@@ -1,0 +1,55 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="RenderWidget.cpp" />
+    <ClCompile Include="HexEngineEditor.cpp" />
+    <ClCompile Include="main.cpp" />
+    <ClCompile Include="Explorer\FolderExplorer.cpp" />
+    <ClCompile Include="Explorer\AssetsExplorer.cpp" />
+    <ClCompile Include="Inspector\Inspector.cpp" />
+    <ClCompile Include="Inspector\TransformWidget.cpp" />
+    <ClCompile Include="Inspector\MeshRendererWidget.cpp" />
+    <ClCompile Include="Inspector\PointLightWidget.cpp" />
+    <ClCompile Include="Inspector\EntityWidget.cpp" />
+    <ClCompile Include="Inspector\RigidBodyWidget.cpp" />
+    <ClCompile Include="Tools\ToolsManager.cpp" />
+    <ClCompile Include="RendererSettings.cpp" />
+    <ClCompile Include="Widgets\ColourPicker.cpp" />
+    <ClCompile Include="Tools\FoliageTool.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtMoc Include="HexEngineEditor.h" />
+    <QtMoc Include="RenderWidget.h" />
+    <QtMoc Include="Widgets\ColourPicker.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtRcc Include="Templates\HexEngineEditor.qrc" />
+  </ItemGroup>
+  <ItemGroup>
+    <QtUic Include="Templates\HexEngineEditor.ui" />
+    <QtUic Include="Templates\NewProject.ui" />
+    <QtUic Include="Templates\TransformWidget.ui" />
+    <QtUic Include="Templates\MeshRendererWidget.ui" />
+    <QtUic Include="Templates\PointLightWidget.ui" />
+    <QtUic Include="Templates\EntityWidget.ui" />
+    <QtUic Include="Templates\RigidBodyWidget.ui" />
+    <QtUic Include="Templates\TerrainDialog.ui" />
+    <QtUic Include="Templates\MaterialWidget.ui" />
+    <QtUic Include="Templates\RendererSettings.ui" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Explorer\FolderExplorer.h" />
+    <ClInclude Include="Explorer\AssetsExplorer.h" />
+    <ClInclude Include="Inspector\Inspector.h" />
+    <ClInclude Include="Inspector\TransformWidget.h" />
+    <ClInclude Include="Inspector\BaseWidget.h" />
+    <ClInclude Include="Inspector\MeshRendererWidget.h" />
+    <ClInclude Include="Inspector\PointLightWidget.h" />
+    <ClInclude Include="Inspector\EntityWidget.h" />
+    <ClInclude Include="Inspector\RigidBodyWidget.h" />
+    <ClInclude Include="Tools\ToolsManager.hpp" />
+    <ClInclude Include="RendererSettings.hpp" />
+    <ClInclude Include="Tools\ToolBase.hpp" />
+    <ClInclude Include="Tools\FoliageTool.hpp" />
+  </ItemGroup>
+</Project>

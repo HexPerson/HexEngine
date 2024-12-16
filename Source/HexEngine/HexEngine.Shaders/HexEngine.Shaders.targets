@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+	<ItemGroup>
+		<!-- Include definitions from dxc.xml, which defines the DXCShader item. -->
+		<PropertyPageSchema Include="$(MSBuildThisFileDirectory)shader.xml" />
+		<!-- Hook up DXCShader items to be built by the DXC target. -->
+		<AvailableItemName Include="HexEngineShader">
+			<Targets>HexEngineShaderCompiler</Targets>
+		</AvailableItemName>
+	</ItemGroup>
+
+	<Target
+	  Name="HexEngineShaderCompiler"
+	  Condition="'@(HexEngineShader)' != ''"
+	  BeforeTargets="ClCompile">
+		<Message Importance="High" Text="Compiling shaders..." />
+
+		<ItemGroup>
+			<ShaderHeader Include="*.shaderinc" />
+		</ItemGroup>
+		<PropertyGroup>
+			<ShaderHeaders>@(ShaderHeader)</ShaderHeaders>
+		</PropertyGroup>
+
+		<!-- Setup metadata for custom build tool -->
+		<ItemGroup>
+			<HexEngineShader>
+				<AdditionalInputs>$(ShaderHeaders)</AdditionalInputs>
+				<Message>%(Filename)%(Extension)</Message>
+				<Command>
+					"$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\HexEngine.ShaderCompiler.exe" -I "%(FullPath)" -T hlsl
+				</Command>
+				<Outputs>.\Compiled\%(FileName).hcs</Outputs>
+			</HexEngineShader>
+		</ItemGroup>
+
+		<!-- Compile by forwarding to the Custom Build Tool infrastructure -->
+		<CustomBuild
+			Sources="@(HexEngineShader)"
+			MinimalRebuildFromTracking="true"
+			TrackerLogDirectory="$(TLogLocation)"
+			ErrorListRegex="(?'FILENAME'.+):(?'LINE'\d+):(?'COLUMN'\d+): (?'CATEGORY'error|warning): (?'TEXT'.*)" 
+	/>
+
+	</Target>
+</Project>
+
+<!-- Built using information from: https://www.reedbeta.com/blog/custom-toolchain-with-msbuild/ -->

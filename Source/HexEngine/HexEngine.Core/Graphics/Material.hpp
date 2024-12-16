@@ -1,0 +1,185 @@
+
+
+#pragma once
+
+#include "ITexture2D.hpp"
+#include "ITexture3D.hpp"
+#include "IShader.hpp"
+#include "RenderStructs.hpp"
+#include "../FileSystem/IResource.hpp"
+#include "../FileSystem/JsonFile.hpp"
+
+namespace HexEngine
+{
+	enum MaterialTexture
+	{
+		Albedo,
+		Normal,
+		Roughness,
+		Metallic,
+		Height,
+		Emission,
+		Opacity,
+		AmbientOcclusion,
+		Count
+	};
+
+	struct MaterialProperties
+	{
+		MaterialProperties() :
+			metallicFactor(0.0f),
+			roughnessFactor(0.5f),
+			diffuseColour(1.0f),
+			hasTransparency(0),
+			isWater(0),
+			emissiveColour(0.0f),
+			isInTransparencyPhase(0)
+		{}
+
+		bool operator ==(const MaterialProperties& other)
+		{
+			return (
+				metallicFactor == other.metallicFactor &&
+				roughnessFactor == other.roughnessFactor &&
+				diffuseColour == other.diffuseColour &&
+				emissiveColour == other.emissiveColour &&
+				hasTransparency == other.hasTransparency &&
+				isWater == other.isWater
+				);
+		}
+
+		float metallicFactor;
+		float roughnessFactor;
+		float smoothness;
+		float specularProbability;
+		math::Vector4 diffuseColour;
+		math::Vector4 emissiveColour;
+
+		int hasTransparency;
+		int isWater;
+		int isInTransparencyPhase;
+		int pad2;
+	};
+
+	class Material : public IResource
+	{
+	public:
+		Material();
+		~Material();
+
+		bool Equals(const Material& other)
+		{
+			std::unique_lock lock(_lock);
+
+			bool texturesAreMatching = false;
+
+			for (int32_t i = 0; i < MaterialTexture::Count; ++i)
+			{
+				if (_textures[i] != 0 && other._textures[i] != 0)
+				{
+					if (_textures[i]->GetAbsolutePath() == other._textures[i]->GetAbsolutePath())
+					{
+						texturesAreMatching = true;
+					}
+					else
+					{
+						texturesAreMatching = false;
+					}
+				}
+			}
+			return (
+				texturesAreMatching &&
+				GetName() == other.GetName() &&
+				_properties == other._properties &&
+				_standardShader == other._standardShader &&
+				_shadowMapShader == other._shadowMapShader &&
+				_blendState == other._blendState &&
+				_depthState == other._depthState &&
+				_cullMode == other._cullMode
+				);
+		}
+
+		bool operator ==(const Material& other)
+		{
+			return Equals(other);
+		}
+
+		bool operator ==(const Material* other)
+		{
+			return Equals(*other);
+		}
+
+		void SetName(const std::string& name);
+		const std::string& GetName() const;
+
+		static Material* Create(const fs::path& path);
+		static Material* GetDefaultMaterial();
+		static bool Exists(const fs::path& path);
+		static const std::wstring& GetMaterialTextureName(MaterialTexture type);
+
+		virtual void Destroy() override;
+
+		Material(const Material& other);
+
+		void CopyFrom(Material* material);
+		void CopyFrom(const Material& material);
+
+		Material& operator = (const Material& other);
+
+		Material& operator = (Material* other);
+
+		void SetTexture(MaterialTexture type, ITexture2D* texture);
+
+		void SetStandardShader(IShader* shader);
+		void SetShadowMapShader(IShader* shader);
+
+		IShader* GetStandardShader() const;
+		IShader* GetShadowMapShader() const;
+
+		ITexture2D* GetTexture(MaterialTexture type) const;
+
+		void SetVolumeTexture(ITexture3D* texture);
+		ITexture3D* GetVolumeTexture() const { return _volumeTexture; }
+
+		void				SetBlendState(BlendState state);
+		void				SetCullMode(CullingMode mode);
+		void				SetDepthState(DepthBufferState state);
+
+		BlendState			GetBlendState() const;
+		CullingMode			GetCullMode() const;
+		DepthBufferState	GetDepthState() const;
+
+		void		SaveRenderState();
+		void		RestoreRenderState();
+
+		void AddSoundTag(const std::string& key, const std::string& value);
+		const std::string& GetSoundTag(const std::string& key) const;
+
+		void Lock();
+		void Unlock();
+
+	public:
+		MaterialProperties _properties;
+
+	private:
+		uint32_t _materialId = 0;
+		ITexture2D* _textures[MaterialTexture::Count] = { nullptr };
+		ITexture3D* _volumeTexture = nullptr;
+		IShader* _standardShader = nullptr;
+		IShader* _shadowMapShader = nullptr;		
+		std::string _name;
+
+
+		BlendState _blendState = BlendState::Opaque;
+		CullingMode _cullMode = CullingMode::BackFace;
+		DepthBufferState _depthState = DepthBufferState::DepthDefault;
+
+		BlendState _previousBlendState = BlendState::Opaque;
+		CullingMode _previousCullMode = CullingMode::BackFace;
+		DepthBufferState _previousDepthState = DepthBufferState::DepthDefault;
+
+		std::map<std::string, std::string> _soundTags;
+
+		std::recursive_mutex _lock;
+	};
+}

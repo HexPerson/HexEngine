@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">
+      <Configuration>Debug</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">
+      <Configuration>Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{05a66d02-fe8f-435c-9cce-918df543fc88}</ProjectGuid>
+    <RootNamespace>HexEngineShaders</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <LinkIncremental>true</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>true</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+    <PostBuildEvent>
+      <Command>mkdir "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\Data\Shaders\"
+copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\Data\Shaders\*.hcs"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+    </Link>
+    <PostBuildEvent>
+      <Command>mkdir "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\Data\Shaders\"
+copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\Data\Shaders\*.hcs"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <HexEngineShader Include="BasicDenoise.shader" />
+    <HexEngineShader Include="DefaultAnimated.shader" />
+    <HexEngineShader Include="PBRutils.shader" />
+    <HexEngineShader Include="ShadowMapGeometryAnimated.shader" />
+    <HexEngineShader Include="SSRResolve.shader" />
+    <HexEngineShader Include="UIBasic.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="BilateralUpsample.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="Billboard.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="Bloom.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="BuildShadowMask.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <None Include="DebugCommon.shader" />
+    <HexEngineShader Include="ChromaticAbberation.shader" />
+    <HexEngineShader Include="ColourGrade.shader" />
+    <HexEngineShader Include="DebugRender.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="Deferred.shader">
+      <FileType>Document</FileType>
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+    </HexEngineShader>
+    <None Include="PCSS.shader">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+      <FileType>Document</FileType>
+    </None>
+    <HexEngineShader Include="PointLight.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <None Include="DepthPrePass.shader" />
+    <HexEngineShader Include="FullScreenQuad.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="FXAA.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <None Include="FXAACommon.shader" />
+    <HexEngineShader Include="GaussianBlur.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="GaussianBlurVert.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="GaussianBlurVert_Depth.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="GaussianBlur_Depth.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="Default.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <None Include="Global.shader" />
+    <None Include="HexEngine.Shaders.targets" />
+    <None Include="LightingUtils.shader" />
+    <None Include="Mesh.shader" />
+    <None Include="MeshCommon.shader" />
+    <HexEngineShader Include="PostFog.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="ShadowMapGeometry.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <None Include="ShadowUtils.shader" />
+    <HexEngineShader Include="SkySphere.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <None Include="SkySphereCommon.shader" />
+    <HexEngineShader Include="SpotLight.shader" />
+    <HexEngineShader Include="SSR.shader" />
+    <HexEngineShader Include="TAAResolve.shader" />
+    <HexEngineShader Include="Tonemap.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <None Include="Utils.shader" />
+    <HexEngineShader Include="UIInstanced.shader" />
+    <HexEngineShader Include="Vignette.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="VolumetricClouds.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="VolumetricLighting.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="Water.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <None Include="WaterMask.shader" />
+  </ItemGroup>
+  <ItemGroup>
+    <Xml Include="shader.xml" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="HexEngine.Shaders.targets" />
+  </ImportGroup>
+</Project>

@@ -1,0 +1,220 @@
+
+#include "Inspector.hpp"
+#include "../EditorUI.hpp"
+
+namespace HexEditor
+{
+	Inspector::Inspector(Element* parent, const Point& position, const Point& size) :
+		Dock(parent, position, size, Dock::Anchor::Right)
+	{
+		_tabs = new TabView(this, Point(0, 10), Point(size.x, size.y - 20));
+
+		auto entityTab = _tabs->AddTab(L"Entity");		
+		{
+			_entityName = new LineEdit(entityTab, Point(5, g_pEnv->_uiManager->GetRenderer()->_style.tab_height), Point(size.x - 10, 25), L"");
+			_entityName->SetOnInputFn(std::bind(&Inspector::OnChangeEntityName, this, std::placeholders::_2));
+
+			_deleteBtn = new Button(entityTab, Point(size.x - 75, 50), Point(70, 25), L"Delete", std::bind(&Inspector::OnDeleteEntity, this, std::placeholders::_1));
+			_deleteBtn->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(237, 28, 36, 255)));
+
+			_addComponentBtn = new Button(entityTab, Point(5, 80), Point(size.x - 10, 25), L"Add Component...", std::bind(&Inspector::OnAddComponent, this, std::placeholders::_1));
+		}
+
+		auto resourceTab = _tabs->AddTab(L"Resource");
+		
+	}
+
+	bool Inspector::IsInspectingEntity() const
+	{
+		return _inspecting != nullptr;
+	}
+
+	bool Inspector::IsInspectingResource() const
+	{
+		return _tabs->GetCurrentTabIndex() == 1;
+	}
+
+	Entity* Inspector::GetInspectingEntity() const
+	{
+		return _inspecting;
+	}
+
+	bool Inspector::OnDeleteEntity(Button* button)
+	{
+		if (_inspecting)
+		{
+			g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(_inspecting);
+
+			ClearInspectorWidgets();
+
+			_inspecting = nullptr;
+
+			_entityName->SetValue(L"");
+		}
+
+		return true;
+	}
+
+	void Inspector::ClearInspectorWidgets()
+	{
+		// free any component widgets from the last inspected entity
+		for (auto& widget : _componentWidgets)
+		{
+			widget->DeleteMe();
+		}
+		_componentWidgets.clear();
+	}
+
+	void Inspector::OnChangeEntityName(const std::wstring& name)
+	{
+		if (_inspecting)
+		{
+			auto oldItem = g_pUIManager->GetEntityTreeList()->FindItemByLabel(std::wstring(_inspecting->GetName().begin(), _inspecting->GetName().end()));
+
+			if (oldItem)
+			{
+				oldItem->SetLabel(name);
+			}
+
+			_inspecting->SetName(std::string(name.begin(), name.end()));
+		}			
+	}
+
+	void Inspector::InspectEntity(Entity* entity)
+	{
+		if (!entity)
+		{
+			_inspecting = nullptr;
+			ClearInspectorWidgets();
+			return;
+		}
+		if (_addComponentContextMenu)
+		{
+			_addComponentContextMenu->Disable();
+		}
+
+		_tabs->SetActiveTab(0);
+
+		if (entity != _inspecting)
+		{
+			_entityName->SetValue(std::wstring(entity->GetName().begin(), entity->GetName().end()));
+			_entityName->SetHasInputFocus(false);
+
+			auto size = GetSize();
+
+			size.x -= 10;
+			size.y -= 20;
+
+			ClearInspectorWidgets();
+
+			_inspecting = entity;
+
+			int32_t y = 130;
+
+			for (auto& component : entity->GetAllComponents())
+			{
+				auto componentName = component->GetComponentName();
+
+				ComponentWidget* widget = new ComponentWidget(this, Point(5, y), Point(size.x, size.y), std::wstring(componentName.begin(), componentName.end()));
+
+				if (component->CreateWidget(widget) == false)
+				{
+					widget->DeleteMe();
+					continue;
+				}
+
+				widget->CalculateLargestLabelWidth();
+
+				_componentWidgets.push_back(widget);
+
+				y += widget->GetTotalHeight() + 10;
+			}
+		}
+	}
+
+	void Inspector::InspectResource(const fs::path& path)
+	{
+		_tabs->SetActiveTab(1);
+
+		ClearInspectorWidgets();
+
+		_inspecting = nullptr;
+	}
+
+	bool Inspector::OnAddComponent(Button* button)
+	{
+		if (_addComponentContextMenu == nullptr)
+		{
+			int32_t mx, my;
+			g_pEnv->_inputSystem->GetMousePosition(mx, my);
+
+			mx -= _addComponentBtn->GetAbsolutePosition().x;
+			my -= _addComponentBtn->GetAbsolutePosition().y;
+
+			_addComponentContextMenu = new ContextMenu(
+				_addComponentBtn,
+				Point(button->GetAbsolutePosition().x, button->GetAbsolutePosition().y + button->GetSize().y),
+				Point(-1, -1));
+
+			const auto& classes = g_pEnv->_classRegistry->GetAllClasses();
+
+			for (auto& cls : classes)
+			{
+				std::wstring compName(cls.second.name.begin(), cls.second.name.end());
+
+				_addComponentContextMenu->AddItem(new ContextItem(compName, std::bind(&Inspector::OnClickAddComponentItem, this, std::placeholders::_1, cls.second.compId)));
+			}
+			/*_addComponentContextMenu->AddItem({ L"Rigid Body", std::bind(&Inspector::OnClickAddComponentItem, this, std::placeholders::_1, RigidBody::_GetComponentId()) });
+			_addComponentContextMenu->AddItem({ L"Hinge Joint", std::bind(&Inspector::OnClickAddComponentItem, this, std::placeholders::_1, HingeJoint::_GetComponentId()) });*/
+			_addComponentContextMenu->BringToFront();
+		}
+
+
+		_addComponentContextMenu->Enable();
+
+		//_addComponentBtn->EnableInput(false);
+
+		return true;
+	}
+
+	void Inspector::OnClickAddComponentItem(const std::wstring& name, ComponentId compId)
+	{
+		_addComponentContextMenu->Disable();
+		_addComponentContextMenu->DeleteMe();
+		_addComponentContextMenu = nullptr;
+
+		_addComponentBtn->EnableInput(true);
+
+		CON_ECHO("Adding component name '%S' Id=%d", name.c_str(), compId);
+
+		if (_inspecting)
+		{
+			auto cls = g_pEnv->_classRegistry->FindByComponentId(compId);
+			BaseComponent* component = cls->newInstanceFn(_inspecting);
+
+			_inspecting->AddComponent(component);
+		}
+
+		// inspect it again
+		auto ent = _inspecting;
+		_inspecting = nullptr;
+		InspectEntity(ent);
+	}
+
+	void Inspector::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	{
+		//renderer->SetDrawList(&_drawList);
+
+		Dock::Render(renderer, w, h);		
+	}
+
+	void Inspector::InspectComponent(Point& pos, BaseComponent* component, GuiRenderer* renderer)
+	{
+		
+	}
+
+	void Inspector::PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	{
+		renderer->ListDraw(&_drawList);
+	}
+}
