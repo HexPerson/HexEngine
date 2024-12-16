@@ -61,7 +61,7 @@ def build_directxtk(buildConfig):
     os.chdir("ThirdParty/directxtk/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2019" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
 
     projectPath = os.path.realpath("DirectXTK.vcxproj")
     print("Project path is %s" % projectPath)
@@ -83,7 +83,7 @@ def build_nrd(buildConfig):
     
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "Visual Studio 16 2019" -A x64')
+    os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "Visual Studio 16 2022" -A x64')
     
     projectPath = os.path.realpath("NRD.vcxproj")
     print("Project path is %s" % projectPath)
@@ -108,16 +108,16 @@ def build_directxtk_audio(buildConfig):
     os.chdir("ThirdParty/directxtk/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2019" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
     os.chdir("..")
 
-    projectPath = os.path.realpath("Audio/DirectXTKAudio_Desktop_2019_Win8.vcxproj")
+    projectPath = os.path.realpath("Audio/DirectXTKAudio_Desktop_2022_Win8.vcxproj")
     print("Project path is %s" % projectPath)
 
     msbuild(msbuildPath, projectPath, ["/p:Configuration=" + buildConfig, "/p:Platform=x64"])
 
-    print("Copying DirectXTKAudio library file from %s to %s" % (os.path.realpath("Audio/Bin/Desktop_2019/x64/" + buildConfig + "/DirectXTK.lib"), libraryDir))
-    shutil.copy(os.path.realpath("Audio/Bin/Desktop_2019/x64/" + buildConfig + "/DirectXTKAudioWin8.lib"), libraryDir)
+    print("Copying DirectXTKAudio library file from %s to %s" % (os.path.realpath("Audio/Bin/Desktop_2022/x64/" + buildConfig + "/DirectXTK.lib"), libraryDir))
+    shutil.copy(os.path.realpath("Audio/Bin/Desktop_2022/x64/" + buildConfig + "/DirectXTKAudioWin8.lib"), libraryDir)
 
     print("Successfully built DirectXTKAudio!")
     os.chdir(engineMainDir)
@@ -183,16 +183,15 @@ def build_shaderconductor(buildConfig):
         Repo.clone_from("https://github.com/microsoft/ShaderConductor.git", "ThirdParty/shaderconductor/")
 
     os.chdir("ThirdParty/shaderconductor/")
-    subprocess.check_call(["python", "BuildAll.py", "vs2019", "vc142", "x64", buildConfig])
-    #os.system("BuildAll.py vs2019 vc142 x64" + buildConfig)
+    subprocess.check_call(["python", "BuildAll.py", "vs2022", "vc142", "x64", buildConfig])
 
-    scLibDir = "vs2019-win-vc142-x64"
+    scLibDir = "vs2022-win-vc142-x64"
 
     if buildConfig == "Debug":
         scLibDir = scLibDir + "Debug"
 
-    print("Copying ShaderConductor library file from %s to %s" % (os.path.realpath("Build/vs2019-win-vc142-x64/lib/" + buildConfig + "/ShaderConductor.lib"), libraryDir))
-    shutil.copy(os.path.realpath("Build/vs2019-win-vc142-x64/lib/" + buildConfig + "/ShaderConductor.lib"), libraryDir)
+    print("Copying ShaderConductor library file from %s to %s" % (os.path.realpath("Build/vs2022-win-vc142-x64/lib/" + buildConfig + "/ShaderConductor.lib"), libraryDir))
+    shutil.copy(os.path.realpath("Build/vs2022-win-vc142-x64/lib/" + buildConfig + "/ShaderConductor.lib"), libraryDir)
 
     print("Successfully built ShaderConductor!")
     os.chdir(engineMainDir)
@@ -221,7 +220,7 @@ def build_freetype(buildConfig):
     os.chdir("ThirdParty/freetype/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2019" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
 
     projectPath = os.path.realpath("freetype.sln")
     print("Project path is %s" % projectPath)
@@ -246,7 +245,7 @@ def build_directxtex(buildConfig):
     os.chdir("ThirdParty/directxtex/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2019" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
 
     projectPath = os.path.realpath("DirectXTex.vcxproj")
     print("Project path is %s" % projectPath)
@@ -267,7 +266,7 @@ def build_brotli(buildConfig):
     os.chdir("ThirdParty/brotli/")
     os.system("mkdir out")
     os.chdir("out")
-    os.system('cmake -S .. -G "Visual Studio 16 2019" -A x64 -DCMAKE_BUILD_TYPE=' + buildConfig + ' -DCMAKE_INSTALL_PREFIX=./installed')
+    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64 -DCMAKE_BUILD_TYPE=' + buildConfig + ' -DCMAKE_INSTALL_PREFIX=./installed')
 
     projectPath = os.path.realpath("brotli.sln")
     print("Project path is %s" % projectPath)
@@ -293,7 +292,7 @@ def build_angelscript(buildConfig):
         print("Cloning angelscript...")
         Repo.clone_from("https://github.com/codecat/angelscript-mirror.git", "ThirdParty/angelscript/")
 
-    os.chdir("ThirdParty/angelscript/sdk/angelscript/projects/msvc2019")
+    os.chdir("ThirdParty/angelscript/sdk/angelscript/projects/msvc2022")
     projectPath = os.path.realpath("angelscript.sln")
     print("Project path is %s" % projectPath)
 
@@ -318,7 +317,7 @@ def build_recastnavigation(buildConfig):
     os.chdir("ThirdParty/recastnavigation/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2019" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
     
     print("Successfully built recastnavigation!")
     os.chdir(engineMainDir)
