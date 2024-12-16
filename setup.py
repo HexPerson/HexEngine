@@ -61,7 +61,7 @@ def build_directxtk(buildConfig):
     os.chdir("ThirdParty/directxtk/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 17 2022" -A x64')
 
     projectPath = os.path.realpath("DirectXTK.vcxproj")
     print("Project path is %s" % projectPath)
@@ -83,7 +83,7 @@ def build_nrd(buildConfig):
     
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "Visual Studio 16 2022" -A x64')
+    os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "Visual Studio 17 2022" -A x64')
     
     projectPath = os.path.realpath("NRD.vcxproj")
     print("Project path is %s" % projectPath)
@@ -108,7 +108,7 @@ def build_directxtk_audio(buildConfig):
     os.chdir("ThirdParty/directxtk/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 17 2022" -A x64')
     os.chdir("..")
 
     projectPath = os.path.realpath("Audio/DirectXTKAudio_Desktop_2022_Win8.vcxproj")
@@ -220,7 +220,7 @@ def build_freetype(buildConfig):
     os.chdir("ThirdParty/freetype/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 17 2022" -A x64')
 
     projectPath = os.path.realpath("freetype.sln")
     print("Project path is %s" % projectPath)
@@ -245,7 +245,7 @@ def build_directxtex(buildConfig):
     os.chdir("ThirdParty/directxtex/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 17 2022" -A x64')
 
     projectPath = os.path.realpath("DirectXTex.vcxproj")
     print("Project path is %s" % projectPath)
@@ -266,7 +266,7 @@ def build_brotli(buildConfig):
     os.chdir("ThirdParty/brotli/")
     os.system("mkdir out")
     os.chdir("out")
-    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64 -DCMAKE_BUILD_TYPE=' + buildConfig + ' -DCMAKE_INSTALL_PREFIX=./installed')
+    os.system('cmake -S .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=' + buildConfig + ' -DCMAKE_INSTALL_PREFIX=./installed')
 
     projectPath = os.path.realpath("brotli.sln")
     print("Project path is %s" % projectPath)
@@ -317,7 +317,7 @@ def build_recastnavigation(buildConfig):
     os.chdir("ThirdParty/recastnavigation/")
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "Visual Studio 16 2022" -A x64')
+    os.system('cmake -S .. -G "Visual Studio 17 2022" -A x64')
     
     print("Successfully built recastnavigation!")
     os.chdir(engineMainDir)
