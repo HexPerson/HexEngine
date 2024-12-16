@@ -68,8 +68,8 @@ def build_directxtk(buildConfig):
 
     msbuild(msbuildPath, projectPath, ["/p:Configuration=" + buildConfig + ""])
 
-    print("Copying DirectXTK library file from %s to %s" % (os.path.realpath("bin/CMake/" + buildConfig + "/DirectXTK.lib"), libraryDir))
-    shutil.copy(os.path.realpath("bin/CMake/" + buildConfig + "/DirectXTK.lib"), libraryDir)
+    print("Copying DirectXTK library file from %s to %s" % (os.path.realpath("lib/" + buildConfig + "/DirectXTK.lib"), libraryDir))
+    shutil.copy(os.path.realpath("lib/" + buildConfig + "/DirectXTK.lib"), libraryDir)
 
     print("Successfully built DirectXTK!")
     os.chdir(engineMainDir)
