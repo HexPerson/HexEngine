@@ -125,22 +125,22 @@ def build_directxtk_audio(buildConfig):
 def build_physx(buildConfig):
     if not os.path.exists("ThirdParty/physx/"):
         print("Cloning PhysX...")
-        Repo.clone_from("https://github.com/NVIDIAGameWorks/PhysX.git", "ThirdParty/physx/")
+        Repo.clone_from("https://github.com/NVIDIA-Omniverse/PhysX.git", "ThirdParty/physx/")
 
     os.chdir("ThirdParty/physx/physx/")
 
     # stupid hack to force physx to build with dynamic crt
-    fin = open("buildtools/presets/public/vc16win64.xml", "rt")
+    fin = open("buildtools/presets/public/vc17win64.xml", "rt")
     data = fin.read()
     data = data.replace('NV_USE_STATIC_WINCRT" value="True"', 'NV_USE_STATIC_WINCRT" value="False"')
     fin.close()
 
-    fin = open("buildtools/presets/public/vc16win64.xml", "wt")
+    fin = open("buildtools/presets/public/vc17win64.xml", "wt")
     fin.write(data)
     fin.close()
 
-    os.system("generate_projects.bat vc16win64")
-    os.chdir("compiler/vc16win64/")
+    os.system("generate_projects.bat vc17win64")
+    os.chdir("compiler/vc17win64/")
 
     projectPath = os.path.realpath("PhysXSDK.sln")
     print("Project path is %s" % projectPath)
@@ -154,24 +154,24 @@ def build_physx(buildConfig):
         "-t:PhysX SDK\LowLevelDynamics:rebuild",
         "-t:PhysX SDK\PhysXCommon:rebuild",
         "-t:PhysX SDK\PhysXPvdSDK:rebuild",
-        "-t:PhysX SDK\PhysXTask:rebuild",
-        "-t:PhysX SDK\FastXml:rebuild",        
+        "-t:PhysX SDK\PhysXTask:rebuild",     
         "-t:PhysX SDK\PhysX:rebuild",
         "-t:PhysX SDK\PhysXExtensions:rebuild",
         "-t:PhysX SDK\PhysXCharacterKinematic:rebuild",
         "-t:PhysX SDK\PhysXCooking:rebuild",
         "-t:PhysX SDK\PhysXVehicle:rebuild",
+        "-t:PhysX SDK\PhysXVehicle2:rebuild",
         "/p:Configuration=" + buildConfig + ""
         ])
 
     os.chdir("../../")
 
-    print("Copying PhysX library file from %s to %s" % (os.path.realpath("bin/win.x86_64.vc142.md/" + buildConfig), libraryDir))
+    print("Copying PhysX library file from %s to %s" % (os.path.realpath("bin/win.x86_64.vc143.md/" + buildConfig), libraryDir))
 
-    for file in glob.glob("bin/win.x86_64.vc142.md/" + buildConfig + "/*.lib"):
+    for file in glob.glob("bin/win.x86_64.vc143.md/" + buildConfig + "/*.lib"):
         shutil.copy(file, libraryDir)
 
-    for file in glob.glob("bin/win.x86_64.vc142.md/" + buildConfig + "/*.dll"):
+    for file in glob.glob("bin/win.x86_64.vc143.md/" + buildConfig + "/*.dll"):
         shutil.copy(file, binDir + "Bin")
 
     print("Successfully built PhysX!")
@@ -183,15 +183,22 @@ def build_shaderconductor(buildConfig):
         Repo.clone_from("https://github.com/microsoft/ShaderConductor.git", "ThirdParty/shaderconductor/")
 
     os.chdir("ThirdParty/shaderconductor/")
-    subprocess.check_call(["python", "BuildAll.py", "vs2022", "vc142", "x64", buildConfig])
+    
+    os.system("mkdir build")
+    os.chdir("build")
+    os.system('cmake -G "Visual Studio 17 2022" -T host=x64 -A x64 ../ -DCMAKE_CXX_FLAGS="/wd4189" -DCMAKE_BUILD_TYPE='+buildConfig)
+    os.system('cmake --build . ')
+    os.chdir("..")
+    
+    #subprocess.check_call(["python", "BuildAll.py", "vs2022", "vc143", "x64", buildConfig])
 
-    scLibDir = "vs2022-win-vc142-x64"
+    scLibDir = "vs2022-win-vc143-x64"
 
     if buildConfig == "Debug":
         scLibDir = scLibDir + "Debug"
 
-    print("Copying ShaderConductor library file from %s to %s" % (os.path.realpath("Build/vs2022-win-vc142-x64/lib/" + buildConfig + "/ShaderConductor.lib"), libraryDir))
-    shutil.copy(os.path.realpath("Build/vs2022-win-vc142-x64/lib/" + buildConfig + "/ShaderConductor.lib"), libraryDir)
+    print("Copying ShaderConductor library file from %s to %s" % (os.path.realpath("Build/lib/" + buildConfig + "/ShaderConductor.lib"), libraryDir))
+    shutil.copy(os.path.realpath("Build/lib/" + buildConfig + "/ShaderConductor.lib"), libraryDir)
 
     print("Successfully built ShaderConductor!")
     os.chdir(engineMainDir)
@@ -252,8 +259,8 @@ def build_directxtex(buildConfig):
 
     msbuild(msbuildPath, projectPath, ["/p:Configuration=" + buildConfig + ""])
 
-    print("Copying DirectXTex library file from %s to %s" % (os.path.realpath("bin/CMake/" + buildConfig + "/DirectXTK.lib"), libraryDir))
-    shutil.copy(os.path.realpath("bin/CMake/" + buildConfig + "/DirectXTex.lib"), libraryDir)
+    print("Copying DirectXTex library file from %s to %s" % (os.path.realpath("lib/" + buildConfig + "/DirectXTex.lib"), libraryDir))
+    shutil.copy(os.path.realpath("lib/" + buildConfig + "/DirectXTex.lib"), libraryDir)
 
     print("Successfully built DirectXTex!")
     os.chdir(engineMainDir)
@@ -332,12 +339,12 @@ def buildConfig(buildConfig):
     
     build_assimp(buildConfig)
     build_directxtk(buildConfig)
-    build_physx(buildConfig.lower())
+    #build_physx(buildConfig.lower())
     build_shaderconductor(buildConfig)
     build_hbaoplus(buildConfig)
     build_freetype(buildConfig)
     build_directxtex(buildConfig)
-    build_directxtk_audio(buildConfig)
+    #build_directxtk_audio(buildConfig)
     build_brotli(buildConfig)
     build_angelscript(buildConfig)
     build_recastnavigation(buildConfig)
