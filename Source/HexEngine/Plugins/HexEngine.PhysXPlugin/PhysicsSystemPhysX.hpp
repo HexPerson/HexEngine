@@ -42,7 +42,7 @@ namespace HexEngine
 
 		physx::PxPhysics* GetPhysics();
 		physx::PxMaterial* GetDefaultMaterial();
-		physx::PxCooking* GetCooking();
+		//physx::PxCooking* GetCooking();
 		physx::PxScene* GetScene();
 
 		void LockWrite();
@@ -74,7 +74,7 @@ namespace HexEngine
 		physx::PxPhysics* _physics = nullptr;
 		physx::PxDefaultCpuDispatcher* _dispatcher = nullptr;
 		physx::PxScene* _scene = nullptr;
-		physx::PxCooking* _cooking = nullptr;
+		//physx::PxCooking* _cooking = nullptr;
 		physx::PxMaterial* _defaultMaterial = nullptr;
 		physx::PxControllerManager* _controllerManager = nullptr;
 

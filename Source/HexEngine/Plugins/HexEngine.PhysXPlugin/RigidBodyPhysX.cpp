@@ -104,10 +104,9 @@ namespace HexEngine
 
 		if (_shape)
 		{
-			if (_shape->getGeometryType() == physx::PxGeometryType::eBOX)
+			if (_shape->getGeometry().getType() == physx::PxGeometryType::eBOX)
 			{
-				physx::PxBoxGeometry geom;
-				_shape->getBoxGeometry(geom);
+				physx::PxBoxGeometry geom;// = static_cast<const physx::PxBoxGeometry&>(_shape->getGeometry());
 
 				_shape->setLocalPose(physx::PxTransform(physx::PxVec3(box.Center.x, box.Center.y, box.Center.z)));
 
@@ -127,16 +126,17 @@ namespace HexEngine
 
 		if (_shape)
 		{
-			if (_shape->getGeometryType() == physx::PxGeometryType::eTRIANGLEMESH)
+			if (_shape->getGeometry().getType() == physx::PxGeometryType::eTRIANGLEMESH)
 			{
-				physx::PxTriangleMeshGeometry geom;
-				_shape->getTriangleMeshGeometry(geom);
+				const physx::PxTriangleMeshGeometry& geom = static_cast<const physx::PxTriangleMeshGeometry&>(_shape->getGeometry());
+				
+				physx::PxTriangleMeshGeometry newGeom = geom;
 
-				geom.scale.scale.x = scale.x;
-				geom.scale.scale.y = scale.y;
-				geom.scale.scale.z = scale.z;
+				newGeom.scale.scale.x = scale.x;
+				newGeom.scale.scale.y = scale.y;
+				newGeom.scale.scale.z = scale.z;
 
-				_shape->setGeometry(geom);
+				_shape->setGeometry(newGeom);
 			}
 		}
 		g_pPhysx->GetScene()->unlockWrite();
@@ -343,9 +343,15 @@ namespace HexEngine
 		hfDesc.samples.data = samples;
 		hfDesc.samples.stride = sizeof(physx::PxHeightFieldSample);
 
-		physx::PxHeightField* aHeightField = g_pPhysx->GetCooking()->createHeightField(
+		physx::PxDefaultMemoryOutputStream hfStream;
+		PxCookHeightField(hfDesc, hfStream);
+
+		physx::PxDefaultMemoryInputData input(hfStream.getData(), hfStream.getSize());
+		physx::PxHeightField* aHeightField = g_pPhysx->GetPhysics()->createHeightField(input);
+
+		/*physx::PxHeightField* aHeightField = g_pPhysx->GetCooking()->createHeightField(
 			hfDesc,
-			g_pPhysx->GetPhysics()->getPhysicsInsertionCallback());
+			g_pPhysx->GetPhysics()->getPhysicsInsertionCallback());*/
 
 		_geometry = new physx::PxHeightFieldGeometry(
 			aHeightField,
@@ -366,6 +372,8 @@ namespace HexEngine
 		_collider = new ColliderPhysX(_shape, this);
 
 		g_pPhysx->_resetDebug = true;
+
+		delete[] samples;
 
 		return _collider;
 	}
@@ -395,7 +403,7 @@ namespace HexEngine
 		//params.meshCookingHint = physx::PxMeshCookingHint::eCOOKING_PERFORMANCE;
 		params.midphaseDesc.setToDefault(physx::PxMeshMidPhase::eBVH34);
 
-		g_pPhysx->GetCooking()->setParams(params);
+		//g_pPhysx->GetCooking()->setParams(params);
 
 #if 0
 		physx::PxDefaultMemoryOutputStream writeBuffer;
@@ -409,7 +417,13 @@ namespace HexEngine
 		physx::PxDefaultMemoryInputData readBuffer(writeBuffer.getData(), writeBuffer.getSize());
 		auto mesh = g_pPhysx->GetPhysics()->createTriangleMesh(readBuffer);
 #else
-		auto mesh = g_pPhysx->GetCooking()->createTriangleMesh(meshDesc, g_pPhysx->GetPhysics()->getPhysicsInsertionCallback());
+		physx::PxDefaultMemoryOutputStream buf;
+		PxCookTriangleMesh(params, meshDesc, buf);
+
+		physx::PxDefaultMemoryInputData input(buf.getData(), buf.getSize());
+		physx::PxTriangleMesh* mesh = g_pPhysx->GetPhysics()->createTriangleMesh(input);
+
+		//auto mesh = g_pPhysx->GetCooking()->createTriangleMesh(meshDesc, g_pPhysx->GetPhysics()->getPhysicsInsertionCallback());
 #endif
 		_geometry = new physx::PxTriangleMeshGeometry;
 
@@ -493,7 +507,23 @@ namespace HexEngine
 		physx::PxDefaultMemoryInputData readBuffer(writeBuffer.getData(), writeBuffer.getSize());
 		auto mesh = g_pPhysx->GetPhysics()->createTriangleMesh(readBuffer);*/
 
-		auto mesh = g_pPhysx->GetCooking()->createConvexMesh(meshDesc, g_pPhysx->GetPhysics()->getPhysicsInsertionCallback());
+		physx::PxTolerancesScale scale;
+		physx::PxCookingParams params(scale);
+		// disable mesh cleaning - perform mesh validation on development configurations
+		params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_CLEAN_MESH;
+		// disable edge precompute, edges are set for each triangle, slows contact generation
+		params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
+		// lower hierarchy for internal mesh
+		//params.meshCookingHint = physx::PxMeshCookingHint::eCOOKING_PERFORMANCE;
+		params.midphaseDesc.setToDefault(physx::PxMeshMidPhase::eBVH34);
+
+		physx::PxDefaultMemoryOutputStream buf;
+		PxCookConvexMesh(params, meshDesc, buf);
+
+		physx::PxDefaultMemoryInputData input(buf.getData(), buf.getSize());
+		physx::PxConvexMesh* mesh = g_pPhysx->GetPhysics()->createConvexMesh(input);
+
+		//auto mesh = g_pPhysx->GetCooking()->createConvexMesh(meshDesc, g_pPhysx->GetPhysics()->getPhysicsInsertionCallback());
 
 		_geometry = new physx::PxConvexMeshGeometry;
 

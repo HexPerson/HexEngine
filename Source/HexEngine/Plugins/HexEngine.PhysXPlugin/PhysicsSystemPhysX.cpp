@@ -57,6 +57,7 @@ namespace HexEngine
 
 		_physics = PxCreatePhysics(PX_PHYSICS_VERSION, *_foundation, physx::PxTolerancesScale(), recordMemoryAllocations, _pvd);
 
+
 		PxInitExtensions(*_physics, _pvd);
 
 		// Create a physics scene
@@ -87,7 +88,7 @@ namespace HexEngine
 
 		
 
-		_cooking = PxCreateCooking(PX_PHYSICS_VERSION, *_foundation, physx::PxCookingParams(_physics->getTolerancesScale()));
+		//_cooking = PxCreateCooking(PX_PHYSICS_VERSION, *_foundation, physx::PxCookingParams(_physics->getTolerancesScale()));
 		//if (!_cooking)
 		//	fatalError("PxCreateCooking failed!");
 
@@ -111,7 +112,7 @@ namespace HexEngine
 
 		PX_RELEASE(_controllerManager);
 		PX_RELEASE(_defaultMaterial);
-		PX_RELEASE(_cooking);
+		//PX_RELEASE(_cooking);
 		PX_RELEASE(_scene);
 		PX_RELEASE(_dispatcher);
 		PX_RELEASE(_physics);
@@ -514,10 +515,10 @@ namespace HexEngine
 		return _defaultMaterial;
 	}
 
-	physx::PxCooking* PhysicsSystemPhysX::GetCooking()
+	/*physx::PxCooking* PhysicsSystemPhysX::GetCooking()
 	{
 		return _cooking;
-	}
+	}*/
 
 	physx::PxScene* PhysicsSystemPhysX::GetScene()
 	{
