@@ -24,6 +24,7 @@
     <ProjectGuid>{7a7eac1e-cda1-4137-95f0-1a29680fc2eb}</ProjectGuid>
     <RootNamespace>HexEngineEditor2</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>HexEngine.Editor</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -126,7 +127,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(Configuration)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>DirectXTK.lib;HexEngine.Core.lib;HexEngine.Engine.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>DirectXTK.lib;HexEngine.Core.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>copy "$(TargetDir)$(TargetName).exe" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).exe"

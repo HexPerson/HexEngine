@@ -53,7 +53,7 @@ namespace HexEngine
 
 		const auto& bbvp = camera->GetViewport();
 
-		renderer->StartFrame(bbvp.width, bbvp.height);
+		renderer->StartFrame((uint32_t)bbvp.width, (uint32_t)bbvp.height);
 
 		D3DPERF_BeginEvent(0xFFFFFFFF, L"BloomStart");
 

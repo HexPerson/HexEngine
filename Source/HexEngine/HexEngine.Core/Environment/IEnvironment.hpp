@@ -50,7 +50,7 @@ namespace HexEngine
 		class UIManager* _uiManager = nullptr;
 		class AssetPackageManager* _assetPackageManager = nullptr;
 		class IconService* _iconService = nullptr;
-		class IScriptEngine* _scriptEngine = nullptr;
+		//class IScriptEngine* _scriptEngine = nullptr; // disabled currently
 		class IStreamlineProvider* _streamlineProvider = nullptr;
 		class IDenoiserProvider* _denoiserProvider = nullptr;
 		MeshLoader* _meshLoader = nullptr;

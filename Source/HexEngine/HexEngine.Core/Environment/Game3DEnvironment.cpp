@@ -137,8 +137,8 @@ namespace HexEngine
 		env->_fontImporter = (IFontImporter*)env->_pluginSystem->CreateInterface(IFontImporter::InterfaceName);
 		env->_fontImporter->Create();
 
-		env->_scriptEngine = (IScriptEngine*)env->_pluginSystem->CreateInterface(IScriptEngine::InterfaceName);
-		env->_scriptEngine->Create();
+		//env->_scriptEngine = (IScriptEngine*)env->_pluginSystem->CreateInterface(IScriptEngine::InterfaceName);
+		//env->_scriptEngine->Create();
 
 		env->_meshPrimitives = new MeshPrimitives;
 
@@ -186,7 +186,7 @@ namespace HexEngine
 
 		env->_chunkManager = new ChunkManager;
 		env->_audioManager = new AudioManager;
-		env->_audioManager->Create();
+		//env->_audioManager->Create();
 
 		env->_uiManager = new UIManager;
 
@@ -316,8 +316,8 @@ namespace HexEngine
 		_fontImporter->Destroy();
 		SAFE_DELETE(_fontImporter);
 
-		_scriptEngine->Destroy();
-		SAFE_DELETE(_scriptEngine);
+		//_scriptEngine->Destroy();
+		//SAFE_DELETE(_scriptEngine);
 
 		SAFE_DELETE(_debugRenderer);
 		SAFE_DELETE(_timeManager);

@@ -79,20 +79,30 @@ def build_nrd(buildConfig):
         print("Cloning NRD...")
         Repo.clone_from("https://github.com/NVIDIAGameWorks/RayTracingDenoiser.git", "ThirdParty/nrd/", recursive=True)
 
-    os.chdir("ThirdParty/nrd/")
+    os.chdir("ThirdParty/nrd/")    
+    
+    runtimeLib = "/MDd"
+    runtimeLib2 = "MultiThreadedDebugDLL"
+    
+    if buildConfig == "Release":
+        runtimeLib = "/MD"
+        runtimeLib2 = "MultiThreadedDLL"
     
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "Visual Studio 17 2022" -A x64')
+    os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "Visual Studio 17 2022" -A x64 -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "')
     
-    projectPath = os.path.realpath("NRD.vcxproj")
+    projectPath = os.path.realpath("NRD.sln")
     print("Project path is %s" % projectPath)
 
-    msbuild(msbuildPath, projectPath, ["/p:Configuration=" + buildConfig + ""])
+    msbuild(msbuildPath, projectPath, [
+        "/p:Configuration=" + buildConfig,
+        "/p:WarningLevel=0",
+        "/p:RuntimeLibrary=" + runtimeLib2
+        ])
     
     os.chdir("..")
 
-    # HBAO+ comes pre-built so no need to build it, just copy the libs
     print("Copying NRD library file from %s to %s" % (os.path.realpath("_Bin/" + buildConfig + "/NRD.lib"), libraryDir))
     
     shutil.copy(os.path.realpath("_Bin/" + buildConfig + "/NRD.lib"), libraryDir)
@@ -187,7 +197,7 @@ def build_shaderconductor(buildConfig):
     os.system("mkdir build")
     os.chdir("build")
     os.system('cmake -G "Visual Studio 17 2022" -T host=x64 -A x64 ../ -DCMAKE_CXX_FLAGS="/wd4189" -DCMAKE_BUILD_TYPE='+buildConfig)
-    os.system('cmake --build . ')
+    os.system('cmake --build . --config '+buildConfig)
     os.chdir("..")
     
     #subprocess.check_call(["python", "BuildAll.py", "vs2022", "vc143", "x64", buildConfig])
@@ -302,12 +312,19 @@ def build_angelscript(buildConfig):
     os.chdir("ThirdParty/angelscript/sdk/angelscript/projects/msvc2022")
     projectPath = os.path.realpath("angelscript.sln")
     print("Project path is %s" % projectPath)
-
-    msbuild(msbuildPath, projectPath, ["/p:Configuration=" + buildConfig + ""])
-
+    
     libName = "angelscriptd.lib"
+    runtimeLib = "MultiThreadedDebugDLL"
+    
     if buildConfig == "Release":
         libName = "angelscript.lib"
+        runtimeLib = "MultiThreadedDLL"
+
+    msbuild(msbuildPath, projectPath, [
+        "/p:Configuration=" + buildConfig,
+        "/p:RuntimeLibrary=" + runtimeLib,
+        "/p:ANGELSCRIPT_EXPORT=0"
+        ])   
         
     print("Copying angelscript library file from %s to %s" % (os.path.realpath("../../lib/" + libName), libraryDir))
     
@@ -328,6 +345,19 @@ def build_recastnavigation(buildConfig):
     
     print("Successfully built recastnavigation!")
     os.chdir(engineMainDir)
+    
+def build_oidn(buildConfig):
+    if not os.path.exists("ThirdParty/oidn/"):
+        print("Cloning oidn...")
+        Repo.clone_from("https://github.com/OpenImageDenoise/oidn.git", "ThirdParty/oidn/")
+
+    os.chdir("ThirdParty/oidn/")
+    os.system("mkdir build")
+    os.chdir("build")
+    os.system('cmake -S .. -G "Visual Studio 17 2022" -A x64')
+    
+    print("Successfully built oidn!")
+    os.chdir(engineMainDir)
 
 def buildConfig(buildConfig):
     global libraryDir
@@ -339,8 +369,8 @@ def buildConfig(buildConfig):
     
     build_assimp(buildConfig)
     build_directxtk(buildConfig)
-    #build_physx(buildConfig.lower())
-    build_shaderconductor(buildConfig)
+   # build_physx(buildConfig.lower())
+    #build_shaderconductor(buildConfig)
     build_hbaoplus(buildConfig)
     build_freetype(buildConfig)
     build_directxtex(buildConfig)
@@ -349,6 +379,7 @@ def buildConfig(buildConfig):
     build_angelscript(buildConfig)
     build_recastnavigation(buildConfig)
     build_nrd(buildConfig)
+    build_oidn(buildConfig)
 
 def get_cxxopts():
     if not os.path.exists("ThirdParty/cxxopts/"):

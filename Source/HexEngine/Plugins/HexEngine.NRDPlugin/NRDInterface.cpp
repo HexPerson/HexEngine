@@ -48,9 +48,9 @@ void NRDInterface::CreateBuffers(int32_t width, int32_t height, ITexture2D* beau
 	nrd::InstanceCreationDesc createDesc;
 	createDesc.denoisersNum = desc.supportedDenoisersNum;
 	createDesc.denoisers = denoisers.data();
-	createDesc.memoryAllocatorInterface.Allocate = Allocate;
-	createDesc.memoryAllocatorInterface.Reallocate = Reallocate;
-	createDesc.memoryAllocatorInterface.Free = Free;
+	createDesc.allocationCallbacks.Allocate = Allocate;
+	createDesc.allocationCallbacks.Reallocate = Reallocate;
+	createDesc.allocationCallbacks.Free = Free;
 
 	auto res = nrd::CreateInstance(createDesc, _instance);
 
