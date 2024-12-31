@@ -8,10 +8,13 @@
 *.obj
 
 ThirdParty/*
+Include/*
+Source/HexEngine/HexEngine.Shaders/Compiled/*
 
 # Precompiled Headers
 *.gch
 *.pch
+*.hcs
 
 # Compiled Dynamic libraries
 *.so
@@ -433,3 +436,36 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+/Source/HexEngine/HexEngine.Shaders/Compiled/BasicDenoise.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/BilateralUpsample.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/Billboard.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/Bloom.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/BuildShadowMask.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/ChromaticAbberation.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/ColourGrade.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/DebugRender.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/Default.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/DefaultAnimated.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/Deferred.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/FullScreenQuad.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/FXAA.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/GaussianBlur.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/GaussianBlurVert.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/GaussianBlurVert_Depth.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/GaussianBlur_Depth.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/PointLight.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/PostFog.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/ShadowMapGeometry.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/ShadowMapGeometryAnimated.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/SkySphere.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/SpotLight.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/SSR.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/SSRResolve.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/TAAResolve.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/Tonemap.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/UIBasic.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/UIInstanced.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/Vignette.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/VolumetricClouds.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/VolumetricLighting.hcs
+/Source/HexEngine/HexEngine.Shaders/Compiled/Water.hcs
