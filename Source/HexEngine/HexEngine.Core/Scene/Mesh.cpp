@@ -15,7 +15,7 @@ namespace HexEngine
 	{
 		_objectBuffer = new PerObjectBuffer;
 	}
-	Mesh::Mesh(Model* model, const std::string& name)
+	Mesh::Mesh(const std::shared_ptr<Model>& model, const std::string& name)
 	{
 		_name = name;
 		_model = model;
@@ -101,9 +101,9 @@ namespace HexEngine
 		}*/
 	}
 
-	Mesh* Mesh::Create(const fs::path& path)
+	std::shared_ptr<Mesh> Mesh::Create(const fs::path& path)
 	{
-		return (Mesh*)g_pEnv->_resourceSystem->LoadResource(path);
+		return reinterpret_pointer_cast<Mesh>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 
 	const std::string& Mesh::GetName()
@@ -182,7 +182,7 @@ namespace HexEngine
 		{
 			if (gMeshInstanceManager.DestroyInstance(_instance, this))
 			{
-				SAFE_UNLOAD(_model);
+				_model.reset();
 			}
 
 			//_instance = nullptr;
@@ -491,23 +491,20 @@ namespace HexEngine
 		_maxLodLevel = level;
 	}
 
-	Material* Mesh::GetMaterial() const
+	std::shared_ptr<Material> Mesh::GetMaterial() const
 	{
 		return _material;
 	}
 
-	void Mesh::SetMaterial(Material* material)
+	void Mesh::SetMaterial(std::shared_ptr<Material> material)
 	{
-		SAFE_UNLOAD(_material);
-
 		if (material)
 		{
 			_material = material;
-			_material->AddRef();
 		}
 		else
 		{
-			_material = nullptr;
+			_material.reset();
 		}
 	}
 }

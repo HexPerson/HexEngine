@@ -20,10 +20,8 @@ namespace HexEngine
 		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
-	IResource* MaterialLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> MaterialLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		Material* material = new Material;
-
 		JsonFile file(absolutePath, std::ios::in);
 
 		if (file.DoesExist() == false)
@@ -31,6 +29,8 @@ namespace HexEngine
 			LOG_CRIT("Material file '%s' does not exist", absolutePath.u8string().c_str());
 			return nullptr;
 		}
+
+		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material, ResourceDeleter());
 
 		file.Open();
 
@@ -48,20 +48,22 @@ namespace HexEngine
 		return material;
 	}
 
-	IResource* MaterialLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> MaterialLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		Material* material = new Material;
-
 		std::string materialData = (const char*)data.data();
 
 		KeyValues kv;
 		if(kv.Parse(materialData) == false)
 		{
 			LOG_CRIT("Failed to parse key values from material file '%s'", relativePath.string().c_str());
-			SAFE_DELETE(material);
 			return nullptr;
 		}
-		//ParseJson(kv, material);
+
+		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material, ResourceDeleter());
+		
+		json matData = json::parse(data);
+
+		//ParseJson(&file, matData, material);
 
 		AddMaterial(material);
 
@@ -70,7 +72,7 @@ namespace HexEngine
 		return material;
 	}
 
-	void MaterialLoader::ParseJson(JsonFile* file, json& json, Material* material)
+	void MaterialLoader::ParseJson(JsonFile* file, json& json, std::shared_ptr<Material>& material)
 	{
 		
 		// Load textures
@@ -83,7 +85,7 @@ namespace HexEngine
 			auto texNameA = std::string(texName.begin(), texName.end());
 
 			if (auto tex = textures.find(texNameA); tex != textures.end())
-				material->SetTexture((MaterialTexture)i, (ITexture2D*)g_pEnv->_resourceSystem->LoadResource(tex.value()));
+				material->SetTexture((MaterialTexture)i, ITexture2D::Create(tex.value()));
 		}
 
 		// Load properties
@@ -190,7 +192,10 @@ namespace HexEngine
 
 	void MaterialLoader::UnloadResource(IResource* resource)
 	{		
-		RemoveMaterial((Material*)resource);
+		_loadedMaterials.erase(std::remove_if(_loadedMaterials.begin(), _loadedMaterials.end(),
+			[resource](std::weak_ptr<Material> res) {
+				return res.lock().get() == resource;
+			}));
 		SAFE_DELETE(resource);
 	}
 
@@ -204,27 +209,30 @@ namespace HexEngine
 		return L"Materials";
 	}
 
-	void MaterialLoader::AddMaterial(Material* material)
+	void MaterialLoader::AddMaterial(const std::shared_ptr<Material> material)
 	{
 		_loadedMaterials.push_back(material);
 	}
 
-	void MaterialLoader::RemoveMaterial(Material* material)
+	void MaterialLoader::RemoveMaterial(const std::shared_ptr<Material> material)
 	{
-		_loadedMaterials.erase(std::remove(_loadedMaterials.begin(), _loadedMaterials.end(), material));
+		_loadedMaterials.erase(std::remove_if(_loadedMaterials.begin(), _loadedMaterials.end(),
+			[material](std::weak_ptr<Material> mat) {
+				return mat.lock() == material;
+			}));
 	}
 
-	Material* MaterialLoader::FindMaterialByName(const std::string& name) const
+	std::shared_ptr<Material> MaterialLoader::FindMaterialByName(const std::string& name) const
 	{
 		auto it = std::find_if(_loadedMaterials.begin(), _loadedMaterials.end(),
-			[name](Material* mat) {
-			return mat->GetName() == name;
+			[name](std::weak_ptr<Material> mat) {
+			return mat.lock()->GetName() == name;
 			});
 
 		if (it == _loadedMaterials.end())
 			return nullptr;
 
-		return *it;
+		return (*it).lock();
 	}
 
 	Dialog* MaterialLoader::CreateEditorDialog(const fs::path& path, FileSystem* fileSystem)
@@ -238,7 +246,7 @@ namespace HexEngine
 		const int32_t dlgW = 800;
 		const int32_t dlgH = 600;
 
-		Material* mat = Material::Create(path);
+		auto mat = Material::Create(path);
 
 		if (mat)
 		{
@@ -247,9 +255,7 @@ namespace HexEngine
 				Point(cx - dlgW / 2, cy - dlgH / 2),
 				Point(dlgW, dlgH),
 				std::format(L"Editing Material '{}'", path.filename().wstring()),
-				mat);
-
-			mat->Release();
+				mat.get());
 
 			return dlg;
 		}
@@ -318,7 +324,7 @@ namespace HexEngine
 
 		auto jsonString = data.dump(2);
 
-		file.Write(jsonString.data(), jsonString.length());
+		file.Write(jsonString.data(), (uint32_t)jsonString.length());
 		file.Flush();
 		file.Close();
 

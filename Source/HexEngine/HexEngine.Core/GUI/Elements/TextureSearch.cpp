@@ -25,18 +25,13 @@ namespace HexEngine
 
 		if (_texture)
 		{
-			_texture->AddRef();
 			_edit->SetValue(_texture->GetAbsolutePath().filename());
 		}
-
-		if (_material)
-			_material->AddRef();
 	}
 
 	TextureSearch::~TextureSearch()
 	{
-		SAFE_RELEASE(_texture);
-		SAFE_RELEASE(_material);
+		SAFE_DELETE(_edit);
 	}
 
 	void TextureSearch::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
@@ -55,7 +50,7 @@ namespace HexEngine
 		if (_texture)
 		{
 			renderer->FillTexturedQuad(
-				_texture,
+				_texture.get(),
 				pos.x + _edit->GetLabelMinSize() + 25,
 				pos.y + 30,
 				_size.y - 35,
@@ -64,7 +59,7 @@ namespace HexEngine
 		}
 
 		int32_t closeButtonSize = _size.y - 3;
-		renderer->FillTexturedQuad(renderer->_style.img_win_close, _position.x + _size.x - (closeButtonSize + 8), _position.y + (renderer->_style.win_title_height / 2) - (closeButtonSize / 2) - 1, closeButtonSize, closeButtonSize, math::Color(1, 0, 0, 1));
+		renderer->FillTexturedQuad(renderer->_style.img_win_close.get(), _position.x + _size.x - (closeButtonSize + 8), _position.y + (renderer->_style.win_title_height / 2) - (closeButtonSize / 2) - 1, closeButtonSize, closeButtonSize, math::Color(1, 0, 0, 1));
 
 	}
 
@@ -95,9 +90,7 @@ namespace HexEngine
 		{
 			_material->SetTexture(_type, newTexture);
 
-			SAFE_UNLOAD(_texture);
 			_texture = newTexture;
-			_texture->AddRef();
 
 			_edit->SetValue(path.filename());
 		}

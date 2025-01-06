@@ -64,16 +64,18 @@ namespace HexEngine
 	//	return;
 	//}
 
-	Mesh* CreateTerrain(const TerrainGenerationParams& params)
+	std::shared_ptr<Mesh> CreateTerrain(const TerrainGenerationParams& params)
 	{
 		uint32_t resolution = params.resolution + 1;
 
-		Mesh* mesh = nullptr;
+		Mesh* meshp = nullptr;
 
 		if (!params.createInstance)
-			mesh = new Mesh(nullptr, params.ident + std::to_string(params.position.x) + std::to_string(params.position.y) + std::to_string(params.position.z));
+			meshp = new Mesh(nullptr, params.ident + std::to_string(params.position.x) + std::to_string(params.position.y) + std::to_string(params.position.z));
 		else
-			mesh = new Mesh(nullptr, params.ident);
+			meshp = new Mesh(nullptr, params.ident);
+
+		std::shared_ptr<Mesh> mesh = std::shared_ptr<Mesh>(meshp);
 
 		std::vector<MeshVertex> vertices;
 		std::vector<MeshIndexFormat> indices;

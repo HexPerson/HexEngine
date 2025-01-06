@@ -17,7 +17,7 @@ namespace HexEngine
 
 	}
 
-	void ScriptComponent::SetScript(ScriptFile* script)
+	void ScriptComponent::SetScript(const std::shared_ptr<ScriptFile>& script)
 	{
 		_script = script;
 		_script->_component = this;

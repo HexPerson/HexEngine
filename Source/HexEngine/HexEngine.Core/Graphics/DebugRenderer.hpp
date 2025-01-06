@@ -42,7 +42,7 @@ namespace HexEngine
 	private:
 		IVertexBuffer* _lineVBuffer = nullptr;
 		IIndexBuffer* _lineIBuffer = nullptr;
-		IShader* _debugShader = nullptr;
+		std::shared_ptr<IShader> _debugShader;
 		//IInputLayout* _inputLayout = nullptr;
 
 		std::vector<DebugLines> _lines;

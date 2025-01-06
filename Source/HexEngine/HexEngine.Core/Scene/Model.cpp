@@ -9,13 +9,12 @@ namespace HexEngine
 		Destroy();
 	}
 
-	void Model::AddMesh(Mesh* mesh)
+	void Model::AddMesh(const std::shared_ptr<Mesh>& mesh)
 	{
 		_meshes.push_back(mesh);
-		mesh->AddRef();
 	}
 
-	void Model::AddRef()
+	/*void Model::AddRef()
 	{
 		IResource::AddRef();
 
@@ -28,16 +27,16 @@ namespace HexEngine
 
 			LOG_DEBUG("Mesh '%s' [%p] now has a refcount of %d", mesh->GetName().c_str(), mesh, mesh->GetRefCount());
 		}
+	}*/
+
+	std::shared_ptr<Model> Model::Create(const fs::path& path)
+	{
+		return reinterpret_pointer_cast<Model>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 
-	Model* Model::Create(const fs::path& path)
+	std::shared_ptr<Model> Model::CreateAsync(const fs::path& path, ResourceLoadedFn callback)
 	{
-		return (Model*)g_pEnv->_resourceSystem->LoadResource(path);
-	}
-
-	Model* Model::CreateAsync(const fs::path& path, ResourceLoadedFn callback)
-	{
-		return (Model*)g_pEnv->_resourceSystem->LoadResourceAsync(path, callback);
+		return reinterpret_pointer_cast<Model>(g_pEnv->_resourceSystem->LoadResourceAsync(path, callback));
 	}
 
 	void Model::Destroy()
@@ -61,7 +60,7 @@ namespace HexEngine
 		return _relativePath;
 	}	
 
-	Mesh* Model::GetMeshAtIndex(uint32_t index)
+	std::shared_ptr<Mesh> Model::GetMeshAtIndex(uint32_t index)
 	{
 		if (index < 0 || index >= _meshes.size())
 			return nullptr;
@@ -74,7 +73,7 @@ namespace HexEngine
 		return (uint32_t)_meshes.size();
 	}
 
-	const std::vector<Mesh*>& Model::GetMeshes() const
+	const std::vector<std::shared_ptr<Mesh>>& Model::GetMeshes() const
 	{
 		return _meshes;
 	}

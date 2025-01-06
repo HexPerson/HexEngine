@@ -49,17 +49,17 @@ namespace HexEngine
 				_skySphere = CreateEntity("SkySphere", math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(2.0f));
 				_skySphere->SetLayer(Layer::Sky);
 
-				Mesh* sphereModel = Mesh::Create("EngineData.Models/Primitives/sphere_sphereobj_843_960.hmesh");
+				auto sphereMesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
 				auto skyRenderer = _skySphere->AddComponent<StaticMeshComponent>();
 
-				skyRenderer->SetMesh(sphereModel);
+				skyRenderer->SetMesh(sphereMesh);
 
 				//auto material = Material::Create("Materials/SkySphere.hmat"); skyRenderer->GetMesh(0)->GetMaterial();
 
 				//material->SetCullMode(CullingMode::FrontFace);
 				//material->SetDepthState(DepthBufferState::DepthNone);
-				skyRenderer->SetMaterial(0, Material::Create("Materials/SkySphere.hmat"));
+				skyRenderer->SetMaterial(Material::Create("Materials/SkySphere.hmat"));
 			}
 		}
 	}
@@ -88,12 +88,12 @@ namespace HexEngine
 				_skySphere = CreateEntity("SkySphere", math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(2.0f));
 				_skySphere->SetLayer(Layer::Sky);
 
-				Mesh* sphereModel = Mesh::Create("EngineData.Models/Primitives/sphere_sphereobj_843_960.hmesh");
+				auto sphereMesh = Mesh::Create("EngineData.Models/Primitives/sphere_sphereobj_843_960.hmesh");
 
 				auto skyRenderer = _skySphere->AddComponent<StaticMeshComponent>();
 
-				skyRenderer->SetMesh(sphereModel);
-				skyRenderer->SetMaterial(0, Material::Create("EngineData.Materials/SkySphere.hmat"));
+				skyRenderer->SetMesh(sphereMesh);
+				skyRenderer->SetMaterial(Material::Create("EngineData.Materials/SkySphere.hmat"));
 			}
 		}
 	}
@@ -906,20 +906,20 @@ namespace HexEngine
 
 			if (_updateFlags != 0)
 			{
-				renderer->PrintText(font, 14, x, y, math::Color(1, 0, 0, 1), FontAlign::Right, L"Flushing entities"); y += 15;
+				renderer->PrintText(font.get(), 14, x, y, math::Color(1, 0, 0, 1), FontAlign::Right, L"Flushing entities"); y += 15;
 			}
 			else
 			{
-				renderer->PrintText(font, 14, x, y, math::Color(0, 01, 0, 1), FontAlign::Right, L"Not flushing entities"); y += 15;
+				renderer->PrintText(font.get(), 14, x, y, math::Color(0, 01, 0, 1), FontAlign::Right, L"Not flushing entities"); y += 15;
 			}
 
-			renderer->PrintText(font, 14, x, y, math::Color(1, 1, 0.5f, 1), FontAlign::Right, std::format(L"Camera pos {:.2f} {:.2f} {:.2f} ", cameraPos.x, cameraPos.y, cameraPos.z));
+			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 0.5f, 1), FontAlign::Right, std::format(L"Camera pos {:.2f} {:.2f} {:.2f} ", cameraPos.x, cameraPos.y, cameraPos.z));
 			y += 15;
 
-			renderer->PrintText(font, 14, x, y, math::Color(1, 1, 0.5f, 1), FontAlign::Right, std::format(L"Frustum centre pos {:.2f} {:.2f} {:.2f}", frustum.Origin.x, frustum.Origin.y, frustum.Origin.z));
+			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 0.5f, 1), FontAlign::Right, std::format(L"Frustum centre pos {:.2f} {:.2f} {:.2f}", frustum.Origin.x, frustum.Origin.y, frustum.Origin.z));
 			y += 15;
 
-			renderer->PrintText(font, 14, x, y, math::Color(1, 1, 0.5f, 1), FontAlign::Right, std::format(L"Frustum sphere pos {:.2f} {:.2f} {:.2f} Radius {:.2f}", frustumSphere.Center.x, frustumSphere.Center.y, frustumSphere.Center.z, frustumSphere.Radius));
+			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 0.5f, 1), FontAlign::Right, std::format(L"Frustum sphere pos {:.2f} {:.2f} {:.2f} Radius {:.2f}", frustumSphere.Center.x, frustumSphere.Center.y, frustumSphere.Center.z, frustumSphere.Radius));
 			y += 15;
 
 #if 0
@@ -935,7 +935,7 @@ namespace HexEngine
 			}
 #endif
 
-			renderer->PrintText(font, 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Drawn entities {:d} Draw calls {:d}", _drawnEntities, _drawCalls)); y += 15;
+			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Drawn entities {:d} Draw calls {:d}", _drawnEntities, _drawCalls)); y += 15;
 		}
 	}
 
@@ -1051,7 +1051,7 @@ namespace HexEngine
 					if (!renderer)
 						continue;
 
-					if (renderer->RenderMesh(mesh, renderFlags, _drawnEntities) == false)
+					if (renderer->RenderMesh(mesh.get(), renderFlags, _drawnEntities) == false)
 					{
 						LOG_WARN("Failed to RenderMesh, ignoring this entity");
 						continue;

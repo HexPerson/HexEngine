@@ -512,7 +512,7 @@ namespace HexEngine
 
 					if (cl_showfps._val.b)
 					{
-						_uiManager->GetRenderer()->PrintText(_uiManager->GetRenderer()->_style.font, (uint8_t)Style::FontSize::Small, 5, 5, math::Color(1, 1, 1, 1), 0, std::format(L"FPS: {:d}", _timeManager->_fps));
+						_uiManager->GetRenderer()->PrintText(_uiManager->GetRenderer()->_style.font.get(), (uint8_t)Style::FontSize::Small, 5, 5, math::Color(1, 1, 1, 1), 0, std::format(L"FPS: {:d}", _timeManager->_fps));
 					}
 
 					//_sceneRenderer->RenderOverlays(SceneFlags::PostProcessingEnabled);

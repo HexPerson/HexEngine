@@ -16,9 +16,9 @@ namespace HexEngine
 
 		// IResourceLoader
 		//
-		virtual IResource* LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
+		virtual std::shared_ptr<IResource> LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
 
-		virtual IResource* LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
+		virtual std::shared_ptr<IResource> LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
 
 		virtual void UnloadResource(IResource* resource) override;
 
@@ -31,10 +31,10 @@ namespace HexEngine
 		void ReloadAllShaders();
 
 	private:
-		IShader* ParseShaderInternal(const fs::path& absolutePath);
-		IShader* ParseShaderInternal(const std::vector<uint8_t>& data);
+		std::shared_ptr<IShader> ParseShaderInternal(const fs::path& absolutePath);
+		std::shared_ptr<IShader> ParseShaderInternal(const std::vector<uint8_t>& data);
 
 	private:
-		std::map<fs::path, IShader*> _loadedShaders;
+		std::map<fs::path, std::weak_ptr<IShader>> _loadedShaders;
 	};
 }

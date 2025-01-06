@@ -68,14 +68,14 @@ namespace HexEditor
 				loadingDlg->SetText(std::format(L"Loading {} {:d}/{:d}", entityName, loaded, total));
 			};
 
-			Scene* sceneToActivateAfterLoad = nullptr;
+			std::shared_ptr<Scene> sceneToActivateAfterLoad;
 			bool loadedGameFromIntegrator = false;
 
 			for (auto& scene : file._scenes)
 			{
 				if (scene->IsSceneAttached() == false)
 				{
-					Scene* newScene = g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)g_pEnv->_uiManager);
+					auto newScene = g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)g_pEnv->_uiManager);
 
 					if (sceneToActivateAfterLoad == nullptr)
 					{
@@ -103,7 +103,7 @@ namespace HexEditor
 					//newScene->GetMainCamera()->SetViewport(math::Viewport(0, 0, _centralDock->GetSize().x, _centralDock->GetSize().y));
 					//g_pEnv->_sceneRenderer->Resize(_centralDock->GetSize().x, _centralDock->GetSize().y);
 
-					SceneSaveFile* saveFile = new SceneSaveFile(scene->GetAbsolutePath(), std::ios::out, newScene);
+					SceneSaveFile* saveFile = new SceneSaveFile(scene->GetAbsolutePath(), std::ios::out, newScene.get());
 
 					_sceneFiles.push_back(saveFile);
 				}
@@ -132,7 +132,7 @@ namespace HexEditor
 
 			newScene->CreateDefaultSunLight();
 
-			SceneSaveFile* sceneFile = new SceneSaveFile(_projectFolderPath / "Data/Scenes/New Scene.json", std::ios::out | std::ios::trunc, newScene);
+			SceneSaveFile* sceneFile = new SceneSaveFile(_projectFolderPath / "Data/Scenes/New Scene.json", std::ios::out | std::ios::trunc, newScene.get());
 
 			sceneFile->Save();
 
@@ -299,7 +299,7 @@ namespace HexEditor
 	{
 		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
 
-		g_pEnv->_sceneManager->UnloadScene(scene);
+		g_pEnv->_sceneManager->UnloadScene(scene.get());
 
 		_sceneFiles.erase(std::remove_if(_sceneFiles.begin(), _sceneFiles.end(), [scene](SceneSaveFile* ssf) {
 			return ssf->GetScene() == scene;
@@ -318,32 +318,32 @@ namespace HexEditor
 		case PrimitiveType::Cube:
 		{
 			auto primitive = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Cube");
-			auto mesh = primitive->AddComponent<StaticMeshComponent>();
-			auto model = (Mesh*)g_pEnv->_resourceSystem->LoadResource("EngineData.Models/Primitives/cube_cubeobj_24_12.hmesh");
+			auto meshComponent = primitive->AddComponent<StaticMeshComponent>();
+			auto mesh = Mesh::Create("EngineData.Models/Primitives/cube.hmesh");
 
-			mesh->SetMesh(model);
+			meshComponent->SetMesh(mesh);
 
 			auto body = primitive->AddComponent<RigidBody>();
-			body->AddBoxCollider(model->GetAABB());
+			body->AddBoxCollider(mesh->GetAABB());
 
 			break;
 		}
 		case PrimitiveType::Sphere:
 		{
 			auto primitive = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Sphere");
-			auto mesh = primitive->AddComponent<StaticMeshComponent>();
-			auto model = (Model*)g_pEnv->_resourceSystem->LoadResource("EngineData.Models/Primitives/sphere.obj");
+			auto meshComponent = primitive->AddComponent<StaticMeshComponent>();
+			auto mesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
-			mesh->SetMesh(model->GetMeshAtIndex(0));
+			meshComponent->SetMesh(mesh);
 			break;
 		}
 		case PrimitiveType::Plane:
 		{
 			auto primitive = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Plane");
-			auto mesh = primitive->AddComponent<StaticMeshComponent>();
+			auto meshComponent = primitive->AddComponent<StaticMeshComponent>();
+			auto mesh = Mesh::Create("EngineData.Models/Primitives/plane.hmesh");
 
-			auto model = (Model*)g_pEnv->_resourceSystem->LoadResource("EngineData.Models/Primitives/plane.obj");
-			mesh->SetMesh(model->GetMeshAtIndex(0));
+			meshComponent->SetMesh(mesh);
 			break;
 		}
 
@@ -427,7 +427,7 @@ namespace HexEditor
 		std::wstring dataLocalPath = L"Data/Scenes/" + sceneName + L".json";
 		auto scenePath = _projectFolderPath / dataLocalPath;
 
-		SceneSaveFile* ssf = new SceneSaveFile(scenePath, std::ios::out, scene);
+		SceneSaveFile* ssf = new SceneSaveFile(scenePath, std::ios::out, scene.get());
 
 		_projectFile->_scenes.push_back(ssf);
 		_sceneFiles.push_back(ssf);

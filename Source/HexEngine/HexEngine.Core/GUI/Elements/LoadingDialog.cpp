@@ -33,7 +33,7 @@ namespace HexEngine
 
 		if (_text.length() > 0)
 		{
-			renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, _position.x + 10, _position.y + 40, renderer->_style.text_regular, FontAlign::None, _text);
+			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, _position.x + 10, _position.y + 40, renderer->_style.text_regular, FontAlign::None, _text);
 		}
 
 		renderer->PushFillQuad(_position.x + 10, _position.y + 60, _size.x - 20, 20, renderer->_style.lineedit_back);

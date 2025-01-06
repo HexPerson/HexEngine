@@ -55,7 +55,9 @@ namespace HexEngine
 		friend class ShaderSystem;
 
 	public:
-		static IShader* Create(const fs::path& path);
+		static std::shared_ptr<IShader> Create(const fs::path& path);
+
+		static std::shared_ptr<IShader> GetDefaultShader();
 
 		virtual void Destroy() override;
 
@@ -65,7 +67,7 @@ namespace HexEngine
 
 		ShaderRequirements GetRequirements() const;
 
-		static IShader* GetDefaultShader();
+		
 
 	private:
 		IShaderStage* _stages[(uint32_t)ShaderStage::NumShaderStages] = { nullptr };

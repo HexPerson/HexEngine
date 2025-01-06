@@ -5,11 +5,11 @@
 
 namespace HexEngine
 {
-	ScriptFile* ScriptFile::Create(const fs::path& path, ScriptComponent* component)
+	std::shared_ptr<ScriptFile> ScriptFile::Create(const fs::path& path, ScriptComponent* component)
 	{
 		ScriptLoadOptions options;
 		options.component = component;
 
-		return (ScriptFile*)g_pEnv->_resourceSystem->LoadResource(path, &options);
+		return reinterpret_pointer_cast<ScriptFile>(g_pEnv->_resourceSystem->LoadResource(path, &options));
 	}
 }

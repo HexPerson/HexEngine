@@ -15,7 +15,7 @@ namespace HexEngine
 	class ScriptFile : public IResource
 	{
 	public:
-		static ScriptFile* Create(const fs::path& path, ScriptComponent* component);
+		static std::shared_ptr<ScriptFile> Create(const fs::path& path, ScriptComponent* component);
 
 		virtual void Update(float dt) {};
 		virtual void FixedUpdate(float dt) {};

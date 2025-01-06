@@ -21,16 +21,6 @@ namespace HexEngine
 			_loader->SaveResource(this, GetAbsolutePath());
 	}
 
-	void IResource::AddRef()
-	{
-		++_refCnt;
-	}
-
-	int32_t IResource::GetRefCount() const
-	{
-		return _refCnt;
-	}
-
 	const fs::path& IResource::GetAbsolutePath() const
 	{
 		return _absolutePath;
@@ -44,11 +34,6 @@ namespace HexEngine
 	const fs::path& IResource::GetFileSystemPath() const
 	{
 		return _fsRelativePath;
-	}
-
-	void IResource::Release()
-	{
-		--_refCnt;
 	}
 
 	FileSystem* IResource::GetOwningFileSystem() const

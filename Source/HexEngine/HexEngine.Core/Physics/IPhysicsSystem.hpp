@@ -28,7 +28,7 @@ namespace HexEngine
 		math::Vector3 normal;
 		Entity* entity = nullptr;
 		float distance = 0.0f;
-		Material* material = nullptr;
+		std::weak_ptr<Material> material;
 	};
 
 	enum class JointType

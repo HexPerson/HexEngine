@@ -64,8 +64,8 @@ namespace HexEngine
 
 		virtual void Destroy() override;
 
-		virtual Model*						LoadResourceFromFile(const fs::path& path, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
-		virtual Model*						LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
+		virtual std::shared_ptr<IResource>	LoadResourceFromFile(const fs::path& path, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
+		virtual std::shared_ptr<IResource>	LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
 		virtual void						UnloadResource(IResource* resource) override;
 		virtual std::vector<std::string>	GetSupportedResourceExtensions() override;
 		virtual std::wstring				GetResourceDirectory() const override;
@@ -73,13 +73,13 @@ namespace HexEngine
 		virtual void						SaveResource(IResource* resource, const fs::path& path) override { }
 
 	private:
-		void			ProcessNode(Model* model, aiNode* node, std::vector<AnimChannel*> parentAnims, const aiScene* scene, FileSystem* fileSystem);
-		Mesh*			ProcessMesh(Model* model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem);
-		AnimatedMesh*	ProcessAnimatedMesh(Model* model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem);
-		void			ProcessMaterial(Mesh* mesh, const aiScene* scene, aiMaterial* material, FileSystem* fileSystem);
-		ITexture2D*		LoadTexture(Mesh* mesh, const aiTextureType type, const aiScene* scene, const aiMaterial* material, FileSystem* fileSystem);
-		void			ProcessAnimations(Model* model, const aiScene* scene);
-		AnimChannel*	FindAnimChannelFromNodeName(Model* model, const std::string& nodeName);
+		void						ProcessNode(std::shared_ptr<Model>& model, aiNode* node, std::vector<AnimChannel*> parentAnims, const aiScene* scene, FileSystem* fileSystem);
+		std::shared_ptr<Mesh>		ProcessMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem);
+		AnimatedMesh*				ProcessAnimatedMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem);
+		void						ProcessMaterial(std::shared_ptr<Mesh>& mesh, const aiScene* scene, aiMaterial* material, FileSystem* fileSystem);
+		std::shared_ptr<ITexture2D>	LoadTexture(std::shared_ptr<Mesh>& mesh, const aiTextureType type, const aiScene* scene, const aiMaterial* material, FileSystem* fileSystem);
+		void						ProcessAnimations(std::shared_ptr<Model>& model, const aiScene* scene);
+		AnimChannel*				FindAnimChannelFromNodeName(std::shared_ptr<Model>& model, const std::string& nodeName);
 
 	private:
 		fs::path _currentPath;

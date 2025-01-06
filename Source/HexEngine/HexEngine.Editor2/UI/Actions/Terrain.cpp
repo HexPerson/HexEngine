@@ -87,8 +87,8 @@ namespace HexEditor
 
 		if (_useChunkSystem)
 		{
-			g_pEnv->_chunkManager->RemoveAllChunks(g_pEnv->_sceneManager->GetCurrentScene());
-			g_pEnv->_chunkManager->CreateChunks(g_pEnv->_sceneManager->GetCurrentScene(), _width, _gridSize);
+			g_pEnv->_chunkManager->RemoveAllChunks(g_pEnv->_sceneManager->GetCurrentScene().get());
+			g_pEnv->_chunkManager->CreateChunks(g_pEnv->_sceneManager->GetCurrentScene().get(), _width, _gridSize);
 		}
 
 		if (_parent)
@@ -99,7 +99,7 @@ namespace HexEditor
 
 		
 
-		Material* terrainMaterial = Material::Create(_materialName->GetValue());
+		auto terrainMaterial = Material::Create(_materialName->GetValue());
 
 		LOG_DEBUG("Creating a new heightmap terrain with seed %d", seed);
 
@@ -163,12 +163,12 @@ namespace HexEditor
 
 					auto meshRenderer = terrainEnt->AddComponent<StaticMeshComponent>();
 					meshRenderer->SetMesh(mesh);
-					meshRenderer->SetMaterial(0, terrainMaterial);
+					meshRenderer->SetMaterial(terrainMaterial);
 
 					if (_makeColliders)
 					{
 						auto rb = terrainEnt->AddComponent<RigidBody>();
-						rb->AddTriangleMeshCollider(mesh, true);
+						rb->AddTriangleMeshCollider(mesh.get(), true);
 					}
 				}
 

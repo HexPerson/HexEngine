@@ -54,7 +54,7 @@ namespace HexEngine
 	{
 		_gbuffer.Create(g_pEnv->_graphicsDevice, g_pEnv->_graphicsDevice->GetCurrentMSAALevel());
 
-		_sphereModel = (Model*)g_pEnv->_resourceSystem->LoadResource("EngineData.Models/Primitives/sphere.obj");
+		_sphereMesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
 		_pointLightMaterial = Material::Create("EngineData.Materials/PointLight.hmat");
 		_spotLightMaterial = Material::Create("EngineData.Materials/SpotLight.hmat");
@@ -136,23 +136,7 @@ namespace HexEngine
 
 		_gbuffer.Destroy();
 
-		SAFE_UNLOAD(_sphereModel);
-
 		//SAFE_DELETE(_clouds);
-
-		SAFE_UNLOAD(_compositionShader);
-		//SAFE_UNLOAD(_shadowMaskShader);
-		SAFE_UNLOAD(_fxaa);
-		SAFE_UNLOAD(_fogEffect);
-		SAFE_UNLOAD(_bilateralUpsample);
-		SAFE_UNLOAD(_pointLightShader);
-		SAFE_UNLOAD(_spotLightShader);
-		SAFE_UNLOAD(_ssrShader);
-		SAFE_UNLOAD(_vignetteShader);
-		SAFE_UNLOAD(_chromaticAberrationShader);
-		SAFE_UNLOAD(_colourGradingShader);
-		SAFE_UNLOAD(_tonemapShader);
-		SAFE_UNLOAD(_basicDenoise);
 
 		SAFE_DELETE(_beautyRT);
 		SAFE_DELETE(_shadowMapsRT);
@@ -175,35 +159,29 @@ namespace HexEngine
 		//SAFE_DELETE(_blueNoise);
 		SAFE_DELETE(_bloomEffect);
 		//SAFE_DELETE(_ssrBlur);
-		SAFE_DELETE(_ssrResolve);
-
-		SAFE_UNLOAD(_spotLightMaterial);
-		SAFE_UNLOAD(_pointLightMaterial);
-		
 	}
 
 	void SceneRenderer::CreateShaders()
 	{
-		_compositionShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/Deferred.hcs");
-		//_shadowMaskShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("Shaders/BuildShadowMask.hcs");		
-		_fxaa = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/FXAA.hcs");
-		_fogEffect = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/PostFog.hcs");
-		_volumetricLighting = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/VolumetricLighting.hcs");
-		_bilateralUpsample = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/BilateralUpsample.hcs");
-		_pointLightShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/PointLight.hcs");
-		_spotLightShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/SpotLight.hcs");
-		_ssrShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/SSR.hcs");
-		_vignetteShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/Vignette.hcs");
-		_chromaticAberrationShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/ChromaticAbberation.hcs");
-		_colourGradingShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/ColourGrade.hcs");
-		_ssrResolve = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/SSRResolve.hcs");
-		_tonemapShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/Tonemap.hcs");
-		_basicDenoise = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/BasicDenoise.hcs");
+		_compositionShader			= IShader::Create("EngineData.Shaders/Deferred.hcs");	
+		_fxaa						= IShader::Create("EngineData.Shaders/FXAA.hcs");
+		_fogEffect					= IShader::Create("EngineData.Shaders/PostFog.hcs");
+		_volumetricLighting			= IShader::Create("EngineData.Shaders/VolumetricLighting.hcs");
+		_bilateralUpsample			= IShader::Create("EngineData.Shaders/BilateralUpsample.hcs");
+		_pointLightShader			= IShader::Create("EngineData.Shaders/PointLight.hcs");
+		_spotLightShader			= IShader::Create("EngineData.Shaders/SpotLight.hcs");
+		_ssrShader					= IShader::Create("EngineData.Shaders/SSR.hcs");
+		_vignetteShader				= IShader::Create("EngineData.Shaders/Vignette.hcs");
+		_chromaticAberrationShader	= IShader::Create("EngineData.Shaders/ChromaticAbberation.hcs");
+		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
+		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
+		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
+		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
 
 		//_volumetricBlur = new BlurEffect(_volumetricLightingBuffer, BlurType::Gaussian, 2);
 		//_waterBlur = new BlurEffect(_waterAccumulationRT, BlurType::Gaussian, 2);
 
-		_blueNoise = (ITexture2D*)g_pEnv->_resourceSystem->LoadResource("EngineData.Textures/LDR_RGBA_0.png");
+		_blueNoise					= ITexture2D::Create("EngineData.Textures/LDR_RGBA_0.png");
 
 		
 
@@ -435,8 +413,8 @@ namespace HexEngine
 			_sphereEntity->SetLayer(Layer::Invisible);
 			_sphereEntity->SetFlag(EntityFlags::DoNotSave);
 			auto sphereMeshRenderer = _sphereEntity->AddComponent<StaticMeshComponent>();
-			sphereMeshRenderer->SetMesh(_sphereModel->GetMeshAtIndex(0));
-			sphereMeshRenderer->SetMaterial(0, _pointLightMaterial);
+			sphereMeshRenderer->SetMesh(_sphereMesh);
+			sphereMeshRenderer->SetMaterial(_pointLightMaterial);
 		}
 		// TODO move this somewhere
 		/*if (_clouds == nullptr)
@@ -1313,19 +1291,19 @@ namespace HexEngine
 
 			
 
-			guiRenderer->FullScreenTexturedQuad(beauty, _colourGradingShader);
+			guiRenderer->FullScreenTexturedQuad(beauty, _colourGradingShader.get());
 			renderTarget->CopyTo(beauty);
 
-			guiRenderer->FullScreenTexturedQuad(beauty, _vignetteShader);
+			guiRenderer->FullScreenTexturedQuad(beauty, _vignetteShader.get());
 			renderTarget->CopyTo(beauty);
 
-			guiRenderer->FullScreenTexturedQuad(beauty, _chromaticAberrationShader);
+			guiRenderer->FullScreenTexturedQuad(beauty, _chromaticAberrationShader.get());
 			renderTarget->CopyTo(beauty);
 
 			
 
 			if (r_fxaa._val.i32 && canPostProcess)
-				guiRenderer->FullScreenTexturedQuad(beauty, _fxaa);
+				guiRenderer->FullScreenTexturedQuad(beauty, _fxaa.get());
 			else
 				guiRenderer->FullScreenTexturedQuad(beauty);
 
@@ -1442,7 +1420,7 @@ namespace HexEngine
 
 				
 
-				guiRenderer->FullScreenTexturedQuad(nullptr, _compositionShader);
+				guiRenderer->FullScreenTexturedQuad(nullptr, _compositionShader.get());
 
 				_lightAccumulationBuffer->CopyTo(_beautyRT);
 			}
@@ -1466,7 +1444,7 @@ namespace HexEngine
 		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
 
 		auto renderer = _sphereEntity->GetComponent<StaticMeshComponent>();
-		renderer->SetMaterial(0, _pointLightMaterial);
+		renderer->SetMaterial(_pointLightMaterial);
 		auto mesh = renderer->GetMesh();
 		auto instance = mesh->GetInstance();
 
@@ -1505,7 +1483,7 @@ namespace HexEngine
 			{
 				instance->Start();
 
-				renderer->RenderMesh(mesh, MeshRenderFlags::MeshRenderNormal, numPointLightsRendered);
+				renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, numPointLightsRendered);
 
 				renderedSphere = true;
 			}
@@ -1538,7 +1516,7 @@ namespace HexEngine
 
 			D3DPERF_BeginEvent(0xFFFFFFFF, L"Begin PointLight");
 
-			g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereModel->GetMeshAtIndex(0)->GetNumIndices(), numPointLightsRendered);
+			g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numPointLightsRendered);
 
 			D3DPERF_EndEvent();
 		}
@@ -1562,7 +1540,7 @@ namespace HexEngine
 		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
 
 		auto renderer = _sphereEntity->GetComponent<StaticMeshComponent>();
-		renderer->SetMaterial(0, _spotLightMaterial);
+		renderer->SetMaterial(_spotLightMaterial);
 		auto mesh = renderer->GetMesh();
 		auto instance = mesh->GetInstance();
 		bool renderedSphere = false;
@@ -1604,7 +1582,7 @@ namespace HexEngine
 						g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 				}
 
-				renderer->RenderMesh(mesh, MeshRenderFlags::MeshRenderNormal, numPointLightsRendered);		
+				renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, numPointLightsRendered);
 
 				
 
@@ -1632,7 +1610,7 @@ namespace HexEngine
 		{
 			D3DPERF_BeginEvent(0xFFFFFFFF, L"Begin SpotLight");
 
-			g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereModel->GetMeshAtIndex(0)->GetNumIndices(), numPointLightsRendered);
+			g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numPointLightsRendered);
 
 			D3DPERF_EndEvent();
 		}
@@ -1683,7 +1661,7 @@ namespace HexEngine
 			// Render fog as a post process
 			_gbuffer.BindAsShaderResource(_beautyRT);
 			g_pEnv->_graphicsDevice->SetTexture2D(_atmosphereRT);
-			guiRenderer->FullScreenTexturedQuad(nullptr, _fogEffect);
+			guiRenderer->FullScreenTexturedQuad(nullptr, _fogEffect.get());
 
 			//_fogBuffer->CopyTo(_gbuffer.GetDiffuse());
 			_fogBuffer->CopyTo(_beautyRT);
@@ -1755,13 +1733,13 @@ namespace HexEngine
 					shadowMap->BindAsShaderResource();
 				}
 
-				g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise);
+				g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
 
 				bool forceCascade = caster->CastAs<SpotLight>() != nullptr;
 
 				SetupPerShadowCasterBuffer(caster, forceCascade, 0, 0, 0, 0.0f);
 
-				guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricLighting);
+				guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricLighting.get());
 			}
 
 			// the blur should have the gbuffer as it needs to sample depth
@@ -1816,11 +1794,11 @@ namespace HexEngine
 			_gbuffer.BindAsShaderResource();
 
 			g_pEnv->_graphicsDevice->SetTexture2D(_beautyRT);
-			g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise);
+			g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
 			g_pEnv->_graphicsDevice->SetTexture2D(_ssrHistory);
 			g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetVelocity());
 
-			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader);	
+			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader.get());
 
 			
 
@@ -1832,7 +1810,7 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetTexture2D(_ssrHistory);
 			g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetVelocity());
 			g_pEnv->_graphicsDevice->SetTexture2D(_ssrHitInfo);
-			guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve);
+			guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
 
 			_ssrResolved->CopyTo(_ssrHistory);
 #endif

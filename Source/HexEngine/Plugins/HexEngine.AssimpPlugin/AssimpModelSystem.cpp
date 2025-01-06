@@ -113,13 +113,19 @@ namespace HexEngine
 			_importOpts.replaceTextureExtension = text;
 			});
 
+		auto importModel = [&]() -> bool{
+			LoadResourceFromFile(fileSystem->GetLocalAbsoluteDataPath(path), fileSystem, nullptr);
+			return true;
+			};
+
 		auto import = new Button(layout, layout->GetNextPos(), Point(80, 20), L"Import", 
-			std::bind(&AssimpModelImporter::LoadResourceFromFile, this, fileSystem->GetLocalAbsoluteDataPath(path), fileSystem, nullptr));
+			std::bind(importModel)
+			/*std::bind(&AssimpModelImporter::LoadResourceFromFile, this, fileSystem->GetLocalAbsoluteDataPath(path), fileSystem, nullptr)*/);
 
 		return dlg;
 	}
 
-	Model* AssimpModelImporter::LoadResourceFromFile(const fs::path& path, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
+	std::shared_ptr<IResource> AssimpModelImporter::LoadResourceFromFile(const fs::path& path, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
 	{
 		if (path.extension() == ".mtl")
 			return nullptr;
@@ -182,7 +188,7 @@ namespace HexEngine
 			modelScene->mRootNode->mTransformation *= mat;
 		}
 
-		Model* model = new Model;
+		std::shared_ptr<Model> model = std::shared_ptr<Model>(new Model, ResourceDeleter());
 
 		//if(_importAnimations)
 		//	ProcessAnimations(model, modelScene);
@@ -244,7 +250,7 @@ namespace HexEngine
 		return model;
 	}
 
-	Model* AssimpModelImporter::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> AssimpModelImporter::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		if (relativePath.extension() == ".mtl")
 			return nullptr;
@@ -286,7 +292,7 @@ namespace HexEngine
 
 		_currentPath = relativePath;
 
-		Model* model = new Model;
+		std::shared_ptr<Model> model = std::shared_ptr<Model>(new Model, ResourceDeleter());
 		model->SetPaths(relativePath, fileSystem);
 
 		/*if (modelScene->mMetaData)
@@ -371,7 +377,7 @@ namespace HexEngine
 		return model;
 	}
 
-	void AssimpModelImporter::ProcessAnimations(Model* model, const aiScene* scene)
+	void AssimpModelImporter::ProcessAnimations(std::shared_ptr<Model>& model, const aiScene* scene)
 	{
 		if (!scene->mNumAnimations)
 			return;
@@ -439,7 +445,7 @@ namespace HexEngine
 		SAFE_DELETE(resource);
 	}
 
-	void AssimpModelImporter::ProcessNode(Model* model, aiNode* node, std::vector<AnimChannel*> parentAnims, const aiScene* scene, FileSystem* fileSystem)
+	void AssimpModelImporter::ProcessNode(std::shared_ptr<Model>& model, aiNode* node, std::vector<AnimChannel*> parentAnims, const aiScene* scene, FileSystem* fileSystem)
 	{
 		if (model->_animData && _importOpts.importAnimations)
 		{
@@ -553,7 +559,7 @@ namespace HexEngine
 		}
 	}
 
-	AnimChannel* AssimpModelImporter::FindAnimChannelFromNodeName(Model* model, const std::string& nodeName)
+	AnimChannel* AssimpModelImporter::FindAnimChannelFromNodeName(std::shared_ptr<Model>& model, const std::string& nodeName)
 	{
 		for (auto& anim : model->_animData->_animations)
 		{
@@ -568,7 +574,7 @@ namespace HexEngine
 		return nullptr;
 	}
 
-	Mesh* AssimpModelImporter::ProcessMesh(Model* model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem)
+	std::shared_ptr<Mesh> AssimpModelImporter::ProcessMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem)
 	{
 		std::string meshName = node->mName.C_Str();
 
@@ -582,7 +588,7 @@ namespace HexEngine
 
 		// Pre-calculate needed vertices and indices
 		//
-		Mesh* modelMesh = new Mesh(model, meshName);
+		std::shared_ptr<Mesh> modelMesh = std::shared_ptr<Mesh>(new Mesh(model, meshName), ResourceDeleter());
 
 		auto fixedExtensionPath = _currentPath;
 
@@ -738,7 +744,8 @@ namespace HexEngine
 		return modelMesh;
 	}
 
-	AnimatedMesh* AssimpModelImporter::ProcessAnimatedMesh(Model* model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem)
+#if 0
+	AnimatedMesh* AssimpModelImporter::ProcessAnimatedMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem)
 	{
 		// Pre-calculate needed vertices and indices
 		//
@@ -875,9 +882,10 @@ namespace HexEngine
 
 		return modelMesh;
 	}
+#endif
 
 #if 1
-	void AssimpModelImporter::ProcessMaterial(Mesh* mesh, const aiScene* scene, aiMaterial* material, FileSystem* fileSystem)
+	void AssimpModelImporter::ProcessMaterial(std::shared_ptr<Mesh>& mesh, const aiScene* scene, aiMaterial* material, FileSystem* fileSystem)
 	{		
 		std::string matName = material->GetName().C_Str();		
 
@@ -894,7 +902,7 @@ namespace HexEngine
 			return;
 		}
 
-		Material* mat = new Material;
+		std::shared_ptr<Material> mat = std::shared_ptr<Material>(new Material);
 		
 		mat->SetPaths(_currentPath.parent_path() / matName, fileSystem);
 		mat->SetName(matName);
@@ -1015,7 +1023,7 @@ namespace HexEngine
 	}
 #endif
 
-	ITexture2D* AssimpModelImporter::LoadTexture(Mesh* mesh, const aiTextureType type, const aiScene* scene, const aiMaterial* material, FileSystem* fileSystem)
+	std::shared_ptr<ITexture2D> AssimpModelImporter::LoadTexture(std::shared_ptr<Mesh>& mesh, const aiTextureType type, const aiScene* scene, const aiMaterial* material, FileSystem* fileSystem)
 	{
 		auto GetTextureType = [](const aiScene* scene, const aiString& str) {
 
@@ -1078,7 +1086,7 @@ namespace HexEngine
 
 			fsPath = fileSystem->GetRelativeResourcePath(relativePath);
 
-			auto texture = (ITexture2D*)g_pEnv->_resourceSystem->LoadResource(fsPath);
+			auto texture = ITexture2D::Create(fsPath);
 
 			if (!texture)
 			{

@@ -45,7 +45,7 @@ namespace HexEngine
 		std::vector<UIInstanceData> _data;
 		std::vector<std::pair<size_t, ITexture2D*>> _textureToInstanceIdMap;
 		uint32_t _instanceBufferNumElements = 0;
-		int32_t _poolIndex = 0;
+		uint32_t _poolIndex = 0;
 		bool _hasStarted = false;
 		bool _hasSetVertexData = false;
 	};

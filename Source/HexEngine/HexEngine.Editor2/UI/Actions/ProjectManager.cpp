@@ -158,7 +158,7 @@ namespace HexEditor
 
 				auto v = val.get<std::string>();
 
-				_oldProjectsList->AddItem(std::wstring(v.begin(), v.end()), g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed);
+				_oldProjectsList->AddItem(std::wstring(v.begin(), v.end()), g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get());
 			}
 
 			file.Close();

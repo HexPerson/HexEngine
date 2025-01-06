@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	using ResourceLoadedFn = std::function<void(IResource*)>;
+	using ResourceLoadedFn = std::function<void(std::shared_ptr<IResource>)>;
 	const int32_t MaxAsyncResourceLoaders = 4;
 
 	class FileSystem;
@@ -18,12 +18,17 @@ namespace HexEngine
 		bool loadLights = false;
 	};
 
+	struct ResourceDeleter
+	{
+		void operator()(IResource* p) const;
+	};
+
 	class IResourceLoader
 	{
 	public:
-		virtual IResource* LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) = 0;
+		virtual std::shared_ptr<IResource> LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) = 0;
 
-		virtual IResource* LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) = 0;
+		virtual std::shared_ptr<IResource> LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) = 0;
 
 		virtual void UnloadResource(IResource* resource) = 0;
 
@@ -59,9 +64,9 @@ namespace HexEngine
 
 		// Methods responsible for loading resources
 		//
-		IResource*	LoadResource(const fs::path& path, const ResourceLoadOptions* options = nullptr);
-		void		UnloadResource(IResource* resource);
-		IResource*	LoadResourceAsync(const fs::path& path, ResourceLoadedFn callback);
+		std::shared_ptr<IResource>	LoadResource(const fs::path& path, const ResourceLoadOptions* options = nullptr);
+		void						UnloadResource(IResource* resource);
+		std::shared_ptr<IResource>	LoadResourceAsync(const fs::path& path, ResourceLoadedFn callback);
 
 		std::vector<std::string> GetSupportedFileExtensions();
 
@@ -75,12 +80,42 @@ namespace HexEngine
 		std::vector<FileSystem*> _fileSystems;
 		std::vector<IResourceLoader*> _resourceLoaders;
 
-		std::map<fs::path, IResource*> _loadedResources;
+		std::map<fs::path, std::weak_ptr<IResource>> _loadedResources;
 		std::list<std::pair<fs::path, ResourceLoadedFn>> _queuedResources;
-		std::list<std::pair<IResource*, ResourceLoadedFn>> _asyncLoadedForCallback;
+		std::list<std::pair<std::shared_ptr<IResource>, ResourceLoadedFn>> _asyncLoadedForCallback;
 		std::thread _jobThread[MaxAsyncResourceLoaders];
 		std::recursive_mutex _lock;
 		std::mutex _resourceLoadedCallbackLock;
 		bool _running = true;
 	};
+
+	/*template<class T, class U>
+	std::shared_ptr<T> static_pointer_cast(const std::shared_ptr<U>& r) noexcept
+	{
+		auto p = static_cast<typename std::shared_ptr<T>::element_type*>(r.get());
+		return std::shared_ptr<T>{r, p};
+	}
+
+	template<class T, class U>
+	std::shared_ptr<T> dynamic_pointer_cast(const std::shared_ptr<U>& r) noexcept
+	{
+		if (auto p = dynamic_cast<typename std::shared_ptr<T>::element_type*>(r.get()))
+			return std::shared_ptr<T>{r, p};
+		else
+			return std::shared_ptr<T>{};
+	}
+
+	template<class T, class U>
+	std::shared_ptr<T> const_pointer_cast(const std::shared_ptr<U>& r) noexcept
+	{
+		auto p = const_cast<typename std::shared_ptr<T>::element_type*>(r.get());
+		return std::shared_ptr<T>{r, p};
+	}
+
+	template<class T, class U>
+	std::shared_ptr<T> reinterpret_pointer_cast(const std::shared_ptr<U>& r) noexcept
+	{
+		auto p = reinterpret_cast<typename std::shared_ptr<T>::element_type*>(r.get());
+		return std::shared_ptr<T>{r, p};
+	}*/
 }

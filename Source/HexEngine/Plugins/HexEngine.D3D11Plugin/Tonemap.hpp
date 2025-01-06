@@ -17,6 +17,6 @@ namespace HexEngine
 
 	private:
 		Texture2D* _renderTarget = nullptr;
-		IShader* _renderShader = nullptr;
+		std::shared_ptr<IShader> _renderShader;
 	};
 }

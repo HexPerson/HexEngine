@@ -28,20 +28,11 @@ namespace HexEngine
 
 	void Material::Destroy()
 	{
-		std::unique_lock lock(_lock);
-
-		for (int i = 0; i < MaterialTexture::Count; ++i)
-		{
-			SAFE_UNLOAD(_textures[i]);
-		}
-
-		SAFE_UNLOAD(_standardShader);
-		SAFE_UNLOAD(_shadowMapShader);
 	}
 
-	Material* Material::Create(const fs::path& path)
+	std::shared_ptr<Material> Material::Create(const fs::path& path)
 	{
-		return (Material*)g_pEnv->_resourceSystem->LoadResource(path);
+		return reinterpret_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 
 	bool Material::Exists(const fs::path& path)
@@ -49,9 +40,9 @@ namespace HexEngine
 		return g_pEnv->_resourceSystem->DoesResourceExistAsAsset(path);
 	}
 
-	void Material::CopyFrom(Material* material)
+	void Material::CopyFrom(const std::shared_ptr<Material>& material)
 	{
-		CopyFrom(*material);
+		CopyFrom(*material.get());
 	}
 
 	void Material::CopyFrom(const Material& material)
@@ -84,13 +75,13 @@ namespace HexEngine
 		return *this;
 	}
 
-	Material& Material::operator = (Material* other)
+	Material& Material::operator = (const std::shared_ptr<Material>& other)
 	{
 		CopyFrom(other);
 		return *this;
 	}
 
-	void Material::SetTexture(MaterialTexture type, ITexture2D* texture)
+	void Material::SetTexture(MaterialTexture type, const std::shared_ptr<ITexture2D>& texture)
 	{
 		if (!texture)
 			return;
@@ -100,12 +91,6 @@ namespace HexEngine
 		auto oldTexture = _textures[type];
 
 		_textures[type] = texture;
-		_textures[type]->AddRef();
-
-		if (oldTexture != nullptr)
-		{
-			SAFE_UNLOAD(oldTexture);
-		}
 	}
 
 	void Material::SetVolumeTexture(ITexture3D* texture)
@@ -115,48 +100,44 @@ namespace HexEngine
 		_volumeTexture = texture;
 	}
 
-	void Material::SetStandardShader(IShader* shader)
+	void Material::SetStandardShader(const std::shared_ptr<IShader>& shader)
 	{
 		std::unique_lock lock(_lock);
 
 		if (shader)
 		{
 			_standardShader = shader;
-			_standardShader->AddRef();
 		}
 	}
 
-	void Material::SetShadowMapShader(IShader* shader)
+	void Material::SetShadowMapShader(const std::shared_ptr<IShader>& shader)
 	{
 		std::unique_lock lock(_lock);
 
 		if (shader)
 		{
 			_shadowMapShader = shader;
-			_shadowMapShader->AddRef();
 		}
 	}
 
-	IShader* Material::GetStandardShader() const
+	std::shared_ptr<IShader> Material::GetStandardShader() const
 	{
 		return _standardShader;
 	}
 
-	IShader* Material::GetShadowMapShader() const
+	std::shared_ptr<IShader> Material::GetShadowMapShader() const
 	{
 		return _shadowMapShader;
 	}
 
-	ITexture2D* Material::GetTexture(MaterialTexture type) const
+	std::shared_ptr<ITexture2D> Material::GetTexture(MaterialTexture type) const
 	{
 		return _textures[type];
 	}
 
-	Material* Material::GetDefaultMaterial()
+	std::shared_ptr<Material> Material::GetDefaultMaterial()
 	{
-		static Material* sDefaultMaterial = (Material*)g_pEnv->_resourceSystem->LoadResource("EngineData.Materials/Default.hmat");
-
-		return sDefaultMaterial;
+		return reinterpret_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource("EngineData.Materials/Default.hmat"));
 	}
 
 	/*void Material::Load(DiskFile* file)

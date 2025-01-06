@@ -19,7 +19,7 @@ namespace HexEngine
 		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
-	IResource* TextureLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
+	std::shared_ptr<IResource> TextureLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
 	{
 		if (g_pEnv->_fileSystem->DoesAbsolutePathExist(absolutePath) == false)
 		{
@@ -34,7 +34,7 @@ namespace HexEngine
 		auto gfxDevice = (ID3D11Device*)g_pEnv->_graphicsDevice->GetNativeDevice();
 		auto gfxContexte = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 
-		Texture2D* tex = new Texture2D;
+		
 
 		ID3D11Texture2D* d3dTexture = nullptr;
 		ID3D11ShaderResourceView* d3dSRV = nullptr;
@@ -58,19 +58,19 @@ namespace HexEngine
 
 			if (DirectX::LoadFromTGAFile(absolutePath.c_str(), &metaData, scratchImage) == S_OK)
 			{
-				DirectX::CreateTexture(
+				CHECK_HR(DirectX::CreateTexture(
 					gfxDevice,
 					scratchImage.GetImages(),
 					scratchImage.GetImageCount(),
 					metaData,
-					(ID3D11Resource**)&d3dTexture);
+					(ID3D11Resource**)&d3dTexture));
 
-				DirectX::CreateShaderResourceView(
+				CHECK_HR(DirectX::CreateShaderResourceView(
 					gfxDevice,
 					scratchImage.GetImages(),
 					scratchImage.GetImageCount(),
 					metaData,
-					&d3dSRV);
+					&d3dSRV));
 			}
 		}
 		else
@@ -92,9 +92,10 @@ namespace HexEngine
 
 		if (d3dTexture == nullptr)
 		{
-			delete tex;
 			return nullptr;
 		}
+
+		std::shared_ptr<Texture2D> tex = std::shared_ptr<Texture2D>(new Texture2D, ResourceDeleter());
 
 		D3D11_TEXTURE2D_DESC desc;
 		d3dTexture->GetDesc(&desc);
@@ -106,20 +107,18 @@ namespace HexEngine
 
 #ifdef _DEBUG
 		std::string path = absolutePath.string().c_str();
-		((ID3D11Texture2D*)tex->GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, path.length(), path.data());
+		((ID3D11Texture2D*)tex->GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)path.length(), path.data());
 #endif
 
 		return tex;
 	}
 
-	IResource* TextureLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> TextureLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		auto extension = relativePath.extension();
 
 		auto gfxDevice = (ID3D11Device*)g_pEnv->_graphicsDevice->GetNativeDevice();
 		auto gfxContexte = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
-
-		Texture2D* tex = new Texture2D;
 
 		ID3D11Texture2D* d3dTexture = nullptr;
 		ID3D11ShaderResourceView* d3dSRV = nullptr;
@@ -148,19 +147,19 @@ namespace HexEngine
 				&metaData,
 				scratchImage) == S_OK)
 			{
-				DirectX::CreateTexture(
+				CHECK_HR(DirectX::CreateTexture(
 					gfxDevice,
 					scratchImage.GetImages(),
 					scratchImage.GetImageCount(),
 					metaData,
-					(ID3D11Resource**)&d3dTexture);
+					(ID3D11Resource**)&d3dTexture));
 
-				DirectX::CreateShaderResourceView(
+				CHECK_HR(DirectX::CreateShaderResourceView(
 					gfxDevice,
 					scratchImage.GetImages(),
 					scratchImage.GetImageCount(),
 					metaData,
-					&d3dSRV);
+					&d3dSRV));
 			}
 		}
 		else
@@ -178,9 +177,10 @@ namespace HexEngine
 
 		if (d3dTexture == nullptr)
 		{
-			delete tex;
 			return nullptr;
 		}
+
+		std::shared_ptr<Texture2D> tex = std::shared_ptr<Texture2D>(new Texture2D, ResourceDeleter());
 
 		D3D11_TEXTURE2D_DESC desc;
 		d3dTexture->GetDesc(&desc);
@@ -192,7 +192,7 @@ namespace HexEngine
 
 #ifdef _DEBUG
 		std::string path = relativePath.string().c_str();
-		((ID3D11Texture2D*)tex->GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, path.length(), path.data());
+		((ID3D11Texture2D*)tex->GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)path.length(), path.data());
 #endif
 
 		return tex;

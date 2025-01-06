@@ -124,8 +124,6 @@ namespace HexEngine
 	const int OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION	= (1 << 6);
 	const int OBJECT_FLAGS_HAS_ANIMATION			= (1 << 7);
 
-	const int MeshMaxMaterials = 8;
-
 	class MeshRenderer;
 	class Model;
 	class FileSystem;
@@ -139,18 +137,18 @@ namespace HexEngine
 		friend class IconService;
 
 		Mesh();
-		Mesh(Model* model, const std::string& name);
+		Mesh(const std::shared_ptr<Model>& model, const std::string& name);
 		Mesh(Mesh* other);
 
 		virtual ~Mesh();
 
-		static Mesh* Create(const fs::path& path);
+		static std::shared_ptr<Mesh> Create(const fs::path& path);
 
 		//static Mesh* CreatePlane(uint32_t resolution, float uvScale = 1.0f);
 
 		// Materials
-		Material*	GetMaterial() const;
-		void		SetMaterial(Material* material);
+		std::shared_ptr<Material>	GetMaterial() const;
+		void						SetMaterial(std::shared_ptr<Material> material);
 
 		bool CreateBuffers();
 		//bool CreateBuffers(bool dynamic, uint32_t stride, uint32_t count, void* data);
@@ -209,7 +207,7 @@ namespace HexEngine
 		std::vector<MeshIndexFormat> _indices;
 
 	private:
-		class Model* _model = nullptr;
+		std::shared_ptr<Model> _model;
 		//std::string _fileName;
 		std::string _name;
 
@@ -230,6 +228,6 @@ namespace HexEngine
 
 	private:
 		// Materials
-		Material* _material = nullptr;
+		std::shared_ptr<Material> _material = nullptr;
 	};
 }

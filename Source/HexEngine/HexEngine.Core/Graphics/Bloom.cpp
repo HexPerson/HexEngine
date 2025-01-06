@@ -22,9 +22,7 @@ namespace HexEngine
 			D3D11_SRV_DIMENSION_TEXTURE2D
 		);
 
-		_renderShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/Bloom.hcs");
-		//_gaussianBlurShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("Shaders/GaussianBlur.hcs");
-		//_gaussianBlurShaderVert = (IShader*)g_pEnv->_resourceSystem->LoadResource("Shaders/GaussianBlurVert.hcs");
+		_renderShader = IShader::Create("EngineData.Shaders/Bloom.hcs");
 
 		_viewport = CD3D11_VIEWPORT(0.0f, 0.0f, (float)width, (float)height);
 
@@ -39,10 +37,6 @@ namespace HexEngine
 	void Bloom::Destroy()
 	{
 		SAFE_DELETE(_renderTarget);
-
-		SAFE_UNLOAD(_renderShader);
-		//SAFE_UNLOAD(_gaussianBlurShader);
-		//SAFE_UNLOAD(_gaussianBlurShaderVert);
 
 		SAFE_DELETE(_blur);
 	}
@@ -66,7 +60,7 @@ namespace HexEngine
 
 		// generate the luminosity texture
 		//
-		renderer->FullScreenTexturedQuad(bloomInput, _renderShader);
+		renderer->FullScreenTexturedQuad(bloomInput, _renderShader.get());
 
 		_blur->Render(renderer);
 

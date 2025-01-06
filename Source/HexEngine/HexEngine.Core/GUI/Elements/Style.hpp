@@ -73,12 +73,12 @@ namespace HexEngine
 		math::Color context_back;
 		math::Color context_highlight;
 
-		ITexture2D* img_win_close;
+		std::shared_ptr<ITexture2D> img_win_close;
 		int32_t win_title_height;
 		FillStyle win_title_fillstyle;
-		IFontResource* font;
-		ITexture2D* img_folder_closed;
-		ITexture2D* img_folder_open;
+		std::shared_ptr<IFontResource> font;
+		std::shared_ptr<ITexture2D> img_folder_closed;
+		std::shared_ptr<ITexture2D> img_folder_open;
 
 		int32_t tab_height;
 		

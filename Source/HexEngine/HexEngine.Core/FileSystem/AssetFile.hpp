@@ -28,7 +28,7 @@ namespace HexEngine
 	public:
 		AssetFile(const fs::path& absolutePath);
 
-		bool Unpack(AssetPackage* package);
+		bool Unpack(std::shared_ptr<AssetPackage> package);
 
 	private:
 		AssetFileHeader* _header = nullptr;

@@ -483,7 +483,7 @@ namespace HexEngine
 			{
 				if(auto mesh = GetEntity()->GetComponent<HexEngine::StaticMeshComponent>()->GetMesh(); mesh != nullptr)
 				{
-					AddTriangleMeshCollider(mesh, true);
+					AddTriangleMeshCollider(mesh.get(), true);
 				}
 				else
 				{
@@ -628,7 +628,7 @@ namespace HexEngine
 		int c = 0;
 		auto mesh = GetEntity()->GetComponent<HexEngine::StaticMeshComponent>()->GetMesh();
 		{
-			AddTriangleMeshCollider(mesh, true);
+			AddTriangleMeshCollider(mesh.get(), true);
 		}
 
 		widget->SetValue(L"Triangle Mesh");

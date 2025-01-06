@@ -16,10 +16,7 @@ namespace HexEngine
 
 	Dialog::~Dialog()
 	{
-		SAFE_UNLOAD(_logo);
-	}
-
-	
+	}	
 
 	void Dialog::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
@@ -46,7 +43,7 @@ namespace HexEngine
 		//if(IsMouseOver() == false)
 		//	renderer->PrintText(style.font, (uint8_t)Style::FontSize::Regular, _position.x + 40, _position.y + style.win_title_height / 2, style.win_title, FontAlign::CentreUD, _title);
 		//else
-		renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Small, _position.x + 40, _position.y + renderer->_style.win_title_height / 2, renderer->_style.win_highlight, FontAlign::CentreUD, _title);
+		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, _position.x + 40, _position.y + renderer->_style.win_title_height / 2, renderer->_style.win_highlight, FontAlign::CentreUD, _title);
 
 		// title bottom border
 		renderer->Line(_position.x, _position.y + renderer->_style.win_title_height, _position.x + _size.x, _position.y + renderer->_style.win_title_height, renderer->_style.win_border);
@@ -71,9 +68,9 @@ namespace HexEngine
 
 		// close button
 		
-		renderer->FillTexturedQuad(renderer->_style.img_win_close, _position.x + _size.x - (closeButtonSize + 8), _position.y + (renderer->_style.win_title_height / 2) - (closeButtonSize / 2) - 1, closeButtonSize, closeButtonSize, _hoveringCloseButton ? math::Color(1, 0, 0, 1) : math::Color(1, 1, 1, 1));
+		renderer->FillTexturedQuad(renderer->_style.img_win_close.get(), _position.x + _size.x - (closeButtonSize + 8), _position.y + (renderer->_style.win_title_height / 2) - (closeButtonSize / 2) - 1, closeButtonSize, closeButtonSize, _hoveringCloseButton ? math::Color(1, 0, 0, 1) : math::Color(1, 1, 1, 1));
 
-		renderer->FillTexturedQuad(_logo, _position.x + 3, _position.y + 1, renderer->_style.win_title_height-2, renderer->_style.win_title_height-2, renderer->_style.text_highlight);
+		renderer->FillTexturedQuad(_logo.get(), _position.x + 3, _position.y + 1, renderer->_style.win_title_height-2, renderer->_style.win_title_height-2, renderer->_style.text_highlight);
 
 		
 	}

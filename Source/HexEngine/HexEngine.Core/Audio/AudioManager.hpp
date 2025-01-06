@@ -14,9 +14,9 @@ namespace HexEngine
 	public:
 		AudioManager();
 
-		virtual IResource* LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
+		virtual std::shared_ptr<IResource> LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
 
-		virtual IResource* LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
+		virtual std::shared_ptr<IResource> LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
 
 		virtual void UnloadResource(IResource* resource) override;
 
@@ -44,7 +44,7 @@ namespace HexEngine
 		dx::AudioEngine* _engine;
 		dx::AudioListener _listener;
 
-		std::vector<SoundEffect*> _createdSounds;
+		std::vector<std::weak_ptr<SoundEffect>> _createdSounds;
 		
 	};
 }

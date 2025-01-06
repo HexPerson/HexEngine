@@ -29,7 +29,7 @@ namespace HexEngine
 		void AddEntity(Entity* entity);
 		void RemoveEntity(Entity* entity);
 		void DuplicateEntity(Entity* entity);
-		ListNode* AddScene(Scene* scene);
+		ListNode* AddScene(const std::shared_ptr<Scene>& scene);
 		virtual void SaveAsPrefab(Entity* entity, FileSystem* fs);
 
 		virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data) override;
@@ -47,7 +47,7 @@ namespace HexEngine
 		void CreateIcons();
 
 	private:
-		std::map<IconId, HexEngine::ITexture2D*> _icons;
+		std::map<IconId, std::shared_ptr<HexEngine::ITexture2D>> _icons;
 		HexEngine::ContextMenu* _ctx = nullptr;
 
 	public:

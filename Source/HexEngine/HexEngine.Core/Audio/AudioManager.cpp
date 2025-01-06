@@ -12,34 +12,21 @@ namespace HexEngine
 		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
 	}
 
-	IResource* AudioManager::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> AudioManager::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		SoundEffect* effect = new SoundEffect;
-
-		/*auto wfx = reinterpret_cast<WAVEFORMATEX*>(wavData.get());
-		wfx->wFormatTag = WAVE_FORMAT_PCM;
-		wfx->nChannels = 1;
-		wfx->nSamplesPerSec = 44100;
-		wfx->nAvgBytesPerSec = 2 * 44100;
-		wfx->nBlockAlign = 2;
-		wfx->wBitsPerSample = 16;
-		wfx->cbSize = 0;*/
-
-		//_engine->AllocateVoice()SoundEffectInstance_Default
+		std::shared_ptr<SoundEffect> effect = std::shared_ptr<SoundEffect>(new SoundEffect, ResourceDeleter());
 
 		effect->_effect = new dx::SoundEffect(this->_engine, absolutePath.c_str());
 		effect->_instance = effect->_effect->CreateInstance(dx::SoundEffectInstance_Use3D /*| dx::SoundEffectInstance_ReverbUseFilters*/);
 
 		_createdSounds.push_back(effect);
 
-		//effect->_effect->
-
 		return effect;
 	}
 
-	IResource* AudioManager::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> AudioManager::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		SoundEffect* effect = new SoundEffect;
+		std::shared_ptr<SoundEffect> effect = std::shared_ptr<SoundEffect>(new SoundEffect, ResourceDeleter());
 
 		effect->_wavData = std::make_unique<uint8_t[]>(data.size());
 		memcpy(effect->_wavData.get(), data.data(), data.size());
@@ -53,7 +40,7 @@ namespace HexEngine
 		if (FAILED(hr))
 		{
 			LOG_CRIT("Failed to load audio file from memory! 0x%X", hr);
-			delete effect;
+			effect.reset();
 			return nullptr;
 		}		
 
@@ -124,7 +111,9 @@ namespace HexEngine
 
 				for (auto& sound : _createdSounds)
 				{
-					if (sound->_is3D && sound->IsPlaying())
+					auto sp = sound.lock();
+
+					if (sp->_is3D && sp->IsPlaying())
 					{
 						/*if (sound->GetRadius() != 0.0f)
 						{
@@ -135,7 +124,7 @@ namespace HexEngine
 							sound->SetVolume(attenuation);
 						}*/
 						//sound->_emitter.SetPosition(sound->_emitter.Position);// .x, math::Vector3::Up, g_pEnv->_timeManager->_frameTime);
-						sound->_instance->Apply3D(_listener, sound->_emitter);
+						sp->_instance->Apply3D(_listener, sp->_emitter);
 					}
 				}
 			}

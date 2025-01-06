@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	AnimatedMesh::AnimatedMesh(Model* model, const std::string& name) :
+	AnimatedMesh::AnimatedMesh(std::shared_ptr<Model>& model, const std::string& name) :
 		Mesh(model, name)
 	{
 		_animationBuffer = new PerAnimationBuffer;

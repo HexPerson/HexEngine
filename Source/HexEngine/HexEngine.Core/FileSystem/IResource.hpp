@@ -34,22 +34,6 @@ namespace HexEngine
 		/// </summary>
 		virtual void	Destroy() = 0;
 
-		/// <summary>
-		/// Increase the reference count
-		/// </summary>
-		virtual void	AddRef();
-
-		/// <summary>
-		/// Decreases the reference count of this resource
-		/// </summary>
-		void			Release();
-
-		/// <summary>
-		/// Returns the current reference count
-		/// </summary>
-		/// <returns></returns>
-		int32_t			GetRefCount() const;
-
 		const fs::path& GetAbsolutePath() const;
 		const fs::path& GetRelativePath() const;
 		const fs::path& GetFileSystemPath() const;
@@ -58,8 +42,7 @@ namespace HexEngine
 
 		FileSystem*		GetOwningFileSystem() const;
 
-	private:
-		int32_t _refCnt = 0;		
+	private:	
 		FileSystem* _fs = nullptr;
 
 	protected:

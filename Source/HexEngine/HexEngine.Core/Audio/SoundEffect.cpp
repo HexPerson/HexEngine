@@ -15,9 +15,9 @@ namespace HexEngine
 		//_emitter.EnableDefaultCurves();	
 	}
 
-	SoundEffect* SoundEffect::Create(const fs::path& path)
+	std::shared_ptr<SoundEffect> SoundEffect::Create(const fs::path& path)
 	{
-		return (SoundEffect*)g_pEnv->_resourceSystem->LoadResource(path);
+		return reinterpret_pointer_cast<SoundEffect>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 	void SoundEffect::SetVolume(float volume)
 	{

@@ -40,7 +40,6 @@ namespace HexEngine
 	{
 		SAFE_DELETE(_history);
 		SAFE_DELETE(_renderTarget);
-		SAFE_UNLOAD(_resolveShader);
 	}
 
 	TAA::~TAA()
@@ -68,7 +67,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetTexture2D(_history);
 		g_pEnv->_graphicsDevice->SetTexture2D(velocity);
 		g_pEnv->_graphicsDevice->SetTexture2D(normalAndDepth);
-		renderer->FullScreenTexturedQuad(buffer, _resolveShader);
+		renderer->FullScreenTexturedQuad(buffer, _resolveShader.get());
 
 		// copy the resolved buffer to the 
 		_renderTarget->CopyTo(_history);

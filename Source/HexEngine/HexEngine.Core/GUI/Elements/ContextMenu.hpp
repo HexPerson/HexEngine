@@ -59,7 +59,7 @@ namespace HexEngine
 		ContextRoot* _root = nullptr;
 		ContextItem* _hovering = nullptr;
 		bool _didInitialHover = false;
-		ITexture2D* _triangle = nullptr;
+		std::shared_ptr<ITexture2D> _triangle;
 
 	public:
 		std::function<void(ContextItem*)> _onClicked;

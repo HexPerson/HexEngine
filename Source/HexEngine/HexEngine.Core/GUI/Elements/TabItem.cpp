@@ -24,14 +24,14 @@ namespace HexEngine
 			renderer->FillQuad(x, pos.y, width + 10, renderer->_style.tab_height, renderer->_style.tabview_tab_highlight);
 			renderer->Frame(x, pos.y, width + 10, renderer->_style.tab_height, 1, renderer->_style.tabview_border);
 
-			renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Small, x + (width / 2) + 5, pos.y + renderer->_style.tab_height / 2, renderer->_style.tabview_text_highlight, FontAlign::CentreUD | FontAlign::CentreLR, _label);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x + (width / 2) + 5, pos.y + renderer->_style.tab_height / 2, renderer->_style.tabview_text_highlight, FontAlign::CentreUD | FontAlign::CentreLR, _label);
 		}
 		else
 		{
 			renderer->FillQuad(x, pos.y, width + 10, renderer->_style.tab_height, renderer->_style.tabview_tab_back);
 			renderer->Frame(x, pos.y, width + 10, renderer->_style.tab_height, 1, renderer->_style.tabview_border);
 
-			renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Small, x + (width / 2) + 5, pos.y + renderer->_style.tab_height / 2, renderer->_style.text_regular, FontAlign::CentreUD | FontAlign::CentreLR, _label);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x + (width / 2) + 5, pos.y + renderer->_style.tab_height / 2, renderer->_style.text_regular, FontAlign::CentreUD | FontAlign::CentreLR, _label);
 		}
 	}
 

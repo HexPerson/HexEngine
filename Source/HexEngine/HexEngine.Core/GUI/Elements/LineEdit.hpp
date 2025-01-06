@@ -30,7 +30,7 @@ namespace HexEngine
 
 		virtual int32_t GetLabelWidth() const override;
 
-		void SetIcon(ITexture2D* icon, const math::Color& colour);
+		void SetIcon(const std::shared_ptr<ITexture2D>& icon, const math::Color& colour);
 		void SetDoesCallbackWaitForReturn(bool doesWait);
 		void SetUneditableText(const std::wstring& text);
 
@@ -40,7 +40,7 @@ namespace HexEngine
 		OnSetInputFn _onInputFn;
 		OnDragAndDropFn _onDragAndDropFn;
 		OnDoubleClickFn _onDoubleClickFn;
-		ITexture2D* _icon = nullptr;
+		std::shared_ptr<ITexture2D> _icon;
 		math::Color _iconColour;
 		bool _hasLabelChanged = false;
 		int32_t _cachedLabelWidth = 0;

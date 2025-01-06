@@ -22,7 +22,7 @@ namespace HexEngine
 		GetEntity()->SetLayer(Layer::Particle);
 	}
 
-	void Billboard::SetTexture(ITexture2D* texture)
+	void Billboard::SetTexture(const std::shared_ptr<ITexture2D>& texture)
 	{
 		StaticMeshComponent* renderer = GetEntity()->GetComponent<StaticMeshComponent>();
 
@@ -34,7 +34,7 @@ namespace HexEngine
 			auto model = Model::Create("EngineData.Models/Primitives/billboard.obj");
 			_mesh = model->GetMeshAtIndex(0);
 
-			renderer->SetMaterial(0, Material::Create("EngineData.Materials/Billboard.hmat"));
+			renderer->SetMaterial(Material::Create("EngineData.Materials/Billboard.hmat"));
 
 			renderer->SetMesh(_mesh);
 		}

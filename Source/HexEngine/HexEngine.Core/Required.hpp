@@ -22,6 +22,7 @@
 #include <array>
 #include <hidusage.h>
 #include <format>
+#include <memory>
 
 #ifdef _DEBUG // for perf
 	#include <d3d9.h>

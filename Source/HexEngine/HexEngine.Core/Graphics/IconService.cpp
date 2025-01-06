@@ -12,7 +12,7 @@ namespace HexEngine
 		_iconScene->SetFlags(SceneFlags::Utility);
 		_iconScene->CreateDefaultSunLight();
 		_iconScene->SetName(sceneName);
-		g_pEnv->_debugGui->RemoveCallback(_iconScene);
+		g_pEnv->_debugGui->RemoveCallback(_iconScene.get());
 
 		uint32_t width, height;
 		g_pEnv->_graphicsDevice->GetBackBufferDimensions(width, height);
@@ -20,14 +20,14 @@ namespace HexEngine
 		auto cameraEnt = _iconScene->CreateEntity("IconCamera", math::Vector3(0.0f, 0.0f, -50.0f));
 		_camera = cameraEnt->AddComponent<Camera>();
 		_camera->SetPespectiveParameters(90.0f, 1.0f, 1.0f, 2000.0f);
-		_camera->SetViewport(math::Viewport(0.0f, 0.0f, width, height));
+		_camera->SetViewport(math::Viewport(0.0f, 0.0f, (float)width, (float)height));
 
 		
 	}
 
 	void IconService::Destroy()
 	{
-		g_pEnv->_sceneManager->UnloadScene(_iconScene);
+		//g_pEnv->_sceneManager->UnloadScene(_iconScene);
 	}
 
 	void IconService::PushFilePathForIconGeneration(const fs::path& path)
@@ -98,11 +98,9 @@ namespace HexEngine
 					if (model)
 					{
 						meshRenderer->SetMesh(model);
-
-						SAFE_UNLOAD(model);
 					}
 
-					auto pos = math::Vector3(0, _dummyEnt->GetBoundingSphere().Radius * 0.5f, _dummyEnt->GetBoundingSphere().Radius * 1.5);
+					auto pos = math::Vector3(0, _dummyEnt->GetBoundingSphere().Radius * 0.5f, _dummyEnt->GetBoundingSphere().Radius * 1.5f);
 
 					_camera->GetEntity()->SetPosition(pos);
 
@@ -130,7 +128,7 @@ namespace HexEngine
 					params.lodPartition = _camera->GetFarZ();
 					params.shape.frustum = _camera->GetFrustum();
 					params.shapeType = PVSParams::ShapeType::Frustum;
-					_camera->GetPVS()->CalculateVisibility(_iconScene, params);
+					_camera->GetPVS()->CalculateVisibility(_iconScene.get(), params);
 
 					_generatedPaths.push_back(path);
 				}
@@ -152,9 +150,7 @@ namespace HexEngine
 				{
 					meshRenderer->SetMesh(model->GetMeshAtIndex(0));
 
-					SAFE_UNLOAD(model);
-
-					meshRenderer->SetMaterial(0, Material::Create(path));
+					meshRenderer->SetMaterial(Material::Create(path));
 				}
 
 				_camera->GetEntity()->SetPosition(math::Vector3(0, 0, _dummyEnt->GetBoundingSphere().Radius * 1.2f));
@@ -177,7 +173,7 @@ namespace HexEngine
 				params.lodPartition = _camera->GetFarZ();
 				params.shape.frustum = _camera->GetFrustum();
 				params.shapeType = PVSParams::ShapeType::Frustum;
-				_camera->GetPVS()->CalculateVisibility(_iconScene, params);
+				_camera->GetPVS()->CalculateVisibility(_iconScene.get(), params);
 
 				_generatedPaths.push_back(path);
 			}

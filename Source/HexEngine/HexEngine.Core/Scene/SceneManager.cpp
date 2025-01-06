@@ -17,8 +17,7 @@ namespace HexEngine
 
 		for (auto&& scene : _scenes)
 		{
-			scene->Destroy();
-			SAFE_DELETE(scene);
+			UnloadScene(scene.get());
 		}
 
 		_scenes.clear();
@@ -26,7 +25,7 @@ namespace HexEngine
 		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
-	Scene* SceneManager::LoadScene(const fs::path& path)
+	std::shared_ptr<Scene> SceneManager::LoadScene(const fs::path& path)
 	{
 		/*if (auto scene = GetCurrentScene(); scene != nullptr)
 		{
@@ -35,7 +34,7 @@ namespace HexEngine
 
 		auto newScene = CreateEmptyScene(false);
 
-		SceneSaveFile file(path, std::ios::in, newScene);
+		SceneSaveFile file(path, std::ios::in, newScene.get());
 
 		if (!file.Load())
 		{
@@ -48,7 +47,7 @@ namespace HexEngine
 		return newScene;
 	}
 
-	const std::vector<Scene*>& SceneManager::GetAllScenes() const
+	const std::vector<std::shared_ptr<Scene>>& SceneManager::GetAllScenes() const
 	{
 		return _scenes;
 	}
@@ -59,11 +58,14 @@ namespace HexEngine
 
 		scene->Destroy();
 
-		_scenes.erase(std::remove(_scenes.begin(), _scenes.end(), scene));
+		_scenes.erase(std::remove_if(_scenes.begin(), _scenes.end(),
+			[scene](std::shared_ptr<Scene> sp) {
+				return sp.get() == scene;
+			}));
 
 		delete scene;					
 
-		if (scene == _currentScene)
+		if (scene == _currentScene.get())
 			_currentScene = nullptr;
 	}
 
@@ -73,7 +75,7 @@ namespace HexEngine
 
 		auto prefabScene = CreateEmptyScene(false);
 
-		SceneSaveFile file(path, std::ios::in, prefabScene);
+		SceneSaveFile file(path, std::ios::in, prefabScene.get());
 
 		if (!file.Load())
 		{
@@ -83,19 +85,18 @@ namespace HexEngine
 
 		file.Close();
 
-		scene->MergeFrom(prefabScene);
-		UnloadScene(prefabScene);
+		scene->MergeFrom(prefabScene.get());
 
-		_currentScene = scene;
+		//_currentScene = scene;
 
 		return ents;
 	}
 
-	Scene* SceneManager::CreateEmptyScene(bool createSkySphere, IEntityListener* listener)
+	std::shared_ptr<Scene> SceneManager::CreateEmptyScene(bool createSkySphere, IEntityListener* listener)
 	{
 		std::unique_lock lock(_mutex);
 
-		Scene* scene = new Scene;
+		std::shared_ptr<Scene> scene = std::shared_ptr<Scene>(new Scene, ResourceDeleter());
 
 		if (_currentScene == nullptr)
 			_currentScene = scene;
@@ -107,7 +108,7 @@ namespace HexEngine
 		return scene;
 	}
 
-	Scene* SceneManager::GetCurrentScene()
+	std::shared_ptr<Scene> SceneManager::GetCurrentScene()
 	{
 		return _currentScene;
 	}
@@ -121,7 +122,7 @@ namespace HexEngine
 			if (HEX_HASFLAG(scene->GetFlags(), SceneFlags::Updateable))
 			{
 				_currentScene = scene;
-				scene->Update(frameTime);
+				_currentScene->Update(frameTime);
 			}
 		}
 	}
@@ -165,30 +166,30 @@ namespace HexEngine
 				D3DPERF_BeginEvent(0xffffffff, std::format(L"Rendering scene '{}'", scene->GetName()).c_str());
 
 				_currentScene = scene;
-				g_pEnv->_sceneRenderer->RenderScene(scene, scene->GetMainCamera(), scene->GetFlags());
+				g_pEnv->_sceneRenderer->RenderScene(scene.get(), scene->GetMainCamera(), scene->GetFlags());
 
 				D3DPERF_EndEvent();
 			}
 		}
 	}
 
-	void SceneManager::SetActiveScene(Scene* scene)
+	void SceneManager::SetActiveScene(const std::shared_ptr<Scene>& scene)
 	{
 		_currentScene = scene;
 	}
 
-	IResource* SceneManager::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> SceneManager::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		if (absolutePath.extension() == ".prefab")
 		{
-			LoadPrefab(GetCurrentScene(), absolutePath);
+			LoadPrefab(GetCurrentScene().get(), absolutePath);
 			return nullptr;
 		}
 		else
 			return LoadScene(absolutePath);
 	}
 
-	IResource* SceneManager::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> SceneManager::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		return nullptr;
 	}

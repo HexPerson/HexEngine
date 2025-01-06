@@ -20,14 +20,14 @@ namespace HexEngine
 
 	void MenuBar::AddRootItem(RootItem* item)
 	{
-		item->idx = _rootItems.size();
+		item->idx = (int32_t)_rootItems.size();
 		_rootItems.push_back(item);
 	}
 
 	void MenuBar::AddSubItem(RootItem* parent, Item* item)
 	{
 		item->parent = parent;
-		item->idx = parent->items.size();
+		item->idx = (int32_t)parent->items.size();
 		parent->items.push_back(item);
 	}
 
@@ -75,10 +75,10 @@ namespace HexEngine
 			if (IsMouseOver(pos, Point(itemSize.x, _size.y)))
 			{
 				_rootHoverIdx = idx;
-				renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Small, x, (_size.y / 2) - (itemSize.y / 2) + 1, renderer->_style.text_highlight, FontAlign::None, item->name);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x, (_size.y / 2) - (itemSize.y / 2) + 1, renderer->_style.text_highlight, FontAlign::None, item->name);
 			}
 			else
-				renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Small, x, (_size.y / 2) - (itemSize.y / 2) + 1, renderer->_style.text_regular , FontAlign::None, item->name);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x, (_size.y / 2) - (itemSize.y / 2) + 1, renderer->_style.text_regular , FontAlign::None, item->name);
 
 			if (item->isOpen)
 			{
@@ -127,11 +127,11 @@ namespace HexEngine
 				if (item->parent)
 					item->parent->hoverIdx = hoverIdx;
 
-				renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Small, x + 15, y, renderer->_style.text_highlight, FontAlign::None, item->name);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x + 15, y, renderer->_style.text_highlight, FontAlign::None, item->name);
 			}
 			else
 			{
-				renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Small, x + 15, y, renderer->_style.text_regular, FontAlign::None, item->name);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x + 15, y, renderer->_style.text_regular, FontAlign::None, item->name);
 			}
 
 			y += MenuItemHeight;

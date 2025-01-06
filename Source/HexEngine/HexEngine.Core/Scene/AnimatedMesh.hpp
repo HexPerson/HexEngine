@@ -10,7 +10,7 @@ namespace HexEngine
 	public:
 		friend class AssimpModelImporter;
 
-		AnimatedMesh(Model* model, const std::string& name);
+		AnimatedMesh(std::shared_ptr<Model>& model, const std::string& name);
 		AnimatedMesh(AnimatedMesh* other);
 
 		virtual ~AnimatedMesh();

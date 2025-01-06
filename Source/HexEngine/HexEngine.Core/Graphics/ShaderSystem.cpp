@@ -15,7 +15,7 @@ namespace HexEngine
 		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
-	IResource* ShaderSystem::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> ShaderSystem::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		auto shader = ParseShaderInternal(absolutePath);
 
@@ -30,7 +30,7 @@ namespace HexEngine
 		return shader;
 	}
 
-	IResource* ShaderSystem::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> ShaderSystem::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		auto shader = ParseShaderInternal(data);
 
@@ -85,23 +85,21 @@ namespace HexEngine
 				continue;
 			}
 
-			it.second->Destroy();
+			auto sp = it.second.lock();
+			sp->Destroy();
 
 			for (auto i = 0; i < (int)ShaderStage::NumShaderStages; ++i)
 			{
 				if (reloadedShader->_stages[i] != nullptr)
 				{
-					it.second->_stages[i] = reloadedShader->_stages[i];
-					it.second->_stages[i]->CopyFrom(reloadedShader->_stages[i]);
+					sp->_stages[i] = reloadedShader->_stages[i];
+					sp->_stages[i]->CopyFrom(reloadedShader->_stages[i]);
 				}
-			}
-
-			delete reloadedShader;
-			
+			}			
 		}
 	}
 
-	IShader* ShaderSystem::ParseShaderInternal(const fs::path& absolutePath)
+	std::shared_ptr<IShader> ShaderSystem::ParseShaderInternal(const fs::path& absolutePath)
 	{
 		DiskFile file(absolutePath, std::ios::in | std::ios::binary);
 
@@ -110,8 +108,6 @@ namespace HexEngine
 			LOG_CRIT("Failed to load shader: %S", absolutePath.c_str());
 			return nullptr;
 		}
-
-		IShader* shader = new IShader;
 
 		// Read the header first
 		//
@@ -124,9 +120,10 @@ namespace HexEngine
 			LOG_CRIT("Shader '%s' was built using an outdated version. Current = %d, Shader = %d",
 				absolutePath.filename().generic_u8string().c_str(), ShaderFileFormat::SHADER_FILE_VERSION, shaderFile._version);
 
-			delete shader;
 			return nullptr;
 		}
+
+		std::shared_ptr<IShader> shader = std::shared_ptr<IShader>(new IShader, ResourceDeleter());
 
 		std::vector<uint8_t> shaderBlobs[(uint32_t)ShaderStage::NumShaderStages];
 
@@ -165,10 +162,8 @@ namespace HexEngine
 		return shader;
 	}
 
-	IShader* ShaderSystem::ParseShaderInternal(const std::vector<uint8_t>& data)
+	std::shared_ptr<IShader> ShaderSystem::ParseShaderInternal(const std::vector<uint8_t>& data)
 	{
-		IShader* shader = new IShader;
-
 		uint8_t* p = (uint8_t*)data.data();
 
 		// Read the header first
@@ -182,9 +177,10 @@ namespace HexEngine
 			LOG_CRIT("Shader was built using an outdated version. Current = %d, Shader = %d",
 				ShaderFileFormat::SHADER_FILE_VERSION, shaderFile->_version);
 
-			delete shader;
 			return nullptr;
 		}
+
+		std::shared_ptr<IShader> shader = std::shared_ptr<IShader>(new IShader, ResourceDeleter());
 
 		std::vector<uint8_t> shaderBlobs[(uint32_t)ShaderStage::NumShaderStages];
 

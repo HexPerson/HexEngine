@@ -18,7 +18,9 @@ namespace HexEngine
 		/// </summary>
 		/// <param name="absolutePath">The absolute path to the file on disk</param>
 		/// <returns>A pointer to a ITexture2D instance or null if the resource wasn't loaded successfully</returns>
-		static ITexture2D* Create(const fs::path& absolutePath);
+		static std::shared_ptr<ITexture2D> Create(const fs::path& absolutePath);
+
+		static std::shared_ptr<ITexture2D> GetDefaultTexture();
 
 		virtual ~ITexture2D() {}
 
@@ -55,10 +57,6 @@ namespace HexEngine
 #ifdef _DEBUG
 			((ID3D11Texture2D*)GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)name.length(), name.data());
 #endif
-		}
-
-		// Static methods
-		//
-		static ITexture2D* GetDefaultTexture();
+		}		
 	};
 }
