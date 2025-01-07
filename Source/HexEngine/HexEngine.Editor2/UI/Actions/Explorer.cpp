@@ -378,7 +378,7 @@ namespace HexEditor
 
 				auto meshRenderer = entity->AddComponent<StaticMeshComponent>();
 
-				auto mesh = reinterpret_pointer_cast<Mesh>(resource);
+				auto mesh = dynamic_pointer_cast<Mesh>(resource);
 
 				meshRenderer->SetMesh(mesh);
 

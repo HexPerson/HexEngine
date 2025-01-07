@@ -38,6 +38,10 @@ namespace HexEngine
 			std::string matName = file.ReadString();
 			mesh->SetMaterial(Material::Create(matName));
 		}
+		else
+		{
+			mesh->SetMaterial(Material::GetDefaultMaterial());
+		}
 
 		// read the number of faces
 		uint32_t numFaces;

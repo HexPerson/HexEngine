@@ -17,7 +17,7 @@ namespace HexEngine
 
 	std::shared_ptr<SoundEffect> SoundEffect::Create(const fs::path& path)
 	{
-		return reinterpret_pointer_cast<SoundEffect>(g_pEnv->_resourceSystem->LoadResource(path));
+		return dynamic_pointer_cast<SoundEffect>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 	void SoundEffect::SetVolume(float volume)
 	{

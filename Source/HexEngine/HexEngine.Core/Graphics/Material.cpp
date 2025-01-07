@@ -32,7 +32,7 @@ namespace HexEngine
 
 	std::shared_ptr<Material> Material::Create(const fs::path& path)
 	{
-		return reinterpret_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource(path));
+		return dynamic_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 
 	bool Material::Exists(const fs::path& path)
@@ -137,7 +137,8 @@ namespace HexEngine
 
 	std::shared_ptr<Material> Material::GetDefaultMaterial()
 	{
-		return reinterpret_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource("EngineData.Materials/Default.hmat"));
+		static auto defaultMat = dynamic_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource("EngineData.Materials/Default.hmat"));
+		return defaultMat;
 	}
 
 	/*void Material::Load(DiskFile* file)

@@ -23,7 +23,7 @@ namespace HexEngine
 		fontOpts.AddCharacterSet(FontImportOptions::EnglishCharacterSets);
 		//fontOpts.AddCharacterSet(FontImportOptions::SimplifiedChineseCharacterSets);
 
-		_font = reinterpret_pointer_cast<IFontResource>(g_pEnv->_resourceSystem->LoadResource("EngineData.Fonts/Liberation Mono/LiberationMono-Regular.ttf", &fontOpts));
+		_font = dynamic_pointer_cast<IFontResource>(g_pEnv->_resourceSystem->LoadResource("EngineData.Fonts/Liberation Mono/LiberationMono-Regular.ttf", &fontOpts));
 
 		// Bind the console to the default key
 		g_pEnv->_commandManager->RegisterCommand(&cmd_ConsoleToggle);

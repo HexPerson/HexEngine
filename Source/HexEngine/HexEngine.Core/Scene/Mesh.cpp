@@ -103,7 +103,7 @@ namespace HexEngine
 
 	std::shared_ptr<Mesh> Mesh::Create(const fs::path& path)
 	{
-		return reinterpret_pointer_cast<Mesh>(g_pEnv->_resourceSystem->LoadResource(path));
+		return dynamic_pointer_cast<Mesh>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 
 	const std::string& Mesh::GetName()

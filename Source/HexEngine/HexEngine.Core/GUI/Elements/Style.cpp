@@ -71,7 +71,7 @@ namespace HexEngine
 
 		fontOpts.AddCharacterSet(FontImportOptions::EnglishCharacterSets);
 
-		style.font = reinterpret_pointer_cast<IFontResource>(g_pEnv->_resourceSystem->LoadResource("EngineData.Fonts/Inter/Inter-Medium.ttf", &fontOpts));
+		style.font = dynamic_pointer_cast<IFontResource>(g_pEnv->_resourceSystem->LoadResource("EngineData.Fonts/Inter/Inter-Medium.ttf", &fontOpts));
 
 #else
 

@@ -31,12 +31,12 @@ namespace HexEngine
 
 	std::shared_ptr<Model> Model::Create(const fs::path& path)
 	{
-		return reinterpret_pointer_cast<Model>(g_pEnv->_resourceSystem->LoadResource(path));
+		return dynamic_pointer_cast<Model>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 
 	std::shared_ptr<Model> Model::CreateAsync(const fs::path& path, ResourceLoadedFn callback)
 	{
-		return reinterpret_pointer_cast<Model>(g_pEnv->_resourceSystem->LoadResourceAsync(path, callback));
+		return dynamic_pointer_cast<Model>(g_pEnv->_resourceSystem->LoadResourceAsync(path, callback));
 	}
 
 	void Model::Destroy()

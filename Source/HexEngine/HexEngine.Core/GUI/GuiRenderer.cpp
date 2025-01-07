@@ -308,7 +308,7 @@ namespace HexEngine
 		float x1 = x0 + (float)width;
 		float y1 = y0 + (float)height;
 
-		list->_atlas.AddTexture(reinterpret_pointer_cast<ITexture2D>(_basicWhiteTex).get());
+		list->_atlas.AddTexture(_basicWhiteTex.get());
 
 		auto instanceBuffer = list->_quadInstance;
 
