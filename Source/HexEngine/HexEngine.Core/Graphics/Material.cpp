@@ -28,11 +28,20 @@ namespace HexEngine
 
 	void Material::Destroy()
 	{
+		if (GetName().find("SkySphere") != std::string::npos)
+		{
+			__debugbreak();
+		}
 	}
 
 	std::shared_ptr<Material> Material::Create(const fs::path& path)
 	{
 		return dynamic_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource(path));
+	}
+
+	std::shared_ptr<Material> Material::CreateAsync(const fs::path& path, ResourceLoadedFn fn)
+	{
+		return dynamic_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResourceAsync(path, fn));
 	}
 
 	bool Material::Exists(const fs::path& path)

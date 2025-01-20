@@ -213,6 +213,24 @@ namespace HexEngine
 			}
 			else
 			{
+#if 1
+				auto mesh = Mesh::CreateAsync(path,
+					[&](std::shared_ptr<IResource> resource)
+					{
+						auto mesh = dynamic_pointer_cast<Mesh>(resource);
+
+						if (!mesh)
+						{
+							LOG_CRIT("Could not load model '%s' from save file", path.c_str());
+							return;
+						}
+						else
+						{
+							SetMesh(mesh);
+						}
+
+					});
+#else
 
 				auto mesh = Mesh::Create(path);
 
@@ -225,6 +243,7 @@ namespace HexEngine
 				{
 					SetMesh(mesh);
 				}
+#endif
 			}
 			int32_t materialIndex = 0;
 
@@ -232,17 +251,25 @@ namespace HexEngine
 			{
 				auto path = materials.value();
 
-				auto material = Material::Create(path);
+				auto material = Material::CreateAsync(path, 
+					[&](std::shared_ptr<IResource> resource) {
 
-				if (!material)
-				{
-					LOG_CRIT("Failed to load material '%s' when deserialising MeshRenderer", ((std::string)path).c_str());
-					continue;
-				}
+						auto material = dynamic_pointer_cast<Material>(resource);
 
-				SetMaterial(material);
+						if (!material)
+						{
+							LOG_CRIT("Failed to load material '%s' when deserialising MeshRenderer", ((std::string)path).c_str());
+							return;
+						}
 
-				LOG_DEBUG("mesh %s loaded a shader of %s", _mesh->GetRelativePath().string().c_str(), material->GetStandardShader()->GetAbsolutePath().string().c_str());
+						SetMaterial(material);
+
+						g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+
+					});
+				
+
+				//LOG_DEBUG("mesh %s loaded a shader of %s", _mesh->GetRelativePath().string().c_str(), material->GetStandardShader()->GetAbsolutePath().string().c_str());
 
 				++materialIndex;
 			}

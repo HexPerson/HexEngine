@@ -36,7 +36,7 @@
     <ClCompile Include="Texture3D.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="TextureLoader.cpp">
+    <ClCompile Include="TextureImporter.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Tonemap.cpp">
@@ -71,7 +71,7 @@
     <ClInclude Include="Texture3D.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="TextureLoader.hpp">
+    <ClInclude Include="TextureImporter.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Tonemap.hpp">

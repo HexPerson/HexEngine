@@ -6,6 +6,13 @@
 
 namespace HexEngine
 {
+	struct DirectoryWatchInfo
+	{
+		fs::path path;
+		HANDLE handle;
+		HANDLE event;
+	};
+
 	class FileSystem
 	{
 	public:
@@ -35,14 +42,16 @@ namespace HexEngine
 
 		void CreateSubDirectories(const fs::path& absolutePath);
 
-		HANDLE CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB);
+		bool CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB=nullptr);
 
 		virtual void GetFileData(const fs::path& absolutePath, std::vector<uint8_t>& data);
 
 		std::wstring GetRelativeResourcePath(const fs::path& path);
 
 	private:
-		void FileChangeMonitorThread(HANDLE handle, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB);
+		void FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& watchInfo, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB);
+
+		void OnFileChange(PFILE_NOTIFY_INFORMATION info);
 
 	private:
 		std::wstring _name;

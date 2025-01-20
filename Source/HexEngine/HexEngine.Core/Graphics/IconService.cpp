@@ -27,7 +27,7 @@ namespace HexEngine
 
 	void IconService::Destroy()
 	{
-		//g_pEnv->_sceneManager->UnloadScene(_iconScene);
+		//g_pEnv->_sceneManager->UnloadScene(_iconScene.get());
 	}
 
 	void IconService::PushFilePathForIconGeneration(const fs::path& path)
@@ -144,11 +144,11 @@ namespace HexEngine
 
 				meshRenderer->ReleaseAllMeshes();
 
-				auto model = Model::Create("Models/Primitives/sphere.obj");
+				auto mesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
-				if (model)
+				if (mesh)
 				{
-					meshRenderer->SetMesh(model->GetMeshAtIndex(0));
+					meshRenderer->SetMesh(mesh);
 
 					meshRenderer->SetMaterial(Material::Create(path));
 				}

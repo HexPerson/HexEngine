@@ -9,7 +9,7 @@
 #include "Shader.hpp"
 #include "InputLayout.hpp"
 #include "ConstantBuffer.hpp"
-#include "TextureLoader.hpp"
+#include "TextureImporter.hpp"
 
 #include <CommonStates.h>
 #include <PostProcess.h>
@@ -154,7 +154,7 @@ namespace HexEngine
 
 		virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) override;
 
-		virtual IResourceLoader* GetTextureLoader() override;
+		virtual TextureImporter* GetTextureLoader() override;
 
 		virtual void SetDepthBufferState(DepthBufferState state) override;
 
@@ -254,7 +254,7 @@ namespace HexEngine
 		//GBuffer _gbuffer;
 		uint32_t _bbufferWidth = 0;
 		uint32_t _bbufferHeight = 0;
-		TextureLoader* _textureLoader = nullptr;
+		TextureImporter* _textureLoader = nullptr;
 		//ID3D11SamplerState* _texSamplerClamp = nullptr;
 		//ID3D11SamplerState* _texSamplerWrap = nullptr;
 		ID3D11SamplerState* _texSamplerComparison = nullptr;

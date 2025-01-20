@@ -1229,22 +1229,18 @@ namespace HexEngine
 			if (canPostProcess)
 			{
 #if 1
-				if (_currentCamera->IsDLSSEnabled())
+				if (_currentCamera->IsDLSSEnabled() && g_pEnv->_streamlineProvider != nullptr)
 				{
 					_dlssTarget->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
-					g_pEnv->_streamlineProvider->PrepareFrameResources(
-						_beautyRT->GetNativePtr(),
-						_dlssTarget->GetNativePtr(),
-						_gbuffer.GetVelocity()->GetNativePtr(),
-						_gbuffer.GetDepthBuffer()->GetNativePtr(),
-						g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+						g_pEnv->_streamlineProvider->PrepareFrameResources(
+							_beautyRT->GetNativePtr(),
+							_dlssTarget->GetNativePtr(),
+							_gbuffer.GetVelocity()->GetNativePtr(),
+							_gbuffer.GetDepthBuffer()->GetNativePtr(),
+							g_pEnv->_graphicsDevice->GetNativeDeviceContext());
 
-					g_pEnv->_streamlineProvider->EvaluateFeature(StreamlineFeature::DLSS, g_pEnv->_graphicsDevice->GetNativeDeviceContext());
-
-					//g_pEnv->_graphicsDevice->ResetState();
-
-					//_dlssTarget->CopyTo(_currentCamera->GetFullScreenRenderTarget());
+						g_pEnv->_streamlineProvider->EvaluateFeature(StreamlineFeature::DLSS, g_pEnv->_graphicsDevice->GetNativeDeviceContext());
 
 					g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
 
@@ -1253,7 +1249,6 @@ namespace HexEngine
 				else
 #endif
 				{
-					//_beautyRT->CopyTo(_currentCamera->GetFullScreenRenderTarget());
 
 					g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
 

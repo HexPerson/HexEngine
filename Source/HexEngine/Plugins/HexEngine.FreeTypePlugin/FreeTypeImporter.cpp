@@ -383,7 +383,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 
 	font->_sizedGlyphs.insert({ size, sizedAtlas });
 
-#ifdef _DEBUG
+#if 0//def _DEBUG
 	std::string atlasPath = "FontAtlas_";
 	atlasPath += font->_face;
 	atlasPath += "_";

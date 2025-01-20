@@ -131,7 +131,10 @@ namespace HexEngine
 
 	void DebugGUI::RemoveCallback(IDebugGUICallback* callback)
 	{
-		_callbacks.erase(std::remove(_callbacks.begin(), _callbacks.end(), callback));
+		auto it = std::remove(_callbacks.begin(), _callbacks.end(), callback);
+
+		if (it != _callbacks.end())
+			_callbacks.erase(it);
 	}
 
 	void DebugGUI::ShowGizmo(Entity* entity)

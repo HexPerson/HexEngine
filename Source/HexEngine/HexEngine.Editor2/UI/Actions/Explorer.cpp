@@ -214,7 +214,11 @@ namespace HexEditor
 						{
 							std::wstring relative = (_currentlyBrowsedFS->GetName() + L".") + fs::relative(_hoveredAsset->path, _currentlyBrowsedFS->GetDataDirectory()).wstring();
 							
-							resourceLoader->CreateEditorDialog(relative, _currentlyBrowsedFS);
+							// if the editor dialog is null, we should just presume that no import options are needed and immediately load the resource
+							if (auto dlg = resourceLoader->CreateEditorDialog(relative, _currentlyBrowsedFS); dlg == nullptr)
+							{
+								g_pEnv->_resourceSystem->LoadResource(_hoveredAsset->path);
+							}
 						}
 
 						_hoveredAsset = nullptr;

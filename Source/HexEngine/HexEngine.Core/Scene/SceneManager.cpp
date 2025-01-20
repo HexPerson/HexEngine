@@ -15,9 +15,9 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_mutex);
 
-		for (auto&& scene : _scenes)
+		while(_scenes.size() > 0)
 		{
-			UnloadScene(scene.get());
+			UnloadScene(_scenes[0].get());
 		}
 
 		_scenes.clear();
@@ -180,7 +180,7 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> SceneManager::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		if (absolutePath.extension() == ".prefab")
+		if (absolutePath.extension() == ".hprefab")
 		{
 			LoadPrefab(GetCurrentScene().get(), absolutePath);
 			return nullptr;
@@ -201,7 +201,7 @@ namespace HexEngine
 
 	std::vector<std::string> SceneManager::GetSupportedResourceExtensions()
 	{
-		return { ".scene", ".prefab" };
+		return { ".hscene", ".hprefab" };
 	}
 
 	std::wstring SceneManager::GetResourceDirectory() const

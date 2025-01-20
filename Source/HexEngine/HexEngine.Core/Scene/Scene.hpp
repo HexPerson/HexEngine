@@ -109,6 +109,7 @@ namespace HexEngine
 		void Unlock();
 
 		void FlushPVS(Entity* entity, bool remove=false);
+		void ForceRebuildPVS();
 
 		void RenderEntities(PVS* pvs, LayerMask layerMask, MeshRenderFlags renderFlags);
 
@@ -141,8 +142,8 @@ namespace HexEngine
 		const EntityMap& GetEntities() const;
 
 		bool GetEntities(const ComponentSignature signature, std::vector<Entity*>& entities);
-
 		bool GetComponents(const ComponentSignature signature, std::vector<BaseComponent*>& components);
+		uint32_t GetTotalNumberOfEntities();
 
 		//void GetLights(std::vector<Light*>& lights) const;
 
@@ -156,7 +157,6 @@ namespace HexEngine
 		//void RenderSkySphere();
 
 		uint32_t GetNumberOfEntitiesDrawn();
-
 		uint32_t GetDrawCalls();
 
 		void AddEntityListener(IEntityListener* listener);

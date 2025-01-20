@@ -1,6 +1,6 @@
 
 
-#include "TextureLoader.hpp"
+#include "TextureImporter.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
 #include "GraphicsDeviceD3D11.hpp"
 #include <DDSTextureLoader.h>
@@ -9,17 +9,17 @@
 
 namespace HexEngine
 {
-	TextureLoader::TextureLoader()
+	TextureImporter::TextureImporter()
 	{
 		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
 	}
 
-	TextureLoader::~TextureLoader()
+	TextureImporter::~TextureImporter()
 	{
 		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
-	std::shared_ptr<IResource> TextureLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
+	std::shared_ptr<IResource> TextureImporter::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
 	{
 		if (g_pEnv->_fileSystem->DoesAbsolutePathExist(absolutePath) == false)
 		{
@@ -42,40 +42,29 @@ namespace HexEngine
 		g_pGraphics->Lock();
 
 		LOG_INFO("Loading texture '%S'", absolutePath.c_str());
+
+		DirectX::TexMetadata metaData;
+		DirectX::ScratchImage scratchImage;
 		
 		if (lowerExtension == ".dds")
 		{
-			CHECK_HR(DirectX::CreateDDSTextureFromFile(
+			/*CHECK_HR(DirectX::CreateDDSTextureFromFile(
 				gfxDevice,
 				absolutePath.c_str(),
 				(ID3D11Resource**)&d3dTexture,
-				&d3dSRV));
+				&d3dSRV));*/
+
+			CHECK_HR(DirectX::LoadFromDDSFile(absolutePath.c_str(), DirectX::DDS_FLAGS_NONE, &metaData, scratchImage));
 		}
 		else if (lowerExtension == ".tga")
 		{
-			DirectX::TexMetadata metaData;
-			DirectX::ScratchImage scratchImage;
-
-			if (DirectX::LoadFromTGAFile(absolutePath.c_str(), &metaData, scratchImage) == S_OK)
-			{
-				CHECK_HR(DirectX::CreateTexture(
-					gfxDevice,
-					scratchImage.GetImages(),
-					scratchImage.GetImageCount(),
-					metaData,
-					(ID3D11Resource**)&d3dTexture));
-
-				CHECK_HR(DirectX::CreateShaderResourceView(
-					gfxDevice,
-					scratchImage.GetImages(),
-					scratchImage.GetImageCount(),
-					metaData,
-					&d3dSRV));
-			}
+			CHECK_HR(DirectX::LoadFromTGAFile(absolutePath.c_str(), &metaData, scratchImage));
 		}
 		else
 		{
-			CHECK_HR(DirectX::CreateWICTextureFromFileEx(
+			CHECK_HR(DirectX::LoadFromWICFile(absolutePath.c_str(), DirectX::WIC_FLAGS_FORCE_RGB, &metaData, scratchImage));
+
+			/*CHECK_HR(DirectX::CreateWICTextureFromFileEx(
 				gfxDevice,
 				gfxContexte,
 				absolutePath.c_str(),
@@ -85,8 +74,22 @@ namespace HexEngine
 				0,0,
 				DirectX::WIC_LOADER_FORCE_RGBA32,
 				(ID3D11Resource**)&d3dTexture,
-				&d3dSRV));
+				&d3dSRV));*/
 		}
+
+		CHECK_HR(DirectX::CreateTexture(
+			gfxDevice,
+			scratchImage.GetImages(),
+			scratchImage.GetImageCount(),
+			metaData,
+			(ID3D11Resource**)&d3dTexture));
+
+		CHECK_HR(DirectX::CreateShaderResourceView(
+			gfxDevice,
+			scratchImage.GetImages(),
+			scratchImage.GetImageCount(),
+			metaData,
+			&d3dSRV));
 
 		g_pGraphics->Unlock();
 
@@ -113,7 +116,7 @@ namespace HexEngine
 		return tex;
 	}
 
-	std::shared_ptr<IResource> TextureLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> TextureImporter::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		auto extension = relativePath.extension();
 
@@ -198,17 +201,17 @@ namespace HexEngine
 		return tex;
 	}
 
-	void TextureLoader::UnloadResource(IResource* resource)
+	void TextureImporter::UnloadResource(IResource* resource)
 	{
 		SAFE_DELETE(resource);
 	}
 
-	std::vector<std::string> TextureLoader::GetSupportedResourceExtensions()
+	std::vector<std::string> TextureImporter::GetSupportedResourceExtensions()
 	{
 		return { ".png", ".jpg", ".jpeg", ".bmp", ".dds", ".tga", ".tif", ".psd"};
 	}
 
-	std::wstring TextureLoader::GetResourceDirectory() const
+	std::wstring TextureImporter::GetResourceDirectory() const
 	{
 		return L"Textures";
 	}

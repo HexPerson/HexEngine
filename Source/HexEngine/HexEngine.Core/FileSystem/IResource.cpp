@@ -21,6 +21,11 @@ namespace HexEngine
 			_loader->SaveResource(this, GetAbsolutePath());
 	}
 
+	uint32_t IResource::GetId() const
+	{
+		return _id;
+	}
+
 	const fs::path& IResource::GetAbsolutePath() const
 	{
 		return _absolutePath;

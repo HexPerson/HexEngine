@@ -113,6 +113,7 @@ namespace HexEngine
 		const std::string& GetName() const;
 
 		static std::shared_ptr<Material> Create(const fs::path& path);
+		static std::shared_ptr<Material> CreateAsync(const fs::path& path, ResourceLoadedFn fn);
 		static std::shared_ptr<Material> GetDefaultMaterial();
 		static bool Exists(const fs::path& path);
 		static const std::wstring& GetMaterialTextureName(MaterialTexture type);

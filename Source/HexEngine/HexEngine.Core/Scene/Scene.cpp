@@ -59,7 +59,7 @@ namespace HexEngine
 
 				//material->SetCullMode(CullingMode::FrontFace);
 				//material->SetDepthState(DepthBufferState::DepthNone);
-				skyRenderer->SetMaterial(Material::Create("Materials/SkySphere.hmat"));
+				skyRenderer->SetMaterial(Material::Create("EngineData.Materials/SkySphere.hmat"));
 			}
 		}
 	}
@@ -88,7 +88,7 @@ namespace HexEngine
 				_skySphere = CreateEntity("SkySphere", math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(2.0f));
 				_skySphere->SetLayer(Layer::Sky);
 
-				auto sphereMesh = Mesh::Create("EngineData.Models/Primitives/sphere_sphereobj_843_960.hmesh");
+				auto sphereMesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
 				auto skyRenderer = _skySphere->AddComponent<StaticMeshComponent>();
 
@@ -391,6 +391,22 @@ namespace HexEngine
 		}
 	}
 
+	void Scene::ForceRebuildPVS()
+	{
+		for (auto& camera : _cameras)
+		{
+			camera->GetPVS()->ForceRebuild();
+		}
+
+		for (auto& caster : g_pEnv->_sceneRenderer->GetShadowCasters())
+		{
+			for (auto i = 0; i < caster->GetMaxSupportedShadowCascades(); ++i)
+			{
+				caster->GetPVS(i)->ForceRebuild();
+			}
+		}
+	}
+
 	void Scene::SendMessageToEntities(Message* message, LayerMask layerMask)
 	{
 		const auto& entities = GetEntities();
@@ -486,6 +502,20 @@ namespace HexEngine
 		delete entity;
 	}
 
+	uint32_t Scene::GetTotalNumberOfEntities()
+	{
+		std::unique_lock lock(_lock);
+
+		uint32_t totalEnts = 0;
+
+		for (auto& ents : _entities)
+		{
+			totalEnts += (uint32_t)ents.second.size();
+		}
+
+		return totalEnts;
+	}
+
 	void Scene::DestroyEntity(Entity* entity)
 	{
 		std::unique_lock lock(_lock);
@@ -494,7 +524,7 @@ namespace HexEngine
 
 		assert(entity != nullptr && "Trying to remove a NULL entity!");
 
-		LOG_DEBUG("Removing entity [%p] %s", entity, entity->GetName().c_str());
+		LOG_DEBUG("Removing entity [%p] %s. There will be %d entities remaining in the scene", entity, entity->GetName().c_str(), GetTotalNumberOfEntities()-1);
 
 		/*if (g_pEnv->_chunkManager->HasActiveChunks())
 		{

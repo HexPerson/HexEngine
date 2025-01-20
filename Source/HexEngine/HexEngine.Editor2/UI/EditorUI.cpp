@@ -132,7 +132,7 @@ namespace HexEditor
 
 			newScene->CreateDefaultSunLight();
 
-			SceneSaveFile* sceneFile = new SceneSaveFile(_projectFolderPath / "Data/Scenes/New Scene.json", std::ios::out | std::ios::trunc, newScene.get());
+			SceneSaveFile* sceneFile = new SceneSaveFile(_projectFolderPath / "Data/Scenes/New Scene.hscene", std::ios::out | std::ios::trunc, newScene.get());
 
 			sceneFile->Save();
 
@@ -424,7 +424,7 @@ namespace HexEditor
 
 		_entityList->RefreshList();
 
-		std::wstring dataLocalPath = L"Data/Scenes/" + sceneName + L".json";
+		std::wstring dataLocalPath = L"Data/Scenes/" + sceneName + L".hscene";
 		auto scenePath = _projectFolderPath / dataLocalPath;
 
 		SceneSaveFile* ssf = new SceneSaveFile(scenePath, std::ios::out, scene.get());

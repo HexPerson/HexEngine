@@ -203,6 +203,7 @@ copy "$(ProjectDir)Shaders\Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTa
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <SupportJustMyCode>false</SupportJustMyCode>
       <ShowIncludes>false</ShowIncludes>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -317,11 +318,13 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="FileSystem\AssetPackage.hpp" />
     <ClInclude Include="FileSystem\AssetPackageManager.hpp" />
     <ClInclude Include="FileSystem\ICompressionProvider.hpp" />
+    <ClInclude Include="FileSystem\IResourceLoader.hpp" />
     <ClInclude Include="FileSystem\JsonFile.hpp" />
     <ClInclude Include="FileSystem\ProjectFile.hpp" />
     <ClInclude Include="Graphics\IDenoiserProvider.hpp" />
     <ClInclude Include="Graphics\IStreamlineProvider.hpp" />
     <ClInclude Include="Graphics\MeshLoader.hpp" />
+    <ClInclude Include="Graphics\TextureLoader.hpp" />
     <ClInclude Include="GUI\Elements\Canvas.hpp" />
     <ClInclude Include="GUI\Elements\LineEditDialog.hpp" />
     <ClInclude Include="GUI\Elements\ListNode.hpp" />
@@ -496,6 +499,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="FileSystem\IResource.cpp" />
     <ClCompile Include="FileSystem\ProjectFile.cpp" />
     <ClCompile Include="Graphics\MeshLoader.cpp" />
+    <ClCompile Include="Graphics\TextureLoader.cpp" />
     <ClCompile Include="GUI\Elements\Canvas.cpp" />
     <ClCompile Include="GUI\Elements\LineEditDialog.cpp" />
     <ClCompile Include="GUI\Elements\ListNode.cpp" />

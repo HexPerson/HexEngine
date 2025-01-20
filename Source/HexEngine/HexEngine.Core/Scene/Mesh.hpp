@@ -7,6 +7,7 @@
 #include "../Graphics/IShader.hpp"
 #include "../Graphics/IInputLayout.hpp"
 #include "../Graphics/ITexture2D.hpp"
+#include "../FileSystem/ResourceSystem.hpp"
 #include "MeshInstance.hpp"
 //#include "../Terrain/TerrainGenerator.hpp"
 
@@ -143,6 +144,7 @@ namespace HexEngine
 		virtual ~Mesh();
 
 		static std::shared_ptr<Mesh> Create(const fs::path& path);
+		static std::shared_ptr<Mesh> CreateAsync(const fs::path& path, ResourceLoadedFn fn);
 
 		//static Mesh* CreatePlane(uint32_t resolution, float uvScale = 1.0f);
 

@@ -2,17 +2,16 @@
 
 #pragma once
 
-#include "../FileSystem/ResourceSystem.hpp"
+#include <HexEngine.Core/FileSystem/ResourceSystem.hpp>
+#include <HexEngine.Core/Graphics/ITexture2D.hpp>
 
 namespace HexEngine
 {
-	class IShader;
-
-	class ShaderSystem : public IResourceLoader
+	class TextureImporter : public IResourceLoader
 	{
 	public:
-		ShaderSystem();
-		~ShaderSystem();
+		TextureImporter();
+		virtual ~TextureImporter();
 
 		// IResourceLoader
 		//
@@ -22,15 +21,6 @@ namespace HexEngine
 		virtual void						UnloadResource(IResource* resource) override;
 		virtual std::vector<std::string>	GetSupportedResourceExtensions() override;
 		virtual std::wstring				GetResourceDirectory() const override;
-		virtual void						SaveResource(IResource* resource, const fs::path& path) override {}
-
-		void ReloadAllShaders();
-
-	private:
-		std::shared_ptr<IShader> ParseShaderInternal(const fs::path& absolutePath);
-		std::shared_ptr<IShader> ParseShaderInternal(const std::vector<uint8_t>& data);
-
-	private:
-		std::map<fs::path, std::weak_ptr<IShader>> _loadedShaders;
+		virtual void						SaveResource(IResource* resource, const fs::path& path) override { }
 	};
 }

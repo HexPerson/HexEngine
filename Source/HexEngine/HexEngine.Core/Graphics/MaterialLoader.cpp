@@ -192,10 +192,17 @@ namespace HexEngine
 
 	void MaterialLoader::UnloadResource(IResource* resource)
 	{		
-		_loadedMaterials.erase(std::remove_if(_loadedMaterials.begin(), _loadedMaterials.end(),
-			[resource](std::weak_ptr<Material> res) {
-				return res.lock().get() == resource;
-			}));
+		auto it = std::remove_if(_loadedMaterials.begin(), _loadedMaterials.end(),
+			[resource](const std::weak_ptr<Material>& res)
+			{
+				if (res.expired() == false)
+					return res.lock()->GetId() == resource->GetId();
+				return false;
+			});
+
+		if(it != _loadedMaterials.end())
+			_loadedMaterials.erase(it);
+
 		SAFE_DELETE(resource);
 	}
 
@@ -209,7 +216,7 @@ namespace HexEngine
 		return L"Materials";
 	}
 
-	void MaterialLoader::AddMaterial(const std::shared_ptr<Material> material)
+	void MaterialLoader::AddMaterial(const std::shared_ptr<Material>& material)
 	{
 		_loadedMaterials.push_back(material);
 	}

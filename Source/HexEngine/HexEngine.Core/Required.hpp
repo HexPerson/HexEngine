@@ -1,6 +1,12 @@
 
 #pragma once
 
+#if defined(_DEBUG) && !defined(NOMEMDBG)
+	#define _CRTDBG_MAP_ALLOC
+	#include <stdlib.h>
+	#include <crtdbg.h>
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string>

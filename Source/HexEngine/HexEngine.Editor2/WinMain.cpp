@@ -49,8 +49,6 @@ int WinMain(
 
 	HexEditor::g_pEditor = new HexEditor::EditorExtension;
 
-
-
 	// Create a new Game3DOptions instance
 	//
 	Game3DOptions environmentOpts;
@@ -69,6 +67,19 @@ int WinMain(
 
 		return EXIT_FAILURE;
 	}
+
+	g_pEnv->_fileSystem->CreateChangeNotifier(g_pEnv->_fileSystem->GetDataDirectory(),
+		[](PFILE_NOTIFY_INFORMATION info)
+		{
+			DWORD name_len = info->FileNameLength / sizeof(wchar_t);
+
+			switch (info->Action) {
+			case FILE_ACTION_ADDED: {
+
+
+			}
+			}
+		});
 
 	g_pEnv->SetEditorMode(true);
 	g_pEnv->AddGameExtension(HexEditor::g_pEditor);

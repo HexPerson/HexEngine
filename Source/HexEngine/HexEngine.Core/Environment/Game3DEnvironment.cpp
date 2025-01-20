@@ -358,6 +358,10 @@ namespace HexEngine
 
 		CoUninitialize();
 
+#ifdef _DEBUG
+		_CrtDumpMemoryLeaks();
+#endif
+
 #if ENABLE_MEMORY_LEAK_TRACKER
 		gMemoryTracker.DumpMemoryLeaks();
 #endif

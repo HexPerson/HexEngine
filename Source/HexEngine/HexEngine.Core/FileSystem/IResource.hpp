@@ -12,6 +12,9 @@ namespace HexEngine
 		bool isLoadedFromAssetPackage = false;
 	};
 
+	typedef uint32_t ResourceId;
+	constexpr uint32_t InvalidResourceId = (-1);
+
 	class FileSystem;
 
 	class IResource
@@ -23,6 +26,8 @@ namespace HexEngine
 
 		void				SetLoader(class IResourceLoader* loader);
 		IResourceLoader*	GetLoader() const;
+
+		ResourceId			GetId() const;
 
 		/// <summary>
 		/// Allows the resource to be saved to disk
@@ -56,5 +61,7 @@ namespace HexEngine
 		fs::path _relativePath;
 
 		class IResourceLoader* _loader = nullptr;
+
+		uint32_t _id = InvalidResourceId;
 	};
 }

@@ -234,9 +234,11 @@ namespace HexEngine
 			// set up the paths
 			resource->_fsRelativePath = fs->GetRelativeResourcePath(trueLocalPath.wstring());
 			resource->_absolutePath = fullPath;
-			resource->_relativePath = trueLocalPath;			
+			resource->_relativePath = trueLocalPath;		
+			resource->_id = _currentResourceId++;
 
 			_loadedResources[resource->GetFileSystemPath()] = resource;
+			_idToResourceMap[resource->_id] = resource;
 
 			return resource;
 		}
@@ -261,6 +263,7 @@ namespace HexEngine
 		_lock.lock();
 
 		_loadedResources.erase(resource->GetFileSystemPath());
+		_idToResourceMap.erase(resource->GetId());
 
 		LOG_INFO("Unloading resource '%S'", resource->GetFileSystemPath().wstring().c_str());
 
@@ -274,7 +277,7 @@ namespace HexEngine
 		_lock.unlock();
 	}
 
-	std::vector<std::string> ResourceSystem::GetSupportedFileExtensions()
+	std::vector<std::string> ResourceSystem::GetSupportedFileExtensions() const
 	{
 		std::vector<std::string> res;
 
@@ -286,5 +289,15 @@ namespace HexEngine
 		}
 
 		return res;
+	}
+
+	std::shared_ptr<IResource> ResourceSystem::FindResourceById(ResourceId id) const
+	{
+		auto it = _idToResourceMap.find(id);
+
+		if (it == _idToResourceMap.end())
+			return nullptr;
+
+		return it->second.lock();
 	}
 }
