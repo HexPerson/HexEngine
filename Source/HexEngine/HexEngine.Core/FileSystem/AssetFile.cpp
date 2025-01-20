@@ -11,7 +11,7 @@ namespace HexEngine
 		DiskFile(absolutePath, std::ios::binary | std::ios::in)
 	{}
 
-	bool AssetFile::Unpack(AssetPackage* package)
+	bool AssetFile::Unpack(std::shared_ptr<AssetPackage> package)
 	{
 		if (!Open())
 			return false;

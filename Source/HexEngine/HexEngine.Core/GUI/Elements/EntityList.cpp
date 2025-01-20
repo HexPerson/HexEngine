@@ -18,10 +18,6 @@ namespace HexEngine
 
 	EntityList::~EntityList()
 	{
-		for (auto it = _icons.begin(); it != _icons.end(); it++)
-		{
-			SAFE_UNLOAD(it->second);
-		}
 	}
 
 	bool EntityList::OnInputEvent(InputEvent event, InputData* data)
@@ -176,12 +172,12 @@ namespace HexEngine
 		SceneSaveFile saveFile(
 			fs->GetLocalAbsoluteDataPath("Prefabs/" + entity->GetName() + ".prefab"),
 			std::ios::out,
-			prefabScene,
+			prefabScene.get(),
 			SceneFileFlags::DontSaveVariables);
 
 		saveFile.Save();
 		
-		g_pEnv->_sceneManager->UnloadScene(prefabScene);
+		//g_pEnv->_sceneManager->UnloadScene(prefabScene);
 		sceneManager->SetActiveScene(currentScene);
 	}
 
@@ -192,11 +188,11 @@ namespace HexEngine
 		_icons[IconId::Scene] = HexEngine::ITexture2D::Create("EngineData.Textures/UI/scene.png");
 	}
 
-	ListNode* EntityList::AddScene(Scene* scene)
+	ListNode* EntityList::AddScene(const std::shared_ptr<Scene>& scene)
 	{
 		scene->Lock();
 
-		auto sceneNode = new SceneListNode(this, scene->GetName(), { _icons[IconId::Scene], _icons[IconId::Scene] }, scene);
+		auto sceneNode = new SceneListNode(this, scene->GetName(), { _icons[IconId::Scene].get(), _icons[IconId::Scene].get() }, scene.get());
 
 		if(_onSceneClicked)
 			sceneNode->_onClick = std::bind(_onSceneClicked, this, sceneNode->GetScene());
@@ -220,7 +216,7 @@ namespace HexEngine
 
 			if (parentItem)
 			{
-				auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity] });
+				auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity].get() });
 
 				node->_onClick = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2);
 
@@ -230,7 +226,7 @@ namespace HexEngine
 			}
 		}
 
-		auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity] });
+		auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity].get() });
 		node->_onClick = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2);
 
 		AddNode(node, scene);

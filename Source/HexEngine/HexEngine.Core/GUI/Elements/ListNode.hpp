@@ -43,7 +43,7 @@ namespace HexEngine
 		std::vector<ITexture2D*> _icons;
 		//ITexture2D* _openIcon = nullptr;
 		//ITexture2D* _closeIcon = nullptr;
-		ITexture2D* _arrowIcon = nullptr;
+		std::shared_ptr<ITexture2D> _arrowIcon;
 		ListNode* _child = nullptr;
 		ListNode* _parent = nullptr;
 		bool _isOpen = false;

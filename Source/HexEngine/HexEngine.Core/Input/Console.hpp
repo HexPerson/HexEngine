@@ -20,10 +20,10 @@ namespace HexEngine
 
 		void OnCharInput(wchar_t ch);
 		void OnKeyInput(int32_t key, bool down);
-		IFontResource* GetFont() const;
+		std::shared_ptr<IFontResource> GetFont() const;
 
 	private:
-		IFontResource* _font = nullptr;
+		std::shared_ptr<IFontResource> _font;
 		bool _active = false;
 		std::string _input;
 		std::list<std::string> _lines;

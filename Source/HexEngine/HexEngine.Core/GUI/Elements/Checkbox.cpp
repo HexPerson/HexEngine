@@ -15,7 +15,6 @@ namespace HexEngine
 
 	Checkbox::~Checkbox()
 	{
-		SAFE_UNLOAD(_tickImg);
 	}
 
 	void Checkbox::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
@@ -29,7 +28,7 @@ namespace HexEngine
 		int32_t width = 0, height = 0;
 		if (_label.length() > 0)
 		{
-			renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, pos.x, pos.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x, pos.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);
 
 			
 			renderer->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, _label, width, height);
@@ -45,7 +44,7 @@ namespace HexEngine
 
 		if (_value && *_value)
 		{
-			renderer->FillTexturedQuad(_tickImg, pos.x + 1, pos.y , _size.y - 2, _size.y, math::Color(1, 1, 1, 1));
+			renderer->FillTexturedQuad(_tickImg.get(), pos.x + 1, pos.y , _size.y - 2, _size.y, math::Color(1, 1, 1, 1));
 		}
 
 		if (IsMouseOver(pos.x, pos.y, _size.y, _size.y))

@@ -25,6 +25,6 @@ namespace HexEngine
 		ITexture2D* _history = nullptr;
 		ITexture2D* _renderTarget = nullptr;
 		//ITexture2D* _velocity = nullptr;
-		IShader* _resolveShader = nullptr;
+		std::shared_ptr<IShader> _resolveShader;
 	};
 }

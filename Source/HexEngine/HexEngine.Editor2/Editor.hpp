@@ -50,7 +50,7 @@ namespace HexEditor
 
 	public:
 		FileSystem* _projectFS = nullptr;
-		ITexture2D* _overlayIcons[Overlay_Count] = { nullptr };
+		std::shared_ptr<ITexture2D> _overlayIcons[Overlay_Count] = { nullptr };
 	};
 
 	inline EditorExtension* g_pEditor = nullptr;

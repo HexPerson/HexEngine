@@ -19,7 +19,7 @@ namespace HexEngine
 			D3D11_USAGE_DYNAMIC,
 			D3D11_CPU_ACCESS_WRITE);
 
-		_debugShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/DebugRender.hcs");
+		_debugShader = IShader::Create("EngineData.Shaders/DebugRender.hcs");
 
 		//D3D11_INPUT_ELEMENT_DESC inputDesc[] = {
 		//	{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
@@ -44,8 +44,7 @@ namespace HexEngine
 	void DebugRenderer::Destroy()
 	{
 		SAFE_DELETE(_lineVBuffer);
-		//SAFE_DELETE(_inputLayout);
-		SAFE_UNLOAD(_debugShader);
+		SAFE_DELETE(_lineIBuffer);
 	}	
 
 	void DebugRenderer::DrawFrustum(const dx::BoundingFrustum& frustum)

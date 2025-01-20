@@ -27,6 +27,6 @@ namespace HexEngine
 		int32_t _blurSize;
 		ITexture2D* _blurTarget;
 		ITexture2D* _blurCompositionRT;
-		IShader* _shaders[2];
+		std::shared_ptr<IShader> _shaders[2];
 	};
 }

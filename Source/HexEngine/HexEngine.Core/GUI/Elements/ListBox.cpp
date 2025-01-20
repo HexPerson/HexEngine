@@ -83,7 +83,7 @@ namespace HexEngine
 				if (item.icon)
 					renderer->FillTexturedQuad(item.icon, pos.x + 4, pos.y + 1, 16, 16, math::Color(1, 1, 1, 1));
 
-				renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, pos.x + 24, pos.y + size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, item.label);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x + 24, pos.y + size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, item.label);
 
 				pos.y += lineHeight;
 

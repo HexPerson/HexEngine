@@ -24,7 +24,7 @@ namespace HexEngine
 	private:
 		bool* _value;
 		std::wstring _label;
-		ITexture2D* _tickImg;
+		std::shared_ptr<ITexture2D> _tickImg;
 		bool _hovering = false;
 		OnCheckFn _onCheckFn;
 	};

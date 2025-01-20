@@ -34,11 +34,6 @@ namespace HexEngine
 
 	GuiRenderer::~GuiRenderer()
 	{
-		SAFE_UNLOAD(_basicShader);
-		SAFE_UNLOAD(_instancedShader);
-
-		SAFE_UNLOAD(_basicWhiteTex);
-
 		SAFE_DELETE(_vertexBuffer);
 		SAFE_DELETE(_indexBuffer);
 		SAFE_DELETE(_fontVertexBuffer);
@@ -288,7 +283,7 @@ namespace HexEngine
 		//
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
-		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex);
+		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex.get());
 		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
 	}
@@ -313,7 +308,7 @@ namespace HexEngine
 		float x1 = x0 + (float)width;
 		float y1 = y0 + (float)height;
 
-		list->_atlas.AddTexture(_basicWhiteTex);
+		list->_atlas.AddTexture(_basicWhiteTex.get());
 
 		auto instanceBuffer = list->_quadInstance;
 
@@ -344,7 +339,7 @@ namespace HexEngine
 			(float)y + ((float)height / 2.0f));
 
 		instanceBuffer->Render(
-			_basicWhiteTex,
+			_basicWhiteTex.get(),
 			math::Vector2(centrePoint.x, centrePoint.y),
 			math::Vector2(scaleX, scaleY),
 			math::Vector2(0.0f, 0.0f),
@@ -437,7 +432,7 @@ namespace HexEngine
 
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
-		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex);
+		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex.get());
 		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
 	}
@@ -457,7 +452,7 @@ namespace HexEngine
 			height = RY(height, _screenHeight);
 		}
 
-		list->_atlas.AddTexture(_basicWhiteTex);
+		list->_atlas.AddTexture(_basicWhiteTex.get());
 
 		auto instanceBuffer = list->_quadInstance;
 
@@ -488,7 +483,7 @@ namespace HexEngine
 			(float)y + ((float)height / 2.0f));
 
 		instanceBuffer->Render(
-			_basicWhiteTex,
+			_basicWhiteTex.get(),
 			math::Vector2(centrePoint.x, centrePoint.y),
 			math::Vector2(scaleX, scaleY),
 			math::Vector2(0.0f, 0.0f),
@@ -545,7 +540,7 @@ namespace HexEngine
 		//
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
-		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex);
+		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex.get());
 		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
 		g_pEnv->_graphicsDevice->DrawIndexed(2);
 	}
@@ -592,7 +587,7 @@ namespace HexEngine
 		//
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
-		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex);
+		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex.get());
 		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
 		g_pEnv->_graphicsDevice->DrawIndexed(2);
 	}

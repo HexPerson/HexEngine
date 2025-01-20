@@ -13,7 +13,7 @@ namespace HexEngine
 		CREATE_COMPONENT_ID(ScriptComponent);
 		DEFINE_COMPONENT_CTOR(ScriptComponent);
 
-		void SetScript(ScriptFile* script);
+		void SetScript(const std::shared_ptr<ScriptFile>& script);
 		void SetScript(const fs::path& path);
 
 		virtual void Update(float frameTime) override;
@@ -30,6 +30,6 @@ namespace HexEngine
 		void SetScriptFromWidget(LineEdit* edit, const fs::path& path);
 
 	private:
-		ScriptFile* _script = nullptr;
+		std::shared_ptr<ScriptFile> _script;
 	};
 }

@@ -16,7 +16,6 @@ namespace HexEngine
 
 	DropDown::~DropDown()
 	{
-		SAFE_UNLOAD(_arrowIcon);
 	}
 
 	ContextMenu* DropDown::GetContextMenu() const
@@ -51,7 +50,7 @@ namespace HexEngine
 		const int32_t iconSize = _size.y - 4;
 
 		renderer->PushFillTexturedQuad(
-			_arrowIcon,
+			_arrowIcon.get(),
 			GetAbsolutePosition().x + _size.x - iconSize,
 			GetAbsolutePosition().y + (_size.y / 2) - iconSize / 2,
 			iconSize, iconSize,

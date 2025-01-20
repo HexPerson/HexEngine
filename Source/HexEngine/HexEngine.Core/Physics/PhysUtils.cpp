@@ -217,7 +217,7 @@ namespace HexEngine
 											tempHit.entity = entity;
 											tempHit.normal = (vertices[i0]._normal + vertices[i1]._normal + vertices[i2]._normal) / 3.0f;
 											tempHit.normal.Normalize();
-											tempHit.material = meshRenderer->GetMaterial(0);
+											tempHit.material = meshRenderer->GetMaterial();
 
 											hits.push_back(tempHit);
 											break;
@@ -233,7 +233,6 @@ namespace HexEngine
 								tempHit.position = ray.position + ray.direction * dist;
 								tempHit.entity = entity;
 								tempHit.normal = -ray.direction;
-								tempHit.material = nullptr;
 
 								hits.push_back(tempHit);
 							}

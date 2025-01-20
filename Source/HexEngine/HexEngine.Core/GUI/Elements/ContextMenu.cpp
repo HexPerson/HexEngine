@@ -18,7 +18,6 @@ namespace HexEngine
 	{
 		DeleteItems(_root);
 
-		SAFE_UNLOAD(_triangle);
 		SAFE_DELETE(_root);
 	}
 
@@ -108,14 +107,14 @@ namespace HexEngine
 				_hovering = item;
 				renderer->PushFillQuad(x, y, root->largestWidth - 1, (int32_t)Style::FontSize::Tiny + 4, renderer->_style.context_highlight);
 
-				renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, x + 2, y + ((int32_t)Style::FontSize::Tiny + 4) / 2, math::Color(0, 0, 0, 1), FontAlign::CentreUD, item->name);
+				renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + 2, y + ((int32_t)Style::FontSize::Tiny + 4) / 2, math::Color(0, 0, 0, 1), FontAlign::CentreUD, item->name);
 			}
 			else
-				renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, x + 2, y + ((int32_t)Style::FontSize::Tiny + 4) / 2, math::Color(1, 1, 1, 1), FontAlign::CentreUD, item->name);
+				renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + 2, y + ((int32_t)Style::FontSize::Tiny + 4) / 2, math::Color(1, 1, 1, 1), FontAlign::CentreUD, item->name);
 
 			if (item->submenu != nullptr)
 			{
-				renderer->PushFillTexturedQuad(_triangle, x + root->largestWidth - (uint8_t)Style::FontSize::Tiny, y, (uint8_t)Style::FontSize::Tiny, (uint8_t)Style::FontSize::Tiny, math::Color(1, 1, 1, 1), -90.0f);
+				renderer->PushFillTexturedQuad(_triangle.get(), x + root->largestWidth - (uint8_t)Style::FontSize::Tiny, y, (uint8_t)Style::FontSize::Tiny, (uint8_t)Style::FontSize::Tiny, math::Color(1, 1, 1, 1), -90.0f);
 
 				if (item->submenu->open)
 				{

@@ -5,6 +5,11 @@
 
 namespace HexEngine
 {
+	void ResourceDeleter::operator()(IResource* p) const
+	{
+		g_pEnv->_resourceSystem->UnloadResource(p);
+	}
+
 	void ResourceSystem::Create()
 	{
 		for (auto i = 0; i < MaxAsyncResourceLoaders; ++i)
@@ -20,7 +25,7 @@ namespace HexEngine
 
 		for (auto&& resource : _loadedResources)
 		{
-			LOG_DEBUG("** WARNING ** Unloaded resource: '%S' RefCount = %d", resource.first.c_str(), resource.second->GetRefCount());
+			LOG_DEBUG("** WARNING ** Unloaded resource: '%S' RefCount = %d", resource.first.c_str(), resource.second.use_count());
 		}		
 	}
 
@@ -130,18 +135,19 @@ namespace HexEngine
 		return nullptr;
 	}
 
-	IResource* ResourceSystem::LoadResource(const fs::path& localPath, const ResourceLoadOptions* options /*= nullptr*/)
+	std::shared_ptr<IResource> ResourceSystem::LoadResource(const fs::path& localPath, const ResourceLoadOptions* options /*= nullptr*/)
 	{
 		auto it = _loadedResources.find(localPath);
 
 		// If this resource is already loaded, we simply need to increment it's ref count and return the ptr
 		if (it != _loadedResources.end())
 		{
-			it->second->AddRef();
-			return it->second;
+			LOG_DEBUG("Resource '%s' was already loaded, it now has a reference count of %d", it->first.string().c_str(), it->second.use_count() + 1);
+
+			return it->second.lock();
 		}
 
-		IResource* resource = nullptr;
+		std::shared_ptr<IResource> resource = nullptr;
 
 		for (auto& fs : _fileSystems)
 		{
@@ -162,8 +168,7 @@ namespace HexEngine
 				// If this resource is already loaded, we simply need to increment it's ref count and return the ptr
 				if (it != _loadedResources.end())
 				{
-					it->second->AddRef();
-					return it->second;
+					return it->second.lock();
 				}
 			}
 			else
@@ -223,16 +228,17 @@ namespace HexEngine
 				return nullptr;
 			}
 
-			resource->_refCnt = 1;
 			resource->_loader = loader;
 			resource->_fs = fs;
 
 			// set up the paths
 			resource->_fsRelativePath = fs->GetRelativeResourcePath(trueLocalPath.wstring());
 			resource->_absolutePath = fullPath;
-			resource->_relativePath = trueLocalPath;			
+			resource->_relativePath = trueLocalPath;		
+			resource->_id = _currentResourceId++;
 
 			_loadedResources[resource->GetFileSystemPath()] = resource;
+			_idToResourceMap[resource->_id] = resource;
 
 			return resource;
 		}
@@ -241,7 +247,7 @@ namespace HexEngine
 		return nullptr;
 	}
 
-	IResource* ResourceSystem::LoadResourceAsync(const fs::path& path, ResourceLoadedFn callback)
+	std::shared_ptr<IResource> ResourceSystem::LoadResourceAsync(const fs::path& path, ResourceLoadedFn callback)
 	{
 		_lock.lock();
 
@@ -256,26 +262,22 @@ namespace HexEngine
 	{
 		_lock.lock();
 
-		resource->Release();
+		_loadedResources.erase(resource->GetFileSystemPath());
+		_idToResourceMap.erase(resource->GetId());
 
-		if (resource->GetRefCount() == 0)
+		LOG_INFO("Unloading resource '%S'", resource->GetFileSystemPath().wstring().c_str());
+
+		if (resource->_loader)
+			resource->_loader->UnloadResource(resource);
+		else
 		{
-			_loadedResources.erase(resource->GetFileSystemPath());
-
-			LOG_INFO("Unloading resource '%S'", resource->GetFileSystemPath().wstring().c_str());
-
-			if(resource->_loader)
-				resource->_loader->UnloadResource(resource);			
-			else
-			{
-				LOG_WARN("Trying to unload resource '%s' but it has no associated resource loader. This will cause a memory leak.", resource->GetFileSystemPath().filename().string().c_str());
-			}
+			LOG_WARN("Trying to unload resource '%s' but it has no associated resource loader. This will cause a memory leak.", resource->GetFileSystemPath().filename().string().c_str());
 		}
 
 		_lock.unlock();
 	}
 
-	std::vector<std::string> ResourceSystem::GetSupportedFileExtensions()
+	std::vector<std::string> ResourceSystem::GetSupportedFileExtensions() const
 	{
 		std::vector<std::string> res;
 
@@ -287,5 +289,15 @@ namespace HexEngine
 		}
 
 		return res;
+	}
+
+	std::shared_ptr<IResource> ResourceSystem::FindResourceById(ResourceId id) const
+	{
+		auto it = _idToResourceMap.find(id);
+
+		if (it == _idToResourceMap.end())
+			return nullptr;
+
+		return it->second.lock();
 	}
 }

@@ -112,8 +112,9 @@ namespace HexEngine
 		void SetName(const std::string& name);
 		const std::string& GetName() const;
 
-		static Material* Create(const fs::path& path);
-		static Material* GetDefaultMaterial();
+		static std::shared_ptr<Material> Create(const fs::path& path);
+		static std::shared_ptr<Material> CreateAsync(const fs::path& path, ResourceLoadedFn fn);
+		static std::shared_ptr<Material> GetDefaultMaterial();
 		static bool Exists(const fs::path& path);
 		static const std::wstring& GetMaterialTextureName(MaterialTexture type);
 
@@ -121,22 +122,22 @@ namespace HexEngine
 
 		Material(const Material& other);
 
-		void CopyFrom(Material* material);
+		void CopyFrom(const std::shared_ptr<Material>& material);
 		void CopyFrom(const Material& material);
 
 		Material& operator = (const Material& other);
 
-		Material& operator = (Material* other);
+		Material& operator = (const std::shared_ptr<Material>& other);
 
-		void SetTexture(MaterialTexture type, ITexture2D* texture);
+		void SetTexture(MaterialTexture type, const std::shared_ptr<ITexture2D>& texture);
 
-		void SetStandardShader(IShader* shader);
-		void SetShadowMapShader(IShader* shader);
+		void SetStandardShader(const std::shared_ptr<IShader>& shader);
+		void SetShadowMapShader(const std::shared_ptr<IShader>& shader);
 
-		IShader* GetStandardShader() const;
-		IShader* GetShadowMapShader() const;
+		std::shared_ptr<IShader> GetStandardShader() const;
+		std::shared_ptr<IShader> GetShadowMapShader() const;
 
-		ITexture2D* GetTexture(MaterialTexture type) const;
+		std::shared_ptr<ITexture2D> GetTexture(MaterialTexture type) const;
 
 		void SetVolumeTexture(ITexture3D* texture);
 		ITexture3D* GetVolumeTexture() const { return _volumeTexture; }
@@ -163,10 +164,10 @@ namespace HexEngine
 
 	private:
 		uint32_t _materialId = 0;
-		ITexture2D* _textures[MaterialTexture::Count] = { nullptr };
+		std::shared_ptr<ITexture2D> _textures[MaterialTexture::Count];
 		ITexture3D* _volumeTexture = nullptr;
-		IShader* _standardShader = nullptr;
-		IShader* _shadowMapShader = nullptr;		
+		std::shared_ptr<IShader> _standardShader;
+		std::shared_ptr<IShader> _shadowMapShader = nullptr;
 		std::string _name;
 
 

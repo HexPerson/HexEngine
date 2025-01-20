@@ -38,11 +38,10 @@ namespace HexEngine
 		bool		RenderMesh(Mesh* mesh, MeshRenderFlags flags, int32_t instanceId);
 
 		// Materials
-		Material*	GetMaterial(int32_t id = 0) const;
-		void		SetMaterial(int32_t id, Material* material);
-		Material*	CreateMaterial();
-		void		DestroyMaterial(int32_t id);
-		int32_t		GetNumMaterials() const;
+		std::shared_ptr<Material>	GetMaterial() const;
+		void						SetMaterial(const std::shared_ptr<Material>& material);
+		std::shared_ptr<Material>	CreateMaterial();
+		void						DestroyMaterial();
 
 		CullingMode GetShadowCullMode() const;
 		void		SetShadowCullMode(CullingMode mode);
@@ -59,8 +58,8 @@ namespace HexEngine
 
 		// Mesh
 		//
-		void SetMesh(Mesh* mesh);
-		Mesh* GetMesh() const;
+		void SetMesh(const std::shared_ptr<Mesh>& mesh);
+		std::shared_ptr<Mesh> GetMesh() const;
 
 		const math::Vector2& GetUVScale() const;
 
@@ -75,9 +74,8 @@ namespace HexEngine
 		//void ShowTextureBrowserFromWidget(Material::MaterialTexture type);
 
 	private:
-		Mesh* _mesh = nullptr;
-		int32_t _numMaterials = 0;
-		Material* _materials[MeshMaxMaterials] = { nullptr };
+		std::shared_ptr<Mesh> _mesh = nullptr;
+		std::shared_ptr<Material> _material;
 		mutable std::recursive_mutex _lock;
 
 		math::Vector2 _uvScale;

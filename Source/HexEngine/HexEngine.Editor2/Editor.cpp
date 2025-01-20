@@ -20,7 +20,6 @@ namespace HexEditor
 	EditorExtension::~EditorExtension()
 	{
 		SAFE_DELETE(_projectFS);
-		SAFE_UNLOAD_ARRAY(_overlayIcons, _countof(_overlayIcons));
 	}
 
 	void EditorExtension::OnCreateGame()
@@ -52,9 +51,9 @@ namespace HexEditor
 
 					const int32_t IconSize = 24;
 
-					g_pEnv->_uiManager->GetRenderer()->FillTexturedQuad(_overlayIcons[Overlay_Light], scrx- IconSize/2, scry- IconSize/2, IconSize, IconSize, math::Color(1, 1, 1, 1));
+					g_pEnv->_uiManager->GetRenderer()->FillTexturedQuad(_overlayIcons[Overlay_Light].get(), scrx- IconSize/2, scry- IconSize/2, IconSize, IconSize, math::Color(1, 1, 1, 1));
 
-					g_pEnv->_uiManager->GetRenderer()->PrintText(g_pUIManager->GetRenderer()->_style.font, (uint8_t)Style::FontSize::Tiny, scrx, scry + IconSize / 2 + 2, math::Color(1, 1, 1, 1), FontAlign::CentreLR, std::wstring(light->GetEntity()->GetName().begin(), light->GetEntity()->GetName().end()));
+					g_pEnv->_uiManager->GetRenderer()->PrintText(g_pUIManager->GetRenderer()->_style.font.get(), (uint8_t)Style::FontSize::Tiny, scrx, scry + IconSize / 2 + 2, math::Color(1, 1, 1, 1), FontAlign::CentreLR, std::wstring(light->GetEntity()->GetName().begin(), light->GetEntity()->GetName().end()));
 				}
 			}
 		}
@@ -75,6 +74,18 @@ namespace HexEditor
 
 		g_pEditor->_projectFS = new FileSystem(L"GameData");
 		g_pEditor->_projectFS->SetBaseDirectory(path);
+		g_pEditor->_projectFS->CreateChangeNotifier(g_pEditor->_projectFS->GetDataDirectory(),
+			[](PFILE_NOTIFY_INFORMATION info)
+			{
+				DWORD name_len = info->FileNameLength / sizeof(wchar_t);
+
+				switch (info->Action) {
+				case FILE_ACTION_ADDED: {
+
+
+				}
+				}
+			});
 
 		g_pEnv->_resourceSystem->AddFileSystem(g_pEditor->_projectFS);
 

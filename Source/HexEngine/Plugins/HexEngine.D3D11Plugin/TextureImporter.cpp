@@ -1,6 +1,6 @@
 
 
-#include "TextureLoader.hpp"
+#include "TextureImporter.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
 #include "GraphicsDeviceD3D11.hpp"
 #include <DDSTextureLoader.h>
@@ -9,17 +9,17 @@
 
 namespace HexEngine
 {
-	TextureLoader::TextureLoader()
+	TextureImporter::TextureImporter()
 	{
 		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
 	}
 
-	TextureLoader::~TextureLoader()
+	TextureImporter::~TextureImporter()
 	{
 		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
-	IResource* TextureLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
+	std::shared_ptr<IResource> TextureImporter::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
 	{
 		if (g_pEnv->_fileSystem->DoesAbsolutePathExist(absolutePath) == false)
 		{
@@ -34,7 +34,7 @@ namespace HexEngine
 		auto gfxDevice = (ID3D11Device*)g_pEnv->_graphicsDevice->GetNativeDevice();
 		auto gfxContexte = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 
-		Texture2D* tex = new Texture2D;
+		
 
 		ID3D11Texture2D* d3dTexture = nullptr;
 		ID3D11ShaderResourceView* d3dSRV = nullptr;
@@ -42,40 +42,29 @@ namespace HexEngine
 		g_pGraphics->Lock();
 
 		LOG_INFO("Loading texture '%S'", absolutePath.c_str());
+
+		DirectX::TexMetadata metaData;
+		DirectX::ScratchImage scratchImage;
 		
 		if (lowerExtension == ".dds")
 		{
-			CHECK_HR(DirectX::CreateDDSTextureFromFile(
+			/*CHECK_HR(DirectX::CreateDDSTextureFromFile(
 				gfxDevice,
 				absolutePath.c_str(),
 				(ID3D11Resource**)&d3dTexture,
-				&d3dSRV));
+				&d3dSRV));*/
+
+			CHECK_HR(DirectX::LoadFromDDSFile(absolutePath.c_str(), DirectX::DDS_FLAGS_NONE, &metaData, scratchImage));
 		}
 		else if (lowerExtension == ".tga")
 		{
-			DirectX::TexMetadata metaData;
-			DirectX::ScratchImage scratchImage;
-
-			if (DirectX::LoadFromTGAFile(absolutePath.c_str(), &metaData, scratchImage) == S_OK)
-			{
-				DirectX::CreateTexture(
-					gfxDevice,
-					scratchImage.GetImages(),
-					scratchImage.GetImageCount(),
-					metaData,
-					(ID3D11Resource**)&d3dTexture);
-
-				DirectX::CreateShaderResourceView(
-					gfxDevice,
-					scratchImage.GetImages(),
-					scratchImage.GetImageCount(),
-					metaData,
-					&d3dSRV);
-			}
+			CHECK_HR(DirectX::LoadFromTGAFile(absolutePath.c_str(), &metaData, scratchImage));
 		}
 		else
 		{
-			CHECK_HR(DirectX::CreateWICTextureFromFileEx(
+			CHECK_HR(DirectX::LoadFromWICFile(absolutePath.c_str(), DirectX::WIC_FLAGS_FORCE_RGB, &metaData, scratchImage));
+
+			/*CHECK_HR(DirectX::CreateWICTextureFromFileEx(
 				gfxDevice,
 				gfxContexte,
 				absolutePath.c_str(),
@@ -85,16 +74,31 @@ namespace HexEngine
 				0,0,
 				DirectX::WIC_LOADER_FORCE_RGBA32,
 				(ID3D11Resource**)&d3dTexture,
-				&d3dSRV));
+				&d3dSRV));*/
 		}
+
+		CHECK_HR(DirectX::CreateTexture(
+			gfxDevice,
+			scratchImage.GetImages(),
+			scratchImage.GetImageCount(),
+			metaData,
+			(ID3D11Resource**)&d3dTexture));
+
+		CHECK_HR(DirectX::CreateShaderResourceView(
+			gfxDevice,
+			scratchImage.GetImages(),
+			scratchImage.GetImageCount(),
+			metaData,
+			&d3dSRV));
 
 		g_pGraphics->Unlock();
 
 		if (d3dTexture == nullptr)
 		{
-			delete tex;
 			return nullptr;
 		}
+
+		std::shared_ptr<Texture2D> tex = std::shared_ptr<Texture2D>(new Texture2D, ResourceDeleter());
 
 		D3D11_TEXTURE2D_DESC desc;
 		d3dTexture->GetDesc(&desc);
@@ -106,20 +110,18 @@ namespace HexEngine
 
 #ifdef _DEBUG
 		std::string path = absolutePath.string().c_str();
-		((ID3D11Texture2D*)tex->GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, path.length(), path.data());
+		((ID3D11Texture2D*)tex->GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)path.length(), path.data());
 #endif
 
 		return tex;
 	}
 
-	IResource* TextureLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> TextureImporter::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		auto extension = relativePath.extension();
 
 		auto gfxDevice = (ID3D11Device*)g_pEnv->_graphicsDevice->GetNativeDevice();
 		auto gfxContexte = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
-
-		Texture2D* tex = new Texture2D;
 
 		ID3D11Texture2D* d3dTexture = nullptr;
 		ID3D11ShaderResourceView* d3dSRV = nullptr;
@@ -148,19 +150,19 @@ namespace HexEngine
 				&metaData,
 				scratchImage) == S_OK)
 			{
-				DirectX::CreateTexture(
+				CHECK_HR(DirectX::CreateTexture(
 					gfxDevice,
 					scratchImage.GetImages(),
 					scratchImage.GetImageCount(),
 					metaData,
-					(ID3D11Resource**)&d3dTexture);
+					(ID3D11Resource**)&d3dTexture));
 
-				DirectX::CreateShaderResourceView(
+				CHECK_HR(DirectX::CreateShaderResourceView(
 					gfxDevice,
 					scratchImage.GetImages(),
 					scratchImage.GetImageCount(),
 					metaData,
-					&d3dSRV);
+					&d3dSRV));
 			}
 		}
 		else
@@ -178,9 +180,10 @@ namespace HexEngine
 
 		if (d3dTexture == nullptr)
 		{
-			delete tex;
 			return nullptr;
 		}
+
+		std::shared_ptr<Texture2D> tex = std::shared_ptr<Texture2D>(new Texture2D, ResourceDeleter());
 
 		D3D11_TEXTURE2D_DESC desc;
 		d3dTexture->GetDesc(&desc);
@@ -192,23 +195,23 @@ namespace HexEngine
 
 #ifdef _DEBUG
 		std::string path = relativePath.string().c_str();
-		((ID3D11Texture2D*)tex->GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, path.length(), path.data());
+		((ID3D11Texture2D*)tex->GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)path.length(), path.data());
 #endif
 
 		return tex;
 	}
 
-	void TextureLoader::UnloadResource(IResource* resource)
+	void TextureImporter::UnloadResource(IResource* resource)
 	{
 		SAFE_DELETE(resource);
 	}
 
-	std::vector<std::string> TextureLoader::GetSupportedResourceExtensions()
+	std::vector<std::string> TextureImporter::GetSupportedResourceExtensions()
 	{
 		return { ".png", ".jpg", ".jpeg", ".bmp", ".dds", ".tga", ".tif", ".psd"};
 	}
 
-	std::wstring TextureLoader::GetResourceDirectory() const
+	std::wstring TextureImporter::GetResourceDirectory() const
 	{
 		return L"Textures";
 	}

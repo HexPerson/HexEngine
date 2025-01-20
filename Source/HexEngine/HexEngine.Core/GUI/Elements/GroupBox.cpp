@@ -24,7 +24,7 @@ namespace HexEngine
 			int32_t width, height;
 			renderer->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, _label, width, height);
 
-			renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, pos.x + 42, pos.y, renderer->_style.text_regular, FontAlign::CentreUD, _label);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x + 42, pos.y, renderer->_style.text_regular, FontAlign::CentreUD, _label);
 
 			renderer->Line(pos.x + width + 44, pos.y, pos.x + _size.x, pos.y, renderer->_style.groupbox_border);
 		}

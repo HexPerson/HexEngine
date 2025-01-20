@@ -22,7 +22,7 @@ namespace HexEngine
 	private:
 		ITexture2D* _renderTarget = nullptr;
 		BlurEffect* _blur = nullptr;
-		IShader* _renderShader = nullptr;
+		std::shared_ptr<IShader> _renderShader;
 		//IShader* _gaussianBlurShader = nullptr;
 		//IShader* _gaussianBlurShaderVert = nullptr;
 		D3D11_VIEWPORT _viewport;

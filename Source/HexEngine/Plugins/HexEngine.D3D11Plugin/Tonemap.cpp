@@ -19,14 +19,12 @@ namespace HexEngine
 			D3D11_SRV_DIMENSION_TEXTURE2D
 		);
 
-		_renderShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/Tonemap.hcs");
+		_renderShader = IShader::Create("EngineData.Shaders/Tonemap.hcs");
 	}
 
 	void Tonemap::Destroy()
 	{
 		SAFE_DELETE(_renderTarget);
-
-		SAFE_UNLOAD(_renderShader);
 	}
 
 	void Tonemap::Render(ID3D11ShaderResourceView* bbSRV)
@@ -55,6 +53,6 @@ namespace HexEngine
 
 		renderer->StartFrame();
 
-		renderer->FullScreenTexturedQuad(_renderTarget, _renderShader);
+		renderer->FullScreenTexturedQuad(_renderTarget, _renderShader.get());
 	}
 }

@@ -121,6 +121,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <SupportJustMyCode>false</SupportJustMyCode>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -168,7 +169,7 @@
     <ClCompile Include="Shader.cpp" />
     <ClCompile Include="Texture2D.cpp" />
     <ClCompile Include="Texture3D.cpp" />
-    <ClCompile Include="TextureLoader.cpp" />
+    <ClCompile Include="TextureImporter.cpp" />
     <ClCompile Include="Tonemap.cpp" />
     <ClCompile Include="VertexBuffer.cpp" />
   </ItemGroup>
@@ -181,7 +182,7 @@
     <ClInclude Include="Shader.hpp" />
     <ClInclude Include="Texture2D.hpp" />
     <ClInclude Include="Texture3D.hpp" />
-    <ClInclude Include="TextureLoader.hpp" />
+    <ClInclude Include="TextureImporter.hpp" />
     <ClInclude Include="Tonemap.hpp" />
     <ClInclude Include="VertexBuffer.hpp" />
   </ItemGroup>

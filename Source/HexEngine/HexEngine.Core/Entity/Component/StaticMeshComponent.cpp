@@ -21,19 +21,16 @@ namespace HexEngine
 
 		SetMesh(clone->GetMesh());
 
-		for (int32_t i = 0; i < clone->GetNumMaterials(); ++i)
-		{
-			SetMaterial(i, clone->GetMaterial(i));
-		}
+		SetMaterial(clone->GetMaterial());
 	}
 
 	bool StaticMeshComponent::RenderMesh(Mesh* mesh, MeshRenderFlags flags, int32_t instanceId)
 	{
 		// make sure this MeshRenderer can actually render this Mesh
-		if (mesh != _mesh)
+		if (mesh != _mesh.get())
 			return false;
 
-		Material* material = GetMaterial();
+		auto material = GetMaterial();
 
 		if (!material)
 		{
@@ -41,7 +38,7 @@ namespace HexEngine
 			return false;
 		}
 
-		IShader* shader = material->GetStandardShader();
+		auto shader = material->GetStandardShader();
 
 		if ((flags & MeshRenderFlags::MeshRenderShadowMap) != 0)
 			shader = material->GetShadowMapShader();
@@ -72,7 +69,7 @@ namespace HexEngine
 
 		// Update the per-object constant buffer
 		//
-		mesh->UpdateConstantBuffer(GetEntity()->GetLocalTM(), material, instanceId);
+		mesh->UpdateConstantBuffer(GetEntity()->GetLocalTM(), material.get(), instanceId);
 
 		// bind the shader's requirements
 		auto requirements = shader->GetRequirements();
@@ -91,28 +88,25 @@ namespace HexEngine
 
 		// Set the textures
 		//
-		for (int i = 0; i < GetNumMaterials(); ++i)
-		{
-			auto materialSet = GetMaterial(i);
+		auto materialSet = GetMaterial();
 
-			graphicsDevice->SetTexture2D(slotIdx + 0, materialSet->GetTexture(MaterialTexture::Albedo));
+		graphicsDevice->SetTexture2D(slotIdx + 0, materialSet->GetTexture(MaterialTexture::Albedo).get());
 
-			graphicsDevice->SetTexture2D(slotIdx + 1, materialSet->GetTexture(MaterialTexture::Normal));
+		graphicsDevice->SetTexture2D(slotIdx + 1, materialSet->GetTexture(MaterialTexture::Normal).get());
 
-			graphicsDevice->SetTexture2D(slotIdx + 2, materialSet->GetTexture(MaterialTexture::Roughness));
+		graphicsDevice->SetTexture2D(slotIdx + 2, materialSet->GetTexture(MaterialTexture::Roughness).get());
 
-			graphicsDevice->SetTexture2D(slotIdx + 3, materialSet->GetTexture(MaterialTexture::Metallic));
+		graphicsDevice->SetTexture2D(slotIdx + 3, materialSet->GetTexture(MaterialTexture::Metallic).get());
 
-			graphicsDevice->SetTexture2D(slotIdx + 4, materialSet->GetTexture(MaterialTexture::Height));
+		graphicsDevice->SetTexture2D(slotIdx + 4, materialSet->GetTexture(MaterialTexture::Height).get());
 
-			graphicsDevice->SetTexture2D(slotIdx + 5, materialSet->GetTexture(MaterialTexture::Emission));
+		graphicsDevice->SetTexture2D(slotIdx + 5, materialSet->GetTexture(MaterialTexture::Emission).get());
 
-			graphicsDevice->SetTexture2D(slotIdx + 6, materialSet->GetTexture(MaterialTexture::Opacity));
+		graphicsDevice->SetTexture2D(slotIdx + 6, materialSet->GetTexture(MaterialTexture::Opacity).get());
 
-			graphicsDevice->SetTexture2D(slotIdx + 7, materialSet->GetTexture(MaterialTexture::AmbientOcclusion));
+		graphicsDevice->SetTexture2D(slotIdx + 7, materialSet->GetTexture(MaterialTexture::AmbientOcclusion).get());
 
-			slotIdx += MaterialTexture::Count;
-		}
+		slotIdx += MaterialTexture::Count;
 
 		mesh->SetBuffers(GetEntity()->GetLocalTM());
 		return true;
@@ -130,89 +124,27 @@ namespace HexEngine
 	void StaticMeshComponent::Destroy()
 	{
 		ReleaseAllMeshes();
-
-		for (int i = 0; i < MeshMaxMaterials; ++i)
-		{
-			SAFE_UNLOAD(_materials[i]);
-		}
 	}
 
 	void StaticMeshComponent::ReleaseAllMeshes()
 	{
-		SAFE_UNLOAD(_mesh);
+		_mesh.reset();
 	}
 
-	/*Material* MeshRenderer::GetMaterial(int32_t id) const
+	void StaticMeshComponent::SetMesh(const std::shared_ptr<Mesh>& mesh)
 	{
-		return _materials[id];
-	}
-
-	Material* MeshRenderer::CreateMaterial()
-	{
-		if (_numMaterials + 1 >= MeshMaxMaterials)
-		{
-			LOG_CRIT("Maximum number of materials already in use");
-			return nullptr;
-		}
-
-		Material* material = new Material;
-
-		_materials[_numMaterials++] = material;
-
-		return material;
-	}
-
-	void MeshRenderer::SetMaterial(int32_t id, Material* material)
-	{
-		if (_materials[id] != nullptr && _materials[id] != Material::GetDefaultMaterial())
-		{
-			SAFE_RELEASE(_materials[id]);
-		}
-
-		if (_materials[id] != material)
-		{
-			_materials[id] = material;
-			_numMaterials++;
-
-			material->AddRef();
-		}
-	}
-
-	void MeshRenderer::DestroyMaterial(int32_t id)
-	{
-		auto material = GetMaterial(id);
-
-		if (material)
-		{
-			if (material != Material::GetDefaultMaterial())
-				SAFE_RELEASE(material);
-
-			_numMaterials--;
-		}
-	}
-
-	int32_t MeshRenderer::GetNumMaterials() const
-	{
-		return _numMaterials;
-	}*/
-
-	void StaticMeshComponent::SetMesh(Mesh* mesh)
-	{
-		SAFE_UNLOAD(_mesh);
-
 		_mesh = mesh;
-		_mesh->AddRef();
 
 		GetEntity()->SetAABB(mesh->GetAABB());
 		GetEntity()->SetOBB(mesh->GetOBB());
 
 		if (mesh->GetMaterial())
-			SetMaterial(0, mesh->GetMaterial());
+			SetMaterial(mesh->GetMaterial());
 
 		// Set a default material
 		if (GetMaterial() == nullptr)
 		{ 
-			SetMaterial(0, Material::Create("EngineData.Materials/Default.hmat"));
+			SetMaterial(Material::Create("EngineData.Materials/Default.hmat"));
 		}
 
 		mesh->CreateBuffers();
@@ -225,7 +157,7 @@ namespace HexEngine
 		_mesh = nullptr;
 	}*/
 
-	Mesh* StaticMeshComponent::GetMesh() const
+	std::shared_ptr<Mesh> StaticMeshComponent::GetMesh() const
 	{
 		return _mesh;
 	}
@@ -248,21 +180,12 @@ namespace HexEngine
 			//mesh->_terrainParams.Save(meshData["terrain"], file);
 		}
 
-		int32_t numMaterials = GetNumMaterials();
-
 		auto& materials = meshData["materials"];
 
-		LOG_DEBUG("numMaterial = %d", numMaterials);
+		auto material = GetMaterial();
 
-		for (auto i = 0; i < numMaterials; ++i)
-		{
-			auto material = GetMaterial(i);
-
-			if (!material)
-				continue;
-
+		if (material)
 			materials.push_back(material->GetFileSystemPath().string());
-		}
 
 		data["uvScale"] = { _uvScale.x, _uvScale.y };
 		data["shadowCullingMode"] = _shadowCullingMode;
@@ -279,7 +202,7 @@ namespace HexEngine
 				TerrainGenerationParams params;
 				params.Load(mesh.value()["terrain"], file);
 
-				Mesh* terrain = CreateTerrain(params);
+				auto terrain = CreateTerrain(params);
 
 				SetMesh(terrain);
 
@@ -290,8 +213,26 @@ namespace HexEngine
 			}
 			else
 			{
+#if 1
+				auto mesh = Mesh::CreateAsync(path,
+					[&](std::shared_ptr<IResource> resource)
+					{
+						auto mesh = dynamic_pointer_cast<Mesh>(resource);
 
-				Mesh* mesh = (Mesh*)g_pEnv->_resourceSystem->LoadResource(path);
+						if (!mesh)
+						{
+							LOG_CRIT("Could not load model '%s' from save file", path.c_str());
+							return;
+						}
+						else
+						{
+							SetMesh(mesh);
+						}
+
+					});
+#else
+
+				auto mesh = Mesh::Create(path);
 
 				if (!mesh)
 				{
@@ -302,6 +243,7 @@ namespace HexEngine
 				{
 					SetMesh(mesh);
 				}
+#endif
 			}
 			int32_t materialIndex = 0;
 
@@ -309,17 +251,25 @@ namespace HexEngine
 			{
 				auto path = materials.value();
 
-				auto material = Material::Create(path);
+				auto material = Material::CreateAsync(path, 
+					[&](std::shared_ptr<IResource> resource) {
 
-				if (!material)
-				{
-					LOG_CRIT("Failed to load material '%s' when deserialising MeshRenderer", ((std::string)path).c_str());
-					continue;
-				}
+						auto material = dynamic_pointer_cast<Material>(resource);
 
-				SetMaterial(materialIndex, material);
+						if (!material)
+						{
+							LOG_CRIT("Failed to load material '%s' when deserialising MeshRenderer", ((std::string)path).c_str());
+							return;
+						}
 
-				LOG_DEBUG("mesh %s loaded a shader of %s", _mesh->GetRelativePath().string().c_str(), material->GetStandardShader()->GetAbsolutePath().string().c_str());
+						SetMaterial(material);
+
+						g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+
+					});
+				
+
+				//LOG_DEBUG("mesh %s loaded a shader of %s", _mesh->GetRelativePath().string().c_str(), material->GetStandardShader()->GetAbsolutePath().string().c_str());
 
 				++materialIndex;
 			}
@@ -518,7 +468,7 @@ namespace HexEngine
 
 	void StaticMeshComponent::SetTextureFromWidget(Mesh* mesh, LineEdit* edit, MaterialTexture type, const fs::path& path)
 	{
-		ITexture2D* tex = (ITexture2D*)g_pEnv->_resourceSystem->LoadResource(path);
+		auto tex = ITexture2D::Create(path);
 
 		if (tex)
 		{
@@ -534,127 +484,55 @@ namespace HexEngine
 
 	void StaticMeshComponent::SetMaterialFromWidget(int32_t index, const fs::path& path)
 	{
-		Material* mat = Material::Create(path);
+		auto mat = Material::Create(path);
 
 		if (mat)
 		{
-			SetMaterial(index, mat);
+			SetMaterial(mat);
 		}
 	}
 
-	Material* StaticMeshComponent::GetMaterial(int32_t id) const
+	std::shared_ptr<Material> StaticMeshComponent::GetMaterial() const
 	{
 		std::unique_lock lock(_lock);
 
-		return _materials[id];
+		return _material;
 	}
 
-	Material* StaticMeshComponent::CreateMaterial()
+	std::shared_ptr<Material> StaticMeshComponent::CreateMaterial()
 	{
-		if (_numMaterials + 1 >= MeshMaxMaterials)
-		{
-			LOG_CRIT("Maximum number of materials already in use");
-			return nullptr;
-		}
-
 		std::unique_lock lock(_lock);
 
-		Material* material = new Material;
+		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material);
 
 		// set the correct resource loader so it can be unloaded
 		material->SetLoader(g_pEnv->_resourceSystem->FindResourceLoaderForExtension(".hmat"));
 
-		_materials[_numMaterials++] = material;
-
-		material->AddRef();
+		_material = material;
 
 		g_pEnv->_materialLoader->AddMaterial(material);
 
 		return material;
 	}
 
-	void StaticMeshComponent::SetMaterial(int32_t id, Material* material)
+	void StaticMeshComponent::SetMaterial(const std::shared_ptr<Material>& material)
 	{
-		if (id >= MeshMaxMaterials)
-			return;
-
 		std::unique_lock lock(_lock);
 
-		if (_materials[id] != nullptr /*&& _materials[id] != Material::GetDefaultMaterial()*/)
-		{
-			SAFE_UNLOAD(_materials[id]);
-			--_numMaterials;
-		}
-
-		if (_materials[id] != material)
+		if (_material != material)
 		{
 			material->Lock();
 
-			_materials[id] = material;
-			_numMaterials++;
-
-			material->AddRef();
+			_material = material;
 
 			material->Unlock();
 		}
 	}
 
-	void StaticMeshComponent::DestroyMaterial(int32_t id)
-	{
-		if (id >= MeshMaxMaterials)
-			return;
-
-		std::unique_lock lock(_lock);
-
-		auto material = GetMaterial(id);
-
-		if (material)
-		{
-			SAFE_UNLOAD(material);
-
-			_numMaterials--;
-		}
-	}
-
-	int32_t StaticMeshComponent::GetNumMaterials() const
+	void StaticMeshComponent::DestroyMaterial()
 	{
 		std::unique_lock lock(_lock);
 
-		return _numMaterials;
+		_material.reset();
 	}
-
-	/*void MeshRenderer::SetBlendState(BlendState state)
-	{
-		_blendState = state;
-	}
-
-	void MeshRenderer::SetCullMode(CullingMode mode)
-	{
-		_cullMode = mode;
-		_previousCullMode = mode;
-	}
-
-	void MeshRenderer::SetDepthState(DepthBufferState state)
-	{
-		_depthState = state;
-	}
-
-	BlendState MeshRenderer::GetBlendState() const
-	{
-		return _blendState;
-	}
-
-	CullingMode MeshRenderer::GetCullMode() const
-	{
-		return _cullMode;
-	}
-
-	DepthBufferState MeshRenderer::GetDepthState() const
-	{
-		return _depthState;
-	}*/
-	/*void MeshRenderer::ShowTextureBrowserFromWidget(Material::MaterialTexture type)
-	{
-
-	}*/
 }

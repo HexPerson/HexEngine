@@ -214,7 +214,11 @@ namespace HexEditor
 						{
 							std::wstring relative = (_currentlyBrowsedFS->GetName() + L".") + fs::relative(_hoveredAsset->path, _currentlyBrowsedFS->GetDataDirectory()).wstring();
 							
-							resourceLoader->CreateEditorDialog(relative, _currentlyBrowsedFS);
+							// if the editor dialog is null, we should just presume that no import options are needed and immediately load the resource
+							if (auto dlg = resourceLoader->CreateEditorDialog(relative, _currentlyBrowsedFS); dlg == nullptr)
+							{
+								g_pEnv->_resourceSystem->LoadResource(_hoveredAsset->path);
+							}
 						}
 
 						_hoveredAsset = nullptr;
@@ -366,7 +370,7 @@ namespace HexEditor
 		ResourceLoadOptions opts;
 		opts.silenceErrors = true;		
 
-		IResource* resource = g_pEnv->_resourceSystem->LoadResource(path, &opts);
+		std::shared_ptr<IResource> resource = g_pEnv->_resourceSystem->LoadResource(path, &opts);
 
 		if (resource && resourceLoader->GetResourceDirectory() == L"Meshes")
 		{
@@ -378,7 +382,9 @@ namespace HexEditor
 
 				auto meshRenderer = entity->AddComponent<StaticMeshComponent>();
 
-				meshRenderer->SetMesh((Mesh*)resource);
+				auto mesh = dynamic_pointer_cast<Mesh>(resource);
+
+				meshRenderer->SetMesh(mesh);
 
 				//auto rigidBody = entity->AddComponent<RigidBody>();
 				//rigidBody->AddTriangleMeshCollider((Mesh*)resource, true);
@@ -401,7 +407,7 @@ namespace HexEditor
 
 			if (fs::is_directory(p))
 			{
-				ListNode* currentItem = new ListNode(_folderView, fs::relative(p, path), { g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open, g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed });
+				ListNode* currentItem = new ListNode(_folderView, fs::relative(p, path), { g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open.get(), g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get() });
 
 				currentItem->_onClick = std::bind(&Explorer::OnClickFolder, this, _folderView, std::placeholders::_1, std::placeholders::_2);
 				
@@ -436,7 +442,7 @@ namespace HexEditor
 			auto rootPath = new ListNode(
 				_folderView,
 				std::wstring(fs->GetName().begin(), fs->GetName().end()),
-				{ g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open, g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed },
+				{ g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open.get(), g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get() },
 				fs);
 			_folderView->AddNode(rootPath);
 
@@ -795,7 +801,7 @@ namespace HexEditor
 
 						assetNameToDisplay = asset.assetNameShort;
 
-						renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, x + IconSize / 2, y + IconSize + 2, hovering ? renderer->_style.text_highlight : renderer->_style.text_regular, FontAlign::CentreLR, assetNameToDisplay);
+						renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + IconSize / 2, y + IconSize + 2, hovering ? renderer->_style.text_highlight : renderer->_style.text_regular, FontAlign::CentreLR, assetNameToDisplay);
 					}
 					else
 					{
@@ -823,7 +829,7 @@ namespace HexEditor
 				renderer->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, fullNameToDraw, width, height);
 
 				renderer->PushFillQuad(hoverX - ((width / 2) + 3), hoverY - 1, width + 6, height + 4, math::Color(0.1f, 0.1f, 0.1f, 1.0f));
-				renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, hoverX, hoverY, renderer->_style.text_highlight, FontAlign::CentreLR, fullNameToDraw);
+				renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, hoverX, hoverY, renderer->_style.text_highlight, FontAlign::CentreLR, fullNameToDraw);
 			}
 
 			if (_hoveredAsset == nullptr)
@@ -858,7 +864,7 @@ namespace HexEditor
 			g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 			renderer->PushFillTexturedQuad(_draggingAsset->icon, mx - IconSize / 2, my - IconSize / 2, IconSize, IconSize, math::Color(1.0f, 1.0f, 1.0f, 0.5f));
-			renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, mx + IconSize / 2, my + IconSize + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _draggingAsset->path.filename().wstring());
+			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, mx + IconSize / 2, my + IconSize + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _draggingAsset->path.filename().wstring());
 		}
 
 		//g_pEnv->_uiManager->GetRenderer()->ListDraw(&_drawList);

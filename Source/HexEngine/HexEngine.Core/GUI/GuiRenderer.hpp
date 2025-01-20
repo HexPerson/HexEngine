@@ -97,8 +97,8 @@ namespace HexEngine
 		bool CreateInstancedBuffers();
 
 	private:
-		IShader* _basicShader = nullptr;
-		IShader* _instancedShader = nullptr;
+		std::shared_ptr<IShader> _basicShader;
+		std::shared_ptr<IShader> _instancedShader;
 
 		IVertexBuffer* _vertexBuffer = nullptr;
 		IIndexBuffer* _indexBuffer = nullptr;
@@ -112,7 +112,7 @@ namespace HexEngine
 
 		IInputLayout* _inputLayout = nullptr;
 		IInputLayout* _instancedInputLayout = nullptr;
-		ITexture2D* _basicWhiteTex = nullptr;
+		std::shared_ptr<ITexture2D> _basicWhiteTex;
 
 		uint32_t _screenWidth = 0;
 		uint32_t _screenHeight = 0;

@@ -129,7 +129,7 @@ namespace HexEngine
 		_engineConstantBuffers[(uint32_t)EngineConstantBuffer::PerShadowCasterBuffer] = CreateConstantBuffer(sizeof(PerShadowCasterBuffer));
 		_engineConstantBuffers[(uint32_t)EngineConstantBuffer::PerAnimationBuffer] = CreateConstantBuffer(sizeof(PerAnimationBuffer));
 
-		_textureLoader = new TextureLoader;
+		_textureLoader = new TextureImporter;
 
 		_states = new dx::CommonStates(_device);
 
@@ -1572,7 +1572,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
 	}
 
-	IResourceLoader* GraphicsDeviceD3D11::GetTextureLoader()
+	TextureImporter* GraphicsDeviceD3D11::GetTextureLoader()
 	{
 		return _textureLoader;
 	}
@@ -1661,7 +1661,7 @@ namespace HexEngine
 
 	void GraphicsDeviceD3D11::BeginFrame(ITexture2D* depthBuffer)
 	{
-		std::lock_guard<std::recursive_mutex> lock(_lock);
+		//std::lock_guard<std::recursive_mutex> lock(_lock);
 
 		assert(_currentlyBoundSRVIndex == 0 && "There are unbound SRVs from the previous frame!");
 
@@ -1680,7 +1680,7 @@ namespace HexEngine
 
 	void GraphicsDeviceD3D11::EndFrame()
 	{
-		std::lock_guard<std::recursive_mutex> lock(_lock);
+		//std::lock_guard<std::recursive_mutex> lock(_lock);
 
 		// Finally present the scene
 		//

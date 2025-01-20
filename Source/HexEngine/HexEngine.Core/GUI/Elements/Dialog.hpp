@@ -25,7 +25,7 @@ namespace HexEngine
 		std::wstring _title;
 		bool _beingDragged = false;
 		Point _dragStart;
-		ITexture2D* _logo = nullptr;
+		std::shared_ptr<ITexture2D> _logo;
 		bool _hoveringCloseButton = false;
 
 	protected:

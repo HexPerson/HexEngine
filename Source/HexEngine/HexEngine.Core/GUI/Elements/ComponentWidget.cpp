@@ -79,7 +79,7 @@ namespace HexEngine
 		renderer->FillQuad(pos.x, pos.y, _size.x, _totalHeight + 30, renderer->_style.inspector_widget_back);
 		renderer->Frame(pos.x, pos.y, _size.x, _totalHeight + 30, 1, renderer->_style.win_border);
 
-		renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, pos.x + _size.x / 2, pos.y + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _label);
+		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x + _size.x / 2, pos.y + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _label);
 	}
 
 	Point ComponentWidget::GetNextPos()

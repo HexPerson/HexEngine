@@ -33,7 +33,7 @@ namespace HexEngine
 		std::map<fs::path, ITexture2D*> _icons;
 		
 
-		Scene* _iconScene = nullptr;
+		std::shared_ptr<Scene> _iconScene;
 		Camera* _camera = nullptr;
 		Entity* _dummyEnt = nullptr;
 	};

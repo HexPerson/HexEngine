@@ -41,9 +41,9 @@ namespace HexEngine
 
 		// Draw the label first always
 		if ((IsMouseOver(true) || _hasInputFocus) && _label.length() > 0)
-			renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_highlight, FontAlign::CentreUD, _label);
+			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_highlight, FontAlign::CentreUD, _label);
 		else
-			renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);		
+			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);
 
 		//_labelWidth = minSize;
 
@@ -64,7 +64,7 @@ namespace HexEngine
 		{
 			int32_t iconSize = _size.y - 3;
 
-			renderer->PushFillTexturedQuad(_icon, position.x + minSize + 4, position.y + 3, iconSize, iconSize, _iconColour);
+			renderer->PushFillTexturedQuad(_icon.get(), position.x + minSize + 4, position.y + 3, iconSize, iconSize, _iconColour);
 
 			position.x += iconSize + 4;
 			boxWidth -= iconSize + 4;
@@ -90,11 +90,11 @@ namespace HexEngine
 
 			if (_uneditableText.length() > 0)
 			{
-				renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, math::Color(HEX_RGBA_TO_FLOAT4(70, 70, 70, 255)), FontAlign::CentreUD, value);
+				renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, math::Color(HEX_RGBA_TO_FLOAT4(70, 70, 70, 255)), FontAlign::CentreUD, value);
 				position.x += uneditableTextWidth;
 			}
 
-			renderer->PushPrintText(renderer->_style.font, (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, value);
+			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, value);
 		}
 
 		if (_hasInputFocus)
@@ -215,7 +215,7 @@ namespace HexEngine
 		return width;
 	}
 
-	void LineEdit::SetIcon(ITexture2D* icon, const math::Color& colour)
+	void LineEdit::SetIcon(const std::shared_ptr<ITexture2D>& icon, const math::Color& colour)
 	{
 		_icon = icon;
 		_iconColour = colour;

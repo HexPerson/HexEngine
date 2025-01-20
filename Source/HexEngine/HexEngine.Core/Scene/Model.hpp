@@ -16,13 +16,11 @@ namespace HexEngine
 		friend class AssimpModelImporter;
 
 	public:
-		static Model* Create(const fs::path& path);
-		static Model* CreateAsync(const fs::path& path, ResourceLoadedFn callback);
+		static std::shared_ptr<Model> Create(const fs::path& path);
+		static std::shared_ptr<Model> CreateAsync(const fs::path& path, ResourceLoadedFn callback);
 
 		Model() {}
 		virtual ~Model();
-
-		virtual void AddRef() override;
 
 		void SetPaths(const fs::path& path, FileSystem* fileSystem);
 
@@ -30,19 +28,19 @@ namespace HexEngine
 
 		virtual void Destroy() override;
 
-		Mesh* GetMeshAtIndex(uint32_t index);
+		std::shared_ptr<Mesh> GetMeshAtIndex(uint32_t index);
 
-		const std::vector<Mesh*>& GetMeshes() const;
+		const std::vector<std::shared_ptr<Mesh>>& GetMeshes() const;
 
 		uint32_t GetNumMeshes();
 
-		void AddMesh(Mesh* mesh);
+		void AddMesh(const std::shared_ptr<Mesh>& mesh);
 
 		int32_t GetMaxLOD() { return _maxLOD; }
 		void SetMaxLOD(int32_t maxLod) { _maxLOD = maxLod; }
 
 	private:
-		std::vector<Mesh*> _meshes;
+		std::vector<std::shared_ptr<Mesh>> _meshes;
 		std::wstring _name;
 		fs::path _relativePath;
 		int32_t _maxLOD = -1;

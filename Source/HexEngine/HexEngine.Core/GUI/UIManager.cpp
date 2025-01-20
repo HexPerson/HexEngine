@@ -44,8 +44,8 @@ namespace HexEngine
 
 			const auto& oldSize = element->GetSize();
 			Point newSize;
-			newSize.x = (float)oldSize.x * widthScale;
-			newSize.y = (float)oldSize.y * heightScale;
+			newSize.x = (int32_t)((float)oldSize.x * widthScale);
+			newSize.y = (int32_t)((float)oldSize.y * heightScale);
 
 			//element->SetSize(newSize);
 			});

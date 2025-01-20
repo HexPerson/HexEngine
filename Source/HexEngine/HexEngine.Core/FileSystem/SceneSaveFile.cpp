@@ -140,7 +140,7 @@ namespace HexEngine
 
 			createdEnts.push_back({
 				ent.value(),
-				Entity::LoadFromFile(ent.value(), ent.key(), _scene, this)
+				Entity::LoadFromFile(ent.value(), ent.key(), _scene.get(), this)
 			});
 
 			_scene->Unlock();
@@ -200,7 +200,7 @@ namespace HexEngine
 		return true;
 	}
 
-	Scene* SceneSaveFile::GetScene() const
+	std::shared_ptr<Scene> SceneSaveFile::GetScene() const
 	{
 		return _scene;
 	}

@@ -92,14 +92,14 @@ namespace HexEngine
 					int32_t optimalWidth, optimalHeight;
 
 					if (streamline->QueryOptimalDLSSSettings(
-						_viewport.width, _viewport.height,
+						(int32_t)_viewport.width, (int32_t)_viewport.height,
 						DLSSMode::MaxQuality,
 						optimalWidth, optimalHeight) == true)
 					{
 						LOG_INFO("DLSS determined an optimum render size of %dx%d (from %dx%d)", optimalWidth, optimalHeight, _viewport.width, _viewport.height);
 
-						_dlssViewport.width = optimalWidth;
-						_dlssViewport.height = optimalHeight;
+						_dlssViewport.width = (float)optimalWidth;
+						_dlssViewport.height = (float)optimalHeight;
 
 						streamline->SetDLSSOptions(1.0f, true, true, DLSSMode::MaxQuality, _viewport.width, _viewport.height);
 
@@ -191,7 +191,7 @@ namespace HexEngine
 			pvsParams.shapeType = PVSParams::ShapeType::Frustum;
 			pvsParams.shape.frustum = _frustum;
 
-			_pvs->CalculateVisibility(g_pEnv->_sceneManager->GetCurrentScene(), pvsParams);
+			_pvs->CalculateVisibility(g_pEnv->_sceneManager->GetCurrentScene().get(), pvsParams);
 		}
 	}
 
@@ -484,7 +484,7 @@ namespace HexEngine
 	{
 		DESERIALIZE_VALUE(_dlssEnabled, false);
 		DESERIALIZE_VALUE(_effects, CameraEffect::None);
-		DESERIALIZE_VALUE(_cameraAngles);
+		DESERIALIZE_VALUE(_cameraAngles, math::Vector3());
 
 		_dlssValueChanged = true;
 		

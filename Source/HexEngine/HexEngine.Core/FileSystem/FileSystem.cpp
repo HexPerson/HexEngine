@@ -103,46 +103,169 @@ namespace HexEngine
 		file.Close();
 	}
 
-	HANDLE FileSystem::CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
+	bool FileSystem::CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
 	{
-		HANDLE dwChangeHandles = CreateFileW(
-			pathToWatch.wstring().c_str(),
-			FILE_LIST_DIRECTORY,
-			FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
-			FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
-
-		if (dwChangeHandles == INVALID_HANDLE_VALUE)
+		if (fs::is_directory(pathToWatch) == false)
 		{
-			LOG_CRIT("Could not create file change notifcation handle. Error: %d", GetLastError());
+			LOG_WARN("Cannot place a file change watch on a path that is not a directory");
 			return INVALID_HANDLE_VALUE;
 		}
 
-		std::thread notifyThread(std::bind(&FileSystem::FileChangeMonitorThread, this, dwChangeHandles, onFileChangeCB));
+		auto createWatchInfo = [](const fs::path& path, DirectoryWatchInfo& info) -> bool
+			{
+				info.handle = CreateFileW(
+					path.wstring().c_str(),
+					FILE_LIST_DIRECTORY,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+					FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+
+				if (info.handle == INVALID_HANDLE_VALUE)
+				{
+					LOG_CRIT("Could not create file change notifcation handle. Error: %d", GetLastError());
+					return false;
+				}
+
+				info.event = CreateEvent(NULL, FALSE, 0, NULL);
+
+				if (info.event == INVALID_HANDLE_VALUE)
+				{
+					LOG_CRIT("Could not create file change event handle. Error: %d", GetLastError());
+					return false;
+				}
+
+				info.path = path;
+
+				return true;
+			};
+
+		DirectoryWatchInfo info;
+		if (createWatchInfo(pathToWatch, info) == false)
+		{
+			LOG_CRIT("Change watch creation failed");
+			return false;
+		}		
+
+		std::vector<DirectoryWatchInfo> pathsToWatch;
+		pathsToWatch.push_back(info);
+		
+		/*for (auto it = fs::directory_iterator(pathToWatch); it != fs::directory_iterator(); it++)
+		{
+			auto p = *it;
+
+			if (fs::is_directory(p))
+			{
+				if (createWatchInfo(p, info) == false)
+				{
+					LOG_CRIT("Change watch creation failed");
+					return false;
+				}
+				pathsToWatch.push_back(info);
+			}
+		}*/
+
+		std::thread notifyThread(std::bind(&FileSystem::FileChangeMonitorThread, this, pathsToWatch, onFileChangeCB));
 		notifyThread.detach();
 
-		return dwChangeHandles;
+		return true;
 	}
 
-	void FileSystem::FileChangeMonitorThread(HANDLE handle, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
+	void FileSystem::FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& pathsToWatch, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
 	{
 		// https://github.com/tresorit/rdcfswatcherexample/blob/master/rdc_fs_watcher.cpp
-		//while (1)
-		//{
-		//	constexpr DWORD flags = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME
-		//		| FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_CREATION
-		//		| FILE_NOTIFY_CHANGE_SECURITY;
+		while (g_pEnv->IsRunning())
+		{
+			constexpr DWORD flags = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME
+				| FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_CREATION
+				| FILE_NOTIFY_CHANGE_SECURITY;
 
-		//	const BOOL res = ReadDirectoryChangesW(handle, &this->notifBuffer,
-		//		static_cast<DWORD>(sizeof(this->notifBuffer)), true /* bWatchSubtree */, flags,
-		//		nullptr /* lpBytesReturned */, this->overlapped.get(), nullptr /* lpCompletionRoutine */);
+			for (auto& info : pathsToWatch)
+			{
 
-		//	switch (status)
-		//	{
-		//	case WAIT_OBJECT_0:
-		//	{
-		//		ReadDirectoryChangesW()
-		//	}
-		//}
+				const uint32_t bufferSize = 0x10240;
+				uint8_t* buffer = new uint8_t[bufferSize];
+
+				OVERLAPPED overlapped;
+				overlapped.hEvent = info.event;
+
+				const BOOL res = ReadDirectoryChangesW(
+					info.handle,
+					buffer,
+					bufferSize,
+					true /* bWatchSubtree */,
+					flags,
+					nullptr /* lpBytesReturned */,
+					&overlapped,
+					nullptr /* lpCompletionRoutine */);
+
+				DWORD result = WaitForSingleObjectEx(overlapped.hEvent, INFINITE, TRUE);
+
+				if (result == WAIT_OBJECT_0) {
+					DWORD bytes_transferred;
+					GetOverlappedResult(info.handle, &overlapped, &bytes_transferred, FALSE);
+
+					FILE_NOTIFY_INFORMATION* event = (FILE_NOTIFY_INFORMATION*)buffer;
+
+					onFileChangeCB(event);
+
+					for (;;) {
+						DWORD name_len = event->FileNameLength / sizeof(wchar_t);
+
+						if(onFileChangeCB)
+							onFileChangeCB(event);
+						else
+							OnFileChange(event);
+
+						switch (event->Action) {
+						case FILE_ACTION_ADDED: {
+							LOG_DEBUG("Added: %.*ws", name_len, event->FileName);
+						} break;
+
+						case FILE_ACTION_REMOVED: {
+							LOG_DEBUG("Removed: %.*ws", name_len, event->FileName);
+						} break;
+
+						case FILE_ACTION_MODIFIED: {
+							LOG_DEBUG("Modified: %.*ws", name_len, event->FileName);
+						} break;
+
+						case FILE_ACTION_RENAMED_OLD_NAME: {
+							LOG_DEBUG("Renamed from: %.*ws", name_len, event->FileName);
+						} break;
+
+						case FILE_ACTION_RENAMED_NEW_NAME: {
+							LOG_DEBUG("to: %.*ws", name_len, event->FileName);
+						} break;
+
+						default: {
+							LOG_DEBUG("Unknown action!\n");
+						} break;
+						}
+
+						// Are there more events to handle?
+						if (event->NextEntryOffset) {
+							*((uint8_t**)&event) += event->NextEntryOffset;
+						}
+						else {
+							break;
+						}
+					}
+				}
+
+				SAFE_DELETE_ARRAY(buffer);
+			}
+			//std::this_thread::sleep_for(std::chrono::milliseconds(250));
+		}
+
+		for (auto& info : pathsToWatch)
+		{
+			CloseHandle(info.event);
+			CloseHandle(info.handle);
+		}
+	}
+
+	void FileSystem::OnFileChange(PFILE_NOTIFY_INFORMATION info)
+	{
+
 	}
 
 	std::wstring FileSystem::GetRelativeResourcePath(const fs::path& path)

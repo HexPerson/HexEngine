@@ -15,7 +15,7 @@ namespace HexEngine
 	public:
 		SoundEffect();
 
-		static SoundEffect* Create(const fs::path& path);
+		static std::shared_ptr<SoundEffect> Create(const fs::path& path);
 
 		virtual void Destroy() override
 		{

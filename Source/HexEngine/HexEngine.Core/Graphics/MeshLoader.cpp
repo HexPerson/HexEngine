@@ -18,7 +18,7 @@ namespace HexEngine
 		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
-	IResource* MeshLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> MeshLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		DiskFile file(absolutePath, std::ios::in | std::ios::binary);
 
@@ -28,7 +28,7 @@ namespace HexEngine
 			return nullptr;
 		}
 
-		Mesh* mesh = new Mesh(nullptr, fs::relative(absolutePath, fileSystem->GetDataDirectory()).string());
+		std::shared_ptr<Mesh> mesh = std::shared_ptr<Mesh>(new Mesh(nullptr, fs::relative(absolutePath, fileSystem->GetDataDirectory()).string()), ResourceDeleter());
 
 		// read the material
 		bool hasMaterial = file.Read<bool>();
@@ -37,6 +37,10 @@ namespace HexEngine
 		{
 			std::string matName = file.ReadString();
 			mesh->SetMaterial(Material::Create(matName));
+		}
+		else
+		{
+			mesh->SetMaterial(Material::GetDefaultMaterial());
 		}
 
 		// read the number of faces
@@ -69,7 +73,7 @@ namespace HexEngine
 		return mesh;
 	}
 
-	IResource* MeshLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	std::shared_ptr<IResource> MeshLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		return nullptr;
 	}

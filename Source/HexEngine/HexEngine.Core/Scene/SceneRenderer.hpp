@@ -28,7 +28,7 @@ namespace HexEngine
 		const GBuffer* GetGBuffer();
 		const Light* GetCurrentShadowCaster();
 		const ShadowMap* GetCurrentShadowMap();
-		ITexture2D* GetNoiseTexture() const {return _blueNoise;}
+		std::shared_ptr<ITexture2D> GetNoiseTexture() const { return _blueNoise;}
 		const std::vector<Light*>& GetShadowCasters() const;
 		void ClearShadowCasters();
 		void RemoveShadowCaster(Light* light);
@@ -98,23 +98,23 @@ namespace HexEngine
 		ITexture2D* _pointLightBuffer = nullptr;
 		ITexture2D* _ssrTexture = nullptr;
 		ITexture2D* _ssrHitInfo = nullptr;
-		ITexture2D* _blueNoise = nullptr;
+		std::shared_ptr<ITexture2D> _blueNoise;
 		ITexture2D* _dlssTarget = nullptr;
-		IShader* _compositionShader = nullptr;
-		//IShader* _shadowMaskShader = nullptr;
-		IShader* _fxaa = nullptr;
-		IShader* _fogEffect = nullptr;
-		IShader* _bilateralUpsample = nullptr;
-		IShader* _pointLightShader = nullptr;
-		IShader* _spotLightShader = nullptr;
-		IShader* _ssrShader = nullptr;
-		IShader* _vignetteShader = nullptr;
-		IShader* _chromaticAberrationShader = nullptr;
-		IShader* _colourGradingShader = nullptr;
-		IShader* _tonemapShader = nullptr;
-		IShader* _basicDenoise = nullptr;
+		std::shared_ptr<IShader> _compositionShader;
+		std::shared_ptr<IShader> _fxaa;
+		std::shared_ptr<IShader> _fogEffect;
+		std::shared_ptr<IShader> _bilateralUpsample;
+		std::shared_ptr<IShader> _pointLightShader;
+		std::shared_ptr<IShader> _spotLightShader;
+		std::shared_ptr<IShader> _ssrShader;
+		std::shared_ptr<IShader> _vignetteShader;
+		std::shared_ptr<IShader> _chromaticAberrationShader;
+		std::shared_ptr<IShader> _colourGradingShader;
+		std::shared_ptr<IShader> _tonemapShader;
+		std::shared_ptr<IShader> _basicDenoise;
+		std::shared_ptr<IShader> _volumetricLighting;
+		std::shared_ptr<IShader> _ssrResolve;
 
-		IShader* _volumetricLighting = nullptr;
 		//BlurEffect* _volumetricBlur = nullptr;
 		//BlurEffect* _waterBlur = nullptr;
 		//BlurEffect* _ssrBlur = nullptr;
@@ -123,15 +123,14 @@ namespace HexEngine
 		Bloom* _bloomEffect = nullptr;
 
 		//CloudVolume* _clouds = nullptr;
-		Model* _sphereModel = nullptr;
+		std::shared_ptr<Mesh> _sphereMesh = nullptr;
 		Entity* _sphereEntity = nullptr;
-		Material* _pointLightMaterial = nullptr;
-		Material* _spotLightMaterial = nullptr;
+		std::shared_ptr<Material> _pointLightMaterial;
+		std::shared_ptr<Material> _spotLightMaterial;
 
 		TAA _taa;
 
-		ITexture2D* _ssrHistory = nullptr;
-		IShader* _ssrResolve = nullptr;
+		ITexture2D* _ssrHistory = nullptr;		
 		ITexture2D* _ssrResolved = nullptr;
 
 		//TAA _ssrResolver;

@@ -20,11 +20,11 @@ namespace HexEngine
 
 		virtual void Update(float frameTime) override;
 
-		void SetTexture(ITexture2D* texture);
+		void SetTexture(const std::shared_ptr<ITexture2D>& texture);
 
 	private:
 		ITexture2D* _texture;
 		math::Matrix _billboardMatrix;
-		Mesh* _mesh;
+		std::shared_ptr<Mesh> _mesh;
 	};
 }

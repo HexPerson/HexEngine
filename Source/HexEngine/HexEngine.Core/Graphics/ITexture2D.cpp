@@ -5,16 +5,13 @@
 
 namespace HexEngine
 {
-	ITexture2D* ITexture2D::GetDefaultTexture()
+	std::shared_ptr<ITexture2D> ITexture2D::GetDefaultTexture()
 	{
-		static ITexture2D* sDefaultTexture = (HexEngine::ITexture2D*)HexEngine::g_pEnv->_resourceSystem->LoadResource("EngineData.Textures/white.png");
-
-		sDefaultTexture->AddRef();
-		return sDefaultTexture;
+		return ITexture2D::Create("EngineData.Textures/white.png");
 	}
 
-	ITexture2D* ITexture2D::Create(const fs::path& absolutePath)
+	std::shared_ptr<ITexture2D> ITexture2D::Create(const fs::path& absolutePath)
 	{
-		return (ITexture2D*)g_pEnv->_resourceSystem->LoadResource(absolutePath);
+		return dynamic_pointer_cast<ITexture2D>(g_pEnv->_resourceSystem->LoadResource(absolutePath));
 	}
 }

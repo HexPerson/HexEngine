@@ -1,6 +1,12 @@
 
 #pragma once
 
+#if defined(_DEBUG) && !defined(NOMEMDBG)
+	#define _CRTDBG_MAP_ALLOC
+	#include <stdlib.h>
+	#include <crtdbg.h>
+#endif
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string>
@@ -22,6 +28,7 @@
 #include <array>
 #include <hidusage.h>
 #include <format>
+#include <memory>
 
 #ifdef _DEBUG // for perf
 	#include <d3d9.h>

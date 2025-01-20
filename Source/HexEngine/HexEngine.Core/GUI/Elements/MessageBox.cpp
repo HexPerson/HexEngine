@@ -54,7 +54,7 @@ namespace HexEngine
 		auto textPos = GetAbsolutePosition();
 
 		g_pEnv->_uiManager->GetRenderer()->PrintText(
-			g_pEnv->_uiManager->GetRenderer()->_style.font,
+			g_pEnv->_uiManager->GetRenderer()->_style.font.get(),
 			(uint8_t)Style::FontSize::Tiny,
 			textPos.x + 30, textPos.y + 10,
 			g_pEnv->_uiManager->GetRenderer()->_style.text_regular,

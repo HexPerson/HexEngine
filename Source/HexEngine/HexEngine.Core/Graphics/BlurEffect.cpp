@@ -11,8 +11,8 @@ namespace HexEngine
 	{
 		if (type == BlurType::Gaussian)
 		{
-			_shaders[0] = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/GaussianBlur.hcs");
-			_shaders[1] = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/GaussianBlurVert.hcs");
+			_shaders[0] = IShader::Create("EngineData.Shaders/GaussianBlur.hcs");
+			_shaders[1] = IShader::Create("EngineData.Shaders/GaussianBlurVert.hcs");
 		}
 		else
 		{
@@ -24,11 +24,6 @@ namespace HexEngine
 
 	BlurEffect::~BlurEffect()
 	{
-		for (auto i = 0; i < ARRAYSIZE(_shaders); ++i)
-		{
-			SAFE_UNLOAD(_shaders[i]);
-		}
-
 		SAFE_DELETE(_blurCompositionRT);
 	}
 
@@ -49,7 +44,7 @@ namespace HexEngine
 			//g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
 
 			// render the horizontal blur
-			renderer->FullScreenTexturedQuad(_blurTarget, _shaders[0]);
+			renderer->FullScreenTexturedQuad(_blurTarget, _shaders[0].get());
 
 			if (alpha)
 			{
@@ -63,7 +58,7 @@ namespace HexEngine
 
 			//g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
 
-			renderer->FullScreenTexturedQuad(_blurTarget, _shaders[1]);
+			renderer->FullScreenTexturedQuad(_blurTarget, _shaders[1].get());
 
 			if (alpha)
 			{

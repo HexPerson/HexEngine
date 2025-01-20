@@ -32,20 +32,13 @@ namespace HexEngine
 		return _requirements;
 	}
 
-	IShader* IShader::GetDefaultShader()
+	std::shared_ptr<IShader> IShader::GetDefaultShader()
 	{
-		static IShader* sDefaultShader = nullptr;
-
-		if (!sDefaultShader)
-		{
-			sDefaultShader = (IShader*)g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/Default.hcs");
-		}
-
-		return sDefaultShader;
+		return dynamic_pointer_cast<IShader>(g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/Default.hcs"));
 	}
 
-	IShader* IShader::Create(const fs::path& path)
+	std::shared_ptr<IShader> IShader::Create(const fs::path& path)
 	{
-		return (IShader*)g_pEnv->_resourceSystem->LoadResource(path);
+		return dynamic_pointer_cast<IShader>(g_pEnv->_resourceSystem->LoadResource(path));
 	}
 }

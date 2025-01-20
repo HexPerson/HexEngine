@@ -32,7 +32,7 @@ namespace HexEngine
 
 	private:
 		LineEdit* _edit = nullptr;
-		ITexture2D* _texture = nullptr;
+		std::shared_ptr<ITexture2D> _texture;
 		Material* _material = nullptr;
 		MaterialTexture _type = MaterialTexture::Albedo;
 	};

@@ -149,7 +149,9 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
   <ItemGroup>
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
-    <HexEngineShader Include="PBRutils.shader" />
+    <HexEngineShader Include="PBRutils.shader">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
+    </HexEngineShader>
     <HexEngineShader Include="ShadowMapGeometryAnimated.shader" />
     <HexEngineShader Include="SSRResolve.shader" />
     <HexEngineShader Include="UIBasic.shader">

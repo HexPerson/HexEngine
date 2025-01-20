@@ -36,11 +36,11 @@ void FreeTypeImporter::Destroy()
 #endif
 }
 
-IResource* FreeTypeImporter::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
+std::shared_ptr<IResource> FreeTypeImporter::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
 {
 	const FontImportOptions* importOptions = reinterpret_cast<const FontImportOptions*>(options);
 
-	FreeTypeFont* font = new FreeTypeFont;
+	std::shared_ptr<FreeTypeFont> font = std::shared_ptr<FreeTypeFont>(new FreeTypeFont, ResourceDeleter());
 
 	font->_face = absolutePath.filename().string();
 
@@ -61,7 +61,7 @@ IResource* FreeTypeImporter::LoadResourceFromFile(const fs::path& absolutePath, 
 		if (LoadFontInternal(font, face, size, importOptions) == false)
 		{
 			LOG_CRIT("Failed to import font '%s'", absolutePath.string().c_str());
-			delete font;
+			font.reset();
 			return nullptr;
 		}
 	}
@@ -69,11 +69,11 @@ IResource* FreeTypeImporter::LoadResourceFromFile(const fs::path& absolutePath, 
 	return font;
 }
 
-IResource* FreeTypeImporter::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+std::shared_ptr<IResource> FreeTypeImporter::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 {
 	const FontImportOptions* importOptions = reinterpret_cast<const FontImportOptions*>(options);
 
-	FreeTypeFont* font = new FreeTypeFont;
+	std::shared_ptr<FreeTypeFont> font = std::shared_ptr<FreeTypeFont>(new FreeTypeFont, ResourceDeleter());
 
 	font->_face = relativePath.filename().string();
 
@@ -102,14 +102,14 @@ IResource* FreeTypeImporter::LoadResourceFromMemory(const std::vector<uint8_t>& 
 		if (LoadFontInternal(font, face, size, importOptions) == false)
 		{
 			LOG_CRIT("Failed to import font '%s'", relativePath.string().c_str());
-			delete font;
+			font.reset();
 			return nullptr;
 		}
 	}
 	return font;
 }
 
-bool FreeTypeImporter::LoadFontInternal(FreeTypeFont* font, FT_Face face, int32_t size, const FontImportOptions* importOptions)
+bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_Face face, int32_t size, const FontImportOptions* importOptions)
 {
 	FT_Error error = FT_Select_Charmap(face, FT_ENCODING_UNICODE);
 
@@ -383,7 +383,7 @@ bool FreeTypeImporter::LoadFontInternal(FreeTypeFont* font, FT_Face face, int32_
 
 	font->_sizedGlyphs.insert({ size, sizedAtlas });
 
-#ifdef _DEBUG
+#if 0//def _DEBUG
 	std::string atlasPath = "FontAtlas_";
 	atlasPath += font->_face;
 	atlasPath += "_";

@@ -101,7 +101,7 @@ namespace HexEngine
 			_frameTimeMS = 0.0f;
 
 			_accumulatedAverageFrameTimeMS = 0.0f;
-			_accumulatedFrames = 0.0f;
+			_accumulatedFrames = 0;
 			_lastFPSUpdate = 0.0f;
 			//_accumulatedSimulationTime = 0.0f;
 

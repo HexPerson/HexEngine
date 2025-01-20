@@ -24,7 +24,7 @@ namespace HexEngine
 
 		renderer->Frame(pos.x, pos.y, _size.x, _size.y, 1, renderer->_style.button_border);
 
-		renderer->PrintText(renderer->_style.font, (uint8_t)Style::FontSize::Small, centre.x, centre.y, hovering ? renderer->_style.button_hover_text : renderer->_style.text_regular, FontAlign::CentreLR | FontAlign::CentreUD, _label);
+		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, centre.x, centre.y, hovering ? renderer->_style.button_hover_text : renderer->_style.text_regular, FontAlign::CentreLR | FontAlign::CentreUD, _label);
 	}
 
 	bool Button::OnInputEvent(InputEvent event, InputData* data)

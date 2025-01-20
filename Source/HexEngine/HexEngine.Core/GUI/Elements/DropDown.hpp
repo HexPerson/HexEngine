@@ -24,6 +24,6 @@ namespace HexEngine
 	private:
 		ContextMenu* _context;
 		bool _hasAdjustedContextPosition = false;
-		ITexture2D* _arrowIcon = nullptr;
+		std::shared_ptr<ITexture2D> _arrowIcon;
 	};
 }

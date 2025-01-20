@@ -27,12 +27,12 @@ namespace HexEngine
 
 		bool Save();
 
-		Scene* GetScene() const;
+		std::shared_ptr<Scene> GetScene() const;
 
 		bool IsSceneAttached() const;
 
 	public:
-		Scene* _scene = nullptr;
+		std::shared_ptr<Scene> _scene;
 		SceneFileFlags _flags;
 	};
 }
