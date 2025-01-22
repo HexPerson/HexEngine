@@ -42,16 +42,16 @@ namespace HexEngine
 
 		void CreateSubDirectories(const fs::path& absolutePath);
 
-		bool CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB=nullptr);
+		bool CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(const DirectoryWatchInfo&, PFILE_NOTIFY_INFORMATION)> onFileChangeCB=nullptr);
 
 		virtual void GetFileData(const fs::path& absolutePath, std::vector<uint8_t>& data);
 
 		std::wstring GetRelativeResourcePath(const fs::path& path);
 
 	private:
-		void FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& watchInfo, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB);
+		void FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& watchInfo, std::function<void(const DirectoryWatchInfo&, PFILE_NOTIFY_INFORMATION)> onFileChangeCB);
 
-		void OnFileChange(PFILE_NOTIFY_INFORMATION info);
+		void OnFileChange(const DirectoryWatchInfo& watchInfo, PFILE_NOTIFY_INFORMATION fileInfo);
 
 	private:
 		std::wstring _name;

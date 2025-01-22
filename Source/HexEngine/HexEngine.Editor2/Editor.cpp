@@ -74,18 +74,7 @@ namespace HexEditor
 
 		g_pEditor->_projectFS = new FileSystem(L"GameData");
 		g_pEditor->_projectFS->SetBaseDirectory(path);
-		g_pEditor->_projectFS->CreateChangeNotifier(g_pEditor->_projectFS->GetDataDirectory(),
-			[](PFILE_NOTIFY_INFORMATION info)
-			{
-				DWORD name_len = info->FileNameLength / sizeof(wchar_t);
-
-				switch (info->Action) {
-				case FILE_ACTION_ADDED: {
-
-
-				}
-				}
-			});
+		g_pEditor->_projectFS->CreateChangeNotifier(g_pEditor->_projectFS->GetDataDirectory());
 
 		g_pEnv->_resourceSystem->AddFileSystem(g_pEditor->_projectFS);
 

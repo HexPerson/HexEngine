@@ -227,8 +227,8 @@ namespace HexEngine
 						else
 						{
 							SetMesh(mesh);
+							g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 						}
-
 					});
 #else
 
@@ -264,7 +264,7 @@ namespace HexEngine
 
 						SetMaterial(material);
 
-						g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+						//g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 
 					});
 				

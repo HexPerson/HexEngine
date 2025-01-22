@@ -103,7 +103,7 @@ namespace HexEngine
 		file.Close();
 	}
 
-	bool FileSystem::CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
+	bool FileSystem::CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(const DirectoryWatchInfo&, PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
 	{
 		if (fs::is_directory(pathToWatch) == false)
 		{
@@ -135,6 +135,8 @@ namespace HexEngine
 
 				info.path = path;
 
+				LOG_INFO("Created file change watch in directory: %s", path.string().c_str());
+
 				return true;
 			};
 
@@ -148,28 +150,13 @@ namespace HexEngine
 		std::vector<DirectoryWatchInfo> pathsToWatch;
 		pathsToWatch.push_back(info);
 		
-		/*for (auto it = fs::directory_iterator(pathToWatch); it != fs::directory_iterator(); it++)
-		{
-			auto p = *it;
-
-			if (fs::is_directory(p))
-			{
-				if (createWatchInfo(p, info) == false)
-				{
-					LOG_CRIT("Change watch creation failed");
-					return false;
-				}
-				pathsToWatch.push_back(info);
-			}
-		}*/
-
 		std::thread notifyThread(std::bind(&FileSystem::FileChangeMonitorThread, this, pathsToWatch, onFileChangeCB));
 		notifyThread.detach();
 
 		return true;
 	}
 
-	void FileSystem::FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& pathsToWatch, std::function<void(PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
+	void FileSystem::FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& pathsToWatch, std::function<void(const DirectoryWatchInfo&, PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
 	{
 		// https://github.com/tresorit/rdcfswatcherexample/blob/master/rdc_fs_watcher.cpp
 		while (g_pEnv->IsRunning())
@@ -205,15 +192,13 @@ namespace HexEngine
 
 					FILE_NOTIFY_INFORMATION* event = (FILE_NOTIFY_INFORMATION*)buffer;
 
-					onFileChangeCB(event);
-
 					for (;;) {
 						DWORD name_len = event->FileNameLength / sizeof(wchar_t);
 
 						if(onFileChangeCB)
-							onFileChangeCB(event);
+							onFileChangeCB(info, event);
 						else
-							OnFileChange(event);
+							OnFileChange(info, event);
 
 						switch (event->Action) {
 						case FILE_ACTION_ADDED: {
@@ -263,9 +248,21 @@ namespace HexEngine
 		}
 	}
 
-	void FileSystem::OnFileChange(PFILE_NOTIFY_INFORMATION info)
+	void FileSystem::OnFileChange(const DirectoryWatchInfo& watchInfo, PFILE_NOTIFY_INFORMATION fileInfo)
 	{
+		DWORD name_len = fileInfo->FileNameLength / sizeof(wchar_t);
 
+		std::wstring fileName(fileInfo->FileName, fileInfo->FileName + name_len);
+		fs::path filePath = watchInfo.path / fileName;
+
+		auto loader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(filePath.extension().string());
+		auto resource = g_pEnv->_resourceSystem->FindResourceByFileName(filePath.filename(), true);
+
+		if (loader && resource)
+		{
+			if (fileInfo->Action == FILE_ACTION_MODIFIED)
+				loader->OnResourceChanged(resource);
+		}
 	}
 
 	std::wstring FileSystem::GetRelativeResourcePath(const fs::path& path)

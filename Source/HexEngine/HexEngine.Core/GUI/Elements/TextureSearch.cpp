@@ -10,7 +10,7 @@ namespace HexEngine
 		const Point& position,
 		const Point& size,
 		const std::wstring& label,
-		ITexture2D* texture,
+		const std::shared_ptr<ITexture2D>& texture,
 		Material* material,
 		MaterialTexture type) :
 		Element(parent, position, size),

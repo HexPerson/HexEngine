@@ -2,6 +2,33 @@
 #include "Editor.hpp"
 #include "UI/EditorUI.hpp"
 
+static std::vector<std::shared_ptr<IShader>> g_hotReloadShaders;
+
+void PrepareShaderHotReload()
+{
+	// find all the shaders in the shaders dir, and "load" them.
+	// the reason we do this is so that change notifications can be received later on
+	for (auto const& dir_entry : std::filesystem::recursive_directory_iterator(_SHADERS_LIVE_DIR))
+	{
+		if (dir_entry.is_directory())
+			continue;
+
+		if (dir_entry.is_regular_file() == false)
+			continue;
+
+		const auto& path = dir_entry.path();
+
+		if (path.extension() != ".shader")
+			continue;
+
+
+		g_hotReloadShaders.push_back(IShader::Create(path));
+	}
+
+	// create a file watch on the shaders folder, so we can catch any modifications and hot reload
+	g_pEnv->_fileSystem->CreateChangeNotifier(_SHADERS_LIVE_DIR);
+}
+
 int WinMain(
 	HINSTANCE hInstance,
 	HINSTANCE hPrevInstance,
@@ -68,18 +95,7 @@ int WinMain(
 		return EXIT_FAILURE;
 	}
 
-	g_pEnv->_fileSystem->CreateChangeNotifier(g_pEnv->_fileSystem->GetDataDirectory(),
-		[](PFILE_NOTIFY_INFORMATION info)
-		{
-			DWORD name_len = info->FileNameLength / sizeof(wchar_t);
-
-			switch (info->Action) {
-			case FILE_ACTION_ADDED: {
-
-
-			}
-			}
-		});
+	PrepareShaderHotReload();
 
 	g_pEnv->SetEditorMode(true);
 	g_pEnv->AddGameExtension(HexEditor::g_pEditor);
@@ -94,6 +110,12 @@ int WinMain(
 	while (g_pEnv->IsRunning())
 	{
 		g_pEnv->Run();
+	}
+
+	// release the hot reloaded shaders, this really just deletes memory
+	for (auto& hotReloadShader : g_hotReloadShaders)
+	{
+		hotReloadShader.reset();
 	}
 
 	Window::Destroy(mainWindow);

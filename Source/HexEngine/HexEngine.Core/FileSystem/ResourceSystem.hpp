@@ -51,6 +51,7 @@ namespace HexEngine
 		void							UnloadResource(IResource* resource);
 		std::shared_ptr<IResource>		LoadResourceAsync(const fs::path& path, ResourceLoadedFn callback);
 		std::shared_ptr<IResource>		FindResourceById(ResourceId id) const;
+		std::shared_ptr<IResource>		FindResourceByFileName(const fs::path& fileName, bool matchFileNameOnly = false) const;
 
 		std::vector<std::string>		GetSupportedFileExtensions() const;
 

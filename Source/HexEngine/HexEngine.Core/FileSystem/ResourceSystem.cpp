@@ -300,4 +300,27 @@ namespace HexEngine
 
 		return it->second.lock();
 	}
+
+	std::shared_ptr<IResource> ResourceSystem::FindResourceByFileName(const fs::path& fileName, bool matchFileNameOnly) const
+	{
+		if (matchFileNameOnly)
+		{
+			for (auto& it : _loadedResources)
+			{
+				if (it.first.filename() == fileName)
+				{
+					return it.second.lock();
+				}
+			}
+		}
+		else
+		{
+			auto it = _loadedResources.find(fileName);
+
+			if (it != _loadedResources.end())
+				return it->second.lock();
+		}
+
+		return nullptr;
+	}
 }

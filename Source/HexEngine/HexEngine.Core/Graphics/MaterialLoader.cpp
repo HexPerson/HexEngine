@@ -41,7 +41,7 @@ namespace HexEngine
 
 		ParseJson(&file, matData, material);
 
-		AddMaterial(material);
+		_loadedMaterials[absolutePath] = material;
 
 		material->SetName(absolutePath.filename().string());
 
@@ -65,11 +65,38 @@ namespace HexEngine
 
 		//ParseJson(&file, matData, material);
 
-		AddMaterial(material);
+		_loadedMaterials[relativePath] = material;
 
 		material->SetName(relativePath.filename().string());
 
 		return material;
+	}
+
+	void MaterialLoader::OnResourceChanged(std::shared_ptr<IResource> resource)
+	{
+		auto it = _loadedMaterials.find(resource->GetAbsolutePath());
+
+		if (it == _loadedMaterials.end())
+			return;
+
+		JsonFile file(resource->GetAbsolutePath(), std::ios::in);
+
+		if (file.DoesExist() == false)
+		{
+			LOG_CRIT("Material file '%s' does not exist", resource->GetAbsolutePath().string().c_str());
+			return;
+		}
+
+		std::shared_ptr<Material> materialToReload = dynamic_pointer_cast<Material>(resource);
+
+		file.Open();
+
+		std::string data;
+		file.ReadAll(data);
+
+		json matData = json::parse(data);
+
+		ParseJson(&file, matData, materialToReload);
 	}
 
 	void MaterialLoader::ParseJson(JsonFile* file, json& json, std::shared_ptr<Material>& material)
@@ -192,16 +219,7 @@ namespace HexEngine
 
 	void MaterialLoader::UnloadResource(IResource* resource)
 	{		
-		auto it = std::remove_if(_loadedMaterials.begin(), _loadedMaterials.end(),
-			[resource](const std::weak_ptr<Material>& res)
-			{
-				if (res.expired() == false)
-					return res.lock()->GetId() == resource->GetId();
-				return false;
-			});
-
-		if(it != _loadedMaterials.end())
-			_loadedMaterials.erase(it);
+		_loadedMaterials.erase(resource->GetAbsolutePath());
 
 		SAFE_DELETE(resource);
 	}
@@ -218,28 +236,24 @@ namespace HexEngine
 
 	void MaterialLoader::AddMaterial(const std::shared_ptr<Material>& material)
 	{
-		_loadedMaterials.push_back(material);
+		_loadedMaterials[material->GetAbsolutePath()] = material;
 	}
 
 	void MaterialLoader::RemoveMaterial(const std::shared_ptr<Material> material)
 	{
-		_loadedMaterials.erase(std::remove_if(_loadedMaterials.begin(), _loadedMaterials.end(),
-			[material](std::weak_ptr<Material> mat) {
-				return mat.lock() == material;
-			}));
+		_loadedMaterials.erase(material->GetAbsolutePath());
 	}
 
 	std::shared_ptr<Material> MaterialLoader::FindMaterialByName(const std::string& name) const
 	{
-		auto it = std::find_if(_loadedMaterials.begin(), _loadedMaterials.end(),
-			[name](std::weak_ptr<Material> mat) {
-			return mat.lock()->GetName() == name;
-			});
+		for (auto& it : _loadedMaterials)
+		{
+			auto mat = it.second.lock();
+			if (mat->GetName() == name)
+				return mat;
+		}
 
-		if (it == _loadedMaterials.end())
-			return nullptr;
-
-		return (*it).lock();
+		return nullptr;
 	}
 
 	Dialog* MaterialLoader::CreateEditorDialog(const fs::path& path, FileSystem* fileSystem)

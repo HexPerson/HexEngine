@@ -37,6 +37,9 @@
 		// store the world pos of the light in tangent
 		output.tangent = instance.world[3].xyz;
 
+		output.normal = mul(input.normal, (float3x3)instance.worldInverseTranspose);
+		output.normal = normalize(output.normal);
+
 		// use viewDirection to store forwards
 		//output.viewDirection = instance.customData;
 
@@ -82,7 +85,7 @@
 			float d = length(lightToPixelVec);
 			lightToPixelVec /= d;
 
-#if 1 // make it depth aware
+#if 0 // make it depth aware
 			float4 fragScr = float4(currentPos.xyz, 1.0f);
 			float4 fragView = mul(fragScr, g_viewMatrix);
 			float4 fragClip = mul(fragView, g_projectionMatrix);
@@ -96,7 +99,7 @@
 			float pixelDepth = GBUFFER_NORMAL.Sample(g_pointSampler, fragTex).w;
 
 			if(pixelDepth < fragDepth)
-				return 0.0f;
+				break;
 #endif
 
 			float attenuation = saturate(1.0f - saturate(d / radius));
@@ -110,8 +113,8 @@
 
 			//float dist = length(currentPos - lastPos);
 
-			if(length(currentPos - lightPos) >= radius)
-				break;
+			//if(length(currentPos - lightPos) >= radius)
+			//	break;
 			//	accumFog += 1.0f;
 
 			//accumFog += coneDot;
@@ -153,6 +156,9 @@
 		//float4 pixelSpecular = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 
 		float3 eyeVector = normalize(g_eyePos.xyz - pixelPosWS.xyz);
+		float3 sphereNormal = normalize(input.normal.xyz);
+		float3 eyeToSphereDir = normalize(input.positionWS.xyz - g_eyePos.xyz);
+		float pixelDepth = pixelNormal.w;
 
 		float3 lightPos = input.tangent;
 		float lightRange = input.texcoord.x;//g_lightRadius;// input.positionWS.w;
@@ -160,20 +166,37 @@
 		float lightIntensity = input.colour.a;
 
 		float3 lightToPixelVec = lightPos.xyz - pixelPosWS.xyz;
-
 		float d = length(lightToPixelVec);
-
 		lightToPixelVec /= d;
 
 		float attenuation = saturate(1.0f - saturate(d / lightRange));
 		attenuation = pow(attenuation, 2);
 
-		const float3 lightDir = g_shadowCasterLightDir;// input.viewDirection.xyz;
+		float3 lightDir = g_shadowCasterLightDir;// input.viewDirection.xyz;
 		const float cone = g_spotLightConeSize;// input.viewDirection.w;
 
 		float coneDot = dot(-lightToPixelVec, lightDir);
-
 		float coneAtten = pow(max(coneDot, 0.0f), cone);
+
+		if(length(lightPos.xyz - g_eyePos.xyz) <= lightRange)
+		{
+			eyeToSphereDir *= -1.0f;
+			//lightToPixelVec *= -1.0f;
+		}
+		if(dot(sphereNormal, eyeToSphereDir) < 0)
+		{
+			//clip(-1);
+		}
+		else
+		{
+			//eyeVector *= -1.0f;
+		}
+			
+		// depth test
+		//if(pixelDepth < input.position.w)
+		//	clip(-1);//return float4(pixelColour.rgb, 1);//float4(1,0,0,1);
+		
+		
 
 		//float len = length(input.positionWS.xyz - g_eyePos.xyz) / lightRange;
 
@@ -181,7 +204,7 @@
 
 		float volumetricScattering = CalculateVolumetricScattering(
 			input.positionWS.xyz, 
-			-normalize(lightPos.xyz - g_eyePos.xyz),
+			eyeToSphereDir/*normalize(lightPos.xyz - g_eyePos.xyz)*/,
 			lightPos,
 			lightDir,
 			lightRange,

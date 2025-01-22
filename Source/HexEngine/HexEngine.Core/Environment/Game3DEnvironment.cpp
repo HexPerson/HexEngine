@@ -62,8 +62,7 @@ namespace HexEngine
 		// Set up the file system
 		//
 		env->_fileSystem = new FileSystem(L"EngineData");	
-
-		env->_fileSystem->SetBaseDirectory(fs::current_path());
+		env->_fileSystem->SetBaseDirectory(fs::current_path());		
 
 		// Create the log file
 		//
@@ -216,6 +215,9 @@ namespace HexEngine
 		// We can now set the engine to "running" mode so the main loop can proceed
 		//
 		env->_running = true;
+
+		// create the change watch after _running becomes true otherwise the thread will exit immediately
+		env->_fileSystem->CreateChangeNotifier(env->_fileSystem->GetDataDirectory());
 
 #if USE_MULTITHREADED_PHYSICS == 1
 		env->_physicsThread = std::thread([env]() {
@@ -453,7 +455,10 @@ namespace HexEngine
 			hasUpdatedOnce = true;
 		}
 
-		if (GetHasFocus() && hasUpdatedOnce)
+		if(GetHasFocus() == false)
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+		if (hasUpdatedOnce)
 		{
 			if (hasUpdatedOnce)
 			{
@@ -557,8 +562,7 @@ namespace HexEngine
 		}
 		else
 		{
-			// yeild the cpu for other processes
-			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			
 		}
 
 		//_sceneManager->LateUpdate(_timeManager->_frameTime);

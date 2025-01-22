@@ -317,6 +317,7 @@ int main(int argc, const char* argv[])
 
 	const auto input = opts["input"].as<std::string>();
 	const auto target = opts["target"].as<std::string>();
+	const auto output = opts.count("output") > 0 ? opts["output"].as<std::string>() : "";
 
 	printf("ShaderCompiler :: Compiling shader %s to target %s\n", input.c_str(), target.c_str());
 
@@ -345,10 +346,19 @@ int main(int argc, const char* argv[])
 
 	if(compiler->Compile(input, compiled, shader) && compiled.size() > 0)
 	{
-		fs::path outputPath = gWorkingDirectory;
-		outputPath += "Compiled/";
-		outputPath += path.stem();
-		outputPath += ".hcs";
+		fs::path outputPath;
+		
+		if (output.length() > 0)
+		{
+			outputPath = output;
+		}
+		else
+		{
+			outputPath = gWorkingDirectory;
+			outputPath += "Compiled/";
+			outputPath += path.stem();
+			outputPath += ".hcs";
+		}
 	
 		// Create the path if it doesn't exist
 		auto pathOnly = outputPath;

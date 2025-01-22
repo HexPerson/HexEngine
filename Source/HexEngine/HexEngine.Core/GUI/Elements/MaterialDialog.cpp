@@ -21,7 +21,7 @@ namespace HexEngine
 				pos,
 				Point(size.x - 40, 100),
 				Material::GetMaterialTextureName((MaterialTexture)i),
-				material->GetTexture((MaterialTexture)i).get(),
+				material->GetTexture((MaterialTexture)i),
 				material,
 				(MaterialTexture)i);	
 

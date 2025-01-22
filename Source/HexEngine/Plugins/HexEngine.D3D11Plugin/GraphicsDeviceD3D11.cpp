@@ -1624,8 +1624,8 @@ namespace HexEngine
 	{
 		std::lock_guard<std::recursive_mutex> lock(_lock);
 
-		if (_prevRenderState._cullMode == mode)
-			return;
+		//if (_prevRenderState._cullMode == mode)
+		//	return;
 
 		switch (mode)
 		{

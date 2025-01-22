@@ -17,6 +17,13 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> ShaderSystem::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
+		// if its a .shader (not compiled shader) then just create a dummy and return it, there's nothing to actually load at this point
+		if (absolutePath.extension() == ".shader")
+		{
+			std::shared_ptr<IShader> shader = std::shared_ptr<IShader>(new IShader, ResourceDeleter());
+			_hotReloadShaders[absolutePath] = shader;
+			return shader;
+		}
 		auto shader = ParseShaderInternal(absolutePath);
 
 		if (!shader)
@@ -57,12 +64,93 @@ namespace HexEngine
 
 	std::vector<std::string> ShaderSystem::GetSupportedResourceExtensions()
 	{
-		return { ".hcs" };
+		return { ".hcs", ".shader" };
 	}
 
 	std::wstring ShaderSystem::GetResourceDirectory() const
 	{
 		return L"Shaders";
+	}
+
+	void ShaderSystem::OnResourceChanged(std::shared_ptr<IResource> resource)
+	{
+		auto it = _hotReloadShaders.find(resource->GetAbsolutePath());
+
+		if (it == _hotReloadShaders.end())
+			return;
+
+		// find a hot reloadable dummy shader and link them together, if possible
+		auto stem = resource->GetAbsolutePath().stem();
+		std::shared_ptr<IShader> shaderToReload;
+		for (auto& it : _loadedShaders)
+		{
+			if (it.first.stem() == stem)
+			{
+				shaderToReload = it.second.lock();
+				break;
+			}
+		}
+
+		if (!shaderToReload)
+			return;
+
+		auto shader = it->second;
+
+		std::wstring compilerPath = (g_pEnv->_fileSystem->GetBaseDirectory() / L"HexEngine.ShaderCompiler.exe");
+
+		compilerPath += L" -I " + resource->GetAbsolutePath().wstring() + L" -T hlsl";
+		compilerPath += L" -O " + shaderToReload->GetAbsolutePath().wstring();
+
+		STARTUPINFOW si;
+		PROCESS_INFORMATION pi;
+
+		ZeroMemory(&si, sizeof(si));
+		si.cb = sizeof(si);
+		ZeroMemory(&pi, sizeof(pi));
+
+		if (CreateProcessW(
+			nullptr,
+			(wchar_t*)compilerPath.c_str(),
+			nullptr,
+			nullptr,
+			FALSE,
+			0,
+			nullptr,
+			nullptr,
+			&si,
+			&pi) == FALSE)
+		{
+			LOG_CRIT("Failed to create an instance of HexEngine.ShaderCompiler.exe for hot reload. Error: %d", GetLastError());
+			return;
+		}
+
+		WaitForSingleObject(pi.hProcess, INFINITE);
+		CloseHandle(pi.hProcess);
+		CloseHandle(pi.hThread);
+
+		
+
+		
+
+		auto reloadedShader = ParseShaderInternal(shaderToReload->GetAbsolutePath());
+
+		if (!reloadedShader)
+		{
+			LOG_CRIT("Could not reload shader '%S'", shaderToReload->GetAbsolutePath());
+			return;
+		}
+
+		shaderToReload->Destroy();
+
+		for (auto i = 0; i < (int)ShaderStage::NumShaderStages; ++i)
+		{
+			if (reloadedShader->_stages[i] != nullptr)
+			{
+				shaderToReload->_stages[i] = reloadedShader->_stages[i];
+				shaderToReload->_stages[i]->CopyFrom(reloadedShader->_stages[i]);
+			}
+		}
+
 	}
 
 	void ShaderSystem::ReloadAllShaders()

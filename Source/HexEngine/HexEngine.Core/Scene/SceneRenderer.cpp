@@ -1529,10 +1529,33 @@ namespace HexEngine
 			1 << SpotLight::_GetComponentId(), spotLights) == false)
 			return;
 
+		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
+
+		std::vector<SpotLight*> spotLightsInsideVolume, spotLightOutsideVolume;
+
+		// sort the spot lights into two vectors, one for volumes the camera is inside of, one for outside
+		for (auto& comp : spotLights)
+		{
+			SpotLight* light = (SpotLight*)comp;
+
+			auto lightEnt = light->GetEntity();
+			const auto& lightPos = lightEnt->GetPosition();
+			const float lightRad = light->GetRadius();
+
+			if ((cameraPos - lightPos).Length() <= lightRad)
+			{
+				spotLightsInsideVolume.push_back(light);
+			}
+			else
+			{
+				spotLightOutsideVolume.push_back(light);
+			}
+		}
+
 		g_pEnv->_graphicsDevice->SetRenderTarget(_pointLightBuffer);
 		_pointLightBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
-		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
+		
 
 		auto renderer = _sphereEntity->GetComponent<StaticMeshComponent>();
 		renderer->SetMaterial(_spotLightMaterial);
@@ -1542,77 +1565,85 @@ namespace HexEngine
 
 		int32_t numPointLightsRendered = 0;
 
-		for (auto& comp : spotLights)
-		{
-			SpotLight* light = (SpotLight*)comp;
-
-			const auto& diffuse = light->GetDiffuseColour();
-
-			if (diffuse.w <= 0.0f)
-				continue;
-
-			auto lightEnt = light->GetEntity();
-			const auto& lightPos = lightEnt->GetPosition();
-			const float lightRad = light->GetRadius();
-
-			SetupPerShadowCasterBuffer(light, true, 0, numPointLightsRendered, 2, light->GetConeSize());
-
-			
-
-			if (renderedSphere == false)
+		auto renderLightList = [&](const std::vector<SpotLight*>& lights, CullingMode cullMode)
 			{
-				instance->Start();
+				renderedSphere = false;
 
-				_gbuffer.BindAsShaderResource();	
-
-				for (int32_t i = 0; i < 6; ++i)
+				for (auto& comp : lights)
 				{
-					auto shadowMap = light->GetShadowMap(i);
+					SpotLight* light = (SpotLight*)comp;
 
-					if (shadowMap)
+					const auto& diffuse = light->GetDiffuseColour();
+
+					if (diffuse.w <= 0.0f)
+						continue;
+
+					auto lightEnt = light->GetEntity();
+					const auto& lightPos = lightEnt->GetPosition();
+					const float lightRad = light->GetRadius();
+
+					SetupPerShadowCasterBuffer(light, true, 0, numPointLightsRendered, 2, light->GetConeSize());
+
+					if (renderedSphere == false)
 					{
-						shadowMap->BindAsShaderResource();
+						instance->Start();
+
+						_gbuffer.BindAsShaderResource();
+
+						for (int32_t i = 0; i < 6; ++i)
+						{
+							auto shadowMap = light->GetShadowMap(i);
+
+							if (shadowMap)
+							{
+								shadowMap->BindAsShaderResource();
+							}
+							else
+								g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+						}
+
+						renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, numPointLightsRendered);
+
+						renderedSphere = true;
 					}
-					else
-						g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+
+					_sphereEntity->SetPosition(lightPos);
+					_sphereEntity->SetScale(math::Vector3(lightRad));
+
+					g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
+	
+					const auto& lightForward = lightEnt->GetComponent<Transform>()->GetForward();
+					const math::Matrix lightMatrix = math::Matrix::CreateScale(lightRad) * math::Matrix::CreateWorld(lightPos, lightForward, math::Vector3::Up);
+					instance->Render(
+						_sphereEntity->GetWorldTM(),
+						_sphereEntity->GetWorldTMTranspose()/*lightMatrix.Transpose()*/,
+						_sphereEntity->GetWorldTMPrev().Transpose(),
+						diffuse,
+						math::Vector2(lightRad, light->GetLightStrength()));
+
+					numPointLightsRendered++;
 				}
 
-				renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, numPointLightsRendered);
+				instance->Finish();
+
+				if (numPointLightsRendered > 0)
+				{
+					D3DPERF_BeginEvent(0xFFFFFFFF, L"Begin SpotLight");
+
+					g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numPointLightsRendered);
+
+					D3DPERF_EndEvent();
+				}
 
 				
+			};
 
-				renderedSphere = true;
-			}
+		renderLightList(spotLightsInsideVolume, CullingMode::FrontFace);
+		renderLightList(spotLightOutsideVolume, CullingMode::BackFace);
 
-			_sphereEntity->SetPosition(lightPos);
-			_sphereEntity->SetScale(math::Vector3(lightRad));
-
-			const auto& lightForward = lightEnt->GetComponent<Transform>()->GetForward();
-			const math::Matrix lightMatrix = math::Matrix::CreateScale(lightRad) * math::Matrix::CreateWorld(lightPos, lightForward, math::Vector3::Up);
-			instance->Render(
-				_sphereEntity->GetWorldTM(),
-				_sphereEntity->GetWorldTMTranspose()/*lightMatrix.Transpose()*/,
-				_sphereEntity->GetWorldTMPrev().Transpose(),
-				diffuse,
-				math::Vector2(lightRad, light->GetLightStrength()));			
-			
-			numPointLightsRendered++;
-		}		
-
-		instance->Finish();
-
-		if (numPointLightsRendered > 0)
-		{
-			D3DPERF_BeginEvent(0xFFFFFFFF, L"Begin SpotLight");
-
-			g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numPointLightsRendered);
-
-			D3DPERF_EndEvent();
-		}
-
+		
+		g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
 		_pointLightBuffer->BlendTo_Additive(_lightAccumulationBuffer);
-
-		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace); // restore culling
 	}
 #endif
 
