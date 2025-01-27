@@ -25,26 +25,22 @@ namespace HexEngine
 		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
-	std::shared_ptr<Scene> SceneManager::LoadScene(const fs::path& path)
+	bool SceneManager::LoadScene(const fs::path& path, std::shared_ptr<Scene>& scene)
 	{
-		/*if (auto scene = GetCurrentScene(); scene != nullptr)
-		{
-			UnloadScene(scene);
-		}*/
+		scene = CreateEmptyScene(false);
 
-		auto newScene = CreateEmptyScene(false);
-
-		SceneSaveFile file(path, std::ios::in, newScene.get());
+		SceneSaveFile file(path, std::ios::in, scene);
 
 		if (!file.Load())
 		{
+			scene.reset();
 			LOG_CRIT("Failed to load scene");
-			return nullptr;
+			return false;
 		}
 
 		file.Close();
 
-		return newScene;
+		return true;
 	}
 
 	const std::vector<std::shared_ptr<Scene>>& SceneManager::GetAllScenes() const
@@ -75,7 +71,7 @@ namespace HexEngine
 
 		auto prefabScene = CreateEmptyScene(false);
 
-		SceneSaveFile file(path, std::ios::in, prefabScene.get());
+		SceneSaveFile file(path, std::ios::in, prefabScene);
 
 		if (!file.Load())
 		{
@@ -186,7 +182,18 @@ namespace HexEngine
 			return nullptr;
 		}
 		else
-			return LoadScene(absolutePath);
+		{
+			std::shared_ptr<Scene> scene;
+			if (LoadScene(absolutePath, scene) == false)
+			{
+				LOG_CRIT("Failed to load scene %s", absolutePath.string().c_str());
+				return nullptr;
+			}
+
+			return scene;
+		}
+
+		return nullptr;
 	}
 
 	std::shared_ptr<IResource> SceneManager::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)

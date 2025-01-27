@@ -276,7 +276,7 @@ namespace HexEngine
 				Point(cx - dlgW / 2, cy - dlgH / 2),
 				Point(dlgW, dlgH),
 				std::format(L"Editing Material '{}'", path.filename().wstring()),
-				mat.get());
+				mat);
 
 			return dlg;
 		}

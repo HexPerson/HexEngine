@@ -47,6 +47,11 @@ namespace HexEngine
 		Destroy();
 	}
 
+	void TAA::ResetHistory()
+	{
+		_resetHistory = true;
+	}
+
 	math::Vector2 TAA::GetJitterOffset(float screenWidth, float screenHeight) const
 	{
 		math::Vector2 baseJitter = gJitterOffset[g_pEnv->_timeManager->_frameCount % ARRAYSIZE(gJitterOffset)];
@@ -64,7 +69,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetRenderTarget(_renderTarget);
 		_renderTarget->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
-		g_pEnv->_graphicsDevice->SetTexture2D(_history);
+		g_pEnv->_graphicsDevice->SetTexture2D(_resetHistory ? buffer : _history);
 		g_pEnv->_graphicsDevice->SetTexture2D(velocity);
 		g_pEnv->_graphicsDevice->SetTexture2D(normalAndDepth);
 		renderer->FullScreenTexturedQuad(buffer, _resolveShader.get());
@@ -74,5 +79,7 @@ namespace HexEngine
 		_renderTarget->CopyTo(output);
 
 		renderer->EndFrame();
+
+		_resetHistory = false;
 	}
 }

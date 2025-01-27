@@ -103,7 +103,7 @@ namespace HexEditor
 					//newScene->GetMainCamera()->SetViewport(math::Viewport(0, 0, _centralDock->GetSize().x, _centralDock->GetSize().y));
 					//g_pEnv->_sceneRenderer->Resize(_centralDock->GetSize().x, _centralDock->GetSize().y);
 
-					SceneSaveFile* saveFile = new SceneSaveFile(scene->GetAbsolutePath(), std::ios::out, newScene.get());
+					SceneSaveFile* saveFile = new SceneSaveFile(scene->GetAbsolutePath(), std::ios::out, newScene);
 
 					_sceneFiles.push_back(saveFile);
 				}
@@ -132,7 +132,7 @@ namespace HexEditor
 
 			newScene->CreateDefaultSunLight();
 
-			SceneSaveFile* sceneFile = new SceneSaveFile(_projectFolderPath / "Data/Scenes/New Scene.hscene", std::ios::out | std::ios::trunc, newScene.get());
+			SceneSaveFile* sceneFile = new SceneSaveFile(_projectFolderPath / "Data/Scenes/New Scene.hscene", std::ios::out | std::ios::trunc, newScene);
 
 			sceneFile->Save();
 
@@ -427,7 +427,7 @@ namespace HexEditor
 		std::wstring dataLocalPath = L"Data/Scenes/" + sceneName + L".hscene";
 		auto scenePath = _projectFolderPath / dataLocalPath;
 
-		SceneSaveFile* ssf = new SceneSaveFile(scenePath, std::ios::out, scene.get());
+		SceneSaveFile* ssf = new SceneSaveFile(scenePath, std::ios::out, scene);
 
 		_projectFile->_scenes.push_back(ssf);
 		_sceneFiles.push_back(ssf);

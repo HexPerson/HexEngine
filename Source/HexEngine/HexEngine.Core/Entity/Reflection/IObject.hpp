@@ -28,7 +28,7 @@ namespace HexEngine
 		public: 
 			T GetType()
 			{
-				return std::remove_reference<decltype(T)>::type;
+				return std::remove_reference<T>::type;
 			}
 		};
 	}

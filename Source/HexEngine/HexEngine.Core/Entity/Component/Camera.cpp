@@ -518,7 +518,7 @@ namespace HexEngine
 		Checkbox* dlssEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"DLSS Enabled", &_dlssEnabled);
 		dlssEnabled->SetOnCheckFn(std::bind(&Camera::EnableDLSS, this, std::placeholders::_2));
 
-		Checkbox* ssrEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"SSR Enabled", nullptr);
+		Checkbox* ssrEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"SSR Enabled", [this]() { return HEX_HASFLAG(GetCameraEffects(), CameraEffect::SSR);});
 		ssrEnabled->SetOnCheckFn(std::bind(&Camera::ToggleEffect, this, CameraEffect::SSR));
 
 		return true;

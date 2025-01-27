@@ -21,10 +21,13 @@ namespace HexEngine
 
 		 void Resolve(ITexture2D* output, ITexture2D* buffer, ITexture2D* velocity, ITexture2D* normalAndDepth, GuiRenderer* renderer);
 
+		 void ResetHistory();
+
 	private:
 		ITexture2D* _history = nullptr;
 		ITexture2D* _renderTarget = nullptr;
 		//ITexture2D* _velocity = nullptr;
 		std::shared_ptr<IShader> _resolveShader;
+		bool _resetHistory = false;
 	};
 }

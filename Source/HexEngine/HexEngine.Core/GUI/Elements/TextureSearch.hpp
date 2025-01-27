@@ -14,7 +14,7 @@ namespace HexEngine
 			const Point& size,
 			const std::wstring& label,
 			const std::shared_ptr<ITexture2D>& texture,
-			Material* material,
+			std::shared_ptr<Material> material,
 			MaterialTexture type);
 
 		virtual ~TextureSearch();
@@ -33,7 +33,7 @@ namespace HexEngine
 	private:
 		LineEdit* _edit = nullptr;
 		std::shared_ptr<ITexture2D> _texture;
-		Material* _material = nullptr;
+		std::shared_ptr<Material> _material = nullptr;
 		MaterialTexture _type = MaterialTexture::Albedo;
 	};
 }

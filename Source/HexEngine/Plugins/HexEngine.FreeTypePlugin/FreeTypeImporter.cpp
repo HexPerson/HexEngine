@@ -4,7 +4,7 @@
 
 const int32_t AtlasSize = 256;
 
-#define ENABLE_OUTLINE 0
+#define ENABLE_OUTLINE 1
 
 bool FreeTypeImporter::Create()
 {
@@ -128,7 +128,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 	
 #if ENABLE_OUTLINE
 	//  2 * 64 result in 2px outline
-	FT_Stroker_Set(_stroker, 10, FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
+	FT_Stroker_Set(_stroker, 1 * 64, FT_STROKER_LINECAP_ROUND, FT_STROKER_LINEJOIN_ROUND, 0);
 #endif
 
 	//size = RY(size, height);
@@ -185,7 +185,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 #if ENABLE_OUTLINE
 			FT_Glyph glyph;
 			FT_Get_Glyph(face->glyph, &glyph);
-			FT_Glyph_StrokeBorder(&glyph, _stroker, false, true);
+			//FT_Glyph_StrokeBorder(&glyph, _stroker, false, true);
 			FT_Glyph_To_Bitmap(&glyph, FT_RENDER_MODE_NORMAL, nullptr, true);
 
 			FT_BitmapGlyph bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(glyph);

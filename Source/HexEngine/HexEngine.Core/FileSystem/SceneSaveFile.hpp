@@ -19,7 +19,7 @@ namespace HexEngine
 	public:
 		using SceneSaveProgressCallback = std::function<void(const std::wstring& entityName, int32_t loaded, int32_t total)>;
 
-		SceneSaveFile(const fs::path& absolutePath, std::ios_base::openmode openMode, Scene* scene, SceneFileFlags flags = SceneFileFlags::None);
+		SceneSaveFile(const fs::path& absolutePath, std::ios_base::openmode openMode, std::shared_ptr<Scene> scene, SceneFileFlags flags = SceneFileFlags::None);
 
 		const int Version = 2;
 

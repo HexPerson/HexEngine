@@ -7,10 +7,20 @@ namespace HexEngine
 {
 	Checkbox::Checkbox(Element* parent, const Point& position, const Point& size, const std::wstring& label, bool* value) :
 		Element(parent, position, size),
-		_label(label),
-		_value(value)
+		_label(label)
 	{
 		_tickImg = ITexture2D::Create("EngineData.Textures/UI/tick.png");
+		_value.b = value;
+		_value.type = CheckType::Bool;
+	}
+
+	Checkbox::Checkbox(Element* parent, const Point& position, const Point& size, const std::wstring& label, std::function<bool()> value) :
+		Element(parent, position, size),
+		_label(label)
+	{
+		_tickImg = ITexture2D::Create("EngineData.Textures/UI/tick.png");
+		_value.c = value;
+		_value.type = CheckType::Callback;
 	}
 
 	Checkbox::~Checkbox()
@@ -42,7 +52,7 @@ namespace HexEngine
 		renderer->FillQuad(pos.x, pos.y, _size.y, _size.y, math::Color(1, 1, 1, 1));
 		renderer->Frame(pos.x, pos.y, _size.y, _size.y, 1, math::Color(0, 0, 0, 1));
 
-		if (_value && *_value)
+		if (_value.Get())
 		{
 			renderer->FillTexturedQuad(_tickImg.get(), pos.x + 1, pos.y , _size.y - 2, _size.y, math::Color(1, 1, 1, 1));
 		}
@@ -57,11 +67,10 @@ namespace HexEngine
 	{
 		if (event == InputEvent::MouseDown && _hovering)
 		{
-			if(_value)
-				*_value = !*_value;
+			_value.Toggle();
 
 			if (_onCheckFn)
-				_onCheckFn(this, (_value ? *_value : false));
+				_onCheckFn(this, _value.Get());
 
 			return true;
 		}

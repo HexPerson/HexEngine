@@ -172,7 +172,7 @@ namespace HexEngine
 		SceneSaveFile saveFile(
 			fs->GetLocalAbsoluteDataPath("Prefabs/" + entity->GetName() + ".prefab"),
 			std::ios::out,
-			prefabScene.get(),
+			prefabScene,
 			SceneFileFlags::DontSaveVariables);
 
 		saveFile.Save();

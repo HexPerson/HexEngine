@@ -2,7 +2,7 @@
 #pragma once
 
 #include <HexEngine.Core\HexEngine.hpp>
-#include "Actions\EntityList.hpp"
+#include "Elements\EntityList.hpp"
 #include "Actions\Inspector.hpp"
 #include "Actions\Explorer.hpp"
 #include "Actions\ProjectManager.hpp"

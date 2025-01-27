@@ -9,16 +9,26 @@
 
 namespace HexEditor
 {
+	const int32_t ToolbarHeight = 32;
+	const int32_t IconSize = ToolbarHeight - 2;
+
 	EntityList::EntityList(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		HexEngine::EntityList(parent, position, size)
 	{
 		_onEntityClicked = std::bind(&Inspector::InspectEntity, g_pUIManager->GetInspector(), std::placeholders::_2);
 		_onEntityParented = std::bind(&EntityList::SetEntityParent, this, std::placeholders::_2, std::placeholders::_3);
+
+		_newFolderImg = ITexture2D::Create("EngineData.Textures/UI/folder_new.png");
+
+		_entitySearch = new LineEdit(this, Point(0, 0), Point(size.x - (IconSize + 10), IconSize - 5), L"");
+		_entitySearch->SetIcon(ITexture2D::Create("EngineData.Textures/UI/magnifying_glass.png"), math::Color(HEX_RGBA_TO_FLOAT4(140, 140, 140, 255)));
+		_entitySearch->SetDoesCallbackWaitForReturn(false);
+		//_entitySearch->SetOnInputFn()
 	}
 
 	EntityList::~EntityList()
 	{
-		
+		SAFE_DELETE(_entitySearch);
 	}
 
 	void EntityList::SetEntityParent(HexEngine::Entity* sourceEnt, HexEngine::Entity* targetEnt)
@@ -42,7 +52,20 @@ namespace HexEditor
 	{
 		//auto dl = renderer->PushDrawList();
 
+		auto pos = GetAbsolutePosition();
+		auto origPos = GetPosition();
+		auto origSize = GetSize();
+		
+
+		renderer->FillTexturedQuad(_newFolderImg.get(), pos.x + origSize.x - ToolbarHeight, pos.y, IconSize, IconSize, math::Color(1, 1, 1, 1));
+
+		SetPosition(HexEngine::Point(origPos.x, origPos.y + ToolbarHeight));
+		SetSize(HexEngine::Point(origSize.x, origSize.y - ToolbarHeight));
+
 		HexEngine::EntityList::Render(renderer, w, h);
+
+		SetPosition(HexEngine::Point(origPos.x, origPos.y));
+		SetSize(HexEngine::Point(origSize.x, origSize.y));
 
 		//renderer->ListDraw(dl);
 		//renderer->PopDrawList();

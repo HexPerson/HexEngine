@@ -11,7 +11,7 @@ namespace HexEngine
 	class MaterialDialog : public Dialog
 	{
 	public:
-		MaterialDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title, Material* material);
+		MaterialDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title, std::shared_ptr<Material> material);
 
 		virtual ~MaterialDialog() {}
 
@@ -25,6 +25,6 @@ namespace HexEngine
 		TextureSearch* _normal = nullptr;
 		DragFloat* _smoothness = nullptr;
 		DragFloat* _specularProbability = nullptr;
-		Material* _material = nullptr;
+		std::shared_ptr<Material> _material;
 	};
 }

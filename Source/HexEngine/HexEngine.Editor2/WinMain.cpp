@@ -52,7 +52,7 @@ int WinMain(
 
 	// Create an editor window
 	Window* mainWindow = Window::Create(0, 0, screenWidth, screenHeight, DisplayMode::Windowed, "Hex Engine Editor");
-	//mainWindow->Maximise();
+	mainWindow->Maximise();
 
 	mainWindow->_displayFpsInTitle = true;
 

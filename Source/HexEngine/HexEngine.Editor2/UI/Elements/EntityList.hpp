@@ -1,10 +1,7 @@
 
 #pragma once
 
-#include <HexEngine.Core\GUI\Elements\EntityList.hpp>
-#include <HexEngine.Core\GUI\Elements\ContextMenu.hpp>
-#include <HexEngine.Core\Entity\Entity.hpp>
-#include <HexEngine.Core\GUI\DrawList.hpp>
+#include <HexEngine.Core\HexEngine.hpp>
 
 namespace HexEditor
 {
@@ -40,5 +37,7 @@ namespace HexEditor
 
 	private:
 		//HexEngine::DrawList _drawList;
+		std::shared_ptr<HexEngine::ITexture2D> _newFolderImg;
+		HexEngine::LineEdit* _entitySearch = nullptr;
 	};
 }

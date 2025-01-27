@@ -52,4 +52,9 @@ namespace HexEngine
 		_fsRelativePath = fileSystem->GetRelativeResourcePath(_relativePath);
 		_absolutePath = absolutePath;
 	}
+
+	ResourceType IResource::GetResourceType() const
+	{
+		return ResourceType::None;
+	}
 }

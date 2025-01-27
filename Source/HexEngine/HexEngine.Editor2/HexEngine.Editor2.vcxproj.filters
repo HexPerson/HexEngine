@@ -39,7 +39,7 @@
     <ClInclude Include="UI\Actions\Terrain.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="UI\Actions\EntityList.hpp">
+    <ClInclude Include="UI\Elements\EntityList.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\Gadgets\Gadget.hpp">
@@ -58,6 +58,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="UI\Actions\MaterialEditor.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Scene\SceneManager.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -89,7 +92,7 @@
     <ClCompile Include="UI\Actions\Terrain.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="UI\Actions\EntityList.cpp">
+    <ClCompile Include="UI\Elements\EntityList.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\Gadgets\Gadget.cpp">

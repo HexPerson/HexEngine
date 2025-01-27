@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	SceneSaveFile::SceneSaveFile(const fs::path& absolutePath, std::ios_base::openmode openMode, Scene* scene, SceneFileFlags flags) :
+	SceneSaveFile::SceneSaveFile(const fs::path& absolutePath, std::ios_base::openmode openMode, std::shared_ptr<Scene> scene, SceneFileFlags flags) :
 		JsonFile(absolutePath, openMode, HexEngine::DiskFileOptions::CreateSubDirs),
 		_scene(scene),
 		_flags(flags)

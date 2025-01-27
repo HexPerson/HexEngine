@@ -8,9 +8,52 @@ namespace HexEngine
 	class Checkbox : public Element
 	{
 	public:
+		enum class CheckType
+		{
+			None,
+			Bool,
+			Callback
+		};
+
+		struct CheckData
+		{
+			~CheckData() {}
+
+			bool Get()
+			{
+				switch (type)
+				{
+				case CheckType::Bool:
+					return *b;
+
+				case CheckType::Callback:
+					return c();
+				}
+				return false;
+			}
+
+			void Toggle()
+			{
+				switch (type)
+				{
+				case CheckType::Bool:
+					*b = !*b;
+				}
+			}
+
+			union
+			{
+				bool* b = nullptr;
+				std::function<bool()> c;
+			};
+
+			CheckType type = CheckType::None;
+		};
+
 		using OnCheckFn = std::function<void(Checkbox*, bool)>;
 
 		Checkbox(Element* parent, const Point& position, const Point& size, const std::wstring& label, bool* value);
+		Checkbox(Element* parent, const Point& position, const Point& size, const std::wstring& label, std::function<bool()> callback);
 
 		~Checkbox();
 
@@ -22,7 +65,7 @@ namespace HexEngine
 		virtual int32_t GetLabelWidth() const;
 
 	private:
-		bool* _value;
+		CheckData _value;
 		std::wstring _label;
 		std::shared_ptr<ITexture2D> _tickImg;
 		bool _hovering = false;

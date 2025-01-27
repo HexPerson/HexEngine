@@ -69,12 +69,12 @@
 	float2 CalcVelocity(float4 newPos, float4 oldPos, float2 viewSize)
 	{
 		oldPos.xyz /= oldPos.w;
-		//oldPos.xy = (oldPos.xy * 0.5) + 0.5;
+		oldPos.xy = (oldPos.xy * 0.5) + 0.5;
 		//oldPos.xy = (oldPos.xy + 1) / 2.0f;
 		//oldPos.y = 1 - oldPos.y;
 
 		newPos.xyz /= newPos.w;
-		//newPos.xy = (newPos.xy * 0.5) + 0.5;
+		newPos.xy = (newPos.xy * 0.5) + 0.5;
 		//newPos.xy = (newPos.xy + 1) / 2.0f;
 		//newPos.y = 1 - newPos.y;
 

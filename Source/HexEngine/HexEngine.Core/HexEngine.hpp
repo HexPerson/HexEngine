@@ -73,6 +73,7 @@
 #include "GUI/Elements/LineEditDialog.hpp"
 #include "GUI/Elements/LoadingDialog.hpp"
 #include "GUI/Elements/Vector2Edit.hpp"
+#include "GUI/Elements/EntityList.hpp"
 
 #include "Terrain/ChunkManager.hpp"
 #include "Terrain/HeightMapGenerator.hpp"

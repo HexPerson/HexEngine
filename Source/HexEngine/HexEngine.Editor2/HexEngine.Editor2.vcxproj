@@ -167,7 +167,8 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
   <ItemGroup>
     <ClInclude Include="Editor.hpp" />
     <ClInclude Include="GameIntegrator.hpp" />
-    <ClInclude Include="UI\Actions\EntityList.hpp" />
+    <ClInclude Include="Scene\SceneManager.hpp" />
+    <ClInclude Include="UI\Elements\EntityList.hpp" />
     <ClInclude Include="UI\Actions\MaterialEditor.hpp" />
     <ClInclude Include="UI\Actions\ProjectGenerator.hpp" />
     <ClInclude Include="UI\Actions\ProjectManager.hpp" />
@@ -184,7 +185,7 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
   <ItemGroup>
     <ClCompile Include="Editor.cpp" />
     <ClCompile Include="GameIntegrator.cpp" />
-    <ClCompile Include="UI\Actions\EntityList.cpp" />
+    <ClCompile Include="UI\Elements\EntityList.cpp" />
     <ClCompile Include="UI\Actions\MaterialEditor.cpp" />
     <ClCompile Include="UI\Actions\ProjectGenerator.cpp" />
     <ClCompile Include="UI\Actions\ProjectManager.cpp" />

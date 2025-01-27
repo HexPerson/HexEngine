@@ -39,9 +39,10 @@
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		float3 colour = shaderTexture.Sample(PointSampler, input.texcoord).rgb;		
+		
 		float2 velocity = velocityTexture.Sample(PointSampler, input.texcoord).xy;
 
-		//velocity /= float2(g_screenWidth, g_screenHeight);
+		//velocity *= float2(g_screenWidth, g_screenHeight);
 		//velocity.xy = (velocity.xy + 1) / 2.0f;
 		//velocity.y = 1 - velocity.y;
 
@@ -58,9 +59,14 @@
 			return float4(colour.rgb, 1.0f);
 		}*/
 
+		//return float4(velocity.x * g_screenWidth, velocity.y * g_screenHeight, 0.0f, 1.0f);
+
 		float2 prevousPixelPos = input.texcoord - velocity;
 
 		float3 history = historyTexture.Sample(LinearSampler, prevousPixelPos);
+
+		//return float4(history.rgb, 1.0f);
+
 		float oldDepth = depthTexture.Sample(LinearSampler, prevousPixelPos).w;
 
 		if (oldDepth - depth > FRAME_DEPTH_MAX_DIFF || (depth == g_frustumDepths[3] && oldDepth == g_frustumDepths[3]))

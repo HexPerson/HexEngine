@@ -21,7 +21,7 @@ namespace HexEngine
 		style.text_regular = math::Color(HEX_RGBA_TO_FLOAT4(210, 210, 210, 255));
 		style.text_highlight = math::Color(HEX_RGBA_TO_FLOAT4(1, 85, 219, 255));
 
-		style.lineedit_back = math::Color(HEX_RGBA_TO_FLOAT4(35, 35, 36, 255));
+		style.lineedit_back = math::Color(HEX_RGBA_TO_FLOAT4(25, 25, 26, 255));
 
 		style.button_back = math::Color(HEX_RGBA_TO_FLOAT4(54, 54, 55, 255));
 		style.button_back2 = math::Color(HEX_RGBA_TO_FLOAT4(44, 44, 45, 255));

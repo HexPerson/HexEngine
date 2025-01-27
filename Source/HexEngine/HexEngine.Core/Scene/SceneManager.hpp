@@ -15,7 +15,7 @@ namespace HexEngine
 
 		void Destroy();
 
-		std::shared_ptr<Scene> LoadScene(const fs::path& path);
+		bool LoadScene(const fs::path& path, std::shared_ptr<Scene>& scene);
 
 		std::vector<Entity*> LoadPrefab(Scene* scene, const fs::path& path);
 

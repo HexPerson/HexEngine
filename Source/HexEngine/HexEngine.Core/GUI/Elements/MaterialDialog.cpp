@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	MaterialDialog::MaterialDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title, Material* material) :
+	MaterialDialog::MaterialDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title, std::shared_ptr<Material> material) :
 		Dialog(parent, position, size, title),
 		_material(material)
 	{

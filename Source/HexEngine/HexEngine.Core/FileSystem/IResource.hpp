@@ -17,6 +17,15 @@ namespace HexEngine
 
 	class FileSystem;
 
+	enum class ResourceType
+	{
+		None = 0,
+		Image,
+		Mesh,
+		Audio,
+		Font,
+	};
+
 	class IResource
 	{
 		friend class ResourceSystem;
@@ -46,6 +55,8 @@ namespace HexEngine
 		void			SetPaths(const fs::path& absolutePath, FileSystem* fileSystem);
 
 		FileSystem*		GetOwningFileSystem() const;
+
+		virtual ResourceType GetResourceType() const;
 
 	private:	
 		FileSystem* _fs = nullptr;
