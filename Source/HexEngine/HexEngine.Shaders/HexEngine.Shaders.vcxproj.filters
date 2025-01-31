@@ -28,6 +28,7 @@
     <None Include="WaterMask.shader" />
     <None Include="HexEngine.Shaders.targets" />
     <None Include="PCSS.shader" />
+    <None Include="PBRutils.shader" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="shader.xml" />
@@ -66,6 +67,5 @@
     <HexEngineShader Include="ShadowMapGeometryAnimated.shader" />
     <HexEngineShader Include="SSRResolve.shader" />
     <HexEngineShader Include="BasicDenoise.shader" />
-    <HexEngineShader Include="PBRutils.shader" />
   </ItemGroup>
 </Project>

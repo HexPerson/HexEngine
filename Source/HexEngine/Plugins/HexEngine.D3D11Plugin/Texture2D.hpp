@@ -50,6 +50,9 @@ namespace HexEngine
 
 		virtual void* GetSharedHandle() override;
 
+		virtual void* LockPixels(int32_t* rowPitch = nullptr) override;
+		virtual void UnlockPixels() override;
+
 	public:
 		ID3D11Texture2D* _texture = nullptr;
 		DXGI_FORMAT _format = DXGI_FORMAT::DXGI_FORMAT_UNKNOWN;

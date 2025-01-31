@@ -22,5 +22,8 @@ namespace HexEngine
 		virtual void GetPixels(std::vector<float>& buffer) = 0;
 
 		virtual void* GetSharedHandle() = 0;
+
+		virtual void* LockPixels(int32_t* rowPitch = nullptr) = 0;
+		virtual void UnlockPixels() = 0;
 	};
 }

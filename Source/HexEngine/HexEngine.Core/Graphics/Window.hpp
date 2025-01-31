@@ -13,6 +13,8 @@ namespace HexEngine
 		FullscreenBorderless
 	};
 
+	HWND WindowCreate(int32_t xpos, int32_t ypos, int32_t width, int32_t height, DisplayMode displayMode, const std::string& windowTitle);
+
 	class Window
 	{
 	public:				
@@ -40,11 +42,9 @@ namespace HexEngine
 
 		void Maximise();
 		void Minimise();
-
-	private:
 		void RecalculateWindowSize();
 
-	private:
+	protected:
 		HWND _handle;
 		int32_t _width;
 		int32_t _height;

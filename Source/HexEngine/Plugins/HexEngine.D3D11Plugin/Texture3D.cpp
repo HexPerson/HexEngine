@@ -40,6 +40,35 @@ namespace HexEngine
 		}
 	}
 
+	void* Texture3D::LockPixels(int32_t* rowPitch)
+	{
+		g_pGraphics->Lock();
+
+		D3D11_MAPPED_SUBRESOURCE mapped = {};
+
+		auto gfxDevice = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
+
+		if (gfxDevice->Map(_texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped) == S_OK)
+		{
+			g_pGraphics->Unlock();
+			return mapped.pData;
+		}
+
+		g_pGraphics->Unlock();
+		return nullptr;
+	}
+
+	void Texture3D::UnlockPixels()
+	{
+		g_pGraphics->Lock();
+
+		auto gfxDevice = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
+
+		gfxDevice->Unmap(_texture, 0);
+
+		g_pGraphics->Unlock();
+	}
+
 	void Texture3D::GetPixels(std::vector<uint8_t>& buffer)
 	{
 		auto gfxContext = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();

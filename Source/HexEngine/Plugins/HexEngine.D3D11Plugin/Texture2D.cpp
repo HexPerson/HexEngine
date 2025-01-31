@@ -70,6 +70,38 @@ namespace HexEngine
 		buffer.insert(buffer.end(), pixels, pixels + pixelsSize);
 	}
 
+	void* Texture2D::LockPixels(int32_t* rowPitch)
+	{
+		g_pGraphics->Lock();
+
+		D3D11_MAPPED_SUBRESOURCE mapped = {};
+
+		auto gfxDevice = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
+
+		if (gfxDevice->Map(_texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped) == S_OK)
+		{
+			g_pGraphics->Unlock();
+
+			if (rowPitch)
+				*rowPitch = mapped.RowPitch;
+			return mapped.pData;
+		}
+
+		g_pGraphics->Unlock();
+		return nullptr;
+	}
+
+	void Texture2D::UnlockPixels()
+	{
+		g_pGraphics->Lock();
+
+		auto gfxDevice = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
+
+		gfxDevice->Unmap(_texture, 0);
+
+		g_pGraphics->Unlock();
+	}
+
 	void Texture2D::GetPixels(std::vector<float>& buffer)
 	{
 		auto gfxContext = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();

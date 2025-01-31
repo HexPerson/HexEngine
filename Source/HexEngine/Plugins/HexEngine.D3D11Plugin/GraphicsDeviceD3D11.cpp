@@ -664,6 +664,8 @@ namespace HexEngine
 		int32_t mipLevels,
 		int32_t sampleCount,
 		int32_t sampleQuality,
+		D3D11_SUBRESOURCE_DATA* initialData,
+		D3D11_CPU_ACCESS_FLAG access,
 		D3D11_RTV_DIMENSION rtvDimension,
 		D3D11_UAV_DIMENSION uavDimension,
 		D3D11_SRV_DIMENSION srvDimension,
@@ -676,16 +678,16 @@ namespace HexEngine
 		// Create the texture2D description
 		//
 		D3D11_TEXTURE2D_DESC desc = {};
-		desc.Format = static_cast<DXGI_FORMAT>(format); // the format structure is 1:1
+		desc.Format = format;
 		desc.BindFlags = bindFlags;
 		desc.Width = width;
 		desc.Height = height;
-		desc.MipLevels = mipLevels != 1 ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
+		desc.MipLevels = mipLevels != D3D11_RESOURCE_MISC_GENERATE_MIPS ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
 		desc.ArraySize = arraySize;
 		desc.SampleDesc.Count = sampleCount;
 		desc.SampleDesc.Quality = sampleQuality;
 		desc.Usage = usage;
-		desc.CPUAccessFlags = (usage == D3D11_USAGE_STAGING ? (D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE) : 0);
+		desc.CPUAccessFlags = access;//(usage == D3D11_USAGE_STAGING ? (D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE) : 0);
 		desc.MiscFlags = miscFlags;// D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;// (usage == D3D11_USAGE_STAGING ? (D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) : 0);
 
 
@@ -780,107 +782,107 @@ namespace HexEngine
 		return texture;
 	}
 
-	Texture2D* GraphicsDeviceD3D11::CreateTexture2D(
-		int32_t width,
-		int32_t height,
-		DXGI_FORMAT format,
-		int32_t arraySize,
-		uint32_t bindFlags,
-		int32_t mipLevels,
-		int32_t sampleCount,
-		int32_t sampleQuality,
-		D3D11_SUBRESOURCE_DATA* initialData,
-		D3D11_RTV_DIMENSION rtvDimension,
-		D3D11_UAV_DIMENSION uavDimension,
-		D3D11_SRV_DIMENSION srvDimension,
-		D3D11_DSV_DIMENSION dsvDimension)
-	{
-		std::lock_guard<std::recursive_mutex> lock(_lock);
+	//Texture2D* GraphicsDeviceD3D11::CreateTexture2D(
+	//	int32_t width,
+	//	int32_t height,
+	//	DXGI_FORMAT format,
+	//	int32_t arraySize,
+	//	uint32_t bindFlags,
+	//	int32_t mipLevels,
+	//	int32_t sampleCount,
+	//	int32_t sampleQuality,
+	//	D3D11_SUBRESOURCE_DATA* initialData,
+	//	D3D11_RTV_DIMENSION rtvDimension,
+	//	D3D11_UAV_DIMENSION uavDimension,
+	//	D3D11_SRV_DIMENSION srvDimension,
+	//	D3D11_DSV_DIMENSION dsvDimension)
+	//{
+	//	std::lock_guard<std::recursive_mutex> lock(_lock);
 
-		// Create the texture2D description
-		//
-		D3D11_TEXTURE2D_DESC desc = {};
-		desc.Format = static_cast<DXGI_FORMAT>(format); // the format structure is 1:1
-		desc.BindFlags = bindFlags;
-		desc.Width = width;
-		desc.Height = height;
-		desc.MipLevels = mipLevels != 1 ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
-		desc.ArraySize = arraySize;
-		desc.SampleDesc.Count = sampleCount;
-		desc.SampleDesc.Quality = sampleQuality;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.CPUAccessFlags = 0;
-		desc.MiscFlags = 0;
+	//	// Create the texture2D description
+	//	//
+	//	D3D11_TEXTURE2D_DESC desc = {};
+	//	desc.Format = static_cast<DXGI_FORMAT>(format); // the format structure is 1:1
+	//	desc.BindFlags = bindFlags;
+	//	desc.Width = width;
+	//	desc.Height = height;
+	//	desc.MipLevels = mipLevels != 1 ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
+	//	desc.ArraySize = arraySize;
+	//	desc.SampleDesc.Count = sampleCount;
+	//	desc.SampleDesc.Quality = sampleQuality;
+	//	desc.Usage = D3D11_USAGE_DEFAULT;
+	//	desc.CPUAccessFlags = 0;
+	//	desc.MiscFlags = 0;
 
-		/*D3D11_SUBRESOURCE_DATA data;
-		data.pSysMem = initialData.data();
-		data.SysMemPitch = initialData.size();
-		data.SysMemSlicePitch = 0;*/
+	//	/*D3D11_SUBRESOURCE_DATA data;
+	//	data.pSysMem = initialData.data();
+	//	data.SysMemPitch = initialData.size();
+	//	data.SysMemSlicePitch = 0;*/
 
-		ID3D11Texture2D* d3dTexture;
-		CHECK_HR(_device->CreateTexture2D(&desc, initialData, &d3dTexture));
+	//	ID3D11Texture2D* d3dTexture;
+	//	CHECK_HR(_device->CreateTexture2D(&desc, initialData, &d3dTexture));
 
-		Texture2D* texture = new Texture2D;
+	//	Texture2D* texture = new Texture2D;
 
-		// Set the initial texture data
-		//
-		texture->_width = width;
-		texture->_height = height;
-		texture->_texture = d3dTexture;
-		texture->_format = format;
-		texture->_rtvDimension = rtvDimension;
-		texture->_srvDimension = srvDimension;
-		texture->_dsvDimension = dsvDimension;
+	//	// Set the initial texture data
+	//	//
+	//	texture->_width = width;
+	//	texture->_height = height;
+	//	texture->_texture = d3dTexture;
+	//	texture->_format = format;
+	//	texture->_rtvDimension = rtvDimension;
+	//	texture->_srvDimension = srvDimension;
+	//	texture->_dsvDimension = dsvDimension;
 
-		// If its a render target
-		//
-		if (bindFlags & D3D11_BIND_RENDER_TARGET)
-		{
-			for (auto i = 0; i < arraySize; ++i)
-			{
-				CD3D11_RENDER_TARGET_VIEW_DESC rtvDesc((D3D11_RTV_DIMENSION)rtvDimension, (DXGI_FORMAT)format, 0, i, 1);
+	//	// If its a render target
+	//	//
+	//	if (bindFlags & D3D11_BIND_RENDER_TARGET)
+	//	{
+	//		for (auto i = 0; i < arraySize; ++i)
+	//		{
+	//			CD3D11_RENDER_TARGET_VIEW_DESC rtvDesc((D3D11_RTV_DIMENSION)rtvDimension, (DXGI_FORMAT)format, 0, i, 1);
 
-				ID3D11RenderTargetView* renderTargetView;
-				CHECK_HR(_device->CreateRenderTargetView(texture->_texture, &rtvDesc, &renderTargetView));
+	//			ID3D11RenderTargetView* renderTargetView;
+	//			CHECK_HR(_device->CreateRenderTargetView(texture->_texture, &rtvDesc, &renderTargetView));
 
-				texture->_renderTargetView = renderTargetView;
-			}
-		}
+	//			texture->_renderTargetView = renderTargetView;
+	//		}
+	//	}
 
-		if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
-		{
-			for (auto i = 0; i < arraySize; ++i)
-			{
-				CD3D11_SHADER_RESOURCE_VIEW_DESC rtvDesc((D3D11_SRV_DIMENSION)srvDimension, (DXGI_FORMAT)format, 0, 1, i, 1);
+	//	if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
+	//	{
+	//		for (auto i = 0; i < arraySize; ++i)
+	//		{
+	//			CD3D11_SHADER_RESOURCE_VIEW_DESC rtvDesc((D3D11_SRV_DIMENSION)srvDimension, (DXGI_FORMAT)format, 0, 1, i, 1);
 
-				ID3D11ShaderResourceView* shaderResourceView;
-				CHECK_HR(_device->CreateShaderResourceView(texture->_texture, &rtvDesc, &shaderResourceView));
+	//			ID3D11ShaderResourceView* shaderResourceView;
+	//			CHECK_HR(_device->CreateShaderResourceView(texture->_texture, &rtvDesc, &shaderResourceView));
 
-				texture->_shaderResourceView = shaderResourceView;
-			}
-		}
+	//			texture->_shaderResourceView = shaderResourceView;
+	//		}
+	//	}
 
-		if (bindFlags & D3D11_BIND_DEPTH_STENCIL)
-		{
-			for (auto i = 0; i < arraySize; ++i)
-			{
-				CD3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc(
-					(D3D11_DSV_DIMENSION)dsvDimension,
-					(DXGI_FORMAT)format,
-					0,
-					i,
-					1,
-					0);
+	//	if (bindFlags & D3D11_BIND_DEPTH_STENCIL)
+	//	{
+	//		for (auto i = 0; i < arraySize; ++i)
+	//		{
+	//			CD3D11_DEPTH_STENCIL_VIEW_DESC dsvDesc(
+	//				(D3D11_DSV_DIMENSION)dsvDimension,
+	//				(DXGI_FORMAT)format,
+	//				0,
+	//				i,
+	//				1,
+	//				0);
 
-				ID3D11DepthStencilView* depthStencilView;
-				CHECK_HR(_device->CreateDepthStencilView(texture->_texture, &dsvDesc, &depthStencilView));
+	//			ID3D11DepthStencilView* depthStencilView;
+	//			CHECK_HR(_device->CreateDepthStencilView(texture->_texture, &dsvDesc, &depthStencilView));
 
-				texture->_depthStencilView = depthStencilView;
-			}
-		}
+	//			texture->_depthStencilView = depthStencilView;
+	//		}
+	//	}
 
-		return texture;
-	}
+	//	return texture;
+	//}
 
 	ITexture3D* GraphicsDeviceD3D11::CreateTexture3D(
 		int32_t width,

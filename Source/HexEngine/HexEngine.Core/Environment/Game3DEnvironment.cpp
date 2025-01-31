@@ -92,27 +92,28 @@ namespace HexEngine
 
 		env->_commandManager = new CommandManager;
 		env->_commandManager->Create();
-
 		
-
-		if (options.window != nullptr)
+		if (!HEX_HASFLAG(options.flags, GameOptions::GameOptions_NoRenderer))
 		{
-			env->_windowWidth = options.window->GetClientWidth();
-			env->_windowHeight = options.window->GetClientHeight();
-			env->_windowHandle = options.window->GetHandle();
+			if (options.window != nullptr)
+			{
+				env->_windowWidth = options.window->GetClientWidth();
+				env->_windowHeight = options.window->GetClientHeight();
+				env->_windowHandle = options.window->GetHandle();
 
-			env->_inputSystem->Create(options.window->GetHandle());
+				env->_inputSystem->Create(options.window->GetHandle());
 
-			env->_inputSystem->SetMousePosition(options.window->GetClientWidth() / 2, options.window->GetClientHeight() / 2, true);
+				env->_inputSystem->SetMousePosition(options.window->GetClientWidth() / 2, options.window->GetClientHeight() / 2, true);
+			}
+			else
+			{
+				env->_windowWidth = options.windowWidth;
+				env->_windowHeight = options.windowHeight;
+				env->_windowHandle = options.windowHandle;
+
+				env->_inputSystem->Create(options.windowHandle);
+			}
 		}
-		else
-		{
-			env->_windowWidth = options.windowWidth;
-			env->_windowHeight = options.windowHeight;
-			env->_windowHandle = options.windowHandle;
-
-			env->_inputSystem->Create(options.windowHandle);
-		}		
 
 		env->_assetPackageManager = new AssetPackageManager;
 
@@ -151,13 +152,16 @@ namespace HexEngine
 
 		// Create the graphics engine
 		//
-		if (env->CreateGraphicsSystem(options) == false)
+		if (!HEX_HASFLAG(options.flags, GameOptions::GameOptions_NoRenderer))
 		{
-			return nullptr;
-		}
+			if (env->CreateGraphicsSystem(options) == false)
+			{
+				return nullptr;
+			}
 
-		env->_ssaoProvider = (ISSAOProvider*)env->_pluginSystem->CreateInterface(ISSAOProvider::InterfaceName);
-		env->_ssaoProvider->Create();
+			env->_ssaoProvider = (ISSAOProvider*)env->_pluginSystem->CreateInterface(ISSAOProvider::InterfaceName);
+			env->_ssaoProvider->Create();
+		}
 
 		// load the standard assets
 #ifndef _DEBUG
@@ -166,15 +170,6 @@ namespace HexEngine
 #endif
 
 		env->_debugGui = new DebugGUI;
-
-		if (options.window != nullptr)
-		{
-			env->_debugGui->Initialize(options.window->GetHandle());
-		}
-		else
-		{
-			env->_debugGui->Initialize(options.windowHandle);
-		}
 
 		env->_sceneManager = new SceneManager;
 		env->_sceneRenderer = new SceneRenderer;

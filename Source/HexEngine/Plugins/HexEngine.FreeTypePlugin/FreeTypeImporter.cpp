@@ -367,6 +367,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 		1,
 		0,
 		&initialData,
+		(D3D11_CPU_ACCESS_FLAG)0,
 		D3D11_RTV_DIMENSION_UNKNOWN,
 		D3D11_UAV_DIMENSION_UNKNOWN,
 		D3D11_SRV_DIMENSION_TEXTURE2D);

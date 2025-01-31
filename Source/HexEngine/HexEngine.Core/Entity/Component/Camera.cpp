@@ -70,6 +70,8 @@ namespace HexEngine
 				0,
 				1,
 				0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
 				D3D11_RTV_DIMENSION_TEXTURE2D,
 				D3D11_UAV_DIMENSION_UNKNOWN,
 				D3D11_SRV_DIMENSION_TEXTURE2D);

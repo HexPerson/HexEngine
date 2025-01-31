@@ -14,10 +14,6 @@ namespace HexEngine
 		Destroy();
 	}
 
-	void DebugGUI::Initialize(HWND wnd)
-	{
-	}
-
 	void DebugGUI::Destroy()
 	{
 		_lock.lock();
@@ -32,7 +28,6 @@ namespace HexEngine
 	void DebugGUI::Resize(HWND wnd)
 	{
 		Destroy();
-		Initialize(wnd);
 	}
 
 	void DebugGUI::Render()

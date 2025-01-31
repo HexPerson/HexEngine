@@ -22,8 +22,6 @@ namespace HexEngine
 
 		~DebugGUI();
 
-		void Initialize(HWND wnd);
-
 		void Destroy();
 
 		void Resize(HWND wnd);

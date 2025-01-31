@@ -215,12 +215,14 @@ namespace HexEngine
 		virtual ITexture2D* CreateTexture2D(
 			int32_t width,
 			int32_t height,
-			DXGI_FORMAT format,
-			int32_t arraySize,
-			uint32_t bindFlags,
-			int32_t mipLevels,
-			int32_t sampleCount,
-			int32_t sampleQuality,
+			DXGI_FORMAT format = DXGI_FORMAT_R8G8B8A8_UNORM,
+			int32_t arraySize = 1,
+			uint32_t bindFlags = D3D11_BIND_SHADER_RESOURCE,
+			int32_t mipLevels = 0,
+			int32_t sampleCount = 1,
+			int32_t sampleQuality = 0,
+			D3D11_SUBRESOURCE_DATA* initialData = nullptr,
+			D3D11_CPU_ACCESS_FLAG access = (D3D11_CPU_ACCESS_FLAG)0,
 			D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
 			D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
 			D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
@@ -228,7 +230,7 @@ namespace HexEngine
 			D3D11_USAGE usage = D3D11_USAGE_DEFAULT,
 			uint32_t miscFlags = 0) = 0;
 
-		virtual ITexture2D* CreateTexture2D(
+		/*virtual ITexture2D* CreateTexture2D(
 			int32_t width,
 			int32_t height,
 			DXGI_FORMAT format,
@@ -241,7 +243,7 @@ namespace HexEngine
 			D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
 			D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
 			D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
-			D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) = 0;
+			D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) = 0;*/
 
 		virtual ITexture3D* CreateTexture3D(
 			int32_t width,

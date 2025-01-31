@@ -8,6 +8,13 @@
 
 namespace HexEngine
 {
+	enum GameOptions
+	{
+		GameOptions_None = 0,
+		GameOptions_NoRenderer = HEX_BITSET(0),
+	};
+	DEFINE_ENUM_FLAG_OPERATORS(GameOptions);
+
 	struct Game3DOptions
 	{
 		Window* window = nullptr;
@@ -16,6 +23,7 @@ namespace HexEngine
 		uint32_t windowHeight = 0;
 		std::wstring applicationName;
 		bool createIconService = false;
+		GameOptions flags = GameOptions::GameOptions_None;
 	};
 
 	class Model;
