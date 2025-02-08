@@ -80,6 +80,8 @@ namespace HexEngine
 		}
 #endif
 
+		Window* win = Window::FindFromHandle(hWnd);
+
 		//Window* window = reinterpret_cast<Window*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 
 		switch (message)
@@ -130,7 +132,7 @@ namespace HexEngine
 			if (g_pEnv)
 			{
 				//g_pEnv->OnResizeWindow(rect.right - rect.left, rect.bottom - rect.top, hWnd);
-				g_pEnv->OnResizeWindow(LOWORD(lParam), HIWORD(lParam), hWnd);
+				g_pEnv->OnResizeWindow(win, LOWORD(lParam), HIWORD(lParam));
 			}
 			break;
 		}
@@ -145,7 +147,7 @@ namespace HexEngine
 				//RECT rect;
 				//GetClientRect(hWnd, &rect);
 				//g_pEnv->OnResizeWindow(rect.right - rect.left, rect.bottom - rect.top);
-				g_pEnv->OnResizeWindow(wp->cx, wp->cy);
+				g_pEnv->OnResizeWindow(win, wp->cx, wp->cy);
 			}
 
 			break;
@@ -611,11 +613,11 @@ namespace HexEngine
 		// begin the ray right where the camera is at (in world space)
 		start_point = camera->GetEntity()->GetPosition();
 
-		auto window = g_pEnv->_window;
+		const auto& viewport = camera->GetViewport();
 
 		// first, set the end point to the screen space position on the far plane
-		end_point.x = ((2.0f * (float)screenX) / (float)window->GetClientWidth()) - 1.0f;
-		end_point.y = (((2.0f * (float)screenY) / (float)window->GetClientHeight()) - 1.0f) * -1.0f;
+		end_point.x = ((2.0f * (float)screenX) / (float)viewport.width) - 1.0f;
+		end_point.y = (((2.0f * (float)screenY) / (float)viewport.height) - 1.0f) * -1.0f;
 		end_point.z = camera->GetNearZ();// 1.0f;
 
 		auto projectionMatrix = camera->GetProjectionMatrix();
@@ -653,8 +655,6 @@ namespace HexEngine
 
 	bool InputSystem::GetWorldToScreenPosition(Camera* camera, const math::Vector3& position, int32_t& x, int32_t& y, int32_t width, int32_t height)
 	{
-		auto window = g_pEnv->_window;
-
 		auto projectionMatrix = camera->GetProjectionMatrix();
 		auto viewMatrix = camera->GetViewMatrix();
 

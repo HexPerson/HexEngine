@@ -256,7 +256,7 @@ namespace HexEngine
 		return nullptr;
 	}
 
-	Dialog* MaterialLoader::CreateEditorDialog(const fs::path& path, FileSystem* fileSystem)
+	Dialog* MaterialLoader::CreateEditorDialog(const std::vector<fs::path>& paths)
 	{
 		uint32_t width, height;
 		g_pEnv->GetScreenSize(width, height);
@@ -267,7 +267,7 @@ namespace HexEngine
 		const int32_t dlgW = 800;
 		const int32_t dlgH = 600;
 
-		auto mat = Material::Create(path);
+		auto mat = Material::Create(paths[0]);
 
 		if (mat)
 		{
@@ -275,7 +275,7 @@ namespace HexEngine
 				g_pEnv->_uiManager->GetRootElement(),
 				Point(cx - dlgW / 2, cy - dlgH / 2),
 				Point(dlgW, dlgH),
-				std::format(L"Editing Material '{}'", path.filename().wstring()),
+				std::format(L"Editing Material '{}'", paths[0].filename().wstring()),
 				mat);
 
 			return dlg;

@@ -294,7 +294,7 @@ namespace HexEngine
 		return 1.0f;
 	}
 
-	void HeadlessEnvironment::OnResizeWindow(uint32_t width, uint32_t height, HWND handle)
+	void HeadlessEnvironment::OnResizeWindow(Window* window, uint32_t width, uint32_t height)
 	{
 	}
 

@@ -17,7 +17,7 @@ namespace HexEngine
 		virtual void						UnloadResource(IResource* resource) = 0;
 		virtual std::vector<std::string>	GetSupportedResourceExtensions() = 0;
 		virtual std::wstring				GetResourceDirectory() const = 0;
-		virtual Dialog*						CreateEditorDialog(const fs::path& path, FileSystem* fileSystem) {	return nullptr;	}
+		virtual Dialog*						CreateEditorDialog(const std::vector<fs::path>& paths) {	return nullptr;	}
 		virtual void						SaveResource(IResource* resource, const fs::path& path) = 0;
 	};
 }

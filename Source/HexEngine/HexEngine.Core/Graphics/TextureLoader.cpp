@@ -29,7 +29,7 @@ namespace HexEngine
 		return L"Textures";
 	}
 
-	Dialog* TextureLoader::CreateEditorDialog(const fs::path& path, FileSystem* fileSystem)
+	Dialog* TextureLoader::CreateEditorDialog(const std::vector<fs::path>& paths)
 	{
 		return nullptr;
 	}

@@ -105,7 +105,6 @@ int WinMain(
 
 	while (g_pEnv->IsRunning())
 	{
-		HexCreator::g_pCreator->_app.Run();
 		g_pEnv->Run();		
 	}
 

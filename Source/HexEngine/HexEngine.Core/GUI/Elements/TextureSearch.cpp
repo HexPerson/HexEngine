@@ -31,7 +31,6 @@ namespace HexEngine
 
 	TextureSearch::~TextureSearch()
 	{
-		SAFE_DELETE(_edit);
 	}
 
 	void TextureSearch::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)

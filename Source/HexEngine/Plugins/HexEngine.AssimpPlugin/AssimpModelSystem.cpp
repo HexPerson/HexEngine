@@ -75,7 +75,7 @@ namespace HexEngine
 	{
 	}
 
-	Dialog* AssimpModelImporter::CreateEditorDialog(const fs::path& path, FileSystem* fileSystem)
+	Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs::path>& paths)
 	{
 		const int32_t width = 800;
 		const int32_t height = 600;
@@ -84,7 +84,7 @@ namespace HexEngine
 			g_pEnv->_uiManager->GetRootElement(),
 			Point::GetScreenCenterWithOffset(-width / 2, -height / 2),
 			Point(width, height),
-			std::format(L"Importing model: {}", path.filename().wstring()));
+			paths.size() == 1 ? std::format(L"Importing model: {}", paths[0].filename().wstring()) : std::format(L"Importing {} models", paths.size()));
 
 		dlg->BringToFront();
 
@@ -114,7 +114,12 @@ namespace HexEngine
 			});
 
 		auto importModel = [&]() -> bool{
-			LoadResourceFromFile(fileSystem->GetLocalAbsoluteDataPath(path), fileSystem, nullptr);
+
+			for (auto& path : paths)
+			{
+				auto fileSystem = g_pEnv->_resourceSystem->FindFileSystemByPath(path);
+				LoadResourceFromFile(fileSystem->GetLocalAbsoluteDataPath(path), fileSystem, nullptr);
+			}
 			return true;
 			};
 

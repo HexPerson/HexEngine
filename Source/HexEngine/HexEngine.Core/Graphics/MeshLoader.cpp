@@ -93,7 +93,7 @@ namespace HexEngine
 		return L"Meshes";
 	}
 
-	Dialog* MeshLoader::CreateEditorDialog(const fs::path& path, FileSystem* fileSystem)
+	Dialog* MeshLoader::CreateEditorDialog(const std::vector<fs::path>& paths)
 	{
 		return nullptr;
 	}

@@ -46,7 +46,7 @@ namespace HexEditor
 
 		void CreateFileSystem(const fs::path& path);
 
-		
+		void OnFileChangeEvent(const DirectoryWatchInfo& info, const FileChangeActionMap& fileData);
 
 	public:
 		FileSystem* _projectFS = nullptr;

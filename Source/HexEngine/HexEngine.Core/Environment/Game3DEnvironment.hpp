@@ -18,9 +18,6 @@ namespace HexEngine
 	struct Game3DOptions
 	{
 		Window* window = nullptr;
-		HWND windowHandle = 0;
-		uint32_t windowWidth = 0;
-		uint32_t windowHeight = 0;
 		std::wstring applicationName;
 		bool createIconService = false;
 		GameOptions flags = GameOptions::GameOptions_None;
@@ -44,7 +41,7 @@ namespace HexEngine
 
 		virtual float GetAspectRatio() override;
 
-		virtual void OnResizeWindow(uint32_t width, uint32_t height, HWND handle = 0) override;
+		virtual void OnResizeWindow(Window* window, uint32_t width, uint32_t height) override;
 
 		virtual void GetScreenSize(uint32_t& width, uint32_t& height) const override;
 
@@ -75,7 +72,6 @@ namespace HexEngine
 
 	private:
 		bool _running;
-		Window* _targetWindow;
 		int32_t _windowWidth = 0;
 		int32_t _windowHeight = 0;
 		HWND _windowHandle = 0;

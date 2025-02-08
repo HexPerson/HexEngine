@@ -14,7 +14,7 @@ namespace HexEngine
 	Camera::Camera(Entity* entity) :
 		UpdateComponent(entity)
 	{
-		SetPespectiveParameters(gCameraDefaultFov, g_pEnv->GetAspectRatio(), 1.0f, 8000.0f);
+		SetPespectiveParameters(gCameraDefaultFov, g_pEnv->GetAspectRatio(), 1.0f, 10000.0f);
 
 		uint32_t width, height;
 		g_pEnv->_graphicsDevice->GetBackBufferDimensions(width, height);

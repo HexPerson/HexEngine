@@ -56,8 +56,8 @@ namespace HexEngine
 
 		using MeshEntityPair = std::pair<std::shared_ptr<Mesh>, Entity*>;
 		using MeshEntityVector = std::vector<MeshEntityPair>;
-		using MaterialEntityVectorPair = std::pair<std::shared_ptr<Material>, MeshEntityVector>;
-		using MeshInstanceMap = std::vector<MaterialEntityVectorPair>;
+		//using MaterialEntityVectorPair = std::pair<, MeshEntityVector>;
+		using MeshInstanceMap = std::map<std::shared_ptr<Material>, MeshEntityVector>;
 
 		void ClearPVS(); 
 		void ForceRebuild();

@@ -136,7 +136,7 @@ namespace HexEngine
 			direction -= transform->GetRight();
 
 		const float AccelerationSpeed = 800.0f;
-		const float MaxSpeed = 180.0f;
+		const float MaxSpeed = 600.0f;
 
 		if (_targetZoom != 0.0f)
 		{
@@ -185,7 +185,7 @@ namespace HexEngine
 	{
 		if (event == InputEvent::MouseMove)
 		{
-			if (_mouseMovementEnabled)
+			if (_mouseMovementEnabled && data->MouseMove.absolute == false)
 			{
 				Camera* camera = GetEntity()->GetComponent<Camera>();
 
@@ -213,7 +213,7 @@ namespace HexEngine
 		}
 		else if (event == InputEvent::MouseWheel)
 		{
-			_targetZoom += data->MouseWheel.delta * 50.0f;
+			_targetZoom += data->MouseWheel.delta * _zoomSpeed;
 		}
 
 		return false;

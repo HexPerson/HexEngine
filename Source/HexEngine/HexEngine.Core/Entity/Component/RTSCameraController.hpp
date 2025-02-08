@@ -38,6 +38,7 @@ namespace HexEngine
 
 		void SetMovementFlag(RTSMoveFlag flag);
 		void ClearMovementFlag(RTSMoveFlag flag);
+		void SetMouseWheelZoomSpeed(float speed) { _zoomSpeed = speed; }
 		
 
 	private:
@@ -45,6 +46,7 @@ namespace HexEngine
 		float _strafeMovementSpeed = 70.0f;
 		float _pitchSensitivity = 1.6f;
 		float _yawSensitivity = 1.6f;
+		float _zoomSpeed = 600.0f;
 
 		std::vector<std::pair<float, float>> _mouseMovementHistory;
 		bool _enableMouseSmoothing = true;

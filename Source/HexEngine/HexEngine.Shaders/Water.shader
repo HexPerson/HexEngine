@@ -22,7 +22,7 @@
 	//static const float _Wavelength = 1.0f;
 	//static const float _Amplitude = 0.001f;
 
-	static const float WaveSizeMultiplier = 1.6f;
+	static const float WaveSizeMultiplier = 10.9f;
 
 #define ENABLE_WAVES 1
 
@@ -80,7 +80,7 @@
 
 	
 
-	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance)
+	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)
 	{
 		MeshPixelInput output = (MeshPixelInput)0;
 
@@ -189,14 +189,14 @@
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	//SHADOWMAPS_RESOURCE(4);
 
-	Texture2D g_splatMap : register(t5);
+	//Texture2D g_splatMap : register(t5);
 
-	Texture2D shaderTexture : register(t6);
-	Texture2D normalMap : register(t7);
-	Texture2D specularMap : register(t8);
-	Texture2D noiseMap : register(t9);
-	Texture2D heightMap : register(t10);
-	Texture2D waterMask : register(t11);
+	Texture2D shaderTexture : register(t5);
+	Texture2D normalMap : register(t6);
+	Texture2D specularMap : register(t7);
+	Texture2D noiseMap : register(t8);
+	Texture2D heightMap : register(t9);
+	Texture2D waterMask : register(t10);
 
 	SamplerState g_TexSamplerAniso : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -373,7 +373,9 @@
 
 	float4 ShaderMain(MeshPixelInput input) : SV_Target
 	{
+		//return float4(1,0,0,1);
 		float4 albedo = shaderTexture.Sample(g_TexSamplerAniso, input.texcoord) * input.colour;
+		//return albedo;
 		//float4 color = albedo * ambientColor;
 
 		float3 reflection;
@@ -533,9 +535,9 @@
 
 		//return float4(relativeDepth, relativeDepth, relativeDepth, 1.0f);
 
-		//float depthMultiplier = saturate(relativeDepth * g_frustumDepths[3]);
+		float depthMultiplier = saturate(relativeDepth * g_frustumDepths[3]);
 
-		//float4 worldAlbedoInfluence = float4(worldDiffuse.rgb * depthMultiplier, 1.0f/*albedo.a*/);
+		float4 worldAlbedoInfluence = float4(worldDiffuse.rgb * depthMultiplier, 1.0f/*albedo.a*/);
 
 		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, saturate(1 - exp(-relativeDepth * g_oceanConfig.fadeFactor)));
 		float fresnel = 1 - pow(saturate(dot(eyeVector, originalWorldNormal)), fresnelPow);// min(0.7, pow(saturate(dot(-eyeVector, worldNormal)), fresnelPow));
@@ -574,7 +576,7 @@
 			retCol.xyz = saturate(lerp(retCol.xyz, reflectionCol.xyz/* + specular*/, reflectionStrength * fadeFactor));
 		}
 
-		retCol = saturate(retCol + specular);
+		retCol = saturate(retCol /*+ specular*/);
 
 		// foam
 		/*if (depthDifference < 1.0f && isInMaskedRegion)
@@ -582,10 +584,10 @@
 			retCol = retCol + (float4(0.3f, 0.3f, 0.3f, 0.0f) * (1.0f - depthDifference));
 		}*/
 		
-		return retCol;
+		//return retCol;
 		//albedo = float4(worldAlbedoInfluence, 1.0f);
 
-		//return 0.2f * albedo + worldAlbedoInfluence + (albedo * lightIntensity) + specular;
+		return 0.2f * albedo + worldAlbedoInfluence + (albedo * lightIntensity);// + specular;
 
 		//float4 finalColour = albedo * color;
 		//color = finalColour;// color* albedo;

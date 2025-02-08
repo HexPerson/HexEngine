@@ -78,7 +78,7 @@ namespace HexEngine
 
 		auto gfxDevice = (ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 
-		if (gfxDevice->Map(_texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped) == S_OK)
+		if (gfxDevice->Map(_texture, 0, D3D11_MAP_WRITE/*_DISCARD*/, 0, &mapped) == S_OK)
 		{
 			g_pGraphics->Unlock();
 

@@ -38,7 +38,7 @@ namespace HexEngine
 		Trigger			= 7,
 		Sky				= 8,
 
-		CustomLayer = 128,
+		CustomLayer = 10,
 
 		AllLayers = 0x7FFFFFFF,
 	};
@@ -138,16 +138,12 @@ namespace HexEngine
 			return comps;
 		}
 
-		BaseComponent* GetComponentByID(const ComponentId& id);
-		BaseComponent* GetComponentByClassName(const std::string& name);
-
-		std::vector<BaseComponent*> GetComponentsBySignature(const ComponentSignature& signature);
-
-		const ComponentSignature& GetComponentSignature() const;
-
-		void RemoveComponent(BaseComponent* component);
-
-		void RemoveComponentById(ComponentId id);
+		BaseComponent*				GetComponentByID(const ComponentId& id);
+		BaseComponent*				GetComponentByClassName(const std::string& name);
+		std::vector<BaseComponent*>	GetComponentsBySignature(const ComponentSignature& signature);
+		const ComponentSignature&	GetComponentSignature() const;
+		void						RemoveComponent(BaseComponent* component);
+		void						RemoveComponentById(ComponentId id);
 
 		template <typename T>
 		void RemoveComponent()
@@ -160,6 +156,9 @@ namespace HexEngine
 
 		Layer GetLayer() const;
 		void SetLayer(Layer layer);
+
+		int32_t GetTag() const;
+		void SetTag(int32_t tag);
 
 		Entity* GetParent();
 		void SetParent(Entity* parent);
@@ -240,6 +239,7 @@ namespace HexEngine
 
 		std::string _name;
 		Layer _layer = Layer::StaticGeometry;
+		int32_t _tag = 0;
 
 		Entity* _parent = nullptr;
 		std::vector<Entity*> _children;

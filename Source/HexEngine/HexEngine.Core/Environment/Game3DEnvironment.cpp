@@ -32,8 +32,7 @@ namespace HexEngine
 	HVar cl_forcelagframe("cl_forcelagframe", "Forcefully delay each frame by this amount (in milliseconds)", 0, 0, 1000);
 
 	Game3DEnvironment::Game3DEnvironment() :
-		_running(false),
-		_targetWindow(nullptr)
+		_running(false)
 	{
 	}
 
@@ -73,8 +72,8 @@ namespace HexEngine
 		
 		// Copy the target window pointer
 		//
-		env->_targetWindow = options.window;
-		env->_window = options.window;
+		if(options.window != nullptr)
+			env->_windows.push_back(options.window);
 
 		// Create the time manager
 		//
@@ -104,14 +103,6 @@ namespace HexEngine
 				env->_inputSystem->Create(options.window->GetHandle());
 
 				env->_inputSystem->SetMousePosition(options.window->GetClientWidth() / 2, options.window->GetClientHeight() / 2, true);
-			}
-			else
-			{
-				env->_windowWidth = options.windowWidth;
-				env->_windowHeight = options.windowHeight;
-				env->_windowHandle = options.windowHandle;
-
-				env->_inputSystem->Create(options.windowHandle);
 			}
 		}
 
@@ -187,10 +178,6 @@ namespace HexEngine
 		if (options.window != nullptr)
 		{
 			env->_uiManager->Create(options.window->GetClientWidth(), options.window->GetClientHeight());
-		}
-		else
-		{
-			env->_uiManager->Create(options.windowWidth, options.windowHeight);
 		}
 		
 		if (options.createIconService)
@@ -404,23 +391,24 @@ namespace HexEngine
 
 		_timeManager->FrameStart(hasUpdatedOnce);
 
-		if (_targetWindow)
+
+		MSG msg = { 0 };
+
+		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
 		{
-			MSG msg = { 0 };
-
-			while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+			if (msg.message == WM_QUIT)
 			{
-				if (msg.message == WM_QUIT)
-				{
-					OnRecieveQuitMessage();
-					break;
-				}
-
-				TranslateMessage(&msg);
-				DispatchMessage(&msg);
+				OnRecieveQuitMessage();
+				break;
 			}
 
-			_targetWindow->Update();
+			TranslateMessage(&msg);
+			DispatchMessage(&msg);
+		}
+
+		for (auto& window : _windows)
+		{
+			window->Update();
 		}
 		
 		const float timeStep = 1.0f / cl_simulationRate._val.f32;	
@@ -486,63 +474,64 @@ namespace HexEngine
 					}
 				}
 
-				
-				
-				_graphicsDevice->BeginFrame(shouldUseDepthBuffer ? _sceneRenderer->GetGBuffer()->GetDepthBuffer() : nullptr);
+				for (auto& win : _windows)
 				{
-					if(_iconService)
-						_iconService->Render();
-
-					_sceneManager->Render();
-
-					if (_iconService)
-						_iconService->CompletedFrame();
-
-					g_pEnv->_graphicsDevice->SetRenderTarget(g_pEnv->_graphicsDevice->GetBackBuffer());
-
-					// Restore the viewport back to the backbuffer's, we need this incase DLSS is on
-					auto graphics = g_pEnv->_graphicsDevice;
-					graphics->SetViewport(graphics->GetBackBufferViewport());
-
-					
-
-					_uiManager->GetRenderer()->StartFrame();
-					_uiManager->GetRenderer()->EnableScaling(true);
-
-					_graphicsDevice->SetBlendState(BlendState::Transparency);					
-
-					if (!_inEditorMode)
-						_uiManager->GetRenderer()->FullScreenTexturedQuad(_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget());
-
-					if (cl_showfps._val.b)
+					_graphicsDevice->BeginFrame(win, shouldUseDepthBuffer ? _sceneRenderer->GetGBuffer()->GetDepthBuffer() : nullptr);
 					{
-						_uiManager->GetRenderer()->PrintText(_uiManager->GetRenderer()->_style.font.get(), (uint8_t)Style::FontSize::Small, 5, 5, math::Color(1, 1, 1, 1), 0, std::format(L"FPS: {:d}", _timeManager->_fps));
+						if (_iconService)
+							_iconService->Render();
+
+						_sceneManager->Render();
+
+						if (_iconService)
+							_iconService->CompletedFrame();
+
+						g_pEnv->_graphicsDevice->SetRenderTarget(g_pEnv->_graphicsDevice->GetBackBuffer());
+
+						// Restore the viewport back to the backbuffer's, we need this incase DLSS is on
+						auto graphics = g_pEnv->_graphicsDevice;
+						graphics->SetViewport(graphics->GetBackBufferViewport());
+
+
+
+						_uiManager->GetRenderer()->StartFrame();
+						_uiManager->GetRenderer()->EnableScaling(true);
+
+						_graphicsDevice->SetBlendState(BlendState::Transparency);
+
+						if (!_inEditorMode)
+							_uiManager->GetRenderer()->FullScreenTexturedQuad(_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget());
+
+						if (cl_showfps._val.b)
+						{
+							_uiManager->GetRenderer()->PrintText(_uiManager->GetRenderer()->_style.font.get(), (uint8_t)Style::FontSize::Small, 5, 5, math::Color(1, 1, 1, 1), 0, std::format(L"FPS: {:d}", _timeManager->_fps));
+						}
+
+						//_sceneRenderer->RenderOverlays(SceneFlags::PostProcessingEnabled);
+
+						_uiManager->Render();
+
+						for (auto& extension : _gameExtensions)
+						{
+							extension->OnGUI();
+						}
+
+						if (auto console = _commandManager->GetConsole(); console != nullptr)
+						{
+							if (console->GetActive())
+								console->Render(_uiManager->GetRenderer());
+						}
+
+						if (_debugGui)
+							_debugGui->Render();
+
+						_uiManager->GetRenderer()->EnableScaling(false);
+						_uiManager->GetRenderer()->EndFrame();
+
+
 					}
-
-					//_sceneRenderer->RenderOverlays(SceneFlags::PostProcessingEnabled);
-
-					_uiManager->Render();
-
-					for (auto& extension : _gameExtensions)
-					{
-						extension->OnGUI();
-					}
-
-					if (auto console = _commandManager->GetConsole(); console != nullptr)
-					{
-						if (console->GetActive())
-							console->Render(_uiManager->GetRenderer());
-					}
-
-					if (_debugGui)
-						_debugGui->Render();
-
-					_uiManager->GetRenderer()->EnableScaling(false);
-					_uiManager->GetRenderer()->EndFrame();
-
-					
+					_graphicsDevice->EndFrame(win);
 				}
-				_graphicsDevice->EndFrame();
 
 				_sceneManager->LateUpdate(_timeManager->_frameTime);
 
@@ -618,13 +607,6 @@ namespace HexEngine
 				return false;
 			}
 		}
-		else if (options.windowHandle != 0 && options.windowWidth > 0 && options.windowHeight > 0)
-		{
-			if (_graphicsDevice->AttachToWindow(options.windowHandle, options.windowWidth, options.windowHeight, false) == false)
-			{
-				return false;
-			}
-		}
 		else
 		{
 			LOG_CRIT("No suitable graphics window was supplied, exiting!");
@@ -674,22 +656,17 @@ namespace HexEngine
 		return _windowHeight;
 	}
 
-	void Game3DEnvironment::OnResizeWindow(uint32_t width, uint32_t height, HWND handle)
+	void Game3DEnvironment::OnResizeWindow(Window* window, uint32_t width, uint32_t height)
 	{
 		LOG_DEBUG("Resizing game window to %dx%d", width, height);
 
 		_windowWidth = width;
 		_windowHeight = height;
 
-		if (handle != 0)
-		{
-			_windowHandle = handle;
-		}
-
 		if (width > 0 && height > 0)
 		{
 			if (_graphicsDevice)
-				_graphicsDevice->Resize(width, height);
+				_graphicsDevice->Resize(window, width, height);
 
 			if (_sceneRenderer)
 				_sceneRenderer->Resize(width, height);

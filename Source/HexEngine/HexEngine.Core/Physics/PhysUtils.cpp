@@ -187,6 +187,7 @@ namespace HexEngine
 							if (auto meshRenderer = (StaticMeshComponent*)component; meshRenderer != nullptr)
 							{
 								auto mesh = meshRenderer->GetMesh();
+								if(mesh)
 								{
 									auto& vertices = mesh->GetVertices();
 									auto& indices = mesh->GetIndices();

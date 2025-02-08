@@ -304,7 +304,8 @@ int main(int argc, const char* argv[])
 	options.add_options()
 		("I,input", "Input file name", cxxopts::value<std::string>())("O,output", "Output file name", cxxopts::value<std::string>())
 		("T,target", "Target shading language: dxil, spirv, hlsl, glsl, essl, msl_macos, msl_ios", cxxopts::value<std::string>()->default_value("dxil"))
-		("V,version", "The version of target shading language", cxxopts::value<std::string>()->default_value(""));
+		("V,version", "The version of target shading language", cxxopts::value<std::string>()->default_value(""))
+		("P,path", "Included", cxxopts::value<std::string>()->default_value(""));
 
 	auto opts = options.parse(argc, argv);
 
@@ -318,6 +319,7 @@ int main(int argc, const char* argv[])
 	const auto input = opts["input"].as<std::string>();
 	const auto target = opts["target"].as<std::string>();
 	const auto output = opts.count("output") > 0 ? opts["output"].as<std::string>() : "";
+	const auto includePath = opts["path"].as<std::string>();
 
 	printf("ShaderCompiler :: Compiling shader %s to target %s\n", input.c_str(), target.c_str());
 
@@ -338,6 +340,10 @@ int main(int argc, const char* argv[])
 		printf("ShaderCompiler :: No supported compiler was found\n");
 		return 1;
 	}
+
+
+	printf("ShaderCompiler :: Include path: %s\n", includePath.c_str());
+	compiler->SetIncludePath(includePath);
 
 	HexEngine::ShaderFileFormat shader = {};
 	shader._version = HexEngine::ShaderFileFormat::SHADER_FILE_VERSION;

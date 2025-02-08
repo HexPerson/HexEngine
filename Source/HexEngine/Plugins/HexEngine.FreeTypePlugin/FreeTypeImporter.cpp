@@ -185,15 +185,13 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 #if ENABLE_OUTLINE
 			FT_Glyph glyph;
 			FT_Get_Glyph(face->glyph, &glyph);
-			//FT_Glyph_StrokeBorder(&glyph, _stroker, false, true);
+			//FT_Glyph_StrokeBorder(&effectGlyph, _stroker, false, true);
+			FT_Glyph_Stroke(&glyph, _stroker, /*false,*/ true);
 			FT_Glyph_To_Bitmap(&glyph, FT_RENDER_MODE_NORMAL, nullptr, true);
 
-			FT_BitmapGlyph bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(glyph);
-
-			
+			FT_BitmapGlyph bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(glyph);			
 
 			auto& slot = face->glyph;
-
 
 			GlyphDescFT desc;
 			desc.ch = ch;
@@ -205,13 +203,30 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 			desc.pitch = bitmapGlyph->bitmap.pitch;
 			desc.advanceX = slot->advance.x;
 			desc.advanceY = slot->advance.y;
-			memcpy(&desc.bitmap, &bitmapGlyph->bitmap, sizeof(FT_Bitmap));
+			memcpy(&desc.effectBitmap, &bitmapGlyph->bitmap, sizeof(FT_Bitmap));
 
 			desc.baseline = baseline;
 			desc.totalHeight = baseline + desc.offsetY + desc.height;
 
+			desc.effectData.insert(desc.effectData.end(), bitmapGlyph->bitmap.buffer, bitmapGlyph->bitmap.buffer + (bitmapGlyph->bitmap.width * bitmapGlyph->bitmap.rows));
+
+			//FT_Done_Glyph(glyph);
+
+			FT_Glyph effectGlyph;
+			FT_Get_Glyph(face->glyph, &effectGlyph);
+			//FT_Glyph_StrokeBorder(&effectGlyph, _stroker, false, true);
+			//FT_Glyph_Stroke(&effectGlyph, _stroker, /*false,*/ true);
+			FT_Glyph_To_Bitmap(&effectGlyph, FT_RENDER_MODE_NORMAL, nullptr, true);			
+
+			bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(effectGlyph);
+			memcpy(&desc.bitmap, &bitmapGlyph->bitmap, sizeof(FT_Bitmap));
+
+			desc.innerWidth = bitmapGlyph->bitmap.width;
+			desc.innerHeight = bitmapGlyph->bitmap.rows;
+
 			desc.pixelData.insert(desc.pixelData.end(), bitmapGlyph->bitmap.buffer, bitmapGlyph->bitmap.buffer + (bitmapGlyph->bitmap.width * bitmapGlyph->bitmap.rows));
 
+			//FT_Done_Glyph(effectGlyph);
 #else
 			error = FT_Render_Glyph(face->glyph, FT_RENDER_MODE_NORMAL);
 			if (error != 0)
@@ -245,6 +260,8 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 		}
 	}
 
+	const int32_t ExtraSize = 1;
+
 	// now work out the atlas size that will fit
 	bool didAtlasFit = false;
 	while (!didAtlasFit)
@@ -258,11 +275,11 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 			if (glyph.totalHeight > _maxCharHeight)
 				_maxCharHeight = glyph.totalHeight;
 
-			if (x + glyph.width >= currentAtlasSize)
+			if (x + glyph.width + ExtraSize >= currentAtlasSize)
 			{
 				uint32_t delta = currentAtlasSize - x;
 
-				y += _maxCharHeight + 1;
+				y += _maxCharHeight + 1 /*+ ExtraSize*/;
 				x = 0;
 
 				// we filled up the atlas, so double the size and start again
@@ -286,7 +303,10 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 				break;
 			}
 
-			x += glyph.width + 1;
+			//int32_t effectOffsetX = (glyph.width - glyph.innerWidth) / 2;
+			//int32_t effectOffsetY = (glyph.height - glyph.innerHeight) / 2;
+
+			x += glyph.width + 1 + ExtraSize;
 		}
 
 		if (didFit)
@@ -312,14 +332,14 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 		if (glyph.totalHeight > _maxCharHeight)
 			_maxCharHeight = glyph.totalHeight;
 
-		if (x + glyph.width >= currentAtlasSize)
+		if (x + glyph.width + ExtraSize >= currentAtlasSize)
 		{
 			uint32_t delta = currentAtlasSize - x;
 
 			p += delta;
 			p += currentAtlasSize * (_maxCharHeight);
 
-			y += _maxCharHeight + 1;
+			y += _maxCharHeight + 1 /*+ ExtraSize*/;
 			x = 0;
 
 			//_maxCharHeight = 0;
@@ -342,9 +362,16 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 			LOG_DEBUG("")
 		}*/
 
-		DrawGlyphToFontSheet(glyph.offsetX, baseline + glyph.offsetY, glyph, &glyph.bitmap, p, currentAtlasSize);
+		//DrawGlyphToFontSheet(glyph.offsetX, baseline + glyph.offsetY, glyph.width, glyph.height, glyph, &glyph.effectBitmap, p, currentAtlasSize, glyph.effectData.data(), 0, 0, 0);
 
-		auto w = (glyph.width + 1);
+		int32_t effectOffsetX = (glyph.width - glyph.innerWidth) / 2;
+		int32_t effectOffsetY = (glyph.height - glyph.innerHeight) / 2;
+
+		DrawGlyphToFontSheet(glyph.offsetX + 1, baseline + glyph.offsetY + 1, glyph.innerWidth, glyph.innerHeight, glyph, &glyph.bitmap, p, currentAtlasSize, glyph.pixelData.data(), 0, 0, 0);
+
+		DrawGlyphToFontSheet(glyph.offsetX /*+ effectOffsetX*/, baseline + glyph.offsetY /*+ effectOffsetY*/, glyph.innerWidth, glyph.innerHeight, glyph, &glyph.bitmap, p, currentAtlasSize, glyph.pixelData.data(), 255, 255, 255);
+
+		auto w = glyph.width + 1 + ExtraSize;
 		p += w;
 		x += w;
 	}
@@ -400,13 +427,13 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 	return true;
 }
 
-void FreeTypeImporter::DrawGlyphToFontSheet(int32_t xoffset, int32_t yoffset, GlyphDesc& glyph, FT_Bitmap* bm, uint32_t* data, uint32_t atlasSize)
+void FreeTypeImporter::DrawGlyphToFontSheet(int32_t xoffset, int32_t yoffset, int32_t width, int32_t height, GlyphDesc& glyph, FT_Bitmap* bm, uint32_t* data, uint32_t atlasSize, const uint8_t* src, uint8_t r, uint8_t g, uint8_t b)
 {
-	const uint8_t* src = glyph.pixelData.data();
+	//const uint8_t* src = glyph.pixelData.data();
 	const uint32_t src_pitch = bm->pitch;
 
-	//if (xoffset > 0)
-	//	data += xoffset;
+	if (xoffset > 0)
+		data += xoffset;
 
 	if (yoffset > 0)
 		data += atlasSize * yoffset;
@@ -415,11 +442,19 @@ void FreeTypeImporter::DrawGlyphToFontSheet(int32_t xoffset, int32_t yoffset, Gl
 	{
 	case FT_PIXEL_MODE_GRAY: // Grayscale image, 1 byte per pixel.
 	{
-		for (int32_t y = 0; y < glyph.height; y++, data += atlasSize, src += src_pitch)
+		for (int32_t y = 0; y < height; y++, data += atlasSize, src += src_pitch)
 		{
-			for (int32_t x = 0; x < glyph.width; x++)
+			for (int32_t x = 0; x < width; x++)
 			{
-				data[x] = HEX_RGBA(255, 255, 255, src[x]);
+				//if ((BYTE)(data[x] >> 24) == 0)
+				/*{
+					float t = (float)src[x] / 255.0f;
+					data[x] = (uint32_t)std::lerp((float)data[x], (float)(HEX_RGBA(r, g, b, src[x])), 1.0f - t);
+				}
+				else*/
+				{
+					data[x] = HEX_RGBA(r, g, b, src[x]);
+				}
 			}
 		}
 		break;

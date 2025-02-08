@@ -151,6 +151,16 @@ namespace HexEngine
 		return window;
 	}
 
+	Window* Window::FindFromHandle(HWND handle)
+	{
+		for (auto& win : g_pEnv->_windows)
+		{
+			if (win->GetHandle() == handle)
+				return win;
+		}
+		return nullptr;
+	}
+
 	void Window::RecalculateWindowSize()
 	{
 		GetClientRect(_handle, &_clientRect);

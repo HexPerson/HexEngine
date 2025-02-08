@@ -514,12 +514,14 @@ namespace HexEngine
 
 		RenderOpaque();
 		//AccumulateShadowMaps();
-		//RenderTransparent();
+		
 		
 		if(HEX_HASFLAG(flags, SceneFlags::PostProcessingEnabled))
 			SetStreamlineConstants();	
 
 		_gbuffer.GetDiffuse()->CopyTo(_beautyRT);
+
+		RenderTransparent();
 
 		//RenderWater();
 		//
@@ -1673,27 +1675,21 @@ namespace HexEngine
 	}
 #endif
 
-	//void SceneRenderer::RenderTransparent()
-	//{
-	//	PROFILE();
+	void SceneRenderer::RenderTransparent()
+	{
+		PROFILE();
 
-	//	//_gbufferTransparency.SetAsRenderTargets(
-	//	g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
+		g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
 
-	//	//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::NoCulling);
+		_currentScene->RenderEntities(
+			_currentCamera->GetPVS(),
+			LAYERMASK(Layer::StaticGeometry),
+			MeshRenderFlags::MeshRenderTransparency);
 
-	//	//g_pEnv->_graphicsDevice->bl
-	//	
+		//_beautyRT->CopyTo(_gbuffer.GetDiffuse());
 
-	//	_currentScene->RenderEntities(
-	//		_currentCamera->GetPVS(),
-	//		LAYERMASK(Layer::Particle),
-	//		MeshRenderFlags::MeshRenderNormal);
-
-	//	_compositionRT->BlendTo_Additive(_gbuffer.GetDiffuse());
-
-	//	//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
-	//}
+		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
+	}
 
 	void SceneRenderer::RenderFog()
 	{

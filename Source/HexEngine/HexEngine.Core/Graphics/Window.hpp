@@ -23,6 +23,7 @@ namespace HexEngine
 
 		static Window* Create(int32_t xpos, int32_t ypos, int32_t width, int32_t height, DisplayMode displayMode, const std::string& windowTitle);
 		static void Destroy(Window* window);
+		static Window* FindFromHandle(HWND handle);
 
 		static void GetDesktopResolution(int& width, int& height);
 

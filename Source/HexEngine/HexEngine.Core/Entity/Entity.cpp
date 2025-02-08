@@ -106,6 +106,16 @@ namespace HexEngine
 		_layer = layer;
 	}
 
+	int32_t Entity::GetTag() const
+	{
+		return _tag;
+	}
+
+	void Entity::SetTag(int32_t tag)
+	{
+		_tag = tag;
+	}
+
 	Entity* Entity::GetParent()
 	{
 		return _parent;

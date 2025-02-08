@@ -18,6 +18,12 @@
 
 namespace HexEngine
 {
+	struct DeviceData
+	{
+		IDXGISwapChain* swapchain = nullptr;
+		Texture2D* backbuffer = nullptr;
+		DXGI_SWAP_CHAIN_DESC swapchainDesc;
+	};
 	class GraphicsDeviceD3D11 : public IGraphicsDevice
 	{
 	public:
@@ -41,11 +47,9 @@ namespace HexEngine
 
 		virtual bool AttachToWindow(Window* window) override;
 
-		virtual bool AttachToWindow(HWND handle, uint32_t width, uint32_t height, bool fullscreen) override;
+		virtual void Resize(Window* window, uint32_t width, uint32_t height) override;
 
-		virtual void Resize(uint32_t width, uint32_t height) override;
-
-		virtual Texture2D* GetBackBuffer() override;
+		virtual Texture2D* GetBackBuffer(Window* window = nullptr) override;
 
 		virtual Texture2D* CreateTexture(ITexture2D* clone) override;
 
@@ -191,9 +195,9 @@ namespace HexEngine
 
 		virtual uint32_t GetBoundResourceIndex() override;
 
-		virtual void BeginFrame(ITexture2D* depthBuffer) override;
+		virtual void BeginFrame(Window* window, ITexture2D* depthBuffer) override;
 
-		virtual void EndFrame() override;
+		virtual void EndFrame(Window* window) override;
 
 		virtual void SetViewports(const std::vector<D3D11_VIEWPORT>& viewports) override;
 
@@ -232,15 +236,15 @@ namespace HexEngine
 
 		std::vector<ScreenDisplayMode> _supportedScreenDisplayModes;
 
-		DXGI_SWAP_CHAIN_DESC _swapChainDesc;
+		//DXGI_SWAP_CHAIN_DESC _swapChainDesc;
 
 		D3D_FEATURE_LEVEL _featureLevelSupported = D3D_FEATURE_LEVEL::D3D_FEATURE_LEVEL_11_0;
 		ID3D11Device* _device = nullptr;
 		ID3D11DeviceContext* _deviceContext = nullptr;
-		IDXGISwapChain* _swapChain = nullptr;
-		ID3D11RenderTargetView* _renderTargetView = nullptr;
-		Texture2D* _backBuffer = nullptr;
-		ID3D11ShaderResourceView* _renderTargetSRV = nullptr;
+		//IDXGISwapChain* _swapChain = nullptr;
+		//ID3D11RenderTargetView* _renderTargetView = nullptr;
+		//Texture2D* _backBuffer = nullptr;
+		//ID3D11ShaderResourceView* _renderTargetSRV = nullptr;
 		RenderState _prevRenderState;
 		std::vector<Mesh*> _meshesToRender;
 		ConstantBuffer* _engineConstantBuffers[(uint32_t)EngineConstantBuffer::NumEngineConstantBuffers] = { nullptr };
@@ -250,6 +254,8 @@ namespace HexEngine
 		//ID3D11RasterizerState* _rasterStateCullNone = nullptr;
 		ID3D11BlendState* _subtractivetBlendState = nullptr;
 		//ID3D11Texture2D* _depthStencilBuffer = nullptr;
+
+		std::unordered_map<Window*, DeviceData> _deviceData;
 		
 
 		//ShadowMap* _shadowMap[4];

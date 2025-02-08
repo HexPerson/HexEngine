@@ -13,7 +13,7 @@ namespace HexEngine
 
 		auto oldSize = _pvs.size();
 		_pvs.clear();
-		_pvs.reserve(oldSize);
+		//_pvs.reserve(oldSize);
 
 		_forceRebuild = true;
 	}
@@ -135,7 +135,7 @@ namespace HexEngine
 
 
 		auto end = _pvs.end();
-		auto it = end;
+		//auto it = end;
 
 		for (auto&& component : componentIterator)
 		{
@@ -213,30 +213,30 @@ namespace HexEngine
 				if (!meshInstance)
 					continue;
 
-				it = std::find_if(_pvs.begin(), _pvs.end(), [material, mesh](const MaterialEntityVectorPair& p) {
+				/*it = std::find_if(_pvs.begin(), _pvs.end(), [material, mesh](const MaterialEntityVectorPair& p) {
 					if (p.first == nullptr)
 						return false;
 					return p.first->Equals(*material);
-					});
+					});*/
 
-				if (it == _pvs.end())
+				//if (it == _pvs.end())
 				{
-					RenderState rs;
+					//MaterialEntityVectorPair newEntry = { material, {} };
 
-					//auto& newEntry = _pvs[material];
+					auto& it = _pvs[material];
 
-					MaterialEntityVectorPair newEntry = { material, {} };
+					if (it.size() == 0)
+						it.reserve(256);
 
-					_pvs.push_back(newEntry);
+					_pvs[material].push_back({ mesh,entity });
+					//_pvs.push_back(newEntry);
 
-					it = _pvs.end() - 1;
+					//it = _pvs.end() - 1;
 
-					it->second.reserve(256);
-					//it->second.push_back({ mesh,entity });
+					//it->second.reserve(256);
 				}
-				//else
 				{
-					bool found = false;
+					/*bool found = false;
 					for (auto&& pair : it->second)
 					{
 						if (pair.second == entity && pair.first == mesh)
@@ -245,16 +245,28 @@ namespace HexEngine
 							break;
 						}
 					}
-					if (!found)
-						it->second.push_back({ mesh,entity });
+					if (!found)*/
+					{
+						//it->second.push_back({ mesh,entity });
+
+						
+					}
 				}
 			}
 		}
 
-		//std::sort(_pvs.begin(), _pvs.end(),
-			
+		for (auto& mevp : _pvs)
+		{
+			auto& mev = mevp.second;
 
-		//scene->Unlock();
+			std::sort(mev.begin(), mev.end(),
+				[](MeshEntityPair& left, MeshEntityPair& right)
+				{
+					return left.first->GetInstance()->GetInstanceId() < right.first->GetInstance()->GetInstanceId();
+				}
+			);
+		}
+		//std::sort(_pvs.begin(), _pvs.end(),
 	}
 
 	bool PVS::IsEntityVisible(Entity* entity, const PVSParams& params)

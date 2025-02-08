@@ -29,9 +29,10 @@ namespace HexCreator
             /// any windows.
             ///
             Settings settings;
-            //settings.force_cpu_renderer = true;
+            settings.force_cpu_renderer = true;
             Config config;
             config.scroll_timer_delay = 1.0 / 90.0;
+            //config.force_repaint = true;
             
             auto& platform = ultralight::Platform::instance();
 
@@ -63,6 +64,10 @@ namespace HexCreator
                 (uint32_t)((float)height / scale)/*,
                 false,
                 kWindowFlags_Titled | kWindowFlags_Maximizable | kWindowFlags_Resizable*/);
+
+            Window* window2 = new Window(800, 600);
+            window2->set_listener(this);
+            //CreateTile(800, 600, 1.0f);
 
             ///
             /// Set the title of our window.
@@ -122,6 +127,22 @@ namespace HexCreator
             return tile;
         }
 
+        /*Tile* CreateDialogWin(int32_t width, int32_t height, double scale)
+        {
+            Window* window = new Window(width, height);
+
+            Tile* tile = new Tile(_renderer, width, height, scale);
+
+            tile->view()->LoadURL("file:///sidebar.html");
+            tile->view()->set_view_listener(this);
+            tile->view()->set_load_listener(this);
+            tile->view()->Focus();
+
+            _tiles.push_back(tile);
+
+            return tile;
+        }*/
+
         virtual ~CreatorApp() {}
 
         virtual bool OnInputEvent(InputEvent event, InputData* data) override
@@ -135,6 +156,24 @@ namespace HexCreator
                 evt.x = data->MouseMove.x;
                 evt.y = data->MouseMove.y;
                 evt.button = ultralight::MouseEvent::Button::kButton_None;
+                OnMouseEvent(evt);
+                break;
+            }
+
+            case InputEvent::MouseDown:
+            {
+                ultralight::MouseEvent evt;
+                evt.type = ultralight::MouseEvent::kType_MouseDown;
+                evt.x = data->MouseDown.xpos;
+                evt.y = data->MouseDown.ypos;
+
+                if(data->MouseDown.button == VK_LBUTTON)
+                    evt.button = ultralight::MouseEvent::Button::kButton_Left;
+                else if (data->MouseDown.button == VK_RBUTTON)
+                    evt.button = ultralight::MouseEvent::Button::kButton_Right;
+                else if (data->MouseDown.button == VK_MBUTTON)
+                    evt.button = ultralight::MouseEvent::Button::kButton_Middle;
+
                 OnMouseEvent(evt);
                 break;
             }
@@ -198,6 +237,8 @@ namespace HexCreator
         {
             for (auto& tile : _tiles)
             {
+                //tile->view()->Focus();
+                //tile->view()->Focus();
                 tile->view()->FireMouseEvent(evt);
             }
 
@@ -216,6 +257,7 @@ namespace HexCreator
 
         void Run() {
             _renderer->Update();
+            _renderer->RefreshDisplay(0);
             _renderer->Render();
             //_app->Run();
         }

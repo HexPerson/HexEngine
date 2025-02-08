@@ -63,6 +63,46 @@ namespace HexEditor
 	{
 	}
 
+	void EditorExtension::OnFileChangeEvent(const DirectoryWatchInfo& info, const FileChangeActionMap& actionMap)
+	{
+		std::map<IResourceLoader*, std::vector<fs::path>> addedFiles;
+
+		for (auto& action : actionMap)
+		{
+			if (action.first == FILE_ACTION_ADDED)
+			{
+				for (auto& fileInfo : action.second)
+				{
+					IResourceLoader* resourceLoader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(fileInfo.path.extension().string());
+
+					if (resourceLoader)
+					{
+						auto fileSystem = g_pEnv->_resourceSystem->FindFileSystemByPath(fileInfo.path);
+
+						if (fileSystem)
+						{
+							std::wstring relative = (fileSystem->GetName() + L".") + fs::relative(fileInfo.path, fileSystem->GetDataDirectory()).wstring();
+
+							addedFiles[resourceLoader].push_back(relative);
+						}
+					}
+				}
+			}
+		}
+
+		for (auto& added : addedFiles)
+		{
+			// if the editor dialog is null, we should just presume that no import options are needed and immediately load the resource
+			//if (auto dlg = added.first->CreateEditorDialog(added.second); dlg == nullptr)
+			{
+				for (auto& path : added.second)
+				{
+					g_pEnv->_resourceSystem->LoadResource(path);
+				}
+			}
+		}
+	}
+
 	void EditorExtension::CreateFileSystem(const fs::path& path)
 	{
 		// Create the filesystem for the new project
@@ -74,7 +114,7 @@ namespace HexEditor
 
 		g_pEditor->_projectFS = new FileSystem(L"GameData");
 		g_pEditor->_projectFS->SetBaseDirectory(path);
-		g_pEditor->_projectFS->CreateChangeNotifier(g_pEditor->_projectFS->GetDataDirectory());
+		g_pEditor->_projectFS->CreateChangeNotifier(g_pEditor->_projectFS->GetDataDirectory(), std::bind(&EditorExtension::OnFileChangeEvent, this, std::placeholders::_1, std::placeholders::_2));
 
 		g_pEnv->_resourceSystem->AddFileSystem(g_pEditor->_projectFS);
 

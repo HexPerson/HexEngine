@@ -26,7 +26,7 @@ namespace HexEngine
 
 		virtual float GetAspectRatio() override;
 
-		virtual void OnResizeWindow(uint32_t width, uint32_t height, HWND handle = 0) override;
+		virtual void OnResizeWindow(Window* window, uint32_t width, uint32_t height) override;
 
 		virtual void GetScreenSize(uint32_t& width, uint32_t& height) const override;
 

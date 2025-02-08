@@ -4,6 +4,7 @@
 
 #include "../Required.hpp"
 #include "../Graphics/MeshLoader.hpp"
+#include "../Graphics/Window.hpp"
 
 namespace HexEngine
 {
@@ -34,7 +35,7 @@ namespace HexEngine
 		class SceneRenderer* _sceneRenderer = nullptr;
 		class MeshPrimitives* _meshPrimitives = nullptr;		
 		class InputSystem* _inputSystem = nullptr;
-		class Window* _window = nullptr;
+		std::vector<Window*> _windows;
 		class DebugRenderer* _debugRenderer = nullptr;
 		class IPhysicsSystem* _physicsSystem = nullptr;
 		class IFontImporter* _fontImporter = nullptr;
@@ -67,7 +68,7 @@ namespace HexEngine
 
 		virtual float GetAspectRatio() = 0;
 
-		virtual void OnResizeWindow(uint32_t width, uint32_t height, HWND handle = 0) = 0;
+		virtual void OnResizeWindow(Window* window, uint32_t width, uint32_t height) = 0;
 
 		virtual void GetScreenSize(uint32_t& width, uint32_t& height) const = 0;
 

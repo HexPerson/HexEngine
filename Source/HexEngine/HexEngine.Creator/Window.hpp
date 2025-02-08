@@ -23,17 +23,17 @@ namespace HexCreator
 
         virtual ~Surface()
         {
+            SAFE_DELETE(_staging);
             SAFE_DELETE(_texture);
         }
 
-        virtual uint32_t width() const override { return _texture->GetWidth(); }
+        virtual uint32_t width() const override { return _staging->GetWidth(); }
 
-        virtual uint32_t height() const override { return _texture->GetHeight(); }
+        virtual uint32_t height() const override { return _staging->GetHeight(); }
 
         virtual uint32_t row_bytes() const override
         {
-
-            return _texture->GetWidth() * 4;
+            return _staging->GetWidth() * 4;
         }
 
         virtual size_t size() const override { return row_bytes() * height(); }
@@ -41,9 +41,10 @@ namespace HexCreator
         virtual void* LockPixels() override
         {
             int32_t rowPitch;
-            auto mapped = _texture->LockPixels(&rowPitch);
+            auto mapped = _staging->LockPixels(&rowPitch);
 
-            if (mapped)
+            // ignore this
+            /*if (mapped)
             {
                 if (rowPitch != row_bytes())
                 {
@@ -52,24 +53,42 @@ namespace HexCreator
                     return nullptr;
                 }
 
-            }
+            }*/
 
             return mapped;
         }
 
         virtual void UnlockPixels() override
         {
-            _texture->UnlockPixels();
+            _staging->UnlockPixels();
         }
 
         virtual void Resize(uint32_t width, uint32_t height) override
         {
             SAFE_DELETE(_texture);
+            SAFE_DELETE(_staging);
+
             _texture = g_pEnv->_graphicsDevice->CreateTexture2D(
                 width, height,
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 1,
-                D3D11_BIND_SHADER_RESOURCE /*| D3D11_BIND_RENDER_TARGET*/,
+                D3D11_BIND_SHADER_RESOURCE,
+                0,
+                1,
+                0,
+                nullptr,
+                (D3D11_CPU_ACCESS_FLAG)0,
+                D3D11_RTV_DIMENSION_UNKNOWN,
+                D3D11_UAV_DIMENSION_UNKNOWN,
+                D3D11_SRV_DIMENSION_TEXTURE2D,
+                D3D11_DSV_DIMENSION_UNKNOWN,
+                D3D11_USAGE_DEFAULT);
+
+            _staging = g_pEnv->_graphicsDevice->CreateTexture2D(
+                width, height,
+                DXGI_FORMAT_B8G8R8A8_UNORM,
+                1,
+                0/*D3D11_BIND_SHADER_RESOURCE*/,
                 0,
                 1,
                 0,
@@ -77,13 +96,33 @@ namespace HexCreator
                 D3D11_CPU_ACCESS_WRITE,
                 D3D11_RTV_DIMENSION_UNKNOWN,
                 D3D11_UAV_DIMENSION_UNKNOWN,
-                D3D11_SRV_DIMENSION_TEXTURE2D,
+                D3D11_SRV_DIMENSION_UNKNOWN,
                 D3D11_DSV_DIMENSION_UNKNOWN,
-                D3D11_USAGE_DYNAMIC);
+                D3D11_USAGE_STAGING);
+        }
+
+        void Update()
+        {
+            if (dirty_bounds_.IsEmpty() == false)
+            {
+                RECT rect = {
+                    dirty_bounds_.x(),
+                    dirty_bounds_.y(),
+                    dirty_bounds_.x() + dirty_bounds_.width(),
+                    dirty_bounds_.y() + dirty_bounds_.height()
+                };
+
+                _staging->CopyTo(_texture,
+                    rect,
+                    rect);
+
+                this->ClearDirtyBounds();
+            }
         }
 
 	//private:
 		ITexture2D* _texture = nullptr;
+        ITexture2D* _staging = nullptr;
 	};
 
     class Tile

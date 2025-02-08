@@ -135,6 +135,18 @@ namespace HexEngine
 		return nullptr;
 	}
 
+	FileSystem* ResourceSystem::FindFileSystemByPath(const fs::path& path)
+	{
+		for (auto& fs : _fileSystems)
+		{
+			auto rel = fs::relative(path, fs->GetBaseDirectory());
+
+			if (!rel.empty() && rel.native()[0] != '.')
+				return fs;
+		}
+		return nullptr;
+	}
+
 	std::shared_ptr<IResource> ResourceSystem::LoadResource(const fs::path& localPath, const ResourceLoadOptions* options /*= nullptr*/)
 	{
 		auto it = _loadedResources.find(localPath);
@@ -194,7 +206,7 @@ namespace HexEngine
 
 			if (fs->DoesAbsolutePathExist(fullPath) == false)
 			{
-				LOG_CRIT("Cannot load resource because the path is not valid");
+				LOG_CRIT("Cannot load resource '%s' because the path does not exist", fullPath.string().c_str());
 				continue;
 			}
 

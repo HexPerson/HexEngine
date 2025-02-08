@@ -31,7 +31,7 @@ protected:
 
 private:
 	bool LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_Face face, int32_t size, const FontImportOptions* importOptions);
-	void DrawGlyphToFontSheet(int32_t xoffset, int32_t yoffset, GlyphDesc& glyph, FT_Bitmap* bm, uint32_t* data, uint32_t atlasSize);
+	void DrawGlyphToFontSheet(int32_t xoffset, int32_t yoffset, int32_t width, int32_t height, GlyphDesc& glyph, FT_Bitmap* bm, uint32_t* data, uint32_t atlasSize, const uint8_t* src, uint8_t r, uint8_t g, uint8_t b);
 
 private:
 	FT_Library _library;

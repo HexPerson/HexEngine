@@ -92,6 +92,7 @@ namespace HexEditor
 		// copy from the standard material just so that the shaders are valid
 		material->SetPaths(newMaterialPath, _currentlyBrowsedFS);
 		material->CopyFrom(Material::GetDefaultMaterial());
+		material->SetLoader(g_pEnv->_resourceSystem->FindResourceLoaderForExtension(".hmat"));
 		material->Save();
 
 		//file.Close();	
@@ -215,7 +216,7 @@ namespace HexEditor
 							std::wstring relative = (_currentlyBrowsedFS->GetName() + L".") + fs::relative(_hoveredAsset->path, _currentlyBrowsedFS->GetDataDirectory()).wstring();
 							
 							// if the editor dialog is null, we should just presume that no import options are needed and immediately load the resource
-							if (auto dlg = resourceLoader->CreateEditorDialog(relative, _currentlyBrowsedFS); dlg == nullptr)
+							if (auto dlg = resourceLoader->CreateEditorDialog({ relative }); dlg == nullptr)
 							{
 								g_pEnv->_resourceSystem->LoadResource(_hoveredAsset->path);
 							}

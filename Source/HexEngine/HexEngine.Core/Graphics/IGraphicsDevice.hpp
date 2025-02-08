@@ -204,11 +204,9 @@ namespace HexEngine
 
 		virtual bool AttachToWindow(Window* window) = 0;
 
-		virtual bool AttachToWindow(HWND handle, uint32_t width, uint32_t height, bool fullscreen) = 0;
+		virtual void Resize(Window* window, uint32_t width, uint32_t height) = 0;
 
-		virtual void Resize(uint32_t width, uint32_t height) = 0;
-
-		virtual ITexture2D* GetBackBuffer() = 0;
+		virtual ITexture2D* GetBackBuffer(Window* window = nullptr) = 0;
 
 		virtual ITexture2D* CreateTexture(ITexture2D* clone) = 0;
 
@@ -355,9 +353,9 @@ namespace HexEngine
 
 		//virtual void BindShadowMaps() = 0;
 
-		virtual void BeginFrame(ITexture2D* depthBuffer=nullptr) = 0;
+		virtual void BeginFrame(Window* window, ITexture2D* depthBuffer=nullptr) = 0;
 
-		virtual void EndFrame() = 0;
+		virtual void EndFrame(Window* window) = 0;
 
 		virtual void SetViewports(const std::vector<D3D11_VIEWPORT>& viewports) = 0;
 

@@ -117,6 +117,8 @@ namespace HexEngine
 		//gfxDevice->SetBlendState(BlendState::Transparency);
 
 		//_baseDrawList.Clear();
+
+		_currentCamera = g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera();
 	}
 
 	void GuiRenderer::EnableScaling(bool enable)

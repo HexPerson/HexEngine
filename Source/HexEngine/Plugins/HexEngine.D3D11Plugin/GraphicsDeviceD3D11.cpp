@@ -236,10 +236,6 @@ namespace HexEngine
 	{
 		SAFE_DELETE(_states);
 
-		SAFE_DELETE(_backBuffer);
-		SAFE_RELEASE(_renderTargetView);
-		SAFE_RELEASE(_renderTargetSRV);
-
 		for (int i = 0; i < (int32_t)EngineConstantBuffer::NumEngineConstantBuffers; ++i)
 		{
 			SAFE_DELETE(_engineConstantBuffers[i]);
@@ -267,14 +263,17 @@ namespace HexEngine
 		SAFE_DELETE(_textureLoader);
 
 		SAFE_RELEASE(_deviceContext);
-		SAFE_RELEASE(_swapChain);
+
+		for (auto& device : _deviceData)
+		{
+			SAFE_DELETE(device.second.backbuffer);
+			SAFE_RELEASE(device.second.swapchain);
+		}		
 
 		SAFE_RELEASE(_dxgiOutput);
 		SAFE_RELEASE(_dxgiFactory);
 		SAFE_RELEASE(_dxgiAdapter);
-		SAFE_RELEASE(_dxgiDevice);
-
-		
+		SAFE_RELEASE(_dxgiDevice);		
 
 #if 0//def _DEBUG
 		ID3D11Debug* debugDev;
@@ -294,14 +293,10 @@ namespace HexEngine
 
 	bool GraphicsDeviceD3D11::AttachToWindow(Window* window)
 	{
-		return AttachToWindow(window->GetHandle(), window->GetClientWidth(), window->GetClientHeight(), window->GetDisplayMode() == DisplayMode::Fullscreen);
-	}
+		auto& device = _deviceData[window];
 
-	bool GraphicsDeviceD3D11::AttachToWindow(HWND handle, uint32_t width, uint32_t height, bool fullscreen)
-	{
-		
-		_bbufferWidth = width;
-		_bbufferHeight = height;
+		_bbufferWidth = window->GetClientWidth();
+		_bbufferHeight = window->GetClientHeight();
 
 		HRESULT hr;
 
@@ -321,36 +316,38 @@ namespace HexEngine
 			}
 		}*/
 
+		bool fullscreen = (window->GetDisplayMode() == DisplayMode::Fullscreen);
+
 		DXGI_SWAP_CHAIN_DESC sd;
 		ZeroMemory(&sd, sizeof(sd));
-		sd.BufferCount = 3;
-		sd.BufferDesc.Width = width;
-		sd.BufferDesc.Height = height;
+		sd.BufferCount = 2;
+		sd.BufferDesc.Width = window->GetClientWidth();
+		sd.BufferDesc.Height = window->GetClientHeight();
 		sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;// DXGI_FORMAT_R8G8B8A8_UNORM;// DXGI_FORMAT_R10G10B10A2_UNORM;
 		sd.BufferDesc.RefreshRate.Numerator = pDm ? pDm->refresh.numerator : 0;// 60;
 		sd.BufferDesc.RefreshRate.Denominator = pDm ? pDm->refresh.denominator : 1;
 		sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
-		sd.OutputWindow = handle;
+		sd.OutputWindow = window->GetHandle();
 		sd.SampleDesc.Count = MsaaLevel;
 		sd.SampleDesc.Quality = quality - 1;
 		sd.Windowed = !fullscreen;
 		sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;// MsaaLevel > 1 ? DXGI_SWAP_EFFECT_DISCARD : DXGI_SWAP_EFFECT_FLIP_DISCARD;
 		sd.Flags = fullscreen ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH : 0;
 
-		CHECK_HR(_dxgiFactory->CreateSwapChain(_device, &sd, &_swapChain));
+		CHECK_HR(_dxgiFactory->CreateSwapChain(_device, &sd, &device.swapchain));
 
 		if (sd.Windowed == FALSE)
 		{
-			_swapChain->SetFullscreenState(TRUE, NULL);
+			device.swapchain->SetFullscreenState(TRUE, NULL);
 		}
 
-		memcpy(&_swapChainDesc, &sd, sizeof(_swapChainDesc));
+		memcpy(&device.swapchainDesc, &sd, sizeof(sd));
 
-		CHECK_HR(_dxgiFactory->MakeWindowAssociation(handle, DXGI_MWA_NO_ALT_ENTER));
+		CHECK_HR(_dxgiFactory->MakeWindowAssociation(window->GetHandle(), DXGI_MWA_NO_ALT_ENTER));
 
 		// Create a render target view
 		ID3D11Texture2D* pBackBuffer = nullptr;
-		hr = _swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer));
+		hr = device.swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer));
 		if (FAILED(hr))
 		{
 			//DBG("GetBuffer failure 0x%X", hr);
@@ -361,54 +358,59 @@ namespace HexEngine
 		rtvDesc.Format = sd.BufferDesc.Format;
 		rtvDesc.ViewDimension = MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
 
-		CHECK_HR(_device->CreateRenderTargetView(pBackBuffer, &rtvDesc, &_renderTargetView));
+		ID3D11RenderTargetView* renderTargetView = nullptr;
+		CHECK_HR(_device->CreateRenderTargetView(pBackBuffer, &rtvDesc, &renderTargetView));
 
-		_backBuffer = new Texture2D;
-		_backBuffer->_renderTargetView = _renderTargetView;
-		_renderTargetView->AddRef();
+		device.backbuffer = new Texture2D;
+		device.backbuffer->_renderTargetView = renderTargetView;
+		renderTargetView->AddRef();
 
-		_backBuffer->_format = rtvDesc.Format;
-		_backBuffer->_width = width;
-		_backBuffer->_height = height;
+		device.backbuffer->_format = rtvDesc.Format;
+		device.backbuffer->_width = sd.BufferDesc.Width;
+		device.backbuffer->_height = sd.BufferDesc.Height;
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.Format = sd.BufferDesc.Format;// _SRGB;
 		srvDesc.ViewDimension = MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
 
-		_device->CreateShaderResourceView(pBackBuffer, nullptr, &_renderTargetSRV);
+		ID3D11ShaderResourceView* renderTargetSRV = nullptr;
+		_device->CreateShaderResourceView(pBackBuffer, nullptr, &renderTargetSRV);
+
+		device.backbuffer->_shaderResourceView = renderTargetSRV;
+		renderTargetSRV->AddRef();
 
 		pBackBuffer->Release();
 
 		return CreateInternal();
 	}
 
-	void GraphicsDeviceD3D11::Resize(uint32_t width, uint32_t height)
+	void GraphicsDeviceD3D11::Resize(Window* window, uint32_t width, uint32_t height)
 	{
-		if (!_swapChain)
+		auto it = _deviceData.find(window);
+
+		if (it == _deviceData.end())
+		{
+			LOG_CRIT("Trying to resize and unknown device");
 			return;
+		}
+
+		auto device = it->second;
 
 		_bbufferWidth = width;
 		_bbufferHeight = height;
 
-		SAFE_DELETE(_backBuffer);
-		SAFE_RELEASE(_renderTargetView);
-		SAFE_RELEASE(_renderTargetSRV);
-
-		//_gbuffer.Destroy();
-		//SAFE_DELETE(_composedTexture);
+		SAFE_DELETE(device.backbuffer);
 
 		LOG_DEBUG("Resizing graphics device to %dx%d", width, height);
 
-		_swapChainDesc.BufferDesc.Width = width;
-		_swapChainDesc.BufferDesc.Height = height;
+		device.swapchainDesc.BufferDesc.Width = width;
+		device.swapchainDesc.BufferDesc.Height = height;
 		
-		//_swapChain->ResizeTarget(&_swapChainDesc.BufferDesc);
-
-		CHECK_HR(_swapChain->ResizeBuffers(3, width, height, _swapChainDesc.BufferDesc.Format, 0));
+		CHECK_HR(device.swapchain->ResizeBuffers(3, width, height, device.swapchainDesc.BufferDesc.Format, 0));
 
 		// Create a render target view
 		ID3D11Texture2D* pBackBuffer = nullptr;
-		HRESULT hr = _swapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer));
+		HRESULT hr = device.swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer));
 		if (FAILED(hr))
 		{
 			//DBG("GetBuffer failure 0x%X", hr);
@@ -419,21 +421,26 @@ namespace HexEngine
 		rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;// DXGI_FORMAT_R8G8B8A8_UNORM;// _SRGB;
 		rtvDesc.ViewDimension = MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
 
-		CHECK_HR(_device->CreateRenderTargetView(pBackBuffer, &rtvDesc, &_renderTargetView));
+		ID3D11RenderTargetView* renderTargetView = nullptr;
+		CHECK_HR(_device->CreateRenderTargetView(pBackBuffer, &rtvDesc, &renderTargetView));
 
-		_backBuffer = new Texture2D;
-		_backBuffer->_renderTargetView = _renderTargetView;
-		_renderTargetView->AddRef();
+		device.backbuffer = new Texture2D;
+		device.backbuffer->_renderTargetView = renderTargetView;
+		renderTargetView->AddRef();
 
-		_backBuffer->_format = rtvDesc.Format;
-		_backBuffer->_width = width;
-		_backBuffer->_height = height;
+		device.backbuffer->_format = rtvDesc.Format;
+		device.backbuffer->_width = width;
+		device.backbuffer->_height = height;
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;// _SRGB;
 		srvDesc.ViewDimension = MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
 
-		CHECK_HR(_device->CreateShaderResourceView(pBackBuffer, nullptr, &_renderTargetSRV));
+		ID3D11ShaderResourceView* renderTargetSRV = nullptr;
+		CHECK_HR(_device->CreateShaderResourceView(pBackBuffer, nullptr, &renderTargetSRV));
+
+		device.backbuffer->_shaderResourceView = renderTargetSRV;
+		renderTargetSRV->AddRef();
 
 		pBackBuffer->Release();		
 
@@ -563,9 +570,23 @@ namespace HexEngine
 	//	}
 	//}
 
-	Texture2D* GraphicsDeviceD3D11::GetBackBuffer()
+	Texture2D* GraphicsDeviceD3D11::GetBackBuffer(Window* window)
 	{
-		return _backBuffer;
+		// if no window is specified use the first back buffer that was created
+		if (window == nullptr)
+		{
+			if (_deviceData.size() > 0)
+				return _deviceData.begin()->second.backbuffer;
+		}
+		else
+		{
+			auto it = _deviceData.find(window);
+
+			if (it == _deviceData.end())
+				return nullptr;
+
+			return it->second.backbuffer;
+		}
 	}
 
 	Texture2D* GraphicsDeviceD3D11::CreateTexture(ITexture2D* clone)
@@ -690,9 +711,8 @@ namespace HexEngine
 		desc.CPUAccessFlags = access;//(usage == D3D11_USAGE_STAGING ? (D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE) : 0);
 		desc.MiscFlags = miscFlags;// D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;// (usage == D3D11_USAGE_STAGING ? (D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) : 0);
 
-
 		ID3D11Texture2D* d3dTexture;
-		CHECK_HR(_device->CreateTexture2D(&desc, nullptr, &d3dTexture));
+		CHECK_HR(_device->CreateTexture2D(&desc, initialData, &d3dTexture));
 
 		Texture2D* texture = new Texture2D;
 
@@ -1661,8 +1681,14 @@ namespace HexEngine
 		_deviceContext->PSSetSamplers(0, 5, samplers);
 	}
 
-	void GraphicsDeviceD3D11::BeginFrame(ITexture2D* depthBuffer)
+	void GraphicsDeviceD3D11::BeginFrame(Window* window, ITexture2D* depthBuffer)
 	{
+		auto it = _deviceData.find(window);
+
+		if (it == _deviceData.end())
+			return;
+
+		
 		//std::lock_guard<std::recursive_mutex> lock(_lock);
 
 		assert(_currentlyBoundSRVIndex == 0 && "There are unbound SRVs from the previous frame!");
@@ -1674,29 +1700,34 @@ namespace HexEngine
 		ID3D11SamplerState* samplers[] = { _states->AnisotropicWrap(), _texSamplerComparison, _states->PointWrap(), _texSamplerMirrored, _states->LinearWrap() };
 		_deviceContext->PSSetSamplers(0, 5, samplers);
 
-		_backBuffer->ClearRenderTargetView(math::Color(HEX_RGBA_TO_FLOAT4(83,92,111,255)));
+		it->second.backbuffer->ClearRenderTargetView(math::Color(HEX_RGBA_TO_FLOAT4(83,92,111,255)));
 
-		SetRenderTarget(_backBuffer, depthBuffer);
+		SetRenderTarget(it->second.backbuffer, depthBuffer);
 	}
 
 
-	void GraphicsDeviceD3D11::EndFrame()
+	void GraphicsDeviceD3D11::EndFrame(Window* window)
 	{
+		auto it = _deviceData.find(window);
+
+		if (it == _deviceData.end())
+			return;
+
 		//std::lock_guard<std::recursive_mutex> lock(_lock);
 
 		// Finally present the scene
 		//
 		if (r_vsync._val.i32 == 0)
 		{
-			CHECK_HR(_swapChain->Present(0, 0));
+			CHECK_HR(it->second.swapchain->Present(0, 0));
 		}
 		else if (r_vsync._val.i32 == 1)
 		{
-			CHECK_HR(_swapChain->Present(1, 0));
+			CHECK_HR(it->second.swapchain->Present(1, 0));
 		}
 		else if (r_vsync._val.i32 == 2)
 		{
-			CHECK_HR(_swapChain->Present(g_pEnv->_timeManager->_frameCount % 2 == 0, 0));
+			CHECK_HR(it->second.swapchain->Present(g_pEnv->_timeManager->_frameCount % 2 == 0, 0));
 		}
 		UnbindAllPixelShaderResources();
 	}

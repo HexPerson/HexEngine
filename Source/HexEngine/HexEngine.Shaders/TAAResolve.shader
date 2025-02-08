@@ -69,8 +69,8 @@
 
 		float oldDepth = depthTexture.Sample(LinearSampler, prevousPixelPos).w;
 
-		if (oldDepth - depth > FRAME_DEPTH_MAX_DIFF || (depth == g_frustumDepths[3] && oldDepth == g_frustumDepths[3]))
-			return float4(colour, 1.0f);
+		//if (oldDepth - depth > FRAME_DEPTH_MAX_DIFF || (depth == g_frustumDepths[3] && oldDepth == g_frustumDepths[3]))
+		//	return float4(1,0,0,1);//float4(colour, 1.0f);
 
 		// Box filter
 		// Apply clamping on the history color.
@@ -87,6 +87,8 @@
 		float modulationFactor = 0.9f;// *velocityConfidence;
 
 		float3 resolvedColour = lerp(colour, history, modulationFactor);
+
+		//return float4(1,0,0,1);
 
 		return float4(resolvedColour, 1.0f);
 	}

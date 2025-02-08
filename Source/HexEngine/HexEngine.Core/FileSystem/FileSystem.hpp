@@ -13,6 +13,13 @@ namespace HexEngine
 		HANDLE event;
 	};
 
+	struct FileChangeInfo
+	{
+		fs::path path;
+	};
+
+	using FileChangeActionMap = std::map<uint32_t, std::vector<FileChangeInfo>>;
+
 	class FileSystem
 	{
 	public:
@@ -42,16 +49,16 @@ namespace HexEngine
 
 		void CreateSubDirectories(const fs::path& absolutePath);
 
-		bool CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(const DirectoryWatchInfo&, PFILE_NOTIFY_INFORMATION)> onFileChangeCB=nullptr);
+		bool CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(const DirectoryWatchInfo&, const FileChangeActionMap&)> onFileChangeCB=nullptr);
 
 		virtual void GetFileData(const fs::path& absolutePath, std::vector<uint8_t>& data);
 
 		std::wstring GetRelativeResourcePath(const fs::path& path);
 
 	private:
-		void FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& watchInfo, std::function<void(const DirectoryWatchInfo&, PFILE_NOTIFY_INFORMATION)> onFileChangeCB);
+		void FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& watchInfo, std::function<void(const DirectoryWatchInfo&, const FileChangeActionMap&)> onFileChangeCB);
 
-		void OnFileChange(const DirectoryWatchInfo& watchInfo, PFILE_NOTIFY_INFORMATION fileInfo);
+		void OnFileChange(const DirectoryWatchInfo& watchInfo, const FileChangeActionMap& fileInfo);
 
 	private:
 		std::wstring _name;

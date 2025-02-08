@@ -299,7 +299,7 @@ namespace HexEngine
 		if (!material)
 			return;
 
-		material->GetLoader()->CreateEditorDialog(material->GetFileSystemPath(), material->GetOwningFileSystem());
+		material->GetLoader()->CreateEditorDialog({ material->GetFileSystemPath() });
 	}
 
 	bool StaticMeshComponent::CreateWidget(ComponentWidget* widget)

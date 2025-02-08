@@ -369,11 +369,11 @@ namespace HexEngine
 				camera->GetPVS()->AddEntity(entity);
 
 			// We have to make the camera think it moved otherwise it won't refresh the PVS
-			TransformChangedMessage message;
+			/*TransformChangedMessage message;
 			message._flags = TransformChangedMessage::ChangeFlags::PositionChanged;
 			message._position = camera->GetEntity()->GetPosition();
 
-			camera->OnMessage(&message, nullptr);
+			camera->OnMessage(&message, nullptr);*/
 		}
 
 		for (auto& caster : g_pEnv->_sceneRenderer->GetShadowCasters())

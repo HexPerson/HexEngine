@@ -103,7 +103,7 @@ namespace HexEngine
 		file.Close();
 	}
 
-	bool FileSystem::CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(const DirectoryWatchInfo&, PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
+	bool FileSystem::CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(const DirectoryWatchInfo&, const FileChangeActionMap&)> onFileChangeCB)
 	{
 		if (fs::is_directory(pathToWatch) == false)
 		{
@@ -156,7 +156,7 @@ namespace HexEngine
 		return true;
 	}
 
-	void FileSystem::FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& pathsToWatch, std::function<void(const DirectoryWatchInfo&, PFILE_NOTIFY_INFORMATION)> onFileChangeCB)
+	void FileSystem::FileChangeMonitorThread(const std::vector<DirectoryWatchInfo>& pathsToWatch, std::function<void(const DirectoryWatchInfo&, const FileChangeActionMap&)> onFileChangeCB)
 	{
 		// https://github.com/tresorit/rdcfswatcherexample/blob/master/rdc_fs_watcher.cpp
 		while (g_pEnv->IsRunning())
@@ -190,40 +190,26 @@ namespace HexEngine
 					DWORD bytes_transferred;
 					GetOverlappedResult(info.handle, &overlapped, &bytes_transferred, FALSE);
 
+					FileChangeActionMap events;
+
 					FILE_NOTIFY_INFORMATION* event = (FILE_NOTIFY_INFORMATION*)buffer;
 
 					for (;;) {
-						DWORD name_len = event->FileNameLength / sizeof(wchar_t);
+						DWORD name_len = event->FileNameLength / sizeof(wchar_t);						
 
-						if(onFileChangeCB)
-							onFileChangeCB(info, event);
+						std::wstring fileName(event->FileName, event->FileName + name_len);
+						fs::path filePath = info.path / fileName;
+
+						FileChangeInfo changeInfo;
+						changeInfo.path = filePath;
+
+						if (auto it = events.find(event->Action); it != events.end())
+						{
+							it->second.push_back(changeInfo);
+						}
 						else
-							OnFileChange(info, event);
-
-						switch (event->Action) {
-						case FILE_ACTION_ADDED: {
-							LOG_DEBUG("Added: %.*ws", name_len, event->FileName);
-						} break;
-
-						case FILE_ACTION_REMOVED: {
-							LOG_DEBUG("Removed: %.*ws", name_len, event->FileName);
-						} break;
-
-						case FILE_ACTION_MODIFIED: {
-							LOG_DEBUG("Modified: %.*ws", name_len, event->FileName);
-						} break;
-
-						case FILE_ACTION_RENAMED_OLD_NAME: {
-							LOG_DEBUG("Renamed from: %.*ws", name_len, event->FileName);
-						} break;
-
-						case FILE_ACTION_RENAMED_NEW_NAME: {
-							LOG_DEBUG("to: %.*ws", name_len, event->FileName);
-						} break;
-
-						default: {
-							LOG_DEBUG("Unknown action!\n");
-						} break;
+						{
+							events[event->Action].push_back(changeInfo);
 						}
 
 						// Are there more events to handle?
@@ -234,6 +220,11 @@ namespace HexEngine
 							break;
 						}
 					}
+
+					OnFileChange(info, events);
+
+					if (onFileChangeCB)
+						onFileChangeCB(info, events);
 				}
 
 				SAFE_DELETE_ARRAY(buffer);
@@ -248,20 +239,23 @@ namespace HexEngine
 		}
 	}
 
-	void FileSystem::OnFileChange(const DirectoryWatchInfo& watchInfo, PFILE_NOTIFY_INFORMATION fileInfo)
+	void FileSystem::OnFileChange(const DirectoryWatchInfo& watchInfo, const FileChangeActionMap& actionMap)
 	{
-		DWORD name_len = fileInfo->FileNameLength / sizeof(wchar_t);
-
-		std::wstring fileName(fileInfo->FileName, fileInfo->FileName + name_len);
-		fs::path filePath = watchInfo.path / fileName;
-
-		auto loader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(filePath.extension().string());
-		auto resource = g_pEnv->_resourceSystem->FindResourceByFileName(filePath.filename(), true);
-
-		if (loader && resource)
+		for (auto& actions : actionMap)
 		{
-			if (fileInfo->Action == FILE_ACTION_MODIFIED)
-				loader->OnResourceChanged(resource);
+			if (actions.first == FILE_ACTION_MODIFIED)
+			{
+				for (auto& fileInfo : actions.second)
+				{
+					auto loader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(fileInfo.path.extension().string());
+					auto resource = g_pEnv->_resourceSystem->FindResourceByFileName(fileInfo.path.filename(), true);
+
+					if (loader && resource)
+					{
+						loader->OnResourceChanged(resource);
+					}
+				}
+			}
 		}
 	}
 

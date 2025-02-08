@@ -9,6 +9,7 @@
 struct GlyphDescFT : GlyphDesc
 {
 	FT_Bitmap bitmap;
+	FT_Bitmap effectBitmap;
 };
 
 class FreeTypeFont : public IFontResource

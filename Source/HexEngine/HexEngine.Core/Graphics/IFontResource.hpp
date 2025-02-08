@@ -30,12 +30,15 @@ namespace HexEngine
 		int32_t offsetY;
 		int32_t width;
 		int32_t height;
+		int32_t innerWidth;
+		int32_t innerHeight;
 		int32_t totalHeight;
 		int32_t pitch;
 		int32_t advanceX;
 		int32_t advanceY;
 		wchar_t ch;
 		std::vector<uint8_t> pixelData;
+		std::vector<uint8_t> effectData;
 		RECT atlasRect;
 		float uv0[2];
 		float uv1[2];

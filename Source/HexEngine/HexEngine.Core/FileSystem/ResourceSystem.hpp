@@ -38,6 +38,7 @@ namespace HexEngine
 		void							AddFileSystem(FileSystem* fileSystem);
 		void							RemoveFileSystem(FileSystem* fileSystem);
 		const std::vector<FileSystem*>& GetFileSystems() const { return _fileSystems; }
+		FileSystem*						FindFileSystemByPath(const fs::path& path);
 
 		// Resource loader methods
 		//

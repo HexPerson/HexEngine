@@ -116,7 +116,7 @@ HRESULT HLSL::Open(D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID pPare
 	while (fileName[0] == ' ')
 		fileName++;
 
-	auto shaderPath = gWorkingDirectory;
+	auto shaderPath = _includePath.length() > 0 ? _includePath : gWorkingDirectory;
 	shaderPath += fileName;
 
 	HexEngine::DiskFile file(shaderPath, std::ios::in);

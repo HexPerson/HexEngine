@@ -18,7 +18,7 @@ namespace HexEngine
 		virtual void						OnResourceChanged(std::shared_ptr<IResource> resource) override {}
 		virtual std::vector<std::string>	GetSupportedResourceExtensions() override;
 		virtual std::wstring				GetResourceDirectory() const override;
-		virtual Dialog*						CreateEditorDialog(const fs::path& path, FileSystem* fileSystem) override;
+		virtual Dialog*						CreateEditorDialog(const std::vector<fs::path>& paths) override;
 		virtual void						SaveResource(IResource* resource, const fs::path& path) override;
 	};
 }

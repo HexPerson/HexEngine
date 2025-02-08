@@ -97,6 +97,7 @@ namespace HexEngine
 		bool CreateInstancedBuffers();
 
 	private:
+		Camera* _currentCamera = nullptr;
 		std::shared_ptr<IShader> _basicShader;
 		std::shared_ptr<IShader> _instancedShader;
 
@@ -133,8 +134,8 @@ namespace HexEngine
 		
 	};
 
-#define RX(x,w) (((float)x / (float)g_pEnv->_window->GetClientWidth()) * (float)w)
-#define RY(y,h) (((float)y / (float)g_pEnv->_window->GetClientHeight()) * (float)h)
+#define RX(x,w) (((float)x / (float)g_pEnv->GetScreenWidth()) * (float)w)
+#define RY(y,h) (((float)y / (float)g_pEnv->GetScreenHeight()) * (float)h)
 #define SCALEX(x) RY(x, g_pEnv->GetScreenWidth())
 #define SCALEY(y) RY(y, g_pEnv->GetScreenHeight())
 }
