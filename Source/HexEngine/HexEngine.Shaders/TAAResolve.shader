@@ -52,6 +52,9 @@
 
 		float velocityConfidence = saturate(1.f - length(velocity.xy) / FRAME_VELOCITY_IN_TEXELS_DIFF);
 
+		//if(depth == g_frustumDepths[3])
+		//	return float4(colour, 1.0f);
+
 		//velocity *= velocityConfidence;
 
 		/*if (velocity.x == 999 && velocity.y == 999)

@@ -140,8 +140,8 @@ namespace HexEngine
 			{
 				// use the list of renderables, because we know they have already been tested for visibility
 				//
-				Scene::EntityComponentVector entities;
-				g_pEnv->_sceneManager->GetCurrentScene()->GetComponents((ComponentSignature)(1 << StaticMeshComponent::_GetComponentId()), entities);
+				std::vector<StaticMeshComponent*> entities;
+				g_pEnv->_sceneManager->GetCurrentScene()->GetComponents<StaticMeshComponent>(entities);
 
 				for (auto&& component : entities)
 				{
@@ -189,13 +189,16 @@ namespace HexEngine
 								auto mesh = meshRenderer->GetMesh();
 								if(mesh)
 								{
+									if (mesh->HasAnimations())
+										continue;
+
 									auto& vertices = mesh->GetVertices();
 									auto& indices = mesh->GetIndices();
 
 									if (indices.size() < mesh->GetNumFaces() * 3)
 										continue;
 
-									for (int i = 0; i < mesh->GetNumFaces(); ++i)
+									for (uint32_t i = 0; i < mesh->GetNumFaces(); ++i)
 									{
 										uint32_t i0 = indices[i * 3 + 0];
 										uint32_t i1 = indices[i * 3 + 1];

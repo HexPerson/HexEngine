@@ -12,6 +12,8 @@
 #include "../Entity/Component/TimedLifetimeComponent.hpp"
 #include "../Entity/Component/HingeJoint.hpp"
 #include "../Entity/Component/ScriptComponent.hpp"
+#include "../Entity/Component/NavigationComponent.hpp"
+#include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "../HexEngine.hpp"
 
 
@@ -51,6 +53,8 @@ namespace HexEngine
 		REG_CLASS(TimedLifetimeComponent);
 		REG_CLASS(HingeJoint);
 		REG_CLASS(ScriptComponent);
+		REG_CLASS(NavigationComponent);
+		REG_CLASS(SkeletalAnimationComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

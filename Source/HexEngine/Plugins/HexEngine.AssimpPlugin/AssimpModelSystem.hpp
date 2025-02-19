@@ -48,8 +48,10 @@ namespace HexEngine
 
 	struct AssimpImportOptions
 	{
-		bool importAnimations = false;
+		bool importAnimations = true;
 		bool tryAndCreateMaterials = false;
+		bool renameFiles = true;
+		bool deleteOriginalsAfterImport = true;
 		std::wstring textureSearchPath;
 		std::wstring replaceTextureExtension;
 	};
@@ -74,13 +76,13 @@ namespace HexEngine
 		virtual void						SaveResource(IResource* resource, const fs::path& path) override { }
 
 	private:
-		void						ProcessNode(std::shared_ptr<Model>& model, aiNode* node, std::vector<AnimChannel*> parentAnims, const aiScene* scene, FileSystem* fileSystem);
-		std::shared_ptr<Mesh>		ProcessMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem);
-		AnimatedMesh*				ProcessAnimatedMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem);
-		void						ProcessMaterial(std::shared_ptr<Mesh>& mesh, const aiScene* scene, aiMaterial* material, FileSystem* fileSystem);
-		std::shared_ptr<ITexture2D>	LoadTexture(std::shared_ptr<Mesh>& mesh, const aiTextureType type, const aiScene* scene, const aiMaterial* material, FileSystem* fileSystem);
-		void						ProcessAnimations(std::shared_ptr<Model>& model, const aiScene* scene);
-		AnimChannel*				FindAnimChannelFromNodeName(std::shared_ptr<Model>& model, const std::string& nodeName);
+		void							ProcessNode(std::shared_ptr<Model>& model, aiNode* node, std::vector<AnimChannel*> parentAnims, const aiScene* scene, FileSystem* fileSystem);
+		std::shared_ptr<Mesh>			ProcessMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem);
+		std::shared_ptr<AnimatedMesh>	ProcessAnimatedMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem);
+		void							ProcessMaterial(std::shared_ptr<Mesh> mesh, const aiScene* scene, aiMaterial* material, FileSystem* fileSystem);
+		std::shared_ptr<ITexture2D>		LoadTexture(std::shared_ptr<Mesh>& mesh, const aiTextureType type, const aiScene* scene, const aiMaterial* material, FileSystem* fileSystem);
+		void							ProcessAnimations(std::shared_ptr<Model>& model, const aiScene* scene);
+		AnimChannel*					FindAnimChannelFromNodeName(std::shared_ptr<Model>& model, const std::string& nodeName);
 
 	private:
 		fs::path _currentPath;
@@ -89,5 +91,7 @@ namespace HexEngine
 
 		// Import options
 		AssimpImportOptions _importOpts;
+
+		std::vector<std::pair<fs::path, std::shared_ptr<Mesh>>> _createdMeshes;
 	};
 }

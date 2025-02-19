@@ -38,6 +38,7 @@
 #include "Scene/MeshPrimitives.hpp"
 #include "Scene/SceneRenderer.hpp"
 #include "Scene/AnimatedMesh.hpp"
+#include "Scene/INavMeshProvider.hpp"
 
 #include "Input/InputSystem.hpp"
 #include "Input/CommandManager.hpp"
@@ -92,6 +93,8 @@
 #include "Entity/Component/TimedLifetimeComponent.hpp"
 #include "Entity/Component/HingeJoint.hpp"
 #include "Entity/Component/ScriptComponent.hpp"
+#include "Entity/Component/NavigationComponent.hpp"
+#include "Entity/Component/SkeletalAnimationComponent.hpp"
 
 #include "Audio/AudioManager.hpp"
 

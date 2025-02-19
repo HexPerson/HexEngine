@@ -18,7 +18,10 @@
     <ClInclude Include="Plugin.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="MyInterface.hpp">
+    <ClInclude Include="RecastInterface.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="DebugRender.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -26,7 +29,7 @@
     <ClCompile Include="Plugin.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="MyInterface.cpp">
+    <ClCompile Include="RecastInterface.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="DebugUtils\Source\DebugDraw.cpp">
@@ -93,6 +96,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Recast\Source\RecastRegion.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DebugRender.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="DetourCrowd\Source\DetourPathCorridor.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

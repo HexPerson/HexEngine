@@ -128,6 +128,9 @@ namespace HexEngine
 		env->_fontImporter = (IFontImporter*)env->_pluginSystem->CreateInterface(IFontImporter::InterfaceName);
 		env->_fontImporter->Create();
 
+		env->_navMeshProvider = (INavMeshProvider*)env->_pluginSystem->CreateInterface(INavMeshProvider::InterfaceName);
+		env->_navMeshProvider->Create();
+
 		//env->_scriptEngine = (IScriptEngine*)env->_pluginSystem->CreateInterface(IScriptEngine::InterfaceName);
 		//env->_scriptEngine->Create();
 
@@ -299,6 +302,9 @@ namespace HexEngine
 
 		_fontImporter->Destroy();
 		SAFE_DELETE(_fontImporter);
+
+		_navMeshProvider->Destroy();
+		SAFE_DELETE(_navMeshProvider);
 
 		//_scriptEngine->Destroy();
 		//SAFE_DELETE(_scriptEngine);

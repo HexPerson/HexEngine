@@ -10,6 +10,7 @@ namespace HexEngine
 	class Entity;
 	class Scene;
 	class Material;
+	class BaseComponent;
 
 	struct PVSParams
 	{
@@ -54,7 +55,7 @@ namespace HexEngine
 		//};
 
 
-		using MeshEntityPair = std::pair<std::shared_ptr<Mesh>, Entity*>;
+		using MeshEntityPair = std::tuple<std::shared_ptr<Mesh>, Entity*, BaseComponent*>;
 		using MeshEntityVector = std::vector<MeshEntityPair>;
 		//using MaterialEntityVectorPair = std::pair<, MeshEntityVector>;
 		using MeshInstanceMap = std::map<std::shared_ptr<Material>, MeshEntityVector>;

@@ -67,5 +67,6 @@
     <HexEngineShader Include="ShadowMapGeometryAnimated.shader" />
     <HexEngineShader Include="SSRResolve.shader" />
     <HexEngineShader Include="BasicDenoise.shader" />
+    <HexEngineShader Include="DefaultPixel.shader" />
   </ItemGroup>
 </Project>

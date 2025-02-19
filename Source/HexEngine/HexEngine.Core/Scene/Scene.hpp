@@ -76,7 +76,7 @@ namespace HexEngine
 		using EntityComponentVector = std::vector<BaseComponent*>;
 
 		using EntityMap = std::map<ComponentSignature, EntityVector>;
-		using ComponentMap = std::map<ComponentSignature, EntityComponentVector>;
+		using ComponentMap = std::map<ComponentId, EntityComponentVector>;
 
 		void Create(bool createSkySphere, IEntityListener* listener = nullptr);
 		void CreateEmpty(bool createSkySphere, IEntityListener* listener = nullptr);
@@ -137,12 +137,26 @@ namespace HexEngine
 
 		void SetSkySphere(Entity* skySphere);
 
-		
+		void CalculateBounds(math::Vector3& min, math::Vector3& max);
+		void CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces);
+		void CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces);
 
 		const EntityMap& GetEntities() const;
 
 		bool GetEntities(const ComponentSignature signature, std::vector<Entity*>& entities);
-		bool GetComponents(const ComponentSignature signature, std::vector<BaseComponent*>& components);
+
+		template <typename T>
+		bool GetComponents(std::vector<T*>& components)
+		{
+			std::unique_lock lock(_lock);
+			const auto& comps = _components[T::_GetComponentId()];
+			components.reserve(comps.size());
+			for (auto& it : comps)
+			{
+				components.push_back((T*)it);
+			}
+			return components.size() > 0;
+		}
 		uint32_t GetTotalNumberOfEntities();
 
 		//void GetLights(std::vector<Light*>& lights) const;
@@ -184,9 +198,6 @@ namespace HexEngine
 		void SetName(const std::wstring& name);
 
 	private:
-		void CalculateVisibility(Camera* camera, bool transparent);
-		void CalculateShadowMapVisibility(const dx::BoundingSphere& cascadeSphere, const uint32_t passIdx);	
-
 		void HandlePendingRemovals();
 		void HandlePendingAdditions();
 

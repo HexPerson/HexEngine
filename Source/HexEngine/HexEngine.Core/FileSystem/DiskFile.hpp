@@ -120,6 +120,11 @@ namespace HexEngine
 			Read(data, sizeof(T));
 		}
 
+		uint32_t GetRemainingReadSize()
+		{
+			return GetSize() - _stream.tellp();
+		}
+
 	protected:
 		std::fstream _stream;
 		std::ios_base::openmode _openMode;

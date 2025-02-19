@@ -605,17 +605,20 @@ namespace HexEngine
 		// now add to the component list
 		{
 			// Remove it from its old set first
-			auto it = _components.find(previousSignature);
+			/*auto it = _components.find(previousSignature);
 
 			if (it != _components.end())
 			{
-				it->second.erase(std::remove(it->second.begin(), it->second.end(), component), it->second.end());
-			}
+				for (auto& oldComp : entity->GetAllComponents())
+				{
+					it->second.erase(std::remove(it->second.begin(), it->second.end(), oldComp), it->second.end());
+				}
+			}*/
 
 			ComponentSignature newSignature = entity->GetComponentSignature();
 
 			// Now add it to a new set, or create one
-			EntityComponentVector* entList = nullptr;
+			/*EntityComponentVector* entList = nullptr;
 
 			for (auto& ent : _components)
 			{
@@ -626,13 +629,13 @@ namespace HexEngine
 				}
 			}
 
-			if (!entList)
-				_components[newSignature].push_back(component);
-			else
+			if (!entList)*/			
+				_components[component->GetComponentId()].push_back(component);
+			/*else
 			{
 				if (std::find(entList->begin(), entList->end(), component) == entList->end())
 					entList->push_back(component);
-			}
+			}*/
 
 			/*it = _components.find(newSignature);
 
@@ -644,6 +647,17 @@ namespace HexEngine
 			{
 				it->second.push_back(component);
 			}*/
+
+				// add it to the update list too, its a special case where the component should exist in two lists
+				if (entity->HasA<UpdateComponent>())
+				{
+					auto& uit = _components[UpdateComponent::_GetComponentId()];
+
+					if (std::find(uit.begin(), uit.end(), component) == uit.end())
+					{
+						uit.push_back(component);
+					}
+				}
 		}
 
 		// attempt to automatigally set the main camera, if it hasn't already been set
@@ -743,9 +757,9 @@ namespace HexEngine
 
 		_insideEntityIteration = true;
 
-		std::vector<BaseComponent*> updateSet;
+		std::vector<UpdateComponent*> updateSet;
 
-		if (GetComponents(1 << UpdateComponent::_GetComponentId(), updateSet))
+		if (GetComponents<UpdateComponent>(updateSet))
 		{
 			for (auto&& component : updateSet)
 			{
@@ -780,9 +794,9 @@ namespace HexEngine
 
 		_insideEntityIteration = true;
 		
-		std::vector<BaseComponent*> updateSet;
+		std::vector<UpdateComponent*> updateSet;
 
-		if (GetComponents(1 << UpdateComponent::_GetComponentId(), updateSet))
+		if (GetComponents<UpdateComponent>(updateSet))
 		{
 			for (auto&& component : updateSet)
 			{
@@ -802,9 +816,9 @@ namespace HexEngine
 			}
 		}
 
-		std::vector<BaseComponent*> meshSet;
+		std::vector<StaticMeshComponent*> meshSet;
 
-		if (GetComponents(1 << StaticMeshComponent::_GetComponentId(), meshSet))
+		if (GetComponents<StaticMeshComponent>(meshSet))
 		{
 			for (auto&& component : meshSet)
 			{
@@ -832,9 +846,9 @@ namespace HexEngine
 
 		_insideEntityIteration = true;
 
-		std::vector<BaseComponent*> updateSet;
+		std::vector<UpdateComponent*> updateSet;
 
-		if (GetComponents(1 << UpdateComponent::_GetComponentId(), updateSet))
+		if (GetComponents<UpdateComponent>(updateSet))
 		{
 			for (auto&& component : updateSet)
 			{
@@ -1009,14 +1023,14 @@ namespace HexEngine
 
 			for (auto&& meshEntityPair : it->second)
 			{
-				auto mesh = meshEntityPair.first;
-				auto entity = meshEntityPair.second;	
+				auto mesh = std::get<0>(meshEntityPair);
+				auto entity = std::get<1>(meshEntityPair);
 				auto instance = mesh->GetInstance();				
 
 				if (!mesh || !entity || !instance)
 					continue;
 
-				renderer = entity->GetComponent<StaticMeshComponent>();
+				renderer = dynamic_cast<StaticMeshComponent*>(std::get<2>(meshEntityPair));//entity->GetComponent<StaticMeshComponent>();
 				currentInstance = instance;
 
 				if ((renderFlags & MeshRenderTransparency) == 0)
@@ -1030,11 +1044,13 @@ namespace HexEngine
 						continue;
 				}
 
-				if (currentInstance != lastInstance && lastInstance != nullptr)
+				if (currentInstance != lastInstance && lastInstance != nullptr || mesh->HasAnimations())
 				{
 					RenderInstance(lastInstance, drawnInstances, renderer);
 					
 					drawnInstances = 0;
+
+					rendered = false;
 				}
 
 				// check this entity is in the layer mask we want
@@ -1124,8 +1140,8 @@ namespace HexEngine
 
 		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
 
-		EntityComponentVector entities;
-		GetComponents(1 << StaticMeshComponent::_GetComponentId(), entities);
+		std::vector<StaticMeshComponent*> entities;
+		GetComponents<StaticMeshComponent>(entities);
 
 		for (auto&& ent : entities)
 		{
@@ -1237,25 +1253,19 @@ namespace HexEngine
 	{
 		EntityComponentVector components;
 
-		GetComponents((1 << id), components);
+		//GetComponents((1 << id), components);
 
 		return components.size();
 	}
 
-	bool Scene::GetComponents(const ComponentSignature signature, std::vector<BaseComponent*>& components)
+	/*bool Scene::GetComponents(ComponentId id, std::vector<BaseComponent*>& components)
 	{
 		std::unique_lock lock(_lock);
 
-		for (auto& ent : _components)
-		{
-			if ((ent.first & signature) != 0)
-			{
-				components.insert(components.end(), ent.second.begin(), ent.second.end());
-			}
-		}
+		components = _components[id];
 
 		return components.size() > 0;
-	}
+	}*/
 
 	void Scene::AddEntityListener(IEntityListener* listener)
 	{
@@ -1311,8 +1321,100 @@ namespace HexEngine
 		//}
 	}
 
-	/*void Scene::ClearTerrainParams()
+	void Scene::CalculateBounds(math::Vector3& min, math::Vector3& max)
 	{
-		_terrainParams.clear();
-	}*/
+		std::vector<Entity*> entity;
+
+		min = math::Vector3(FLT_MAX);
+		max = math::Vector3(FLT_MIN);
+
+		if (GetEntities(1 << StaticMeshComponent::_GetComponentId(), entity))
+		{
+			for (auto& ent : entity)
+			{
+				const auto& worldAABB = ent->GetWorldAABB();
+
+				math::Vector3 bbCentre(worldAABB.Center);
+				math::Vector3 bbExtents(worldAABB.Extents);
+				math::Vector3 bbMin = bbCentre - bbExtents;
+				math::Vector3 bbMax = bbCentre + bbExtents;
+
+				for (int i = 0; i < 3; ++i)
+				{
+					if (((float*)&bbMin.x)[i] < ((float*)&min.x)[i])
+						((float*)&min.x)[i] = ((float*)&bbMin.x)[i];
+
+					if (((float*)&bbMax.x)[i] > ((float*)&max.x)[i])
+						((float*)&max.x)[i] = ((float*)&bbMax.x)[i];
+				}
+			}
+		}
+	}
+
+	void Scene::CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces)
+	{
+		numFaces = 0;
+
+		std::vector<StaticMeshComponent*> smcs;
+		if (GetComponents<StaticMeshComponent>(smcs))
+		{
+			for (auto& smc : smcs)
+			{
+				auto mesh = smc->GetMesh();
+
+				if (!mesh)
+					continue;
+
+				auto verts = mesh->GetVertices();
+				auto inds = mesh->GetIndices();
+
+				numFaces += mesh->GetNumFaces();
+
+				for (auto& v : verts)
+				{
+					vertices.push_back(*(math::Vector3*)&v._position.x);
+				}
+
+				indices.insert(indices.end(), inds.begin(), inds.end());
+			}
+		}
+	}
+
+	void Scene::CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces)
+	{
+		numFaces = 0;
+
+		std::vector<StaticMeshComponent*> smcs;
+		if (GetComponents<StaticMeshComponent>(smcs))
+		{
+			uint32_t indexOffset = 0;
+
+			for (auto& smc : smcs)
+			{
+				auto mesh = smc->GetMesh();
+
+				if (!mesh)
+					continue;
+
+				auto verts = mesh->GetVertices();
+				auto inds = mesh->GetIndices();
+
+				numFaces += mesh->GetNumFaces();
+
+				auto entPos = smc->GetEntity()->GetPosition();
+
+				for (auto& v : verts)
+				{
+					vertices.push_back(entPos + *(math::Vector3*)&v._position.x);
+				}				
+
+				for (auto& i : inds)
+				{
+					indices.push_back((int)i + indexOffset);
+				}
+
+				indexOffset += verts.size();
+			}
+		}
+	}
 }

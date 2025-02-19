@@ -21,7 +21,7 @@
 }
 "VertexShader"
 {
-	MeshPixelInput ShaderMain(AnimatedMeshVertexInput input, MeshInstanceData instance)
+	MeshPixelInput ShaderMain(AnimatedMeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)
 	{
 		MeshPixelInput output;
 
@@ -84,6 +84,8 @@
 		output.viewDirection.xyz = normalize(output.viewDirection.xyz);
 
 		output.colour = instance.colour;
+
+		output.instanceID = instanceID + entityId;
 
 		return output;
 	}

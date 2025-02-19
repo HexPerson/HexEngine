@@ -62,7 +62,7 @@
 }
 "PixelShader"
 {	
-	Texture2D g_noiseTexture : register(t3);
+	Texture2D g_noiseTexture : register(t1);
 
 	SamplerState g_pointSampler : register(s2);
 
@@ -132,21 +132,21 @@
 		float3 singleNoiseVal = noise;
 
 		// move from 0-1 to -1 to +1
-		singleNoiseVal = (singleNoiseVal * 2.0f) - 1.0f;
+		//singleNoiseVal = (singleNoiseVal * 2.0f) - 1.0f;
 
 		// close the range
-		singleNoiseVal /= 4.0f;
+		singleNoiseVal /= 8.0f;
 
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
 		//velocity /= float2(g_screenWidth, g_screenHeight);
 
-		output.diff = float4(colour.rgb + singleNoiseVal.rgb, -1);// lerp(output.diff, fogColour, fogLerp);
+		output.diff = float4(colour.rgb + singleNoiseVal, -1);// lerp(output.diff, fogColour, fogLerp);
 
 		output.mat = float4(0, 0, 0, 0);
 
 		output.norm = float4(0, 0, 0, g_frustumDepths[3]);
 
-		output.velocity = velocity;
+		output.velocity = float2(0,0);//velocity;
 
 		// project it out as far as possible to mimic far away sky
 		float3 worldSpaceDir = normalize(input.positionWS.xyz - g_eyePos);

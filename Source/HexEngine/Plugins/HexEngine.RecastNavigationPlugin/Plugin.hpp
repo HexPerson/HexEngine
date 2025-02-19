@@ -2,15 +2,15 @@
 #pragma once
 
 #include <HexEngine.Core\HexEngine.hpp>
-#include "MyInterface.hpp"
+#include "RecastInterface.hpp"
 
 /// <summary>
 /// The sample plugin class. Overrides IPlugin
 /// </summary>
-class SamplePlugin : public IPlugin
+class RecastPlugin : public IPlugin
 {
 public:
-	SamplePlugin();
+	RecastPlugin();
 
 	/// <summary>
 	/// Called after the plugin is loaded
@@ -39,7 +39,7 @@ public:
 	virtual void GetDependencies(std::vector<std::string>& dependencies) const {}
 
 private:
-	MyInterface* _interface = nullptr;
+	RecastInterface* _interface = nullptr;
 };
 
-inline SamplePlugin* g_pSamplePlugin = nullptr;
+inline RecastPlugin* g_pRecastPlugin = nullptr;

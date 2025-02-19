@@ -12,6 +12,8 @@
 	static const uint OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION	= (1 << 6);
 	static const uint OBJECT_FLAGS_HAS_ANIMATION			= (1 << 7);
 
+	static const uint MAX_BONES = 70;
+
 #define MERGE(a, b) a##b
 #define LIT(val) (val)
 
@@ -160,7 +162,7 @@
 
 	cbuffer PerAnimationBuffer : register(b3)
 	{
-		matrix g_boneTransforms[70];
+		matrix g_boneTransforms[MAX_BONES];
 	}
 
 	struct ShadowSettings

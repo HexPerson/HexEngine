@@ -387,6 +387,15 @@ namespace HexEditor
 
 				meshRenderer->SetMesh(mesh);
 
+				if (mesh->HasAnimations())
+				{
+					auto sac = entity->AddComponent<SkeletalAnimationComponent>();
+
+					auto animatedMesh = dynamic_pointer_cast<AnimatedMesh>(mesh);
+
+					sac->SetAnimationData(animatedMesh, animatedMesh->GetAnimationData());
+				}
+
 				//auto rigidBody = entity->AddComponent<RigidBody>();
 				//rigidBody->AddTriangleMeshCollider((Mesh*)resource, true);
 			}

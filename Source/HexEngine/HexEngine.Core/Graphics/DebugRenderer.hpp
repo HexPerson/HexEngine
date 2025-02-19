@@ -37,15 +37,28 @@ namespace HexEngine
 
 		void DrawLine(const math::Vector3& from, const math::Vector3& to, const math::Color& colour = math::Color(1.0f, 0.0f, 0.5f, 0.4f));
 
+		void DrawLines(const std::vector<std::pair<math::Vector3, math::Color>>& vertices);
+
+		void DrawPolygon(const std::vector<std::pair<math::Vector3, math::Color>>& vertices);
+
 		void FlushBuffers();
 
 	private:
 		IVertexBuffer* _lineVBuffer = nullptr;
 		IIndexBuffer* _lineIBuffer = nullptr;
+
+		IVertexBuffer* _polyVBuffer = nullptr;
+		IIndexBuffer* _polyIBuffer = nullptr;
+
 		std::shared_ptr<IShader> _debugShader;
 		//IInputLayout* _inputLayout = nullptr;
 
 		std::vector<DebugLines> _lines;
 		uint32_t _numLineVertices = 0;
+
+		std::vector<DebugVertex> _vertices;
+		std::vector<uint32_t> _indices;
+		uint32_t _numVertices = 0;
+		uint32_t _vertIndex = 0;
 	};
 }

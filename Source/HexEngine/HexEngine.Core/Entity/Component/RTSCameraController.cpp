@@ -67,6 +67,11 @@ namespace HexEngine
 
 		camera->SetPitch(-65.0f);
 
+		g_pEnv->_commandManager->RegisterCommand(&cmd_movebackwards);
+		g_pEnv->_commandManager->RegisterCommand(&cmd_moveforward);
+		g_pEnv->_commandManager->RegisterCommand(&cmd_moveleft);
+		g_pEnv->_commandManager->RegisterCommand(&cmd_moveright);
+
 		g_pEnv->_commandManager->CreateBind('W', "rtsmoveforward", this);
 		g_pEnv->_commandManager->CreateBind('S', "rtsmovebackwards", this);
 		g_pEnv->_commandManager->CreateBind('A', "rtsmoveleft", this);
@@ -81,6 +86,11 @@ namespace HexEngine
 		Camera* camera = GetEntity()->GetComponent<Camera>();
 
 		camera->SetPitch(-65.0f);
+
+		g_pEnv->_commandManager->RegisterCommand(&cmd_movebackwards);
+		g_pEnv->_commandManager->RegisterCommand(&cmd_moveforward);
+		g_pEnv->_commandManager->RegisterCommand(&cmd_moveleft);
+		g_pEnv->_commandManager->RegisterCommand(&cmd_moveright);
 
 		g_pEnv->_commandManager->CreateBind('W', "rtsmoveforward");
 		g_pEnv->_commandManager->CreateBind('S', "rtsmovebackwards");

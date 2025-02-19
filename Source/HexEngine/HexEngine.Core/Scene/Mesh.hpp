@@ -99,8 +99,8 @@ namespace HexEngine
 		std::string name;
 		float ticksPerSecond;
 		float duration;
-		float speed = 0.5f;
-		float time = 0.0f;
+		//float speed = 0.5f;
+		//float time = 0.0f;
 
 		AnimChannel* _rootNode = nullptr;
 		std::vector<AnimChannel> channels;
@@ -111,10 +111,12 @@ namespace HexEngine
 	{
 		std::vector<Animation> _animations;		
 		math::Matrix _globalInverseTransform;
-		uint32_t _animIndex = 1;
-		uint32_t _nextAnimIndex = -1;
-		float _blendFactor = 0.0f;
+		//uint32_t _animIndex = 1;
+		//uint32_t _nextAnimIndex = -1;
+		//float _blendFactor = 0.0f;
 	};
+
+	const int MAX_BONES = 70;
 
 	const int OBJECT_FLAGS_HAS_BUMP					= (1 << 0);
 	const int OBJECT_FLAGS_HAS_ROUGHNESS			= (1 << 1);
@@ -129,6 +131,7 @@ namespace HexEngine
 	class Model;
 	class FileSystem;
 	class Material;
+	class Entity;
 	
 	class Mesh : public IResource
 	{
@@ -152,14 +155,14 @@ namespace HexEngine
 		std::shared_ptr<Material>	GetMaterial() const;
 		void						SetMaterial(std::shared_ptr<Material> material);
 
-		bool CreateBuffers();
+		virtual bool CreateBuffers();
 		//bool CreateBuffers(bool dynamic, uint32_t stride, uint32_t count, void* data);
 
 		virtual void Destroy() override;
 
 		void SetBuffers(const math::Matrix& worldMatrix);
 
-		virtual void UpdateConstantBuffer(const math::Matrix& localTM, Material* material, int32_t instanceId);
+		virtual void UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId);
 		
 
 		void Clear();
@@ -197,6 +200,10 @@ namespace HexEngine
 		void		SetMaxLodLevel(int32_t level);
 
 		virtual bool HasAnimations() const { return false; }
+
+		virtual std::shared_ptr<AnimationData> GetAnimationData() const { return nullptr; }
+
+		virtual std::shared_ptr<AnimationData> CreateAnimationData() { return nullptr; }
 
 	public:
 		MeshInstance* _instance = nullptr;

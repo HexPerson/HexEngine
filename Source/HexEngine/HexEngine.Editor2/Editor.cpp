@@ -34,7 +34,7 @@ namespace HexEditor
 		if (scene)
 		{
 			std::vector<BaseComponent*> lights;
-			if (scene->GetComponents(1 << PointLight::_GetComponentId() | 1 << SpotLight::_GetComponentId(), lights))
+			//if (scene->GetComponents(1 << PointLight::_GetComponentId() | 1 << SpotLight::_GetComponentId(), lights))
 			{
 				for (auto& light : lights)
 				{

@@ -54,6 +54,7 @@ namespace HexEngine
 		//class IScriptEngine* _scriptEngine = nullptr; // disabled currently
 		class IStreamlineProvider* _streamlineProvider = nullptr;
 		class IDenoiserProvider* _denoiserProvider = nullptr;
+		class INavMeshProvider* _navMeshProvider = nullptr;
 		MeshLoader* _meshLoader = nullptr;
 
 		std::thread _physicsThread;		

@@ -153,6 +153,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
       <FileType>Document</FileType>
     </None>
+    <HexEngineShader Include="DefaultPixel.shader" />
     <HexEngineShader Include="ShadowMapGeometryAnimated.shader" />
     <HexEngineShader Include="SSRResolve.shader" />
     <HexEngineShader Include="UIBasic.shader">

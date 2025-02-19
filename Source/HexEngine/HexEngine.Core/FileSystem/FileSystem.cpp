@@ -117,7 +117,7 @@ namespace HexEngine
 					path.wstring().c_str(),
 					FILE_LIST_DIRECTORY,
 					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
-					FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+					FILE_FLAG_BACKUP_SEMANTICS /*| FILE_FLAG_OVERLAPPED*/, NULL);
 
 				if (info.handle == INVALID_HANDLE_VALUE)
 				{
@@ -170,9 +170,12 @@ namespace HexEngine
 
 				const uint32_t bufferSize = 0x10240;
 				uint8_t* buffer = new uint8_t[bufferSize];
+				memset(buffer, 0, bufferSize);
 
 				OVERLAPPED overlapped;
 				overlapped.hEvent = info.event;
+
+				DWORD bytesRead = 0;
 
 				const BOOL res = ReadDirectoryChangesW(
 					info.handle,
@@ -180,22 +183,33 @@ namespace HexEngine
 					bufferSize,
 					true /* bWatchSubtree */,
 					flags,
-					nullptr /* lpBytesReturned */,
-					&overlapped,
-					nullptr /* lpCompletionRoutine */);
+					&bytesRead /* lpBytesReturned */,
+					nullptr/*&overlapped*/,
+					nullptr);
 
-				DWORD result = WaitForSingleObjectEx(overlapped.hEvent, INFINITE, TRUE);
+				if (!res)
+				{
+					LOG_CRIT("ReadDirectoryChangesW error %d", GetLastError());
+					continue;
+				}
 
-				if (result == WAIT_OBJECT_0) {
-					DWORD bytes_transferred;
-					GetOverlappedResult(info.handle, &overlapped, &bytes_transferred, FALSE);
+				//DWORD result = WaitForSingleObjectEx(overlapped.hEvent, INFINITE, TRUE);
+
+				//if (result == WAIT_OBJECT_0)
+				{
+					/*DWORD bytes_transferred;
+					if (!GetOverlappedResult(info.handle, &overlapped, &bytes_transferred, TRUE))
+					{
+						if (GetLastError() == ERROR_IO_INCOMPLETE)
+							return;
+					}*/
 
 					FileChangeActionMap events;
 
 					FILE_NOTIFY_INFORMATION* event = (FILE_NOTIFY_INFORMATION*)buffer;
 
 					for (;;) {
-						DWORD name_len = event->FileNameLength / sizeof(wchar_t);						
+						DWORD name_len = event->FileNameLength / sizeof(wchar_t);
 
 						std::wstring fileName(event->FileName, event->FileName + name_len);
 						fs::path filePath = info.path / fileName;
@@ -213,8 +227,8 @@ namespace HexEngine
 						}
 
 						// Are there more events to handle?
-						if (event->NextEntryOffset) {
-							*((uint8_t**)&event) += event->NextEntryOffset;
+						if (event->NextEntryOffset != 0) {
+							event = (PFILE_NOTIFY_INFORMATION)((uintptr_t)event + event->NextEntryOffset);
 						}
 						else {
 							break;

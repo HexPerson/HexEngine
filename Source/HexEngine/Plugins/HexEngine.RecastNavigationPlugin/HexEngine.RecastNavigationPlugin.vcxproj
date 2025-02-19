@@ -122,6 +122,8 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>HexEngine.Core.lib;DirectXTK.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
       <Command>copy "$(TargetDir)$(TargetName).dll" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\Plugins\$(TargetName).dll"</Command>
@@ -149,14 +151,17 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClInclude Include="MyInterface.hpp" />
+    <ClInclude Include="DebugRender.hpp" />
+    <ClInclude Include="RecastInterface.hpp" />
     <ClInclude Include="Plugin.hpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="DebugRender.cpp" />
     <ClCompile Include="DebugUtils\Source\DebugDraw.cpp" />
     <ClCompile Include="DebugUtils\Source\DetourDebugDraw.cpp" />
     <ClCompile Include="DebugUtils\Source\RecastDebugDraw.cpp" />
     <ClCompile Include="DebugUtils\Source\RecastDump.cpp" />
+    <ClCompile Include="DetourCrowd\Source\DetourPathCorridor.cpp" />
     <ClCompile Include="Detour\Source\DetourAlloc.cpp" />
     <ClCompile Include="Detour\Source\DetourAssert.cpp" />
     <ClCompile Include="Detour\Source\DetourCommon.cpp" />
@@ -164,7 +169,7 @@
     <ClCompile Include="Detour\Source\DetourNavMeshBuilder.cpp" />
     <ClCompile Include="Detour\Source\DetourNavMeshQuery.cpp" />
     <ClCompile Include="Detour\Source\DetourNode.cpp" />
-    <ClCompile Include="MyInterface.cpp" />
+    <ClCompile Include="RecastInterface.cpp" />
     <ClCompile Include="Plugin.cpp" />
     <ClCompile Include="Recast\Source\Recast.cpp" />
     <ClCompile Include="Recast\Source\RecastAlloc.cpp" />

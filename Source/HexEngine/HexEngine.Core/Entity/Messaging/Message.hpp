@@ -17,6 +17,7 @@ namespace HexEngine
 		RigidBodyCollision,
 		EntityDestroyed,
 		EntityParentChanged,
+		NavigationTargetReached,
 
 		CustomMessage,	// custom game messages should start here
 	};
@@ -125,5 +126,14 @@ namespace HexEngine
 
 		Entity* collidedWith = nullptr;
 		math::Vector3 collisionPoint;
+	};
+
+	class NavigationTargetReachedMessage : public Message
+	{
+	public:
+		NavigationTargetReachedMessage() : Message(MessageId::NavigationTargetReached) {}
+
+		math::Vector3 targetPosition;
+		math::Vector3 finalPosition;
 	};
 }

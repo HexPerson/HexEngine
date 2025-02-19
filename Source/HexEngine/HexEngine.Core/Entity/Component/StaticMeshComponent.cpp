@@ -69,7 +69,7 @@ namespace HexEngine
 
 		// Update the per-object constant buffer
 		//
-		mesh->UpdateConstantBuffer(GetEntity()->GetLocalTM(), material.get(), instanceId);
+		mesh->UpdateConstantBuffer(GetEntity(), GetEntity()->GetLocalTM(), material.get(), instanceId);
 
 		// bind the shader's requirements
 		auto requirements = shader->GetRequirements();
@@ -135,8 +135,15 @@ namespace HexEngine
 	{
 		_mesh = mesh;
 
-		GetEntity()->SetAABB(mesh->GetAABB());
-		GetEntity()->SetOBB(mesh->GetOBB());
+		dx::BoundingBox bbox = GetEntity()->GetAABB();
+		dx::BoundingBox::CreateMerged(bbox, bbox, mesh->GetAABB());
+
+		GetEntity()->SetAABB(bbox);
+
+		dx::BoundingOrientedBox obb = GetEntity()->GetOBB();
+		dx::BoundingOrientedBox::CreateFromBoundingBox(obb, bbox);
+
+		GetEntity()->SetOBB(obb);
 
 		if (mesh->GetMaterial())
 			SetMaterial(mesh->GetMaterial());
@@ -147,7 +154,7 @@ namespace HexEngine
 			SetMaterial(Material::Create("EngineData.Materials/Default.hmat"));
 		}
 
-		mesh->CreateBuffers();
+		//mesh->CreateBuffers();
 		mesh->CreateInstance();
 	}
 

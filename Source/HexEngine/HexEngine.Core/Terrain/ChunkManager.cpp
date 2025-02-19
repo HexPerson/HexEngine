@@ -55,8 +55,8 @@ namespace HexEngine
 
 		// because the scene may already have entities in it that the chunk system might not be aware of, we should add them all back in
 
-		Scene::EntityComponentVector components;
-		scene->GetComponents(1 << StaticMeshComponent::_GetComponentId(), components);
+		std::vector<StaticMeshComponent*> components;
+		scene->GetComponents<StaticMeshComponent>(components);
 
 		for (auto& comp : components)
 		{

@@ -305,6 +305,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
   <ItemGroup>
     <ClInclude Include="Audio\AudioManager.hpp" />
     <ClInclude Include="Audio\SoundEffect.hpp" />
+    <ClInclude Include="Entity\Component\NavigationComponent.hpp" />
+    <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp" />
     <ClInclude Include="Entity\Entity.hpp" />
     <ClInclude Include="Entity\Component\AudioListener.hpp" />
     <ClInclude Include="Entity\Component\AudioSource.hpp" />
@@ -335,6 +337,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="GUI\Elements\TextureSearch.hpp" />
     <ClInclude Include="GUI\Elements\Vector2Edit.hpp" />
     <ClInclude Include="Scene\AnimatedMesh.hpp" />
+    <ClInclude Include="Scene\INavMeshProvider.hpp" />
     <ClInclude Include="Scripting\ScriptFile.hpp" />
     <ClInclude Include="FileSystem\XmlFile.hpp" />
     <ClInclude Include="Graphics\Bloom.hpp" />
@@ -484,6 +487,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
   <ItemGroup>
     <ClCompile Include="Audio\AudioManager.cpp" />
     <ClCompile Include="Audio\SoundEffect.cpp" />
+    <ClCompile Include="Entity\Component\NavigationComponent.cpp" />
+    <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp" />
     <ClCompile Include="Entity\Entity.cpp" />
     <ClCompile Include="Entity\Component\AudioListener.cpp" />
     <ClCompile Include="Entity\Component\AudioSource.cpp" />

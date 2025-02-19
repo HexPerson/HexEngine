@@ -75,6 +75,8 @@
 
 		float3 eyeVec = normalize(pixelPos - g_eyePos);
 
+		//return float3(eyeVec);
+
 		float3 viewPixelPosition = ScreenToWorldPosition2(pixelDepth, g_frustumDepths[3], eyeVec, g_eyePos);
 
 		//float3 viewPixelPosition = ScreenToWorldPosition(pixelDepth, g_frustumDepths[3], screenPos, float2(g_screenWidth, g_screenHeight), g_viewProjectionMatrixInverse);// VSPositionFromDepth(pixelDepth, screenPosUV);// pixelPos;
@@ -106,7 +108,7 @@
 		int index = 0;
 
 		const int numSteps = g_atmosphere.volumetricStepsMax;
-		float stepLength = traceLen / (float)numSteps; // g_atmosphere.volumetricStepIncrement;//
+		float stepLength = g_atmosphere.volumetricStepIncrement;//traceLen / (float)numSteps; // g_atmosphere.volumetricStepIncrement;//
 
 		float3 tracePos = startPos;
 		float totalTraceLen = 0.0f;
@@ -147,7 +149,7 @@
 		tracePos += direction * startOffset;
 #endif
 
-		tracePos += direction + noise * 3.0f;// +frac(g_time * 50.0f));
+		tracePos += direction + noise * .8f;// + frac(g_time * 50.0f));
 
 		int numHits = 0;
 

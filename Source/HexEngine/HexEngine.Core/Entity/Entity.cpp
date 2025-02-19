@@ -230,11 +230,11 @@ namespace HexEngine
 
 	BaseComponent* Entity::AddComponent(BaseComponent* component)
 	{
-		if (auto existingComponent = GetComponentByID(component->GetComponentId()); existingComponent != nullptr)
+		/*if (auto existingComponent = GetComponentByID(component->GetComponentId()); existingComponent != nullptr)
 		{
 			LOG_WARN("An entity is trying to add a %s when it already has one registered!", component->GetComponentName().c_str());
 			return existingComponent;
-		}
+		}*/
 
 		if (component->GetComponentId() == StaticMeshComponent::_GetComponentId())
 		{
@@ -254,11 +254,11 @@ namespace HexEngine
 		_componentsSignature |= (1 << newCompId);
 
 		// strip off all the other components signatures first otherwise we will get overlap
-		for (auto& comp : _components)
+		/*for (auto& comp : _components)
 		{
 			if (comp.component != component)
 				_componentsSignature &= ~(1 << comp.id);
-		}
+		}*/
 
 		// Does this component inherit from UpdateComponent? if so it should have its signature adjusted so it can be updated
 		if (component->CastAs<UpdateComponent>() != nullptr)

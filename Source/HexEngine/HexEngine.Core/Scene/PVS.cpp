@@ -110,15 +110,15 @@ namespace HexEngine
 
 		_forceRebuild = false;
 
-		Scene::EntityComponentVector componentIterator;
+		std::vector<StaticMeshComponent*> components;
 
 		if (g_pEnv->_chunkManager->HasActiveChunks(scene))
 		{
-			g_pEnv->_chunkManager->CalculatePVS(scene, this, params, componentIterator);
+			//g_pEnv->_chunkManager->CalculatePVS(scene, this, params, componentIterator);
 		}
 		else
 		{
-			scene->GetComponents(1 << StaticMeshComponent::_GetComponentId(), componentIterator);
+			scene->GetComponents<StaticMeshComponent>(components);
 		}
 
 		/*std::sort(componentIterator.begin(), componentIterator.end(), 
@@ -137,7 +137,7 @@ namespace HexEngine
 		auto end = _pvs.end();
 		//auto it = end;
 
-		for (auto&& component : componentIterator)
+		for (auto&& component : components)
 		{
 			auto entity = component->GetEntity();
 
@@ -163,7 +163,7 @@ namespace HexEngine
 				if (!visible)
 					continue;
 
-				auto mesh = meshComponent->GetMesh();
+				auto mesh = component->GetMesh();
 
 				if (!mesh)
 					continue;
@@ -228,7 +228,7 @@ namespace HexEngine
 					if (it.size() == 0)
 						it.reserve(256);
 
-					_pvs[material].push_back({ mesh,entity });
+					_pvs[material].push_back({ mesh, entity, component });
 					//_pvs.push_back(newEntry);
 
 					//it = _pvs.end() - 1;
@@ -262,7 +262,7 @@ namespace HexEngine
 			std::sort(mev.begin(), mev.end(),
 				[](MeshEntityPair& left, MeshEntityPair& right)
 				{
-					return left.first->GetInstance()->GetInstanceId() < right.first->GetInstance()->GetInstanceId();
+					return std::get<0>(left)->GetInstance()->GetInstanceId() < std::get<0>(right)->GetInstance()->GetInstanceId();
 				}
 			);
 		}
@@ -315,7 +315,7 @@ namespace HexEngine
 		{
 			it->second.erase(std::remove_if(it->second.begin(), it->second.end(),
 				[entity](const MeshEntityPair& pair) {
-					return pair.second == entity;
+					return std::get<1>(pair) == entity;
 				}), it->second.end());
 
 			/*for (auto& mep : it->second)

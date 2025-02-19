@@ -41,21 +41,21 @@ namespace HexEngine
 		//aiProcess_ValidateDataStructure  | // perform a full validation of the loader's output
 		aiProcess_Triangulate | // Ensure all verticies are triangulated (each 3 vertices are triangle)
 		aiProcess_FlipUVs | // convert everything to D3D left handed space (by default right-handed, for OpenGL)
-		aiProcess_SortByPType | // ?
+		//aiProcess_SortByPType | // ?
 		aiProcess_ImproveCacheLocality | // improve the cache locality of the output vertices
-		aiProcess_RemoveRedundantMaterials | // remove redundant materials
-		aiProcess_FindDegenerates | // remove degenerated polygons from the import
-		aiProcess_FindInvalidData | // detect invalid model data, such as invalid normal vectors
+		//aiProcess_RemoveRedundantMaterials | // remove redundant materials
+		//aiProcess_FindDegenerates | // remove degenerated polygons from the import
+		//aiProcess_FindInvalidData | // detect invalid model data, such as invalid normal vectors
 		aiProcess_GenUVCoords | // convert spherical, cylindrical, box and planar mapping to proper UVs
 		aiProcess_TransformUVCoords | // preprocess UV transformations (scaling, translation ...)
-		aiProcess_FindInstances | // search for instanced meshes and remove them by references to one master
+		//aiProcess_FindInstances | // search for instanced meshes and remove them by references to one master
 		aiProcess_LimitBoneWeights | // limit bone weights to 4 per vertex
 		aiProcess_OptimizeMeshes | // join small meshes, if possible;
 
 		//aiProcess_SplitLargeMeshes |
-		aiProcess_PreTransformVertices |
+		//aiProcess_PreTransformVertices | // this will drop animations !!
 
-		aiProcess_SplitByBoneCount | // split meshes with too many bones. Necessary for our (limited) hardware skinning shader
+		//aiProcess_SplitByBoneCount | // split meshes with too many bones. Necessary for our (limited) hardware skinning shader
 		//aiProcess_MakeLeftHanded |
 		0
 #endif
@@ -95,6 +95,8 @@ namespace HexEngine
 
 		auto importAnims = new Checkbox(layout, layout->GetNextPos(), Point(200, 20), L"Import animations", &_importOpts.importAnimations);
 		auto createAnims = new Checkbox(layout, layout->GetNextPos(), Point(200, 20), L"Create materials", &_importOpts.tryAndCreateMaterials);
+		auto renameFiles = new Checkbox(layout, layout->GetNextPos(), Point(200, 20), L"Rename files", &_importOpts.renameFiles);
+		auto deleteOriginals = new Checkbox(layout, layout->GetNextPos(), Point(200, 20), L"Delete originals after import", &_importOpts.deleteOriginalsAfterImport);
 
 		auto searchpath = new LineEdit(layout, layout->GetNextPos(), Point(500, 20), L"Override texture search path");
 		
@@ -118,8 +120,11 @@ namespace HexEngine
 			for (auto& path : paths)
 			{
 				auto fileSystem = g_pEnv->_resourceSystem->FindFileSystemByPath(path);
-				LoadResourceFromFile(fileSystem->GetLocalAbsoluteDataPath(path), fileSystem, nullptr);
+				auto fullPath = fileSystem->GetLocalAbsoluteDataPath(path);
+				LoadResourceFromFile(fullPath, fileSystem, nullptr);
 			}
+
+			
 			return true;
 			};
 
@@ -154,6 +159,8 @@ namespace HexEngine
 			LOG_WARN("Failed to load model: %s!", importer.GetErrorString());
 			return nullptr;
 		}
+
+		_createdMeshes.clear();
 
 		_currentPath = path;
 
@@ -190,27 +197,27 @@ namespace HexEngine
 				forwardVec.x, forwardVec.y, forwardVec.z, 0.0f,
 				0.0f, 0.0f, 0.0f, 1.0f);
 
-			modelScene->mRootNode->mTransformation *= mat;
+			//modelScene->mRootNode->mTransformation *= mat;
 		}
 
 		std::shared_ptr<Model> model = std::shared_ptr<Model>(new Model, ResourceDeleter());
 
-		//if(_importAnimations)
-		//	ProcessAnimations(model, modelScene);
+		if(_importOpts.importAnimations)
+			ProcessAnimations(model, modelScene);
 
 		std::vector<AnimChannel*> parents(modelScene->mNumAnimations);
 
 		ProcessNode(model, modelScene->mRootNode, parents, modelScene, fileSystem);
 
-		/*if (modelScene->mNumAnimations > 0)
+		for (auto& mesh : _createdMeshes)
 		{
-			for (auto& mesh : model->GetMeshes())
-			{
-				((AnimatedMesh*)mesh)->_animData = model->_animData;
+			mesh.second->Save();
 
-				
-			}
-		}*/
+			// rename the file back to .hmesh
+			fs::path renamedFile = mesh.first;
+			fs::rename(mesh.first, renamedFile.replace_extension(".hmesh"));
+		}
+
 		// Update the max lod levels
 		for (auto& mesh : model->GetMeshes())
 		{
@@ -251,6 +258,11 @@ namespace HexEngine
 		//		}
 		//	}
 		//}
+
+		if (_importOpts.deleteOriginalsAfterImport)
+		{
+			//fs::remove(path);
+		}
 
 		return model;
 	}
@@ -300,6 +312,8 @@ namespace HexEngine
 		std::shared_ptr<Model> model = std::shared_ptr<Model>(new Model, ResourceDeleter());
 		model->SetPaths(relativePath, fileSystem);
 
+		_createdMeshes.clear();
+
 		/*if (modelScene->mMetaData)
 		{
 			int upAxis = 1;
@@ -347,6 +361,14 @@ namespace HexEngine
 			mesh->SetMaxLodLevel(model->GetMaxLOD());
 		}
 
+		for (auto& mesh : _createdMeshes)
+		{
+			mesh.second->Save();
+
+			// rename the file back to .hmesh
+			fs::path renamedFile = mesh.first;
+			fs::rename(mesh.first, renamedFile.replace_extension(".hmesh"));
+		}
 		//if (options)
 		//{
 		//	ModelLoadOptions* modelOpts = (ModelLoadOptions*)options;
@@ -390,7 +412,7 @@ namespace HexEngine
 		model->_animData = std::make_shared<AnimationData>();
 
 		model->_animData->_globalInverseTransform = math::Matrix(&scene->mRootNode->mTransformation.a1);
-		model->_animData->_globalInverseTransform = model->_animData->_globalInverseTransform.Invert(); // do we need this?
+		//model->_animData->_globalInverseTransform = model->_animData->_globalInverseTransform.Invert(); // do we need this?
 
 
 		for (auto i = 0u; i < scene->mNumAnimations; ++i)
@@ -552,9 +574,9 @@ namespace HexEngine
 		{
 			aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
 						
-			//if(scene->HasAnimations())
-			//	ProcessAnimatedMesh(mesh, scene, node, fileSystem);
-			//else
+			if (scene->HasAnimations())
+				ProcessAnimatedMesh(model, mesh, scene, node, fileSystem);
+			else
 				ProcessMesh(model, mesh, scene, node, fileSystem);
 		}
 
@@ -581,15 +603,18 @@ namespace HexEngine
 
 	std::shared_ptr<Mesh> AssimpModelImporter::ProcessMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem)
 	{
-		std::string meshName = node->mName.C_Str();
+		std::string meshName = mesh->mName.C_Str();
 
 		meshName.erase(std::remove(meshName.begin(), meshName.end(), ':'));
 		meshName.erase(std::remove(meshName.begin(), meshName.end(), '.'));
 
-		meshName.append("_");
-		meshName.append(std::to_string(mesh->mNumVertices));
-		meshName.append("_");
-		meshName.append(std::to_string(mesh->mNumFaces));
+		/*if (_importOpts.renameFiles)
+		{
+			meshName.append("_");
+			meshName.append(std::to_string(mesh->mNumVertices));
+			meshName.append("_");
+			meshName.append(std::to_string(mesh->mNumFaces));
+		}*/
 
 		// Pre-calculate needed vertices and indices
 		//
@@ -597,10 +622,13 @@ namespace HexEngine
 
 		auto fixedExtensionPath = _currentPath;
 
-		fixedExtensionPath.replace_filename(_currentPath.stem().string() + "_" + meshName);
-		fixedExtensionPath.replace_extension(".hmesh");
+		if (_importOpts.renameFiles == false)
+			fixedExtensionPath.replace_filename(_currentPath.stem().string());
+		else
+			fixedExtensionPath.replace_filename(_currentPath.stem().string() + "_" + meshName);
 
-		
+		// we give it a temporary file extension to stop the file change notifier picking it up whilst its still being written to
+		fixedExtensionPath.replace_extension(".hmesh_tmp");		
 
 		//modelMesh->AddRef();
 		modelMesh->SetPaths(fixedExtensionPath, fileSystem);
@@ -639,13 +667,11 @@ namespace HexEngine
 		if(totalIndices > 0)
 			modelMesh->_indices.reserve(totalIndices);
 
-#if 1 // old broken method of getting faces
 		for (auto i = 0U; i < mesh->mNumVertices; ++i)
 		{
 			MeshVertex vertex;
 
 			vertex._position = AI2VEC4(mesh->mVertices[i]);
-			//vertex._position = math::Vector4::Transform(vertex._position, transmat);
 
 			points.push_back(vertex._position);
 
@@ -659,72 +685,26 @@ namespace HexEngine
 			{
 				vertex._tangent = AI2VEC3(mesh->mTangents[i]);
 				vertex._bitangent = AI2VEC3(mesh->mBitangents[i]);
-
-				//vertex._tangent = math::Vector3::Transform(vertex._tangent, transmat);
-				//vertex._bitangent = math::Vector3::Transform(vertex._bitangent, transmat);
 			}
 
 			if (mesh->mNormals != nullptr)
 			{
 				vertex._normal = AI2VEC3(mesh->mNormals[i]);
-				//vertex._normal = math::Vector3::Transform(vertex._normal, transmat);
 			}
 
 
 			modelMesh->AddVertex(vertex);
 		}
-#endif
-
 		
 		for (uint32_t i = 0; i < mesh->mNumFaces; ++i)
 		{
 			aiFace& face = mesh->mFaces[i];
-
-			/*if (face.mNumIndices != 3) {
-				continue;
-			}*/
 
 			for (uint32_t j = 0; j < face.mNumIndices; ++j)
 			{
 				const auto index = face.mIndices[j];
 
 				modelMesh->_indices.push_back((MeshIndexFormat)index);
-
-#if 0
-				MeshVertex vertex;
-
-				vertex._position = AI2VEC4(mesh->mVertices[index]);
-				//vertex._position = math::Vector4::Transform(vertex._position, transmat);
-
-				// store the raw vertex data too, we might need it for physics
-				modelMesh->_rawVertices.push_back(math::Vector3(vertex._position.x, vertex._position.y, vertex._position.z));
-
-				points.push_back(vertex._position);
-
-				if (mesh->mTextureCoords[0])
-				{
-					vertex._texcoord = AI2VEC2(mesh->mTextureCoords[0][index]);
-				}
-
-				// set up the tangent and bitangents
-				if (mesh->mTangents != nullptr)
-				{
-					vertex._tangent = AI2VEC3(mesh->mTangents[index]);
-					vertex._bitangent = AI2VEC3(mesh->mBitangents[index]);
-
-					//vertex._tangent = math::Vector3::Transform(vertex._tangent, transmat);
-					//vertex._bitangent = math::Vector3::Transform(vertex._bitangent, transmat);
-				}
-
-				if (mesh->mNormals != nullptr)
-				{
-					vertex._normal = AI2VEC3(mesh->mNormals[index]);
-					//vertex._normal = math::Vector3::Transform(vertex._normal, transmat);
-				}
-
-
-				modelMesh->AddVertex(vertex);
-#endif
 			}
 		}
 
@@ -744,20 +724,54 @@ namespace HexEngine
 			}
 		}
 
-		modelMesh->Save();
+		_createdMeshes.push_back({ fixedExtensionPath , modelMesh });
+
+		//modelMesh->Save();
+
+		//_createdMeshes.push_back({ fixedExtensionPath , modelMesh });
+
+		//// rename the file back to .hmesh
+		//fs::path renamedFile = fixedExtensionPath;
+		//fs::rename(fixedExtensionPath, renamedFile.replace_extension(".hmesh"));
 
 		return modelMesh;
 	}
 
-#if 0
-	AnimatedMesh* AssimpModelImporter::ProcessAnimatedMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem)
+#if 1
+	std::shared_ptr<AnimatedMesh> AssimpModelImporter::ProcessAnimatedMesh(std::shared_ptr<Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, FileSystem* fileSystem)
 	{
+		std::string meshName = mesh->mName.C_Str();
+
+		meshName.erase(std::remove(meshName.begin(), meshName.end(), ':'));
+		meshName.erase(std::remove(meshName.begin(), meshName.end(), '.'));
+
+		/*if (_importOpts.renameFiles)
+		{
+			meshName.append("_");
+			meshName.append(std::to_string(mesh->mNumVertices));
+			meshName.append("_");
+			meshName.append(std::to_string(mesh->mNumFaces));
+		}*/
+
 		// Pre-calculate needed vertices and indices
 		//
-		AnimatedMesh* modelMesh = new AnimatedMesh(model, node->mName.C_Str());
+		std::shared_ptr<AnimatedMesh> modelMesh = std::shared_ptr<AnimatedMesh>(new AnimatedMesh(model, meshName), ResourceDeleter());
+
+		auto fixedExtensionPath = _currentPath;
+
+		// set the animation data
+		modelMesh->SetAnimationData(model->_animData);
+
+		if (_importOpts.renameFiles == false)
+			fixedExtensionPath.replace_filename(_currentPath.stem().string());
+		else
+			fixedExtensionPath.replace_filename(_currentPath.stem().string() + "_" + meshName);
+
+		fixedExtensionPath.replace_extension(".hmesh_tmp");
 
 		//modelMesh->AddRef();
-		modelMesh->SetPaths(_currentPath, fileSystem);
+		modelMesh->SetPaths(fixedExtensionPath, fileSystem);
+		modelMesh->SetLoader(g_pEnv->_meshLoader);
 		modelMesh->_faceCount = mesh->mNumFaces;
 
 		// set the root transformation for this node
@@ -798,7 +812,6 @@ namespace HexEngine
 			AnimatedMeshVertex vertex;
 
 			vertex._position = AI2VEC4(mesh->mVertices[i]);
-			//vertex._position = math::Vector4::Transform(vertex._position, transmat);
 
 			points.push_back(vertex._position);
 
@@ -812,15 +825,11 @@ namespace HexEngine
 			{
 				vertex._tangent = AI2VEC3(mesh->mTangents[i]);
 				vertex._bitangent = AI2VEC3(mesh->mBitangents[i]);
-
-				//vertex._tangent = math::Vector3::Transform(vertex._tangent, transmat);
-				//vertex._bitangent = math::Vector3::Transform(vertex._bitangent, transmat);
 			}
 
 			if (mesh->mNormals != nullptr)
 			{
 				vertex._normal = AI2VEC3(mesh->mNormals[i]);
-				//vertex._normal = math::Vector3::Transform(vertex._normal, transmat);
 			}
 
 
@@ -831,27 +840,30 @@ namespace HexEngine
 		dx::BoundingBox::CreateFromPoints(modelMesh->_aabb, points.size(), (const math::Vector3*)points.data(), sizeof(math::Vector4));
 		dx::BoundingOrientedBox::CreateFromBoundingBox(modelMesh->_obb, modelMesh->_aabb);
 
+		AnimatedMesh::BoneNameMap boneMap;
+		AnimatedMesh::BoneInfoArray boneInfo;
+
 		// Load the bones
 		for (uint32_t i = 0; i < mesh->mNumBones; i++)
 		{
 			uint32_t BoneIndex = 0;
 			std::string BoneName(mesh->mBones[i]->mName.data);
 
-			auto it = modelMesh->_boneMap.find(BoneName);
+			auto it = boneMap.find(BoneName);
 
-			if (it == modelMesh->_boneMap.end()) {
+			if (it == boneMap.end()) {
 				// Allocate an index for a new bone
-				BoneIndex = modelMesh->_boneMap.size();
+				BoneIndex = boneMap.size();
 
 				BoneInfo bi;
 				bi.BoneOffset = math::Matrix(&mesh->mBones[i]->mOffsetMatrix.a1);
-				modelMesh->_boneInfo.push_back(bi);
+				boneInfo[i] = bi;
 
-				modelMesh->_boneMap[BoneName] = BoneIndex;
+				boneMap[BoneName] = BoneIndex;
 			}
 			else {
 				BoneIndex = it->second;
-			}
+			}		
 
 			for (uint32_t j = 0; j < mesh->mBones[i]->mNumWeights; j++)
 			{
@@ -862,7 +874,7 @@ namespace HexEngine
 			}
 		}
 
-
+		modelMesh->SetBoneMap(mesh->mNumBones, boneMap, boneInfo);
 
 		for (uint32_t i = 0; i < mesh->mNumFaces; ++i)
 		{
@@ -874,23 +886,33 @@ namespace HexEngine
 			}
 		}
 
-		if (mesh->mMaterialIndex >= 0)
+		if (_importOpts.tryAndCreateMaterials && mesh->mMaterialIndex >= 0)
 		{
 			auto material = scene->mMaterials[mesh->mMaterialIndex];
 
 			if (material)
 			{
-				//modelMesh->_materialName = material->GetName().C_Str();
-				//ProcessMaterial(modelMesh, scene, material);
+				modelMesh->_materialName = material->GetName().C_Str();
+				ProcessMaterial(dynamic_pointer_cast<Mesh>(modelMesh), scene, material, fileSystem);
 			}
 		}
+
+		_createdMeshes.push_back({ fixedExtensionPath , modelMesh });
+
+		//modelMesh->Save();
+
+		//_createdMeshes.push_back({ fixedExtensionPath , modelMesh });
+
+		//// rename the file back to .hmesh
+		//fs::path renamedFile = fixedExtensionPath;
+		//fs::rename(fixedExtensionPath, renamedFile.replace_extension(".hmesh"));
 
 		return modelMesh;
 	}
 #endif
 
 #if 1
-	void AssimpModelImporter::ProcessMaterial(std::shared_ptr<Mesh>& mesh, const aiScene* scene, aiMaterial* material, FileSystem* fileSystem)
+	void AssimpModelImporter::ProcessMaterial(std::shared_ptr<Mesh> mesh, const aiScene* scene, aiMaterial* material, FileSystem* fileSystem)
 	{		
 		std::string matName = material->GetName().C_Str();		
 

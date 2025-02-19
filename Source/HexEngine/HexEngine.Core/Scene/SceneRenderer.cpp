@@ -524,7 +524,6 @@ namespace HexEngine
 		RenderTransparent();
 
 		//RenderWater();
-		//
 		RenderPostProcessing(flags);
 
 		if (r_debugScene._val.i32 == 1)
@@ -532,6 +531,8 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
 
 			_currentScene->RenderDebug(_currentCamera->GetPVS());
+
+			g_pEnv->_navMeshProvider->DebugRender();
 
 			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 		}
@@ -551,11 +552,17 @@ namespace HexEngine
 
 		// Next, get a list of lights and work out whether or not to include them
 		//
-		std::vector<BaseComponent*> lightList;
+		std::vector<Light*> directionalLights, spotLights, pointLights, allLights;
 		std::vector<Light*> pvs;
-		_currentScene->GetComponents((1 << DirectionalLight::_GetComponentId()) | (1 << SpotLight::_GetComponentId()) | (1 << PointLight::_GetComponentId()), lightList);
+		_currentScene->GetComponents<DirectionalLight>((std::vector<DirectionalLight*>&)directionalLights);
+		_currentScene->GetComponents<SpotLight>((std::vector<SpotLight*>&)spotLights);
+		_currentScene->GetComponents<PointLight>((std::vector<PointLight*>&)pointLights);
 
-		for (auto& component : lightList)
+		allLights.insert(allLights.end(), directionalLights.begin(), directionalLights.end());
+		allLights.insert(allLights.end(), spotLights.begin(), spotLights.end());
+		allLights.insert(allLights.end(), pointLights.begin(), pointLights.end());
+
+		for (auto& component : allLights)
 		{
 			auto light = component->CastAs<Light>();
 
@@ -1389,9 +1396,8 @@ namespace HexEngine
 	void SceneRenderer::RenderDirectionalLights()
 	{
 #if 1
-		std::vector<BaseComponent*> directionalLights;
-		if (_currentScene->GetComponents(
-			1 << DirectionalLight::_GetComponentId(), directionalLights) == false)
+		std::vector<DirectionalLight*> directionalLights;
+		if (_currentScene->GetComponents<DirectionalLight>(directionalLights) == false)
 			return;
 
 		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
@@ -1456,9 +1462,8 @@ namespace HexEngine
 
 	void SceneRenderer::RenderPointLights()
 	{
-		std::vector<BaseComponent*> pointLights;
-		if (_currentScene->GetComponents(
-			1 << PointLight::_GetComponentId(), pointLights) == false)
+		std::vector<PointLight*> pointLights;
+		if (_currentScene->GetComponents<PointLight>(pointLights) == false)
 			return;
 
 		g_pEnv->_graphicsDevice->SetRenderTarget(_pointLightBuffer);
@@ -1552,9 +1557,8 @@ namespace HexEngine
 #if 1
 	void SceneRenderer::RenderSpotLights()
 	{
-		std::vector<BaseComponent*> spotLights;
-		if (_currentScene->GetComponents(
-			1 << SpotLight::_GetComponentId(), spotLights) == false)
+		std::vector<SpotLight*> spotLights;
+		if (_currentScene->GetComponents<SpotLight>(spotLights) == false)
 			return;
 
 		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();

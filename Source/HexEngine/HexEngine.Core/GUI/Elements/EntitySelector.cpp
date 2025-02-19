@@ -11,7 +11,7 @@ namespace HexEngine
 		_list = new EntityList(this, Point(5, 5), Point(size.x - 10, size.y - 10));
 
 		Scene::EntityComponentVector components;
-		if (g_pEnv->_sceneManager->GetCurrentScene()->GetComponents(componentMask, components))
+		//if (g_pEnv->_sceneManager->GetCurrentScene()->GetComponents(componentMask, components))
 		{
 			for (auto& comp : components)
 			{
