@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class ListBox : public Element
+	class HEX_API ListBox : public Element
 	{
 	public:
 		struct Item

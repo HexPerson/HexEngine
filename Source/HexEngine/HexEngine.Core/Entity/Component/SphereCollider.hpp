@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class SphereCollider : public Collider
+	class HEX_API SphereCollider : public Collider
 	{
 	public:		
 		SphereCollider(Entity* entity, float radius);

@@ -7,8 +7,6 @@
 #include "Compilers\BaseCompiler.hpp"
 #include "Compilers\HLSL.hpp"
 
-HexEngine::IEnvironment* HexEngine::g_pEnv = nullptr;
-
 //HVar* HexEngine::g_hvars = nullptr;
 //HCommand* HexEngine::g_commands = nullptr;
 //int32_t HexEngine::g_numVars = 0;

@@ -72,5 +72,5 @@ namespace HexEngine
 		float modulo = 0.0f;
 	};
 
-	std::shared_ptr<Mesh> CreateTerrain(const TerrainGenerationParams& params);
+	std::shared_ptr<Mesh> HEX_API CreateTerrain(const TerrainGenerationParams& params);
 }

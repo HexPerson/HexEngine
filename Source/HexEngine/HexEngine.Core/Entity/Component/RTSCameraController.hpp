@@ -17,7 +17,7 @@ namespace HexEngine
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(RTSMoveFlag);
 
-	class RTSCameraController : public UpdateComponent, public IInputListener
+	class HEX_API RTSCameraController : public UpdateComponent, public IInputListener
 	{
 	public:
 		RTSCameraController(Entity* entity);

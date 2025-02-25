@@ -26,7 +26,7 @@ namespace HexEngine
 	class Model;
 	class AssetPackage;
 
-	class Game3DEnvironment : public IEnvironment
+	class HEX_API Game3DEnvironment : public IEnvironment
 	{
 	public:
 		Game3DEnvironment();

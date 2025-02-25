@@ -7,7 +7,7 @@
 namespace HexEngine
 {
 	class Camera;
-	class DirectionalLight : public Light
+	class HEX_API DirectionalLight : public Light
 	{
 	public:
 		CREATE_COMPONENT_ID(DirectionalLight);

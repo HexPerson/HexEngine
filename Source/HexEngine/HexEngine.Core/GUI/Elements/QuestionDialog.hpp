@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class QuestionDialog : public Dialog
+	class HEX_API QuestionDialog : public Dialog
 	{
 	public:
 		enum class ButtonOptions

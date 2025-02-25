@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class Point
+	class HEX_API Point
 	{
 	public:
 		Point();

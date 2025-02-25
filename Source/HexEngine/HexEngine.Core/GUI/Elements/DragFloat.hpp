@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class DragFloat : public LineEdit
+	class HEX_API DragFloat : public LineEdit
 	{
 	public:
 		using OnDrag = std::function<void(float, float, float)>;

@@ -11,7 +11,7 @@
 
 namespace HexEngine
 {
-	class UIManager : public IInputListener
+	class HEX_API UIManager : public IInputListener
 	{
 	public:
 		UIManager();

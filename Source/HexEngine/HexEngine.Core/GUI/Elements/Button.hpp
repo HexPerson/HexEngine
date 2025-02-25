@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class Button : public Element
+	class HEX_API Button : public Element
 	{
 	public:
 		Button(Element* parent, const Point& position, const Point& size, const std::wstring& label, std::function<bool(Button*)> action);

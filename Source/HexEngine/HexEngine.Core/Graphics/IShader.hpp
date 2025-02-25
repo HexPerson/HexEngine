@@ -50,7 +50,7 @@ namespace HexEngine
 		uint32_t _shaderSizes[(uint32_t)ShaderStage::NumShaderStages];
 	};
 
-	class IShader : public IResource
+	class HEX_API IShader : public IResource
 	{
 		friend class ShaderSystem;
 

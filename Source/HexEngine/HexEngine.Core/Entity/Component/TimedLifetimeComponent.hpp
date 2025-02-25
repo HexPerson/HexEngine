@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class TimedLifetimeComponent : public UpdateComponent
+	class HEX_API TimedLifetimeComponent : public UpdateComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(TimedLifetimeComponent);

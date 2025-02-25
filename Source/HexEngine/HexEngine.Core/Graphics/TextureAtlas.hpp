@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class TextureAtlas
+	class HEX_API TextureAtlas
 	{
 	public:
 		struct Item

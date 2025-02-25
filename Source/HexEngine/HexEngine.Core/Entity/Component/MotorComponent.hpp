@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class MotorComponent : public UpdateComponent
+	class HEX_API MotorComponent : public UpdateComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(MotorComponent);

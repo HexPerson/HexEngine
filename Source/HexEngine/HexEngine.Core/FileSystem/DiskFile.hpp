@@ -13,7 +13,7 @@ namespace HexEngine
 
 	DEFINE_ENUM_FLAG_OPERATORS(DiskFileOptions);
 
-	class DiskFile : public IFile
+	class HEX_API DiskFile : public IFile
 	{
 	public:
 		DiskFile(const fs::path& absolutePath, std::ios_base::openmode openMode, DiskFileOptions options=DiskFileOptions::None);

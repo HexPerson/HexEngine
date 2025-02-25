@@ -11,7 +11,7 @@ namespace HexEngine
 	class FileSystem;
 
 
-	class Model : public IResource
+	class HEX_API Model : public IResource
 	{
 		friend class AssimpModelImporter;
 

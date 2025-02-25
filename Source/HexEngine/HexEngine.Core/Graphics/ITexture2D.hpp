@@ -8,7 +8,7 @@ namespace HexEngine
 {
 	class IShader;
 
-	class ITexture2D : public ITexture, public IResource
+	class HEX_API ITexture2D : public ITexture, public IResource
 	{
 	public:
 		// Convenience static methods

@@ -12,7 +12,7 @@ namespace HexEngine
 	class GuiRenderer;
 	class UIManager;
 
-	class Element
+	class HEX_API Element
 	{
 	public:
 		using OnClickFn = std::function<void(Element*, int32_t, int32_t, int32_t)>;

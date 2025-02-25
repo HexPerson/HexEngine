@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class Joint : public BaseComponent
+	class HEX_API Joint : public BaseComponent
 	{
 	public:
 		Joint(Entity* entity);

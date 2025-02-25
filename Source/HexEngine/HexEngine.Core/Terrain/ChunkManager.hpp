@@ -21,7 +21,7 @@ namespace HexEngine
 		HexEngine::Chunk*** _chunks = nullptr;
 	};
 
-	class ChunkManager : public IEntityListener
+	class HEX_API ChunkManager : public IEntityListener
 	{
 	public:
 		void CreateChunks(Scene* scene, float chunkSize, int32_t numChunks);

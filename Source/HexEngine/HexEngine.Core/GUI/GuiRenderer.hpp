@@ -32,7 +32,7 @@ namespace HexEngine
 
 	
 
-	class GuiRenderer
+	class HEX_API GuiRenderer
 	{
 	public:
 		GuiRenderer();

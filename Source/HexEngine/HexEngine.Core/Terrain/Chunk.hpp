@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class Chunk
+	class HEX_API Chunk
 	{
 	public:
 		Chunk(const dx::BoundingBox& box);		

@@ -6,7 +6,7 @@
 namespace HexEngine
 {
 	class TabView;
-	class TabItem : public Element
+	class HEX_API TabItem : public Element
 	{
 	public:
 		TabItem(TabView* parent, const Point& position, const Point& size, const std::wstring& label);

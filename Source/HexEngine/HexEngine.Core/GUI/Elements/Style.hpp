@@ -8,7 +8,7 @@ namespace HexEngine
 	class ITexture2D;
 	class IFontResource;
 
-	class Style
+	class HEX_API Style
 	{
 	public:
 		enum class FontSize : int8_t

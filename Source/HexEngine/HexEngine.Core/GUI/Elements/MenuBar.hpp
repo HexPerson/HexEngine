@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class MenuBar : public Element
+	class HEX_API MenuBar : public Element
 	{
 	public:
 		struct Item

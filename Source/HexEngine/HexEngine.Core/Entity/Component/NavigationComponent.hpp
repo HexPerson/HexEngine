@@ -7,9 +7,7 @@
 
 namespace HexEngine
 {
-	
-
-	class NavigationComponent : public UpdateComponent, public IDebugGUICallback
+	class HEX_API NavigationComponent : public UpdateComponent, public IDebugGUICallback
 	{
 	public:
 		CREATE_COMPONENT_ID(NavigationComponent);

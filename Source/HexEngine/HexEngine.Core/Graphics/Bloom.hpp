@@ -9,7 +9,7 @@ namespace HexEngine
 {
 	class Camera;
 
-	class Bloom
+	class HEX_API Bloom
 	{
 	public:
 		~Bloom();

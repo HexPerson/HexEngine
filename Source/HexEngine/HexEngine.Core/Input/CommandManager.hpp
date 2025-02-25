@@ -12,7 +12,7 @@ namespace HexEngine
 {
 	class HCommand;
 
-	class CommandManager : public IInputListener
+	class HEX_API CommandManager : public IInputListener
 	{
 	public:		
 		friend class HVar;

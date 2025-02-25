@@ -14,7 +14,7 @@ namespace HexEngine
 
 	class GuiRenderer;
 
-	class BlurEffect
+	class HEX_API BlurEffect
 	{
 	public:
 		BlurEffect(ITexture2D* textureToBlur, BlurType type, int32_t blurSize);

@@ -7,7 +7,7 @@
 namespace HexEngine
 {
 #undef MessageBox
-	class MessageBox : public Dialog
+	class HEX_API MessageBox : public Dialog
 	{
 	public:
 		static MessageBox* Info(const std::wstring& title, const std::wstring& message, CallbackFn callback = nullptr);

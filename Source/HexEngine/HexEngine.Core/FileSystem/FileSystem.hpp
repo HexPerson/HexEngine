@@ -20,7 +20,7 @@ namespace HexEngine
 
 	using FileChangeActionMap = std::map<uint32_t, std::vector<FileChangeInfo>>;
 
-	class FileSystem
+	class HEX_API FileSystem
 	{
 	public:
 		FileSystem(const std::wstring& name) :

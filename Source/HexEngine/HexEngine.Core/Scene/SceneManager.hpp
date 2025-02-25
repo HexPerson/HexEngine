@@ -8,7 +8,7 @@ namespace HexEngine
 {
 	class IEntityListener;
 
-	class SceneManager : public IResourceLoader
+	class HEX_API SceneManager : public IResourceLoader
 	{
 	public:
 		SceneManager();

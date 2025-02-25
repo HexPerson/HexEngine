@@ -64,7 +64,7 @@ namespace HexEngine
 
 	DEFINE_ENUM_FLAG_OPERATORS(EntityFlags);
 
-	class Entity final : public MessageListener, public Reflection::IObject
+	class HEX_API Entity final : public MessageListener, public Reflection::IObject
 	{
 	public:
 		//DEFINE_OBJECT_GUID(Entity);

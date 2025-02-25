@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class ITexture : public INativeGraphicsResource
+	class HEX_API ITexture : public INativeGraphicsResource
 	{
 	public:
         virtual ~ITexture() {}

@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class SkeletalAnimationComponent : public UpdateComponent
+	class HEX_API SkeletalAnimationComponent : public UpdateComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(SkeletalAnimationComponent);

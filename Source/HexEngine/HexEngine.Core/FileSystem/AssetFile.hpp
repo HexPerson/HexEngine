@@ -23,7 +23,7 @@ namespace HexEngine
 
 	class AssetPackage;
 
-	class AssetFile : public DiskFile
+	class HEX_API AssetFile : public DiskFile
 	{
 	public:
 		AssetFile(const fs::path& absolutePath);

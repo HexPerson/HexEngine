@@ -587,6 +587,7 @@ namespace HexEngine
 
 			return it->second.backbuffer;
 		}
+		return nullptr;
 	}
 
 	Texture2D* GraphicsDeviceD3D11::CreateTexture(ITexture2D* clone)

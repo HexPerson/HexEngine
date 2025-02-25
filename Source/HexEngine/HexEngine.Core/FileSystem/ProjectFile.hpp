@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class ProjectFile : public DiskFile
+	class HEX_API ProjectFile : public DiskFile
 	{
 	public:
 		ProjectFile(const fs::path& absolutePath, std::ios_base::openmode openMode);

@@ -9,7 +9,7 @@ namespace HexEngine
 	class Camera;
 	class Mesh;
 
-	class Billboard : public UpdateComponent
+	class HEX_API Billboard : public UpdateComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(Billboard);

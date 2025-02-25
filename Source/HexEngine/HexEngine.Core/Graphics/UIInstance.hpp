@@ -24,7 +24,7 @@ namespace HexEngine
 
 	typedef uint32_t MeshInstanceId;
 
-	class UIInstance
+	class HEX_API UIInstance
 	{
 	public:
 		friend class MeshInstanceManager;

@@ -49,6 +49,9 @@ namespace HexEditor
 #define ADD_CONTROL(widget, name,label,p, dp) { auto var = g_pEnv->_commandManager->FindHVar(name);\
 DragFloat* df = new DragFloat(widget, widget->GetNextPos(), Point(sizex - 40, 18), label, &var->_val.f32, var->_min.f32, var->_max.f32, p, dp); }
 
+#define ADD_CONTROL_TOGGLE(widget, name, label) { auto var = g_pEnv->_commandManager->FindHVar(name);\
+Checkbox* df = new Checkbox(widget, widget->GetNextPos(), Point(sizex - 40, 18), label, &var->_max.b); }
+
 		ADD_CONTROL(pm->_widgetBase, "env_zenithExponent", L"Zenith Exponent", 0.01f, 3);
 		ADD_CONTROL(pm->_widgetBase, "env_anisotropicIntensity", L"Anisotropic Intensity", 0.01f, 3);
 		ADD_CONTROL(pm->_widgetBase, "env_density", L"Density", 0.01f, 3);
@@ -71,7 +74,7 @@ DragFloat* df = new DragFloat(widget, widget->GetNextPos(), Point(sizex - 40, 18
 
 		pm->_fog = new ComponentWidget(layout, layout->GetNextPos(), Point(pm->_size.x - 20, 10), L"Fog");
 
-		auto fogOn = new Checkbox(pm->_fog, pm->_fog->GetNextPos(), Point(pm->_fog->GetSize().x - 40, 18), L"Fog Enabled", &r_fog._val.b);
+		ADD_CONTROL_TOGGLE(pm->_fog, "r_fog", L"Fog on/off");
 		ADD_CONTROL(pm->_fog, "r_fogDensity", L"Fog Density", 0.0001f, 5);
 		//ADD_CONTROL(pm->_fog, "r_exposure", L"Exposure", 0.01f, 3);
 		//ADD_CONTROL(pm->_fog, "r_hueShift", L"Hue Shift", 0.01f, 3);

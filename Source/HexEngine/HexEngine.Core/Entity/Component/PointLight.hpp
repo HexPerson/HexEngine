@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class PointLight : public Light
+	class HEX_API PointLight : public Light
 	{
 	public:
 		enum ShadowSides

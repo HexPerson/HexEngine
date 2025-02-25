@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class JsonFile : public DiskFile
+	class HEX_API JsonFile : public DiskFile
 	{
 	public:
 		JsonFile(const fs::path& absolutePath, std::ios_base::openmode openMode, DiskFileOptions options = DiskFileOptions::None) :

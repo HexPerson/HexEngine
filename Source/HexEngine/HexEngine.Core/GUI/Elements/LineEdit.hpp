@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class LineEdit : public Element
+	class HEX_API LineEdit : public Element
 	{
 	public:
 		using OnSetInputFn = std::function<void(LineEdit*, const std::wstring&)>;

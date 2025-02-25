@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class LineEditDialog : public Dialog
+	class HEX_API LineEditDialog : public Dialog
 	{
 	public:
 		using OnCompleteLineEditDialog = std::function<void(LineEditDialog*, const std::wstring&)>;

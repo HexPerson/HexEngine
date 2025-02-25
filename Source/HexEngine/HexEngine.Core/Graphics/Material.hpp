@@ -61,7 +61,7 @@ namespace HexEngine
 		int pad2;
 	};
 
-	class Material : public IResource
+	class HEX_API Material : public IResource
 	{
 	public:
 		Material();

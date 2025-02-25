@@ -3,6 +3,8 @@
 
 namespace HexEngine
 {
+	HEX_API IEnvironment* g_pEnv = nullptr;
+
 	void IEnvironment::DestroyEnvironment(IEnvironment* environment)
 	{
 		if (!environment)
@@ -11,7 +13,7 @@ namespace HexEngine
 		environment->Destroy();
 	}
 
-	void DestroyEnvironment()
+	void HEX_API DestroyEnvironment()
 	{
 		IEnvironment::DestroyEnvironment(g_pEnv);
 	}

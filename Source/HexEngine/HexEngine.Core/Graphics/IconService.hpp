@@ -11,7 +11,7 @@ namespace HexEngine
 		fs::path path;
 		std::wstring assetPackage;
 	};
-	class IconService
+	class HEX_API IconService
 	{
 	public:
 		void Create(const std::wstring& sceneName);

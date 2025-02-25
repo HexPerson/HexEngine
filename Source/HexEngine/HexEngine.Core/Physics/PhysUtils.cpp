@@ -9,7 +9,7 @@ namespace HexEngine
 {
 	namespace PhysUtils
 	{
-		bool RayCast(const math::Vector3& from, const math::Vector3& to, LayerMask mask, RayHit* hitInfo)
+		bool HEX_API RayCast(const math::Vector3& from, const math::Vector3& to, LayerMask mask, RayHit* hitInfo)
 		{
 			math::Vector3 direction = (to - from);
 			float maxDistance = direction.Length();
@@ -26,7 +26,7 @@ namespace HexEngine
 			return RayCast(ray, maxDistance, mask, hitInfo);
 		}
 
-		bool RayCast(const math::Ray& ray, float maxDistance, LayerMask mask, RayHit* hitInfo)
+		bool HEX_API RayCast(const math::Ray& ray, float maxDistance, LayerMask mask, RayHit* hitInfo)
 		{
 			g_pEnv->_sceneManager->GetCurrentScene()->Lock();
 

@@ -87,5 +87,5 @@ namespace HexEngine
 		}
 	};
 
-	std::vector<float> GenerateHeightMap(const HeightMapGenerationParams& params);
+	std::vector<float> HEX_API GenerateHeightMap(const HeightMapGenerationParams& params);
 }

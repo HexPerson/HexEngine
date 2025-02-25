@@ -26,7 +26,7 @@ namespace HexEngine
 		Font,
 	};
 
-	class IResource
+	class HEX_API IResource
 	{
 		friend class ResourceSystem;
 

@@ -4,9 +4,6 @@
 #include <cxxopts/cxxopts.hpp>
 #include <brotli\encode.h>
 
-
-HexEngine::IEnvironment* HexEngine::g_pEnv = nullptr;
-
 //HVar* HexEngine::g_hvars = nullptr;
 //HCommand* HexEngine::g_commands = nullptr;
 //int32_t HexEngine::g_numVars = 0;

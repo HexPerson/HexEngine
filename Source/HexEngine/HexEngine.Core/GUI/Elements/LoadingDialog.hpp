@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class LoadingDialog : public Dialog
+	class HEX_API LoadingDialog : public Dialog
 	{
 	public:
 		LoadingDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title);

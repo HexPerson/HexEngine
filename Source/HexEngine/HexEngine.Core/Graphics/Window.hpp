@@ -13,9 +13,9 @@ namespace HexEngine
 		FullscreenBorderless
 	};
 
-	HWND WindowCreate(int32_t xpos, int32_t ypos, int32_t width, int32_t height, DisplayMode displayMode, const std::string& windowTitle);
+	HWND HEX_API WindowCreate(int32_t xpos, int32_t ypos, int32_t width, int32_t height, DisplayMode displayMode, const std::string& windowTitle);
 
-	class Window
+	class HEX_API Window
 	{
 	public:				
 		Window();

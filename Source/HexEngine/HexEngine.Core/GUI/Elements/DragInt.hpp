@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class DragInt : public LineEdit
+	class HEX_API DragInt : public LineEdit
 	{
 	public:
 		using OnDrag = std::function<void(int32_t*, int32_t, int32_t)>;

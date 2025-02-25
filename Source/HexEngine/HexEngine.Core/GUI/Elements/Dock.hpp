@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class Dock : public Element
+	class HEX_API Dock : public Element
 	{
 	public:
 		enum class Anchor

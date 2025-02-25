@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class ScriptComponent : public UpdateComponent
+	class HEX_API ScriptComponent : public UpdateComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(ScriptComponent);

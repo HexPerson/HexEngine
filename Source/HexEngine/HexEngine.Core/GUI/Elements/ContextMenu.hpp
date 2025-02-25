@@ -35,7 +35,7 @@ namespace HexEngine
 		bool open;
 	};
 
-	class ContextMenu : public Element
+	class HEX_API ContextMenu : public Element
 	{
 	public:
 		ContextMenu(Element* parent, const Point& position, const Point& size = Point(-1,-1));

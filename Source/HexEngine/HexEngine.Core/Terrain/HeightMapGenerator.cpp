@@ -105,7 +105,7 @@ namespace HexEngine
 		return  noise * scale * 100.0f;
 	}
 
-	std::vector<float> GenerateHeightMap(const HeightMapGenerationParams& params)
+	std::vector<float> HEX_API GenerateHeightMap(const HeightMapGenerationParams& params)
 	{
 		std::vector<float> heightMap;
 

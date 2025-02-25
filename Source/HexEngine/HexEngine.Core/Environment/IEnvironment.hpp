@@ -13,7 +13,7 @@ namespace HexEngine
 
 	class IGameExtension;
 
-	class IEnvironment
+	class HEX_API IEnvironment
 	{
 	public:
 
@@ -96,12 +96,12 @@ namespace HexEngine
 		virtual void Destroy() = 0;
 	};
 
-	extern IEnvironment* g_pEnv;
+	HEX_API extern IEnvironment* g_pEnv;
 
 	/// <summary>
 	/// Helper function to destroy the game environment
 	/// </summary>
-	void DestroyEnvironment();
+	void HEX_API DestroyEnvironment();
 
 #ifdef _DEBUG
 	#define LOG_DEBUG(text, ...) if(HexEngine::g_pEnv && HexEngine::g_pEnv->_logFile){HexEngine::g_pEnv->_logFile->WriteLine(HexEngine::LogLevel::Debug, __FILE__, __FUNCTION__, __LINE__, text, __VA_ARGS__); }

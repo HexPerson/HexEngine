@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class ComponentWidget : public Element
+	class HEX_API ComponentWidget : public Element
 	{
 	public:
 		ComponentWidget(Element* parent, const Point& position, const Point& size, const std::wstring& label);

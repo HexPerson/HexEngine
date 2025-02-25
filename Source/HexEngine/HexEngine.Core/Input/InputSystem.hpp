@@ -95,7 +95,7 @@ namespace HexEngine
 		Locked, // FPS style
 	};
 
-	class InputSystem
+	class HEX_API InputSystem
 	{
 	public:
 		~InputSystem();

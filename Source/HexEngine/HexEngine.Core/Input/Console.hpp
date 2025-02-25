@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class Console
+	class HEX_API Console
 	{
 	public:
 		void Create();

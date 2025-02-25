@@ -393,13 +393,16 @@ namespace HexEngine
 
 	void Scene::OnGUI()
 	{
-		for (auto& renderable : _mainCamera->GetPVS()->GetRenderables())
+		if (_mainCamera)
 		{
-			for (auto& tuple : renderable.second)
+			for (auto& renderable : _mainCamera->GetPVS()->GetRenderables())
 			{
-				auto ent = std::get<1>(tuple);
+				for (auto& tuple : renderable.second)
+				{
+					auto ent = std::get<1>(tuple);
 
-				ent->OnGUI();
+					ent->OnGUI();
+				}
 			}
 		}
 	}

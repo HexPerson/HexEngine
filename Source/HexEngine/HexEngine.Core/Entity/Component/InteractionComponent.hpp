@@ -9,7 +9,7 @@ namespace HexEngine
 
 	using tInteractionCallback = void(InteractionComponent*, Entity*);
 
-	class InteractionComponent : public BaseComponent
+	class HEX_API InteractionComponent : public BaseComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(InteractionComponent);

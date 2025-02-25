@@ -69,7 +69,7 @@ namespace HexEngine
 
 	DEFINE_ENUM_FLAG_OPERATORS(SceneUpdateFlags);
 
-	class Scene : public IDebugGUICallback, public IResource
+	class HEX_API Scene : public IDebugGUICallback, public IResource
 	{
 	public:
 		using EntityVector = std::vector<Entity*>;

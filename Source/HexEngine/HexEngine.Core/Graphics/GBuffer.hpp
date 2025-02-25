@@ -10,7 +10,7 @@ namespace HexEngine
 	class IGraphicsDevice;
 	class GuiRenderer;
 
-	class GBuffer
+	class HEX_API GBuffer
 	{
 	public:
 		bool Create(IGraphicsDevice* device, int msaaLevel);

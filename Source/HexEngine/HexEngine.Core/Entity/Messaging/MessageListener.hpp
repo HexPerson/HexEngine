@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class MessageListener
+	class HEX_API MessageListener
 	{
 	public:
 		virtual void OnMessage(Message* message, MessageListener* sender) {};

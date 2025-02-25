@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class TabView : public Element
+	class HEX_API TabView : public Element
 	{
 	public:
 		TabView(Element* parent, const Point& position, const Point& size);

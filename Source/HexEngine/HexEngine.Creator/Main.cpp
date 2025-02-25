@@ -8,8 +8,6 @@
 
 using namespace ultralight;
 
-IEnvironment* HexEngine::g_pEnv = nullptr;
-
 void signal_handler(int signal)
 {
 	bool a = false;

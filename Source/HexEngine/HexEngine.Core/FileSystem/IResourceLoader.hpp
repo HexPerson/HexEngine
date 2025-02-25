@@ -8,7 +8,7 @@ namespace HexEngine
 {
 	class Dialog;
 
-	class IResourceLoader
+	class HEX_API IResourceLoader
 	{
 	public:
 		virtual std::shared_ptr<IResource>	LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) = 0;

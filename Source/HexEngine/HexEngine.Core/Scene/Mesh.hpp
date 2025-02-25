@@ -133,7 +133,7 @@ namespace HexEngine
 	class Material;
 	class Entity;
 	
-	class Mesh : public IResource
+	class HEX_API Mesh : public IResource
 	{
 	public:
 		friend class AssimpModelImporter;

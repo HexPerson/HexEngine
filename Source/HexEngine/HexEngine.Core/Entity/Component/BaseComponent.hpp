@@ -38,7 +38,7 @@ else\
 
 #define SERIALIZE_VALUE(name) file->Serialize(data,#name, name);//data[#name] = name;
 
-	class BaseComponent : public MessageListener, public Reflection::IObject
+	class HEX_API BaseComponent : public MessageListener, public Reflection::IObject
 	{
 	public:
 		BaseComponent(Entity* entity);		

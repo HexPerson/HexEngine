@@ -10,7 +10,7 @@ namespace HexEngine
 	class Material;
 	class JsonFile;
 
-	class MaterialLoader : public IResourceLoader
+	class HEX_API MaterialLoader : public IResourceLoader
 	{
 	public:
 		MaterialLoader();

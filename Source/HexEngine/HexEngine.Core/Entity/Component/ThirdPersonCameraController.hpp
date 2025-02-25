@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class ThirdPersonCameraController : public UpdateComponent, public IInputListener
+	class HEX_API ThirdPersonCameraController : public UpdateComponent, public IInputListener
 	{
 	public:
 		CREATE_COMPONENT_ID(ThirdPersonCameraController);

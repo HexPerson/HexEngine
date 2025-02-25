@@ -23,7 +23,7 @@ namespace HexEngine
 	DEFINE_ENUM_FLAG_OPERATORS(LogOptions);
 	DEFINE_ENUM_FLAG_OPERATORS(LogLevel);
 
-	class LogFile : public DiskFile
+	class HEX_API LogFile : public DiskFile
 	{
 	public:
 		LogFile(const fs::path& path, LogOptions options, LogLevel level);

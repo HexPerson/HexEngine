@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class Dialog : public Element
+	class HEX_API Dialog : public Element
 	{
 	public:
 		using CallbackFn = std::function<void ()>;		

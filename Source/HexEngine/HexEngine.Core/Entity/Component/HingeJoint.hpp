@@ -7,7 +7,7 @@ namespace HexEngine
 {
 	class LineEdit;
 
-	class HingeJoint : public Joint
+	class HEX_API HingeJoint : public Joint
 	{
 	public:
 		CREATE_COMPONENT_ID(HingeJoint);

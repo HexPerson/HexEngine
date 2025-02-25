@@ -9,7 +9,7 @@ namespace HexEngine
 {
 	
 
-	class CommandArgs
+	class HEX_API CommandArgs
 	{
 	public:
 		friend class CommandManager;
@@ -66,7 +66,7 @@ namespace HexEngine
 
 	using CommandFunc = std::function<void(CommandArgs*, bool, void*)>;
 
-	class HCommand
+	class HEX_API HCommand
 	{
 	public:
 		//HCommand(const char* name, CommandFunc func);

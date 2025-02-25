@@ -11,7 +11,7 @@ namespace HexEngine
 		IGameExtension* gameExtension = nullptr;
 	};
 
-	class HeadlessEnvironment : public IEnvironment
+	class HEX_API HeadlessEnvironment : public IEnvironment
 	{
 	public:
 		HeadlessEnvironment();

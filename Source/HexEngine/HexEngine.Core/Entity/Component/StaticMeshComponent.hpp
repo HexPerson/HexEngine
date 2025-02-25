@@ -9,9 +9,7 @@
 
 namespace HexEngine
 {
-	class LineEdit;
-
-	
+	class LineEdit;	
 
 	enum MeshRenderFlags
 	{
@@ -22,7 +20,7 @@ namespace HexEngine
 
 	DEFINE_ENUM_FLAG_OPERATORS(MeshRenderFlags);
 
-	class StaticMeshComponent : public BaseComponent
+	class HEX_API StaticMeshComponent : public BaseComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(StaticMeshComponent);

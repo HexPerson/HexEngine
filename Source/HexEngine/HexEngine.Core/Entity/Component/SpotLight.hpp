@@ -8,7 +8,7 @@ namespace HexEngine
 {
 	class Camera;
 
-	class SpotLight : public Light
+	class HEX_API SpotLight : public Light
 	{
 	public:
 		CREATE_COMPONENT_ID(SpotLight);

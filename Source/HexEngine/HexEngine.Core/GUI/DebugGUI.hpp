@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class IDebugGUICallback
+	class HEX_API IDebugGUICallback
 	{
 	public:
 		virtual void OnDebugGUI() = 0;
@@ -15,7 +15,7 @@ namespace HexEngine
 
 	class Entity;
 
-	class DebugGUI
+	class HEX_API DebugGUI
 	{
 	public:
 		DebugGUI();

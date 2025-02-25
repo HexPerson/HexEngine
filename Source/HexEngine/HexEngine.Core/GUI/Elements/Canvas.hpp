@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class Canvas
+	class HEX_API Canvas
 	{
 	public:
 		~Canvas();

@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class IMGUI
+	class HEX_API IMGUI
 	{
 	public:
 		static void FloatControl(int32_t x, int32_t y, int32_t w, int32_t h, Style* style, float* value);

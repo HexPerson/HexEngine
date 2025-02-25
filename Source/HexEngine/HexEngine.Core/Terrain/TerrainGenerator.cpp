@@ -64,7 +64,7 @@ namespace HexEngine
 	//	return;
 	//}
 
-	std::shared_ptr<Mesh> CreateTerrain(const TerrainGenerationParams& params)
+	std::shared_ptr<Mesh> HEX_API CreateTerrain(const TerrainGenerationParams& params)
 	{
 		uint32_t resolution = params.resolution + 1;
 

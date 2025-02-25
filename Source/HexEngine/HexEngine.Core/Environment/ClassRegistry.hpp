@@ -8,7 +8,7 @@ namespace HexEngine
 	class BaseComponent;
 	class Entity;
 
-	class ClassRegistry
+	class HEX_API ClassRegistry
 	{
 	public:
 		using CloneInstanceFn = std::function<BaseComponent* (Entity*, BaseComponent*)>;

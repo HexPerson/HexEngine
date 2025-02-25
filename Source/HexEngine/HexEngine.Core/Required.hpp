@@ -59,6 +59,8 @@ namespace math = DirectX::SimpleMath;
 namespace dx = DirectX;
 using json = nlohmann::json;
 
+#pragma warning(disable: 4251)
+
 #define SAFE_DELETE(x) if(x){ delete x; x = nullptr; }
 #define SAFE_DELETE_ARRAY(x) if(x) { delete[] x; x = nullptr; }
 #define SAFE_RELEASE(x) if(x) { x->Release(); x = nullptr; }
@@ -68,7 +70,7 @@ using json = nlohmann::json;
 #define HEX_EXPORT __declspec(dllexport)
 #define HEX_IMPORT __declspec(dllimport)
 
-#ifdef HEX_CORE_MODULE
+#ifdef HEX_CORE
 #define HEX_API HEX_EXPORT
 #else
 #define HEX_API HEX_IMPORT

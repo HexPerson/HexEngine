@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class EntitySelector : public Dialog
+	class HEX_API EntitySelector : public Dialog
 	{
 	public:
 		EntitySelector(Element* parent, const Point& position, const Point& size, const std::wstring& label, ComponentSignature componentMask);

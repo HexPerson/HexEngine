@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class AudioSource : public BaseComponent
+	class HEX_API AudioSource : public BaseComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(AudioSource);

@@ -7,7 +7,7 @@
 
 namespace HexEngine
 {
-	class Collider : public BaseComponent
+	class HEX_API Collider : public BaseComponent
 	{
 	public:
 		Collider(Entity* entity);

@@ -15,7 +15,7 @@ namespace HexEngine
 		math::Color colour;
 	};
 
-	class DebugRenderer
+	class HEX_API DebugRenderer
 	{
 	public:
 		struct DebugLines

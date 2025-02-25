@@ -14,7 +14,7 @@ namespace HexEngine
 
 	inline const int32_t TreeListLineHeight = 20;
 
-	class ListNode
+	class HEX_API ListNode
 	{
 		friend class TreeList;
 

@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class TimeManager
+	class HEX_API TimeManager
 	{
 	public:
 		TimeManager();

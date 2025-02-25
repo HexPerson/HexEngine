@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class AudioListener : public BaseComponent
+	class HEX_API AudioListener : public BaseComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(AudioListener);

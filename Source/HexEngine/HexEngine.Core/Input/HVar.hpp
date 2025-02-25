@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class HVar
+	class HEX_API HVar
 	{
 	public:
 		enum class Type

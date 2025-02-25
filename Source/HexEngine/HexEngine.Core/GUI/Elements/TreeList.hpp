@@ -8,7 +8,7 @@ namespace HexEngine
 {
 	
 
-	class TreeList : public Element
+	class HEX_API TreeList : public Element
 	{
 	public:
 		//using OnSelectItem = std::function<bool(TreeList*, ListNode*, int32_t mouseButton)>;

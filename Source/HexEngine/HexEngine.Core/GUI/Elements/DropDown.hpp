@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class DropDown : public LineEdit
+	class HEX_API DropDown : public LineEdit
 	{
 	public:
 		DropDown(Element* parent, const Point& position, const Point& size, const std::wstring& label);

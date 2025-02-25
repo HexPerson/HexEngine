@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class TextureSearch : public Element
+	class HEX_API TextureSearch : public Element
 	{
 	public:
 		TextureSearch(

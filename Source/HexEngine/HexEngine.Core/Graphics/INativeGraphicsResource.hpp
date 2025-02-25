@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class INativeGraphicsResource
+	class HEX_API INativeGraphicsResource
 	{
 	public:
 		virtual void Destroy() = 0;

@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class ColourPicker : public Dialog
+	class HEX_API ColourPicker : public Dialog
 	{
 	public:
 		ColourPicker(Element* parent, const Point& position, const Point& size, const std::wstring& label);

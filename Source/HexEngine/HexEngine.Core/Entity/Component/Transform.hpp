@@ -13,7 +13,7 @@ namespace HexEngine
 		Interpolated
 	};
 
-	class Transform : public BaseComponent
+	class HEX_API Transform : public BaseComponent
 	{
 	public:	
 

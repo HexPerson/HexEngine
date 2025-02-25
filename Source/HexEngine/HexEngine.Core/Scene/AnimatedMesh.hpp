@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class AnimatedMesh : public Mesh
+	class HEX_API AnimatedMesh : public Mesh
 	{
 	public:
 		using BoneNameMap = std::map<std::string, uint32_t>;

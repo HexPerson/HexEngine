@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class Checkbox : public Element
+	class HEX_API Checkbox : public Element
 	{
 	public:
 		enum class CheckType

@@ -10,7 +10,7 @@ namespace HexEngine
 
 	namespace Reflection
 	{
-		class IObject
+		class HEX_API IObject
 		{
 		public:
 			virtual void Serialize(json& data, JsonFile* file) {

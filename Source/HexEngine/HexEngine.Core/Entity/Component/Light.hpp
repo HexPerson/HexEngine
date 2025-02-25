@@ -36,7 +36,7 @@ namespace HexEngine
 	/// </summary>
 	const int32_t MaxLightShadowMaps = 6;
 
-	class Light : public BaseComponent
+	class HEX_API Light : public BaseComponent
 	{
 	public:
 		Light(Entity* entity);

@@ -25,7 +25,7 @@ namespace HexEngine
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(CameraEffect);
 
-	class Camera : public UpdateComponent
+	class HEX_API Camera : public UpdateComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(Camera);

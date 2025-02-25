@@ -15,7 +15,7 @@ namespace HexEngine
 		Scene
 	};
 
-	class EntityList : public HexEngine::TreeList
+	class HEX_API EntityList : public HexEngine::TreeList
 	{
 	public:
 		using OnEntityClickedFn = std::function<void(EntityList*, Entity*)>;

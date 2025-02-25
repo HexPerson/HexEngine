@@ -8,7 +8,7 @@
 
 namespace HexEngine
 {
-	class MaterialDialog : public Dialog
+	class HEX_API MaterialDialog : public Dialog
 	{
 	public:
 		MaterialDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title, std::shared_ptr<Material> material);

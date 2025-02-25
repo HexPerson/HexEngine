@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class VerticalLayout : public Element
+	class HEX_API VerticalLayout : public Element
 	{
 	public:
 		virtual void OnAddChild(Element* child) override;

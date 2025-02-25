@@ -19,7 +19,7 @@ namespace HexEngine
 		bool loadLights = false;
 	};
 
-	struct ResourceDeleter
+	struct HEX_API ResourceDeleter
 	{
 		void operator()(IResource* p) const;
 	};
@@ -28,7 +28,7 @@ namespace HexEngine
 
 	
 
-	class ResourceSystem
+	class HEX_API ResourceSystem
 	{
 	public:
 		void Create();

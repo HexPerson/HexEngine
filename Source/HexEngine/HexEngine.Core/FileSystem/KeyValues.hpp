@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class KeyValues
+	class HEX_API KeyValues
 	{
 	public:
 		struct ValueData

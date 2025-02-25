@@ -10,12 +10,9 @@ namespace HexEngine
 {
 	class Terrain;
 	class Mesh;
-
-	
-
 	class DropDown;
 
-	class RigidBody : public BaseComponent
+	class HEX_API RigidBody : public BaseComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(RigidBody);

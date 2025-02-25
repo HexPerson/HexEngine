@@ -37,7 +37,7 @@ namespace HexEngine
 		height = GetSystemMetrics(SM_CYSCREEN);
 	}
 
-	HWND WindowCreate(int32_t xpos, int32_t ypos, int32_t width, int32_t height, DisplayMode displayMode, const std::string& windowTitle)
+	HWND HEX_API WindowCreate(int32_t xpos, int32_t ypos, int32_t width, int32_t height, DisplayMode displayMode, const std::string& windowTitle)
 	{
 		WNDCLASSEXA wcex = { sizeof(wcex) };
 

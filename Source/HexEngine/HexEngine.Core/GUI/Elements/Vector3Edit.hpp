@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	class Vector3Edit : public Element
+	class HEX_API Vector3Edit : public Element
 	{
 	public:
 		Vector3Edit(Element* parent, const Point& position, const Point& size, const std::wstring& label, math::Vector3* vector, std::function<void(const math::Vector3&)> callback=nullptr);

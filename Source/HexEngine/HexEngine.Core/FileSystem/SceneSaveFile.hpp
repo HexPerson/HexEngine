@@ -14,7 +14,7 @@ namespace HexEngine
 
 	class Scene;
 
-	class SceneSaveFile : public JsonFile
+	class HEX_API SceneSaveFile : public JsonFile
 	{
 	public:
 		using SceneSaveProgressCallback = std::function<void(const std::wstring& entityName, int32_t loaded, int32_t total)>;

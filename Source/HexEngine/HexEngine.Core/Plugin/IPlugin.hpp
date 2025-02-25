@@ -50,10 +50,8 @@ namespace HexEngine
 
 		virtual void GetDependencies(std::vector<std::string>& dependencies) const = 0;
 	};
-	#define CREATE_PLUGIN(pointer, cls)	IEnvironment* HexEngine::g_pEnv = nullptr;\
-extern "C" __declspec(dllexport) IPlugin* CreatePlugin(IEnvironment* environment)\
+	#define CREATE_PLUGIN(pointer, cls)	extern "C" __declspec(dllexport) IPlugin* CreatePlugin()\
 	{\
-		g_pEnv = environment;\
 		pointer = new cls;\
 		return (IPlugin*)pointer;\
 	}\

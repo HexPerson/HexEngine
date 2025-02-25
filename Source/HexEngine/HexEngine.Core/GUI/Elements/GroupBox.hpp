@@ -5,7 +5,7 @@
 
 namespace HexEngine
 {
-	class GroupBox : public Element
+	class HEX_API GroupBox : public Element
 	{
 	public:
 		GroupBox(Element* parent, const Point& position, const Point& size, const std::wstring& label);
