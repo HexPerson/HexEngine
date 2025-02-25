@@ -43,9 +43,9 @@
 		}
 		else*/
 		{
-			worldMatrix = instance.world;
-			normalMatrix = instance.worldInverseTranspose;
-			worldPrev = instance.worldPrev;
+			worldMatrix = instance.world;//mul(instance.world, g_worldMatrix);
+			normalMatrix = instance.worldInverseTranspose;//mul(instance.worldInverseTranspose, g_worldMatrix);
+			worldPrev = instance.worldPrev;//mul(instance.worldPrev, g_worldMatrix);;
 		}
 
 		output.position = mul(input.position, worldMatrix);

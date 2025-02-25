@@ -14,10 +14,13 @@ namespace HexEngine
 		void RecalculateAABB();
 
 		const std::vector<Entity*>& GetChunkChildren() const;
+		const std::vector<StaticMeshComponent*>& GetChunkChildrenMeshes() const;
 
-		void AddChunkChild(Entity* entity);
+		void AddChunkEntity(Entity* entity);
+		void RemoveChunkEntity(Entity* entity);
 
-		void RemoveChunkChild(Entity* entity);
+		void AddChunkComponent(Entity* entity, BaseComponent* component);
+		void RemoveChunkComponent(Entity* entity, BaseComponent* component);
 
 		const dx::BoundingBox& GetBoundingVolume() const;
 
@@ -25,6 +28,7 @@ namespace HexEngine
 
 	private:
 		std::vector<Entity*> _children;
+		std::vector<StaticMeshComponent*> _childrenMeshes;
 		dx::BoundingBox _boundingVolume;
 		dx::BoundingSphere _boundingSphere;
 	};

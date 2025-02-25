@@ -7,6 +7,7 @@
 #include "../Entity.hpp"
 #include "../Component/Camera.hpp"
 #include "../../Environment/TimeManager.hpp"
+#include "../../Scene/SceneManager.hpp"
 
 namespace HexEngine
 {
@@ -37,13 +38,16 @@ namespace HexEngine
 		{
 			Camera* camera = GetEntity()->GetComponent<Camera>();
 
-			if (data->MouseMove.x != 0.0f)
+			if (g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera() == camera)
 			{
-				camera->SetYaw(camera->GetYaw() - data->MouseMove.x);
-			}
-			if (data->MouseMove.y != 0.0f)
-			{
-				camera->SetPitch(camera->GetPitch() - data->MouseMove.y);
+				if (data->MouseMove.x != 0.0f)
+				{
+					camera->SetYaw(camera->GetYaw() - data->MouseMove.x);
+				}
+				if (data->MouseMove.y != 0.0f)
+				{
+					camera->SetPitch(camera->GetPitch() - data->MouseMove.y);
+				}
 			}
 		}
 

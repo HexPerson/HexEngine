@@ -128,6 +128,7 @@ namespace HexEngine
 					params.lodPartition = _camera->GetFarZ();
 					params.shape.frustum = _camera->GetFrustum();
 					params.shapeType = PVSParams::ShapeType::Frustum;
+					params.camera = _camera;
 					_camera->GetPVS()->CalculateVisibility(_iconScene.get(), params);
 
 					_generatedPaths.push_back(path);
@@ -173,6 +174,7 @@ namespace HexEngine
 				params.lodPartition = _camera->GetFarZ();
 				params.shape.frustum = _camera->GetFrustum();
 				params.shapeType = PVSParams::ShapeType::Frustum;
+				params.camera = _camera;
 				_camera->GetPVS()->CalculateVisibility(_iconScene.get(), params);
 
 				_generatedPaths.push_back(path);

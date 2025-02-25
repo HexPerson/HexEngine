@@ -26,6 +26,7 @@ namespace HexEngine
 		virtual void OnDebugGUI() override;
 
 		void SetRotationSpeed(float speed) { _rotationSpeed = speed; }
+		void SetMovementSpeed(float speed) { _movementSpeed = speed; }
 
 		//void SetReachedDestinationFn(std::function<ReachedDestinationFn> fn) { _reachedDestinationFn = fn; }
 
@@ -39,6 +40,7 @@ namespace HexEngine
 		float _rotationSpeed = 2.0f;
 		bool _hasNewRotation = false;
 		float _targetYaw = 0.0f;
+		float _movementSpeed = 180.0f;
 
 		//std::function<ReachedDestinationFn> _reachedDestinationFn;
 	};

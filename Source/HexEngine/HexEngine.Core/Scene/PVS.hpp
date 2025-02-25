@@ -11,13 +11,16 @@ namespace HexEngine
 	class Scene;
 	class Material;
 	class BaseComponent;
+	class Camera;
 
 	struct PVSParams
 	{
 		PVSParams() :
 			shapeType(ShapeType::Frustum),
 			lodPartition(0.0f),
-			forceMaxLod(false)
+			forceMaxLod(false),
+			isShadow(false),
+			camera(nullptr)
 		{}
 
 		enum class ShapeType
@@ -38,8 +41,9 @@ namespace HexEngine
 		} shape;
 
 		math::Matrix shadowViewMatrix;
-
+		Camera* camera;
 		ShapeType shapeType;
+		bool isShadow;
 	};
 
 	class PVS
@@ -76,6 +80,9 @@ namespace HexEngine
 
 		const PVSParams& GetOptimisedParams() const;
 
+		uint32_t GetTotalNumberOfEnts() const { return _totalEnts; }
+		uint32_t GetTotalSkeletalAnimators() const { return _totalSkeletalAnimators; }
+
 	private:
 		MeshInstanceMap _pvs;
 		PVSParams _optimisedParams;
@@ -83,5 +90,8 @@ namespace HexEngine
 		bool _hasBuildOptimisation = false;
 		bool _forceRebuild = true;
 		std::recursive_mutex _lock;
+
+		uint32_t _totalEnts = 0;
+		uint32_t _totalSkeletalAnimators = 0;
 	};
 }

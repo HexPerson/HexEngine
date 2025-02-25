@@ -55,6 +55,8 @@ else\
 
 		virtual void DebugRender() {};
 
+		virtual void OnGUI() {}
+
 		template<typename T>
 		T* CastAs()
 		{
@@ -66,6 +68,8 @@ else\
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override {};
 
 		virtual bool CreateWidget(ComponentWidget* widget) { return false; };
+
+		void BroadcastMessage(Message* message);
 
 	protected:
 		ComponentId _componentId = -1;

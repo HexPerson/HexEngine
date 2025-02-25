@@ -433,7 +433,7 @@ namespace HexEngine
 
 	void PhysicsSystemPhysX::DebugRender()
 	{
-#ifdef _DEBUG
+#if 0//def _DEBUG
 		if (_resetDebug)
 		{
 			if (_waitingForSimulationStepForDebug == false)

@@ -608,6 +608,17 @@ namespace HexEngine
 		meshName.erase(std::remove(meshName.begin(), meshName.end(), ':'));
 		meshName.erase(std::remove(meshName.begin(), meshName.end(), '.'));
 
+		// if the mesh name is the same as the model name, try and use the material as the unique name instead
+		if (_currentPath.stem().string() == meshName)
+		{
+			auto material = scene->mMaterials[mesh->mMaterialIndex];
+
+			if (material)
+			{
+				meshName = material->GetName().C_Str();
+			}
+		}
+
 		/*if (_importOpts.renameFiles)
 		{
 			meshName.append("_");

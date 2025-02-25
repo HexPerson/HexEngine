@@ -237,13 +237,16 @@
 							projectTexCoord.x = nextLightViewPosition.x / nextLightViewPosition.w / 2.0f + 0.5f;
 							projectTexCoord.y = -nextLightViewPosition.y / nextLightViewPosition.w / 2.0f + 0.5f;
 
-							float lightDepthValueNext = (nextLightViewPosition.z / nextLightViewPosition.w) - bias;
+							if ((saturate(projectTexCoord.x) == projectTexCoord.x) && (saturate(projectTexCoord.y) == projectTexCoord.y))
+							{
+								float lightDepthValueNext = (nextLightViewPosition.z / nextLightViewPosition.w) - bias;
 
-							float nextCascadeDepth = SampleDepth(cmpSampler, pointSampler, depthMaps[i + 1], lightDepthValueNext, projectTexCoord, input.positionSS, input.samples);
+								float nextCascadeDepth = SampleDepth(cmpSampler, pointSampler, depthMaps[i + 1], lightDepthValueNext, projectTexCoord, input.positionSS, input.samples);
 
-							float lerpValue = shadowDelta / g_shadowConfig.cascadeBlendRange;
+								float lerpValue = shadowDelta / g_shadowConfig.cascadeBlendRange;
 
-							depthValue = lerp(depthValue, nextCascadeDepth, 1.0f - lerpValue);
+								depthValue = lerp(depthValue, nextCascadeDepth, 1.0f - lerpValue);
+							}
 
 							//break; // prevent further sampling, we're done now
 

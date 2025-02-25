@@ -56,6 +56,6 @@
             //result += shaderTexture.Sample(PointSampler, input.texcoord.xy + float2(0.0, tex_offset.y * i)) * weight[i];
             //result += shaderTexture.Sample(PointSampler, input.texcoord.xy - float2(0.0, tex_offset.y * i)) * weight[i];
         }
-        return float4(result * 1.1, colour.a);
+        return float4(result, colour.a);
     }
 }

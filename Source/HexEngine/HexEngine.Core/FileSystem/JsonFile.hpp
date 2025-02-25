@@ -29,6 +29,13 @@ namespace HexEngine
 		}
 
 		template <>
+		json& Serialize(json& container, const std::string& key, const math::Vector2& value)
+		{
+			container[key] = { value.x, value.y };
+			return container;
+		}
+
+		template <>
 		json& Serialize(json& container, const std::string& key, const math::Vector3& value)
 		{
 			container[key] = { value.x, value.y, value.z };
@@ -98,6 +105,20 @@ namespace HexEngine
 		{
 			if (container.find(key) != container.end())
 				container[key].get_to<T>(value);
+			return container;
+		}
+
+		template <>
+		json& Deserialize(json& container, const std::string& key, math::Vector2& value)
+		{
+			if (container.find(key) != container.end())
+			{
+				auto values = container[key];
+
+				values[0].get_to<float>(value.x);
+				values[1].get_to<float>(value.y);
+			}
+
 			return container;
 		}
 

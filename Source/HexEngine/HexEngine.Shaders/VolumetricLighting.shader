@@ -36,6 +36,7 @@
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
+	SamplerState g_LinearSampler : register(s4);
 
 	static const float G_SCATTERING = -0.40f;// -0.5f;
 	static const float PI = 3.14159f;
@@ -107,8 +108,10 @@
 
 		int index = 0;
 
-		const int numSteps = g_atmosphere.volumetricStepsMax;
-		float stepLength = g_atmosphere.volumetricStepIncrement;//traceLen / (float)numSteps; // g_atmosphere.volumetricStepIncrement;//
+		//float finalDepth = pixelDepth == -1 ? g_frustumDepths[3] : pixelDepth;
+
+		int numSteps = g_atmosphere.volumetricStepsMax;
+		float stepLength = traceLen / (float)numSteps;//g_atmosphere.volumetricStepIncrement;//traceLen / (float)numSteps; // g_atmosphere.volumetricStepIncrement;//
 
 		float3 tracePos = startPos;
 		float totalTraceLen = 0.0f;
@@ -149,13 +152,16 @@
 		tracePos += direction * startOffset;
 #endif
 
-		tracePos += direction + noise * .8f;// + frac(g_time * 50.0f));
+		tracePos += direction + noise * 1.2f;// + frac(g_time * 50.0f));
 
 		int numHits = 0;
+		int numActualSteps = 0;
 
 		[loop]
 		for (int i = 0; i < numSteps; i++)
 		{
+			numActualSteps++;
+
 			if (g_shadowConfig.cascadeOverride != -1)
 			{
 				index = g_shadowConfig.passIndex;
@@ -165,18 +171,30 @@
 				if (totalTraceLen <= g_frustumDepths[0])
 				{
 					index = 0;
+
+					//numSteps = 100;
+					stepLength = 5.0f;//g_frustumDepths[0] / (float)(numSteps / 4);
 				}
 				else if (totalTraceLen <= g_frustumDepths[1])
 				{
 					index = 1;
+
+					//numSteps = 50;
+					stepLength = 15.0f;//(g_frustumDepths[1] - g_frustumDepths[0]) /  (float)(numSteps / 4);
 				}
 				else if (totalTraceLen <= g_frustumDepths[2])
 				{
 					index = 2;
+
+					//numSteps = 40;
+					stepLength = 40.0f;//(g_frustumDepths[2] - g_frustumDepths[1]) /  (float)(numSteps / 4);
 				}
 				else
 				{
 					index = 3;
+
+					//numSteps = 10;
+					stepLength = 60.0f;//(g_frustumDepths[3] - g_frustumDepths[2]) /  (float)(numSteps / 4);
 				}
 			}
 
@@ -200,19 +218,19 @@
 				{
 					//shadowDepth = SampleDepth(SHADOWMAPS[0], projectTexCoord.xy, depthFromLight);
 
-					shadowDepth = SHADOWMAPS[0].Sample(g_pointSampler, projectTexCoord.xy).x;
+					shadowDepth = SHADOWMAPS[0].Sample(g_LinearSampler, projectTexCoord.xy).x;
 				}
 				else if (index == 1)
 				{
-					shadowDepth = SHADOWMAPS[1].Sample(g_pointSampler, projectTexCoord.xy).x;
+					shadowDepth = SHADOWMAPS[1].Sample(g_LinearSampler, projectTexCoord.xy).x;
 				}
 				else if (index == 2)
 				{
-					shadowDepth = SHADOWMAPS[2].Sample(g_pointSampler, projectTexCoord.xy).x;
+					shadowDepth = SHADOWMAPS[2].Sample(g_LinearSampler, projectTexCoord.xy).x;
 				}
 				else if (index == 3)
 				{
-					shadowDepth = SHADOWMAPS[3].Sample(g_pointSampler, projectTexCoord.xy).x;
+					shadowDepth = SHADOWMAPS[3].Sample(g_LinearSampler, projectTexCoord.xy).x;
 				}
 
 				if (shadowDepth > depthFromLight)
@@ -222,16 +240,15 @@
 				}
 			}
 
-			tracePos += (direction * stepLength);
+			tracePos += (direction * stepLength);			
 
-			if (length(tracePos - startPos) >= traceLen)
+			totalTraceLen += stepLength;	
+			
+			if (totalTraceLen >= traceLen)
 				break;
-
-			//if(tracePos.y)
-			totalTraceLen += stepLength;			
 		}
 
-		accumFog /= (float)numSteps;
+		accumFog /= (float)numActualSteps;
 
 		return saturate(getSunColour() * accumFog);
 	}

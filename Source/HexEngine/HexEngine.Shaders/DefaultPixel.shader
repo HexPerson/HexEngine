@@ -72,6 +72,10 @@
 
 		//float4 specular = float4(0.0f, 0.0f, 0.0f, 0.0f);
 		float4 albedo = g_albedoMap.Sample(g_textureSampler, input.texcoord) * input.colour;
+
+		if(albedo.a == 0.0f && g_material.isInTransparencyPhase == 0)
+			clip(-1);
+
 		float metalness = g_material.metallicFactor;
 		float roughness = g_material.roughnessFactor;
 

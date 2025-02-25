@@ -54,6 +54,6 @@
 				result += result2.rgb * weight[i];
         }
         
-		return float4(result * 1.1, colour.a);
+		return float4(result, colour.a);
 	}
 }

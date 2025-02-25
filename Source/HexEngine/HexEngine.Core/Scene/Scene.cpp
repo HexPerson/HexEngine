@@ -391,6 +391,19 @@ namespace HexEngine
 		}
 	}
 
+	void Scene::OnGUI()
+	{
+		for (auto& renderable : _mainCamera->GetPVS()->GetRenderables())
+		{
+			for (auto& tuple : renderable.second)
+			{
+				auto ent = std::get<1>(tuple);
+
+				ent->OnGUI();
+			}
+		}
+	}
+
 	void Scene::ForceRebuildPVS()
 	{
 		for (auto& camera : _cameras)
@@ -407,29 +420,29 @@ namespace HexEngine
 		}
 	}
 
-	void Scene::SendMessageToEntities(Message* message, LayerMask layerMask)
+	void Scene::BroadcastMessage(Message* message)
 	{
 		const auto& entities = GetEntities();
 
-		for (auto it = entities.begin(); it != entities.end(); it++)
+		for (auto& listener : _auxMessageListeners)
 		{
-			for (auto& entity : it->second)
-			{
-				if ((LAYERMASK(entity->GetLayer()) & layerMask) == 0)
-					continue;
-
-				entity->OnMessage(message, nullptr);
-			}
+			listener->OnMessage(message, nullptr);
 		}
+	}
+
+	void Scene::RegisterMessageListener(MessageListener* listener)
+	{
+		_auxMessageListeners.push_back(listener);
+	}
+
+	void Scene::UnregisterMessageListener(MessageListener* listener)
+	{
+		_auxMessageListeners.erase(std::remove(_auxMessageListeners.begin(), _auxMessageListeners.end(), listener));
 	}
 
 	void Scene::RemoveEntityInternal(Entity* entity)
 	{
-		std::unique_lock lock(_lock);
-
-		// Notify all entities first
-		EntityDestroyedMessage message(entity);
-		SendMessageToEntities(&message);
+		std::unique_lock lock(_lock);		
 
 		if (entity->GetComponent<DirectionalLight>() == _sunLight)
 		{
@@ -526,27 +539,18 @@ namespace HexEngine
 
 		LOG_DEBUG("Removing entity [%p] %s. There will be %d entities remaining in the scene", entity, entity->GetName().c_str(), GetTotalNumberOfEntities()-1);
 
-		/*if (g_pEnv->_chunkManager->HasActiveChunks())
-		{
-			Chunk* chunkAtPos = g_pEnv->_chunkManager->GetChunkByPosition(entity->GetPosition());
-
-			if (chunkAtPos)
-			{
-				chunkAtPos->RemoveChunkChild(entity);
-			}
-		}*/
-
 		if (entity == _skySphere)
 		{
 			_skySphere = nullptr;
 		}
 
+		entity->DeleteMe();
+
 		if (_insideEntityIteration)
 		{
 			LOG_DEBUG("Entity [%p] '%s' cannot be removed immediately because iteration is in progress, but will be removed next tick", entity, entity->GetName().c_str());
 
-			_pendingRemovals.insert(entity);
-			entity->DeleteMe();
+			_pendingRemovals.insert(entity);			
 		}
 		else
 		{
@@ -784,8 +788,10 @@ namespace HexEngine
 	}
 
 	void Scene::Update(float frameTime)
-	{
+	{		
 		std::unique_lock lock(_lock);
+
+		_drawCalls = 0;
 
 		PROFILE();
 
@@ -811,8 +817,11 @@ namespace HexEngine
 					continue;
 				}
 
-				if(updateComponent->CanUpdate())
-					updateComponent->Update(frameTime);
+				if (updateComponent->CanUpdate())
+				{
+					float timeOffset = updateComponent->GetTickRate() > 1 ? g_pEnv->_timeManager->_currentTime - updateComponent->GetLastUpdateTime() : 0.0f;
+					updateComponent->Update(frameTime + timeOffset);
+				}
 			}
 		}
 
@@ -934,7 +943,7 @@ namespace HexEngine
 
 	void Scene::OnDebugGUI()
 	{
-		if (r_debugScene._val.b && _mainCamera)
+		if (/*r_debugScene._val.b &&*/ _mainCamera)
 		{
 			auto renderer = g_pEnv->_uiManager->GetRenderer();
 			auto width = g_pEnv->GetScreenWidth();
@@ -979,7 +988,9 @@ namespace HexEngine
 			}
 #endif
 
-			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Drawn entities {:d} Draw calls {:d}", _drawnEntities, _drawCalls)); y += 15;
+			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Drawn entities {:d}", pvs->GetTotalNumberOfEnts())); y += 15;
+			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Drawn skeletal animators {:d}", pvs->GetTotalSkeletalAnimators())); y += 15;
+			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Draw calls {:d}", _drawCalls)); y += 15;
 		}
 	}
 
@@ -1038,6 +1049,16 @@ namespace HexEngine
 					if (auto material = renderer->GetMaterial(); material != nullptr)
 					{
 						if (material->_properties.hasTransparency == 1 || material->_properties.isWater == 1)
+							continue;
+					}
+					else
+						continue;
+				}
+				else
+				{
+					if (auto material = renderer->GetMaterial(); material != nullptr)
+					{
+						if (material->_properties.hasTransparency == 0 && material->_properties.isWater == 0)
 							continue;
 					}
 					else
@@ -1143,12 +1164,12 @@ namespace HexEngine
 		std::vector<StaticMeshComponent*> entities;
 		GetComponents<StaticMeshComponent>(entities);
 
-		for (auto&& ent : entities)
+		for (auto& set : _entities)
 		{
-			//if (ent == GetMainCamera())
-			//	continue;
-
-			ent->GetEntity()->DebugRender();
+			for (auto& ent : set.second)
+			{
+				ent->DebugRender();
+			}
 		}
 
 		// Allow the game extension to render the debug info (if they want)

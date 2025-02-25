@@ -275,9 +275,10 @@ bool RecastInterface::CreateRoutingData()
 
 void RecastInterface::DebugRender()
 {
+	return;
 	//duDebugDrawPolyMesh(&_debugRenderer, *_polyMesh);
-
-	duDebugDrawNavMesh(&_debugRenderer, *_navMesh, DU_DRAWNAVMESH_COLOR_TILES | DU_DRAWNAVMESH_CLOSEDLIST);
+	if(_navMesh)
+		duDebugDrawNavMesh(&_debugRenderer, *_navMesh, DU_DRAWNAVMESH_COLOR_TILES | DU_DRAWNAVMESH_CLOSEDLIST);
 }
 
 float frand()
@@ -501,8 +502,9 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 		pathCount = fixupShortcuts((dtPolyRef*)pathRefs.data(), pathCount, _navMeshQuery);
 
 		float h = 0;
-		_navMeshQuery->getPolyHeight((dtPolyRef)pathRefs[0], result2, &h);
-		result2[1] = h;
+		if(dtStatusSucceed(_navMeshQuery->getPolyHeight((dtPolyRef)pathRefs[0], result2, &h)))
+			result2[1] = h;
+
 		dtVcopy(&currentPos.x, result2);
 
 		// Handle end of path and off-mesh links when close enough.

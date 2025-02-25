@@ -119,7 +119,7 @@ namespace HexEngine
 
 			for (auto&& component : _components)
 			{
-				if (component.guid == T::GetObjectGUID())
+				if (component.id == T::_GetComponentId())
 					result.push_back(reinterpret_cast<T*>(component.component));
 			}
 
@@ -195,7 +195,9 @@ namespace HexEngine
 		const dx::BoundingOrientedBox& GetWorldOBB();
 
 		const dx::BoundingSphere& GetBoundingSphere() const;
-		const dx::BoundingSphere GetWorldBoundingSphere();		
+		const dx::BoundingSphere GetWorldBoundingSphere();	
+
+		bool IsInPVS() const { return _isInPVS; }
 
 		const math::Matrix& GetWorldTM();
 		const math::Matrix& GetWorldTMPrev();
@@ -205,6 +207,9 @@ namespace HexEngine
 		void ClearTransformCache();
 
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
+		void BroadcastMessage(Message* message);
+
+		void OnGUI();
 
 		/*virtual const math::Matrix& GetWorldRenderTM();
 		virtual const math::Matrix& GetWorldRenderTMTranspose();
@@ -234,6 +239,7 @@ namespace HexEngine
 		ComponentSignature _componentsSignature = 0;	
 
 	protected:
+		bool _isInPVS = false;
 		Scene* _scene = nullptr;
 		EntityFlags _flags = EntityFlags::None;
 

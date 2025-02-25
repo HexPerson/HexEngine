@@ -930,10 +930,12 @@ namespace HexEngine
 
 					PVSParams params;
 					params.lodPartition = r_lodPartition._val.f32;
-					//params.shapeType = PVSParams::ShapeType::Sphere;
-					//params.shape.sphere = shadowCaster->GetLightBoundingSphere(i);
-					params.shapeType = PVSParams::ShapeType::Frustum;
-					params.shape.frustum = shadowCaster->GetLightBoundingFrustum(i);
+					params.shapeType = PVSParams::ShapeType::Sphere;
+					params.shape.sphere = shadowCaster->GetLightBoundingSphere(i);
+					//params.shapeType = PVSParams::ShapeType::Frustum;
+					//params.shape.frustum = shadowCaster->GetLightBoundingFrustum(i);
+					params.isShadow = true;
+					params.camera = _currentCamera;
 
 					shadowCaster->GetPVS(i)->CalculateVisibility(_currentScene, params);					
 				}
@@ -1221,13 +1223,8 @@ namespace HexEngine
 			{
 				_taa.Resolve(_beautyRT, _beautyRT, _gbuffer.GetVelocity(), _gbuffer.GetNormal(), g_pEnv->_uiManager->GetRenderer());
 			}
-
-			
-
-			
 			
 			_bloomEffect->Render(_currentCamera, _beautyRT, _beautyRT);
-
 			
 			//_beautyRT->GetPixels(_denoiseFD.colour);
 			//_gbuffer.GetNormal()->GetPixels(_denoiseFD.normals);

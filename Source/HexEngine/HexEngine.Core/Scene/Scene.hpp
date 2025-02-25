@@ -113,7 +113,7 @@ namespace HexEngine
 
 		void RenderEntities(PVS* pvs, LayerMask layerMask, MeshRenderFlags renderFlags);
 
-		void SendMessageToEntities(Message* message, LayerMask layerMask = (LayerMask)Layer::AllLayers);
+		void OnGUI();
 
 		//void RenderWater(const SceneRenderParameters& params, bool maskPass, ITexture2D* maskTexture);
 
@@ -174,7 +174,6 @@ namespace HexEngine
 		uint32_t GetDrawCalls();
 
 		void AddEntityListener(IEntityListener* listener);
-
 		void RemoveEntityListener(IEntityListener* listener);
 
 		OceanSettings& GetOcean() { return _oceanSettings; }
@@ -190,6 +189,10 @@ namespace HexEngine
 		//void PushTerrainParams(const TerrainGenerationParams& params);
 		//const std::vector<TerrainGenerationParams>& GetTerrainParams() const;
 		//void ClearTerrainParams();
+
+		void RegisterMessageListener(MessageListener* listener);
+		void UnregisterMessageListener(MessageListener* listener);
+		void BroadcastMessage(Message* message);
 
 		void Save(SceneSaveFile* file);
 		void Load(SceneSaveFile* file);
@@ -240,6 +243,8 @@ namespace HexEngine
 		OceanSettings _oceanSettings;
 
 		std::recursive_mutex _lock;
+
+		std::vector<MessageListener*> _auxMessageListeners;
 
 		//std::vector<TerrainGenerationParams> _terrainParams;
 	};

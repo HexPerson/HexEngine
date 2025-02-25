@@ -34,6 +34,8 @@ namespace HexEngine
 
 		const std::array<math::Matrix, MAX_BONES>& GetBoneTransformArray() const;
 
+		virtual void OnMessage(Message* message, MessageListener* sender) override;
+
 	private:
 		std::shared_ptr<AnimatedMesh> _mesh;
 		std::shared_ptr<AnimationData> _animData;
@@ -44,5 +46,7 @@ namespace HexEngine
 
 		std::array<BoneInfo, MAX_BONES> _boneInfo;
 		std::array<math::Matrix, MAX_BONES> _transforms;
+
+		int32_t _previousTickRate = 1;
 	};
 }

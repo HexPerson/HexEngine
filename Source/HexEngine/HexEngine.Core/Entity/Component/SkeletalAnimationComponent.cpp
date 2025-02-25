@@ -1,6 +1,7 @@
 
 #include "SkeletalAnimationComponent.hpp"
 #include "../../Environment/TimeManager.hpp"
+#include "../../Math/FloatMath.hpp"
 
 namespace HexEngine
 {
@@ -19,12 +20,34 @@ namespace HexEngine
 		_mesh = mesh;
 		_animData = animData;
 		_boneInfo = mesh->GetAllBoneInfo();
-		_animationStartTime = g_pEnv->_timeManager->_currentTime;
+
+		// offset the time slightly because animations starting at the same time will be perfectly in sync which looks weird
+		_animationStartTime = g_pEnv->_timeManager->_currentTime + GetRandomFloat(0.5f, 1.0f);
 	}
 
 	const std::array<math::Matrix, MAX_BONES>& SkeletalAnimationComponent::GetBoneTransformArray() const
 	{
 		return _transforms;
+	}
+
+	void SkeletalAnimationComponent::OnMessage(Message* message, MessageListener* sender)
+	{
+		UpdateComponent::OnMessage(message, sender);
+
+		if (message->_id == MessageId::PVSVisibilityChanged)
+		{
+			bool visible = message->CastAs<PVSVisibilityChangedMessage>()->visible;
+
+			if (visible)
+			{
+				SetTickRate(_previousTickRate);
+			}
+			else
+			{
+				_previousTickRate = GetTickRate();
+				SetTickRate(100); // almost completely disable animations
+			}
+		}
 	}
 
 	void SkeletalAnimationComponent::Update(float frameTime)
@@ -168,12 +191,12 @@ namespace HexEngine
 
 		uint32_t ScalingIndex = FindScaling(AnimationTime, pNodeAnim);
 		uint32_t NextScalingIndex = (ScalingIndex + 1);
-		assert(NextScalingIndex < pNodeAnim->scaleKeys.size());
+		//assert(NextScalingIndex < pNodeAnim->scaleKeys.size());
 		float t1 = (float)pNodeAnim->scaleKeys[ScalingIndex].first - (float)pNodeAnim->scaleKeys[0].first;
 		float t2 = (float)pNodeAnim->scaleKeys[NextScalingIndex].first - (float)pNodeAnim->scaleKeys[0].first;
 		float DeltaTime = t2 - t1;
 		float Factor = std::clamp((AnimationTime - (float)t1) / DeltaTime, 0.0f, 1.0f);
-		assert(Factor >= 0.0f && Factor <= 1.0f);
+		//assert(Factor >= 0.0f && Factor <= 1.0f);
 		const math::Vector3& Start = pNodeAnim->scaleKeys[ScalingIndex].second;
 		const math::Vector3& End = pNodeAnim->scaleKeys[NextScalingIndex].second;
 		math::Vector3 Delta = End - Start;
@@ -189,12 +212,12 @@ namespace HexEngine
 
 		uint32_t PositionIndex = FindPosition(AnimationTime, pNodeAnim);
 		uint32_t NextPositionIndex = (PositionIndex + 1);
-		assert(NextPositionIndex < pNodeAnim->positionKeys.size());
+		//assert(NextPositionIndex < pNodeAnim->positionKeys.size());
 		float t1 = (float)pNodeAnim->positionKeys[PositionIndex].first - (float)pNodeAnim->positionKeys[0].first;
 		float t2 = (float)pNodeAnim->positionKeys[NextPositionIndex].first - (float)pNodeAnim->positionKeys[0].first;
 		float DeltaTime = t2 - t1;
 		float Factor = std::clamp((AnimationTime - (float)t1) / DeltaTime, 0.0f, 1.0f);
-		assert(Factor >= 0.0f && Factor <= 1.0f);
+		//assert(Factor >= 0.0f && Factor <= 1.0f);
 		const math::Vector3& Start = pNodeAnim->positionKeys[PositionIndex].second;
 		const math::Vector3& End = pNodeAnim->positionKeys[NextPositionIndex].second;
 		math::Vector3 Delta = End - Start;
@@ -212,22 +235,22 @@ namespace HexEngine
 
 		uint32_t RotationIndex = FindRotation(AnimationTime, pNodeAnim);
 		uint32_t NextRotationIndex = (RotationIndex + 1);
-		assert(NextRotationIndex < pNodeAnim->rotationKeys.size());
+		//assert(NextRotationIndex < pNodeAnim->rotationKeys.size());
 		float t1 = (float)pNodeAnim->rotationKeys[RotationIndex].first - (float)pNodeAnim->rotationKeys[0].first;
 		float t2 = (float)pNodeAnim->rotationKeys[NextRotationIndex].first - (float)pNodeAnim->rotationKeys[0].first;
 		float DeltaTime = t2 - t1;
 		float Factor = std::clamp((AnimationTime - (float)t1) / DeltaTime, 0.0f, 1.0f);
-		assert(Factor >= 0.0f && Factor <= 1.0f);
+		//assert(Factor >= 0.0f && Factor <= 1.0f);
 		const math::Quaternion& StartRotationQ = pNodeAnim->rotationKeys[RotationIndex].second;
 		const math::Quaternion& EndRotationQ = pNodeAnim->rotationKeys[NextRotationIndex].second;
 
-		math::Quaternion::Slerp(StartRotationQ, EndRotationQ, Factor, Out);
-		Out.Normalize();
+		math::Quaternion::Lerp(StartRotationQ, EndRotationQ, Factor, Out);
+		//Out.Normalize();
 	}
 
 	uint32_t SkeletalAnimationComponent::FindScaling(float AnimationTime, const AnimChannel* pNodeAnim)
 	{
-		assert(pNodeAnim->scaleKeys.size() > 0);
+		//assert(pNodeAnim->scaleKeys.size() > 0);
 
 		for (uint32_t i = 0; i < pNodeAnim->scaleKeys.size() - 1; i++) {
 			float t = (float)pNodeAnim->scaleKeys[i + 1].first - (float)pNodeAnim->scaleKeys[0].first;
@@ -284,8 +307,8 @@ namespace HexEngine
 	void SkeletalAnimationComponent::BlendToAnimationIndex(uint32_t idx)
 	{
 		// no point blending into the animation we are already running
-		if ((_animIndex == idx /*&& _animData->_blendFactor == 0.0f*/) || _nextAnimIndex == idx)
-			return;
+		//if (_nextAnimIndex == idx)
+		//	return;
 
 		_blendFactor = 0.0f;
 		_nextAnimIndex = idx;

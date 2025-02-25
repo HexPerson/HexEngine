@@ -27,7 +27,7 @@ namespace HexEngine
 		void CreateChunks(Scene* scene, float chunkSize, int32_t numChunks);
 		bool HasActiveChunks(Scene* scene) const;
 		bool GetChunkData(Scene* scene, ChunkData* data) const;
-		void CalculatePVS(Scene* scene, PVS* pvs, const PVSParams& params, Scene::EntityComponentVector& components);
+		void CalculatePVS(Scene* scene, PVS* pvs, const PVSParams& params, std::vector<StaticMeshComponent*>& components);
 		void RemoveAllChunks(Scene* scene);
 
 		//Tile* GetTileByPosition(HexEngine::Entity* entity, const math::Vector3& position) const;

@@ -56,7 +56,7 @@ namespace HexEngine
 
 		_hasFpsUpdated = false;
 
-		if (g_pEnv->GetHasFocus() == true && hasUpdatedOnce)
+		if (hasUpdatedOnce)
 		{
 			++_frameCount;
 
@@ -91,22 +91,22 @@ namespace HexEngine
 
 		_accumulatedSimulationTime += _frameTime;
 
-		if (g_pEnv->GetHasFocus() == false)
-		{
-			//_frameCount = 0;
+		//if (g_pEnv->GetHasFocus() == false)
+		//{
+		//	//_frameCount = 0;
 
-			//_currentTime = 0.0f;
-			_lastTime = 0.0f;
+		//	//_currentTime = 0.0f;
+		//	_lastTime = 0.0f;
 
-			_frameTimeMS = 0.0f;
+		//	_frameTimeMS = 0.0f;
 
-			_accumulatedAverageFrameTimeMS = 0.0f;
-			_accumulatedFrames = 0;
-			_lastFPSUpdate = 0.0f;
-			//_accumulatedSimulationTime = 0.0f;
+		//	_accumulatedAverageFrameTimeMS = 0.0f;
+		//	_accumulatedFrames = 0;
+		//	_lastFPSUpdate = 0.0f;
+		//	//_accumulatedSimulationTime = 0.0f;
 
-			_fps = 0;
-		}
+		//	_fps = 0;
+		//}
 
 		// clamp the accumulated time to 5 seconds
 		if (_accumulatedSimulationTime >= 5.0f)

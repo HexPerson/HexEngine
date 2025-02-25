@@ -192,7 +192,7 @@ namespace HexEngine
 		}
 		
 		dx::BoundingBox aabb = file.Read<dx::BoundingBox>();
-		dx::BoundingOrientedBox obb = file.Read<dx::BoundingOrientedBox>();	
+		dx::BoundingOrientedBox obb = file.Read<dx::BoundingOrientedBox>();
 		
 		mesh->SetAABB(aabb);
 		mesh->SetOBB(obb);
@@ -359,9 +359,7 @@ namespace HexEngine
 
 			// write the index data
 			file.Write<uint32_t>((uint32_t)indices.size());
-			file.Write((uint8_t*)indices.data(), (uint32_t)indices.size() * sizeof(MeshIndexFormat));
-
-			
+			file.Write((uint8_t*)indices.data(), (uint32_t)indices.size() * sizeof(MeshIndexFormat));			
 		}		
 
 		// write the material
@@ -374,25 +372,11 @@ namespace HexEngine
 		else
 		{
 			file.Write<bool>(false);
-		}
-
-		
+		}		
 
 		// write the aabb + obb
 		file.Write<dx::BoundingBox>(mesh->GetAABB());
 		file.Write<dx::BoundingOrientedBox>(mesh->GetOBB());
-
-		if (mesh->HasAnimations())
-		{
-			file.Write<bool>(true);
-
-			
-			//file.Write<uint32_t>(animData->_animIndex);
-		}
-		else
-		{
-			file.Write<bool>(false);
-		}
 
 		// finally close the file
 		file.Close();

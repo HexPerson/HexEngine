@@ -29,7 +29,7 @@ namespace HexEngine
 
 		void Destroy();
 
-		void DrawFrustum(const dx::BoundingFrustum& frustum);
+		void DrawFrustum(const dx::BoundingFrustum& frustum, const math::Color& colour);
 
 		void DrawAABB(const dx::BoundingBox& bbox, const math::Color& colour = math::Color(1.0f, 0.0f, 0.5f, 0.4f));
 

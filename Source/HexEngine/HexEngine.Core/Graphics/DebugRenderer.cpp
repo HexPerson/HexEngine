@@ -88,7 +88,7 @@ namespace HexEngine
 		}
 	}
 
-	void DebugRenderer::DrawFrustum(const dx::BoundingFrustum& frustum)
+	void DebugRenderer::DrawFrustum(const dx::BoundingFrustum& frustum, const math::Color& colour)
 	{
 		std::vector<DebugVertex> vtx(16);
 
@@ -97,118 +97,66 @@ namespace HexEngine
 
 		memcpy(originalCorners, corners, sizeof(corners));
 
-		vtx[0].position = corners[0];
-		vtx[1].position = corners[4];
+		DebugLines line;
+		line.points[0] = corners[0];
+		line.points[1] = corners[4];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[2].position = corners[1];
-		vtx[3].position = corners[5];
+		line.points[0] = corners[1];
+		line.points[1] = corners[5];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[4].position = corners[2];
-		vtx[5].position = corners[6];
+		line.points[0] = corners[2];
+		line.points[1] = corners[6];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[6].position = corners[3];
-		vtx[7].position = corners[7];
+		line.points[0] = corners[3];
+		line.points[1] = corners[7];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		// far joins
-		vtx[8].position = corners[0];
-		vtx[9].position = corners[1];
+		line.points[0] = corners[0];
+		line.points[1] = corners[1];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[10].position = corners[1];
-		vtx[11].position = corners[2];
+		line.points[0] = corners[1];
+		line.points[1] = corners[2];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[12].position = corners[2];
-		vtx[13].position = corners[3];
+		line.points[0] = corners[2];
+		line.points[1] = corners[3];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[14].position = corners[3];
-		vtx[15].position = corners[0];
+		line.points[0] = corners[3];
+		line.points[1] = corners[0];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		// near joins
-		/*vtx[16].position = corners[4];
-		vtx[17].position = corners[5];
+		line.points[0] = corners[4];
+		line.points[1] = corners[5];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[18].position = corners[5];
-		vtx[19].position = corners[6];
+		line.points[0] = corners[5];
+		line.points[1] = corners[3];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[20].position = corners[6];
-		vtx[21].position = corners[7];
+		line.points[0] = corners[6];
+		line.points[1] = corners[7];
+		line.colour = colour;
+		_lines.push_back(line);
 
-		vtx[22].position = corners[7];
-		vtx[23].position = corners[4];*/
-
-		//auto splitCornerNear = [](math::Vector3* corners, const math::Vector3* original, float distance, int index) {
-
-		//	auto dir = (original[index - 4] - original[index]);
-		//	float len = dir.Length();
-		//	dir.Normalize();
-
-		//	corners[index] += dir * len * distance;
-		//};
-		//auto splitCornerFar = [](math::Vector3* corners, const math::Vector3* original, float distance, int index) {
-
-		//	auto dir = (original[index] - original[index + 4]);
-		//	float len = dir.Length();
-		//	dir.Normalize();
-
-		//	corners[index] = original[index + 4] + (dir * len * (distance));
-		//};
-		//splitCornerFar(corners, originalCorners, 0.6f, 0);
-		//splitCornerFar(corners, originalCorners, 0.6f, 1);
-		//splitCornerFar(corners, originalCorners, 0.6f, 2);
-		//splitCornerFar(corners, originalCorners, 0.6f, 3);
-
-		//splitCornerNear(corners, originalCorners, 0.15f, 4);
-		//splitCornerNear(corners, originalCorners, 0.15f, 5);
-		//splitCornerNear(corners, originalCorners, 0.15f, 6);
-		//splitCornerNear(corners, originalCorners, 0.15f, 7);
-
-		//// near
-		//vtx[24].position = corners[4];
-		//vtx[25].position = corners[5];
-
-		//vtx[26].position = corners[5];
-		//vtx[27].position = corners[6];
-
-		//vtx[28].position = corners[6];
-		//vtx[29].position = corners[7];
-
-		//vtx[30].position = corners[7];
-		//vtx[31].position = corners[4];
-
-		//// far
-		//vtx[32].position = corners[0];
-		//vtx[33].position = corners[1];
-
-		//vtx[34].position = corners[1];
-		//vtx[35].position = corners[2];
-
-		//vtx[36].position = corners[2];
-		//vtx[37].position = corners[3];
-
-		//vtx[38].position = corners[3];
-		//vtx[39].position = corners[0];
-
-		auto graphicsDevice = g_pEnv->_graphicsDevice;
-
-		auto perObjectBuffer = graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerObjectBuffer);
-
-		if (perObjectBuffer)
-		{
-			PerObjectBuffer bufferData;
-			bufferData._worldMatrix = math::Matrix::Identity.Transpose();
-
-			bufferData._material.diffuseColour = math::Vector4(1.0f, 0.0f, 0.5f, 0.4f);
-
-			perObjectBuffer->Write(&bufferData, sizeof(bufferData));
-		}
-
-		_lineVBuffer->SetVertexData((uint8_t*)vtx.data(), (uint32_t)vtx.size() * sizeof(DebugVertex));
-
-		graphicsDevice->SetVertexBuffer(0, _lineVBuffer);
-		graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-		graphicsDevice->SetPixelShader(_debugShader->GetShaderStage(ShaderStage::PixelShader));
-		graphicsDevice->SetVertexShader(_debugShader->GetShaderStage(ShaderStage::VertexShader));
-		graphicsDevice->SetInputLayout(_debugShader->GetInputLayout());
-		graphicsDevice->Draw((uint32_t)vtx.size());
+		line.points[0] = corners[7];
+		line.points[1] = corners[4];
+		line.colour = colour;
+		_lines.push_back(line);
 	}
 
 	void DebugRenderer::DrawAABB(const dx::BoundingBox& bbox, const math::Color& colour)

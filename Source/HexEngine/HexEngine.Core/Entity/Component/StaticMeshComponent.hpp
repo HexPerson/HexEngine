@@ -79,6 +79,7 @@ namespace HexEngine
 		mutable std::recursive_mutex _lock;
 
 		math::Vector2 _uvScale;
+		math::Vector3 _offsetPosition;
 
 		CullingMode _shadowCullingMode = CullingMode::FrontFace;
 		

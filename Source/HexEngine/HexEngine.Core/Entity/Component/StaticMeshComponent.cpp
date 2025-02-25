@@ -69,7 +69,9 @@ namespace HexEngine
 
 		// Update the per-object constant buffer
 		//
-		mesh->UpdateConstantBuffer(GetEntity(), GetEntity()->GetLocalTM(), material.get(), instanceId);
+		math::Matrix offsetMatrix = math::Matrix::CreateTranslation(_offsetPosition);
+
+		mesh->UpdateConstantBuffer(GetEntity(), GetEntity()->GetLocalTM() * offsetMatrix, material.get(), instanceId);
 
 		// bind the shader's requirements
 		auto requirements = shader->GetRequirements();
@@ -194,8 +196,9 @@ namespace HexEngine
 		if (material)
 			materials.push_back(material->GetFileSystemPath().string());
 
-		data["uvScale"] = { _uvScale.x, _uvScale.y };
-		data["shadowCullingMode"] = _shadowCullingMode;
+		SERIALIZE_VALUE(_uvScale);
+		SERIALIZE_VALUE(_shadowCullingMode);
+		SERIALIZE_VALUE(_offsetPosition);
 	}
 
 	void StaticMeshComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
@@ -282,16 +285,9 @@ namespace HexEngine
 			}
 		}
 
-		if (data.find("uvScale") != data.end())
-		{
-			_uvScale.x = data["uvScale"][0];
-			_uvScale.y = data["uvScale"][1];
-		}
-
-		if (data.find("shadowCullingMode") != data.end())
-		{
-			_shadowCullingMode = data["shadowCullingMode"];
-		}
+		DESERIALIZE_VALUE(_uvScale);
+		DESERIALIZE_VALUE(_shadowCullingMode);
+		DESERIALIZE_VALUE(_offsetPosition);
 	}
 
 	const math::Vector2& StaticMeshComponent::GetUVScale() const
@@ -311,154 +307,22 @@ namespace HexEngine
 
 	bool StaticMeshComponent::CreateWidget(ComponentWidget* widget)
 	{
-		int32_t i = 0;
-		auto mesh = _mesh;
+		LineEdit* meshLine = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Mesh");
+
+		//meshLine->SetLabelMinSize(130);
+		meshLine->SetValue(std::wstring(_mesh->GetName().begin(), _mesh->GetName().end()));
+
+		if (auto material = GetMaterial(); material != nullptr)
 		{
-			std::wstring label = L"Mesh " + std::to_wstring(i);
-			LineEdit* meshLine = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), label);
-
-			//meshLine->SetLabelMinSize(130);
-			meshLine->SetValue(std::wstring(mesh->GetName().begin(), mesh->GetName().end()));
-
-			if (auto material = GetMaterial(); material != nullptr)
-			{
-#if 1
-				LineEdit* matName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Material");
-				matName->SetValue(std::wstring(material->GetName().begin(), material->GetName().end()));
-				matName->SetOnDragAndDropFn(std::bind(&StaticMeshComponent::SetMaterialFromWidget, this, 0, std::placeholders::_2));
-				matName->SetOnDoubleClickFn(std::bind(&StaticMeshComponent::DoubleClickMaterial, this, std::placeholders::_2));
-#else
-				// Albedo
-				{
-					auto albedoTex = material->GetTexture(MaterialTexture::Diffuse);
-
-					LineEdit* matEdit = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Albedo");
-					matEdit->SetLabelMinSize(150);
-					matEdit->SetValue(albedoTex ? albedoTex->GetPath().filename() : L"None");
-					matEdit->SetOnDragAndDropFn(std::bind(&MeshRenderer::SetTextureFromWidget, this, mesh, matEdit, MaterialTexture::Diffuse, std::placeholders::_2));
-				}
-
-				// Normal
-				{
-					auto normalTex = material->GetTexture(MaterialTexture::Normal);
-
-					LineEdit* matEdit = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Normal");
-					matEdit->SetLabelMinSize(150);
-					matEdit->SetValue(normalTex ? normalTex->GetPath().filename() : L"None");
-					matEdit->SetOnDragAndDropFn(std::bind(&MeshRenderer::SetTextureFromWidget, this, mesh, matEdit, MaterialTexture::Normal, std::placeholders::_2));
-				}
-
-				// Specular
-				{
-					auto specularTex = material->GetTexture(MaterialTexture::Specular);
-
-					LineEdit* matEdit = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Specular");
-					matEdit->SetLabelMinSize(150);
-					matEdit->SetValue(specularTex ? specularTex->GetPath().filename() : L"None");
-					matEdit->SetOnDragAndDropFn(std::bind(&MeshRenderer::SetTextureFromWidget, this, mesh, matEdit, MaterialTexture::Specular, std::placeholders::_2));
-				}
-
-				// Noise
-				{
-					auto noiseTex = material->GetTexture(MaterialTexture::Noise);
-
-					LineEdit* matEdit = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Noise");
-					matEdit->SetLabelMinSize(150);
-					matEdit->SetValue(noiseTex ? noiseTex->GetPath().filename() : L"None");
-					matEdit->SetOnDragAndDropFn(std::bind(&MeshRenderer::SetTextureFromWidget, this, mesh, matEdit, MaterialTexture::Noise, std::placeholders::_2));
-				}
-
-				// Height
-				{
-					auto heightTex = material->GetTexture(MaterialTexture::Height);
-
-					LineEdit* matEdit = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Height");
-					matEdit->SetLabelMinSize(150);
-					matEdit->SetValue(heightTex ? heightTex->GetPath().filename() : L"None");
-					matEdit->SetOnDragAndDropFn(std::bind(&MeshRenderer::SetTextureFromWidget, this, mesh, matEdit, MaterialTexture::Height, std::placeholders::_2));
-				}
-
-				// Emission
-				{
-					auto emissionTex = material->GetTexture(MaterialTexture::Emission);
-
-					LineEdit* matEdit = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Emission");
-					matEdit->SetLabelMinSize(150);
-					matEdit->SetValue(emissionTex ? emissionTex->GetPath().filename() : L"None");
-					matEdit->SetOnDragAndDropFn(std::bind(&MeshRenderer::SetTextureFromWidget, this, mesh, matEdit, MaterialTexture::Emission, std::placeholders::_2));
-				}
-
-				// Opacity
-				{
-					auto opacityTex = material->GetTexture(MaterialTexture::Opacity);
-
-					LineEdit* matEdit = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Opacity");
-					matEdit->SetLabelMinSize(150);
-					matEdit->SetValue(opacityTex ? opacityTex->GetPath().filename() : L"None");
-					matEdit->SetOnDragAndDropFn(std::bind(&MeshRenderer::SetTextureFromWidget, this, mesh, matEdit, MaterialTexture::Opacity, std::placeholders::_2));
-				}
-
-				// emission strength
-				DragFloat* emissionR = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Emission R", &material->_properties.emissiveColour.x, 0.0f, 1.0f, 0.1f);
-				emissionR->SetLabelMinSize(160);
-				DragFloat* emissionG = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Emission G", &material->_properties.emissiveColour.y, 0.0f, 1.0f, 0.1f);
-				emissionG->SetLabelMinSize(160);
-				DragFloat* emissionB = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Emission B", &material->_properties.emissiveColour.z, 0.0f, 1.0f, 0.1f);
-				emissionB->SetLabelMinSize(160);
-				DragFloat* emissionStrength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Emission", &material->_properties.emissiveColour.w, 0.0f, 4.0f, 0.1f);
-				emissionStrength->SetLabelMinSize(160);
-
-				// Diffuse
-				DragFloat* diffuseR = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Diffuse R", &material->_properties.diffuseColour.x, 0.0f, 1.0f, 0.1f);
-				diffuseR->SetLabelMinSize(160);
-				DragFloat* diffuseG = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Diffuse G", &material->_properties.diffuseColour.y, 0.0f, 1.0f, 0.1f);
-				diffuseG->SetLabelMinSize(160);
-				DragFloat* diffuseB = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Diffuse B", &material->_properties.diffuseColour.z, 0.0f, 1.0f, 0.1f);
-				diffuseB->SetLabelMinSize(160);
-
-				DragFloat* ShininessStrength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Shiny Strength", &material->_properties.shininessStrength, 0.0f, 1.0f, 0.01f);
-				ShininessStrength->SetLabelMinSize(160);
-
-				DragFloat* Shininess = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Exponent", &material->_properties.shininess, 0.0f, 1000.0f, 0.1f);
-				Shininess->SetLabelMinSize(160);
-
-				DragFloat* Smoothness = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Smoothness", &material->_properties.smoothness, 0.0f, 1.0f, 0.01f);
-				Smoothness->SetLabelMinSize(160);
-
-				DragFloat* SpecularProbability = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Specular Probability", &material->_properties.specularProbability, 0.0f, 1.0f, 0.01f);
-				SpecularProbability->SetLabelMinSize(160);
-#endif
-			}
-
-			Vector2Edit* uvScale = new Vector2Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"UV Scale", &_uvScale, nullptr);
-
-			++i;
+			LineEdit* matName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Material");
+			matName->SetValue(std::wstring(material->GetName().begin(), material->GetName().end()));
+			matName->SetOnDragAndDropFn(std::bind(&StaticMeshComponent::SetMaterialFromWidget, this, 0, std::placeholders::_2));
+			matName->SetOnDoubleClickFn(std::bind(&StaticMeshComponent::DoubleClickMaterial, this, std::placeholders::_2));
 		}
 
-		DropDown* shadowCull = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Depth State");
-		shadowCull->GetContextMenu()->AddItem(new ContextItem(L"No culling", std::bind(&StaticMeshComponent::SetShadowCullMode, this, CullingMode::NoCulling)));
-		shadowCull->GetContextMenu()->AddItem(new ContextItem(L"Back face", std::bind(&StaticMeshComponent::SetShadowCullMode, this, CullingMode::BackFace)));
-		shadowCull->GetContextMenu()->AddItem(new ContextItem(L"Front face", std::bind(&StaticMeshComponent::SetShadowCullMode, this, CullingMode::FrontFace)));
+		Vector2Edit* uvScale = new Vector2Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"UV Scale", &_uvScale, nullptr);
+		Vector3Edit* offetPos = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Offset Position", &_offsetPosition);
 
-		//bodyType->GetContextMenu()->AddItem({ L"Static", std::bind(&RigidBody::SetBodyTypeFromWidget, this, IRigidBody::BodyType::Static, bodyType) });
-
-		/*DropDown* DepthState = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Depth State");
-		DepthState->GetContextMenu()->AddItem({ L"No depth", std::bind(&MeshRenderer::SetDepthState, this, DepthBufferState::DepthNone) });
-		DepthState->GetContextMenu()->AddItem({ L"Default", std::bind(&MeshRenderer::SetDepthState, this, DepthBufferState::DepthDefault) });
-		DepthState->GetContextMenu()->AddItem({ L"Read", std::bind(&MeshRenderer::SetDepthState, this, DepthBufferState::DepthRead) });
-		DepthState->GetContextMenu()->AddItem({ L"Reverse Z", std::bind(&MeshRenderer::SetDepthState, this, DepthBufferState::DepthReverseZ) });
-		DepthState->GetContextMenu()->AddItem({ L"Read Reverse Z", std::bind(&MeshRenderer::SetDepthState, this, DepthBufferState::DepthReadReverseZ) });
-		DepthState->GetContextMenu()->Disable();
-
-		DropDown* CullMode = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Culling Mode");
-		CullMode->GetContextMenu()->AddItem({ L"No culling", std::bind(&MeshRenderer::SetCullMode, this, CullingMode::NoCulling) });
-		CullMode->GetContextMenu()->AddItem({ L"Back face", std::bind(&MeshRenderer::SetCullMode, this, CullingMode::BackFace) });
-		CullMode->GetContextMenu()->AddItem({ L"Front face", std::bind(&MeshRenderer::SetCullMode, this, CullingMode::FrontFace) });
-		CullMode->GetContextMenu()->Disable();*/
-
-		//LineEdit* shader = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Material");
-		//shader->SetLabelMinSize(130);
-		//shader->SetValue(mesh->GetMaterial()->GetPath().filename().wstring());
 
 		return true;
 	}

@@ -31,24 +31,13 @@
 			worldMatrix = mul(boneTransform, instance.world);
 		}
 		else*/
-			worldMatrix = instance.world;
+			worldMatrix = instance.world;//mul(instance.world, g_worldMatrix);
 
 		output.position = mul(input.position, worldMatrix);
 		output.positionWS = output.position;
 
 		output.position = mul(output.position, g_viewProjectionMatrix);
 
-#if 0
-		// Calculate velocity
-		float4x4 prevFrame_modelMatrix = instance.worldPrev;
-		float4 prevFrame_worldPos = mul(input.position, worldMatrix);
-		float4 prevFrame_clipPos = mul(prevFrame_worldPos, g_viewProjectionMatrixPrev);
-
-		output.velocity = CalcVelocity(prevFrame_clipPos, output.position, float2(g_screenWidth, g_screenHeight));
-
-		// Apply TAA jitter
-		output.position.xy += g_jitterOffsets * output.position.w;		
-#endif
 
 		output.texcoord = input.texcoord;
 		
@@ -57,6 +46,7 @@
 }
 "PixelShader"
 {
+	Texture2D g_albedoMap : register(t0);
 	Texture2D g_opacityMap : register(t7);
 	SamplerState g_textureSampler : register(s0);
 
@@ -83,6 +73,9 @@
 				}
 			}
 		}
+
+		if(g_albedoMap.Sample(g_textureSampler, input.texcoord).a == 0.0f && g_material.isInTransparencyPhase == 0)
+			clip(-1);
 		/*else
 		{
 			if (g_objectFlags & OBJECT_FLAGS_HAS_OPACITY)

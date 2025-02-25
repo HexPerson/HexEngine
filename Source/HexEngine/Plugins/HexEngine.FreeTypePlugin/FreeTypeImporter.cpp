@@ -260,7 +260,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 		}
 	}
 
-	const int32_t ExtraSize = 1;
+	const int32_t ExtraSize = 0;
 
 	// now work out the atlas size that will fit
 	bool didAtlasFit = false;
@@ -367,7 +367,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 		int32_t effectOffsetX = (glyph.width - glyph.innerWidth) / 2;
 		int32_t effectOffsetY = (glyph.height - glyph.innerHeight) / 2;
 
-		DrawGlyphToFontSheet(glyph.offsetX + 1, baseline + glyph.offsetY + 1, glyph.innerWidth, glyph.innerHeight, glyph, &glyph.bitmap, p, currentAtlasSize, glyph.pixelData.data(), 0, 0, 0);
+		//DrawGlyphToFontSheet(glyph.offsetX + 1, baseline + glyph.offsetY + 1, glyph.innerWidth, glyph.innerHeight, glyph, &glyph.bitmap, p, currentAtlasSize, glyph.effectData.data(), 0, 0, 0);
 
 		DrawGlyphToFontSheet(glyph.offsetX /*+ effectOffsetX*/, baseline + glyph.offsetY /*+ effectOffsetY*/, glyph.innerWidth, glyph.innerHeight, glyph, &glyph.bitmap, p, currentAtlasSize, glyph.pixelData.data(), 255, 255, 255);
 

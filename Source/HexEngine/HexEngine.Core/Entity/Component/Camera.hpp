@@ -108,6 +108,8 @@ namespace HexEngine
 		void ToggleEffect(CameraEffect effect);
 		CameraEffect GetCameraEffects() const;
 
+		virtual void DebugRender() override;
+
 	private:
 		void ConstructProjectionMatrix();
 		void ConstructViewMatrix();

@@ -94,10 +94,26 @@ namespace HexEngine
 			Write(&data, sizeof(T));
 		}*/
 
+
 		template<typename T>
 		void Write(T data)
 		{
-			Write(&data, sizeof(T));
+			Write((void*)&data, sizeof(T));
+		}
+
+		template<>
+		void Write(dx::BoundingBox data)
+		{
+			Write<math::Vector3>(data.Center);
+			Write<math::Vector3>(data.Extents);
+		}
+
+		template<>
+		void Write(dx::BoundingOrientedBox data)
+		{
+			Write<math::Vector3>(data.Center);
+			Write<math::Vector3>(data.Extents);
+			Write<math::Vector4>(data.Orientation);
 		}
 
 		template<typename T>
@@ -120,9 +136,28 @@ namespace HexEngine
 			Read(data, sizeof(T));
 		}
 
+		template<>
+		dx::BoundingBox Read()
+		{
+			dx::BoundingBox data;
+			data.Center = Read<math::Vector3>();
+			data.Extents = Read<math::Vector3>();
+			return data;
+		}
+
+		template<>
+		dx::BoundingOrientedBox Read()
+		{
+			dx::BoundingOrientedBox data;
+			data.Center = Read<math::Vector3>();
+			data.Extents = Read<math::Vector3>();
+			data.Orientation = Read<math::Vector4>();
+			return data;
+		}
+
 		uint32_t GetRemainingReadSize()
 		{
-			return GetSize() - _stream.tellp();
+			return GetSize() - (uint32_t)_stream.tellp();
 		}
 
 	protected:

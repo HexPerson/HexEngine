@@ -3,6 +3,7 @@
 #include "../Environment/IEnvironment.hpp"
 #include "../Terrain/ChunkManager.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
+#include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "Scene.hpp"
 
 namespace HexEngine
@@ -16,6 +17,9 @@ namespace HexEngine
 		//_pvs.reserve(oldSize);
 
 		_forceRebuild = true;
+
+		_totalEnts = 0;
+		_totalSkeletalAnimators = 0;
 	}
 
 	const PVS::MeshInstanceMap& PVS::GetRenderables() const
@@ -61,7 +65,7 @@ namespace HexEngine
 			switch (params.shapeType)
 			{
 			case PVSParams::ShapeType::Frustum:
-				if (_optimisedParams.shape.sphere.Contains(params.shape.frustum) != dx::ContainmentType::CONTAINS)
+				if (_optimisedParams.shape.frustum.Contains(params.shape.frustum) != dx::ContainmentType::CONTAINS)
 					needsRebuild = true;
 				break;
 
@@ -82,13 +86,33 @@ namespace HexEngine
 			switch (params.shapeType)
 			{
 			case PVSParams::ShapeType::Frustum:
-				dx::BoundingSphere::CreateFromFrustum(_optimisedParams.shape.sphere, params.shape.frustum);
-				_optimisedParams.shape.sphere.Radius *= 1.2f;
+			{
+				//dx::BoundingSphere::CreateFromFrustum(_optimisedParams.shape.sphere, params.shape.frustum);
+				//_optimisedParams.shape.sphere.Radius *= 1.05f;
 
-				/*_optimisedParams.shape.frustum.Transform(_optimisedParams.shape.frustum, math::Matrix::CreateScale(1.2f));
-				_optimisedParams.shape.frustum.Near = params.shape.frustum.Near;
-				_optimisedParams.shape.frustum.Far = params.shape.frustum.Far;*/
+				//_optimisedParams.shape.frustum.Transform(_optimisedParams.shape.frustum, math::Matrix::CreateScale(1.2f));
+
+				//_optimisedParams.shape.frustum.Origin = params.shape.frustum.Origin;
+				//_optimisedParams.shape.frustum.Orientation = params.shape.frustum.Orientation;
+
+				//_optimisedParams.shape.frustum.Near *= 2.2f;//params.shape.frustum.Near;
+				//_optimisedParams.shape.frustum.Far = params.shape.frustum.Far;
+
+				//_optimisedParams.shape.frustum.RightSlope	*= 2.2f;
+				//_optimisedParams.shape.frustum.LeftSlope	*= 2.2f;
+				//_optimisedParams.shape.frustum.TopSlope		*= 2.2f;
+				//_optimisedParams.shape.frustum.BottomSlope	*= 2.2f;
+				//_optimisedParams.shape.frustum.Near *= 2.2f;
+				////_optimisedParams.shape.frustum.Far *= 2.2f;
+
+				//math::Vector3 o = _optimisedParams.shape.frustum.Origin;
+				//math::Quaternion d = _optimisedParams.shape.frustum.Orientation;
+				//o -= d.ToEuler() * 100.0f;
+
+				//_optimisedParams.shape.frustum.Origin = o;
+				
 				break;
+			}
 
 			case PVSParams::ShapeType::Sphere:
 				//_optimisedParams.shape.sphere.Transform(_optimisedParams.shape.sphere, math::Matrix::CreateScale(1.2f));
@@ -108,30 +132,30 @@ namespace HexEngine
 
 		ClearPVS();		
 
+		
+
 		_forceRebuild = false;
 
 		std::vector<StaticMeshComponent*> components;
 
 		if (g_pEnv->_chunkManager->HasActiveChunks(scene))
 		{
-			//g_pEnv->_chunkManager->CalculatePVS(scene, this, params, componentIterator);
+			g_pEnv->_chunkManager->CalculatePVS(scene, this, params, components);
 		}
 		else
 		{
 			scene->GetComponents<StaticMeshComponent>(components);
 		}
 
-		/*std::sort(componentIterator.begin(), componentIterator.end(), 
-			
-			[](Entity* ent1, Entity* ent2) {
+		/*std::sort(components.begin(), components.end(),
 
-				auto r1 = ent1->GetCachedMeshRenderer();
-				auto r2 = ent2->GetCachedMeshRenderer();
+			[params](StaticMeshComponent* ent1, StaticMeshComponent* ent2) {
 
+				float distance1 = (params.camera->GetEntity()->GetPosition() - ent1->GetEntity()->GetPosition()).Length();
+				float distance2 = (params.camera->GetEntity()->GetPosition() - ent2->GetEntity()->GetPosition()).Length();
 
-
-				
-			}*/
+				return distance1 < distance2;
+			});*/
 
 
 		auto end = _pvs.end();
@@ -146,24 +170,45 @@ namespace HexEngine
 
 			// don't bother rendering entities into the shadow map that can't receive shadows
 			//
-			if (entity->GetCastsShadows() == false)
-				continue;
+			if (params.isShadow)
+			{
+				if (entity->GetCastsShadows() == false)
+					continue;
+			}
 
-			auto meshComponent = entity->GetCachedMeshRenderer();
+			// early cull distance
+			if (params.camera)
+			{
+				// because we earlier sorted the components by distance, if this check fails we can just exit the function because we know no more entities should be visible
+				if ((params.camera->GetEntity()->GetPosition() - entity->GetPosition()).Length() - entity->GetWorldBoundingSphere().Radius >= params.camera->GetFarZ())
+				{
+					if (entity->IsInPVS())
+					{
+						PVSVisibilityChangedMessage pvsMsg;
+						pvsMsg.visible = false;
+						entity->OnMessage(&pvsMsg, nullptr);
+					}
+					continue;
+				}{}
+			}
+
+			auto meshComponent = component;
 
 			if (meshComponent)
 			{
-				bool visible = false;
-				
-				//if (meshComponent->GetDepthState() == DepthBufferState::DepthNone)
-				//	visible = true;
-				//else
-					visible = IsEntityVisible(entity, params);
+				bool visible = IsEntityVisible(entity, params);
+
+				if (entity->IsInPVS() != visible)
+				{
+					PVSVisibilityChangedMessage pvsMsg;
+					pvsMsg.visible = visible;
+					entity->OnMessage(&pvsMsg, nullptr);
+				}
 
 				if (!visible)
 					continue;
 
-				auto mesh = component->GetMesh();
+				auto mesh = meshComponent->GetMesh();
 
 				if (!mesh)
 					continue;
@@ -228,6 +273,11 @@ namespace HexEngine
 					if (it.size() == 0)
 						it.reserve(256);
 
+					_totalEnts++;
+
+					if (entity->HasA<SkeletalAnimationComponent>())
+						_totalSkeletalAnimators++;
+
 					_pvs[material].push_back({ mesh, entity, component });
 					//_pvs.push_back(newEntry);
 
@@ -271,7 +321,10 @@ namespace HexEngine
 
 	bool PVS::IsEntityVisible(Entity* entity, const PVSParams& params)
 	{
-		return IsShapeVisible(entity->GetWorldAABB(), params);
+		if (entity->GetLayer() == Layer::Sky)
+			return true;
+
+		return IsShapeVisible(entity->GetWorldBoundingSphere(), params);
 	}
 
 	bool PVS::IsShapeVisible(const dx::BoundingBox& bbox, const PVSParams& params)
@@ -279,7 +332,7 @@ namespace HexEngine
 		switch (params.shapeType)
 		{
 		case PVSParams::ShapeType::Frustum:
-			return _optimisedParams.shape.sphere.Intersects(bbox);
+			return _optimisedParams.shape.frustum.Intersects(bbox);
 
 		case PVSParams::ShapeType::Sphere:
 			return _optimisedParams.shape.sphere.Intersects(bbox);
@@ -294,7 +347,7 @@ namespace HexEngine
 		switch (params.shapeType)
 		{
 		case PVSParams::ShapeType::Frustum:
-			return _optimisedParams.shape.sphere.Intersects(bsphere);
+			return _optimisedParams.shape.frustum.Intersects(bsphere);
 
 		case PVSParams::ShapeType::Sphere:
 			return _optimisedParams.shape.sphere.Intersects(bsphere);

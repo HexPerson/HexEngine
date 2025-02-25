@@ -62,7 +62,7 @@ namespace HexEngine
 				float length = delta.Length();
 				delta.Normalize();
 
-				if (length <= 5.0f)
+				if (length <= 10.0f)
 				{
 					++_pathIndex;
 
@@ -86,7 +86,7 @@ namespace HexEngine
 				}
 	
 
-				currentPos += delta * dt * 200.0f;
+				currentPos += delta * dt * _movementSpeed;
 
 				transform->SetPosition(currentPos);
 
@@ -94,7 +94,7 @@ namespace HexEngine
 
 				auto targetRotation = math::Quaternion::CreateFromYawPitchRoll(yaw, 0.0f, 0.0f);
 
-				if (yaw != _targetYaw /*&& _hasNewRotation == false*/)
+				if (yaw != _targetYaw && _hasNewRotation == false)
 				{
 					_rotationTime = 0.0f;
 					_targetYaw = yaw;
@@ -107,10 +107,10 @@ namespace HexEngine
 
 				auto easingFunction = getEasingFunction(EaseOutCubic);
 
-				if(_hasNewRotation)
+				//if(_hasNewRotation)
 					transform->SetRotation(math::Quaternion::Slerp(transform->GetRotation(), _targetRotation, easingFunction(_rotationTime)));
 
-				if (_rotationTime >= 1.0f)
+				if (_rotationTime >= 0.6f)
 				{
 					_hasNewRotation = false;
 				}

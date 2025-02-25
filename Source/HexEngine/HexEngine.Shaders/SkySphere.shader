@@ -146,7 +146,7 @@
 
 		output.norm = float4(0, 0, 0, g_frustumDepths[3]);
 
-		output.velocity = float2(0,0);//velocity;
+		output.velocity = velocity;
 
 		// project it out as far as possible to mimic far away sky
 		float3 worldSpaceDir = normalize(input.positionWS.xyz - g_eyePos);

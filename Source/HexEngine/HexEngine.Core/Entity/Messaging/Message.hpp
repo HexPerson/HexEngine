@@ -18,6 +18,7 @@ namespace HexEngine
 		EntityDestroyed,
 		EntityParentChanged,
 		NavigationTargetReached,
+		PVSVisibilityChanged,
 
 		CustomMessage,	// custom game messages should start here
 	};
@@ -135,5 +136,13 @@ namespace HexEngine
 
 		math::Vector3 targetPosition;
 		math::Vector3 finalPosition;
+	};
+
+	class PVSVisibilityChangedMessage : public Message
+	{
+	public:
+		PVSVisibilityChangedMessage() : Message(MessageId::PVSVisibilityChanged) {}
+
+		bool visible = false;
 	};
 }

@@ -46,7 +46,7 @@ namespace HexEngine
 		float _strafeMovementSpeed = 70.0f;
 		float _pitchSensitivity = 1.6f;
 		float _yawSensitivity = 1.6f;
-		float _zoomSpeed = 600.0f;
+		float _zoomSpeed = 900.0f;
 
 		std::vector<std::pair<float, float>> _mouseMovementHistory;
 		bool _enableMouseSmoothing = true;

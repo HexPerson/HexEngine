@@ -12,6 +12,7 @@ namespace HexEngine
 		GetEntity()->OnMessage(&message, this);
 
 		_lastUpdateTick = (int32_t)g_pEnv->_timeManager->_frameCount;
+		_lastUpdateTime = g_pEnv->_timeManager->_currentTime;
 	}
 
 	void UpdateComponent::SetTickRate(int32_t tickRate)

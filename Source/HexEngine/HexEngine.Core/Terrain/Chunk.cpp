@@ -18,6 +18,11 @@ namespace HexEngine
 		return _children;
 	}
 
+	const std::vector<StaticMeshComponent*>& Chunk::GetChunkChildrenMeshes() const
+	{
+		return _childrenMeshes;
+	}
+
 	void Chunk::RecalculateAABB()
 	{
 		dx::BoundingBox aabb = _boundingVolume;
@@ -60,15 +65,20 @@ namespace HexEngine
 		}
 	}
 
-	void Chunk::AddChunkChild(Entity* entity)
+	void Chunk::AddChunkEntity(Entity* entity)
 	{
 		if (std::binary_search(_children.begin(), _children.end(), entity) == false)
 		{
 			_children.push_back(entity);
 		}
 
+		/*if (std::binary_search(_children.begin(), _children.end(), entity) == false)
+		{
+			_children.push_back(entity);
+		}*/
+
 		// sort the list in order of mesh instance
-		std::sort(_children.begin(), _children.end(),
+		/*std::sort(_children.begin(), _children.end(),
 
 			[](Entity* left, Entity* right) {
 
@@ -89,14 +99,40 @@ namespace HexEngine
 					}
 				}
 				return false;
-			});
+			});*/
 
 		RecalculateAABB();
 	}
 
-	void Chunk::RemoveChunkChild(Entity* entity)
+	void Chunk::RemoveChunkEntity(Entity* entity)
 	{
 		_children.erase(std::remove(_children.begin(), _children.end(), entity), _children.end());
+
+		// we should also remove any mesh components if the parent entity got removed
+		for (auto& mesh : entity->GetComponents<StaticMeshComponent>())
+		{
+			_childrenMeshes.erase(std::remove(_childrenMeshes.begin(), _childrenMeshes.end(), mesh));
+		}
+
+		RecalculateAABB();
+	}
+
+	void Chunk::AddChunkComponent(Entity* entity, BaseComponent* component)
+	{
+		if (auto smc = component->CastAs<StaticMeshComponent>(); smc != nullptr)
+		{
+			_childrenMeshes.push_back(smc);
+		}
+
+		RecalculateAABB();
+	}
+
+	void Chunk::RemoveChunkComponent(Entity* entity, BaseComponent* component)
+	{
+		if (auto smc = component->CastAs<StaticMeshComponent>(); smc != nullptr)
+		{
+			_childrenMeshes.erase(std::remove(_childrenMeshes.begin(), _childrenMeshes.end(), smc));
+		}
 
 		RecalculateAABB();
 	}

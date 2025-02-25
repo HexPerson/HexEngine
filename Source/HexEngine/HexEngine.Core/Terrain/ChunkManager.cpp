@@ -152,7 +152,19 @@ namespace HexEngine
 
 	void ChunkManager::OnAddEntity(Entity* entity)
 	{
-		
+		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
+
+		if (chunkData == _sceneToChunkMap.end())
+			return;
+
+		auto chunk = GetChunkByPosition(chunkData->second, entity->GetPosition());
+
+		if (chunk == nullptr)
+			return;
+
+		LOG_DEBUG("Adding entity %p to chunk %p", entity, chunk);
+
+		chunk->AddChunkEntity(entity);
 	}
 
 	void ChunkManager::OnRemoveEntity(Entity* entity)
@@ -169,7 +181,7 @@ namespace HexEngine
 
 		LOG_DEBUG("Removing entity %p from chunk %p", entity, chunk);
 
-		chunk->RemoveChunkChild(entity);
+		chunk->RemoveChunkEntity(entity);
 	}
 
 	void ChunkManager::OnAddComponent(Entity* entity, BaseComponent* component)
@@ -187,12 +199,25 @@ namespace HexEngine
 		if (chunk == nullptr)
 			return;
 
-		chunk->AddChunkChild(entity);
+		chunk->AddChunkComponent(entity, component);
 	}
 
 	void ChunkManager::OnRemoveComponent(Entity* entity, BaseComponent* component)
 	{
+		if (component->GetComponentId() != StaticMeshComponent::_GetComponentId())
+			return;
 
+		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
+
+		if (chunkData == _sceneToChunkMap.end())
+			return;
+
+		auto chunk = GetChunkByPosition(chunkData->second, entity->GetPosition());
+
+		if (chunk == nullptr)
+			return;
+
+		chunk->RemoveChunkComponent(entity, component);
 	}
 
 	void ChunkManager::OnEntityPositionChanged(Entity* entity, const math::Vector3& oldPosition, const math::Vector3& newPosition)
@@ -210,11 +235,20 @@ namespace HexEngine
 		{
 			LOG_DEBUG("Entity '%s' [%p] is being moved from chunk %p to chunk %p", entity->GetName().c_str(), entity, oldChunk, newChunk);
 
-			if(oldChunk)
-				oldChunk->RemoveChunkChild(entity);
+			if (oldChunk)
+			{
+				oldChunk->RemoveChunkEntity(entity);
+			}
 
-			if(newChunk)
-				newChunk->AddChunkChild(entity);
+			if (newChunk)
+			{
+				newChunk->AddChunkEntity(entity);
+
+				for (auto& mesh : entity->GetComponents<StaticMeshComponent>())
+				{
+					newChunk->AddChunkComponent(entity, mesh);
+				}
+			}
 		}
 	}
 
@@ -316,7 +350,7 @@ namespace HexEngine
 	}
 #endif
 
-	void ChunkManager::CalculatePVS(Scene* scene, PVS* pvs, const PVSParams& params, Scene::EntityComponentVector& components)
+	void ChunkManager::CalculatePVS(Scene* scene, PVS* pvs, const PVSParams& params, std::vector<StaticMeshComponent*>& components)
 	{
 		auto chunkData = _sceneToChunkMap.find(scene);
 
@@ -327,19 +361,12 @@ namespace HexEngine
 		{
 			for (int32_t j = 0; j < chunkData->second._numChunks; ++j)
 			{
-				const auto& boundingVolume = chunkData->second._chunks[i][j]->GetBoundingSphere();
+				const auto& boundingVolume = chunkData->second._chunks[i][j]->GetBoundingVolume();
 
 				if (pvs->IsShapeVisible(boundingVolume, params))
 				{
-					const auto& entities = chunkData->second._chunks[i][j]->GetChunkChildren();
-
-					for (auto& ent : entities)
-					{
-						if (auto meshRenderer = ent->GetCachedMeshRenderer(); meshRenderer != nullptr)
-						{
-							components.push_back(meshRenderer);
-						}
-					}
+					const auto& meshes = chunkData->second._chunks[i][j]->GetChunkChildrenMeshes();
+					components.insert(components.end(), meshes.begin(), meshes.end());
 				}
 			}
 		}

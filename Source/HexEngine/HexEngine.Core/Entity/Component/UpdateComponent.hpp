@@ -26,9 +26,11 @@ namespace HexEngine
 		void SetTickRate(int32_t tickRate);
 		int32_t GetTickRate() const;
 		bool CanUpdate() const;
+		float GetLastUpdateTime() const { return _lastUpdateTime; }
 
 	private:
 		int32_t _tickRate = 1;
 		int32_t _lastUpdateTick = 0;
+		float _lastUpdateTime = 0.0f;
 	};
 }

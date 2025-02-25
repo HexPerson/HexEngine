@@ -192,6 +192,7 @@ namespace HexEngine
 			pvsParams.lodPartition = r_lodPartition._val.f32;
 			pvsParams.shapeType = PVSParams::ShapeType::Frustum;
 			pvsParams.shape.frustum = _frustum;
+			pvsParams.camera = this;
 
 			_pvs->CalculateVisibility(g_pEnv->_sceneManager->GetCurrentScene().get(), pvsParams);
 		}
@@ -551,5 +552,15 @@ namespace HexEngine
 	CameraEffect Camera::GetCameraEffects() const
 	{
 		return _effects;
+	}
+
+	void Camera::DebugRender()
+	{
+		g_pEnv->_debugRenderer->DrawFrustum(_frustum, math::Color(1,0,0.1,1));
+		//g_pEnv->_debugRenderer->DrawFrustum(_pvs->GetOptimisedParams().shape.frustum, math::Color(0.1, 0, 1, 1));
+
+		dx::BoundingBox pvsBB;
+		dx::BoundingBox::CreateFromSphere(pvsBB, _pvs->GetOptimisedParams().shape.sphere);
+		g_pEnv->_debugRenderer->DrawAABB(pvsBB);
 	}
 }

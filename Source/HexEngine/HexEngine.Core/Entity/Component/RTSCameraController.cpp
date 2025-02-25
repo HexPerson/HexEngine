@@ -8,6 +8,7 @@
 #include "../../Input/CommandManager.hpp"
 #include "../../Environment/LogFile.hpp"
 #include "../../Environment/TimeManager.hpp"
+#include "../../Scene/SceneManager.hpp"
 #include "../../Input/HCommand.hpp"
 #include "RigidBody.hpp"
 
@@ -145,8 +146,8 @@ namespace HexEngine
 		if (_moveFlags & RTSMoveFlag::MoveLeft)
 			direction -= transform->GetRight();
 
-		const float AccelerationSpeed = 800.0f;
-		const float MaxSpeed = 600.0f;
+		const float AccelerationSpeed = 1200.0f;
+		const float MaxSpeed = 900.0f;
 
 		if (_targetZoom != 0.0f)
 		{
@@ -170,7 +171,7 @@ namespace HexEngine
 		}
 		else
 		{
-			_currentSpeed -= frameTime * AccelerationSpeed;
+			_currentSpeed *= 0.9f;
 		}
 
 		
@@ -199,13 +200,18 @@ namespace HexEngine
 			{
 				Camera* camera = GetEntity()->GetComponent<Camera>();
 
-				if (data->MouseMove.x != 0.0f)
+				//if (g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera() == camera)
 				{
-					camera->SetYaw(camera->GetYaw() - data->MouseMove.x);
-				}
-				if (data->MouseMove.y != 0.0f)
-				{
-					camera->SetPitch(camera->GetPitch() - data->MouseMove.y);
+					if (data->MouseMove.x != 0.0f)
+					{
+						camera->SetYaw(camera->GetYaw() - data->MouseMove.x);
+					}
+					if (data->MouseMove.y != 0.0f)
+					{
+						camera->SetPitch(camera->GetPitch() - data->MouseMove.y);
+					}
+
+					//math::Quaternion::LookRotation()
 				}
 			}
 		}
@@ -224,6 +230,7 @@ namespace HexEngine
 		else if (event == InputEvent::MouseWheel)
 		{
 			_targetZoom += data->MouseWheel.delta * _zoomSpeed;
+			_targetZoom = std::clamp(_targetZoom, -1000.0f, 1000.0f);
 		}
 
 		return false;

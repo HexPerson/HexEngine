@@ -62,6 +62,10 @@ namespace HexEngine
 	{
 		SetFlag(EntityFlags::WantsDeletion);
 
+		// Notify all entities first
+		EntityDestroyedMessage message(this);
+		BroadcastMessage(&message);
+
 		for (auto&& child : _children)
 		{
 			child->SetFlag(EntityFlags::WantsDeletion);
@@ -333,11 +337,11 @@ namespace HexEngine
 			worldAABB.Extents.z *= 1.1f;
 
 			g_pEnv->_debugRenderer->DrawOBB(GetWorldOBB(), debugColour);
-			g_pEnv->_debugRenderer->DrawAABB(worldAABB, math::Color(1.0f, 0, 0, 0.6f));
+			//g_pEnv->_debugRenderer->DrawAABB(worldAABB, math::Color(1.0f, 0, 0, 0.6f));
 
-			g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetForward() * 20.0f, math::Color(0, 0, 1, 1));
-			g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetRight() * 20.0f, math::Color(1, 0, 0, 1));
-			g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetUp() * 20.0f, math::Color(0, 1, 0, 1));
+			//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetForward() * 20.0f, math::Color(0, 0, 1, 1));
+			//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetRight() * 20.0f, math::Color(1, 0, 0, 1));
+			//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetUp() * 20.0f, math::Color(0, 1, 0, 1));
 		}
 
 		for (auto& comp : _components)
@@ -716,6 +720,12 @@ namespace HexEngine
 			break;
 
 		}
+
+		case MessageId::PVSVisibilityChanged:
+		{
+			_isInPVS = message->CastAs<PVSVisibilityChangedMessage>()->visible;
+			break;
+		}
 		}
 
 		for (auto&& component : _components)
@@ -730,6 +740,30 @@ namespace HexEngine
 			if(sender != this)
 			child->OnMessage(message, sender);
 		}
+	}
+
+	void Entity::OnGUI()
+	{
+		for (auto&& component : _components)
+		{
+			component.component->OnGUI();
+		}
+	}
+
+	void Entity::BroadcastMessage(Message* message)
+	{
+		for (auto& entSet : g_pEnv->_sceneManager->GetCurrentScene()->GetEntities())
+		{
+			for (auto& ent : entSet.second)
+			{
+				if (ent == this)
+					continue;
+
+				ent->OnMessage(message, this);
+			}
+		}
+
+		_scene->BroadcastMessage(message);
 	}
 
 	void Entity::SetCastsShadows(bool castsShadows)
