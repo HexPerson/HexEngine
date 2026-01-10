@@ -8,7 +8,7 @@
 namespace HexEngine
 {
 	using ResourceLoadedFn = std::function<void(std::shared_ptr<IResource>)>;
-	const int32_t MaxAsyncResourceLoaders = 10;
+	const int32_t MaxAsyncResourceLoaders = 4;
 
 	class FileSystem;
 	class Dialog;
@@ -22,11 +22,7 @@ namespace HexEngine
 	struct HEX_API ResourceDeleter
 	{
 		void operator()(IResource* p) const;
-	};
-
-	
-
-	
+	};	
 
 	class HEX_API ResourceSystem
 	{
@@ -39,6 +35,7 @@ namespace HexEngine
 		void							RemoveFileSystem(FileSystem* fileSystem);
 		const std::vector<FileSystem*>& GetFileSystems() const { return _fileSystems; }
 		FileSystem*						FindFileSystemByPath(const fs::path& path);
+		FileSystem*						FindFileSystemByName(const std::wstring& name);
 
 		// Resource loader methods
 		//
@@ -71,7 +68,7 @@ namespace HexEngine
 		std::list<std::pair<fs::path, ResourceLoadedFn>> _queuedResources;
 		std::list<std::pair<std::shared_ptr<IResource>, ResourceLoadedFn>> _asyncLoadedForCallback;
 		std::thread _jobThread[MaxAsyncResourceLoaders];
-		std::recursive_mutex _lock;
+		mutable std::recursive_mutex _lock;
 		std::mutex _resourceLoadedCallbackLock;
 		bool _running = true;
 		ResourceId _currentResourceId = 1;

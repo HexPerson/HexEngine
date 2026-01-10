@@ -111,7 +111,7 @@
 		//float finalDepth = pixelDepth == -1 ? g_frustumDepths[3] : pixelDepth;
 
 		int numSteps = g_atmosphere.volumetricStepsMax;
-		float stepLength = traceLen / (float)numSteps;//g_atmosphere.volumetricStepIncrement;//traceLen / (float)numSteps; // g_atmosphere.volumetricStepIncrement;//
+		float stepLength = g_atmosphere.volumetricStepIncrement;//traceLen / (float)numSteps; // g_atmosphere.volumetricStepIncrement;//
 
 		float3 tracePos = startPos;
 		float totalTraceLen = 0.0f;
@@ -152,7 +152,7 @@
 		tracePos += direction * startOffset;
 #endif
 
-		tracePos += direction + noise * 1.2f;// + frac(g_time * 50.0f));
+		tracePos += direction + noise * 0.07f;// + frac(g_time * 50.0f));
 
 		int numHits = 0;
 		int numActualSteps = 0;
@@ -173,28 +173,28 @@
 					index = 0;
 
 					//numSteps = 100;
-					stepLength = 5.0f;//g_frustumDepths[0] / (float)(numSteps / 4);
+					//stepLength = 5.0f;//g_frustumDepths[0] / (float)(numSteps / 4);
 				}
 				else if (totalTraceLen <= g_frustumDepths[1])
 				{
 					index = 1;
 
 					//numSteps = 50;
-					stepLength = 15.0f;//(g_frustumDepths[1] - g_frustumDepths[0]) /  (float)(numSteps / 4);
+					//stepLength = 15.0f;//(g_frustumDepths[1] - g_frustumDepths[0]) /  (float)(numSteps / 4);
 				}
 				else if (totalTraceLen <= g_frustumDepths[2])
 				{
 					index = 2;
 
 					//numSteps = 40;
-					stepLength = 40.0f;//(g_frustumDepths[2] - g_frustumDepths[1]) /  (float)(numSteps / 4);
+					//stepLength = 40.0f;//(g_frustumDepths[2] - g_frustumDepths[1]) /  (float)(numSteps / 4);
 				}
 				else
 				{
 					index = 3;
 
 					//numSteps = 10;
-					stepLength = 60.0f;//(g_frustumDepths[3] - g_frustumDepths[2]) /  (float)(numSteps / 4);
+					//stepLength = 60.0f;//(g_frustumDepths[3] - g_frustumDepths[2]) /  (float)(numSteps / 4);
 				}
 			}
 

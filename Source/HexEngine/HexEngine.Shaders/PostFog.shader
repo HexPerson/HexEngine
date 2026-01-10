@@ -59,16 +59,20 @@
 		float4 worldPos = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
 
 		// don't fog over emissive pixels
-		if (worldPos.w == -1)
+		if (pixelNormal.w == g_frustumDepths[3])
 		{
 			return float4(pixelColour.rgb, 1.0f);
 		}
 
 		float pixelDepth = pixelNormal.w;
 
-		float4 fogColour = float4(g_globalLight[1], g_globalLight[2], g_globalLight[3], 1);
+		float4 fogColour;// = float4(g_globalLight[1], g_globalLight[2], g_globalLight[3], 1);
 
 		/// --------- CALCULATE FOG ----------- //
+		
+
+#if 0
+
 		float4 pixelPos = mul(worldPos, g_viewMatrix);
 		pixelPos = mul(pixelPos, g_projectionMatrix);
 
@@ -83,7 +87,6 @@
 
 		float aspect = (float)g_screenWidth / (float)g_screenHeight;
 
-#if 0
 		float3 atmosphericFogColour = getAtmosphereColour(
 			(worldPos.y / 5000.0f),
 			projectedPixel.xy * 2.0f,
@@ -97,7 +100,7 @@
 #else
 
 		// use ATMOSPHERE COLOUR?
-		fogColour = float4(getSunColour() * 0.6f, 1.0f);//g_atmosphereTexture.Sample(g_pointSampler, screenPos);
+		fogColour = float4(getSunColour() * 0.8, 1.0f);//g_atmosphereTexture.Sample(g_pointSampler, screenPos);
 #endif
 
 

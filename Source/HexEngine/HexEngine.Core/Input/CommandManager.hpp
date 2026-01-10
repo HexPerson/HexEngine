@@ -43,17 +43,17 @@ namespace HexEngine
 		void SaveVars(json& jsonFile);
 		void LoadVars(json& jsonFile);
 
-		void RegisterCommand(HCommand* command);
-		void RegisterVar(HVar* var);
+		//void RegisterCommand(HCommand* command);
+		//void RegisterVar(HVar* var);
 
-		int32_t GetNumVars() const { return (int32_t)_vars.size(); }
+		int32_t GetNumVars() const { return g_numVars; }
 
 	private:
 		static std::recursive_mutex _varLock;
 		static std::recursive_mutex _cmdLock;
 		std::map<int32_t, std::pair<std::string, void*>> _binds;
-		std::vector<HCommand*> _commands;
-		std::vector<HVar*> _vars;
+		//std::vector<HCommand*> _commands;
+		//std::vector<HVar*> _vars;
 		Console _console;
 
 	public:

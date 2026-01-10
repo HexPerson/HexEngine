@@ -115,10 +115,24 @@ namespace HexEngine
 			widget->GetNextPos(),
 			Point(widget->GetSize().x - 20, 18),
 			L"Cone Size",
-			&_coneSize, 1.0f, 180.0f,
-			1.0f);
+			&_coneSize, 0.1f, 50.0f,
+			0.1f);
 
 		return true;
+	}
+
+	void SpotLight::Serialize(json& data, JsonFile* file)
+	{
+		Light::Serialize(data, file);
+
+		SERIALIZE_VALUE(_coneSize);
+	}
+
+	void SpotLight::Deserialize(json& data, JsonFile* file, uint32_t mask)
+	{
+		Light::Deserialize(data, file, mask);
+
+		DESERIALIZE_VALUE(_coneSize);
 	}
 
 	/*DirectionalLight* DirectionalLight::Load(DiskFile* file)

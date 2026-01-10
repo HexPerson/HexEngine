@@ -37,9 +37,13 @@ namespace HexEditor
 
 		void SelectAll();
 
+		void SetMassMaterial();
+
 		AssetDesc* FindAssetInView(const fs::path& filename);
 
 		void EditAssetName(AssetDesc* asset);
+
+		AssetDesc* GetCurrentlyDraggedAsset() const { return _draggingAsset; }
 
 		//void EditFileName(const fs::path& 
 
@@ -76,6 +80,7 @@ namespace HexEditor
 		std::wstring _editingAssetExtension;
 		LineEdit* _fileSearchBar = nullptr;
 		std::wstring _searchFilter;
+		Canvas _canvas;
 		//DrawList _drawList;
 	};
 }

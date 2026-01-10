@@ -8,6 +8,7 @@
 #include "../Entity/Component/StaticMeshComponent.hpp"
 #include "../Environment/LogFile.hpp"
 #include "../Input/HVar.hpp"
+#include "../Graphics/DebugRenderer.hpp"
 
 namespace HexEngine
 {
@@ -29,9 +30,21 @@ namespace HexEngine
 		data._totalWidth = data._chunkWidth * (float)numChunks;
 		data._halfTotalWidth = data._totalWidth / 2.0f;
 
+		math::Vector3 min, max;
+		scene->CalculateBounds(min, max);
+
+		float dx = (max.x - min.x) / (float)numChunks;
+		float dz = (max.z - min.z) / (float)numChunks;
+
+		math::Vector3 start = min;
+		start.x += dx / 2.0f;
+		start.z += dz / 2.0f;
+
 		int32_t halfGridSize = numChunks / 2;
 
 		data._chunks = new Chunk ** [numChunks];
+
+		int32_t currentId = 0;
 
 		for (int32_t i = 0; i < numChunks; ++i)
 		{
@@ -40,10 +53,12 @@ namespace HexEngine
 			for (int32_t j = 0; j < numChunks; ++j)
 			{
 				dx::BoundingBox initialVolume;
-				initialVolume.Extents = math::Vector3(chunkSize, 1.0f, chunkSize);
-				initialVolume.Center = math::Vector3((float)(i - halfGridSize) * data._chunkWidth, 0.0f, (float)(j - halfGridSize) * data._chunkWidth);
+				initialVolume.Extents = math::Vector3(dx / 2.0f, 1.0f, dz / 2.0f);
+				initialVolume.Center = math::Vector3(start.x + (float)i * dx, start.y, start.z + (float)j * dz);
 
-				Chunk* chunk = new Chunk(initialVolume);	
+				Chunk* chunk = new Chunk(initialVolume, currentId);
+
+				currentId++;
 
 				data._chunks[i][j] = chunk;
 			}
@@ -62,6 +77,14 @@ namespace HexEngine
 		{
 			OnAddComponent(comp->GetEntity(), comp);
 		}
+
+		//_chunkLoader = std::thread(&ChunkManager::ChunkLoader, this);
+		//_chunkLoader.detach();
+	}
+
+	int32_t ChunkManager::GetNumChunksVisible() const
+	{
+		return _chunksVisible;
 	}
 
 	bool ChunkManager::HasActiveChunks(Scene* scene) const
@@ -152,12 +175,15 @@ namespace HexEngine
 
 	void ChunkManager::OnAddEntity(Entity* entity)
 	{
+		if (entity->GetLayer() == Layer::Sky)
+			return;
+
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
 
 		if (chunkData == _sceneToChunkMap.end())
 			return;
 
-		auto chunk = GetChunkByPosition(chunkData->second, entity->GetPosition());
+		auto chunk = entity->GetChunk() ? entity->GetChunk() : GetChunkByPosition(chunkData->second, entity->GetPosition());
 
 		if (chunk == nullptr)
 			return;
@@ -169,12 +195,15 @@ namespace HexEngine
 
 	void ChunkManager::OnRemoveEntity(Entity* entity)
 	{
+		if (entity->GetLayer() == Layer::Sky)
+			return;
+
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
 
 		if (chunkData == _sceneToChunkMap.end())
 			return;
 
-		auto chunk = GetChunkByPosition(chunkData->second, entity->GetPosition());
+		auto chunk = entity->GetChunk() ? entity->GetChunk() : GetChunkByPosition(chunkData->second, entity->GetPosition());
 
 		if (chunk == nullptr)
 			return;
@@ -189,12 +218,15 @@ namespace HexEngine
 		if (component->GetComponentId() != StaticMeshComponent::_GetComponentId())
 			return;
 
+		if (entity->GetLayer() == Layer::Sky)
+			return;
+
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
 
 		if (chunkData == _sceneToChunkMap.end())
 			return;
 
-		auto chunk = GetChunkByPosition(chunkData->second, entity->GetPosition());
+		auto chunk = entity->GetChunk() ? entity->GetChunk() : GetChunkByPosition(chunkData->second, entity->GetPosition());
 
 		if (chunk == nullptr)
 			return;
@@ -207,12 +239,15 @@ namespace HexEngine
 		if (component->GetComponentId() != StaticMeshComponent::_GetComponentId())
 			return;
 
+		if (entity->GetLayer() == Layer::Sky)
+			return;
+
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
 
 		if (chunkData == _sceneToChunkMap.end())
 			return;
 
-		auto chunk = GetChunkByPosition(chunkData->second, entity->GetPosition());
+		auto chunk = entity->GetChunk() ? entity->GetChunk() : GetChunkByPosition(chunkData->second, entity->GetPosition());
 
 		if (chunk == nullptr)
 			return;
@@ -220,8 +255,25 @@ namespace HexEngine
 		chunk->RemoveChunkComponent(entity, component);
 	}
 
+	void ChunkManager::RecalculateAllChunkBounds(Scene* scene)
+	{
+		auto chunkData = _sceneToChunkMap.find(scene);
+
+		if (chunkData == _sceneToChunkMap.end())
+			return;
+
+		ForEachChunkExecute(chunkData->second, [](int32_t, int32_t, Chunk* chunk) {
+
+			chunk->RecalculateAABB();
+
+		});
+	}
+
 	void ChunkManager::OnEntityPositionChanged(Entity* entity, const math::Vector3& oldPosition, const math::Vector3& newPosition)
 	{
+		//if (entity->GetLayer() == Layer::Sky)
+		//	return;
+
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
 
 		if (chunkData == _sceneToChunkMap.end())
@@ -350,8 +402,23 @@ namespace HexEngine
 	}
 #endif
 
+	void ChunkManager::DebugRender()
+	{
+		auto chunkData = _sceneToChunkMap.find(g_pEnv->_sceneManager->GetCurrentScene().get());
+
+		if (chunkData == _sceneToChunkMap.end())
+			return;
+
+		ForEachChunkExecute(chunkData->second, [](int32_t, int32_t, Chunk* chunk) {
+			g_pEnv->_debugRenderer->DrawAABB(chunk->GetBoundingVolume(), math::Color(1, 0, 0, 1));
+			});
+	}
+
 	void ChunkManager::CalculatePVS(Scene* scene, PVS* pvs, const PVSParams& params, std::vector<StaticMeshComponent*>& components)
 	{
+		if(params.isShadow == false)
+			_chunksVisible = 0;
+
 		auto chunkData = _sceneToChunkMap.find(scene);
 
 		if (chunkData == _sceneToChunkMap.end())
@@ -361,294 +428,79 @@ namespace HexEngine
 		{
 			for (int32_t j = 0; j < chunkData->second._numChunks; ++j)
 			{
-				const auto& boundingVolume = chunkData->second._chunks[i][j]->GetBoundingVolume();
+				const auto& chunk = chunkData->second._chunks[i][j];
+
+				const auto& boundingVolume = chunk->GetBoundingVolume();				
 
 				if (pvs->IsShapeVisible(boundingVolume, params))
 				{
-					const auto& meshes = chunkData->second._chunks[i][j]->GetChunkChildrenMeshes();
+					// if the chunk was cached, read it back in from disk
+					if (_cachingEnabled && params.isShadow == false && chunk->IsCached() == true)
+					{
+						_loaderLock.lock();
+
+						if(std::find(_loadList.begin(), _loadList.end(), chunk) == _loadList.end())
+							_loadList.push_front(chunk);
+
+						_loaderLock.unlock();
+
+						continue;
+					}
+					chunk->Lock();
+					const auto& meshes = chunk->GetChunkChildrenMeshes();
 					components.insert(components.end(), meshes.begin(), meshes.end());
+					chunk->Unlock();
+
+					if (params.isShadow == false)
+						_chunksVisible++;
 				}
-			}
-		}
-	}
-
-#if 0
-	void ChunkManager::CalculateVisibility(Scene* scene, Camera* camera, PVS::MeshInstanceMap& map)
-	{
-		if (!camera)
-			return;
-
-		auto chunkData = _sceneToChunkMap.find(scene);
-
-		if (chunkData == _sceneToChunkMap.end())
-			return;
-
-		//visMap.clear();
-
-		auto cameraTransform = camera->GetEntity()->GetComponent<Transform>();
-		const auto& cameraPos = cameraTransform->GetPosition();
-		const auto& frustum = camera->GetFrustum();
-
-		for (int32_t i = 0; i < chunkData->second._numChunks; ++i)
-		{
-			for (int32_t j = 0; j < chunkData->second._numChunks; ++j)
-			{
-				const auto& boundingVolume = chunkData->second._chunks[i][j]->GetBoundingSphere();
-
-				if (frustum.Intersects(boundingVolume))
+				else if(_cachingEnabled && params.isShadow == false && chunk->IsCached() == false)
 				{
-					//if (IsChunkOccluded(cameraPos, _chunks[i][j]))
-					//	continue;
+					_loaderLock.lock();
 
-					
+					if (std::find(_unloadList.begin(), _unloadList.end(), chunk) == _unloadList.end())
+						_unloadList.push_back(chunk);
 
-					MeshInstance* lastMeshInstance = nullptr;
-					auto it = map.end();
-					const auto& visMapEnd = map.end();
-
-					for (auto& entity : entities)
-					{
-						if (entity->IsPendingDeletion())
-							continue;
-
-						if (entity->GetLayer() == Layer::Invisible || entity->GetLayer() == Layer::Trigger)
-							continue;
-
-						auto meshComponent = entity->GetCachedMeshRenderer();
-
-						if (meshComponent)
-						{
-							if (frustum.Intersects(entity->GetWorldAABB()) == false)
-								continue;
-
-							float distance = (entity->GetPosition() - g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera()->GetEntity()->GetPosition()).Length();
-
-							for (auto& mesh : meshComponent->GetMeshes())
-							{
-								if (!mesh)
-									continue;
-
-								if (mesh->GetLodLevel() != -1)
-								{
-									//if (mesh->GetLodLevel() != 1)
-									//	continue;
-
-									const float lodPartitions = r_lodPartition._val.f32;
-
-									float minDistance = lodPartitions * (float)(mesh->GetLodLevel());
-									float maxDistance = lodPartitions * (float)(mesh->GetLodLevel() + 1);
-
-									float distance = (entity->GetPosition() - camera->GetEntity()->GetPosition()).Length();
-
-									if (mesh->GetLodLevel() < 3)
-									{
-										// always allow level 3
-										if (distance < minDistance || distance > maxDistance)
-										{
-											//LOG_DEBUG("Entity %p failed LOD test at level %d because distance %.1f is greated then max allowed (%.1f) for this level", entity, mesh->GetLodLevel(), distance, maxDistance);
-											continue;
-										}
-									}
-									else
-									{
-										if (distance < minDistance)
-										{
-											continue;
-										}
-									}
-								}
-
-								auto meshInstance = mesh->GetInstance();
-
-								if (it == visMapEnd)
-								{
-									RenderState rs;
-
-									auto& newEntry = map[meshInstance];
-
-									newEntry.reserve(256);
-									newEntry.push_back({ mesh,entity });
-
-									map[meshInstance].push_back({ mesh,entity });
-								}
-								else
-								{
-									bool found = false;
-									for (auto&& pair : it->second)
-									{
-										if (pair.second == entity)
-										{
-											found = true;
-											break;
-										}
-									}
-									if (!found)
-										it->second.push_back({ mesh,entity });
-								}
-							}
-						}
-					}
+					_loaderLock.unlock();
 				}
 			}
 		}
 	}
 
-	void ChunkManager::CalculateShadowVisibility(const dx::BoundingSphere& cascadeSphere, std::unordered_map<MeshInstance*, std::vector<std::pair<Mesh*, Entity*>>>& visMap)
+	void ChunkManager::ChunkLoader()
 	{
-		for (int32_t i = 0; i < _numChunks; ++i)
+		//while (g_pEnv->IsRunning())
 		{
-			for (int32_t j = 0; j < _numChunks; ++j)
+			_loaderLock.lock();
+
+			if (_unloadList.size() > 0)
 			{
-				const auto& boundingVolume = _chunks[i][j]->GetBoundingSphere();
-
-				if (cascadeSphere.Intersects(boundingVolume))
+				auto& head = _unloadList.front();
+				if (g_pEnv->_sceneManager->GetCurrentScene()->TryLock() == true)
 				{
-					const auto& entities = _chunks[i][j]->GetChunkChildren();
+					head->WriteToDisk();
+					_unloadList.pop_front();
 
-					//MeshInstance* lastMeshInstance = nullptr;
-
-					auto it = visMap.end();
-					const auto& visMapEnd = visMap.end();
-
-					for (auto& entity : entities)
-					{
-						if (entity->IsPendingDeletion())
-							continue;
-
-						if (entity->GetCastsShadows() == false)
-							continue;
-
-						if (entity->GetLayer() == Layer::Invisible || entity->GetLayer() == Layer::Trigger)
-							continue;
-
-						auto meshComponent = entity->GetCachedMeshRenderer();
-
-						if (meshComponent)
-						{
-							bool visible = cascadeSphere.Intersects(entity->GetWorldAABB());
-
-							if (!visible)
-								continue;
-
-							float distance = (entity->GetPosition() - g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera()->GetEntity()->GetPosition()).Length();
-
-							for (auto& mesh : meshComponent->GetMeshes())
-							{
-								if (!mesh)
-									continue;
-
-								if (auto lod = mesh->GetLodLevel(); lod != -1)
-								{
-									if (lod < r_shadowMinimumLodThreshold._val.i32)
-										continue;
-
-									//if (mesh->GetLodLevel() != 1)
-									//	continue;
-
-									const float lodPartitions = r_lodPartition._val.f32;
-
-									float minDistance = lodPartitions * (float)(mesh->GetLodLevel());
-									float maxDistance = lodPartitions * (float)(mesh->GetLodLevel() + 1);									
-
-									if (mesh->GetLodLevel() < 3)
-									{
-										// always allow level 3
-										if (distance < minDistance || distance > maxDistance)
-										{
-											//LOG_DEBUG("Entity %p failed LOD test at level %d because distance %.1f is greated then max allowed (%.1f) for this level", entity, mesh->GetLodLevel(), distance, maxDistance);
-											continue;
-										}
-									}
-									else
-									{
-										if (distance < minDistance)
-										{
-											continue;
-										}
-									}
-								}
-
-								auto meshInstance = mesh->GetInstance();
-
-								//auto& vec = visMap[meshInstance];
-
-								//if (vec.capacity() == 0)
-								//	vec.resize(_visMapSizeIncrease);
-
-#if 0
-								int lastNullIdx = -1;
-
-								while (true)
-								{
-									const auto vecSize = vec.size();
-									for (int x = 0; x < vecSize; ++x)
-									{
-										if (vec[x].first == nullptr)
-										{
-											lastNullIdx = x;
-											break;
-										}
-									}
-									/*const auto& end = vec.end();
-									for (auto it = vec.begin(); it != end; it++)
-									{
-										if (it->first == nullptr)
-										{
-											lastNullIdx = std::distance(vec.begin(), it);
-											break;
-										}
-									}*/
-
-									// we ran out of space
-									if (lastNullIdx == -1)
-										vec.resize(vec.size() + _visMapSizeIncrease);
-									else
-										break;
-								}
-									
-								vec[lastNullIdx] = std::make_pair(mesh, entity);
-#endif
-									//vec.emplace_back(mesh, entity);
-								//vec[vec.size()] = std::make_pair(mesh,entity);
-
-								//if (meshInstance != lastMeshInstance)
-								{
-									it = visMap.find(meshInstance);
-									//lastMeshInstance = meshInstance;
-								}
-
-								if (it == visMapEnd)
-								{
-									RenderState rs;
-
-									auto& newEntry = visMap[meshInstance];
-
-									newEntry.reserve(256);
-									newEntry.push_back({ mesh,entity });
-
-									visMap[meshInstance].push_back({ mesh,entity });
-								}
-								else
-								{
-									bool found = false;
-									for (auto&& pair : it->second)
-									{
-										if (pair.second == entity)
-										{
-											found = true;
-											break;
-										}
-									}
-									if (!found)
-									it->second.push_back({ mesh,entity });
-								}
-							}
-						}
-					}
+					g_pEnv->_sceneManager->GetCurrentScene()->Unlock();
 				}
 			}
+
+			if (_loadList.size() > 0)
+			{
+				auto& head = _loadList.front();
+				if (g_pEnv->_sceneManager->GetCurrentScene()->TryLock() == true)
+				{
+					head->ReadFromDisk();
+					_loadList.pop_front();
+
+					g_pEnv->_sceneManager->GetCurrentScene()->Unlock();
+				}
+			}
+
+			_loaderLock.unlock();
+
+			//std::this_thread::sleep_for(std::chrono::milliseconds(2));
 		}
 	}
-#endif
 
 }

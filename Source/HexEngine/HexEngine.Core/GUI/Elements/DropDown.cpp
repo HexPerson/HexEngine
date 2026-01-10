@@ -49,7 +49,7 @@ namespace HexEngine
 
 		const int32_t iconSize = _size.y - 4;
 
-		renderer->PushFillTexturedQuad(
+		renderer->FillTexturedQuad(
 			_arrowIcon.get(),
 			GetAbsolutePosition().x + _size.x - iconSize,
 			GetAbsolutePosition().y + (_size.y / 2) - iconSize / 2,

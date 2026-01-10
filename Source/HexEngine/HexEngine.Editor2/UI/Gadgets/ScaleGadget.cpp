@@ -14,7 +14,7 @@ namespace HexEditor
 		g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 		auto inspector = g_pUIManager->GetInspector();
-		auto canvas = g_pUIManager->GetCanvas();
+		auto canvas = g_pUIManager->GetSceneView();
 		auto ent = inspector->GetInspectingEntity();
 
 		if (!ent)
@@ -39,6 +39,8 @@ namespace HexEditor
 			_adjustSize = sqrt((dx * dx) + (dy * dy));
 		}
 
+		_scaleFreedom = math::Vector3(1.0f, 1.0f, 1.0f);
+
 		return true;
 	}
 
@@ -58,7 +60,7 @@ namespace HexEditor
 
 		len /= 100.0f;
 
-		ent->SetScale(_originalScale + math::Vector3(len));
+		ent->SetScale(_originalScale + (math::Vector3(len) * _scaleFreedom));
 	}
 
 	void ScaleGadget::StopGadget(GadgetAction action)
@@ -74,5 +76,36 @@ namespace HexEditor
 		{
 			ent->SetScale(_originalScale);
 		}
+	}
+
+	bool ScaleGadget::OnInputEvent(InputEvent event, InputData* data)
+	{
+		bool ret = Gadget::OnInputEvent(event, data);
+
+		if (_gadgetStarted && event == InputEvent::KeyDown)
+		{
+			auto inspector = g_pUIManager->GetInspector();
+			auto ent = inspector->GetInspectingEntity();
+
+			switch (data->KeyDown.key)
+			{
+			case 'X':
+				ent->SetScale(_originalScale);
+				_scaleFreedom = math::Vector3(1.0f, 0.0f, 0.0f);
+				break;
+
+			case 'Y':
+				ent->SetScale(_originalScale);
+				_scaleFreedom = math::Vector3(0.0f, 1.0f, 0.0f);
+				break;
+
+			case 'Z':
+				ent->SetScale(_originalScale);
+				_scaleFreedom = math::Vector3(0.0f, 0.0f, 1.0f);
+				break;
+			}
+		}
+
+		return ret;
 	}
 }

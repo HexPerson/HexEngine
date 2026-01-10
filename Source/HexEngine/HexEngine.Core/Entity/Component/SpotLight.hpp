@@ -44,6 +44,10 @@ namespace HexEngine
 		float GetConeSize() const;
 		void SetConeSize(float cone);
 
+		virtual void Serialize(json& data, JsonFile* file) override;
+
+		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
+
 		//IMPLEMENT_LOADER(DirectionalLight);
 
 	private:

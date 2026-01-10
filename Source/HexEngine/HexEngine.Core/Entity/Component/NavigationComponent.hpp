@@ -17,7 +17,7 @@ namespace HexEngine
 
 		virtual ~NavigationComponent();
 
-		void FindPath(const math::Vector3& from, const math::Vector3& to, float stepSize);
+		void FindPath(NavMeshId id, const math::Vector3& from, const math::Vector3& to, float stepSize);
 
 		virtual void Update(float dt) override;
 
@@ -35,7 +35,7 @@ namespace HexEngine
 		//math::Quaternion _currentRotation;
 		math::Quaternion _targetRotation;
 		float _rotationTime = 0.0f;
-		float _rotationSpeed = 2.0f;
+		float _rotationSpeed = 1.25f;
 		bool _hasNewRotation = false;
 		float _targetYaw = 0.0f;
 		float _movementSpeed = 180.0f;

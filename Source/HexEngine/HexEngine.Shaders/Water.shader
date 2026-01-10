@@ -1,6 +1,7 @@
 "Requirements"
 {
-	GBuffer
+	GBuffer,
+	Beauty
 }
 "InputLayout"
 {
@@ -22,9 +23,9 @@
 	//static const float _Wavelength = 1.0f;
 	//static const float _Amplitude = 0.001f;
 
-	static const float WaveSizeMultiplier = 10.9f;
+	static const float WaveSizeMultiplier = 1.9f;
 
-#define ENABLE_WAVES 1
+#define ENABLE_WAVES 0
 
 	float RoundDown(float toRound)
 	{
@@ -189,14 +190,14 @@
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	//SHADOWMAPS_RESOURCE(4);
 
-	//Texture2D g_splatMap : register(t5);
+	Texture2D beautyTexture : register(t5);
 
-	Texture2D shaderTexture : register(t5);
-	Texture2D normalMap : register(t6);
-	Texture2D specularMap : register(t7);
-	Texture2D noiseMap : register(t8);
-	Texture2D heightMap : register(t9);
-	Texture2D waterMask : register(t10);
+	Texture2D shaderTexture : register(t6);
+	Texture2D normalMap : register(t7);
+	Texture2D specularMap : register(t8);
+	Texture2D noiseMap : register(t9);
+	Texture2D heightMap : register(t10);
+	Texture2D waterMask : register(t11);
 
 	SamplerState g_TexSamplerAniso : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -266,7 +267,7 @@
 
 				//if (fragDepth >= actualDepth /*&& fragDepth > currentDepth && (actualDepth > currentDepth || actualDepth == g_frustumDepths[3])*/)
 				if ((fragDepth >= actualDepth && actualDepth > currentDepth) || actualDepth == g_frustumDepths[3])
-					return GBUFFER_DIFFUSE.Sample(g_TexSamplerPoint, texCoord);
+					return beautyTexture.Sample(g_TexSamplerPoint, texCoord);
 			}
 		}
 
@@ -275,6 +276,7 @@
 
 	float4 GetWorldColour(float3 eyeDir, inout float2 screenPos, float3 worldNormal, float4 originalWorldDiffuse, inout bool isInMaskedRegion, float3 pixelPos)
 	{
+		return float4(0,1,0,1);
 		//return originalWorldDiffuse;
 
 		isInMaskedRegion = true;
@@ -290,11 +292,11 @@
 		if (g_eyePos.y <= 0.0f)
 			eta = 1.33f;
 
-		float3 refractedNormal = normalize(refract(eyeDir, normalize(worldNormal), eta));
+		float3 refractedNormal = refract(eyeDir, (worldNormal), eta);
 
 #if 0
 		float3 rayStart = pixelPos;
-		const float stepLen = 2.0f;
+		const float stepLen = 0.1f;
 
 		rayStart += refractedNormal * stepLen;
 
@@ -322,7 +324,7 @@
 		jitterNormal = mul(jitterNormal, g_viewMatrix);
 		jitterNormal = mul(jitterNormal, g_projectionMatrix);
 
-		const float jitterAmmount = 0.001f;
+		const float jitterAmmount = 0.03f;
 
 		jitterNormal = jitterNormal * jitterAmmount;
 
@@ -338,7 +340,7 @@
 		}*/
 
 		// resample the world at the jittered position
-		float4 jitterDiffuse = GBUFFER_DIFFUSE.Sample(g_TexSamplerPoint, screenPos);
+		float4 jitterDiffuse = beautyTexture.Sample(g_TexSamplerPoint, screenPos);
 		jitterDiffuse.a = 1.0f;
 
 		return jitterDiffuse;
@@ -374,7 +376,7 @@
 	float4 ShaderMain(MeshPixelInput input) : SV_Target
 	{
 		//return float4(1,0,0,1);
-		float4 albedo = shaderTexture.Sample(g_TexSamplerAniso, input.texcoord) * input.colour;
+		float4 albedo = shaderTexture.Sample(g_TexSamplerAniso, input.texcoord);// * input.colour;
 		//return albedo;
 		//float4 color = albedo * ambientColor;
 
@@ -384,8 +386,21 @@
 		float3 eyeVector = normalize(g_eyePos.xyz - input.positionWS.xyz);// normalize(g_eyePos.xyz - input.positionWS.xyz);
 		//float3 lightVector = normalize(input.positionWS.xyz - g_lightPosition.xyz);
 		float3 worldNormal = normalize(input.normal.xyz);
-		float3 originalWorldNormal = worldNormal;
 		float3 refractionNormal = worldNormal;
+
+		if (g_eyePos.y <= 0.0f)
+		{
+			//refractionNormal *= -1.0f;
+			worldNormal *= -1.0f;
+
+			//worldNormal.y *= -1.0f;
+			refractionNormal.y *= -1.0f;
+		}
+
+		//return float4(1,0,0,1);
+
+		float3 originalWorldNormal = worldNormal;
+		
 		float3 lightDir = -normalize(g_lightDirection.xyz);
 
 		float4 worldViewPosition = mul(input.positionWS, g_viewMatrix);
@@ -403,7 +418,7 @@
 		float4 originalWorldDiffuse = worldDiffuse;
 
 		// BUMP MAPPING
-		if (g_objectFlags & OBJECT_FLAGS_HAS_BUMP)
+		//if (g_objectFlags & OBJECT_FLAGS_HAS_BUMP)
 		{
 			// Sample the pixel in the bump map.
 			//float4 bumpMap = normalMap.Sample(g_TexSamplerAniso, input.texcoord);
@@ -420,7 +435,7 @@
 			//float3 biTangent = cross(input.normal, input.tangent);
 
 			// Calculate the normal from the data in the bump map.
-			float3 bumpNormal = ApplyNormalMap(worldNormal, input.tangent, input.binormal, normalMap, g_TexSamplerAniso, input.texcoord, false, 0.4f);
+			float3 bumpNormal = ApplyNormalMap(worldNormal, input.tangent, input.binormal, normalMap, g_TexSamplerAniso, input.texcoord, false, 1.0f);
 
 			//bumpNormal += ApplyNormalMap(worldNormal, input.tangent, input.binormal, noiseMap, g_TexSamplerAniso, input.texcoord += g_time * 0.04f, true, 0.9f);
 
@@ -436,14 +451,7 @@
 			worldNormal = normalize(bumpNormal);
 		}
 
-		if (g_eyePos.y <= 0.0f)
-		{
-			//refractionNormal *= -1.0f;
-			//worldNormal *= -1.0f;
-
-			//worldNormal.y *= -1.0f;
-			refractionNormal.y *= -1.0f;
-		}
+		
 
 		//return float4(worldNormal.xyz, 1.0f);
 
@@ -452,9 +460,9 @@
 
 		bool isInMaskedRegion = false;
 
-		if (worldDepth >= pixelDepth || worldDepth == -1.0f)
+		if (true && (worldDepth >= pixelDepth || worldDepth == -1.0f))
 		{			
-			worldDiffuse = GetWorldColour(-eyeVector, screenPos, worldNormal/*refractionNormal*/, worldDiffuse, isInMaskedRegion, input.positionWS.xyz);
+			worldDiffuse = GetWorldColour(-eyeVector, screenPos, /* worldNormal */refractionNormal, worldDiffuse, isInMaskedRegion, input.positionWS.xyz);
 
 			// sample the other buffers using the corrected jitter positions
 			//
@@ -467,6 +475,8 @@
 			//	else
 			//		worldDepth = normalAndDepth.w;
 			//}
+
+			return worldDiffuse;
 		}
 
 		// Correct for gamma
@@ -479,7 +489,7 @@
 		//if (isInMaskedRegion == false)
 		//	clip(-1);
 
-		float lightIntensity = saturate(dot(worldNormal, lightDir)) * g_globalLight[0];
+		float lightIntensity = dot(worldNormal, lightDir) * g_globalLight[0];
 		
 		if (lightIntensity > 0.0f)
 		{
@@ -494,27 +504,28 @@
 			// Calculate the reflection vector based on the light intensity, normal vector, and light direction.
 			reflection = normalize(2 * lightIntensity * worldNormal - lightDir);
 
-			//float shinyPower = g_material.shininess;
+			float shinyPower = 120;//g_material.shininess;
 
-			//if (shinyPower < 10.0f)
-			//	shinyPower = 10.0f;
+			if (shinyPower < 10.0f)
+				shinyPower = 10.0f;
 
 			float rDotL = dot(reflection, eyeVector);
 
 			// Determine the amount of specular light based on the reflection vector, viewing direction, and specular power.
-			//specular = float4(getSunColour(), 1.0f) * pow(saturate(rDotL), shinyPower);// * g_material.shininessStrength;
+			specular = float4(getSunColour(), 1.0f) * pow(saturate(rDotL), shinyPower);// * g_material.shininessStrength;
 
+			//return specular;
 			if ((g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS) != 0)
 			{
-				float4 specularIntensity = specularMap.Sample(g_TexSamplerAniso, input.texcoord);
+				//float4 specularIntensity = specularMap.Sample(g_TexSamplerAniso, input.texcoord);
 
-				specular = specular * specularIntensity.r;// *depthValue2;
+				//specular = specular * specularIntensity.r;// *depthValue2;
 			}
 
 			//specular = min(specular, albedo.a);
 		}
 
-		//return float4(worldDiffuse.rgb, 1.0f);6
+		//return float4(lightIntensity, lightIntensity, lightIntensity, 1.0f);
 
 		// calculate the view-space pixel depth
 
@@ -554,7 +565,7 @@
 		
 		//finalColour.a = fadeFactor;
 
-		//return worldDiffuse;
+		//return float4(finalColour.xyz, 1.0f);
 
 		float finalFadeFactor = fadeFactor;
 
@@ -567,16 +578,16 @@
 		
 		//retCol = float4(retCol.rgb * depthValue, 1.0f);
 
-		if (false && isInMaskedRegion == true && g_eyePos.y > 0.0f)
+		if (true/*  && isInMaskedRegion == true && g_eyePos.y > 0.0f */)
 		{
 			float4 reflectionCol = GetReflection(-eyeVector, input.positionWS.xyz, worldNormal, retCol, pixelDepth);
 
 			const float reflectionStrength = g_oceanConfig.reflectionStrength;// 0.46f;
 
-			retCol.xyz = saturate(lerp(retCol.xyz, reflectionCol.xyz/* + specular*/, reflectionStrength * fadeFactor));
+			retCol.xyz = saturate(lerp(retCol.xyz, reflectionCol.xyz + specular, reflectionStrength * fadeFactor));
 		}
 
-		retCol = saturate(retCol /*+ specular*/);
+		retCol = saturate(retCol /* + specular */);
 
 		// foam
 		/*if (depthDifference < 1.0f && isInMaskedRegion)
@@ -587,7 +598,12 @@
 		//return retCol;
 		//albedo = float4(worldAlbedoInfluence, 1.0f);
 
-		return 0.2f * albedo + worldAlbedoInfluence + (albedo * lightIntensity);// + specular;
+		//return albedo * lightIntensity;
+
+		//return float4(1,0,0,1);
+		retCol.a = 1.0f;
+
+		return retCol  /* + worldAlbedoInfluence */  + (albedo * lightIntensity) + specular;
 
 		//float4 finalColour = albedo * color;
 		//color = finalColour;// color* albedo;

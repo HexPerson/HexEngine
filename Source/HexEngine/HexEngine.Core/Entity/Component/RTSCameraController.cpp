@@ -15,7 +15,7 @@
 namespace HexEngine
 {
 	// Movement commands
-	void IN_RTSMoveForward(CommandArgs* args, bool pressed, void* param)
+	HEX_COMMAND(RTSMoveForward)
 	{
 		RTSCameraController* controller = (RTSCameraController*)param;
 
@@ -24,9 +24,8 @@ namespace HexEngine
 		else
 			controller->ClearMovementFlag(RTSMoveFlag::MoveForwards);
 	}
-	HCommand cmd_moveforward("rtsmoveforward", IN_RTSMoveForward);
 
-	void IN_RTSMoveBackwards(CommandArgs* args, bool pressed, void* param)
+	HEX_COMMAND(RTSMoveBackwards)
 	{
 		RTSCameraController* controller = (RTSCameraController*)param;
 
@@ -35,9 +34,8 @@ namespace HexEngine
 		else
 			controller->ClearMovementFlag(RTSMoveFlag::MoveBackwards);
 	}
-	HCommand cmd_movebackwards("rtsmovebackwards", IN_RTSMoveBackwards);
 
-	void IN_RTSMoveLeft(CommandArgs* args, bool pressed, void* param)
+	HEX_COMMAND(RTSMoveLeft)
 	{
 		RTSCameraController* controller = (RTSCameraController*)param;
 
@@ -46,9 +44,8 @@ namespace HexEngine
 		else
 			controller->ClearMovementFlag(RTSMoveFlag::MoveLeft);
 	}
-	HCommand cmd_moveleft("rtsmoveleft", IN_RTSMoveLeft);
 
-	void IN_RTSMoveRight(CommandArgs* args, bool pressed, void* param)
+	HEX_COMMAND(RTSMoveRight)
 	{
 		RTSCameraController* controller = (RTSCameraController*)param;
 
@@ -57,7 +54,6 @@ namespace HexEngine
 		else
 			controller->ClearMovementFlag(RTSMoveFlag::MoveRight);
 	}
-	HCommand cmd_moveright("rtsmoveright", IN_RTSMoveRight);
 
 	RTSCameraController::RTSCameraController(Entity* entity) :
 		UpdateComponent(entity)
@@ -68,15 +64,15 @@ namespace HexEngine
 
 		camera->SetPitch(-65.0f);
 
-		g_pEnv->_commandManager->RegisterCommand(&cmd_movebackwards);
+		/*g_pEnv->_commandManager->RegisterCommand(&cmd_movebackwards);
 		g_pEnv->_commandManager->RegisterCommand(&cmd_moveforward);
 		g_pEnv->_commandManager->RegisterCommand(&cmd_moveleft);
-		g_pEnv->_commandManager->RegisterCommand(&cmd_moveright);
+		g_pEnv->_commandManager->RegisterCommand(&cmd_moveright);*/
 
-		g_pEnv->_commandManager->CreateBind('W', "rtsmoveforward", this);
-		g_pEnv->_commandManager->CreateBind('S', "rtsmovebackwards", this);
-		g_pEnv->_commandManager->CreateBind('A', "rtsmoveleft", this);
-		g_pEnv->_commandManager->CreateBind('D', "rtsmoveright", this);
+		g_pEnv->_commandManager->CreateBind('W', "RTSMoveForward", this);
+		g_pEnv->_commandManager->CreateBind('S', "RTSMoveBackwards", this);
+		g_pEnv->_commandManager->CreateBind('A', "RTSMoveLeft", this);
+		g_pEnv->_commandManager->CreateBind('D', "RTSMoveRight", this);
 	}
 
 	RTSCameraController::RTSCameraController(Entity* entity, RTSCameraController* other) :
@@ -88,14 +84,14 @@ namespace HexEngine
 
 		camera->SetPitch(-65.0f);
 
-		g_pEnv->_commandManager->RegisterCommand(&cmd_movebackwards);
+		/*g_pEnv->_commandManager->RegisterCommand(&cmd_movebackwards);
 		g_pEnv->_commandManager->RegisterCommand(&cmd_moveforward);
 		g_pEnv->_commandManager->RegisterCommand(&cmd_moveleft);
-		g_pEnv->_commandManager->RegisterCommand(&cmd_moveright);
+		g_pEnv->_commandManager->RegisterCommand(&cmd_moveright);*/
 
-		g_pEnv->_commandManager->CreateBind('W', "rtsmoveforward");
-		g_pEnv->_commandManager->CreateBind('S', "rtsmovebackwards");
-		g_pEnv->_commandManager->CreateBind('A', "rtsmoveleft");
+		g_pEnv->_commandManager->CreateBind('W', "RTSMoveForward");
+		g_pEnv->_commandManager->CreateBind('S', "RTSMoveBackwards");
+		g_pEnv->_commandManager->CreateBind('A', "RTSMoveLeft");
 		g_pEnv->_commandManager->CreateBind('D', "rtsmoveright");
 	}
 
@@ -147,7 +143,7 @@ namespace HexEngine
 			direction -= transform->GetRight();
 
 		const float AccelerationSpeed = 1200.0f;
-		const float MaxSpeed = 900.0f;
+		const float MaxSpeed = 1000.0f;
 
 		if (_targetZoom != 0.0f)
 		{
@@ -190,6 +186,11 @@ namespace HexEngine
 
 			//LOG_DEBUG("[%d] Updated camera position to %.3f %.3f %.3f", g_pEnv->_timeManager->_frameCount, currentPos.x, currentPos.y, currentPos.z);
 		}
+	}
+
+	void RTSCameraController::SetLookAt(const math::Vector3& to)
+	{
+		_lookAtLocation = to;
 	}
 
 	bool RTSCameraController::OnInputEvent(InputEvent event, InputData* data)

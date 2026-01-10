@@ -78,6 +78,6 @@ namespace HexEngine
 		bool _isPhysicsThreadActive = false;
 		bool _hasFocus = true;
 		bool _inEditorMode = false;
-		AssetPackage* _standardAssets = nullptr;
+		std::shared_ptr < AssetPackage> _standardAssets = nullptr;
 	};
 }

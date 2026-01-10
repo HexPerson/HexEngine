@@ -16,6 +16,7 @@ namespace HexEngine
 		void Resize(uint32_t width, uint32_t height);
 		void Destroy();
 		void Redraw();
+		bool NeedsRedrawing() const;
 
 		bool BeginDraw(GuiRenderer* renderer, uint32_t width, uint32_t height);
 		void EndDraw(GuiRenderer* renderer);
@@ -27,7 +28,7 @@ namespace HexEngine
 		uint32_t _height = 0;
 		bool _needsRedraw = true;
 
-		DrawList* _drawList = nullptr;
+		//DrawList* _drawList = nullptr;
 
 		std::vector<ITexture2D*> _prevRenderTargets;
 	};

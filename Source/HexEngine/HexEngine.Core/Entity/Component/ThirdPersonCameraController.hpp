@@ -28,7 +28,7 @@ namespace HexEngine
 
 		void SetViewOffset(float right, float up, float forward);
 		void SetTargetOffset(const math::Vector3& offset);
-
+		void SetTargetPitch(float pitch);
 		void SetSpringSpeeds(float rotation, float position);
 
 	private:
@@ -41,10 +41,12 @@ namespace HexEngine
 
 		float _physicsRadius = 5.0f;
 		float _lastMouseInputTime = 0.0f;
+		float _viewRestoreTime = 0.0f;
 		float _cameraResetStartTime = 0.0f;
 		float _targetYaw = 0.0f;
 		float _lastTargetYawChange = 0.0f;
 		bool _forceCameraReset = true;
+		float _targetPitch = -10.0f;
 
 		float _rotationSpringSpeed = 1.8f;
 		float _positionSpringSpeed = 1.3f;

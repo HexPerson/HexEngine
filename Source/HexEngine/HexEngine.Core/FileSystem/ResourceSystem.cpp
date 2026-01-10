@@ -143,20 +143,39 @@ namespace HexEngine
 
 			if (!rel.empty() && rel.native()[0] != '.')
 				return fs;
+
+			rel = fs::relative(fs->GetName(), path);
+
+			if (!rel.empty() && rel.native()[0] != '.')
+				return fs;
+		}
+		return nullptr;
+	}
+
+	FileSystem* ResourceSystem::FindFileSystemByName(const std::wstring& name)
+	{
+		for (auto& fs : _fileSystems)
+		{
+			if(fs->GetName() == name)
+				return fs;
 		}
 		return nullptr;
 	}
 
 	std::shared_ptr<IResource> ResourceSystem::LoadResource(const fs::path& localPath, const ResourceLoadOptions* options /*= nullptr*/)
 	{
+		std::unique_lock lock(_lock);
+
 		auto it = _loadedResources.find(localPath);
 
 		// If this resource is already loaded, we simply need to increment it's ref count and return the ptr
 		if (it != _loadedResources.end())
 		{
-			LOG_DEBUG("Resource '%s' was already loaded, it now has a reference count of %d", it->first.string().c_str(), it->second.use_count() + 1);
+			auto newPtr = it->second.lock();
 
-			return it->second.lock();
+			LOG_DEBUG("Resource '%s' was already loaded, it now has a reference count of %d. Returning %p", it->first.string().c_str(), it->second.use_count() + 1, newPtr.get());
+
+			return newPtr;
 		}
 
 		std::shared_ptr<IResource> resource = nullptr;
@@ -220,6 +239,8 @@ namespace HexEngine
 				return nullptr;
 			}			
 
+
+
 			if (fs->IsAsset())
 			{
 				std::vector<uint8_t> fileData;
@@ -261,18 +282,16 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> ResourceSystem::LoadResourceAsync(const fs::path& path, ResourceLoadedFn callback)
 	{
-		_lock.lock();
+		std::unique_lock lock(_lock);
 
 		_queuedResources.push_back({ path, callback });
-
-		_lock.unlock();
 
 		return nullptr;
 	}
 
 	void ResourceSystem::UnloadResource(IResource* resource)
 	{
-		_lock.lock();
+		std::unique_lock lock(_lock);
 
 		_loadedResources.erase(resource->GetFileSystemPath());
 		_idToResourceMap.erase(resource->GetId());
@@ -285,12 +304,12 @@ namespace HexEngine
 		{
 			LOG_WARN("Trying to unload resource '%s' but it has no associated resource loader. This will cause a memory leak.", resource->GetFileSystemPath().filename().string().c_str());
 		}
-
-		_lock.unlock();
 	}
 
 	std::vector<std::string> ResourceSystem::GetSupportedFileExtensions() const
 	{
+		std::unique_lock lock(_lock);
+
 		std::vector<std::string> res;
 
 		for (auto&& loader : _resourceLoaders)
@@ -305,6 +324,8 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> ResourceSystem::FindResourceById(ResourceId id) const
 	{
+		std::unique_lock lock(_lock);
+
 		auto it = _idToResourceMap.find(id);
 
 		if (it == _idToResourceMap.end())
@@ -315,6 +336,8 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> ResourceSystem::FindResourceByFileName(const fs::path& fileName, bool matchFileNameOnly) const
 	{
+		std::unique_lock lock(_lock);
+
 		if (matchFileNameOnly)
 		{
 			for (auto& it : _loadedResources)

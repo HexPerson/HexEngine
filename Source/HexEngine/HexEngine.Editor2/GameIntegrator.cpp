@@ -25,7 +25,7 @@ namespace HexEditor
 			return false;
 		}
 
-		using tCreateGame = IGameExtension * (*)(IEnvironment* pEnv);
+		using tCreateGame = IGameExtension * (*)();
 		tCreateGame CreateGame = (tCreateGame)GetProcAddress(_gameDll, "CreateGame");
 
 		if (!CreateGame)
@@ -34,7 +34,7 @@ namespace HexEditor
 			return false;
 		}
 
-		_gameExtension =  CreateGame(g_pEnv);
+		_gameExtension =  CreateGame();
 
 		if (!_gameExtension)
 		{

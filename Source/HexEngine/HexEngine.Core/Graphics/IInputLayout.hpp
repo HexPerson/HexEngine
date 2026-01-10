@@ -13,10 +13,12 @@ namespace HexEngine
 
 		PosTex,
 		PosTex_INSTANCED,
+		PosTex_INSTANCED_SIMPLE,
 
 		PosNormTanBinTex_INSTANCED,
 
 		PosNormTanBinTexBoned_INSTANCED,
+		PosTexBoned_INSTANCED_SIMPLE,
 
 		PosColour,
 		PosTexColour,
@@ -36,11 +38,13 @@ namespace HexEngine
 
 		static IInputLayout* GetLayout_PosNormTanBinTex_INSTANCED(IShaderStage* vertexShaderStage);
 		static IInputLayout* GetLayout_PosNormTanBinTexBoned_INSTANCED(IShaderStage* vertexShaderStage);
+		static IInputLayout* GetLayout_PosTexBoned_INSTANCED_SIMPLE(IShaderStage* vertexShaderStage);
 
 		static IInputLayout* GetLayout_Pos(IShaderStage* vertexShaderStage);
 		static IInputLayout* GetLayout_Pos_INSTANCED(IShaderStage* vertexShaderStage);
 
 		static IInputLayout* GetLayout_PosTex_INSTANCED(IShaderStage* vertexShaderStage);
+		static IInputLayout* GetLayout_PosTex_INSTANCED_SIMPLE(IShaderStage* vertexShaderStage);
 		static IInputLayout* GetLayout_PosTex(IShaderStage* vertexShaderStage);
 
 		static IInputLayout* GetLayout_PosColour(IShaderStage* vertexShaderStage);

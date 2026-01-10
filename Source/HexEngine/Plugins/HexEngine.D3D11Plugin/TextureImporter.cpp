@@ -58,11 +58,16 @@ namespace HexEngine
 		}
 		else if (lowerExtension == ".tga")
 		{
-			CHECK_HR(DirectX::LoadFromTGAFile(absolutePath.c_str(), &metaData, scratchImage));
+			
+			auto hr = DirectX::LoadFromTGAFile(absolutePath.c_str(), &metaData, scratchImage);
+			if (FAILED(hr))
+			{
+
+			}
 		}
 		else
 		{
-			CHECK_HR(DirectX::LoadFromWICFile(absolutePath.c_str(), DirectX::WIC_FLAGS_FORCE_RGB, &metaData, scratchImage));
+			CHECK_HR(DirectX::LoadFromWICFile(absolutePath.c_str(), DirectX::WIC_FLAGS_NONE, &metaData, scratchImage));
 
 			/*CHECK_HR(DirectX::CreateWICTextureFromFileEx(
 				gfxDevice,

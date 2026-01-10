@@ -400,6 +400,7 @@ namespace HexEngine
 		file->Serialize(data, "_shape", shape);		
 		file->Serialize(data, "_exclusive", _exclusive);
 		file->Serialize(data, "_isTrigger", _isTrigger);
+		file->Serialize(data, "_isGravityApplied", _isGravityApplied);
 
 		json& shapeData = data["shapeData"];
 
@@ -453,6 +454,7 @@ namespace HexEngine
 		file->Deserialize(data, "_shape", _colliderShape);
 		file->Deserialize(data, "_exclusive", _exclusive);
 		file->Deserialize(data, "_isTrigger", _isTrigger);
+		file->Deserialize(data, "_isGravityApplied", _isGravityApplied);
 
 		json& shapeData = data["shapeData"];		
 
@@ -497,6 +499,7 @@ namespace HexEngine
 		{
 			_rigidBody->SetBodyType(type);
 			_rigidBody->SetMass(mass);
+			_rigidBody->SetGravityEnabled(_isGravityApplied);
 		}
 
 		if (_isTrigger)

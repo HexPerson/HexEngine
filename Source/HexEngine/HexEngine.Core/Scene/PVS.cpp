@@ -5,9 +5,12 @@
 #include "../Entity/Component/StaticMeshComponent.hpp"
 #include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "Scene.hpp"
+#include "../Input/HVar.hpp"
 
 namespace HexEngine
 {
+	HVar r_grassCullDist("r_grassCullDist", "The distance at which to cull grass", 1000.0f, 0.0f, 10000.0f);
+
 	void PVS::ClearPVS()
 	{
 		std::unique_lock lock(_lock);
@@ -65,7 +68,12 @@ namespace HexEngine
 			switch (params.shapeType)
 			{
 			case PVSParams::ShapeType::Frustum:
-				if (_optimisedParams.shape.frustum.Contains(params.shape.frustum) != dx::ContainmentType::CONTAINS)
+				if (_optimisedParams.shape.frustum.sm.Contains(params.shape.frustum.sm) != dx::ContainmentType::CONTAINS)
+					needsRebuild = true;
+				break;
+
+			case PVSParams::ShapeType::Frustum2:
+				if (_optimisedParams.shape.frustum.lg.Contains(params.shape.frustum.sm) != dx::ContainmentType::CONTAINS)
 					needsRebuild = true;
 				break;
 
@@ -116,7 +124,7 @@ namespace HexEngine
 
 			case PVSParams::ShapeType::Sphere:
 				//_optimisedParams.shape.sphere.Transform(_optimisedParams.shape.sphere, math::Matrix::CreateScale(1.2f));
-				_optimisedParams.shape.sphere.Radius *= 1.2f;
+				_optimisedParams.shape.sphere.Radius *= 1.25f;
 				break;
 			}
 
@@ -126,13 +134,10 @@ namespace HexEngine
 
 		if (!needsRebuild)
 		{
-			//scene->Unlock();
 			return;
 		}
 
-		ClearPVS();		
-
-		
+		ClearPVS();			
 
 		_forceRebuild = false;
 
@@ -176,29 +181,64 @@ namespace HexEngine
 					continue;
 			}
 
-			// early cull distance
-			if (params.camera)
+			// always draw grass if its in the grass radius
+#if 0
+			if (entity->GetLayer() == Layer::Grass && params.isShadow == false)
 			{
-				// because we earlier sorted the components by distance, if this check fails we can just exit the function because we know no more entities should be visible
-				if ((params.camera->GetEntity()->GetPosition() - entity->GetPosition()).Length() - entity->GetWorldBoundingSphere().Radius >= params.camera->GetFarZ())
+				//if ((params.camera->GetEntity()->GetPosition() - entity->GetPosition()).Length() <= r_grassCullDist._val.f32)
 				{
-					if (entity->IsInPVS())
-					{
-						PVSVisibilityChangedMessage pvsMsg;
-						pvsMsg.visible = false;
-						entity->OnMessage(&pvsMsg, nullptr);
-					}
+					auto material = component->GetMaterial();
+
+					if (!material)
+						continue;
+
+					auto mesh = component->GetMesh();
+
+					if (!mesh)
+						continue;
+
+					auto meshInstance = mesh->GetInstance();
+
+					if (!meshInstance)
+						continue;
+
+					auto& it = _pvs[material];
+
+					if (it.size() == 0)
+						it.reserve(1000);
+
+					_totalEnts++;
+
+					it.push_back({ mesh, entity, component });
 					continue;
-				}{}
+				}
+				//else
+				//	continue;
 			}
+#endif
+			
 
-			auto meshComponent = component;
+			// early cull distance
+			//if (params.camera)
+			//{
+			//	// because we earlier sorted the components by distance, if this check fails we can just exit the function because we know no more entities should be visible
+			//	if ((params.camera->GetEntity()->GetPosition() - entity->GetPosition()).Length() - entity->GetWorldBoundingSphere().Radius >= params.camera->GetFarZ())
+			//	{
+			//		if (entity->IsInPVS() && params.isShadow == false)
+			//		{
+			//			PVSVisibilityChangedMessage pvsMsg;
+			//			pvsMsg.visible = false;
+			//			entity->OnMessage(&pvsMsg, nullptr);
+			//		}
+			//		continue;
+			//	}{}
+			//}
 
-			if (meshComponent)
+			if (component)
 			{
 				bool visible = IsEntityVisible(entity, params);
 
-				if (entity->IsInPVS() != visible)
+				if (entity->IsInPVS() != visible && params.isShadow == false)
 				{
 					PVSVisibilityChangedMessage pvsMsg;
 					pvsMsg.visible = visible;
@@ -208,7 +248,7 @@ namespace HexEngine
 				if (!visible)
 					continue;
 
-				auto mesh = meshComponent->GetMesh();
+				auto mesh = component->GetMesh();
 
 				if (!mesh)
 					continue;
@@ -248,7 +288,7 @@ namespace HexEngine
 					}
 				}
 
-				auto material = meshComponent->GetMaterial();
+				auto material = component->GetMaterial();
 
 				if (!material)
 					continue;
@@ -258,63 +298,34 @@ namespace HexEngine
 				if (!meshInstance)
 					continue;
 
-				/*it = std::find_if(_pvs.begin(), _pvs.end(), [material, mesh](const MaterialEntityVectorPair& p) {
-					if (p.first == nullptr)
-						return false;
-					return p.first->Equals(*material);
-					});*/
+				auto& it = _pvs[material];
 
-				//if (it == _pvs.end())
-				{
-					//MaterialEntityVectorPair newEntry = { material, {} };
+				if (it.size() == 0)
+					it.reserve(256);
 
-					auto& it = _pvs[material];
+				_totalEnts++;
 
-					if (it.size() == 0)
-						it.reserve(256);
+				if (entity->HasA<SkeletalAnimationComponent>())
+					_totalSkeletalAnimators++;
 
-					_totalEnts++;
+				_pvs[material].push_back({ mesh, entity, component });
 
-					if (entity->HasA<SkeletalAnimationComponent>())
-						_totalSkeletalAnimators++;
-
-					_pvs[material].push_back({ mesh, entity, component });
-					//_pvs.push_back(newEntry);
-
-					//it = _pvs.end() - 1;
-
-					//it->second.reserve(256);
-				}
-				{
-					/*bool found = false;
-					for (auto&& pair : it->second)
-					{
-						if (pair.second == entity && pair.first == mesh)
-						{
-							found = true;
-							break;
-						}
-					}
-					if (!found)*/
-					{
-						//it->second.push_back({ mesh,entity });
-
-						
-					}
-				}
 			}
 		}
 
-		for (auto& mevp : _pvs)
+		//if (params.isShadow == false)
 		{
-			auto& mev = mevp.second;
+			for (auto& mevp : _pvs)
+			{
+				auto& mev = mevp.second;
 
-			std::sort(mev.begin(), mev.end(),
-				[](MeshEntityPair& left, MeshEntityPair& right)
-				{
-					return std::get<0>(left)->GetInstance()->GetInstanceId() < std::get<0>(right)->GetInstance()->GetInstanceId();
-				}
-			);
+				std::sort(mev.begin(), mev.end(),
+					[](MeshEntityPair& left, MeshEntityPair& right)
+					{
+						return std::get<0>(left)->GetInstance()->GetInstanceId() < std::get<0>(right)->GetInstance()->GetInstanceId();
+					}
+				);
+			}
 		}
 		//std::sort(_pvs.begin(), _pvs.end(),
 	}
@@ -332,7 +343,10 @@ namespace HexEngine
 		switch (params.shapeType)
 		{
 		case PVSParams::ShapeType::Frustum:
-			return _optimisedParams.shape.frustum.Intersects(bbox);
+			return _optimisedParams.shape.frustum.sm.Intersects(bbox);
+
+		case PVSParams::ShapeType::Frustum2:
+			return _optimisedParams.shape.frustum.lg.Intersects(bbox);
 
 		case PVSParams::ShapeType::Sphere:
 			return _optimisedParams.shape.sphere.Intersects(bbox);
@@ -347,7 +361,8 @@ namespace HexEngine
 		switch (params.shapeType)
 		{
 		case PVSParams::ShapeType::Frustum:
-			return _optimisedParams.shape.frustum.Intersects(bsphere);
+		case PVSParams::ShapeType::Frustum2:
+			return _optimisedParams.shape.frustum.sm.Intersects(bsphere);
 
 		case PVSParams::ShapeType::Sphere:
 			return _optimisedParams.shape.sphere.Intersects(bsphere);

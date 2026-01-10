@@ -11,6 +11,13 @@
 class RecastInterface : public INavMeshProvider, public rcContext
 {
 public:
+	struct NavMeshes
+	{
+		dtNavMesh* navMesh;
+		uint8_t* navMeshData;
+		dtNavMeshQuery* navMeshQuery;
+		Chunk* chunk = nullptr;
+	};
 	RecastInterface() {}
 	virtual ~RecastInterface() {}
 
@@ -18,9 +25,11 @@ public:
 
 	virtual void Destroy() override;
 
-	virtual bool CreateNavMeshForScene(Scene* scene, const NavMeshCreationParams& params) override;
+	virtual bool CreateNavMeshForScene(Scene* scene, const NavMeshCreationParams& params, NavMeshId* navMesh) override;
 
-	virtual bool CreateRoutingData() override;
+	virtual bool CreateNavMeshForChunk(Scene* scene, Chunk* chunk, const NavMeshCreationParams& params, NavMeshId* navMesh) override;
+
+	virtual bool RebuildMesh(NavMeshId id) override;
 
 	virtual void DebugRender() override;
 
@@ -29,6 +38,12 @@ public:
 	virtual MoveResult Move(PathResult& result) override;
 
 	virtual void doLog(const rcLogCategory category, const char* msg, const int len) override;
+
+private:
+	bool CreateNavMeshInternal(Scene* scene, Chunk* chunk, const NavMeshCreationParams& params, NavMeshId* navMesh);
+
+private:
+	bool CreateRoutingData(NavMeshId* navMesh);
 
 private:
 	rcHeightfield* _heightField = nullptr;
@@ -40,7 +55,9 @@ private:
 	RCDebugRenderer _debugRenderer;
 	NavMeshCreationParams _creationParams;
 
-	dtNavMesh* _navMesh = nullptr;
-	dtNavMeshQuery* _navMeshQuery = nullptr;
+	//dtNavMesh* _navMesh = nullptr;
+	//dtNavMeshQuery* _navMeshQuery = nullptr;
 	dtQueryFilter _filter;
+
+	std::vector<NavMeshes> _navMeshes;
 };

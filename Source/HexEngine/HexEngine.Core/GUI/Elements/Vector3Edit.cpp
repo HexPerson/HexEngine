@@ -78,7 +78,7 @@ namespace HexEngine
 		};
 
 		if(_label.length() > 0)
-			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x, pos.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x, pos.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);
 
 		// draw the axis boxes
 		for (int32_t i = 0; i < 3; ++i)
@@ -91,8 +91,8 @@ namespace HexEngine
 
 			auto editPos = _lineEdits[i]->GetAbsolutePosition();
 
-			renderer->PushFillQuad(editPos.x - 13, editPos.y, 12, _size.y, axisCols[i]);
-			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, editPos.x - 13 + 6, editPos.y + _size.y / 2, math::Color(0, 0, 0, 1), FontAlign::CentreLR | FontAlign::CentreUD, _axisLabels[i]);
+			renderer->FillQuad(editPos.x - 13, editPos.y, 12, _size.y, axisCols[i]);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, editPos.x - 13 + 6, editPos.y + _size.y / 2, math::Color(0, 0, 0, 1), FontAlign::CentreLR | FontAlign::CentreUD, _axisLabels[i]);
 		}
 
 		_lastVectorVal = *_vector;

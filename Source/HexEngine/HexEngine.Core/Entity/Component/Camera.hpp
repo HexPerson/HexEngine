@@ -126,6 +126,7 @@ namespace HexEngine
 		math::Matrix _largerProjectionMatrix;
 		math::Matrix _projectionMatrixPrev;
 		math::Matrix _viewMatrix;
+		math::Matrix _viewMatrixBehind;
 		math::Matrix _viewMatrixPrev;
 		math::Matrix _cameraToWorld;
 		

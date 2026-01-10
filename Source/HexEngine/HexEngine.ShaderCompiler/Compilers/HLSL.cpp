@@ -32,7 +32,7 @@ bool HLSL::Compile(const fs::path& filePath, std::vector<uint8_t>& dataOut, HexE
 
 			const HexEngine::ShaderStage stage = static_cast<HexEngine::ShaderStage>(stageIdx);
 
-			printf("Stage %d line is %d\n", stage, lineOffsets[stageIdx]);
+			//printf("Stage %d line is %d\n", stage, lineOffsets[stageIdx]);
 
 			auto targetVer = gShaderStageToVersion[(&data - shaderData)];
 

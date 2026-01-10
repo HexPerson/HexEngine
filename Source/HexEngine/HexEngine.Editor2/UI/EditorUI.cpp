@@ -9,6 +9,11 @@
 #include "Gadgets\PositionGadget.hpp"
 #include "Gadgets\DuplicateGadget.hpp"
 
+namespace HexEngine
+{
+	HEX_API HVar r_debugScene;
+}
+
 namespace HexEditor
 {
 	EditorUI::EditorUI()
@@ -75,7 +80,7 @@ namespace HexEditor
 			{
 				if (scene->IsSceneAttached() == false)
 				{
-					auto newScene = g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)g_pEnv->_uiManager);
+					auto newScene = g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)g_pEnv->_uiManager, true);
 
 					if (sceneToActivateAfterLoad == nullptr)
 					{
@@ -98,7 +103,9 @@ namespace HexEditor
 
 					loadedGameFromIntegrator = true;
 
-					scene->Load(updateLoadingDialog);					
+					scene->Load(updateLoadingDialog);	
+
+					_entityList->Repaint();
 
 					//newScene->GetMainCamera()->SetViewport(math::Viewport(0, 0, _centralDock->GetSize().x, _centralDock->GetSize().y));
 					//g_pEnv->_sceneRenderer->Resize(_centralDock->GetSize().x, _centralDock->GetSize().y);
@@ -121,7 +128,7 @@ namespace HexEditor
 		else
 		{
 			// We created a new project so it needs a new scene
-			auto newScene = g_pEnv->_sceneManager->CreateEmptyScene(true, (EditorUI*)g_pEnv->_uiManager);
+			auto newScene = g_pEnv->_sceneManager->CreateEmptyScene(true, (EditorUI*)g_pEnv->_uiManager, true);
 
 			g_pEnv->_sceneManager->SetActiveScene(newScene);
 
@@ -177,6 +184,8 @@ namespace HexEditor
 
 		LineEditDialog* dlg = new LineEditDialog(_rootElement, Point(GetWidth() / 2 - sizeX / 2, GetHeight() / 2 - sizeY / 2), Point(sizeX, sizeY), label, std::bind(callback, this, std::placeholders::_2));
 	}
+
+	
 
 	void EditorUI::CreateMenuBar()
 	{
@@ -275,10 +284,31 @@ namespace HexEditor
 				actionNewTerrain->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Terrain);
 				_mainMenu->AddSubItem(scene, actionNewTerrain);
 
+				MenuBar::Item* actionNewOcean = new MenuBar::Item;
+				actionNewOcean->name = L"Add ocean";
+				actionNewOcean->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Ocean);
+				_mainMenu->AddSubItem(scene, actionNewOcean);
+
 				MenuBar::Item* actionSettings = new MenuBar::Item;
 				actionSettings->name = L"Settings";
 				actionSettings->action = std::bind(&EditorUI::ShowSettingsDialog, this);
 				_mainMenu->AddSubItem(scene, actionSettings);
+			}
+		}
+
+		{
+			MenuBar::RootItem* scene = new MenuBar::RootItem;
+			scene->name = L"Debug";
+			//edit->type = MenuBar::Item::Type::RootMenu;
+			_mainMenu->AddRootItem(scene);
+			{
+				MenuBar::Item* debugScene = new MenuBar::Item;
+				debugScene->name = L"Debug Scene";
+				debugScene->action = std::bind(
+					[]() {						
+						r_debugScene._val.b = !r_debugScene._val.b;
+					});
+				_mainMenu->AddSubItem(scene, debugScene);
 			}
 		}
 	}
@@ -352,6 +382,12 @@ namespace HexEditor
 			Terrain::CreateTerrainDialog(_rootElement, nullptr);
 			break;
 		}
+
+		case PrimitiveType::Ocean:
+		{
+			Terrain::CreateOceanDialog(_rootElement, nullptr);
+			break;
+		}
 		}
 	}
 
@@ -412,7 +448,7 @@ namespace HexEditor
 
 	void EditorUI::OnCreateNewSceneAction(const std::wstring& sceneName)
 	{
-		auto scene = g_pEnv->_sceneManager->CreateEmptyScene(true, this);
+		auto scene = g_pEnv->_sceneManager->CreateEmptyScene(true, this, true);
 
 		if (auto mainCamera = scene->CreateEntity("MainCamera"); mainCamera != nullptr)
 		{
@@ -444,7 +480,7 @@ namespace HexEditor
 
 		auto& style = g_pEnv->_uiManager->GetRenderer()->_style;
 
-		_centralDock = new Dock(_rootElement, Point(dockWidth, style.win_title_height + 2), Point(width - (dockWidth * 2), height - (style.win_title_height + 2) - lowerDockHeight), Dock::Anchor::Middle);
+		_sceneView = new SceneView(_rootElement, Point(dockWidth, style.win_title_height + 2), Point(width - (dockWidth * 2), height - (style.win_title_height + 2) - lowerDockHeight));
 
 		_leftDock = new Dock(_rootElement, Point(0, style.win_title_height + 2), Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)), Dock::Anchor::Left);
 		_rightDock = new Inspector(_rootElement, Point(width - dockWidth, style.win_title_height + 2), Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)));
@@ -501,7 +537,7 @@ namespace HexEditor
 		if (!camera)
 			return;
 
-		if (_centralDock->GetRoamState() == Dock::RoamState::FreeLook)
+		if (_sceneView->GetRoamState() == SceneView::RoamState::FreeLook)
 		{
 			
 			auto cameraTransform = camera->GetEntity()->GetComponent<Transform>();
@@ -510,14 +546,14 @@ namespace HexEditor
 			{
 				if (_freeLookDir.Length() > 0.0f)
 				{
-					math::Vector3 dir = _freeLookDir * g_pEnv->_timeManager->GetFrameTime() * 200.0f;
+					math::Vector3 dir = _freeLookDir * g_pEnv->_timeManager->GetFrameTime() * 200.0f * _freeLookMultiplier;
 
 					const auto& currentPos = cameraTransform->GetPosition();
 
 					cameraTransform->SetPosition(currentPos + dir);
 				}
 
-				const auto& mouseStart = _centralDock->GetRoamingMouseStartPos();
+				const auto& mouseStart = _sceneView->GetRoamingMouseStartPos();
 
 				int32_t mx, my;
 				g_pEnv->_inputSystem->GetMousePosition(mx, my);
@@ -532,17 +568,17 @@ namespace HexEditor
 
 				if (dx != 0)
 				{
-					float yaw = camera->GetYaw() - dx * 7.0f;
+					float yaw = camera->GetYaw() - dx * 9.0f;
 					camera->SetYaw(yaw);
 				}
 
 				if (dy != 0)
 				{
-					float pitch = camera->GetPitch() - dy * 7.0f;
+					float pitch = camera->GetPitch() - dy * 9.0f;
 					camera->SetPitch(pitch);
 				}
 
-				_centralDock->SetRoamingMouseStartPos(Point(mx, my));
+				_sceneView->SetRoamingMouseStartPos(Point(mx, my));
 			}
 		}
 	}
@@ -555,7 +591,7 @@ namespace HexEditor
 		if (UIManager::OnInputEvent(event, data) == false)
 			return false;
 
-		if (_centralDock->GetRoamState() != Dock::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started)
+		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started)
 		{
 			bool anyGadgetRunning = false;
 			bool keyhandled = false;
@@ -572,7 +608,7 @@ namespace HexEditor
 				return false;
 		}
 
-		if (_centralDock->GetRoamState() == Dock::RoamState::FreeLook)
+		if (_sceneView->GetRoamState() == SceneView::RoamState::FreeLook)
 		{
 			if (event == InputEvent::KeyDown)
 			{
@@ -604,68 +640,28 @@ namespace HexEditor
 					break;
 				}
 			}
+			else if (event == InputEvent::MouseWheel)
+			{
+				if (data->MouseWheel.delta > 0)
+					_freeLookMultiplier += 1.0f;
+				else if (data->MouseWheel.delta < 0)
+					_freeLookMultiplier -= 1.0f;
+			}
 			return false;
 		}
 
 		
 		
-		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _centralDock->IsMouseOver(true))
+		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _sceneView->IsMouseOver(true))
 		{
-			// pick entity
-			auto currentScene = g_pEnv->_sceneManager->GetCurrentScene();
+			auto hit = RayCastWorld();
 
-			if (currentScene)
+			if (hit.entity)
 			{
-				auto mainCamera = currentScene->GetMainCamera();
-
-				if (mainCamera)
-				{
-					int32_t mx, my;
-					g_pEnv->_inputSystem->GetMousePosition(mx, my);
-
-					const Point& centerSize = _centralDock->GetSize();
-					Point centerLoc = _centralDock->GetAbsolutePosition();
-					Point centerPos = centerLoc.GetCenter(centerSize);
-
-					const auto& vp = mainCamera->GetViewport();
-
-					//auto vpCenterX = mainCamera->GetViewport().x + mainCamera->GetViewport().width / 2;
-					//auto vpCenterY = mainCamera->GetViewport().y + mainCamera->GetViewport().height / 2;
-
-					mx -= centerLoc.x;
-					//my -= centerLoc.y;
-
-					float scaleX = vp.width / (float)centerSize.x;
-					float scaleY = vp.height / (float)centerSize.y;
-
-					float fmx = (float)mx * scaleX;
-					float fmy = (float)my * scaleY;
-
-					auto screenRay = g_pEnv->_inputSystem->GetScreenToWorldRay(mainCamera, fmx, fmy/*, _centralDock->GetSize().x, _centralDock->GetSize().y*/);
-
-					math::Ray ray;
-					ray.direction = screenRay;
-					ray.position = mainCamera->GetEntity()->GetPosition();
-
-					RayHit hit;
-
-					if (HexEngine::PhysUtils::RayCast(
-						ray,
-						mainCamera->GetFarZ(),
-						LAYERMASK(Layer::StaticGeometry) |
-						LAYERMASK(Layer::DynamicGeometry),
-						&hit)
-						)
-					{
-						if (hit.entity != nullptr)
-						{
-							_rightDock->InspectEntity(hit.entity);
-						}
-					}
-				}
+				_rightDock->InspectEntity(hit.entity);
 			}
 		}
-		else if (event == InputEvent::KeyDown && _centralDock->IsMouseOver(true))
+		else if (event == InputEvent::KeyDown && _sceneView->IsMouseOver(true))
 		{
 			if (_integrator.GetState() == GameTestState::Started && data->KeyDown.key == VK_ESCAPE)
 			{
@@ -674,6 +670,64 @@ namespace HexEditor
 		}
 
 		return false;
+	}
+
+	RayHit EditorUI::RayCastWorld(const std::vector<Entity*>& entsToIgnore)
+	{
+		// pick entity
+		auto currentScene = g_pEnv->_sceneManager->GetCurrentScene();
+
+		if (currentScene)
+		{
+			auto mainCamera = currentScene->GetMainCamera();
+
+			if (mainCamera)
+			{
+				int32_t mx, my;
+				g_pEnv->_inputSystem->GetMousePosition(mx, my);
+
+				const Point& centerSize = _sceneView->GetSize();
+				Point centerLoc = _sceneView->GetAbsolutePosition();
+				Point centerPos = centerLoc.GetCenter(centerSize);
+
+				const auto& vp = mainCamera->GetViewport();
+
+				//auto vpCenterX = mainCamera->GetViewport().x + mainCamera->GetViewport().width / 2;
+				//auto vpCenterY = mainCamera->GetViewport().y + mainCamera->GetViewport().height / 2;
+
+				mx -= centerLoc.x;
+				//my -= centerLoc.y;
+
+				float scaleX = vp.width / (float)centerSize.x;
+				float scaleY = vp.height / (float)centerSize.y;
+
+				float fmx = (float)mx * scaleX;
+				float fmy = (float)my * scaleY;
+
+				auto screenRay = g_pEnv->_inputSystem->GetScreenToWorldRay(mainCamera, fmx, fmy/*, _centralDock->GetSize().x, _centralDock->GetSize().y*/);
+
+				math::Ray ray;
+				ray.direction = screenRay;
+				ray.position = mainCamera->GetEntity()->GetPosition();
+
+				RayHit hit;
+
+				if (HexEngine::PhysUtils::RayCast(
+					ray,
+					mainCamera->GetFarZ(),
+					LAYERMASK(Layer::StaticGeometry) |
+					LAYERMASK(Layer::DynamicGeometry),
+					&hit,
+					entsToIgnore)
+					)
+				{
+					return hit;
+				}
+			}
+		}
+
+		return {};
+	
 	}
 
 	void EditorUI::OnAddEntity(Entity* entity)

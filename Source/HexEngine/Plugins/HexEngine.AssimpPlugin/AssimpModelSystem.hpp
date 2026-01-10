@@ -74,6 +74,7 @@ namespace HexEngine
 		virtual std::wstring				GetResourceDirectory() const override;
 		virtual Dialog*						CreateEditorDialog(const std::vector<fs::path>& paths) override;
 		virtual void						SaveResource(IResource* resource, const fs::path& path) override { }
+		virtual bool						DoesSupportHotLoading() override { return true; }
 
 	private:
 		void							ProcessNode(std::shared_ptr<Model>& model, aiNode* node, std::vector<AnimChannel*> parentAnims, const aiScene* scene, FileSystem* fileSystem);

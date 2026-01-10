@@ -19,5 +19,6 @@ namespace HexEngine
 		virtual std::wstring				GetResourceDirectory() const = 0;
 		virtual Dialog*						CreateEditorDialog(const std::vector<fs::path>& paths) {	return nullptr;	}
 		virtual void						SaveResource(IResource* resource, const fs::path& path) = 0;
+		virtual bool						DoesSupportHotLoading() { return false; }
 	};
 }

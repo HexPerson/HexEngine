@@ -57,7 +57,7 @@ namespace HexEngine
 		auto dir = cameraTransform->GetPosition() - GetEntity()->GetComponent<Transform>()->GetPosition();
 		dir.Normalize();
 
-		auto rot = math::Quaternion::LookRotation(dir, math::Vector3::Up);
+		auto rot = math::Quaternion::LookRotation(-dir, math::Vector3::Up);
 
 		GetEntity()->GetComponent<Transform>()->SetRotation(rot/*math::Quaternion::CreateFromRotationMatrix(matrix)*/);
 	}

@@ -178,20 +178,20 @@ namespace HexEngine
 
 	void Light::Serialize(json& data, JsonFile* file)
 	{
-		file->Serialize(data, "_diffuseColour", _diffuseColour);
-		file->Serialize(data, "_effect", _effect);
-		file->Serialize(data, "_strengthMultiplier", _strengthMultiplier);
-		file->Serialize(data, "_radius", _radius);
-		file->Serialize(data, "_doesCastShadows", _doesCastShadows);
+		SERIALIZE_VALUE(_diffuseColour);
+		SERIALIZE_VALUE(_effect);
+		SERIALIZE_VALUE(_strengthMultiplier);
+		SERIALIZE_VALUE(_radius);
+		SERIALIZE_VALUE(_doesCastShadows);
 	}
 
 	void Light::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
-		file->Deserialize(data, "_diffuseColour", _diffuseColour);
-		file->Deserialize(data, "_effect", _effect);
-		file->Deserialize(data, "_strengthMultiplier", _strengthMultiplier);
-		file->Deserialize(data, "_radius", _radius);
-		file->Deserialize(data, "_doesCastShadows", _doesCastShadows);
+		DESERIALIZE_VALUE(_diffuseColour);
+		DESERIALIZE_VALUE(_effect);
+		DESERIALIZE_VALUE(_strengthMultiplier);
+		DESERIALIZE_VALUE(_radius);
+		DESERIALIZE_VALUE(_doesCastShadows);
 
 		_originalStrengthMultiplier = _strengthMultiplier;
 

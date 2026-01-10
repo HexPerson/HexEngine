@@ -30,6 +30,8 @@ namespace HexEngine
 			return nullptr;
 		}
 
+		LOG_INFO("Loading material '%s'", absolutePath.filename().string().c_str());
+
 		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material, ResourceDeleter());
 
 		file.Open();
@@ -178,6 +180,21 @@ namespace HexEngine
 				mode = CullingMode::FrontFace;*/
 
 			material->SetCullMode(mode);
+
+			MaterialFormat format = MaterialFormat::None;
+			file->Deserialize(renderer, "format", format);
+			/*if (values[0] == "NoCulling")
+				mode = CullingMode::NoCulling;
+			else if (values[0] == "BackFace")
+				mode = CullingMode::BackFace;
+			else if (values[0] == "FrontFace")
+				mode = CullingMode::FrontFace;*/
+
+			material->SetFormat(format);
+
+			float cullDistance = 0.0f;
+			file->Deserialize(renderer, "cullDistance", cullDistance);
+			material->SetCullDistance(cullDistance);
 		}
 
 		// Load shaders
@@ -332,6 +349,7 @@ namespace HexEngine
 			file.Serialize(renderer, "depthState", material->GetDepthState());
 			file.Serialize(renderer, "blendState", material->GetBlendState());
 			file.Serialize(renderer, "cullingMode", material->GetCullMode());
+			file.Serialize(renderer, "format", material->GetFormat());
 		}
 
 		auto& shaders = data["shaders"];

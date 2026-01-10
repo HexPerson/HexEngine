@@ -9,7 +9,7 @@
 namespace HexEngine
 {
 	class SoundEffect;
-	class AudioManager : public IResourceLoader
+	class HEX_API AudioManager : public IResourceLoader
 	{
 	public:
 		AudioManager();
@@ -26,13 +26,13 @@ namespace HexEngine
 		void Destroy();
 		void Update();
 
-		void Play(SoundEffect* effect);
-		void Play(SoundEffect* effect, const math::Vector3& position);
+		void Play(const std::shared_ptr<SoundEffect>& effect);
+		void Play(const std::shared_ptr<SoundEffect>& effect, const math::Vector3& position);
 
-		void Loop(SoundEffect* effect);
-		void Loop(SoundEffect* effect, const math::Vector3& position);
+		void Loop(const std::shared_ptr<SoundEffect>& effect);
+		void Loop(const std::shared_ptr<SoundEffect>& effect, const math::Vector3& position);
 
-		void Stop(SoundEffect* effect);
+		void Stop(const std::shared_ptr<SoundEffect>& effect);
 
 		void SetReverb(dx::AUDIO_ENGINE_REVERB reverb);
 

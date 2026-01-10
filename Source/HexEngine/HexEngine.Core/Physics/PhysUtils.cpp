@@ -9,7 +9,7 @@ namespace HexEngine
 {
 	namespace PhysUtils
 	{
-		bool HEX_API RayCast(const math::Vector3& from, const math::Vector3& to, LayerMask mask, RayHit* hitInfo)
+		bool HEX_API RayCast(const math::Vector3& from, const math::Vector3& to, LayerMask mask, RayHit* hitInfo, const std::vector<Entity*>& entsToIgnore)
 		{
 			math::Vector3 direction = (to - from);
 			float maxDistance = direction.Length();
@@ -23,10 +23,10 @@ namespace HexEngine
 			ray.position = from;
 			ray.direction = direction;
 
-			return RayCast(ray, maxDistance, mask, hitInfo);
+			return RayCast(ray, maxDistance, mask, hitInfo, entsToIgnore);
 		}
 
-		bool HEX_API RayCast(const math::Ray& ray, float maxDistance, LayerMask mask, RayHit* hitInfo)
+		bool HEX_API RayCast(const math::Ray& ray, float maxDistance, LayerMask mask, RayHit* hitInfo, const std::vector<Entity*>& entsToIgnore)
 		{
 			g_pEnv->_sceneManager->GetCurrentScene()->Lock();
 
@@ -148,6 +148,20 @@ namespace HexEngine
 					auto entity = component->GetEntity();
 
 					if ((mask & (1 << (uint32_t)entity->GetLayer())) == 0)
+						continue;
+
+					bool skipThisEnt = false;
+
+					for (auto&& ignore : entsToIgnore)
+					{
+						if (entity == ignore)
+						{
+							skipThisEnt = true;
+							break;
+						}
+					}
+
+					if (skipThisEnt)
 						continue;
 
 					auto entityPosition = entity->GetComponent<Transform>()->GetPosition();

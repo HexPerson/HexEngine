@@ -28,6 +28,7 @@ namespace HexEngine
 		const GBuffer* GetGBuffer();
 		const Light* GetCurrentShadowCaster();
 		const ShadowMap* GetCurrentShadowMap();
+		ITexture2D* GetBeautyTexture() const;
 		std::shared_ptr<ITexture2D> GetNoiseTexture() const { return _blueNoise;}
 		const std::vector<Light*>& GetShadowCasters() const;
 		void ClearShadowCasters();
@@ -98,6 +99,7 @@ namespace HexEngine
 		ITexture2D* _pointLightBuffer = nullptr;
 		ITexture2D* _ssrTexture = nullptr;
 		ITexture2D* _ssrHitInfo = nullptr;
+		ITexture2D* _waterRT = nullptr;
 		std::shared_ptr<ITexture2D> _blueNoise;
 		ITexture2D* _dlssTarget = nullptr;
 		std::shared_ptr<IShader> _compositionShader;
@@ -114,6 +116,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> _basicDenoise;
 		std::shared_ptr<IShader> _volumetricLighting;
 		std::shared_ptr<IShader> _ssrResolve;
+		std::shared_ptr<IShader> _waterBlitEffect;
 
 		//BlurEffect* _volumetricBlur = nullptr;
 		//BlurEffect* _waterBlur = nullptr;

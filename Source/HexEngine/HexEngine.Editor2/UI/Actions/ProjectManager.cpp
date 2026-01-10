@@ -219,47 +219,6 @@ namespace HexEditor
 
 		g_pEditor->CreateFileSystem(_projectPath->GetValue());
 
-		//auto* newScene = g_pEnv->_sceneManager->CreateEmptyScene(g_pUIManager);
-
-
-		// Create the new scene file
-		//
-		//SceneSaveFile sceneFile(projectFolder / L"Data/Scenes/New Scene.scene", std::ios::out | std::ios::binary);
-		//_currentProjectPath = projectFolder;
-
-		//sceneFile.Save();
-		//sceneFile.Close();
-
-		//const auto absPath = sceneFile.GetAbsolutePath();
-
-		//std::string sceneFilePath = std::string(absPath.begin(), absPath.end());
-
-		//// Create the json project file
-		//json projectData = {
-		//	{"projectName", _projectName->GetValue().c_str()},
-		//	{"editorVersion", HexEditorVersion},
-		//	{"engineVersion", HexEngineVersion},
-		//	{"scenes", {
-		//		sceneFilePath
-		//	}}
-		//};
-
-
-		//
-		//DiskFile projectFile(projectFilePath, std::ios::out | std::ios::trunc);
-
-		//if (projectFile.Open() == false)
-		//{
-		//	LOG_CRIT("Failed to create project file!");
-		//	return true;
-		//}
-
-		//auto dumpData = projectData.dump();
-		//projectFile.Write(dumpData.data(), dumpData.length());
-		//projectFile.Close();
-
-		//LOG_INFO("Project file successfully written to %S", projectFilePath.wstring().c_str());
-
 		// add the project
 		AddNewProjectPath(projectFilePath);		
 

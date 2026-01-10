@@ -32,7 +32,7 @@ namespace HexEngine
 
 	bool GraphicsDeviceD3D11::Create()
 	{
-		g_pEnv->_commandManager->RegisterVar(&r_vsync);
+		//g_pEnv->_commandManager->RegisterVar(&r_vsync);
 		
 		g_pGraphics = this;
 

@@ -37,6 +37,7 @@ namespace HexEngine
 		void						SetLabel(const std::wstring& label);
 
 	protected:
+		int32_t _id = 0;
 		TreeList* _list;
 		std::wstring _label;
 		uint32_t _iconId = 0;

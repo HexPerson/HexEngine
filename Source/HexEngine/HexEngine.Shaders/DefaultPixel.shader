@@ -79,22 +79,36 @@
 		float metalness = g_material.metallicFactor;
 		float roughness = g_material.roughnessFactor;
 
-		// Get the roughness
-		if (false && g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS)
+		// support ORM format, extract the data from the roughness map
+		if(g_objectFlags & OBJECT_FLAGS_ORM_FORMAT)
 		{
-			roughness = g_roughnessMap.Sample(g_textureSampler, input.texcoord).r * g_material.roughnessFactor;
-		}		
+			if (g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS)
+			{
+				float3 orm = g_roughnessMap.Sample(g_textureSampler, input.texcoord).rgb;
 
-		// Get metallicness
-		if (g_objectFlags & OBJECT_FLAGS_HAS_METALLIC)
+				roughness = orm.g * g_material.roughnessFactor;		
+				metalness = orm.b * g_material.metallicFactor;
+				albedo.rgb *= orm.r;
+			}
+		}
+		else
 		{
-			metalness = g_metallicMap.Sample(g_textureSampler, input.texcoord).r * g_material.metallicFactor;
-		}	
-		
-		// ambient occlusion
-		if (g_objectFlags & OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION)
-		{
-			albedo.rgb *= g_ambientOcclusionMap.Sample(g_textureSampler, input.texcoord).r;
+			// Get the roughness
+			if (g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS)
+			{
+				roughness = g_roughnessMap.Sample(g_textureSampler, input.texcoord).r * g_material.roughnessFactor;
+			}		
+
+			// Get metallicness
+			if (g_objectFlags & OBJECT_FLAGS_HAS_METALLIC)
+			{
+				metalness = g_metallicMap.Sample(g_textureSampler, input.texcoord).r * g_material.metallicFactor;
+			}			
+			// ambient occlusion
+			if (g_objectFlags & OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION)
+			{
+				albedo.rgb *= g_ambientOcclusionMap.Sample(g_textureSampler, input.texcoord).r;
+			}
 		}
 
 		float3 finalRGB = albedo.rgb;
@@ -102,14 +116,14 @@
 		// Apply emission, if there was any and multiply it by the emission colours and factor
 		// Emission mapping
 
-		float3 emission = g_material.emissiveColour.rgb;
+		float3 emission = float3(0,0,0);//g_material.emissiveColour.rgb;
 
 		if (g_objectFlags & OBJECT_FLAGS_HAS_EMISSION)
 		{
-			emission = g_emissionMap.Sample(g_textureSampler, input.texcoord).rgb * g_material.emissiveColour.rgb;
+			emission = g_emissionMap.Sample(g_textureSampler, input.texcoord).rgb * g_material.emissiveColour.rgb * g_material.emissiveColour.a;
 		}
 
-		finalRGB += emission * g_material.emissiveColour.a;
+		finalRGB += emission;
 
 		// skip and pixels that have any transparency
 		if (g_objectFlags & OBJECT_FLAGS_HAS_OPACITY)
@@ -132,7 +146,7 @@
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 
-		output.pos = float4(input.positionWS.xyz, g_material.emissiveColour.a);
+		output.pos = float4(input.positionWS.xyz, length(emission));
 
 		output.velocity = velocity;
 

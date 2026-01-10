@@ -36,24 +36,24 @@ namespace HexEngine
 		if (_label.length() == 0)
 			minSize = 0;
 
-		if(labelWidth > 0)
-			renderer->PushScissorRect({ position.x,  position.y, position.x + labelWidth, position.y + _size.y });
+		//if(labelWidth > 0)
+		//	renderer->PushScissorRect({ position.x,  position.y, position.x + labelWidth, position.y + _size.y });
 
 		// Draw the label first always
 		if ((IsMouseOver(true) || _hasInputFocus) && _label.length() > 0)
-			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_highlight, FontAlign::CentreUD, _label);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_highlight, FontAlign::CentreUD, _label);
 		else
-			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);
 
 		//_labelWidth = minSize;
 
 		int32_t boxWidth = _size.x - minSize;
 
-		renderer->PushScissorRect({ position.x + minSize,  position.y, position.x + minSize + boxWidth, position.y + _size.y });
+		//renderer->ScissorRect({ position.x + minSize,  position.y, position.x + minSize + boxWidth, position.y + _size.y });
 
 		// draw the box
-		renderer->PushFillQuad(position.x + minSize, position.y, boxWidth, _size.y, renderer->_style.lineedit_back);
-		renderer->PushFrame(position.x + minSize, position.y, boxWidth, _size.y, 1, renderer->_style.win_border);
+		renderer->FillQuad(position.x + minSize, position.y, boxWidth, _size.y, renderer->_style.lineedit_back);
+		renderer->Frame(position.x + minSize, position.y, boxWidth, _size.y, 1, renderer->_style.win_border);
 
 		if (IsMouseOver(position.x + minSize, position.y, boxWidth, _size.y))
 			_hovering = true;
@@ -64,7 +64,7 @@ namespace HexEngine
 		{
 			int32_t iconSize = _size.y - 3;
 
-			renderer->PushFillTexturedQuad(_icon.get(), position.x + minSize + 4, position.y + 3, iconSize, iconSize, _iconColour);
+			renderer->FillTexturedQuad(_icon.get(), position.x + minSize + 4, position.y + 3, iconSize, iconSize, _iconColour);
 
 			position.x += iconSize + 4;
 			boxWidth -= iconSize + 4;
@@ -90,16 +90,16 @@ namespace HexEngine
 
 			if (_uneditableText.length() > 0)
 			{
-				renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, math::Color(HEX_RGBA_TO_FLOAT4(70, 70, 70, 255)), FontAlign::CentreUD, value);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, math::Color(HEX_RGBA_TO_FLOAT4(70, 70, 70, 255)), FontAlign::CentreUD, value);
 				position.x += uneditableTextWidth;
 			}
 
-			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, value);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, value);
 		}
 
 		if (_hasInputFocus)
 		{
-			renderer->PushFillQuad(position.x + minSize + 4 + valueWidth, position.y + 2, 2, _size.y - 4, renderer->_style.text_regular);
+			renderer->FillQuad(position.x + minSize + 4 + valueWidth, position.y + 2, 2, _size.y - 4, renderer->_style.text_regular);
 		}
 
 	}

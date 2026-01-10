@@ -59,6 +59,7 @@ namespace HexEngine
 		//_fileName = other->_fileName;
 
 		_vertices = other->_vertices;
+		_simpleVertices = other->_simpleVertices;
 		_indices = other->_indices;
 
 		_aabb = other->_aabb;
@@ -177,21 +178,18 @@ namespace HexEngine
 		//
 		SAFE_DELETE(_vertexBuffer);
 		SAFE_DELETE(_indexBuffer);
-
-		
+		SAFE_DELETE(_simpleVertexBuffer);		
 
 		// And finally delete the mesh instance
 		//
-		//SAFE_DELETE(_instance);
-		if (_instance)
+		/*if (_instance)
 		{
 			if (gMeshInstanceManager.DestroyInstance(_instance, this))
 			{
 				_model.reset();
 			}
-
-			//_instance = nullptr;
-		}
+		}*/
+		SAFE_DELETE(_instance);
 	}
 
 	void Mesh::Clear()
@@ -213,7 +211,25 @@ namespace HexEngine
 			return _instance;
 		}
 
-		_instance = gMeshInstanceManager.CreateInstance(this);
+		//_instance = gMeshInstanceManager.CreateInstance(this);
+
+		MeshInstance* meshInstance = new MeshInstance;
+
+		static int32_t _idBase = 0;
+
+		meshInstance->_instanceBufferNumElements = 0;
+		meshInstance->_mesh = this;
+		meshInstance->_meshName = GetFullName();
+		meshInstance->_refCount = 1;
+		meshInstance->_id = _idBase++;
+
+		meshInstance->_simpleInstance->_instanceBufferNumElements = 0;
+		meshInstance->_simpleInstance->_mesh = this;
+		meshInstance->_simpleInstance->_meshName = GetFullName();
+		meshInstance->_simpleInstance->_refCount = 1;
+		meshInstance->_simpleInstance->_id = meshInstance->_id;
+
+		_instance = meshInstance;
 
 		return _instance;
 	}
@@ -264,6 +280,21 @@ namespace HexEngine
 			}
 		}
 
+		if (_simpleVertexBuffer == nullptr)
+		{
+			_simpleVertexBuffer = g_pEnv->_graphicsDevice->CreateVertexBuffer(
+				(int32_t)_simpleVertices.size() * sizeof(SimpleMeshVertex),
+				sizeof(SimpleMeshVertex),
+				D3D11_USAGE_DEFAULT,
+				0,
+				_simpleVertices.data());
+
+			if (!_simpleVertexBuffer)
+			{
+				return false;
+			}
+		}
+
 		if (_indexBuffer == nullptr)
 		{
 			_indexBuffer = g_pEnv->_graphicsDevice->CreateIndexBuffer(
@@ -282,19 +313,25 @@ namespace HexEngine
 		return true;
 	}
 
-	void Mesh::SetBuffers(const math::Matrix& worldMatrix)
+	void Mesh::SetBuffers(bool isShadowMap)
 	{
 		auto graphicsDevice = g_pEnv->_graphicsDevice;
 
 		// Set the vertex and index buffers
 		graphicsDevice->SetIndexBuffer(_indexBuffer);
-		graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
+		graphicsDevice->SetVertexBuffer(0, isShadowMap ? _simpleVertexBuffer : _vertexBuffer);
 		graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 	}	
 
 	void Mesh::AddVertex(const MeshVertex& vertex)
 	{
 		_vertices.push_back(vertex);
+
+		SimpleMeshVertex smv;
+		smv._position = vertex._position;
+		smv._texcoord = vertex._texcoord;
+
+		_simpleVertices.push_back(smv);
 	}
 
 	void Mesh::AddIndex(const MeshIndexFormat index)
@@ -305,6 +342,15 @@ namespace HexEngine
 	void Mesh::AddVertices(const std::vector<MeshVertex>& vertices)
 	{
 		_vertices.insert(_vertices.end(), vertices.begin(), vertices.end());
+
+		for (auto& vertex : vertices)
+		{
+			SimpleMeshVertex smv;
+			smv._position = vertex._position;
+			smv._texcoord = vertex._texcoord;
+
+			_simpleVertices.push_back(smv);
+		}
 	}
 
 	void Mesh::AddIndices(const std::vector<MeshIndexFormat>& indices)
@@ -327,6 +373,7 @@ namespace HexEngine
 		_objectBuffer->_worldMatrix = localTM.Transpose();
 		_objectBuffer->_flags = 0;
 		_objectBuffer->entityId = instanceId;
+		_objectBuffer->cullDistance = material->GetCullDistance();
 
 		if (HasAnimations()) {
 			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_ANIMATION;
@@ -352,6 +399,9 @@ namespace HexEngine
 
 		if (material->GetTexture(MaterialTexture::AmbientOcclusion) != nullptr)
 			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION;
+
+		if (material->GetFormat() == MaterialFormat::ORM)
+			_objectBuffer->_flags |= OBJECT_FLAGS_ORM_FORMAT;
 
 		memcpy(&_objectBuffer->_material, &material->_properties, sizeof(MaterialProperties));
 

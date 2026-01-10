@@ -73,7 +73,7 @@ namespace HexEngine
 
 		if (_needsRedraw == true)
 		{
-			_drawList = renderer->PushDrawList();
+			//_drawList = renderer->PushDrawList();
 
 			// save the old render targets first
 			g_pEnv->_graphicsDevice->GetRenderTargets(_prevRenderTargets);
@@ -92,8 +92,8 @@ namespace HexEngine
 	{
 		if (_needsRedraw)
 		{
-			renderer->ListDraw(_drawList);
-			renderer->PopDrawList();
+			//renderer->ListDraw(_drawList);
+			//renderer->PopDrawList();
 
 			// reset back to original render targets
 			g_pEnv->_graphicsDevice->SetRenderTargets(_prevRenderTargets);
@@ -102,6 +102,10 @@ namespace HexEngine
 		}
 	}
 
+	bool Canvas::NeedsRedrawing() const
+	{
+		return _needsRedraw;
+	}
 
 	void Canvas::Present(GuiRenderer* renderer, uint32_t x, uint32_t y, uint32_t width, uint32_t height)
 	{

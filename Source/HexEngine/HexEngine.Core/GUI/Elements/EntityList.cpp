@@ -170,14 +170,13 @@ namespace HexEngine
 		}
 
 		SceneSaveFile saveFile(
-			fs->GetLocalAbsoluteDataPath("Prefabs/" + entity->GetName() + ".prefab"),
+			fs->GetLocalAbsoluteDataPath("Prefabs/" + entity->GetName() + ".hprefab"),
 			std::ios::out,
 			prefabScene,
 			SceneFileFlags::DontSaveVariables);
 
 		saveFile.Save();
 		
-		//g_pEnv->_sceneManager->UnloadScene(prefabScene);
 		sceneManager->SetActiveScene(currentScene);
 	}
 
@@ -197,7 +196,7 @@ namespace HexEngine
 		if(_onSceneClicked)
 			sceneNode->_onClick = std::bind(_onSceneClicked, this, sceneNode->GetScene());
 
-		AddNode(sceneNode);
+		AddNode(sceneNode, nullptr, false);
 
 		scene->Unlock();
 
@@ -220,7 +219,7 @@ namespace HexEngine
 
 				node->_onClick = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2);
 
-				AddNode(node, parentItem);				
+				AddNode(node, parentItem, false);				
 
 				return;
 			}
@@ -229,7 +228,7 @@ namespace HexEngine
 		auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity].get() });
 		node->_onClick = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2);
 
-		AddNode(node, scene);
+		AddNode(node, scene, false);
 
 		//entity->GetScene()->Unlock();
 	}

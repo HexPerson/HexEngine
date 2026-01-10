@@ -10,9 +10,9 @@ namespace HexEngine
 {
 	namespace PhysUtils
 	{
-		bool HEX_API RayCast(const math::Vector3& from, const math::Vector3& to, LayerMask mask, RayHit* hitInfo);
+		bool HEX_API RayCast(const math::Vector3& from, const math::Vector3& to, LayerMask mask, RayHit* hitInfo, const std::vector<Entity*>& entsToIgnore = {});
 
-		bool HEX_API RayCast(const math::Ray& ray, float maxDistance, LayerMask mask, RayHit* hitInfo);
+		bool HEX_API RayCast(const math::Ray& ray, float maxDistance, LayerMask mask, RayHit* hitInfo, const std::vector<Entity*>& entsToIgnore = {});
 
 		//bool CameraPickEntity(const math::Vector3& ray, RayHit& hit, uint32_t layerMask = (uint32_t)Layer::AllLayers);
 

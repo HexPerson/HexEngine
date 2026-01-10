@@ -241,6 +241,27 @@ namespace HexEngine
 		return math::Quaternion::Identity;
 	}
 
+	math::Vector3 RigidBodyPhysX::GetLinearVelocity()
+	{
+		if (_collider && _bodyType == BodyType::Dynamic)
+		{
+			auto shape = _collider->GetShape();
+
+			if (shape)
+			{
+				g_pPhysx->GetScene()->lockRead();
+
+				auto linearVel = ((physx::PxRigidBody*)_body)->getLinearVelocity();
+
+				g_pPhysx->GetScene()->unlockRead();
+
+				return math::Vector3(linearVel.x, linearVel.y, linearVel.z);
+			}
+		}
+
+		return math::Vector3::Zero;
+	}
+
 	ICollider* RigidBodyPhysX::AddSphereCollider(Transform* transform, float radius)
 	{
 		g_pPhysx->GetScene()->lockWrite();
@@ -698,7 +719,7 @@ namespace HexEngine
 		}
 	}
 
-	void RigidBodyPhysX::SetGravityEnabled(bool enabled)
+	void RigidBodyPhysX::SetGravityEnabled(bool enabled, bool resetVelocity)
 	{
 		if (_bodyType == BodyType::Dynamic || _bodyType == BodyType::Kinematic)
 		{
@@ -706,7 +727,7 @@ namespace HexEngine
 
 			_body->setActorFlag(physx::PxActorFlag::eDISABLE_GRAVITY, !enabled);
 
-			if (!enabled)
+			if (!enabled && resetVelocity)
 			{
 				((physx::PxRigidDynamic*)_body)->setLinearVelocity(physx::PxVec3(physx::PxZero));
 				((physx::PxRigidDynamic*)_body)->setAngularVelocity(physx::PxVec3(physx::PxZero));
@@ -722,6 +743,19 @@ namespace HexEngine
 
 	void RigidBodyPhysX::SetPhysicalProperties(const PhysicalProperties& props)
 	{
+		if (_bodyType == BodyType::Dynamic || _bodyType == BodyType::Kinematic)
+		{
+			g_pPhysx->GetScene()->lockWrite();
+
+			if (_customMaterial)
+				_customMaterial->release();
+
+			_customMaterial = g_pPhysx->GetPhysics()->createMaterial(props.staticFriction, props.dynamicFriction, props.restitution);
+
+			_shape->setMaterials(&_customMaterial, 1);			
+
+			g_pPhysx->GetScene()->unlockWrite();
+		}
 	}
 
 	void RigidBodyPhysX::SetLinearVelocityDamping(float damping)

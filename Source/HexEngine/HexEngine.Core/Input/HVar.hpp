@@ -198,5 +198,10 @@ namespace HexEngine
 
 		std::string _name;
 		std::string _description;
+
+		HVar* _next = nullptr;
 	};
+
+	extern HEX_API HVar* g_hvars;
+	extern HEX_API int32_t g_numVars;
 }

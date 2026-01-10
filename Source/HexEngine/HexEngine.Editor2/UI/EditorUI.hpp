@@ -6,6 +6,7 @@
 #include "Actions\Inspector.hpp"
 #include "Actions\Explorer.hpp"
 #include "Actions\ProjectManager.hpp"
+#include "Actions/SceneView.hpp"
 #include "../GameIntegrator.hpp"
 
 namespace HexEditor
@@ -21,6 +22,7 @@ namespace HexEditor
 			Cube,
 			Sphere,
 			Terrain,
+			Ocean
 		};
 
 		friend class EditorExtension;
@@ -42,7 +44,9 @@ namespace HexEditor
 
 		EntityList* GetEntityTreeList() const { return _entityList; }
 		Inspector* GetInspector() const { return _rightDock; }
-		Dock* GetCanvas() const { return _centralDock; }
+		SceneView* GetSceneView() const { return _sceneView; }
+
+		RayHit RayCastWorld(const std::vector<Entity*>& entsToIgnore = {});
 
 	private:		
 		void CreateMenuBar();
@@ -68,6 +72,7 @@ namespace HexEditor
 
 		void RunGame();
 		void StopGame();
+		
 
 	private:
 		// IEntityListener overrides
@@ -89,11 +94,12 @@ namespace HexEditor
 		// docks
 		Dock* _leftDock = nullptr;
 		Inspector* _rightDock = nullptr;
-		Dock* _centralDock = nullptr;
+		SceneView* _sceneView = nullptr;
 		Explorer* _lowerDock = nullptr;
 		EntityList* _entityList = nullptr;
 
 		math::Vector3 _freeLookDir;
+		float _freeLookMultiplier = 1.0f;
 
 		ProjectManager* _projectManager = nullptr;
 		fs::path _projectFolderPath;

@@ -12,6 +12,8 @@ namespace HexEngine
 		_userData(userData)
 	{
 		_arrowIcon = ITexture2D::Create("EngineData.Textures/UI/triangle.png");
+
+		_id = list->GetCurrentNodeId();
 	}
 
 	const std::wstring&	ListNode::GetLabel() const
@@ -28,12 +30,12 @@ namespace HexEngine
 	{
 		if (_child)
 		{
-			renderer->PushFillTexturedQuad(_arrowIcon.get(), /*_list->GetPosition().x +*/ _list->GetSize().x - TreeListLineHeight, position.y, TreeListLineHeight, TreeListLineHeight, math::Color(HEX_RGBA_TO_FLOAT4(100, 100, 100, 255)), _isOpen ? 0.0f : 90.0f);
+			renderer->FillTexturedQuad(_arrowIcon.get(), /*_list->GetPosition().x +*/ _list->GetSize().x - TreeListLineHeight, position.y, TreeListLineHeight, TreeListLineHeight, math::Color(HEX_RGBA_TO_FLOAT4(100, 100, 100, 255)), _isOpen ? 0.0f : 90.0f);
 		}
 		
-		renderer->PushFillTexturedQuad(GetIcon(), position.x + 4, position.y + 1, 16, 16, math::Color(1, 1, 1, 1));
+		renderer->FillTexturedQuad(GetIcon(), position.x + 4, position.y + 1, 16, 16, math::Color(1, 1, 1, 1));
 
-		renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + 24, position.y + TreeListLineHeight / 2, renderer->_style.text_regular, FontAlign::CentreUD, GetLabel());
+		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + 24, position.y + TreeListLineHeight / 2, renderer->_style.text_regular, FontAlign::CentreUD, GetLabel());
 	}
 
 	void ListNode::OnClick(int32_t button, int32_t x, int32_t y)

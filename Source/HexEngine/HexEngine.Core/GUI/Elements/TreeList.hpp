@@ -22,19 +22,25 @@ namespace HexEngine
 
 		//ListNode* AddItem(const std::wstring& label, ITexture2D* icons[2] = nullptr, void* objectPtr = nullptr);
 		//ListNode* AddItem(ListNode* parent, const std::wstring& label, ITexture2D* icons[2] = nullptr, void* objectPtr = nullptr);
-		void AddNode(ListNode* node, ListNode* parent = nullptr);
+		void AddNode(ListNode* node, ListNode* parent = nullptr, bool repaintImmediately = true);
 		ListNode* FindItemByObjectPtr(void* objectPtr, ListNode* parent = nullptr);
 		void RemoveItem(const std::wstring& label);
 		void RemoveItem(ListNode* parent, const std::wstring& label);
 		void Clear();
 		void ClearItem(ListNode* item);
+		void Repaint();
 
 		ListNode* FindItemByLabel(const std::wstring& label);
 		ListNode* FindItemByLabelParented(const std::wstring& label, ListNode* parent = nullptr);
 
+		ListNode* FindItemById(int32_t id);
+		ListNode* FindItemByIdParented(int32_t id, ListNode* parent = nullptr);
+
 		//void SetOnSelectItem(OnSelectItem cb);
 
 		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
+
+		int32_t GetCurrentNodeId() const;
 
 	private:
 		void RenderItems(GuiRenderer* renderer, Point& position, const Point& absolutePos, const std::vector<ListNode*>& items, int32_t& c);
@@ -59,6 +65,7 @@ namespace HexEngine
 		ListNode* _draggedItem = nullptr;
 		ListNode* _dragTarget = nullptr;
 		std::recursive_mutex _lock;
+		int32_t _currentNodeId = 0;
 		//ITexture2D* _renderTarget = nullptr;
 		//bool _redrawRenderTarget = true;
 

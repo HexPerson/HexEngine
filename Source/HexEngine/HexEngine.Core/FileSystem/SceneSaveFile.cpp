@@ -86,7 +86,7 @@ namespace HexEngine
 
 		auto jsonString = saveFileData.dump(2);
 
-		Write(jsonString.data(), jsonString.length());
+		Write(jsonString.data(), (uint32_t)jsonString.length());
 
 		LOG_DEBUG("Save file successfully written");
 
@@ -97,7 +97,74 @@ namespace HexEngine
 		return true;
 	}
 
-	bool SceneSaveFile::Load(SceneSaveProgressCallback callback)
+	bool SceneSaveFile::Save(const std::vector<HexEngine::Entity*>& entitiesVec)
+	{
+		LOG_DEBUG("Opening save file for writing");
+
+		if (!Open())
+		{
+			LOG_CRIT("Failed to open save file for writing");
+			return false;
+		}
+
+		json saveFileData;
+
+		bool isPrefab = HEX_HASFLAG(_flags, SceneFileFlags::IsPrefab);
+
+		saveFileData["header"] = {
+			{"version", Version},
+			//{"numEntities", (uint32_t)finalEntityList.size()},
+			//{"numVariables", g_pEnv->_commandManager->GetNumVars()}
+		};
+
+		if (!HEX_HASFLAG(_flags, SceneFileFlags::DontSaveVariables) && isPrefab == false)
+		{
+			auto& variables = saveFileData["variables"];
+
+			g_pEnv->_commandManager->SaveVars(variables);
+		}
+
+		auto& entities = saveFileData["entities"];
+
+		for (auto&& ent : entitiesVec)
+		{
+			LOG_DEBUG("Saving entity '%s' with %d components", ent->GetName().c_str(), ent->GetAllComponents().size());
+
+			if (ent->HasFlag(EntityFlags::DoNotSave) == false)
+				ent->Serialize(entities, this);
+		}
+
+		if (!HEX_HASFLAG(_flags, SceneFileFlags::DontSaveHierarchy))
+		{
+			auto& hierarchy = saveFileData["hierarchy"];
+
+			// now save all the parent information
+			for (auto&& ent : entitiesVec)
+			{
+				if (ent->HasFlag(EntityFlags::DoNotSave) == false)
+				{
+					if (ent->GetParent() != nullptr)
+					{
+						hierarchy[ent->GetName()] = ent->GetParent()->GetName();
+					}
+				}
+			}
+		}
+
+		auto jsonString = saveFileData.dump(2);
+
+		Write(jsonString.data(), (uint32_t)jsonString.length());
+
+		LOG_DEBUG("Save file successfully written");
+
+		Flush();
+		Close();
+
+
+		return true;
+	}
+
+	bool SceneSaveFile::Load(std::shared_ptr<Scene> loadIntoExistingScene, SceneSaveProgressCallback callback)
 	{
 		LOG_DEBUG("Opening save file for reading");
 
@@ -118,7 +185,10 @@ namespace HexEngine
 
 		json sceneData = json::parse(data);
 
-		_scene->SetName(_fsPathObj.stem().wstring());
+		bool isPrefab = HEX_HASFLAG(_flags, SceneFileFlags::IsPrefab);
+
+		if (isPrefab == false)
+			loadIntoExistingScene->SetName(_fsPathObj.stem().wstring());
 
 		const auto& headerData = sceneData["header"];
 
@@ -128,76 +198,82 @@ namespace HexEngine
 			return false;
 		}
 
-		g_pEnv->_commandManager->LoadVars(sceneData["variables"]);
+		if (isPrefab == false)
+			g_pEnv->_commandManager->LoadVars(sceneData["variables"]);
 
 		//LOG_DEBUG("Loading %d entities", header.numEnts);
 
 		std::vector<std::pair<json, Entity*>> createdEnts;
 
-		for(auto& ent : sceneData["entities"].items())
+		for (auto& ent : sceneData["entities"].items())
 		{
-			_scene->Lock();
+			//_scene->Lock();
 
 			createdEnts.push_back({
 				ent.value(),
-				Entity::LoadFromFile(ent.value(), ent.key(), _scene.get(), this)
-			});
+				Entity::LoadFromFile(ent.value(), ent.key(), loadIntoExistingScene.get(), this)
+				});
 
-			_scene->Unlock();
+			//_scene->Unlock();
 		}
 
 		auto& hierarchy = sceneData["hierarchy"];
 
 		for (auto p : hierarchy.items())
 		{
-			auto child = _scene->GetEntityByName(p.key());
-			auto parent = _scene->GetEntityByName(p.value());
+			auto child = loadIntoExistingScene->GetEntityByName(p.key());
+			auto parent = loadIntoExistingScene->GetEntityByName(p.value());
 
 			if (child && parent)
 			{
-				_scene->Lock();
+				loadIntoExistingScene->Lock();
 				child->SetParent(parent);
-				_scene->Unlock();
+				loadIntoExistingScene->Unlock();
 			}
 		}
 		// Deserialize the transforms first, because other components may depends on the transforms being correct
 		for (auto& ent : createdEnts)
 		{
-			_scene->Lock();
-			ent.second->Deserialize(ent.first, this, 1 << Transform::_GetComponentId());		
-			_scene->Unlock();
+			loadIntoExistingScene->Lock();
+			ent.second->Deserialize(ent.first, this, 1 << Transform::_GetComponentId());
+			loadIntoExistingScene->Unlock();
 		}
 
-		
+
 		int32_t loadedCount = 0;
 
 		for (auto& ent : createdEnts)
 		{
 			if (callback)
-				callback(std::wstring(ent.second->GetName().begin(), ent.second->GetName().end()), loadedCount, createdEnts.size());
+				callback(std::wstring(ent.second->GetName().begin(), ent.second->GetName().end()), loadedCount, (uint32_t)createdEnts.size());
 
-			_scene->Lock();
+			loadIntoExistingScene->Lock();
 			ent.second->Deserialize(ent.first, this);
-			_scene->Unlock();
+			loadIntoExistingScene->Unlock();
 
 			//  we want to force the PVS to rebuild each time an entity is loaded, in the case of streaming scene files
-			if (auto mainCamera = _scene->GetMainCamera(); mainCamera != nullptr)
+			if (auto mainCamera = loadIntoExistingScene->GetMainCamera(); mainCamera != nullptr)
 			{
-				_scene->Lock();
+				loadIntoExistingScene->Lock();
 				mainCamera->GetPVS()->ForceRebuild();
-				_scene->Unlock();
+				loadIntoExistingScene->Unlock();
 			}
 
 			loadedCount++;
 		}
 
-		_scene->Load(this);
+		loadIntoExistingScene->Load(this);
 
-		LOG_DEBUG("Save file successfully read");
+		LOG_DEBUG("Scene save file successfully loaded");
 
 		Close();
 
 		return true;
+	}
+
+	bool SceneSaveFile::Load(SceneSaveProgressCallback callback)
+	{
+		return Load(_scene, callback);
 	}
 
 	std::shared_ptr<Scene> SceneSaveFile::GetScene() const

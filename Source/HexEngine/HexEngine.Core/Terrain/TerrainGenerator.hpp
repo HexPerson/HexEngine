@@ -68,8 +68,10 @@ namespace HexEngine
 		bool createInstance = false;
 
 		std::vector<float> heightMap;
+		fs::path path;
 
 		float modulo = 0.0f;
+		FileSystem* fs = nullptr;
 	};
 
 	std::shared_ptr<Mesh> HEX_API CreateTerrain(const TerrainGenerationParams& params);

@@ -178,10 +178,14 @@
 		float coneDot = dot(-lightToPixelVec, lightDir);
 		float coneAtten = pow(max(coneDot, 0.0f), cone);
 
+		float dir = 1.0f;
+
 		if(length(lightPos.xyz - g_eyePos.xyz) <= lightRange)
 		{
-			eyeToSphereDir *= -1.0f;
+			//eyeToSphereDir *= -1.0f;
 			//lightToPixelVec *= -1.0f;
+
+			dir = -1.0f;
 		}
 		if(dot(sphereNormal, eyeToSphereDir) < 0)
 		{

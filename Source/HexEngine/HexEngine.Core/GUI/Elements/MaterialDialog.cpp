@@ -2,6 +2,7 @@
 #include "MaterialDialog.hpp"
 #include "Button.hpp"
 #include "MessageBox.hpp"
+#include "DropDown.hpp"
 #include "../../FileSystem/FileSystem.hpp"
 
 namespace HexEngine
@@ -35,6 +36,10 @@ namespace HexEngine
 		auto roughnessFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Roughness Factor", &material->_properties.roughnessFactor, 0.0f, 1.0f, 0.01f, 2);
 
 		auto save = new Button(_layout, _layout->GetNextPos(), Point(80, 20), L"Save", std::bind(&MaterialDialog::Save, this));
+
+		auto format = new DropDown(_layout, _layout->GetNextPos(), Point(200, 18), L"Format");
+		format->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&Material::SetFormat, material.get(), MaterialFormat::None)));
+		format->GetContextMenu()->AddItem(new ContextItem(L"ORM", std::bind(&Material::SetFormat, material.get(), MaterialFormat::ORM)));
 	}
 
 	bool MaterialDialog::Save()

@@ -21,6 +21,7 @@
 #include "../Scripting/IScriptEngine.hpp"
 #include "../Graphics/IDenoiserProvider.hpp"
 #include "../Graphics/MeshLoader.hpp"
+#include "../FileSystem/PrefabLoader.hpp"
 
 #define USE_MULTITHREADED_PHYSICS 0
 
@@ -91,6 +92,8 @@ namespace HexEngine
 
 		env->_commandManager = new CommandManager;
 		env->_commandManager->Create();
+
+		env->_prefabLoader = new PrefabLoader;
 		
 		if (!HEX_HASFLAG(options.flags, GameOptions::GameOptions_NoRenderer))
 		{
@@ -160,7 +163,7 @@ namespace HexEngine
 		// load the standard assets
 #ifndef _DEBUG
 		LOG_INFO("Loading standard asset package");
-		env->_standardAssets = (AssetPackage*)env->_resourceSystem->LoadResource("AssetPackages/StandardAssets.pkg");
+		env->_standardAssets = dynamic_pointer_cast<AssetPackage>(env->_resourceSystem->LoadResource("EnigneData.AssetPackages/StandardAssets.pkg"));
 #endif
 
 		env->_debugGui = new DebugGUI;
@@ -174,7 +177,7 @@ namespace HexEngine
 
 		env->_chunkManager = new ChunkManager;
 		env->_audioManager = new AudioManager;
-		//env->_audioManager->Create();
+		env->_audioManager->Create();
 
 		env->_uiManager = new UIManager;
 
@@ -189,9 +192,6 @@ namespace HexEngine
 			env->_iconService->Create(L"IconScene");
 		}
 
-		env->_commandManager->RegisterVar(&cl_simulationRate);
-		env->_commandManager->RegisterVar(&cl_showfps);
-		env->_commandManager->RegisterVar(&cl_forcelagframe);
 		env->_commandManager->GetConsole()->Create();
 
 
@@ -256,8 +256,6 @@ namespace HexEngine
 			std::this_thread::sleep_for(std::chrono::milliseconds(100));
 		}
 #endif
-
-		SAFE_UNLOAD(_standardAssets);
 
 		for(auto& extension : _gameExtensions)
 		{
@@ -330,6 +328,7 @@ namespace HexEngine
 		SAFE_DELETE(_graphicsDevice);
 
 		SAFE_DELETE(_shaderLoader);
+		SAFE_DELETE(_prefabLoader);
 
 		if (_resourceSystem)
 		{
@@ -506,18 +505,13 @@ namespace HexEngine
 						_graphicsDevice->SetBlendState(BlendState::Transparency);
 
 						if (!_inEditorMode)
-							_uiManager->GetRenderer()->FullScreenTexturedQuad(_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget());
-
-						if (cl_showfps._val.b)
-						{
-							_uiManager->GetRenderer()->PrintText(_uiManager->GetRenderer()->_style.font.get(), (uint8_t)Style::FontSize::Small, 5, 5, math::Color(1, 1, 1, 1), 0, std::format(L"FPS: {:d}", _timeManager->_fps));
-						}
+							_uiManager->GetRenderer()->FullScreenTexturedQuad(_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget());						
 
 						//_sceneRenderer->RenderOverlays(SceneFlags::PostProcessingEnabled);
 
-						_sceneManager->GetCurrentScene()->OnGUI();
-
 						_uiManager->Render();
+
+						_sceneManager->GetCurrentScene()->OnGUI();						
 
 						for (auto& extension : _gameExtensions)
 						{
@@ -533,6 +527,11 @@ namespace HexEngine
 						if (_debugGui)
 							_debugGui->Render();
 
+						if (cl_showfps._val.b)
+						{
+							_uiManager->GetRenderer()->PrintText(_uiManager->GetRenderer()->_style.font.get(), (uint8_t)Style::FontSize::Small, 5, 5, math::Color(1, 1, 1, 1), 0, std::format(L"FPS: {:d}", _timeManager->_fps));
+						}
+
 						_uiManager->GetRenderer()->EnableScaling(false);
 						_uiManager->GetRenderer()->EndFrame();
 
@@ -545,11 +544,6 @@ namespace HexEngine
 
 				if (cl_forcelagframe._val.i32 > 0)
 					std::this_thread::sleep_for(std::chrono::milliseconds(cl_forcelagframe._val.i32));
-
-				/*if (_timeManager->_frameCount >= 500)
-				{
-					OnRecieveQuitMessage();
-				}*/
 			}
 		}
 		else

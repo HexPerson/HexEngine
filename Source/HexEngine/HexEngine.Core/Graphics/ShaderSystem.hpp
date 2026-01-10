@@ -23,6 +23,7 @@ namespace HexEngine
 		virtual std::vector<std::string>	GetSupportedResourceExtensions() override;
 		virtual std::wstring				GetResourceDirectory() const override;
 		virtual void						SaveResource(IResource* resource, const fs::path& path) override {}
+		virtual bool						DoesSupportHotLoading() override { return true; }
 
 		void ReloadAllShaders();
 

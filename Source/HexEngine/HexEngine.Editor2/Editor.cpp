@@ -42,11 +42,11 @@ namespace HexEditor
 						scene->GetMainCamera(),
 						light->GetEntity()->GetPosition(),
 						scrx, scry, 
-						g_pUIManager->_centralDock->GetSize().x, g_pUIManager->_centralDock->GetSize().y) == false)
+						g_pUIManager->GetSceneView()->GetSize().x, g_pUIManager->GetSceneView()->GetSize().y) == false)
 						continue;
 
-					scrx += g_pUIManager->_centralDock->GetPosition().x;
-					scry += g_pUIManager->_centralDock->GetPosition().y;
+					scrx += g_pUIManager->GetSceneView()->GetPosition().x;
+					scry += g_pUIManager->GetSceneView()->GetPosition().y;
 
 					const int32_t IconSize = 24;
 
@@ -76,6 +76,9 @@ namespace HexEditor
 
 					if (resourceLoader)
 					{
+						if (resourceLoader->DoesSupportHotLoading() == false)
+							continue;
+
 						auto fileSystem = g_pEnv->_resourceSystem->FindFileSystemByPath(fileInfo.path);
 
 						if (fileSystem)

@@ -57,6 +57,13 @@ namespace HexEngine
 		}
 
 		template <>
+		json& Serialize(json& container, const std::string& key, const math::Color& value)
+		{
+			container[key] = { value.x, value.y, value.z, value.w };
+			return container;
+		}
+
+		template <>
 		json& Serialize(json& container, const std::string& key, const math::Quaternion& value)
 		{
 			container[key] = { value.x, value.y, value.z, value.w };
@@ -154,6 +161,22 @@ namespace HexEngine
 
 		template <>
 		json& Deserialize(json& container, const std::string& key, math::Vector4& value)
+		{
+			if (container.find(key) != container.end())
+			{
+				auto values = container[key];
+
+				values[0].get_to<float>(value.x);
+				values[1].get_to<float>(value.y);
+				values[2].get_to<float>(value.z);
+				values[3].get_to<float>(value.w);
+			}
+
+			return container;
+		}
+
+		template <>
+		json& Deserialize(json& container, const std::string& key, math::Color& value)
 		{
 			if (container.find(key) != container.end())
 			{

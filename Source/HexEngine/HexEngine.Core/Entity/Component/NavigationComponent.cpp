@@ -27,16 +27,20 @@ namespace HexEngine
 		//g_pEnv->_debugGui->RemoveCallback(this);
 	}
 
-	void NavigationComponent::FindPath(const math::Vector3& from, const math::Vector3& to, float stepSize)
+	void NavigationComponent::FindPath(NavMeshId id, const math::Vector3& from, const math::Vector3& to, float stepSize)
 	{
 		_result.path.clear();
 		_pathIndex = 0;
 
+		math::Vector3 dirFromEndToStart = (from - to);
+		dirFromEndToStart.Normalize();
+
 		INavMeshProvider::PathParams path;
 		path.from = from;
 		path.to = to;
-		path.searchDistance = math::Vector3(500.0f);
+		path.searchDistance = math::Vector3(200.0f);
 		path.stepSize = stepSize;
+		path.meshId = id;
 
 		_targetPosition = to;
 
@@ -86,15 +90,15 @@ namespace HexEngine
 				}
 	
 
-				currentPos += delta * dt * _movementSpeed;
+				currentPos += -transform->GetForward() * dt * _movementSpeed;
 
 				transform->SetPosition(currentPos);
 
 				float yaw = atan2(delta.x, delta.z);
-
+				
 				auto targetRotation = math::Quaternion::CreateFromYawPitchRoll(yaw, 0.0f, 0.0f);
 
-				if (yaw != _targetYaw && _hasNewRotation == false)
+				if (yaw != _targetYaw /*&& _hasNewRotation == false*/)
 				{
 					_rotationTime = 0.0f;
 					_targetYaw = yaw;
@@ -105,12 +109,12 @@ namespace HexEngine
 				_rotationTime += dt * _rotationSpeed;
 				_rotationTime = std::clamp(_rotationTime, 0.0f, 1.0f);
 
-				auto easingFunction = getEasingFunction(EaseOutCubic);
+				auto easingFunction = getEasingFunction(EaseOutQuart);
 
 				//if(_hasNewRotation)
 					transform->SetRotation(math::Quaternion::Slerp(transform->GetRotation(), _targetRotation, easingFunction(_rotationTime)));
 
-				if (_rotationTime >= 0.6f)
+				if (_rotationTime >= 1.0f)
 				{
 					_hasNewRotation = false;
 				}

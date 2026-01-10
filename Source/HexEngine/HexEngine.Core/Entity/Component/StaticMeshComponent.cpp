@@ -24,6 +24,12 @@ namespace HexEngine
 		SetMaterial(clone->GetMaterial());
 	}
 
+	StaticMeshComponent::~StaticMeshComponent()
+	{
+		if(_mesh)
+			LOG_DEBUG("Mesh '%s' now has a ref count of %d (will be %d after this)", _mesh->GetName().c_str(), _mesh.use_count(), _mesh.use_count()-1);
+	}
+
 	bool StaticMeshComponent::RenderMesh(Mesh* mesh, MeshRenderFlags flags, int32_t instanceId)
 	{
 		// make sure this MeshRenderer can actually render this Mesh
@@ -40,7 +46,9 @@ namespace HexEngine
 
 		auto shader = material->GetStandardShader();
 
-		if ((flags & MeshRenderFlags::MeshRenderShadowMap) != 0)
+		bool isShadowMap = (flags & MeshRenderFlags::MeshRenderShadowMap) != 0;
+
+		if (isShadowMap)
 			shader = material->GetShadowMapShader();
 
 		if (!shader)
@@ -69,9 +77,18 @@ namespace HexEngine
 
 		// Update the per-object constant buffer
 		//
-		math::Matrix offsetMatrix = math::Matrix::CreateTranslation(_offsetPosition);
+		math::Matrix offsetMatrix;
+		
+		if (_boundBone)
+		{
+			_offsetMatrix = math::Matrix::CreateFromQuaternion(_boundBone->Rotation) * math::Matrix::CreateTranslation(_boundBone->Position);//_boundBone->FinalTransformation.Invert().Transpose();//* math::Matrix::CreateTranslation(_boundBone->Position);
+		}
+		//else
+		//{
+		//	offsetMatrix = math::Matrix::CreateTranslation(_offsetPosition);
+		//}
 
-		mesh->UpdateConstantBuffer(GetEntity(), GetEntity()->GetLocalTM() * offsetMatrix, material.get(), instanceId);
+		mesh->UpdateConstantBuffer(GetEntity(), /*GetEntity()->GetLocalTM() **/ offsetMatrix, material.get(), instanceId);
 
 		// bind the shader's requirements
 		auto requirements = shader->GetRequirements();
@@ -84,6 +101,11 @@ namespace HexEngine
 		if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresShadowMaps))
 		{
 			g_pEnv->_sceneRenderer->GetCurrentShadowMap()->BindAsShaderResource();
+		}
+
+		if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresBeauty))
+		{
+			graphicsDevice->SetTexture2D(g_pEnv->_sceneRenderer->GetBeautyTexture());
 		}
 
 		uint32_t slotIdx = graphicsDevice->GetBoundResourceIndex();
@@ -110,7 +132,7 @@ namespace HexEngine
 
 		slotIdx += MaterialTexture::Count;
 
-		mesh->SetBuffers(GetEntity()->GetLocalTM());
+		mesh->SetBuffers(isShadowMap);
 		return true;
 	}
 
@@ -130,22 +152,16 @@ namespace HexEngine
 
 	void StaticMeshComponent::ReleaseAllMeshes()
 	{
-		_mesh.reset();
+		//_mesh.reset();
 	}
 
-	void StaticMeshComponent::SetMesh(const std::shared_ptr<Mesh>& mesh)
+	void StaticMeshComponent::SetMesh(std::shared_ptr<Mesh> mesh)
 	{
 		_mesh = mesh;
 
-		dx::BoundingBox bbox = GetEntity()->GetAABB();
-		dx::BoundingBox::CreateMerged(bbox, bbox, mesh->GetAABB());
+		dx::BoundingBox bbox = mesh->GetAABB();
 
-		GetEntity()->SetAABB(bbox);
-
-		dx::BoundingOrientedBox obb = GetEntity()->GetOBB();
-		dx::BoundingOrientedBox::CreateFromBoundingBox(obb, bbox);
-
-		GetEntity()->SetOBB(obb);
+		GetEntity()->RecalculateBoundingVolumes(bbox);
 
 		if (mesh->GetMaterial())
 			SetMaterial(mesh->GetMaterial());
@@ -156,15 +172,8 @@ namespace HexEngine
 			SetMaterial(Material::Create("EngineData.Materials/Default.hmat"));
 		}
 
-		//mesh->CreateBuffers();
 		mesh->CreateInstance();
 	}
-
-	/*void MeshRenderer::RemoveMesh()
-	{
-		_mesh->_meshRenderer = nullptr;
-		_mesh = nullptr;
-	}*/
 
 	std::shared_ptr<Mesh> StaticMeshComponent::GetMesh() const
 	{
@@ -203,6 +212,8 @@ namespace HexEngine
 
 	void StaticMeshComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
+		_serializationState = BaseComponent::SerializationState::Deserializing;
+
 		for(auto& mesh : data["mesh"].items())
 		{
 			auto path = mesh.key();
@@ -223,7 +234,7 @@ namespace HexEngine
 			}
 			else
 			{
-#if 1
+#if 0
 				auto mesh = Mesh::CreateAsync(path,
 					[&](std::shared_ptr<IResource> resource)
 					{
@@ -239,6 +250,8 @@ namespace HexEngine
 							SetMesh(mesh);
 							g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 						}
+
+						_serializationState = BaseComponent::SerializationState::Ready;
 					});
 #else
 
@@ -261,6 +274,8 @@ namespace HexEngine
 			{
 				auto path = materials.value();
 
+#if 0
+
 				auto material = Material::CreateAsync(path, 
 					[&](std::shared_ptr<IResource> resource) {
 
@@ -277,9 +292,17 @@ namespace HexEngine
 						//g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 
 					});
-				
+#else
+				auto material = Material::Create(path);
 
-				//LOG_DEBUG("mesh %s loaded a shader of %s", _mesh->GetRelativePath().string().c_str(), material->GetStandardShader()->GetAbsolutePath().string().c_str());
+				if (!material)
+				{
+					LOG_CRIT("Failed to load material '%s' when deserialising MeshRenderer", ((std::string)path).c_str());
+					return;
+				}
+				SetMaterial(material);
+
+#endif
 
 				++materialIndex;
 			}

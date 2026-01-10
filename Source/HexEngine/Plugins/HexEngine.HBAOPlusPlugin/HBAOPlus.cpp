@@ -18,7 +18,7 @@ bool HBAOPlus::Create()
 		return false;
 	}
 
-	g_pEnv->_commandManager->RegisterVar(&hbao_unitscale);
+	//g_pEnv->_commandManager->RegisterVar(&hbao_unitscale);
 
 	return true;
 }
@@ -44,7 +44,7 @@ void HBAOPlus::ApplyAmbientOcclusion(Camera* camera, ITexture2D* depthBuffer, IT
 	math::Matrix vp = camera->GetViewMatrix();// *camera->GetProjectionMatrix();
 
 	//vp = vp.Invert();
-	vp = vp.Transpose();
+	//vp = vp.Transpose();
 
 	if (normals)
 	{

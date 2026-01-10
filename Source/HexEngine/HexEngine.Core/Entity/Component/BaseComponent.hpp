@@ -25,22 +25,29 @@ namespace HexEngine
 //		name = it.value();\
 //	}
 
-#define DESERIALIZE_VALUE(name, defaultValue) file->Deserialize(data, #name, name);
+#define DESERIALIZE_VALUE(name) file->Deserialize(data, #name, name);
 
-#define DESERIALIZE_VALUE_TYPE(name, defaultValue, type) if (auto it = data.find(#name); it == data.end())\
-	{\
-		name = (type)defaultValue;\
-	}\
-else\
-	{\
-		name = (type)it.value();\
-	}
+//#define DESERIALIZE_VALUE_TYPE(name, defaultValue) if (auto it = data.find(#name); it == data.end())\
+//	{\
+//		name = (decltype(name))defaultValue;\
+//	}\
+//else\
+//	{\
+//		name = (decltype(name))it.value();\
+//	}
 
 #define SERIALIZE_VALUE(name) file->Serialize(data,#name, name);//data[#name] = name;
 
 	class HEX_API BaseComponent : public MessageListener, public Reflection::IObject
 	{
 	public:
+		enum class SerializationState
+		{
+			Ready,
+			Deserializing,
+			Serializing
+		};
+
 		BaseComponent(Entity* entity);		
 
 		virtual ~BaseComponent() {}
@@ -51,7 +58,7 @@ else\
 
 		virtual ComponentId GetComponentId() = 0;
 
-		virtual const std::string GetComponentName() = 0;
+		virtual const char* GetComponentName() = 0;
 
 		virtual void DebugRender() {};
 
@@ -71,10 +78,16 @@ else\
 
 		void BroadcastMessage(Message* message);
 
+		void WaitForDeserialize();
+
+
 	protected:
 		ComponentId _componentId = -1;
 
 	private:		
 		Entity* _entity = nullptr;
+
+	public:
+		SerializationState _serializationState = SerializationState::Ready;
 	};
 }

@@ -37,6 +37,7 @@ namespace HexEngine
 		Particle		= 6,
 		Trigger			= 7,
 		Sky				= 8,
+		Grass			= 9,
 
 		CustomLayer = 10,
 
@@ -51,18 +52,20 @@ namespace HexEngine
 	class StaticMeshComponent;
 	class Transform;
 	class BaseComponent;
+	class Chunk;
 
 	enum class EntityFlags
 	{
 		None = 0,
-		WantsDeletion			= HEX_BITSET(0),
-		HasBeenCreated			= HEX_BITSET(1),
-		IsPendingRemoval		= HEX_BITSET(2),
-		DoNotSave				= HEX_BITSET(3),
-		PreviousTransformDirty	= HEX_BITSET(4),
+		HasBeenCreated			= HEX_BITSET(0),
+		IsPendingRemoval		= HEX_BITSET(1),
+		DoNotSave				= HEX_BITSET(2),
+		PreviousTransformDirty	= HEX_BITSET(3),
+		DoNotBlockNavMesh		= HEX_BITSET(4),
 	};
-
 	DEFINE_ENUM_FLAG_OPERATORS(EntityFlags);
+
+	constexpr EntityFlags EntityInvalidMask = (EntityFlags::IsPendingRemoval);
 
 	class HEX_API Entity final : public MessageListener, public Reflection::IObject
 	{
@@ -77,7 +80,7 @@ namespace HexEngine
 
 		virtual void Create();
 
-		void DeleteMe();
+		void DeleteMe(bool broadcast = true);
 
 		bool IsValid() const;
 		bool IsCreated() const;
@@ -160,7 +163,7 @@ namespace HexEngine
 		int32_t GetTag() const;
 		void SetTag(int32_t tag);
 
-		Entity* GetParent();
+		Entity* GetParent() const;
 		void SetParent(Entity* parent);
 		const std::vector<Entity*>& GetChildren() const;
 
@@ -179,10 +182,11 @@ namespace HexEngine
 		void SetScale(const math::Vector3& scale);
 		void ForceScale(const math::Vector3& scale);
 		const math::Vector3& GetScale() const;
+		math::Vector3 GetAbsoluteScale() const;
 
 		void SetOBB(const dx::BoundingOrientedBox& obb);
 
-		const dx::BoundingBox GetAABB();
+		const dx::BoundingBox& GetAABB();
 		void SetAABB(const dx::BoundingBox& bbox);
 		const dx::BoundingBox& GetWorldAABB();
 
@@ -191,8 +195,9 @@ namespace HexEngine
 		const dx::BoundingBox GetWorldOcclusionVolume();
 		
 
-		const dx::BoundingOrientedBox GetOBB();
+		const dx::BoundingOrientedBox& GetOBB();
 		const dx::BoundingOrientedBox& GetWorldOBB();
+		void RecalculateBoundingVolumes(const dx::BoundingBox& aabb);
 
 		const dx::BoundingSphere& GetBoundingSphere() const;
 		const dx::BoundingSphere GetWorldBoundingSphere();	
@@ -200,7 +205,9 @@ namespace HexEngine
 		bool IsInPVS() const { return _isInPVS; }
 
 		const math::Matrix& GetWorldTM();
-		const math::Matrix& GetWorldTMPrev();
+		const math::Matrix& GetWorldTMInvert();
+		const math::Matrix& GetWorldTMPrev() const;
+		const math::Matrix& GetWorldTMPrevTranspose() const;
 		const math::Matrix& GetWorldTMTranspose();
 		const math::Matrix& GetLocalTM();
 
@@ -218,8 +225,10 @@ namespace HexEngine
 		//virtual void OnTransformChanged(bool scaleChanged, bool rotationChanged, bool translationChanged);
 
 		void SetCastsShadows(bool receivesShadows);
-
 		bool GetCastsShadows();
+
+		void SetChunk(Chunk* chunk);
+		Chunk* GetChunk() const;
 
 		StaticMeshComponent* GetCachedMeshRenderer() { return _cachedMeshRenderer; }
 
@@ -255,9 +264,14 @@ namespace HexEngine
 		dx::BoundingSphere _boundingSphere;
 		dx::BoundingBox _occlusionVolume;
 
+		Chunk* _lastChunk = nullptr;
+		math::Vector3 _lastPosition;
+
 		math::Matrix _cachedLocalTM;
 		math::Matrix _cachedWorldTM;
+		math::Matrix _cachedWorldTMInvert;
 		math::Matrix _cachedWorldTMPrev;
+		math::Matrix _cachedWorldTMPrevTranspose;
 		math::Matrix _cachedWorldTMTranspose;
 		dx::BoundingBox _cachedWorldAABB;
 		dx::BoundingOrientedBox _cachedWorldOBB;
@@ -265,6 +279,7 @@ namespace HexEngine
 		dx::BoundingBox _cachedWorldOcclusionVolume;
 		bool _hasCachedLocalTM = false;
 		bool _hasCachedWorldTM = false;
+		bool _hasCachedWorldTMInvert = false;
 		bool _hasCachedWorldTMTranspose = false;
 		bool _hasCachedWorldAABB = false;
 		bool _hasCachedWorldOBB = false;

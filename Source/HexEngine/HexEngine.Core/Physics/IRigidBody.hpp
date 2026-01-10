@@ -32,10 +32,9 @@ namespace HexEngine
 
 		struct PhysicalProperties
 		{
-			float rollingResistance;
-			float bounciness;
-			float frictionCoefficient;
-			float massDensity;
+			float staticFriction;
+			float dynamicFriction;
+			float restitution;
 		};
 
 		struct ColliderData
@@ -83,6 +82,8 @@ namespace HexEngine
 
 		virtual math::Quaternion GetPhysicsRotation() = 0;
 
+		virtual math::Vector3 GetLinearVelocity() = 0;
+
 		virtual ICollider* AddSphereCollider(Transform* transform, float radius) = 0;
 
 		virtual ICollider* AddCapsuleCollider(Transform* transform, float radius, float height) = 0;
@@ -109,7 +110,7 @@ namespace HexEngine
 
 		virtual float GetMass() const = 0;
 
-		virtual void SetGravityEnabled(bool enabled) = 0;
+		virtual void SetGravityEnabled(bool enabled, bool resetVelocity = false) = 0;
 
 		virtual void OnCollision(IRigidBody* body) = 0;
 

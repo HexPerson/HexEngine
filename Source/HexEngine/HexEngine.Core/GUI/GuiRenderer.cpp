@@ -161,6 +161,9 @@ namespace HexEngine
 		if (!list)
 			return;
 
+		if (list->_instances.size() == 0)
+			return;
+
 		auto gfxDevice = g_pEnv->_graphicsDevice;
 
 		gfxDevice->SetVertexShader(_instancedShader->GetShaderStage(ShaderStage::VertexShader));
@@ -630,7 +633,7 @@ namespace HexEngine
 		//}
 	}
 
-	void GuiRenderer::FillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour)
+	void GuiRenderer::FillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour, float rotation)
 	{
 		if (_scalingEnabled)
 		{
@@ -717,7 +720,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
 	}
 
-	void GuiRenderer::FillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, math::Vector2 uv[2], const math::Color& colour)
+	void GuiRenderer::FillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, math::Vector2 uv[2], const math::Color& colour, float rotation)
 	{
 		if (_scalingEnabled)
 		{

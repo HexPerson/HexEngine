@@ -114,10 +114,10 @@ namespace HexEngine
 
 		CON_ECHO("^rred ^ggreen ^bblue");
 
-		RegisterCommand(&cmd_bind);
+		/*RegisterCommand(&cmd_bind);
 		RegisterCommand(&cmd_echo);
 		RegisterCommand(&cmd_set_entity_pos);
-		RegisterCommand(&cmd_set_entity_rot);
+		RegisterCommand(&cmd_set_entity_rot);*/
 	}
 
 	CommandManager::~CommandManager()
@@ -127,7 +127,7 @@ namespace HexEngine
 		g_pEnv->_inputSystem->RemoveInputListener(this);
 	}
 
-	void CommandManager::RegisterCommand(HCommand* command)
+	/*void CommandManager::RegisterCommand(HCommand* command)
 	{
 		if (FindHCommand(command->_name))
 			return;
@@ -141,13 +141,13 @@ namespace HexEngine
 			return;
 
 		_vars.push_back(var);
-	}
+	}*/
 
 	HVar* CommandManager::FindHVar(const std::string& name)
 	{
 		const std::lock_guard<std::recursive_mutex> lock(_varLock);
 
-		for(auto& var : _vars)
+		for(HVar* var = g_hvars; var != nullptr; var = var->_next)
 		{
 			if (var->_name == name)
 				return var;
@@ -162,7 +162,7 @@ namespace HexEngine
 
 		std::vector<HVar*> vars;
 
-		for (auto& var : _vars)
+		for (HVar* var = g_hvars; var != nullptr; var = var->_next)
 		{
 			if (var->_name.find(name) != name.npos)
 			{
@@ -177,7 +177,7 @@ namespace HexEngine
 	{
 		const std::lock_guard<std::recursive_mutex> lock(_cmdLock);
 
-		for(auto& cmd : _commands)
+		for (HCommand* cmd = g_commands; cmd != nullptr; cmd = cmd->_next)
 		{
 			if (cmd->_name == name)
 				return cmd;
@@ -361,9 +361,9 @@ namespace HexEngine
 				case HVar::Type::Vector3:
 				{
 					math::Vector3 old = pVar->_val.v3;
-					pVar->_val.v3.x = std::stoull(tokens[1]);
-					pVar->_val.v3.y = std::stoull(tokens[2]);
-					pVar->_val.v3.z = std::stoull(tokens[3]);
+					pVar->_val.v3.x = std::stof(tokens[1]);
+					pVar->_val.v3.y = std::stof(tokens[2]);
+					pVar->_val.v3.z = std::stof(tokens[3]);
 					pVar->Clamp();
 					CON_ECHO("^gHVar '%s' change from %f %f %f to %f %f %f", pVar->_name.c_str(),
 						old.x, old.y, old.z, 
@@ -493,13 +493,9 @@ namespace HexEngine
 
 	void CommandManager::SaveVars(json& jsonFile)
 	{
-		//header->numVars = _vars.size();
-
-		for(auto& var : _vars)
+		for (HVar* var = g_hvars; var != nullptr; var = var->_next)
 		{
 			jsonFile[var->_name] = var->ValToString();
-			//file->WriteString(var->_name);
-			//file->WriteString(var->ValToString());
 		}
 	}
 
@@ -512,13 +508,6 @@ namespace HexEngine
 
 			ProcessCommandInput(varName + " " + varValue);
 		}
-		/*for (int32_t i = 0; i < jsonFile["header"]["numVars"]; ++i)
-		{
-			auto varName = file->ReadString();
-			auto varValue = file->ReadString();
-
-			ProcessCommandInput(varName + " " + varValue);
-		}*/
 	}
 
 	/*int32_t CommandManager::GetNumVars()

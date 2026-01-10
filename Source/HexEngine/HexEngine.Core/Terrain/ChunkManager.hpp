@@ -24,11 +24,15 @@ namespace HexEngine
 	class HEX_API ChunkManager : public IEntityListener
 	{
 	public:
+		friend class Chunk;
+
 		void CreateChunks(Scene* scene, float chunkSize, int32_t numChunks);
 		bool HasActiveChunks(Scene* scene) const;
 		bool GetChunkData(Scene* scene, ChunkData* data) const;
 		void CalculatePVS(Scene* scene, PVS* pvs, const PVSParams& params, std::vector<StaticMeshComponent*>& components);
 		void RemoveAllChunks(Scene* scene);
+
+		void DebugRender();
 
 		//Tile* GetTileByPosition(HexEngine::Entity* entity, const math::Vector3& position) const;
 		//Tile* GetTileByPosition(const math::Vector3& position) const;
@@ -36,6 +40,11 @@ namespace HexEngine
 		Chunk* GetChunkByPosition(ChunkData& data, const math::Vector3& position) const;
 
 		void ForEachChunkExecute(ChunkData& data, std::function<void (int32_t, int32_t, HexEngine::Chunk*)> function) const;
+
+		void RecalculateAllChunkBounds(Scene* scene);
+
+		void EnableContinuousChunkBoundCalculation(bool enable) { _continuousCalculationEnabled = enable; }
+		bool IsContinuousChunkBoundCalculationEnabled() const { return _continuousCalculationEnabled; }
 
 		void Destroy();
 
@@ -54,14 +63,27 @@ namespace HexEngine
 
 		virtual void OnRemoveComponent(Entity* entity, BaseComponent* component) override;
 
+		int32_t GetNumChunksVisible() const;
+
+		void EnableCaching(bool enable) { _cachingEnabled = enable; }
+
+		void ChunkLoader();
+
 	private:
 		//bool IsChunkOccluded(const math::Vector3& cameraPos, Chunk* chunk);
+		bool _continuousCalculationEnabled = true;
+		bool _cachingEnabled = false;
 
 	public:
 		std::map<Scene*, ChunkData> _sceneToChunkMap;
-		
 
 		const int32_t _visMapSizeIncrease = 1024;
+		int32_t _chunksVisible = 0;
+
+		std::thread _chunkLoader;
+		std::recursive_mutex _loaderLock;
+		std::list<Chunk*> _loadList;
+		std::list<Chunk*> _unloadList;
 
 		//std::vector<HexEngine::Chunk*> _chunks;
 	};

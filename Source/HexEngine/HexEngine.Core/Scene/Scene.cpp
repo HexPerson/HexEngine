@@ -7,6 +7,7 @@
 #include "../Entity/Component/StaticMeshComponent.hpp"
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/FirstPersonCameraController.hpp"
+#include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "PVS.hpp"
 
 namespace HexEngine
@@ -172,7 +173,7 @@ namespace HexEngine
 
 	Entity* Scene::CreateEntity(const std::string& name, const math::Vector3& position, const math::Quaternion& rotation, const math::Vector3& scale)
 	{
-		std::unique_lock lock(_lock);
+		//std::unique_lock lock(_lock);
 
 		PROFILE();
 
@@ -180,7 +181,6 @@ namespace HexEngine
 
 		if (auto existingEnt = GetEntityByName(name); existingEnt != nullptr)
 		{
-
 			if (_namingPolicy == EntityNamingPolicy::AutoRename)
 			{
 				while (true)
@@ -219,11 +219,16 @@ namespace HexEngine
 		entity->SetRotation(rotation);
 		entity->SetScale(scale);
 
+		
 		if (_insideEntityIteration)
+		{
+			_lock.lock();
 			_pendingAdditions.insert(entity);
+			_lock.unlock();
+		}
 		else
 		{
-			LOG_DEBUG("Adding entity [%p] %s", entity, entity->GetName().c_str());
+			//LOG_DEBUG("Adding entity [%p] %s", entity, entity->GetName().c_str());
 
 			AddEntityInternal(entity);
 		}
@@ -256,7 +261,7 @@ namespace HexEngine
 
 			if (!cls)
 			{
-				LOG_CRIT("Could not find an corresponding entry in the class registry for '%s'", comp->GetComponentName().c_str());
+				LOG_CRIT("Could not find an corresponding entry in the class registry for '%s'", comp->GetComponentName());
 				DestroyEntity(clone);
 				return nullptr;
 			}
@@ -285,8 +290,6 @@ namespace HexEngine
 		{
 			for (auto& ent : map.second)
 			{
-				static auto& ptr = map.second;
-
 				auto newEnt = CloneEntity(ent, false);
 
 				renamedEnts.push_back({ newEnt, ent, newEnt->GetName(), ent->GetName() });
@@ -355,6 +358,8 @@ namespace HexEngine
 
 		//_flushEnts = true;
 		_updateFlags |= SceneUpdateAddedEntity;
+
+		_entNameMap[entity->GetName()] = entity;;
 
 		FlushPVS(entity);
 	}
@@ -508,6 +513,8 @@ namespace HexEngine
 
 		_updateFlags |= SceneUpdateRemovedEntity;
 
+		_entNameMap.erase(entity->GetName());
+
 		//_flushEnts = true;
 		//_didDeleteEnts = true;		
 
@@ -532,7 +539,7 @@ namespace HexEngine
 		return totalEnts;
 	}
 
-	void Scene::DestroyEntity(Entity* entity)
+	void Scene::DestroyEntity(Entity* entity, bool broadcast)
 	{
 		std::unique_lock lock(_lock);
 
@@ -547,7 +554,8 @@ namespace HexEngine
 			_skySphere = nullptr;
 		}
 
-		entity->DeleteMe();
+		if(entity->HasFlag(EntityFlags::IsPendingRemoval) == false)
+			entity->DeleteMe(broadcast);
 
 		if (_insideEntityIteration)
 		{
@@ -795,6 +803,7 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_drawCalls = 0;
+		_didAnyDrawnItemReflect = false;
 
 		PROFILE();
 
@@ -813,12 +822,6 @@ namespace HexEngine
 
 				if (!updateComponent)
 					continue;
-
-				if (updateComponent->GetEntity()->IsPendingDeletion())
-				{
-					DestroyEntity(updateComponent->GetEntity());
-					continue;
-				}
 
 				if (updateComponent->CanUpdate())
 				{
@@ -889,6 +892,8 @@ namespace HexEngine
 
 		//_didDeleteEnts = false;
 		//_flushEnts = false;
+
+		g_pEnv->_chunkManager->ChunkLoader();
 	}
 
 	void Scene::SetFogColour(const math::Color& colour)
@@ -919,6 +924,11 @@ namespace HexEngine
 	void Scene::Unlock()
 	{
 		_lock.unlock();
+	}
+
+	bool Scene::TryLock()
+	{
+		return _lock.try_lock();
 	}
 
 	const std::wstring& Scene::GetName() const
@@ -994,6 +1004,25 @@ namespace HexEngine
 			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Drawn entities {:d}", pvs->GetTotalNumberOfEnts())); y += 15;
 			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Drawn skeletal animators {:d}", pvs->GetTotalSkeletalAnimators())); y += 15;
 			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Draw calls {:d}", _drawCalls)); y += 15;
+			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Chunks visible {:d}", g_pEnv->_chunkManager->GetNumChunksVisible())); y += 15;
+		}
+	}
+
+	template <typename T>
+	void RenderInstance(T* instance, uint32_t numInstances, StaticMeshComponent* renderer, bool& rendered)
+	{
+		if (instance)
+		{
+			instance->Finish();
+
+			if (numInstances > 0)
+			{
+				g_pEnv->_graphicsDevice->DrawIndexedInstanced(instance->GetMesh()->GetNumIndices(), (uint32_t)numInstances);
+
+				renderer->GetMaterial()->RestoreRenderState();
+
+				rendered = false;
+			}
 		}
 	}
 
@@ -1005,7 +1034,15 @@ namespace HexEngine
 
 		const auto& renderableSet = pvs->GetRenderables();
 
-		_drawnEntities = 0;
+		bool isShadowMap = (renderFlags & MeshRenderFlags::MeshRenderShadowMap) != 0;
+		bool isTransparency = (renderFlags & MeshRenderFlags::MeshRenderTransparency) != 0;
+		bool isNormalRender = !isShadowMap && !isTransparency;
+
+		if (isNormalRender)
+		{
+			_drawnEntities = 0;
+			_drawCalls = 0;
+		}		
 
 		for (auto it = renderableSet.begin(); it != renderableSet.end(); it++)
 		{
@@ -1018,7 +1055,7 @@ namespace HexEngine
 			MeshInstance* lastInstance = nullptr;
 			StaticMeshComponent* renderer = nullptr;
 
-			auto RenderInstance = [&rendered](MeshInstance* instance, uint32_t numInstances, StaticMeshComponent* renderer)
+			/*auto RenderInstance = [&rendered](MeshInstance* instance, uint32_t numInstances, StaticMeshComponent* renderer)
 			{
 				if (instance)
 				{
@@ -1033,19 +1070,25 @@ namespace HexEngine
 						rendered = false;
 					}
 				}
-			};
+			};*/
 
 			for (auto&& meshEntityPair : it->second)
 			{
 				auto mesh = std::get<0>(meshEntityPair);
 				auto entity = std::get<1>(meshEntityPair);
-				auto instance = mesh->GetInstance();				
+				auto meshComponent = (StaticMeshComponent*)std::get<2>(meshEntityPair);
+				auto instance = mesh->GetInstance();	
+				SimpleMeshInstance* simpleInstance = instance->GetSimpleInstance();
+
 
 				if (!mesh || !entity || !instance)
 					continue;
 
-				renderer = dynamic_cast<StaticMeshComponent*>(std::get<2>(meshEntityPair));//entity->GetComponent<StaticMeshComponent>();
+				renderer = meshComponent;
 				currentInstance = instance;
+
+				if (isShadowMap)
+					currentInstance = (MeshInstance*)simpleInstance;
 
 				if ((renderFlags & MeshRenderTransparency) == 0)
 				{
@@ -1053,6 +1096,9 @@ namespace HexEngine
 					{
 						if (material->_properties.hasTransparency == 1 || material->_properties.isWater == 1)
 							continue;
+
+						if (material->DoesHaveAnyReflectivity())
+							_didAnyDrawnItemReflect = true;
 					}
 					else
 						continue;
@@ -1070,7 +1116,13 @@ namespace HexEngine
 
 				if (currentInstance != lastInstance && lastInstance != nullptr || mesh->HasAnimations())
 				{
-					RenderInstance(lastInstance, drawnInstances, renderer);
+					if (isNormalRender)
+						++_drawCalls;
+
+					if(isShadowMap)
+						RenderInstance((SimpleMeshInstance*)lastInstance, drawnInstances, renderer, rendered);
+					else
+						RenderInstance(lastInstance, drawnInstances, renderer, rendered);
 					
 					drawnInstances = 0;
 
@@ -1116,7 +1168,10 @@ namespace HexEngine
 
 				if (!rendered)
 				{
-					instance->Start();					
+					if (isShadowMap)
+						simpleInstance->Start();
+					else
+						instance->Start();					
 
 					if (!renderer)
 						continue;
@@ -1134,22 +1189,69 @@ namespace HexEngine
 				//	entity->GetComponent<Transform>()->UpdateInterpolatedPosition();				
 
 				drawnInstances++;
-				lastInstance = currentInstance;				
+				lastInstance = currentInstance;		
 
-				instance->Render(
-					entity->GetWorldTM(),
-					entity->GetWorldTMTranspose() /** mesh->_modelTransform.Transpose()*/,
-					entity->GetWorldTMPrev().Transpose(),
-					material->_properties.diffuseColour,
-					renderer->GetUVScale());
+				if (isShadowMap)
+				{
+					if (meshComponent->IsBoundToBone())
+					{
+						simpleInstance->Render(entity->GetWorldTMTranspose() * meshComponent->GetOffsetMatrixTranspose());
+					}
+					else
+					{
+						simpleInstance->Render(entity->GetWorldTMTranspose());
+					}
+				}
+				else
+				{
+					if (meshComponent->IsBoundToBone())
+					{
+						instance->Render(
+							entity->GetWorldTM(),
+							entity->GetWorldTMTranspose() * meshComponent->GetOffsetMatrixTranspose(),
+							entity->GetWorldTMPrevTranspose(),
+							entity->GetWorldTMInvert(),
+							material->_properties.diffuseColour,
+							renderer->GetUVScale());
+					}
+					else
+					{
+						if (entity->HasA<InstancedStaticMeshComponent>())
+						{
+							instance->Render(
+								entity->GetWorldTM(),
+								entity->GetWorldTMTranspose(),
+								entity->GetWorldTMPrevTranspose(),
+								entity->GetWorldTMInvert(),
+								material->_properties.diffuseColour,
+								renderer->GetUVScale());
+						}
+						else
+						{
+							instance->Render(
+								entity->GetWorldTM(),
+								entity->GetWorldTMTranspose(),
+								entity->GetWorldTMPrevTranspose(),
+								entity->GetWorldTMInvert(),
+								material->_properties.diffuseColour,
+								renderer->GetUVScale());
+						}
+					}
+				}
 
-				++_drawCalls;
-				_drawnEntities += 1;// drawnInstances;
+				if (isNormalRender)
+					_drawnEntities += 1;
 			}
 
 			if (currentInstance && drawnInstances > 0)
 			{
-				RenderInstance(currentInstance, drawnInstances, renderer);
+				if (isNormalRender)
+					++_drawCalls;
+
+				if (isShadowMap)
+					RenderInstance((SimpleMeshInstance*)currentInstance, drawnInstances, renderer, rendered);
+				else
+					RenderInstance(currentInstance, drawnInstances, renderer, rendered);
 			}
 
 			
@@ -1167,12 +1269,17 @@ namespace HexEngine
 		std::vector<StaticMeshComponent*> entities;
 		GetComponents<StaticMeshComponent>(entities);
 
-		for (auto& set : _entities)
+		/*for (auto& set : entities)
 		{
 			for (auto& ent : set.second)
 			{
 				ent->DebugRender();
 			}
+		}*/
+
+		for (auto& ent : entities)
+		{
+			ent->DebugRender();
 		}
 
 		// Allow the game extension to render the debug info (if they want)
@@ -1180,6 +1287,8 @@ namespace HexEngine
 		{
 			extension->OnDebugRender();
 		}
+
+		g_pEnv->_chunkManager->DebugRender();
 
 		/*if (_hasLastHit)
 		{
@@ -1261,14 +1370,16 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		for (auto& ent : _entities)
+		return _entNameMap[name];
+
+		/*for (auto& ent : _entities)
 		{
 			for (auto& entp : ent.second)
 			{
 				if (entp->GetName() == name)
 					return entp;
 			}
-		}
+		}*/
 
 		return nullptr;
 	}
@@ -1375,7 +1486,7 @@ namespace HexEngine
 		}
 	}
 
-	void Scene::CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces)
+	void Scene::CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags)
 	{
 		numFaces = 0;
 
@@ -1387,6 +1498,14 @@ namespace HexEngine
 				auto mesh = smc->GetMesh();
 
 				if (!mesh)
+					continue;
+
+				auto entity = smc->GetEntity();
+
+				if (!entity)
+					continue;
+
+				if (entity->HasFlag(excludeFlags))
 					continue;
 
 				auto verts = mesh->GetVertices();
@@ -1404,7 +1523,7 @@ namespace HexEngine
 		}
 	}
 
-	void Scene::CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces)
+	void Scene::CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags)
 	{
 		numFaces = 0;
 
@@ -1418,6 +1537,14 @@ namespace HexEngine
 				auto mesh = smc->GetMesh();
 
 				if (!mesh)
+					continue;
+
+				auto entity = smc->GetEntity();
+
+				if (!entity)
+					continue;
+
+				if (entity->HasFlag(excludeFlags))
 					continue;
 
 				auto verts = mesh->GetVertices();

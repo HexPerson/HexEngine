@@ -21,7 +21,14 @@ namespace HexEditor
 		}
 
 		auto resourceTab = _tabs->AddTab(L"Resource");
+
+		_canvas.Create(size.x, size.y);
 		
+	}
+
+	Inspector::~Inspector()
+	{
+		_canvas.Destroy();
 	}
 
 	bool Inspector::IsInspectingEntity() const
@@ -50,6 +57,8 @@ namespace HexEditor
 			_inspecting = nullptr;
 
 			_entityName->SetValue(L"");
+
+			_canvas.Redraw();
 		}
 
 		return true;
@@ -63,6 +72,8 @@ namespace HexEditor
 			widget->DeleteMe();
 		}
 		_componentWidgets.clear();
+
+		_canvas.Redraw();
 	}
 
 	void Inspector::OnChangeEntityName(const std::wstring& name)
@@ -91,6 +102,8 @@ namespace HexEditor
 		if (_addComponentContextMenu)
 		{
 			_addComponentContextMenu->Disable();
+			_addComponentContextMenu->DeleteMe();
+			_addComponentContextMenu = nullptr;
 		}
 
 		_tabs->SetActiveTab(0);
@@ -115,7 +128,8 @@ namespace HexEditor
 			{
 				auto componentName = component->GetComponentName();
 
-				ComponentWidget* widget = new ComponentWidget(this, Point(5, y), Point(size.x, size.y), std::wstring(componentName.begin(), componentName.end()));
+
+				ComponentWidget* widget = new ComponentWidget(this, Point(5, y), Point(size.x, size.y), s2ws(componentName));
 
 				if (component->CreateWidget(widget) == false)
 				{
@@ -130,6 +144,8 @@ namespace HexEditor
 				y += widget->GetTotalHeight() + 10;
 			}
 		}
+
+		_canvas.Redraw();
 	}
 
 	void Inspector::InspectResource(const fs::path& path)
@@ -139,6 +155,8 @@ namespace HexEditor
 		ClearInspectorWidgets();
 
 		_inspecting = nullptr;
+
+		_canvas.Redraw();
 	}
 
 	bool Inspector::OnAddComponent(Button* button)
@@ -153,8 +171,7 @@ namespace HexEditor
 
 			_addComponentContextMenu = new ContextMenu(
 				_addComponentBtn,
-				Point(button->GetAbsolutePosition().x, button->GetAbsolutePosition().y + button->GetSize().y),
-				Point(-1, -1));
+				Point(button->GetPosition().x, /*button->GetPosition().y +*/ button->GetSize().y));
 
 			const auto& classes = g_pEnv->_classRegistry->GetAllClasses();
 
@@ -171,6 +188,8 @@ namespace HexEditor
 
 
 		_addComponentContextMenu->Enable();
+
+		_canvas.Redraw();
 
 		//_addComponentBtn->EnableInput(false);
 
@@ -205,7 +224,16 @@ namespace HexEditor
 	{
 		//renderer->SetDrawList(&_drawList);
 
-		Dock::Render(renderer, w, h);		
+		//if (_canvas.BeginDraw(renderer, w, h))
+		{
+			//Dock::Render(renderer, w, h);
+
+			renderer->FillQuad(_position.x, _position.y, _size.x, _size.y, renderer->_style.win_back);
+
+			
+		}
+
+		
 	}
 
 	void Inspector::InspectComponent(Point& pos, BaseComponent* component, GuiRenderer* renderer)
@@ -215,6 +243,16 @@ namespace HexEditor
 
 	void Inspector::PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
-		renderer->ListDraw(&_drawList);
+		//renderer->ListDraw(&_drawList);
+
+		/*if (_canvas.NeedsRedrawing())
+		{
+			_canvas.EndDraw(renderer);
+		}
+
+		_canvas.Present(
+			renderer,
+			GetAbsolutePosition().x, GetAbsolutePosition().y,
+			_size.x, _size.y);*/
 	}
 }

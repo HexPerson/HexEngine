@@ -26,6 +26,8 @@
 
 		input.position.w = 1.0f;
 
+		output.cullDistance = 0.5f;
+
 		output.position = mul(input.position, instance.world);
 		output.position = mul(output.position, g_viewMatrix);
 		output.position = mul(output.position, g_projectionMatrix);

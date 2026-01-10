@@ -92,7 +92,7 @@ namespace HexEngine
 
 		void MergeFrom(Scene* scene);
 
-		void DestroyEntity(Entity* entity);
+		void DestroyEntity(Entity* entity, bool broadcast = true);
 
 		void OnEntityAddComponent(Entity* entity, ComponentSignature previousSignature, BaseComponent* component);
 		void OnEntityRemoveComponent(Entity* entity, ComponentSignature previousSignature, BaseComponent* component);
@@ -107,6 +107,7 @@ namespace HexEngine
 
 		void Lock();
 		void Unlock();
+		bool TryLock();
 
 		void FlushPVS(Entity* entity, bool remove=false);
 		void ForceRebuildPVS();
@@ -138,8 +139,8 @@ namespace HexEngine
 		void SetSkySphere(Entity* skySphere);
 
 		void CalculateBounds(math::Vector3& min, math::Vector3& max);
-		void CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces);
-		void CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces);
+		void CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
+		void CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
 
 		const EntityMap& GetEntities() const;
 
@@ -200,6 +201,8 @@ namespace HexEngine
 		const std::wstring& GetName() const;
 		void SetName(const std::wstring& name);
 
+		bool DidAnyDrawnItemReflect() const { return _didAnyDrawnItemReflect; }
+
 	private:
 		void HandlePendingRemovals();
 		void HandlePendingAdditions();
@@ -215,6 +218,7 @@ namespace HexEngine
 
 		EntityMap _entities;
 		ComponentMap _components;
+		std::map<std::string, Entity*> _entNameMap;
 
 		std::set<Entity*> _pendingAdditions;
 		std::set<Entity*> _pendingRemovals;
@@ -245,6 +249,8 @@ namespace HexEngine
 		std::recursive_mutex _lock;
 
 		std::vector<MessageListener*> _auxMessageListeners;
+
+		bool _didAnyDrawnItemReflect = false;
 
 		//std::vector<TerrainGenerationParams> _terrainParams;
 	};

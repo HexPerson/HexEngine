@@ -27,6 +27,8 @@
 		
 		input.position.w = 1.0f;
 
+		
+
 		matrix worldMatrix, normalMatrix, worldPrev;
 
 		/*if ((g_objectFlags & OBJECT_FLAGS_HAS_ANIMATION) != 0)
@@ -43,13 +45,18 @@
 		}
 		else*/
 		{
-			worldMatrix = instance.world;//mul(instance.world, g_worldMatrix);
-			normalMatrix = instance.worldInverseTranspose;//mul(instance.worldInverseTranspose, g_worldMatrix);
-			worldPrev = instance.worldPrev;//mul(instance.worldPrev, g_worldMatrix);;
+			worldMatrix = mul(instance.world, g_worldMatrix);
+			normalMatrix = mul(instance.worldInverseTranspose, g_worldMatrix);
+			worldPrev = mul(instance.worldPrev, g_worldMatrix);
 		}
 
 		output.position = mul(input.position, worldMatrix);
 		output.positionWS = output.position;
+
+		if(g_cullDistance > 0.0f)
+		{
+			output.cullDistance = length(output.positionWS.xyz - g_eyePos.xyz) >= g_cullDistance ? -1.0f : 1.0f;
+		}
 
 		output.position = mul(output.position, g_viewProjectionMatrix);
 

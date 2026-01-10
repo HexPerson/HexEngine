@@ -11,6 +11,8 @@ namespace HexEditor
 	public:
 		Inspector(Element* parent, const Point& position, const Point& size);
 
+		virtual ~Inspector();
+
 		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 
 		void InspectEntity(Entity* entity);
@@ -37,6 +39,7 @@ namespace HexEditor
 		TabView* _tabs = nullptr;
 		ContextMenu* _addComponentContextMenu = nullptr;
 		std::vector<ComponentWidget*> _componentWidgets;
-		DrawList _drawList;
+		//DrawList _drawList;
+		//Canvas _canvas;
 	};
 }

@@ -13,6 +13,7 @@
 #include "../../Physics/PhysUtils.hpp"
 #include "../../Input/Console.hpp"
 #include "../../Input/CommandManager.hpp"
+#include "../../Math/easing.h"
 
 namespace HexEngine
 {
@@ -42,7 +43,7 @@ namespace HexEngine
 		{
 			math::Vector3 targetPosition = _lookAtTarget->GetPosition() + _targetOffset;
 
-			_thirdPersonPosition = targetPosition + (transform->GetForward() * _viewOffset.z) + (transform->GetRight() * _viewOffset.x) + (math::Vector3::Up * _viewOffset.y);
+			_thirdPersonPosition = targetPosition + (_lookAtTarget->GetForward() * _viewOffset.z) + (_lookAtTarget->GetRight() * _viewOffset.x) + (math::Vector3::Up * _viewOffset.y);
 
 			auto dirFromCameraToTarget = (_thirdPersonPosition - targetPosition);
 			float distance = dirFromCameraToTarget.Length();
@@ -89,14 +90,18 @@ namespace HexEngine
 			}
 #endif
 
-			if (g_pEnv->_timeManager->_currentTime - _lastMouseInputTime > 2.0f || _lastMouseInputTime == 0.0f)
+			if (g_pEnv->_timeManager->_currentTime - _lastMouseInputTime > 1.7f || _lastMouseInputTime == 0.0f)
 			{
+				if (_viewRestoreTime == 0.0f)
+				{
+					_viewRestoreTime = g_pEnv->_timeManager->_currentTime;
+				}
+
+				float viewRestoreDelta = std::clamp(g_pEnv->_timeManager->_currentTime - _viewRestoreTime, 0.0f, 1.0f);
+				const auto easingFunc = getEasingFunction(EaseInExpo);
 				float newTargetYaw = ToDegree(_lookAtTarget->GetYaw());
 				
-				newTargetYaw += 180.0f;
-
 				float currentYaw = camera->GetYaw();
-
 				float delta = newTargetYaw - currentYaw;
 
 				if (delta > 180.0f)
@@ -104,11 +109,11 @@ namespace HexEngine
 				else if (delta < -180.0f)
 					newTargetYaw += 360.0f;
 
-				camera->SetYaw(std::lerp(currentYaw, newTargetYaw, frameTime * _rotationSpringSpeed));
+				camera->SetYaw(std::lerp(currentYaw, newTargetYaw, frameTime * _rotationSpringSpeed * easingFunc(viewRestoreDelta)));
 
 				// pitch
 
-				float newTargetPitch = -10.0f;
+				float newTargetPitch = _targetPitch;
 
 				float currentPitch = camera->GetPitch();
 
@@ -119,7 +124,7 @@ namespace HexEngine
 				else if (delta < -180.0f)
 					newTargetPitch += 360.0f;
 
-				camera->SetPitch(std::lerp(currentPitch, newTargetPitch, frameTime * _rotationSpringSpeed));
+				camera->SetPitch(std::lerp(currentPitch, newTargetPitch, frameTime * _rotationSpringSpeed * easingFunc(viewRestoreDelta)));
 			}
 			else
 			{
@@ -176,6 +181,11 @@ namespace HexEngine
 		_targetOffset = offset;
 	}
 
+	void ThirdPersonCameraController::SetTargetPitch(float pitch)
+	{
+		_targetPitch = pitch;
+	}
+
 	bool ThirdPersonCameraController::OnInputEvent(InputEvent event, InputData* data)
 	{
 		if (event == InputEvent::MouseMove && data->MouseMove.absolute == false)
@@ -187,12 +197,14 @@ namespace HexEngine
 				camera->SetYaw(camera->GetYaw() - data->MouseMove.x);
 
 				_lastMouseInputTime = g_pEnv->_timeManager->_currentTime;
+				_viewRestoreTime = 0.0f;
 			}
 			if (data->MouseMove.y != 0.0f)
 			{
 				camera->SetPitch(camera->GetPitch() - data->MouseMove.y);
 
 				_lastMouseInputTime = g_pEnv->_timeManager->_currentTime;
+				_viewRestoreTime = 0.0f;
 			}
 		}
 

@@ -20,5 +20,6 @@ namespace HexEditor
 		ComponentWidget* _shadowSettings = nullptr;
 		ComponentWidget* _colouring = nullptr;
 		ComponentWidget* _fog = nullptr;
+		ComponentWidget* _ocean = nullptr;
 	};
 }

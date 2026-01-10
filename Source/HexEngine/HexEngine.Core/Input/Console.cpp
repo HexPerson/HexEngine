@@ -26,7 +26,7 @@ namespace HexEngine
 		_font = dynamic_pointer_cast<IFontResource>(g_pEnv->_resourceSystem->LoadResource("EngineData.Fonts/Liberation Mono/LiberationMono-Regular.ttf", &fontOpts));
 
 		// Bind the console to the default key
-		g_pEnv->_commandManager->RegisterCommand(&cmd_ConsoleToggle);
+		//g_pEnv->_commandManager->RegisterCommand(&cmd_ConsoleToggle);
 		g_pEnv->_commandManager->CreateBind(VK_OEM_8, "ConsoleToggle");
 
 		uint32_t width, height;
@@ -54,9 +54,9 @@ namespace HexEngine
 
 		height >>= 1;
 
-		//if (_canvas.BeginDraw(renderer, width, height /*<< 1*/))
+		if (_canvas.BeginDraw(renderer, width, height /*<< 1*/))
 		{
-			renderer->PushFillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 190)));
+			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 190)));
 			renderer->Line(0, height, width, height, math::Color(HEX_RGBA_TO_FLOAT4(5, 5, 5, 255)));
 
 			std::wstring input = L"] ";
@@ -72,12 +72,12 @@ namespace HexEngine
 				for (auto var : vars)
 				{
 					auto txt = std::wstring(var->_name.begin(), var->_name.end());
-					renderer->PushPrintText(_font.get(), ConsoleFontSize, 15, promptY, math::Color(1, 1, 1, 1), 0, txt);
+					renderer->PrintText(_font.get(), ConsoleFontSize, 15, promptY, math::Color(1, 1, 1, 1), 0, txt);
 					promptY += ConsoleFontSize;
 				}
 			}
 
-			renderer->PushPrintText(_font.get(), ConsoleFontSize, 5, height - ConsoleFontSize, math::Color(1, 1, 1, 1), 0, input);
+			renderer->PrintText(_font.get(), ConsoleFontSize, 5, height - ConsoleFontSize, math::Color(1, 1, 1, 1), 0, input);
 
 			static const math::Color colourTable[] = {
 				math::Color(HEX_RGBA_TO_FLOAT4(237, 28, 36, 255)),		// r
@@ -103,7 +103,7 @@ namespace HexEngine
 						// render the un-formatted part first
 						if (p > 0)
 						{
-							renderer->PushPrintText(_font.get(), ConsoleFontSize, 5, y, col, 0, wline.substr(0, p));
+							renderer->PrintText(_font.get(), ConsoleFontSize, 5, y, col, 0, wline.substr(0, p));
 							wline.erase(p);
 							p = 0;
 
@@ -123,7 +123,7 @@ namespace HexEngine
 						if (auto p2 = wline.find_first_of('^'); p2 != wline.npos)
 						{
 							auto sub = wline.substr(0, p2);
-							renderer->PushPrintText(_font.get(), ConsoleFontSize, x, y, col, 0, sub);
+							renderer->PrintText(_font.get(), ConsoleFontSize, x, y, col, 0, sub);
 							_font->MeasureText(ConsoleFontSize, sub, tw, th);
 
 							wline.erase(0, p2);
@@ -132,14 +132,14 @@ namespace HexEngine
 						}
 						else
 						{
-							renderer->PushPrintText(_font.get(), ConsoleFontSize, x, y, col, 0, wline);
+							renderer->PrintText(_font.get(), ConsoleFontSize, x, y, col, 0, wline);
 							x = 5;
 							break;
 						}
 					}
 					else
 					{
-						renderer->PushPrintText(_font.get(), ConsoleFontSize, 5, y, col, 0, wline);
+						renderer->PrintText(_font.get(), ConsoleFontSize, 5, y, col, 0, wline);
 						x = 5;
 						break;
 					}

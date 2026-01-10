@@ -319,7 +319,7 @@ int main(int argc, const char* argv[])
 	const auto output = opts.count("output") > 0 ? opts["output"].as<std::string>() : "";
 	const auto includePath = opts["path"].as<std::string>();
 
-	printf("ShaderCompiler :: Compiling shader %s to target %s\n", input.c_str(), target.c_str());
+	printf("ShaderCompiler :: Compiling shader %s to target %s\nInclude path = %s\n", input.c_str(), target.c_str(), includePath.c_str());
 
 	auto path = fs::path(input);
 
@@ -340,7 +340,7 @@ int main(int argc, const char* argv[])
 	}
 
 
-	printf("ShaderCompiler :: Include path: %s\n", includePath.c_str());
+	//printf("ShaderCompiler :: Include path: %s\n", includePath.c_str());
 	compiler->SetIncludePath(includePath);
 
 	HexEngine::ShaderFileFormat shader = {};

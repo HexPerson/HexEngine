@@ -20,12 +20,28 @@
 		//float4 boneWeights	: BLENDWEIGHT;
 	};
 
+	struct SimpleMeshVertexInput
+	{
+		float4 position 	: POSITION;
+		float2 texcoord		: TEXCOORD0;	
+	};
+
 	struct AnimatedMeshVertexInput
 	{
 		float4 position 	: POSITION;
 		float3 normal 		: NORMAL;
 		float3 tangent 		: TANGENT;
 		float3 binormal 	: BINORMAL;
+		float2 texcoord		: TEXCOORD0;
+
+		// Bone stuff
+		float4 boneIds		: BLENDINDICES;
+		float4 boneWeights	: BLENDWEIGHT;
+	};
+
+	struct SimpleAnimatedMeshVertexInput
+	{
+		float4 position 	: POSITION;
 		float2 texcoord		: TEXCOORD0;
 
 		// Bone stuff
@@ -42,6 +58,11 @@
 		float4 colour : INSTANCECOLOR;
 		float2 uvScale : UVSCALE;
 		//uint instanceID : SV_INSTANCEID;
+	};
+
+	struct SimpleMeshInstanceData
+	{
+		matrix world : WORLD;
 	};
 	
 	// This is the structure sent to the pixel shader from the vertex shader
@@ -65,6 +86,13 @@
 		float4 currentPositionUnjittered : TEXCOORD9;
 
 		uint instanceID : SV_INSTANCEID;
+		float cullDistance : SV_CullDistance;
+	};
+
+	struct SimpleMeshPixelInput
+	{
+		float4 position : SV_POSITION;
+		float2 texcoord : TEXCOORD0;
 	};
 
 #endif

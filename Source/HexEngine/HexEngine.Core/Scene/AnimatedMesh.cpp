@@ -117,11 +117,30 @@ namespace HexEngine
 		_transformedVertices.push_back(vertex);
 
 		Mesh::AddVertex(vertex);
+
+		SimpleAnimatedMeshVertex simpleVertex;
+		simpleVertex._position = vertex._position;
+		simpleVertex._texcoord = vertex._texcoord;
+		simpleVertex._boneIds = vertex._boneIds;
+		simpleVertex._boneWeights = vertex._boneWeights;
+
+		_simpleVertices.push_back(simpleVertex);
 	}
 
 	void AnimatedMesh::AddVertices(const std::vector<AnimatedMeshVertex>& vertex)
 	{
 		_vertices.insert(_vertices.end(), vertex.begin(), vertex.end());
+
+		for (auto& vert : vertex)
+		{
+			SimpleAnimatedMeshVertex simpleVertex;
+			simpleVertex._position = vert._position;
+			simpleVertex._texcoord = vert._texcoord;
+			simpleVertex._boneIds = vert._boneIds;
+			simpleVertex._boneWeights = vert._boneWeights;
+
+			_simpleVertices.push_back(simpleVertex);
+		}
 	}
 
 	bool AnimatedMesh::CreateBuffers()
@@ -142,6 +161,21 @@ namespace HexEngine
 		if (!_vertexBuffer)
 		{
 			return false;
+		}
+
+		if (_simpleVertices.size() > 0)
+		{
+			_simpleVertexBuffer = g_pEnv->_graphicsDevice->CreateVertexBuffer(
+				(int32_t)_vertices.size() * sizeof(SimpleAnimatedMeshVertex),
+				sizeof(SimpleAnimatedMeshVertex),
+				D3D11_USAGE_DEFAULT,
+				0,
+				_simpleVertices.data());
+
+			if (!_simpleVertexBuffer)
+			{
+				return false;
+			}
 		}
 
 		_indexBuffer = g_pEnv->_graphicsDevice->CreateIndexBuffer(

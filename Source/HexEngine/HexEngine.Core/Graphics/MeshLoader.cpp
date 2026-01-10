@@ -29,6 +29,8 @@ namespace HexEngine
 			return nullptr;
 		}
 
+		LOG_INFO("Loading mesh '%s'", absolutePath.filename().string().c_str());
+
 		std::shared_ptr<Mesh> mesh;
 
 		bool hasAnimations = file.Read<bool>();
@@ -241,7 +243,7 @@ namespace HexEngine
 
 	void MeshLoader::SaveResource(IResource* resource, const fs::path& path)
 	{
-		DiskFile file(path, std::ios::out | std::ios::binary | std::ios::trunc);
+		DiskFile file(path, std::ios::out | std::ios::binary | std::ios::trunc, DiskFileOptions::CreateSubDirs);
 
 		if (file.Open() == false)
 		{

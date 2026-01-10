@@ -28,7 +28,7 @@ namespace HexEngine
 	HVar r_shadowFilterMaxSize("r_shadowFilterMaxSize", "The maximum size of the shadow filter", 0.21f, 0.0f, 10.0f);
 	HVar r_shadowBiasMultiplier("r_shadowBiasMultiplier", "The bias multiplier to use when calculating normal offset", 0.0002f, 0.0f, 1.0f);
 	HVar r_shadowCascadeBlendRange("r_shadowCascadeBlendRange", "The distance to use for blending shadow cascades together", 10.0f, 1.0f, 1000.0f);
-	HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
+	HEX_API HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
 	HVar r_waterResolution("r_waterResolution", "The resolution multiplier at which to render water, a value of 1.0f is full resolution", 1.0f, 0.1f, 1.0f);
 	HVar r_bloomLuminanceThreshold("r_bloomLuminanceThreshold", "The minimum amount of luminance for a material to bloom", 0.9999999f, 0.0f, 1.0f);
 	HVar r_fxaa("r_fxaa", "Whether or not to use the FXAA anti-aliasing method", 1, 0, 1);
@@ -64,44 +64,7 @@ namespace HexEngine
 		uint32_t width, height;
 		g_pEnv->_graphicsDevice->GetBackBufferDimensions(width, height);
 
-		CreateRenderTargets(width, height);
-
-		g_pEnv->_commandManager->RegisterVar(&env_zenithExponent);
-		g_pEnv->_commandManager->RegisterVar(&env_anisotropicIntensity);
-		g_pEnv->_commandManager->RegisterVar(&env_density);
-		g_pEnv->_commandManager->RegisterVar(&env_volumetricLighting);
-		g_pEnv->_commandManager->RegisterVar(&env_volumetricScattering);
-		g_pEnv->_commandManager->RegisterVar(&env_volumetricStrength);
-		g_pEnv->_commandManager->RegisterVar(&env_volumetricSteps);
-		g_pEnv->_commandManager->RegisterVar(&env_waterNormalInfluence);
-		g_pEnv->_commandManager->RegisterVar(&env_volumetricStepIncrement);
-		g_pEnv->_commandManager->RegisterVar(&r_gamma);
-		g_pEnv->_commandManager->RegisterVar(&r_shadowCascades);
-		g_pEnv->_commandManager->RegisterVar(&r_shadowCascadeRange);
-		g_pEnv->_commandManager->RegisterVar(&r_penumbraFilterMaxSize);
-		g_pEnv->_commandManager->RegisterVar(&r_shadowFilterMaxSize);
-		g_pEnv->_commandManager->RegisterVar(&r_shadowBiasMultiplier);
-		g_pEnv->_commandManager->RegisterVar(&r_shadowCascadeBlendRange);
-		g_pEnv->_commandManager->RegisterVar(&r_debugScene);
-		g_pEnv->_commandManager->RegisterVar(&r_waterResolution);
-		g_pEnv->_commandManager->RegisterVar(&r_bloomLuminanceThreshold);
-		g_pEnv->_commandManager->RegisterVar(&r_fxaa);
-		g_pEnv->_commandManager->RegisterVar(&r_fog);
-		g_pEnv->_commandManager->RegisterVar(&r_lodPartition);
-		g_pEnv->_commandManager->RegisterVar(&r_frustumSphereBoundsMultiplier);
-		g_pEnv->_commandManager->RegisterVar(&r_shadowMinimumLodThreshold);
-		g_pEnv->_commandManager->RegisterVar(&r_taa);
-		g_pEnv->_commandManager->RegisterVar(&r_shadowNearClip);
-		g_pEnv->_commandManager->RegisterVar(&r_colourFilter);
-		g_pEnv->_commandManager->RegisterVar(&r_contrast);
-		g_pEnv->_commandManager->RegisterVar(&r_exposure);
-		g_pEnv->_commandManager->RegisterVar(&r_hueShift);
-		g_pEnv->_commandManager->RegisterVar(&r_saturation);
-		g_pEnv->_commandManager->RegisterVar(&r_interpolate);
-		g_pEnv->_commandManager->RegisterVar(&r_ssr);
-		g_pEnv->_commandManager->RegisterVar(&r_fogDensity);
-
-		
+		CreateRenderTargets(width, height);		
 	}
 
 	void SceneRenderer::Resize(int32_t width, int32_t height)
@@ -151,6 +114,7 @@ namespace HexEngine
 		SAFE_DELETE(_ssrTexture);
 		SAFE_DELETE(_ssrHitInfo);
 		SAFE_DELETE(_dlssTarget);
+		SAFE_DELETE(_waterRT);
 		
 		//SAFE_DELETE(_waterDSV);
 
@@ -177,6 +141,7 @@ namespace HexEngine
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
 		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
+		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
 
 		//_volumetricBlur = new BlurEffect(_volumetricLightingBuffer, BlurType::Gaussian, 2);
 		//_waterBlur = new BlurEffect(_waterAccumulationRT, BlurType::Gaussian, 2);
@@ -219,6 +184,8 @@ namespace HexEngine
 			LOG_CRIT("Failed to create composition render target");
 			return;
 		}
+
+		_waterRT = g_pEnv->_graphicsDevice->CreateTexture(_beautyRT);
 
 		_particleRT = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
@@ -482,7 +449,9 @@ namespace HexEngine
 		// Clear the composition RT
 		_beautyRT->ClearRenderTargetView(math::Color(0, 0, 0, 1));
 		//_currentCamera->GetFullScreenRenderTarget()->ClearRenderTargetView(math::Color(0, 0, 0, 1));
-		_currentCamera->GetRenderTarget()->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+
+		if(auto rt = _currentCamera->GetRenderTarget(); rt != nullptr)
+			rt->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
 		// Set up the Gbuffer in preparation for rendering
 		//
@@ -519,12 +488,12 @@ namespace HexEngine
 		if(HEX_HASFLAG(flags, SceneFlags::PostProcessingEnabled))
 			SetStreamlineConstants();	
 
-		_gbuffer.GetDiffuse()->CopyTo(_beautyRT);
-
-		RenderTransparent();
+		_gbuffer.GetDiffuse()->CopyTo(_beautyRT);		
 
 		//RenderWater();
 		RenderPostProcessing(flags);
+
+		//RenderTransparent();
 
 		if (r_debugScene._val.i32 == 1)
 		{
@@ -714,7 +683,7 @@ namespace HexEngine
 			bufferData._bloom.viewportScale = 4.0f;
 
 			bufferData._time = g_pEnv->_timeManager->GetTime();
-			bufferData._frame = g_pEnv->_timeManager->_frameCount;
+			bufferData._frame = (uint32_t)g_pEnv->_timeManager->_frameCount;
 			bufferData._gamma = r_gamma._val.f32;			
 
 			// ocean
@@ -799,10 +768,10 @@ namespace HexEngine
 				bufferData._shadowConfig.penumbraFilterMaxSize = r_penumbraFilterMaxSize._val.f32 * shadowVarsMultiplier;
 				bufferData._shadowConfig.shadowFilterMaxSize = r_shadowFilterMaxSize._val.f32 * shadowVarsMultiplier;
 				bufferData._shadowConfig.biasMultiplier = r_shadowBiasMultiplier._val.f32;
-				bufferData._shadowConfig.samples = numSamples;
+				bufferData._shadowConfig.samples = (float)numSamples;
 				bufferData._shadowConfig.cascadeBlendRange = r_shadowCascadeBlendRange._val.f32;
 
-				bufferData._shadowCasterLightDir = shadowCaster->GetEntity()->GetComponent<Transform>()->GetForward();
+				bufferData._shadowCasterLightDir = shadowCaster->GetEntity()->GetWorldTM().Forward();
 				bufferData._lightRadius = shadowCaster->GetRadius();
 				bufferData._spotLightConeSize = (coneSize);
 				bufferData._shadowConfig.shadowMapSize = shadowMapSize;
@@ -843,7 +812,7 @@ namespace HexEngine
 
 		_currentScene->RenderEntities(
 			_currentCamera->GetPVS(),
-			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry),
+			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass),
 			MeshRenderFlags::MeshRenderNormal);
 
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
@@ -898,8 +867,8 @@ namespace HexEngine
 					(lightFlags & LightFlags::RebuildShadowMatrices | LightFlags::RebuildPVS) == (LightFlags::RebuildShadowMatrices | LightFlags::RebuildPVS)))
 					continue;*/
 
-				if ((g_pEnv->_timeManager->_frameCount + i) % 2 == 0)
-					continue;
+				//if ((g_pEnv->_timeManager->_frameCount + i) % 2 == 0)
+				//	continue;
 
 				// Set as the current render target
 				//
@@ -1216,8 +1185,11 @@ namespace HexEngine
 			RenderFog();
 			//RenderWater();
 			RenderVolumetricLighting();		
+			//RenderTransparent();
 
-			RenderSSR();
+			// don't bother doing this if we don't need to, its expensive!
+			if(_currentScene->DidAnyDrawnItemReflect())
+				RenderSSR();
 
 			if (r_taa._val.b)
 			{
@@ -1524,7 +1496,8 @@ namespace HexEngine
 			instance->Render(
 				_sphereEntity->GetWorldTM(),
 				_sphereEntity->GetWorldTMTranspose()/*lightMatrix.Transpose()*/,
-				_sphereEntity->GetWorldTMPrev().Transpose(),
+				_sphereEntity->GetWorldTMPrevTranspose(),
+				_sphereEntity->GetWorldTMInvert(),
 				diffuse,
 				math::Vector2(lightRad, light->GetLightStrength()));
 
@@ -1539,11 +1512,11 @@ namespace HexEngine
 
 			//g_pEnv->_graphicsDevice->SetTexture2D(_beautyRT);
 
-			D3DPERF_BeginEvent(0xFFFFFFFF, L"Begin PointLight");
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin PointLight");
 
 			g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numPointLightsRendered);
 
-			D3DPERF_EndEvent();
+			GFX_PERF_END();
 		}
 
 		_pointLightBuffer->BlendTo_Additive(_lightAccumulationBuffer);
@@ -1568,7 +1541,7 @@ namespace HexEngine
 			SpotLight* light = (SpotLight*)comp;
 
 			auto lightEnt = light->GetEntity();
-			const auto& lightPos = lightEnt->GetPosition();
+			const auto& lightPos = lightEnt->GetWorldTM().Translation();
 			const float lightRad = light->GetRadius();
 
 			if ((cameraPos - lightPos).Length() <= lightRad)
@@ -1608,7 +1581,7 @@ namespace HexEngine
 						continue;
 
 					auto lightEnt = light->GetEntity();
-					const auto& lightPos = lightEnt->GetPosition();
+					const auto& lightPos = lightEnt->GetWorldTM().Translation();
 					const float lightRad = light->GetRadius();
 
 					SetupPerShadowCasterBuffer(light, true, 0, numPointLightsRendered, 2, light->GetConeSize());
@@ -1641,12 +1614,13 @@ namespace HexEngine
 
 					g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
 	
-					const auto& lightForward = lightEnt->GetComponent<Transform>()->GetForward();
+					const auto& lightForward = lightEnt->GetWorldTM().Forward();// GetComponent<Transform>()->GetForward();
 					const math::Matrix lightMatrix = math::Matrix::CreateScale(lightRad) * math::Matrix::CreateWorld(lightPos, lightForward, math::Vector3::Up);
 					instance->Render(
 						_sphereEntity->GetWorldTM(),
 						_sphereEntity->GetWorldTMTranspose()/*lightMatrix.Transpose()*/,
-						_sphereEntity->GetWorldTMPrev().Transpose(),
+						_sphereEntity->GetWorldTMPrevTranspose(),
+						_sphereEntity->GetWorldTMInvert(),
 						diffuse,
 						math::Vector2(lightRad, light->GetLightStrength()));
 
@@ -1657,11 +1631,11 @@ namespace HexEngine
 
 				if (numPointLightsRendered > 0)
 				{
-					D3DPERF_BeginEvent(0xFFFFFFFF, L"Begin SpotLight");
+					GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin SpotLight");
 
 					g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numPointLightsRendered);
 
-					D3DPERF_EndEvent();
+					GFX_PERF_END();
 				}
 
 				
@@ -1680,14 +1654,23 @@ namespace HexEngine
 	{
 		PROFILE();
 
-		g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
+		_waterRT->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+		g_pEnv->_graphicsDevice->SetRenderTarget(_waterRT, _gbuffer.GetDepthBuffer());
 
 		_currentScene->RenderEntities(
 			_currentCamera->GetPVS(),
 			LAYERMASK(Layer::StaticGeometry),
 			MeshRenderFlags::MeshRenderTransparency);
 
-		//_beautyRT->CopyTo(_gbuffer.GetDiffuse());
+		if (auto guiRenderer = g_pEnv->_uiManager->GetRenderer(); guiRenderer != nullptr)
+		{
+			guiRenderer->StartFrame();
+
+			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
+			guiRenderer->FullScreenTexturedQuad(_waterRT, _waterBlitEffect.get());
+
+			guiRenderer->EndFrame();
+		}
 
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
 	}
@@ -1914,5 +1897,10 @@ namespace HexEngine
 	const ShadowMap* SceneRenderer::GetCurrentShadowMap()
 	{
 		return _currentShadowMapForComposition;
+	}
+
+	ITexture2D* SceneRenderer::GetBeautyTexture() const
+	{
+		return _beautyRT;
 	}
 }

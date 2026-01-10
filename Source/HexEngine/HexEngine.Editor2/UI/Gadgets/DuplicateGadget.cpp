@@ -15,7 +15,7 @@ namespace HexEditor
 		g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 		auto inspector = g_pUIManager->GetInspector();
-		auto canvas = g_pUIManager->GetCanvas();
+		auto canvas = g_pUIManager->GetSceneView();
 		auto ent = inspector->GetInspectingEntity();
 
 		if (!ent)

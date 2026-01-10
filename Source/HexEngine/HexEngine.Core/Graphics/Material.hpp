@@ -24,6 +24,12 @@ namespace HexEngine
 		Count
 	};
 
+	enum class MaterialFormat
+	{
+		None,
+		ORM
+	};
+
 	struct MaterialProperties
 	{
 		MaterialProperties() :
@@ -145,10 +151,14 @@ namespace HexEngine
 		void				SetBlendState(BlendState state);
 		void				SetCullMode(CullingMode mode);
 		void				SetDepthState(DepthBufferState state);
+		void				SetFormat(MaterialFormat format);
+		void				SetCullDistance(float distance);
 
 		BlendState			GetBlendState() const;
 		CullingMode			GetCullMode() const;
 		DepthBufferState	GetDepthState() const;
+		MaterialFormat		GetFormat() const;
+		float				GetCullDistance() const;
 
 		void		SaveRenderState();
 		void		RestoreRenderState();
@@ -158,6 +168,8 @@ namespace HexEngine
 
 		void Lock();
 		void Unlock();
+
+		bool DoesHaveAnyReflectivity();
 
 	public:
 		MaterialProperties _properties;
@@ -174,10 +186,12 @@ namespace HexEngine
 		BlendState _blendState = BlendState::Opaque;
 		CullingMode _cullMode = CullingMode::BackFace;
 		DepthBufferState _depthState = DepthBufferState::DepthDefault;
+		float _cullDistance = 0.0f;
 
 		BlendState _previousBlendState = BlendState::Opaque;
 		CullingMode _previousCullMode = CullingMode::BackFace;
 		DepthBufferState _previousDepthState = DepthBufferState::DepthDefault;
+		MaterialFormat _format = MaterialFormat::None;
 
 		std::map<std::string, std::string> _soundTags;
 

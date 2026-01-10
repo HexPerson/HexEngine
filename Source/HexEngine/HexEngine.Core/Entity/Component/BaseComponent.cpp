@@ -31,4 +31,10 @@ namespace HexEngine
 			}
 		}
 	}
+
+	void BaseComponent::WaitForDeserialize()
+	{
+		while (_serializationState == SerializationState::Deserializing)
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+	}
 }

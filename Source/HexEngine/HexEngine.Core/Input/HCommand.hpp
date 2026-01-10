@@ -69,19 +69,16 @@ namespace HexEngine
 	class HEX_API HCommand
 	{
 	public:
-		//HCommand(const char* name, CommandFunc func);
-
-		HCommand(const char* name, CommandFunc func)
-		{
-			_name = name;
-			_func = func;
-		}
+		HCommand(const char* name, CommandFunc func);
 
 	public:
 		std::string _name;
-		//HCommand* _next;
+		HCommand* _next;
 		CommandFunc _func;
 	};
+
+	extern HEX_API HCommand* g_commands;
+	extern HEX_API uint32_t g_numCommands;
 
 #define HEX_COMMAND(funcname)\
 void funcname##_fn(CommandArgs* args, bool pressed, void* param);\

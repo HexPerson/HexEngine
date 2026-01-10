@@ -132,7 +132,7 @@ namespace HexEditor
 
 		if (_assetNameToEdit && event == InputEvent::Char)
 		{
-			if (data->Char.ch == VK_BACK)
+			if (data->Char.ch == VK_BACK && _editingAssetTempName.size() > 0)
 				_editingAssetTempName.pop_back();
 			else if (data->Char.ch == VK_RETURN)
 			{
@@ -240,8 +240,11 @@ namespace HexEditor
 				}
 				else if (data->MouseDown.button == VK_RBUTTON && IsMouseOver(true))
 				{
-					if(_contextMenu)
+					if (_contextMenu)
+					{
 						_contextMenu->DeleteMe();
+						_contextMenu = nullptr;
+					}
 
 					if (IsMouseOver(true))
 					{
@@ -253,16 +256,25 @@ namespace HexEditor
 						p.x -= 10;
 						p.y -= 10;
 
-						_contextMenu = new ContextMenu(this, p);
+						if (_hoveredAsset != nullptr)
+						{
+							_contextMenu = new ContextMenu(this, p);
 
-						_contextMenu->AddItem(new ContextItem(L"Select All", std::bind(&Explorer::SelectAll, this)));
+							_contextMenu->AddItem(new ContextItem(L"Set Material", std::bind(&Explorer::SetMassMaterial, this)));
+						}
+						else
+						{
+							_contextMenu = new ContextMenu(this, p);
 
-						ContextItem* createNewItem = new ContextItem(L"Create new...", nullptr);
+							_contextMenu->AddItem(new ContextItem(L"Select All", std::bind(&Explorer::SelectAll, this)));
 
-						_contextMenu->AddItem(createNewItem);
-						auto newRoot = _contextMenu->CreateSubMenu(createNewItem);
+							ContextItem* createNewItem = new ContextItem(L"Create new...", nullptr);
 
-						_contextMenu->AddItem(new ContextItem(L"Material", std::bind(&Explorer::CreateNewMaterial, this, _currentlyBrowsedFolder)), newRoot);
+							_contextMenu->AddItem(createNewItem);
+							auto newRoot = _contextMenu->CreateSubMenu(createNewItem);
+
+							_contextMenu->AddItem(new ContextItem(L"Material", std::bind(&Explorer::CreateNewMaterial, this, _currentlyBrowsedFolder)), newRoot);
+						}
 					}
 				}
 			}
@@ -308,6 +320,18 @@ namespace HexEditor
 				{
 					_draggingAsset = _hoveredAsset;
 				}
+				else if (_draggingAsset != nullptr)
+				{
+					if (g_pUIManager->GetSceneView()->IsMouseOver())
+					{
+						bool a = false;
+					}
+				}
+
+				if (IsMouseOver(true))
+				{
+					_canvas.Redraw();
+				}
 			}
 			else if (event == InputEvent::MouseWheel)
 			{
@@ -315,6 +339,8 @@ namespace HexEditor
 
 				if (_scrollOffset > 0)
 					_scrollOffset = 0;
+
+				_canvas.Redraw();
 			}
 		}
 		else
@@ -344,10 +370,43 @@ namespace HexEditor
 		return false;
 	}
 
+	void Explorer::SetMassMaterial()
+	{
+		if (_contextMenu)
+		{
+			_contextMenu->DeleteMe();
+			_contextMenu = nullptr;
+		}
+
+		//std::thread doit([this]() {
+			for (auto& asset : _assetsInView)
+			{
+				if (asset.selected)
+				{
+					if (asset.path.extension() == ".hmesh")
+					{
+						auto mesh = Mesh::Create(asset.path);
+						mesh->SetMaterial(Material::Create("GameData.Materials/Main.hmat"));
+						mesh->Save();
+
+						g_pEnv->_iconService->RemoveIcon(asset.path);
+
+						SAFE_DELETE(asset.generatedIcon);
+					}
+				}
+			}
+			//});
+
+		//doit.detach();
+	}
+
 	void Explorer::SelectAll()
 	{
 		if (_contextMenu)
+		{
 			_contextMenu->DeleteMe();
+			_contextMenu = nullptr;
+		}
 
 		for (auto& asset : _assetsInView)
 		{
@@ -386,6 +445,8 @@ namespace HexEditor
 				auto mesh = dynamic_pointer_cast<Mesh>(resource);
 
 				meshRenderer->SetMesh(mesh);
+
+				entity->GetComponent<Transform>()->SetScale(math::Vector3(10.0f));
 
 				if (mesh->HasAnimations())
 				{
@@ -431,6 +492,8 @@ namespace HexEditor
 	void Explorer::UpdateFolderView()
 	{
 		g_pEnv->_sceneManager->GetCurrentScene()->Lock();
+
+		_canvas.Redraw();
 
 		/*{
 			auto rootPath = new ListNode(_folderView, L"Game Data", { g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open, g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed }); 
@@ -563,6 +626,8 @@ namespace HexEditor
 			SAFE_DELETE(asset.icon);
 		}
 		_assetsInView.clear();
+
+		_canvas.Redraw();
 
 		// asset packages need to be handled separately
 		//
@@ -714,158 +779,153 @@ namespace HexEditor
 	{
 		const int32_t IconSize = 80;
 
-		if (_assetsInView.size() > 0)
+		if (_canvas.BeginDraw(renderer, w, h))
 		{
-			//_drawList.Clear();
-
-			int32_t x = _position.x + _size.y + 20;
-			int32_t y = _position.y + 50;
-
-			_hoveredAsset = nullptr;
-
-			std::wstring fullNameToDraw;
-			int32_t hoverX, hoverY;
-
-			RECT scissor;
-			scissor.left = x;
-			scissor.top = y;
-			scissor.right = _size.x;
-			scissor.bottom = y + _size.y;
-			g_pEnv->_graphicsDevice->SetScissorRect(scissor);
-
-			y += _scrollOffset;
-
-
-			for (auto& asset : _assetsInView)
+			if (_assetsInView.size() > 0)
 			{
-				bool hovering = false;
-				bool drawFullName = false;
+				//_drawList.Clear();
 
-				if (y >= _position.y + 30 - IconSize && y <= _position.y + _size.y)
+				int32_t x = _position.x + _size.y + 20;
+				int32_t y = _position.y + 50;
+
+				_hoveredAsset = nullptr;
+
+				std::wstring fullNameToDraw;
+				int32_t hoverX, hoverY;
+
+				RECT scissor;
+				scissor.left = x;
+				scissor.top = y;
+				scissor.right = _size.x;
+				scissor.bottom = y + _size.y;
+				g_pEnv->_graphicsDevice->SetScissorRect(scissor);
+
+				y += _scrollOffset;
+
+
+				for (auto& asset : _assetsInView)
 				{
-					if (!_draggingAsset && (IsMouseOver(x, y, IconSize, IconSize) || asset.selected ))
+					bool hovering = false;
+					bool drawFullName = false;
+
+					if (y >= _position.y + 30 - IconSize && y <= _position.y + _size.y)
 					{
-						hovering = true;
-						renderer->PushFillQuad(x - 3, y - 3, IconSize + 6, IconSize + 20, math::Color(HEX_RGBA_TO_FLOAT4(23, 23, 23, 255)));
-						_hoveredAsset = &asset;
-
-						if (!asset.selected)
+						if (!_draggingAsset && (IsMouseOver(x, y, IconSize, IconSize) || asset.selected))
 						{
-							if (_hoveredAsset != _lastHoveredAsset)
+							hovering = true;
+							renderer->FillQuad(x - 3, y - 3, IconSize + 6, IconSize + 20, math::Color(HEX_RGBA_TO_FLOAT4(23, 23, 23, 255)));
+							_hoveredAsset = &asset;
+
+							if (!asset.selected)
 							{
-								_hoverStartTime = g_pEnv->_timeManager->_currentTime;
-								_lastHoveredAsset = _hoveredAsset;
+								if (_hoveredAsset != _lastHoveredAsset)
+								{
+									_hoverStartTime = g_pEnv->_timeManager->_currentTime;
+									_lastHoveredAsset = _hoveredAsset;
+								}
+
+								if (_hoverStartTime != 0.0f && g_pEnv->_timeManager->_currentTime - _hoverStartTime > 0.1f)
+								{
+									drawFullName = true;
+								}
+							}
+						}
+
+						if (!asset.generatedIcon)
+						{
+							if (auto generatedIcon = g_pEnv->_iconService->GetIcon(asset.path); generatedIcon != nullptr)
+							{
+								//renderer->PushFillTexturedQuad(&_drawList, generatedIcon, x, y, IconSize, IconSize, math::Color(1, 1, 1, 1));
+								asset.generatedIcon = generatedIcon;
+							}
+						}
+
+						if (asset.icon || asset.generatedIcon)
+						{
+							renderer->FillTexturedQuad(asset.generatedIcon ? asset.generatedIcon : asset.icon, x, y, IconSize, IconSize, math::Color(1, 1, 1, 1));
+						}
+
+
+
+						// shorten the label to fit
+						if (asset.assetNameFull.length() == 0)
+							asset.assetNameFull = asset.path.filename().wstring();
+
+						std::wstring assetNameToDisplay = asset.assetNameFull;
+
+						if (_assetNameToEdit && _assetNameToEdit->path == asset.path)
+						{
+							drawFullName = true;
+							assetNameToDisplay = _editingAssetTempName + _editingAssetExtension;
+						}
+
+						if (!drawFullName)
+						{
+							if (asset.assetNameShort.length() == 0)
+							{
+								while (true)
+								{
+									int32_t width, height;
+									renderer->_style.font->MeasureText((int32_t)Style::FontSize::Titchy, assetNameToDisplay, width, height);
+
+									if (width >= IconSize)
+										assetNameToDisplay.pop_back();
+									else
+										break;
+								}
+
+								asset.assetNameShort = assetNameToDisplay;
 							}
 
-							if (_hoverStartTime != 0.0f && g_pEnv->_timeManager->_currentTime - _hoverStartTime > 0.1f)
-							{
-								drawFullName = true;
-							}
+							assetNameToDisplay = asset.assetNameShort;
+
+							renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Titchy, x + IconSize / 2, y + IconSize + 2, hovering ? renderer->_style.text_highlight : renderer->_style.text_regular, FontAlign::CentreLR, assetNameToDisplay);
+						}
+						else
+						{
+							hoverX = x + IconSize / 2;
+							hoverY = y + IconSize + 2;
+							fullNameToDraw = assetNameToDisplay;
 						}
 					}
 
-					if (!asset.generatedIcon)
+					x += IconSize + 20;
+
+					if (x + IconSize >= _size.x)
 					{
-						if (auto generatedIcon = g_pEnv->_iconService->GetIcon(asset.path); generatedIcon != nullptr)
-						{
-							//renderer->PushFillTexturedQuad(&_drawList, generatedIcon, x, y, IconSize, IconSize, math::Color(1, 1, 1, 1));
-							asset.generatedIcon = generatedIcon;
-						}
-					}
-
-					if (asset.icon || asset.generatedIcon)
-					{
-						renderer->PushFillTexturedQuad(asset.generatedIcon ? asset.generatedIcon : asset.icon, x, y, IconSize, IconSize, math::Color(1, 1, 1, 1));
-					}
-
-					
-
-					// shorten the label to fit
-					if(asset.assetNameFull.length() == 0)
-						asset.assetNameFull = asset.path.filename().wstring();
-
-					std::wstring assetNameToDisplay = asset.assetNameFull;
-
-					if (_assetNameToEdit && _assetNameToEdit->path == asset.path)
-					{
-						drawFullName = true;
-						assetNameToDisplay = _editingAssetTempName + _editingAssetExtension;
-					}
-
-					if (!drawFullName)
-					{
-						if (asset.assetNameShort.length() == 0)
-						{
-							while (true)
-							{
-								int32_t width, height;
-								renderer->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, assetNameToDisplay, width, height);
-
-								if (width >= IconSize)
-									assetNameToDisplay.pop_back();
-								else
-									break;
-							}
-
-							asset.assetNameShort = assetNameToDisplay;
-						}
-
-						assetNameToDisplay = asset.assetNameShort;
-
-						renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + IconSize / 2, y + IconSize + 2, hovering ? renderer->_style.text_highlight : renderer->_style.text_regular, FontAlign::CentreLR, assetNameToDisplay);
-					}
-					else
-					{
-						hoverX = x + IconSize / 2;
-						hoverY = y + IconSize + 2;
-						fullNameToDraw = assetNameToDisplay;
+						x = _position.x + _size.y + 20;
+						y += IconSize + 30;
 					}
 				}
 
-				x += IconSize + 20;
+				//g_pEnv->_uiManager->GetRenderer()->ListDraw(&_drawList);
+				g_pEnv->_graphicsDevice->ClearScissorRect();
 
-				if (x + IconSize >= _size.x)
+				if (fullNameToDraw.length() > 0)
 				{
-					x = _position.x + _size.y + 20;
-					y += IconSize + 30;
-				}
-			}
+					int32_t width, height;
+					renderer->_style.font->MeasureText((int32_t)Style::FontSize::Titchy, fullNameToDraw, width, height);
 
-			//g_pEnv->_uiManager->GetRenderer()->ListDraw(&_drawList);
-			g_pEnv->_graphicsDevice->ClearScissorRect();
+					renderer->FillQuad(hoverX - ((width / 2) + 3), hoverY - 1, width + 6, height + 4, math::Color(0.1f, 0.1f, 0.1f, 1.0f));
+					renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Titchy, hoverX, hoverY, renderer->_style.text_highlight, FontAlign::CentreLR, fullNameToDraw);
+				}			
+			}		
 
-			if (fullNameToDraw.length() > 0)
+			_canvas.EndDraw(renderer);
+		}
+
+		_canvas.Present(renderer, 0, 0, w, h);
+
+		if (_hoveredAsset == nullptr)
+		{
+			_lastHoveredAsset = nullptr;
+			_hoverStartTime = 0.0f;
+		}
+		else
+		{
+			if (_hoveredAsset->icon || _hoveredAsset->generatedIcon)
 			{
-				int32_t width, height;
-				renderer->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, fullNameToDraw, width, height);
-
-				renderer->PushFillQuad(hoverX - ((width / 2) + 3), hoverY - 1, width + 6, height + 4, math::Color(0.1f, 0.1f, 0.1f, 1.0f));
-				renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, hoverX, hoverY, renderer->_style.text_highlight, FontAlign::CentreLR, fullNameToDraw);
-			}
-
-			if (_hoveredAsset == nullptr)
-			{
-				_lastHoveredAsset = nullptr;
-				_hoverStartTime = 0.0f;
-			}
-			else
-			{
-				if (_hoveredAsset->icon || _hoveredAsset->generatedIcon)
-				{
-					renderer->PushFillTexturedQuad(_hoveredAsset->generatedIcon ? _hoveredAsset->generatedIcon : _hoveredAsset->icon, g_pUIManager->GetCanvas()->GetAbsolutePosition().x, _position.y - 256, 256, 256, math::Color(1, 1, 1, 1));
-				}
-				/*else if (!_hoveredAsset->generatedIcon)
-				{
-					if (auto generatedIcon = g_pEnv->_iconService->GetIcon(_hoveredAsset->path); generatedIcon != nullptr)
-					{
-						renderer->PushFillTexturedQuad(&_drawList, generatedIcon, g_pUIManager->GetCanvas()->GetAbsolutePosition().x, _position.y - 256, 256, 256, math::Color(1, 1, 1, 1));
-						_hoveredAsset->generatedIcon = generatedIcon;
-					}
-				}*/
-				/*else
-				{
-					renderer->FillTexturedQuad(_hoveredAsset->icon, _position.x, _position.y, 200, 200, math::Color(1, 1, 1, 1));
-				}*/
+				renderer->FillTexturedQuad(_hoveredAsset->generatedIcon ? _hoveredAsset->generatedIcon : _hoveredAsset->icon, g_pUIManager->GetSceneView()->GetAbsolutePosition().x, _position.y - 256, 256, 256, math::Color(1, 1, 1, 1));
 			}
 		}
 
@@ -874,8 +934,8 @@ namespace HexEditor
 			int32_t mx, my;
 			g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
-			renderer->PushFillTexturedQuad(_draggingAsset->icon, mx - IconSize / 2, my - IconSize / 2, IconSize, IconSize, math::Color(1.0f, 1.0f, 1.0f, 0.5f));
-			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, mx + IconSize / 2, my + IconSize + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _draggingAsset->path.filename().wstring());
+			renderer->FillTexturedQuad(_draggingAsset->icon, mx - IconSize / 2, my - IconSize / 2, IconSize, IconSize, math::Color(1.0f, 1.0f, 1.0f, 0.5f));
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Titchy, mx + IconSize / 2, my + IconSize + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _draggingAsset->path.filename().wstring());
 		}
 
 		//g_pEnv->_uiManager->GetRenderer()->ListDraw(&_drawList);

@@ -14,6 +14,7 @@
 #include "../Entity/Component/ScriptComponent.hpp"
 #include "../Entity/Component/NavigationComponent.hpp"
 #include "../Entity/Component/SkeletalAnimationComponent.hpp"
+#include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "../HexEngine.hpp"
 
 
@@ -55,6 +56,7 @@ namespace HexEngine
 		REG_CLASS(ScriptComponent);
 		REG_CLASS(NavigationComponent);
 		REG_CLASS(SkeletalAnimationComponent);
+		REG_CLASS(InstancedStaticMeshComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)
@@ -71,7 +73,7 @@ namespace HexEngine
 		cls.type = &type;
 		cls.cloneInstanceFn = cloneInstanceFn;
 		cls.newInstanceFn = newInstanceFn;
-		cls.compId = _registry.size();
+		cls.compId = (uint32_t)_registry.size();
 
 		_registry[nameHash] = cls;
 

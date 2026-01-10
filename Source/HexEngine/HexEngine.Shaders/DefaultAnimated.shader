@@ -27,6 +27,8 @@
 
 		input.position.w = 1.0f;
 
+		output.cullDistance = 0.5f;
+
 		matrix worldMatrix, normalMatrix, worldPrev;
 
 		if ((g_objectFlags & OBJECT_FLAGS_HAS_ANIMATION) != 0)

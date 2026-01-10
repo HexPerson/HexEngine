@@ -11,6 +11,7 @@
 	static const uint OBJECT_FLAGS_HAS_OPACITY				= (1 << 5);
 	static const uint OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION	= (1 << 6);
 	static const uint OBJECT_FLAGS_HAS_ANIMATION			= (1 << 7);
+	static const uint OBJECT_FLAGS_ORM_FORMAT				= (1 << 8);
 
 	static const uint MAX_BONES = 70;
 
@@ -53,7 +54,6 @@
 	{
 		float4 shallowColour;
 		float4 deepColour;
-		float4 fogColour;
 		float fresnelPow;
 		float shoreFadeStrength;
 		float fadeFactor;
@@ -154,7 +154,7 @@
 
 		uint g_objectFlags;
 		int entityId;
-		int pad2;
+		float g_cullDistance;
 		int pad3;
 
 		MaterialProps g_material;		

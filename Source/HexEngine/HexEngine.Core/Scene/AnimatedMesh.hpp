@@ -55,6 +55,7 @@ namespace HexEngine
 	private:
 		uint32_t _numBones = 0;
 		std::vector<AnimatedMeshVertex> _vertices;
+		std::vector<SimpleAnimatedMeshVertex> _simpleVertices;
 		std::vector<AnimatedMeshVertex> _transformedVertices;
 
 		BoneNameMap _boneMap;

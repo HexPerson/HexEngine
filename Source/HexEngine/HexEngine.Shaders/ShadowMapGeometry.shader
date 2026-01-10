@@ -1,6 +1,6 @@
 "InputLayout"
 {
-	PosNormTanBinTex_INSTANCED
+	PosTex_INSTANCED_SIMPLE
 }
 "VertexShaderIncludes"
 {
@@ -13,9 +13,9 @@
 }
 "VertexShader"
 {
-	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance)
+	SimpleMeshPixelInput ShaderMain(SimpleMeshVertexInput input, SimpleMeshInstanceData instance)
 	{
-		MeshPixelInput output;
+		SimpleMeshPixelInput output;
 		
 		input.position.w = 1.0f;
 
@@ -31,10 +31,10 @@
 			worldMatrix = mul(boneTransform, instance.world);
 		}
 		else*/
-			worldMatrix = instance.world;//mul(instance.world, g_worldMatrix);
+			worldMatrix = mul(instance.world, g_worldMatrix);
 
 		output.position = mul(input.position, worldMatrix);
-		output.positionWS = output.position;
+		//output.positionWS = output.position;
 
 		output.position = mul(output.position, g_viewProjectionMatrix);
 
@@ -50,14 +50,14 @@
 	Texture2D g_opacityMap : register(t7);
 	SamplerState g_textureSampler : register(s0);
 
-	float4 ShaderMain(MeshPixelInput input) : SV_Target
+	float4 ShaderMain(SimpleMeshPixelInput input) : SV_Target
 	{
 		// Calculate the pixel depth
 		//
-		float4 worldViewPosition = mul(input.positionWS, g_viewMatrix);
-		float pixelDepth = -worldViewPosition.z;
+		//float4 worldViewPosition = mul(input.positionWS, g_viewMatrix);
+		//float pixelDepth = -worldViewPosition.z;
 
-		pixelDepth = pixelDepth / g_frustumDepths[3];
+		//pixelDepth = pixelDepth / g_frustumDepths[3];
 
 		float opacity = 1.0f;
 
@@ -89,6 +89,6 @@
 			}
 		}*/
 
-		return float4(pixelDepth, pixelDepth, pixelDepth, opacity);
+		return float4(1.0f.rrr, opacity);
 	}
 }

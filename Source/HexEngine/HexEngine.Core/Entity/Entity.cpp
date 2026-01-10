@@ -58,17 +58,20 @@ namespace HexEngine
 		_flags &= ~flags;
 	}
 
-	void Entity::DeleteMe()
+	void Entity::DeleteMe(bool broadcast)
 	{
-		SetFlag(EntityFlags::WantsDeletion);
+		SetFlag(EntityFlags::IsPendingRemoval);
 
-		// Notify all entities first
-		EntityDestroyedMessage message(this);
-		BroadcastMessage(&message);
+		if (broadcast)
+		{
+			// Notify all entities first
+			EntityDestroyedMessage message(this);
+			BroadcastMessage(&message);
+		}
 
 		for (auto&& child : _children)
 		{
-			child->SetFlag(EntityFlags::WantsDeletion);
+			child->SetFlag(EntityFlags::IsPendingRemoval);
 			child->SetParent(nullptr);
 		}
 
@@ -81,7 +84,7 @@ namespace HexEngine
 
 	bool Entity::IsValid() const
 	{
-		return !HasFlag(EntityFlags::WantsDeletion) && !HasFlag(EntityFlags::IsPendingRemoval);
+		return !HasFlag(EntityFlags::IsPendingRemoval);
 	}
 
 	bool Entity::IsCreated() const
@@ -91,7 +94,7 @@ namespace HexEngine
 
 	bool Entity::IsPendingDeletion() const
 	{
-		if (HasFlag(EntityFlags::WantsDeletion))
+		if (HasFlag(EntityFlags::IsPendingRemoval))
 			return true;
 
 		if (_parent)
@@ -120,9 +123,19 @@ namespace HexEngine
 		_tag = tag;
 	}
 
-	Entity* Entity::GetParent()
+	Entity* Entity::GetParent() const
 	{
 		return _parent;
+	}
+
+	void Entity::SetChunk(Chunk* chunk)
+	{
+		_lastChunk = chunk;
+	}
+
+	Chunk* Entity::GetChunk() const
+	{
+		return _lastChunk;
 	}
 
 	void Entity::SetParent(Entity* parent)
@@ -149,6 +162,7 @@ namespace HexEngine
 		_hasCachedWorldBoundingSphere = false;
 		_hasCachedWorldOBB = false;
 		_hasCachedWorldTMTranspose = false;
+		_hasCachedWorldTMInvert = false;
 	}
 
 	const std::vector<Entity*>& Entity::GetChildren() const
@@ -191,6 +205,11 @@ namespace HexEngine
 		{
 			LOG_CRIT("An entity is trying to remove a component but does not have one registered!");
 			return;
+		}
+
+		if (component->CastAs<Transform>() != nullptr)
+		{
+			_cachedTransform = nullptr;
 		}
 
 		ComponentSignature previousSignature = _componentsSignature;
@@ -337,7 +356,7 @@ namespace HexEngine
 			worldAABB.Extents.z *= 1.1f;
 
 			g_pEnv->_debugRenderer->DrawOBB(GetWorldOBB(), debugColour);
-			//g_pEnv->_debugRenderer->DrawAABB(worldAABB, math::Color(1.0f, 0, 0, 0.6f));
+			g_pEnv->_debugRenderer->DrawAABB(worldAABB, math::Color(1.0f, 0, 0, 0.6f));
 
 			//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetForward() * 20.0f, math::Color(0, 0, 1, 1));
 			//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetRight() * 20.0f, math::Color(1, 0, 0, 1));
@@ -385,6 +404,10 @@ namespace HexEngine
 
 	const math::Vector3& Entity::GetPosition() const
 	{
+		if (_cachedTransform == nullptr)
+		{
+			return _lastPosition;
+		}
 		return _cachedTransform->GetPosition();
 	}
 
@@ -439,6 +462,8 @@ namespace HexEngine
 			else
 				_cachedWorldTMPrev = _cachedWorldTM;
 
+			_cachedWorldTMPrevTranspose = _cachedWorldTMPrev.Transpose();
+
 			
 			_cachedWorldTM = transform;// math::Matrix::CreateScale(transform->GetScale())* math::Matrix::CreateFromQuaternion(transform->GetRenderRotation())* math::Matrix::CreateWorld(position, math::Vector3::Forward, math::Vector3::Up);
 
@@ -450,9 +475,14 @@ namespace HexEngine
 		return _cachedWorldTM;
 	}
 
-	const math::Matrix& Entity::GetWorldTMPrev()
+	const math::Matrix& Entity::GetWorldTMPrev() const
 	{
 		return _cachedWorldTMPrev;
+	}
+
+	const math::Matrix& Entity::GetWorldTMPrevTranspose() const
+	{
+		return _cachedWorldTMPrevTranspose;
 	}
 
 	const math::Matrix& Entity::GetWorldTMTranspose()
@@ -465,6 +495,18 @@ namespace HexEngine
 		}
 
 		return _cachedWorldTMTranspose;
+	}
+
+	const math::Matrix& Entity::GetWorldTMInvert()
+	{
+		if (!_hasCachedWorldTMInvert)
+		{
+			_cachedWorldTMInvert = GetWorldTM().Invert();
+
+			_hasCachedWorldTMInvert = true;
+		}
+
+		return _cachedWorldTMInvert;
 	}
 
 	const math::Matrix& Entity::GetLocalTM()
@@ -493,42 +535,43 @@ namespace HexEngine
 		return _cachedTransform->GetScale();
 	}
 
-	const dx::BoundingBox Entity::GetAABB()
-	{
-		auto aabb = _aabb;
+	void Entity::RecalculateBoundingVolumes(const dx::BoundingBox& aabb)
+	{		 
+		aabb.Transform(_aabb, math::Matrix::CreateScale(GetAbsoluteScale()));
 
-		math::Vector3 absoluteScale = GetScale();
-		Entity* parent = GetParent();
+		dx::BoundingOrientedBox::CreateFromBoundingBox(_obb, _aabb);
+		_obb.Transform(_obb, math::Matrix::CreateFromQuaternion(GetRotation()));
 
-		while (parent)
-		{
-			absoluteScale *= parent->GetScale();
-			parent = parent->GetParent();
-		}
+		dx::BoundingSphere::CreateFromBoundingBox(_boundingSphere, _aabb);
 
-		aabb.Transform(aabb, math::Matrix::CreateScale(absoluteScale));
-		aabb.Transform(aabb, math::Matrix::CreateFromQuaternion(GetRotation()));
-
-		return aabb;
+		_hasCachedWorldAABB = false;
+		_hasCachedWorldOBB = false;
+		_hasCachedWorldBoundingSphere = false;
 	}
 
-	const dx::BoundingOrientedBox Entity::GetOBB()
+	math::Vector3 Entity::GetAbsoluteScale() const
 	{
-		auto obb = _obb;
+		math::Vector3 scale = GetScale();
 
-		math::Vector3 absoluteScale = GetScale();
 		Entity* parent = GetParent();
 
 		while (parent)
 		{
-			absoluteScale *= parent->GetScale();
+			scale *= parent->GetScale();
 			parent = parent->GetParent();
 		}
 
-		obb.Transform(obb, math::Matrix::CreateScale(absoluteScale));
-		obb.Transform(obb, math::Matrix::CreateFromQuaternion(GetRotation()));
+		return scale;
+	}
 
-		return obb;
+	const dx::BoundingBox& Entity::GetAABB()
+	{
+		return _aabb;
+	}
+
+	const dx::BoundingOrientedBox& Entity::GetOBB()
+	{
+		return _obb;
 	}
 
 	void Entity::SetAABB(const dx::BoundingBox& bbox)
@@ -551,10 +594,11 @@ namespace HexEngine
 		if (_occlusionVolume.Extents.x == 0.0f && _occlusionVolume.Extents.y == 0.0f && _occlusionVolume.Extents.z == 0.0f)
 			SetOcclusionVolume(bbox);
 
+		dx::BoundingSphere::CreateFromBoundingBox(_boundingSphere, bbox);
+
 		_hasCachedWorldAABB = false;
 		_hasCachedWorldBoundingSphere = false;
-
-		dx::BoundingSphere::CreateFromBoundingBox(_boundingSphere, bbox);
+		_hasCachedWorldBoundingSphere = false;		
 	}
 
 	void Entity::SetOBB(const dx::BoundingOrientedBox& obb)
@@ -672,6 +716,7 @@ namespace HexEngine
 		_hasCachedWorldOBB = false;
 		_hasCachedWorldTMTranspose = false;
 		_hasCachedWorldBoundingSphere = false;
+		_hasCachedWorldTMInvert = false;
 	}
 
 	void Entity::OnMessage(Message* message, MessageListener* sender)
@@ -689,7 +734,13 @@ namespace HexEngine
 				_hasCachedWorldAABB = false;
 				_hasCachedWorldOBB = false;
 				_hasCachedWorldTMTranspose = false;
+				_hasCachedWorldTMInvert = false;
 				_hasCachedWorldBoundingSphere = false;
+
+				if (auto meshComponent = GetComponent<StaticMeshComponent>(); meshComponent != nullptr)
+				{
+					RecalculateBoundingVolumes(meshComponent->GetMesh()->GetAABB());
+				}
 			}
 
 			if ((transformMessage->_flags & TransformChangedMessage::ChangeFlags::PositionChanged) == TransformChangedMessage::ChangeFlags::PositionChanged)
@@ -698,8 +749,11 @@ namespace HexEngine
 				_hasCachedLocalTM = false;
 				_hasCachedWorldAABB = false;
 				_hasCachedWorldTMTranspose = false;
+				_hasCachedWorldTMInvert = false;
 				_hasCachedWorldBoundingSphere = false;
 				_hasCachedWorldOBB = false;
+
+				_lastPosition = transformMessage->_position;
 			}
 
 			break;
@@ -800,7 +854,7 @@ namespace HexEngine
 
 			compsData.push_back(compData);
 
-			LOG_DEBUG("Saved component '%s::%s'", GetName().c_str(), component.component->GetComponentName().c_str())
+			LOG_DEBUG("Saved component '%s::%s'", GetName().c_str(), component.component->GetComponentName())
 		}
 	}
 

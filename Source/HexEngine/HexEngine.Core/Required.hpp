@@ -106,3 +106,27 @@ static constexpr float ToDegree(float radian)
 {
 	return radian * 57.29577951f;
 }
+
+#ifdef _DEBUG
+	#define GFX_PERF_BEGIN(mask, name) D3DPERF_BeginEvent(mask, name)
+	#define GFX_PERF_END() D3DPERF_EndEvent()
+#else
+	#define GFX_PERF_BEGIN(mask, name)
+	#define GFX_PERF_END()
+#endif
+
+__forceinline std::wstring s2ws(const std::string& str)
+{
+	int size_needed = MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0);
+	std::wstring wstrTo(size_needed, 0);
+	MultiByteToWideChar(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed);
+	return wstrTo;
+}
+
+__forceinline std::string ws2s(const std::wstring& str)
+{
+	int size_needed = WideCharToMultiByte(CP_UTF8, 0, &str[0], (int)str.size(), NULL, 0, NULL, NULL);
+	std::string wstrTo(size_needed, 0);
+	WideCharToMultiByte(CP_UTF8, 0, &str[0], (int)str.size(), &wstrTo[0], size_needed, NULL, NULL);
+	return wstrTo;
+}

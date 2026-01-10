@@ -21,5 +21,6 @@ namespace HexEditor
 		math::Quaternion _cameraRotation;
 		int32_t _adjustStartX;
 		int32_t _adjustStartY;
+		bool _useTrace = false;
 	};
 }

@@ -20,7 +20,7 @@ virtual HexEngine::ComponentId GetComponentId() override {\
 		_componentId = std::decay_t<decltype(*this)>::_GetComponentId();\
 	return _componentId;\
 }\
-virtual const std::string GetComponentName() override {\
+virtual const char* GetComponentName() override {\
 	return std::decay_t<decltype(*this)>::_GetComponentName();\
 }
 

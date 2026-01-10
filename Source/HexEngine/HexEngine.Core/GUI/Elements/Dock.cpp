@@ -12,15 +12,14 @@ namespace HexEngine
 
 	void Dock::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
-		if(_anchor == Anchor::Middle)
-			renderer->FillQuad(_position.x, _position.y, _size.x, _size.y, renderer->_style.win_render_area);
-		else
+		if(_anchor != Anchor::Middle)			
 			renderer->FillQuad(_position.x, _position.y, _size.x, _size.y, renderer->_style.win_back);
 
 		renderer->Frame(_position.x, _position.y, _size.x, _size.y, 1, renderer->_style.win_border);
 
 		if (_anchor == Anchor::Middle)
 		{
+			bool hasRenderered = false;
 			if (auto scene = g_pEnv->_sceneManager->GetCurrentScene(); scene != nullptr)
 			{
 				if (auto mainCamera = scene->GetMainCamera(); mainCamera != nullptr)
@@ -29,8 +28,13 @@ namespace HexEngine
 						GetPosition().x, GetPosition().y,
 						GetSize().x, GetSize().y,
 						math::Color(1, 1, 1, 1));
+
+					hasRenderered = true;
 				}
 			}
+
+			if(!hasRenderered)
+				renderer->FillQuad(_position.x, _position.y, _size.x, _size.y, renderer->_style.win_render_area);
 		}
 
 		//switch (_anchor)
@@ -50,24 +54,7 @@ namespace HexEngine
 	{
 		if (_anchor == Anchor::Middle)
 		{
-			if (event == InputEvent::MouseDown && IsMouseOver(true))
-			{
-				_mouseActionStartPos.x = data->MouseDown.xpos;
-				_mouseActionStartPos.y = data->MouseDown.ypos;
-
-				switch (data->MouseDown.button)
-				{
-				case VK_MBUTTON:
-					_roamState = RoamState::FreeLook;
-					break;
-				}
-				return false;
-			}
-			else if (event == InputEvent::MouseUp)
-			{
-				_roamState = RoamState::None;
-				return true;
-			}
+			
 		}
 		return false;
 	}

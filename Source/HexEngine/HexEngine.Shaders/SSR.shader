@@ -387,7 +387,11 @@
 		float4 pixelSpecular = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 		float4 pixelColour = g_beautyTexture.Sample(g_pointSampler, screenPos);
 
-		
+		if(pixelSpecular.r == 0.0f)
+		{
+			ssr.diff = float4(pixelColour.rgb, 1.0f);
+			return ssr;
+		}
 
 		
 		float smoothness = pixelSpecular.b;

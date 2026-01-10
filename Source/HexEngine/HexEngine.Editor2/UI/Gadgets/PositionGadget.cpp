@@ -17,7 +17,7 @@ namespace HexEditor
 		g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 		auto inspector = g_pUIManager->GetInspector();
-		auto canvas = g_pUIManager->GetCanvas();
+		auto canvas = g_pUIManager->GetSceneView();
 		auto ent = inspector->GetInspectingEntity();
 
 		if (!ent)
@@ -37,6 +37,8 @@ namespace HexEditor
 
 			_cameraRotation = g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera()->GetEntity()->GetRotation();
 		}
+
+		_useTrace = false;
 
 		return true;
 	}
@@ -66,6 +68,10 @@ namespace HexEditor
 				ent->SetPosition(_originalPosition);
 				_movementFreedom = math::Vector3(0.0f, 0.0f, 1.0f);
 				break;
+
+			case 'T':
+				_useTrace = true;
+				break;
 			}
 		}
 
@@ -74,26 +80,40 @@ namespace HexEditor
 
 	void PositionGadget::Update()
 	{
-		int32_t mx, my;
-		g_pEnv->_inputSystem->GetMousePosition(mx, my);
-
 		auto inspector = g_pUIManager->GetInspector();
 		auto ent = inspector->GetInspectingEntity();
 
-		const float inputSensitivity = 0.7f;
+		if (_useTrace)
+		{
+			auto hit = g_pUIManager->RayCastWorld({ ent });
 
-		float dx = ((float)mx - (float)_adjustStartX) * inputSensitivity;
-		float dy = ((float)my - (float)_adjustStartY) * inputSensitivity;
+			if (hit.entity != nullptr)
+			{
+				ent->ForcePosition(hit.position);
+			}
+		}
+		else
+		{
+			int32_t mx, my;
+			g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
-		math::Vector3 rightVec = math::Vector3::Transform(math::Vector3::Right, _cameraRotation);
-		math::Vector3 upVec = math::Vector3::Transform(math::Vector3::Up, _cameraRotation);
-		math::Vector3 forwardVec = math::Vector3::Transform(math::Vector3::Forward, _cameraRotation);
+			
 
-		math::Vector3 newPos = _originalPosition;
-		newPos += (rightVec * (float)dx) * _movementFreedom;
-		newPos -= (upVec * (float)dy) * _movementFreedom;
+			const float inputSensitivity = 0.7f;
 
-		ent->ForcePosition(newPos);
+			float dx = ((float)mx - (float)_adjustStartX) * inputSensitivity;
+			float dy = ((float)my - (float)_adjustStartY) * inputSensitivity;
+
+			math::Vector3 rightVec = math::Vector3::Transform(math::Vector3::Right, _cameraRotation);
+			math::Vector3 upVec = math::Vector3::Transform(math::Vector3::Up, _cameraRotation);
+			math::Vector3 forwardVec = math::Vector3::Transform(math::Vector3::Forward, _cameraRotation);
+
+			math::Vector3 newPos = _originalPosition;
+			newPos += (rightVec * (float)dx) * _movementFreedom;
+			newPos -= (upVec * (float)dy) * _movementFreedom;
+
+			ent->ForcePosition(newPos);
+		}
 	}
 
 	void PositionGadget::StopGadget(GadgetAction action)

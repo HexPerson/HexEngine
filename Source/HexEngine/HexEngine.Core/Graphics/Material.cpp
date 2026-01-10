@@ -46,7 +46,13 @@ namespace HexEngine
 
 	bool Material::Exists(const fs::path& path)
 	{
-		return g_pEnv->_resourceSystem->DoesResourceExistAsAsset(path);
+		auto fs = g_pEnv->_resourceSystem->FindFileSystemByPath(path);
+
+		if (fs)
+		{
+			return fs->DoesRelativePathExist(path);
+		}
+		return false;
 	}
 
 	void Material::CopyFrom(const std::shared_ptr<Material>& material)
@@ -71,6 +77,8 @@ namespace HexEngine
 		_blendState = material._blendState;
 		_depthState = material._depthState;
 		_cullMode = material._cullMode;
+		_format = material._format;
+		_cullDistance = material._cullDistance;
 	}
 
 	Material::Material(const Material& other)
@@ -209,6 +217,16 @@ namespace HexEngine
 		_depthState = state;
 	}
 
+	void Material::SetFormat(MaterialFormat format)
+	{
+		_format = format;
+	}
+
+	void Material::SetCullDistance(float distance)
+	{
+		_cullDistance = distance;
+	}
+
 	BlendState Material::GetBlendState() const
 	{
 		return _blendState;
@@ -222,6 +240,16 @@ namespace HexEngine
 	DepthBufferState Material::GetDepthState() const
 	{
 		return _depthState;
+	}
+
+	MaterialFormat Material::GetFormat() const
+	{
+		return _format;
+	}
+
+	float Material::GetCullDistance() const
+	{
+		return _cullDistance;
 	}
 
 	void Material::SaveRenderState()
@@ -283,5 +311,13 @@ namespace HexEngine
 		};
 
 		return sTextureTypeNames[type];
+	}
+
+	bool Material::DoesHaveAnyReflectivity()
+	{
+		if (_properties.metallicFactor > 0.0f && _properties.smoothness > 0.0f)
+			return true;
+
+		return false;
 	}
 }

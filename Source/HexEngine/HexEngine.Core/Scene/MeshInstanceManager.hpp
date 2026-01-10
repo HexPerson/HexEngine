@@ -57,6 +57,7 @@ namespace HexEngine
 	private:
 		std::map<std::string, MeshInstanceStorage> _instances;
 		MeshInstanceId _idBase = 1;
+		std::recursive_mutex _lock;
 	};
 
 	inline MeshInstanceManager gMeshInstanceManager;

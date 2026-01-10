@@ -96,8 +96,8 @@ namespace HexEngine
 		int32_t height = (int32_t)root->items.size() * ((int32_t)Style::FontSize::Tiny + 4);
 
 		// frame and background
-		renderer->PushFillQuad(x, y, root->largestWidth, height, renderer->_style.context_back);
-		renderer->PushFrame(x, y, root->largestWidth, height, 1, math::Color(0, 0, 0, 1));
+		renderer->FillQuad(x, y, root->largestWidth, height, renderer->_style.context_back);
+		renderer->Frame(x, y, root->largestWidth, height, 1, math::Color(0, 0, 0, 1));
 
 		for (auto& item : root->items)
 		{
@@ -105,16 +105,16 @@ namespace HexEngine
 			{
 				_didInitialHover = true;
 				_hovering = item;
-				renderer->PushFillQuad(x, y, root->largestWidth - 1, (int32_t)Style::FontSize::Tiny + 4, renderer->_style.context_highlight);
+				renderer->FillQuad(x, y, root->largestWidth - 1, (int32_t)Style::FontSize::Tiny + 4, renderer->_style.context_highlight);
 
-				renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + 2, y + ((int32_t)Style::FontSize::Tiny + 4) / 2, math::Color(0, 0, 0, 1), FontAlign::CentreUD, item->name);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + 2, y + ((int32_t)Style::FontSize::Tiny + 4) / 2, math::Color(0, 0, 0, 1), FontAlign::CentreUD, item->name);
 			}
 			else
-				renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + 2, y + ((int32_t)Style::FontSize::Tiny + 4) / 2, math::Color(1, 1, 1, 1), FontAlign::CentreUD, item->name);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, x + 2, y + ((int32_t)Style::FontSize::Tiny + 4) / 2, math::Color(1, 1, 1, 1), FontAlign::CentreUD, item->name);
 
 			if (item->submenu != nullptr)
 			{
-				renderer->PushFillTexturedQuad(_triangle.get(), x + root->largestWidth - (uint8_t)Style::FontSize::Tiny, y, (uint8_t)Style::FontSize::Tiny, (uint8_t)Style::FontSize::Tiny, math::Color(1, 1, 1, 1), -90.0f);
+				renderer->FillTexturedQuad(_triangle.get(), x + root->largestWidth - (uint8_t)Style::FontSize::Tiny, y, (uint8_t)Style::FontSize::Tiny, (uint8_t)Style::FontSize::Tiny, math::Color(1, 1, 1, 1)/*, -90.0f*/);
 
 				if (item->submenu->open)
 				{

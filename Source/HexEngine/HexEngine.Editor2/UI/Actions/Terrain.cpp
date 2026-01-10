@@ -53,13 +53,49 @@ namespace HexEditor
 		return pm;
 	}
 
+	Terrain* Terrain::CreateOceanDialog(Element* parent, OnCompleted onCompletedAction)
+	{
+		uint32_t width, height;
+		g_pEnv->GetScreenSize(width, height);
+
+		int32_t centrex = width >> 1;
+		int32_t centrey = height >> 1;
+
+		const int32_t sizex = 800;
+		const int32_t sizey = 480;
+
+		Terrain* pm = new Terrain(parent, Point(centrex - sizex / 2, centrey - sizey / 2), Point(sizex, sizey));
+
+		pm->_heightScale = 0.0f;
+
+		DragInt* gridSize = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Grid Size", &pm->_gridSize, 1, 1024, 1);
+		DragFloat* chunkWidth = new DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Chunk Width", &pm->_width, 1.0f, 1024.0f, 1.0f);
+		DragFloat* uvScale = new DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Texture Scale", &pm->_uvScale, 0.1f, 10.0f, 0.1f);
+		DragInt* resolution = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Resolution", &pm->_resolution, 1, 512, 1);
+		DragInt* lod = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Max LOD", &pm->_maxLod, 0, 3, 1);
+		Checkbox* makeParent = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Create Parent", &pm->_parent);
+		Checkbox* makeColliders = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Add Colliders", &pm->_makeColliders);
+		Checkbox* useChunkingSystem = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Enable Chunk System", &pm->_useChunkSystem);
+		pm->_materialName = new LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Material");
+		pm->_materialName->SetValue(L"EngineData.Materials/Water.hmat");
+		Button* generateBtn = new Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(100, 25), L"Generate", std::bind(&Terrain::GenerateTerrain, pm));
+
+		//Button* regen = new Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(100, 25), L"Re", std::bind(&Terrain::GenerateTerrain, pm));
+
+
+
+		pm->BringToFront();
+
+		return pm;
+	}
+
 	bool Terrain::GenerateTerrain()
 	{
-		if (Material::Exists(_materialName->GetValue()) == false)
+		/*if (Material::Exists(_materialName->GetValue()) == false)
 		{
 			MessageBox::Info(L"Invalid Material", std::format(L"The material '{}' was not present on disk or in a loaded asset file, please check the file name and try again", _materialName->GetValue()));
 			return false;
-		}
+		}*/
 
 		if (_created.size() > 0)
 		{
@@ -72,7 +108,7 @@ namespace HexEditor
 
 		g_pUIManager->GetInspector()->InspectEntity(nullptr);
 
-		const auto seed = std::stoul(_seed->GetValue());// GetRandomInt();
+		const auto seed = _seed ? std::stoul( _seed->GetValue()) : 0;// GetRandomInt();
 		const int32_t gridSize = (int32_t)_gridSize;
 		const int32_t halfGridSize = (gridSize / 2);
 		const float width = _width;
@@ -154,10 +190,13 @@ namespace HexEditor
 					terrainParams.uvScale = _uvScale;
 					terrainParams.width = params.width;
 					terrainParams.createInstance = true;
+					terrainParams.path = g_pEditor->_projectFS->GetLocalAbsoluteDataPath("Terrain/" + ident + ".hmesh");
+					terrainParams.fs = g_pEditor->_projectFS;
 
 					auto mesh = HexEngine::CreateTerrain(terrainParams);
 
 					mesh->CreateInstance();
+					mesh->Save();
 
 					resolution /= 2;
 

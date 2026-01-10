@@ -84,9 +84,12 @@
 		float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
 		//float4 pixelMaterial = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 		
+		//return float4(pixelColour.aaa, 1.0f);
+
 		// sky
 		if(pixelColour.a == -1 || pixelPosWS.a > 0.0f)
 		{
+			//return float4(1, 0, 0, 1.0f);
 			return float4(pixelColour.rgb, 1.0f);
 		}
 		

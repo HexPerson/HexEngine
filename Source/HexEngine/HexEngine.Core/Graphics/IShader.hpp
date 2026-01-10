@@ -33,8 +33,9 @@ namespace HexEngine
 	enum class ShaderRequirements : uint32_t
 	{
 		None = 0,
-		RequiresGBuffer = HEX_BITSET(0),
-		RequiresShadowMaps = HEX_BITSET(1)
+		RequiresGBuffer		= HEX_BITSET(0),
+		RequiresShadowMaps	= HEX_BITSET(1),
+		RequiresBeauty		= HEX_BITSET(2)
 	};
 
 	DEFINE_ENUM_FLAG_OPERATORS(ShaderRequirements);

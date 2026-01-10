@@ -6,9 +6,11 @@ namespace HexEngine
 {
 	static IInputLayout* g_pLayoutPosNormTanBinTex_INSTANCED = nullptr;
 	static IInputLayout* g_pLayoutPosNormTanBinTexBoned_INSTANCED = nullptr;
+	static IInputLayout* g_pLayoutPosTexBoned_INSTANCED_SIMPLE = nullptr;
 	static IInputLayout* g_pLayoutPos = nullptr;
 	static IInputLayout* g_pLayoutPos_INSTANCED = nullptr;
 	static IInputLayout* g_pLayout_PosTex_INSTANCED = nullptr;
+	static IInputLayout* g_pLayout_PosTex_INSTANCED_SIMPLE = nullptr;
 	static IInputLayout* g_pLayout_PosTex = nullptr;
 	static IInputLayout* g_pLayout_PosColour = nullptr;
 	static IInputLayout* g_pLayout_PosTexColour = nullptr;
@@ -24,6 +26,8 @@ namespace HexEngine
 		SAFE_DELETE(g_pLayoutPosNormTanBinTexBoned_INSTANCED);
 		SAFE_DELETE(g_pLayout_PosTexColour);
 		SAFE_DELETE(g_pLayout_UI_INSTANCED);
+		SAFE_DELETE(g_pLayout_PosTex_INSTANCED_SIMPLE);
+		SAFE_DELETE(g_pLayoutPosTexBoned_INSTANCED_SIMPLE);
 	}
 
 	IInputLayout* IInputLayout::GetInputLayoutById(InputLayoutId id, IShaderStage* vertexStage)
@@ -45,8 +49,14 @@ namespace HexEngine
 		case InputLayoutId::PosNormTanBinTex_INSTANCED:
 			return GetLayout_PosNormTanBinTex_INSTANCED(vertexStage);
 
+		case InputLayoutId::PosTex_INSTANCED_SIMPLE:
+			return GetLayout_PosTex_INSTANCED_SIMPLE(vertexStage);
+
 		case InputLayoutId::PosNormTanBinTexBoned_INSTANCED:
 			return GetLayout_PosNormTanBinTexBoned_INSTANCED(vertexStage);
+
+		case InputLayoutId::PosTexBoned_INSTANCED_SIMPLE:
+			return GetLayout_PosTexBoned_INSTANCED_SIMPLE(vertexStage);
 
 		case InputLayoutId::PosColour:
 			return GetLayout_PosColour(vertexStage);
@@ -153,6 +163,36 @@ namespace HexEngine
 		return g_pLayoutPosNormTanBinTexBoned_INSTANCED;
 	}
 
+	IInputLayout* IInputLayout::GetLayout_PosTexBoned_INSTANCED_SIMPLE(IShaderStage* vertexShaderStage)
+	{
+		if (!g_pLayoutPosTexBoned_INSTANCED_SIMPLE)
+		{
+			D3D11_INPUT_ELEMENT_DESC inputDesc[] = {
+				{"POSITION", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 0,  D3D11_INPUT_PER_VERTEX_DATA, 0},
+				{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,		0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0},
+				{"BLENDINDICES", 0,	DXGI_FORMAT_R32G32B32A32_FLOAT,	0, 24, D3D11_INPUT_PER_VERTEX_DATA, 0},
+				{"BLENDWEIGHT", 0, DXGI_FORMAT_R32G32B32A32_FLOAT,	0, 40, D3D11_INPUT_PER_VERTEX_DATA, 0},
+
+				// Data from the instance buffer
+				{ "WORLD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT,    1, 0,  D3D11_INPUT_PER_INSTANCE_DATA, 1},
+				{ "WORLD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT,    1, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+				{ "WORLD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT,    1, 32, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+				{ "WORLD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT,    1, 48, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+			};
+
+
+			std::vector<uint8_t> vertexShaderCode;
+			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
+			{
+				g_pLayoutPosTexBoned_INSTANCED_SIMPLE = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+
+				g_pLayoutPosTexBoned_INSTANCED_SIMPLE->SetDebugName("PosNormTanBinTexBoned_INSTANCED_SIMPLE");
+			}
+		}
+
+		return g_pLayoutPosTexBoned_INSTANCED_SIMPLE;
+	}
+
 	IInputLayout* IInputLayout::GetLayout_Pos(IShaderStage* vertexShaderStage)
 	{
 		if (!g_pLayoutPos)
@@ -246,6 +286,31 @@ namespace HexEngine
 		}
 
 		return g_pLayout_PosTex_INSTANCED;
+	}
+
+	IInputLayout* IInputLayout::GetLayout_PosTex_INSTANCED_SIMPLE(IShaderStage* vertexShaderStage)
+	{
+		if (!g_pLayout_PosTex_INSTANCED_SIMPLE)
+		{
+			D3D11_INPUT_ELEMENT_DESC inputDesc[] = {
+				{"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,	0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
+				{"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,		0, 16, D3D11_INPUT_PER_VERTEX_DATA, 0},
+
+				// Data from the instance buffer
+				{ "WORLD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT,    1, 0,  D3D11_INPUT_PER_INSTANCE_DATA, 1},
+				{ "WORLD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT,    1, 16, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+				{ "WORLD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT,    1, 32, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+				{ "WORLD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT,    1, 48, D3D11_INPUT_PER_INSTANCE_DATA, 1},
+			};
+
+			std::vector<uint8_t> vertexShaderCode;
+			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
+			{
+				g_pLayout_PosTex_INSTANCED_SIMPLE = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+			}
+		}
+
+		return g_pLayout_PosTex_INSTANCED_SIMPLE;
 	}
 
 	IInputLayout* IInputLayout::GetLayout_PosTex(IShaderStage* vertexShaderStage)

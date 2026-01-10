@@ -17,11 +17,11 @@ namespace HexEngine
 
 		bool LoadScene(const fs::path& path, std::shared_ptr<Scene>& scene);
 
-		std::vector<Entity*> LoadPrefab(Scene* scene, const fs::path& path);
+		std::shared_ptr<Scene> LoadPrefab(std::shared_ptr<Scene> scene, const fs::path& path);
 
 		void UnloadScene(Scene* scene);
 
-		std::shared_ptr<Scene> CreateEmptyScene(bool createSkySphere, IEntityListener* listener = nullptr);
+		std::shared_ptr<Scene> CreateEmptyScene(bool createSkySphere, IEntityListener* listener = nullptr, bool registerScene = false);
 
 		std::shared_ptr<Scene> GetCurrentScene();
 

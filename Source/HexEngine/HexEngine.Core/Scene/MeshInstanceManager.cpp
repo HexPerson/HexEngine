@@ -8,6 +8,8 @@ namespace HexEngine
 {
 	MeshInstance* MeshInstanceManager::CreateInstance(Mesh* mesh)
 	{
+		std::unique_lock lock(_lock);
+
 		for (auto&& it : _instances)
 		{
 			if (it.first == mesh->GetFullName() /*&&
@@ -34,6 +36,12 @@ namespace HexEngine
 		meshInstance->_meshName = mesh->GetFullName();
 		meshInstance->_refCount = 1;
 		meshInstance->_id = _idBase++;
+
+		meshInstance->_simpleInstance->_instanceBufferNumElements = 0;
+		meshInstance->_simpleInstance->_mesh = mesh;
+		meshInstance->_simpleInstance->_meshName = mesh->GetFullName();
+		meshInstance->_simpleInstance->_refCount = 1;
+		meshInstance->_simpleInstance->_id = meshInstance->_id;
 
 		MeshInstanceStorage storage;
 		storage.instance = meshInstance;
@@ -69,6 +77,8 @@ namespace HexEngine
 
 	bool MeshInstanceManager::DestroyInstance(MeshInstance* instance, Mesh* oldMesh)
 	{
+		std::unique_lock lock(_lock);
+
 		LOG_DEBUG("Destroying MeshInstance for '%s'", instance->_meshName.c_str());
 
 		std::string meshName = instance->_meshName;
@@ -85,6 +95,10 @@ namespace HexEngine
 				if (targetMesh && targetMesh != it.second.instance->_mesh)
 				{
 					it.second.instance->_mesh = targetMesh;
+				}
+				else if (!targetMesh)
+				{
+					bool a = false;
 				}
 
 				it.second.RemoveMesh(oldMesh);

@@ -131,7 +131,7 @@ namespace HexEngine
 		}
 	}
 
-	void AudioManager::Play(SoundEffect* effect)
+	void AudioManager::Play(const std::shared_ptr<SoundEffect>& effect)
 	{
 		//effect->_effect->Play(effect->_volume, 0.0f, 0.0f);
 		effect->_instance->Stop(true);
@@ -139,13 +139,13 @@ namespace HexEngine
 		effect->_instance->Play(false);
 	}
 
-	void AudioManager::Loop(SoundEffect* effect)
+	void AudioManager::Loop(const std::shared_ptr<SoundEffect>& effect)
 	{
 		effect->_instance->Stop(true);
 		effect->_instance->Play(true);
 	}
 
-	void AudioManager::Play(SoundEffect* effect, const math::Vector3& position)
+	void AudioManager::Play(const std::shared_ptr<SoundEffect>& effect, const math::Vector3& position)
 	{
 		if (!effect)
 			return;
@@ -165,7 +165,7 @@ namespace HexEngine
 		effect->_instance->Apply3D(_listener, effect->_emitter);
 	}
 
-	void AudioManager::Loop(SoundEffect* effect, const math::Vector3& position)
+	void AudioManager::Loop(const std::shared_ptr<SoundEffect>& effect, const math::Vector3& position)
 	{
 		if (!effect)
 			return;
@@ -183,7 +183,7 @@ namespace HexEngine
 		effect->_instance->Apply3D(_listener, effect->_emitter);
 	}
 
-	void AudioManager::Stop(SoundEffect* effect)
+	void AudioManager::Stop(const std::shared_ptr<SoundEffect>& effect)
 	{
 		effect->_instance->Stop(true);
 	}

@@ -316,4 +316,16 @@ namespace HexEngine
 		// TODO move this to anim component
 		//_animData->_animations.at(idx).time = g_pEnv->_timeManager->_currentTime;
 	}
+
+	BoneInfo* SkeletalAnimationComponent::GetBoneInfoByName(const std::string& name)
+	{
+		auto& boneMap = _mesh->GetBoneMap();
+
+		auto it = boneMap.find(name);
+		
+		if (it == boneMap.end())
+			return nullptr;
+
+		return &_boneInfo[it->second];
+	}
 }

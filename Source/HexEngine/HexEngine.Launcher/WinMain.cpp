@@ -2,8 +2,6 @@
 
 #include "../HexEngine.Core/HexEngine.hpp"
 
-IEnvironment* HexEngine::g_pEnv = nullptr;
-
 //HVar* HexEngine::g_hvars = nullptr;
 //HCommand* HexEngine::g_commands = nullptr;
 //int32_t HexEngine::g_numVars = 0;
@@ -83,7 +81,7 @@ int WinMain(
 		pGameExtension->OnCreateGame();
 	}
 
-	g_pEnv->_inputSystem->EnableRawInput(true);
+	//g_pEnv->_inputSystem->EnableRawInput(true);
 
 	// Now that everything is created, enter the game loop
 	//

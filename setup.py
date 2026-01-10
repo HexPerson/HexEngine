@@ -349,7 +349,7 @@ def build_recastnavigation(buildConfig):
 def build_oidn(buildConfig):
     if not os.path.exists("ThirdParty/oidn/"):
         print("Cloning oidn...")
-        Repo.clone_from("https://github.com/OpenImageDenoise/oidn.git", "ThirdParty/oidn/")
+        Repo.clone_from("https://github.com/OpenImageDenoise/oidn.git", "ThirdParty/oidn/", recursive=True)
 
     os.chdir("ThirdParty/oidn/")
     os.system("mkdir build")

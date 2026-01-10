@@ -14,7 +14,8 @@ namespace HexEngine
 
 		virtual void Update(float deltaTime) override;
 
-		void SetAnimationData(std::shared_ptr<AnimatedMesh> mesh, std::shared_ptr<AnimationData> animData);
+		void		SetAnimationData(std::shared_ptr<AnimatedMesh> mesh, std::shared_ptr<AnimationData> animData);
+		BoneInfo*	GetBoneInfoByName(const std::string& name);
 
 	private:
 		void				UpdateBoneTransform(Animation* animation, float TimeInSeconds, std::array<math::Matrix, MAX_BONES>& Transforms);
@@ -26,6 +27,8 @@ namespace HexEngine
 		uint32_t			FindScaling(float AnimationTime, const AnimChannel* pNodeAnim);
 		uint32_t			FindPosition(float AnimationTime, const AnimChannel* pNodeAnim);
 		uint32_t			FindRotation(float AnimationTime, const AnimChannel* pNodeAnim);
+
+		
 
 	public:
 		void				StopAnimating();

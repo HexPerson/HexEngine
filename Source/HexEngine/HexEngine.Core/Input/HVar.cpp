@@ -6,18 +6,18 @@
 
 namespace HexEngine
 {
-	//extern HVar* g_hvars;
-	//extern int32_t g_numVars;
+	HEX_API HVar* g_hvars = nullptr;
+	HEX_API int32_t g_numVars = 0;
 
 	void HVar::Create()
 	{
-		/*CommandManager::LockVars();
+		CommandManager::LockVars();
 
-		_next = GetVars();
-		GetVars() = this;
-		GetNumVars()++;
+		_next = g_hvars;
+		g_hvars = this;
+		g_numVars++;
 
-		CommandManager::UnlockVars();*/
+		CommandManager::UnlockVars();
 	}
 
 	HVar::Type HVar::GetType()

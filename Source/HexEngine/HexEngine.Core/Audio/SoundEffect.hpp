@@ -8,7 +8,7 @@
 
 namespace HexEngine
 {
-	class SoundEffect : public IResource
+	class HEX_API SoundEffect : public IResource
 	{
 		friend class AudioManager;
 

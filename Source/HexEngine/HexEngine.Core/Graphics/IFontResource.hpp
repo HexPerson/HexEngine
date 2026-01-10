@@ -55,7 +55,7 @@ namespace HexEngine
 
 	DEFINE_ENUM_FLAG_OPERATORS(FontAlign);
 
-	class IFontResource : public IResource
+	class HEX_API IFontResource : public IResource
 	{
 	public:
 		virtual bool HasFontSize(int32_t size) { return false; }
@@ -75,5 +75,7 @@ namespace HexEngine
 		virtual bool HasInstanceBuffer(int32_t size) const = 0;
 
 		virtual UIInstance* GetInstanceBuffer(int32_t size) const = 0;
+
+		static std::shared_ptr<IFontResource> Create(const fs::path& path, FontImportOptions* options);
 	};
 }

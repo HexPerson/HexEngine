@@ -8,13 +8,15 @@
 namespace HexEngine
 {
 	const float gCameraDefaultFov = 70.0f;
+	const float gViewMatrixBehindDistance = 1000.0f;
+	const float gDefaultMaxViewDistance = 1500.0f;
 
 	extern HVar r_lodPartition;
 
 	Camera::Camera(Entity* entity) :
 		UpdateComponent(entity)
 	{
-		SetPespectiveParameters(gCameraDefaultFov, g_pEnv->GetAspectRatio(), 1.0f, 10000.0f);
+		SetPespectiveParameters(gCameraDefaultFov, g_pEnv->GetAspectRatio(), 1.0f, gDefaultMaxViewDistance);
 
 		uint32_t width, height;
 		g_pEnv->_graphicsDevice->GetBackBufferDimensions(width, height);
@@ -190,8 +192,9 @@ namespace HexEngine
 		{
 			PVSParams pvsParams;
 			pvsParams.lodPartition = r_lodPartition._val.f32;
-			pvsParams.shapeType = PVSParams::ShapeType::Frustum;
-			pvsParams.shape.frustum = _frustum;
+			pvsParams.shapeType = PVSParams::ShapeType::Frustum2;
+			pvsParams.shape.frustum.sm = _frustum;
+			pvsParams.shape.frustum.lg = _largerFrustum;
 			pvsParams.camera = this;
 
 			_pvs->CalculateVisibility(g_pEnv->_sceneManager->GetCurrentScene().get(), pvsParams);
@@ -295,7 +298,7 @@ namespace HexEngine
 		if (_projectionMatrixPrev == math::Matrix::Identity)
 			_projectionMatrixPrev = _projectionMatrix;
 
-		_largerProjectionMatrix = math::Matrix::CreatePerspectiveFieldOfView(ToRadian(_fov * 1.2f), _aspectRatio, _screenNear, _screenFar);
+		_largerProjectionMatrix = math::Matrix::CreatePerspectiveFieldOfView(ToRadian(_fov+10.0f), _aspectRatio, _screenNear, _screenFar + (gViewMatrixBehindDistance * 2.0f));
 	}
 
 	void Camera::UpdateRotation()
@@ -370,11 +373,10 @@ namespace HexEngine
 	{
 		auto transform = GetEntity()->GetComponent<Transform>();
 
-		math::Vector3 up = _rotationMatrix.Up();
-
-		//_viewMatrixPrev = _viewMatrix;
+		math::Vector3 up = _rotationMatrix.Up();		
 
 		_viewMatrix = math::Matrix::CreateLookAt(transform->GetPosition(), _lookDir + transform->GetPosition(), up);
+		_viewMatrixBehind = math::Matrix::CreateLookAt(transform->GetPosition() - _lookDir * gViewMatrixBehindDistance, _lookDir + transform->GetPosition(), up);
 
 		BuildFrustum();
 
@@ -392,13 +394,10 @@ namespace HexEngine
 		// Update the frustum
 		//
 		dx::BoundingFrustum::CreateFromMatrix(_frustum, _projectionMatrix, true);
-		dx::BoundingFrustum::CreateFromMatrix(_largerFrustum, _projectionMatrix, true);
+		dx::BoundingFrustum::CreateFromMatrix(_largerFrustum, _largerProjectionMatrix, true);
 
-		auto viewMatrixInverse = _viewMatrix;
-		viewMatrixInverse = viewMatrixInverse.Invert();
-
-		_frustum.Transform(_frustum, viewMatrixInverse);
-		_largerFrustum.Transform(_largerFrustum, viewMatrixInverse);
+		_frustum.Transform(_frustum, _viewMatrix.Invert());
+		_largerFrustum.Transform(_largerFrustum, _viewMatrixBehind.Invert());
 
 		_boundingSphere.CreateFromFrustum(_boundingSphere, _frustum);		
 	}
@@ -485,9 +484,9 @@ namespace HexEngine
 
 	void Camera::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
-		DESERIALIZE_VALUE(_dlssEnabled, false);
-		DESERIALIZE_VALUE(_effects, CameraEffect::None);
-		DESERIALIZE_VALUE(_cameraAngles, math::Vector3());
+		DESERIALIZE_VALUE(_dlssEnabled);
+		DESERIALIZE_VALUE(_effects);
+		DESERIALIZE_VALUE(_cameraAngles);
 
 		_dlssValueChanged = true;
 		
@@ -557,10 +556,6 @@ namespace HexEngine
 	void Camera::DebugRender()
 	{
 		g_pEnv->_debugRenderer->DrawFrustum(_frustum, math::Color(1,0,0.1,1));
-		//g_pEnv->_debugRenderer->DrawFrustum(_pvs->GetOptimisedParams().shape.frustum, math::Color(0.1, 0, 1, 1));
-
-		dx::BoundingBox pvsBB;
-		dx::BoundingBox::CreateFromSphere(pvsBB, _pvs->GetOptimisedParams().shape.sphere);
-		g_pEnv->_debugRenderer->DrawAABB(pvsBB);
+		g_pEnv->_debugRenderer->DrawFrustum(_largerFrustum, math::Color(0, 1, 0.1, 1));
 	}
 }

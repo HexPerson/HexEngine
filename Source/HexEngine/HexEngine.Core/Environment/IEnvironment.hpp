@@ -56,6 +56,7 @@ namespace HexEngine
 		class IDenoiserProvider* _denoiserProvider = nullptr;
 		class INavMeshProvider* _navMeshProvider = nullptr;
 		MeshLoader* _meshLoader = nullptr;
+		class PrefabLoader* _prefabLoader = nullptr;
 
 		std::thread _physicsThread;		
 		std::vector<IGameExtension*> _gameExtensions;

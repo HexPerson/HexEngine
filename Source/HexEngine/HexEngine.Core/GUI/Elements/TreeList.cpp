@@ -59,17 +59,22 @@ namespace HexEngine
 	{
 		//D3DPERF_BeginEvent(0xffffffff, L"Rendering TreeList");
 
+		auto pos = GetAbsolutePosition();
+
+		renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.listbox_back);
+
+		int32_t y = 0, i = 0;
+		UpdateHovering(renderer, _items, y, i);
+
 		if(_canvas.BeginDraw(renderer, _size.x, _size.y))
 		{
-			auto pos = GetAbsolutePosition();
-
 			pos.x = pos.y = 0;
 
 			auto originalPos = pos;
 
 			//g_pEnv->_graphicsDevice->SetScissorRect({ pos.x, pos.y, pos.x + _size.x, pos.y + _size.y });
 
-			renderer->PushFillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.listbox_back);
+			
 
 			_renderCount = 0;
 
@@ -97,7 +102,7 @@ namespace HexEngine
 
 			RenderItems(renderer, pos, pos, _items, c);
 
-			renderer->PushFrame(originalPos.x, originalPos.y, _size.x, _size.y, 1, renderer->_style.listbox_border);
+			renderer->Frame(originalPos.x, originalPos.y, _size.x, _size.y, 1, renderer->_style.listbox_border);
 
 			if (_draggedItem != nullptr)
 			{
@@ -123,8 +128,7 @@ namespace HexEngine
 			GetAbsolutePosition().x, GetAbsolutePosition().y,
 			_size.x, _size.y);
 
-		int32_t y = 0, i = 0;
-		UpdateHovering(renderer, _items, y, i);
+		
 
 		//D3DPERF_EndEvent();
 	}
@@ -156,7 +160,7 @@ namespace HexEngine
 
 			if (IsMouseOver(highlightPos, highlightSize))
 			{
-				//renderer->PushFillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_highlight);
+				renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_highlight);
 
 				_hoveredItem = item;
 
@@ -168,10 +172,10 @@ namespace HexEngine
 			if (_lastHoveredItem != _hoveredItem)
 			{
 				//_redrawRenderTarget = true;
-				_canvas.Redraw();
+				//_canvas.Redraw();
 				_lastHoveredItem = _hoveredItem;
 
-				CON_ECHO("Hovered item changed");
+				//CON_ECHO("Hovered item changed");
 			}
 
 			y += item->GetHeight();
@@ -335,13 +339,18 @@ namespace HexEngine
 	}
 #endif
 
-	void TreeList::AddNode(ListNode* node, ListNode* parent)
+	void TreeList::Repaint()
+	{
+		_canvas.Redraw();
+	}
+
+	void TreeList::AddNode(ListNode* node, ListNode* parent, bool repaintImmediately)
 	{
 		std::unique_lock lock(_lock);
 
 		// don't add it if it already exists
 		//
-		if (auto exist = FindItemByLabelParented(node->GetLabel(), parent); exist != nullptr)
+		if (auto exist = FindItemByIdParented(node->_id, parent); exist != nullptr)
 			return;
 
 		if (parent)
@@ -359,8 +368,10 @@ namespace HexEngine
 			_numItems++;
 		}
 
-		//_redrawRenderTarget = true;
-		_canvas.Redraw();
+		if(repaintImmediately)
+			_canvas.Redraw();
+
+		_currentNodeId++;
 	}
 
 	ListNode* TreeList::FindItemByLabel(const std::wstring& label)
@@ -387,6 +398,36 @@ namespace HexEngine
 			if (item->_child)
 			{
 				if (auto itemFound = FindItemByLabelParented(label, item); itemFound != nullptr)
+					return itemFound;
+			}
+		}
+		return nullptr;
+	}
+
+	ListNode* TreeList::FindItemById(int32_t id)
+	{
+		std::unique_lock lock(_lock);
+
+		for (auto& item : _items)
+		{
+			if (item->_id == id)
+				return item;
+		}
+		return nullptr;
+	}
+
+	ListNode* TreeList::FindItemByIdParented(int32_t id, ListNode* parent)
+	{
+		std::unique_lock lock(_lock);
+
+		for (auto& item : parent ? parent->_items : _items)
+		{
+			if (item->_id == id)
+				return item;
+
+			if (item->_child)
+			{
+				if (auto itemFound = FindItemByIdParented(id, item); itemFound != nullptr)
 					return itemFound;
 			}
 		}
@@ -494,6 +535,11 @@ namespace HexEngine
 		item->_items.clear();
 	}
 
+	int32_t TreeList::GetCurrentNodeId() const
+	{
+		return _currentNodeId;
+	}
+
 	void TreeList::RenderItems(GuiRenderer* renderer, Point& position, const Point& absolutePos, const std::vector<ListNode*>& items, int32_t& c)
 	{
 		Point itemPos = position;
@@ -561,7 +607,7 @@ namespace HexEngine
 			Point highlightPos(position.x, position.y);
 			Point highlightSize(_size.x, item->GetHeight());
 
-			renderer->PushFillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_highlight);
+			renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_highlight);
 		}
 
 		item->Render(renderer, position, Point(_size.x, TreeListLineHeight));

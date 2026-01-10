@@ -79,6 +79,15 @@ Checkbox* df = new Checkbox(widget, widget->GetNextPos(), Point(sizex - 40, 18),
 		//ADD_CONTROL(pm->_fog, "r_exposure", L"Exposure", 0.01f, 3);
 		//ADD_CONTROL(pm->_fog, "r_hueShift", L"Hue Shift", 0.01f, 3);
 		//ADD_CONTROL(pm->_fog, "r_saturation", L"Saturatuin", 0.01f, 3);
+		
+		pm->_ocean = new ComponentWidget(layout, layout->GetNextPos(), Point(pm->_size.x - 20, 10), L"Ocean");
+
+		auto& ocean = g_pEnv->_sceneManager->GetCurrentScene()->GetOcean();
+
+		DragFloat* fp = new DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), Point(sizex - 40, 18), L"Fresnel Power", &ocean.fresnelPow, 0.1f, 10.0f, 0.1f);
+		DragFloat* sfs = new DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), Point(sizex - 40, 18), L"Shore Fade Strength", &ocean.shoreFadeStrength, 0.1f, 50.0f, 0.1f);
+		DragFloat* ff = new DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), Point(sizex - 40, 18), L"Fade Factor", &ocean.fadeFactor, 0.1f, 50.0f, 0.1f);
+		DragFloat* rs = new DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), Point(sizex - 40, 18), L"Reflection Strength", &ocean.reflectionStrength, 0.1f, 1.0f, 0.01f);
 
 		pm->BringToFront();
 		//pm->_onCompleted = onCompletedAction;

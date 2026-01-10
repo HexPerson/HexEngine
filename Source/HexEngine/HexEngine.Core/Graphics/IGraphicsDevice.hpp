@@ -62,9 +62,8 @@ namespace HexEngine
 	struct OceanSettings
 	{
 		OceanSettings() :
-			shallowColour(HEX_RGBA_TO_FLOAT4(63.0f, 155.0f, 205.0f, 255.0f)),
-			deepColour(HEX_RGBA_TO_FLOAT4(20.0f, 51.0f, 75.0f, 255.0f)),
-			fogColour(HEX_RGBA_TO_FLOAT4(195.0f, 241.0f, 242.0f, 255.0f)),
+			shallowColour(HEX_RGBA_TO_FLOAT4(53.0f, 58.0f, 69.0f, 255.0f)),
+			deepColour(HEX_RGBA_TO_FLOAT4(77.0f, 63.0f, 73.0f, 255.0f)),
 			fresnelPow(3.2f),
 			shoreFadeStrength(12.0f),
 			fadeFactor(15.0f),
@@ -73,7 +72,6 @@ namespace HexEngine
 
 		math::Vector4 shallowColour;
 		math::Vector4 deepColour;
-		math::Vector4 fogColour;
 		float fresnelPow;
 		float shoreFadeStrength;
 		float fadeFactor;
@@ -152,7 +150,8 @@ namespace HexEngine
 		math::Matrix _worldMatrix;
 		uint32_t _flags;
 		int entityId;
-		int pad[2];
+		float cullDistance;
+		int pad;
 
 		MaterialProperties _material;
 	};

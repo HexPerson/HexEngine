@@ -42,9 +42,40 @@ namespace HexEngine
 		//math::Vector4 _boneWeights;
 	};
 
+	struct SimpleMeshVertex
+	{
+		math::Vector4 _position;
+		math::Vector2 _texcoord;
+	};
+
 	using MeshIndexFormat = uint32_t;
 
 	struct AnimatedMeshVertex : MeshVertex
+	{
+		void AddBoneData(uint32_t BoneID, float Weight)
+		{
+			for (uint32_t i = 0; i < 4; i++)
+			{
+				float* weights = &_boneWeights.x;
+				float* ids = &_boneIds.x;
+
+				if (weights[i] == 0.0)
+				{
+					ids[i] = (float)BoneID;
+					weights[i] = Weight;
+					return;
+				}
+			}
+
+			// should never get here - more bones than we have space for
+			//    assert(0);
+		}
+
+		math::Vector4 _boneIds;
+		math::Vector4 _boneWeights;
+	};
+
+	struct SimpleAnimatedMeshVertex : SimpleMeshVertex
 	{
 		void AddBoneData(uint32_t BoneID, float Weight)
 		{
@@ -126,6 +157,7 @@ namespace HexEngine
 	const int OBJECT_FLAGS_HAS_OPACITY				= (1 << 5);
 	const int OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION	= (1 << 6);
 	const int OBJECT_FLAGS_HAS_ANIMATION			= (1 << 7);
+	const int OBJECT_FLAGS_ORM_FORMAT				= (1 << 8);
 
 	class MeshRenderer;
 	class Model;
@@ -160,7 +192,7 @@ namespace HexEngine
 
 		virtual void Destroy() override;
 
-		void SetBuffers(const math::Matrix& worldMatrix);
+		void SetBuffers(bool isShadowMap = false);
 
 		virtual void UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId);
 		
@@ -212,6 +244,7 @@ namespace HexEngine
 
 	protected:
 		IVertexBuffer* _vertexBuffer = nullptr;
+		IVertexBuffer* _simpleVertexBuffer = nullptr;
 		IIndexBuffer* _indexBuffer = nullptr;
 		std::vector<MeshIndexFormat> _indices;
 
@@ -225,6 +258,7 @@ namespace HexEngine
 		std::string _materialName;
 		
 		std::vector<MeshVertex> _vertices;
+		std::vector<SimpleMeshVertex> _simpleVertices;
 		uint32_t _faceCount = 0;		
 
 		dx::BoundingBox _aabb;

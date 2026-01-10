@@ -33,16 +33,16 @@ namespace HexEngine
 
 		if (_text.length() > 0)
 		{
-			renderer->PushPrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, _position.x + 10, _position.y + 40, renderer->_style.text_regular, FontAlign::None, _text);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, _position.x + 10, _position.y + 40, renderer->_style.text_regular, FontAlign::None, _text);
 		}
 
-		renderer->PushFillQuad(_position.x + 10, _position.y + 60, _size.x - 20, 20, renderer->_style.lineedit_back);
+		renderer->FillQuad(_position.x + 10, _position.y + 60, _size.x - 20, 20, renderer->_style.lineedit_back);
 
 		if (_percentage > 0.0f)
 		{
-			renderer->PushFillQuad(_position.x + 12, _position.y + 62, (int32_t)((float)(_size.x - 24) * _percentage), 18, renderer->_style.win_highlight);
+			renderer->FillQuad(_position.x + 12, _position.y + 62, (int32_t)((float)(_size.x - 24) * _percentage), 18, renderer->_style.win_highlight);
 		}
 		
-		renderer->PushFrame(_position.x + 10, _position.y + 60, _size.x - 20, 20, 1, renderer->_style.win_border);
+		renderer->Frame(_position.x + 10, _position.y + 60, _size.x - 20, 20, 1, renderer->_style.win_border);
 	}
 }

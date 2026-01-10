@@ -62,7 +62,7 @@
     <EnableASAN>false</EnableASAN>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
-    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
     <WholeProgramOptimization>false</WholeProgramOptimization>
@@ -207,9 +207,10 @@ copy "$(ProjectDir)Shaders\Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTa
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(Configuration)</AdditionalLibraryDirectories>
       <AdditionalDependencies>DirectXTK.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AssemblyDebug>true</AssemblyDebug>
     </Link>
     <Lib>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
@@ -235,13 +236,13 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions);HEX_CORE_MODULE;_XM_SSE4_INTRINSICS_</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions);HEX_CORE;_XM_SSE4_INTRINSICS_</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <AdditionalIncludeDirectories>$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Audio\</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
-      <EnableEnhancedInstructionSet>NotSet</EnableEnhancedInstructionSet>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
       <FloatingPointModel>Fast</FloatingPointModel>
     </ClCompile>
     <Link>
@@ -257,6 +258,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     </Lib>
     <PostBuildEvent>
       <Command>copy "$(TargetDir)$(TargetName).lib" "$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).lib"
+
+copy "$(TargetDir)$(TargetName).dll" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).dll"
 
 copy "$(ProjectDir)Shaders\Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\Data\Shaders\*.hcs"
 
@@ -307,6 +310,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
   <ItemGroup>
     <ClInclude Include="Audio\AudioManager.hpp" />
     <ClInclude Include="Audio\SoundEffect.hpp" />
+    <ClInclude Include="Entity\Component\InstancedStaticMeshComponent.hpp" />
     <ClInclude Include="Entity\Component\NavigationComponent.hpp" />
     <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp" />
     <ClInclude Include="Entity\Entity.hpp" />
@@ -324,6 +328,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="FileSystem\ICompressionProvider.hpp" />
     <ClInclude Include="FileSystem\IResourceLoader.hpp" />
     <ClInclude Include="FileSystem\JsonFile.hpp" />
+    <ClInclude Include="FileSystem\PrefabLoader.hpp" />
     <ClInclude Include="FileSystem\ProjectFile.hpp" />
     <ClInclude Include="Graphics\IDenoiserProvider.hpp" />
     <ClInclude Include="Graphics\IStreamlineProvider.hpp" />
@@ -489,6 +494,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
   <ItemGroup>
     <ClCompile Include="Audio\AudioManager.cpp" />
     <ClCompile Include="Audio\SoundEffect.cpp" />
+    <ClCompile Include="Entity\Component\InstancedStaticMeshComponent.cpp" />
     <ClCompile Include="Entity\Component\NavigationComponent.cpp" />
     <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp" />
     <ClCompile Include="Entity\Entity.cpp" />
@@ -504,7 +510,9 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="FileSystem\AssetPackage.cpp" />
     <ClCompile Include="FileSystem\AssetPackageManager.cpp" />
     <ClCompile Include="FileSystem\IResource.cpp" />
+    <ClCompile Include="FileSystem\PrefabLoader.cpp" />
     <ClCompile Include="FileSystem\ProjectFile.cpp" />
+    <ClCompile Include="Graphics\IFontResource.cpp" />
     <ClCompile Include="Graphics\MeshLoader.cpp" />
     <ClCompile Include="Graphics\TextureLoader.cpp" />
     <ClCompile Include="GUI\Elements\Canvas.cpp" />

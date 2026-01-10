@@ -14,6 +14,7 @@ namespace HexEditor
 		~Terrain();
 
 		static Terrain* CreateTerrainDialog(Element* parent, OnCompleted onCompletedAction);
+		static Terrain* CreateOceanDialog(Element* parent, OnCompleted onCompletedAction);
 
 		bool GenerateTerrain();
 
@@ -23,9 +24,9 @@ namespace HexEditor
 
 		float _heightScale = 1.0f;
 		float _width = 1024.0f;
-		int32_t _gridSize = 10;
-		float _uvScale = 4.4f;
-		int32_t _resolution = 64;
+		int32_t _gridSize = 4;
+		float _uvScale = 5.0f;
+		int32_t _resolution = 32;
 		int32_t _maxLod = 0;
 		bool _parent = true;
 		bool _makeColliders = true;

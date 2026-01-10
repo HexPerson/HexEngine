@@ -26,7 +26,8 @@ namespace HexEngine
 		enum class ShapeType
 		{
 			Sphere,
-			Frustum
+			Frustum,
+			Frustum2
 		};
 
 		float lodPartition;
@@ -37,7 +38,13 @@ namespace HexEngine
 			constexpr Shape() {}
 
 			dx::BoundingSphere sphere;
-			dx::BoundingFrustum frustum;
+
+			struct
+			{
+				dx::BoundingFrustum sm;
+				dx::BoundingFrustum lg;
+			} frustum;
+
 		} shape;
 
 		math::Matrix shadowViewMatrix;

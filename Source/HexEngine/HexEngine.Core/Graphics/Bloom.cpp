@@ -28,7 +28,7 @@ namespace HexEngine
 
 		_viewport = CD3D11_VIEWPORT(0.0f, 0.0f, (float)width, (float)height);
 
-		_blur = new BlurEffect(_renderTarget, BlurType::Gaussian, 10);
+		_blur = new BlurEffect(_renderTarget, BlurType::Gaussian, 8);
 	}
 
 	Bloom::~Bloom()
@@ -51,7 +51,7 @@ namespace HexEngine
 
 		renderer->StartFrame((uint32_t)bbvp.width, (uint32_t)bbvp.height);
 
-		D3DPERF_BeginEvent(0xFFFFFFFF, L"BloomStart");
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"BloomStart");
 
 		g_pEnv->_graphicsDevice->SetRenderTarget(_renderTarget);
 		_renderTarget->ClearRenderTargetView(math::Color(0, 0, 0, 0));
@@ -71,7 +71,7 @@ namespace HexEngine
 
 		_renderTarget->BlendTo_Additive(bloomOutput);
 
-		D3DPERF_EndEvent();
+		GFX_PERF_END();
 
 		renderer->EndFrame();
 		

@@ -97,7 +97,7 @@ namespace HexEngine
 
 		// create a default material
 		//
-		_defaultMaterial = _physics->createMaterial(0.5f, 0.5f, 0.6f);
+		_defaultMaterial = _physics->createMaterial(0.5f, 0.5f, 0.4f);
 
 		/*PxInitVehicleSDK(*_physics);
 		PxVehicleSetBasisVectors(physx::PxVec3(0, 1, 0), physx::PxVec3(0, 0, 1));
@@ -286,6 +286,18 @@ namespace HexEngine
 
 					rigidBody->_geometry = geomCopy;
 					rigidBody->_shape = _physics->createShape(*geomCopy, *_defaultMaterial, true);
+
+					break;
+				}
+				case physx::PxGeometryType::eBOX:
+				{
+					physx::PxBoxGeometry* boxGeom = (physx::PxBoxGeometry*)physxBody->_geometry;
+
+					physx::PxBoxGeometry* geomCopy = new physx::PxBoxGeometry(boxGeom->halfExtents);
+
+					rigidBody->_geometry = geomCopy;
+					rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
+
 					break;
 				}
 
@@ -433,16 +445,20 @@ namespace HexEngine
 
 	void PhysicsSystemPhysX::DebugRender()
 	{
-#if 0//def _DEBUG
-		if (_resetDebug)
+#if 1//def _DEBUG
+		static int debugTicks = 0;
+
+		if (_resetDebug || ++debugTicks >= 10)
 		{
+			debugTicks = 0;
+
 			if (_waitingForSimulationStepForDebug == false)
 			{
 				_scene->lockWrite();
 				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eSCALE, 1.0f);
 				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_STATIC, 1.0f);
 				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_DYNAMIC, 1.0f);
-				//_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_AABBS, 1.0f);
+				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_AABBS, 1.0f);
 				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_SHAPES, 1.0f);
 
 				_waitingForSimulationStepForDebug = true;
@@ -465,7 +481,7 @@ namespace HexEngine
 				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eSCALE, 0.0f);
 				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_STATIC, 0.0f);
 				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_DYNAMIC, 0.0f);
-				//_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_AABBS, 1.0f);
+				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_AABBS, 1.0f);
 				_scene->setVisualizationParameter(physx::PxVisualizationParameter::eCOLLISION_SHAPES, 0.0f);
 				_scene->unlockWrite();
 

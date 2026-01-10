@@ -555,6 +555,12 @@
     <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Entity\Component\InstancedStaticMeshComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FileSystem\PrefabLoader.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Graphics\Window.cpp">
@@ -957,6 +963,15 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\InstancedStaticMeshComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="FileSystem\PrefabLoader.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Graphics\IFontResource.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

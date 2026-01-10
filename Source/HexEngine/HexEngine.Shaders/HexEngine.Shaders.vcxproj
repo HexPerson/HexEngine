@@ -149,6 +149,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
   <ItemGroup>
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
+    <HexEngineShader Include="WaterBlit.shader" />
     <None Include="PBRutils.shader">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
       <FileType>Document</FileType>

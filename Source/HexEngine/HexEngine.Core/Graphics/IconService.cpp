@@ -8,7 +8,7 @@ namespace HexEngine
 
 	void IconService::Create(const std::wstring& sceneName)
 	{
-		_iconScene = g_pEnv->_sceneManager->CreateEmptyScene(false);
+		_iconScene = g_pEnv->_sceneManager->CreateEmptyScene(false, nullptr, true);
 		_iconScene->SetFlags(SceneFlags::Utility);
 		_iconScene->CreateDefaultSunLight();
 		_iconScene->SetName(sceneName);
@@ -100,7 +100,7 @@ namespace HexEngine
 						meshRenderer->SetMesh(model);
 					}
 
-					auto pos = math::Vector3(0, _dummyEnt->GetBoundingSphere().Radius * 0.5f, _dummyEnt->GetBoundingSphere().Radius * 1.5f);
+					auto pos = math::Vector3(0, _dummyEnt->GetBoundingSphere().Radius * 0.5f, _dummyEnt->GetBoundingSphere().Radius * 1.4f);
 
 					_camera->GetEntity()->SetPosition(pos);
 
@@ -126,7 +126,7 @@ namespace HexEngine
 
 					PVSParams params;
 					params.lodPartition = _camera->GetFarZ();
-					params.shape.frustum = _camera->GetFrustum();
+					params.shape.frustum.sm = _camera->GetFrustum();
 					params.shapeType = PVSParams::ShapeType::Frustum;
 					params.camera = _camera;
 					_camera->GetPVS()->CalculateVisibility(_iconScene.get(), params);
@@ -172,7 +172,7 @@ namespace HexEngine
 
 				PVSParams params;
 				params.lodPartition = _camera->GetFarZ();
-				params.shape.frustum = _camera->GetFrustum();
+				params.shape.frustum.sm = _camera->GetFrustum();
 				params.shapeType = PVSParams::ShapeType::Frustum;
 				params.camera = _camera;
 				_camera->GetPVS()->CalculateVisibility(_iconScene.get(), params);
@@ -207,7 +207,12 @@ namespace HexEngine
 
 			auto cameraRT = _camera->GetRenderTarget();
 
-			D3DPERF_BeginEvent(0xffffffff, L"Rendering IconScene");
+			GFX_PERF_BEGIN(0xffffffff, L"Rendering IconScene");
+
+			if (_icons.find(path) != _icons.end())
+			{
+				DebugBreak();
+			}
 
 			_icons[path] = g_pEnv->_graphicsDevice->CreateTexture2D(
 				512,
@@ -236,7 +241,7 @@ namespace HexEngine
 
 			}
 
-			D3DPERF_EndEvent();
+			GFX_PERF_END();
 
 			_generatedPaths.erase(_generatedPaths.begin());
 

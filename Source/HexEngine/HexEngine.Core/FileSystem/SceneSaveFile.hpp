@@ -9,7 +9,8 @@ namespace HexEngine
 	{
 		None = 0,
 		DontSaveVariables = HEX_BITSET(0),
-		DontSaveHierarchy = HEX_BITSET(1)
+		DontSaveHierarchy = HEX_BITSET(1),
+		IsPrefab		  = HEX_BITSET(2)
 	};
 
 	class Scene;
@@ -24,8 +25,13 @@ namespace HexEngine
 		const int Version = 2;
 
 		bool Load(SceneSaveProgressCallback callback = nullptr);
+		bool Load(std::shared_ptr<Scene> loadIntoExistingScene, SceneSaveProgressCallback callback = nullptr);
 
+		// Save all entities in the scene
 		bool Save();
+
+		// Save a specific set of entities only
+		bool Save(const std::vector<HexEngine::Entity*>& entities);
 
 		std::shared_ptr<Scene> GetScene() const;
 

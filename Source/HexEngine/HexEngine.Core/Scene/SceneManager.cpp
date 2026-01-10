@@ -27,7 +27,7 @@ namespace HexEngine
 
 	bool SceneManager::LoadScene(const fs::path& path, std::shared_ptr<Scene>& scene)
 	{
-		scene = CreateEmptyScene(false);
+		scene = CreateEmptyScene(false, nullptr, true);
 
 		SceneSaveFile file(path, std::ios::in, scene);
 
@@ -65,7 +65,7 @@ namespace HexEngine
 			_currentScene = nullptr;
 	}
 
-	std::vector<Entity*> SceneManager::LoadPrefab(Scene* scene, const fs::path& path)
+	std::shared_ptr<Scene> SceneManager::LoadPrefab(std::shared_ptr<Scene> scene, const fs::path& path)
 	{
 		std::vector<Entity*> ents;
 
@@ -76,30 +76,29 @@ namespace HexEngine
 		if (!file.Load())
 		{
 			LOG_CRIT("Failed to load scene");
-			return ents;
+			return nullptr;
 		}
 
 		file.Close();
 
 		scene->MergeFrom(prefabScene.get());
 
-		//_currentScene = scene;
-
-		return ents;
+		return scene;
 	}
 
-	std::shared_ptr<Scene> SceneManager::CreateEmptyScene(bool createSkySphere, IEntityListener* listener)
+	std::shared_ptr<Scene> SceneManager::CreateEmptyScene(bool createSkySphere, IEntityListener* listener, bool registerScene)
 	{
 		std::unique_lock lock(_mutex);
 
 		std::shared_ptr<Scene> scene = std::shared_ptr<Scene>(new Scene, ResourceDeleter());
 
-		if (_currentScene == nullptr)
+		if (_currentScene == nullptr && registerScene == true)
 			_currentScene = scene;
 
 		scene->CreateEmpty(createSkySphere, listener);
 
-		_scenes.push_back(scene);		
+		if(registerScene)
+			_scenes.push_back(scene);		
 
 		return scene;
 	}
@@ -159,12 +158,12 @@ namespace HexEngine
 		{
 			if (HEX_HASFLAG(scene->GetFlags(), SceneFlags::Renderable))
 			{
-				D3DPERF_BeginEvent(0xffffffff, std::format(L"Rendering scene '{}'", scene->GetName()).c_str());
+				GFX_PERF_BEGIN(0xffffffff, std::format(L"Rendering scene '{}'", scene->GetName()).c_str());
 
 				_currentScene = scene;
 				g_pEnv->_sceneRenderer->RenderScene(scene.get(), scene->GetMainCamera(), scene->GetFlags());
 
-				D3DPERF_EndEvent();
+				GFX_PERF_END();
 			}
 		}
 	}
@@ -177,9 +176,8 @@ namespace HexEngine
 	std::shared_ptr<IResource> SceneManager::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		if (absolutePath.extension() == ".hprefab")
-		{
-			LoadPrefab(GetCurrentScene().get(), absolutePath);
-			return nullptr;
+		{			
+			return LoadPrefab(GetCurrentScene(), absolutePath);
 		}
 		else
 		{

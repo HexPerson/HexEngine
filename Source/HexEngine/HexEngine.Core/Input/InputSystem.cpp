@@ -15,12 +15,6 @@ namespace HexEngine
 	void InputSystem::Create(HWND handle)
 	{
 		_targetWnd = handle;
-
-		g_pEnv->_commandManager->RegisterVar(&in_pitchSensitivity);
-		g_pEnv->_commandManager->RegisterVar(&in_yawSensitivity);
-		g_pEnv->_commandManager->RegisterVar(&in_mouseSmoothing);
-		g_pEnv->_commandManager->RegisterVar(&in_mouseSmoothingWeight);
-		g_pEnv->_commandManager->RegisterVar(&in_mouseSmoothingSamples);
 	}
 
 	InputSystem::~InputSystem()

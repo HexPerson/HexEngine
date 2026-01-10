@@ -115,13 +115,14 @@
 
 		colour = float4(atmosphereColour, 1.0f);
 		
+		//colour = float4(0, 0, 0, 1);
 
 		GBufferOut output;
 
-		bool isCameraUnderWater = false;// g_eyePos.y <= 0.0f;
+		//bool isCameraUnderWater = false;// g_eyePos.y <= 0.0f;
 
-		if (isCameraUnderWater && input.positionWS.y <= 0.0f)
-			colour.rgb = g_oceanConfig.fogColour.rgb;
+		//if (isCameraUnderWater && input.positionWS.y <= 0.0f)
+		//	colour.rgb = g_oceanConfig.fogColour.rgb;
 
 		float2 noiseSamplePos = projectedPixel.xy * 4.0f;
 

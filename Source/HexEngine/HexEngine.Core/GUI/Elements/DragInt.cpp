@@ -68,7 +68,7 @@ namespace HexEngine
 		}
 		else if (event == InputEvent::MouseMove && _startDrag != -1)
 		{
-			if (abs(_startDrag - data->MouseDown.xpos) > 0)
+			if (abs(_startDrag - data->MouseDown.xpos) > 0 && _dragging == false)
 			{
 				_dragging = true;
 				SetHasInputFocus(false);

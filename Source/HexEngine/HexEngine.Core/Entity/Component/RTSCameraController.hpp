@@ -39,9 +39,12 @@ namespace HexEngine
 		void SetMovementFlag(RTSMoveFlag flag);
 		void ClearMovementFlag(RTSMoveFlag flag);
 		void SetMouseWheelZoomSpeed(float speed) { _zoomSpeed = speed; }
-		
+
+		void SetLookAt(const math::Vector3& to);		
 
 	private:
+		math::Vector3 _lookAtLocation;
+
 		float _movementSpeed = 70.0f;
 		float _strafeMovementSpeed = 70.0f;
 		float _pitchSensitivity = 1.6f;

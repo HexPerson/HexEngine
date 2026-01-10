@@ -29,6 +29,8 @@ namespace HexEngine
 
 		StaticMeshComponent(Entity* entity, StaticMeshComponent* clone);
 
+		virtual ~StaticMeshComponent();
+
 		virtual void Destroy() override;
 
 		void		ReleaseAllMeshes();
@@ -44,6 +46,11 @@ namespace HexEngine
 		CullingMode GetShadowCullMode() const;
 		void		SetShadowCullMode(CullingMode mode);
 
+		bool IsBoundToBone() const { return _boundBone != nullptr; }
+		void BindToBone(BoneInfo* boneInfo) { _boundBone = boneInfo; }
+		const math::Matrix& GetOffsetMatrix() const { return _offsetMatrix; }
+		const math::Matrix& GetOffsetMatrixTranspose() const { return _offsetMatrixTranspose; }
+
 		/*void				SetBlendState(BlendState state);
 		void				SetCullMode(CullingMode mode);
 		void				SetDepthState(DepthBufferState state);*/
@@ -56,7 +63,7 @@ namespace HexEngine
 
 		// Mesh
 		//
-		void SetMesh(const std::shared_ptr<Mesh>& mesh);
+		void SetMesh(std::shared_ptr<Mesh> mesh);
 		std::shared_ptr<Mesh> GetMesh() const;
 
 		const math::Vector2& GetUVScale() const;
@@ -78,6 +85,10 @@ namespace HexEngine
 
 		math::Vector2 _uvScale;
 		math::Vector3 _offsetPosition;
+
+		BoneInfo* _boundBone = nullptr;
+		math::Matrix _offsetMatrix;
+		math::Matrix _offsetMatrixTranspose;
 
 		CullingMode _shadowCullingMode = CullingMode::FrontFace;
 		

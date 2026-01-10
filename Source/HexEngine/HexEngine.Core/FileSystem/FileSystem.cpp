@@ -168,7 +168,7 @@ namespace HexEngine
 			for (auto& info : pathsToWatch)
 			{
 
-				const uint32_t bufferSize = 0x10240;
+				const uint32_t bufferSize = 0x102400;
 				uint8_t* buffer = new uint8_t[bufferSize];
 				memset(buffer, 0, bufferSize);
 

@@ -28,6 +28,8 @@ namespace HexEngine
 
 		virtual math::Quaternion GetPhysicsRotation() override;
 
+		virtual math::Vector3 GetLinearVelocity() override;
+
 		virtual ICollider* AddSphereCollider(Transform* transform, float radius) override;
 
 		virtual ICollider* AddCapsuleCollider(Transform* transform, float radius, float height) override;
@@ -54,7 +56,7 @@ namespace HexEngine
 
 		virtual float GetMass() const override;
 
-		virtual void SetGravityEnabled(bool enabled) override;
+		virtual void SetGravityEnabled(bool enabled, bool resetVelocity = false) override;
 
 		virtual void OnCollision(IRigidBody* body) override;
 
@@ -112,5 +114,6 @@ namespace HexEngine
 		physx::PxGeometry* _geometry = nullptr;
 		Entity* _entity = nullptr;
 		float _mass = 1.0f;
+		physx::PxMaterial* _customMaterial = nullptr;
 	};
 }

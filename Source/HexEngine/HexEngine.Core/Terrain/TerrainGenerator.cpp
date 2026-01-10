@@ -214,10 +214,9 @@ namespace HexEngine
 		mesh->SetOBB(obb);
 
 		// set the paths for saving/loading
-		fs::path terrainPath = g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("TERRAIN");
 
-		mesh->SetPaths(terrainPath, g_pEnv->_fileSystem);
-		//mesh->_terrainParams = params;
+		mesh->SetPaths(params.path, params.fs);
+		mesh->SetLoader(g_pEnv->_resourceSystem->FindResourceLoaderForExtension(".hmesh"));
 
 		return mesh;
 	}
