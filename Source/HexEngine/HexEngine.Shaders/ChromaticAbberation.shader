@@ -47,9 +47,9 @@
 
 		float4 colour = c0;
 
-		colour.r = shaderTexture.Sample(PointSampler, input.texcoord + (direction * redOffset)).r;
-		colour.g = shaderTexture.Sample(PointSampler, input.texcoord + (direction * greenOffset)).g;
-		colour.b = shaderTexture.Sample(PointSampler, input.texcoord + (direction * blueOffset)).b;
+		colour.r = shaderTexture.Sample(PointSampler, input.texcoord + (direction * redOffset * g_chromaticAbberationAmmount)).r;
+		colour.g = shaderTexture.Sample(PointSampler, input.texcoord + (direction * greenOffset * g_chromaticAbberationAmmount)).g;
+		colour.b = shaderTexture.Sample(PointSampler, input.texcoord + (direction * blueOffset * g_chromaticAbberationAmmount)).b;
 
 		return colour;
 	}

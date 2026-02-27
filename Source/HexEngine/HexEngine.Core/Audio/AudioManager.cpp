@@ -54,6 +54,17 @@ namespace HexEngine
 
 	void AudioManager::UnloadResource(IResource* resource)
 	{
+		for (auto it = _createdSounds.begin(); it != _createdSounds.end(); it++)
+		{
+			auto sound = it->lock();
+
+			if (sound.get() == dynamic_cast<SoundEffect*>(resource))
+			{
+				_createdSounds.erase(it);
+				break;
+			}
+		}
+
 		SAFE_DELETE(resource);
 	}
 

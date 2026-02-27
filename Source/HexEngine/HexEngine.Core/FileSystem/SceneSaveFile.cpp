@@ -84,6 +84,8 @@ namespace HexEngine
 			}
 		}
 
+		_scene->Save(saveFileData, this);
+
 		auto jsonString = saveFileData.dump(2);
 
 		Write(jsonString.data(), (uint32_t)jsonString.length());
@@ -91,8 +93,7 @@ namespace HexEngine
 		LOG_DEBUG("Save file successfully written");
 
 		Flush();
-		Close();
-		
+		Close();		
 
 		return true;
 	}
@@ -231,14 +232,18 @@ namespace HexEngine
 				loadIntoExistingScene->Unlock();
 			}
 		}
+
+		_loadedEntities.clear();
+
 		// Deserialize the transforms first, because other components may depends on the transforms being correct
 		for (auto& ent : createdEnts)
 		{
 			loadIntoExistingScene->Lock();
 			ent.second->Deserialize(ent.first, this, 1 << Transform::_GetComponentId());
 			loadIntoExistingScene->Unlock();
-		}
 
+			_loadedEntities.push_back(ent.second);
+		}		
 
 		int32_t loadedCount = 0;
 
@@ -262,7 +267,7 @@ namespace HexEngine
 			loadedCount++;
 		}
 
-		loadIntoExistingScene->Load(this);
+		loadIntoExistingScene->Load(sceneData, this);
 
 		LOG_DEBUG("Scene save file successfully loaded");
 
@@ -284,5 +289,10 @@ namespace HexEngine
 	bool SceneSaveFile::IsSceneAttached() const
 	{
 		return _scene != nullptr;
+	}
+
+	const std::vector<Entity*>& SceneSaveFile::GetLoadedEntities() const
+	{
+		return _loadedEntities;
 	}
 }

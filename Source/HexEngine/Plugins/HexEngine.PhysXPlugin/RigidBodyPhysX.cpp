@@ -842,8 +842,8 @@ namespace HexEngine
 			}
 			else
 			{
-				_shape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);
 				_shape->setFlag(physx::PxShapeFlag::eTRIGGER_SHAPE, false);
+				_shape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, true);				
 			}
 		}
 	}

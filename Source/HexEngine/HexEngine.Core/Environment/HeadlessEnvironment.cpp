@@ -95,6 +95,9 @@ namespace HexEngine
 		if (options.gameExtension)
 			options.gameExtension->OnCreateGame();
 
+		// Rebuild the PVS after game launch
+		g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+
 		// We can now set the engine to "running" mode so the main loop can proceed
 		//
 		env->_running = true;

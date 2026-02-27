@@ -28,7 +28,7 @@ namespace HexEngine
 
 		_viewport = CD3D11_VIEWPORT(0.0f, 0.0f, (float)width, (float)height);
 
-		_blur = new BlurEffect(_renderTarget, BlurType::Gaussian, 8);
+		_blur = new BlurEffect(_renderTarget, BlurType::Gaussian, 10);
 	}
 
 	Bloom::~Bloom()
@@ -64,7 +64,7 @@ namespace HexEngine
 		//
 		renderer->FullScreenTexturedQuad(bloomInput, _renderShader.get());
 
-		_blur->Render(renderer);
+		_blur->Render(renderer, true);
 
 		
 		g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());

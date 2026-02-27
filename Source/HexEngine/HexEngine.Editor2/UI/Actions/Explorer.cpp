@@ -133,7 +133,10 @@ namespace HexEditor
 		if (_assetNameToEdit && event == InputEvent::Char)
 		{
 			if (data->Char.ch == VK_BACK && _editingAssetTempName.size() > 0)
+			{
 				_editingAssetTempName.pop_back();
+				_canvas.Redraw();
+			}
 			else if (data->Char.ch == VK_RETURN)
 			{
 				fs::path assetRenamedName = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(_currentlyBrowsedFolder / (_editingAssetTempName + _editingAssetExtension));
@@ -147,10 +150,14 @@ namespace HexEditor
 				_assetNameToEdit->path = assetRenamedName;
 
 				_assetNameToEdit = nullptr;
+				_editingAssetTempName.clear();
+
+				_canvas.Redraw();
 			}
 			else
 			{
 				_editingAssetTempName.push_back(data->Char.ch);
+				_canvas.Redraw();
 			}
 
 			return true;
@@ -700,7 +707,9 @@ namespace HexEditor
 						SHGFI_ICON | SHGFI_USEFILEATTRIBUTES | SHGFI_LARGEICON);
 
 					ICONINFO stIconInfo;
-					GetIconInfo(stFileInfo.hIcon, &stIconInfo);
+					if (GetIconInfo(stFileInfo.hIcon, &stIconInfo) == false)
+						continue;
+
 					HBITMAP hBmp = stIconInfo.hbmColor;
 
 					BITMAP BM;
@@ -777,7 +786,7 @@ namespace HexEditor
 
 	void Explorer::RenderAssetExplorer(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
-		const int32_t IconSize = 80;
+		const int32_t IconSize = 140;
 
 		if (_canvas.BeginDraw(renderer, w, h))
 		{
@@ -808,7 +817,7 @@ namespace HexEditor
 					bool hovering = false;
 					bool drawFullName = false;
 
-					if (y >= _position.y + 30 - IconSize && y <= _position.y + _size.y)
+					if (y >= _position.y + 30 && y <= _position.y + _size.y)
 					{
 						if (!_draggingAsset && (IsMouseOver(x, y, IconSize, IconSize) || asset.selected))
 						{

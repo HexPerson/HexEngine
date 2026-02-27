@@ -11,62 +11,113 @@ namespace HexEngine
 	{
 		if (type == BlurType::Gaussian)
 		{
-			_shaders[0] = IShader::Create("EngineData.Shaders/GaussianBlur.hcs");
-			_shaders[1] = IShader::Create("EngineData.Shaders/GaussianBlurVert.hcs");
+			_shaders[Direction::Horizontal] = IShader::Create("EngineData.Shaders/GaussianBlur.hcs");
+			_shaders[Direction::Vertical] = IShader::Create("EngineData.Shaders/GaussianBlurVert.hcs");
 		}
 		else
 		{
 			assert("Radial blur not yet implemented");
 		}
 
-		_blurCompositionRT = g_pEnv->_graphicsDevice->CreateTexture(textureToBlur);
+		_blurCompositionRT[Direction::Horizontal] = g_pEnv->_graphicsDevice->CreateTexture(textureToBlur);
+		_blurCompositionRT[Direction::Vertical] = g_pEnv->_graphicsDevice->CreateTexture(textureToBlur);
 	}
 
 	BlurEffect::~BlurEffect()
 	{
-		SAFE_DELETE(_blurCompositionRT);
+		SAFE_DELETE(_blurCompositionRT[Direction::Horizontal]);
+		SAFE_DELETE(_blurCompositionRT[Direction::Vertical]);
 	}
 
 	void BlurEffect::Render(GuiRenderer* renderer, bool alpha)
 	{
-		// set the render target to the blur composition
-		g_pEnv->_graphicsDevice->SetRenderTarget(_blurCompositionRT, nullptr);
-
-		// clear it out
-		_blurCompositionRT->ClearRenderTargetView(math::Color(0, 0, 0, 0));
-
-		// copy the current pixels that we want to blur into the composition
-		//_blurTarget->CopyTo(_blurCompositionRT);
-
-		// then start the blur
-		for (int32_t x = 0; x < _blurSize; ++x)
+		//for (int32_t x = 0; x < _blurSize; ++x)
 		{
-			//g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+			// ----------------------------------------------- //
+			// ---------------- HORIZONTAL BLUR -------------- //
+			// ----------------------------------------------- //
+			// 
+			// set the render target to the blur composition
+			g_pEnv->_graphicsDevice->SetRenderTarget(_blurCompositionRT[Direction::Horizontal], nullptr);
 
-			// render the horizontal blur
-			renderer->FullScreenTexturedQuad(_blurTarget, _shaders[0].get());
+			// clear it out
+			_blurCompositionRT[Direction::Horizontal]->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
-			if (alpha)
+			// copy the current pixels that we want to blur into the composition
+			//_blurTarget->CopyTo(_blurCompositionRT);
+
+			// then start the blur
+
 			{
-				_blurCompositionRT->BlendTo_NonPremultiplied(_blurTarget);
-				g_pEnv->_graphicsDevice->SetRenderTarget(_blurCompositionRT, nullptr);
+				//g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+
+				// render the horizontal blur
+				renderer->FullScreenTexturedQuad(_blurTarget, _shaders[Direction::Horizontal].get());
+
+				//if (alpha)
+				//{
+				//	_blurCompositionRT[Direction::Horizontal]->BlendTo_NonPremultiplied(_blurTarget);
+				//	g_pEnv->_graphicsDevice->SetRenderTarget(_blurCompositionRT[Direction::Horizontal], nullptr);
+				//}
+				//else
+				//	_blurCompositionRT[Direction::Horizontal]->CopyTo(_blurTarget);
+
+
+
+				////g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+
+				//renderer->FullScreenTexturedQuad(_blurTarget, _shaders[1].get());
+
+				/*if (alpha)
+				{
+					_blurCompositionRT[Direction::Horizontal]->BlendTo_NonPremultiplied(_blurTarget);
+					g_pEnv->_graphicsDevice->SetRenderTarget(_blurCompositionRT[Direction::Horizontal], nullptr);
+				}
+				else
+					_blurCompositionRT[Direction::Horizontal]->CopyTo(_blurTarget);*/
 			}
-			else
-				_blurCompositionRT->CopyTo(_blurTarget);
 
+			// ----------------------------------------------- //
+			// ---------------- VERTICAL BLUR ---------------- //
+			// ----------------------------------------------- //
+			g_pEnv->_graphicsDevice->SetRenderTarget(_blurTarget, nullptr);
 
+			// clear it out
+			_blurCompositionRT[Direction::Vertical]->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
-			//g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+			// copy the current pixels that we want to blur into the composition
+			//_blurTarget->CopyTo(_blurCompositionRT);
 
-			renderer->FullScreenTexturedQuad(_blurTarget, _shaders[1].get());
-
-			if (alpha)
+			// then start the blur
+			//for (int32_t x = 0; x < _blurSize; ++x)
 			{
-				_blurCompositionRT->BlendTo_NonPremultiplied(_blurTarget);
-				g_pEnv->_graphicsDevice->SetRenderTarget(_blurCompositionRT, nullptr);
+				//g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+
+				// render the vertical blur
+				renderer->FullScreenTexturedQuad(_blurCompositionRT[Direction::Horizontal], _shaders[Direction::Vertical].get());
+
+				/*if (alpha)
+				{
+					_blurCompositionRT[Direction::Horizontal]->BlendTo_NonPremultiplied(_blurTarget);
+					g_pEnv->_graphicsDevice->SetRenderTarget(_blurCompositionRT[Direction::Horizontal], nullptr);
+				}
+				else
+					_blurCompositionRT[Direction::Horizontal]->CopyTo(_blurTarget);*/
+
+
+
+					//g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+
+					//renderer->FullScreenTexturedQuad(_blurTarget, _shaders[1].get());
+
+					/*if (alpha)
+					{
+						_blurCompositionRT[Direction::Horizontal]->BlendTo_NonPremultiplied(_blurTarget);
+						g_pEnv->_graphicsDevice->SetRenderTarget(_blurCompositionRT[Direction::Horizontal], nullptr);
+					}
+					else
+						_blurCompositionRT[Direction::Horizontal]->CopyTo(_blurTarget);*/
 			}
-			else
-				_blurCompositionRT->CopyTo(_blurTarget);
 		}
 	}
 }

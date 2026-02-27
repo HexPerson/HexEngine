@@ -13,6 +13,8 @@ namespace HexEngine
 		_current.forward = math::Vector3::Forward;
 		_current.right = math::Vector3::Right;
 		_current.up = math::Vector3::Up;
+
+		_arrow = Mesh::Create("EngineData.Models/Primitives/Arrow.hmesh");
 	}
 
 	void Transform::UpdateRotation()
@@ -537,5 +539,10 @@ namespace HexEngine
 	void Transform::OnMessage(Message* message, MessageListener* sender)
 	{
 
+	}
+
+	void Transform::OnRenderEditorGizmo(bool isSelected)
+	{
+		
 	}
 }

@@ -88,6 +88,7 @@ namespace HexEditor
 		// menu bar actions
 		void OnCreateNewSceneAction(const std::wstring& sceneName);
 		void OnDeleteSceneAction();
+		void OnStartPaintTreeDialog();
 
 
 	private:

@@ -55,7 +55,7 @@
 
 		//float maxVal = max(max(filteredValue.r, filteredValue.g), filteredValue.b);
 
-		return float4(filteredValue, 1.0f);
+		return float4(/* pixelColour.rgb + */ filteredValue, 1.0f);
 
 		/*float brightness = dot(pixelColour.rgb, float3(0.2126, 0.7152, 0.0722));
 		

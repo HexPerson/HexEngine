@@ -232,7 +232,10 @@ namespace HexEditor
 			//edit->type = MenuBar::Item::Type::RootMenu;
 			_mainMenu->AddRootItem(edit);
 			{
-
+				MenuBar::Item* actionPaintTrees = new MenuBar::Item;
+				actionPaintTrees->name = L"Paint Trees";
+				actionPaintTrees->action = std::bind(&EditorUI::OnStartPaintTreeDialog, this);
+				_mainMenu->AddSubItem(edit, actionPaintTrees);
 			}
 		}
 		{
@@ -313,7 +316,15 @@ namespace HexEditor
 		}
 	}
 
-	
+	void EditorUI::OnStartPaintTreeDialog()
+	{
+		const int32_t dlgWidth = 400;
+		const int32_t dlgHeight = 500;
+
+		Dialog* dlg = new Dialog(g_pEnv->_uiManager->GetRootElement(), Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2), Point(dlgWidth, dlgHeight), L"Vegetation Paint Tool");
+
+		//LineEdit* meshInput = 
+	}
 
 	void EditorUI::RunGame()
 	{

@@ -4,17 +4,18 @@
 #include "SceneSaveFile.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "../Environment/LogFile.hpp"
+#include "../Scene/Prefab.hpp"
 
 namespace HexEngine
 {
 	PrefabLoader::PrefabLoader()
 	{
-		//g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
 	}
 
 	PrefabLoader::~PrefabLoader()
 	{
-		//g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 	}
 
 	std::shared_ptr<IResource> PrefabLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
@@ -27,7 +28,15 @@ namespace HexEngine
 			return nullptr;
 		}
 
-		return g_pEnv->_sceneManager->GetCurrentScene();
+		std::vector<Entity*> ents;
+
+		//auto prefabScene = g_pEnv->_sceneManager->CreateEmptyScene(false);
+
+		std::shared_ptr<Prefab> prefab = std::shared_ptr<Prefab>(new Prefab, ResourceDeleter());
+
+		prefab->_entities = prefabFile.GetLoadedEntities();
+
+		return prefab;
 	}
 
 	std::shared_ptr<IResource> PrefabLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)

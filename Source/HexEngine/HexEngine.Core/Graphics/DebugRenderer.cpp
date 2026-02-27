@@ -166,12 +166,10 @@ namespace HexEngine
 		math::Vector3 corners[8];
 		bbox.GetCorners(corners);
 
-		const math::Color col(0, 1, 0, 0.5f);
-
 		DebugLines line;
 		line.points[0] = corners[2];
 		line.points[1] = corners[6];
-		line.colour = col;
+		line.colour = colour;
 		_lines.push_back(line);
 
 		line.points[0] = corners[6];

@@ -150,6 +150,11 @@ namespace HexEngine
 			_hasInputFocus = focus;
 	}
 
+	bool Element::IsInputFocus() const
+	{
+		return _hasInputFocus;
+	}
+
 	void Element::DeleteMe()
 	{
 		g_pEnv->_uiManager->Lock();

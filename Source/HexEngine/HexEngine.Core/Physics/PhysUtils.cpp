@@ -150,6 +150,9 @@ namespace HexEngine
 					if ((mask & (1 << (uint32_t)entity->GetLayer())) == 0)
 						continue;
 
+					if (entity->HasFlag(EntityFlags::DoNotRender))
+						continue;
+
 					bool skipThisEnt = false;
 
 					for (auto&& ignore : entsToIgnore)

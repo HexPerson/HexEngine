@@ -17,6 +17,14 @@ namespace HexEngine
 	class HEX_API BlurEffect
 	{
 	public:
+
+		enum Direction
+		{
+			Horizontal,
+			Vertical,
+			Count
+		};
+
 		BlurEffect(ITexture2D* textureToBlur, BlurType type, int32_t blurSize);
 		~BlurEffect();
 
@@ -26,7 +34,7 @@ namespace HexEngine
 		BlurType _type;
 		int32_t _blurSize;
 		ITexture2D* _blurTarget;
-		ITexture2D* _blurCompositionRT;
-		std::shared_ptr<IShader> _shaders[2];
+		ITexture2D* _blurCompositionRT[Direction::Count];
+		std::shared_ptr<IShader> _shaders[Direction::Count];
 	};
 }

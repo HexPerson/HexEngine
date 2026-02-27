@@ -3,6 +3,7 @@
 
 #include "DiskFile.hpp"
 #include "../Physics/IRigidBody.hpp"
+#include "../Graphics/RenderStructs.hpp"
 
 namespace HexEngine
 {
@@ -96,6 +97,18 @@ namespace HexEngine
 		json& Serialize(json& container, const std::string& key, const IRigidBody::ColliderData::Sphere& value)
 		{
 			Serialize(container[key], "radius", value.radius);
+			return container;
+		}
+
+		template <>
+		json& Serialize(json& container, const std::string& key, const OceanSettings& value)
+		{
+			Serialize(container[key], "shallowColour", value.shallowColour);
+			Serialize(container[key], "deepColour", value.deepColour);
+			Serialize(container[key], "fresnelPow", value.fresnelPow);
+			Serialize(container[key], "shoreFadeStrength", value.shoreFadeStrength);
+			Serialize(container[key], "fadeFactor", value.fadeFactor);
+			Serialize(container[key], "reflectionStrength", value.reflectionStrength);
 			return container;
 		}
 
@@ -233,6 +246,18 @@ namespace HexEngine
 		json& Deserialize(json& container, const std::string& key, IRigidBody::ColliderData::Sphere& value)
 		{
 			Deserialize(container, "radius", value.radius);
+			return container;
+		}
+
+		template <>
+		json& Deserialize(json& container, const std::string& key, OceanSettings& value)
+		{
+			Deserialize(container[key], "shallowColour", value.shallowColour);
+			Deserialize(container[key], "deepColour", value.deepColour);
+			Deserialize(container[key], "fresnelPow", value.fresnelPow);
+			Deserialize(container[key], "shoreFadeStrength", value.shoreFadeStrength);
+			Deserialize(container[key], "fadeFactor", value.fadeFactor);
+			Deserialize(container[key], "reflectionStrength", value.reflectionStrength);
 			return container;
 		}
 	};

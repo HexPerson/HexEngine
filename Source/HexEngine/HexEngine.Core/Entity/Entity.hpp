@@ -62,6 +62,8 @@ namespace HexEngine
 		DoNotSave				= HEX_BITSET(2),
 		PreviousTransformDirty	= HEX_BITSET(3),
 		DoNotBlockNavMesh		= HEX_BITSET(4),
+		DoNotRender				= HEX_BITSET(5),
+		SelectedInEditor		= HEX_BITSET(6)
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(EntityFlags);
 
@@ -88,6 +90,7 @@ namespace HexEngine
 		bool HasFlag(EntityFlags flags) const;
 		void SetFlag(EntityFlags flags);
 		void ClearFlags(EntityFlags flags);
+		EntityFlags GetFlags() const;
 
 		virtual void DebugRender();
 
@@ -237,6 +240,8 @@ namespace HexEngine
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 
 		static Entity* LoadFromFile(json& data, const std::string& name, Scene* scene, JsonFile* file);
+
+		void ToggleVisibility();
 
 	private:
 		struct EntityGuidComponent

@@ -26,6 +26,12 @@
 
 #define SHADOWMAPS_RESOURCE(idx) Texture2D SHADOWMAPS[6] : register(t##idx);
 
+	static const float WaveSizeMultiplier = 1.5f;
+
+	static const float4 _WaveA = float4(0.6, 0.12, 0.10, 140);
+	static const float4 _WaveB = float4(0.7, -1, 0.051, 125);
+	static const float4 _WaveC = float4(0.4564, 0.348, 0.05, 20);
+	static const float4 _WaveD = float4(-0.1, 0.12, 0.067, 175);
 	
 	struct Atmosphere
 	{
@@ -129,7 +135,7 @@
 
 		float2 g_jitterOffsets;
 		uint g_frame;
-		float pad_4;
+		float g_chromaticAbberationAmmount;
 	};
 
 	struct MaterialProps

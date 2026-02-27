@@ -10,6 +10,13 @@ namespace HexEngine
 		_action(action)
 	{}
 
+	Button::Button(Element* parent, const Point& position, const Point& size, const std::shared_ptr<ITexture2D>& icon, std::function<bool(Button*)> action) :
+		Element(parent, position, size),
+		_icon(icon),
+		_action(action)
+	{
+	}
+
 	void Button::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		auto pos = GetAbsolutePosition();
@@ -24,7 +31,24 @@ namespace HexEngine
 
 		renderer->Frame(pos.x, pos.y, _size.x, _size.y, 1, renderer->_style.button_border);
 
-		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, centre.x, centre.y, hovering ? renderer->_style.button_hover_text : renderer->_style.text_regular, FontAlign::CentreLR | FontAlign::CentreUD, _label);
+		if (_icon)
+		{
+			renderer->FillTexturedQuad(_icon.get(),
+				centre.x - (_size.y / 2) + 1,
+				centre.y - (_size.y / 2) + 1,
+				_size.y - 2,
+				_size.y - 2,
+				math::Color(0xFFFFFFFF));
+		}
+		else
+		{
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, centre.x, centre.y, hovering ? renderer->_style.button_hover_text : renderer->_style.text_regular, FontAlign::CentreLR | FontAlign::CentreUD, _label);
+		}
+	}
+
+	void Button::SetIcon(std::shared_ptr<ITexture2D> icon)
+	{
+		_icon = icon;
 	}
 
 	bool Button::OnInputEvent(InputEvent event, InputData* data)

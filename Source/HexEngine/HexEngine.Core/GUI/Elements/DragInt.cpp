@@ -75,7 +75,7 @@ namespace HexEngine
 				return true;
 			}
 		}
-		else if (event == InputEvent::MouseUp && data->MouseUp.button == VK_LBUTTON)
+		else if (event == InputEvent::MouseUp && data->MouseUp.button == VK_LBUTTON && _dragging)
 		{
 			_dragging = false;
 			_startDrag = -1;

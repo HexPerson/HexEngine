@@ -64,7 +64,7 @@
 
 		//return float4(velocity.x * g_screenWidth, velocity.y * g_screenHeight, 0.0f, 1.0f);
 
-		float2 prevousPixelPos = input.texcoord - velocity;
+		float2 prevousPixelPos = input.texcoord + velocity;
 
 		float3 history = historyTexture.Sample(LinearSampler, prevousPixelPos);
 
@@ -87,7 +87,7 @@
 
 		history = clamp(history, BoxMin, BoxMax);
 
-		float modulationFactor = 0.9f;// *velocityConfidence;
+		float modulationFactor = 0.8f * velocityConfidence;
 
 		float3 resolvedColour = lerp(colour, history, modulationFactor);
 

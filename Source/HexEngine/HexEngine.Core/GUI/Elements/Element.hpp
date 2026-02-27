@@ -51,6 +51,7 @@ namespace HexEngine
 
 		void BringToFront();
 		void SetHasInputFocus(bool focus);
+		bool IsInputFocus() const;
 
 		void DeleteMe();
 		bool WantsDeletion() const;

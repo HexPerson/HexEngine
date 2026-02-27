@@ -37,8 +37,11 @@ namespace HexEngine
 
 		bool IsSceneAttached() const;
 
+		const std::vector<Entity*>& GetLoadedEntities() const;
+
 	public:
 		std::shared_ptr<Scene> _scene;
 		SceneFileFlags _flags;
+		std::vector<Entity*> _loadedEntities;
 	};
 }

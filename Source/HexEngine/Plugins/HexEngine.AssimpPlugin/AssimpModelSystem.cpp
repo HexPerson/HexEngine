@@ -115,9 +115,9 @@ namespace HexEngine
 			_importOpts.replaceTextureExtension = text;
 			});
 
-		auto importModel = [&]() -> bool{
+		auto importModel = [&](std::vector<fs::path> pathsToSearch) -> bool{
 
-			for (auto& path : paths)
+			for (auto& path : pathsToSearch)
 			{
 				auto fileSystem = g_pEnv->_resourceSystem->FindFileSystemByPath(path);
 				auto fullPath = fileSystem->GetLocalAbsoluteDataPath(path);
@@ -129,7 +129,7 @@ namespace HexEngine
 			};
 
 		auto import = new Button(layout, layout->GetNextPos(), Point(80, 20), L"Import", 
-			std::bind(importModel)
+			std::bind(importModel, paths)
 			/*std::bind(&AssimpModelImporter::LoadResourceFromFile, this, fileSystem->GetLocalAbsoluteDataPath(path), fileSystem, nullptr)*/);
 
 		return dlg;

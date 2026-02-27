@@ -2,9 +2,12 @@
 #include "TextureSearch.hpp"
 #include "Dialog.hpp"
 #include "MessageBox.hpp"
+#include "../UIManager.hpp"
 
 namespace HexEngine
 {
+	const int32_t TextureSearchBarSize = 20;
+
 	TextureSearch::TextureSearch(
 		Element* parent,
 		const Point& position,
@@ -18,7 +21,7 @@ namespace HexEngine
 		_material(material),
 		_type(type)
 	{
-		_edit = new LineEdit(this, Point(0, 0), Point(size.x, 20), label);
+		_edit = new LineEdit(this, Point(0, 0), Point(size.x, TextureSearchBarSize), label);
 		_edit->SetIcon(ITexture2D::Create("EngineData.Textures/UI/magnifying_glass.png"), math::Color(HEX_RGBA_TO_FLOAT4(140, 140, 140, 255)));
 		_edit->SetOnDragAndDropFn(std::bind(&TextureSearch::DragAndDropTexture, this, std::placeholders::_2));
 		
@@ -40,7 +43,7 @@ namespace HexEngine
 		const auto pos = _edit->GetAbsolutePosition();
 
 		renderer->FillQuad(
-			pos.x + _edit->GetLabelMinSize() + 20,
+			pos.x + _edit->GetLabelMinSize() + TextureSearchBarSize,
 			pos.y + 25,
 			_size.y - 25,
 			_size.y - 25,
@@ -57,13 +60,28 @@ namespace HexEngine
 				math::Color(1,1,1,1));
 		}
 
-		int32_t closeButtonSize = _size.y - 3;
-		renderer->FillTexturedQuad(renderer->_style.img_win_close.get(), _position.x + _size.x - (closeButtonSize + 8), _position.y + (renderer->_style.win_title_height / 2) - (closeButtonSize / 2) - 1, closeButtonSize, closeButtonSize, math::Color(1, 0, 0, 1));
+		
+		
 
 	}
 
 	bool TextureSearch::OnInputEvent(InputEvent event, InputData* data)
 	{
+		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON)
+		{
+			const auto pos = _edit->GetAbsolutePosition();
+
+			if (_edit->IsMouseOver(
+				pos.x + _size.x - (TextureSearchBarSize + 4),
+				pos.y + (g_pEnv->_uiManager->GetRenderer()->_style.win_title_height / 2) - (TextureSearchBarSize / 2) - 1,
+				TextureSearchBarSize-4, TextureSearchBarSize-4
+			))
+			{
+				_material->SetTexture(_type, nullptr);
+				_texture.reset();
+				return true;
+			}
+		}
 		return Element::OnInputEvent(event, data);
 	}
 
@@ -103,5 +121,21 @@ namespace HexEngine
 	void TextureSearch::SetLabelMinSize(int32_t minSize)
 	{
 		_edit->SetLabelMinSize(minSize);
+	}
+
+	void TextureSearch::PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	{
+		const auto pos = _edit->GetAbsolutePosition();
+
+		int32_t mx, my;
+		g_pEnv->_inputSystem->GetMousePosition(mx, my);
+
+		renderer->FillQuad(mx, my, 4, 4, math::Color(1, 0, 0, 1));
+
+		renderer->FillTexturedQuad(
+			renderer->_style.img_win_close.get(),
+			pos.x + _size.x - (TextureSearchBarSize + 4),
+			pos.y + (renderer->_style.win_title_height / 2) - (TextureSearchBarSize / 2) - 1,
+			TextureSearchBarSize-4, TextureSearchBarSize-4, math::Color(HEX_RGB_TO_FLOAT3(240, 20, 20), 1));
 	}
 }

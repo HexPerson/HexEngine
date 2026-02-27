@@ -282,9 +282,11 @@ namespace HexEngine
 		return CloneEntity(entity, entity->GetName(), entity->GetPosition(), entity->GetRotation(), entity->GetScale(), retainHierarchy);
 	}
 
-	void Scene::MergeFrom(Scene* scene)
+	std::vector<Entity*> Scene::MergeFrom(Scene* scene)
 	{
 		std::vector<std::tuple<Entity*, Entity*, std::string, std::string>> renamedEnts;
+
+		std::vector<Entity*> newEnts;
 
 		for (auto& map : scene->GetEntities())
 		{
@@ -293,6 +295,8 @@ namespace HexEngine
 				auto newEnt = CloneEntity(ent, false);
 
 				renamedEnts.push_back({ newEnt, ent, newEnt->GetName(), ent->GetName() });
+
+				newEnts.push_back(newEnt);
 			}
 		}
 
@@ -330,7 +334,8 @@ namespace HexEngine
 			}
 		}
 
-		_mainCamera->GetPVS()->ClearPVS();
+		ForceRebuildPVS();
+		return newEnts;
 	}
 
 	void Scene::AddEntityInternal(Entity* entity)
@@ -956,7 +961,7 @@ namespace HexEngine
 
 	void Scene::OnDebugGUI()
 	{
-		if (/*r_debugScene._val.b &&*/ _mainCamera)
+		if (r_debugScene._val.b && _mainCamera)
 		{
 			auto renderer = g_pEnv->_uiManager->GetRenderer();
 			auto width = g_pEnv->GetScreenWidth();
@@ -1264,23 +1269,23 @@ namespace HexEngine
 
 		PROFILE();
 
-		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
+		//g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
 
-		std::vector<StaticMeshComponent*> entities;
-		GetComponents<StaticMeshComponent>(entities);
+		//std::vector<StaticMeshComponent*> entities;
+		//GetComponents<StaticMeshComponent>(entities);
 
-		/*for (auto& set : entities)
+		for (auto& set : GetEntities())
 		{
 			for (auto& ent : set.second)
 			{
 				ent->DebugRender();
 			}
-		}*/
-
-		for (auto& ent : entities)
-		{
-			ent->DebugRender();
 		}
+
+		/*for (auto& ent : entities)
+		{
+			ent->OnDebugRender();
+		}*/
 
 		// Allow the game extension to render the debug info (if they want)
 		for (auto& extension : g_pEnv->_gameExtensions)
@@ -1297,11 +1302,11 @@ namespace HexEngine
 			g_pEnv->_debugRenderer->DrawLine(_lastHit.start, _lastHit.position, math::Color(0.0f, 1.0f, 0.0f, 1.0f));
 		}*/
 
-		g_pEnv->_physicsSystem->DebugRender();
+		//g_pEnv->_physicsSystem->DebugRender();
 
 		g_pEnv->_debugRenderer->FlushBuffers();
 
-		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthDefault);
+		//g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthDefault);
 	}
 
 	SceneFlags Scene::GetFlags()
@@ -1390,7 +1395,7 @@ namespace HexEngine
 
 		//GetComponents((1 << id), components);
 
-		return components.size();
+		return (uint32_t)components.size();
 	}
 
 	/*bool Scene::GetComponents(ComponentId id, std::vector<BaseComponent*>& components)
@@ -1431,29 +1436,17 @@ namespace HexEngine
 		return _terrainParams;
 	}*/
 
-	void Scene::Save(SceneSaveFile* file)
+	void Scene::Save(json& data, JsonFile* file)
 	{
-		/*file->Write<int>(_terrainParams.size());
-
-		for (auto& terrain : _terrainParams)
-		{
-			terrain.Save(file);
-		}*/
+		file->Serialize<OceanSettings>(data, "_oceanSettings", _oceanSettings);
 	}
 
-	void Scene::Load(SceneSaveFile* file)
+	void Scene::Load(json& data, JsonFile* file)
 	{
-		//int num = file->Read<int>();
-		//for (int32_t i = 0; i < num; ++i)
-		//{
-		//	//HeightMapGenerationParams first;
-		//	//first.Load(file);
-
-		//	TerrainGenerationParams second;
-		//	second.Load(file);
-
-		//	_terrainParams.push_back(second);
-		//}
+		if (data.find("_oceanSettings") != data.end())
+		{
+			file->Deserialize<OceanSettings>(data, "_oceanSettings", _oceanSettings);
+		}
 	}
 
 	void Scene::CalculateBounds(math::Vector3& min, math::Vector3& max)
@@ -1564,7 +1557,7 @@ namespace HexEngine
 					indices.push_back((int)i + indexOffset);
 				}
 
-				indexOffset += verts.size();
+				indexOffset += (uint32_t)verts.size();
 			}
 		}
 	}

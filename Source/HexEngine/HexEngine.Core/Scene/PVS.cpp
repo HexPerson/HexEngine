@@ -170,7 +170,7 @@ namespace HexEngine
 		{
 			auto entity = component->GetEntity();
 
-			if (entity->GetLayer() == Layer::Invisible || entity->GetLayer() == Layer::Trigger)
+			if (entity->GetLayer() == Layer::Invisible || entity->GetLayer() == Layer::Trigger || entity->HasFlag(EntityFlags::DoNotRender))
 				continue;
 
 			// don't bother rendering entities into the shadow map that can't receive shadows

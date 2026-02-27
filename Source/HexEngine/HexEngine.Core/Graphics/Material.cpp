@@ -28,10 +28,6 @@ namespace HexEngine
 
 	void Material::Destroy()
 	{
-		if (GetName().find("SkySphere") != std::string::npos)
-		{
-			__debugbreak();
-		}
 	}
 
 	std::shared_ptr<Material> Material::Create(const fs::path& path)

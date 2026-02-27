@@ -206,14 +206,16 @@
 
 		//return float4(input.positionWS.xyz, 1.0f);
 
-		float volumetricScattering = CalculateVolumetricScattering(
-			input.positionWS.xyz, 
-			eyeToSphereDir/*normalize(lightPos.xyz - g_eyePos.xyz)*/,
-			lightPos,
-			lightDir,
-			lightRange,
-			lightIntensity
-		);
+		float volumetricScattering = 1.0f;
+
+		// float volumetricScattering = CalculateVolumetricScattering(
+		// 	input.positionWS.xyz, 
+		// 	eyeToSphereDir/*normalize(lightPos.xyz - g_eyePos.xyz)*/,
+		// 	lightPos,
+		// 	lightDir,
+		// 	lightRange,
+		// 	lightIntensity
+		// );
 
 		//if(volumetricScattering <= 0.0f)
 		//	return float4(0,0,0,1);
@@ -270,8 +272,8 @@
 			);
 
 		//return float4((input.colour.rgb * coneAtten * attenuation) + (input.colour.rgb * volumetricScattering), 1.0f);
-		const float volumetricScatteringContribution = 3.2f;
+		//const float volumetricScatteringContribution = 3.2f;
 
-		return float4((pbr.rgb * lightIntensity) + (input.colour.rgb * volumetricScattering * volumetricScatteringContribution), 1.0f);
+		return float4((pbr.rgb * lightIntensity * attenuation * coneAtten) /*+ (input.colour.rgb *  volumetricScattering * volumetricScatteringContribution )*/, 1.0f);
 	}
 }

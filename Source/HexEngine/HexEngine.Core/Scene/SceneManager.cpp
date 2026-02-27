@@ -65,7 +65,7 @@ namespace HexEngine
 			_currentScene = nullptr;
 	}
 
-	std::shared_ptr<Scene> SceneManager::LoadPrefab(std::shared_ptr<Scene> scene, const fs::path& path)
+	std::vector<Entity*> SceneManager::LoadPrefab(std::shared_ptr<Scene> scene, const fs::path& path)
 	{
 		std::vector<Entity*> ents;
 
@@ -76,14 +76,12 @@ namespace HexEngine
 		if (!file.Load())
 		{
 			LOG_CRIT("Failed to load scene");
-			return nullptr;
+			return {};
 		}
 
 		file.Close();
 
-		scene->MergeFrom(prefabScene.get());
-
-		return scene;
+		return scene->MergeFrom(prefabScene.get());
 	}
 
 	std::shared_ptr<Scene> SceneManager::CreateEmptyScene(bool createSkySphere, IEntityListener* listener, bool registerScene)
@@ -177,7 +175,8 @@ namespace HexEngine
 	{
 		if (absolutePath.extension() == ".hprefab")
 		{			
-			return LoadPrefab(GetCurrentScene(), absolutePath);
+			LoadPrefab(GetCurrentScene(), absolutePath);
+			return nullptr;
 		}
 		else
 		{
@@ -206,7 +205,7 @@ namespace HexEngine
 
 	std::vector<std::string> SceneManager::GetSupportedResourceExtensions()
 	{
-		return { ".hscene", ".hprefab" };
+		return { ".hscene" };
 	}
 
 	std::wstring SceneManager::GetResourceDirectory() const

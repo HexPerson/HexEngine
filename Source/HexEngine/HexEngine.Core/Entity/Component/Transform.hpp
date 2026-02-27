@@ -66,12 +66,10 @@ namespace HexEngine
 		//void SetRotationMatrix(const math::Matrix& rotation);
 
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
-
 		virtual void Serialize(json& data, JsonFile* file) override;
-
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
-
 		virtual bool CreateWidget(ComponentWidget* widget) override;
+		virtual void OnRenderEditorGizmo(bool isSelected) override;
 
 	private:
 		void UpdateRotation();
@@ -108,5 +106,7 @@ namespace HexEngine
 		//math::Quaternion _interpolatedRotation;
 		uint32_t _lastInterpolationTick = 0;
 		bool _enableInterpolation = false;
+
+		std::shared_ptr<Mesh> _arrow;
 	};
 }

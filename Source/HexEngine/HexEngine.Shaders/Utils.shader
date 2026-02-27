@@ -20,7 +20,10 @@
 		bumpMap = bumpMap * float3(bumMapMultiplier, bumMapMultiplier, 1.0f);
 
 		// Calculate the normal from the data in the bump map.
-		float3 bumpNormal = (bumpMap.x * (tangent)) + (bumpMap.y * (binormal)) + (bumpMap.z * worldNormal);
+		//float3 bumpNormal = (bumpMap.x * (tangent)) + (bumpMap.y * (binormal)) + (bumpMap.z * worldNormal);
+		float3 bumpNormal = (bumpMap.x * tangent) + (bumpMap.y * binormal) + (bumpMap.z * worldNormal);
+
+		// bumpNormal = normal + bumpMap.x * tangent + bumpMap.y * binormal;
 
 		// Normalize the resulting bump normal.
 		worldNormal = (bumpNormal);

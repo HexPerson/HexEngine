@@ -11,6 +11,7 @@
 	UICommon
 	ShadowUtils
 	Atmosphere
+	Water
 }
 "VertexShader"
 {
@@ -71,7 +72,7 @@
 		/// --------- CALCULATE FOG ----------- //
 		
 
-#if 0
+#if 1
 
 		float4 pixelPos = mul(worldPos, g_viewMatrix);
 		pixelPos = mul(pixelPos, g_projectionMatrix);
@@ -88,9 +89,9 @@
 		float aspect = (float)g_screenWidth / (float)g_screenHeight;
 
 		float3 atmosphericFogColour = getAtmosphereColour(
-			(worldPos.y / 5000.0f),
-			projectedPixel.xy * 2.0f,
-			projectedSun.xy * 2.0f,
+			(worldPos.y / 12000.0f),
+			projectedPixel.xy * 1.0f,
+			projectedSun.xy * 1.0f,
 			aspect,
 			false/*sunPosition.w > 0.0f*/);
 
@@ -110,15 +111,63 @@
 
 		float fogStrength = 1.0f;
 
-		if (pixelDepth > 0.0f)
+		
+
+		//if (pixelDepth >= 0.0f)
 		{
 			float fogDepth = g_frustumDepths[3] - pixelDepth;
 			float fogDist = length(worldPos.xyz - g_eyePos.xyz);
 
-			bool isCameraUnderWater = false;// g_eyePos.y <= 0.0f;
+			float waveHeightAtWorldPos = 0.0f;
+			float startPos = 0.0f;
+				
+			waveHeightAtWorldPos += GerstnerWaveHeight(_WaveA, startPos);
+			waveHeightAtWorldPos += GerstnerWaveHeight(_WaveB, startPos);
+			waveHeightAtWorldPos += GerstnerWaveHeight(_WaveC, startPos);
+			waveHeightAtWorldPos += GerstnerWaveHeight(_WaveD, startPos);
+
+			//waveHeightAtWorldPos -= 1.5f;
+
+			bool isPixelUnderWater = waveHeightAtWorldPos <= 0.0f;
+			bool isCameraUnderWater = g_eyePos.y <= waveHeightAtWorldPos;
+
+			if(isCameraUnderWater)
+			{
+				if(pixelDepth >= g_frustumDepths[3] /* || pixelDepth == -1 */)
+					fogDist = 10.0f;
+			}
+
+			const float waterFogOffset = 10.0f;
+			const float waterFogFadeDistance = 30.0f;
 			
-			// pixel is above water
-			if (/*worldPos.y > 0.0f &&*/ !isCameraUnderWater)
+			if(worldPos.y <= waveHeightAtWorldPos /* - waterFogOffset */ /* && isCameraUnderWater */)
+			{
+				// exponential
+				float fogFactor = saturate(exp2(-( g_frustumDepths[3] - (fogDist * 5.1f) ) * (g_atmosphere.fogDensity / 2.8)  /*0.0030f*/));
+
+				// linear
+				//float fogFactor = saturate((1500 - (g_frustumDepths[3] - pixelDepth)) / 300);
+
+				const float3 underWaterFogColour = float3(27.0f / 255.0f, 45.0f / 255.0f, 51.0f / 255.0f) * g_globalLight[0];
+
+				float heightFactor = 1.0f - saturate(exp2(-(/* waveHeightAtWorldPos */0.0f - worldPos.y - waterFogOffset) / waterFogFadeDistance));
+
+				//if(isCameraUnderWater == false)
+				{
+					//float heightFadeFactorFromSurface = saturate((waveHeightAtWorldPos - g_eyePos.y) / 50.0f);
+					
+					//fogFactor = lerp(0.0f, 1.0f, heightFadeFactorFromSurface);
+
+					//heightFactor =min(heightFactor, 0.66f);
+				}
+
+				float3 foggedAlbedo = lerp(pixelColour.rgb, underWaterFogColour, fogFactor * heightFactor);
+
+				
+
+				return float4(foggedAlbedo, 1.0f);
+			}
+			else
 			{
 				// exponential
 				float fogFactor = saturate(exp2(-(g_frustumDepths[3]-fogDist) /** fogDepth*/ * g_atmosphere.fogDensity /*0.0030f*/));

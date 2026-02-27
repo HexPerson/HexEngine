@@ -13,7 +13,13 @@ namespace HexEngine
 		CREATE_COMPONENT_ID(AudioSource);
 		DEFINE_COMPONENT_CTOR(AudioSource);
 
-		void SetSoundSource(SoundEffect* sound);
+		void SetSoundSource(std::shared_ptr<SoundEffect> sound);
+		void Play();
+		void Stop();
+		void Loop();
+
+	private:
+		std::shared_ptr<SoundEffect> _sound;
 
 	};
 }

@@ -39,6 +39,7 @@
 #include "Scene/SceneRenderer.hpp"
 #include "Scene/AnimatedMesh.hpp"
 #include "Scene/INavMeshProvider.hpp"
+#include "Scene/Prefab.hpp"
 
 #include "Input/InputSystem.hpp"
 #include "Input/CommandManager.hpp"

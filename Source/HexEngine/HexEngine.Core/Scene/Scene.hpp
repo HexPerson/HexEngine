@@ -90,7 +90,7 @@ namespace HexEngine
 
 		Entity* CloneEntity(Entity* entity, bool retainHierarchy = true);
 
-		void MergeFrom(Scene* scene);
+		std::vector<Entity*> MergeFrom(Scene* scene);
 
 		void DestroyEntity(Entity* entity, bool broadcast = true);
 
@@ -195,8 +195,8 @@ namespace HexEngine
 		void UnregisterMessageListener(MessageListener* listener);
 		void BroadcastMessage(Message* message);
 
-		void Save(SceneSaveFile* file);
-		void Load(SceneSaveFile* file);
+		void Save(json& key, JsonFile* file);
+		void Load(json& key, JsonFile* file);
 
 		const std::wstring& GetName() const;
 		void SetName(const std::wstring& name);
@@ -232,7 +232,6 @@ namespace HexEngine
 		Camera* _mainCamera = nullptr;
 		std::vector<Camera*> _cameras;
 
-
 		SceneUpdateFlags _updateFlags = SceneUpdateNone;
 
 		math::Color _fogColour;
@@ -251,7 +250,5 @@ namespace HexEngine
 		std::vector<MessageListener*> _auxMessageListeners;
 
 		bool _didAnyDrawnItemReflect = false;
-
-		//std::vector<TerrainGenerationParams> _terrainParams;
 	};
 }

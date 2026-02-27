@@ -4,6 +4,7 @@
 #include "Elements\Dock.hpp"
 #include "../Environment/IEnvironment.hpp"
 #include "../Scene/SceneManager.hpp"
+#include "../Environment/LogFile.hpp"
 
 namespace HexEngine
 {
@@ -84,11 +85,15 @@ namespace HexEngine
 			_blurEffect = new BlurEffect(_blurredBackground, BlurType::Gaussian, 6);
 		}
 
-		g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget()->CopyTo(_blurredBackground);
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"Background Blur");
+		{
+			g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget()->CopyTo(_blurredBackground);
 
-		_blurEffect->Render(&_renderer);
+			_blurEffect->Render(&_renderer, true);
 
-		g_pEnv->_graphicsDevice->SetRenderTargets(currentRT);
+			g_pEnv->_graphicsDevice->SetRenderTargets(currentRT);
+		}
+		GFX_PERF_END();
 	}
 
 	void UIManager::Render()
@@ -205,7 +210,10 @@ namespace HexEngine
 		}
 
 		if (element->OnInputEvent(event, data))
+		{
+			LOG_DEBUG("Element '%s', handled input", typeid(*element).name());
 			return false;
+		}
 
 		return true;
 	}

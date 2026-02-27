@@ -89,6 +89,9 @@ Checkbox* df = new Checkbox(widget, widget->GetNextPos(), Point(sizex - 40, 18),
 		DragFloat* ff = new DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), Point(sizex - 40, 18), L"Fade Factor", &ocean.fadeFactor, 0.1f, 50.0f, 0.1f);
 		DragFloat* rs = new DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), Point(sizex - 40, 18), L"Reflection Strength", &ocean.reflectionStrength, 0.1f, 1.0f, 0.01f);
 
+		Vector3Edit* deepCol = new Vector3Edit(pm->_ocean, pm->_ocean->GetNextPos(), Point(sizex - 40, 18), L"Deep Colour", (math::Vector3*)&ocean.deepColour.x);
+		Vector3Edit* shallowCol = new Vector3Edit(pm->_ocean, pm->_ocean->GetNextPos(), Point(sizex - 40, 18), L"Shallow Colour", (math::Vector3*)&ocean.shallowColour.x);
+
 		pm->BringToFront();
 		//pm->_onCompleted = onCompletedAction;
 

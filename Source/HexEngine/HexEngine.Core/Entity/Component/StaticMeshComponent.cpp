@@ -429,4 +429,9 @@ namespace HexEngine
 
 		_material.reset();
 	}
+
+	void StaticMeshComponent::OnRenderEditorGizmo(bool isSelected)
+	{
+		g_pEnv->_debugRenderer->DrawAABB(GetEntity()->GetWorldAABB(), math::Color(HEX_RGBA_TO_FLOAT4(255, 127, 40, 255)));
+	}
 }

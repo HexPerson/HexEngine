@@ -9,7 +9,7 @@ namespace HexEngine
 {
 	const float gCameraDefaultFov = 70.0f;
 	const float gViewMatrixBehindDistance = 1000.0f;
-	const float gDefaultMaxViewDistance = 1500.0f;
+	const float gDefaultMaxViewDistance = 2500.0f;
 
 	extern HVar r_lodPartition;
 
@@ -553,7 +553,7 @@ namespace HexEngine
 		return _effects;
 	}
 
-	void Camera::DebugRender()
+	void Camera::OnDebugRender()
 	{
 		g_pEnv->_debugRenderer->DrawFrustum(_frustum, math::Color(1,0,0.1,1));
 		g_pEnv->_debugRenderer->DrawFrustum(_largerFrustum, math::Color(0, 1, 0.1, 1));

@@ -21,8 +21,8 @@ namespace HexEngine
 		_doesCastShadows			= clone->_doesCastShadows;
 		_isVolumetric				= clone->_isVolumetric;
 		_effect						= clone->_effect;
-		_strengthMultiplier			= clone->_strengthMultiplier;
-		_originalStrengthMultiplier = clone->_originalStrengthMultiplier;
+		_strength					= clone->_strength;
+		_originalStrength			= clone->_originalStrength;
 		_diffuseColour				= clone->_diffuseColour;
 		_slowRandomPulseEffect		= clone->_slowRandomPulseEffect;
 		_radius						= clone->_radius;
@@ -32,7 +32,7 @@ namespace HexEngine
 	{
 		if (effect != LightingEffect::None)
 		{
-			_originalStrengthMultiplier = _strengthMultiplier;
+			_originalStrength = _strength;
 			// Add an updatable component if there isn't one
 			//
 			if (GetEntity()->HasA<UpdateComponent>() == false)
@@ -41,7 +41,7 @@ namespace HexEngine
 			}
 		}
 		else
-			_strengthMultiplier = _originalStrengthMultiplier;
+			_strength = _originalStrength;
 
 		_effect = effect;
 	}
@@ -80,13 +80,13 @@ namespace HexEngine
 				{
 					if (fabs(_slowRandomPulseEffect.current- _slowRandomPulseEffect.target) < 0.01f)
 					{
-						_slowRandomPulseEffect.target = GetRandomFloat(_originalStrengthMultiplier * 0.25f, _originalStrengthMultiplier);
+						_slowRandomPulseEffect.target = GetRandomFloat(_originalStrength * 0.25f, _originalStrength);
 					}
 
 					float dir = _slowRandomPulseEffect.target > _slowRandomPulseEffect.current ? 1.0f : -1.0f;
 
 					_slowRandomPulseEffect.current += /*(_slowRandomPulseEffect.target - _slowRandomPulseEffect.current)*/dir * g_pEnv->_timeManager->GetFrameTime() * 1.4f;
-					_strengthMultiplier = std::clamp(_slowRandomPulseEffect.current, 0.0f, _originalStrengthMultiplier);
+					_strength = std::clamp(_slowRandomPulseEffect.current, 0.0f, _originalStrength);
 					break;
 				}
 			}
@@ -124,30 +124,30 @@ namespace HexEngine
 	{
 		math::Vector4 diffuse = _diffuseColour;
 
-		diffuse.w *= _strengthMultiplier;
+		diffuse.w *= _strength;
 
 		return diffuse;
 	}
 
-	/*void Light::SetLightMultiplier(float value)
+	void Light::SetLightMultiplier(float value)
 	{
 		_lightMultiplier = std::clamp(value, 0.0f, 1.0f);
 	}
 
-	float Light::GetLightMultiplier()
+	float Light::GetLightMultiplier() const
 	{
 		return _lightMultiplier;
-	}*/
+	}
 
 	void Light::SetLightStength(float value)
 	{
-		_strengthMultiplier = value;
-		_originalStrengthMultiplier = value;
+		_strength = value;
+		_originalStrength = value;
 	}
 
 	float Light::GetLightStrength() const
 	{
-		return _strengthMultiplier;
+		return _strength;
 	}
 
 	void Light::SetIsVolumetric(bool volumetric)
@@ -180,22 +180,24 @@ namespace HexEngine
 	{
 		SERIALIZE_VALUE(_diffuseColour);
 		SERIALIZE_VALUE(_effect);
-		SERIALIZE_VALUE(_strengthMultiplier);
+		SERIALIZE_VALUE(_strength);
 		SERIALIZE_VALUE(_radius);
 		SERIALIZE_VALUE(_doesCastShadows);
+		SERIALIZE_VALUE(_lightMultiplier);
 	}
 
 	void Light::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
 		DESERIALIZE_VALUE(_diffuseColour);
 		DESERIALIZE_VALUE(_effect);
-		DESERIALIZE_VALUE(_strengthMultiplier);
+		DESERIALIZE_VALUE(_strength);
 		DESERIALIZE_VALUE(_radius);
 		DESERIALIZE_VALUE(_doesCastShadows);
+		DESERIALIZE_VALUE(_lightMultiplier);
 
-		_originalStrengthMultiplier = _strengthMultiplier;
+		_originalStrength = _strength;
 
-		LOG_DEBUG("Loaded light params for %s, strength = %f", GetEntity()->GetName().c_str(), _strengthMultiplier);
+		LOG_DEBUG("Loaded light params for %s, strength = %f", GetEntity()->GetName().c_str(), _strength);
 
 		SetLightingEffect(_effect);
 		SetDoesCastShadows(_doesCastShadows);
@@ -207,7 +209,7 @@ namespace HexEngine
 		//castsShadows->SetLabelMinSize(130);
 		castsShadows->SetOnCheckFn(std::bind(&Light::SetDoesCastShadows, this, std::placeholders::_2));
 
-		DragFloat* strength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Strength", &_strengthMultiplier, 0.1f, 500.0f, 0.1f);
+		DragFloat* strength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Strength", &_strength, 0.1f, 500.0f, 0.1f);
 		//strength->SetLabelMinSize(130);
 
 		DragFloat* radius = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Radius", &_radius, 2.0f, 1000.0f, 0.1f);

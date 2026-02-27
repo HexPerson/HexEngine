@@ -11,61 +11,7 @@
 
 namespace HexEngine
 {
-	enum MaterialTexture
-	{
-		Albedo,
-		Normal,
-		Roughness,
-		Metallic,
-		Height,
-		Emission,
-		Opacity,
-		AmbientOcclusion,
-		Count
-	};
-
-	enum class MaterialFormat
-	{
-		None,
-		ORM
-	};
-
-	struct MaterialProperties
-	{
-		MaterialProperties() :
-			metallicFactor(0.0f),
-			roughnessFactor(0.5f),
-			diffuseColour(1.0f),
-			hasTransparency(0),
-			isWater(0),
-			emissiveColour(0.0f),
-			isInTransparencyPhase(0)
-		{}
-
-		bool operator ==(const MaterialProperties& other)
-		{
-			return (
-				metallicFactor == other.metallicFactor &&
-				roughnessFactor == other.roughnessFactor &&
-				diffuseColour == other.diffuseColour &&
-				emissiveColour == other.emissiveColour &&
-				hasTransparency == other.hasTransparency &&
-				isWater == other.isWater
-				);
-		}
-
-		float metallicFactor;
-		float roughnessFactor;
-		float smoothness;
-		float specularProbability;
-		math::Vector4 diffuseColour;
-		math::Vector4 emissiveColour;
-
-		int hasTransparency;
-		int isWater;
-		int isInTransparencyPhase;
-		int pad2;
-	};
+	
 
 	class HEX_API Material : public IResource
 	{

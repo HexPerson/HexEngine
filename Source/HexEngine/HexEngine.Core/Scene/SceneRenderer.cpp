@@ -46,6 +46,8 @@ namespace HexEngine
 	HVar r_saturation("r_saturation", "How much to saturate the final render", 1.05f, 0.1f, 3.0f);
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
+	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
+	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
 
 	SceneRenderer::SceneRenderer()
 	{}
@@ -477,7 +479,7 @@ namespace HexEngine
 			sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
 			_currentCamera->GetViewport(),
 			6,
-			/*sunLight ? sunLight->GetLightMultiplier() :*/ 1.0f
+			sunLight ? sunLight->GetLightMultiplier() : 1.0f
 		);
 		_gbuffer.SetAsRenderTargets(_currentCamera->GetViewport());
 
@@ -495,7 +497,7 @@ namespace HexEngine
 
 		//RenderTransparent();
 
-		if (r_debugScene._val.i32 == 1)
+		//if (r_debugScene._val.i32 == 1)
 		{
 			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
 
@@ -692,6 +694,8 @@ namespace HexEngine
 			bufferData._jitterOffsets = _taa.GetJitterOffset(viewport.width, viewport.height);
 			_denoiseFD.jitter = bufferData._jitterOffsets;
 
+			bufferData._chromaticAbberationAmmount = r_chromaticAbberation._val.f32;
+
 			perFrameBuffer->Write(&bufferData, sizeof(bufferData));
 
 			// set the per frame constant buffers
@@ -867,9 +871,11 @@ namespace HexEngine
 					(lightFlags & LightFlags::RebuildShadowMatrices | LightFlags::RebuildPVS) == (LightFlags::RebuildShadowMatrices | LightFlags::RebuildPVS)))
 					continue;*/
 
-				//if ((g_pEnv->_timeManager->_frameCount + i) % 2 == 0)
-				//	continue;
-
+				if (r_performantShadowMaps._val.b)
+				{
+					if ((g_pEnv->_timeManager->_frameCount + i) % 2 == 0)
+						continue;
+				}
 				// Set as the current render target
 				//
 				shadowMap->SetRenderTarget();	
@@ -1185,7 +1191,7 @@ namespace HexEngine
 			RenderFog();
 			//RenderWater();
 			RenderVolumetricLighting();		
-			//RenderTransparent();
+			RenderTransparent();
 
 			// don't bother doing this if we don't need to, its expensive!
 			if(_currentScene->DidAnyDrawnItemReflect())
@@ -1296,10 +1302,11 @@ namespace HexEngine
 			guiRenderer->FullScreenTexturedQuad(beauty, _vignetteShader.get());
 			renderTarget->CopyTo(beauty);
 
-			guiRenderer->FullScreenTexturedQuad(beauty, _chromaticAberrationShader.get());
-			renderTarget->CopyTo(beauty);
-
-			
+			if (r_chromaticAbberation._val.f32 > 0.0f)
+			{
+				guiRenderer->FullScreenTexturedQuad(beauty, _chromaticAberrationShader.get());
+				renderTarget->CopyTo(beauty);
+			}			
 
 			if (r_fxaa._val.i32 && canPostProcess)
 				guiRenderer->FullScreenTexturedQuad(beauty, _fxaa.get());
@@ -1654,6 +1661,8 @@ namespace HexEngine
 	{
 		PROFILE();
 
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin Water");
+
 		_waterRT->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		g_pEnv->_graphicsDevice->SetRenderTarget(_waterRT, _gbuffer.GetDepthBuffer());
 
@@ -1671,6 +1680,8 @@ namespace HexEngine
 
 			guiRenderer->EndFrame();
 		}
+
+		GFX_PERF_END();
 
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
 	}

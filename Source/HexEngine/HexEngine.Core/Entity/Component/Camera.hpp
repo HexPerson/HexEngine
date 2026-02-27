@@ -108,7 +108,7 @@ namespace HexEngine
 		void ToggleEffect(CameraEffect effect);
 		CameraEffect GetCameraEffects() const;
 
-		virtual void DebugRender() override;
+		virtual void OnDebugRender() override;
 
 	private:
 		void ConstructProjectionMatrix();

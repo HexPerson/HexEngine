@@ -58,6 +58,11 @@ namespace HexEngine
 		_flags &= ~flags;
 	}
 
+	EntityFlags Entity::GetFlags() const
+	{
+		return _flags;
+	}
+
 	void Entity::DeleteMe(bool broadcast)
 	{
 		SetFlag(EntityFlags::IsPendingRemoval);
@@ -336,36 +341,39 @@ namespace HexEngine
 
 	void Entity::DebugRender()
 	{
-		auto layer = GetLayer();
+		//auto layer = GetLayer();
 
-		if (layer != Layer::Invisible || layer == Layer::Trigger)
-		{
-			math::Color debugColour;
-			switch (layer)
-			{
-			default:
-				debugColour = math::Color(0, 1, 0, 0.4f); break;
+		//if (layer != Layer::Invisible || layer == Layer::Trigger)
+		//{
+		//	math::Color debugColour;
+		//	switch (layer)
+		//	{
+		//	default:
+		//		debugColour = math::Color(0, 1, 0, 0.4f); break;
 
-			case Layer::Trigger:
-				debugColour = math::Color(1.0f, 0.1f, 0.1f, 0.4f); break;
-			}
+		//	case Layer::Trigger:
+		//		debugColour = math::Color(1.0f, 0.1f, 0.1f, 0.4f); break;
+		//	}
 
-			auto worldAABB = GetWorldAABB();
-			worldAABB.Extents.x *= 1.1f;
-			worldAABB.Extents.y *= 1.1f;
-			worldAABB.Extents.z *= 1.1f;
+		//	auto worldAABB = GetWorldAABB();
+		//	worldAABB.Extents.x *= 1.1f;
+		//	worldAABB.Extents.y *= 1.1f;
+		//	worldAABB.Extents.z *= 1.1f;
 
-			g_pEnv->_debugRenderer->DrawOBB(GetWorldOBB(), debugColour);
-			g_pEnv->_debugRenderer->DrawAABB(worldAABB, math::Color(1.0f, 0, 0, 0.6f));
+		//	g_pEnv->_debugRenderer->DrawOBB(GetWorldOBB(), debugColour);
+		//	g_pEnv->_debugRenderer->DrawAABB(worldAABB, math::Color(1.0f, 0, 0, 0.6f));
 
-			//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetForward() * 20.0f, math::Color(0, 0, 1, 1));
-			//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetRight() * 20.0f, math::Color(1, 0, 0, 1));
-			//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetUp() * 20.0f, math::Color(0, 1, 0, 1));
-		}
+		//	//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetForward() * 20.0f, math::Color(0, 0, 1, 1));
+		//	//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetRight() * 20.0f, math::Color(1, 0, 0, 1));
+		//	//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetUp() * 20.0f, math::Color(0, 1, 0, 1));
+		//}
 
 		for (auto& comp : _components)
 		{
-			comp.component->DebugRender();
+			comp.component->OnDebugRender();
+
+			if(HasFlag(EntityFlags::SelectedInEditor))
+				comp.component->OnRenderEditorGizmo(true);
 		}
 	}
 
@@ -638,7 +646,7 @@ namespace HexEngine
 		{
 			_cachedWorldOcclusionVolume = GetOcclusionVolume();
 
-			auto position = _cachedTransform->GetPosition();
+			auto position = GetWorldTM().Translation();
 
 			_cachedWorldOcclusionVolume.Center.x += position.x;
 			_cachedWorldOcclusionVolume.Center.y += position.y;
@@ -661,7 +669,7 @@ namespace HexEngine
 		{
 			_cachedWorldBoundingSphere = GetBoundingSphere();
 
-			auto position = _cachedTransform->GetPosition();
+			auto position = GetWorldTM().Translation();
 
 			_cachedWorldBoundingSphere.Center.x += position.x;
 			_cachedWorldBoundingSphere.Center.y += position.y;
@@ -680,6 +688,7 @@ namespace HexEngine
 			_cachedWorldAABB = GetAABB();
 
 			const auto& translation = GetWorldTM().Translation();
+
 			_cachedWorldAABB.Center.x += translation.x;
 			_cachedWorldAABB.Center.y += translation.y;
 			_cachedWorldAABB.Center.z += translation.z;
@@ -835,6 +844,7 @@ namespace HexEngine
 		json& entData = data[GetName()];
 		
 		entData["layer"] = GetLayer();
+		entData["flags"] = GetFlags();
 
 		//int numComponents = (int)_components.size();
 		//file->Write(&numComponents, sizeof(int));
@@ -874,9 +884,17 @@ namespace HexEngine
 
 	void Entity::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
-		Layer layer = data["layer"].get<Layer>();
+		if (data.find("layer") != data.end())
+		{
+			Layer layer = data["layer"].get<Layer>();
+			SetLayer(layer);
+		}
 
-		SetLayer(layer);
+		if (data.find("flags") != data.end())
+		{
+			EntityFlags flags = data["flags"].get<EntityFlags>();
+			SetFlag(flags);
+		}
 
 		for(auto& comp : data["components"].items())
 		{
@@ -910,6 +928,23 @@ namespace HexEngine
 				continue;
 
 			component->Deserialize(comp.value(), file, mask);
+		}
+	}
+
+	void Entity::ToggleVisibility()
+	{
+		if (HasFlag(EntityFlags::DoNotRender))
+		{
+			ClearFlags(EntityFlags::DoNotRender);			
+		}
+		else
+		{
+			SetFlag(EntityFlags::DoNotRender);
+		}
+
+		for (auto& child : _children)
+		{
+			child->ToggleVisibility();
 		}
 	}
 }

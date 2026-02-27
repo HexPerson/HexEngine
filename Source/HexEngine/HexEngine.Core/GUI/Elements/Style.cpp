@@ -26,7 +26,7 @@ namespace HexEngine
 		style.button_back = math::Color(HEX_RGBA_TO_FLOAT4(54, 54, 55, 255));
 		style.button_back2 = math::Color(HEX_RGBA_TO_FLOAT4(44, 44, 45, 255));
 		style.button_border = math::Color(HEX_RGBA_TO_FLOAT4(1, 2, 3, 255));
-		style.button_hover = math::Color(HEX_RGBA_TO_FLOAT4(255, 201, 14, 255));
+		style.button_hover = math::Color(HEX_RGBA_TO_FLOAT4(1, 85, 219, 255));
 		style.button_hover_text = math::Color(HEX_RGBA_TO_FLOAT4(1, 2, 3, 255));
 
 		style.listbox_back = math::Color(HEX_RGBA_TO_FLOAT4(35, 35, 36, 255));

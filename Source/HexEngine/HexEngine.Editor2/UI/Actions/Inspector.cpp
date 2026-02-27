@@ -17,6 +17,11 @@ namespace HexEditor
 			_deleteBtn = new Button(entityTab, Point(size.x - 75, 50), Point(70, 25), L"Delete", std::bind(&Inspector::OnDeleteEntity, this, std::placeholders::_1));
 			_deleteBtn->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(237, 28, 36, 255)));
 
+			_visBtnTextures[0] = ITexture2D::Create("EngineData.Textures/UI/ui_invisible.png");
+			_visBtnTextures[1] = ITexture2D::Create("EngineData.Textures/UI/ui_visible.png");
+
+			_toggleVisibilityBtn = new Button(entityTab, Point(5, 50), Point(30, 25), _visBtnTextures[1], std::bind(&Inspector::OnToggleEntityVisible, this, std::placeholders::_1));
+
 			_addComponentBtn = new Button(entityTab, Point(5, 80), Point(size.x - 10, 25), L"Add Component...", std::bind(&Inspector::OnAddComponent, this, std::placeholders::_1));
 		}
 
@@ -64,6 +69,27 @@ namespace HexEditor
 		return true;
 	}
 
+	bool Inspector::OnToggleEntityVisible(Button* button)
+	{
+		if (_inspecting)
+		{
+			if (_inspecting->HasFlag(EntityFlags::DoNotRender))
+			{
+				_inspecting->ToggleVisibility();
+				g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+				_toggleVisibilityBtn->SetIcon(_visBtnTextures[1]);
+			}
+			else
+			{
+				_inspecting->ToggleVisibility();
+				g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+				_toggleVisibilityBtn->SetIcon(_visBtnTextures[0]);
+			}
+		}
+
+		return true;
+	}
+
 	void Inspector::ClearInspectorWidgets()
 	{
 		// free any component widgets from the last inspected entity
@@ -93,6 +119,9 @@ namespace HexEditor
 
 	void Inspector::InspectEntity(Entity* entity)
 	{
+		if (_inspecting)
+			_inspecting->ClearFlags(EntityFlags::SelectedInEditor);
+
 		if (!entity)
 		{
 			_inspecting = nullptr;
@@ -121,6 +150,8 @@ namespace HexEditor
 			ClearInspectorWidgets();
 
 			_inspecting = entity;
+
+			_inspecting->SetFlag(EntityFlags::SelectedInEditor);
 
 			int32_t y = 130;
 

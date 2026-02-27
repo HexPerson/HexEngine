@@ -79,11 +79,11 @@ namespace HexEngine
 
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
 
-		//void SetLightMultiplier(float value);
-		//float GetLightMultiplier();
-
 		void SetLightStength(float value);
 		float GetLightStrength() const;
+
+		void SetLightMultiplier(float value);
+		float GetLightMultiplier() const;
 
 		void SetRadius(float radius);
 		float GetRadius() const;
@@ -109,14 +109,14 @@ namespace HexEngine
 		bool _isVolumetric = false;
 		LightingEffect _effect = LightingEffect::None;
 
-		float _strengthMultiplier = 1.0f;
-		float _originalStrengthMultiplier = 1.0f;
+		float _strength = 1.0f;
+		float _originalStrength = 1.0f;
 		math::Vector4 _diffuseColour;
 
 		// Effect data
 		SlowRandomPulseEffect _slowRandomPulseEffect;
 
-		//float _lightMultiplier = 1.0f;
+		float _lightMultiplier = 1.0f;
 
 		float _radius = 5.0f;
 

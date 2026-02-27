@@ -119,7 +119,7 @@
 			getSunColour(), 
 			pixelColour.rgb,
 			depthValue,
-			1.0f);
+			g_globalLight[0]);
 
 		return pbr;
 

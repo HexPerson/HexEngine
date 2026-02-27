@@ -139,15 +139,23 @@ namespace HexEngine
 	{
 		for (auto& fs : _fileSystems)
 		{
-			auto rel = fs::relative(path, fs->GetBaseDirectory());
+			if (auto p = path.wstring().find('.'); p != std::string::npos)
+			{
+				if (fs->GetName() == path.wstring().substr(0, p))
+					return fs;
+			}
+			else
+			{
+				auto rel = fs::relative(path, fs->GetBaseDirectory());
 
-			if (!rel.empty() && rel.native()[0] != '.')
-				return fs;
+				if (!rel.empty() && rel.native()[0] != '.')
+					return fs;
 
-			rel = fs::relative(fs->GetName(), path);
+				rel = fs::relative(fs->GetName(), path);
 
-			if (!rel.empty() && rel.native()[0] != '.')
-				return fs;
+				if (!rel.empty() && rel.native()[0] != '.')
+					return fs;
+			}
 		}
 		return nullptr;
 	}

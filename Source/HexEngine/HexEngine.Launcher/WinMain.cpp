@@ -81,6 +81,9 @@ int WinMain(
 		pGameExtension->OnCreateGame();
 	}
 
+	// Rebuild the PVS after game launch
+	g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+
 	//g_pEnv->_inputSystem->EnableRawInput(true);
 
 	// Now that everything is created, enter the game loop

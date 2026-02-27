@@ -33,6 +33,8 @@ namespace HexEngine
 
 		virtual void Destroy() override;
 
+		virtual void OnRenderEditorGizmo(bool isSelected) override;
+
 		void		ReleaseAllMeshes();
 
 		bool		RenderMesh(Mesh* mesh, MeshRenderFlags flags, int32_t instanceId);

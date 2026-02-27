@@ -156,14 +156,52 @@ namespace HexEngine
 			math::Vector3 deltaPos2 = (math::Vector3)v2 - (math::Vector3)v0;
 			//math::Vector3 d2 = (math::Vector3)v2 - (math::Vector3)v1;
 
-			math::Vector2 deltaUV1 = uv1 - uv0;
+			/*math::Vector2 deltaUV1 = uv1 - uv0;
 			math::Vector2 deltaUV2 = uv2 - uv0;
 			float r = 1.0f / (deltaUV1.x * deltaUV2.y - deltaUV1.y * deltaUV2.x);
-
 			
-
 			math::Vector3 tangent = (deltaPos1 * deltaUV2.y - deltaPos2 * deltaUV1.y) * r;
 			math::Vector3 bitangent = (deltaPos2 * deltaUV1.x - deltaPos1 * deltaUV2.x) * r;
+			
+			math::Vector3 tangent = {
+				(tvVector[1] * deltaPos1.x - tvVector[0] * deltaPos2.x) * r,
+				(tvVector[1] * deltaPos1.y - tvVector[0] * deltaPos2.y) * r,
+				(tvVector[1] * deltaPos1.z - tvVector[0] * deltaPos2.z) * r
+			};
+
+			math::Vector3 bitangent = {
+				(tuVector[0] * deltaPos2.x - tuVector[1] * deltaPos1.x) * r,
+				(tuVector[0] * deltaPos2.y - tuVector[1] * deltaPos1.y) * r,
+				(tuVector[0] * deltaPos2.z - tuVector[1] * deltaPos1.z) * r
+			};
+			*/
+			
+
+			float tuVector[2], tvVector[2];
+
+			// Calculate the tu and tv texture space vectors.
+			tuVector[0] = uv1.x - uv0.x;
+			tvVector[0] = uv1.y - uv0.y;
+
+			tuVector[1] = uv2.x - uv0.x;
+			tvVector[1] = uv2.y - uv0.y;
+
+			// Calculate the denominator of the tangent/binormal equation.
+			float r = 1.0f / (tuVector[0] * tvVector[1] - tuVector[1] * tvVector[0]);
+			 
+			math::Vector3 tangent = {
+				(tvVector[1] * deltaPos1.x - tvVector[0] * deltaPos2.x) * r,
+				(tvVector[1] * deltaPos1.y - tvVector[0] * deltaPos2.y) * r,
+				(tvVector[1] * deltaPos1.z - tvVector[0] * deltaPos2.z) * r
+			};
+
+			math::Vector3 bitangent = {
+				(tuVector[0] * deltaPos2.x - tuVector[1] * deltaPos1.x) * r,
+				(tuVector[0] * deltaPos2.y - tuVector[1] * deltaPos1.y) * r,
+				(tuVector[0] * deltaPos2.z - tuVector[1] * deltaPos1.z) * r
+			};
+
+			//tangent = tangent * -1.0f;
 
 			//math::Vector3 bitangent = normal.Cross(d2);
 			bitangent.Normalize();

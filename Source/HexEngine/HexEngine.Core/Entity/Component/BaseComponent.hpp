@@ -60,9 +60,9 @@ namespace HexEngine
 
 		virtual const char* GetComponentName() = 0;
 
-		virtual void DebugRender() {};
-
+		virtual void OnDebugRender() {};
 		virtual void OnGUI() {}
+		virtual void OnRenderEditorGizmo(bool isSelected) {}
 
 		template<typename T>
 		T* CastAs()
