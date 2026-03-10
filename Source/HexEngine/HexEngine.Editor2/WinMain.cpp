@@ -2,7 +2,7 @@
 #include "Editor.hpp"
 #include "UI/EditorUI.hpp"
 
-static std::vector<std::shared_ptr<IShader>> g_hotReloadShaders;
+static std::vector<std::shared_ptr<HexEngine::IShader>> g_hotReloadShaders;
 
 void PrepareShaderHotReload()
 {
@@ -22,11 +22,11 @@ void PrepareShaderHotReload()
 			continue;
 
 
-		g_hotReloadShaders.push_back(IShader::Create(path));
+		g_hotReloadShaders.push_back(HexEngine::IShader::Create(path));
 	}
 
 	// create a file watch on the shaders folder, so we can catch any modifications and hot reload
-	g_pEnv->_fileSystem->CreateChangeNotifier(_SHADERS_LIVE_DIR);
+	HexEngine::g_pEnv->_fileSystem->CreateChangeNotifier(_SHADERS_LIVE_DIR);
 }
 
 int WinMain(
@@ -40,7 +40,7 @@ int WinMain(
 
 
 	int screenWidth, screenHeight;
-	Window::GetDesktopResolution(screenWidth, screenHeight);
+	HexEngine::Window::GetDesktopResolution(screenWidth, screenHeight);
 
 #ifdef _DEBUG
 	//screenWidth = 2560;
@@ -51,7 +51,7 @@ int WinMain(
 #endif
 
 	// Create an editor window
-	Window* mainWindow = Window::Create(0, 0, screenWidth, screenHeight, DisplayMode::Windowed, "Hex Engine Editor");
+	HexEngine::Window* mainWindow = HexEngine::Window::Create(0, 0, screenWidth, screenHeight, HexEngine::DisplayMode::Windowed, "Hex Engine Editor");
 	mainWindow->Maximise();
 
 	mainWindow->_displayFpsInTitle = true;
@@ -78,7 +78,7 @@ int WinMain(
 
 	// Create a new Game3DOptions instance
 	//
-	Game3DOptions environmentOpts;
+	HexEngine::Game3DOptions environmentOpts;
 
 	environmentOpts.window = mainWindow;
 	environmentOpts.applicationName = L"HexEngineEditor";
@@ -86,30 +86,30 @@ int WinMain(
 
 	// Create a 3D Game environment
 	//
-	if (Game3DEnvironment::Create(environmentOpts) == nullptr)
+	if (HexEngine::Game3DEnvironment::Create(environmentOpts) == nullptr)
 	{
-		Window::Destroy(mainWindow);
+		HexEngine::Window::Destroy(mainWindow);
 
-		DestroyEnvironment();
+		HexEngine::DestroyEnvironment();
 
 		return EXIT_FAILURE;
 	}
 
 	PrepareShaderHotReload();
 
-	g_pEnv->SetEditorMode(true);
-	g_pEnv->AddGameExtension(HexEditor::g_pEditor);
+	HexEngine::g_pEnv->SetEditorMode(true);
+	HexEngine::g_pEnv->AddGameExtension(HexEditor::g_pEditor);
 	HexEditor::g_pEditor->OnCreateGame();
 
-	SAFE_DELETE(g_pEnv->_uiManager);
-	g_pEnv->_uiManager = new HexEditor::EditorUI;
-	g_pEnv->_uiManager->Create(mainWindow->GetClientWidth(), mainWindow->GetClientHeight());
+	SAFE_DELETE(HexEngine::g_pEnv->_uiManager);
+	HexEngine::g_pEnv->_uiManager = new HexEditor::EditorUI;
+	HexEngine::g_pEnv->_uiManager->Create(mainWindow->GetClientWidth(), mainWindow->GetClientHeight());
 
 	//g_pEnv->_inputSystem->SetMouseMode(dx::Mouse::Mode::MODE_ABSOLUTE);
 
-	while (g_pEnv->IsRunning())
+	while (HexEngine::g_pEnv->IsRunning())
 	{
-		g_pEnv->Run();
+		HexEngine::g_pEnv->Run();
 	}
 
 	// release the hot reloaded shaders, this really just deletes memory
@@ -118,11 +118,11 @@ int WinMain(
 		hotReloadShader.reset();
 	}
 
-	Window::Destroy(mainWindow);
+	HexEngine::Window::Destroy(mainWindow);
 
 	// Finally, destroy the environment
 	//
-	DestroyEnvironment();
+	HexEngine::DestroyEnvironment();
 
 	// this will show as a leak, but its not
 	SAFE_DELETE(HexEditor::g_pEditor);

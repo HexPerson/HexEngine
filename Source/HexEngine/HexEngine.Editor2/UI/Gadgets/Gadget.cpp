@@ -14,19 +14,19 @@ namespace HexEditor
 		_cancelKey = cancelKey;
 	}
 
-	bool Gadget::OnInputEvent(InputEvent event, InputData* data)
+	bool Gadget::OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data)
 	{
 		bool keyHandled = false;
 
-		if(event == InputEvent::KeyDown)
+		if(event == HexEngine::InputEvent::KeyDown)
 		{
 			keyHandled = ProcessKey(data->KeyDown.key);
 		}
-		else if (event == InputEvent::MouseDown)
+		else if (event == HexEngine::InputEvent::MouseDown)
 		{
 			keyHandled = ProcessKey(data->MouseDown.button);
 		}
-		else if (event == InputEvent::KeyUp)
+		else if (event == HexEngine::InputEvent::KeyUp)
 		{
 			for (auto& hk : _hotkeys)
 			{

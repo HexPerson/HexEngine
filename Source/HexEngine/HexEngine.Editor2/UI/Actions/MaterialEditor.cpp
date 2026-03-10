@@ -3,7 +3,7 @@
 
 namespace HexEditor
 {
-	MaterialEditor::MaterialEditor(Element* parent, const Point& position, const Point& size) :
+	MaterialEditor::MaterialEditor(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		Dialog(parent, position, size, L"Material Editor")
 	{
 
@@ -14,7 +14,7 @@ namespace HexEditor
 
 	}
 
-	void MaterialEditor::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void MaterialEditor::Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		Dialog::Render(renderer, w, h);
 	}

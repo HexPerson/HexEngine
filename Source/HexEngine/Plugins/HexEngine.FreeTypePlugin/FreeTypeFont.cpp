@@ -34,7 +34,7 @@ bool FreeTypeFont::HasFontSize(int32_t size)
 	return false;
 }
 
-GlyphDesc* FreeTypeFont::GetGlyphFromChar(int32_t size, wchar_t ch)
+HexEngine::GlyphDesc* FreeTypeFont::GetGlyphFromChar(int32_t size, wchar_t ch)
 {
 	for (auto&& set : _sizedGlyphs)
 	{
@@ -51,7 +51,7 @@ GlyphDesc* FreeTypeFont::GetGlyphFromChar(int32_t size, wchar_t ch)
 	return nullptr;
 }
 
-ITexture2D* FreeTypeFont::GetAtlas(int32_t size)
+HexEngine::ITexture2D* FreeTypeFont::GetAtlas(int32_t size)
 {
 	if (!HasFontSize(size))
 		return nullptr;
@@ -173,7 +173,7 @@ void FreeTypeFont::CreateInstanceBuffer(int32_t size)
 	if (atlas->second.instance != nullptr)
 		return;
 
-	atlas->second.instance = new UIInstance;
+	atlas->second.instance = new HexEngine::UIInstance;
 }
 
 bool FreeTypeFont::HasInstanceBuffer(int32_t size) const
@@ -181,7 +181,7 @@ bool FreeTypeFont::HasInstanceBuffer(int32_t size) const
 	return false;
 }
 
-UIInstance* FreeTypeFont::GetInstanceBuffer(int32_t size) const
+HexEngine::UIInstance* FreeTypeFont::GetInstanceBuffer(int32_t size) const
 {
 	auto atlas = _sizedGlyphs.find(size);
 

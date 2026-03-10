@@ -13,7 +13,7 @@ namespace HexEditor
 		Overlay_Count
 	};
 
-	class EditorExtension : public IGameExtension
+	class EditorExtension : public HexEngine::IGameExtension
 	{
 	public:
 		EditorExtension();
@@ -46,11 +46,11 @@ namespace HexEditor
 
 		void CreateFileSystem(const fs::path& path);
 
-		void OnFileChangeEvent(const DirectoryWatchInfo& info, const FileChangeActionMap& fileData);
+		void OnFileChangeEvent(const HexEngine::DirectoryWatchInfo& info, const HexEngine::FileChangeActionMap& fileData);
 
 	public:
-		FileSystem* _projectFS = nullptr;
-		std::shared_ptr<ITexture2D> _overlayIcons[Overlay_Count] = { nullptr };
+		HexEngine::FileSystem* _projectFS = nullptr;
+		std::shared_ptr<HexEngine::ITexture2D> _overlayIcons[Overlay_Count] = { nullptr };
 	};
 
 	inline EditorExtension* g_pEditor = nullptr;

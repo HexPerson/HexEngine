@@ -5,12 +5,12 @@
 
 namespace HexEditor
 {
-	class ProjectManager : public Dialog
+	class ProjectManager : public HexEngine::Dialog
 	{
 	public:
-		using OnCompleted = std::function<void(const fs::path&, const std::string&, bool, const std::wstring&, LoadingDialog* loadingDlg)>;
+		using OnCompleted = std::function<void(const fs::path&, const std::string&, bool, const std::wstring&, HexEngine::LoadingDialog* loadingDlg)>;
 
-		ProjectManager(Element* parent, const Point& position, const Point& size);
+		ProjectManager(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size);
 		~ProjectManager();
 
 		static ProjectManager* CreateProjectManagerDialog(Element* parent, OnCompleted onCompletedAction);
@@ -18,10 +18,10 @@ namespace HexEditor
 		void ReadProjectList();
 		void AddNewProjectPath(const fs::path& path);
 
-		bool OnClickExistingProject(ListBox* box, ListBox::Item* item);
+		bool OnClickExistingProject(HexEngine::ListBox* box, HexEngine::ListBox::Item* item);
 
-		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
-		virtual void PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
+		virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;
+		virtual void PostRenderChildren(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 
 		//const fs::path& GetCurrentProjectPath() const { return _currentProjectPath; }
 		//const fs::path& GetCurrentProjectFilePath() const { return _currentProjectFilePath; }
@@ -32,16 +32,16 @@ namespace HexEditor
 
 	private:
 		// new
-		GroupBox* _newProjectGroup;
-		LineEdit* _projectName;
-		LineEdit* _projectPath;
-		LineEdit* _namespaceName;
-		Button* _browsePathBtn;
-		Button* _createProjectBtn;
+		HexEngine::GroupBox* _newProjectGroup;
+		HexEngine::LineEdit* _projectName;
+		HexEngine::LineEdit* _projectPath;
+		HexEngine::LineEdit* _namespaceName;
+		HexEngine::Button* _browsePathBtn;
+		HexEngine::Button* _createProjectBtn;
 
 		// existig
-		GroupBox* _oldProjectsGroup;
-		ListBox* _oldProjectsList;
+		HexEngine::GroupBox* _oldProjectsGroup;
+		HexEngine::ListBox* _oldProjectsList;
 
 		json _projectListData;
 
@@ -50,7 +50,7 @@ namespace HexEditor
 
 		OnCompleted _onCompleted;
 
-		DrawList _drawList;
+		HexEngine::DrawList _drawList;
 
 		//std::wstring _projectPath;
 		//std::wstring _projectName;

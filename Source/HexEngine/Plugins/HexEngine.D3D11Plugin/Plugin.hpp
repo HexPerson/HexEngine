@@ -4,7 +4,7 @@
 #include <HexEngine.Core\HexEngine.hpp>
 #include "GraphicsDeviceD3D11.hpp"
 
-class D3D11Plugin : public IPlugin
+class D3D11Plugin : public HexEngine::IPlugin
 {
 public:
 	D3D11Plugin();
@@ -15,7 +15,7 @@ public:
 
 	virtual void GetVersionData(VersionData* data) override;
 
-	virtual IPluginInterface* CreateInterface(const std::string& interfaceName) override;
+	virtual HexEngine::IPluginInterface* CreateInterface(const std::string& interfaceName) override;
 
 	virtual void GetDependencies(std::vector<std::string>& dependencies) const override {}
 

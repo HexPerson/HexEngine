@@ -3,7 +3,7 @@
 
 #include <HexEngine.Core/HexEngine.hpp>
 
-class MyInterface : public IPluginInterface
+class MyInterface : public HexEngine::IPluginInterface
 {
 public:
 	virtual bool Create() override;

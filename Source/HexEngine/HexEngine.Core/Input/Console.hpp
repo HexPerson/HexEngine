@@ -34,5 +34,5 @@ namespace HexEngine
 		Canvas _canvas;
 	};
 
-#define CON_ECHO(text, ...) if(g_pEnv && g_pEnv->_commandManager &&  g_pEnv->_commandManager->GetConsole()) g_pEnv->_commandManager->GetConsole()->Print(text, __VA_ARGS__);
+#define CON_ECHO(text, ...) if(HexEngine::g_pEnv && HexEngine::g_pEnv->_commandManager &&  HexEngine::g_pEnv->_commandManager->GetConsole()) HexEngine::g_pEnv->_commandManager->GetConsole()->Print(text, __VA_ARGS__);
 }

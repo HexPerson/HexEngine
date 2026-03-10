@@ -39,6 +39,9 @@ namespace HexEngine
 		int32_t GetMaxLOD() { return _maxLOD; }
 		void SetMaxLOD(int32_t maxLod) { _maxLOD = maxLod; }
 
+		void SetAnimatioData(const std::shared_ptr<AnimationData>& animData);
+		std::shared_ptr<AnimationData> GetAnimationData() const;
+
 	private:
 		std::vector<std::shared_ptr<Mesh>> _meshes;
 		std::wstring _name;

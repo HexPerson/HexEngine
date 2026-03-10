@@ -2,14 +2,14 @@
 #include "HBAOPlus.hpp"
 #include "../HexEngine.D3D11Plugin/Texture2D.hpp"
 
-HVar hbao_unitscale("hbao_unitscale", "Metres to view-space units", 1.0f, 0.1f, 100.0f);
+HexEngine::HVar hbao_unitscale("hbao_unitscale", "Metres to view-space units", 1.0f, 0.1f, 100.0f);
 
 bool HBAOPlus::Create()
 {
 	GFSDK_SSAO_Status status;	
 
 	status = GFSDK_SSAO_CreateContext_D3D11(
-		(ID3D11Device*)g_pEnv->_graphicsDevice->GetNativeDevice(),
+		(ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice(),
 		&_aoContext, nullptr);
 
 	if (status != GFSDK_SSAO_OK)
@@ -28,7 +28,7 @@ void HBAOPlus::Destroy()
 	SAFE_RELEASE(_aoContext);
 }
 
-void HBAOPlus::ApplyAmbientOcclusion(Camera* camera, ITexture2D* depthBuffer, ITexture2D* normals, ITexture2D* target)
+void HBAOPlus::ApplyAmbientOcclusion(HexEngine::Camera* camera, HexEngine::ITexture2D* depthBuffer, HexEngine::ITexture2D* normals, HexEngine::ITexture2D* target)
 {
 	const math::Matrix& pm = camera->GetProjectionMatrix();
 
@@ -80,5 +80,5 @@ void HBAOPlus::ApplyAmbientOcclusion(Camera* camera, ITexture2D* depthBuffer, IT
 	Output.pRenderTargetView = ((Texture2D*)target)->_renderTargetView;
 	Output.Blend.Mode = GFSDK_SSAO_MULTIPLY_RGB;
 
-	_aoContext->RenderAO((ID3D11DeviceContext*)g_pEnv->_graphicsDevice->GetNativeDeviceContext(), Input, Params, Output);
+	_aoContext->RenderAO((ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext(), Input, Params, Output);
 }

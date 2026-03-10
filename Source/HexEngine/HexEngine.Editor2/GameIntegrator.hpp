@@ -14,7 +14,7 @@ namespace HexEditor
 		Max
 	};
 
-	class GameIntegrator : public IEntityListener
+	class GameIntegrator : public HexEngine::IEntityListener
 	{
 	public:
 		bool BuildGame(const std::wstring& projectFileName);
@@ -23,16 +23,16 @@ namespace HexEditor
 		bool StopGame();
 		GameTestState GetState() const;
 
-		virtual void OnAddEntity(Entity* entity) override;
-		virtual void OnRemoveEntity(Entity* entity) override;
-		virtual void OnAddComponent(Entity* entity, BaseComponent* component) override {};
-		virtual void OnRemoveComponent(Entity* entity, BaseComponent* component) override {};
+		virtual void OnAddEntity(HexEngine::Entity* entity) override;
+		virtual void OnRemoveEntity(HexEngine::Entity* entity) override;
+		virtual void OnAddComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component) override {};
+		virtual void OnRemoveComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component) override {};
 
 	private:
-		std::vector<Entity*> _tempEntitiesCreated;
-		FileSystem* _runtimeFS;
+		std::vector<HexEngine::Entity*> _tempEntitiesCreated;
+		HexEngine::FileSystem* _runtimeFS;
 		HMODULE _gameDll = 0;
-		IGameExtension* _gameExtension = 0;
+		HexEngine::IGameExtension* _gameExtension = 0;
 		GameTestState _state = GameTestState::None;
 	};
 }

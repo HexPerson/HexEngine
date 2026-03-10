@@ -192,4 +192,14 @@ namespace HexEngine
 
 		return true;
 	}
+
+	void AnimatedMesh::SetRootTransformation(const math::Matrix& rootTrans)
+	{
+		_rootTransformation = rootTrans;
+	}
+
+	const math::Matrix& AnimatedMesh::GetRootTransformation() const
+	{
+		return _rootTransformation;
+	}
 }

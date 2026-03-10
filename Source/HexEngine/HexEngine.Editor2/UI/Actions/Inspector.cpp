@@ -4,25 +4,25 @@
 
 namespace HexEditor
 {
-	Inspector::Inspector(Element* parent, const Point& position, const Point& size) :
+	Inspector::Inspector(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		Dock(parent, position, size, Dock::Anchor::Right)
 	{
-		_tabs = new TabView(this, Point(0, 10), Point(size.x, size.y - 20));
+		_tabs = new HexEngine::TabView(this, HexEngine::Point(0, 10), HexEngine::Point(size.x, size.y - 20));
 
 		auto entityTab = _tabs->AddTab(L"Entity");		
 		{
-			_entityName = new LineEdit(entityTab, Point(5, g_pEnv->_uiManager->GetRenderer()->_style.tab_height), Point(size.x - 10, 25), L"");
+			_entityName = new HexEngine::LineEdit(entityTab, HexEngine::Point(5, HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.tab_height), HexEngine::Point(size.x - 10, 25), L"");
 			_entityName->SetOnInputFn(std::bind(&Inspector::OnChangeEntityName, this, std::placeholders::_2));
 
-			_deleteBtn = new Button(entityTab, Point(size.x - 75, 50), Point(70, 25), L"Delete", std::bind(&Inspector::OnDeleteEntity, this, std::placeholders::_1));
+			_deleteBtn = new HexEngine::Button(entityTab, HexEngine::Point(size.x - 75, 50), HexEngine::Point(70, 25), L"Delete", std::bind(&Inspector::OnDeleteEntity, this, std::placeholders::_1));
 			_deleteBtn->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(237, 28, 36, 255)));
 
-			_visBtnTextures[0] = ITexture2D::Create("EngineData.Textures/UI/ui_invisible.png");
-			_visBtnTextures[1] = ITexture2D::Create("EngineData.Textures/UI/ui_visible.png");
+			_visBtnTextures[0] = HexEngine::ITexture2D::Create("EngineData.Textures/UI/ui_invisible.png");
+			_visBtnTextures[1] = HexEngine::ITexture2D::Create("EngineData.Textures/UI/ui_visible.png");
 
-			_toggleVisibilityBtn = new Button(entityTab, Point(5, 50), Point(30, 25), _visBtnTextures[1], std::bind(&Inspector::OnToggleEntityVisible, this, std::placeholders::_1));
+			_toggleVisibilityBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 50), HexEngine::Point(30, 25), _visBtnTextures[1], std::bind(&Inspector::OnToggleEntityVisible, this, std::placeholders::_1));
 
-			_addComponentBtn = new Button(entityTab, Point(5, 80), Point(size.x - 10, 25), L"Add Component...", std::bind(&Inspector::OnAddComponent, this, std::placeholders::_1));
+			_addComponentBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 80), HexEngine::Point(size.x - 10, 25), L"Add Component...", std::bind(&Inspector::OnAddComponent, this, std::placeholders::_1));
 		}
 
 		auto resourceTab = _tabs->AddTab(L"Resource");
@@ -46,16 +46,16 @@ namespace HexEditor
 		return _tabs->GetCurrentTabIndex() == 1;
 	}
 
-	Entity* Inspector::GetInspectingEntity() const
+	HexEngine::Entity* Inspector::GetInspectingEntity() const
 	{
 		return _inspecting;
 	}
 
-	bool Inspector::OnDeleteEntity(Button* button)
+	bool Inspector::OnDeleteEntity(HexEngine::Button* button)
 	{
 		if (_inspecting)
 		{
-			g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(_inspecting);
+			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(_inspecting);
 
 			ClearInspectorWidgets();
 
@@ -69,20 +69,20 @@ namespace HexEditor
 		return true;
 	}
 
-	bool Inspector::OnToggleEntityVisible(Button* button)
+	bool Inspector::OnToggleEntityVisible(HexEngine::Button* button)
 	{
 		if (_inspecting)
 		{
-			if (_inspecting->HasFlag(EntityFlags::DoNotRender))
+			if (_inspecting->HasFlag(HexEngine::EntityFlags::DoNotRender))
 			{
 				_inspecting->ToggleVisibility();
-				g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+				HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 				_toggleVisibilityBtn->SetIcon(_visBtnTextures[1]);
 			}
 			else
 			{
 				_inspecting->ToggleVisibility();
-				g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+				HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 				_toggleVisibilityBtn->SetIcon(_visBtnTextures[0]);
 			}
 		}
@@ -117,10 +117,10 @@ namespace HexEditor
 		}			
 	}
 
-	void Inspector::InspectEntity(Entity* entity)
+	void Inspector::InspectEntity(HexEngine::Entity* entity)
 	{
 		if (_inspecting)
-			_inspecting->ClearFlags(EntityFlags::SelectedInEditor);
+			_inspecting->ClearFlags(HexEngine::EntityFlags::SelectedInEditor);
 
 		if (!entity)
 		{
@@ -151,7 +151,7 @@ namespace HexEditor
 
 			_inspecting = entity;
 
-			_inspecting->SetFlag(EntityFlags::SelectedInEditor);
+			_inspecting->SetFlag(HexEngine::EntityFlags::SelectedInEditor);
 
 			int32_t y = 130;
 
@@ -159,8 +159,7 @@ namespace HexEditor
 			{
 				auto componentName = component->GetComponentName();
 
-
-				ComponentWidget* widget = new ComponentWidget(this, Point(5, y), Point(size.x, size.y), s2ws(componentName));
+				HexEngine::ComponentWidget* widget = new HexEngine::ComponentWidget(this, HexEngine::Point(5, y), HexEngine::Point(size.x, size.y), s2ws(componentName));
 
 				if (component->CreateWidget(widget) == false)
 				{
@@ -190,27 +189,27 @@ namespace HexEditor
 		_canvas.Redraw();
 	}
 
-	bool Inspector::OnAddComponent(Button* button)
+	bool Inspector::OnAddComponent(HexEngine::Button* button)
 	{
 		if (_addComponentContextMenu == nullptr)
 		{
 			int32_t mx, my;
-			g_pEnv->_inputSystem->GetMousePosition(mx, my);
+			HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 			mx -= _addComponentBtn->GetAbsolutePosition().x;
 			my -= _addComponentBtn->GetAbsolutePosition().y;
 
-			_addComponentContextMenu = new ContextMenu(
+			_addComponentContextMenu = new HexEngine::ContextMenu(
 				_addComponentBtn,
-				Point(button->GetPosition().x, /*button->GetPosition().y +*/ button->GetSize().y));
+				HexEngine::Point(button->GetPosition().x, /*button->GetPosition().y +*/ button->GetSize().y));
 
-			const auto& classes = g_pEnv->_classRegistry->GetAllClasses();
+			const auto& classes = HexEngine::g_pEnv->_classRegistry->GetAllClasses();
 
 			for (auto& cls : classes)
 			{
 				std::wstring compName(cls.second.name.begin(), cls.second.name.end());
 
-				_addComponentContextMenu->AddItem(new ContextItem(compName, std::bind(&Inspector::OnClickAddComponentItem, this, std::placeholders::_1, cls.second.compId)));
+				_addComponentContextMenu->AddItem(new HexEngine::ContextItem(compName, std::bind(&Inspector::OnClickAddComponentItem, this, std::placeholders::_1, cls.second.compId)));
 			}
 			/*_addComponentContextMenu->AddItem({ L"Rigid Body", std::bind(&Inspector::OnClickAddComponentItem, this, std::placeholders::_1, RigidBody::_GetComponentId()) });
 			_addComponentContextMenu->AddItem({ L"Hinge Joint", std::bind(&Inspector::OnClickAddComponentItem, this, std::placeholders::_1, HingeJoint::_GetComponentId()) });*/
@@ -227,7 +226,7 @@ namespace HexEditor
 		return true;
 	}
 
-	void Inspector::OnClickAddComponentItem(const std::wstring& name, ComponentId compId)
+	void Inspector::OnClickAddComponentItem(const std::wstring& name, HexEngine::ComponentId compId)
 	{
 		_addComponentContextMenu->Disable();
 		_addComponentContextMenu->DeleteMe();
@@ -239,8 +238,8 @@ namespace HexEditor
 
 		if (_inspecting)
 		{
-			auto cls = g_pEnv->_classRegistry->FindByComponentId(compId);
-			BaseComponent* component = cls->newInstanceFn(_inspecting);
+			auto cls = HexEngine::g_pEnv->_classRegistry->FindByComponentId(compId);
+			HexEngine::BaseComponent* component = cls->newInstanceFn(_inspecting);
 
 			_inspecting->AddComponent(component);
 		}
@@ -251,7 +250,7 @@ namespace HexEditor
 		InspectEntity(ent);
 	}
 
-	void Inspector::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void Inspector::Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		//renderer->SetDrawList(&_drawList);
 
@@ -267,12 +266,12 @@ namespace HexEditor
 		
 	}
 
-	void Inspector::InspectComponent(Point& pos, BaseComponent* component, GuiRenderer* renderer)
+	void Inspector::InspectComponent(HexEngine::Point& pos, HexEngine::BaseComponent* component, HexEngine::GuiRenderer* renderer)
 	{
 		
 	}
 
-	void Inspector::PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void Inspector::PostRenderChildren(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		//renderer->ListDraw(&_drawList);
 

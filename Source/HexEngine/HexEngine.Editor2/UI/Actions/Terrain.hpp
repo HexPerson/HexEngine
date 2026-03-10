@@ -5,12 +5,12 @@
 
 namespace HexEditor
 {
-	class Terrain : public Dialog
+	class Terrain : public HexEngine::Dialog
 	{
 	public:
 		using OnCompleted = std::function<void(const fs::path&, const std::string&, bool)>;
 
-		Terrain(Element* parent, const Point& position, const Point& size);
+		Terrain(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size);
 		~Terrain();
 
 		static Terrain* CreateTerrainDialog(Element* parent, OnCompleted onCompletedAction);
@@ -19,8 +19,8 @@ namespace HexEditor
 		bool GenerateTerrain();
 
 	private:
-		ComponentWidget* _widgetBase = nullptr;
-		ComponentWidget* _shadowSettings = nullptr;
+		HexEngine::ComponentWidget* _widgetBase = nullptr;
+		HexEngine::ComponentWidget* _shadowSettings = nullptr;
 
 		float _heightScale = 1.0f;
 		float _width = 1024.0f;
@@ -32,8 +32,8 @@ namespace HexEditor
 		bool _makeColliders = true;
 		bool _useChunkSystem = true;
 
-		LineEdit* _materialName;
-		LineEdit* _seed;
-		std::vector<Entity*> _created;
+		HexEngine::LineEdit* _materialName;
+		HexEngine::LineEdit* _seed;
+		std::vector<HexEngine::Entity*> _created;
 	};
 }

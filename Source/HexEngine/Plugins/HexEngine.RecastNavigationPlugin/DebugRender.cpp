@@ -81,11 +81,11 @@ void RCDebugRenderer::end()
 	switch (_type)
 	{
 	case duDebugDrawPrimitives::DU_DRAW_LINES:
-		g_pEnv->_debugRenderer->DrawLines(_polys);
+		HexEngine::g_pEnv->_debugRenderer->DrawLines(_polys);
 		break;
 
 	case duDebugDrawPrimitives::DU_DRAW_TRIS:
-		g_pEnv->_debugRenderer->DrawPolygon(_polys);
+		HexEngine::g_pEnv->_debugRenderer->DrawPolygon(_polys);
 		break;
 	}
 	_polys.clear();

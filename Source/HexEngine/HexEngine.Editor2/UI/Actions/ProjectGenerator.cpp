@@ -45,7 +45,7 @@ namespace HexEditor
 		{
 			fs::create_directories(assetFolder);
 		}
-		fs::copy(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("AssetPackages/StandardAssets.pkg"), assetFolder / "StandardAssets.pkg", fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+		fs::copy(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("AssetPackages/StandardAssets.pkg"), assetFolder / "StandardAssets.pkg", fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 
 		return true;
 	}
@@ -53,7 +53,7 @@ namespace HexEditor
 	bool ProjectGenerator::CreateSolutionFile(ProjectGenerationParams& params)
 	{
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/SolutionTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/SolutionTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -85,7 +85,7 @@ namespace HexEditor
 
 		ReplaceKeyValues(keys, text);
 
-		DiskFile slnFile(params.path / (params.projectName + ".sln"), std::ios::out | std::ios::binary);
+		HexEngine::DiskFile slnFile(params.path / (params.projectName + ".sln"), std::ios::out | std::ios::binary);
 
 		if (!slnFile.Open())
 		{
@@ -109,7 +109,7 @@ namespace HexEditor
 		}
 
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ProjectTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ProjectTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -128,7 +128,7 @@ namespace HexEditor
 
 		ReplaceKeyValues(keys, text);
 
-		DiskFile projFile(projectFolder / (params.projectName + ".vcxproj"), std::ios::out | std::ios::binary);
+		HexEngine::DiskFile projFile(projectFolder / (params.projectName + ".vcxproj"), std::ios::out | std::ios::binary);
 
 		if (!projFile.Open())
 		{
@@ -147,7 +147,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/HeaderTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/HeaderTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -165,7 +165,7 @@ namespace HexEditor
 
 		ReplaceKeyValues(keys, text);
 
-		DiskFile headerFile(projectFolder / (params.projectName + ".hpp"), std::ios::out | std::ios::binary);
+		HexEngine::DiskFile headerFile(projectFolder / (params.projectName + ".hpp"), std::ios::out | std::ios::binary);
 
 		if (!headerFile.Open())
 		{
@@ -184,7 +184,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/CppTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/CppTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -203,7 +203,7 @@ namespace HexEditor
 
 		ReplaceKeyValues(keys, text);
 
-		DiskFile headerFile(projectFolder / (params.projectName + ".cpp"), std::ios::out | std::ios::binary);
+		HexEngine::DiskFile headerFile(projectFolder / (params.projectName + ".cpp"), std::ios::out | std::ios::binary);
 
 		if (!headerFile.Open())
 		{
@@ -222,7 +222,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/MainCppTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/MainCppTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -240,7 +240,7 @@ namespace HexEditor
 
 		ReplaceKeyValues(keys, text);
 
-		DiskFile headerFile(projectFolder / ("Main.cpp"), std::ios::out | std::ios::binary);
+		HexEngine::DiskFile headerFile(projectFolder / ("Main.cpp"), std::ios::out | std::ios::binary);
 
 		if (!headerFile.Open())
 		{
@@ -259,7 +259,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/FiltersTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/FiltersTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -276,7 +276,7 @@ namespace HexEditor
 
 		ReplaceKeyValues(keys, text);
 
-		DiskFile headerFile(projectFolder / (params.projectName + ".vcxproj.filters"), std::ios::out | std::ios::binary);
+		HexEngine::DiskFile headerFile(projectFolder / (params.projectName + ".vcxproj.filters"), std::ios::out | std::ios::binary);
 
 		if (!headerFile.Open())
 		{
@@ -295,7 +295,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ShaderTargetsTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ShaderTargetsTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -313,7 +313,7 @@ namespace HexEditor
 
 		ReplaceKeyValues(keys, text);
 
-		DiskFile headerFile(projectFolder / "HexEngine.Shaders.targets", std::ios::out | std::ios::binary);
+		HexEngine::DiskFile headerFile(projectFolder / "HexEngine.Shaders.targets", std::ios::out | std::ios::binary);
 
 		if (!headerFile.Open())
 		{
@@ -332,7 +332,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ShaderTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ShaderTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -343,7 +343,7 @@ namespace HexEditor
 		std::string text;
 		slnTemplate.ReadAll(text);
 
-		DiskFile headerFile(projectFolder / "shader.xml", std::ios::out | std::ios::binary);
+		HexEngine::DiskFile headerFile(projectFolder / "shader.xml", std::ios::out | std::ios::binary);
 
 		if (!headerFile.Open())
 		{
@@ -362,7 +362,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		DiskFile slnTemplate(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/UserTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/UserTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -379,7 +379,7 @@ namespace HexEditor
 
 		ReplaceKeyValues(keys, text);
 
-		DiskFile headerFile(projectFolder / (params.projectName + ".vcxproj.user"), std::ios::out | std::ios::binary);
+		HexEngine::DiskFile headerFile(projectFolder / (params.projectName + ".vcxproj.user"), std::ios::out | std::ios::binary);
 
 		if (!headerFile.Open())
 		{

@@ -4,7 +4,7 @@
 #include <HexEngine.Core\HexEngine.hpp>
 #include "PhysicsSystemPhysX.hpp"
 
-class PhysXPlugin : public IPlugin
+class PhysXPlugin : public HexEngine::IPlugin
 {
 public:
 	PhysXPlugin();
@@ -15,7 +15,7 @@ public:
 
 	virtual void GetVersionData(VersionData* data) override;
 
-	virtual IPluginInterface* CreateInterface(const std::string& interfaceName) override;
+	virtual HexEngine::IPluginInterface* CreateInterface(const std::string& interfaceName) override;
 
 	virtual void GetDependencies(std::vector<std::string>& dependencies) const override {}
 

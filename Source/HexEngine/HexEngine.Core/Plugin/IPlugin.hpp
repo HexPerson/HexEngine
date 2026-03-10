@@ -50,10 +50,10 @@ namespace HexEngine
 
 		virtual void GetDependencies(std::vector<std::string>& dependencies) const = 0;
 	};
-	#define CREATE_PLUGIN(pointer, cls)	extern "C" __declspec(dllexport) IPlugin* CreatePlugin()\
+	#define CREATE_PLUGIN(pointer, cls)	extern "C" __declspec(dllexport) HexEngine::IPlugin* CreatePlugin()\
 	{\
 		pointer = new cls;\
-		return (IPlugin*)pointer;\
+		return (HexEngine::IPlugin*)pointer;\
 	}\
 	extern "C" __declspec(dllexport) void DestroyPlugin()\
 	{\

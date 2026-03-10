@@ -27,9 +27,9 @@ void PhysXPlugin::GetVersionData(VersionData* data)
 	data->name = "HexEngine.PhysXPlugin";
 }
 
-IPluginInterface* PhysXPlugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* PhysXPlugin::CreateInterface(const std::string& interfaceName)
 {
-	if (interfaceName == IPhysicsSystem::InterfaceName)
+	if (interfaceName == HexEngine::IPhysicsSystem::InterfaceName)
 		return _physx;
 
 	return nullptr;

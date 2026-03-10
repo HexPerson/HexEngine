@@ -22,9 +22,9 @@ namespace HexCreator
 		_width = width;
 		_height = height;
 		_title = "HexEngine Creator";
-		_displayMode = DisplayMode::Windowed;
+		_displayMode = HexEngine::DisplayMode::Windowed;
 
-		_handle = HexEngine::WindowCreate(0, 0, width, height, DisplayMode::Windowed, "HexEngine Creator");
+		_handle = HexEngine::WindowCreate(0, 0, width, height, HexEngine::DisplayMode::Windowed, "HexEngine Creator");
 
 		ShowWindow(_handle, SW_SHOW);
 

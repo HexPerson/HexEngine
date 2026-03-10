@@ -10,7 +10,7 @@ using namespace ultralight;
 namespace HexCreator
 {
 	class Creator :
-		public IGameExtension
+		public HexEngine::IGameExtension
 	{
 	public:
 		Creator() {}

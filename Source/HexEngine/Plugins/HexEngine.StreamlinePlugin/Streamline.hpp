@@ -23,7 +23,7 @@ typedef HRESULT(WINAPI* PFunD3D11CreateDevice)(
 	D3D_FEATURE_LEVEL* pFeatureLevel,
 	ID3D11DeviceContext** ppImmediateContext);
 
-class Streamline : public IStreamlineProvider
+class Streamline : public HexEngine::IStreamlineProvider
 {
 public:
 	virtual bool Create() override;
@@ -49,23 +49,23 @@ public:
 	virtual bool QueryOptimalDLSSSettings(
 		int32_t desiredWidth,
 		int32_t desiredHeight,
-		DLSSMode mode,
+		HexEngine::DLSSMode mode,
 		int32_t& optimalWidth,
 		int32_t& optimalHeight) override;
 
 	virtual uint32_t GetSupportedFeaturesMask() override;
 
-	virtual void SetDLSSOptions(float sharpness, bool hdr, bool autoExposure, DLSSMode mode, int32_t outputWidth, int32_t outputHeight) override;
+	virtual void SetDLSSOptions(float sharpness, bool hdr, bool autoExposure, HexEngine::DLSSMode mode, int32_t outputWidth, int32_t outputHeight) override;
 
 	virtual void PrepareFrameResources(void* colourIn, void* colourOut, void* motionVectors, void* depth, void* cmdList) override;
 
-	virtual void SetCommonConstants(const StreamlineConstants& constants) override;
+	virtual void SetCommonConstants(const HexEngine::StreamlineConstants& constants) override;
 
 	virtual void BeginFrame() override;
 
 	virtual void EndFrame() override {}
 
-	virtual void EvaluateFeature(StreamlineFeature feature, void* cmdList) override;
+	virtual void EvaluateFeature(HexEngine::StreamlineFeature feature, void* cmdList) override;
 
 private:
 	struct ImportedFuncs

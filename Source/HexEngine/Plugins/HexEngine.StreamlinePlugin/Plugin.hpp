@@ -7,7 +7,7 @@
 /// <summary>
 /// The sample plugin class. Overrides IPlugin
 /// </summary>
-class StreamlinePlugin : public IPlugin
+class StreamlinePlugin : public HexEngine::IPlugin
 {
 public:
 	StreamlinePlugin();
@@ -34,7 +34,7 @@ public:
 	/// </summary>
 	/// <param name="interfaceName">The name of the interface being searched for</param>
 	/// <returns>A pointer to an implemented interface if found, or null if not.</returns>
-	virtual IPluginInterface* CreateInterface(const std::string& interfaceName) override;
+	virtual HexEngine::IPluginInterface* CreateInterface(const std::string& interfaceName) override;
 
 	virtual void GetDependencies(std::vector<std::string>& dependencies) const override {};
 

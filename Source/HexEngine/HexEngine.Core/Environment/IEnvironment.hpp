@@ -12,6 +12,11 @@ namespace HexEngine
 	#define DEV_RESOLUTION_Y 2081 //2160 2081 is when in windowed editor mode
 
 	class IGameExtension;
+	class IGraphicsDevice;
+	class SceneManager;
+	class InputSystem;
+	class UIManager;
+	class LogFile;
 
 	class HEX_API IEnvironment
 	{
@@ -24,6 +29,91 @@ namespace HexEngine
 			return _physicsSystem != nullptr;
 		}
 
+		FileSystem& GetFileSystem()
+		{
+			HEX_ASSERT(_fileSystem != nullptr);
+			return *_fileSystem;
+		}
+
+		const FileSystem& GetFileSystem() const
+		{
+			HEX_ASSERT(_fileSystem != nullptr);
+			return *_fileSystem;
+		}
+
+		IGraphicsDevice& GetGraphicsDevice()
+		{
+			HEX_ASSERT(_graphicsDevice != nullptr);
+			return *_graphicsDevice;
+		}
+
+		const IGraphicsDevice& GetGraphicsDevice() const
+		{
+			HEX_ASSERT(_graphicsDevice != nullptr);
+			return *_graphicsDevice;
+		}
+
+		ResourceSystem& GetResourceSystem()
+		{
+			HEX_ASSERT(_resourceSystem != nullptr);
+			return *_resourceSystem;
+		}
+
+		const ResourceSystem& GetResourceSystem() const
+		{
+			HEX_ASSERT(_resourceSystem != nullptr);
+			return *_resourceSystem;
+		}
+
+		SceneManager& GetSceneManager()
+		{
+			HEX_ASSERT(_sceneManager != nullptr);
+			return *_sceneManager;
+		}
+
+		const SceneManager& GetSceneManager() const
+		{
+			HEX_ASSERT(_sceneManager != nullptr);
+			return *_sceneManager;
+		}
+
+		InputSystem& GetInputSystem()
+		{
+			HEX_ASSERT(_inputSystem != nullptr);
+			return *_inputSystem;
+		}
+
+		const InputSystem& GetInputSystem() const
+		{
+			HEX_ASSERT(_inputSystem != nullptr);
+			return *_inputSystem;
+		}
+
+		UIManager& GetUIManager()
+		{
+			HEX_ASSERT(_uiManager != nullptr);
+			return *_uiManager;
+		}
+
+		const UIManager& GetUIManager() const
+		{
+			HEX_ASSERT(_uiManager != nullptr);
+			return *_uiManager;
+		}
+
+		LogFile& GetLogFile()
+		{
+			HEX_ASSERT(_logFile != nullptr);
+			return *_logFile;
+		}
+
+		const LogFile& GetLogFile() const
+		{
+			HEX_ASSERT(_logFile != nullptr);
+			return *_logFile;
+		}
+
+		// Legacy direct access members
 		class FileSystem* _fileSystem = nullptr;
 		class IGraphicsDevice* _graphicsDevice = nullptr;
 		class TimeManager* _timeManager = nullptr;

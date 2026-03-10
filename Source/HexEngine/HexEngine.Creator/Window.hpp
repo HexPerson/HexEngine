@@ -68,7 +68,7 @@ namespace HexCreator
             SAFE_DELETE(_texture);
             SAFE_DELETE(_staging);
 
-            _texture = g_pEnv->_graphicsDevice->CreateTexture2D(
+            _texture = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(
                 width, height,
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 1,
@@ -84,7 +84,7 @@ namespace HexCreator
                 D3D11_DSV_DIMENSION_UNKNOWN,
                 D3D11_USAGE_DEFAULT);
 
-            _staging = g_pEnv->_graphicsDevice->CreateTexture2D(
+            _staging = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(
                 width, height,
                 DXGI_FORMAT_B8G8R8A8_UNORM,
                 1,
@@ -121,8 +121,8 @@ namespace HexCreator
         }
 
 	//private:
-		ITexture2D* _texture = nullptr;
-        ITexture2D* _staging = nullptr;
+        HexEngine::ITexture2D* _texture = nullptr;
+        HexEngine::ITexture2D* _staging = nullptr;
 	};
 
     class Tile

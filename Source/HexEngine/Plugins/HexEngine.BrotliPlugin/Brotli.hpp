@@ -5,7 +5,7 @@
 #include <brotli\encode.h>
 #include <brotli\decode.h>
 
-class Brotli : public ICompressionProvider
+class Brotli : public HexEngine::ICompressionProvider
 {
 public:
 	virtual bool Create() override { return true; }

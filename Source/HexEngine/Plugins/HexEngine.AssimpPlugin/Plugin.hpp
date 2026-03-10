@@ -4,7 +4,7 @@
 #include <HexEngine.Core\HexEngine.hpp>
 #include "AssimpModelSystem.hpp"
 
-class AssimpPlugin : public IPlugin
+class AssimpPlugin : public HexEngine::IPlugin
 {
 public:
 	AssimpPlugin();
@@ -15,7 +15,7 @@ public:
 
 	virtual void GetVersionData(VersionData* data) override;
 
-	virtual IPluginInterface* CreateInterface(const std::string& interfaceName) override;
+	virtual HexEngine::IPluginInterface* CreateInterface(const std::string& interfaceName) override;
 
 	virtual void GetDependencies(std::vector<std::string>& dependencies) const override {}
 

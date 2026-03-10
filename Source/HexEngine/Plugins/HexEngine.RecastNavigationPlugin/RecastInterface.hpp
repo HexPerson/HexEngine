@@ -8,7 +8,7 @@
 #include "Detour/Include/DetourNavMeshQuery.h"
 #include "DebugRender.hpp"
 
-class RecastInterface : public INavMeshProvider, public rcContext
+class RecastInterface : public HexEngine::INavMeshProvider, public rcContext
 {
 public:
 	struct NavMeshes
@@ -16,7 +16,7 @@ public:
 		dtNavMesh* navMesh;
 		uint8_t* navMeshData;
 		dtNavMeshQuery* navMeshQuery;
-		Chunk* chunk = nullptr;
+		HexEngine::Chunk* chunk = nullptr;
 	};
 	RecastInterface() {}
 	virtual ~RecastInterface() {}
@@ -25,11 +25,11 @@ public:
 
 	virtual void Destroy() override;
 
-	virtual bool CreateNavMeshForScene(Scene* scene, const NavMeshCreationParams& params, NavMeshId* navMesh) override;
+	virtual bool CreateNavMeshForScene(HexEngine::Scene* scene, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh) override;
 
-	virtual bool CreateNavMeshForChunk(Scene* scene, Chunk* chunk, const NavMeshCreationParams& params, NavMeshId* navMesh) override;
+	virtual bool CreateNavMeshForChunk(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh) override;
 
-	virtual bool RebuildMesh(NavMeshId id) override;
+	virtual bool RebuildMesh(HexEngine::NavMeshId id) override;
 
 	virtual void DebugRender() override;
 
@@ -40,10 +40,10 @@ public:
 	virtual void doLog(const rcLogCategory category, const char* msg, const int len) override;
 
 private:
-	bool CreateNavMeshInternal(Scene* scene, Chunk* chunk, const NavMeshCreationParams& params, NavMeshId* navMesh);
+	bool CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh);
 
 private:
-	bool CreateRoutingData(NavMeshId* navMesh);
+	bool CreateRoutingData(HexEngine::NavMeshId* navMesh);
 
 private:
 	rcHeightfield* _heightField = nullptr;

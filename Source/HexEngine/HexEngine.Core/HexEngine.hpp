@@ -18,6 +18,7 @@
 #include "FileSystem/ProjectFile.hpp"
 #include "FileSystem/AssetPackage.hpp"
 #include "FileSystem/AssetPackageManager.hpp"
+#include "FileSystem/DiskFile.hpp"
 
 #include "Scripting/ScriptFile.hpp"
 #include "Scripting/IScriptEngine.hpp"
@@ -97,8 +98,8 @@
 #include "Entity/Component/NavigationComponent.hpp"
 #include "Entity/Component/SkeletalAnimationComponent.hpp"
 
+#include "Plugin/PluginSystem.hpp"
+
 #include "Audio/AudioManager.hpp"
 
 #include "Math/FloatMath.hpp"
-
-using namespace HexEngine;

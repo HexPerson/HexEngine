@@ -6,24 +6,24 @@
 #include FT_FREETYPE_H
 #include FT_STROKER_H
 
-struct GlyphDescFT : GlyphDesc
+struct GlyphDescFT : HexEngine::GlyphDesc
 {
 	FT_Bitmap bitmap;
 	FT_Bitmap effectBitmap;
 };
 
-class FreeTypeFont : public IFontResource
+class FreeTypeFont : public HexEngine::IFontResource
 {
 public:
 	struct SizedAtlas
 	{
 		int32_t baseLine = 0;
 		FT_Face face = 0;
-		ITexture2D* atlas;
+		HexEngine::ITexture2D* atlas;
 		std::vector<GlyphDescFT> glyphs;
-		IVertexBuffer* vbuffer = nullptr;
-		IIndexBuffer* ibuffer = nullptr;
-		UIInstance* instance = nullptr;
+		HexEngine::IVertexBuffer* vbuffer = nullptr;
+		HexEngine::IIndexBuffer* ibuffer = nullptr;
+		HexEngine::UIInstance* instance = nullptr;
 	};
 	FreeTypeFont();
 
@@ -31,9 +31,9 @@ public:
 
 	virtual bool HasFontSize(int32_t size) override;
 
-	virtual GlyphDesc* GetGlyphFromChar(int32_t size, wchar_t ch) override;
+	virtual HexEngine::GlyphDesc* GetGlyphFromChar(int32_t size, wchar_t ch) override;
 
-	virtual ITexture2D* GetAtlas(int32_t size) override;
+	virtual HexEngine::ITexture2D* GetAtlas(int32_t size) override;
 
 	virtual void MeasureText(int32_t fontSize, const std::string& text, int32_t& width, int32_t& height) override;
 
@@ -45,7 +45,7 @@ public:
 
 	virtual bool HasInstanceBuffer(int32_t size) const override;
 
-	virtual UIInstance* GetInstanceBuffer(int32_t size) const override;
+	virtual HexEngine::UIInstance* GetInstanceBuffer(int32_t size) const override;
 
 public:	
 	std::unordered_map<int32_t, SizedAtlas> _sizedGlyphs;

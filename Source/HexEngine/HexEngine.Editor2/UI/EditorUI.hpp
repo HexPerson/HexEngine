@@ -13,7 +13,7 @@ namespace HexEditor
 {
 	class Gadget;
 
-	class EditorUI : public UIManager, public IEntityListener
+	class EditorUI : public HexEngine::UIManager, public HexEngine::IEntityListener
 	{
 	public:
 		enum PrimitiveType
@@ -32,7 +32,7 @@ namespace HexEditor
 
 		virtual void Create(uint32_t width, uint32_t height) override;
 		
-		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
+		virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data) override;
 
 		Explorer* GetExplorer() { return _lowerDock; }
 
@@ -46,17 +46,17 @@ namespace HexEditor
 		Inspector* GetInspector() const { return _rightDock; }
 		SceneView* GetSceneView() const { return _sceneView; }
 
-		RayHit RayCastWorld(const std::vector<Entity*>& entsToIgnore = {});
+		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {});
 
 	private:		
 		void CreateMenuBar();
 		void CreateDocks(uint32_t width, uint32_t height);
 		void CreateEntityList();
 
-		void ForEachElementImpl(Element* element, std::function<void(Element*)> doAction);
+		void ForEachElementImpl(HexEngine::Element* element, std::function<void(HexEngine::Element*)> doAction);
 
 		void HandleDeletions();
-		void HandleDeletetionImpl(Element* element);
+		void HandleDeletetionImpl(HexEngine::Element* element);
 
 		void CheckCentralDockRoamState();
 
@@ -67,7 +67,7 @@ namespace HexEditor
 		void OnSaveAction();
 		void OnExportAction();
 		void OnAddBillboard();
-		void OnProjectManagerCompleted(const fs::path& projectFolder, const std::string& projectName, bool didLoadExisting, const std::wstring& namespaceName, LoadingDialog* loadingDlg);
+		void OnProjectManagerCompleted(const fs::path& projectFolder, const std::string& projectName, bool didLoadExisting, const std::wstring& namespaceName, HexEngine::LoadingDialog* loadingDlg);
 		void OnAddPrimitive(PrimitiveType type);
 
 		void RunGame();
@@ -76,13 +76,13 @@ namespace HexEditor
 
 	private:
 		// IEntityListener overrides
-		virtual void OnAddEntity(Entity* entity) override;
+		virtual void OnAddEntity(HexEngine::Entity* entity) override;
 
-		virtual void OnRemoveEntity(Entity* entity) override;
+		virtual void OnRemoveEntity(HexEngine::Entity* entity) override;
 
-		virtual void OnAddComponent(Entity* entity, BaseComponent* component) override;
+		virtual void OnAddComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component) override;
 
-		virtual void OnRemoveComponent(Entity* entity, BaseComponent* component) override;
+		virtual void OnRemoveComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component) override;
 
 	private:
 		// menu bar actions
@@ -93,7 +93,7 @@ namespace HexEditor
 
 	private:
 		// docks
-		Dock* _leftDock = nullptr;
+		HexEngine::Dock* _leftDock = nullptr;
 		Inspector* _rightDock = nullptr;
 		SceneView* _sceneView = nullptr;
 		Explorer* _lowerDock = nullptr;
@@ -106,12 +106,12 @@ namespace HexEditor
 		fs::path _projectFolderPath;
 		fs::path _projectFilePath;
 
-		ProjectFile* _projectFile = nullptr;
-		std::vector<SceneSaveFile*> _sceneFiles;
+		HexEngine::ProjectFile* _projectFile = nullptr;
+		std::vector<HexEngine::SceneSaveFile*> _sceneFiles;
 
 		std::vector<Gadget*> _gadgets;
 		GameIntegrator _integrator;
-		MenuBar* _mainMenu = nullptr;
+		HexEngine::MenuBar* _mainMenu = nullptr;
 		
 	};
 

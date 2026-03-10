@@ -22,7 +22,7 @@ namespace HexEngine
 
 	DEFINE_ENUM_FLAG_OPERATORS(InputEvent);
 
-#define InputEventMaskAllDesktop (InputEvent::KeyDown | InputEvent::KeyUp | InputEvent::MouseDown | InputEvent::MouseDoubleClick | InputEvent::MouseUp | InputEvent::MouseWheel | InputEvent::MouseMove | InputEvent::Char | InputEvent::DragAndDrop)
+#define InputEventMaskAllDesktop (HexEngine::InputEvent::KeyDown | HexEngine::InputEvent::KeyUp | HexEngine::InputEvent::MouseDown | HexEngine::InputEvent::MouseDoubleClick | HexEngine::InputEvent::MouseUp | HexEngine::InputEvent::MouseWheel | HexEngine::InputEvent::MouseMove | HexEngine::InputEvent::Char | HexEngine::InputEvent::DragAndDrop)
 
 	struct InputData
 	{

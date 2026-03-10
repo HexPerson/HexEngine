@@ -32,9 +32,9 @@ void BrotliPlugin::GetVersionData(VersionData* data)
 	data->name = "HexEngine.BrotliPlugin";
 }
 
-IPluginInterface* BrotliPlugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* BrotliPlugin::CreateInterface(const std::string& interfaceName)
 {
-	if (interfaceName == ICompressionProvider::InterfaceName)
+	if (interfaceName == HexEngine::ICompressionProvider::InterfaceName)
 		return _brotli;
 
 	return nullptr;

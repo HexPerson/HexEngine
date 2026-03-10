@@ -11,7 +11,7 @@ namespace HexEditor
 	bool ScaleGadget::StartGadget()
 	{
 		int32_t mx, my;
-		g_pEnv->_inputSystem->GetMousePosition(mx, my);
+		HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 		auto inspector = g_pUIManager->GetInspector();
 		auto canvas = g_pUIManager->GetSceneView();
@@ -21,8 +21,8 @@ namespace HexEditor
 			return false;
 
 		int32_t scrx, scry;
-		g_pEnv->_inputSystem->GetWorldToScreenPosition(
-			g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera(),
+		HexEngine::g_pEnv->_inputSystem->GetWorldToScreenPosition(
+			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera(),
 			ent->GetPosition(),
 			scrx, scry,
 			canvas->GetSize().x, canvas->GetSize().y);
@@ -47,7 +47,7 @@ namespace HexEditor
 	void ScaleGadget::Update()
 	{
 		int32_t mx, my;
-		g_pEnv->_inputSystem->GetMousePosition(mx, my);
+		HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 		auto inspector = g_pUIManager->GetInspector();
 		auto ent = inspector->GetInspectingEntity();
@@ -78,11 +78,11 @@ namespace HexEditor
 		}
 	}
 
-	bool ScaleGadget::OnInputEvent(InputEvent event, InputData* data)
+	bool ScaleGadget::OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data)
 	{
 		bool ret = Gadget::OnInputEvent(event, data);
 
-		if (_gadgetStarted && event == InputEvent::KeyDown)
+		if (_gadgetStarted && event == HexEngine::InputEvent::KeyDown)
 		{
 			auto inspector = g_pUIManager->GetInspector();
 			auto ent = inspector->GetInspectingEntity();

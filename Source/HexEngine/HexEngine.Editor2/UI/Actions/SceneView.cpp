@@ -4,14 +4,14 @@
 
 namespace HexEditor
 {
-	SceneView::SceneView(Element* parent, const Point& position, const Point& size) :
+	SceneView::SceneView(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		Element(parent, position, size)
 	{
 	}
 
-	bool SceneView::OnInputEvent(InputEvent event, InputData* data)
+	bool SceneView::OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data)
 	{
-		if (event == InputEvent::MouseDown && IsMouseOver(true))
+		if (event == HexEngine::InputEvent::MouseDown && IsMouseOver(true))
 		{
 			_mouseActionStartPos.x = data->MouseDown.xpos;
 			_mouseActionStartPos.y = data->MouseDown.ypos;
@@ -24,7 +24,7 @@ namespace HexEditor
 			}
 			return false;
 		}
-		else if (event == InputEvent::MouseUp)
+		else if (event == HexEngine::InputEvent::MouseUp)
 		{
 			_roamState = RoamState::None;
 
@@ -38,7 +38,7 @@ namespace HexEditor
 
 		// handle resource drag & dropping
 
-		if (event == InputEvent::MouseMove && IsMouseOver(true))
+		if (event == HexEngine::InputEvent::MouseMove && IsMouseOver(true))
 		{
 			if (auto draggingAsset = g_pUIManager->GetExplorer()->GetCurrentlyDraggedAsset(); draggingAsset != nullptr && draggingAsset->path.extension() == ".hmesh")
 			{
@@ -48,16 +48,16 @@ namespace HexEditor
 				{
 					if (_dragAndDropEntity == nullptr)
 					{
-						_dragAndDropEntity = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(
+						_dragAndDropEntity = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(
 							ws2s(draggingAsset->assetNameShort),
 							hit.position,
 							math::Quaternion(),
 							math::Vector3(10.0f)
 						);
 
-						auto staticMesh = _dragAndDropEntity->AddComponent<StaticMeshComponent>();
+						auto staticMesh = _dragAndDropEntity->AddComponent<HexEngine::StaticMeshComponent>();
 
-						staticMesh->SetMesh(Mesh::Create(draggingAsset->path));
+						staticMesh->SetMesh(HexEngine::Mesh::Create(draggingAsset->path));
 					}
 					else
 					{
@@ -72,9 +72,9 @@ namespace HexEditor
 		return Element::OnInputEvent(event, data);
 	}
 
-	void SceneView::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void SceneView::Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
-		if (auto scene = g_pEnv->_sceneManager->GetCurrentScene(); scene != nullptr)
+		if (auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene(); scene != nullptr)
 		{
 			if (auto mainCamera = scene->GetMainCamera(); mainCamera != nullptr)
 			{

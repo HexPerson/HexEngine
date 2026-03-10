@@ -82,4 +82,14 @@ namespace HexEngine
 	{
 		_animIndex = index;
 	}*/
+
+	void Model::SetAnimatioData(const std::shared_ptr<AnimationData>& animData)
+	{
+		_animData = animData;
+	}
+
+	std::shared_ptr<AnimationData> Model::GetAnimationData() const
+	{
+		return _animData;
+	}
 }

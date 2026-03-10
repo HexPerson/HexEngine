@@ -27,9 +27,9 @@ void HBAOPlusPlugin::GetVersionData(VersionData* data)
 	data->name = "HexEngine.HBAOPlusPlugin";
 }
 
-IPluginInterface* HBAOPlusPlugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* HBAOPlusPlugin::CreateInterface(const std::string& interfaceName)
 {
-	if (interfaceName == ISSAOProvider::InterfaceName)
+	if (interfaceName == HexEngine::ISSAOProvider::InterfaceName)
 		return _hbao;
 
 	return nullptr;

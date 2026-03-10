@@ -16,279 +16,268 @@
 
 #define DEFERRED_SHADING 1
 
-namespace HexEngine
+struct DeviceData
 {
-	struct DeviceData
+	IDXGISwapChain* swapchain = nullptr;
+	Texture2D* backbuffer = nullptr;
+	DXGI_SWAP_CHAIN_DESC swapchainDesc;
+};
+class GraphicsDeviceD3D11 : public HexEngine::IGraphicsDevice
+{
+public:
+	virtual ~GraphicsDeviceD3D11()
 	{
-		IDXGISwapChain* swapchain = nullptr;
-		Texture2D* backbuffer = nullptr;
-		DXGI_SWAP_CHAIN_DESC swapchainDesc;
-	};
-	class GraphicsDeviceD3D11 : public IGraphicsDevice
-	{
-	public:
-		virtual ~GraphicsDeviceD3D11()
-		{
-			Destroy();
-		}
-		friend class GBuffer;
-		friend class VolumetricLighting;
-		friend class Bloom;
-		friend class Texture2D;
-
-		//GraphicsSystemD3D11();
-
-		virtual void Lock() override;
-		virtual void Unlock() override;
+		Destroy();
+	}
+	friend class GBuffer;
+	friend class VolumetricLighting;
+	friend class Bloom;
+	friend class Texture2D;
 
-		virtual bool Create() override;
+	//GraphicsSystemD3D11();
 
-		virtual void Destroy() override;
+	virtual void Lock() override;
+	virtual void Unlock() override;
 
-		virtual bool AttachToWindow(Window* window) override;
+	virtual bool Create() override;
 
-		virtual void Resize(Window* window, uint32_t width, uint32_t height) override;
+	virtual void Destroy() override;
 
-		virtual Texture2D* GetBackBuffer(Window* window = nullptr) override;
+	virtual bool AttachToWindow(HexEngine::Window* window) override;
 
-		virtual Texture2D* CreateTexture(ITexture2D* clone) override;
+	virtual void Resize(HexEngine::Window* window, uint32_t width, uint32_t height) override;
 
-		virtual Texture2D* CreateTexture2D(
-			int32_t width,
-			int32_t height,
-			DXGI_FORMAT format,
-			int32_t arraySize,
-			uint32_t bindFlags,
-			int32_t mipLevels,
-			int32_t sampleCount,
-			int32_t sampleQuality,
-			D3D11_SUBRESOURCE_DATA* initialData = nullptr,
-			D3D11_CPU_ACCESS_FLAG access = (D3D11_CPU_ACCESS_FLAG)0,
-			D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
-			D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
-			D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
-			D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN,
-			D3D11_USAGE usage = D3D11_USAGE_DEFAULT,
-			uint32_t miscFlags = 0) override;
+	virtual Texture2D* GetBackBuffer(HexEngine::Window* window = nullptr) override;
 
-		/*virtual Texture2D* CreateTexture2D(
-			int32_t width,
-			int32_t height,
-			DXGI_FORMAT format,
-			int32_t arraySize,
-			uint32_t bindFlags,
-			int32_t mipLevels,
-			int32_t sampleCount,
-			int32_t sampleQuality,
-			D3D11_SUBRESOURCE_DATA* initialData,
-			D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
-			D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
-			D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
-			D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) override;*/
+	virtual Texture2D* CreateTexture(HexEngine::ITexture2D* clone) override;
 
-		virtual ITexture3D* CreateTexture3D(
-			int32_t width,
-			int32_t height,
-			int32_t depth,
-			DXGI_FORMAT format,
-			int32_t arraySize,
-			uint32_t bindFlags,
-			int32_t mipLevels,
-			int32_t sampleCount,
-			int32_t sampleQuality,
-			D3D11_SUBRESOURCE_DATA* initialData,
-			D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
-			D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
-			D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
-			D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) override;
+	virtual Texture2D* CreateTexture2D(
+		int32_t width,
+		int32_t height,
+		DXGI_FORMAT format,
+		int32_t arraySize,
+		uint32_t bindFlags,
+		int32_t mipLevels,
+		int32_t sampleCount,
+		int32_t sampleQuality,
+		D3D11_SUBRESOURCE_DATA* initialData = nullptr,
+		D3D11_CPU_ACCESS_FLAG access = (D3D11_CPU_ACCESS_FLAG)0,
+		D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
+		D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
+		D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
+		D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN,
+		D3D11_USAGE usage = D3D11_USAGE_DEFAULT,
+		uint32_t miscFlags = 0) override;
 
-		virtual VertexBuffer* CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags) override;
+	/*virtual Texture2D* CreateTexture2D(
+		int32_t width,
+		int32_t height,
+		DXGI_FORMAT format,
+		int32_t arraySize,
+		uint32_t bindFlags,
+		int32_t mipLevels,
+		int32_t sampleCount,
+		int32_t sampleQuality,
+		D3D11_SUBRESOURCE_DATA* initialData,
+		D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
+		D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
+		D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
+		D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) override;*/
 
-		virtual VertexBuffer* CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* vertices) override;
+	virtual HexEngine::ITexture3D* CreateTexture3D(
+		int32_t width,
+		int32_t height,
+		int32_t depth,
+		DXGI_FORMAT format,
+		int32_t arraySize,
+		uint32_t bindFlags,
+		int32_t mipLevels,
+		int32_t sampleCount,
+		int32_t sampleQuality,
+		D3D11_SUBRESOURCE_DATA* initialData,
+		D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
+		D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
+		D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
+		D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) override;
 
-		virtual IndexBuffer* CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags) override;
+	virtual VertexBuffer* CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags) override;
 
-		virtual IndexBuffer* CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* indices) override;
+	virtual VertexBuffer* CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* vertices) override;
 
-		virtual ShaderStageImpl<ID3D11VertexShader>* CreateVertexShader(std::vector<uint8_t>& shaderCode) override;
+	virtual IndexBuffer* CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags) override;
 
-		virtual ShaderStageImpl<ID3D11PixelShader>* CreatePixelShader(std::vector<uint8_t>& shaderCode) override;
+	virtual IndexBuffer* CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* indices) override;
 
-		virtual InputLayout* CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary) override;
+	virtual ShaderStageImpl<ID3D11VertexShader>* CreateVertexShader(std::vector<uint8_t>& shaderCode) override;
 
-		virtual ConstantBuffer* CreateConstantBuffer(uint32_t size);
+	virtual ShaderStageImpl<ID3D11PixelShader>* CreatePixelShader(std::vector<uint8_t>& shaderCode) override;
 
-		virtual ConstantBuffer* GetEngineConstantBuffer(EngineConstantBuffer buffer) override;
+	virtual InputLayout* CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary) override;
 
-		virtual void SetIndexBuffer(IIndexBuffer* buffer) override;
+	virtual ConstantBuffer* CreateConstantBuffer(uint32_t size);
 
-		virtual void SetVertexBuffer(uint32_t slot, IVertexBuffer* buffer) override;
+	virtual ConstantBuffer* GetEngineConstantBuffer(HexEngine::EngineConstantBuffer buffer) override;
 
-		virtual void SetTopology(D3D_PRIMITIVE_TOPOLOGY topology) override;
+	virtual void SetIndexBuffer(HexEngine::IIndexBuffer* buffer) override;
 
-		virtual void SetVertexShader(IShaderStage* shader) override;
+	virtual void SetVertexBuffer(uint32_t slot, HexEngine::IVertexBuffer* buffer) override;
 
-		virtual void SetPixelShader(IShaderStage* shader) override;
+	virtual void SetTopology(D3D_PRIMITIVE_TOPOLOGY topology) override;
 
-		virtual void SetInputLayout(IInputLayout* layout) override;
+	virtual void SetVertexShader(HexEngine::IShaderStage* shader) override;
 
-		virtual void SetConstantBufferVS(uint32_t slot, IConstantBuffer* buffer) override;
+	virtual void SetPixelShader(HexEngine::IShaderStage* shader) override;
 
-		virtual void SetConstantBufferPS(uint32_t slot, IConstantBuffer* buffer) override;
+	virtual void SetInputLayout(HexEngine::IInputLayout* layout) override;
 
-		virtual void SetTexture2D(uint32_t slot, ITexture2D* texture) override;
+	virtual void SetConstantBufferVS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 
-		virtual void SetTexture2D(ITexture2D* texture) override;
+	virtual void SetConstantBufferPS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 
-		virtual void SetTexture3D(ITexture3D* texture) override;
+	virtual void SetTexture2D(uint32_t slot, HexEngine::ITexture2D* texture) override;
 
-		virtual void SetTexture2DArray(uint32_t slot, const std::vector<ITexture2D*>& textures) override;
+	virtual void SetTexture2D(HexEngine::ITexture2D* texture) override;
 
-		virtual void SetTexture2DArray(const std::vector<ITexture2D*>& textures) override;
+	virtual void SetTexture3D(HexEngine::ITexture3D* texture) override;
 
-		virtual void SetRenderTarget(ITexture2D* renderTarget, ITexture2D* depthStencil = nullptr) override;
+	virtual void SetTexture2DArray(uint32_t slot, const std::vector<HexEngine::ITexture2D*>& textures) override;
 
-		virtual void SetRenderTargets(const std::vector<ITexture2D*>& renderTargets, ITexture2D* depthStencil = nullptr) override;
+	virtual void SetTexture2DArray(const std::vector<HexEngine::ITexture2D*>& textures) override;
 
-		virtual void GetRenderTargets(std::vector<ITexture2D*>& renderTargets, ITexture2D** depthStencil = nullptr) override;
+	virtual void SetRenderTarget(HexEngine::ITexture2D* renderTarget, HexEngine::ITexture2D* depthStencil = nullptr) override;
 
-		virtual void DrawIndexed(uint32_t numIndices) override;
+	virtual void SetRenderTargets(const std::vector<HexEngine::ITexture2D*>& renderTargets, HexEngine::ITexture2D* depthStencil = nullptr) override;
 
-		virtual void DrawIndexedInstanced(uint32_t numIndices, uint32_t instanceCount) override;
+	virtual void GetRenderTargets(std::vector<HexEngine::ITexture2D*>& renderTargets, HexEngine::ITexture2D** depthStencil = nullptr) override;
 
-		virtual void Draw(uint32_t vertexCount, int32_t startVertexLocation = 0) override;
+	virtual void DrawIndexed(uint32_t numIndices) override;
 
-		virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) override;
+	virtual void DrawIndexedInstanced(uint32_t numIndices, uint32_t instanceCount) override;
 
-		virtual TextureImporter* GetTextureLoader() override;
+	virtual void Draw(uint32_t vertexCount, int32_t startVertexLocation = 0) override;
 
-		virtual void SetDepthBufferState(DepthBufferState state) override;
+	virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) override;
 
-		virtual DepthBufferState GetDepthBufferState() const override;
+	virtual TextureImporter* GetTextureLoader() override;
 
-		virtual void SetClearColour(const math::Color& colour) override;
+	virtual void SetDepthBufferState(HexEngine::DepthBufferState state) override;
 
-		virtual void SetCullingMode(CullingMode mode) override;
+	virtual HexEngine::DepthBufferState GetDepthBufferState() const override;
 
-		virtual CullingMode GetCullingMode() const override;
+	virtual void SetClearColour(const math::Color& colour) override;
 
-		virtual /*ID3D11Device*/void* GetNativeDevice() override;
-		virtual /*ID3D11DeviceContext*/void* GetNativeDeviceContext() override;
+	virtual void SetCullingMode(HexEngine::CullingMode mode) override;
 
-		virtual bool GetSupportedDisplayModes(std::vector<ScreenDisplayMode>& modes) override;
+	virtual HexEngine::CullingMode GetCullingMode() const override;
 
-		virtual void SetPixelShaderResource(uint32_t slot, ID3D11ShaderResourceView* resource) override;
+	virtual /*ID3D11Device*/void* GetNativeDevice() override;
+	virtual /*ID3D11DeviceContext*/void* GetNativeDeviceContext() override;
 
-		virtual void SetPixelShaderResource(ID3D11ShaderResourceView* resource) override;
+	virtual bool GetSupportedDisplayModes(std::vector<HexEngine::ScreenDisplayMode>& modes) override;
 
-		virtual void SetPixelShaderResources(uint32_t slot, const std::vector<ID3D11ShaderResourceView*>& resources) override;
+	virtual void SetPixelShaderResource(uint32_t slot, ID3D11ShaderResourceView* resource) override;
 
-		virtual void SetPixelShaderResources(const std::vector<ID3D11ShaderResourceView*>& resources) override;
+	virtual void SetPixelShaderResource(ID3D11ShaderResourceView* resource) override;
 
-		virtual void SetRenderTargets(uint32_t numTargets, const std::vector<ITexture2D*>& targets, ITexture2D* depthStencil) override;
+	virtual void SetPixelShaderResources(uint32_t slot, const std::vector<ID3D11ShaderResourceView*>& resources) override;
 
-		virtual void UnbindAllPixelShaderResources() override;
+	virtual void SetPixelShaderResources(const std::vector<ID3D11ShaderResourceView*>& resources) override;
 
-		//virtual void BindGBuffer() override;
+	virtual void SetRenderTargets(uint32_t numTargets, const std::vector<HexEngine::ITexture2D*>& targets, HexEngine::ITexture2D* depthStencil) override;
 
-		//virtual void BindShadowMaps() override;
+	virtual void UnbindAllPixelShaderResources() override;
 
-		virtual uint32_t GetBoundResourceIndex() override;
+	//virtual void BindGBuffer() override;
 
-		virtual void BeginFrame(Window* window, ITexture2D* depthBuffer) override;
+	//virtual void BindShadowMaps() override;
 
-		virtual void EndFrame(Window* window) override;
+	virtual uint32_t GetBoundResourceIndex() override;
 
-		virtual void SetViewports(const std::vector<D3D11_VIEWPORT>& viewports) override;
+	virtual void BeginFrame(HexEngine::Window* window, HexEngine::ITexture2D* depthBuffer) override;
 
-		virtual void SetViewport(const D3D11_VIEWPORT& viewport) override;
+	virtual void EndFrame(HexEngine::Window* window) override;
 
-		virtual const D3D11_VIEWPORT& GetBackBufferViewport() const override;
+	virtual void SetViewports(const std::vector<D3D11_VIEWPORT>& viewports) override;
 
-		virtual void SetBlendState(BlendState state) override;
+	virtual void SetViewport(const D3D11_VIEWPORT& viewport) override;
 
-		virtual BlendState GetBlendState() const override;
+	virtual const D3D11_VIEWPORT& GetBackBufferViewport() const override;
 
-		virtual int32_t GetCurrentMSAALevel() const override;
+	virtual void SetBlendState(HexEngine::BlendState state) override;
 
-		virtual void SetScissorRect(const RECT& rect) override;
+	virtual HexEngine::BlendState GetBlendState() const override;
 
-		virtual void SetScissorRects(const std::vector<RECT>& rects) override;
+	virtual int32_t GetCurrentMSAALevel() const override;
 
-		virtual void ClearScissorRect() override;
+	virtual void SetScissorRect(const RECT& rect) override;
 
-		virtual void ResetState() override;
+	virtual void SetScissorRects(const std::vector<RECT>& rects) override;
 
-	private:
-		bool CreateFactory();
+	virtual void ClearScissorRect() override;
 
-		bool CreateInternal();
+	virtual void ResetState() override;
 
-		void DestroyInternal();
+private:
+	bool CreateFactory();
 
-	private:
-		IDXGIDevice* _dxgiDevice = nullptr;
-		IDXGIAdapter* _dxgiAdapter = nullptr;
-		IDXGIFactory1* _dxgiFactory = nullptr;
-		IDXGIOutput* _dxgiOutput = nullptr;
+	bool CreateInternal();
 
-		std::recursive_mutex _lock;
+	void DestroyInternal();
 
-		std::vector<ScreenDisplayMode> _supportedScreenDisplayModes;
+private:
+	IDXGIDevice* _dxgiDevice = nullptr;
+	IDXGIAdapter* _dxgiAdapter = nullptr;
+	IDXGIFactory1* _dxgiFactory = nullptr;
+	IDXGIOutput* _dxgiOutput = nullptr;
 
-		//DXGI_SWAP_CHAIN_DESC _swapChainDesc;
+	std::recursive_mutex _lock;
 
-		D3D_FEATURE_LEVEL _featureLevelSupported = D3D_FEATURE_LEVEL::D3D_FEATURE_LEVEL_11_0;
-		ID3D11Device* _device = nullptr;
-		ID3D11DeviceContext* _deviceContext = nullptr;
-		//IDXGISwapChain* _swapChain = nullptr;
-		//ID3D11RenderTargetView* _renderTargetView = nullptr;
-		//Texture2D* _backBuffer = nullptr;
-		//ID3D11ShaderResourceView* _renderTargetSRV = nullptr;
-		RenderState _prevRenderState;
-		std::vector<Mesh*> _meshesToRender;
-		ConstantBuffer* _engineConstantBuffers[(uint32_t)EngineConstantBuffer::NumEngineConstantBuffers] = { nullptr };
-		D3D11_VIEWPORT _bbufferViewport;
-		//ID3D11RasterizerState* _rasterState = nullptr;
-		//ID3D11RasterizerState* _rasterStateCullFront = nullptr;
-		//ID3D11RasterizerState* _rasterStateCullNone = nullptr;
-		ID3D11BlendState* _subtractivetBlendState = nullptr;
-		//ID3D11Texture2D* _depthStencilBuffer = nullptr;
+	std::vector<HexEngine::ScreenDisplayMode> _supportedScreenDisplayModes;
 
-		std::unordered_map<Window*, DeviceData> _deviceData;
-		
+	//DXGI_SWAP_CHAIN_DESC _swapChainDesc;
 
-		//ShadowMap* _shadowMap[4];
-		//GBuffer _gbuffer;
-		uint32_t _bbufferWidth = 0;
-		uint32_t _bbufferHeight = 0;
-		TextureImporter* _textureLoader = nullptr;
-		//ID3D11SamplerState* _texSamplerClamp = nullptr;
-		//ID3D11SamplerState* _texSamplerWrap = nullptr;
-		ID3D11SamplerState* _texSamplerComparison = nullptr;
-		ID3D11SamplerState* _texSamplerMirrored = nullptr;
+	D3D_FEATURE_LEVEL _featureLevelSupported = D3D_FEATURE_LEVEL::D3D_FEATURE_LEVEL_11_0;
+	ID3D11Device* _device = nullptr;
+	ID3D11DeviceContext* _deviceContext = nullptr;
+	//IDXGISwapChain* _swapChain = nullptr;
+	//ID3D11RenderTargetView* _renderTargetView = nullptr;
+	//Texture2D* _backBuffer = nullptr;
+	//ID3D11ShaderResourceView* _renderTargetSRV = nullptr;
+	HexEngine::RenderState _prevRenderState;
+	ConstantBuffer* _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::NumEngineConstantBuffers] = { nullptr };
+	D3D11_VIEWPORT _bbufferViewport;
+	//ID3D11RasterizerState* _rasterState = nullptr;
+	//ID3D11RasterizerState* _rasterStateCullFront = nullptr;
+	//ID3D11RasterizerState* _rasterStateCullNone = nullptr;
+	ID3D11BlendState* _subtractivetBlendState = nullptr;
+	//ID3D11Texture2D* _depthStencilBuffer = nullptr;
 
-		dx::CommonStates* _states = nullptr;
-		math::Color _clearColour;
-		//dx::BasicPostProcess* _postProcess = nullptr;
-		//Texture2D* _bloomTextures[2] = { nullptr };
-		//Texture2D* _renderTexture = nullptr;
-		//Texture2D* _composedTexture = nullptr;
-		//Texture2D* _toneMappedTexture = nullptr;
-		//dx::DualPostProcess* _cobinePostProcess = nullptr;
-		//dx::ToneMapPostProcess* _toneMapProcess = nullptr;
+	std::unordered_map<HexEngine::Window*, DeviceData> _deviceData;
 
-		
-		uint32_t _currentlyBoundSRVIndex = 0;
-		bool _isInShadowMapGeneration = false;
 
-		std::vector<ITexture2D*> _boundRenderTargets;
-		ITexture2D* _boundDepthStencil = nullptr;
+	//ShadowMap* _shadowMap[4];
+	//GBuffer _gbuffer;
+	uint32_t _bbufferWidth = 0;
+	uint32_t _bbufferHeight = 0;
+	TextureImporter* _textureLoader = nullptr;
+	//ID3D11SamplerState* _texSamplerClamp = nullptr;
+	//ID3D11SamplerState* _texSamplerWrap = nullptr;
+	ID3D11SamplerState* _texSamplerComparison = nullptr;
+	ID3D11SamplerState* _texSamplerMirrored = nullptr;
 
-		ID3D11ShaderResourceView** _emptyShaderResources = nullptr;
-		uint32_t _maxEmptyResources = 0;
-	};
+	dx::CommonStates* _states = nullptr;
+	math::Color _clearColour;
+	
 
-	inline GraphicsDeviceD3D11* g_pGraphics = nullptr;
-}
+	uint32_t _currentlyBoundSRVIndex = 0;
+	bool _isInShadowMapGeneration = false;
+
+	std::vector<HexEngine::ITexture2D*> _boundRenderTargets;
+	HexEngine::ITexture2D* _boundDepthStencil = nullptr;
+
+	ID3D11ShaderResourceView** _emptyShaderResources = nullptr;
+	uint32_t _maxEmptyResources = 0;
+};
+
+inline GraphicsDeviceD3D11* g_pGraphics = nullptr;
 

@@ -8,7 +8,7 @@ const int32_t AtlasSize = 256;
 
 bool FreeTypeImporter::Create()
 {
-	g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+	HexEngine::g_pEnv->_resourceSystem->RegisterResourceLoader(this);
 
 	auto error = FT_Init_FreeType(&_library);
 
@@ -27,7 +27,7 @@ bool FreeTypeImporter::Create()
 
 void FreeTypeImporter::Destroy()
 {
-	g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+	HexEngine::g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
 
 	FT_Done_FreeType(_library);
 
@@ -36,16 +36,16 @@ void FreeTypeImporter::Destroy()
 #endif
 }
 
-std::shared_ptr<IResource> FreeTypeImporter::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options /*= nullptr*/)
+std::shared_ptr<HexEngine::IResource> FreeTypeImporter::LoadResourceFromFile(const fs::path& absolutePath, HexEngine::FileSystem* fileSystem, const HexEngine::ResourceLoadOptions* options /*= nullptr*/)
 {
-	const FontImportOptions* importOptions = reinterpret_cast<const FontImportOptions*>(options);
+	const HexEngine::FontImportOptions* importOptions = reinterpret_cast<const HexEngine::FontImportOptions*>(options);
 
-	std::shared_ptr<FreeTypeFont> font = std::shared_ptr<FreeTypeFont>(new FreeTypeFont, ResourceDeleter());
+	std::shared_ptr<FreeTypeFont> font = std::shared_ptr<FreeTypeFont>(new FreeTypeFont, HexEngine::ResourceDeleter());
 
 	font->_face = absolutePath.filename().string();
 
 	uint32_t width, height;
-	g_pEnv->GetScreenSize(width, height);
+	HexEngine::g_pEnv->GetScreenSize(width, height);
 
 	_maxCharHeight = 0;
 	
@@ -69,16 +69,16 @@ std::shared_ptr<IResource> FreeTypeImporter::LoadResourceFromFile(const fs::path
 	return font;
 }
 
-std::shared_ptr<IResource> FreeTypeImporter::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+std::shared_ptr<HexEngine::IResource> FreeTypeImporter::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, HexEngine::FileSystem* fileSystem, const HexEngine::ResourceLoadOptions* options)
 {
-	const FontImportOptions* importOptions = reinterpret_cast<const FontImportOptions*>(options);
+	const HexEngine::FontImportOptions* importOptions = reinterpret_cast<const HexEngine::FontImportOptions*>(options);
 
-	std::shared_ptr<FreeTypeFont> font = std::shared_ptr<FreeTypeFont>(new FreeTypeFont, ResourceDeleter());
+	std::shared_ptr<FreeTypeFont> font = std::shared_ptr<FreeTypeFont>(new FreeTypeFont, HexEngine::ResourceDeleter());
 
 	font->_face = relativePath.filename().string();
 
 	uint32_t width, height;
-	g_pEnv->GetScreenSize(width, height);
+	HexEngine::g_pEnv->GetScreenSize(width, height);
 
 	FT_Int32 loadFlags = FT_LOAD_TARGET_NORMAL;
 
@@ -109,7 +109,7 @@ std::shared_ptr<IResource> FreeTypeImporter::LoadResourceFromMemory(const std::v
 	return font;
 }
 
-bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_Face face, int32_t size, const FontImportOptions* importOptions)
+bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_Face face, int32_t size, const HexEngine::FontImportOptions* importOptions)
 {
 	FT_Error error = FT_Select_Charmap(face, FT_ENCODING_UNICODE);
 
@@ -384,7 +384,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 	initialData.SysMemSlicePitch = 0;
 
 	// Create the texture atlas with initial pixel data
-	auto atlas = g_pEnv->_graphicsDevice->CreateTexture2D(
+	auto atlas = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(
 		currentAtlasSize,
 		currentAtlasSize,
 		DXGI_FORMAT_R8G8B8A8_UNORM,
@@ -427,7 +427,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 	return true;
 }
 
-void FreeTypeImporter::DrawGlyphToFontSheet(int32_t xoffset, int32_t yoffset, int32_t width, int32_t height, GlyphDesc& glyph, FT_Bitmap* bm, uint32_t* data, uint32_t atlasSize, const uint8_t* src, uint8_t r, uint8_t g, uint8_t b)
+void FreeTypeImporter::DrawGlyphToFontSheet(int32_t xoffset, int32_t yoffset, int32_t width, int32_t height, HexEngine::GlyphDesc& glyph, FT_Bitmap* bm, uint32_t* data, uint32_t atlasSize, const uint8_t* src, uint8_t r, uint8_t g, uint8_t b)
 {
 	//const uint8_t* src = glyph.pixelData.data();
 	const uint32_t src_pitch = bm->pitch;
@@ -469,7 +469,7 @@ void FreeTypeImporter::DrawGlyphToFontSheet(int32_t xoffset, int32_t yoffset, in
 
 }
 
-void FreeTypeImporter::UnloadResource(IResource* resource)
+void FreeTypeImporter::UnloadResource(HexEngine::IResource* resource)
 {
 	SAFE_DELETE(resource);
 }

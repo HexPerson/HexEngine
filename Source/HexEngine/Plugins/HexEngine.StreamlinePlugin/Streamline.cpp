@@ -12,7 +12,7 @@ bool Streamline::Create()
 {
 	_dlssOptions.mode = (sl::DLSSMode)-1;
 
-	auto binaryPath = g_pEnv->_fileSystem->GetBinaryDirectory();
+	auto binaryPath = HexEngine::g_pEnv->_fileSystem->GetBinaryDirectory();
 
 	auto interposerPath = (binaryPath / L"sl.interposer.dll").wstring();
 
@@ -142,7 +142,7 @@ HRESULT Streamline::CreateDXGIFactory1(REFIID riid, _COM_Outptr_ void** ppFactor
 			else
 			{
 				LOG_WARN("DLSS IS supported on adapter %s", desc.Description);
-				_supportedFeatures |= StreamlineFeature::DLSS;
+				_supportedFeatures |= HexEngine::StreamlineFeature::DLSS;
 			}
 
 			if (SL_FAILED(result, slIsFeatureSupported(sl::kFeatureNRD, adapterInfo)))
@@ -152,7 +152,7 @@ HRESULT Streamline::CreateDXGIFactory1(REFIID riid, _COM_Outptr_ void** ppFactor
 			else
 			{
 				LOG_WARN("NRD IS supported on adapter %s", desc.Description);
-				_supportedFeatures |= StreamlineFeature::NRD;
+				_supportedFeatures |= HexEngine::StreamlineFeature::NRD;
 			}
 		}
 		i++;
@@ -164,7 +164,7 @@ HRESULT Streamline::CreateDXGIFactory1(REFIID riid, _COM_Outptr_ void** ppFactor
 bool Streamline::QueryOptimalDLSSSettings(
 	int32_t desiredWidth,
 	int32_t desiredHeight,
-	DLSSMode mode,
+	HexEngine::DLSSMode mode,
 	int32_t& optimalWidth,
 	int32_t& optimalHeight)
 {
@@ -205,7 +205,7 @@ uint32_t Streamline::GetSupportedFeaturesMask()
 	return _supportedFeatures;
 }
 
-void Streamline::SetDLSSOptions(float sharpness, bool hdr, bool autoExposure, DLSSMode mode, int32_t outputWidth, int32_t outputHeight)
+void Streamline::SetDLSSOptions(float sharpness, bool hdr, bool autoExposure, HexEngine::DLSSMode mode, int32_t outputWidth, int32_t outputHeight)
 {
 	if (_dlssOptions.mode == (sl::DLSSMode)mode)
 		return;
@@ -228,7 +228,7 @@ void Streamline::SetDLSSOptions(float sharpness, bool hdr, bool autoExposure, DL
 		LOG_CRIT("Failed to set DLSS options");
 	}
 
-	if (mode == DLSSMode::Off)
+	if (mode == HexEngine::DLSSMode::Off)
 	{
 		slFreeResources(sl::kFeatureDLSS, _viewport);
 	}
@@ -254,7 +254,7 @@ void Streamline::PrepareFrameResources(void* colourIn, void* colourOut, void* mo
 	slSetTag(_viewport, inputs, _countof(inputs), cmdList);
 }
 
-void Streamline::SetCommonConstants(const StreamlineConstants& constants)
+void Streamline::SetCommonConstants(const HexEngine::StreamlineConstants& constants)
 {
 	sl::Constants consts = {};
 	// Set motion vector scaling based on your setup
@@ -306,7 +306,7 @@ void Streamline::BeginFrame()
 	slGetNewFrameToken(_frameToken, nullptr);
 }
 
-void Streamline::EvaluateFeature(StreamlineFeature feature, void* cmdList)
+void Streamline::EvaluateFeature(HexEngine::StreamlineFeature feature, void* cmdList)
 {
 	sl::ViewportHandle view(_viewport);
 	const sl::BaseStructure* inputs[] = { &view };

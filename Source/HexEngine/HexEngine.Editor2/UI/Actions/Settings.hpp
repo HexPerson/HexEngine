@@ -5,21 +5,21 @@
 
 namespace HexEditor
 {
-	class Settings : public Dialog
+	class Settings : public HexEngine::Dialog
 	{
 	public:
 		using OnCompleted = std::function<void(const fs::path&, const std::string&, bool)>;
 
-		Settings(Element* parent, const Point& position, const Point& size);
+		Settings(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size);
 		~Settings();
 
 		static Settings* CreateSettingsDialog(Element* parent, OnCompleted onCompletedAction);
 
 	private:
-		ComponentWidget* _widgetBase = nullptr;
-		ComponentWidget* _shadowSettings = nullptr;
-		ComponentWidget* _colouring = nullptr;
-		ComponentWidget* _fog = nullptr;
-		ComponentWidget* _ocean = nullptr;
+		HexEngine::ComponentWidget* _widgetBase = nullptr;
+		HexEngine::ComponentWidget* _shadowSettings = nullptr;
+		HexEngine::ComponentWidget* _colouring = nullptr;
+		HexEngine::ComponentWidget* _fog = nullptr;
+		HexEngine::ComponentWidget* _ocean = nullptr;
 	};
 }

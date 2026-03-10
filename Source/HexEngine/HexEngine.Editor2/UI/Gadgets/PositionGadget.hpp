@@ -13,7 +13,7 @@ namespace HexEditor
 		virtual bool StartGadget() override;
 		virtual void StopGadget(GadgetAction action) override;
 		virtual void Update() override;
-		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
+		virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data) override;
 
 	private:
 		math::Vector3 _originalPosition;

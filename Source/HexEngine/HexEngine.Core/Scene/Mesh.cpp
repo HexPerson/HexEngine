@@ -562,4 +562,14 @@ namespace HexEngine
 			_material.reset();
 		}
 	}
+
+	void Mesh::SetMaterialName(const std::string& matName)
+	{
+		_materialName = matName;
+	}
+
+	const std::string& Mesh::GetMaterialName() const
+	{
+		return _materialName;
+	}
 }

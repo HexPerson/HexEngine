@@ -12,7 +12,7 @@ namespace HexEditor
 	bool DuplicateGadget::StartGadget()
 	{
 		int32_t mx, my;
-		g_pEnv->_inputSystem->GetMousePosition(mx, my);
+		HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 		auto inspector = g_pUIManager->GetInspector();
 		auto canvas = g_pUIManager->GetSceneView();
@@ -21,13 +21,13 @@ namespace HexEditor
 		if (!ent)
 			return false;
 
-		auto copyEnt = g_pEnv->_sceneManager->GetCurrentScene()->CloneEntity(ent);
+		auto copyEnt = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CloneEntity(ent);
 
 		inspector->InspectEntity(copyEnt);
 
 		int32_t scrx, scry;
-		if (g_pEnv->_inputSystem->GetWorldToScreenPosition(
-			g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera(),
+		if (HexEngine::g_pEnv->_inputSystem->GetWorldToScreenPosition(
+			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera(),
 			copyEnt->GetWorldTM().Translation(),
 			scrx, scry,
 			canvas->GetSize().x, canvas->GetSize().y))
@@ -37,7 +37,7 @@ namespace HexEditor
 			_adjustStartX = mx;
 			_adjustStartY = my;
 
-			_cameraRotation = g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera()->GetEntity()->GetRotation();
+			_cameraRotation = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera()->GetEntity()->GetRotation();
 		}
 
 		return true;
@@ -46,7 +46,7 @@ namespace HexEditor
 	void DuplicateGadget::Update()
 	{
 		int32_t mx, my;
-		g_pEnv->_inputSystem->GetMousePosition(mx, my);
+		HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 		auto inspector = g_pUIManager->GetInspector();
 		auto ent = inspector->GetInspectingEntity();

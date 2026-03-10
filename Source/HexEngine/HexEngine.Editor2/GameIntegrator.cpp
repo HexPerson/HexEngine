@@ -8,7 +8,7 @@ namespace HexEditor
 	{
 		fs::path gameDllPath = g_pEditor->_projectFS->GetBaseDirectory() / L"Build";
 
-		_runtimeFS = new FileSystem(L"RuntimeGameData");
+		_runtimeFS = new HexEngine::FileSystem(L"RuntimeGameData");
 		_runtimeFS->SetBaseDirectory(gameDllPath);
 
 		
@@ -25,7 +25,7 @@ namespace HexEditor
 			return false;
 		}
 
-		using tCreateGame = IGameExtension * (*)();
+		using tCreateGame = HexEngine::IGameExtension * (*)();
 		tCreateGame CreateGame = (tCreateGame)GetProcAddress(_gameDll, "CreateGame");
 
 		if (!CreateGame)
@@ -60,11 +60,10 @@ namespace HexEditor
 
 	bool GameIntegrator::RunGame()
 	{
-		g_pEnv->_resourceSystem->AddFileSystem(_runtimeFS);
-		g_pEnv->AddGameExtension(_gameExtension);
-		g_pEnv->SetEditorMode(false);
-
-		g_pEnv->_sceneManager->GetCurrentScene()->AddEntityListener(this);
+		HexEngine::g_pEnv->_resourceSystem->AddFileSystem(_runtimeFS);
+		HexEngine::g_pEnv->AddGameExtension(_gameExtension);
+		HexEngine::g_pEnv->SetEditorMode(false);
+		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->AddEntityListener(this);
 
 		_gameExtension->OnCreateGame();
 
@@ -77,23 +76,23 @@ namespace HexEditor
 	{
 		if (_runtimeFS)
 		{
-			g_pEnv->_resourceSystem->RemoveFileSystem(_runtimeFS);
+			HexEngine::g_pEnv->_resourceSystem->RemoveFileSystem(_runtimeFS);
 			delete _runtimeFS;
 			_runtimeFS = nullptr;
 		}
 
-		g_pEnv->_sceneManager->GetCurrentScene()->RemoveEntityListener(this);
+		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->RemoveEntityListener(this);
 
 		for (auto& tempEnt : _tempEntitiesCreated)
 		{
-			g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(tempEnt);
+			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(tempEnt);
 		}
 
 		_gameExtension->OnStopGame();
 
-		g_pEnv->SetEditorMode(true);
-		g_pEnv->_inputSystem->SetMouseLockMode(MouseLockMode::Free);
-		g_pEnv->RemoveGameExtension(_gameExtension);
+		HexEngine::g_pEnv->SetEditorMode(true);
+		HexEngine::g_pEnv->_inputSystem->SetMouseLockMode(HexEngine::MouseLockMode::Free);
+		HexEngine::g_pEnv->RemoveGameExtension(_gameExtension);
 
 		_state = GameTestState::Stopped;
 
@@ -105,12 +104,12 @@ namespace HexEditor
 		return _state;
 	}
 
-	void GameIntegrator::OnAddEntity(Entity* entity)
+	void GameIntegrator::OnAddEntity(HexEngine::Entity* entity)
 	{
 		_tempEntitiesCreated.push_back(entity);
 	}
 
-	void GameIntegrator::OnRemoveEntity(Entity* entity)
+	void GameIntegrator::OnRemoveEntity(HexEngine::Entity* entity)
 	{
 		_tempEntitiesCreated.erase(std::remove(_tempEntitiesCreated.begin(), _tempEntitiesCreated.end(), entity), _tempEntitiesCreated.end());
 	}

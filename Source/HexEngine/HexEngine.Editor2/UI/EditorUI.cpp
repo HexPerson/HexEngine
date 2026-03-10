@@ -27,7 +27,7 @@ namespace HexEditor
 
 	EditorUI::~EditorUI()
 	{		
-		g_pEnv->_inputSystem->RemoveInputListener(this);
+		HexEngine::g_pEnv->_inputSystem->RemoveInputListener(this);
 		g_pUIManager = nullptr;
 	}
 
@@ -43,19 +43,19 @@ namespace HexEditor
 		_projectManager = ProjectManager::CreateProjectManagerDialog(_rootElement, std::bind(&EditorUI::OnProjectManagerCompleted, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
 	}
 
-	void EditorUI::OnProjectManagerCompleted(const fs::path& projectFolder, const std::string& projectName, bool didLoadExisting, const std::wstring& namespaceName, LoadingDialog* loadingDlg)
+	void EditorUI::OnProjectManagerCompleted(const fs::path& projectFolder, const std::string& projectName, bool didLoadExisting, const std::wstring& namespaceName, HexEngine::LoadingDialog* loadingDlg)
 	{
 		_projectManager = nullptr;
 
 		_projectFolderPath = projectFolder;
 		_projectFilePath = projectFolder / projectName;
 
-		_projectFile = new ProjectFile(_projectFilePath, std::ios::out | std::ios::trunc);
+		_projectFile = new HexEngine::ProjectFile(_projectFilePath, std::ios::out | std::ios::trunc);
 		_projectFile->_projectName = projectName;
 
 		if (didLoadExisting)
 		{
-			ProjectFile file(_projectFilePath, std::ios::in);
+			HexEngine::ProjectFile file(_projectFilePath, std::ios::in);
 
 			if (!file.Load())
 			{
@@ -73,14 +73,14 @@ namespace HexEditor
 				loadingDlg->SetText(std::format(L"Loading {} {:d}/{:d}", entityName, loaded, total));
 			};
 
-			std::shared_ptr<Scene> sceneToActivateAfterLoad;
+			std::shared_ptr<HexEngine::Scene> sceneToActivateAfterLoad;
 			bool loadedGameFromIntegrator = false;
 
 			for (auto& scene : file._scenes)
 			{
 				if (scene->IsSceneAttached() == false)
 				{
-					auto newScene = g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)g_pEnv->_uiManager, true);
+					auto newScene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)HexEngine::g_pEnv->_uiManager, true);
 
 					if (sceneToActivateAfterLoad == nullptr)
 					{
@@ -88,10 +88,10 @@ namespace HexEditor
 					}
 					else
 					{
-						newScene->SetFlags(SceneFlags::Disabled);
+						newScene->SetFlags(HexEngine::SceneFlags::Disabled);
 					}
 
-					g_pEnv->_sceneManager->SetActiveScene(newScene);
+					HexEngine::g_pEnv->_sceneManager->SetActiveScene(newScene);
 
 					scene->_scene = newScene;
 
@@ -110,7 +110,7 @@ namespace HexEditor
 					//newScene->GetMainCamera()->SetViewport(math::Viewport(0, 0, _centralDock->GetSize().x, _centralDock->GetSize().y));
 					//g_pEnv->_sceneRenderer->Resize(_centralDock->GetSize().x, _centralDock->GetSize().y);
 
-					SceneSaveFile* saveFile = new SceneSaveFile(scene->GetAbsolutePath(), std::ios::out, newScene);
+					HexEngine::SceneSaveFile* saveFile = new HexEngine::SceneSaveFile(scene->GetAbsolutePath(), std::ios::out, newScene);
 
 					_sceneFiles.push_back(saveFile);
 				}
@@ -118,7 +118,7 @@ namespace HexEditor
 
 			loadingDlg->DeleteMe();
 
-			g_pEnv->_sceneManager->SetActiveScene(sceneToActivateAfterLoad);			
+			HexEngine::g_pEnv->_sceneManager->SetActiveScene(sceneToActivateAfterLoad);
 
 			_projectFile->_scenes = _sceneFiles;
 			_entityList->RefreshList();
@@ -128,18 +128,18 @@ namespace HexEditor
 		else
 		{
 			// We created a new project so it needs a new scene
-			auto newScene = g_pEnv->_sceneManager->CreateEmptyScene(true, (EditorUI*)g_pEnv->_uiManager, true);
+			auto newScene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(true, (EditorUI*)HexEngine::g_pEnv->_uiManager, true);
 
-			g_pEnv->_sceneManager->SetActiveScene(newScene);
+			HexEngine::g_pEnv->_sceneManager->SetActiveScene(newScene);
 
 			if (auto mainCamera = newScene->CreateEntity("MainCamera"); mainCamera != nullptr)
 			{
-				auto cameraComponent = mainCamera->AddComponent<Camera>();
+				auto cameraComponent = mainCamera->AddComponent<HexEngine::Camera>();
 			}
 
 			newScene->CreateDefaultSunLight();
 
-			SceneSaveFile* sceneFile = new SceneSaveFile(_projectFolderPath / "Data/Scenes/New Scene.hscene", std::ios::out | std::ios::trunc, newScene);
+			HexEngine::SceneSaveFile* sceneFile = new HexEngine::SceneSaveFile(_projectFolderPath / "Data/Scenes/New Scene.hscene", std::ios::out | std::ios::trunc, newScene);
 
 			sceneFile->Save();
 
@@ -153,7 +153,7 @@ namespace HexEditor
 			ProjectGenerationParams params;
 			params.path = projectFolder / "Code";
 			params.projectName = projectName;
-			params.sdkPath = g_pEnv->_fileSystem->GetBaseDirectory().parent_path().parent_path().parent_path(); // this is....awful
+			params.sdkPath = HexEngine::g_pEnv->_fileSystem->GetBaseDirectory().parent_path().parent_path().parent_path(); // this is....awful
 			params.nameSpace = std::string(namespaceName.begin(), namespaceName.end());
 			params.primaryScenePath = sceneFile->GetAbsolutePath();
 
@@ -182,64 +182,64 @@ namespace HexEditor
 		const int32_t sizeX = 400;
 		const int32_t sizeY = 80;
 
-		LineEditDialog* dlg = new LineEditDialog(_rootElement, Point(GetWidth() / 2 - sizeX / 2, GetHeight() / 2 - sizeY / 2), Point(sizeX, sizeY), label, std::bind(callback, this, std::placeholders::_2));
+		HexEngine::LineEditDialog* dlg = new HexEngine::LineEditDialog(_rootElement, HexEngine::Point(GetWidth() / 2 - sizeX / 2, GetHeight() / 2 - sizeY / 2), HexEngine::Point(sizeX, sizeY), label, std::bind(callback, this, std::placeholders::_2));
 	}
 
 	
 
 	void EditorUI::CreateMenuBar()
 	{
-		_mainMenu = new MenuBar(_rootElement, Point(), Point(_width, 30));
+		_mainMenu = new HexEngine::MenuBar(_rootElement, HexEngine::Point(), HexEngine::Point(_width, 30));
 		{
-			MenuBar::RootItem* file = new MenuBar::RootItem;
+			HexEngine::MenuBar::RootItem* file = new HexEngine::MenuBar::RootItem;
 			file->name = L"File";
 			_mainMenu->AddRootItem(file);
 			{
-				MenuBar::Item* actionNew = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNew = new HexEngine::MenuBar::Item;
 				actionNew->name = L"New Scene";
 				actionNew->action = std::bind(&EditorUI::CreateLineEditDialog, this, L"Enter a scene name", &EditorUI::OnCreateNewSceneAction);
 				_mainMenu->AddSubItem(file, actionNew);
 
-				MenuBar::Item* actionDel = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionDel = new HexEngine::MenuBar::Item;
 				actionDel->name = L"Delete Scene";
 				actionDel->action = std::bind(&EditorUI::OnDeleteSceneAction, this);
 				_mainMenu->AddSubItem(file, actionDel);
 
-				MenuBar::Item* actionSave = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionSave = new HexEngine::MenuBar::Item;
 				actionSave->name = L"Save";
 				actionSave->action = std::bind(&EditorUI::OnSaveAction, this);
 				_mainMenu->AddSubItem(file, actionSave);
 
-				MenuBar::Item* actionExport = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionExport = new HexEngine::MenuBar::Item;
 				actionExport->name = L"Export";
 				actionExport->action = std::bind(&EditorUI::OnExportAction, this);
 				_mainMenu->AddSubItem(file, actionExport);
 
-				MenuBar::Item* actionRun = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionRun = new HexEngine::MenuBar::Item;
 				actionRun->name = L"Run";
 				actionRun->action = std::bind(&EditorUI::RunGame, this);
 				_mainMenu->AddSubItem(file, actionRun);
 
-				MenuBar::Item* actionStop = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionStop = new HexEngine::MenuBar::Item;
 				actionStop->name = L"Stop";
 				actionStop->action = std::bind(&EditorUI::StopGame, this);
 				_mainMenu->AddSubItem(file, actionStop);
 			}
 		}
 		{
-			MenuBar::RootItem* edit = new MenuBar::RootItem;
+			HexEngine::MenuBar::RootItem* edit = new HexEngine::MenuBar::RootItem;
 			edit->name = L"Edit";
 			//edit->type = MenuBar::Item::Type::RootMenu;
 			_mainMenu->AddRootItem(edit);
 			{
-				MenuBar::Item* actionPaintTrees = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionPaintTrees = new HexEngine::MenuBar::Item;
 				actionPaintTrees->name = L"Paint Trees";
 				actionPaintTrees->action = std::bind(&EditorUI::OnStartPaintTreeDialog, this);
 				_mainMenu->AddSubItem(edit, actionPaintTrees);
 			}
 		}
 		{
-			MenuBar::RootItem* scene = new MenuBar::RootItem;
+			HexEngine::MenuBar::RootItem* scene = new HexEngine::MenuBar::RootItem;
 			scene->name = L"Scene";
 			//edit->type = MenuBar::Item::Type::RootMenu;
 			_mainMenu->AddRootItem(scene);
@@ -252,47 +252,47 @@ namespace HexEditor
 				testsub2->name = L"TestSub2";
 				menu->AddSubItem(testsub, testsub);*/
 
-				MenuBar::Item* actionNewPlane = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNewPlane = new HexEngine::MenuBar::Item;
 				actionNewPlane->name = L"Add plane";
 				actionNewPlane->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Plane);
 				_mainMenu->AddSubItem(scene, actionNewPlane);
 
-				MenuBar::Item* actionNewCube = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNewCube = new HexEngine::MenuBar::Item;
 				actionNewCube->name = L"Add cube";
 				actionNewCube->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Cube);
 				_mainMenu->AddSubItem(scene, actionNewCube);
 
-				MenuBar::Item* actionNewSphere = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNewSphere = new HexEngine::MenuBar::Item;
 				actionNewSphere->name = L"Add sphere";
 				actionNewSphere->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Sphere);
 				_mainMenu->AddSubItem(scene, actionNewSphere);
 
-				MenuBar::Item* actionNew = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNew = new HexEngine::MenuBar::Item;
 				actionNew->name = L"Add point light";
 				actionNew->action = std::bind(&EditorUI::OnAddLight, this);
 				_mainMenu->AddSubItem(scene, actionNew);
 
-				MenuBar::Item* actionNewSL = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNewSL = new HexEngine::MenuBar::Item;
 				actionNewSL->name = L"Add spot light";
 				actionNewSL->action = std::bind(&EditorUI::OnAddSpotLight, this);
 				_mainMenu->AddSubItem(scene, actionNewSL);
 
-				MenuBar::Item* actionNewBB = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNewBB = new HexEngine::MenuBar::Item;
 				actionNewBB->name = L"Add billboard";
 				actionNewBB->action = std::bind(&EditorUI::OnAddBillboard, this);
 				_mainMenu->AddSubItem(scene, actionNewBB);
 
-				MenuBar::Item* actionNewTerrain = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNewTerrain = new HexEngine::MenuBar::Item;
 				actionNewTerrain->name = L"Add terrain";
 				actionNewTerrain->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Terrain);
 				_mainMenu->AddSubItem(scene, actionNewTerrain);
 
-				MenuBar::Item* actionNewOcean = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionNewOcean = new HexEngine::MenuBar::Item;
 				actionNewOcean->name = L"Add ocean";
 				actionNewOcean->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Ocean);
 				_mainMenu->AddSubItem(scene, actionNewOcean);
 
-				MenuBar::Item* actionSettings = new MenuBar::Item;
+				HexEngine::MenuBar::Item* actionSettings = new HexEngine::MenuBar::Item;
 				actionSettings->name = L"Settings";
 				actionSettings->action = std::bind(&EditorUI::ShowSettingsDialog, this);
 				_mainMenu->AddSubItem(scene, actionSettings);
@@ -300,16 +300,16 @@ namespace HexEditor
 		}
 
 		{
-			MenuBar::RootItem* scene = new MenuBar::RootItem;
+			HexEngine::MenuBar::RootItem* scene = new HexEngine::MenuBar::RootItem;
 			scene->name = L"Debug";
 			//edit->type = MenuBar::Item::Type::RootMenu;
 			_mainMenu->AddRootItem(scene);
 			{
-				MenuBar::Item* debugScene = new MenuBar::Item;
+				HexEngine::MenuBar::Item* debugScene = new HexEngine::MenuBar::Item;
 				debugScene->name = L"Debug Scene";
 				debugScene->action = std::bind(
 					[]() {						
-						r_debugScene._val.b = !r_debugScene._val.b;
+						HexEngine::r_debugScene._val.b = !HexEngine::r_debugScene._val.b;
 					});
 				_mainMenu->AddSubItem(scene, debugScene);
 			}
@@ -321,7 +321,7 @@ namespace HexEditor
 		const int32_t dlgWidth = 400;
 		const int32_t dlgHeight = 500;
 
-		Dialog* dlg = new Dialog(g_pEnv->_uiManager->GetRootElement(), Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2), Point(dlgWidth, dlgHeight), L"Vegetation Paint Tool");
+		HexEngine::Dialog* dlg = new HexEngine::Dialog(HexEngine::g_pEnv->_uiManager->GetRootElement(), HexEngine::Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2), HexEngine::Point(dlgWidth, dlgHeight), L"Vegetation Paint Tool");
 
 		//LineEdit* meshInput = 
 	}
@@ -338,11 +338,11 @@ namespace HexEditor
 
 	void EditorUI::OnDeleteSceneAction()
 	{
-		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
 
-		g_pEnv->_sceneManager->UnloadScene(scene.get());
+		HexEngine::g_pEnv->_sceneManager->UnloadScene(scene.get());
 
-		_sceneFiles.erase(std::remove_if(_sceneFiles.begin(), _sceneFiles.end(), [scene](SceneSaveFile* ssf) {
+		_sceneFiles.erase(std::remove_if(_sceneFiles.begin(), _sceneFiles.end(), [scene](HexEngine::SceneSaveFile* ssf) {
 			return ssf->GetScene() == scene;
 			}));
 	}
@@ -358,31 +358,31 @@ namespace HexEditor
 		{
 		case PrimitiveType::Cube:
 		{
-			auto primitive = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Cube");
-			auto meshComponent = primitive->AddComponent<StaticMeshComponent>();
-			auto mesh = Mesh::Create("EngineData.Models/Primitives/cube.hmesh");
+			auto primitive = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Cube");
+			auto meshComponent = primitive->AddComponent<HexEngine::StaticMeshComponent>();
+			auto mesh = HexEngine::Mesh::Create("EngineData.Models/Primitives/cube.hmesh");
 
 			meshComponent->SetMesh(mesh);
 
-			auto body = primitive->AddComponent<RigidBody>();
+			auto body = primitive->AddComponent<HexEngine::RigidBody>();
 			body->AddBoxCollider(mesh->GetAABB());
 
 			break;
 		}
 		case PrimitiveType::Sphere:
 		{
-			auto primitive = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Sphere");
-			auto meshComponent = primitive->AddComponent<StaticMeshComponent>();
-			auto mesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
+			auto primitive = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Sphere");
+			auto meshComponent = primitive->AddComponent<HexEngine::StaticMeshComponent>();
+			auto mesh = HexEngine::Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
 			meshComponent->SetMesh(mesh);
 			break;
 		}
 		case PrimitiveType::Plane:
 		{
-			auto primitive = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Plane");
-			auto meshComponent = primitive->AddComponent<StaticMeshComponent>();
-			auto mesh = Mesh::Create("EngineData.Models/Primitives/plane.hmesh");
+			auto primitive = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Plane");
+			auto meshComponent = primitive->AddComponent<HexEngine::StaticMeshComponent>();
+			auto mesh = HexEngine::Mesh::Create("EngineData.Models/Primitives/plane.hmesh");
 
 			meshComponent->SetMesh(mesh);
 			break;
@@ -404,10 +404,10 @@ namespace HexEditor
 
 	void EditorUI::OnAddBillboard()
 	{
-		auto billboard = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Bill", math::Vector3(0.0f, 10.0f, 0.0f), math::Quaternion::Identity, math::Vector3(5.0f));
+		auto billboard = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("Bill", math::Vector3(0.0f, 10.0f, 0.0f), math::Quaternion::Identity, math::Vector3(5.0f));
 
-		auto bb = billboard->AddComponent<Billboard>();
-		bb->SetTexture(ITexture2D::Create("EngineData.Textures/particles/smoke01.png"));
+		auto bb = billboard->AddComponent<HexEngine::Billboard>();
+		bb->SetTexture(HexEngine::ITexture2D::Create("EngineData.Textures/particles/smoke01.png"));
 		//bb->SetTexture(ITexture2D::Create("Textures/test.png"));
 	}
 
@@ -442,28 +442,28 @@ namespace HexEditor
 
 	void EditorUI::OnAddLight()
 	{
-		Entity* light = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("PointLight");
+		HexEngine::Entity* light = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("PointLight");
 
-		auto pointLight = light->AddComponent<PointLight>();
+		auto pointLight = light->AddComponent<HexEngine::PointLight>();
 		pointLight->SetRadius(100.0f);
 		pointLight->SetLightStength(4.0f);
 	}
 
 	void EditorUI::OnAddSpotLight()
 	{
-		Entity* light = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("SpotLight");
+		HexEngine::Entity* light = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("SpotLight");
 
-		auto pointLight = light->AddComponent<SpotLight>();
+		auto pointLight = light->AddComponent<HexEngine::SpotLight>();
 		pointLight->SetLightStength(4.0f);
 	}
 
 	void EditorUI::OnCreateNewSceneAction(const std::wstring& sceneName)
 	{
-		auto scene = g_pEnv->_sceneManager->CreateEmptyScene(true, this, true);
+		auto scene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(true, this, true);
 
 		if (auto mainCamera = scene->CreateEntity("MainCamera"); mainCamera != nullptr)
 		{
-			auto cameraComponent = mainCamera->AddComponent<Camera>();
+			auto cameraComponent = mainCamera->AddComponent<HexEngine::Camera>();
 		}
 
 		scene->CreateDefaultSunLight();
@@ -474,7 +474,7 @@ namespace HexEditor
 		std::wstring dataLocalPath = L"Data/Scenes/" + sceneName + L".hscene";
 		auto scenePath = _projectFolderPath / dataLocalPath;
 
-		SceneSaveFile* ssf = new SceneSaveFile(scenePath, std::ios::out, scene);
+		HexEngine::SceneSaveFile* ssf = new HexEngine::SceneSaveFile(scenePath, std::ios::out, scene);
 
 		_projectFile->_scenes.push_back(ssf);
 		_sceneFiles.push_back(ssf);
@@ -489,19 +489,19 @@ namespace HexEditor
 		int32_t dockWidth = (int32_t)((float)width * dockPercentage);
 		int32_t lowerDockHeight = (int32_t)((float)height * 0.25f);
 
-		auto& style = g_pEnv->_uiManager->GetRenderer()->_style;
+		auto& style = HexEngine::g_pEnv->_uiManager->GetRenderer()->_style;
 
-		_sceneView = new SceneView(_rootElement, Point(dockWidth, style.win_title_height + 2), Point(width - (dockWidth * 2), height - (style.win_title_height + 2) - lowerDockHeight));
+		_sceneView = new SceneView(_rootElement, HexEngine::Point(dockWidth, style.win_title_height + 2), HexEngine::Point(width - (dockWidth * 2), height - (style.win_title_height + 2) - lowerDockHeight));
 
-		_leftDock = new Dock(_rootElement, Point(0, style.win_title_height + 2), Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)), Dock::Anchor::Left);
-		_rightDock = new Inspector(_rootElement, Point(width - dockWidth, style.win_title_height + 2), Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)));
+		_leftDock = new HexEngine::Dock(_rootElement, HexEngine::Point(0, style.win_title_height + 2), HexEngine::Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)), HexEngine::Dock::Anchor::Left);
+		_rightDock = new Inspector(_rootElement, HexEngine::Point(width - dockWidth, style.win_title_height + 2), HexEngine::Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)));
 
-		_lowerDock = new Explorer(_rootElement, Point(0, height - (lowerDockHeight)), Point(width, lowerDockHeight));
+		_lowerDock = new Explorer(_rootElement, HexEngine::Point(0, height - (lowerDockHeight)), HexEngine::Point(width, lowerDockHeight));
 	}
 
 	void EditorUI::CreateEntityList()
 	{
-		_entityList = new EntityList(_leftDock, Point(10, 10), Point(_leftDock->GetSize().x - 20, _leftDock->GetSize().y - 20));
+		_entityList = new EntityList(_leftDock, HexEngine::Point(10, 10), HexEngine::Point(_leftDock->GetSize().x - 20, _leftDock->GetSize().y - 20));
 	}
 
 	void EditorUI::Update(float frameTime)
@@ -538,7 +538,7 @@ namespace HexEditor
 
 	void EditorUI::CheckCentralDockRoamState()
 	{
-		auto currentScene = g_pEnv->_sceneManager->GetCurrentScene();
+		auto currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
 
 		if (!currentScene)
 			return;
@@ -551,13 +551,13 @@ namespace HexEditor
 		if (_sceneView->GetRoamState() == SceneView::RoamState::FreeLook)
 		{
 			
-			auto cameraTransform = camera->GetEntity()->GetComponent<Transform>();
+			auto cameraTransform = camera->GetEntity()->GetComponent<HexEngine::Transform>();
 
 			if (camera)
 			{
 				if (_freeLookDir.Length() > 0.0f)
 				{
-					math::Vector3 dir = _freeLookDir * g_pEnv->_timeManager->GetFrameTime() * 200.0f * _freeLookMultiplier;
+					math::Vector3 dir = _freeLookDir * HexEngine::g_pEnv->_timeManager->GetFrameTime() * 200.0f * _freeLookMultiplier;
 
 					const auto& currentPos = cameraTransform->GetPosition();
 
@@ -567,14 +567,14 @@ namespace HexEditor
 				const auto& mouseStart = _sceneView->GetRoamingMouseStartPos();
 
 				int32_t mx, my;
-				g_pEnv->_inputSystem->GetMousePosition(mx, my);
+				HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 				float dx, dy;
 				dx = (float)mx - mouseStart.x;
 				dy = (float)my - mouseStart.y;
 
-				dx *= g_pEnv->_timeManager->GetFrameTime();
-				dy *= g_pEnv->_timeManager->GetFrameTime();
+				dx *= HexEngine::g_pEnv->_timeManager->GetFrameTime();
+				dy *= HexEngine::g_pEnv->_timeManager->GetFrameTime();
 
 
 				if (dx != 0)
@@ -589,14 +589,14 @@ namespace HexEditor
 					camera->SetPitch(pitch);
 				}
 
-				_sceneView->SetRoamingMouseStartPos(Point(mx, my));
+				_sceneView->SetRoamingMouseStartPos(HexEngine::Point(mx, my));
 			}
 		}
 	}
 
-	bool EditorUI::OnInputEvent(InputEvent event, InputData* data)
+	bool EditorUI::OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data)
 	{
-		if (g_pEnv->_commandManager->GetConsole()->GetActive())
+		if (HexEngine::g_pEnv->_commandManager->GetConsole()->GetActive())
 			return false;
 
 		if (UIManager::OnInputEvent(event, data) == false)
@@ -621,10 +621,10 @@ namespace HexEditor
 
 		if (_sceneView->GetRoamState() == SceneView::RoamState::FreeLook)
 		{
-			if (event == InputEvent::KeyDown)
+			if (event == HexEngine::InputEvent::KeyDown)
 			{
-				auto camera = g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera();
-				auto cameraTransform = camera->GetEntity()->GetComponent<Transform>();
+				auto camera = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera();
+				auto cameraTransform = camera->GetEntity()->GetComponent<HexEngine::Transform>();
 
 				switch (data->KeyDown.key)
 				{
@@ -639,7 +639,7 @@ namespace HexEditor
 
 				return false;
 			}
-			else if (event == InputEvent::KeyUp)
+			else if (event == HexEngine::InputEvent::KeyUp)
 			{
 				switch (data->KeyDown.key)
 				{
@@ -651,7 +651,7 @@ namespace HexEditor
 					break;
 				}
 			}
-			else if (event == InputEvent::MouseWheel)
+			else if (event == HexEngine::InputEvent::MouseWheel)
 			{
 				if (data->MouseWheel.delta > 0)
 					_freeLookMultiplier += 1.0f;
@@ -663,7 +663,7 @@ namespace HexEditor
 
 		
 		
-		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _sceneView->IsMouseOver(true))
+		if (event == HexEngine::InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _sceneView->IsMouseOver(true))
 		{
 			auto hit = RayCastWorld();
 
@@ -672,7 +672,7 @@ namespace HexEditor
 				_rightDock->InspectEntity(hit.entity);
 			}
 		}
-		else if (event == InputEvent::KeyDown && _sceneView->IsMouseOver(true))
+		else if (event == HexEngine::InputEvent::KeyDown && _sceneView->IsMouseOver(true))
 		{
 			if (_integrator.GetState() == GameTestState::Started && data->KeyDown.key == VK_ESCAPE)
 			{
@@ -683,10 +683,10 @@ namespace HexEditor
 		return false;
 	}
 
-	RayHit EditorUI::RayCastWorld(const std::vector<Entity*>& entsToIgnore)
+	HexEngine::RayHit EditorUI::RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore)
 	{
 		// pick entity
-		auto currentScene = g_pEnv->_sceneManager->GetCurrentScene();
+		auto currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
 
 		if (currentScene)
 		{
@@ -695,11 +695,11 @@ namespace HexEditor
 			if (mainCamera)
 			{
 				int32_t mx, my;
-				g_pEnv->_inputSystem->GetMousePosition(mx, my);
+				HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
-				const Point& centerSize = _sceneView->GetSize();
-				Point centerLoc = _sceneView->GetAbsolutePosition();
-				Point centerPos = centerLoc.GetCenter(centerSize);
+				const HexEngine::Point& centerSize = _sceneView->GetSize();
+				HexEngine::Point centerLoc = _sceneView->GetAbsolutePosition();
+				HexEngine::Point centerPos = centerLoc.GetCenter(centerSize);
 
 				const auto& vp = mainCamera->GetViewport();
 
@@ -715,19 +715,19 @@ namespace HexEditor
 				float fmx = (float)mx * scaleX;
 				float fmy = (float)my * scaleY;
 
-				auto screenRay = g_pEnv->_inputSystem->GetScreenToWorldRay(mainCamera, fmx, fmy/*, _centralDock->GetSize().x, _centralDock->GetSize().y*/);
+				auto screenRay = HexEngine::g_pEnv->_inputSystem->GetScreenToWorldRay(mainCamera, fmx, fmy/*, _centralDock->GetSize().x, _centralDock->GetSize().y*/);
 
 				math::Ray ray;
 				ray.direction = screenRay;
 				ray.position = mainCamera->GetEntity()->GetPosition();
 
-				RayHit hit;
+				HexEngine::RayHit hit;
 
 				if (HexEngine::PhysUtils::RayCast(
 					ray,
 					mainCamera->GetFarZ(),
-					LAYERMASK(Layer::StaticGeometry) |
-					LAYERMASK(Layer::DynamicGeometry),
+					LAYERMASK(HexEngine::Layer::StaticGeometry) |
+					LAYERMASK(HexEngine::Layer::DynamicGeometry),
 					&hit,
 					entsToIgnore)
 					)
@@ -741,7 +741,7 @@ namespace HexEditor
 	
 	}
 
-	void EditorUI::OnAddEntity(Entity* entity)
+	void EditorUI::OnAddEntity(HexEngine::Entity* entity)
 	{
 		_entityList->AddEntity(entity);
 
@@ -751,11 +751,11 @@ namespace HexEditor
 
 		if (entity->GetName() == "SkySphere")
 		{
-			g_pEnv->_sceneManager->GetCurrentScene()->SetSkySphere(entity);
+			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->SetSkySphere(entity);
 		}
 	}
 
-	void EditorUI::OnRemoveEntity(Entity* entity)
+	void EditorUI::OnRemoveEntity(HexEngine::Entity* entity)
 	{
 		_entityList->RemoveEntity(entity);
 
@@ -764,12 +764,12 @@ namespace HexEditor
 		_entityList->RemoveItem(std::wstring(name.begin(), name.end()));*/
 	}
 
-	void EditorUI::OnAddComponent(Entity* entity, BaseComponent* component)
+	void EditorUI::OnAddComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component)
 	{
 
 	}
 
-	void EditorUI::OnRemoveComponent(Entity* entity, BaseComponent* component)
+	void EditorUI::OnRemoveComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component)
 	{
 
 	}

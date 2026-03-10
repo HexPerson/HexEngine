@@ -13,6 +13,8 @@ namespace HexEngine
 		Interpolated
 	};
 
+	class Mesh;
+
 	class HEX_API Transform : public BaseComponent
 	{
 	public:	
@@ -79,9 +81,9 @@ namespace HexEngine
 		{
 			math::Vector3 position;
 			math::Quaternion rotation;
-			math::Vector3 forward;
-			math::Vector3 right;
-			math::Vector3 up;
+			math::Vector3 forward = math::Vector3::Forward;
+			math::Vector3 right = math::Vector3::Right;
+			math::Vector3 up = math::Vector3::Up;
 			math::Vector3 scale = math::Vector3(1.0f);
 		} _current, _previous, _interpolated;
 

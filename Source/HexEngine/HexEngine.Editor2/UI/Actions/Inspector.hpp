@@ -6,42 +6,42 @@
 
 namespace HexEditor
 {
-	class Inspector : public Dock
+	class Inspector : public HexEngine::Dock
 	{
 	public:
-		Inspector(Element* parent, const Point& position, const Point& size);
+		Inspector(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size);
 
 		virtual ~Inspector();
 
-		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
+		virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 
-		void InspectEntity(Entity* entity);
+		void InspectEntity(HexEngine::Entity* entity);
 		void InspectResource(const fs::path& path);
 
 		bool IsInspectingEntity() const;
 		bool IsInspectingResource() const;
-		Entity* GetInspectingEntity() const;
+		HexEngine::Entity* GetInspectingEntity() const;
 
 	private:
-		void InspectComponent(Point& pos, BaseComponent* component, GuiRenderer* renderer);
-		bool OnAddComponent(Button* button);
-		void OnClickAddComponentItem(const std::wstring& name, ComponentId compId);
+		void InspectComponent(HexEngine::Point& pos, HexEngine::BaseComponent* component, HexEngine::GuiRenderer* renderer);
+		bool OnAddComponent(HexEngine::Button* button);
+		void OnClickAddComponentItem(const std::wstring& name, HexEngine::ComponentId compId);
 		void OnChangeEntityName(const std::wstring& name);
-		bool OnDeleteEntity(Button* button);
-		bool OnToggleEntityVisible(Button* button);
+		bool OnDeleteEntity(HexEngine::Button* button);
+		bool OnToggleEntityVisible(HexEngine::Button* button);
 		void ClearInspectorWidgets();
-		virtual void PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
+		virtual void PostRenderChildren(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 
 	private:
-		Entity* _inspecting = nullptr;
-		Button* _addComponentBtn = nullptr;
-		Button* _toggleVisibilityBtn = nullptr;
-		LineEdit* _entityName = nullptr;
-		Button* _deleteBtn = nullptr;
-		TabView* _tabs = nullptr;
-		ContextMenu* _addComponentContextMenu = nullptr;
-		std::vector<ComponentWidget*> _componentWidgets;
-		std::shared_ptr<ITexture2D> _visBtnTextures[2];
+		HexEngine::Entity* _inspecting = nullptr;
+		HexEngine::Button* _addComponentBtn = nullptr;
+		HexEngine::Button* _toggleVisibilityBtn = nullptr;
+		HexEngine::LineEdit* _entityName = nullptr;
+		HexEngine::Button* _deleteBtn = nullptr;
+		HexEngine::TabView* _tabs = nullptr;
+		HexEngine::ContextMenu* _addComponentContextMenu = nullptr;
+		std::vector<HexEngine::ComponentWidget*> _componentWidgets;
+		std::shared_ptr<HexEngine::ITexture2D> _visBtnTextures[2];
 		//DrawList _drawList;
 		//Canvas _canvas;
 	};

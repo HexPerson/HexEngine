@@ -23,22 +23,22 @@ namespace HexEditor
 
 	void EditorExtension::OnCreateGame()
 	{
-		_overlayIcons[Overlay_Light] = ITexture2D::Create("EngineData.Textures/UI/light_bulb.png");
+		_overlayIcons[Overlay_Light] = HexEngine::ITexture2D::Create("EngineData.Textures/UI/light_bulb.png");
 	}
 
 	void EditorExtension::OnGUI()
 	{
-		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		auto scene = HexEngine::g_pEnv->GetSceneManager().GetCurrentScene();
 
 		if (scene)
 		{
-			std::vector<BaseComponent*> lights;
+			std::vector<HexEngine::BaseComponent*> lights;
 			//if (scene->GetComponents(1 << PointLight::_GetComponentId() | 1 << SpotLight::_GetComponentId(), lights))
 			{
 				for (auto& light : lights)
 				{
 					int32_t scrx, scry;
-					if (g_pEnv->_inputSystem->GetWorldToScreenPosition(
+					if (HexEngine::g_pEnv->_inputSystem->GetWorldToScreenPosition(
 						scene->GetMainCamera(),
 						light->GetEntity()->GetPosition(),
 						scrx, scry, 
@@ -50,9 +50,9 @@ namespace HexEditor
 
 					const int32_t IconSize = 24;
 
-					g_pEnv->_uiManager->GetRenderer()->FillTexturedQuad(_overlayIcons[Overlay_Light].get(), scrx- IconSize/2, scry- IconSize/2, IconSize, IconSize, math::Color(1, 1, 1, 1));
+					HexEngine::g_pEnv->_uiManager->GetRenderer()->FillTexturedQuad(_overlayIcons[Overlay_Light].get(), scrx- IconSize/2, scry- IconSize/2, IconSize, IconSize, math::Color(1, 1, 1, 1));
 
-					g_pEnv->_uiManager->GetRenderer()->PrintText(g_pUIManager->GetRenderer()->_style.font.get(), (uint8_t)Style::FontSize::Tiny, scrx, scry + IconSize / 2 + 2, math::Color(1, 1, 1, 1), FontAlign::CentreLR, std::wstring(light->GetEntity()->GetName().begin(), light->GetEntity()->GetName().end()));
+					HexEngine::g_pEnv->_uiManager->GetRenderer()->PrintText(g_pUIManager->GetRenderer()->_style.font.get(), (uint8_t)HexEngine::Style::FontSize::Tiny, scrx, scry + IconSize / 2 + 2, math::Color(1, 1, 1, 1), HexEngine::FontAlign::CentreLR, std::wstring(light->GetEntity()->GetName().begin(), light->GetEntity()->GetName().end()));
 				}
 			}
 		}
@@ -62,9 +62,9 @@ namespace HexEditor
 	{
 	}
 
-	void EditorExtension::OnFileChangeEvent(const DirectoryWatchInfo& info, const FileChangeActionMap& actionMap)
+	void EditorExtension::OnFileChangeEvent(const HexEngine::DirectoryWatchInfo& info, const HexEngine::FileChangeActionMap& actionMap)
 	{
-		std::map<IResourceLoader*, std::vector<fs::path>> addedFiles;
+		std::map<HexEngine::IResourceLoader*, std::vector<fs::path>> addedFiles;
 
 		for (auto& action : actionMap)
 		{
@@ -72,14 +72,14 @@ namespace HexEditor
 			{
 				for (auto& fileInfo : action.second)
 				{
-					IResourceLoader* resourceLoader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(fileInfo.path.extension().string());
+					HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(fileInfo.path.extension().string());
 
 					if (resourceLoader)
 					{
 						if (resourceLoader->DoesSupportHotLoading() == false)
 							continue;
 
-						auto fileSystem = g_pEnv->_resourceSystem->FindFileSystemByPath(fileInfo.path);
+						auto fileSystem = HexEngine::g_pEnv->_resourceSystem->FindFileSystemByPath(fileInfo.path);
 
 						if (fileSystem)
 						{
@@ -99,7 +99,7 @@ namespace HexEditor
 			{
 				for (auto& path : added.second)
 				{
-					g_pEnv->_resourceSystem->LoadResource(path);
+					HexEngine::g_pEnv->_resourceSystem->LoadResource(path);
 				}
 			}
 		}
@@ -110,15 +110,15 @@ namespace HexEditor
 		// Create the filesystem for the new project
 		if (_projectFS != nullptr)
 		{
-			g_pEnv->_resourceSystem->RemoveFileSystem(_projectFS);
+			HexEngine::g_pEnv->_resourceSystem->RemoveFileSystem(_projectFS);
 			delete g_pEditor->_projectFS;
 		}
 
-		g_pEditor->_projectFS = new FileSystem(L"GameData");
+		g_pEditor->_projectFS = new HexEngine::FileSystem(L"GameData");
 		g_pEditor->_projectFS->SetBaseDirectory(path);
 		g_pEditor->_projectFS->CreateChangeNotifier(g_pEditor->_projectFS->GetDataDirectory(), std::bind(&EditorExtension::OnFileChangeEvent, this, std::placeholders::_1, std::placeholders::_2));
 
-		g_pEnv->_resourceSystem->AddFileSystem(g_pEditor->_projectFS);
+		HexEngine::g_pEnv->_resourceSystem->AddFileSystem(g_pEditor->_projectFS);
 
 		g_pUIManager->GetExplorer()->SetProjectPath(path);
 	}

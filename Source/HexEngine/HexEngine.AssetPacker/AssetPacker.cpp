@@ -19,10 +19,10 @@ int main(int argc, const char* argv[])
 		("E,exclude", "Any file exclusions", cxxopts::value<std::string>())
 		("C,compression", "Compression enabled", cxxopts::value<bool>());
 
-	HeadlessOptions o;
+	HexEngine::HeadlessOptions o;
 	o.gameExtension = nullptr;
 
-	HeadlessEnvironment::Create(o);
+	HexEngine::HeadlessEnvironment::Create(o);
 
 	auto opts = options.parse(argc, argv);
 
@@ -60,9 +60,9 @@ int main(int argc, const char* argv[])
 		return 1;
 	}
 
-	AssetFileHeader package;
+	HexEngine::AssetFileHeader package;
 
-	package.version = AssetFileHeader::AssetVersion;
+	package.version = HexEngine::AssetFileHeader::AssetVersion;
 
 #ifdef _DEBUG
 	package.compressed = false;
@@ -70,7 +70,7 @@ int main(int argc, const char* argv[])
 	package.compressed = true;
 #endif
 	
-	std::vector<std::pair<AssetHeader, uint8_t*>> files;
+	std::vector<std::pair<HexEngine::AssetHeader, uint8_t*>> files;
 
 	for (auto const& dir_entry : std::filesystem::recursive_directory_iterator{ inputPath })
 	{
@@ -83,11 +83,9 @@ int main(int argc, const char* argv[])
 		const auto& path = dir_entry.path();
 
 		if (path.string().find("AssetPackages") != std::string::npos)
-			continue;
+			continue;		
 
-		
-
-		DiskFile diskFile(path, std::ios::binary | std::ios::in);
+		HexEngine::DiskFile diskFile(path, std::ios::binary | std::ios::in);
 
 		if (diskFile.Open() == false)
 			continue;
@@ -99,9 +97,9 @@ int main(int argc, const char* argv[])
 
 		diskFile.Read(fileData, fileSize);
 
-		std::pair<AssetHeader, uint8_t*> pair;
+		std::pair<HexEngine::AssetHeader, uint8_t*> pair;
 
-		AssetHeader& file = pair.first;
+		HexEngine::AssetHeader& file = pair.first;
 		file.size = fileSize;
 
 		auto relativePath = fs::relative(path, inputPath/*g_pEnv->_fileSystem->GetDataDirectory()*/).wstring();
@@ -127,21 +125,21 @@ int main(int argc, const char* argv[])
 
 	package.numFiles = (uint16_t)files.size();
 	
-	DiskFile outFile(output, std::ios::out | std::ios::binary, DiskFileOptions::CreateSubDirs);
+	HexEngine::DiskFile outFile(output, std::ios::out | std::ios::binary, HexEngine::DiskFileOptions::CreateSubDirs);
 
 	if (!outFile.Open())
 		return 1;
 
 	// Write the asset header
 	//
-	outFile.Write(&package, sizeof(AssetFileHeader));
+	outFile.Write(&package, sizeof(HexEngine::AssetFileHeader));
 
 	// Write all the files
 	//
 	for (auto& file : files)
 	{
 		// Write the header
-		outFile.Write(&file.first , sizeof(AssetHeader));
+		outFile.Write(&file.first , sizeof(HexEngine::AssetHeader));
 
 		// Then follow with the data
 		outFile.Write(file.second , file.first.size);
@@ -155,7 +153,7 @@ int main(int argc, const char* argv[])
 	{
 		std::cout << "Compressing archive: " << output << std::endl;
 
-		g_pEnv->_compressionProvider->CompressFile(output, output);
+		HexEngine::g_pEnv->_compressionProvider->CompressFile(output, output);
 
 		std::cout << "Successfully wrote compressed archive" << std::endl;
 	}

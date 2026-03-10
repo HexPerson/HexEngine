@@ -27,9 +27,9 @@ void D3D11Plugin::GetVersionData(VersionData* data)
 	data->name = "HexEngine.D3D11Plugin";
 }
 
-IPluginInterface* D3D11Plugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* D3D11Plugin::CreateInterface(const std::string& interfaceName)
 {
-	if (interfaceName == IGraphicsDevice::InterfaceName)
+	if (interfaceName == HexEngine::IGraphicsDevice::InterfaceName)
 		return _device;
 
 	return nullptr;

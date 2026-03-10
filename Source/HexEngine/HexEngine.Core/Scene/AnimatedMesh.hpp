@@ -42,6 +42,9 @@ namespace HexEngine
 		void AddVertices(const std::vector<AnimatedMeshVertex>& vertex);
 		const std::vector<AnimatedMeshVertex>& GetVertices() const;
 
+		void SetRootTransformation(const math::Matrix& rootTrans);
+		const math::Matrix& GetRootTransformation() const;
+
 	private:
 		void ReadNodeHierarchy(AnimChannel* animation, float AnimationTime, math::Matrix& ParentTransform);
 		const AnimChannel* FindNodeAnim(const AnimChannel* pAnimation, const std::string& NodeName);

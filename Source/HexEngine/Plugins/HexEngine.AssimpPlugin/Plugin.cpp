@@ -27,9 +27,9 @@ void AssimpPlugin::GetVersionData(VersionData* data)
 	data->name = "HexEngine.AssimpPlugin";
 }
 
-IPluginInterface* AssimpPlugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* AssimpPlugin::CreateInterface(const std::string& interfaceName)
 {
-	if (interfaceName == IModelImporter::InterfaceName)
+	if (interfaceName == HexEngine::IModelImporter::InterfaceName)
 		return _importer;
 
 	return nullptr;

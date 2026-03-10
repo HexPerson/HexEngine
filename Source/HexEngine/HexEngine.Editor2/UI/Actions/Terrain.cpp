@@ -6,10 +6,10 @@
 
 namespace HexEditor
 {
-	Terrain::Terrain(Element* parent, const Point& position, const Point& size) :
+	Terrain::Terrain(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		Dialog(parent, position, size, L"Terrain Generator")
 	{
-		_widgetBase = new ComponentWidget(this, Point(10, 10), Point(size.x - 20, -1), L"Environment");
+		_widgetBase = new HexEngine::ComponentWidget(this, HexEngine::Point(10, 10), HexEngine::Point(size.x - 20, -1), L"Environment");
 		//_shadowSettings = new ComponentWidget(this, Point(10, 200), Point(size.x - 20, -1), L"Shadow");
 	}
 
@@ -20,7 +20,7 @@ namespace HexEditor
 	Terrain* Terrain::CreateTerrainDialog(Element* parent, OnCompleted onCompletedAction)
 	{
 		uint32_t width, height;
-		g_pEnv->GetScreenSize(width, height);
+		HexEngine::g_pEnv->GetScreenSize(width, height);
 
 		int32_t centrex = width >> 1;
 		int32_t centrey = height >> 1;
@@ -28,21 +28,21 @@ namespace HexEditor
 		const int32_t sizex = 800;
 		const int32_t sizey = 480;
 
-		Terrain* pm = new Terrain(parent, Point(centrex - sizex / 2, centrey - sizey / 2), Point(sizex, sizey));
+		Terrain* pm = new Terrain(parent, HexEngine::Point(centrex - sizex / 2, centrey - sizey / 2), HexEngine::Point(sizex, sizey));
 
-		pm->_seed = new LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Seed");
-		DragFloat* heightScale = new DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Height Scale", &pm->_heightScale, 0.1f, 100.0f, 0.1f);
-		DragInt* gridSize = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Grid Size", &pm->_gridSize, 1, 1024, 1);
-		DragFloat* chunkWidth = new DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Chunk Width", &pm->_width, 1.0f, 1024.0f, 1.0f);
-		DragFloat* uvScale = new DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Texture Scale", &pm->_uvScale, 0.1f, 10.0f, 0.1f);
-		DragInt* resolution = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Resolution", & pm->_resolution, 1, 512, 1);
-		DragInt* lod = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Max LOD", &pm->_maxLod, 0, 3, 1);
-		Checkbox* makeParent = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Create Parent", &pm->_parent);
-		Checkbox* makeColliders = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Add Colliders", &pm->_makeColliders);
-		Checkbox* useChunkingSystem = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Enable Chunk System", &pm->_useChunkSystem);
-		pm->_materialName = new LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Material");
+		pm->_seed = new HexEngine::LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Seed");
+		HexEngine::DragFloat* heightScale = new HexEngine::DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Height Scale", &pm->_heightScale, 0.1f, 100.0f, 0.1f);
+		HexEngine::DragInt* gridSize = new HexEngine::DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Grid Size", &pm->_gridSize, 1, 1024, 1);
+		HexEngine::DragFloat* chunkWidth = new HexEngine::DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Chunk Width", &pm->_width, 1.0f, 1024.0f, 1.0f);
+		HexEngine::DragFloat* uvScale = new HexEngine::DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Texture Scale", &pm->_uvScale, 0.1f, 10.0f, 0.1f);
+		HexEngine::DragInt* resolution = new HexEngine::DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Resolution", & pm->_resolution, 1, 512, 1);
+		HexEngine::DragInt* lod = new HexEngine::DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Max LOD", &pm->_maxLod, 0, 3, 1);
+		HexEngine::Checkbox* makeParent = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Create Parent", &pm->_parent);
+		HexEngine::Checkbox* makeColliders = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Add Colliders", &pm->_makeColliders);
+		HexEngine::Checkbox* useChunkingSystem = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Enable Chunk System", &pm->_useChunkSystem);
+		pm->_materialName = new HexEngine::LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Material");
 		pm->_materialName->SetValue(L"Materials/DesertTerrain.hmat");
-		Button* generateBtn = new Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(100, 25), L"Generate", std::bind(&Terrain::GenerateTerrain, pm));
+		HexEngine::Button* generateBtn = new HexEngine::Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(100, 25), L"Generate", std::bind(&Terrain::GenerateTerrain, pm));
 
 		//Button* regen = new Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(100, 25), L"Re", std::bind(&Terrain::GenerateTerrain, pm));
 		
@@ -56,7 +56,7 @@ namespace HexEditor
 	Terrain* Terrain::CreateOceanDialog(Element* parent, OnCompleted onCompletedAction)
 	{
 		uint32_t width, height;
-		g_pEnv->GetScreenSize(width, height);
+		HexEngine::g_pEnv->GetScreenSize(width, height);
 
 		int32_t centrex = width >> 1;
 		int32_t centrey = height >> 1;
@@ -64,21 +64,21 @@ namespace HexEditor
 		const int32_t sizex = 800;
 		const int32_t sizey = 480;
 
-		Terrain* pm = new Terrain(parent, Point(centrex - sizex / 2, centrey - sizey / 2), Point(sizex, sizey));
+		Terrain* pm = new Terrain(parent, HexEngine::Point(centrex - sizex / 2, centrey - sizey / 2), HexEngine::Point(sizex, sizey));
 
 		pm->_heightScale = 0.0f;
 
-		DragInt* gridSize = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Grid Size", &pm->_gridSize, 1, 1024, 1);
-		DragFloat* chunkWidth = new DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Chunk Width", &pm->_width, 1.0f, 1024.0f, 1.0f);
-		DragFloat* uvScale = new DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Texture Scale", &pm->_uvScale, 0.1f, 10.0f, 0.1f);
-		DragInt* resolution = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Resolution", &pm->_resolution, 1, 512, 1);
-		DragInt* lod = new DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Max LOD", &pm->_maxLod, 0, 3, 1);
-		Checkbox* makeParent = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Create Parent", &pm->_parent);
-		Checkbox* makeColliders = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Add Colliders", &pm->_makeColliders);
-		Checkbox* useChunkingSystem = new Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Enable Chunk System", &pm->_useChunkSystem);
-		pm->_materialName = new LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(sizex - 40, 18), L"Material");
+		HexEngine::DragInt* gridSize = new HexEngine::DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Grid Size", &pm->_gridSize, 1, 1024, 1);
+		HexEngine::DragFloat* chunkWidth = new HexEngine::DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Chunk Width", &pm->_width, 1.0f, 1024.0f, 1.0f);
+		HexEngine::DragFloat* uvScale = new HexEngine::DragFloat(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Texture Scale", &pm->_uvScale, 0.1f, 10.0f, 0.1f);
+		HexEngine::DragInt* resolution = new HexEngine::DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Resolution", &pm->_resolution, 1, 512, 1);
+		HexEngine::DragInt* lod = new HexEngine::DragInt(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Max LOD", &pm->_maxLod, 0, 3, 1);
+		HexEngine::Checkbox* makeParent = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Create Parent", &pm->_parent);
+		HexEngine::Checkbox* makeColliders = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Add Colliders", &pm->_makeColliders);
+		HexEngine::Checkbox* useChunkingSystem = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Enable Chunk System", &pm->_useChunkSystem);
+		pm->_materialName = new HexEngine::LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Material");
 		pm->_materialName->SetValue(L"EngineData.Materials/Water.hmat");
-		Button* generateBtn = new Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(100, 25), L"Generate", std::bind(&Terrain::GenerateTerrain, pm));
+		HexEngine::Button* generateBtn = new HexEngine::Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(100, 25), L"Generate", std::bind(&Terrain::GenerateTerrain, pm));
 
 		//Button* regen = new Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(100, 25), L"Re", std::bind(&Terrain::GenerateTerrain, pm));
 
@@ -101,7 +101,7 @@ namespace HexEditor
 		{
 			for (auto& ent : _created)
 			{
-				g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(ent);
+				HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(ent);
 			}
 			_created.clear();
 		}
@@ -113,29 +113,29 @@ namespace HexEditor
 		const int32_t halfGridSize = (gridSize / 2);
 		const float width = _width;
 		const float totalSize = width * gridSize;
-		Entity* parentEnt = nullptr;
+		HexEngine::Entity* parentEnt = nullptr;
 
-		Biome biome;
+		HexEngine::Biome biome;
 		biome.position = math::Vector3::Zero;
-		biome.flattenMode = (int32_t)Biome::TerrainFlattenMode::Flatten;
+		biome.flattenMode = (int32_t)HexEngine::Biome::TerrainFlattenMode::Flatten;
 		biome.radius = 2048.0f;
 		biome.falloffStart = 400.0f;
 
 		if (_useChunkSystem)
 		{
-			g_pEnv->_chunkManager->RemoveAllChunks(g_pEnv->_sceneManager->GetCurrentScene().get());
-			g_pEnv->_chunkManager->CreateChunks(g_pEnv->_sceneManager->GetCurrentScene().get(), _width, _gridSize);
+			HexEngine::g_pEnv->_chunkManager->RemoveAllChunks(HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get());
+			HexEngine::g_pEnv->_chunkManager->CreateChunks(HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get(), _width, _gridSize);
 		}
 
 		if (_parent)
 		{
-			parentEnt = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("TerrainParent");
+			parentEnt = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("TerrainParent");
 			_created.push_back(parentEnt);
 		}
 
 		
 
-		auto terrainMaterial = Material::Create(_materialName->GetValue());
+		auto terrainMaterial = HexEngine::Material::Create(_materialName->GetValue());
 
 		LOG_DEBUG("Creating a new heightmap terrain with seed %d", seed);
 
@@ -152,11 +152,11 @@ namespace HexEditor
 
 				int32_t resolution = _resolution;
 
-				auto terrainEnt = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(ident, position);
+				auto terrainEnt = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(ident, position);
 
 				for (int32_t k = 0; k <= _maxLod; ++k)
 				{
-					HeightMapGenerationParams params;
+					HexEngine::HeightMapGenerationParams params;
 
 					params.seed = seed;
 					params.resolution = resolution;
@@ -169,7 +169,7 @@ namespace HexEditor
 
 					params.biomes.push_back(biome);
 
-					auto heightMap = GenerateHeightMap(params);
+					auto heightMap = HexEngine::GenerateHeightMap(params);
 
 					if (heightMap.size() == 0)
 					{
@@ -200,13 +200,13 @@ namespace HexEditor
 
 					resolution /= 2;
 
-					auto meshRenderer = terrainEnt->AddComponent<StaticMeshComponent>();
+					auto meshRenderer = terrainEnt->AddComponent<HexEngine::StaticMeshComponent>();
 					meshRenderer->SetMesh(mesh);
 					meshRenderer->SetMaterial(terrainMaterial);
 
 					if (_makeColliders)
 					{
-						auto rb = terrainEnt->AddComponent<RigidBody>();
+						auto rb = terrainEnt->AddComponent<HexEngine::RigidBody>();
 						rb->AddTriangleMeshCollider(mesh.get(), true);
 					}
 				}

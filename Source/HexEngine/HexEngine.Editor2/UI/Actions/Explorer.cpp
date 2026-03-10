@@ -6,18 +6,18 @@
 
 namespace HexEditor
 {
-	Explorer::Explorer(Element* parent, const Point& position, const Point& size) :
+	Explorer::Explorer(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		Dock(parent, position, size, Dock::Anchor::Bottom)
 	{
-		_folderView = new TreeList(this, Point(10, 10), Point(size.y-20, size.y-20));
+		_folderView = new HexEngine::TreeList(this, HexEngine::Point(10, 10), HexEngine::Point(size.y-20, size.y-20));
 		//_folderView->_onSelect = std::bind(&Explorer::OnClickFolder, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
 
-		_tab = new TabView(this, Point(size.y, 10), Point(g_pEnv->_uiManager->GetWidth() - (size.y + 10), size.y - 20));
+		_tab = new HexEngine::TabView(this, HexEngine::Point(size.y, 10), HexEngine::Point(HexEngine::g_pEnv->_uiManager->GetWidth() - (size.y + 10), size.y - 20));
 		_tab->AddTab(L"Assets");
 		_tab->AddTab(L"Log");
 
-		_fileSearchBar = new LineEdit(_tab, Point(10, 20), Point(_tab->GetSize().x - 20, 20), L"");
-		_fileSearchBar->SetIcon(ITexture2D::Create(L"EngineData.Textures/UI/magnifying_glass.png"), math::Color(1,1,1,1));
+		_fileSearchBar = new HexEngine::LineEdit(_tab, HexEngine::Point(10, 20), HexEngine::Point(_tab->GetSize().x - 20, 20), L"");
+		_fileSearchBar->SetIcon(HexEngine::ITexture2D::Create(L"EngineData.Textures/UI/magnifying_glass.png"), math::Color(1,1,1,1));
 		_fileSearchBar->SetOnInputFn(std::bind(&Explorer::OnEnterSearchText, this, std::placeholders::_2));
 		_fileSearchBar->SetDoesCallbackWaitForReturn(false);
 	}
@@ -30,15 +30,15 @@ namespace HexEditor
 		UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
 	}
 
-	bool Explorer::OnClickFolder(TreeList* list, ListNode* item, int32_t mouseButton)
+	bool Explorer::OnClickFolder(HexEngine::TreeList* list, HexEngine::ListNode* item, int32_t mouseButton)
 	{
 		if (mouseButton == VK_LBUTTON)
 		{
-			ListNode* pathItem = item;
+			HexEngine::ListNode* pathItem = item;
 
 			std::wstring assetFolderPath;
 
-			FileSystem* fs = nullptr;
+			HexEngine::FileSystem* fs = nullptr;
 
 			if (fs::path(pathItem->GetLabel()).extension() == ".pkg")
 			{
@@ -50,7 +50,7 @@ namespace HexEditor
 				{
 					if (pathItem->GetParent() == nullptr && fs == nullptr)
 					{
-						fs = (FileSystem*)pathItem->_userData;
+						fs = (HexEngine::FileSystem*)pathItem->_userData;
 					}
 					else
 						assetFolderPath.insert(0, pathItem->GetLabel() + L"/");
@@ -67,7 +67,7 @@ namespace HexEditor
 		return true;
 	}
 
-	void Explorer::OpenAssetFolder(const fs::path& relativePath, FileSystem* fs)
+	void Explorer::OpenAssetFolder(const fs::path& relativePath, HexEngine::FileSystem* fs)
 	{
 		UpdateAssets(relativePath, fs);
 	}
@@ -87,12 +87,12 @@ namespace HexEditor
 			return;
 		}*/
 
-		Material* material = new Material;
+		HexEngine::Material* material = new HexEngine::Material;
 
 		// copy from the standard material just so that the shaders are valid
 		material->SetPaths(newMaterialPath, _currentlyBrowsedFS);
-		material->CopyFrom(Material::GetDefaultMaterial());
-		material->SetLoader(g_pEnv->_resourceSystem->FindResourceLoaderForExtension(".hmat"));
+		material->CopyFrom(HexEngine::Material::GetDefaultMaterial());
+		material->SetLoader(HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(".hmat"));
 		material->Save();
 
 		//file.Close();	
@@ -126,11 +126,11 @@ namespace HexEditor
 		_editingAssetExtension = asset->path.extension();
 	}
 
-	bool Explorer::OnInputEvent(InputEvent event, InputData* data)
+	bool Explorer::OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data)
 	{
 		auto pos = GetAbsolutePosition();
 
-		if (_assetNameToEdit && event == InputEvent::Char)
+		if (_assetNameToEdit && event == HexEngine::InputEvent::Char)
 		{
 			if (data->Char.ch == VK_BACK && _editingAssetTempName.size() > 0)
 			{
@@ -165,7 +165,7 @@ namespace HexEditor
 
 		if (IsMouseOver())
 		{
-			if (event == InputEvent::DragAndDrop)
+			if (event == HexEngine::InputEvent::DragAndDrop)
 			{
 				if (data->DragAndDrop.x >= pos.x && data->DragAndDrop.x < pos.x + _size.x &&
 					data->DragAndDrop.y >= pos.y && data->DragAndDrop.y < pos.y + _size.y)
@@ -180,7 +180,7 @@ namespace HexEditor
 
 					LOG_DEBUG("Received drag and drop request for file '%S'", fileName.wstring().c_str());
 
-					IResourceLoader* resourceLoader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(fileName.extension().string());
+					HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(fileName.extension().string());
 
 					if (!resourceLoader)
 					{
@@ -208,7 +208,7 @@ namespace HexEditor
 					return true;
 				}
 			}
-			else if (event == InputEvent::MouseDoubleClick)
+			else if (event == HexEngine::InputEvent::MouseDoubleClick)
 			{
 				if (data->MouseDown.button == VK_LBUTTON)
 				{
@@ -216,7 +216,7 @@ namespace HexEditor
 					{
 						//LoadAsset(fs::relative(_hoveredAsset->path, g_pEditor->_projectFS->GetDataDirectory()));
 
-						IResourceLoader* resourceLoader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(_hoveredAsset->path.extension().string());
+						HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(_hoveredAsset->path.extension().string());
 
 						if (resourceLoader)
 						{
@@ -225,7 +225,7 @@ namespace HexEditor
 							// if the editor dialog is null, we should just presume that no import options are needed and immediately load the resource
 							if (auto dlg = resourceLoader->CreateEditorDialog({ relative }); dlg == nullptr)
 							{
-								g_pEnv->_resourceSystem->LoadResource(_hoveredAsset->path);
+								HexEngine::g_pEnv->_resourceSystem->LoadResource(_hoveredAsset->path);
 							}
 						}
 
@@ -234,7 +234,7 @@ namespace HexEditor
 					}
 				}
 			}
-			else if (event == InputEvent::MouseDown)
+			else if (event == HexEngine::InputEvent::MouseDown)
 			{
 				if (data->MouseDown.button == VK_LBUTTON)
 				{
@@ -255,7 +255,7 @@ namespace HexEditor
 
 					if (IsMouseOver(true))
 					{
-						Point p;
+						HexEngine::Point p;
 						p.x = data->MouseDown.xpos - GetAbsolutePosition().x;
 						p.y = data->MouseDown.ypos - GetAbsolutePosition().y;
 
@@ -265,27 +265,27 @@ namespace HexEditor
 
 						if (_hoveredAsset != nullptr)
 						{
-							_contextMenu = new ContextMenu(this, p);
+							_contextMenu = new HexEngine::ContextMenu(this, p);
 
-							_contextMenu->AddItem(new ContextItem(L"Set Material", std::bind(&Explorer::SetMassMaterial, this)));
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Set Material", std::bind(&Explorer::SetMassMaterial, this)));
 						}
 						else
 						{
-							_contextMenu = new ContextMenu(this, p);
+							_contextMenu = new HexEngine::ContextMenu(this, p);
 
-							_contextMenu->AddItem(new ContextItem(L"Select All", std::bind(&Explorer::SelectAll, this)));
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Select All", std::bind(&Explorer::SelectAll, this)));
 
-							ContextItem* createNewItem = new ContextItem(L"Create new...", nullptr);
+							HexEngine::ContextItem* createNewItem = new HexEngine::ContextItem(L"Create new...", nullptr);
 
 							_contextMenu->AddItem(createNewItem);
 							auto newRoot = _contextMenu->CreateSubMenu(createNewItem);
 
-							_contextMenu->AddItem(new ContextItem(L"Material", std::bind(&Explorer::CreateNewMaterial, this, _currentlyBrowsedFolder)), newRoot);
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Material", std::bind(&Explorer::CreateNewMaterial, this, _currentlyBrowsedFolder)), newRoot);
 						}
 					}
 				}
 			}
-			else if (event == InputEvent::KeyDown)
+			else if (event == HexEngine::InputEvent::KeyDown)
 			{
 				if (data->KeyDown.key == VK_RETURN)
 				{
@@ -299,7 +299,7 @@ namespace HexEditor
 					}
 				}
 			}
-			else if (event == InputEvent::MouseUp)
+			else if (event == HexEngine::InputEvent::MouseUp)
 			{
 				if (data->KeyUp.key == VK_LBUTTON)
 				{
@@ -309,9 +309,9 @@ namespace HexEditor
 					if (_draggingAsset != nullptr)
 					{
 						int32_t mx, my;
-						g_pEnv->_inputSystem->GetMousePosition(mx, my);
+						HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
-						g_pEnv->_inputSystem->OnDragAndDropFiles({ _draggingAsset->path }, mx, my);
+						HexEngine::g_pEnv->_inputSystem->OnDragAndDropFiles({ _draggingAsset->path }, mx, my);
 
 						_draggingAsset = nullptr;
 					}
@@ -321,7 +321,7 @@ namespace HexEditor
 					}
 				}
 			}
-			else if (event == InputEvent::MouseMove)
+			else if (event == HexEngine::InputEvent::MouseMove)
 			{
 				if (_hoveredAsset != nullptr && _hoveredAsset->dragging == true && _dragStart.x != -1 && _dragStart.y != -1 && (abs(_dragStart.x - data->MouseMove.x) >= 2 || abs(_dragStart.y - data->MouseMove.y) >= 2))
 				{
@@ -340,7 +340,7 @@ namespace HexEditor
 					_canvas.Redraw();
 				}
 			}
-			else if (event == InputEvent::MouseWheel)
+			else if (event == HexEngine::InputEvent::MouseWheel)
 			{
 				_scrollOffset += data->MouseWheel.delta * 20;
 
@@ -352,7 +352,7 @@ namespace HexEditor
 		}
 		else
 		{
-			if (event == InputEvent::MouseUp)
+			if (event == HexEngine::InputEvent::MouseUp)
 			{
 				if (data->KeyUp.key == VK_LBUTTON)
 				{
@@ -362,12 +362,12 @@ namespace HexEditor
 					if (_draggingAsset != nullptr)
 					{
 						int32_t mx, my;
-						g_pEnv->_inputSystem->GetMousePosition(mx, my);
+						HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 						std::wstring relative = (_currentlyBrowsedFS->GetName() + L".") + fs::relative(_draggingAsset->path, _currentlyBrowsedFS->GetDataDirectory()).wstring();
 
 
-						g_pEnv->_inputSystem->OnDragAndDropFiles({ relative }, mx, my);
+						HexEngine::g_pEnv->_inputSystem->OnDragAndDropFiles({ relative }, mx, my);
 
 						_draggingAsset = nullptr;
 					}
@@ -392,11 +392,11 @@ namespace HexEditor
 				{
 					if (asset.path.extension() == ".hmesh")
 					{
-						auto mesh = Mesh::Create(asset.path);
-						mesh->SetMaterial(Material::Create("GameData.Materials/Main.hmat"));
+						auto mesh = HexEngine::Mesh::Create(asset.path);
+						mesh->SetMaterial(HexEngine::Material::Create("GameData.Materials/Main.hmat"));
 						mesh->Save();
 
-						g_pEnv->_iconService->RemoveIcon(asset.path);
+						HexEngine::g_pEnv->_iconService->RemoveIcon(asset.path);
 
 						SAFE_DELETE(asset.generatedIcon);
 					}
@@ -426,7 +426,7 @@ namespace HexEditor
 		if (path.extension() == ".mtl")
 			return;
 
-		IResourceLoader* resourceLoader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(path.extension().string());
+		HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(path.extension().string());
 
 		if (!resourceLoader)
 		{
@@ -434,10 +434,10 @@ namespace HexEditor
 			return;
 		}
 
-		ResourceLoadOptions opts;
+		HexEngine::ResourceLoadOptions opts;
 		opts.silenceErrors = true;		
 
-		std::shared_ptr<IResource> resource = g_pEnv->_resourceSystem->LoadResource(path, &opts);
+		std::shared_ptr<HexEngine::IResource> resource = HexEngine::g_pEnv->_resourceSystem->LoadResource(path, &opts);
 
 		if (resource && resourceLoader->GetResourceDirectory() == L"Meshes")
 		{
@@ -445,21 +445,21 @@ namespace HexEditor
 
 			//if (model->GetNumMeshes() > 0)
 			{
-				Entity* entity = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(path.stem().string()/*, math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(0.1f)*/);
+				HexEngine::Entity* entity = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(path.stem().string()/*, math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(0.1f)*/);
 
-				auto meshRenderer = entity->AddComponent<StaticMeshComponent>();
+				auto meshRenderer = entity->AddComponent<HexEngine::StaticMeshComponent>();
 
-				auto mesh = dynamic_pointer_cast<Mesh>(resource);
+				auto mesh = dynamic_pointer_cast<HexEngine::Mesh>(resource);
 
 				meshRenderer->SetMesh(mesh);
 
-				entity->GetComponent<Transform>()->SetScale(math::Vector3(10.0f));
+				entity->GetComponent<HexEngine::Transform>()->SetScale(math::Vector3(10.0f));
 
 				if (mesh->HasAnimations())
 				{
-					auto sac = entity->AddComponent<SkeletalAnimationComponent>();
+					auto sac = entity->AddComponent<HexEngine::SkeletalAnimationComponent>();
 
-					auto animatedMesh = dynamic_pointer_cast<AnimatedMesh>(mesh);
+					auto animatedMesh = dynamic_pointer_cast<HexEngine::AnimatedMesh>(mesh);
 
 					sac->SetAnimationData(animatedMesh, animatedMesh->GetAnimationData());
 				}
@@ -477,7 +477,7 @@ namespace HexEditor
 		UpdateFolderView();
 	}
 
-	void Explorer::RecurseList(ListNode* parent, const fs::path& path)
+	void Explorer::RecurseList(HexEngine::ListNode* parent, const fs::path& path)
 	{
 		for (auto it = fs::directory_iterator(path); it != fs::directory_iterator(); it++)
 		{
@@ -485,7 +485,7 @@ namespace HexEditor
 
 			if (fs::is_directory(p))
 			{
-				ListNode* currentItem = new ListNode(_folderView, fs::relative(p, path), { g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open.get(), g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get() });
+				HexEngine::ListNode* currentItem = new HexEngine::ListNode(_folderView, fs::relative(p, path), { HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open.get(), HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get() });
 
 				currentItem->_onClick = std::bind(&Explorer::OnClickFolder, this, _folderView, std::placeholders::_1, std::placeholders::_2);
 				
@@ -498,7 +498,7 @@ namespace HexEditor
 
 	void Explorer::UpdateFolderView()
 	{
-		g_pEnv->_sceneManager->GetCurrentScene()->Lock();
+		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->Lock();
 
 		_canvas.Redraw();
 
@@ -515,20 +515,20 @@ namespace HexEditor
 			RecurseList(rootPath, g_pEditor->_projectFS->GetDataDirectory());
 		}*/
 
-		for (auto& fs : g_pEnv->_resourceSystem->GetFileSystems())
+		for (auto& fs : HexEngine::g_pEnv->_resourceSystem->GetFileSystems())
 		{
 			bool a = false;
 
-			auto rootPath = new ListNode(
+			auto rootPath = new HexEngine::ListNode(
 				_folderView,
 				std::wstring(fs->GetName().begin(), fs->GetName().end()),
-				{ g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open.get(), g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get() },
+				{ HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open.get(), HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get() },
 				fs);
 			_folderView->AddNode(rootPath);
 
-			ListNode* lastItem = rootPath;
+			HexEngine::ListNode* lastItem = rootPath;
 
-			std::list<ListNode*> directoryList;
+			std::list<HexEngine::ListNode*> directoryList;
 			directoryList.push_back(lastItem);
 
 			int32_t lastDepth = 0;
@@ -618,10 +618,10 @@ namespace HexEditor
 		//	}
 		//}
 
-		g_pEnv->_sceneManager->GetCurrentScene()->Unlock();
+		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->Unlock();
 	}
 
-	void Explorer::UpdateAssets(const fs::path& relativePath, FileSystem* fs)
+	void Explorer::UpdateAssets(const fs::path& relativePath, HexEngine::FileSystem* fs)
 	{
 		_assetsPath = relativePath;
 
@@ -693,11 +693,11 @@ namespace HexEditor
 				AssetDesc desc;
 				desc.path = p;
 
-				if (auto existingIcon = g_pEnv->_iconService->GetIcon(p); existingIcon != nullptr)
+				if (auto existingIcon = HexEngine::g_pEnv->_iconService->GetIcon(p); existingIcon != nullptr)
 					desc.icon = existingIcon;
 				else
 				{
-					g_pEnv->_iconService->PushFilePathForIconGeneration(p);
+					HexEngine::g_pEnv->_iconService->PushFilePathForIconGeneration(p);
 
 					SHFILEINFO stFileInfo;
 					SHGetFileInfo(p.path().wstring().c_str(),
@@ -739,7 +739,7 @@ namespace HexEditor
 					pixelData.SysMemPitch = BM.bmWidth * bpp;
 					pixelData.SysMemSlicePitch = 0;
 
-					desc.icon = g_pEnv->_graphicsDevice->CreateTexture2D(BM.bmWidth, BM.bmHeight, DXGI_FORMAT_R8G8B8A8_UNORM,
+					desc.icon = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(BM.bmWidth, BM.bmHeight, DXGI_FORMAT_R8G8B8A8_UNORM,
 						1, D3D11_BIND_SHADER_RESOURCE,
 						0, 1, 0,
 						&pixelData,
@@ -757,14 +757,14 @@ namespace HexEditor
 		}
 	}
 
-	void Explorer::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void Explorer::Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		renderer->PushDrawList();
 
 		Dock::Render(renderer, w, h);		
 	}
 
-	void Explorer::PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void Explorer::PostRenderChildren(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		renderer->ListDraw(renderer->GetDrawList());
 		renderer->PopDrawList();
@@ -784,7 +784,7 @@ namespace HexEditor
 		renderer->PopDrawList();
 	}
 
-	void Explorer::RenderAssetExplorer(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void Explorer::RenderAssetExplorer(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		const int32_t IconSize = 140;
 
@@ -807,7 +807,7 @@ namespace HexEditor
 				scissor.top = y;
 				scissor.right = _size.x;
 				scissor.bottom = y + _size.y;
-				g_pEnv->_graphicsDevice->SetScissorRect(scissor);
+				HexEngine::g_pEnv->_graphicsDevice->SetScissorRect(scissor);
 
 				y += _scrollOffset;
 
@@ -829,11 +829,11 @@ namespace HexEditor
 							{
 								if (_hoveredAsset != _lastHoveredAsset)
 								{
-									_hoverStartTime = g_pEnv->_timeManager->_currentTime;
+									_hoverStartTime = HexEngine::g_pEnv->_timeManager->_currentTime;
 									_lastHoveredAsset = _hoveredAsset;
 								}
 
-								if (_hoverStartTime != 0.0f && g_pEnv->_timeManager->_currentTime - _hoverStartTime > 0.1f)
+								if (_hoverStartTime != 0.0f && HexEngine::g_pEnv->_timeManager->_currentTime - _hoverStartTime > 0.1f)
 								{
 									drawFullName = true;
 								}
@@ -842,7 +842,7 @@ namespace HexEditor
 
 						if (!asset.generatedIcon)
 						{
-							if (auto generatedIcon = g_pEnv->_iconService->GetIcon(asset.path); generatedIcon != nullptr)
+							if (auto generatedIcon = HexEngine::g_pEnv->_iconService->GetIcon(asset.path); generatedIcon != nullptr)
 							{
 								//renderer->PushFillTexturedQuad(&_drawList, generatedIcon, x, y, IconSize, IconSize, math::Color(1, 1, 1, 1));
 								asset.generatedIcon = generatedIcon;
@@ -875,7 +875,7 @@ namespace HexEditor
 								while (true)
 								{
 									int32_t width, height;
-									renderer->_style.font->MeasureText((int32_t)Style::FontSize::Titchy, assetNameToDisplay, width, height);
+									renderer->_style.font->MeasureText((int32_t)HexEngine::Style::FontSize::Titchy, assetNameToDisplay, width, height);
 
 									if (width >= IconSize)
 										assetNameToDisplay.pop_back();
@@ -888,7 +888,7 @@ namespace HexEditor
 
 							assetNameToDisplay = asset.assetNameShort;
 
-							renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Titchy, x + IconSize / 2, y + IconSize + 2, hovering ? renderer->_style.text_highlight : renderer->_style.text_regular, FontAlign::CentreLR, assetNameToDisplay);
+							renderer->PrintText(renderer->_style.font.get(), (uint8_t)HexEngine::Style::FontSize::Titchy, x + IconSize / 2, y + IconSize + 2, hovering ? renderer->_style.text_highlight : renderer->_style.text_regular, HexEngine::FontAlign::CentreLR, assetNameToDisplay);
 						}
 						else
 						{
@@ -908,15 +908,15 @@ namespace HexEditor
 				}
 
 				//g_pEnv->_uiManager->GetRenderer()->ListDraw(&_drawList);
-				g_pEnv->_graphicsDevice->ClearScissorRect();
+				HexEngine::g_pEnv->_graphicsDevice->ClearScissorRect();
 
 				if (fullNameToDraw.length() > 0)
 				{
 					int32_t width, height;
-					renderer->_style.font->MeasureText((int32_t)Style::FontSize::Titchy, fullNameToDraw, width, height);
+					renderer->_style.font->MeasureText((int32_t)HexEngine::Style::FontSize::Titchy, fullNameToDraw, width, height);
 
 					renderer->FillQuad(hoverX - ((width / 2) + 3), hoverY - 1, width + 6, height + 4, math::Color(0.1f, 0.1f, 0.1f, 1.0f));
-					renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Titchy, hoverX, hoverY, renderer->_style.text_highlight, FontAlign::CentreLR, fullNameToDraw);
+					renderer->PrintText(renderer->_style.font.get(), (uint8_t)HexEngine::Style::FontSize::Titchy, hoverX, hoverY, renderer->_style.text_highlight, HexEngine::FontAlign::CentreLR, fullNameToDraw);
 				}			
 			}		
 
@@ -941,10 +941,10 @@ namespace HexEditor
 		if (_draggingAsset != nullptr)
 		{
 			int32_t mx, my;
-			g_pEnv->_inputSystem->GetMousePosition(mx, my);
+			HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
 			renderer->FillTexturedQuad(_draggingAsset->icon, mx - IconSize / 2, my - IconSize / 2, IconSize, IconSize, math::Color(1.0f, 1.0f, 1.0f, 0.5f));
-			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Titchy, mx + IconSize / 2, my + IconSize + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _draggingAsset->path.filename().wstring());
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)HexEngine::Style::FontSize::Titchy, mx + IconSize / 2, my + IconSize + 2, renderer->_style.text_highlight, HexEngine::FontAlign::CentreLR, _draggingAsset->path.filename().wstring());
 		}
 
 		//g_pEnv->_uiManager->GetRenderer()->ListDraw(&_drawList);

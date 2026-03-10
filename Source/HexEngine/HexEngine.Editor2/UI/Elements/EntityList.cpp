@@ -18,10 +18,10 @@ namespace HexEditor
 		_onEntityClicked = std::bind(&Inspector::InspectEntity, g_pUIManager->GetInspector(), std::placeholders::_2);
 		_onEntityParented = std::bind(&EntityList::SetEntityParent, this, std::placeholders::_2, std::placeholders::_3);
 
-		_newFolderImg = ITexture2D::Create("EngineData.Textures/UI/folder_new.png");
+		_newFolderImg = HexEngine::ITexture2D::Create("EngineData.Textures/UI/folder_new.png");
 
-		_entitySearch = new LineEdit(this, Point(0, 0), Point(size.x - (IconSize + 10), IconSize - 5), L"");
-		_entitySearch->SetIcon(ITexture2D::Create("EngineData.Textures/UI/magnifying_glass.png"), math::Color(HEX_RGBA_TO_FLOAT4(140, 140, 140, 255)));
+		_entitySearch = new HexEngine::LineEdit(this, HexEngine::Point(0, 0), HexEngine::Point(size.x - (IconSize + 10), IconSize - 5), L"");
+		_entitySearch->SetIcon(HexEngine::ITexture2D::Create("EngineData.Textures/UI/magnifying_glass.png"), math::Color(HEX_RGBA_TO_FLOAT4(140, 140, 140, 255)));
 		_entitySearch->SetDoesCallbackWaitForReturn(false);
 		//_entitySearch->SetOnInputFn()
 	}
@@ -43,12 +43,12 @@ namespace HexEditor
 
 	}
 
-	void EntityList::SaveAsPrefab(Entity* entity, FileSystem* fs)
+	void EntityList::SaveAsPrefab(HexEngine::Entity* entity, HexEngine::FileSystem* fs)
 	{
 		HexEngine::EntityList::SaveAsPrefab(entity, g_pEditor->_projectFS);
 	}
 
-	void EntityList::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void EntityList::Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		//auto dl = renderer->PushDrawList();
 

@@ -7,7 +7,7 @@
 //int32_t HexEngine::g_numVars = 0;
 //int32_t HexEngine::g_numCommands = 0;
 
-IGameExtension* LoadGameExtension()
+HexEngine::IGameExtension* LoadGameExtension()
 {
 	fs::path gameDllPath = fs::current_path() / fs::path(L"Game.dll");
 
@@ -21,7 +21,7 @@ IGameExtension* LoadGameExtension()
 		return nullptr;
 	}
 
-	using tCreateGame = IGameExtension * (*)(IEnvironment* pEnv);
+	using tCreateGame = HexEngine::IGameExtension * (*)(HexEngine::IEnvironment* pEnv);
 	tCreateGame CreateGame = (tCreateGame)GetProcAddress(gameDll, "CreateGame");
 
 	if (!CreateGame)
@@ -30,7 +30,7 @@ IGameExtension* LoadGameExtension()
 		return nullptr;
 	}
 
-	return CreateGame(g_pEnv);
+	return CreateGame(HexEngine::g_pEnv);
 }
 
 int WinMain(
@@ -44,27 +44,27 @@ int WinMain(
 
 	// Get the desktop resolution
 	int screenWidth, screenheight;
-	Window::GetDesktopResolution(screenWidth, screenheight);
+	HexEngine::Window::GetDesktopResolution(screenWidth, screenheight);
 
 	
 
 	// Initialise a game window for rendering
 	//
-	Window* mainWindow = Window::Create(0, 0, screenWidth, screenheight, DisplayMode::FullscreenBorderless, "A Hex Engine Game");
+	HexEngine::Window* mainWindow = HexEngine::Window::Create(0, 0, screenWidth, screenheight, HexEngine::DisplayMode::FullscreenBorderless, "A Hex Engine Game");
 
 	// Create a new Game3DOptions instance
 	//
-	Game3DOptions environmentOpts;
+	HexEngine::Game3DOptions environmentOpts;
 
 	environmentOpts.window = mainWindow;
 
 	// Create a 3D Game environment
 	//
-	if (Game3DEnvironment::Create(environmentOpts) == nullptr)
+	if (HexEngine::Game3DEnvironment::Create(environmentOpts) == nullptr)
 	{
-		Window::Destroy(mainWindow);
+		HexEngine::Window::Destroy(mainWindow);
 
-		DestroyEnvironment();
+		HexEngine::DestroyEnvironment();
 
 		// Add an error message here?
 		return EXIT_FAILURE;
@@ -75,31 +75,31 @@ int WinMain(
 	if (pGameExtension)
 	{
 		// mainWindow->SetTitle ...
-		g_pEnv->AddGameExtension(pGameExtension);
+		HexEngine::g_pEnv->AddGameExtension(pGameExtension);
 		pGameExtension->OnRegisterClasses();
 		pGameExtension->OnLoadGameWorld();
 		pGameExtension->OnCreateGame();
 	}
 
 	// Rebuild the PVS after game launch
-	g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+	HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 
 	//g_pEnv->_inputSystem->EnableRawInput(true);
 
 	// Now that everything is created, enter the game loop
 	//
-	while (g_pEnv->IsRunning())
+	while (HexEngine::g_pEnv->IsRunning())
 	{
-		g_pEnv->Run();
+		HexEngine::g_pEnv->Run();
 	}
 
 	pGameExtension->OnStopGame();
 
-	Window::Destroy(mainWindow);
+	HexEngine::Window::Destroy(mainWindow);
 
 	// Finally, destroy the environment
 	//
-	DestroyEnvironment();
+	HexEngine::DestroyEnvironment();
 
 	// this will show as a leak, but its not
 	return EXIT_SUCCESS;

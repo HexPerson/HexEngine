@@ -5,12 +5,12 @@
 
 namespace HexEditor
 {
-	class MaterialEditor : public Dialog
+	class MaterialEditor : public HexEngine::Dialog
 	{
 	public:
-		MaterialEditor(Element* parent, const Point& position, const Point& size);
+		MaterialEditor(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size);
 		~MaterialEditor();
 
-		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
+		virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 	};
 }

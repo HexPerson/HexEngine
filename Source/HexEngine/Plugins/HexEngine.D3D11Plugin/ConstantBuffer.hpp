@@ -4,25 +4,22 @@
 
 #include <HexEngine.Core/Graphics/IConstantBuffer.hpp>
 
-namespace HexEngine
+class ConstantBuffer : public HexEngine::IConstantBuffer
 {
-	class ConstantBuffer : public IConstantBuffer
-	{
-		friend class GraphicsDeviceD3D11;
+	friend class GraphicsDeviceD3D11;
 
-	public:
-		ConstantBuffer(uint32_t bufferSize);
+public:
+	ConstantBuffer(uint32_t bufferSize);
 
-		virtual ~ConstantBuffer();
+	virtual ~ConstantBuffer();
 
-		virtual void Destroy() override;
+	virtual void Destroy() override;
 
-		virtual void* GetNativePtr() override;
+	virtual void* GetNativePtr() override;
 
-		virtual bool Write(void* data, uint32_t size) override;
+	virtual bool Write(void* data, uint32_t size) override;
 
-	private:
-		ID3D11Buffer* _buffer = nullptr;
-		uint8_t* _data = nullptr;
-	};
-}
+private:
+	ID3D11Buffer* _buffer = nullptr;
+	uint8_t* _data = nullptr;
+};

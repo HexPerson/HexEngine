@@ -92,6 +92,8 @@ MAKE_VERSION(HexEditorVersion, 0, 1);
 #define HEX_HASFLAG(val,flag) (((uint32_t)val & (uint32_t)flag) != 0)
 #define HEX_NOTHASFLAG(val,flag) (((uint32_t)val & (uint32_t)flag) == 0)
 
+#define HEX_ASSERT(x) assert(x)
+
 #define CHECK_HR(x) if(auto hr = x; FAILED(hr))\
 {\
 	LOG_CRIT(#x" failed: 0x%X", hr);\

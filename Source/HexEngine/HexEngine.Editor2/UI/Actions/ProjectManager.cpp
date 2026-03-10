@@ -6,27 +6,27 @@
 
 namespace HexEditor
 {
-	ProjectManager::ProjectManager(Element* parent, const Point& position, const Point& size) :
+	ProjectManager::ProjectManager(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		Dialog(parent, position, size, L"Project Manager")
 	{
-		_newProjectGroup = new GroupBox(this, Point(10, 10), Point(780, 150), L"Create New");
+		_newProjectGroup = new HexEngine::GroupBox(this, HexEngine::Point(10, 10), HexEngine::Point(780, 150), L"Create New");
 		{
-			_projectName = new LineEdit(_newProjectGroup, Point(10, 10), Point(600, 26), L"Project Name");
-			_projectPath = new LineEdit(_newProjectGroup, Point(10, 50), Point(600, 26), L"Project Path");
-			_namespaceName = new LineEdit(_newProjectGroup, Point(10, 90), Point(600, 26), L"Namespace");
-			_browsePathBtn = new Button(_newProjectGroup, Point(630, 50), Point(130, 26), L"Browse...", std::bind(&ProjectManager::OnBrowseFolderPath, this));
+			_projectName = new HexEngine::LineEdit(_newProjectGroup, HexEngine::Point(10, 10), HexEngine::Point(600, 26), L"Project Name");
+			_projectPath = new HexEngine::LineEdit(_newProjectGroup, HexEngine::Point(10, 50), HexEngine::Point(600, 26), L"Project Path");
+			_namespaceName = new HexEngine::LineEdit(_newProjectGroup, HexEngine::Point(10, 90), HexEngine::Point(600, 26), L"Namespace");
+			_browsePathBtn = new HexEngine::Button(_newProjectGroup, HexEngine::Point(630, 50), HexEngine::Point(130, 26), L"Browse...", std::bind(&ProjectManager::OnBrowseFolderPath, this));
 
 			_projectName->SetLabelMinSize(140);
 			_projectPath->SetLabelMinSize(140);
 			_namespaceName->SetLabelMinSize(140);
 			_projectPath->EnableInput(false);
 
-			_createProjectBtn = new Button(_newProjectGroup, Point(630, 90), Point(130, 26), L"Create", std::bind(&ProjectManager::OnCreateProject, this));
+			_createProjectBtn = new HexEngine::Button(_newProjectGroup, HexEngine::Point(630, 90), HexEngine::Point(130, 26), L"Create", std::bind(&ProjectManager::OnCreateProject, this));
 		}
 
-		_oldProjectsGroup = new GroupBox(this, Point(10, 180), Point(780, 260), L"Previous projects");
+		_oldProjectsGroup = new HexEngine::GroupBox(this, HexEngine::Point(10, 180), HexEngine::Point(780, 260), L"Previous projects");
 		{
-			_oldProjectsList = new ListBox(_oldProjectsGroup, Point(10, 10), Point(600, 230));
+			_oldProjectsList = new HexEngine::ListBox(_oldProjectsGroup, HexEngine::Point(10, 10), HexEngine::Point(600, 230));
 			_oldProjectsList->OnClickItem = std::bind(&ProjectManager::OnClickExistingProject, this, std::placeholders::_1, std::placeholders::_2);
 		}
 	}
@@ -35,15 +35,15 @@ namespace HexEditor
 	{
 	}
 
-	bool ProjectManager::OnClickExistingProject(ListBox* box, ListBox::Item* item)
+	bool ProjectManager::OnClickExistingProject(HexEngine::ListBox* box, HexEngine::ListBox::Item* item)
 	{
 		fs::path projectPath(item->label);
 
 		if (_onCompleted)
 		{
-			LoadingDialog* loadingDlg = new LoadingDialog(g_pUIManager->GetRootElement(), Point(g_pUIManager->GetWidth() / 2 - 220, g_pUIManager->GetHeight() / 2 - 60), Point(440, 120), L"Loading");
+			HexEngine::LoadingDialog* loadingDlg = new HexEngine::LoadingDialog(g_pUIManager->GetRootElement(), HexEngine::Point(g_pUIManager->GetWidth() / 2 - 220, g_pUIManager->GetHeight() / 2 - 60), HexEngine::Point(440, 120), L"Loading");
 
-			std::thread thread([](const fs::path p, LoadingDialog* dlg, const std::wstring namesp, OnCompleted fn)
+			std::thread thread([](const fs::path p, HexEngine::LoadingDialog* dlg, const std::wstring namesp, OnCompleted fn)
 				{
 					fn(p.parent_path(), p.filename().string(), true, namesp, dlg);
 				},
@@ -58,7 +58,7 @@ namespace HexEditor
 	ProjectManager* ProjectManager::CreateProjectManagerDialog(Element* parent, OnCompleted onCompletedAction)
 	{
 		uint32_t width, height;
-		g_pEnv->GetScreenSize(width, height);
+		HexEngine::g_pEnv->GetScreenSize(width, height);
 
 		int32_t centrex = width >> 1;
 		int32_t centrey = height >> 1;
@@ -66,7 +66,7 @@ namespace HexEditor
 		const int32_t sizex = 800;
 		const int32_t sizey = 480;
 
-		ProjectManager* pm = new ProjectManager(parent, Point(centrex - sizex / 2, centrey - sizey / 2), Point(sizex, sizey));
+		ProjectManager* pm = new ProjectManager(parent, HexEngine::Point(centrex - sizex / 2, centrey - sizey / 2), HexEngine::Point(sizex, sizey));
 
 		pm->ReadProjectList();
 		pm->BringToFront();
@@ -85,14 +85,14 @@ namespace HexEditor
 		return 0;
 	};
 
-	void ProjectManager::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void ProjectManager::Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
-		//renderer->SetDrawList(&_drawList);
+		//renderer->SetDrawList(&_drawList);6
 
 		Dialog::Render(renderer, w, h);
 	}
 
-	void ProjectManager::PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	void ProjectManager::PostRenderChildren(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		renderer->ListDraw(&_drawList);
 	}
@@ -100,7 +100,7 @@ namespace HexEditor
 	bool ProjectManager::OnBrowseFolderPath()
 	{
 		wchar_t baseDirectory[MAX_PATH];
-		wcscpy_s(baseDirectory, g_pEnv->_fileSystem->GetBaseDirectory().wstring().c_str());
+		wcscpy_s(baseDirectory, HexEngine::g_pEnv->_fileSystem->GetBaseDirectory().wstring().c_str());
 
 		BROWSEINFO bi = { 0 };
 		bi.lpszTitle = L"Browse for folder...";
@@ -142,7 +142,7 @@ namespace HexEditor
 
 	void ProjectManager::ReadProjectList()
 	{
-		DiskFile file(g_pEnv->_fileSystem->GetLocalAbsolutePath(L"Projects.json"), std::ios::in);
+		HexEngine::DiskFile file(HexEngine::g_pEnv->_fileSystem->GetLocalAbsolutePath(L"Projects.json"), std::ios::in);
 
 		if (file.Open())
 		{
@@ -158,7 +158,7 @@ namespace HexEditor
 
 				auto v = val.get<std::string>();
 
-				_oldProjectsList->AddItem(std::wstring(v.begin(), v.end()), g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get());
+				_oldProjectsList->AddItem(std::wstring(v.begin(), v.end()), HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get());
 			}
 
 			file.Close();
@@ -180,7 +180,7 @@ namespace HexEditor
 		_projectListData["projects"].push_back(path);
 
 		// update the project file on disk
-		DiskFile file(g_pEnv->_fileSystem->GetLocalAbsolutePath(L"Projects.json"), std::ios::out | std::ios::trunc);
+		HexEngine::DiskFile file(HexEngine::g_pEnv->_fileSystem->GetLocalAbsolutePath(L"Projects.json"), std::ios::out | std::ios::trunc);
 
 		if (file.Open())
 		{

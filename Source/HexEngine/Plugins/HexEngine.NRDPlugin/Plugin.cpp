@@ -42,12 +42,12 @@ void NRDPlugin::GetVersionData(VersionData* data)
 /// </summary>
 /// <param name="interfaceName">The name of the interface being searched for</param>
 /// <returns>A pointer to an implemented interface if found, or null if not.</returns>
-IPluginInterface* NRDPlugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* NRDPlugin::CreateInterface(const std::string& interfaceName)
 {
 	// generally you'd use a InterfaceName from the interface you want to override, e.g. IModelImporter::InterfaceName as this is guaranteed to be correct for the version being implemented.
 	// You can use string literals too, but its not recommended
 	//
-	if (interfaceName == IDenoiserProvider::InterfaceName)
+	if (interfaceName == HexEngine::IDenoiserProvider::InterfaceName)
 		return _interface;
 
 	return nullptr;

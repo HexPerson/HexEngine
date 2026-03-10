@@ -14,7 +14,7 @@ namespace HexEngine
 		_current.right = math::Vector3::Right;
 		_current.up = math::Vector3::Up;
 
-		_arrow = Mesh::Create("EngineData.Models/Primitives/Arrow.hmesh");
+		//_arrow = Mesh::Create("EngineData.Models/Primitives/Arrow.hmesh");
 	}
 
 	void Transform::UpdateRotation()

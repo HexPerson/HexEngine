@@ -66,7 +66,7 @@ int WinMain(
 
 	// Create a new Game3DOptions instance
 	//
-	Game3DOptions environmentOpts;
+	HexEngine::Game3DOptions environmentOpts;
 
 	environmentOpts.window = HexCreator::g_pCreator->_app._window;
 	//environmentOpts.windowWidth = app.window()->width();
@@ -77,22 +77,22 @@ int WinMain(
 
 	// Create a 3D Game environment
 	//
-	if (Game3DEnvironment::Create(environmentOpts) == nullptr)
+	if (HexEngine::Game3DEnvironment::Create(environmentOpts) == nullptr)
 	{
 		//Window::Destroy(mainWindow);
 
-		DestroyEnvironment();
+		HexEngine::DestroyEnvironment();
 
 		return EXIT_FAILURE;
 	}
 
 	HexCreator::g_pCreator->_app.CreateTile(512, 512, 1.25);
-	g_pEnv->_inputSystem->AddInputListener(&HexCreator::g_pCreator->_app, InputEventMaskAllDesktop);
+	HexEngine::g_pEnv->_inputSystem->AddInputListener(&HexCreator::g_pCreator->_app, InputEventMaskAllDesktop);
 
 	//PrepareShaderHotReload();
 
-	g_pEnv->SetEditorMode(true);
-	g_pEnv->AddGameExtension(HexCreator::g_pCreator);
+	HexEngine::g_pEnv->SetEditorMode(true);
+	HexEngine::g_pEnv->AddGameExtension(HexCreator::g_pCreator);
 	HexCreator::g_pCreator->OnCreateGame();
 
 	//SAFE_DELETE(g_pEnv->_uiManager);
@@ -101,9 +101,9 @@ int WinMain(
 
 	//g_pEnv->_inputSystem->SetMouseMode(dx::Mouse::Mode::MODE_ABSOLUTE);
 
-	while (g_pEnv->IsRunning())
+	while (HexEngine::g_pEnv->IsRunning())
 	{
-		g_pEnv->Run();		
+		HexEngine::g_pEnv->Run();
 	}
 
 	// release the hot reloaded shaders, this really just deletes memory
@@ -116,7 +116,7 @@ int WinMain(
 
 	// Finally, destroy the environment
 	//
-	DestroyEnvironment();
+	HexEngine::DestroyEnvironment();
 
 	// this will show as a leak, but its not
 	SAFE_DELETE(HexCreator::g_pCreator);

@@ -12,7 +12,7 @@ namespace HexCreator
 	{
 		_app.Run();
 
-		auto renderer = g_pEnv->_uiManager->GetRenderer();	
+		auto renderer = HexEngine::g_pEnv->GetUIManager().GetRenderer();
 
 		for (auto& tile : _app._tiles)
 		{

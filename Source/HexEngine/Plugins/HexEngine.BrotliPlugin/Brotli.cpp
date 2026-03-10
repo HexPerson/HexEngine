@@ -9,7 +9,7 @@ static const size_t kFileBufferSize = 1 << 19;
 
 bool Brotli::CompressFile(const fs::path& absolutePath, const fs::path& output)
 {
-    DiskFile file(absolutePath, std::ios::in | std::ios::binary);
+    HexEngine::DiskFile file(absolutePath, std::ios::in | std::ios::binary);
 
     if (!file.Open())
         return false;
@@ -26,7 +26,7 @@ bool Brotli::CompressFile(const fs::path& absolutePath, const fs::path& output)
     if (!CompressData(uncompressed, compressed))
         return false;
 
-    DiskFile out(output, std::ios::out | std::ios::binary);
+    HexEngine::DiskFile out(output, std::ios::out | std::ios::binary);
 
     if (!out.Open())
         return false;
@@ -39,7 +39,7 @@ bool Brotli::CompressFile(const fs::path& absolutePath, const fs::path& output)
 
 bool Brotli::DecompressFile(const fs::path& absolutePath, const fs::path& output)
 {
-    DiskFile file(absolutePath, std::ios::in | std::ios::binary);
+    HexEngine::DiskFile file(absolutePath, std::ios::in | std::ios::binary);
 
     if (!file.Open())
         return false;
@@ -56,7 +56,7 @@ bool Brotli::DecompressFile(const fs::path& absolutePath, const fs::path& output
     if (!DecompressData(compressed, uncompressed))
         return false;
 
-    DiskFile out(output, std::ios::out | std::ios::binary);
+    HexEngine::DiskFile out(output, std::ios::out | std::ios::binary);
 
     if (!out.Open())
         return false;
@@ -69,7 +69,7 @@ bool Brotli::DecompressFile(const fs::path& absolutePath, const fs::path& output
 
 bool Brotli::CompressFile(const fs::path& absolutePath, std::vector<uint8_t>& output)
 {
-    DiskFile file(absolutePath, std::ios::in | std::ios::binary);
+    HexEngine::DiskFile file(absolutePath, std::ios::in | std::ios::binary);
 
     if (!file.Open())
         return false;
@@ -91,7 +91,7 @@ bool Brotli::CompressFile(const fs::path& absolutePath, std::vector<uint8_t>& ou
 
 bool Brotli::DecompressFile(const fs::path& absolutePath, std::vector<uint8_t>& output)
 {
-    DiskFile file(absolutePath, std::ios::in | std::ios::binary);
+    HexEngine::DiskFile file(absolutePath, std::ios::in | std::ios::binary);
 
     if (!file.Open())
         return false;

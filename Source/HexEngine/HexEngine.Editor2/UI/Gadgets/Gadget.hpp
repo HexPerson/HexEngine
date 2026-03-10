@@ -17,7 +17,7 @@ namespace HexEditor
 		
 		Gadget(const std::vector<char>& hotkeys, char confirmKey, char cancelKey);
 
-		virtual bool OnInputEvent(InputEvent event, InputData* data);
+		virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data);
 
 		virtual void Update() {}
 

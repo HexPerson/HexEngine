@@ -27,7 +27,7 @@ void NRDInterface::Destroy()
 	nrd::DestroyInstance(*_instance);
 }
 
-void NRDInterface::CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITexture2D* normals, ITexture2D* albedo)
+void NRDInterface::CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* beauty, HexEngine::ITexture2D* normals, HexEngine::ITexture2D* albedo)
 {
 	if (_created)
 		return;
@@ -63,12 +63,12 @@ void NRDInterface::CreateBuffers(int32_t width, int32_t height, ITexture2D* beau
 	_created = true;
 }
 
-void NRDInterface::BuildFrameData(DenoiserFrameData& fd, ITexture2D* beauty, ITexture2D* normals, ITexture2D* albedo)
+void NRDInterface::BuildFrameData(HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* beauty, HexEngine::ITexture2D* normals, HexEngine::ITexture2D* albedo)
 {
 	
 }
 
-void NRDInterface::FilterFrame(const DenoiserFrameData& fd, ITexture2D* beauty)
+void NRDInterface::FilterFrame(const HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* beauty)
 {
 	nrd::CommonSettings cs;
 
@@ -81,7 +81,7 @@ void NRDInterface::FilterFrame(const DenoiserFrameData& fd, ITexture2D* beauty)
 	cs.cameraJitter[0] = (fd.jitter.x / 2.0f) * fd.camera->GetViewport().width;
 	cs.cameraJitter[1] = (fd.jitter.y / 2.0f) * fd.camera->GetViewport().height;
 
-	cs.frameIndex = (uint32_t)g_pEnv->_timeManager->_frameCount;
+	cs.frameIndex = (uint32_t)HexEngine::g_pEnv->_timeManager->_frameCount;
 
 	cs.resourceSize[0] = beauty->GetWidth();
 	cs.resourceSize[1] = beauty->GetHeight();

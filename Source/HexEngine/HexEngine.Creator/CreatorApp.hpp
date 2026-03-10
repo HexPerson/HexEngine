@@ -145,11 +145,11 @@ namespace HexCreator
 
         virtual ~CreatorApp() {}
 
-        virtual bool OnInputEvent(InputEvent event, InputData* data) override
+        virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data) override
         {
             switch (event)
             {
-            case InputEvent::MouseMove:
+            case HexEngine::InputEvent::MouseMove:
             {
                 ultralight::MouseEvent evt;
                 evt.type = ultralight::MouseEvent::kType_MouseMoved;
@@ -160,7 +160,7 @@ namespace HexCreator
                 break;
             }
 
-            case InputEvent::MouseDown:
+            case HexEngine::InputEvent::MouseDown:
             {
                 ultralight::MouseEvent evt;
                 evt.type = ultralight::MouseEvent::kType_MouseDown;

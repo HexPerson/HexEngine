@@ -52,7 +52,7 @@ namespace HexEngine
 
 	struct AnimatedMeshVertex : MeshVertex
 	{
-		void AddBoneData(uint32_t BoneID, float Weight)
+		void AddBoneData(uint32_t BoneID, float Weight) const
 		{
 			for (uint32_t i = 0; i < 4; i++)
 			{
@@ -71,8 +71,8 @@ namespace HexEngine
 			//    assert(0);
 		}
 
-		math::Vector4 _boneIds;
-		math::Vector4 _boneWeights;
+		mutable math::Vector4 _boneIds;
+		mutable math::Vector4 _boneWeights;
 	};
 
 	struct SimpleAnimatedMeshVertex : SimpleMeshVertex
@@ -234,8 +234,10 @@ namespace HexEngine
 		virtual bool HasAnimations() const { return false; }
 
 		virtual std::shared_ptr<AnimationData> GetAnimationData() const { return nullptr; }
-
 		virtual std::shared_ptr<AnimationData> CreateAnimationData() { return nullptr; }
+
+		void SetMaterialName(const std::string& matName);
+		const std::string& GetMaterialName() const;
 
 	public:
 		MeshInstance* _instance = nullptr;

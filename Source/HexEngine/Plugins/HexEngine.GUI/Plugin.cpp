@@ -45,7 +45,7 @@ void SamplePlugin::GetVersionData(VersionData* data)
 /// </summary>
 /// <param name="interfaceName">The name of the interface being searched for</param>
 /// <returns>A pointer to an implemented interface if found, or null if not.</returns>
-IPluginInterface* SamplePlugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* SamplePlugin::CreateInterface(const std::string& interfaceName)
 {
 	// generally you'd use a InterfaceName from the interface you want to override, e.g. IModelImporter::InterfaceName as this is guaranteed to be correct for the version being implemented.
 	// You can use string literals too, but its not recommended
