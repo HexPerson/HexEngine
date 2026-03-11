@@ -12,12 +12,12 @@ namespace HexEngine
 {
 	MaterialLoader::MaterialLoader()
 	{
-		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
 	}
 
 	MaterialLoader::~MaterialLoader()
 	{
-		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 	}
 
 	std::shared_ptr<IResource> MaterialLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
@@ -289,7 +289,7 @@ namespace HexEngine
 		if (mat)
 		{
 			MaterialDialog* dlg = new MaterialDialog(
-				g_pEnv->_uiManager->GetRootElement(),
+				g_pEnv->GetUIManager().GetRootElement(),
 				Point(cx - dlgW / 2, cy - dlgH / 2),
 				Point(dlgW, dlgH),
 				std::format(L"Editing Material '{}'", paths[0].filename().wstring()),

@@ -61,12 +61,12 @@ aiProcess_OptimizeMeshes | // join small meshes, if possible;
 
 AssimpModelImporter::AssimpModelImporter()
 {
-	HexEngine::g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+	HexEngine::g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
 }
 
 AssimpModelImporter::~AssimpModelImporter()
 {
-	HexEngine::g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+	HexEngine::g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 }
 
 void AssimpModelImporter::Destroy()
@@ -79,7 +79,7 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 	const int32_t height = 600;
 
 	HexEngine::Dialog* dlg = new HexEngine::Dialog(
-		HexEngine::g_pEnv->_uiManager->GetRootElement(),
+		HexEngine::g_pEnv->GetUIManager().GetRootElement(),
 		HexEngine::Point::GetScreenCenterWithOffset(-width / 2, -height / 2),
 		HexEngine::Point(width, height),
 		paths.size() == 1 ? std::format(L"Importing model: {}", paths[0].filename().wstring()) : std::format(L"Importing {} models", paths.size()));
@@ -117,7 +117,7 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 
 		for (auto& path : pathsToSearch)
 		{
-			auto fileSystem = HexEngine::g_pEnv->_resourceSystem->FindFileSystemByPath(path);
+			auto fileSystem = HexEngine::g_pEnv->GetResourceSystem().FindFileSystemByPath(path);
 			auto fullPath = fileSystem->GetLocalAbsoluteDataPath(path);
 			LoadResourceFromFile(fullPath, fileSystem, nullptr);
 		}
@@ -1140,7 +1140,7 @@ std::shared_ptr<HexEngine::ITexture2D> AssimpModelImporter::LoadTexture(std::sha
 // IOSystem
 bool AssimpIoSystem::Exists(const char* pFile) const
 {
-	return HexEngine::g_pEnv->_resourceSystem->DoesResourceExistAsAsset(pFile);
+	return HexEngine::g_pEnv->GetResourceSystem().DoesResourceExistAsAsset(pFile);
 }
 
 AssimpIoStream* AssimpIoSystem::Open(const char* pFile, const char* pMode)
@@ -1159,7 +1159,7 @@ AssimpIoStream::AssimpIoStream(const char* pFile, const char* pMode)
 	_path = pFile;
 	_readOffset = 0;
 
-	HexEngine::FileSystem* assetSystem = HexEngine::g_pEnv->_resourceSystem->FindAssetFileSystemForAsset(_path);
+	HexEngine::FileSystem* assetSystem = HexEngine::g_pEnv->GetResourceSystem().FindAssetFileSystemForAsset(_path);
 
 	if (!assetSystem)
 		return;

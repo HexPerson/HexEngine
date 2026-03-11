@@ -9,7 +9,7 @@ namespace HexEngine
 {
 	AudioManager::AudioManager()
 	{
-		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
 	}
 
 	std::shared_ptr<IResource> AudioManager::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)

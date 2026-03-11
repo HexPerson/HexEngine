@@ -7,12 +7,12 @@ namespace HexEngine
 {
 	ShaderSystem::ShaderSystem()
 	{
-		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
 	}
 
 	ShaderSystem::~ShaderSystem()
 	{
-		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 	}
 
 	std::shared_ptr<IResource> ShaderSystem::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
@@ -96,7 +96,7 @@ namespace HexEngine
 
 		auto shader = it->second;
 
-		std::wstring compilerPath = (g_pEnv->_fileSystem->GetBaseDirectory() / L"HexEngine.ShaderCompiler.exe");
+		std::wstring compilerPath = (g_pEnv->GetFileSystem().GetBaseDirectory() / L"HexEngine.ShaderCompiler.exe");
 
 		compilerPath += L" -I " + resource->GetAbsolutePath().wstring() + L" -T hlsl";
 		compilerPath += L" -O " + shaderToReload->GetAbsolutePath().wstring();

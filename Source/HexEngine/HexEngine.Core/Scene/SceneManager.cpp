@@ -8,7 +8,7 @@ namespace HexEngine
 {
 	SceneManager::SceneManager()
 	{
-		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
 	}
 
 	void SceneManager::Destroy()
@@ -22,7 +22,7 @@ namespace HexEngine
 
 		_scenes.clear();
 
-		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 	}
 
 	bool SceneManager::LoadScene(const fs::path& path, std::shared_ptr<Scene>& scene)

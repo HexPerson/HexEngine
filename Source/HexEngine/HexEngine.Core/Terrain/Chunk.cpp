@@ -270,7 +270,7 @@ namespace HexEngine
 
 		if (_hasChanged)
 		{
-			SceneSaveFile file(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath(std::format("Chunks/Chunk_{}.hscene", _id)), std::ios::out | std::ios::trunc, g_pEnv->_sceneManager->GetCurrentScene(), SceneFileFlags::DontSaveVariables);
+			SceneSaveFile file(g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath(std::format("Chunks/Chunk_{}.hscene", _id)), std::ios::out | std::ios::trunc, g_pEnv->_sceneManager->GetCurrentScene(), SceneFileFlags::DontSaveVariables);
 
 			file.Save(_children);
 			file.Close();
@@ -310,7 +310,7 @@ namespace HexEngine
 		//if (g_pEnv->_timeManager->_currentTime - _cachedTime < 5.0f)
 		//	return;
 
-		SceneSaveFile file(g_pEnv->_fileSystem->GetLocalAbsoluteDataPath(std::format("Chunks/Chunk_{}.hscene", _id)), std::ios::in, g_pEnv->_sceneManager->GetCurrentScene(), SceneFileFlags::DontSaveVariables);
+		SceneSaveFile file(g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath(std::format("Chunks/Chunk_{}.hscene", _id)), std::ios::in, g_pEnv->_sceneManager->GetCurrentScene(), SceneFileFlags::DontSaveVariables);
 
 		file.Load();
 

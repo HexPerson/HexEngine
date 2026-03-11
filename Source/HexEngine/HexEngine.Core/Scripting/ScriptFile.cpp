@@ -10,6 +10,6 @@ namespace HexEngine
 		ScriptLoadOptions options;
 		options.component = component;
 
-		return dynamic_pointer_cast<ScriptFile>(g_pEnv->_resourceSystem->LoadResource(path, &options));
+		return dynamic_pointer_cast<ScriptFile>(g_pEnv->GetResourceSystem().LoadResource(path, &options));
 	}
 }

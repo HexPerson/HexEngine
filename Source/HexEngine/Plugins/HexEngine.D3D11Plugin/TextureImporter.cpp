@@ -9,17 +9,17 @@
 
 TextureImporter::TextureImporter()
 {
-	HexEngine::g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+	HexEngine::g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
 }
 
 TextureImporter::~TextureImporter()
 {
-	HexEngine::g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+	HexEngine::g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 }
 
 std::shared_ptr<HexEngine::IResource> TextureImporter::LoadResourceFromFile(const fs::path& absolutePath, HexEngine::FileSystem* fileSystem, const HexEngine::ResourceLoadOptions* options /*= nullptr*/)
 {
-	if (HexEngine::g_pEnv->_fileSystem->DoesAbsolutePathExist(absolutePath) == false)
+	if (HexEngine::g_pEnv->GetFileSystem().DoesAbsolutePathExist(absolutePath) == false)
 	{
 		LOG_WARN("The texture at path '%s' does not exist, cannot load!", absolutePath.u8string().c_str());
 		return nullptr;

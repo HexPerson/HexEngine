@@ -8,7 +8,7 @@ const int32_t AtlasSize = 256;
 
 bool FreeTypeImporter::Create()
 {
-	HexEngine::g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+	HexEngine::g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
 
 	auto error = FT_Init_FreeType(&_library);
 
@@ -27,7 +27,7 @@ bool FreeTypeImporter::Create()
 
 void FreeTypeImporter::Destroy()
 {
-	HexEngine::g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+	HexEngine::g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 
 	FT_Done_FreeType(_library);
 

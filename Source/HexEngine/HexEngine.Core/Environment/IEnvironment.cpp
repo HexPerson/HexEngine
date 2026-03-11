@@ -1,5 +1,6 @@
 
 #include "IEnvironment.hpp"
+#include "../GUI/UIManager.hpp"
 
 namespace HexEngine
 {
@@ -26,5 +27,12 @@ namespace HexEngine
 	void IEnvironment::RemoveGameExtension(IGameExtension* extension)
 	{
 		_gameExtensions.erase(std::remove(_gameExtensions.begin(), _gameExtensions.end(), extension), _gameExtensions.end());
+	}
+
+	void IEnvironment::SetUIManager(UIManager* uiManager)
+	{
+		HEX_ASSERT(uiManager != nullptr);
+		SAFE_DELETE(_uiManager);
+		_uiManager = uiManager;
 	}
 }

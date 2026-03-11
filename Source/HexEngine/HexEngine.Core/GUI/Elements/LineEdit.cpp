@@ -143,7 +143,7 @@ namespace HexEngine
 		{
 			if (IsMouseOver(true))
 			{
-				g_pEnv->_uiManager->SetInputFocus(this);
+				g_pEnv->GetUIManager().SetInputFocus(this);
 				return true;
 			}
 			else
@@ -210,7 +210,7 @@ namespace HexEngine
 		int32_t width = 0, height = 0;
 
 		if (_label.length() > 0)
-			g_pEnv->_uiManager->GetRenderer()->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, _label, width, height);
+			g_pEnv->GetUIManager().GetRenderer()->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, _label, width, height);
 
 		return width;
 	}

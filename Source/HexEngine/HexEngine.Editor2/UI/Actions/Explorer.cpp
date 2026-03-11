@@ -12,7 +12,7 @@ namespace HexEditor
 		_folderView = new HexEngine::TreeList(this, HexEngine::Point(10, 10), HexEngine::Point(size.y-20, size.y-20));
 		//_folderView->_onSelect = std::bind(&Explorer::OnClickFolder, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
 
-		_tab = new HexEngine::TabView(this, HexEngine::Point(size.y, 10), HexEngine::Point(HexEngine::g_pEnv->_uiManager->GetWidth() - (size.y + 10), size.y - 20));
+		_tab = new HexEngine::TabView(this, HexEngine::Point(size.y, 10), HexEngine::Point(HexEngine::g_pEnv->GetUIManager().GetWidth() - (size.y + 10), size.y - 20));
 		_tab->AddTab(L"Assets");
 		_tab->AddTab(L"Log");
 
@@ -92,7 +92,7 @@ namespace HexEditor
 		// copy from the standard material just so that the shaders are valid
 		material->SetPaths(newMaterialPath, _currentlyBrowsedFS);
 		material->CopyFrom(HexEngine::Material::GetDefaultMaterial());
-		material->SetLoader(HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(".hmat"));
+		material->SetLoader(HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
 		material->Save();
 
 		//file.Close();	
@@ -180,7 +180,7 @@ namespace HexEditor
 
 					LOG_DEBUG("Received drag and drop request for file '%S'", fileName.wstring().c_str());
 
-					HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(fileName.extension().string());
+					HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(fileName.extension().string());
 
 					if (!resourceLoader)
 					{
@@ -216,7 +216,7 @@ namespace HexEditor
 					{
 						//LoadAsset(fs::relative(_hoveredAsset->path, g_pEditor->_projectFS->GetDataDirectory()));
 
-						HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(_hoveredAsset->path.extension().string());
+						HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(_hoveredAsset->path.extension().string());
 
 						if (resourceLoader)
 						{
@@ -225,7 +225,7 @@ namespace HexEditor
 							// if the editor dialog is null, we should just presume that no import options are needed and immediately load the resource
 							if (auto dlg = resourceLoader->CreateEditorDialog({ relative }); dlg == nullptr)
 							{
-								HexEngine::g_pEnv->_resourceSystem->LoadResource(_hoveredAsset->path);
+								HexEngine::g_pEnv->GetResourceSystem().LoadResource(_hoveredAsset->path);
 							}
 						}
 
@@ -426,7 +426,7 @@ namespace HexEditor
 		if (path.extension() == ".mtl")
 			return;
 
-		HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->_resourceSystem->FindResourceLoaderForExtension(path.extension().string());
+		HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(path.extension().string());
 
 		if (!resourceLoader)
 		{
@@ -437,7 +437,7 @@ namespace HexEditor
 		HexEngine::ResourceLoadOptions opts;
 		opts.silenceErrors = true;		
 
-		std::shared_ptr<HexEngine::IResource> resource = HexEngine::g_pEnv->_resourceSystem->LoadResource(path, &opts);
+		std::shared_ptr<HexEngine::IResource> resource = HexEngine::g_pEnv->GetResourceSystem().LoadResource(path, &opts);
 
 		if (resource && resourceLoader->GetResourceDirectory() == L"Meshes")
 		{
@@ -485,7 +485,7 @@ namespace HexEditor
 
 			if (fs::is_directory(p))
 			{
-				HexEngine::ListNode* currentItem = new HexEngine::ListNode(_folderView, fs::relative(p, path), { HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open.get(), HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get() });
+				HexEngine::ListNode* currentItem = new HexEngine::ListNode(_folderView, fs::relative(p, path), { HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.img_folder_open.get(), HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.img_folder_closed.get() });
 
 				currentItem->_onClick = std::bind(&Explorer::OnClickFolder, this, _folderView, std::placeholders::_1, std::placeholders::_2);
 				
@@ -515,14 +515,14 @@ namespace HexEditor
 			RecurseList(rootPath, g_pEditor->_projectFS->GetDataDirectory());
 		}*/
 
-		for (auto& fs : HexEngine::g_pEnv->_resourceSystem->GetFileSystems())
+		for (auto& fs : HexEngine::g_pEnv->GetResourceSystem().GetFileSystems())
 		{
 			bool a = false;
 
 			auto rootPath = new HexEngine::ListNode(
 				_folderView,
 				std::wstring(fs->GetName().begin(), fs->GetName().end()),
-				{ HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_open.get(), HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get() },
+				{ HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.img_folder_open.get(), HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.img_folder_closed.get() },
 				fs);
 			_folderView->AddNode(rootPath);
 

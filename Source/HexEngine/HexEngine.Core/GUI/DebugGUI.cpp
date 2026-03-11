@@ -41,7 +41,7 @@ namespace HexEngine
 			callback->OnDebugGUI();
 		}
 
-		for (auto& extension : g_pEnv->_gameExtensions)
+		for (auto& extension : g_pEnv->GetGameExtensions())
 		{
 			extension->OnDebugGUI();
 		}

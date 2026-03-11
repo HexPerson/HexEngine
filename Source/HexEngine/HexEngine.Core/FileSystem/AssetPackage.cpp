@@ -9,12 +9,12 @@ namespace HexEngine
 	AssetPackage::AssetPackage() :
 		FileSystem(GetAbsolutePath().filename().wstring())
 	{
-		g_pEnv->_resourceSystem->AddFileSystem(this);
+		g_pEnv->GetResourceSystem().AddFileSystem(this);
 	}
 
 	void AssetPackage::Destroy()
 	{
-		g_pEnv->_resourceSystem->RemoveFileSystem(this);
+		g_pEnv->GetResourceSystem().RemoveFileSystem(this);
 	}
 
 	void AssetPackage::AddAsset(AssetHeader* file)

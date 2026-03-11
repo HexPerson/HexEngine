@@ -157,7 +157,7 @@ namespace HexEngine
 
 	void Element::DeleteMe()
 	{
-		g_pEnv->_uiManager->Lock();
+		g_pEnv->GetUIManager().Lock();
 
 		_wantsDeletion = true;		
 
@@ -166,9 +166,9 @@ namespace HexEngine
 			child->DeleteMe();
 		}
 
-		g_pEnv->_uiManager->MarkForDeletion(this);
+		g_pEnv->GetUIManager().MarkForDeletion(this);
 
-		g_pEnv->_uiManager->Unlock();
+		g_pEnv->GetUIManager().Unlock();
 	}
 
 	bool Element::WantsDeletion() const

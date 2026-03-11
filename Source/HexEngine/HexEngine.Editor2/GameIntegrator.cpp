@@ -60,7 +60,7 @@ namespace HexEditor
 
 	bool GameIntegrator::RunGame()
 	{
-		HexEngine::g_pEnv->_resourceSystem->AddFileSystem(_runtimeFS);
+		HexEngine::g_pEnv->GetResourceSystem().AddFileSystem(_runtimeFS);
 		HexEngine::g_pEnv->AddGameExtension(_gameExtension);
 		HexEngine::g_pEnv->SetEditorMode(false);
 		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->AddEntityListener(this);
@@ -76,7 +76,7 @@ namespace HexEditor
 	{
 		if (_runtimeFS)
 		{
-			HexEngine::g_pEnv->_resourceSystem->RemoveFileSystem(_runtimeFS);
+			HexEngine::g_pEnv->GetResourceSystem().RemoveFileSystem(_runtimeFS);
 			delete _runtimeFS;
 			_runtimeFS = nullptr;
 		}

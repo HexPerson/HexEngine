@@ -12,7 +12,7 @@ namespace HexEngine
 
 		if (HEX_HASFLAG(options,DiskFileOptions::CreateSubDirs))
 		{
-			g_pEnv->_fileSystem->CreateSubDirectories(_fsPathObj);
+			g_pEnv->GetFileSystem().CreateSubDirectories(_fsPathObj);
 		}
 	}
 

@@ -44,7 +44,7 @@ namespace HexEngine
 			root->items.push_back(item);
 
 			int32_t width, height;
-			g_pEnv->_uiManager->GetRenderer()->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, item->name, width, height);
+			g_pEnv->GetUIManager().GetRenderer()->_style.font->MeasureText((int32_t)Style::FontSize::Tiny, item->name, width, height);
 
 			width += 8; // padding
 

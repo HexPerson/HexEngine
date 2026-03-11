@@ -7,7 +7,7 @@ namespace HexEngine
 {
 	void ResourceDeleter::operator()(IResource* p) const
 	{
-		g_pEnv->_resourceSystem->UnloadResource(p);
+		g_pEnv->GetResourceSystem().UnloadResource(p);
 	}
 
 	void ResourceSystem::Create()

@@ -110,7 +110,7 @@ namespace HexEngine
 		}
 		else if (event == InputEvent::MouseWheel && IsMouseOver(true))
 		{
-			_offset += data->MouseWheel.delta / 10;
+			_offset += (int32_t)(data->MouseWheel.delta / 10.0f);
 
 			if (_offset > _items.size() - 1)
 				_offset = _items.size() - 1;

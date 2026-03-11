@@ -5,7 +5,7 @@ namespace HexEngine
 {
 	void IMGUI::FloatControl(int32_t x, int32_t y, int32_t w, int32_t h, Style* style, float* value)
 	{
-		auto renderer = g_pEnv->_uiManager->GetRenderer();
+		auto renderer = g_pEnv->GetUIManager().GetRenderer();
 
 		renderer->FillQuad(x, y, w, h, style->win_back);
 		renderer->Frame(x, y, w, h, 1, style->win_border);

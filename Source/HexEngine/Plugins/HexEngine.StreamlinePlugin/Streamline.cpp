@@ -12,7 +12,7 @@ bool Streamline::Create()
 {
 	_dlssOptions.mode = (sl::DLSSMode)-1;
 
-	auto binaryPath = HexEngine::g_pEnv->_fileSystem->GetBinaryDirectory();
+	auto binaryPath = HexEngine::g_pEnv->GetFileSystem().GetBinaryDirectory();
 
 	auto interposerPath = (binaryPath / L"sl.interposer.dll").wstring();
 

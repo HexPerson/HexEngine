@@ -41,14 +41,14 @@ namespace HexEngine
 						_onDrag(_value, _min, _max);
 				}
 
-				SetCursor(LoadCursor(nullptr, MAKEINTRESOURCE(IDC_SIZEWE)));
+				SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
 
 				_startDrag = mx;
 			}
 		}
 		else
 		{
-			SetCursor(LoadCursor(nullptr, MAKEINTRESOURCE(IDC_ARROW)));
+			SetCursor(LoadCursor(nullptr, IDC_ARROW));
 		}
 	}
 

@@ -261,8 +261,8 @@ namespace HexEngine
 			{
 				for (auto& fileInfo : actions.second)
 				{
-					auto loader = g_pEnv->_resourceSystem->FindResourceLoaderForExtension(fileInfo.path.extension().string());
-					auto resource = g_pEnv->_resourceSystem->FindResourceByFileName(fileInfo.path.filename(), true);
+					auto loader = g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(fileInfo.path.extension().string());
+					auto resource = g_pEnv->GetResourceSystem().FindResourceByFileName(fileInfo.path.filename(), true);
 
 					if (loader && resource)
 					{

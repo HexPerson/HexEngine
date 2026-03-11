@@ -73,7 +73,7 @@ namespace HexEngine
 
 			if (_edit->IsMouseOver(
 				pos.x + _size.x - (TextureSearchBarSize + 4),
-				pos.y + (g_pEnv->_uiManager->GetRenderer()->_style.win_title_height / 2) - (TextureSearchBarSize / 2) - 1,
+				pos.y + (g_pEnv->GetUIManager().GetRenderer()->_style.win_title_height / 2) - (TextureSearchBarSize / 2) - 1,
 				TextureSearchBarSize-4, TextureSearchBarSize-4
 			))
 			{

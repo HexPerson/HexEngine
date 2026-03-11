@@ -38,7 +38,7 @@ namespace HexEngine
 	bool TabItem::OnInputEvent(InputEvent event, InputData* data)
 	{	
 		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON &&
-			IsMouseOver(GetAbsolutePosition(), Point(GetTabWidth(), g_pEnv->_uiManager->GetRenderer()->_style.tab_height)))
+			IsMouseOver(GetAbsolutePosition(), Point(GetTabWidth(), g_pEnv->GetUIManager().GetRenderer()->_style.tab_height)))
 		{
 			((TabView*)GetParent())->SetActiveTab(this);
 			return true;
@@ -65,7 +65,7 @@ namespace HexEngine
 		if (_tabWidth == 0)
 		{
 			int32_t width, height;
-			g_pEnv->_uiManager->GetRenderer()->_style.font->MeasureText((int32_t)Style::FontSize::Small, _label, width, height);
+			g_pEnv->GetUIManager().GetRenderer()->_style.font->MeasureText((int32_t)Style::FontSize::Small, _label, width, height);
 
 			_tabWidth = width + 10;
 		}

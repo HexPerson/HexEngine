@@ -963,7 +963,7 @@ namespace HexEngine
 	{
 		if (r_debugScene._val.b && _mainCamera)
 		{
-			auto renderer = g_pEnv->_uiManager->GetRenderer();
+			auto renderer = g_pEnv->GetUIManager().GetRenderer();
 			auto width = g_pEnv->GetScreenWidth();
 			int32_t x = width - 20;
 			int32_t y = 20;
@@ -1288,7 +1288,7 @@ namespace HexEngine
 		}*/
 
 		// Allow the game extension to render the debug info (if they want)
-		for (auto& extension : g_pEnv->_gameExtensions)
+		for (auto& extension : g_pEnv->GetGameExtensions())
 		{
 			extension->OnDebugRender();
 		}

@@ -34,11 +34,11 @@ namespace HexEngine
 
 	std::shared_ptr<IShader> IShader::GetDefaultShader()
 	{
-		return dynamic_pointer_cast<IShader>(g_pEnv->_resourceSystem->LoadResource("EngineData.Shaders/Default.hcs"));
+		return dynamic_pointer_cast<IShader>(g_pEnv->GetResourceSystem().LoadResource("EngineData.Shaders/Default.hcs"));
 	}
 
 	std::shared_ptr<IShader> IShader::Create(const fs::path& path)
 	{
-		return dynamic_pointer_cast<IShader>(g_pEnv->_resourceSystem->LoadResource(path));
+		return dynamic_pointer_cast<IShader>(g_pEnv->GetResourceSystem().LoadResource(path));
 	}
 }

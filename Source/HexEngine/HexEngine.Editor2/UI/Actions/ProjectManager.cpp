@@ -100,7 +100,7 @@ namespace HexEditor
 	bool ProjectManager::OnBrowseFolderPath()
 	{
 		wchar_t baseDirectory[MAX_PATH];
-		wcscpy_s(baseDirectory, HexEngine::g_pEnv->_fileSystem->GetBaseDirectory().wstring().c_str());
+		wcscpy_s(baseDirectory, HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory().wstring().c_str());
 
 		BROWSEINFO bi = { 0 };
 		bi.lpszTitle = L"Browse for folder...";
@@ -142,7 +142,7 @@ namespace HexEditor
 
 	void ProjectManager::ReadProjectList()
 	{
-		HexEngine::DiskFile file(HexEngine::g_pEnv->_fileSystem->GetLocalAbsolutePath(L"Projects.json"), std::ios::in);
+		HexEngine::DiskFile file(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json"), std::ios::in);
 
 		if (file.Open())
 		{
@@ -158,7 +158,7 @@ namespace HexEditor
 
 				auto v = val.get<std::string>();
 
-				_oldProjectsList->AddItem(std::wstring(v.begin(), v.end()), HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.img_folder_closed.get());
+				_oldProjectsList->AddItem(std::wstring(v.begin(), v.end()), HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.img_folder_closed.get());
 			}
 
 			file.Close();
@@ -180,7 +180,7 @@ namespace HexEditor
 		_projectListData["projects"].push_back(path);
 
 		// update the project file on disk
-		HexEngine::DiskFile file(HexEngine::g_pEnv->_fileSystem->GetLocalAbsolutePath(L"Projects.json"), std::ios::out | std::ios::trunc);
+		HexEngine::DiskFile file(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json"), std::ios::out | std::ios::trunc);
 
 		if (file.Open())
 		{

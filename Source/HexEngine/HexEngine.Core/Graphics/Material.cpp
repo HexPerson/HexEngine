@@ -32,17 +32,17 @@ namespace HexEngine
 
 	std::shared_ptr<Material> Material::Create(const fs::path& path)
 	{
-		return dynamic_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource(path));
+		return dynamic_pointer_cast<Material>(g_pEnv->GetResourceSystem().LoadResource(path));
 	}
 
 	std::shared_ptr<Material> Material::CreateAsync(const fs::path& path, ResourceLoadedFn fn)
 	{
-		return dynamic_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResourceAsync(path, fn));
+		return dynamic_pointer_cast<Material>(g_pEnv->GetResourceSystem().LoadResourceAsync(path, fn));
 	}
 
 	bool Material::Exists(const fs::path& path)
 	{
-		auto fs = g_pEnv->_resourceSystem->FindFileSystemByPath(path);
+		auto fs = g_pEnv->GetResourceSystem().FindFileSystemByPath(path);
 
 		if (fs)
 		{
@@ -150,7 +150,7 @@ namespace HexEngine
 
 	std::shared_ptr<Material> Material::GetDefaultMaterial()
 	{
-		static auto defaultMat = dynamic_pointer_cast<Material>(g_pEnv->_resourceSystem->LoadResource("EngineData.Materials/Default.hmat"));
+		static auto defaultMat = dynamic_pointer_cast<Material>(g_pEnv->GetResourceSystem().LoadResource("EngineData.Materials/Default.hmat"));
 		return defaultMat;
 	}
 

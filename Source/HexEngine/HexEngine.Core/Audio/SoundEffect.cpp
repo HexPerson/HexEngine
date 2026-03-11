@@ -17,7 +17,7 @@ namespace HexEngine
 #pragma optimize("", off)
 	std::shared_ptr<SoundEffect> SoundEffect::Create(const fs::path& path)
 	{
-		return dynamic_pointer_cast<SoundEffect>(g_pEnv->_resourceSystem->LoadResource(path));
+		return dynamic_pointer_cast<SoundEffect>(g_pEnv->GetResourceSystem().LoadResource(path));
 	}
 #pragma optimize("", on)
 

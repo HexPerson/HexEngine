@@ -45,7 +45,7 @@ namespace HexEditor
 		{
 			fs::create_directories(assetFolder);
 		}
-		fs::copy(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("AssetPackages/StandardAssets.pkg"), assetFolder / "StandardAssets.pkg", fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+		fs::copy(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("AssetPackages/StandardAssets.pkg"), assetFolder / "StandardAssets.pkg", fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 
 		return true;
 	}
@@ -53,7 +53,7 @@ namespace HexEditor
 	bool ProjectGenerator::CreateSolutionFile(ProjectGenerationParams& params)
 	{
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/SolutionTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/SolutionTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -109,7 +109,7 @@ namespace HexEditor
 		}
 
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ProjectTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/ProjectTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -147,7 +147,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/HeaderTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/HeaderTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -184,7 +184,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/CppTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/CppTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -222,7 +222,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/MainCppTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/MainCppTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -259,7 +259,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/FiltersTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/FiltersTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -295,7 +295,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ShaderTargetsTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/ShaderTargetsTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -332,7 +332,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/ShaderTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/ShaderTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{
@@ -362,7 +362,7 @@ namespace HexEditor
 		fs::path projectFolder = params.path / params.projectName;
 
 		// Open up the solution template file
-		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->_fileSystem->GetLocalAbsoluteDataPath("Templates/UserTemplate.txt"), std::ios::in | std::ios::binary);
+		HexEngine::DiskFile slnTemplate(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Templates/UserTemplate.txt"), std::ios::in | std::ios::binary);
 
 		if (slnTemplate.Open() == false)
 		{

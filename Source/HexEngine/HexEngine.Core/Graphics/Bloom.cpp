@@ -45,7 +45,7 @@ namespace HexEngine
 
 	void Bloom::Render(Camera* camera, ITexture2D* bloomInput, ITexture2D* bloomOutput)
 	{
-		GuiRenderer* renderer = g_pEnv->_uiManager->GetRenderer();
+		GuiRenderer* renderer = g_pEnv->GetUIManager().GetRenderer();
 
 		const auto& bbvp = camera->GetViewport();
 

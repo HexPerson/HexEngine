@@ -84,7 +84,7 @@ namespace HexEngine
 				_ctx = new ContextMenu(this, p.RelativeTo(GetAbsolutePosition()));
 
 				_ctx->AddItem(new ContextItem(L"Duplicate", std::bind(&EntityList::DuplicateEntity, this, entity)));
-				_ctx->AddItem(new ContextItem(L"Save as prefab", std::bind(&EntityList::SaveAsPrefab, this, entity, g_pEnv->_fileSystem)));
+				_ctx->AddItem(new ContextItem(L"Save as prefab", std::bind(&EntityList::SaveAsPrefab, this, entity, &g_pEnv->GetFileSystem())));
 			}
 		}
 	}

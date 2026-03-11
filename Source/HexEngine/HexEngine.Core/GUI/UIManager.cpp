@@ -78,7 +78,7 @@ namespace HexEngine
 			_blurredBackground = g_pEnv->_graphicsDevice->CreateTexture(g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget());
 		}
 
-		_blurredBackground->ClearRenderTargetView(math::Color(0.0f));
+		_blurredBackground->ClearRenderTargetView(math::Color(0));
 
 		if (_blurEffect == nullptr)
 		{

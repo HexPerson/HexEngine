@@ -80,7 +80,7 @@ namespace HexEditor
 			{
 				if (scene->IsSceneAttached() == false)
 				{
-					auto newScene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)HexEngine::g_pEnv->_uiManager, true);
+					auto newScene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(false, (EditorUI*)&HexEngine::g_pEnv->GetUIManager(), true);
 
 					if (sceneToActivateAfterLoad == nullptr)
 					{
@@ -128,7 +128,7 @@ namespace HexEditor
 		else
 		{
 			// We created a new project so it needs a new scene
-			auto newScene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(true, (EditorUI*)HexEngine::g_pEnv->_uiManager, true);
+			auto newScene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(true, (EditorUI*)&HexEngine::g_pEnv->GetUIManager(), true);
 
 			HexEngine::g_pEnv->_sceneManager->SetActiveScene(newScene);
 
@@ -153,7 +153,7 @@ namespace HexEditor
 			ProjectGenerationParams params;
 			params.path = projectFolder / "Code";
 			params.projectName = projectName;
-			params.sdkPath = HexEngine::g_pEnv->_fileSystem->GetBaseDirectory().parent_path().parent_path().parent_path(); // this is....awful
+			params.sdkPath = HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory().parent_path().parent_path().parent_path(); // this is....awful
 			params.nameSpace = std::string(namespaceName.begin(), namespaceName.end());
 			params.primaryScenePath = sceneFile->GetAbsolutePath();
 
@@ -321,7 +321,7 @@ namespace HexEditor
 		const int32_t dlgWidth = 400;
 		const int32_t dlgHeight = 500;
 
-		HexEngine::Dialog* dlg = new HexEngine::Dialog(HexEngine::g_pEnv->_uiManager->GetRootElement(), HexEngine::Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2), HexEngine::Point(dlgWidth, dlgHeight), L"Vegetation Paint Tool");
+		HexEngine::Dialog* dlg = new HexEngine::Dialog(HexEngine::g_pEnv->GetUIManager().GetRootElement(), HexEngine::Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2), HexEngine::Point(dlgWidth, dlgHeight), L"Vegetation Paint Tool");
 
 		//LineEdit* meshInput = 
 	}
@@ -489,7 +489,7 @@ namespace HexEditor
 		int32_t dockWidth = (int32_t)((float)width * dockPercentage);
 		int32_t lowerDockHeight = (int32_t)((float)height * 0.25f);
 
-		auto& style = HexEngine::g_pEnv->_uiManager->GetRenderer()->_style;
+		auto& style = HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style;
 
 		_sceneView = new SceneView(_rootElement, HexEngine::Point(dockWidth, style.win_title_height + 2), HexEngine::Point(width - (dockWidth * 2), height - (style.win_title_height + 2) - lowerDockHeight));
 

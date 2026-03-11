@@ -64,7 +64,7 @@ using json = nlohmann::json;
 #define SAFE_DELETE(x) if(x){ delete x; x = nullptr; }
 #define SAFE_DELETE_ARRAY(x) if(x) { delete[] x; x = nullptr; }
 #define SAFE_RELEASE(x) if(x) { x->Release(); x = nullptr; }
-#define SAFE_UNLOAD(x) if(x) { HexEngine::g_pEnv->_resourceSystem->UnloadResource(x); x = nullptr; }
+#define SAFE_UNLOAD(x) if(x) { HexEngine::g_pEnv->GetResourceSystem().UnloadResource(x); x = nullptr; }
 #define SAFE_UNLOAD_ARRAY(x, s) if(x) { for(auto i = 0; i < s; ++i) { HexEngine::g_pEnv->_resourceSystem->UnloadResource(x[i]); x[i] = nullptr; } }
 
 #define HEX_EXPORT __declspec(dllexport)

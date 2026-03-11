@@ -11,7 +11,7 @@ namespace HexEditor
 
 		auto entityTab = _tabs->AddTab(L"Entity");		
 		{
-			_entityName = new HexEngine::LineEdit(entityTab, HexEngine::Point(5, HexEngine::g_pEnv->_uiManager->GetRenderer()->_style.tab_height), HexEngine::Point(size.x - 10, 25), L"");
+			_entityName = new HexEngine::LineEdit(entityTab, HexEngine::Point(5, HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.tab_height), HexEngine::Point(size.x - 10, 25), L"");
 			_entityName->SetOnInputFn(std::bind(&Inspector::OnChangeEntityName, this, std::placeholders::_2));
 
 			_deleteBtn = new HexEngine::Button(entityTab, HexEngine::Point(size.x - 75, 50), HexEngine::Point(70, 25), L"Delete", std::bind(&Inspector::OnDeleteEntity, this, std::placeholders::_1));

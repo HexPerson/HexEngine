@@ -80,7 +80,7 @@ namespace HexEngine
 		auto pos = GetPosition();
 
 		// add in the title bar
-		pos.y += g_pEnv->_uiManager->GetRenderer()->_style.win_title_height;
+		pos.y += g_pEnv->GetUIManager().GetRenderer()->_style.win_title_height;
 
 		if (Element* parent = GetParent(); parent != nullptr)
 		{
@@ -102,7 +102,7 @@ namespace HexEngine
 					return true;
 				}
 
-				if (IsMouseOver(_position.x, _position.y, _size.x, g_pEnv->_uiManager->GetRenderer()->_style.win_title_height))
+				if (IsMouseOver(_position.x, _position.y, _size.x, g_pEnv->GetUIManager().GetRenderer()->_style.win_title_height))
 				{
 					_dragStart.x = data->MouseDown.xpos - _position.x;
 					_dragStart.y = data->MouseDown.ypos - _position.y;

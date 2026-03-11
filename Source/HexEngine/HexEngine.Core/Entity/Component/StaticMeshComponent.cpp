@@ -400,7 +400,7 @@ namespace HexEngine
 		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material);
 
 		// set the correct resource loader so it can be unloaded
-		material->SetLoader(g_pEnv->_resourceSystem->FindResourceLoaderForExtension(".hmat"));
+		material->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
 
 		_material = material;
 

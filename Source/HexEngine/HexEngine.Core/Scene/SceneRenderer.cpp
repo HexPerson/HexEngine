@@ -1199,7 +1199,7 @@ namespace HexEngine
 
 			if (r_taa._val.b)
 			{
-				_taa.Resolve(_beautyRT, _beautyRT, _gbuffer.GetVelocity(), _gbuffer.GetNormal(), g_pEnv->_uiManager->GetRenderer());
+				_taa.Resolve(_beautyRT, _beautyRT, _gbuffer.GetVelocity(), _gbuffer.GetNormal(), g_pEnv->GetUIManager().GetRenderer());
 			}
 			
 			_bloomEffect->Render(_currentCamera, _beautyRT, _beautyRT);
@@ -1232,7 +1232,7 @@ namespace HexEngine
 
 		
 
-		if (auto guiRenderer = g_pEnv->_uiManager->GetRenderer(); guiRenderer != nullptr)
+		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
 
@@ -1285,7 +1285,7 @@ namespace HexEngine
 
 		g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
 
-		if (auto guiRenderer = g_pEnv->_uiManager->GetRenderer(); guiRenderer != nullptr)
+		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
 
@@ -1390,7 +1390,7 @@ namespace HexEngine
 		//
 		
 
-		if (auto guiRenderer = g_pEnv->_uiManager->GetRenderer(); guiRenderer != nullptr)
+		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
 
@@ -1671,7 +1671,7 @@ namespace HexEngine
 			LAYERMASK(Layer::StaticGeometry),
 			MeshRenderFlags::MeshRenderTransparency);
 
-		if (auto guiRenderer = g_pEnv->_uiManager->GetRenderer(); guiRenderer != nullptr)
+		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
 
@@ -1697,7 +1697,7 @@ namespace HexEngine
 		_fogBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		g_pEnv->_graphicsDevice->SetRenderTarget(_fogBuffer);
 
-		if (auto guiRenderer = g_pEnv->_uiManager->GetRenderer(); guiRenderer != nullptr)
+		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
 
@@ -1739,7 +1739,7 @@ namespace HexEngine
 		vp.MaxDepth = 1.0f;
 		g_pEnv->_graphicsDevice->SetViewport(vp);
 
-		if (auto guiRenderer = g_pEnv->_uiManager->GetRenderer(); guiRenderer != nullptr)
+		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
 
@@ -1829,7 +1829,7 @@ namespace HexEngine
 		vp.MaxDepth = 1.0f;
 		g_pEnv->_graphicsDevice->SetViewport(vp);
 
-		if (auto guiRenderer = g_pEnv->_uiManager->GetRenderer(); guiRenderer != nullptr)
+		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
 

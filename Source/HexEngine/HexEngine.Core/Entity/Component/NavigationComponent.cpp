@@ -142,7 +142,7 @@ namespace HexEngine
 
 	void NavigationComponent::OnDebugGUI()
 	{
-		auto renderer = g_pEnv->_uiManager->GetRenderer();
+		auto renderer = g_pEnv->GetUIManager().GetRenderer();
 
 		int32_t x, y;
 

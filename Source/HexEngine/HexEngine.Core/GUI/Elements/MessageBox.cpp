@@ -5,11 +5,11 @@
 namespace HexEngine
 {
 	MessageBox::MessageBox(const std::wstring& title, const std::wstring& message, CallbackFn callback) :
-		Dialog(g_pEnv->_uiManager->GetRootElement(), Point(), Point(), _title, callback),
+		Dialog(g_pEnv->GetUIManager().GetRootElement(), Point(), Point(), _title, callback),
 		_message(message)
 	{		
 		int32_t width, height;
-		g_pEnv->_uiManager->GetRenderer()->_style.font->MeasureText((uint8_t)Style::FontSize::Tiny, message, width, height);
+		g_pEnv->GetUIManager().GetRenderer()->_style.font->MeasureText((uint8_t)Style::FontSize::Tiny, message, width, height);
 
 		_size.x = width + 50;
 		_size.y = height + 100;
@@ -53,11 +53,11 @@ namespace HexEngine
 
 		auto textPos = GetAbsolutePosition();
 
-		g_pEnv->_uiManager->GetRenderer()->PrintText(
-			g_pEnv->_uiManager->GetRenderer()->_style.font.get(),
+		renderer->PrintText(
+			renderer->_style.font.get(),
 			(uint8_t)Style::FontSize::Tiny,
 			textPos.x + 30, textPos.y + 10,
-			g_pEnv->_uiManager->GetRenderer()->_style.text_regular,
+			renderer->_style.text_regular,
 			FontAlign::None,
 			_message);
 	}

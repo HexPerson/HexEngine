@@ -7,6 +7,6 @@ namespace HexEngine
 {
 	std::shared_ptr<IFontResource> IFontResource::Create(const fs::path& path, FontImportOptions* options)
 	{
-		return dynamic_pointer_cast<IFontResource>(g_pEnv->_resourceSystem->LoadResource(path, options));
+		return dynamic_pointer_cast<IFontResource>(g_pEnv->GetResourceSystem().LoadResource(path, options));
 	}
 }

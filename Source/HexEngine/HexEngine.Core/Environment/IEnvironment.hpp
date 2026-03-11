@@ -101,6 +101,8 @@ namespace HexEngine
 			return *_uiManager;
 		}
 
+		void SetUIManager(UIManager* uiManager);
+
 		LogFile& GetLogFile()
 		{
 			HEX_ASSERT(_logFile != nullptr);
@@ -113,13 +115,18 @@ namespace HexEngine
 			return *_logFile;
 		}
 
+		const std::vector<IGameExtension*>& GetGameExtensions() const
+		{
+			return _gameExtensions;
+		}
+
 		// Legacy direct access members
-		class FileSystem* _fileSystem = nullptr;
+		
 		class IGraphicsDevice* _graphicsDevice = nullptr;
 		class TimeManager* _timeManager = nullptr;
 		class LogFile* _logFile = nullptr;
 		class IModelImporter* _modelImporter = nullptr;
-		class ResourceSystem* _resourceSystem = nullptr;
+		
 		class ShaderSystem* _shaderLoader = nullptr;
 		class SceneManager* _sceneManager = nullptr;
 		class SceneRenderer* _sceneRenderer = nullptr;
@@ -138,7 +145,7 @@ namespace HexEngine
 		class PluginSystem* _pluginSystem = nullptr;
 		class ISSAOProvider* _ssaoProvider = nullptr;
 		class ICompressionProvider* _compressionProvider = nullptr;
-		class UIManager* _uiManager = nullptr;
+		
 		class AssetPackageManager* _assetPackageManager = nullptr;
 		class IconService* _iconService = nullptr;
 		//class IScriptEngine* _scriptEngine = nullptr; // disabled currently
@@ -147,6 +154,11 @@ namespace HexEngine
 		class INavMeshProvider* _navMeshProvider = nullptr;
 		MeshLoader* _meshLoader = nullptr;
 		class PrefabLoader* _prefabLoader = nullptr;
+
+	protected:
+		class FileSystem* _fileSystem = nullptr;
+		class UIManager* _uiManager = nullptr;
+		class ResourceSystem* _resourceSystem = nullptr;
 
 		std::thread _physicsThread;		
 		std::vector<IGameExtension*> _gameExtensions;

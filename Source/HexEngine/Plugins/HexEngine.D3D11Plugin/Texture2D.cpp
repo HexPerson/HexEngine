@@ -174,7 +174,7 @@ void Texture2D::SaveToFile(const fs::path& path)
 		scratch.GetImageCount(),
 		DirectX::WIC_FLAGS_NONE,
 		DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG),
-		HexEngine::g_pEnv->_fileSystem->GetLocalAbsolutePath(path).c_str()));
+		HexEngine::g_pEnv->GetFileSystem().GetLocalAbsolutePath(path).c_str()));
 
 	g_pGraphics->Unlock();
 }
@@ -279,7 +279,7 @@ void Texture2D::BlendTo_Additive(ITexture2D* other, HexEngine::IShader* optional
 	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
 
-	HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->_uiManager->GetRenderer();
+	HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->GetUIManager().GetRenderer();
 	g_pGraphics->SetRenderTarget(other);
 
 	renderer->StartFrame();
@@ -302,7 +302,7 @@ void Texture2D::BlendTo_Additive_Double(ITexture2D* other, HexEngine::IShader* o
 	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
 
-	HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->_uiManager->GetRenderer();
+	HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->GetUIManager().GetRenderer();
 	g_pGraphics->SetRenderTarget(other);
 
 	renderer->StartFrame();
@@ -325,7 +325,7 @@ void Texture2D::BlendTo_Alpha(ITexture2D* other, HexEngine::IShader* optionalSha
 	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
 
-	HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->_uiManager->GetRenderer();
+	HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->GetUIManager().GetRenderer();
 	g_pGraphics->SetRenderTarget(other);
 
 	renderer->StartFrame();
@@ -348,7 +348,7 @@ void Texture2D::BlendTo_NonPremultiplied(ITexture2D* other, HexEngine::IShader* 
 	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
 
-	HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->_uiManager->GetRenderer();
+	HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->GetUIManager().GetRenderer();
 	g_pGraphics->SetRenderTarget(other);
 
 	renderer->StartFrame();

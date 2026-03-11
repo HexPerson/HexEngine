@@ -232,7 +232,7 @@ namespace HexEngine
 
 			g_pEnv->_graphicsDevice->SetViewport(*math::Viewport(0, 0, 512, 512).Get11());
 
-			auto renderer = g_pEnv->_uiManager->GetRenderer();
+			auto renderer = g_pEnv->GetUIManager().GetRenderer();
 			{
 				renderer->StartFrame(512,512);
 				renderer->FullScreenTexturedQuad(cameraRT);

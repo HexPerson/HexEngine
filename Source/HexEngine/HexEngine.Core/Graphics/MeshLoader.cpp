@@ -11,12 +11,12 @@ namespace HexEngine
 {
 	MeshLoader::MeshLoader()
 	{
-		g_pEnv->_resourceSystem->RegisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
 	}
 
 	MeshLoader::~MeshLoader()
 	{
-		g_pEnv->_resourceSystem->UnregisterResourceLoader(this);
+		g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 	}
 
 	std::shared_ptr<IResource> MeshLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)

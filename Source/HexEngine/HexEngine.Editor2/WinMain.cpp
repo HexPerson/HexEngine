@@ -26,7 +26,7 @@ void PrepareShaderHotReload()
 	}
 
 	// create a file watch on the shaders folder, so we can catch any modifications and hot reload
-	HexEngine::g_pEnv->_fileSystem->CreateChangeNotifier(_SHADERS_LIVE_DIR);
+	HexEngine::g_pEnv->GetFileSystem().CreateChangeNotifier(_SHADERS_LIVE_DIR);
 }
 
 int WinMain(
@@ -101,9 +101,9 @@ int WinMain(
 	HexEngine::g_pEnv->AddGameExtension(HexEditor::g_pEditor);
 	HexEditor::g_pEditor->OnCreateGame();
 
-	SAFE_DELETE(HexEngine::g_pEnv->_uiManager);
-	HexEngine::g_pEnv->_uiManager = new HexEditor::EditorUI;
-	HexEngine::g_pEnv->_uiManager->Create(mainWindow->GetClientWidth(), mainWindow->GetClientHeight());
+	HexEditor::EditorUI* uiManager = new HexEditor::EditorUI;
+	uiManager->Create(mainWindow->GetClientWidth(), mainWindow->GetClientHeight());
+	HexEngine::g_pEnv->SetUIManager(uiManager);
 
 	//g_pEnv->_inputSystem->SetMouseMode(dx::Mouse::Mode::MODE_ABSOLUTE);
 

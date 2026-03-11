@@ -12,6 +12,6 @@ namespace HexEngine
 
 	std::shared_ptr<ITexture2D> ITexture2D::Create(const fs::path& absolutePath)
 	{
-		return dynamic_pointer_cast<ITexture2D>(g_pEnv->_resourceSystem->LoadResource(absolutePath));
+		return dynamic_pointer_cast<ITexture2D>(g_pEnv->GetResourceSystem().LoadResource(absolutePath));
 	}
 }

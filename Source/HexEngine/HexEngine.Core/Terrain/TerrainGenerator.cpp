@@ -254,7 +254,7 @@ namespace HexEngine
 		// set the paths for saving/loading
 
 		mesh->SetPaths(params.path, params.fs);
-		mesh->SetLoader(g_pEnv->_resourceSystem->FindResourceLoaderForExtension(".hmesh"));
+		mesh->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmesh"));
 
 		return mesh;
 	}

@@ -24,7 +24,7 @@ namespace HexEngine
 	/// <returns>The number of plugins that were loaded</returns>
 	uint32_t PluginSystem::LoadAllPlugins()
 	{
-		auto pluginPath = g_pEnv->_fileSystem->GetLocalAbsolutePath("Plugins");
+		auto pluginPath = g_pEnv->GetFileSystem().GetLocalAbsolutePath("Plugins");
 
 		if (fs::exists(pluginPath) == false)
 		{
