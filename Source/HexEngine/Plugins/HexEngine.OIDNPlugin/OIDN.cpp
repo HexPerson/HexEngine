@@ -57,7 +57,7 @@ void OIDN::Destroy()
 		_normalBuf.release();
 }
 
-void OIDN::CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors)
+void OIDN::CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* diffuseSignalInput, HexEngine::ITexture2D* diffuseHitDistance, HexEngine::ITexture2D* specularSignalInput, HexEngine::ITexture2D* specularHitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors)
 {
 	if (_filter)
 		_filter.release();
@@ -140,9 +140,9 @@ void OIDN::CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* s
 		D3D11_USAGE_DEFAULT,
 		D3D11_RESOURCE_MISC_SHARED);*/
 
-	_outputStaging = HexEngine::g_pEnv->_graphicsDevice->CreateTexture(beauty);
+	_outputStaging = HexEngine::g_pEnv->_graphicsDevice->CreateTexture(specularSignalInput);
 
-	_colourBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, beauty->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
+	_colourBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, specularSignalInput->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
 	_albedoBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, normalAndDepth->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
 	_normalBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, material->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
 	_outputBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, _outputStaging->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
@@ -162,7 +162,7 @@ void OIDN::CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* s
 	
 }
 
-void OIDN::BuildFrameData(HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors)
+void OIDN::BuildFrameData(HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* diffuseSignalInput, HexEngine::ITexture2D* diffuseHitDistance, HexEngine::ITexture2D* specularSignalInput, HexEngine::ITexture2D* specularHitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors)
 {
 	//return;
 	//beauty->CopyTo(_beautyStaging);

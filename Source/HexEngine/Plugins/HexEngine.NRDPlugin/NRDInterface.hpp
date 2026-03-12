@@ -11,8 +11,8 @@ class NRDInterface : public HexEngine::IDenoiserProvider
 public:
 	virtual bool Create() override;
 	virtual void Destroy() override;
-	virtual void CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors) override;
-	virtual void BuildFrameData(HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors) override;
+	virtual void CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* diffuseSignalInput, HexEngine::ITexture2D* diffuseHitDistance, HexEngine::ITexture2D* specularSignalInput, HexEngine::ITexture2D* specularHitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors) override;
+	virtual void BuildFrameData(HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* diffuseSignalInput, HexEngine::ITexture2D* diffuseHitDistance, HexEngine::ITexture2D* specularSignalInput, HexEngine::ITexture2D* specularHitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors) override;
 	virtual void FilterFrame(const HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* output) override;
 
 private:
@@ -31,7 +31,7 @@ private:
 	};
 
 	bool EnsureDevice();
-	bool RecreateResources(int32_t width, int32_t height, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors);
+	bool RecreateResources(int32_t width, int32_t height, HexEngine::ITexture2D* diffuseSignalInput, HexEngine::ITexture2D* diffuseHitDistance, HexEngine::ITexture2D* specularSignalInput, HexEngine::ITexture2D* specularHitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors);
 	void DestroyNrdResources();
 	bool CreateInstance();
 	bool CreatePipelines();
@@ -39,7 +39,7 @@ private:
 	bool CreateConstantBuffer();
 	bool CompileFullscreenShaders();
 	bool CreatePoolTextures();
-	bool CreateAuxiliaryTextures(HexEngine::ITexture2D* signalInput);
+	bool CreateAuxiliaryTextures(HexEngine::ITexture2D* specularSignalInput);
 	bool CreateTexture(TextureBinding& binding, uint32_t width, uint32_t height, DXGI_FORMAT format, UINT bindFlags);
 	bool CreateExternalBinding(TextureBinding& binding, HexEngine::ITexture2D* texture);
 	TextureBinding* ResolveResource(const nrd::ResourceDesc& resource);
@@ -59,14 +59,18 @@ private:
 	std::vector<ID3D11ComputeShader*> _pipelines;
 	std::vector<TextureBinding> _permanentPool;
 	std::vector<TextureBinding> _transientPool;
-	TextureBinding _signalInput;
-	TextureBinding _hitDistanceInput;
+	TextureBinding _diffuseSignalInput;
+	TextureBinding _diffuseHitDistanceInput;
+	TextureBinding _specularSignalInput;
+	TextureBinding _specularHitDistanceInput;
 	TextureBinding _normalAndDepthInput;
 	TextureBinding _materialInput;
 	TextureBinding _motionVectorsInput;
 	TextureBinding _normalRoughness;
 	TextureBinding _viewZ;
+	TextureBinding _diffuseRadianceHitDistance;
 	TextureBinding _specularRadianceHitDistance;
+	TextureBinding _denoisedDiffuseRadianceHitDistance;
 	TextureBinding _denoisedSpecularRadianceHitDistance;
 	TextureBinding _resolvedSignal;
 	ID3D11Buffer* _constantBuffer = nullptr;
@@ -81,5 +85,5 @@ private:
 	uint32_t _width = 0;
 	uint32_t _height = 0;
 	math::Vector2 _previousJitter;
-	nrd::Denoiser _activeDenoiser = nrd::Denoiser::RELAX_SPECULAR;
+	nrd::Denoiser _activeDenoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
 };

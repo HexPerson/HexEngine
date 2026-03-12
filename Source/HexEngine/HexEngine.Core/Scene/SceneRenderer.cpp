@@ -82,6 +82,8 @@ namespace HexEngine
 		SAFE_DELETE(_waterAccumulationRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_particleRT);
+		SAFE_DELETE(_ssrDiffuseTexture);
+		SAFE_DELETE(_ssrDiffuseHitInfo);
 		SAFE_DELETE(_ssrTexture);
 		SAFE_DELETE(_ssrHitInfo);
 		SAFE_DELETE(_dlssTarget);
@@ -113,6 +115,8 @@ namespace HexEngine
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_pointLightBuffer);
 		SAFE_DELETE(_particleRT);
+		SAFE_DELETE(_ssrDiffuseTexture);
+		SAFE_DELETE(_ssrDiffuseHitInfo);
 		SAFE_DELETE(_ssrTexture);
 		SAFE_DELETE(_ssrHitInfo);
 		SAFE_DELETE(_dlssTarget);
@@ -205,6 +209,36 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
+		_ssrDiffuseTexture = g_pEnv->_graphicsDevice->CreateTexture2D(
+			width,
+			height,
+			BEAUTY_FORMAT,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			0, MsaaLevel, 0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
+
+		_ssrDiffuseTexture->SetDebugName("_ssrDiffuseTexture");
+
+		_ssrDiffuseHitInfo = g_pEnv->_graphicsDevice->CreateTexture2D(
+			width,
+			height,
+			BEAUTY_FORMAT,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			0, MsaaLevel, 0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
+
+		_ssrDiffuseHitInfo->SetDebugName("_ssrDiffuseHitInfo");
+
 		_ssrTexture = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,// / 2,
 			height,// / 2,
@@ -218,7 +252,7 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
-		_ssrTexture->SetDebugName("_ssrTexture");
+		_ssrTexture->SetDebugName("_ssrSpecularTexture");
 
 		_ssrHitInfo = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,// / 2,
@@ -233,7 +267,7 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
-		_ssrHitInfo->SetDebugName("_ssrHitInfo");
+		_ssrHitInfo->SetDebugName("_ssrSpecularHitInfo");
 
 		_ssrHistory = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
 		_ssrResolved = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
@@ -381,7 +415,7 @@ namespace HexEngine
 
 		_taa.Create(_beautyRT);
 
-		g_pEnv->_denoiserProvider->CreateBuffers(width, height, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
+		g_pEnv->_denoiserProvider->CreateBuffers(width, height, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
 	}
 
 	const std::vector<Light*>& SceneRenderer::GetShadowCasters() const
@@ -1356,11 +1390,15 @@ namespace HexEngine
 
 				int32_t xpos = 10;
 
-				guiRenderer->FillTexturedQuad(_ssrTexture, DebugImageSize * 5 + 10, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+				guiRenderer->FillTexturedQuad(_ssrDiffuseTexture, DebugImageSize * 5 + 10, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
 
-				guiRenderer->FillTexturedQuad(_ssrHitInfo, DebugImageSize * 6 + 20, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+				guiRenderer->FillTexturedQuad(_ssrDiffuseHitInfo, DebugImageSize * 6 + 20, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
 
-				guiRenderer->FillTexturedQuad(_ssrResolved, DebugImageSize * 7 + 30, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+				guiRenderer->FillTexturedQuad(_ssrTexture, DebugImageSize * 7 + 30, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+
+				guiRenderer->FillTexturedQuad(_ssrHitInfo, DebugImageSize * 8 + 40, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+
+				guiRenderer->FillTexturedQuad(_ssrResolved, DebugImageSize * 9 + 50, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
 
 				//guiRenderer->FillTexturedQuad(_dlssTarget, 150 * 7 + 20, 10, 150, 150, math::Color(1, 1, 1, 1));
 
@@ -1854,10 +1892,12 @@ namespace HexEngine
 
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Begin");
 
+		_ssrDiffuseTexture->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+		_ssrDiffuseHitInfo->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		_ssrTexture->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		_ssrHitInfo->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
-		g_pEnv->_graphicsDevice->SetRenderTargets({ _ssrTexture, _ssrHitInfo });
+		g_pEnv->_graphicsDevice->SetRenderTargets({ _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo });
 		
 		const auto& bbvp = _currentCamera->GetViewport();
 		// set the shadow viewport
@@ -1894,7 +1934,7 @@ namespace HexEngine
 
 #if 1
 			// use NRD
-            g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
+            g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
             g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _ssrResolved);
 
             _ssrResolved->CopyTo(_ssrHistory);

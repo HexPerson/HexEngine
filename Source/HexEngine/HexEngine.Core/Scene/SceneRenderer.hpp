@@ -97,6 +97,8 @@ namespace HexEngine
 		ITexture2D* _atmosphereRT = nullptr;
 		ITexture2D* _lightAccumulationBuffer = nullptr;
 		ITexture2D* _pointLightBuffer = nullptr;
+		ITexture2D* _ssrDiffuseTexture = nullptr;
+		ITexture2D* _ssrDiffuseHitInfo = nullptr;
 		ITexture2D* _ssrTexture = nullptr;
 		ITexture2D* _ssrHitInfo = nullptr;
 		ITexture2D* _waterRT = nullptr;

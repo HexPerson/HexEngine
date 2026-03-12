@@ -220,7 +220,9 @@
 	struct SSROut
 	{
 		float4 diff : SV_TARGET0;
-		float4 hitinfo : SV_TARGET1;
+		float4 diffHitInfo : SV_TARGET1;
+		float4 spec : SV_TARGET2;
+		float4 specHitInfo : SV_TARGET3;
 	};
 
 	float3 GetForwardVectorFromWorldMatrix(matrix mat)

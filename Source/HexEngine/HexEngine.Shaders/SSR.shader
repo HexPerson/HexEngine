@@ -392,135 +392,126 @@
 		
 		float4 pixelSpecular = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 		float4 pixelColour = g_beautyTexture.Sample(g_pointSampler, screenPos);
+		float4 pixelDiffuse = GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos);
+		float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
+		float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
 
-		if(pixelSpecular.r == 0.0f)
+		float smoothness = pixelSpecular.b;
+		float metalness = pixelSpecular.r;
+		float specularProbability = pixelSpecular.a;
+		float diffuseWeight = saturate((1.0f - metalness) * (1.0f - smoothness));
+		float specularWeight = saturate(smoothness);
+		float3 diffuseSurfaceColour = saturate(pixelDiffuse.rgb);
+
+		if (smoothness <= 0.0f/* diffuseWeight <= 0.0f && specularWeight <= 0.0f */)
 		{
 			ssr.diff = float4(0, 0, 0, 0);
-			ssr.hitinfo = float4(0, 0, 0, 0);
+			ssr.diffHitInfo = float4(0, 0, 0, 0);
+			ssr.spec = float4(0, 0, 0, 0);
+			ssr.specHitInfo = float4(0, 0, 0, 0);
 			return ssr;
 		}
 
-		
-		float smoothness = pixelSpecular.b;
-		
+		uint instanceID = (uint)GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos).w;
+		uint2 numPixels = uint2(g_screenWidth, g_screenHeight);
+		uint2 pixelCoord = screenPos * numPixels;
+		uint pixelIndex = pixelCoord.y * numPixels.x + pixelCoord.x;
+		float3 eyeVector = normalize(pixelPosWS.xyz - g_eyePos.xyz);
+		float2 noiseSamplePos = screenPos * 64;
+		noiseSamplePos += frac(g_time) * 100.0f;
+		float3 noise = g_noiseTexture.Sample(g_pointSampler, noiseSamplePos).rgb;
+		uint baseRngState = pixelIndex + 719393 + noise.r * 3654 + noise.g * 1232 + 1540 * noise.b;
+		float depth = pixelNormal.w;
 
-		uint instanceID = (uint)GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos).w;//pixelColour.w;
+		float3 finalDiffuseColour = 0.0f;
+		float3 finalSpecularColour = 0.0f;
+		float diffuseHitDistanceAccum = 0.0f;
+		float specularHitDistanceAccum = 0.0f;
+		float diffuseHitCount = 0.0f;
+		float specularHitCount = 0.0f;
+		bool hadDiffuseReflection = false;
+		bool hadSpecularReflection = false;
 
-		float3 finalColour = 0.0f;
+		const uint DiffuseRays = 1;
+		const uint SpecularRays = 2;
 
-		bool hadAnyReflection = false;
-
-		// Calculate reflection, if there is any
-		if (smoothness > 0.0f)
+		if (diffuseWeight > 0.0f)
 		{
-			//smoothness = smoothness * pixelSpecular.r;
+			uint diffuseRngState = baseRngState ^ 0x68bc21ebu;
+			[loop]
+			for (uint i = 0; i < DiffuseRays; ++i)
+			{
+				bool didReflect = false;
+				float hitDistance = 0.0f;
+				float4 reflectedColour = GetReflection(
+					eyeVector,
+					pixelPosWS.xyz,
+					pixelNormal.xyz,
+					pixelColour,
+					depth,
+					didReflect,
+					hitDistance,
+					screenPos,
+					noise,
+					diffuseRngState,
+					smoothness,
+					0.0f,
+					instanceID
+				);
 
-			//float2 velocity = g_velocityTexture.Sample(g_pointSampler, screenPos).xy;
-
-			uint2 numPixels = uint2(g_screenWidth, g_screenHeight);
-			uint2 pixelCoord = screenPos * numPixels;
-			uint pixelIndex = pixelCoord.y * numPixels.x + pixelCoord.x;
-
-			const int pixelsToReject = 0;
-
-			// if(pixelsToReject > 0)
-			// {
-			// 	uint flipFlop = 1 - (g_frame % pixelsToReject);
-
-			// 	uint pixelIndex2 = pixelIndex + pixelCoord.y % pixelsToReject;
-
-			// 	if((pixelIndex2 % pixelsToReject) != flipFlop)
-			// 	{
-			// 		ssr.hitinfo = float4(0, 0, 0, 0);
-			// 		//ssr.diff = float4(g_historyTexture.Sample(g_pointSampler, screenPos - velocity).rgb, 1.0f);		
-			// 		ssr.diff = float4(pixelColour.rgb, 1.0f);		
-
-			// 		return ssr;
-			// 	}
-			// }
-
-			float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
-			float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
-
-			float3 eyeVector = normalize(pixelPosWS.xyz - g_eyePos.xyz);
-			float specularProbability = pixelSpecular.a;
-			float emission = pixelPosWS.w;
-
-			//float numPixelsTotal = g_screenWidth * g_screenHeight;
-			//numPixelsTotal /= 129600;
-
-			float3 finalReflectedColour = 0;
-
-			float2 noiseSamplePos = screenPos * 64;
-
-			noiseSamplePos += frac(g_time) * 100.0f;
-
-			float3 noise = g_noiseTexture.Sample(g_pointSampler, noiseSamplePos).rgb;
-			
-			uint rngState = pixelIndex + 719393 + noise.r * 3654 + noise.g * 1232 + 1540 * noise.b;// pixelIndex + (noise.r * 3 + noise.g  /*fmod(g_time, 1337.0f)*/ * 14540 * noise.b) + 719393  /*+(g_frame % 64) * 150*/;
-
-			//rngState += g_frame * 40;
-			//rngState += g_jitterOffsets;
-
-			const float NumRays = 2;
-
-			float depth = pixelNormal.w;
-
-            float numHits = 0;
-            float accumulatedHitDistance = 0.0f;
-
-            /*if (depth <= g_frustumDepths[0])
-                NumRays = 5;
-            else if (depth <= g_frustumDepths[1])
-                NumRays = 3;
-            else if (depth <= g_frustumDepths[2])
-                NumRays = 2;
-            else if (depth <= g_frustumDepths[3])
-                NumRays = 1;*/
-
-            [loop]
-            for (uint i = 0; i < NumRays; ++i)
-            {
-                bool didReflect = false;
-                float hitDistance = 0.0f;
-                float4 reflectedColour = GetReflection(
-                    eyeVector,
-                    pixelPosWS.xyz,
-                    pixelNormal.xyz,
-                    pixelColour,
-                    depth,
-                    didReflect,
-                    hitDistance,
-                    screenPos,
-                    noise,
-                    rngState,
-                    smoothness,
-                    specularProbability,
-                    instanceID
-                );
-
-                if (didReflect)
-                {
-                    finalReflectedColour += reflectedColour.rgb;
-                    numHits += 1.0f;
-                    accumulatedHitDistance += hitDistance;
-                    hadAnyReflection = true;
-                }
-            }
-
-			if(numHits > 0.0f)
-				finalColour.rgb = finalReflectedColour.rgb / (float)numHits;
-
-			float reflectionWeight = hadAnyReflection ? smoothness : 0.0f;
-			float averageHitDistance = numHits > 0.0f ? accumulatedHitDistance / numHits : 0.0f;
-			ssr.hitinfo = float4(0, 0, 0, averageHitDistance);
-            ssr.diff = float4(finalColour.rgb * reflectionWeight, hadAnyReflection ? 1.0f : 0.0f);
+				if (didReflect)
+				{
+					finalDiffuseColour += reflectedColour.rgb;
+					diffuseHitDistanceAccum += hitDistance;
+					diffuseHitCount += 1.0f;
+					hadDiffuseReflection = true;
+				}
+			}
 		}
-		else
+
+		if (specularWeight > 0.0f)
 		{
-			ssr.hitinfo = float4(0, 0, 0, 0);
-			ssr.diff = float4(0, 0, 0, 0);
+			uint specularRngState = baseRngState ^ 0x2c1b3c6du;
+			[loop]
+			for (uint i = 0; i < SpecularRays; ++i)
+			{
+				bool didReflect = false;
+				float hitDistance = 0.0f;
+				float4 reflectedColour = GetReflection(
+					eyeVector,
+					pixelPosWS.xyz,
+					pixelNormal.xyz,
+					pixelColour,
+					depth,
+					didReflect,
+					hitDistance,
+					screenPos,
+					noise,
+					specularRngState,
+					smoothness,
+					max(specularProbability, 1.0f),
+					instanceID
+				);
+
+				if (didReflect)
+				{
+					finalSpecularColour += reflectedColour.rgb;
+					specularHitDistanceAccum += hitDistance;
+					specularHitCount += 1.0f;
+					hadSpecularReflection = true;
+				}
+			}
 		}
+
+		float3 diffuseColour = diffuseHitCount > 0.0f ? finalDiffuseColour / diffuseHitCount : 0.0f;
+		float3 specularColour = specularHitCount > 0.0f ? finalSpecularColour / specularHitCount : 0.0f;
+		float averageDiffuseHitDistance = diffuseHitCount > 0.0f ? diffuseHitDistanceAccum / diffuseHitCount : 0.0f;
+		float averageSpecularHitDistance = specularHitCount > 0.0f ? specularHitDistanceAccum / specularHitCount : 0.0f;
+
+		ssr.diff = float4(diffuseColour * diffuseSurfaceColour * diffuseWeight, hadDiffuseReflection ? 1.0f : 0.0f);
+		ssr.diffHitInfo = float4(0, 0, 0, averageDiffuseHitDistance);
+		ssr.spec = float4(specularColour * specularWeight, hadSpecularReflection ? 1.0f : 0.0f);
+		ssr.specHitInfo = float4(0, 0, 0, averageSpecularHitDistance);
 
 		return ssr;
 	}
