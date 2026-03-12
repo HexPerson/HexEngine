@@ -1,9 +1,10 @@
 # HexEngine
-Hex Engine is an open-source 3D game engine currently being developed. The goal of Hex Engine is to provide an engine that is extremely performant but offering high-quality graphics.
+Hex Engine is a C++ open-source 3D game engine currently being developed. The goal of HexEngine is to provide an engine that is extremely performant but offering high-quality graphics.
 
 # Features
 - Full interactive world editor
 - Screen space reflections
+- Nvidia Real-time Denoiser with presets
 - DLSS 3.5
 - Support for volumetric light sources
 - Volumetric day/night light source
@@ -28,5 +29,3 @@ You'll need:
 Run Setup.bat and the automated build script will grab all the dependencies and begin building. This will take quite some time on the first run. 
 
 You can run this at any time and it will pull the latest repositories from each dependencies and rebuild (if necessary).
-
-# 
