@@ -81,10 +81,8 @@
 		//newPos.xy = (newPos.xy + 1) / 2.0f;
 		//newPos.y = 1 - newPos.y;
 
-		float2 vel = (newPos.xy - oldPos.xy);
+        float2 vel = (oldPos.xy - newPos.xy);
 
-		vel.x /= viewSize.x;
-		vel.y /= viewSize.y;
 
 		return vel;
 	}

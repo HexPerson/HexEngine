@@ -81,7 +81,7 @@ namespace HexEngine
 	extern HEX_API uint32_t g_numCommands;
 
 #define HEX_COMMAND(funcname)\
-void funcname##_fn(CommandArgs* args, bool pressed, void* param);\
-HCommand cmd_##funcname(#funcname, funcname##_fn);\
-void funcname##_fn(CommandArgs* args, bool pressed, void* param)	
+void funcname##_fn(HexEngine::CommandArgs* args, bool pressed, void* param);\
+HexEngine::HCommand cmd_##funcname(#funcname, funcname##_fn);\
+void funcname##_fn(HexEngine::CommandArgs* args, bool pressed, void* param)	
 }

@@ -133,7 +133,8 @@
 		float3 worldNormal,
 		float4 originalColour,
 		float currentDepth,
-		inout bool didReflect, 
+		inout bool didReflect,
+		out float hitDistance,
 		float2 screenPosUV,
 		float3 noise,
 		inout uint rngState,
@@ -142,6 +143,7 @@
 		uint instanceID)
 	{
 		didReflect = false;
+		hitDistance = 0.0f;
 
 		// fire a ray
 		float3 rayStart = worldPos;// +RandomPointInCircle(rngState).xy;
@@ -161,8 +163,8 @@
 		//return float4(rayDir, 1.0f);
 
 
-		const int stepCount = 16;
-		const float stepLen = 16.0f; // 32x32 is good
+		const int stepCount = 8;
+		const float stepLen = 8.0f; // 32x32 is good
 
 		//const int smallStepCount = stepCount * 3.0f;
 		//const float smallStepLen = stepLen / 3.0f;
@@ -185,7 +187,7 @@
 
 		float3 rayColour = 1;//originalColour.rgb;
 
-		const int MaxBounces = 3;
+		const int MaxBounces = 1;
 		int NumBounces = 0;
 
 		float totalDistanceTravelled = 0.0f;
@@ -235,6 +237,7 @@
 				fragPos -= rayDir * stepLen;
 				totalDistanceTravelled -= stepLen;
 
+#if 1
 				[loop]
 				for(int j = 0; j < 16; ++j)
 				{
@@ -272,7 +275,7 @@
 						break;
 					}
 				}
-				
+				#endif
 
 				float4 colourAndEmissive = g_beautyTexture.Sample(g_pointSampler, fragTex);
 				float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, fragTex);
@@ -294,6 +297,7 @@
 				// if we hit an emissive object just return
 				if(pixelPosWS.w > 0.0f)
 				{
+                    hitDistance = max(length(pixelPosWS.xyz - worldPos), 0.0f);
 					return float4(rayColour.rgb, 1.0f);
 				}
 
@@ -318,6 +322,7 @@
 				//}
 				//rayColour *= 1.0f / p;				
 
+                hitDistance = didHitSky ? max(totalDistanceTravelled, 0.0f) : max(length(pixelPosWS.xyz - worldPos), 0.0f);
 				NumBounces++;
 
 				if(didHitSky)
@@ -359,9 +364,10 @@
 		}
 
 		if(NumBounces == 0)
-			return float4(originalColour.rgb, 1.0f);// originalColour;
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-		return float4(rayColour, 1.0f);// originalColour;
+		hitDistance = totalDistanceTravelled;
+		return float4(rayColour, 1.0f);
 	}
 
 	/*struct SSR_OUT
@@ -389,7 +395,8 @@
 
 		if(pixelSpecular.r == 0.0f)
 		{
-			ssr.diff = float4(pixelColour.rgb, 1.0f);
+			ssr.diff = float4(0, 0, 0, 0);
+			ssr.hitinfo = float4(0, 0, 0, 0);
 			return ssr;
 		}
 
@@ -399,7 +406,7 @@
 
 		uint instanceID = (uint)GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos).w;//pixelColour.w;
 
-		float3 finalColour = pixelColour.rgb;
+		float3 finalColour = 0.0f;
 
 		bool hadAnyReflection = false;
 
@@ -414,23 +421,23 @@
 			uint2 pixelCoord = screenPos * numPixels;
 			uint pixelIndex = pixelCoord.y * numPixels.x + pixelCoord.x;
 
-			const int pixelsToReject = 2;
+			const int pixelsToReject = 0;
 
-			if(pixelsToReject > 0)
-			{
-				uint flipFlop = 1 - (g_frame % pixelsToReject);
+			// if(pixelsToReject > 0)
+			// {
+			// 	uint flipFlop = 1 - (g_frame % pixelsToReject);
 
-				uint pixelIndex2 = pixelIndex + pixelCoord.y % pixelsToReject;
+			// 	uint pixelIndex2 = pixelIndex + pixelCoord.y % pixelsToReject;
 
-				if((pixelIndex2 % pixelsToReject) != flipFlop)
-				{
-					ssr.hitinfo = float4(0, 0, 0, 0);
-					//ssr.diff = float4(g_historyTexture.Sample(g_pointSampler, screenPos - velocity).rgb, 1.0f);		
-					ssr.diff = float4(pixelColour.rgb, 1.0f);		
+			// 	if((pixelIndex2 % pixelsToReject) != flipFlop)
+			// 	{
+			// 		ssr.hitinfo = float4(0, 0, 0, 0);
+			// 		//ssr.diff = float4(g_historyTexture.Sample(g_pointSampler, screenPos - velocity).rgb, 1.0f);		
+			// 		ssr.diff = float4(pixelColour.rgb, 1.0f);		
 
-					return ssr;
-				}
-			}
+			// 		return ssr;
+			// 	}
+			// }
 
 			float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
 			float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
@@ -444,12 +451,11 @@
 
 			float3 finalReflectedColour = 0;
 
-			float2 noiseSamplePos = screenPos * 32;
+			float2 noiseSamplePos = screenPos * 64;
 
-			//noiseSamplePos += frac(g_time) * 20.0f;
+			noiseSamplePos += frac(g_time) * 100.0f;
 
 			float3 noise = g_noiseTexture.Sample(g_pointSampler, noiseSamplePos).rgb;
-
 			
 			uint rngState = pixelIndex + 719393 + noise.r * 3654 + noise.g * 1232 + 1540 * noise.b;// pixelIndex + (noise.r * 3 + noise.g  /*fmod(g_time, 1337.0f)*/ * 14540 * noise.b) + 719393  /*+(g_frame % 64) * 150*/;
 
@@ -460,57 +466,66 @@
 
 			float depth = pixelNormal.w;
 
-			float numHits = 0;
+            float numHits = 0;
+            float accumulatedHitDistance = 0.0f;
 
-			/*if (depth <= g_frustumDepths[0])
-				NumRays = 5;
-			else if (depth <= g_frustumDepths[1])
-				NumRays = 3;
-			else if (depth <= g_frustumDepths[2])
-				NumRays = 2;
-			else if (depth <= g_frustumDepths[3])
-				NumRays = 1;*/
+            /*if (depth <= g_frustumDepths[0])
+                NumRays = 5;
+            else if (depth <= g_frustumDepths[1])
+                NumRays = 3;
+            else if (depth <= g_frustumDepths[2])
+                NumRays = 2;
+            else if (depth <= g_frustumDepths[3])
+                NumRays = 1;*/
 
-			
+            [loop]
+            for (uint i = 0; i < NumRays; ++i)
+            {
+                bool didReflect = false;
+                float hitDistance = 0.0f;
+                float4 reflectedColour = GetReflection(
+                    eyeVector,
+                    pixelPosWS.xyz,
+                    pixelNormal.xyz,
+                    pixelColour,
+                    depth,
+                    didReflect,
+                    hitDistance,
+                    screenPos,
+                    noise,
+                    rngState,
+                    smoothness,
+                    specularProbability,
+                    instanceID
+                );
 
-			[loop]
-			for (uint i = 0; i < NumRays; ++i)
-			{
-				bool didReflect = false;
-				float4 reflectedColour = GetReflection(
-					eyeVector,
-					pixelPosWS.xyz,
-					pixelNormal.xyz,
-					pixelColour,
-					depth,
-					didReflect,
-					screenPos,
-					noise,
-					rngState,
-					smoothness,
-					specularProbability,
-					instanceID
-				);
-
-				if (didReflect)
-				{
-					finalReflectedColour += reflectedColour.rgb;
-					numHits += 1.0f;
-
-					hadAnyReflection = true;
-				}
-			}
+                if (didReflect)
+                {
+                    finalReflectedColour += reflectedColour.rgb;
+                    numHits += 1.0f;
+                    accumulatedHitDistance += hitDistance;
+                    hadAnyReflection = true;
+                }
+            }
 
 			if(numHits > 0.0f)
-				finalColour.rgb = finalReflectedColour.rgb / (float)numHits;// NumRays;
+				finalColour.rgb = finalReflectedColour.rgb / (float)numHits;
 
-			ssr.hitinfo = float4(lerp(pixelColour.rgb, finalColour.rgb, smoothness), hadAnyReflection ? 1.0f : 0.0f);
-		}	
+			float reflectionWeight = hadAnyReflection ? smoothness : 0.0f;
+			float averageHitDistance = numHits > 0.0f ? accumulatedHitDistance / numHits : 0.0f;
+			ssr.hitinfo = float4(0, 0, 0, averageHitDistance);
+            ssr.diff = float4(finalColour.rgb * reflectionWeight, hadAnyReflection ? 1.0f : 0.0f);
+		}
 		else
-			ssr.hitinfo = float4(0, 0, 0, -1);
+		{
+			ssr.hitinfo = float4(0, 0, 0, 0);
+			ssr.diff = float4(0, 0, 0, 0);
+		}
 
-		ssr.diff = float4(lerp(pixelColour.rgb, finalColour.rgb, smoothness), 1.0f);		
-
-		return ssr;//float4(lerp(pixelColour.rgb, finalColour.rgb, smoothness), 1.0f);
+		return ssr;
 	}
 }
+
+
+
+

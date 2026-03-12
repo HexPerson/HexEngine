@@ -57,7 +57,7 @@ void OIDN::Destroy()
 		_normalBuf.release();
 }
 
-void OIDN::CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITexture2D* normals, ITexture2D* albedo)
+void OIDN::CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors)
 {
 	if (_filter)
 		_filter.release();
@@ -80,7 +80,7 @@ void OIDN::CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITex
 	//_normalBuf = _device.newBuffer(width * height * 4 * sizeof(float), oidn::Storage::Managed);
 	//_outputBuf = _device.newBuffer(width * height * 4 * sizeof(float), oidn::Storage::Managed);
 
-	/*_beautyStaging = g_pEnv->_graphicsDevice->CreateTexture2D(
+	/*_beautyStaging = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(
 		width, height,
 		(DXGI_FORMAT)beauty->GetFormat(),
 		1,
@@ -95,7 +95,7 @@ void OIDN::CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITex
 		D3D11_USAGE_DEFAULT,
 		D3D11_RESOURCE_MISC_SHARED);
 
-	_normalStaging = g_pEnv->_graphicsDevice->CreateTexture2D(
+	_normalStaging = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(
 		width, height,
 		(DXGI_FORMAT)beauty->GetFormat(),
 		1,
@@ -110,7 +110,7 @@ void OIDN::CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITex
 		D3D11_USAGE_DEFAULT,
 		D3D11_RESOURCE_MISC_SHARED);
 
-	_colourStaging = g_pEnv->_graphicsDevice->CreateTexture2D(
+	_colourStaging = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(
 		width, height,
 		(DXGI_FORMAT)beauty->GetFormat(),
 		1,
@@ -125,7 +125,7 @@ void OIDN::CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITex
 		D3D11_USAGE_DEFAULT,
 		D3D11_RESOURCE_MISC_SHARED);
 
-	_outputStaging = g_pEnv->_graphicsDevice->CreateTexture2D(
+	_outputStaging = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(
 		width, height,
 		(DXGI_FORMAT)beauty->GetFormat(),
 		1,
@@ -140,11 +140,11 @@ void OIDN::CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITex
 		D3D11_USAGE_DEFAULT,
 		D3D11_RESOURCE_MISC_SHARED);*/
 
-	_outputStaging = g_pEnv->_graphicsDevice->CreateTexture(beauty);
+	_outputStaging = HexEngine::g_pEnv->_graphicsDevice->CreateTexture(beauty);
 
 	_colourBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, beauty->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
-	_albedoBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, normals->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
-	_normalBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, albedo->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
+	_albedoBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, normalAndDepth->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
+	_normalBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, material->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
 	_outputBuf = _device.newBuffer(oidn::ExternalMemoryTypeFlag::D3D11ResourceKMT, _outputStaging->GetSharedHandle(), nullptr, width * height * 4 * sizeof(float));
 
 	// Create a filter for denoising a beauty (color) image using optional auxiliary images too
@@ -162,7 +162,7 @@ void OIDN::CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITex
 	
 }
 
-void OIDN::BuildFrameData(DenoiserFrameData& fd, ITexture2D* beauty, ITexture2D* normals, ITexture2D* albedo)
+void OIDN::BuildFrameData(HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors)
 {
 	//return;
 	//beauty->CopyTo(_beautyStaging);
@@ -175,7 +175,7 @@ void OIDN::BuildFrameData(DenoiserFrameData& fd, ITexture2D* beauty, ITexture2D*
 	//_colourStaging->GetPixels(fd.albedo);
 }
 
-void OIDN::FilterFrame(const DenoiserFrameData& fd, ITexture2D* beauty)
+void OIDN::FilterFrame(const HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* output)
 {
 	// Fill the input image buffers
 	//float* colorPtr = (float*)_colourBuf.getData();
@@ -206,3 +206,5 @@ void OIDN::FilterFrame(const DenoiserFrameData& fd, ITexture2D* beauty)
 		//_colourBuf->CopyTo(beauty);
 	}
 }
+
+

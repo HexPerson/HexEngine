@@ -29,7 +29,7 @@ void OIDNPlugin::Destroy()
 /// Called by the engine to retrieve version info about this plugin
 /// </summary>
 /// <param name="data">A pointer to the VersionInfo instance representing this plugin</param>
-void OIDNPlugin::GetVersionData(VersionData* data)
+void OIDNPlugin::GetVersionData(HexEngine::IPlugin::VersionData* data)
 {
 	data->author = "HexPerson";
 	data->description = "A short description of what your plugin does";
@@ -44,12 +44,12 @@ void OIDNPlugin::GetVersionData(VersionData* data)
 /// </summary>
 /// <param name="interfaceName">The name of the interface being searched for</param>
 /// <returns>A pointer to an implemented interface if found, or null if not.</returns>
-IPluginInterface* OIDNPlugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* OIDNPlugin::CreateInterface(const std::string& interfaceName)
 {
 	// generally you'd use a InterfaceName from the interface you want to override, e.g. IModelImporter::InterfaceName as this is guaranteed to be correct for the version being implemented.
 	// You can use string literals too, but its not recommended
 	//
-	if (interfaceName == IDenoiserProvider::InterfaceName)
+	if (interfaceName == HexEngine::IDenoiserProvider::InterfaceName)
 		return _interface;
 
 	return nullptr;
@@ -60,3 +60,5 @@ void OIDNPlugin::GetDependencies(std::vector<std::string>& dependencies) const
 	// if your plugin depends on any other plugins, add them here. For example:
 	// dependencies.push_back("HexEngine.D3D11Plugin");
 }
+
+

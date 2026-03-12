@@ -1,21 +1,20 @@
-
 #pragma once
 
 #include <HexEngine.Core/HexEngine.hpp>
 #include <OpenImageDenoise/oidn.hpp>
 
-class OIDN : public IDenoiserProvider
+class OIDN : public HexEngine::IDenoiserProvider
 {
 public:
 	virtual bool Create() override;
 
 	virtual void Destroy() override;
 
-	virtual void CreateBuffers(int32_t width, int32_t height, ITexture2D* beauty, ITexture2D* normals, ITexture2D* albedo) override;
+	virtual void CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors) override;
 
-	virtual void BuildFrameData(DenoiserFrameData& fd, ITexture2D* beauty, ITexture2D* normals, ITexture2D* albedo) override;
+	virtual void BuildFrameData(HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* signalInput, HexEngine::ITexture2D* hitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors) override;
 
-	virtual void FilterFrame(const DenoiserFrameData& fd, ITexture2D* beauty) override;
+	virtual void FilterFrame(const HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* output) override;
 
 private:
 	oidn::DeviceRef _device;
@@ -25,8 +24,9 @@ private:
 	oidn::BufferRef _outputBuf;
 	oidn::FilterRef _filter;
 
-	ITexture2D* _beautyStaging = nullptr;
-	ITexture2D* _colourStaging = nullptr;
-	ITexture2D* _normalStaging = nullptr;
-	ITexture2D* _outputStaging = nullptr;
+	HexEngine::ITexture2D* _beautyStaging = nullptr;
+	HexEngine::ITexture2D* _colourStaging = nullptr;
+	HexEngine::ITexture2D* _normalStaging = nullptr;
+	HexEngine::ITexture2D* _outputStaging = nullptr;
 };
+

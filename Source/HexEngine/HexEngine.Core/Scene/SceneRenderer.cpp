@@ -181,6 +181,8 @@ namespace HexEngine
 			D3D11_USAGE_DEFAULT,
 			D3D11_RESOURCE_MISC_SHARED);
 
+		_beautyRT->SetDebugName("_beautyRT");
+
 		if (!_beautyRT)
 		{
 			LOG_CRIT("Failed to create composition render target");
@@ -188,6 +190,7 @@ namespace HexEngine
 		}
 
 		_waterRT = g_pEnv->_graphicsDevice->CreateTexture(_beautyRT);
+		_waterRT->SetDebugName("_waterRT");
 
 		_particleRT = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
@@ -215,6 +218,8 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
+		_ssrTexture->SetDebugName("_ssrTexture");
+
 		_ssrHitInfo = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,// / 2,
 			height,// / 2,
@@ -228,8 +233,13 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
+		_ssrHitInfo->SetDebugName("_ssrHitInfo");
+
 		_ssrHistory = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
 		_ssrResolved = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
+
+		_ssrHistory->SetDebugName("_ssrHistory");
+		_ssrResolved->SetDebugName("_ssrResolved");
 
 		_shadowMapsRT = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
@@ -364,12 +374,14 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_TEXTURE2D,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
+		_dlssTarget->SetDebugName("_dlssTarget");
+
 		_bloomEffect = new Bloom();
 		_bloomEffect->Create(width / 4, height / 4);
 
 		_taa.Create(_beautyRT);
 
-		g_pEnv->_denoiserProvider->CreateBuffers(width, height, _beautyRT, _gbuffer.GetNormal(), _gbuffer.GetDiffuse());
+		g_pEnv->_denoiserProvider->CreateBuffers(width, height, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
 	}
 
 	const std::vector<Light*>& SceneRenderer::GetShadowCasters() const
@@ -1208,11 +1220,6 @@ namespace HexEngine
 			//_gbuffer.GetNormal()->GetPixels(_denoiseFD.normals);
 			//_gbuffer.GetDiffuse()->GetPixels(_denoiseFD.albedo);
 
-			_denoiseFD.camera = _currentCamera;
-
-			g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _beautyRT, _gbuffer.GetNormal(), _gbuffer.GetDiffuse());
-
-			g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _beautyRT);
 		}
 		else
 		{
@@ -1260,9 +1267,12 @@ namespace HexEngine
 #endif
 				{
 
-					g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
-
-					RenderOverlays(flags, _beautyRT, _currentCamera->GetRenderTarget());
+					GFX_PERF_BEGIN(0xFFFFFFFF, L"RenderOverlays");
+					{
+						g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
+						RenderOverlays(flags, _beautyRT, _currentCamera->GetRenderTarget());
+					}
+					GFX_PERF_END();
 				}				
 			}
 			else
@@ -1295,37 +1305,66 @@ namespace HexEngine
 			//guiRenderer->FullScreenTexturedQuad(beauty);
 
 			
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"Colour grading");
+			{
+				guiRenderer->FullScreenTexturedQuad(beauty, _colourGradingShader.get());
+				renderTarget->CopyTo(beauty);
+			}
+			GFX_PERF_END();
 
-			guiRenderer->FullScreenTexturedQuad(beauty, _colourGradingShader.get());
-			renderTarget->CopyTo(beauty);
-
-			guiRenderer->FullScreenTexturedQuad(beauty, _vignetteShader.get());
-			renderTarget->CopyTo(beauty);
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"Vignette");
+			{
+				guiRenderer->FullScreenTexturedQuad(beauty, _vignetteShader.get());
+				renderTarget->CopyTo(beauty);
+			}
+			GFX_PERF_END();
 
 			if (r_chromaticAbberation._val.f32 > 0.0f)
 			{
-				guiRenderer->FullScreenTexturedQuad(beauty, _chromaticAberrationShader.get());
-				renderTarget->CopyTo(beauty);
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Chromatic abberration");
+				{
+					guiRenderer->FullScreenTexturedQuad(beauty, _chromaticAberrationShader.get());
+					renderTarget->CopyTo(beauty);
+				}
+				GFX_PERF_END();
 			}			
 
 			if (r_fxaa._val.i32 && canPostProcess)
-				guiRenderer->FullScreenTexturedQuad(beauty, _fxaa.get());
+			{
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"FXAA");
+				{
+					guiRenderer->FullScreenTexturedQuad(beauty, _fxaa.get());
+				}
+				GFX_PERF_END();
+			}
 			else
-				guiRenderer->FullScreenTexturedQuad(beauty);
+			{
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Colour grading");
+				{
+					guiRenderer->FullScreenTexturedQuad(beauty);
+				}
+				GFX_PERF_END();
+			}
 
+			const int32_t DebugImageSize = 250;
 
 			// Render the debug targets
 			if (r_debugScene._val.b && canPostProcess)
 			{
-				_gbuffer.RenderDebugTargets(10, 10, 150, guiRenderer);
+				_gbuffer.RenderDebugTargets(10, 10, DebugImageSize, guiRenderer);
 
 
 				int32_t xpos = 10;
 
-				guiRenderer->FillTexturedQuad(_ssrTexture, 150 * 5 + 10, 10, 150, 150, math::Color(1, 1, 1, 1));
+				guiRenderer->FillTexturedQuad(_ssrTexture, DebugImageSize * 5 + 10, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
 
-				guiRenderer->FillTexturedQuad(_dlssTarget, 150 * 6 + 20, 10, 150, 150, math::Color(1, 1, 1, 1));
+				guiRenderer->FillTexturedQuad(_ssrHitInfo, DebugImageSize * 6 + 20, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
 
+				guiRenderer->FillTexturedQuad(_ssrResolved, DebugImageSize * 7 + 30, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+
+				//guiRenderer->FillTexturedQuad(_dlssTarget, 150 * 7 + 20, 10, 150, 150, math::Color(1, 1, 1, 1));
+
+#if 0
 				for (auto& caster : _shadowCasters)
 				{
 					for (auto i = 0; i < caster->GetMaxSupportedShadowCascades(); ++i)
@@ -1335,13 +1374,14 @@ namespace HexEngine
 						if (!map)
 							continue;
 
-						map->RenderDebugTargets(xpos, 170, 150, guiRenderer);
+						map->RenderDebugTargets(xpos, 170, DebugImageSize, guiRenderer);
 						xpos += 160;
 					}
 				}
 
 				// draw the shadow accumulator
-				guiRenderer->FillTexturedQuad(_shadowMapsAccumulator, xpos, 170, 150, 150, math::Color(1, 1, 1, 1));
+				guiRenderer->FillTexturedQuad(_shadowMapsAccumulator, xpos, 170, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+#endif
 			}
 		}
 	}
@@ -1812,6 +1852,8 @@ namespace HexEngine
 		if (!r_ssr._val.b)
 			return;
 
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Begin");
+
 		_ssrTexture->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		_ssrHitInfo->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
@@ -1845,35 +1887,58 @@ namespace HexEngine
 
 			
 
-#if 1 // resolve it
+            _ssrResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
-			_ssrResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
-			g_pEnv->_graphicsDevice->SetRenderTarget(_ssrResolved);
+            _denoiseFD.camera = _currentCamera;
+            _denoiseFD.jitter = _taa.GetJitterOffset(bbvp.width, bbvp.height);
 
-			g_pEnv->_graphicsDevice->SetTexture2D(_ssrHistory);
-			g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetVelocity());
-			g_pEnv->_graphicsDevice->SetTexture2D(_ssrHitInfo);
+#if 1
+			// use NRD
+            g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
+            g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _ssrResolved);
+
+            _ssrResolved->CopyTo(_ssrHistory);
+
+			// This needs to be set again as NRD overwrites it
+			auto sunLight = _currentScene->GetSunLight();
+
+			SetupPerFrameBuffer(
+				_currentCamera->GetViewMatrix(),
+				_currentCamera->GetProjectionMatrix(),
+				_currentCamera->GetViewMatrixPrev(),
+				_currentCamera->GetProjectionMatrixPrev(),
+				r_shadowCascades._val.i32,
+				sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
+				_currentCamera->GetViewport(),
+				6,
+				sunLight ? sunLight->GetLightMultiplier() : 1.0f
+			);
+
+			guiRenderer->StartFrame();
+			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve");
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+			guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
+			//_ssrResolved->BlendTo_Additive(_beautyRT);
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+
+#else
+
+			// do not use NRD
+			guiRenderer->StartFrame();
+			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve");
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
 			guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
-
-			_ssrResolved->CopyTo(_ssrHistory);
+			//_ssrResolved->BlendTo_Additive(_beautyRT);
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 #endif
 
-			
-
-			//_ssrBlur->Render(guiRenderer);
-
-			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
-			
-			// to denoise
-			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
-			guiRenderer->FullScreenTexturedQuad(_ssrResolved, nullptr/*_basicDenoise*/);
-			// without denoising
-			//_ssrTexture->CopyTo(_beautyRT);
-			// 
-			
-
-			//_ssrTexture->BlendTo_Alpha(_beautyRT);
-			
+			//guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
+			//_ssrResolved->CopyTo(_beautyRT);
+			GFX_PERF_END();
 
 			//_ssrResolved->BlendTo_Additive(_compositionRT);
 			
@@ -1888,6 +1953,8 @@ namespace HexEngine
 
 			guiRenderer->EndFrame();
 		}
+
+		GFX_PERF_END();
 	}
 
 	void SceneRenderer::RenderVolumetricClouds()
@@ -1915,3 +1982,5 @@ namespace HexEngine
 		return _beautyRT;
 	}
 }
+
+

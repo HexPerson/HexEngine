@@ -43,6 +43,6 @@ namespace HexEngine
 	};
 
 #define REG_CLASS(cls) HexEngine::g_pEnv->_classRegistry->Register(ConstCRC32(#cls), #cls, typeid(cls),\
-[](Entity* entity, BaseComponent* copy){ return (BaseComponent*)new cls(entity, (cls*)copy); },\
-[](Entity* entity){ return (BaseComponent*)new cls(entity); });
+[](HexEngine::Entity* entity, HexEngine::BaseComponent* copy){ return (HexEngine::BaseComponent*)new cls(entity, (cls*)copy); },\
+[](HexEngine::Entity* entity){ return (HexEngine::BaseComponent*)new cls(entity); });
 }

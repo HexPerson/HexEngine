@@ -25,10 +25,10 @@
 }
 "PixelShader"
 {
-	Texture2D historyTexture : register(t0);
-	Texture2D velocityTexture : register(t1);
-	Texture2D hitInfo : register(t2);
-	Texture2D shaderTexture : register(t3);
+	//Texture2D historyTexture : register(t0);
+	//Texture2D velocityTexture : register(t1);
+	//Texture2D hitInfo : register(t2);
+	Texture2D shaderTexture : register(t0);
 	
 
 	SamplerState PointSampler : register(s3);
@@ -43,6 +43,9 @@
 		float2 screenPos = float2(input.position.x / (float)g_screenWidth , input.position.y / (float)g_screenHeight ); //input.texcoord
 
 		float4 pixels = shaderTexture.Sample(PointSampler, input.texcoord);
+		return float4(pixels.rgb, 1.0f);
+
+#if 0
 		float3 colour = pixels.rgb;
 		float2 velocity = velocityTexture.Sample(PointSampler, input.texcoord).xy;
 
@@ -150,5 +153,6 @@
 		float3 resolvedColour = lerp(colour, history, modulationFactor);
 
 		return float4(resolvedColour, 1.0f);
+#endif
 	}
 }

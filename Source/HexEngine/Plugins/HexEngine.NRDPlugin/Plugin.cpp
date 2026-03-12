@@ -31,10 +31,10 @@ void NRDPlugin::Destroy()
 void NRDPlugin::GetVersionData(VersionData* data)
 {
 	data->author = "HexPerson";
-	data->description = "A short description of what your plugin does";
+	data->description = "Integrates NVIDIA Real-Time Denoisers through the Direct3D 11 backend";
 	data->majorVersion = 1;
 	data->minorVersion = 0;
-	data->name = "SamplePlugin";
+	data->name = "HexEngine.NRDPlugin";
 }
 
 /// <summary>
@@ -55,6 +55,5 @@ HexEngine::IPluginInterface* NRDPlugin::CreateInterface(const std::string& inter
 
 void NRDPlugin::GetDependencies(std::vector<std::string>& dependencies) const
 {
-	// if your plugin depends on any other plugins, add them here. For example:
-	// dependencies.push_back("HexEngine.D3D11Plugin");
+	dependencies.push_back("HexEngine.D3D11Plugin");
 }

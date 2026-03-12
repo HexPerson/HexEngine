@@ -13,8 +13,8 @@ namespace HexEngine
 	class Style;
 	class ComponentWidget;
 
-#define DEFINE_COMPONENT_CTOR(comp) comp(Entity* entity);\
-	comp(Entity* entity, comp* copy);
+#define DEFINE_COMPONENT_CTOR(comp) comp(HexEngine::Entity* entity);\
+	comp(HexEngine::Entity* entity, comp* copy);
 
 //#define DESERIALIZE_VALUE(name, defaultValue) if (auto it = data.find(#name); it == data.end())\
 //	{\

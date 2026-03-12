@@ -31,6 +31,9 @@ namespace HexEngine
 		_history = g_pEnv->_graphicsDevice->CreateTexture(buffer);
 		_renderTarget = g_pEnv->_graphicsDevice->CreateTexture(buffer);
 
+		_history->SetDebugName("TAA::_history");
+		_renderTarget->SetDebugName("TAA::_renderTarget");
+
 		_resolveShader = IShader::Create("EngineData.Shaders/TAAResolve.hcs");
 
 		return true;
