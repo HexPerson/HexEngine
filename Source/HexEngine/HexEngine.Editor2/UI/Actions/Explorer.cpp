@@ -126,6 +126,21 @@ namespace HexEditor
 		_editingAssetExtension = asset->path.extension();
 	}
 
+	void Explorer::ImportAllMeshes()
+	{
+		const auto folderPath = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(_currentlyBrowsedFolder);
+
+		for (auto it = fs::directory_iterator(folderPath); it != fs::directory_iterator(); it++)
+		{
+			auto p = *it;
+
+			if (fs::is_directory(p) == false && p.path().extension() == ".hmesh")
+			{
+				LoadAsset(p.path());
+			}
+		}		
+	}
+
 	bool Explorer::OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data)
 	{
 		auto pos = GetAbsolutePosition();
@@ -267,13 +282,14 @@ namespace HexEditor
 						{
 							_contextMenu = new HexEngine::ContextMenu(this, p);
 
-							_contextMenu->AddItem(new HexEngine::ContextItem(L"Set Material", std::bind(&Explorer::SetMassMaterial, this)));
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&Explorer::SetMassMaterial, this)));
 						}
 						else
 						{
 							_contextMenu = new HexEngine::ContextMenu(this, p);
 
-							_contextMenu->AddItem(new HexEngine::ContextItem(L"Select All", std::bind(&Explorer::SelectAll, this)));
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Select all", std::bind(&Explorer::SelectAll, this)));
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Import all meshes", std::bind(&Explorer::ImportAllMeshes, this)));
 
 							HexEngine::ContextItem* createNewItem = new HexEngine::ContextItem(L"Create new...", nullptr);
 
@@ -453,7 +469,7 @@ namespace HexEditor
 
 				meshRenderer->SetMesh(mesh);
 
-				entity->GetComponent<HexEngine::Transform>()->SetScale(math::Vector3(10.0f));
+				entity->GetComponent<HexEngine::Transform>()->SetScale(math::Vector3(0.1f));
 
 				if (mesh->HasAnimations())
 				{

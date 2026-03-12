@@ -45,7 +45,7 @@ namespace HexEditor
 
 		AssetDesc* GetCurrentlyDraggedAsset() const { return _draggingAsset; }
 
-		//void EditFileName(const fs::path& 
+		void ImportAllMeshes();
 
 	private:
 		void RenderAssetExplorer(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h);
