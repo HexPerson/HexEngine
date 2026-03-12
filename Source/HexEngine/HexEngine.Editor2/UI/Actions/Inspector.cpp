@@ -119,7 +119,7 @@ namespace HexEditor
 
 	void Inspector::InspectEntity(HexEngine::Entity* entity)
 	{
-		if (_inspecting)
+		if (_inspecting && _inspecting != entity)
 			_inspecting->ClearFlags(HexEngine::EntityFlags::SelectedInEditor);
 
 		if (!entity)

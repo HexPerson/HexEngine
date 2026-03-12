@@ -497,6 +497,12 @@ namespace HexEditor
 		_rightDock = new Inspector(_rootElement, HexEngine::Point(width - dockWidth, style.win_title_height + 2), HexEngine::Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)));
 
 		_lowerDock = new Explorer(_rootElement, HexEngine::Point(0, height - (lowerDockHeight)), HexEngine::Point(width, lowerDockHeight));
+
+		HexEngine::g_pEnv->_inputSystem->SetInputViewport(
+			_sceneView->GetPosition().x,
+			_sceneView->GetPosition().y,
+			_sceneView->GetSize().x,
+			_sceneView->GetSize().y);
 	}
 
 	void EditorUI::CreateEntityList()
@@ -665,6 +671,11 @@ namespace HexEditor
 		
 		if (event == HexEngine::InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _sceneView->IsMouseOver(true))
 		{
+			if (auto inspecting = _rightDock->GetInspectingEntity(); inspecting != nullptr && inspecting->IsEditorGizmoHovered())
+			{
+				return false;
+			}
+
 			auto hit = RayCastWorld();
 
 			if (hit.entity)

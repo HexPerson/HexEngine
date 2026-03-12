@@ -94,6 +94,8 @@ namespace HexEngine
 
 		virtual void DebugRender();
 
+		bool IsEditorGizmoHovered() const { return _isEditorGizmoHovered; }
+
 		Scene* GetScene() const;
 
 		template <typename T>
@@ -254,6 +256,7 @@ namespace HexEngine
 
 	protected:
 		bool _isInPVS = false;
+		bool _isEditorGizmoHovered = false;
 		Scene* _scene = nullptr;
 		EntityFlags _flags = EntityFlags::None;
 

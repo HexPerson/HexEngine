@@ -887,7 +887,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			enableAntiFirefly = true;
 			enableRoughnessEdgeStopping = true;
 			hitDistanceMode = nrd::HitDistanceReconstructionMode::OFF;
-			enableAntilag = false;
+			enableAntilag = true;
 			antilagAcceleration = 0.0f;
 			antilagSpatialSigma = 4.5f;
 			antilagTemporalSigma = 0.5f;
@@ -910,7 +910,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			enableAntiFirefly = true;
 			enableRoughnessEdgeStopping = true;
 			hitDistanceMode = nrd::HitDistanceReconstructionMode::OFF;
-			enableAntilag = false;
+			enableAntilag = true;
 			antilagAcceleration = 0.0f;
 			antilagSpatialSigma = 4.5f;
 			antilagTemporalSigma = 0.5f;

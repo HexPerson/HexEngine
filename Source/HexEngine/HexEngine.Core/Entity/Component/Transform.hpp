@@ -71,7 +71,7 @@ namespace HexEngine
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(ComponentWidget* widget) override;
-		virtual void OnRenderEditorGizmo(bool isSelected) override;
+		virtual void OnRenderEditorGizmo(bool isSelected, bool& isHovering) override;
 
 	private:
 		void UpdateRotation();

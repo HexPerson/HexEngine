@@ -161,6 +161,8 @@ namespace HexEngine
 		float GetXAxis() const;
 		float GetYAxis() const;
 
+		void SetInputViewport(int32_t x, int32_t y, int32_t w, int32_t h);
+
 	private:
 		void ProcessMouseMovement(float frameTime);
 
@@ -186,5 +188,8 @@ namespace HexEngine
 
 		float _inputAxis[2] = { 0.0f };
 		bool _interruptInputImmediately = false;
+
+		math::Viewport _vp;
+		bool _hasCustomVP = false;
 	};
 }

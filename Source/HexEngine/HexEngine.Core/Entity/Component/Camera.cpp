@@ -555,7 +555,7 @@ namespace HexEngine
 
 	void Camera::OnDebugRender()
 	{
-		g_pEnv->_debugRenderer->DrawFrustum(_frustum, math::Color(1,0,0.1,1));
-		g_pEnv->_debugRenderer->DrawFrustum(_largerFrustum, math::Color(0, 1, 0.1, 1));
+		//g_pEnv->_debugRenderer->DrawFrustum(_frustum, math::Color(1,0,0.1,1));
+		//g_pEnv->_debugRenderer->DrawFrustum(_largerFrustum, math::Color(0, 1, 0.1, 1));
 	}
 }

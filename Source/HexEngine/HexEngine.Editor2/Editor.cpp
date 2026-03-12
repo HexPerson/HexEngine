@@ -24,6 +24,8 @@ namespace HexEditor
 	void EditorExtension::OnCreateGame()
 	{
 		_overlayIcons[Overlay_Light] = HexEngine::ITexture2D::Create("EngineData.Textures/UI/light_bulb.png");
+
+		
 	}
 
 	void EditorExtension::OnGUI()
@@ -41,12 +43,11 @@ namespace HexEditor
 					if (HexEngine::g_pEnv->_inputSystem->GetWorldToScreenPosition(
 						scene->GetMainCamera(),
 						light->GetEntity()->GetPosition(),
-						scrx, scry, 
-						g_pUIManager->GetSceneView()->GetSize().x, g_pUIManager->GetSceneView()->GetSize().y) == false)
+						scrx, scry) == false)
 						continue;
 
-					scrx += g_pUIManager->GetSceneView()->GetPosition().x;
-					scry += g_pUIManager->GetSceneView()->GetPosition().y;
+					//scrx += g_pUIManager->GetSceneView()->GetPosition().x;
+					//scry += g_pUIManager->GetSceneView()->GetPosition().y;
 
 					const int32_t IconSize = 24;
 
@@ -60,6 +61,13 @@ namespace HexEditor
 
 	void EditorExtension::OnResize(int32_t width, int32_t height)
 	{
+		const auto sceneView = g_pUIManager->GetSceneView();
+
+		HexEngine::g_pEnv->_inputSystem->SetInputViewport(
+			sceneView->GetPosition().x,
+			sceneView->GetPosition().y,
+			sceneView->GetSize().x,
+			sceneView->GetSize().y);
 	}
 
 	void EditorExtension::OnFileChangeEvent(const HexEngine::DirectoryWatchInfo& info, const HexEngine::FileChangeActionMap& actionMap)

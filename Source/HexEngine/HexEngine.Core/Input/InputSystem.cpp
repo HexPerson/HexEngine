@@ -649,6 +649,11 @@ namespace HexEngine
 
 	bool InputSystem::GetWorldToScreenPosition(Camera* camera, const math::Vector3& position, int32_t& x, int32_t& y, int32_t width, int32_t height)
 	{
+		if (_hasCustomVP)
+		{
+			width = _vp.width;
+			height = _vp.height;
+		}
 		auto projectionMatrix = camera->GetProjectionMatrix();
 		auto viewMatrix = camera->GetViewMatrix();
 
@@ -680,6 +685,12 @@ namespace HexEngine
 
 		if (y < 0 || y > height)
 			return false;
+
+		if (_hasCustomVP)
+		{
+			x += _vp.x;
+			y += _vp.y;
+		}
 
 		return true;
 	}
@@ -876,5 +887,14 @@ namespace HexEngine
 			ShowCursor(true);
 			break;
 		}
+	}
+
+	void InputSystem::SetInputViewport(int32_t x, int32_t y, int32_t w, int32_t h)
+	{
+		_vp.x = x;
+		_vp.y = y;
+		_vp.width = w;
+		_vp.height = h;
+		_hasCustomVP = true;
 	}
 }

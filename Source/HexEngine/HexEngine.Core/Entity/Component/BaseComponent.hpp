@@ -62,7 +62,7 @@ namespace HexEngine
 
 		virtual void OnDebugRender() {};
 		virtual void OnGUI() {}
-		virtual void OnRenderEditorGizmo(bool isSelected) {}
+		virtual void OnRenderEditorGizmo(bool isSelected, bool& isHovering) {}
 
 		template<typename T>
 		T* CastAs()

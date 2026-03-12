@@ -4,9 +4,83 @@
 #include "../Entity.hpp"
 #include "../../HexEngine.hpp"
 #include "../../GUI/Elements/ImmediateMode.hpp"
+#include <algorithm>
+#include <array>
 
 namespace HexEngine
 {
+	namespace
+	{
+		struct EditorTranslateGizmoState
+		{
+			Transform* activeTransform = nullptr;
+			int32_t activeAxis = -1;
+			int32_t lastMouseX = 0;
+			int32_t lastMouseY = 0;
+			bool wasLeftMouseDown = false;
+		};
+
+		EditorTranslateGizmoState g_translateGizmoState;
+
+		float DistanceToScreenLineSegment(float mouseX, float mouseY, float lineStartX, float lineStartY, float lineEndX, float lineEndY, float* outSegmentT = nullptr)
+		{
+			const float lineDeltaX = lineEndX - lineStartX;
+			const float lineDeltaY = lineEndY - lineStartY;
+			const float lineLengthSq = lineDeltaX * lineDeltaX + lineDeltaY * lineDeltaY;
+
+			if (lineLengthSq <= FLT_EPSILON)
+			{
+				if (outSegmentT != nullptr)
+					*outSegmentT = 0.0f;
+
+				const float dx = mouseX - lineStartX;
+				const float dy = mouseY - lineStartY;
+				return sqrtf(dx * dx + dy * dy);
+			}
+
+			float t = ((mouseX - lineStartX) * lineDeltaX + (mouseY - lineStartY) * lineDeltaY) / lineLengthSq;
+			t = std::clamp(t, 0.0f, 1.0f);
+
+			if (outSegmentT != nullptr)
+				*outSegmentT = t;
+
+			const float closestX = lineStartX + lineDeltaX * t;
+			const float closestY = lineStartY + lineDeltaY * t;
+			const float dx = mouseX - closestX;
+			const float dy = mouseY - closestY;
+			return sqrtf(dx * dx + dy * dy);
+		}
+
+		void DrawAxisArrow(const math::Vector3& origin, const math::Vector3& axisDirection, float axisLength, const math::Vector3& cameraPosition, const math::Color& colour)
+		{
+			const math::Vector3 axisEnd = origin + axisDirection * axisLength;
+			g_pEnv->_debugRenderer->DrawLine(origin, axisEnd, colour);
+
+			math::Vector3 toCamera = cameraPosition - axisEnd;
+			if (toCamera.Length() <= FLT_EPSILON)
+				toCamera = math::Vector3::Forward;
+			else
+				toCamera.Normalize();
+
+			math::Vector3 arrowSide = axisDirection.Cross(toCamera);
+			if (arrowSide.Length() <= FLT_EPSILON)
+			{
+				arrowSide = axisDirection.Cross(math::Vector3::Up);
+				if (arrowSide.Length() <= FLT_EPSILON)
+					arrowSide = axisDirection.Cross(math::Vector3::Right);
+			}
+
+			if (arrowSide.Length() > FLT_EPSILON)
+				arrowSide.Normalize();
+
+			const float headLength = axisLength * 0.18f;
+			const float headWidth = axisLength * 0.06f;
+
+			g_pEnv->_debugRenderer->DrawLine(axisEnd, axisEnd - axisDirection * headLength + arrowSide * headWidth, colour);
+			g_pEnv->_debugRenderer->DrawLine(axisEnd, axisEnd - axisDirection * headLength - arrowSide * headWidth, colour);
+		}
+	}
+
 	Transform::Transform(Entity* entity) :
 		BaseComponent(entity)
 	{
@@ -541,8 +615,152 @@ namespace HexEngine
 
 	}
 
-	void Transform::OnRenderEditorGizmo(bool isSelected)
+	void Transform::OnRenderEditorGizmo(bool isSelected, bool& isHovering)
 	{
-		
+		if (!isSelected || !g_pEnv->IsEditorMode())
+		{
+			if (g_translateGizmoState.activeTransform == this)
+			{
+				g_translateGizmoState.activeTransform = nullptr;
+				g_translateGizmoState.activeAxis = -1;
+			}
+			return;
+		}
+
+		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr)
+			return;
+
+		auto camera = scene->GetMainCamera();
+		if (camera == nullptr)
+			return;
+
+		const math::Vector3 origin = GetEntity()->GetWorldTM().Translation();
+		const math::Vector3 cameraPosition = camera->GetEntity()->GetPosition();
+		const float distanceToCamera = max((origin - cameraPosition).Length(), 1.0f);
+		const float axisLength = std::clamp(distanceToCamera * 0.18f, 10.0f, 150.0f);
+
+		const std::array<math::Vector3, 3> axisDirections = {
+			math::Vector3::Right,
+			math::Vector3::Up,
+			math::Vector3::Forward
+		};
+
+		const std::array<math::Color, 3> axisColours = {
+			math::Color(1.0f, 0.2f, 0.2f, 1.0f),
+			math::Color(0.2f, 1.0f, 0.2f, 1.0f),
+			math::Color(0.2f, 0.45f, 1.0f, 1.0f)
+		};
+
+		int32_t mouseX = 0;
+		int32_t mouseY = 0;
+		g_pEnv->_inputSystem->GetMousePosition(mouseX, mouseY);
+
+		const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+		int32_t hoveredAxis = -1;
+
+		if (g_translateGizmoState.activeTransform == nullptr || g_translateGizmoState.activeTransform == this)
+		{
+			int32_t originScreenX = 0;
+			int32_t originScreenY = 0;
+			if (g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, origin, originScreenX, originScreenY))
+			{
+				float closestAxisDistance = 14.0f;
+
+				for (size_t axisIndex = 0; axisIndex < axisDirections.size(); ++axisIndex)
+				{
+					const math::Vector3 axisEnd = origin + axisDirections[axisIndex] * axisLength;
+
+					int32_t axisScreenX = 0;
+					int32_t axisScreenY = 0;
+					if (!g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, axisEnd, axisScreenX, axisScreenY))
+						continue;
+
+					float segmentT = 0.0f;
+					const float axisDistance = DistanceToScreenLineSegment(
+						(float)mouseX,
+						(float)mouseY,
+						(float)originScreenX,
+						(float)originScreenY,
+						(float)axisScreenX,
+						(float)axisScreenY,
+						&segmentT);
+
+					if (axisDistance < closestAxisDistance && segmentT >= 0.1f)
+					{
+						closestAxisDistance = axisDistance;
+						hoveredAxis = (int32_t)axisIndex;
+						isHovering = true;
+					}
+				}
+			}
+		}
+
+		if (leftMouseDown && !g_translateGizmoState.wasLeftMouseDown && hoveredAxis != -1 && g_translateGizmoState.activeTransform == nullptr)
+		{
+			g_translateGizmoState.activeTransform = this;
+			g_translateGizmoState.activeAxis = hoveredAxis;
+			g_translateGizmoState.lastMouseX = mouseX;
+			g_translateGizmoState.lastMouseY = mouseY;
+		}
+		else if (!leftMouseDown && g_translateGizmoState.activeTransform == this)
+		{
+			g_translateGizmoState.activeTransform = nullptr;
+			g_translateGizmoState.activeAxis = -1;
+		}
+
+		if (g_translateGizmoState.activeTransform == this && g_translateGizmoState.activeAxis >= 0)
+		{
+			const int32_t activeAxis = g_translateGizmoState.activeAxis;
+			const math::Vector3 axisDirection = axisDirections[activeAxis];
+			const math::Vector3 axisEnd = origin + axisDirection * axisLength;
+
+			int32_t originScreenX = 0;
+			int32_t originScreenY = 0;
+			int32_t axisScreenX = 0;
+			int32_t axisScreenY = 0;
+
+			if (g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, origin, originScreenX, originScreenY) &&
+				g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, axisEnd, axisScreenX, axisScreenY))
+			{
+				float axisScreenDirX = (float)(axisScreenX - originScreenX);
+				float axisScreenDirY = (float)(axisScreenY - originScreenY);
+				const float axisScreenLength = sqrtf(axisScreenDirX * axisScreenDirX + axisScreenDirY * axisScreenDirY);
+
+				if (axisScreenLength > 1.0f)
+				{
+					axisScreenDirX /= axisScreenLength;
+					axisScreenDirY /= axisScreenLength;
+
+					const float mouseDeltaX = (float)(mouseX - g_translateGizmoState.lastMouseX);
+					const float mouseDeltaY = (float)(mouseY - g_translateGizmoState.lastMouseY);
+					const float projectedPixels = mouseDeltaX * axisScreenDirX + mouseDeltaY * axisScreenDirY;
+					const float worldUnitsPerPixel = axisLength / axisScreenLength;
+
+					if (fabsf(projectedPixels) > FLT_EPSILON)
+					{
+						GetEntity()->ForcePosition(GetEntity()->GetPosition() + axisDirection * (projectedPixels * worldUnitsPerPixel));
+					}
+				}
+			}
+
+			g_translateGizmoState.lastMouseX = mouseX;
+			g_translateGizmoState.lastMouseY = mouseY;
+			hoveredAxis = activeAxis;
+		}
+
+		for (size_t axisIndex = 0; axisIndex < axisDirections.size(); ++axisIndex)
+		{
+			math::Color colour = axisColours[axisIndex];
+
+			if ((int32_t)axisIndex == hoveredAxis)
+			{
+				colour = math::Color(HEX_RGB_TO_FLOAT3(255, 201, 14));
+			}
+
+			DrawAxisArrow(origin, axisDirections[axisIndex], axisLength, cameraPosition, colour);
+		}
+
+		g_translateGizmoState.wasLeftMouseDown = leftMouseDown;
 	}
 }

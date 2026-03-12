@@ -163,8 +163,8 @@
 		//return float4(rayDir, 1.0f);
 
 
-		const int stepCount = 8;
-		const float stepLen = 8.0f; // 32x32 is good
+		const int stepCount = 32;
+		const float stepLen = 10.0f; // 32x32 is good
 
 		//const int smallStepCount = stepCount * 3.0f;
 		//const float smallStepLen = stepLen / 3.0f;
@@ -231,7 +231,7 @@
 
 			bool didHitSky = actualDepth == g_frustumDepths[3];
 
-			if(fragDepth > actualDepth || didHitSky)
+			if(fragDepth >= actualDepth || didHitSky)
 			{
 				// back track to the last interval
 				fragPos -= rayDir * stepLen;
@@ -239,10 +239,12 @@
 
 #if 1
 				[loop]
-				for(int j = 0; j < 16; ++j)
+				for(int j = 0; j < 10; ++j)
 				{
-					fragPos += rayDir * 1.0f;
-					totalDistanceTravelled += 1.0f;
+					const float DistToTravel = 0.6f;
+
+					fragPos += rayDir * DistToTravel;
+					totalDistanceTravelled += DistToTravel;
 
 					// convert this position to a world space
 					fragScr = float4(fragPos.xyz, 1.0f);

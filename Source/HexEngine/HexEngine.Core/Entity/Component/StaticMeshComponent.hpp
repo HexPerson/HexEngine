@@ -33,7 +33,7 @@ namespace HexEngine
 
 		virtual void Destroy() override;
 
-		virtual void OnRenderEditorGizmo(bool isSelected) override;
+		virtual void OnRenderEditorGizmo(bool isSelected, bool& isHovering) override;
 
 		void		ReleaseAllMeshes();
 

@@ -368,12 +368,18 @@ namespace HexEngine
 		//	//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetUp() * 20.0f, math::Color(0, 1, 0, 1));
 		//}
 
+		_isEditorGizmoHovered = false;
+
 		for (auto& comp : _components)
 		{
 			comp.component->OnDebugRender();
 
-			if(HasFlag(EntityFlags::SelectedInEditor))
-				comp.component->OnRenderEditorGizmo(true);
+			if (HasFlag(EntityFlags::SelectedInEditor))
+			{
+				bool hovering = false;
+				comp.component->OnRenderEditorGizmo(true, hovering);
+				_isEditorGizmoHovered |= hovering;
+			}
 		}
 	}
 
