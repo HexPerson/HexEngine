@@ -163,15 +163,13 @@
 		//return float4(rayDir, 1.0f);
 
 
-		const int stepCount = 32;
-		const float stepLen = 10.0f; // 32x32 is good
+		const int stepCount = 26;
+		const int refinementStepCount = 5;
+		const float minStepLen = 2.0f;
+		const float maxStepLen = 8.0f;
+		const float baseThickness = 2.0f;
 
-		//const int smallStepCount = stepCount * 3.0f;
-		//const float smallStepLen = stepLen / 3.0f;
-
-		const float surfaceSmoothness = 2.0f;
-
-		float3 fragPos = rayStart;
+		float3 fragPos = rayStart + worldNormal * 0.25f;
 
 		/*const float2 RandomSamples[4] = {
 			float2(-1.0f, -1.0f),
@@ -194,91 +192,98 @@
 
 		[loop]
 		for (int i = 0; i < stepCount; ++i)
-		{			
-			fragPos += rayDir * stepLen;
+		{
+			const float marchFraction = (float)i / (float)(stepCount - 1);
+			const float stepLen = lerp(minStepLen, maxStepLen, marchFraction * marchFraction);
+			const float thickness = baseThickness + totalDistanceTravelled * 0.02f + (1.0f - smoothness) * 1.5f;
 
+			float3 previousFragPos = fragPos;
+			float previousDistanceTravelled = totalDistanceTravelled;
+
+			fragPos += rayDir * stepLen;
 			totalDistanceTravelled += stepLen;
 
-			// convert this position to a world space
 			float4 fragScr = float4(fragPos.xyz, 1.0f);
-
 			float4 fragView = mul(fragScr, g_viewMatrix);
 			float4 fragClip = mul(fragView, g_projectionMatrix);
 
 			fragClip.xyz /= fragClip.w;
 
-			float fragDepth = -fragView.z;// / fragView.w;
-
-			fragClip.xy = fragClip.xy * 0.5 + 0.5; // is this needed?
+			float fragDepth = -fragView.z;
+			fragClip.xy = fragClip.xy * 0.5 + 0.5;
 
 			float2 fragTex = float2(fragClip.x, 1.0f - fragClip.y);
 
 			if (fragTex.x < 0.0f || fragTex.x > 1.0f || fragTex.y < 0.0f || fragTex.y > 1.0f)
 			{
-				if(NumBounces == 0)
+				if (NumBounces == 0)
 					return float4(originalColour.rgb, 1.0f);
 
 				return float4(rayColour, 1.0f);
 			}
 
-			// sample the depth of the world
-			float4 actualDepthAndNormal = GBUFFER_NORMAL.Sample(
-				g_pointSampler,
-				fragTex);
-
+			float4 actualDepthAndNormal = GBUFFER_NORMAL.Sample(g_pointSampler, fragTex);
 			float actualDepth = actualDepthAndNormal.w;
-			float3 actualNormal = actualDepthAndNormal.xyz;			
-
 			bool didHitSky = actualDepth == g_frustumDepths[3];
 
-			if(fragDepth >= actualDepth || didHitSky)
+			if (fragDepth >= actualDepth - thickness || didHitSky)
 			{
-				// back track to the last interval
-				fragPos -= rayDir * stepLen;
-				totalDistanceTravelled -= stepLen;
-
-#if 1
-				[loop]
-				for(int j = 0; j < 10; ++j)
+				if (!didHitSky)
 				{
-					const float DistToTravel = 0.6f;
+					float3 refineStart = previousFragPos;
+					float3 refineEnd = fragPos;
+					float refineStartDistance = previousDistanceTravelled;
+					float refineEndDistance = totalDistanceTravelled;
 
-					fragPos += rayDir * DistToTravel;
-					totalDistanceTravelled += DistToTravel;
-
-					// convert this position to a world space
-					fragScr = float4(fragPos.xyz, 1.0f);
-
-					fragView = mul(fragScr, g_viewMatrix);
-					fragClip = mul(fragView, g_projectionMatrix);
-
-					fragClip.xyz /= fragClip.w;
-
-					fragDepth = -fragView.z;// / fragView.w;
-
-					fragClip.xy = fragClip.xy * 0.5 + 0.5; // is this needed?
-
-					fragTex = float2(fragClip.x, 1.0f - fragClip.y);
-
-					actualDepthAndNormal = GBUFFER_NORMAL.Sample(g_pointSampler, fragTex);
-
-					didHitSky = actualDepthAndNormal.w == g_frustumDepths[3];
-
-					uint newInstanceId = (uint)GBUFFER_DIFFUSE.Sample(g_pointSampler, fragTex).w;
-
-					if(newInstanceId == instanceID && !didHitSky)
+					[loop]
+					for (int j = 0; j < refinementStepCount; ++j)
 					{
-						//i--;
-						continue;
-					}
+						float3 candidatePos = lerp(refineStart, refineEnd, 0.5f);
+						float candidateDistance = lerp(refineStartDistance, refineEndDistance, 0.5f);
+						float candidateThickness = baseThickness + candidateDistance * 0.02f + (1.0f - smoothness) * 1.5f;
 
-					if(fragDepth >= actualDepthAndNormal.w || (didHitSky && totalDistanceTravelled >= initialWorldPosFromEye))
-					{
-						break;
+						float4 candidateScr = float4(candidatePos.xyz, 1.0f);
+						float4 candidateView = mul(candidateScr, g_viewMatrix);
+						float4 candidateClip = mul(candidateView, g_projectionMatrix);
+						candidateClip.xyz /= candidateClip.w;
+
+						float candidateDepth = -candidateView.z;
+						candidateClip.xy = candidateClip.xy * 0.5 + 0.5;
+						float2 candidateTex = float2(candidateClip.x, 1.0f - candidateClip.y);
+
+						if (candidateTex.x < 0.0f || candidateTex.x > 1.0f || candidateTex.y < 0.0f || candidateTex.y > 1.0f)
+						{
+							refineEnd = candidatePos;
+							refineEndDistance = candidateDistance;
+							continue;
+						}
+
+						float4 candidateDepthAndNormal = GBUFFER_NORMAL.Sample(g_pointSampler, candidateTex);
+						bool candidateHitSky = candidateDepthAndNormal.w == g_frustumDepths[3];
+						uint candidateInstanceId = (uint)GBUFFER_DIFFUSE.Sample(g_pointSampler, candidateTex).w;
+						bool candidateBlocked = candidateHitSky || ((candidateDepth >= candidateDepthAndNormal.w - candidateThickness) && candidateInstanceId != instanceID);
+
+						if (candidateBlocked)
+						{
+							refineEnd = candidatePos;
+							refineEndDistance = candidateDistance;
+							fragPos = candidatePos;
+							totalDistanceTravelled = candidateDistance;
+							fragScr = candidateScr;
+							fragView = candidateView;
+							fragClip = candidateClip;
+							fragDepth = candidateDepth;
+							fragTex = candidateTex;
+							actualDepthAndNormal = candidateDepthAndNormal;
+							didHitSky = candidateHitSky;
+						}
+						else
+						{
+							refineStart = candidatePos;
+							refineStartDistance = candidateDistance;
+						}
 					}
 				}
-				#endif
-
 				float4 colourAndEmissive = g_beautyTexture.Sample(g_pointSampler, fragTex);
 				float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, fragTex);
 				float4 pixelSpecular = GBUFFER_SPECULAR.Sample(g_pointSampler, fragTex);
