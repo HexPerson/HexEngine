@@ -115,6 +115,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> _chromaticAberrationShader;
 		std::shared_ptr<IShader> _colourGradingShader;
 		std::shared_ptr<IShader> _tonemapShader;
+		std::shared_ptr<IShader> _hdrOutputShader;
 		std::shared_ptr<IShader> _basicDenoise;
 		std::shared_ptr<IShader> _volumetricLighting;
 		std::shared_ptr<IShader> _ssrResolve;

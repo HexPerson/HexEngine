@@ -21,6 +21,8 @@ struct DeviceData
 	IDXGISwapChain* swapchain = nullptr;
 	Texture2D* backbuffer = nullptr;
 	DXGI_SWAP_CHAIN_DESC swapchainDesc;
+	DXGI_FORMAT backbufferFormat = DXGI_FORMAT_UNKNOWN;
+	bool hdrOutputActive = false;
 };
 class GraphicsDeviceD3D11 : public HexEngine::IGraphicsDevice
 {

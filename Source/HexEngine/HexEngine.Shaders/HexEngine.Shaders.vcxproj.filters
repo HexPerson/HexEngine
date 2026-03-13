@@ -53,6 +53,10 @@
     <HexEngineShader Include="ShadowMapGeometry.shader" />
     <HexEngineShader Include="SkySphere.shader" />
     <HexEngineShader Include="Tonemap.shader" />
+    <HexEngineShader Include="TonemapHDR.shader" />
+    <HexEngineShader Include="PresentHDR.shader" />
+    <HexEngineShader Include="UIBasicHDR.shader" />
+    <HexEngineShader Include="UIInstancedHDR.shader" />
     <HexEngineShader Include="VolumetricClouds.shader" />
     <HexEngineShader Include="VolumetricLighting.shader" />
     <HexEngineShader Include="Water.shader" />

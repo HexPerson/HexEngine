@@ -146,6 +146,7 @@ namespace HexEngine
 		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
 		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
+		_hdrOutputShader			= IShader::Create("EngineData.Shaders/TonemapHDR.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
 		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
 
@@ -1311,9 +1312,15 @@ namespace HexEngine
 			}
 			else
 			{
+				auto outputShader = _tonemapShader.get();
+				if (auto backBuffer = g_pEnv->_graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
+				{
+					outputShader = _hdrOutputShader.get();
+				}
+
 				g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
 				g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
-				guiRenderer->FullScreenTexturedQuad(_beautyRT);
+				guiRenderer->FullScreenTexturedQuad(_beautyRT, outputShader);
 			}
 
 			guiRenderer->EndFrame();
@@ -1333,12 +1340,12 @@ namespace HexEngine
 		{
 			guiRenderer->StartFrame();
 
-			//guiRenderer->FullScreenTexturedQuad(beauty, _tonemapShader);
-			//renderTarget->CopyTo(beauty);
+			auto outputShader = _tonemapShader.get();
+			if (auto backBuffer = g_pEnv->_graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
+			{
+				outputShader = _hdrOutputShader.get();
+			}
 
-			//guiRenderer->FullScreenTexturedQuad(beauty);
-
-			
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Colour grading");
 			{
 				guiRenderer->FullScreenTexturedQuad(beauty, _colourGradingShader.get());
@@ -1368,17 +1375,16 @@ namespace HexEngine
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"FXAA");
 				{
 					guiRenderer->FullScreenTexturedQuad(beauty, _fxaa.get());
+					renderTarget->CopyTo(beauty);
 				}
 				GFX_PERF_END();
 			}
-			else
+
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"Display output");
 			{
-				GFX_PERF_BEGIN(0xFFFFFFFF, L"Colour grading");
-				{
-					guiRenderer->FullScreenTexturedQuad(beauty);
-				}
-				GFX_PERF_END();
+				guiRenderer->FullScreenTexturedQuad(beauty, outputShader);
 			}
+			GFX_PERF_END();
 
 			const int32_t DebugImageSize = 250;
 

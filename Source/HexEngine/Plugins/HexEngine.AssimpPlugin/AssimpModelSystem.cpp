@@ -606,6 +606,43 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 	std::string meshName = mesh->mName.C_Str();
 
 	meshName.erase(std::remove(meshName.begin(), meshName.end(), ':'));
+
+	auto findStringToChar = [](std::string s, char c)
+		{
+
+		};
+
+	// Fix for bad mesh names e.g. "Paris_Street_4.Paris_Street_4.Paris_Street_4.Paris_Street_4.Paris_Street_4.Paris_Street_4.Paris_Street_4.Paris_Street_4.Paris_Street_4" etc
+	while (true)
+	{
+		if (auto p = meshName.find('.'); p != meshName.npos)
+		{
+			std::string first = meshName.substr(0, p);
+			std::string second = meshName.substr(p + 1);
+
+			auto p2 = second.find('.');
+
+			if (p2 != meshName.npos)
+			{
+				auto secondSplit = second.substr(0, p2);
+
+				if (secondSplit == first)
+				{
+					meshName.erase(0, p+1);
+				}
+				else
+					break;
+			}
+			else
+			{
+				meshName = first;
+				break;
+			}
+		}
+		else
+			break;
+	}
+		
 	meshName.erase(std::remove(meshName.begin(), meshName.end(), '.'));
 
 	// if the mesh name is the same as the model name, try and use the material as the unique name instead
@@ -636,7 +673,20 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 	if (_importOpts.renameFiles == false)
 		fixedExtensionPath.replace_filename(_currentPath.stem().string());
 	else
-		fixedExtensionPath.replace_filename(_currentPath.stem().string() + "_" + meshName);
+	{
+		auto currentFileName = _currentPath.stem().filename().string();
+
+		std::transform(meshName.begin(), meshName.end(), meshName.begin(), ::tolower);
+		std::transform(currentFileName.begin(), currentFileName.end(), currentFileName.begin(), ::tolower);
+		if (meshName != currentFileName)
+		{
+			fixedExtensionPath.replace_filename(_currentPath.stem().string() + "_" + meshName);
+		}
+		else
+		{
+			bool a = false;
+		}
+	}
 
 	// we give it a temporary file extension to stop the file change notifier picking it up whilst its still being written to
 	fixedExtensionPath.replace_extension(".hmesh_tmp");

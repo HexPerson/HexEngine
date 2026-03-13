@@ -11,11 +11,13 @@
 #include <HexEngine.Core/Graphics/IStreamlineProvider.hpp>
 
 #include <DirectXTex\DirectXTex.h>
+#include <dxgi1_6.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
 
 HexEngine::HVar r_vsync("r_vsync", "The type of V-Sync to use. 0 = Off, 1 = Full, 2 = Half", 0, 0, 2);
+HexEngine::HVar r_hdrOutput("r_hdrOutput", "Enable HDR scRGB output when supported by the active display", true, false, true);
 
 /*GraphicsSystemD3D11::GraphicsSystemD3D11() :
 	_device(nullptr),
@@ -26,6 +28,94 @@ HexEngine::HVar r_vsync("r_vsync", "The type of V-Sync to use. 0 = Off, 1 = Full
 {}*/
 
 const int32_t MsaaLevel = 1;
+
+namespace
+{
+	DXGI_FORMAT GetPresentationFormat(bool hdrOutputActive)
+	{
+		return hdrOutputActive ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_R8G8B8A8_UNORM;
+	}
+
+	bool IsHdrOutputColorSpace(DXGI_COLOR_SPACE_TYPE colorSpace)
+	{
+		switch (colorSpace)
+		{
+		case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020:
+		case DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	bool WindowSupportsHDR(IDXGIAdapter* adapter, HWND hwnd)
+	{
+		if (!adapter || !hwnd)
+			return false;
+
+		const HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+		if (!monitor)
+			return false;
+
+		for (UINT outputIndex = 0;; ++outputIndex)
+		{
+			IDXGIOutput* output = nullptr;
+			const HRESULT hr = adapter->EnumOutputs(outputIndex, &output);
+			if (hr == DXGI_ERROR_NOT_FOUND)
+				break;
+			if (FAILED(hr) || !output)
+				break;
+
+			DXGI_OUTPUT_DESC outputDesc = {};
+			const bool isMatchingOutput = SUCCEEDED(output->GetDesc(&outputDesc)) && outputDesc.Monitor == monitor;
+			if (!isMatchingOutput)
+			{
+				SAFE_RELEASE(output);
+				continue;
+			}
+
+			bool hdrSupported = false;
+			IDXGIOutput6* output6 = nullptr;
+			if (SUCCEEDED(output->QueryInterface(__uuidof(IDXGIOutput6), reinterpret_cast<void**>(&output6))) && output6)
+			{
+				DXGI_OUTPUT_DESC1 outputDesc1 = {};
+				if (SUCCEEDED(output6->GetDesc1(&outputDesc1)))
+				{
+					hdrSupported = IsHdrOutputColorSpace(outputDesc1.ColorSpace) && outputDesc1.MaxLuminance > 0.0f;
+				}
+			}
+
+			SAFE_RELEASE(output6);
+			SAFE_RELEASE(output);
+			return hdrSupported;
+		}
+
+		return false;
+	}
+
+	void ConfigureSwapChainColorSpace(IDXGISwapChain* swapchain, bool hdrOutputActive)
+	{
+		if (!swapchain)
+			return;
+
+		IDXGISwapChain3* swapchain3 = nullptr;
+		if (FAILED(swapchain->QueryInterface(__uuidof(IDXGISwapChain3), reinterpret_cast<void**>(&swapchain3))) || !swapchain3)
+			return;
+
+		const DXGI_COLOR_SPACE_TYPE targetColorSpace = hdrOutputActive
+			? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
+			: DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+
+		UINT colorSpaceSupport = 0;
+		if (SUCCEEDED(swapchain3->CheckColorSpaceSupport(targetColorSpace, &colorSpaceSupport))
+			&& (colorSpaceSupport & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT))
+		{
+			swapchain3->SetColorSpace1(targetColorSpace);
+		}
+
+		SAFE_RELEASE(swapchain3);
+	}
+}
 
 bool GraphicsDeviceD3D11::Create()
 {
@@ -297,8 +387,11 @@ bool GraphicsDeviceD3D11::AttachToWindow(HexEngine::Window* window)
 
 	HRESULT hr;
 
-	UINT quality;
-	_device->CheckMultisampleQualityLevels(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, MsaaLevel, &quality);
+	const bool hdrOutputActive = r_hdrOutput._val.b && WindowSupportsHDR(_dxgiAdapter, window->GetHandle());
+	const DXGI_FORMAT backbufferFormat = GetPresentationFormat(hdrOutputActive);
+
+	UINT quality = 0;
+	_device->CheckMultisampleQualityLevels(backbufferFormat, MsaaLevel, &quality);
 
 	std::reverse(_supportedScreenDisplayModes.begin(), _supportedScreenDisplayModes.end());
 
@@ -320,15 +413,15 @@ bool GraphicsDeviceD3D11::AttachToWindow(HexEngine::Window* window)
 	sd.BufferCount = 2;
 	sd.BufferDesc.Width = window->GetClientWidth();
 	sd.BufferDesc.Height = window->GetClientHeight();
-	sd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;// DXGI_FORMAT_R8G8B8A8_UNORM;// DXGI_FORMAT_R10G10B10A2_UNORM;
-	sd.BufferDesc.RefreshRate.Numerator = pDm ? pDm->refresh.numerator : 0;// 60;
+	sd.BufferDesc.Format = backbufferFormat;
+	sd.BufferDesc.RefreshRate.Numerator = pDm ? pDm->refresh.numerator : 0;
 	sd.BufferDesc.RefreshRate.Denominator = pDm ? pDm->refresh.denominator : 1;
 	sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT;
 	sd.OutputWindow = window->GetHandle();
-	sd.SampleDesc.Count = MsaaLevel;
-	sd.SampleDesc.Quality = quality - 1;
+	sd.SampleDesc.Count = hdrOutputActive ? 1 : MsaaLevel;
+	sd.SampleDesc.Quality = hdrOutputActive || quality == 0 ? 0 : quality - 1;
 	sd.Windowed = !fullscreen;
-	sd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;// MsaaLevel > 1 ? DXGI_SWAP_EFFECT_DISCARD : DXGI_SWAP_EFFECT_FLIP_DISCARD;
+	sd.SwapEffect = hdrOutputActive ? DXGI_SWAP_EFFECT_FLIP_DISCARD : DXGI_SWAP_EFFECT_DISCARD;
 	sd.Flags = fullscreen ? DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH : 0;
 
 	CHECK_HR(_dxgiFactory->CreateSwapChain(_device, &sd, &device.swapchain));
@@ -339,21 +432,23 @@ bool GraphicsDeviceD3D11::AttachToWindow(HexEngine::Window* window)
 	}
 
 	memcpy(&device.swapchainDesc, &sd, sizeof(sd));
+	device.backbufferFormat = backbufferFormat;
+	device.hdrOutputActive = hdrOutputActive;
+
+	ConfigureSwapChainColorSpace(device.swapchain, hdrOutputActive);
 
 	CHECK_HR(_dxgiFactory->MakeWindowAssociation(window->GetHandle(), DXGI_MWA_NO_ALT_ENTER));
 
-	// Create a render target view
 	ID3D11Texture2D* pBackBuffer = nullptr;
 	hr = device.swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer));
 	if (FAILED(hr))
 	{
-		//DBG("GetBuffer failure 0x%X", hr);
 		return hr;
 	}
 
 	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-	rtvDesc.Format = sd.BufferDesc.Format;
-	rtvDesc.ViewDimension = MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
+	rtvDesc.Format = device.backbufferFormat;
+	rtvDesc.ViewDimension = sd.SampleDesc.Count > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
 
 	ID3D11RenderTargetView* renderTargetView = nullptr;
 	CHECK_HR(_device->CreateRenderTargetView(pBackBuffer, &rtvDesc, &renderTargetView));
@@ -367,11 +462,16 @@ bool GraphicsDeviceD3D11::AttachToWindow(HexEngine::Window* window)
 	device.backbuffer->_height = sd.BufferDesc.Height;
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-	srvDesc.Format = sd.BufferDesc.Format;// _SRGB;
-	srvDesc.ViewDimension = MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Format = device.backbufferFormat;
+	srvDesc.ViewDimension = sd.SampleDesc.Count > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
+	if (srvDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D)
+	{
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+	}
 
 	ID3D11ShaderResourceView* renderTargetSRV = nullptr;
-	_device->CreateShaderResourceView(pBackBuffer, nullptr, &renderTargetSRV);
+	CHECK_HR(_device->CreateShaderResourceView(pBackBuffer, &srvDesc, &renderTargetSRV));
 
 	device.backbuffer->_shaderResourceView = renderTargetSRV;
 	renderTargetSRV->AddRef();
@@ -391,7 +491,7 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 		return;
 	}
 
-	auto device = it->second;
+	auto& device = it->second;
 
 	_bbufferWidth = width;
 	_bbufferHeight = height;
@@ -403,20 +503,19 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 	device.swapchainDesc.BufferDesc.Width = width;
 	device.swapchainDesc.BufferDesc.Height = height;
 
-	CHECK_HR(device.swapchain->ResizeBuffers(3, width, height, device.swapchainDesc.BufferDesc.Format, 0));
+	CHECK_HR(device.swapchain->ResizeBuffers(device.swapchainDesc.BufferCount, width, height, device.swapchainDesc.BufferDesc.Format, device.swapchainDesc.Flags));
+	ConfigureSwapChainColorSpace(device.swapchain, device.hdrOutputActive);
 
-	// Create a render target view
 	ID3D11Texture2D* pBackBuffer = nullptr;
 	HRESULT hr = device.swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer));
 	if (FAILED(hr))
 	{
-		//DBG("GetBuffer failure 0x%X", hr);
 		return;
 	}
 
 	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-	rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;// DXGI_FORMAT_R8G8B8A8_UNORM;// _SRGB;
-	rtvDesc.ViewDimension = MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
+	rtvDesc.Format = device.backbufferFormat;
+	rtvDesc.ViewDimension = device.swapchainDesc.SampleDesc.Count > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D;
 
 	ID3D11RenderTargetView* renderTargetView = nullptr;
 	CHECK_HR(_device->CreateRenderTargetView(pBackBuffer, &rtvDesc, &renderTargetView));
@@ -430,11 +529,16 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 	device.backbuffer->_height = height;
 
 	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-	srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;// _SRGB;
-	srvDesc.ViewDimension = MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
+	srvDesc.Format = device.backbufferFormat;
+	srvDesc.ViewDimension = device.swapchainDesc.SampleDesc.Count > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D;
+	if (srvDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D)
+	{
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+	}
 
 	ID3D11ShaderResourceView* renderTargetSRV = nullptr;
-	CHECK_HR(_device->CreateShaderResourceView(pBackBuffer, nullptr, &renderTargetSRV));
+	CHECK_HR(_device->CreateShaderResourceView(pBackBuffer, &srvDesc, &renderTargetSRV));
 
 	device.backbuffer->_shaderResourceView = renderTargetSRV;
 	renderTargetSRV->AddRef();

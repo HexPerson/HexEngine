@@ -86,7 +86,7 @@
 			{
 				float3 orm = g_roughnessMap.Sample(g_textureSampler, input.texcoord).rgb;
 
-				roughness = orm.g * g_material.roughnessFactor;		
+				roughness = lerp(1.0f, orm.g, g_material.roughnessFactor);		
 				metalness = orm.b * g_material.metallicFactor;
 				albedo.rgb *= orm.r;
 			}
@@ -96,7 +96,7 @@
 			// Get the roughness
 			if (g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS)
 			{
-				roughness = g_roughnessMap.Sample(g_textureSampler, input.texcoord).r * g_material.roughnessFactor;
+				roughness = lerp(1.0f, g_roughnessMap.Sample(g_textureSampler, input.texcoord).r, g_material.roughnessFactor);
 			}		
 
 			// Get metallicness

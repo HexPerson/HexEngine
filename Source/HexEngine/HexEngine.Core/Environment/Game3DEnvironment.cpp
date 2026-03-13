@@ -180,6 +180,7 @@ namespace HexEngine
 		env->_audioManager->Create();
 
 		env->_uiManager = new UIManager;
+		env->_hdrPresentShader = IShader::Create("EngineData.Shaders/PresentHDR.hcs");
 
 		if (options.window != nullptr)
 		{
@@ -505,7 +506,15 @@ namespace HexEngine
 						_graphicsDevice->SetBlendState(BlendState::Transparency);
 
 						if (!_inEditorMode)
-							_uiManager->GetRenderer()->FullScreenTexturedQuad(_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget());						
+						{
+							auto presentShader = (IShader*)nullptr;
+							if (auto backBuffer = _graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
+							{
+								presentShader = _hdrPresentShader.get();
+							}
+
+							_uiManager->GetRenderer()->FullScreenTexturedQuad(_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget(), presentShader);
+						}
 
 						//_sceneRenderer->RenderOverlays(SceneFlags::PostProcessingEnabled);
 

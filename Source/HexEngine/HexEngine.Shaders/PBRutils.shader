@@ -47,6 +47,15 @@
 		return roughnessSq / (PI * f * f);
 	}
 
+	float ApplySpecularAntiAliasing(float3 normal, float perceptualRoughness)
+	{
+		const float3 dndx = ddx(normal);
+		const float3 dndy = ddy(normal);
+		const float normalVariance = max(dot(dndx, dndx), dot(dndy, dndy));
+		const float kernelRoughness = saturate(normalVariance * 0.5f);
+		return saturate(max(perceptualRoughness, sqrt(kernelRoughness)));
+	}
+
 	float4 CalculatePBR(
 		Texture2D materialTex,
 		SamplerState samp,
@@ -65,7 +74,8 @@
 		const float3 mrSample = materialTex.Sample(samp, TexCoord0);
 		const float3 baseColor = pixelColour;
 		const float metallic = saturate(mrSample.r);
-		const float perceptualRoughness = clamp(mrSample.g, MinRoughness, 1.0);
+		float perceptualRoughness = clamp(mrSample.g, MinRoughness, 1.0);
+		perceptualRoughness = ApplySpecularAntiAliasing(normal, perceptualRoughness);
 
 		// Roughness is authored as perceptual roughness; as is convention,
 		// convert to material roughness by squaring the perceptual roughness [2].
@@ -135,7 +145,8 @@
 		const float3 mrSample = materialTex.Sample(samp, TexCoord0);
 		const float3 baseColor = pixelColour;
 		const float metallic = saturate(mrSample.r);
-		const float perceptualRoughness = clamp(mrSample.g, MinRoughness, 1.0);
+		float perceptualRoughness = clamp(mrSample.g, MinRoughness, 1.0);
+		perceptualRoughness = ApplySpecularAntiAliasing(normal, perceptualRoughness);
 
 		// Roughness is authored as perceptual roughness; as is convention,
 		// convert to material roughness by squaring the perceptual roughness [2].
@@ -203,7 +214,8 @@
 		const float3 mrSample = materialTex.Sample(samp, TexCoord0);
 		const float3 baseColor = pixelColour;
 		const float metallic = saturate(mrSample.r);
-		const float perceptualRoughness = clamp(mrSample.g, MinRoughness, 1.0);
+		float perceptualRoughness = clamp(mrSample.g, MinRoughness, 1.0);
+		perceptualRoughness = ApplySpecularAntiAliasing(normal, perceptualRoughness);
 
 		// Roughness is authored as perceptual roughness; as is convention,
 		// convert to material roughness by squaring the perceptual roughness [2].

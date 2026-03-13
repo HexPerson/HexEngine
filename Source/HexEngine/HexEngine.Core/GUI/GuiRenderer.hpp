@@ -99,7 +99,11 @@ namespace HexEngine
 	private:
 		Camera* _currentCamera = nullptr;
 		std::shared_ptr<IShader> _basicShader;
+		std::shared_ptr<IShader> _basicHdrShader;
 		std::shared_ptr<IShader> _instancedShader;
+		std::shared_ptr<IShader> _instancedHdrShader;
+		IShader* _activeBasicShader = nullptr;
+		IShader* _activeInstancedShader = nullptr;
 
 		IVertexBuffer* _vertexBuffer = nullptr;
 		IIndexBuffer* _indexBuffer = nullptr;

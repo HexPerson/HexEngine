@@ -8,7 +8,12 @@ namespace HexEngine
 	GuiRenderer::GuiRenderer()
 	{
 		_basicShader = IShader::Create("EngineData.Shaders/UIBasic.hcs");
+		_basicHdrShader = IShader::Create("EngineData.Shaders/UIBasicHDR.hcs");
 		_instancedShader = IShader::Create("EngineData.Shaders/UIInstanced.hcs");
+		_instancedHdrShader = IShader::Create("EngineData.Shaders/UIInstancedHDR.hcs");
+
+		_activeBasicShader = _basicShader.get();
+		_activeInstancedShader = _instancedShader.get();
 
 		CreateInstancedBuffers();
 
@@ -94,8 +99,12 @@ namespace HexEngine
 	{
 		auto gfxDevice = g_pEnv->_graphicsDevice;
 
-		gfxDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
-		gfxDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
+		const bool hdrBackBuffer = gfxDevice->GetBackBuffer() != nullptr && gfxDevice->GetBackBuffer()->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT;
+		_activeBasicShader = hdrBackBuffer && _basicHdrShader ? _basicHdrShader.get() : _basicShader.get();
+		_activeInstancedShader = hdrBackBuffer && _instancedHdrShader ? _instancedHdrShader.get() : _instancedShader.get();
+
+		gfxDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
+		gfxDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 
 		gfxDevice->SetInputLayout(_inputLayout);
 		//gfxDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -166,8 +175,8 @@ namespace HexEngine
 
 		auto gfxDevice = g_pEnv->_graphicsDevice;
 
-		gfxDevice->SetVertexShader(_instancedShader->GetShaderStage(ShaderStage::VertexShader));
-		gfxDevice->SetPixelShader(_instancedShader->GetShaderStage(ShaderStage::PixelShader));
+		gfxDevice->SetVertexShader(_activeInstancedShader->GetShaderStage(ShaderStage::VertexShader));
+		gfxDevice->SetPixelShader(_activeInstancedShader->GetShaderStage(ShaderStage::PixelShader));
 
 		list->_atlas.Pack();
 		/*if (auto tex = _atlas.GetAtlasTexture(); tex != nullptr)
@@ -280,8 +289,8 @@ namespace HexEngine
 			perObjectBuffer->Write(&_perObjectBuffer, sizeof(_perObjectBuffer));
 		}*/
 
-		g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
-		g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
+		g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
+		g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 		g_pEnv->_graphicsDevice->SetInputLayout(_inputLayout);
 
 		// We use basic white texture
@@ -430,8 +439,8 @@ namespace HexEngine
 
 		// We use basic white texture
 		//
-		g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
-		g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
+		g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
+		g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 
 		g_pEnv->_graphicsDevice->SetInputLayout(_inputLayout);
 
@@ -536,8 +545,8 @@ namespace HexEngine
 
 		_indexBuffer->SetIndexData((uint8_t*)indices, sizeof(indices));
 
-		g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
-		g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
+		g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
+		g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 
 		g_pEnv->_graphicsDevice->SetInputLayout(_inputLayout);
 
@@ -706,8 +715,8 @@ namespace HexEngine
 			perObjectBuffer->Write(&_perObjectBuffer, sizeof(_perObjectBuffer));
 		}*/
 
-		g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
-		g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
+		g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
+		g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 
 		g_pEnv->_graphicsDevice->SetInputLayout(_inputLayout);
 
@@ -793,8 +802,8 @@ namespace HexEngine
 			perObjectBuffer->Write(&_perObjectBuffer, sizeof(_perObjectBuffer));
 		}*/
 
-		g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
-		g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
+		g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
+		g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 
 		g_pEnv->_graphicsDevice->SetInputLayout(_inputLayout);
 
@@ -1131,8 +1140,8 @@ namespace HexEngine
 
 			// restore the shaders
 			//
-			g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
-			g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
+			g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
+			g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
 		}
 		else
 		{
@@ -1151,8 +1160,8 @@ namespace HexEngine
 
 			// restore the shaders
 			//
-			g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
-			g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
+			g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
+			g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
 		}
 		else
 		{
@@ -1171,8 +1180,8 @@ namespace HexEngine
 
 			// restore the shaders
 			//
-			g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
-			g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
+			g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
+			g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
 		}
 		else
 		{
@@ -1391,8 +1400,8 @@ namespace HexEngine
 
 		g_pEnv->_graphicsDevice->SetTexture2D(font->GetAtlas(fontSize));
 
-		g_pEnv->_graphicsDevice->SetVertexShader(_basicShader->GetShaderStage(ShaderStage::VertexShader));
-		g_pEnv->_graphicsDevice->SetPixelShader(_basicShader->GetShaderStage(ShaderStage::PixelShader));
+		g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
+		g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 
 		g_pEnv->_graphicsDevice->SetInputLayout(_inputLayout);
 		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);

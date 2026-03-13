@@ -403,9 +403,8 @@ namespace HexEngine
 		if (material->GetFormat() == MaterialFormat::ORM)
 			_objectBuffer->_flags |= OBJECT_FLAGS_ORM_FORMAT;
 
-		memcpy(&_objectBuffer->_material, &material->_properties, sizeof(MaterialProperties));
-
-		material->_properties.isInTransparencyPhase = false;// isInTransparencyPhase;
+		_objectBuffer->_material = material->_properties;
+		_objectBuffer->_material.isInTransparencyPhase = false;
 
 		perObjectBuffer->Write(_objectBuffer, sizeof(PerObjectBuffer));
 

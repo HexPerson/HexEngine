@@ -7,6 +7,32 @@
 #include <WICTextureLoader.h>
 #include <DirectXTex\DirectXTex.h>
 
+namespace
+{
+	const DirectX::Image* GetImagesWithMipmaps(
+		const DirectX::ScratchImage& sourceImage,
+		DirectX::TexMetadata& metaData,
+		DirectX::ScratchImage& generatedMipChain)
+	{
+		if (metaData.dimension == DirectX::TEX_DIMENSION_TEXTURE2D && metaData.mipLevels <= 1 && metaData.width > 1 && metaData.height > 1)
+		{
+			if (SUCCEEDED(DirectX::GenerateMipMaps(
+				sourceImage.GetImages(),
+				sourceImage.GetImageCount(),
+				metaData,
+				DirectX::TEX_FILTER_DEFAULT,
+				0,
+				generatedMipChain)))
+			{
+				metaData = generatedMipChain.GetMetadata();
+				return generatedMipChain.GetImages();
+			}
+		}
+
+		return sourceImage.GetImages();
+	}
+}
+
 TextureImporter::TextureImporter()
 {
 	HexEngine::g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
@@ -43,6 +69,7 @@ std::shared_ptr<HexEngine::IResource> TextureImporter::LoadResourceFromFile(cons
 
 	DirectX::TexMetadata metaData;
 	DirectX::ScratchImage scratchImage;
+	DirectX::ScratchImage mipChain;
 
 	if (lowerExtension == ".dds")
 	{
@@ -80,17 +107,20 @@ std::shared_ptr<HexEngine::IResource> TextureImporter::LoadResourceFromFile(cons
 			&d3dSRV));*/
 	}
 
+	const DirectX::Image* imageData = GetImagesWithMipmaps(scratchImage, metaData, mipChain);
+	const size_t imageCount = mipChain.GetImageCount() > 0 ? mipChain.GetImageCount() : scratchImage.GetImageCount();
+
 	CHECK_HR(DirectX::CreateTexture(
 		gfxDevice,
-		scratchImage.GetImages(),
-		scratchImage.GetImageCount(),
+		imageData,
+		imageCount,
 		metaData,
 		(ID3D11Resource**)&d3dTexture));
 
 	CHECK_HR(DirectX::CreateShaderResourceView(
 		gfxDevice,
-		scratchImage.GetImages(),
-		scratchImage.GetImageCount(),
+		imageData,
+		imageCount,
 		metaData,
 		&d3dSRV));
 
@@ -146,6 +176,7 @@ std::shared_ptr<HexEngine::IResource> TextureImporter::LoadResourceFromMemory(co
 	{
 		DirectX::TexMetadata metaData;
 		DirectX::ScratchImage scratchImage;
+		DirectX::ScratchImage mipChain;
 
 		if (DirectX::LoadFromTGAMemory(
 			data.data(),
@@ -153,29 +184,52 @@ std::shared_ptr<HexEngine::IResource> TextureImporter::LoadResourceFromMemory(co
 			&metaData,
 			scratchImage) == S_OK)
 		{
+			const DirectX::Image* imageData = GetImagesWithMipmaps(scratchImage, metaData, mipChain);
+			const size_t imageCount = mipChain.GetImageCount() > 0 ? mipChain.GetImageCount() : scratchImage.GetImageCount();
+
 			CHECK_HR(DirectX::CreateTexture(
 				gfxDevice,
-				scratchImage.GetImages(),
-				scratchImage.GetImageCount(),
+				imageData,
+				imageCount,
 				metaData,
 				(ID3D11Resource**)&d3dTexture));
 
 			CHECK_HR(DirectX::CreateShaderResourceView(
 				gfxDevice,
-				scratchImage.GetImages(),
-				scratchImage.GetImageCount(),
+				imageData,
+				imageCount,
 				metaData,
 				&d3dSRV));
 		}
 	}
 	else
 	{
-		CHECK_HR(DirectX::CreateWICTextureFromMemory(
-			gfxDevice,
-			gfxContexte,
+		DirectX::TexMetadata metaData;
+		DirectX::ScratchImage scratchImage;
+		DirectX::ScratchImage mipChain;
+
+		CHECK_HR(DirectX::LoadFromWICMemory(
 			data.data(),
 			data.size(),
-			(ID3D11Resource**)&d3dTexture,
+			DirectX::WIC_FLAGS_NONE,
+			&metaData,
+			scratchImage));
+
+		const DirectX::Image* imageData = GetImagesWithMipmaps(scratchImage, metaData, mipChain);
+		const size_t imageCount = mipChain.GetImageCount() > 0 ? mipChain.GetImageCount() : scratchImage.GetImageCount();
+
+		CHECK_HR(DirectX::CreateTexture(
+			gfxDevice,
+			imageData,
+			imageCount,
+			metaData,
+			(ID3D11Resource**)&d3dTexture));
+
+		CHECK_HR(DirectX::CreateShaderResourceView(
+			gfxDevice,
+			imageData,
+			imageCount,
+			metaData,
 			&d3dSRV));
 	}
 
