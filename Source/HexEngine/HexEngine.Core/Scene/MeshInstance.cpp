@@ -57,6 +57,20 @@ namespace HexEngine
 		_poolIndex++;
 	}
 
+	void MeshInstance::Render(const MeshInstanceData& data)
+	{
+		if ((_poolIndex + 1) > (int32_t)_data.size())
+		{
+			_data.push_back(data);
+		}
+		else
+		{
+			_data.at(_poolIndex) = data;
+		}
+
+		_poolIndex++;
+	}
+
 	void MeshInstance::Finish()
 	{
 		if (_poolIndex == 0)
@@ -99,6 +113,20 @@ namespace HexEngine
 			SimpleMeshInstanceData& data = _data.at(_poolIndex);
 
 			data.worldMatrix = worldMatrixTranspose;
+		}
+
+		_poolIndex++;
+	}
+
+	void SimpleMeshInstance::Render(const SimpleMeshInstanceData& data)
+	{
+		if ((_poolIndex + 1) > (int32_t)_data.size())
+		{
+			_data.push_back(data);
+		}
+		else
+		{
+			_data.at(_poolIndex) = data;
 		}
 
 		_poolIndex++;

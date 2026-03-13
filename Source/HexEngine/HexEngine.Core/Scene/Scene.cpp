@@ -1014,7 +1014,7 @@ namespace HexEngine
 	}
 
 	template <typename T>
-	void RenderInstance(T* instance, uint32_t numInstances, StaticMeshComponent* renderer, bool& rendered)
+	void RenderInstance(T* instance, uint32_t numInstances, Material* material, bool& rendered)
 	{
 		if (instance)
 		{
@@ -1024,7 +1024,8 @@ namespace HexEngine
 			{
 				g_pEnv->_graphicsDevice->DrawIndexedInstanced(instance->GetMesh()->GetNumIndices(), (uint32_t)numInstances);
 
-				renderer->GetMaterial()->RestoreRenderState();
+				if (material)
+					material->RestoreRenderState();
 
 				rendered = false;
 			}
@@ -1095,27 +1096,20 @@ namespace HexEngine
 				if (isShadowMap)
 					currentInstance = (MeshInstance*)simpleInstance;
 
+				if (!material)
+					continue;
+
 				if ((renderFlags & MeshRenderTransparency) == 0)
 				{
-					if (auto material = renderer->GetMaterial(); material != nullptr)
-					{
-						if (material->_properties.hasTransparency == 1 || material->_properties.isWater == 1)
-							continue;
-
-						if (material->DoesHaveAnyReflectivity())
-							_didAnyDrawnItemReflect = true;
-					}
-					else
+					if (material->_properties.hasTransparency == 1 || material->_properties.isWater == 1)
 						continue;
+
+					if (material->DoesHaveAnyReflectivity())
+						_didAnyDrawnItemReflect = true;
 				}
 				else
 				{
-					if (auto material = renderer->GetMaterial(); material != nullptr)
-					{
-						if (material->_properties.hasTransparency == 0 && material->_properties.isWater == 0)
-							continue;
-					}
-					else
+					if (material->_properties.hasTransparency == 0 && material->_properties.isWater == 0)
 						continue;
 				}
 
@@ -1125,9 +1119,9 @@ namespace HexEngine
 						++_drawCalls;
 
 					if(isShadowMap)
-						RenderInstance((SimpleMeshInstance*)lastInstance, drawnInstances, renderer, rendered);
+						RenderInstance((SimpleMeshInstance*)lastInstance, drawnInstances, material.get(), rendered);
 					else
-						RenderInstance(lastInstance, drawnInstances, renderer, rendered);
+						RenderInstance(lastInstance, drawnInstances, material.get(), rendered);
 					
 					drawnInstances = 0;
 
@@ -1181,7 +1175,7 @@ namespace HexEngine
 					if (!renderer)
 						continue;
 
-					if (renderer->RenderMesh(mesh.get(), renderFlags, _drawnEntities) == false)
+					if (renderer->RenderMesh(mesh.get(), renderFlags, _drawnEntities, material.get()) == false)
 					{
 						LOG_WARN("Failed to RenderMesh, ignoring this entity");
 						continue;
@@ -1204,7 +1198,7 @@ namespace HexEngine
 					}
 					else
 					{
-						simpleInstance->Render(entity->GetWorldTMTranspose());
+						simpleInstance->Render(meshComponent->GetCachedShadowInstanceData());
 					}
 				}
 				else
@@ -1221,26 +1215,7 @@ namespace HexEngine
 					}
 					else
 					{
-						if (entity->HasA<InstancedStaticMeshComponent>())
-						{
-							instance->Render(
-								entity->GetWorldTM(),
-								entity->GetWorldTMTranspose(),
-								entity->GetWorldTMPrevTranspose(),
-								entity->GetWorldTMInvert(),
-								material->_properties.diffuseColour,
-								renderer->GetUVScale());
-						}
-						else
-						{
-							instance->Render(
-								entity->GetWorldTM(),
-								entity->GetWorldTMTranspose(),
-								entity->GetWorldTMPrevTranspose(),
-								entity->GetWorldTMInvert(),
-								material->_properties.diffuseColour,
-								renderer->GetUVScale());
-						}
+						instance->Render(meshComponent->GetCachedInstanceData(material.get()));
 					}
 				}
 
@@ -1254,9 +1229,9 @@ namespace HexEngine
 					++_drawCalls;
 
 				if (isShadowMap)
-					RenderInstance((SimpleMeshInstance*)currentInstance, drawnInstances, renderer, rendered);
+					RenderInstance((SimpleMeshInstance*)currentInstance, drawnInstances, material.get(), rendered);
 				else
-					RenderInstance(currentInstance, drawnInstances, renderer, rendered);
+					RenderInstance(currentInstance, drawnInstances, material.get(), rendered);
 			}
 
 			

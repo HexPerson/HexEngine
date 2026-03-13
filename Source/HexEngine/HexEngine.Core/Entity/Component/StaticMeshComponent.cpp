@@ -30,13 +30,13 @@ namespace HexEngine
 			LOG_DEBUG("Mesh '%s' now has a ref count of %d (will be %d after this)", _mesh->GetName().c_str(), _mesh.use_count(), _mesh.use_count()-1);
 	}
 
-	bool StaticMeshComponent::RenderMesh(Mesh* mesh, MeshRenderFlags flags, int32_t instanceId)
+	bool StaticMeshComponent::RenderMesh(Mesh* mesh, MeshRenderFlags flags, int32_t instanceId, Material* cachedMaterial)
 	{
 		// make sure this MeshRenderer can actually render this Mesh
 		if (mesh != _mesh.get())
 			return false;
 
-		auto material = GetMaterial();
+		auto material = cachedMaterial ? cachedMaterial : GetMaterial().get();
 
 		if (!material)
 		{
@@ -88,7 +88,7 @@ namespace HexEngine
 		//	offsetMatrix = math::Matrix::CreateTranslation(_offsetPosition);
 		//}
 
-		mesh->UpdateConstantBuffer(GetEntity(), /*GetEntity()->GetLocalTM() **/ offsetMatrix, material.get(), instanceId);
+		mesh->UpdateConstantBuffer(GetEntity(), /*GetEntity()->GetLocalTM() **/ offsetMatrix, material, instanceId);
 
 		// bind the shader's requirements
 		auto requirements = shader->GetRequirements();
@@ -112,23 +112,21 @@ namespace HexEngine
 
 		// Set the textures
 		//
-		auto materialSet = GetMaterial();
+		graphicsDevice->SetTexture2D(slotIdx + 0, material->GetTexture(MaterialTexture::Albedo).get());
 
-		graphicsDevice->SetTexture2D(slotIdx + 0, materialSet->GetTexture(MaterialTexture::Albedo).get());
+		graphicsDevice->SetTexture2D(slotIdx + 1, material->GetTexture(MaterialTexture::Normal).get());
 
-		graphicsDevice->SetTexture2D(slotIdx + 1, materialSet->GetTexture(MaterialTexture::Normal).get());
+		graphicsDevice->SetTexture2D(slotIdx + 2, material->GetTexture(MaterialTexture::Roughness).get());
 
-		graphicsDevice->SetTexture2D(slotIdx + 2, materialSet->GetTexture(MaterialTexture::Roughness).get());
+		graphicsDevice->SetTexture2D(slotIdx + 3, material->GetTexture(MaterialTexture::Metallic).get());
 
-		graphicsDevice->SetTexture2D(slotIdx + 3, materialSet->GetTexture(MaterialTexture::Metallic).get());
+		graphicsDevice->SetTexture2D(slotIdx + 4, material->GetTexture(MaterialTexture::Height).get());
 
-		graphicsDevice->SetTexture2D(slotIdx + 4, materialSet->GetTexture(MaterialTexture::Height).get());
+		graphicsDevice->SetTexture2D(slotIdx + 5, material->GetTexture(MaterialTexture::Emission).get());
 
-		graphicsDevice->SetTexture2D(slotIdx + 5, materialSet->GetTexture(MaterialTexture::Emission).get());
+		graphicsDevice->SetTexture2D(slotIdx + 6, material->GetTexture(MaterialTexture::Opacity).get());
 
-		graphicsDevice->SetTexture2D(slotIdx + 6, materialSet->GetTexture(MaterialTexture::Opacity).get());
-
-		graphicsDevice->SetTexture2D(slotIdx + 7, materialSet->GetTexture(MaterialTexture::AmbientOcclusion).get());
+		graphicsDevice->SetTexture2D(slotIdx + 7, material->GetTexture(MaterialTexture::AmbientOcclusion).get());
 
 		slotIdx += MaterialTexture::Count;
 
@@ -316,6 +314,42 @@ namespace HexEngine
 	const math::Vector2& StaticMeshComponent::GetUVScale() const
 	{
 		return _uvScale;
+	}
+
+	const MeshInstanceData& StaticMeshComponent::GetCachedInstanceData(Material* material)
+	{
+		auto entity = GetEntity();
+		const auto transformVersion = entity->GetTransformVersion();
+		const auto colour = material ? material->_properties.diffuseColour : math::Vector4(1.0f);
+
+		if (_cachedRenderTransformVersion != transformVersion || _cachedRenderColour != colour || _cachedRenderUvScale != _uvScale)
+		{
+			_cachedInstanceData.worldMatrix = entity->GetWorldTMTranspose();
+			_cachedInstanceData.worldMatrixPrev = entity->GetWorldTMPrevTranspose();
+			_cachedInstanceData.worldMatrixInverseTranspose = entity->GetWorldTMInvert();
+			_cachedInstanceData.colour = colour;
+			_cachedInstanceData.uvscale = _uvScale;
+
+			_cachedRenderTransformVersion = transformVersion;
+			_cachedRenderColour = colour;
+			_cachedRenderUvScale = _uvScale;
+		}
+
+		return _cachedInstanceData;
+	}
+
+	const SimpleMeshInstanceData& StaticMeshComponent::GetCachedShadowInstanceData()
+	{
+		auto entity = GetEntity();
+		const auto transformVersion = entity->GetTransformVersion();
+
+		if (_cachedRenderTransformVersion != transformVersion)
+		{
+			_cachedShadowInstanceData.worldMatrix = entity->GetWorldTMTranspose();
+			_cachedRenderTransformVersion = transformVersion;
+		}
+
+		return _cachedShadowInstanceData;
 	}
 
 	void StaticMeshComponent::DoubleClickMaterial(const std::wstring& path)

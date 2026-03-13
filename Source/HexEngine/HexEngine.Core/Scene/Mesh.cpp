@@ -371,37 +371,14 @@ namespace HexEngine
 		}
 
 		_objectBuffer->_worldMatrix = localTM.Transpose();
-		_objectBuffer->_flags = 0;
+		_objectBuffer->_flags = material->GetObjectFlags();
 		_objectBuffer->entityId = instanceId;
 		_objectBuffer->cullDistance = material->GetCullDistance();
 
-		if (HasAnimations()) {
+		if (HasAnimations())
+		{
 			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_ANIMATION;
 		}
-
-		if (material->GetTexture(MaterialTexture::Normal) != nullptr)
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_BUMP;
-
-		if (material->GetTexture(MaterialTexture::Roughness) != nullptr)
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_ROUGHNESS;
-
-		if (material->GetTexture(MaterialTexture::Metallic) != nullptr)
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_METALLIC;
-
-		if (material->GetTexture(MaterialTexture::Height) != nullptr)
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_HEIGHT;
-
-		if (material->GetTexture(MaterialTexture::Emission) != nullptr)
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_EMISSION;
-
-		if (material->GetTexture(MaterialTexture::Opacity) != nullptr)
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_OPACITY;
-
-		if (material->GetTexture(MaterialTexture::AmbientOcclusion) != nullptr)
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION;
-
-		if (material->GetFormat() == MaterialFormat::ORM)
-			_objectBuffer->_flags |= OBJECT_FLAGS_ORM_FORMAT;
 
 		_objectBuffer->_material = material->_properties;
 		_objectBuffer->_material.isInTransparencyPhase = false;

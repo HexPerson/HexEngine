@@ -2,10 +2,26 @@
 
 #include "Material.hpp"
 #include "../HexEngine.hpp"
+#include "../Scene/Mesh.hpp"
 
 namespace HexEngine
 {
 	static uint32_t sMaterialCount = 0;
+
+	static uint32_t GetObjectFlagsForTexture(MaterialTexture type)
+	{
+		switch (type)
+		{
+		case MaterialTexture::Normal: return OBJECT_FLAGS_HAS_BUMP;
+		case MaterialTexture::Roughness: return OBJECT_FLAGS_HAS_ROUGHNESS;
+		case MaterialTexture::Metallic: return OBJECT_FLAGS_HAS_METALLIC;
+		case MaterialTexture::Height: return OBJECT_FLAGS_HAS_HEIGHT;
+		case MaterialTexture::Emission: return OBJECT_FLAGS_HAS_EMISSION;
+		case MaterialTexture::Opacity: return OBJECT_FLAGS_HAS_OPACITY;
+		case MaterialTexture::AmbientOcclusion: return OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION;
+		default: return 0;
+		}
+	}
 
 	Material::Material() :
 		_materialId(++sMaterialCount)
@@ -75,6 +91,7 @@ namespace HexEngine
 		_cullMode = material._cullMode;
 		_format = material._format;
 		_cullDistance = material._cullDistance;
+		_objectFlags = material._objectFlags;
 	}
 
 	Material::Material(const Material& other)
@@ -101,9 +118,16 @@ namespace HexEngine
 
 		std::unique_lock lock(_lock);
 
-		auto oldTexture = _textures[type];
-
 		_textures[type] = texture;
+
+		const auto flag = GetObjectFlagsForTexture(type);
+		if (flag != 0)
+		{
+			if (texture == nullptr)
+				_objectFlags &= ~flag;
+			else
+				_objectFlags |= flag;
+		}
 	}
 
 	void Material::SetVolumeTexture(ITexture3D* texture)
@@ -146,6 +170,18 @@ namespace HexEngine
 	std::shared_ptr<ITexture2D> Material::GetTexture(MaterialTexture type) const
 	{
 		return _textures[type];
+	}
+
+	uint32_t Material::GetObjectFlags() const
+	{
+		uint32_t flags = _objectFlags;
+
+		if (_format == MaterialFormat::ORM)
+		{
+			flags |= OBJECT_FLAGS_ORM_FORMAT;
+		}
+
+		return flags;
 	}
 
 	std::shared_ptr<Material> Material::GetDefaultMaterial()

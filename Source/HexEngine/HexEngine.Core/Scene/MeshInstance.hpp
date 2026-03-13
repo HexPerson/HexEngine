@@ -81,6 +81,7 @@ namespace HexEngine
 
 		void Finish();
 		void Render(const math::Matrix& worldMatrixTranspose);
+		void Render(const SimpleMeshInstanceData& data);
 	};
 
 	class MeshInstance : public BaseMeshInstance<MeshInstanceData>
@@ -112,6 +113,7 @@ namespace HexEngine
 			const math::Matrix& worldMatrixInvert,
 			const math::Vector4& colour,
 			const math::Vector2& uvScale = math::Vector2(1.0f, 1.0f));
+		void Render(const MeshInstanceData& data);
 
 		SimpleMeshInstance* GetSimpleInstance() const
 		{

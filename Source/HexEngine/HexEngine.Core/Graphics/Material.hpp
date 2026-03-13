@@ -90,6 +90,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> GetShadowMapShader() const;
 
 		std::shared_ptr<ITexture2D> GetTexture(MaterialTexture type) const;
+		uint32_t GetObjectFlags() const;
 
 		void SetVolumeTexture(ITexture3D* texture);
 		ITexture3D* GetVolumeTexture() const { return _volumeTexture; }
@@ -142,5 +143,6 @@ namespace HexEngine
 		std::map<std::string, std::string> _soundTags;
 
 		std::recursive_mutex _lock;
+		uint32_t _objectFlags = 0;
 	};
 }

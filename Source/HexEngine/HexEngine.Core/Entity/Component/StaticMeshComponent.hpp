@@ -37,7 +37,7 @@ namespace HexEngine
 
 		void		ReleaseAllMeshes();
 
-		bool		RenderMesh(Mesh* mesh, MeshRenderFlags flags, int32_t instanceId);
+		bool		RenderMesh(Mesh* mesh, MeshRenderFlags flags, int32_t instanceId, Material* cachedMaterial = nullptr);
 
 		// Materials
 		std::shared_ptr<Material>	GetMaterial() const;
@@ -69,6 +69,8 @@ namespace HexEngine
 		std::shared_ptr<Mesh> GetMesh() const;
 
 		const math::Vector2& GetUVScale() const;
+		const MeshInstanceData& GetCachedInstanceData(Material* material);
+		const SimpleMeshInstanceData& GetCachedShadowInstanceData();
 
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
@@ -93,6 +95,12 @@ namespace HexEngine
 		math::Matrix _offsetMatrixTranspose;
 
 		CullingMode _shadowCullingMode = CullingMode::FrontFace;
+
+		uint64_t _cachedRenderTransformVersion = 0;
+		math::Vector4 _cachedRenderColour = math::Vector4::Zero;
+		math::Vector2 _cachedRenderUvScale = math::Vector2(0.0f, 0.0f);
+		MeshInstanceData _cachedInstanceData = {};
+		SimpleMeshInstanceData _cachedShadowInstanceData = {};
 		
 
 		/*BlendState _blendState = BlendState::Opaque;

@@ -215,6 +215,7 @@ namespace HexEngine
 		const math::Matrix& GetWorldTMPrevTranspose() const;
 		const math::Matrix& GetWorldTMTranspose();
 		const math::Matrix& GetLocalTM();
+		uint64_t GetTransformVersion() const { return _transformVersion; }
 
 		void ClearTransformCache();
 
@@ -293,6 +294,7 @@ namespace HexEngine
 		bool _hasCachedWorldOBB = false;
 		bool _hasCachedWorldBoundingSphere = false;
 		bool _hasCachedWorldOcclusionVolume = true;
+		uint64_t _transformVersion = 1;
 		Transform* _cachedTransform = nullptr;
 		StaticMeshComponent* _cachedMeshRenderer = nullptr;
 		bool _canCastShadows = true;

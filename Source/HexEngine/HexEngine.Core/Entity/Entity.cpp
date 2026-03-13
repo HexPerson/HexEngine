@@ -732,6 +732,7 @@ namespace HexEngine
 		_hasCachedWorldTMTranspose = false;
 		_hasCachedWorldBoundingSphere = false;
 		_hasCachedWorldTMInvert = false;
+		++_transformVersion;
 	}
 
 	void Entity::OnMessage(Message* message, MessageListener* sender)
@@ -744,6 +745,7 @@ namespace HexEngine
 
 			if ((transformMessage->_flags & (TransformChangedMessage::ChangeFlags::ScaleChanged | TransformChangedMessage::ChangeFlags::RotationChanged)) != 0)
 			{
+				++_transformVersion;
 				_hasCachedLocalTM = false;
 				_hasCachedWorldTM = false;
 				_hasCachedWorldAABB = false;
@@ -760,6 +762,7 @@ namespace HexEngine
 
 			if ((transformMessage->_flags & TransformChangedMessage::ChangeFlags::PositionChanged) == TransformChangedMessage::ChangeFlags::PositionChanged)
 			{
+				++_transformVersion;
 				_hasCachedWorldTM = false;
 				_hasCachedLocalTM = false;
 				_hasCachedWorldAABB = false;
