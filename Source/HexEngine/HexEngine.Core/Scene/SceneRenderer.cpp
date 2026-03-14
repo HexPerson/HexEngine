@@ -48,6 +48,12 @@ namespace HexEngine
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
 	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
+	HVar r_profileDisableDirectionalLights("r_profileDisableDirectionalLights", "Disable directional light rendering for profiling", false, false, true);
+	HVar r_profileDisablePointLights("r_profileDisablePointLights", "Disable point light rendering for profiling", false, false, true);
+	HVar r_profileDisableSpotLights("r_profileDisableSpotLights", "Disable spot light rendering for profiling", false, false, true);
+	HVar r_profileDisablePost("r_profileDisablePost", "Disable post-processing overlays for profiling", false, false, true);
+	HVar r_profileDisableBloom("r_profileDisableBloom", "Disable bloom for profiling", false, false, true);
+	HVar r_profileAlbedoOnly("r_profileAlbedoOnly", "Display only the GBuffer albedo/diffuse target for profiling", false, false, true);
 
 	SceneRenderer::SceneRenderer()
 	{}
@@ -1219,9 +1225,14 @@ namespace HexEngine
 	{
 		PROFILE();
 
-		bool canPostProcess = (flags & SceneFlags::PostProcessingEnabled) != (SceneFlags)0;
+		const bool profileAlbedoOnly = r_profileAlbedoOnly._val.b;
+		bool canPostProcess = (flags & SceneFlags::PostProcessingEnabled) != (SceneFlags)0 && !r_profileDisablePost._val.b && !profileAlbedoOnly;
 
-		if (canPostProcess)
+		if (profileAlbedoOnly)
+		{
+			_gbuffer.GetDiffuse()->CopyTo(_beautyRT);
+		}
+		else if (canPostProcess)
 		{
 			if (g_pEnv->_ssaoProvider)
 			{
@@ -1249,7 +1260,10 @@ namespace HexEngine
 				_taa.Resolve(_beautyRT, _beautyRT, _gbuffer.GetVelocity(), _gbuffer.GetNormal(), g_pEnv->GetUIManager().GetRenderer());
 			}
 			
-			_bloomEffect->Render(_currentCamera, _beautyRT, _beautyRT);
+			if (!r_profileDisableBloom._val.b)
+			{
+				_bloomEffect->Render(_currentCamera, _beautyRT, _beautyRT);
+			}
 			
 			//_beautyRT->GetPixels(_denoiseFD.colour);
 			//_gbuffer.GetNormal()->GetPixels(_denoiseFD.normals);
@@ -1329,7 +1343,8 @@ namespace HexEngine
 
 	void SceneRenderer::RenderOverlays(SceneFlags flags, ITexture2D* beauty, ITexture2D* renderTarget)
 	{
-		bool canPostProcess = (flags & SceneFlags::PostProcessingEnabled) != (SceneFlags)0;
+		const bool profileAlbedoOnly = r_profileAlbedoOnly._val.b;
+		bool canPostProcess = (flags & SceneFlags::PostProcessingEnabled) != (SceneFlags)0 && !r_profileDisablePost._val.b && !profileAlbedoOnly;
 
 		if (!canPostProcess || !_currentCamera)
 			return;
@@ -1439,9 +1454,12 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
 		//g_pEnv->_graphicsDevice->EnableDepthBuffer(false);
 
-		RenderDirectionalLights();
-		RenderPointLights();
-		RenderSpotLights();
+		if (!r_profileDisableDirectionalLights._val.b)
+			RenderDirectionalLights();
+		if (!r_profileDisablePointLights._val.b)
+			RenderPointLights();
+		if (!r_profileDisableSpotLights._val.b)
+			RenderSpotLights();
 
 		//_lightAccumulationBuffer->BlendTo_Additive(_gbuffer.GetDiffuse());
 		//_lightAccumulationBuffer->BlendTo_Additive(_compositionRT);

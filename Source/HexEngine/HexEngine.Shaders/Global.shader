@@ -64,6 +64,10 @@
 		float shoreFadeStrength;
 		float fadeFactor;
 		float reflectionStrength;
+		float reflectionNearDistance;
+		float reflectionFarDistance;
+		float reflection_pad0;
+		float reflection_pad1;
 	};
 
 	struct ColourGradeSettings

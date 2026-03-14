@@ -15,6 +15,9 @@ namespace HexEngine
 
 	extern HVar r_debugScene;
 	extern HVar r_interpolate;
+	HVar r_profileDisableShadowSampling("r_profileDisableShadowSampling", "Disable shadow-map sampling in static mesh materials for profiling", false, false, true);
+	HVar r_profileDisableNormalMaps("r_profileDisableNormalMaps", "Disable normal map bindings in static mesh materials for profiling", false, false, true);
+	HVar r_profileDisableSurfaceMaps("r_profileDisableSurfaceMaps", "Disable roughness, metallic, AO, height, emission and opacity map bindings in static mesh materials for profiling", false, false, true);
 
 	void Scene::Create(bool createSkySphere, IEntityListener* listener)
 	{
@@ -1013,6 +1016,92 @@ namespace HexEngine
 		}
 	}
 
+	namespace
+	{
+		struct RenderableSnapshot
+		{
+			std::shared_ptr<Mesh> mesh;
+			std::shared_ptr<Material> material;
+			MeshInstance* instance = nullptr;
+			SimpleMeshInstance* simpleInstance = nullptr;
+			Layer layer = Layer::Invisible;
+			bool hasAnimations = false;
+			bool isBoundToBone = false;
+			CullingMode shadowCullMode = CullingMode::FrontFace;
+			MeshInstanceData instanceData = {};
+			SimpleMeshInstanceData shadowInstanceData = {};
+		};
+
+		using RenderBatchSnapshot = std::vector<std::pair<std::shared_ptr<Material>, std::vector<RenderableSnapshot>>>;
+
+		bool PrepareMeshRender(Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode)
+		{
+			if (!mesh || !material)
+				return false;
+
+			auto shader = material->GetStandardShader();
+			const bool isShadowMap = (flags & MeshRenderFlags::MeshRenderShadowMap) != 0;
+			const bool disableShadowSampling = r_profileDisableShadowSampling._val.b;
+			const bool disableNormalMaps = r_profileDisableNormalMaps._val.b;
+			const bool disableSurfaceMaps = r_profileDisableSurfaceMaps._val.b;
+			auto defaultTexture = ITexture2D::GetDefaultTexture();
+
+			if (isShadowMap)
+				shader = material->GetShadowMapShader();
+
+			if (!shader)
+			{
+				LOG_WARN("Cannot render a mesh without a valid shader, please check the material has a shader applied!");
+				return false;
+			}
+
+			auto graphicsDevice = g_pEnv->_graphicsDevice;
+			graphicsDevice->SetPixelShader(shader->GetShaderStage(ShaderStage::PixelShader));
+			graphicsDevice->SetVertexShader(shader->GetShaderStage(ShaderStage::VertexShader));
+			graphicsDevice->SetInputLayout(shader->GetInputLayout());
+
+			material->SaveRenderState();
+			graphicsDevice->SetBlendState(material->GetBlendState());
+			graphicsDevice->SetDepthBufferState(material->GetDepthState());
+			graphicsDevice->SetCullingMode(isShadowMap ? shadowCullMode : material->GetCullMode());
+
+			mesh->UpdateConstantBuffer(nullptr, math::Matrix::Identity, material, instanceId);
+
+			auto requirements = shader->GetRequirements();
+			if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresGBuffer))
+				g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+
+			if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresShadowMaps))
+			{
+				if (disableShadowSampling)
+					graphicsDevice->SetTexture2D(nullptr);
+				else
+					g_pEnv->_sceneRenderer->GetCurrentShadowMap()->BindAsShaderResource();
+			}
+
+			if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresBeauty))
+				graphicsDevice->SetTexture2D(g_pEnv->_sceneRenderer->GetBeautyTexture());
+
+			uint32_t slotIdx = graphicsDevice->GetBoundResourceIndex();
+
+			std::vector<ITexture2D*> textures = {
+				material->GetTexture(MaterialTexture::Albedo).get(),
+				disableNormalMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Normal).get(),
+				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Roughness).get(),
+				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Metallic).get(),
+				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Height).get(),
+				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Emission).get(),
+				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::Opacity).get(),
+				disableSurfaceMaps ? defaultTexture.get() : material->GetTexture(MaterialTexture::AmbientOcclusion).get()
+			};
+
+			graphicsDevice->SetTexture2DArray(slotIdx, textures);
+
+			mesh->SetBuffers(isShadowMap);
+			return true;
+		}
+	}
+
 	template <typename T>
 	void RenderInstance(T* instance, uint32_t numInstances, Material* material, bool& rendered)
 	{
@@ -1034,11 +1123,64 @@ namespace HexEngine
 
 	void Scene::RenderEntities(PVS* pvs, LayerMask layerMask, MeshRenderFlags renderFlags)
 	{
-		std::unique_lock lock(_lock);
-
 		PROFILE();
 
-		const auto& renderableSet = pvs->GetRenderables();
+		RenderBatchSnapshot renderableSet;
+		{
+			std::unique_lock lock(_lock);
+			const auto& pvsRenderables = pvs->GetRenderables();
+			renderableSet.reserve(pvsRenderables.size());
+
+			for (const auto& renderableBatch : pvsRenderables)
+			{
+				auto material = renderableBatch.first;
+				if (!material)
+					continue;
+
+				auto& batch = renderableSet.emplace_back(material, std::vector<RenderableSnapshot>()).second;
+				batch.reserve(renderableBatch.second.size());
+
+				for (const auto& meshEntityPair : renderableBatch.second)
+				{
+					auto mesh = std::get<0>(meshEntityPair);
+					auto entity = std::get<1>(meshEntityPair);
+					auto meshComponent = (StaticMeshComponent*)std::get<2>(meshEntityPair);
+					if (!mesh || !entity || !meshComponent)
+						continue;
+
+					auto instance = mesh->GetInstance();
+					if (!instance)
+						continue;
+
+					RenderableSnapshot snapshot;
+					snapshot.mesh = mesh;
+					snapshot.material = material;
+					snapshot.instance = instance;
+					snapshot.simpleInstance = instance->GetSimpleInstance();
+					snapshot.layer = entity->GetLayer();
+					snapshot.hasAnimations = mesh->HasAnimations();
+					snapshot.isBoundToBone = meshComponent->IsBoundToBone();
+					snapshot.shadowCullMode = meshComponent->GetShadowCullMode();
+
+					if (snapshot.isBoundToBone)
+					{
+						snapshot.shadowInstanceData.worldMatrix = entity->GetWorldTMTranspose() * meshComponent->GetOffsetMatrixTranspose();
+						snapshot.instanceData.worldMatrix = snapshot.shadowInstanceData.worldMatrix;
+						snapshot.instanceData.worldMatrixPrev = entity->GetWorldTMPrevTranspose();
+						snapshot.instanceData.worldMatrixInverseTranspose = entity->GetWorldTMInvert();
+						snapshot.instanceData.colour = material->_properties.diffuseColour;
+						snapshot.instanceData.uvscale = meshComponent->GetUVScale();
+					}
+					else
+					{
+						snapshot.shadowInstanceData = meshComponent->GetCachedShadowInstanceData();
+						snapshot.instanceData = meshComponent->GetCachedInstanceData(material.get());
+					}
+
+					batch.push_back(snapshot);
+				}
+			}
+		}
 
 		bool isShadowMap = (renderFlags & MeshRenderFlags::MeshRenderShadowMap) != 0;
 		bool isTransparency = (renderFlags & MeshRenderFlags::MeshRenderTransparency) != 0;
@@ -1059,7 +1201,6 @@ namespace HexEngine
 			int drawnInstances = 0;		
 			MeshInstance* currentInstance = nullptr;
 			MeshInstance* lastInstance = nullptr;
-			StaticMeshComponent* renderer = nullptr;
 
 			/*auto RenderInstance = [&rendered](MeshInstance* instance, uint32_t numInstances, StaticMeshComponent* renderer)
 			{
@@ -1078,26 +1219,19 @@ namespace HexEngine
 				}
 			};*/
 
-			for (auto&& meshEntityPair : it->second)
+			for (auto&& renderable : it->second)
 			{
-				auto mesh = std::get<0>(meshEntityPair);
-				auto entity = std::get<1>(meshEntityPair);
-				auto meshComponent = (StaticMeshComponent*)std::get<2>(meshEntityPair);
-				auto instance = mesh->GetInstance();	
-				SimpleMeshInstance* simpleInstance = instance->GetSimpleInstance();
+				auto mesh = renderable.mesh;
+				auto instance = renderable.instance;
+				SimpleMeshInstance* simpleInstance = renderable.simpleInstance;
 
-
-				if (!mesh || !entity || !instance)
+				if (!mesh || !instance)
 					continue;
 
-				renderer = meshComponent;
 				currentInstance = instance;
 
 				if (isShadowMap)
 					currentInstance = (MeshInstance*)simpleInstance;
-
-				if (!material)
-					continue;
 
 				if ((renderFlags & MeshRenderTransparency) == 0)
 				{
@@ -1113,7 +1247,7 @@ namespace HexEngine
 						continue;
 				}
 
-				if (currentInstance != lastInstance && lastInstance != nullptr || mesh->HasAnimations())
+				if (currentInstance != lastInstance && lastInstance != nullptr || renderable.hasAnimations)
 				{
 					if (isNormalRender)
 						++_drawCalls;
@@ -1129,7 +1263,7 @@ namespace HexEngine
 				}
 
 				// check this entity is in the layer mask we want
-				if ((layerMask & LAYERMASK(entity->GetLayer())) == 0)
+				if ((layerMask & LAYERMASK(renderable.layer)) == 0)
 					continue;
 
 				// Check for LOD
@@ -1170,18 +1304,15 @@ namespace HexEngine
 					if (isShadowMap)
 						simpleInstance->Start();
 					else
-						instance->Start();					
+						instance->Start();
 
-					if (!renderer)
-						continue;
-
-					if (renderer->RenderMesh(mesh.get(), renderFlags, _drawnEntities, material.get()) == false)
+					if (PrepareMeshRender(mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode) == false)
 					{
-						LOG_WARN("Failed to RenderMesh, ignoring this entity");
+						LOG_WARN("Failed to prepare mesh render state, ignoring this entity");
 						continue;
 					}
 					rendered = true;
-				}				
+				}
 
 				// TODO: is this needed
 				//if(entity->GetLayer() == Layer::DynamicGeometry)
@@ -1192,31 +1323,11 @@ namespace HexEngine
 
 				if (isShadowMap)
 				{
-					if (meshComponent->IsBoundToBone())
-					{
-						simpleInstance->Render(entity->GetWorldTMTranspose() * meshComponent->GetOffsetMatrixTranspose());
-					}
-					else
-					{
-						simpleInstance->Render(meshComponent->GetCachedShadowInstanceData());
-					}
+					simpleInstance->Render(renderable.shadowInstanceData);
 				}
 				else
 				{
-					if (meshComponent->IsBoundToBone())
-					{
-						instance->Render(
-							entity->GetWorldTM(),
-							entity->GetWorldTMTranspose() * meshComponent->GetOffsetMatrixTranspose(),
-							entity->GetWorldTMPrevTranspose(),
-							entity->GetWorldTMInvert(),
-							material->_properties.diffuseColour,
-							renderer->GetUVScale());
-					}
-					else
-					{
-						instance->Render(meshComponent->GetCachedInstanceData(material.get()));
-					}
+					instance->Render(renderable.instanceData);
 				}
 
 				if (isNormalRender)

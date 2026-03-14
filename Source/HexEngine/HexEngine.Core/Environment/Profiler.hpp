@@ -23,7 +23,7 @@ namespace HexEngine
 		uint32_t _line;
 	};
 
-#ifdef _DEBUG
+#if 0//def _DEBUG
 	#define PROFILE() Profiler __profile__##__LINE__(__FILE__, __FUNCTION__, __LINE__);
 #else
 	#define PROFILE()

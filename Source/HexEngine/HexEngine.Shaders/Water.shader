@@ -234,76 +234,111 @@ float3 GerstnerWave(
 
 	float4 GetReflection(float3 eyeDir, float3 worldPos, float3 worldNormal, float4 originalColour, float currentDepth)
 	{
-		// fire a ray
-		float3 rayStart = worldPos;
+		float3 rayStart = worldPos + worldNormal * 0.25f;
 		float3 rayDir = normalize(reflect(eyeDir, worldNormal));
 
-		const int stepCount = 32;
-		const float stepLen = 10.0f; // 32x32 is good
-
-		const float DepthCheckBias = 1.0f;
+		const int stepCount = 24;
+		const int refinementStepCount = 5;
+		const float minStepLen = 2.0f;
+		const float maxStepLen = 8.0f;
+		const float baseThickness = 2.0f;
 
 		float3 fragPos = rayStart;
-
-		const float2 RandomSamples[4] = {
-			float2(-1.0f, -1.0f),
-			float2(1.0f, 1.0f),
-			float2(-1.0f, 1.0f),
-			float2(1.0f, -1.0f),
-		};
-
-		float2 texCoord;
-		float actualDepth;
+		float3 previousFragPos = fragPos;
+		float totalDistanceTravelled = 0.0f;
+		float previousDistanceTravelled = 0.0f;
+		float2 texCoord = 0.0f;
+		float actualDepth = currentDepth;
 
 		[loop]
 		for (int i = 0; i < stepCount; ++i)
 		{
+			const float marchFraction = (float)i / (float)(stepCount - 1);
+			const float stepLen = lerp(minStepLen, maxStepLen, marchFraction * marchFraction);
+			const float thickness = baseThickness + totalDistanceTravelled * 0.02f;
+
+			previousFragPos = fragPos;
+			previousDistanceTravelled = totalDistanceTravelled;
 			fragPos += rayDir * stepLen;
+			totalDistanceTravelled += stepLen;
 
-			// convert this position to a world space
 			float4 fragScr = float4(fragPos.xyz, 1.0f);
-
 			float4 fragView = mul(fragScr, g_viewMatrix);
-			float4 fragClip = mul(fragView, g_projectionMatrix);			
-
+			float4 fragClip = mul(fragView, g_projectionMatrix);
 			fragClip.xyz /= fragClip.w;
 
-			float fragDepth = -fragView.z;// / fragView.w;
-
-			fragClip.xy = fragClip.xy * 0.5 + 0.5; // is this needed?
-
+			float fragDepth = -fragView.z;
+			fragClip.xy = fragClip.xy * 0.5 + 0.5;
 			float2 fragTex = float2(fragClip.x, 1.0f - fragClip.y);
 
 			if (fragTex.x < 0.0f || fragTex.x > 1.0f || fragTex.y < 0.0f || fragTex.y > 1.0f)
 				return originalColour;
 
-			//for (int j = 0; j < 4; ++j)
+			actualDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, fragTex).w;
+			float fragHeight = GBUFFER_POSITION.Sample(g_TexSamplerPoint, fragTex).y;
+			bool isOnCorrectPlane = fragHeight >= rayStart.y;
+
+			if (g_eyePos.y <= 0.0f)
+				isOnCorrectPlane = fragHeight < rayStart.y;
+
+			if ((fragDepth >= actualDepth - thickness) && isOnCorrectPlane && actualDepth > currentDepth)
 			{
-				texCoord = float2(fragTex.x, /* 1.0f - */ fragTex.y);// +float2(RandomSamples[j].x * 1.0f / g_screenWidth, RandomSamples[j].y * 1.0f / g_screenHeight);
+				float3 refineStart = previousFragPos;
+				float3 refineEnd = fragPos;
+				float refineStartDistance = previousDistanceTravelled;
+				float refineEndDistance = totalDistanceTravelled;
 
-				// sample the depth of the world
-				//float actualDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, texCoord).w;
+				[loop]
+				for (int j = 0; j < refinementStepCount; ++j)
+				{
+					float3 candidatePos = lerp(refineStart, refineEnd, 0.5f);
+					float candidateDistance = lerp(refineStartDistance, refineEndDistance, 0.5f);
+					float candidateThickness = baseThickness + candidateDistance * 0.02f;
 
-				actualDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, float2(texCoord.x, texCoord.y)).w; //Load(int3(texCoord.x * g_screenWidth, texCoord.y * g_screenHeight, 0)).w;
-				float fragHeight = GBUFFER_POSITION.Sample(g_TexSamplerPoint, float2(texCoord.x, texCoord.y)).y;
+					float4 candidateScr = float4(candidatePos.xyz, 1.0f);
+					float4 candidateView = mul(candidateScr, g_viewMatrix);
+					float4 candidateClip = mul(candidateView, g_projectionMatrix);
+					candidateClip.xyz /= candidateClip.w;
 
-				bool isOnCorrectPlane = fragHeight >= rayStart.y;
+					float candidateDepth = -candidateView.z;
+					candidateClip.xy = candidateClip.xy * 0.5 + 0.5;
+					float2 candidateTex = float2(candidateClip.x, 1.0f - candidateClip.y);
 
-				if(g_eyePos.y <= 0.0f)
-					isOnCorrectPlane = fragHeight < rayStart.y;
+					if (candidateTex.x < 0.0f || candidateTex.x > 1.0f || candidateTex.y < 0.0f || candidateTex.y > 1.0f)
+					{
+						refineEnd = candidatePos;
+						refineEndDistance = candidateDistance;
+						continue;
+					}
 
-				//if (fragDepth >= actualDepth /*&& fragDepth > currentDepth && (actualDepth > currentDepth || actualDepth == g_frustumDepths[3])*/)
-				if ((fragDepth >= actualDepth && abs(fragDepth-actualDepth) < 16.0f && isOnCorrectPlane && actualDepth > currentDepth) /* || (g_eyePos.y > 0.0f && actualDepth >= g_frustumDepths[3]) */)
-					return beautyTexture.Sample(g_TexSamplerPoint, float2(texCoord.x, texCoord.y));
+					float candidateActualDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, candidateTex).w;
+					float candidateHeight = GBUFFER_POSITION.Sample(g_TexSamplerPoint, candidateTex).y;
+					bool candidatePlane = candidateHeight >= rayStart.y;
+					if (g_eyePos.y <= 0.0f)
+						candidatePlane = candidateHeight < rayStart.y;
 
-					//return float4(actualDepth.rrr / g_frustumDepths[3], 1.0f);
+					if ((candidateDepth >= candidateActualDepth - candidateThickness) && candidatePlane && candidateActualDepth > currentDepth)
+					{
+						refineEnd = candidatePos;
+						refineEndDistance = candidateDistance;
+						fragTex = candidateTex;
+						actualDepth = candidateActualDepth;
+					}
+					else
+					{
+						refineStart = candidatePos;
+						refineStartDistance = candidateDistance;
+					}
+				}
+
+				return beautyTexture.Sample(g_TexSamplerPoint, fragTex);
 			}
+
+			texCoord = fragTex;
 		}
 
-		// if we got this far and didn't hit anythung, just return the sky colour
-		//if(actualDepth >= g_frustumDepths[3])
-		if(actualDepth > currentDepth)
-			return beautyTexture.Sample(g_TexSamplerPoint, float2(texCoord.x, texCoord.y));
+		if (actualDepth > currentDepth)
+			return beautyTexture.Sample(g_TexSamplerPoint, texCoord);
 
 		return originalColour;
 	}
@@ -463,6 +498,13 @@ float3 GerstnerWave(
 		float4 specular = float4(0,0,0,1);
 
 		float3 eyeVector = normalize(g_eyePos.xyz - input.positionWS.xyz);// normalize(g_eyePos.xyz - input.positionWS.xyz);
+		const float cameraDistance = length(input.positionWS.xyz - g_eyePos.xyz);
+		const float nearQualityDistance = g_oceanConfig.reflectionNearDistance;
+		const float midQualityDistance = lerp(g_oceanConfig.reflectionNearDistance, g_oceanConfig.reflectionFarDistance, 0.6f);
+		const float farQualityDistance = max(g_oceanConfig.reflectionFarDistance, midQualityDistance + 1.0f);
+		const float refractionQualityWeight = 1.0f - saturate((cameraDistance - nearQualityDistance) / max(midQualityDistance - nearQualityDistance, 1.0f));
+		const float ssrQualityWeight = 1.0f - saturate((cameraDistance - nearQualityDistance) / max(farQualityDistance - nearQualityDistance, 1.0f));
+		const float distantNormalFade = ssrQualityWeight;
 		//float3 lightVector = normalize(input.positionWS.xyz - g_lightPosition.xyz);
 		float3 worldNormal = normalize(input.normal.xyz);
 		float3 refractionNormal = -worldNormal;
@@ -497,39 +539,13 @@ float3 GerstnerWave(
 		float4 originalWorldDiffuse = worldDiffuse;
 
 		// BUMP MAPPING
-		//if (g_objectFlags & OBJECT_FLAGS_HAS_BUMP)
+		if (distantNormalFade > 0.001f)
 		{
-			// Sample the pixel in the bump map.
-			//float4 bumpMap = normalMap.Sample(g_TexSamplerAniso, input.texcoord);
-
-			// Expand the range of the normal value from (0, +1) to (-1, +1).
-			//bumpMap = (bumpMap * 2.0f) - 1.0f;
-
-			//bumpMap = bumpMap * 0.5f;
-
-			//Make sure tangent is completely orthogonal to normal
-			//input.tangent = normalize(input.tangent - dot(input.tangent, input.normal) * input.normal);
-
-			//Create the biTangent
-			//float3 biTangent = cross(input.normal, input.tangent);
-
-			// Calculate the normal from the data in the bump map.
-			//float3 bumpNormal = normalMap.Sample(g_TexSamplerAniso, input.texcoord).xyz;//ApplyNormalMap(worldNormal, input.tangent, input.binormal, normalMap, g_TexSamplerAniso, input.texcoord, false, 1.0f);
 			float3 bumpNormal = normalize(ANM(worldNormal, input.tangent, input.binormal, normalMap, g_TexSamplerAniso, input.texcoord, false, 1.0f));
+			bumpNormal = normalize(lerp(input.normal.xyz, bumpNormal, distantNormalFade));
 
-			//bumpNormal += ApplyNormalMap(worldNormal, input.tangent, input.binormal, noiseMap, g_TexSamplerAniso, input.texcoord += g_time * 0.04f, true, 0.9f);
-
-			refractionNormal = bumpNormal;// * -1.25f;// ApplyNormalMap(worldNormal, input.tangent, input.binormal, normalMap, g_TexSamplerAniso, input.texcoord, false, 5.0f);
-
-			//float3 bumpNormal = ApplyNormalMap(worldNormal, input.tangent, biTangent, normalMap, g_TexSamplerAniso, input.texcoord, false, 0.5f);
-			//float3 bumpNormal = (bumpMap.x * normalize(input.tangent)) + (bumpMap.y * normalize(input.binormal)) + (bumpMap.z * worldNormal);
-
-			// Normalize the resulting bump normal.
+			refractionNormal = bumpNormal;
 			worldNormal = normalize(bumpNormal);
-
-			//if (g_eyePos.y <= 0.0f)
-			//	worldNormal *= -1.0f;
-			//return float4(bumpNormal.rgb, 1.0f);
 		}
 
 		
@@ -541,9 +557,10 @@ float3 GerstnerWave(
 
 		bool isInMaskedRegion = false;
 
-		if (true && (worldDepth >= pixelDepth || worldDepth == -1.0f))
+		if (refractionQualityWeight > 0.001f && (worldDepth >= pixelDepth || worldDepth == -1.0f))
 		{			
-			worldDiffuse = GetWorldColour(-eyeVector, screenPos, /* worldNormal */refractionNormal, worldDiffuse, isInMaskedRegion, input.positionWS.xyz, pixelDepth);
+			float4 refractedWorldDiffuse = GetWorldColour(-eyeVector, screenPos, /* worldNormal */refractionNormal, worldDiffuse, isInMaskedRegion, input.positionWS.xyz, pixelDepth);
+			worldDiffuse = lerp(originalWorldDiffuse, refractedWorldDiffuse, refractionQualityWeight);
 
 			// sample the other buffers using the corrected jitter positions
 			//
@@ -668,11 +685,17 @@ float3 GerstnerWave(
 			if (g_eyePos.y <= 0.0f)
 				reflectionNormal *= -1.0f;
 
-			float4 reflectionCol = GetReflection(-eyeVector, input.positionWS.xyz, reflectionNormal, retCol, pixelDepth);
+			const float reflectionStrength = g_oceanConfig.reflectionStrength;
 
-			//return reflectionCol;
+			float4 cheapReflectionCol = beautyTexture.Sample(g_TexSamplerPoint, screenPos);
+			cheapReflectionCol.xyz = lerp(cheapReflectionCol.xyz, fadeColour.xyz, 0.25f);
 
-			const float reflectionStrength = g_oceanConfig.reflectionStrength;// 0.46f;
+			float4 reflectionCol = cheapReflectionCol;
+			if (ssrQualityWeight > 0.001f)
+			{
+				float4 ssrReflectionCol = GetReflection(-eyeVector, input.positionWS.xyz, reflectionNormal, retCol, pixelDepth);
+				reflectionCol = lerp(cheapReflectionCol, ssrReflectionCol, ssrQualityWeight);
+			}
 
 			retCol.xyz = saturate(lerp(retCol.xyz, reflectionCol.xyz + specular, reflectionStrength * fadeFactor));
 		}

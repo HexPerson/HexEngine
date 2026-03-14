@@ -87,7 +87,9 @@ namespace HexEngine
 			fresnelPow(3.2f),
 			shoreFadeStrength(12.0f),
 			fadeFactor(15.0f),
-			reflectionStrength(0.4f)
+			reflectionStrength(0.4f),
+			reflectionNearDistance(150.0f),
+			reflectionFarDistance(450.0f)
 		{
 		}
 
@@ -97,6 +99,10 @@ namespace HexEngine
 		float shoreFadeStrength;
 		float fadeFactor;
 		float reflectionStrength;
+		float reflectionNearDistance;
+		float reflectionFarDistance;
+		float reflection_pad0;
+		float reflection_pad1;
 	};
 
 	struct ColourGradeSettings

@@ -167,7 +167,7 @@ namespace HexEngine
 		return _shadowMapShader;
 	}
 
-	std::shared_ptr<ITexture2D> Material::GetTexture(MaterialTexture type) const
+	const std::shared_ptr<ITexture2D>& Material::GetTexture(MaterialTexture type) const
 	{
 		return _textures[type];
 	}

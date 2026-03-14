@@ -89,7 +89,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> GetStandardShader() const;
 		std::shared_ptr<IShader> GetShadowMapShader() const;
 
-		std::shared_ptr<ITexture2D> GetTexture(MaterialTexture type) const;
+		const std::shared_ptr<ITexture2D>& GetTexture(MaterialTexture type) const;
 		uint32_t GetObjectFlags() const;
 
 		void SetVolumeTexture(ITexture3D* texture);

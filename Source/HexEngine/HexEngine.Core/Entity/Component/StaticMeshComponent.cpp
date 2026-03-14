@@ -343,10 +343,10 @@ namespace HexEngine
 		auto entity = GetEntity();
 		const auto transformVersion = entity->GetTransformVersion();
 
-		if (_cachedRenderTransformVersion != transformVersion)
+		if (_cachedRenderTransformVersionShadow != transformVersion)
 		{
 			_cachedShadowInstanceData.worldMatrix = entity->GetWorldTMTranspose();
-			_cachedRenderTransformVersion = transformVersion;
+			_cachedRenderTransformVersionShadow = transformVersion;
 		}
 
 		return _cachedShadowInstanceData;

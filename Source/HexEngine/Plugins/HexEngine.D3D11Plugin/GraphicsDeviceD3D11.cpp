@@ -1507,20 +1507,38 @@ void GraphicsDeviceD3D11::SetTexture2DArray(uint32_t slot, const std::vector<Hex
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
-	for (auto& texture : textures)
+	HEX_ASSERT(textures.size() < 32);
+
+	ID3D11ShaderResourceView* array[32]; // this is a bad idea, what if there are more than 32 textures??!!
+
+	for (auto i = 0; i < textures.size(); ++i)
 	{
-		SetTexture2D(slot++, texture);
+		auto tex = reinterpret_cast<Texture3D*>(textures[i]);
+
+		array[i] = tex ? tex->_shaderResourceView : nullptr;
 	}
+	_deviceContext->PSSetShaderResources(slot, textures.size(), array);
+
+	_currentlyBoundSRVIndex += textures.size();
 }
 
 void GraphicsDeviceD3D11::SetTexture2DArray(const std::vector<HexEngine::ITexture2D*>& textures)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
-	for (auto& texture : textures)
+	HEX_ASSERT(textures.size() < 32);
+
+	ID3D11ShaderResourceView* array[32]; // this is a bad idea, what if there are more than 32 textures??!!
+
+	for (auto i = 0; i < textures.size(); ++i)
 	{
-		SetTexture2D(texture);
+		auto tex = reinterpret_cast<Texture3D*>(textures[i]);
+
+		array[i] = tex ? tex->_shaderResourceView : nullptr;
 	}
+	_deviceContext->PSSetShaderResources(_currentlyBoundSRVIndex, textures.size(), array);
+
+	_currentlyBoundSRVIndex += textures.size();
 }
 
 void GraphicsDeviceD3D11::SetRenderTargets(uint32_t numTargets, const std::vector<HexEngine::ITexture2D*>& targets, HexEngine::ITexture2D* depthStencil)

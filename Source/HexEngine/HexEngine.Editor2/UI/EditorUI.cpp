@@ -9,11 +9,6 @@
 #include "Gadgets\PositionGadget.hpp"
 #include "Gadgets\DuplicateGadget.hpp"
 
-namespace HexEngine
-{
-	HEX_API HVar r_debugScene;
-}
-
 namespace HexEditor
 {
 	EditorUI::EditorUI()
@@ -306,12 +301,75 @@ namespace HexEditor
 			_mainMenu->AddRootItem(scene);
 			{
 				HexEngine::MenuBar::Item* debugScene = new HexEngine::MenuBar::Item;
-				debugScene->name = L"Debug Scene";
+				debugScene->name = L"Debug scene";
 				debugScene->action = std::bind(
-					[]() {						
-						HexEngine::r_debugScene._val.b = !HexEngine::r_debugScene._val.b;
+					[]() {		
+						static HexEngine::HVar* r_debugScene = HexEngine::g_pEnv->_commandManager->FindHVar("r_debugScene");
+						r_debugScene->_val.b = !r_debugScene->_val.b;
 					});
-				_mainMenu->AddSubItem(scene, debugScene);
+
+				HexEngine::MenuBar::Item* profileAlbedoOnly = new HexEngine::MenuBar::Item;
+				profileAlbedoOnly->name = L"Albedo only";
+				profileAlbedoOnly->action = std::bind(
+					[]() {
+						static HexEngine::HVar* r_profileAlbedoOnly = HexEngine::g_pEnv->_commandManager->FindHVar("r_profileAlbedoOnly");
+						r_profileAlbedoOnly->_val.b = !r_profileAlbedoOnly->_val.b;
+					});
+				_mainMenu->AddSubItem(scene, profileAlbedoOnly);
+
+				HexEngine::MenuBar::Item* profileDisableDirectionalLights = new HexEngine::MenuBar::Item;
+				profileDisableDirectionalLights->name = L"Disable directional lights";
+				profileDisableDirectionalLights->action = std::bind(
+					[]() {
+						static HexEngine::HVar* r_profileDisableDirectionalLights = HexEngine::g_pEnv->_commandManager->FindHVar("r_profileDisableDirectionalLights");
+						r_profileDisableDirectionalLights->_val.b = !r_profileDisableDirectionalLights->_val.b;
+					});
+				_mainMenu->AddSubItem(scene, profileDisableDirectionalLights);
+
+				HexEngine::MenuBar::Item* profileDisablePointLights = new HexEngine::MenuBar::Item;
+				profileDisablePointLights->name = L"Disable point lights";
+				profileDisablePointLights->action = std::bind(
+					[]() {
+						static HexEngine::HVar* r_profileDisablePointLights = HexEngine::g_pEnv->_commandManager->FindHVar("r_profileDisablePointLights");
+						r_profileDisablePointLights->_val.b = !r_profileDisablePointLights->_val.b;
+					});
+				_mainMenu->AddSubItem(scene, profileDisablePointLights);
+
+				HexEngine::MenuBar::Item* profileDisableSpotLights = new HexEngine::MenuBar::Item;
+				profileDisableSpotLights->name = L"Disable spot lights";
+				profileDisableSpotLights->action = std::bind(
+					[]() {
+						static HexEngine::HVar* r_profileDisableSpotLights = HexEngine::g_pEnv->_commandManager->FindHVar("r_profileDisableSpotLights");
+						r_profileDisableSpotLights->_val.b = !r_profileDisableSpotLights->_val.b;
+					});
+				_mainMenu->AddSubItem(scene, profileDisableSpotLights);
+
+				HexEngine::MenuBar::Item* profileDisablePost = new HexEngine::MenuBar::Item;
+				profileDisablePost->name = L"Disable post-processing";
+				profileDisablePost->action = std::bind(
+					[]() {
+						static HexEngine::HVar* r_profileDisablePost = HexEngine::g_pEnv->_commandManager->FindHVar("r_profileDisablePost");
+						r_profileDisablePost->_val.b = !r_profileDisablePost->_val.b;
+					});
+				_mainMenu->AddSubItem(scene, profileDisablePost);
+
+				HexEngine::MenuBar::Item* profileDisableBloom = new HexEngine::MenuBar::Item;
+				profileDisableBloom->name = L"Disable bloom";
+				profileDisableBloom->action = std::bind(
+					[]() {
+						static HexEngine::HVar* r_profileDisableBloom = HexEngine::g_pEnv->_commandManager->FindHVar("r_profileDisableBloom");
+						r_profileDisableBloom->_val.b = !r_profileDisableBloom->_val.b;
+					});
+				_mainMenu->AddSubItem(scene, profileDisableBloom);
+
+				/*HexEngine::MenuBar::Item* profileDepthOnly = new HexEngine::MenuBar::Item;
+				profileDepthOnly->name = L"Depth only";
+				profileDepthOnly->action = std::bind(
+					[]() {
+						static HexEngine::HVar* r_profileDepthOnly = HexEngine::g_pEnv->_commandManager->FindHVar("r_profileDepthOnly");
+						r_profileDepthOnly->_val.b = !r_profileDepthOnly->_val.b;
+					});
+				_mainMenu->AddSubItem(scene, profileDepthOnly);*/
 			}
 		}
 	}

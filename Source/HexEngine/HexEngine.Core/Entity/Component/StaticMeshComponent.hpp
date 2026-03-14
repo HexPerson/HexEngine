@@ -97,6 +97,7 @@ namespace HexEngine
 		CullingMode _shadowCullingMode = CullingMode::FrontFace;
 
 		uint64_t _cachedRenderTransformVersion = 0;
+		uint64_t _cachedRenderTransformVersionShadow = 0;
 		math::Vector4 _cachedRenderColour = math::Vector4::Zero;
 		math::Vector2 _cachedRenderUvScale = math::Vector2(0.0f, 0.0f);
 		MeshInstanceData _cachedInstanceData = {};

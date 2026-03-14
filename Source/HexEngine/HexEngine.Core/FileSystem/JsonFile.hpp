@@ -109,6 +109,8 @@ namespace HexEngine
 			Serialize(container[key], "shoreFadeStrength", value.shoreFadeStrength);
 			Serialize(container[key], "fadeFactor", value.fadeFactor);
 			Serialize(container[key], "reflectionStrength", value.reflectionStrength);
+			Serialize(container[key], "reflectionNearDistance", value.reflectionNearDistance);
+			Serialize(container[key], "reflectionFarDistance", value.reflectionFarDistance);
 			return container;
 		}
 
@@ -258,6 +260,8 @@ namespace HexEngine
 			Deserialize(container[key], "shoreFadeStrength", value.shoreFadeStrength);
 			Deserialize(container[key], "fadeFactor", value.fadeFactor);
 			Deserialize(container[key], "reflectionStrength", value.reflectionStrength);
+			Deserialize(container[key], "reflectionNearDistance", value.reflectionNearDistance);
+			Deserialize(container[key], "reflectionFarDistance", value.reflectionFarDistance);
 			return container;
 		}
 	};
