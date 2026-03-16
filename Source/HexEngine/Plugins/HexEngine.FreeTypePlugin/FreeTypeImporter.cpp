@@ -154,10 +154,18 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 	int32_t x = 0;
 	int32_t y = 0;
 
-	int yMax = face->bbox.yMax;
-	int yMin = face->bbox.yMin;
+	int32_t baseline = static_cast<int32_t>(face->size->metrics.ascender >> 6);
+	int32_t descender = static_cast<int32_t>(std::abs(face->size->metrics.descender >> 6));
+	int32_t lineHeight = static_cast<int32_t>(face->size->metrics.height >> 6);
 
-	int32_t baseline = size * yMax / (yMax - yMin);
+	if (lineHeight < baseline + descender)
+		lineHeight = baseline + descender;
+
+	if (lineHeight <= 0)
+		lineHeight = size;
+
+	if (baseline <= 0)
+		baseline = lineHeight;
 
 	// for each character set
 	//
@@ -195,10 +203,6 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 
 			GlyphDescFT desc;
 			desc.ch = ch;
-			desc.offsetX = slot->bitmap_left;
-			desc.offsetY = -slot->bitmap_top;
-			desc.width = bitmapGlyph->bitmap.width;
-			desc.height = bitmapGlyph->bitmap.rows;
 
 			desc.pitch = bitmapGlyph->bitmap.pitch;
 			desc.advanceX = slot->advance.x;
@@ -206,7 +210,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 			memcpy(&desc.effectBitmap, &bitmapGlyph->bitmap, sizeof(FT_Bitmap));
 
 			desc.baseline = baseline;
-			desc.totalHeight = baseline + desc.offsetY + desc.height;
+			desc.totalHeight = lineHeight;
 
 			desc.effectData.insert(desc.effectData.end(), bitmapGlyph->bitmap.buffer, bitmapGlyph->bitmap.buffer + (bitmapGlyph->bitmap.width * bitmapGlyph->bitmap.rows));
 
@@ -221,8 +225,12 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 			bitmapGlyph = reinterpret_cast<FT_BitmapGlyph>(effectGlyph);
 			memcpy(&desc.bitmap, &bitmapGlyph->bitmap, sizeof(FT_Bitmap));
 
+			desc.offsetX = bitmapGlyph->left;
+			desc.offsetY = -bitmapGlyph->top;
 			desc.innerWidth = bitmapGlyph->bitmap.width;
 			desc.innerHeight = bitmapGlyph->bitmap.rows;
+			desc.width = desc.innerWidth;
+			desc.height = desc.innerHeight;
 
 			desc.pixelData.insert(desc.pixelData.end(), bitmapGlyph->bitmap.buffer, bitmapGlyph->bitmap.buffer + (bitmapGlyph->bitmap.width * bitmapGlyph->bitmap.rows));
 
@@ -246,8 +254,10 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 			desc.advanceY = slot->advance.y;
 			memcpy(&desc.bitmap, &slot->bitmap, sizeof(FT_Bitmap));
 
+			desc.innerWidth = desc.width;
+			desc.innerHeight = desc.height;
 			desc.baseline = baseline;
-			desc.totalHeight = baseline + desc.offsetY + desc.height;
+			desc.totalHeight = lineHeight;
 
 			desc.pixelData.insert(desc.pixelData.end(), slot->bitmap.buffer, slot->bitmap.buffer + (slot->bitmap.width * slot->bitmap.rows));
 #endif
@@ -348,7 +358,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 		// calculate the rect
 		glyph.atlasRect.left = x;
 		glyph.atlasRect.right = glyph.atlasRect.left + glyph.width;
-		glyph.atlasRect.top = y;// +(glyph.baseline + glyph.offsetY);
+		glyph.atlasRect.top = y;
 		glyph.atlasRect.bottom = glyph.atlasRect.top + glyph.totalHeight;
 
 		// calculate UV
@@ -369,7 +379,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 
 		//DrawGlyphToFontSheet(glyph.offsetX + 1, baseline + glyph.offsetY + 1, glyph.innerWidth, glyph.innerHeight, glyph, &glyph.bitmap, p, currentAtlasSize, glyph.effectData.data(), 0, 0, 0);
 
-		DrawGlyphToFontSheet(glyph.offsetX /*+ effectOffsetX*/, baseline + glyph.offsetY /*+ effectOffsetY*/, glyph.innerWidth, glyph.innerHeight, glyph, &glyph.bitmap, p, currentAtlasSize, glyph.pixelData.data(), 255, 255, 255);
+		DrawGlyphToFontSheet(0, baseline + glyph.offsetY /*+ effectOffsetY*/, glyph.innerWidth, glyph.innerHeight, glyph, &glyph.bitmap, p, currentAtlasSize, glyph.pixelData.data(), 255, 255, 255);
 
 		auto w = glyph.width + 1 + ExtraSize;
 		p += w;
@@ -408,6 +418,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 	sizedAtlas.glyphs = glyphs;
 	sizedAtlas.face = face;
 	sizedAtlas.baseLine = baseline;
+	sizedAtlas.lineHeight = lineHeight;
 
 	font->_sizedGlyphs.insert({ size, sizedAtlas });
 

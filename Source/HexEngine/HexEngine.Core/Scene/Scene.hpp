@@ -69,6 +69,8 @@ namespace HexEngine
 
 	DEFINE_ENUM_FLAG_OPERATORS(SceneUpdateFlags);
 
+	
+
 	class HEX_API Scene : public IDebugGUICallback, public IResource
 	{
 	public:
@@ -250,5 +252,6 @@ namespace HexEngine
 		std::vector<MessageListener*> _auxMessageListeners;
 
 		bool _didAnyDrawnItemReflect = false;
+		
 	};
 }

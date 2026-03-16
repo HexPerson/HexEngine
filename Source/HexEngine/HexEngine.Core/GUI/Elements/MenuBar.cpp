@@ -75,10 +75,10 @@ namespace HexEngine
 			if (IsMouseOver(pos, Point(itemSize.x, _size.y)))
 			{
 				_rootHoverIdx = idx;
-				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x, (_size.y / 2) - (itemSize.y / 2) + 1, renderer->_style.text_highlight, FontAlign::None, item->name);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x, (_size.y / 2) - (itemSize.y / 2) + 1, renderer->_style.text_highlight, FontAlign::None, item->name, TextEffectSettings::Glow());
 			}
 			else
-				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x, (_size.y / 2) - (itemSize.y / 2) + 1, renderer->_style.text_regular , FontAlign::None, item->name);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, x, (_size.y / 2) - (itemSize.y / 2) + 1, renderer->_style.text_regular , FontAlign::None, item->name, TextEffectSettings::Glow());
 
 			if (item->isOpen)
 			{

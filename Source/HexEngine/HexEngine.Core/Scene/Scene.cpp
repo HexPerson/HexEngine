@@ -15,6 +15,8 @@ namespace HexEngine
 
 	extern HVar r_debugScene;
 	extern HVar r_interpolate;
+	extern HVar r_lodPartition;
+
 	HVar r_profileDisableShadowSampling("r_profileDisableShadowSampling", "Disable shadow-map sampling in static mesh materials for profiling", false, false, true);
 	HVar r_profileDisableNormalMaps("r_profileDisableNormalMaps", "Disable normal map bindings in static mesh materials for profiling", false, false, true);
 	HVar r_profileDisableSurfaceMaps("r_profileDisableSurfaceMaps", "Disable roughness, metallic, AO, height, emission and opacity map bindings in static mesh materials for profiling", false, false, true);
@@ -1018,21 +1020,7 @@ namespace HexEngine
 
 	namespace
 	{
-		struct RenderableSnapshot
-		{
-			std::shared_ptr<Mesh> mesh;
-			std::shared_ptr<Material> material;
-			MeshInstance* instance = nullptr;
-			SimpleMeshInstance* simpleInstance = nullptr;
-			Layer layer = Layer::Invisible;
-			bool hasAnimations = false;
-			bool isBoundToBone = false;
-			CullingMode shadowCullMode = CullingMode::FrontFace;
-			MeshInstanceData instanceData = {};
-			SimpleMeshInstanceData shadowInstanceData = {};
-		};
-
-		using RenderBatchSnapshot = std::vector<std::pair<std::shared_ptr<Material>, std::vector<RenderableSnapshot>>>;
+		
 
 		bool PrepareMeshRender(Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode)
 		{
@@ -1044,7 +1032,7 @@ namespace HexEngine
 			const bool disableShadowSampling = r_profileDisableShadowSampling._val.b;
 			const bool disableNormalMaps = r_profileDisableNormalMaps._val.b;
 			const bool disableSurfaceMaps = r_profileDisableSurfaceMaps._val.b;
-			auto defaultTexture = ITexture2D::GetDefaultTexture();
+			static auto defaultTexture = ITexture2D::GetDefaultTexture();
 
 			if (isShadowMap)
 				shader = material->GetShadowMapShader();
@@ -1125,11 +1113,14 @@ namespace HexEngine
 	{
 		PROFILE();
 
-		RenderBatchSnapshot renderableSet;
+		auto& snapshot = pvs->GetRenderableSnapshot();
+
+		if(pvs->DidRebuild())
 		{
 			std::unique_lock lock(_lock);
-			const auto& pvsRenderables = pvs->GetRenderables();
-			renderableSet.reserve(pvsRenderables.size());
+			const auto& pvsRenderables = pvs->GetRenderables();			
+			snapshot.clear();
+			snapshot.reserve(pvsRenderables.size());
 
 			for (const auto& renderableBatch : pvsRenderables)
 			{
@@ -1137,7 +1128,7 @@ namespace HexEngine
 				if (!material)
 					continue;
 
-				auto& batch = renderableSet.emplace_back(material, std::vector<RenderableSnapshot>()).second;
+				auto& batch = snapshot.emplace_back(material, std::vector<RenderableSnapshot>()).second;
 				batch.reserve(renderableBatch.second.size());
 
 				for (const auto& meshEntityPair : renderableBatch.second)
@@ -1180,6 +1171,8 @@ namespace HexEngine
 					batch.push_back(snapshot);
 				}
 			}
+
+			pvs->ResetDidRebuild();
 		}
 
 		bool isShadowMap = (renderFlags & MeshRenderFlags::MeshRenderShadowMap) != 0;
@@ -1192,7 +1185,7 @@ namespace HexEngine
 			_drawCalls = 0;
 		}		
 
-		for (auto it = renderableSet.begin(); it != renderableSet.end(); it++)
+		for (auto it = snapshot.begin(); it != snapshot.end(); it++)
 		{
 			auto material = it->first;
 
@@ -1267,7 +1260,7 @@ namespace HexEngine
 					continue;
 
 				// Check for LOD
-#if 0
+#if 1
 				if (mesh->GetLodLevel() != -1)
 				{
 					//if (mesh->GetLodLevel() != 1)
@@ -1278,7 +1271,7 @@ namespace HexEngine
 					float minDistance = lodPartitions * (float)(mesh->GetLodLevel());
 					float maxDistance = lodPartitions * (float)(mesh->GetLodLevel() + 1);
 
-					float distance = (entity->GetPosition() - GetMainCamera()->GetEntity()->GetPosition()).Length();
+					float distance = (renderable.instanceData.worldMatrix.Translation() - GetMainCamera()->GetEntity()->GetPosition()).Length();
 
 					if (mesh->GetLodLevel() < 3)
 					{

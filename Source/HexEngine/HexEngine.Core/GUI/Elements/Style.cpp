@@ -71,7 +71,7 @@ namespace HexEngine
 
 		fontOpts.AddCharacterSet(FontImportOptions::EnglishCharacterSets);
 
-		style.font = IFontResource::Create("EngineData.Fonts/Inter/Inter-Medium.ttf", &fontOpts);
+		style.font = IFontResource::Create("EngineData.Fonts/Arial/arial.ttf", &fontOpts);
 
 #else
 
@@ -79,6 +79,9 @@ namespace HexEngine
 		fontOpts.antialias = true;
 		fontOpts.dpi = 72;
 		fontOpts.sizes.insert(fontOpts.sizes.end(), {
+			(uint8_t)FontSize::Microscopic,
+			(uint8_t)FontSize::Minute,
+			(uint8_t)FontSize::Titchy,
 			(uint8_t)FontSize::Tiny,
 			(uint8_t)FontSize::Small,
 			(uint8_t)FontSize::Regular,

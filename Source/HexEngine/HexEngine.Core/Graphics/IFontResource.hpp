@@ -53,7 +53,49 @@ namespace HexEngine
 		Right	 = HEX_BITSET(2)
 	};
 
+	enum class TextEffectFlags : uint8_t
+	{
+		None = 0,
+		Shadow = HEX_BITSET(0),
+		Outline = HEX_BITSET(1),
+		Glow = HEX_BITSET(2)
+	};
+
+	struct TextEffectSettings
+	{
+		TextEffectFlags flags = TextEffectFlags::None;
+		math::Color shadowColour = math::Color(0.0f, 0.0f, 0.0f, 0.75f);
+		int32_t shadowOffsetX = 1;
+		int32_t shadowOffsetY = 1;
+		math::Color outlineColour = math::Color(0.0f, 0.0f, 0.0f, 1.0f);
+		int32_t outlineThickness = 1;
+		math::Color glowColour = math::Color(1.0f, 0.0f, 0.0f, 0.2f);
+		int32_t glowRadius = 2;
+
+		bool HasEffects() const
+		{
+			return flags != TextEffectFlags::None;
+		}
+
+		static TextEffectSettings Shadow()
+		{
+			TextEffectSettings shadow;
+			shadow.flags = TextEffectFlags::Shadow;
+			shadow.shadowOffsetX = shadow.shadowOffsetY = 2;
+			return shadow;
+		}
+
+		static TextEffectSettings Glow()
+		{
+			TextEffectSettings glow;
+			glow.flags = TextEffectFlags::Glow;
+			glow.glowRadius = 3;
+			return glow;
+		}
+	};
+
 	DEFINE_ENUM_FLAG_OPERATORS(FontAlign);
+	DEFINE_ENUM_FLAG_OPERATORS(TextEffectFlags);
 
 	class HEX_API IFontResource : public IResource
 	{

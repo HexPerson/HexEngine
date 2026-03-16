@@ -2,6 +2,7 @@
 #pragma once
 
 #include "../Required.hpp"
+#include "../Entity/Entity.hpp"
 
 namespace HexEngine
 {
@@ -53,6 +54,22 @@ namespace HexEngine
 		bool isShadow;
 	};
 
+	struct RenderableSnapshot
+	{
+		std::shared_ptr<Mesh> mesh;
+		std::shared_ptr<Material> material;
+		MeshInstance* instance = nullptr;
+		SimpleMeshInstance* simpleInstance = nullptr;
+		Layer layer = Layer::Invisible;
+		bool hasAnimations = false;
+		bool isBoundToBone = false;
+		CullingMode shadowCullMode = CullingMode::FrontFace;
+		MeshInstanceData instanceData = {};
+		SimpleMeshInstanceData shadowInstanceData = {};
+	};
+
+	using RenderBatchSnapshot = std::vector<std::pair<std::shared_ptr<Material>, std::vector<RenderableSnapshot>>>;
+
 	class PVS
 	{
 	public:
@@ -74,6 +91,8 @@ namespace HexEngine
 		void ClearPVS(); 
 		void ForceRebuild();
 		bool NeedsRebuild() const;
+		void ResetDidRebuild();
+		bool DidRebuild() const;
 		const MeshInstanceMap& GetRenderables() const;
 
 		void CalculateVisibility(Scene* scene, const PVSParams& params);
@@ -90,15 +109,20 @@ namespace HexEngine
 		uint32_t GetTotalNumberOfEnts() const { return _totalEnts; }
 		uint32_t GetTotalSkeletalAnimators() const { return _totalSkeletalAnimators; }
 
+		RenderBatchSnapshot& GetRenderableSnapshot() { return _renderableSnapshot; }
+
 	private:
 		MeshInstanceMap _pvs;
 		PVSParams _optimisedParams;
 		bool _needsOptimisationRebuild = true;
 		bool _hasBuildOptimisation = false;
 		bool _forceRebuild = true;
+		bool _didRebuild = false;
 		std::recursive_mutex _lock;
 
 		uint32_t _totalEnts = 0;
 		uint32_t _totalSkeletalAnimators = 0;
+
+		RenderBatchSnapshot _renderableSnapshot;
 	};
 }

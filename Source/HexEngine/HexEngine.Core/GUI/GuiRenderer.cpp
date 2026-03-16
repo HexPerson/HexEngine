@@ -3,6 +3,70 @@
 #include "GuiRenderer.hpp"
 #include "../HexEngine.hpp"
 
+namespace
+{
+	struct TextRenderPass
+	{
+		int32_t offsetX = 0;
+		int32_t offsetY = 0;
+		math::Color colour = math::Color(1.0f, 1.0f, 1.0f, 1.0f);
+	};
+
+	bool HasTextEffect(HexEngine::TextEffectFlags value, HexEngine::TextEffectFlags flag)
+	{
+		return (static_cast<uint8_t>(value) & static_cast<uint8_t>(flag)) != 0;
+	}
+
+	math::Color ScaleTextEffectAlpha(const math::Color& colour, float alphaScale)
+	{
+		return math::Color(colour.x, colour.y, colour.z, colour.w * alphaScale);
+	}
+
+	std::vector<TextRenderPass> BuildTextPasses(const HexEngine::TextEffectSettings& effects)
+	{
+		std::vector<TextRenderPass> passes;
+
+		if (HasTextEffect(effects.flags, HexEngine::TextEffectFlags::Shadow))
+		{
+			passes.push_back({ effects.shadowOffsetX, effects.shadowOffsetY, effects.shadowColour });
+		}
+
+		if (HasTextEffect(effects.flags, HexEngine::TextEffectFlags::Glow) && effects.glowRadius > 0)
+		{
+			for (int32_t step = effects.glowRadius; step >= 1; --step)
+			{
+				float alphaScale = static_cast<float>(step) / static_cast<float>(effects.glowRadius + 1);
+				auto glowColour = ScaleTextEffectAlpha(effects.glowColour, alphaScale);
+				passes.push_back({ -step, 0, glowColour });
+				passes.push_back({ step, 0, glowColour });
+				passes.push_back({ 0, -step, glowColour });
+				passes.push_back({ 0, step, glowColour });
+				passes.push_back({ -step, -step, glowColour });
+				passes.push_back({ step, -step, glowColour });
+				passes.push_back({ -step, step, glowColour });
+				passes.push_back({ step, step, glowColour });
+			}
+		}
+
+		if (HasTextEffect(effects.flags, HexEngine::TextEffectFlags::Outline) && effects.outlineThickness > 0)
+		{
+			for (int32_t step = 1; step <= effects.outlineThickness; ++step)
+			{
+				passes.push_back({ -step, 0, effects.outlineColour });
+				passes.push_back({ step, 0, effects.outlineColour });
+				passes.push_back({ 0, -step, effects.outlineColour });
+				passes.push_back({ 0, step, effects.outlineColour });
+				passes.push_back({ -step, -step, effects.outlineColour });
+				passes.push_back({ step, -step, effects.outlineColour });
+				passes.push_back({ -step, step, effects.outlineColour });
+				passes.push_back({ step, step, effects.outlineColour });
+			}
+		}
+
+		return passes;
+	}
+}
+
 namespace HexEngine
 {
 	GuiRenderer::GuiRenderer()
@@ -1211,103 +1275,16 @@ namespace HexEngine
 
 	void GuiRenderer::PrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text)
 	{
-		if (!font)
+		PrintText(font, fontSize, x, y, colour, align, text, TextEffectSettings());
+	}
+
+	void GuiRenderer::PrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text, const TextEffectSettings& effects)
+	{
+		if (!font || text.empty())
 			return;
 
-		if (text.length() == 0)
-			return;
-
-#if 0
-		if (_scalingEnabled)
-		{
-			float originalAspect = (float)DEV_RESOLUTION_X;// / (float)DEV_RESOLUTION_Y;
-			float newAspect = (float)_screenWidth;// / (float)_screenHeight;
-			float fontSizeMultiplier = newAspect / originalAspect;
-
-			if (fontSizeMultiplier != 1.0f)
-			{
-
-				int32_t targetFontSize = (int32_t)(float)fontSize * fontSizeMultiplier;
-
-				if (targetFontSize != fontSize)
-				{
-					int32_t lastGoodFontSize = fontSize;
-					int32_t dir = targetFontSize - fontSize < 0 ? -1 : 1;
-					int32_t fontTempSize = fontSize;
-
-					while (true)
-					{
-						fontTempSize += dir;
-						if (font->HasFontSize(fontTempSize))
-							lastGoodFontSize = fontTempSize;
-
-						if (dir == -1)
-						{
-							if (lastGoodFontSize <= targetFontSize)
-								break;
-						}
-						else if (dir == 1)
-						{
-							if (lastGoodFontSize >= targetFontSize)
-								break;
-						}
-
-						if (fontTempSize < 1)
-							break;
-					}
-
-					fontSize = lastGoodFontSize;
-				}
-			}
-		}
-#endif
-
-		// Make sure the font supports this size
-		//
 		if (font->HasFontSize(fontSize) == false)
 			return;
-
-
-		uint32_t numCharsToAlloc = (uint32_t)text.length() + 1;
-		auto numQuads = numCharsToAlloc;
-		auto numTriangles = numQuads * 2;
-		auto numVertices = numQuads * 4;
-		auto numIndexes = numTriangles * 3;
-
-		if (_fontVertexBuffer == nullptr || _fontIndexBuffer == nullptr || _cachedFontBufferSize == 0 || numCharsToAlloc > _cachedFontBufferSize)
-		{
-			SAFE_DELETE(_fontVertexBuffer);
-			SAFE_DELETE(_fontIndexBuffer);
-
-			LOG_DEBUG("Rebuilding font buffers for string '%S': numQuads=%d, numTriangles=%d, numVertices=%d, numIndices=%d", text.c_str(), numQuads, numTriangles, numVertices, numIndexes);
-
-			_fontVertexBuffer = g_pEnv->_graphicsDevice->CreateVertexBuffer(
-				(4 * sizeof(GuiVertex)) * (numCharsToAlloc + 1000),
-				sizeof(GuiVertex),
-				D3D11_USAGE_DYNAMIC,
-				D3D11_CPU_ACCESS_WRITE);			
-
-			std::vector<MeshIndexFormat> indices(numIndexes + 6000);
-
-			for (UINT i = 0; i < (numIndexes + 6000) / 6; ++i)
-			{
-				indices[i * 6] = i * 4;
-				indices[i * 6 + 1] = i * 4 + 1;
-				indices[i * 6 + 2] = i * 4 + 2;
-				indices[i * 6 + 3] = i * 4;
-				indices[i * 6 + 4] = i * 4 + 2;
-				indices[i * 6 + 5] = i * 4 + 3;
-			}
-
-			_fontIndexBuffer = g_pEnv->_graphicsDevice->CreateIndexBuffer(
-				((numIndexes + 6000) * sizeof(MeshIndexFormat)),
-				sizeof(MeshIndexFormat),
-				D3D11_USAGE_DEFAULT,
-				0,
-				indices.data());
-
-			_cachedFontBufferSize = numCharsToAlloc + 1000;
-		}
 
 		if (align != 0)
 		{
@@ -1324,100 +1301,145 @@ namespace HexEngine
 				x -= textw;
 		}
 
-		// Allocate the list of vertices (4 for each character)
-		GuiVertex* vertices = new GuiVertex[numVertices];
+		auto effectPasses = BuildTextPasses(effects);
+		uint32_t glyphCount = 0;
+		for (auto ch : text)
+		{
+			if (ch != '\n')
+				++glyphCount;
+		}
 
-		int32_t i = 0;
+		if (glyphCount == 0)
+			return;
+
+		const uint32_t quadsPerGlyph = 1 + static_cast<uint32_t>(effectPasses.size());
+		const uint32_t numCharsToAlloc = glyphCount * quadsPerGlyph + 1;
+		auto numQuads = numCharsToAlloc;
+		auto numTriangles = numQuads * 2;
+		auto numIndexes = numTriangles * 3;
+
+		if (_fontVertexBuffer == nullptr || _fontIndexBuffer == nullptr || _cachedFontBufferSize == 0 || numCharsToAlloc > _cachedFontBufferSize)
+		{
+			SAFE_DELETE(_fontVertexBuffer);
+			SAFE_DELETE(_fontIndexBuffer);
+
+			_fontVertexBuffer = g_pEnv->_graphicsDevice->CreateVertexBuffer(
+				(4 * sizeof(GuiVertex)) * (numCharsToAlloc + 1000),
+				sizeof(GuiVertex),
+				D3D11_USAGE_DYNAMIC,
+				D3D11_CPU_ACCESS_WRITE);
+
+			std::vector<MeshIndexFormat> indices(numIndexes + 6000);
+			for (UINT index = 0; index < (numIndexes + 6000) / 6; ++index)
+			{
+				indices[index * 6] = index * 4;
+				indices[index * 6 + 1] = index * 4 + 1;
+				indices[index * 6 + 2] = index * 4 + 2;
+				indices[index * 6 + 3] = index * 4;
+				indices[index * 6 + 4] = index * 4 + 2;
+				indices[index * 6 + 5] = index * 4 + 3;
+			}
+
+			_fontIndexBuffer = g_pEnv->_graphicsDevice->CreateIndexBuffer(
+				((numIndexes + 6000) * sizeof(MeshIndexFormat)),
+				sizeof(MeshIndexFormat),
+				D3D11_USAGE_DEFAULT,
+				0,
+				indices.data());
+
+			_cachedFontBufferSize = numCharsToAlloc + 1000;
+		}
+
+		auto atlas = font->GetAtlas(fontSize);
+		std::vector<GuiVertex> vertices(glyphCount * quadsPerGlyph * 4);
+
 		int32_t sx = x;
 		int32_t sy = y;
-
 		if (_scalingEnabled)
 		{
 			sx = RX(sx, _screenWidth);
 			sy = RY(sy, _screenHeight);
 		}
 
+		const int32_t lineStartX = sx;
+		int32_t lineHeight = fontSize;
 		wchar_t lastCh = 0;
-		bool didBaseline = false;
+		uint32_t vertexIndex = 0;
 
-		int32_t ox = sx;
-
-		for(auto it = text.begin(); it != text.end(); it++)
+		auto emitQuad = [&](int32_t drawX, int32_t drawY, int32_t width, int32_t height, GlyphDesc* glyphDesc, const math::Color& passColour)
 		{
-			auto ch = *it;
+			vertices[vertexIndex + 0].position = PointToNdc(drawX, drawY + height);
+			vertices[vertexIndex + 1].position = PointToNdc(drawX, drawY);
+			vertices[vertexIndex + 2].position = PointToNdc(drawX + width, drawY);
+			vertices[vertexIndex + 3].position = PointToNdc(drawX + width, drawY + height);
 
+			vertices[vertexIndex + 0].texcoord = math::Vector2(glyphDesc->uv0[0], glyphDesc->uv1[1]);
+			vertices[vertexIndex + 1].texcoord = math::Vector2(glyphDesc->uv0[0], glyphDesc->uv0[1]);
+			vertices[vertexIndex + 2].texcoord = math::Vector2(glyphDesc->uv1[0], glyphDesc->uv0[1]);
+			vertices[vertexIndex + 3].texcoord = math::Vector2(glyphDesc->uv1[0], glyphDesc->uv1[1]);
+
+			vertices[vertexIndex + 0].colour = passColour;
+			vertices[vertexIndex + 1].colour = passColour;
+			vertices[vertexIndex + 2].colour = passColour;
+			vertices[vertexIndex + 3].colour = passColour;
+			vertexIndex += 4;
+		};
+
+		for (auto ch : text)
+		{
 			if (ch == '\n')
 			{
-				sx = ox;
-				sy += fontSize;
+				sx = lineStartX;
+				sy += lineHeight;
+				lastCh = 0;
 				continue;
 			}
 
 			auto glyphDesc = font->GetGlyphFromChar(fontSize, ch);
-
 			if (!glyphDesc)
-			{
-				delete[] vertices;
-				return;
-			}
+				continue;
 
-			int32_t width = glyphDesc->width;
-			int32_t height = glyphDesc->totalHeight;	
+			lineHeight = glyphDesc->totalHeight > 0 ? glyphDesc->totalHeight : lineHeight;
 
-			sx += glyphDesc->offsetX;
+			int32_t penX = sx;
+			int32_t drawX = penX + glyphDesc->offsetX;
+			int32_t drawY = sy;
 
-			vertices[i + 0].position = PointToNdc(sx, sy + height);
-			vertices[i + 1].position = PointToNdc(sx, sy);
-			vertices[i + 2].position = PointToNdc(sx + width, sy);
-			vertices[i + 3].position = PointToNdc(sx + width, sy + height);
+			for (const auto& pass : effectPasses)
+				emitQuad(drawX + pass.offsetX, drawY + pass.offsetY, glyphDesc->width, glyphDesc->totalHeight, glyphDesc, pass.colour);
 
-			vertices[i + 0].texcoord.x = glyphDesc->uv0[0];
-			vertices[i + 0].texcoord.y = glyphDesc->uv1[1];
-			vertices[i + 0].colour = colour;
+			emitQuad(drawX, drawY, glyphDesc->width, glyphDesc->totalHeight, glyphDesc, colour);
 
-			vertices[i + 1].texcoord.x = glyphDesc->uv0[0];
-			vertices[i + 1].texcoord.y = glyphDesc->uv0[1];
-			vertices[i + 1].colour = colour;
-
-			vertices[i + 2].texcoord.x = glyphDesc->uv1[0];
-			vertices[i + 2].texcoord.y = glyphDesc->uv0[1];
-			vertices[i + 2].colour = colour;
-
-			vertices[i + 3].texcoord.x = glyphDesc->uv1[0];
-			vertices[i + 3].texcoord.y = glyphDesc->uv1[1];
-			vertices[i + 3].colour = colour;
-
-			sx += (glyphDesc->advanceX >> 6);
-
+			sx = penX + (glyphDesc->advanceX >> 6);
 			lastCh = ch;
-
-			sx -= glyphDesc->offsetX;
-
-			i += 4;
 		}
-			
-		_fontVertexBuffer->SetVertexData((uint8_t*)vertices, sizeof(GuiVertex)* numVertices);
 
-		g_pEnv->_graphicsDevice->SetTexture2D(font->GetAtlas(fontSize));
+		const uint32_t usedVertexCount = vertexIndex;
+		const uint32_t usedIndexCount = (usedVertexCount / 4) * 6;
+		if (usedVertexCount == 0)
+			return;
 
+		_fontVertexBuffer->SetVertexData(reinterpret_cast<uint8_t*>(vertices.data()), sizeof(GuiVertex) * usedVertexCount);
+
+		g_pEnv->_graphicsDevice->SetTexture2D(atlas);
 		g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
 		g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
-
 		g_pEnv->_graphicsDevice->SetInputLayout(_inputLayout);
 		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_fontIndexBuffer);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _fontVertexBuffer);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(1, nullptr);
-
-		g_pEnv->_graphicsDevice->DrawIndexed(numIndexes);
-
-		SAFE_DELETE_ARRAY(vertices);
+		g_pEnv->_graphicsDevice->DrawIndexed(usedIndexCount);
 	}
 
 	void GuiRenderer::PushPrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text)
 	{
-		PushPrintText(GetDrawList(), font, fontSize, x, y, colour, align, text);
+		PushPrintText(GetDrawList(), font, fontSize, x, y, colour, align, text, TextEffectSettings());
+	}
+
+	void GuiRenderer::PushPrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text, const TextEffectSettings& effects)
+	{
+		PushPrintText(GetDrawList(), font, fontSize, x, y, colour, align, text, effects);
 	}
 
 	void GuiRenderer::PushScissorRect(const RECT& rect)
@@ -1435,14 +1457,14 @@ namespace HexEngine
 
 	void GuiRenderer::PushPrintText(DrawList* list, IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text)
 	{
-		if (!font)
+		PushPrintText(list, font, fontSize, x, y, colour, align, text, TextEffectSettings());
+	}
+
+	void GuiRenderer::PushPrintText(DrawList* list, IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text, const TextEffectSettings& effects)
+	{
+		if (!list || !font || text.empty())
 			return;
 
-		if (text.length() == 0)
-			return;
-
-		// Make sure the font supports this size
-		//
 		if (font->HasFontSize(fontSize) == false)
 			return;
 
@@ -1463,77 +1485,82 @@ namespace HexEngine
 				x -= textw;
 		}
 
-		auto instanceBuffer = list->_quadInstance;//font->GetInstanceBuffer(fontSize);
-
-		if (instanceBuffer)
-		{
-			if (instanceBuffer->HasStarted() == false)
-			{
-				instanceBuffer->Start();
-
-				GuiInstanceData instance;
-				instance.instance = instanceBuffer;
-				//instance.texture = font->GetAtlas(fontSize);
-
-				list->_instances.push_back(instance);
-			}
-		}
-		else
+		auto instanceBuffer = list->_quadInstance;
+		if (!instanceBuffer)
 		{
 			LOG_CRIT("Trying to render instanced text using a font not owning an instance");
 			return;
 		}
 
-		int32_t i = 0;
+		if (instanceBuffer->HasStarted() == false)
+		{
+			instanceBuffer->Start();
+
+			GuiInstanceData instance;
+			instance.instance = instanceBuffer;
+			list->_instances.push_back(instance);
+		}
+
+		auto atlas = font->GetAtlas(fontSize);
+		auto effectPasses = BuildTextPasses(effects);
+
 		int32_t sx = x;
 		int32_t sy = y;
-
 		if (_scalingEnabled)
 		{
 			sx = RX(sx, _screenWidth);
 			sy = RY(sy, _screenHeight);
 		}
 
+		const int32_t lineStartX = sx;
+		int32_t lineHeight = fontSize;
 		wchar_t lastCh = 0;
-		bool didBaseline = false;
 
-		for (auto it = text.begin(); it != text.end(); it++)
+		auto emitInstance = [&](int32_t drawX, int32_t drawY, int32_t drawHeight, GlyphDesc* glyphDesc, const math::Color& passColour)
 		{
-			auto ch = *it;
-
-			auto glyphDesc = font->GetGlyphFromChar(fontSize, ch);
-
-			if (!glyphDesc)
-				return;
-
-			int32_t width = glyphDesc->width;
-			int32_t height = glyphDesc->totalHeight;
-
-			sx += glyphDesc->offsetX;
-
-			float scaleX = (float)width / (float)_screenWidth;
-			float scaleY = (float)height / (float)_screenHeight;
-
+			float scaleX = static_cast<float>(glyphDesc->width) / static_cast<float>(_screenWidth);
+			float scaleY = static_cast<float>(drawHeight) / static_cast<float>(_screenHeight);
 			auto centrePoint = PointToNdc(
-				(float)sx + ((float)width / 2.0f),
-				(float)sy + ((float)height / 2.0f));
+				static_cast<float>(drawX) + (static_cast<float>(glyphDesc->width) / 2.0f),
+				static_cast<float>(drawY) + (static_cast<float>(drawHeight) / 2.0f));
 
 			instanceBuffer->Render(
-				font->GetAtlas(fontSize),
+				atlas,
 				math::Vector2(centrePoint.x, centrePoint.y),
 				math::Vector2(scaleX, scaleY),
 				math::Vector2(glyphDesc->uv0),
 				math::Vector2(glyphDesc->uv1),
-				colour,
+				passColour,
 				math::Matrix::Identity);
+		};
 
-			sx += (glyphDesc->advanceX >> 6);
+		for (auto ch : text)
+		{
+			if (ch == '\n')
+			{
+				sx = lineStartX;
+				sy += lineHeight;
+				lastCh = 0;
+				continue;
+			}
 
+			auto glyphDesc = font->GetGlyphFromChar(fontSize, ch);
+			if (!glyphDesc)
+				continue;
+
+			lineHeight = glyphDesc->totalHeight > 0 ? glyphDesc->totalHeight : lineHeight;
+
+			int32_t penX = sx;
+			int32_t drawX = penX + glyphDesc->offsetX;
+			int32_t drawY = sy;
+
+			for (const auto& pass : effectPasses)
+				emitInstance(drawX + pass.offsetX, drawY + pass.offsetY, glyphDesc->totalHeight, glyphDesc, pass.colour);
+
+			emitInstance(drawX, drawY, glyphDesc->totalHeight, glyphDesc, colour);
+
+			sx = penX + (glyphDesc->advanceX >> 6);
 			lastCh = ch;
-
-			sx -= glyphDesc->offsetX;
-
-			i += 4;
 		}
 	}
 }

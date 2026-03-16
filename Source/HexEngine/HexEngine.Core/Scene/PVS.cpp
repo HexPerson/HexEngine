@@ -55,6 +55,16 @@ namespace HexEngine
 		return _forceRebuild;
 	}
 
+	void PVS::ResetDidRebuild()
+	{
+		_didRebuild = false;
+	}
+
+	bool PVS::DidRebuild() const
+	{
+		return _didRebuild;
+	}
+
 	void PVS::CalculateVisibility(Scene* scene, const PVSParams& params)
 	{
 		std::unique_lock lock(_lock);
@@ -328,6 +338,8 @@ namespace HexEngine
 			}
 		}
 		//std::sort(_pvs.begin(), _pvs.end(),
+
+		_didRebuild = true;
 	}
 
 	bool PVS::IsEntityVisible(Entity* entity, const PVSParams& params)

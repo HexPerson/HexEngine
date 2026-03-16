@@ -902,6 +902,7 @@ namespace HexEngine
 		if (data.find("flags") != data.end())
 		{
 			EntityFlags flags = data["flags"].get<EntityFlags>();
+			flags &= ~EntityFlags::SelectedInEditor; // remove the selected in editor flag
 			SetFlag(flags);
 		}
 

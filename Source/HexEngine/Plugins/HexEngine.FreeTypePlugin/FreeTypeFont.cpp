@@ -67,78 +67,54 @@ HexEngine::ITexture2D* FreeTypeFont::GetAtlas(int32_t size)
 
 void FreeTypeFont::MeasureText(int32_t fontSize, const std::string& text, int32_t& width, int32_t& height)
 {
-	width = height = 0;
-
-	for (auto& set : _sizedGlyphs)
-	{
-		if (set.first == fontSize)
-		{
-			if (height == 0)
-				height = set.second.baseLine;
-
-			for (auto& ch : text)
-			{
-				for (auto& glyph : set.second.glyphs)
-				{
-					if (glyph.ch == ch)
-					{
-						width += (glyph.advanceX >> 6);
-						break;
-					}
-				}
-			}	
-
-			break;
-		}
-	}	
+	MeasureText(fontSize, std::wstring(text.begin(), text.end()), width, height);
 }
 
 void FreeTypeFont::MeasureText(int32_t fontSize, const std::wstring& text, int32_t& width, int32_t& height)
 {
-	width = height = 0;
+	width = 0;
+	height = 0;
+
+	auto atlas = _sizedGlyphs.find(fontSize);
+	if (atlas == _sizedGlyphs.end())
+		return;
+
+	const auto& glyphSet = atlas->second;
+	const int32_t lineHeight = glyphSet.lineHeight > 0 ? glyphSet.lineHeight : glyphSet.baseLine;
 
 	int32_t largestWidth = 0;
 	int32_t currentWidth = 0;
+	wchar_t lastCh = 0;
+	height = lineHeight;
 
-	for (auto& set : _sizedGlyphs)
+	for (auto ch : text)
 	{
-		if (set.first == fontSize)
+		if (ch == '\n')
 		{
-			if (height == 0)
-				height = set.second.baseLine;
-
-			for (auto& ch : text)
-			{
-				if (ch == '\n')
-				{
-					if (currentWidth > largestWidth)
-						largestWidth = currentWidth;
-
-					width = 0;
-					height += set.second.baseLine;
-					currentWidth = 0;
-					continue;
-				}
-				for (auto& glyph : set.second.glyphs)
-				{
-					if (glyph.ch == ch)
-					{
-						width += (glyph.advanceX >> 6);
-						currentWidth = width;
-
-						break;
-					}
-				}
-			}
-
 			if (currentWidth > largestWidth)
 				largestWidth = currentWidth;
 
-			width = largestWidth;
+			currentWidth = 0;
+			lastCh = 0;
+			height += lineHeight;
+			continue;
+		}
 
-			break;
+		for (const auto& glyph : glyphSet.glyphs)
+		{
+			if (glyph.ch == ch)
+			{
+				currentWidth += (glyph.advanceX >> 6);
+				lastCh = ch;
+				break;
+			}
 		}
 	}
+
+	if (currentWidth > largestWidth)
+		largestWidth = currentWidth;
+
+	width = largestWidth;
 }
 
 int32_t FreeTypeFont::GetKerning(int32_t size, wchar_t first, wchar_t second)

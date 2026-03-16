@@ -48,6 +48,7 @@ namespace HexEngine
 		void FillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, math::Vector2 uv[2], const math::Color& colour, float rotation = 0.0f);
 
 		void PrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text);
+		void PrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text, const TextEffectSettings& effects);
 		void Line(int32_t x1, int32_t y1, int32_t x2, int32_t y2, const math::Color& colour);
 
 		void FullScreenTexturedQuad(ITexture2D* texture);
@@ -63,6 +64,7 @@ namespace HexEngine
 		void PushFrame(int32_t x, int32_t y, int32_t width, int32_t height, int32_t thickness, const math::Color& colour);
 		void PushFillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour, float rotation = 0.0f);
 		void PushPrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text);
+		void PushPrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text, const TextEffectSettings& effects);
 		void PushLine(int32_t x1, int32_t y1, int32_t x2, int32_t y2, const math::Color& colour);
 
 		void PushFillQuad(DrawList* list, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour);
@@ -70,6 +72,7 @@ namespace HexEngine
 		void PushFrame(DrawList* list, int32_t x, int32_t y, int32_t width, int32_t height, int32_t thickness, const math::Color& colour);
 		void PushFillTexturedQuad(DrawList* list, ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour, float rotation = 0.0f);
 		void PushPrintText(DrawList* list, IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text);
+		void PushPrintText(DrawList* list, IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text, const TextEffectSettings& effects);
 		void PushLine(DrawList* list, int32_t x1, int32_t y1, int32_t x2, int32_t y2, const math::Color& colour);
 
 		void PushFullScreenTexturedQuad(ITexture2D* texture);

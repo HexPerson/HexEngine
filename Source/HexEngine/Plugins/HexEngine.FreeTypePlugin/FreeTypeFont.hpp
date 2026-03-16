@@ -18,6 +18,7 @@ public:
 	struct SizedAtlas
 	{
 		int32_t baseLine = 0;
+		int32_t lineHeight = 0;
 		FT_Face face = 0;
 		HexEngine::ITexture2D* atlas;
 		std::vector<GlyphDescFT> glyphs;
