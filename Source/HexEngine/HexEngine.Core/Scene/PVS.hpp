@@ -66,6 +66,7 @@ namespace HexEngine
 		CullingMode shadowCullMode = CullingMode::FrontFace;
 		MeshInstanceData instanceData = {};
 		SimpleMeshInstanceData shadowInstanceData = {};
+		Entity* entity = nullptr;
 	};
 
 	using RenderBatchSnapshot = std::vector<std::pair<std::shared_ptr<Material>, std::vector<RenderableSnapshot>>>;

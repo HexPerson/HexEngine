@@ -1152,6 +1152,7 @@ namespace HexEngine
 					snapshot.hasAnimations = mesh->HasAnimations();
 					snapshot.isBoundToBone = meshComponent->IsBoundToBone();
 					snapshot.shadowCullMode = meshComponent->GetShadowCullMode();
+					snapshot.entity = entity;
 
 					if (snapshot.isBoundToBone)
 					{
@@ -1305,11 +1306,7 @@ namespace HexEngine
 						continue;
 					}
 					rendered = true;
-				}
-
-				// TODO: is this needed
-				//if(entity->GetLayer() == Layer::DynamicGeometry)
-				//	entity->GetComponent<Transform>()->UpdateInterpolatedPosition();				
+				}		
 
 				drawnInstances++;
 				lastInstance = currentInstance;		
@@ -1320,6 +1317,14 @@ namespace HexEngine
 				}
 				else
 				{
+					// Fix so sky doesn't used cached position
+					if (renderable.layer == Layer::Sky)
+					{
+						renderable.instanceData.worldMatrix = renderable.entity->GetWorldTMTranspose();
+						renderable.instanceData.worldMatrixPrev = renderable.entity->GetWorldTMPrevTranspose();
+						renderable.instanceData.worldMatrixInverseTranspose = renderable.entity->GetWorldTMInvert();
+					}
+
 					instance->Render(renderable.instanceData);
 				}
 
