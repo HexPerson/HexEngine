@@ -1,8 +1,15 @@
 # HexEngine
+Hex Engine is a high-performance, ECS-driven 3D game engine written in modern C++, built for performance, flexibility, and fast iteration.
+
+It combines a modular architecture with a full production-ready feature set — including a 3D editor, PBR rendering pipeline, HDR, post-processing, physics, audio, asset pipelines, and cross-platform shader compilation — all designed to give developers complete control over their games.
+
+If you prefer building systems over fighting engine constraints, Hex Engine is built for you.
 Hex Engine is a C++ open-source 3D game engine currently being developed. The goal of HexEngine is to provide an engine that is extremely performant but offering high-quality graphics.
 
 # Features
 - Full interactive world editor
+- Hot-reloadable C++ game code whilst in the world editor
+- HDR/SDR support
 - Screen space reflections
 - Nvidia Real-time Denoiser with presets
 - DLSS 3.5
@@ -13,7 +20,7 @@ Hex Engine is a C++ open-source 3D game engine currently being developed. The go
 - Scene saving/loading
 - Shader cross compilation (for when the engine supports multiple renderers, currently only DirectX 11 is in use)
 - HBAO
-- Post-processing effects (chromatic abberration, fog, colour grading, bloom, blur, vignette, FXAA)
+- Post-processing effects (chromatic abberration, fog, colour grading, bloom, blur, vignette, FXAA, HDR tone-mapping)
 - Temporal anti-aliasing
 - Skeletel animation system
 - Cascaded shadow mapping
