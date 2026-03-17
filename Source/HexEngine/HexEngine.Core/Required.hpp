@@ -29,6 +29,7 @@
 #include <hidusage.h>
 #include <format>
 #include <memory>
+#include <deque>
 
 #ifdef _DEBUG // for perf
 	#include <d3d9.h>

@@ -571,6 +571,7 @@ namespace HexEditor
 	void EditorUI::Update(float frameTime)
 	{
 		CheckCentralDockRoamState();
+		_integrator.Update();
 
 		if (_mainMenu->IsOpen())
 		{
