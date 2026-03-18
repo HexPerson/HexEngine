@@ -25,9 +25,9 @@ namespace HexEngine
 		g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 	}
 
-	bool SceneManager::LoadScene(const fs::path& path, std::shared_ptr<Scene>& scene)
+	std::shared_ptr<Scene> SceneManager::LoadScene(const fs::path& path)
 	{
-		scene = CreateEmptyScene(false, nullptr, true);
+		auto scene = CreateEmptyScene(false, nullptr, true);
 
 		SceneSaveFile file(path, std::ios::in, scene);
 
@@ -35,12 +35,12 @@ namespace HexEngine
 		{
 			scene.reset();
 			LOG_CRIT("Failed to load scene");
-			return false;
+			return nullptr;
 		}
 
 		file.Close();
 
-		return true;
+		return scene;
 	}
 
 	const std::vector<std::shared_ptr<Scene>>& SceneManager::GetAllScenes() const
@@ -180,8 +180,8 @@ namespace HexEngine
 		}
 		else
 		{
-			std::shared_ptr<Scene> scene;
-			if (LoadScene(absolutePath, scene) == false)
+			std::shared_ptr<Scene> scene = LoadScene(absolutePath);
+			if (scene == nullptr)
 			{
 				LOG_CRIT("Failed to load scene %s", absolutePath.string().c_str());
 				return nullptr;

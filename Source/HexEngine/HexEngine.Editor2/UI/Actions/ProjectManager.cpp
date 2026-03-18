@@ -149,16 +149,23 @@ namespace HexEditor
 			std::string contents;
 			file.ReadAll(contents);
 
-			_projectListData = json::parse(contents);
-
-			for (auto& project : _projectListData["projects"].items())
-			//for(json::iterator it = _projectListData["projects"].begin(); it != _projectListData["projects"].end(); it++)
+			try
 			{
-				auto val = project.value();
+				_projectListData = json::parse(contents);
 
-				auto v = val.get<std::string>();
+				for (auto& project : _projectListData["projects"].items())
+					//for(json::iterator it = _projectListData["projects"].begin(); it != _projectListData["projects"].end(); it++)
+				{
+					auto val = project.value();
 
-				_oldProjectsList->AddItem(std::wstring(v.begin(), v.end()), HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.img_folder_closed.get());
+					auto v = val.get<std::string>();
+
+					_oldProjectsList->AddItem(std::wstring(v.begin(), v.end()), HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.img_folder_closed.get());
+				}
+			}
+			catch (json::exception& e)
+			{
+				LOG_CRIT("Failed to read json file: %s", e.what());
 			}
 
 			file.Close();
@@ -184,7 +191,7 @@ namespace HexEditor
 
 		if (file.Open())
 		{
-			auto str = _projectListData.dump();
+			auto str = _projectListData.dump(2);
 
 			file.Write(str.data(), str.length());
 			file.Close();

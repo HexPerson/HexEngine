@@ -176,6 +176,10 @@ namespace HexEngine
 					_onInputFn(this, _value);
 				}
 			}
+			else if (data->Char.ch == VK_TAB)
+			{
+				// TODO add auto pick next input
+			}
 			else
 				_value.push_back(data->Char.ch);
 
