@@ -1,29 +1,48 @@
 # HexEngine
-Hex Engine is a high-performance, ECS-driven 3D game engine written in modern C++, built for performance, flexibility, and fast iteration.
+HexEngine is a modern, modular 3D game engine written in C++ with a focus on performance, flexibility, and rapid iteration.
 
-It combines a modular architecture with a full production-ready feature set — including a 3D editor, PBR rendering pipeline, HDR, post-processing, physics, audio, asset pipelines, and cross-platform shader compilation — all designed to give developers complete control over their games.
+Built around an ECS architecture, Hex Engine provides a complete game development stack including a real-time 3D editor, physically-based rendering (PBR), HDR and post-processing, cross-platform shader compilation, physics, audio, and a fully extensible plugin system.
 
-If you prefer building systems over fighting engine constraints, Hex Engine is built for you.
-Hex Engine is a C++ open-source 3D game engine currently being developed. The goal of HexEngine is to provide an engine that is extremely performant but offering high-quality graphics.
+Designed for developers who want low-level control without sacrificing workflow, Hex Engine delivers the power of native C++ with the usability of modern game engines.
 
 # Features
-- Full interactive world editor
-- Hot-reloadable C++ game code whilst in the world editor
-- HDR/SDR support
-- Screen space reflections
-- Nvidia Real-time Denoiser with presets
-- DLSS 3.5
-- Support for volumetric light sources
-- Volumetric day/night light source
-- Support for many light sources in one scene
-- A fairly well optimised scene gathering algorithm
-- Scene saving/loading
-- Shader cross compilation (for when the engine supports multiple renderers, currently only DirectX 11 is in use)
-- HBAO
-- Post-processing effects (chromatic abberration, fog, colour grading, bloom, blur, vignette, FXAA, HDR tone-mapping)
-- Temporal anti-aliasing
-- Skeletel animation system
-- Cascaded shadow mapping
+- ⚙️ **Modern C++ Engine Core**
+  - High-performance design
+  - Modular architecture with clean separation of systems
+  - Hot-reloadable C++ game code
+
+- 🧩 **ECS Architecture**
+  - Scalable entity-component-system design
+  - Flexible and extensible gameplay logic
+
+- 🎮 **3D Editor**
+  - Real-time scene editing
+  - Asset management and workflow tools
+
+- 🎨 **Rendering Pipeline**
+  - Physically Based Rendering (PBR)
+  - HDR rendering
+  - Post-processing effects
+  - Cross-platform shader compilation
+  - HBAO
+  - Nvidia real-time denoiser
+
+- 📦 **Asset System**
+  - Asset packaging and dependency management
+  - Efficient build pipeline
+
+- 🔌 **Plugin System**
+  - Fully extensible engine architecture
+  - Create and integrate custom modules
+
+- 🔊 **Audio System**
+  - Integrated audio playback and control
+
+- 🧱 **Physics Engine**
+  - Real-time simulation and collision handling
+
+- 🎮 **Input System**
+  - Unified input handling across platforms
 
 # Prerequesites
 You'll need:
@@ -36,3 +55,37 @@ You'll need:
 Run Setup.bat and the automated build script will grab all the dependencies and begin building. This will take quite some time on the first run. 
 
 You can run this at any time and it will pull the latest repositories from each dependencies and rebuild (if necessary).
+
+# Why HexEngine?
+HexEngine is built for developers who want:
+
+- Full control over their engine and architecture
+- High performance without engine bloat
+- A modern ECS-based workflow
+- A modular system that scales with complexity
+
+Unlike larger engines, HexEngine is designed to stay lightweight, transparent, and developer-focused.
+
+# Roadmap
+- [ ] Improve editor UX and tooling
+- [ ] Visual material editor
+- [ ] Animation system
+- [ ] Networking / multiplayer support
+- [ ] Expanded documentation and tutorials
+- [ ] Plugin marketplace
+- [ ] Sample projects
+- [ ] Automated build process
+
+# Contributing
+Contributions are welcome!
+
+- Check out open issues
+- Submit pull requests
+- Suggest features or improvements
+
+Join the community and help shape the future of Hex Engine.
+
+# Community
+- Discord: https://discord.gg/QtQXx3QWjk
+- Discussions: GitHub Discussions
+- Website: hex-engine.com (under construction)
