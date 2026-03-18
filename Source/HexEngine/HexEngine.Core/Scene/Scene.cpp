@@ -20,6 +20,7 @@ namespace HexEngine
 	HVar r_profileDisableShadowSampling("r_profileDisableShadowSampling", "Disable shadow-map sampling in static mesh materials for profiling", false, false, true);
 	HVar r_profileDisableNormalMaps("r_profileDisableNormalMaps", "Disable normal map bindings in static mesh materials for profiling", false, false, true);
 	HVar r_profileDisableSurfaceMaps("r_profileDisableSurfaceMaps", "Disable roughness, metallic, AO, height, emission and opacity map bindings in static mesh materials for profiling", false, false, true);
+	HVar phys_debug("phys_debug", "Enable the physics debugger (very slow)", false, false, true);
 
 	void Scene::Create(bool createSkySphere, IEntityListener* listener)
 	{
@@ -1353,11 +1354,6 @@ namespace HexEngine
 
 		PROFILE();
 
-		//g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
-
-		//std::vector<StaticMeshComponent*> entities;
-		//GetComponents<StaticMeshComponent>(entities);
-
 		for (auto& set : GetEntities())
 		{
 			for (auto& ent : set.second)
@@ -1365,11 +1361,6 @@ namespace HexEngine
 				ent->DebugRender();
 			}
 		}
-
-		/*for (auto& ent : entities)
-		{
-			ent->OnDebugRender();
-		}*/
 
 		// Allow the game extension to render the debug info (if they want)
 		for (auto& extension : g_pEnv->GetGameExtensions())
@@ -1379,14 +1370,8 @@ namespace HexEngine
 
 		g_pEnv->_chunkManager->DebugRender();
 
-		/*if (_hasLastHit)
-		{
-			g_pEnv->_debugRenderer->DrawLine(_lastHit.position, _lastHit.position + _lastHit.normal * 5.0f, math::Color(1.0f, 0.0f, 0.0f, 1.0f));
-
-			g_pEnv->_debugRenderer->DrawLine(_lastHit.start, _lastHit.position, math::Color(0.0f, 1.0f, 0.0f, 1.0f));
-		}*/
-
-		//g_pEnv->_physicsSystem->DebugRender();
+		if(phys_debug._val.b)
+			g_pEnv->_physicsSystem->DebugRender();
 
 		g_pEnv->_debugRenderer->FlushBuffers();
 

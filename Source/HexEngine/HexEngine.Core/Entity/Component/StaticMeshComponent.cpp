@@ -159,6 +159,9 @@ namespace HexEngine
 
 		dx::BoundingBox bbox = mesh->GetAABB();
 
+		GetEntity()->SetAABB(bbox);
+		GetEntity()->SetOBB(mesh->GetOBB());
+
 		GetEntity()->RecalculateBoundingVolumes(bbox);
 
 		if (mesh->GetMaterial())

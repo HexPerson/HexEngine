@@ -100,7 +100,7 @@ namespace HexEngine
 						meshRenderer->SetMesh(model);
 					}
 
-					auto pos = math::Vector3(0, _dummyEnt->GetBoundingSphere().Radius * 0.5f, _dummyEnt->GetBoundingSphere().Radius * 1.1f);
+					auto pos = math::Vector3(0, _dummyEnt->GetAABB().Center.y, _dummyEnt->GetBoundingSphere().Radius * 1.05f);
 
 					_camera->GetEntity()->SetPosition(pos);
 

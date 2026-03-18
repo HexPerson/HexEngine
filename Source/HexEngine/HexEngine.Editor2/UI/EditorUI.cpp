@@ -307,6 +307,16 @@ namespace HexEditor
 						static HexEngine::HVar* r_debugScene = HexEngine::g_pEnv->_commandManager->FindHVar("r_debugScene");
 						r_debugScene->_val.b = !r_debugScene->_val.b;
 					});
+				_mainMenu->AddSubItem(scene, debugScene);
+
+				HexEngine::MenuBar::Item* debugPhysics = new HexEngine::MenuBar::Item;
+				debugPhysics->name = L"Debug physics";
+				debugPhysics->action = std::bind(
+					[]() {
+						static HexEngine::HVar* phys_debug = HexEngine::g_pEnv->_commandManager->FindHVar("phys_debug");
+						phys_debug->_val.b = !phys_debug->_val.b;
+					});	
+				_mainMenu->AddSubItem(scene, debugPhysics);
 
 				HexEngine::MenuBar::Item* profileAlbedoOnly = new HexEngine::MenuBar::Item;
 				profileAlbedoOnly->name = L"Albedo only";
@@ -361,6 +371,7 @@ namespace HexEditor
 						r_profileDisableBloom->_val.b = !r_profileDisableBloom->_val.b;
 					});
 				_mainMenu->AddSubItem(scene, profileDisableBloom);
+
 
 				/*HexEngine::MenuBar::Item* profileDepthOnly = new HexEngine::MenuBar::Item;
 				profileDepthOnly->name = L"Depth only";
