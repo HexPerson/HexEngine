@@ -51,7 +51,7 @@ int WinMain(
 #endif
 
 	// Create an editor window
-	HexEngine::Window* mainWindow = HexEngine::Window::Create(0, 0, screenWidth, screenHeight, HexEngine::DisplayMode::Windowed, "Hex Engine Editor");
+	HexEngine::Window* mainWindow = HexEngine::Window::Create(0, 0, screenWidth, screenHeight, HexEngine::DisplayMode::Windowed, "Hex Engine Studio");
 	mainWindow->Maximise();
 
 	mainWindow->_displayFpsInTitle = true;
@@ -81,7 +81,7 @@ int WinMain(
 	HexEngine::Game3DOptions environmentOpts;
 
 	environmentOpts.window = mainWindow;
-	environmentOpts.applicationName = L"HexEngineEditor";
+	environmentOpts.applicationName = L"HexEngineStudio";
 	environmentOpts.createIconService = true;
 
 	// Create a 3D Game environment

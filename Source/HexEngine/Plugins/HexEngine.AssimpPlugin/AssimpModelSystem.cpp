@@ -73,6 +73,62 @@ void AssimpModelImporter::Destroy()
 {
 }
 
+#include <shlobj.h>
+
+static int32_t CALLBACK BrowseCallbackProc(HWND hwnd, UINT uMsg, LPARAM lParam, LPARAM lpData)
+{
+	if (uMsg == BFFM_INITIALIZED)
+	{
+		SendMessage(hwnd, BFFM_SETSELECTION, TRUE, lpData);
+	}
+
+	return 0;
+};
+
+bool AssimpModelImporter::OnBrowseFolderPath(HexEngine::LineEdit* edit)
+{
+	wchar_t baseDirectory[MAX_PATH];
+	wcscpy_s(baseDirectory, HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory().wstring().c_str());
+
+	BROWSEINFO bi = { 0 };
+	bi.lpszTitle = L"Browse for folder...";
+	bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+	bi.lpfn = BrowseCallbackProc;
+	bi.lParam = (LPARAM)baseDirectory;
+
+	LPITEMIDLIST pidl = SHBrowseForFolder(&bi);
+
+	std::wstring path;
+
+	if (pidl != 0)
+	{
+		wchar_t tempPath[MAX_PATH];
+		//get the name of the folder and put it in path
+		SHGetPathFromIDList(pidl, tempPath);
+
+		//free memory used
+		IMalloc* imalloc = 0;
+		if (SUCCEEDED(SHGetMalloc(&imalloc)))
+		{
+			imalloc->Free(pidl);
+			imalloc->Release();
+		}
+
+		path = tempPath;
+	}
+	else
+		return true;
+
+	if (path.length() == 0)
+	{
+		return true;
+	}
+
+	edit->SetValue(path);
+	_importOpts.textureSearchPath = path;
+	return true;
+}
+
 HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs::path>& paths)
 {
 	const int32_t width = 800;
@@ -97,6 +153,7 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 	auto deleteOriginals = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Delete originals after import", &_importOpts.deleteOriginalsAfterImport);
 
 	auto searchpath = new HexEngine::LineEdit(layout, layout->GetNextPos(), HexEngine::Point(500, 20), L"Override texture search path");
+	auto browse = new HexEngine::Button(layout, searchpath->GetPosition() + HexEngine::Point(510, 0), HexEngine::Point(130, 26), L"Browse...", std::bind(&AssimpModelImporter::OnBrowseFolderPath, this, searchpath));
 
 
 	//searchpath->SetUneditableText(fileSystem->GetName());
@@ -132,6 +189,8 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 
 	return dlg;
 }
+
+
 
 std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromFile(const fs::path& path, HexEngine::FileSystem* fileSystem, const HexEngine::ResourceLoadOptions* options /*= nullptr*/)
 {

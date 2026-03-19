@@ -5,6 +5,7 @@
 
 namespace HexEngine
 {
+	/** @brief Streamline DLSS quality/performance mode. */
 	enum class DLSSMode : uint32_t
 	{
 		Off,
@@ -17,12 +18,14 @@ namespace HexEngine
 		Count,
 	};
 
+	/** @brief Bitmask of Streamline features supported by the backend. */
 	enum StreamlineFeature
 	{
 		DLSS	= HEX_BITSET(0),
 		NRD		= HEX_BITSET(1),
 	};
 
+	/** @brief Per-frame camera and motion constants consumed by Streamline features. */
 	struct StreamlineConstants
 	{
         //! Specifies matrix transformation from the camera view to the clip space.
@@ -96,11 +99,13 @@ namespace HexEngine
         float minRelativeLinearDepthObjectSeparation = 40.0f;
 	};
 
+	/** @brief Plugin interface for NVIDIA Streamline integration (DLSS/NRD). */
 	class IStreamlineProvider : public IPluginInterface
 	{
 	public:
 		DECLARE_PLUGIN_INTERFACE(IStreamlineProvider, 001);
 
+		/** @brief Returns whether Streamline is initialized and usable. */
 		virtual bool IsEnabled() = 0;
 
 		virtual HRESULT D3D11CreateDevice(
@@ -117,6 +122,7 @@ namespace HexEngine
 
 		virtual HRESULT CreateDXGIFactory1(REFIID riid, _COM_Outptr_ void** ppFactory) = 0;
 
+		/** @brief Queries optimal render resolution for the requested DLSS mode. */
 		virtual bool QueryOptimalDLSSSettings(
 			int32_t desiredWidth,
 			int32_t desiredHeight,
@@ -124,18 +130,25 @@ namespace HexEngine
 			int32_t& optimalWidth,
 			int32_t& optimalHeight) = 0;
 
+		/** @brief Sets active DLSS options for subsequent evaluations. */
 		virtual void SetDLSSOptions(float sharpness, bool hdr, bool autoExposure, DLSSMode mode, int32_t optimalWidth, int32_t optimalHeight) = 0;
 
+		/** @brief Binds per-frame input/output resources used by Streamline. */
         virtual void PrepareFrameResources(void* colourIn, void* colourOut, void* motionVectors, void* depth, void* cmdList) = 0;
 
+		/** @brief Returns a bitmask of supported Streamline features. */
 		virtual uint32_t GetSupportedFeaturesMask() = 0;
 
+		/** @brief Sets per-frame camera and motion constants. */
         virtual void SetCommonConstants(const StreamlineConstants& constants) = 0;
 
+		/** @brief Begins Streamline frame scope. */
         virtual void BeginFrame() = 0;
 
+		/** @brief Ends Streamline frame scope. */
         virtual void EndFrame() = 0;
 
+		/** @brief Evaluates one Streamline feature on the current command list. */
         virtual void EvaluateFeature(StreamlineFeature feature, void* cmdList) = 0;
 	};
 }

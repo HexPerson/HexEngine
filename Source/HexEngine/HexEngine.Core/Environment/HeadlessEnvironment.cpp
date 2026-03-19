@@ -27,11 +27,11 @@ namespace HexEngine
 		_running(false)
 	{}
 
-	/// <summary>
-	/// Create a 3D game environment
-	/// </summary>
-	/// <param name="options">The engine options</param>
-	/// <returns>A pointer to a Game3DEnvironment instance</returns>
+	/**
+	 * @brief Creates and initializes a headless runtime environment.
+	 * @param options Startup options for headless execution.
+	 * @return Initialized headless environment instance, or `nullptr` on failure.
+	 */
 	HeadlessEnvironment* HeadlessEnvironment::Create(const HeadlessOptions& options)
 	{
 		CoInitializeEx(NULL, COINIT_MULTITHREADED);
@@ -142,9 +142,7 @@ namespace HexEngine
 		return env;
 	}
 
-	/// <summary>
-	/// Destroy this instance
-	/// </summary>
+	/** @brief Destroys this environment instance and all owned subsystems. */
 	void HeadlessEnvironment::Destroy()
 	{
 #if USE_MULTITHREADED_PHYSICS == 1
@@ -200,18 +198,13 @@ namespace HexEngine
 #endif
 	}
 
-	/// <summary>
-	/// Determines if the engine is still running
-	/// </summary>
-	/// <returns></returns>
+	/** @brief Returns whether the environment main loop is still running. */
 	bool HeadlessEnvironment::IsRunning()
 	{
 		return _running;
 	}
 
-	/// <summary>
-	/// Run this engine instance
-	/// </summary>
+	/** @brief Executes one frame of the headless environment main loop. */
 	void HeadlessEnvironment::Run()
 	{
 		static bool hasUpdatedOnce = false;
@@ -268,9 +261,7 @@ namespace HexEngine
 		_timeManager->FrameEnd();
 	}
 
-	/// <summary>
-	/// A quit message was received
-	/// </summary>
+	/** @brief Handles a quit request and stops the environment loop. */
 	void HeadlessEnvironment::OnRecieveQuitMessage()
 	{
 		LOG_INFO("A quit signal was recieved, ending the session");

@@ -22,6 +22,12 @@ namespace HexEngine
 	class Window;
 	class Camera;
 
+	/**
+	 * @brief Graphics backend interface (D3D11 plugin implementation).
+	 *
+	 * Exposes device creation, resource allocation, binding, draw submission,
+	 * and frame presentation services used by the renderer.
+	 */
 	class IGraphicsDevice : public IPluginInterface
 	{
 	public:
@@ -32,18 +38,25 @@ namespace HexEngine
 		virtual void Lock() {};
 		virtual void Unlock() {};
 
+		/** @brief Creates the backend device/context and static GPU state. */
 		virtual bool Create() = 0;
 
+		/** @brief Destroys backend device/context resources. */
 		virtual void Destroy() {};
 
+		/** @brief Attaches backend swapchain/backbuffer resources to a window. */
 		virtual bool AttachToWindow(Window* window) = 0;
 
+		/** @brief Resizes swapchain/backbuffer resources for a window. */
 		virtual void Resize(Window* window, uint32_t width, uint32_t height) = 0;
 
+		/** @brief Returns the backbuffer texture for the selected window. */
 		virtual ITexture2D* GetBackBuffer(Window* window = nullptr) = 0;
 
+		/** @brief Creates a texture clone with matching descriptor/content. */
 		virtual ITexture2D* CreateTexture(ITexture2D* clone) = 0;
 
+		/** @brief Creates a 2D texture resource with explicit descriptor options. */
 		virtual ITexture2D* CreateTexture2D(
 			int32_t width,
 			int32_t height,
@@ -77,6 +90,7 @@ namespace HexEngine
 			D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
 			D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) = 0;*/
 
+		/** @brief Creates a 3D texture resource. */
 		virtual ITexture3D* CreateTexture3D(
 			int32_t width,
 			int32_t height,
@@ -93,22 +107,31 @@ namespace HexEngine
 			D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
 			D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) = 0;
 
+		/** @brief Creates a vertex buffer resource. */
 		virtual IVertexBuffer* CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags) = 0;
 
+		/** @brief Creates and uploads a vertex buffer resource. */
 		virtual IVertexBuffer* CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* vertices) = 0;
 
+		/** @brief Creates an index buffer resource. */
 		virtual IIndexBuffer* CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags) = 0;
 
+		/** @brief Creates and uploads an index buffer resource. */
 		virtual IIndexBuffer* CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* indices) = 0;
 
+		/** @brief Creates a compiled vertex shader stage object. */
 		virtual IShaderStage* CreateVertexShader(std::vector<uint8_t>& shaderCode) = 0;
 
+		/** @brief Creates a compiled pixel shader stage object. */
 		virtual IShaderStage* CreatePixelShader(std::vector<uint8_t>& shaderCode) = 0;
 
+		/** @brief Creates an input layout from descriptor + vertex shader bytecode. */
 		virtual IInputLayout* CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary) = 0;
 
+		/** @brief Creates a constant buffer. */
 		virtual IConstantBuffer* CreateConstantBuffer(uint32_t size) = 0;
 
+		/** @brief Returns one of the engine-owned global constant buffers. */
 		virtual IConstantBuffer* GetEngineConstantBuffer(EngineConstantBuffer buffer) = 0;
 
 		virtual void SetConstantBufferVS(uint32_t slot, IConstantBuffer* buffer) = 0;
@@ -143,10 +166,13 @@ namespace HexEngine
 
 		virtual void GetRenderTargets(std::vector<ITexture2D*>& renderTargets, ITexture2D** depthStencil = nullptr) = 0;
 
+		/** @brief Issues indexed draw call. */
 		virtual void DrawIndexed(uint32_t numIndices) = 0;
 
+		/** @brief Issues indexed instanced draw call. */
 		virtual void DrawIndexedInstanced(uint32_t numIndices, uint32_t instanceCount) = 0;
 
+		/** @brief Issues non-indexed draw call. */
 		virtual void Draw(uint32_t vertexCount, int32_t startVertexLocation = 0) = 0;
 
 		virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) = 0;
@@ -167,6 +193,7 @@ namespace HexEngine
 
 		virtual void* GetNativeDeviceContext() = 0;
 
+		/** @brief Returns all display modes supported by the active output. */
 		virtual bool GetSupportedDisplayModes(std::vector<ScreenDisplayMode>& modes) = 0;
 
 		virtual void SetPixelShaderResource(uint32_t slot, ID3D11ShaderResourceView* resource) = 0;
@@ -187,8 +214,10 @@ namespace HexEngine
 
 		//virtual void BindShadowMaps() = 0;
 
+		/** @brief Begins rendering for a frame/window. */
 		virtual void BeginFrame(Window* window, ITexture2D* depthBuffer=nullptr) = 0;
 
+		/** @brief Ends rendering and presents the frame/window. */
 		virtual void EndFrame(Window* window) = 0;
 
 		virtual void SetViewports(const std::vector<D3D11_VIEWPORT>& viewports) = 0;
@@ -209,8 +238,10 @@ namespace HexEngine
 
 		virtual void ClearScissorRect() = 0;
 
+		/** @brief Resets cached graphics state to backend defaults. */
 		virtual void ResetState() = 0;
 
+		/** @brief Returns preferred swapchain/backbuffer format for this backend. */
 		virtual uint32_t GetDesiredBackBufferFormat() const {
 			return DXGI_FORMAT_R16G16B16A16_FLOAT;
 		}

@@ -11,6 +11,7 @@ namespace HexEngine
 	class IShaderStage;
 	class IConstantBuffer;
 
+	/** @brief Blend-state presets used by the renderer. */
 	enum class BlendState
 	{
 		Invalid = -1,
@@ -21,6 +22,7 @@ namespace HexEngine
 		Count
 	};
 
+	/** @brief Depth-stencil presets used by the renderer. */
 	enum class DepthBufferState
 	{
 		Invalid = -1,
@@ -32,6 +34,7 @@ namespace HexEngine
 		Count
 	};
 
+	/** @brief Face-culling mode for rasterization state. */
 	enum class CullingMode
 	{
 		Invalid = -1,
@@ -40,6 +43,7 @@ namespace HexEngine
 		FrontFace
 	};
 
+	/** @brief Atmosphere and fog parameters uploaded in the per-frame constant buffer. */
 	struct Atmosphere
 	{
 		float zenithExponent;
@@ -55,6 +59,7 @@ namespace HexEngine
 		math::Vector4 ambientLight;
 	};
 
+	/** @brief Bloom post-process parameters uploaded per frame. */
 	struct BloomParams
 	{
 		float luminosityThreshold;
@@ -63,6 +68,7 @@ namespace HexEngine
 		float pad_2;
 	};
 
+	/** @brief Shadow filtering/cascade settings for shadow passes. */
 	struct ShadowSettings
 	{
 		float shadowFilterMaxSize;
@@ -79,6 +85,7 @@ namespace HexEngine
 		int	  pad2;
 	};
 
+	/** @brief Ocean rendering settings uploaded in the per-frame constant buffer. */
 	struct OceanSettings
 	{
 		OceanSettings() :
@@ -105,6 +112,7 @@ namespace HexEngine
 		float reflection_pad1;
 	};
 
+	/** @brief Colour-grading parameters uploaded in the per-frame constant buffer. */
 	struct ColourGradeSettings
 	{
 		float contrast;
@@ -116,6 +124,7 @@ namespace HexEngine
 		float colour_pad;
 	};
 
+	/** @brief Cached graphics state snapshot used to reduce redundant state changes. */
 	struct RenderState
 	{
 		void Reset()
@@ -143,6 +152,7 @@ namespace HexEngine
 		CullingMode _cullMode = CullingMode::Invalid;
 	};
 
+	/** @brief Per-frame constants shared by most shaders. */
 	struct PerFrameConstantBuffer
 	{
 		// Current frame
@@ -182,6 +192,7 @@ namespace HexEngine
 		float _chromaticAbberationAmmount;
 	};
 
+	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */
 	struct PerShadowCasterBuffer
 	{
 		math::Matrix _lightViewMatrix[6];
@@ -199,6 +210,7 @@ namespace HexEngine
 		ShadowSettings _shadowConfig;
 	};
 
+	/** @brief Material texture slot indices expected by engine shaders. */
 	enum MaterialTexture
 	{
 		Albedo,
@@ -212,12 +224,14 @@ namespace HexEngine
 		Count
 	};
 
+	/** @brief Packing format for material texture workflows. */
 	enum class MaterialFormat
 	{
 		None,
 		ORM
 	};
 
+	/** @brief Material scalar/vector properties uploaded per draw. */
 	struct MaterialProperties
 	{
 		MaterialProperties() :
@@ -256,6 +270,7 @@ namespace HexEngine
 		int pad2;
 	};
 
+	/** @brief Per-object constants uploaded for each draw call. */
 	struct PerObjectBuffer
 	{
 		math::Matrix _worldMatrix;
@@ -267,11 +282,13 @@ namespace HexEngine
 		MaterialProperties _material;
 	};
 
+	/** @brief Skeletal animation matrices uploaded for skinned mesh rendering. */
 	struct PerAnimationBuffer
 	{
 		math::Matrix _boneTransforms[70];
 	};
 
+	/** @brief Engine-managed constant buffer binding slots. */
 	enum class EngineConstantBuffer
 	{
 		PerFrameBuffer,
@@ -281,6 +298,7 @@ namespace HexEngine
 		NumEngineConstantBuffers
 	};
 
+	/** @brief Display mode descriptor returned by graphics device output queries. */
 	struct ScreenDisplayMode
 	{
 		struct RefreshRate

@@ -80,7 +80,7 @@ namespace HexEngine
 
 	bool AudioManager::Create()
 	{
-		dx::AUDIO_ENGINE_FLAGS flags = /*dx::AudioEngine_Default |*/ dx::AudioEngine_UseMasteringLimiter;// | dx::AudioEngine_EnvironmentalReverb | dx::AudioEngine_ReverbUseFilters;;
+		dx::AUDIO_ENGINE_FLAGS flags = dx::AudioEngine_Default | dx::AudioEngine_UseMasteringLimiter;// | dx::AudioEngine_EnvironmentalReverb | dx::AudioEngine_ReverbUseFilters;;
 
 		
 

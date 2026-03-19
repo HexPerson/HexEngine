@@ -5,6 +5,7 @@
 
 namespace HexEditor
 {
+	/** @brief Runtime state of the editor-integrated game module. */
 	enum class GameTestState
 	{
 		None,
@@ -14,20 +15,39 @@ namespace HexEditor
 		Max
 	};
 
+	/**
+	 * @brief Bridges editor play mode with game DLL lifecycle and hot reload.
+	 *
+	 * This class owns loading/unloading the game extension DLL, running/stopping
+	 * play mode, and watching `Code` files to trigger rebuild + reload.
+	 */
 	class GameIntegrator : public HexEngine::IEntityListener
 	{
 	public:
 		GameIntegrator() = default;
+		/** @brief Ensures currently loaded game module resources are released. */
 		~GameIntegrator();
 
+		/** @brief Processes delayed hot-reload requests queued by the file watcher. */
 		void Update();
+		/**
+		 * @brief Builds the active game solution/project.
+		 * @param projectFileName Optional `.sln`/`.vcxproj` under the project `Code` directory.
+		 * @return True when build succeeded.
+		 */
 		bool BuildGame(const std::wstring& projectFileName = L"");
+		/** @brief Loads the game DLL and creates the game extension instance. */
 		bool LoadGame();
+		/** @brief Enters play mode and invokes game startup callbacks. */
 		bool RunGame();
+		/** @brief Leaves play mode and invokes game shutdown callbacks. */
 		bool StopGame();
+		/** @brief Returns the current game integration state. */
 		GameTestState GetState() const;
 
+		/** @brief Tracks temporary entities created during play mode. */
 		virtual void OnAddEntity(HexEngine::Entity* entity) override;
+		/** @brief Removes tracked temporary entities when deleted. */
 		virtual void OnRemoveEntity(HexEngine::Entity* entity) override;
 		virtual void OnAddComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component) override {};
 		virtual void OnRemoveComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component) override {};

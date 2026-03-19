@@ -82,6 +82,7 @@ private:
 	std::shared_ptr<HexEngine::ITexture2D>		LoadTexture(std::shared_ptr<HexEngine::Mesh>& mesh, const aiTextureType type, const aiScene* scene, const aiMaterial* material, HexEngine::FileSystem* fileSystem);
 	void							ProcessAnimations(std::shared_ptr<HexEngine::Model>& model, const aiScene* scene);
 	HexEngine::AnimChannel* FindAnimChannelFromNodeName(std::shared_ptr<HexEngine::Model>& model, const std::string& nodeName);
+	bool OnBrowseFolderPath(HexEngine::LineEdit* edit);
 
 private:
 	fs::path _currentPath;

@@ -8,8 +8,7 @@
 
 namespace HexEngine
 {
-	
-
+	/** @brief Plugin interface marker for font importer backends (for example FreeType). */
 	class IFontImporter : public IPluginInterface
 	{
 	public:

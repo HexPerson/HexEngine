@@ -18,12 +18,22 @@ namespace HexEngine
 	class UIManager;
 	class LogFile;
 
+	/**
+	 * @brief Core runtime environment interface and global service hub.
+	 *
+	 * Concrete environment implementations own the engine main loop,
+	 * window lifecycle, subsystem creation, and active game extensions.
+	 */
 	class HEX_API IEnvironment
 	{
 	public:
-
+		/**
+		 * @brief Destroys a concrete environment instance.
+		 * @param environment Environment pointer created by the engine bootstrap.
+		 */
 		static void DestroyEnvironment(IEnvironment* environment);
 
+		/** @brief Returns whether a physics provider is currently available. */
 		bool IsPhysicsSystemEnabled()
 		{
 			return _physicsSystem != nullptr;
@@ -164,46 +174,77 @@ namespace HexEngine
 		std::vector<IGameExtension*> _gameExtensions;
 
 	public:
+		/** @brief Returns whether the environment main loop is running. */
 		virtual bool IsRunning() = 0;
 
+		/** @brief Starts and runs the environment main loop. */
 		virtual void Run() = 0;
 
+		/** @brief Requests orderly shutdown (typically on window close). */
 		virtual void OnRecieveQuitMessage() = 0;
 
+		/** @brief Returns the current output aspect ratio. */
 		virtual float GetAspectRatio() = 0;
 
+		/**
+		 * @brief Handles window resize notifications.
+		 * @param window Window that changed size.
+		 * @param width New width in pixels.
+		 * @param height New height in pixels.
+		 */
 		virtual void OnResizeWindow(Window* window, uint32_t width, uint32_t height) = 0;
 
+		/**
+		 * @brief Returns the current screen size.
+		 * @param width Output width in pixels.
+		 * @param height Output height in pixels.
+		 */
 		virtual void GetScreenSize(uint32_t& width, uint32_t& height) const = 0;
 
+		/** @brief Returns X-axis screen scale factor used by UI/layout code. */
 		virtual float GetScreenScaleX() const = 0;
 
+		/** @brief Returns Y-axis screen scale factor used by UI/layout code. */
 		virtual float GetScreenScaleY() const = 0;
 
+		/** @brief Returns current screen width in pixels. */
 		virtual int32_t GetScreenWidth() const = 0;
 
+		/** @brief Returns current screen height in pixels. */
 		virtual int32_t GetScreenHeight() const = 0;
 
+		/** @brief Returns whether the main window currently has focus. */
 		virtual bool GetHasFocus() const = 0;
 
+		/** @brief Updates window focus state. */
 		virtual void SetHasFocus(bool hasFocus) = 0;
 
+		/** @brief Enables/disables editor mode behavior in the runtime. */
 		virtual void SetEditorMode(bool editorMode) = 0;
 
+		/** @brief Returns whether the runtime is currently in editor mode. */
 		virtual bool IsEditorMode() const = 0;
 
+		/**
+		 * @brief Adds a game extension instance to the active extension list.
+		 * @param extension Game extension to register.
+		 */
 		void AddGameExtension(IGameExtension* extension);
+		/**
+		 * @brief Removes a game extension instance from the active extension list.
+		 * @param extension Game extension to unregister.
+		 */
 		void RemoveGameExtension(IGameExtension* extension);
 
 	protected:
+		/** @brief Implementation-specific destruction hook invoked by DestroyEnvironment. */
 		virtual void Destroy() = 0;
 	};
 
+	/** @brief Global pointer to the active engine environment. */
 	HEX_API extern IEnvironment* g_pEnv;
 
-	/// <summary>
-	/// Helper function to destroy the game environment
-	/// </summary>
+	/** @brief Destroys the active global environment instance (`g_pEnv`). */
 	void HEX_API DestroyEnvironment();
 
 #ifdef _DEBUG

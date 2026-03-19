@@ -37,11 +37,11 @@ namespace HexEngine
 	{
 	}
 
-	/// <summary>
-	/// Create a 3D game environment
-	/// </summary>
-	/// <param name="options">The engine options</param>
-	/// <returns>A pointer to a Game3DEnvironment instance</returns>
+	/**
+	 * @brief Creates and initializes a full 3D runtime environment.
+	 * @param options Startup options (window, flags, app metadata).
+	 * @return Initialized environment instance, or `nullptr` on failure.
+	 */
 	Game3DEnvironment* Game3DEnvironment::Create(const Game3DOptions& options)
 	{
 		//CoInitialize(nullptr);
@@ -245,9 +245,7 @@ namespace HexEngine
 		return env;
 	}
 
-	/// <summary>
-	/// Destroy this instance
-	/// </summary>
+	/** @brief Destroys this environment instance and all owned subsystems. */
 	void Game3DEnvironment::Destroy()
 	{
 #if USE_MULTITHREADED_PHYSICS == 1
@@ -357,10 +355,7 @@ namespace HexEngine
 #endif
 	}
 
-	/// <summary>
-	/// Determines if the engine is still running
-	/// </summary>
-	/// <returns></returns>
+	/** @brief Returns whether the environment main loop is still running. */
 	bool Game3DEnvironment::IsRunning()
 	{
 		return _running;
@@ -388,9 +383,7 @@ namespace HexEngine
 		_timeManager->_simulationTime += dt;
 	}
 
-	/// <summary>
-	/// Run this engine instance
-	/// </summary>
+	/** @brief Executes one frame of the game environment main loop. */
 	void Game3DEnvironment::Run()
 	{
 		static bool hasUpdatedOnce = false;
@@ -570,9 +563,7 @@ namespace HexEngine
 		_inEditorMode = editorMode;
 	}
 
-	/// <summary>
-	/// A quit message was received
-	/// </summary>
+	/** @brief Handles a quit request and stops the environment loop. */
 	void Game3DEnvironment::OnRecieveQuitMessage()
 	{
 		LOG_INFO("A quit signal was recieved, ending the session");
@@ -580,11 +571,11 @@ namespace HexEngine
 		_running = false;
 	}
 
-	/// <summary>
-	/// Create the graphics subsystem by loading the relevant module into the engine and calling it's entry point
-	/// </summary>
-	/// <param name="engine">That graphics engine we wish to use</param>
-	/// <returns></returns>
+	/**
+	 * @brief Creates and initializes the graphics backend subsystem.
+	 * @param options Startup options containing the target window.
+	 * @return True when graphics initialization succeeds.
+	 */
 	bool Game3DEnvironment::CreateGraphicsSystem(const Game3DOptions& options)
 	{
 		_shaderLoader = new ShaderSystem;
