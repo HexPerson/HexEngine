@@ -158,6 +158,7 @@ namespace HexEngine
 	const int OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION	= (1 << 6);
 	const int OBJECT_FLAGS_HAS_ANIMATION			= (1 << 7);
 	const int OBJECT_FLAGS_ORM_FORMAT				= (1 << 8);
+	const int OBJECT_FLAGS_RMA_FORMAT				= (1 << 9);
 
 	class MeshRenderer;
 	class Model;

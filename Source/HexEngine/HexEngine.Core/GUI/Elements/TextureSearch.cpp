@@ -91,7 +91,7 @@ namespace HexEngine
 	}
 	void TextureSearch::DragAndDropTexture(const fs::path& path)
 	{
-		if (path.filename().string().find("RMA") != std::string::npos)
+		/*if (path.filename().string().find("RMA") != std::string::npos)
 		{
 			MessageBox::Info(
 				L"RMA texture detected",
@@ -100,7 +100,7 @@ namespace HexEngine
 
 			return;
 
-		}
+		}*/
 		auto newTexture = ITexture2D::Create(path);
 
 		if (newTexture)

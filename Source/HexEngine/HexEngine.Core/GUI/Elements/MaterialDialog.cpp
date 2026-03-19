@@ -39,6 +39,7 @@ namespace HexEngine
 		auto format = new DropDown(_layout, _layout->GetNextPos(), Point(200, 18), L"Format");
 		format->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&Material::SetFormat, material.get(), MaterialFormat::None)));
 		format->GetContextMenu()->AddItem(new ContextItem(L"ORM", std::bind(&Material::SetFormat, material.get(), MaterialFormat::ORM)));
+		format->GetContextMenu()->AddItem(new ContextItem(L"RMA", std::bind(&Material::SetFormat, material.get(), MaterialFormat::RMA)));
 
 		auto save = new Button(_layout, _layout->GetNextPos(), Point(80, 20), L"Save", std::bind(&MaterialDialog::Save, this));
 

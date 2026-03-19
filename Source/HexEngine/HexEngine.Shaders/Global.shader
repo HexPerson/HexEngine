@@ -12,6 +12,7 @@
 	static const uint OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION	= (1 << 6);
 	static const uint OBJECT_FLAGS_HAS_ANIMATION			= (1 << 7);
 	static const uint OBJECT_FLAGS_ORM_FORMAT				= (1 << 8);
+	static const uint OBJECT_FLAGS_RMA_FORMAT				= (1 << 9);
 
 	static const uint MAX_BONES = 70;
 

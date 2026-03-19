@@ -91,6 +91,17 @@
 				albedo.rgb *= orm.r;
 			}
 		}
+		else if(g_objectFlags & OBJECT_FLAGS_RMA_FORMAT)
+		{
+			if (g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS)
+			{
+				float3 rma = g_roughnessMap.Sample(g_textureSampler, input.texcoord).rgb;
+
+				roughness = lerp(1.0f, rma.r, g_material.roughnessFactor);		
+				metalness = rma.b * g_material.metallicFactor;
+				albedo.rgb *= rma.g;
+			}
+		}
 		else
 		{
 			// Get the roughness

@@ -228,7 +228,8 @@ namespace HexEngine
 	enum class MaterialFormat
 	{
 		None,
-		ORM
+		ORM,
+		RMA
 	};
 
 	/** @brief Material scalar/vector properties uploaded per draw. */

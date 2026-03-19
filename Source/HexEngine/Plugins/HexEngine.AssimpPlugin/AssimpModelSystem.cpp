@@ -824,6 +824,7 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 
 	math::Matrix transmat = *(math::Matrix*)&transformation.a1;
 	transmat = transmat.Transpose();
+	const bool applyNodeTransform = mesh->mNumBones == 0;
 
 	std::vector<math::Vector4> points;
 
@@ -832,6 +833,10 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 		HexEngine::MeshVertex vertex;
 
 		vertex._position = AI2VEC4(mesh->mVertices[i]);
+		if (applyNodeTransform)
+		{
+			vertex._position = math::Vector4::Transform(vertex._position, transmat);
+		}
 
 		points.push_back(vertex._position);
 
@@ -845,11 +850,25 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 		{
 			vertex._tangent = AI2VEC3(mesh->mTangents[i]);
 			vertex._bitangent = AI2VEC3(mesh->mBitangents[i]);
+
+			if (applyNodeTransform)
+			{
+				vertex._tangent = math::Vector3::TransformNormal(vertex._tangent, transmat);
+				vertex._bitangent = math::Vector3::TransformNormal(vertex._bitangent, transmat);
+				vertex._tangent.Normalize();
+				vertex._bitangent.Normalize();
+			}
 		}
 
 		if (mesh->mNormals != nullptr)
 		{
 			vertex._normal = AI2VEC3(mesh->mNormals[i]);
+
+			if (applyNodeTransform)
+			{
+				vertex._normal = math::Vector3::TransformNormal(vertex._normal, transmat);
+				vertex._normal.Normalize();
+			}
 		}
 
 		modelMesh->AddVertex(vertex);
@@ -962,6 +981,7 @@ std::shared_ptr<HexEngine::AnimatedMesh> AssimpModelImporter::ProcessAnimatedMes
 
 	math::Matrix transmat = *(math::Matrix*)&transformation.a1;
 	transmat = transmat.Transpose();
+	const bool applyNodeTransform = mesh->mNumBones == 0;
 
 	std::vector<math::Vector4> points;
 
@@ -970,6 +990,10 @@ std::shared_ptr<HexEngine::AnimatedMesh> AssimpModelImporter::ProcessAnimatedMes
 		HexEngine::AnimatedMeshVertex vertex;
 
 		vertex._position = AI2VEC4(mesh->mVertices[i]);
+		if (applyNodeTransform)
+		{
+			vertex._position = math::Vector4::Transform(vertex._position, transmat);
+		}
 
 		points.push_back(vertex._position);
 
@@ -983,11 +1007,25 @@ std::shared_ptr<HexEngine::AnimatedMesh> AssimpModelImporter::ProcessAnimatedMes
 		{
 			vertex._tangent = AI2VEC3(mesh->mTangents[i]);
 			vertex._bitangent = AI2VEC3(mesh->mBitangents[i]);
+
+			if (applyNodeTransform)
+			{
+				vertex._tangent = math::Vector3::TransformNormal(vertex._tangent, transmat);
+				vertex._bitangent = math::Vector3::TransformNormal(vertex._bitangent, transmat);
+				vertex._tangent.Normalize();
+				vertex._bitangent.Normalize();
+			}
 		}
 
 		if (mesh->mNormals != nullptr)
 		{
 			vertex._normal = AI2VEC3(mesh->mNormals[i]);
+
+			if (applyNodeTransform)
+			{
+				vertex._normal = math::Vector3::TransformNormal(vertex._normal, transmat);
+				vertex._normal.Normalize();
+			}
 		}
 
 

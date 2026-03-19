@@ -180,6 +180,10 @@ namespace HexEngine
 		{
 			flags |= OBJECT_FLAGS_ORM_FORMAT;
 		}
+		if (_format == MaterialFormat::RMA)
+		{
+			flags |= OBJECT_FLAGS_RMA_FORMAT;
+		}
 
 		return flags;
 	}
