@@ -3,6 +3,7 @@
 #include "../../Environment/IEnvironment.hpp"
 #include "../../Graphics/IGraphicsDevice.hpp"
 #include "../../Environment/LogFile.hpp"
+#include <algorithm>
 
 namespace HexEngine
 {
@@ -116,5 +117,26 @@ namespace HexEngine
 				width, height,
 				math::Color(1, 1, 1, 1));
 		}
+	}
+
+	void Canvas::Present(GuiRenderer* renderer, uint32_t x, uint32_t y, uint32_t width, uint32_t height, const RECT& srcRect)
+	{
+		if (_renderTarget == nullptr || _width == 0 || _height == 0)
+			return;
+
+		RECT clamped = srcRect;
+		clamped.left = std::clamp(clamped.left, 0L, (long)_width);
+		clamped.top = std::clamp(clamped.top, 0L, (long)_height);
+		clamped.right = std::clamp(clamped.right, 0L, (long)_width);
+		clamped.bottom = std::clamp(clamped.bottom, 0L, (long)_height);
+
+		if (clamped.right <= clamped.left || clamped.bottom <= clamped.top)
+			return;
+
+		math::Vector2 uv[2];
+		uv[0] = math::Vector2((float)clamped.left / (float)_width, (float)clamped.top / (float)_height);
+		uv[1] = math::Vector2((float)clamped.right / (float)_width, (float)clamped.bottom / (float)_height);
+
+		renderer->FillTexturedQuad(_renderTarget, x, y, width, height, uv, math::Color(1, 1, 1, 1));
 	}
 }

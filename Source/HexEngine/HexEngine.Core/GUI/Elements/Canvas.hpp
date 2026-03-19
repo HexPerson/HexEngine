@@ -21,6 +21,7 @@ namespace HexEngine
 		bool BeginDraw(GuiRenderer* renderer, uint32_t width, uint32_t height);
 		void EndDraw(GuiRenderer* renderer);
 		void Present(GuiRenderer* renderer, uint32_t x, uint32_t y, uint32_t width, uint32_t height);
+		void Present(GuiRenderer* renderer, uint32_t x, uint32_t y, uint32_t width, uint32_t height, const RECT& srcRect);
 
 	private:
 		ITexture2D* _renderTarget = nullptr;

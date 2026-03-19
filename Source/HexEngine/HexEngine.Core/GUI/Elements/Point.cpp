@@ -45,7 +45,7 @@ namespace HexEngine
 		return *this;
 	}
 
-	Point Point::GetCenter(const Point& size)
+	Point Point::GetCenter(const Point& size) const
 	{
 		Point p(*this);
 
@@ -55,7 +55,7 @@ namespace HexEngine
 		return p;
 	}
 
-	Point Point::RelativeTo(const Point& other)
+	Point Point::RelativeTo(const Point& other) const
 	{
 		Point p = *this;
 

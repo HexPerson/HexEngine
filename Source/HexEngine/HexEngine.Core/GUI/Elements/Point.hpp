@@ -16,8 +16,8 @@ namespace HexEngine
 		Point& operator += (const Point& other);
 		Point operator +(const Point& other) const;
 
-		Point GetCenter(const Point& size);
-		Point RelativeTo(const Point& other);
+		Point GetCenter(const Point& size) const;
+		Point RelativeTo(const Point& other) const;
 
 		static Point GetScreenCenter();
 		static Point GetScreenCenterWithOffset(int32_t offsetx, int32_t offsety);

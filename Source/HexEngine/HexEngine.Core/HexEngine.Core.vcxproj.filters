@@ -372,6 +372,9 @@
     <ClInclude Include="GUI\Elements\Point.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="GUI\Elements\ScrollView.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="GUI\Elements\Style.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -810,6 +813,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="GUI\Elements\Point.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="GUI\Elements\ScrollView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="GUI\Elements\Style.cpp">

@@ -11,8 +11,15 @@ namespace HexEngine
 		_position(position),
 		_nextPos(position)
 	{
-		if(_parent)
+		if (_parent)
+		{
 			_parent->OnAddChild(this);
+
+			if (auto grandParent = _parent->GetParent(); grandParent != nullptr)
+			{
+				grandParent->OnAddGrandChild(this);
+			}
+		}
 	}
 
 	Element::Element(Element* parent, const Point& position, const Point& size) :
@@ -21,7 +28,14 @@ namespace HexEngine
 		_size(size)
 	{
 		if (_parent)
+		{
 			_parent->OnAddChild(this);
+
+			if (auto grandParent = _parent->GetParent(); grandParent != nullptr)
+			{
+				grandParent->OnAddGrandChild(this);
+			}
+		}
 	}
 
 	Element::~Element()
@@ -75,6 +89,32 @@ namespace HexEngine
 	void Element::SetSize(const Point& size)
 	{
 		_size = size;
+	}
+
+	void Element::Reparent(Element* newParent, bool preserveAbsolutePosition /*= true*/)
+	{
+		if (newParent == _parent)
+			return;
+
+		const Point oldAbsPos = GetAbsolutePosition();
+
+		if (_parent)
+		{
+			_parent->OnRemoveChild(this);
+		}
+
+		_parent = newParent;
+
+		if (_parent)
+		{
+			_parent->OnAddChild(this);
+		}
+
+		if (preserveAbsolutePosition)
+		{
+			const Point parentAbsPos = _parent ? _parent->GetAbsolutePosition() : Point(0, 0);
+			_position = oldAbsPos.RelativeTo(parentAbsPos);
+		}
 	}
 
 	void Element::OnAddChild(Element* element)

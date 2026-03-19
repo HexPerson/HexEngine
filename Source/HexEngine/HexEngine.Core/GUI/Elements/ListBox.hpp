@@ -1,11 +1,11 @@
 
 #pragma once
 
-#include "Element.hpp"
+#include "ScrollView.hpp"
 
 namespace HexEngine
 {
-	class HEX_API ListBox : public Element
+	class HEX_API ListBox : public ScrollView
 	{
 	public:
 		struct Item
@@ -31,11 +31,8 @@ namespace HexEngine
 
 	private:
 		std::vector<Item> _items;
-		ITexture2D* _renderTarget = nullptr;
-		std::vector<ITexture2D*> _oldRenderTargets;
 		ITexture2D* _oldDepthStenchil = nullptr;
 		D3D11_VIEWPORT _oldViewport;
 		int32_t _hoverIdx = -1;
-		int32_t _offset = 0;
 	};
 }

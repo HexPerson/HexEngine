@@ -78,6 +78,7 @@
 #include "GUI/Elements/Vector2Edit.hpp"
 #include "GUI/Elements/EntityList.hpp"
 #include "GUI/Elements/ArrayElement.hpp"
+#include "GUI/Elements/ScrollView.hpp"
 
 #include "Terrain/ChunkManager.hpp"
 #include "Terrain/HeightMapGenerator.hpp"

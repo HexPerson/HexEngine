@@ -379,6 +379,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="GUI\Elements\ListBox.hpp" />
     <ClInclude Include="GUI\Elements\MenuBar.hpp" />
     <ClInclude Include="GUI\Elements\Point.hpp" />
+    <ClInclude Include="GUI\Elements\ScrollView.hpp" />
     <ClInclude Include="GUI\Elements\Style.hpp" />
     <ClInclude Include="GUI\Elements\TabItem.hpp" />
     <ClInclude Include="GUI\Elements\TabView.hpp" />
@@ -556,6 +557,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="GUI\Elements\ListBox.cpp" />
     <ClCompile Include="GUI\Elements\MenuBar.cpp" />
     <ClCompile Include="GUI\Elements\Point.cpp" />
+    <ClCompile Include="GUI\Elements\ScrollView.cpp" />
     <ClCompile Include="GUI\Elements\Style.cpp" />
     <ClCompile Include="GUI\Elements\TabItem.cpp" />
     <ClCompile Include="GUI\Elements\TabView.cpp" />

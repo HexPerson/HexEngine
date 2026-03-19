@@ -215,15 +215,15 @@ namespace HexEngine
 		DragFloat* radius = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Radius", &_radius, 2.0f, 1000.0f, 0.1f);
 		//radius->SetLabelMinSize(130);
 
-		//ColourPicker* picker = new ColourPicker(widget, Point(0, 0), Point(0, 0), L"");
+		ColourPicker* picker = new ColourPicker(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Colour", &_diffuseColour);
 
-		// emission strength
-		DragFloat* r = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Red", &_diffuseColour.x, 0.0f, 1.0f, 0.1f);
-		r->SetLabelMinSize(130);
-		DragFloat* g = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Green", &_diffuseColour.y, 0.0f, 1.0f, 0.1f);
-		g->SetLabelMinSize(130);
-		DragFloat* b = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Blue", &_diffuseColour.z, 0.0f, 1.0f, 0.1f);
-		b->SetLabelMinSize(130);
+		//// emission strength
+		//DragFloat* r = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Red", &_diffuseColour.x, 0.0f, 1.0f, 0.1f);
+		//r->SetLabelMinSize(130);
+		//DragFloat* g = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Green", &_diffuseColour.y, 0.0f, 1.0f, 0.1f);
+		//g->SetLabelMinSize(130);
+		//DragFloat* b = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Blue", &_diffuseColour.z, 0.0f, 1.0f, 0.1f);
+		//b->SetLabelMinSize(130);
 
 		DropDown* state = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 40, 18), L"Effect");
 

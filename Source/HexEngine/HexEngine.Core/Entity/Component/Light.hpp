@@ -111,7 +111,7 @@ namespace HexEngine
 
 		float _strength = 1.0f;
 		float _originalStrength = 1.0f;
-		math::Vector4 _diffuseColour;
+		math::Color _diffuseColour;
 
 		// Effect data
 		SlowRandomPulseEffect _slowRandomPulseEffect;

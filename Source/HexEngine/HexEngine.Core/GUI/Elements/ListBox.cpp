@@ -3,103 +3,84 @@
 #include "../../Environment/IEnvironment.hpp"
 #include "../GuiRenderer.hpp"
 #include "../../Graphics/IGraphicsDevice.hpp"
+#include <cmath>
 
 namespace HexEngine
 {
 	ListBox::ListBox(Element* parent, const Point& position, const Point& size) :
-		Element(parent, position, size)
+		ScrollView(parent, position, size)
 	{
-		_renderTarget = g_pEnv->_graphicsDevice->CreateTexture2D(
-			size.x,
-			size.y,
-			DXGI_FORMAT_R8G8B8A8_UNORM,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0,
-			1, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			D3D11_SRV_DIMENSION_TEXTURE2D);
+		SetManualContentHeight(size.y);
 	}
 
 	ListBox::~ListBox()
 	{
-		SAFE_DELETE(_renderTarget);
 	}
 
 	void ListBox::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		auto pos = GetAbsolutePosition();
 
-		renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.listbox_back);
-		
+		renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.listbox_back);		
 
 		RenderItems(renderer, pos);
 
 		renderer->Frame(pos.x, pos.y, _size.x, _size.y, 1, renderer->_style.listbox_border);
-
-		//renderer->FillTexturedQuad(_renderTarget, pos.x, pos.y, _size.x, _size.y, math::Color(1, 1, 1, 1));
-		//renderer->FullScreenTexturedQuad(_renderTarget);
 	}
 
 	void ListBox::AddItem(const std::wstring& label, ITexture2D* icon)
 	{
 		_items.push_back({ label, icon });
+
+		const int32_t lineHeight = 20;
+		SetManualContentHeight(max(_size.y, (int32_t)_items.size() * lineHeight));
 	}
 
 	void ListBox::RenderItems(GuiRenderer* renderer, const Point& position)
 	{
 		_hoverIdx = -1;
-
-		// acquire the current render state
-		/*g_pEnv->_graphicsDevice->GetRenderTargets(_oldRenderTargets, &_oldDepthStenchil);
-		_oldViewport = g_pEnv->_graphicsDevice->GetBackBufferViewport();
-
-		g_pEnv->_graphicsDevice->SetRenderTarget(_renderTarget);
-		_renderTarget->ClearRenderTargetView(math::Color(0, 0, 0, 0));
-
-		D3D11_VIEWPORT vp = { 0.0f, 0.0f, (float)_size.x, (float)_size.y, 0.0f, 1.0f };*/
-		//g_pEnv->_graphicsDevice->SetViewports({ vp });
 		{
-			Point pos(position.x, position.y);			
 			const int32_t lineHeight = 20;
 			Point size(_size.x, lineHeight);
+			const float scroll = GetScrollOffset();
+			const int32_t firstVisibleIndex = max(0, (int32_t)std::floor(scroll / (float)lineHeight));
+			const int32_t pixelOffset = (int32_t)std::round(scroll - (float)firstVisibleIndex * (float)lineHeight);
+			Point pos(position.x, position.y - pixelOffset);
 
-			int32_t i = -1;
-			for (auto& item : _items)
+			for (int32_t i = firstVisibleIndex; i < (int32_t)_items.size(); ++i)
 			{
-				if (++i < _offset)
-					continue;
+				const auto& item = _items[i];
 
-				if (IsMouseOver(pos, size))
+				if (pos.y >= position.y + _size.y)
+					break;
+
+				if (pos.y + lineHeight > position.y && IsMouseOver(pos, size))
 				{
 					renderer->FillQuad(pos.x, pos.y, size.x, size.y, renderer->_style.listbox_highlight);
 
 					_hoverIdx = i;
 				}
-				else if (i % 2 == 0)
+				else if (pos.y + lineHeight > position.y && i % 2 == 0)
 					renderer->FillQuad(pos.x, pos.y, size.x, size.y, renderer->_style.listbox_alternate_colour);
 
-				if (item.icon)
+				if (pos.y + lineHeight > position.y && item.icon)
 					renderer->FillTexturedQuad(item.icon, pos.x + 4, pos.y + 1, 16, 16, math::Color(1, 1, 1, 1));
 
-				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x + 24, pos.y + size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, item.label);
+				if (pos.y + lineHeight > position.y)
+					renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x + 24, pos.y + size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, item.label);
 
 				pos.y += lineHeight;
-
-				if (pos.y >= GetAbsolutePosition().y + GetSize().y)
-					break;
 			}
 		}
-		// reset
-		//g_pEnv->_graphicsDevice->SetRenderTargets(_oldRenderTargets, _oldDepthStenchil);
-		//g_pEnv->_graphicsDevice->SetViewports({ _oldViewport });
 	}
 
 	bool ListBox::OnInputEvent(InputEvent event, InputData* data)
 	{
+		if (ScrollView::OnInputEvent(event, data))
+		{
+			return true;
+		}
+
 		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON)
 		{
 			if (OnClickItem && _hoverIdx != -1)
@@ -108,15 +89,7 @@ namespace HexEngine
 					return true;
 			}
 		}
-		else if (event == InputEvent::MouseWheel && IsMouseOver(true))
-		{
-			_offset += (int32_t)(data->MouseWheel.delta / 10.0f);
 
-			if (_offset > _items.size() - 1)
-				_offset = _items.size() - 1;
-			else if (_offset < 0)
-				_offset = 0;
-		}
 		return false;
 	}
 }
