@@ -19,6 +19,29 @@ namespace HexEditor
 			return x >= absolutePos.x && x < absolutePos.x + size.x &&
 				y >= absolutePos.y && y < absolutePos.y + size.y;
 		}
+
+		RECT NormalizeRect(const HexEngine::Point& a, const HexEngine::Point& b)
+		{
+			RECT r = {};
+			r.left = min(a.x, b.x);
+			r.top = min(a.y, b.y);
+			r.right = max(a.x, b.x);
+			r.bottom = max(a.y, b.y);
+			return r;
+		}
+
+		bool PointInRect(const RECT& r, int32_t x, int32_t y)
+		{
+			return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+		}
+
+		bool Intersects(const RECT& a, const RECT& b)
+		{
+			return a.left < b.right && a.right > b.left &&
+				a.top < b.bottom && a.bottom > b.top;
+		}
+
+		
 	}
 
 	AssetExplorer::AssetExplorer(HexEngine::Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
@@ -78,6 +101,66 @@ namespace HexEditor
 		return max(_size.y, IconPadding * 2 + rows * IconRowStep);
 	}
 
+	void AssetExplorer::ClearSelection()
+	{
+		for (auto& asset : _assetsInView)
+		{
+			asset.selected = false;
+		}
+
+		_canvas.Redraw();
+	}
+
+	AssetExplorer::AssetDesc* AssetExplorer::FindAssetAtPosition(int32_t x, int32_t y)
+	{
+		const auto pos = GetAbsolutePosition();
+		const int32_t startX = pos.x + IconPadding;
+		int32_t drawX = startX;
+		int32_t drawY = pos.y + IconPadding - (int32_t)std::round(GetScrollOffset());
+
+		for (auto& asset : _assetsInView)
+		{
+			RECT assetRect = { drawX, drawY, drawX + IconSize, drawY + IconSize };
+			if (PointInRect(assetRect, x, y))
+			{
+				return &asset;
+			}
+
+			drawX += IconSize + IconSpacing;
+			if (drawX + IconSize >= pos.x + _size.x - IconPadding)
+			{
+				drawX = startX;
+				drawY += IconRowStep;
+			}
+		}
+
+		return nullptr;
+	}
+
+	void AssetExplorer::ApplyMarqueeSelection()
+	{
+		const RECT marquee = NormalizeRect(_marqueeStart, _marqueeEnd);
+		const auto pos = GetAbsolutePosition();
+		const int32_t startX = pos.x + IconPadding;
+		int32_t drawX = startX;
+		int32_t drawY = pos.y + IconPadding - (int32_t)std::round(GetScrollOffset());
+
+		for (auto& asset : _assetsInView)
+		{
+			const RECT assetRect = { drawX, drawY, drawX + IconSize, drawY + IconSize };
+			asset.selected = Intersects(marquee, assetRect);
+
+			drawX += IconSize + IconSpacing;
+			if (drawX + IconSize >= pos.x + _size.x - IconPadding)
+			{
+				drawX = startX;
+				drawY += IconRowStep;
+			}
+		}
+
+		_canvas.Redraw();
+	}
+
 	void AssetExplorer::UpdateAssets(const fs::path& relativePath, HexEngine::FileSystem* fs)
 	{
 		_currentlyBrowsedFS = fs;
@@ -88,6 +171,9 @@ namespace HexEditor
 		_assetNameToEdit = nullptr;
 		_editingAssetTempName.clear();
 		_editingAssetExtension.clear();
+		_isMarqueeSelecting = false;
+		_marqueeStart = { -1, -1 };
+		_marqueeEnd = { -1, -1 };
 		SetScrollOffset(0.0f);
 
 		ClearAssetIcons();
@@ -252,6 +338,39 @@ namespace HexEditor
 		}
 	}
 
+	void AssetExplorer::ImportAllForeignMeshes()
+	{
+		std::map<fs::path, std::vector<fs::path>> pathsToLoad;
+		HexEngine::IResourceLoader* resourceLoader = nullptr;
+
+		for (auto& asset : _assetsInView)
+		{
+			if (!asset.selected /*|| asset.path.extension() != ".hmesh"*/)
+				continue;
+
+			const auto extension = asset.path.extension();
+
+			resourceLoader = HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(extension.string());
+			if (resourceLoader)
+			{
+				std::wstring relative = (_currentlyBrowsedFS->GetName() + L".") + fs::relative(asset.path, _currentlyBrowsedFS->GetDataDirectory()).wstring();
+
+				pathsToLoad[extension].push_back(relative);			
+			}
+		}
+
+		for (auto& path : pathsToLoad)
+		{
+			auto extension = path.first;
+			auto relatives = path.second;
+
+			if (resourceLoader->CreateEditorDialog(relatives) == nullptr)
+			{
+				//HexEngine::g_pEnv->GetResourceSystem().LoadResource(asset.path);
+			}
+		}
+	}
+
 	void AssetExplorer::SetMassMaterial()
 	{
 		CloseContextMenu();
@@ -405,10 +524,40 @@ namespace HexEditor
 		{
 			if (data->MouseDown.button == VK_LBUTTON)
 			{
-				if (_hoveredAsset != nullptr && mouseOverExplorer)
+				if (mouseOverExplorer)
 				{
-					_hoveredAsset->dragging = true;
-					_dragStart = { data->MouseDown.xpos, data->MouseDown.ypos };
+					CloseContextMenu();
+
+					AssetDesc* clickedAsset = FindAssetAtPosition(data->MouseDown.xpos, data->MouseDown.ypos);
+					if (clickedAsset != nullptr)
+					{
+						if (HexEngine::g_pEnv->GetInputSystem().IsCtrlDown())
+						{
+							clickedAsset->selected = !clickedAsset->selected;
+							_dragStart = { -1, -1 };
+							clickedAsset->dragging = false;
+							_canvas.Redraw();
+							return true;
+						}
+
+						if (!clickedAsset->selected)
+						{
+							ClearSelection();
+							clickedAsset->selected = true;
+						}
+
+						clickedAsset->dragging = true;
+						_dragStart = { data->MouseDown.xpos, data->MouseDown.ypos };
+					}
+					else
+					{
+						ClearSelection();
+						_isMarqueeSelecting = true;
+						_marqueeStart = { data->MouseDown.xpos, data->MouseDown.ypos };
+						_marqueeEnd = _marqueeStart;
+						_dragStart = { -1, -1 };
+					}
+
 					return true;
 				}
 			}
@@ -416,15 +565,33 @@ namespace HexEditor
 			{
 				CloseContextMenu();
 
+				AssetDesc* clickedAsset = FindAssetAtPosition(data->MouseDown.xpos, data->MouseDown.ypos);
+				if (clickedAsset && !clickedAsset->selected)
+				{
+					ClearSelection();
+					clickedAsset->selected = true;
+				}
+
+				bool hasSelection = false;
+				for (const auto& asset : _assetsInView)
+				{
+					if (asset.selected)
+					{
+						hasSelection = true;
+						break;
+					}
+				}
+
 				auto* menuParent = GetParent() ? GetParent() : this;
 				HexEngine::Point p;
 				p.x = data->MouseDown.xpos - menuParent->GetAbsolutePosition().x - 10;
 				p.y = data->MouseDown.ypos - menuParent->GetAbsolutePosition().y - 10;
 				_contextMenu = new HexEngine::ContextMenu(menuParent, p);
 
-				if (_hoveredAsset != nullptr)
+				if (hasSelection)
 				{
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&AssetExplorer::SetMassMaterial, this)));
+					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import", std::bind(&AssetExplorer::ImportAllForeignMeshes, this)));
 				}
 				else
 				{
@@ -455,6 +622,14 @@ namespace HexEditor
 		else if (event == HexEngine::InputEvent::MouseUp && data->MouseUp.button == VK_LBUTTON)
 		{
 			_dragStart = { -1, -1 };
+
+			if (_isMarqueeSelecting)
+			{
+				_marqueeEnd = { data->MouseUp.xpos, data->MouseUp.ypos };
+				ApplyMarqueeSelection();
+				_isMarqueeSelecting = false;
+				return true;
+			}
 
 			for (auto& asset : _assetsInView)
 			{
@@ -488,6 +663,13 @@ namespace HexEditor
 		}
 		else if (event == HexEngine::InputEvent::MouseMove)
 		{
+			if (_isMarqueeSelecting)
+			{
+				_marqueeEnd = { (int32_t)data->MouseMove.x, (int32_t)data->MouseMove.y };
+				ApplyMarqueeSelection();
+				return true;
+			}
+
 			if (_hoveredAsset != nullptr &&
 				_hoveredAsset->dragging &&
 				_dragStart.x != -1 &&
@@ -538,11 +720,6 @@ namespace HexEditor
 					renderer->FillQuad(x - 3, y - 3, IconSize + 6, IconSize + 20, math::Color(HEX_RGBA_TO_FLOAT4(23, 23, 23, 255)));
 
 					if (isMouseHover)
-					{
-						_hoveredAsset = &asset;
-					}
-
-					if (!_hoveredAsset && asset.selected)
 					{
 						_hoveredAsset = &asset;
 					}
@@ -637,6 +814,16 @@ namespace HexEditor
 
 			renderer->FillQuad(hoverX - ((width / 2) + 3), hoverY - 1, width + 6, height + 4, math::Color(0.1f, 0.1f, 0.1f, 1.0f));
 			renderer->PrintText(renderer->_style.font.get(), (uint8_t)HexEngine::Style::FontSize::Titchy, hoverX, hoverY, renderer->_style.text_highlight, HexEngine::FontAlign::CentreLR, fullNameToDraw);
+		}
+
+		if (_isMarqueeSelecting)
+		{
+			const RECT marquee = NormalizeRect(_marqueeStart, _marqueeEnd);
+			const int32_t width = max(0L, marquee.right - marquee.left);
+			const int32_t height = max(0L, marquee.bottom - marquee.top);
+
+			renderer->FillQuad(marquee.left, marquee.top, width, height, math::Color(0.2f, 0.4f, 1.0f, 0.2f));
+			renderer->Frame(marquee.left, marquee.top, width, height, 1, math::Color(0.2f, 0.6f, 1.0f, 0.9f));
 		}
 
 		if (_hoveredAsset == nullptr)

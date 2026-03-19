@@ -163,6 +163,8 @@ namespace HexEngine
 
 		void SetInputViewport(int32_t x, int32_t y, int32_t w, int32_t h);
 
+		bool IsCtrlDown() const;
+
 	private:
 		void ProcessMouseMovement(float frameTime);
 

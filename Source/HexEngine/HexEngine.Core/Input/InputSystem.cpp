@@ -549,6 +549,11 @@ namespace HexEngine
 		return GetScreenToWorldRay(camera, screenX, screenY, width, height);
 	}
 
+	bool InputSystem::IsCtrlDown() const
+	{
+		return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+	}
+
 	math::Vector3 InputSystem::GetScreenToWorldRay(Camera* camera, int32_t screenX, int32_t screenY, int32_t screenWidth, int32_t screenHeight)
 	{
 		math::Vector3 start_point, end_point;

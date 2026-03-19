@@ -41,6 +41,10 @@ namespace HexEditor
 		void ClearAssetIcons();
 		void CloseContextMenu();
 		int32_t ComputeRequiredContentHeight() const;
+		void ClearSelection();
+		void ApplyMarqueeSelection();
+		AssetDesc* FindAssetAtPosition(int32_t x, int32_t y);
+		void ImportAllForeignMeshes();
 
 	private:
 		std::vector<AssetDesc> _assetsInView;
@@ -50,6 +54,9 @@ namespace HexEditor
 		AssetDesc* _draggingAsset = nullptr;
 		float _hoverStartTime = 0.0f;
 		HexEngine::Point _dragStart = { -1, -1 };
+		bool _isMarqueeSelecting = false;
+		HexEngine::Point _marqueeStart = { -1, -1 };
+		HexEngine::Point _marqueeEnd = { -1, -1 };
 		HexEngine::FileSystem* _currentlyBrowsedFS = nullptr;
 		fs::path _currentlyBrowsedFolder;
 		AssetDesc* _assetNameToEdit = nullptr;
