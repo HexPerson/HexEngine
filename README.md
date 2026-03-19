@@ -26,6 +26,7 @@ Designed for developers who want low-level control without sacrificing workflow,
   - Cross-platform shader compilation
   - HBAO
   - Nvidia real-time denoiser
+  - Screen-space reflections
 
 - 📦 **Asset System**
   - Asset packaging and dependency management
