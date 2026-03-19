@@ -125,7 +125,6 @@ bool AssimpModelImporter::OnBrowseFolderPath(HexEngine::LineEdit* edit)
 	}
 
 	edit->SetValue(path);
-	_importOpts.textureSearchPath = path;
 	return true;
 }
 
@@ -152,21 +151,60 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 	auto renameFiles = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Rename files", &_importOpts.renameFiles);
 	auto deleteOriginals = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Delete originals after import", &_importOpts.deleteOriginalsAfterImport);
 
-	auto searchpath = new HexEngine::LineEdit(layout, layout->GetNextPos(), HexEngine::Point(500, 20), L"Override texture search path");
-	auto browse = new HexEngine::Button(layout, searchpath->GetPosition() + HexEngine::Point(510, 0), HexEngine::Point(130, 26), L"Browse...", std::bind(&AssimpModelImporter::OnBrowseFolderPath, this, searchpath));
+	constexpr int32_t kTexturePathArrayHeight = 240;
+	auto array = new HexEngine::ArrayElement<std::wstring>(
+		layout,
+		layout->GetNextPos(),
+		HexEngine::Point(640, kTexturePathArrayHeight),
+		L"Texture search paths",
+		_importOpts.textureSearchPaths,
+		[this](HexEngine::Element* rowRoot, std::wstring& item, int32_t index)
+		{
+			constexpr int32_t kBrowseButtonWidth = 120;
+			constexpr int32_t kSpacing = 6;
+			constexpr int32_t kRowControlHeight = 24;
+			const int32_t editWidth = std::max(100, rowRoot->GetSize().x - kBrowseButtonWidth - kSpacing);
 
+			auto* pathEdit = new HexEngine::LineEdit(rowRoot, HexEngine::Point(0, 0), HexEngine::Point(editWidth, kRowControlHeight), L"");
+			pathEdit->SetDoesCallbackWaitForReturn(false);
+			pathEdit->SetValue(item);
+			pathEdit->SetOnInputFn([this, index](HexEngine::LineEdit*, const std::wstring& text)
+			{
+				if (index < 0 || index >= (int32_t)_importOpts.textureSearchPaths.size())
+					return;
 
-	//searchpath->SetUneditableText(fileSystem->GetName());
-	searchpath->SetDoesCallbackWaitForReturn(false);
-	searchpath->SetValue(_importOpts.textureSearchPath);
-	searchpath->SetOnInputFn([&](HexEngine::LineEdit*, const std::wstring& text) {
-		_importOpts.textureSearchPath = text;
+				_importOpts.textureSearchPaths[index] = text;
+			});
+
+			new HexEngine::Button(
+				rowRoot,
+				HexEngine::Point(editWidth + kSpacing, -1),
+				HexEngine::Point(kBrowseButtonWidth, 26),
+				L"Browse...",
+				[this, pathEdit, index](HexEngine::Button*) -> bool
+				{
+					if (!OnBrowseFolderPath(pathEdit))
+						return false;
+
+					if (index >= 0 && index < (int32_t)_importOpts.textureSearchPaths.size())
+					{
+						_importOpts.textureSearchPaths[index] = pathEdit->GetValue();
+					}
+
+					return true;
+				});
+		},
+		[]() -> std::wstring { return std::wstring(); },
+		[](const std::wstring&, int32_t) -> int32_t { return 48; },
+		[](const std::wstring&, int32_t index) -> std::wstring
+		{
+			return L"Path " + std::to_wstring(index + 1);
 		});
 
 	auto textureExtension = new HexEngine::LineEdit(layout, layout->GetNextPos(), HexEngine::Point(500, 20), L"Override texture extension");
 	textureExtension->SetDoesCallbackWaitForReturn(false);
 	textureExtension->SetValue(_importOpts.replaceTextureExtension);
-	textureExtension->SetOnInputFn([&](HexEngine::LineEdit*, const std::wstring& text) {
+	textureExtension->SetOnInputFn([this](HexEngine::LineEdit*, const std::wstring& text) {
 		_importOpts.replaceTextureExtension = text;
 		});
 
@@ -1212,32 +1250,67 @@ std::shared_ptr<HexEngine::ITexture2D> AssimpModelImporter::LoadTexture(std::sha
 		if (path[0] == '/')
 			path.erase(0, 1);
 
-		fs::path relativePath;
-		fs::path fsPath;
+		std::vector<fs::path> pathCandidates;
+		pathCandidates.reserve(_importOpts.textureSearchPaths.size() + 1);
 
-		if (_importOpts.textureSearchPath.length() > 0)
+		const fs::path textureFileName = fs::path(path).filename();
+		for (const auto& searchPath : _importOpts.textureSearchPaths)
 		{
-			relativePath = _importOpts.textureSearchPath;
-			relativePath /= fs::path(path).filename();
+			if (searchPath.empty())
+				continue;
+
+			fs::path candidate = fs::path(searchPath) / textureFileName;
+			if (_importOpts.replaceTextureExtension.length() > 0)
+			{
+				candidate.replace_extension(_importOpts.replaceTextureExtension);
+			}
+
+			pathCandidates.push_back(candidate);
+		}
+
+		fs::path defaultCandidate = mesh->GetRelativePath().parent_path() / fs::path(path);
+		if (_importOpts.replaceTextureExtension.length() > 0)
+		{
+			defaultCandidate.replace_extension(_importOpts.replaceTextureExtension);
+		}
+		pathCandidates.push_back(defaultCandidate);
+
+		fs::path selectedPath = pathCandidates.front();
+		for (const auto& candidate : pathCandidates)
+		{
+			fs::path absoluteCandidate = candidate;
+			if (!absoluteCandidate.is_absolute())
+			{
+				absoluteCandidate = fileSystem->GetLocalAbsoluteDataPath(candidate);
+			}
+
+			if (fileSystem->DoesAbsolutePathExist(absoluteCandidate))
+			{
+				selectedPath = candidate;
+				break;
+			}
+		}
+
+		fs::path fsPath = selectedPath;
+		if (!selectedPath.is_absolute())
+		{
+			fsPath = fileSystem->GetRelativeResourcePath(selectedPath);
 		}
 		else
 		{
-			relativePath = mesh->GetRelativePath().parent_path();
-			relativePath /= path;
+			std::error_code relPathError;
+			const fs::path relativeToData = fs::relative(selectedPath, fileSystem->GetDataDirectory(), relPathError);
+			if (!relPathError && !relativeToData.empty() && relativeToData.native()[0] != '.')
+			{
+				fsPath = fileSystem->GetRelativeResourcePath(relativeToData);
+			}
 		}
-
-		if (_importOpts.replaceTextureExtension.length() > 0)
-		{
-			relativePath.replace_extension(_importOpts.replaceTextureExtension);
-		}
-
-		fsPath = fileSystem->GetRelativeResourcePath(relativePath);
 
 		auto texture = HexEngine::ITexture2D::Create(fsPath);
 
 		if (!texture)
 		{
-			LOG_WARN("*** Mesh texture load failed for: %s", relativePath.string().c_str());
+			LOG_WARN("*** Mesh texture load failed for: %s", selectedPath.string().c_str());
 		}
 
 		return texture;

@@ -50,7 +50,7 @@ struct AssimpImportOptions
 	bool tryAndCreateMaterials = false;
 	bool renameFiles = true;
 	bool deleteOriginalsAfterImport = true;
-	std::wstring textureSearchPath;
+	std::vector<std::wstring> textureSearchPaths;
 	std::wstring replaceTextureExtension;
 };
 

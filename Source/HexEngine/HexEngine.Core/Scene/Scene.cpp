@@ -1327,8 +1327,6 @@ namespace HexEngine
 					}
 
 					instance->Render(renderable.instanceData);
-
-					LOG_DEBUG("Rendering '%s'", renderable.entity->GetName().c_str());
 				}
 
 				if (isNormalRender)

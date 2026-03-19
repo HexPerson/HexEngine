@@ -335,6 +335,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\MeshLoader.hpp" />
     <ClInclude Include="Graphics\TextureLoader.hpp" />
     <ClInclude Include="GUI\Elements\Canvas.hpp" />
+    <ClInclude Include="GUI\Elements\ArrayElement.hpp" />
+    <ClInclude Include="GUI\Elements\ArrayElementBase.hpp" />
     <ClInclude Include="GUI\Elements\LineEditDialog.hpp" />
     <ClInclude Include="GUI\Elements\ListNode.hpp" />
     <ClInclude Include="GUI\Elements\LoadingDialog.hpp" />
@@ -517,6 +519,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Graphics\MeshLoader.cpp" />
     <ClCompile Include="Graphics\TextureLoader.cpp" />
     <ClCompile Include="GUI\Elements\Canvas.cpp" />
+    <ClCompile Include="GUI\Elements\ArrayElementBase.cpp" />
     <ClCompile Include="GUI\Elements\LineEditDialog.cpp" />
     <ClCompile Include="GUI\Elements\ListNode.cpp" />
     <ClCompile Include="GUI\Elements\LoadingDialog.cpp" />
