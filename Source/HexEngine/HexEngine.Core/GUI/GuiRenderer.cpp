@@ -793,6 +793,20 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
 	}
 
+	void GuiRenderer::FillTexturedQuadWithShader(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour, IShader* shader, float rotation)
+	{
+		if (!shader)
+		{
+			FillTexturedQuad(texture, x, y, width, height, colour, rotation);
+			return;
+		}
+
+		auto previousShader = _activeBasicShader;
+		_activeBasicShader = shader;
+		FillTexturedQuad(texture, x, y, width, height, colour, rotation);
+		_activeBasicShader = previousShader;
+	}
+
 	void GuiRenderer::FillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, math::Vector2 uv[2], const math::Color& colour, float rotation)
 	{
 		if (_scalingEnabled)
@@ -878,6 +892,20 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
+	}
+
+	void GuiRenderer::FillTexturedQuadWithShader(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, math::Vector2 uv[2], const math::Color& colour, IShader* shader, float rotation)
+	{
+		if (!shader)
+		{
+			FillTexturedQuad(texture, x, y, width, height, uv, colour, rotation);
+			return;
+		}
+
+		auto previousShader = _activeBasicShader;
+		_activeBasicShader = shader;
+		FillTexturedQuad(texture, x, y, width, height, uv, colour, rotation);
+		_activeBasicShader = previousShader;
 	}
 
 	void GuiRenderer::PushFillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour, float rotation)

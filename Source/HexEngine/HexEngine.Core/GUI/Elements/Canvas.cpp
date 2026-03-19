@@ -2,6 +2,7 @@
 #include "Canvas.hpp"
 #include "../../Environment/IEnvironment.hpp"
 #include "../../Graphics/IGraphicsDevice.hpp"
+#include "../../Graphics/IShader.hpp"
 #include "../../Environment/LogFile.hpp"
 #include <algorithm>
 
@@ -110,13 +111,29 @@ namespace HexEngine
 
 	void Canvas::Present(GuiRenderer* renderer, uint32_t x, uint32_t y, uint32_t width, uint32_t height)
 	{
-		if (_renderTarget != nullptr)
+		if (_renderTarget == nullptr)
+			return;
+
+		auto backBuffer = g_pEnv->_graphicsDevice->GetBackBuffer();
+		const bool hdrBackBuffer = backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+		if (hdrBackBuffer)
 		{
-			renderer->FillTexturedQuad(_renderTarget,
+			if (!_hdrPresentShader)
+				_hdrPresentShader = IShader::Create("EngineData.Shaders/UIBasicHDRCanvas.hcs");
+
+			renderer->FillTexturedQuadWithShader(_renderTarget,
 				x, y,
 				width, height,
-				math::Color(1, 1, 1, 1));
+				math::Color(1, 1, 1, 1),
+				_hdrPresentShader.get());
+			return;
 		}
+
+		renderer->FillTexturedQuad(_renderTarget,
+			x, y,
+			width, height,
+			math::Color(1, 1, 1, 1));
 	}
 
 	void Canvas::Present(GuiRenderer* renderer, uint32_t x, uint32_t y, uint32_t width, uint32_t height, const RECT& srcRect)
@@ -136,6 +153,18 @@ namespace HexEngine
 		math::Vector2 uv[2];
 		uv[0] = math::Vector2((float)clamped.left / (float)_width, (float)clamped.top / (float)_height);
 		uv[1] = math::Vector2((float)clamped.right / (float)_width, (float)clamped.bottom / (float)_height);
+
+		auto backBuffer = g_pEnv->_graphicsDevice->GetBackBuffer();
+		const bool hdrBackBuffer = backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+		if (hdrBackBuffer)
+		{
+			if (!_hdrPresentShader)
+				_hdrPresentShader = IShader::Create("EngineData.Shaders/UIBasicHDRCanvas.hcs");
+
+			renderer->FillTexturedQuadWithShader(_renderTarget, x, y, width, height, uv, math::Color(1, 1, 1, 1), _hdrPresentShader.get());
+			return;
+		}
 
 		renderer->FillTexturedQuad(_renderTarget, x, y, width, height, uv, math::Color(1, 1, 1, 1));
 	}

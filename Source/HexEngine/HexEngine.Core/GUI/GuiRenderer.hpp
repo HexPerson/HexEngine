@@ -46,6 +46,8 @@ namespace HexEngine
 		void Frame(int32_t x, int32_t y, int32_t width, int32_t height, int32_t thickness, const math::Color& colour);
 		void FillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour, float rotation = 0.0f);
 		void FillTexturedQuad(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, math::Vector2 uv[2], const math::Color& colour, float rotation = 0.0f);
+		void FillTexturedQuadWithShader(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, const math::Color& colour, IShader* shader, float rotation = 0.0f);
+		void FillTexturedQuadWithShader(ITexture2D* texture, int32_t x, int32_t y, int32_t width, int32_t height, math::Vector2 uv[2], const math::Color& colour, IShader* shader, float rotation = 0.0f);
 
 		void PrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text);
 		void PrintText(IFontResource* font, uint8_t fontSize, int32_t x, int32_t y, const math::Color& colour, uint8_t align, const std::wstring& text, const TextEffectSettings& effects);

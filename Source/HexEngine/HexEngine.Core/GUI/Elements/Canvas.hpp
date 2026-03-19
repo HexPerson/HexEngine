@@ -32,5 +32,6 @@ namespace HexEngine
 		//DrawList* _drawList = nullptr;
 
 		std::vector<ITexture2D*> _prevRenderTargets;
+		std::shared_ptr<IShader> _hdrPresentShader;
 	};
 }

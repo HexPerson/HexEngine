@@ -56,6 +56,7 @@
     <HexEngineShader Include="TonemapHDR.shader" />
     <HexEngineShader Include="PresentHDR.shader" />
     <HexEngineShader Include="UIBasicHDR.shader" />
+    <HexEngineShader Include="UIBasicHDRCanvas.shader" />
     <HexEngineShader Include="UIInstancedHDR.shader" />
     <HexEngineShader Include="VolumetricClouds.shader" />
     <HexEngineShader Include="VolumetricLighting.shader" />

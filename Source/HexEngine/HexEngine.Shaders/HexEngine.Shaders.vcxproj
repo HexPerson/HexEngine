@@ -243,6 +243,9 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="UIBasicHDR.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="UIBasicHDRCanvas.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="UIInstancedHDR.shader">
       <FileType>Document</FileType>
     </HexEngineShader>

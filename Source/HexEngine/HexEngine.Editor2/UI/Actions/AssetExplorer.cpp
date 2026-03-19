@@ -9,7 +9,7 @@ namespace HexEditor
 {
 	namespace
 	{
-		constexpr int32_t IconSize = 140;
+		constexpr int32_t IconSize = 120;
 		constexpr int32_t IconSpacing = 20;
 		constexpr int32_t IconPadding = 10;
 		constexpr int32_t IconRowStep = IconSize + 30;

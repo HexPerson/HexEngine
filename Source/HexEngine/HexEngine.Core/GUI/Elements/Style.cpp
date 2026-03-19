@@ -46,7 +46,7 @@ namespace HexEngine
 		style.img_folder_closed = ITexture2D::Create("EngineData.Textures/UI/folder_closed.png");
 		style.img_folder_open = ITexture2D::Create("EngineData.Textures/UI/folder_open.png");
 
-		style.inspector_widget_back = math::Color(HEX_RGBA_TO_FLOAT4(65, 65, 66, 255));
+		style.inspector_widget_back = math::Color(HEX_RGBA_TO_FLOAT4(45, 45, 46, 255));
 
 		style.context_back = math::Color(HEX_RGBA_TO_FLOAT4(55, 56, 57, 255));
 		style.context_highlight = math::Color(HEX_RGBA_TO_FLOAT4(1, 85, 219, 255));
