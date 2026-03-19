@@ -560,18 +560,27 @@ namespace HexEditor
 
 		auto& style = HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style;
 
-		_sceneView = new SceneView(_rootElement, HexEngine::Point(dockWidth, style.win_title_height + 2), HexEngine::Point(width - (dockWidth * 2), height - (style.win_title_height + 2) - lowerDockHeight));
+		_sceneView = new SceneView(
+			_rootElement,
+			HexEngine::Point(dockWidth, style.win_title_height + 2),
+			HexEngine::Point(width - (dockWidth * 2), height - (style.win_title_height + 2) - lowerDockHeight),
+			[this]() { RunGame(); },
+			[this]() { StopGame(); },
+			[this]() { return _integrator.GetState() == GameTestState::Started; });
 
 		_leftDock = new HexEngine::Dock(_rootElement, HexEngine::Point(0, style.win_title_height + 2), HexEngine::Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)), HexEngine::Dock::Anchor::Left);
 		_rightDock = new Inspector(_rootElement, HexEngine::Point(width - dockWidth, style.win_title_height + 2), HexEngine::Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)));
 
 		_lowerDock = new Explorer(_rootElement, HexEngine::Point(0, height - (lowerDockHeight)), HexEngine::Point(width, lowerDockHeight));
 
+		const auto sceneViewportPos = _sceneView->GetSceneViewportAbsolutePosition();
+		const auto sceneViewportSize = _sceneView->GetSceneViewportSize();
+
 		HexEngine::g_pEnv->_inputSystem->SetInputViewport(
-			_sceneView->GetPosition().x,
-			_sceneView->GetPosition().y,
-			_sceneView->GetSize().x,
-			_sceneView->GetSize().y);
+			sceneViewportPos.x,
+			sceneViewportPos.y,
+			sceneViewportSize.x,
+			sceneViewportSize.y);
 	}
 
 	void EditorUI::CreateEntityList()
@@ -739,7 +748,7 @@ namespace HexEditor
 
 		
 		
-		if (event == HexEngine::InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _sceneView->IsMouseOver(true))
+		if (event == HexEngine::InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _sceneView->IsMouseOverSceneViewport())
 		{
 			if (auto inspecting = _rightDock->GetInspectingEntity(); inspecting != nullptr && inspecting->IsEditorGizmoHovered())
 			{
@@ -753,7 +762,7 @@ namespace HexEditor
 				_rightDock->InspectEntity(hit.entity);
 			}
 		}
-		else if (event == HexEngine::InputEvent::KeyDown && _sceneView->IsMouseOver(true))
+		else if (event == HexEngine::InputEvent::KeyDown && _sceneView->IsMouseOverSceneViewport())
 		{
 			if (_integrator.GetState() == GameTestState::Started && data->KeyDown.key == VK_ESCAPE)
 			{
@@ -778,8 +787,8 @@ namespace HexEditor
 				int32_t mx, my;
 				HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
-				const HexEngine::Point& centerSize = _sceneView->GetSize();
-				HexEngine::Point centerLoc = _sceneView->GetAbsolutePosition();
+				const HexEngine::Point centerSize = _sceneView->GetSceneViewportSize();
+				HexEngine::Point centerLoc = _sceneView->GetSceneViewportAbsolutePosition();
 				HexEngine::Point centerPos = centerLoc.GetCenter(centerSize);
 
 				const auto& vp = mainCamera->GetViewport();

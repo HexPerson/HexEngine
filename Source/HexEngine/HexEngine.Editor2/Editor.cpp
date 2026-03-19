@@ -62,12 +62,14 @@ namespace HexEditor
 	void EditorExtension::OnResize(int32_t width, int32_t height)
 	{
 		const auto sceneView = g_pUIManager->GetSceneView();
+		const auto sceneViewportPos = sceneView->GetSceneViewportAbsolutePosition();
+		const auto sceneViewportSize = sceneView->GetSceneViewportSize();
 
 		HexEngine::g_pEnv->_inputSystem->SetInputViewport(
-			sceneView->GetPosition().x,
-			sceneView->GetPosition().y,
-			sceneView->GetSize().x,
-			sceneView->GetSize().y);
+			sceneViewportPos.x,
+			sceneViewportPos.y,
+			sceneViewportSize.x,
+			sceneViewportSize.y);
 	}
 
 	void EditorExtension::OnFileChangeEvent(const HexEngine::DirectoryWatchInfo& info, const HexEngine::FileChangeActionMap& actionMap)

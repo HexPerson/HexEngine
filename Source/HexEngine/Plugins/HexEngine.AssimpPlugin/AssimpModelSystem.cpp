@@ -208,6 +208,13 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 		_importOpts.replaceTextureExtension = text;
 		});
 
+	auto texturePrefix = new HexEngine::LineEdit(layout, layout->GetNextPos(), HexEngine::Point(500, 20), L"Texture prefix");
+	texturePrefix->SetDoesCallbackWaitForReturn(false);
+	texturePrefix->SetValue(_importOpts.texturePrefix);
+	texturePrefix->SetOnInputFn([this](HexEngine::LineEdit*, const std::wstring& text) {
+		_importOpts.texturePrefix = text;
+		});
+
 	auto importModel = [&](std::vector<fs::path> pathsToSearch) -> bool {
 
 		for (auto& path : pathsToSearch)
@@ -1253,7 +1260,14 @@ std::shared_ptr<HexEngine::ITexture2D> AssimpModelImporter::LoadTexture(std::sha
 		std::vector<fs::path> pathCandidates;
 		pathCandidates.reserve(_importOpts.textureSearchPaths.size() + 1);
 
-		const fs::path textureFileName = fs::path(path).filename();
+		fs::path textureFileName = fs::path(path).filename();
+
+		if (_importOpts.texturePrefix.length() > 0)
+		{
+			// prepend the prefix if it doesn't already exist
+			if(textureFileName.wstring().find(_importOpts.texturePrefix) != 0)
+				textureFileName = fs::path(_importOpts.texturePrefix + textureFileName.wstring());
+		}
 		for (const auto& searchPath : _importOpts.textureSearchPaths)
 		{
 			if (searchPath.empty())
@@ -1311,6 +1325,10 @@ std::shared_ptr<HexEngine::ITexture2D> AssimpModelImporter::LoadTexture(std::sha
 		if (!texture)
 		{
 			LOG_WARN("*** Mesh texture load failed for: %s", selectedPath.string().c_str());
+		}
+		else
+		{
+			LOG_INFO("*** Mesh texture load failed for: %s", selectedPath.string().c_str());
 		}
 
 		return texture;

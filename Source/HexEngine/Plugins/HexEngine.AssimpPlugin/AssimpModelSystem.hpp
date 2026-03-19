@@ -52,6 +52,7 @@ struct AssimpImportOptions
 	bool deleteOriginalsAfterImport = true;
 	std::vector<std::wstring> textureSearchPaths;
 	std::wstring replaceTextureExtension;
+	std::wstring texturePrefix;
 };
 
 class AssimpModelImporter : public HexEngine::IModelImporter

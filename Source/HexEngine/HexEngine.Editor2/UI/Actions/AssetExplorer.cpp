@@ -572,13 +572,13 @@ namespace HexEditor
 					clickedAsset->selected = true;
 				}
 
-				bool hasSelection = false;
+				int32_t numSelection = 0;
+				bool doesHaveAtLeastOneMeshSelected = false;
 				for (const auto& asset : _assetsInView)
 				{
 					if (asset.selected)
 					{
-						hasSelection = true;
-						break;
+						numSelection++;
 					}
 				}
 
@@ -588,7 +588,7 @@ namespace HexEditor
 				p.y = data->MouseDown.ypos - menuParent->GetAbsolutePosition().y - 10;
 				_contextMenu = new HexEngine::ContextMenu(menuParent, p);
 
-				if (hasSelection)
+				if (numSelection >= 1)
 				{
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&AssetExplorer::SetMassMaterial, this)));
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import", std::bind(&AssetExplorer::ImportAllForeignMeshes, this)));

@@ -19,6 +19,7 @@ namespace HexEditor
 		auto inspector = g_pUIManager->GetInspector();
 		auto canvas = g_pUIManager->GetSceneView();
 		auto ent = inspector->GetInspectingEntity();
+		const auto viewportSize = canvas->GetSceneViewportSize();
 
 		if (!ent)
 			return false;
@@ -28,7 +29,7 @@ namespace HexEditor
 			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera(),
 			ent->GetWorldTM().Translation(),
 			scrx, scry,
-			canvas->GetSize().x, canvas->GetSize().y))
+			viewportSize.x, viewportSize.y))
 		{
 			_originalPosition = ent->GetPosition();
 

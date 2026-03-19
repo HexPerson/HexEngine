@@ -367,6 +367,9 @@ namespace HexEngine
 
 	bool StaticMeshComponent::CreateWidget(ComponentWidget* widget)
 	{
+		if (!_mesh)
+			return false;
+
 		LineEdit* meshLine = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Mesh");
 
 		//meshLine->SetLabelMinSize(130);
