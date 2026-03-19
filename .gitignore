@@ -469,3 +469,5 @@ FodyWeavers.xsd
 /Source/HexEngine/HexEngine.Shaders/Compiled/VolumetricClouds.hcs
 /Source/HexEngine/HexEngine.Shaders/Compiled/VolumetricLighting.hcs
 /Source/HexEngine/HexEngine.Shaders/Compiled/Water.hcs
+/Source/HexEngine/HexEngine.Creator/HexEngine.Creator.vcxproj
+/Source/HexEngine/HexEngine.Creator/HexEngine.Creator.vcxproj.filters
