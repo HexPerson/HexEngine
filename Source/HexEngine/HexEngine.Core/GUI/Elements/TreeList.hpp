@@ -1,14 +1,14 @@
 
 #pragma once
 
-#include "Element.hpp"
+#include "ScrollView.hpp"
 #include "ListNode.hpp"
 
 namespace HexEngine
 {
 	
 
-	class HEX_API TreeList : public Element
+	class HEX_API TreeList : public ScrollView
 	{
 	public:
 		//using OnSelectItem = std::function<bool(TreeList*, ListNode*, int32_t mouseButton)>;
@@ -45,10 +45,11 @@ namespace HexEngine
 	private:
 		void RenderItems(GuiRenderer* renderer, Point& position, const Point& absolutePos, const std::vector<ListNode*>& items, int32_t& c);
 		bool RenderItem(GuiRenderer* renderer, Point& position, const Point& absolutePos, ListNode* item, ListNode* parent, int32_t& c);
+		int32_t CountVisibleRows(const std::vector<ListNode*>& items);
 		
 	private:
 		//void CreateRenderTarget();
-		void UpdateHovering(GuiRenderer* renderer, const std::vector<ListNode*>& items, int32_t& y, int32_t& i);
+		void UpdateHovering(GuiRenderer* renderer, const std::vector<ListNode*>& items, int32_t& y);
 
 	private:
 		std::vector<ListNode*> _items;
@@ -59,7 +60,6 @@ namespace HexEngine
 		ListNode* _lastHoveredItem = nullptr;
 		int32_t _numItems = 0;
 		int32_t _renderCount = 0;
-		int32_t _offset = 0;
 		Point _dragStart;
 		bool _isDragging = false;
 		ListNode* _draggedItem = nullptr;

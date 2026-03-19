@@ -73,17 +73,21 @@ namespace HexEngine
 
 	void TabView::SetActiveTab(TabItem* item)
 	{
+		int32_t idx = 0;
 		for (auto& tab : _items)
 		{
 			if (tab == item)
 			{
 				_selectedTab = tab;
 				tab->SetSelected(true);
+				_currentIndex = idx;
 			}
 			else
 			{
 				tab->SetSelected(false);
 			}
+
+			++idx;
 		}
 	}
 }

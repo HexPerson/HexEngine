@@ -774,6 +774,8 @@ namespace HexEngine
 				_lastPosition = transformMessage->_position;
 			}
 
+			g_pEnv->_sceneManager->GetCurrentScene()->FlushPVS(this);
+
 			break;
 		}
 

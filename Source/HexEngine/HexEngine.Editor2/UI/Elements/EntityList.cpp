@@ -20,15 +20,14 @@ namespace HexEditor
 
 		_newFolderImg = HexEngine::ITexture2D::Create("EngineData.Textures/UI/folder_new.png");
 
-		_entitySearch = new HexEngine::LineEdit(this, HexEngine::Point(0, 0), HexEngine::Point(size.x - (IconSize + 10), IconSize - 5), L"");
+		/*_entitySearch = new HexEngine::LineEdit(this, HexEngine::Point(0, 0), HexEngine::Point(size.x - (IconSize + 10), IconSize - 5), L"");
 		_entitySearch->SetIcon(HexEngine::ITexture2D::Create("EngineData.Textures/UI/magnifying_glass.png"), math::Color(HEX_RGBA_TO_FLOAT4(140, 140, 140, 255)));
-		_entitySearch->SetDoesCallbackWaitForReturn(false);
+		_entitySearch->SetDoesCallbackWaitForReturn(false);*/
 		//_entitySearch->SetOnInputFn()
 	}
 
 	EntityList::~EntityList()
 	{
-		SAFE_DELETE(_entitySearch);
 	}
 
 	void EntityList::SetEntityParent(HexEngine::Entity* sourceEnt, HexEngine::Entity* targetEnt)
@@ -57,15 +56,15 @@ namespace HexEditor
 		auto origSize = GetSize();
 		
 
-		renderer->FillTexturedQuad(_newFolderImg.get(), pos.x + origSize.x - ToolbarHeight, pos.y, IconSize, IconSize, math::Color(1, 1, 1, 1));
+		//renderer->FillTexturedQuad(_newFolderImg.get(), pos.x + origSize.x - ToolbarHeight, pos.y, IconSize, IconSize, math::Color(1, 1, 1, 1));
 
-		SetPosition(HexEngine::Point(origPos.x, origPos.y + ToolbarHeight));
-		SetSize(HexEngine::Point(origSize.x, origSize.y - ToolbarHeight));
+		//SetPosition(HexEngine::Point(origPos.x, origPos.y + ToolbarHeight));
+		//SetSize(HexEngine::Point(origSize.x, origSize.y - ToolbarHeight));
 
 		HexEngine::EntityList::Render(renderer, w, h);
 
-		SetPosition(HexEngine::Point(origPos.x, origPos.y));
-		SetSize(HexEngine::Point(origSize.x, origSize.y));
+		//SetPosition(HexEngine::Point(origPos.x, origPos.y));
+		//SetSize(HexEngine::Point(origSize.x, origSize.y));
 
 		//renderer->ListDraw(dl);
 		//renderer->PopDrawList();

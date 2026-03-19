@@ -178,6 +178,8 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClInclude Include="UI\Actions\Terrain.hpp" />
     <ClInclude Include="UI\EditorUI.hpp" />
     <ClInclude Include="UI\Actions\Explorer.hpp" />
+    <ClInclude Include="UI\Actions\AssetExplorer.hpp" />
+    <ClInclude Include="UI\Actions\FolderExplorer.hpp" />
     <ClInclude Include="UI\Actions\Inspector.hpp" />
     <ClInclude Include="UI\Gadgets\DuplicateGadget.hpp" />
     <ClInclude Include="UI\Gadgets\Gadget.hpp" />
@@ -193,6 +195,8 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClCompile Include="UI\Actions\ProjectGenerator.cpp" />
     <ClCompile Include="UI\Actions\ProjectManager.cpp" />
     <ClCompile Include="UI\Actions\Explorer.cpp" />
+    <ClCompile Include="UI\Actions\AssetExplorer.cpp" />
+    <ClCompile Include="UI\Actions\FolderExplorer.cpp" />
     <ClCompile Include="UI\Actions\Inspector.cpp" />
     <ClCompile Include="UI\Actions\Settings.cpp" />
     <ClCompile Include="UI\Actions\Terrain.cpp" />

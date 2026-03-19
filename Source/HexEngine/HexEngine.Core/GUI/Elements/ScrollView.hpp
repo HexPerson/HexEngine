@@ -30,7 +30,6 @@ namespace HexEngine
 		int32_t GetContentHeight() const;
 
 		virtual void OnAddChild(Element* child) override;
-		virtual void OnAddGrandChild(Element* child) override;
 		virtual void PreRender(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 		virtual void PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h) override;

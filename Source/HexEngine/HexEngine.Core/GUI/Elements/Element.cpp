@@ -14,11 +14,6 @@ namespace HexEngine
 		if (_parent)
 		{
 			_parent->OnAddChild(this);
-
-			if (auto grandParent = _parent->GetParent(); grandParent != nullptr)
-			{
-				grandParent->OnAddGrandChild(this);
-			}
 		}
 	}
 
@@ -30,11 +25,6 @@ namespace HexEngine
 		if (_parent)
 		{
 			_parent->OnAddChild(this);
-
-			if (auto grandParent = _parent->GetParent(); grandParent != nullptr)
-			{
-				grandParent->OnAddGrandChild(this);
-			}
 		}
 	}
 

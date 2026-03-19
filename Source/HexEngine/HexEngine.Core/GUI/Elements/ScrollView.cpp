@@ -38,19 +38,6 @@ namespace HexEngine
 		}
 	}
 
-	void ScrollView::OnAddGrandChild(Element* child)
-	{
-		Element::OnAddGrandChild(child);
-
-		// Keep ScrollView call-sites simple: direct children are automatically
-		// moved under the internal content root so scrolling/layout works.
-		if (child && _contentRoot && child != _contentRoot && child->GetParent() == this)
-		{
-			child->Reparent(_contentRoot, true);
-			_canvas.Redraw();
-		}
-	}
-
 	void ScrollView::SetScrollOffset(float offset)
 	{
 		_scrollOffset = std::clamp(offset, 0.0f, ComputeMaxScroll());
@@ -114,7 +101,7 @@ namespace HexEngine
 
 		_contentRoot->EnableInput(IsMouseOver(true));
 
-		_canvas.Redraw();
+		//_canvas.Redraw();
 		_isCapturing = _canvas.BeginDraw(renderer, w, h);
 	}
 
@@ -125,7 +112,9 @@ namespace HexEngine
 
 		const auto pos = GetAbsolutePosition();
 
-		//renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.inspector_widget_back);
+		renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.inspector_widget_back);
+
+		//renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, math::Color(HEX_RGB_TO_FLOAT3(255, 0, 0)));
 
 		if (!_label.empty())
 		{

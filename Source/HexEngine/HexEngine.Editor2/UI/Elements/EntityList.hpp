@@ -38,6 +38,6 @@ namespace HexEditor
 	private:
 		//HexEngine::DrawList _drawList;
 		std::shared_ptr<HexEngine::ITexture2D> _newFolderImg;
-		HexEngine::LineEdit* _entitySearch = nullptr;
+		//HexEngine::LineEdit* _entitySearch = nullptr;
 	};
 }

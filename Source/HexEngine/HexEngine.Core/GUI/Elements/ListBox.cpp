@@ -19,13 +19,15 @@ namespace HexEngine
 
 	void ListBox::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
+		ScrollView::Render(renderer, w, h);
+
 		auto pos = GetAbsolutePosition();
 
 		renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.listbox_back);		
 
 		RenderItems(renderer, pos);
 
-		renderer->Frame(pos.x, pos.y, _size.x, _size.y, 1, renderer->_style.listbox_border);
+		//renderer->Frame(pos.x, pos.y, _size.x, _size.y, 1, renderer->_style.listbox_border);
 	}
 
 	void ListBox::AddItem(const std::wstring& label, ITexture2D* icon)
@@ -60,8 +62,8 @@ namespace HexEngine
 
 					_hoverIdx = i;
 				}
-				else if (pos.y + lineHeight > position.y && i % 2 == 0)
-					renderer->FillQuad(pos.x, pos.y, size.x, size.y, renderer->_style.listbox_alternate_colour);
+				//else if (pos.y + lineHeight > position.y && i % 2 == 0)
+				//	renderer->FillQuad(pos.x, pos.y, size.x, size.y, renderer->_style.listbox_alternate_colour);
 
 				if (pos.y + lineHeight > position.y && item.icon)
 					renderer->FillTexturedQuad(item.icon, pos.x + 4, pos.y + 1, 16, 16, math::Color(1, 1, 1, 1));

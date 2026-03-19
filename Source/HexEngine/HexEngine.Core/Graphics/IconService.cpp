@@ -67,6 +67,8 @@ namespace HexEngine
 		{
 			_iconScene->SetFlags(SceneFlags::Renderable);
 
+			g_pEnv->GetGraphicsDevice().SetClearColour(math::Color(HEX_RGB_TO_FLOAT3(40, 44, 48)));
+
 			const auto& pending = _pendingPaths[0];
 
 			auto path = pending.path;
@@ -77,7 +79,7 @@ namespace HexEngine
 			if (extension == ".hmesh")
 			{
 				g_pEnv->_sceneManager->SetActiveScene(_iconScene);
-				_camera->GetRenderTarget()->ClearRenderTargetView(math::Color(0.1f, 0.1f, 0.1f, 1.0f));
+				_camera->GetRenderTarget()->ClearRenderTargetView(math::Color(HEX_RGB_TO_FLOAT3(40, 44, 48)));
 
 				if (_dummyEnt != nullptr)
 				{
@@ -138,7 +140,7 @@ namespace HexEngine
 			{
 				g_pEnv->_sceneManager->SetActiveScene(_iconScene);
 
-				_camera->GetRenderTarget()->ClearRenderTargetView(math::Color(0.1f, 0.1f, 0.1f, 1.0f));
+				_camera->GetRenderTarget()->ClearRenderTargetView(math::Color(HEX_RGB_TO_FLOAT3(40, 44, 48)));
 
 
 				auto meshRenderer = _dummyEnt->GetComponent<StaticMeshComponent>();

@@ -30,7 +30,8 @@ namespace HexEngine
 	{
 		if (_child)
 		{
-			renderer->FillTexturedQuad(_arrowIcon.get(), /*_list->GetPosition().x +*/ _list->GetSize().x - TreeListLineHeight, position.y, TreeListLineHeight, TreeListLineHeight, math::Color(HEX_RGBA_TO_FLOAT4(100, 100, 100, 255)), _isOpen ? 0.0f : 90.0f);
+			const int32_t arrowX = _list->GetAbsolutePosition().x + _list->GetSize().x - TreeListLineHeight * 2;
+			renderer->FillTexturedQuad(_arrowIcon.get(), arrowX, position.y, TreeListLineHeight, TreeListLineHeight, math::Color(HEX_RGBA_TO_FLOAT4(22, 23, 255, 255)), _isOpen ? 0.0f : 90.0f);
 		}
 		
 		renderer->FillTexturedQuad(GetIcon(), position.x + 4, position.y + 1, 16, 16, math::Color(1, 1, 1, 1));

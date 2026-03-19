@@ -91,8 +91,8 @@ HexEngine::Checkbox* df = new HexEngine::Checkbox(widget, widget->GetNextPos(), 
 		HexEngine::DragFloat* rnd = new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Reflection Near Distance", &ocean.reflectionNearDistance, 1.0f, 2000.0f, 1.0f);
 		HexEngine::DragFloat* rfd = new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Reflection Far Distance", &ocean.reflectionFarDistance, 1.0f, 5000.0f, 1.0f);
 
-		HexEngine::Vector3Edit* deepCol = new HexEngine::Vector3Edit(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Deep Colour", (math::Vector3*)&ocean.deepColour.x);
-		HexEngine::Vector3Edit* shallowCol = new HexEngine::Vector3Edit(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Shallow Colour", (math::Vector3*)&ocean.shallowColour.x);
+		HexEngine::ColourPicker* deepCol = new HexEngine::ColourPicker(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Deep Colour", (math::Color*)&ocean.deepColour.x);
+		HexEngine::ColourPicker* shallowCol = new HexEngine::ColourPicker(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Shallow Colour", (math::Color*)&ocean.shallowColour.x);
 
 		pm->BringToFront();
 		//pm->_onCompleted = onCompletedAction;

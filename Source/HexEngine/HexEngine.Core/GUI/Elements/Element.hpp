@@ -34,7 +34,6 @@ namespace HexEngine
 		void Reparent(Element* newParent, bool preserveAbsolutePosition = true);
 
 		virtual void OnAddChild(Element* child);
-		virtual void OnAddGrandChild(Element* child) {}
 		virtual void OnRemoveChild(Element* child);
 		
 		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) {}

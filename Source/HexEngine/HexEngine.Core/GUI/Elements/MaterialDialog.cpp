@@ -3,6 +3,7 @@
 #include "Button.hpp"
 #include "MessageBox.hpp"
 #include "DropDown.hpp"
+#include "ColourPicker.hpp"
 #include "../../FileSystem/FileSystem.hpp"
 
 namespace HexEngine
@@ -56,14 +57,8 @@ namespace HexEngine
 		switch (type)
 		{
 		case MaterialTexture::Emission:
-			DragFloat* emissionR = new DragFloat(parent, Point(100, 25), Point(200, 18), L"R", &_material->_properties.emissiveColour.x, 0.0f, 1.0f, 0.1f);
-			emissionR->SetLabelMinSize(40);
-			DragFloat* emissionG = new DragFloat(parent, Point(100, 45), Point(200, 18), L"G", &_material->_properties.emissiveColour.y, 0.0f, 1.0f, 0.1f);
-			emissionG->SetLabelMinSize(40);
-			DragFloat* emissionB = new DragFloat(parent, Point(100, 65), Point(200, 18), L"B", &_material->_properties.emissiveColour.z, 0.0f, 1.0f, 0.1f);
-			emissionB->SetLabelMinSize(40);
-			DragFloat* emissionStrength = new DragFloat(parent, Point(100, 85), Point(200, 18), L"Strength", &_material->_properties.emissiveColour.w, 0.0f, 4.0f, 0.1f);
-			emissionStrength->SetLabelMinSize(40);
+			ColourPicker* emissiveClr = new ColourPicker(parent, Point(100, 25), Point(200, 18), L"Emission", (math::Color*) & _material->_properties.emissiveColour.x);
+			emissiveClr->SetLabelMinSize(40);
 			break;
 		}
 	}

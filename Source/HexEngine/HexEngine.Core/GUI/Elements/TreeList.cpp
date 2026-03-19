@@ -12,9 +12,8 @@ namespace HexEngine
 	
 
 	TreeList::TreeList(Element* parent, const Point& position, const Point& size) :
-		Element(parent, position, size)
+		ScrollView(parent, position, size)
 	{
-		_canvas.Create(size.x, size.y);
 	}
 
 	TreeList::~TreeList()
@@ -23,11 +22,6 @@ namespace HexEngine
 		{
 			SAFE_DELETE(item);
 		}
-
-		_canvas.Destroy();
-		
-
-		//SAFE_DELETE(_renderTarget);
 	}
 
 	/*void TreeList::CreateRenderTarget()
@@ -57,83 +51,38 @@ namespace HexEngine
 
 	void TreeList::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
-		//D3DPERF_BeginEvent(0xffffffff, L"Rendering TreeList");
+		ScrollView::Render(renderer, w, h);
 
 		auto pos = GetAbsolutePosition();
 
-		renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.listbox_back);
+		SetManualContentHeight(max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
 
-		int32_t y = 0, i = 0;
-		UpdateHovering(renderer, _items, y, i);
+		_hoveredItem = nullptr;
+		int32_t y = pos.y - (int32_t)std::round(GetScrollOffset());
+		UpdateHovering(renderer, _items, y);
 
-		if(_canvas.BeginDraw(renderer, _size.x, _size.y))
+		Point drawPos(pos.x, pos.y - (int32_t)std::round(GetScrollOffset()));
+		int32_t c = -1;
+
 		{
-			pos.x = pos.y = 0;
-
-			auto originalPos = pos;
-
-			//g_pEnv->_graphicsDevice->SetScissorRect({ pos.x, pos.y, pos.x + _size.x, pos.y + _size.y });
-
-			
-
-			_renderCount = 0;
-
-			
-
-			int32_t c = -1;
-
-			//for (int32_t y = 0, i = 0; y < _size.y; y += TreeListLineHeight, i++)
-			//{
-			//	if (y > pos.y + _size.y)
-			//		break;
-
-			//	Point highlightPos(pos.x, pos.y + y);
-			//	Point highlightSize(_size.x, TreeListLineHeight);
-
-			//	if (IsMouseOver(highlightPos, highlightSize))
-			//	{
-			//		renderer->PushFillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_highlight);
-			//	}
-			//	//else if (i % 2 == 0)
-			//	//	renderer->PushFillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_alternate_colour);
-			//}
-
 			std::unique_lock lock(_lock);
-
-			RenderItems(renderer, pos, pos, _items, c);
-
-			renderer->Frame(originalPos.x, originalPos.y, _size.x, _size.y, 1, renderer->_style.listbox_border);
-
-			if (_draggedItem != nullptr)
-			{
-				int32_t mx, my;
-				g_pEnv->_inputSystem->GetMousePosition(mx, my);
-
-				Point hoverPos(mx, my);
-				RenderItem(renderer, hoverPos, Point(mx, my), _draggedItem, nullptr, c);
-			}
-
-			_canvas.EndDraw(renderer);
+			_renderCount = 0;
+			RenderItems(renderer, drawPos, pos, _items, c);
 		}
 
-		if(IsMouseOver(true) == false)
-			_hoveredItem = nullptr;		
+		if (_draggedItem != nullptr)
+		{
+			int32_t mx, my;
+			g_pEnv->_inputSystem->GetMousePosition(mx, my);
+			Point hoverPos(mx, my);
+			RenderItem(renderer, hoverPos, Point(mx, my), _draggedItem, nullptr, c);
+		}
 
-		/*renderer->PushFillTexturedQuad(_renderTarget,
-			GetAbsolutePosition().x, GetAbsolutePosition().y,
-			_size.x, _size.y,
-			math::Color(1, 1, 1, 1));*/
-
-		_canvas.Present(renderer,
-			GetAbsolutePosition().x, GetAbsolutePosition().y,
-			_size.x, _size.y);
-
-		
-
-		//D3DPERF_EndEvent();
+		if (IsMouseOver(true) == false)
+			_hoveredItem = nullptr;
 	}
 
-	void TreeList::UpdateHovering(GuiRenderer* renderer, const std::vector<ListNode*>& items, int32_t& y, int32_t& i)
+	void TreeList::UpdateHovering(GuiRenderer* renderer, const std::vector<ListNode*>& items, int32_t& y)
 	{
 		auto pos = GetAbsolutePosition();
 		
@@ -143,31 +92,20 @@ namespace HexEngine
 
 		for (auto& item : items)
 		{
-			Point highlightPos(pos.x, pos.y + y);
+			if (item->_parent != nullptr && item->_parent->_isOpen == false)
+				continue;
+
+			Point highlightPos(pos.x, y);
 			Point highlightSize(_size.x, TreeListLineHeight);
 
-			if (i < _offset)
+			if (highlightPos.y + highlightSize.y >= pos.y && highlightPos.y <= pos.y + _size.y)
 			{
-				i++;
-
-				if (item->_child && item->_isOpen)
+				if (IsMouseOver(highlightPos, highlightSize))
 				{
-					UpdateHovering(renderer, item->_items, y, i);
+					renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_highlight);
+					_hoveredItem = item;
 				}
-				//y += item->GetHeight();
-				continue;
-			}
-
-			if (IsMouseOver(highlightPos, highlightSize))
-			{
-				renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_highlight);
-
-				_hoveredItem = item;
-
-				
-			}
-
-			++i;
+			}			
 
 			if (_lastHoveredItem != _hoveredItem)
 			{
@@ -182,7 +120,7 @@ namespace HexEngine
 
 			if (item->_child && item->_isOpen)
 			{
-				UpdateHovering(renderer, item->_items, y, i);
+				UpdateHovering(renderer, item->_items, y);
 			}
 		}
 	}
@@ -194,6 +132,11 @@ namespace HexEngine
 
 	bool TreeList::OnInputEvent(InputEvent event, InputData* data)
 	{
+		if (ScrollView::OnInputEvent(event, data))
+		{
+			return true;
+		}
+
 		if (event == InputEvent::MouseDown)
 		{
 			if (IsMouseOver(true))
@@ -222,7 +165,7 @@ namespace HexEngine
 						return true;
 				}*/
 
-				if (data->MouseDown.button == VK_LBUTTON)
+				if (data->MouseUp.button == VK_LBUTTON)
 				{
 					if (_draggedItem == nullptr)
 					{
@@ -245,25 +188,15 @@ namespace HexEngine
 					if (_hoveredItem != nullptr)
 					{
 						_hoveredItem->_isOpen = !_hoveredItem->_isOpen;
-						//_redrawRenderTarget = true;
-						_canvas.Redraw();
+						_hoveredItem->OnClick(VK_LBUTTON, data->MouseUp.xpos, data->MouseUp.ypos);
 
-						_hoveredItem->OnClick(VK_LBUTTON, data->MouseDown.xpos, data->MouseDown.ypos);
+						SetManualContentHeight(max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+						_canvas.Redraw();
 					}
 
 					
 				}
 			}
-		}
-		else if (event == InputEvent::MouseWheel && IsMouseOver(true))
-		{
-			_offset -= (int32_t)data->MouseWheel.delta;
-
-			if (_offset < 0)
-				_offset = 0;
-
-			//_redrawRenderTarget = true;
-			_canvas.Redraw();
 		}
 		else if (event == InputEvent::MouseMove)
 		{
@@ -277,7 +210,18 @@ namespace HexEngine
 					_draggedItem = _hoveredItem;
 				}
 			}
+
+			if (IsMouseOver(true))
+			{
+				_canvas.Redraw();
+			}
 		}
+
+		if (event == InputEvent::MouseDown || event == InputEvent::MouseUp)
+		{
+			_canvas.Redraw();
+		}
+
 		return false;
 	}
 
@@ -370,6 +314,8 @@ namespace HexEngine
 
 		if(repaintImmediately)
 			_canvas.Redraw();
+
+		SetManualContentHeight(max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
 
 		_currentNodeId++;
 	}
@@ -521,6 +467,8 @@ namespace HexEngine
 			delete item;
 		}
 		_items.clear();
+		SetManualContentHeight(_size.y);
+		_canvas.Redraw();
 	}
 
 	void TreeList::ClearItem(ListNode* item)
@@ -567,7 +515,7 @@ namespace HexEngine
 					_hoveredItem = item;
 			}*/
 
-			if(RenderItem(renderer, position, absolutePos, item, parent, c))
+			if (RenderItem(renderer, position, absolutePos, item, parent, c))
 				position.y += TreeListLineHeight;
 
 			if (item->_items.size() > 0 )
@@ -593,13 +541,10 @@ namespace HexEngine
 
 	bool TreeList::RenderItem(GuiRenderer* renderer, Point& position, const Point& absolutePos, ListNode* item, ListNode* parent, int32_t& c)
 	{
-		/*if (position.y < GetAbsolutePosition().y - 8)
-			return false;
+		 if (position.y + TreeListLineHeight < absolutePos.y - TreeListLineHeight)
+			return true;
 
-		if (position.y > GetAbsolutePosition().y + _size.y)
-			return false;*/
-
-		if (++c < _offset)
+		if (position.y > absolutePos.y + _size.y)
 			return false;
 
 		if (_hoveredItem == item)
@@ -649,5 +594,27 @@ namespace HexEngine
 		_renderCount++;
 
 		return true;
+	}
+
+	int32_t TreeList::CountVisibleRows(const std::vector<ListNode*>& items)
+	{
+		std::unique_lock lock(_lock);
+
+		int32_t rows = 0;
+
+		for (auto* item : items)
+		{
+			if (item == nullptr)
+				continue;
+
+			++rows;
+
+			if (item->_child && item->_isOpen)
+			{
+				rows += CountVisibleRows(item->_items);
+			}
+		}
+
+		return rows;
 	}
 }
