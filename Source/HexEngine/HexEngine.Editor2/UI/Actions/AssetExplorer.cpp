@@ -62,6 +62,17 @@ namespace HexEditor
 		return _draggingAsset;
 	}
 
+	bool AssetExplorer::ConsumeRecentlyDroppedAssetPath(fs::path& outPath)
+	{
+		if (!_hasRecentlyDroppedAsset)
+			return false;
+
+		outPath = _recentlyDroppedAssetPath;
+		_recentlyDroppedAssetPath.clear();
+		_hasRecentlyDroppedAsset = false;
+		return true;
+	}
+
 	void AssetExplorer::SetSearchFilter(const std::wstring& text)
 	{
 		_searchFilter = text;
@@ -638,6 +649,9 @@ namespace HexEditor
 
 			if (_draggingAsset != nullptr)
 			{
+				_recentlyDroppedAssetPath = _draggingAsset->path;
+				_hasRecentlyDroppedAsset = true;
+
 				int32_t mx, my;
 				HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
@@ -652,7 +666,7 @@ namespace HexEditor
 				}
 
 				_draggingAsset = nullptr;
-				return true;
+				return IsMouseOver(true);
 			}
 
 			if (_hoveredAsset != nullptr && mouseOverExplorer)

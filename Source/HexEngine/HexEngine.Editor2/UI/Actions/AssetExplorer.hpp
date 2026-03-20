@@ -25,6 +25,7 @@ namespace HexEditor
 		void SetSearchFilter(const std::wstring& text);
 		void UpdateAssets(const fs::path& relativePath, HexEngine::FileSystem* fs);
 		AssetDesc* GetCurrentlyDraggedAsset() const;
+		bool ConsumeRecentlyDroppedAssetPath(fs::path& outPath);
 
 		virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 		virtual void PostRenderChildren(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;
@@ -63,5 +64,7 @@ namespace HexEditor
 		std::wstring _editingAssetTempName;
 		std::wstring _editingAssetExtension;
 		std::wstring _searchFilter;
+		fs::path _recentlyDroppedAssetPath;
+		bool _hasRecentlyDroppedAsset = false;
 	};
 }

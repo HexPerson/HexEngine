@@ -23,6 +23,7 @@ namespace HexEditor
 		virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 
 		AssetDesc* GetCurrentlyDraggedAsset() const;
+		bool ConsumeRecentlyDroppedAssetPath(fs::path& outPath);
 
 	private:
 		void OnFolderSelected(const fs::path& relativePath, HexEngine::FileSystem* fs);

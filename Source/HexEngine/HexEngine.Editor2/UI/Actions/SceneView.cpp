@@ -116,10 +116,43 @@ namespace HexEditor
 		{
 			_roamState = RoamState::None;
 
-			if (data->MouseUp.button == VK_LBUTTON && _dragAndDropEntity != nullptr)
+			if (data->MouseUp.button == VK_LBUTTON)
 			{
-				g_pUIManager->GetInspector()->InspectEntity(_dragAndDropEntity);
-				_dragAndDropEntity = nullptr;
+				if (_dragAndDropEntity != nullptr)
+				{
+					g_pUIManager->GetInspector()->InspectEntity(_dragAndDropEntity);
+					_dragAndDropEntity = nullptr;
+					return true;
+				}
+
+				if (!IsMouseOverSceneViewport())
+					return true;
+
+				fs::path droppedAssetPath;
+				if (auto draggingAsset = g_pUIManager->GetExplorer()->GetCurrentlyDraggedAsset(); draggingAsset != nullptr)
+				{
+					droppedAssetPath = draggingAsset->path;
+				}
+				else
+				{
+					g_pUIManager->GetExplorer()->ConsumeRecentlyDroppedAssetPath(droppedAssetPath);
+				}
+
+				if (!droppedAssetPath.empty())
+				{
+					if (droppedAssetPath.extension() == ".hmat")
+					{
+						auto hit = g_pUIManager->RayCastWorld();
+
+						if (hit.entity != nullptr)
+						{
+							if (auto smc = hit.entity->GetComponent<HexEngine::StaticMeshComponent>(); smc != nullptr)
+							{
+								smc->SetMaterial(HexEngine::Material::Create(droppedAssetPath));
+							}
+						}
+					}
+				}
 			}
 			return true;
 		}
@@ -128,32 +161,33 @@ namespace HexEditor
 
 		if (event == HexEngine::InputEvent::MouseMove && IsMouseOverSceneViewport())
 		{
-			if (auto draggingAsset = g_pUIManager->GetExplorer()->GetCurrentlyDraggedAsset(); draggingAsset != nullptr && draggingAsset->path.extension() == ".hmesh")
+			if (auto draggingAsset = g_pUIManager->GetExplorer()->GetCurrentlyDraggedAsset(); draggingAsset != nullptr)
 			{
-				auto hit = g_pUIManager->RayCastWorld({ _dragAndDropEntity });
-
-				if (hit.entity != nullptr)
+				if (draggingAsset->path.extension() == ".hmesh")
 				{
-					if (_dragAndDropEntity == nullptr)
+					auto hit = g_pUIManager->RayCastWorld({ _dragAndDropEntity });
+
+					if (hit.entity != nullptr)
 					{
-						_dragAndDropEntity = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(
-							ws2s(draggingAsset->assetNameShort),
-							hit.position,
-							math::Quaternion(),
-							math::Vector3(1.0f)
-						);
+						if (_dragAndDropEntity == nullptr)
+						{
+							_dragAndDropEntity = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(
+								ws2s(draggingAsset->assetNameShort),
+								hit.position,
+								math::Quaternion(),
+								math::Vector3(1.0f)
+							);
 
-						auto staticMesh = _dragAndDropEntity->AddComponent<HexEngine::StaticMeshComponent>();
+							auto staticMesh = _dragAndDropEntity->AddComponent<HexEngine::StaticMeshComponent>();
 
-						staticMesh->SetMesh(HexEngine::Mesh::Create(draggingAsset->path));
+							staticMesh->SetMesh(HexEngine::Mesh::Create(draggingAsset->path));
+						}
+						else
+						{
+							_dragAndDropEntity->SetPosition(hit.position);
+						}
 					}
-					else
-					{
-						_dragAndDropEntity->SetPosition(hit.position);
-					}
-
 				}
-				
 			}
 		}
 

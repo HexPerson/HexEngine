@@ -48,6 +48,11 @@ namespace HexEditor
 		return _assetExplorer ? _assetExplorer->GetCurrentlyDraggedAsset() : nullptr;
 	}
 
+	bool Explorer::ConsumeRecentlyDroppedAssetPath(fs::path& outPath)
+	{
+		return _assetExplorer ? _assetExplorer->ConsumeRecentlyDroppedAssetPath(outPath) : false;
+	}
+
 	void Explorer::SetProjectPath(const fs::path& path)
 	{
 		_projectPath = path;

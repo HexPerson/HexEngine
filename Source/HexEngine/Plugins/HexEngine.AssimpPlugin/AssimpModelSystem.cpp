@@ -1160,6 +1160,10 @@ void AssimpModelImporter::ProcessMaterial(std::shared_ptr<HexEngine::Mesh> mesh,
 	{
 		mat->SetTexture(HexEngine::MaterialTexture::Albedo, LoadTexture(mesh, aiTextureType_DIFFUSE, scene, material, fileSystem));
 	}
+	else if (material->GetTextureCount(aiTextureType_BASE_COLOR) > 0)
+	{
+		mat->SetTexture(HexEngine::MaterialTexture::Albedo, LoadTexture(mesh, aiTextureType_BASE_COLOR, scene, material, fileSystem));
+	}
 	else
 	{
 		mat->SetTexture(HexEngine::MaterialTexture::Albedo, HexEngine::ITexture2D::GetDefaultTexture());
@@ -1366,7 +1370,7 @@ std::shared_ptr<HexEngine::ITexture2D> AssimpModelImporter::LoadTexture(std::sha
 		}
 		else
 		{
-			LOG_INFO("*** Mesh texture load failed for: %s", selectedPath.string().c_str());
+			LOG_INFO("*** Mesh texture succeeded for: %s", selectedPath.string().c_str());
 		}
 
 		return texture;

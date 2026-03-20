@@ -102,7 +102,7 @@ namespace HexEngine
 						meshRenderer->SetMesh(model);
 					}
 
-					auto pos = math::Vector3(0, _dummyEnt->GetAABB().Center.y, _dummyEnt->GetBoundingSphere().Radius * 1.05f);
+					auto pos = math::Vector3(0, _dummyEnt->GetAABB().Center.y, _dummyEnt->GetBoundingSphere().Radius * 1.1f);
 
 					_camera->GetEntity()->SetPosition(pos);
 
@@ -136,12 +136,17 @@ namespace HexEngine
 					_generatedPaths.push_back(path);
 				}
 			}
-			else if (false && extension == ".hmat")
+			else if (extension == ".hmat")
 			{
 				g_pEnv->_sceneManager->SetActiveScene(_iconScene);
-
 				_camera->GetRenderTarget()->ClearRenderTargetView(math::Color(HEX_RGB_TO_FLOAT3(40, 44, 48)));
 
+				if (_dummyEnt != nullptr)
+				{
+					_iconScene->DestroyEntity(_dummyEnt);
+				}
+				_dummyEnt = _iconScene->CreateEntity("DummyEnt");
+				_dummyEnt->AddComponent<StaticMeshComponent>();
 
 				auto meshRenderer = _dummyEnt->GetComponent<StaticMeshComponent>();
 
@@ -156,10 +161,10 @@ namespace HexEngine
 					meshRenderer->SetMaterial(Material::Create(path));
 				}
 
-				_camera->GetEntity()->SetPosition(math::Vector3(0, 0, _dummyEnt->GetBoundingSphere().Radius * 1.2f));
+				_camera->GetEntity()->SetPosition(math::Vector3(0, 0, _dummyEnt->GetBoundingSphere().Radius * 1.18f));
 
 				_camera->SetYaw(0.0f);
-				_camera->SetPitch(-45.0f);
+				//_camera->SetPitch(-45.0f);
 				//_camera->GetEntity()->GetComponent<Transform>()->SetRotation(math::Quaternion::FromToRotation(_camera->GetEntity()->GetPosition(), dummyEnt->GetPosition()));
 
 				_camera->GetPVS()->ClearPVS();
