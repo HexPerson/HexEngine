@@ -7,6 +7,8 @@
 	#include <crtdbg.h>
 #endif
 
+#define NOMINMAX
+
 #include <stdint.h>
 #include <stdio.h>
 #include <string>

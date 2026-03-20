@@ -5,6 +5,7 @@
 #include "BaseComponent.hpp"
 #include "../../Physics/IRigidBody.hpp"
 #include "../../Audio/SoundEffect.hpp"
+#include "../../Physics/IPhysicsSystem.hpp"
 
 namespace HexEngine
 {
@@ -42,6 +43,8 @@ namespace HexEngine
 		void AddTriangleMeshCollider(Mesh* mesh, bool exclusive);
 
 		void AddConvexMeshCollider(Mesh* mesh, bool exclusive);
+
+		void CreateCharacterController(const ControllerParameters& params, Transform* transform);
 
 		void RemoveCollider();
 

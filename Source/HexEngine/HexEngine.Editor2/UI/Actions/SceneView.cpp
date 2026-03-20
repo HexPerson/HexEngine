@@ -8,6 +8,39 @@ namespace HexEditor
 	namespace
 	{
 		constexpr int32_t kUtilityBarHeight = 28;
+		constexpr uint32_t kBoxColliderMaxFaces = 100;
+		constexpr uint32_t kSphereColliderMaxFaces = 600;
+
+		enum class AutoColliderType
+		{
+			Box,
+			Sphere,
+			TriangleMesh
+		};
+
+		AutoColliderType GetAutoColliderType(const HexEngine::Mesh& mesh)
+		{
+			uint32_t faceCount = mesh.GetNumFaces();
+			if (faceCount == 0)
+			{
+				faceCount = static_cast<uint32_t>(mesh.GetNumIndices() / 3);
+			}
+
+			if (faceCount <= kBoxColliderMaxFaces)
+				return AutoColliderType::Box;
+
+			//if (faceCount <= kSphereColliderMaxFaces)
+			//	return AutoColliderType::Sphere;
+
+			return AutoColliderType::TriangleMesh;
+		}
+
+		/*float GetSphereColliderRadius(const dx::BoundingBox& aabb)
+		{
+			const auto& extents = aabb.Extents;
+			const float radius = std::max({ extents.x, extents.y, extents.z });
+			return std::max(radius, 0.01f);
+		}*/
 
 		class SceneSurface : public HexEngine::Element
 		{
@@ -72,7 +105,7 @@ namespace HexEditor
 		_sceneSurface = new SceneSurface(
 			_sceneTab,
 			HexEngine::Point(0, tabHeaderHeight),
-			HexEngine::Point(_tabView->GetSize().x, max(1, _tabView->GetSize().y - tabHeaderHeight)));
+			HexEngine::Point(_tabView->GetSize().x, std::max(1, _tabView->GetSize().y - tabHeaderHeight)));
 
 		_runButton = new HexEngine::Button(
 			this,
@@ -179,8 +212,26 @@ namespace HexEditor
 							);
 
 							auto staticMesh = _dragAndDropEntity->AddComponent<HexEngine::StaticMeshComponent>();
+							auto rigidBody = _dragAndDropEntity->AddComponent<HexEngine::RigidBody>();
+							auto mesh = HexEngine::Mesh::Create(draggingAsset->path);
 
-							staticMesh->SetMesh(HexEngine::Mesh::Create(draggingAsset->path));
+							staticMesh->SetMesh(mesh);
+
+							if (mesh != nullptr)
+							{
+								switch (GetAutoColliderType(*mesh))
+								{
+								case AutoColliderType::Box:
+									rigidBody->AddBoxCollider(mesh->GetAABB());
+									break;
+								//case AutoColliderType::Sphere:
+								//	rigidBody->AddSphereCollider(GetSphereColliderRadius(mesh->GetAABB()));
+								//	break;
+								case AutoColliderType::TriangleMesh:
+									rigidBody->AddTriangleMeshCollider(mesh.get(), true);
+									break;
+								}
+							}
 						}
 						else
 						{
@@ -254,7 +305,7 @@ namespace HexEditor
 			return _sceneSurface->GetSize();
 
 		const int32_t tabHeaderHeight = HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.tab_height;
-		const int32_t viewportHeight = max(1, _size.y - kUtilityBarHeight - tabHeaderHeight);
+		const int32_t viewportHeight = std::max(1, _size.y - kUtilityBarHeight - tabHeaderHeight);
 		return HexEngine::Point(_size.x, viewportHeight);
 	}
 

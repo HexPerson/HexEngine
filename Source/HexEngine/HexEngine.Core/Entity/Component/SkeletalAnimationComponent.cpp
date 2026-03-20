@@ -56,13 +56,13 @@ namespace HexEngine
 
 		if (_animData && _animData->_animations.size() > 0 && _animIndex != -1)
 		{
-			Animation& anim = _animData->_animations.at(min(_animData->_animations.size() - 1, _animIndex));
+			Animation& anim = _animData->_animations.at(std::min((uint32_t)_animData->_animations.size() - 1, _animIndex));
 
 			UpdateBoneTransform(&anim, g_pEnv->_timeManager->_currentTime - _animationStartTime, _transforms);
 
 			if (_nextAnimIndex != -1)
 			{
-				Animation& anim2 = _animData->_animations.at(min(_animData->_animations.size() - 1, _nextAnimIndex));
+				Animation& anim2 = _animData->_animations.at(std::min((uint32_t)_animData->_animations.size() - 1, _nextAnimIndex));
 
 				std::array<math::Matrix, MAX_BONES> blendTransforms;
 				UpdateBoneTransform(&anim2, g_pEnv->_timeManager->_currentTime - _animationStartTime, blendTransforms);

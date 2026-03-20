@@ -637,7 +637,7 @@ namespace HexEngine
 
 		const math::Vector3 origin = GetEntity()->GetWorldTM().Translation();
 		const math::Vector3 cameraPosition = camera->GetEntity()->GetPosition();
-		const float distanceToCamera = max((origin - cameraPosition).Length(), 1.0f);
+		const float distanceToCamera = std::max((origin - cameraPosition).Length(), 1.0f);
 		const float axisLength = std::clamp(distanceToCamera * 0.18f, 10.0f, 150.0f);
 
 		const std::array<math::Vector3, 3> axisDirections = {

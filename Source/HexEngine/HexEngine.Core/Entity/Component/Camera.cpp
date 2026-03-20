@@ -8,7 +8,7 @@
 namespace HexEngine
 {
 	const float gCameraDefaultFov = 70.0f;
-	const float gViewMatrixBehindDistance = 1000.0f;
+	const float gViewMatrixBehindDistance = 200.0f;
 	const float gDefaultMaxViewDistance = 2500.0f;
 
 	extern HVar r_lodPartition;
@@ -367,7 +367,10 @@ namespace HexEngine
 		_viewMatrix = viewMatrix;
 	}
 
-	
+	void Camera::SetViewOffset(const math::Vector3& offset)
+	{
+		_viewOffset = offset;
+	}
 
 	void Camera::ConstructViewMatrix()
 	{
@@ -375,8 +378,8 @@ namespace HexEngine
 
 		math::Vector3 up = _rotationMatrix.Up();		
 
-		_viewMatrix = math::Matrix::CreateLookAt(transform->GetPosition(), _lookDir + transform->GetPosition(), up);
-		_viewMatrixBehind = math::Matrix::CreateLookAt(transform->GetPosition() - _lookDir * gViewMatrixBehindDistance, _lookDir + transform->GetPosition(), up);
+		_viewMatrix = math::Matrix::CreateLookAt(transform->GetPosition() + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
+		_viewMatrixBehind = math::Matrix::CreateLookAt(transform->GetPosition() - (_lookDir * gViewMatrixBehindDistance) + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
 
 		BuildFrustum();
 
@@ -402,9 +405,14 @@ namespace HexEngine
 		_boundingSphere.CreateFromFrustum(_boundingSphere, _frustum);		
 	}
 
-	math::Vector3 Camera::GetLookDir()
+	const math::Vector3& Camera::GetLookDir() const
 	{
 		return _lookDir;
+	}
+
+	const math::Vector3& Camera::GetViewOffset() const
+	{
+		return _viewOffset;
 	}
 
 	const math::Matrix& Camera::GetViewMatrix() const

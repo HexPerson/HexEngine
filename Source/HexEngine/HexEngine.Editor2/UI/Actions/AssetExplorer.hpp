@@ -36,7 +36,10 @@ namespace HexEditor
 		void SelectAll();
 		void SetMassMaterial();
 		void ShowCombineMeshesDialog();
+		void ShowAutoCombineMeshesDialog();
 		void CombineSelectedMeshes(fs::path outputFileName, bool removeOriginalFiles);
+		void AutoCombineSelectedMeshesByMaterial(bool removeOriginalFiles);
+		bool CombineMeshPathGroup(const std::vector<fs::path>& meshPaths, fs::path outputFileName, bool removeOriginalFiles);
 		void LoadAsset(const fs::path& path);
 		void ImportAllMeshes();
 		AssetDesc* FindAssetInView(const fs::path& filename);
@@ -67,6 +70,7 @@ namespace HexEditor
 		std::wstring _editingAssetExtension;
 		std::wstring _searchFilter;
 		bool _combineDeleteOriginals = false;
+		bool _autoCombineDeleteOriginals = false;
 		fs::path _recentlyDroppedAssetPath;
 		bool _hasRecentlyDroppedAsset = false;
 	};

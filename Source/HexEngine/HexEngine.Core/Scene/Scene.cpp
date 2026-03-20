@@ -962,7 +962,7 @@ namespace HexEngine
 		//_skySphereMatrix = math::Matrix::CreateScale(math::Vector3(2.0f)) * math::Matrix::CreateTranslation(_mainCamera->GetEntity()->GetPosition());
 
 		if(_skySphere)
-			_skySphere->SetPosition(_mainCamera->GetEntity()->GetPosition());
+			_skySphere->SetPosition(_mainCamera->GetEntity()->GetPosition() + _mainCamera->GetViewOffset());
 	}
 
 	void Scene::OnDebugGUI()

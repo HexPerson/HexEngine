@@ -55,7 +55,7 @@ namespace HexEngine
 
 		auto pos = GetAbsolutePosition();
 
-		SetManualContentHeight(max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+		SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
 
 		_hoveredItem = nullptr;
 		int32_t y = pos.y - (int32_t)std::round(GetScrollOffset());
@@ -190,7 +190,7 @@ namespace HexEngine
 						_hoveredItem->_isOpen = !_hoveredItem->_isOpen;
 						_hoveredItem->OnClick(VK_LBUTTON, data->MouseUp.xpos, data->MouseUp.ypos);
 
-						SetManualContentHeight(max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+						SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
 						_canvas.Redraw();
 					}
 
@@ -315,7 +315,7 @@ namespace HexEngine
 		if(repaintImmediately)
 			_canvas.Redraw();
 
-		SetManualContentHeight(max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+		SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
 
 		_currentNodeId++;
 	}

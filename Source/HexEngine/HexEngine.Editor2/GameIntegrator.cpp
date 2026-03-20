@@ -275,6 +275,9 @@ namespace HexEditor
 		HexEngine::g_pEnv->SetEditorMode(false);
 		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->AddEntityListener(this);
 
+		// make a backup of the main camera for restoring after the game stops
+		_origMainCamera = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera();
+
 		_gameExtension->OnCreateGame();
 
 		_state = GameTestState::Started;
@@ -302,6 +305,9 @@ namespace HexEditor
 		_tempEntitiesCreated.clear();
 
 		_gameExtension->OnStopGame();
+
+		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->SetMainCamera(_origMainCamera);
+		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 
 		HexEngine::g_pEnv->SetEditorMode(true);
 		HexEngine::g_pEnv->_inputSystem->SetMouseLockMode(HexEngine::MouseLockMode::Free);

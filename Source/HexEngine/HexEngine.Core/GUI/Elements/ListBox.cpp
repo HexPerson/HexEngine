@@ -35,7 +35,7 @@ namespace HexEngine
 		_items.push_back({ label, icon });
 
 		const int32_t lineHeight = 20;
-		SetManualContentHeight(max(_size.y, (int32_t)_items.size() * lineHeight));
+		SetManualContentHeight(std::max(_size.y, (int32_t)_items.size() * lineHeight));
 	}
 
 	void ListBox::RenderItems(GuiRenderer* renderer, const Point& position)
@@ -45,7 +45,7 @@ namespace HexEngine
 			const int32_t lineHeight = 20;
 			Point size(_size.x, lineHeight);
 			const float scroll = GetScrollOffset();
-			const int32_t firstVisibleIndex = max(0, (int32_t)std::floor(scroll / (float)lineHeight));
+			const int32_t firstVisibleIndex = std::max(0, (int32_t)std::floor(scroll / (float)lineHeight));
 			const int32_t pixelOffset = (int32_t)std::round(scroll - (float)firstVisibleIndex * (float)lineHeight);
 			Point pos(position.x, position.y - pixelOffset);
 

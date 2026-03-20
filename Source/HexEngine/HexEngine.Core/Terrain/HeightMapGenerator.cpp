@@ -136,7 +136,7 @@ namespace HexEngine
 
 						float p = easingFunction(std::clamp((y - params.minimumHeight) / 200.0f, 0.0f, 1.0f));
 
-						y = max(params.minimumHeight, std::lerp(params.minimumHeight, y, p));
+						y = std::max(params.minimumHeight, std::lerp(params.minimumHeight, y, p));
 					}
 				}
 

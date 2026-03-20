@@ -103,7 +103,7 @@ namespace HexEngine
 
 		for (int32_t i = 0; i < itemCount; ++i)
 		{
-			const int32_t rowHeight = max(RowHeaderHeight + 8, GetItemHeightInternal(i));
+			const int32_t rowHeight = std::max(RowHeaderHeight + 8, GetItemHeightInternal(i));
 
 			ItemRowVisual visual;
 			visual.top = rowTop;
@@ -111,8 +111,8 @@ namespace HexEngine
 			_rowVisuals.push_back(visual);
 
 			const int32_t contentTop = rowTop + RowHeaderHeight;
-			const int32_t contentHeight = max(8, rowHeight - RowHeaderHeight - RowInnerPadding);
-			const int32_t contentWidth = max(8, _size.x - (HeaderPadding + RowInnerPadding) * 2);
+			const int32_t contentHeight = std::max(8, rowHeight - RowHeaderHeight - RowInnerPadding);
+			const int32_t contentWidth = std::max(8, _size.x - (HeaderPadding + RowInnerPadding) * 2);
 
 			Element* rowRoot = new Element(
 				this,

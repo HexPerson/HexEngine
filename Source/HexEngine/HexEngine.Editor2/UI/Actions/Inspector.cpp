@@ -64,6 +64,8 @@ namespace HexEditor
 			_entityName->SetValue(L"");
 
 			_canvas.Redraw();
+
+			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 		}
 
 		return true;

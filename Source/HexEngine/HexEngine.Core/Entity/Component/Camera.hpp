@@ -70,7 +70,8 @@ namespace HexEngine
 		float GetFov() const;
 		float GetAspectRatio() const;
 
-		math::Vector3 GetLookDir();
+		const math::Vector3& GetLookDir() const;
+		const math::Vector3& GetViewOffset() const;
 		const math::Matrix& GetViewMatrix() const;
 		const math::Matrix& GetProjectionMatrix() const;
 		const math::Matrix& GetViewMatrixPrev() const;
@@ -92,6 +93,7 @@ namespace HexEngine
 		void SetYawLimits(const math::Vector2& limit, bool set = true);
 		void SetPitchLimits(const math::Vector2& limit, bool set = true);
 		void SetRollLimits(const math::Vector2& limit, bool set = true);
+		void SetViewOffset(const math::Vector3& offset);
 
 		virtual void Serialize(json& data, JsonFile* file) override;
 
@@ -138,6 +140,7 @@ namespace HexEngine
 		math::Vector3 _cameraAngles;
 		math::Vector3 _previousCameraAngles;
 		math::Vector3 _lookDir;
+		math::Vector3 _viewOffset;
 		math::Matrix _rotationMatrix;
 		dx::BoundingFrustum _frustum;
 		dx::BoundingFrustum _largerFrustum;

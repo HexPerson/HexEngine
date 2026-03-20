@@ -79,5 +79,6 @@ namespace HexEditor
 		std::chrono::steady_clock::time_point _lastCodeChange = std::chrono::steady_clock::now();
 		std::mutex _reloadMutex;
 		fs::path _loadedGameDllPath;
+		HexEngine::Camera* _origMainCamera = nullptr;
 	};
 }

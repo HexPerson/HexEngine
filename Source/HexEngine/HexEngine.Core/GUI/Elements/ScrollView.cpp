@@ -51,7 +51,7 @@ namespace HexEngine
 
 	void ScrollView::SetScrollSpeed(float speed)
 	{
-		_scrollSpeed = max(1.0f, speed);
+		_scrollSpeed = std::max(1.0f, speed);
 	}
 
 	float ScrollView::GetScrollSpeed() const
@@ -61,7 +61,7 @@ namespace HexEngine
 
 	void ScrollView::SetManualContentHeight(int32_t height)
 	{
-		_manualContentHeight = max(0, height);
+		_manualContentHeight = std::max(0, height);
 		SetScrollOffset(_scrollOffset);
 	}
 
@@ -95,7 +95,7 @@ namespace HexEngine
 
 		SetScrollOffset(_scrollOffset);
 
-		const int32_t contentHeight = max(_size.y, ComputeContentHeight());
+		const int32_t contentHeight = std::max(_size.y, ComputeContentHeight());
 		_contentRoot->SetSize(Point(_size.x, contentHeight));
 		_contentRoot->SetPosition(Point(0, -(int32_t)std::round(_scrollOffset)));
 
@@ -150,10 +150,10 @@ namespace HexEngine
 				renderer->_style.lineedit_back);
 
 			const float maxScroll = ComputeMaxScroll();
-			const int32_t contentHeight = max(_size.y, ComputeContentHeight());
+			const int32_t contentHeight = std::max(_size.y, ComputeContentHeight());
 			const int32_t trackHeight = scrollbarRect.bottom - scrollbarRect.top;
 			const int32_t thumbHeight = std::clamp((int32_t)((float)_size.y / (float)contentHeight * (float)trackHeight), MinThumbHeight, trackHeight);
-			const int32_t thumbTravel = max(0, trackHeight - thumbHeight);
+			const int32_t thumbTravel = std::max(0, trackHeight - thumbHeight);
 			const int32_t thumbY = scrollbarRect.top + (maxScroll > 0.0f ? (int32_t)std::round((_scrollOffset / maxScroll) * (float)thumbTravel) : 0);
 
 			const math::Color thumbColor = _isDraggingScrollbar ? renderer->_style.text_highlight : renderer->_style.listbox_highlight;
@@ -233,7 +233,7 @@ namespace HexEngine
 
 					const int32_t localTop = baseY + child->GetPosition().y;
 					const int32_t localBottom = localTop + child->GetSize().y;
-					outMax = max(outMax, localBottom);
+					outMax = std::max(outMax, localBottom);
 
 					walk(child, localTop, outMax);
 				}
@@ -242,13 +242,13 @@ namespace HexEngine
 			walk(_contentRoot, 0, computed);
 		}
 
-		computed = max(computed, _manualContentHeight);
-		return max(computed, _size.y);
+		computed = std::max(computed, _manualContentHeight);
+		return std::max(computed, _size.y);
 	}
 
 	float ScrollView::ComputeMaxScroll() const
 	{
-		return max(0.0f, (float)ComputeContentHeight() - (float)_size.y);
+		return std::max(0.0f, (float)ComputeContentHeight() - (float)_size.y);
 	}
 
 	RECT ScrollView::ComputeScrollbarRect() const
@@ -273,9 +273,9 @@ namespace HexEngine
 		if (trackHeight <= 0)
 			return;
 
-		const int32_t contentHeight = max(_size.y, ComputeContentHeight());
+		const int32_t contentHeight = std::max(_size.y, ComputeContentHeight());
 		const int32_t thumbHeight = std::clamp((int32_t)((float)_size.y / (float)contentHeight * (float)trackHeight), MinThumbHeight, trackHeight);
-		const int32_t thumbTravel = max(1, trackHeight - thumbHeight);
+		const int32_t thumbTravel = std::max(1, trackHeight - thumbHeight);
 		const float maxScroll = ComputeMaxScroll();
 		if (maxScroll <= 0.0f)
 			return;

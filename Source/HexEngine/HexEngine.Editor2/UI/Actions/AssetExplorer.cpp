@@ -23,10 +23,10 @@ namespace HexEditor
 		RECT NormalizeRect(const HexEngine::Point& a, const HexEngine::Point& b)
 		{
 			RECT r = {};
-			r.left = min(a.x, b.x);
-			r.top = min(a.y, b.y);
-			r.right = max(a.x, b.x);
-			r.bottom = max(a.y, b.y);
+			r.left = std::min(a.x, b.x);
+			r.top = std::min(a.y, b.y);
+			r.right = std::max(a.x, b.x);
+			r.bottom = std::max(a.y, b.y);
 			return r;
 		}
 
@@ -41,7 +41,30 @@ namespace HexEditor
 				a.top < b.bottom && a.bottom > b.top;
 		}
 
-		
+		std::wstring SanitizeFileName(const std::wstring& value)
+		{
+			std::wstring result;
+			result.reserve(value.size());
+
+			for (const wchar_t ch : value)
+			{
+				if (iswalnum(ch))
+				{
+					result.push_back(ch);
+				}
+				else if (ch == L'_' || ch == L'-')
+				{
+					result.push_back(ch);
+				}
+			}
+
+			if (result.empty())
+			{
+				result = L"Material";
+			}
+
+			return result;
+		}
 	}
 
 	AssetExplorer::AssetExplorer(HexEngine::Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
@@ -106,10 +129,10 @@ namespace HexEditor
 
 	int32_t AssetExplorer::ComputeRequiredContentHeight() const
 	{
-		const int32_t innerWidth = max(1, _size.x - IconPadding * 2);
-		const int32_t itemsPerRow = max(1, (innerWidth + IconSpacing) / (IconSize + IconSpacing));
+		const int32_t innerWidth = std::max(1, _size.x - IconPadding * 2);
+		const int32_t itemsPerRow = std::max(1, (innerWidth + IconSpacing) / (IconSize + IconSpacing));
 		const int32_t rows = (int32_t)((_assetsInView.size() + itemsPerRow - 1) / itemsPerRow);
-		return max(_size.y, IconPadding * 2 + rows * IconRowStep);
+		return std::max(_size.y, IconPadding * 2 + rows * IconRowStep);
 	}
 
 	void AssetExplorer::ClearSelection()
@@ -463,6 +486,61 @@ namespace HexEditor
 			});
 	}
 
+	void AssetExplorer::ShowAutoCombineMeshesDialog()
+	{
+		CloseContextMenu();
+
+		int32_t numSelectedMeshes = 0;
+		for (const auto& asset : _assetsInView)
+		{
+			if (asset.selected && asset.path.extension() == ".hmesh")
+			{
+				numSelectedMeshes++;
+			}
+		}
+
+		if (numSelectedMeshes < 2)
+			return;
+
+		_autoCombineDeleteOriginals = false;
+
+		const int32_t dlgWidth = 420;
+		const int32_t dlgHeight = 130;
+		auto* dlg = new HexEngine::Dialog(
+			HexEngine::g_pEnv->GetUIManager().GetRootElement(),
+			HexEngine::Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2),
+			HexEngine::Point(dlgWidth, dlgHeight),
+			L"Auto Combine Meshes By Material");
+
+		new HexEngine::Checkbox(
+			dlg,
+			HexEngine::Point(12, 12),
+			HexEngine::Point(dlgWidth - 24, 22),
+			L"Delete original files after combine",
+			&_autoCombineDeleteOriginals);
+
+		new HexEngine::Button(
+			dlg,
+			HexEngine::Point(dlgWidth - 180, dlgHeight - 38),
+			HexEngine::Point(78, 24),
+			L"Cancel",
+			[dlg](HexEngine::Button*) {
+				dlg->DeleteMe();
+				return true;
+			});
+
+		new HexEngine::Button(
+			dlg,
+			HexEngine::Point(dlgWidth - 92, dlgHeight - 38),
+			HexEngine::Point(78, 24),
+			L"Combine",
+			[this, dlg](HexEngine::Button*) {
+				AutoCombineSelectedMeshesByMaterial(_autoCombineDeleteOriginals);
+				dlg->DeleteMe();
+				return true;
+			});
+	}
+
 	void AssetExplorer::CombineSelectedMeshes(fs::path outputFileName, bool removeOriginalFiles)
 	{
 		CloseContextMenu();
@@ -488,6 +566,78 @@ namespace HexEditor
 		if (selectedMeshPaths.size() < 2)
 			return;
 
+		if (CombineMeshPathGroup(selectedMeshPaths, outputFileName, removeOriginalFiles))
+		{
+			UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+		}
+	}
+
+	void AssetExplorer::AutoCombineSelectedMeshesByMaterial(bool removeOriginalFiles)
+	{
+		CloseContextMenu();
+
+		if (_currentlyBrowsedFS == nullptr)
+			return;
+
+		std::map<std::wstring, std::vector<fs::path>> groupedByMaterial;
+		for (const auto& asset : _assetsInView)
+		{
+			if (!asset.selected || asset.path.extension() != ".hmesh")
+				continue;
+
+			auto mesh = HexEngine::Mesh::Create(asset.path);
+			if (!mesh)
+				continue;
+
+			if (mesh->HasAnimations())
+				continue;
+
+			std::wstring materialKey = L"Default";
+			if (auto mat = mesh->GetMaterial(); mat != nullptr)
+			{
+				const auto& materialPath = mat->GetFileSystemPath();
+				if (!materialPath.empty())
+				{
+					materialKey = materialPath.wstring();
+				}
+			}
+
+			groupedByMaterial[materialKey].push_back(asset.path);
+		}
+
+		bool didCombine = false;
+		for (const auto& group : groupedByMaterial)
+		{
+			if (group.second.size() < 2)
+				continue;
+
+			fs::path materialPath = fs::path(group.first);
+			std::wstring baseName = materialPath.stem().wstring();
+			if (baseName.empty())
+			{
+				baseName = L"Default";
+			}
+
+			baseName = SanitizeFileName(baseName);
+
+			const fs::path outputFileName = L"AutoCombined_" + baseName + L".hmesh";
+			if (CombineMeshPathGroup(group.second, outputFileName, removeOriginalFiles))
+			{
+				didCombine = true;
+			}
+		}
+
+		if (didCombine)
+		{
+			UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+		}
+	}
+
+	bool AssetExplorer::CombineMeshPathGroup(const std::vector<fs::path>& meshPaths, fs::path outputFileName, bool removeOriginalFiles)
+	{
+		if (_currentlyBrowsedFS == nullptr || meshPaths.size() < 2)
+			return false;
+
 		std::vector<HexEngine::MeshVertex> combinedVertices;
 		std::vector<HexEngine::MeshIndexFormat> combinedIndices;
 		combinedVertices.reserve(4096);
@@ -495,7 +645,7 @@ namespace HexEditor
 
 		std::shared_ptr<HexEngine::Material> firstMaterial;
 
-		for (const auto& meshPath : selectedMeshPaths)
+		for (const auto& meshPath : meshPaths)
 		{
 			auto mesh = HexEngine::Mesh::Create(meshPath);
 			if (!mesh)
@@ -532,7 +682,7 @@ namespace HexEditor
 		if (combinedVertices.empty() || combinedIndices.empty())
 		{
 			LOG_WARN("Combine mesh operation produced no output data");
-			return;
+			return false;
 		}
 
 		fs::path outputFilePath = fs::path(outputFileName).filename();
@@ -593,7 +743,7 @@ namespace HexEditor
 
 		if (removeOriginalFiles)
 		{
-			for (const auto& meshPath : selectedMeshPaths)
+			for (const auto& meshPath : meshPaths)
 			{
 				if (meshPath == outputPath)
 					continue;
@@ -607,7 +757,7 @@ namespace HexEditor
 			}
 		}
 
-		UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+		return true;
 	}
 
 	void AssetExplorer::SelectAll()
@@ -826,6 +976,7 @@ namespace HexEditor
 					if (numSelectedMeshes >= 2)
 					{
 						_contextMenu->AddItem(new HexEngine::ContextItem(L"Combine meshes...", std::bind(&AssetExplorer::ShowCombineMeshesDialog, this)));
+						_contextMenu->AddItem(new HexEngine::ContextItem(L"Auto combine by material...", std::bind(&AssetExplorer::ShowAutoCombineMeshesDialog, this)));
 					}
 				}
 				else
@@ -1057,8 +1208,8 @@ namespace HexEditor
 		if (_isMarqueeSelecting)
 		{
 			const RECT marquee = NormalizeRect(_marqueeStart, _marqueeEnd);
-			const int32_t width = max(0L, marquee.right - marquee.left);
-			const int32_t height = max(0L, marquee.bottom - marquee.top);
+			const int32_t width = std::max(0L, marquee.right - marquee.left);
+			const int32_t height = std::max(0L, marquee.bottom - marquee.top);
 
 			renderer->FillQuad(marquee.left, marquee.top, width, height, math::Color(0.2f, 0.4f, 1.0f, 0.2f));
 			renderer->Frame(marquee.left, marquee.top, width, height, 1, math::Color(0.2f, 0.6f, 1.0f, 0.9f));

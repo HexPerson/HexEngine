@@ -662,4 +662,16 @@ namespace HexEngine
 		GetIRigidBody()->SetGravityEnabled(value);
 		_isGravityApplied = value;
 	}
+
+	void RigidBody::CreateCharacterController(const ControllerParameters& params, Transform* transform)
+	{
+		if (_rigidBody != nullptr)
+		{
+			RemoveCollider();
+
+			g_pEnv->_physicsSystem->DestroyRigidBody(_rigidBody);			
+		}
+
+		_rigidBody = g_pEnv->_physicsSystem->CreateController(params, transform);
+	}
 }

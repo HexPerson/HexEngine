@@ -9,11 +9,11 @@ namespace HexEngine
 {
 	enum RTSMoveFlag
 	{
-		MoveNone = 0,
-		MoveForwards = HEX_BITSET(0),
-		MoveBackwards = HEX_BITSET(1),
-		MoveLeft = HEX_BITSET(2),
-		MoveRight = HEX_BITSET(3),
+		RTSMoveNone = 0,
+		RTSMoveForwards = HEX_BITSET(0),
+		RTSMoveBackwards = HEX_BITSET(1),
+		RTSMoveLeft = HEX_BITSET(2),
+		RTSMoveRight = HEX_BITSET(3),
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(RTSMoveFlag);
 
@@ -69,7 +69,7 @@ namespace HexEngine
 		bool _hasConstraint = false;
 
 		math::Vector3 _desiredMovementDir;
-		RTSMoveFlag _moveFlags = MoveNone;
+		RTSMoveFlag _moveFlags = RTSMoveNone;
 
 		float _targetZoom = 0.0f;
 		float _currentZoom = 0.0f;

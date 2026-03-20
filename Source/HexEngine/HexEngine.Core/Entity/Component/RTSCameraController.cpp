@@ -20,9 +20,9 @@ namespace HexEngine
 		RTSCameraController* controller = (RTSCameraController*)param;
 
 		if (pressed)
-			controller->SetMovementFlag(RTSMoveFlag::MoveForwards);
+			controller->SetMovementFlag(RTSMoveFlag::RTSMoveForwards);
 		else
-			controller->ClearMovementFlag(RTSMoveFlag::MoveForwards);
+			controller->ClearMovementFlag(RTSMoveFlag::RTSMoveForwards);
 	}
 
 	HEX_COMMAND(RTSMoveBackwards)
@@ -30,9 +30,9 @@ namespace HexEngine
 		RTSCameraController* controller = (RTSCameraController*)param;
 
 		if (pressed)
-			controller->SetMovementFlag(RTSMoveFlag::MoveBackwards);
+			controller->SetMovementFlag(RTSMoveFlag::RTSMoveBackwards);
 		else
-			controller->ClearMovementFlag(RTSMoveFlag::MoveBackwards);
+			controller->ClearMovementFlag(RTSMoveFlag::RTSMoveBackwards);
 	}
 
 	HEX_COMMAND(RTSMoveLeft)
@@ -40,9 +40,9 @@ namespace HexEngine
 		RTSCameraController* controller = (RTSCameraController*)param;
 
 		if (pressed)
-			controller->SetMovementFlag(RTSMoveFlag::MoveLeft);
+			controller->SetMovementFlag(RTSMoveFlag::RTSMoveLeft);
 		else
-			controller->ClearMovementFlag(RTSMoveFlag::MoveLeft);
+			controller->ClearMovementFlag(RTSMoveFlag::RTSMoveLeft);
 	}
 
 	HEX_COMMAND(RTSMoveRight)
@@ -50,9 +50,9 @@ namespace HexEngine
 		RTSCameraController* controller = (RTSCameraController*)param;
 
 		if (pressed)
-			controller->SetMovementFlag(RTSMoveFlag::MoveRight);
+			controller->SetMovementFlag(RTSMoveFlag::RTSMoveRight);
 		else
-			controller->ClearMovementFlag(RTSMoveFlag::MoveRight);
+			controller->ClearMovementFlag(RTSMoveFlag::RTSMoveRight);
 	}
 
 	RTSCameraController::RTSCameraController(Entity* entity) :
@@ -122,24 +122,24 @@ namespace HexEngine
 
 		Transform* transform = GetEntity()->GetComponent<Transform>();
 
-		if (_moveFlags & RTSMoveFlag::MoveForwards)
+		if (_moveFlags & RTSMoveFlag::RTSMoveForwards)
 		{
 			auto right = -transform->GetRight();
 			auto forward = right.Cross(math::Vector3::Up);
 			direction += forward;
 		}
 
-		if (_moveFlags & RTSMoveFlag::MoveBackwards)
+		if (_moveFlags & RTSMoveFlag::RTSMoveBackwards)
 		{
 			auto right = -transform->GetRight();
 			auto forward = right.Cross(math::Vector3::Up);
 			direction += -forward;
 		}
 
-		if (_moveFlags & RTSMoveFlag::MoveRight)
+		if (_moveFlags & RTSMoveFlag::RTSMoveRight)
 			direction += transform->GetRight();
 
-		if (_moveFlags & RTSMoveFlag::MoveLeft)
+		if (_moveFlags & RTSMoveFlag::RTSMoveLeft)
 			direction -= transform->GetRight();
 
 		const float AccelerationSpeed = 1200.0f;

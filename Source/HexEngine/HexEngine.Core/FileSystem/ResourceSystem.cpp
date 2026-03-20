@@ -233,7 +233,7 @@ namespace HexEngine
 
 			if (fs->DoesAbsolutePathExist(fullPath) == false)
 			{
-				LOG_CRIT("Cannot load resource '%s' because the path does not exist", fullPath.string().c_str());
+				LOG_WARN("Cannot load resource '%s' because the path does not exist", fullPath.string().c_str());
 				continue;
 			}
 
