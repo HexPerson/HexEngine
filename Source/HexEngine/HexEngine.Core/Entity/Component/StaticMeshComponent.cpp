@@ -49,7 +49,13 @@ namespace HexEngine
 		bool isShadowMap = (flags & MeshRenderFlags::MeshRenderShadowMap) != 0;
 
 		if (isShadowMap)
-			shader = material->GetShadowMapShader();
+		{
+			auto shadowShader = material->GetShadowMapShader();
+			if (!shadowShader)
+				shadowShader = IShader::Create("EngineData.Shaders/ShadowMapGeometry.hcs");
+			if (shadowShader)
+				shader = shadowShader;
+		}
 
 		if (!shader)
 		{

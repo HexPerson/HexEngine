@@ -35,6 +35,7 @@ namespace HexEngine
 		//
 		auto cameraEntity = CreateEntity("MainCamera");
 		cameraEntity->SetLayer(Layer::Camera);
+		
 		_mainCamera = cameraEntity->AddComponent<Camera>();
 
 		// Add an environment light (sun)
@@ -55,7 +56,7 @@ namespace HexEngine
 			{
 				_skySphere = CreateEntity("SkySphere", math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(2.0f));
 				_skySphere->SetLayer(Layer::Sky);
-
+				_skySphere->SetFlag(EntityFlags::ExcludeFromHLOD);
 				auto sphereMesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
 				auto skyRenderer = _skySphere->AddComponent<StaticMeshComponent>();
@@ -94,6 +95,7 @@ namespace HexEngine
 			{
 				_skySphere = CreateEntity("SkySphere", math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(2.0f));
 				_skySphere->SetLayer(Layer::Sky);
+				_skySphere->SetFlag(EntityFlags::ExcludeFromHLOD);
 
 				auto sphereMesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
@@ -1036,7 +1038,13 @@ namespace HexEngine
 			static auto defaultTexture = ITexture2D::GetDefaultTexture();
 
 			if (isShadowMap)
-				shader = material->GetShadowMapShader();
+			{
+				auto shadowShader = material->GetShadowMapShader();
+				if (!shadowShader)
+					shadowShader = IShader::Create("EngineData.Shaders/ShadowMapGeometry.hcs"); // it should never get here, hard fallback
+				if (shadowShader)
+					shader = shadowShader;
+			}
 
 			if (!shader)
 			{

@@ -1509,11 +1509,45 @@ void GraphicsDeviceD3D11::SetTexture2DArray(uint32_t slot, const std::vector<Hex
 
 	HEX_ASSERT(textures.size() < 32);
 
+	const auto hasOutputHazard = [this, &textures]()
+	{
+		for (HexEngine::ITexture2D* texture : textures)
+		{
+			if (!texture)
+			{
+				continue;
+			}
+
+			if (texture == _boundDepthStencil)
+			{
+				return true;
+			}
+
+			for (HexEngine::ITexture2D* boundTarget : _boundRenderTargets)
+			{
+				if (texture == boundTarget)
+				{
+					return true;
+				}
+			}
+		}
+
+		return false;
+	};
+
+	if (hasOutputHazard())
+	{
+		// SRV/RTV-DSV overlap is invalid in D3D11; unbind outputs first.
+		_deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+		_boundRenderTargets.clear();
+		_boundDepthStencil = nullptr;
+	}
+
 	ID3D11ShaderResourceView* array[32]; // this is a bad idea, what if there are more than 32 textures??!!
 
 	for (auto i = 0; i < textures.size(); ++i)
 	{
-		auto tex = reinterpret_cast<Texture3D*>(textures[i]);
+		auto tex = reinterpret_cast<Texture2D*>(textures[i]);
 
 		array[i] = tex ? tex->_shaderResourceView : nullptr;
 	}
@@ -1528,11 +1562,45 @@ void GraphicsDeviceD3D11::SetTexture2DArray(const std::vector<HexEngine::ITextur
 
 	HEX_ASSERT(textures.size() < 32);
 
+	const auto hasOutputHazard = [this, &textures]()
+	{
+		for (HexEngine::ITexture2D* texture : textures)
+		{
+			if (!texture)
+			{
+				continue;
+			}
+
+			if (texture == _boundDepthStencil)
+			{
+				return true;
+			}
+
+			for (HexEngine::ITexture2D* boundTarget : _boundRenderTargets)
+			{
+				if (texture == boundTarget)
+				{
+					return true;
+				}
+			}
+		}
+
+		return false;
+	};
+
+	if (hasOutputHazard())
+	{
+		// SRV/RTV-DSV overlap is invalid in D3D11; unbind outputs first.
+		_deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+		_boundRenderTargets.clear();
+		_boundDepthStencil = nullptr;
+	}
+
 	ID3D11ShaderResourceView* array[32]; // this is a bad idea, what if there are more than 32 textures??!!
 
 	for (auto i = 0; i < textures.size(); ++i)
 	{
-		auto tex = reinterpret_cast<Texture3D*>(textures[i]);
+		auto tex = reinterpret_cast<Texture2D*>(textures[i]);
 
 		array[i] = tex ? tex->_shaderResourceView : nullptr;
 	}

@@ -63,7 +63,8 @@ namespace HexEngine
 		PreviousTransformDirty	= HEX_BITSET(3),
 		DoNotBlockNavMesh		= HEX_BITSET(4),
 		DoNotRender				= HEX_BITSET(5),
-		SelectedInEditor		= HEX_BITSET(6)
+		SelectedInEditor		= HEX_BITSET(6),
+		ExcludeFromHLOD			= HEX_BITSET(7)
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(EntityFlags);
 

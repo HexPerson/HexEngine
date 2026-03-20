@@ -291,6 +291,11 @@ namespace HexEditor
 				actionSettings->name = L"Settings";
 				actionSettings->action = std::bind(&EditorUI::ShowSettingsDialog, this);
 				_mainMenu->AddSubItem(scene, actionSettings);
+
+				HexEngine::MenuBar::Item* actionGenerateHlod = new HexEngine::MenuBar::Item;
+				actionGenerateHlod->name = L"Generate HLOD (Scaffold)";
+				actionGenerateHlod->action = std::bind(&EditorUI::OnGenerateHLOD, this);
+				_mainMenu->AddSubItem(scene, actionGenerateHlod);
 			}
 		}
 
@@ -478,6 +483,242 @@ namespace HexEditor
 		auto bb = billboard->AddComponent<HexEngine::Billboard>();
 		bb->SetTexture(HexEngine::ITexture2D::Create("EngineData.Textures/particles/smoke01.png"));
 		//bb->SetTexture(ITexture2D::Create("Textures/test.png"));
+	}
+
+	void EditorUI::OnGenerateHLOD()
+	{
+		auto* currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get();
+		if (currentScene == nullptr)
+			return;
+
+		if (_projectFolderPath.empty())
+		{
+			LOG_WARN("Cannot generate HLOD because no project folder is active");
+			return;
+		}
+
+		std::vector<HexEngine::StaticMeshComponent*> staticMeshes;
+		currentScene->GetComponents(staticMeshes);
+		if (staticMeshes.empty())
+		{
+			LOG_INFO("HLOD generation skipped: scene has no static meshes");
+			return;
+		}
+
+		struct ClusterData
+		{
+			std::vector<HexEngine::StaticMeshComponent*> meshes;
+		};
+
+		const float clusterSize = 600.0f;
+		std::unordered_map<std::string, ClusterData> clusters;
+		clusters.reserve(staticMeshes.size());
+
+		for (auto* smc : staticMeshes)
+		{
+			if (smc == nullptr || smc->GetMesh() == nullptr)
+				continue;
+
+			auto* entity = smc->GetEntity();
+			if (entity == nullptr || entity->HasFlag(HexEngine::EntityFlags::DoNotRender))
+				continue;
+
+			if (entity->HasFlag(HexEngine::EntityFlags::ExcludeFromHLOD))
+			{
+				LOG_INFO("Ignoring entity '%s' for HLOD generation", smc->GetEntity()->GetName().c_str());
+				continue;
+			}
+
+			const auto& pos = entity->GetPosition();
+			const int32_t cx = static_cast<int32_t>(std::floor(pos.x / clusterSize));
+			const int32_t cy = static_cast<int32_t>(std::floor(pos.y / clusterSize));
+			const int32_t cz = static_cast<int32_t>(std::floor(pos.z / clusterSize));
+
+			const std::string key = std::to_string(cx) + "_" + std::to_string(cy) + "_" + std::to_string(cz);
+			clusters[key].meshes.push_back(smc);
+		}
+
+		fs::path hlodOutputDir = _projectFolderPath / "Data/Models/HLOD";
+		std::error_code mkErr;
+		fs::create_directories(hlodOutputDir, mkErr);
+		if (mkErr)
+		{
+			LOG_WARN("Failed to create HLOD output directory '%s': %s", hlodOutputDir.string().c_str(), mkErr.message().c_str());
+			return;
+		}
+
+		HexEngine::FileSystem* gameFs = HexEngine::g_pEnv->GetResourceSystem().FindFileSystemByName(L"GameData");
+		if (gameFs == nullptr)
+		{
+			LOG_WARN("Cannot generate HLOD because GameData filesystem is unavailable");
+			return;
+		}
+
+		int32_t generatedClusters = 0;
+		int32_t clusterIndex = 0;
+
+		for (const auto& [clusterKey, cluster] : clusters)
+		{
+			if (cluster.meshes.size() < 2)
+				continue;
+
+			std::unordered_map<std::string, std::vector<HexEngine::StaticMeshComponent*>> materialGroups;
+			materialGroups.reserve(cluster.meshes.size());
+
+			for (auto* smc : cluster.meshes)
+			{
+				if (smc == nullptr || smc->GetMesh() == nullptr)
+					continue;
+
+				auto material = smc->GetMaterial();
+				std::string matKey = "__default";
+				if (material != nullptr)
+				{
+					auto fsPath = material->GetFileSystemPath();
+					if (!fsPath.empty())
+						matKey = fsPath.string();
+				}
+
+				materialGroups[matKey].push_back(smc);
+			}
+
+			int32_t materialGroupIndex = 0;
+			for (const auto& [materialKey, groupMeshes] : materialGroups)
+			{
+				if (groupMeshes.empty())
+					continue;
+
+				std::vector<HexEngine::MeshVertex> combinedVertices;
+				std::vector<HexEngine::MeshIndexFormat> combinedIndices;
+				combinedVertices.reserve(8192);
+				combinedIndices.reserve(16384);
+
+				std::shared_ptr<HexEngine::Material> groupMaterial;
+				math::Vector3 accumulatedWorldPos = math::Vector3::Zero;
+				uint32_t accumulatedWorldPosCount = 0;
+
+				for (auto* smc : groupMeshes)
+				{
+					auto mesh = smc->GetMesh();
+					if (!mesh || mesh->HasAnimations())
+						continue;
+
+					if (!groupMaterial && smc->GetMaterial())
+					{
+						groupMaterial = smc->GetMaterial();
+					}
+
+					const auto& sourceVertices = mesh->GetVertices();
+					const auto& sourceIndices = mesh->GetIndices();
+					if (sourceVertices.empty() || sourceIndices.empty())
+						continue;
+
+					const auto worldTM = smc->GetEntity()->GetWorldTM();
+					const auto indexOffset = static_cast<HexEngine::MeshIndexFormat>(combinedVertices.size());
+
+					for (auto vertex : sourceVertices)
+					{
+						vertex._position = math::Vector4::Transform(vertex._position, worldTM);
+						vertex._normal = math::Vector3::TransformNormal(vertex._normal, worldTM);
+						vertex._tangent = math::Vector3::TransformNormal(vertex._tangent, worldTM);
+						vertex._bitangent = math::Vector3::TransformNormal(vertex._bitangent, worldTM);
+						vertex._normal.Normalize();
+						vertex._tangent.Normalize();
+						vertex._bitangent.Normalize();
+
+						accumulatedWorldPos += math::Vector3(vertex._position.x, vertex._position.y, vertex._position.z);
+						accumulatedWorldPosCount++;
+
+						combinedVertices.push_back(vertex);
+					}
+
+					for (const auto index : sourceIndices)
+					{
+						combinedIndices.push_back(index + indexOffset);
+					}
+				}
+
+				if (combinedVertices.empty() || combinedIndices.empty() || accumulatedWorldPosCount == 0)
+					continue;
+
+				const math::Vector3 clusterCenter = accumulatedWorldPos / static_cast<float>(accumulatedWorldPosCount);
+				for (auto& vertex : combinedVertices)
+				{
+					vertex._position.x -= clusterCenter.x;
+					vertex._position.y -= clusterCenter.y;
+					vertex._position.z -= clusterCenter.z;
+				}
+
+				fs::path outputPath = hlodOutputDir / ("HLOD_" + std::to_string(clusterIndex) + "_" + std::to_string(materialGroupIndex++) + ".hmesh");
+				if (fs::exists(outputPath))
+				{
+					for (int32_t i = 1; i < 1024; ++i)
+					{
+						fs::path candidate = hlodOutputDir / ("HLOD_" + std::to_string(clusterIndex) + "_" + std::to_string(materialGroupIndex) + "_" + std::to_string(i) + ".hmesh");
+						if (!fs::exists(candidate))
+						{
+							outputPath = candidate;
+							break;
+						}
+					}
+				}
+
+				auto combinedMesh = std::shared_ptr<HexEngine::Mesh>(new HexEngine::Mesh(nullptr, outputPath.stem().string()), HexEngine::ResourceDeleter());
+				combinedMesh->SetPaths(outputPath, gameFs);
+				combinedMesh->SetLoader(HexEngine::g_pEnv->_meshLoader);
+				combinedMesh->SetNumFaces(static_cast<uint32_t>(combinedIndices.size() / 3));
+				combinedMesh->AddVertices(combinedVertices);
+				combinedMesh->AddIndices(combinedIndices);
+
+				dx::BoundingBox aabb;
+				dx::BoundingBox::CreateFromPoints(
+					aabb,
+					static_cast<size_t>(combinedVertices.size()),
+					reinterpret_cast<const math::Vector3*>(combinedVertices.data()),
+					sizeof(HexEngine::MeshVertex));
+				combinedMesh->SetAABB(aabb);
+
+				dx::BoundingOrientedBox obb;
+				dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
+				combinedMesh->SetOBB(obb);
+
+				std::shared_ptr<HexEngine::Material> hlodMaterial = groupMaterial
+					? std::make_shared<HexEngine::Material>(*groupMaterial)
+					: HexEngine::Material::GetDefaultMaterial();
+
+				if (hlodMaterial && !hlodMaterial->GetShadowMapShader())
+				{
+					auto fallbackShadowShader = HexEngine::IShader::Create("EngineData.Shaders/ShadowMapGeometry.hcs");
+					if (!fallbackShadowShader)
+						fallbackShadowShader = hlodMaterial->GetStandardShader();
+
+					if (fallbackShadowShader)
+						hlodMaterial->SetShadowMapShader(fallbackShadowShader);
+				}
+
+				combinedMesh->SetMaterial(hlodMaterial ? hlodMaterial : HexEngine::Material::GetDefaultMaterial());
+
+				combinedMesh->Save();
+
+				auto loadedHlodMesh = HexEngine::Mesh::Create(outputPath);
+				if (!loadedHlodMesh)
+				{
+					LOG_WARN("Failed to load generated HLOD mesh '%s'", outputPath.string().c_str());
+					continue;
+				}
+
+				auto* hlodEntity = currentScene->CreateEntity("HLOD_" + clusterKey + "_" + std::to_string(materialGroupIndex), clusterCenter);
+				auto* hlodSmc = hlodEntity->AddComponent<HexEngine::StaticMeshComponent>();
+				hlodSmc->SetMesh(loadedHlodMesh);
+				hlodSmc->SetMaterial(hlodMaterial ? hlodMaterial : HexEngine::Material::GetDefaultMaterial());
+
+				generatedClusters++;
+			}
+
+			clusterIndex++;
+		}
+
+		LOG_INFO("HLOD scaffold generation complete. Created %d cluster mesh(es).", generatedClusters);
 	}
 
 	void EditorUI::OnSaveAction()

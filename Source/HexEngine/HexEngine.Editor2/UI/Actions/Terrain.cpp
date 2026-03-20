@@ -212,6 +212,7 @@ namespace HexEditor
 				}
 
 				terrainEnt->SetParent(parentEnt);
+				terrainEnt->SetFlag(HexEngine::EntityFlags::ExcludeFromHLOD);
 
 				if(_parent == false)
 					_created.push_back(terrainEnt);

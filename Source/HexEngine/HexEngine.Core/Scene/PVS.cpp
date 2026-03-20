@@ -4,12 +4,72 @@
 #include "../Terrain/ChunkManager.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
 #include "../Entity/Component/SkeletalAnimationComponent.hpp"
+#include "../Graphics/Material.hpp"
 #include "Scene.hpp"
 #include "../Input/HVar.hpp"
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace HexEngine
 {
 	HVar r_grassCullDist("r_grassCullDist", "The distance at which to cull grass", 1000.0f, 0.0f, 10000.0f);
+	HVar r_hlodEnable("r_hlodEnable", "Enable runtime HLOD substitution for generated HLOD entities", true, false, true);
+	HVar r_hlodClusterSize("r_hlodClusterSize", "Cluster size used when mapping source meshes to generated HLOD entities", 200.0f, 1.0f, 100000.0f);
+	HVar r_hlodSwitchDistance("r_hlodSwitchDistance", "Distance from camera where runtime HLOD replaces source meshes", 400.0f, 1.0f, 100000.0f);
+	HVar r_hlodDebugShowOnly("r_hlodDebugShowOnly", "Debug: render only generated HLOD entities", false, false, true);
+	HVar r_hlodAffectTerrain("r_hlodAffectTerrain", "Allow runtime HLOD substitution to affect chunk-based terrain meshes", false, false, true);
+
+	namespace
+	{
+		struct HlodClusterRuntimeData
+		{
+			math::Vector3 center = math::Vector3::Zero;
+			bool hasCenter = false;
+			std::unordered_set<std::string> materialKeys;
+		};
+
+		bool TryExtractHlodClusterKey(const std::string& entityName, std::string& outClusterKey)
+		{
+			static constexpr const char* HlodPrefix = "HLOD_";
+			static constexpr size_t HlodPrefixLen = 5;
+
+			if (entityName.rfind(HlodPrefix, 0) != 0 || entityName.size() <= HlodPrefixLen)
+				return false;
+
+			const std::string suffix = entityName.substr(HlodPrefixLen);
+			const size_t lastUnderscore = suffix.find_last_of('_');
+			if (lastUnderscore == std::string::npos || lastUnderscore == 0)
+				return false;
+
+			const std::string tail = suffix.substr(lastUnderscore + 1);
+			const bool hasNumericTail = !tail.empty() && std::all_of(tail.begin(), tail.end(), [](unsigned char c) { return std::isdigit(c) != 0; });
+			outClusterKey = hasNumericTail ? suffix.substr(0, lastUnderscore) : suffix;
+			return !outClusterKey.empty();
+		}
+
+		std::string BuildClusterKeyFromPosition(const math::Vector3& pos, float clusterSize)
+		{
+			const int32_t cx = static_cast<int32_t>(std::floor(pos.x / clusterSize));
+			const int32_t cy = static_cast<int32_t>(std::floor(pos.y / clusterSize));
+			const int32_t cz = static_cast<int32_t>(std::floor(pos.z / clusterSize));
+			return std::to_string(cx) + "_" + std::to_string(cy) + "_" + std::to_string(cz);
+		}
+
+		std::string BuildMaterialKey(const std::shared_ptr<Material>& material)
+		{
+			if (!material)
+				return "__default";
+
+			const fs::path fsPath = material->GetFileSystemPath();
+			if (fsPath.empty())
+				return "__default";
+
+			return fsPath.string();
+		}
+	}
 
 	void PVS::ClearPVS()
 	{
@@ -162,6 +222,30 @@ namespace HexEngine
 			scene->GetComponents<StaticMeshComponent>(components);
 		}
 
+		std::unordered_map<std::string, HlodClusterRuntimeData> hlodClusters;
+		hlodClusters.reserve(components.size());
+		for (auto* component : components)
+		{
+			if (!component)
+				continue;
+
+			Entity* entity = component->GetEntity();
+			if (!entity)
+				continue;
+
+			std::string hlodClusterKey;
+			if (TryExtractHlodClusterKey(entity->GetName(), hlodClusterKey))
+			{
+				auto& clusterData = hlodClusters[hlodClusterKey];
+				if (!clusterData.hasCenter)
+				{
+					clusterData.center = entity->GetPosition();
+					clusterData.hasCenter = true;
+				}
+				clusterData.materialKeys.insert(BuildMaterialKey(component->GetMaterial()));
+			}
+		}
+
 		/*std::sort(components.begin(), components.end(),
 
 			[params](StaticMeshComponent* ent1, StaticMeshComponent* ent2) {
@@ -246,6 +330,56 @@ namespace HexEngine
 
 			if (component)
 			{
+				if (r_hlodEnable._val.b && params.camera != nullptr)
+				{
+					//if (!r_hlodAffectTerrain._val.b && entity->GetChunk() != nullptr)
+					//{
+					//	// Terrain/chunk meshes have their own LOD path and can share proxy origins; skip HLOD substitution by default.
+					//}
+					//else
+					{
+						const float switchDistance = r_hlodSwitchDistance._val.f32;
+						std::string hlodClusterKey;
+						const bool isHlodEntity = TryExtractHlodClusterKey(entity->GetName(), hlodClusterKey);
+
+						if (r_hlodDebugShowOnly._val.b)
+						{
+							if (!isHlodEntity)
+								continue;
+						}
+						else
+						{
+							if (isHlodEntity)
+							{
+								auto hlodIt = hlodClusters.find(hlodClusterKey);
+								const math::Vector3 clusterCenter = (hlodIt != hlodClusters.end() && hlodIt->second.hasCenter)
+									? hlodIt->second.center
+									: entity->GetPosition();
+								const float distanceToCluster = (clusterCenter - params.camera->GetEntity()->GetPosition()).Length();
+								if (distanceToCluster < switchDistance)
+									continue;
+							}
+							else
+							{
+								const std::string sourceClusterKey = BuildClusterKeyFromPosition(entity->GetPosition(), r_hlodClusterSize._val.f32);
+								auto hlodIt = hlodClusters.find(sourceClusterKey);
+								if (hlodIt != hlodClusters.end())
+								{
+									const std::string sourceMaterialKey = BuildMaterialKey(component->GetMaterial());
+									const bool hasMatchingHlodMaterial = hlodIt->second.materialKeys.find(sourceMaterialKey) != hlodIt->second.materialKeys.end();
+									if (hasMatchingHlodMaterial)
+									{
+										const math::Vector3 clusterCenter = hlodIt->second.hasCenter ? hlodIt->second.center : entity->GetPosition();
+										const float distanceToCluster = (clusterCenter - params.camera->GetEntity()->GetPosition()).Length();
+										if (distanceToCluster >= switchDistance)
+											continue;
+									}
+								}
+							}
+						}
+					}
+				}
+
 				bool visible = IsEntityVisible(entity, params);
 
 				if (entity->IsInPVS() != visible && params.isShadow == false)
