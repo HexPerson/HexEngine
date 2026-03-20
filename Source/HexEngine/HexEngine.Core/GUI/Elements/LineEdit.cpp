@@ -90,7 +90,7 @@ namespace HexEngine
 
 			if (_uneditableText.length() > 0)
 			{
-				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, math::Color(HEX_RGBA_TO_FLOAT4(70, 70, 70, 255)), FontAlign::CentreUD, value);
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, math::Color(HEX_RGBA_TO_FLOAT4(70, 70, 70, 255)), FontAlign::CentreUD, _uneditableText);
 				position.x += uneditableTextWidth;
 			}
 

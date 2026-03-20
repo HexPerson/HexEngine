@@ -400,6 +400,216 @@ namespace HexEditor
 		}
 	}
 
+	void AssetExplorer::ShowCombineMeshesDialog()
+	{
+		CloseContextMenu();
+
+		int32_t numSelectedMeshes = 0;
+		for (const auto& asset : _assetsInView)
+		{
+			if (asset.selected && asset.path.extension() == ".hmesh")
+			{
+				numSelectedMeshes++;
+			}
+		}
+
+		if (numSelectedMeshes < 2)
+			return;
+
+		_combineDeleteOriginals = false;
+
+		const int32_t dlgWidth = 420;
+		const int32_t dlgHeight = 160;
+		auto* dlg = new HexEngine::Dialog(
+			HexEngine::g_pEnv->GetUIManager().GetRootElement(),
+			HexEngine::Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2),
+			HexEngine::Point(dlgWidth, dlgHeight),
+			L"Combine Meshes");
+
+		auto* outputName = new HexEngine::LineEdit(
+			dlg,
+			HexEngine::Point(12, 12),
+			HexEngine::Point(dlgWidth - 24, 24),
+			L"Output name");
+		outputName->SetValue(L"CombinedMesh");
+		outputName->SetDoesCallbackWaitForReturn(false);
+
+		new HexEngine::Checkbox(
+			dlg,
+			HexEngine::Point(12, 46),
+			HexEngine::Point(dlgWidth - 24, 22),
+			L"Delete original files after combine",
+			&_combineDeleteOriginals);
+
+		new HexEngine::Button(
+			dlg,
+			HexEngine::Point(dlgWidth - 180, dlgHeight - 68),
+			HexEngine::Point(78, 24),
+			L"Cancel",
+			[dlg](HexEngine::Button*) {
+				dlg->DeleteMe();
+				return true;
+			});
+
+		new HexEngine::Button(
+			dlg,
+			HexEngine::Point(dlgWidth - 92, dlgHeight - 68),
+			HexEngine::Point(78, 24),
+			L"Combine",
+			[this, dlg, outputName](HexEngine::Button*) {
+				CombineSelectedMeshes(outputName->GetValue(), _combineDeleteOriginals);
+				dlg->DeleteMe();
+				return true;
+			});
+	}
+
+	void AssetExplorer::CombineSelectedMeshes(fs::path outputFileName, bool removeOriginalFiles)
+	{
+		CloseContextMenu();
+
+		if (_currentlyBrowsedFS == nullptr)
+			return;
+
+		// ensure correct file extension
+		if (outputFileName.filename().extension() != ".hmesh")
+			outputFileName.replace_extension(".hmesh");
+
+		std::vector<fs::path> selectedMeshPaths;
+		selectedMeshPaths.reserve(_assetsInView.size());
+
+		for (const auto& asset : _assetsInView)
+		{
+			if (asset.selected && asset.path.extension() == ".hmesh")
+			{
+				selectedMeshPaths.push_back(asset.path);
+			}
+		}
+
+		if (selectedMeshPaths.size() < 2)
+			return;
+
+		std::vector<HexEngine::MeshVertex> combinedVertices;
+		std::vector<HexEngine::MeshIndexFormat> combinedIndices;
+		combinedVertices.reserve(4096);
+		combinedIndices.reserve(4096);
+
+		std::shared_ptr<HexEngine::Material> firstMaterial;
+
+		for (const auto& meshPath : selectedMeshPaths)
+		{
+			auto mesh = HexEngine::Mesh::Create(meshPath);
+			if (!mesh)
+			{
+				LOG_WARN("Skipping mesh '%s' while combining because it failed to load", meshPath.string().c_str());
+				continue;
+			}
+
+			if (mesh->HasAnimations())
+			{
+				LOG_WARN("Skipping mesh '%s' while combining because animated meshes are not supported", meshPath.string().c_str());
+				continue;
+			}
+
+			const auto& sourceVertices = mesh->GetVertices();
+			const auto& sourceIndices = mesh->GetIndices();
+			if (sourceVertices.empty() || sourceIndices.empty())
+				continue;
+
+			if (!firstMaterial && mesh->GetMaterial())
+			{
+				firstMaterial = mesh->GetMaterial();
+			}
+
+			const HexEngine::MeshIndexFormat indexOffset = static_cast<HexEngine::MeshIndexFormat>(combinedVertices.size());
+			combinedVertices.insert(combinedVertices.end(), sourceVertices.begin(), sourceVertices.end());
+
+			for (const auto index : sourceIndices)
+			{
+				combinedIndices.push_back(index + indexOffset);
+			}
+		}
+
+		if (combinedVertices.empty() || combinedIndices.empty())
+		{
+			LOG_WARN("Combine mesh operation produced no output data");
+			return;
+		}
+
+		fs::path outputFilePath = fs::path(outputFileName).filename();
+		if (outputFilePath.empty() || outputFilePath == L"." || outputFilePath == L"..")
+		{
+			outputFilePath = L"CombinedMesh";
+		}
+
+		if (outputFilePath.extension() != L".hmesh")
+		{
+			outputFilePath.replace_extension(L".hmesh");
+		}
+
+		fs::path outputPath = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(_currentlyBrowsedFolder / outputFilePath);
+		if (fs::exists(outputPath))
+		{
+			const std::wstring baseName = outputPath.stem().wstring();
+			for (int32_t i = 1; i < 1024; ++i)
+			{
+				fs::path candidate = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(_currentlyBrowsedFolder / (baseName + L"_" + std::to_wstring(i) + L".hmesh"));
+				if (!fs::exists(candidate))
+				{
+					outputPath = candidate;
+					break;
+				}
+			}
+		}
+
+		auto combinedMesh = std::shared_ptr<HexEngine::Mesh>(new HexEngine::Mesh(nullptr, outputPath.stem().string()), HexEngine::ResourceDeleter());
+		combinedMesh->SetPaths(outputPath, _currentlyBrowsedFS);
+		combinedMesh->SetLoader(HexEngine::g_pEnv->_meshLoader);
+		combinedMesh->SetNumFaces(static_cast<uint32_t>(combinedIndices.size() / 3));
+		combinedMesh->AddVertices(combinedVertices);
+		combinedMesh->AddIndices(combinedIndices);
+
+		dx::BoundingBox aabb;
+		dx::BoundingBox::CreateFromPoints(
+			aabb,
+			static_cast<size_t>(combinedVertices.size()),
+			reinterpret_cast<const math::Vector3*>(combinedVertices.data()),
+			sizeof(HexEngine::MeshVertex));
+		combinedMesh->SetAABB(aabb);
+
+		dx::BoundingOrientedBox obb;
+		dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
+		combinedMesh->SetOBB(obb);
+
+		if (firstMaterial)
+		{
+			combinedMesh->SetMaterial(firstMaterial);
+		}
+		else
+		{
+			combinedMesh->SetMaterial(HexEngine::Material::GetDefaultMaterial());
+		}
+
+		combinedMesh->Save();
+
+		if (removeOriginalFiles)
+		{
+			for (const auto& meshPath : selectedMeshPaths)
+			{
+				if (meshPath == outputPath)
+					continue;
+
+				std::error_code ec;
+				fs::remove(meshPath, ec);
+				if (ec)
+				{
+					LOG_WARN("Failed to remove original mesh '%s': %s", meshPath.string().c_str(), ec.message().c_str());
+				}
+			}
+		}
+
+		UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+	}
+
 	void AssetExplorer::SelectAll()
 	{
 		CloseContextMenu();
@@ -584,12 +794,16 @@ namespace HexEditor
 				}
 
 				int32_t numSelection = 0;
-				bool doesHaveAtLeastOneMeshSelected = false;
+				int32_t numSelectedMeshes = 0;
 				for (const auto& asset : _assetsInView)
 				{
 					if (asset.selected)
 					{
 						numSelection++;
+						if (asset.path.extension() == ".hmesh")
+						{
+							numSelectedMeshes++;
+						}
 					}
 				}
 
@@ -603,6 +817,16 @@ namespace HexEditor
 				{
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&AssetExplorer::SetMassMaterial, this)));
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import", std::bind(&AssetExplorer::ImportAllForeignMeshes, this)));
+					_contextMenu->AddItem(new HexEngine::ContextItem(L"Delete",
+						[this](const std::wstring& item) {
+							fs::remove(_hoveredAsset->path);
+							UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+						}));
+
+					if (numSelectedMeshes >= 2)
+					{
+						_contextMenu->AddItem(new HexEngine::ContextItem(L"Combine meshes...", std::bind(&AssetExplorer::ShowCombineMeshesDialog, this)));
+					}
 				}
 				else
 				{

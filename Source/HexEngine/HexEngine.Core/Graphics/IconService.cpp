@@ -216,10 +216,10 @@ namespace HexEngine
 
 			GFX_PERF_BEGIN(0xffffffff, L"Rendering IconScene");
 
-			if (_icons.find(path) != _icons.end())
+			/*if (_icons.find(path) != _icons.end())
 			{
 				DebugBreak();
-			}
+			}*/
 
 			_icons[path] = g_pEnv->_graphicsDevice->CreateTexture2D(
 				512,
