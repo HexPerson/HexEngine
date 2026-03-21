@@ -27,6 +27,9 @@ namespace HexEngine
 
 	void ComponentWidget::AddComponentChild(Element* child)
 	{
+		if (child->GetPosition().y < 20)
+			return;
+
 		_totalHeight += (child->GetSize().y + ComponentVerticalPadding);
 
 		CalculateLargestLabelWidth();
@@ -40,6 +43,9 @@ namespace HexEngine
 
 	void ComponentWidget::RemoveComponentChild(Element* child)
 	{
+		if (child->GetPosition().y < 20)
+			return;
+
 		_totalHeight -= (child->GetSize().y + ComponentVerticalPadding);
 
 		CalculateLargestLabelWidth();

@@ -193,6 +193,17 @@ namespace HexEditor
 
 				widget->CalculateLargestLabelWidth();
 
+				if (component->GetComponentId() != HexEngine::Transform::_GetComponentId())
+				{
+					auto* removeBtn = new HexEngine::Button(
+						widget,
+						HexEngine::Point(widget->GetSize().x - 26, 2),
+						HexEngine::Point(20, 16),
+						L"X",
+						[this, component](HexEngine::Button*) { return OnRemoveComponent(component); });
+					removeBtn->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(237, 28, 36, 255)));
+				}
+
 				_componentWidgets.push_back(widget);
 
 				y += widget->GetTotalHeight() + 10;
@@ -263,15 +274,65 @@ namespace HexEditor
 		if (_inspecting)
 		{
 			auto cls = HexEngine::g_pEnv->_classRegistry->FindByComponentId(compId);
+			if (cls == nullptr)
+			{
+				LOG_WARN("Could not find class metadata for component id %u", compId);
+				return;
+			}
+
+			if (compId == HexEngine::Transform::_GetComponentId())
+			{
+				LOG_WARN("Adding a second Transform component is not supported");
+				return;
+			}
+
 			HexEngine::BaseComponent* component = cls->newInstanceFn(_inspecting);
+			if (component == nullptr)
+			{
+				LOG_WARN("Failed to create component instance for id %u", compId);
+				return;
+			}
 
 			_inspecting->AddComponent(component);
+
+			if (g_pUIManager != nullptr)
+			{
+				g_pUIManager->RecordComponentAdded(component);
+			}
 		}
 
 		// inspect it again
 		auto ent = _inspecting;
 		_inspecting = nullptr;
 		InspectEntity(ent);
+	}
+
+	bool Inspector::OnRemoveComponent(HexEngine::BaseComponent* component)
+	{
+		if (_inspecting == nullptr || component == nullptr)
+			return true;
+
+		if (component->GetEntity() != _inspecting)
+			return true;
+
+		if (component->GetComponentId() == HexEngine::Transform::_GetComponentId())
+		{
+			LOG_WARN("Cannot remove Transform component from entity '%s'", _inspecting->GetName().c_str());
+			return true;
+		}
+
+		if (g_pUIManager != nullptr)
+		{
+			g_pUIManager->RecordComponentDeleted(component);
+		}
+
+		_inspecting->RemoveComponent(component);
+
+		auto* entity = _inspecting;
+		_inspecting = nullptr;
+		InspectEntity(entity);
+
+		return true;
 	}
 
 	void Inspector::Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)

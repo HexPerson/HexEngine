@@ -55,6 +55,8 @@ namespace HexEditor
 		void RecordEntityRename(HexEngine::Entity* entity, const std::string& beforeName, const std::string& afterName);
 		void RecordEntityParentChange(HexEngine::Entity* entity, HexEngine::Entity* beforeParent, HexEngine::Entity* afterParent);
 		void RecordEntityVisibilityChange(HexEngine::Entity* entity, bool beforeHidden, bool afterHidden);
+		void RecordComponentAdded(HexEngine::BaseComponent* component);
+		void RecordComponentDeleted(HexEngine::BaseComponent* component);
 		void RecordEntityCreated(HexEngine::Entity* entity);
 		void RecordEntityDeleted(HexEngine::Entity* entity);
 		bool UndoLastTransaction();
@@ -71,6 +73,12 @@ namespace HexEditor
 		void HandleDeletetionImpl(HexEngine::Element* element);
 
 		void CheckCentralDockRoamState();
+		void TryBeginPendingComponentEdit(HexEngine::InputEvent event, HexEngine::InputData* data);
+		void TryCommitPendingComponentEdit(HexEngine::InputEvent event, HexEngine::InputData* data);
+		bool IsFocusedElementWithinInspector() const;
+		static HexEngine::Element* FindFocusedElement(HexEngine::Element* root);
+		static bool IsDescendantOf(const HexEngine::Element* element, const HexEngine::Element* ancestor);
+		static bool HasMatchingComponentLayout(const json& before, const json& after);
 
 		void CreateLineEditDialog(const std::wstring& label, std::function<void(EditorUI*, const std::wstring&)> callback);
 
@@ -126,6 +134,17 @@ namespace HexEditor
 		GameIntegrator _integrator;
 		HexEngine::MenuBar* _mainMenu = nullptr;
 		EditorTransactionStack _transactions;
+
+		enum class PendingComponentEditSource
+		{
+			None,
+			Mouse,
+			Keyboard
+		};
+
+		bool _pendingComponentEditActive = false;
+		PendingComponentEditSource _pendingComponentEditSource = PendingComponentEditSource::None;
+		Detail::EntityComponentStateSnapshot _pendingComponentEditBefore;
 		
 	};
 

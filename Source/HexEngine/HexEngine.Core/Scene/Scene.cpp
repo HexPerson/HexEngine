@@ -712,25 +712,46 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		{
-			// Remove it from its old set first
-			auto it = _entities.find(previousSignature);
+		if (entity == nullptr || component == nullptr)
+			return;
 
-			if (it != _entities.end())
-			{
-				it->second.erase(std::remove(it->second.begin(), it->second.end(), entity), it->second.end());
-			}
+		// Remove from the previous entity-signature bucket.
+		if (auto it = _entities.find(previousSignature); it != _entities.end())
+		{
+			it->second.erase(std::remove(it->second.begin(), it->second.end(), entity), it->second.end());
 		}
 
-		// now add to the component list
+		// Reinsert into the new bucket after the component-signature change.
+		const ComponentSignature newSignature = entity->GetComponentSignature();
+		if (auto it = _entities.find(newSignature); it != _entities.end())
 		{
-			// Remove it from its old set first
-			auto it = _components.find(previousSignature);
+			if (std::find(it->second.begin(), it->second.end(), entity) == it->second.end())
+				it->second.push_back(entity);
+		}
+		else
+		{
+			_entities[newSignature].push_back(entity);
+		}
 
-			if (it != _components.end())
-			{
-				it->second.erase(std::remove(it->second.begin(), it->second.end(), component), it->second.end());
-			}
+		// Remove from the per-component cache using the component id (not signature).
+		if (auto it = _components.find(component->GetComponentId()); it != _components.end())
+		{
+			it->second.erase(std::remove(it->second.begin(), it->second.end(), component), it->second.end());
+		}
+
+		// Some components are mirrored in the UpdateComponent list, remove stale entries there too.
+		if (auto it = _components.find(UpdateComponent::_GetComponentId()); it != _components.end())
+		{
+			it->second.erase(std::remove(it->second.begin(), it->second.end(), component), it->second.end());
+		}
+
+		// Remove any empty component buckets.
+		for (auto it = _components.begin(); it != _components.end();)
+		{
+			if (it->second.empty())
+				it = _components.erase(it);
+			else
+				++it;
 		}
 
 		for (auto&& listener : _entityListeners)

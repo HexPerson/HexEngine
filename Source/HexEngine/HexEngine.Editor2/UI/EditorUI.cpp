@@ -960,7 +960,13 @@ namespace HexEditor
 		if (HexEngine::g_pEnv->_commandManager->GetConsole()->GetActive())
 			return false;
 
-		if (UIManager::OnInputEvent(event, data) == false)
+		TryBeginPendingComponentEdit(event, data);
+
+		const bool uiHandled = UIManager::OnInputEvent(event, data) == false;
+
+		TryCommitPendingComponentEdit(event, data);
+
+		if (uiHandled)
 			return false;
 
 		if (event == HexEngine::InputEvent::KeyDown && HexEngine::g_pEnv->_inputSystem->IsCtrlDown())
@@ -1061,6 +1067,144 @@ namespace HexEditor
 		}
 
 		return false;
+	}
+
+	void EditorUI::TryBeginPendingComponentEdit(HexEngine::InputEvent event, HexEngine::InputData* data)
+	{
+		if (_pendingComponentEditActive || _rightDock == nullptr)
+			return;
+
+		auto* inspectingEntity = _rightDock->GetInspectingEntity();
+		if (inspectingEntity == nullptr)
+			return;
+
+		bool beginCapture = false;
+		PendingComponentEditSource source = PendingComponentEditSource::None;
+
+		if (event == HexEngine::InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _rightDock->IsMouseOver(true))
+		{
+			beginCapture = true;
+			source = PendingComponentEditSource::Mouse;
+		}
+		else if (event == HexEngine::InputEvent::Char && data->Char.ch != VK_RETURN && IsFocusedElementWithinInspector())
+		{
+			beginCapture = true;
+			source = PendingComponentEditSource::Keyboard;
+		}
+
+		if (!beginCapture)
+			return;
+
+		Detail::EntityComponentStateSnapshot beforeSnapshot;
+		if (!Detail::CaptureEntityComponentState(inspectingEntity, beforeSnapshot))
+			return;
+
+		_pendingComponentEditBefore = std::move(beforeSnapshot);
+		_pendingComponentEditActive = true;
+		_pendingComponentEditSource = source;
+	}
+
+	void EditorUI::TryCommitPendingComponentEdit(HexEngine::InputEvent event, HexEngine::InputData* data)
+	{
+		if (!_pendingComponentEditActive)
+			return;
+
+		bool shouldCommit = false;
+		bool shouldCancel = false;
+		switch (_pendingComponentEditSource)
+		{
+		case PendingComponentEditSource::Mouse:
+			shouldCommit = (event == HexEngine::InputEvent::MouseUp && data->MouseUp.button == VK_LBUTTON);
+			break;
+		case PendingComponentEditSource::Keyboard:
+			shouldCommit = (event == HexEngine::InputEvent::Char && data->Char.ch == VK_RETURN);
+			shouldCancel = (event == HexEngine::InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON);
+			break;
+		default:
+			break;
+		}
+
+		if (shouldCancel)
+		{
+			_pendingComponentEditActive = false;
+			_pendingComponentEditSource = PendingComponentEditSource::None;
+			_pendingComponentEditBefore = {};
+			return;
+		}
+
+		if (!shouldCommit)
+			return;
+
+		auto* entity = Detail::ResolveEntityByName(_pendingComponentEditBefore.sceneName, _pendingComponentEditBefore.entityName);
+		if (entity != nullptr && !entity->IsPendingDeletion())
+		{
+			Detail::EntityComponentStateSnapshot afterSnapshot;
+			if (Detail::CaptureEntityComponentState(entity, afterSnapshot))
+			{
+				if (HasMatchingComponentLayout(_pendingComponentEditBefore.components, afterSnapshot.components) &&
+					_pendingComponentEditBefore.components != afterSnapshot.components)
+				{
+					_transactions.Push(std::make_unique<ComponentPropertyTransaction>(_pendingComponentEditBefore, afterSnapshot));
+				}
+			}
+		}
+
+		_pendingComponentEditActive = false;
+		_pendingComponentEditSource = PendingComponentEditSource::None;
+		_pendingComponentEditBefore = {};
+	}
+
+	bool EditorUI::IsFocusedElementWithinInspector() const
+	{
+		auto* focused = FindFocusedElement(_rootElement);
+		return IsDescendantOf(focused, _rightDock);
+	}
+
+	HexEngine::Element* EditorUI::FindFocusedElement(HexEngine::Element* root)
+	{
+		if (root == nullptr)
+			return nullptr;
+
+		if (root->IsInputFocus())
+			return root;
+
+		for (auto* child : root->GetChildren())
+		{
+			if (auto* focused = FindFocusedElement(child); focused != nullptr)
+				return focused;
+		}
+
+		return nullptr;
+	}
+
+	bool EditorUI::IsDescendantOf(const HexEngine::Element* element, const HexEngine::Element* ancestor)
+	{
+		if (element == nullptr || ancestor == nullptr)
+			return false;
+
+		for (auto* current = element; current != nullptr; current = current->GetParent())
+		{
+			if (current == ancestor)
+				return true;
+		}
+
+		return false;
+	}
+
+	bool EditorUI::HasMatchingComponentLayout(const json& before, const json& after)
+	{
+		if (!before.is_array() || !after.is_array() || before.size() != after.size())
+			return false;
+
+		for (size_t i = 0; i < before.size(); ++i)
+		{
+			const auto beforeName = before[i].value("name", std::string());
+			const auto afterName = after[i].value("name", std::string());
+			if (beforeName != afterName)
+				return false;
+		}
+
+		return true;
 	}
 
 	HexEngine::RayHit EditorUI::RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore)
@@ -1209,6 +1353,24 @@ namespace HexEditor
 		_transactions.Push(std::make_unique<VisibilityTransaction>(entity->GetName(), beforeHidden, afterHidden));
 	}
 
+	void EditorUI::RecordComponentAdded(HexEngine::BaseComponent* component)
+	{
+		auto transaction = ComponentLifecycleTransaction::CreateForAddedComponent(component);
+		if (transaction)
+		{
+			_transactions.Push(std::move(transaction));
+		}
+	}
+
+	void EditorUI::RecordComponentDeleted(HexEngine::BaseComponent* component)
+	{
+		auto transaction = ComponentLifecycleTransaction::CreateForRemovedComponent(component);
+		if (transaction)
+		{
+			_transactions.Push(std::move(transaction));
+		}
+	}
+
 	void EditorUI::RecordEntityCreated(HexEngine::Entity* entity)
 	{
 		auto transaction = EntityLifecycleTransaction::CreateForCreatedEntity(entity);
@@ -1235,6 +1397,15 @@ namespace HexEditor
 			_entityList->RefreshList();
 		}
 
+		if (undone && _rightDock != nullptr)
+		{
+			if (auto* inspecting = _rightDock->GetInspectingEntity(); inspecting != nullptr && !inspecting->IsPendingDeletion())
+			{
+				_rightDock->InspectEntity(nullptr);
+				_rightDock->InspectEntity(inspecting);
+			}
+		}
+
 		return undone;
 	}
 
@@ -1244,6 +1415,15 @@ namespace HexEditor
 		if (redone && _entityList != nullptr)
 		{
 			_entityList->RefreshList();
+		}
+
+		if (redone && _rightDock != nullptr)
+		{
+			if (auto* inspecting = _rightDock->GetInspectingEntity(); inspecting != nullptr && !inspecting->IsPendingDeletion())
+			{
+				_rightDock->InspectEntity(nullptr);
+				_rightDock->InspectEntity(inspecting);
+			}
 		}
 
 		return redone;

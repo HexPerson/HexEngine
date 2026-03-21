@@ -3,6 +3,7 @@
 #include "../HexEngine.hpp"
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/PointLight.hpp"
+#include <unordered_set>
 
 namespace HexEngine
 {
@@ -576,21 +577,39 @@ namespace HexEngine
 
 		// Next, get a list of lights and work out whether or not to include them
 		//
-		std::vector<Light*> directionalLights, spotLights, pointLights, allLights;
 		std::vector<Light*> pvs;
-		_currentScene->GetComponents<DirectionalLight>((std::vector<DirectionalLight*>&)directionalLights);
-		_currentScene->GetComponents<SpotLight>((std::vector<SpotLight*>&)spotLights);
-		_currentScene->GetComponents<PointLight>((std::vector<PointLight*>&)pointLights);
+		std::unordered_set<Light*> uniqueLights;
 
-		allLights.insert(allLights.end(), directionalLights.begin(), directionalLights.end());
-		allLights.insert(allLights.end(), spotLights.begin(), spotLights.end());
-		allLights.insert(allLights.end(), pointLights.begin(), pointLights.end());
-
-		for (auto& component : allLights)
+		auto gatherFromEntities = [&](ComponentId componentId)
 		{
-			auto light = component->CastAs<Light>();
+			std::vector<Entity*> entitiesWithComponent;
+			_currentScene->GetEntities((1 << componentId), entitiesWithComponent);
 
+			for (auto* entity : entitiesWithComponent)
+			{
+				if (entity == nullptr || entity->IsPendingDeletion())
+					continue;
+
+				auto* component = entity->GetComponentByID(componentId);
+				auto* light = component ? component->CastAs<Light>() : nullptr;
+				if (light != nullptr)
+				{
+					uniqueLights.insert(light);
+				}
+			}
+		};
+
+		gatherFromEntities(DirectionalLight::_GetComponentId());
+		gatherFromEntities(SpotLight::_GetComponentId());
+		gatherFromEntities(PointLight::_GetComponentId());
+
+		for (auto* light : uniqueLights)
+		{
 			if (!light)
+				continue;
+
+			auto* owner = light->GetEntity();
+			if (owner == nullptr || owner->IsPendingDeletion())
 				continue;
 
 			if (light->GetDoesCastShadows() == false)

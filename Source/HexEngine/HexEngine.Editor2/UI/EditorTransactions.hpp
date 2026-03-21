@@ -95,6 +95,21 @@ namespace HexEditor
 			std::vector<EntitySnapshot> entities;
 		};
 
+		struct ComponentSnapshot
+		{
+			std::wstring sceneName;
+			std::string entityName;
+			std::string componentName;
+			json componentData;
+		};
+
+		struct EntityComponentStateSnapshot
+		{
+			std::wstring sceneName;
+			std::string entityName;
+			json components;
+		};
+
 		inline std::shared_ptr<HexEngine::Scene> GetActiveScene()
 		{
 			if (!HexEngine::g_pEnv || !HexEngine::g_pEnv->_sceneManager)
@@ -295,6 +310,171 @@ namespace HexEditor
 				return false;
 
 			return finalName == newName;
+		}
+
+		inline bool CaptureComponentSnapshot(HexEngine::BaseComponent* component, ComponentSnapshot& outSnapshot)
+		{
+			if (component == nullptr)
+				return false;
+
+			auto* entity = component->GetEntity();
+			if (entity == nullptr || entity->IsPendingDeletion())
+				return false;
+
+			const auto scene = GetActiveScene();
+			if (!scene || entity->GetScene() != scene.get())
+				return false;
+
+			outSnapshot.sceneName = scene->GetName();
+			outSnapshot.entityName = entity->GetName();
+			outSnapshot.componentName = component->GetComponentName();
+
+			json componentData = json::object();
+			componentData["name"] = component->GetComponentName();
+
+			HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+			component->Serialize(componentData, &serializer);
+
+			outSnapshot.componentData = componentData;
+			return true;
+		}
+
+		inline HexEngine::BaseComponent* RestoreComponentFromSnapshot(const ComponentSnapshot& snapshot)
+		{
+			const auto scene = GetActiveScene();
+			if (!scene || scene->GetName() != snapshot.sceneName)
+				return nullptr;
+
+			auto* entity = scene->GetEntityByName(snapshot.entityName);
+			if (entity == nullptr || entity->IsPendingDeletion())
+				return nullptr;
+
+			auto* component = entity->GetComponentByClassName(snapshot.componentName);
+			if (component == nullptr)
+			{
+				auto* cls = HexEngine::g_pEnv->_classRegistry->Find(snapshot.componentName);
+				if (cls == nullptr)
+					return nullptr;
+
+				component = cls->newInstanceFn(entity);
+				if (component == nullptr)
+					return nullptr;
+
+				entity->AddComponent(component);
+			}
+
+			HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+			json data = snapshot.componentData;
+			component->Deserialize(data, &serializer);
+			return component;
+		}
+
+		inline bool RemoveComponentByName(const std::wstring& sceneName, const std::string& entityName, const std::string& componentName)
+		{
+			const auto scene = GetActiveScene();
+			if (!scene || scene->GetName() != sceneName)
+				return false;
+
+			auto* entity = scene->GetEntityByName(entityName);
+			if (entity == nullptr || entity->IsPendingDeletion())
+				return false;
+
+			auto* component = entity->GetComponentByClassName(componentName);
+			if (component == nullptr)
+				return false;
+
+			if (component->GetComponentId() == HexEngine::Transform::_GetComponentId())
+				return false;
+
+			entity->RemoveComponent(component);
+			return true;
+		}
+
+		inline bool CaptureEntityComponentState(HexEngine::Entity* entity, EntityComponentStateSnapshot& outSnapshot)
+		{
+			if (entity == nullptr || entity->IsPendingDeletion())
+				return false;
+
+			const auto scene = GetActiveScene();
+			if (!scene || entity->GetScene() != scene.get())
+				return false;
+
+			outSnapshot.sceneName = scene->GetName();
+			outSnapshot.entityName = entity->GetName();
+
+			json data = json::object();
+			HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+			entity->Serialize(data, &serializer);
+
+			auto itEntity = data.find(outSnapshot.entityName);
+			if (itEntity == data.end())
+				return false;
+
+			auto itComponents = itEntity->find("components");
+			if (itComponents == itEntity->end())
+			{
+				outSnapshot.components = json::array();
+				return true;
+			}
+
+			outSnapshot.components = *itComponents;
+			return true;
+		}
+
+		inline bool ApplyEntityComponentState(const EntityComponentStateSnapshot& snapshot)
+		{
+			const auto scene = GetActiveScene();
+			if (!scene || scene->GetName() != snapshot.sceneName)
+				return false;
+
+			auto* entity = scene->GetEntityByName(snapshot.entityName);
+			if (entity == nullptr || entity->IsPendingDeletion())
+				return false;
+
+			if (!snapshot.components.is_array())
+				return false;
+
+			for (const auto& componentData : snapshot.components)
+			{
+				if (!componentData.is_object())
+					return false;
+
+				const auto componentName = componentData.value("name", std::string());
+				if (componentName.empty())
+					return false;
+
+				auto* component = entity->GetComponentByClassName(componentName);
+				if (component == nullptr)
+					return false;
+			}
+
+			HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+
+			// Pass 1: transform first so dependent components observe current transform.
+			for (const auto& componentData : snapshot.components)
+			{
+				const auto componentName = componentData.value("name", std::string());
+				auto* component = entity->GetComponentByClassName(componentName);
+				if (component != nullptr && component->GetComponentId() == HexEngine::Transform::_GetComponentId())
+				{
+					json data = componentData;
+					component->Deserialize(data, &serializer);
+				}
+			}
+
+			// Pass 2: all non-transform components.
+			for (const auto& componentData : snapshot.components)
+			{
+				const auto componentName = componentData.value("name", std::string());
+				auto* component = entity->GetComponentByClassName(componentName);
+				if (component != nullptr && component->GetComponentId() != HexEngine::Transform::_GetComponentId())
+				{
+					json data = componentData;
+					component->Deserialize(data, &serializer);
+				}
+			}
+
+			return true;
 		}
 	}
 
@@ -598,5 +778,92 @@ namespace HexEditor
 		std::string _entityName;
 		bool _beforeHidden = false;
 		bool _afterHidden = false;
+	};
+
+	class ComponentLifecycleTransaction final : public IEditorTransaction
+	{
+	public:
+		enum class SourceAction
+		{
+			Added,
+			Removed
+		};
+
+		static std::unique_ptr<ComponentLifecycleTransaction> CreateForAddedComponent(HexEngine::BaseComponent* component)
+		{
+			Detail::ComponentSnapshot snapshot;
+			if (!Detail::CaptureComponentSnapshot(component, snapshot))
+				return nullptr;
+
+			return std::make_unique<ComponentLifecycleTransaction>(snapshot, SourceAction::Added);
+		}
+
+		static std::unique_ptr<ComponentLifecycleTransaction> CreateForRemovedComponent(HexEngine::BaseComponent* component)
+		{
+			Detail::ComponentSnapshot snapshot;
+			if (!Detail::CaptureComponentSnapshot(component, snapshot))
+				return nullptr;
+
+			return std::make_unique<ComponentLifecycleTransaction>(snapshot, SourceAction::Removed);
+		}
+
+		ComponentLifecycleTransaction(const Detail::ComponentSnapshot& snapshot, SourceAction action) :
+			_snapshot(snapshot),
+			_sourceAction(action)
+		{
+		}
+
+		virtual bool Undo() override
+		{
+			switch (_sourceAction)
+			{
+			case SourceAction::Added:
+				return Detail::RemoveComponentByName(_snapshot.sceneName, _snapshot.entityName, _snapshot.componentName);
+			case SourceAction::Removed:
+				return Detail::RestoreComponentFromSnapshot(_snapshot) != nullptr;
+			}
+
+			return false;
+		}
+
+		virtual bool Redo() override
+		{
+			switch (_sourceAction)
+			{
+			case SourceAction::Added:
+				return Detail::RestoreComponentFromSnapshot(_snapshot) != nullptr;
+			case SourceAction::Removed:
+				return Detail::RemoveComponentByName(_snapshot.sceneName, _snapshot.entityName, _snapshot.componentName);
+			}
+
+			return false;
+		}
+
+		virtual const char* GetLabel() const override
+		{
+			return _sourceAction == SourceAction::Added ? "Add Component" : "Remove Component";
+		}
+
+	private:
+		Detail::ComponentSnapshot _snapshot;
+		SourceAction _sourceAction = SourceAction::Added;
+	};
+
+	class ComponentPropertyTransaction final : public IEditorTransaction
+	{
+	public:
+		ComponentPropertyTransaction(const Detail::EntityComponentStateSnapshot& before, const Detail::EntityComponentStateSnapshot& after) :
+			_before(before),
+			_after(after)
+		{
+		}
+
+		virtual bool Undo() override { return Detail::ApplyEntityComponentState(_before); }
+		virtual bool Redo() override { return Detail::ApplyEntityComponentState(_after); }
+		virtual const char* GetLabel() const override { return "Edit Component"; }
+
+	private:
+		Detail::EntityComponentStateSnapshot _before;
+		Detail::EntityComponentStateSnapshot _after;
 	};
 }

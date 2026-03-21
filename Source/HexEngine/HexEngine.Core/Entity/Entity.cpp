@@ -221,6 +221,15 @@ namespace HexEngine
 
 		_componentsSignature = previousSignature & ~(1 << component->GetComponentId());		
 
+		for (auto it = _components.begin(); it != _components.end(); it++)
+		{
+			if (it->component == component)
+			{
+				_components.erase(it);
+				break;
+			}
+		}
+
 		_scene->OnEntityRemoveComponent(this, previousSignature, component);
 
 		component->Destroy();
