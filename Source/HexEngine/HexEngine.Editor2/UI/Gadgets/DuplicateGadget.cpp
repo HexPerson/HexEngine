@@ -11,6 +11,9 @@ namespace HexEditor
 
 	bool DuplicateGadget::StartGadget()
 	{
+		_sourceEntity = nullptr;
+		_duplicatedEntity = nullptr;
+
 		int32_t mx, my;
 		HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
@@ -22,7 +25,12 @@ namespace HexEditor
 		if (!ent)
 			return false;
 
+		_sourceEntity = ent;
 		auto copyEnt = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CloneEntity(ent);
+		if (copyEnt == nullptr)
+			return false;
+
+		_duplicatedEntity = copyEnt;
 
 		inspector->InspectEntity(copyEnt);
 
@@ -46,11 +54,11 @@ namespace HexEditor
 
 	void DuplicateGadget::Update()
 	{
+		if (_duplicatedEntity == nullptr)
+			return;
+
 		int32_t mx, my;
 		HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
-
-		auto inspector = g_pUIManager->GetInspector();
-		auto ent = inspector->GetInspectingEntity();
 
 		int32_t dx = (mx - _adjustStartX);
 		int32_t dy = (my - _adjustStartY);
@@ -63,21 +71,34 @@ namespace HexEditor
 		newPos += rightVec * (float)dx;
 		newPos -= upVec * (float)dy;
 
-		ent->ForcePosition(newPos);
+		_duplicatedEntity->ForcePosition(newPos);
 	}
 
 	void DuplicateGadget::StopGadget(GadgetAction action)
 	{
 		auto inspector = g_pUIManager->GetInspector();
-		auto ent = inspector->GetInspectingEntity();
+		auto duplicatedEntity = _duplicatedEntity;
+
+		_duplicatedEntity = nullptr;
+
+		if (duplicatedEntity == nullptr)
+			return;
 
 		if (action == GadgetAction::Confirm)
 		{
-
+			g_pUIManager->RecordEntityCreated(duplicatedEntity);
 		}
 		else if (action == GadgetAction::Cancel)
 		{
-			ent->SetPosition(_originalPosition);
+			auto currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+			if (currentScene != nullptr)
+			{
+				currentScene->DestroyEntity(duplicatedEntity);
+			}
+
+			inspector->InspectEntity(_sourceEntity);
 		}
+
+		_sourceEntity = nullptr;
 	}
 }

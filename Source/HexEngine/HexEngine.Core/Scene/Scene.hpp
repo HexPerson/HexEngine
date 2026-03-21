@@ -127,6 +127,7 @@ namespace HexEngine
 		void RenderDebug(PVS* pvs);
 
 		Entity* GetEntityByName(const std::string& name);
+		bool RenameEntity(Entity* entity, const std::string& desiredName, std::string* outFinalName = nullptr);
 
 		uint32_t GetNumberOfComponentsOfType(const ComponentId id);
 

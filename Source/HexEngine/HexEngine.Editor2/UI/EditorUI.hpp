@@ -52,6 +52,11 @@ namespace HexEditor
 		void RecordEntityPositionChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
 		void RecordEntityScaleChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
 		void RecordStaticMeshMaterialChange(HexEngine::Entity* entity, const fs::path& before, const fs::path& after);
+		void RecordEntityRename(HexEngine::Entity* entity, const std::string& beforeName, const std::string& afterName);
+		void RecordEntityParentChange(HexEngine::Entity* entity, HexEngine::Entity* beforeParent, HexEngine::Entity* afterParent);
+		void RecordEntityVisibilityChange(HexEngine::Entity* entity, bool beforeHidden, bool afterHidden);
+		void RecordEntityCreated(HexEngine::Entity* entity);
+		void RecordEntityDeleted(HexEngine::Entity* entity);
 		bool UndoLastTransaction();
 		bool RedoLastTransaction();
 

@@ -21,6 +21,7 @@ namespace HexEngine
 		using OnEntityClickedFn = std::function<void(EntityList*, Entity*)>;
 		using OnSceneClickedFn = std::function<void(EntityList*, Scene*)>;
 		using OnEntityParentedFn = std::function<void(EntityList*, Entity*, Entity*)>;
+		using OnEntityDuplicatedFn = std::function<void(EntityList*, Entity*, Entity*)>;
 
 		EntityList(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size);
 		virtual ~EntityList();
@@ -54,5 +55,6 @@ namespace HexEngine
 		OnEntityClickedFn _onEntityClicked;
 		OnEntityParentedFn _onEntityParented;
 		OnSceneClickedFn _onSceneClicked;
+		OnEntityDuplicatedFn _onEntityDuplicated;
 	};
 }

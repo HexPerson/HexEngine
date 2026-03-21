@@ -15,6 +15,8 @@ namespace HexEditor
 		virtual void Update() override;
 
 	private:
+		HexEngine::Entity* _sourceEntity = nullptr;
+		HexEngine::Entity* _duplicatedEntity = nullptr;
 		math::Vector3 _originalPosition;
 		math::Quaternion _cameraRotation;
 		int32_t _adjustStartX;

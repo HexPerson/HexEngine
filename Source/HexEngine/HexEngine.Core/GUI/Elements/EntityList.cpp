@@ -148,7 +148,12 @@ namespace HexEngine
 
 	void EntityList::DuplicateEntity(Entity* entity)
 	{
-		g_pEnv->_sceneManager->GetCurrentScene()->CloneEntity(entity, entity->GetName(), entity->GetPosition(), entity->GetRotation(), entity->GetScale());
+		auto* duplicate = g_pEnv->_sceneManager->GetCurrentScene()->CloneEntity(entity, entity->GetName(), entity->GetPosition(), entity->GetRotation(), entity->GetScale());
+		if (_onEntityDuplicated && duplicate != nullptr)
+		{
+			_onEntityDuplicated(this, entity, duplicate);
+		}
+
 		_ctx->DeleteMe();
 		_ctx = nullptr;
 	}

@@ -462,6 +462,8 @@ namespace HexEditor
 			auto body = primitive->AddComponent<HexEngine::RigidBody>();
 			body->AddBoxCollider(mesh->GetAABB());
 
+			RecordEntityCreated(primitive);
+
 			break;
 		}
 		case PrimitiveType::Sphere:
@@ -471,6 +473,7 @@ namespace HexEditor
 			auto mesh = HexEngine::Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 
 			meshComponent->SetMesh(mesh);
+			RecordEntityCreated(primitive);
 			break;
 		}
 		case PrimitiveType::Plane:
@@ -480,6 +483,7 @@ namespace HexEditor
 			auto mesh = HexEngine::Mesh::Create("EngineData.Models/Primitives/plane.hmesh");
 
 			meshComponent->SetMesh(mesh);
+			RecordEntityCreated(primitive);
 			break;
 		}
 
@@ -504,6 +508,8 @@ namespace HexEditor
 		auto bb = billboard->AddComponent<HexEngine::Billboard>();
 		bb->SetTexture(HexEngine::ITexture2D::Create("EngineData.Textures/particles/smoke01.png"));
 		//bb->SetTexture(ITexture2D::Create("Textures/test.png"));
+
+		RecordEntityCreated(billboard);
 	}
 
 	void EditorUI::OnGenerateHLOD()
@@ -782,6 +788,8 @@ namespace HexEditor
 		auto pointLight = light->AddComponent<HexEngine::PointLight>();
 		pointLight->SetRadius(100.0f);
 		pointLight->SetLightStength(4.0f);
+
+		RecordEntityCreated(light);
 	}
 
 	void EditorUI::OnAddSpotLight()
@@ -790,6 +798,8 @@ namespace HexEditor
 
 		auto pointLight = light->AddComponent<HexEngine::SpotLight>();
 		pointLight->SetLightStength(4.0f);
+
+		RecordEntityCreated(light);
 	}
 
 	void EditorUI::OnCreateNewSceneAction(const std::wstring& sceneName)
@@ -1129,6 +1139,11 @@ namespace HexEditor
 	{
 		_entityList->RemoveEntity(entity);
 
+		if (_rightDock != nullptr && _rightDock->GetInspectingEntity() == entity)
+		{
+			_rightDock->InspectEntity(nullptr);
+		}
+
 		/*auto& name = entity->GetName();
 
 		_entityList->RemoveItem(std::wstring(name.begin(), name.end()));*/
@@ -1168,13 +1183,69 @@ namespace HexEditor
 		_transactions.Push(std::make_unique<MaterialAssignmentTransaction>(entity->GetName(), before, after));
 	}
 
+	void EditorUI::RecordEntityRename(HexEngine::Entity* entity, const std::string& beforeName, const std::string& afterName)
+	{
+		if (entity == nullptr || beforeName.empty() || afterName.empty() || beforeName == afterName)
+			return;
+
+		_transactions.Push(std::make_unique<RenameTransaction>(beforeName, afterName));
+	}
+
+	void EditorUI::RecordEntityParentChange(HexEngine::Entity* entity, HexEngine::Entity* beforeParent, HexEngine::Entity* afterParent)
+	{
+		if (entity == nullptr || beforeParent == afterParent)
+			return;
+
+		const std::string beforeParentName = beforeParent ? beforeParent->GetName() : "";
+		const std::string afterParentName = afterParent ? afterParent->GetName() : "";
+		_transactions.Push(std::make_unique<ReparentTransaction>(entity->GetName(), beforeParentName, afterParentName));
+	}
+
+	void EditorUI::RecordEntityVisibilityChange(HexEngine::Entity* entity, bool beforeHidden, bool afterHidden)
+	{
+		if (entity == nullptr || beforeHidden == afterHidden)
+			return;
+
+		_transactions.Push(std::make_unique<VisibilityTransaction>(entity->GetName(), beforeHidden, afterHidden));
+	}
+
+	void EditorUI::RecordEntityCreated(HexEngine::Entity* entity)
+	{
+		auto transaction = EntityLifecycleTransaction::CreateForCreatedEntity(entity);
+		if (transaction)
+		{
+			_transactions.Push(std::move(transaction));
+		}
+	}
+
+	void EditorUI::RecordEntityDeleted(HexEngine::Entity* entity)
+	{
+		auto transaction = EntityLifecycleTransaction::CreateForDeletedEntity(entity);
+		if (transaction)
+		{
+			_transactions.Push(std::move(transaction));
+		}
+	}
+
 	bool EditorUI::UndoLastTransaction()
 	{
-		return _transactions.Undo();
+		const bool undone = _transactions.Undo();
+		if (undone && _entityList != nullptr)
+		{
+			_entityList->RefreshList();
+		}
+
+		return undone;
 	}
 
 	bool EditorUI::RedoLastTransaction()
 	{
-		return _transactions.Redo();
+		const bool redone = _transactions.Redo();
+		if (redone && _entityList != nullptr)
+		{
+			_entityList->RefreshList();
+		}
+
+		return redone;
 	}
 }

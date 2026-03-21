@@ -116,29 +116,32 @@ namespace HexEngine
 
 		const float kMoveDilation = 0.001f;
 
+		auto right = transform->GetRight();
+		auto absForwards = -right.Cross(math::Vector3::Up);
+
 		if ((_flags & MoveFlag::MoveForwards) != 0)
 		{
-			moveDir = transform->GetForward() * _movementSpeed * kMoveDilation;
+			moveDir = absForwards * _movementSpeed * kMoveDilation;
 		}
 
 		if ((_flags & MoveFlag::MoveBackwards) != 0)
 		{
-			moveDir = -transform->GetForward() * _movementSpeed * kMoveDilation;
+			moveDir = -absForwards * _movementSpeed * kMoveDilation;
 		}
 
 		if ((_flags & MoveFlag::MoveRight) != 0)
 		{
-			moveDir = transform->GetRight() * _movementSpeed * kMoveDilation;
+			moveDir = right * _movementSpeed * kMoveDilation;
 		}
 
 		if ((_flags & MoveFlag::MoveLeft) != 0)
 		{
-			moveDir = -transform->GetRight() * _movementSpeed * kMoveDilation;
+			moveDir = -right * _movementSpeed * kMoveDilation;
 		}
 
 		if (bodyController->IsOnGround() == false)
 		{
-			moveDir.y -= 9.81f * kMoveDilation * 2.0f;
+			moveDir.y -= 9.81f * kMoveDilation * 4.0f;
 		}
 
 		if (moveDir.Length() > 0.0f)

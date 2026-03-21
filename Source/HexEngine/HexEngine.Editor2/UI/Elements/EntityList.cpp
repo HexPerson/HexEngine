@@ -17,6 +17,13 @@ namespace HexEditor
 	{
 		_onEntityClicked = std::bind(&Inspector::InspectEntity, g_pUIManager->GetInspector(), std::placeholders::_2);
 		_onEntityParented = std::bind(&EntityList::SetEntityParent, this, std::placeholders::_2, std::placeholders::_3);
+		_onEntityDuplicated = [](HexEngine::EntityList*, HexEngine::Entity*, HexEngine::Entity* duplicateEntity)
+		{
+			if (g_pUIManager != nullptr)
+			{
+				g_pUIManager->RecordEntityCreated(duplicateEntity);
+			}
+		};
 
 		_newFolderImg = HexEngine::ITexture2D::Create("EngineData.Textures/UI/folder_new.png");
 
@@ -37,7 +44,27 @@ namespace HexEditor
 
 		if (sourceEnt && targetEnt)
 		{
+			auto* beforeParent = sourceEnt->GetParent();
+			if (beforeParent == targetEnt)
+				return;
+
+			for (auto* ancestor = targetEnt; ancestor != nullptr; ancestor = ancestor->GetParent())
+			{
+				if (ancestor == sourceEnt)
+					return;
+			}
+
+			if (g_pUIManager != nullptr)
+			{
+				g_pUIManager->RecordEntityParentChange(sourceEnt, beforeParent, targetEnt);
+			}
+
 			sourceEnt->SetParent(targetEnt);
+
+			if (auto* scene = sourceEnt->GetScene(); scene != nullptr)
+			{
+				scene->ForceRebuildPVS();
+			}
 		}
 
 	}

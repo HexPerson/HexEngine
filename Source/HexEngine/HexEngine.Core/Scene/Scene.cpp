@@ -1466,6 +1466,67 @@ namespace HexEngine
 		return nullptr;
 	}
 
+	bool Scene::RenameEntity(Entity* entity, const std::string& desiredName, std::string* outFinalName)
+	{
+		std::unique_lock lock(_lock);
+
+		if (entity == nullptr || entity->GetScene() != this || desiredName.empty())
+			return false;
+
+		const std::string oldName = entity->GetName();
+		if (oldName == desiredName)
+		{
+			if (outFinalName != nullptr)
+				*outFinalName = oldName;
+			return true;
+		}
+
+		auto oldNameIt = _entNameMap.find(oldName);
+		if (oldNameIt != _entNameMap.end() && oldNameIt->second == entity)
+		{
+			_entNameMap.erase(oldNameIt);
+		}
+
+		std::string resolvedName = desiredName;
+		auto existingIt = _entNameMap.find(resolvedName);
+		if (existingIt != _entNameMap.end() && existingIt->second != entity)
+		{
+			if (_namingPolicy == EntityNamingPolicy::AutoRename)
+			{
+				std::string baseName = resolvedName;
+				int32_t suffix = 1;
+
+				if (auto p = baseName.find_last_not_of("0123456789"); p != baseName.npos)
+				{
+					if (p < baseName.length() - 1)
+					{
+						suffix = std::stoi(baseName.substr(p + 1));
+						baseName = baseName.substr(0, p + 1);
+					}
+				}
+
+				do
+				{
+					resolvedName = baseName + std::to_string(++suffix);
+					existingIt = _entNameMap.find(resolvedName);
+				} while (existingIt != _entNameMap.end() && existingIt->second != entity);
+			}
+			else
+			{
+				_entNameMap[oldName] = entity;
+				return false;
+			}
+		}
+
+		entity->SetName(resolvedName);
+		_entNameMap[resolvedName] = entity;
+
+		if (outFinalName != nullptr)
+			*outFinalName = resolvedName;
+
+		return true;
+	}
+
 	uint32_t Scene::GetNumberOfComponentsOfType(const ComponentId id)
 	{
 		EntityComponentVector components;

@@ -55,6 +55,7 @@ namespace HexEditor
 	{
 		if (_inspecting)
 		{
+			g_pUIManager->RecordEntityDeleted(_inspecting);
 			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(_inspecting);
 
 			ClearInspectorWidgets();
@@ -75,17 +76,17 @@ namespace HexEditor
 	{
 		if (_inspecting)
 		{
-			if (_inspecting->HasFlag(HexEngine::EntityFlags::DoNotRender))
+			const bool beforeHidden = _inspecting->HasFlag(HexEngine::EntityFlags::DoNotRender);
+
+			_inspecting->ToggleVisibility();
+			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+
+			const bool afterHidden = _inspecting->HasFlag(HexEngine::EntityFlags::DoNotRender);
+			_toggleVisibilityBtn->SetIcon(afterHidden ? _visBtnTextures[0] : _visBtnTextures[1]);
+
+			if (g_pUIManager != nullptr)
 			{
-				_inspecting->ToggleVisibility();
-				HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
-				_toggleVisibilityBtn->SetIcon(_visBtnTextures[1]);
-			}
-			else
-			{
-				_inspecting->ToggleVisibility();
-				HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
-				_toggleVisibilityBtn->SetIcon(_visBtnTextures[0]);
+				g_pUIManager->RecordEntityVisibilityChange(_inspecting, beforeHidden, afterHidden);
 			}
 		}
 
@@ -108,14 +109,35 @@ namespace HexEditor
 	{
 		if (_inspecting)
 		{
-			auto oldItem = g_pUIManager->GetEntityTreeList()->FindItemByLabel(std::wstring(_inspecting->GetName().begin(), _inspecting->GetName().end()));
-
-			if (oldItem)
+			std::string requestedName(name.begin(), name.end());
+			if (requestedName.empty())
 			{
-				oldItem->SetLabel(name);
+				_entityName->SetValue(std::wstring(_inspecting->GetName().begin(), _inspecting->GetName().end()));
+				return;
 			}
 
-			_inspecting->SetName(std::string(name.begin(), name.end()));
+			auto* scene = _inspecting->GetScene();
+			if (scene == nullptr)
+				return;
+
+			const std::string beforeName = _inspecting->GetName();
+			std::string finalName;
+			if (!scene->RenameEntity(_inspecting, requestedName, &finalName))
+			{
+				_entityName->SetValue(std::wstring(beforeName.begin(), beforeName.end()));
+				return;
+			}
+
+			if (beforeName != finalName && g_pUIManager != nullptr)
+			{
+				g_pUIManager->RecordEntityRename(_inspecting, beforeName, finalName);
+				g_pUIManager->GetEntityTreeList()->RefreshList();
+			}
+
+			if (finalName != requestedName)
+			{
+				_entityName->SetValue(std::wstring(finalName.begin(), finalName.end()));
+			}
 		}			
 	}
 
@@ -138,12 +160,12 @@ namespace HexEditor
 		}
 
 		_tabs->SetActiveTab(0);
+		_entityName->SetValue(std::wstring(entity->GetName().begin(), entity->GetName().end()));
+		_entityName->SetHasInputFocus(false);
+		_toggleVisibilityBtn->SetIcon(entity->HasFlag(HexEngine::EntityFlags::DoNotRender) ? _visBtnTextures[0] : _visBtnTextures[1]);
 
 		if (entity != _inspecting)
 		{
-			_entityName->SetValue(std::wstring(entity->GetName().begin(), entity->GetName().end()));
-			_entityName->SetHasInputFocus(false);
-
 			auto size = GetSize();
 
 			size.x -= 10;

@@ -153,6 +153,7 @@ namespace HexEditor
 			{
 				if (_dragAndDropEntity != nullptr)
 				{
+					g_pUIManager->RecordEntityCreated(_dragAndDropEntity);
 					g_pUIManager->GetInspector()->InspectEntity(_dragAndDropEntity);
 					_dragAndDropEntity = nullptr;
 					return true;

@@ -801,6 +801,11 @@ namespace HexEditor
 				auto animatedMesh = dynamic_pointer_cast<HexEngine::AnimatedMesh>(mesh);
 				sac->SetAnimationData(animatedMesh, animatedMesh->GetAnimationData());
 			}
+
+			if (g_pUIManager != nullptr)
+			{
+				g_pUIManager->RecordEntityCreated(entity);
+			}
 		}
 	}
 
