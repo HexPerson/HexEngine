@@ -211,7 +211,7 @@ namespace HexEngine
 
 		if (element->OnInputEvent(event, data))
 		{
-			LOG_DEBUG("Element '%s', handled input", typeid(*element).name());
+			//LOG_DEBUG("Element '%s', handled input", typeid(*element).name());
 			return false;
 		}
 

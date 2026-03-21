@@ -739,7 +739,9 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 			}
 			else
 			{
-				meshName = first;
+				if(second == first)
+					meshName = first;
+
 				break;
 			}
 		}
@@ -794,6 +796,29 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 
 	// we give it a temporary file extension to stop the file change notifier picking it up whilst its still being written to
 	fixedExtensionPath.replace_extension(".hmesh_tmp");
+
+	int32_t count = 0;
+	while (true)
+	{
+		bool found = false;
+
+		for (auto& createdMesh : _createdMeshes)
+		{
+			if (createdMesh.first == fixedExtensionPath)
+			{
+				fixedExtensionPath.replace_filename(_currentPath.stem().string() + "_" + meshName + "_" + std::to_string(count));
+				fixedExtensionPath.replace_extension(".hmesh_tmp");
+				count++;
+				found = true;
+				break;
+			}
+		}
+
+		if (!found)
+			break;
+	}
+
+	
 
 	//modelMesh->AddRef();
 	modelMesh->SetPaths(fixedExtensionPath, fileSystem);

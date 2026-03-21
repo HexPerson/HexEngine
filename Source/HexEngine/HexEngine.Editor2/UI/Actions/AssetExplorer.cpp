@@ -379,7 +379,7 @@ namespace HexEditor
 
 		for (auto& asset : _assetsInView)
 		{
-			if (!asset.selected /*|| asset.path.extension() != ".hmesh"*/)
+			if (!asset.selected || asset.path.extension() == ".hmesh")
 				continue;
 
 			const auto extension = asset.path.extension();
@@ -966,7 +966,7 @@ namespace HexEditor
 				if (numSelection >= 1)
 				{
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&AssetExplorer::SetMassMaterial, this)));
-					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import", std::bind(&AssetExplorer::ImportAllForeignMeshes, this)));
+					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import meshes", std::bind(&AssetExplorer::ImportAllForeignMeshes, this)));
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Delete",
 						[this](const std::wstring& item) {
 							fs::remove(_hoveredAsset->path);
@@ -982,7 +982,7 @@ namespace HexEditor
 				else
 				{
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Select all", std::bind(&AssetExplorer::SelectAll, this)));
-					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import all meshes", std::bind(&AssetExplorer::ImportAllMeshes, this)));
+					_contextMenu->AddItem(new HexEngine::ContextItem(L"Add all meshes to scene", std::bind(&AssetExplorer::ImportAllMeshes, this)));
 
 					auto* createNewItem = new HexEngine::ContextItem(L"Create new...", nullptr);
 					_contextMenu->AddItem(createNewItem);
