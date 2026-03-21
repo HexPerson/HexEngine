@@ -9,11 +9,20 @@
 #include "../Environment/LogFile.hpp"
 #include "../Input/HVar.hpp"
 #include "../Graphics/DebugRenderer.hpp"
+#include <unordered_set>
 
 namespace HexEngine
 {
 	extern HVar r_lodPartition;
 	extern HVar r_shadowMinimumLodThreshold;
+
+	namespace
+	{
+		bool IsHlodEntity(const Entity* entity)
+		{
+			return entity != nullptr && entity->GetName().rfind("HLOD_", 0) == 0;
+		}
+	}
 
 	void ChunkManager::CreateChunks(Scene* scene, float chunkSize, int32_t numChunks)
 	{
@@ -177,6 +186,8 @@ namespace HexEngine
 	{
 		if (entity->GetLayer() == Layer::Sky)
 			return;
+		if (IsHlodEntity(entity))
+			return;
 
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
 
@@ -196,6 +207,8 @@ namespace HexEngine
 	void ChunkManager::OnRemoveEntity(Entity* entity)
 	{
 		if (entity->GetLayer() == Layer::Sky)
+			return;
+		if (IsHlodEntity(entity))
 			return;
 
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
@@ -220,6 +233,8 @@ namespace HexEngine
 
 		if (entity->GetLayer() == Layer::Sky)
 			return;
+		if (IsHlodEntity(entity))
+			return;
 
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
 
@@ -240,6 +255,8 @@ namespace HexEngine
 			return;
 
 		if (entity->GetLayer() == Layer::Sky)
+			return;
+		if (IsHlodEntity(entity))
 			return;
 
 		auto chunkData = _sceneToChunkMap.find(entity->GetScene());
@@ -416,6 +433,13 @@ namespace HexEngine
 
 	void ChunkManager::CalculatePVS(Scene* scene, PVS* pvs, const PVSParams& params, std::vector<StaticMeshComponent*>& components)
 	{
+		static std::unordered_set<Scene*> s_chunkBoundsRefreshed;
+		if (!params.isShadow && s_chunkBoundsRefreshed.find(scene) == s_chunkBoundsRefreshed.end())
+		{
+			RecalculateAllChunkBounds(scene);
+			s_chunkBoundsRefreshed.insert(scene);
+		}
+
 		if(params.isShadow == false)
 			_chunksVisible = 0;
 

@@ -62,6 +62,8 @@ namespace HexEngine
 
 			if (entity->GetLayer() == Layer::Sky)
 				continue;
+			if (entity->GetName().rfind("HLOD_", 0) == 0)
+				continue;
 
 			const auto& bbox = entity->GetWorldAABB();
 

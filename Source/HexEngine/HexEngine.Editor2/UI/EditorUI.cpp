@@ -538,7 +538,7 @@ namespace HexEditor
 			clusters[key].meshes.push_back(smc);
 		}
 
-		fs::path hlodOutputDir = _projectFolderPath / "Data/Models/HLOD";
+		fs::path hlodOutputDir = _projectFolderPath / "Data/HLOD";
 		std::error_code mkErr;
 		fs::create_directories(hlodOutputDir, mkErr);
 		if (mkErr)
@@ -636,6 +636,8 @@ namespace HexEditor
 					{
 						combinedIndices.push_back(index + indexOffset);
 					}
+
+					LOG_DEBUG("Mesh '%s' was added to HLOD_%d_%d with material '%s'", smc->GetMesh()->GetName().c_str(), clusterIndex, materialGroupIndex, groupMaterial->GetName().c_str());
 				}
 
 				if (combinedVertices.empty() || combinedIndices.empty() || accumulatedWorldPosCount == 0)
@@ -651,7 +653,9 @@ namespace HexEditor
 
 				fs::path outputPath = hlodOutputDir / ("HLOD_" + std::to_string(clusterIndex) + "_" + std::to_string(materialGroupIndex++) + ".hmesh");
 				if (fs::exists(outputPath))
-				{
+					fs::remove(outputPath);
+
+				/*{
 					for (int32_t i = 1; i < 1024; ++i)
 					{
 						fs::path candidate = hlodOutputDir / ("HLOD_" + std::to_string(clusterIndex) + "_" + std::to_string(materialGroupIndex) + "_" + std::to_string(i) + ".hmesh");
@@ -661,7 +665,7 @@ namespace HexEditor
 							break;
 						}
 					}
-				}
+				}*/
 
 				auto combinedMesh = std::shared_ptr<HexEngine::Mesh>(new HexEngine::Mesh(nullptr, outputPath.stem().string()), HexEngine::ResourceDeleter());
 				combinedMesh->SetPaths(outputPath, gameFs);

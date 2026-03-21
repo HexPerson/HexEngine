@@ -161,6 +161,12 @@ namespace HexEngine
 
 	void StaticMeshComponent::SetMesh(std::shared_ptr<Mesh> mesh)
 	{
+		if (!mesh)
+		{
+			_mesh.reset();
+			return;
+		}
+
 		_mesh = mesh;
 
 		dx::BoundingBox bbox = mesh->GetAABB();

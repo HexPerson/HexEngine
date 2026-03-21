@@ -459,7 +459,7 @@ namespace HexEngine
 		{
 			_sphereEntity = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("LightSphere");
 			_sphereEntity->SetLayer(Layer::Invisible);
-			_sphereEntity->SetFlag(EntityFlags::DoNotSave);
+			_sphereEntity->SetFlag(EntityFlags::DoNotSave | EntityFlags::ExcludeFromHLOD);
 			auto sphereMeshRenderer = _sphereEntity->AddComponent<StaticMeshComponent>();
 			sphereMeshRenderer->SetMesh(_sphereMesh);
 			sphereMeshRenderer->SetMaterial(_pointLightMaterial);

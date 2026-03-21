@@ -21,14 +21,18 @@ namespace HexEngine
 	HVar r_hlodSwitchDistance("r_hlodSwitchDistance", "Distance from camera where runtime HLOD replaces source meshes", 400.0f, 1.0f, 100000.0f);
 	HVar r_hlodDebugShowOnly("r_hlodDebugShowOnly", "Debug: render only generated HLOD entities", false, false, true);
 	HVar r_hlodAffectTerrain("r_hlodAffectTerrain", "Allow runtime HLOD substitution to affect chunk-based terrain meshes", false, false, true);
+	HVar r_hlodStreamEnable("r_hlodStreamEnable", "Enable runtime streaming of generated HLOD meshes", true, false, true);
+	HVar r_hlodStreamHysteresis("r_hlodStreamHysteresis", "Hysteresis distance used for HLOD streaming load/unload", 75.0f, 0.0f, 100000.0f);
 
 	namespace
 	{
+		std::unordered_map<StaticMeshComponent*, fs::path> g_hlodMeshPaths;
+		std::unordered_set<StaticMeshComponent*> g_hlodPendingLoads;
+
 		struct HlodClusterRuntimeData
 		{
 			math::Vector3 center = math::Vector3::Zero;
 			bool hasCenter = false;
-			std::unordered_set<std::string> materialKeys;
 		};
 
 		bool TryExtractHlodClusterKey(const std::string& entityName, std::string& outClusterKey)
@@ -58,16 +62,74 @@ namespace HexEngine
 			return std::to_string(cx) + "_" + std::to_string(cy) + "_" + std::to_string(cz);
 		}
 
-		std::string BuildMaterialKey(const std::shared_ptr<Material>& material)
+		void CacheHlodMeshPath(StaticMeshComponent* component)
 		{
-			if (!material)
-				return "__default";
+			if (!component)
+				return;
 
-			const fs::path fsPath = material->GetFileSystemPath();
-			if (fsPath.empty())
-				return "__default";
+			auto mesh = component->GetMesh();
+			if (!mesh)
+				return;
 
-			return fsPath.string();
+			const fs::path path = mesh->GetFileSystemPath();
+			if (!path.empty())
+			{
+				g_hlodMeshPaths[component] = path;
+			}
+		}
+
+		void UpdateHlodStreamingState(StaticMeshComponent* component, float distanceToCluster, float switchDistance, bool forceLoad)
+		{
+			if (!component)
+				return;
+
+			CacheHlodMeshPath(component);
+
+			auto mesh = component->GetMesh();
+			const bool isLoaded = mesh != nullptr;
+			const float hysteresis = std::max(0.0f, r_hlodStreamHysteresis._val.f32);
+			const float loadDistance = std::max(0.0f, switchDistance - hysteresis);
+			const float unloadDistance = std::max(0.0f, switchDistance - (hysteresis * 2.0f));
+
+			if ((forceLoad || distanceToCluster >= loadDistance) && !isLoaded)
+			{
+				if (g_hlodPendingLoads.find(component) != g_hlodPendingLoads.end())
+					return;
+
+				auto pathIt = g_hlodMeshPaths.find(component);
+				if (pathIt != g_hlodMeshPaths.end() && !pathIt->second.empty())
+				{
+					const fs::path meshPath = pathIt->second;
+					g_hlodPendingLoads.insert(component);
+
+					Mesh::CreateAsync(meshPath, [component, meshPath](std::shared_ptr<IResource> resource)
+					{
+						g_hlodPendingLoads.erase(component);
+
+						auto cachedPathIt = g_hlodMeshPaths.find(component);
+						if (cachedPathIt == g_hlodMeshPaths.end() || cachedPathIt->second != meshPath)
+							return;
+
+						auto mesh = std::dynamic_pointer_cast<Mesh>(resource);
+						if (!mesh)
+							return;
+
+						// If the mesh is still unloaded when the async load completes, swap it in.
+						if (!component->GetMesh())
+						{
+							// Preserve the authored component material; SetMesh() may replace it with mesh/default material.
+							auto originalMaterial = component->GetMaterial();
+							component->SetMesh(mesh);
+							if (originalMaterial)
+								component->SetMaterial(originalMaterial);
+						}
+					});
+				}
+			}
+			else if (!forceLoad && distanceToCluster <= unloadDistance && isLoaded)
+			{
+				component->SetMesh(nullptr);
+			}
 		}
 	}
 
@@ -216,6 +278,26 @@ namespace HexEngine
 		if (g_pEnv->_chunkManager->HasActiveChunks(scene))
 		{
 			g_pEnv->_chunkManager->CalculatePVS(scene, this, params, components);
+			components.erase(
+				std::remove_if(components.begin(), components.end(), [](StaticMeshComponent* smc)
+					{
+						return smc && smc->GetEntity() && smc->GetEntity()->GetName().rfind("HLOD_", 0) == 0;
+					}),
+				components.end());
+
+			// HLOD entities are intentionally excluded from chunk membership to avoid perturbing terrain chunk visibility.
+			// Add them explicitly here so they still participate in runtime PVS/rendering.
+			std::vector<StaticMeshComponent*> allStaticMeshes;
+			scene->GetComponents<StaticMeshComponent>(allStaticMeshes);
+			for (auto* smc : allStaticMeshes)
+			{
+				if (!smc || !smc->GetEntity())
+					continue;
+				if (smc->GetEntity()->GetName().rfind("HLOD_", 0) != 0)
+					continue;
+				if (std::find(components.begin(), components.end(), smc) == components.end())
+					components.push_back(smc);
+			}
 		}
 		else
 		{
@@ -236,13 +318,14 @@ namespace HexEngine
 			std::string hlodClusterKey;
 			if (TryExtractHlodClusterKey(entity->GetName(), hlodClusterKey))
 			{
+				CacheHlodMeshPath(component);
+
 				auto& clusterData = hlodClusters[hlodClusterKey];
 				if (!clusterData.hasCenter)
 				{
 					clusterData.center = entity->GetPosition();
 					clusterData.hasCenter = true;
 				}
-				clusterData.materialKeys.insert(BuildMaterialKey(component->GetMaterial()));
 			}
 		}
 
@@ -332,11 +415,14 @@ namespace HexEngine
 			{
 				if (r_hlodEnable._val.b && params.camera != nullptr)
 				{
-					//if (!r_hlodAffectTerrain._val.b && entity->GetChunk() != nullptr)
-					//{
-					//	// Terrain/chunk meshes have their own LOD path and can share proxy origins; skip HLOD substitution by default.
-					//}
-					//else
+					auto currentMesh = component->GetMesh();
+					
+					if (!r_hlodAffectTerrain._val.b && (entity->GetChunk() != nullptr || entity->HasFlag(EntityFlags::ExcludeFromHLOD)))
+					{
+						// Terrain/chunk meshes have their own LOD path and can share proxy origins; skip HLOD substitution by default.
+						bool ignore = false;
+					}
+					else
 					{
 						const float switchDistance = r_hlodSwitchDistance._val.f32;
 						std::string hlodClusterKey;
@@ -356,6 +442,14 @@ namespace HexEngine
 									? hlodIt->second.center
 									: entity->GetPosition();
 								const float distanceToCluster = (clusterCenter - params.camera->GetEntity()->GetPosition()).Length();
+
+								if (r_hlodStreamEnable._val.b)
+								{
+									UpdateHlodStreamingState(component, distanceToCluster, switchDistance, r_hlodDebugShowOnly._val.b);
+									if (!component->GetMesh())
+										continue;
+								}
+
 								if (distanceToCluster < switchDistance)
 									continue;
 							}
@@ -365,15 +459,10 @@ namespace HexEngine
 								auto hlodIt = hlodClusters.find(sourceClusterKey);
 								if (hlodIt != hlodClusters.end())
 								{
-									const std::string sourceMaterialKey = BuildMaterialKey(component->GetMaterial());
-									const bool hasMatchingHlodMaterial = hlodIt->second.materialKeys.find(sourceMaterialKey) != hlodIt->second.materialKeys.end();
-									if (hasMatchingHlodMaterial)
-									{
-										const math::Vector3 clusterCenter = hlodIt->second.hasCenter ? hlodIt->second.center : entity->GetPosition();
-										const float distanceToCluster = (clusterCenter - params.camera->GetEntity()->GetPosition()).Length();
-										if (distanceToCluster >= switchDistance)
-											continue;
-									}
+									const math::Vector3 clusterCenter = hlodIt->second.hasCenter ? hlodIt->second.center : entity->GetPosition();
+									const float distanceToCluster = (clusterCenter - params.camera->GetEntity()->GetPosition()).Length();
+									if (distanceToCluster >= switchDistance)
+										continue;
 								}
 							}
 						}
@@ -520,26 +609,183 @@ namespace HexEngine
 
 	void PVS::AddEntity(Entity* entity)
 	{
-		_forceRebuild = true;
+		FlushEntity(entity, true);
+	}
+
+	void PVS::FlushEntity(Entity* entity, bool recache)
+	{
+		if (!entity)
+			return;
+
+		std::unique_lock lock(_lock);
+
+		uint32_t removedFromPvs = 0;
+		uint32_t removedSkeletal = 0;
+
+		for (auto it = _pvs.begin(); it != _pvs.end();)
+		{
+			auto& entries = it->second;
+			entries.erase(
+				std::remove_if(entries.begin(), entries.end(),
+					[entity, &removedFromPvs, &removedSkeletal](const MeshEntityPair& pair)
+					{
+						const bool shouldRemove = std::get<1>(pair) == entity;
+						if (shouldRemove)
+						{
+							removedFromPvs++;
+							if (entity->HasA<SkeletalAnimationComponent>())
+								removedSkeletal++;
+						}
+						return shouldRemove;
+					}),
+				entries.end());
+
+			if (entries.empty())
+				it = _pvs.erase(it);
+			else
+				++it;
+		}
+
+		for (auto it = _renderableSnapshot.begin(); it != _renderableSnapshot.end();)
+		{
+			auto& snapshotEntries = it->second;
+			snapshotEntries.erase(
+				std::remove_if(snapshotEntries.begin(), snapshotEntries.end(),
+					[entity](const RenderableSnapshot& snapshot)
+					{
+						return snapshot.entity == entity;
+					}),
+				snapshotEntries.end());
+
+			if (snapshotEntries.empty())
+				it = _renderableSnapshot.erase(it);
+			else
+				++it;
+		}
+
+		_totalEnts = _totalEnts > removedFromPvs ? _totalEnts - removedFromPvs : 0;
+		_totalSkeletalAnimators = _totalSkeletalAnimators > removedSkeletal ? _totalSkeletalAnimators - removedSkeletal : 0;
+
+		if (!recache)
+			return;
+
+		if (!_hasBuildOptimisation)
+			return;
+
+		if (entity->GetLayer() == Layer::Invisible || entity->GetLayer() == Layer::Trigger || entity->HasFlag(EntityFlags::DoNotRender))
+			return;
+
+		if (_optimisedParams.isShadow && !entity->GetCastsShadows())
+			return;
+
+		if (!IsEntityVisible(entity, _optimisedParams))
+			return;
+
+		auto scene = entity->GetScene();
+		if (!scene)
+			return;
+
+		const bool hasSkeletalAnimation = entity->HasA<SkeletalAnimationComponent>();
+		auto meshComponents = entity->GetComponents<StaticMeshComponent>();
+
+		for (auto* meshComponent : meshComponents)
+		{
+			if (!meshComponent)
+				continue;
+
+			auto mesh = meshComponent->GetMesh();
+			if (!mesh)
+				continue;
+
+			if (auto lod = mesh->GetLodLevel(); lod != -1)
+			{
+				if (_optimisedParams.forceMaxLod)
+				{
+					if (lod < mesh->GetMaxLodLevel())
+						continue;
+				}
+
+				const float lodPartitions = _optimisedParams.lodPartition;
+				const float minDistance = lodPartitions * static_cast<float>(mesh->GetLodLevel());
+				const float maxDistance = lodPartitions * static_cast<float>(mesh->GetLodLevel() + 1);
+				const float distance = (entity->GetPosition() - scene->GetMainCamera()->GetEntity()->GetPosition()).Length();
+
+				if (mesh->GetLodLevel() < 3)
+				{
+					if (distance < minDistance || distance > maxDistance)
+						continue;
+				}
+				else if (distance < minDistance)
+				{
+					continue;
+				}
+			}
+
+			auto material = meshComponent->GetMaterial();
+			if (!material)
+				continue;
+
+			auto meshInstance = mesh->GetInstance();
+			if (!meshInstance)
+				continue;
+
+			_pvs[material].push_back({ mesh, entity, meshComponent });
+
+			auto& pvsBatch = _pvs[material];
+			std::sort(pvsBatch.begin(), pvsBatch.end(),
+				[](MeshEntityPair& left, MeshEntityPair& right)
+				{
+					return std::get<0>(left)->GetInstance()->GetInstanceId() < std::get<0>(right)->GetInstance()->GetInstanceId();
+				});
+
+			auto snapshotIt = std::find_if(_renderableSnapshot.begin(), _renderableSnapshot.end(),
+				[&material](const auto& batch)
+				{
+					return batch.first == material;
+				});
+
+			if (snapshotIt == _renderableSnapshot.end())
+			{
+				_renderableSnapshot.push_back({ material, {} });
+				snapshotIt = std::prev(_renderableSnapshot.end());
+			}
+
+			RenderableSnapshot snapshot;
+			snapshot.mesh = mesh;
+			snapshot.material = material;
+			snapshot.instance = meshInstance;
+			snapshot.simpleInstance = meshInstance->GetSimpleInstance();
+			snapshot.layer = entity->GetLayer();
+			snapshot.hasAnimations = mesh->HasAnimations();
+			snapshot.isBoundToBone = meshComponent->IsBoundToBone();
+			snapshot.shadowCullMode = meshComponent->GetShadowCullMode();
+			snapshot.entity = entity;
+
+			if (snapshot.isBoundToBone)
+			{
+				snapshot.shadowInstanceData.worldMatrix = entity->GetWorldTMTranspose() * meshComponent->GetOffsetMatrixTranspose();
+				snapshot.instanceData.worldMatrix = snapshot.shadowInstanceData.worldMatrix;
+				snapshot.instanceData.worldMatrixPrev = entity->GetWorldTMPrevTranspose();
+				snapshot.instanceData.worldMatrixInverseTranspose = entity->GetWorldTMInvert();
+				snapshot.instanceData.colour = material->_properties.diffuseColour;
+				snapshot.instanceData.uvscale = meshComponent->GetUVScale();
+			}
+			else
+			{
+				snapshot.shadowInstanceData = meshComponent->GetCachedShadowInstanceData();
+				snapshot.instanceData = meshComponent->GetCachedInstanceData(material.get());
+			}
+
+			snapshotIt->second.push_back(snapshot);
+			_totalEnts++;
+			if (hasSkeletalAnimation)
+				_totalSkeletalAnimators++;
+		}
 	}
 
 	void PVS::RemoveEntity(Entity* entity)
 	{
-		for (auto it = _pvs.begin(); it != _pvs.end(); it++)
-		{
-			it->second.erase(std::remove_if(it->second.begin(), it->second.end(),
-				[entity](const MeshEntityPair& pair) {
-					return std::get<1>(pair) == entity;
-				}), it->second.end());
-
-			/*for (auto& mep : it->second)
-			{
-				if (mep.second == entity)
-				{
-
-				}
-			}*/
-		}
+		FlushEntity(entity);
 	}
 
 	const PVSParams& PVS::GetOptimisedParams() const

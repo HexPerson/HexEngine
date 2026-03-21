@@ -103,6 +103,7 @@ namespace HexEngine
 		bool IsShapeVisible(const dx::BoundingSphere& bsphere, const PVSParams& params);
 
 		void AddEntity(Entity* entity);
+		void FlushEntity(Entity* entity, bool recache = false);
 		void RemoveEntity(Entity* entity);
 
 		const PVSParams& GetOptimisedParams() const;
