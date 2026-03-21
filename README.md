@@ -19,6 +19,8 @@ Designed for developers who want low-level control without sacrificing workflow,
   - Real-time scene editing
   - Asset management and workflow tools
   - Automatic and manual mesh combining for optimised rendering
+  - Undo/redo stack
+  - HLOD generation
 
 - 🎨 **Rendering Pipeline**
   - Physically Based Rendering (PBR)
@@ -28,7 +30,7 @@ Designed for developers who want low-level control without sacrificing workflow,
   - HBAO
   - Nvidia real-time denoiser
   - Screen-space reflections
-  - HLOD system
+  - HLOD system with asynchronous streaming
 
 - 📦 **Asset System**
   - Asset packaging and dependency management
