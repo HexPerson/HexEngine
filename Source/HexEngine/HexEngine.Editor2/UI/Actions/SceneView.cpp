@@ -181,7 +181,14 @@ namespace HexEditor
 						{
 							if (auto smc = hit.entity->GetComponent<HexEngine::StaticMeshComponent>(); smc != nullptr)
 							{
-								smc->SetMaterial(HexEngine::Material::Create(droppedAssetPath));
+								const fs::path previousMaterialPath = smc->GetMaterial() ? smc->GetMaterial()->GetFileSystemPath() : fs::path();
+								auto newMaterial = HexEngine::Material::Create(droppedAssetPath);
+								if (newMaterial != nullptr)
+								{
+									const fs::path newMaterialPath = newMaterial->GetFileSystemPath();
+									smc->SetMaterial(newMaterial);
+									g_pUIManager->RecordStaticMeshMaterialChange(hit.entity, previousMaterialPath, newMaterialPath);
+								}
 							}
 						}
 					}

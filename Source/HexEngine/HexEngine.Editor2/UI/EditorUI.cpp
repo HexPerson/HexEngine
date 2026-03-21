@@ -15,6 +15,15 @@ namespace HexEditor
 	{
 		g_pUIManager = this;
 
+		HexEngine::Transform::SetEditorTranslateCommitCallback(
+			[](HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)
+			{
+				if (g_pUIManager != nullptr)
+				{
+					g_pUIManager->RecordEntityPositionChange(entity, before, after);
+				}
+			});
+
 		_gadgets.push_back(new ScaleGadget);
 		_gadgets.push_back(new PositionGadget);
 		_gadgets.push_back(new DuplicateGadget);
@@ -22,6 +31,7 @@ namespace HexEditor
 
 	EditorUI::~EditorUI()
 	{		
+		HexEngine::Transform::SetEditorTranslateCommitCallback({});
 		HexEngine::g_pEnv->_inputSystem->RemoveInputListener(this);
 		g_pUIManager = nullptr;
 	}
@@ -41,6 +51,7 @@ namespace HexEditor
 	void EditorUI::OnProjectManagerCompleted(const fs::path& projectFolder, const std::string& projectName, bool didLoadExisting, const std::wstring& namespaceName, HexEngine::LoadingDialog* loadingDlg)
 	{
 		_projectManager = nullptr;
+		_transactions.Clear();
 
 		_projectFolderPath = projectFolder;
 		_projectFilePath = projectFolder / projectName;
@@ -227,6 +238,16 @@ namespace HexEditor
 			//edit->type = MenuBar::Item::Type::RootMenu;
 			_mainMenu->AddRootItem(edit);
 			{
+				HexEngine::MenuBar::Item* actionUndo = new HexEngine::MenuBar::Item;
+				actionUndo->name = L"Undo (Ctrl+Z)";
+				actionUndo->action = std::bind(&EditorUI::UndoLastTransaction, this);
+				_mainMenu->AddSubItem(edit, actionUndo);
+
+				HexEngine::MenuBar::Item* actionRedo = new HexEngine::MenuBar::Item;
+				actionRedo->name = L"Redo (Ctrl+Y)";
+				actionRedo->action = std::bind(&EditorUI::RedoLastTransaction, this);
+				_mainMenu->AddSubItem(edit, actionRedo);
+
 				HexEngine::MenuBar::Item* actionPaintTrees = new HexEngine::MenuBar::Item;
 				actionPaintTrees->name = L"Paint Trees";
 				actionPaintTrees->action = std::bind(&EditorUI::OnStartPaintTreeDialog, this);
@@ -932,6 +953,20 @@ namespace HexEditor
 		if (UIManager::OnInputEvent(event, data) == false)
 			return false;
 
+		if (event == HexEngine::InputEvent::KeyDown && HexEngine::g_pEnv->_inputSystem->IsCtrlDown())
+		{
+			if (data->KeyDown.key == 'Z')
+			{
+				UndoLastTransaction();
+				return false;
+			}
+			else if (data->KeyDown.key == 'Y')
+			{
+				RedoLastTransaction();
+				return false;
+			}
+		}
+
 		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started)
 		{
 			bool anyGadgetRunning = false;
@@ -1107,5 +1142,39 @@ namespace HexEditor
 	void EditorUI::OnRemoveComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component)
 	{
 
+	}
+
+	void EditorUI::RecordEntityPositionChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)
+	{
+		if (entity == nullptr || before == after)
+			return;
+
+		_transactions.Push(std::make_unique<PositionTransaction>(entity->GetName(), before, after));
+	}
+
+	void EditorUI::RecordEntityScaleChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)
+	{
+		if (entity == nullptr || before == after)
+			return;
+
+		_transactions.Push(std::make_unique<ScaleTransaction>(entity->GetName(), before, after));
+	}
+
+	void EditorUI::RecordStaticMeshMaterialChange(HexEngine::Entity* entity, const fs::path& before, const fs::path& after)
+	{
+		if (entity == nullptr || before == after)
+			return;
+
+		_transactions.Push(std::make_unique<MaterialAssignmentTransaction>(entity->GetName(), before, after));
+	}
+
+	bool EditorUI::UndoLastTransaction()
+	{
+		return _transactions.Undo();
+	}
+
+	bool EditorUI::RedoLastTransaction()
+	{
+		return _transactions.Redo();
 	}
 }

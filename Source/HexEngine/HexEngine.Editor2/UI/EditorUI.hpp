@@ -7,6 +7,7 @@
 #include "Actions\Explorer.hpp"
 #include "Actions\ProjectManager.hpp"
 #include "Actions/SceneView.hpp"
+#include "EditorTransactions.hpp"
 #include "../GameIntegrator.hpp"
 
 namespace HexEditor
@@ -47,6 +48,12 @@ namespace HexEditor
 		SceneView* GetSceneView() const { return _sceneView; }
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {});
+
+		void RecordEntityPositionChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
+		void RecordEntityScaleChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
+		void RecordStaticMeshMaterialChange(HexEngine::Entity* entity, const fs::path& before, const fs::path& after);
+		bool UndoLastTransaction();
+		bool RedoLastTransaction();
 
 	private:		
 		void CreateMenuBar();
@@ -113,6 +120,7 @@ namespace HexEditor
 		std::vector<Gadget*> _gadgets;
 		GameIntegrator _integrator;
 		HexEngine::MenuBar* _mainMenu = nullptr;
+		EditorTransactionStack _transactions;
 		
 	};
 

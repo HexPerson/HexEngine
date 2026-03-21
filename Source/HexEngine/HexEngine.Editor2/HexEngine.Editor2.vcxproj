@@ -176,6 +176,7 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClInclude Include="UI\Actions\ProjectManager.hpp" />
     <ClInclude Include="UI\Actions\Settings.hpp" />
     <ClInclude Include="UI\Actions\Terrain.hpp" />
+    <ClInclude Include="UI\EditorTransactions.hpp" />
     <ClInclude Include="UI\EditorUI.hpp" />
     <ClInclude Include="UI\Actions\Explorer.hpp" />
     <ClInclude Include="UI\Actions\AssetExplorer.hpp" />

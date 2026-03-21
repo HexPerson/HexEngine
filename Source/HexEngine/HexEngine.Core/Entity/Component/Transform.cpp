@@ -9,6 +9,8 @@
 
 namespace HexEngine
 {
+	Transform::EditorTranslateCommitCallback Transform::_editorTranslateCommitCallback = {};
+
 	namespace
 	{
 		struct EditorTranslateGizmoState
@@ -17,6 +19,7 @@ namespace HexEngine
 			int32_t activeAxis = -1;
 			int32_t lastMouseX = 0;
 			int32_t lastMouseY = 0;
+			math::Vector3 dragStartPosition = math::Vector3::Zero;
 			bool wasLeftMouseDown = false;
 		};
 
@@ -89,6 +92,11 @@ namespace HexEngine
 		_current.up = math::Vector3::Up;
 
 		//_arrow = Mesh::Create("EngineData.Models/Primitives/Arrow.hmesh");
+	}
+
+	void Transform::SetEditorTranslateCommitCallback(EditorTranslateCommitCallback callback)
+	{
+		_editorTranslateCommitCallback = callback;
 	}
 
 	void Transform::UpdateRotation()
@@ -623,6 +631,7 @@ namespace HexEngine
 			{
 				g_translateGizmoState.activeTransform = nullptr;
 				g_translateGizmoState.activeAxis = -1;
+				g_translateGizmoState.dragStartPosition = math::Vector3::Zero;
 			}
 			return;
 		}
@@ -702,11 +711,20 @@ namespace HexEngine
 			g_translateGizmoState.activeAxis = hoveredAxis;
 			g_translateGizmoState.lastMouseX = mouseX;
 			g_translateGizmoState.lastMouseY = mouseY;
+			g_translateGizmoState.dragStartPosition = GetEntity()->GetPosition();
 		}
 		else if (!leftMouseDown && g_translateGizmoState.activeTransform == this)
 		{
+			const math::Vector3 finalPosition = GetEntity()->GetPosition();
+			if (_editorTranslateCommitCallback &&
+				g_translateGizmoState.dragStartPosition != finalPosition)
+			{
+				_editorTranslateCommitCallback(GetEntity(), g_translateGizmoState.dragStartPosition, finalPosition);
+			}
+
 			g_translateGizmoState.activeTransform = nullptr;
 			g_translateGizmoState.activeAxis = -1;
+			g_translateGizmoState.dragStartPosition = math::Vector3::Zero;
 		}
 
 		if (g_translateGizmoState.activeTransform == this && g_translateGizmoState.activeAxis >= 0)

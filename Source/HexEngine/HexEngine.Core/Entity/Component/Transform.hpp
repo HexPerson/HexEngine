@@ -3,6 +3,7 @@
 #pragma once
 
 #include "BaseComponent.hpp"
+#include <functional>
 
 namespace HexEngine
 {
@@ -67,6 +68,9 @@ namespace HexEngine
 		void SetScale(const math::Vector3& scale);
 		//void SetRotationMatrix(const math::Matrix& rotation);
 
+		using EditorTranslateCommitCallback = std::function<void(Entity* entity, const math::Vector3& before, const math::Vector3& after)>;
+		static void SetEditorTranslateCommitCallback(EditorTranslateCommitCallback callback);
+
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
@@ -110,5 +114,7 @@ namespace HexEngine
 		bool _enableInterpolation = false;
 
 		std::shared_ptr<Mesh> _arrow;
+
+		static EditorTranslateCommitCallback _editorTranslateCommitCallback;
 	};
 }

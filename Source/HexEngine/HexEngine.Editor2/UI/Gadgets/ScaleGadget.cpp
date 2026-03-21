@@ -71,7 +71,10 @@ namespace HexEditor
 
 		if (action == GadgetAction::Confirm)
 		{
-
+			if (ent != nullptr)
+			{
+				g_pUIManager->RecordEntityScaleChange(ent, _originalScale, ent->GetScale());
+			}
 		}
 		else if (action == GadgetAction::Cancel)
 		{

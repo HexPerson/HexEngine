@@ -122,7 +122,10 @@ namespace HexEditor
 
 		if (action == GadgetAction::Confirm)
 		{
-
+			if (ent != nullptr)
+			{
+				g_pUIManager->RecordEntityPositionChange(ent, _originalPosition, ent->GetPosition());
+			}
 		}
 		else if (action == GadgetAction::Cancel)
 		{
