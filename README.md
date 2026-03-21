@@ -18,6 +18,7 @@ Designed for developers who want low-level control without sacrificing workflow,
 - 🎮 **3D Editor**
   - Real-time scene editing
   - Asset management and workflow tools
+  - Automatic and manual mesh combining for optimised rendering
 
 - 🎨 **Rendering Pipeline**
   - Physically Based Rendering (PBR)
@@ -27,6 +28,7 @@ Designed for developers who want low-level control without sacrificing workflow,
   - HBAO
   - Nvidia real-time denoiser
   - Screen-space reflections
+  - HLOD system
 
 - 📦 **Asset System**
   - Asset packaging and dependency management
