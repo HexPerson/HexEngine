@@ -247,6 +247,20 @@ namespace HexEngine
 
 		void ToggleVisibility();
 
+		void SetPrefabSource(const fs::path& prefabPath, const std::string& prefabRootEntityName, bool isRootInstance);
+		void ClearPrefabSource();
+		bool IsPrefabInstance() const;
+		bool IsPrefabInstanceRoot() const;
+		const fs::path& GetPrefabSourcePath() const;
+		const std::string& GetPrefabRootEntityName() const;
+		void SetPrefabInstanceRoot(bool isRootInstance);
+		void MarkPrefabPropertyOverride(const std::string& propertyPath);
+		void ClearPrefabPropertyOverride(const std::string& propertyPath);
+		bool HasPrefabPropertyOverride(const std::string& propertyPath) const;
+		void ClearPrefabPropertyOverrides();
+		void SetPrefabPropertyOverrides(const std::unordered_set<std::string>& overrides);
+		const std::unordered_set<std::string>& GetPrefabPropertyOverrides() const;
+
 	private:
 		struct EntityGuidComponent
 		{
@@ -299,6 +313,10 @@ namespace HexEngine
 		Transform* _cachedTransform = nullptr;
 		StaticMeshComponent* _cachedMeshRenderer = nullptr;
 		bool _canCastShadows = true;
+		fs::path _prefabSourcePath;
+		std::string _prefabRootEntityName;
+		bool _isPrefabInstanceRoot = false;
+		std::unordered_set<std::string> _prefabPropertyOverrides;
 		
 	};
 }

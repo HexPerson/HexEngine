@@ -27,6 +27,8 @@ namespace HexEditor
 		bool OnAddComponent(HexEngine::Button* button);
 		void OnClickAddComponentItem(const std::wstring& name, HexEngine::ComponentId compId);
 		bool OnRemoveComponent(HexEngine::BaseComponent* component);
+		bool OnRevertPrefabInstance(HexEngine::Button* button);
+		bool OnApplyPrefabInstance(HexEngine::Button* button);
 		void OnChangeEntityName(const std::wstring& name);
 		bool OnDeleteEntity(HexEngine::Button* button);
 		bool OnToggleEntityVisible(HexEngine::Button* button);
@@ -39,6 +41,8 @@ namespace HexEditor
 		HexEngine::Button* _toggleVisibilityBtn = nullptr;
 		HexEngine::LineEdit* _entityName = nullptr;
 		HexEngine::Button* _deleteBtn = nullptr;
+		HexEngine::Button* _revertPrefabBtn = nullptr;
+		HexEngine::Button* _applyPrefabBtn = nullptr;
 		HexEngine::TabView* _tabs = nullptr;
 		HexEngine::ContextMenu* _addComponentContextMenu = nullptr;
 		std::vector<HexEngine::ComponentWidget*> _componentWidgets;

@@ -6,6 +6,7 @@
 #include "Component\FirstPersonCameraController.hpp"
 #include "Component\RTSCameraController.hpp"
 #include "Component\PointLight.hpp"
+#include <algorithm>
 
 namespace HexEngine
 {
@@ -183,57 +184,64 @@ namespace HexEngine
 			g_pEnv->_physicsSystem->LockWrite();
 		}*/
 
-		for (auto&& component : _components)
+		// RemoveComponent mutates _components, so tear down from the back until empty.
+		while (!_components.empty())
 		{
-			LOG_DEBUG("Destroying component with ID %d", component.id);
-
-			RemoveComponent(component.component);
+			auto* component = _components.back().component;
+			const auto componentId = _components.back().id;
+			LOG_DEBUG("Destroying component with ID %d", componentId);
+			RemoveComponent(component);
 		}
-
-		_components.clear();
 
 		/*if (HasA<RigidBody>())
 		{
 			g_pEnv->_physicsSystem->UnlockWrite();
 		}*/
 
-		for (auto& child : _children)
+		// Child destruction can broadcast messages that also mutate _children.
+		while (!_children.empty())
 		{
+			auto* child = _children.back();
+			_children.pop_back();
 			_scene->DestroyEntity(child);
 		}
-		_children.clear();
 	}
 
 	void Entity::RemoveComponent(BaseComponent* component)
 	{
-		if (auto existingComponent = GetComponentByID(component->GetComponentId()); existingComponent == nullptr)
+		if (component == nullptr)
+		{
+			return;
+		}
+
+		auto it = std::find_if(_components.begin(), _components.end(), [component](const auto& comp) {
+			return comp.component == component;
+			});
+
+		if (it == _components.end())
 		{
 			LOG_CRIT("An entity is trying to remove a component but does not have one registered!");
 			return;
 		}
 
-		if (component->CastAs<Transform>() != nullptr)
+		const ComponentId componentId = it->id;
+
+		if (componentId == Transform::_GetComponentId())
 		{
 			_cachedTransform = nullptr;
 		}
 
 		ComponentSignature previousSignature = _componentsSignature;
 
-		_componentsSignature = previousSignature & ~(1 << component->GetComponentId());		
+		_componentsSignature = previousSignature & ~(1 << componentId);
 
-		for (auto it = _components.begin(); it != _components.end(); it++)
-		{
-			if (it->component == component)
-			{
-				_components.erase(it);
-				break;
-			}
-		}
+		auto* componentToDestroy = it->component;
+		_components.erase(it);
 
-		_scene->OnEntityRemoveComponent(this, previousSignature, component);
+		_scene->OnEntityRemoveComponent(this, previousSignature, componentToDestroy);
 
-		component->Destroy();
-		delete component;
+		componentToDestroy->Destroy();
+		delete componentToDestroy;
 	}
 
 	void Entity::RemoveComponentById(ComponentId id)
@@ -763,7 +771,7 @@ namespace HexEngine
 				_hasCachedWorldTMInvert = false;
 				_hasCachedWorldBoundingSphere = false;
 
-				if (auto meshComponent = GetComponent<StaticMeshComponent>(); meshComponent != nullptr)
+				if (auto meshComponent = GetComponent<StaticMeshComponent>(); meshComponent != nullptr && meshComponent->GetMesh())
 				{
 					RecalculateBoundingVolumes(meshComponent->GetMesh()->GetAABB());
 				}
@@ -866,6 +874,21 @@ namespace HexEngine
 		entData["layer"] = GetLayer();
 		entData["flags"] = GetFlags();
 
+		if (!_prefabSourcePath.empty())
+		{
+			auto& prefabData = entData["prefab"];
+			prefabData["sourcePath"] = _prefabSourcePath.string();
+			prefabData["rootEntityName"] = _prefabRootEntityName;
+			prefabData["isRootInstance"] = _isPrefabInstanceRoot;
+
+			if (!_prefabPropertyOverrides.empty())
+			{
+				std::vector<std::string> overrides(_prefabPropertyOverrides.begin(), _prefabPropertyOverrides.end());
+				std::sort(overrides.begin(), overrides.end());
+				prefabData["overrides"] = overrides;
+			}
+		}
+
 		//int numComponents = (int)_components.size();
 		//file->Write(&numComponents, sizeof(int));
 
@@ -915,6 +938,34 @@ namespace HexEngine
 			EntityFlags flags = data["flags"].get<EntityFlags>();
 			flags &= ~EntityFlags::SelectedInEditor; // remove the selected in editor flag
 			SetFlag(flags);
+		}
+
+		if (data.find("prefab") != data.end())
+		{
+			const auto& prefabData = data["prefab"];
+			const auto sourcePath = prefabData.value("sourcePath", std::string());
+			_prefabSourcePath = sourcePath.empty() ? fs::path() : fs::path(sourcePath);
+			_prefabRootEntityName = prefabData.value("rootEntityName", std::string());
+			_isPrefabInstanceRoot = prefabData.value("isRootInstance", false);
+			_prefabPropertyOverrides.clear();
+
+			const auto overridesIt = prefabData.find("overrides");
+			if (overridesIt != prefabData.end() && overridesIt->is_array())
+			{
+				for (const auto& item : *overridesIt)
+				{
+					if (item.is_string())
+					{
+						const auto overridePath = item.get<std::string>();
+						if (!overridePath.empty())
+							_prefabPropertyOverrides.insert(overridePath);
+					}
+				}
+			}
+		}
+		else
+		{
+			ClearPrefabSource();
 		}
 
 		for(auto& comp : data["components"].items())
@@ -967,5 +1018,82 @@ namespace HexEngine
 		{
 			child->ToggleVisibility();
 		}
+	}
+
+	void Entity::SetPrefabSource(const fs::path& prefabPath, const std::string& prefabRootEntityName, bool isRootInstance)
+	{
+		_prefabSourcePath = prefabPath;
+		_prefabRootEntityName = prefabRootEntityName;
+		_isPrefabInstanceRoot = isRootInstance;
+		_prefabPropertyOverrides.clear();
+	}
+
+	void Entity::ClearPrefabSource()
+	{
+		_prefabSourcePath.clear();
+		_prefabRootEntityName.clear();
+		_isPrefabInstanceRoot = false;
+		_prefabPropertyOverrides.clear();
+	}
+
+	bool Entity::IsPrefabInstance() const
+	{
+		return !_prefabSourcePath.empty();
+	}
+
+	bool Entity::IsPrefabInstanceRoot() const
+	{
+		return IsPrefabInstance() && _isPrefabInstanceRoot;
+	}
+
+	const fs::path& Entity::GetPrefabSourcePath() const
+	{
+		return _prefabSourcePath;
+	}
+
+	const std::string& Entity::GetPrefabRootEntityName() const
+	{
+		return _prefabRootEntityName;
+	}
+
+	void Entity::SetPrefabInstanceRoot(bool isRootInstance)
+	{
+		_isPrefabInstanceRoot = isRootInstance;
+	}
+
+	void Entity::MarkPrefabPropertyOverride(const std::string& propertyPath)
+	{
+		if (propertyPath.empty())
+			return;
+
+		_prefabPropertyOverrides.insert(propertyPath);
+	}
+
+	void Entity::ClearPrefabPropertyOverride(const std::string& propertyPath)
+	{
+		if (propertyPath.empty())
+			return;
+
+		_prefabPropertyOverrides.erase(propertyPath);
+	}
+
+	bool Entity::HasPrefabPropertyOverride(const std::string& propertyPath) const
+	{
+		return !propertyPath.empty() && _prefabPropertyOverrides.find(propertyPath) != _prefabPropertyOverrides.end();
+	}
+
+	void Entity::ClearPrefabPropertyOverrides()
+	{
+		_prefabPropertyOverrides.clear();
+	}
+
+	void Entity::SetPrefabPropertyOverrides(const std::unordered_set<std::string>& overrides)
+	{
+		_prefabPropertyOverrides = overrides;
+	}
+
+	const std::unordered_set<std::string>& Entity::GetPrefabPropertyOverrides() const
+	{
+		return _prefabPropertyOverrides;
 	}
 }

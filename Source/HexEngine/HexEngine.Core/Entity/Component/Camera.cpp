@@ -8,7 +8,7 @@
 namespace HexEngine
 {
 	const float gCameraDefaultFov = 70.0f;
-	const float gViewMatrixBehindDistance = 400.0f;
+	const float gViewMatrixBehindDistance = 20.0f;
 	const float gDefaultMaxViewDistance = 2500.0f;
 
 	extern HVar r_lodPartition;

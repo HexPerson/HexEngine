@@ -882,6 +882,13 @@ namespace HexEditor
 		{
 			if (_hoveredAsset != nullptr && mouseOverExplorer)
 			{
+				if (_hoveredAsset->path.extension() == ".hprefab" && g_pUIManager != nullptr)
+				{
+					g_pUIManager->OpenPrefabStage(_hoveredAsset->path);
+					_hoveredAsset = nullptr;
+					return true;
+				}
+
 				HexEngine::IResourceLoader* resourceLoader = HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(_hoveredAsset->path.extension().string());
 				if (resourceLoader)
 				{

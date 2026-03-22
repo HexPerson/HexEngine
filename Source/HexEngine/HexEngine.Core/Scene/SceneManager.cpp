@@ -81,7 +81,39 @@ namespace HexEngine
 
 		file.Close();
 
-		return scene->MergeFrom(prefabScene.get());
+		std::vector<std::pair<Entity*, Entity*>> sourceToMerged;
+		ents = scene->MergeFrom(prefabScene.get(), &sourceToMerged);
+
+		auto findSourceRoot = [](Entity* sourceEntity) -> Entity*
+		{
+			if (sourceEntity == nullptr)
+				return nullptr;
+
+			auto* root = sourceEntity;
+			while (root->GetParent() != nullptr)
+			{
+				root = root->GetParent();
+			}
+
+			return root;
+		};
+
+		for (const auto& entry : sourceToMerged)
+		{
+			auto* sourceEntity = entry.first;
+			auto* mergedEntity = entry.second;
+			if (sourceEntity == nullptr || mergedEntity == nullptr)
+				continue;
+
+			auto* sourceRoot = findSourceRoot(sourceEntity);
+			if (sourceRoot == nullptr)
+				continue;
+
+			const bool isRootInstance = sourceEntity->GetParent() == nullptr;
+			mergedEntity->SetPrefabSource(path, sourceRoot->GetName(), isRootInstance);
+		}
+
+		return ents;
 	}
 
 	std::shared_ptr<Scene> SceneManager::CreateEmptyScene(bool createSkySphere, IEntityListener* listener, bool registerScene)

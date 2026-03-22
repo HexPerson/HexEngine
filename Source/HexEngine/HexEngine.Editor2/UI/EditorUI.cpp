@@ -5,12 +5,205 @@
 #include "Actions\ProjectGenerator.hpp"
 #include "Actions\Settings.hpp"
 #include "Actions\Terrain.hpp"
+#include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
+#include <HexEngine.Core\Scene\SceneFramingUtils.hpp>
+
 #include "Gadgets\ScaleGadget.hpp"
 #include "Gadgets\PositionGadget.hpp"
 #include "Gadgets\DuplicateGadget.hpp"
 
 namespace HexEditor
 {
+	namespace
+	{
+		json BuildPrefabEntitySnapshotRecursive(HexEngine::Entity* entity, HexEngine::JsonFile& serializer, bool canonicalRootName)
+		{
+			if (entity == nullptr)
+				return json::object();
+
+			json serializedEntities = json::object();
+			entity->Serialize(serializedEntities, &serializer);
+
+			json entityData = json::object();
+			if (serializedEntities.find(entity->GetName()) != serializedEntities.end())
+			{
+				entityData = serializedEntities[entity->GetName()];
+			}
+
+			entityData.erase("prefab");
+			entityData["entityName"] = canonicalRootName ? "__PREFAB_ROOT__" : entity->GetName();
+
+			if (entityData.find("flags") != entityData.end())
+			{
+				uint64_t flags = entityData["flags"].get<uint64_t>();
+				flags &= ~static_cast<uint64_t>(HexEngine::EntityFlags::SelectedInEditor);
+				entityData["flags"] = flags;
+			}
+
+			if (entityData.find("components") != entityData.end() && entityData["components"].is_array())
+			{
+				auto& components = entityData["components"];
+				std::sort(components.begin(), components.end(),
+					[](const json& a, const json& b)
+					{
+						return a.value("name", std::string()) < b.value("name", std::string());
+					});
+			}
+
+			std::vector<HexEngine::Entity*> children = entity->GetChildren();
+			std::sort(children.begin(), children.end(),
+				[](const HexEngine::Entity* a, const HexEngine::Entity* b)
+				{
+					if (a == nullptr || b == nullptr)
+						return a < b;
+					return a->GetName() < b->GetName();
+				});
+
+			auto& childSnapshots = entityData["children"];
+			childSnapshots = json::array();
+			for (auto* child : children)
+			{
+				childSnapshots.push_back(BuildPrefabEntitySnapshotRecursive(child, serializer, false));
+			}
+
+			return entityData;
+		}
+
+		constexpr const char* kPrefabOverrideTransformPosition = "transform.position";
+		constexpr const char* kPrefabOverrideTransformRotation = "transform.rotation";
+		constexpr const char* kPrefabOverrideTransformScale = "transform.scale";
+		constexpr const char* kPrefabOverrideStaticMeshMaterial = "staticMesh.material";
+
+		struct PrefabEntityOverrideState
+		{
+			std::unordered_set<std::string> overridePaths;
+			math::Vector3 position = math::Vector3::Zero;
+			math::Quaternion rotation = math::Quaternion::Identity;
+			math::Vector3 scale = math::Vector3(1.0f);
+			fs::path materialPath;
+			bool hasMaterialPath = false;
+		};
+
+		void CollectPrefabOverrideStateRecursive(
+			HexEngine::Entity* entity,
+			const std::string& pathKey,
+			std::unordered_map<std::string, PrefabEntityOverrideState>& outStates)
+		{
+			if (entity == nullptr)
+				return;
+
+			const auto& entityOverrides = entity->GetPrefabPropertyOverrides();
+			if (!entityOverrides.empty())
+			{
+				PrefabEntityOverrideState state;
+				state.overridePaths = entityOverrides;
+				state.position = entity->GetPosition();
+				state.rotation = entity->GetRotation();
+				state.scale = entity->GetScale();
+
+				if (auto* staticMesh = entity->GetComponent<HexEngine::StaticMeshComponent>(); staticMesh != nullptr)
+				{
+					if (auto material = staticMesh->GetMaterial(); material != nullptr)
+					{
+						state.materialPath = material->GetFileSystemPath();
+						state.hasMaterialPath = !state.materialPath.empty();
+					}
+				}
+
+				outStates[pathKey] = std::move(state);
+			}
+
+			std::unordered_map<std::string, int32_t> siblingNameCount;
+			for (auto* child : entity->GetChildren())
+			{
+				if (child == nullptr)
+					continue;
+
+				const int32_t siblingIndex = siblingNameCount[child->GetName()]++;
+				const std::string childPath = pathKey + "/" + child->GetName() + "#" + std::to_string(siblingIndex);
+				CollectPrefabOverrideStateRecursive(child, childPath, outStates);
+			}
+		}
+
+		void ApplyPrefabOverrideStateRecursive(
+			HexEngine::Entity* entity,
+			const std::string& pathKey,
+			const std::unordered_map<std::string, PrefabEntityOverrideState>& overrideStates)
+		{
+			if (entity == nullptr)
+				return;
+
+			entity->ClearPrefabPropertyOverrides();
+
+			const auto stateIt = overrideStates.find(pathKey);
+			if (stateIt != overrideStates.end())
+			{
+				const auto& state = stateIt->second;
+				for (const auto& overridePath : state.overridePaths)
+				{
+					entity->MarkPrefabPropertyOverride(overridePath);
+				}
+
+				if (state.overridePaths.find(kPrefabOverrideTransformPosition) != state.overridePaths.end())
+					entity->SetPosition(state.position);
+
+				if (state.overridePaths.find(kPrefabOverrideTransformRotation) != state.overridePaths.end())
+					entity->SetRotation(state.rotation);
+
+				if (state.overridePaths.find(kPrefabOverrideTransformScale) != state.overridePaths.end())
+					entity->SetScale(state.scale);
+
+				if (state.overridePaths.find(kPrefabOverrideStaticMeshMaterial) != state.overridePaths.end())
+				{
+					if (auto* staticMesh = entity->GetComponent<HexEngine::StaticMeshComponent>(); staticMesh != nullptr)
+					{
+						if (state.hasMaterialPath && !state.materialPath.empty())
+						{
+							if (auto material = HexEngine::Material::Create(state.materialPath); material != nullptr)
+							{
+								staticMesh->SetMaterial(material);
+							}
+						}
+					}
+				}
+			}
+
+			std::unordered_map<std::string, int32_t> siblingNameCount;
+			for (auto* child : entity->GetChildren())
+			{
+				if (child == nullptr)
+					continue;
+
+				const int32_t siblingIndex = siblingNameCount[child->GetName()]++;
+				const std::string childPath = pathKey + "/" + child->GetName() + "#" + std::to_string(siblingIndex);
+				ApplyPrefabOverrideStateRecursive(child, childPath, overrideStates);
+			}
+		}
+
+		bool ComponentEntryChanged(const json& beforeComponents, const json& afterComponents, const std::string& componentName)
+		{
+			if (!beforeComponents.is_array() || !afterComponents.is_array())
+				return false;
+
+			auto findByName = [&componentName](const json& components) -> const json*
+			{
+				for (const auto& component : components)
+				{
+					if (component.value("name", std::string()) == componentName)
+						return &component;
+				}
+				return nullptr;
+			};
+
+			const json* before = findByName(beforeComponents);
+			const json* after = findByName(afterComponents);
+			if (before == nullptr || after == nullptr)
+				return false;
+
+			return *before != *after;
+		}
+	}
+
 	EditorUI::EditorUI()
 	{
 		g_pUIManager = this;
@@ -215,6 +408,16 @@ namespace HexEditor
 				actionSave->name = L"Save";
 				actionSave->action = std::bind(&EditorUI::OnSaveAction, this);
 				_mainMenu->AddSubItem(file, actionSave);
+
+				HexEngine::MenuBar::Item* actionSavePrefab = new HexEngine::MenuBar::Item;
+				actionSavePrefab->name = L"Save Prefab Stage";
+				actionSavePrefab->action = std::bind(&EditorUI::SavePrefabStage, this);
+				_mainMenu->AddSubItem(file, actionSavePrefab);
+
+				HexEngine::MenuBar::Item* actionExitPrefab = new HexEngine::MenuBar::Item;
+				actionExitPrefab->name = L"Exit Prefab Stage";
+				actionExitPrefab->action = std::bind(&EditorUI::ClosePrefabStage, this, true);
+				_mainMenu->AddSubItem(file, actionExitPrefab);
 
 				HexEngine::MenuBar::Item* actionExport = new HexEngine::MenuBar::Item;
 				actionExport->name = L"Export";
@@ -423,6 +626,12 @@ namespace HexEditor
 
 	void EditorUI::RunGame()
 	{
+		if (IsPrefabStageActive())
+		{
+			LOG_WARN("Cannot run game while prefab stage is active. Exit prefab mode first.");
+			return;
+		}
+
 		_integrator.RunGame();
 	}
 
@@ -431,8 +640,673 @@ namespace HexEditor
 		_integrator.StopGame();
 	}
 
+	void EditorUI::EnsurePrefabStageCameraAndLighting(const std::shared_ptr<HexEngine::Scene>& scene)
+	{
+		if (scene == nullptr)
+			return;
+
+		if (scene->GetMainCamera() == nullptr)
+		{
+			auto* cameraEntity = scene->CreateEntity("__PrefabEditorCamera", math::Vector3(0.0f, 2.0f, -8.0f));
+			if (cameraEntity != nullptr)
+			{
+				cameraEntity->SetLayer(HexEngine::Layer::Camera);
+				cameraEntity->SetFlag(HexEngine::EntityFlags::DoNotSave);
+				auto* camera = cameraEntity->AddComponent<HexEngine::Camera>();
+				scene->SetMainCamera(camera);
+			}
+		}
+
+		if (scene->GetSunLight() == nullptr)
+		{
+			scene->CreateDefaultSunLight();
+			if (auto* sun = scene->GetSunLight(); sun != nullptr && sun->GetEntity() != nullptr)
+			{
+				sun->GetEntity()->SetFlag(HexEngine::EntityFlags::DoNotSave);
+			}
+		}
+	}
+
+	void EditorUI::FramePrefabStageCamera(const std::shared_ptr<HexEngine::Scene>& scene)
+	{
+		if (scene == nullptr)
+			return;
+
+		auto* camera = scene->GetMainCamera();
+		if (camera == nullptr)
+			return;
+
+		if (!HexEngine::SceneFramingUtils::FrameCameraToSceneBounds(scene.get(), camera, true))
+			return;
+
+		if (auto* pvs = camera->GetPVS(); pvs != nullptr)
+		{
+			pvs->ForceRebuild();
+		}
+	}
+
+	HexEngine::Entity* EditorUI::FindPrefabRootInScene(const std::shared_ptr<HexEngine::Scene>& scene, const std::string& preferredName) const
+	{
+		if (scene == nullptr)
+			return nullptr;
+
+		if (!preferredName.empty())
+		{
+			if (auto* preferred = scene->GetEntityByName(preferredName); preferred != nullptr && preferred->GetParent() == nullptr)
+			{
+				return preferred;
+			}
+		}
+
+		for (const auto& bySignature : scene->GetEntities())
+		{
+			for (auto* entity : bySignature.second)
+			{
+				if (entity != nullptr && entity->GetParent() == nullptr && !entity->HasFlag(HexEngine::EntityFlags::DoNotSave))
+				{
+					return entity;
+				}
+			}
+		}
+
+		return nullptr;
+	}
+
+	void EditorUI::CollectEntityHierarchy(HexEngine::Entity* root, std::vector<HexEngine::Entity*>& outEntities) const
+	{
+		if (root == nullptr || root->IsPendingDeletion())
+			return;
+
+		outEntities.push_back(root);
+
+		for (auto* child : root->GetChildren())
+		{
+			CollectEntityHierarchy(child, outEntities);
+		}
+	}
+
+	HexEngine::Entity* EditorUI::CloneEntityHierarchyToScene(
+		HexEngine::Scene* targetScene,
+		HexEngine::Entity* sourceEntity,
+		HexEngine::Entity* targetParent,
+		const fs::path& prefabSourcePath,
+		const std::string& prefabRootName,
+		bool isRootInstance)
+	{
+		if (targetScene == nullptr || sourceEntity == nullptr)
+			return nullptr;
+
+		auto* clonedEntity = targetScene->CloneEntity(sourceEntity, false);
+		if (clonedEntity == nullptr)
+			return nullptr;
+
+		if (targetParent != nullptr)
+		{
+			clonedEntity->SetParent(targetParent);
+		}
+
+		if (!prefabSourcePath.empty())
+		{
+			clonedEntity->SetPrefabSource(prefabSourcePath, prefabRootName, isRootInstance);
+		}
+		else
+		{
+			clonedEntity->ClearPrefabSource();
+		}
+
+		for (auto* child : sourceEntity->GetChildren())
+		{
+			CloneEntityHierarchyToScene(targetScene, child, clonedEntity, prefabSourcePath, prefabRootName, false);
+		}
+
+		return clonedEntity;
+	}
+
+	HexEngine::Entity* EditorUI::FindPrefabInstanceRoot(HexEngine::Entity* entity) const
+	{
+		if (entity == nullptr || !entity->IsPrefabInstance())
+			return nullptr;
+
+		for (auto* current = entity; current != nullptr; current = current->GetParent())
+		{
+			if (current->IsPrefabInstanceRoot())
+				return current;
+		}
+
+		return nullptr;
+	}
+
+	void EditorUI::RefreshInspectorForPrefabInstance(HexEngine::Entity* changedEntity)
+	{
+		if (changedEntity == nullptr || _rightDock == nullptr)
+			return;
+
+		auto* inspecting = _rightDock->GetInspectingEntity();
+		if (inspecting == nullptr)
+			return;
+
+		auto* changedRoot = FindPrefabInstanceRoot(changedEntity);
+		auto* inspectingRoot = FindPrefabInstanceRoot(inspecting);
+		if (changedRoot != nullptr && changedRoot == inspectingRoot)
+		{
+			_rightDock->InspectEntity(inspecting);
+		}
+	}
+
+	void EditorUI::MarkPrefabOverride(HexEngine::Entity* entity, const std::string& propertyPath)
+	{
+		if (entity == nullptr || propertyPath.empty() || !entity->IsPrefabInstance())
+			return;
+
+		entity->MarkPrefabPropertyOverride(propertyPath);
+		RefreshInspectorForPrefabInstance(entity);
+	}
+
+	bool EditorUI::PropagateAppliedPrefabToInstances(
+		const fs::path& prefabPath,
+		HexEngine::Entity* appliedSourceInstance,
+		HexEngine::Entity** outReplacementForAppliedInstance)
+	{
+		if (outReplacementForAppliedInstance != nullptr)
+			*outReplacementForAppliedInstance = nullptr;
+
+		if (prefabPath.empty())
+			return false;
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return false;
+
+		auto prefabScene = sceneManager->CreateEmptyScene(false, nullptr, false);
+		HexEngine::SceneSaveFile loadFile(prefabPath, std::ios::in, prefabScene, HexEngine::SceneFileFlags::IsPrefab);
+		if (!loadFile.Load(prefabScene))
+		{
+			LOG_WARN("Failed to reload prefab '%s' for instance propagation.", prefabPath.string().c_str());
+			return false;
+		}
+
+		struct InstanceRefreshTarget
+		{
+			HexEngine::Entity* instanceRoot = nullptr;
+			math::Vector3 rootPosition = math::Vector3::Zero;
+			math::Quaternion rootRotation = math::Quaternion::Identity;
+			math::Vector3 rootScale = math::Vector3(1.0f);
+		};
+
+		std::vector<InstanceRefreshTarget> targets;
+		for (const auto& scene : sceneManager->GetAllScenes())
+		{
+			if (scene == nullptr)
+				continue;
+
+			for (const auto& bySignature : scene->GetEntities())
+			{
+				for (auto* entity : bySignature.second)
+				{
+					if (entity == nullptr || entity->IsPendingDeletion())
+						continue;
+
+					if (!entity->IsPrefabInstanceRoot() || entity->GetPrefabSourcePath() != prefabPath)
+						continue;
+
+					const bool isAppliedSource = (entity == appliedSourceInstance);
+					if (isAppliedSource)
+					{
+						if (outReplacementForAppliedInstance != nullptr)
+							*outReplacementForAppliedInstance = entity;
+						continue;
+					}
+
+					InstanceRefreshTarget target;
+					target.instanceRoot = entity;
+					target.rootPosition = entity->GetPosition();
+					target.rootRotation = entity->GetRotation();
+					target.rootScale = entity->GetScale();
+					targets.push_back(target);
+				}
+			}
+		}
+
+		bool replacedAny = false;
+		for (const auto& target : targets)
+		{
+			auto* instanceRoot = target.instanceRoot;
+			if (instanceRoot == nullptr || instanceRoot->IsPendingDeletion())
+				continue;
+
+			auto* sourceRoot = FindPrefabRootInScene(prefabScene, instanceRoot->GetPrefabRootEntityName());
+			if (sourceRoot == nullptr)
+			{
+				LOG_WARN("Could not find source root '%s' while propagating prefab '%s'.",
+					instanceRoot->GetPrefabRootEntityName().c_str(), prefabPath.string().c_str());
+				continue;
+			}
+
+			auto* targetScene = instanceRoot->GetScene();
+			if (targetScene == nullptr)
+				continue;
+
+			const std::string desiredName = instanceRoot->GetName();
+			auto* parent = instanceRoot->GetParent();
+
+			std::unordered_map<std::string, PrefabEntityOverrideState> overrideStates;
+			CollectPrefabOverrideStateRecursive(instanceRoot, "__root__", overrideStates);
+
+			const bool wasInspected = (_rightDock != nullptr && _rightDock->GetInspectingEntity() == instanceRoot);
+			targetScene->DestroyEntity(instanceRoot);
+
+			auto* newRoot = CloneEntityHierarchyToScene(targetScene, sourceRoot, parent, prefabPath, sourceRoot->GetName(), true);
+			if (newRoot == nullptr)
+			{
+				LOG_WARN("Failed to rebuild prefab instance while propagating '%s'.", prefabPath.string().c_str());
+				continue;
+			}
+
+			if (!desiredName.empty() && desiredName != newRoot->GetName())
+			{
+				std::string finalName;
+				targetScene->RenameEntity(newRoot, desiredName, &finalName);
+			}
+
+			ApplyPrefabOverrideStateRecursive(newRoot, "__root__", overrideStates);
+			newRoot->SetPosition(target.rootPosition);
+			newRoot->SetRotation(target.rootRotation);
+			newRoot->SetScale(target.rootScale);
+
+			targetScene->ForceRebuildPVS();
+			replacedAny = true;
+
+			if (wasInspected && _rightDock != nullptr)
+			{
+				_rightDock->InspectEntity(newRoot);
+			}
+
+		}
+
+		if (replacedAny && _entityList != nullptr)
+		{
+			_entityList->RefreshList();
+		}
+
+		return replacedAny;
+	}
+
+	bool EditorUI::IsPrefabInstanceEntity(HexEngine::Entity* entity) const
+	{
+		return entity != nullptr && entity->IsPrefabInstance();
+	}
+
+	bool EditorUI::IsPrefabInstanceRootEntity(HexEngine::Entity* entity) const
+	{
+		return entity != nullptr && entity->IsPrefabInstanceRoot();
+	}
+
+	bool EditorUI::HasPrefabInstanceOverrides(HexEngine::Entity* entity) const
+	{
+		if (entity == nullptr || !entity->IsPrefabInstance())
+			return false;
+
+		auto* root = entity;
+		while (root != nullptr && !root->IsPrefabInstanceRoot())
+		{
+			root = root->GetParent();
+		}
+
+		if (root == nullptr || !root->IsPrefabInstanceRoot())
+			return false;
+
+		const fs::path prefabPath = root->GetPrefabSourcePath();
+		if (prefabPath.empty())
+			return false;
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return false;
+
+		auto prefabScene = sceneManager->CreateEmptyScene(false, nullptr, false);
+		HexEngine::SceneSaveFile loadFile(prefabPath, std::ios::in, prefabScene, HexEngine::SceneFileFlags::IsPrefab);
+		if (!loadFile.Load(prefabScene))
+		{
+			LOG_WARN("Failed to load prefab '%s' while checking instance overrides.", prefabPath.string().c_str());
+			return false;
+		}
+
+		auto* sourceRoot = FindPrefabRootInScene(prefabScene, root->GetPrefabRootEntityName());
+		if (sourceRoot == nullptr)
+			return false;
+
+		HexEngine::JsonFile serializer(fs::path("temp_prefab_compare.json"), std::ios::out);
+		const json currentSnapshot = BuildPrefabEntitySnapshotRecursive(root, serializer, true);
+		const json sourceSnapshot = BuildPrefabEntitySnapshotRecursive(sourceRoot, serializer, true);
+		return currentSnapshot != sourceSnapshot;
+	}
+
+	HexEngine::Entity* EditorUI::RevertPrefabInstance(HexEngine::Entity* entity)
+	{
+		if (entity == nullptr || !entity->IsPrefabInstanceRoot())
+			return nullptr;
+
+		if (IsPrefabStageActive())
+		{
+			LOG_WARN("Cannot revert prefab instance while prefab stage is active.");
+			return nullptr;
+		}
+
+		const fs::path prefabPath = entity->GetPrefabSourcePath();
+		if (prefabPath.empty())
+		{
+			LOG_WARN("Cannot revert prefab instance '%s' because it has no source path.", entity->GetName().c_str());
+			return nullptr;
+		}
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return nullptr;
+
+		auto prefabScene = sceneManager->CreateEmptyScene(false);
+		HexEngine::SceneSaveFile loadFile(prefabPath, std::ios::in, prefabScene, HexEngine::SceneFileFlags::IsPrefab);
+		if (!loadFile.Load(prefabScene))
+		{
+			LOG_WARN("Failed to load prefab '%s' while reverting instance '%s'.", prefabPath.string().c_str(), entity->GetName().c_str());
+			return nullptr;
+		}
+
+		const std::string prefabRootName = entity->GetPrefabRootEntityName();
+		auto* sourceRoot = FindPrefabRootInScene(prefabScene, prefabRootName);
+		if (sourceRoot == nullptr)
+		{
+			LOG_WARN("Failed to find prefab root '%s' in '%s'.", prefabRootName.c_str(), prefabPath.string().c_str());
+			return nullptr;
+		}
+
+		auto* targetScene = entity->GetScene();
+		auto* parent = entity->GetParent();
+		const std::string desiredInstanceName = entity->GetName();
+
+		targetScene->DestroyEntity(entity);
+
+		auto* newRoot = CloneEntityHierarchyToScene(targetScene, sourceRoot, parent, prefabPath, sourceRoot->GetName(), true);
+		if (newRoot == nullptr)
+		{
+			LOG_WARN("Failed to recreate prefab instance from '%s'.", prefabPath.string().c_str());
+			return nullptr;
+		}
+
+		if (!desiredInstanceName.empty() && desiredInstanceName != newRoot->GetName())
+		{
+			std::string finalName;
+			targetScene->RenameEntity(newRoot, desiredInstanceName, &finalName);
+		}
+
+		if (_entityList != nullptr)
+		{
+			_entityList->RefreshList();
+		}
+
+		targetScene->ForceRebuildPVS();
+		LOG_INFO("Reverted prefab instance '%s' from '%s'.", newRoot->GetName().c_str(), prefabPath.string().c_str());
+		return newRoot;
+	}
+
+	bool EditorUI::ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity)
+	{
+		if (entity == nullptr || !entity->IsPrefabInstanceRoot())
+			return false;
+
+		if (IsPrefabStageActive())
+		{
+			LOG_WARN("Cannot apply prefab instance while prefab stage is active.");
+			return false;
+		}
+
+		const fs::path prefabPath = entity->GetPrefabSourcePath();
+		if (prefabPath.empty())
+		{
+			LOG_WARN("Cannot apply prefab instance '%s' because it has no source path.", entity->GetName().c_str());
+			return false;
+		}
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return false;
+
+		auto tempScene = sceneManager->CreateEmptyScene(false);
+		auto* tempRoot = CloneEntityHierarchyToScene(tempScene.get(), entity, nullptr, fs::path(), std::string(), true);
+		if (tempRoot == nullptr)
+		{
+			LOG_WARN("Failed to clone prefab instance '%s' for apply operation.", entity->GetName().c_str());
+			return false;
+		}
+
+		const std::string desiredRootName = entity->GetPrefabRootEntityName().empty() ? tempRoot->GetName() : entity->GetPrefabRootEntityName();
+		if (!desiredRootName.empty() && tempRoot->GetName() != desiredRootName)
+		{
+			std::string finalName;
+			tempScene->RenameEntity(tempRoot, desiredRootName, &finalName);
+		}
+
+		std::vector<HexEngine::Entity*> entitiesToSave;
+		CollectEntityHierarchy(tempRoot, entitiesToSave);
+
+		HexEngine::SceneSaveFile saveFile(prefabPath, std::ios::out | std::ios::trunc, tempScene, HexEngine::SceneFileFlags::IsPrefab);
+		if (!saveFile.Save(entitiesToSave))
+		{
+			LOG_WARN("Failed to save prefab '%s' from instance '%s'.", prefabPath.string().c_str(), entity->GetName().c_str());
+			return false;
+		}
+
+		// The source instance now matches the prefab asset by definition.
+		std::vector<HexEngine::Entity*> sourceHierarchy;
+		CollectEntityHierarchy(entity, sourceHierarchy);
+		for (auto* sourceEntity : sourceHierarchy)
+		{
+			if (sourceEntity != nullptr)
+				sourceEntity->ClearPrefabPropertyOverrides();
+		}
+		RefreshInspectorForPrefabInstance(entity);
+
+		PropagateAppliedPrefabToInstances(prefabPath, entity, nullptr);
+
+		LOG_INFO("Applied prefab instance '%s' to asset '%s'.", entity->GetName().c_str(), prefabPath.string().c_str());
+		return true;
+	}
+
+	bool EditorUI::OpenPrefabStage(const fs::path& prefabPath)
+	{
+		if (prefabPath.empty() || prefabPath.extension() != ".hprefab")
+			return false;
+
+		if (_integrator.GetState() == GameTestState::Started)
+		{
+			LOG_WARN("Cannot open prefab stage while game is running.");
+			return false;
+		}
+
+		if (_prefabStage.active && _prefabStage.prefabPath == prefabPath)
+			return true;
+
+		if (_prefabStage.active)
+		{
+			ClosePrefabStage(true);
+		}
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return false;
+
+		auto activeScene = sceneManager->GetCurrentScene();
+		if (activeScene == nullptr)
+		{
+			LOG_WARN("Cannot open prefab stage because there is no active scene.");
+			return false;
+		}
+
+		if (_prefabStage.stageScene == nullptr)
+		{
+			_prefabStage.stageScene = sceneManager->CreateEmptyScene(false, this, true);
+			if (_prefabStage.stageScene == nullptr)
+				return false;
+
+			_prefabStage.stageScene->SetFlags(HexEngine::SceneFlags::Disabled | HexEngine::SceneFlags::Utility);
+		}
+		else
+		{
+			_prefabStage.stageScene->Destroy();
+			_prefabStage.stageScene->CreateEmpty(false);
+			_prefabStage.stageScene->SetFlags(HexEngine::SceneFlags::Disabled | HexEngine::SceneFlags::Utility);
+		}
+
+		_prefabStage.prefabPath = prefabPath;
+		_prefabStage.previousActiveScene = activeScene;
+		_prefabStage.previousSceneFlags.clear();
+
+		HexEngine::SceneSaveFile loadFile(prefabPath, std::ios::in, _prefabStage.stageScene, HexEngine::SceneFileFlags::IsPrefab);
+		if (!loadFile.Load(_prefabStage.stageScene))
+		{
+			LOG_WARN("Failed to open prefab stage for '%s'", prefabPath.string().c_str());
+			_prefabStage.prefabPath.clear();
+			_prefabStage.previousActiveScene.reset();
+			return false;
+		}
+
+		_prefabStage.stageScene->SetName(L"Prefab: " + prefabPath.stem().wstring());
+
+		const auto& allScenes = sceneManager->GetAllScenes();
+		for (const auto& scene : allScenes)
+		{
+			if (!scene || scene == _prefabStage.stageScene)
+				continue;
+
+			_prefabStage.previousSceneFlags.emplace_back(scene, scene->GetFlags());
+			scene->SetFlags(HexEngine::SceneFlags::Disabled);
+		}
+
+		_prefabStage.stageScene->SetFlags(HexEngine::SceneFlags::Updateable | HexEngine::SceneFlags::Renderable | HexEngine::SceneFlags::PostProcessingEnabled);
+		sceneManager->SetActiveScene(_prefabStage.stageScene);
+
+		EnsurePrefabStageCameraAndLighting(_prefabStage.stageScene);
+		FramePrefabStageCamera(_prefabStage.stageScene);
+
+		_prefabStage.active = true;
+
+		if (_rightDock != nullptr)
+		{
+			_rightDock->InspectEntity(nullptr);
+		}
+
+		if (_entityList != nullptr)
+		{
+			_entityList->RefreshList();
+		}
+
+		LOG_INFO("Opened prefab stage: %s", prefabPath.string().c_str());
+		return true;
+	}
+
+	bool EditorUI::SavePrefabStage()
+	{
+		if (!_prefabStage.active || _prefabStage.stageScene == nullptr || _prefabStage.prefabPath.empty())
+			return false;
+
+		std::vector<HexEngine::Entity*> entitiesToSave;
+		for (const auto& bySignature : _prefabStage.stageScene->GetEntities())
+		{
+			for (auto* entity : bySignature.second)
+			{
+				if (entity != nullptr && !entity->HasFlag(HexEngine::EntityFlags::DoNotSave))
+				{
+					entitiesToSave.push_back(entity);
+				}
+			}
+		}
+
+		HexEngine::SceneSaveFile saveFile(_prefabStage.prefabPath, std::ios::out | std::ios::trunc, _prefabStage.stageScene, HexEngine::SceneFileFlags::IsPrefab);
+		if (!saveFile.Save(entitiesToSave))
+		{
+			LOG_WARN("Failed to save prefab stage: %s", _prefabStage.prefabPath.string().c_str());
+			return false;
+		}
+
+		LOG_INFO("Saved prefab: %s", _prefabStage.prefabPath.string().c_str());
+		return true;
+	}
+
+	bool EditorUI::ClosePrefabStage(bool saveChanges)
+	{
+		if (!_prefabStage.active)
+			return false;
+
+		if (saveChanges)
+		{
+			SavePrefabStage();
+		}
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager != nullptr)
+		{
+			for (auto& [scene, flags] : _prefabStage.previousSceneFlags)
+			{
+				if (scene != nullptr)
+				{
+					scene->SetFlags(flags);
+				}
+			}
+
+			if (_prefabStage.stageScene != nullptr)
+			{
+				_prefabStage.stageScene->SetFlags(HexEngine::SceneFlags::Disabled | HexEngine::SceneFlags::Utility);
+			}
+
+			if (_prefabStage.previousActiveScene != nullptr)
+			{
+				sceneManager->SetActiveScene(_prefabStage.previousActiveScene);
+			}
+			else
+			{
+				const auto& scenes = sceneManager->GetAllScenes();
+				for (const auto& scene : scenes)
+				{
+					if (scene != nullptr && scene != _prefabStage.stageScene && !HEX_HASFLAG(scene->GetFlags(), HexEngine::SceneFlags::Utility))
+					{
+						sceneManager->SetActiveScene(scene);
+						break;
+					}
+				}
+			}
+		}
+
+		_prefabStage.active = false;
+		_prefabStage.prefabPath.clear();
+		_prefabStage.previousActiveScene.reset();
+		_prefabStage.previousSceneFlags.clear();
+
+		if (_rightDock != nullptr)
+		{
+			_rightDock->InspectEntity(nullptr);
+		}
+
+		if (_entityList != nullptr)
+		{
+			_entityList->RefreshList();
+		}
+
+		LOG_INFO("Exited prefab stage");
+		return true;
+	}
+
+	bool EditorUI::IsPrefabStageActive() const
+	{
+		return _prefabStage.active;
+	}
+
 	void EditorUI::OnDeleteSceneAction()
 	{
+		if (IsPrefabStageActive())
+		{
+			LOG_WARN("Cannot delete scene while prefab stage is active. Exit prefab mode first.");
+			return;
+		}
+
 		auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
 
 		HexEngine::g_pEnv->_sceneManager->UnloadScene(scene.get());
@@ -754,6 +1628,11 @@ namespace HexEditor
 
 	void EditorUI::OnSaveAction()
 	{
+		if (IsPrefabStageActive())
+		{
+			SavePrefabStage();
+		}
+
 		// save the project file
 		if (_projectFile)
 			_projectFile->Save();
@@ -842,7 +1721,10 @@ namespace HexEditor
 			HexEngine::Point(width - (dockWidth * 2), height - (style.win_title_height + 2) - lowerDockHeight),
 			[this]() { RunGame(); },
 			[this]() { StopGame(); },
-			[this]() { return _integrator.GetState() == GameTestState::Started; });
+			[this]() { return _integrator.GetState() == GameTestState::Started; },
+			[this]() { SavePrefabStage(); },
+			[this]() { ClosePrefabStage(true); },
+			[this]() { return IsPrefabStageActive(); });
 
 		_leftDock = new HexEngine::Dock(_rootElement, HexEngine::Point(0, style.win_title_height + 2), HexEngine::Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)), HexEngine::Dock::Anchor::Left);
 		_rightDock = new Inspector(_rootElement, HexEngine::Point(width - dockWidth, style.win_title_height + 2), HexEngine::Point(dockWidth, height - (style.win_title_height + 2) - (lowerDockHeight)));
@@ -1145,6 +2027,18 @@ namespace HexEditor
 					_pendingComponentEditBefore.components != afterSnapshot.components)
 				{
 					_transactions.Push(std::make_unique<ComponentPropertyTransaction>(_pendingComponentEditBefore, afterSnapshot));
+
+					if (ComponentEntryChanged(_pendingComponentEditBefore.components, afterSnapshot.components, "Transform"))
+					{
+						MarkPrefabOverride(entity, kPrefabOverrideTransformPosition);
+						MarkPrefabOverride(entity, kPrefabOverrideTransformRotation);
+						MarkPrefabOverride(entity, kPrefabOverrideTransformScale);
+					}
+
+					if (ComponentEntryChanged(_pendingComponentEditBefore.components, afterSnapshot.components, "StaticMeshComponent"))
+					{
+						MarkPrefabOverride(entity, kPrefabOverrideStaticMeshMaterial);
+					}
 				}
 			}
 		}
@@ -1309,6 +2203,7 @@ namespace HexEditor
 			return;
 
 		_transactions.Push(std::make_unique<PositionTransaction>(entity->GetName(), before, after));
+		MarkPrefabOverride(entity, kPrefabOverrideTransformPosition);
 	}
 
 	void EditorUI::RecordEntityScaleChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)
@@ -1317,6 +2212,7 @@ namespace HexEditor
 			return;
 
 		_transactions.Push(std::make_unique<ScaleTransaction>(entity->GetName(), before, after));
+		MarkPrefabOverride(entity, kPrefabOverrideTransformScale);
 	}
 
 	void EditorUI::RecordStaticMeshMaterialChange(HexEngine::Entity* entity, const fs::path& before, const fs::path& after)
@@ -1325,6 +2221,7 @@ namespace HexEditor
 			return;
 
 		_transactions.Push(std::make_unique<MaterialAssignmentTransaction>(entity->GetName(), before, after));
+		MarkPrefabOverride(entity, kPrefabOverrideStaticMeshMaterial);
 	}
 
 	void EditorUI::RecordEntityRename(HexEngine::Entity* entity, const std::string& beforeName, const std::string& afterName)

@@ -1,6 +1,7 @@
 
 #include "Inspector.hpp"
 #include "../EditorUI.hpp"
+#include <algorithm>
 
 namespace HexEditor
 {
@@ -23,6 +24,12 @@ namespace HexEditor
 			_toggleVisibilityBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 50), HexEngine::Point(30, 25), _visBtnTextures[1], std::bind(&Inspector::OnToggleEntityVisible, this, std::placeholders::_1));
 
 			_addComponentBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 80), HexEngine::Point(size.x - 10, 25), L"Add Component...", std::bind(&Inspector::OnAddComponent, this, std::placeholders::_1));
+
+			const int32_t prefabButtonWidth = std::max(40, (size.x - 15) / 2);
+			_revertPrefabBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 110), HexEngine::Point(prefabButtonWidth, 22), L"Revert Prefab", std::bind(&Inspector::OnRevertPrefabInstance, this, std::placeholders::_1));
+			_applyPrefabBtn = new HexEngine::Button(entityTab, HexEngine::Point(10 + prefabButtonWidth, 110), HexEngine::Point(prefabButtonWidth, 22), L"Apply Prefab", std::bind(&Inspector::OnApplyPrefabInstance, this, std::placeholders::_1));
+			_revertPrefabBtn->DisableRecursive();
+			_applyPrefabBtn->DisableRecursive();
 		}
 
 		auto resourceTab = _tabs->AddTab(L"Resource");
@@ -149,6 +156,13 @@ namespace HexEditor
 		if (!entity)
 		{
 			_inspecting = nullptr;
+			if (_revertPrefabBtn != nullptr)
+				_revertPrefabBtn->DisableRecursive();
+			if (_applyPrefabBtn != nullptr)
+			{
+				_applyPrefabBtn->DisableRecursive();
+				_applyPrefabBtn->RemoveHighlightOverride();
+			}
 			ClearInspectorWidgets();
 			return;
 		}
@@ -164,6 +178,38 @@ namespace HexEditor
 		_entityName->SetHasInputFocus(false);
 		_toggleVisibilityBtn->SetIcon(entity->HasFlag(HexEngine::EntityFlags::DoNotRender) ? _visBtnTextures[0] : _visBtnTextures[1]);
 
+		const bool showPrefabButtons =
+			(g_pUIManager != nullptr) &&
+			g_pUIManager->IsPrefabInstanceRootEntity(entity) &&
+			!g_pUIManager->IsPrefabStageActive();
+		const bool hasPrefabOverrides =
+			showPrefabButtons &&
+			g_pUIManager->HasPrefabInstanceOverrides(entity);
+
+		if (_revertPrefabBtn != nullptr && _applyPrefabBtn != nullptr)
+		{
+			if (showPrefabButtons)
+			{
+				_revertPrefabBtn->EnableRecursive();
+				if (hasPrefabOverrides)
+				{
+					_applyPrefabBtn->EnableRecursive();
+					_applyPrefabBtn->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(30, 180, 90, 255)));
+				}
+				else
+				{
+					_applyPrefabBtn->DisableRecursive();
+					_applyPrefabBtn->RemoveHighlightOverride();
+				}
+			}
+			else
+			{
+				_revertPrefabBtn->DisableRecursive();
+				_applyPrefabBtn->DisableRecursive();
+				_applyPrefabBtn->RemoveHighlightOverride();
+			}
+		}
+
 		if (entity != _inspecting)
 		{
 			auto size = GetSize();
@@ -177,7 +223,7 @@ namespace HexEditor
 
 			_inspecting->SetFlag(HexEngine::EntityFlags::SelectedInEditor);
 
-			int32_t y = 130;
+			int32_t y = showPrefabButtons ? 140 : 130;
 
 			for (auto& component : entity->GetAllComponents())
 			{
@@ -331,6 +377,36 @@ namespace HexEditor
 		auto* entity = _inspecting;
 		_inspecting = nullptr;
 		InspectEntity(entity);
+
+		return true;
+	}
+
+	bool Inspector::OnRevertPrefabInstance(HexEngine::Button* button)
+	{
+		if (_inspecting == nullptr || g_pUIManager == nullptr)
+			return true;
+
+		auto* newRoot = g_pUIManager->RevertPrefabInstance(_inspecting);
+		if (newRoot != nullptr)
+		{
+			_inspecting = nullptr;
+			InspectEntity(newRoot);
+		}
+
+		return true;
+	}
+
+	bool Inspector::OnApplyPrefabInstance(HexEngine::Button* button)
+	{
+		if (_inspecting == nullptr || g_pUIManager == nullptr)
+			return true;
+
+		if (g_pUIManager->ApplyPrefabInstanceToPrefabAsset(_inspecting))
+		{
+			auto* entity = _inspecting;
+			_inspecting = nullptr;
+			InspectEntity(entity);
+		}
 
 		return true;
 	}
