@@ -69,6 +69,9 @@ namespace HexEngine
 		std::shared_ptr<Mesh> GetMesh() const;
 
 		const math::Vector2& GetUVScale() const;
+		void SetUVScale(const math::Vector2& uvScale);
+		const math::Vector3& GetOffsetPosition() const;
+		void SetOffsetPosition(const math::Vector3& offsetPosition);
 		const MeshInstanceData& GetCachedInstanceData(Material* material);
 		const SimpleMeshInstanceData& GetCachedShadowInstanceData();
 

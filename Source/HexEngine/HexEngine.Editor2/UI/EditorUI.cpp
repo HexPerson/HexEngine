@@ -72,7 +72,11 @@ namespace HexEditor
 		constexpr const char* kPrefabOverrideTransformPosition = "transform.position";
 		constexpr const char* kPrefabOverrideTransformRotation = "transform.rotation";
 		constexpr const char* kPrefabOverrideTransformScale = "transform.scale";
+		constexpr const char* kPrefabOverrideStaticMeshMesh = "staticMesh.mesh";
 		constexpr const char* kPrefabOverrideStaticMeshMaterial = "staticMesh.material";
+		constexpr const char* kPrefabOverrideStaticMeshUVScale = "staticMesh.uvScale";
+		constexpr const char* kPrefabOverrideStaticMeshShadowCullMode = "staticMesh.shadowCullMode";
+		constexpr const char* kPrefabOverrideStaticMeshOffsetPosition = "staticMesh.offsetPosition";
 
 		struct PrefabEntityOverrideState
 		{
@@ -80,8 +84,13 @@ namespace HexEditor
 			math::Vector3 position = math::Vector3::Zero;
 			math::Quaternion rotation = math::Quaternion::Identity;
 			math::Vector3 scale = math::Vector3(1.0f);
+			fs::path meshPath;
+			bool hasMeshPath = false;
 			fs::path materialPath;
 			bool hasMaterialPath = false;
+			math::Vector2 uvScale = math::Vector2(1.0f, 1.0f);
+			HexEngine::CullingMode shadowCullMode = HexEngine::CullingMode::FrontFace;
+			math::Vector3 offsetPosition = math::Vector3::Zero;
 		};
 
 		void CollectPrefabOverrideStateRecursive(
@@ -103,11 +112,21 @@ namespace HexEditor
 
 				if (auto* staticMesh = entity->GetComponent<HexEngine::StaticMeshComponent>(); staticMesh != nullptr)
 				{
+					if (auto mesh = staticMesh->GetMesh(); mesh != nullptr)
+					{
+						state.meshPath = mesh->GetFileSystemPath();
+						state.hasMeshPath = !state.meshPath.empty();
+					}
+
 					if (auto material = staticMesh->GetMaterial(); material != nullptr)
 					{
 						state.materialPath = material->GetFileSystemPath();
 						state.hasMaterialPath = !state.materialPath.empty();
 					}
+
+					state.uvScale = staticMesh->GetUVScale();
+					state.shadowCullMode = staticMesh->GetShadowCullMode();
+					state.offsetPosition = staticMesh->GetOffsetPosition();
 				}
 
 				outStates[pathKey] = std::move(state);
@@ -153,6 +172,20 @@ namespace HexEditor
 				if (state.overridePaths.find(kPrefabOverrideTransformScale) != state.overridePaths.end())
 					entity->SetScale(state.scale);
 
+				if (state.overridePaths.find(kPrefabOverrideStaticMeshMesh) != state.overridePaths.end())
+				{
+					if (auto* staticMesh = entity->GetComponent<HexEngine::StaticMeshComponent>(); staticMesh != nullptr)
+					{
+						if (state.hasMeshPath && !state.meshPath.empty())
+						{
+							if (auto mesh = HexEngine::Mesh::Create(state.meshPath); mesh != nullptr)
+							{
+								staticMesh->SetMesh(mesh);
+							}
+						}
+					}
+				}
+
 				if (state.overridePaths.find(kPrefabOverrideStaticMeshMaterial) != state.overridePaths.end())
 				{
 					if (auto* staticMesh = entity->GetComponent<HexEngine::StaticMeshComponent>(); staticMesh != nullptr)
@@ -164,6 +197,30 @@ namespace HexEditor
 								staticMesh->SetMaterial(material);
 							}
 						}
+					}
+				}
+
+				if (state.overridePaths.find(kPrefabOverrideStaticMeshUVScale) != state.overridePaths.end())
+				{
+					if (auto* staticMesh = entity->GetComponent<HexEngine::StaticMeshComponent>(); staticMesh != nullptr)
+					{
+						staticMesh->SetUVScale(state.uvScale);
+					}
+				}
+
+				if (state.overridePaths.find(kPrefabOverrideStaticMeshShadowCullMode) != state.overridePaths.end())
+				{
+					if (auto* staticMesh = entity->GetComponent<HexEngine::StaticMeshComponent>(); staticMesh != nullptr)
+					{
+						staticMesh->SetShadowCullMode(state.shadowCullMode);
+					}
+				}
+
+				if (state.overridePaths.find(kPrefabOverrideStaticMeshOffsetPosition) != state.overridePaths.end())
+				{
+					if (auto* staticMesh = entity->GetComponent<HexEngine::StaticMeshComponent>(); staticMesh != nullptr)
+					{
+						staticMesh->SetOffsetPosition(state.offsetPosition);
 					}
 				}
 			}
@@ -201,6 +258,84 @@ namespace HexEditor
 				return false;
 
 			return *before != *after;
+		}
+
+		const json* FindComponentEntryByName(const json& components, const std::string& componentName)
+		{
+			if (!components.is_array())
+				return nullptr;
+
+			for (const auto& component : components)
+			{
+				if (component.value("name", std::string()) == componentName)
+					return &component;
+			}
+
+			return nullptr;
+		}
+
+		std::string ExtractStaticMeshPath(const json& staticMeshComponent)
+		{
+			auto meshIt = staticMeshComponent.find("mesh");
+			if (meshIt == staticMeshComponent.end() || !meshIt->is_object() || meshIt->empty())
+				return {};
+
+			return meshIt->items().begin().key();
+		}
+
+		std::string ExtractStaticMeshMaterialPath(const json& staticMeshComponent)
+		{
+			auto meshIt = staticMeshComponent.find("mesh");
+			if (meshIt == staticMeshComponent.end() || !meshIt->is_object() || meshIt->empty())
+				return {};
+
+			const auto& meshEntry = meshIt->items().begin().value();
+			auto materialsIt = meshEntry.find("materials");
+			if (materialsIt == meshEntry.end() || !materialsIt->is_array() || materialsIt->empty())
+				return {};
+
+			if (!(*materialsIt)[0].is_string())
+				return {};
+
+			return (*materialsIt)[0].get<std::string>();
+		}
+
+		struct StaticMeshComponentDiff
+		{
+			bool meshChanged = false;
+			bool materialChanged = false;
+			bool uvScaleChanged = false;
+			bool shadowCullModeChanged = false;
+			bool offsetPositionChanged = false;
+
+			bool HasAnyChange() const
+			{
+				return meshChanged || materialChanged || uvScaleChanged || shadowCullModeChanged || offsetPositionChanged;
+			}
+		};
+
+		StaticMeshComponentDiff BuildStaticMeshComponentDiff(const json& beforeComponents, const json& afterComponents)
+		{
+			StaticMeshComponentDiff diff;
+
+			const auto* before = FindComponentEntryByName(beforeComponents, "StaticMeshComponent");
+			const auto* after = FindComponentEntryByName(afterComponents, "StaticMeshComponent");
+			if (before == nullptr || after == nullptr)
+				return diff;
+
+			diff.meshChanged = ExtractStaticMeshPath(*before) != ExtractStaticMeshPath(*after);
+			diff.materialChanged = ExtractStaticMeshMaterialPath(*before) != ExtractStaticMeshMaterialPath(*after);
+
+			auto getFieldOrNull = [](const json& component, const char* key) -> json
+			{
+				auto it = component.find(key);
+				return it != component.end() ? *it : json();
+			};
+
+			diff.uvScaleChanged = getFieldOrNull(*before, "_uvScale") != getFieldOrNull(*after, "_uvScale");
+			diff.shadowCullModeChanged = getFieldOrNull(*before, "_shadowCullingMode") != getFieldOrNull(*after, "_shadowCullingMode");
+			diff.offsetPositionChanged = getFieldOrNull(*before, "_offsetPosition") != getFieldOrNull(*after, "_offsetPosition");
+			return diff;
 		}
 	}
 
@@ -1095,14 +1230,8 @@ namespace HexEditor
 			return false;
 		}
 
-		// The source instance now matches the prefab asset by definition.
-		std::vector<HexEngine::Entity*> sourceHierarchy;
-		CollectEntityHierarchy(entity, sourceHierarchy);
-		for (auto* sourceEntity : sourceHierarchy)
-		{
-			if (sourceEntity != nullptr)
-				sourceEntity->ClearPrefabPropertyOverrides();
-		}
+		// Keep explicit per-instance overrides sticky across apply operations.
+		// This preserves user-authored local values when other instances later apply different prefab changes.
 		RefreshInspectorForPrefabInstance(entity);
 
 		PropagateAppliedPrefabToInstances(prefabPath, entity, nullptr);
@@ -2037,7 +2166,27 @@ namespace HexEditor
 
 					if (ComponentEntryChanged(_pendingComponentEditBefore.components, afterSnapshot.components, "StaticMeshComponent"))
 					{
-						MarkPrefabOverride(entity, kPrefabOverrideStaticMeshMaterial);
+						const auto staticMeshDiff = BuildStaticMeshComponentDiff(_pendingComponentEditBefore.components, afterSnapshot.components);
+						if (staticMeshDiff.meshChanged)
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshMesh);
+						if (staticMeshDiff.materialChanged)
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshMaterial);
+						if (staticMeshDiff.uvScaleChanged)
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshUVScale);
+						if (staticMeshDiff.shadowCullModeChanged)
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshShadowCullMode);
+						if (staticMeshDiff.offsetPositionChanged)
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshOffsetPosition);
+
+						// Defensive fallback if serialization layout changes and per-field extraction misses it.
+						if (!staticMeshDiff.HasAnyChange())
+						{
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshMesh);
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshMaterial);
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshUVScale);
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshShadowCullMode);
+							MarkPrefabOverride(entity, kPrefabOverrideStaticMeshOffsetPosition);
+						}
 					}
 				}
 			}

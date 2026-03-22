@@ -331,6 +331,21 @@ namespace HexEngine
 		return _uvScale;
 	}
 
+	void StaticMeshComponent::SetUVScale(const math::Vector2& uvScale)
+	{
+		_uvScale = uvScale;
+	}
+
+	const math::Vector3& StaticMeshComponent::GetOffsetPosition() const
+	{
+		return _offsetPosition;
+	}
+
+	void StaticMeshComponent::SetOffsetPosition(const math::Vector3& offsetPosition)
+	{
+		_offsetPosition = offsetPosition;
+	}
+
 	const MeshInstanceData& StaticMeshComponent::GetCachedInstanceData(Material* material)
 	{
 		auto entity = GetEntity();
@@ -435,6 +450,13 @@ namespace HexEngine
 		if (mat)
 		{
 			SetMaterial(mat);
+
+			// Inspector drag-drop can bypass editor-side pending component capture;
+			// ensure prefab instances still track this as an explicit per-instance override.
+			if (auto* entity = GetEntity(); entity != nullptr && entity->IsPrefabInstance())
+			{
+				entity->MarkPrefabPropertyOverride("staticMesh.material");
+			}
 		}
 	}
 
