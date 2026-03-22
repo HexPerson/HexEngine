@@ -2,6 +2,7 @@
 #include "Inspector.hpp"
 #include "../EditorUI.hpp"
 #include <algorithm>
+#include <unordered_set>
 
 namespace HexEditor
 {
@@ -185,6 +186,14 @@ namespace HexEditor
 		const bool hasPrefabOverrides =
 			showPrefabButtons &&
 			g_pUIManager->HasPrefabInstanceOverrides(entity);
+		const bool showVariantOverrideControls =
+			(g_pUIManager != nullptr) &&
+			g_pUIManager->IsVariantStageEntity(entity);
+		std::unordered_set<std::string> variantOverriddenComponents;
+		if (showVariantOverrideControls)
+		{
+			g_pUIManager->GetVariantStageEntityOverrideComponents(entity, variantOverriddenComponents);
+		}
 
 		if (_revertPrefabBtn != nullptr && _applyPrefabBtn != nullptr)
 		{
@@ -210,7 +219,8 @@ namespace HexEditor
 			}
 		}
 
-		if (entity != _inspecting)
+		const bool shouldRebuildWidgets = (entity != _inspecting) || showVariantOverrideControls;
+		if (shouldRebuildWidgets)
 		{
 			auto size = GetSize();
 
@@ -238,6 +248,9 @@ namespace HexEditor
 				}
 
 				widget->CalculateLargestLabelWidth();
+				const bool componentOverridden = showVariantOverrideControls &&
+					(variantOverriddenComponents.find(componentName) != variantOverriddenComponents.end());
+				widget->SetOverrideActive(componentOverridden);
 
 				if (component->GetComponentId() != HexEngine::Transform::_GetComponentId())
 				{
@@ -248,6 +261,24 @@ namespace HexEditor
 						L"X",
 						[this, component](HexEngine::Button*) { return OnRemoveComponent(component); });
 					removeBtn->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(237, 28, 36, 255)));
+				}
+
+				if (componentOverridden)
+				{
+					const int32_t revertButtonX = component->GetComponentId() != HexEngine::Transform::_GetComponentId()
+						? widget->GetSize().x - 86
+						: widget->GetSize().x - 60;
+
+					auto* revertBtn = new HexEngine::Button(
+						widget,
+						HexEngine::Point(revertButtonX, 2),
+						HexEngine::Point(56, 16),
+						L"Revert",
+						[this, componentName](HexEngine::Button*)
+						{
+							return OnRevertVariantComponent(componentName);
+						});
+					revertBtn->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(36, 122, 74, 255)));
 				}
 
 				_componentWidgets.push_back(widget);
@@ -393,6 +424,20 @@ namespace HexEditor
 			InspectEntity(newRoot);
 		}
 
+		return true;
+	}
+
+	bool Inspector::OnRevertVariantComponent(const std::string& componentName)
+	{
+		if (_inspecting == nullptr || g_pUIManager == nullptr || componentName.empty())
+			return true;
+
+		if (!g_pUIManager->RevertVariantStageComponentToBase(_inspecting, componentName))
+			return true;
+
+		auto* entity = _inspecting;
+		_inspecting = nullptr;
+		InspectEntity(entity);
 		return true;
 	}
 

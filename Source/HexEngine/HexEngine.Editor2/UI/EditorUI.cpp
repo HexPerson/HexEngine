@@ -45,7 +45,7 @@ namespace HexEditor
 		CreateDocks(width, height);
 		CreateEntityList();
 		CreateMenuBar();
-		_prefabController.SetDependencies(this, &_integrator, _rightDock, _entityList);
+		_prefabController.SetDependencies(this, &_integrator, _rightDock, _entityList, _lowerDock);
 
 		// Always start with the project manager
 		_projectManager = ProjectManager::CreateProjectManagerDialog(_rootElement, std::bind(&EditorUI::OnProjectManagerCompleted, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
@@ -473,6 +473,21 @@ namespace HexEditor
 	bool EditorUI::ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity)
 	{
 		return _prefabController.ApplyPrefabInstanceToPrefabAsset(entity);
+	}
+
+	bool EditorUI::IsVariantStageEntity(HexEngine::Entity* entity) const
+	{
+		return _prefabController.IsVariantStageEntity(entity);
+	}
+
+	bool EditorUI::GetVariantStageEntityOverrideComponents(HexEngine::Entity* entity, std::unordered_set<std::string>& outComponentNames) const
+	{
+		return _prefabController.GetVariantStageEntityOverrideComponents(entity, outComponentNames);
+	}
+
+	bool EditorUI::RevertVariantStageComponentToBase(HexEngine::Entity* entity, const std::string& componentName)
+	{
+		return _prefabController.RevertVariantStageComponentToBase(entity, componentName);
 	}
 
 	bool EditorUI::OpenPrefabStage(const fs::path& prefabPath)

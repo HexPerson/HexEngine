@@ -23,10 +23,12 @@ namespace HexEngine
 
 		void AddComponentChild(Element* child);
 		void RemoveComponentChild(Element* child);
+		void SetOverrideActive(bool active);
 
 	private:
 		int32_t _totalHeight = 0;
 		std::wstring _label;
 		int32_t _largestLabelWidth = 0;
+		bool _overrideActive = false;
 	};
 }

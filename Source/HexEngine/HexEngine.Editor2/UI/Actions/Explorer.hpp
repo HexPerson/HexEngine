@@ -21,6 +21,7 @@ namespace HexEditor
 		virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data) override;
 
 		void UpdateFolderView();
+		void InvalidateAssetPreview(const fs::path& assetPath);
 
 		void SetProjectPath(const fs::path& path);
 

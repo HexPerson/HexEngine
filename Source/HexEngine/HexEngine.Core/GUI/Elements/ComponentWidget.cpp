@@ -82,10 +82,29 @@ namespace HexEngine
 	{
 		auto pos = GetAbsolutePosition();
 
-		renderer->FillQuad(pos.x, pos.y, _size.x, _totalHeight + 30, renderer->_style.inspector_widget_back);
-		renderer->Frame(pos.x, pos.y, _size.x, _totalHeight + 30, 1, renderer->_style.win_border);
+		const math::Color background = _overrideActive
+			? math::Color(HEX_RGBA_TO_FLOAT4(40, 68, 46, 255))
+			: renderer->_style.inspector_widget_back;
+		const math::Color border = _overrideActive
+			? math::Color(HEX_RGBA_TO_FLOAT4(90, 160, 110, 255))
+			: renderer->_style.win_border;
+
+		renderer->FillQuad(pos.x, pos.y, _size.x, _totalHeight + 30, background);
+		renderer->Frame(pos.x, pos.y, _size.x, _totalHeight + 30, 1, border);
 
 		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x + _size.x / 2, pos.y + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _label);
+
+		if (_overrideActive)
+		{
+			renderer->PrintText(
+				renderer->_style.font.get(),
+				(uint8_t)Style::FontSize::Tiny,
+				pos.x + _size.x - 8,
+				pos.y + 2,
+				math::Color(HEX_RGBA_TO_FLOAT4(170, 255, 180, 255)),
+				FontAlign::Right,
+				L"OVERRIDE");
+		}
 	}
 
 	Point ComponentWidget::GetNextPos()
@@ -96,5 +115,10 @@ namespace HexEngine
 	int32_t ComponentWidget::GetTotalHeight() const
 	{
 		return _totalHeight + 30;
+	}
+
+	void ComponentWidget::SetOverrideActive(bool active)
+	{
+		_overrideActive = active;
 	}
 }

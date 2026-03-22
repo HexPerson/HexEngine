@@ -120,6 +120,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> _volumetricLighting;
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _waterBlitEffect;
+		std::shared_ptr<IShader> _fullScreenQuadShader;
 
 		//BlurEffect* _volumetricBlur = nullptr;
 		//BlurEffect* _waterBlur = nullptr;

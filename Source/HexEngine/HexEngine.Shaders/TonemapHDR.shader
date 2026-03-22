@@ -52,7 +52,7 @@
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
-		float4 colour = shaderTexture.Sample(PointSampler, input.texcoord) * g_material.diffuseColour;
+		float4 colour = shaderTexture.Sample(PointSampler, input.texcoord);
 		return float4(ApplyHdrDisplayMap(colour.rgb), colour.a);
 	}
 }

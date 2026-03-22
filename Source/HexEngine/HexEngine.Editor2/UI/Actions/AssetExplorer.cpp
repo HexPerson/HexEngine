@@ -97,6 +97,24 @@ namespace HexEditor
 		return true;
 	}
 
+	void AssetExplorer::InvalidateAssetPreview(const fs::path& assetPath)
+	{
+		if (assetPath.empty())
+			return;
+
+		if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_iconService != nullptr)
+		{
+			HexEngine::g_pEnv->_iconService->RemoveIcon(assetPath);
+			HexEngine::g_pEnv->_iconService->PushFilePathForIconGeneration(assetPath);
+		}
+
+		if (auto* asset = FindAssetInView(assetPath); asset != nullptr)
+		{
+			asset->generatedIcon = nullptr;
+			_canvas.Redraw();
+		}
+	}
+
 	void AssetExplorer::SetSearchFilter(const std::wstring& text)
 	{
 		_searchFilter = text;

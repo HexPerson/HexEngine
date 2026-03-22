@@ -41,7 +41,7 @@
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
-		float4 colour = shaderTexture.Sample(PointSampler, input.texcoord) * g_material.diffuseColour;
+		float4 colour = shaderTexture.Sample(PointSampler, input.texcoord);
 		float3 mapped = AcesFitted(max(colour.rgb, 0.0f));
 		mapped = pow(mapped, kInvGamma);
 		return float4(mapped, colour.a);

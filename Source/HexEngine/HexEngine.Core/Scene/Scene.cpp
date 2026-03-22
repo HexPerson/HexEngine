@@ -428,6 +428,8 @@ namespace HexEngine
 	{
 		if (_mainCamera)
 		{
+			std::unique_lock lock(_lock);
+
 			for (auto& renderable : _mainCamera->GetPVS()->GetRenderables())
 			{
 				for (auto& tuple : renderable.second)

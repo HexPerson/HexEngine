@@ -155,6 +155,16 @@
 		float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
 		//float4 pixelSpecular = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 
+		// Skip non-geometry pixels (sky/background markers in the GBuffer).
+		if (pixelPosWS.a > 0.0f || pixelColour.a == -1.0f || pixelNormal.w <= 0.0f)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+		float3 normalWS = pixelNormal.xyz;
+		const float normalLenSq = dot(normalWS, normalWS);
+		if (normalLenSq <= 0.000001f)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+		normalWS *= rsqrt(normalLenSq);
+
 		float3 eyeVector = normalize(g_eyePos.xyz - pixelPosWS.xyz);
 		float3 sphereNormal = normalize(input.normal.xyz);
 		float3 eyeToSphereDir = normalize(input.positionWS.xyz - g_eyePos.xyz);
@@ -167,6 +177,10 @@
 
 		float3 lightToPixelVec = lightPos.xyz - pixelPosWS.xyz;
 		float d = length(lightToPixelVec);
+		if (d <= 0.0001f)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+		if (d > lightRange)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
 		lightToPixelVec /= d;
 
 		float attenuation = saturate(1.0f - saturate(d / lightRange));
@@ -262,7 +276,7 @@
 			GBUFFER_SPECULAR,
 			g_pointSampler,
 			screenPos,
-			pixelNormal.xyz,
+			normalWS,
 			pixelPosWS.xyz,
 			lightToPixelVec,
 			input.colour.rgb,
@@ -274,6 +288,9 @@
 		//return float4((input.colour.rgb * coneAtten * attenuation) + (input.colour.rgb * volumetricScattering), 1.0f);
 		//const float volumetricScatteringContribution = 3.2f;
 
-		return float4((pbr.rgb * lightIntensity * attenuation * coneAtten) /*+ (input.colour.rgb *  volumetricScattering * volumetricScatteringContribution )*/, 1.0f);
+		float3 lightContribution = max((pbr.rgb * lightIntensity * attenuation * coneAtten), 0.0f);
+		if (!all(isfinite(lightContribution)))
+			lightContribution = 0.0f.xxx;
+		return float4(lightContribution /*+ (input.colour.rgb *  volumetricScattering * volumetricScatteringContribution )*/, 1.0f);
 	}
 }

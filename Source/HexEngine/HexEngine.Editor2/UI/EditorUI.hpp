@@ -71,6 +71,9 @@ namespace HexEditor
 		bool HasPrefabInstanceOverrides(HexEngine::Entity* entity) const;
 		HexEngine::Entity* RevertPrefabInstance(HexEngine::Entity* entity);
 		bool ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity);
+		bool IsVariantStageEntity(HexEngine::Entity* entity) const;
+		bool GetVariantStageEntityOverrideComponents(HexEngine::Entity* entity, std::unordered_set<std::string>& outComponentNames) const;
+		bool RevertVariantStageComponentToBase(HexEngine::Entity* entity, const std::string& componentName);
 
 	private:		
 		void CreateMenuBar();

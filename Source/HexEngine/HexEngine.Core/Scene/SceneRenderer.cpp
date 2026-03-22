@@ -156,6 +156,7 @@ namespace HexEngine
 		_hdrOutputShader			= IShader::Create("EngineData.Shaders/TonemapHDR.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
 		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
+		_fullScreenQuadShader		= IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
 
 		//_volumetricBlur = new BlurEffect(_volumetricLightingBuffer, BlurType::Gaussian, 2);
 		//_waterBlur = new BlurEffect(_waterAccumulationRT, BlurType::Gaussian, 2);
@@ -662,7 +663,7 @@ namespace HexEngine
 
 		if (perFrameBuffer)
 		{
-			PerFrameConstantBuffer bufferData;
+			PerFrameConstantBuffer bufferData = {};
 
 			// Camera data
 			bufferData._viewMatrix = viewMatrix.Transpose();
@@ -689,12 +690,6 @@ namespace HexEngine
 			bufferData._colourGrading.exposure = r_exposure._val.f32;
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
-
-			if (bufferData._viewMatrix != bufferData._viewMatrixPrev)
-			{
-
-				bool a = false;
-			}
 
 			// Shadowmap data
 			
@@ -726,7 +721,9 @@ namespace HexEngine
 
 			//bufferData._lightViewMatrix = shadowCaster->GetViewMatrix().Transpose();
 
-			//bufferData._lightPosition = math::Vector4(params.lightPosition.x, params.lightPosition.y, params.lightPosition.z, 1.0f);
+			const float sunProxyDistance = _currentCamera ? (_currentCamera->GetFarZ() * 0.5f) : 500.0f;
+			const math::Vector3 sunProxyPos = _cameraEntity->GetPosition() - (lightDir * sunProxyDistance);
+			bufferData._lightPosition = math::Vector4(sunProxyPos.x, sunProxyPos.y, sunProxyPos.z, 1.0f);
 			bufferData._lightDirection = math::Vector4(lightDir.x, lightDir.y, lightDir.z, 1.0f);
 			bufferData._globalLight[0] = lightMultiplier;
 
@@ -784,7 +781,7 @@ namespace HexEngine
 
 		if (perFrameBuffer)
 		{
-			PerShadowCasterBuffer bufferData;
+			PerShadowCasterBuffer bufferData = {};
 
 			// Shadowmap data
 			if (shadowCaster != nullptr)
@@ -1369,6 +1366,7 @@ namespace HexEngine
 			return;
 
 		g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
+		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 
 		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
@@ -1473,8 +1471,15 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
 		//g_pEnv->_graphicsDevice->EnableDepthBuffer(false);
 
-		if (!r_profileDisableDirectionalLights._val.b)
+		std::vector<DirectionalLight*> directionalLights;
+		const bool hasDirectionalLights = _currentScene->GetComponents<DirectionalLight>(directionalLights);
+		if (!r_profileDisableDirectionalLights._val.b && hasDirectionalLights)
 			RenderDirectionalLights();
+		else if (!hasDirectionalLights)
+		{
+			// Keep a sane base when a scene has no directional light; local lights will add on top.
+			_beautyRT->CopyTo(_lightAccumulationBuffer);
+		}
 		if (!r_profileDisablePointLights._val.b)
 			RenderPointLights();
 		if (!r_profileDisableSpotLights._val.b)
@@ -1487,6 +1492,7 @@ namespace HexEngine
 		_lightAccumulationBuffer->CopyTo(_beautyRT);
 		
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthDefault);
 		//g_pEnv->_graphicsDevice->EnableDepthBuffer(true);
 	}
 
@@ -1563,8 +1569,7 @@ namespace HexEngine
 		if (_currentScene->GetComponents<PointLight>(pointLights) == false)
 			return;
 
-		g_pEnv->_graphicsDevice->SetRenderTarget(_pointLightBuffer);
-		_pointLightBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+		g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
 
 		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
 
@@ -1590,7 +1595,7 @@ namespace HexEngine
 			const auto& lightPos = lightEnt->GetPosition();
 			const float lightRad = light->GetRadius();
 
-			SetupPerShadowCasterBuffer(light, true, 0, numPointLightsRendered, 16, 0.0f);
+			//SetupPerShadowCasterBuffer(light, true, 0, numPointLightsRendered, 16, 0.0f);
 
 			// if we're inside the sphere we should reverse culling
 			/*if ((cameraPos - lightPos).Length() <= lightRad)
@@ -1601,8 +1606,6 @@ namespace HexEngine
 			{
 				g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
 			}*/
-
-
 
 			if (renderedSphere == false)
 			{
@@ -1638,6 +1641,9 @@ namespace HexEngine
 		{
 			instance->Finish();
 
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+			g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
+
 			//g_pEnv->_graphicsDevice->SetTexture2D(_beautyRT);
 
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin PointLight");
@@ -1646,8 +1652,6 @@ namespace HexEngine
 
 			GFX_PERF_END();
 		}
-
-		_pointLightBuffer->BlendTo_Additive(_lightAccumulationBuffer);
 
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace); // restore culling
 	}
@@ -1682,8 +1686,7 @@ namespace HexEngine
 			}
 		}
 
-		g_pEnv->_graphicsDevice->SetRenderTarget(_pointLightBuffer);
-		_pointLightBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+		g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
 
 		
 
@@ -1759,6 +1762,9 @@ namespace HexEngine
 
 				if (numPointLightsRendered > 0)
 				{
+					g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+					g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
+
 					GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin SpotLight");
 
 					g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numPointLightsRendered);
@@ -1774,7 +1780,6 @@ namespace HexEngine
 
 		
 		g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
-		_pointLightBuffer->BlendTo_Additive(_lightAccumulationBuffer);
 	}
 #endif
 

@@ -2,6 +2,7 @@
 
 #include "../GameIntegrator.hpp"
 #include "Actions/Inspector.hpp"
+#include "Actions/Explorer.hpp"
 #include "Elements/EntityList.hpp"
 
 #include <HexEngine.Core\FileSystem\DiskFile.hpp>
@@ -615,6 +616,67 @@ namespace HexEditor
 			return patches;
 		}
 
+		HexEngine::Entity* FindEntityByPrefabNodeIdInScene(const std::shared_ptr<HexEngine::Scene>& scene, const std::string& nodeId)
+		{
+			if (scene == nullptr || nodeId.empty())
+				return nullptr;
+
+			for (const auto& bySignature : scene->GetEntities())
+			{
+				for (auto* entity : bySignature.second)
+				{
+					if (entity != nullptr && entity->GetPrefabNodeId() == nodeId)
+						return entity;
+				}
+			}
+
+			return nullptr;
+		}
+
+		void CollectOverriddenComponentNamesFromSnapshots(
+			const json& baseComponents,
+			const json& editedComponents,
+			std::unordered_set<std::string>& outComponentNames)
+		{
+			outComponentNames.clear();
+
+			const auto patches = BuildGenericPrefabOverridePatches(baseComponents, editedComponents);
+			bool hasArrayLevelPatch = false;
+			for (const auto& patch : patches)
+			{
+				if (patch.componentName == kPrefabOverrideComponentArrayPatchTarget)
+				{
+					hasArrayLevelPatch = true;
+					continue;
+				}
+
+				if (!patch.componentName.empty())
+					outComponentNames.insert(patch.componentName);
+			}
+
+			if (!hasArrayLevelPatch)
+				return;
+
+			if (!baseComponents.is_array() || !editedComponents.is_array())
+				return;
+
+			for (const auto& editedComponent : editedComponents)
+			{
+				if (!editedComponent.is_object())
+					continue;
+
+				const auto componentName = editedComponent.value("name", std::string());
+				if (componentName.empty())
+					continue;
+
+				const auto* baseComponent = FindComponentEntryByName(baseComponents, componentName);
+				if (baseComponent == nullptr || *baseComponent != editedComponent)
+				{
+					outComponentNames.insert(componentName);
+				}
+			}
+		}
+
 		void CollectSceneEntitiesByNodeId(HexEngine::Scene* scene, std::unordered_map<std::string, HexEngine::Entity*>& outByNodeId)
 		{
 			outByNodeId.clear();
@@ -997,12 +1059,30 @@ namespace HexEditor
 		HexEngine::IEntityListener* stageEntityListener,
 		GameIntegrator* integrator,
 		Inspector* inspector,
-		EntityList* entityList)
+		EntityList* entityList,
+		Explorer* explorer)
 	{
 		_stageEntityListener = stageEntityListener;
 		_integrator = integrator;
 		_inspector = inspector;
 		_entityList = entityList;
+		_explorer = explorer;
+	}
+
+	void PrefabController::RefreshPrefabAssetPreview(const fs::path& prefabPath)
+	{
+		if (prefabPath.empty() || prefabPath.extension() != ".hprefab")
+			return;
+
+		if (_explorer != nullptr)
+		{
+			_explorer->InvalidateAssetPreview(prefabPath);
+		}
+		else if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_iconService != nullptr)
+		{
+			HexEngine::g_pEnv->_iconService->RemoveIcon(prefabPath);
+			HexEngine::g_pEnv->_iconService->PushFilePathForIconGeneration(prefabPath);
+		}
 	}
 
 	void PrefabController::EnsurePrefabStageCameraAndLighting(const std::shared_ptr<HexEngine::Scene>& scene)
@@ -1311,23 +1391,44 @@ namespace HexEditor
 
 	void PrefabController::HandleComponentPropertyEdit(HexEngine::Entity* entity, const json& beforeComponents, const json& afterComponents)
 	{
-		if (entity == nullptr || !entity->IsPrefabInstance())
+		if (entity == nullptr)
 			return;
 
-		const auto genericPatches = BuildGenericPrefabOverridePatches(beforeComponents, afterComponents);
-		for (const auto& patch : genericPatches)
+		const bool isPrefabInstance = entity->IsPrefabInstance();
+		const bool isVariantStageEntity = IsVariantStageEntity(entity);
+		if (!isPrefabInstance && !isVariantStageEntity)
+			return;
+
+		if (isPrefabInstance)
 		{
-			entity->UpsertPrefabOverridePatch(patch);
+			const auto genericPatches = BuildGenericPrefabOverridePatches(beforeComponents, afterComponents);
+			for (const auto& patch : genericPatches)
+			{
+				entity->UpsertPrefabOverridePatch(patch);
+			}
+			if (!genericPatches.empty())
+			{
+				RefreshInspectorForPrefabInstance(entity);
+			}
 		}
-		if (!genericPatches.empty())
+
+		if (isVariantStageEntity &&
+			beforeComponents != afterComponents &&
+			_inspector != nullptr &&
+			_inspector->GetInspectingEntity() == entity)
 		{
-			RefreshInspectorForPrefabInstance(entity);
+			_inspector->InspectEntity(entity);
 		}
 	}
 
 	void PrefabController::HandleTransformPositionEdit(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)
 	{
-		if (entity == nullptr || !entity->IsPrefabInstance() || before == after)
+		if (entity == nullptr || before == after)
+			return;
+
+		const bool isPrefabInstance = entity->IsPrefabInstance();
+		const bool isVariantStageEntity = IsVariantStageEntity(entity);
+		if (!isPrefabInstance && !isVariantStageEntity)
 			return;
 
 		json afterComponents = json::array();
@@ -1347,7 +1448,12 @@ namespace HexEditor
 
 	void PrefabController::HandleTransformScaleEdit(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)
 	{
-		if (entity == nullptr || !entity->IsPrefabInstance() || before == after)
+		if (entity == nullptr || before == after)
+			return;
+
+		const bool isPrefabInstance = entity->IsPrefabInstance();
+		const bool isVariantStageEntity = IsVariantStageEntity(entity);
+		if (!isPrefabInstance && !isVariantStageEntity)
 			return;
 
 		json afterComponents = json::array();
@@ -1367,7 +1473,12 @@ namespace HexEditor
 
 	void PrefabController::HandleStaticMeshMaterialEdit(HexEngine::Entity* entity, const fs::path& before, const fs::path& after)
 	{
-		if (entity == nullptr || !entity->IsPrefabInstance() || before == after)
+		if (entity == nullptr || before == after)
+			return;
+
+		const bool isPrefabInstance = entity->IsPrefabInstance();
+		const bool isVariantStageEntity = IsVariantStageEntity(entity);
+		if (!isPrefabInstance && !isVariantStageEntity)
 			return;
 
 		json afterComponents = json::array();
@@ -1561,6 +1672,7 @@ namespace HexEditor
 				return false;
 			}
 
+			RefreshPrefabAssetPreview(prefabPath);
 			RefreshInspectorForPrefabInstance(entity);
 			PropagateAppliedPrefabToInstances(prefabPath, entity, nullptr);
 
@@ -1578,11 +1690,127 @@ namespace HexEditor
 			return false;
 		}
 
+		RefreshPrefabAssetPreview(prefabPath);
 		RefreshInspectorForPrefabInstance(entity);
 		PropagateAppliedPrefabToInstances(prefabPath, entity, nullptr);
 
 		LOG_INFO("Applied prefab instance '%s' to asset '%s'.", entity->GetName().c_str(), prefabPath.string().c_str());
 		return true;
+	}
+
+	bool PrefabController::IsVariantStageEntity(HexEngine::Entity* entity) const
+	{
+		if (entity == nullptr || !_prefabStage.active || !_prefabStage.isVariantAsset || _prefabStage.stageScene == nullptr)
+			return false;
+
+		return entity->GetScene() == _prefabStage.stageScene.get();
+	}
+
+	bool PrefabController::GetVariantStageEntityOverrideComponents(HexEngine::Entity* entity, std::unordered_set<std::string>& outComponentNames) const
+	{
+		outComponentNames.clear();
+		if (!IsVariantStageEntity(entity))
+			return false;
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return false;
+
+		VariantAssetData variantData;
+		if (!LoadVariantAssetData(_prefabStage.prefabPath, variantData))
+			return false;
+
+		auto baseScene = sceneManager->CreateEmptyScene(false, nullptr, false);
+		if (!sceneManager->LoadPrefabAssetToScene(variantData.basePrefabAbsolutePath, baseScene))
+			return false;
+
+		auto* baseEntity = FindEntityByPrefabNodeIdInScene(baseScene, entity->GetPrefabNodeId());
+		if (baseEntity == nullptr)
+			return false;
+
+		json baseComponents = json::array();
+		json editedComponents = json::array();
+		if (!CaptureEntityComponentsSnapshot(baseEntity, baseComponents) ||
+			!CaptureEntityComponentsSnapshot(entity, editedComponents))
+		{
+			return false;
+		}
+
+		CollectOverriddenComponentNamesFromSnapshots(baseComponents, editedComponents, outComponentNames);
+		return true;
+	}
+
+	bool PrefabController::RevertVariantStageComponentToBase(HexEngine::Entity* entity, const std::string& componentName)
+	{
+		if (!IsVariantStageEntity(entity) || componentName.empty())
+			return false;
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return false;
+
+		VariantAssetData variantData;
+		if (!LoadVariantAssetData(_prefabStage.prefabPath, variantData))
+			return false;
+
+		auto baseScene = sceneManager->CreateEmptyScene(false, nullptr, false);
+		if (!sceneManager->LoadPrefabAssetToScene(variantData.basePrefabAbsolutePath, baseScene))
+			return false;
+
+		auto* baseEntity = FindEntityByPrefabNodeIdInScene(baseScene, entity->GetPrefabNodeId());
+		if (baseEntity == nullptr)
+			return false;
+
+		json baseComponents = json::array();
+		json editedComponents = json::array();
+		if (!CaptureEntityComponentsSnapshot(baseEntity, baseComponents) ||
+			!CaptureEntityComponentsSnapshot(entity, editedComponents))
+		{
+			return false;
+		}
+
+		json desiredComponents = editedComponents;
+		const json* baseComponent = FindComponentEntryByName(baseComponents, componentName);
+		json* desiredComponent = FindMutableComponentEntryByName(desiredComponents, componentName);
+
+		if (baseComponent == nullptr)
+		{
+			if (componentName == "Transform")
+				return false;
+
+			if (desiredComponents.is_array())
+			{
+				desiredComponents.erase(
+					std::remove_if(desiredComponents.begin(), desiredComponents.end(),
+						[&](const json& item)
+						{
+							return item.is_object() && item.value("name", std::string()) == componentName;
+						}),
+					desiredComponents.end());
+			}
+		}
+		else
+		{
+			if (desiredComponent != nullptr)
+			{
+				*desiredComponent = *baseComponent;
+			}
+			else if (desiredComponents.is_array())
+			{
+				desiredComponents.push_back(*baseComponent);
+			}
+		}
+
+		const auto patches = BuildGenericPrefabOverridePatches(editedComponents, desiredComponents);
+		if (patches.empty())
+			return true;
+
+		const bool applied = ApplyGenericPrefabOverridePatchesToEntity(entity, patches);
+		if (applied)
+		{
+			entity->GetScene()->ForceRebuildPVS();
+		}
+		return applied;
 	}
 
 	bool PrefabController::OpenPrefabStage(const fs::path& prefabPath)
@@ -1631,6 +1859,7 @@ namespace HexEditor
 		}
 
 		_prefabStage.prefabPath = prefabPath;
+		_prefabStage.isVariantAsset = IsVariantPrefabAsset(prefabPath);
 		_prefabStage.previousActiveScene = activeScene;
 		_prefabStage.previousSceneFlags.clear();
 
@@ -1638,6 +1867,7 @@ namespace HexEditor
 		{
 			LOG_WARN("Failed to open prefab stage for '%s'", prefabPath.string().c_str());
 			_prefabStage.prefabPath.clear();
+			_prefabStage.isVariantAsset = false;
 			_prefabStage.previousActiveScene.reset();
 			return false;
 		}
@@ -1729,6 +1959,7 @@ namespace HexEditor
 		if (prefabPath.empty() || prefabPath.extension() != ".hprefab")
 			return false;
 
+		RefreshPrefabAssetPreview(prefabPath);
 		return PropagateAppliedPrefabToInstances(prefabPath, nullptr, nullptr);
 	}
 
@@ -1777,6 +2008,7 @@ namespace HexEditor
 		}
 
 		_prefabStage.active = false;
+		_prefabStage.isVariantAsset = false;
 		_prefabStage.prefabPath.clear();
 		_prefabStage.previousActiveScene.reset();
 		_prefabStage.previousSceneFlags.clear();

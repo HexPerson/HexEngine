@@ -27,6 +27,7 @@ namespace HexEditor
 		bool OnAddComponent(HexEngine::Button* button);
 		void OnClickAddComponentItem(const std::wstring& name, HexEngine::ComponentId compId);
 		bool OnRemoveComponent(HexEngine::BaseComponent* component);
+		bool OnRevertVariantComponent(const std::string& componentName);
 		bool OnRevertPrefabInstance(HexEngine::Button* button);
 		bool OnApplyPrefabInstance(HexEngine::Button* button);
 		void OnChangeEntityName(const std::wstring& name);

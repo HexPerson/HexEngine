@@ -59,6 +59,16 @@
 		float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
 		//float4 pixelSpecular = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 
+		// Skip non-geometry pixels (sky/background markers in the GBuffer).
+		if (pixelPosWS.a > 0.0f || pixelColour.a == -1.0f || pixelNormal.w <= 0.0f)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+
+		float3 normalWS = pixelNormal.xyz;
+		const float normalLenSq = dot(normalWS, normalWS);
+		if (normalLenSq <= 0.000001f)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+		normalWS *= rsqrt(normalLenSq);
+
 		//return float4(pixelColour.rgb, 1.0f);
 
 
@@ -70,6 +80,8 @@
 		float3 lightToPixelVec = lightPos.xyz - pixelPosWS.xyz;
 
 		float d = length(lightToPixelVec);// / 0.9f;
+		if (d <= 0.0001f)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
 		if (d > lightRange)
 			return float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -87,7 +99,7 @@
 		//float shinyPower = pixelSpecular.w;
 		//float shininessStrength = pixelColour.w;
 
-		float howMuchLight = saturate(dot(lightToPixelVec, pixelNormal));
+		float howMuchLight = saturate(dot(lightToPixelVec, normalWS));
 		float3 lightAtt = float3(0.01f, 0.10f, 0.009f);
 
 		float attenuation = saturate(1.0f - saturate(d / lightRange));
@@ -97,7 +109,7 @@
 			GBUFFER_SPECULAR,
 			g_pointSampler,
 			screenPos,
-			pixelNormal.xyz,
+			normalWS,
 			pixelPosWS.xyz,
 			lightToPixelVec,
 			input.colour.rgb,
@@ -106,7 +118,10 @@
 			attenuation
 			);
 
-		return float4(pbr.rgb * lightIntensity, 1.0f);
+		float3 lightContribution = max(pbr.rgb * lightIntensity, 0.0f);
+		if (!all(isfinite(lightContribution)))
+			lightContribution = 0.0f.xxx;
+		return float4(lightContribution, 1.0f);
 
 		//float4 specular = float4(0.0f, 0.0f, 0.0f, 0.0f);
 

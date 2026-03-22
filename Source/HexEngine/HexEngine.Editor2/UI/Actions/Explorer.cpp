@@ -320,6 +320,14 @@ namespace HexEditor
 		}
 	}
 
+	void Explorer::InvalidateAssetPreview(const fs::path& assetPath)
+	{
+		if (_assetExplorer != nullptr)
+		{
+			_assetExplorer->InvalidateAssetPreview(assetPath);
+		}
+	}
+
 	void Explorer::Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		std::vector<HexEngine::LogMessage> pendingMessages;

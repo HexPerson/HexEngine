@@ -24,6 +24,7 @@ namespace HexEditor
 
 		void SetSearchFilter(const std::wstring& text);
 		void UpdateAssets(const fs::path& relativePath, HexEngine::FileSystem* fs);
+		void InvalidateAssetPreview(const fs::path& assetPath);
 		AssetDesc* GetCurrentlyDraggedAsset() const;
 		bool ConsumeRecentlyDroppedAssetPath(fs::path& outPath);
 
