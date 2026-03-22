@@ -28,6 +28,8 @@ namespace HexEngine
 		void CompletedFrame();
 
 	private:
+		void ClearPreviewEntities();
+
 		std::vector<IconPending> _pendingPaths;
 		std::vector<fs::path> _generatedPaths;
 		std::map<fs::path, ITexture2D*> _icons;
@@ -35,6 +37,6 @@ namespace HexEngine
 
 		std::shared_ptr<Scene> _iconScene;
 		Camera* _camera = nullptr;
-		Entity* _dummyEnt = nullptr;
+		std::vector<Entity*> _previewRootEntities;
 	};
 }

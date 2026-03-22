@@ -32,6 +32,10 @@
 #include <format>
 #include <memory>
 #include <deque>
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+#include <unordered_set>
 
 #ifdef _DEBUG // for perf
 	#include <d3d9.h>

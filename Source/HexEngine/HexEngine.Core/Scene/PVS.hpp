@@ -71,22 +71,11 @@ namespace HexEngine
 
 	using RenderBatchSnapshot = std::vector<std::pair<std::shared_ptr<Material>, std::vector<RenderableSnapshot>>>;
 
-	class PVS
+	class HEX_API PVS
 	{
 	public:
-		//struct MeshMapComp
-		//{
-		//	//template<typename T>
-		//	bool operator()(Material* l, Material* r) const
-		//	{
-		//		if(l->)
-		//	}
-		//};
-
-
 		using MeshEntityPair = std::tuple<std::shared_ptr<Mesh>, Entity*, BaseComponent*>;
 		using MeshEntityVector = std::vector<MeshEntityPair>;
-		//using MaterialEntityVectorPair = std::pair<, MeshEntityVector>;
 		using MeshInstanceMap = std::map<std::shared_ptr<Material>, MeshEntityVector>;
 
 		void ClearPVS(); 

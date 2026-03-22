@@ -396,6 +396,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Plugin\IPlugin.hpp" />
     <ClInclude Include="Plugin\PluginSystem.hpp" />
     <ClInclude Include="Scene\PVS.hpp" />
+    <ClInclude Include="Scene\SceneFramingUtils.hpp" />
     <ClInclude Include="Scripting\IScriptEngine.hpp" />
     <ClInclude Include="Terrain\Chunk.hpp" />
     <ClInclude Include="Terrain\ChunkManager.hpp" />
@@ -574,6 +575,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Physics\PhysUtils.cpp" />
     <ClCompile Include="Plugin\PluginSystem.cpp" />
     <ClCompile Include="Scene\PVS.cpp" />
+    <ClCompile Include="Scene\SceneFramingUtils.cpp" />
     <ClCompile Include="Terrain\Chunk.cpp" />
     <ClCompile Include="Terrain\ChunkManager.cpp" />
     <ClCompile Include="Entity\Component\BaseComponent.cpp" />

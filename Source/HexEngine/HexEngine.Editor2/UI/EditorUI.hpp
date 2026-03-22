@@ -61,11 +61,35 @@ namespace HexEditor
 		void RecordEntityDeleted(HexEngine::Entity* entity);
 		bool UndoLastTransaction();
 		bool RedoLastTransaction();
+		bool OpenPrefabStage(const fs::path& prefabPath);
+		bool SavePrefabStage();
+		bool ClosePrefabStage(bool saveChanges);
+		bool IsPrefabStageActive() const;
+		bool IsPrefabInstanceEntity(HexEngine::Entity* entity) const;
+		bool IsPrefabInstanceRootEntity(HexEngine::Entity* entity) const;
+		bool HasPrefabInstanceOverrides(HexEngine::Entity* entity) const;
+		HexEngine::Entity* RevertPrefabInstance(HexEngine::Entity* entity);
+		bool ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity);
 
 	private:		
 		void CreateMenuBar();
 		void CreateDocks(uint32_t width, uint32_t height);
 		void CreateEntityList();
+		void EnsurePrefabStageCameraAndLighting(const std::shared_ptr<HexEngine::Scene>& scene);
+		void FramePrefabStageCamera(const std::shared_ptr<HexEngine::Scene>& scene);
+		HexEngine::Entity* CloneEntityHierarchyToScene(
+			HexEngine::Scene* targetScene,
+			HexEngine::Entity* sourceEntity,
+			HexEngine::Entity* targetParent,
+			const fs::path& prefabSourcePath,
+			const std::string& prefabRootName,
+			bool isRootInstance);
+		void CollectEntityHierarchy(HexEngine::Entity* root, std::vector<HexEngine::Entity*>& outEntities) const;
+		HexEngine::Entity* FindPrefabRootInScene(const std::shared_ptr<HexEngine::Scene>& scene, const std::string& preferredName) const;
+		HexEngine::Entity* FindPrefabInstanceRoot(HexEngine::Entity* entity) const;
+		void RefreshInspectorForPrefabInstance(HexEngine::Entity* changedEntity);
+		void MarkPrefabOverride(HexEngine::Entity* entity, const std::string& propertyPath);
+		bool PropagateAppliedPrefabToInstances(const fs::path& prefabPath, HexEngine::Entity* appliedSourceInstance, HexEngine::Entity** outReplacementForAppliedInstance = nullptr);
 
 		void ForEachElementImpl(HexEngine::Element* element, std::function<void(HexEngine::Element*)> doAction);
 
@@ -145,6 +169,15 @@ namespace HexEditor
 		bool _pendingComponentEditActive = false;
 		PendingComponentEditSource _pendingComponentEditSource = PendingComponentEditSource::None;
 		Detail::EntityComponentStateSnapshot _pendingComponentEditBefore;
+
+		struct PrefabStageState
+		{
+			bool active = false;
+			fs::path prefabPath;
+			std::shared_ptr<HexEngine::Scene> stageScene;
+			std::shared_ptr<HexEngine::Scene> previousActiveScene;
+			std::vector<std::pair<std::shared_ptr<HexEngine::Scene>, HexEngine::SceneFlags>> previousSceneFlags;
+		} _prefabStage;
 		
 	};
 

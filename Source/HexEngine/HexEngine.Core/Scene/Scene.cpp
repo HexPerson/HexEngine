@@ -255,6 +255,15 @@ namespace HexEngine
 		Entity* clone = CreateEntity(name /*+ " (Clone)"*/, position, rotation, scale);
 
 		clone->SetLayer(entity->GetLayer());
+		if (entity->IsPrefabInstance())
+		{
+			clone->SetPrefabSource(entity->GetPrefabSourcePath(), entity->GetPrefabRootEntityName(), entity->IsPrefabInstanceRoot());
+			clone->SetPrefabPropertyOverrides(entity->GetPrefabPropertyOverrides());
+		}
+		else
+		{
+			clone->ClearPrefabSource();
+		}
 
 		if (retainHierarchy && entity->GetParent())
 			clone->SetParent(entity->GetParent());
@@ -290,7 +299,7 @@ namespace HexEngine
 		return CloneEntity(entity, entity->GetName(), entity->GetPosition(), entity->GetRotation(), entity->GetScale(), retainHierarchy);
 	}
 
-	std::vector<Entity*> Scene::MergeFrom(Scene* scene)
+	std::vector<Entity*> Scene::MergeFrom(Scene* scene, std::vector<std::pair<Entity*, Entity*>>* outSourceToMerged)
 	{
 		std::vector<std::tuple<Entity*, Entity*, std::string, std::string>> renamedEnts;
 
@@ -303,6 +312,10 @@ namespace HexEngine
 				auto newEnt = CloneEntity(ent, false);
 
 				renamedEnts.push_back({ newEnt, ent, newEnt->GetName(), ent->GetName() });
+				if (outSourceToMerged != nullptr)
+				{
+					outSourceToMerged->push_back({ ent, newEnt });
+				}
 
 				newEnts.push_back(newEnt);
 			}
@@ -715,22 +728,39 @@ namespace HexEngine
 		if (entity == nullptr || component == nullptr)
 			return;
 
-		// Remove from the previous entity-signature bucket.
-		if (auto it = _entities.find(previousSignature); it != _entities.end())
-		{
-			it->second.erase(std::remove(it->second.begin(), it->second.end(), entity), it->second.end());
-		}
+		const bool isEntityPendingDeletion = entity->IsPendingDeletion();
 
-		// Reinsert into the new bucket after the component-signature change.
-		const ComponentSignature newSignature = entity->GetComponentSignature();
-		if (auto it = _entities.find(newSignature); it != _entities.end())
+		if (!isEntityPendingDeletion)
 		{
-			if (std::find(it->second.begin(), it->second.end(), entity) == it->second.end())
-				it->second.push_back(entity);
+			// Remove from the previous entity-signature bucket.
+			if (auto it = _entities.find(previousSignature); it != _entities.end())
+			{
+				it->second.erase(std::remove(it->second.begin(), it->second.end(), entity), it->second.end());
+			}
+
+			// Reinsert into the new bucket after the component-signature change.
+			const ComponentSignature newSignature = entity->GetComponentSignature();
+			if (auto it = _entities.find(newSignature); it != _entities.end())
+			{
+				if (std::find(it->second.begin(), it->second.end(), entity) == it->second.end())
+					it->second.push_back(entity);
+			}
+			else
+			{
+				_entities[newSignature].push_back(entity);
+			}
 		}
 		else
 		{
-			_entities[newSignature].push_back(entity);
+			// During entity teardown, never re-bucket the entity.
+			for (auto it = _entities.begin(); it != _entities.end();)
+			{
+				it->second.erase(std::remove(it->second.begin(), it->second.end(), entity), it->second.end());
+				if (it->second.empty())
+					it = _entities.erase(it);
+				else
+					++it;
+			}
 		}
 
 		// Remove from the per-component cache using the component id (not signature).
@@ -754,14 +784,20 @@ namespace HexEngine
 				++it;
 		}
 
-		for (auto&& listener : _entityListeners)
-		{
-			listener->OnRemoveComponent(entity, component);
-		}
-
 		if (component->GetComponentId() == Camera::_GetComponentId())
 		{
 			_cameras.erase(std::remove(_cameras.begin(), _cameras.end(), component->CastAs<Camera>()), _cameras.end());
+
+			if (_mainCamera == component->CastAs<Camera>())
+				_mainCamera = nullptr;
+		}
+
+		if (!isEntityPendingDeletion)
+		{
+			for (auto&& listener : _entityListeners)
+			{
+				listener->OnRemoveComponent(entity, component);
+			}
 		}
 	}
 

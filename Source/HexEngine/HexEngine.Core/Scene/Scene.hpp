@@ -92,7 +92,7 @@ namespace HexEngine
 
 		Entity* CloneEntity(Entity* entity, bool retainHierarchy = true);
 
-		std::vector<Entity*> MergeFrom(Scene* scene);
+		std::vector<Entity*> MergeFrom(Scene* scene, std::vector<std::pair<Entity*, Entity*>>* outSourceToMerged = nullptr);
 
 		void DestroyEntity(Entity* entity, bool broadcast = true);
 
