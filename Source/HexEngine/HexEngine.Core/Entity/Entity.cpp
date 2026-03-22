@@ -6,10 +6,23 @@
 #include "Component\FirstPersonCameraController.hpp"
 #include "Component\RTSCameraController.hpp"
 #include "Component\PointLight.hpp"
-#include <algorithm>
 
 namespace HexEngine
 {
+	namespace
+	{
+		std::string GeneratePrefabNodeId()
+		{
+			static std::atomic<uint64_t> s_counter = 1;
+			const uint64_t counter = s_counter.fetch_add(1, std::memory_order_relaxed);
+			const auto now = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+
+			std::ostringstream ss;
+			ss << std::hex << now << "_" << counter;
+			return ss.str();
+		}
+	}
+
 	Entity::Entity(Scene* scene) :
 		_scene(scene)
 	{
@@ -873,6 +886,7 @@ namespace HexEngine
 		
 		entData["layer"] = GetLayer();
 		entData["flags"] = GetFlags();
+		entData["prefabNodeId"] = EnsurePrefabNodeId();
 
 		if (!_prefabSourcePath.empty())
 		{
@@ -886,6 +900,36 @@ namespace HexEngine
 				std::vector<std::string> overrides(_prefabPropertyOverrides.begin(), _prefabPropertyOverrides.end());
 				std::sort(overrides.begin(), overrides.end());
 				prefabData["overrides"] = overrides;
+			}
+
+			if (!_prefabOverridePatches.empty())
+			{
+				auto patches = _prefabOverridePatches;
+				std::sort(patches.begin(), patches.end(),
+					[](const PrefabOverridePatch& a, const PrefabOverridePatch& b)
+					{
+						if (a.componentName != b.componentName)
+							return a.componentName < b.componentName;
+						if (a.path != b.path)
+							return a.path < b.path;
+						return a.op < b.op;
+					});
+
+				auto& patchArray = prefabData["overridePatches"];
+				patchArray = json::array();
+				for (const auto& patch : patches)
+				{
+					if (patch.componentName.empty() || patch.path.empty() || patch.op.empty())
+						continue;
+
+					json patchData = json::object();
+					patchData["component"] = patch.componentName;
+					patchData["path"] = patch.path;
+					patchData["op"] = patch.op;
+					if (patch.op != "remove")
+						patchData["value"] = patch.value;
+					patchArray.push_back(std::move(patchData));
+				}
 			}
 		}
 
@@ -940,6 +984,15 @@ namespace HexEngine
 			SetFlag(flags);
 		}
 
+		if (data.find("prefabNodeId") != data.end() && data["prefabNodeId"].is_string())
+		{
+			_prefabNodeId = data["prefabNodeId"].get<std::string>();
+		}
+		if (_prefabNodeId.empty())
+		{
+			_prefabNodeId = GeneratePrefabNodeId();
+		}
+
 		if (data.find("prefab") != data.end())
 		{
 			const auto& prefabData = data["prefab"];
@@ -948,6 +1001,7 @@ namespace HexEngine
 			_prefabRootEntityName = prefabData.value("rootEntityName", std::string());
 			_isPrefabInstanceRoot = prefabData.value("isRootInstance", false);
 			_prefabPropertyOverrides.clear();
+			_prefabOverridePatches.clear();
 
 			const auto overridesIt = prefabData.find("overrides");
 			if (overridesIt != prefabData.end() && overridesIt->is_array())
@@ -960,6 +1014,27 @@ namespace HexEngine
 						if (!overridePath.empty())
 							_prefabPropertyOverrides.insert(overridePath);
 					}
+				}
+			}
+
+			const auto patchesIt = prefabData.find("overridePatches");
+			if (patchesIt != prefabData.end() && patchesIt->is_array())
+			{
+				for (const auto& item : *patchesIt)
+				{
+					if (!item.is_object())
+						continue;
+
+					PrefabOverridePatch patch;
+					patch.componentName = item.value("component", std::string());
+					patch.path = item.value("path", std::string());
+					patch.op = item.value("op", std::string());
+					if (patch.componentName.empty() || patch.path.empty() || patch.op.empty())
+						continue;
+
+					const auto valueIt = item.find("value");
+					patch.value = valueIt != item.end() ? *valueIt : json();
+					UpsertPrefabOverridePatch(patch);
 				}
 			}
 		}
@@ -1026,6 +1101,7 @@ namespace HexEngine
 		_prefabRootEntityName = prefabRootEntityName;
 		_isPrefabInstanceRoot = isRootInstance;
 		_prefabPropertyOverrides.clear();
+		_prefabOverridePatches.clear();
 	}
 
 	void Entity::ClearPrefabSource()
@@ -1034,6 +1110,7 @@ namespace HexEngine
 		_prefabRootEntityName.clear();
 		_isPrefabInstanceRoot = false;
 		_prefabPropertyOverrides.clear();
+		_prefabOverridePatches.clear();
 	}
 
 	bool Entity::IsPrefabInstance() const
@@ -1059,6 +1136,26 @@ namespace HexEngine
 	void Entity::SetPrefabInstanceRoot(bool isRootInstance)
 	{
 		_isPrefabInstanceRoot = isRootInstance;
+	}
+
+	void Entity::SetPrefabNodeId(const std::string& prefabNodeId)
+	{
+		_prefabNodeId = prefabNodeId;
+	}
+
+	const std::string& Entity::GetPrefabNodeId() const
+	{
+		return _prefabNodeId;
+	}
+
+	const std::string& Entity::EnsurePrefabNodeId()
+	{
+		if (_prefabNodeId.empty())
+		{
+			_prefabNodeId = GeneratePrefabNodeId();
+		}
+
+		return _prefabNodeId;
 	}
 
 	void Entity::MarkPrefabPropertyOverride(const std::string& propertyPath)
@@ -1095,5 +1192,52 @@ namespace HexEngine
 	const std::unordered_set<std::string>& Entity::GetPrefabPropertyOverrides() const
 	{
 		return _prefabPropertyOverrides;
+	}
+
+	void Entity::UpsertPrefabOverridePatch(const PrefabOverridePatch& patch)
+	{
+		if (patch.componentName.empty() || patch.path.empty() || patch.op.empty())
+			return;
+
+		for (auto& existing : _prefabOverridePatches)
+		{
+			if (existing.componentName == patch.componentName && existing.path == patch.path)
+			{
+				existing.op = patch.op;
+				existing.value = patch.value;
+				return;
+			}
+		}
+
+		_prefabOverridePatches.push_back(patch);
+	}
+
+	void Entity::ClearPrefabOverridePatch(const std::string& componentName, const std::string& path)
+	{
+		if (componentName.empty() || path.empty())
+			return;
+
+		_prefabOverridePatches.erase(
+			std::remove_if(_prefabOverridePatches.begin(), _prefabOverridePatches.end(),
+				[&](const PrefabOverridePatch& patch)
+				{
+					return patch.componentName == componentName && patch.path == path;
+				}),
+			_prefabOverridePatches.end());
+	}
+
+	void Entity::ClearPrefabOverridePatches()
+	{
+		_prefabOverridePatches.clear();
+	}
+
+	void Entity::SetPrefabOverridePatches(const std::vector<PrefabOverridePatch>& patches)
+	{
+		_prefabOverridePatches = patches;
+	}
+
+	const std::vector<Entity::PrefabOverridePatch>& Entity::GetPrefabOverridePatches() const
+	{
+		return _prefabOverridePatches;
 	}
 }

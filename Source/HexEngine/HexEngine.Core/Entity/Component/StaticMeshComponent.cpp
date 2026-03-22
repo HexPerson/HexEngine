@@ -449,13 +449,47 @@ namespace HexEngine
 
 		if (mat)
 		{
+			auto* entity = GetEntity();
+			json beforeData = json::object();
+			HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+			beforeData["name"] = GetComponentName();
+			Serialize(beforeData, &serializer);
+
 			SetMaterial(mat);
 
-			// Inspector drag-drop can bypass editor-side pending component capture;
-			// ensure prefab instances still track this as an explicit per-instance override.
-			if (auto* entity = GetEntity(); entity != nullptr && entity->IsPrefabInstance())
+			if (entity != nullptr && entity->IsPrefabInstance())
 			{
-				entity->MarkPrefabPropertyOverride("staticMesh.material");
+				json afterData = json::object();
+				afterData["name"] = GetComponentName();
+				Serialize(afterData, &serializer);
+
+				json diffOps = json::diff(beforeData, afterData);
+				if (diffOps.is_array())
+				{
+					for (const auto& diffOp : diffOps)
+					{
+						if (!diffOp.is_object())
+							continue;
+
+						const auto op = diffOp.value("op", std::string());
+						const auto patchPath = diffOp.value("path", std::string());
+						if (op.empty() || patchPath.empty())
+							continue;
+
+						if (patchPath == "/name" || patchPath.rfind("/name/", 0) == 0)
+							continue;
+
+						Entity::PrefabOverridePatch patch;
+						patch.componentName = GetComponentName();
+						patch.path = patchPath;
+						patch.op = op;
+						const auto valueIt = diffOp.find("value");
+						patch.value = valueIt != diffOp.end() ? *valueIt : json();
+						entity->UpsertPrefabOverridePatch(patch);
+					}
+				}
+
+				entity->ClearPrefabPropertyOverride("staticMesh.material");
 			}
 		}
 	}

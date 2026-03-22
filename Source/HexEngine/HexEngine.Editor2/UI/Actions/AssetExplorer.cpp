@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
+#include <fstream>
 
 namespace HexEditor
 {
@@ -421,6 +422,159 @@ namespace HexEditor
 			HexEngine::g_pEnv->_iconService->RemoveIcon(asset.path);
 			asset.generatedIcon = nullptr;
 		}
+	}
+
+	void AssetExplorer::ShowCreatePrefabVariantDialog()
+	{
+		CloseContextMenu();
+
+		if (_currentlyBrowsedFS == nullptr)
+			return;
+
+		fs::path basePrefabPath;
+		for (const auto& asset : _assetsInView)
+		{
+			if (!asset.selected || asset.path.extension() != ".hprefab")
+				continue;
+
+			if (!basePrefabPath.empty())
+			{
+				LOG_WARN("Create prefab variant requires exactly one selected prefab asset.");
+				return;
+			}
+
+			basePrefabPath = asset.path;
+		}
+
+		if (basePrefabPath.empty())
+		{
+			LOG_WARN("Create prefab variant requires exactly one selected prefab asset.");
+			return;
+		}
+
+		const int32_t dlgWidth = 420;
+		const int32_t dlgHeight = 130;
+		auto* dlg = new HexEngine::Dialog(
+			HexEngine::g_pEnv->GetUIManager().GetRootElement(),
+			HexEngine::Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2),
+			HexEngine::Point(dlgWidth, dlgHeight),
+			L"Create Prefab Variant");
+
+		auto* outputName = new HexEngine::LineEdit(
+			dlg,
+			HexEngine::Point(12, 12),
+			HexEngine::Point(dlgWidth - 24, 24),
+			L"Variant name");
+		outputName->SetValue(basePrefabPath.stem().wstring() + L"_Variant");
+		outputName->SetDoesCallbackWaitForReturn(false);
+
+		new HexEngine::Button(
+			dlg,
+			HexEngine::Point(dlgWidth - 180, dlgHeight - 38),
+			HexEngine::Point(78, 24),
+			L"Cancel",
+			[dlg](HexEngine::Button*) {
+				dlg->DeleteMe();
+				return true;
+			});
+
+		new HexEngine::Button(
+			dlg,
+			HexEngine::Point(dlgWidth - 92, dlgHeight - 38),
+			HexEngine::Point(78, 24),
+			L"Create",
+			[this, dlg, outputName, basePrefabPath](HexEngine::Button*) {
+				CreatePrefabVariant(basePrefabPath, outputName->GetValue());
+				dlg->DeleteMe();
+				return true;
+			});
+	}
+
+	void AssetExplorer::CreatePrefabVariant(const fs::path& basePrefabPath, const std::wstring& requestedName)
+	{
+		if (_currentlyBrowsedFS == nullptr || basePrefabPath.empty() || basePrefabPath.extension() != ".hprefab")
+			return;
+
+		std::wstring stem = requestedName;
+		if (stem.empty())
+		{
+			stem = basePrefabPath.stem().wstring() + L"_Variant";
+		}
+
+		const fs::path requestedPath(stem);
+		stem = SanitizeFileName(requestedPath.stem().wstring().empty() ? requestedPath.wstring() : requestedPath.stem().wstring());
+
+		fs::path outputFileName = fs::path(stem).filename();
+		if (outputFileName.extension() != L".hprefab")
+			outputFileName.replace_extension(L".hprefab");
+
+		fs::path outputPath = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(_currentlyBrowsedFolder / outputFileName);
+		bool isSameAsBase = false;
+		{
+			std::error_code eqError;
+			isSameAsBase = fs::equivalent(outputPath, basePrefabPath, eqError);
+			if (eqError)
+			{
+				isSameAsBase = outputPath.lexically_normal() == basePrefabPath.lexically_normal();
+			}
+		}
+		if (isSameAsBase)
+		{
+			outputPath = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(_currentlyBrowsedFolder / (outputPath.stem().wstring() + L"_Variant.hprefab"));
+		}
+
+		if (fs::exists(outputPath))
+		{
+			const std::wstring baseName = outputPath.stem().wstring();
+			for (int32_t i = 1; i < 1024; ++i)
+			{
+				fs::path candidate = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(_currentlyBrowsedFolder / (baseName + L"_" + std::to_wstring(i) + L".hprefab"));
+				if (!fs::exists(candidate))
+				{
+					outputPath = candidate;
+					break;
+				}
+			}
+		}
+
+		std::error_code ec;
+		fs::path baseReference = fs::relative(basePrefabPath, outputPath.parent_path(), ec);
+		if (ec || baseReference.empty())
+		{
+			baseReference = basePrefabPath.filename();
+		}
+
+		json variantData = json::object();
+		variantData["header"] = {
+			{"version", 2}
+		};
+		variantData["variant"] = {
+			{"basePrefab", baseReference.generic_string()},
+			{"patches", json::array()}
+		};
+
+		std::ofstream outputFile(outputPath, std::ios::out | std::ios::trunc | std::ios::binary);
+		if (!outputFile.is_open())
+		{
+			LOG_WARN("Failed to create prefab variant file '%s'.", outputPath.string().c_str());
+			return;
+		}
+
+		outputFile << variantData.dump(2);
+		outputFile.close();
+
+		UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+
+		for (auto& asset : _assetsInView)
+			asset.selected = false;
+
+		if (auto* newAsset = FindAssetInView(outputPath); newAsset != nullptr)
+		{
+			newAsset->selected = true;
+		}
+
+		_canvas.Redraw();
+		LOG_INFO("Created prefab variant '%s' from base '%s'.", outputPath.string().c_str(), basePrefabPath.string().c_str());
 	}
 
 	void AssetExplorer::ShowCombineMeshesDialog()
@@ -957,6 +1111,7 @@ namespace HexEditor
 
 				int32_t numSelection = 0;
 				int32_t numSelectedMeshes = 0;
+				int32_t numSelectedPrefabs = 0;
 				for (const auto& asset : _assetsInView)
 				{
 					if (asset.selected)
@@ -965,6 +1120,10 @@ namespace HexEditor
 						if (asset.path.extension() == ".hmesh")
 						{
 							numSelectedMeshes++;
+						}
+						else if (asset.path.extension() == ".hprefab")
+						{
+							numSelectedPrefabs++;
 						}
 					}
 				}
@@ -977,6 +1136,11 @@ namespace HexEditor
 
 				if (numSelection >= 1)
 				{
+					if (numSelection == 1 && numSelectedPrefabs == 1)
+					{
+						_contextMenu->AddItem(new HexEngine::ContextItem(L"Create prefab variant...", std::bind(&AssetExplorer::ShowCreatePrefabVariantDialog, this)));
+					}
+
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&AssetExplorer::SetMassMaterial, this)));
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import meshes", std::bind(&AssetExplorer::ImportAllForeignMeshes, this)));
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Delete",

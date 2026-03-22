@@ -124,17 +124,16 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		if (_pendingDeletion.size() > 0)
+		while (_pendingDeletion.size() > 0)
 		{
-			for (auto& deletion : _pendingDeletion)
-			{
-				if (deletion->GetParent())
-					deletion->GetParent()->OnRemoveChild(deletion);
+			auto& deletion = _pendingDeletion.front();
 
-				SAFE_DELETE(deletion);
-			}
+			if (deletion->GetParent())
+				deletion->GetParent()->OnRemoveChild(deletion);
 
-			_pendingDeletion.clear();
+			SAFE_DELETE(deletion);
+
+			_pendingDeletion.erase(_pendingDeletion.begin());
 		}
 	}
 

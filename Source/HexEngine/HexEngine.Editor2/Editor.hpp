@@ -2,6 +2,9 @@
 #pragma once
 
 #include <HexEngine.Core\HexEngine.hpp>
+#include <mutex>
+#include <unordered_set>
+#include <vector>
 
 namespace HexEditor
 {
@@ -47,10 +50,16 @@ namespace HexEditor
 		void CreateFileSystem(const fs::path& path);
 
 		void OnFileChangeEvent(const HexEngine::DirectoryWatchInfo& info, const HexEngine::FileChangeActionMap& fileData);
+		void ConsumePendingPrefabReloads(std::vector<fs::path>& outPaths);
 
 	public:
 		HexEngine::FileSystem* _projectFS = nullptr;
 		std::shared_ptr<HexEngine::ITexture2D> _overlayIcons[Overlay_Count] = { nullptr };
+
+	private:
+		std::mutex _prefabReloadMutex;
+		std::vector<fs::path> _pendingPrefabReloads;
+		std::unordered_set<std::wstring> _pendingPrefabReloadDedup;
 	};
 
 	inline EditorExtension* g_pEditor = nullptr;

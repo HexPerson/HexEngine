@@ -2,7 +2,449 @@
 
 #include "SceneManager.hpp"
 #include "../HexEngine.hpp"
+#include "../FileSystem/DiskFile.hpp"
 #include "../FileSystem/SceneSaveFile.hpp"
+#include <algorithm>
+#include <cwctype>
+#include <exception>
+#include <unordered_map>
+#include <unordered_set>
+
+namespace
+{
+	constexpr const char* kVariantPatchComponentArrayTarget = "__components__";
+
+	struct PrefabVariantPatch
+	{
+		std::string nodeId;
+		std::string componentName;
+		std::string path;
+		std::string op;
+		json value = nullptr;
+	};
+
+	struct PrefabVariantData
+	{
+		fs::path basePrefabPath;
+		std::vector<PrefabVariantPatch> patches;
+	};
+
+	std::wstring BuildComparablePath(const fs::path& inputPath)
+	{
+		if (inputPath.empty())
+			return std::wstring();
+
+		fs::path normalized = inputPath;
+		try
+		{
+			if (fs::exists(normalized))
+				normalized = fs::weakly_canonical(normalized);
+			else
+				normalized = normalized.lexically_normal();
+		}
+		catch (...)
+		{
+			normalized = normalized.lexically_normal();
+		}
+
+		auto lowered = normalized.make_preferred().wstring();
+		std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+			[](wchar_t c)
+			{
+				return static_cast<wchar_t>(std::towlower(c));
+			});
+		return lowered;
+	}
+
+	bool CaptureEntityComponentsSnapshot(HexEngine::Entity* entity, json& outComponents)
+	{
+		if (entity == nullptr || entity->IsPendingDeletion())
+			return false;
+
+		json serializedEntities = json::object();
+		HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+		entity->Serialize(serializedEntities, &serializer);
+
+		const auto entityIt = serializedEntities.find(entity->GetName());
+		if (entityIt == serializedEntities.end() || !entityIt->is_object())
+			return false;
+
+		const auto componentsIt = entityIt->find("components");
+		if (componentsIt == entityIt->end() || !componentsIt->is_array())
+		{
+			outComponents = json::array();
+			return true;
+		}
+
+		outComponents = *componentsIt;
+		return true;
+	}
+
+	bool ApplySerializedComponentArrayToEntity(
+		HexEngine::Entity* entity,
+		const json& desiredComponents,
+		HexEngine::JsonFile& serializer)
+	{
+		if (entity == nullptr || !desiredComponents.is_array())
+			return false;
+
+		std::vector<std::string> desiredOrder;
+		std::unordered_map<std::string, json> desiredByName;
+		for (const auto& componentData : desiredComponents)
+		{
+			if (!componentData.is_object())
+				continue;
+
+			const auto componentName = componentData.value("name", std::string());
+			if (componentName.empty())
+				continue;
+
+			if (desiredByName.find(componentName) == desiredByName.end())
+				desiredOrder.push_back(componentName);
+
+			desiredByName[componentName] = componentData;
+		}
+
+		auto existingComponents = entity->GetAllComponents();
+		for (auto* component : existingComponents)
+		{
+			if (component == nullptr)
+				continue;
+
+			const auto& componentName = component->GetComponentName();
+			if (desiredByName.find(componentName) != desiredByName.end())
+				continue;
+
+			if (component->GetComponentId() == HexEngine::Transform::_GetComponentId())
+				continue;
+
+			entity->RemoveComponent(component);
+		}
+
+		for (const auto& componentName : desiredOrder)
+		{
+			auto* component = entity->GetComponentByClassName(componentName);
+			if (component != nullptr)
+				continue;
+
+			auto* cls = HexEngine::g_pEnv->_classRegistry->Find(componentName);
+			if (cls == nullptr)
+			{
+				LOG_WARN("Prefab variant could not resolve component class '%s' on '%s'.",
+					componentName.c_str(), entity->GetName().c_str());
+				continue;
+			}
+
+			component = cls->newInstanceFn(entity);
+			if (component == nullptr)
+			{
+				LOG_WARN("Prefab variant failed to instantiate component class '%s' on '%s'.",
+					componentName.c_str(), entity->GetName().c_str());
+				continue;
+			}
+
+			entity->AddComponent(component);
+		}
+
+		for (const auto& componentName : desiredOrder)
+		{
+			auto* component = entity->GetComponentByClassName(componentName);
+			if (component == nullptr || component->GetComponentId() != HexEngine::Transform::_GetComponentId())
+				continue;
+
+			json componentData = desiredByName[componentName];
+			component->Deserialize(componentData, &serializer);
+		}
+
+		for (const auto& componentName : desiredOrder)
+		{
+			auto* component = entity->GetComponentByClassName(componentName);
+			if (component == nullptr || component->GetComponentId() == HexEngine::Transform::_GetComponentId())
+				continue;
+
+			json componentData = desiredByName[componentName];
+			component->Deserialize(componentData, &serializer);
+		}
+
+		return true;
+	}
+
+	bool ApplyVariantPatchesToEntity(HexEngine::Entity* entity, const std::vector<PrefabVariantPatch>& patches)
+	{
+		if (entity == nullptr || patches.empty())
+			return false;
+
+		json serializedEntities = json::object();
+		HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+		entity->Serialize(serializedEntities, &serializer);
+
+		auto entityIt = serializedEntities.find(entity->GetName());
+		if (entityIt == serializedEntities.end() || !entityIt->is_object())
+			return false;
+
+		auto componentsIt = entityIt->find("components");
+		if (componentsIt == entityIt->end() || !componentsIt->is_array())
+			return false;
+
+		auto rebuildComponentPointers = [&]() -> std::unordered_map<std::string, json*>
+		{
+			std::unordered_map<std::string, json*> componentsByName;
+			for (auto& componentJson : *componentsIt)
+			{
+				if (!componentJson.is_object())
+					continue;
+
+				const auto componentName = componentJson.value("name", std::string());
+				if (componentName.empty())
+					continue;
+
+				if (componentsByName.find(componentName) == componentsByName.end())
+				{
+					componentsByName[componentName] = &componentJson;
+				}
+			}
+			return componentsByName;
+		};
+
+		auto componentsByName = rebuildComponentPointers();
+		json componentArrayPatchDoc = json::array();
+		std::unordered_map<std::string, json> patchDocsByComponent;
+		for (const auto& patch : patches)
+		{
+			if (patch.componentName.empty() || patch.path.empty() || patch.op.empty())
+				continue;
+
+			if (patch.componentName == kVariantPatchComponentArrayTarget)
+			{
+				json op = json::object();
+				op["op"] = patch.op;
+				op["path"] = patch.path;
+				if (patch.op != "remove")
+					op["value"] = patch.value;
+
+				componentArrayPatchDoc.push_back(std::move(op));
+				continue;
+			}
+
+			auto componentIt = componentsByName.find(patch.componentName);
+			if (componentIt == componentsByName.end())
+				continue;
+
+			auto& patchDoc = patchDocsByComponent[patch.componentName];
+			if (!patchDoc.is_array())
+				patchDoc = json::array();
+
+			json op = json::object();
+			op["op"] = patch.op;
+			op["path"] = patch.path;
+			if (patch.op != "remove")
+				op["value"] = patch.value;
+			patchDoc.push_back(std::move(op));
+		}
+
+		bool appliedAny = false;
+
+		if (!componentArrayPatchDoc.empty())
+		{
+			try
+			{
+				json patchedComponents = componentsIt->patch(componentArrayPatchDoc);
+				if (patchedComponents.is_array())
+				{
+					if (ApplySerializedComponentArrayToEntity(entity, patchedComponents, serializer))
+					{
+						appliedAny = true;
+						if (CaptureEntityComponentsSnapshot(entity, *componentsIt))
+						{
+							componentsByName = rebuildComponentPointers();
+						}
+					}
+				}
+			}
+			catch (const std::exception& ex)
+			{
+				LOG_WARN("Failed to apply variant component-array patches on '%s': %s",
+					entity->GetName().c_str(), ex.what());
+			}
+		}
+
+		for (const auto& [componentName, patchDoc] : patchDocsByComponent)
+		{
+			auto componentIt = componentsByName.find(componentName);
+			if (componentIt == componentsByName.end() || componentIt->second == nullptr)
+				continue;
+
+			auto* componentJson = componentIt->second;
+			auto* component = entity->GetComponentByClassName(componentName);
+			if (component == nullptr)
+				continue;
+
+			try
+			{
+				json patched = componentJson->patch(patchDoc);
+				component->Deserialize(patched, &serializer);
+				*componentJson = std::move(patched);
+				appliedAny = true;
+			}
+			catch (const std::exception& ex)
+			{
+				LOG_WARN("Failed to apply variant patch on '%s::%s': %s",
+					entity->GetName().c_str(), componentName.c_str(), ex.what());
+			}
+		}
+
+		return appliedAny;
+	}
+
+	bool ApplyVariantPatchesToScene(HexEngine::Scene* scene, const std::vector<PrefabVariantPatch>& patches)
+	{
+		if (scene == nullptr || patches.empty())
+			return false;
+
+		std::unordered_map<std::string, std::vector<PrefabVariantPatch>> patchesByNodeId;
+		for (const auto& patch : patches)
+		{
+			if (!patch.nodeId.empty())
+			{
+				patchesByNodeId[patch.nodeId].push_back(patch);
+			}
+		}
+
+		if (patchesByNodeId.empty())
+			return false;
+
+		std::unordered_map<std::string, HexEngine::Entity*> entitiesByNodeId;
+		for (const auto& bySignature : scene->GetEntities())
+		{
+			for (auto* entity : bySignature.second)
+			{
+				if (entity == nullptr)
+					continue;
+
+				const auto nodeId = entity->EnsurePrefabNodeId();
+				if (!nodeId.empty())
+					entitiesByNodeId[nodeId] = entity;
+			}
+		}
+
+		bool appliedAny = false;
+		for (const auto& [nodeId, nodePatches] : patchesByNodeId)
+		{
+			auto nodeIt = entitiesByNodeId.find(nodeId);
+			if (nodeIt == entitiesByNodeId.end() || nodeIt->second == nullptr)
+			{
+				LOG_WARN("Prefab variant patch targets unknown node id '%s'.", nodeId.c_str());
+				continue;
+			}
+
+			if (ApplyVariantPatchesToEntity(nodeIt->second, nodePatches))
+				appliedAny = true;
+		}
+
+		return appliedAny;
+	}
+
+	bool TryReadPrefabVariantData(const fs::path& prefabAssetPath, PrefabVariantData& outData)
+	{
+		outData = {};
+		HexEngine::DiskFile file(prefabAssetPath, std::ios::in | std::ios::binary);
+		if (!file.Open())
+			return false;
+
+		std::string rawJson;
+		file.ReadAll(rawJson);
+		file.Close();
+		if (rawJson.empty())
+			return false;
+
+		json rootJson;
+		try
+		{
+			rootJson = json::parse(rawJson);
+		}
+		catch (const std::exception&)
+		{
+			return false;
+		}
+
+		const auto variantIt = rootJson.find("variant");
+		if (variantIt == rootJson.end() || !variantIt->is_object())
+			return false;
+
+		const auto basePathStr = variantIt->value("basePrefab", std::string());
+		if (basePathStr.empty())
+			return false;
+
+		fs::path basePath = fs::path(basePathStr);
+		if (basePath.is_relative())
+			basePath = (prefabAssetPath.parent_path() / basePath).lexically_normal();
+		outData.basePrefabPath = basePath;
+
+		const auto patchArrayIt = variantIt->find("patches");
+		if (patchArrayIt != variantIt->end() && patchArrayIt->is_array())
+		{
+			for (const auto& item : *patchArrayIt)
+			{
+				if (!item.is_object())
+					continue;
+
+				PrefabVariantPatch patch;
+				patch.nodeId = item.value("nodeId", std::string());
+				patch.componentName = item.value("component", std::string());
+				patch.path = item.value("path", std::string());
+				patch.op = item.value("op", std::string());
+				if (patch.nodeId.empty() || patch.componentName.empty() || patch.path.empty() || patch.op.empty())
+					continue;
+
+				const auto valueIt = item.find("value");
+				patch.value = valueIt != item.end() ? *valueIt : json();
+				outData.patches.push_back(std::move(patch));
+			}
+		}
+
+		return true;
+	}
+
+	bool LoadPrefabAssetToSceneRecursive(
+		const fs::path& prefabAssetPath,
+		const std::shared_ptr<HexEngine::Scene>& targetScene,
+		std::unordered_set<std::wstring>& recursionGuard)
+	{
+		if (targetScene == nullptr)
+			return false;
+
+		const std::wstring recursionKey = BuildComparablePath(prefabAssetPath);
+		if (recursionKey.empty())
+			return false;
+
+		if (!recursionGuard.insert(recursionKey).second)
+		{
+			LOG_CRIT("Detected prefab variant recursion while resolving '%s'.", prefabAssetPath.string().c_str());
+			return false;
+		}
+
+		PrefabVariantData variantData;
+		const bool isVariant = TryReadPrefabVariantData(prefabAssetPath, variantData);
+		bool loaded = false;
+
+		if (isVariant)
+		{
+			loaded = LoadPrefabAssetToSceneRecursive(variantData.basePrefabPath, targetScene, recursionGuard);
+			if (loaded)
+			{
+				ApplyVariantPatchesToScene(targetScene.get(), variantData.patches);
+			}
+		}
+		else
+		{
+			HexEngine::SceneSaveFile file(prefabAssetPath, std::ios::in, targetScene, HexEngine::SceneFileFlags::IsPrefab);
+			loaded = file.Load(targetScene);
+		}
+
+		recursionGuard.erase(recursionKey);
+		return loaded;
+	}
+}
 
 namespace HexEngine
 {
@@ -71,15 +513,11 @@ namespace HexEngine
 
 		auto prefabScene = CreateEmptyScene(false);
 
-		SceneSaveFile file(path, std::ios::in, prefabScene);
-
-		if (!file.Load())
+		if (!LoadPrefabAssetToScene(path, prefabScene))
 		{
-			LOG_CRIT("Failed to load scene");
+			LOG_CRIT("Failed to load prefab '%s'", path.string().c_str());
 			return {};
 		}
-
-		file.Close();
 
 		std::vector<std::pair<Entity*, Entity*>> sourceToMerged;
 		ents = scene->MergeFrom(prefabScene.get(), &sourceToMerged);
@@ -105,6 +543,8 @@ namespace HexEngine
 			if (sourceEntity == nullptr || mergedEntity == nullptr)
 				continue;
 
+			mergedEntity->SetPrefabNodeId(sourceEntity->EnsurePrefabNodeId());
+
 			auto* sourceRoot = findSourceRoot(sourceEntity);
 			if (sourceRoot == nullptr)
 				continue;
@@ -114,6 +554,15 @@ namespace HexEngine
 		}
 
 		return ents;
+	}
+
+	bool SceneManager::LoadPrefabAssetToScene(const fs::path& path, const std::shared_ptr<Scene>& targetScene)
+	{
+		if (path.empty() || targetScene == nullptr)
+			return false;
+
+		std::unordered_set<std::wstring> recursionGuard;
+		return LoadPrefabAssetToSceneRecursive(path, targetScene, recursionGuard);
 	}
 
 	std::shared_ptr<Scene> SceneManager::CreateEmptyScene(bool createSkySphere, IEntityListener* listener, bool registerScene)

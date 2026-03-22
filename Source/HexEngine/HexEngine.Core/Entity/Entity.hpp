@@ -8,7 +8,6 @@
 #include "../FileSystem/SceneSaveFile.hpp"
 #include "Messaging/MessageListener.hpp"
 #include "Messaging/MessageDispatcher.hpp"
-
 #include "Component/ComponentTypes.hpp"
 
 namespace HexEngine
@@ -254,12 +253,28 @@ namespace HexEngine
 		const fs::path& GetPrefabSourcePath() const;
 		const std::string& GetPrefabRootEntityName() const;
 		void SetPrefabInstanceRoot(bool isRootInstance);
+		void SetPrefabNodeId(const std::string& prefabNodeId);
+		const std::string& GetPrefabNodeId() const;
+		const std::string& EnsurePrefabNodeId();
 		void MarkPrefabPropertyOverride(const std::string& propertyPath);
 		void ClearPrefabPropertyOverride(const std::string& propertyPath);
 		bool HasPrefabPropertyOverride(const std::string& propertyPath) const;
 		void ClearPrefabPropertyOverrides();
 		void SetPrefabPropertyOverrides(const std::unordered_set<std::string>& overrides);
 		const std::unordered_set<std::string>& GetPrefabPropertyOverrides() const;
+
+		struct PrefabOverridePatch
+		{
+			std::string componentName;
+			std::string path;
+			std::string op;
+			json value = nullptr;
+		};
+		void UpsertPrefabOverridePatch(const PrefabOverridePatch& patch);
+		void ClearPrefabOverridePatch(const std::string& componentName, const std::string& path);
+		void ClearPrefabOverridePatches();
+		void SetPrefabOverridePatches(const std::vector<PrefabOverridePatch>& patches);
+		const std::vector<PrefabOverridePatch>& GetPrefabOverridePatches() const;
 
 	private:
 		struct EntityGuidComponent
@@ -316,7 +331,9 @@ namespace HexEngine
 		fs::path _prefabSourcePath;
 		std::string _prefabRootEntityName;
 		bool _isPrefabInstanceRoot = false;
+		std::string _prefabNodeId;
 		std::unordered_set<std::string> _prefabPropertyOverrides;
+		std::vector<PrefabOverridePatch> _prefabOverridePatches;
 		
 	};
 }

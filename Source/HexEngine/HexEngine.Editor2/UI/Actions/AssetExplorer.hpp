@@ -35,6 +35,8 @@ namespace HexEditor
 		void CreateNewMaterial(const fs::path& baseDir);
 		void SelectAll();
 		void SetMassMaterial();
+		void ShowCreatePrefabVariantDialog();
+		void CreatePrefabVariant(const fs::path& basePrefabPath, const std::wstring& requestedName);
 		void ShowCombineMeshesDialog();
 		void ShowAutoCombineMeshesDialog();
 		void CombineSelectedMeshes(fs::path outputFileName, bool removeOriginalFiles);

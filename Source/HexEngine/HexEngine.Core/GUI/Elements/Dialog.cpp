@@ -11,7 +11,7 @@ namespace HexEngine
 		_title(title),
 		_callback(callback)
 	{
-		_logo = ITexture2D::Create("EngineData.Textures/UI/hex_logo_small.png");
+		_logo = ITexture2D::Create("EngineData.Textures/UI/hexengine_icon.png");
 	}
 
 	Dialog::~Dialog()

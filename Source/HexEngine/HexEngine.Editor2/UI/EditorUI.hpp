@@ -7,6 +7,7 @@
 #include "Actions\Explorer.hpp"
 #include "Actions\ProjectManager.hpp"
 #include "Actions/SceneView.hpp"
+#include "PrefabController.hpp"
 #include "EditorTransactions.hpp"
 #include "../GameIntegrator.hpp"
 
@@ -75,21 +76,6 @@ namespace HexEditor
 		void CreateMenuBar();
 		void CreateDocks(uint32_t width, uint32_t height);
 		void CreateEntityList();
-		void EnsurePrefabStageCameraAndLighting(const std::shared_ptr<HexEngine::Scene>& scene);
-		void FramePrefabStageCamera(const std::shared_ptr<HexEngine::Scene>& scene);
-		HexEngine::Entity* CloneEntityHierarchyToScene(
-			HexEngine::Scene* targetScene,
-			HexEngine::Entity* sourceEntity,
-			HexEngine::Entity* targetParent,
-			const fs::path& prefabSourcePath,
-			const std::string& prefabRootName,
-			bool isRootInstance);
-		void CollectEntityHierarchy(HexEngine::Entity* root, std::vector<HexEngine::Entity*>& outEntities) const;
-		HexEngine::Entity* FindPrefabRootInScene(const std::shared_ptr<HexEngine::Scene>& scene, const std::string& preferredName) const;
-		HexEngine::Entity* FindPrefabInstanceRoot(HexEngine::Entity* entity) const;
-		void RefreshInspectorForPrefabInstance(HexEngine::Entity* changedEntity);
-		void MarkPrefabOverride(HexEngine::Entity* entity, const std::string& propertyPath);
-		bool PropagateAppliedPrefabToInstances(const fs::path& prefabPath, HexEngine::Entity* appliedSourceInstance, HexEngine::Entity** outReplacementForAppliedInstance = nullptr);
 
 		void ForEachElementImpl(HexEngine::Element* element, std::function<void(HexEngine::Element*)> doAction);
 
@@ -156,6 +142,7 @@ namespace HexEditor
 
 		std::vector<Gadget*> _gadgets;
 		GameIntegrator _integrator;
+		PrefabController _prefabController;
 		HexEngine::MenuBar* _mainMenu = nullptr;
 		EditorTransactionStack _transactions;
 
@@ -169,15 +156,6 @@ namespace HexEditor
 		bool _pendingComponentEditActive = false;
 		PendingComponentEditSource _pendingComponentEditSource = PendingComponentEditSource::None;
 		Detail::EntityComponentStateSnapshot _pendingComponentEditBefore;
-
-		struct PrefabStageState
-		{
-			bool active = false;
-			fs::path prefabPath;
-			std::shared_ptr<HexEngine::Scene> stageScene;
-			std::shared_ptr<HexEngine::Scene> previousActiveScene;
-			std::vector<std::pair<std::shared_ptr<HexEngine::Scene>, HexEngine::SceneFlags>> previousSceneFlags;
-		} _prefabStage;
 		
 	};
 

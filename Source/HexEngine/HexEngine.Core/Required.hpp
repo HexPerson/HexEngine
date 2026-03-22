@@ -36,6 +36,7 @@
 #include <cstdint>
 #include <limits>
 #include <unordered_set>
+#include <atomic>
 
 #ifdef _DEBUG // for perf
 	#include <d3d9.h>

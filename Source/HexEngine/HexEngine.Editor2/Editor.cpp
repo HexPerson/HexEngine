@@ -3,6 +3,8 @@
 #include <HexEngine.Core\Environment\IEnvironment.hpp>
 #include <HexEngine.Core\Environment\Game3DEnvironment.hpp>
 #include <HexEngine.Core\Entity\Component\PointLight.hpp>
+#include <algorithm>
+#include <cwctype>
 #include "Editor.hpp"
 #include "UI\EditorUI.hpp"
 
@@ -13,6 +15,36 @@
 
 namespace HexEditor
 {
+	namespace
+	{
+		std::wstring BuildComparablePath(const fs::path& inputPath)
+		{
+			if (inputPath.empty())
+				return std::wstring();
+
+			fs::path normalized = inputPath;
+			try
+			{
+				if (fs::exists(normalized))
+					normalized = fs::weakly_canonical(normalized);
+				else
+					normalized = normalized.lexically_normal();
+			}
+			catch (...)
+			{
+				normalized = normalized.lexically_normal();
+			}
+
+			auto lowered = normalized.make_preferred().wstring();
+			std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+				[](wchar_t c)
+				{
+					return static_cast<wchar_t>(std::towlower(c));
+				});
+			return lowered;
+		}
+	}
+
 	EditorExtension::EditorExtension()
 	{}
 
@@ -75,6 +107,25 @@ namespace HexEditor
 	void EditorExtension::OnFileChangeEvent(const HexEngine::DirectoryWatchInfo& info, const HexEngine::FileChangeActionMap& actionMap)
 	{
 		std::map<HexEngine::IResourceLoader*, std::vector<fs::path>> addedFiles;
+		std::vector<fs::path> changedPrefabs;
+
+		const auto collectPrefabChanges = [&](uint32_t actionType)
+		{
+			auto actionIt = actionMap.find(actionType);
+			if (actionIt == actionMap.end())
+				return;
+
+			for (const auto& fileInfo : actionIt->second)
+			{
+				if (fileInfo.path.extension() == ".hprefab")
+				{
+					changedPrefabs.push_back(fileInfo.path);
+				}
+			}
+		};
+
+		collectPrefabChanges(FILE_ACTION_MODIFIED);
+		collectPrefabChanges(FILE_ACTION_RENAMED_NEW_NAME);
 
 		for (auto& action : actionMap)
 		{
@@ -113,6 +164,33 @@ namespace HexEditor
 				}
 			}
 		}
+
+		if (!changedPrefabs.empty())
+		{
+			std::scoped_lock lock(_prefabReloadMutex);
+			for (const auto& prefabPath : changedPrefabs)
+			{
+				const std::wstring dedupKey = BuildComparablePath(prefabPath);
+				if (dedupKey.empty())
+					continue;
+
+				if (_pendingPrefabReloadDedup.insert(dedupKey).second)
+				{
+					_pendingPrefabReloads.push_back(prefabPath);
+				}
+			}
+		}
+	}
+
+	void EditorExtension::ConsumePendingPrefabReloads(std::vector<fs::path>& outPaths)
+	{
+		outPaths.clear();
+		std::scoped_lock lock(_prefabReloadMutex);
+		if (_pendingPrefabReloads.empty())
+			return;
+
+		outPaths.swap(_pendingPrefabReloads);
+		_pendingPrefabReloadDedup.clear();
 	}
 
 	void EditorExtension::CreateFileSystem(const fs::path& path)

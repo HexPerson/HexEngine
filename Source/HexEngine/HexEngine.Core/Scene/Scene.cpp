@@ -258,7 +258,9 @@ namespace HexEngine
 		if (entity->IsPrefabInstance())
 		{
 			clone->SetPrefabSource(entity->GetPrefabSourcePath(), entity->GetPrefabRootEntityName(), entity->IsPrefabInstanceRoot());
+			clone->SetPrefabNodeId(entity->EnsurePrefabNodeId());
 			clone->SetPrefabPropertyOverrides(entity->GetPrefabPropertyOverrides());
+			clone->SetPrefabOverridePatches(entity->GetPrefabOverridePatches());
 		}
 		else
 		{

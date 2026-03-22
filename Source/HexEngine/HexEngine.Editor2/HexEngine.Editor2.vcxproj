@@ -177,6 +177,7 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClInclude Include="UI\Actions\Settings.hpp" />
     <ClInclude Include="UI\Actions\Terrain.hpp" />
     <ClInclude Include="UI\EditorTransactions.hpp" />
+    <ClInclude Include="UI\PrefabController.hpp" />
     <ClInclude Include="UI\EditorUI.hpp" />
     <ClInclude Include="UI\Actions\Explorer.hpp" />
     <ClInclude Include="UI\Actions\AssetExplorer.hpp" />
@@ -201,6 +202,7 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClCompile Include="UI\Actions\Inspector.cpp" />
     <ClCompile Include="UI\Actions\Settings.cpp" />
     <ClCompile Include="UI\Actions\Terrain.cpp" />
+    <ClCompile Include="UI\PrefabController.cpp" />
     <ClCompile Include="UI\EditorUI.cpp" />
     <ClCompile Include="UI\Gadgets\DuplicateGadget.cpp" />
     <ClCompile Include="UI\Gadgets\Gadget.cpp" />
