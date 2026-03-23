@@ -27,6 +27,9 @@ namespace HexEngine
 
 	void ComponentWidget::AddComponentChild(Element* child)
 	{
+		if (child == nullptr || !child->ContributesToParentAutoLayout())
+			return;
+
 		if (child->GetPosition().y < 20)
 			return;
 
@@ -43,6 +46,9 @@ namespace HexEngine
 
 	void ComponentWidget::RemoveComponentChild(Element* child)
 	{
+		if (child == nullptr || !child->ContributesToParentAutoLayout())
+			return;
+
 		if (child->GetPosition().y < 20)
 			return;
 
@@ -92,7 +98,7 @@ namespace HexEngine
 		renderer->FillQuad(pos.x, pos.y, _size.x, _totalHeight + 30, background);
 		renderer->Frame(pos.x, pos.y, _size.x, _totalHeight + 30, 1, border);
 
-		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x + _size.x / 2, pos.y + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _label);
+		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, pos.x + _size.x / 2, pos.y + 2, renderer->_style.text_highlight, FontAlign::CentreLR, _label, TextEffectSettings::Shadow());
 
 		if (_overrideActive)
 		{
@@ -103,7 +109,8 @@ namespace HexEngine
 				pos.y + 2,
 				math::Color(HEX_RGBA_TO_FLOAT4(170, 255, 180, 255)),
 				FontAlign::Right,
-				L"OVERRIDE");
+				L"OVERRIDE", 
+				TextEffectSettings::Shadow());
 		}
 	}
 

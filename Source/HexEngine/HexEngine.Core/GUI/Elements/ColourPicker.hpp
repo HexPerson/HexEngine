@@ -17,6 +17,7 @@ namespace HexEngine
 		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
 		virtual int32_t GetLabelWidth() const override;
+		virtual std::wstring GetLabelText() const override;
 
 	private:
 		void OpenPopup();

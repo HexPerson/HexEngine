@@ -638,6 +638,11 @@ namespace HexEngine
 		return width;
 	}
 
+	std::wstring ColourPicker::GetLabelText() const
+	{
+		return _label;
+	}
+
 	void ColourPicker::OpenPopup()
 	{
 		if (_popup != nullptr && !_popup->WantsDeletion())

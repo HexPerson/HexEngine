@@ -5,6 +5,8 @@
 #include "../Environment/IEnvironment.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "../Environment/LogFile.hpp"
+#include <algorithm>
+#include <unordered_set>
 
 namespace HexEngine
 {
@@ -123,17 +125,25 @@ namespace HexEngine
 	void UIManager::HandleDeletions()
 	{
 		std::unique_lock lock(_lock);
+		std::unordered_set<Element*> deletedThisPass;
 
 		while (_pendingDeletion.size() > 0)
 		{
-			auto& deletion = _pendingDeletion.front();
+			Element* deletion = _pendingDeletion.front();
+			_pendingDeletion.erase(_pendingDeletion.begin());
+
+			if (deletion == nullptr)
+				continue;
+
+			if (deletedThisPass.find(deletion) != deletedThisPass.end())
+				continue;
+
+			deletedThisPass.insert(deletion);
 
 			if (deletion->GetParent())
 				deletion->GetParent()->OnRemoveChild(deletion);
 
 			SAFE_DELETE(deletion);
-
-			_pendingDeletion.erase(_pendingDeletion.begin());
 		}
 	}
 
@@ -243,7 +253,13 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		_pendingDeletion.push_back(element);
+		if (element == nullptr)
+			return;
+
+		if (std::find(_pendingDeletion.begin(), _pendingDeletion.end(), element) == _pendingDeletion.end())
+		{
+			_pendingDeletion.push_back(element);
+		}
 	}
 
 	uint32_t UIManager::GetWidth() const

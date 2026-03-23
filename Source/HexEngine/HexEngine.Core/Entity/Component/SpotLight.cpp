@@ -117,6 +117,7 @@ namespace HexEngine
 			L"Cone Size",
 			&_coneSize, 0.1f, 50.0f,
 			0.1f);
+		coneSize->SetPrefabOverrideBinding(GetComponentName(), "/_coneSize");
 
 		return true;
 	}

@@ -219,6 +219,11 @@ namespace HexEngine
 		return width;
 	}
 
+	std::wstring LineEdit::GetLabelText() const
+	{
+		return _label;
+	}
+
 	void LineEdit::SetIcon(const std::shared_ptr<ITexture2D>& icon, const math::Color& colour)
 	{
 		_icon = icon;

@@ -19,7 +19,7 @@ namespace HexEngine
 		style.win_highlight = math::Color(HEX_RGBA_TO_FLOAT4(200, 200, 200, 255));
 
 		style.text_regular = math::Color(HEX_RGBA_TO_FLOAT4(210, 210, 210, 255));
-		style.text_highlight = math::Color(HEX_RGBA_TO_FLOAT4(1, 85, 219, 255));
+		style.text_highlight = math::Color(HEX_RGBA_TO_FLOAT4(1, 170, 245, 255));
 
 		style.lineedit_back = math::Color(HEX_RGBA_TO_FLOAT4(25, 25, 26, 255));
 

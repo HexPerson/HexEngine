@@ -465,6 +465,26 @@ namespace HexEditor
 		return _prefabController.HasPrefabInstanceOverrides(entity);
 	}
 
+	bool EditorUI::GetPrefabInstancePropertyOverrides(HexEngine::Entity* entity, std::vector<PrefabController::PrefabPropertyOverride>& outOverrides) const
+	{
+		return _prefabController.GetPrefabInstancePropertyOverrides(entity, outOverrides);
+	}
+
+	bool EditorUI::RevertPrefabInstancePropertyOverride(HexEngine::Entity* entity, const std::string& componentName, const std::string& propertyPath)
+	{
+		return _prefabController.RevertPrefabInstancePropertyOverride(entity, componentName, propertyPath);
+	}
+
+	bool EditorUI::RevertPrefabInstanceComponentOverrides(HexEngine::Entity* entity, const std::string& componentName)
+	{
+		return _prefabController.RevertPrefabInstanceComponentOverrides(entity, componentName);
+	}
+
+	bool EditorUI::ApplySelectedPrefabInstanceOverridesToAsset(HexEngine::Entity* entity, const std::vector<PrefabController::PrefabPropertyOverride>& selectedOverrides)
+	{
+		return _prefabController.ApplySelectedPrefabInstanceOverridesToAsset(entity, selectedOverrides);
+	}
+
 	HexEngine::Entity* EditorUI::RevertPrefabInstance(HexEngine::Entity* entity)
 	{
 		return _prefabController.RevertPrefabInstance(entity);

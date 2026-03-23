@@ -29,6 +29,7 @@ namespace HexEngine
 		void SetOnDoubleClickFn(OnDoubleClickFn fn);
 
 		virtual int32_t GetLabelWidth() const override;
+		virtual std::wstring GetLabelText() const override;
 
 		void SetIcon(const std::shared_ptr<ITexture2D>& icon, const math::Color& colour);
 		void SetDoesCallbackWaitForReturn(bool doesWait);

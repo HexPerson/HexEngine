@@ -614,6 +614,9 @@ namespace HexEngine
 		Vector3Edit* position = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Position", &_current.position, std::bind(&Entity::ForcePosition, GetEntity(), std::placeholders::_1));
 		Vector3Edit* rotation = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Rotation", &_eulerAnglesDeg, std::bind(&Transform::SetEulerAnglesDeg, this, std::placeholders::_1));
 		Vector3Edit* scale = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Scale", &_current.scale, std::bind(&Transform::SetScale, this, std::placeholders::_1));
+		position->SetPrefabOverrideBinding(GetComponentName(), "/_position");
+		rotation->SetPrefabOverrideBinding(GetComponentName(), "/_rotation");
+		scale->SetPrefabOverrideBinding(GetComponentName(), "/_scale");
 
 		return true;
 	}

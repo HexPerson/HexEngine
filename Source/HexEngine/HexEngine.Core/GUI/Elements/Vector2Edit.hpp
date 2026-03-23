@@ -16,6 +16,7 @@ namespace HexEngine
 		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 
 		virtual int32_t GetLabelWidth() const override;
+		virtual std::wstring GetLabelText() const override;
 
 	private:
 		void OnSetAxisValue(int32_t axis, LineEdit* edit, const std::wstring& value);

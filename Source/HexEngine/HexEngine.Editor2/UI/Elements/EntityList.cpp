@@ -15,7 +15,13 @@ namespace HexEditor
 	EntityList::EntityList(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		HexEngine::EntityList(parent, position, size)
 	{
-		_onEntityClicked = std::bind(&Inspector::InspectEntity, g_pUIManager->GetInspector(), std::placeholders::_2);
+		_onEntityClicked = [](HexEngine::EntityList*, HexEngine::Entity* entity)
+		{
+			if (g_pUIManager != nullptr && g_pUIManager->GetInspector() != nullptr)
+			{
+				g_pUIManager->GetInspector()->InspectEntity(entity);
+			}
+		};
 		_onEntityParented = std::bind(&EntityList::SetEntityParent, this, std::placeholders::_2, std::placeholders::_3);
 		_onEntityDuplicated = [](HexEngine::EntityList*, HexEngine::Entity*, HexEngine::Entity* duplicateEntity)
 		{

@@ -398,6 +398,7 @@ namespace HexEngine
 			return false;
 
 		LineEdit* meshLine = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Mesh");
+		meshLine->SetPrefabOverrideBinding(GetComponentName(), "/mesh");
 
 		//meshLine->SetLabelMinSize(130);
 		meshLine->SetValue(std::wstring(_mesh->GetName().begin(), _mesh->GetName().end()));
@@ -405,6 +406,7 @@ namespace HexEngine
 		if (auto material = GetMaterial(); material != nullptr)
 		{
 			LineEdit* matName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Material");
+			matName->SetPrefabOverrideBinding(GetComponentName(), "/mesh");
 			matName->SetValue(std::wstring(material->GetName().begin(), material->GetName().end()));
 			matName->SetOnDragAndDropFn(std::bind(&StaticMeshComponent::SetMaterialFromWidget, this, 0, std::placeholders::_2));
 			matName->SetOnDoubleClickFn(std::bind(&StaticMeshComponent::DoubleClickMaterial, this, std::placeholders::_2));
@@ -412,6 +414,8 @@ namespace HexEngine
 
 		Vector2Edit* uvScale = new Vector2Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"UV Scale", &_uvScale, nullptr);
 		Vector3Edit* offetPos = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Offset Position", &_offsetPosition);
+		uvScale->SetPrefabOverrideBinding(GetComponentName(), "/_uvScale");
+		offetPos->SetPrefabOverrideBinding(GetComponentName(), "/_offsetPosition");
 
 
 		return true;

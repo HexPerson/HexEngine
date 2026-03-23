@@ -208,14 +208,18 @@ namespace HexEngine
 		Checkbox* castsShadows = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Casts shadows", &_doesCastShadows);
 		//castsShadows->SetLabelMinSize(130);
 		castsShadows->SetOnCheckFn(std::bind(&Light::SetDoesCastShadows, this, std::placeholders::_2));
+		castsShadows->SetPrefabOverrideBinding(GetComponentName(), "/_doesCastShadows");
 
 		DragFloat* strength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Strength", &_strength, 0.1f, 500.0f, 0.1f);
 		//strength->SetLabelMinSize(130);
+		strength->SetPrefabOverrideBinding(GetComponentName(), "/_strength");
 
 		DragFloat* radius = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Radius", &_radius, 2.0f, 1000.0f, 0.1f);
 		//radius->SetLabelMinSize(130);
+		radius->SetPrefabOverrideBinding(GetComponentName(), "/_radius");
 
 		ColourPicker* picker = new ColourPicker(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Colour", &_diffuseColour);
+		picker->SetPrefabOverrideBinding(GetComponentName(), "/_diffuseColour");
 
 		//// emission strength
 		//DragFloat* r = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Red", &_diffuseColour.x, 0.0f, 1.0f, 0.1f);
@@ -225,7 +229,8 @@ namespace HexEngine
 		//DragFloat* b = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Blue", &_diffuseColour.z, 0.0f, 1.0f, 0.1f);
 		//b->SetLabelMinSize(130);
 
-		DropDown* state = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 40, 18), L"Effect");
+		DropDown* state = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Effect");
+		state->SetPrefabOverrideBinding(GetComponentName(), "/_effect");
 
 		state->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&Light::SetLightingEffect, this, LightingEffect::None)));
 		state->GetContextMenu()->AddItem(new ContextItem(L"Slow random pulse", std::bind(&Light::SetLightingEffect, this, LightingEffect::SlowRandomPulse)));

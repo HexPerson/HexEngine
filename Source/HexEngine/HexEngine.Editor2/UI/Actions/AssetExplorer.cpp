@@ -1163,8 +1163,11 @@ namespace HexEditor
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import meshes", std::bind(&AssetExplorer::ImportAllForeignMeshes, this)));
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Delete",
 						[this](const std::wstring& item) {
-							fs::remove(_hoveredAsset->path);
-							UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+							if (_hoveredAsset)
+							{
+								fs::remove(_hoveredAsset->path);
+								UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+							}
 						}));
 
 					if (numSelectedMeshes >= 2)

@@ -107,4 +107,9 @@ namespace HexEngine
 
 		return width;
 	}
+
+	std::wstring Vector3Edit::GetLabelText() const
+	{
+		return _label;
+	}
 }

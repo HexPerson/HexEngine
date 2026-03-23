@@ -63,6 +63,7 @@ namespace HexEngine
 		void SetOnCheckFn(OnCheckFn fn);
 
 		virtual int32_t GetLabelWidth() const;
+		virtual std::wstring GetLabelText() const override;
 
 	private:
 		CheckData _value;

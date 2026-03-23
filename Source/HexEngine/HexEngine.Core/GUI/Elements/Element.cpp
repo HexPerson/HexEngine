@@ -189,6 +189,12 @@ namespace HexEngine
 	{
 		g_pEnv->GetUIManager().Lock();
 
+		if (_wantsDeletion)
+		{
+			g_pEnv->GetUIManager().Unlock();
+			return;
+		}
+
 		_wantsDeletion = true;		
 
 		for (auto& child : _children)

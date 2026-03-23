@@ -71,6 +71,16 @@ namespace HexEngine
 		void Toggle();
 
 		virtual int32_t GetLabelWidth() const { return 0; }
+		virtual std::wstring GetLabelText() const { return L""; }
+		virtual bool ContributesToParentAutoLayout() const { return _contributesToParentLayout; }
+		void SetContributesToParentAutoLayout(bool contributes) { _contributesToParentLayout = contributes; }
+		void SetPrefabOverrideBinding(const std::string& componentName, const std::string& propertyPath)
+		{
+			_prefabOverrideComponentName = componentName;
+			_prefabOverridePath = propertyPath;
+		}
+		const std::string& GetPrefabOverrideComponentName() const { return _prefabOverrideComponentName; }
+		const std::string& GetPrefabOverridePath() const { return _prefabOverridePath; }
 
 	protected:
 		bool _enabled = true;
@@ -88,6 +98,9 @@ namespace HexEngine
 		std::vector<Element*> _children;
 		bool _wantsDeletion = false;
 		bool _inputEnabled = true;
+		bool _contributesToParentLayout = true;
+		std::string _prefabOverrideComponentName;
+		std::string _prefabOverridePath;
 
 	public:
 		//static Style style;

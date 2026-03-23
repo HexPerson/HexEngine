@@ -24,6 +24,9 @@ namespace HexEngine
 
 		virtual void OnGui(GuiRenderer* renderer);
 
+		virtual void Serialize(json& data, JsonFile* file) override;
+		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
+
 		virtual bool CreateWidget(ComponentWidget* widget) override;
 
 	private:

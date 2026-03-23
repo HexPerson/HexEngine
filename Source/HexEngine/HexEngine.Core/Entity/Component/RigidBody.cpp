@@ -535,6 +535,7 @@ namespace HexEngine
 	bool RigidBody::CreateWidget(ComponentWidget* widget)
 	{
 		DropDown* bodyType = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Type");
+		bodyType->SetPrefabOverrideBinding(GetComponentName(), "/_bodyType");
 		bodyType->SetLabelMinSize(130);
 		bodyType->GetContextMenu()->Disable();
 
@@ -562,6 +563,7 @@ namespace HexEngine
 		bodyType->GetContextMenu()->AddItem(new ContextItem(L"Dynamic", std::bind(&RigidBody::SetBodyTypeFromWidget, this, IRigidBody::BodyType::Dynamic, bodyType)));
 
 		DropDown* colliderType = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Collider");
+		colliderType->SetPrefabOverrideBinding(GetComponentName(), "/_shape");
 
 		switch (_colliderShape)
 		{
@@ -583,14 +585,17 @@ namespace HexEngine
 		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Triangle Mesh", std::bind(&RigidBody::AddTriangleColliderFromWidget, this, colliderType)));
 
 		Checkbox* isTrigger = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Is trigger?", &_isTrigger);
+		isTrigger->SetPrefabOverrideBinding(GetComponentName(), "/_isTrigger");
 		isTrigger->SetOnCheckFn(std::bind(&RigidBody::OnSetIsTriggerFromWidget, this, std::placeholders::_2));
 
 		Checkbox* isGravity = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Apply gravity?", &_isGravityApplied);
+		isGravity->SetPrefabOverrideBinding(GetComponentName(), "/_isGravityApplied");
 		isGravity->SetOnCheckFn(std::bind(&RigidBody::OnSetIsGravityFromWidget, this, std::placeholders::_2));
 
 		if(_rigidBody)
 			_massAdjust = _rigidBody->GetMass();
 		DragFloat* mass = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Mass", &_massAdjust, 1.0f, 10000.0f, 0.5f);
+		mass->SetPrefabOverrideBinding(GetComponentName(), "/_mass");
 		mass->SetOnDrag(std::bind(&RigidBody::SetMass, this, std::placeholders::_1));
 
 		//Button* addCollider = new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Add Collider", std::bind(&RigidBody::AddColliderFromWidget,

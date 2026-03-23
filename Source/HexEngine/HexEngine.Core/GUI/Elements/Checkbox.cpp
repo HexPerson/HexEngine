@@ -91,4 +91,9 @@ namespace HexEngine
 
 		return width;
 	}
+
+	std::wstring Checkbox::GetLabelText() const
+	{
+		return _label;
+	}
 }

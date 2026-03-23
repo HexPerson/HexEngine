@@ -12,6 +12,13 @@ namespace HexEditor
 	class PrefabController
 	{
 	public:
+		struct PrefabPropertyOverride
+		{
+			std::string componentName;
+			std::string path;
+			std::string op;
+		};
+
 		void SetDependencies(
 			HexEngine::IEntityListener* stageEntityListener,
 			GameIntegrator* integrator,
@@ -32,6 +39,10 @@ namespace HexEditor
 		bool IsPrefabInstanceEntity(HexEngine::Entity* entity) const;
 		bool IsPrefabInstanceRootEntity(HexEngine::Entity* entity) const;
 		bool HasPrefabInstanceOverrides(HexEngine::Entity* entity) const;
+		bool GetPrefabInstancePropertyOverrides(HexEngine::Entity* entity, std::vector<PrefabPropertyOverride>& outOverrides) const;
+		bool RevertPrefabInstancePropertyOverride(HexEngine::Entity* entity, const std::string& componentName, const std::string& propertyPath);
+		bool RevertPrefabInstanceComponentOverrides(HexEngine::Entity* entity, const std::string& componentName);
+		bool ApplySelectedPrefabInstanceOverridesToAsset(HexEngine::Entity* entity, const std::vector<PrefabPropertyOverride>& selectedOverrides);
 		HexEngine::Entity* RevertPrefabInstance(HexEngine::Entity* entity);
 		bool ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity);
 		bool IsVariantStageEntity(HexEngine::Entity* entity) const;

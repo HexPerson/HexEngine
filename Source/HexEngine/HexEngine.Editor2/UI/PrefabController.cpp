@@ -104,6 +104,37 @@ namespace HexEditor
 			}
 		}
 
+		HexEngine::Element* FindFocusedElementRecursive(HexEngine::Element* root)
+		{
+			if (root == nullptr)
+				return nullptr;
+
+			if (root->IsInputFocus())
+				return root;
+
+			for (auto* child : root->GetChildren())
+			{
+				if (auto* focused = FindFocusedElementRecursive(child); focused != nullptr)
+					return focused;
+			}
+
+			return nullptr;
+		}
+
+		bool IsDescendantOfElement(const HexEngine::Element* element, const HexEngine::Element* ancestor)
+		{
+			if (element == nullptr || ancestor == nullptr)
+				return false;
+
+			for (auto* current = element; current != nullptr; current = current->GetParent())
+			{
+				if (current == ancestor)
+					return true;
+			}
+
+			return false;
+		}
+
 		bool LoadVariantAssetData(const fs::path& variantPath, VariantAssetData& outData)
 		{
 			outData = {};
@@ -631,6 +662,246 @@ namespace HexEditor
 			}
 
 			return nullptr;
+		}
+
+		HexEngine::Entity* ResolvePrefabInstanceRootEntity(HexEngine::Entity* entity)
+		{
+			auto* root = entity;
+			while (root != nullptr && !root->IsPrefabInstanceRoot())
+			{
+				root = root->GetParent();
+			}
+			return root;
+		}
+
+		HexEngine::Entity* FindPrefabSourceRootInScene(
+			const std::shared_ptr<HexEngine::Scene>& prefabScene,
+			const std::string& preferredName,
+			const std::string& preferredNodeId)
+		{
+			if (prefabScene == nullptr)
+				return nullptr;
+
+			if (!preferredNodeId.empty())
+			{
+				if (auto* byNodeId = FindEntityByPrefabNodeIdInScene(prefabScene, preferredNodeId); byNodeId != nullptr)
+				{
+					return byNodeId;
+				}
+			}
+
+			if (!preferredName.empty())
+			{
+				for (const auto& bySignature : prefabScene->GetEntities())
+				{
+					for (auto* candidate : bySignature.second)
+					{
+						if (candidate != nullptr && candidate->GetName() == preferredName)
+							return candidate;
+					}
+				}
+			}
+
+			for (const auto& bySignature : prefabScene->GetEntities())
+			{
+				for (auto* candidate : bySignature.second)
+				{
+					if (candidate != nullptr && candidate->GetParent() == nullptr)
+						return candidate;
+				}
+			}
+
+			return nullptr;
+		}
+
+		bool ResolvePrefabSourceEntityAndSnapshots(
+			HexEngine::Entity* entity,
+			std::shared_ptr<HexEngine::Scene>& outPrefabScene,
+			HexEngine::Entity*& outSourceEntity,
+			HexEngine::Entity*& outInstanceRoot,
+			json& outBaseComponents,
+			json& outEditedComponents,
+			fs::path* outPrefabPath = nullptr)
+		{
+			outPrefabScene.reset();
+			outSourceEntity = nullptr;
+			outInstanceRoot = nullptr;
+			outBaseComponents = json::array();
+			outEditedComponents = json::array();
+
+			if (entity == nullptr || !entity->IsPrefabInstance())
+				return false;
+
+			auto* instanceRoot = ResolvePrefabInstanceRootEntity(entity);
+			if (instanceRoot == nullptr)
+				return false;
+
+			const fs::path prefabPath = instanceRoot->GetPrefabSourcePath();
+			if (prefabPath.empty())
+				return false;
+
+			auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+			if (sceneManager == nullptr)
+				return false;
+
+			auto prefabScene = sceneManager->CreateEmptyScene(false, nullptr, false);
+			if (!sceneManager->LoadPrefabAssetToScene(prefabPath, prefabScene))
+				return false;
+
+			auto* sourceRoot = FindPrefabSourceRootInScene(
+				prefabScene,
+				instanceRoot->GetPrefabRootEntityName(),
+				instanceRoot->GetPrefabNodeId());
+			if (sourceRoot == nullptr)
+				return false;
+
+			HexEngine::Entity* sourceEntity = nullptr;
+			const std::string nodeId = entity->GetPrefabNodeId();
+			if (!nodeId.empty())
+			{
+				sourceEntity = FindEntityByPrefabNodeIdInScene(prefabScene, nodeId);
+			}
+
+			if (sourceEntity == nullptr && entity == instanceRoot)
+			{
+				sourceEntity = sourceRoot;
+			}
+
+			if (sourceEntity == nullptr)
+				return false;
+
+			if (!CaptureEntityComponentsSnapshot(sourceEntity, outBaseComponents) ||
+				!CaptureEntityComponentsSnapshot(entity, outEditedComponents))
+			{
+				return false;
+			}
+
+			outPrefabScene = prefabScene;
+			outSourceEntity = sourceEntity;
+			outInstanceRoot = instanceRoot;
+			if (outPrefabPath != nullptr)
+			{
+				*outPrefabPath = prefabPath;
+			}
+			return true;
+		}
+
+		std::string BuildPrefabOverrideSelectionKey(const std::string& componentName, const std::string& path)
+		{
+			return componentName + "\n" + path;
+		}
+
+		bool IsPatchPathMatchingSelection(const std::string& patchPath, const std::string& selectedPath)
+		{
+			if (patchPath == selectedPath)
+				return true;
+
+			if (selectedPath.empty())
+				return false;
+
+			const std::string selectedPrefix = selectedPath + "/";
+			if (patchPath.rfind(selectedPrefix, 0) == 0)
+				return true;
+
+			const std::string patchPrefix = patchPath + "/";
+			return selectedPath.rfind(patchPrefix, 0) == 0;
+		}
+
+		void FilterOverridePatchesBySelection(
+			const std::vector<HexEngine::Entity::PrefabOverridePatch>& patches,
+			const std::unordered_set<std::string>& selectedKeys,
+			bool keepSelected,
+			std::vector<HexEngine::Entity::PrefabOverridePatch>& outPatches)
+		{
+			outPatches.clear();
+			for (const auto& patch : patches)
+			{
+				const bool selected = selectedKeys.find(BuildPrefabOverrideSelectionKey(patch.componentName, patch.path)) != selectedKeys.end();
+				if ((keepSelected && selected) || (!keepSelected && !selected))
+				{
+					outPatches.push_back(patch);
+				}
+			}
+		}
+
+		bool ApplyOverridePatchesToComponentSnapshot(
+			json& componentSnapshot,
+			const std::vector<HexEngine::Entity::PrefabOverridePatch>& patches)
+		{
+			if (!componentSnapshot.is_array())
+				return false;
+
+			if (patches.empty())
+				return true;
+
+			std::unordered_map<std::string, json> patchDocsByComponent;
+			json componentArrayPatchDoc = json::array();
+
+			for (const auto& patch : patches)
+			{
+				if (patch.componentName.empty() || patch.path.empty() || patch.op.empty())
+					continue;
+
+				json op = json::object();
+				op["op"] = patch.op;
+				op["path"] = patch.path;
+				if (patch.op != "remove")
+					op["value"] = patch.value;
+
+				if (patch.componentName == kPrefabOverrideComponentArrayPatchTarget)
+				{
+					componentArrayPatchDoc.push_back(std::move(op));
+					continue;
+				}
+
+				auto& patchDoc = patchDocsByComponent[patch.componentName];
+				if (!patchDoc.is_array())
+					patchDoc = json::array();
+				patchDoc.push_back(std::move(op));
+			}
+
+			if (componentArrayPatchDoc.is_array() && !componentArrayPatchDoc.empty())
+			{
+				try
+				{
+					componentSnapshot = componentSnapshot.patch(componentArrayPatchDoc);
+				}
+				catch (const std::exception&)
+				{
+					return false;
+				}
+			}
+
+			std::unordered_map<std::string, json*> componentsByName;
+			for (auto& component : componentSnapshot)
+			{
+				if (!component.is_object())
+					continue;
+
+				const auto componentName = component.value("name", std::string());
+				if (componentName.empty())
+					continue;
+
+				componentsByName[componentName] = &component;
+			}
+
+			for (auto& [componentName, patchDoc] : patchDocsByComponent)
+			{
+				auto it = componentsByName.find(componentName);
+				if (it == componentsByName.end() || it->second == nullptr)
+					continue;
+
+				try
+				{
+					*it->second = it->second->patch(patchDoc);
+				}
+				catch (const std::exception&)
+				{
+					return false;
+				}
+			}
+
+			return true;
 		}
 
 		void CollectOverriddenComponentNamesFromSnapshots(
@@ -1255,7 +1526,8 @@ namespace HexEditor
 		auto* inspectingRoot = FindPrefabInstanceRoot(inspecting);
 		if (changedRoot != nullptr && changedRoot == inspectingRoot)
 		{
-			_inspector->InspectEntity(inspecting);
+			// Let Inspector decide when to safely apply the refresh (for example after popup dialogs close).
+			_inspector->RequestForcedRefresh(inspecting);
 		}
 	}
 
@@ -1550,6 +1822,265 @@ namespace HexEditor
 		const json currentSnapshot = BuildPrefabEntitySnapshotRecursive(root, serializer, true);
 		const json sourceSnapshot = BuildPrefabEntitySnapshotRecursive(sourceRoot, serializer, true);
 		return currentSnapshot != sourceSnapshot;
+	}
+
+	bool PrefabController::GetPrefabInstancePropertyOverrides(HexEngine::Entity* entity, std::vector<PrefabPropertyOverride>& outOverrides) const
+	{
+		outOverrides.clear();
+		if (entity == nullptr || !entity->IsPrefabInstance())
+			return false;
+
+		std::shared_ptr<HexEngine::Scene> prefabScene;
+		HexEngine::Entity* sourceEntity = nullptr;
+		HexEngine::Entity* instanceRoot = nullptr;
+		json baseComponents = json::array();
+		json editedComponents = json::array();
+		if (!ResolvePrefabSourceEntityAndSnapshots(
+			entity,
+			prefabScene,
+			sourceEntity,
+			instanceRoot,
+			baseComponents,
+			editedComponents))
+		{
+			return false;
+		}
+
+		auto patches = BuildGenericPrefabOverridePatches(baseComponents, editedComponents);
+		std::sort(patches.begin(), patches.end(),
+			[](const HexEngine::Entity::PrefabOverridePatch& a, const HexEngine::Entity::PrefabOverridePatch& b)
+			{
+				if (a.componentName != b.componentName)
+					return a.componentName < b.componentName;
+				if (a.path != b.path)
+					return a.path < b.path;
+				return a.op < b.op;
+			});
+
+		for (const auto& patch : patches)
+		{
+			if (patch.componentName.empty() || patch.path.empty() || patch.op.empty())
+				continue;
+
+			if (patch.componentName == kPrefabOverrideComponentArrayPatchTarget)
+				continue;
+
+			PrefabPropertyOverride overrideEntry;
+			overrideEntry.componentName = patch.componentName;
+			overrideEntry.path = patch.path;
+			overrideEntry.op = patch.op;
+			outOverrides.push_back(std::move(overrideEntry));
+		}
+
+		return !outOverrides.empty();
+	}
+
+	bool PrefabController::RevertPrefabInstancePropertyOverride(HexEngine::Entity* entity, const std::string& componentName, const std::string& propertyPath)
+	{
+		if (entity == nullptr || !entity->IsPrefabInstance() || componentName.empty() || propertyPath.empty())
+			return false;
+
+		std::shared_ptr<HexEngine::Scene> prefabScene;
+		HexEngine::Entity* sourceEntity = nullptr;
+		HexEngine::Entity* instanceRoot = nullptr;
+		json baseComponents = json::array();
+		json editedComponents = json::array();
+		if (!ResolvePrefabSourceEntityAndSnapshots(
+			entity,
+			prefabScene,
+			sourceEntity,
+			instanceRoot,
+			baseComponents,
+			editedComponents))
+		{
+			return false;
+		}
+
+		const auto allPatches = BuildGenericPrefabOverridePatches(baseComponents, editedComponents);
+		std::unordered_set<std::string> selectedKeys;
+		for (const auto& patch : allPatches)
+		{
+			if (patch.componentName != componentName)
+				continue;
+
+			if (!IsPatchPathMatchingSelection(patch.path, propertyPath))
+				continue;
+
+			selectedKeys.insert(BuildPrefabOverrideSelectionKey(patch.componentName, patch.path));
+		}
+
+		if (selectedKeys.empty())
+			return false;
+
+		std::vector<HexEngine::Entity::PrefabOverridePatch> remainingPatches;
+		FilterOverridePatchesBySelection(allPatches, selectedKeys, false, remainingPatches);
+
+		json desiredComponents = baseComponents;
+		if (!ApplyOverridePatchesToComponentSnapshot(desiredComponents, remainingPatches))
+			return false;
+
+		const auto patchesToApply = BuildGenericPrefabOverridePatches(editedComponents, desiredComponents);
+		if (!patchesToApply.empty() && !ApplyGenericPrefabOverridePatchesToEntity(entity, patchesToApply))
+			return false;
+
+		entity->SetPrefabOverridePatches(remainingPatches);
+		entity->ClearPrefabPropertyOverrides();
+
+		if (auto* scene = entity->GetScene(); scene != nullptr)
+		{
+			scene->ForceRebuildPVS();
+		}
+		RefreshInspectorForPrefabInstance(entity);
+		return true;
+	}
+
+	bool PrefabController::RevertPrefabInstanceComponentOverrides(HexEngine::Entity* entity, const std::string& componentName)
+	{
+		if (entity == nullptr || !entity->IsPrefabInstance() || componentName.empty())
+			return false;
+
+		std::shared_ptr<HexEngine::Scene> prefabScene;
+		HexEngine::Entity* sourceEntity = nullptr;
+		HexEngine::Entity* instanceRoot = nullptr;
+		json baseComponents = json::array();
+		json editedComponents = json::array();
+		if (!ResolvePrefabSourceEntityAndSnapshots(
+			entity,
+			prefabScene,
+			sourceEntity,
+			instanceRoot,
+			baseComponents,
+			editedComponents))
+		{
+			return false;
+		}
+
+		const auto allPatches = BuildGenericPrefabOverridePatches(baseComponents, editedComponents);
+		std::unordered_set<std::string> selectedKeys;
+		for (const auto& patch : allPatches)
+		{
+			if (patch.componentName == componentName)
+			{
+				selectedKeys.insert(BuildPrefabOverrideSelectionKey(patch.componentName, patch.path));
+			}
+		}
+
+		if (selectedKeys.empty())
+			return false;
+
+		std::vector<HexEngine::Entity::PrefabOverridePatch> remainingPatches;
+		FilterOverridePatchesBySelection(allPatches, selectedKeys, false, remainingPatches);
+
+		json desiredComponents = baseComponents;
+		if (!ApplyOverridePatchesToComponentSnapshot(desiredComponents, remainingPatches))
+			return false;
+
+		const auto patchesToApply = BuildGenericPrefabOverridePatches(editedComponents, desiredComponents);
+		if (!patchesToApply.empty() && !ApplyGenericPrefabOverridePatchesToEntity(entity, patchesToApply))
+			return false;
+
+		entity->SetPrefabOverridePatches(remainingPatches);
+		entity->ClearPrefabPropertyOverrides();
+
+		if (auto* scene = entity->GetScene(); scene != nullptr)
+		{
+			scene->ForceRebuildPVS();
+		}
+		RefreshInspectorForPrefabInstance(entity);
+		return true;
+	}
+
+	bool PrefabController::ApplySelectedPrefabInstanceOverridesToAsset(HexEngine::Entity* entity, const std::vector<PrefabPropertyOverride>& selectedOverrides)
+	{
+		if (entity == nullptr || !entity->IsPrefabInstance() || selectedOverrides.empty())
+			return false;
+
+		std::shared_ptr<HexEngine::Scene> prefabScene;
+		HexEngine::Entity* sourceEntity = nullptr;
+		HexEngine::Entity* instanceRoot = nullptr;
+		json baseComponents = json::array();
+		json editedComponents = json::array();
+		fs::path prefabPath;
+		if (!ResolvePrefabSourceEntityAndSnapshots(
+			entity,
+			prefabScene,
+			sourceEntity,
+			instanceRoot,
+			baseComponents,
+			editedComponents,
+			&prefabPath))
+		{
+			return false;
+		}
+
+		std::unordered_set<std::string> selectedKeys;
+		for (const auto& selected : selectedOverrides)
+		{
+			if (selected.componentName.empty() || selected.path.empty())
+				continue;
+
+			selectedKeys.insert(BuildPrefabOverrideSelectionKey(selected.componentName, selected.path));
+		}
+
+		if (selectedKeys.empty())
+			return false;
+
+		const auto allPatches = BuildGenericPrefabOverridePatches(baseComponents, editedComponents);
+		std::vector<HexEngine::Entity::PrefabOverridePatch> selectedPatches;
+		std::vector<HexEngine::Entity::PrefabOverridePatch> remainingPatches;
+		FilterOverridePatchesBySelection(allPatches, selectedKeys, true, selectedPatches);
+		FilterOverridePatchesBySelection(allPatches, selectedKeys, false, remainingPatches);
+		if (selectedPatches.empty())
+			return false;
+
+		json sourceBeforeComponents = json::array();
+		if (!CaptureEntityComponentsSnapshot(sourceEntity, sourceBeforeComponents))
+			return false;
+
+		json sourceDesiredComponents = sourceBeforeComponents;
+		if (!ApplyOverridePatchesToComponentSnapshot(sourceDesiredComponents, selectedPatches))
+			return false;
+
+		const auto sourcePatchesToApply = BuildGenericPrefabOverridePatches(sourceBeforeComponents, sourceDesiredComponents);
+		if (!sourcePatchesToApply.empty() && !ApplyGenericPrefabOverridePatchesToEntity(sourceEntity, sourcePatchesToApply))
+			return false;
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return false;
+
+		if (IsVariantPrefabAsset(prefabPath))
+		{
+			size_t patchCount = 0;
+			if (!SaveVariantAssetFromEditedScene(prefabPath, prefabScene.get(), sceneManager, &patchCount))
+				return false;
+		}
+		else
+		{
+			std::vector<HexEngine::Entity*> entitiesToSave;
+			for (const auto& bySignature : prefabScene->GetEntities())
+			{
+				for (auto* prefabEntity : bySignature.second)
+				{
+					if (prefabEntity != nullptr && !prefabEntity->HasFlag(HexEngine::EntityFlags::DoNotSave))
+					{
+						entitiesToSave.push_back(prefabEntity);
+					}
+				}
+			}
+
+			HexEngine::SceneSaveFile saveFile(prefabPath, std::ios::out | std::ios::trunc, prefabScene, HexEngine::SceneFileFlags::IsPrefab);
+			if (!saveFile.Save(entitiesToSave))
+				return false;
+		}
+
+		entity->SetPrefabOverridePatches(remainingPatches);
+		entity->ClearPrefabPropertyOverrides();
+
+		RefreshPrefabAssetPreview(prefabPath);
+		RefreshInspectorForPrefabInstance(entity);
+		PropagateAppliedPrefabToInstances(prefabPath, instanceRoot, nullptr);
+		return true;
 	}
 
 	HexEngine::Entity* PrefabController::RevertPrefabInstance(HexEngine::Entity* entity)

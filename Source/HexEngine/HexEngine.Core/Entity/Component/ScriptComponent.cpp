@@ -51,9 +51,32 @@ namespace HexEngine
 
 	}
 
+	void ScriptComponent::Serialize(json& data, JsonFile* file)
+	{
+		fs::path scriptPath;
+		if (_script != nullptr)
+		{
+			scriptPath = _script->GetAbsolutePath();
+		}
+
+		file->Serialize(data, "_scriptPath", scriptPath);
+	}
+
+	void ScriptComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
+	{
+		fs::path scriptPath;
+		file->Deserialize(data, "_scriptPath", scriptPath);
+
+		if (!scriptPath.empty())
+		{
+			SetScript(scriptPath);
+		}
+	}
+
 	bool ScriptComponent::CreateWidget(ComponentWidget* widget)
 	{
-		LineEdit* scriptName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Material");
+		LineEdit* scriptName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Script");
+		scriptName->SetPrefabOverrideBinding(GetComponentName(), "/_scriptPath");
 
 		if (_script)
 		{
