@@ -159,18 +159,31 @@ namespace HexEngine
 
 	void Entity::SetParent(Entity* parent)
 	{
+		if (parent == this)
+		{
+			LOG_WARN("Cannot parent entity '%s' to itself", GetName().c_str());
+			return;
+		}
+
+		if (_parent == parent)
+			return;
+
 		// if it already has a parent, notify that parent that it is no longer the parent
 		if (_parent != nullptr)
 		{
-			EntityParentChangedMessage message(this, _parent, EntityParentChangedMessage::Flags::NoLongerParent);
-			_parent->OnMessage(&message, this);
+			auto* previousParent = _parent;
+			previousParent->_children.erase(std::remove(previousParent->_children.begin(), previousParent->_children.end(), this), previousParent->_children.end());
+
+			EntityParentChangedMessage message(this, previousParent, EntityParentChangedMessage::Flags::NoLongerParent);
+			previousParent->OnMessage(&message, this);
 		}
 
 		_parent = parent;
 
 		if (parent != nullptr)
 		{
-			_parent->_children.push_back(this);
+			if (std::find(_parent->_children.begin(), _parent->_children.end(), this) == _parent->_children.end())
+				_parent->_children.push_back(this);
 
 			EntityParentChangedMessage message(this, _parent, EntityParentChangedMessage::Flags::BecameParent);
 			_parent->OnMessage(&message, this);

@@ -100,10 +100,26 @@ namespace HexEngine
 
 	bool EntityList::OnDragAndDropEntity(TreeList* list, ListNode* dragSource, ListNode* dragTarget)
 	{
+		(void)list;
+
+		if (dragSource == nullptr || dragTarget == nullptr)
+			return false;
+
 		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr)
+			return false;
 
 		auto sourceEnt = scene->GetEntityByName(std::string(dragSource->GetLabel().begin(), dragSource->GetLabel().end()));
-		auto targetEnt = scene->GetEntityByName(std::string(dragTarget->GetLabel().begin(), dragTarget->GetLabel().end()));
+		if (sourceEnt == nullptr)
+			return false;
+
+		Entity* targetEnt = nullptr;
+		if (dynamic_cast<SceneListNode*>(dragTarget) == nullptr)
+		{
+			targetEnt = scene->GetEntityByName(std::string(dragTarget->GetLabel().begin(), dragTarget->GetLabel().end()));
+			if (targetEnt == nullptr)
+				return false;
+		}
 
 		// This will cause a black hole to form and collapse in on itself, best not to play with the universe like this
 		if (sourceEnt == targetEnt)
@@ -210,19 +226,27 @@ namespace HexEngine
 
 	void EntityList::AddEntity(HexEngine::Entity* entity, ListNode* scene)
 	{
+		if (entity == nullptr || scene == nullptr)
+			return;
+
+		// Avoid duplicate rows when adding parent chains.
+		if (FindItemByObjectPtr(entity, scene) != nullptr)
+			return;
+
 		std::wstring entNameStr = std::wstring(entity->GetName().begin(), entity->GetName().end());
 
 		if (auto parent = entity->GetParent(); parent != nullptr)
 		{
 			AddEntity(parent, scene);
 
-			auto parentItem = FindItemByLabelParented(std::wstring(parent->GetName().begin(), parent->GetName().end()));
+			auto parentItem = FindItemByObjectPtr(parent, scene);
 
 			if (parentItem)
 			{
-				auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity].get() });
+				auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity].get() }, entity);
 
 				node->_onClick = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2);
+				node->_onDragAndDrop = std::bind(&EntityList::OnDragAndDropEntity, this, this, std::placeholders::_1, std::placeholders::_2);
 
 				AddNode(node, parentItem, false);				
 
@@ -230,8 +254,9 @@ namespace HexEngine
 			}
 		}
 
-		auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity].get() });
+		auto node = new ListNode(this, entNameStr, { _icons[IconId::Entity].get() }, entity);
 		node->_onClick = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2);
+		node->_onDragAndDrop = std::bind(&EntityList::OnDragAndDropEntity, this, this, std::placeholders::_1, std::placeholders::_2);
 
 		AddNode(node, scene, false);
 

@@ -281,6 +281,11 @@ namespace HexEditor
 				testsub2->name = L"TestSub2";
 				menu->AddSubItem(testsub, testsub);*/
 
+				HexEngine::MenuBar::Item* actionNewEmpty = new HexEngine::MenuBar::Item;
+				actionNewEmpty->name = L"Add empty entity";
+				actionNewEmpty->action = std::bind(&EditorUI::OnAddEmptyEntity, this);
+				_mainMenu->AddSubItem(scene, actionNewEmpty);
+
 				HexEngine::MenuBar::Item* actionNewPlane = new HexEngine::MenuBar::Item;
 				actionNewPlane->name = L"Add plane";
 				actionNewPlane->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Plane);
@@ -900,6 +905,29 @@ namespace HexEditor
 		pointLight->SetLightStength(4.0f);
 
 		RecordEntityCreated(light);
+	}
+
+	void EditorUI::OnAddEmptyEntity()
+	{
+		auto currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		if (!currentScene)
+			return;
+
+		auto* entity = currentScene->CreateEntity("Entity");
+		if (entity == nullptr)
+			return;
+
+		RecordEntityCreated(entity);
+
+		if (_entityList != nullptr)
+		{
+			_entityList->RefreshList();
+		}
+
+		if (_rightDock != nullptr)
+		{
+			_rightDock->InspectEntity(entity);
+		}
 	}
 
 	void EditorUI::OnAddSpotLight()

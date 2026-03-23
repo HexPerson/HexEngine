@@ -45,34 +45,36 @@ namespace HexEditor
 
 	void EntityList::SetEntityParent(HexEngine::Entity* sourceEnt, HexEngine::Entity* targetEnt)
 	{
+		if (sourceEnt == nullptr)
+			return;
+
 		if (sourceEnt == targetEnt)
 			return;
 
-		if (sourceEnt && targetEnt)
-		{
-			auto* beforeParent = sourceEnt->GetParent();
-			if (beforeParent == targetEnt)
-				return;
+		auto* beforeParent = sourceEnt->GetParent();
+		if (beforeParent == targetEnt)
+			return;
 
+		if (targetEnt != nullptr)
+		{
 			for (auto* ancestor = targetEnt; ancestor != nullptr; ancestor = ancestor->GetParent())
 			{
 				if (ancestor == sourceEnt)
 					return;
 			}
-
-			if (g_pUIManager != nullptr)
-			{
-				g_pUIManager->RecordEntityParentChange(sourceEnt, beforeParent, targetEnt);
-			}
-
-			sourceEnt->SetParent(targetEnt);
-
-			if (auto* scene = sourceEnt->GetScene(); scene != nullptr)
-			{
-				scene->ForceRebuildPVS();
-			}
 		}
 
+		if (g_pUIManager != nullptr)
+		{
+			g_pUIManager->RecordEntityParentChange(sourceEnt, beforeParent, targetEnt);
+		}
+
+		sourceEnt->SetParent(targetEnt);
+
+		if (auto* scene = sourceEnt->GetScene(); scene != nullptr)
+		{
+			scene->ForceRebuildPVS();
+		}
 	}
 
 	void EntityList::SaveAsPrefab(HexEngine::Entity* entity, HexEngine::FileSystem* fs)

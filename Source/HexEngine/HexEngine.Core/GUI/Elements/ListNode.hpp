@@ -61,7 +61,7 @@ namespace HexEngine
 	{
 	public:
 		SceneListNode(TreeList* list, const std::wstring& label, const std::vector<ITexture2D*>& icons, Scene* scene) :
-			ListNode(list, label, icons),
+			ListNode(list, label, icons, scene),
 			_scene(scene)
 		{}
 

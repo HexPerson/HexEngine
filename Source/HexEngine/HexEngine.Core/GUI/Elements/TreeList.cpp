@@ -58,6 +58,7 @@ namespace HexEngine
 		SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
 
 		_hoveredItem = nullptr;
+		_dragTarget = nullptr;
 		int32_t y = pos.y - (int32_t)std::round(GetScrollOffset());
 		UpdateHovering(renderer, _items, y);
 
@@ -104,6 +105,10 @@ namespace HexEngine
 				{
 					renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.listbox_highlight);
 					_hoveredItem = item;
+					if (_draggedItem != nullptr && item != _draggedItem)
+					{
+						_dragTarget = item;
+					}
 				}
 			}			
 

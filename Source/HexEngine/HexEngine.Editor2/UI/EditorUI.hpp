@@ -107,6 +107,7 @@ namespace HexEditor
 
 		void OnAddLight();
 		void OnAddSpotLight();
+		void OnAddEmptyEntity();
 		void OnSaveAction();
 		void OnExportAction();
 		void OnAddBillboard();
