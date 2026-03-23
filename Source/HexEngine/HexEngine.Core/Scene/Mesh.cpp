@@ -118,13 +118,13 @@ namespace HexEngine
 		{
 			std::string name;
 
-			if (_relativePath.empty() == false)
+			/*if (_relativePath.empty() == false)
 			{
 				fs::path modelPath = _relativePath;
 				modelPath += fs::path::preferred_separator;
 
 				name = modelPath.string();
-			}
+			}*/
 
 			name.append(_name);
 

@@ -342,6 +342,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="GUI\Elements\LoadingDialog.hpp" />
     <ClInclude Include="GUI\Elements\MaterialDialog.hpp" />
     <ClInclude Include="GUI\Elements\MessageBox.hpp" />
+    <ClInclude Include="GUI\Elements\AssetSearch.hpp" />
     <ClInclude Include="GUI\Elements\QuestionDialog.hpp" />
     <ClInclude Include="GUI\Elements\TextureSearch.hpp" />
     <ClInclude Include="GUI\Elements\Vector2Edit.hpp" />
@@ -527,6 +528,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="GUI\Elements\LoadingDialog.cpp" />
     <ClCompile Include="GUI\Elements\MaterialDialog.cpp" />
     <ClCompile Include="GUI\Elements\MessageBox.cpp" />
+    <ClCompile Include="GUI\Elements\AssetSearch.cpp" />
     <ClCompile Include="GUI\Elements\QuestionDialog.cpp" />
     <ClCompile Include="GUI\Elements\TextureSearch.cpp" />
     <ClCompile Include="GUI\Elements\Vector2Edit.cpp" />

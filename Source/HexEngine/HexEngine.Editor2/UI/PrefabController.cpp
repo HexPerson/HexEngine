@@ -1674,12 +1674,30 @@ namespace HexEditor
 		if (isPrefabInstance)
 		{
 			const auto genericPatches = BuildGenericPrefabOverridePatches(beforeComponents, afterComponents);
+			bool touchesTransformSpatial = false;
 			for (const auto& patch : genericPatches)
 			{
 				entity->UpsertPrefabOverridePatch(patch);
+
+				if (!touchesTransformSpatial &&
+					patch.componentName == "Transform" &&
+					(patch.path == "/_position" || patch.path == "/_rotation" || patch.path == "/_scale"))
+				{
+					touchesTransformSpatial = true;
+				}
 			}
 			if (!genericPatches.empty())
 			{
+				// Keep editor visibility caches coherent after transform overrides.
+				// Without this, stale renderable entries can persist until camera movement forces a rebuild.
+				if (touchesTransformSpatial)
+				{
+					if (auto* scene = entity->GetScene(); scene != nullptr)
+					{
+						scene->ForceRebuildPVS();
+					}
+				}
+
 				RefreshInspectorForPrefabInstance(entity);
 			}
 		}

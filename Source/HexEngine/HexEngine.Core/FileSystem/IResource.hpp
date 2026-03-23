@@ -25,6 +25,7 @@ namespace HexEngine
 		Audio,
 		Font,
 		Prefab,
+		Material,
 	};
 
 	class HEX_API IResource

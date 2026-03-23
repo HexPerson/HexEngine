@@ -397,19 +397,43 @@ namespace HexEngine
 		if (!_mesh)
 			return false;
 
-		LineEdit* meshLine = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Mesh");
+		AssetSearch* meshLine = new AssetSearch(
+			widget,
+			widget->GetNextPos(),
+			Point(widget->GetSize().x - 20, 84),
+			L"Mesh",
+			{ ResourceType::Mesh },
+			std::bind(&StaticMeshComponent::SetMeshFromWidget, this, std::placeholders::_1, std::placeholders::_2));
 		meshLine->SetPrefabOverrideBinding(GetComponentName(), "/mesh");
 
-		//meshLine->SetLabelMinSize(130);
-		meshLine->SetValue(std::wstring(_mesh->GetName().begin(), _mesh->GetName().end()));
+		if (!_mesh->GetFileSystemPath().empty())
+			meshLine->SetValue(_mesh->GetFileSystemPath().wstring());
+		else
+			meshLine->SetValue(std::wstring(_mesh->GetName().begin(), _mesh->GetName().end()));
 
 		if (auto material = GetMaterial(); material != nullptr)
 		{
-			LineEdit* matName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Material");
+			auto applyMaterialFromResult = [this](AssetSearch*, const AssetSearchResult& result)
+			{
+				const fs::path pathToApply = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+				if (!pathToApply.empty())
+				{
+					SetMaterialFromWidget(0, pathToApply);
+				}
+			};
+
+			AssetSearch* matName = new AssetSearch(
+				widget,
+				widget->GetNextPos(),
+				Point(widget->GetSize().x - 20, 84),
+				L"Material",
+				{ ResourceType::Material },
+				applyMaterialFromResult);
 			matName->SetPrefabOverrideBinding(GetComponentName(), "/mesh");
-			matName->SetValue(std::wstring(material->GetName().begin(), material->GetName().end()));
-			matName->SetOnDragAndDropFn(std::bind(&StaticMeshComponent::SetMaterialFromWidget, this, 0, std::placeholders::_2));
-			matName->SetOnDoubleClickFn(std::bind(&StaticMeshComponent::DoubleClickMaterial, this, std::placeholders::_2));
+			if (!material->GetFileSystemPath().empty())
+				matName->SetValue(material->GetFileSystemPath().wstring());
+			else
+				matName->SetValue(std::wstring(material->GetName().begin(), material->GetName().end()));
 		}
 
 		Vector2Edit* uvScale = new Vector2Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"UV Scale", &_uvScale, nullptr);
@@ -419,6 +443,67 @@ namespace HexEngine
 
 
 		return true;
+	}
+
+	void StaticMeshComponent::SetMeshFromWidget(AssetSearch* search, const AssetSearchResult& result)
+	{
+		(void)search;
+		if (result.assetPath.empty())
+			return;
+
+		auto mesh = Mesh::Create(result.assetPath);
+		if (!mesh)
+		{
+			LOG_WARN("Failed to set mesh from AssetSearch path '%s'", result.assetPath.string().c_str());
+			return;
+		}
+
+		auto* entity = GetEntity();
+		json beforeData = json::object();
+		HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+		beforeData["name"] = GetComponentName();
+		Serialize(beforeData, &serializer);
+
+		SetMesh(mesh);
+		if (auto* scene = entity != nullptr ? entity->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->ForceRebuildPVS();
+		}
+
+		if (entity != nullptr && entity->IsPrefabInstance())
+		{
+			json afterData = json::object();
+			afterData["name"] = GetComponentName();
+			Serialize(afterData, &serializer);
+
+			json diffOps = json::diff(beforeData, afterData);
+			if (diffOps.is_array())
+			{
+				for (const auto& diffOp : diffOps)
+				{
+					if (!diffOp.is_object())
+						continue;
+
+					const auto op = diffOp.value("op", std::string());
+					const auto patchPath = diffOp.value("path", std::string());
+					if (op.empty() || patchPath.empty())
+						continue;
+
+					if (patchPath == "/name" || patchPath.rfind("/name/", 0) == 0)
+						continue;
+
+					Entity::PrefabOverridePatch patch;
+					patch.componentName = GetComponentName();
+					patch.path = patchPath;
+					patch.op = op;
+					const auto valueIt = diffOp.find("value");
+					patch.value = valueIt != diffOp.end() ? *valueIt : json();
+					entity->UpsertPrefabOverridePatch(patch);
+				}
+			}
+
+			entity->ClearPrefabPropertyOverride("staticMesh.mesh");
+		}
 	}
 
 	CullingMode StaticMeshComponent::GetShadowCullMode() const
@@ -460,6 +545,13 @@ namespace HexEngine
 			Serialize(beforeData, &serializer);
 
 			SetMaterial(mat);
+			if (entity != nullptr)
+			{
+				if (auto* scene = entity->GetScene(); scene != nullptr)
+				{
+					scene->ForceRebuildPVS();
+				}
+			}
 
 			if (entity != nullptr && entity->IsPrefabInstance())
 			{

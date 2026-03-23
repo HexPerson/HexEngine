@@ -37,12 +37,16 @@ namespace HexEditor
 		bool OnRevertPrefabPropertyOverride(const std::string& componentName, const std::string& propertyPath);
 		bool OnRevertPrefabComponentOverrides(const std::string& componentName);
 		bool OnApplySelectedPrefabOverrides(HexEngine::Button* button);
+		bool OnConfirmApplyPrefabInstance(HexEngine::Button* button);
 		void OnChangeEntityName(const std::wstring& name);
 		bool OnDeleteEntity(HexEngine::Button* button);
 		bool OnToggleEntityVisible(HexEngine::Button* button);
 		bool ReloadPrefabOverrideRows(bool preserveSelection);
+		bool ReloadPrefabApplyPreviewRows();
 		void RebuildPrefabOverrideDialogContents();
+		void RebuildPrefabApplyPreviewDialogContents();
 		void ClosePrefabOverrideDialog();
+		void ClosePrefabApplyPreviewDialog();
 		void AddInlinePrefabOverrideMarkers(HexEngine::ComponentWidget* widget, const std::string& componentName, const std::vector<PrefabController::PrefabPropertyOverride>& prefabOverrides);
 		static std::string NormalizeOverrideToken(const std::string& text);
 		static std::string NormalizeOverrideToken(const std::wstring& text);
@@ -76,6 +80,9 @@ namespace HexEditor
 		HexEngine::Dialog* _prefabOverridesDialog = nullptr;
 		HexEngine::ScrollView* _prefabOverridesScroll = nullptr;
 		std::vector<PrefabOverrideRow> _prefabOverrideRows;
+		HexEngine::Dialog* _prefabApplyPreviewDialog = nullptr;
+		HexEngine::ScrollView* _prefabApplyPreviewScroll = nullptr;
+		std::vector<PrefabOverrideRow> _prefabApplyPreviewRows;
 		bool _pendingForcedRefresh = false;
 		HexEngine::Entity* _pendingRefreshEntity = nullptr;
 		std::vector<HexEngine::ComponentWidget*> _componentWidgets;

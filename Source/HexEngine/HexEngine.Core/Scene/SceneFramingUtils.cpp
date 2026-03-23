@@ -103,7 +103,7 @@ namespace HexEngine::SceneFramingUtils
 		distance = std::max(distance, camera->GetNearZ() + radius + 0.5f);
 		distance = std::min(distance, camera->GetFarZ() * 0.75f);
 
-		math::Vector3 viewDirection(-1.0f, 0.35f, -1.0f);
+		math::Vector3 viewDirection(-1.0f, -0.65f, -1.0f);
 		viewDirection.Normalize();
 
 		const math::Vector3 cameraPosition = center - (viewDirection * distance);

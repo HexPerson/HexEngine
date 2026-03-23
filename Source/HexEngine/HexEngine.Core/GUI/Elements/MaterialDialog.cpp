@@ -4,7 +4,9 @@
 #include "MessageBox.hpp"
 #include "DropDown.hpp"
 #include "ColourPicker.hpp"
+#include "AssetSearch.hpp"
 #include "../../FileSystem/FileSystem.hpp"
+#include "../../Environment/LogFile.hpp"
 
 namespace HexEngine
 {
@@ -18,14 +20,20 @@ namespace HexEngine
 		{
 			const auto pos = _layout->GetNextPos();
 
-			_textures[i] = new TextureSearch(
+			_textures[i] = new AssetSearch(
 				_layout,
 				pos,
 				Point(size.x - 40, 100),
 				Material::GetMaterialTextureName((MaterialTexture)i),
-				material->GetTexture((MaterialTexture)i),
-				material,
-				(MaterialTexture)i);	
+				{ ResourceType::Image },
+				[this, type = (MaterialTexture)i](AssetSearch* search, const AssetSearchResult& result)
+				{
+					(void)search;
+					ApplyTextureFromSearch(type, result);
+				});
+
+			if (auto tex = _material->GetTexture((MaterialTexture)i); tex != nullptr)
+				_textures[i]->SetValue(tex->GetFileSystemPath().wstring());
 
 			AdditionalControls(_textures[i], (MaterialTexture)i, pos);
 		}
@@ -51,6 +59,37 @@ namespace HexEngine
 		_material->Save();
 		DeleteMe();
 		return true;
+	}
+
+	void MaterialDialog::ApplyTextureFromSearch(MaterialTexture type, const AssetSearchResult& result)
+	{
+		fs::path pathToLoad = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+		if (pathToLoad.empty())
+			return;
+
+		auto texture = ITexture2D::Create(pathToLoad);
+		if (texture == nullptr && !result.absolutePath.empty() && pathToLoad != result.absolutePath)
+		{
+			texture = ITexture2D::Create(result.absolutePath);
+		}
+
+		if (texture == nullptr)
+		{
+			LOG_WARN("MaterialDialog: failed to load texture for '%S' from '%s'",
+				Material::GetMaterialTextureName(type).c_str(),
+				pathToLoad.string().c_str());
+			return;
+		}
+
+		_material->SetTexture(type, texture);
+
+		if (_textures[type] != nullptr)
+		{
+			const fs::path displayPath = !texture->GetFileSystemPath().empty()
+				? texture->GetFileSystemPath()
+				: texture->GetAbsolutePath();
+			_textures[type]->SetValue(displayPath.wstring());
+		}
 	}
 
 	void MaterialDialog::AdditionalControls(Element* parent, MaterialTexture type, const Point& pos)

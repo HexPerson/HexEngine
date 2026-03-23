@@ -3,10 +3,7 @@
 #include "../EditorUI.hpp"
 #include <HexEngine.Core\GUI\Elements\Dialog.hpp>
 #include <HexEngine.Core\GUI\Elements\ContextMenu.hpp>
-#include <algorithm>
-#include <cctype>
-#include <unordered_map>
-#include <unordered_set>
+#include "../Gadgets/Gadget.hpp"
 
 namespace HexEditor
 {
@@ -48,6 +45,7 @@ namespace HexEditor
 	Inspector::~Inspector()
 	{
 		ClosePrefabOverrideDialog();
+		ClosePrefabApplyPreviewDialog();
 		_canvas.Destroy();
 	}
 
@@ -82,6 +80,11 @@ namespace HexEditor
 			_canvas.Redraw();
 
 			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+		}
+
+		for (auto& gadget : g_pUIManager->GetAllGadgets())
+		{
+			gadget->StopGadget(GadgetAction::Confirm);
 		}
 
 		return true;
@@ -233,6 +236,7 @@ namespace HexEditor
 			}
 
 			if (current != _prefabOverridesDialog &&
+				current != _prefabApplyPreviewDialog &&
 				!current->WantsDeletion() &&
 				dynamic_cast<HexEngine::Dialog*>(current) != nullptr &&
 				!IsDescendantOfElement(current, this))
@@ -260,6 +264,7 @@ namespace HexEditor
 			_pendingForcedRefresh = false;
 			_pendingRefreshEntity = nullptr;
 			ClosePrefabOverrideDialog();
+			ClosePrefabApplyPreviewDialog();
 			if (_revertPrefabBtn != nullptr)
 				_revertPrefabBtn->DisableRecursive();
 			if (_applyPrefabBtn != nullptr)
@@ -360,6 +365,7 @@ namespace HexEditor
 			if (entity != _inspecting)
 			{
 				ClosePrefabOverrideDialog();
+				ClosePrefabApplyPreviewDialog();
 			}
 
 			ClearInspectorWidgets();
@@ -445,6 +451,7 @@ namespace HexEditor
 		_pendingForcedRefresh = false;
 		_pendingRefreshEntity = nullptr;
 		ClosePrefabOverrideDialog();
+		ClosePrefabApplyPreviewDialog();
 		ClearInspectorWidgets();
 
 		_inspecting = nullptr;
@@ -597,13 +604,57 @@ namespace HexEditor
 		if (_inspecting == nullptr || g_pUIManager == nullptr)
 			return true;
 
-		if (g_pUIManager->ApplyPrefabInstanceToPrefabAsset(_inspecting))
+		if (!ReloadPrefabApplyPreviewRows())
 		{
-			auto* entity = _inspecting;
-			_inspecting = nullptr;
-			InspectEntity(entity);
+			if (g_pUIManager->ApplyPrefabInstanceToPrefabAsset(_inspecting))
+			{
+				auto* entity = _inspecting;
+				_inspecting = nullptr;
+				InspectEntity(entity);
+			}
+			return true;
 		}
 
+		if (_prefabApplyPreviewDialog == nullptr)
+		{
+			const int32_t dialogWidth = 760;
+			const int32_t dialogHeight = 520;
+			_prefabApplyPreviewDialog = new HexEngine::Dialog(
+				HexEngine::g_pEnv->GetUIManager().GetRootElement(),
+				HexEngine::Point::GetScreenCenterWithOffset(-dialogWidth / 2, -dialogHeight / 2),
+				HexEngine::Point(dialogWidth, dialogHeight),
+				L"Apply Prefab: Preview");
+
+			_prefabApplyPreviewScroll = new HexEngine::ScrollView(
+				_prefabApplyPreviewDialog,
+				HexEngine::Point(10, 10),
+				HexEngine::Point(dialogWidth - 20, dialogHeight - 62));
+
+			auto* confirmApply = new HexEngine::Button(
+				_prefabApplyPreviewDialog,
+				HexEngine::Point(dialogWidth - 220, dialogHeight - 42),
+				HexEngine::Point(100, 24),
+				L"Apply",
+				std::bind(&Inspector::OnConfirmApplyPrefabInstance, this, std::placeholders::_1));
+			confirmApply->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(30, 180, 90, 255)));
+
+			new HexEngine::Button(
+				_prefabApplyPreviewDialog,
+				HexEngine::Point(dialogWidth - 110, dialogHeight - 42),
+				HexEngine::Point(90, 24),
+				L"Cancel",
+				[this](HexEngine::Button*)
+				{
+					ClosePrefabApplyPreviewDialog();
+					return true;
+				});
+		}
+		else
+		{
+			_prefabApplyPreviewDialog->BringToFront();
+		}
+
+		RebuildPrefabApplyPreviewDialogContents();
 		return true;
 	}
 
@@ -746,6 +797,113 @@ namespace HexEditor
 		_prefabOverrideRows.clear();
 	}
 
+	bool Inspector::ReloadPrefabApplyPreviewRows()
+	{
+		if (_inspecting == nullptr || g_pUIManager == nullptr)
+			return false;
+
+		_prefabApplyPreviewRows.clear();
+
+		std::vector<PrefabController::PrefabPropertyOverride> overrides;
+		if (!g_pUIManager->GetPrefabInstancePropertyOverrides(_inspecting, overrides) || overrides.empty())
+			return false;
+
+		for (const auto& overrideEntry : overrides)
+		{
+			PrefabOverrideRow row;
+			row.componentName = overrideEntry.componentName;
+			row.path = overrideEntry.path;
+			row.op = overrideEntry.op;
+			_prefabApplyPreviewRows.push_back(std::move(row));
+		}
+
+		std::sort(_prefabApplyPreviewRows.begin(), _prefabApplyPreviewRows.end(),
+			[](const PrefabOverrideRow& a, const PrefabOverrideRow& b)
+			{
+				if (a.componentName != b.componentName)
+					return a.componentName < b.componentName;
+				return a.path < b.path;
+			});
+
+		return !_prefabApplyPreviewRows.empty();
+	}
+
+	void Inspector::RebuildPrefabApplyPreviewDialogContents()
+	{
+		if (_prefabApplyPreviewDialog == nullptr || _prefabApplyPreviewScroll == nullptr)
+			return;
+
+		auto* contentRoot = _prefabApplyPreviewScroll->GetContentRoot();
+		if (contentRoot == nullptr)
+			return;
+
+		std::vector<HexEngine::Element*> oldChildren = contentRoot->GetChildren();
+		for (auto* child : oldChildren)
+		{
+			if (child != nullptr)
+				child->DeleteMe();
+		}
+
+		const auto toWide = [](const std::string& value)
+		{
+			return std::wstring(value.begin(), value.end());
+		};
+
+		const int32_t contentWidth = std::max(200, _prefabApplyPreviewScroll->GetSize().x - 20);
+		int32_t y = 4;
+
+		std::wstring header = L"This will apply " + std::to_wstring(_prefabApplyPreviewRows.size()) + L" override(s) to the prefab asset:";
+		auto* summary = new HexEngine::Button(
+			contentRoot,
+			HexEngine::Point(0, y),
+			HexEngine::Point(contentWidth, 22),
+			header,
+			[](HexEngine::Button*) { return true; });
+		summary->EnableInput(false);
+		y += 26;
+
+		std::string currentComponent;
+		for (const auto& row : _prefabApplyPreviewRows)
+		{
+			if (currentComponent != row.componentName)
+			{
+				currentComponent = row.componentName;
+				auto* componentHeader = new HexEngine::Button(
+					contentRoot,
+					HexEngine::Point(0, y),
+					HexEngine::Point(contentWidth, 20),
+					toWide(currentComponent),
+					[](HexEngine::Button*) { return true; });
+				componentHeader->EnableInput(false);
+				componentHeader->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(72, 88, 110, 255)));
+				y += 22;
+			}
+
+			const std::wstring rowText = L"[" + toWide(row.op) + L"] " + toWide(row.path);
+			auto* rowBtn = new HexEngine::Button(
+				contentRoot,
+				HexEngine::Point(8, y),
+				HexEngine::Point(contentWidth - 8, 18),
+				rowText,
+				[](HexEngine::Button*) { return true; });
+			rowBtn->EnableInput(false);
+			y += 20;
+		}
+
+		_prefabApplyPreviewScroll->SetManualContentHeight(y + 6);
+	}
+
+	void Inspector::ClosePrefabApplyPreviewDialog()
+	{
+		if (_prefabApplyPreviewDialog != nullptr)
+		{
+			_prefabApplyPreviewDialog->DeleteMe();
+			_prefabApplyPreviewDialog = nullptr;
+			_prefabApplyPreviewScroll = nullptr;
+		}
+		_prefabApplyPreviewRows.clear();
+	}
+
 	bool Inspector::OnOpenPrefabOverrides(HexEngine::Button* button)
 	{
 		if (_inspecting == nullptr || g_pUIManager == nullptr)
@@ -805,8 +963,20 @@ namespace HexEditor
 		if (_inspecting == nullptr || g_pUIManager == nullptr)
 			return true;
 
+		Detail::EntityComponentStateSnapshot beforeSnapshot;
+		const bool hasBefore = Detail::CaptureEntityComponentState(_inspecting, beforeSnapshot);
+
 		if (!g_pUIManager->RevertPrefabInstancePropertyOverride(_inspecting, componentName, propertyPath))
 			return true;
+
+		if (hasBefore)
+		{
+			Detail::EntityComponentStateSnapshot afterSnapshot;
+			if (Detail::CaptureEntityComponentState(_inspecting, afterSnapshot))
+			{
+				g_pUIManager->RecordComponentPropertyStateChange(_inspecting, beforeSnapshot, afterSnapshot);
+			}
+		}
 
 		InspectEntity(_inspecting);
 		if (!ReloadPrefabOverrideRows(true))
@@ -826,8 +996,20 @@ namespace HexEditor
 		if (_inspecting == nullptr || g_pUIManager == nullptr)
 			return true;
 
+		Detail::EntityComponentStateSnapshot beforeSnapshot;
+		const bool hasBefore = Detail::CaptureEntityComponentState(_inspecting, beforeSnapshot);
+
 		if (!g_pUIManager->RevertPrefabInstanceComponentOverrides(_inspecting, componentName))
 			return true;
+
+		if (hasBefore)
+		{
+			Detail::EntityComponentStateSnapshot afterSnapshot;
+			if (Detail::CaptureEntityComponentState(_inspecting, afterSnapshot))
+			{
+				g_pUIManager->RecordComponentPropertyStateChange(_inspecting, beforeSnapshot, afterSnapshot);
+			}
+		}
 
 		InspectEntity(_inspecting);
 		if (!ReloadPrefabOverrideRows(true))
@@ -863,8 +1045,20 @@ namespace HexEditor
 		if (selected.empty())
 			return true;
 
+		Detail::EntityComponentStateSnapshot beforeSnapshot;
+		const bool hasBefore = Detail::CaptureEntityComponentState(_inspecting, beforeSnapshot);
+
 		if (!g_pUIManager->ApplySelectedPrefabInstanceOverridesToAsset(_inspecting, selected))
 			return true;
+
+		if (hasBefore)
+		{
+			Detail::EntityComponentStateSnapshot afterSnapshot;
+			if (Detail::CaptureEntityComponentState(_inspecting, afterSnapshot))
+			{
+				g_pUIManager->RecordComponentPropertyStateChange(_inspecting, beforeSnapshot, afterSnapshot);
+			}
+		}
 
 		InspectEntity(_inspecting);
 		if (!ReloadPrefabOverrideRows(true))
@@ -874,6 +1068,25 @@ namespace HexEditor
 		else
 		{
 			RebuildPrefabOverrideDialogContents();
+		}
+
+		return true;
+	}
+
+	bool Inspector::OnConfirmApplyPrefabInstance(HexEngine::Button* button)
+	{
+		if (_inspecting == nullptr || g_pUIManager == nullptr)
+		{
+			ClosePrefabApplyPreviewDialog();
+			return true;
+		}
+
+		ClosePrefabApplyPreviewDialog();
+		if (g_pUIManager->ApplyPrefabInstanceToPrefabAsset(_inspecting))
+		{
+			auto* entity = _inspecting;
+			_inspecting = nullptr;
+			InspectEntity(entity);
 		}
 
 		return true;

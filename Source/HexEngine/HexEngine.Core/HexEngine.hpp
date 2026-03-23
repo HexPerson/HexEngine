@@ -79,6 +79,7 @@
 #include "GUI/Elements/EntityList.hpp"
 #include "GUI/Elements/ArrayElement.hpp"
 #include "GUI/Elements/ScrollView.hpp"
+#include "GUI/Elements/AssetSearch.hpp"
 
 #include "Terrain/ChunkManager.hpp"
 #include "Terrain/HeightMapGenerator.hpp"

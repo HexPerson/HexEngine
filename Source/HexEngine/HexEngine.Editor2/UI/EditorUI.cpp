@@ -1264,15 +1264,7 @@ namespace HexEditor
 			Detail::EntityComponentStateSnapshot afterSnapshot;
 			if (Detail::CaptureEntityComponentState(entity, afterSnapshot))
 			{
-				if (HasMatchingComponentLayout(_pendingComponentEditBefore.components, afterSnapshot.components) &&
-					_pendingComponentEditBefore.components != afterSnapshot.components)
-				{
-					_transactions.Push(std::make_unique<ComponentPropertyTransaction>(_pendingComponentEditBefore, afterSnapshot));
-					_prefabController.HandleComponentPropertyEdit(
-						entity,
-						_pendingComponentEditBefore.components,
-						afterSnapshot.components);
-				}
+				RecordComponentPropertyStateChange(entity, _pendingComponentEditBefore, afterSnapshot);
 			}
 		}
 
@@ -1551,6 +1543,24 @@ namespace HexEditor
 		}
 
 		_prefabController.HandleComponentPropertyEdit(entity, beforeSnapshot.components, afterSnapshot.components);
+	}
+
+	void EditorUI::RecordComponentPropertyStateChange(
+		HexEngine::Entity* entity,
+		const Detail::EntityComponentStateSnapshot& before,
+		const Detail::EntityComponentStateSnapshot& after)
+	{
+		if (entity == nullptr || entity->IsPendingDeletion())
+			return;
+
+		if (!HasMatchingComponentLayout(before.components, after.components))
+			return;
+
+		if (before.components == after.components)
+			return;
+
+		_transactions.Push(std::make_unique<ComponentPropertyTransaction>(before, after));
+		_prefabController.HandleComponentPropertyEdit(entity, before.components, after.components);
 	}
 
 	void EditorUI::RecordEntityCreated(HexEngine::Entity* entity)

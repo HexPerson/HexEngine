@@ -58,6 +58,10 @@ namespace HexEditor
 		void RecordEntityVisibilityChange(HexEngine::Entity* entity, bool beforeHidden, bool afterHidden);
 		void RecordComponentAdded(HexEngine::BaseComponent* component);
 		void RecordComponentDeleted(HexEngine::BaseComponent* component);
+		void RecordComponentPropertyStateChange(
+			HexEngine::Entity* entity,
+			const Detail::EntityComponentStateSnapshot& before,
+			const Detail::EntityComponentStateSnapshot& after);
 		void RecordEntityCreated(HexEngine::Entity* entity);
 		void RecordEntityDeleted(HexEngine::Entity* entity);
 		bool UndoLastTransaction();
@@ -78,6 +82,8 @@ namespace HexEditor
 		bool IsVariantStageEntity(HexEngine::Entity* entity) const;
 		bool GetVariantStageEntityOverrideComponents(HexEngine::Entity* entity, std::unordered_set<std::string>& outComponentNames) const;
 		bool RevertVariantStageComponentToBase(HexEngine::Entity* entity, const std::string& componentName);
+
+		const std::vector<Gadget*> GetAllGadgets() const { return _gadgets; }
 
 	private:		
 		void CreateMenuBar();
@@ -110,7 +116,8 @@ namespace HexEditor
 
 		void RunGame();
 		void StopGame();
-		
+
+			
 
 	private:
 		// IEntityListener overrides

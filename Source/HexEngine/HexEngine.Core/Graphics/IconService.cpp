@@ -10,6 +10,16 @@
 
 namespace
 {
+	bool IsImageExtension(const std::string& extLower)
+	{
+		return extLower == ".png" ||
+			extLower == ".jpg" ||
+			extLower == ".jpeg" ||
+			extLower == ".dds" ||
+			extLower == ".tga" ||
+			extLower == ".bmp";
+	}
+
 	void CollectHierarchyEntities(HexEngine::Entity* root, std::vector<HexEngine::Entity*>& outEntities)
 	{
 		if (root == nullptr || root->IsPendingDeletion())
@@ -170,9 +180,10 @@ namespace HexEngine
 	void IconService::PushFilePathForIconGeneration(const fs::path& path)
 	{
 		auto it = _icons.find(path);
+		auto itRes = _resourceIcons.find(path);
 
 		// Only add a request if the icon hasn't already been generated
-		if (it == _icons.end())
+		if (it == _icons.end() && itRes == _resourceIcons.end())
 		{
 			LOG_INFO("IconService: An icon was requested for: %s", path.string().c_str());
 
@@ -185,9 +196,10 @@ namespace HexEngine
 	void IconService::PushAssetPathForIconGeneration(const std::wstring& assetPackage, const fs::path& assetPath)
 	{
 		auto it = _icons.find(assetPath);
+		auto itRes = _resourceIcons.find(assetPath);
 
 		// Only add a request if the icon hasn't already been generated
-		if (it == _icons.end())
+		if (it == _icons.end() && itRes == _resourceIcons.end())
 		{
 			LOG_INFO("IconService: An icon was requested for: %s", assetPath.string().c_str());
 
@@ -212,6 +224,19 @@ namespace HexEngine
 			auto extension = path.extension().string();
 
 			std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+
+			// Textures can be used directly as icons; no preview scene render required.
+			if (IsImageExtension(extension))
+			{
+				auto texture = ITexture2D::Create(path);
+				if (texture != nullptr)
+				{
+					_resourceIcons[path] = texture;
+				}
+
+				_pendingPaths.erase(_pendingPaths.begin());
+				return;
+			}
 
 			g_pEnv->_sceneManager->SetActiveScene(_iconScene);
 			_camera->GetRenderTarget()->ClearRenderTargetView(math::Color(HEX_RGB_TO_FLOAT3(40, 44, 48)));
@@ -369,6 +394,11 @@ namespace HexEngine
 
 	ITexture2D* IconService::GetIcon(const fs::path& path)
 	{
+		if (auto itRes = _resourceIcons.find(path); itRes != _resourceIcons.end())
+		{
+			return itRes->second.get();
+		}
+
 		auto it = _icons.find(path);
 
 		if (it == _icons.end())
@@ -379,6 +409,12 @@ namespace HexEngine
 
 	void IconService::RemoveIcon(const fs::path& path)
 	{
+		auto itRes = _resourceIcons.find(path);
+		if (itRes != _resourceIcons.end())
+		{
+			_resourceIcons.erase(itRes);
+		}
+
 		auto it = _icons.find(path);
 
 		if (it == _icons.end())

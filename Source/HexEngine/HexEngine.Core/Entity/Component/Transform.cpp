@@ -9,6 +9,9 @@
 
 namespace HexEngine
 {
+	HVar ed_translateSnap("ed_translateSnap", "Enable grid snapping while dragging the editor translation gizmo", false, false, true);
+	HVar ed_translateSnapSize("ed_translateSnapSize", "Grid size used for editor translation gizmo snapping", 1.0f, 0.001f, 10000.0f);
+
 	Transform::EditorTranslateCommitCallback Transform::_editorTranslateCommitCallback = {};
 
 	namespace
@@ -20,6 +23,7 @@ namespace HexEngine
 			int32_t lastMouseX = 0;
 			int32_t lastMouseY = 0;
 			math::Vector3 dragStartPosition = math::Vector3::Zero;
+			math::Vector3 accumulatedPosition = math::Vector3::Zero;
 			bool wasLeftMouseDown = false;
 		};
 
@@ -81,6 +85,14 @@ namespace HexEngine
 
 			g_pEnv->_debugRenderer->DrawLine(axisEnd, axisEnd - axisDirection * headLength + arrowSide * headWidth, colour);
 			g_pEnv->_debugRenderer->DrawLine(axisEnd, axisEnd - axisDirection * headLength - arrowSide * headWidth, colour);
+		}
+
+		float SnapToStep(float value, float step)
+		{
+			if (step <= FLT_EPSILON)
+				return value;
+
+			return roundf(value / step) * step;
 		}
 	}
 
@@ -635,6 +647,7 @@ namespace HexEngine
 				g_translateGizmoState.activeTransform = nullptr;
 				g_translateGizmoState.activeAxis = -1;
 				g_translateGizmoState.dragStartPosition = math::Vector3::Zero;
+				g_translateGizmoState.accumulatedPosition = math::Vector3::Zero;
 			}
 			return;
 		}
@@ -715,6 +728,7 @@ namespace HexEngine
 			g_translateGizmoState.lastMouseX = mouseX;
 			g_translateGizmoState.lastMouseY = mouseY;
 			g_translateGizmoState.dragStartPosition = GetEntity()->GetPosition();
+			g_translateGizmoState.accumulatedPosition = g_translateGizmoState.dragStartPosition;
 		}
 		else if (!leftMouseDown && g_translateGizmoState.activeTransform == this)
 		{
@@ -728,6 +742,7 @@ namespace HexEngine
 			g_translateGizmoState.activeTransform = nullptr;
 			g_translateGizmoState.activeAxis = -1;
 			g_translateGizmoState.dragStartPosition = math::Vector3::Zero;
+			g_translateGizmoState.accumulatedPosition = math::Vector3::Zero;
 		}
 
 		if (g_translateGizmoState.activeTransform == this && g_translateGizmoState.activeAxis >= 0)
@@ -760,7 +775,23 @@ namespace HexEngine
 
 					if (fabsf(projectedPixels) > FLT_EPSILON)
 					{
-						GetEntity()->ForcePosition(GetEntity()->GetPosition() + axisDirection * (projectedPixels * worldUnitsPerPixel));
+						g_translateGizmoState.accumulatedPosition += axisDirection * (projectedPixels * worldUnitsPerPixel);
+
+						math::Vector3 targetPosition = g_translateGizmoState.accumulatedPosition;
+						if (ed_translateSnap._val.b)
+						{
+							const float snapSize = std::max(ed_translateSnapSize._val.f32, 0.001f);
+
+							switch (activeAxis)
+							{
+							case 0: targetPosition.x = SnapToStep(targetPosition.x, snapSize); break;
+							case 1: targetPosition.y = SnapToStep(targetPosition.y, snapSize); break;
+							case 2: targetPosition.z = SnapToStep(targetPosition.z, snapSize); break;
+							default: break;
+							}
+						}
+
+						GetEntity()->ForcePosition(targetPosition);
 					}
 				}
 			}

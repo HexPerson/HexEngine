@@ -94,6 +94,31 @@ HexEngine::Checkbox* df = new HexEngine::Checkbox(widget, widget->GetNextPos(), 
 		HexEngine::ColourPicker* deepCol = new HexEngine::ColourPicker(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Deep Colour", (math::Color*)&ocean.deepColour.x);
 		HexEngine::ColourPicker* shallowCol = new HexEngine::ColourPicker(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Shallow Colour", (math::Color*)&ocean.shallowColour.x);
 
+		pm->_editor = new HexEngine::ComponentWidget(layout, layout->GetNextPos(), HexEngine::Point(pm->_size.x - 20, 10), L"Editor");
+		if (auto snapEnabledVar = HexEngine::g_pEnv->_commandManager->FindHVar("ed_translateSnap"); snapEnabledVar != nullptr)
+		{
+			new HexEngine::Checkbox(
+				pm->_editor,
+				pm->_editor->GetNextPos(),
+				HexEngine::Point(sizex - 40, 18),
+				L"Grid Snap (Translate Gizmo)",
+				&snapEnabledVar->_val.b);
+		}
+
+		if (auto snapSizeVar = HexEngine::g_pEnv->_commandManager->FindHVar("ed_translateSnapSize"); snapSizeVar != nullptr)
+		{
+			new HexEngine::DragFloat(
+				pm->_editor,
+				pm->_editor->GetNextPos(),
+				HexEngine::Point(sizex - 40, 18),
+				L"Grid Snap Size",
+				&snapSizeVar->_val.f32,
+				snapSizeVar->_min.f32,
+				snapSizeVar->_max.f32,
+				0.1f,
+				3);
+		}
+
 		pm->BringToFront();
 		//pm->_onCompleted = onCompletedAction;
 

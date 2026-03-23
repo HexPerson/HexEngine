@@ -49,6 +49,8 @@ aiProcess_TransformUVCoords | // preprocess UV transformations (scaling, transla
 //aiProcess_FindInstances | // search for instanced meshes and remove them by references to one master
 aiProcess_LimitBoneWeights | // limit bone weights to 4 per vertex
 aiProcess_OptimizeMeshes | // join small meshes, if possible;
+aiProcess_GenSmoothNormals |
+aiProcess_FindInvalidData |
 
 //aiProcess_SplitLargeMeshes |
 //aiProcess_PreTransformVertices | // this will drop animations !!

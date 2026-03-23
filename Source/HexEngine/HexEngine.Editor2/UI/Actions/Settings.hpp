@@ -21,5 +21,6 @@ namespace HexEditor
 		HexEngine::ComponentWidget* _colouring = nullptr;
 		HexEngine::ComponentWidget* _fog = nullptr;
 		HexEngine::ComponentWidget* _ocean = nullptr;
+		HexEngine::ComponentWidget* _editor = nullptr;
 	};
 }

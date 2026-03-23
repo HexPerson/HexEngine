@@ -2,6 +2,7 @@
 #include "MaterialLoader.hpp"
 #include "Material.hpp"
 
+#include "../FileSystem/FileSystem.hpp"
 #include "../Environment/IEnvironment.hpp"
 #include "../Environment/LogFile.hpp"
 #include "../GUI/Elements/MaterialDialog.hpp"
@@ -275,6 +276,9 @@ namespace HexEngine
 
 	Dialog* MaterialLoader::CreateEditorDialog(const std::vector<fs::path>& paths)
 	{
+		if (paths.empty())
+			return nullptr;
+
 		uint32_t width, height;
 		g_pEnv->GetScreenSize(width, height);
 
@@ -284,7 +288,36 @@ namespace HexEngine
 		const int32_t dlgW = 800;
 		const int32_t dlgH = 600;
 
-		auto mat = Material::Create(paths[0]);
+		auto& resourceSystem = g_pEnv->GetResourceSystem();
+		const fs::path inputPath = paths[0];
+
+		std::shared_ptr<Material> mat = dynamic_pointer_cast<Material>(resourceSystem.FindResourceByFileName(inputPath));
+
+		if (!mat && inputPath.is_absolute())
+		{
+			for (auto* fileSystem : resourceSystem.GetFileSystems())
+			{
+				if (fileSystem == nullptr)
+					continue;
+
+				std::error_code ec;
+				const fs::path rel = fs::relative(inputPath, fileSystem->GetDataDirectory(), ec);
+				if (ec || rel.empty())
+					continue;
+
+				const auto relStr = rel.generic_string();
+				if (relStr.size() >= 2 && relStr[0] == '.' && relStr[1] == '.')
+					continue;
+
+				const fs::path fsPath = fileSystem->GetRelativeResourcePath(rel.wstring());
+				mat = dynamic_pointer_cast<Material>(resourceSystem.FindResourceByFileName(fsPath));
+				if (mat)
+					break;
+			}
+		}
+
+		if (!mat)
+			mat = Material::Create(inputPath);
 
 		if (mat)
 		{

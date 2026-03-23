@@ -34,6 +34,10 @@ namespace HexEditor
 
 		inspector->InspectEntity(copyEnt);
 
+		StopGadget(GadgetAction::Confirm);
+
+
+
 		int32_t scrx, scry;
 		if (HexEngine::g_pEnv->_inputSystem->GetWorldToScreenPosition(
 			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera(),

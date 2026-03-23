@@ -5,6 +5,7 @@
 #include "TextureSearch.hpp"
 #include "ComponentWidget.hpp"
 #include "DragFloat.hpp"
+#include "AssetSearch.hpp"
 
 namespace HexEngine
 {
@@ -20,9 +21,10 @@ namespace HexEngine
 		void AdditionalControls(Element* parent, MaterialTexture type, const Point& pos);
 
 	private:
+		void ApplyTextureFromSearch(MaterialTexture type, const AssetSearchResult& result);
+
 		ComponentWidget* _layout = nullptr;
-		TextureSearch* _textures[MaterialTexture::Count] = { nullptr };
-		TextureSearch* _normal = nullptr;
+		AssetSearch* _textures[MaterialTexture::Count] = { nullptr };
 		DragFloat* _smoothness = nullptr;
 		DragFloat* _specularProbability = nullptr;
 		std::shared_ptr<Material> _material;

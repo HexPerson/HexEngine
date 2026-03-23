@@ -33,6 +33,7 @@ namespace HexEngine
 		std::vector<IconPending> _pendingPaths;
 		std::vector<fs::path> _generatedPaths;
 		std::map<fs::path, ITexture2D*> _icons;
+		std::map<fs::path, std::shared_ptr<ITexture2D>> _resourceIcons;
 		
 
 		std::shared_ptr<Scene> _iconScene;

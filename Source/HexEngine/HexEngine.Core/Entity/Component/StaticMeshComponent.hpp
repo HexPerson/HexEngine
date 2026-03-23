@@ -10,6 +10,8 @@
 namespace HexEngine
 {
 	class LineEdit;	
+	class AssetSearch;
+	struct AssetSearchResult;
 
 	enum MeshRenderFlags
 	{
@@ -82,6 +84,7 @@ namespace HexEngine
 	private:
 		void SetTextureFromWidget(Mesh* mesh, LineEdit* edit, MaterialTexture type, const fs::path& path);
 		void SetMaterialFromWidget(int32_t index, const fs::path& path);
+		void SetMeshFromWidget(AssetSearch* search, const AssetSearchResult& result);
 		void DoubleClickMaterial(const std::wstring& path);
 		//void ShowTextureBrowserFromWidget(Material::MaterialTexture type);
 

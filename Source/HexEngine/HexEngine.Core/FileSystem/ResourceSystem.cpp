@@ -174,16 +174,65 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		auto it = _loadedResources.find(localPath);
-
-		// If this resource is already loaded, we simply need to increment it's ref count and return the ptr
-		if (it != _loadedResources.end())
+		auto tryGetLoadedByKey = [this](const fs::path& key) -> std::shared_ptr<IResource>
 		{
-			auto newPtr = it->second.lock();
+			if (key.empty())
+				return nullptr;
 
-			LOG_DEBUG("Resource '%s' was already loaded, it now has a reference count of %d. Returning %p", it->first.string().c_str(), it->second.use_count() + 1, newPtr.get());
+			auto it = _loadedResources.find(key);
+			if (it == _loadedResources.end())
+				return nullptr;
 
-			return newPtr;
+			auto loaded = it->second.lock();
+			if (!loaded)
+			{
+				_loadedResources.erase(it);
+				return nullptr;
+			}
+
+			return loaded;
+		};
+
+		auto tryGetLoadedByAbsolute = [this](const fs::path& absolutePath) -> std::shared_ptr<IResource>
+		{
+			if (!absolutePath.is_absolute())
+				return nullptr;
+
+			const fs::path normalizedAbsolute = absolutePath.lexically_normal();
+
+			for (auto it = _loadedResources.begin(); it != _loadedResources.end(); )
+			{
+				auto loaded = it->second.lock();
+				if (!loaded)
+				{
+					it = _loadedResources.erase(it);
+					continue;
+				}
+
+				const fs::path loadedAbsolute = loaded->GetAbsolutePath();
+				if (!loadedAbsolute.empty())
+				{
+					std::error_code ec;
+					if (fs::equivalent(loadedAbsolute, normalizedAbsolute, ec) && !ec)
+						return loaded;
+
+					if (loadedAbsolute.lexically_normal() == normalizedAbsolute)
+						return loaded;
+				}
+
+				++it;
+			}
+
+			return nullptr;
+		};
+
+		if (auto loaded = tryGetLoadedByKey(localPath); loaded != nullptr)
+			return loaded;
+
+		if (localPath.is_absolute())
+		{
+			if (auto loaded = tryGetLoadedByAbsolute(localPath); loaded != nullptr)
+				return loaded;
 		}
 
 		std::shared_ptr<IResource> resource = nullptr;
@@ -196,19 +245,25 @@ namespace HexEngine
 			// Deal with absolute file paths first
 			if (trueLocalPath.is_absolute())
 			{
-				trueLocalPath = fs::relative(trueLocalPath, fs->GetDataDirectory());
+				std::error_code ec;
+				trueLocalPath = fs::relative(trueLocalPath, fs->GetDataDirectory(), ec);
 
-				if (trueLocalPath.empty())
+				if (ec || trueLocalPath.empty())
 					continue;
 
-				// do a second check for the loaded resource, as the local path might be correct now
-				auto it = _loadedResources.find(trueLocalPath);
+				const auto relStr = trueLocalPath.generic_string();
+				if (relStr.size() >= 2 && relStr[0] == '.' && relStr[1] == '.')
+					continue;
 
-				// If this resource is already loaded, we simply need to increment it's ref count and return the ptr
-				if (it != _loadedResources.end())
-				{
-					return it->second.lock();
-				}
+				trueLocalPath = trueLocalPath.lexically_normal();
+
+				// do a second check for the loaded resource, as the local path might be correct now
+				const fs::path fsPath = fs->GetRelativeResourcePath(trueLocalPath.wstring());
+				if (auto loaded = tryGetLoadedByKey(fsPath); loaded != nullptr)
+					return loaded;
+
+				if (auto loaded = tryGetLoadedByKey(trueLocalPath); loaded != nullptr)
+					return loaded;
 			}
 			else
 			{
@@ -224,12 +279,23 @@ namespace HexEngine
 					else
 						continue;
 				}
+
+				// non-prefixed relative path may still map to an already-loaded resource via fs-relative key
+				const fs::path fsPath = fs->GetRelativeResourcePath(trueLocalPath.wstring());
+				if (auto loaded = tryGetLoadedByKey(fsPath); loaded != nullptr)
+					return loaded;
+
+				if (auto loaded = tryGetLoadedByKey(trueLocalPath); loaded != nullptr)
+					return loaded;
 			}
 
 			LOG_INFO("Loading resource '%S' at file system data directory '%s'", trueLocalPath.c_str(), fs->GetDataDirectory().string().c_str());
 
 			// else it has not been loaded, so load it!
 			auto fullPath = fs->GetLocalAbsoluteDataPath(trueLocalPath);
+
+			if (auto loaded = tryGetLoadedByAbsolute(fullPath); loaded != nullptr)
+				return loaded;
 
 			if (fs->DoesAbsolutePathExist(fullPath) == false)
 			{
