@@ -140,7 +140,7 @@
 			const float waterFogOffset = 10.0f;
 			const float waterFogFadeDistance = 30.0f;
 			
-			if(worldPos.y <= waveHeightAtWorldPos /* - waterFogOffset */ /* && isCameraUnderWater */)
+			if(false && worldPos.y <= waveHeightAtWorldPos /* - waterFogOffset */ /* && isCameraUnderWater */)
 			{
 				// exponential
 				float fogFactor = saturate(exp2(-( g_frustumDepths[3] - (fogDist * 5.1f) ) * (g_atmosphere.fogDensity / 2.8)  /*0.0030f*/));

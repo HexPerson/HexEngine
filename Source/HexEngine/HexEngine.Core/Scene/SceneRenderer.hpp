@@ -7,6 +7,7 @@
 #include "../Graphics/BlurEffect.hpp"
 #include "../Graphics/Bloom.hpp"
 #include "CloudVolume.hpp"
+#include "DiffuseGI.hpp"
 #include "../Graphics/TAA.hpp"
 #include "../Graphics/IDenoiserProvider.hpp"
 
@@ -67,6 +68,7 @@ namespace HexEngine
 		void RenderPointLights();
 		void RenderSpotLights();
 		void RenderDirectionalLights();
+		void RenderDiffuseGI();
 		void RenderVignette();
 		void SetStreamlineConstants();
 		
@@ -136,6 +138,7 @@ namespace HexEngine
 		std::shared_ptr<Material> _spotLightMaterial;
 
 		TAA _taa;
+		DiffuseGI _diffuseGi;
 
 		ITexture2D* _ssrHistory = nullptr;		
 		ITexture2D* _ssrResolved = nullptr;

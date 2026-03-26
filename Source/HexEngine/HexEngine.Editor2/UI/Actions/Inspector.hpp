@@ -39,6 +39,7 @@ namespace HexEditor
 		bool OnApplySelectedPrefabOverrides(HexEngine::Button* button);
 		bool OnConfirmApplyPrefabInstance(HexEngine::Button* button);
 		void OnChangeEntityName(const std::wstring& name);
+		void OnInspectorFilterChanged(HexEngine::LineEdit* edit, const std::wstring& value);
 		bool OnDeleteEntity(HexEngine::Button* button);
 		bool OnToggleEntityVisible(HexEngine::Button* button);
 		bool ReloadPrefabOverrideRows(bool preserveSelection);
@@ -71,6 +72,7 @@ namespace HexEditor
 		HexEngine::Button* _addComponentBtn = nullptr;
 		HexEngine::Button* _toggleVisibilityBtn = nullptr;
 		HexEngine::LineEdit* _entityName = nullptr;
+		HexEngine::LineEdit* _propertyFilter = nullptr;
 		HexEngine::Button* _deleteBtn = nullptr;
 		HexEngine::Button* _revertPrefabBtn = nullptr;
 		HexEngine::Button* _applyPrefabBtn = nullptr;

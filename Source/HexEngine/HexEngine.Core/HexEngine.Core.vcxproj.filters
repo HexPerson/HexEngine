@@ -393,6 +393,9 @@
     <ClInclude Include="GUI\Elements\ImmediateMode.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="GUI\Elements\InputFloat.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Input\HCommand.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -842,6 +845,9 @@
     <ClCompile Include="GUI\Elements\ImmediateMode.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="GUI\Elements\InputFloat.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Input\HCommand.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1005,6 +1011,16 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Scene\Prefab.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Scene\DiffuseGI.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Scene\DiffuseGI.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

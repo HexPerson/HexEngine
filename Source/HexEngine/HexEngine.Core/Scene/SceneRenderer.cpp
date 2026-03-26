@@ -108,6 +108,7 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
+		_diffuseGi.Destroy();
 		_gbuffer.Destroy();
 
 		//SAFE_DELETE(_clouds);
@@ -423,6 +424,7 @@ namespace HexEngine
 		_bloomEffect->Create(width / 4, height / 4);
 
 		_taa.Create(_beautyRT);
+		_diffuseGi.Create(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 
 		g_pEnv->_denoiserProvider->CreateBuffers(width, height, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
 	}
@@ -1262,6 +1264,7 @@ namespace HexEngine
 			//_gbuffer.GetDiffuse()->CopyTo(_compositionRT);
 
 			RenderLights();
+			RenderDiffuseGI();
 			RenderFog();
 			//RenderWater();
 			RenderVolumetricLighting();		
@@ -1494,6 +1497,17 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthDefault);
 		//g_pEnv->_graphicsDevice->EnableDepthBuffer(true);
+	}
+
+	void SceneRenderer::RenderDiffuseGI()
+	{
+		PROFILE();
+
+		if (!_currentScene || !_currentCamera || !_beautyRT)
+			return;
+
+		_diffuseGi.Update(_currentScene, _currentCamera);
+		_diffuseGi.Render(_currentScene, _currentCamera, _gbuffer, _beautyRT);
 	}
 
 	void SceneRenderer::RenderDirectionalLights()
