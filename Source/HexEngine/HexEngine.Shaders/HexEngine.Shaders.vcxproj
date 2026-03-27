@@ -180,6 +180,9 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="Bloom.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="BloomPhysical.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="BuildShadowMask.shader">
       <FileType>Document</FileType>
     </HexEngineShader>

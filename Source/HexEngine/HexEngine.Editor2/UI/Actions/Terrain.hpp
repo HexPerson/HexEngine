@@ -32,7 +32,7 @@ namespace HexEditor
 		bool _makeColliders = true;
 		bool _useChunkSystem = true;
 
-		HexEngine::LineEdit* _materialName;
+		HexEngine::AssetSearch* _materialName;
 		HexEngine::LineEdit* _seed;
 		std::vector<HexEngine::Entity*> _created;
 	};

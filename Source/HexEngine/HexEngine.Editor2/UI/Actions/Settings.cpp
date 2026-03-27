@@ -14,6 +14,7 @@ namespace HexEngine
 	extern HVar env_volumetricStrength;
 	extern HVar env_waterNormalInfluence;
 	extern HVar env_volumetricSteps;
+	extern HVar r_volumetricQuality;
 	extern HVar r_fog;
 	extern HVar r_fogDensity;
 }
@@ -118,13 +119,38 @@ namespace HexEditor
 				&var->_val.b);
 		};
 
-		pm->_widgetBase = makeSectionTab(L"Environment", L"Environment");
-		addFloatControl(pm->_widgetBase, "env_zenithExponent", L"Zenith Exponent", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_anisotropicIntensity", L"Anisotropic Intensity", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_density", L"Density", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricScattering", L"Volumetric Scattering", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricSteps", L"Volumetric Steps", 1.0f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricStepIncrement", L"Volumetric Step Distance", 0.1f, 3);
+		const auto addVector3Control = [&](HexEngine::ComponentWidget* widget, const char* name, const wchar_t* label)
+		{
+			auto* var = HexEngine::g_pEnv->_commandManager->FindHVar(name);
+			if (var == nullptr || var->GetType() != HexEngine::HVar::Type::Vector3)
+				return;
+
+			new HexEngine::Vector3Edit(
+				widget,
+				widget->GetNextPos(),
+				HexEngine::Point(controlWidthFor(widget), 18),
+				label,
+				&var->_val.v3,
+				[var](const math::Vector3& value)
+				{
+					var->_val.v3 = value;
+					var->Clamp();
+				});
+		};
+
+			pm->_widgetBase = makeSectionTab(L"Environment", L"Environment");
+			addFloatControl(pm->_widgetBase, "env_zenithExponent", L"Zenith Exponent", 0.01f, 3);
+			addFloatControl(pm->_widgetBase, "env_anisotropicIntensity", L"Anisotropic Intensity", 0.01f, 3);
+			addFloatControl(pm->_widgetBase, "env_density", L"Density", 0.01f, 3);
+			addFloatControl(pm->_widgetBase, "env_volumetricScattering", L"Volumetric Scattering", 0.01f, 3);
+			addFloatControl(pm->_widgetBase, "env_volumetricStrength", L"Volumetric Strength", 0.01f, 3);
+			addIntControl(pm->_widgetBase, "r_volumetricQuality", L"Volumetric Quality Preset", 1);
+			addFloatControl(pm->_widgetBase, "env_volumetricSteps", L"Volumetric Steps", 1.0f, 3);
+			addFloatControl(pm->_widgetBase, "env_volumetricStepIncrement", L"Volumetric Step Scale", 0.1f, 3);
+			addFloatControl(pm->_widgetBase, "env_volumetricPointInsideMin", L"Point Inside Gain Min", 0.01f, 3);
+			addFloatControl(pm->_widgetBase, "env_volumetricPointInsideMax", L"Point Inside Gain Max", 0.01f, 3);
+			addFloatControl(pm->_widgetBase, "env_volumetricSpotInsideMin", L"Spot Inside Gain Min", 0.01f, 3);
+			addFloatControl(pm->_widgetBase, "env_volumetricSpotInsideMax", L"Spot Inside Gain Max", 0.01f, 3);
 
 		pm->_shadowSettings = makeSectionTab(L"Shadow", L"Shadow");
 		addFloatControl(pm->_shadowSettings, "r_penumbraFilterMaxSize", L"Penumbra Filter Max Size", 0.0001f, 6);
@@ -140,6 +166,30 @@ namespace HexEditor
 		pm->_fog = makeSectionTab(L"Fog", L"Fog");
 		addToggleControl(pm->_fog, "r_fog", L"Fog on/off");
 		addFloatControl(pm->_fog, "r_fogDensity", L"Fog Density", 0.0001f, 5);
+
+		pm->_clouds = makeSectionTab(L"Clouds", L"Volumetric Clouds");
+		addToggleControl(pm->_clouds, "r_cloudEnable", L"Clouds on/off");
+		addIntControl(pm->_clouds, "r_cloudQuality", L"Quality Preset", 1);
+		addVector3Control(pm->_clouds, "r_cloudAabbMin", L"AABB Min");
+		addVector3Control(pm->_clouds, "r_cloudAabbMax", L"AABB Max");
+		addFloatControl(pm->_clouds, "r_cloudDensity", L"Density", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudCoverage", L"Coverage", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudErosion", L"Erosion", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudShapeScale", L"Shape Scale", 0.00001f, 6);
+		addFloatControl(pm->_clouds, "r_cloudDetailScale", L"Detail Scale", 0.00001f, 6);
+		addVector3Control(pm->_clouds, "r_cloudWindDirection", L"Wind Direction");
+		addFloatControl(pm->_clouds, "r_cloudWindSpeed", L"Wind Speed", 0.1f, 2);
+		addFloatControl(pm->_clouds, "r_cloudAnimationSpeed", L"Animation Speed", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudLightAbsorption", L"Shadow Absorption", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudViewAbsorption", L"View Absorption (Opacity)", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudPowderStrength", L"Powder Strength", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudAmbientStrength", L"Ambient Strength", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudShadowFloor", L"Shadow Floor", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudAnisotropy", L"Anisotropy", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudViewSteps", L"View Steps", 1.0f, 0);
+		addFloatControl(pm->_clouds, "r_cloudLightSteps", L"Light Steps", 1.0f, 0);
+		addFloatControl(pm->_clouds, "r_cloudStepScale", L"Step Scale", 0.01f, 3);
+		addFloatControl(pm->_clouds, "r_cloudMaxDistance", L"Max Distance", 1.0f, 1);
 
 		auto* gi = makeSectionTab(L"GI", L"Global Illumination");
 		addToggleControl(gi, "r_giEnable", L"Enable GI");
@@ -157,9 +207,16 @@ namespace HexEditor
 		addFloatControl(gi, "r_giSunDirectionalBoost", L"Sun Directional Boost", 0.05f, 3);
 		addFloatControl(gi, "r_giSunDirectionality", L"Sun Directionality", 0.01f, 3);
 		addFloatControl(gi, "r_giDiffuseInjection", L"Diffuse Injection", 0.01f, 3);
+		addFloatControl(gi, "r_giUnlitAlbedoInjection", L"Unlit Albedo Injection", 0.01f, 3);
 		addFloatControl(gi, "r_giAlbedoBleedBoost", L"Albedo Bleed Boost", 0.05f, 3);
 		addFloatControl(gi, "r_giColourBleedStrength", L"Colour Bleed Strength", 0.05f, 3);
 		addFloatControl(gi, "r_giEmissiveInjection", L"Emissive Injection", 0.01f, 3);
+		addFloatControl(gi, "r_giLocalLightInjection", L"Local Light Injection", 0.01f, 3);
+		addIntControl(gi, "r_giLocalLightMaxPerMesh", L"Local Light Max Per Mesh", 1);
+		addFloatControl(gi, "r_giLocalLightBaseSuppression", L"Local Light Base Suppression", 0.01f, 3);
+		addFloatControl(gi, "r_giLocalLightSunSuppression", L"Local Light Sun Suppression", 0.01f, 3);
+		addFloatControl(gi, "r_giLocalLightAlbedoWeight", L"Local Light Albedo Weight", 0.01f, 3);
+		addToggleControl(gi, "r_giLocalLightsOnlyDebug", L"Local Lights Only Debug");
 		addFloatControl(gi, "r_giProbeGatherBoost", L"Probe Gather Boost", 0.01f, 3);
 		addFloatControl(gi, "r_giScreenBounce", L"Screen Bounce", 0.01f, 3);
 		addFloatControl(gi, "r_giVoxelDecay", L"Voxel Decay", 0.001f, 3);

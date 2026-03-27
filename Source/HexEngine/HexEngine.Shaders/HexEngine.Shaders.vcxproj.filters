@@ -38,6 +38,7 @@
     <HexEngineShader Include="BilateralUpsample.shader" />
     <HexEngineShader Include="Billboard.shader" />
     <HexEngineShader Include="Bloom.shader" />
+    <HexEngineShader Include="BloomPhysical.shader" />
     <HexEngineShader Include="BuildShadowMask.shader" />
     <HexEngineShader Include="DebugRender.shader" />
     <HexEngineShader Include="Deferred.shader" />

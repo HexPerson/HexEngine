@@ -317,12 +317,30 @@
 		const float3 probeIrr = SampleProbeIrradianceTrilinear(clipIdx, uvw);
 		const float probeVis = SampleProbeVisibilityTrilinear(clipIdx, uvw);
 		const float3 probeGi = probeIrr * lerp(0.25f, 1.0f, probeVis) * 0.90f;
+		const float voxelMax = max(voxelRadiance.r, max(voxelRadiance.g, voxelRadiance.b));
+		const float voxelMin = min(voxelRadiance.r, min(voxelRadiance.g, voxelRadiance.b));
+		const float voxelChroma = saturate(voxelMax - voxelMin);
 
 		const float horizon = saturate(worldNormal.y * 0.5f + 0.5f);
-		float3 gi = lerp(voxelRadiance * 0.85f, probeGi, saturate(g_giParams2.y));
+		const float probeBlendBase = saturate(g_giParams2.y);
+		// Keep probe contribution lower in strongly chromatic voxel regions (typical local colored lights)
+		// to avoid desaturating into neutral/white halos.
+		const float probeBlend = probeBlendBase * (1.0f - voxelChroma * 0.75f);
+		float3 gi = lerp(voxelRadiance * 0.85f, probeGi, saturate(probeBlend));
 		gi *= lerp(0.55f, 1.0f, horizon);
 		gi *= (1.0f - voxelOcc * 0.12f);
 		gi += screenBounce * g_giParams2.x;
+
+		// Preserve voxel tint in high-chroma regions after probe/screen blending.
+		const float giLum = dot(gi, float3(0.2126f, 0.7152f, 0.0722f));
+		const float voxelLum = dot(voxelRadiance, float3(0.2126f, 0.7152f, 0.0722f));
+		if (voxelLum > 1e-4f && giLum > 1e-4f)
+		{
+			const float3 voxelTint = max(0.0f.xxx, voxelRadiance / voxelLum);
+			const float3 giTinted = voxelTint * giLum;
+			const float tintStrength = saturate(voxelChroma * 1.8f) * saturate(voxelLum * 1.4f);
+			gi = lerp(gi, giTinted, tintStrength * 0.75f);
+		}
 
 		voxelRadianceOut = voxelRadiance;
 		voxelOccOut = voxelOcc;

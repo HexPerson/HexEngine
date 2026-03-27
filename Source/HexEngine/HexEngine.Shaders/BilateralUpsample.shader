@@ -45,7 +45,7 @@
 
 		upSampledDepth /= g_frustumDepths[3];
 
-		float3 color = 0.0f.xxx;
+		float4 color = 0.0f.xxxx;
 		float totalWeight = 0.0f;
 
 		// Select the closest downscaled pixels.
@@ -61,14 +61,13 @@
 		for (int i = 0; i < 4; i++)
 		{
 
-			float3 downscaledColor = shaderTexture.Load(int3(screenPosDownscaled + float2(offsets[i].x, offsets[i].y), 0)).rgb;
+			float4 downscaledColor = shaderTexture.Load(int3(screenPosDownscaled + float2(offsets[i].x, offsets[i].y), 0));
 
-			float downscaledDepth = GBUFFER_NORMAL.Load(int3(screenPosDownscaled + float2(offsets[i].x, offsets[i].y), 1)).w;
-
-			downscaledDepth /= g_frustumDepths[3];
-
+			float downscaledDepth = GBUFFER_NORMAL.Load(int3(screenPosDownscaled + float2(offsets[i].x, offsets[i].y), 0)).w;
 			if (downscaledDepth == -1)
 				downscaledDepth = g_frustumDepths[3];
+
+			downscaledDepth /= g_frustumDepths[3];
 
 			float currentWeight = 1.0f;
 			currentWeight *= max(0.0f, 1.0f - (1.0f) * abs(downscaledDepth - upSampledDepth));
@@ -78,11 +77,11 @@
 
 		}
 
-		float3 volumetricLight;
+		float4 volumetricLight;
 		const float epsilon = 0.0001f;
-		volumetricLight.xyz = color / (totalWeight + epsilon);
+		volumetricLight = color / (totalWeight + epsilon);
 
-		return float4(volumetricLight.xyz, 1.0f);
+		return volumetricLight;
 
 		//return colour;
 	}

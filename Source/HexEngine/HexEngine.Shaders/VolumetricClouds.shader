@@ -1,190 +1,242 @@
-"Requirements"
-{
-	//ShadowMaps
-}
 "InputLayout"
 {
-	PosNormTanBinTex_INSTANCED
+	PosTexColour
 }
 "VertexShaderIncludes"
 {
-	MeshCommon
+	UICommon
 }
 "PixelShaderIncludes"
 {
-	MeshCommon
+	UICommon
 	Atmosphere
-	ShadowUtils
 	Utils
-	LightingUtils
 }
 "VertexShader"
 {
-	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance)
+	UIPixelInput ShaderMain(UIVertexInput input)
 	{
-		MeshPixelInput output;
+		UIPixelInput output;
 
-		input.position.w = 1.0f;
-
-		output.cullDistance = 0.5f;
-
-		output.position = mul(input.position, instance.world);
-		output.position = mul(output.position, g_viewMatrix);
-		output.position = mul(output.position, g_projectionMatrix);
-
-		output.positionWS = mul(input.position, instance.world);
-
+		output.position = input.position;
 		output.texcoord = input.texcoord;
-
-		output.normal = mul(input.normal, (float3x3)instance.world);
-		output.normal = normalize(output.normal);
-
-		output.tangent = mul(input.tangent, (float3x3)instance.world);
-		output.tangent = normalize(output.tangent);
-
-		output.binormal = mul(input.binormal, (float3x3)instance.world);
-		output.binormal = normalize(output.binormal);
-
-		// Determine the viewing direction based on the position of the camera and the position of the vertex in the world.
-		output.viewDirection.xyz = g_eyePos.xyz - output.positionWS.xyz;
-
-		// Normalize the viewing direction vector.
-		output.viewDirection.xyz = normalize(output.viewDirection.xyz);
-
-		output.colour = instance.colour;
+		output.positionSS = output.position;
+		output.colour = input.colour;
 
 		return output;
 	}
 }
 "PixelShader"
 {
-	//SHADOWMAPS_RESOURCE(0); // 
+	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 
-	Texture2D g_splatMap : register(t0);
-	Texture3D g_noiseMap : register(t1);
+	Texture2D g_sceneColour : register(t5);
+	Texture2D g_noiseTexture : register(t6);
+	Texture3D g_shapeNoise : register(t7);
+	Texture3D g_detailNoise : register(t8);
 
+	SamplerState g_pointSampler : register(s2);
+	SamplerState g_mirrorSampler : register(s3);
+	SamplerState g_linearSampler : register(s4);
 
-	//Texture2D g_depthMaps[4] : register(t4);
+	cbuffer CloudConstants : register(b4)
+	{
+		float4 g_cloudBoundsMin;
+		float4 g_cloudBoundsMax;
+		float4 g_cloudParams0; // x=density, y=coverage, z=erosion, w=maxDistance
+		float4 g_cloudParams1; // x=absorption, y=powder, z=anisotropy, w=stepScale
+		float4 g_cloudParams2; // x=shapeScale, y=detailScale, z=windSpeed, w=animationSpeed
+		float4 g_cloudParams3; // x=viewAbsorption, y=ambientStrength, z=shadowFloor, w=phaseBoost
+		float4 g_cloudWindDirection; // xyz=wind direction, w=quality preset
+		float4 g_cloudMarch; // x=view steps, y=light steps
+	};
 
-	SamplerState g_textureSampler : register(s0);
-	SamplerComparisonState g_cmpSampler : register(s1);
-	SamplerState g_textureSamplerMirror : register(s3);
+	static const float PI = 3.14159265f;
 
-	static const int numStepsLight = 8;
-	static const float lightAbsorptionTowardSun = 1.0f;
-	static const float darknessThreshold = 0.2f;
-	static const float lightAbsorbptionThroughCloud = 1.0f;
+	float Hash12(float2 p)
+	{
+		const float h = dot(p, float2(127.1f, 311.7f));
+		return frac(sin(h) * 43758.5453123f);
+	}
 
 	float2 RayBoxDist(float3 boundsMin, float3 boundsMax, float3 rayOrigin, float3 rayDir)
 	{
-		float3 t0 = (boundsMin - rayOrigin) / rayDir;
-		float3 t1 = (boundsMax - rayOrigin) / rayDir;
-		float3 tmin = min(t0, t1);
-		float3 tmax = max(t0, t1);
+		float3 safeDir = rayDir;
+		safeDir.x = abs(safeDir.x) < 1e-5f ? (safeDir.x < 0.0f ? -1e-5f : 1e-5f) : safeDir.x;
+		safeDir.y = abs(safeDir.y) < 1e-5f ? (safeDir.y < 0.0f ? -1e-5f : 1e-5f) : safeDir.y;
+		safeDir.z = abs(safeDir.z) < 1e-5f ? (safeDir.z < 0.0f ? -1e-5f : 1e-5f) : safeDir.z;
+		const float3 invDir = 1.0f / safeDir;
+		const float3 t0 = (boundsMin - rayOrigin) * invDir;
+		const float3 t1 = (boundsMax - rayOrigin) * invDir;
+		const float3 tmin = min(t0, t1);
+		const float3 tmax = max(t0, t1);
 
-		float dstA = max(max(tmin.x, tmin.y), tmin.z);
-		float dstB = min(tmax.x, min(tmax.y, tmax.z));
+		const float dstA = max(max(tmin.x, tmin.y), tmin.z);
+		const float dstB = min(tmax.x, min(tmax.y, tmax.z));
 
-		float dstToBox = max(0, dstA);
-		float dstInsideBox = max(0, dstB - dstToBox);
+		const float dstToBox = max(0.0f, dstA);
+		const float dstInsideBox = max(0.0f, dstB - dstToBox);
 
 		return float2(dstToBox, dstInsideBox);
-
 	}
 
-	float GetDensity(float3 position)
+	float HenyeyGreenstein(float cosTheta, float anisotropy)
 	{
-		float3 texCoord = (position.xyz + 100.0f) / 200.0f;
-
-		texCoord *= 1.0f;
-
-		float4 cloudNoise = g_noiseMap.SampleLevel(g_textureSamplerMirror, texCoord/*float3(input.texcoord.xy, ySamplePos)*/, 0.0f);
-
-		return cloudNoise.r;
+		const float g = clamp(anisotropy, -0.95f, 0.95f);
+		const float denom = max(1e-4f, 1.0f + g * g - 2.0f * g * cosTheta);
+		return (1.0f - g * g) / (4.0f * PI * pow(denom, 1.5f));
 	}
 
-	float LightMarch(float3 position, float3 boundsMin, float3 boundsMax)
+	float3 GetWorldRay(float2 uv)
 	{
-		float3 dirToLight = normalize(g_lightPosition.xyz - position);
+		float4 clipPos = float4(uv * 2.0f - 1.0f, 1.0f, 1.0f);
+		clipPos.y *= -1.0f;
+		float4 worldPos = mul(clipPos, g_viewProjectionMatrixInverse);
+		worldPos.xyz /= max(1e-5f, worldPos.w);
+		return normalize(worldPos.xyz - g_eyePos.xyz);
+	}
 
-		float dstInsideBox = RayBoxDist(boundsMin, boundsMax, position, 1 / dirToLight).y;
+	float SampleCloudDensity(float3 worldPos, float3 boundsMin, float3 boundsMax, float3 windOffset)
+	{
+		const float3 boundsSize = max(boundsMax - boundsMin, 1e-3f.xxx);
+		const float3 localUVW = (worldPos - boundsMin) / boundsSize;
 
-		float stepSize = dstInsideBox / numStepsLight;
-		float totalDensity = 0;
+		if (any(localUVW < 0.0f.xxx) || any(localUVW > 1.0f.xxx))
+			return 0.0f;
 
-		for (int step = 0; step < numStepsLight; step++) {
-			position += dirToLight * stepSize;
-			totalDensity += max(0, GetDensity(position) * stepSize);
+		const float shape = g_shapeNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.x + windOffset, 0.0f).r;
+		const float detail = g_detailNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r;
+
+		const float height = saturate(localUVW.y);
+		const float heightMask = smoothstep(0.03f, 0.22f, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
+
+		const float coverage = saturate(g_cloudParams0.y);
+		const float coverageThreshold = 1.0f - coverage;
+		float cloud = saturate((shape - coverageThreshold) / max(0.001f, coverage));
+		cloud = saturate(cloud - (1.0f - detail) * g_cloudParams0.z);
+
+		return min(cloud * heightMask * g_cloudParams0.x, 2.0f);
+	}
+
+	float MarchToLight(float3 samplePos, float3 boundsMin, float3 boundsMax, float3 windOffset, float3 sunDir, int lightSteps)
+	{
+		const float2 lightHit = RayBoxDist(boundsMin, boundsMax, samplePos, sunDir);
+		if (lightHit.y <= 0.0f)
+			return 1.0f;
+
+		const float stepLen = max(1.0f, lightHit.y / max(1, lightSteps));
+		const float invCloudHeight = rcp(max(100.0f, boundsMax.y - boundsMin.y));
+		float travelled = 0.0f;
+		float opticalDepth = 0.0f;
+
+		[loop]
+		for (int i = 0; i < lightSteps; ++i)
+		{
+			if (travelled >= lightHit.y)
+				break;
+
+			const float3 p = samplePos + sunDir * travelled;
+			const float density = SampleCloudDensity(p, boundsMin, boundsMax, windOffset);
+			opticalDepth += density * stepLen * invCloudHeight;
+			travelled += stepLen;
 		}
 
-		float transmittance = exp(-totalDensity * lightAbsorptionTowardSun);
-		return darknessThreshold + transmittance * (1 - darknessThreshold);
+		return max(g_cloudParams3.z, exp(-opticalDepth * g_cloudParams1.x));
 	}
 
-
-	float4 ShaderMain(MeshPixelInput input) : SV_TARGET
+	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
-		//return float4(1,0,0,1);
+		const float2 uv = input.texcoord;
+		float pixelDepth = GBUFFER_NORMAL.Sample(g_pointSampler, uv).w;
+		if (pixelDepth <= 0.0f || pixelDepth == -1.0f)
+			pixelDepth = g_frustumDepths[3];
 
-		//float ySamplePos = (input.positionWS.y + 100.0f) / 200.0f;
+		const float3 boundsMin = g_cloudBoundsMin.xyz;
+		const float3 boundsMax = g_cloudBoundsMax.xyz;
+		const float3 eyePos = g_eyePos.xyz;
+		const float3 rayDir = GetWorldRay(uv);
+		const float2 cloudHit = RayBoxDist(boundsMin, boundsMax, eyePos, rayDir);
 
-		float3 rayDir = normalize(input.positionWS.xyz - g_eyePos.xyz);		
+		if (cloudHit.y <= 0.0f)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-		const float3 boundsMin = float3(-200.0f, -200.0f, -200.0f);
-		const float3 boundsMax = float3(200.0f, 200.0f, 200.0f);
+		const float entryDist = cloudHit.x;
+		float maxTraceDistance = min(cloudHit.y, max(0.0f, pixelDepth - entryDist));
+		maxTraceDistance = min(maxTraceDistance, g_cloudParams0.w);
+		if (maxTraceDistance <= 0.0f)
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-		float2 boxDistance = RayBoxDist(boundsMin, boundsMax, g_eyePos.xyz, rayDir);
-
-		bool didHitCloudVolume = boxDistance.y != 0;
-
-		if (didHitCloudVolume)
+		int viewSteps = max(8, (int)g_cloudMarch.x);
+		int lightSteps = max(2, (int)g_cloudMarch.y);
+		const float qualityPreset = g_cloudWindDirection.w;
+		if (qualityPreset <= 0.5f)
 		{
-			float3 marchStart = g_eyePos.xyz + rayDir * boxDistance.x;
-			float totalLength = boxDistance.y;
+			viewSteps = max(8, (int)(viewSteps * 0.80f));
+			lightSteps = max(2, (int)(lightSteps * 0.70f));
+		}
+		else if (qualityPreset >= 1.5f)
+		{
+			viewSteps = (int)(viewSteps * 1.15f);
+			lightSteps = (int)(lightSteps * 1.20f);
+		}
 
-			//float totalDensity = 0.0f;
-			float transmittance = 1.0f;
-			float3 lightEnergy = 0.0f;
+		float baseStep = maxTraceDistance / max(1, viewSteps);
+		baseStep = max(1.0f, baseStep * g_cloudParams1.w);
+		const float invCloudHeight = rcp(max(100.0f, boundsMax.y - boundsMin.y));
 
-			float dstToBox = boxDistance.x;
-			float dstInsideBox = boxDistance.y;
+		const float2 noiseUv = uv * float2(max(1.0f, g_screenWidth / 128.0f), max(1.0f, g_screenHeight / 128.0f));
+		const float noise = g_noiseTexture.Sample(g_linearSampler, noiseUv).r;
+		const float jitter = frac(noise + Hash12(input.position.xy) + frac(g_time * 0.1337f));
 
-			const float stepSize = 10.0f;
-			float dstTravelled = 0.0f;
-			float dstLimit = min(dstToBox, dstInsideBox);
+		const float3 windDir = normalize(g_cloudWindDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+		const float3 windOffset = windDir * g_cloudParams2.z * g_cloudParams2.w * (g_time * 0.01f);
+		const float3 sunDir = normalize(-g_lightDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+		const float3 sunColour = getSunColour() * max(0.0f, g_globalLight[0]);
+		const float hgPhase = HenyeyGreenstein(dot(rayDir, sunDir), g_cloudParams1.z);
+		const float isotropicPhase = 1.0f / (4.0f * PI);
+		const float phase = lerp(isotropicPhase, hgPhase, 0.75f) * g_cloudParams3.w;
+		const float3 ambientSky = lerp(g_globalLight.yzw, g_atmosphere.ambientLight.rgb, 0.60f) * g_cloudParams3.y;
 
-			//float3 dirToLight = normalize(g_lightPosition.xyz - input.positionWS.xyz);
+		float transmittance = 1.0f;
+		float3 cloudLight = 0.0f.xxx;
 
-			//float cosAngle = dot(rayDir, dirToLight);
-			//float phaseVal = phase(cosAngle);
+		float travelled = baseStep * jitter;
+		[loop]
+		for (int i = 0; i < viewSteps; ++i)
+		{
+			if (travelled >= maxTraceDistance)
+				break;
 
-			while(dstTravelled < dstLimit)
+			const float3 samplePos = eyePos + rayDir * (entryDist + travelled);
+			const float density = SampleCloudDensity(samplePos, boundsMin, boundsMax, windOffset);
+
+			if (density > 0.0001f)
 			{
-				float density = /*totalLength / 200.0f **/ GetDensity(marchStart);
+				const float lightTrans = MarchToLight(samplePos, boundsMin, boundsMax, windOffset, sunDir, lightSteps);
+				const float powder = 1.0f + g_cloudParams1.y * (1.0f - lightTrans);
+				const float scatter = density * baseStep * invCloudHeight * transmittance;
+				const float3 directLight = lightTrans * powder * phase * sunColour;
+				const float3 ambientLight = ambientSky * (0.35f + (1.0f - lightTrans) * 0.65f);
+				cloudLight += scatter * (directLight + ambientLight);
 
-				if (density > 0.0f)
-				{
-					float lightTransmittance = LightMarch(marchStart, boundsMin, boundsMax);
-					lightEnergy += density * stepSize * transmittance * lightTransmittance;// *phaseVal;
-					transmittance *= exp(-density * stepSize * lightAbsorbptionThroughCloud);
-
-					if (transmittance < 0.01f)
-						break;
-				}
-
-				//totalDensity += density;
-
-				dstTravelled += stepSize;
-				marchStart += rayDir * dstTravelled;
+				transmittance *= exp(-density * baseStep * invCloudHeight * g_cloudParams3.x);
+				if (transmittance < 0.01f)
+					break;
 			}
 
-			//totalDensity /= 10.0f;
-
-			lightEnergy = saturate(lightEnergy);
-
-			return float4(lightEnergy.rgb, lightEnergy.r);
+			travelled += baseStep;
 		}
 
-		return float4(0, 0, 0, 0);	
+		// Keep dense cores from collapsing to pure black under aggressive shadowing.
+		cloudLight = max(cloudLight, ambientSky * (1.0f - transmittance) * 0.12f);
+
+		const float alpha = saturate(1.0f - transmittance);
+		if (alpha <= 1e-4f)
+			return 0.0f.xxxx;
+
+		// Clouds are composited with non-premultiplied alpha.
+		const float safeAlpha = max(0.03f, alpha);
+		const float3 straightCloud = saturate(cloudLight / safeAlpha);
+		return float4(straightCloud, alpha);
 	}
 }

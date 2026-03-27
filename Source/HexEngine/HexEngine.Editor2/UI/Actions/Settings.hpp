@@ -20,6 +20,7 @@ namespace HexEditor
 		HexEngine::ComponentWidget* _shadowSettings = nullptr;
 		HexEngine::ComponentWidget* _colouring = nullptr;
 		HexEngine::ComponentWidget* _fog = nullptr;
+		HexEngine::ComponentWidget* _clouds = nullptr;
 		HexEngine::ComponentWidget* _ocean = nullptr;
 		HexEngine::ComponentWidget* _editor = nullptr;
 	};

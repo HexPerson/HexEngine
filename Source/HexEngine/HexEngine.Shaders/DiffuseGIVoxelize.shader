@@ -244,10 +244,14 @@
 					// from triangle-budget/coverage changes while moving clipmaps.
 					const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 					const float temporalKeep = lerp(0.80f, 0.94f, warmStabilize);
-					float3 radiance = previous.rgb * temporalKeep + injected * (1.0f - temporalKeep);
+					const float injectedLum = dot(injected, float3(0.2126f, 0.7152f, 0.0722f));
+					// If there's little/no new injection, reduce history retention so stale neutral energy fades out.
+					const float injectionPresence = saturate(injectedLum * 2.5f);
+					const float effectiveKeep = lerp(0.20f, temporalKeep, injectionPresence);
+					float3 radiance = previous.rgb * effectiveKeep + injected * (1.0f - effectiveKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
-					const float3 deltaLimit = (0.08f + previous.rgb * 0.30f).xxx;
+					const float3 deltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
 					radiance = clamp(radiance, previous.rgb - deltaLimit, previous.rgb + deltaLimit);
 					radiance = min(radiance, 32.0f.xxx);
 

@@ -139,6 +139,12 @@ namespace HexEngine
 		uint32_t _activeClipmap = 0;
 		bool _created = false;
 		float _resolveStabilityBoost = 0.0f;
+		bool _lastLocalLightsOnlyDebug = false;
+		float _lastLocalLightInjection = 1.0f;
+		int32_t _lastLocalLightMaxPerMesh = 20;
+		float _lastLocalLightBaseSuppression = 0.85f;
+		float _lastLocalLightSunSuppression = 1.0f;
+		float _lastLocalLightAlbedoWeight = 0.0f;
 		math::Vector3 _lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		bool _lastSunDirectionInitialized = false;
 		uint32_t _sunRelightFramesRemaining = 0;
@@ -148,7 +154,6 @@ namespace HexEngine
 		std::array<std::vector<dx::BoundingBox>, ClipmapCount> _dirtyRegions = {};
 		std::unordered_map<StaticMeshComponent*, MeshTrackingState> _meshTracking;
 		std::unordered_map<const Material*, math::Vector3> _materialAlbedoCache;
-		std::array<std::unordered_map<StaticMeshComponent*, uint8_t>, ClipmapCount> _clipmapMeshHold = {};
 		std::vector<GpuVoxelTriangle> _voxelTriangleUpload;
 
 		ITexture2D* _giHalfRes = nullptr;

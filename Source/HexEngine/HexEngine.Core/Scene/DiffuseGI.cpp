@@ -3,6 +3,8 @@
 #include "../HexEngine.hpp"
 #include "../Entity/Component/Camera.hpp"
 #include "../Entity/Component/DirectionalLight.hpp"
+#include "../Entity/Component/PointLight.hpp"
+#include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
 #include "../Entity/Component/Transform.hpp"
 #include "../Graphics/DebugRenderer.hpp"
@@ -11,8 +13,8 @@
 #include "../GUI/GuiRenderer.hpp"
 #include "Scene.hpp"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
-#include <numeric>
 #include <unordered_set>
 
 namespace HexEngine
@@ -38,9 +40,16 @@ namespace HexEngine
 	HVar r_giSunDirectionalBoost("r_giSunDirectionalBoost", "Directional boost applied to sun-facing GI injection", 2.0f, 0.0f, 8.0f);
 	HVar r_giSunDirectionality("r_giSunDirectionality", "Directional transport/shadowing strength for sun GI", 0.85f, 0.0f, 1.0f);
 	HVar r_giDiffuseInjection("r_giDiffuseInjection", "Diffuse albedo energy injected into GI voxels", 0.08f, 0.0f, 4.0f);
+	HVar r_giUnlitAlbedoInjection("r_giUnlitAlbedoInjection", "Baseline diffuse albedo injection independent of direct lighting", 0.0f, 0.0f, 1.0f);
 	HVar r_giAlbedoBleedBoost("r_giAlbedoBleedBoost", "Boost for albedo-colored diffuse bounce injection", 3.0f, 0.0f, 12.0f);
 	HVar r_giColourBleedStrength("r_giColourBleedStrength", "Extra multiplier for saturated color transfer (red/green/blue bleed)", 1.0f, 0.0f, 4.0f);
 	HVar r_giEmissiveInjection("r_giEmissiveInjection", "Emissive energy injected into GI voxels", 0.75f, 0.0f, 16.0f);
+	HVar r_giLocalLightInjection("r_giLocalLightInjection", "Point/spot light energy injected into GI voxels", 2.5f, 0.0f, 32.0f);
+	HVar r_giLocalLightMaxPerMesh("r_giLocalLightMaxPerMesh", "Maximum local point/spot lights considered per mesh for GI injection", 20, 1, 64);
+	HVar r_giLocalLightBaseSuppression("r_giLocalLightBaseSuppression", "How strongly local-light influence suppresses neutral/sun GI base around the light", 0.85f, 0.0f, 1.0f);
+	HVar r_giLocalLightSunSuppression("r_giLocalLightSunSuppression", "How strongly local-light influence suppresses sun GI injection on the same triangles", 1.0f, 0.0f, 1.0f);
+	HVar r_giLocalLightAlbedoWeight("r_giLocalLightAlbedoWeight", "How strongly local-light GI is tinted by receiver albedo (0=preserve light colour)", 0.0f, 0.0f, 1.0f);
+	HVar r_giLocalLightsOnlyDebug("r_giLocalLightsOnlyDebug", "Debug mode: inject only local point/spot light bounce into GI", false, false, true);
 	HVar r_giProbeGatherBoost("r_giProbeGatherBoost", "Probe raymarch energy boost before temporal filtering", 0.90f, 0.1f, 8.0f);
 	HVar r_giScreenBounce("r_giScreenBounce", "Screen-space diffuse bounce assist intensity", 0.0f, 0.0f, 2.0f);
 	HVar r_giUseTextureTint("r_giUseTextureTint", "Use albedo texture readback to tint GI injection (cached per material)", true, false, true);
@@ -49,9 +58,6 @@ namespace HexEngine
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
-	HVar r_giDeterministicTriangleSampling("r_giDeterministicTriangleSampling", "Use stable deterministic triangle sampling for GPU voxelization", false, false, true);
-	HVar r_giClipmapGatherPaddingVoxels("r_giClipmapGatherPaddingVoxels", "Extra voxel units added around clipmap bounds for stable mesh gather", 2.0f, 0.0f, 12.0f);
-	HVar r_giClipmapMeshHoldFrames("r_giClipmapMeshHoldFrames", "How many frames meshes are kept in clipmap gather after leaving bounds", 2, 0, 8);
 	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap)", 0, 0, 4);
 	HVar r_giVoxelResolution("r_giVoxelResolution", "Per-clipmap voxel resolution", 128, 16, 256);
 	HVar r_giClipmapBaseExtent("r_giClipmapBaseExtent", "Half-extent of first GI clipmap in world units", 56.0f, 16.0f, 4096.0f);
@@ -143,6 +149,8 @@ namespace
 		auto* sun = scene->GetSunLight();
 		if (sun == nullptr)
 			return base;
+		if (!sun->GetInjectIntoGI())
+			return base;
 
 		const auto sunColour = sun->GetDiffuseColour();
 		const float sunStrength = std::max(0.0f, sun->GetLightMultiplier() * sun->GetLightStrength());
@@ -158,6 +166,9 @@ namespace
 
 		if (auto* sun = scene->GetSunLight(); sun != nullptr)
 		{
+			if (!sun->GetInjectIntoGI())
+				return sunDirection;
+
 			if (auto* sunEntity = sun->GetEntity(); sunEntity != nullptr)
 			{
 				if (auto* sunTransform = sunEntity->GetComponent<HexEngine::Transform>(); sunTransform != nullptr)
@@ -174,22 +185,6 @@ namespace
 		return sunDirection;
 	}
 
-	static uint32_t ComputeCoprimeStep(uint32_t n, uint32_t seed)
-	{
-		if (n <= 1u)
-			return 1u;
-
-		uint32_t step = (seed % (n - 1u)) + 1u;
-		while (std::gcd(step, n) != 1u)
-		{
-			++step;
-			if (step >= n)
-			{
-				step = 1u;
-			}
-		}
-		return step;
-	}
 }
 
 namespace HexEngine
@@ -205,6 +200,12 @@ namespace HexEngine
 		_frameCounter = 0;
 		_activeClipmap = 0;
 		_resolveStabilityBoost = 0.0f;
+		_lastLocalLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
+		_lastLocalLightInjection = r_giLocalLightInjection._val.f32;
+		_lastLocalLightMaxPerMesh = r_giLocalLightMaxPerMesh._val.i32;
+		_lastLocalLightBaseSuppression = r_giLocalLightBaseSuppression._val.f32;
+		_lastLocalLightSunSuppression = r_giLocalLightSunSuppression._val.f32;
+		_lastLocalLightAlbedoWeight = r_giLocalLightAlbedoWeight._val.f32;
 		_lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
@@ -217,10 +218,6 @@ namespace HexEngine
 		}
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
-		for (auto& held : _clipmapMeshHold)
-		{
-			held.clear();
-		}
 		for (auto& regions : _dirtyRegions)
 		{
 			regions.clear();
@@ -328,10 +325,6 @@ namespace HexEngine
 		DestroyClipmapResources();
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
-		for (auto& held : _clipmapMeshHold)
-		{
-			held.clear();
-		}
 		for (auto& regions : _dirtyRegions)
 		{
 			regions.clear();
@@ -356,6 +349,12 @@ namespace HexEngine
 		_voxelShiftShader = nullptr;
 		_created = false;
 		_resolveStabilityBoost = 0.0f;
+		_lastLocalLightsOnlyDebug = false;
+		_lastLocalLightInjection = 1.0f;
+		_lastLocalLightMaxPerMesh = 20;
+		_lastLocalLightBaseSuppression = 0.85f;
+		_lastLocalLightSunSuppression = 1.0f;
+		_lastLocalLightAlbedoWeight = 0.0f;
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
@@ -1061,6 +1060,8 @@ namespace HexEngine
 		const float extent = level.extent;
 		const float invExtent = extent > 0.0f ? (1.0f / extent) : 0.0f;
 		const math::Vector3 sunTint = ComputeSunTint(scene);
+		const bool sunInjectEnabled = scene != nullptr && scene->GetSunLight() != nullptr && scene->GetSunLight()->GetInjectIntoGI();
+		const float sunInjectScale = sunInjectEnabled ? 1.0f : 0.0f;
 		const uint32_t frameBudget = GetFrameBudget();
 		const dx::BoundingBox clipBounds(level.center, math::Vector3(extent, extent, extent));
 
@@ -1072,9 +1073,9 @@ namespace HexEngine
 			{
 				level.opacityCpu[i] = ToUNorm8(0.01f);
 				const size_t c = i * 4u;
-				level.radianceCpu[c + 0] = sunTint.x * 0.08f;
-				level.radianceCpu[c + 1] = sunTint.y * 0.08f;
-				level.radianceCpu[c + 2] = sunTint.z * 0.08f;
+				level.radianceCpu[c + 0] = sunTint.x * 0.08f * sunInjectScale;
+				level.radianceCpu[c + 1] = sunTint.y * 0.08f * sunInjectScale;
+				level.radianceCpu[c + 2] = sunTint.z * 0.08f * sunInjectScale;
 				level.radianceCpu[c + 3] = 1.0f;
 			}
 			else
@@ -1204,7 +1205,7 @@ namespace HexEngine
 				++step;
 			}
 
-			math::Vector3 injection = sunTint * std::max(0.0f, r_giSunInjection._val.f32);
+			math::Vector3 injection = sunTint * std::max(0.0f, r_giSunInjection._val.f32) * sunInjectScale;
 			if (auto mat = smc->GetMaterial())
 			{
 				const auto emissive = mat->_properties.emissiveColour;
@@ -1354,13 +1355,25 @@ namespace HexEngine
 			? std::min(baseDecay, 0.72f)
 			: baseDecay;
 		_constants.params2 = math::Vector4(
-			r_giScreenBounce._val.f32,
+			r_giLocalLightsOnlyDebug._val.b ? 0.0f : r_giScreenBounce._val.f32,
 			r_giUseProbes._val.b ? 0.35f : 0.0f,
 			effectiveDecay,
 			r_giGpuVoxelize._val.b ? 1.0f : 0.0f);
 
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
-		const float sunDirectionality = std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f);
+		float sunStrength = 0.0f;
+		if (scene != nullptr)
+		{
+			if (auto* sun = scene->GetSunLight(); sun != nullptr)
+			{
+				if (sun->GetInjectIntoGI())
+					sunStrength = std::max(0.0f, sun->GetLightStrength() * sun->GetLightMultiplier());
+			}
+		}
+		const float sunPresence = std::clamp(sunStrength * std::max(0.0f, r_giSunInjection._val.f32), 0.0f, 1.0f);
+		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
+			? 0.0f
+			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresence;
 		_constants.params3 = math::Vector4(sunDirection.x, sunDirection.y, sunDirection.z, sunDirectionality);
 		const int32_t movementPreset = (r_giMovementPreset._val.i32 == 0 && g_pEnv != nullptr && g_pEnv->IsEditorMode())
 			? 1
@@ -1398,6 +1411,66 @@ namespace HexEngine
 
 		ApplyQualityPreset();
 
+		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
+		if (localLightsOnlyDebug != _lastLocalLightsOnlyDebug)
+		{
+			// Flush stale voxel history when changing local-light-only debug mode.
+			// This avoids old neutral/sun energy contaminating the local-light color test.
+			DestroyClipmapResources();
+			if (!CreateClipmapResources())
+			{
+				_created = false;
+				return;
+			}
+			for (auto& regions : _dirtyRegions)
+			{
+				regions.clear();
+			}
+			for (uint32_t i = 0; i < ClipmapCount; ++i)
+			{
+				_cachedVoxelTriangles[i].clear();
+				_cachedVoxelTrianglesValid[i] = false;
+				_cachedVoxelTrianglesFrame[i] = 0ull;
+				_clipmapWarmFramesRemaining[i] = 0u;
+			}
+			if (_giHistory != nullptr)
+			{
+				_giHistory->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+			if (_giResolved != nullptr)
+			{
+				_giResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+			if (_giHalfRes != nullptr)
+			{
+				_giHalfRes->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+			_lastLocalLightsOnlyDebug = localLightsOnlyDebug;
+		}
+
+		const bool localLightTuningChanged =
+			(std::abs(r_giLocalLightInjection._val.f32 - _lastLocalLightInjection) > 1e-4f) ||
+			(r_giLocalLightMaxPerMesh._val.i32 != _lastLocalLightMaxPerMesh) ||
+			(std::abs(r_giLocalLightBaseSuppression._val.f32 - _lastLocalLightBaseSuppression) > 1e-4f) ||
+			(std::abs(r_giLocalLightSunSuppression._val.f32 - _lastLocalLightSunSuppression) > 1e-4f) ||
+			(std::abs(r_giLocalLightAlbedoWeight._val.f32 - _lastLocalLightAlbedoWeight) > 1e-4f);
+		if (localLightTuningChanged)
+		{
+			for (uint32_t i = 0; i < ClipmapCount; ++i)
+			{
+				_cachedVoxelTriangles[i].clear();
+				_cachedVoxelTrianglesValid[i] = false;
+				_cachedVoxelTrianglesFrame[i] = 0ull;
+				_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], 2u);
+				_clipmaps[i].dirty = true;
+			}
+			_lastLocalLightInjection = r_giLocalLightInjection._val.f32;
+			_lastLocalLightMaxPerMesh = r_giLocalLightMaxPerMesh._val.i32;
+			_lastLocalLightBaseSuppression = r_giLocalLightBaseSuppression._val.f32;
+			_lastLocalLightSunSuppression = r_giLocalLightSunSuppression._val.f32;
+			_lastLocalLightAlbedoWeight = r_giLocalLightAlbedoWeight._val.f32;
+		}
+
 		const uint32_t expectedHalfWidth = r_giHalfRes._val.b ? _halfWidth : _width;
 		const uint32_t expectedHalfHeight = r_giHalfRes._val.b ? _halfHeight : _height;
 		if (_giHalfRes != nullptr &&
@@ -1421,10 +1494,6 @@ namespace HexEngine
 			for (auto& regions : _dirtyRegions)
 			{
 				regions.clear();
-			}
-			for (auto& held : _clipmapMeshHold)
-			{
-				held.clear();
 			}
 			for (uint32_t i = 0; i < ClipmapCount; ++i)
 			{
@@ -1552,6 +1621,7 @@ namespace HexEngine
 		out.clear();
 		if (scene == nullptr || levelIndex >= ClipmapCount)
 			return 0u;
+		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
 
 		auto& level = _clipmaps[levelIndex];
 		const uint64_t cacheAge = (_frameCounter >= _cachedVoxelTrianglesFrame[levelIndex])
@@ -1564,95 +1634,100 @@ namespace HexEngine
 			return static_cast<uint32_t>(out.size());
 		}
 
-		const float voxelSizeWorld = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
-		const float gatherPadding = voxelSizeWorld * std::max(0.0f, r_giClipmapGatherPaddingVoxels._val.f32);
-		const float gatherExtent = level.extent + gatherPadding;
-		const dx::BoundingBox clipBounds(level.center, math::Vector3(gatherExtent, gatherExtent, gatherExtent));
-		const math::Vector3 clipMin = level.center - math::Vector3(gatherExtent, gatherExtent, gatherExtent);
-		const math::Vector3 clipMax = level.center + math::Vector3(gatherExtent, gatherExtent, gatherExtent);
+		const dx::BoundingBox clipBounds(level.center, math::Vector3(level.extent, level.extent, level.extent));
+		const math::Vector3 clipMin = level.center - math::Vector3(level.extent, level.extent, level.extent);
+		const math::Vector3 clipMax = level.center + math::Vector3(level.extent, level.extent, level.extent);
 		std::vector<StaticMeshComponent*> meshesInBounds;
 		scene->GatherStaticMeshesInBounds(clipBounds, meshesInBounds, true);
 
-		const int32_t holdFramesCfg = std::clamp(r_giClipmapMeshHoldFrames._val.i32, 0, 8);
-		auto& heldMeshes = _clipmapMeshHold[levelIndex];
-		if (holdFramesCfg <= 0)
+		struct LocalLightSample
 		{
-			heldMeshes.clear();
-		}
-		else
+			math::Vector3 position = math::Vector3::Zero;
+			math::Vector3 direction = math::Vector3(0.0f, 0.0f, 1.0f);
+			math::Vector3 colour = math::Vector3::Zero;
+			float radius = 0.0f;
+			float coneExponent = 1.0f;
+			bool isSpot = false;
+		};
+		std::vector<LocalLightSample> localLights;
 		{
-			std::unordered_set<StaticMeshComponent*> currentInside;
-			currentInside.reserve(meshesInBounds.size() * 2u + 1u);
-			for (auto* smc : meshesInBounds)
+			std::vector<PointLight*> pointLights;
+			scene->GetComponents<PointLight>(pointLights);
+			localLights.reserve(pointLights.size());
+			for (auto* light : pointLights)
 			{
-				if (smc == nullptr)
+				if (light == nullptr)
+					continue;
+				if (!light->GetInjectIntoGI())
+					continue;
+				auto* lightEntity = light->GetEntity();
+				if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
 					continue;
 
-				currentInside.insert(smc);
-				heldMeshes[smc] = static_cast<uint8_t>(holdFramesCfg);
-			}
-
-			std::vector<StaticMeshComponent*> allSceneMeshes;
-			scene->GetComponents<StaticMeshComponent>(allSceneMeshes);
-
-			std::unordered_set<StaticMeshComponent*> validSceneMeshes;
-			validSceneMeshes.reserve(allSceneMeshes.size() * 2u + 1u);
-			for (auto* smc : allSceneMeshes)
-			{
-				if (smc != nullptr)
-				{
-					validSceneMeshes.insert(smc);
-				}
-			}
-
-			for (auto it = heldMeshes.begin(); it != heldMeshes.end();)
-			{
-				StaticMeshComponent* smc = it->first;
-				if (smc == nullptr || validSceneMeshes.find(smc) == validSceneMeshes.end())
-				{
-					it = heldMeshes.erase(it);
+				const float radius = std::max(0.01f, light->GetRadius());
+				const auto diffuse = light->GetDiffuseColour();
+				// Match direct point-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
+				const float lightEnergy = std::max(0.0f, diffuse.w);
+				const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
+				const math::Vector3 scaledColour = lightColour * lightEnergy;
+				if (scaledColour.LengthSquared() <= 1e-8f)
 					continue;
-				}
 
-				if (currentInside.find(smc) != currentInside.end())
+				LocalLightSample sample = {};
+				sample.position = lightEntity->GetPosition();
+				if (sample.position.LengthSquared() <= 1e-8f)
 				{
-					++it;
-					continue;
+					sample.position = lightEntity->GetWorldTM().Translation();
 				}
-
-				if (it->second == 0u)
-				{
-					it = heldMeshes.erase(it);
-					continue;
-				}
-
-				--(it->second);
-				++it;
-			}
-
-			if (!heldMeshes.empty())
-			{
-				std::unordered_set<StaticMeshComponent*> merged = currentInside;
-				merged.reserve(currentInside.size() + heldMeshes.size() + 1u);
-				meshesInBounds.reserve(meshesInBounds.size() + heldMeshes.size());
-				for (const auto& kv : heldMeshes)
-				{
-					StaticMeshComponent* smc = kv.first;
-					if (smc != nullptr && merged.insert(smc).second)
-					{
-						meshesInBounds.push_back(smc);
-					}
-				}
+				sample.direction = math::Vector3(0.0f, 0.0f, 1.0f);
+				sample.colour = scaledColour;
+				sample.radius = radius;
+				sample.isSpot = false;
+				localLights.push_back(sample);
 			}
 		}
-		const bool deterministicSampling = r_giDeterministicTriangleSampling._val.b;
-		if (deterministicSampling)
 		{
-			std::sort(meshesInBounds.begin(), meshesInBounds.end(),
-				[](const StaticMeshComponent* a, const StaticMeshComponent* b)
+			std::vector<SpotLight*> spotLights;
+			scene->GetComponents<SpotLight>(spotLights);
+			localLights.reserve(localLights.size() + spotLights.size());
+			for (auto* light : spotLights)
+			{
+				if (light == nullptr)
+					continue;
+				if (!light->GetInjectIntoGI())
+					continue;
+				auto* lightEntity = light->GetEntity();
+				if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
+					continue;
+
+				const float radius = std::max(0.01f, light->GetRadius());
+				const auto diffuse = light->GetDiffuseColour();
+				// Match direct spot-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
+				const float lightEnergy = std::max(0.0f, diffuse.w);
+				const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
+				const math::Vector3 scaledColour = lightColour * lightEnergy;
+				if (scaledColour.LengthSquared() <= 1e-8f)
+					continue;
+
+				math::Vector3 lightDir = lightEntity->GetWorldTM().Forward();
+				if (lightDir.LengthSquared() <= 1e-8f)
+					lightDir = math::Vector3(0.0f, 0.0f, 1.0f);
+				else
+					lightDir.Normalize();
+
+				LocalLightSample sample = {};
+				sample.position = lightEntity->GetPosition();
+				if (sample.position.LengthSquared() <= 1e-8f)
 				{
-					return a < b;
-				});
+					sample.position = lightEntity->GetWorldTM().Translation();
+				}
+				sample.direction = lightDir;
+				sample.colour = scaledColour;
+				sample.radius = radius;
+				sample.coneExponent = std::clamp(light->GetConeSize(), 1.0f, 128.0f);
+				sample.isSpot = true;
+				localLights.push_back(sample);
+			}
 		}
 
 		uint32_t budget = static_cast<uint32_t>(std::max(256, r_giVoxelTriangleBudget._val.i32));
@@ -1665,37 +1740,14 @@ namespace HexEngine
 			budget = std::min<uint32_t>(budget * 3u, 300000u);
 		}
 
-		uint64_t totalTrianglesForBudget = 0ull;
-		if (deterministicSampling)
-		{
-			for (auto* smc : meshesInBounds)
-			{
-				if (smc == nullptr || smc->GetMesh() == nullptr)
-					continue;
-
-				auto* entity = smc->GetEntity();
-				if (entity == nullptr || entity->IsPendingDeletion())
-					continue;
-
-				const auto mesh = smc->GetMesh();
-				if (!mesh)
-					continue;
-
-				const auto& indices = mesh->GetIndices();
-				if (indices.size() < 3u)
-					continue;
-
-				totalTrianglesForBudget += static_cast<uint64_t>(indices.size() / 3u);
-			}
-		}
-
 		out.reserve(std::min<uint32_t>(budget, static_cast<uint32_t>(meshesInBounds.size()) * 64u));
 		const math::Vector3 sunTint = ComputeSunTint(scene);
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
 		float sunStrength = 0.0f;
 		if (auto* sun = scene->GetSunLight(); sun != nullptr)
 		{
-			sunStrength = std::max(0.0f, sun->GetLightMultiplier() * sun->GetLightStrength());
+			if (sun->GetInjectIntoGI())
+				sunStrength = std::max(0.0f, sun->GetLightMultiplier() * sun->GetLightStrength());
 		}
 		const float clipAttenuation = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
 
@@ -1728,10 +1780,11 @@ namespace HexEngine
 			const float albedoMin = std::min(albedoTint.x, std::min(albedoTint.y, albedoTint.z));
 			const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
 			const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
-			const float ambientDiffuseWeight = (sunStrength > 0.001f) ? 0.06f : 0.22f;
-			const math::Vector3 baseDiffuseBounce = albedoTint * (diffuseInject * ambientDiffuseWeight * (0.55f + bleedBoost * 0.30f) * colourBleedBoost);
+			const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
+			const float sunDrivenBase = std::max(0.0f, sunStrength * sunInject) * 0.04f;
+			const math::Vector3 baseDiffuseBounce = albedoTint * (diffuseInject * (unlitBase + sunDrivenBase) * (0.55f + bleedBoost * 0.30f) * colourBleedBoost);
 			const math::Vector3 baseEmissiveBounce = emissiveTint * emissiveStrength * emissiveInject;
-			const math::Vector3 triInjection =
+			const math::Vector3 triBaseInjection =
 				(baseDiffuseBounce + baseEmissiveBounce) * clipAttenuation;
 			const math::Vector3 sunTintedAlbedo = (albedoTint * sunTint) * clipAttenuation;
 
@@ -1744,30 +1797,88 @@ namespace HexEngine
 			if (vertices.empty() || indices.size() < 3u)
 				continue;
 
+			const uint32_t remaining = budget > out.size() ? (budget - static_cast<uint32_t>(out.size())) : 0u;
+			if (remaining == 0u)
+				break;
 			const uint32_t triangleCount = static_cast<uint32_t>(indices.size() / 3u);
-			if (triangleCount == 0u)
-				continue;
+			const uint32_t triStep = std::max<uint32_t>(1u, (triangleCount + remaining - 1u) / remaining);
 			const auto& worldTM = entity->GetWorldTM();
 			const auto& entityAabb = entity->GetWorldAABB();
 			const math::Vector3 entityCenter(entityAabb.Center.x, entityAabb.Center.y, entityAabb.Center.z);
 			const math::Vector3 entityExtents(entityAabb.Extents.x, entityAabb.Extents.y, entityAabb.Extents.z);
 			const math::Vector3 entityMin = entityCenter - entityExtents;
 			const math::Vector3 entityMax = entityCenter + entityExtents;
+			std::vector<uint32_t> meshLocalLightIndices;
+			if (!localLights.empty())
+			{
+				struct MeshLightCandidate
+				{
+					uint32_t lightIndex = 0u;
+					float distanceSq = 0.0f;
+				};
+				std::vector<MeshLightCandidate> meshLightCandidates;
+				meshLightCandidates.reserve(localLights.size());
+
+				for (uint32_t lightIndex = 0u; lightIndex < static_cast<uint32_t>(localLights.size()); ++lightIndex)
+				{
+					const auto& light = localLights[lightIndex];
+					float dx = 0.0f;
+					if (light.position.x < entityMin.x)
+						dx = entityMin.x - light.position.x;
+					else if (light.position.x > entityMax.x)
+						dx = light.position.x - entityMax.x;
+
+					float dy = 0.0f;
+					if (light.position.y < entityMin.y)
+						dy = entityMin.y - light.position.y;
+					else if (light.position.y > entityMax.y)
+						dy = light.position.y - entityMax.y;
+
+					float dz = 0.0f;
+					if (light.position.z < entityMin.z)
+						dz = entityMin.z - light.position.z;
+					else if (light.position.z > entityMax.z)
+						dz = light.position.z - entityMax.z;
+
+					const float distanceSq = dx * dx + dy * dy + dz * dz;
+					const float radiusSq = light.radius * light.radius;
+					if (distanceSq > radiusSq)
+						continue;
+
+					MeshLightCandidate candidate = {};
+					candidate.lightIndex = lightIndex;
+					candidate.distanceSq = distanceSq;
+					meshLightCandidates.push_back(candidate);
+				}
+
+				if (!meshLightCandidates.empty())
+				{
+					std::sort(meshLightCandidates.begin(), meshLightCandidates.end(),
+						[](const MeshLightCandidate& a, const MeshLightCandidate& b)
+						{
+							return a.distanceSq < b.distanceSq;
+						});
+					const uint32_t maxPerMesh = static_cast<uint32_t>(std::max(1, r_giLocalLightMaxPerMesh._val.i32));
+					const uint32_t keepCount = std::min<uint32_t>(maxPerMesh, static_cast<uint32_t>(meshLightCandidates.size()));
+					meshLocalLightIndices.reserve(keepCount);
+					for (uint32_t i = 0u; i < keepCount; ++i)
+					{
+						meshLocalLightIndices.push_back(meshLightCandidates[i].lightIndex);
+					}
+				}
+			}
 			const bool meshFullyInsideClip =
 				(entityMin.x >= clipMin.x && entityMax.x <= clipMax.x) &&
 				(entityMin.y >= clipMin.y && entityMax.y <= clipMax.y) &&
 				(entityMin.z >= clipMin.z && entityMax.z <= clipMax.z);
 
-			const auto appendTriangle = [&](uint32_t tri)
+			for (uint32_t tri = 0u; tri < triangleCount && out.size() < budget; tri += triStep)
 			{
-				if (tri >= triangleCount || out.size() >= budget)
-					return;
-
 				const uint32_t i0 = indices[tri * 3u + 0u];
 				const uint32_t i1 = indices[tri * 3u + 1u];
 				const uint32_t i2 = indices[tri * 3u + 2u];
 				if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
-					return;
+					continue;
 
 				const math::Vector4 v0w = math::Vector4::Transform(vertices[i0]._position, worldTM);
 				const math::Vector4 v1w = math::Vector4::Transform(vertices[i1]._position, worldTM);
@@ -1779,7 +1890,7 @@ namespace HexEngine
 				math::Vector3 faceNormal = (p1 - p0).Cross(p2 - p0);
 				const float faceNormalLengthSq = faceNormal.LengthSquared();
 				if (faceNormalLengthSq <= 1e-8f)
-					return;
+					continue;
 				faceNormal.Normalize();
 				const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
 				const float directSunBounce = sunFacing * sunStrength * sunInject * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
@@ -1799,7 +1910,7 @@ namespace HexEngine
 						triMax.y < clipMin.y || triMin.y > clipMax.y ||
 						triMax.z < clipMin.z || triMin.z > clipMax.z)
 					{
-						return;
+						continue;
 					}
 				}
 
@@ -1807,50 +1918,103 @@ namespace HexEngine
 				entry.p0 = math::Vector4(p0.x, p0.y, p0.z, 1.0f);
 				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, 1.0f);
 				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, 1.0f);
+
+				math::Vector3 localLightBounce = math::Vector3::Zero;
+				float localLightInfluence = 0.0f;
+				float localLightAttenuation = 0.0f;
+				if (!meshLocalLightIndices.empty())
+				{
+					const math::Vector3 triCenter = (p0 + p1 + p2) / 3.0f;
+					math::Vector3 localIrradiance = math::Vector3::Zero;
+					for (uint32_t localLightIdx : meshLocalLightIndices)
+					{
+						const auto& light = localLights[localLightIdx];
+						const math::Vector3 toLight = light.position - triCenter;
+						const float dist2 = toLight.LengthSquared();
+						const float radius2 = light.radius * light.radius;
+						if (dist2 <= 1e-8f || dist2 >= radius2)
+							continue;
+
+						const float dist = std::sqrt(dist2);
+						const math::Vector3 toLightDir = toLight / dist;
+						const float ndotl = std::max(faceNormal.Dot(toLightDir), 0.0f);
+						if (ndotl <= 0.0f)
+							continue;
+
+						float attenuation = std::clamp(1.0f - std::clamp(dist / light.radius, 0.0f, 1.0f), 0.0f, 1.0f);
+						attenuation = attenuation * attenuation;
+						if (light.isSpot)
+						{
+							const float spotCos = std::clamp(light.direction.Dot(-toLightDir), -1.0f, 1.0f);
+							if (spotCos <= 0.0f)
+								continue;
+							const float coneAtten = std::pow(spotCos, light.coneExponent);
+							// Match current direct spotlight behavior more closely (narrower effective footprint).
+							attenuation *= coneAtten;
+							attenuation *= coneAtten;
+						}
+
+						const float lightContribution = attenuation * ndotl;
+						localIrradiance += light.colour * lightContribution;
+						// Use a broader suppression term than raw irradiance so neutral base GI is reduced
+						// across the local-light footprint (not only at normal-facing hotspots).
+						const float suppressionInfluence = attenuation * (0.35f + 0.65f * ndotl);
+						localLightInfluence = std::max(localLightInfluence, suppressionInfluence);
+						localLightAttenuation = std::max(localLightAttenuation, attenuation);
+					}
+
+					const float localLum = localIrradiance.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f));
+					localIrradiance = localIrradiance / (1.0f + localLum * 0.5f);
+					const float localInject = std::max(0.0f, r_giLocalLightInjection._val.f32);
+					const float localAlbedoWeight = std::clamp(r_giLocalLightAlbedoWeight._val.f32, 0.0f, 1.0f);
+					const math::Vector3 whiteTint(1.0f, 1.0f, 1.0f);
+					const math::Vector3 localReceiverTint = whiteTint + (albedoTint - whiteTint) * localAlbedoWeight;
+					localLightBounce = (localIrradiance * localReceiverTint) * (localInject * (0.55f + bleedBoost * 0.12f));
+				}
+
+				math::Vector3 sunInjection = sunTintedAlbedo * (directSunBounce + directionalDiffuseBounce);
+				math::Vector3 baseInjection = triBaseInjection + sunInjection;
+				if (localLightsOnlyDebug)
+				{
+					baseInjection = math::Vector3::Zero;
+					sunInjection = math::Vector3::Zero;
+				}
+				if (localLightsOnlyDebug && localLightBounce.LengthSquared() <= 1e-8f)
+				{
+					// In local-light debug mode, only keep triangles that actually receive local-light bounce.
+					continue;
+				}
+				const float baseSuppression = std::clamp(r_giLocalLightBaseSuppression._val.f32, 0.0f, 1.0f);
+				const float localBounceLum = localLightBounce.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f));
+				const float localInfluenceCurve = std::sqrt(std::clamp(localLightInfluence, 0.0f, 1.0f));
+				const float localAttenuationCurve = std::pow(std::clamp(localLightAttenuation, 0.0f, 1.0f), 0.40f);
+				const float localLumCurve = std::clamp(localBounceLum * 0.8f, 0.0f, 1.0f);
+				const float localDominance = std::clamp(std::max(std::max(localInfluenceCurve, localLumCurve), localAttenuationCurve) * 1.35f, 0.0f, 1.0f);
+				const float sunSuppression = std::clamp(r_giLocalLightSunSuppression._val.f32, 0.0f, 1.0f);
+				const float sunSuppressionMask = localDominance * sunSuppression;
+				sunInjection *= (1.0f - sunSuppressionMask);
+				baseInjection = triBaseInjection + sunInjection;
+				const float baseScale = 1.0f - localDominance * baseSuppression;
+				if (localBounceLum > 1e-5f)
+				{
+					const math::Vector3 lumaWeights(0.2126f, 0.7152f, 0.0722f);
+					const float baseLum = baseInjection.Dot(lumaWeights);
+					math::Vector3 localTint = localLightBounce / localBounceLum;
+					localTint.x = std::clamp(localTint.x, 0.0f, 4.0f);
+					localTint.y = std::clamp(localTint.y, 0.0f, 4.0f);
+					localTint.z = std::clamp(localTint.z, 0.0f, 4.0f);
+					const math::Vector3 baseTintedByLocal = localTint * baseLum;
+					const float tintAmount = std::clamp(localDominance * baseSuppression * 0.80f, 0.0f, 1.0f);
+					baseInjection = baseInjection * (1.0f - tintAmount) + baseTintedByLocal * tintAmount;
+				}
 				const math::Vector3 triInjectionFinal =
-					triInjection + sunTintedAlbedo * (directSunBounce + directionalDiffuseBounce);
+					baseInjection * baseScale + localLightBounce;
 				entry.radianceOpacity = math::Vector4(
 					std::clamp(triInjectionFinal.x, 0.0f, 32.0f),
 					std::clamp(triInjectionFinal.y, 0.0f, 32.0f),
 					std::clamp(triInjectionFinal.z, 0.0f, 32.0f),
 					0.92f);
 				out.push_back(entry);
-			};
-
-			const uint32_t remaining = budget > out.size() ? (budget - static_cast<uint32_t>(out.size())) : 0u;
-			if (remaining == 0u)
-				break;
-
-			if (deterministicSampling)
-			{
-				uint32_t meshBudget = remaining;
-				if (totalTrianglesForBudget > 0ull)
-				{
-					const uint64_t proportional = static_cast<uint64_t>(triangleCount) * static_cast<uint64_t>(budget);
-					meshBudget = static_cast<uint32_t>(std::max<uint64_t>(1ull, proportional / totalTrianglesForBudget));
-					meshBudget = std::min(meshBudget, remaining);
-				}
-
-				const uint32_t samplesForMesh = std::max<uint32_t>(1u, std::min(meshBudget, triangleCount));
-				const size_t smcHash = (reinterpret_cast<size_t>(smc) >> 4u);
-				const uint32_t triOffset = (triangleCount > 1u)
-					? static_cast<uint32_t>(smcHash % static_cast<size_t>(triangleCount))
-					: 0u;
-				const uint32_t triStep = ComputeCoprimeStep(triangleCount, static_cast<uint32_t>(smcHash ^ (static_cast<size_t>(levelIndex) * 0x9e3779b9u)));
-
-				for (uint32_t sampleIdx = 0u; sampleIdx < samplesForMesh && out.size() < budget; ++sampleIdx)
-				{
-					const uint32_t tri = (triOffset + sampleIdx * triStep) % triangleCount;
-					appendTriangle(tri);
-				}
-			}
-			else
-			{
-				const uint32_t triStep = std::max<uint32_t>(1u, (triangleCount + remaining - 1u) / remaining);
-				for (uint32_t tri = 0u; tri < triangleCount && out.size() < budget; tri += triStep)
-				{
-					appendTriangle(tri);
-				}
 			}
 		}
 
@@ -1966,7 +2130,7 @@ namespace HexEngine
 		}
 		ID3D11Buffer* perShadowCasterCb = nullptr;
 		DirectionalLight* sun = scene->GetSunLight();
-		if (sun != nullptr && sun->GetDoesCastShadows())
+		if (sun != nullptr && sun->GetDoesCastShadows() && sun->GetInjectIntoGI())
 		{
 			if (auto* cb = g_pEnv->_graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerShadowCasterBuffer); cb != nullptr)
 			{
@@ -1988,7 +2152,7 @@ namespace HexEngine
 		if (giCb != nullptr)
 			context->CSSetConstantBuffers(4, 1, &giCb);
 
-		if (sun != nullptr && sun->GetDoesCastShadows())
+		if (sun != nullptr && sun->GetDoesCastShadows() && sun->GetInjectIntoGI())
 		{
 			for (int32_t i = 0; i < 6; ++i)
 			{

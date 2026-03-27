@@ -100,6 +100,7 @@
 #include "Entity/Component/ScriptComponent.hpp"
 #include "Entity/Component/NavigationComponent.hpp"
 #include "Entity/Component/SkeletalAnimationComponent.hpp"
+#include "Entity/Component/DayNightCycleComponent.hpp"
 
 #include "Plugin/PluginSystem.hpp"
 

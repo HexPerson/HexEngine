@@ -72,8 +72,9 @@
 		}
 
 		const float propagation = lerp(0.40f, 0.55f, dirStrength);
-		float3 mixed = lerp(blurred, max(blurred, directionalSample), 0.35f * dirStrength);
-		float3 outRgb = lerp(center.rgb, max(center.rgb, mixed), propagation);
+		// Use symmetric temporal blending to avoid channel "white locking" from max-only propagation.
+		float3 mixed = lerp(blurred, directionalSample, 0.35f * dirStrength);
+		float3 outRgb = lerp(center.rgb, mixed, propagation);
 		outRgb = min(outRgb, 32.0f.xxx);
 
 		const float outOcc = saturate(max(center.a * 0.985f, maxOcc * 0.95f));

@@ -421,6 +421,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\PointLight.hpp" />
     <ClInclude Include="Entity\Component\DirectionalLight.hpp" />
     <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp" />
+    <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp" />
     <ClInclude Include="Entity\Component\Transform.hpp" />
     <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
     <ClInclude Include="Entity\Messaging\Message.hpp" />
@@ -598,6 +599,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\PointLight.cpp" />
     <ClCompile Include="Entity\Component\DirectionalLight.cpp" />
     <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp" />
+    <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp" />
     <ClCompile Include="Entity\Component\Transform.cpp" />
     <ClCompile Include="Entity\Component\UpdateComponent.cpp" />
     <ClCompile Include="Entity\Messaging\MessageDispatcher.cpp" />
