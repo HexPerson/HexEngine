@@ -90,6 +90,8 @@ namespace HexEngine
 
 		void SetIsVolumetric(bool volumetric);
 		bool GetIsVolumetric() const;
+		void SetInjectIntoGI(bool injectIntoGI);
+		bool GetInjectIntoGI() const;
 
 		LightFlags GetFlags() const;
 		void SetFlag(LightFlags flag);
@@ -107,6 +109,7 @@ namespace HexEngine
 	protected:
 		bool _doesCastShadows = false;
 		bool _isVolumetric = false;
+		bool _injectIntoGI = false;
 		LightingEffect _effect = LightingEffect::None;
 
 		float _strength = 1.0f;

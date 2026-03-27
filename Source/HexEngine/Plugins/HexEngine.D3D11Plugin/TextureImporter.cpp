@@ -138,6 +138,7 @@ std::shared_ptr<HexEngine::IResource> TextureImporter::LoadResourceFromFile(cons
 
 	tex->_width = desc.Width;
 	tex->_height = desc.Height;
+	tex->_format = desc.Format;
 	tex->_texture = d3dTexture;
 	tex->_shaderResourceView = d3dSRV;
 
@@ -247,6 +248,7 @@ std::shared_ptr<HexEngine::IResource> TextureImporter::LoadResourceFromMemory(co
 
 	tex->_width = desc.Width;
 	tex->_height = desc.Height;
+	tex->_format = desc.Format;
 	tex->_texture = d3dTexture;
 	tex->_shaderResourceView = d3dSRV;
 

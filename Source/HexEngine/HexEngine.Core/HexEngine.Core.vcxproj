@@ -376,6 +376,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="GUI\Elements\EntitySelector.hpp" />
     <ClInclude Include="GUI\Elements\GroupBox.hpp" />
     <ClInclude Include="GUI\Elements\ImmediateMode.hpp" />
+    <ClInclude Include="GUI\Elements\InputFloat.hpp" />
     <ClInclude Include="GUI\Elements\LineEdit.hpp" />
     <ClInclude Include="GUI\Elements\ListBox.hpp" />
     <ClInclude Include="GUI\Elements\MenuBar.hpp" />
@@ -420,6 +421,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\PointLight.hpp" />
     <ClInclude Include="Entity\Component\DirectionalLight.hpp" />
     <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp" />
+    <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp" />
     <ClInclude Include="Entity\Component\Transform.hpp" />
     <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
     <ClInclude Include="Entity\Messaging\Message.hpp" />
@@ -479,6 +481,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Reflection\IObject.hpp" />
     <ClInclude Include="Required.hpp" />
     <ClInclude Include="Scene\CloudVolume.hpp" />
+    <ClInclude Include="Scene\DiffuseGI.hpp" />
     <ClInclude Include="Scene\IEntityListener.hpp" />
     <ClInclude Include="Scene\MeshInstance.hpp" />
     <ClInclude Include="Scene\MeshInstanceManager.hpp" />
@@ -556,6 +559,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="GUI\Elements\EntitySelector.cpp" />
     <ClCompile Include="GUI\Elements\GroupBox.cpp" />
     <ClCompile Include="GUI\Elements\ImmediateMode.cpp" />
+    <ClCompile Include="GUI\Elements\InputFloat.cpp" />
     <ClCompile Include="GUI\Elements\LineEdit.cpp" />
     <ClCompile Include="GUI\Elements\ListBox.cpp" />
     <ClCompile Include="GUI\Elements\MenuBar.cpp" />
@@ -595,6 +599,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\PointLight.cpp" />
     <ClCompile Include="Entity\Component\DirectionalLight.cpp" />
     <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp" />
+    <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp" />
     <ClCompile Include="Entity\Component\Transform.cpp" />
     <ClCompile Include="Entity\Component\UpdateComponent.cpp" />
     <ClCompile Include="Entity\Messaging\MessageDispatcher.cpp" />
@@ -629,6 +634,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Math\FloatMath.cpp" />
     <ClCompile Include="Graphics\IInputLayout.cpp" />
     <ClCompile Include="Scene\CloudVolume.cpp" />
+    <ClCompile Include="Scene\DiffuseGI.cpp" />
     <ClCompile Include="Scene\Mesh.cpp" />
     <ClCompile Include="Scene\MeshInstance.cpp" />
     <ClCompile Include="Scene\MeshInstanceManager.cpp" />

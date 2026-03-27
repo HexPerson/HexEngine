@@ -1244,6 +1244,19 @@ ShaderStageImpl<ID3D11PixelShader>* GraphicsDeviceD3D11::CreatePixelShader(std::
 	return shader;
 }
 
+ShaderStageImpl<ID3D11ComputeShader>* GraphicsDeviceD3D11::CreateComputeShader(std::vector<uint8_t>& shaderCode)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	ID3D11ComputeShader* d3dShader = nullptr;
+	CHECK_HR(_device->CreateComputeShader(shaderCode.data(), shaderCode.size(), nullptr, &d3dShader));
+
+	auto* shader = new ShaderStageImpl<ID3D11ComputeShader>;
+	shader->_shader = d3dShader;
+	shader->_shaderCode = shaderCode;
+	return shader;
+}
+
 InputLayout* GraphicsDeviceD3D11::CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);

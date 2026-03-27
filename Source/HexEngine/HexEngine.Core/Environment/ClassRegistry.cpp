@@ -15,6 +15,7 @@
 #include "../Entity/Component/NavigationComponent.hpp"
 #include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
+#include "../Entity/Component/DayNightCycleComponent.hpp"
 #include "../HexEngine.hpp"
 
 
@@ -57,6 +58,7 @@ namespace HexEngine
 		REG_CLASS(NavigationComponent);
 		REG_CLASS(SkeletalAnimationComponent);
 		REG_CLASS(InstancedStaticMeshComponent);
+		REG_CLASS(DayNightCycleComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

@@ -44,7 +44,7 @@ namespace HexEngine
 
 		SetFogColour(math::Color(HEX_RGB_TO_FLOAT3(95, 241, 242)));
 
-		_ambientLight = math::Vector4(0.25f, 0.24f, 0.24f, 1.0f);
+		_ambientLight = math::Vector4(0.14f, 0.14f, 0.145f, 1.0f);
 
 		if (createSkySphere)
 		{
@@ -83,7 +83,7 @@ namespace HexEngine
 
 		SetFogColour(math::Color(HEX_RGB_TO_FLOAT3(95, 241, 242)));
 
-		_ambientLight = math::Vector4(0.25f, 0.24f, 0.24f, 1.0f);
+		_ambientLight = math::Vector4(0.14f, 0.14f, 0.145f, 1.0f);
 
 		if (createSkySphere)
 		{
@@ -958,6 +958,7 @@ namespace HexEngine
 		}
 
 		_insideEntityIteration = false;
+		_wasPvsReset = false;
 
 		_updateFlags = SceneUpdateNone;
 
@@ -1243,6 +1244,7 @@ namespace HexEngine
 				}
 			}
 
+			_wasPvsReset = true;
 			pvs->ResetDidRebuild();
 		}
 
@@ -1676,6 +1678,53 @@ namespace HexEngine
 				}
 			}
 		}
+	}
+
+	bool Scene::GatherStaticMeshesInBounds(const dx::BoundingBox& bounds, std::vector<StaticMeshComponent*>& outComponents, bool includeDynamic)
+	{
+		std::unique_lock lock(_lock);
+
+		outComponents.clear();
+
+		auto it = _components.find(StaticMeshComponent::_GetComponentId());
+		if (it == _components.end())
+			return false;
+
+		outComponents.reserve(it->second.size());
+		for (BaseComponent* base : it->second)
+		{
+			auto* component = static_cast<StaticMeshComponent*>(base);
+			if (component == nullptr || component->GetMesh() == nullptr)
+				continue;
+
+			Entity* entity = component->GetEntity();
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
+
+			if (entity->HasFlag(EntityFlags::DoNotRender))
+				continue;
+
+			if (!includeDynamic)
+			{
+				const Layer layer = entity->GetLayer();
+				const bool isStaticLayer =
+					layer == Layer::StaticGeometry ||
+					layer == Layer::Decorative ||
+					layer == Layer::Grass /*||
+					layer == Layer::Sky*/;
+
+				if (!isStaticLayer)
+					continue;
+			}
+
+			const auto& worldAabb = entity->GetWorldAABB();
+			if (!bounds.Intersects(worldAabb))
+				continue;
+
+			outComponents.push_back(component);
+		}
+
+		return !outComponents.empty();
 	}
 
 	void Scene::CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags)

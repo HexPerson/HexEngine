@@ -55,9 +55,6 @@
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
 
-	//static const float G_SCATTERING = -0.40f;// -0.5f;
-	//static const float PI = 3.14159f;
-
 	float ComputeScattering(float lightDotView)
 	{
 		float result = 1.0f - g_atmosphere.volumetricScattering * g_atmosphere.volumetricScattering;
@@ -65,212 +62,160 @@
 		return result;
 	}
 
-	float CalculateVolumetricScattering(float3 worldPos, float3 direction, float3 lightPos, float3 lightDir, float radius, float lightStrength)
+	int GetVolumetricSampleCount()
 	{
-		float3 startPos = worldPos;
-		float3 currentPos = startPos;
-		const float stepDistance = (radius / 16);
+		if (g_atmosphere.volumetricQuality <= 0)
+			return 8;
+		if (g_atmosphere.volumetricQuality >= 2)
+			return 20;
 
-		float accumFog = 0.0f;
+		return 14;
+	}
 
-		float samples = 0.0f;
-		//float3 lastPos = currentPos;
-
-		[loop]
-		for(float i = 0; i < 16; i = i + 1.0f)
+	bool GetRaySphereInterval(float3 rayStart, float3 rayDirection, float3 sphereCenter, float sphereRadius, out float tMin, out float tMax)
+	{
+		float3 oc = rayStart - sphereCenter;
+		float b = dot(oc, rayDirection);
+		float c = dot(oc, oc) - (sphereRadius * sphereRadius);
+		float h = b * b - c;
+		if (h <= 0.0f)
 		{
-			currentPos += direction * stepDistance;
-
-			float3 lightToPixelVec = (lightPos - currentPos);
-			float d = length(lightToPixelVec);
-			lightToPixelVec /= d;
-
-#if 0 // make it depth aware
-			float4 fragScr = float4(currentPos.xyz, 1.0f);
-			float4 fragView = mul(fragScr, g_viewMatrix);
-			float4 fragClip = mul(fragView, g_projectionMatrix);
-
-			fragClip.xyz /= fragClip.w;
-			float fragDepth = -fragView.z;
-
-			fragClip.xy = fragClip.xy * 0.5 + 0.5; // is this needed?
-			float2 fragTex = float2(fragClip.x, 1.0f - fragClip.y);
-
-			float pixelDepth = GBUFFER_NORMAL.Sample(g_pointSampler, fragTex).w;
-
-			if(pixelDepth < fragDepth)
-				break;
-#endif
-
-			float attenuation = saturate(1.0f - saturate(d / radius));
-			attenuation = pow(attenuation, 2);
-
-			float coneDot = dot(-lightToPixelVec, lightDir);
-			float coneAtten = pow(max(coneDot, 0.0f), g_spotLightConeSize);
-
-			//if(coneDot == 0.0f || coneAtten == 0.0f)
-			//	break;
-
-			//float dist = length(currentPos - lastPos);
-
-			//if(length(currentPos - lightPos) >= radius)
-			//	break;
-			//	accumFog += 1.0f;
-
-			//accumFog += coneDot;
-
-			//if(coneDot > 0)
-				//accumFog += dist / radius;
-
-			accumFog += ComputeScattering(dot(direction, normalize(lightDir))) * coneAtten * attenuation;
-
-			samples += 1.0f;
-
-			//lastPos = currentPos;
+			tMin = 0.0f;
+			tMax = 0.0f;
+			return false;
 		}
 
-		if(samples == 0.0f)
+		float s = sqrt(h);
+		tMin = -b - s;
+		tMax = -b + s;
+		return tMax > 0.0f;
+	}
+
+	float CalculateVolumetricScattering(float3 raySurfacePos, float3 lightPos, float3 lightDir, float radius, float lightStrength, float sceneDepth)
+	{
+		if (radius <= 0.0001f || lightStrength <= 0.0f || g_atmosphere.volumetricStrength <= 0.0f)
 			return 0.0f;
 
-		accumFog /= samples;//(radius * 2);
-		accumFog *= lightStrength;
+		float3 rayStart = g_eyePos.xyz;
+		float3 direction = normalize(raySurfacePos - rayStart);
+		float distanceToLight = length(lightPos - rayStart);
+		bool cameraInsideVolume = distanceToLight < radius;
 
-		return accumFog;
+		float tMin = 0.0f;
+		float tMax = 0.0f;
+		if (!GetRaySphereInterval(rayStart, direction, lightPos, radius, tMin, tMax))
+			return 0.0f;
+		float traceStart = max(0.0f, tMin);
+		float traceEnd = tMax;
+		float rayLength = traceEnd - traceStart;
+		if (rayLength <= 0.0001f)
+			return 0.0f;
+
+		const int sampleCount = GetVolumetricSampleCount();
+		const float stepDistance = rayLength / (float)sampleCount;
+		float3 currentPos = rayStart + direction * (traceStart + stepDistance * 0.5f);
+		float accumFog = 0.0f;
+		float phase = ComputeScattering(dot(direction, lightDir));
+
+		[loop]
+		for (int i = 0; i < sampleCount; ++i)
+		{
+			float sampleDepth = -mul(float4(currentPos, 1.0f), g_viewMatrix).z;
+			if (sampleDepth <= 0.0f)
+			{
+				currentPos += direction * stepDistance;
+				continue;
+			}
+
+			if (sceneDepth > 0.0f)
+			{
+				float depthBias = max(0.02f, sampleDepth * 0.002f);
+				if (sampleDepth > sceneDepth + depthBias)
+					break;
+			}
+
+			float3 lightToSample = lightPos - currentPos;
+			float d = length(lightToSample);
+			if (d > 0.0001f)
+			{
+				lightToSample /= d;
+
+				float attenuation = saturate(1.0f - saturate(d / radius));
+				attenuation = attenuation * attenuation;
+
+				float coneDot = dot(-lightToSample, lightDir);
+				float coneAtten = pow(max(coneDot, 0.0f), g_spotLightConeSize);
+
+				accumFog += phase * coneAtten * attenuation * stepDistance;
+			}			
+
+			currentPos += direction * stepDistance;
+		}
+
+		accumFog /= max(radius, 0.0001f);
+
+		accumFog *= lightStrength * g_atmosphere.volumetricStrength;
+
+		// Inside the light volume we reduce gain, but keep it distance-weighted so it does not look flat/dull.
+		if (cameraInsideVolume)
+		{
+			float centerFactor = saturate(distanceToLight / max(radius, 0.0001f));
+			float insideGain = lerp(g_atmosphere.volumetricSpotInsideMin, g_atmosphere.volumetricSpotInsideMax, centerFactor);
+			accumFog *= insideGain;
+		}
+
+		return max(0.0f, accumFog);
 	}
 
 	float4 ShaderMain(MeshPixelInput input) : SV_Target
 	{
-		float2 projectTexCoord;
-
-	//return float4(0, 0, 0, 0);
-
 		float2 screenPos = float2(input.position.x / (float)g_screenWidth, input.position.y / (float)g_screenHeight);
 
-		// get the world pos of the pixel being rendered
-		//float4 worldPos = mul(input.position, g_viewProjectionMatrixInverse);
-		// Sample the gbuffer
-		//
 		float4 pixelColour = GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos);
 		float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
 		float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
-		//float4 pixelSpecular = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 
-		// Skip non-geometry pixels (sky/background markers in the GBuffer).
-		if (pixelPosWS.a > 0.0f || pixelColour.a == -1.0f || pixelNormal.w <= 0.0f)
-			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+		float3 lightPos = input.tangent;
+		float lightRange = input.texcoord.x;
+		float lightIntensity = input.colour.a;
+		float3 lightDir = normalize(g_shadowCasterLightDir);
+
+		float volumetricScattering = CalculateVolumetricScattering(
+			input.positionWS.xyz,
+			lightPos,
+			lightDir,
+			lightRange,
+			lightIntensity,
+			pixelNormal.w);
+
+		float3 volumetricContribution = max(input.colour.rgb * volumetricScattering, 0.0f);
+		if (!all(isfinite(volumetricContribution)))
+			volumetricContribution = 0.0f.xxx;
+
+		bool hasGeometry = !(pixelPosWS.a > 0.0f || pixelColour.a == -1.0f || pixelNormal.w <= 0.0f);
+		if (!hasGeometry)
+			return float4(volumetricContribution, 1.0f);
 
 		float3 normalWS = pixelNormal.xyz;
 		const float normalLenSq = dot(normalWS, normalWS);
 		if (normalLenSq <= 0.000001f)
-			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+			return float4(volumetricContribution, 1.0f);
 		normalWS *= rsqrt(normalLenSq);
 
-		float3 eyeVector = normalize(g_eyePos.xyz - pixelPosWS.xyz);
-		float3 sphereNormal = normalize(input.normal.xyz);
-		float3 eyeToSphereDir = normalize(input.positionWS.xyz - g_eyePos.xyz);
-		float pixelDepth = pixelNormal.w;
-
-		float3 lightPos = input.tangent;
-		float lightRange = input.texcoord.x;//g_lightRadius;// input.positionWS.w;
-		float4 lightDiffuse = float4(input.colour.rgb, 1.0f);
-		float lightIntensity = input.colour.a;
-
-		float3 lightToPixelVec = lightPos.xyz - pixelPosWS.xyz;
+		float3 lightToPixelVec = lightPos - pixelPosWS.xyz;
 		float d = length(lightToPixelVec);
-		if (d <= 0.0001f)
-			return float4(0.0f, 0.0f, 0.0f, 0.0f);
-		if (d > lightRange)
-			return float4(0.0f, 0.0f, 0.0f, 0.0f);
+		if (d <= 0.0001f || d > lightRange)
+			return float4(volumetricContribution, 1.0f);
 		lightToPixelVec /= d;
 
 		float attenuation = saturate(1.0f - saturate(d / lightRange));
-		attenuation = pow(attenuation, 2);
+		attenuation = attenuation * attenuation;
 
-		float3 lightDir = g_shadowCasterLightDir;// input.viewDirection.xyz;
-		const float cone = g_spotLightConeSize;// input.viewDirection.w;
-
+		const float cone = g_spotLightConeSize;
 		float coneDot = dot(-lightToPixelVec, lightDir);
 		float coneAtten = pow(max(coneDot, 0.0f), cone);
 
-		float dir = 1.0f;
-
-		if(length(lightPos.xyz - g_eyePos.xyz) <= lightRange)
-		{
-			//eyeToSphereDir *= -1.0f;
-			//lightToPixelVec *= -1.0f;
-
-			dir = -1.0f;
-		}
-		if(dot(sphereNormal, eyeToSphereDir) < 0)
-		{
-			//clip(-1);
-		}
-		else
-		{
-			//eyeVector *= -1.0f;
-		}
-			
-		// depth test
-		//if(pixelDepth < input.position.w)
-		//	clip(-1);//return float4(pixelColour.rgb, 1);//float4(1,0,0,1);
-		
-		
-
-		//float len = length(input.positionWS.xyz - g_eyePos.xyz) / lightRange;
-
-		//return float4(input.positionWS.xyz, 1.0f);
-
-		float volumetricScattering = 1.0f;
-
-		// float volumetricScattering = CalculateVolumetricScattering(
-		// 	input.positionWS.xyz, 
-		// 	eyeToSphereDir/*normalize(lightPos.xyz - g_eyePos.xyz)*/,
-		// 	lightPos,
-		// 	lightDir,
-		// 	lightRange,
-		// 	lightIntensity
-		// );
-
-		//if(volumetricScattering <= 0.0f)
-		//	return float4(0,0,0,1);
-
-		//if (d > lightRange)
-		//	return float4(coneDot,0,0,1);
-		
-#if 0
-		ShadowInput shadow;
-		shadow.pixelDepth = pixelNormal.w;
-		shadow.positionWS = pixelPosWS;
-		shadow.positionSS = input.position.xy;
-		shadow.samples = g_shadowConfig.samples;
-
-		float d2 = dot(normalize(pixelNormal.xyz), normalize(g_shadowCasterLightDir.xyz));
-		float bias = g_shadowConfig.biasMultiplier * (1.0 - d2);// max(0.000002 * (1.0 - d), 0.0000002); // seems good
-		//float bias = 0.00011 * (1.0 - d);// max(0.000002 * (1.0 - d), 0.0000002);
-
-		float depthValue = CalculateShadows(shadow, g_cmpSampler, g_pointSampler, SHADOWMAPS, bias);
-
-		//if (depthValue == 0.0f)
-		//	return float4(0.0f, 0.0f, 0.0f, 0.0f);
-#else
 		float depthValue = 1.0f;
-#endif
-
-		
-
-		//float4 finalColor = float4(0.0f, 0.0f, 0.0f, 0.0f);
-
-		
-		//float shinyPower = pixelSpecular.w;
-		//float shininessStrength = pixelColour.w;
-
-		//float3 HalfWay = normalize(eyeVector + lightToPixelVec);
-		//float NDotH = saturate(dot(HalfWay, pixelNormal.xyz));
-
-		float howMuchLight = dot(lightToPixelVec.xyz, pixelNormal.xyz) * depthValue;
-		float3 lightAtt = float3(1.00f, 0.1f, 0.00f);
-
-		
 
 		float4 pbr = CalculatePBRSpotLighting(			
 			GBUFFER_SPECULAR,
@@ -285,12 +230,10 @@
 			attenuation * coneAtten
 			);
 
-		//return float4((input.colour.rgb * coneAtten * attenuation) + (input.colour.rgb * volumetricScattering), 1.0f);
-		//const float volumetricScatteringContribution = 3.2f;
-
 		float3 lightContribution = max((pbr.rgb * lightIntensity * attenuation * coneAtten), 0.0f);
+		lightContribution += volumetricContribution;
 		if (!all(isfinite(lightContribution)))
 			lightContribution = 0.0f.xxx;
-		return float4(lightContribution /*+ (input.colour.rgb *  volumetricScattering * volumetricScatteringContribution )*/, 1.0f);
+		return float4(lightContribution, 1.0f);
 	}
 }

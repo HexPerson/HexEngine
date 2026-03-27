@@ -7,12 +7,15 @@
 #include "../Graphics/BlurEffect.hpp"
 #include "../Graphics/Bloom.hpp"
 #include "CloudVolume.hpp"
+#include "DiffuseGI.hpp"
 #include "../Graphics/TAA.hpp"
 #include "../Graphics/IDenoiserProvider.hpp"
 
 namespace HexEngine
 {
 	class Camera;
+	class ITexture3D;
+	class IConstantBuffer;
 
 	class SceneRenderer
 	{
@@ -67,6 +70,7 @@ namespace HexEngine
 		void RenderPointLights();
 		void RenderSpotLights();
 		void RenderDirectionalLights();
+		void RenderDiffuseGI();
 		void RenderVignette();
 		void SetStreamlineConstants();
 		
@@ -94,6 +98,7 @@ namespace HexEngine
 		//ITexture2D* _waterDSV = nullptr;
 		ITexture2D* _fogBuffer = nullptr;
 		ITexture2D* _volumetricLightingBuffer = nullptr;
+		ITexture2D* _cloudsBuffer = nullptr;
 		ITexture2D* _atmosphereRT = nullptr;
 		ITexture2D* _lightAccumulationBuffer = nullptr;
 		ITexture2D* _pointLightBuffer = nullptr;
@@ -118,6 +123,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> _hdrOutputShader;
 		std::shared_ptr<IShader> _basicDenoise;
 		std::shared_ptr<IShader> _volumetricLighting;
+		std::shared_ptr<IShader> _volumetricClouds;
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _waterBlitEffect;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
@@ -130,12 +136,16 @@ namespace HexEngine
 		Bloom* _bloomEffect = nullptr;
 
 		//CloudVolume* _clouds = nullptr;
+		ITexture3D* _cloudShapeNoise = nullptr;
+		ITexture3D* _cloudDetailNoise = nullptr;
+		IConstantBuffer* _cloudConstantBuffer = nullptr;
 		std::shared_ptr<Mesh> _sphereMesh = nullptr;
 		Entity* _sphereEntity = nullptr;
 		std::shared_ptr<Material> _pointLightMaterial;
 		std::shared_ptr<Material> _spotLightMaterial;
 
 		TAA _taa;
+		DiffuseGI _diffuseGi;
 
 		ITexture2D* _ssrHistory = nullptr;		
 		ITexture2D* _ssrResolved = nullptr;

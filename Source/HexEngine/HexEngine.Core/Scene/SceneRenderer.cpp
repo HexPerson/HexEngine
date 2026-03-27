@@ -3,7 +3,11 @@
 #include "../HexEngine.hpp"
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/PointLight.hpp"
+#include "../Math/FloatMath.hpp"
+#include <fastnoiselite/FastNoiseLite.h>
 #include <unordered_set>
+#include <algorithm>
+#include <vector>
 
 namespace HexEngine
 {
@@ -15,13 +19,40 @@ namespace HexEngine
 
 	HVar env_zenithExponent("env_zenithExponent", "Atmospheric zenith component", 4.12f, 1.0f, 10.0f);
 	HVar env_anisotropicIntensity("env_anisotropicIntensity", "Atmospheric scattering intensity", 0.38f, 0.0f, 10.0f);
-	HVar env_density("env_density", "The density of the atmosphere", 0.11f, 0.0f, 4.0f);
-	HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
-	HVar env_volumetricScattering("env_volumetricScattering", "The amount of scattering used in volumetric lighting calculations", -0.43f, -2.0f, 2.0f);
+		HVar env_density("env_density", "The density of the atmosphere", 0.11f, 0.0f, 4.0f);
+		HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
+		HVar env_volumetricScattering("env_volumetricScattering", "The amount of scattering used in volumetric lighting calculations", -0.43f, -2.0f, 2.0f);
 	HVar env_volumetricStrength("env_volumetricStrength", "The strength multiplier of volumetric lighting", 1.0f, 0.1f, 5.0f);
 	HVar env_volumetricSteps("env_volumetricSteps", "The number of iterations over which to calculate volumetric lighting", 100.0f, 10.0f, 500.0f);
+	HVar r_volumetricQuality("r_volumetricQuality", "Volumetric quality preset (0 = performance, 1 = balanced, 2 = quality)", 1, 0, 2);
+	HVar env_volumetricPointInsideMin("env_volumetricPointInsideMin", "Point-light volumetric gain when camera is at light center", 0.58f, 0.0f, 2.0f);
+	HVar env_volumetricPointInsideMax("env_volumetricPointInsideMax", "Point-light volumetric gain when camera is near light radius edge", 0.92f, 0.0f, 2.0f);
+	HVar env_volumetricSpotInsideMin("env_volumetricSpotInsideMin", "Spot-light volumetric gain when camera is at light center", 0.52f, 0.0f, 2.0f);
+	HVar env_volumetricSpotInsideMax("env_volumetricSpotInsideMax", "Spot-light volumetric gain when camera is near light radius edge", 0.88f, 0.0f, 2.0f);
 	HVar env_waterNormalInfluence("env_waterNormalInfluence", "The strength of the normal maps when rendering water", 0.4f, 0.0f, 4.0f);
-	HVar env_volumetricStepIncrement("env_volumetricStepIncrement", "The distance to move along the ray for each volumetric step", 1.0f, 0.1f, 100.0f);
+	HVar env_volumetricStepIncrement("env_volumetricStepIncrement", "Global scale multiplier applied to adaptive volumetric ray-march step size", 1.0f, 0.1f, 100.0f);
+	HVar r_cloudEnable("r_cloudEnable", "Enable or disable volumetric cloud rendering", true, false, true);
+	HVar r_cloudQuality("r_cloudQuality", "Cloud quality preset (0 = performance, 1 = balanced, 2 = quality)", 1, 0, 2);
+	HVar r_cloudAabbMin("r_cloudAabbMin", "Minimum world-space bounds of cloud AABB", math::Vector3(-600.0f, 100.0f, -600.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
+	HVar r_cloudAabbMax("r_cloudAabbMax", "Maximum world-space bounds of cloud AABB", math::Vector3(600.0f, 200.0f, 600.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
+	HVar r_cloudDensity("r_cloudDensity", "Cloud density multiplier", 1.0f, 0.05f, 8.0f);
+	HVar r_cloudCoverage("r_cloudCoverage", "Cloud coverage amount", 0.56f, 0.01f, 1.0f);
+	HVar r_cloudErosion("r_cloudErosion", "Small-scale erosion amount", 0.34f, 0.0f, 1.0f);
+	HVar r_cloudLightAbsorption("r_cloudLightAbsorption", "Absorption multiplier for cloud self-shadowing", 0.08f, 0.0f, 8.0f);
+	HVar r_cloudViewAbsorption("r_cloudViewAbsorption", "Absorption multiplier along view ray inside clouds", 0.42f, 0.0f, 8.0f);
+	HVar r_cloudPowderStrength("r_cloudPowderStrength", "Powder term to brighten cloud edges", 0.38f, 0.0f, 2.0f);
+	HVar r_cloudAmbientStrength("r_cloudAmbientStrength", "Ambient skylight contribution for cloud interiors", 0.65f, 0.0f, 2.0f);
+	HVar r_cloudShadowFloor("r_cloudShadowFloor", "Minimum transmittance floor for cloud self-shadowing", 0.35f, 0.0f, 1.0f);
+	HVar r_cloudAnisotropy("r_cloudAnisotropy", "Anisotropy term for cloud phase function", 0.35f, -0.95f, 0.95f);
+	HVar r_cloudShapeScale("r_cloudShapeScale", "Base cloud shape noise scale", 0.00017f, 0.00001f, 0.01f);
+	HVar r_cloudDetailScale("r_cloudDetailScale", "Cloud detail noise scale", 0.00125f, 0.00005f, 0.05f);
+	HVar r_cloudWindDirection("r_cloudWindDirection", "Cloud wind direction", math::Vector3(1.0f, 0.0f, 0.15f), math::Vector3(-1.0f, -1.0f, -1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
+	HVar r_cloudWindSpeed("r_cloudWindSpeed", "Cloud wind speed", 34.0f, 0.0f, 500.0f);
+	HVar r_cloudAnimationSpeed("r_cloudAnimationSpeed", "Cloud animation speed multiplier", 1.0f, 0.0f, 10.0f);
+	HVar r_cloudViewSteps("r_cloudViewSteps", "Base view ray-march step count", 72.0f, 8.0f, 256.0f);
+	HVar r_cloudLightSteps("r_cloudLightSteps", "Base light ray-march step count", 12.0f, 2.0f, 64.0f);
+	HVar r_cloudStepScale("r_cloudStepScale", "Global cloud march step scale", 1.0f, 0.25f, 8.0f);
+	HVar r_cloudMaxDistance("r_cloudMaxDistance", "Maximum cloud trace distance from camera", 20000.0f, 100.0f, 100000.0f);
 	HVar r_gamma("r_gamma", "The amount of gamma correction to apply", 2.2f, 0.1f, 5.0f);
 	HVar r_shadowCascades("r_shadowCascades", "The number of cascades to calculate with shadow mapping", 4, 1, 4);
 	HVar r_shadowCascadeRange("r_shadowCascadeRange", "The depth of one shadow cascade, except the last (which will occupy all remaining space", 100.0f, 1.0f, 10000.0f);
@@ -31,16 +62,133 @@ namespace HexEngine
 	HVar r_shadowCascadeBlendRange("r_shadowCascadeBlendRange", "The distance to use for blending shadow cascades together", 10.0f, 1.0f, 1000.0f);
 	HEX_API HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
 	HVar r_waterResolution("r_waterResolution", "The resolution multiplier at which to render water, a value of 1.0f is full resolution", 1.0f, 0.1f, 1.0f);
-	HVar r_bloomLuminanceThreshold("r_bloomLuminanceThreshold", "The minimum amount of luminance for a material to bloom", 0.9999999f, 0.0f, 1.0f);
+	HVar r_bloomLuminanceThreshold("r_bloomLuminanceThreshold", "Reference luminance where physically-based bloom starts to respond strongly", 1.0f, 0.0f, 32.0f);
+	HVar r_bloomPhysicalIntensity("r_bloomPhysicalIntensity", "Strength multiplier for physically-based bloom", 0.35f, 0.0f, 8.0f);
+	HVar r_bloomPhysicalClamp("r_bloomPhysicalClamp", "Clamp physically-based bloom prefilter output (0 disables clamp)", 0.0f, 0.0f, 128.0f);
 	HVar r_fxaa("r_fxaa", "Whether or not to use the FXAA anti-aliasing method", 1, 0, 1);
 	HVar r_fog("r_fog", "Enable or disable fog effect", 1, 0, 1);
 	HVar r_fogDensity("r_fogDensity", "How dense the fog should be", 0.0030f, 0.0f, 1.0f);
 	HVar r_lodPartition("r_lodPartition", "The value that determines where LOD partitions occur", 250.0f, 10.0f, 5000.0f);
 	HVar r_frustumSphereBoundsMultiplier("r_frustumSphereBoundsMultiplier", "The multiplier applied to the frustum bounds in order to calculate culling", 1.15f, 1.0f, 4.0f);
-	HVar r_shadowMinimumLodThreshold("r_shadowMinimumLodLevel", "The lowest LOD level allowed for shadow maps. A high number will improve performance at the expensve of shadow fidelity", 0, 0, 3);
-	HVar r_taa("r_taa", "Enable or disable temporal anti-aliasing", true, false, true);
-	HVar r_shadowNearClip("r_shadowNearClip", "How much clipping offset to apply to directional lights, larger scenes typically require a higher value", 150.0f, -1000.0f, 1000.0f);
-	HVar r_colourFilter("r_colourFilter", "The filter colour to use for colour grading", math::Vector3(1.00f, 0.98f, 0.97f), math::Vector3(0.0f), math::Vector3(1.0f));
+		HVar r_shadowMinimumLodThreshold("r_shadowMinimumLodLevel", "The lowest LOD level allowed for shadow maps. A high number will improve performance at the expensve of shadow fidelity", 0, 0, 3);
+		HVar r_taa("r_taa", "Enable or disable temporal anti-aliasing", true, false, true);
+		HVar r_shadowNearClip("r_shadowNearClip", "How much clipping offset to apply to directional lights, larger scenes typically require a higher value", 150.0f, -1000.0f, 1000.0f);
+		HVar r_colourFilter("r_colourFilter", "The filter colour to use for colour grading", math::Vector3(1.00f, 0.98f, 0.97f), math::Vector3(0.0f), math::Vector3(1.0f));
+
+		static int32_t GetVolumetricEffectiveSteps()
+		{
+			const int32_t qualityPreset = r_volumetricQuality._val.i32 < 0 ? 0 : (r_volumetricQuality._val.i32 > 2 ? 2 : r_volumetricQuality._val.i32);
+			const int32_t baseSteps = static_cast<int32_t>(env_volumetricSteps._val.f32);
+
+			float stepScale = 1.0f;
+			switch (qualityPreset)
+			{
+			case 0: // performance
+				stepScale = 0.70f;
+				break;
+			case 2: // quality
+				stepScale = 1.45f;
+				break;
+			case 1: // balanced
+			default:
+				stepScale = 1.00f;
+				break;
+			}
+
+			int32_t effectiveSteps = static_cast<int32_t>(baseSteps * stepScale);
+			if (effectiveSteps < 8)
+				effectiveSteps = 8;
+			if (effectiveSteps > 768)
+				effectiveSteps = 768;
+
+			return effectiveSteps;
+		}
+
+		struct CloudConstants
+		{
+			math::Vector4 boundsMin;
+			math::Vector4 boundsMax;
+			math::Vector4 params0; // x=density, y=coverage, z=erosion, w=maxDistance
+			math::Vector4 params1; // x=absorption, y=powder, z=anisotropy, w=stepScale
+			math::Vector4 params2; // x=shapeScale, y=detailScale, z=windSpeed, w=animationSpeed
+			math::Vector4 params3; // x=viewAbsorption, y=ambientStrength, z=shadowFloor, w=phaseBoost
+			math::Vector4 windDirection; // xyz=windDir, w=qualityPreset
+			math::Vector4 marchParams; // x=viewSteps, y=lightSteps, z=reserved, w=reserved
+		};
+
+		static int32_t GetCloudQualityPreset()
+		{
+			return std::clamp(r_cloudQuality._val.i32, 0, 2);
+		}
+
+		static int32_t GetCloudEffectiveSteps(const float baseSteps, const int32_t minSteps, const int32_t maxSteps)
+		{
+			float scale = 1.0f;
+			switch (GetCloudQualityPreset())
+			{
+			case 0:
+				scale = 0.75f;
+				break;
+			case 2:
+				scale = 1.35f;
+				break;
+			case 1:
+			default:
+				scale = 1.0f;
+				break;
+			}
+
+			const int32_t steps = static_cast<int32_t>(baseSteps * scale);
+			return std::clamp(steps, minSteps, maxSteps);
+		}
+
+		static ITexture3D* CreateCloudNoiseVolume(int32_t resolution, int32_t seed, float frequency, int32_t octaves, float gain, float lacunarity)
+		{
+			FastNoiseLite noise;
+			noise.SetSeed(seed);
+			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+			noise.SetFrequency(frequency);
+			noise.SetFractalType(FastNoiseLite::FractalType_FBm);
+			noise.SetFractalOctaves(octaves);
+			noise.SetFractalGain(gain);
+			noise.SetFractalLacunarity(lacunarity);
+
+			std::vector<float> noiseData(static_cast<size_t>(resolution) * static_cast<size_t>(resolution) * static_cast<size_t>(resolution), 0.0f);
+
+			for (int32_t z = 0; z < resolution; ++z)
+			{
+				for (int32_t y = 0; y < resolution; ++y)
+				{
+					for (int32_t x = 0; x < resolution; ++x)
+					{
+						const float n = noise.GetNoise(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+						const float normalized = std::clamp(n * 0.5f + 0.5f, 0.0f, 1.0f);
+						const int32_t idx = (z * resolution * resolution) + (y * resolution) + x;
+						noiseData[idx] = normalized;
+					}
+				}
+			}
+
+			D3D11_SUBRESOURCE_DATA initialData = {};
+			initialData.pSysMem = noiseData.data();
+			initialData.SysMemPitch = static_cast<UINT>(resolution * sizeof(float));
+			initialData.SysMemSlicePitch = static_cast<UINT>(resolution * resolution * sizeof(float));
+
+			return g_pEnv->_graphicsDevice->CreateTexture3D(
+				resolution,
+				resolution,
+				resolution,
+				DXGI_FORMAT_R32_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE,
+				0,
+				1,
+				0,
+				&initialData,
+				D3D11_RTV_DIMENSION_UNKNOWN,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE3D);
+		}
 	HVar r_contrast("r_contrast", "How much contrast to apply to the final render", 1.0f, 0.1f, 3.0f);
 	HVar r_exposure("r_exposure", "How much exposure to apply to the final render", 1.0f, 0.1f, 3.0f);
 	HVar r_hueShift("r_hueShift", "How much to adjust the hue by in the final render", 0.0f, -3.0f, 3.0f);
@@ -73,7 +221,25 @@ namespace HexEngine
 		uint32_t width, height;
 		g_pEnv->_graphicsDevice->GetBackBufferDimensions(width, height);
 
-		CreateRenderTargets(width, height);		
+		CreateRenderTargets(width, height);
+
+		if (_cloudConstantBuffer == nullptr)
+		{
+			_cloudConstantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(CloudConstants));
+		}
+
+		if (_cloudShapeNoise == nullptr || _cloudDetailNoise == nullptr)
+		{
+			const int32_t shapeResolution = 96;
+			const int32_t detailResolution = 64;
+			const int32_t randomSeed = std::max(1, GetRandomInt());
+
+			SAFE_DELETE(_cloudShapeNoise);
+			SAFE_DELETE(_cloudDetailNoise);
+
+			_cloudShapeNoise = CreateCloudNoiseVolume(shapeResolution, randomSeed, 0.025f, 5, 0.52f, 2.0f);
+			_cloudDetailNoise = CreateCloudNoiseVolume(detailResolution, randomSeed + 137, 0.09f, 4, 0.45f, 2.1f);
+		}
 	}
 
 	void SceneRenderer::Resize(int32_t width, int32_t height)
@@ -85,6 +251,7 @@ namespace HexEngine
 		SAFE_DELETE(_shadowMapsAccumulator);
 		SAFE_DELETE(_fogBuffer);
 		SAFE_DELETE(_volumetricLightingBuffer);
+		SAFE_DELETE(_cloudsBuffer);
 		SAFE_DELETE(_atmosphereRT);
 		SAFE_DELETE(_waterAccumulationRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
@@ -108,6 +275,7 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
+		_diffuseGi.Destroy();
 		_gbuffer.Destroy();
 
 		//SAFE_DELETE(_clouds);
@@ -117,6 +285,7 @@ namespace HexEngine
 		SAFE_DELETE(_shadowMapsAccumulator);
 		SAFE_DELETE(_fogBuffer);
 		SAFE_DELETE(_volumetricLightingBuffer);
+		SAFE_DELETE(_cloudsBuffer);
 		SAFE_DELETE(_atmosphereRT);
 		SAFE_DELETE(_waterAccumulationRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
@@ -128,6 +297,9 @@ namespace HexEngine
 		SAFE_DELETE(_ssrHitInfo);
 		SAFE_DELETE(_dlssTarget);
 		SAFE_DELETE(_waterRT);
+		SAFE_DELETE(_cloudShapeNoise);
+		SAFE_DELETE(_cloudDetailNoise);
+		SAFE_DELETE(_cloudConstantBuffer);
 		
 		//SAFE_DELETE(_waterDSV);
 
@@ -144,6 +316,7 @@ namespace HexEngine
 		_fxaa						= IShader::Create("EngineData.Shaders/FXAA.hcs");
 		_fogEffect					= IShader::Create("EngineData.Shaders/PostFog.hcs");
 		_volumetricLighting			= IShader::Create("EngineData.Shaders/VolumetricLighting.hcs");
+		_volumetricClouds			= IShader::Create("EngineData.Shaders/VolumetricClouds.hcs");
 		_bilateralUpsample			= IShader::Create("EngineData.Shaders/BilateralUpsample.hcs");
 		_pointLightShader			= IShader::Create("EngineData.Shaders/PointLight.hcs");
 		_spotLightShader			= IShader::Create("EngineData.Shaders/SpotLight.hcs");
@@ -387,6 +560,26 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			/*MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS :*/ D3D11_SRV_DIMENSION_TEXTURE2D);
 
+		_cloudsBuffer = g_pEnv->_graphicsDevice->CreateTexture2D(
+			width / 2,
+			height / 2,
+			DXGI_FORMAT_R16G16B16A16_FLOAT,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			0,
+			1,
+			0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D);
+
+		if (_cloudsBuffer)
+		{
+			_cloudsBuffer->SetDebugName("_cloudsBuffer");
+		}
+
 		_atmosphereRT = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
 			height,
@@ -423,6 +616,7 @@ namespace HexEngine
 		_bloomEffect->Create(width / 4, height / 4);
 
 		_taa.Create(_beautyRT);
+		_diffuseGi.Create(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 
 		g_pEnv->_denoiserProvider->CreateBuffers(width, height, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
 	}
@@ -746,12 +940,19 @@ namespace HexEngine
 
 			bufferData._atmosphere.volumetricScattering = env_volumetricScattering._val.f32;
 			bufferData._atmosphere.volumetricStrength = env_volumetricStrength._val.f32;
-			bufferData._atmosphere.volumetricSteps = (int)env_volumetricSteps._val.f32;
+			bufferData._atmosphere.volumetricSteps = GetVolumetricEffectiveSteps();
 			bufferData._atmosphere.volumetricStepIncrement = env_volumetricStepIncrement._val.f32;
+			bufferData._atmosphere.volumetricQuality = r_volumetricQuality._val.i32;
+			bufferData._atmosphere.volumetricPointInsideMin = env_volumetricPointInsideMin._val.f32;
+			bufferData._atmosphere.volumetricPointInsideMax = env_volumetricPointInsideMax._val.f32;
+			bufferData._atmosphere.volumetricSpotInsideMin = env_volumetricSpotInsideMin._val.f32;
+			bufferData._atmosphere.volumetricSpotInsideMax = env_volumetricSpotInsideMax._val.f32;
 
 			// bloom
 			bufferData._bloom.luminosityThreshold = r_bloomLuminanceThreshold._val.f32;
 			bufferData._bloom.viewportScale = 4.0f;
+			bufferData._bloom.bloomIntensity = r_bloomPhysicalIntensity._val.f32;
+			bufferData._bloom.bloomClamp = r_bloomPhysicalClamp._val.f32;
 
 			bufferData._time = g_pEnv->_timeManager->GetTime();
 			bufferData._frame = (uint32_t)g_pEnv->_timeManager->_frameCount;
@@ -1262,9 +1463,11 @@ namespace HexEngine
 			//_gbuffer.GetDiffuse()->CopyTo(_compositionRT);
 
 			RenderLights();
+			RenderDiffuseGI();
 			RenderFog();
 			//RenderWater();
-			RenderVolumetricLighting();		
+			RenderVolumetricLighting();
+			RenderVolumetricClouds();
 			RenderTransparent();
 
 			// don't bother doing this if we don't need to, its expensive!
@@ -1494,6 +1697,17 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthDefault);
 		//g_pEnv->_graphicsDevice->EnableDepthBuffer(true);
+	}
+
+	void SceneRenderer::RenderDiffuseGI()
+	{
+		PROFILE();
+
+		if (!_currentScene || !_currentCamera || !_beautyRT)
+			return;
+
+		_diffuseGi.Update(_currentScene, _currentCamera);
+		_diffuseGi.Render(_currentScene, _currentCamera, _gbuffer, _beautyRT);
 	}
 
 	void SceneRenderer::RenderDirectionalLights()
@@ -2047,7 +2261,110 @@ namespace HexEngine
 
 	void SceneRenderer::RenderVolumetricClouds()
 	{
+		if (!r_cloudEnable._val.b || !_currentCamera || !_cloudsBuffer || !_volumetricClouds || !_cloudConstantBuffer || !_cloudShapeNoise || !_cloudDetailNoise || !_fogBuffer)
+			return;
 
+		PROFILE();
+
+		const auto& bbvp = _currentCamera->GetViewport();
+		if (bbvp.width <= 1.0f || bbvp.height <= 1.0f)
+			return;
+
+		math::Vector3 boundsMin = r_cloudAabbMin._val.v3;
+		math::Vector3 boundsMax = r_cloudAabbMax._val.v3;
+
+		if (boundsMin.x > boundsMax.x) std::swap(boundsMin.x, boundsMax.x);
+		if (boundsMin.y > boundsMax.y) std::swap(boundsMin.y, boundsMax.y);
+		if (boundsMin.z > boundsMax.z) std::swap(boundsMin.z, boundsMax.z);
+
+		const math::Vector3 extents = boundsMax - boundsMin;
+		if (extents.x < 1.0f || extents.y < 1.0f || extents.z < 1.0f)
+			return;
+
+		math::Vector3 windDir = r_cloudWindDirection._val.v3;
+		if (windDir.LengthSquared() <= 0.0001f)
+			windDir = math::Vector3::Forward;
+		else
+			windDir.Normalize();
+
+		CloudConstants constants = {};
+		constants.boundsMin = math::Vector4(boundsMin.x, boundsMin.y, boundsMin.z, 0.0f);
+		constants.boundsMax = math::Vector4(boundsMax.x, boundsMax.y, boundsMax.z, 0.0f);
+		constants.params0 = math::Vector4(
+			r_cloudDensity._val.f32,
+			r_cloudCoverage._val.f32,
+			r_cloudErosion._val.f32,
+			r_cloudMaxDistance._val.f32);
+		constants.params1 = math::Vector4(
+			r_cloudLightAbsorption._val.f32,
+			r_cloudPowderStrength._val.f32,
+			r_cloudAnisotropy._val.f32,
+			r_cloudStepScale._val.f32);
+		constants.params2 = math::Vector4(
+			r_cloudShapeScale._val.f32,
+			r_cloudDetailScale._val.f32,
+			r_cloudWindSpeed._val.f32,
+			r_cloudAnimationSpeed._val.f32);
+		constants.params3 = math::Vector4(
+			r_cloudViewAbsorption._val.f32,
+			r_cloudAmbientStrength._val.f32,
+			r_cloudShadowFloor._val.f32,
+			1.55f);
+		constants.windDirection = math::Vector4(windDir.x, windDir.y, windDir.z, (float)GetCloudQualityPreset());
+		constants.marchParams = math::Vector4(
+			(float)GetCloudEffectiveSteps(r_cloudViewSteps._val.f32, 8, 256),
+			(float)GetCloudEffectiveSteps(r_cloudLightSteps._val.f32, 2, 64),
+			0.0f,
+			0.0f);
+
+		_cloudConstantBuffer->Write(&constants, sizeof(constants));
+		g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _cloudConstantBuffer);
+
+		_cloudsBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+		g_pEnv->_graphicsDevice->SetRenderTarget(_cloudsBuffer);
+
+		D3D11_VIEWPORT halfVp = {};
+		halfVp.TopLeftX = 0.0f;
+		halfVp.TopLeftY = 0.0f;
+		halfVp.Width = std::max(1.0f, bbvp.width * 0.5f);
+		halfVp.Height = std::max(1.0f, bbvp.height * 0.5f);
+		halfVp.MinDepth = 0.0f;
+		halfVp.MaxDepth = 1.0f;
+		g_pEnv->_graphicsDevice->SetViewport(halfVp);
+
+		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
+		{
+			guiRenderer->StartFrame();
+			_gbuffer.BindAsShaderResource();
+			g_pEnv->_graphicsDevice->SetTexture2D(_beautyRT);
+			g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
+			g_pEnv->_graphicsDevice->SetTexture3D(_cloudShapeNoise);
+			g_pEnv->_graphicsDevice->SetTexture3D(_cloudDetailNoise);
+			guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricClouds.get());
+			guiRenderer->EndFrame();
+
+			_fogBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			g_pEnv->_graphicsDevice->SetRenderTarget(_fogBuffer);
+			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+
+			guiRenderer->StartFrame();
+			_gbuffer.BindAsShaderResource();
+			g_pEnv->_graphicsDevice->SetTexture2D(_cloudsBuffer);
+			guiRenderer->FullScreenTexturedQuad(nullptr, _bilateralUpsample.get());
+			guiRenderer->EndFrame();
+
+			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
+			g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
+
+			guiRenderer->StartFrame();
+			guiRenderer->FullScreenTexturedQuad(_fogBuffer, _fullScreenQuadShader.get());
+			guiRenderer->EndFrame();
+		}
+
+		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthDefault);
+		g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
 	}
 
 	const GBuffer* SceneRenderer::GetGBuffer()

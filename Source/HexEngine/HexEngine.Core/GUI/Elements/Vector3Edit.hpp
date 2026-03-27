@@ -2,7 +2,7 @@
 #pragma once
 
 #include "Element.hpp"
-#include "DragFloat.hpp"
+#include "InputFloat.hpp"
 
 namespace HexEngine
 {
@@ -27,7 +27,7 @@ namespace HexEngine
 		math::Vector3* _vector;
 		math::Vector3 _lastVectorVal;
 		std::wstring _axisLabels[3];
-		DragFloat* _lineEdits[3] = { nullptr };
+		InputFloat* _lineEdits[3] = { nullptr };
 		std::function<void(const math::Vector3&)> _callback;
 	};
 }

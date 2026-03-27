@@ -25,6 +25,7 @@ namespace HexEngine
 		Light(entity)
 	{
 		SetDoesCastShadows(clone->GetDoesCastShadows());
+		SetInjectIntoGI(clone->GetInjectIntoGI());
 	}
 
 	void DirectionalLight::Destroy()

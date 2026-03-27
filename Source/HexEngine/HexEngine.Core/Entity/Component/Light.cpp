@@ -20,6 +20,7 @@ namespace HexEngine
 	{
 		_doesCastShadows			= clone->_doesCastShadows;
 		_isVolumetric				= clone->_isVolumetric;
+		_injectIntoGI				= clone->_injectIntoGI;
 		_effect						= clone->_effect;
 		_strength					= clone->_strength;
 		_originalStrength			= clone->_originalStrength;
@@ -160,6 +161,16 @@ namespace HexEngine
 		return _isVolumetric;
 	}
 
+	void Light::SetInjectIntoGI(bool injectIntoGI)
+	{
+		_injectIntoGI = injectIntoGI;
+	}
+
+	bool Light::GetInjectIntoGI() const
+	{
+		return _injectIntoGI;
+	}
+
 	PVS* Light::GetPVS(int32_t index)
 	{
 		return &_pvs[index];
@@ -183,6 +194,7 @@ namespace HexEngine
 		SERIALIZE_VALUE(_strength);
 		SERIALIZE_VALUE(_radius);
 		SERIALIZE_VALUE(_doesCastShadows);
+		SERIALIZE_VALUE(_injectIntoGI);
 		SERIALIZE_VALUE(_lightMultiplier);
 	}
 
@@ -193,6 +205,7 @@ namespace HexEngine
 		DESERIALIZE_VALUE(_strength);
 		DESERIALIZE_VALUE(_radius);
 		DESERIALIZE_VALUE(_doesCastShadows);
+		DESERIALIZE_VALUE(_injectIntoGI);
 		DESERIALIZE_VALUE(_lightMultiplier);
 
 		_originalStrength = _strength;
@@ -209,6 +222,10 @@ namespace HexEngine
 		//castsShadows->SetLabelMinSize(130);
 		castsShadows->SetOnCheckFn(std::bind(&Light::SetDoesCastShadows, this, std::placeholders::_2));
 		castsShadows->SetPrefabOverrideBinding(GetComponentName(), "/_doesCastShadows");
+
+		Checkbox* injectGI = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Inject Into GI", &_injectIntoGI);
+		injectGI->SetOnCheckFn(std::bind(&Light::SetInjectIntoGI, this, std::placeholders::_2));
+		injectGI->SetPrefabOverrideBinding(GetComponentName(), "/_injectIntoGI");
 
 		DragFloat* strength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Strength", &_strength, 0.1f, 500.0f, 0.1f);
 		//strength->SetLabelMinSize(130);

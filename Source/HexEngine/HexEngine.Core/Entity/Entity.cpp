@@ -734,13 +734,19 @@ namespace HexEngine
 	{
 		if (!_hasCachedWorldAABB)
 		{
-			_cachedWorldAABB = GetAABB();
+			auto worldOBB = GetWorldOBB();
 
-			const auto& translation = GetWorldTM().Translation();
+			math::Vector3 corners[8];
+			worldOBB.GetCorners(corners);
+
+			dx::BoundingBox::CreateFromPoints(_cachedWorldAABB, 8, corners, sizeof(math::Vector3));
+			//_cachedWorldAABB = GetAABB();
+
+			/*const auto& translation = GetWorldTM().Translation();
 
 			_cachedWorldAABB.Center.x += translation.x;
 			_cachedWorldAABB.Center.y += translation.y;
-			_cachedWorldAABB.Center.z += translation.z;
+			_cachedWorldAABB.Center.z += translation.z;*/
 
 			_hasCachedWorldAABB = true;
 		}
@@ -753,12 +759,12 @@ namespace HexEngine
 		if (!_hasCachedWorldOBB)
 		{
 			_cachedWorldOBB = GetOBB();
-			//_cachedWorldOBB.Transform(_cachedWorldOBB, GetWorldTM());
+			_cachedWorldOBB.Transform(_cachedWorldOBB, GetWorldTM());
 
-			const auto& translation = GetWorldTM().Translation();
+			/*const auto& translation = GetWorldTM().Translation();
 			_cachedWorldOBB.Center.x += translation.x;
 			_cachedWorldOBB.Center.y += translation.y;
-			_cachedWorldOBB.Center.z += translation.z;
+			_cachedWorldOBB.Center.z += translation.z;*/
 
 			_hasCachedWorldOBB = true;
 		}

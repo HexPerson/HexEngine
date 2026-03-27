@@ -16,7 +16,7 @@ namespace HexEngine
 		int32_t xpos = 90;
 		for (int i = 0; i < 2; ++i)
 		{
-			_lineEdits[i] = new DragFloat(this, Point(xpos, 0), Point(Vector3EditBoxWidth, size.y), L"", &((float*)&vector->x)[i], -9999.0f, 9999.0f, 0.1f);
+			_lineEdits[i] = new InputFloat(this, Point(xpos, 0), Point(Vector3EditBoxWidth, size.y), L"", &((float*)&vector->x)[i], -9999.0f, 9999.0f, 0.1f);
 
 			_lineEdits[i]->SetValue(std::format(L"{:.2f}", ((float*)&vector->x)[i]));
 			_lineEdits[i]->SetOnDrag(std::bind(&Vector2Edit::OnSetAxisValueFloat, this, i, std::placeholders::_1));

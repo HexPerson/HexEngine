@@ -9,39 +9,26 @@
 		</AvailableItemName>
 	</ItemGroup>
 
+	<ItemGroup>
+		<ShaderHeader Include="*.shaderinc" />
+		<ShaderInclude Include="@(None->WithMetadataValue('Extension','.shader'))" />
+		<BuildShader Include="@(HexEngineShader)" />
+		<BuildShader Remove="@(HexEngineShader->WithMetadataValue('ExcludedFromBuild','true'))" />
+	</ItemGroup>
+
 	<Target
 	  Name="HexEngineShaderCompiler"
-	  Condition="'@(HexEngineShader)' != ''"
+	  Condition="'@(BuildShader)' != ''"
+	  Inputs="%(BuildShader.FullPath);@(ShaderHeader);@(ShaderInclude);$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\HexEngine.ShaderCompiler.exe"
+	  Outputs="$(MSBuildProjectDirectory)\Compiled\%(BuildShader.Filename).hcs"
 	  BeforeTargets="ClCompile">
-		<Message Importance="High" Text="Compiling shaders..." />
+		<MakeDir Directories="$(MSBuildProjectDirectory)\Compiled" />
+		<Message Importance="High" Text="Compiling shader: %(BuildShader.Filename)%(BuildShader.Extension)" />
+		<Exec Command="&quot;$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\HexEngine.ShaderCompiler.exe&quot; -I &quot;%(BuildShader.FullPath)&quot; -O &quot;$(MSBuildProjectDirectory)\Compiled\%(BuildShader.Filename).hcs&quot; -T hlsl" />
+	</Target>
 
-		<ItemGroup>
-			<ShaderHeader Include="*.shaderinc" />
-		</ItemGroup>
-		<PropertyGroup>
-			<ShaderHeaders>@(ShaderHeader)</ShaderHeaders>
-		</PropertyGroup>
-
-		<!-- Setup metadata for custom build tool -->
-		<ItemGroup>
-			<HexEngineShader>
-				<AdditionalInputs>$(ShaderHeaders)</AdditionalInputs>
-				<Message>%(Filename)%(Extension)</Message>
-				<Command>
-					"$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\HexEngine.ShaderCompiler.exe" -I "%(FullPath)" -T hlsl
-				</Command>
-				<Outputs>.\Compiled\%(FileName).hcs</Outputs>
-			</HexEngineShader>
-		</ItemGroup>
-
-		<!-- Compile by forwarding to the Custom Build Tool infrastructure -->
-		<CustomBuild
-			Sources="@(HexEngineShader)"
-			MinimalRebuildFromTracking="true"
-			TrackerLogDirectory="$(TLogLocation)"
-			ErrorListRegex="(?'FILENAME'.+):(?'LINE'\d+):(?'COLUMN'\d+): (?'CATEGORY'error|warning): (?'TEXT'.*)" 
-	/>
-
+	<Target Name="HexEngineShaderClean" AfterTargets="Clean" Condition="'@(BuildShader)' != ''">
+		<Delete Files="@(BuildShader->'$(MSBuildProjectDirectory)\Compiled\%(Filename).hcs')" />
 	</Target>
 </Project>
 

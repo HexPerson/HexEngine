@@ -55,6 +55,14 @@ namespace HexEngine
 		float volumetricStrength;
 		int volumetricSteps;
 		float volumetricStepIncrement;
+		int volumetricQuality;
+		int volumetric_pad0;
+		int volumetric_pad1;
+		int volumetric_pad2;
+		float volumetricPointInsideMin;
+		float volumetricPointInsideMax;
+		float volumetricSpotInsideMin;
+		float volumetricSpotInsideMax;
 
 		math::Vector4 ambientLight;
 	};
@@ -64,8 +72,8 @@ namespace HexEngine
 	{
 		float luminosityThreshold;
 		float viewportScale;
-		float pad_1;
-		float pad_2;
+		float bloomIntensity;
+		float bloomClamp;
 	};
 
 	/** @brief Shadow filtering/cascade settings for shadow passes. */

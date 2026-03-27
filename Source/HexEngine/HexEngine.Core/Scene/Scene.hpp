@@ -142,6 +142,7 @@ namespace HexEngine
 		void SetSkySphere(Entity* skySphere);
 
 		void CalculateBounds(math::Vector3& min, math::Vector3& max);
+		bool GatherStaticMeshesInBounds(const dx::BoundingBox& bounds, std::vector<StaticMeshComponent*>& outComponents, bool includeDynamic = true);
 		void CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
 		void CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
 
@@ -206,6 +207,8 @@ namespace HexEngine
 
 		bool DidAnyDrawnItemReflect() const { return _didAnyDrawnItemReflect; }
 
+		bool DidPvsReset() const { return _wasPvsReset; }
+
 	private:
 		void HandlePendingRemovals();
 		void HandlePendingAdditions();
@@ -253,6 +256,7 @@ namespace HexEngine
 		std::vector<MessageListener*> _auxMessageListeners;
 
 		bool _didAnyDrawnItemReflect = false;
+		bool _wasPvsReset = true;
 		
 	};
 }

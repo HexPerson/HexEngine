@@ -194,7 +194,7 @@ namespace HexEngine
 
 			item->parent->hoverIdx = -1;
 			CloseAllMenus();
-			ret = true;
+			return true;
 		}
 
 		for (auto& child : item->items)

@@ -15,7 +15,7 @@ namespace HexEngine
 
 		SpotLight(Entity* entity);
 
-		SpotLight(Entity* entity, SpotLight* copy) : Light(entity) {}
+		SpotLight(Entity* entity, SpotLight* copy) : Light(entity, copy) {}
 
 		virtual void Destroy() override;
 
