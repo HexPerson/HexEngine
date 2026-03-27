@@ -1,0 +1,2392 @@
+#include "DiffuseGI.hpp"
+
+#include "../HexEngine.hpp"
+#include "../Entity/Component/Camera.hpp"
+#include "../Entity/Component/DirectionalLight.hpp"
+#include "../Entity/Component/PointLight.hpp"
+#include "../Entity/Component/SpotLight.hpp"
+#include "../Entity/Component/StaticMeshComponent.hpp"
+#include "../Entity/Component/Transform.hpp"
+#include "../Graphics/DebugRenderer.hpp"
+#include "../Graphics/Material.hpp"
+#include "../Graphics/RenderStructs.hpp"
+#include "../GUI/GuiRenderer.hpp"
+#include "Scene.hpp"
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <unordered_set>
+
+namespace HexEngine
+{
+	HVar r_giEnable("r_giEnable", "Enable runtime diffuse global illumination", true, false, true);
+	HVar r_giQuality("r_giQuality", "GI quality preset (0 = low, 1 = medium, 2 = high)", 2, 0, 2);
+	HVar r_giHalfRes("r_giHalfRes", "Run GI trace pass at half resolution", true, false, true);
+	HVar r_giMovementPreset("r_giMovementPreset", "GI movement stability preset (0=off, 1=stable, 2=ultra stable)", 0, 0, 2);
+	HVar r_giProbeBudget("r_giProbeBudget", "Maximum dynamic probe/object updates per frame", 64, 4, 4096);
+	HVar r_giRaysPerProbe("r_giRaysPerProbe", "Logical rays-per-probe budget hint", 1, 1, 8);
+	HVar r_giHysteresis("r_giHysteresis", "Temporal history blend amount for GI resolve", 0.72f, 0.0f, 0.99f);
+	HVar r_giHistoryReject("r_giHistoryReject", "Velocity threshold for GI history rejection", 0.006f, 0.0001f, 1.0f);
+	HVar r_giJitterScale("r_giJitterScale", "World-space jitter scale for clipmap sampling", 0.45f, 0.0f, 1.5f);
+	HVar r_giClipBlendWidth("r_giClipBlendWidth", "Width used to blend overlapping clipmaps", 0.50f, 0.01f, 0.95f);
+	HVar r_giResolvePixelMotionStart("r_giResolvePixelMotionStart", "Pixel-motion threshold where GI history rejection begins", 1.25f, 0.0f, 8.0f);
+	HVar r_giResolvePixelMotionStrength("r_giResolvePixelMotionStrength", "Strength of pixel-motion GI history rejection", 0.30f, 0.0f, 2.0f);
+	HVar r_giResolveLumaReject("r_giResolveLumaReject", "Luminance-delta multiplier for GI history rejection", 1.0f, 0.0f, 8.0f);
+	HVar r_giResolveDitherDark("r_giResolveDitherDark", "Dither amplitude on dark GI resolve regions", 0.0020f, 0.0f, 0.01f);
+	HVar r_giResolveDitherBright("r_giResolveDitherBright", "Dither amplitude on bright GI resolve regions", 0.0008f, 0.0f, 0.01f);
+	HVar r_giEnergyClamp("r_giEnergyClamp", "Maximum GI radiance contribution before clamp", 1.25f, 0.1f, 32.0f);
+	HVar r_giIntensity("r_giIntensity", "Final GI intensity multiplier", 0.85f, 0.0f, 8.0f);
+	HVar r_giSunInjection("r_giSunInjection", "Sunlight energy injected into the GI voxel clipmaps", 0.25f, 0.0f, 8.0f);
+	HVar r_giSunDirectionalBoost("r_giSunDirectionalBoost", "Directional boost applied to sun-facing GI injection", 2.0f, 0.0f, 8.0f);
+	HVar r_giSunDirectionality("r_giSunDirectionality", "Directional transport/shadowing strength for sun GI", 0.85f, 0.0f, 1.0f);
+	HVar r_giDiffuseInjection("r_giDiffuseInjection", "Diffuse albedo energy injected into GI voxels", 0.08f, 0.0f, 4.0f);
+	HVar r_giUnlitAlbedoInjection("r_giUnlitAlbedoInjection", "Baseline diffuse albedo injection independent of direct lighting", 0.0f, 0.0f, 1.0f);
+	HVar r_giAlbedoBleedBoost("r_giAlbedoBleedBoost", "Boost for albedo-colored diffuse bounce injection", 3.0f, 0.0f, 12.0f);
+	HVar r_giColourBleedStrength("r_giColourBleedStrength", "Extra multiplier for saturated color transfer (red/green/blue bleed)", 1.0f, 0.0f, 4.0f);
+	HVar r_giEmissiveInjection("r_giEmissiveInjection", "Emissive energy injected into GI voxels", 0.75f, 0.0f, 16.0f);
+	HVar r_giLocalLightInjection("r_giLocalLightInjection", "Point/spot light energy injected into GI voxels", 2.5f, 0.0f, 32.0f);
+	HVar r_giLocalLightMaxPerMesh("r_giLocalLightMaxPerMesh", "Maximum local point/spot lights considered per mesh for GI injection", 20, 1, 64);
+	HVar r_giLocalLightBaseSuppression("r_giLocalLightBaseSuppression", "How strongly local-light influence suppresses neutral/sun GI base around the light", 0.85f, 0.0f, 1.0f);
+	HVar r_giLocalLightSunSuppression("r_giLocalLightSunSuppression", "How strongly local-light influence suppresses sun GI injection on the same triangles", 1.0f, 0.0f, 1.0f);
+	HVar r_giLocalLightAlbedoWeight("r_giLocalLightAlbedoWeight", "How strongly local-light GI is tinted by receiver albedo (0=preserve light colour)", 0.0f, 0.0f, 1.0f);
+	HVar r_giLocalLightsOnlyDebug("r_giLocalLightsOnlyDebug", "Debug mode: inject only local point/spot light bounce into GI", false, false, true);
+	HVar r_giProbeGatherBoost("r_giProbeGatherBoost", "Probe raymarch energy boost before temporal filtering", 0.90f, 0.1f, 8.0f);
+	HVar r_giScreenBounce("r_giScreenBounce", "Screen-space diffuse bounce assist intensity", 0.0f, 0.0f, 2.0f);
+	HVar r_giUseTextureTint("r_giUseTextureTint", "Use albedo texture readback to tint GI injection (cached per material)", true, false, true);
+	HVar r_giGpuVoxelize("r_giGpuVoxelize", "Use GPU voxelization for clipmap radiance updates", true, false, true);
+	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
+	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
+	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
+	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
+	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap)", 0, 0, 4);
+	HVar r_giVoxelResolution("r_giVoxelResolution", "Per-clipmap voxel resolution", 128, 16, 256);
+	HVar r_giClipmapBaseExtent("r_giClipmapBaseExtent", "Half-extent of first GI clipmap in world units", 56.0f, 16.0f, 4096.0f);
+}
+
+namespace
+{
+	static DXGI_FORMAT ResolveShadowSrvFormat(DXGI_FORMAT format)
+	{
+		switch (format)
+		{
+		case DXGI_FORMAT_R32_TYPELESS: return DXGI_FORMAT_R32_FLOAT;
+		case DXGI_FORMAT_R24G8_TYPELESS: return DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+		case DXGI_FORMAT_R16_TYPELESS: return DXGI_FORMAT_R16_UNORM;
+		default: return format;
+		}
+	}
+
+	static ID3D11ShaderResourceView* CreateShadowMapSrv(ID3D11Device* device, HexEngine::ITexture2D* depthTexture)
+	{
+		if (device == nullptr || depthTexture == nullptr || depthTexture->GetNativePtr() == nullptr)
+			return nullptr;
+
+		auto* texture = reinterpret_cast<ID3D11Texture2D*>(depthTexture->GetNativePtr());
+		D3D11_TEXTURE2D_DESC textureDesc = {};
+		texture->GetDesc(&textureDesc);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = ResolveShadowSrvFormat(textureDesc.Format);
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MostDetailedMip = 0;
+		srvDesc.Texture2D.MipLevels = 1;
+
+		ID3D11ShaderResourceView* srv = nullptr;
+		if (FAILED(device->CreateShaderResourceView(texture, &srvDesc, &srv)))
+			return nullptr;
+
+		return srv;
+	}
+
+	static void BuildSunShadowCasterBuffer(HexEngine::DirectionalLight* sun, HexEngine::PerShadowCasterBuffer& outBuffer)
+	{
+		outBuffer = {};
+		if (sun == nullptr)
+			return;
+
+		const int32_t cascadeCount = std::clamp<int32_t>(sun->GetMaxSupportedShadowCascades(), 0, 6);
+		for (int32_t i = 0; i < cascadeCount; ++i)
+		{
+			outBuffer._lightProjectionMatrix[i] = sun->GetProjectionMatrix(i).Transpose();
+			outBuffer._lightViewMatrix[i] = sun->GetViewMatrix(i).Transpose();
+			outBuffer._lightViewProjectionMatrix[i] = (sun->GetViewMatrix(i) * sun->GetProjectionMatrix(i)).Transpose();
+		}
+
+		if (auto* sunEntity = sun->GetEntity(); sunEntity != nullptr)
+		{
+			outBuffer._shadowCasterLightDir = sunEntity->GetWorldTM().Forward();
+		}
+		else
+		{
+			outBuffer._shadowCasterLightDir = math::Vector3(0.0f, -1.0f, 0.0f);
+		}
+
+		if (auto* shadowMap = sun->GetShadowMap(0); shadowMap != nullptr)
+		{
+			outBuffer._shadowConfig.shadowMapSize = shadowMap->GetViewport().width;
+		}
+		outBuffer._shadowConfig.passIndex = 0;
+		outBuffer._shadowConfig.cascadeOverride = -1;
+		outBuffer._shadowConfig.samples = 0.0f;
+	}
+
+	static uint8_t ToUNorm8(float value)
+	{
+		value = std::clamp(value, 0.0f, 1.0f);
+		return static_cast<uint8_t>(value * 255.0f + 0.5f);
+	}
+
+	static math::Vector3 ComputeSunTint(HexEngine::Scene* scene)
+	{
+		if (scene == nullptr)
+			return math::Vector3(0.2f, 0.22f, 0.25f);
+
+		math::Vector3 base(scene->GetAmbientColour().x, scene->GetAmbientColour().y, scene->GetAmbientColour().z);
+		base.x = std::max(base.x, 0.05f);
+		base.y = std::max(base.y, 0.05f);
+		base.z = std::max(base.z, 0.05f);
+
+		auto* sun = scene->GetSunLight();
+		if (sun == nullptr)
+			return base;
+		if (!sun->GetInjectIntoGI())
+			return base;
+
+		const auto sunColour = sun->GetDiffuseColour();
+		const float sunStrength = std::max(0.0f, sun->GetLightMultiplier() * sun->GetLightStrength());
+		const math::Vector3 scaledSun(sunColour.x, sunColour.y, sunColour.z);
+		return base + scaledSun * (0.10f * sunStrength);
+	}
+
+	static math::Vector3 ComputeSunDirectionWS(HexEngine::Scene* scene)
+	{
+		math::Vector3 sunDirection(0.0f, -1.0f, 0.0f);
+		if (scene == nullptr)
+			return sunDirection;
+
+		if (auto* sun = scene->GetSunLight(); sun != nullptr)
+		{
+			if (!sun->GetInjectIntoGI())
+				return sunDirection;
+
+			if (auto* sunEntity = sun->GetEntity(); sunEntity != nullptr)
+			{
+				if (auto* sunTransform = sunEntity->GetComponent<HexEngine::Transform>(); sunTransform != nullptr)
+				{
+					sunDirection = sunTransform->GetForward();
+					if (sunDirection.LengthSquared() > 1e-6f)
+						sunDirection.Normalize();
+					else
+						sunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
+				}
+			}
+		}
+
+		return sunDirection;
+	}
+
+}
+
+namespace HexEngine
+{
+	void DiffuseGI::Create(uint32_t width, uint32_t height)
+	{
+		Destroy();
+
+		_width = width;
+		_height = height;
+		_halfWidth = std::max(1u, width / 2u);
+		_halfHeight = std::max(1u, height / 2u);
+		_frameCounter = 0;
+		_activeClipmap = 0;
+		_resolveStabilityBoost = 0.0f;
+		_lastLocalLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
+		_lastLocalLightInjection = r_giLocalLightInjection._val.f32;
+		_lastLocalLightMaxPerMesh = r_giLocalLightMaxPerMesh._val.i32;
+		_lastLocalLightBaseSuppression = r_giLocalLightBaseSuppression._val.f32;
+		_lastLocalLightSunSuppression = r_giLocalLightSunSuppression._val.f32;
+		_lastLocalLightAlbedoWeight = r_giLocalLightAlbedoWeight._val.f32;
+		_lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
+		_lastSunDirectionInitialized = false;
+		_sunRelightFramesRemaining = 0;
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			_cachedVoxelTriangles[i].clear();
+			_cachedVoxelTrianglesValid[i] = false;
+			_cachedVoxelTrianglesFrame[i] = 0ull;
+			_clipmapWarmFramesRemaining[i] = 0u;
+		}
+		_meshTracking.clear();
+		_materialAlbedoCache.clear();
+		for (auto& regions : _dirtyRegions)
+		{
+			regions.clear();
+		}
+
+		_traceShader = IShader::Create("EngineData.Shaders/DiffuseGITrace.hcs");
+		_resolveShader = IShader::Create("EngineData.Shaders/DiffuseGIResolve.hcs");
+		_fullScreenShader = IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
+		_voxelizeShader = IShader::Create("EngineData.Shaders/DiffuseGIVoxelize.hcs");
+		_voxelClearShader = IShader::Create("EngineData.Shaders/DiffuseGIClearVoxel.hcs");
+		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
+		_voxelShiftShader = IShader::Create("EngineData.Shaders/DiffuseGIShiftVoxel.hcs");
+		_constantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(GIConstants));
+		_voxelShiftConstantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(VoxelShiftConstants));
+
+		const DXGI_FORMAT colourFormat = static_cast<DXGI_FORMAT>(g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat());
+		const uint32_t halfWidth = r_giHalfRes._val.b ? _halfWidth : _width;
+		const uint32_t halfHeight = r_giHalfRes._val.b ? _halfHeight : _height;
+
+		_giHalfRes = g_pEnv->_graphicsDevice->CreateTexture2D(
+			static_cast<int32_t>(halfWidth),
+			static_cast<int32_t>(halfHeight),
+			colourFormat,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			1,
+			1,
+			0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D,
+			D3D11_DSV_DIMENSION_UNKNOWN,
+			D3D11_USAGE_DEFAULT,
+			0);
+
+		_giResolved = g_pEnv->_graphicsDevice->CreateTexture2D(
+			static_cast<int32_t>(_width),
+			static_cast<int32_t>(_height),
+			colourFormat,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			1,
+			1,
+			0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D,
+			D3D11_DSV_DIMENSION_UNKNOWN,
+			D3D11_USAGE_DEFAULT,
+			0);
+
+		_giHistory = g_pEnv->_graphicsDevice->CreateTexture2D(
+			static_cast<int32_t>(_width),
+			static_cast<int32_t>(_height),
+			colourFormat,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			1,
+			1,
+			0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D,
+			D3D11_DSV_DIMENSION_UNKNOWN,
+			D3D11_USAGE_DEFAULT,
+			0);
+
+		if (_giHalfRes)
+			_giHalfRes->SetDebugName("GI_HalfRes");
+		if (_giResolved)
+			_giResolved->SetDebugName("GI_Resolved");
+		if (_giHistory)
+			_giHistory->SetDebugName("GI_History");
+
+		const bool clipmapsOk = CreateClipmapResources();
+		_created =
+			(_giHalfRes != nullptr &&
+			 _giResolved != nullptr &&
+			 _giHistory != nullptr &&
+			 _constantBuffer != nullptr &&
+			 _traceShader != nullptr &&
+			 _resolveShader != nullptr &&
+			 _fullScreenShader != nullptr &&
+			 _voxelizeShader != nullptr &&
+			 _voxelClearShader != nullptr &&
+			 _voxelPropagateShader != nullptr &&
+			 _voxelShiftShader != nullptr &&
+			 _voxelShiftConstantBuffer != nullptr &&
+			 clipmapsOk);
+
+		if (!_created)
+		{
+			LOG_CRIT("DiffuseGI failed to initialize resources. GI will remain disabled until recreated.");
+		}
+	}
+
+	void DiffuseGI::Destroy()
+	{
+		DestroyClipmapResources();
+		_meshTracking.clear();
+		_materialAlbedoCache.clear();
+		for (auto& regions : _dirtyRegions)
+		{
+			regions.clear();
+		}
+
+		SAFE_DELETE(_giHalfRes);
+		SAFE_DELETE(_giResolved);
+		SAFE_DELETE(_giHistory);
+		SAFE_DELETE(_constantBuffer);
+		SAFE_DELETE(_voxelShiftConstantBuffer);
+		SAFE_RELEASE(_voxelTriangleSrv);
+		SAFE_RELEASE(_voxelTriangleBuffer);
+		_voxelTriangleCapacity = 0;
+		_voxelTriangleUpload.clear();
+
+		_traceShader = nullptr;
+		_resolveShader = nullptr;
+		_fullScreenShader = nullptr;
+		_voxelizeShader = nullptr;
+		_voxelClearShader = nullptr;
+		_voxelPropagateShader = nullptr;
+		_voxelShiftShader = nullptr;
+		_created = false;
+		_resolveStabilityBoost = 0.0f;
+		_lastLocalLightsOnlyDebug = false;
+		_lastLocalLightInjection = 1.0f;
+		_lastLocalLightMaxPerMesh = 20;
+		_lastLocalLightBaseSuppression = 0.85f;
+		_lastLocalLightSunSuppression = 1.0f;
+		_lastLocalLightAlbedoWeight = 0.0f;
+		_lastSunDirectionInitialized = false;
+		_sunRelightFramesRemaining = 0;
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			_cachedVoxelTriangles[i].clear();
+			_cachedVoxelTrianglesValid[i] = false;
+			_cachedVoxelTrianglesFrame[i] = 0ull;
+			_clipmapWarmFramesRemaining[i] = 0u;
+		}
+	}
+
+	void DiffuseGI::Resize(uint32_t width, uint32_t height)
+	{
+		if (!_created)
+		{
+			Create(width, height);
+			return;
+		}
+
+		Create(width, height);
+	}
+
+	void DiffuseGI::ApplyQualityPreset()
+	{
+		switch (r_giQuality._val.i32)
+		{
+		case 0:
+			r_giVoxelResolution._val.i32 = std::min(r_giVoxelResolution._val.i32, 32);
+			r_giProbeBudget._val.i32 = std::min(r_giProbeBudget._val.i32, 24);
+			r_giRaysPerProbe._val.i32 = 1;
+			r_giHalfRes._val.b = true;
+			break;
+		case 1:
+			r_giVoxelResolution._val.i32 = std::clamp(r_giVoxelResolution._val.i32, 32, 40);
+			r_giProbeBudget._val.i32 = std::clamp(r_giProbeBudget._val.i32, 24, 48);
+			r_giRaysPerProbe._val.i32 = std::clamp(r_giRaysPerProbe._val.i32, 1, 2);
+			break;
+		case 2:
+		default:
+			r_giVoxelResolution._val.i32 = std::clamp(r_giVoxelResolution._val.i32, 40, 256);
+			r_giProbeBudget._val.i32 = std::clamp(r_giProbeBudget._val.i32, 48, 64);
+			r_giRaysPerProbe._val.i32 = std::clamp(r_giRaysPerProbe._val.i32, 1, 2);
+			break;
+		}
+
+		int32_t movementPreset = std::clamp(r_giMovementPreset._val.i32, 0, 2);
+		if (movementPreset == 0 && g_pEnv != nullptr && g_pEnv->IsEditorMode())
+		{
+			// In editor, default to a more stable profile unless the user explicitly picks another mode.
+			movementPreset = 1;
+		}
+
+		if (movementPreset == 1)
+		{
+			r_giJitterScale._val.f32 = std::min(r_giJitterScale._val.f32, 0.38f);
+			r_giClipBlendWidth._val.f32 = std::max(r_giClipBlendWidth._val.f32, 0.58f);
+			r_giResolvePixelMotionStart._val.f32 = std::max(r_giResolvePixelMotionStart._val.f32, 1.6f);
+			r_giResolvePixelMotionStrength._val.f32 = std::min(r_giResolvePixelMotionStrength._val.f32, 0.22f);
+			r_giResolveLumaReject._val.f32 = std::min(r_giResolveLumaReject._val.f32, 0.85f);
+			r_giResolveDitherDark._val.f32 = std::max(r_giResolveDitherDark._val.f32, 0.0022f);
+			r_giResolveDitherBright._val.f32 = std::max(r_giResolveDitherBright._val.f32, 0.0010f);
+		}
+		else if (movementPreset >= 2)
+		{
+			r_giJitterScale._val.f32 = std::min(r_giJitterScale._val.f32, 0.30f);
+			r_giClipBlendWidth._val.f32 = std::max(r_giClipBlendWidth._val.f32, 0.68f);
+			r_giResolvePixelMotionStart._val.f32 = std::max(r_giResolvePixelMotionStart._val.f32, 2.0f);
+			r_giResolvePixelMotionStrength._val.f32 = std::min(r_giResolvePixelMotionStrength._val.f32, 0.16f);
+			r_giResolveLumaReject._val.f32 = std::min(r_giResolveLumaReject._val.f32, 0.65f);
+			r_giResolveDitherDark._val.f32 = std::max(r_giResolveDitherDark._val.f32, 0.0028f);
+			r_giResolveDitherBright._val.f32 = std::max(r_giResolveDitherBright._val.f32, 0.0014f);
+		}
+	}
+
+	uint32_t DiffuseGI::GetVoxelResolution() const
+	{
+		return static_cast<uint32_t>(std::clamp(r_giVoxelResolution._val.i32, 16, 256));
+	}
+
+	float DiffuseGI::GetBaseExtent() const
+	{
+		return std::max(16.0f, r_giClipmapBaseExtent._val.f32);
+	}
+
+	uint32_t DiffuseGI::GetFrameBudget() const
+	{
+		return static_cast<uint32_t>(std::max(4, r_giProbeBudget._val.i32));
+	}
+
+	bool DiffuseGI::CreateClipmapResources()
+	{
+		const uint32_t resolution = GetVoxelResolution();
+		const uint32_t probeAtlasWidth = ProbeGridX * ProbeGridZ;
+		const uint32_t probeAtlasHeight = ProbeGridY;
+
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			auto& level = _clipmaps[i];
+			level.resolution = resolution;
+			level.extent = GetBaseExtent() * std::pow(2.0f, static_cast<float>(i));
+			level.dirty = true;
+			level.initialized = false;
+
+			level.radianceVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				DXGI_FORMAT_R32G32B32A32_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+				1,
+				1,
+				0,
+				nullptr,
+				D3D11_RTV_DIMENSION_UNKNOWN,
+				D3D11_UAV_DIMENSION_TEXTURE3D,
+				D3D11_SRV_DIMENSION_TEXTURE3D,
+				D3D11_DSV_DIMENSION_UNKNOWN);
+
+			level.radianceScratchVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				DXGI_FORMAT_R32G32B32A32_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+				1,
+				1,
+				0,
+				nullptr,
+				D3D11_RTV_DIMENSION_UNKNOWN,
+				D3D11_UAV_DIMENSION_TEXTURE3D,
+				D3D11_SRV_DIMENSION_TEXTURE3D,
+				D3D11_DSV_DIMENSION_UNKNOWN);
+
+			level.opacityVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				DXGI_FORMAT_R8_UNORM,
+				1,
+				D3D11_BIND_SHADER_RESOURCE,
+				1,
+				1,
+				0,
+				nullptr,
+				D3D11_RTV_DIMENSION_UNKNOWN,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE3D,
+				D3D11_DSV_DIMENSION_UNKNOWN);
+
+			level.probeIrradianceAtlas = g_pEnv->_graphicsDevice->CreateTexture2D(
+				static_cast<int32_t>(probeAtlasWidth),
+				static_cast<int32_t>(probeAtlasHeight),
+				DXGI_FORMAT_R32G32B32A32_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE,
+				1,
+				1,
+				0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_UNKNOWN,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE2D,
+				D3D11_DSV_DIMENSION_UNKNOWN,
+				D3D11_USAGE_DEFAULT,
+				0);
+
+			level.probeVisibilityAtlas = g_pEnv->_graphicsDevice->CreateTexture2D(
+				static_cast<int32_t>(probeAtlasWidth),
+				static_cast<int32_t>(probeAtlasHeight),
+				DXGI_FORMAT_R8_UNORM,
+				1,
+				D3D11_BIND_SHADER_RESOURCE,
+				1,
+				1,
+				0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_UNKNOWN,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE2D,
+				D3D11_DSV_DIMENSION_UNKNOWN,
+				D3D11_USAGE_DEFAULT,
+				0);
+
+			level.radianceCpu.resize(static_cast<size_t>(resolution) * resolution * resolution * 4u, 0.0f);
+			level.opacityCpu.resize(static_cast<size_t>(resolution) * resolution * resolution, 0u);
+			level.probeIrradianceCpu.resize(static_cast<size_t>(probeAtlasWidth) * probeAtlasHeight * 4u, 0.0f);
+			level.probeVisibilityCpu.resize(static_cast<size_t>(probeAtlasWidth) * probeAtlasHeight, 0u);
+
+			if (!level.radianceVolume || !level.radianceScratchVolume || !level.opacityVolume || !level.probeIrradianceAtlas || !level.probeVisibilityAtlas)
+			{
+				LOG_CRIT("DiffuseGI failed to allocate one or more clipmap resources.");
+				return false;
+			}
+
+			auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+			if (device != nullptr)
+			{
+				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+				uavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+				uavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D;
+				uavDesc.Texture3D.MipSlice = 0;
+				uavDesc.Texture3D.FirstWSlice = 0;
+				uavDesc.Texture3D.WSize = resolution;
+				HRESULT hr = device->CreateUnorderedAccessView(
+					reinterpret_cast<ID3D11Texture3D*>(level.radianceVolume->GetNativePtr()),
+					&uavDesc,
+					&level.radianceUav);
+				if (FAILED(hr) || level.radianceUav == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to create radiance UAV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
+					return false;
+				}
+
+				hr = device->CreateUnorderedAccessView(
+					reinterpret_cast<ID3D11Texture3D*>(level.radianceScratchVolume->GetNativePtr()),
+					&uavDesc,
+					&level.radianceScratchUav);
+				if (FAILED(hr) || level.radianceScratchUav == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to create radiance scratch UAV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
+					return false;
+				}
+
+				hr = device->CreateShaderResourceView(
+					reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
+					nullptr,
+					&level.radianceSrv);
+				if (FAILED(hr) || level.radianceSrv == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to create radiance SRV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
+					return false;
+				}
+
+				hr = device->CreateShaderResourceView(
+					reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()),
+					nullptr,
+					&level.radianceScratchSrv);
+				if (FAILED(hr) || level.radianceScratchSrv == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to create radiance scratch SRV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+
+	void DiffuseGI::DestroyClipmapResources()
+	{
+		for (auto& level : _clipmaps)
+		{
+			SAFE_RELEASE(level.radianceUav);
+			SAFE_RELEASE(level.radianceScratchUav);
+			SAFE_RELEASE(level.radianceSrv);
+			SAFE_RELEASE(level.radianceScratchSrv);
+			SAFE_DELETE(level.radianceVolume);
+			SAFE_DELETE(level.radianceScratchVolume);
+			SAFE_DELETE(level.opacityVolume);
+			SAFE_DELETE(level.probeIrradianceAtlas);
+			SAFE_DELETE(level.probeVisibilityAtlas);
+			level.radianceCpu.clear();
+			level.opacityCpu.clear();
+			level.probeIrradianceCpu.clear();
+			level.probeVisibilityCpu.clear();
+			level.initialized = false;
+		}
+	}
+
+	void DiffuseGI::RebuildClipmapTransforms(const math::Vector3& cameraPosition)
+	{
+		const uint32_t resolution = GetVoxelResolution();
+		const float baseExtent = GetBaseExtent();
+
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			auto& level = _clipmaps[i];
+			const float extent = baseExtent * std::pow(2.0f, static_cast<float>(i));
+			const float voxelSize = (extent * 2.0f) / static_cast<float>(resolution);
+			const float snapFactor = (i == 0u) ? 1.0f : ((i == 1u) ? 2.0f : 3.0f);
+			const float scrollStep = std::max(voxelSize * snapFactor, 1e-3f);
+
+			const math::Vector3 snappedCandidate(
+				std::round(cameraPosition.x / scrollStep) * scrollStep,
+				std::round(cameraPosition.y / scrollStep) * scrollStep,
+				std::round(cameraPosition.z / scrollStep) * scrollStep);
+			math::Vector3 snapped = snappedCandidate;
+			const math::Vector3 previousCenter = level.center;
+
+			// Add hysteresis to the nearest clipmap to prevent frequent center hops while moving.
+			// This reduces visible GI popping/shimmer in first-person movement.
+			if (i == 0u && level.initialized)
+			{
+				const math::Vector3 deltaToCandidate = level.center - snappedCandidate;
+				const float holdDistance = scrollStep * 2.0f;
+				if (deltaToCandidate.LengthSquared() < (holdDistance * holdDistance))
+				{
+					snapped = level.center;
+				}
+			}
+
+			if ((level.center - snapped).LengthSquared() > scrollStep * scrollStep * 0.25f)
+			{
+				level.dirty = true;
+				_cachedVoxelTrianglesValid[i] = false;
+				_cachedVoxelTrianglesFrame[i] = 0ull;
+				_clipmapWarmFramesRemaining[i] = (i == 0u) ? 4u : 2u;
+				level.pendingShiftWs = level.initialized ? (snapped - previousCenter) : math::Vector3::Zero;
+			}
+			
+			level.center = snapped;
+			level.extent = extent;
+		}
+	}
+
+	void DiffuseGI::AddDirtyRegion(uint32_t levelIndex, const dx::BoundingBox& bounds)
+	{
+		if (levelIndex >= ClipmapCount)
+			return;
+
+		auto& regions = _dirtyRegions[levelIndex];
+		regions.push_back(bounds);
+
+		constexpr size_t MaxDirtyRegions = 128;
+		if (regions.size() > MaxDirtyRegions)
+		{
+			const size_t trim = regions.size() - MaxDirtyRegions;
+			regions.erase(regions.begin(), regions.begin() + trim);
+		}
+	}
+
+	bool DiffuseGI::IsMeshStateDirty(StaticMeshComponent* smc, const math::Vector3& worldPos)
+	{
+		if (smc == nullptr)
+			return false;
+
+		MeshTrackingState state;
+		state.position = worldPos;
+
+		if (auto mat = smc->GetMaterial())
+		{
+			state.emissive = mat->_properties.emissiveColour;
+			state.diffuse = mat->_properties.diffuseColour;
+		}
+
+		const auto nearlyEqual3 = [](const math::Vector3& a, const math::Vector3& b)
+		{
+			return (a - b).LengthSquared() <= (0.001f * 0.001f);
+		};
+		const auto nearlyEqual4 = [](const math::Vector4& a, const math::Vector4& b)
+		{
+			const math::Vector4 d = a - b;
+			const float err = d.x * d.x + d.y * d.y + d.z * d.z + d.w * d.w;
+			return err <= (0.0005f * 0.0005f);
+		};
+
+		auto it = _meshTracking.find(smc);
+		if (it == _meshTracking.end())
+		{
+			_meshTracking.emplace(smc, state);
+			return true;
+		}
+
+		const bool dirty =
+			!nearlyEqual3(it->second.position, state.position) ||
+			!nearlyEqual4(it->second.emissive, state.emissive) ||
+			!nearlyEqual4(it->second.diffuse, state.diffuse);
+
+		if (dirty)
+		{
+			it->second = state;
+		}
+
+		return dirty;
+	}
+
+	math::Vector3 DiffuseGI::GetMaterialAlbedoTint(const Material* material)
+	{
+		if (material == nullptr)
+			return math::Vector3(1.0f, 1.0f, 1.0f);
+
+		if (auto it = _materialAlbedoCache.find(material); it != _materialAlbedoCache.end())
+			return it->second;
+
+		math::Vector3 tint(
+			std::clamp(material->_properties.diffuseColour.x, 0.0f, 1.0f),
+			std::clamp(material->_properties.diffuseColour.y, 0.0f, 1.0f),
+			std::clamp(material->_properties.diffuseColour.z, 0.0f, 1.0f));
+
+		if (r_giUseTextureTint._val.b)
+		{
+			if (auto albedo = material->GetTexture(MaterialTexture::Albedo))
+			{
+				std::vector<uint8_t> pixels;
+				albedo->GetPixels(pixels);
+
+				const int32_t texW = std::max(1, albedo->GetWidth());
+				const int32_t texH = std::max(1, albedo->GetHeight());
+				const size_t minTightSize = static_cast<size_t>(texW) * static_cast<size_t>(texH) * 4u;
+				if (pixels.size() >= minTightSize && texW > 0 && texH > 0)
+				{
+					const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedo->GetFormat());
+					const bool isBgra =
+						(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+						(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+						(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+						(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+					const int cR = isBgra ? 2 : 0;
+					const int cG = 1;
+					const int cB = isBgra ? 0 : 2;
+
+					// GetPixels payload is treated as tightly packed base level for tint estimation.
+					const size_t rowPitch = static_cast<size_t>(texW) * 4u;
+					const size_t pixelCount = static_cast<size_t>(texW) * static_cast<size_t>(texH);
+					const size_t step = std::max<size_t>(1u, pixelCount / 8192u);
+
+					double r = 0.0;
+					double g = 0.0;
+					double b = 0.0;
+					double rs = 0.0;
+					double gs = 0.0;
+					double bs = 0.0;
+					double satWeightSum = 0.0;
+					size_t samples = 0u;
+					for (size_t i = 0u; i < pixelCount; i += step)
+					{
+						const size_t x = i % static_cast<size_t>(texW);
+						const size_t y = i / static_cast<size_t>(texW);
+						const size_t idx = y * rowPitch + x * 4u;
+						if (idx + 3u >= pixels.size())
+							continue;
+
+						const float srgbR = pixels[idx + static_cast<size_t>(cR)] / 255.0f;
+						const float srgbG = pixels[idx + static_cast<size_t>(cG)] / 255.0f;
+						const float srgbB = pixels[idx + static_cast<size_t>(cB)] / 255.0f;
+						const float linR = static_cast<float>(std::pow(static_cast<double>(srgbR), 2.2));
+						const float linG = static_cast<float>(std::pow(static_cast<double>(srgbG), 2.2));
+						const float linB = static_cast<float>(std::pow(static_cast<double>(srgbB), 2.2));
+						r += linR;
+						g += linG;
+						b += linB;
+
+						const float maxC = std::max(linR, std::max(linG, linB));
+						const float minC = std::min(linR, std::min(linG, linB));
+						const float sat = std::max(0.0f, maxC - minC);
+						const float satWeight = 0.05f + sat * sat * 4.0f;
+						rs += linR * satWeight;
+						gs += linG * satWeight;
+						bs += linB * satWeight;
+						satWeightSum += satWeight;
+						++samples;
+					}
+
+					if (samples > 0u)
+					{
+						const float inv = 1.0f / static_cast<float>(samples);
+						const math::Vector3 avgTex(
+							static_cast<float>(r) * inv,
+							static_cast<float>(g) * inv,
+							static_cast<float>(b) * inv);
+						math::Vector3 satTex = avgTex;
+						if (satWeightSum > 1e-5)
+						{
+							const float satInv = 1.0f / static_cast<float>(satWeightSum);
+							satTex = math::Vector3(
+								static_cast<float>(rs) * satInv,
+								static_cast<float>(gs) * satInv,
+								static_cast<float>(bs) * satInv);
+						}
+						const float avgMax = std::max(avgTex.x, std::max(avgTex.y, avgTex.z));
+						const float avgMin = std::min(avgTex.x, std::min(avgTex.y, avgTex.z));
+						const float avgSat = std::max(0.0f, avgMax - avgMin);
+						const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
+						const float satMix = std::clamp((avgSat * 3.5f + 0.20f) * colourBleedStrength, 0.0f, 1.0f);
+						const math::Vector3 texTint = avgTex * (1.0f - satMix) + satTex * satMix;
+						tint = tint * texTint;
+					}
+				}
+			}
+		}
+
+		tint.x = std::clamp(tint.x, 0.03f, 1.0f);
+		tint.y = std::clamp(tint.y, 0.03f, 1.0f);
+		tint.z = std::clamp(tint.z, 0.03f, 1.0f);
+		const float tintLuma = tint.x * 0.2126f + tint.y * 0.7152f + tint.z * 0.0722f;
+		const float tintMax = std::max(tint.x, std::max(tint.y, tint.z));
+		const float tintMin = std::min(tint.x, std::min(tint.y, tint.z));
+		const float tintSat = std::max(0.0f, tintMax - tintMin);
+		const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
+		const float satBoostFactor = std::clamp(tintSat * 0.55f * colourBleedStrength, 0.0f, 0.65f);
+		tint = math::Vector3(tintLuma, tintLuma, tintLuma) * (1.0f - satBoostFactor) + tint * (1.0f + satBoostFactor);
+		tint.x = std::clamp(tint.x, 0.03f, 1.0f);
+		tint.y = std::clamp(tint.y, 0.03f, 1.0f);
+		tint.z = std::clamp(tint.z, 0.03f, 1.0f);
+
+		_materialAlbedoCache[material] = tint;
+		return tint;
+	}
+
+	void DiffuseGI::UpdateProbeAtlases(ClipmapLevel& level)
+	{
+		const uint32_t probeAtlasWidth = ProbeGridX * ProbeGridZ;
+		const uint32_t probeAtlasHeight = ProbeGridY;
+		const float probeHistory = level.dirty ? 0.0f : std::clamp(r_giHysteresis._val.f32, 0.0f, 0.95f);
+
+		std::vector<float> previousIrradiance = level.probeIrradianceCpu;
+		std::vector<uint8_t> previousVisibility = level.probeVisibilityCpu;
+		std::fill(level.probeIrradianceCpu.begin(), level.probeIrradianceCpu.end(), 0.0f);
+		std::fill(level.probeVisibilityCpu.begin(), level.probeVisibilityCpu.end(), 0u);
+
+		const uint32_t voxelRes = level.resolution;
+		const float scaleX = static_cast<float>(voxelRes - 1) / static_cast<float>(ProbeGridX - 1);
+		const float scaleY = static_cast<float>(voxelRes - 1) / static_cast<float>(ProbeGridY - 1);
+		const float scaleZ = static_cast<float>(voxelRes - 1) / static_cast<float>(ProbeGridZ - 1);
+		const int32_t rayCount = std::clamp(r_giRaysPerProbe._val.i32 * 2, 2, 12);
+		const int32_t raySteps = std::clamp(6 + r_giRaysPerProbe._val.i32, 6, 14);
+
+		static const math::Vector3 kRayDirs[] =
+		{
+			math::Vector3(1.0f, 0.0f, 0.0f),
+			math::Vector3(-1.0f, 0.0f, 0.0f),
+			math::Vector3(0.0f, 1.0f, 0.0f),
+			math::Vector3(0.0f, -1.0f, 0.0f),
+			math::Vector3(0.0f, 0.0f, 1.0f),
+			math::Vector3(0.0f, 0.0f, -1.0f),
+			math::Vector3(0.577f, 0.577f, 0.577f),
+			math::Vector3(-0.577f, 0.577f, 0.577f),
+			math::Vector3(0.577f, -0.577f, 0.577f),
+			math::Vector3(0.577f, 0.577f, -0.577f),
+			math::Vector3(-0.707f, 0.0f, 0.707f),
+			math::Vector3(0.707f, 0.0f, -0.707f)
+		};
+		const int32_t maxDirs = static_cast<int32_t>(std::size(kRayDirs));
+		auto sampleVoxelTrilinear = [&](const math::Vector3& p, math::Vector3& radiance, float& opacity)
+		{
+			const float fx = std::clamp(p.x, 0.0f, static_cast<float>(voxelRes - 1u));
+			const float fy = std::clamp(p.y, 0.0f, static_cast<float>(voxelRes - 1u));
+			const float fz = std::clamp(p.z, 0.0f, static_cast<float>(voxelRes - 1u));
+
+			const uint32_t x0 = static_cast<uint32_t>(std::floor(fx));
+			const uint32_t y0 = static_cast<uint32_t>(std::floor(fy));
+			const uint32_t z0 = static_cast<uint32_t>(std::floor(fz));
+			const uint32_t x1 = std::min<uint32_t>(x0 + 1u, voxelRes - 1u);
+			const uint32_t y1 = std::min<uint32_t>(y0 + 1u, voxelRes - 1u);
+			const uint32_t z1 = std::min<uint32_t>(z0 + 1u, voxelRes - 1u);
+
+			const float tx = fx - static_cast<float>(x0);
+			const float ty = fy - static_cast<float>(y0);
+			const float tz = fz - static_cast<float>(z0);
+
+			const auto sampleAt = [&](uint32_t x, uint32_t y, uint32_t z, math::Vector3& outRad, float& outOpacity)
+			{
+				const size_t idx = (static_cast<size_t>(z) * voxelRes * voxelRes) + (static_cast<size_t>(y) * voxelRes) + x;
+				const size_t ridx = idx * 4u;
+				outRad = math::Vector3(
+					level.radianceCpu[ridx + 0],
+					level.radianceCpu[ridx + 1],
+					level.radianceCpu[ridx + 2]);
+				outOpacity = level.opacityCpu[idx] / 255.0f;
+			};
+
+			math::Vector3 c000, c100, c010, c110, c001, c101, c011, c111;
+			float o000, o100, o010, o110, o001, o101, o011, o111;
+			sampleAt(x0, y0, z0, c000, o000);
+			sampleAt(x1, y0, z0, c100, o100);
+			sampleAt(x0, y1, z0, c010, o010);
+			sampleAt(x1, y1, z0, c110, o110);
+			sampleAt(x0, y0, z1, c001, o001);
+			sampleAt(x1, y0, z1, c101, o101);
+			sampleAt(x0, y1, z1, c011, o011);
+			sampleAt(x1, y1, z1, c111, o111);
+
+			const math::Vector3 c00 = c000 * (1.0f - tx) + c100 * tx;
+			const math::Vector3 c10 = c010 * (1.0f - tx) + c110 * tx;
+			const math::Vector3 c01 = c001 * (1.0f - tx) + c101 * tx;
+			const math::Vector3 c11 = c011 * (1.0f - tx) + c111 * tx;
+			const math::Vector3 c0 = c00 * (1.0f - ty) + c10 * ty;
+			const math::Vector3 c1 = c01 * (1.0f - ty) + c11 * ty;
+			radiance = c0 * (1.0f - tz) + c1 * tz;
+
+			const float o00 = o000 * (1.0f - tx) + o100 * tx;
+			const float o10 = o010 * (1.0f - tx) + o110 * tx;
+			const float o01 = o001 * (1.0f - tx) + o101 * tx;
+			const float o11 = o011 * (1.0f - tx) + o111 * tx;
+			const float o0 = o00 * (1.0f - ty) + o10 * ty;
+			const float o1 = o01 * (1.0f - ty) + o11 * ty;
+			opacity = o0 * (1.0f - tz) + o1 * tz;
+		};
+
+		for (uint32_t z = 0; z < ProbeGridZ; ++z)
+		{
+			for (uint32_t y = 0; y < ProbeGridY; ++y)
+			{
+				for (uint32_t x = 0; x < ProbeGridX; ++x)
+				{
+					const float vxBase = x * scaleX;
+					const float vyBase = y * scaleY;
+					const float vzBase = z * scaleZ;
+					const math::Vector3 probeVoxel(vxBase, vyBase, vzBase);
+					math::Vector3 accumulatedRadiance = math::Vector3::Zero;
+					float accumulatedVisibility = 0.0f;
+
+					for (int32_t ray = 0; ray < rayCount; ++ray)
+					{
+						// Use low-frequency temporal scrambling to avoid high-frequency probe shimmer while moving.
+						const uint32_t temporalSlice = static_cast<uint32_t>(_frameCounter >> 3ull);
+						const uint32_t scramble = (x * 73856093u) ^ (y * 19349663u) ^ (z * 83492791u) ^ temporalSlice;
+						const math::Vector3 rayDir = kRayDirs[(ray + static_cast<int32_t>(scramble % static_cast<uint32_t>(maxDirs))) % maxDirs];
+						float transmittance = 1.0f;
+						math::Vector3 rayRadiance = math::Vector3::Zero;
+
+						for (int32_t step = 1; step <= raySteps; ++step)
+						{
+							const math::Vector3 p = probeVoxel + rayDir * static_cast<float>(step);
+							float opacity = 0.0f;
+							math::Vector3 sampleRadiance = math::Vector3::Zero;
+							sampleVoxelTrilinear(p, sampleRadiance, opacity);
+
+							rayRadiance += sampleRadiance * transmittance * (0.40f * r_giProbeGatherBoost._val.f32);
+							transmittance *= (1.0f - opacity * 0.60f);
+							if (transmittance < 0.05f)
+								break;
+						}
+
+						accumulatedRadiance += rayRadiance;
+						accumulatedVisibility += transmittance;
+					}
+
+					const float invRayCount = 1.0f / static_cast<float>(std::max(rayCount, 1));
+					accumulatedRadiance *= invRayCount * 1.15f;
+					accumulatedVisibility = std::clamp(accumulatedVisibility * invRayCount, 0.0f, 1.0f);
+
+					const uint32_t atlasX = x + z * ProbeGridX;
+					const uint32_t atlasY = y;
+					const size_t atlasIdx = static_cast<size_t>(atlasY) * probeAtlasWidth + atlasX;
+					const size_t atlasRadiance = atlasIdx * 4u;
+
+					const float prevR = previousIrradiance[atlasRadiance + 0];
+					const float prevG = previousIrradiance[atlasRadiance + 1];
+					const float prevB = previousIrradiance[atlasRadiance + 2];
+					const float prevV = previousVisibility[atlasIdx] / 255.0f;
+
+					const float currLum = std::max(0.0f, accumulatedRadiance.x * 0.2126f + accumulatedRadiance.y * 0.7152f + accumulatedRadiance.z * 0.0722f);
+					const float prevLum = std::max(0.0f, prevR * 0.2126f + prevG * 0.7152f + prevB * 0.0722f);
+					const float deltaLum = std::abs(currLum - prevLum);
+					const float deltaNorm = deltaLum / std::max(0.08f, prevLum + currLum + 0.03f);
+					const float temporalConfidence =
+						std::clamp(
+							accumulatedVisibility * 0.55f +
+							prevV * 0.25f +
+							std::clamp(currLum * 1.05f, 0.0f, 1.0f) * 0.20f,
+							0.0f, 1.0f);
+					const float rejectFromChange = std::clamp(deltaNorm * (0.45f + (1.0f - temporalConfidence) * 0.25f), 0.0f, 0.75f);
+					const float adaptiveHistory = std::max(probeHistory * 0.45f, probeHistory * temporalConfidence * (1.0f - rejectFromChange));
+
+					level.probeIrradianceCpu[atlasRadiance + 0] = std::lerp(accumulatedRadiance.x, prevR, adaptiveHistory);
+					level.probeIrradianceCpu[atlasRadiance + 1] = std::lerp(accumulatedRadiance.y, prevG, adaptiveHistory);
+					level.probeIrradianceCpu[atlasRadiance + 2] = std::lerp(accumulatedRadiance.z, prevB, adaptiveHistory);
+					level.probeIrradianceCpu[atlasRadiance + 3] = 1.0f;
+					level.probeVisibilityCpu[atlasIdx] = ToUNorm8(std::lerp(accumulatedVisibility, prevV, adaptiveHistory));
+				}
+			}
+		}
+
+		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (!context)
+			return;
+
+		if (level.probeIrradianceAtlas)
+		{
+			context->UpdateSubresource(
+				reinterpret_cast<ID3D11Texture2D*>(level.probeIrradianceAtlas->GetNativePtr()),
+				0,
+				nullptr,
+				level.probeIrradianceCpu.data(),
+				probeAtlasWidth * 4u * sizeof(float),
+				0u);
+		}
+
+		if (level.probeVisibilityAtlas)
+		{
+			context->UpdateSubresource(
+				reinterpret_cast<ID3D11Texture2D*>(level.probeVisibilityAtlas->GetNativePtr()),
+				0,
+				nullptr,
+				level.probeVisibilityCpu.data(),
+				probeAtlasWidth,
+				0u);
+		}
+	}
+
+	void DiffuseGI::UpdateClipmapData(Scene* scene, uint32_t levelIndex)
+	{
+		if (scene == nullptr || levelIndex >= ClipmapCount)
+			return;
+
+		auto& level = _clipmaps[levelIndex];
+		const uint32_t voxelRes = level.resolution;
+		const float extent = level.extent;
+		const float invExtent = extent > 0.0f ? (1.0f / extent) : 0.0f;
+		const math::Vector3 sunTint = ComputeSunTint(scene);
+		const bool sunInjectEnabled = scene != nullptr && scene->GetSunLight() != nullptr && scene->GetSunLight()->GetInjectIntoGI();
+		const float sunInjectScale = sunInjectEnabled ? 1.0f : 0.0f;
+		const uint32_t frameBudget = GetFrameBudget();
+		const dx::BoundingBox clipBounds(level.center, math::Vector3(extent, extent, extent));
+
+		const bool bootstrap = !level.initialized;
+		const float decay = level.dirty ? 0.9965f : 0.9985f;
+		for (size_t i = 0; i < level.opacityCpu.size(); ++i)
+		{
+			if (bootstrap)
+			{
+				level.opacityCpu[i] = ToUNorm8(0.01f);
+				const size_t c = i * 4u;
+				level.radianceCpu[c + 0] = sunTint.x * 0.08f * sunInjectScale;
+				level.radianceCpu[c + 1] = sunTint.y * 0.08f * sunInjectScale;
+				level.radianceCpu[c + 2] = sunTint.z * 0.08f * sunInjectScale;
+				level.radianceCpu[c + 3] = 1.0f;
+			}
+			else
+			{
+				level.opacityCpu[i] = static_cast<uint8_t>(std::max(1.0f, level.opacityCpu[i] * decay));
+				const size_t c = i * 4u;
+				level.radianceCpu[c + 0] = std::max(0.0005f, level.radianceCpu[c + 0] * decay);
+				level.radianceCpu[c + 1] = std::max(0.0005f, level.radianceCpu[c + 1] * decay);
+				level.radianceCpu[c + 2] = std::max(0.0005f, level.radianceCpu[c + 2] * decay);
+				level.radianceCpu[c + 3] = 1.0f;
+			}
+		}
+
+		if (bootstrap || level.dirty)
+		{
+			_dirtyRegions[levelIndex].clear();
+			AddDirtyRegion(levelIndex, clipBounds);
+		}
+
+		std::vector<StaticMeshComponent*> meshesInBounds;
+		scene->GatherStaticMeshesInBounds(clipBounds, meshesInBounds, true);
+
+		std::vector<StaticMeshComponent*> prioritized;
+		std::vector<StaticMeshComponent*> regular;
+		prioritized.reserve(meshesInBounds.size());
+		regular.reserve(meshesInBounds.size());
+
+		std::unordered_set<StaticMeshComponent*> visibleSet;
+		visibleSet.reserve(meshesInBounds.size());
+
+		for (auto* smc : meshesInBounds)
+		{
+			if (smc == nullptr || smc->GetMesh() == nullptr)
+				continue;
+
+			auto* entity = smc->GetEntity();
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
+
+			visibleSet.insert(smc);
+
+			const math::Vector3 worldPos = entity->GetWorldTM().Translation();
+			const bool meshDirty = IsMeshStateDirty(smc, worldPos);
+			if (meshDirty)
+			{
+				AddDirtyRegion(levelIndex, entity->GetWorldAABB());
+			}
+
+			const auto& aabb = entity->GetWorldAABB();
+			bool intersectsDirty = meshDirty;
+			if (!intersectsDirty)
+			{
+				for (const auto& dirtyRegion : _dirtyRegions[levelIndex])
+				{
+					if (dirtyRegion.Intersects(aabb))
+					{
+						intersectsDirty = true;
+						break;
+					}
+				}
+			}
+
+			if (intersectsDirty)
+				prioritized.push_back(smc);
+			else
+				regular.push_back(smc);
+		}
+
+		if ((_frameCounter % 64ull) == 0ull)
+		{
+			for (auto it = _meshTracking.begin(); it != _meshTracking.end();)
+			{
+				if (visibleSet.find(it->first) == visibleSet.end())
+					it = _meshTracking.erase(it);
+				else
+					++it;
+			}
+		}
+
+		auto injectMesh = [&](StaticMeshComponent* smc)
+		{
+			if (smc == nullptr)
+				return false;
+
+			Entity* entity = smc->GetEntity();
+			if (entity == nullptr || entity->IsPendingDeletion())
+				return false;
+
+			const auto& worldAabb = entity->GetWorldOBB();
+			const math::Vector3 aabbCenter(worldAabb.Center.x, worldAabb.Center.y, worldAabb.Center.z);
+			const math::Vector3 aabbExtents(worldAabb.Extents.x, worldAabb.Extents.y, worldAabb.Extents.z);
+			math::Vector3 worldMin = aabbCenter - aabbExtents;
+			math::Vector3 worldMax = aabbCenter + aabbExtents;
+
+			const math::Vector3 uvwMin = ((worldMin - level.center) * invExtent) * 0.5f + math::Vector3(0.5f);
+			const math::Vector3 uvwMax = ((worldMax - level.center) * invExtent) * 0.5f + math::Vector3(0.5f);
+
+			const math::Vector3 uvwLo(
+				std::clamp(std::min(uvwMin.x, uvwMax.x), 0.0f, 1.0f),
+				std::clamp(std::min(uvwMin.y, uvwMax.y), 0.0f, 1.0f),
+				std::clamp(std::min(uvwMin.z, uvwMax.z), 0.0f, 1.0f));
+			const math::Vector3 uvwHi(
+				std::clamp(std::max(uvwMin.x, uvwMax.x), 0.0f, 1.0f),
+				std::clamp(std::max(uvwMin.y, uvwMax.y), 0.0f, 1.0f),
+				std::clamp(std::max(uvwMin.z, uvwMax.z), 0.0f, 1.0f));
+
+			if (uvwHi.x < 0.0f || uvwHi.y < 0.0f || uvwHi.z < 0.0f ||
+				uvwLo.x > 1.0f || uvwLo.y > 1.0f || uvwLo.z > 1.0f)
+			{
+				return false;
+			}
+
+			const uint32_t vx0 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwLo.x * static_cast<float>(voxelRes - 1)));
+			const uint32_t vy0 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwLo.y * static_cast<float>(voxelRes - 1)));
+			const uint32_t vz0 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwLo.z * static_cast<float>(voxelRes - 1)));
+			const uint32_t vx1 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwHi.x * static_cast<float>(voxelRes - 1)));
+			const uint32_t vy1 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwHi.y * static_cast<float>(voxelRes - 1)));
+			const uint32_t vz1 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwHi.z * static_cast<float>(voxelRes - 1)));
+
+			uint32_t step = 1;
+			const uint32_t spanX = (vx1 >= vx0) ? (vx1 - vx0 + 1u) : 1u;
+			const uint32_t spanY = (vy1 >= vy0) ? (vy1 - vy0 + 1u) : 1u;
+			const uint32_t spanZ = (vz1 >= vz0) ? (vz1 - vz0 + 1u) : 1u;
+			constexpr uint32_t MaxVoxelWritesPerMesh = 196u;
+			while (((spanX + step - 1u) / step) * ((spanY + step - 1u) / step) * ((spanZ + step - 1u) / step) > MaxVoxelWritesPerMesh)
+			{
+				++step;
+			}
+
+			math::Vector3 injection = sunTint * std::max(0.0f, r_giSunInjection._val.f32) * sunInjectScale;
+			if (auto mat = smc->GetMaterial())
+			{
+				const auto emissive = mat->_properties.emissiveColour;
+				const math::Vector3 albedoTint = GetMaterialAlbedoTint(mat.get());
+				const float albedoMax = std::max(albedoTint.x, std::max(albedoTint.y, albedoTint.z));
+				const float albedoMin = std::min(albedoTint.x, std::min(albedoTint.y, albedoTint.z));
+				const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
+				const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
+				const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * 0.8f, 1.0f, 2.0f);
+				injection += albedoTint * std::max(0.0f, r_giDiffuseInjection._val.f32) * colourBleedBoost;
+				injection += math::Vector3(emissive.x, emissive.y, emissive.z) * std::max(0.0f, emissive.w) * std::max(0.0f, r_giEmissiveInjection._val.f32);
+			}
+
+			const float clipAttenuation = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
+			injection *= clipAttenuation;
+
+			for (uint32_t vz = vz0; vz <= vz1; vz += step)
+			{
+				for (uint32_t vy = vy0; vy <= vy1; vy += step)
+				{
+					for (uint32_t vx = vx0; vx <= vx1; vx += step)
+					{
+						const size_t voxelIdx = (static_cast<size_t>(vz) * voxelRes * voxelRes) + (static_cast<size_t>(vy) * voxelRes) + vx;
+						const size_t radianceOffset = voxelIdx * 4u;
+
+						level.radianceCpu[radianceOffset + 0] = std::min(32.0f, level.radianceCpu[radianceOffset + 0] + injection.x);
+						level.radianceCpu[radianceOffset + 1] = std::min(32.0f, level.radianceCpu[radianceOffset + 1] + injection.y);
+						level.radianceCpu[radianceOffset + 2] = std::min(32.0f, level.radianceCpu[radianceOffset + 2] + injection.z);
+						level.radianceCpu[radianceOffset + 3] = 1.0f;
+						level.opacityCpu[voxelIdx] = std::max<uint8_t>(level.opacityCpu[voxelIdx], ToUNorm8(0.85f));
+					}
+				}
+			}
+
+			return true;
+		};
+
+		const uint32_t updateBudget = level.dirty
+			? std::min<uint32_t>(frameBudget * 2u, 256u)
+			: frameBudget;
+
+		uint32_t processed = 0;
+		for (auto* smc : prioritized)
+		{
+			if (injectMesh(smc) && ++processed >= updateBudget)
+				break;
+		}
+
+		if (processed < updateBudget)
+		{
+			for (auto* smc : regular)
+			{
+				if (injectMesh(smc) && ++processed >= updateBudget)
+					break;
+			}
+		}
+
+		if (!_dirtyRegions[levelIndex].empty())
+		{
+			const size_t popCount = (processed >= updateBudget) ? 1u : std::min<size_t>(_dirtyRegions[levelIndex].size(), 8u);
+			_dirtyRegions[levelIndex].erase(_dirtyRegions[levelIndex].begin(), _dirtyRegions[levelIndex].begin() + popCount);
+		}
+
+		for (auto& otherLevel : _dirtyRegions)
+		{
+			if (otherLevel.size() > 128u)
+			{
+				otherLevel.erase(otherLevel.begin(), otherLevel.begin() + (otherLevel.size() - 128u));
+			}
+		}
+
+		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (context != nullptr && level.radianceVolume != nullptr && level.opacityVolume != nullptr)
+		{
+			const uint32_t rowPitchRadiance = voxelRes * 4u * sizeof(float);
+			const uint32_t slicePitchRadiance = rowPitchRadiance * voxelRes;
+			const uint32_t rowPitchOpacity = voxelRes;
+			const uint32_t slicePitchOpacity = rowPitchOpacity * voxelRes;
+
+			context->UpdateSubresource(
+				reinterpret_cast<ID3D11Texture3D*>(level.radianceVolume->GetNativePtr()),
+				0,
+				nullptr,
+				level.radianceCpu.data(),
+				rowPitchRadiance,
+				slicePitchRadiance);
+
+			context->UpdateSubresource(
+				reinterpret_cast<ID3D11Texture3D*>(level.opacityVolume->GetNativePtr()),
+				0,
+				nullptr,
+				level.opacityCpu.data(),
+				rowPitchOpacity,
+				slicePitchOpacity);
+		}
+
+		if (r_giUseProbes._val.b)
+		{
+			UpdateProbeAtlases(level);
+		}
+		level.initialized = true;
+		level.dirty = false;
+	}
+
+	void DiffuseGI::UpdateConstants(Scene* scene)
+	{
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			const auto& level = _clipmaps[i];
+			const float voxelSize = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
+			_constants.clipCenterExtent[i] = math::Vector4(level.center.x, level.center.y, level.center.z, level.extent);
+			_constants.clipVoxelInfo[i] = math::Vector4(
+				voxelSize,
+				voxelSize > 0.0f ? 1.0f / voxelSize : 0.0f,
+				static_cast<float>(level.resolution),
+				static_cast<float>(std::max(1, r_giRaysPerProbe._val.i32)));
+		}
+
+		_constants.params0 = math::Vector4(
+			r_giIntensity._val.f32,
+			r_giEnergyClamp._val.f32,
+			static_cast<float>(r_giDebugView._val.i32),
+			static_cast<float>(_activeClipmap));
+
+		const uint32_t giWidth = _giHalfRes ? static_cast<uint32_t>(std::max(1, _giHalfRes->GetWidth())) : 1u;
+		const uint32_t giHeight = _giHalfRes ? static_cast<uint32_t>(std::max(1, _giHalfRes->GetHeight())) : 1u;
+		const bool clipmapWarmActive = (_clipmapWarmFramesRemaining[0] > 0u) || (_clipmapWarmFramesRemaining[1] > 0u);
+		const float stabilityTarget = clipmapWarmActive ? 1.0f : 0.0f;
+		_resolveStabilityBoost = std::clamp(_resolveStabilityBoost + (stabilityTarget - _resolveStabilityBoost) * 0.22f, 0.0f, 1.0f);
+		const float baseHysteresis = r_giHysteresis._val.f32;
+		const float baseHistoryReject = r_giHistoryReject._val.f32;
+		const float warmHysteresis = std::max(baseHysteresis, 0.88f);
+		const float warmHistoryReject = std::max(baseHistoryReject, 0.015f);
+		const float effectiveHysteresis = (_sunRelightFramesRemaining > 0u)
+			? std::min(baseHysteresis, 0.45f)
+			: (baseHysteresis + (warmHysteresis - baseHysteresis) * _resolveStabilityBoost);
+		const float effectiveHistoryReject = (_sunRelightFramesRemaining > 0u)
+			? std::max(baseHistoryReject, 0.0035f)
+			: (baseHistoryReject + (warmHistoryReject - baseHistoryReject) * _resolveStabilityBoost);
+		_constants.params1 = math::Vector4(
+			effectiveHysteresis,
+			effectiveHistoryReject,
+			1.0f / static_cast<float>(giWidth),
+			1.0f / static_cast<float>(giHeight));
+		const float baseDecay = std::clamp(r_giVoxelDecay._val.f32, 0.5f, 0.999f);
+		const float effectiveDecay = (_sunRelightFramesRemaining > 0u)
+			? std::min(baseDecay, 0.72f)
+			: baseDecay;
+		_constants.params2 = math::Vector4(
+			r_giLocalLightsOnlyDebug._val.b ? 0.0f : r_giScreenBounce._val.f32,
+			r_giUseProbes._val.b ? 0.35f : 0.0f,
+			effectiveDecay,
+			r_giGpuVoxelize._val.b ? 1.0f : 0.0f);
+
+		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
+		float sunStrength = 0.0f;
+		if (scene != nullptr)
+		{
+			if (auto* sun = scene->GetSunLight(); sun != nullptr)
+			{
+				if (sun->GetInjectIntoGI())
+					sunStrength = std::max(0.0f, sun->GetLightStrength() * sun->GetLightMultiplier());
+			}
+		}
+		const float sunPresence = std::clamp(sunStrength * std::max(0.0f, r_giSunInjection._val.f32), 0.0f, 1.0f);
+		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
+			? 0.0f
+			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresence;
+		_constants.params3 = math::Vector4(sunDirection.x, sunDirection.y, sunDirection.z, sunDirectionality);
+		const int32_t movementPreset = (r_giMovementPreset._val.i32 == 0 && g_pEnv != nullptr && g_pEnv->IsEditorMode())
+			? 1
+			: std::clamp(r_giMovementPreset._val.i32, 0, 2);
+		const float basePixelMotionStart = std::max(0.0f, r_giResolvePixelMotionStart._val.f32);
+		const float basePixelMotionStrength = std::max(0.0f, r_giResolvePixelMotionStrength._val.f32);
+		const float warmPixelMotionStart = std::max(basePixelMotionStart, 2.2f);
+		const float warmPixelMotionStrength = std::min(basePixelMotionStrength, 0.12f);
+		const float effectivePixelMotionStart = basePixelMotionStart + (warmPixelMotionStart - basePixelMotionStart) * _resolveStabilityBoost;
+		const float effectivePixelMotionStrength = basePixelMotionStrength + (warmPixelMotionStrength - basePixelMotionStrength) * _resolveStabilityBoost;
+		_constants.params4 = math::Vector4(
+			std::max(0.0f, r_giJitterScale._val.f32),
+			std::clamp(r_giClipBlendWidth._val.f32, 0.01f, 0.95f),
+			effectivePixelMotionStart,
+			effectivePixelMotionStrength);
+		_constants.params5 = math::Vector4(
+			std::max(0.0f, r_giResolveLumaReject._val.f32),
+			std::max(0.0f, r_giResolveDitherDark._val.f32),
+			std::max(0.0f, r_giResolveDitherBright._val.f32),
+			static_cast<float>(movementPreset));
+
+		if (_constantBuffer)
+		{
+			_constantBuffer->Write(&_constants, sizeof(_constants));
+		}
+	}
+
+	void DiffuseGI::Update(Scene* scene, Camera* camera)
+	{
+		if (!_created || !r_giEnable._val.b || scene == nullptr || camera == nullptr)
+			return;
+
+		if (camera->GetEntity() == nullptr)
+			return;
+
+		ApplyQualityPreset();
+
+		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
+		if (localLightsOnlyDebug != _lastLocalLightsOnlyDebug)
+		{
+			// Flush stale voxel history when changing local-light-only debug mode.
+			// This avoids old neutral/sun energy contaminating the local-light color test.
+			DestroyClipmapResources();
+			if (!CreateClipmapResources())
+			{
+				_created = false;
+				return;
+			}
+			for (auto& regions : _dirtyRegions)
+			{
+				regions.clear();
+			}
+			for (uint32_t i = 0; i < ClipmapCount; ++i)
+			{
+				_cachedVoxelTriangles[i].clear();
+				_cachedVoxelTrianglesValid[i] = false;
+				_cachedVoxelTrianglesFrame[i] = 0ull;
+				_clipmapWarmFramesRemaining[i] = 0u;
+			}
+			if (_giHistory != nullptr)
+			{
+				_giHistory->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+			if (_giResolved != nullptr)
+			{
+				_giResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+			if (_giHalfRes != nullptr)
+			{
+				_giHalfRes->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+			_lastLocalLightsOnlyDebug = localLightsOnlyDebug;
+		}
+
+		const bool localLightTuningChanged =
+			(std::abs(r_giLocalLightInjection._val.f32 - _lastLocalLightInjection) > 1e-4f) ||
+			(r_giLocalLightMaxPerMesh._val.i32 != _lastLocalLightMaxPerMesh) ||
+			(std::abs(r_giLocalLightBaseSuppression._val.f32 - _lastLocalLightBaseSuppression) > 1e-4f) ||
+			(std::abs(r_giLocalLightSunSuppression._val.f32 - _lastLocalLightSunSuppression) > 1e-4f) ||
+			(std::abs(r_giLocalLightAlbedoWeight._val.f32 - _lastLocalLightAlbedoWeight) > 1e-4f);
+		if (localLightTuningChanged)
+		{
+			for (uint32_t i = 0; i < ClipmapCount; ++i)
+			{
+				_cachedVoxelTriangles[i].clear();
+				_cachedVoxelTrianglesValid[i] = false;
+				_cachedVoxelTrianglesFrame[i] = 0ull;
+				_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], 2u);
+				_clipmaps[i].dirty = true;
+			}
+			_lastLocalLightInjection = r_giLocalLightInjection._val.f32;
+			_lastLocalLightMaxPerMesh = r_giLocalLightMaxPerMesh._val.i32;
+			_lastLocalLightBaseSuppression = r_giLocalLightBaseSuppression._val.f32;
+			_lastLocalLightSunSuppression = r_giLocalLightSunSuppression._val.f32;
+			_lastLocalLightAlbedoWeight = r_giLocalLightAlbedoWeight._val.f32;
+		}
+
+		const uint32_t expectedHalfWidth = r_giHalfRes._val.b ? _halfWidth : _width;
+		const uint32_t expectedHalfHeight = r_giHalfRes._val.b ? _halfHeight : _height;
+		if (_giHalfRes != nullptr &&
+			(static_cast<uint32_t>(_giHalfRes->GetWidth()) != expectedHalfWidth ||
+			 static_cast<uint32_t>(_giHalfRes->GetHeight()) != expectedHalfHeight))
+		{
+			Create(_width, _height);
+			if (!_created)
+				return;
+		}
+
+		const uint32_t desiredResolution = GetVoxelResolution();
+		if (_clipmaps[0].resolution != desiredResolution)
+		{
+			DestroyClipmapResources();
+			if (!CreateClipmapResources())
+			{
+				_created = false;
+				return;
+			}
+			for (auto& regions : _dirtyRegions)
+			{
+				regions.clear();
+			}
+			for (uint32_t i = 0; i < ClipmapCount; ++i)
+			{
+				_cachedVoxelTriangles[i].clear();
+				_cachedVoxelTrianglesValid[i] = false;
+				_cachedVoxelTrianglesFrame[i] = 0ull;
+			}
+		}
+
+		RebuildClipmapTransforms(camera->GetEntity()->GetPosition());
+		const math::Vector3 currentSunDirection = ComputeSunDirectionWS(scene);
+		if (!_lastSunDirectionInitialized)
+		{
+			_lastSunDirection = currentSunDirection;
+			_lastSunDirectionInitialized = true;
+		}
+		else
+		{
+			const float sunDirDot = std::clamp(_lastSunDirection.Dot(currentSunDirection), -1.0f, 1.0f);
+			if (sunDirDot < 0.9995f)
+			{
+				_sunRelightFramesRemaining = 10u;
+				for (auto& level : _clipmaps)
+				{
+					level.dirty = true;
+				}
+			}
+			_lastSunDirection = currentSunDirection;
+		}
+
+		// Keep the nearest clipmap hot every frame for stable local bounce.
+		_activeClipmap = 0;
+		UpdateConstants(scene);
+		if (!r_giGpuVoxelize._val.b)
+		{
+			UpdateClipmapData(scene, 0);
+			if ((_frameCounter & 1ull) == 0ull)
+			{
+				const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 2ull) % (ClipmapCount - 1u));
+				UpdateClipmapData(scene, farClip);
+			}
+		}
+		else
+		{
+			if (_sunRelightFramesRemaining > 0u)
+			{
+				for (uint32_t i = 0u; i < ClipmapCount; ++i)
+				{
+					RunGpuVoxelization(scene, i);
+				}
+			}
+			else
+			{
+				RunGpuVoxelization(scene, 0);
+				if ((_frameCounter % 4ull) == 0ull)
+				{
+					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 4ull) % (ClipmapCount - 1u));
+					RunGpuVoxelization(scene, farClip);
+				}
+			}
+		}
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			if (_clipmapWarmFramesRemaining[i] > 0u)
+			{
+				--_clipmapWarmFramesRemaining[i];
+			}
+		}
+		if (_sunRelightFramesRemaining > 0u)
+		{
+			--_sunRelightFramesRemaining;
+		}
+		UpdateConstants(scene);
+		++_frameCounter;
+	}
+
+	bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
+	{
+		if (elementCapacity == 0u)
+			return false;
+		if (_voxelTriangleBuffer != nullptr && _voxelTriangleSrv != nullptr && _voxelTriangleCapacity >= elementCapacity)
+			return true;
+
+		SAFE_RELEASE(_voxelTriangleSrv);
+		SAFE_RELEASE(_voxelTriangleBuffer);
+		_voxelTriangleCapacity = 0;
+
+		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		if (device == nullptr)
+			return false;
+
+		D3D11_BUFFER_DESC desc = {};
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		desc.ByteWidth = std::max<uint32_t>(1u, elementCapacity) * static_cast<uint32_t>(sizeof(GpuVoxelTriangle));
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		desc.Usage = D3D11_USAGE_DYNAMIC;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = sizeof(GpuVoxelTriangle);
+
+		if (FAILED(device->CreateBuffer(&desc, nullptr, &_voxelTriangleBuffer)) || _voxelTriangleBuffer == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel triangle buffer.");
+			return false;
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = elementCapacity;
+
+		if (FAILED(device->CreateShaderResourceView(_voxelTriangleBuffer, &srvDesc, &_voxelTriangleSrv)) || _voxelTriangleSrv == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel triangle SRV.");
+			SAFE_RELEASE(_voxelTriangleBuffer);
+			return false;
+		}
+
+		_voxelTriangleCapacity = elementCapacity;
+		return true;
+	}
+
+	uint32_t DiffuseGI::BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out)
+	{
+		out.clear();
+		if (scene == nullptr || levelIndex >= ClipmapCount)
+			return 0u;
+		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
+
+		auto& level = _clipmaps[levelIndex];
+		const uint64_t cacheAge = (_frameCounter >= _cachedVoxelTrianglesFrame[levelIndex])
+			? (_frameCounter - _cachedVoxelTrianglesFrame[levelIndex])
+			: 0ull;
+		const uint64_t cacheFrames = static_cast<uint64_t>(std::max(1, r_giTriangleCacheFrames._val.i32));
+		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheAge < cacheFrames)
+		{
+			out = _cachedVoxelTriangles[levelIndex];
+			return static_cast<uint32_t>(out.size());
+		}
+
+		const dx::BoundingBox clipBounds(level.center, math::Vector3(level.extent, level.extent, level.extent));
+		const math::Vector3 clipMin = level.center - math::Vector3(level.extent, level.extent, level.extent);
+		const math::Vector3 clipMax = level.center + math::Vector3(level.extent, level.extent, level.extent);
+		std::vector<StaticMeshComponent*> meshesInBounds;
+		scene->GatherStaticMeshesInBounds(clipBounds, meshesInBounds, true);
+
+		struct LocalLightSample
+		{
+			math::Vector3 position = math::Vector3::Zero;
+			math::Vector3 direction = math::Vector3(0.0f, 0.0f, 1.0f);
+			math::Vector3 colour = math::Vector3::Zero;
+			float radius = 0.0f;
+			float coneExponent = 1.0f;
+			bool isSpot = false;
+		};
+		std::vector<LocalLightSample> localLights;
+		{
+			std::vector<PointLight*> pointLights;
+			scene->GetComponents<PointLight>(pointLights);
+			localLights.reserve(pointLights.size());
+			for (auto* light : pointLights)
+			{
+				if (light == nullptr)
+					continue;
+				if (!light->GetInjectIntoGI())
+					continue;
+				auto* lightEntity = light->GetEntity();
+				if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
+					continue;
+
+				const float radius = std::max(0.01f, light->GetRadius());
+				const auto diffuse = light->GetDiffuseColour();
+				// Match direct point-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
+				const float lightEnergy = std::max(0.0f, diffuse.w);
+				const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
+				const math::Vector3 scaledColour = lightColour * lightEnergy;
+				if (scaledColour.LengthSquared() <= 1e-8f)
+					continue;
+
+				LocalLightSample sample = {};
+				sample.position = lightEntity->GetPosition();
+				if (sample.position.LengthSquared() <= 1e-8f)
+				{
+					sample.position = lightEntity->GetWorldTM().Translation();
+				}
+				sample.direction = math::Vector3(0.0f, 0.0f, 1.0f);
+				sample.colour = scaledColour;
+				sample.radius = radius;
+				sample.isSpot = false;
+				localLights.push_back(sample);
+			}
+		}
+		{
+			std::vector<SpotLight*> spotLights;
+			scene->GetComponents<SpotLight>(spotLights);
+			localLights.reserve(localLights.size() + spotLights.size());
+			for (auto* light : spotLights)
+			{
+				if (light == nullptr)
+					continue;
+				if (!light->GetInjectIntoGI())
+					continue;
+				auto* lightEntity = light->GetEntity();
+				if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
+					continue;
+
+				const float radius = std::max(0.01f, light->GetRadius());
+				const auto diffuse = light->GetDiffuseColour();
+				// Match direct spot-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
+				const float lightEnergy = std::max(0.0f, diffuse.w);
+				const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
+				const math::Vector3 scaledColour = lightColour * lightEnergy;
+				if (scaledColour.LengthSquared() <= 1e-8f)
+					continue;
+
+				math::Vector3 lightDir = lightEntity->GetWorldTM().Forward();
+				if (lightDir.LengthSquared() <= 1e-8f)
+					lightDir = math::Vector3(0.0f, 0.0f, 1.0f);
+				else
+					lightDir.Normalize();
+
+				LocalLightSample sample = {};
+				sample.position = lightEntity->GetPosition();
+				if (sample.position.LengthSquared() <= 1e-8f)
+				{
+					sample.position = lightEntity->GetWorldTM().Translation();
+				}
+				sample.direction = lightDir;
+				sample.colour = scaledColour;
+				sample.radius = radius;
+				sample.coneExponent = std::clamp(light->GetConeSize(), 1.0f, 128.0f);
+				sample.isSpot = true;
+				localLights.push_back(sample);
+			}
+		}
+
+		uint32_t budget = static_cast<uint32_t>(std::max(256, r_giVoxelTriangleBudget._val.i32));
+		if (level.dirty)
+		{
+			budget = std::min<uint32_t>(budget * 3u, 300000u);
+		}
+		if (_clipmapWarmFramesRemaining[levelIndex] > 0u)
+		{
+			budget = std::min<uint32_t>(budget * 3u, 300000u);
+		}
+
+		out.reserve(std::min<uint32_t>(budget, static_cast<uint32_t>(meshesInBounds.size()) * 64u));
+		const math::Vector3 sunTint = ComputeSunTint(scene);
+		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
+		float sunStrength = 0.0f;
+		if (auto* sun = scene->GetSunLight(); sun != nullptr)
+		{
+			if (sun->GetInjectIntoGI())
+				sunStrength = std::max(0.0f, sun->GetLightMultiplier() * sun->GetLightStrength());
+		}
+		const float clipAttenuation = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
+
+		for (auto* smc : meshesInBounds)
+		{
+			if (smc == nullptr || smc->GetMesh() == nullptr)
+				continue;
+
+			auto* entity = smc->GetEntity();
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
+
+			const float diffuseInject = std::max(0.0f, r_giDiffuseInjection._val.f32);
+			const float sunInject = std::max(0.0f, r_giSunInjection._val.f32);
+			const float sunDirectionalBoost = std::max(0.0f, r_giSunDirectionalBoost._val.f32);
+			const float emissiveInject = std::max(0.0f, r_giEmissiveInjection._val.f32);
+			const float bleedBoost = std::max(0.0f, r_giAlbedoBleedBoost._val.f32);
+			const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
+			math::Vector3 albedoTint(0.75f, 0.75f, 0.75f);
+			math::Vector3 emissiveTint = math::Vector3::Zero;
+			float emissiveStrength = 0.0f;
+			if (auto mat = smc->GetMaterial())
+			{
+				const auto emissive = mat->_properties.emissiveColour;
+				albedoTint = GetMaterialAlbedoTint(mat.get());
+				emissiveTint = math::Vector3(emissive.x, emissive.y, emissive.z);
+				emissiveStrength = std::max(0.0f, emissive.w);
+			}
+			const float albedoMax = std::max(albedoTint.x, std::max(albedoTint.y, albedoTint.z));
+			const float albedoMin = std::min(albedoTint.x, std::min(albedoTint.y, albedoTint.z));
+			const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
+			const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
+			const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
+			const float sunDrivenBase = std::max(0.0f, sunStrength * sunInject) * 0.04f;
+			const math::Vector3 baseDiffuseBounce = albedoTint * (diffuseInject * (unlitBase + sunDrivenBase) * (0.55f + bleedBoost * 0.30f) * colourBleedBoost);
+			const math::Vector3 baseEmissiveBounce = emissiveTint * emissiveStrength * emissiveInject;
+			const math::Vector3 triBaseInjection =
+				(baseDiffuseBounce + baseEmissiveBounce) * clipAttenuation;
+			const math::Vector3 sunTintedAlbedo = (albedoTint * sunTint) * clipAttenuation;
+
+			auto mesh = smc->GetMesh();
+			if (!mesh)
+				continue;
+
+			const auto& vertices = mesh->GetVertices();
+			const auto& indices = mesh->GetIndices();
+			if (vertices.empty() || indices.size() < 3u)
+				continue;
+
+			const uint32_t remaining = budget > out.size() ? (budget - static_cast<uint32_t>(out.size())) : 0u;
+			if (remaining == 0u)
+				break;
+			const uint32_t triangleCount = static_cast<uint32_t>(indices.size() / 3u);
+			const uint32_t triStep = std::max<uint32_t>(1u, (triangleCount + remaining - 1u) / remaining);
+			const auto& worldTM = entity->GetWorldTM();
+			const auto& entityAabb = entity->GetWorldAABB();
+			const math::Vector3 entityCenter(entityAabb.Center.x, entityAabb.Center.y, entityAabb.Center.z);
+			const math::Vector3 entityExtents(entityAabb.Extents.x, entityAabb.Extents.y, entityAabb.Extents.z);
+			const math::Vector3 entityMin = entityCenter - entityExtents;
+			const math::Vector3 entityMax = entityCenter + entityExtents;
+			std::vector<uint32_t> meshLocalLightIndices;
+			if (!localLights.empty())
+			{
+				struct MeshLightCandidate
+				{
+					uint32_t lightIndex = 0u;
+					float distanceSq = 0.0f;
+				};
+				std::vector<MeshLightCandidate> meshLightCandidates;
+				meshLightCandidates.reserve(localLights.size());
+
+				for (uint32_t lightIndex = 0u; lightIndex < static_cast<uint32_t>(localLights.size()); ++lightIndex)
+				{
+					const auto& light = localLights[lightIndex];
+					float dx = 0.0f;
+					if (light.position.x < entityMin.x)
+						dx = entityMin.x - light.position.x;
+					else if (light.position.x > entityMax.x)
+						dx = light.position.x - entityMax.x;
+
+					float dy = 0.0f;
+					if (light.position.y < entityMin.y)
+						dy = entityMin.y - light.position.y;
+					else if (light.position.y > entityMax.y)
+						dy = light.position.y - entityMax.y;
+
+					float dz = 0.0f;
+					if (light.position.z < entityMin.z)
+						dz = entityMin.z - light.position.z;
+					else if (light.position.z > entityMax.z)
+						dz = light.position.z - entityMax.z;
+
+					const float distanceSq = dx * dx + dy * dy + dz * dz;
+					const float radiusSq = light.radius * light.radius;
+					if (distanceSq > radiusSq)
+						continue;
+
+					MeshLightCandidate candidate = {};
+					candidate.lightIndex = lightIndex;
+					candidate.distanceSq = distanceSq;
+					meshLightCandidates.push_back(candidate);
+				}
+
+				if (!meshLightCandidates.empty())
+				{
+					std::sort(meshLightCandidates.begin(), meshLightCandidates.end(),
+						[](const MeshLightCandidate& a, const MeshLightCandidate& b)
+						{
+							return a.distanceSq < b.distanceSq;
+						});
+					const uint32_t maxPerMesh = static_cast<uint32_t>(std::max(1, r_giLocalLightMaxPerMesh._val.i32));
+					const uint32_t keepCount = std::min<uint32_t>(maxPerMesh, static_cast<uint32_t>(meshLightCandidates.size()));
+					meshLocalLightIndices.reserve(keepCount);
+					for (uint32_t i = 0u; i < keepCount; ++i)
+					{
+						meshLocalLightIndices.push_back(meshLightCandidates[i].lightIndex);
+					}
+				}
+			}
+			const bool meshFullyInsideClip =
+				(entityMin.x >= clipMin.x && entityMax.x <= clipMax.x) &&
+				(entityMin.y >= clipMin.y && entityMax.y <= clipMax.y) &&
+				(entityMin.z >= clipMin.z && entityMax.z <= clipMax.z);
+
+			for (uint32_t tri = 0u; tri < triangleCount && out.size() < budget; tri += triStep)
+			{
+				const uint32_t i0 = indices[tri * 3u + 0u];
+				const uint32_t i1 = indices[tri * 3u + 1u];
+				const uint32_t i2 = indices[tri * 3u + 2u];
+				if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
+					continue;
+
+				const math::Vector4 v0w = math::Vector4::Transform(vertices[i0]._position, worldTM);
+				const math::Vector4 v1w = math::Vector4::Transform(vertices[i1]._position, worldTM);
+				const math::Vector4 v2w = math::Vector4::Transform(vertices[i2]._position, worldTM);
+
+				const math::Vector3 p0(v0w.x, v0w.y, v0w.z);
+				const math::Vector3 p1(v1w.x, v1w.y, v1w.z);
+				const math::Vector3 p2(v2w.x, v2w.y, v2w.z);
+				math::Vector3 faceNormal = (p1 - p0).Cross(p2 - p0);
+				const float faceNormalLengthSq = faceNormal.LengthSquared();
+				if (faceNormalLengthSq <= 1e-8f)
+					continue;
+				faceNormal.Normalize();
+				const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
+				const float directSunBounce = sunFacing * sunStrength * sunInject * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
+				const float directionalDiffuseBounce = sunFacing * sunStrength * diffuseInject * (0.28f + bleedBoost * 0.18f) * sunDirectionalBoost * colourBleedBoost;
+
+				if (!meshFullyInsideClip)
+				{
+					const math::Vector3 triMin(
+						std::min(p0.x, std::min(p1.x, p2.x)),
+						std::min(p0.y, std::min(p1.y, p2.y)),
+						std::min(p0.z, std::min(p1.z, p2.z)));
+					const math::Vector3 triMax(
+						std::max(p0.x, std::max(p1.x, p2.x)),
+						std::max(p0.y, std::max(p1.y, p2.y)),
+						std::max(p0.z, std::max(p1.z, p2.z)));
+					if (triMax.x < clipMin.x || triMin.x > clipMax.x ||
+						triMax.y < clipMin.y || triMin.y > clipMax.y ||
+						triMax.z < clipMin.z || triMin.z > clipMax.z)
+					{
+						continue;
+					}
+				}
+
+				GpuVoxelTriangle entry = {};
+				entry.p0 = math::Vector4(p0.x, p0.y, p0.z, 1.0f);
+				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, 1.0f);
+				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, 1.0f);
+
+				math::Vector3 localLightBounce = math::Vector3::Zero;
+				float localLightInfluence = 0.0f;
+				float localLightAttenuation = 0.0f;
+				if (!meshLocalLightIndices.empty())
+				{
+					const math::Vector3 triCenter = (p0 + p1 + p2) / 3.0f;
+					math::Vector3 localIrradiance = math::Vector3::Zero;
+					for (uint32_t localLightIdx : meshLocalLightIndices)
+					{
+						const auto& light = localLights[localLightIdx];
+						const math::Vector3 toLight = light.position - triCenter;
+						const float dist2 = toLight.LengthSquared();
+						const float radius2 = light.radius * light.radius;
+						if (dist2 <= 1e-8f || dist2 >= radius2)
+							continue;
+
+						const float dist = std::sqrt(dist2);
+						const math::Vector3 toLightDir = toLight / dist;
+						const float ndotl = std::max(faceNormal.Dot(toLightDir), 0.0f);
+						if (ndotl <= 0.0f)
+							continue;
+
+						float attenuation = std::clamp(1.0f - std::clamp(dist / light.radius, 0.0f, 1.0f), 0.0f, 1.0f);
+						attenuation = attenuation * attenuation;
+						if (light.isSpot)
+						{
+							const float spotCos = std::clamp(light.direction.Dot(-toLightDir), -1.0f, 1.0f);
+							if (spotCos <= 0.0f)
+								continue;
+							const float coneAtten = std::pow(spotCos, light.coneExponent);
+							// Match current direct spotlight behavior more closely (narrower effective footprint).
+							attenuation *= coneAtten;
+							attenuation *= coneAtten;
+						}
+
+						const float lightContribution = attenuation * ndotl;
+						localIrradiance += light.colour * lightContribution;
+						// Use a broader suppression term than raw irradiance so neutral base GI is reduced
+						// across the local-light footprint (not only at normal-facing hotspots).
+						const float suppressionInfluence = attenuation * (0.35f + 0.65f * ndotl);
+						localLightInfluence = std::max(localLightInfluence, suppressionInfluence);
+						localLightAttenuation = std::max(localLightAttenuation, attenuation);
+					}
+
+					const float localLum = localIrradiance.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f));
+					localIrradiance = localIrradiance / (1.0f + localLum * 0.5f);
+					const float localInject = std::max(0.0f, r_giLocalLightInjection._val.f32);
+					const float localAlbedoWeight = std::clamp(r_giLocalLightAlbedoWeight._val.f32, 0.0f, 1.0f);
+					const math::Vector3 whiteTint(1.0f, 1.0f, 1.0f);
+					const math::Vector3 localReceiverTint = whiteTint + (albedoTint - whiteTint) * localAlbedoWeight;
+					localLightBounce = (localIrradiance * localReceiverTint) * (localInject * (0.55f + bleedBoost * 0.12f));
+				}
+
+				math::Vector3 sunInjection = sunTintedAlbedo * (directSunBounce + directionalDiffuseBounce);
+				math::Vector3 baseInjection = triBaseInjection + sunInjection;
+				if (localLightsOnlyDebug)
+				{
+					baseInjection = math::Vector3::Zero;
+					sunInjection = math::Vector3::Zero;
+				}
+				if (localLightsOnlyDebug && localLightBounce.LengthSquared() <= 1e-8f)
+				{
+					// In local-light debug mode, only keep triangles that actually receive local-light bounce.
+					continue;
+				}
+				const float baseSuppression = std::clamp(r_giLocalLightBaseSuppression._val.f32, 0.0f, 1.0f);
+				const float localBounceLum = localLightBounce.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f));
+				const float localInfluenceCurve = std::sqrt(std::clamp(localLightInfluence, 0.0f, 1.0f));
+				const float localAttenuationCurve = std::pow(std::clamp(localLightAttenuation, 0.0f, 1.0f), 0.40f);
+				const float localLumCurve = std::clamp(localBounceLum * 0.8f, 0.0f, 1.0f);
+				const float localDominance = std::clamp(std::max(std::max(localInfluenceCurve, localLumCurve), localAttenuationCurve) * 1.35f, 0.0f, 1.0f);
+				const float sunSuppression = std::clamp(r_giLocalLightSunSuppression._val.f32, 0.0f, 1.0f);
+				const float sunSuppressionMask = localDominance * sunSuppression;
+				sunInjection *= (1.0f - sunSuppressionMask);
+				baseInjection = triBaseInjection + sunInjection;
+				const float baseScale = 1.0f - localDominance * baseSuppression;
+				if (localBounceLum > 1e-5f)
+				{
+					const math::Vector3 lumaWeights(0.2126f, 0.7152f, 0.0722f);
+					const float baseLum = baseInjection.Dot(lumaWeights);
+					math::Vector3 localTint = localLightBounce / localBounceLum;
+					localTint.x = std::clamp(localTint.x, 0.0f, 4.0f);
+					localTint.y = std::clamp(localTint.y, 0.0f, 4.0f);
+					localTint.z = std::clamp(localTint.z, 0.0f, 4.0f);
+					const math::Vector3 baseTintedByLocal = localTint * baseLum;
+					const float tintAmount = std::clamp(localDominance * baseSuppression * 0.80f, 0.0f, 1.0f);
+					baseInjection = baseInjection * (1.0f - tintAmount) + baseTintedByLocal * tintAmount;
+				}
+				const math::Vector3 triInjectionFinal =
+					baseInjection * baseScale + localLightBounce;
+				entry.radianceOpacity = math::Vector4(
+					std::clamp(triInjectionFinal.x, 0.0f, 32.0f),
+					std::clamp(triInjectionFinal.y, 0.0f, 32.0f),
+					std::clamp(triInjectionFinal.z, 0.0f, 32.0f),
+					0.92f);
+				out.push_back(entry);
+			}
+		}
+
+		_cachedVoxelTriangles[levelIndex] = out;
+		_cachedVoxelTrianglesValid[levelIndex] = true;
+		_cachedVoxelTrianglesFrame[levelIndex] = _frameCounter;
+		return static_cast<uint32_t>(out.size());
+	}
+
+	void DiffuseGI::RunGpuVoxelization(Scene* scene, uint32_t levelIndex)
+	{
+		if (!_created || !r_giGpuVoxelize._val.b || levelIndex >= ClipmapCount || scene == nullptr)
+			return;
+
+		auto* voxelizeStage = _voxelizeShader ? _voxelizeShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
+		auto* clearStage = _voxelClearShader ? _voxelClearShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
+		auto* propagateStage = _voxelPropagateShader ? _voxelPropagateShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
+		auto* shiftStage = _voxelShiftShader ? _voxelShiftShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
+		if (voxelizeStage == nullptr || clearStage == nullptr || propagateStage == nullptr || shiftStage == nullptr)
+			return;
+
+		auto& level = _clipmaps[levelIndex];
+		if (level.radianceUav == nullptr || level.radianceScratchUav == nullptr ||
+			level.radianceSrv == nullptr || level.radianceScratchSrv == nullptr ||
+			level.radianceVolume == nullptr || level.radianceScratchVolume == nullptr)
+			return;
+
+		const uint32_t triangleCount = BuildGpuVoxelTriangleList(scene, levelIndex, _voxelTriangleUpload);
+		const bool hasTriangles = (triangleCount > 0u) && EnsureGpuVoxelTriangleBuffer(triangleCount);
+		if (!hasTriangles && level.initialized)
+		{
+			// Avoid one-frame GI collapse from transient empty triangle gathers after clipmap shifts.
+			// Keep previous radiance and retry with a warm budget on subsequent frames.
+			_clipmapWarmFramesRemaining[levelIndex] = std::max(_clipmapWarmFramesRemaining[levelIndex], (levelIndex == 0u) ? 3u : 1u);
+			level.dirty = true;
+			return;
+		}
+
+		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (device == nullptr || context == nullptr)
+			return;
+
+		const uint32_t clearGroups = (level.resolution + 7u) / 8u;
+		if (level.initialized && level.pendingShiftWs.LengthSquared() > 1e-8f && level.radianceSrv != nullptr && level.radianceScratchUav != nullptr)
+		{
+			const float voxelSize = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
+			const int32_t shiftX = static_cast<int32_t>(std::round(level.pendingShiftWs.x / std::max(voxelSize, 1e-6f)));
+			const int32_t shiftY = static_cast<int32_t>(std::round(level.pendingShiftWs.y / std::max(voxelSize, 1e-6f)));
+			const int32_t shiftZ = static_cast<int32_t>(std::round(level.pendingShiftWs.z / std::max(voxelSize, 1e-6f)));
+			if (shiftX != 0 || shiftY != 0 || shiftZ != 0)
+			{
+				if (_voxelShiftConstantBuffer != nullptr)
+				{
+					VoxelShiftConstants shiftConstants = {};
+					shiftConstants.offsetX = shiftX;
+					shiftConstants.offsetY = shiftY;
+					shiftConstants.offsetZ = shiftZ;
+					_voxelShiftConstantBuffer->Write(&shiftConstants, sizeof(shiftConstants));
+				}
+
+				ID3D11Buffer* shiftCb = _voxelShiftConstantBuffer ? reinterpret_cast<ID3D11Buffer*>(_voxelShiftConstantBuffer->GetNativePtr()) : nullptr;
+				if (shiftCb != nullptr)
+				{
+					context->CSSetConstantBuffers(5, 1, &shiftCb);
+				}
+				ID3D11ShaderResourceView* shiftSrv[1] = { level.radianceSrv };
+				ID3D11UnorderedAccessView* shiftUav[1] = { level.radianceScratchUav };
+				context->CSSetShaderResources(0, 1, shiftSrv);
+				context->CSSetUnorderedAccessViews(0, 1, shiftUav, nullptr);
+				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(shiftStage->GetNativePtr()), nullptr, 0);
+				context->Dispatch(clearGroups, clearGroups, clearGroups);
+
+				ID3D11ShaderResourceView* nullShiftSrv[1] = {};
+				ID3D11UnorderedAccessView* nullShiftUav[1] = {};
+				ID3D11Buffer* nullShiftCb[1] = {};
+				context->CSSetShaderResources(0, 1, nullShiftSrv);
+				context->CSSetUnorderedAccessViews(0, 1, nullShiftUav, nullptr);
+				context->CSSetConstantBuffers(5, 1, nullShiftCb);
+				context->CSSetShader(nullptr, nullptr, 0);
+
+				context->CopyResource(
+					reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
+					reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
+			}
+			level.pendingShiftWs = math::Vector3::Zero;
+		}
+
+		if (hasTriangles)
+		{
+			D3D11_MAPPED_SUBRESOURCE mapped = {};
+			if (SUCCEEDED(context->Map(_voxelTriangleBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+			{
+				memcpy(mapped.pData, _voxelTriangleUpload.data(), triangleCount * sizeof(GpuVoxelTriangle));
+				context->Unmap(_voxelTriangleBuffer, 0);
+			}
+			else
+			{
+				return;
+			}
+		}
+
+		_constants.params0.w = static_cast<float>(levelIndex);
+		if (_constantBuffer)
+		{
+			_constantBuffer->Write(&_constants, sizeof(_constants));
+		}
+
+		ID3D11Buffer* perFrameCb = nullptr;
+		if (auto* cb = g_pEnv->_graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer); cb != nullptr)
+		{
+			perFrameCb = reinterpret_cast<ID3D11Buffer*>(cb->GetNativePtr());
+		}
+		ID3D11Buffer* perShadowCasterCb = nullptr;
+		DirectionalLight* sun = scene->GetSunLight();
+		if (sun != nullptr && sun->GetDoesCastShadows() && sun->GetInjectIntoGI())
+		{
+			if (auto* cb = g_pEnv->_graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerShadowCasterBuffer); cb != nullptr)
+			{
+				PerShadowCasterBuffer shadowBufferData = {};
+				BuildSunShadowCasterBuffer(sun, shadowBufferData);
+				cb->Write(&shadowBufferData, sizeof(shadowBufferData));
+				perShadowCasterCb = reinterpret_cast<ID3D11Buffer*>(cb->GetNativePtr());
+			}
+		}
+		ID3D11Buffer* giCb = _constantBuffer ? reinterpret_cast<ID3D11Buffer*>(_constantBuffer->GetNativePtr()) : nullptr;
+		ID3D11ShaderResourceView* sunShadowSrvs[6] = {};
+
+		if (perFrameCb != nullptr)
+			context->CSSetConstantBuffers(0, 1, &perFrameCb);
+		{
+			ID3D11Buffer* shadowCbToBind = perShadowCasterCb;
+			context->CSSetConstantBuffers(2, 1, &shadowCbToBind);
+		}
+		if (giCb != nullptr)
+			context->CSSetConstantBuffers(4, 1, &giCb);
+
+		if (sun != nullptr && sun->GetDoesCastShadows() && sun->GetInjectIntoGI())
+		{
+			for (int32_t i = 0; i < 6; ++i)
+			{
+				auto* shadowMap = sun->GetShadowMap(i);
+				if (shadowMap == nullptr)
+					continue;
+
+				sunShadowSrvs[i] = CreateShadowMapSrv(device, shadowMap->GetDepthMap());
+			}
+		}
+		context->CSSetShaderResources(2, 6, sunShadowSrvs);
+
+		// Preserve previous frame radiance for approximate sun-visibility queries during injection.
+		context->CopyResource(
+			reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()),
+			reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()));
+
+		ID3D11UnorderedAccessView* clearUav[1] = { level.radianceUav };
+		context->CSSetUnorderedAccessViews(0, 1, clearUav, nullptr);
+		context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(clearStage->GetNativePtr()), nullptr, 0);
+		context->Dispatch(clearGroups, clearGroups, clearGroups);
+
+		if (hasTriangles)
+		{
+			ID3D11ShaderResourceView* voxelizeSrvs[2] = { _voxelTriangleSrv, level.radianceScratchSrv };
+			context->CSSetShaderResources(0, 2, voxelizeSrvs);
+			context->CSSetUnorderedAccessViews(0, 1, clearUav, nullptr);
+			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(voxelizeStage->GetNativePtr()), nullptr, 0);
+			const uint32_t groups = (triangleCount + 63u) / 64u;
+			context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
+		}
+
+		// Break UAV/SRV hazards between injection and propagation passes.
+		ID3D11ShaderResourceView* nullSrvBetweenPasses[2] = {};
+		ID3D11UnorderedAccessView* nullUavBetweenPasses[1] = {};
+		context->CSSetShaderResources(0, 2, nullSrvBetweenPasses);
+		context->CSSetUnorderedAccessViews(0, 1, nullUavBetweenPasses, nullptr);
+
+		ID3D11ShaderResourceView* radianceSrcSrv = level.radianceSrv;
+		if (radianceSrcSrv != nullptr)
+		{
+			ID3D11ShaderResourceView* srcSrv[1] = { radianceSrcSrv };
+			ID3D11UnorderedAccessView* dstUav[1] = { level.radianceScratchUav };
+
+			context->CSSetShaderResources(0, 1, srcSrv);
+			context->CSSetUnorderedAccessViews(0, 1, dstUav, nullptr);
+			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(propagateStage->GetNativePtr()), nullptr, 0);
+			context->Dispatch(clearGroups, clearGroups, clearGroups);
+
+			ID3D11ShaderResourceView* nullSrvForProp[1] = {};
+			ID3D11UnorderedAccessView* nullUavForProp[1] = {};
+			context->CSSetShaderResources(0, 1, nullSrvForProp);
+			context->CSSetUnorderedAccessViews(0, 1, nullUavForProp, nullptr);
+			context->CSSetShader(nullptr, nullptr, 0);
+
+			context->CopyResource(
+				reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
+				reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
+
+			// Second propagation iteration to improve bounce spread in larger interiors.
+			context->CSSetShaderResources(0, 1, srcSrv);
+			context->CSSetUnorderedAccessViews(0, 1, dstUav, nullptr);
+			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(propagateStage->GetNativePtr()), nullptr, 0);
+			context->Dispatch(clearGroups, clearGroups, clearGroups);
+
+			context->CSSetShaderResources(0, 1, nullSrvForProp);
+			context->CSSetUnorderedAccessViews(0, 1, nullUavForProp, nullptr);
+			context->CSSetShader(nullptr, nullptr, 0);
+
+			context->CopyResource(
+				reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
+				reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
+		}
+
+		ID3D11ShaderResourceView* nullSrvs[2] = {};
+		ID3D11ShaderResourceView* nullShadowSrvs[6] = {};
+		ID3D11UnorderedAccessView* nullUavs[1] = {};
+		context->CSSetShaderResources(0, 2, nullSrvs);
+		context->CSSetShaderResources(2, 6, nullShadowSrvs);
+		context->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+		for (auto* srv : sunShadowSrvs)
+		{
+			SAFE_RELEASE(srv);
+		}
+
+		level.initialized = true;
+		level.dirty = false;
+	}
+
+	void DiffuseGI::RenderTracePass(const GBuffer& gbuffer, ITexture2D* beautyTarget)
+	{
+		if (!_traceShader || !_giHalfRes || beautyTarget == nullptr)
+			return;
+
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		_giHalfRes->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+		g_pEnv->_graphicsDevice->SetRenderTarget(_giHalfRes);
+
+		D3D11_VIEWPORT vp = {};
+		vp.TopLeftX = 0.0f;
+		vp.TopLeftY = 0.0f;
+		vp.Width = static_cast<float>(_giHalfRes->GetWidth());
+		vp.Height = static_cast<float>(_giHalfRes->GetHeight());
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		g_pEnv->_graphicsDevice->SetViewport(vp);
+
+		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+		gbuffer.BindAsShaderResource();
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].radianceVolume);
+			g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].opacityVolume);
+			g_pEnv->_graphicsDevice->SetTexture2D(_clipmaps[i].probeIrradianceAtlas);
+			g_pEnv->_graphicsDevice->SetTexture2D(_clipmaps[i].probeVisibilityAtlas);
+		}
+		g_pEnv->_graphicsDevice->SetTexture2D(beautyTarget);
+		g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _constantBuffer);
+
+		guiRenderer->StartFrame();
+		guiRenderer->FullScreenTexturedQuad(nullptr, _traceShader.get());
+		guiRenderer->EndFrame();
+
+		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+	}
+
+	void DiffuseGI::RenderResolvePass(const GBuffer& gbuffer)
+	{
+		if (!_resolveShader || !_giResolved || !_giHistory || !_giHalfRes)
+			return;
+
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		_giResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+		g_pEnv->_graphicsDevice->SetRenderTarget(_giResolved);
+
+		D3D11_VIEWPORT vp = {};
+		vp.TopLeftX = 0.0f;
+		vp.TopLeftY = 0.0f;
+		vp.Width = static_cast<float>(_giResolved->GetWidth());
+		vp.Height = static_cast<float>(_giResolved->GetHeight());
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		g_pEnv->_graphicsDevice->SetViewport(vp);
+
+		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+		g_pEnv->_graphicsDevice->SetTexture2D(_giHalfRes);
+		g_pEnv->_graphicsDevice->SetTexture2D(_giHistory);
+		g_pEnv->_graphicsDevice->SetTexture2D(gbuffer.GetVelocity());
+		g_pEnv->_graphicsDevice->SetTexture2D(gbuffer.GetNormal());
+		g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _constantBuffer);
+
+		guiRenderer->StartFrame();
+		guiRenderer->FullScreenTexturedQuad(nullptr, _resolveShader.get());
+		guiRenderer->EndFrame();
+
+		_giResolved->CopyTo(_giHistory);
+		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+	}
+
+	void DiffuseGI::CompositeToBeauty(ITexture2D* beautyTarget)
+	{
+		if (beautyTarget == nullptr || _giResolved == nullptr)
+			return;
+
+		const int32_t debugView = r_giDebugView._val.i32;
+		if (debugView == 1 || debugView == 3 || debugView == 4)
+		{
+			auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+			if (guiRenderer == nullptr)
+				return;
+
+			g_pEnv->_graphicsDevice->SetRenderTarget(beautyTarget);
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+			guiRenderer->StartFrame();
+			guiRenderer->FullScreenTexturedQuad(_giResolved, _fullScreenShader.get());
+			guiRenderer->EndFrame();
+			return;
+		}
+
+		_giResolved->BlendTo_Additive(beautyTarget, nullptr);
+	}
+
+	void DiffuseGI::DebugDrawProbeGrid(uint32_t levelIndex) const
+	{
+		if (r_giDebugView._val.i32 != 2 || g_pEnv->_debugRenderer == nullptr || levelIndex >= ClipmapCount)
+			return;
+
+		const auto& level = _clipmaps[levelIndex];
+		const float extent = level.extent;
+		const float stepX = (extent * 2.0f) / static_cast<float>(ProbeGridX);
+		const float stepY = (extent * 2.0f) / static_cast<float>(ProbeGridY);
+		const float stepZ = (extent * 2.0f) / static_cast<float>(ProbeGridZ);
+		const float markerExtent = std::max(0.15f, std::min(stepX, std::min(stepY, stepZ)) * 0.075f);
+
+		const uint32_t stride = std::max(1u, 3u - static_cast<uint32_t>(r_giQuality._val.i32));
+		for (uint32_t z = 0; z < ProbeGridZ; z += stride)
+		{
+			for (uint32_t y = 0; y < ProbeGridY; y += stride)
+			{
+				for (uint32_t x = 0; x < ProbeGridX; x += stride)
+				{
+					math::Vector3 center = level.center;
+					center.x += (-extent) + (x + 0.5f) * stepX;
+					center.y += (-extent) + (y + 0.5f) * stepY;
+					center.z += (-extent) + (z + 0.5f) * stepZ;
+
+					dx::BoundingBox marker(center, math::Vector3(markerExtent, markerExtent, markerExtent));
+					g_pEnv->_debugRenderer->DrawAABB(marker, math::Color(HEX_RGBA_TO_FLOAT4(96, 210, 255, 220)));
+				}
+			}
+		}
+	}
+
+	void DiffuseGI::Render(Scene* scene, Camera* camera, const GBuffer& gbuffer, ITexture2D* beautyTarget)
+	{
+		if (!_created || !r_giEnable._val.b || scene == nullptr || camera == nullptr || beautyTarget == nullptr)
+			return;
+
+		if (!_traceShader || !_resolveShader || !_fullScreenShader || !_giHalfRes || !_giResolved || !_giHistory || !_constantBuffer)
+		{
+			LOG_WARN("DiffuseGI is enabled but resources are incomplete; skipping frame.");
+			return;
+		}
+
+		RenderTracePass(gbuffer, beautyTarget);
+		RenderResolvePass(gbuffer);
+		CompositeToBeauty(beautyTarget);
+		DebugDrawProbeGrid(_activeClipmap);
+	}
+}

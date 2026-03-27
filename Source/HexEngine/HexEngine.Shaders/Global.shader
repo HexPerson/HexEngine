@@ -45,6 +45,14 @@
 		float volumetricStrength;
 		int volumetricStepsMax;
 		float volumetricStepIncrement;
+		int volumetricQuality;
+		int volumetric_pad0;
+		int volumetric_pad1;
+		int volumetric_pad2;
+		float volumetricPointInsideMin;
+		float volumetricPointInsideMax;
+		float volumetricSpotInsideMin;
+		float volumetricSpotInsideMax;
 
 		float4 ambientLight;
 	};
@@ -53,8 +61,8 @@
 	{
 		float luminosityThreshold;
 		float viewportScale;
-		float pad_1;
-		float pad_2;
+		float bloomIntensity;
+		float bloomClamp;
 	};	
 
 	struct OceanSettings

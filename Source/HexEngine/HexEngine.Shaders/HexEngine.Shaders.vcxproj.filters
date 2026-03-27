@@ -38,6 +38,7 @@
     <HexEngineShader Include="BilateralUpsample.shader" />
     <HexEngineShader Include="Billboard.shader" />
     <HexEngineShader Include="Bloom.shader" />
+    <HexEngineShader Include="BloomPhysical.shader" />
     <HexEngineShader Include="BuildShadowMask.shader" />
     <HexEngineShader Include="DebugRender.shader" />
     <HexEngineShader Include="Deferred.shader" />
@@ -72,7 +73,13 @@
     <HexEngineShader Include="ShadowMapGeometryAnimated.shader" />
     <HexEngineShader Include="SSRResolve.shader" />
     <HexEngineShader Include="BasicDenoise.shader" />
+    <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
+    <HexEngineShader Include="DiffuseGIPropagateVoxel.shader" />
+    <HexEngineShader Include="DiffuseGITrace.shader" />
+    <HexEngineShader Include="DiffuseGIResolve.shader" />
+    <HexEngineShader Include="DiffuseGIVoxelize.shader" />
     <HexEngineShader Include="DefaultPixel.shader" />
     <HexEngineShader Include="WaterBlit.shader" />
+    <HexEngineShader Include="DiffuseGIShiftVoxel.shader" />
   </ItemGroup>
 </Project>

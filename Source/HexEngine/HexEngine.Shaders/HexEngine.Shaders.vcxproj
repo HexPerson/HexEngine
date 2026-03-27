@@ -70,6 +70,9 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
   </PropertyGroup>
@@ -149,6 +152,14 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
   <ItemGroup>
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
+    <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
+    <HexEngineShader Include="DiffuseGIPropagateVoxel.shader" />
+    <HexEngineShader Include="DiffuseGIResolve.shader" />
+    <HexEngineShader Include="DiffuseGIShiftVoxel.shader" />
+    <HexEngineShader Include="DiffuseGITrace.shader">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+    </HexEngineShader>
+    <HexEngineShader Include="DiffuseGIVoxelize.shader" />
     <HexEngineShader Include="WaterBlit.shader" />
     <None Include="PBRutils.shader">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</ExcludedFromBuild>
@@ -167,6 +178,9 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
       <FileType>Document</FileType>
     </HexEngineShader>
     <HexEngineShader Include="Bloom.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="BloomPhysical.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
     <HexEngineShader Include="BuildShadowMask.shader">

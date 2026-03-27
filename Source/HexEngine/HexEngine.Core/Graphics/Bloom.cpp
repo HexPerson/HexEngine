@@ -6,6 +6,7 @@
 #include "../GUI/GuiRenderer.hpp"
 #include "../GUI/UIManager.hpp"
 #include "../Entity/Component/Camera.hpp"
+#include "../Environment/LogFile.hpp"
 
 namespace HexEngine
 {
@@ -13,7 +14,7 @@ namespace HexEngine
 	{
 		_renderTarget = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width, height,
-			DXGI_FORMAT_R8G8B8A8_UNORM,
+			DXGI_FORMAT_R16G16B16A16_FLOAT,
 			1,
 			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
 			0, 1, 0,
@@ -24,7 +25,12 @@ namespace HexEngine
 			D3D11_SRV_DIMENSION_TEXTURE2D
 		);
 
-		_renderShader = IShader::Create("EngineData.Shaders/Bloom.hcs");
+		_renderShader = IShader::Create("EngineData.Shaders/BloomPhysical.hcs");
+		if (!_renderShader)
+		{
+			LOG_WARN("BloomPhysical.hcs could not be loaded. Falling back to legacy Bloom.hcs. Make sure BloomPhysical.shader is compiled for this configuration.");
+			_renderShader = IShader::Create("EngineData.Shaders/Bloom.hcs");
+		}
 
 		_viewport = CD3D11_VIEWPORT(0.0f, 0.0f, (float)width, (float)height);
 
@@ -45,6 +51,9 @@ namespace HexEngine
 
 	void Bloom::Render(Camera* camera, ITexture2D* bloomInput, ITexture2D* bloomOutput)
 	{
+		if (!_renderShader || !bloomInput || !bloomOutput || !camera)
+			return;
+
 		GuiRenderer* renderer = g_pEnv->GetUIManager().GetRenderer();
 
 		const auto& bbvp = camera->GetViewport();

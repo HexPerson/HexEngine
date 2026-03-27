@@ -240,11 +240,22 @@ namespace HexEngine
 				case ShaderStage::PixelShader:
 					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreatePixelShader(shaderBlobs[stage]);
 					break;
+
+				case ShaderStage::ComputeShader:
+					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateComputeShader(shaderBlobs[stage]);
+					break;
 				}
 			}
 		}
 
-		shader->_inputLayout = IInputLayout::GetInputLayoutById(shaderFile._inputLayout, shader->_stages[(uint32_t)ShaderStage::VertexShader]);
+		if (shader->_stages[(uint32_t)ShaderStage::VertexShader] != nullptr)
+		{
+			shader->_inputLayout = IInputLayout::GetInputLayoutById(shaderFile._inputLayout, shader->_stages[(uint32_t)ShaderStage::VertexShader]);
+		}
+		else
+		{
+			shader->_inputLayout = nullptr;
+		}
 		shader->_requirements = shaderFile._requirements;
 
 		return shader;
@@ -298,11 +309,22 @@ namespace HexEngine
 				case ShaderStage::PixelShader:
 					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreatePixelShader(shaderBlobs[stage]);
 					break;
+
+				case ShaderStage::ComputeShader:
+					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateComputeShader(shaderBlobs[stage]);
+					break;
 				}
 			}
 		}
 
-		shader->_inputLayout = IInputLayout::GetInputLayoutById(shaderFile->_inputLayout, shader->_stages[(uint32_t)ShaderStage::VertexShader]);
+		if (shader->_stages[(uint32_t)ShaderStage::VertexShader] != nullptr)
+		{
+			shader->_inputLayout = IInputLayout::GetInputLayoutById(shaderFile->_inputLayout, shader->_stages[(uint32_t)ShaderStage::VertexShader]);
+		}
+		else
+		{
+			shader->_inputLayout = nullptr;
+		}
 		shader->_requirements = shaderFile->_requirements;
 
 		return shader;

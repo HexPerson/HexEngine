@@ -40,8 +40,8 @@ namespace HexEditor
 		HexEngine::Checkbox* makeParent = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Create Parent", &pm->_parent);
 		HexEngine::Checkbox* makeColliders = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Add Colliders", &pm->_makeColliders);
 		HexEngine::Checkbox* useChunkingSystem = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Enable Chunk System", &pm->_useChunkSystem);
-		pm->_materialName = new HexEngine::LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Material");
-		pm->_materialName->SetValue(L"Materials/DesertTerrain.hmat");
+		pm->_materialName = new HexEngine::AssetSearch(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Material", { HexEngine::ResourceType::Material });
+		pm->_materialName->SetValue(L"EngineData.Materials/Default.hmat");
 		HexEngine::Button* generateBtn = new HexEngine::Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(100, 25), L"Generate", std::bind(&Terrain::GenerateTerrain, pm));
 
 		//Button* regen = new Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), Point(100, 25), L"Re", std::bind(&Terrain::GenerateTerrain, pm));
@@ -76,7 +76,7 @@ namespace HexEditor
 		HexEngine::Checkbox* makeParent = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Create Parent", &pm->_parent);
 		HexEngine::Checkbox* makeColliders = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Add Colliders", &pm->_makeColliders);
 		HexEngine::Checkbox* useChunkingSystem = new HexEngine::Checkbox(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Enable Chunk System", &pm->_useChunkSystem);
-		pm->_materialName = new HexEngine::LineEdit(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Material");
+		pm->_materialName = new HexEngine::AssetSearch(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(sizex - 40, 18), L"Material", {HexEngine::ResourceType::Material});
 		pm->_materialName->SetValue(L"EngineData.Materials/Water.hmat");
 		HexEngine::Button* generateBtn = new HexEngine::Button(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(100, 25), L"Generate", std::bind(&Terrain::GenerateTerrain, pm));
 

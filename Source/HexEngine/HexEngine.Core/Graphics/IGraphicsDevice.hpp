@@ -125,6 +125,9 @@ namespace HexEngine
 		/** @brief Creates a compiled pixel shader stage object. */
 		virtual IShaderStage* CreatePixelShader(std::vector<uint8_t>& shaderCode) = 0;
 
+		/** @brief Creates a compiled compute shader stage object. */
+		virtual IShaderStage* CreateComputeShader(std::vector<uint8_t>& shaderCode) = 0;
+
 		/** @brief Creates an input layout from descriptor + vertex shader bytecode. */
 		virtual IInputLayout* CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary) = 0;
 

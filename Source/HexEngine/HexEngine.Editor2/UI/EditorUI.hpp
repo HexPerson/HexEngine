@@ -48,7 +48,7 @@ namespace HexEditor
 		Inspector* GetInspector() const { return _rightDock; }
 		SceneView* GetSceneView() const { return _sceneView; }
 
-		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {});
+		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 
 		void RecordEntityPositionChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
 		void RecordEntityScaleChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);

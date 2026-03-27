@@ -898,13 +898,17 @@ namespace HexEditor
 
 	void EditorUI::OnAddLight()
 	{
-		HexEngine::Entity* light = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("PointLight");
+		auto hit = RayCastWorld({}, false);
+
+		HexEngine::Entity* light = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("PointLight", hit.position);
 
 		auto pointLight = light->AddComponent<HexEngine::PointLight>();
 		pointLight->SetRadius(100.0f);
 		pointLight->SetLightStength(4.0f);
 
 		RecordEntityCreated(light);
+
+		GetInspector()->InspectEntity(light);
 	}
 
 	void EditorUI::OnAddEmptyEntity()
@@ -932,12 +936,16 @@ namespace HexEditor
 
 	void EditorUI::OnAddSpotLight()
 	{
-		HexEngine::Entity* light = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("SpotLight");
+		auto hit = RayCastWorld({}, false);
+
+		HexEngine::Entity* light = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("SpotLight", hit.position);
 
 		auto pointLight = light->AddComponent<HexEngine::SpotLight>();
 		pointLight->SetLightStength(4.0f);
 
 		RecordEntityCreated(light);
+
+		GetInspector()->InspectEntity(light);
 	}
 
 	void EditorUI::OnCreateNewSceneAction(const std::wstring& sceneName)
@@ -1069,7 +1077,7 @@ namespace HexEditor
 			{
 				if (_freeLookDir.Length() > 0.0f)
 				{
-					math::Vector3 dir = _freeLookDir * HexEngine::g_pEnv->_timeManager->GetFrameTime() * 200.0f * _freeLookMultiplier;
+					math::Vector3 dir = _freeLookDir * HexEngine::g_pEnv->_timeManager->GetFrameTime() * 20.0f * _freeLookMultiplier;
 
 					const auto& currentPos = cameraTransform->GetPosition();
 
@@ -1354,7 +1362,7 @@ namespace HexEditor
 		return true;
 	}
 
-	HexEngine::RayHit EditorUI::RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore)
+	HexEngine::RayHit EditorUI::RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore, bool useMousePos)
 	{
 		// pick entity
 		auto currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
@@ -1366,19 +1374,21 @@ namespace HexEditor
 			if (mainCamera)
 			{
 				int32_t mx, my;
-				HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
-
 				const HexEngine::Point centerSize = _sceneView->GetSceneViewportSize();
 				HexEngine::Point centerLoc = _sceneView->GetSceneViewportAbsolutePosition();
 				HexEngine::Point centerPos = centerLoc.GetCenter(centerSize);
-
 				const auto& vp = mainCamera->GetViewport();
 
-				//auto vpCenterX = mainCamera->GetViewport().x + mainCamera->GetViewport().width / 2;
-				//auto vpCenterY = mainCamera->GetViewport().y + mainCamera->GetViewport().height / 2;
-
-				mx -= centerLoc.x;
-				//my -= centerLoc.y;
+				if (useMousePos)
+				{
+					HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
+					mx -= centerLoc.x;
+				}
+				else
+				{
+					mx = centerPos.x - centerLoc.x;
+					my = centerPos.y - centerLoc.y;
+				}
 
 				float scaleX = vp.width / (float)centerSize.x;
 				float scaleY = vp.height / (float)centerSize.y;

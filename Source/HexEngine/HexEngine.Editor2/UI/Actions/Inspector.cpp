@@ -4,9 +4,40 @@
 #include <HexEngine.Core\GUI\Elements\Dialog.hpp>
 #include <HexEngine.Core\GUI\Elements\ContextMenu.hpp>
 #include "../Gadgets/Gadget.hpp"
+#include <algorithm>
+#include <cwctype>
 
 namespace HexEditor
 {
+	namespace
+	{
+		std::wstring ToLowerCopy(const std::wstring& text)
+		{
+			std::wstring lowered = text;
+			std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+				[](wchar_t c) { return (wchar_t)std::towlower(c); });
+			return lowered;
+		}
+
+		bool ElementTreeMatchesFilter(HexEngine::Element* element, const std::wstring& filterLower)
+		{
+			if (element == nullptr || filterLower.empty())
+				return true;
+
+			const std::wstring labelLower = ToLowerCopy(element->GetLabelText());
+			if (!labelLower.empty() && labelLower.find(filterLower) != std::wstring::npos)
+				return true;
+
+			for (auto* child : element->GetChildren())
+			{
+				if (ElementTreeMatchesFilter(child, filterLower))
+					return true;
+			}
+
+			return false;
+		}
+	}
+
 	Inspector::Inspector(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		Dock(parent, position, size, Dock::Anchor::Right)
 	{
@@ -24,6 +55,10 @@ namespace HexEditor
 			_visBtnTextures[1] = HexEngine::ITexture2D::Create("EngineData.Textures/UI/ui_visible.png");
 
 			_toggleVisibilityBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 50), HexEngine::Point(30, 25), _visBtnTextures[1], std::bind(&Inspector::OnToggleEntityVisible, this, std::placeholders::_1));
+			_propertyFilter = new HexEngine::LineEdit(entityTab, HexEngine::Point(40, 50), HexEngine::Point(std::max(100, size.x - 120), 25), L"");
+			_propertyFilter->SetUneditableText(L"Filter ");
+			_propertyFilter->SetDoesCallbackWaitForReturn(false);
+			_propertyFilter->SetOnInputFn(std::bind(&Inspector::OnInspectorFilterChanged, this, std::placeholders::_1, std::placeholders::_2));
 
 			_addComponentBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 80), HexEngine::Point(size.x - 10, 25), L"Add Component...", std::bind(&Inspector::OnAddComponent, this, std::placeholders::_1));
 
@@ -157,6 +192,16 @@ namespace HexEditor
 				_entityName->SetValue(std::wstring(finalName.begin(), finalName.end()));
 			}
 		}			
+	}
+
+	void Inspector::OnInspectorFilterChanged(HexEngine::LineEdit* edit, const std::wstring& value)
+	{
+		(void)edit;
+		(void)value;
+		if (_inspecting != nullptr)
+		{
+			InspectEntity(_inspecting, true);
+		}
 	}
 
 	void Inspector::InspectEntity(HexEngine::Entity* entity)
@@ -389,6 +434,16 @@ namespace HexEditor
 				{
 					widget->DeleteMe();
 					continue;
+				}
+
+				if (_propertyFilter != nullptr)
+				{
+					const std::wstring filterLower = ToLowerCopy(_propertyFilter->GetValue());
+					if (!filterLower.empty() && !ElementTreeMatchesFilter(widget, filterLower))
+					{
+						widget->DeleteMe();
+						continue;
+					}
 				}
 
 				widget->CalculateLargestLabelWidth();

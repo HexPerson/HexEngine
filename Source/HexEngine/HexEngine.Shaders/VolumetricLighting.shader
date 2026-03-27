@@ -48,119 +48,134 @@
 		return result;
 	}
 
-	
-
-	/*float SampleDepth(Texture2D shadowMap, float2 projectTexCoord, float lightDepthValue)
+	int GetCascadeIndexForDistance(float distanceFromCamera)
 	{
-		float sum = 0;
-		int num = 0;
+		if (distanceFromCamera <= g_frustumDepths[0])
+			return 0;
+		else if (distanceFromCamera <= g_frustumDepths[1])
+			return 1;
+		else if (distanceFromCamera <= g_frustumDepths[2])
+			return 2;
 
-		const float pcfFactor = 5.0f;
-		for (float y = -pcfFactor; y <= pcfFactor; y += 1.0)
-		{
-			for (float x = -pcfFactor; x <= pcfFactor; x += 1.0)
-			{
-				sum += shadowMap.SampleCmpLevelZero(g_cmpSampler, projectTexCoord.xy + TexOffset(x, y), lightDepthValue).r;
-				num = num + 1;
-			}
-		}
+		return 3;
+	}
 
-		return sum / (float)num;
-	}*/
+	float GetCascadeStartDepth(int cascadeIndex)
+	{
+		if (cascadeIndex <= 0)
+			return 0.0f;
+		if (cascadeIndex == 1)
+			return g_frustumDepths[0];
+		if (cascadeIndex == 2)
+			return g_frustumDepths[1];
+
+		return g_frustumDepths[2];
+	}
+
+	float GetCascadeEndDepth(int cascadeIndex)
+	{
+		if (cascadeIndex <= 0)
+			return g_frustumDepths[0];
+		if (cascadeIndex == 1)
+			return g_frustumDepths[1];
+		if (cascadeIndex == 2)
+			return g_frustumDepths[2];
+
+		return g_frustumDepths[3];
+	}
+
+	float GetVolumetricPresetStepScale()
+	{
+		if (g_atmosphere.volumetricQuality <= 0)
+			return 1.65f; // performance
+		if (g_atmosphere.volumetricQuality >= 2)
+			return 0.72f; // quality
+
+		return 1.0f; // balanced
+	}
+
+	float GetVolumetricPresetJitterScale()
+	{
+		if (g_atmosphere.volumetricQuality <= 0)
+			return 0.65f; // performance
+		if (g_atmosphere.volumetricQuality >= 2)
+			return 1.25f; // quality
+
+		return 1.0f; // balanced
+	}
+
+	float GetVolumetricStepClampMinMul()
+	{
+		if (g_atmosphere.volumetricQuality <= 0)
+			return 0.75f;
+		if (g_atmosphere.volumetricQuality >= 2)
+			return 0.45f;
+
+		return 0.60f;
+	}
+
+	float GetVolumetricStepClampMaxMul()
+	{
+		if (g_atmosphere.volumetricQuality <= 0)
+			return 2.40f;
+		if (g_atmosphere.volumetricQuality >= 2)
+			return 1.15f;
+
+		return 1.60f;
+	}
+
+	float ComputeCascadeAdaptiveStep(int cascadeIndex, float traceLen, int targetSteps)
+	{
+		float cascadeStart = GetCascadeStartDepth(cascadeIndex);
+		float cascadeEnd = GetCascadeEndDepth(cascadeIndex);
+		float cascadeLength = max(0.001f, cascadeEnd - cascadeStart);
+
+		float safeTargetSteps = max(8.0f, (float)targetSteps);
+		float traceBasedStep = traceLen / safeTargetSteps;
+		float cascadeBasedStep = cascadeLength / max(2.0f, safeTargetSteps * 0.25f);
+
+		float autoStep = lerp(traceBasedStep, cascadeBasedStep, 0.45f);
+		float minStep = traceBasedStep * GetVolumetricStepClampMinMul();
+		float maxStep = traceBasedStep * GetVolumetricStepClampMaxMul();
+
+		return clamp(autoStep, minStep, maxStep);
+	}
 
 	float3 CalculateVolumetricLighting(float pixelDepth, float3 pixelPos, float2 screenPos, float2 screenPosUV, float3 noise)
 	{
 		float3 viewEyePosition = g_eyePos;
-
-		// float3 ScreenToWorldPosition2(float depth, float maxDepth, float3 dirToPixelWS, float3 cameraPos)
-
 		float3 eyeVec = normalize(pixelPos - g_eyePos);
-
-		//return float3(eyeVec);
-
 		float3 viewPixelPosition = ScreenToWorldPosition2(pixelDepth, g_frustumDepths[3], eyeVec, g_eyePos);
-
-		//float3 viewPixelPosition = ScreenToWorldPosition(pixelDepth, g_frustumDepths[3], screenPos, float2(g_screenWidth, g_screenHeight), g_viewProjectionMatrixInverse);// VSPositionFromDepth(pixelDepth, screenPosUV);// pixelPos;
-
-		//if (pixelDepth == -1)
-			//return float3(0, 0, 0);
-			//viewPixelPosition = VSPositionFromDepth(pixelDepth, screenPosUV);
-
-		//pixelPos = pixelPos * 1.0f;
-
 		float3 startPos = viewEyePosition;
 		float3 endPos = viewPixelPosition;
 
 		float3 direction = (endPos - startPos);
-
-		//float2 noisePos = float2(screenPos.x / g_screenWidth, screenPos.y / g_screenHeight);
-
-		//noisePos.xy += g_time * 0.01f;
-
-		// sample the noise
-		//float4 noise = g_noiseTexture.Sample(g_pointSampler, noisePos);
-
-		//direction.x += cos(noise.x * 2 * PI) * 0.25f;
-		//direction.y += sin(noise.x * 2 * PI) * 0.25f;
-
 		float traceLen = length(direction);
+		if (traceLen <= 0.0001f)
+			return 0.0f.xxx;
+
 		direction /= traceLen;
 
 		int index = 0;
-
-		//float finalDepth = pixelDepth == -1 ? g_frustumDepths[3] : pixelDepth;
-
-		int numSteps = g_atmosphere.volumetricStepsMax;
-		float stepLength = g_atmosphere.volumetricStepIncrement;//traceLen / (float)numSteps; // g_atmosphere.volumetricStepIncrement;//
+		int numSteps = max(8, g_atmosphere.volumetricStepsMax);
+		const float globalStepScale = max(0.01f, g_atmosphere.volumetricStepIncrement);
 
 		float3 tracePos = startPos;
 		float totalTraceLen = 0.0f;
-
+		float marchedDistance = 0.0f;
 		float accumFog = 0.0f;
-
-#if 0
-		float4 noise = g_noiseTexture.Sample(g_textureSampler, screenPosUV * float2(g_screenWidth / 128.0f, g_screenHeight / 128.0f) /** 4.0f*/);
-
-		direction *= (noise.xyz /** 0.5*/);
-		direction = normalize(direction);
-#endif
-
-		/*const float ditherPattern[4][4] = {
-			{ 0.0f, 0.5f, 0.125f, 0.625f},
-			{ 0.75f, 0.22f, 0.875f, 0.375f},
-			{ 0.1875f, 0.6875f, 0.0625f, 0.5625},
-			{ 0.9375f, 0.4375f, 0.8125f, 0.3125}
-		};*/
-
-#if 0
-		const float ditherPattern[4][4] = {
-			{00.0 / 16.0, 12.0 / 16.0, 03.0 / 16.0, 15.0 / 16.0},
-			{08.0 / 16.0, 04.0 / 16.0, 11.0 / 16.0, 07.0 / 16.0},
-			{02.0 / 16.0, 14.0 / 16.0, 01.0 / 16.0, 13.0 / 16.0},
-			{10.0 / 16.0, 06.0 / 16.0, 09.0 / 16.0, 05.0 / 16.0}
-		};
-
-		float ditherValue = ditherPattern[screenPos.x % 4][screenPos.y % 4];
-
-		float goldenRatio = 1.61803398875;
-		float invGoldenRatio = 1.0 / goldenRatio;
-
-		float blue = ditherValue;
-		float startOffset = blue * 1.0;
-		startOffset = blue + frac(g_time) * 10.0f;// invGoldenRatio;
-
-		tracePos += direction * startOffset;
-#endif
-
-		tracePos += direction + noise * 0.07f;// + frac(g_time * 50.0f));
-
-		int numHits = 0;
-		int numActualSteps = 0;
+		float phase = ComputeScattering(dot(direction, normalize(g_shadowCasterLightDir.xyz))) * g_atmosphere.volumetricStrength;
+		float screenNoise = InterleavedGradientNoise(screenPos);
+		float frameNoise = frac((float)(g_frame & 1023u) * 0.61803398875f);
+		float jitter = frac(noise.x + screenNoise + frameNoise);
+		float initialStep = ComputeCascadeAdaptiveStep(0, traceLen, numSteps) * GetVolumetricPresetStepScale() * globalStepScale;
+		tracePos += direction * (initialStep * jitter * GetVolumetricPresetJitterScale());
 
 		[loop]
 		for (int i = 0; i < numSteps; i++)
 		{
-			numActualSteps++;
+			if (totalTraceLen >= traceLen)
+				break;
 
 			if (g_shadowConfig.cascadeOverride != -1)
 			{
@@ -168,35 +183,30 @@
 			}
 			else
 			{
-				if (totalTraceLen <= g_frustumDepths[0])
-				{
-					index = 0;
+				index = GetCascadeIndexForDistance(totalTraceLen);
+			}
 
-					//numSteps = 100;
-					//stepLength = 5.0f;//g_frustumDepths[0] / (float)(numSteps / 4);
-				}
-				else if (totalTraceLen <= g_frustumDepths[1])
-				{
-					index = 1;
+			float stepLength = ComputeCascadeAdaptiveStep(index, traceLen, numSteps) * GetVolumetricPresetStepScale() * globalStepScale;
 
-					//numSteps = 50;
-					//stepLength = 15.0f;//(g_frustumDepths[1] - g_frustumDepths[0]) /  (float)(numSteps / 4);
-				}
-				else if (totalTraceLen <= g_frustumDepths[2])
-				{
-					index = 2;
+			if (g_shadowConfig.cascadeOverride == -1 && index < 3)
+			{
+				float cascadeStart = GetCascadeStartDepth(index);
+				float cascadeEnd = GetCascadeEndDepth(index);
+				float cascadeLength = max(0.001f, cascadeEnd - cascadeStart);
+				float blendWidth = max(stepLength * 2.0f, cascadeLength * 0.15f);
+				float distToEnd = cascadeEnd - totalTraceLen;
+				float boundaryBlend = saturate(1.0f - (distToEnd / blendWidth));
 
-					//numSteps = 40;
-					//stepLength = 40.0f;//(g_frustumDepths[2] - g_frustumDepths[1]) /  (float)(numSteps / 4);
-				}
-				else
+				if (boundaryBlend > 0.0f)
 				{
-					index = 3;
-
-					//numSteps = 10;
-					//stepLength = 60.0f;//(g_frustumDepths[3] - g_frustumDepths[2]) /  (float)(numSteps / 4);
+					float nextStepLength = ComputeCascadeAdaptiveStep(index + 1, traceLen, numSteps) * GetVolumetricPresetStepScale() * globalStepScale;
+					stepLength = lerp(stepLength, nextStepLength, boundaryBlend);
 				}
 			}
+
+			float remainingDistance = traceLen - totalTraceLen;
+			stepLength = max(0.0001f, stepLength);
+			stepLength = min(stepLength, remainingDistance);
 
 			float4 pixelPosShadow = float4(tracePos, 1.0f);
 
@@ -216,8 +226,6 @@
 
 				if (index == 0)
 				{
-					//shadowDepth = SampleDepth(SHADOWMAPS[0], projectTexCoord.xy, depthFromLight);
-
 					shadowDepth = SHADOWMAPS[0].Sample(g_LinearSampler, projectTexCoord.xy).x;
 				}
 				else if (index == 1)
@@ -233,22 +241,20 @@
 					shadowDepth = SHADOWMAPS[3].Sample(g_LinearSampler, projectTexCoord.xy).x;
 				}
 
-				if (shadowDepth > depthFromLight)
-				{
-					accumFog += ComputeScattering(dot(direction, normalize(g_shadowCasterLightDir.xyz))) * g_atmosphere.volumetricStrength;
-					numHits++;
-				}
+				float visibility = shadowDepth > depthFromLight ? 1.0f : 0.0f;
+				accumFog += visibility * phase * stepLength;
 			}
 
-			tracePos += (direction * stepLength);			
+			tracePos += (direction * stepLength);
 
-			totalTraceLen += stepLength;	
+			totalTraceLen += stepLength;
+			marchedDistance += stepLength;
 			
 			if (totalTraceLen >= traceLen)
 				break;
 		}
 
-		accumFog /= (float)numActualSteps;
+		accumFog /= max(0.0001f, marchedDistance);
 
 		return saturate(getSunColour() * accumFog);
 	}
@@ -261,10 +267,8 @@
 
 		// Sample the gbuffer
 		//
-		//float4 pixelColour = GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos);
 		float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
 		float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
-		//float4 pixelSpecular = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 
 		float2 noiseSamplePos = screenPos * 8.0f;
 
