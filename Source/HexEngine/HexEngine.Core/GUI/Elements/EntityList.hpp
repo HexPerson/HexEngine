@@ -3,6 +3,7 @@
 
 #include "TreeList.hpp"
 #include "ContextMenu.hpp"
+#include <unordered_set>
 
 namespace HexEngine
 {
@@ -43,6 +44,10 @@ namespace HexEngine
 		void OnClickEntityInList(ListNode* item, int32_t mouseButton);
 		bool OnDragAndDropEntity(TreeList* list, ListNode* dragSource, ListNode* dragTarget);
 		void OnLoadScene(SceneListNode* node);
+		Entity* ResolveEntityNode(const ListNode* node) const;
+		Scene* ResolveSceneNode(const ListNode* node) const;
+		ListNode* AddEntityInternal(Entity* entity, ListNode* sceneNode, std::unordered_set<Entity*>& parentWalkGuard);
+		bool IsAncestorOf(const Entity* source, const Entity* potentialChild) const;
 
 	private:
 		void CreateIcons();

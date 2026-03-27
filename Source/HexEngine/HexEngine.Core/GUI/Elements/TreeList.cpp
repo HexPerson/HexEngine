@@ -162,45 +162,31 @@ namespace HexEngine
 		}
 		else if (event == InputEvent::MouseUp)
 		{
-			if (IsMouseOver(true))
+			if (data->MouseUp.button == VK_LBUTTON)
 			{
-				/*if (_onSelect && _hoveredItem)
+				const bool isMouseOver = IsMouseOver(true);
+				const bool hadDraggedItem = _draggedItem != nullptr;
+				bool handledDrop = false;
+
+				if (_draggedItem && _dragTarget && _isDragging)
 				{
-					if (_onSelect(this, _hoveredItem, data->MouseDown.button))
-						return true;
-				}*/
-
-				if (data->MouseUp.button == VK_LBUTTON)
-				{
-					if (_draggedItem == nullptr)
-					{
-						_isDragging = false;
-					}
-
-					if (_draggedItem && _dragTarget)
-					{
-						if (_isDragging)
-							_draggedItem->OnDragAndDrop(_dragTarget);
-							//_onDragAndDrop(this, _draggedItem, _dragTarget);
-
-						_isDragging = false;
-						_draggedItem = nullptr;
-						_dragTarget = nullptr;
-
-						return true;
-					}
-
-					if (_hoveredItem != nullptr)
-					{
-						_hoveredItem->_isOpen = !_hoveredItem->_isOpen;
-						_hoveredItem->OnClick(VK_LBUTTON, data->MouseUp.xpos, data->MouseUp.ypos);
-
-						SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
-						_canvas.Redraw();
-					}
-
-					
+					_draggedItem->OnDragAndDrop(_dragTarget);
+					handledDrop = true;
 				}
+
+				if (isMouseOver && !hadDraggedItem && _hoveredItem != nullptr)
+				{
+					_hoveredItem->_isOpen = !_hoveredItem->_isOpen;
+					_hoveredItem->OnClick(VK_LBUTTON, data->MouseUp.xpos, data->MouseUp.ypos);
+
+					SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+					_canvas.Redraw();
+				}
+
+				ResetDragState();
+
+				if (handledDrop)
+					return true;
 			}
 		}
 		else if (event == InputEvent::MouseMove)
@@ -391,7 +377,7 @@ namespace HexEngine
 
 		for (auto& item : parent ? parent->_items : _items)
 		{
-			if (item->_objectPtr == objectPtr)
+			if (item->GetObjectPtr() == objectPtr)
 				return item;
 
 			if (item->_child)
@@ -463,8 +449,7 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_hoveredItem = nullptr;
-		_draggedItem = nullptr;
-		_isDragging = false;
+		ResetDragState();
 
 		for (auto& item : _items)
 		{
@@ -474,6 +459,13 @@ namespace HexEngine
 		_items.clear();
 		SetManualContentHeight(_size.y);
 		_canvas.Redraw();
+	}
+
+	void TreeList::ResetDragState()
+	{
+		_isDragging = false;
+		_draggedItem = nullptr;
+		_dragTarget = nullptr;
 	}
 
 	void TreeList::ClearItem(ListNode* item)

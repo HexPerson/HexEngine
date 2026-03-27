@@ -105,20 +105,20 @@ namespace HexEngine
 						_dlssViewport.width = (float)optimalWidth;
 						_dlssViewport.height = (float)optimalHeight;
 
-						streamline->SetDLSSOptions(1.0f, true, true, DLSSMode::MaxQuality, _viewport.width, _viewport.height);
+						streamline->SetDLSSOptions(1.0f, true, true, DLSSMode::MaxQuality, (int32_t)_viewport.width, (int32_t)_viewport.height);
 
 						//CreateRenderTarget(_dlssViewport.width, _dlssViewport.height);
 
 						SetPespectiveParameters(_fov, _dlssViewport.width / _dlssViewport.height, _screenNear, _screenFar);
 
-						g_pEnv->_sceneRenderer->Resize(_dlssViewport.width, _dlssViewport.height);
+						g_pEnv->_sceneRenderer->Resize((int32_t)_dlssViewport.width, (int32_t)_dlssViewport.height);
 					}
 				}
 			}
 		}
 		else
 		{
-			CreateRenderTarget(_viewport.width, _viewport.height);
+			CreateRenderTarget((int32_t)_viewport.width, (int32_t)_viewport.height);
 			
 			g_pEnv->_sceneRenderer->Resize(_viewport.width, _viewport.height);
 		}

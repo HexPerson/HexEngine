@@ -109,7 +109,7 @@ namespace HexEngine
 				else if (delta < -180.0f)
 					newTargetYaw += 360.0f;
 
-				camera->SetYaw(std::lerp(currentYaw, newTargetYaw, frameTime * _rotationSpringSpeed * easingFunc(viewRestoreDelta)));
+				camera->SetYaw(std::lerp(currentYaw, newTargetYaw, frameTime * _rotationSpringSpeed * (float)easingFunc(viewRestoreDelta)));
 
 				// pitch
 
@@ -124,7 +124,7 @@ namespace HexEngine
 				else if (delta < -180.0f)
 					newTargetPitch += 360.0f;
 
-				camera->SetPitch(std::lerp(currentPitch, newTargetPitch, frameTime * _rotationSpringSpeed * easingFunc(viewRestoreDelta)));
+				camera->SetPitch(std::lerp(currentPitch, newTargetPitch, frameTime * _rotationSpringSpeed * (float)easingFunc(viewRestoreDelta)));
 			}
 			else
 			{

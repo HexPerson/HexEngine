@@ -9,7 +9,7 @@ namespace HexEngine
 		_list(list),
 		_label(label),
 		_icons(icons),
-		_userData(userData)
+		_objectPtr(userData)
 	{
 		_arrowIcon = ITexture2D::Create("EngineData.Textures/UI/triangle.png");
 
@@ -60,6 +60,11 @@ namespace HexEngine
 		return _icons.at(_iconId);
 	}
 
+	void* ListNode::GetObjectPtr() const
+	{
+		return _objectPtr;
+	}
+
 	void ListNode::SetIcon(uint32_t iconId)
 	{
 		_iconId = iconId;
@@ -73,6 +78,11 @@ namespace HexEngine
 	void ListNode::SetLabel(const std::wstring& label)
 	{
 		_label = label;
+	}
+
+	void ListNode::SetObjectPtr(void* objectPtr)
+	{
+		_objectPtr = objectPtr;
 	}
 
 	void SceneListNode::OnClick(int32_t button, int32_t x, int32_t y)

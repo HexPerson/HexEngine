@@ -153,8 +153,8 @@ namespace HexCreator
             {
                 ultralight::MouseEvent evt;
                 evt.type = ultralight::MouseEvent::kType_MouseMoved;
-                evt.x = data->MouseMove.x;
-                evt.y = data->MouseMove.y;
+                evt.x = (int32_t)data->MouseMove.x;
+                evt.y = (int32_t)data->MouseMove.y;
                 evt.button = ultralight::MouseEvent::Button::kButton_None;
                 OnMouseEvent(evt);
                 break;

@@ -50,6 +50,7 @@ namespace HexEngine
 	private:
 		//void CreateRenderTarget();
 		void UpdateHovering(GuiRenderer* renderer, const std::vector<ListNode*>& items, int32_t& y);
+		void ResetDragState();
 
 	private:
 		std::vector<ListNode*> _items;

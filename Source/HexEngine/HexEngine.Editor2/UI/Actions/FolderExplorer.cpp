@@ -32,7 +32,7 @@ namespace HexEditor
 			{
 				if (pathItem->GetParent() == nullptr && fs == nullptr)
 				{
-					fs = static_cast<HexEngine::FileSystem*>(pathItem->_userData);
+					fs = pathItem->GetObjectAs<HexEngine::FileSystem>();
 				}
 				else
 				{

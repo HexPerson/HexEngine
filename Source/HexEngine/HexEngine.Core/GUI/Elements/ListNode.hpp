@@ -30,11 +30,19 @@ namespace HexEngine
 		virtual void				OnClick(int32_t button, int32_t x, int32_t y);
 		virtual void				OnDragAndDrop(ListNode* target);
 		virtual ITexture2D*			GetIcon() const;
+		virtual void*				GetObjectPtr() const;
 
 
 		void						SetIcon(uint32_t iconId);
 		ListNode*					GetParent() const;
 		void						SetLabel(const std::wstring& label);
+		void						SetObjectPtr(void* objectPtr);
+
+		template <typename T>
+		T* GetObjectAs() const
+		{
+			return reinterpret_cast<T*>(GetObjectPtr());
+		}
 
 	protected:
 		int32_t _id = 0;
@@ -54,7 +62,6 @@ namespace HexEngine
 	public:
 		OnClickNode _onClick;
 		OnDragAndDropNode _onDragAndDrop;
-		void* _userData;
 	};
 
 	class SceneListNode : public ListNode

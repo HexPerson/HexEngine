@@ -1513,7 +1513,9 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		return _entNameMap[name];
+		auto it = _entNameMap.find(name);
+		if (it != _entNameMap.end())
+			return it->second;
 
 		/*for (auto& ent : _entities)
 		{
