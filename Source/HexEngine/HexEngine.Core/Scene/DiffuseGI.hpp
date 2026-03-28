@@ -49,6 +49,7 @@ namespace HexEngine
 		struct ClipmapLevel
 		{
 			math::Vector3 center = math::Vector3::Zero;
+			math::Vector3 targetCenter = math::Vector3::Zero;
 			float extent = 64.0f;
 			uint32_t resolution = 48;
 			bool dirty = true;
@@ -81,6 +82,7 @@ namespace HexEngine
 			math::Vector4 params3; // xyz=sunDirectionWS, w=sunDirectionality
 			math::Vector4 params4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 			math::Vector4 params5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
+			math::Vector4 params6; // x=voxelNeighbourBlend, y=shiftSettle, z,w=reserved
 		};
 
 		struct GpuVoxelTriangle
@@ -141,10 +143,20 @@ namespace HexEngine
 		float _resolveStabilityBoost = 0.0f;
 		bool _lastLocalLightsOnlyDebug = false;
 		float _lastLocalLightInjection = 1.0f;
+		bool _lastLocalLightInjectionEnable = true;
+		bool _lastDisableBaseAndSunInjection = false;
+		bool _lastDisableBaseInjection = false;
+		bool _lastDisableSunInjection = false;
 		int32_t _lastLocalLightMaxPerMesh = 20;
 		float _lastLocalLightBaseSuppression = 0.85f;
 		float _lastLocalLightSunSuppression = 1.0f;
 		float _lastLocalLightAlbedoWeight = 0.0f;
+		float _lastBaseSunSmallTriangleDamp = 0.85f;
+		float _lastMeshBaseInjectionNormalization = 1.0f;
+		float _lastMeshSunInjectionNormalization = 0.0f;
+		float _lastMeshBaseInjectionMinScale = 0.02f;
+		float _lastMeshSunInjectionMinScale = 0.20f;
+		uint64_t _lastInjectLightSignature = 0ull;
 		math::Vector3 _lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		bool _lastSunDirectionInitialized = false;
 		uint32_t _sunRelightFramesRemaining = 0;

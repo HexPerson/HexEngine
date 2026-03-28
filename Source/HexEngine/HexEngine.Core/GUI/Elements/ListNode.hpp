@@ -31,6 +31,10 @@ namespace HexEngine
 		virtual void				OnDragAndDrop(ListNode* target);
 		virtual ITexture2D*			GetIcon() const;
 		virtual void*				GetObjectPtr() const;
+		bool						IsOpen() const;
+		void						SetOpen(bool open);
+		bool						HasChildren() const;
+		const std::vector<ListNode*>& GetChildren() const;
 
 
 		void						SetIcon(uint32_t iconId);

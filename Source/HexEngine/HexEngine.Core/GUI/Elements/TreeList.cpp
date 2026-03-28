@@ -6,6 +6,7 @@
 #include "../../Environment/LogFile.hpp"
 #include "../../Input/CommandManager.hpp"
 #include "../../Input/Console.hpp"
+#include "../UIManager.hpp"
 
 namespace HexEngine
 {
@@ -142,14 +143,122 @@ namespace HexEngine
 			return true;
 		}
 
+		if (event == InputEvent::KeyDown && IsInputFocus())
+		{
+			std::vector<ListNode*> visibleItems;
+			CollectVisibleItems(_items, visibleItems);
+			if (visibleItems.empty())
+				return false;
+
+			auto findVisibleIndex = [&](ListNode* item) -> int32_t
+			{
+				for (int32_t i = 0; i < (int32_t)visibleItems.size(); ++i)
+				{
+					if (visibleItems[i] == item)
+						return i;
+				}
+				return -1;
+			};
+
+			auto ensureSelection = [&]() -> int32_t
+			{
+				int32_t selectedIndex = findVisibleIndex(_selectedItem);
+				if (selectedIndex == -1)
+				{
+					if (_hoveredItem != nullptr)
+					{
+						selectedIndex = findVisibleIndex(_hoveredItem);
+					}
+
+					if (selectedIndex == -1)
+						selectedIndex = 0;
+
+					SetSelectedItem(visibleItems[selectedIndex], true);
+				}
+
+				return selectedIndex;
+			};
+
+			switch (data->KeyDown.key)
+			{
+			case VK_UP:
+			{
+				const int32_t selectedIndex = ensureSelection();
+				const int32_t targetIndex = std::max(0, selectedIndex - 1);
+				SetSelectedItem(visibleItems[targetIndex], true);
+				return true;
+			}
+			case VK_DOWN:
+			{
+				const int32_t selectedIndex = ensureSelection();
+				const int32_t targetIndex = std::min((int32_t)visibleItems.size() - 1, selectedIndex + 1);
+				SetSelectedItem(visibleItems[targetIndex], true);
+				return true;
+			}
+			case VK_LEFT:
+			{
+				ensureSelection();
+				if (_selectedItem != nullptr)
+				{
+					if (_selectedItem->HasChildren() && _selectedItem->IsOpen())
+					{
+						_selectedItem->SetOpen(false);
+						SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+						_canvas.Redraw();
+					}
+					else if (_selectedItem->GetParent() != nullptr)
+					{
+						SetSelectedItem(_selectedItem->GetParent(), true);
+					}
+				}
+				return true;
+			}
+			case VK_RIGHT:
+			{
+				ensureSelection();
+				if (_selectedItem != nullptr)
+				{
+					if (_selectedItem->HasChildren() && !_selectedItem->IsOpen())
+					{
+						_selectedItem->SetOpen(true);
+						SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+						_canvas.Redraw();
+					}
+					else if (_selectedItem->HasChildren())
+					{
+						const auto& children = _selectedItem->GetChildren();
+						if (!children.empty() && children.front() != nullptr)
+						{
+							SetSelectedItem(children.front(), true);
+						}
+					}
+				}
+				return true;
+			}
+			case VK_RETURN:
+			{
+				ensureSelection();
+				if (_selectedItem != nullptr)
+				{
+					_selectedItem->OnClick(VK_LBUTTON, 0, 0);
+					_canvas.Redraw();
+					return true;
+				}
+				break;
+			}
+			}
+		}
+
 		if (event == InputEvent::MouseDown)
 		{
 			if (IsMouseOver(true))
 			{
 				if (data->MouseDown.button == VK_LBUTTON)
 				{
+					g_pEnv->GetUIManager().SetInputFocus(this);
 					_isDragging = true;
 					_dragStart = Point(data->MouseDown.xpos, data->MouseDown.ypos);
+					_dragSource = _hoveredItem;
 				}
 				else if(data->MouseDown.button == VK_RBUTTON)
 				{
@@ -176,6 +285,7 @@ namespace HexEngine
 
 				if (isMouseOver && !hadDraggedItem && _hoveredItem != nullptr)
 				{
+					SetSelectedItem(_hoveredItem, false);
 					_hoveredItem->_isOpen = !_hoveredItem->_isOpen;
 					_hoveredItem->OnClick(VK_LBUTTON, data->MouseUp.xpos, data->MouseUp.ypos);
 
@@ -191,14 +301,14 @@ namespace HexEngine
 		}
 		else if (event == InputEvent::MouseMove)
 		{
-			if (_isDragging && _hoveredItem != nullptr)
+			if (_isDragging && _draggedItem == nullptr && _dragSource != nullptr)
 			{
 				auto dx = data->MouseMove.x - _dragStart.x;
 				auto dy = data->MouseMove.y - _dragStart.y;
 
 				if (abs(dx) >= 5 || abs(dy) >= 5)
 				{
-					_draggedItem = _hoveredItem;
+					_draggedItem = _dragSource;
 				}
 			}
 
@@ -371,6 +481,85 @@ namespace HexEngine
 		return nullptr;
 	}
 
+	const std::vector<ListNode*>& TreeList::GetRootItems() const
+	{
+		return _items;
+	}
+
+	void TreeList::SetSelectedItem(ListNode* item, bool scrollIntoView)
+	{
+		std::unique_lock lock(_lock);
+		_selectedItem = item;
+		if (scrollIntoView && item != nullptr)
+		{
+			ScrollToItem(item, 24);
+		}
+		_canvas.Redraw();
+	}
+
+	ListNode* TreeList::GetSelectedItem() const
+	{
+		return _selectedItem;
+	}
+
+	bool TreeList::ScrollToItem(ListNode* item, int32_t padding)
+	{
+		if (item == nullptr)
+			return false;
+
+		padding = std::max(0, padding);
+
+		int32_t targetRow = -1;
+		int32_t currentRow = 0;
+
+		std::function<void(const std::vector<ListNode*>&)> findRowRecursive;
+		findRowRecursive = [&](const std::vector<ListNode*>& items)
+		{
+			for (auto* node : items)
+			{
+				if (node == nullptr)
+					continue;
+
+				if (targetRow != -1)
+					return;
+
+				const int32_t thisRow = currentRow++;
+				if (node == item)
+				{
+					targetRow = thisRow;
+					return;
+				}
+
+				if (node->HasChildren() && node->IsOpen())
+				{
+					findRowRecursive(node->GetChildren());
+				}
+			}
+		};
+
+		findRowRecursive(_items);
+
+		if (targetRow == -1)
+			return false;
+
+		const int32_t rowTop = targetRow * TreeListLineHeight;
+		const int32_t rowBottom = rowTop + TreeListLineHeight;
+		const int32_t viewportTop = (int32_t)std::round(GetScrollOffset());
+		const int32_t viewportBottom = viewportTop + _size.y;
+
+		if (rowTop < viewportTop + padding)
+		{
+			SetScrollOffset((float)std::max(0, rowTop - padding));
+		}
+		else if (rowBottom > viewportBottom - padding)
+		{
+			const int32_t targetOffset = rowBottom - _size.y + padding;
+			SetScrollOffset((float)std::max(0, targetOffset));
+		}
+
+		return true;
+	}
+
 	ListNode* TreeList::FindItemByObjectPtr(void* objectPtr, ListNode* parent)
 	{
 		std::unique_lock lock(_lock);
@@ -449,6 +638,7 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_hoveredItem = nullptr;
+		_selectedItem = nullptr;
 		ResetDragState();
 
 		for (auto& item : _items)
@@ -464,6 +654,7 @@ namespace HexEngine
 	void TreeList::ResetDragState()
 	{
 		_isDragging = false;
+		_dragSource = nullptr;
 		_draggedItem = nullptr;
 		_dragTarget = nullptr;
 	}
@@ -544,7 +735,13 @@ namespace HexEngine
 		if (position.y > absolutePos.y + _size.y)
 			return false;
 
-		if (_hoveredItem == item)
+		if (_selectedItem == item)
+		{
+			Point highlightPos(position.x, position.y);
+			Point highlightSize(_size.x, item->GetHeight());
+			renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.win_highlight);
+		}
+		else if (_hoveredItem == item)
 		{
 			Point highlightPos(position.x, position.y);
 			Point highlightSize(_size.x, item->GetHeight());
@@ -613,5 +810,27 @@ namespace HexEngine
 		}
 
 		return rows;
+	}
+
+	void TreeList::CollectVisibleItems(const std::vector<ListNode*>& items, std::vector<ListNode*>& outItems)
+	{
+		std::unique_lock lock(_lock);
+		CollectVisibleItemsRecursive(items, outItems);
+	}
+
+	void TreeList::CollectVisibleItemsRecursive(const std::vector<ListNode*>& items, std::vector<ListNode*>& outItems) const
+	{
+		for (auto* item : items)
+		{
+			if (item == nullptr)
+				continue;
+
+			outItems.push_back(item);
+
+			if (item->_child && item->_isOpen)
+			{
+				CollectVisibleItemsRecursive(item->_items, outItems);
+			}
+		}
 	}
 }

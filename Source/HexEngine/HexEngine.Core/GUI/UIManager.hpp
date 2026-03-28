@@ -26,6 +26,7 @@ namespace HexEngine
 		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
 
 		void SetInputFocus(Element* element);
+		Element* GetInputFocus() const;
 		void ForEachElement(std::function<void(Element*)> doAction);
 
 		void MarkForDeletion(Element* element);
@@ -64,5 +65,6 @@ namespace HexEngine
 		BlurEffect* _blurEffect = nullptr;
 		bool _backgroundBlurEnabled = false;
 		std::recursive_mutex _lock;
+		Element* _inputFocs = nullptr;
 	};
 }

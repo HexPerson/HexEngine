@@ -47,6 +47,8 @@
 		float4 g_cloudParams1; // x=absorption, y=powder, z=anisotropy, w=stepScale
 		float4 g_cloudParams2; // x=shapeScale, y=detailScale, z=windSpeed, w=animationSpeed
 		float4 g_cloudParams3; // x=viewAbsorption, y=ambientStrength, z=shadowFloor, w=phaseBoost
+		float4 g_cloudParams4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
+		float4 g_cloudParams5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
 		float4 g_cloudWindDirection; // xyz=wind direction, w=quality preset
 		float4 g_cloudMarch; // x=view steps, y=light steps
 	};
@@ -196,6 +198,12 @@
 		const float isotropicPhase = 1.0f / (4.0f * PI);
 		const float phase = lerp(isotropicPhase, hgPhase, 0.75f) * g_cloudParams3.w;
 		const float3 ambientSky = lerp(g_globalLight.yzw, g_atmosphere.ambientLight.rgb, 0.60f) * g_cloudParams3.y;
+		const float skyLuma = dot(ambientSky, float3(0.299f, 0.587f, 0.114f));
+		const float3 ambientNeutral = skyLuma.xxx;
+		const float3 ambientChromatic = lerp(ambientNeutral, ambientSky, saturate(g_cloudParams5.y));
+		const float3 ambientShaded = lerp(ambientChromatic, sunColour, saturate(g_cloudParams5.x) * 0.45f);
+		const float3 topTint = lerp(ambientShaded, sunColour, 0.70f);
+		const float3 bottomTint = lerp(ambientNeutral, ambientShaded, 0.88f);
 
 		float transmittance = 1.0f;
 		float3 cloudLight = 0.0f.xxx;
@@ -213,11 +221,24 @@
 			if (density > 0.0001f)
 			{
 				const float lightTrans = MarchToLight(samplePos, boundsMin, boundsMax, windOffset, sunDir, lightSteps);
+				const float shadowAmount = 1.0f - lightTrans;
+				const float viewToSun = saturate(dot(rayDir, sunDir));
 				const float powder = 1.0f + g_cloudParams1.y * (1.0f - lightTrans);
 				const float scatter = density * baseStep * invCloudHeight * transmittance;
-				const float3 directLight = lightTrans * powder * phase * sunColour;
-				const float3 ambientLight = ambientSky * (0.35f + (1.0f - lightTrans) * 0.65f);
-				cloudLight += scatter * (directLight + ambientLight);
+				const float diffuseProbeDistance = max(1.0f, baseStep * 0.75f);
+				const float densityTowardSun = SampleCloudDensity(samplePos + sunDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
+				const float derivativeDiffuse = saturate((density - densityTowardSun) * 2.25f + 0.12f);
+				const float directionalDiffuse = lerp(1.0f, derivativeDiffuse, saturate(g_cloudParams5.z));
+				const float silverLining = pow(saturate(shadowAmount), max(0.5f, g_cloudParams4.y)) * g_cloudParams4.x;
+				const float multiScatter = 1.0f + shadowAmount * g_cloudParams4.z;
+				const float height01 = saturate((samplePos.y - boundsMin.y) / max(1.0f, boundsMax.y - boundsMin.y));
+				const float3 heightTint = lerp(bottomTint, topTint, smoothstep(0.08f, 0.92f, height01));
+				const float3 stylizedTint = lerp(1.0f.xxx, heightTint, g_cloudParams4.w);
+				const float localAO = exp(-density * (0.8f + 1.8f * saturate(g_cloudParams5.w)));
+				const float aoTerm = lerp(1.0f, localAO, saturate(g_cloudParams5.w));
+				const float3 directLight = (lightTrans * powder * phase * sunColour + silverLining * sunColour * (0.35f + 0.65f * viewToSun)) * multiScatter * directionalDiffuse;
+				const float3 ambientLight = ambientShaded * (0.35f + shadowAmount * 0.65f) * (1.0f + shadowAmount * 0.25f * g_cloudParams4.z) * aoTerm;
+				cloudLight += scatter * (directLight + ambientLight) * stylizedTint;
 
 				transmittance *= exp(-density * baseStep * invCloudHeight * g_cloudParams3.x);
 				if (transmittance < 0.01f)
@@ -228,7 +249,7 @@
 		}
 
 		// Keep dense cores from collapsing to pure black under aggressive shadowing.
-		cloudLight = max(cloudLight, ambientSky * (1.0f - transmittance) * 0.12f);
+		cloudLight = max(cloudLight, ambientShaded * (1.0f - transmittance) * 0.12f);
 
 		const float alpha = saturate(1.0f - transmittance);
 		if (alpha <= 1e-4f)
@@ -236,7 +257,7 @@
 
 		// Clouds are composited with non-premultiplied alpha.
 		const float safeAlpha = max(0.03f, alpha);
-		const float3 straightCloud = saturate(cloudLight / safeAlpha);
+		const float3 straightCloud = min(cloudLight / safeAlpha, 8.0f.xxx);
 		return float4(straightCloud, alpha);
 	}
 }

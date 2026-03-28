@@ -247,6 +247,12 @@ namespace HexEngine
 			});
 
 		element->SetHasInputFocus(true);
+		_inputFocs = element;
+	}
+
+	Element* UIManager::GetInputFocus() const
+	{
+		return _inputFocs;
 	}
 
 	void UIManager::MarkForDeletion(Element* element)
@@ -255,6 +261,9 @@ namespace HexEngine
 
 		if (element == nullptr)
 			return;
+
+		if (_inputFocs == element)
+			_inputFocs = nullptr;
 
 		if (std::find(_pendingDeletion.begin(), _pendingDeletion.end(), element) == _pendingDeletion.end())
 		{

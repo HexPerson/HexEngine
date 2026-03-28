@@ -53,10 +53,11 @@
 		float4 g_clipVoxelInfo[4];
 		float4 g_giParams0; // x=intensity, y=energyClamp, z=debugMode, w=activeClipmap
 		float4 g_giParams1; // x=hysteresis, y=historyReject, z=halfInvW, w=halfInvH
-		float4 g_giParams2; // x=screenBounce, y=probeBlend, z=reserved, w=useVoxelAlphaOpacity
+		float4 g_giParams2; // x=screenBounce, y=probeBlend, z=voxelDecay, w=useVoxelAlphaOpacity
 		float4 g_giParams3; // xyz=sunDirectionWS, w=sunDirectionality
 		float4 g_giParams4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 		float4 g_giParams5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
+		float4 g_giParams6; // x=voxelNeighbourBlend, y=shiftSettle, z,w=reserved
 	};
 
 	static const float3 kClipDebugColours[4] =
@@ -312,7 +313,39 @@
 		}
 
 		voxelRadiance /= max(accumW, 1e-4f);
-		const float voxelOcc = saturate(occAccum / max(accumW, 1e-4f));
+		float voxelOcc = saturate(occAccum / max(accumW, 1e-4f));
+
+		// Optional neighbour smoothing to reduce visible voxel-grid patterning on large flat surfaces.
+		const float neighbourBlend = saturate(g_giParams6.x);
+		if (neighbourBlend > 0.0001f)
+		{
+			const float3 nOff[6] =
+			{
+				float3(1.0, 0.0, 0.0),
+				float3(-1.0, 0.0, 0.0),
+				float3(0.0, 1.0, 0.0),
+				float3(0.0, -1.0, 0.0),
+				float3(0.0, 0.0, 1.0),
+				float3(0.0, 0.0, -1.0)
+			};
+
+			float3 neighRad = 0.0f.xxx;
+			float neighOcc = 0.0f;
+			[unroll]
+			for (uint n = 0; n < 6; ++n)
+			{
+				const float3 nuv = saturate(uvw + nOff[n] * voxelTexel);
+				const float4 nData = SampleVoxelRadiance(clipIdx, nuv);
+				const float nOcc = (g_giParams2.w > 0.5f) ? nData.a : SampleVoxelOpacity(clipIdx, nuv);
+				neighRad += nData.rgb;
+				neighOcc += nOcc;
+			}
+			neighRad *= (1.0f / 6.0f);
+			neighOcc *= (1.0f / 6.0f);
+
+			voxelRadiance = lerp(voxelRadiance, neighRad, neighbourBlend);
+			voxelOcc = lerp(voxelOcc, saturate(neighOcc), neighbourBlend * 0.75f);
+		}
 
 		const float3 probeIrr = SampleProbeIrradianceTrilinear(clipIdx, uvw);
 		const float probeVis = SampleProbeVisibilityTrilinear(clipIdx, uvw);
@@ -368,6 +401,7 @@
 		const float pixelMotionStrength = max(g_giParams4.w, 0.0f);
 		const float motionFactor = saturate((pixelMotion - pixelMotionStart) * pixelMotionStrength);
 		const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
+		const float shiftSettle = saturate(g_giParams6.y);
 
 		const float3 worldNormal = normalize(pixelNormalDepth.xyz);
 		const float3 screenBounce = (g_giParams2.x > 0.0001f)
@@ -410,7 +444,8 @@
 			const float jitterScale =
 				max(g_giParams4.x, 0.0f) *
 				lerp(1.0f, 0.05f, motionFactor) *
-				lerp(1.0f, 0.20f, warmStabilize);
+				lerp(1.0f, 0.20f, warmStabilize) *
+				lerp(1.0f, 0.30f, shiftSettle);
 			const float3 jitterUVW =
 				(float3(
 					Hash12(seed + float2(19.91f, 7.13f)),
@@ -422,10 +457,17 @@
 			const float edgeDistanceX = min(uvw.x, 1.0f - uvw.x);
 			const float edgeDistanceZ = min(uvw.z, 1.0f - uvw.z);
 			const float edgeDistance = min(edgeDistanceX, edgeDistanceZ);
-			const float blendWidth = max(0.001f, saturate(g_giParams4.y + motionFactor * 0.08f + warmStabilize * 0.08f));
+			const float blendWidth = max(0.001f, saturate(g_giParams4.y + motionFactor * 0.08f + warmStabilize * 0.08f + shiftSettle * 0.10f));
 			const float edgeWeight = smoothstep(0.0f, blendWidth, edgeDistance);
 			const float fidelityWeight = exp2(-2.0f * (float)i);
 			float clipWeight = edgeWeight * fidelityWeight;
+			// During clipmap shift settle, reduce cross-clip weight churn by biasing toward
+			// higher-fidelity clipmaps (especially clip 0 when available).
+			if (shiftSettle > 0.0001f)
+			{
+				const float settleBias = lerp(1.0f, exp2(-2.5f * (float)i), shiftSettle);
+				clipWeight *= settleBias;
+			}
 			if (i == 3u)
 			{
 				clipWeight = max(clipWeight, 0.01f * fidelityWeight);
@@ -492,13 +534,14 @@
 		gi *= lerp(0.85f, 1.0f, rayQuality);
 		gi *= lerp(0.35f.xxx, 1.00f.xxx, saturate(pixelDiffuse.rgb));
 
-		// Reduce indirect on strongly direct-lit sun-facing receivers to avoid same-surface "self-bounce"
+		// Reduce indirect on strongly sun-facing receivers to avoid same-surface "self-bounce"
 		// dominating over neighboring bounce transfer.
+		// Intentionally avoid sampling full scene-lighting here to keep local direct lights from
+		// leaking into GI modulation when they are not injecting into GI.
 		const float3 sunDir = normalize(g_giParams3.xyz + float3(1e-5f, 1e-5f, 1e-5f));
 		const float sunFacing = saturate(dot(worldNormal, -sunDir));
-		const float3 sceneLit = g_sceneLightingTex.Sample(g_linearSampler, uv).rgb;
-		const float directLuma = dot(sceneLit, float3(0.2126f, 0.7152f, 0.0722f));
-		const float directMask = saturate((directLuma - 0.12f) * 0.65f) * sunFacing;
+		const float sunDirectionality = saturate(g_giParams3.w);
+		const float directMask = sunFacing * sunDirectionality;
 		gi *= lerp(1.0f, 0.38f, directMask);
 
 		gi = gi / (1.0f + gi * 0.18f);

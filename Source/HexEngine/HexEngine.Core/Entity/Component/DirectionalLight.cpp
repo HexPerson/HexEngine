@@ -19,6 +19,7 @@ namespace HexEngine
 	{
 		SetDoesCastShadows(true);
 		SetIsVolumetric(true);
+		SetInjectIntoGI(true);
 	}
 
 	DirectionalLight::DirectionalLight(Entity* entity, DirectionalLight* clone) :

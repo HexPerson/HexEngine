@@ -496,6 +496,11 @@ namespace HexEditor
 			_inspecting->SetFlag(HexEngine::EntityFlags::SelectedInEditor);
 		}
 
+		if (g_pUIManager != nullptr && g_pUIManager->GetEntityTreeList() != nullptr)
+		{
+			g_pUIManager->GetEntityTreeList()->FocusEntity(entity);
+		}
+
 		_canvas.Redraw();
 	}
 

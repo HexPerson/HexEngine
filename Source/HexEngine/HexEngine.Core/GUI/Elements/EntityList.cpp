@@ -5,12 +5,44 @@
 #include "../../Environment\IEnvironment.hpp"
 #include "../../Scene\SceneManager.hpp"
 #include <algorithm>
+#include <cwctype>
+#include <unordered_map>
 
 namespace HexEngine
 {
+	namespace
+	{
+		struct EntityListState
+		{
+			std::unordered_map<const Entity*, bool> entityOpenState;
+			std::unordered_map<const Scene*, bool> sceneOpenState;
+			std::wstring filterText;
+			std::vector<std::wstring> filterTokens;
+			Entity* selectedEntity = nullptr;
+		};
+
+		std::unordered_map<const EntityList*, EntityListState> g_entityListStates;
+
+		EntityListState& GetState(const EntityList* list)
+		{
+			return g_entityListStates[list];
+		}
+
+		const EntityListState& GetStateConst(const EntityList* list)
+		{
+			auto it = g_entityListStates.find(list);
+			if (it != g_entityListStates.end())
+				return it->second;
+
+			static const EntityListState emptyState{};
+			return emptyState;
+		}
+	}
+
 	EntityList::EntityList(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		TreeList(parent, position, size)
 	{
+		(void)GetState(this);
 		CreateIcons();
 
 		//_onSelect = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3);
@@ -19,6 +51,7 @@ namespace HexEngine
 
 	EntityList::~EntityList()
 	{
+		g_entityListStates.erase(this);
 	}
 
 	bool EntityList::OnInputEvent(InputEvent event, InputData* data)
@@ -39,6 +72,10 @@ namespace HexEngine
 			auto* entity = ResolveEntityNode(item);
 			if (entity == nullptr || entity->IsPendingDeletion())
 				return;
+
+			auto& state = GetState(this);
+			state.selectedEntity = entity;
+			FocusEntity(entity);
 
 			if (_onEntityClicked)
 				_onEntityClicked(this, entity);
@@ -151,6 +188,15 @@ namespace HexEngine
 		auto* node = new ListNode(this, entName, { _icons[IconId::Entity].get() }, entity);
 		node->_onClick = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2);
 		node->_onDragAndDrop = std::bind(&EntityList::OnDragAndDropEntity, this, this, std::placeholders::_1, std::placeholders::_2);
+		auto& listState = GetState(this);
+		if (auto state = listState.entityOpenState.find(entity); state != listState.entityOpenState.end())
+		{
+			node->SetOpen(state->second);
+		}
+		else if (!listState.filterTokens.empty())
+		{
+			node->SetOpen(true);
+		}
 
 		AddNode(node, parentNode, false);
 
@@ -204,6 +250,8 @@ namespace HexEngine
 
 	void EntityList::RefreshList()
 	{
+		auto& state = GetState(this);
+		CaptureTreeState();
 		Clear();
 
 		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
@@ -215,12 +263,18 @@ namespace HexEngine
 			return;
 
 		std::vector<Entity*> entities;
+		std::unordered_set<Entity*> uniqueEntities;
 		for (const auto& entSet : scene->GetEntities())
 		{
 			for (auto* ent : entSet.second)
 			{
-				if (ent != nullptr && !ent->IsPendingDeletion() && ent->GetScene() == scene.get())
+				if (ent != nullptr &&
+					!ent->IsPendingDeletion() &&
+					ent->GetScene() == scene.get() &&
+					uniqueEntities.insert(ent).second)
+				{
 					entities.push_back(ent);
+				}
 			}
 		}
 
@@ -230,11 +284,83 @@ namespace HexEngine
 				return lhs->GetName() < rhs->GetName();
 			});
 
+		std::unordered_set<Entity*> filteredVisibilitySet;
+		if (!state.filterTokens.empty())
+		{
+			for (auto* entity : entities)
+			{
+				if (!DoesEntityMatchFilter(entity))
+					continue;
+
+				for (auto* chain = entity; chain != nullptr && chain->GetScene() == scene.get(); chain = chain->GetParent())
+				{
+					filteredVisibilitySet.insert(chain);
+				}
+			}
+		}
+
 		for (auto* entity : entities)
 		{
+			if (!state.filterTokens.empty() && filteredVisibilitySet.find(entity) == filteredVisibilitySet.end())
+				continue;
+
 			std::unordered_set<Entity*> parentWalkGuard;
 			AddEntityInternal(entity, sceneRoot, parentWalkGuard);
 		}
+
+		if (state.selectedEntity != nullptr && state.selectedEntity->GetScene() == scene.get() && !state.selectedEntity->IsPendingDeletion())
+		{
+			FocusEntity(state.selectedEntity);
+		}
+	}
+
+	void EntityList::SetFilterText(const std::wstring& filterText)
+	{
+		auto& state = GetState(this);
+		if (state.filterText == filterText)
+			return;
+
+		state.filterText = filterText;
+		RebuildFilterTokens();
+		RefreshList();
+	}
+
+	const std::wstring& EntityList::GetFilterText() const
+	{
+		return GetStateConst(this).filterText;
+	}
+
+	bool EntityList::FocusEntity(Entity* entity)
+	{
+		if (entity == nullptr || entity->IsPendingDeletion())
+			return false;
+
+		auto& state = GetState(this);
+		state.selectedEntity = entity;
+
+		auto* node = FindItemByObjectPtr(entity);
+		if (node == nullptr)
+			return false;
+
+		for (auto* parent = node->GetParent(); parent != nullptr; parent = parent->GetParent())
+		{
+			parent->SetOpen(true);
+
+			if (auto* parentEntity = ResolveEntityNode(parent); parentEntity != nullptr)
+			{
+				state.entityOpenState[parentEntity] = true;
+			}
+			else if (auto* parentScene = ResolveSceneNode(parent); parentScene != nullptr)
+			{
+				state.sceneOpenState[parentScene] = true;
+			}
+		}
+
+		state.entityOpenState[entity] = node->IsOpen();
+		SetSelectedItem(node, false);
+		ScrollToItem(node, 28);
+		Repaint();
+		return true;
 	}
 
 	void EntityList::DuplicateEntity(Entity* entity)
@@ -295,6 +421,15 @@ namespace HexEngine
 			return nullptr;
 
 		auto sceneNode = new SceneListNode(this, scene->GetName(), { _icons[IconId::Scene].get(), _icons[IconId::Scene].get() }, scene.get());
+		auto& listState = GetState(this);
+		if (auto state = listState.sceneOpenState.find(scene.get()); state != listState.sceneOpenState.end())
+		{
+			sceneNode->SetOpen(state->second);
+		}
+		else
+		{
+			sceneNode->SetOpen(true);
+		}
 
 		if (_onSceneClicked)
 		{
@@ -312,8 +447,9 @@ namespace HexEngine
 
 	void EntityList::AddEntity(HexEngine::Entity* entity, ListNode* scene)
 	{
-		std::unordered_set<Entity*> parentWalkGuard;
-		AddEntityInternal(entity, scene, parentWalkGuard);
+		(void)entity;
+		(void)scene;
+		RefreshList();
 	}
 
 	void EntityList::AddEntity(HexEngine::Entity* entity)
@@ -325,14 +461,9 @@ namespace HexEngine
 		if (scene == nullptr || entity->GetScene() != scene.get())
 			return;
 
-		auto* sceneParentItem = FindItemByObjectPtr(entity->GetScene());
-		if (sceneParentItem == nullptr)
-		{
-			sceneParentItem = AddScene(scene);
-		}
-
-		AddEntity(entity, sceneParentItem);
-		Repaint();
+		auto& state = GetState(this);
+		state.selectedEntity = entity;
+		RefreshList();
 	}
 
 	void EntityList::RemoveEntity(HexEngine::Entity* entity)
@@ -347,5 +478,92 @@ namespace HexEngine
 	void EntityList::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
 		TreeList::Render(renderer, w, h);
+	}
+
+	void EntityList::CaptureTreeState()
+	{
+		for (auto* root : GetRootItems())
+		{
+			CaptureNodeStateRecursive(root);
+		}
+	}
+
+	void EntityList::CaptureNodeStateRecursive(const ListNode* node)
+	{
+		if (node == nullptr)
+			return;
+
+		if (auto* sceneNode = dynamic_cast<const SceneListNode*>(node); sceneNode != nullptr)
+		{
+			auto& state = GetState(this);
+			state.sceneOpenState[sceneNode->GetScene()] = sceneNode->IsOpen();
+		}
+		else if (auto* entity = ResolveEntityNode(node); entity != nullptr)
+		{
+			auto& state = GetState(this);
+			state.entityOpenState[entity] = node->IsOpen();
+		}
+
+		for (auto* child : node->GetChildren())
+		{
+			CaptureNodeStateRecursive(child);
+		}
+	}
+
+	void EntityList::RebuildFilterTokens()
+	{
+		auto& state = GetState(this);
+		state.filterTokens.clear();
+
+		std::wstring currentToken;
+		currentToken.reserve(state.filterText.size());
+
+		for (wchar_t ch : state.filterText)
+		{
+			if (std::iswspace(ch))
+			{
+				if (!currentToken.empty())
+				{
+					state.filterTokens.push_back(currentToken);
+					currentToken.clear();
+				}
+				continue;
+			}
+
+			currentToken.push_back((wchar_t)std::towlower(ch));
+		}
+
+		if (!currentToken.empty())
+		{
+			state.filterTokens.push_back(currentToken);
+		}
+	}
+
+	bool EntityList::DoesEntityMatchFilter(const Entity* entity) const
+	{
+		if (entity == nullptr)
+			return false;
+
+		const auto& state = GetStateConst(this);
+		if (state.filterTokens.empty())
+			return true;
+
+		std::wstring loweredName(entity->GetName().begin(), entity->GetName().end());
+		std::transform(loweredName.begin(), loweredName.end(), loweredName.begin(),
+			[](wchar_t ch)
+			{
+				return (wchar_t)std::towlower(ch);
+			});
+
+		for (const auto& token : state.filterTokens)
+		{
+			if (token.empty())
+				continue;
+
+			if (loweredName.find(token) == std::wstring::npos)
+				return false;
+		}
+
+		return true;
 	}
 }

@@ -43,6 +43,7 @@
 		float4 g_giParams3; // xyz=sunDirectionWS, w=sunDirectionality
 		float4 g_giParams4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 		float4 g_giParams5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
+		float4 g_giParams6; // x=voxelNeighbourBlend, y=shiftSettle, z,w=reserved
 	};
 
 	float3 UpsampleGiBilateral(float2 uv)
@@ -105,6 +106,7 @@
 		const float2 historyUv = uv + velocity;
 		const bool historyUvValid = all(historyUv >= 0.0f.xx) && all(historyUv <= 1.0f.xx);
 		const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
+		const float shiftSettle = saturate(g_giParams6.y);
 		float3 history = historyUvValid ? g_historyGi.Sample(g_linearSampler, historyUv).rgb : 0.0f.xxx;
 		const float4 centerNormalDepth = g_normalDepth.Sample(g_pointSampler, uv);
 		const float4 historyNormalDepth = g_normalDepth.Sample(g_pointSampler, saturate(historyUv));
@@ -122,7 +124,9 @@
 		// Be less aggressive while moving camera to avoid GI scintillation.
 		const float pixelMotionStart = max(g_giParams4.z, 0.0f);
 		const float pixelMotionStrength = max(g_giParams4.w, 0.0f);
-		const float pixelMotionReject = saturate((pixelMotion - pixelMotionStart) * pixelMotionStrength * 0.65f);
+		float pixelMotionReject = saturate((pixelMotion - pixelMotionStart) * pixelMotionStrength * 0.65f);
+		// During clipmap shift settle, reduce motion-driven rejection so GI does not "reset then re-brighten".
+		pixelMotionReject *= lerp(1.0f, 0.55f, shiftSettle);
 
 		const float currentLum = dot(current, float3(0.2126f, 0.7152f, 0.0722f));
 		const float historyLum = dot(history, float3(0.2126f, 0.7152f, 0.0722f));
@@ -149,7 +153,7 @@
 		else
 		{
 			// Keep a small stability floor to avoid visible GI shimmer during camera motion.
-			const float stabilityFloor = (1.0f - disocclusion) * 0.38f * g_giParams1.x;
+			const float stabilityFloor = (1.0f - disocclusion) * (0.38f + 0.20f * shiftSettle) * g_giParams1.x;
 			historyWeight = max(historyWeight, stabilityFloor);
 		}
 
@@ -158,12 +162,13 @@
 
 		// During clipmap warm-up we temporarily cap per-frame GI deltas to suppress residual
 		// recenter flicker (single-frame dark/bright spikes).
-		if (historyUvValid && warmStabilize > 0.0f)
+		if (historyUvValid && (warmStabilize > 0.0f || shiftSettle > 0.0f))
 		{
 			const float deltaLumScale = 0.08f + currentLum * 0.12f;
 			const float3 looseLimit = (0.22f + deltaLumScale).xxx;
 			const float3 tightLimit = (0.06f + deltaLumScale * 0.45f).xxx;
-			const float3 deltaLimit = lerp(looseLimit, tightLimit, warmStabilize);
+			const float settleAmount = saturate(max(warmStabilize, shiftSettle));
+			const float3 deltaLimit = lerp(looseLimit, tightLimit, settleAmount);
 			resolved = clamp(resolved, history - deltaLimit, history + deltaLimit);
 		}
 

@@ -65,6 +65,26 @@ namespace HexEngine
 		return _objectPtr;
 	}
 
+	bool ListNode::IsOpen() const
+	{
+		return _isOpen;
+	}
+
+	void ListNode::SetOpen(bool open)
+	{
+		_isOpen = open;
+	}
+
+	bool ListNode::HasChildren() const
+	{
+		return _child != nullptr;
+	}
+
+	const std::vector<ListNode*>& ListNode::GetChildren() const
+	{
+		return _items;
+	}
+
 	void ListNode::SetIcon(uint32_t iconId)
 	{
 		_iconId = iconId;

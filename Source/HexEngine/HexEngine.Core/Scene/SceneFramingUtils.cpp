@@ -15,9 +15,13 @@ namespace HexEngine::SceneFramingUtils
 		if (scene == nullptr)
 			return false;
 
-		math::Vector3 boundsMin(std::numeric_limits<float>::max());
-		math::Vector3 boundsMax(std::numeric_limits<float>::lowest());
-		bool hasBounds = false;
+		math::Vector3 meshBoundsMin(std::numeric_limits<float>::max());
+		math::Vector3 meshBoundsMax(std::numeric_limits<float>::lowest());
+		bool hasMeshBounds = false;
+
+		math::Vector3 fallbackBoundsMin(std::numeric_limits<float>::max());
+		math::Vector3 fallbackBoundsMax(std::numeric_limits<float>::lowest());
+		bool hasFallbackBounds = false;
 
 		for (const auto& bySignature : scene->GetEntities())
 		{
@@ -29,52 +33,60 @@ namespace HexEngine::SceneFramingUtils
 				if (ignoreDoNotSaveEntities && entity->HasFlag(EntityFlags::DoNotSave))
 					continue;
 
-				bool contributed = false;
 				if (auto* meshComponent = entity->GetComponent<StaticMeshComponent>(); meshComponent != nullptr && meshComponent->GetMesh() != nullptr)
 				{
+					if (entity->HasFlag(EntityFlags::DoNotRender))
+						continue;
+
 					const auto& worldAabb = entity->GetWorldAABB();
 					const math::Vector3 center(worldAabb.Center);
 					const math::Vector3 extents(worldAabb.Extents);
 					const math::Vector3 aabbMin = center - extents;
 					const math::Vector3 aabbMax = center + extents;
 
-					boundsMin.x = std::min(boundsMin.x, aabbMin.x);
-					boundsMin.y = std::min(boundsMin.y, aabbMin.y);
-					boundsMin.z = std::min(boundsMin.z, aabbMin.z);
+					meshBoundsMin.x = std::min(meshBoundsMin.x, aabbMin.x);
+					meshBoundsMin.y = std::min(meshBoundsMin.y, aabbMin.y);
+					meshBoundsMin.z = std::min(meshBoundsMin.z, aabbMin.z);
 
-					boundsMax.x = std::max(boundsMax.x, aabbMax.x);
-					boundsMax.y = std::max(boundsMax.y, aabbMax.y);
-					boundsMax.z = std::max(boundsMax.z, aabbMax.z);
+					meshBoundsMax.x = std::max(meshBoundsMax.x, aabbMax.x);
+					meshBoundsMax.y = std::max(meshBoundsMax.y, aabbMax.y);
+					meshBoundsMax.z = std::max(meshBoundsMax.z, aabbMax.z);
 
-					hasBounds = true;
-					contributed = true;
+					hasMeshBounds = true;
+					continue;
 				}
 
-				if (!contributed)
-				{
-					const auto pos = entity->GetPosition();
-					const math::Vector3 minPos = pos - math::Vector3(0.25f);
-					const math::Vector3 maxPos = pos + math::Vector3(0.25f);
+				const auto worldPosition = entity->GetWorldTM().Translation();
+				const math::Vector3 minPos = worldPosition - math::Vector3(0.25f);
+				const math::Vector3 maxPos = worldPosition + math::Vector3(0.25f);
 
-					boundsMin.x = std::min(boundsMin.x, minPos.x);
-					boundsMin.y = std::min(boundsMin.y, minPos.y);
-					boundsMin.z = std::min(boundsMin.z, minPos.z);
+				fallbackBoundsMin.x = std::min(fallbackBoundsMin.x, minPos.x);
+				fallbackBoundsMin.y = std::min(fallbackBoundsMin.y, minPos.y);
+				fallbackBoundsMin.z = std::min(fallbackBoundsMin.z, minPos.z);
 
-					boundsMax.x = std::max(boundsMax.x, maxPos.x);
-					boundsMax.y = std::max(boundsMax.y, maxPos.y);
-					boundsMax.z = std::max(boundsMax.z, maxPos.z);
+				fallbackBoundsMax.x = std::max(fallbackBoundsMax.x, maxPos.x);
+				fallbackBoundsMax.y = std::max(fallbackBoundsMax.y, maxPos.y);
+				fallbackBoundsMax.z = std::max(fallbackBoundsMax.z, maxPos.z);
 
-					hasBounds = true;
-				}
+				hasFallbackBounds = true;
 			}
 		}
 
-		if (!hasBounds)
-			return false;
+		if (hasMeshBounds)
+		{
+			outBoundsMin = meshBoundsMin;
+			outBoundsMax = meshBoundsMax;
+			return true;
+		}
 
-		outBoundsMin = boundsMin;
-		outBoundsMax = boundsMax;
-		return true;
+		if (hasFallbackBounds)
+		{
+			outBoundsMin = fallbackBoundsMin;
+			outBoundsMax = fallbackBoundsMax;
+			return true;
+		}
+
+		return false;
 	}
 
 	bool FrameCameraToSceneBounds(

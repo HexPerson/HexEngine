@@ -22,7 +22,10 @@ namespace HexEditor
 				g_pUIManager->GetInspector()->InspectEntity(entity);
 			}
 		};
-		_onEntityParented = std::bind(&EntityList::SetEntityParent, this, std::placeholders::_2, std::placeholders::_3);
+		_onEntityParented = [this](HexEngine::EntityList*, HexEngine::Entity* sourceEntity, HexEngine::Entity* targetEntity)
+		{
+			SetEntityParent(sourceEntity, targetEntity);
+		};
 		_onEntityDuplicated = [](HexEngine::EntityList*, HexEngine::Entity*, HexEngine::Entity* duplicateEntity)
 		{
 			if (g_pUIManager != nullptr)

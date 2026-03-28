@@ -45,17 +45,27 @@ namespace HexEngine
 	HVar r_giColourBleedStrength("r_giColourBleedStrength", "Extra multiplier for saturated color transfer (red/green/blue bleed)", 1.0f, 0.0f, 4.0f);
 	HVar r_giEmissiveInjection("r_giEmissiveInjection", "Emissive energy injected into GI voxels", 0.75f, 0.0f, 16.0f);
 	HVar r_giLocalLightInjection("r_giLocalLightInjection", "Point/spot light energy injected into GI voxels", 2.5f, 0.0f, 32.0f);
+	HVar r_giDebugDisableLocalLightInjection("r_giDebugDisableLocalLightInjection", "Debug: disable local point/spot light injection into GI", false, false, true);
+	HVar r_giDebugDisableBaseAndSunInjection("r_giDebugDisableBaseAndSunInjection", "Debug: disable base diffuse/emissive and sun GI injection", false, false, true);
+	HVar r_giDebugDisableBaseInjection("r_giDebugDisableBaseInjection", "Debug: disable base diffuse/emissive GI injection only", false, false, true);
+	HVar r_giDebugDisableSunInjection("r_giDebugDisableSunInjection", "Debug: disable sun GI injection only", false, false, true);
+	HVar r_giMeshBaseInjectionNormalization("r_giMeshBaseInjectionNormalization", "Normalize base GI injection by sampled triangle count per mesh", 1.0f, 0.0f, 1.0f);
+	HVar r_giMeshSunInjectionNormalization("r_giMeshSunInjectionNormalization", "Normalize sun GI injection by sampled triangle count per mesh", 0.0f, 0.0f, 1.0f);
+	HVar r_giMeshBaseInjectionMinScale("r_giMeshBaseInjectionMinScale", "Minimum per-mesh scale after base GI normalization", 0.02f, 0.0f, 1.0f);
+	HVar r_giMeshSunInjectionMinScale("r_giMeshSunInjectionMinScale", "Minimum per-mesh scale after sun GI normalization", 0.20f, 0.0f, 1.0f);
 	HVar r_giLocalLightMaxPerMesh("r_giLocalLightMaxPerMesh", "Maximum local point/spot lights considered per mesh for GI injection", 20, 1, 64);
 	HVar r_giLocalLightBaseSuppression("r_giLocalLightBaseSuppression", "How strongly local-light influence suppresses neutral/sun GI base around the light", 0.85f, 0.0f, 1.0f);
 	HVar r_giLocalLightSunSuppression("r_giLocalLightSunSuppression", "How strongly local-light influence suppresses sun GI injection on the same triangles", 1.0f, 0.0f, 1.0f);
 	HVar r_giLocalLightAlbedoWeight("r_giLocalLightAlbedoWeight", "How strongly local-light GI is tinted by receiver albedo (0=preserve light colour)", 0.0f, 0.0f, 1.0f);
 	HVar r_giLocalLightsOnlyDebug("r_giLocalLightsOnlyDebug", "Debug mode: inject only local point/spot light bounce into GI", false, false, true);
+	HVar r_giBaseSunSmallTriangleDamp("r_giBaseSunSmallTriangleDamp", "Damp base/sun GI injection from tiny triangles to avoid local over-injection hotspots", 0.85f, 0.0f, 1.0f);
 	HVar r_giProbeGatherBoost("r_giProbeGatherBoost", "Probe raymarch energy boost before temporal filtering", 0.90f, 0.1f, 8.0f);
 	HVar r_giScreenBounce("r_giScreenBounce", "Screen-space diffuse bounce assist intensity", 0.0f, 0.0f, 2.0f);
 	HVar r_giUseTextureTint("r_giUseTextureTint", "Use albedo texture readback to tint GI injection (cached per material)", true, false, true);
 	HVar r_giGpuVoxelize("r_giGpuVoxelize", "Use GPU voxelization for clipmap radiance updates", true, false, true);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
+	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
 	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap)", 0, 0, 4);
@@ -185,6 +195,107 @@ namespace
 		return sunDirection;
 	}
 
+	static uint64_t HashMix64(uint64_t state, uint64_t v)
+	{
+		state ^= v + 0x9e3779b97f4a7c15ull + (state << 6) + (state >> 2);
+		return state;
+	}
+
+	static uint64_t HashFloatBits(float value)
+	{
+		uint32_t bits = 0u;
+		std::memcpy(&bits, &value, sizeof(float));
+		return static_cast<uint64_t>(bits);
+	}
+
+	static uint64_t HashQuantizedFloat(float value, float step)
+	{
+		if (step <= 0.0f)
+			return HashFloatBits(value);
+		const float q = std::round(value / step) * step;
+		return HashFloatBits(q);
+	}
+
+	static uint64_t ComputeInjectLightSignature(HexEngine::Scene* scene)
+	{
+		if (scene == nullptr)
+			return 0ull;
+
+		uint64_t h = 1469598103934665603ull;
+
+		if (auto* sun = scene->GetSunLight(); sun != nullptr)
+		{
+			h = HashMix64(h, sun->GetInjectIntoGI() ? 1ull : 0ull);
+			if (sun->GetInjectIntoGI())
+			{
+				const auto d = sun->GetDiffuseColour();
+				// Sun direction changes are handled by dedicated relight logic; avoid
+				// signature churn from tiny float jitter by hashing only quantized color/intensity.
+				h = HashMix64(h, HashQuantizedFloat(d.x, 1.0f / 255.0f));
+				h = HashMix64(h, HashQuantizedFloat(d.y, 1.0f / 255.0f));
+				h = HashMix64(h, HashQuantizedFloat(d.z, 1.0f / 255.0f));
+				h = HashMix64(h, HashQuantizedFloat(d.w, 1.0f / 255.0f));
+			}
+		}
+
+		std::vector<HexEngine::PointLight*> pointLights;
+		scene->GetComponents<HexEngine::PointLight>(pointLights);
+		h = HashMix64(h, static_cast<uint64_t>(pointLights.size()));
+		for (auto* light : pointLights)
+		{
+			if (light == nullptr)
+				continue;
+			auto* e = light->GetEntity();
+			if (e == nullptr || e->IsPendingDeletion())
+				continue;
+			h = HashMix64(h, light->GetInjectIntoGI() ? 0xabcdu : 0xdef1u);
+			if (!light->GetInjectIntoGI())
+				continue;
+			const auto p = e->GetPosition();
+			const auto d = light->GetDiffuseColour();
+			h = HashMix64(h, HashQuantizedFloat(p.x, 0.05f));
+			h = HashMix64(h, HashQuantizedFloat(p.y, 0.05f));
+			h = HashMix64(h, HashQuantizedFloat(p.z, 0.05f));
+			h = HashMix64(h, HashQuantizedFloat(light->GetRadius(), 0.05f));
+			h = HashMix64(h, HashQuantizedFloat(d.x, 1.0f / 255.0f));
+			h = HashMix64(h, HashQuantizedFloat(d.y, 1.0f / 255.0f));
+			h = HashMix64(h, HashQuantizedFloat(d.z, 1.0f / 255.0f));
+			h = HashMix64(h, HashQuantizedFloat(d.w, 1.0f / 255.0f));
+		}
+
+		std::vector<HexEngine::SpotLight*> spotLights;
+		scene->GetComponents<HexEngine::SpotLight>(spotLights);
+		h = HashMix64(h, static_cast<uint64_t>(spotLights.size()));
+		for (auto* light : spotLights)
+		{
+			if (light == nullptr)
+				continue;
+			auto* e = light->GetEntity();
+			if (e == nullptr || e->IsPendingDeletion())
+				continue;
+			h = HashMix64(h, light->GetInjectIntoGI() ? 0x1234u : 0x5678u);
+			if (!light->GetInjectIntoGI())
+				continue;
+			const auto p = e->GetPosition();
+			const auto d = light->GetDiffuseColour();
+			const auto f = e->GetWorldTM().Forward();
+			h = HashMix64(h, HashQuantizedFloat(p.x, 0.05f));
+			h = HashMix64(h, HashQuantizedFloat(p.y, 0.05f));
+			h = HashMix64(h, HashQuantizedFloat(p.z, 0.05f));
+			h = HashMix64(h, HashQuantizedFloat(f.x, 0.02f));
+			h = HashMix64(h, HashQuantizedFloat(f.y, 0.02f));
+			h = HashMix64(h, HashQuantizedFloat(f.z, 0.02f));
+			h = HashMix64(h, HashQuantizedFloat(light->GetRadius(), 0.05f));
+			h = HashMix64(h, HashQuantizedFloat(light->GetConeSize(), 0.10f));
+			h = HashMix64(h, HashQuantizedFloat(d.x, 1.0f / 255.0f));
+			h = HashMix64(h, HashQuantizedFloat(d.y, 1.0f / 255.0f));
+			h = HashMix64(h, HashQuantizedFloat(d.z, 1.0f / 255.0f));
+			h = HashMix64(h, HashQuantizedFloat(d.w, 1.0f / 255.0f));
+		}
+
+		return h;
+	}
+
 }
 
 namespace HexEngine
@@ -202,10 +313,20 @@ namespace HexEngine
 		_resolveStabilityBoost = 0.0f;
 		_lastLocalLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
 		_lastLocalLightInjection = r_giLocalLightInjection._val.f32;
+		_lastLocalLightInjectionEnable = !r_giDebugDisableLocalLightInjection._val.b;
+		_lastDisableBaseAndSunInjection = r_giDebugDisableBaseAndSunInjection._val.b;
+		_lastDisableBaseInjection = r_giDebugDisableBaseInjection._val.b;
+		_lastDisableSunInjection = r_giDebugDisableSunInjection._val.b;
 		_lastLocalLightMaxPerMesh = r_giLocalLightMaxPerMesh._val.i32;
 		_lastLocalLightBaseSuppression = r_giLocalLightBaseSuppression._val.f32;
 		_lastLocalLightSunSuppression = r_giLocalLightSunSuppression._val.f32;
 		_lastLocalLightAlbedoWeight = r_giLocalLightAlbedoWeight._val.f32;
+		_lastBaseSunSmallTriangleDamp = r_giBaseSunSmallTriangleDamp._val.f32;
+		_lastMeshBaseInjectionNormalization = r_giMeshBaseInjectionNormalization._val.f32;
+		_lastMeshSunInjectionNormalization = r_giMeshSunInjectionNormalization._val.f32;
+		_lastMeshBaseInjectionMinScale = r_giMeshBaseInjectionMinScale._val.f32;
+		_lastMeshSunInjectionMinScale = r_giMeshSunInjectionMinScale._val.f32;
+		_lastInjectLightSignature = ComputeInjectLightSignature(g_pEnv ? g_pEnv->_sceneManager->GetCurrentScene().get() : nullptr);
 		_lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
@@ -351,10 +472,20 @@ namespace HexEngine
 		_resolveStabilityBoost = 0.0f;
 		_lastLocalLightsOnlyDebug = false;
 		_lastLocalLightInjection = 1.0f;
+		_lastLocalLightInjectionEnable = true;
+		_lastDisableBaseAndSunInjection = false;
+		_lastDisableBaseInjection = false;
+		_lastDisableSunInjection = false;
 		_lastLocalLightMaxPerMesh = 20;
 		_lastLocalLightBaseSuppression = 0.85f;
 		_lastLocalLightSunSuppression = 1.0f;
 		_lastLocalLightAlbedoWeight = 0.0f;
+		_lastBaseSunSmallTriangleDamp = 0.85f;
+		_lastMeshBaseInjectionNormalization = 1.0f;
+		_lastMeshSunInjectionNormalization = 0.0f;
+		_lastMeshBaseInjectionMinScale = 0.02f;
+		_lastMeshSunInjectionMinScale = 0.20f;
+		_lastInjectLightSignature = 0ull;
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
@@ -641,35 +772,53 @@ namespace HexEngine
 			const float snapFactor = (i == 0u) ? 1.0f : ((i == 1u) ? 2.0f : 3.0f);
 			const float scrollStep = std::max(voxelSize * snapFactor, 1e-3f);
 
-			const math::Vector3 snappedCandidate(
+			const math::Vector3 snapped(
 				std::round(cameraPosition.x / scrollStep) * scrollStep,
 				std::round(cameraPosition.y / scrollStep) * scrollStep,
 				std::round(cameraPosition.z / scrollStep) * scrollStep);
-			math::Vector3 snapped = snappedCandidate;
-			const math::Vector3 previousCenter = level.center;
-
-			// Add hysteresis to the nearest clipmap to prevent frequent center hops while moving.
-			// This reduces visible GI popping/shimmer in first-person movement.
-			if (i == 0u && level.initialized)
+			// Keep sample center (level.center) tied to the actual shifted voxel volume.
+			// targetCenter follows camera snapping immediately; pendingShiftWs carries the
+			// delta until this clipmap is actually processed.
+			if (!level.initialized)
 			{
-				const math::Vector3 deltaToCandidate = level.center - snappedCandidate;
-				const float holdDistance = scrollStep * 2.0f;
-				if (deltaToCandidate.LengthSquared() < (holdDistance * holdDistance))
-				{
-					snapped = level.center;
-				}
-			}
-
-			if ((level.center - snapped).LengthSquared() > scrollStep * scrollStep * 0.25f)
-			{
+				level.center = snapped;
+				level.targetCenter = snapped;
+				level.pendingShiftWs = math::Vector3::Zero;
 				level.dirty = true;
 				_cachedVoxelTrianglesValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = (i == 0u) ? 4u : 2u;
-				level.pendingShiftWs = level.initialized ? (snapped - previousCenter) : math::Vector3::Zero;
 			}
-			
-			level.center = snapped;
+			else
+			{
+				const bool targetChanged = (level.targetCenter - snapped).LengthSquared() > scrollStep * scrollStep * 0.25f;
+				if (targetChanged)
+				{
+					level.targetCenter = snapped;
+					level.dirty = true;
+
+					const math::Vector3 pendingShift = level.targetCenter - level.center;
+					const float shiftDistance = std::sqrt(pendingShift.LengthSquared());
+					const bool largeJump = shiftDistance > extent * 0.20f;
+
+					// Preserve cache on normal scrolling shifts; hard reset only on large jumps.
+					if (largeJump)
+					{
+						_cachedVoxelTrianglesValid[i] = false;
+						_cachedVoxelTrianglesFrame[i] = 0ull;
+						_clipmapWarmFramesRemaining[i] = (i == 0u) ? 4u : 2u;
+					}
+					else
+					{
+						_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], (i == 0u) ? 2u : 1u);
+					}
+				}
+
+				// Always keep pending shift as target-minus-sampled center so skipped clipmaps
+				// accumulate full desired displacement without oscillating.
+				level.pendingShiftWs = level.targetCenter - level.center;
+			}
+
 			level.extent = extent;
 		}
 	}
@@ -1354,11 +1503,23 @@ namespace HexEngine
 		const float effectiveDecay = (_sunRelightFramesRemaining > 0u)
 			? std::min(baseDecay, 0.72f)
 			: baseDecay;
+		float shiftSettle = 0.0f;
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			const bool hasPendingShift = _clipmaps[i].pendingShiftWs.LengthSquared() > 1e-8f;
+			const float warmFactor = std::clamp(static_cast<float>(_clipmapWarmFramesRemaining[i]) / 4.0f, 0.0f, 1.0f);
+			shiftSettle = std::max(shiftSettle, hasPendingShift ? 1.0f : warmFactor);
+		}
 		_constants.params2 = math::Vector4(
-			r_giLocalLightsOnlyDebug._val.b ? 0.0f : r_giScreenBounce._val.f32,
+			(r_giLocalLightsOnlyDebug._val.b || r_giDebugDisableLocalLightInjection._val.b) ? 0.0f : r_giScreenBounce._val.f32,
 			r_giUseProbes._val.b ? 0.35f : 0.0f,
 			effectiveDecay,
 			r_giGpuVoxelize._val.b ? 1.0f : 0.0f);
+		_constants.params6 = math::Vector4(
+			std::clamp(r_giVoxelNeighbourBlend._val.f32, 0.0f, 1.0f),
+			shiftSettle,
+			0.0f,
+			0.0f);
 
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
 		float sunStrength = 0.0f;
@@ -1450,11 +1611,59 @@ namespace HexEngine
 
 		const bool localLightTuningChanged =
 			(std::abs(r_giLocalLightInjection._val.f32 - _lastLocalLightInjection) > 1e-4f) ||
+			((!r_giDebugDisableLocalLightInjection._val.b) != _lastLocalLightInjectionEnable) ||
+			(r_giDebugDisableBaseAndSunInjection._val.b != _lastDisableBaseAndSunInjection) ||
+			(r_giDebugDisableBaseInjection._val.b != _lastDisableBaseInjection) ||
+			(r_giDebugDisableSunInjection._val.b != _lastDisableSunInjection) ||
 			(r_giLocalLightMaxPerMesh._val.i32 != _lastLocalLightMaxPerMesh) ||
 			(std::abs(r_giLocalLightBaseSuppression._val.f32 - _lastLocalLightBaseSuppression) > 1e-4f) ||
 			(std::abs(r_giLocalLightSunSuppression._val.f32 - _lastLocalLightSunSuppression) > 1e-4f) ||
-			(std::abs(r_giLocalLightAlbedoWeight._val.f32 - _lastLocalLightAlbedoWeight) > 1e-4f);
-		if (localLightTuningChanged)
+			(std::abs(r_giLocalLightAlbedoWeight._val.f32 - _lastLocalLightAlbedoWeight) > 1e-4f) ||
+			(std::abs(r_giBaseSunSmallTriangleDamp._val.f32 - _lastBaseSunSmallTriangleDamp) > 1e-4f) ||
+			(std::abs(r_giMeshBaseInjectionNormalization._val.f32 - _lastMeshBaseInjectionNormalization) > 1e-4f) ||
+			(std::abs(r_giMeshSunInjectionNormalization._val.f32 - _lastMeshSunInjectionNormalization) > 1e-4f) ||
+			(std::abs(r_giMeshBaseInjectionMinScale._val.f32 - _lastMeshBaseInjectionMinScale) > 1e-4f) ||
+			(std::abs(r_giMeshSunInjectionMinScale._val.f32 - _lastMeshSunInjectionMinScale) > 1e-4f);
+		const bool localLightModeToggled = ((!r_giDebugDisableLocalLightInjection._val.b) != _lastLocalLightInjectionEnable);
+		const bool baseSunModeToggled = (r_giDebugDisableBaseAndSunInjection._val.b != _lastDisableBaseAndSunInjection);
+		const bool baseOnlyModeToggled = (r_giDebugDisableBaseInjection._val.b != _lastDisableBaseInjection);
+		const bool sunOnlyModeToggled = (r_giDebugDisableSunInjection._val.b != _lastDisableSunInjection);
+		const uint64_t currentInjectLightSignature = ComputeInjectLightSignature(scene);
+		const bool injectLightSetChanged = (currentInjectLightSignature != _lastInjectLightSignature);
+		if (localLightModeToggled || baseSunModeToggled || baseOnlyModeToggled || sunOnlyModeToggled)
+		{
+			// Hard reset when local injection mode flips so no historical local-light energy remains.
+			DestroyClipmapResources();
+			if (!CreateClipmapResources())
+			{
+				_created = false;
+				return;
+			}
+			for (auto& regions : _dirtyRegions)
+			{
+				regions.clear();
+			}
+			for (uint32_t i = 0; i < ClipmapCount; ++i)
+			{
+				_cachedVoxelTriangles[i].clear();
+				_cachedVoxelTrianglesValid[i] = false;
+				_cachedVoxelTrianglesFrame[i] = 0ull;
+				_clipmapWarmFramesRemaining[i] = 0u;
+			}
+			if (_giHistory != nullptr)
+			{
+				_giHistory->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+			if (_giResolved != nullptr)
+			{
+				_giResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+			if (_giHalfRes != nullptr)
+			{
+				_giHalfRes->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+			}
+		}
+		if (localLightTuningChanged || injectLightSetChanged)
 		{
 			for (uint32_t i = 0; i < ClipmapCount; ++i)
 			{
@@ -1465,10 +1674,20 @@ namespace HexEngine
 				_clipmaps[i].dirty = true;
 			}
 			_lastLocalLightInjection = r_giLocalLightInjection._val.f32;
+			_lastLocalLightInjectionEnable = !r_giDebugDisableLocalLightInjection._val.b;
+			_lastDisableBaseAndSunInjection = r_giDebugDisableBaseAndSunInjection._val.b;
+			_lastDisableBaseInjection = r_giDebugDisableBaseInjection._val.b;
+			_lastDisableSunInjection = r_giDebugDisableSunInjection._val.b;
 			_lastLocalLightMaxPerMesh = r_giLocalLightMaxPerMesh._val.i32;
 			_lastLocalLightBaseSuppression = r_giLocalLightBaseSuppression._val.f32;
 			_lastLocalLightSunSuppression = r_giLocalLightSunSuppression._val.f32;
 			_lastLocalLightAlbedoWeight = r_giLocalLightAlbedoWeight._val.f32;
+			_lastBaseSunSmallTriangleDamp = r_giBaseSunSmallTriangleDamp._val.f32;
+			_lastMeshBaseInjectionNormalization = r_giMeshBaseInjectionNormalization._val.f32;
+			_lastMeshSunInjectionNormalization = r_giMeshSunInjectionNormalization._val.f32;
+			_lastMeshBaseInjectionMinScale = r_giMeshBaseInjectionMinScale._val.f32;
+			_lastMeshSunInjectionMinScale = r_giMeshSunInjectionMinScale._val.f32;
+			_lastInjectLightSignature = currentInjectLightSignature;
 		}
 
 		const uint32_t expectedHalfWidth = r_giHalfRes._val.b ? _halfWidth : _width;
@@ -1622,8 +1841,13 @@ namespace HexEngine
 		if (scene == nullptr || levelIndex >= ClipmapCount)
 			return 0u;
 		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
+		const bool localLightInjectionEnabled = !r_giDebugDisableLocalLightInjection._val.b;
+		const bool disableBaseAndSunInjection = r_giDebugDisableBaseAndSunInjection._val.b;
+		const bool disableBaseInjection = disableBaseAndSunInjection || r_giDebugDisableBaseInjection._val.b;
+		const bool disableSunInjection = disableBaseAndSunInjection || r_giDebugDisableSunInjection._val.b;
 
 		auto& level = _clipmaps[levelIndex];
+		const float voxelSizeWorld = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
 		const uint64_t cacheAge = (_frameCounter >= _cachedVoxelTrianglesFrame[levelIndex])
 			? (_frameCounter - _cachedVoxelTrianglesFrame[levelIndex])
 			: 0ull;
@@ -1650,83 +1874,86 @@ namespace HexEngine
 			bool isSpot = false;
 		};
 		std::vector<LocalLightSample> localLights;
+		if (localLightInjectionEnabled)
 		{
-			std::vector<PointLight*> pointLights;
-			scene->GetComponents<PointLight>(pointLights);
-			localLights.reserve(pointLights.size());
-			for (auto* light : pointLights)
 			{
-				if (light == nullptr)
-					continue;
-				if (!light->GetInjectIntoGI())
-					continue;
-				auto* lightEntity = light->GetEntity();
-				if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
-					continue;
-
-				const float radius = std::max(0.01f, light->GetRadius());
-				const auto diffuse = light->GetDiffuseColour();
-				// Match direct point-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
-				const float lightEnergy = std::max(0.0f, diffuse.w);
-				const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
-				const math::Vector3 scaledColour = lightColour * lightEnergy;
-				if (scaledColour.LengthSquared() <= 1e-8f)
-					continue;
-
-				LocalLightSample sample = {};
-				sample.position = lightEntity->GetPosition();
-				if (sample.position.LengthSquared() <= 1e-8f)
+				std::vector<PointLight*> pointLights;
+				scene->GetComponents<PointLight>(pointLights);
+				localLights.reserve(pointLights.size());
+				for (auto* light : pointLights)
 				{
-					sample.position = lightEntity->GetWorldTM().Translation();
+					if (light == nullptr)
+						continue;
+					if (!light->GetInjectIntoGI())
+						continue;
+					auto* lightEntity = light->GetEntity();
+					if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
+						continue;
+
+					const float radius = std::max(0.01f, light->GetRadius());
+					const auto diffuse = light->GetDiffuseColour();
+					// Match direct point-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
+					const float lightEnergy = std::max(0.0f, diffuse.w);
+					const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
+					const math::Vector3 scaledColour = lightColour * lightEnergy;
+					if (scaledColour.LengthSquared() <= 1e-8f)
+						continue;
+
+					LocalLightSample sample = {};
+					sample.position = lightEntity->GetPosition();
+					if (sample.position.LengthSquared() <= 1e-8f)
+					{
+						sample.position = lightEntity->GetWorldTM().Translation();
+					}
+					sample.direction = math::Vector3(0.0f, 0.0f, 1.0f);
+					sample.colour = scaledColour;
+					sample.radius = radius;
+					sample.isSpot = false;
+					localLights.push_back(sample);
 				}
-				sample.direction = math::Vector3(0.0f, 0.0f, 1.0f);
-				sample.colour = scaledColour;
-				sample.radius = radius;
-				sample.isSpot = false;
-				localLights.push_back(sample);
 			}
-		}
-		{
-			std::vector<SpotLight*> spotLights;
-			scene->GetComponents<SpotLight>(spotLights);
-			localLights.reserve(localLights.size() + spotLights.size());
-			for (auto* light : spotLights)
 			{
-				if (light == nullptr)
-					continue;
-				if (!light->GetInjectIntoGI())
-					continue;
-				auto* lightEntity = light->GetEntity();
-				if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
-					continue;
-
-				const float radius = std::max(0.01f, light->GetRadius());
-				const auto diffuse = light->GetDiffuseColour();
-				// Match direct spot-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
-				const float lightEnergy = std::max(0.0f, diffuse.w);
-				const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
-				const math::Vector3 scaledColour = lightColour * lightEnergy;
-				if (scaledColour.LengthSquared() <= 1e-8f)
-					continue;
-
-				math::Vector3 lightDir = lightEntity->GetWorldTM().Forward();
-				if (lightDir.LengthSquared() <= 1e-8f)
-					lightDir = math::Vector3(0.0f, 0.0f, 1.0f);
-				else
-					lightDir.Normalize();
-
-				LocalLightSample sample = {};
-				sample.position = lightEntity->GetPosition();
-				if (sample.position.LengthSquared() <= 1e-8f)
+				std::vector<SpotLight*> spotLights;
+				scene->GetComponents<SpotLight>(spotLights);
+				localLights.reserve(localLights.size() + spotLights.size());
+				for (auto* light : spotLights)
 				{
-					sample.position = lightEntity->GetWorldTM().Translation();
+					if (light == nullptr)
+						continue;
+					if (!light->GetInjectIntoGI())
+						continue;
+					auto* lightEntity = light->GetEntity();
+					if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
+						continue;
+
+					const float radius = std::max(0.01f, light->GetRadius());
+					const auto diffuse = light->GetDiffuseColour();
+					// Match direct spot-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
+					const float lightEnergy = std::max(0.0f, diffuse.w);
+					const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
+					const math::Vector3 scaledColour = lightColour * lightEnergy;
+					if (scaledColour.LengthSquared() <= 1e-8f)
+						continue;
+
+					math::Vector3 lightDir = lightEntity->GetWorldTM().Forward();
+					if (lightDir.LengthSquared() <= 1e-8f)
+						lightDir = math::Vector3(0.0f, 0.0f, 1.0f);
+					else
+						lightDir.Normalize();
+
+					LocalLightSample sample = {};
+					sample.position = lightEntity->GetPosition();
+					if (sample.position.LengthSquared() <= 1e-8f)
+					{
+						sample.position = lightEntity->GetWorldTM().Translation();
+					}
+					sample.direction = lightDir;
+					sample.colour = scaledColour;
+					sample.radius = radius;
+					sample.coneExponent = std::clamp(light->GetConeSize(), 1.0f, 128.0f);
+					sample.isSpot = true;
+					localLights.push_back(sample);
 				}
-				sample.direction = lightDir;
-				sample.colour = scaledColour;
-				sample.radius = radius;
-				sample.coneExponent = std::clamp(light->GetConeSize(), 1.0f, 128.0f);
-				sample.isSpot = true;
-				localLights.push_back(sample);
 			}
 		}
 
@@ -1781,8 +2008,9 @@ namespace HexEngine
 			const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
 			const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
 			const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
-			const float sunDrivenBase = std::max(0.0f, sunStrength * sunInject) * 0.04f;
-			const math::Vector3 baseDiffuseBounce = albedoTint * (diffuseInject * (unlitBase + sunDrivenBase) * (0.55f + bleedBoost * 0.30f) * colourBleedBoost);
+			// Keep "base" injection independent of sun; sun bounce is handled explicitly by sunInjection below.
+			// This prevents broad double-counted ambient wash that can look like white/local-light halos.
+			const math::Vector3 baseDiffuseBounce = albedoTint * (diffuseInject * unlitBase * (0.55f + bleedBoost * 0.30f) * colourBleedBoost);
 			const math::Vector3 baseEmissiveBounce = emissiveTint * emissiveStrength * emissiveInject;
 			const math::Vector3 triBaseInjection =
 				(baseDiffuseBounce + baseEmissiveBounce) * clipAttenuation;
@@ -1802,6 +2030,19 @@ namespace HexEngine
 				break;
 			const uint32_t triangleCount = static_cast<uint32_t>(indices.size() / 3u);
 			const uint32_t triStep = std::max<uint32_t>(1u, (triangleCount + remaining - 1u) / remaining);
+			const uint32_t sampledTriCount = std::max<uint32_t>(1u, (triangleCount + triStep - 1u) / triStep);
+			const float meshBaseInjectionNormalize = std::clamp(r_giMeshBaseInjectionNormalization._val.f32, 0.0f, 1.0f);
+			const float meshSunInjectionNormalize = std::clamp(r_giMeshSunInjectionNormalization._val.f32, 0.0f, 1.0f);
+			const float meshBaseMinScale = std::clamp(r_giMeshBaseInjectionMinScale._val.f32, 0.0f, 1.0f);
+			const float meshSunMinScale = std::clamp(r_giMeshSunInjectionMinScale._val.f32, 0.0f, 1.0f);
+			const float meshBaseInjectionScale = std::lerp(
+				1.0f,
+				std::max(meshBaseMinScale, 1.0f / static_cast<float>(sampledTriCount)),
+				meshBaseInjectionNormalize);
+			const float meshSunInjectionScale = std::lerp(
+				1.0f,
+				std::max(meshSunMinScale, 1.0f / static_cast<float>(sampledTriCount)),
+				meshSunInjectionNormalize);
 			const auto& worldTM = entity->GetWorldTM();
 			const auto& entityAabb = entity->GetWorldAABB();
 			const math::Vector3 entityCenter(entityAabb.Center.x, entityAabb.Center.y, entityAabb.Center.z);
@@ -1891,6 +2132,11 @@ namespace HexEngine
 				const float faceNormalLengthSq = faceNormal.LengthSquared();
 				if (faceNormalLengthSq <= 1e-8f)
 					continue;
+				const float triArea = 0.5f * std::sqrt(faceNormalLengthSq);
+				const float voxelAreaRef = std::max(1e-6f, voxelSizeWorld * voxelSizeWorld);
+				const float triAreaNorm = std::clamp(std::sqrt(triArea / voxelAreaRef), 0.15f, 1.0f);
+				const float smallTriDamp = std::clamp(r_giBaseSunSmallTriangleDamp._val.f32, 0.0f, 1.0f);
+				const float baseSunAreaWeight = std::lerp(1.0f, triAreaNorm, smallTriDamp);
 				faceNormal.Normalize();
 				const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
 				const float directSunBounce = sunFacing * sunStrength * sunInject * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
@@ -1972,8 +2218,10 @@ namespace HexEngine
 					localLightBounce = (localIrradiance * localReceiverTint) * (localInject * (0.55f + bleedBoost * 0.12f));
 				}
 
-				math::Vector3 sunInjection = sunTintedAlbedo * (directSunBounce + directionalDiffuseBounce);
-				math::Vector3 baseInjection = triBaseInjection + sunInjection;
+				math::Vector3 sunInjection = disableSunInjection
+					? math::Vector3::Zero
+					: (sunTintedAlbedo * (directSunBounce + directionalDiffuseBounce) * baseSunAreaWeight * meshSunInjectionScale);
+				math::Vector3 baseInjection = (disableBaseInjection ? math::Vector3::Zero : (triBaseInjection * baseSunAreaWeight * meshBaseInjectionScale)) + sunInjection;
 				if (localLightsOnlyDebug)
 				{
 					baseInjection = math::Vector3::Zero;
@@ -1993,7 +2241,7 @@ namespace HexEngine
 				const float sunSuppression = std::clamp(r_giLocalLightSunSuppression._val.f32, 0.0f, 1.0f);
 				const float sunSuppressionMask = localDominance * sunSuppression;
 				sunInjection *= (1.0f - sunSuppressionMask);
-				baseInjection = triBaseInjection + sunInjection;
+				baseInjection = (disableBaseInjection ? math::Vector3::Zero : (triBaseInjection * baseSunAreaWeight * meshBaseInjectionScale)) + sunInjection;
 				const float baseScale = 1.0f - localDominance * baseSuppression;
 				if (localBounceLum > 1e-5f)
 				{
@@ -2065,6 +2313,8 @@ namespace HexEngine
 			const int32_t shiftX = static_cast<int32_t>(std::round(level.pendingShiftWs.x / std::max(voxelSize, 1e-6f)));
 			const int32_t shiftY = static_cast<int32_t>(std::round(level.pendingShiftWs.y / std::max(voxelSize, 1e-6f)));
 			const int32_t shiftZ = static_cast<int32_t>(std::round(level.pendingShiftWs.z / std::max(voxelSize, 1e-6f)));
+			bool appliedShift = false;
+			math::Vector3 appliedShiftWs = math::Vector3::Zero;
 			if (shiftX != 0 || shiftY != 0 || shiftZ != 0)
 			{
 				if (_voxelShiftConstantBuffer != nullptr)
@@ -2099,8 +2349,28 @@ namespace HexEngine
 				context->CopyResource(
 					reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
 					reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
+
+				appliedShift = true;
+				appliedShiftWs = math::Vector3(
+					static_cast<float>(shiftX) * voxelSize,
+					static_cast<float>(shiftY) * voxelSize,
+					static_cast<float>(shiftZ) * voxelSize);
 			}
-			level.pendingShiftWs = math::Vector3::Zero;
+
+			if (appliedShift)
+			{
+				level.center += appliedShiftWs;
+			}
+			else
+			{
+				// Pending shift was below one voxel after quantization; snap sampled center to target.
+				level.center = level.targetCenter;
+			}
+			level.pendingShiftWs = level.targetCenter - level.center;
+			if (level.pendingShiftWs.LengthSquared() <= 1e-8f)
+			{
+				level.pendingShiftWs = math::Vector3::Zero;
+			}
 		}
 
 		if (hasTriangles)
@@ -2118,6 +2388,10 @@ namespace HexEngine
 		}
 
 		_constants.params0.w = static_cast<float>(levelIndex);
+		_constants.clipCenterExtent[levelIndex].x = level.center.x;
+		_constants.clipCenterExtent[levelIndex].y = level.center.y;
+		_constants.clipCenterExtent[levelIndex].z = level.center.z;
+		_constants.clipCenterExtent[levelIndex].w = level.extent;
 		if (_constantBuffer)
 		{
 			_constantBuffer->Write(&_constants, sizeof(_constants));

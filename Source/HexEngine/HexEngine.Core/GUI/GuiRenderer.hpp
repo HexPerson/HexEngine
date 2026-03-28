@@ -143,8 +143,8 @@ namespace HexEngine
 		
 	};
 
-#define RX(x,w) (((float)x / (float)HexEngine::g_pEnv->GetScreenWidth()) * (float)w)
-#define RY(y,h) (((float)y / (float)HexEngine::g_pEnv->GetScreenHeight()) * (float)h)
+#define RX(x,w) (int32_t)(((float)x / (float)HexEngine::g_pEnv->GetScreenWidth()) * (float)w)
+#define RY(y,h) (int32_t)(((float)y / (float)HexEngine::g_pEnv->GetScreenHeight()) * (float)h)
 #define SCALEX(x) RY(x, HexEngine::g_pEnv->GetScreenWidth())
 #define SCALEY(y) RY(y, HexEngine::g_pEnv->GetScreenHeight())
 }

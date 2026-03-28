@@ -37,6 +37,9 @@ namespace HexEngine
 		virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data) override;
 
 		void RefreshList();
+		void SetFilterText(const std::wstring& filterText);
+		const std::wstring& GetFilterText() const;
+		bool FocusEntity(Entity* entity);
 
 		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 
@@ -48,6 +51,10 @@ namespace HexEngine
 		Scene* ResolveSceneNode(const ListNode* node) const;
 		ListNode* AddEntityInternal(Entity* entity, ListNode* sceneNode, std::unordered_set<Entity*>& parentWalkGuard);
 		bool IsAncestorOf(const Entity* source, const Entity* potentialChild) const;
+		void CaptureTreeState();
+		void CaptureNodeStateRecursive(const ListNode* node);
+		void RebuildFilterTokens();
+		bool DoesEntityMatchFilter(const Entity* entity) const;
 
 	private:
 		void CreateIcons();

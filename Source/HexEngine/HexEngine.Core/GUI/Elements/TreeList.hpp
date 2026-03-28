@@ -35,6 +35,10 @@ namespace HexEngine
 
 		ListNode* FindItemById(int32_t id);
 		ListNode* FindItemByIdParented(int32_t id, ListNode* parent = nullptr);
+		const std::vector<ListNode*>& GetRootItems() const;
+		bool ScrollToItem(ListNode* item, int32_t padding = 24);
+		void SetSelectedItem(ListNode* item, bool scrollIntoView = true);
+		ListNode* GetSelectedItem() const;
 
 		//void SetOnSelectItem(OnSelectItem cb);
 
@@ -51,6 +55,8 @@ namespace HexEngine
 		//void CreateRenderTarget();
 		void UpdateHovering(GuiRenderer* renderer, const std::vector<ListNode*>& items, int32_t& y);
 		void ResetDragState();
+		void CollectVisibleItems(const std::vector<ListNode*>& items, std::vector<ListNode*>& outItems);
+		void CollectVisibleItemsRecursive(const std::vector<ListNode*>& items, std::vector<ListNode*>& outItems) const;
 
 	private:
 		std::vector<ListNode*> _items;
@@ -63,8 +69,10 @@ namespace HexEngine
 		int32_t _renderCount = 0;
 		Point _dragStart;
 		bool _isDragging = false;
+		ListNode* _dragSource = nullptr;
 		ListNode* _draggedItem = nullptr;
 		ListNode* _dragTarget = nullptr;
+		ListNode* _selectedItem = nullptr;
 		std::recursive_mutex _lock;
 		int32_t _currentNodeId = 0;
 		//ITexture2D* _renderTarget = nullptr;

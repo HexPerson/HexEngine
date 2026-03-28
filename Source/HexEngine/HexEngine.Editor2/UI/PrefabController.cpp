@@ -1392,7 +1392,8 @@ namespace HexEditor
 		if (camera == nullptr)
 			return;
 
-		if (!HexEngine::SceneFramingUtils::FrameCameraToSceneBounds(scene.get(), camera, true))
+		if (!HexEngine::SceneFramingUtils::FrameCameraToSceneBounds(scene.get(), camera, true) &&
+			!HexEngine::SceneFramingUtils::FrameCameraToSceneBounds(scene.get(), camera, false))
 			return;
 
 		if (auto* pvs = camera->GetPVS(); pvs != nullptr)

@@ -290,7 +290,10 @@ namespace HexEngine
 
 			if (hasPreviewEntities)
 			{
-				SceneFramingUtils::FrameCameraToSceneBounds(_iconScene.get(), _camera, true);
+				if (!SceneFramingUtils::FrameCameraToSceneBounds(_iconScene.get(), _camera, true))
+				{
+					SceneFramingUtils::FrameCameraToSceneBounds(_iconScene.get(), _camera, false);
+				}
 				SeedPVSForPreview(_iconScene.get(), _camera, _previewRootEntities);
 				_generatedPaths.push_back(path);
 			}

@@ -120,7 +120,7 @@ namespace HexEngine
 		{
 			CreateRenderTarget((int32_t)_viewport.width, (int32_t)_viewport.height);
 			
-			g_pEnv->_sceneRenderer->Resize(_viewport.width, _viewport.height);
+			g_pEnv->_sceneRenderer->Resize((int32_t)_viewport.width, (int32_t)_viewport.height);
 		}
 	}
 
@@ -168,7 +168,7 @@ namespace HexEngine
 	{
 		_viewport = vp;
 
-		CreateRenderTarget(vp.width, vp.height);
+		CreateRenderTarget((int32_t)vp.width, (int32_t)vp.height);
 	}
 
 	void Camera::Update(float frameTime)

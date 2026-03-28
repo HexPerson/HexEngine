@@ -3,6 +3,7 @@
 #include "../UIManager.hpp"
 #include "../../Graphics/IFontResource.hpp"
 #include "../GuiRenderer.hpp"
+#include <algorithm>
 
 namespace HexEngine
 {
@@ -16,90 +17,85 @@ namespace HexEngine
 		auto position = GetAbsolutePosition();
 
 		int32_t labelWidth = 0, labelHeight = 0;
-		int32_t uneditableTextWidth, uneditableTextHeight;
-		
-
-		if(_label.length() > 0)
+		if (_label.length() > 0)
 			renderer->_style.font->MeasureText((uint8_t)Style::FontSize::Tiny, _label, labelWidth, labelHeight);
 
+		int32_t prefixWidth = 0, prefixHeight = 0;
 		if (_uneditableText.length() > 0)
-		{
-			renderer->_style.font->MeasureText((uint8_t)Style::FontSize::Tiny, _uneditableText, uneditableTextWidth, uneditableTextHeight);
-
-			labelWidth += uneditableTextWidth;
-		}
+			renderer->_style.font->MeasureText((uint8_t)Style::FontSize::Tiny, _uneditableText, prefixWidth, prefixHeight);
 
 		int32_t minSize = _labelMinSize > 0 ? _labelMinSize : labelWidth + 20;
-
 		_cachedLabelWidth = minSize;
 
 		if (_label.length() == 0)
 			minSize = 0;
 
-		//if(labelWidth > 0)
-		//	renderer->PushScissorRect({ position.x,  position.y, position.x + labelWidth, position.y + _size.y });
-
-		// Draw the label first always
 		if ((IsMouseOver(true) || _hasInputFocus) && _label.length() > 0)
 			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_highlight, FontAlign::CentreUD, _label);
 		else
 			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, _label);
 
-		//_labelWidth = minSize;
+		int32_t boxX = position.x + minSize;
+		int32_t boxWidth = std::max(0, _size.x - minSize);
+		renderer->FillQuad(boxX, position.y, boxWidth, _size.y, renderer->_style.lineedit_back);
+		renderer->Frame(boxX, position.y, boxWidth, _size.y, 1, renderer->_style.win_border);
 
-		int32_t boxWidth = _size.x - minSize;
+		_hovering = IsMouseOver(boxX, position.y, boxWidth, _size.y);
 
-		//renderer->ScissorRect({ position.x + minSize,  position.y, position.x + minSize + boxWidth, position.y + _size.y });
-
-		// draw the box
-		renderer->FillQuad(position.x + minSize, position.y, boxWidth, _size.y, renderer->_style.lineedit_back);
-		renderer->Frame(position.x + minSize, position.y, boxWidth, _size.y, 1, renderer->_style.win_border);
-
-		if (IsMouseOver(position.x + minSize, position.y, boxWidth, _size.y))
-			_hovering = true;
-		else
-			_hovering = false;
+		int32_t textX = boxX + 4;
+		int32_t textAvailableWidth = std::max(0, boxWidth - 8);
 
 		if (_icon)
 		{
 			int32_t iconSize = _size.y - 3;
-
-			renderer->FillTexturedQuad(_icon.get(), position.x + minSize + 4, position.y + 3, iconSize, iconSize, _iconColour);
-
-			position.x += iconSize + 4;
-			boxWidth -= iconSize + 4;
+			renderer->FillTexturedQuad(_icon.get(), textX, position.y + 3, iconSize, iconSize, _iconColour);
+			textX += iconSize + 4;
+			textAvailableWidth = std::max(0, textAvailableWidth - (iconSize + 4));
 		}
 
+		std::wstring visibleValue = _value;
 		int32_t valueWidth = 0, valueHeight = 0;
+		const int32_t prefixGap = _uneditableText.empty() ? 0 : 6;
+		const int32_t valueAvailableWidth = std::max(0, textAvailableWidth - prefixWidth - prefixGap);
 
-		
+		while (!visibleValue.empty())
+		{
+			renderer->_style.font->MeasureText((uint8_t)Style::FontSize::Tiny, visibleValue, valueWidth, valueHeight);
+			if (valueWidth + 2 < valueAvailableWidth)
+				break;
 
-		if (_value.length() > 0)
-		{	
-			std::wstring value = _value;
-
-			while (1)
-			{
-				renderer->_style.font->MeasureText((uint8_t)Style::FontSize::Tiny, value + _uneditableText, valueWidth, valueHeight);
-
-				if (valueWidth + 2 >= boxWidth)
-					value.erase(value.begin());
-				else
-					break;
-			}
-
-			if (_uneditableText.length() > 0)
-			{
-				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, math::Color(HEX_RGBA_TO_FLOAT4(70, 70, 70, 255)), FontAlign::CentreUD, _uneditableText);
-				position.x += uneditableTextWidth;
-			}
-
-			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + minSize + 4, position.y + _size.y / 2, renderer->_style.text_regular, FontAlign::CentreUD, value);
+			visibleValue.erase(visibleValue.begin());
 		}
+
+		if (visibleValue.empty())
+		{
+			valueWidth = 0;
+		}
+
+		if (_uneditableText.length() > 0)
+		{
+			renderer->PrintText(
+				renderer->_style.font.get(),
+				(uint8_t)Style::FontSize::Tiny,
+				textX,
+				position.y + _size.y / 2,
+				math::Color(HEX_RGBA_TO_FLOAT4(118, 118, 120, 255)),
+				FontAlign::CentreUD,
+				_uneditableText);
+		}
+
+		renderer->PrintText(
+			renderer->_style.font.get(),
+			(uint8_t)Style::FontSize::Tiny,
+			textX + prefixWidth + prefixGap,
+			position.y + _size.y / 2,
+			renderer->_style.text_regular,
+			FontAlign::CentreUD,
+			visibleValue);
 
 		if (_hasInputFocus)
 		{
-			renderer->FillQuad(position.x + minSize + 4 + valueWidth, position.y + 2, 2, _size.y - 4, renderer->_style.text_regular);
+			renderer->FillQuad(textX + prefixWidth + prefixGap + valueWidth, position.y + 2, 2, _size.y - 4, renderer->_style.text_regular);
 		}
 
 	}
@@ -139,9 +135,9 @@ namespace HexEngine
 		if (Element::OnInputEvent(event, data))
 			return true;
 
-		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON)
+		if (event == InputEvent::MouseDown)
 		{
-			if (IsMouseOver(true))
+			if (IsMouseOver(true) && data->MouseDown.button == VK_LBUTTON)
 			{
 				g_pEnv->GetUIManager().SetInputFocus(this);
 				return true;

@@ -143,6 +143,7 @@ namespace HexEditor
 		Inspector* _rightDock = nullptr;
 		SceneView* _sceneView = nullptr;
 		Explorer* _lowerDock = nullptr;
+		HexEngine::LineEdit* _entitySearch = nullptr;
 		EntityList* _entityList = nullptr;
 
 		math::Vector3 _freeLookDir;

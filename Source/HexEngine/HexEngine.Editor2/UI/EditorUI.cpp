@@ -1010,7 +1010,32 @@ namespace HexEditor
 
 	void EditorUI::CreateEntityList()
 	{
-		_entityList = new EntityList(_leftDock, HexEngine::Point(10, 10), HexEngine::Point(_leftDock->GetSize().x - 20, _leftDock->GetSize().y - 20));
+		constexpr int32_t margin = 10;
+		constexpr int32_t searchHeight = 24;
+		constexpr int32_t spacing = 6;
+
+		_entitySearch = new HexEngine::LineEdit(
+			_leftDock,
+			HexEngine::Point(margin, margin),
+			HexEngine::Point(_leftDock->GetSize().x - margin * 2, searchHeight),
+			L"");
+		_entitySearch->SetUneditableText(L"Search ");
+		_entitySearch->SetDoesCallbackWaitForReturn(false);
+		_entitySearch->SetIcon(HexEngine::ITexture2D::Create("EngineData.Textures/UI/magnifying_glass.png"), math::Color(HEX_RGBA_TO_FLOAT4(140, 140, 140, 255)));
+
+		_entityList = new EntityList(
+			_leftDock,
+			HexEngine::Point(margin, margin + searchHeight + spacing),
+			HexEngine::Point(_leftDock->GetSize().x - margin * 2, _leftDock->GetSize().y - (margin * 2 + searchHeight + spacing)));
+
+		_entitySearch->SetOnInputFn(
+			[this](HexEngine::LineEdit*, const std::wstring& value)
+			{
+				if (_entityList != nullptr)
+				{
+					_entityList->SetFilterText(value);
+				}
+			});
 	}
 
 	void EditorUI::Update(float frameTime)
@@ -1119,11 +1144,47 @@ namespace HexEditor
 		if (HexEngine::g_pEnv->_commandManager->GetConsole()->GetActive())
 			return false;
 
+		if (event == HexEngine::InputEvent::KeyDown &&
+			HexEngine::g_pEnv->_inputSystem->IsCtrlDown() &&
+			data->KeyDown.key == 'F' &&
+			_entitySearch != nullptr)
+		{
+			SetInputFocus(_entitySearch);
+			return false;
+		}
+
 		TryBeginPendingComponentEdit(event, data);
 
 		const bool uiHandled = UIManager::OnInputEvent(event, data) == false;
 
 		TryCommitPendingComponentEdit(event, data);
+
+		auto* focusedElement = g_pUIManager->GetInputFocus();
+		const bool isTypingInLineEdit = dynamic_cast<HexEngine::LineEdit*>(focusedElement) != nullptr;
+
+		// Let gadget hotkeys (e.g. Ctrl+D duplicate) still work even when another
+		// focused widget reports the key event as handled, but never while typing.
+		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook &&
+			_integrator.GetState() != GameTestState::Started &&
+			!isTypingInLineEdit &&
+			event == HexEngine::InputEvent::KeyDown &&
+			HexEngine::g_pEnv->_inputSystem->IsCtrlDown() &&
+			data->KeyDown.key == 'D')
+		{
+			bool anyGadgetRunning = false;
+			bool keyhandled = false;
+
+			for (auto& gadget : _gadgets)
+			{
+				keyhandled |= gadget->OnInputEvent(event, data);
+
+				if (gadget->IsStarted())
+					anyGadgetRunning = true;
+			}
+
+			if (anyGadgetRunning || keyhandled)
+				return false;
+		}
 
 		if (uiHandled)
 			return false;
@@ -1142,7 +1203,7 @@ namespace HexEditor
 			}
 		}
 
-		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started)
+		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started && !isTypingInLineEdit)
 		{
 			bool anyGadgetRunning = false;
 			bool keyhandled = false;

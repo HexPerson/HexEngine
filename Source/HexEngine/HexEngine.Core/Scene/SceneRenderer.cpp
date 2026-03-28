@@ -44,6 +44,14 @@ namespace HexEngine
 	HVar r_cloudAmbientStrength("r_cloudAmbientStrength", "Ambient skylight contribution for cloud interiors", 0.65f, 0.0f, 2.0f);
 	HVar r_cloudShadowFloor("r_cloudShadowFloor", "Minimum transmittance floor for cloud self-shadowing", 0.35f, 0.0f, 1.0f);
 	HVar r_cloudAnisotropy("r_cloudAnisotropy", "Anisotropy term for cloud phase function", 0.35f, -0.95f, 0.95f);
+	HVar r_cloudSilverLiningStrength("r_cloudSilverLiningStrength", "Stylized rim/silver-lining strength", 0.55f, 0.0f, 4.0f);
+	HVar r_cloudSilverLiningExponent("r_cloudSilverLiningExponent", "Stylized rim/silver-lining falloff", 5.0f, 0.5f, 16.0f);
+	HVar r_cloudMultiScatterStrength("r_cloudMultiScatterStrength", "Stylized multi-scattering lift in dense cloud regions", 0.45f, 0.0f, 3.0f);
+	HVar r_cloudHeightTintStrength("r_cloudHeightTintStrength", "Stylized height-based cloud tint strength", 0.35f, 0.0f, 1.0f);
+	HVar r_cloudTintWarmth("r_cloudTintWarmth", "Warm bias for cloud lift/tint lighting", 0.28f, 0.0f, 1.0f);
+	HVar r_cloudSkyTintInfluence("r_cloudSkyTintInfluence", "How much skylight chroma influences cloud tint", 0.42f, 0.0f, 1.0f);
+	HVar r_cloudDirectionalDiffuse("r_cloudDirectionalDiffuse", "Directional-derivative diffuse lighting strength", 0.65f, 0.0f, 2.0f);
+	HVar r_cloudAmbientOcclusion("r_cloudAmbientOcclusion", "Local ambient occlusion strength for cloud interiors", 0.35f, 0.0f, 1.0f);
 	HVar r_cloudShapeScale("r_cloudShapeScale", "Base cloud shape noise scale", 0.00017f, 0.00001f, 0.01f);
 	HVar r_cloudDetailScale("r_cloudDetailScale", "Cloud detail noise scale", 0.00125f, 0.00005f, 0.05f);
 	HVar r_cloudWindDirection("r_cloudWindDirection", "Cloud wind direction", math::Vector3(1.0f, 0.0f, 0.15f), math::Vector3(-1.0f, -1.0f, -1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
@@ -112,6 +120,8 @@ namespace HexEngine
 			math::Vector4 params1; // x=absorption, y=powder, z=anisotropy, w=stepScale
 			math::Vector4 params2; // x=shapeScale, y=detailScale, z=windSpeed, w=animationSpeed
 			math::Vector4 params3; // x=viewAbsorption, y=ambientStrength, z=shadowFloor, w=phaseBoost
+			math::Vector4 params4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
+			math::Vector4 params5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
 			math::Vector4 windDirection; // xyz=windDir, w=qualityPreset
 			math::Vector4 marchParams; // x=viewSteps, y=lightSteps, z=reserved, w=reserved
 		};
@@ -1910,11 +1920,11 @@ namespace HexEngine
 		auto instance = mesh->GetInstance();
 		bool renderedSphere = false;
 
-		int32_t numPointLightsRendered = 0;
-
 		auto renderLightList = [&](const std::vector<SpotLight*>& lights, CullingMode cullMode)
 			{
 				renderedSphere = false;
+				int32_t numSpotLightsRendered = 0;
+				instance->Start();
 
 				for (auto& comp : lights)
 				{
@@ -1929,12 +1939,10 @@ namespace HexEngine
 					const auto& lightPos = lightEnt->GetWorldTM().Translation();
 					const float lightRad = light->GetRadius();
 
-					SetupPerShadowCasterBuffer(light, true, 0, numPointLightsRendered, 2, light->GetConeSize());
+					SetupPerShadowCasterBuffer(light, true, 0, numSpotLightsRendered, 2, light->GetConeSize());
 
 					if (renderedSphere == false)
 					{
-						instance->Start();
-
 						_gbuffer.BindAsShaderResource();
 
 						for (int32_t i = 0; i < 6; ++i)
@@ -1949,7 +1957,7 @@ namespace HexEngine
 								g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 						}
 
-						renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, numPointLightsRendered);
+						renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, numSpotLightsRendered);
 
 						renderedSphere = true;
 					}
@@ -1969,19 +1977,19 @@ namespace HexEngine
 						diffuse,
 						math::Vector2(lightRad, light->GetLightStrength()));
 
-					numPointLightsRendered++;
+					numSpotLightsRendered++;
 				}
 
 				instance->Finish();
 
-				if (numPointLightsRendered > 0)
+				if (numSpotLightsRendered > 0)
 				{
 					g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
 					g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
 
 					GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin SpotLight");
 
-					g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numPointLightsRendered);
+					g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numSpotLightsRendered);
 
 					GFX_PERF_END();
 				}
@@ -2310,6 +2318,16 @@ namespace HexEngine
 			r_cloudAmbientStrength._val.f32,
 			r_cloudShadowFloor._val.f32,
 			1.55f);
+		constants.params4 = math::Vector4(
+			r_cloudSilverLiningStrength._val.f32,
+			r_cloudSilverLiningExponent._val.f32,
+			r_cloudMultiScatterStrength._val.f32,
+			r_cloudHeightTintStrength._val.f32);
+		constants.params5 = math::Vector4(
+			r_cloudTintWarmth._val.f32,
+			r_cloudSkyTintInfluence._val.f32,
+			r_cloudDirectionalDiffuse._val.f32,
+			r_cloudAmbientOcclusion._val.f32);
 		constants.windDirection = math::Vector4(windDir.x, windDir.y, windDir.z, (float)GetCloudQualityPreset());
 		constants.marchParams = math::Vector4(
 			(float)GetCloudEffectiveSteps(r_cloudViewSteps._val.f32, 8, 256),
