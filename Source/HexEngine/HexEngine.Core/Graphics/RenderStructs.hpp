@@ -246,11 +246,14 @@ namespace HexEngine
 		MaterialProperties() :
 			metallicFactor(0.0f),
 			roughnessFactor(0.5f),
+			smoothness(0.0f),
+			specularProbability(0.0f),
 			diffuseColour(1.0f),
 			hasTransparency(0),
 			isWater(0),
 			emissiveColour(0.0f),
-			isInTransparencyPhase(0)
+			isInTransparencyPhase(0),
+			pad2(0)
 		{
 		}
 

@@ -738,8 +738,9 @@ namespace HexEngine
 		if (_selectedItem == item)
 		{
 			Point highlightPos(position.x, position.y);
-			Point highlightSize(_size.x, item->GetHeight());
-			renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, renderer->_style.win_highlight);
+			Point highlightSize(_size.x - position.x - 10, item->GetHeight());
+			renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, math::Color(0.2f, 0.4f, 1.0f, 0.2f));
+			renderer->Frame(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, 1, math::Color(0.2f, 0.6f, 1.0f, 0.9f));
 		}
 		else if (_hoveredItem == item)
 		{

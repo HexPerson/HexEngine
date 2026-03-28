@@ -64,13 +64,16 @@ namespace HexEditor
 		}
 
 		const fs::path builtGameDllPath = g_pEditor->_projectFS->GetBaseDirectory() / L"Build" / L"Game.dll";
+		if (!BuildGame(_lastBuildProjectFileName))
+		{
+			LOG_CRIT("Could not build the game before loading '%S'", builtGameDllPath.wstring().c_str());
+			return false;
+		}
+
 		if (!fs::exists(builtGameDllPath))
 		{
-			if (!BuildGame(_lastBuildProjectFileName))
-			{
-				LOG_CRIT("Could not build the game before loading '%S'", builtGameDllPath.wstring().c_str());
-				return false;
-			}
+			LOG_CRIT("Built game DLL was not found at '%S'", builtGameDllPath.wstring().c_str());
+			return false;
 		}
 
 		if (!_runtimeFS)
@@ -185,10 +188,18 @@ namespace HexEditor
 				<< LR"(</Project>)" << L"\n";
 		}
 
+		const wchar_t* buildConfiguration =
+#ifdef _DEBUG
+			L"Debug";
+#else
+			L"Release";
+#endif
+
 		std::wstring commandLine = std::format(
-			L"{} {} /t:Build /p:Configuration=Debug /p:Platform=x64 /p:ForceImportAfterCppProps={} /m /nologo /verbosity:minimal",
+			L"{} {} /t:Build /p:Configuration={} /p:Platform=x64 /p:ForceImportAfterCppProps={} /m /nologo /verbosity:minimal",
 			QuoteForCommandLine(msbuildPath),
 			QuoteForCommandLine(_buildProjectPath),
+			buildConfiguration,
 			QuoteForCommandLine(overridePropsPath));
 
 		STARTUPINFOW si = {};

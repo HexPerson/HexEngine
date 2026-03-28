@@ -5,6 +5,7 @@
 #include "../Entity/Component/PointLight.hpp"
 #include "../Math/FloatMath.hpp"
 #include <fastnoiselite/FastNoiseLite.h>
+#include <cstdint>
 #include <unordered_set>
 #include <algorithm>
 #include <vector>
@@ -213,6 +214,11 @@ namespace HexEngine
 	HVar r_profileDisablePost("r_profileDisablePost", "Disable post-processing overlays for profiling", false, false, true);
 	HVar r_profileDisableBloom("r_profileDisableBloom", "Disable bloom for profiling", false, false, true);
 	HVar r_profileAlbedoOnly("r_profileAlbedoOnly", "Display only the GBuffer albedo/diffuse target for profiling", false, false, true);
+	HVar r_debugBypassLighting("r_debugBypassLighting", "Bypass deferred light accumulation and copy gbuffer diffuse directly to beauty target", false, false, true);
+	HVar r_debugLightingPass("r_debugLightingPass", "Log deferred lighting stage diagnostics", false, false, true);
+	HVar r_debugBypassFog("r_debugBypassFog", "Bypass fog compositing pass", false, false, true);
+	HVar r_debugPresentCopy("r_debugPresentCopy", "Present by direct texture copy instead of fullscreen tonemap/overlay shaders", false, false, true);
+	HVar r_debugForceGBufferBeforePresent("r_debugForceGBufferBeforePresent", "Force beauty target from gbuffer diffuse immediately before present", false, false, true);
 
 	SceneRenderer::SceneRenderer()
 	{}
@@ -340,6 +346,23 @@ namespace HexEngine
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
 		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
 		_fullScreenQuadShader		= IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
+
+		if (!_compositionShader)
+		{
+			LOG_CRIT("SceneRenderer: failed to load required deferred composition shader EngineData.Shaders/Deferred.hcs");
+		}
+		if (!_pointLightShader)
+		{
+			LOG_CRIT("SceneRenderer: failed to load point light shader EngineData.Shaders/PointLight.hcs");
+		}
+		if (!_spotLightShader)
+		{
+			LOG_CRIT("SceneRenderer: failed to load spot light shader EngineData.Shaders/SpotLight.hcs");
+		}
+		if (!_fogEffect)
+		{
+			LOG_CRIT("SceneRenderer: failed to load fog shader EngineData.Shaders/PostFog.hcs");
+		}
 
 		//_volumetricBlur = new BlurEffect(_volumetricLightingBuffer, BlurType::Gaussian, 2);
 		//_waterBlur = new BlurEffect(_waterAccumulationRT, BlurType::Gaussian, 2);
@@ -1519,6 +1542,17 @@ namespace HexEngine
 
 		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
+			if (r_debugForceGBufferBeforePresent._val.b && _gbuffer.GetDiffuse() != nullptr && _beautyRT != nullptr)
+			{
+				_gbuffer.GetDiffuse()->CopyTo(_beautyRT);
+			}
+
+			if (r_debugPresentCopy._val.b && _currentCamera && _currentCamera->GetRenderTarget())
+			{
+				_beautyRT->CopyTo(_currentCamera->GetRenderTarget());
+				return;
+			}
+
 			guiRenderer->StartFrame();
 
 			if (canPostProcess)
@@ -1577,6 +1611,12 @@ namespace HexEngine
 
 		if (!canPostProcess || !_currentCamera)
 			return;
+
+		if (r_debugPresentCopy._val.b)
+		{
+			beauty->CopyTo(renderTarget);
+			return;
+		}
 
 		g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
@@ -1677,6 +1717,13 @@ namespace HexEngine
 
 	void SceneRenderer::RenderLights()
 	{
+		if (r_debugBypassLighting._val.b)
+		{
+			if (_gbuffer.GetDiffuse() != nullptr && _beautyRT != nullptr)
+				_gbuffer.GetDiffuse()->CopyTo(_beautyRT);
+			return;
+		}
+
 		// switch to the light accumulation buffer
 		g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
 		_lightAccumulationBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
@@ -1686,8 +1733,35 @@ namespace HexEngine
 
 		std::vector<DirectionalLight*> directionalLights;
 		const bool hasDirectionalLights = _currentScene->GetComponents<DirectionalLight>(directionalLights);
+
+		if (r_debugLightingPass._val.b)
+		{
+			static uint64_t s_lastLightDiagFrame = 0;
+			const uint64_t frameNow = static_cast<uint64_t>(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0);
+			if (frameNow - s_lastLightDiagFrame >= 60)
+			{
+				s_lastLightDiagFrame = frameNow;
+				LOG_INFO(
+					"RenderLights: directional=%d pointEnabled=%d spotEnabled=%d compShader=%d pointShader=%d spotShader=%d",
+					static_cast<int32_t>(directionalLights.size()),
+					!r_profileDisablePointLights._val.b ? 1 : 0,
+					!r_profileDisableSpotLights._val.b ? 1 : 0,
+					_compositionShader ? 1 : 0,
+					_pointLightShader ? 1 : 0,
+					_spotLightShader ? 1 : 0);
+			}
+		}
+
+		if (hasDirectionalLights && !_compositionShader)
+		{
+			LOG_WARN("RenderLights: directional lights present but deferred composition shader is missing. Preserving base beauty as fallback.");
+			_beautyRT->CopyTo(_lightAccumulationBuffer);
+		}
 		if (!r_profileDisableDirectionalLights._val.b && hasDirectionalLights)
-			RenderDirectionalLights();
+		{
+			if (_compositionShader)
+				RenderDirectionalLights();
+		}
 		else if (!hasDirectionalLights)
 		{
 			// Keep a sane base when a scene has no directional light; local lights will add on top.
@@ -1723,6 +1797,9 @@ namespace HexEngine
 	void SceneRenderer::RenderDirectionalLights()
 	{
 #if 1
+		if (!_compositionShader || !_lightAccumulationBuffer || !_beautyRT)
+			return;
+
 		std::vector<DirectionalLight*> directionalLights;
 		if (_currentScene->GetComponents<DirectionalLight>(directionalLights) == false)
 			return;
@@ -2036,8 +2113,20 @@ namespace HexEngine
 
 	void SceneRenderer::RenderFog()
 	{
-		if (!r_fog._val.i8)
+		if (!r_fog._val.i8 || r_debugBypassFog._val.b)
 			return;
+
+		if (!_fogEffect || !_fogBuffer || !_beautyRT)
+		{
+			if (r_debugLightingPass._val.b)
+			{
+				LOG_WARN("RenderFog skipped due to missing resources: fogEffect=%d fogBuffer=%d beauty=%d",
+					_fogEffect ? 1 : 0,
+					_fogBuffer ? 1 : 0,
+					_beautyRT ? 1 : 0);
+			}
+			return;
+		}
 
 		PROFILE();
 

@@ -162,8 +162,8 @@ namespace HexEngine
 
 		// load the standard assets
 #ifndef _DEBUG
-		LOG_INFO("Loading standard asset package");
-		env->_standardAssets = dynamic_pointer_cast<AssetPackage>(env->_resourceSystem->LoadResource("EnigneData.AssetPackages/StandardAssets.pkg"));
+		//LOG_INFO("Loading standard asset package");
+		//env->_standardAssets = dynamic_pointer_cast<AssetPackage>(env->_resourceSystem->LoadResource("EnigneData.AssetPackages/StandardAssets.pkg"));
 #endif
 
 		env->_debugGui = new DebugGUI;

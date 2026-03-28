@@ -30,11 +30,16 @@ void HBAOPlus::Destroy()
 
 void HBAOPlus::ApplyAmbientOcclusion(HexEngine::Camera* camera, HexEngine::ITexture2D* depthBuffer, HexEngine::ITexture2D* normals, HexEngine::ITexture2D* target)
 {
+	if (_aoContext == nullptr || camera == nullptr || depthBuffer == nullptr || target == nullptr)
+		return;
+
 	const math::Matrix& pm = camera->GetProjectionMatrix();
 
 	Texture2D* tex11Depth = dynamic_cast<Texture2D*>(depthBuffer);
+	if (tex11Depth == nullptr || tex11Depth->_shaderResourceView == nullptr)
+		return;
 
-	GFSDK_SSAO_InputData_D3D11 Input;
+	GFSDK_SSAO_InputData_D3D11 Input = {};
 	Input.DepthData.DepthTextureType = GFSDK_SSAO_HARDWARE_DEPTHS;
 	Input.DepthData.pFullResDepthTextureSRV = tex11Depth->_shaderResourceView;
 	Input.DepthData.ProjectionMatrix.Data = GFSDK_SSAO_Float4x4(&pm.m[0][0]);
@@ -58,7 +63,7 @@ void HBAOPlus::ApplyAmbientOcclusion(HexEngine::Camera* camera, HexEngine::IText
 		Input.NormalData.Enable = false;
 	}
 
-	GFSDK_SSAO_Parameters Params;
+	GFSDK_SSAO_Parameters Params = {};
 	Params.Radius = 1.0f;
 	Params.Bias = 0.1f;
 	Params.PowerExponent = 1.0f;
@@ -76,9 +81,17 @@ void HBAOPlus::ApplyAmbientOcclusion(HexEngine::Camera* camera, HexEngine::IText
 	Params.BackgroundAO.Enable = true;
 	Params.BackgroundAO.BackgroundViewDepth = 600.0f;*/
 
-	GFSDK_SSAO_Output_D3D11 Output;
+	GFSDK_SSAO_Output_D3D11 Output = {};
 	Output.pRenderTargetView = ((Texture2D*)target)->_renderTargetView;
 	Output.Blend.Mode = GFSDK_SSAO_MULTIPLY_RGB;
+	const GFSDK_SSAO_Status status = _aoContext->RenderAO(
+		(ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext(),
+		Input,
+		Params,
+		Output);
 
-	_aoContext->RenderAO((ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext(), Input, Params, Output);
+	if (status != GFSDK_SSAO_OK)
+	{
+		LOG_WARN("HBAOPlus RenderAO failed: %d", status);
+	}
 }

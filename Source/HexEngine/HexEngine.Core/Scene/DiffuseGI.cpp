@@ -1331,12 +1331,6 @@ namespace HexEngine
 				std::clamp(std::max(uvwMin.y, uvwMax.y), 0.0f, 1.0f),
 				std::clamp(std::max(uvwMin.z, uvwMax.z), 0.0f, 1.0f));
 
-			if (uvwHi.x < 0.0f || uvwHi.y < 0.0f || uvwHi.z < 0.0f ||
-				uvwLo.x > 1.0f || uvwLo.y > 1.0f || uvwLo.z > 1.0f)
-			{
-				return false;
-			}
-
 			const uint32_t vx0 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwLo.x * static_cast<float>(voxelRes - 1)));
 			const uint32_t vy0 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwLo.y * static_cast<float>(voxelRes - 1)));
 			const uint32_t vz0 = std::min<uint32_t>(voxelRes - 1, static_cast<uint32_t>(uvwLo.z * static_cast<float>(voxelRes - 1)));

@@ -21,6 +21,7 @@ namespace HexEngine
 	HVar r_profileDisableNormalMaps("r_profileDisableNormalMaps", "Disable normal map bindings in static mesh materials for profiling", false, false, true);
 	HVar r_profileDisableSurfaceMaps("r_profileDisableSurfaceMaps", "Disable roughness, metallic, AO, height, emission and opacity map bindings in static mesh materials for profiling", false, false, true);
 	HVar phys_debug("phys_debug", "Enable the physics debugger (very slow)", false, false, true);
+	HVar r_debugRenderSkips("r_debugRenderSkips", "Log per-pass render skip counters for scene entity rendering", false, false, true);
 
 	void Scene::Create(bool createSkySphere, IEntityListener* listener)
 	{
@@ -1185,6 +1186,13 @@ namespace HexEngine
 		PROFILE();
 
 		auto& snapshot = pvs->GetRenderableSnapshot();
+		uint32_t totalCandidates = 0;
+		uint32_t skippedNullMeshOrInstance = 0;
+		uint32_t skippedTransparencyGate = 0;
+		uint32_t skippedLayerMask = 0;
+		uint32_t skippedLod = 0;
+		uint32_t skippedPrepareRender = 0;
+		uint32_t drawnInstancesTotal = 0;
 
 		if(pvs->DidRebuild())
 		{
@@ -1287,12 +1295,17 @@ namespace HexEngine
 
 			for (auto&& renderable : it->second)
 			{
+				totalCandidates++;
+
 				auto mesh = renderable.mesh;
 				auto instance = renderable.instance;
 				SimpleMeshInstance* simpleInstance = renderable.simpleInstance;
 
 				if (!mesh || !instance)
+				{
+					skippedNullMeshOrInstance++;
 					continue;
+				}
 
 				currentInstance = instance;
 
@@ -1302,7 +1315,10 @@ namespace HexEngine
 				if ((renderFlags & MeshRenderTransparency) == 0)
 				{
 					if (material->_properties.hasTransparency == 1 || material->_properties.isWater == 1)
+					{
+						skippedTransparencyGate++;
 						continue;
+					}
 
 					if (material->DoesHaveAnyReflectivity())
 						_didAnyDrawnItemReflect = true;
@@ -1310,7 +1326,10 @@ namespace HexEngine
 				else
 				{
 					if (material->_properties.hasTransparency == 0 && material->_properties.isWater == 0)
+					{
+						skippedTransparencyGate++;
 						continue;
+					}
 				}
 
 				if (currentInstance != lastInstance && lastInstance != nullptr || renderable.hasAnimations)
@@ -1330,7 +1349,10 @@ namespace HexEngine
 
 				// check this entity is in the layer mask we want
 				if ((layerMask & LAYERMASK(renderable.layer)) == 0)
+				{
+					skippedLayerMask++;
 					continue;
+				}
 
 				// Check for LOD
 #if 1
@@ -1352,6 +1374,7 @@ namespace HexEngine
 						if (distance < minDistance || distance > maxDistance)
 						{
 							//LOG_DEBUG("Entity %p failed LOD test at level %d because distance %.1f is greated then max allowed (%.1f) for this level", entity, mesh->GetLodLevel(), distance, maxDistance);
+							skippedLod++;
 							continue;
 						}
 					}
@@ -1359,6 +1382,7 @@ namespace HexEngine
 					{
 						if (distance < minDistance)
 						{
+							skippedLod++;
 							continue;
 						}
 					}
@@ -1375,12 +1399,14 @@ namespace HexEngine
 					if (PrepareMeshRender(mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode) == false)
 					{
 						LOG_WARN("Failed to prepare mesh render state, ignoring this entity");
+						skippedPrepareRender++;
 						continue;
 					}
 					rendered = true;
 				}		
 
 				drawnInstances++;
+				drawnInstancesTotal++;
 				lastInstance = currentInstance;		
 
 				if (isShadowMap)
@@ -1416,6 +1442,31 @@ namespace HexEngine
 			}
 
 			
+		}
+
+		if (r_debugRenderSkips._val.b)
+		{
+			static std::unordered_map<uint64_t, uint64_t> lastLoggedFrameByPass;
+			const uint64_t frame = g_pEnv && g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0;
+			const uint64_t passKey = (static_cast<uint64_t>(static_cast<uint32_t>(renderFlags)) << 32) | static_cast<uint64_t>(layerMask);
+			const auto lastLogged = lastLoggedFrameByPass.find(passKey);
+			if ((lastLogged == lastLoggedFrameByPass.end() || lastLogged->second != frame) && (frame % 60) == 0)
+			{
+				lastLoggedFrameByPass[passKey] = frame;
+				LOG_INFO(
+					"RenderEntities pass flags=%u layerMask=0x%08X candidates=%u drawn=%u skip(null=%u,trans=%u,layer=%u,lod=%u,prep=%u) pvsRebuilt=%d snapshotBatches=%zu",
+					(uint32_t)renderFlags,
+					layerMask,
+					totalCandidates,
+					drawnInstancesTotal,
+					skippedNullMeshOrInstance,
+					skippedTransparencyGate,
+					skippedLayerMask,
+					skippedLod,
+					skippedPrepareRender,
+					pvs->DidRebuild() ? 1 : 0,
+					snapshot.size());
+			}
 		}
 	}
 

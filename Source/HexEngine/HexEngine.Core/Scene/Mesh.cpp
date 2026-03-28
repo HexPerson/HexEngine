@@ -13,7 +13,7 @@ namespace HexEngine
 {
 	Mesh::Mesh()
 	{
-		_objectBuffer = new PerObjectBuffer;
+		_objectBuffer = new PerObjectBuffer{};
 	}
 	Mesh::Mesh(const std::shared_ptr<Model>& model, const std::string& name)
 	{
@@ -49,7 +49,7 @@ namespace HexEngine
 			}
 		}
 
-		_objectBuffer = new PerObjectBuffer;
+		_objectBuffer = new PerObjectBuffer{};
 	}
 
 	Mesh::Mesh(Mesh* other)
@@ -69,7 +69,7 @@ namespace HexEngine
 
 		//CreateBuffers(other->_isDynamicMesh);
 
-		_objectBuffer = new PerObjectBuffer;
+		_objectBuffer = new PerObjectBuffer{};
 
 		_lodLevel = other->_lodLevel;
 
@@ -374,6 +374,7 @@ namespace HexEngine
 		_objectBuffer->_flags = material->GetObjectFlags();
 		_objectBuffer->entityId = instanceId;
 		_objectBuffer->cullDistance = material->GetCullDistance();
+		_objectBuffer->pad = 0;
 
 		if (HasAnimations())
 		{
