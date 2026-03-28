@@ -312,6 +312,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Audio\SoundEffect.hpp" />
     <ClInclude Include="Entity\Component\InstancedStaticMeshComponent.hpp" />
     <ClInclude Include="Entity\Component\NavigationComponent.hpp" />
+    <ClInclude Include="Entity\Component\TrafficLaneComponent.hpp" />
+    <ClInclude Include="Entity\Component\TrafficVehicleComponent.hpp" />
     <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp" />
     <ClInclude Include="Entity\Entity.hpp" />
     <ClInclude Include="Entity\Component\AudioListener.hpp" />
@@ -505,6 +507,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Audio\SoundEffect.cpp" />
     <ClCompile Include="Entity\Component\InstancedStaticMeshComponent.cpp" />
     <ClCompile Include="Entity\Component\NavigationComponent.cpp" />
+    <ClCompile Include="Entity\Component\TrafficLaneComponent.cpp" />
+    <ClCompile Include="Entity\Component\TrafficVehicleComponent.cpp" />
     <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp" />
     <ClCompile Include="Entity\Entity.cpp" />
     <ClCompile Include="Entity\Component\AudioListener.cpp" />

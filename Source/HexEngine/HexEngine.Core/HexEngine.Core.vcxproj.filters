@@ -573,6 +573,12 @@
     <ClInclude Include="Entity\Component\NavigationComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Entity\Component\TrafficLaneComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\TrafficVehicleComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1002,6 +1008,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Entity\Component\NavigationComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\TrafficLaneComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\TrafficVehicleComponent.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp">
