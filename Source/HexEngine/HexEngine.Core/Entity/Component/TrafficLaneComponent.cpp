@@ -10,6 +10,17 @@
 
 namespace HexEngine
 {
+	namespace
+	{
+		void DrawPointMarker(const math::Vector3& position, float extent, const math::Color& colour)
+		{
+			dx::BoundingBox marker;
+			marker.Center = position;
+			marker.Extents = math::Vector3(extent);
+			g_pEnv->_debugRenderer->DrawAABB(marker, colour);
+		}
+	}
+
 	TrafficLaneComponent::TrafficLaneComponent(Entity* entity) :
 		BaseComponent(entity)
 	{
@@ -109,10 +120,10 @@ namespace HexEngine
 		for (size_t i = 0; i + 1 < points.size(); ++i)
 		{
 			g_pEnv->_debugRenderer->DrawLine(points[i], points[i + 1], lineColour);
-			g_pEnv->_debugRenderer->DrawSphere(points[i], 8.0f, pointColour);
+			DrawPointMarker(points[i], 6.0f, pointColour);
 		}
 
-		g_pEnv->_debugRenderer->DrawSphere(points.back(), 8.0f, pointColour);
+		DrawPointMarker(points.back(), 6.0f, pointColour);
 
 		if (_loop && points.size() > 2)
 		{

@@ -14,6 +14,17 @@
 
 namespace HexEngine
 {
+	namespace
+	{
+		void DrawPointMarker(const math::Vector3& position, float extent, const math::Color& colour)
+		{
+			dx::BoundingBox marker;
+			marker.Center = position;
+			marker.Extents = math::Vector3(extent);
+			g_pEnv->_debugRenderer->DrawAABB(marker, colour);
+		}
+	}
+
 	TrafficVehicleComponent::TrafficVehicleComponent(Entity* entity) :
 		UpdateComponent(entity)
 	{
@@ -274,6 +285,6 @@ void TrafficVehicleComponent::RestartPath()
 		const math::Vector3 to = points[_targetIndex];
 
 		g_pEnv->_debugRenderer->DrawLine(from, to, math::Color(HEX_RGB_TO_FLOAT3(52, 152, 219), 1.0f));
-		g_pEnv->_debugRenderer->DrawSphere(to, 10.0f, math::Color(HEX_RGB_TO_FLOAT3(52, 152, 219), 1.0f));
+		DrawPointMarker(to, 8.0f, math::Color(HEX_RGB_TO_FLOAT3(52, 152, 219), 1.0f));
 	}
 }
