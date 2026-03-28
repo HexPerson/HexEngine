@@ -5,6 +5,7 @@
 #include "../../GUI/Elements/ComponentWidget.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../Scene/Scene.hpp"
+#include "../../Graphics/DebugRenderer.hpp"
 #include <format>
 
 namespace HexEngine

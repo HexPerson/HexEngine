@@ -8,6 +8,7 @@
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../GUI/Elements/LineEdit.hpp"
 #include "../../Scene/Scene.hpp"
+#include "../../Graphics/DebugRenderer.hpp"
 #include <algorithm>
 #include <cmath>
 
