@@ -31,6 +31,9 @@ Designed for developers who want low-level control without sacrificing workflow,
   - Nvidia real-time denoiser
   - Screen-space reflections
   - HLOD system with asynchronous streaming
+  - Realtime global illumination
+  - Realtime volumetric clouds
+  - Realtime volumetric light sources
 
 - 📦 **Asset System**
   - Asset packaging and dependency management
