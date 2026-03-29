@@ -66,9 +66,6 @@
     <ClInclude Include="UI\Actions\MaterialEditor.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Scene\SceneManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="UI\Actions\SceneView.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>

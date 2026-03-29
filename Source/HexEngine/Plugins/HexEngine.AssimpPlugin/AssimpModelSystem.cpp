@@ -2,6 +2,7 @@
 
 #include "AssimpModelSystem.hpp"
 #include <HexEngine.Core\Graphics\MaterialLoader.hpp>
+#include <HexEngine.Core\GUI\Elements\DragFloat.hpp>
 
 #define AI2VEC2(val) math::Vector2(val.x, val.y);
 #define AI2VEC3(val) math::Vector3(val.x, val.y, val.z);
@@ -152,6 +153,7 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 	auto createAnims = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Create materials", &_importOpts.tryAndCreateMaterials);
 	auto renameFiles = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Rename files", &_importOpts.renameFiles);
 	auto deleteOriginals = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Delete originals after import", &_importOpts.deleteOriginalsAfterImport);
+	auto importScale = new HexEngine::DragFloat(layout, layout->GetNextPos(), HexEngine::Point(220, 20), L"Import Scale", &_importOpts.importScale, 0.01f, 100.0f, 0.01f, 2);
 
 	constexpr int32_t kTexturePathArrayHeight = 240;
 	auto array = new HexEngine::ArrayElement<std::wstring>(
@@ -709,6 +711,7 @@ HexEngine::AnimChannel* AssimpModelImporter::FindAnimChannelFromNodeName(std::sh
 
 std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_ptr<HexEngine::Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, HexEngine::FileSystem* fileSystem)
 {
+	const float importScale = std::clamp(_importOpts.importScale, 0.01f, 100.0f);
 	std::string meshName = mesh->mName.C_Str();
 
 	meshName.erase(std::remove(meshName.begin(), meshName.end(), ':'));
@@ -864,6 +867,7 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 		{
 			vertex._position = math::Vector4::Transform(vertex._position, transmat);
 		}
+		vertex._position *= importScale;
 
 		points.push_back(vertex._position);
 
@@ -949,6 +953,7 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 #if 1
 std::shared_ptr<HexEngine::AnimatedMesh> AssimpModelImporter::ProcessAnimatedMesh(std::shared_ptr<HexEngine::Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, HexEngine::FileSystem* fileSystem)
 {
+	const float importScale = std::clamp(_importOpts.importScale, 0.01f, 100.0f);
 	std::string meshName = mesh->mName.C_Str();
 
 	meshName.erase(std::remove(meshName.begin(), meshName.end(), ':'));
@@ -1021,6 +1026,7 @@ std::shared_ptr<HexEngine::AnimatedMesh> AssimpModelImporter::ProcessAnimatedMes
 		{
 			vertex._position = math::Vector4::Transform(vertex._position, transmat);
 		}
+		vertex._position *= importScale;
 
 		points.push_back(vertex._position);
 

@@ -168,7 +168,6 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
   <ItemGroup>
     <ClInclude Include="Editor.hpp" />
     <ClInclude Include="GameIntegrator.hpp" />
-    <ClInclude Include="Scene\SceneManager.hpp" />
     <ClInclude Include="UI\Actions\SceneView.hpp" />
     <ClInclude Include="UI\Elements\EntityList.hpp" />
     <ClInclude Include="UI\Actions\MaterialEditor.hpp" />

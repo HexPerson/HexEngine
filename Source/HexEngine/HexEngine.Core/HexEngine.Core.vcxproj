@@ -313,6 +313,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\InstancedStaticMeshComponent.hpp" />
     <ClInclude Include="Entity\Component\NavigationComponent.hpp" />
     <ClInclude Include="Entity\Component\TrafficLaneComponent.hpp" />
+    <ClInclude Include="Entity\Component\TrafficManagerComponent.hpp" />
+    <ClInclude Include="Entity\Component\TrafficSpawnerComponent.hpp" />
     <ClInclude Include="Entity\Component\TrafficVehicleComponent.hpp" />
     <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp" />
     <ClInclude Include="Entity\Entity.hpp" />
@@ -508,6 +510,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\InstancedStaticMeshComponent.cpp" />
     <ClCompile Include="Entity\Component\NavigationComponent.cpp" />
     <ClCompile Include="Entity\Component\TrafficLaneComponent.cpp" />
+    <ClCompile Include="Entity\Component\TrafficManagerComponent.cpp" />
+    <ClCompile Include="Entity\Component\TrafficSpawnerComponent.cpp" />
     <ClCompile Include="Entity\Component\TrafficVehicleComponent.cpp" />
     <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp" />
     <ClCompile Include="Entity\Entity.cpp" />

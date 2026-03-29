@@ -264,6 +264,7 @@ namespace HexEngine
 
 		std::vector<Entity*> entities;
 		std::unordered_set<Entity*> uniqueEntities;
+		scene->Lock();
 		for (const auto& entSet : scene->GetEntities())
 		{
 			for (auto* ent : entSet.second)
@@ -277,6 +278,7 @@ namespace HexEngine
 				}
 			}
 		}
+		scene->Unlock();
 
 		std::sort(entities.begin(), entities.end(),
 			[](const Entity* lhs, const Entity* rhs)

@@ -576,6 +576,12 @@
     <ClInclude Include="Entity\Component\TrafficLaneComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Entity\Component\TrafficManagerComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\TrafficSpawnerComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Entity\Component\TrafficVehicleComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1011,6 +1017,12 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Entity\Component\TrafficLaneComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\TrafficManagerComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\TrafficSpawnerComponent.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Entity\Component\TrafficVehicleComponent.cpp">

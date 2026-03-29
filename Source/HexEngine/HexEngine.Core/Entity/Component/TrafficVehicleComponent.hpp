@@ -13,6 +13,7 @@ namespace HexEngine
 	public:
 		CREATE_COMPONENT_ID(TrafficVehicleComponent);
 		DEFINE_COMPONENT_CTOR(TrafficVehicleComponent);
+		virtual ~TrafficVehicleComponent();
 
 		virtual void Update(float frameTime) override;
 		virtual void Serialize(json& data, JsonFile* file) override;
@@ -25,20 +26,36 @@ namespace HexEngine
 		void RestartPath();
 
 	private:
+		bool GatherPlannedRoute(std::vector<math::Vector3>& outPoints);
+		bool BuildWaypointRoute(std::vector<math::Vector3>& outPoints) const;
+		bool AdvancePlannedRouteIndex(size_t numPoints);
 		TrafficLaneComponent* ResolveLane();
 		bool GatherLanePoints(std::vector<math::Vector3>& outPoints);
-		void AdvanceTargetIndex(size_t numPoints);
+		bool TrySwitchToConnectedLane();
+		bool AdvanceTargetIndex(size_t numPoints);
+		float ComputeAvoidanceSpeed(const math::Vector3& currentPosition, const math::Vector3& moveDirection, float maxSpeed) const;
+
+		static std::vector<TrafficVehicleComponent*> s_allVehicles;
 
 	private:
 		std::string _laneEntityName;
 		size_t _targetIndex = 0;
-		float _speed = 350.0f;
-		float _acceleration = 600.0f;
+		float _speed = 5.0f;
+		float _acceleration = 2.0f;
 		float _rotationLerp = 9.0f;
-		float _arrivalDistance = 35.0f;
+		float _arrivalDistance = 1.0f;
 		float _currentSpeed = 0.0f;
 		bool _useLaneSpeedLimit = true;
 		bool _invertDirection = false;
+		bool _despawnAtRouteEnd = true;
+		bool _useWaypointRoute = false;
+		std::string _startWaypointEntityName;
+		std::string _destinationWaypointEntityName;
 		bool _drawDebug = true;
+		bool _avoidanceEnabled = true;
+		float _avoidanceLookAheadDistance = 10.0f;
+		float _avoidanceFollowDistance = 3.0f;
+		float _brakingStrength = 6.0f;
+		std::vector<math::Vector3> _plannedRoutePoints;
 	};
 }

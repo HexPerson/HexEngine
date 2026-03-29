@@ -1043,6 +1043,11 @@ namespace HexEditor
 		CheckCentralDockRoamState();
 		_integrator.Update();
 
+		if (_entityList != nullptr && _entityListRefreshPending.exchange(false))
+		{
+			_entityList->RefreshList();
+		}
+
 		if (g_pEditor != nullptr)
 		{
 			std::vector<fs::path> changedPrefabs;
@@ -1485,7 +1490,7 @@ namespace HexEditor
 
 	void EditorUI::OnAddEntity(HexEngine::Entity* entity)
 	{
-		_entityList->AddEntity(entity);
+		_entityListRefreshPending = true;
 
 		//auto& name = entity->GetName();
 
@@ -1499,7 +1504,7 @@ namespace HexEditor
 
 	void EditorUI::OnRemoveEntity(HexEngine::Entity* entity)
 	{
-		_entityList->RemoveEntity(entity);
+		_entityListRefreshPending = true;
 
 		if (_rightDock != nullptr && _rightDock->GetInspectingEntity() == entity)
 		{
@@ -1564,6 +1569,7 @@ namespace HexEditor
 		const std::string beforeParentName = beforeParent ? beforeParent->GetName() : "";
 		const std::string afterParentName = afterParent ? afterParent->GetName() : "";
 		_transactions.Push(std::make_unique<ReparentTransaction>(entity->GetName(), beforeParentName, afterParentName));
+		_entityListRefreshPending = true;
 	}
 
 	void EditorUI::RecordEntityVisibilityChange(HexEngine::Entity* entity, bool beforeHidden, bool afterHidden)

@@ -17,6 +17,8 @@
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "../Entity/Component/DayNightCycleComponent.hpp"
 #include "../Entity/Component/TrafficLaneComponent.hpp"
+#include "../Entity/Component/TrafficManagerComponent.hpp"
+#include "../Entity/Component/TrafficSpawnerComponent.hpp"
 #include "../Entity/Component/TrafficVehicleComponent.hpp"
 #include "../HexEngine.hpp"
 
@@ -62,6 +64,8 @@ namespace HexEngine
 		REG_CLASS(InstancedStaticMeshComponent);
 		REG_CLASS(DayNightCycleComponent);
 		REG_CLASS(TrafficLaneComponent);
+		REG_CLASS(TrafficSpawnerComponent);
+		REG_CLASS(TrafficManagerComponent);
 		REG_CLASS(TrafficVehicleComponent);
 	}
 

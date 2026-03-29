@@ -56,6 +56,59 @@ namespace
 		return lowered;
 	}
 
+	bool TryResolvePrefabPathToAbsolute(const fs::path& inputPath, fs::path& outAbsolutePath)
+	{
+		outAbsolutePath.clear();
+		if (inputPath.empty())
+			return false;
+
+		std::error_code ec;
+		if (inputPath.is_absolute())
+		{
+			if (fs::exists(inputPath, ec) && !ec)
+			{
+				outAbsolutePath = inputPath.lexically_normal();
+				return true;
+			}
+		}
+		else
+		{
+			const fs::path absoluteFromCwd = fs::absolute(inputPath, ec);
+			if (!ec && fs::exists(absoluteFromCwd, ec) && !ec)
+			{
+				outAbsolutePath = absoluteFromCwd.lexically_normal();
+				return true;
+			}
+		}
+
+		auto& resourceSystem = HexEngine::g_pEnv->GetResourceSystem();
+
+		if (auto* owningFileSystem = resourceSystem.FindFileSystemByPath(inputPath); owningFileSystem != nullptr)
+		{
+			const fs::path resolved = owningFileSystem->GetLocalAbsoluteDataPath(inputPath);
+			if (fs::exists(resolved, ec) && !ec)
+			{
+				outAbsolutePath = resolved.lexically_normal();
+				return true;
+			}
+		}
+
+		for (auto* fileSystem : resourceSystem.GetFileSystems())
+		{
+			if (fileSystem == nullptr)
+				continue;
+
+			const fs::path resolved = fileSystem->GetLocalAbsoluteDataPath(inputPath);
+			if (fs::exists(resolved, ec) && !ec)
+			{
+				outAbsolutePath = resolved.lexically_normal();
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	bool CaptureEntityComponentsSnapshot(HexEngine::Entity* entity, json& outComponents)
 	{
 		if (entity == nullptr || entity->IsPendingDeletion())
@@ -413,18 +466,25 @@ namespace
 		if (targetScene == nullptr)
 			return false;
 
-		const std::wstring recursionKey = BuildComparablePath(prefabAssetPath);
+		fs::path resolvedPrefabPath;
+		if (!TryResolvePrefabPathToAbsolute(prefabAssetPath, resolvedPrefabPath))
+		{
+			LOG_CRIT("Failed to resolve prefab path '%s' to an absolute path.", prefabAssetPath.string().c_str());
+			return false;
+		}
+
+		const std::wstring recursionKey = BuildComparablePath(resolvedPrefabPath);
 		if (recursionKey.empty())
 			return false;
 
 		if (!recursionGuard.insert(recursionKey).second)
 		{
-			LOG_CRIT("Detected prefab variant recursion while resolving '%s'.", prefabAssetPath.string().c_str());
+			LOG_CRIT("Detected prefab variant recursion while resolving '%s'.", resolvedPrefabPath.string().c_str());
 			return false;
 		}
 
 		PrefabVariantData variantData;
-		const bool isVariant = TryReadPrefabVariantData(prefabAssetPath, variantData);
+		const bool isVariant = TryReadPrefabVariantData(resolvedPrefabPath, variantData);
 		bool loaded = false;
 
 		if (isVariant)
@@ -437,7 +497,7 @@ namespace
 		}
 		else
 		{
-			HexEngine::SceneSaveFile file(prefabAssetPath, std::ios::in, targetScene, HexEngine::SceneFileFlags::IsPrefab);
+			HexEngine::SceneSaveFile file(resolvedPrefabPath, std::ios::in, targetScene, HexEngine::SceneFileFlags::IsPrefab);
 			loaded = file.Load(targetScene);
 		}
 

@@ -10,6 +10,7 @@
 #include "PrefabController.hpp"
 #include "EditorTransactions.hpp"
 #include "../GameIntegrator.hpp"
+#include <atomic>
 
 namespace HexEditor
 {
@@ -172,6 +173,7 @@ namespace HexEditor
 		bool _pendingComponentEditActive = false;
 		PendingComponentEditSource _pendingComponentEditSource = PendingComponentEditSource::None;
 		Detail::EntityComponentStateSnapshot _pendingComponentEditBefore;
+		std::atomic_bool _entityListRefreshPending = false;
 		
 	};
 

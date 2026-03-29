@@ -50,6 +50,7 @@ struct AssimpImportOptions
 	bool tryAndCreateMaterials = false;
 	bool renameFiles = true;
 	bool deleteOriginalsAfterImport = true;
+	float importScale = 1.0f;
 	std::vector<std::wstring> textureSearchPaths;
 	std::wstring replaceTextureExtension;
 	std::wstring texturePrefix;
