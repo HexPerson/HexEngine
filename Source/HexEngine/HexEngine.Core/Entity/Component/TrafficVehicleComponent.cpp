@@ -228,13 +228,14 @@ void TrafficVehicleComponent::RestartPath()
 
 	bool TrafficVehicleComponent::CreateWidget(ComponentWidget* widget)
 	{
-		auto* laneName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Lane Entity");
-		laneName->SetValue(std::wstring(_laneEntityName.begin(), _laneEntityName.end()));
-		laneName->SetOnInputFn([this](LineEdit* edit, const std::wstring& value)
-		{
-			_laneEntityName = std::string(value.begin(), value.end());
-			RestartPath();
-		});
+	auto* laneName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Lane Entity");
+	laneName->SetValue(std::wstring(_laneEntityName.begin(), _laneEntityName.end()));
+	laneName->SetDoesCallbackWaitForReturn(false);
+	laneName->SetOnInputFn([this](LineEdit* edit, const std::wstring& value)
+	{
+		_laneEntityName = std::string(value.begin(), value.end());
+		RestartPath();
+	});
 		laneName->SetPrefabOverrideBinding(GetComponentName(), "/_laneEntityName");
 
 		new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Use Parent Lane", [this, laneName](Button* button) -> bool
