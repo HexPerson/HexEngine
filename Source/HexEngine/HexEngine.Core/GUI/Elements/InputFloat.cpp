@@ -82,9 +82,11 @@ namespace HexEngine
 
 		LineEdit::OnInputEvent(event, data);
 
-		if (event == InputEvent::Char && data->Char.ch == VK_RETURN)
+		if ((event == InputEvent::Char && data->Char.ch == VK_RETURN) ||
+			(event == InputEvent::KeyDown && data->KeyDown.key == VK_RETURN))
 		{
 			CommitTextValue();
+			return true;
 		}
 
 		return false;

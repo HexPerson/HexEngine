@@ -156,6 +156,20 @@ namespace HexEngine
 				return true;
 			}
 		}
+		else if (event == InputEvent::KeyDown && _hasInputFocus)
+		{
+			if (data->KeyDown.key == VK_RETURN)
+			{
+				_hasInputFocus = false;
+
+				if (_onInputFn)
+				{
+					_onInputFn(this, _value);
+				}
+
+				return true;
+			}
+		}
 		else if (event == InputEvent::Char && _hasInputFocus)
 		{
 			if (data->Char.ch == VK_BACK)
