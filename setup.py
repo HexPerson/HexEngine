@@ -655,28 +655,8 @@ def build_recastnavigation(buildConfig):
 
 
 def build_oidn(buildConfig):
-    try:
-        ensure_repo("oidn", recursive=True)
-    except subprocess.CalledProcessError as ex:
-        print(
-            "Warning: oidn repository bootstrap failed; continuing because this dependency is optional in legacy setup. "
-            f"({ex})"
-        )
-        os.chdir(engineMainDir)
-        return
-
-    os.chdir(get_dependency_path("oidn"))
-    os.system("mkdir build")
-    os.chdir("build")
-    cmakeExitCode = os.system(
-        'cmake -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH
-        + " -DOIDN_APPS=OFF -DOIDN_DEVICE_CPU=OFF -DOIDN_DEVICE_SYCL=OFF -DOIDN_DEVICE_CUDA=OFF -DOIDN_DEVICE_HIP=OFF -DOIDN_DEVICE_METAL=OFF"
-    )
-    if cmakeExitCode != 0:
-        print("Warning: oidn configure failed; continuing because this dependency is optional in legacy setup.")
-    else:
-        print("Successfully configured oidn!")
-    os.chdir(engineMainDir)
+    print("Skipping oidn bootstrap: optional dependency in legacy setup (known submodule path-length instability on Windows clones).")
+    return
 
 
 def buildConfig(buildConfig):
