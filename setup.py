@@ -379,7 +379,9 @@ def build_nrd(buildConfig):
     os.system("mkdir build")
     os.chdir("build")
     os.system(
-        'cmake -DNRD_STATIC_LIBRARY=ON -DNRD_EMBEDS_SPIRV_SHADERS=OFF -S .. -G "'
+        'cmake -DNRD_STATIC_LIBRARY=ON -DNRD_EMBEDS_SPIRV_SHADERS=OFF '
+        '-DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>DLL" '
+        '-S .. -G "'
         + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH + ' -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "'
     )
 
@@ -390,7 +392,9 @@ def build_nrd(buildConfig):
         os.makedirs("build", exist_ok=True)
         os.chdir("build")
         os.system(
-            'cmake -DNRD_STATIC_LIBRARY=ON -DNRD_EMBEDS_SPIRV_SHADERS=OFF -S .. -G "'
+            'cmake -DNRD_STATIC_LIBRARY=ON -DNRD_EMBEDS_SPIRV_SHADERS=OFF '
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY="MultiThreaded$<$<CONFIG:Debug>:Debug>DLL" '
+            '-S .. -G "'
             + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH + ' -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "'
         )
 
@@ -773,6 +777,18 @@ def ensure_output_directories():
 
     if not os.path.exists("Bin/x64/Release/Bin"):
         os.makedirs("Bin/x64/Release/Bin")
+
+    if not os.path.exists("Bin/x64/Debug/Plugins"):
+        os.makedirs("Bin/x64/Debug/Plugins")
+
+    if not os.path.exists("Bin/x64/Release/Plugins"):
+        os.makedirs("Bin/x64/Release/Plugins")
+
+    if not os.path.exists("Bin/x64/Debug/Data/Shaders"):
+        os.makedirs("Bin/x64/Debug/Data/Shaders")
+
+    if not os.path.exists("Bin/x64/Release/Data/Shaders"):
+        os.makedirs("Bin/x64/Release/Data/Shaders")
 
 
 def main():
