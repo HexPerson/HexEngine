@@ -655,7 +655,15 @@ def build_recastnavigation(buildConfig):
 
 
 def build_oidn(buildConfig):
-    ensure_repo("oidn", recursive=True)
+    try:
+        ensure_repo("oidn", recursive=True)
+    except subprocess.CalledProcessError as ex:
+        print(
+            "Warning: oidn repository bootstrap failed; continuing because this dependency is optional in legacy setup. "
+            f"({ex})"
+        )
+        os.chdir(engineMainDir)
+        return
 
     os.chdir(get_dependency_path("oidn"))
     os.system("mkdir build")
