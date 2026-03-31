@@ -8,11 +8,14 @@ from pathlib import Path
 
 try:
     from git import Repo
-    from git.exc import InvalidGitRepositoryError
+    from git.exc import GitCommandError, InvalidGitRepositoryError
 except ModuleNotFoundError:
     Repo = None
 
     class InvalidGitRepositoryError(Exception):
+        pass
+
+    class GitCommandError(Exception):
         pass
 
 engineMainDir = os.getcwd() + "\\"
@@ -151,7 +154,14 @@ def maybe_checkout_ref(repo, dep):
         return
 
     print(f"[frozen] {dep['name']}: checking out {ref}")
-    repo.git.checkout(ref)
+    try:
+        repo.git.checkout(ref)
+    except GitCommandError:
+        print(f"[frozen] {dep['name']}: checkout failed, attempting fetch + clean/reset recovery")
+        repo.git.fetch("--all", "--tags")
+        repo.git.reset("--hard")
+        repo.git.clean("-fd")
+        repo.git.checkout(ref)
 
 
 
@@ -199,7 +209,14 @@ def ensure_repo(name, recursive=False):
             print(f"[frozen] {dep['name']}: no ref pinned yet; leaving current state unchanged")
         else:
             print(f"[frozen] {dep['name']}: checking out {ref}")
-            subprocess.check_call(["git", "-C", depPath, "checkout", ref])
+            try:
+                subprocess.check_call(["git", "-C", depPath, "checkout", ref])
+            except subprocess.CalledProcessError:
+                print(f"[frozen] {dep['name']}: checkout failed, attempting fetch + clean/reset recovery")
+                subprocess.check_call(["git", "-C", depPath, "fetch", "--all", "--tags"])
+                subprocess.check_call(["git", "-C", depPath, "reset", "--hard"])
+                subprocess.check_call(["git", "-C", depPath, "clean", "-fd"])
+                subprocess.check_call(["git", "-C", depPath, "checkout", ref])
 
 
 
