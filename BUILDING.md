@@ -78,6 +78,7 @@ Equivalent direct command for plan output:
 Notes:
 - Automatic floating update behavior was removed from default path.
 - Use `--update` explicitly when you want latest upstream changes.
+- Legacy setup treats recastnavigation/oidn configure as optional scaffolding and continues with warnings if those configure-only steps fail in constrained environments.
 
 ## Dependency Manifest
 

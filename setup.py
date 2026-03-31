@@ -312,6 +312,14 @@ def build_nrd(buildConfig):
     os.chdir("build")
     os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH + ' -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "')
 
+    if not os.path.exists("NRD.sln"):
+        print("Warning: NRD.sln was not generated on first configure attempt. Retrying with a clean build directory.")
+        os.chdir("..")
+        shutil.rmtree("build", ignore_errors=True)
+        os.makedirs("build", exist_ok=True)
+        os.chdir("build")
+        os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH + ' -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "')
+
     projectPath = os.path.realpath("NRD.sln")
     print("Project path is %s" % projectPath)
 
@@ -543,9 +551,14 @@ def build_recastnavigation(buildConfig):
     os.chdir(get_dependency_path("recastnavigation"))
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH)
-
-    print("Successfully built recastnavigation!")
+    cmakeExitCode = os.system(
+        'cmake -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH
+        + ' -DRECASTNAVIGATION_DEMO=OFF -DRECASTNAVIGATION_TESTS=OFF -DRECASTNAVIGATION_EXAMPLES=OFF'
+    )
+    if cmakeExitCode != 0:
+        print("Warning: recastnavigation configure failed; continuing because this dependency is optional in legacy setup.")
+    else:
+        print("Successfully configured recastnavigation!")
     os.chdir(engineMainDir)
 
 
@@ -555,9 +568,14 @@ def build_oidn(buildConfig):
     os.chdir(get_dependency_path("oidn"))
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH)
-
-    print("Successfully built oidn!")
+    cmakeExitCode = os.system(
+        'cmake -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH
+        + " -DOIDN_APPS=OFF -DOIDN_DEVICE_CPU=OFF -DOIDN_DEVICE_SYCL=OFF -DOIDN_DEVICE_CUDA=OFF -DOIDN_DEVICE_HIP=OFF -DOIDN_DEVICE_METAL=OFF"
+    )
+    if cmakeExitCode != 0:
+        print("Warning: oidn configure failed; continuing because this dependency is optional in legacy setup.")
+    else:
+        print("Successfully configured oidn!")
     os.chdir(engineMainDir)
 
 
