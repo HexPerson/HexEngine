@@ -73,7 +73,7 @@ Equivalent direct command for plan output:
   - Writes local dependency `HEAD` commits into manifest `ref` fields when repos are available.
 - `--header-only-bootstrap`
   - Fetches/copies header-only dependencies only and skips native library builds.
-  - If `Streamline` clone fails due missing `git-lfs`, bootstrap continues with a warning.
+  - If `Streamline` clone/checkout fails (for example missing `git-lfs`), bootstrap continues with a warning.
 - `--header-layout external`
   - Phase 3 starter behavior: `cxxopts` is consumed from `ThirdParty/cxxopts/include` without copying into `Include/`.
 
@@ -81,6 +81,7 @@ Notes:
 - Automatic floating update behavior was removed from default path.
 - Use `--update` explicitly when you want latest upstream changes.
 - Legacy setup treats recastnavigation/oidn configure as optional scaffolding and continues with warnings if those configure-only steps fail in constrained environments.
+- Legacy setup treats Streamline bootstrap as non-blocking and continues with warnings if clone/checkout fails.
 
 ## Dependency Manifest
 

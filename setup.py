@@ -679,10 +679,9 @@ def get_streamline():
     try:
         ensure_repo("streamline")
     except subprocess.CalledProcessError as ex:
-        if runtimeArgs.header_only_bootstrap:
-            print(f"Warning: streamline bootstrap failed in header-only mode ({ex}). Continuing without streamline.")
-            return
-        raise
+        warningContext = "header-only mode" if runtimeArgs.header_only_bootstrap else "legacy mode"
+        print(f"Warning: streamline bootstrap failed in {warningContext} ({ex}). Continuing without streamline.")
+        return
 
 
 
