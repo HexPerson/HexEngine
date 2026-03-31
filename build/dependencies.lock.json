@@ -1,0 +1,205 @@
+﻿{
+  "schema_version": 1,
+  "description": "HexEngine third-party dependency manifest for staged migration to declarative builds.",
+  "dependencies": [
+    {
+      "name": "assimp",
+      "path": "ThirdParty/assimp",
+      "git_url": "https://github.com/assimp/assimp.git",
+      "ref": null,
+      "build_system": "cmake+msbuild",
+      "notes": "Builds static assimp and zlib artifacts via setup.py legacy flow.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/assimp-*.lib",
+        "Libs/x64/<Config>/zlibstatic*.lib",
+        "Include/assimp/config.h"
+      ]
+    },
+    {
+      "name": "directxtk",
+      "path": "ThirdParty/directxtk",
+      "git_url": "https://github.com/microsoft/DirectXTK.git",
+      "ref": null,
+      "build_system": "cmake+msbuild",
+      "notes": "No automatic pull in default mode; use --update for floating updates.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/DirectXTK.lib",
+        "Libs/x64/<Config>/DirectXTKAudioWin8.lib"
+      ]
+    },
+    {
+      "name": "nrd",
+      "path": "ThirdParty/nrd",
+      "git_url": "https://github.com/NVIDIAGameWorks/RayTracingDenoiser.git",
+      "ref": null,
+      "build_system": "cmake+msbuild",
+      "notes": "Recursive clone.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/NRD.lib"
+      ]
+    },
+    {
+      "name": "physx",
+      "path": "ThirdParty/physx",
+      "git_url": "https://github.com/NVIDIA-Omniverse/PhysX.git",
+      "ref": null,
+      "build_system": "custom+msbuild",
+      "notes": "Legacy flow modifies vc17 preset xml and stages libs/dlls.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/*.lib",
+        "Bin/x64/<Config>/Bin/*.dll"
+      ]
+    },
+    {
+      "name": "shaderconductor",
+      "path": "ThirdParty/shaderconductor",
+      "git_url": "https://github.com/microsoft/ShaderConductor.git",
+      "ref": null,
+      "build_system": "cmake",
+      "notes": "Builds ShaderConductor.lib.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/ShaderConductor.lib"
+      ]
+    },
+    {
+      "name": "hbaoplus",
+      "path": "ThirdParty/hbaoplus",
+      "git_url": "https://github.com/NVIDIAGameWorks/HBAOPlus.git",
+      "ref": null,
+      "build_system": "prebuilt",
+      "notes": "Uses prebuilt GFSDK_SSAO artifacts.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/GFSDK_SSAO_D3D11.win64.lib",
+        "Bin/x64/<Config>/Bin/GFSDK_SSAO_D3D11.win64.dll"
+      ]
+    },
+    {
+      "name": "freetype",
+      "path": "ThirdParty/freetype",
+      "git_url": "https://github.com/freetype/freetype.git",
+      "ref": null,
+      "build_system": "cmake+msbuild",
+      "notes": "Builds freetype.lib/freetyped.lib.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/freetype*.lib"
+      ]
+    },
+    {
+      "name": "directxtex",
+      "path": "ThirdParty/directxtex",
+      "git_url": "https://github.com/microsoft/DirectXTex.git",
+      "ref": null,
+      "build_system": "cmake+msbuild",
+      "notes": "Builds DirectXTex.lib.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/DirectXTex.lib"
+      ]
+    },
+    {
+      "name": "brotli",
+      "path": "ThirdParty/brotli",
+      "git_url": "https://github.com/google/brotli.git",
+      "ref": null,
+      "build_system": "cmake+msbuild",
+      "notes": "Stages brotli libs/dlls/exes from build output.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/brotli*.lib",
+        "Bin/x64/<Config>/Bin/*.dll",
+        "Bin/x64/<Config>/Bin/*.exe"
+      ]
+    },
+    {
+      "name": "angelscript",
+      "path": "ThirdParty/angelscript",
+      "git_url": "https://github.com/codecat/angelscript-mirror.git",
+      "ref": null,
+      "build_system": "msbuild",
+      "notes": "Builds msvc2022 solution.",
+      "legacy_stage_paths": [
+        "Libs/x64/<Config>/angelscript*.lib"
+      ]
+    },
+    {
+      "name": "recastnavigation",
+      "path": "ThirdParty/recastnavigation",
+      "git_url": "https://github.com/recastnavigation/recastnavigation.git",
+      "ref": null,
+      "build_system": "cmake",
+      "notes": "Legacy setup currently only configures CMake.",
+      "legacy_stage_paths": []
+    },
+    {
+      "name": "oidn",
+      "path": "ThirdParty/oidn",
+      "git_url": "https://github.com/OpenImageDenoise/oidn.git",
+      "ref": null,
+      "build_system": "cmake",
+      "notes": "Recursive clone; legacy setup currently only configures CMake.",
+      "legacy_stage_paths": []
+    },
+    {
+      "name": "cxxopts",
+      "path": "ThirdParty/cxxopts",
+      "git_url": "https://github.com/jarro2783/cxxopts.git",
+      "ref": null,
+      "build_system": "header-only",
+      "notes": "Legacy setup copies headers into Include/cxxopts.",
+      "legacy_stage_paths": [
+        "Include/cxxopts"
+      ]
+    },
+    {
+      "name": "fastnoiselite",
+      "path": "ThirdParty/fastnoiselite",
+      "git_url": "https://github.com/Auburn/FastNoiseLite.git",
+      "ref": null,
+      "build_system": "header-only",
+      "notes": "Legacy setup copies headers into Include/fastnoiselite.",
+      "legacy_stage_paths": [
+        "Include/fastnoiselite"
+      ]
+    },
+    {
+      "name": "rapidxml",
+      "path": "ThirdParty/rapidxml",
+      "git_url": "https://github.com/discord/rapidxml.git",
+      "ref": null,
+      "build_system": "header-only",
+      "notes": "Legacy setup copies headers into Include/rapidxml.",
+      "legacy_stage_paths": [
+        "Include/rapidxml"
+      ]
+    },
+    {
+      "name": "rapidjson",
+      "path": "ThirdParty/rapidjson",
+      "git_url": "https://github.com/nlohmann/json.git",
+      "ref": null,
+      "build_system": "header-only",
+      "notes": "Legacy setup clones nlohmann/json under rapidjson path and copies nlohmann headers.",
+      "legacy_stage_paths": [
+        "Include/nlohmann"
+      ]
+    },
+    {
+      "name": "retpack2d",
+      "path": "ThirdParty/retpack2d",
+      "git_url": "https://github.com/TeamHypersomnia/rectpack2D.git",
+      "ref": null,
+      "build_system": "header-only",
+      "notes": "Legacy setup copies headers into Include/retpack2d.",
+      "legacy_stage_paths": [
+        "Include/retpack2d"
+      ]
+    },
+    {
+      "name": "streamline",
+      "path": "ThirdParty/Streamline",
+      "git_url": "https://github.com/NVIDIAGameWorks/Streamline.git",
+      "ref": null,
+      "build_system": "vendor-sdk",
+      "notes": "Cloned by setup; include copy currently disabled.",
+      "legacy_stage_paths": []
+    }
+  ]
+}
