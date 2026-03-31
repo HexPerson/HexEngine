@@ -10,12 +10,15 @@
 		float4 p1;
 		float4 p2;
 		float4 radianceOpacity;
+		float4 albedoWeight;
 	};
 
 	StructuredBuffer<VoxelTriangleData> g_voxelTriangles : register(t0);
 	Texture3D<float4> g_prevVoxelRadiance : register(t1);
-	SHADOWMAPS_RESOURCE(2);
+	Texture3D<float4> g_prevVoxelAlbedo : register(t2);
+	SHADOWMAPS_RESOURCE(3);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
+	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -27,6 +30,7 @@
 		float4 g_giParams3;
 		float4 g_giParams4;
 		float4 g_giParams5;
+		float4 g_giParams6;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -234,16 +238,27 @@
 					}
 
 					const float4 previous = g_voxelRadianceOut[coord];
+					const float4 previousAlbedo = g_prevVoxelAlbedo[coord];
 					// Keep a non-directional floor so directional shadowing never wipes out all indirect bounce.
 					const float visibilityFactor = max(
 						lerp(1.0f, sunVisibility, 0.90f * sunDirectionality),
 						lerp(1.0f, 0.08f, sunDirectionality));
-					const float3 injected = tri.radianceOpacity.rgb * visibilityFactor;
+					const float3 triAlbedo = saturate(tri.albedoWeight.rgb);
 
 					// Temporal damping at the voxel-injection stage to reduce frame-to-frame GI shimmer
 					// from triangle-budget/coverage changes while moving clipmaps.
 					const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 					const float temporalKeep = lerp(0.80f, 0.94f, warmStabilize);
+					const float albedoKeep = lerp(0.75f, 0.93f, warmStabilize);
+					const float prevAlbedoW = saturate(previousAlbedo.a) * albedoKeep;
+					const float triAlbedoW = saturate(tri.albedoWeight.a);
+					const float albedoW = max(prevAlbedoW + triAlbedoW, 1e-4f);
+					const float3 voxelAlbedo = saturate((previousAlbedo.rgb * prevAlbedoW + triAlbedo * triAlbedoW) / albedoW);
+					const float albedoConfidence = saturate(max(previousAlbedo.a * albedoKeep, triAlbedoW));
+					const float albedoInfluence = saturate(g_giParams6.z) * saturate(albedoConfidence * 1.25f);
+					const float3 albedoTint = lerp(1.0f.xxx, voxelAlbedo, albedoInfluence);
+					const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
+					const float3 injected = tri.radianceOpacity.rgb * visibilityFactor * (albedoTint / tintLuma);
 					const float injectedLum = dot(injected, float3(0.2126f, 0.7152f, 0.0722f));
 					// If there's little/no new injection, reduce history retention so stale neutral energy fades out.
 					const float injectionPresence = saturate(injectedLum * 2.5f);
@@ -257,6 +272,7 @@
 
 					const float opacity = max(previous.a, tri.radianceOpacity.a);
 					g_voxelRadianceOut[coord] = float4(radiance, opacity);
+					g_voxelAlbedoOut[coord] = float4(voxelAlbedo, albedoConfidence);
 				}
 			}
 		}

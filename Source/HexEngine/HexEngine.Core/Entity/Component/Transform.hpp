@@ -60,6 +60,7 @@ namespace HexEngine
 		void SetPositionNoNotify(const math::Vector3& position);
 		void SetRotation(const math::Quaternion& rotation);
 		void SetRotationNoNotify(const math::Quaternion& rotation);
+		void SetScaleNoNotify(const math::Vector3& scale);
 
 		void SetEulerYawPitchRoll(float yaw, float pitch, float roll);
 		void SetEulerYawPitchRollDeg(float yaw, float pitch, float roll);

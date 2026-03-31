@@ -33,10 +33,10 @@ void RecastPlugin::Destroy()
 void RecastPlugin::GetVersionData(VersionData* data)
 {
 	data->author = "HexPerson";
-	data->description = "A short description of what your plugin does";
+	data->description = "Recast/Detour based navigation mesh provider";
 	data->majorVersion = 1;
 	data->minorVersion = 0;
-	data->name = "SamplePlugin";
+	data->name = "RecastNavigationPlugin";
 }
 
 /// <summary>

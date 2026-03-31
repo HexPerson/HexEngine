@@ -66,6 +66,9 @@
     <ClInclude Include="UI\Actions\MaterialEditor.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="UI\Actions\NavMeshTool.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="UI\Actions\SceneView.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -129,6 +132,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\Actions\MaterialEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\Actions\NavMeshTool.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\Actions\SceneView.cpp">

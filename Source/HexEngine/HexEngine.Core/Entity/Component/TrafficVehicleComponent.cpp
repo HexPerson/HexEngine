@@ -7,15 +7,9 @@
 #include "../../GUI/Elements/Checkbox.hpp"
 #include "../../GUI/Elements/ComponentWidget.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
-#include "../../GUI/Elements/LineEdit.hpp"
+#include "../../GUI/Elements/EntitySearch.hpp"
 #include "../../Scene/Scene.hpp"
-#include <algorithm>
-#include <cmath>
-#include <functional>
-#include <limits>
-#include <queue>
-#include <unordered_map>
-#include <unordered_set>
+#include "../../Math/FloatMath.hpp"
 
 namespace HexEngine
 {
@@ -50,6 +44,41 @@ namespace HexEngine
 			auto& neighbours = fromIt->second.neighbours;
 			if (std::find(neighbours.begin(), neighbours.end(), to) == neighbours.end())
 				neighbours.push_back(to);
+		}
+
+		bool TryResolveNextLane(Scene* scene, TrafficLaneComponent* currentLane, std::string& outNextLaneName, TrafficLaneComponent*& outNextLane)
+		{
+			outNextLaneName.clear();
+			outNextLane = nullptr;
+
+			if (scene == nullptr || currentLane == nullptr)
+				return false;
+
+			const auto& configuredNext = currentLane->GetNextLaneEntityNames();
+			if (configuredNext.empty())
+				return false;
+
+			// Keep round-robin behaviour, but skip invalid/deleted targets instead of immediately failing.
+			for (size_t attempt = 0; attempt < configuredNext.size(); ++attempt)
+			{
+				const std::string candidateName = currentLane->GetNextLaneEntityName();
+				if (candidateName.empty())
+					continue;
+
+				auto* nextLaneEntity = scene->GetEntityByName(candidateName);
+				if (nextLaneEntity == nullptr || nextLaneEntity->IsPendingDeletion())
+					continue;
+
+				auto* nextLane = nextLaneEntity->GetComponent<TrafficLaneComponent>();
+				if (nextLane == nullptr)
+					continue;
+
+				outNextLaneName = candidateName;
+				outNextLane = nextLane;
+				return true;
+			}
+
+			return false;
 		}
 	}
 
@@ -98,10 +127,24 @@ namespace HexEngine
 		RestartPath();
 	}
 
+	void TrafficVehicleComponent::SetWaypointRouteEndpoints(const std::string& startWaypointEntityName, const std::string& destinationWaypointEntityName)
+	{
+		_startWaypointEntityName = startWaypointEntityName;
+		_destinationWaypointEntityName = destinationWaypointEntityName;
+	}
+
+	bool TrafficVehicleComponent::ConsumeRouteEndReachedEvent()
+	{
+		const bool reached = _routeEndReachedEvent;
+		_routeEndReachedEvent = false;
+		return reached;
+	}
+
 	void TrafficVehicleComponent::RestartPath()
 	{
 		_targetIndex = 0;
 		_plannedRoutePoints.clear();
+		_routeEndReachedEvent = false;
 
 		if (_useWaypointRoute)
 		{
@@ -155,9 +198,11 @@ namespace HexEngine
 			return false;
 
 		std::unordered_map<std::string, WaypointGraphNode> graph;
+		std::unordered_map<Entity*, std::vector<Entity*>> laneWaypointCache;
 
 		std::vector<TrafficLaneComponent*> lanes;
 		scene->GetComponents<TrafficLaneComponent>(lanes);
+
 		for (auto* lane : lanes)
 		{
 			if (lane == nullptr || lane->GetEntity() == nullptr || lane->GetEntity()->IsPendingDeletion())
@@ -165,8 +210,7 @@ namespace HexEngine
 
 			std::vector<Entity*> laneWaypoints;
 			lane->GatherLaneWaypointEntities(laneWaypoints);
-			if (laneWaypoints.empty())
-				continue;
+			laneWaypointCache[lane->GetEntity()] = laneWaypoints;
 
 			for (auto* waypoint : laneWaypoints)
 			{
@@ -176,6 +220,20 @@ namespace HexEngine
 				auto& node = graph[waypoint->GetName()];
 				node.position = waypoint->GetWorldTM().Translation();
 			}
+		}
+
+		for (auto* lane : lanes)
+		{
+			if (lane == nullptr || lane->GetEntity() == nullptr || lane->GetEntity()->IsPendingDeletion())
+				continue;
+
+			const auto cacheIt = laneWaypointCache.find(lane->GetEntity());
+			if (cacheIt == laneWaypointCache.end())
+				continue;
+
+			const auto& laneWaypoints = cacheIt->second;
+			if (laneWaypoints.empty())
+				continue;
 
 			for (size_t i = 0; i + 1 < laneWaypoints.size(); ++i)
 			{
@@ -199,13 +257,14 @@ namespace HexEngine
 				}
 			}
 
-			if (!lane->GetNextLaneEntityNames().empty())
+			const auto& nextLaneNames = lane->GetNextLaneEntityNames();
+			if (!nextLaneNames.empty())
 			{
 				auto* laneEntity = lane->GetEntity();
 				auto* laneTerminal = laneWaypoints.back();
 				if (laneEntity != nullptr && laneTerminal != nullptr && !laneTerminal->IsPendingDeletion())
 				{
-					for (const auto& nextLaneName : lane->GetNextLaneEntityNames())
+					for (const auto& nextLaneName : nextLaneNames)
 					{
 						if (nextLaneName.empty())
 							continue;
@@ -218,8 +277,11 @@ namespace HexEngine
 						if (nextLane == nullptr)
 							continue;
 
-						std::vector<Entity*> nextWaypoints;
-						nextLane->GatherLaneWaypointEntities(nextWaypoints);
+						const auto nextCacheIt = laneWaypointCache.find(nextLaneEntity);
+						if (nextCacheIt == laneWaypointCache.end())
+							continue;
+
+						const auto& nextWaypoints = nextCacheIt->second;
 						if (nextWaypoints.empty() || nextWaypoints.front() == nullptr || nextWaypoints.front()->IsPendingDeletion())
 							continue;
 
@@ -365,6 +427,38 @@ namespace HexEngine
 			return false;
 
 		lane->GatherLanePoints(outPoints);
+		if (outPoints.size() >= 2)
+			return true;
+
+		// Lane graph can be authored as explicit next-node links.
+		// Build a deterministic forward chain to provide at least 2 points for non-route driving mode.
+		auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
+		if (scene == nullptr || outPoints.empty())
+			return false;
+
+		std::unordered_set<std::string> visited;
+		auto* cursor = lane;
+		while (cursor != nullptr && cursor->GetEntity() != nullptr)
+		{
+			if (!visited.insert(cursor->GetEntity()->GetName()).second)
+				break;
+
+			std::string nextName;
+			TrafficLaneComponent* nextLane = nullptr;
+			if (!TryResolveNextLane(scene, cursor, nextName, nextLane))
+				break;
+
+			auto* nextEntity = nextLane->GetEntity();
+			if (nextEntity == nullptr || nextEntity->IsPendingDeletion())
+				break;
+
+			outPoints.push_back(nextEntity->GetWorldTM().Translation());
+			if (outPoints.size() >= 2)
+				return true;
+
+			cursor = nextLane;
+		}
+
 		return outPoints.size() >= 2;
 	}
 
@@ -374,25 +468,18 @@ namespace HexEngine
 		if (currentLane == nullptr)
 			return false;
 
-		const std::string nextLaneName = currentLane->GetNextLaneEntityName();
-		if (nextLaneName.empty())
-			return false;
-
 		auto* scene = GetEntity()->GetScene();
 		if (scene == nullptr)
 			return false;
 
-		auto* nextLaneEntity = scene->GetEntityByName(nextLaneName);
-		if (nextLaneEntity == nullptr || nextLaneEntity->IsPendingDeletion())
-			return false;
-
-		auto* nextLane = nextLaneEntity->GetComponent<TrafficLaneComponent>();
-		if (nextLane == nullptr)
+		std::string nextLaneName;
+		TrafficLaneComponent* nextLane = nullptr;
+		if (!TryResolveNextLane(scene, currentLane, nextLaneName, nextLane))
 			return false;
 
 		std::vector<math::Vector3> points;
 		nextLane->GatherLanePoints(points);
-		if (points.size() < 2)
+		if (points.empty())
 			return false;
 
 		const math::Vector3 vehiclePos = GetEntity()->GetPosition();
@@ -400,31 +487,68 @@ namespace HexEngine
 		const float endDistanceSq = (points.back() - vehiclePos).LengthSquared();
 
 		_laneEntityName = nextLaneName;
-		_invertDirection = (endDistanceSq < startDistanceSq);
-		_targetIndex = _invertDirection ? (points.size() - 1) : 0;
+		if (points.size() >= 2)
+		{
+			_invertDirection = (endDistanceSq < startDistanceSq);
+			_targetIndex = _invertDirection ? (points.size() - 1) : 0;
+		}
+		else
+		{
+			_invertDirection = false;
+			_targetIndex = 0;
+		}
 		return true;
 	}
 
 	bool TrafficVehicleComponent::AdvanceTargetIndex(size_t numPoints)
 	{
 		auto* lane = ResolveLane();
-		if (lane == nullptr || numPoints < 2)
+		if (lane == nullptr)
 		{
 			_targetIndex = 0;
 			return true;
+		}
+
+		if (numPoints < 2)
+		{
+			if (!TrySwitchToConnectedLane())
+			{
+				// If next lanes are configured but currently unresolved, keep retrying instead of treating as route end.
+				if (lane->GetNextLaneEntityNames().empty() == false)
+				{
+					_targetIndex = 0;
+					return false;
+				}
+
+				_targetIndex = 0;
+				return true;
+			}
+			return false;
 		}
 
 		if (_invertDirection)
 		{
 			if (_targetIndex == 0)
 			{
+				// In lane-graph mode, explicit next-lane links take precedence over local looping.
+				if (TrySwitchToConnectedLane())
+				{
+					return false;
+				}
+
 				if (lane->IsLooping())
 				{
 					_targetIndex = numPoints - 1;
 					return false;
 				}
-				else if (!TrySwitchToConnectedLane())
+				else
 				{
+					if (lane->GetNextLaneEntityNames().empty() == false)
+					{
+						_targetIndex = 0;
+						return false;
+					}
+
 					_targetIndex = 0;
 					return true;
 				}
@@ -441,13 +565,25 @@ namespace HexEngine
 			++_targetIndex;
 			if (_targetIndex >= numPoints)
 			{
+				// In lane-graph mode, explicit next-lane links take precedence over local looping.
+				if (TrySwitchToConnectedLane())
+				{
+					return false;
+				}
+
 				if (lane->IsLooping())
 				{
 					_targetIndex = 0;
 					return false;
 				}
-				else if (!TrySwitchToConnectedLane())
+				else
 				{
+					if (lane->GetNextLaneEntityNames().empty() == false)
+					{
+						_targetIndex = numPoints - 1;
+						return false;
+					}
+
 					_targetIndex = numPoints - 1;
 					return true;
 				}
@@ -544,6 +680,10 @@ namespace HexEngine
 				{
 					GetEntity()->DeleteMe();
 				}
+				else
+				{
+					_routeEndReachedEvent = true;
+				}
 				_currentSpeed = 0.0f;
 				return;
 			}
@@ -636,12 +776,16 @@ namespace HexEngine
 
 	bool TrafficVehicleComponent::CreateWidget(ComponentWidget* widget)
 	{
-		auto* laneName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Lane Entity");
+		auto* laneName = new EntitySearch(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Lane Entity");
 		laneName->SetValue(std::wstring(_laneEntityName.begin(), _laneEntityName.end()));
-		laneName->SetDoesCallbackWaitForReturn(false);
-		laneName->SetOnInputFn([this](LineEdit* edit, const std::wstring& value)
+		laneName->SetOnInputFn([this](EntitySearch* search, const std::wstring& value)
 		{
 			_laneEntityName = std::string(value.begin(), value.end());
+			RestartPath();
+		});
+		laneName->SetOnSelectFn([this](EntitySearch* search, const EntitySearchResult& result)
+		{
+			_laneEntityName = result.entityName;
 			RestartPath();
 		});
 		laneName->SetPrefabOverrideBinding(GetComponentName(), "/_laneEntityName");
@@ -658,21 +802,29 @@ namespace HexEngine
 			return true;
 		});
 
-		auto* startWaypoint = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Route Start Waypoint");
+		auto* startWaypoint = new EntitySearch(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Route Start Waypoint");
 		startWaypoint->SetValue(std::wstring(_startWaypointEntityName.begin(), _startWaypointEntityName.end()));
-		startWaypoint->SetDoesCallbackWaitForReturn(false);
-		startWaypoint->SetOnInputFn([this](LineEdit* edit, const std::wstring& value)
+		startWaypoint->SetOnInputFn([this](EntitySearch* search, const std::wstring& value)
 		{
 			_startWaypointEntityName = std::string(value.begin(), value.end());
 			RestartPath();
 		});
+		startWaypoint->SetOnSelectFn([this](EntitySearch* search, const EntitySearchResult& result)
+		{
+			_startWaypointEntityName = result.entityName;
+			RestartPath();
+		});
 
-		auto* destinationWaypoint = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Route Destination");
+		auto* destinationWaypoint = new EntitySearch(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Route Destination");
 		destinationWaypoint->SetValue(std::wstring(_destinationWaypointEntityName.begin(), _destinationWaypointEntityName.end()));
-		destinationWaypoint->SetDoesCallbackWaitForReturn(false);
-		destinationWaypoint->SetOnInputFn([this](LineEdit* edit, const std::wstring& value)
+		destinationWaypoint->SetOnInputFn([this](EntitySearch* search, const std::wstring& value)
 		{
 			_destinationWaypointEntityName = std::string(value.begin(), value.end());
+			RestartPath();
+		});
+		destinationWaypoint->SetOnSelectFn([this](EntitySearch* search, const EntitySearchResult& result)
+		{
+			_destinationWaypointEntityName = result.entityName;
 			RestartPath();
 		});
 

@@ -28,11 +28,14 @@ namespace HexEngine
 		_colliderShape = copy->_colliderShape;
 		_colliderData = copy->_colliderData;
 
-		_rigidBody = g_pEnv->_physicsSystem->CloneRigidBody(
-			copy->GetIRigidBody(), 
-			GetEntity()->GetComponent<Transform>(),
-			this,
-			copy->GetIRigidBody()->GetBodyType());
+		if (auto rb = copy->GetIRigidBody())
+		{
+			_rigidBody = g_pEnv->_physicsSystem->CloneRigidBody(
+				rb,
+				GetEntity()->GetComponent<Transform>(),
+				this,
+				rb->GetBodyType());
+		}
 	}
 
 	void RigidBody::Destroy()

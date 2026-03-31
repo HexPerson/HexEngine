@@ -328,7 +328,7 @@ namespace HexEngine
 			pitch -= 360.0f;
 
 		const auto rotation = math::Quaternion::CreateFromYawPitchRoll(ToRadian(_sunYawDegrees), ToRadian(pitch), ToRadian(0.0f));
-		transform->SetRotation(rotation);
+		transform->SetRotationNoNotify(rotation);
 	}
 
 	void DayNightCycleComponent::ApplyAmbientLight()

@@ -28,21 +28,25 @@
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	Texture3D g_voxelRadianceTex0 : register(t5);
 	Texture3D g_voxelOpacityTex0 : register(t6);
-	Texture2D g_probeIrradianceTex0 : register(t7);
-	Texture2D g_probeVisibilityTex0 : register(t8);
-	Texture3D g_voxelRadianceTex1 : register(t9);
-	Texture3D g_voxelOpacityTex1 : register(t10);
-	Texture2D g_probeIrradianceTex1 : register(t11);
-	Texture2D g_probeVisibilityTex1 : register(t12);
-	Texture3D g_voxelRadianceTex2 : register(t13);
-	Texture3D g_voxelOpacityTex2 : register(t14);
-	Texture2D g_probeIrradianceTex2 : register(t15);
-	Texture2D g_probeVisibilityTex2 : register(t16);
-	Texture3D g_voxelRadianceTex3 : register(t17);
-	Texture3D g_voxelOpacityTex3 : register(t18);
-	Texture2D g_probeIrradianceTex3 : register(t19);
-	Texture2D g_probeVisibilityTex3 : register(t20);
-	Texture2D g_sceneLightingTex : register(t21);
+	Texture3D g_voxelAlbedoTex0 : register(t7);
+	Texture2D g_probeIrradianceTex0 : register(t8);
+	Texture2D g_probeVisibilityTex0 : register(t9);
+	Texture3D g_voxelRadianceTex1 : register(t10);
+	Texture3D g_voxelOpacityTex1 : register(t11);
+	Texture3D g_voxelAlbedoTex1 : register(t12);
+	Texture2D g_probeIrradianceTex1 : register(t13);
+	Texture2D g_probeVisibilityTex1 : register(t14);
+	Texture3D g_voxelRadianceTex2 : register(t15);
+	Texture3D g_voxelOpacityTex2 : register(t16);
+	Texture3D g_voxelAlbedoTex2 : register(t17);
+	Texture2D g_probeIrradianceTex2 : register(t18);
+	Texture2D g_probeVisibilityTex2 : register(t19);
+	Texture3D g_voxelRadianceTex3 : register(t20);
+	Texture3D g_voxelOpacityTex3 : register(t21);
+	Texture3D g_voxelAlbedoTex3 : register(t22);
+	Texture2D g_probeIrradianceTex3 : register(t23);
+	Texture2D g_probeVisibilityTex3 : register(t24);
+	Texture2D g_sceneLightingTex : register(t25);
 
 	SamplerState g_pointSampler : register(s2);
 	SamplerState g_linearSampler : register(s4);
@@ -57,7 +61,7 @@
 		float4 g_giParams3; // xyz=sunDirectionWS, w=sunDirectionality
 		float4 g_giParams4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 		float4 g_giParams5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
-		float4 g_giParams6; // x=voxelNeighbourBlend, y=shiftSettle, z,w=reserved
+		float4 g_giParams6; // x=voxelNeighbourBlend, y=shiftSettle, z=voxelAlbedoInfluence, w=reserved
 	};
 
 	static const float3 kClipDebugColours[4] =
@@ -103,6 +107,17 @@
 		case 1: return g_voxelOpacityTex1.SampleLevel(g_linearSampler, uvw, 0.0f).r;
 		case 2: return g_voxelOpacityTex2.SampleLevel(g_linearSampler, uvw, 0.0f).r;
 		default: return g_voxelOpacityTex3.SampleLevel(g_linearSampler, uvw, 0.0f).r;
+		}
+	}
+
+	float4 SampleVoxelAlbedo(uint clipIdx, float3 uvw)
+	{
+		switch (clipIdx)
+		{
+		case 0: return g_voxelAlbedoTex0.SampleLevel(g_linearSampler, uvw, 0.0f);
+		case 1: return g_voxelAlbedoTex1.SampleLevel(g_linearSampler, uvw, 0.0f);
+		case 2: return g_voxelAlbedoTex2.SampleLevel(g_linearSampler, uvw, 0.0f);
+		default: return g_voxelAlbedoTex3.SampleLevel(g_linearSampler, uvw, 0.0f);
 		}
 	}
 
@@ -274,6 +289,8 @@
 		float3 voxelRadiance = 0.0f.xxx;
 		float occAccum = 0.0f;
 		float accumW = 0.0f;
+		float3 albedoAccum = 0.0f.xxx;
+		float albedoWeightAccum = 0.0f;
 
 		const float3 localOffsets[7] =
 		{
@@ -291,10 +308,14 @@
 			const float w = (n == 0) ? 1.0f : 0.70f;
 			const float3 suv = saturate(uvw + jitterUVW + localOffsets[n] * voxelTexel * 1.5f);
 			const float4 voxelData = SampleVoxelRadiance(clipIdx, suv);
+			const float4 albedoData = SampleVoxelAlbedo(clipIdx, suv);
 			const float occSample = (g_giParams2.w > 0.5f) ? voxelData.a : SampleVoxelOpacity(clipIdx, suv);
 			voxelRadiance += voxelData.rgb * w;
 			occAccum += occSample * w;
 			accumW += w;
+			const float albedoW = w * saturate(albedoData.a);
+			albedoAccum += saturate(albedoData.rgb) * albedoW;
+			albedoWeightAccum += albedoW;
 		}
 
 		float transmittance = 1.0f;
@@ -304,16 +325,24 @@
 			const float rayT = (float)(coneStep + 1u) * stepScale * 3.0f;
 			const float3 rayUVW = saturate(uvw + jitterUVW * 0.5f + worldNormal * rayT);
 			const float4 voxelData = SampleVoxelRadiance(clipIdx, rayUVW);
+			const float4 albedoData = SampleVoxelAlbedo(clipIdx, rayUVW);
 			const float occSample = (g_giParams2.w > 0.5f) ? voxelData.a : SampleVoxelOpacity(clipIdx, rayUVW);
 			const float w = 0.85f * transmittance;
 			voxelRadiance += voxelData.rgb * w;
 			occAccum += occSample * w;
 			accumW += w;
+			const float albedoW = w * saturate(albedoData.a) * 0.75f;
+			albedoAccum += saturate(albedoData.rgb) * albedoW;
+			albedoWeightAccum += albedoW;
 			transmittance *= (1.0f - saturate(occSample) * 0.40f);
 		}
 
 		voxelRadiance /= max(accumW, 1e-4f);
 		float voxelOcc = saturate(occAccum / max(accumW, 1e-4f));
+		float3 voxelAlbedo = (albedoWeightAccum > 1e-4f)
+			? saturate(albedoAccum / albedoWeightAccum)
+			: 1.0f.xxx;
+		float voxelAlbedoConfidence = saturate(albedoWeightAccum / max(accumW, 1e-4f));
 
 		// Optional neighbour smoothing to reduce visible voxel-grid patterning on large flat surfaces.
 		const float neighbourBlend = saturate(g_giParams6.x);
@@ -331,20 +360,30 @@
 
 			float3 neighRad = 0.0f.xxx;
 			float neighOcc = 0.0f;
+			float3 neighAlb = 0.0f.xxx;
+			float neighAlbConf = 0.0f;
 			[unroll]
 			for (uint n = 0; n < 6; ++n)
 			{
 				const float3 nuv = saturate(uvw + nOff[n] * voxelTexel);
 				const float4 nData = SampleVoxelRadiance(clipIdx, nuv);
+				const float4 nAlb = SampleVoxelAlbedo(clipIdx, nuv);
 				const float nOcc = (g_giParams2.w > 0.5f) ? nData.a : SampleVoxelOpacity(clipIdx, nuv);
 				neighRad += nData.rgb;
 				neighOcc += nOcc;
+				neighAlb += saturate(nAlb.rgb) * saturate(nAlb.a);
+				neighAlbConf += saturate(nAlb.a);
 			}
 			neighRad *= (1.0f / 6.0f);
 			neighOcc *= (1.0f / 6.0f);
+			const float neighAlbInv = (neighAlbConf > 1e-4f) ? rcp(neighAlbConf) : 0.0f;
+			const float3 neighAlbAvg = (neighAlbConf > 1e-4f) ? (neighAlb * neighAlbInv) : 1.0f.xxx;
+			const float neighAlbConfAvg = saturate(neighAlbConf * (1.0f / 6.0f));
 
 			voxelRadiance = lerp(voxelRadiance, neighRad, neighbourBlend);
 			voxelOcc = lerp(voxelOcc, saturate(neighOcc), neighbourBlend * 0.75f);
+			voxelAlbedo = lerp(voxelAlbedo, neighAlbAvg, neighbourBlend * 0.65f);
+			voxelAlbedoConfidence = lerp(voxelAlbedoConfidence, neighAlbConfAvg, neighbourBlend * 0.65f);
 		}
 
 		const float3 probeIrr = SampleProbeIrradianceTrilinear(clipIdx, uvw);
@@ -353,16 +392,26 @@
 		const float voxelMax = max(voxelRadiance.r, max(voxelRadiance.g, voxelRadiance.b));
 		const float voxelMin = min(voxelRadiance.r, min(voxelRadiance.g, voxelRadiance.b));
 		const float voxelChroma = saturate(voxelMax - voxelMin);
+		const float albedoMax = max(voxelAlbedo.r, max(voxelAlbedo.g, voxelAlbedo.b));
+		const float albedoMin = min(voxelAlbedo.r, min(voxelAlbedo.g, voxelAlbedo.b));
+		const float albedoChroma = saturate(albedoMax - albedoMin);
+		const float chromaGuidance = max(voxelChroma, albedoChroma * voxelAlbedoConfidence);
 
 		const float horizon = saturate(worldNormal.y * 0.5f + 0.5f);
 		const float probeBlendBase = saturate(g_giParams2.y);
 		// Keep probe contribution lower in strongly chromatic voxel regions (typical local colored lights)
 		// to avoid desaturating into neutral/white halos.
-		const float probeBlend = probeBlendBase * (1.0f - voxelChroma * 0.75f);
+		const float probeBlend = probeBlendBase * (1.0f - chromaGuidance * 0.75f);
 		float3 gi = lerp(voxelRadiance * 0.85f, probeGi, saturate(probeBlend));
 		gi *= lerp(0.55f, 1.0f, horizon);
 		gi *= (1.0f - voxelOcc * 0.12f);
 		gi += screenBounce * g_giParams2.x;
+		const float albedoConfidenceSoft = smoothstep(0.15f, 0.80f, voxelAlbedoConfidence);
+		const float albedoInfluence = saturate(g_giParams6.z) * albedoConfidenceSoft;
+		const float3 stableAlbedo = max(voxelAlbedo, float3(0.35f, 0.35f, 0.35f));
+		const float3 albedoTint = lerp(1.0f.xxx, stableAlbedo, albedoInfluence * 0.85f);
+		const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
+		gi *= (albedoTint / tintLuma);
 
 		// Preserve voxel tint in high-chroma regions after probe/screen blending.
 		const float giLum = dot(gi, float3(0.2126f, 0.7152f, 0.0722f));
@@ -371,7 +420,7 @@
 		{
 			const float3 voxelTint = max(0.0f.xxx, voxelRadiance / voxelLum);
 			const float3 giTinted = voxelTint * giLum;
-			const float tintStrength = saturate(voxelChroma * 1.8f) * saturate(voxelLum * 1.4f);
+			const float tintStrength = saturate(chromaGuidance * 1.8f) * saturate(voxelLum * 1.4f);
 			gi = lerp(gi, giTinted, tintStrength * 0.75f);
 		}
 

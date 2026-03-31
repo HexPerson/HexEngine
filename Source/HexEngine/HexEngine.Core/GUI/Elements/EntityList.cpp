@@ -2,6 +2,7 @@
 #include "EntityList.hpp"
 #include "../../FileSystem/FileSystem.hpp"
 #include "../../Entity\Entity.hpp"
+#include "../../Entity/Component/TrafficLaneComponent.hpp"
 #include "../../Environment\IEnvironment.hpp"
 #include "../../Scene\SceneManager.hpp"
 #include <algorithm>
@@ -36,6 +37,19 @@ namespace HexEngine
 
 			static const EntityListState emptyState{};
 			return emptyState;
+		}
+
+		void TryAutoLinkDuplicatedTrafficLane(Entity* source, Entity* duplicate)
+		{
+			if (source == nullptr || duplicate == nullptr || source == duplicate)
+				return;
+
+			auto* sourceLane = source->GetComponent<TrafficLaneComponent>();
+			auto* duplicateLane = duplicate->GetComponent<TrafficLaneComponent>();
+			if (sourceLane == nullptr || duplicateLane == nullptr)
+				return;
+
+			sourceLane->AddNextLaneEntityName(duplicate->GetName());
 		}
 	}
 
@@ -371,6 +385,7 @@ namespace HexEngine
 			return;
 
 		auto* duplicate = g_pEnv->_sceneManager->GetCurrentScene()->CloneEntity(entity, entity->GetName(), entity->GetPosition(), entity->GetRotation(), entity->GetScale());
+		TryAutoLinkDuplicatedTrafficLane(entity, duplicate);
 		if (_onEntityDuplicated && duplicate != nullptr)
 		{
 			_onEntityDuplicated(this, entity, duplicate);

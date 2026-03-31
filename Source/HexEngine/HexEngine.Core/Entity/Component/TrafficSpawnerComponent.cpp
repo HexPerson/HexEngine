@@ -9,7 +9,7 @@
 #include "../../GUI/Elements/ComponentWidget.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../GUI/Elements/DragInt.hpp"
-#include "../../GUI/Elements/LineEdit.hpp"
+#include "../../GUI/Elements/EntitySearch.hpp"
 #include "../../Scene/Scene.hpp"
 #include <algorithm>
 #include <format>
@@ -96,12 +96,15 @@ namespace HexEngine
 
 	bool TrafficSpawnerComponent::CreateWidget(ComponentWidget* widget)
 	{
-		auto* laneName = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Lane Entity");
+		auto* laneName = new EntitySearch(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Lane Entity");
 		laneName->SetValue(std::wstring(_laneEntityName.begin(), _laneEntityName.end()));
-		laneName->SetDoesCallbackWaitForReturn(false);
-		laneName->SetOnInputFn([this](LineEdit* edit, const std::wstring& value)
+		laneName->SetOnInputFn([this](EntitySearch* search, const std::wstring& value)
 		{
 			_laneEntityName = std::string(value.begin(), value.end());
+		});
+		laneName->SetOnSelectFn([this](EntitySearch* search, const EntitySearchResult& result)
+		{
+			_laneEntityName = result.entityName;
 		});
 
 		new ArrayElement<std::string>(

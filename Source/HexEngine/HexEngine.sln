@@ -23,10 +23,6 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "HexEngine.AssimpPlugin", "P
 	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "HexEngine.Shaders", "HexEngine.Shaders\HexEngine.Shaders.vcxproj", "{05A66D02-FE8F-435C-9CCE-918DF543FC88}"
-	ProjectSection(ProjectDependencies) = postProject
-		{6E10D5FF-D039-4D73-948B-49E29E39A1FA} = {6E10D5FF-D039-4D73-948B-49E29E39A1FA}
-		{E6C42CD6-A33C-4C6C-B1FA-A0E1B5EAAF8B} = {E6C42CD6-A33C-4C6C-B1FA-A0E1B5EAAF8B}
-	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "HexEngine.AssetPacker", "HexEngine.AssetPacker\HexEngine.AssetPacker.vcxproj", "{F6DA822C-3C54-466A-8864-83294F080931}"
 	ProjectSection(ProjectDependencies) = postProject
@@ -388,7 +384,7 @@ Global
 		{C75DEAAE-0E86-4970-97DC-11CE4E20E981} = {FB9A261D-5A41-4139-9B3F-F8922326A9D1}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {DB1DC007-5C32-45FB-A793-07226ECC6F64}
 		VisualSVNWorkingCopyRoot = .
+		SolutionGuid = {DB1DC007-5C32-45FB-A793-07226ECC6F64}
 	EndGlobalSection
 EndGlobal

@@ -10,7 +10,7 @@ namespace HexEditor
 {
 	class LogScrollView;
 
-	class Explorer : public HexEngine::Dock, public HexEngine::ILogFileListener
+	class Explorer : public HexEngine::Element, public HexEngine::ILogFileListener
 	{
 	public:
 		using AssetDesc = AssetExplorer::AssetDesc;

@@ -5,6 +5,7 @@
 #include "Actions\ProjectGenerator.hpp"
 #include "Actions\Settings.hpp"
 #include "Actions\Terrain.hpp"
+#include "Actions\NavMeshTool.hpp"
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
 
 #include "Gadgets\ScaleGadget.hpp"
@@ -130,7 +131,7 @@ namespace HexEditor
 			HexEngine::g_pEnv->_sceneManager->SetActiveScene(sceneToActivateAfterLoad);
 
 			_projectFile->_scenes = _sceneFiles;
-			_entityList->RefreshList();
+			_entityListRefreshPending = true;
 
 			
 		}
@@ -330,6 +331,11 @@ namespace HexEditor
 				actionSettings->name = L"Settings";
 				actionSettings->action = std::bind(&EditorUI::ShowSettingsDialog, this);
 				_mainMenu->AddSubItem(scene, actionSettings);
+
+				HexEngine::MenuBar::Item* actionNavMesh = new HexEngine::MenuBar::Item;
+				actionNavMesh->name = L"Navigation Mesh...";
+				actionNavMesh->action = std::bind(&EditorUI::ShowNavMeshDialog, this);
+				_mainMenu->AddSubItem(scene, actionNavMesh);
 
 				HexEngine::MenuBar::Item* actionGenerateHlod = new HexEngine::MenuBar::Item;
 				actionGenerateHlod->name = L"Generate HLOD (Scaffold)";
@@ -555,6 +561,11 @@ namespace HexEditor
 	void EditorUI::ShowSettingsDialog()
 	{
 		auto settingsDlg = Settings::CreateSettingsDialog(_rootElement, nullptr);
+	}
+
+	void EditorUI::ShowNavMeshDialog()
+	{
+		auto* navMeshDialog = NavMeshTool::CreateEditorDialog(_rootElement);
 	}
 
 	void EditorUI::OnAddPrimitive(PrimitiveType type)
@@ -1078,12 +1089,12 @@ namespace HexEditor
 
 	void EditorUI::Render()
 	{
-		UIManager::Render();		
+		uint32_t width, height;
+		HexEngine::g_pEnv->GetScreenSize(width, height);
 
-		//int32_t mx, my;
-		//g_pEnv->_inputSystem->GetMousePosition(mx, my);
+		GetRenderer()->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(44, 44, 45, 255)));
 
-		//g_pEnv->_uiManager->GetRenderer()->FillQuad(mx, my, 10, 10, math::Color(1, 0, 0, 1));
+		UIManager::Render();
 	}
 
 	void EditorUI::CheckCentralDockRoamState()

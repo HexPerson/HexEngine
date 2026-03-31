@@ -5,6 +5,7 @@
 "ComputeShader"
 {
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
+	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -16,6 +17,7 @@
 		float4 g_giParams3;
 		float4 g_giParams4;
 		float4 g_giParams5;
+		float4 g_giParams6;
 	};
 
 	[numthreads(8, 8, 8)]
@@ -35,5 +37,13 @@
 			value = 0.0f.xxxx;
 		}
 		g_voxelRadianceOut[tid] = value;
+
+		float4 albedo = g_voxelAlbedoOut[tid];
+		albedo.a *= decay;
+		if (albedo.a < 0.01f)
+		{
+			albedo = 0.0f.xxxx;
+		}
+		g_voxelAlbedoOut[tid] = albedo;
 	}
 }

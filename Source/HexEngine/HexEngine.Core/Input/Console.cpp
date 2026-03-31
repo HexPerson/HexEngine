@@ -56,7 +56,7 @@ namespace HexEngine
 
 		if (_canvas.BeginDraw(renderer, width, height /*<< 1*/))
 		{
-			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 190)));
+			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 220)));
 			renderer->Line(0, height, width, height, math::Color(HEX_RGBA_TO_FLOAT4(5, 5, 5, 255)));
 
 			std::wstring input = L"] ";
@@ -94,7 +94,7 @@ namespace HexEngine
 			for (auto& line : _lines)
 			{
 				std::wstring wline(line.begin(), line.end());
-				math::Color col(1, 1, 0.5, 1);
+				math::Color col(1, 1, 0.85, 1);
 
 				while (true)
 				{
@@ -206,6 +206,9 @@ namespace HexEngine
 			_input.clear();
 
 			_canvas.Redraw();
+
+			_historyIdx = 0;
+
 			return;
 		}
 

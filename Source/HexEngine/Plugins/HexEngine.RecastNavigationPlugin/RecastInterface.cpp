@@ -6,6 +6,7 @@
 #include "Detour/Include/DetourCommon.h"
 
 #include "RecastInterface.hpp"
+#include <algorithm>
 
 enum PolyAreas
 {
@@ -35,31 +36,128 @@ bool RecastInterface::Create()
 
 void RecastInterface::Destroy()
 {
+	CleanupBuildData();
 
+	for (auto& navMesh : _navMeshes)
+	{
+		FreeNavMesh(navMesh);
+	}
+	_navMeshes.clear();
+}
+
+void RecastInterface::CleanupBuildData()
+{
+	if (_heightField != nullptr)
+	{
+		rcFreeHeightField(_heightField);
+		_heightField = nullptr;
+	}
+
+	if (_compactHF != nullptr)
+	{
+		rcFreeCompactHeightfield(_compactHF);
+		_compactHF = nullptr;
+	}
+
+	if (_cset != nullptr)
+	{
+		rcFreeContourSet(_cset);
+		_cset = nullptr;
+	}
+
+	if (_polyMesh != nullptr)
+	{
+		rcFreePolyMesh(_polyMesh);
+		_polyMesh = nullptr;
+	}
+
+	if (_detailMesh != nullptr)
+	{
+		rcFreePolyMeshDetail(_detailMesh);
+		_detailMesh = nullptr;
+	}
+}
+
+void RecastInterface::FreeNavMesh(NavMeshes& meshData)
+{
+	if (meshData.navMeshQuery != nullptr)
+	{
+		dtFreeNavMeshQuery(meshData.navMeshQuery);
+		meshData.navMeshQuery = nullptr;
+	}
+
+	if (meshData.navMesh != nullptr)
+	{
+		dtFreeNavMesh(meshData.navMesh);
+		meshData.navMesh = nullptr;
+		meshData.navMeshData = nullptr;
+	}
+
+	if (meshData.navMeshData != nullptr)
+	{
+		dtFree(meshData.navMeshData);
+		meshData.navMeshData = nullptr;
+	}
 }
 
 bool RecastInterface::CreateNavMeshForScene(HexEngine::Scene* scene, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh)
 {
-	return CreateNavMeshInternal(scene, nullptr, params, navMesh);
+	int32_t replaceIndex = -1;
+	for (size_t i = 0; i < _navMeshes.size(); ++i)
+	{
+		if (_navMeshes[i].scene == scene && _navMeshes[i].chunk == nullptr)
+		{
+			replaceIndex = (int32_t)i;
+			break;
+		}
+	}
+
+	return CreateNavMeshInternal(scene, nullptr, params, navMesh, replaceIndex);
 }
 
 bool RecastInterface::CreateNavMeshForChunk(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh)
 {
-	return CreateNavMeshInternal(scene, chunk, params, navMesh);
+	int32_t replaceIndex = -1;
+	for (size_t i = 0; i < _navMeshes.size(); ++i)
+	{
+		if (_navMeshes[i].scene == scene && _navMeshes[i].chunk == chunk)
+		{
+			replaceIndex = (int32_t)i;
+			break;
+		}
+	}
+
+	return CreateNavMeshInternal(scene, chunk, params, navMesh, replaceIndex);
 }
 
 bool RecastInterface::RebuildMesh(HexEngine::NavMeshId id)
 {
-	auto navMesh = _navMeshes.at(id);
+	if (id >= _navMeshes.size())
+	{
+		LOG_WARN("RebuildMesh called with invalid navmesh id: %u", id);
+		return false;
+	}
 
-	dtFreeNavMesh(navMesh.navMesh);
-	navMesh.navMesh = nullptr;
+	auto& existing = _navMeshes[id];
+	if (existing.scene == nullptr)
+	{
+		LOG_WARN("Cannot rebuild navmesh %u because the source scene is no longer valid", id);
+		return false;
+	}
 
-	return true;
+	return CreateNavMeshInternal(existing.scene, existing.chunk, existing.params, &id, (int32_t)id);
 }
 
-bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh)
+bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh, int32_t replaceIndex)
 {
+	if (scene == nullptr || navMesh == nullptr)
+	{
+		LOG_WARN("CreateNavMeshInternal called with invalid arguments");
+		return false;
+	}
+
+	CleanupBuildData();
+
 	int32_t width = 0;
 	int32_t height = 0;
 
@@ -93,11 +191,11 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	if (!rcCreateHeightfield(this, *_heightField, width, height, &min.x, &max.x, params.cs, params.ch))
 	{
 		LOG_CRIT("buildNavigation: Could not create solid heightfield.");
+		CleanupBuildData();
 		return false;
 	}
 
-	
-	uint32_t numFaces;
+	uint32_t numFaces = 0;
 	std::vector<math::Vector3> vertices;
 	std::vector<uint32_t> indices;
 
@@ -110,17 +208,25 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 		scene->CalculateSceneStats_UInt32(vertices, indices, numFaces, HexEngine::EntityFlags::DoNotBlockNavMesh);
 	}
 
-	_triAreas = new uint8_t[numFaces];
+	if (numFaces == 0 || vertices.empty() || indices.empty())
+	{
+		LOG_WARN("Navigation mesh build skipped because no valid geometry was found");
+		CleanupBuildData();
+		return false;
+	}
+
+	std::vector<uint8_t> triAreas(numFaces);
 
 	// Find triangles which are walkable based on their slope and rasterize them.
 	// If your input data is multiple meshes, you can transform them here, calculate
 	// the are type for each of the meshes and rasterize them.
-	memset(_triAreas, 0, numFaces * sizeof(unsigned char));
-	rcMarkWalkableTriangles(this, params.walkableSlopeAngle, &vertices.data()->x, vertices.size(), (int*)indices.data(), numFaces, _triAreas);
+	memset(triAreas.data(), 0, numFaces * sizeof(unsigned char));
+	rcMarkWalkableTriangles(this, params.walkableSlopeAngle, &vertices.data()->x, (int)vertices.size(), (int*)indices.data(), (int)numFaces, triAreas.data());
 
-	if (!rcRasterizeTriangles(this, &vertices.data()->x, vertices.size(), (int*)indices.data(), _triAreas, numFaces, *_heightField, params.walkableClimb))
+	if (!rcRasterizeTriangles(this, &vertices.data()->x, (int)vertices.size(), (int*)indices.data(), triAreas.data(), (int)numFaces, *_heightField, params.walkableClimb))
 	{
 		LOG_CRIT("buildNavigation: Could not rasterize triangles.");
+		CleanupBuildData();
 		return false;
 	}
 
@@ -135,11 +241,13 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	if (!_compactHF)
 	{
 		LOG_CRIT("buildNavigation: Out of memory 'chf'.");
+		CleanupBuildData();
 		return false;
 	}
 	if (!rcBuildCompactHeightfield(this, params.walkableHeight, params.walkableClimb, *_heightField, *_compactHF))
 	{
 		LOG_CRIT("buildNavigation: Could not build compact data.");
+		CleanupBuildData();
 		return false;
 	}
 
@@ -150,6 +258,7 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	if (!rcErodeWalkableArea(this, params.walkableRadius, *_compactHF))
 	{
 		LOG_CRIT("buildNavigation: Could not erode.");
+		CleanupBuildData();
 		return false;
 	}
 
@@ -172,7 +281,8 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	if (!rcBuildRegionsMonotone(this, *_compactHF, params.borderSize, params.minRegionArea, params.mergeRegionArea))
 	{
 		LOG_CRIT("buildNavigation: Could not build monotone regions.");
-		return 0;
+		CleanupBuildData();
+		return false;
 	}
 
 	/*if (!rcBuildLayerRegions(this, *_compactHF, params.borderSize, params.minRegionArea))
@@ -185,11 +295,13 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	if (!_cset)
 	{
 		LOG_CRIT("buildNavigation: Out of memory 'cset'.");
+		CleanupBuildData();
 		return false;
 	}
 	if (!rcBuildContours(this, *_compactHF, params.maxSimplificationError, params.maxEdgeLen, *_cset))
 	{
 		LOG_CRIT("buildNavigation: Could not create contours.");
+		CleanupBuildData();
 		return false;
 	}
 
@@ -198,11 +310,13 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	if (!_polyMesh)
 	{
 		LOG_CRIT("buildNavigation: Out of memory 'pmesh'.");
+		CleanupBuildData();
 		return false;
 	}
 	if (!rcBuildPolyMesh(this, *_cset, params.maxVertsPerPoly, *_polyMesh))
 	{
 		LOG_CRIT("buildNavigation: Could not triangulate contours.");
+		CleanupBuildData();
 		return false;
 	}
 
@@ -214,12 +328,14 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	if (!_detailMesh)
 	{
 		LOG_CRIT("buildNavigation: Out of memory 'pmdtl'.");
+		CleanupBuildData();
 		return false;
 	}
 
 	if (!rcBuildPolyMeshDetail(this, *_polyMesh, *_compactHF, params.detailSampleDist, params.detailSampleMaxError, *_detailMesh))
 	{
 		LOG_CRIT("buildNavigation: Could not build detail mesh.");
+		CleanupBuildData();
 		return false;
 	}
 
@@ -228,11 +344,19 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	rcFreeContourSet(_cset);
 	_cset = 0;
 
-	return CreateRoutingData(navMesh);
+	const bool created = CreateRoutingData(scene, chunk, params, navMesh, replaceIndex);
+	CleanupBuildData();
+	return created;
 }
 
-bool RecastInterface::CreateRoutingData(HexEngine::NavMeshId* navMesh)
+bool RecastInterface::CreateRoutingData(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh, int32_t replaceIndex)
 {
+	if (_polyMesh == nullptr || _detailMesh == nullptr || navMesh == nullptr)
+	{
+		LOG_CRIT("Could not create routing data because the generated polygon mesh is invalid.");
+		return false;
+	}
+
 	for (int i = 0; i < _polyMesh->npolys; ++i)
 	{
 		if (_polyMesh->areas[i] == RC_WALKABLE_AREA)
@@ -290,6 +414,9 @@ bool RecastInterface::CreateRoutingData(HexEngine::NavMeshId* navMesh)
 	int navDataSize = 0;
 
 	NavMeshes stored;
+	stored.scene = scene;
+	stored.chunk = chunk;
+	stored.params = params;
 
 
 	if (!dtCreateNavMeshData(&dtparams, &stored.navMeshData, &navDataSize))
@@ -311,7 +438,7 @@ bool RecastInterface::CreateRoutingData(HexEngine::NavMeshId* navMesh)
 	status = stored.navMesh->init(stored.navMeshData, navDataSize, DT_TILE_FREE_DATA);
 	if (dtStatusFailed(status))
 	{
-		dtFree(stored.navMeshData);
+		FreeNavMesh(stored);
 		LOG_CRIT("Could not init Detour navmesh");
 		return false;
 	}
@@ -321,8 +448,17 @@ bool RecastInterface::CreateRoutingData(HexEngine::NavMeshId* navMesh)
 	status = stored.navMeshQuery->init(stored.navMesh, 2048);
 	if (dtStatusFailed(status))
 	{
+		FreeNavMesh(stored);
 		LOG_CRIT("Could not init Detour navmesh query");
 		return false;
+	}
+
+	if (replaceIndex >= 0 && replaceIndex < (int32_t)_navMeshes.size())
+	{
+		FreeNavMesh(_navMeshes[(size_t)replaceIndex]);
+		_navMeshes[(size_t)replaceIndex] = stored;
+		*navMesh = (HexEngine::NavMeshId)replaceIndex;
+		return true;
 	}
 
 	_navMeshes.push_back(stored);
@@ -334,10 +470,23 @@ bool RecastInterface::CreateRoutingData(HexEngine::NavMeshId* navMesh)
 
 void RecastInterface::DebugRender()
 {
-	//duDebugDrawPolyMesh(&_debugRenderer, *_polyMesh);
-	for(auto nav : _navMeshes)
+	// Draw only the latest navmesh per (scene, chunk) pair to avoid visual overlap
+	// when meshes are rebuilt/recreated over time.
+	std::vector<std::pair<HexEngine::Scene*, HexEngine::Chunk*>> drawnPairs;
+	drawnPairs.reserve(_navMeshes.size());
+
+	for (int32_t i = (int32_t)_navMeshes.size() - 1; i >= 0; --i)
 	{
-		duDebugDrawNavMesh(&_debugRenderer, *nav.navMesh, DU_DRAWNAVMESH_COLOR_TILES | DU_DRAWNAVMESH_CLOSEDLIST);
+		const auto& nav = _navMeshes[(size_t)i];
+		if (nav.navMesh == nullptr)
+			continue;
+
+		const std::pair<HexEngine::Scene*, HexEngine::Chunk*> key{ nav.scene, nav.chunk };
+		if (std::find(drawnPairs.begin(), drawnPairs.end(), key) != drawnPairs.end())
+			continue;
+
+		drawnPairs.push_back(key);
+		duDebugDrawNavMesh(&_debugRenderer, *nav.navMesh, DU_DRAWNAVMESH_COLOR_TILES);
 
 		//duDebugDrawCompactHeightfieldSolid(&_debugRenderer, *_compactHF);
 	}
@@ -455,14 +604,27 @@ static int fixupShortcuts(dtPolyRef* path, int npath, dtNavMeshQuery* navQuery)
 
 void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 {
+	if (params.meshId >= _navMeshes.size())
+	{
+		LOG_WARN("FindPath called with invalid navmesh id: %u", params.meshId);
+		result.path.clear();
+		return;
+	}
+
 	auto navMesh = _navMeshes.at(params.meshId);
 
-	math::Vector3 nearestSp, nearestEp;
-	dtPolyRef startRef, endRef;
+	math::Vector3 nearestSp = math::Vector3::Zero;
+	math::Vector3 nearestEp = math::Vector3::Zero;
+	dtPolyRef startRef = 0;
+	dtPolyRef endRef = 0;
 
 	dtStatus status;
 
-	math::Vector3 searchDistStart(200.0f);
+	math::Vector3 searchDistStart = params.searchDistance;
+	if (searchDistStart.x <= 0.0f || searchDistStart.y <= 0.0f || searchDistStart.z <= 0.0f)
+	{
+		searchDistStart = math::Vector3(50.0f, 15.0f, 50.0f);
+	}
 	
 	if (status = navMesh.navMeshQuery->findNearestPoly(
 		&params.from.x,
@@ -477,9 +639,15 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 
 	
 
+	math::Vector3 searchDistEnd = params.searchDistance;
+	if (searchDistEnd.x <= 0.0f || searchDistEnd.y <= 0.0f || searchDistEnd.z <= 0.0f)
+	{
+		searchDistEnd = math::Vector3(50.0f, 15.0f, 50.0f);
+	}
+
 	if (status = navMesh.navMeshQuery->findNearestPoly(
 		&params.to.x,
-		&params.searchDistance.x,
+		&searchDistEnd.x,
 		&_filter,
 		&endRef,
 		&nearestEp.x); dtStatusFailed(status))
@@ -514,16 +682,22 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 
 	int32_t pathCount = 0;
 
-	std::vector<int32_t> pathRefs(HexEngine::MaxPaths);
+	std::vector<dtPolyRef> pathRefs(HexEngine::MaxPaths);
 
 	if (status = navMesh.navMeshQuery->findPath(
 		startRef, endRef,
 		&params.from.x, &params.to.x,
 		&_filter,
-		(dtPolyRef*)pathRefs.data(), &pathCount,
+		pathRefs.data(), &pathCount,
 		HexEngine::MaxPaths); dtStatusFailed(status))
 	{
 		LOG_CRIT("findPath failed");
+		return;
+	}
+
+	if (pathCount <= 0)
+	{
+		LOG_WARN("No path could be found between the selected points.");
 		return;
 	}
 
@@ -547,7 +721,7 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 
 	math::Vector3 resultingPos;
 
-	static const float STEP_SIZE = params.stepSize;
+	const float stepSize = std::max(0.01f, params.stepSize);
 	static const float SLOP = 0.01f;
 	static const int MAX_SMOOTH = 2048;
 
@@ -559,7 +733,7 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 		dtPolyRef steerPosRef;
 
 		if (!GetSteerTarget(navMesh.navMeshQuery, &currentPos.x, &end.x, SLOP,
-			(dtPolyRef*)pathRefs.data(), pathCount, steerPos, steerPosFlag, steerPosRef))
+			pathRefs.data(), pathCount, steerPos, steerPosFlag, steerPosRef))
 			break;
 
 		bool endOfPath = (steerPosFlag & DT_STRAIGHTPATH_END) ? true : false;
@@ -570,10 +744,10 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 		dtVsub(delta, steerPos, &currentPos.x);
 		len = dtMathSqrtf(dtVdot(delta, delta));
 		// If the steer target is end of path or off-mesh link, do not move past the location.
-		if ((endOfPath || offMeshConnection) && len < STEP_SIZE)
+		if ((endOfPath || offMeshConnection) && len < stepSize)
 			len = 1;
 		else
-			len = STEP_SIZE / len;
+			len = stepSize / len;
 		float moveTgt[3];
 		dtVmad(moveTgt, &currentPos.x, delta, len);
 
@@ -584,8 +758,8 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 		navMesh.navMeshQuery->moveAlongSurface((dtPolyRef)pathRefs[0], &currentPos.x, moveTgt, &_filter,
 			result2, visited, &nvisited, 16);
 
-		pathCount = dtMergeCorridorStartMoved((dtPolyRef*)pathRefs.data(), pathCount, HexEngine::MaxPaths, visited, nvisited);
-		pathCount = fixupShortcuts((dtPolyRef*)pathRefs.data(), pathCount, navMesh.navMeshQuery);
+		pathCount = dtMergeCorridorStartMoved(pathRefs.data(), pathCount, HexEngine::MaxPaths, visited, nvisited);
+		pathCount = fixupShortcuts(pathRefs.data(), pathCount, navMesh.navMeshQuery);
 
 		float h = 0;
 		if(dtStatusSucceed(navMesh.navMeshQuery->getPolyHeight((dtPolyRef)pathRefs[0], result2, &h)))
@@ -696,9 +870,10 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 
 HexEngine::INavMeshProvider::MoveResult RecastInterface::Move(PathResult& result)
 {
-	
-
-	
+	if (result.path.empty())
+	{
+		return MoveResult::Failed;
+	}
 
 	return MoveResult::Moving;
 }

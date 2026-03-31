@@ -7,7 +7,7 @@
 
 namespace HexEditor
 {
-	class Inspector : public HexEngine::Dock
+	class Inspector : public HexEngine::Element
 	{
 	public:
 		Inspector(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size);

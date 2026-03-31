@@ -44,6 +44,7 @@ namespace HexEditor
 		virtual void Update(float frameTime) override;
 
 		void ShowSettingsDialog();
+		void ShowNavMeshDialog();
 
 		EntityList* GetEntityTreeList() const { return _entityList; }
 		Inspector* GetInspector() const { return _rightDock; }

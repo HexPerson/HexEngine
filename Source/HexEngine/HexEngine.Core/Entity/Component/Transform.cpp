@@ -564,6 +564,17 @@ namespace HexEngine
 		//GetEntity()->OnTransformChanged(true, false, false);
 	}
 
+	void Transform::SetScaleNoNotify(const math::Vector3& scale)
+	{
+		if (_current.scale == scale)
+			return;
+
+		_previous.scale = _current.scale;
+		_current.scale = scale;
+
+		GetEntity()->ClearTransformCache();
+	}
+
 	/*void Transform::SetRotationMatrix(const math::Matrix& rotation)
 	{
 		_rotationMatrix = rotation;
@@ -599,6 +610,8 @@ namespace HexEngine
 
 	void Transform::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
+		(void)mask;
+
 		math::Vector3 position;
 		math::Quaternion rotation;
 		math::Vector3 scale;
@@ -607,14 +620,17 @@ namespace HexEngine
 		file->Deserialize(data, "_rotation", rotation);
 		file->Deserialize(data, "_scale", scale);
 
-		SetPosition(position);
-		SetRotation(rotation);
-		SetScale(scale);
+		// Avoid broadcasting transform-change messages during deserialization to
+		// prevent cross-thread scene/PVS contention while scenes are loading.
+		SetPositionNoNotify(position);
+		SetRotationNoNotify(rotation);
+		SetScaleNoNotify(scale);
 
 		// Without this the interpolation will be incorrect
 		//
 		_previous.position = position;
-		_previous,rotation = rotation;
+		_previous.rotation = rotation;
+		_previous.scale = scale;
 
 		LOG_DEBUG("Position %.3f %.3f %.3f", position.x, position.y, position.z);
 		LOG_DEBUG("Rotation %.3f %.3f %.3f", rotation.x, rotation.y, rotation.z);

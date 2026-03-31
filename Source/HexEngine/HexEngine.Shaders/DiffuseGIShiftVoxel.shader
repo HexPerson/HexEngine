@@ -5,7 +5,9 @@
 "ComputeShader"
 {
 	Texture3D<float4> g_voxelRadianceSrc : register(t0);
+	Texture3D<float4> g_voxelAlbedoSrc : register(t1);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
+	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -17,6 +19,7 @@
 		float4 g_giParams3;
 		float4 g_giParams4;
 		float4 g_giParams5;
+		float4 g_giParams6;
 	};
 
 	cbuffer VoxelShiftConstants : register(b5)
@@ -40,9 +43,11 @@
 			src.x > maxCoord || src.y > maxCoord || src.z > maxCoord)
 		{
 			g_voxelRadianceOut[tid] = 0.0f.xxxx;
+			g_voxelAlbedoOut[tid] = 0.0f.xxxx;
 			return;
 		}
 
 		g_voxelRadianceOut[tid] = g_voxelRadianceSrc.Load(int4(src, 0));
+		g_voxelAlbedoOut[tid] = g_voxelAlbedoSrc.Load(int4(src, 0));
 	}
 }

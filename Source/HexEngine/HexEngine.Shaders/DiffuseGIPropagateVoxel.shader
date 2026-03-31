@@ -17,6 +17,7 @@
 		float4 g_giParams3;
 		float4 g_giParams4;
 		float4 g_giParams5;
+		float4 g_giParams6;
 	};
 
 	[numthreads(8, 8, 8)]
