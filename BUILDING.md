@@ -68,6 +68,7 @@ Equivalent direct command for plan output:
   - Writes local dependency `HEAD` commits into manifest `ref` fields when repos are available.
 - `--header-only-bootstrap`
   - Fetches/copies header-only dependencies only and skips native library builds.
+  - If `Streamline` clone fails due missing `git-lfs`, bootstrap continues with a warning.
 - `--header-layout external`
   - Phase 3 starter behavior: `cxxopts` is consumed from `ThirdParty/cxxopts/include` without copying into `Include/`.
 

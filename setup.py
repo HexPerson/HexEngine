@@ -640,7 +640,13 @@ def get_retpack2d():
 
 
 def get_streamline():
-    ensure_repo("streamline")
+    try:
+        ensure_repo("streamline")
+    except subprocess.CalledProcessError as ex:
+        if runtimeArgs.header_only_bootstrap:
+            print(f"Warning: streamline bootstrap failed in header-only mode ({ex}). Continuing without streamline.")
+            return
+        raise
 
 
 
