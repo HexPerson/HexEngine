@@ -62,7 +62,9 @@ You'll need:
 # Building
 Run Setup.bat and the automated build script will grab all the dependencies and begin building. This will take quite some time on the first run. 
 
-You can run this at any time and it will pull the latest repositories from each dependencies and rebuild (if necessary).
+For the migration-aware flow and canonical orchestration entrypoint, see [BUILDING.md](BUILDING.md).
+
+Note: dependency updates are now explicit (`python setup.py --update`), rather than automatic on every run.
 
 # Why HexEngine?
 HexEngine is built for developers who want:

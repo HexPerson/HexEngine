@@ -1,0 +1,58 @@
+﻿{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vs2022-x64-debug",
+      "displayName": "VS2022 x64 Debug",
+      "description": "Canonical HexEngine orchestration preset (legacy compile remains .sln/.vcxproj).",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
+      }
+    },
+    {
+      "name": "vs2022-x64-release",
+      "displayName": "VS2022 x64 Release",
+      "description": "Canonical HexEngine orchestration preset (legacy compile remains .sln/.vcxproj).",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "deps-plan-debug",
+      "displayName": "Dependency Plan (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-plan"
+      ]
+    },
+    {
+      "name": "deps-plan-release",
+      "displayName": "Dependency Plan (Release preset)",
+      "configurePreset": "vs2022-x64-release",
+      "targets": [
+        "hex-deps-plan"
+      ]
+    },
+    {
+      "name": "legacy-setup-debug",
+      "displayName": "Legacy Setup (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-legacy-setup"
+      ]
+    }
+  ]
+}

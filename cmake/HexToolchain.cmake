@@ -1,0 +1,15 @@
+﻿if(NOT WIN32)
+    message(WARNING "HexEngine migration scaffolding currently targets Windows as the primary supported platform.")
+endif()
+
+if(MSVC)
+    message(STATUS "MSVC detected: ${MSVC_VERSION}")
+endif()
+
+if(CMAKE_GENERATOR MATCHES "Visual Studio")
+    message(STATUS "Using generator: ${CMAKE_GENERATOR}")
+elseif(CMAKE_GENERATOR STREQUAL "Ninja" OR CMAKE_GENERATOR STREQUAL "Ninja Multi-Config")
+    message(STATUS "Using Ninja generator. Ensure MSVC toolchain environment is initialized.")
+else()
+    message(WARNING "Generator '${CMAKE_GENERATOR}' is untested for HexEngine migration scaffolding.")
+endif()
