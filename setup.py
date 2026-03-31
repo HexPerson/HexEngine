@@ -179,19 +179,25 @@ def maybe_checkout_ref(repo, dep):
 
 
 
+def clone_dependency_repo(dep, recursive=False):
+    depPath = dep["path"]
+    if Repo is not None:
+        Repo.clone_from(dep["git_url"], depPath, recursive=recursive)
+        return
+
+    cloneArgs = ["git", "clone", dep["git_url"], depPath]
+    if recursive:
+        cloneArgs.insert(2, "--recurse-submodules")
+    git_check_call(cloneArgs)
+
+
 def ensure_repo(name, recursive=False):
     dep = get_dependency(name)
     depPath = dep["path"]
 
     if not os.path.exists(depPath):
         print(f"Cloning {dep['name']}...")
-        if Repo is not None:
-            Repo.clone_from(dep["git_url"], depPath, recursive=recursive)
-        else:
-            cloneArgs = ["git", "clone", dep["git_url"], depPath]
-            if recursive:
-                cloneArgs.insert(2, "--recurse-submodules")
-            git_check_call(cloneArgs)
+        clone_dependency_repo(dep, recursive=recursive)
     else:
         print(f"Using existing dependency directory: {depPath}")
 
@@ -227,10 +233,16 @@ def ensure_repo(name, recursive=False):
                 git_check_call(["git", "-C", depPath, "checkout", ref])
             except subprocess.CalledProcessError:
                 print(f"[frozen] {dep['name']}: checkout failed, attempting fetch + clean/reset recovery")
-                git_check_call(["git", "-C", depPath, "fetch", "--all", "--tags"])
-                git_check_call(["git", "-C", depPath, "reset", "--hard"])
-                git_check_call(["git", "-C", depPath, "clean", "-fd"])
-                git_check_call(["git", "-C", depPath, "checkout", ref])
+                try:
+                    git_check_call(["git", "-C", depPath, "fetch", "--all", "--tags"])
+                    git_check_call(["git", "-C", depPath, "reset", "--hard"])
+                    git_check_call(["git", "-C", depPath, "clean", "-fd"])
+                    git_check_call(["git", "-C", depPath, "checkout", ref])
+                except subprocess.CalledProcessError:
+                    print(f"[frozen] {dep['name']}: recovery failed, re-cloning dependency and retrying checkout")
+                    shutil.rmtree(depPath, ignore_errors=True)
+                    clone_dependency_repo(dep, recursive=recursive)
+                    git_check_call(["git", "-C", depPath, "checkout", ref])
 
 
 

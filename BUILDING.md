@@ -64,6 +64,7 @@ Equivalent direct command for plan output:
   - Uses pinned refs from `build/dependencies.lock.json` where provided.
   - Recommended/default for wrapper entrypoints (`Setup.bat`, `hex-legacy-setup`) to avoid floating upstream layout breaks.
   - If checkout fails due dirty dependency worktrees, setup attempts fetch + hard reset + clean inside that dependency repo before retrying checkout.
+  - If recovery still fails, setup re-clones the dependency and retries checkout.
 - `--update`
   - Updates existing dependency repos from origin before build.
 - `--check-refs`
