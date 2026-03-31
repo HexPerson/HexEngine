@@ -34,6 +34,20 @@ runtimeArgs = None
 msbuildPath = None
 
 
+def git_env():
+    env = os.environ.copy()
+    env["GIT_LFS_SKIP_SMUDGE"] = "1"
+    return env
+
+
+def git_check_call(args):
+    subprocess.check_call(args, env=git_env())
+
+
+def git_check_output(args):
+    return subprocess.check_output(args, text=True, env=git_env())
+
+
 def msbuild(msbuildPath, projectPath, args):
     subprocess.check_call([msbuildPath, projectPath] + args)
 
@@ -76,7 +90,7 @@ def get_dependency_head(dep):
         return None
 
     try:
-        return subprocess.check_output(["git", "-C", depPath, "rev-parse", "HEAD"], text=True).strip()
+        return git_check_output(["git", "-C", depPath, "rev-parse", "HEAD"]).strip()
     except subprocess.CalledProcessError:
         return None
 
@@ -177,7 +191,7 @@ def ensure_repo(name, recursive=False):
             cloneArgs = ["git", "clone", dep["git_url"], depPath]
             if recursive:
                 cloneArgs.insert(2, "--recurse-submodules")
-            subprocess.check_call(cloneArgs)
+            git_check_call(cloneArgs)
     else:
         print(f"Using existing dependency directory: {depPath}")
 
@@ -201,7 +215,7 @@ def ensure_repo(name, recursive=False):
 
     if runtimeArgs.update and not runtimeArgs.frozen:
         print(f"[update] Pulling latest for {dep['name']} from origin")
-        subprocess.check_call(["git", "-C", depPath, "pull", "--ff-only"])
+        git_check_call(["git", "-C", depPath, "pull", "--ff-only"])
 
     if runtimeArgs.frozen:
         ref = dep.get("ref")
@@ -210,13 +224,13 @@ def ensure_repo(name, recursive=False):
         else:
             print(f"[frozen] {dep['name']}: checking out {ref}")
             try:
-                subprocess.check_call(["git", "-C", depPath, "checkout", ref])
+                git_check_call(["git", "-C", depPath, "checkout", ref])
             except subprocess.CalledProcessError:
                 print(f"[frozen] {dep['name']}: checkout failed, attempting fetch + clean/reset recovery")
-                subprocess.check_call(["git", "-C", depPath, "fetch", "--all", "--tags"])
-                subprocess.check_call(["git", "-C", depPath, "reset", "--hard"])
-                subprocess.check_call(["git", "-C", depPath, "clean", "-fd"])
-                subprocess.check_call(["git", "-C", depPath, "checkout", ref])
+                git_check_call(["git", "-C", depPath, "fetch", "--all", "--tags"])
+                git_check_call(["git", "-C", depPath, "reset", "--hard"])
+                git_check_call(["git", "-C", depPath, "clean", "-fd"])
+                git_check_call(["git", "-C", depPath, "checkout", ref])
 
 
 

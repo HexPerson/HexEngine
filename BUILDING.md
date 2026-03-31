@@ -81,6 +81,7 @@ Equivalent direct command for plan output:
 Notes:
 - Automatic floating update behavior was removed from default path.
 - Use `--update` explicitly when you want latest upstream changes.
+- Git operations in setup run with `GIT_LFS_SKIP_SMUDGE=1` to reduce bootstrap failures on machines without `git-lfs`.
 - Legacy setup treats recastnavigation/oidn configure as optional scaffolding and continues with warnings if those configure-only steps fail in constrained environments.
 - Legacy setup treats Streamline bootstrap as non-blocking and continues with warnings if clone/checkout fails.
 
