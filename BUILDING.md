@@ -41,6 +41,9 @@ Use CMake for orchestration and migration visibility:
 8. Build the opt-in legacy imported-target assimp probe:
    - `cmake --preset vs2022-x64-debug-assimp-probe`
    - `cmake --build --preset assimp-probe-debug`
+9. Build the opt-in legacy imported-target brotli probe:
+   - `cmake --preset vs2022-x64-debug-brotli-probe`
+   - `cmake --build --preset brotli-probe-debug`
 
 Equivalent direct command for plan output:
 - `python setup.py --print-plan`
@@ -111,6 +114,10 @@ This keeps migration incremental while enabling reproducible, reviewable depende
   - target: `hex-assimp-probe`
   - source: [assimp_probe.cpp](/C:/HexEngine/cmake/examples/assimp_probe.cpp)
   - purpose: validate non-header dependency consumption through `Hex::assimp_legacy`.
+- Added optional legacy imported-target probe executable:
+  - target: `hex-brotli-probe`
+  - source: [brotli_probe.cpp](/C:/HexEngine/cmake/examples/brotli_probe.cpp)
+  - purpose: validate non-header dependency consumption through `Hex::brotli_legacy`.
 - Existing default behavior remains unchanged (`--header-layout legacy`).
 
 ## Migration Roadmap Snapshot

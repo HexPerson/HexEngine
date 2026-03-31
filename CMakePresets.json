@@ -47,6 +47,16 @@
       "cacheVariables": {
         "HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE": "ON"
       }
+    },
+    {
+      "name": "vs2022-x64-debug-brotli-probe",
+      "displayName": "VS2022 x64 Debug + Brotli Probe",
+      "description": "Enables legacy imported-target brotli probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -105,6 +115,15 @@
       "configurePreset": "vs2022-x64-debug-assimp-probe",
       "targets": [
         "hex-assimp-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "brotli-probe-debug",
+      "displayName": "Brotli Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-brotli-probe",
+      "targets": [
+        "hex-brotli-probe"
       ],
       "configuration": "Debug"
     },
