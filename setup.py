@@ -3,7 +3,9 @@ import glob
 import json
 import os
 import shutil
+import stat
 import subprocess
+import time
 from pathlib import Path
 
 try:
@@ -40,12 +42,41 @@ def git_env():
     return env
 
 
+def with_lfs_disabled(args):
+    if not args or args[0] != "git":
+        return args
+
+    return [
+        "git",
+        "-c", "filter.lfs.smudge=",
+        "-c", "filter.lfs.process=",
+        "-c", "filter.lfs.required=false",
+    ] + args[1:]
+
+
 def git_check_call(args):
-    subprocess.check_call(args, env=git_env())
+    subprocess.check_call(with_lfs_disabled(args), env=git_env())
 
 
 def git_check_output(args):
-    return subprocess.check_output(args, text=True, env=git_env())
+    return subprocess.check_output(with_lfs_disabled(args), text=True, env=git_env())
+
+
+def remove_readonly(func, path, _):
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
+def remove_dependency_directory(dep_path):
+    if not os.path.exists(dep_path):
+        return
+
+    shutil.rmtree(dep_path, onerror=remove_readonly)
+
+    if os.path.exists(dep_path):
+        stale_path = f"{dep_path}.stale.{int(time.time())}"
+        os.replace(dep_path, stale_path)
+        print(f"Moved stale dependency directory to: {stale_path}")
 
 
 def msbuild(msbuildPath, projectPath, args):
@@ -181,9 +212,8 @@ def maybe_checkout_ref(repo, dep):
 
 def clone_dependency_repo(dep, recursive=False):
     depPath = dep["path"]
-    if Repo is not None:
-        Repo.clone_from(dep["git_url"], depPath, recursive=recursive)
-        return
+    if os.path.exists(depPath):
+        remove_dependency_directory(depPath)
 
     cloneArgs = ["git", "clone", dep["git_url"], depPath]
     if recursive:
@@ -200,20 +230,6 @@ def ensure_repo(name, recursive=False):
         clone_dependency_repo(dep, recursive=recursive)
     else:
         print(f"Using existing dependency directory: {depPath}")
-
-    if Repo is not None:
-        try:
-            repo = Repo(depPath)
-        except InvalidGitRepositoryError:
-            print(f"Warning: '{depPath}' is not a git repository; skipping update/checkout controls")
-            return
-
-        if runtimeArgs.update and not runtimeArgs.frozen:
-            print(f"[update] Pulling latest for {dep['name']} from origin")
-            repo.remotes.origin.pull()
-
-        maybe_checkout_ref(repo, dep)
-        return
 
     if not os.path.exists(os.path.join(depPath, ".git")):
         print(f"Warning: '{depPath}' is not a git repository; skipping update/checkout controls")
@@ -240,7 +256,6 @@ def ensure_repo(name, recursive=False):
                     git_check_call(["git", "-C", depPath, "checkout", ref])
                 except subprocess.CalledProcessError:
                     print(f"[frozen] {dep['name']}: recovery failed, re-cloning dependency and retrying checkout")
-                    shutil.rmtree(depPath, ignore_errors=True)
                     clone_dependency_repo(dep, recursive=recursive)
                     git_check_call(["git", "-C", depPath, "checkout", ref])
 
