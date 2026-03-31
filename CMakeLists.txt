@@ -4,6 +4,7 @@ project(HexEngineBuild LANGUAGES NONE)
 
 include(cmake/HexToolchain.cmake)
 include(cmake/HexDependencies.cmake)
+include(cmake/HexLegacyImportedTargets.cmake)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -15,6 +16,7 @@ if(NOT EXISTS "${HEXENGINE_DEPENDENCY_MANIFEST}")
 endif()
 
 option(HEXENGINE_ENABLE_DEP_PROBE "Build a small CMake dependency probe target (Phase 3 validation)." OFF)
+option(HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE "Build a small assimp imported-target probe executable." OFF)
 
 if(HEXENGINE_ENABLE_DEP_PROBE)
     enable_language(CXX)
@@ -28,6 +30,17 @@ if(HEXENGINE_ENABLE_DEP_PROBE)
             Hex::nlohmann_json_headers
             Hex::rectpack2d
     )
+endif()
+
+if(HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE)
+    enable_language(CXX)
+    if(HEXENGINE_HAS_LEGACY_ASSIMP)
+        add_executable(hex-assimp-probe EXCLUDE_FROM_ALL cmake/examples/assimp_probe.cpp)
+        target_compile_features(hex-assimp-probe PRIVATE cxx_std_20)
+        target_link_libraries(hex-assimp-probe PRIVATE Hex::assimp_legacy)
+    else()
+        message(WARNING "HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE=ON, but Hex::assimp_legacy is unavailable.")
+    endif()
 endif()
 
 add_custom_target(hex-deps-plan

@@ -37,6 +37,16 @@
       "cacheVariables": {
         "HEXENGINE_ENABLE_DEP_PROBE": "ON"
       }
+    },
+    {
+      "name": "vs2022-x64-debug-assimp-probe",
+      "displayName": "VS2022 x64 Debug + Assimp Probe",
+      "description": "Enables legacy imported-target assimp probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -86,6 +96,15 @@
       "configurePreset": "vs2022-x64-debug-dep-probe",
       "targets": [
         "hex-dep-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "assimp-probe-debug",
+      "displayName": "Assimp Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-assimp-probe",
+      "targets": [
+        "hex-assimp-probe"
       ],
       "configuration": "Debug"
     },

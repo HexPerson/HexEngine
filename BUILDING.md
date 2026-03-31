@@ -38,6 +38,9 @@ Use CMake for orchestration and migration visibility:
 7. Build the opt-in dependency probe executable:
    - `cmake --preset vs2022-x64-debug-dep-probe`
    - `cmake --build --preset dep-probe-debug`
+8. Build the opt-in legacy imported-target assimp probe:
+   - `cmake --preset vs2022-x64-debug-assimp-probe`
+   - `cmake --build --preset assimp-probe-debug`
 
 Equivalent direct command for plan output:
 - `python setup.py --print-plan`
@@ -104,6 +107,10 @@ This keeps migration incremental while enabling reproducible, reviewable depende
   - target: `hex-dep-probe`
   - source: [dep_probe.cpp](/C:/HexEngine/cmake/examples/dep_probe.cpp)
   - purpose: compile-time validation that target-based include propagation works.
+- Added optional legacy imported-target probe executable:
+  - target: `hex-assimp-probe`
+  - source: [assimp_probe.cpp](/C:/HexEngine/cmake/examples/assimp_probe.cpp)
+  - purpose: validate non-header dependency consumption through `Hex::assimp_legacy`.
 - Existing default behavior remains unchanged (`--header-layout legacy`).
 
 ## Migration Roadmap Snapshot
