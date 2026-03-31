@@ -221,6 +221,13 @@ def clone_dependency_repo(dep, recursive=False):
     git_check_call(cloneArgs)
 
 
+def sync_submodules(dep_path, recursive):
+    if not recursive:
+        return
+
+    git_check_call(["git", "-C", dep_path, "submodule", "update", "--init", "--recursive"])
+
+
 def ensure_repo(name, recursive=False):
     dep = get_dependency(name)
     depPath = dep["path"]
@@ -238,6 +245,7 @@ def ensure_repo(name, recursive=False):
     if runtimeArgs.update and not runtimeArgs.frozen:
         print(f"[update] Pulling latest for {dep['name']} from origin")
         git_check_call(["git", "-C", depPath, "pull", "--ff-only"])
+        sync_submodules(depPath, recursive)
 
     if runtimeArgs.frozen:
         ref = dep.get("ref")
@@ -258,6 +266,8 @@ def ensure_repo(name, recursive=False):
                     print(f"[frozen] {dep['name']}: recovery failed, re-cloning dependency and retrying checkout")
                     clone_dependency_repo(dep, recursive=recursive)
                     git_check_call(["git", "-C", depPath, "checkout", ref])
+
+        sync_submodules(depPath, recursive)
 
 
 
