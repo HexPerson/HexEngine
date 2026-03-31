@@ -14,6 +14,22 @@ if(NOT EXISTS "${HEXENGINE_DEPENDENCY_MANIFEST}")
     message(FATAL_ERROR "Dependency manifest not found: ${HEXENGINE_DEPENDENCY_MANIFEST}")
 endif()
 
+option(HEXENGINE_ENABLE_DEP_PROBE "Build a small CMake dependency probe target (Phase 3 validation)." OFF)
+
+if(HEXENGINE_ENABLE_DEP_PROBE)
+    enable_language(CXX)
+    add_executable(hex-dep-probe EXCLUDE_FROM_ALL cmake/examples/dep_probe.cpp)
+    target_compile_features(hex-dep-probe PRIVATE cxx_std_20)
+    target_link_libraries(hex-dep-probe
+        PRIVATE
+            Hex::cxxopts
+            Hex::fastnoiselite
+            Hex::rapidxml
+            Hex::nlohmann_json_headers
+            Hex::rectpack2d
+    )
+endif()
+
 add_custom_target(hex-deps-plan
     COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --print-plan
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"

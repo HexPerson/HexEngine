@@ -35,6 +35,9 @@ Use CMake for orchestration and migration visibility:
    - `cmake --build --preset headeronly-bootstrap-debug`
 6. If intentional, run legacy setup through canonical entrypoint:
    - `cmake --build --preset legacy-setup-debug`
+7. Build the opt-in dependency probe executable:
+   - `cmake --preset vs2022-x64-debug-dep-probe`
+   - `cmake --build --preset dep-probe-debug`
 
 Equivalent direct command for plan output:
 - `python setup.py --print-plan`
@@ -97,6 +100,10 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 - Added opt-in external-header mode for `cxxopts`:
   - `python setup.py --header-only-bootstrap --header-layout external`
 - In external-header mode, these dependencies are no longer copied into `Include/`; they are consumed from `ThirdParty/...`.
+- Added optional dependency probe executable:
+  - target: `hex-dep-probe`
+  - source: [dep_probe.cpp](/C:/HexEngine/cmake/examples/dep_probe.cpp)
+  - purpose: compile-time validation that target-based include propagation works.
 - Existing default behavior remains unchanged (`--header-layout legacy`).
 
 ## Migration Roadmap Snapshot

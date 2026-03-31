@@ -27,6 +27,16 @@
       "cacheVariables": {
         "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
       }
+    },
+    {
+      "name": "vs2022-x64-debug-dep-probe",
+      "displayName": "VS2022 x64 Debug + Dep Probe",
+      "description": "Enables the Phase 3 dependency probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_DEP_PROBE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -69,6 +79,15 @@
       "targets": [
         "hex-headeronly-bootstrap"
       ]
+    },
+    {
+      "name": "dep-probe-debug",
+      "displayName": "Dependency Probe Build",
+      "configurePreset": "vs2022-x64-debug-dep-probe",
+      "targets": [
+        "hex-dep-probe"
+      ],
+      "configuration": "Debug"
     },
     {
       "name": "legacy-setup-debug",
