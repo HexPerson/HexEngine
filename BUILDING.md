@@ -89,8 +89,14 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 
 - Introduced target-based dependency scaffold in CMake:
   - `Hex::cxxopts` (`INTERFACE`) in [cmake/HexDependencies.cmake](/C:/HexEngine/cmake/HexDependencies.cmake)
+- Extended target-based header-only scaffolding:
+  - `Hex::fastnoiselite`
+  - `Hex::rapidxml`
+  - `Hex::nlohmann_json_headers`
+  - `Hex::rectpack2d`
 - Added opt-in external-header mode for `cxxopts`:
   - `python setup.py --header-only-bootstrap --header-layout external`
+- In external-header mode, these dependencies are no longer copied into `Include/`; they are consumed from `ThirdParty/...`.
 - Existing default behavior remains unchanged (`--header-layout legacy`).
 
 ## Migration Roadmap Snapshot

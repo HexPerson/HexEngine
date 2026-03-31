@@ -598,12 +598,20 @@ def get_cxxopts():
 def get_fastnoiselite():
     ensure_repo("fastnoiselite")
 
+    if runtimeArgs.header_layout == "external":
+        print("[header-layout=external] Skipping Include/fastnoiselite copy; use ThirdParty/fastnoiselite/Cpp via target-based include paths.")
+        return
+
     if not os.path.exists(includeDir + "/fastnoiselite/"):
         shutil.copytree(os.path.realpath("ThirdParty/fastnoiselite/Cpp/"), includeDir + "/fastnoiselite/")
 
 
 def get_rapidxml():
     ensure_repo("rapidxml")
+
+    if runtimeArgs.header_layout == "external":
+        print("[header-layout=external] Skipping Include/rapidxml copy; use ThirdParty/rapidxml via target-based include paths.")
+        return
 
     if not os.path.exists(includeDir + "/rapidxml/"):
         shutil.copytree(os.path.realpath("ThirdParty/rapidxml/"), includeDir + "/rapidxml/")
@@ -612,12 +620,20 @@ def get_rapidxml():
 def get_rapidjson():
     ensure_repo("rapidjson")
 
+    if runtimeArgs.header_layout == "external":
+        print("[header-layout=external] Skipping Include/nlohmann copy; use ThirdParty/rapidjson/include via target-based include paths.")
+        return
+
     if not os.path.exists(includeDir + "/nlohmann/"):
         shutil.copytree(os.path.realpath("ThirdParty/rapidjson/include/nlohmann/"), includeDir + "/nlohmann/")
 
 
 def get_retpack2d():
     ensure_repo("retpack2d")
+
+    if runtimeArgs.header_layout == "external":
+        print("[header-layout=external] Skipping Include/retpack2d copy; use ThirdParty/retpack2d/src via target-based include paths.")
+        return
 
     if not os.path.exists(includeDir + "/retpack2d/"):
         shutil.copytree(os.path.realpath("ThirdParty/retpack2d/src/"), includeDir + "/retpack2d/")
