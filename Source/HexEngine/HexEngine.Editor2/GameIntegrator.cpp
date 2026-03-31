@@ -17,6 +17,152 @@ namespace
 		quoted += L'"';
 		return quoted;
 	}
+
+	class IGameBuildService
+	{
+	public:
+		virtual ~IGameBuildService() = default;
+		virtual bool Build(const fs::path& projectPath, const fs::path& projectBaseDir, const fs::path& msbuildPath, uint64_t& reloadGeneration) const = 0;
+	};
+
+	class MSBuildGameBuildService final : public IGameBuildService
+	{
+	public:
+		bool Build(const fs::path& projectPath, const fs::path& projectBaseDir, const fs::path& msbuildPath, uint64_t& reloadGeneration) const override
+		{
+			const fs::path logPath = projectBaseDir / L"Build" / L"GameBuild.log";
+			fs::create_directories(logPath.parent_path());
+
+			SECURITY_ATTRIBUTES sa = {};
+			sa.nLength = sizeof(sa);
+			sa.bInheritHandle = TRUE;
+
+			HANDLE logFile = CreateFileW(
+				logPath.wstring().c_str(),
+				GENERIC_WRITE,
+				FILE_SHARE_READ | FILE_SHARE_WRITE,
+				&sa,
+				CREATE_ALWAYS,
+				FILE_ATTRIBUTE_NORMAL,
+				nullptr);
+			if (logFile == INVALID_HANDLE_VALUE)
+			{
+				LOG_CRIT("Could not create game build log file '%S'. Error: %d", logPath.wstring().c_str(), GetLastError());
+				return false;
+			}
+
+			const fs::path hotReloadDir = projectBaseDir / L"Build" / L"HotReload";
+			fs::create_directories(hotReloadDir);
+
+			const auto reloadId = ++reloadGeneration;
+			const fs::path pdbPath = hotReloadDir / std::format(L"Game_{:06}.pdb", reloadId);
+			const fs::path overridePropsPath = hotReloadDir / std::format(L"HotReload_{:06}.props", reloadId);
+			{
+				std::wofstream overrideProps(overridePropsPath);
+				if (!overrideProps)
+				{
+					CloseHandle(logFile);
+					LOG_CRIT("Could not create hot reload MSBuild overrides file '%S'", overridePropsPath.wstring().c_str());
+					return false;
+				}
+
+				overrideProps
+					<< LR"(<?xml version="1.0" encoding="utf-8"?>)" << L"\n"
+					<< LR"(<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">)" << L"\n"
+					<< LR"(  <ItemDefinitionGroup>)" << L"\n"
+					<< LR"(    <Link>)" << L"\n"
+					<< L"      <ProgramDatabaseFile>" << pdbPath.wstring() << L"</ProgramDatabaseFile>" << L"\n"
+					<< LR"(      <LinkIncremental>false</LinkIncremental>)" << L"\n"
+					<< LR"(    </Link>)" << L"\n"
+					<< LR"(  </ItemDefinitionGroup>)" << L"\n"
+					<< LR"(</Project>)" << L"\n";
+			}
+
+			const wchar_t* buildConfiguration =
+#ifdef _DEBUG
+				L"Debug";
+#else
+				L"Release";
+#endif
+
+			std::wstring commandLine = std::format(
+				L"{} {} /t:Build /p:Configuration={} /p:Platform=x64 /p:ForceImportAfterCppProps={} /m /nologo /verbosity:minimal",
+				QuoteForCommandLine(msbuildPath),
+				QuoteForCommandLine(projectPath),
+				buildConfiguration,
+				QuoteForCommandLine(overridePropsPath));
+
+			STARTUPINFOW si = {};
+			si.cb = sizeof(si);
+			si.dwFlags = STARTF_USESTDHANDLES;
+			si.hStdOutput = logFile;
+			si.hStdError = logFile;
+			si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+			PROCESS_INFORMATION pi = {};
+			std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
+			mutableCommand.push_back(L'\0');
+
+			LOG_INFO("Building game code with command: %S", commandLine.c_str());
+			LOG_INFO("Writing game build log to '%S'", logPath.wstring().c_str());
+
+			if (!CreateProcessW(
+				nullptr,
+				mutableCommand.data(),
+				nullptr,
+				nullptr,
+				TRUE,
+				CREATE_NO_WINDOW,
+				nullptr,
+				projectPath.parent_path().wstring().c_str(),
+				&si,
+				&pi))
+			{
+				const auto error = GetLastError();
+				CloseHandle(logFile);
+				LOG_CRIT("Could not start MSBuild. Error: %d", error);
+				return false;
+			}
+
+			WaitForSingleObject(pi.hProcess, INFINITE);
+
+			DWORD exitCode = 1;
+			GetExitCodeProcess(pi.hProcess, &exitCode);
+			CloseHandle(pi.hThread);
+			CloseHandle(pi.hProcess);
+			CloseHandle(logFile);
+
+			if (exitCode != 0)
+			{
+				std::ifstream logStream(logPath);
+				if (logStream)
+				{
+					std::deque<std::string> tail;
+					std::string line;
+					while (std::getline(logStream, line))
+					{
+						if (!line.empty())
+						{
+							tail.push_back(line);
+							if (tail.size() > 12)
+								tail.pop_front();
+						}
+					}
+
+					for (const auto& tailLine : tail)
+					{
+						LOG_WARN("MSBuild: %s", tailLine.c_str());
+					}
+				}
+
+				LOG_CRIT("Game code build failed with exit code %d. See '%S'", exitCode, logPath.wstring().c_str());
+				return false;
+			}
+
+			LOG_INFO("Game code build finished successfully");
+			return true;
+		}
+	};
 }
 
 namespace HexEditor
@@ -140,137 +286,8 @@ namespace HexEditor
 			return false;
 		}
 
-		const fs::path logPath = g_pEditor->_projectFS->GetBaseDirectory() / L"Build" / L"GameBuild.log";
-		fs::create_directories(logPath.parent_path());
-
-		SECURITY_ATTRIBUTES sa = {};
-		sa.nLength = sizeof(sa);
-		sa.bInheritHandle = TRUE;
-
-		HANDLE logFile = CreateFileW(
-			logPath.wstring().c_str(),
-			GENERIC_WRITE,
-			FILE_SHARE_READ | FILE_SHARE_WRITE,
-			&sa,
-			CREATE_ALWAYS,
-			FILE_ATTRIBUTE_NORMAL,
-			nullptr);
-		if (logFile == INVALID_HANDLE_VALUE)
-		{
-			LOG_CRIT("Could not create game build log file '%S'. Error: %d", logPath.wstring().c_str(), GetLastError());
-			return false;
-		}
-
-		const fs::path hotReloadDir = g_pEditor->_projectFS->GetBaseDirectory() / L"Build" / L"HotReload";
-		fs::create_directories(hotReloadDir);
-
-		const auto reloadId = ++_reloadGeneration;
-		const fs::path pdbPath = hotReloadDir / std::format(L"Game_{:06}.pdb", reloadId);
-		const fs::path overridePropsPath = hotReloadDir / std::format(L"HotReload_{:06}.props", reloadId);
-		{
-			std::wofstream overrideProps(overridePropsPath);
-			if (!overrideProps)
-			{
-				CloseHandle(logFile);
-				LOG_CRIT("Could not create hot reload MSBuild overrides file '%S'", overridePropsPath.wstring().c_str());
-				return false;
-			}
-
-			overrideProps
-				<< LR"(<?xml version="1.0" encoding="utf-8"?>)" << L"\n"
-				<< LR"(<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">)" << L"\n"
-				<< LR"(  <ItemDefinitionGroup>)" << L"\n"
-				<< LR"(    <Link>)" << L"\n"
-				<< L"      <ProgramDatabaseFile>" << pdbPath.wstring() << L"</ProgramDatabaseFile>" << L"\n"
-				<< LR"(      <LinkIncremental>false</LinkIncremental>)" << L"\n"
-				<< LR"(    </Link>)" << L"\n"
-				<< LR"(  </ItemDefinitionGroup>)" << L"\n"
-				<< LR"(</Project>)" << L"\n";
-		}
-
-		const wchar_t* buildConfiguration =
-#ifdef _DEBUG
-			L"Debug";
-#else
-			L"Release";
-#endif
-
-		std::wstring commandLine = std::format(
-			L"{} {} /t:Build /p:Configuration={} /p:Platform=x64 /p:ForceImportAfterCppProps={} /m /nologo /verbosity:minimal",
-			QuoteForCommandLine(msbuildPath),
-			QuoteForCommandLine(_buildProjectPath),
-			buildConfiguration,
-			QuoteForCommandLine(overridePropsPath));
-
-		STARTUPINFOW si = {};
-		si.cb = sizeof(si);
-		si.dwFlags = STARTF_USESTDHANDLES;
-		si.hStdOutput = logFile;
-		si.hStdError = logFile;
-		si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
-
-		PROCESS_INFORMATION pi = {};
-		std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
-		mutableCommand.push_back(L'\0');
-
-		LOG_INFO("Building game code with command: %S", commandLine.c_str());
-		LOG_INFO("Writing game build log to '%S'", logPath.wstring().c_str());
-
-		if (!CreateProcessW(
-			nullptr,
-			mutableCommand.data(),
-			nullptr,
-			nullptr,
-			TRUE,
-			CREATE_NO_WINDOW,
-			nullptr,
-			_buildProjectPath.parent_path().wstring().c_str(),
-			&si,
-			&pi))
-		{
-			const auto error = GetLastError();
-			CloseHandle(logFile);
-			LOG_CRIT("Could not start MSBuild. Error: %d", error);
-			return false;
-		}
-
-		WaitForSingleObject(pi.hProcess, INFINITE);
-
-		DWORD exitCode = 1;
-		GetExitCodeProcess(pi.hProcess, &exitCode);
-		CloseHandle(pi.hThread);
-		CloseHandle(pi.hProcess);
-		CloseHandle(logFile);
-
-		if (exitCode != 0)
-		{
-			std::ifstream logStream(logPath);
-			if (logStream)
-			{
-				std::deque<std::string> tail;
-				std::string line;
-				while (std::getline(logStream, line))
-				{
-					if (!line.empty())
-					{
-						tail.push_back(line);
-						if (tail.size() > 12)
-							tail.pop_front();
-					}
-				}
-
-				for (const auto& tailLine : tail)
-				{
-					LOG_WARN("MSBuild: %s", tailLine.c_str());
-				}
-			}
-
-			LOG_CRIT("Game code build failed with exit code %d. See '%S'", exitCode, logPath.wstring().c_str());
-			return false;
-		}
-
-		LOG_INFO("Game code build finished successfully");
-		return true;
+		MSBuildGameBuildService buildService;
+		return buildService.Build(_buildProjectPath, g_pEditor->_projectFS->GetBaseDirectory(), msbuildPath, _reloadGeneration);
 	}
 
 	bool GameIntegrator::RunGame()

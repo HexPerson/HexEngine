@@ -29,19 +29,21 @@ Use CMake for orchestration and migration visibility:
    - `cmake --build --preset deps-plan-debug`
 3. Check ref pin status:
    - `cmake --build --preset deps-check-refs-debug`
-4. If you have dependencies cloned locally and want to pin current commits into the manifest:
+4. Enforce strict ref pin status (CI-friendly):
+   - `cmake --build --preset deps-check-refs-strict-debug`
+5. If you have dependencies cloned locally and want to pin current commits into the manifest:
    - `cmake --build --preset deps-lock-refs-debug`
-5. Bootstrap only header dependencies in external-header mode (no native builds):
+6. Bootstrap only header dependencies in external-header mode (no native builds):
    - `cmake --build --preset headeronly-bootstrap-debug`
-6. If intentional, run legacy setup through canonical entrypoint:
+7. If intentional, run legacy setup through canonical entrypoint:
    - `cmake --build --preset legacy-setup-debug`
-7. Build the opt-in dependency probe executable:
+8. Build the opt-in dependency probe executable:
    - `cmake --preset vs2022-x64-debug-dep-probe`
    - `cmake --build --preset dep-probe-debug`
-8. Build the opt-in legacy imported-target assimp probe:
+9. Build the opt-in legacy imported-target assimp probe:
    - `cmake --preset vs2022-x64-debug-assimp-probe`
    - `cmake --build --preset assimp-probe-debug`
-9. Build the opt-in legacy imported-target brotli probe:
+10. Build the opt-in legacy imported-target brotli probe:
    - `cmake --preset vs2022-x64-debug-brotli-probe`
    - `cmake --build --preset brotli-probe-debug`
 
@@ -91,8 +93,14 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 
 - `.vcxproj` post-build copy/staging conventions.
 - Hardcoded include/lib paths in project files.
-- Editor `GameIntegrator` invoking MSBuild directly for game-code hot reload.
+- Game code builds still execute through MSBuild (now behind an editor build-service abstraction).
 - Header staging into `Include/` for select dependencies in legacy setup path.
+
+## Phase 4 Implementation Notes
+
+- `GameIntegrator::BuildGame` now delegates execution details to an internal `MSBuildGameBuildService` in [GameIntegrator.cpp](/C:/HexEngine/Source/HexEngine/HexEngine.Editor2/GameIntegrator.cpp).
+- Hot-reload behavior, MSBuild command line, log output handling, and generated props workflow are preserved.
+- This is a first separation step toward a dedicated project/game build service.
 
 ## Phase 3 Starter (Now Implemented)
 
@@ -122,7 +130,7 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 
 ## Migration Roadmap Snapshot
 
-- Phase 1 (this pass): stabilization + manifest + docs + CMake orchestration scaffold.
-- Phase 2 (started): canonical CMake entrypoint for orchestration targets.
-- Phase 3 (started): move dependencies toward target-based CMake linkage and backend integration (vcpkg/FetchContent).
-- Phase 4 (next): separate game build service from editor runtime hot-reload logic.
+- Phase 1 (completed): stabilization + manifest + docs + reproducible ref workflow.
+- Phase 2 (completed for this tranche): canonical CMake orchestration entrypoint and presets.
+- Phase 3 (completed for this tranche): header-only target migration plus opt-in non-header imported-target probes (assimp, brotli).
+- Phase 4 (completed for this tranche): game build execution extracted behind an MSBuild service abstraction while preserving hot-reload behavior.

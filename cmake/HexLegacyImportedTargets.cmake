@@ -14,6 +14,16 @@ set(HEXENGINE_BROTLIDEC_RELEASE_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Release/brotlid
 set(HEXENGINE_HAS_LEGACY_ASSIMP OFF)
 set(HEXENGINE_HAS_LEGACY_BROTLI OFF)
 
+function(hex_add_imported_static_target target_name alias_name debug_lib release_lib)
+    add_library(${target_name} STATIC IMPORTED GLOBAL)
+    add_library(${alias_name} ALIAS ${target_name})
+    set_target_properties(${target_name} PROPERTIES
+        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
+        IMPORTED_LOCATION_DEBUG "${debug_lib}"
+        IMPORTED_LOCATION_RELEASE "${release_lib}"
+    )
+endfunction()
+
 if(
     EXISTS "${HEXENGINE_ASSIMP_INCLUDE_DIR}"
     AND EXISTS "${HEXENGINE_ASSIMP_DEBUG_LIB}"
@@ -21,20 +31,10 @@ if(
     AND EXISTS "${HEXENGINE_ZLIB_DEBUG_LIB}"
     AND EXISTS "${HEXENGINE_ZLIB_RELEASE_LIB}"
 )
-    add_library(hex_legacy_zlib STATIC IMPORTED GLOBAL)
-    add_library(Hex::legacy_zlib ALIAS hex_legacy_zlib)
-    set_target_properties(hex_legacy_zlib PROPERTIES
-        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
-        IMPORTED_LOCATION_DEBUG "${HEXENGINE_ZLIB_DEBUG_LIB}"
-        IMPORTED_LOCATION_RELEASE "${HEXENGINE_ZLIB_RELEASE_LIB}"
-    )
+    hex_add_imported_static_target(hex_legacy_zlib Hex::legacy_zlib "${HEXENGINE_ZLIB_DEBUG_LIB}" "${HEXENGINE_ZLIB_RELEASE_LIB}")
 
-    add_library(hex_legacy_assimp STATIC IMPORTED GLOBAL)
-    add_library(Hex::assimp_legacy ALIAS hex_legacy_assimp)
+    hex_add_imported_static_target(hex_legacy_assimp Hex::assimp_legacy "${HEXENGINE_ASSIMP_DEBUG_LIB}" "${HEXENGINE_ASSIMP_RELEASE_LIB}")
     set_target_properties(hex_legacy_assimp PROPERTIES
-        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
-        IMPORTED_LOCATION_DEBUG "${HEXENGINE_ASSIMP_DEBUG_LIB}"
-        IMPORTED_LOCATION_RELEASE "${HEXENGINE_ASSIMP_RELEASE_LIB}"
         INTERFACE_INCLUDE_DIRECTORIES "${HEXENGINE_ASSIMP_INCLUDE_DIR}"
     )
     target_link_libraries(hex_legacy_assimp INTERFACE Hex::legacy_zlib)
@@ -51,21 +51,11 @@ if(
     AND EXISTS "${HEXENGINE_BROTLIDEC_DEBUG_LIB}"
     AND EXISTS "${HEXENGINE_BROTLIDEC_RELEASE_LIB}"
 )
-    add_library(hex_legacy_brotlicommon STATIC IMPORTED GLOBAL)
-    add_library(Hex::legacy_brotlicommon ALIAS hex_legacy_brotlicommon)
-    set_target_properties(hex_legacy_brotlicommon PROPERTIES
-        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
-        IMPORTED_LOCATION_DEBUG "${HEXENGINE_BROTLICOMMON_DEBUG_LIB}"
-        IMPORTED_LOCATION_RELEASE "${HEXENGINE_BROTLICOMMON_RELEASE_LIB}"
-        INTERFACE_INCLUDE_DIRECTORIES "${HEXENGINE_BROTLI_INCLUDE_DIR}"
-    )
+    hex_add_imported_static_target(hex_legacy_brotlicommon Hex::legacy_brotlicommon "${HEXENGINE_BROTLICOMMON_DEBUG_LIB}" "${HEXENGINE_BROTLICOMMON_RELEASE_LIB}")
+    set_target_properties(hex_legacy_brotlicommon PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${HEXENGINE_BROTLI_INCLUDE_DIR}")
 
-    add_library(hex_legacy_brotlidec STATIC IMPORTED GLOBAL)
-    add_library(Hex::brotli_legacy ALIAS hex_legacy_brotlidec)
+    hex_add_imported_static_target(hex_legacy_brotlidec Hex::brotli_legacy "${HEXENGINE_BROTLIDEC_DEBUG_LIB}" "${HEXENGINE_BROTLIDEC_RELEASE_LIB}")
     set_target_properties(hex_legacy_brotlidec PROPERTIES
-        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
-        IMPORTED_LOCATION_DEBUG "${HEXENGINE_BROTLIDEC_DEBUG_LIB}"
-        IMPORTED_LOCATION_RELEASE "${HEXENGINE_BROTLIDEC_RELEASE_LIB}"
         INTERFACE_INCLUDE_DIRECTORIES "${HEXENGINE_BROTLI_INCLUDE_DIR}"
     )
     target_link_libraries(hex_legacy_brotlidec INTERFACE Hex::legacy_brotlicommon)

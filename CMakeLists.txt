@@ -69,6 +69,13 @@ add_custom_target(hex-deps-check-refs
     VERBATIM
 )
 
+add_custom_target(hex-deps-check-refs-strict
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --check-refs-strict
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Fail when dependency refs are missing"
+    VERBATIM
+)
+
 add_custom_target(hex-deps-lock-refs
     COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --lock-current-refs
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
