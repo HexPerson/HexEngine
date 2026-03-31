@@ -12,7 +12,7 @@ This file is the authoritative guide for HexEngine build/dependency migration st
 ## Legacy Flow (Still Supported)
 
 1. Run `Setup.bat`.
-2. `Setup.bat` installs Python requirements (`gitpython`, `cmake`) and calls `python setup.py --mode legacy`.
+2. `Setup.bat` installs Python requirements (`gitpython`, `cmake`) and calls `python setup.py --mode legacy --frozen`.
 3. `setup.py` clones/builds/stages dependencies into:
    - `Libs/x64/<Config>/`
    - `Bin/x64/<Config>/Bin/`
@@ -36,7 +36,7 @@ Use CMake for orchestration and migration visibility:
    - `cmake --build --preset deps-lock-refs-debug`
 6. Bootstrap only header dependencies in external-header mode (no native builds):
    - `cmake --build --preset headeronly-bootstrap-debug`
-7. If intentional, run legacy setup through canonical entrypoint:
+7. If intentional, run legacy setup through canonical entrypoint (pinned refs):
    - `cmake --build --preset legacy-setup-debug`
 8. Build the opt-in dependency probe executable:
    - `cmake --preset vs2022-x64-debug-dep-probe`
@@ -62,6 +62,7 @@ Equivalent direct command for plan output:
   - Prints dependency manifest plan and exits without cloning/building.
 - `--frozen`
   - Uses pinned refs from `build/dependencies.lock.json` where provided.
+  - Recommended/default for wrapper entrypoints (`Setup.bat`, `hex-legacy-setup`) to avoid floating upstream layout breaks.
 - `--update`
   - Updates existing dependency repos from origin before build.
 - `--check-refs`

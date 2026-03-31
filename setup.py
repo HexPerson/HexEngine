@@ -362,17 +362,35 @@ def build_directxtk_audio(buildConfig):
 
 def build_physx(buildConfig):
     ensure_repo("physx")
+    physxRepoRoot = os.path.realpath(get_dependency_path("physx"))
+    layoutCandidates = [
+        os.path.join(physxRepoRoot, "physx"),
+        physxRepoRoot,
+    ]
 
-    os.chdir("ThirdParty/physx/physx/")
+    buildRoot = None
+    for candidate in layoutCandidates:
+        presetPath = os.path.join(candidate, "buildtools/presets/public/vc17win64.xml")
+        generateScriptPath = os.path.join(candidate, "generate_projects.bat")
+        if os.path.exists(presetPath) and os.path.exists(generateScriptPath):
+            buildRoot = candidate
+            break
 
-    fin = open("buildtools/presets/public/vc17win64.xml", "rt")
-    data = fin.read()
+    if buildRoot is None:
+        raise RuntimeError(
+            "PhysX dependency layout is not compatible with legacy bootstrap. "
+            "Expected buildtools/presets/public/vc17win64.xml and generate_projects.bat under ThirdParty/physx or ThirdParty/physx/physx. "
+            "Try running with --frozen to use the pinned ref in build/dependencies.lock.json."
+        )
+
+    os.chdir(buildRoot)
+
+    presetPath = "buildtools/presets/public/vc17win64.xml"
+    with open(presetPath, "rt", encoding="utf-8") as fin:
+        data = fin.read()
     data = data.replace('NV_USE_STATIC_WINCRT" value="True"', 'NV_USE_STATIC_WINCRT" value="False"')
-    fin.close()
-
-    fin = open("buildtools/presets/public/vc17win64.xml", "wt")
-    fin.write(data)
-    fin.close()
+    with open(presetPath, "wt", encoding="utf-8") as fin:
+        fin.write(data)
 
     os.system("generate_projects.bat vc17win64")
     os.chdir("compiler/vc17win64/")

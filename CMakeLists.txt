@@ -99,9 +99,9 @@ add_custom_target(hex-headeronly-bootstrap
 )
 
 add_custom_target(hex-legacy-setup
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --frozen
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
-    COMMENT "Run legacy dependency bootstrap intentionally"
+    COMMENT "Run legacy dependency bootstrap intentionally (pinned/frozen refs)"
     VERBATIM
 )
 
