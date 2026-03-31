@@ -378,7 +378,10 @@ def build_nrd(buildConfig):
 
     os.system("mkdir build")
     os.chdir("build")
-    os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH + ' -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "')
+    os.system(
+        'cmake -DNRD_STATIC_LIBRARY=ON -DNRD_EMBEDS_SPIRV_SHADERS=OFF -S .. -G "'
+        + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH + ' -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "'
+    )
 
     if not os.path.exists("NRD.sln"):
         print("Warning: NRD.sln was not generated on first configure attempt. Retrying with a clean build directory.")
@@ -386,7 +389,10 @@ def build_nrd(buildConfig):
         shutil.rmtree("build", ignore_errors=True)
         os.makedirs("build", exist_ok=True)
         os.chdir("build")
-        os.system('cmake -DNRD_STATIC_LIBRARY=ON -S .. -G "' + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH + ' -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "')
+        os.system(
+            'cmake -DNRD_STATIC_LIBRARY=ON -DNRD_EMBEDS_SPIRV_SHADERS=OFF -S .. -G "'
+            + LEGACY_CMAKE_GENERATOR + '" -A ' + LEGACY_CMAKE_ARCH + ' -DCMAKE_CXX_FLAGS="' + runtimeLib + ' /wd4530 "'
+        )
 
     projectPath = os.path.realpath("NRD.sln")
     print("Project path is %s" % projectPath)
