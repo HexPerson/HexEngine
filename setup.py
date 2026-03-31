@@ -51,6 +51,82 @@ def load_dependency_manifest():
 
 
 
+def save_dependency_manifest():
+    with manifestPath.open("w", encoding="utf-8", newline="\n") as manifestFile:
+        json.dump(dependencyManifest, manifestFile, indent=2)
+        manifestFile.write("\n")
+
+
+def get_dependency_head(dep):
+    depPath = dep["path"]
+    if not os.path.exists(depPath):
+        return None
+
+    if Repo is not None:
+        try:
+            repo = Repo(depPath)
+            return repo.head.commit.hexsha
+        except (InvalidGitRepositoryError, ValueError):
+            return None
+
+    if not os.path.exists(os.path.join(depPath, ".git")):
+        return None
+
+    try:
+        return subprocess.check_output(["git", "-C", depPath, "rev-parse", "HEAD"], text=True).strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
+def check_refs(strict=False):
+    missing = []
+    deps = dependencyManifest.get("dependencies", [])
+
+    print("HexEngine dependency ref status")
+    print(f"Manifest: {manifestPath}")
+    print("")
+
+    for dep in deps:
+        ref = dep.get("ref")
+        status = "pinned" if ref else "missing"
+        print(f"- {dep['name']}: {status} ({ref})")
+        if not ref:
+            missing.append(dep["name"])
+
+    print("")
+    print(f"Pinned refs: {len(deps) - len(missing)}")
+    print(f"Missing refs: {len(missing)}")
+
+    if strict and missing:
+        print("Strict check failed: some dependency refs are missing.")
+        return 1
+
+    return 0
+
+
+def lock_current_refs():
+    changed = 0
+    skipped = []
+
+    for dep in dependencyManifest.get("dependencies", []):
+        head = get_dependency_head(dep)
+        if head is None:
+            skipped.append(dep["name"])
+            continue
+
+        if dep.get("ref") != head:
+            dep["ref"] = head
+            changed += 1
+
+    save_dependency_manifest()
+
+    print(f"Updated refs: {changed}")
+    if skipped:
+        print("Skipped (not a local git repo or missing):")
+        for name in skipped:
+            print(f"  - {name}")
+
+
 def get_dependency(name):
     dep = dependenciesByName.get(name.lower())
     if dep is None:
@@ -554,6 +630,9 @@ def parse_args():
     parser.add_argument("--frozen", action="store_true", help="Use pinned refs from dependency manifest where available")
     parser.add_argument("--update", action="store_true", help="Update existing repositories from origin before build")
     parser.add_argument("--print-plan", action="store_true", help="Print dependency plan and exit without cloning/building")
+    parser.add_argument("--check-refs", action="store_true", help="Print dependency ref pin status and exit")
+    parser.add_argument("--check-refs-strict", action="store_true", help="Fail if any dependency ref is missing")
+    parser.add_argument("--lock-current-refs", action="store_true", help="Write current local dependency HEAD commits into manifest refs")
     return parser.parse_args()
 
 
@@ -580,6 +659,16 @@ def main():
 
     if runtimeArgs.print_plan:
         print_plan()
+        return
+
+    if runtimeArgs.check_refs:
+        raise SystemExit(check_refs(strict=False))
+
+    if runtimeArgs.check_refs_strict:
+        raise SystemExit(check_refs(strict=True))
+
+    if runtimeArgs.lock_current_refs:
+        lock_current_refs()
         return
 
     msbuildPath = locate_msbuild_path()

@@ -20,6 +20,20 @@ add_custom_target(hex-deps-plan
     VERBATIM
 )
 
+add_custom_target(hex-deps-check-refs
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --check-refs
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Check dependency ref pin status"
+    VERBATIM
+)
+
+add_custom_target(hex-deps-lock-refs
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --lock-current-refs
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Lock dependency refs to local HEAD commits"
+    VERBATIM
+)
+
 add_custom_target(hex-legacy-setup
     COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"

@@ -27,7 +27,11 @@ Use CMake for orchestration and migration visibility:
    - `cmake --preset vs2022-x64-debug`
 2. Print dependency plan (no mutations):
    - `cmake --build --preset deps-plan-debug`
-3. If intentional, run legacy setup through canonical entrypoint:
+3. Check ref pin status:
+   - `cmake --build --preset deps-check-refs-debug`
+4. If you have dependencies cloned locally and want to pin current commits into the manifest:
+   - `cmake --build --preset deps-lock-refs-debug`
+5. If intentional, run legacy setup through canonical entrypoint:
    - `cmake --build --preset legacy-setup-debug`
 
 Equivalent direct command for plan output:
@@ -43,6 +47,12 @@ Equivalent direct command for plan output:
   - Uses pinned refs from `build/dependencies.lock.json` where provided.
 - `--update`
   - Updates existing dependency repos from origin before build.
+- `--check-refs`
+  - Prints pin status for all dependencies.
+- `--check-refs-strict`
+  - Same as check, but exits with failure when any ref is missing.
+- `--lock-current-refs`
+  - Writes local dependency `HEAD` commits into manifest `ref` fields when repos are available.
 
 Notes:
 - Automatic floating update behavior was removed from default path.

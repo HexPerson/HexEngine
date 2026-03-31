@@ -47,6 +47,22 @@
       ]
     },
     {
+      "name": "deps-check-refs-debug",
+      "displayName": "Dependency Ref Check (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-check-refs"
+      ]
+    },
+    {
+      "name": "deps-lock-refs-debug",
+      "displayName": "Dependency Ref Lock (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-lock-refs"
+      ]
+    },
+    {
       "name": "legacy-setup-debug",
       "displayName": "Legacy Setup (Debug preset)",
       "configurePreset": "vs2022-x64-debug",
