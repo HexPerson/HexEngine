@@ -589,8 +589,8 @@ def buildConfig(buildConfig):
 
     build_assimp(buildConfig)
     build_directxtk(buildConfig)
-    # build_physx(buildConfig.lower())
-    # build_shaderconductor(buildConfig)
+    build_physx(buildConfig.lower())
+    build_shaderconductor(buildConfig)
     build_hbaoplus(buildConfig)
     build_freetype(buildConfig)
     build_directxtex(buildConfig)

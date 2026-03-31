@@ -17,6 +17,7 @@ This file is the authoritative guide for HexEngine build/dependency migration st
    - `Libs/x64/<Config>/`
    - `Bin/x64/<Config>/Bin/`
    - `Include/` (legacy header staging for selected header-only dependencies)
+   - Native library bootstrap includes `physx` and `shaderconductor` as managed dependencies in the default legacy flow.
 4. Build the engine and tools via `Source/HexEngine/HexEngine.sln` in Visual Studio 2022.
 
 ## New Recommended Orchestration Flow (Incremental)
