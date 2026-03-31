@@ -587,6 +587,10 @@ def buildConfig(buildConfig):
 def get_cxxopts():
     ensure_repo("cxxopts")
 
+    if runtimeArgs.header_layout == "external":
+        print("[header-layout=external] Skipping Include/cxxopts copy; use ThirdParty/cxxopts/include via target-based include paths.")
+        return
+
     if not os.path.exists(includeDir + "/cxxopts/"):
         shutil.copytree(os.path.realpath("ThirdParty/cxxopts/include/"), includeDir + "/cxxopts/")
 
@@ -633,6 +637,8 @@ def parse_args():
     parser.add_argument("--check-refs", action="store_true", help="Print dependency ref pin status and exit")
     parser.add_argument("--check-refs-strict", action="store_true", help="Fail if any dependency ref is missing")
     parser.add_argument("--lock-current-refs", action="store_true", help="Write current local dependency HEAD commits into manifest refs")
+    parser.add_argument("--header-only-bootstrap", action="store_true", help="Fetch/copy header-only dependencies only (skip native library builds)")
+    parser.add_argument("--header-layout", choices=["legacy", "external"], default="legacy", help="Header staging mode for migrated dependencies")
     return parser.parse_args()
 
 
@@ -669,6 +675,15 @@ def main():
 
     if runtimeArgs.lock_current_refs:
         lock_current_refs()
+        return
+
+    if runtimeArgs.header_only_bootstrap:
+        get_cxxopts()
+        get_fastnoiselite()
+        get_rapidxml()
+        get_rapidjson()
+        get_retpack2d()
+        get_streamline()
         return
 
     msbuildPath = locate_msbuild_path()

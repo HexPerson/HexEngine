@@ -3,6 +3,7 @@
 project(HexEngineBuild LANGUAGES NONE)
 
 include(cmake/HexToolchain.cmake)
+include(cmake/HexDependencies.cmake)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -31,6 +32,13 @@ add_custom_target(hex-deps-lock-refs
     COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --lock-current-refs
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
     COMMENT "Lock dependency refs to local HEAD commits"
+    VERBATIM
+)
+
+add_custom_target(hex-headeronly-bootstrap
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --header-only-bootstrap --header-layout external
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Fetch header-only dependencies (external-header layout; no full native builds)"
     VERBATIM
 )
 

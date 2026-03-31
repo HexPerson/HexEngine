@@ -63,6 +63,14 @@
       ]
     },
     {
+      "name": "headeronly-bootstrap-debug",
+      "displayName": "Header-Only Bootstrap (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-headeronly-bootstrap"
+      ]
+    },
+    {
       "name": "legacy-setup-debug",
       "displayName": "Legacy Setup (Debug preset)",
       "configurePreset": "vs2022-x64-debug",

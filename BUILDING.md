@@ -31,7 +31,9 @@ Use CMake for orchestration and migration visibility:
    - `cmake --build --preset deps-check-refs-debug`
 4. If you have dependencies cloned locally and want to pin current commits into the manifest:
    - `cmake --build --preset deps-lock-refs-debug`
-5. If intentional, run legacy setup through canonical entrypoint:
+5. Bootstrap only header dependencies in external-header mode (no native builds):
+   - `cmake --build --preset headeronly-bootstrap-debug`
+6. If intentional, run legacy setup through canonical entrypoint:
    - `cmake --build --preset legacy-setup-debug`
 
 Equivalent direct command for plan output:
@@ -53,6 +55,10 @@ Equivalent direct command for plan output:
   - Same as check, but exits with failure when any ref is missing.
 - `--lock-current-refs`
   - Writes local dependency `HEAD` commits into manifest `ref` fields when repos are available.
+- `--header-only-bootstrap`
+  - Fetches/copies header-only dependencies only and skips native library builds.
+- `--header-layout external`
+  - Phase 3 starter behavior: `cxxopts` is consumed from `ThirdParty/cxxopts/include` without copying into `Include/`.
 
 Notes:
 - Automatic floating update behavior was removed from default path.
@@ -79,9 +85,17 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 - Editor `GameIntegrator` invoking MSBuild directly for game-code hot reload.
 - Header staging into `Include/` for select dependencies in legacy setup path.
 
+## Phase 3 Starter (Now Implemented)
+
+- Introduced target-based dependency scaffold in CMake:
+  - `Hex::cxxopts` (`INTERFACE`) in [cmake/HexDependencies.cmake](/C:/HexEngine/cmake/HexDependencies.cmake)
+- Added opt-in external-header mode for `cxxopts`:
+  - `python setup.py --header-only-bootstrap --header-layout external`
+- Existing default behavior remains unchanged (`--header-layout legacy`).
+
 ## Migration Roadmap Snapshot
 
 - Phase 1 (this pass): stabilization + manifest + docs + CMake orchestration scaffold.
 - Phase 2 (started): canonical CMake entrypoint for orchestration targets.
-- Phase 3 (next): move dependencies toward target-based CMake linkage and backend integration (vcpkg/FetchContent).
+- Phase 3 (started): move dependencies toward target-based CMake linkage and backend integration (vcpkg/FetchContent).
 - Phase 4 (next): separate game build service from editor runtime hot-reload logic.
