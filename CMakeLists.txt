@@ -41,6 +41,10 @@ if(HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE)
         target_link_libraries(hex-assimp-probe PRIVATE Hex::assimp_legacy)
     else()
         message(WARNING "HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE=ON, but Hex::assimp_legacy is unavailable.")
+        add_custom_target(hex-assimp-probe
+            COMMAND "${CMAKE_COMMAND}" -E echo "hex-assimp-probe skipped: Hex::assimp_legacy is unavailable in this checkout."
+            VERBATIM
+        )
     endif()
 endif()
 
@@ -52,6 +56,10 @@ if(HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE)
         target_link_libraries(hex-brotli-probe PRIVATE Hex::brotli_legacy)
     else()
         message(WARNING "HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE=ON, but Hex::brotli_legacy is unavailable.")
+        add_custom_target(hex-brotli-probe
+            COMMAND "${CMAKE_COMMAND}" -E echo "hex-brotli-probe skipped: Hex::brotli_legacy is unavailable in this checkout."
+            VERBATIM
+        )
     endif()
 endif()
 

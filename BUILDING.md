@@ -47,6 +47,9 @@ Use CMake for orchestration and migration visibility:
    - `cmake --preset vs2022-x64-debug-brotli-probe`
    - `cmake --build --preset brotli-probe-debug`
 
+Note:
+- In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
+
 Equivalent direct command for plan output:
 - `python setup.py --print-plan`
 

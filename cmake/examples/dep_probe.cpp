@@ -2,7 +2,7 @@
 #include <FastNoiseLite.h>
 #include <nlohmann/json.hpp>
 #include <rapidxml.hpp>
-#include <rect_structs.h>
+#include <rectpack2D/rect_structs.h>
 
 int main()
 {
