@@ -35,6 +35,11 @@
       "displayName": "VS2022 x64 Debug (vcpkg toolchain)",
       "description": "Canonical preset with vcpkg manifest toolchain enabled.",
       "inherits": "vs2022-x64-debug",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{VCPKG_ROOT}",
+        "rhs": ""
+      },
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
@@ -46,6 +51,11 @@
       "displayName": "VS2022 x64 Release (vcpkg toolchain)",
       "description": "Canonical preset with vcpkg manifest toolchain enabled.",
       "inherits": "vs2022-x64-release",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{VCPKG_ROOT}",
+        "rhs": ""
+      },
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "cacheVariables": {
         "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
