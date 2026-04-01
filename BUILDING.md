@@ -56,6 +56,9 @@ Use CMake for orchestration and migration visibility:
 13. Build the opt-in ShaderConductor imported-target probe:
    - `cmake --preset vs2022-x64-debug-shaderconductor-probe`
    - `cmake --build --preset shaderconductor-probe-debug`
+14. Build the opt-in PhysX imported-target probe:
+   - `cmake --preset vs2022-x64-debug-physx-probe`
+   - `cmake --build --preset physx-probe-debug`
 
 Note:
 - In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
@@ -160,6 +163,10 @@ This keeps migration incremental while enabling reproducible, reviewable depende
   - target: `hex-shaderconductor-probe`
   - source: [shaderconductor_probe.cpp](/C:/HexEngine/cmake/examples/shaderconductor_probe.cpp)
   - purpose: validate ShaderConductor include/link consumption through `Hex::shaderconductor_vendor`, directly from `ThirdParty/shaderconductor/Build` (no `Libs/` or `Include/` copy).
+- Added optional PhysX imported-target probe executable:
+  - target: `hex-physx-probe`
+  - source: [physx_probe.cpp](/C:/HexEngine/cmake/examples/physx_probe.cpp)
+  - purpose: validate PhysX include/link consumption through `Hex::physx_vendor`, directly from `ThirdParty/physx/.../bin/win.x86_64.vc143.md`.
 - Existing default behavior remains unchanged (`--header-layout legacy`).
 
 ## Migration Roadmap Snapshot

@@ -18,6 +18,7 @@ endif()
 option(HEXENGINE_ENABLE_DEP_PROBE "Build a small CMake dependency probe target (Phase 3 validation)." OFF)
 option(HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE "Build a small assimp imported-target probe executable." OFF)
 option(HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE "Build a small brotli imported-target probe executable." OFF)
+option(HEXENGINE_ENABLE_PHYSX_PROBE "Build a small physx imported-target probe executable." OFF)
 option(HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE "Build a small shaderconductor imported-target probe executable." OFF)
 option(HEXENGINE_ENABLE_STREAMLINE_PROBE "Build a small streamline imported-target probe executable." OFF)
 
@@ -90,6 +91,21 @@ if(HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE)
         message(WARNING "HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE=ON, but Hex::shaderconductor_vendor is unavailable.")
         add_custom_target(hex-shaderconductor-probe
             COMMAND "${CMAKE_COMMAND}" -E echo "hex-shaderconductor-probe skipped: Hex::shaderconductor_vendor is unavailable in this checkout."
+            VERBATIM
+        )
+    endif()
+endif()
+
+if(HEXENGINE_ENABLE_PHYSX_PROBE)
+    enable_language(CXX)
+    if(HEXENGINE_HAS_PHYSX_VENDOR)
+        add_executable(hex-physx-probe EXCLUDE_FROM_ALL cmake/examples/physx_probe.cpp)
+        target_compile_features(hex-physx-probe PRIVATE cxx_std_20)
+        target_link_libraries(hex-physx-probe PRIVATE Hex::physx_vendor)
+    else()
+        message(WARNING "HEXENGINE_ENABLE_PHYSX_PROBE=ON, but Hex::physx_vendor is unavailable.")
+        add_custom_target(hex-physx-probe
+            COMMAND "${CMAKE_COMMAND}" -E echo "hex-physx-probe skipped: Hex::physx_vendor is unavailable in this checkout."
             VERBATIM
         )
     endif()

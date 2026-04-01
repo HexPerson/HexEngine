@@ -10,6 +10,26 @@ set(HEXENGINE_BROTLICOMMON_DEBUG_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Debug/brotlico
 set(HEXENGINE_BROTLICOMMON_RELEASE_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Release/brotlicommon.lib")
 set(HEXENGINE_BROTLIDEC_DEBUG_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Debug/brotlidec.lib")
 set(HEXENGINE_BROTLIDEC_RELEASE_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Release/brotlidec.lib")
+
+set(HEXENGINE_PHYSX_ROOT "")
+set(_hexengine_physx_layout_candidates
+    "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/physx/physx"
+    "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/physx"
+)
+foreach(_hexengine_physx_candidate IN LISTS _hexengine_physx_layout_candidates)
+    if(EXISTS "${_hexengine_physx_candidate}/include/PxPhysicsAPI.h")
+        set(HEXENGINE_PHYSX_ROOT "${_hexengine_physx_candidate}")
+        break()
+    endif()
+endforeach()
+
+set(HEXENGINE_PHYSX_INCLUDE_DIR "${HEXENGINE_PHYSX_ROOT}/include")
+set(HEXENGINE_PHYSX_PXSHARED_INCLUDE_DIR "${HEXENGINE_PHYSX_ROOT}/../pxshared/include")
+set(HEXENGINE_PHYSX_DEBUG_LIB_DIR "${HEXENGINE_PHYSX_ROOT}/bin/win.x86_64.vc143.md/debug")
+set(HEXENGINE_PHYSX_RELEASE_LIB_DIR "${HEXENGINE_PHYSX_ROOT}/bin/win.x86_64.vc143.md/release")
+set(HEXENGINE_PHYSX_MAIN_DEBUG_LIB "${HEXENGINE_PHYSX_DEBUG_LIB_DIR}/PhysX_64.lib")
+set(HEXENGINE_PHYSX_MAIN_RELEASE_LIB "${HEXENGINE_PHYSX_RELEASE_LIB_DIR}/PhysX_64.lib")
+
 set(HEXENGINE_SHADERCONDUCTOR_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/shaderconductor/Include")
 set(HEXENGINE_SHADERCONDUCTOR_DEBUG_LIB "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/shaderconductor/Build/Lib/Debug/ShaderConductor.lib")
 set(HEXENGINE_SHADERCONDUCTOR_RELEASE_LIB "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/shaderconductor/Build/Lib/Release/ShaderConductor.lib")
@@ -18,6 +38,7 @@ set(HEXENGINE_STREAMLINE_INTERPOSER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/
 
 set(HEXENGINE_HAS_LEGACY_ASSIMP OFF)
 set(HEXENGINE_HAS_LEGACY_BROTLI OFF)
+set(HEXENGINE_HAS_PHYSX_VENDOR OFF)
 set(HEXENGINE_HAS_SHADERCONDUCTOR_VENDOR OFF)
 set(HEXENGINE_HAS_STREAMLINE_VENDOR OFF)
 
@@ -80,6 +101,38 @@ if(
     set(HEXENGINE_HAS_LEGACY_BROTLI ON)
 else()
     message(STATUS "Hex::brotli_legacy unavailable: expected staged legacy libs/includes were not found.")
+endif()
+
+if(
+    EXISTS "${HEXENGINE_PHYSX_INCLUDE_DIR}"
+    AND EXISTS "${HEXENGINE_PHYSX_MAIN_DEBUG_LIB}"
+    AND EXISTS "${HEXENGINE_PHYSX_MAIN_RELEASE_LIB}"
+)
+    add_library(hex_vendor_physx INTERFACE)
+    add_library(Hex::physx_vendor ALIAS hex_vendor_physx)
+    target_include_directories(hex_vendor_physx INTERFACE "${HEXENGINE_PHYSX_INCLUDE_DIR}")
+    if(EXISTS "${HEXENGINE_PHYSX_PXSHARED_INCLUDE_DIR}")
+        target_include_directories(hex_vendor_physx INTERFACE "${HEXENGINE_PHYSX_PXSHARED_INCLUDE_DIR}")
+    endif()
+    target_link_libraries(hex_vendor_physx INTERFACE
+        "$<$<CONFIG:Debug>:${HEXENGINE_PHYSX_DEBUG_LIB_DIR}/PhysX_64.lib>"
+        "$<$<CONFIG:Debug>:${HEXENGINE_PHYSX_DEBUG_LIB_DIR}/PhysXFoundation_64.lib>"
+        "$<$<CONFIG:Debug>:${HEXENGINE_PHYSX_DEBUG_LIB_DIR}/PhysXExtensions_static_64.lib>"
+        "$<$<CONFIG:Debug>:${HEXENGINE_PHYSX_DEBUG_LIB_DIR}/PhysXCooking_64.lib>"
+        "$<$<CONFIG:Debug>:${HEXENGINE_PHYSX_DEBUG_LIB_DIR}/PhysXPvdSDK_static_64.lib>"
+        "$<$<CONFIG:Debug>:${HEXENGINE_PHYSX_DEBUG_LIB_DIR}/PhysXCharacterKinematic_static_64.lib>"
+        "$<$<CONFIG:Debug>:${HEXENGINE_PHYSX_DEBUG_LIB_DIR}/PhysXCommon_64.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${HEXENGINE_PHYSX_RELEASE_LIB_DIR}/PhysX_64.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${HEXENGINE_PHYSX_RELEASE_LIB_DIR}/PhysXFoundation_64.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${HEXENGINE_PHYSX_RELEASE_LIB_DIR}/PhysXExtensions_static_64.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${HEXENGINE_PHYSX_RELEASE_LIB_DIR}/PhysXCooking_64.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${HEXENGINE_PHYSX_RELEASE_LIB_DIR}/PhysXPvdSDK_static_64.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${HEXENGINE_PHYSX_RELEASE_LIB_DIR}/PhysXCharacterKinematic_static_64.lib>"
+        "$<$<NOT:$<CONFIG:Debug>>:${HEXENGINE_PHYSX_RELEASE_LIB_DIR}/PhysXCommon_64.lib>"
+    )
+    set(HEXENGINE_HAS_PHYSX_VENDOR ON)
+else()
+    message(STATUS "Hex::physx_vendor unavailable: expected PhysX headers/libs were not found in ThirdParty/physx.")
 endif()
 
 if(

@@ -77,6 +77,16 @@
       "cacheVariables": {
         "HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE": "ON"
       }
+    },
+    {
+      "name": "vs2022-x64-debug-physx-probe",
+      "displayName": "VS2022 x64 Debug + PhysX Probe",
+      "description": "Enables PhysX imported-target probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_PHYSX_PROBE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -178,6 +188,15 @@
       "configurePreset": "vs2022-x64-debug-shaderconductor-probe",
       "targets": [
         "hex-shaderconductor-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "physx-probe-debug",
+      "displayName": "PhysX Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-physx-probe",
+      "targets": [
+        "hex-physx-probe"
       ],
       "configuration": "Debug"
     },
