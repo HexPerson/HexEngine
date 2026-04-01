@@ -202,6 +202,23 @@ def lock_current_refs(manifest: dict) -> None:
 
 def build_directxtk(ctx: RuntimeContext, dep: dict, config: str) -> None:
     repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    win10_vcxproj = repo / "DirectXTK_Desktop_2022_Win10.vcxproj"
+    if win10_vcxproj.exists():
+        run(
+            [
+                str(ctx.msbuild_path),
+                str(win10_vcxproj),
+                f"/p:Configuration={config}",
+                "/p:Platform=x64",
+                "/m",
+            ]
+        )
+        copy_file(
+            repo / "Bin" / "Desktop_2022_Win10" / "x64" / config / "DirectXTK.lib",
+            ctx.libs_dir(config) / "DirectXTK.lib",
+        )
+        return
+
     build_dir = repo / "build"
     mkdir(build_dir)
     run(["cmake", "-S", "..", "-G", ctx.generator, "-A", ctx.arch], cwd=build_dir)
