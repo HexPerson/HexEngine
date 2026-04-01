@@ -10,6 +10,7 @@
 ThirdParty/*
 Include/*
 Source/HexEngine/HexEngine.Shaders/Compiled/*
+out/
 
 # Precompiled Headers
 *.gch
