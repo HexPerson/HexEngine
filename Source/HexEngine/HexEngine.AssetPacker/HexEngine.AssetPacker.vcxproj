@@ -117,7 +117,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\brotli\c\include\;$(SolutionDir)..\..\ThirdParty\directxtk\inc\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\ThirdParty\brotli\c\include\;$(SolutionDir)..\..\ThirdParty\directxtk\inc\;$(SolutionDir)..\..\ThirdParty\cxxopts\include\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
@@ -141,7 +141,7 @@
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\brotli\c\include\;$(SolutionDir)..\..\ThirdParty\directxtk\inc\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\ThirdParty\brotli\c\include\;$(SolutionDir)..\..\ThirdParty\directxtk\inc\;$(SolutionDir)..\..\ThirdParty\cxxopts\include\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>

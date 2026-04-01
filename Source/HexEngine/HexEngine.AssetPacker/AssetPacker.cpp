@@ -1,7 +1,7 @@
 
 
 #include "AssetPacker.hpp"
-#include <cxxopts/cxxopts.hpp>
+#include <cxxopts.hpp>
 #include <brotli\encode.h>
 
 //HVar* HexEngine::g_hvars = nullptr;

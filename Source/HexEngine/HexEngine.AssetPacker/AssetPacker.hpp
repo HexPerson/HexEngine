@@ -1,6 +1,6 @@
 
 #pragma once
 
-#include <HexEngine.Core\HexEngine.hpp>
+#include "../HexEngine.Core/HexEngine.hpp"
 
 
