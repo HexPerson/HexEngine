@@ -4,7 +4,6 @@
 #include "../Required.hpp"
 #include "Elements\Element.hpp"
 #include "Elements\MenuBar.hpp"
-#include "Elements\Dock.hpp"
 #include "Elements\TreeList.hpp"
 #include "GuiRenderer.hpp"
 #include "../Graphics/BlurEffect.hpp"

@@ -378,7 +378,6 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="GUI\Elements\ComponentWidget.hpp" />
     <ClInclude Include="GUI\Elements\ContextMenu.hpp" />
     <ClInclude Include="GUI\Elements\Dialog.hpp" />
-    <ClInclude Include="GUI\Elements\Dock.hpp" />
     <ClInclude Include="GUI\Elements\DragFloat.hpp" />
     <ClInclude Include="GUI\Elements\DragInt.hpp" />
     <ClInclude Include="GUI\Elements\DropDown.hpp" />
@@ -572,7 +571,6 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="GUI\Elements\ComponentWidget.cpp" />
     <ClCompile Include="GUI\Elements\ContextMenu.cpp" />
     <ClCompile Include="GUI\Elements\Dialog.cpp" />
-    <ClCompile Include="GUI\Elements\Dock.cpp" />
     <ClCompile Include="GUI\Elements\DragFloat.cpp" />
     <ClCompile Include="GUI\Elements\DragInt.cpp" />
     <ClCompile Include="GUI\Elements\DropDown.cpp" />

@@ -53,7 +53,6 @@
 
 #include "GUI/DebugGUI.hpp"
 #include "GUI/UIManager.hpp"
-#include "GUI/Elements/Dock.hpp"
 #include "GUI/Elements/Button.hpp"
 #include "GUI/Elements/Dialog.hpp"
 #include "GUI/Elements/GroupBox.hpp"

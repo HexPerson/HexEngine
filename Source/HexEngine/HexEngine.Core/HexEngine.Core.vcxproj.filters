@@ -354,9 +354,6 @@
     <ClInclude Include="GUI\Elements\Dialog.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="GUI\Elements\Dock.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="GUI\Elements\Element.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -843,9 +840,6 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="GUI\Elements\Dialog.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Dock.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="GUI\Elements\Element.cpp">
