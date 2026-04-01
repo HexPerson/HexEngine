@@ -1,0 +1,57 @@
+name: Windows Modern Build
+
+on:
+  push:
+    branches:
+      - main
+      - codex/build-arch-phase1
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  debug-modern:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure (Debug)
+        run: cmake --preset vs2022-x64-debug
+
+      - name: Minimal Bootstrap (Debug)
+        run: cmake --build --preset minimal-bootstrap-debug
+
+      - name: Build Solution Modern (Debug)
+        run: cmake --build --preset sln-build-debug-modern
+
+  release-modern:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure (Release)
+        run: cmake --preset vs2022-x64-release
+
+      - name: Minimal Bootstrap (Release)
+        run: cmake --build --preset minimal-bootstrap-release
+
+      - name: Build Solution Modern (Release)
+        run: cmake --build --preset sln-build-release-modern

@@ -175,6 +175,14 @@
       ]
     },
     {
+      "name": "minimal-bootstrap-release",
+      "displayName": "Minimal Bootstrap (Release preset)",
+      "configurePreset": "vs2022-x64-release",
+      "targets": [
+        "hex-minimal-bootstrap"
+      ]
+    },
+    {
       "name": "streamline-artifacts-check-debug",
       "displayName": "Streamline Artifact Check (Debug preset)",
       "configurePreset": "vs2022-x64-debug",

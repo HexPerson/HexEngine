@@ -26,59 +26,65 @@ Use CMake for orchestration and migration visibility:
 
 1. Configure:
    - `cmake --preset vs2022-x64-debug`
-2. Print dependency plan (no mutations):
+2. Team default bootstrap + build (Debug modern lane):
+   - `cmake --build --preset minimal-bootstrap-debug`
+   - `cmake --build --preset sln-build-debug-modern`
+3. Team default Release lane:
+   - `cmake --build --preset sln-build-release-modern`
+4. Print dependency plan (no mutations):
    - `cmake --build --preset deps-plan-debug`
-3. Check ref pin status:
+5. Check ref pin status:
    - `cmake --build --preset deps-check-refs-debug`
-4. Enforce strict ref pin status (CI-friendly):
+6. Enforce strict ref pin status (CI-friendly):
    - `cmake --build --preset deps-check-refs-strict-debug`
-5. Print dependency backend scaffold status:
+7. Print dependency backend scaffold status:
    - `cmake --build --preset deps-backend-info-debug`
-6. If you have dependencies cloned locally and want to pin current commits into the manifest:
+8. If you have dependencies cloned locally and want to pin current commits into the manifest:
    - `cmake --build --preset deps-lock-refs-debug`
-7. Bootstrap only header dependencies in external-header mode (no native builds):
+9. Bootstrap only header dependencies in external-header mode (no native builds):
    - `cmake --build --preset headeronly-bootstrap-debug`
-8. Bootstrap required runtime modules only (streamline + physx + shaderconductor):
+10. Bootstrap required runtime modules only (streamline + physx + shaderconductor):
    - `cmake --build --preset required-modules-bootstrap-debug`
    - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
-9. Bootstrap the minimal non-legacy dependency set (recommended migration path):
+11. Bootstrap the minimal non-legacy dependency set (recommended migration path):
    - `cmake --build --preset minimal-bootstrap-debug`
+   - release variant: `cmake --build --preset minimal-bootstrap-release`
    - includes:
      - header-only bootstrap in external mode (no `Include/` copying for migrated header-only deps)
      - required runtime module bootstrap (`streamline`, `physx`, `shaderconductor`)
    - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
-10. If intentional, run full legacy setup through canonical entrypoint (pinned refs):
+12. If intentional, run full legacy setup through canonical entrypoint (pinned refs):
    - `cmake --build --preset legacy-setup-debug`
-10. Build the opt-in dependency probe executable:
+13. Build the opt-in dependency probe executable:
    - `cmake --preset vs2022-x64-debug-dep-probe`
    - `cmake --build --preset dep-probe-debug`
-10. Build the opt-in legacy imported-target assimp probe:
+14. Build the opt-in legacy imported-target assimp probe:
    - `cmake --preset vs2022-x64-debug-assimp-probe`
    - `cmake --build --preset assimp-probe-debug`
-11. Build the opt-in legacy imported-target brotli probe:
+15. Build the opt-in legacy imported-target brotli probe:
    - `cmake --preset vs2022-x64-debug-brotli-probe`
    - `cmake --build --preset brotli-probe-debug`
-12. Build the opt-in Streamline imported-target probe:
+16. Build the opt-in Streamline imported-target probe:
    - `cmake --preset vs2022-x64-debug-streamline-probe`
    - `cmake --build --preset streamline-probe-debug`
-13. Build the opt-in ShaderConductor imported-target probe:
+17. Build the opt-in ShaderConductor imported-target probe:
    - `cmake --preset vs2022-x64-debug-shaderconductor-probe`
    - `cmake --build --preset shaderconductor-probe-debug`
-14. Build the opt-in PhysX imported-target probe:
+18. Build the opt-in PhysX imported-target probe:
    - `cmake --preset vs2022-x64-debug-physx-probe`
    - `cmake --build --preset physx-probe-debug`
-16. Build the engine solution via canonical CMake orchestration targets:
+19. Build the engine solution via canonical CMake orchestration targets:
    - Debug: `cmake --build --preset sln-build-debug`
    - Release: `cmake --build --preset sln-build-release`
-17. Build the engine solution with minimal non-legacy bootstrap:
+20. Build the engine solution with minimal non-legacy bootstrap:
    - Debug: `cmake --build --preset sln-build-debug-modern`
    - Release: `cmake --build --preset sln-build-release-modern`
-18. Run Streamline preflight only (fast check):
+21. Run Streamline preflight only (fast check):
    - `cmake --build --preset streamline-artifacts-check-debug`
-19. Run all required-runtime dependency probes in one shot:
+22. Run all required-runtime dependency probes in one shot:
    - `cmake --preset vs2022-x64-debug-required-runtime-probes`
    - `cmake --build --preset required-runtime-probes-debug`
-20. Build ShaderCompiler via canonical orchestration:
+23. Build ShaderCompiler via canonical orchestration:
    - Legacy linkage: `cmake --build --preset shadercompiler-build-debug`
    - Opt-in vendor linkage (`ThirdParty/shaderconductor/Build`): `cmake --build --preset shadercompiler-build-debug-vendor`
 

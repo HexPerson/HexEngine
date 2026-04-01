@@ -60,11 +60,24 @@ You'll need:
 - Visual Studio 2022
 
 # Building
-Run Setup.bat and the automated build script will grab all the dependencies and begin building. This will take quite some time on the first run. 
+Canonical path (recommended):
 
-For the migration-aware flow and canonical orchestration entrypoint, see [BUILDING.md](BUILDING.md).
+1. `cmake --preset vs2022-x64-debug`
+2. `cmake --build --preset minimal-bootstrap-debug`
+3. `cmake --build --preset sln-build-debug-modern`
 
-Note: dependency updates are now explicit (`python setup.py --update`), rather than automatic on every run.
+Release lane:
+
+1. `cmake --preset vs2022-x64-release`
+2. `cmake --build --preset minimal-bootstrap-release`
+3. `cmake --build --preset sln-build-release-modern`
+
+Legacy wrapper path is still supported:
+
+- `Setup.bat`
+
+For full migration-aware orchestration details, see [BUILDING.md](BUILDING.md).
+Dependency updates are explicit (`python setup.py --update`), not automatic.
 
 # Why HexEngine?
 HexEngine is built for developers who want:
