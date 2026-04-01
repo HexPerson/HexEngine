@@ -10,15 +10,29 @@ set(HEXENGINE_BROTLICOMMON_DEBUG_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Debug/brotlico
 set(HEXENGINE_BROTLICOMMON_RELEASE_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Release/brotlicommon.lib")
 set(HEXENGINE_BROTLIDEC_DEBUG_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Debug/brotlidec.lib")
 set(HEXENGINE_BROTLIDEC_RELEASE_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Release/brotlidec.lib")
+set(HEXENGINE_SHADERCONDUCTOR_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/shaderconductor/Include")
+set(HEXENGINE_SHADERCONDUCTOR_DEBUG_LIB "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/shaderconductor/Build/Lib/Debug/ShaderConductor.lib")
+set(HEXENGINE_SHADERCONDUCTOR_RELEASE_LIB "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/shaderconductor/Build/Lib/Release/ShaderConductor.lib")
 set(HEXENGINE_STREAMLINE_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/Streamline/include")
 set(HEXENGINE_STREAMLINE_INTERPOSER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/Streamline/lib/x64/sl.interposer.lib")
 
 set(HEXENGINE_HAS_LEGACY_ASSIMP OFF)
 set(HEXENGINE_HAS_LEGACY_BROTLI OFF)
+set(HEXENGINE_HAS_SHADERCONDUCTOR_VENDOR OFF)
 set(HEXENGINE_HAS_STREAMLINE_VENDOR OFF)
 
 function(hex_add_imported_static_target target_name alias_name debug_lib release_lib)
     add_library(${target_name} STATIC IMPORTED GLOBAL)
+    add_library(${alias_name} ALIAS ${target_name})
+    set_target_properties(${target_name} PROPERTIES
+        IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
+        IMPORTED_LOCATION_DEBUG "${debug_lib}"
+        IMPORTED_LOCATION_RELEASE "${release_lib}"
+    )
+endfunction()
+
+function(hex_add_imported_unknown_target target_name alias_name debug_lib release_lib)
+    add_library(${target_name} UNKNOWN IMPORTED GLOBAL)
     add_library(${alias_name} ALIAS ${target_name})
     set_target_properties(${target_name} PROPERTIES
         IMPORTED_CONFIGURATIONS "DEBUG;RELEASE"
@@ -66,6 +80,26 @@ if(
     set(HEXENGINE_HAS_LEGACY_BROTLI ON)
 else()
     message(STATUS "Hex::brotli_legacy unavailable: expected staged legacy libs/includes were not found.")
+endif()
+
+if(
+    EXISTS "${HEXENGINE_SHADERCONDUCTOR_INCLUDE_DIR}"
+    AND EXISTS "${HEXENGINE_SHADERCONDUCTOR_DEBUG_LIB}"
+    AND EXISTS "${HEXENGINE_SHADERCONDUCTOR_RELEASE_LIB}"
+)
+    # Phase 3 migration: consume ShaderConductor directly from ThirdParty build output (no Libs/Include copy).
+    hex_add_imported_unknown_target(
+        hex_vendor_shaderconductor
+        Hex::shaderconductor_vendor
+        "${HEXENGINE_SHADERCONDUCTOR_DEBUG_LIB}"
+        "${HEXENGINE_SHADERCONDUCTOR_RELEASE_LIB}"
+    )
+    set_target_properties(hex_vendor_shaderconductor PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${HEXENGINE_SHADERCONDUCTOR_INCLUDE_DIR}"
+    )
+    set(HEXENGINE_HAS_SHADERCONDUCTOR_VENDOR ON)
+else()
+    message(STATUS "Hex::shaderconductor_vendor unavailable: expected ThirdParty shaderconductor include/libs were not found.")
 endif()
 
 if(

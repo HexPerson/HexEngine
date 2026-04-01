@@ -53,6 +53,9 @@ Use CMake for orchestration and migration visibility:
 12. Build the opt-in Streamline imported-target probe:
    - `cmake --preset vs2022-x64-debug-streamline-probe`
    - `cmake --build --preset streamline-probe-debug`
+13. Build the opt-in ShaderConductor imported-target probe:
+   - `cmake --preset vs2022-x64-debug-shaderconductor-probe`
+   - `cmake --build --preset shaderconductor-probe-debug`
 
 Note:
 - In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
@@ -153,6 +156,10 @@ This keeps migration incremental while enabling reproducible, reviewable depende
   - target: `hex-streamline-probe`
   - source: [streamline_probe.cpp](/C:/HexEngine/cmake/examples/streamline_probe.cpp)
   - purpose: validate Streamline SDK include/link consumption through `Hex::streamline_vendor`.
+- Added optional ShaderConductor imported-target probe executable:
+  - target: `hex-shaderconductor-probe`
+  - source: [shaderconductor_probe.cpp](/C:/HexEngine/cmake/examples/shaderconductor_probe.cpp)
+  - purpose: validate ShaderConductor include/link consumption through `Hex::shaderconductor_vendor`, directly from `ThirdParty/shaderconductor/Build` (no `Libs/` or `Include/` copy).
 - Existing default behavior remains unchanged (`--header-layout legacy`).
 
 ## Migration Roadmap Snapshot

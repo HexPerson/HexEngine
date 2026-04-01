@@ -18,6 +18,7 @@ endif()
 option(HEXENGINE_ENABLE_DEP_PROBE "Build a small CMake dependency probe target (Phase 3 validation)." OFF)
 option(HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE "Build a small assimp imported-target probe executable." OFF)
 option(HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE "Build a small brotli imported-target probe executable." OFF)
+option(HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE "Build a small shaderconductor imported-target probe executable." OFF)
 option(HEXENGINE_ENABLE_STREAMLINE_PROBE "Build a small streamline imported-target probe executable." OFF)
 
 if(HEXENGINE_ENABLE_DEP_PROBE)
@@ -74,6 +75,21 @@ if(HEXENGINE_ENABLE_STREAMLINE_PROBE)
         message(WARNING "HEXENGINE_ENABLE_STREAMLINE_PROBE=ON, but Hex::streamline_vendor is unavailable.")
         add_custom_target(hex-streamline-probe
             COMMAND "${CMAKE_COMMAND}" -E echo "hex-streamline-probe skipped: Hex::streamline_vendor is unavailable in this checkout."
+            VERBATIM
+        )
+    endif()
+endif()
+
+if(HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE)
+    enable_language(CXX)
+    if(HEXENGINE_HAS_SHADERCONDUCTOR_VENDOR)
+        add_executable(hex-shaderconductor-probe EXCLUDE_FROM_ALL cmake/examples/shaderconductor_probe.cpp)
+        target_compile_features(hex-shaderconductor-probe PRIVATE cxx_std_20)
+        target_link_libraries(hex-shaderconductor-probe PRIVATE Hex::shaderconductor_vendor)
+    else()
+        message(WARNING "HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE=ON, but Hex::shaderconductor_vendor is unavailable.")
+        add_custom_target(hex-shaderconductor-probe
+            COMMAND "${CMAKE_COMMAND}" -E echo "hex-shaderconductor-probe skipped: Hex::shaderconductor_vendor is unavailable in this checkout."
             VERBATIM
         )
     endif()

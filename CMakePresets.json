@@ -67,6 +67,16 @@
       "cacheVariables": {
         "HEXENGINE_ENABLE_STREAMLINE_PROBE": "ON"
       }
+    },
+    {
+      "name": "vs2022-x64-debug-shaderconductor-probe",
+      "displayName": "VS2022 x64 Debug + ShaderConductor Probe",
+      "description": "Enables ShaderConductor imported-target probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -159,6 +169,15 @@
       "configurePreset": "vs2022-x64-debug-streamline-probe",
       "targets": [
         "hex-streamline-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "shaderconductor-probe-debug",
+      "displayName": "ShaderConductor Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-shaderconductor-probe",
+      "targets": [
+        "hex-shaderconductor-probe"
       ],
       "configuration": "Debug"
     },
