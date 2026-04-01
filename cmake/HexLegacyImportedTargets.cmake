@@ -10,9 +10,12 @@ set(HEXENGINE_BROTLICOMMON_DEBUG_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Debug/brotlico
 set(HEXENGINE_BROTLICOMMON_RELEASE_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Release/brotlicommon.lib")
 set(HEXENGINE_BROTLIDEC_DEBUG_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Debug/brotlidec.lib")
 set(HEXENGINE_BROTLIDEC_RELEASE_LIB "${HEXENGINE_LEGACY_LIB_DIR}/Release/brotlidec.lib")
+set(HEXENGINE_STREAMLINE_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/Streamline/include")
+set(HEXENGINE_STREAMLINE_INTERPOSER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/Streamline/lib/x64/sl.interposer.lib")
 
 set(HEXENGINE_HAS_LEGACY_ASSIMP OFF)
 set(HEXENGINE_HAS_LEGACY_BROTLI OFF)
+set(HEXENGINE_HAS_STREAMLINE_VENDOR OFF)
 
 function(hex_add_imported_static_target target_name alias_name debug_lib release_lib)
     add_library(${target_name} STATIC IMPORTED GLOBAL)
@@ -63,4 +66,19 @@ if(
     set(HEXENGINE_HAS_LEGACY_BROTLI ON)
 else()
     message(STATUS "Hex::brotli_legacy unavailable: expected staged legacy libs/includes were not found.")
+endif()
+
+if(
+    EXISTS "${HEXENGINE_STREAMLINE_INCLUDE_DIR}"
+    AND EXISTS "${HEXENGINE_STREAMLINE_INTERPOSER_LIB}"
+)
+    add_library(hex_vendor_streamline UNKNOWN IMPORTED GLOBAL)
+    add_library(Hex::streamline_vendor ALIAS hex_vendor_streamline)
+    set_target_properties(hex_vendor_streamline PROPERTIES
+        IMPORTED_LOCATION "${HEXENGINE_STREAMLINE_INTERPOSER_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${HEXENGINE_STREAMLINE_INCLUDE_DIR}"
+    )
+    set(HEXENGINE_HAS_STREAMLINE_VENDOR ON)
+else()
+    message(STATUS "Hex::streamline_vendor unavailable: expected Streamline include/lib artifacts were not found.")
 endif()

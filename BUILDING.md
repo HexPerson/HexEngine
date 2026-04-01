@@ -36,17 +36,23 @@ Use CMake for orchestration and migration visibility:
    - `cmake --build --preset deps-lock-refs-debug`
 6. Bootstrap only header dependencies in external-header mode (no native builds):
    - `cmake --build --preset headeronly-bootstrap-debug`
-7. If intentional, run legacy setup through canonical entrypoint (pinned refs):
+7. Bootstrap required runtime modules only (streamline + physx + shaderconductor):
+   - `cmake --build --preset required-modules-bootstrap-debug`
+   - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
+8. If intentional, run full legacy setup through canonical entrypoint (pinned refs):
    - `cmake --build --preset legacy-setup-debug`
-8. Build the opt-in dependency probe executable:
+9. Build the opt-in dependency probe executable:
    - `cmake --preset vs2022-x64-debug-dep-probe`
    - `cmake --build --preset dep-probe-debug`
-9. Build the opt-in legacy imported-target assimp probe:
+10. Build the opt-in legacy imported-target assimp probe:
    - `cmake --preset vs2022-x64-debug-assimp-probe`
    - `cmake --build --preset assimp-probe-debug`
-10. Build the opt-in legacy imported-target brotli probe:
+11. Build the opt-in legacy imported-target brotli probe:
    - `cmake --preset vs2022-x64-debug-brotli-probe`
    - `cmake --build --preset brotli-probe-debug`
+12. Build the opt-in Streamline imported-target probe:
+   - `cmake --preset vs2022-x64-debug-streamline-probe`
+   - `cmake --build --preset streamline-probe-debug`
 
 Note:
 - In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
@@ -75,9 +81,11 @@ Equivalent direct command for plan output:
   - Writes local dependency `HEAD` commits into manifest `ref` fields when repos are available.
 - `--header-only-bootstrap`
   - Fetches/copies header-only dependencies only and skips native library builds.
-  - If `Streamline` clone/checkout fails (for example missing `git-lfs`), bootstrap continues with a warning.
+  - `Streamline` is required and validated (including `git-lfs` artifacts); bootstrap fails if SDK artifacts are missing.
 - `--header-layout external`
   - Phase 3 starter behavior: `cxxopts` is consumed from `ThirdParty/cxxopts/include` without copying into `Include/`.
+- `--required-modules-only`
+  - Bootstraps required runtime modules only (`streamline`, `physx`, `shaderconductor`) for Debug and Release.
 
 Notes:
 - Automatic floating update behavior was removed from default path.
@@ -85,7 +93,7 @@ Notes:
 - Git operations in setup run with `GIT_LFS_SKIP_SMUDGE=1` to reduce bootstrap failures on machines without `git-lfs`.
 - Legacy setup treats recastnavigation/oidn configure as optional scaffolding and continues with warnings if those configure-only steps fail in constrained environments.
 - Legacy setup currently skips OIDN bootstrap by default (optional dependency; known submodule path-length instability in some Windows environments).
-- Legacy setup treats Streamline bootstrap as non-blocking and continues with warnings if clone/checkout fails.
+- Streamline is treated as required by default; setup validates `ThirdParty/Streamline/lib/x64/sl.interposer.lib` is materialized (not a git-lfs pointer).
 - Legacy setup configures NRD with `NRD_EMBEDS_SPIRV_SHADERS=OFF` for Windows-first builds to avoid SPIR-V codegen requirements in environments that only ship DXIL-capable DXC.
 
 ## Dependency Manifest
@@ -139,6 +147,10 @@ This keeps migration incremental while enabling reproducible, reviewable depende
   - target: `hex-brotli-probe`
   - source: [brotli_probe.cpp](/C:/HexEngine/cmake/examples/brotli_probe.cpp)
   - purpose: validate non-header dependency consumption through `Hex::brotli_legacy`.
+- Added optional Streamline imported-target probe executable:
+  - target: `hex-streamline-probe`
+  - source: [streamline_probe.cpp](/C:/HexEngine/cmake/examples/streamline_probe.cpp)
+  - purpose: validate Streamline SDK include/link consumption through `Hex::streamline_vendor`.
 - Existing default behavior remains unchanged (`--header-layout legacy`).
 
 ## Migration Roadmap Snapshot

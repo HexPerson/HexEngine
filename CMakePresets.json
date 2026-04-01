@@ -57,6 +57,16 @@
       "cacheVariables": {
         "HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE": "ON"
       }
+    },
+    {
+      "name": "vs2022-x64-debug-streamline-probe",
+      "displayName": "VS2022 x64 Debug + Streamline Probe",
+      "description": "Enables Streamline imported-target probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_STREAMLINE_PROBE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -109,6 +119,14 @@
       ]
     },
     {
+      "name": "required-modules-bootstrap-debug",
+      "displayName": "Required Modules Bootstrap (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-required-modules-bootstrap"
+      ]
+    },
+    {
       "name": "dep-probe-debug",
       "displayName": "Dependency Probe Build",
       "configurePreset": "vs2022-x64-debug-dep-probe",
@@ -132,6 +150,15 @@
       "configurePreset": "vs2022-x64-debug-brotli-probe",
       "targets": [
         "hex-brotli-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "streamline-probe-debug",
+      "displayName": "Streamline Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-streamline-probe",
+      "targets": [
+        "hex-streamline-probe"
       ],
       "configuration": "Debug"
     },

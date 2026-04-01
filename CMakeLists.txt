@@ -18,6 +18,7 @@ endif()
 option(HEXENGINE_ENABLE_DEP_PROBE "Build a small CMake dependency probe target (Phase 3 validation)." OFF)
 option(HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE "Build a small assimp imported-target probe executable." OFF)
 option(HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE "Build a small brotli imported-target probe executable." OFF)
+option(HEXENGINE_ENABLE_STREAMLINE_PROBE "Build a small streamline imported-target probe executable." OFF)
 
 if(HEXENGINE_ENABLE_DEP_PROBE)
     enable_language(CXX)
@@ -63,6 +64,21 @@ if(HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE)
     endif()
 endif()
 
+if(HEXENGINE_ENABLE_STREAMLINE_PROBE)
+    enable_language(CXX)
+    if(HEXENGINE_HAS_STREAMLINE_VENDOR)
+        add_executable(hex-streamline-probe EXCLUDE_FROM_ALL cmake/examples/streamline_probe.cpp)
+        target_compile_features(hex-streamline-probe PRIVATE cxx_std_20)
+        target_link_libraries(hex-streamline-probe PRIVATE Hex::streamline_vendor)
+    else()
+        message(WARNING "HEXENGINE_ENABLE_STREAMLINE_PROBE=ON, but Hex::streamline_vendor is unavailable.")
+        add_custom_target(hex-streamline-probe
+            COMMAND "${CMAKE_COMMAND}" -E echo "hex-streamline-probe skipped: Hex::streamline_vendor is unavailable in this checkout."
+            VERBATIM
+        )
+    endif()
+endif()
+
 add_custom_target(hex-deps-plan
     COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --print-plan
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
@@ -95,6 +111,13 @@ add_custom_target(hex-headeronly-bootstrap
     COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --header-only-bootstrap --header-layout external
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
     COMMENT "Fetch header-only dependencies (external-header layout; no full native builds)"
+    VERBATIM
+)
+
+add_custom_target(hex-required-modules-bootstrap
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --frozen --required-modules-only
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Bootstrap required runtime modules only (streamline, physx, shaderconductor)"
     VERBATIM
 )
 

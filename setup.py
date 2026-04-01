@@ -51,6 +51,7 @@ def with_lfs_disabled(args):
         "-c", "filter.lfs.smudge=",
         "-c", "filter.lfs.process=",
         "-c", "filter.lfs.required=false",
+        "-c", "core.hooksPath=NUL",
     ] + args[1:]
 
 
@@ -60,6 +61,10 @@ def git_check_call(args):
 
 def git_check_output(args):
     return subprocess.check_output(with_lfs_disabled(args), text=True, env=git_env())
+
+
+def git_plain_check_call(args):
+    subprocess.check_call(args)
 
 
 def remove_readonly(func, path, _):
@@ -742,12 +747,36 @@ def get_retpack2d():
 
 
 def get_streamline():
+    ensure_repo("streamline")
+
+    streamlinePath = os.path.realpath(get_dependency_path("streamline"))
+    requiredLibPath = os.path.join(streamlinePath, "lib", "x64", "sl.interposer.lib")
+    requiredHeaderPath = os.path.join(streamlinePath, "include", "sl_helpers.h")
+
+    print("Fetching Streamline LFS artifacts (required module).")
     try:
-        ensure_repo("streamline")
+        git_plain_check_call(["git", "-C", streamlinePath, "lfs", "pull", "--include=lib/x64/*"])
     except subprocess.CalledProcessError as ex:
-        warningContext = "header-only mode" if runtimeArgs.header_only_bootstrap else "legacy mode"
-        print(f"Warning: streamline bootstrap failed in {warningContext} ({ex}). Continuing without streamline.")
-        return
+        raise RuntimeError(
+            "Streamline requires git-lfs to materialize binary artifacts. "
+            "Please install git-lfs, run 'git lfs install', then rerun setup."
+        ) from ex
+
+    if not os.path.exists(requiredLibPath):
+        raise RuntimeError(f"Missing required Streamline library: {requiredLibPath}")
+
+    if not os.path.exists(requiredHeaderPath):
+        raise RuntimeError(f"Missing required Streamline header: {requiredHeaderPath}")
+
+    with open(requiredLibPath, "rb") as stream:
+        libHead = stream.read(96)
+    if libHead.startswith(b"version https://git-lfs.github.com/spec/v1"):
+        raise RuntimeError(
+            f"Streamline library is an unresolved git-lfs pointer: {requiredLibPath}. "
+            "Run 'git -C ThirdParty/Streamline lfs pull --include=lib/x64/*' and retry."
+        )
+
+    print("Streamline SDK validated.")
 
 
 
@@ -762,6 +791,11 @@ def parse_args():
     parser.add_argument("--lock-current-refs", action="store_true", help="Write current local dependency HEAD commits into manifest refs")
     parser.add_argument("--header-only-bootstrap", action="store_true", help="Fetch/copy header-only dependencies only (skip native library builds)")
     parser.add_argument("--header-layout", choices=["legacy", "external"], default="legacy", help="Header staging mode for migrated dependencies")
+    parser.add_argument(
+        "--required-modules-only",
+        action="store_true",
+        help="Bootstrap required runtime modules only (streamline, physx, shaderconductor).",
+    )
     return parser.parse_args()
 
 
@@ -789,6 +823,14 @@ def ensure_output_directories():
 
     if not os.path.exists("Bin/x64/Release/Data/Shaders"):
         os.makedirs("Bin/x64/Release/Data/Shaders")
+
+
+def set_output_paths_for_config(build_config):
+    global libraryDir
+    global binDir
+
+    libraryDir = engineMainDir + "Libs/x64/" + build_config + "/"
+    binDir = engineMainDir + "Bin/x64/" + build_config + "/"
 
 
 def main():
@@ -819,6 +861,18 @@ def main():
         get_rapidjson()
         get_retpack2d()
         get_streamline()
+        return
+
+    if runtimeArgs.required_modules_only:
+        msbuildPath = locate_msbuild_path()
+        print("MSBuild located at %s" % msbuildPath)
+        ensure_output_directories()
+        get_streamline()
+        for build_config in ("Debug", "Release"):
+            print("Bootstrapping required modules for %s" % build_config)
+            set_output_paths_for_config(build_config)
+            build_physx(build_config.lower())
+            build_shaderconductor(build_config)
         return
 
     msbuildPath = locate_msbuild_path()
