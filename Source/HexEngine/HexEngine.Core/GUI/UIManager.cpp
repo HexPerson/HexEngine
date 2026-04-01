@@ -1,7 +1,6 @@
 
 #include "UIManager.hpp"
 #include "Elements\Dialog.hpp"
-#include "Elements\Dock.hpp"
 #include "../Environment/IEnvironment.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "../Environment/LogFile.hpp"

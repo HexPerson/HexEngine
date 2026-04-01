@@ -141,7 +141,7 @@ namespace HexEditor
 
 	private:
 		// docks
-		HexEngine::Dock* _leftDock = nullptr;
+		HexEngine::Element* _leftDock = nullptr;
 		Inspector* _rightDock = nullptr;
 		SceneView* _sceneView = nullptr;
 		Explorer* _lowerDock = nullptr;

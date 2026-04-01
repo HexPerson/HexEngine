@@ -158,6 +158,7 @@ namespace HexEditor
 					_onRunGame();
 				return true;
 			});
+		_runButton->SetIcon(HexEngine::ITexture2D::Create("EngineData.Textures/UI/play.png"));
 
 		_stopButton = new HexEngine::Button(
 			this,
@@ -169,6 +170,7 @@ namespace HexEditor
 					_onStopGame();
 				return true;
 			});
+		_stopButton->SetIcon(HexEngine::ITexture2D::Create("EngineData.Textures/UI/stop.png"));
 
 		_savePrefabButton = new HexEngine::Button(
 			this,

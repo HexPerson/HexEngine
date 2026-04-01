@@ -6,7 +6,7 @@
 #include <deque>
 #include <fstream>
 
-namespace
+namespace HexEditor
 {
 	constexpr auto GameReloadDebounce = std::chrono::milliseconds(400);
 
@@ -163,10 +163,7 @@ namespace
 			return true;
 		}
 	};
-}
 
-namespace HexEditor
-{
 	GameIntegrator::~GameIntegrator()
 	{
 		UnloadGame();
