@@ -59,6 +59,9 @@ Use CMake for orchestration and migration visibility:
 14. Build the opt-in PhysX imported-target probe:
    - `cmake --preset vs2022-x64-debug-physx-probe`
    - `cmake --build --preset physx-probe-debug`
+15. Build the engine solution via canonical CMake orchestration targets:
+   - Debug: `cmake --build --preset sln-build-debug`
+   - Release: `cmake --build --preset sln-build-release`
 
 Note:
 - In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
@@ -124,6 +127,7 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 - Hardcoded include/lib paths in project files.
 - Game code builds still execute through MSBuild (now behind an editor build-service abstraction).
 - Header staging into `Include/` for select dependencies in legacy setup path.
+- Final compilation still goes through `HexEngine.sln`/`.vcxproj`; CMake is now the canonical orchestration entrypoint for invoking those builds.
 
 ## Phase 4 Implementation Notes
 

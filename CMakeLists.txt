@@ -10,9 +10,24 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 set(HEXENGINE_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(HEXENGINE_DEPENDENCY_MANIFEST "${HEXENGINE_REPO_ROOT}/build/dependencies.lock.json")
+set(HEXENGINE_SOLUTION_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.sln")
+
+if(CMAKE_GENERATOR MATCHES "Visual Studio" AND DEFINED CMAKE_VS_MSBUILD_COMMAND)
+    set(HEXENGINE_MSBUILD_COMMAND "${CMAKE_VS_MSBUILD_COMMAND}")
+else()
+    find_program(HEXENGINE_MSBUILD_COMMAND NAMES msbuild)
+endif()
 
 if(NOT EXISTS "${HEXENGINE_DEPENDENCY_MANIFEST}")
     message(FATAL_ERROR "Dependency manifest not found: ${HEXENGINE_DEPENDENCY_MANIFEST}")
+endif()
+
+if(NOT EXISTS "${HEXENGINE_SOLUTION_PATH}")
+    message(FATAL_ERROR "HexEngine solution not found: ${HEXENGINE_SOLUTION_PATH}")
+endif()
+
+if(NOT HEXENGINE_MSBUILD_COMMAND)
+    message(WARNING "MSBuild executable not found. hex-sln-build-* targets will be unavailable.")
 endif()
 
 option(HEXENGINE_ENABLE_DEP_PROBE "Build a small CMake dependency probe target (Phase 3 validation)." OFF)
@@ -159,6 +174,22 @@ add_custom_target(hex-legacy-setup
     COMMENT "Run legacy dependency bootstrap intentionally (pinned/frozen refs)"
     VERBATIM
 )
+
+if(HEXENGINE_MSBUILD_COMMAND)
+    add_custom_target(hex-sln-build-debug
+        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Debug /p:Platform=x64 /m
+        WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+        COMMENT "Build HexEngine.sln Debug|x64 via canonical CMake orchestration"
+        VERBATIM
+    )
+
+    add_custom_target(hex-sln-build-release
+        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Release /p:Platform=x64 /m
+        WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+        COMMENT "Build HexEngine.sln Release|x64 via canonical CMake orchestration"
+        VERBATIM
+    )
+endif()
 
 message(STATUS "HexEngine canonical orchestration entrypoint enabled.")
 message(STATUS "Engine/editor/game compilation is still legacy MSBuild (.sln/.vcxproj) for this migration phase.")

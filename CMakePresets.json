@@ -207,6 +207,22 @@
       "targets": [
         "hex-legacy-setup"
       ]
+    },
+    {
+      "name": "sln-build-debug",
+      "displayName": "Solution Build Debug|x64 (Canonical CMake Orchestration)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-sln-build-debug"
+      ]
+    },
+    {
+      "name": "sln-build-release",
+      "displayName": "Solution Build Release|x64 (Canonical CMake Orchestration)",
+      "configurePreset": "vs2022-x64-release",
+      "targets": [
+        "hex-sln-build-release"
+      ]
     }
   ]
 }
