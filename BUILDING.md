@@ -39,9 +39,15 @@ Use CMake for orchestration and migration visibility:
 7. Bootstrap required runtime modules only (streamline + physx + shaderconductor):
    - `cmake --build --preset required-modules-bootstrap-debug`
    - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
-8. If intentional, run full legacy setup through canonical entrypoint (pinned refs):
+8. Bootstrap the minimal non-legacy dependency set (recommended migration path):
+   - `cmake --build --preset minimal-bootstrap-debug`
+   - includes:
+     - header-only bootstrap in external mode (no `Include/` copying for migrated header-only deps)
+     - required runtime module bootstrap (`streamline`, `physx`, `shaderconductor`)
+   - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
+9. If intentional, run full legacy setup through canonical entrypoint (pinned refs):
    - `cmake --build --preset legacy-setup-debug`
-9. Build the opt-in dependency probe executable:
+10. Build the opt-in dependency probe executable:
    - `cmake --preset vs2022-x64-debug-dep-probe`
    - `cmake --build --preset dep-probe-debug`
 10. Build the opt-in legacy imported-target assimp probe:
@@ -59,15 +65,18 @@ Use CMake for orchestration and migration visibility:
 14. Build the opt-in PhysX imported-target probe:
    - `cmake --preset vs2022-x64-debug-physx-probe`
    - `cmake --build --preset physx-probe-debug`
-15. Build the engine solution via canonical CMake orchestration targets:
+16. Build the engine solution via canonical CMake orchestration targets:
    - Debug: `cmake --build --preset sln-build-debug`
    - Release: `cmake --build --preset sln-build-release`
-16. Run Streamline preflight only (fast check):
+17. Build the engine solution with minimal non-legacy bootstrap:
+   - Debug: `cmake --build --preset sln-build-debug-modern`
+   - Release: `cmake --build --preset sln-build-release-modern`
+18. Run Streamline preflight only (fast check):
    - `cmake --build --preset streamline-artifacts-check-debug`
-17. Run all required-runtime dependency probes in one shot:
+19. Run all required-runtime dependency probes in one shot:
    - `cmake --preset vs2022-x64-debug-required-runtime-probes`
    - `cmake --build --preset required-runtime-probes-debug`
-18. Build ShaderCompiler via canonical orchestration:
+20. Build ShaderCompiler via canonical orchestration:
    - Legacy linkage: `cmake --build --preset shadercompiler-build-debug`
    - Opt-in vendor linkage (`ThirdParty/shaderconductor/Build`): `cmake --build --preset shadercompiler-build-debug-vendor`
 
@@ -103,6 +112,9 @@ Equivalent direct command for plan output:
   - Phase 3 starter behavior: `cxxopts` is consumed from `ThirdParty/cxxopts/include` without copying into `Include/`.
 - `--required-modules-only`
   - Bootstraps required runtime modules only (`streamline`, `physx`, `shaderconductor`) for Debug and Release.
+- `--minimal-bootstrap`
+  - Bootstraps migrated header-only dependencies in external mode plus required runtime modules.
+  - This is the preferred incremental bootstrap path before solution builds.
 
 Notes:
 - Automatic floating update behavior was removed from default path.
@@ -111,6 +123,7 @@ Notes:
 - Legacy setup treats recastnavigation/oidn configure as optional scaffolding and continues with warnings if those configure-only steps fail in constrained environments.
 - Legacy setup currently skips OIDN bootstrap by default (optional dependency; known submodule path-length instability in some Windows environments).
 - Streamline is treated as required by default; setup validates `ThirdParty/Streamline/lib/x64/sl.interposer.lib` is materialized (not a git-lfs pointer).
+- Required runtime module bootstrap now attempts non-Streamline modules for both Debug and Release before final Streamline validation so failures are reported together.
 - `HexEngine.StreamlinePlugin` now fails early with an explicit pre-build error if `sl.interposer.lib` is missing or still an unresolved git-lfs pointer.
 - `hex-sln-build-debug` / `hex-sln-build-release` now depend on `hex-streamline-artifacts-check`, so canonical CMake orchestration fails fast before lengthy solution compilation when Streamline artifacts are unavailable.
 - Legacy setup configures NRD with `NRD_EMBEDS_SPIRV_SHADERS=OFF` for Windows-first builds to avoid SPIR-V codegen requirements in environments that only ship DXIL-capable DXC.

@@ -805,6 +805,14 @@ def parse_args():
         action="store_true",
         help="Bootstrap required runtime modules only (streamline, physx, shaderconductor).",
     )
+    parser.add_argument(
+        "--minimal-bootstrap",
+        action="store_true",
+        help=(
+            "Bootstrap header-only dependencies in external mode plus required runtime modules. "
+            "This is the preferred incremental path away from full legacy setup."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -842,6 +850,55 @@ def set_output_paths_for_config(build_config):
     binDir = engineMainDir + "Bin/x64/" + build_config + "/"
 
 
+def run_required_runtime_bootstrap():
+    requiredModules = get_required_runtime_module_names()
+    if not requiredModules:
+        raise RuntimeError(
+            "No required runtime modules are marked in build/dependencies.lock.json "
+            "(field: required_runtime_module=true)."
+        )
+
+    print("Required runtime modules: %s" % ", ".join(requiredModules))
+
+    buildHandlers = {
+        "physx": lambda cfg: build_physx(cfg.lower()),
+        "shaderconductor": lambda cfg: build_shaderconductor(cfg),
+        "streamline": lambda cfg: get_streamline(),
+    }
+
+    for moduleName in requiredModules:
+        if moduleName not in buildHandlers:
+            raise RuntimeError(
+                f"Unsupported required runtime module '{moduleName}'. "
+                "Add a handler in setup.py buildHandlers."
+            )
+
+    moduleErrors = []
+
+    for build_config in ("Debug", "Release"):
+        print("Bootstrapping required modules for %s" % build_config)
+        set_output_paths_for_config(build_config)
+        for moduleName in requiredModules:
+            if moduleName == "streamline":
+                continue
+
+            try:
+                buildHandlers[moduleName](build_config)
+            except Exception as ex:
+                moduleErrors.append(f"{moduleName}:{build_config}: {ex}")
+
+    if "streamline" in requiredModules:
+        try:
+            # Streamline validation is configuration independent.
+            get_streamline()
+        except Exception as ex:
+            moduleErrors.append(f"streamline: {ex}")
+
+    if moduleErrors:
+        details = "\n".join(f"  - {entry}" for entry in moduleErrors)
+        raise RuntimeError("Required runtime module bootstrap failed:\n" + details)
+
+
 def main():
     global runtimeArgs
     global msbuildPath
@@ -876,38 +933,27 @@ def main():
         msbuildPath = locate_msbuild_path()
         print("MSBuild located at %s" % msbuildPath)
         ensure_output_directories()
-        requiredModules = get_required_runtime_module_names()
-        if not requiredModules:
-            raise RuntimeError(
-                "No required runtime modules are marked in build/dependencies.lock.json "
-                "(field: required_runtime_module=true)."
-            )
+        run_required_runtime_bootstrap()
+        return
 
-        print("Required runtime modules: %s" % ", ".join(requiredModules))
+    if runtimeArgs.minimal_bootstrap:
+        msbuildPath = locate_msbuild_path()
+        print("MSBuild located at %s" % msbuildPath)
+        ensure_output_directories()
 
-        buildHandlers = {
-            "physx": lambda cfg: build_physx(cfg.lower()),
-            "shaderconductor": lambda cfg: build_shaderconductor(cfg),
-            "streamline": lambda cfg: get_streamline(),
-        }
+        originalHeaderLayout = runtimeArgs.header_layout
+        runtimeArgs.header_layout = "external"
 
-        for moduleName in requiredModules:
-            if moduleName not in buildHandlers:
-                raise RuntimeError(
-                    f"Unsupported required runtime module '{moduleName}'. "
-                    "Add a handler in setup.py buildHandlers."
-                )
+        print("Bootstrapping header-only dependencies in external-header mode (no Include/ copy).")
+        get_cxxopts()
+        get_fastnoiselite()
+        get_rapidxml()
+        get_rapidjson()
+        get_retpack2d()
 
-        # Streamline validation is config-independent.
-        if "streamline" in requiredModules:
-            get_streamline()
-        for build_config in ("Debug", "Release"):
-            print("Bootstrapping required modules for %s" % build_config)
-            set_output_paths_for_config(build_config)
-            for moduleName in requiredModules:
-                if moduleName == "streamline":
-                    continue
-                buildHandlers[moduleName](build_config)
+        runtimeArgs.header_layout = originalHeaderLayout
+
+        run_required_runtime_bootstrap()
         return
 
     msbuildPath = locate_msbuild_path()

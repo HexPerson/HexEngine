@@ -175,6 +175,13 @@ add_custom_target(hex-required-modules-bootstrap
     VERBATIM
 )
 
+add_custom_target(hex-minimal-bootstrap
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --frozen --minimal-bootstrap
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Bootstrap minimal non-legacy dependency set (external header-only + required runtime modules)"
+    VERBATIM
+)
+
 add_custom_target(hex-legacy-setup
     COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --frozen
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
@@ -224,8 +231,26 @@ if(HEXENGINE_MSBUILD_COMMAND)
         VERBATIM
     )
 
+    add_custom_target(hex-sln-build-debug-modern
+        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Debug /p:Platform=x64 /m
+        WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+        COMMENT "Build HexEngine.sln Debug|x64 with minimal non-legacy bootstrap"
+        VERBATIM
+    )
+
+    add_custom_target(hex-sln-build-release-modern
+        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Release /p:Platform=x64 /m
+        WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+        COMMENT "Build HexEngine.sln Release|x64 with minimal non-legacy bootstrap"
+        VERBATIM
+    )
+
     add_dependencies(hex-sln-build-debug hex-streamline-artifacts-check)
     add_dependencies(hex-sln-build-release hex-streamline-artifacts-check)
+    add_dependencies(hex-sln-build-debug-modern hex-minimal-bootstrap)
+    add_dependencies(hex-sln-build-release-modern hex-minimal-bootstrap)
+    add_dependencies(hex-sln-build-debug-modern hex-streamline-artifacts-check)
+    add_dependencies(hex-sln-build-release-modern hex-streamline-artifacts-check)
 endif()
 
 message(STATUS "HexEngine canonical orchestration entrypoint enabled.")

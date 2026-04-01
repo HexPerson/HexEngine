@@ -159,6 +159,14 @@
       ]
     },
     {
+      "name": "minimal-bootstrap-debug",
+      "displayName": "Minimal Bootstrap (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-minimal-bootstrap"
+      ]
+    },
+    {
       "name": "streamline-artifacts-check-debug",
       "displayName": "Streamline Artifact Check (Debug preset)",
       "configurePreset": "vs2022-x64-debug",
@@ -253,6 +261,22 @@
       "configurePreset": "vs2022-x64-release",
       "targets": [
         "hex-sln-build-release"
+      ]
+    },
+    {
+      "name": "sln-build-debug-modern",
+      "displayName": "Solution Build Debug|x64 (Minimal Non-Legacy Bootstrap)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-sln-build-debug-modern"
+      ]
+    },
+    {
+      "name": "sln-build-release-modern",
+      "displayName": "Solution Build Release|x64 (Minimal Non-Legacy Bootstrap)",
+      "configurePreset": "vs2022-x64-release",
+      "targets": [
+        "hex-sln-build-release-modern"
       ]
     },
     {
