@@ -105,6 +105,7 @@ Notes:
 - `git_url`
 - `ref` (pin target; may be `null` until finalized)
 - `build_system`
+- `required_runtime_module` (optional; marks modules included in `--required-modules-only` bootstrap)
 - `notes`
 - `legacy_stage_paths`
 

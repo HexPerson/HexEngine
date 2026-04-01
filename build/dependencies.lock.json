@@ -43,6 +43,7 @@
       "path": "ThirdParty/physx",
       "git_url": "https://github.com/NVIDIA-Omniverse/PhysX.git",
       "ref": "dd587fedd79836442a4117164ea8c46685453c34",
+      "required_runtime_module": true,
       "build_system": "custom+msbuild",
       "notes": "Legacy flow modifies vc17 preset xml and stages libs/dlls.",
       "legacy_stage_paths": [
@@ -55,6 +56,7 @@
       "path": "ThirdParty/shaderconductor",
       "git_url": "https://github.com/microsoft/ShaderConductor.git",
       "ref": "f18f7b5c370bae157a6b7377155f758f6441cfea",
+      "required_runtime_module": true,
       "build_system": "cmake",
       "notes": "Builds ShaderConductor.lib.",
       "legacy_stage_paths": [
@@ -197,6 +199,7 @@
       "path": "ThirdParty/Streamline",
       "git_url": "https://github.com/NVIDIAGameWorks/Streamline.git",
       "ref": "f9fc648591a88d6accf859cd5c36010c25b6ab7b",
+      "required_runtime_module": true,
       "build_system": "vendor-sdk",
       "notes": "Cloned by setup; include copy currently disabled.",
       "legacy_stage_paths": []

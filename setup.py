@@ -193,6 +193,14 @@ def get_dependency_path(name):
     return dep["path"]
 
 
+def get_required_runtime_module_names():
+    required = []
+    for dep in dependencyManifest.get("dependencies", []):
+        if dep.get("required_runtime_module", False):
+            required.append(dep["name"].lower())
+    return required
+
+
 
 def maybe_checkout_ref(repo, dep):
     ref = dep.get("ref")
@@ -290,6 +298,7 @@ def print_plan():
         print(f"  url: {dep['git_url']}")
         print(f"  ref: {dep.get('ref')}")
         print(f"  build_system: {dep.get('build_system')}")
+        print(f"  required_runtime_module: {dep.get('required_runtime_module', False)}")
 
         notes = dep.get("notes")
         if notes:
@@ -867,12 +876,38 @@ def main():
         msbuildPath = locate_msbuild_path()
         print("MSBuild located at %s" % msbuildPath)
         ensure_output_directories()
-        get_streamline()
+        requiredModules = get_required_runtime_module_names()
+        if not requiredModules:
+            raise RuntimeError(
+                "No required runtime modules are marked in build/dependencies.lock.json "
+                "(field: required_runtime_module=true)."
+            )
+
+        print("Required runtime modules: %s" % ", ".join(requiredModules))
+
+        buildHandlers = {
+            "physx": lambda cfg: build_physx(cfg.lower()),
+            "shaderconductor": lambda cfg: build_shaderconductor(cfg),
+            "streamline": lambda cfg: get_streamline(),
+        }
+
+        for moduleName in requiredModules:
+            if moduleName not in buildHandlers:
+                raise RuntimeError(
+                    f"Unsupported required runtime module '{moduleName}'. "
+                    "Add a handler in setup.py buildHandlers."
+                )
+
+        # Streamline validation is config-independent.
+        if "streamline" in requiredModules:
+            get_streamline()
         for build_config in ("Debug", "Release"):
             print("Bootstrapping required modules for %s" % build_config)
             set_output_paths_for_config(build_config)
-            build_physx(build_config.lower())
-            build_shaderconductor(build_config)
+            for moduleName in requiredModules:
+                if moduleName == "streamline":
+                    continue
+                buildHandlers[moduleName](build_config)
         return
 
     msbuildPath = locate_msbuild_path()
