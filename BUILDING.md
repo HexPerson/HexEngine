@@ -32,20 +32,22 @@ Use CMake for orchestration and migration visibility:
    - `cmake --build --preset deps-check-refs-debug`
 4. Enforce strict ref pin status (CI-friendly):
    - `cmake --build --preset deps-check-refs-strict-debug`
-5. If you have dependencies cloned locally and want to pin current commits into the manifest:
+5. Print dependency backend scaffold status:
+   - `cmake --build --preset deps-backend-info-debug`
+6. If you have dependencies cloned locally and want to pin current commits into the manifest:
    - `cmake --build --preset deps-lock-refs-debug`
-6. Bootstrap only header dependencies in external-header mode (no native builds):
+7. Bootstrap only header dependencies in external-header mode (no native builds):
    - `cmake --build --preset headeronly-bootstrap-debug`
-7. Bootstrap required runtime modules only (streamline + physx + shaderconductor):
+8. Bootstrap required runtime modules only (streamline + physx + shaderconductor):
    - `cmake --build --preset required-modules-bootstrap-debug`
    - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
-8. Bootstrap the minimal non-legacy dependency set (recommended migration path):
+9. Bootstrap the minimal non-legacy dependency set (recommended migration path):
    - `cmake --build --preset minimal-bootstrap-debug`
    - includes:
      - header-only bootstrap in external mode (no `Include/` copying for migrated header-only deps)
      - required runtime module bootstrap (`streamline`, `physx`, `shaderconductor`)
    - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
-9. If intentional, run full legacy setup through canonical entrypoint (pinned refs):
+10. If intentional, run full legacy setup through canonical entrypoint (pinned refs):
    - `cmake --build --preset legacy-setup-debug`
 10. Build the opt-in dependency probe executable:
    - `cmake --preset vs2022-x64-debug-dep-probe`
@@ -123,7 +125,9 @@ Notes:
 - Legacy setup treats recastnavigation/oidn configure as optional scaffolding and continues with warnings if those configure-only steps fail in constrained environments.
 - Legacy setup currently skips OIDN bootstrap by default (optional dependency; known submodule path-length instability in some Windows environments).
 - Streamline is treated as required by default; setup validates `ThirdParty/Streamline/lib/x64/sl.interposer.lib` is materialized (not a git-lfs pointer).
+- setup now auto-discovers `git-lfs.exe` (including common `Program Files` install path) for Streamline artifact materialization.
 - Required runtime module bootstrap now attempts non-Streamline modules for both Debug and Release before final Streamline validation so failures are reported together.
+- Streamline plugin pre-build now validates required library existence via an absolute path computed in MSBuild; git-lfs pointer validation remains centralized in canonical CMake preflight (`hex-streamline-artifacts-check*`).
 - `HexEngine.StreamlinePlugin` now fails early with an explicit pre-build error if `sl.interposer.lib` is missing or still an unresolved git-lfs pointer.
 - `hex-sln-build-debug` / `hex-sln-build-release` now depend on `hex-streamline-artifacts-check`, so canonical CMake orchestration fails fast before lengthy solution compilation when Streamline artifacts are unavailable.
 - Legacy setup configures NRD with `NRD_EMBEDS_SPIRV_SHADERS=OFF` for Windows-first builds to avoid SPIR-V codegen requirements in environments that only ship DXIL-capable DXC.
@@ -195,6 +199,17 @@ This keeps migration incremental while enabling reproducible, reviewable depende
   - source: [physx_probe.cpp](/C:/HexEngine/cmake/examples/physx_probe.cpp)
   - purpose: validate PhysX include/link consumption through `Hex::physx_vendor`, directly from `ThirdParty/physx/.../bin/win.x86_64.vc143.md`.
 - Existing default behavior remains unchanged (`--header-layout legacy`).
+- `HexEngine.Core` now includes `ThirdParty/rapidjson/include` and `ThirdParty/retpack2d` directly in project include paths, reducing dependence on copied `Include/` headers for these dependencies.
+
+## Dependency Backend Scaffold
+
+- Added `cmake/deps/HexDependencyBackend.cmake` to centralize backend selection for the next migration tranche.
+- Current default:
+  - `HEXENGINE_DEPENDENCY_BACKEND=legacy_manifest`
+- Future placeholders:
+  - `fetchcontent`
+  - `vcpkg_manifest`
+- Non-default backends are scaffold-only in this phase and intentionally do not change active build behavior yet.
 
 ## Migration Roadmap Snapshot
 

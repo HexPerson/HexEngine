@@ -127,6 +127,14 @@
       ]
     },
     {
+      "name": "deps-backend-info-debug",
+      "displayName": "Dependency Backend Info (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-backend-info"
+      ]
+    },
+    {
       "name": "deps-check-refs-strict-debug",
       "displayName": "Dependency Ref Strict Check (Debug preset)",
       "configurePreset": "vs2022-x64-debug",

@@ -39,6 +39,12 @@ msbuildPath = None
 def git_env():
     env = os.environ.copy()
     env["GIT_LFS_SKIP_SMUDGE"] = "1"
+    git_lfs_exe = locate_git_lfs_executable()
+    if git_lfs_exe:
+        git_lfs_dir = os.path.dirname(git_lfs_exe)
+        current_path = env.get("PATH", "")
+        if git_lfs_dir.lower() not in current_path.lower():
+            env["PATH"] = f"{git_lfs_dir};{current_path}"
     return env
 
 
@@ -67,6 +73,23 @@ def git_plain_check_call(args):
     subprocess.check_call(args)
 
 
+def locate_git_lfs_executable():
+    git_lfs_from_path = shutil.which("git-lfs")
+    if git_lfs_from_path:
+        return git_lfs_from_path
+
+    fallback_candidates = [
+        r"C:\Program Files\Git LFS\git-lfs.exe",
+        r"C:\Program Files (x86)\Git LFS\git-lfs.exe",
+    ]
+
+    for candidate in fallback_candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    return None
+
+
 def remove_readonly(func, path, _):
     os.chmod(path, stat.S_IWRITE)
     func(path)
@@ -82,6 +105,29 @@ def remove_dependency_directory(dep_path):
         stale_path = f"{dep_path}.stale.{int(time.time())}"
         os.replace(dep_path, stale_path)
         print(f"Moved stale dependency directory to: {stale_path}")
+
+
+def copy_file_with_retry(src, dst_dir, retries=3, delay_seconds=0.4, allow_locked=False):
+    last_error = None
+    for attempt in range(1, retries + 1):
+        try:
+            shutil.copy(src, dst_dir)
+            return True
+        except PermissionError as ex:
+            last_error = ex
+            if attempt < retries:
+                time.sleep(delay_seconds)
+                continue
+            break
+
+    if allow_locked and last_error is not None:
+        print(f"Warning: could not copy '{src}' to '{dst_dir}' due to file lock ({last_error}). Continuing.")
+        return False
+
+    if last_error is not None:
+        raise last_error
+
+    return False
 
 
 def msbuild(msbuildPath, projectPath, args):
@@ -514,10 +560,10 @@ def build_physx(buildConfig):
     print("Copying PhysX library file from %s to %s" % (os.path.realpath("bin/win.x86_64.vc143.md/" + buildConfig), libraryDir))
 
     for file in glob.glob("bin/win.x86_64.vc143.md/" + buildConfig + "/*.lib"):
-        shutil.copy(file, libraryDir)
+        copy_file_with_retry(file, libraryDir, retries=5)
 
     for file in glob.glob("bin/win.x86_64.vc143.md/" + buildConfig + "/*.dll"):
-        shutil.copy(file, binDir + "Bin")
+        copy_file_with_retry(file, binDir + "Bin", retries=5, allow_locked=True)
 
     print("Successfully built PhysX!")
     os.chdir(engineMainDir)
@@ -762,9 +808,16 @@ def get_streamline():
     requiredLibPath = os.path.join(streamlinePath, "lib", "x64", "sl.interposer.lib")
     requiredHeaderPath = os.path.join(streamlinePath, "include", "sl_helpers.h")
 
-    print("Fetching Streamline LFS artifacts (required module).")
+    git_lfs_exe = locate_git_lfs_executable()
+    if not git_lfs_exe:
+        raise RuntimeError(
+            "Streamline requires git-lfs, but git-lfs.exe was not found. "
+            "Install Git LFS and rerun setup."
+        )
+
+    print(f"Fetching Streamline LFS artifacts (required module) using '{git_lfs_exe}'.")
     try:
-        git_plain_check_call(["git", "-C", streamlinePath, "lfs", "pull", "--include=lib/x64/*"])
+        subprocess.check_call([git_lfs_exe, "pull", "--include=lib/x64/*"], cwd=streamlinePath, env=git_env())
     except subprocess.CalledProcessError as ex:
         raise RuntimeError(
             "Streamline requires git-lfs to materialize binary artifacts. "

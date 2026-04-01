@@ -124,7 +124,7 @@
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions);HEX_CORE_MODULE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\retpack2d\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -148,7 +148,7 @@ copy "$(ProjectDir)Shaders\Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTa
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions);HEX_CORE_MODULE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\retpack2d\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -174,7 +174,7 @@ copy "$(ProjectDir)Shaders\Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTa
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions);HEX_CORE_MODULE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\retpack2d\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -198,7 +198,7 @@ copy "$(ProjectDir)Shaders\Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTa
       <PreprocessorDefinitions>HEX_CORE;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Audio\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Audio\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\retpack2d\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <SupportJustMyCode>false</SupportJustMyCode>
@@ -239,7 +239,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions);HEX_CORE;_XM_SSE4_INTRINSICS_</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Audio\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Audio\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\retpack2d\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
@@ -279,7 +279,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions);HEX_CORE_MODULE</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp17</LanguageStandard>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\freetype-2.10.4\include;$(SolutionDir)..\..\ThirdParty\HBAOPlus\include\;$(SolutionDir)..\..\ThirdParty\assimp-5.0.1\include\;$(SolutionDir)..\..\ThirdParty\FastNoiseLite\cpp\;$(SolutionDir)..\..\ThirdParty\PhysX\physx\include\;$(SolutionDir)..\..\ThirdParty\PhysX\pxshared\include\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(SolutionDir)..\..\ThirdParty\freetype-2.10.4\include;$(SolutionDir)..\..\ThirdParty\HBAOPlus\include\;$(SolutionDir)..\..\ThirdParty\assimp-5.0.1\include\;$(SolutionDir)..\..\ThirdParty\FastNoiseLite\cpp\;$(SolutionDir)..\..\ThirdParty\PhysX\physx\include\;$(SolutionDir)..\..\ThirdParty\PhysX\pxshared\include\;$(SolutionDir)..\..\ThirdParty\rapidjson\include\;$(SolutionDir)..\..\ThirdParty\retpack2d\;$(SolutionDir)..\..\ThirdParty\retpack2d\src\</AdditionalIncludeDirectories>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>

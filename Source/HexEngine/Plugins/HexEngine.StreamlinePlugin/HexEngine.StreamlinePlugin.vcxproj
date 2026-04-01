@@ -72,6 +72,9 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <HexStreamlineLibPath>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\..\ThirdParty\Streamline\lib\$(PlatformTarget)\sl.interposer.lib'))</HexStreamlineLibPath>
+  </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
   </PropertyGroup>
@@ -118,7 +121,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\Thirdparty\Streamline\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\Streamline\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
     </ClCompile>
@@ -132,18 +135,14 @@
       <Command>copy "$(TargetDir)$(TargetName).dll" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\Plugins\$(TargetName).dll"</Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>set "SL_LIB=$(MSBuildProjectDirectory)\..\..\..\..\ThirdParty\Streamline\lib\$(PlatformTarget)\sl.interposer.lib"
+      <Command>set "SL_LIB=$(HexStreamlineLibPath)"
 if not exist "%SL_LIB%" (
   echo Streamline required library missing: %SL_LIB%
   echo Run: cmake --build --preset required-modules-bootstrap-debug
   exit /b 1
 )
-findstr /b /c:"version https://git-lfs.github.com/spec/v1" "%SL_LIB%" &gt;nul
-if not errorlevel 1 (
-  echo Streamline required library is an unresolved git-lfs pointer: %SL_LIB%
-  echo Install git-lfs, run 'git lfs install', then rerun required-modules bootstrap.
-  exit /b 1
-)</Command>
+
+</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -154,7 +153,7 @@ if not errorlevel 1 (
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\Thirdparty\Streamline\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\Streamline\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
     </ClCompile>
@@ -170,18 +169,14 @@ if not errorlevel 1 (
       <Command>copy "$(TargetDir)$(TargetName).dll" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\Plugins\$(TargetName).dll"</Command>
     </PostBuildEvent>
     <PreBuildEvent>
-      <Command>set "SL_LIB=$(MSBuildProjectDirectory)\..\..\..\..\ThirdParty\Streamline\lib\$(PlatformTarget)\sl.interposer.lib"
+      <Command>set "SL_LIB=$(HexStreamlineLibPath)"
 if not exist "%SL_LIB%" (
   echo Streamline required library missing: %SL_LIB%
   echo Run: cmake --build --preset required-modules-bootstrap-debug
   exit /b 1
 )
-findstr /b /c:"version https://git-lfs.github.com/spec/v1" "%SL_LIB%" &gt;nul
-if not errorlevel 1 (
-  echo Streamline required library is an unresolved git-lfs pointer: %SL_LIB%
-  echo Install git-lfs, run 'git lfs install', then rerun required-modules bootstrap.
-  exit /b 1
-)</Command>
+
+</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

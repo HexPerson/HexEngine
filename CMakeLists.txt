@@ -5,6 +5,7 @@ project(HexEngineBuild LANGUAGES NONE)
 include(cmake/HexToolchain.cmake)
 include(cmake/HexDependencies.cmake)
 include(cmake/HexLegacyImportedTargets.cmake)
+include(cmake/deps/HexDependencyBackend.cmake)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
@@ -147,6 +148,14 @@ add_custom_target(hex-deps-check-refs
     VERBATIM
 )
 
+add_custom_target(hex-deps-backend-info
+    COMMAND "${CMAKE_COMMAND}" -E echo "HEXENGINE_DEPENDENCY_BACKEND=${HEXENGINE_DEPENDENCY_BACKEND}"
+    COMMAND "${CMAKE_COMMAND}" -E echo "Manifest=${HEXENGINE_DEPENDENCY_MANIFEST}"
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Print dependency backend scaffold status"
+    VERBATIM
+)
+
 add_custom_target(hex-deps-check-refs-strict
     COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --check-refs-strict
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
@@ -198,6 +207,17 @@ add_custom_target(hex-streamline-artifacts-check
     VERBATIM
 )
 
+add_custom_target(hex-streamline-artifacts-check-modern
+    COMMAND "${CMAKE_COMMAND}"
+        -DHEXENGINE_STREAMLINE_LIB="${HEXENGINE_STREAMLINE_LIB_PATH}"
+        -P "${HEXENGINE_REPO_ROOT}/cmake/HexCheckStreamlineArtifacts.cmake"
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Validate required Streamline SDK artifacts after modern bootstrap"
+    VERBATIM
+)
+
+add_dependencies(hex-streamline-artifacts-check-modern hex-minimal-bootstrap)
+
 if(TARGET hex-streamline-probe)
     add_dependencies(hex-streamline-probe hex-streamline-artifacts-check)
 endif()
@@ -247,11 +267,10 @@ if(HEXENGINE_MSBUILD_COMMAND)
 
     add_dependencies(hex-sln-build-debug hex-streamline-artifacts-check)
     add_dependencies(hex-sln-build-release hex-streamline-artifacts-check)
-    add_dependencies(hex-sln-build-debug-modern hex-minimal-bootstrap)
-    add_dependencies(hex-sln-build-release-modern hex-minimal-bootstrap)
-    add_dependencies(hex-sln-build-debug-modern hex-streamline-artifacts-check)
-    add_dependencies(hex-sln-build-release-modern hex-streamline-artifacts-check)
+    add_dependencies(hex-sln-build-debug-modern hex-streamline-artifacts-check-modern)
+    add_dependencies(hex-sln-build-release-modern hex-streamline-artifacts-check-modern)
 endif()
 
 message(STATUS "HexEngine canonical orchestration entrypoint enabled.")
 message(STATUS "Engine/editor/game compilation is still legacy MSBuild (.sln/.vcxproj) for this migration phase.")
+hexengine_print_dependency_backend_summary()
