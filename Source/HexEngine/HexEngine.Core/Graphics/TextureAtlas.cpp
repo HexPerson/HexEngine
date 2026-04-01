@@ -6,7 +6,7 @@
 
 #undef min
 #undef max
-#include <retpack2d\finders_interface.h>
+#include <finders_interface.h>
 
 using namespace rectpack2D;
 

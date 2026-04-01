@@ -62,9 +62,31 @@ You'll need:
 - Visual Studio 2022
 
 # Building
-Run Setup.bat and the automated build script will grab all the dependencies and begin building. This will take quite some time on the first run. 
+Canonical path (recommended):
 
-You can run this at any time and it will pull the latest repositories from each dependencies and rebuild (if necessary).
+1. `cmake --preset vs2022-x64-debug`
+2. `cmake --build --preset minimal-bootstrap-debug`
+3. `cmake --build --preset sln-build-debug-modern`
+
+Current required dependency set bootstrapped by the modern path:
+`directxtk`, `freetype`, `directxtex`, `brotli`, `rapidjson`, `retpack2d`, `physx`, `shaderconductor`, `streamline`.
+
+vcpkg (manifest mode, recommended for CMake-managed dependencies):
+1. Install vcpkg and set `VCPKG_ROOT`.
+2. `cmake --preset vs2022-x64-debug-vcpkg`
+3. `cmake --build --preset vcpkg-status-debug`
+
+Release lane:
+
+1. `cmake --preset vs2022-x64-release`
+2. `cmake --build --preset minimal-bootstrap-release`
+3. `cmake --build --preset sln-build-release-modern`
+
+Convenience wrapper:
+- `Setup.bat` (calls the canonical CMake debug flow)
+
+For full migration-aware orchestration details, see [BUILDING.md](BUILDING.md).
+Dependency updates are explicit (`python tools/deps/bootstrap.py --update bootstrap-minimal --configs Debug,Release`), not automatic.
 
 # Why HexEngine?
 HexEngine is built for developers who want:

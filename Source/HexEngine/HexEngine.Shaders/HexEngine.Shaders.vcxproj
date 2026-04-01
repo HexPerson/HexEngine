@@ -280,6 +280,12 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <None Include="WaterMask.shader" />
   </ItemGroup>
   <ItemGroup>
+    <ProjectReference Include="..\HexEngine.ShaderCompiler\HexEngine.ShaderCompiler.vcxproj">
+      <Project>{e6c42cd6-a33c-4c6c-b1fa-a0e1b5eaaf8b}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+    </ProjectReference>
+  </ItemGroup>
+  <ItemGroup>
     <Xml Include="shader.xml" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

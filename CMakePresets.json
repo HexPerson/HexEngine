@@ -1,0 +1,349 @@
+﻿{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vs2022-x64-debug",
+      "displayName": "VS2022 x64 Debug",
+      "description": "Canonical HexEngine orchestration preset (legacy compile remains .sln/.vcxproj).",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "HEXENGINE_DEPENDENCY_BACKEND": "vcpkg_manifest"
+      }
+    },
+    {
+      "name": "vs2022-x64-release",
+      "displayName": "VS2022 x64 Release",
+      "description": "Canonical HexEngine orchestration preset (legacy compile remains .sln/.vcxproj).",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "HEXENGINE_DEPENDENCY_BACKEND": "vcpkg_manifest"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-vcpkg",
+      "displayName": "VS2022 x64 Debug (vcpkg toolchain)",
+      "description": "Canonical preset with vcpkg manifest toolchain enabled.",
+      "inherits": "vs2022-x64-debug",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{VCPKG_ROOT}",
+        "rhs": ""
+      },
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_FEATURE_FLAGS": "manifests"
+      }
+    },
+    {
+      "name": "vs2022-x64-release-vcpkg",
+      "displayName": "VS2022 x64 Release (vcpkg toolchain)",
+      "description": "Canonical preset with vcpkg manifest toolchain enabled.",
+      "inherits": "vs2022-x64-release",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{VCPKG_ROOT}",
+        "rhs": ""
+      },
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_FEATURE_FLAGS": "manifests"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-dep-probe",
+      "displayName": "VS2022 x64 Debug + Dep Probe",
+      "description": "Enables the Phase 3 dependency probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_DEP_PROBE": "ON"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-assimp-probe",
+      "displayName": "VS2022 x64 Debug + Assimp Probe",
+      "description": "Enables legacy imported-target assimp probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_LEGACY_ASSIMP_PROBE": "ON"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-brotli-probe",
+      "displayName": "VS2022 x64 Debug + Brotli Probe",
+      "description": "Enables legacy imported-target brotli probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_LEGACY_BROTLI_PROBE": "ON"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-streamline-probe",
+      "displayName": "VS2022 x64 Debug + Streamline Probe",
+      "description": "Enables Streamline imported-target probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_STREAMLINE_PROBE": "ON"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-shaderconductor-probe",
+      "displayName": "VS2022 x64 Debug + ShaderConductor Probe",
+      "description": "Enables ShaderConductor imported-target probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE": "ON"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-physx-probe",
+      "displayName": "VS2022 x64 Debug + PhysX Probe",
+      "description": "Enables PhysX imported-target probe executable.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_PHYSX_PROBE": "ON"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-required-runtime-probes",
+      "displayName": "VS2022 x64 Debug + Required Runtime Probes",
+      "description": "Enables PhysX, ShaderConductor, and Streamline probe executables.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_PHYSX_PROBE": "ON",
+        "HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE": "ON",
+        "HEXENGINE_ENABLE_STREAMLINE_PROBE": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "deps-plan-debug",
+      "displayName": "Dependency Plan (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-plan"
+      ]
+    },
+    {
+      "name": "deps-plan-release",
+      "displayName": "Dependency Plan (Release preset)",
+      "configurePreset": "vs2022-x64-release",
+      "targets": [
+        "hex-deps-plan"
+      ]
+    },
+    {
+      "name": "deps-check-refs-debug",
+      "displayName": "Dependency Ref Check (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-check-refs"
+      ]
+    },
+    {
+      "name": "deps-backend-info-debug",
+      "displayName": "Dependency Backend Info (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-backend-info"
+      ]
+    },
+    {
+      "name": "vcpkg-status-debug",
+      "displayName": "vcpkg Status (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-vcpkg-status"
+      ]
+    },
+    {
+      "name": "deps-check-refs-strict-debug",
+      "displayName": "Dependency Ref Strict Check (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-check-refs-strict"
+      ]
+    },
+    {
+      "name": "deps-lock-refs-debug",
+      "displayName": "Dependency Ref Lock (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-deps-lock-refs"
+      ]
+    },
+    {
+      "name": "headeronly-bootstrap-debug",
+      "displayName": "Header-Only Bootstrap (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-headeronly-bootstrap"
+      ]
+    },
+    {
+      "name": "required-modules-bootstrap-debug",
+      "displayName": "Required Dependencies Bootstrap (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-required-modules-bootstrap"
+      ]
+    },
+    {
+      "name": "minimal-bootstrap-debug",
+      "displayName": "Minimal Bootstrap (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-minimal-bootstrap"
+      ]
+    },
+    {
+      "name": "minimal-bootstrap-release",
+      "displayName": "Minimal Bootstrap (Release preset)",
+      "configurePreset": "vs2022-x64-release",
+      "targets": [
+        "hex-minimal-bootstrap"
+      ]
+    },
+    {
+      "name": "streamline-artifacts-check-debug",
+      "displayName": "Streamline Artifact Check (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-streamline-artifacts-check"
+      ]
+    },
+    {
+      "name": "dep-probe-debug",
+      "displayName": "Dependency Probe Build",
+      "configurePreset": "vs2022-x64-debug-dep-probe",
+      "targets": [
+        "hex-dep-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "assimp-probe-debug",
+      "displayName": "Assimp Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-assimp-probe",
+      "targets": [
+        "hex-assimp-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "brotli-probe-debug",
+      "displayName": "Brotli Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-brotli-probe",
+      "targets": [
+        "hex-brotli-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "streamline-probe-debug",
+      "displayName": "Streamline Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-streamline-probe",
+      "targets": [
+        "hex-streamline-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "shaderconductor-probe-debug",
+      "displayName": "ShaderConductor Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-shaderconductor-probe",
+      "targets": [
+        "hex-shaderconductor-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "physx-probe-debug",
+      "displayName": "PhysX Imported Target Probe Build",
+      "configurePreset": "vs2022-x64-debug-physx-probe",
+      "targets": [
+        "hex-physx-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "required-runtime-probes-debug",
+      "displayName": "Required Runtime Probes Build",
+      "configurePreset": "vs2022-x64-debug-required-runtime-probes",
+      "targets": [
+        "hex-physx-probe",
+        "hex-shaderconductor-probe",
+        "hex-streamline-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "sln-build-debug",
+      "displayName": "Solution Build Debug|x64 (Canonical CMake Orchestration)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-sln-build-debug"
+      ]
+    },
+    {
+      "name": "sln-build-release",
+      "displayName": "Solution Build Release|x64 (Canonical CMake Orchestration)",
+      "configurePreset": "vs2022-x64-release",
+      "targets": [
+        "hex-sln-build-release"
+      ]
+    },
+    {
+      "name": "sln-build-debug-modern",
+      "displayName": "Solution Build Debug|x64 (Minimal Non-Legacy Bootstrap)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-sln-build-debug-modern"
+      ]
+    },
+    {
+      "name": "sln-build-release-modern",
+      "displayName": "Solution Build Release|x64 (Minimal Non-Legacy Bootstrap)",
+      "configurePreset": "vs2022-x64-release",
+      "targets": [
+        "hex-sln-build-release-modern"
+      ]
+    },
+    {
+      "name": "shadercompiler-build-debug",
+      "displayName": "ShaderCompiler Build Debug|x64 (Legacy Linkage)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-shadercompiler-build-debug"
+      ]
+    },
+    {
+      "name": "shadercompiler-build-debug-vendor",
+      "displayName": "ShaderCompiler Build Debug|x64 (Vendor ShaderConductor)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-shadercompiler-build-debug-vendor"
+      ]
+    }
+  ]
+}
