@@ -25,6 +25,10 @@ namespace HexEngine
 
 		void SetRotationSpeed(float speed) { _rotationSpeed = speed; }
 		void SetMovementSpeed(float speed) { _movementSpeed = speed; }
+		void ClearPath();
+		bool HasPath() const { return !_result.path.empty(); }
+		const std::vector<math::Vector3>& GetPathPoints() const { return _result.path; }
+		uint32_t GetPathIndex() const { return _pathIndex; }
 
 		//void SetReachedDestinationFn(std::function<ReachedDestinationFn> fn) { _reachedDestinationFn = fn; }
 
@@ -38,7 +42,7 @@ namespace HexEngine
 		float _rotationSpeed = 1.25f;
 		bool _hasNewRotation = false;
 		float _targetYaw = 0.0f;
-		float _movementSpeed = 180.0f;
+		float _movementSpeed = 5.0f;
 
 		//std::function<ReachedDestinationFn> _reachedDestinationFn;
 	};

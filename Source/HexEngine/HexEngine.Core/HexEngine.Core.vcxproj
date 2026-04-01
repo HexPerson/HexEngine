@@ -316,6 +316,13 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\TrafficManagerComponent.hpp" />
     <ClInclude Include="Entity\Component\TrafficSpawnerComponent.hpp" />
     <ClInclude Include="Entity\Component\TrafficVehicleComponent.hpp" />
+    <ClInclude Include="Entity\Component\ITaskTravelService.hpp" />
+    <ClInclude Include="Entity\Component\RoutineAgentComponent.hpp" />
+    <ClInclude Include="Entity\Component\PlaceOfWorkComponent.hpp" />
+    <ClInclude Include="Entity\Component\ResidenceComponent.hpp" />
+    <ClInclude Include="Entity\Component\ServiceStationComponent.hpp" />
+    <ClInclude Include="Entity\Component\CityRoutineSystemComponent.hpp" />
+    <ClInclude Include="Entity\Component\CityEmergencyDispatcherSystemComponent.hpp" />
     <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp" />
     <ClInclude Include="Entity\Entity.hpp" />
     <ClInclude Include="Entity\Component\AudioListener.hpp" />
@@ -378,6 +385,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="GUI\Elements\Element.hpp" />
     <ClInclude Include="GUI\Elements\EntityList.hpp" />
     <ClInclude Include="GUI\Elements\EntitySelector.hpp" />
+    <ClInclude Include="GUI\Elements\EntitySearch.hpp" />
     <ClInclude Include="GUI\Elements\GroupBox.hpp" />
     <ClInclude Include="GUI\Elements\ImmediateMode.hpp" />
     <ClInclude Include="GUI\Elements\InputFloat.hpp" />
@@ -513,6 +521,12 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\TrafficManagerComponent.cpp" />
     <ClCompile Include="Entity\Component\TrafficSpawnerComponent.cpp" />
     <ClCompile Include="Entity\Component\TrafficVehicleComponent.cpp" />
+    <ClCompile Include="Entity\Component\RoutineAgentComponent.cpp" />
+    <ClCompile Include="Entity\Component\PlaceOfWorkComponent.cpp" />
+    <ClCompile Include="Entity\Component\ResidenceComponent.cpp" />
+    <ClCompile Include="Entity\Component\ServiceStationComponent.cpp" />
+    <ClCompile Include="Entity\Component\CityRoutineSystemComponent.cpp" />
+    <ClCompile Include="Entity\Component\CityEmergencyDispatcherSystemComponent.cpp" />
     <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp" />
     <ClCompile Include="Entity\Entity.cpp" />
     <ClCompile Include="Entity\Component\AudioListener.cpp" />
@@ -565,6 +579,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="GUI\Elements\Element.cpp" />
     <ClCompile Include="GUI\Elements\EntityList.cpp" />
     <ClCompile Include="GUI\Elements\EntitySelector.cpp" />
+    <ClCompile Include="GUI\Elements\EntitySearch.cpp" />
     <ClCompile Include="GUI\Elements\GroupBox.cpp" />
     <ClCompile Include="GUI\Elements\ImmediateMode.cpp" />
     <ClCompile Include="GUI\Elements\InputFloat.cpp" />

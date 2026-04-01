@@ -823,7 +823,10 @@ namespace HexEngine
 				_lastPosition = transformMessage->_position;
 			}
 
-			g_pEnv->_sceneManager->GetCurrentScene()->FlushPVS(this);
+			if (_scene != nullptr)
+			{
+				_scene->FlushPVS(this);
+			}
 
 			break;
 		}

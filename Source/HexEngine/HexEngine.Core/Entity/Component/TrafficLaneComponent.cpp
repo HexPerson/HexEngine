@@ -1,11 +1,12 @@
 #include "TrafficLaneComponent.hpp"
 #include "../Entity.hpp"
+#include "../../GUI/Elements/ArrayElement.hpp"
 #include "../../Graphics/DebugRenderer.hpp"
 #include "../../GUI/Elements/Button.hpp"
 #include "../../GUI/Elements/Checkbox.hpp"
 #include "../../GUI/Elements/ComponentWidget.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
-#include "../../GUI/Elements/LineEdit.hpp"
+#include "../../GUI/Elements/EntitySearch.hpp"
 #include "../../Math/FloatMath.hpp"
 #include "../../Scene/Scene.hpp"
 #include <algorithm>
@@ -48,9 +49,9 @@ namespace HexEngine
 			_loop = copy->_loop;
 			_speedLimit = copy->_speedLimit;
 			_drawDebug = copy->_drawDebug;
-			_randomNextLane = copy->_randomNextLane;
 			_nextLaneEntityNames = copy->_nextLaneEntityNames;
 			_sequentialNextLaneCursor = 0;
+			_branchOffset = copy->_branchOffset;
 		}
 	}
 
@@ -59,8 +60,8 @@ namespace HexEngine
 		file->Serialize(data, "_loop", _loop);
 		file->Serialize(data, "_speedLimit", _speedLimit);
 		file->Serialize(data, "_drawDebug", _drawDebug);
-		file->Serialize(data, "_randomNextLane", _randomNextLane);
 		file->Serialize(data, "_nextLaneEntityNames", _nextLaneEntityNames);
+		file->Serialize(data, "_branchOffset", _branchOffset);
 	}
 
 	void TrafficLaneComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
@@ -68,8 +69,8 @@ namespace HexEngine
 		file->Deserialize(data, "_loop", _loop);
 		file->Deserialize(data, "_speedLimit", _speedLimit);
 		file->Deserialize(data, "_drawDebug", _drawDebug);
-		file->Deserialize(data, "_randomNextLane", _randomNextLane);
 		file->Deserialize(data, "_nextLaneEntityNames", _nextLaneEntityNames);
+		file->Deserialize(data, "_branchOffset", _branchOffset);
 		_sequentialNextLaneCursor = 0;
 	}
 
@@ -78,18 +79,11 @@ namespace HexEngine
 		outWaypoints.clear();
 
 		auto* entity = GetEntity();
-		if (entity == nullptr)
+		if (entity == nullptr || entity->IsPendingDeletion())
 			return;
 
-		const auto& children = entity->GetChildren();
-		outWaypoints.reserve(children.size());
-		for (auto* child : children)
-		{
-			if (child == nullptr || child->IsPendingDeletion())
-				continue;
-
-			outWaypoints.push_back(child);
-		}
+		// Lane graph is explicitly authored via "Next Lanes". A lane contributes exactly one node.
+		outWaypoints.push_back(entity);
 	}
 
 	void TrafficLaneComponent::GatherLanePoints(std::vector<math::Vector3>& outPoints) const
@@ -138,15 +132,22 @@ namespace HexEngine
 		if (_nextLaneEntityNames.empty())
 			return {};
 
-		if (_randomNextLane)
-		{
-			const int32_t index = GetRandomInt(0, static_cast<int32_t>(_nextLaneEntityNames.size()) - 1);
-			return _nextLaneEntityNames[static_cast<size_t>(index)];
-		}
-
 		const size_t index = _sequentialNextLaneCursor % _nextLaneEntityNames.size();
 		++_sequentialNextLaneCursor;
 		return _nextLaneEntityNames[index];
+	}
+
+	bool TrafficLaneComponent::AddNextLaneEntityName(const std::string& laneEntityName)
+	{
+		const std::string trimmed = Trim(laneEntityName);
+		if (trimmed.empty())
+			return false;
+
+		if (std::find(_nextLaneEntityNames.begin(), _nextLaneEntityNames.end(), trimmed) != _nextLaneEntityNames.end())
+			return false;
+
+		_nextLaneEntityNames.push_back(trimmed);
+		return true;
 	}
 
 	bool TrafficLaneComponent::CreateWidget(ComponentWidget* widget)
@@ -154,37 +155,107 @@ namespace HexEngine
 		auto* loop = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Loop Lane", &_loop);
 		auto* speedLimit = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Speed Limit", &_speedLimit, 0.0f, 5000.0f, 0.1f, 2);
 		auto* drawDebug = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Draw Debug", &_drawDebug);
-		auto* randomNext = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Random Next Lane", &_randomNextLane);
 
-		auto* nextLaneNames = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Next Lanes (CSV)");
-		const std::string nextLanesCsv = GetNextLaneNamesCsv();
-		nextLaneNames->SetValue(std::wstring(nextLanesCsv.begin(), nextLanesCsv.end()));
-		nextLaneNames->SetDoesCallbackWaitForReturn(false);
-		nextLaneNames->SetOnInputFn([this](LineEdit* edit, const std::wstring& value)
-		{
-			SetNextLaneNamesFromCsv(std::string(value.begin(), value.end()));
-		});
+		new ArrayElement<std::string>(
+			widget,
+			widget->GetNextPos(),
+			Point(widget->GetSize().x - 20, 132),
+			L"Next Lanes",
+			_nextLaneEntityNames,
+			[](Element* parent, std::string& item, int32_t index)
+			{
+				auto* laneSearch = new EntitySearch(parent, Point(0, 0), Point(parent->GetSize().x, 22), L"Lane");
+				laneSearch->SetValue(std::wstring(item.begin(), item.end()));
+				laneSearch->SetOnInputFn([&item](EntitySearch* search, const std::wstring& value)
+				{
+					item = std::string(value.begin(), value.end());
+				});
+				laneSearch->SetOnSelectFn([&item](EntitySearch* search, const EntitySearchResult& result)
+				{
+					item = result.entityName;
+				});
+			},
+			[]() -> std::string
+			{
+				return std::string();
+			},
+			[](const std::string& item, int32_t index) -> int32_t
+			{
+				return 34;
+			},
+			[](const std::string& item, int32_t index) -> std::wstring
+			{
+				return std::format(L"Lane {}", index + 1);
+			});
 
 		loop->SetPrefabOverrideBinding(GetComponentName(), "/_loop");
 		speedLimit->SetPrefabOverrideBinding(GetComponentName(), "/_speedLimit");
 		drawDebug->SetPrefabOverrideBinding(GetComponentName(), "/_drawDebug");
-		randomNext->SetPrefabOverrideBinding(GetComponentName(), "/_randomNextLane");
-		nextLaneNames->SetPrefabOverrideBinding(GetComponentName(), "/_nextLaneEntityNames");
 
-		new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Add Waypoint Child", [this](Button* button) -> bool
+		auto* branchOffsetX = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Branch Offset X", &_branchOffset.x, -10000.0f, 10000.0f, 0.1f, 2);
+		auto* branchOffsetY = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Branch Offset Y", &_branchOffset.y, -10000.0f, 10000.0f, 0.1f, 2);
+		auto* branchOffsetZ = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Branch Offset Z", &_branchOffset.z, -10000.0f, 10000.0f, 0.1f, 2);
+
+		branchOffsetX->SetPrefabOverrideBinding(GetComponentName(), "/_branchOffset/x");
+		branchOffsetY->SetPrefabOverrideBinding(GetComponentName(), "/_branchOffset/y");
+		branchOffsetZ->SetPrefabOverrideBinding(GetComponentName(), "/_branchOffset/z");
+
+		new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Add Child Lane", [this](Button* button) -> bool
 		{
 			auto* laneEntity = GetEntity();
 			if (laneEntity == nullptr || laneEntity->GetScene() == nullptr)
 				return false;
 
+			Entity* previousWaypoint = nullptr;
+			for (auto* child : laneEntity->GetChildren())
+			{
+				if (child == nullptr || child->IsPendingDeletion())
+					continue;
+				previousWaypoint = child;
+			}
+
 			const uint32_t waypointIndex = static_cast<uint32_t>(laneEntity->GetChildren().size()) + 1;
-			auto* waypoint = laneEntity->GetScene()->CreateEntity(std::format("Waypoint{}", waypointIndex), math::Vector3::Zero);
+			auto* waypoint = laneEntity->GetScene()->CreateEntity(std::format("Lane{}", waypointIndex), math::Vector3::Zero);
 			if (waypoint == nullptr)
 				return false;
 
 			waypoint->SetParent(laneEntity);
-			waypoint->ForcePosition(math::Vector3(0.0f, 0.0f, waypointIndex * 5.0f));
+			math::Vector3 waypointPosition = laneEntity->GetWorldTM().Translation() + math::Vector3(0.0f, 0.0f, waypointIndex * 5.0f);
+			if (previousWaypoint != nullptr && !previousWaypoint->IsPendingDeletion())
+			{
+				waypointPosition = previousWaypoint->GetWorldTM().Translation() + math::Vector3(0.0f, 0.0f, 5.0f);
+			}
+			waypoint->ForcePosition(waypointPosition);
 			waypoint->SetFlag(EntityFlags::ExcludeFromHLOD);
+			waypoint->AddComponent<TrafficLaneComponent>();
+
+			AddNextLaneEntityName(waypoint->GetName());
+			return true;
+		});
+
+		new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Create Branch Lane", [this](Button* button) -> bool
+		{
+			auto* laneEntity = GetEntity();
+			auto* scene = laneEntity != nullptr ? laneEntity->GetScene() : nullptr;
+			if (laneEntity == nullptr || scene == nullptr)
+				return false;
+
+			Entity* sourceWaypoint = GetEntity();
+
+			const math::Vector3 startPos = sourceWaypoint->GetWorldTM().Translation();
+			const math::Vector3 endPos = startPos + _branchOffset;
+
+			auto* branchLane = scene->CreateEntity("BranchLane", startPos);
+			if (branchLane == nullptr)
+				return false;
+
+			branchLane->SetParent(sourceWaypoint);
+			branchLane->AddComponent<TrafficLaneComponent>();			
+			branchLane->SetFlag(EntityFlags::ExcludeFromHLOD);
+
+
+			AddNextLaneEntityName(branchLane->GetName());
+
 			return true;
 		});
 
@@ -202,11 +273,12 @@ namespace HexEngine
 		std::vector<math::Vector3> points;
 		GatherLanePoints(points);
 
-		if (points.size() < 2)
+		if (points.empty())
 			return;
 
 		const math::Color lineColour = isSelected ? math::Color(HEX_RGB_TO_FLOAT3(255, 201, 14), 1.0f) : math::Color(HEX_RGB_TO_FLOAT3(255, 170, 0), 0.8f);
 		const math::Color pointColour = math::Color(HEX_RGB_TO_FLOAT3(46, 204, 113), 1.0f);
+		const math::Color nextLaneColour = math::Color(HEX_RGBA_TO_FLOAT4(52, 152, 219, 200));
 
 		for (size_t i = 0; i + 1 < points.size(); ++i)
 		{
@@ -220,5 +292,34 @@ namespace HexEngine
 		{
 			g_pEnv->_debugRenderer->DrawLine(points.back(), points.front(), lineColour);
 		}
+
+		auto* entity = GetEntity();
+		auto* scene = entity != nullptr ? entity->GetScene() : nullptr;
+		if (scene == nullptr)
+			return;
+
+		const math::Vector3 from = entity->GetWorldTM().Translation();
+		for (const auto& nextName : _nextLaneEntityNames)
+		{
+			if (nextName.empty())
+				continue;
+
+			auto* next = scene->GetEntityByName(nextName);
+			if (next == nullptr || next->IsPendingDeletion())
+				continue;
+
+			g_pEnv->_debugRenderer->DrawLine(from, next->GetWorldTM().Translation(), nextLaneColour);
+		}
+	}
+
+	void TrafficLaneComponent::OnDebugRender()
+	{
+		if (!g_pEnv->IsEditorMode() || !_drawDebug)
+			return;
+		if (GetEntity() != nullptr && GetEntity()->HasFlag(EntityFlags::SelectedInEditor))
+			return;
+
+		bool hovering = false;
+		OnRenderEditorGizmo(false, hovering);
 	}
 }

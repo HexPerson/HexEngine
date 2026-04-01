@@ -267,6 +267,9 @@ namespace HexEngine
 			loadedCount++;
 		}
 
+		// Rebuild all camera/light PVS sets once after load, instead of flushing per-transform during deserialize.
+		loadIntoExistingScene->ForceRebuildPVS();
+
 		loadIntoExistingScene->Load(sceneData, this);
 
 		LOG_DEBUG("Scene save file successfully loaded");

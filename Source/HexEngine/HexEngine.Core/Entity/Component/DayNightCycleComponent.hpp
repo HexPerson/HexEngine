@@ -15,6 +15,7 @@ namespace HexEngine
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(ComponentWidget* widget) override;
+		float GetCurrentTimeHours() const { return _currentTimeHours; }
 
 	private:
 		void AdvanceTime(float frameTime);

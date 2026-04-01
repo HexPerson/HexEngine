@@ -157,6 +157,6 @@
 		totalSky = jodieReinhardTonemap(totalSky);
 		totalSky = pow(totalSky, float3(2.2f.xxx));
 
-		return totalSky;
+		return totalSky * float3(1.0f, 0.94f, 0.92f);
 	}	
 }

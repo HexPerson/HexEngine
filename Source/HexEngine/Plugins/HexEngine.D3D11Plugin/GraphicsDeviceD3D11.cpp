@@ -638,7 +638,7 @@ bool GraphicsDeviceD3D11::CreateInternal()
 	//D3D11_FILTER_MIN_MAG_MIP_POINT
 
 
-	_clearColour = math::Color(0.1f, 0.1f, 0.1f);
+	_clearColour = math::Color(HEX_RGBA_TO_FLOAT4(44, 44, 45, 255));
 
 	ClearScissorRect();
 

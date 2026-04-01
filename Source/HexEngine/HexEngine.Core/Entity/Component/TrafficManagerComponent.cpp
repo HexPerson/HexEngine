@@ -125,7 +125,7 @@ namespace HexEngine
 
 		std::vector<math::Vector3> lanePoints;
 		lane->GatherLanePoints(lanePoints);
-		if (lanePoints.size() < 2)
+		if (lanePoints.empty())
 			return 0;
 
 		if (!IsSpawnPointClear(scene, lanePoints.front(), spawner->GetSpawnClearanceDistance()))
@@ -187,6 +187,8 @@ namespace HexEngine
 			if (vehicle == nullptr)
 				vehicle = root->AddComponent<TrafficVehicleComponent>();
 
+			// Traffic graph is lane-driven now; do not run authored waypoint A->B route mode for spawned traffic.
+			vehicle->SetUseWaypointRoute(false);
 			vehicle->SetLaneEntityName(spawner->GetLaneEntityName());
 			vehicle->RestartPath();
 

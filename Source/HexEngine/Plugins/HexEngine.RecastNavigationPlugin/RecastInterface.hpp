@@ -13,10 +13,12 @@ class RecastInterface : public HexEngine::INavMeshProvider, public rcContext
 public:
 	struct NavMeshes
 	{
-		dtNavMesh* navMesh;
-		uint8_t* navMeshData;
-		dtNavMeshQuery* navMeshQuery;
+		dtNavMesh* navMesh = nullptr;
+		uint8_t* navMeshData = nullptr;
+		dtNavMeshQuery* navMeshQuery = nullptr;
+		HexEngine::Scene* scene = nullptr;
 		HexEngine::Chunk* chunk = nullptr;
+		NavMeshCreationParams params = {};
 	};
 	RecastInterface() {}
 	virtual ~RecastInterface() {}
@@ -40,10 +42,12 @@ public:
 	virtual void doLog(const rcLogCategory category, const char* msg, const int len) override;
 
 private:
-	bool CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh);
+	bool CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh, int32_t replaceIndex = -1);
 
 private:
-	bool CreateRoutingData(HexEngine::NavMeshId* navMesh);
+	bool CreateRoutingData(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh, int32_t replaceIndex);
+	void CleanupBuildData();
+	void FreeNavMesh(NavMeshes& meshData);
 
 private:
 	rcHeightfield* _heightField = nullptr;
@@ -51,7 +55,6 @@ private:
 	rcContourSet* _cset = nullptr;
 	rcPolyMesh* _polyMesh = nullptr;
 	rcPolyMeshDetail* _detailMesh = nullptr;
-	uint8_t* _triAreas = nullptr;
 	RCDebugRenderer _debugRenderer;
 	NavMeshCreationParams _creationParams;
 

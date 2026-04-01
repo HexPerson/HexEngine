@@ -189,7 +189,7 @@ namespace HexEngine
 
 	void PVS::CalculateVisibility(Scene* scene, const PVSParams& params)
 	{
-		std::unique_lock lock(_lock);
+		
 
 		//scene->Lock();
 
@@ -338,6 +338,12 @@ namespace HexEngine
 
 				return distance1 < distance2;
 			});*/
+
+
+		if (_lock.try_lock() == false)
+			return;
+
+		std::unique_lock lock(_lock);
 
 
 		auto end = _pvs.end();

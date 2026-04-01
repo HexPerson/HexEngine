@@ -24,7 +24,12 @@ namespace HexEditor
 		}
 		else if (event == HexEngine::InputEvent::MouseDown)
 		{
-			keyHandled = ProcessKey(data->MouseDown.button);
+			// Mouse buttons should only confirm/cancel an already-running gadget.
+			// Treating mouse-down as a hotkey source can retrigger gadgets from stale key state.
+			if (_gadgetStarted)
+			{
+				keyHandled = ProcessKey(data->MouseDown.button);
+			}
 		}
 		else if (event == HexEngine::InputEvent::KeyUp)
 		{

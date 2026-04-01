@@ -58,13 +58,19 @@ namespace HexEngine
 
 			ITexture3D* radianceVolume = nullptr;
 			ITexture3D* radianceScratchVolume = nullptr;
+			ITexture3D* albedoVolume = nullptr;
+			ITexture3D* albedoScratchVolume = nullptr;
 			ITexture3D* opacityVolume = nullptr;
 			ITexture2D* probeIrradianceAtlas = nullptr;
 			ITexture2D* probeVisibilityAtlas = nullptr;
 			ID3D11UnorderedAccessView* radianceUav = nullptr;
 			ID3D11UnorderedAccessView* radianceScratchUav = nullptr;
+			ID3D11UnorderedAccessView* albedoUav = nullptr;
+			ID3D11UnorderedAccessView* albedoScratchUav = nullptr;
 			ID3D11ShaderResourceView* radianceSrv = nullptr;
 			ID3D11ShaderResourceView* radianceScratchSrv = nullptr;
+			ID3D11ShaderResourceView* albedoSrv = nullptr;
+			ID3D11ShaderResourceView* albedoScratchSrv = nullptr;
 
 			std::vector<float> radianceCpu;
 			std::vector<uint8_t> opacityCpu;
@@ -82,7 +88,7 @@ namespace HexEngine
 			math::Vector4 params3; // xyz=sunDirectionWS, w=sunDirectionality
 			math::Vector4 params4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 			math::Vector4 params5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
-			math::Vector4 params6; // x=voxelNeighbourBlend, y=shiftSettle, z,w=reserved
+			math::Vector4 params6; // x=voxelNeighbourBlend, y=shiftSettle, z=voxelAlbedoInfluence, w=reserved
 		};
 
 		struct GpuVoxelTriangle
@@ -91,6 +97,7 @@ namespace HexEngine
 			math::Vector4 p1;
 			math::Vector4 p2;
 			math::Vector4 radianceOpacity;
+			math::Vector4 albedoWeight;
 		};
 
 		struct VoxelShiftConstants
@@ -108,6 +115,49 @@ namespace HexEngine
 			math::Vector4 diffuse = math::Vector4::Zero;
 		};
 
+		struct MaterialTriangleAlbedoCacheEntry
+		{
+			math::Vector3 diffuseTint = math::Vector3(0.75f, 0.75f, 0.75f);
+			int32_t width = 0;
+			int32_t height = 0;
+			bool isBgra = false;
+			bool hasTexture = false;
+			std::vector<uint8_t> pixels;
+		};
+
+		struct MaterialAlbedoCacheKey
+		{
+			const Material* material = nullptr;
+			uint16_t uMin = 0u;
+			uint16_t vMin = 0u;
+			uint16_t uMax = 65535u;
+			uint16_t vMax = 65535u;
+
+			bool operator==(const MaterialAlbedoCacheKey& other) const
+			{
+				return material == other.material &&
+					uMin == other.uMin &&
+					vMin == other.vMin &&
+					uMax == other.uMax &&
+					vMax == other.vMax;
+			}
+		};
+
+		struct MaterialAlbedoCacheKeyHash
+		{
+			size_t operator()(const MaterialAlbedoCacheKey& key) const
+			{
+				size_t hash = std::hash<const Material*>{}(key.material);
+				const uint64_t packed =
+					static_cast<uint64_t>(key.uMin) |
+					(static_cast<uint64_t>(key.vMin) << 16u) |
+					(static_cast<uint64_t>(key.uMax) << 32u) |
+					(static_cast<uint64_t>(key.vMax) << 48u);
+				hash ^= std::hash<uint64_t>{}(packed) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
+				return hash;
+			}
+		};
+
 	private:
 		bool CreateClipmapResources();
 		void DestroyClipmapResources();
@@ -117,7 +167,7 @@ namespace HexEngine
 		void UpdateConstants(Scene* scene);
 		void AddDirtyRegion(uint32_t levelIndex, const dx::BoundingBox& bounds);
 		bool IsMeshStateDirty(StaticMeshComponent* smc, const math::Vector3& worldPos);
-		math::Vector3 GetMaterialAlbedoTint(const Material* material);
+		math::Vector3 GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent);
 		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
 		uint32_t BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out);
 		void RunGpuVoxelization(Scene* scene, uint32_t levelIndex);
@@ -165,7 +215,8 @@ namespace HexEngine
 		mutable GIConstants _constants = {};
 		std::array<std::vector<dx::BoundingBox>, ClipmapCount> _dirtyRegions = {};
 		std::unordered_map<StaticMeshComponent*, MeshTrackingState> _meshTracking;
-		std::unordered_map<const Material*, math::Vector3> _materialAlbedoCache;
+		std::unordered_map<MaterialAlbedoCacheKey, math::Vector3, MaterialAlbedoCacheKeyHash> _materialAlbedoCache;
+		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleAlbedoCache;
 		std::vector<GpuVoxelTriangle> _voxelTriangleUpload;
 
 		ITexture2D* _giHalfRes = nullptr;

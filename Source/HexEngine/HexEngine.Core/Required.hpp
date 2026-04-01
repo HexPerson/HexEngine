@@ -37,6 +37,7 @@
 #include <limits>
 #include <unordered_set>
 #include <atomic>
+#include <queue>
 
 #ifdef _DEBUG // for perf
 	#include <d3d9.h>

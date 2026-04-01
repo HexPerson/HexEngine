@@ -38,13 +38,19 @@ namespace HexEngine
 		INavMeshProvider::PathParams path;
 		path.from = from;
 		path.to = to;
-		path.searchDistance = math::Vector3(200.0f);
+		path.searchDistance = math::Vector3(50.0f, 15.0f, 50.0f);
 		path.stepSize = stepSize;
 		path.meshId = id;
 
 		_targetPosition = to;
 
 		g_pEnv->_navMeshProvider->FindPath(path, _result);
+	}
+
+	void NavigationComponent::ClearPath()
+	{
+		_result.path.clear();
+		_pathIndex = 0;
 	}
 
 	void NavigationComponent::Update(float dt)
@@ -58,15 +64,25 @@ namespace HexEngine
 			if (result == INavMeshProvider::MoveResult::Moving)
 			{
 				auto transform = GetEntity()->GetComponent<Transform>();
+				if (transform == nullptr)
+					return;
+
+				if (_pathIndex >= _result.path.size())
+				{
+					_pathIndex = 0;
+					_result.path.clear();
+					return;
+				}
 
 				auto currentPos = transform->GetPosition();
+				constexpr float kNodeArrivalDistance = 1.0f;
+				constexpr float kMinDirectionEpsilon = 0.0001f;
 
-				auto delta = _result.path[_pathIndex] - currentPos;//_result.path[_pathIndex + 0];
-
+				auto delta = _result.path[_pathIndex] - currentPos;
 				float length = delta.Length();
-				delta.Normalize();
 
-				if (length <= 10.0f)
+				// Advance path node before normalizing to avoid invalid vectors when already on a node.
+				if (length <= kNodeArrivalDistance)
 				{
 					++_pathIndex;
 
@@ -83,15 +99,20 @@ namespace HexEngine
 
 						_pathIndex = 0;
 						_result.path.clear();
-
-						//g_pEnv->_navMeshProvider->FindPath(path, _result);
 						return;
 					}
+
+					delta = _result.path[_pathIndex] - currentPos;
+					length = delta.Length();
 				}
-	
 
-				currentPos += -transform->GetForward() * dt * _movementSpeed;
+				if (length <= kMinDirectionEpsilon)
+					return;
 
+				delta /= length;
+
+				const float moveDistance = std::min(length, std::max(0.0f, dt * _movementSpeed));
+				currentPos += delta * moveDistance;
 				transform->SetPosition(currentPos);
 
 				float yaw = atan2(delta.x, delta.z);

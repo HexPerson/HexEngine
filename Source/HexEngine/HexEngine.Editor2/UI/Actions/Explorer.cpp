@@ -217,7 +217,7 @@ namespace HexEditor
 	};
 
 	Explorer::Explorer(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
-		Dock(parent, position, size, Dock::Anchor::Bottom)
+		Element(parent, position, size)
 	{
 		_folderExplorer = new FolderExplorer(this, HexEngine::Point(10, 10), HexEngine::Point(size.y - 20, size.y - 20));
 		_folderExplorer->SetOnFolderSelected(std::bind(&Explorer::OnFolderSelected, this, std::placeholders::_1, std::placeholders::_2));
@@ -375,7 +375,7 @@ namespace HexEditor
 			_logView->DisableRecursive();
 		}
 
-		Dock::Render(renderer, w, h);
+		Element::Render(renderer, w, h);
 	}
 
 	void Explorer::OnLogMessage(const HexEngine::LogMessage& message)

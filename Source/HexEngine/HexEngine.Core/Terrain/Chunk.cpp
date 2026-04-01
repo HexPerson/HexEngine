@@ -246,11 +246,12 @@ namespace HexEngine
 
 			numFaces += mesh->GetNumFaces();
 
-			auto entPos = smc->GetEntity()->GetPosition();
+			const auto& worldTM = entity->GetWorldTM();
 
 			for (auto& v : verts)
 			{
-				vertices.push_back(entPos + *(math::Vector3*)&v._position.x);
+				const math::Vector3 localPos = *(math::Vector3*)&v._position.x;
+				vertices.push_back(math::Vector3::Transform(localPos, worldTM));
 			}
 
 			for (auto& i : inds)

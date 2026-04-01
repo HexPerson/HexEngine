@@ -483,6 +483,9 @@
     <ClInclude Include="GUI\Elements\EntityList.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="GUI\Elements\EntitySearch.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="FileSystem\XmlFile.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -583,6 +586,27 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Entity\Component\TrafficVehicleComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\ITaskTravelService.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\RoutineAgentComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\PlaceOfWorkComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\ResidenceComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\ServiceStationComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\CityRoutineSystemComponent.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Entity\Component\CityEmergencyDispatcherSystemComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp">
@@ -950,6 +974,9 @@
     <ClCompile Include="GUI\Elements\EntityList.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="GUI\Elements\EntitySearch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Graphics\UIInstance.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1026,6 +1053,24 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Entity\Component\TrafficVehicleComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\RoutineAgentComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\PlaceOfWorkComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\ResidenceComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\ServiceStationComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\CityRoutineSystemComponent.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Entity\Component\CityEmergencyDispatcherSystemComponent.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp">

@@ -39,7 +39,7 @@ namespace HexEditor
 	}
 
 	Inspector::Inspector(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
-		Dock(parent, position, size, Dock::Anchor::Right)
+		Element(parent, position, size)
 	{
 		_tabs = new HexEngine::TabView(this, HexEngine::Point(0, 10), HexEngine::Point(size.x, size.y - 20));
 

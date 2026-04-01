@@ -77,6 +77,7 @@
 #include "GUI/Elements/LoadingDialog.hpp"
 #include "GUI/Elements/Vector2Edit.hpp"
 #include "GUI/Elements/EntityList.hpp"
+#include "GUI/Elements/EntitySearch.hpp"
 #include "GUI/Elements/ArrayElement.hpp"
 #include "GUI/Elements/ScrollView.hpp"
 #include "GUI/Elements/AssetSearch.hpp"
@@ -101,6 +102,12 @@
 #include "Entity/Component/NavigationComponent.hpp"
 #include "Entity/Component/SkeletalAnimationComponent.hpp"
 #include "Entity/Component/DayNightCycleComponent.hpp"
+#include "Entity/Component/RoutineAgentComponent.hpp"
+#include "Entity/Component/PlaceOfWorkComponent.hpp"
+#include "Entity/Component/ResidenceComponent.hpp"
+#include "Entity/Component/ServiceStationComponent.hpp"
+#include "Entity/Component/CityRoutineSystemComponent.hpp"
+#include "Entity/Component/CityEmergencyDispatcherSystemComponent.hpp"
 
 #include "Plugin/PluginSystem.hpp"
 

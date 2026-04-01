@@ -2,6 +2,7 @@
 
 #include "DuplicateGadget.hpp"
 #include "../EditorUI.hpp"
+#include <HexEngine.Core\Entity\Component\TrafficLaneComponent.hpp>
 
 namespace HexEditor
 {
@@ -82,6 +83,7 @@ namespace HexEditor
 	{
 		auto inspector = g_pUIManager->GetInspector();
 		auto duplicatedEntity = _duplicatedEntity;
+		auto sourceEntity = _sourceEntity;
 
 		_duplicatedEntity = nullptr;
 
@@ -90,6 +92,13 @@ namespace HexEditor
 
 		if (action == GadgetAction::Confirm)
 		{
+			auto* sourceLane = sourceEntity != nullptr ? sourceEntity->GetComponent<HexEngine::TrafficLaneComponent>() : nullptr;
+			auto* duplicateLane = duplicatedEntity->GetComponent<HexEngine::TrafficLaneComponent>();
+			if (sourceLane != nullptr && duplicateLane != nullptr)
+			{
+				sourceLane->AddNextLaneEntityName(duplicatedEntity->GetName());
+			}
+
 			g_pUIManager->RecordEntityCreated(duplicatedEntity);
 		}
 		else if (action == GadgetAction::Cancel)
@@ -100,7 +109,7 @@ namespace HexEditor
 				currentScene->DestroyEntity(duplicatedEntity);
 			}
 
-			inspector->InspectEntity(_sourceEntity);
+			inspector->InspectEntity(sourceEntity);
 		}
 
 		_sourceEntity = nullptr;

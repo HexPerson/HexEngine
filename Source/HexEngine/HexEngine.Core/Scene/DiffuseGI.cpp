@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <unordered_set>
 
 namespace HexEngine
@@ -61,11 +62,12 @@ namespace HexEngine
 	HVar r_giBaseSunSmallTriangleDamp("r_giBaseSunSmallTriangleDamp", "Damp base/sun GI injection from tiny triangles to avoid local over-injection hotspots", 0.85f, 0.0f, 1.0f);
 	HVar r_giProbeGatherBoost("r_giProbeGatherBoost", "Probe raymarch energy boost before temporal filtering", 0.90f, 0.1f, 8.0f);
 	HVar r_giScreenBounce("r_giScreenBounce", "Screen-space diffuse bounce assist intensity", 0.0f, 0.0f, 2.0f);
-	HVar r_giUseTextureTint("r_giUseTextureTint", "Use albedo texture readback to tint GI injection (cached per material)", true, false, true);
+	HVar r_giUseTextureTint("r_giUseTextureTint", "Use albedo texture readback to tint GI injection (cached per material+UV subset)", true, false, true);
 	HVar r_giGpuVoxelize("r_giGpuVoxelize", "Use GPU voxelization for clipmap radiance updates", true, false, true);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
+	HVar r_giVoxelAlbedoInfluence("r_giVoxelAlbedoInfluence", "How strongly voxelized albedo tints GI bounce (0=energy only, 1=full albedo tint)", 1.0f, 0.0f, 1.0f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
 	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap)", 0, 0, 4);
@@ -75,6 +77,74 @@ namespace HexEngine
 
 namespace
 {
+	struct MaterialUvRect
+	{
+		float uMin = 0.0f;
+		float vMin = 0.0f;
+		float uMax = 1.0f;
+		float vMax = 1.0f;
+	};
+
+	static MaterialUvRect ResolveMaterialUvRect(const HexEngine::StaticMeshComponent* meshComponent)
+	{
+		MaterialUvRect rect = {};
+		if (meshComponent == nullptr)
+			return rect;
+
+		const auto mesh = meshComponent->GetMesh();
+		if (!mesh)
+			return rect;
+
+		const auto& vertices = mesh->GetVertices();
+		if (vertices.empty())
+			return rect;
+
+		const math::Vector2 uvScale = meshComponent->GetUVScale();
+		float minU = std::numeric_limits<float>::infinity();
+		float minV = std::numeric_limits<float>::infinity();
+		float maxU = -std::numeric_limits<float>::infinity();
+		float maxV = -std::numeric_limits<float>::infinity();
+
+		for (const auto& vertex : vertices)
+		{
+			const float u = vertex._texcoord.x * uvScale.x;
+			const float v = vertex._texcoord.y * uvScale.y;
+			if (!std::isfinite(u) || !std::isfinite(v))
+				continue;
+			minU = std::min(minU, u);
+			minV = std::min(minV, v);
+			maxU = std::max(maxU, u);
+			maxV = std::max(maxV, v);
+		}
+
+		if (!std::isfinite(minU) || !std::isfinite(minV) || !std::isfinite(maxU) || !std::isfinite(maxV))
+			return rect;
+
+		const bool usesOutOfRangeUv = (minU < 0.0f) || (minV < 0.0f) || (maxU > 1.0f) || (maxV > 1.0f);
+		if (usesOutOfRangeUv)
+		{
+			// Wrapped/tiled UVs imply the whole texture can contribute.
+			return rect;
+		}
+
+		rect.uMin = std::clamp(minU, 0.0f, 1.0f);
+		rect.vMin = std::clamp(minV, 0.0f, 1.0f);
+		rect.uMax = std::clamp(maxU, 0.0f, 1.0f);
+		rect.vMax = std::clamp(maxV, 0.0f, 1.0f);
+		if (rect.uMax < rect.uMin)
+			std::swap(rect.uMax, rect.uMin);
+		if (rect.vMax < rect.vMin)
+			std::swap(rect.vMax, rect.vMin);
+
+		return rect;
+	}
+
+	static uint16_t QuantizeUvToU16(float uv)
+	{
+		const float clamped = std::clamp(uv, 0.0f, 1.0f);
+		return static_cast<uint16_t>(std::lround(clamped * 65535.0f));
+	}
+
 	static DXGI_FORMAT ResolveShadowSrvFormat(DXGI_FORMAT format)
 	{
 		switch (format)
@@ -339,6 +409,7 @@ namespace HexEngine
 		}
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
+		_materialTriangleAlbedoCache.clear();
 		for (auto& regions : _dirtyRegions)
 		{
 			regions.clear();
@@ -446,6 +517,7 @@ namespace HexEngine
 		DestroyClipmapResources();
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
+		_materialTriangleAlbedoCache.clear();
 		for (auto& regions : _dirtyRegions)
 		{
 			regions.clear();
@@ -621,6 +693,38 @@ namespace HexEngine
 				D3D11_SRV_DIMENSION_TEXTURE3D,
 				D3D11_DSV_DIMENSION_UNKNOWN);
 
+			level.albedoVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				DXGI_FORMAT_R16G16B16A16_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+				1,
+				1,
+				0,
+				nullptr,
+				D3D11_RTV_DIMENSION_UNKNOWN,
+				D3D11_UAV_DIMENSION_TEXTURE3D,
+				D3D11_SRV_DIMENSION_TEXTURE3D,
+				D3D11_DSV_DIMENSION_UNKNOWN);
+
+			level.albedoScratchVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				static_cast<int32_t>(resolution),
+				DXGI_FORMAT_R16G16B16A16_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+				1,
+				1,
+				0,
+				nullptr,
+				D3D11_RTV_DIMENSION_UNKNOWN,
+				D3D11_UAV_DIMENSION_TEXTURE3D,
+				D3D11_SRV_DIMENSION_TEXTURE3D,
+				D3D11_DSV_DIMENSION_UNKNOWN);
+
 			level.opacityVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
 				static_cast<int32_t>(resolution),
 				static_cast<int32_t>(resolution),
@@ -678,7 +782,9 @@ namespace HexEngine
 			level.probeIrradianceCpu.resize(static_cast<size_t>(probeAtlasWidth) * probeAtlasHeight * 4u, 0.0f);
 			level.probeVisibilityCpu.resize(static_cast<size_t>(probeAtlasWidth) * probeAtlasHeight, 0u);
 
-			if (!level.radianceVolume || !level.radianceScratchVolume || !level.opacityVolume || !level.probeIrradianceAtlas || !level.probeVisibilityAtlas)
+			if (!level.radianceVolume || !level.radianceScratchVolume ||
+				!level.albedoVolume || !level.albedoScratchVolume ||
+				!level.opacityVolume || !level.probeIrradianceAtlas || !level.probeVisibilityAtlas)
 			{
 				LOG_CRIT("DiffuseGI failed to allocate one or more clipmap resources.");
 				return false;
@@ -713,6 +819,32 @@ namespace HexEngine
 					return false;
 				}
 
+				D3D11_UNORDERED_ACCESS_VIEW_DESC albedoUavDesc = {};
+				albedoUavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+				albedoUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D;
+				albedoUavDesc.Texture3D.MipSlice = 0;
+				albedoUavDesc.Texture3D.FirstWSlice = 0;
+				albedoUavDesc.Texture3D.WSize = resolution;
+				hr = device->CreateUnorderedAccessView(
+					reinterpret_cast<ID3D11Texture3D*>(level.albedoVolume->GetNativePtr()),
+					&albedoUavDesc,
+					&level.albedoUav);
+				if (FAILED(hr) || level.albedoUav == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to create albedo UAV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
+					return false;
+				}
+
+				hr = device->CreateUnorderedAccessView(
+					reinterpret_cast<ID3D11Texture3D*>(level.albedoScratchVolume->GetNativePtr()),
+					&albedoUavDesc,
+					&level.albedoScratchUav);
+				if (FAILED(hr) || level.albedoScratchUav == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to create albedo scratch UAV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
+					return false;
+				}
+
 				hr = device->CreateShaderResourceView(
 					reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
 					nullptr,
@@ -732,6 +864,26 @@ namespace HexEngine
 					LOG_CRIT("DiffuseGI failed to create radiance scratch SRV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
 					return false;
 				}
+
+				hr = device->CreateShaderResourceView(
+					reinterpret_cast<ID3D11Resource*>(level.albedoVolume->GetNativePtr()),
+					nullptr,
+					&level.albedoSrv);
+				if (FAILED(hr) || level.albedoSrv == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to create albedo SRV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
+					return false;
+				}
+
+				hr = device->CreateShaderResourceView(
+					reinterpret_cast<ID3D11Resource*>(level.albedoScratchVolume->GetNativePtr()),
+					nullptr,
+					&level.albedoScratchSrv);
+				if (FAILED(hr) || level.albedoScratchSrv == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to create albedo scratch SRV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
+					return false;
+				}
 			}
 		}
 
@@ -744,10 +896,16 @@ namespace HexEngine
 		{
 			SAFE_RELEASE(level.radianceUav);
 			SAFE_RELEASE(level.radianceScratchUav);
+			SAFE_RELEASE(level.albedoUav);
+			SAFE_RELEASE(level.albedoScratchUav);
 			SAFE_RELEASE(level.radianceSrv);
 			SAFE_RELEASE(level.radianceScratchSrv);
+			SAFE_RELEASE(level.albedoSrv);
+			SAFE_RELEASE(level.albedoScratchSrv);
 			SAFE_DELETE(level.radianceVolume);
 			SAFE_DELETE(level.radianceScratchVolume);
+			SAFE_DELETE(level.albedoVolume);
+			SAFE_DELETE(level.albedoScratchVolume);
 			SAFE_DELETE(level.opacityVolume);
 			SAFE_DELETE(level.probeIrradianceAtlas);
 			SAFE_DELETE(level.probeVisibilityAtlas);
@@ -884,12 +1042,20 @@ namespace HexEngine
 		return dirty;
 	}
 
-	math::Vector3 DiffuseGI::GetMaterialAlbedoTint(const Material* material)
+	math::Vector3 DiffuseGI::GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent)
 	{
 		if (material == nullptr)
 			return math::Vector3(1.0f, 1.0f, 1.0f);
 
-		if (auto it = _materialAlbedoCache.find(material); it != _materialAlbedoCache.end())
+		const MaterialUvRect uvRect = ResolveMaterialUvRect(meshComponent);
+		MaterialAlbedoCacheKey cacheKey = {};
+		cacheKey.material = material;
+		cacheKey.uMin = QuantizeUvToU16(uvRect.uMin);
+		cacheKey.vMin = QuantizeUvToU16(uvRect.vMin);
+		cacheKey.uMax = QuantizeUvToU16(uvRect.uMax);
+		cacheKey.vMax = QuantizeUvToU16(uvRect.vMax);
+
+		if (auto it = _materialAlbedoCache.find(cacheKey); it != _materialAlbedoCache.end())
 			return it->second;
 
 		math::Vector3 tint(
@@ -920,9 +1086,15 @@ namespace HexEngine
 					const int cB = isBgra ? 0 : 2;
 
 					// GetPixels payload is treated as tightly packed base level for tint estimation.
+					const int32_t sampleX0 = std::clamp(static_cast<int32_t>(std::floor(uvRect.uMin * static_cast<float>(texW - 1))), 0, texW - 1);
+					const int32_t sampleY0 = std::clamp(static_cast<int32_t>(std::floor(uvRect.vMin * static_cast<float>(texH - 1))), 0, texH - 1);
+					const int32_t sampleX1 = std::clamp(static_cast<int32_t>(std::ceil(uvRect.uMax * static_cast<float>(texW - 1))), 0, texW - 1);
+					const int32_t sampleY1 = std::clamp(static_cast<int32_t>(std::ceil(uvRect.vMax * static_cast<float>(texH - 1))), 0, texH - 1);
+					const int32_t regionW = std::max(1, sampleX1 - sampleX0 + 1);
+					const int32_t regionH = std::max(1, sampleY1 - sampleY0 + 1);
 					const size_t rowPitch = static_cast<size_t>(texW) * 4u;
-					const size_t pixelCount = static_cast<size_t>(texW) * static_cast<size_t>(texH);
-					const size_t step = std::max<size_t>(1u, pixelCount / 8192u);
+					const size_t regionPixelCount = static_cast<size_t>(regionW) * static_cast<size_t>(regionH);
+					const int32_t axisStep = std::max<int32_t>(1, static_cast<int32_t>(std::sqrt(static_cast<double>(regionPixelCount) / 8192.0)));
 
 					double r = 0.0;
 					double g = 0.0;
@@ -932,33 +1104,34 @@ namespace HexEngine
 					double bs = 0.0;
 					double satWeightSum = 0.0;
 					size_t samples = 0u;
-					for (size_t i = 0u; i < pixelCount; i += step)
+					for (int32_t y = sampleY0; y <= sampleY1; y += axisStep)
 					{
-						const size_t x = i % static_cast<size_t>(texW);
-						const size_t y = i / static_cast<size_t>(texW);
-						const size_t idx = y * rowPitch + x * 4u;
-						if (idx + 3u >= pixels.size())
-							continue;
+						for (int32_t x = sampleX0; x <= sampleX1; x += axisStep)
+						{
+							const size_t idx = static_cast<size_t>(y) * rowPitch + static_cast<size_t>(x) * 4u;
+							if (idx + 3u >= pixels.size())
+								continue;
 
-						const float srgbR = pixels[idx + static_cast<size_t>(cR)] / 255.0f;
-						const float srgbG = pixels[idx + static_cast<size_t>(cG)] / 255.0f;
-						const float srgbB = pixels[idx + static_cast<size_t>(cB)] / 255.0f;
-						const float linR = static_cast<float>(std::pow(static_cast<double>(srgbR), 2.2));
-						const float linG = static_cast<float>(std::pow(static_cast<double>(srgbG), 2.2));
-						const float linB = static_cast<float>(std::pow(static_cast<double>(srgbB), 2.2));
-						r += linR;
-						g += linG;
-						b += linB;
+							const float srgbR = pixels[idx + static_cast<size_t>(cR)] / 255.0f;
+							const float srgbG = pixels[idx + static_cast<size_t>(cG)] / 255.0f;
+							const float srgbB = pixels[idx + static_cast<size_t>(cB)] / 255.0f;
+							const float linR = static_cast<float>(std::pow(static_cast<double>(srgbR), 2.2));
+							const float linG = static_cast<float>(std::pow(static_cast<double>(srgbG), 2.2));
+							const float linB = static_cast<float>(std::pow(static_cast<double>(srgbB), 2.2));
+							r += linR;
+							g += linG;
+							b += linB;
 
-						const float maxC = std::max(linR, std::max(linG, linB));
-						const float minC = std::min(linR, std::min(linG, linB));
-						const float sat = std::max(0.0f, maxC - minC);
-						const float satWeight = 0.05f + sat * sat * 4.0f;
-						rs += linR * satWeight;
-						gs += linG * satWeight;
-						bs += linB * satWeight;
-						satWeightSum += satWeight;
-						++samples;
+							const float maxC = std::max(linR, std::max(linG, linB));
+							const float minC = std::min(linR, std::min(linG, linB));
+							const float sat = std::max(0.0f, maxC - minC);
+							const float satWeight = 0.05f + sat * sat * 4.0f;
+							rs += linR * satWeight;
+							gs += linG * satWeight;
+							bs += linB * satWeight;
+							satWeightSum += satWeight;
+							++samples;
+						}
 					}
 
 					if (samples > 0u)
@@ -1003,7 +1176,7 @@ namespace HexEngine
 		tint.y = std::clamp(tint.y, 0.03f, 1.0f);
 		tint.z = std::clamp(tint.z, 0.03f, 1.0f);
 
-		_materialAlbedoCache[material] = tint;
+		_materialAlbedoCache[cacheKey] = tint;
 		return tint;
 	}
 
@@ -1352,7 +1525,7 @@ namespace HexEngine
 			if (auto mat = smc->GetMaterial())
 			{
 				const auto emissive = mat->_properties.emissiveColour;
-				const math::Vector3 albedoTint = GetMaterialAlbedoTint(mat.get());
+				const math::Vector3 albedoTint = GetMaterialAlbedoTint(mat.get(), smc);
 				const float albedoMax = std::max(albedoTint.x, std::max(albedoTint.y, albedoTint.z));
 				const float albedoMin = std::min(albedoTint.x, std::min(albedoTint.y, albedoTint.z));
 				const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
@@ -1512,7 +1685,7 @@ namespace HexEngine
 		_constants.params6 = math::Vector4(
 			std::clamp(r_giVoxelNeighbourBlend._val.f32, 0.0f, 1.0f),
 			shiftSettle,
-			0.0f,
+			std::clamp(r_giVoxelAlbedoInfluence._val.f32, 0.0f, 1.0f),
 			0.0f);
 
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
@@ -1971,6 +2144,85 @@ namespace HexEngine
 				sunStrength = std::max(0.0f, sun->GetLightMultiplier() * sun->GetLightStrength());
 		}
 		const float clipAttenuation = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
+		auto getMaterialAlbedoData = [&](const Material* material) -> const MaterialTriangleAlbedoCacheEntry&
+		{
+			auto it = _materialTriangleAlbedoCache.find(material);
+			if (it != _materialTriangleAlbedoCache.end())
+				return it->second;
+
+			MaterialTriangleAlbedoCacheEntry data = {};
+			if (material != nullptr)
+			{
+				data.diffuseTint = math::Vector3(
+					std::clamp(material->_properties.diffuseColour.x, 0.0f, 1.0f),
+					std::clamp(material->_properties.diffuseColour.y, 0.0f, 1.0f),
+					std::clamp(material->_properties.diffuseColour.z, 0.0f, 1.0f));
+
+				if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
+				{
+					data.width = std::max(1, albedoTex->GetWidth());
+					data.height = std::max(1, albedoTex->GetHeight());
+					albedoTex->GetPixels(data.pixels);
+					const size_t minTightSize = static_cast<size_t>(data.width) * static_cast<size_t>(data.height) * 4u;
+					if (data.pixels.size() >= minTightSize)
+					{
+						const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedoTex->GetFormat());
+						data.isBgra =
+							(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+							(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+							(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+							(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+						data.hasTexture = true;
+					}
+				}
+			}
+
+			auto [insertedIt, _] = _materialTriangleAlbedoCache.emplace(material, std::move(data));
+			return insertedIt->second;
+		};
+
+		auto sampleLinearAlbedo = [&](const MaterialTriangleAlbedoCacheEntry& data, float u, float v) -> math::Vector3
+		{
+			if (!data.hasTexture || data.width <= 0 || data.height <= 0)
+				return data.diffuseTint;
+
+			static float srgbToLinear[256] = {};
+			static bool srgbToLinearInit = false;
+			if (!srgbToLinearInit)
+			{
+				for (int32_t i = 0; i < 256; ++i)
+				{
+					const float s = static_cast<float>(i) / 255.0f;
+					srgbToLinear[i] = static_cast<float>(std::pow(static_cast<double>(s), 2.2));
+				}
+				srgbToLinearInit = true;
+			}
+
+			u = u - std::floor(u);
+			v = v - std::floor(v);
+			if (u < 0.0f)
+				u += 1.0f;
+			if (v < 0.0f)
+				v += 1.0f;
+
+			const int32_t x = std::clamp(static_cast<int32_t>(u * static_cast<float>(data.width - 1) + 0.5f), 0, data.width - 1);
+			const int32_t y = std::clamp(static_cast<int32_t>(v * static_cast<float>(data.height - 1) + 0.5f), 0, data.height - 1);
+			const int cR = data.isBgra ? 2 : 0;
+			const int cG = 1;
+			const int cB = data.isBgra ? 0 : 2;
+			const size_t rowPitch = static_cast<size_t>(data.width) * 4u;
+			const size_t idx = static_cast<size_t>(y) * rowPitch + static_cast<size_t>(x) * 4u;
+			if (idx + 3u >= data.pixels.size())
+				return data.diffuseTint;
+
+			const float tr = srgbToLinear[data.pixels[idx + static_cast<size_t>(cR)]];
+			const float tg = srgbToLinear[data.pixels[idx + static_cast<size_t>(cG)]];
+			const float tb = srgbToLinear[data.pixels[idx + static_cast<size_t>(cB)]];
+			return math::Vector3(
+				std::clamp(tr * data.diffuseTint.x, 0.0f, 1.0f),
+				std::clamp(tg * data.diffuseTint.y, 0.0f, 1.0f),
+				std::clamp(tb * data.diffuseTint.z, 0.0f, 1.0f));
+		};
 
 		for (auto* smc : meshesInBounds)
 		{
@@ -1987,28 +2239,16 @@ namespace HexEngine
 			const float emissiveInject = std::max(0.0f, r_giEmissiveInjection._val.f32);
 			const float bleedBoost = std::max(0.0f, r_giAlbedoBleedBoost._val.f32);
 			const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
-			math::Vector3 albedoTint(0.75f, 0.75f, 0.75f);
 			math::Vector3 emissiveTint = math::Vector3::Zero;
 			float emissiveStrength = 0.0f;
+			const Material* material = nullptr;
 			if (auto mat = smc->GetMaterial())
 			{
 				const auto emissive = mat->_properties.emissiveColour;
-				albedoTint = GetMaterialAlbedoTint(mat.get());
+				material = mat.get();
 				emissiveTint = math::Vector3(emissive.x, emissive.y, emissive.z);
 				emissiveStrength = std::max(0.0f, emissive.w);
 			}
-			const float albedoMax = std::max(albedoTint.x, std::max(albedoTint.y, albedoTint.z));
-			const float albedoMin = std::min(albedoTint.x, std::min(albedoTint.y, albedoTint.z));
-			const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
-			const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
-			const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
-			// Keep "base" injection independent of sun; sun bounce is handled explicitly by sunInjection below.
-			// This prevents broad double-counted ambient wash that can look like white/local-light halos.
-			const math::Vector3 baseDiffuseBounce = albedoTint * (diffuseInject * unlitBase * (0.55f + bleedBoost * 0.30f) * colourBleedBoost);
-			const math::Vector3 baseEmissiveBounce = emissiveTint * emissiveStrength * emissiveInject;
-			const math::Vector3 triBaseInjection =
-				(baseDiffuseBounce + baseEmissiveBounce) * clipAttenuation;
-			const math::Vector3 sunTintedAlbedo = (albedoTint * sunTint) * clipAttenuation;
 
 			auto mesh = smc->GetMesh();
 			if (!mesh)
@@ -2038,6 +2278,8 @@ namespace HexEngine
 				std::max(meshSunMinScale, 1.0f / static_cast<float>(sampledTriCount)),
 				meshSunInjectionNormalize);
 			const auto& worldTM = entity->GetWorldTM();
+			const math::Vector2 uvScale = smc->GetUVScale();
+			const auto& matAlbedoData = getMaterialAlbedoData(material);
 			const auto& entityAabb = entity->GetWorldAABB();
 			const math::Vector3 entityCenter(entityAabb.Center.x, entityAabb.Center.y, entityAabb.Center.z);
 			const math::Vector3 entityExtents(entityAabb.Extents.x, entityAabb.Extents.y, entityAabb.Extents.z);
@@ -2132,6 +2374,26 @@ namespace HexEngine
 				const float smallTriDamp = std::clamp(r_giBaseSunSmallTriangleDamp._val.f32, 0.0f, 1.0f);
 				const float baseSunAreaWeight = std::lerp(1.0f, triAreaNorm, smallTriDamp);
 				faceNormal.Normalize();
+				const float u0 = vertices[i0]._texcoord.x * uvScale.x;
+				const float v0 = vertices[i0]._texcoord.y * uvScale.y;
+				const float u1 = vertices[i1]._texcoord.x * uvScale.x;
+				const float v1 = vertices[i1]._texcoord.y * uvScale.y;
+				const float u2 = vertices[i2]._texcoord.x * uvScale.x;
+				const float v2 = vertices[i2]._texcoord.y * uvScale.y;
+				math::Vector3 triAlbedo = sampleLinearAlbedo(matAlbedoData, (u0 + u1 + u2) / 3.0f, (v0 + v1 + v2) / 3.0f);
+				triAlbedo.x = std::clamp(triAlbedo.x, 0.03f, 1.0f);
+				triAlbedo.y = std::clamp(triAlbedo.y, 0.03f, 1.0f);
+				triAlbedo.z = std::clamp(triAlbedo.z, 0.03f, 1.0f);
+				const float triAlbedoMax = std::max(triAlbedo.x, std::max(triAlbedo.y, triAlbedo.z));
+				const float triAlbedoMin = std::min(triAlbedo.x, std::min(triAlbedo.y, triAlbedo.z));
+				const float triAlbedoChroma = std::max(0.0f, triAlbedoMax - triAlbedoMin);
+				const float triAlbedoLuma = std::clamp(triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
+				const float colourBleedBoost = std::clamp(1.0f + triAlbedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
+				const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
+				const math::Vector3 triBaseInjection = (
+					math::Vector3(1.0f, 1.0f, 1.0f) * (triAlbedoLuma * diffuseInject * unlitBase * (0.55f + bleedBoost * 0.30f) * colourBleedBoost) +
+					(emissiveTint * emissiveStrength * emissiveInject)) * clipAttenuation;
+				const math::Vector3 sunEnergyTint = sunTint * (triAlbedoLuma * clipAttenuation);
 				const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
 				const float directSunBounce = sunFacing * sunStrength * sunInject * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
 				const float directionalDiffuseBounce = sunFacing * sunStrength * diffuseInject * (0.28f + bleedBoost * 0.18f) * sunDirectionalBoost * colourBleedBoost;
@@ -2206,15 +2468,12 @@ namespace HexEngine
 					const float localLum = localIrradiance.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f));
 					localIrradiance = localIrradiance / (1.0f + localLum * 0.5f);
 					const float localInject = std::max(0.0f, r_giLocalLightInjection._val.f32);
-					const float localAlbedoWeight = std::clamp(r_giLocalLightAlbedoWeight._val.f32, 0.0f, 1.0f);
-					const math::Vector3 whiteTint(1.0f, 1.0f, 1.0f);
-					const math::Vector3 localReceiverTint = whiteTint + (albedoTint - whiteTint) * localAlbedoWeight;
-					localLightBounce = (localIrradiance * localReceiverTint) * (localInject * (0.55f + bleedBoost * 0.12f));
+					localLightBounce = localIrradiance * (localInject * (0.55f + bleedBoost * 0.12f));
 				}
 
 				math::Vector3 sunInjection = disableSunInjection
 					? math::Vector3::Zero
-					: (sunTintedAlbedo * (directSunBounce + directionalDiffuseBounce) * baseSunAreaWeight * meshSunInjectionScale);
+					: (sunEnergyTint * (directSunBounce + directionalDiffuseBounce) * baseSunAreaWeight * meshSunInjectionScale);
 				math::Vector3 baseInjection = (disableBaseInjection ? math::Vector3::Zero : (triBaseInjection * baseSunAreaWeight * meshBaseInjectionScale)) + sunInjection;
 				if (localLightsOnlyDebug)
 				{
@@ -2256,6 +2515,7 @@ namespace HexEngine
 					std::clamp(triInjectionFinal.y, 0.0f, 32.0f),
 					std::clamp(triInjectionFinal.z, 0.0f, 32.0f),
 					0.92f);
+				entry.albedoWeight = math::Vector4(triAlbedo.x, triAlbedo.y, triAlbedo.z, triAreaNorm);
 				out.push_back(entry);
 			}
 		}
@@ -2280,8 +2540,11 @@ namespace HexEngine
 
 		auto& level = _clipmaps[levelIndex];
 		if (level.radianceUav == nullptr || level.radianceScratchUav == nullptr ||
+			level.albedoUav == nullptr || level.albedoScratchUav == nullptr ||
 			level.radianceSrv == nullptr || level.radianceScratchSrv == nullptr ||
-			level.radianceVolume == nullptr || level.radianceScratchVolume == nullptr)
+			level.albedoSrv == nullptr || level.albedoScratchSrv == nullptr ||
+			level.radianceVolume == nullptr || level.radianceScratchVolume == nullptr ||
+			level.albedoVolume == nullptr || level.albedoScratchVolume == nullptr)
 			return;
 
 		const uint32_t triangleCount = BuildGpuVoxelTriangleList(scene, levelIndex, _voxelTriangleUpload);
@@ -2325,24 +2588,27 @@ namespace HexEngine
 				{
 					context->CSSetConstantBuffers(5, 1, &shiftCb);
 				}
-				ID3D11ShaderResourceView* shiftSrv[1] = { level.radianceSrv };
-				ID3D11UnorderedAccessView* shiftUav[1] = { level.radianceScratchUav };
-				context->CSSetShaderResources(0, 1, shiftSrv);
-				context->CSSetUnorderedAccessViews(0, 1, shiftUav, nullptr);
+				ID3D11ShaderResourceView* shiftSrv[2] = { level.radianceSrv, level.albedoSrv };
+				ID3D11UnorderedAccessView* shiftUav[2] = { level.radianceScratchUav, level.albedoScratchUav };
+				context->CSSetShaderResources(0, 2, shiftSrv);
+				context->CSSetUnorderedAccessViews(0, 2, shiftUav, nullptr);
 				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(shiftStage->GetNativePtr()), nullptr, 0);
 				context->Dispatch(clearGroups, clearGroups, clearGroups);
 
-				ID3D11ShaderResourceView* nullShiftSrv[1] = {};
-				ID3D11UnorderedAccessView* nullShiftUav[1] = {};
+				ID3D11ShaderResourceView* nullShiftSrv[2] = {};
+				ID3D11UnorderedAccessView* nullShiftUav[2] = {};
 				ID3D11Buffer* nullShiftCb[1] = {};
-				context->CSSetShaderResources(0, 1, nullShiftSrv);
-				context->CSSetUnorderedAccessViews(0, 1, nullShiftUav, nullptr);
+				context->CSSetShaderResources(0, 2, nullShiftSrv);
+				context->CSSetUnorderedAccessViews(0, 2, nullShiftUav, nullptr);
 				context->CSSetConstantBuffers(5, 1, nullShiftCb);
 				context->CSSetShader(nullptr, nullptr, 0);
 
 				context->CopyResource(
 					reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
 					reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
+				context->CopyResource(
+					reinterpret_cast<ID3D11Resource*>(level.albedoVolume->GetNativePtr()),
+					reinterpret_cast<ID3D11Resource*>(level.albedoScratchVolume->GetNativePtr()));
 
 				appliedShift = true;
 				appliedShiftWs = math::Vector3(
@@ -2431,33 +2697,36 @@ namespace HexEngine
 				sunShadowSrvs[i] = CreateShadowMapSrv(device, shadowMap->GetDepthMap());
 			}
 		}
-		context->CSSetShaderResources(2, 6, sunShadowSrvs);
+		context->CSSetShaderResources(3, 6, sunShadowSrvs);
 
 		// Preserve previous frame radiance for approximate sun-visibility queries during injection.
 		context->CopyResource(
 			reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()),
 			reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()));
+		context->CopyResource(
+			reinterpret_cast<ID3D11Resource*>(level.albedoScratchVolume->GetNativePtr()),
+			reinterpret_cast<ID3D11Resource*>(level.albedoVolume->GetNativePtr()));
 
-		ID3D11UnorderedAccessView* clearUav[1] = { level.radianceUav };
-		context->CSSetUnorderedAccessViews(0, 1, clearUav, nullptr);
+		ID3D11UnorderedAccessView* clearUav[2] = { level.radianceUav, level.albedoUav };
+		context->CSSetUnorderedAccessViews(0, 2, clearUav, nullptr);
 		context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(clearStage->GetNativePtr()), nullptr, 0);
 		context->Dispatch(clearGroups, clearGroups, clearGroups);
 
 		if (hasTriangles)
 		{
-			ID3D11ShaderResourceView* voxelizeSrvs[2] = { _voxelTriangleSrv, level.radianceScratchSrv };
-			context->CSSetShaderResources(0, 2, voxelizeSrvs);
-			context->CSSetUnorderedAccessViews(0, 1, clearUav, nullptr);
+			ID3D11ShaderResourceView* voxelizeSrvs[3] = { _voxelTriangleSrv, level.radianceScratchSrv, level.albedoScratchSrv };
+			context->CSSetShaderResources(0, 3, voxelizeSrvs);
+			context->CSSetUnorderedAccessViews(0, 2, clearUav, nullptr);
 			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(voxelizeStage->GetNativePtr()), nullptr, 0);
 			const uint32_t groups = (triangleCount + 63u) / 64u;
 			context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
 		}
 
 		// Break UAV/SRV hazards between injection and propagation passes.
-		ID3D11ShaderResourceView* nullSrvBetweenPasses[2] = {};
-		ID3D11UnorderedAccessView* nullUavBetweenPasses[1] = {};
-		context->CSSetShaderResources(0, 2, nullSrvBetweenPasses);
-		context->CSSetUnorderedAccessViews(0, 1, nullUavBetweenPasses, nullptr);
+		ID3D11ShaderResourceView* nullSrvBetweenPasses[3] = {};
+		ID3D11UnorderedAccessView* nullUavBetweenPasses[2] = {};
+		context->CSSetShaderResources(0, 3, nullSrvBetweenPasses);
+		context->CSSetUnorderedAccessViews(0, 2, nullUavBetweenPasses, nullptr);
 
 		ID3D11ShaderResourceView* radianceSrcSrv = level.radianceSrv;
 		if (radianceSrcSrv != nullptr)
@@ -2495,12 +2764,12 @@ namespace HexEngine
 				reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
 		}
 
-		ID3D11ShaderResourceView* nullSrvs[2] = {};
+		ID3D11ShaderResourceView* nullSrvs[3] = {};
 		ID3D11ShaderResourceView* nullShadowSrvs[6] = {};
-		ID3D11UnorderedAccessView* nullUavs[1] = {};
-		context->CSSetShaderResources(0, 2, nullSrvs);
-		context->CSSetShaderResources(2, 6, nullShadowSrvs);
-		context->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
+		ID3D11UnorderedAccessView* nullUavs[2] = {};
+		context->CSSetShaderResources(0, 3, nullSrvs);
+		context->CSSetShaderResources(3, 6, nullShadowSrvs);
+		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 		for (auto* srv : sunShadowSrvs)
 		{
@@ -2538,6 +2807,7 @@ namespace HexEngine
 		{
 			g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].radianceVolume);
 			g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].opacityVolume);
+			g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].albedoVolume);
 			g_pEnv->_graphicsDevice->SetTexture2D(_clipmaps[i].probeIrradianceAtlas);
 			g_pEnv->_graphicsDevice->SetTexture2D(_clipmaps[i].probeVisibilityAtlas);
 		}
