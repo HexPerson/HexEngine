@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - codex/build-arch-phase1
   pull_request:
     branches:
       - main
