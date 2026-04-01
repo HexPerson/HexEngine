@@ -131,6 +131,20 @@
     <PostBuildEvent>
       <Command>copy "$(TargetDir)$(TargetName).dll" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\Plugins\$(TargetName).dll"</Command>
     </PostBuildEvent>
+    <PreBuildEvent>
+      <Command>set "SL_LIB=$(MSBuildProjectDirectory)\..\..\..\..\ThirdParty\Streamline\lib\$(PlatformTarget)\sl.interposer.lib"
+if not exist "%SL_LIB%" (
+  echo Streamline required library missing: %SL_LIB%
+  echo Run: cmake --build --preset required-modules-bootstrap-debug
+  exit /b 1
+)
+findstr /b /c:"version https://git-lfs.github.com/spec/v1" "%SL_LIB%" &gt;nul
+if not errorlevel 1 (
+  echo Streamline required library is an unresolved git-lfs pointer: %SL_LIB%
+  echo Install git-lfs, run 'git lfs install', then rerun required-modules bootstrap.
+  exit /b 1
+)</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -155,6 +169,20 @@
     <PostBuildEvent>
       <Command>copy "$(TargetDir)$(TargetName).dll" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\Plugins\$(TargetName).dll"</Command>
     </PostBuildEvent>
+    <PreBuildEvent>
+      <Command>set "SL_LIB=$(MSBuildProjectDirectory)\..\..\..\..\ThirdParty\Streamline\lib\$(PlatformTarget)\sl.interposer.lib"
+if not exist "%SL_LIB%" (
+  echo Streamline required library missing: %SL_LIB%
+  echo Run: cmake --build --preset required-modules-bootstrap-debug
+  exit /b 1
+)
+findstr /b /c:"version https://git-lfs.github.com/spec/v1" "%SL_LIB%" &gt;nul
+if not errorlevel 1 (
+  echo Streamline required library is an unresolved git-lfs pointer: %SL_LIB%
+  echo Install git-lfs, run 'git lfs install', then rerun required-modules bootstrap.
+  exit /b 1
+)</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Plugin.hpp" />

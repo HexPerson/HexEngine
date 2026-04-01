@@ -94,6 +94,7 @@ Notes:
 - Legacy setup treats recastnavigation/oidn configure as optional scaffolding and continues with warnings if those configure-only steps fail in constrained environments.
 - Legacy setup currently skips OIDN bootstrap by default (optional dependency; known submodule path-length instability in some Windows environments).
 - Streamline is treated as required by default; setup validates `ThirdParty/Streamline/lib/x64/sl.interposer.lib` is materialized (not a git-lfs pointer).
+- `HexEngine.StreamlinePlugin` now fails early with an explicit pre-build error if `sl.interposer.lib` is missing or still an unresolved git-lfs pointer.
 - Legacy setup configures NRD with `NRD_EMBEDS_SPIRV_SHADERS=OFF` for Windows-first builds to avoid SPIR-V codegen requirements in environments that only ship DXIL-capable DXC.
 
 ## Dependency Manifest
