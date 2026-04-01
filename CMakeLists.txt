@@ -11,6 +11,7 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(HEXENGINE_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(HEXENGINE_DEPENDENCY_MANIFEST "${HEXENGINE_REPO_ROOT}/build/dependencies.lock.json")
 set(HEXENGINE_SOLUTION_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.sln")
+set(HEXENGINE_STREAMLINE_LIB_PATH "${HEXENGINE_REPO_ROOT}/ThirdParty/Streamline/lib/x64/sl.interposer.lib")
 
 if(CMAKE_GENERATOR MATCHES "Visual Studio" AND DEFINED CMAKE_VS_MSBUILD_COMMAND)
     set(HEXENGINE_MSBUILD_COMMAND "${CMAKE_VS_MSBUILD_COMMAND}")
@@ -175,6 +176,15 @@ add_custom_target(hex-legacy-setup
     VERBATIM
 )
 
+add_custom_target(hex-streamline-artifacts-check
+    COMMAND "${CMAKE_COMMAND}"
+        -DHEXENGINE_STREAMLINE_LIB="${HEXENGINE_STREAMLINE_LIB_PATH}"
+        -P "${HEXENGINE_REPO_ROOT}/cmake/HexCheckStreamlineArtifacts.cmake"
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Validate required Streamline SDK artifacts"
+    VERBATIM
+)
+
 if(HEXENGINE_MSBUILD_COMMAND)
     add_custom_target(hex-sln-build-debug
         COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Debug /p:Platform=x64 /m
@@ -189,6 +199,9 @@ if(HEXENGINE_MSBUILD_COMMAND)
         COMMENT "Build HexEngine.sln Release|x64 via canonical CMake orchestration"
         VERBATIM
     )
+
+    add_dependencies(hex-sln-build-debug hex-streamline-artifacts-check)
+    add_dependencies(hex-sln-build-release hex-streamline-artifacts-check)
 endif()
 
 message(STATUS "HexEngine canonical orchestration entrypoint enabled.")

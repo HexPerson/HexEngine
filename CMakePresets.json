@@ -147,6 +147,14 @@
       ]
     },
     {
+      "name": "streamline-artifacts-check-debug",
+      "displayName": "Streamline Artifact Check (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-streamline-artifacts-check"
+      ]
+    },
+    {
       "name": "dep-probe-debug",
       "displayName": "Dependency Probe Build",
       "configurePreset": "vs2022-x64-debug-dep-probe",

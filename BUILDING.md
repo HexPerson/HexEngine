@@ -62,6 +62,8 @@ Use CMake for orchestration and migration visibility:
 15. Build the engine solution via canonical CMake orchestration targets:
    - Debug: `cmake --build --preset sln-build-debug`
    - Release: `cmake --build --preset sln-build-release`
+16. Run Streamline preflight only (fast check):
+   - `cmake --build --preset streamline-artifacts-check-debug`
 
 Note:
 - In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
@@ -104,6 +106,7 @@ Notes:
 - Legacy setup currently skips OIDN bootstrap by default (optional dependency; known submodule path-length instability in some Windows environments).
 - Streamline is treated as required by default; setup validates `ThirdParty/Streamline/lib/x64/sl.interposer.lib` is materialized (not a git-lfs pointer).
 - `HexEngine.StreamlinePlugin` now fails early with an explicit pre-build error if `sl.interposer.lib` is missing or still an unresolved git-lfs pointer.
+- `hex-sln-build-debug` / `hex-sln-build-release` now depend on `hex-streamline-artifacts-check`, so canonical CMake orchestration fails fast before lengthy solution compilation when Streamline artifacts are unavailable.
 - Legacy setup configures NRD with `NRD_EMBEDS_SPIRV_SHADERS=OFF` for Windows-first builds to avoid SPIR-V codegen requirements in environments that only ship DXIL-capable DXC.
 
 ## Dependency Manifest
