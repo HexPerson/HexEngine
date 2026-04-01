@@ -6,7 +6,7 @@
 #include "../Graphics/MaterialLoader.hpp"
 
 //#include <noise.h>
-#include <fastnoiselite/FastNoiseLite.h>
+#include <fastnoiselite/Cpp/FastNoiseLite.h>
 #include <GeometricPrimitive.h>
 
 namespace HexEngine

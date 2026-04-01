@@ -4,7 +4,7 @@
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/PointLight.hpp"
 #include "../Math/FloatMath.hpp"
-#include <fastnoiselite/FastNoiseLite.h>
+#include <fastnoiselite/Cpp/FastNoiseLite.h>
 #include <cstdint>
 #include <unordered_set>
 #include <algorithm>

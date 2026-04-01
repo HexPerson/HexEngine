@@ -1,7 +1,7 @@
 
 #include "HeightMapGenerator.hpp"
 #include "../HexEngine.hpp"
-#include <fastnoiselite/FastNoiseLite.h>
+#include <fastnoiselite/Cpp/FastNoiseLite.h>
 #include "../Math/easing.h"
 
 namespace HexEngine

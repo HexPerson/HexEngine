@@ -9,7 +9,7 @@
 #include "../Scene/SceneManager.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
 
-#include <fastnoiselite/FastNoiseLite.h>
+#include <fastnoiselite/Cpp/FastNoiseLite.h>
 
 #if 0
 namespace HexEngine

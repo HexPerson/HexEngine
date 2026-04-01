@@ -53,7 +53,13 @@
 #endif
 
 #include <SimpleMath.h>
-#include <nlohmann/json.hpp>
+#if __has_include(<nlohmann/json.hpp>)
+	#include <nlohmann/json.hpp>
+#elif __has_include("../../../ThirdParty/rapidjson/include/nlohmann/json.hpp")
+	#include "../../../ThirdParty/rapidjson/include/nlohmann/json.hpp"
+#else
+	#error "nlohmann/json.hpp not found. Ensure ThirdParty/rapidjson is bootstrapped."
+#endif
 #include <rapidxml/rapidxml.hpp>
 
 //#include "GUI\imgui\imgui.h"
