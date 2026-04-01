@@ -14,7 +14,8 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "HEXENGINE_DEPENDENCY_BACKEND": "vcpkg_manifest"
       }
     },
     {
@@ -25,7 +26,30 @@
       "architecture": "x64",
       "binaryDir": "${sourceDir}/out/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "HEXENGINE_DEPENDENCY_BACKEND": "vcpkg_manifest"
+      }
+    },
+    {
+      "name": "vs2022-x64-debug-vcpkg",
+      "displayName": "VS2022 x64 Debug (vcpkg toolchain)",
+      "description": "Canonical preset with vcpkg manifest toolchain enabled.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_FEATURE_FLAGS": "manifests"
+      }
+    },
+    {
+      "name": "vs2022-x64-release-vcpkg",
+      "displayName": "VS2022 x64 Release (vcpkg toolchain)",
+      "description": "Canonical preset with vcpkg manifest toolchain enabled.",
+      "inherits": "vs2022-x64-release",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_FEATURE_FLAGS": "manifests"
       }
     },
     {
@@ -135,6 +159,14 @@
       ]
     },
     {
+      "name": "vcpkg-status-debug",
+      "displayName": "vcpkg Status (Debug preset)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-vcpkg-status"
+      ]
+    },
+    {
       "name": "deps-check-refs-strict-debug",
       "displayName": "Dependency Ref Strict Check (Debug preset)",
       "configurePreset": "vs2022-x64-debug",
@@ -160,7 +192,7 @@
     },
     {
       "name": "required-modules-bootstrap-debug",
-      "displayName": "Required Modules Bootstrap (Debug preset)",
+      "displayName": "Required Dependencies Bootstrap (Debug preset)",
       "configurePreset": "vs2022-x64-debug",
       "targets": [
         "hex-required-modules-bootstrap"
@@ -254,14 +286,6 @@
         "hex-streamline-probe"
       ],
       "configuration": "Debug"
-    },
-    {
-      "name": "legacy-setup-debug",
-      "displayName": "Legacy Setup (Debug preset)",
-      "configurePreset": "vs2022-x64-debug",
-      "targets": [
-        "hex-legacy-setup"
-      ]
     },
     {
       "name": "sln-build-debug",

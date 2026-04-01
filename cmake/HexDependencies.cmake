@@ -6,10 +6,13 @@ set(HEXENGINE_NLOHMANN_JSON_INCLUDE_DIR "${HEXENGINE_THIRDPARTY_DIR}/rapidjson/i
 set(HEXENGINE_RECTPACK2D_INCLUDE_ROOT "${HEXENGINE_THIRDPARTY_DIR}/retpack2d/src")
 set(HEXENGINE_RECTPACK2D_INCLUDE_DIR "${HEXENGINE_RECTPACK2D_INCLUDE_ROOT}/rectpack2D")
 
-# Phase 3 starter: model cxxopts as a target-based external header dependency.
 add_library(hex_dep_cxxopts INTERFACE)
 add_library(Hex::cxxopts ALIAS hex_dep_cxxopts)
-target_include_directories(hex_dep_cxxopts INTERFACE "${HEXENGINE_CXXOPTS_INCLUDE_DIR}")
+if(HEXENGINE_DEPENDENCY_BACKEND STREQUAL "vcpkg_manifest" AND TARGET cxxopts::cxxopts)
+    target_link_libraries(hex_dep_cxxopts INTERFACE cxxopts::cxxopts)
+else()
+    target_include_directories(hex_dep_cxxopts INTERFACE "${HEXENGINE_CXXOPTS_INCLUDE_DIR}")
+endif()
 
 add_library(hex_dep_fastnoiselite INTERFACE)
 add_library(Hex::fastnoiselite ALIAS hex_dep_fastnoiselite)
@@ -21,7 +24,11 @@ target_include_directories(hex_dep_rapidxml INTERFACE "${HEXENGINE_RAPIDXML_INCL
 
 add_library(hex_dep_nlohmann_json_headers INTERFACE)
 add_library(Hex::nlohmann_json_headers ALIAS hex_dep_nlohmann_json_headers)
-target_include_directories(hex_dep_nlohmann_json_headers INTERFACE "${HEXENGINE_NLOHMANN_JSON_INCLUDE_DIR}")
+if(HEXENGINE_DEPENDENCY_BACKEND STREQUAL "vcpkg_manifest" AND TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(hex_dep_nlohmann_json_headers INTERFACE nlohmann_json::nlohmann_json)
+else()
+    target_include_directories(hex_dep_nlohmann_json_headers INTERFACE "${HEXENGINE_NLOHMANN_JSON_INCLUDE_DIR}")
+endif()
 
 add_library(hex_dep_rectpack2d INTERFACE)
 add_library(Hex::rectpack2d ALIAS hex_dep_rectpack2d)

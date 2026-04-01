@@ -1,7 +1,17 @@
-pip install gitpython
-pip install cmake
-mkdir ThirdParty
-mkdir Bin\x64\Debug\Bin\
-mkdir Bin\x64\Debug\Plugins\
-python setup.py --mode legacy --frozen
-PAUSE
+@echo off
+setlocal
+
+cmake --preset vs2022-x64-debug || goto :error
+cmake --build --preset minimal-bootstrap-debug || goto :error
+cmake --build --preset sln-build-debug-modern || goto :error
+
+echo.
+echo HexEngine setup completed successfully using canonical CMake orchestration.
+pause
+exit /b 0
+
+:error
+echo.
+echo Setup failed. See command output above.
+pause
+exit /b 1

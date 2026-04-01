@@ -5,19 +5,18 @@ This file is the authoritative guide for HexEngine build/dependency migration st
 ## Current Status
 
 - Engine/editor/game compilation remains legacy Visual Studio/MSBuild (`.sln/.vcxproj`) in `Source/HexEngine/`.
-- `setup.py` is still the active dependency/bootstrap flow.
+- `tools/deps/bootstrap.py` is now the canonical dependency/bootstrap executor.
 - Top-level CMake has been introduced as the canonical orchestration entrypoint for migration tasks.
 - Dependency metadata now lives in `build/dependencies.lock.json`.
 
 ## Legacy Flow (Still Supported)
 
 1. Run `Setup.bat`.
-2. `Setup.bat` installs Python requirements (`gitpython`, `cmake`) and calls `python setup.py --mode legacy --frozen`.
-3. `setup.py` clones/builds/stages dependencies into:
+2. `Setup.bat` delegates to canonical CMake orchestration (`vs2022-x64-debug` + `minimal-bootstrap-debug` + `sln-build-debug-modern`).
+3. The bootstrap tool clones/builds/stages dependencies into:
    - `Libs/x64/<Config>/`
    - `Bin/x64/<Config>/Bin/`
-   - `Include/` (legacy header staging for selected header-only dependencies)
-   - Native library bootstrap includes `physx` and `shaderconductor` as managed dependencies in the default legacy flow.
+   - No third-party header copying into `Include/` in the modern path.
 4. Build the engine and tools via `Source/HexEngine/HexEngine.sln` in Visual Studio 2022.
 
 ## New Recommended Orchestration Flow (Incremental)
@@ -37,24 +36,34 @@ Use CMake for orchestration and migration visibility:
    - `cmake --build --preset deps-check-refs-debug`
 6. Enforce strict ref pin status (CI-friendly):
    - `cmake --build --preset deps-check-refs-strict-debug`
-7. Print dependency backend scaffold status:
+7. Print dependency backend status:
    - `cmake --build --preset deps-backend-info-debug`
-8. If you have dependencies cloned locally and want to pin current commits into the manifest:
+8. Print vcpkg wiring status:
+   - `cmake --build --preset vcpkg-status-debug`
+9. If you have dependencies cloned locally and want to pin current commits into the manifest:
    - `cmake --build --preset deps-lock-refs-debug`
-9. Bootstrap only header dependencies in external-header mode (no native builds):
+10. Bootstrap core header dependencies only (no native builds):
    - `cmake --build --preset headeronly-bootstrap-debug`
-10. Bootstrap required runtime modules only (streamline + physx + shaderconductor):
+11. Bootstrap required dependencies only:
    - `cmake --build --preset required-modules-bootstrap-debug`
    - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
-11. Bootstrap the minimal non-legacy dependency set (recommended migration path):
+12. Bootstrap the minimal non-legacy dependency set (recommended migration path):
    - `cmake --build --preset minimal-bootstrap-debug`
    - release variant: `cmake --build --preset minimal-bootstrap-release`
    - includes:
-     - header-only bootstrap in external mode (no `Include/` copying for migrated header-only deps)
-     - required runtime module bootstrap (`streamline`, `physx`, `shaderconductor`)
+     - core header bootstrap (`cxxopts`, `fastnoiselite`, `rapidxml`)
+     - required dependency bootstrap (manifest `required=true`, plus `required_runtime_module=true`)
+     - current required dependency set:
+       - `directxtk`
+       - `freetype`
+       - `directxtex`
+       - `brotli`
+       - `rapidjson`
+       - `retpack2d`
+       - `physx`
+       - `shaderconductor`
+       - `streamline`
    - prerequisite: `git-lfs` installed and initialized (`git lfs install`) for Streamline SDK binaries
-12. If intentional, run full legacy setup through canonical entrypoint (pinned refs):
-   - `cmake --build --preset legacy-setup-debug`
 13. Build the opt-in dependency probe executable:
    - `cmake --preset vs2022-x64-debug-dep-probe`
    - `cmake --build --preset dep-probe-debug`
@@ -92,51 +101,36 @@ Note:
 - In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
 
 Equivalent direct command for plan output:
-- `python setup.py --print-plan`
+- `python tools/deps/bootstrap.py plan`
 
-## `setup.py` Modes and Flags
+## Bootstrap Tool Commands
 
-- `--mode legacy`
-  - Current supported mode; preserves existing bootstrap/build behavior.
-- `--print-plan`
+- `plan`
   - Prints dependency manifest plan and exits without cloning/building.
+- `check-refs`
+  - Prints pin status for all dependencies.
+- `check-refs-strict`
+  - Same as check, but exits with failure when any ref is missing.
+- `lock-current-refs`
+  - Writes local dependency `HEAD` commits into manifest `ref` fields when repos are available.
+- `bootstrap-headeronly --frozen`
+  - Bootstraps core header-only dependencies required by modern compilation.
+- `bootstrap-required --frozen --configs Debug,Release`
+  - Bootstraps required dependencies declared in the manifest (`required=true` and/or `required_runtime_module=true`).
+- `bootstrap-minimal --frozen --configs Debug,Release`
+  - Bootstraps required dependencies plus core header-only dependencies.
 - `--frozen`
   - Uses pinned refs from `build/dependencies.lock.json` where provided.
-  - Recommended/default for wrapper entrypoints (`Setup.bat`, `hex-legacy-setup`) to avoid floating upstream layout breaks.
-  - If checkout fails due dirty dependency worktrees, setup attempts fetch + hard reset + clean inside that dependency repo before retrying checkout.
-  - If recovery still fails, setup re-clones the dependency and retries checkout.
 - `--update`
   - Updates existing dependency repos from origin before build.
-- `--check-refs`
-  - Prints pin status for all dependencies.
-- `--check-refs-strict`
-  - Same as check, but exits with failure when any ref is missing.
-- `--lock-current-refs`
-  - Writes local dependency `HEAD` commits into manifest `ref` fields when repos are available.
-- `--header-only-bootstrap`
-  - Fetches/copies header-only dependencies only and skips native library builds.
-  - `Streamline` is required and validated (including `git-lfs` artifacts); bootstrap fails if SDK artifacts are missing.
-- `--header-layout external`
-  - Phase 3 starter behavior: `cxxopts` is consumed from `ThirdParty/cxxopts/include` without copying into `Include/`.
-- `--required-modules-only`
-  - Bootstraps required runtime modules only (`streamline`, `physx`, `shaderconductor`) for Debug and Release.
-- `--minimal-bootstrap`
-  - Bootstraps migrated header-only dependencies in external mode plus required runtime modules.
-  - This is the preferred incremental bootstrap path before solution builds.
 
 Notes:
-- Automatic floating update behavior was removed from default path.
-- Use `--update` explicitly when you want latest upstream changes.
-- Git operations in setup run with `GIT_LFS_SKIP_SMUDGE=1` to reduce bootstrap failures on machines without `git-lfs`.
-- Legacy setup treats recastnavigation/oidn configure as optional scaffolding and continues with warnings if those configure-only steps fail in constrained environments.
-- Legacy setup currently skips OIDN bootstrap by default (optional dependency; known submodule path-length instability in some Windows environments).
-- Streamline is treated as required by default; setup validates `ThirdParty/Streamline/lib/x64/sl.interposer.lib` is materialized (not a git-lfs pointer).
-- setup now auto-discovers `git-lfs.exe` (including common `Program Files` install path) for Streamline artifact materialization.
-- Required runtime module bootstrap now attempts non-Streamline modules for both Debug and Release before final Streamline validation so failures are reported together.
+- `setup.py` has been removed from the repository.
+- `Setup.bat` remains as a thin convenience wrapper around canonical CMake debug presets.
+- Streamline remains required by default; bootstrap validates `ThirdParty/Streamline/lib/x64/sl.interposer.lib` materialization (not a git-lfs pointer).
 - Streamline plugin pre-build now validates required library existence via an absolute path computed in MSBuild; git-lfs pointer validation remains centralized in canonical CMake preflight (`hex-streamline-artifacts-check*`).
 - `HexEngine.StreamlinePlugin` now fails early with an explicit pre-build error if `sl.interposer.lib` is missing or still an unresolved git-lfs pointer.
 - `hex-sln-build-debug` / `hex-sln-build-release` now depend on `hex-streamline-artifacts-check`, so canonical CMake orchestration fails fast before lengthy solution compilation when Streamline artifacts are unavailable.
-- Legacy setup configures NRD with `NRD_EMBEDS_SPIRV_SHADERS=OFF` for Windows-first builds to avoid SPIR-V codegen requirements in environments that only ship DXIL-capable DXC.
 
 ## Dependency Manifest
 
@@ -147,6 +141,7 @@ Notes:
 - `git_url`
 - `ref` (pin target; may be `null` until finalized)
 - `build_system`
+- `required` (marks required dependencies for modern bootstrap)
 - `required_runtime_module` (optional; marks modules included in `--required-modules-only` bootstrap)
 - `notes`
 - `legacy_stage_paths`
@@ -158,7 +153,6 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 - `.vcxproj` post-build copy/staging conventions.
 - Hardcoded include/lib paths in project files.
 - Game code builds still execute through MSBuild (now behind an editor build-service abstraction).
-- Header staging into `Include/` for select dependencies in legacy setup path.
 - Final compilation still goes through `HexEngine.sln`/`.vcxproj`; CMake is now the canonical orchestration entrypoint for invoking those builds.
 - `HexEngine.ShaderCompiler` now supports opt-in vendor linkage through MSBuild property `HexUseVendorShaderConductor=true` (used by `shadercompiler-build-debug-vendor` preset) while preserving legacy defaults.
 
@@ -177,9 +171,7 @@ This keeps migration incremental while enabling reproducible, reviewable depende
   - `Hex::rapidxml`
   - `Hex::nlohmann_json_headers`
   - `Hex::rectpack2d`
-- Added opt-in external-header mode for `cxxopts`:
-  - `python setup.py --header-only-bootstrap --header-layout external`
-- In external-header mode, these dependencies are no longer copied into `Include/`; they are consumed from `ThirdParty/...`.
+- Core header dependencies are now consumed directly from `ThirdParty/...` in canonical bootstrap paths (no third-party `Include/` copy).
 - Added optional dependency probe executable:
   - target: `hex-dep-probe`
   - source: [dep_probe.cpp](/C:/HexEngine/cmake/examples/dep_probe.cpp)
@@ -209,13 +201,15 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 
 ## Dependency Backend Scaffold
 
-- Added `cmake/deps/HexDependencyBackend.cmake` to centralize backend selection for the next migration tranche.
+- Added `cmake/deps/HexDependencyBackend.cmake` to centralize backend selection.
 - Current default:
-  - `HEXENGINE_DEPENDENCY_BACKEND=legacy_manifest`
-- Future placeholders:
+  - `HEXENGINE_DEPENDENCY_BACKEND=vcpkg_manifest`
+- Available options:
   - `fetchcontent`
+  - `legacy_manifest`
   - `vcpkg_manifest`
-- Non-default backends are scaffold-only in this phase and intentionally do not change active build behavior yet.
+- `vcpkg_manifest` backend is active for CMake-managed dependencies (`cxxopts`, `nlohmann-json`) when configured with vcpkg toolchain presets.
+- Native engine solution builds still rely on staged artifacts for required runtime modules (PhysX, ShaderConductor, Streamline) in this tranche.
 
 ## Migration Roadmap Snapshot
 

@@ -3,14 +3,21 @@
 project(HexEngineBuild LANGUAGES NONE)
 
 include(cmake/HexToolchain.cmake)
+include(cmake/deps/HexDependencyBackend.cmake)
+
+if(HEXENGINE_DEPENDENCY_BACKEND STREQUAL "vcpkg_manifest")
+    find_package(cxxopts CONFIG QUIET)
+    find_package(nlohmann_json CONFIG QUIET)
+endif()
+
 include(cmake/HexDependencies.cmake)
 include(cmake/HexLegacyImportedTargets.cmake)
-include(cmake/deps/HexDependencyBackend.cmake)
 
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 set(HEXENGINE_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(HEXENGINE_DEPENDENCY_MANIFEST "${HEXENGINE_REPO_ROOT}/build/dependencies.lock.json")
+set(HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT "${HEXENGINE_REPO_ROOT}/tools/deps/bootstrap.py")
 set(HEXENGINE_SOLUTION_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.sln")
 set(HEXENGINE_SHADERCOMPILER_PROJECT_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.ShaderCompiler/HexEngine.ShaderCompiler.vcxproj")
 set(HEXENGINE_STREAMLINE_LIB_PATH "${HEXENGINE_REPO_ROOT}/ThirdParty/Streamline/lib/x64/sl.interposer.lib")
@@ -24,6 +31,10 @@ endif()
 
 if(NOT EXISTS "${HEXENGINE_DEPENDENCY_MANIFEST}")
     message(FATAL_ERROR "Dependency manifest not found: ${HEXENGINE_DEPENDENCY_MANIFEST}")
+endif()
+
+if(NOT EXISTS "${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}")
+    message(FATAL_ERROR "Dependency bootstrap tool not found: ${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}")
 endif()
 
 if(NOT EXISTS "${HEXENGINE_SOLUTION_PATH}")
@@ -135,14 +146,14 @@ if(HEXENGINE_ENABLE_PHYSX_PROBE)
 endif()
 
 add_custom_target(hex-deps-plan
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --print-plan
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}" plan
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
     COMMENT "Print HexEngine dependency plan from build/dependencies.lock.json"
     VERBATIM
 )
 
 add_custom_target(hex-deps-check-refs
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --check-refs
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}" check-refs
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
     COMMENT "Check dependency ref pin status"
     VERBATIM
@@ -156,45 +167,48 @@ add_custom_target(hex-deps-backend-info
     VERBATIM
 )
 
+add_custom_target(hex-vcpkg-status
+    COMMAND "${CMAKE_COMMAND}" -E echo "HEXENGINE_DEPENDENCY_BACKEND=${HEXENGINE_DEPENDENCY_BACKEND}"
+    COMMAND "${CMAKE_COMMAND}" -E echo "CMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}"
+    COMMAND "${CMAKE_COMMAND}" -E echo "VCPKG_ROOT=$ENV{VCPKG_ROOT}"
+    COMMAND "${CMAKE_COMMAND}" -E echo "vcpkg manifest=${HEXENGINE_REPO_ROOT}/vcpkg.json"
+    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+    COMMENT "Print vcpkg backend status"
+    VERBATIM
+)
+
 add_custom_target(hex-deps-check-refs-strict
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --check-refs-strict
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}" check-refs-strict
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
     COMMENT "Fail when dependency refs are missing"
     VERBATIM
 )
 
 add_custom_target(hex-deps-lock-refs
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --lock-current-refs
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}" lock-current-refs
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
     COMMENT "Lock dependency refs to local HEAD commits"
     VERBATIM
 )
 
 add_custom_target(hex-headeronly-bootstrap
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --header-only-bootstrap --header-layout external
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}" --frozen bootstrap-headeronly
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
-    COMMENT "Fetch header-only dependencies (external-header layout; no full native builds)"
+    COMMENT "Fetch core header-only dependencies for modern bootstrap"
     VERBATIM
 )
 
 add_custom_target(hex-required-modules-bootstrap
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --frozen --required-modules-only
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}" --frozen bootstrap-required --configs Debug,Release
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
-    COMMENT "Bootstrap required runtime modules only (streamline, physx, shaderconductor)"
+    COMMENT "Compatibility target: bootstrap required dependencies from manifest (Debug+Release)"
     VERBATIM
 )
 
 add_custom_target(hex-minimal-bootstrap
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --frozen --minimal-bootstrap
+    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT}" --frozen bootstrap-minimal --configs Debug,Release
     WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
-    COMMENT "Bootstrap minimal non-legacy dependency set (external header-only + required runtime modules)"
-    VERBATIM
-)
-
-add_custom_target(hex-legacy-setup
-    COMMAND "${Python3_EXECUTABLE}" "${HEXENGINE_REPO_ROOT}/setup.py" --mode legacy --frozen
-    WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
-    COMMENT "Run legacy dependency bootstrap intentionally (pinned/frozen refs)"
+    COMMENT "Bootstrap minimal modern dependency set (required deps + core header-only deps)"
     VERBATIM
 )
 
