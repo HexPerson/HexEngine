@@ -17,6 +17,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -59,15 +60,35 @@ def mkdir(path: Path) -> None:
 
 def copy_file(src: Path, dst: Path) -> None:
     mkdir(dst.parent)
-    shutil.copy2(src, dst)
+    copy_with_retry(src, dst)
 
 
-def copy_glob(pattern: str, dst_dir: Path) -> None:
+def copy_glob(pattern: str, dst_dir: Path, allow_locked: bool = False) -> None:
     mkdir(dst_dir)
     for item in glob.glob(pattern):
         src = Path(item)
         if src.is_file():
-            shutil.copy2(src, dst_dir / src.name)
+            dst = dst_dir / src.name
+            try:
+                copy_with_retry(src, dst)
+            except PermissionError:
+                if allow_locked:
+                    print(f"warning: file locked, keeping existing destination: {dst}")
+                    continue
+                raise
+
+
+def copy_with_retry(src: Path, dst: Path, attempts: int = 6, delay_s: float = 0.5) -> None:
+    last_error: PermissionError | None = None
+    for _ in range(attempts):
+        try:
+            shutil.copy2(src, dst)
+            return
+        except PermissionError as error:
+            last_error = error
+            time.sleep(delay_s)
+    if last_error:
+        raise last_error
 
 
 def load_manifest() -> dict:
@@ -303,7 +324,7 @@ def build_physx(ctx: RuntimeContext, dep: dict, config: str) -> None:
 
     bin_root = root / "bin" / "win.x86_64.vc143.md" / config.lower()
     copy_glob(str(bin_root / "*.lib"), ctx.libs_dir(config))
-    copy_glob(str(bin_root / "*.dll"), ctx.bin_dir(config))
+    copy_glob(str(bin_root / "*.dll"), ctx.bin_dir(config), allow_locked=True)
 
 
 def build_shaderconductor(ctx: RuntimeContext, dep: dict, config: str) -> None:
