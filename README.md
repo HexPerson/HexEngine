@@ -1,3 +1,5 @@
+[![CI Status](https://github.com/HexPerson/HexEngine/actions/workflows/windows-modern-build.yml/badge.svg)](https://github.com/HexPerson/HexEngine/actions/workflows/windows-modern-build.yml)   
+
 # HexEngine
 HexEngine is a modern, modular 3D game engine written in C++ with a focus on performance, flexibility, and rapid iteration.
 
