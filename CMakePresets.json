@@ -87,6 +87,18 @@
       "cacheVariables": {
         "HEXENGINE_ENABLE_PHYSX_PROBE": "ON"
       }
+    },
+    {
+      "name": "vs2022-x64-debug-required-runtime-probes",
+      "displayName": "VS2022 x64 Debug + Required Runtime Probes",
+      "description": "Enables PhysX, ShaderConductor, and Streamline probe executables.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_PHYSX_PROBE": "ON",
+        "HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE": "ON",
+        "HEXENGINE_ENABLE_STREAMLINE_PROBE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -205,6 +217,17 @@
       "configurePreset": "vs2022-x64-debug-physx-probe",
       "targets": [
         "hex-physx-probe"
+      ],
+      "configuration": "Debug"
+    },
+    {
+      "name": "required-runtime-probes-debug",
+      "displayName": "Required Runtime Probes Build",
+      "configurePreset": "vs2022-x64-debug-required-runtime-probes",
+      "targets": [
+        "hex-physx-probe",
+        "hex-shaderconductor-probe",
+        "hex-streamline-probe"
       ],
       "configuration": "Debug"
     },

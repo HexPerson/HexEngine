@@ -185,6 +185,10 @@ add_custom_target(hex-streamline-artifacts-check
     VERBATIM
 )
 
+if(TARGET hex-streamline-probe)
+    add_dependencies(hex-streamline-probe hex-streamline-artifacts-check)
+endif()
+
 if(HEXENGINE_MSBUILD_COMMAND)
     add_custom_target(hex-sln-build-debug
         COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Debug /p:Platform=x64 /m

@@ -64,6 +64,9 @@ Use CMake for orchestration and migration visibility:
    - Release: `cmake --build --preset sln-build-release`
 16. Run Streamline preflight only (fast check):
    - `cmake --build --preset streamline-artifacts-check-debug`
+17. Run all required-runtime dependency probes in one shot:
+   - `cmake --preset vs2022-x64-debug-required-runtime-probes`
+   - `cmake --build --preset required-runtime-probes-debug`
 
 Note:
 - In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
