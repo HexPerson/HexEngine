@@ -254,6 +254,22 @@
       "targets": [
         "hex-sln-build-release"
       ]
+    },
+    {
+      "name": "shadercompiler-build-debug",
+      "displayName": "ShaderCompiler Build Debug|x64 (Legacy Linkage)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-shadercompiler-build-debug"
+      ]
+    },
+    {
+      "name": "shadercompiler-build-debug-vendor",
+      "displayName": "ShaderCompiler Build Debug|x64 (Vendor ShaderConductor)",
+      "configurePreset": "vs2022-x64-debug",
+      "targets": [
+        "hex-shadercompiler-build-debug-vendor"
+      ]
     }
   ]
 }

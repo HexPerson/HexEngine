@@ -11,7 +11,9 @@ find_package(Python3 COMPONENTS Interpreter REQUIRED)
 set(HEXENGINE_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(HEXENGINE_DEPENDENCY_MANIFEST "${HEXENGINE_REPO_ROOT}/build/dependencies.lock.json")
 set(HEXENGINE_SOLUTION_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.sln")
+set(HEXENGINE_SHADERCOMPILER_PROJECT_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.ShaderCompiler/HexEngine.ShaderCompiler.vcxproj")
 set(HEXENGINE_STREAMLINE_LIB_PATH "${HEXENGINE_REPO_ROOT}/ThirdParty/Streamline/lib/x64/sl.interposer.lib")
+file(TO_NATIVE_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/" HEXENGINE_SOLUTION_DIR_NATIVE)
 
 if(CMAKE_GENERATOR MATCHES "Visual Studio" AND DEFINED CMAKE_VS_MSBUILD_COMMAND)
     set(HEXENGINE_MSBUILD_COMMAND "${CMAKE_VS_MSBUILD_COMMAND}")
@@ -25,6 +27,10 @@ endif()
 
 if(NOT EXISTS "${HEXENGINE_SOLUTION_PATH}")
     message(FATAL_ERROR "HexEngine solution not found: ${HEXENGINE_SOLUTION_PATH}")
+endif()
+
+if(NOT EXISTS "${HEXENGINE_SHADERCOMPILER_PROJECT_PATH}")
+    message(FATAL_ERROR "HexEngine shader compiler project not found: ${HEXENGINE_SHADERCOMPILER_PROJECT_PATH}")
 endif()
 
 if(NOT HEXENGINE_MSBUILD_COMMAND)
@@ -190,6 +196,20 @@ if(TARGET hex-streamline-probe)
 endif()
 
 if(HEXENGINE_MSBUILD_COMMAND)
+    add_custom_target(hex-shadercompiler-build-debug
+        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SHADERCOMPILER_PROJECT_PATH}" /p:Configuration=Debug /p:Platform=x64 /p:SolutionDir=${HEXENGINE_SOLUTION_DIR_NATIVE} /m
+        WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+        COMMENT "Build HexEngine.ShaderCompiler Debug|x64 (legacy linkage, explicit SolutionDir)"
+        VERBATIM
+    )
+
+    add_custom_target(hex-shadercompiler-build-debug-vendor
+        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SHADERCOMPILER_PROJECT_PATH}" /p:Configuration=Debug /p:Platform=x64 /p:HexUseVendorShaderConductor=true /p:SolutionDir=${HEXENGINE_SOLUTION_DIR_NATIVE} /m
+        WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
+        COMMENT "Build HexEngine.ShaderCompiler Debug|x64 with opt-in vendor ShaderConductor linkage (explicit SolutionDir)"
+        VERBATIM
+    )
+
     add_custom_target(hex-sln-build-debug
         COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Debug /p:Platform=x64 /m
         WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"

@@ -67,6 +67,9 @@ Use CMake for orchestration and migration visibility:
 17. Run all required-runtime dependency probes in one shot:
    - `cmake --preset vs2022-x64-debug-required-runtime-probes`
    - `cmake --build --preset required-runtime-probes-debug`
+18. Build ShaderCompiler via canonical orchestration:
+   - Legacy linkage: `cmake --build --preset shadercompiler-build-debug`
+   - Opt-in vendor linkage (`ThirdParty/shaderconductor/Build`): `cmake --build --preset shadercompiler-build-debug-vendor`
 
 Note:
 - In fresh clones where legacy staged libs are not present yet, assimp/brotli probe targets now report a skipped message instead of failing configuration/build.
@@ -134,6 +137,7 @@ This keeps migration incremental while enabling reproducible, reviewable depende
 - Game code builds still execute through MSBuild (now behind an editor build-service abstraction).
 - Header staging into `Include/` for select dependencies in legacy setup path.
 - Final compilation still goes through `HexEngine.sln`/`.vcxproj`; CMake is now the canonical orchestration entrypoint for invoking those builds.
+- `HexEngine.ShaderCompiler` now supports opt-in vendor linkage through MSBuild property `HexUseVendorShaderConductor=true` (used by `shadercompiler-build-debug-vendor` preset) while preserving legacy defaults.
 
 ## Phase 4 Implementation Notes
 
