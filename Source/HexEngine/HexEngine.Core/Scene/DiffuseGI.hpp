@@ -209,6 +209,14 @@ namespace HexEngine
 			uint64_t uploadBytes = 0ull;
 			uint32_t sourceTriangleCount = 0u;
 			uint32_t candidateTriangleCount = 0u;
+			uint32_t gpuLightCount = 0u;
+		};
+
+		struct GpuGiLight
+		{
+			math::Vector4 positionRadius = math::Vector4::Zero;
+			math::Vector4 directionCone = math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
+			math::Vector4 colourType = math::Vector4::Zero;
 		};
 
 	private:
@@ -222,14 +230,19 @@ namespace HexEngine
 		bool IsMeshStateDirty(StaticMeshComponent* smc, const math::Vector3& worldPos);
 		math::Vector3 GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent);
 		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
+		bool EnsureGpuGiLightBuffer(uint32_t elementCapacity);
 		bool EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity);
 		uint32_t BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out);
-		uint32_t BuildGpuVoxelCandidateList(uint32_t levelIndex, uint32_t sourceTriangleCount);
+		uint32_t BuildGpuVoxelCandidateList(uint32_t levelIndex, uint32_t sourceTriangleCount, bool& outDispatchIndirectReady);
 		void ExtractGiSceneProxies(
 			Scene* scene,
 			const GiClipmapParams& clipmapParams,
 			std::vector<GiMeshInstanceProxy>& outMeshes,
 			std::vector<GiMaterialProxy>& outMaterials,
+			std::vector<GiLocalLightProxy>& outLights);
+		void ExtractGiLocalLights(
+			Scene* scene,
+			const GiClipmapParams& clipmapParams,
 			std::vector<GiLocalLightProxy>& outLights);
 		void RunGpuVoxelization(Scene* scene, uint32_t levelIndex);
 
@@ -282,6 +295,7 @@ namespace HexEngine
 		std::vector<GiMeshInstanceProxy> _giMeshProxies;
 		std::vector<GiMaterialProxy> _giMaterialProxies;
 		std::vector<GiLocalLightProxy> _giLightProxies;
+		std::vector<GpuGiLight> _gpuGiLightUpload;
 		std::unordered_map<const Material*, uint32_t> _giMaterialProxyLookup;
 		GiRuntimeStats _stats = {};
 		uint64_t _statsFrameCounter = 0ull;
@@ -294,17 +308,22 @@ namespace HexEngine
 		ID3D11Buffer* _voxelTriangleBuffer = nullptr;
 		ID3D11ShaderResourceView* _voxelTriangleSrv = nullptr;
 		uint32_t _voxelTriangleCapacity = 0;
+		ID3D11Buffer* _giLightBuffer = nullptr;
+		ID3D11ShaderResourceView* _giLightSrv = nullptr;
+		uint32_t _giLightCapacity = 0;
 		ID3D11Buffer* _voxelCandidateBuffer = nullptr;
 		ID3D11ShaderResourceView* _voxelCandidateSrv = nullptr;
 		ID3D11UnorderedAccessView* _voxelCandidateUav = nullptr;
 		ID3D11Buffer* _voxelCandidateCountBuffer = nullptr;
 		ID3D11Buffer* _voxelCandidateCountReadback = nullptr;
+		ID3D11Buffer* _voxelCandidateDispatchArgs = nullptr;
 		uint32_t _voxelCandidateCapacity = 0;
 
 		std::shared_ptr<IShader> _traceShader;
 		std::shared_ptr<IShader> _resolveShader;
 		std::shared_ptr<IShader> _fullScreenShader;
 		std::shared_ptr<IShader> _voxelizeShader;
+		std::shared_ptr<IShader> _voxelizeEvalShader;
 		std::shared_ptr<IShader> _voxelCandidateShader;
 		std::shared_ptr<IShader> _voxelClearShader;
 		std::shared_ptr<IShader> _voxelPropagateShader;

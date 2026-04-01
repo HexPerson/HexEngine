@@ -75,6 +75,7 @@
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
     <HexEngineShader Include="DiffuseGIBuildCandidates.shader" />
+    <HexEngineShader Include="DiffuseGIVoxelizeEval.shader" />
     <HexEngineShader Include="DiffuseGIPropagateVoxel.shader" />
     <HexEngineShader Include="DiffuseGITrace.shader" />
     <HexEngineShader Include="DiffuseGIResolve.shader" />
