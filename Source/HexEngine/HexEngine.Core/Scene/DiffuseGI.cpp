@@ -13,6 +13,7 @@
 #include "../GUI/GuiRenderer.hpp"
 #include "Scene.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -64,6 +65,11 @@ namespace HexEngine
 	HVar r_giScreenBounce("r_giScreenBounce", "Screen-space diffuse bounce assist intensity", 0.0f, 0.0f, 2.0f);
 	HVar r_giUseTextureTint("r_giUseTextureTint", "Use albedo texture readback to tint GI injection (cached per material+UV subset)", true, false, true);
 	HVar r_giGpuVoxelize("r_giGpuVoxelize", "Use GPU voxelization for clipmap radiance updates", true, false, true);
+	HVar r_giGpuCandidateGen("r_giGpuCandidateGen", "Use GPU append-buffer candidate generation before voxel injection", false, false, true);
+	HVar r_giGpuMaterialEval("r_giGpuMaterialEval", "Use GPU-side material/light evaluation path (work in progress)", false, false, true);
+	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters)", 0, 0, 1);
+	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
+	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 120, 10, 2000);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
@@ -77,6 +83,12 @@ namespace HexEngine
 
 namespace
 {
+	static float ElapsedMs(const std::chrono::high_resolution_clock::time_point& start)
+	{
+		using namespace std::chrono;
+		return duration<float, std::milli>(high_resolution_clock::now() - start).count();
+	}
+
 	struct MaterialUvRect
 	{
 		float uMin = 0.0f;
@@ -410,6 +422,12 @@ namespace HexEngine
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
 		_materialTriangleAlbedoCache.clear();
+		_giMeshProxies.clear();
+		_giMaterialProxies.clear();
+		_giLightProxies.clear();
+		_giMaterialProxyLookup.clear();
+		_stats = {};
+		_statsFrameCounter = 0ull;
 		for (auto& regions : _dirtyRegions)
 		{
 			regions.clear();
@@ -419,6 +437,7 @@ namespace HexEngine
 		_resolveShader = IShader::Create("EngineData.Shaders/DiffuseGIResolve.hcs");
 		_fullScreenShader = IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
 		_voxelizeShader = IShader::Create("EngineData.Shaders/DiffuseGIVoxelize.hcs");
+		_voxelCandidateShader = IShader::Create("EngineData.Shaders/DiffuseGIBuildCandidates.hcs");
 		_voxelClearShader = IShader::Create("EngineData.Shaders/DiffuseGIClearVoxel.hcs");
 		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
 		_voxelShiftShader = IShader::Create("EngineData.Shaders/DiffuseGIShiftVoxel.hcs");
@@ -518,6 +537,10 @@ namespace HexEngine
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
 		_materialTriangleAlbedoCache.clear();
+		_giMeshProxies.clear();
+		_giMaterialProxies.clear();
+		_giLightProxies.clear();
+		_giMaterialProxyLookup.clear();
 		for (auto& regions : _dirtyRegions)
 		{
 			regions.clear();
@@ -530,13 +553,22 @@ namespace HexEngine
 		SAFE_DELETE(_voxelShiftConstantBuffer);
 		SAFE_RELEASE(_voxelTriangleSrv);
 		SAFE_RELEASE(_voxelTriangleBuffer);
+		SAFE_RELEASE(_voxelCandidateSrv);
+		SAFE_RELEASE(_voxelCandidateUav);
+		SAFE_RELEASE(_voxelCandidateBuffer);
+		SAFE_RELEASE(_voxelCandidateCountBuffer);
+		SAFE_RELEASE(_voxelCandidateCountReadback);
 		_voxelTriangleCapacity = 0;
+		_voxelCandidateCapacity = 0;
 		_voxelTriangleUpload.clear();
+		_stats = {};
+		_statsFrameCounter = 0ull;
 
 		_traceShader = nullptr;
 		_resolveShader = nullptr;
 		_fullScreenShader = nullptr;
 		_voxelizeShader = nullptr;
+		_voxelCandidateShader = nullptr;
 		_voxelClearShader = nullptr;
 		_voxelPropagateShader = nullptr;
 		_voxelShiftShader = nullptr;
@@ -1738,6 +1770,8 @@ namespace HexEngine
 			return;
 
 		ApplyQualityPreset();
+		_stats = {};
+		_statsFrameCounter = _frameCounter;
 
 		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
 		if (localLightsOnlyDebug != _lastLocalLightsOnlyDebug)
@@ -1952,6 +1986,23 @@ namespace HexEngine
 		{
 			--_sunRelightFramesRemaining;
 		}
+		const bool telemetryEnabled = r_giTelemetry._val.b || (r_giGpuCompareMode._val.i32 > 0);
+		const uint64_t telemetryPeriod = static_cast<uint64_t>(std::max(1, r_giTelemetryLogFrames._val.i32));
+		if (telemetryEnabled && ((_frameCounter % telemetryPeriod) == 0ull))
+		{
+			LOG_INFO(
+				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s",
+				static_cast<unsigned long long>(_frameCounter),
+				_stats.cpuTriangleBuildMs,
+				_stats.cpuUploadMs,
+				_stats.candidateBuildMs,
+				_stats.gpuDispatchMs,
+				_stats.sourceTriangleCount,
+				_stats.candidateTriangleCount,
+				static_cast<unsigned long long>(_stats.uploadBytes),
+				r_giGpuCandidateGen._val.b ? "on" : "off",
+				r_giGpuMaterialEval._val.b ? "on" : "off");
+		}
 		UpdateConstants(scene);
 		++_frameCounter;
 	}
@@ -2002,11 +2053,309 @@ namespace HexEngine
 		return true;
 	}
 
+	bool DiffuseGI::EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity)
+	{
+		if (elementCapacity == 0u)
+			return false;
+		if (_voxelCandidateBuffer != nullptr &&
+			_voxelCandidateSrv != nullptr &&
+			_voxelCandidateUav != nullptr &&
+			_voxelCandidateCountBuffer != nullptr &&
+			_voxelCandidateCountReadback != nullptr &&
+			_voxelCandidateCapacity >= elementCapacity)
+		{
+			return true;
+		}
+
+		SAFE_RELEASE(_voxelCandidateSrv);
+		SAFE_RELEASE(_voxelCandidateUav);
+		SAFE_RELEASE(_voxelCandidateBuffer);
+		SAFE_RELEASE(_voxelCandidateCountBuffer);
+		SAFE_RELEASE(_voxelCandidateCountReadback);
+		_voxelCandidateCapacity = 0u;
+
+		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		if (device == nullptr)
+			return false;
+
+		D3D11_BUFFER_DESC desc = {};
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		desc.ByteWidth = std::max<uint32_t>(1u, elementCapacity) * static_cast<uint32_t>(sizeof(GpuVoxelTriangle));
+		desc.CPUAccessFlags = 0u;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = sizeof(GpuVoxelTriangle);
+
+		if (FAILED(device->CreateBuffer(&desc, nullptr, &_voxelCandidateBuffer)) || _voxelCandidateBuffer == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate buffer.");
+			return false;
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = elementCapacity;
+		if (FAILED(device->CreateShaderResourceView(_voxelCandidateBuffer, &srvDesc, &_voxelCandidateSrv)) || _voxelCandidateSrv == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate SRV.");
+			SAFE_RELEASE(_voxelCandidateBuffer);
+			return false;
+		}
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.FirstElement = 0;
+		uavDesc.Buffer.NumElements = elementCapacity;
+		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_APPEND;
+		if (FAILED(device->CreateUnorderedAccessView(_voxelCandidateBuffer, &uavDesc, &_voxelCandidateUav)) || _voxelCandidateUav == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate UAV.");
+			SAFE_RELEASE(_voxelCandidateSrv);
+			SAFE_RELEASE(_voxelCandidateBuffer);
+			return false;
+		}
+
+		D3D11_BUFFER_DESC countDesc = {};
+		countDesc.ByteWidth = sizeof(uint32_t);
+		countDesc.Usage = D3D11_USAGE_DEFAULT;
+		countDesc.BindFlags = 0u;
+		countDesc.CPUAccessFlags = 0u;
+		countDesc.MiscFlags = 0u;
+		if (FAILED(device->CreateBuffer(&countDesc, nullptr, &_voxelCandidateCountBuffer)) || _voxelCandidateCountBuffer == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate count buffer.");
+			SAFE_RELEASE(_voxelCandidateUav);
+			SAFE_RELEASE(_voxelCandidateSrv);
+			SAFE_RELEASE(_voxelCandidateBuffer);
+			return false;
+		}
+
+		D3D11_BUFFER_DESC countReadbackDesc = {};
+		countReadbackDesc.ByteWidth = sizeof(uint32_t);
+		countReadbackDesc.Usage = D3D11_USAGE_STAGING;
+		countReadbackDesc.BindFlags = 0u;
+		countReadbackDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+		countReadbackDesc.MiscFlags = 0u;
+		if (FAILED(device->CreateBuffer(&countReadbackDesc, nullptr, &_voxelCandidateCountReadback)) || _voxelCandidateCountReadback == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate count readback buffer.");
+			SAFE_RELEASE(_voxelCandidateCountBuffer);
+			SAFE_RELEASE(_voxelCandidateUav);
+			SAFE_RELEASE(_voxelCandidateSrv);
+			SAFE_RELEASE(_voxelCandidateBuffer);
+			return false;
+		}
+
+		_voxelCandidateCapacity = elementCapacity;
+		return true;
+	}
+
+	void DiffuseGI::ExtractGiSceneProxies(
+		Scene* scene,
+		const GiClipmapParams& clipmapParams,
+		std::vector<GiMeshInstanceProxy>& outMeshes,
+		std::vector<GiMaterialProxy>& outMaterials,
+		std::vector<GiLocalLightProxy>& outLights)
+	{
+		outMeshes.clear();
+		outMaterials.clear();
+		outLights.clear();
+		_giMaterialProxyLookup.clear();
+		if (scene == nullptr)
+			return;
+
+		const dx::BoundingBox clipBounds(
+			clipmapParams.center,
+			math::Vector3(clipmapParams.extent, clipmapParams.extent, clipmapParams.extent));
+		std::vector<StaticMeshComponent*> meshesInBounds;
+		scene->GatherStaticMeshesInBounds(clipBounds, meshesInBounds, true);
+		outMeshes.reserve(meshesInBounds.size());
+		outMaterials.reserve(meshesInBounds.size());
+
+		for (auto* smc : meshesInBounds)
+		{
+			if (smc == nullptr || smc->GetMesh() == nullptr)
+				continue;
+
+			auto* entity = smc->GetEntity();
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
+
+			auto meshPtr = smc->GetMesh();
+			if (!meshPtr)
+				continue;
+
+			const auto materialPtr = smc->GetMaterial();
+			const Material* material = materialPtr ? materialPtr.get() : nullptr;
+			uint32_t materialProxyIndex = 0u;
+			if (material != nullptr)
+			{
+				auto it = _giMaterialProxyLookup.find(material);
+				if (it == _giMaterialProxyLookup.end())
+				{
+					GiMaterialProxy proxy = {};
+					proxy.material = material;
+					proxy.diffuse = material->_properties.diffuseColour;
+					proxy.emissive = material->_properties.emissiveColour;
+					proxy.index = static_cast<uint32_t>(outMaterials.size());
+					outMaterials.push_back(proxy);
+					materialProxyIndex = proxy.index;
+					_giMaterialProxyLookup.emplace(material, materialProxyIndex);
+				}
+				else
+				{
+					materialProxyIndex = it->second;
+				}
+			}
+
+			const auto& worldAabb = entity->GetWorldAABB();
+			const math::Vector3 aabbCenter(worldAabb.Center.x, worldAabb.Center.y, worldAabb.Center.z);
+			const math::Vector3 aabbExtents(worldAabb.Extents.x, worldAabb.Extents.y, worldAabb.Extents.z);
+
+			GiMeshInstanceProxy proxy = {};
+			proxy.component = smc;
+			proxy.entity = entity;
+			proxy.mesh = meshPtr.get();
+			proxy.material = material;
+			proxy.materialProxyIndex = materialProxyIndex;
+			proxy.worldTransform = entity->GetWorldTM();
+			proxy.uvScale = smc->GetUVScale();
+			proxy.aabbMin = aabbCenter - aabbExtents;
+			proxy.aabbMax = aabbCenter + aabbExtents;
+			outMeshes.push_back(proxy);
+		}
+
+		std::vector<PointLight*> pointLights;
+		scene->GetComponents<PointLight>(pointLights);
+		outLights.reserve(pointLights.size());
+		for (auto* light : pointLights)
+		{
+			if (light == nullptr || !light->GetInjectIntoGI())
+				continue;
+			auto* lightEntity = light->GetEntity();
+			if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
+				continue;
+
+			const auto diffuse = light->GetDiffuseColour();
+			const float lightEnergy = std::max(0.0f, diffuse.w);
+			const math::Vector3 scaledColour(diffuse.x * lightEnergy, diffuse.y * lightEnergy, diffuse.z * lightEnergy);
+			if (scaledColour.LengthSquared() <= 1e-8f)
+				continue;
+
+			GiLocalLightProxy proxy = {};
+			proxy.position = lightEntity->GetPosition();
+			if (proxy.position.LengthSquared() <= 1e-8f)
+				proxy.position = lightEntity->GetWorldTM().Translation();
+			proxy.direction = math::Vector3(0.0f, 0.0f, 1.0f);
+			proxy.colour = scaledColour;
+			proxy.radius = std::max(0.01f, light->GetRadius());
+			proxy.coneExponent = 1.0f;
+			proxy.isSpot = false;
+			outLights.push_back(proxy);
+		}
+
+		std::vector<SpotLight*> spotLights;
+		scene->GetComponents<SpotLight>(spotLights);
+		outLights.reserve(outLights.size() + spotLights.size());
+		for (auto* light : spotLights)
+		{
+			if (light == nullptr || !light->GetInjectIntoGI())
+				continue;
+			auto* lightEntity = light->GetEntity();
+			if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
+				continue;
+
+			const auto diffuse = light->GetDiffuseColour();
+			const float lightEnergy = std::max(0.0f, diffuse.w);
+			const math::Vector3 scaledColour(diffuse.x * lightEnergy, diffuse.y * lightEnergy, diffuse.z * lightEnergy);
+			if (scaledColour.LengthSquared() <= 1e-8f)
+				continue;
+
+			math::Vector3 lightDir = lightEntity->GetWorldTM().Forward();
+			if (lightDir.LengthSquared() <= 1e-8f)
+				lightDir = math::Vector3(0.0f, 0.0f, 1.0f);
+			else
+				lightDir.Normalize();
+
+			GiLocalLightProxy proxy = {};
+			proxy.position = lightEntity->GetPosition();
+			if (proxy.position.LengthSquared() <= 1e-8f)
+				proxy.position = lightEntity->GetWorldTM().Translation();
+			proxy.direction = lightDir;
+			proxy.colour = scaledColour;
+			proxy.radius = std::max(0.01f, light->GetRadius());
+			proxy.coneExponent = std::clamp(light->GetConeSize(), 1.0f, 128.0f);
+			proxy.isSpot = true;
+			outLights.push_back(proxy);
+		}
+	}
+
+	uint32_t DiffuseGI::BuildGpuVoxelCandidateList(uint32_t levelIndex, uint32_t sourceTriangleCount)
+	{
+		if (sourceTriangleCount == 0u || levelIndex >= ClipmapCount)
+			return 0u;
+		if (!r_giGpuCandidateGen._val.b)
+			return sourceTriangleCount;
+		if (_voxelCandidateShader == nullptr)
+			return sourceTriangleCount;
+		if (!EnsureGpuVoxelCandidateBuffer(sourceTriangleCount))
+			return sourceTriangleCount;
+
+		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		auto* stage = _voxelCandidateShader->GetShaderStage(ShaderStage::ComputeShader);
+		if (context == nullptr || stage == nullptr || _voxelTriangleSrv == nullptr)
+			return sourceTriangleCount;
+
+		const auto candidateStart = std::chrono::high_resolution_clock::now();
+		ID3D11Buffer* giCb = _constantBuffer ? reinterpret_cast<ID3D11Buffer*>(_constantBuffer->GetNativePtr()) : nullptr;
+		if (giCb != nullptr)
+		{
+			context->CSSetConstantBuffers(4, 1, &giCb);
+		}
+
+		ID3D11ShaderResourceView* inputSrv[1] = { _voxelTriangleSrv };
+		ID3D11UnorderedAccessView* outputUav[1] = { _voxelCandidateUav };
+		UINT initialCounts[1] = { 0u };
+		context->CSSetShaderResources(0, 1, inputSrv);
+		context->CSSetUnorderedAccessViews(0, 1, outputUav, initialCounts);
+		context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(stage->GetNativePtr()), nullptr, 0);
+		const uint32_t groups = (sourceTriangleCount + 63u) / 64u;
+		context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
+
+		ID3D11ShaderResourceView* nullSrv[1] = {};
+		ID3D11UnorderedAccessView* nullUav[1] = {};
+		context->CSSetShaderResources(0, 1, nullSrv);
+		context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+
+		context->CopyStructureCount(_voxelCandidateCountBuffer, 0u, _voxelCandidateUav);
+		context->CopyResource(_voxelCandidateCountReadback, _voxelCandidateCountBuffer);
+
+		uint32_t candidateCount = sourceTriangleCount;
+		D3D11_MAPPED_SUBRESOURCE mapped = {};
+		if (SUCCEEDED(context->Map(_voxelCandidateCountReadback, 0, D3D11_MAP_READ, 0, &mapped)))
+		{
+			candidateCount = std::min(sourceTriangleCount, *reinterpret_cast<uint32_t*>(mapped.pData));
+			context->Unmap(_voxelCandidateCountReadback, 0);
+		}
+
+		_stats.candidateBuildMs += ElapsedMs(candidateStart);
+		return candidateCount;
+	}
+
 	uint32_t DiffuseGI::BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out)
 	{
+		const auto buildStart = std::chrono::high_resolution_clock::now();
 		out.clear();
 		if (scene == nullptr || levelIndex >= ClipmapCount)
+		{
+			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
+			_stats.sourceTriangleCount = 0u;
 			return 0u;
+		}
 		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
 		const bool localLightInjectionEnabled = !r_giDebugDisableLocalLightInjection._val.b;
 		const bool disableBaseAndSunInjection = r_giDebugDisableBaseAndSunInjection._val.b;
@@ -2022,14 +2371,29 @@ namespace HexEngine
 		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheAge < cacheFrames)
 		{
 			out = _cachedVoxelTriangles[levelIndex];
+			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
+			_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
 			return static_cast<uint32_t>(out.size());
 		}
 
-		const dx::BoundingBox clipBounds(level.center, math::Vector3(level.extent, level.extent, level.extent));
 		const math::Vector3 clipMin = level.center - math::Vector3(level.extent, level.extent, level.extent);
 		const math::Vector3 clipMax = level.center + math::Vector3(level.extent, level.extent, level.extent);
+		GiClipmapParams clipmapParams = {};
+		clipmapParams.center = level.center;
+		clipmapParams.extent = level.extent;
+		clipmapParams.resolution = level.resolution;
+		clipmapParams.levelIndex = levelIndex;
+		clipmapParams.dirty = level.dirty;
+		ExtractGiSceneProxies(scene, clipmapParams, _giMeshProxies, _giMaterialProxies, _giLightProxies);
 		std::vector<StaticMeshComponent*> meshesInBounds;
-		scene->GatherStaticMeshesInBounds(clipBounds, meshesInBounds, true);
+		meshesInBounds.reserve(_giMeshProxies.size());
+		for (const auto& meshProxy : _giMeshProxies)
+		{
+			if (meshProxy.component != nullptr)
+			{
+				meshesInBounds.push_back(meshProxy.component);
+			}
+		}
 
 		struct LocalLightSample
 		{
@@ -2041,86 +2405,19 @@ namespace HexEngine
 			bool isSpot = false;
 		};
 		std::vector<LocalLightSample> localLights;
-		if (localLightInjectionEnabled)
+		if (localLightInjectionEnabled && !_giLightProxies.empty())
 		{
+			localLights.reserve(_giLightProxies.size());
+			for (const auto& lightProxy : _giLightProxies)
 			{
-				std::vector<PointLight*> pointLights;
-				scene->GetComponents<PointLight>(pointLights);
-				localLights.reserve(pointLights.size());
-				for (auto* light : pointLights)
-				{
-					if (light == nullptr)
-						continue;
-					if (!light->GetInjectIntoGI())
-						continue;
-					auto* lightEntity = light->GetEntity();
-					if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
-						continue;
-
-					const float radius = std::max(0.01f, light->GetRadius());
-					const auto diffuse = light->GetDiffuseColour();
-					// Match direct point-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
-					const float lightEnergy = std::max(0.0f, diffuse.w);
-					const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
-					const math::Vector3 scaledColour = lightColour * lightEnergy;
-					if (scaledColour.LengthSquared() <= 1e-8f)
-						continue;
-
-					LocalLightSample sample = {};
-					sample.position = lightEntity->GetPosition();
-					if (sample.position.LengthSquared() <= 1e-8f)
-					{
-						sample.position = lightEntity->GetWorldTM().Translation();
-					}
-					sample.direction = math::Vector3(0.0f, 0.0f, 1.0f);
-					sample.colour = scaledColour;
-					sample.radius = radius;
-					sample.isSpot = false;
-					localLights.push_back(sample);
-				}
-			}
-			{
-				std::vector<SpotLight*> spotLights;
-				scene->GetComponents<SpotLight>(spotLights);
-				localLights.reserve(localLights.size() + spotLights.size());
-				for (auto* light : spotLights)
-				{
-					if (light == nullptr)
-						continue;
-					if (!light->GetInjectIntoGI())
-						continue;
-					auto* lightEntity = light->GetEntity();
-					if (lightEntity == nullptr || lightEntity->IsPendingDeletion())
-						continue;
-
-					const float radius = std::max(0.01f, light->GetRadius());
-					const auto diffuse = light->GetDiffuseColour();
-					// Match direct spot-light shader intensity path: input.colour.a == diffuse.w (already includes strength).
-					const float lightEnergy = std::max(0.0f, diffuse.w);
-					const math::Vector3 lightColour(diffuse.x, diffuse.y, diffuse.z);
-					const math::Vector3 scaledColour = lightColour * lightEnergy;
-					if (scaledColour.LengthSquared() <= 1e-8f)
-						continue;
-
-					math::Vector3 lightDir = lightEntity->GetWorldTM().Forward();
-					if (lightDir.LengthSquared() <= 1e-8f)
-						lightDir = math::Vector3(0.0f, 0.0f, 1.0f);
-					else
-						lightDir.Normalize();
-
-					LocalLightSample sample = {};
-					sample.position = lightEntity->GetPosition();
-					if (sample.position.LengthSquared() <= 1e-8f)
-					{
-						sample.position = lightEntity->GetWorldTM().Translation();
-					}
-					sample.direction = lightDir;
-					sample.colour = scaledColour;
-					sample.radius = radius;
-					sample.coneExponent = std::clamp(light->GetConeSize(), 1.0f, 128.0f);
-					sample.isSpot = true;
-					localLights.push_back(sample);
-				}
+				LocalLightSample sample = {};
+				sample.position = lightProxy.position;
+				sample.direction = lightProxy.direction;
+				sample.colour = lightProxy.colour;
+				sample.radius = lightProxy.radius;
+				sample.coneExponent = lightProxy.coneExponent;
+				sample.isSpot = lightProxy.isSpot;
+				localLights.push_back(sample);
 			}
 		}
 
@@ -2523,6 +2820,8 @@ namespace HexEngine
 		_cachedVoxelTriangles[levelIndex] = out;
 		_cachedVoxelTrianglesValid[levelIndex] = true;
 		_cachedVoxelTrianglesFrame[levelIndex] = _frameCounter;
+		_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
+		_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
 		return static_cast<uint32_t>(out.size());
 	}
 
@@ -2549,6 +2848,8 @@ namespace HexEngine
 
 		const uint32_t triangleCount = BuildGpuVoxelTriangleList(scene, levelIndex, _voxelTriangleUpload);
 		const bool hasTriangles = (triangleCount > 0u) && EnsureGpuVoxelTriangleBuffer(triangleCount);
+		_stats.sourceTriangleCount = triangleCount;
+		_stats.candidateTriangleCount = triangleCount;
 		if (!hasTriangles && level.initialized)
 		{
 			// Avoid one-frame GI collapse from transient empty triangle gathers after clipmap shifts.
@@ -2635,11 +2936,14 @@ namespace HexEngine
 
 		if (hasTriangles)
 		{
+			const auto uploadStart = std::chrono::high_resolution_clock::now();
 			D3D11_MAPPED_SUBRESOURCE mapped = {};
 			if (SUCCEEDED(context->Map(_voxelTriangleBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 			{
 				memcpy(mapped.pData, _voxelTriangleUpload.data(), triangleCount * sizeof(GpuVoxelTriangle));
 				context->Unmap(_voxelTriangleBuffer, 0);
+				_stats.uploadBytes += static_cast<uint64_t>(triangleCount) * static_cast<uint64_t>(sizeof(GpuVoxelTriangle));
+				_stats.cpuUploadMs += ElapsedMs(uploadStart);
 			}
 			else
 			{
@@ -2656,6 +2960,18 @@ namespace HexEngine
 		{
 			_constantBuffer->Write(&_constants, sizeof(_constants));
 		}
+		uint32_t injectionTriangleCount = triangleCount;
+		ID3D11ShaderResourceView* injectionTriangleSrv = _voxelTriangleSrv;
+		if (hasTriangles && r_giGpuCandidateGen._val.b)
+		{
+			const uint32_t candidateCount = BuildGpuVoxelCandidateList(levelIndex, triangleCount);
+			if (candidateCount > 0u && _voxelCandidateSrv != nullptr)
+			{
+				injectionTriangleCount = candidateCount;
+				injectionTriangleSrv = _voxelCandidateSrv;
+			}
+		}
+		_stats.candidateTriangleCount = injectionTriangleCount;
 
 		ID3D11Buffer* perFrameCb = nullptr;
 		if (auto* cb = g_pEnv->_graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer); cb != nullptr)
@@ -2707,18 +3023,19 @@ namespace HexEngine
 			reinterpret_cast<ID3D11Resource*>(level.albedoScratchVolume->GetNativePtr()),
 			reinterpret_cast<ID3D11Resource*>(level.albedoVolume->GetNativePtr()));
 
+		const auto dispatchStart = std::chrono::high_resolution_clock::now();
 		ID3D11UnorderedAccessView* clearUav[2] = { level.radianceUav, level.albedoUav };
 		context->CSSetUnorderedAccessViews(0, 2, clearUav, nullptr);
 		context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(clearStage->GetNativePtr()), nullptr, 0);
 		context->Dispatch(clearGroups, clearGroups, clearGroups);
 
-		if (hasTriangles)
+		if (hasTriangles && injectionTriangleSrv != nullptr && injectionTriangleCount > 0u)
 		{
-			ID3D11ShaderResourceView* voxelizeSrvs[3] = { _voxelTriangleSrv, level.radianceScratchSrv, level.albedoScratchSrv };
+			ID3D11ShaderResourceView* voxelizeSrvs[3] = { injectionTriangleSrv, level.radianceScratchSrv, level.albedoScratchSrv };
 			context->CSSetShaderResources(0, 3, voxelizeSrvs);
 			context->CSSetUnorderedAccessViews(0, 2, clearUav, nullptr);
 			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(voxelizeStage->GetNativePtr()), nullptr, 0);
-			const uint32_t groups = (triangleCount + 63u) / 64u;
+			const uint32_t groups = (injectionTriangleCount + 63u) / 64u;
 			context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
 		}
 
@@ -2775,6 +3092,7 @@ namespace HexEngine
 		{
 			SAFE_RELEASE(srv);
 		}
+		_stats.gpuDispatchMs += ElapsedMs(dispatchStart);
 
 		level.initialized = true;
 		level.dirty = false;

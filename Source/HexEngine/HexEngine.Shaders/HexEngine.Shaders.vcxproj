@@ -153,6 +153,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
     <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
+    <HexEngineShader Include="DiffuseGIBuildCandidates.shader" />
     <HexEngineShader Include="DiffuseGIPropagateVoxel.shader" />
     <HexEngineShader Include="DiffuseGIResolve.shader" />
     <HexEngineShader Include="DiffuseGIShiftVoxel.shader" />

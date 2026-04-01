@@ -13,6 +13,8 @@ namespace HexEngine
 	class ITexture3D;
 	class StaticMeshComponent;
 	class Material;
+	class Mesh;
+	class Entity;
 
 	/**
 	 * @brief Runtime-friendly diffuse global illumination system based on clipmapped probe volumes.
@@ -158,6 +160,57 @@ namespace HexEngine
 			}
 		};
 
+		struct GiClipmapParams
+		{
+			math::Vector3 center = math::Vector3::Zero;
+			float extent = 1.0f;
+			uint32_t resolution = 1u;
+			uint32_t levelIndex = 0u;
+			bool dirty = true;
+		};
+
+		struct GiMaterialProxy
+		{
+			const Material* material = nullptr;
+			math::Vector4 diffuse = math::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
+			math::Vector4 emissive = math::Vector4::Zero;
+			uint32_t index = 0u;
+		};
+
+		struct GiLocalLightProxy
+		{
+			math::Vector3 position = math::Vector3::Zero;
+			math::Vector3 direction = math::Vector3(0.0f, 0.0f, 1.0f);
+			math::Vector3 colour = math::Vector3::Zero;
+			float radius = 0.0f;
+			float coneExponent = 1.0f;
+			bool isSpot = false;
+		};
+
+		struct GiMeshInstanceProxy
+		{
+			StaticMeshComponent* component = nullptr;
+			Entity* entity = nullptr;
+			Mesh* mesh = nullptr;
+			const Material* material = nullptr;
+			uint32_t materialProxyIndex = 0u;
+			math::Matrix worldTransform = math::Matrix::Identity;
+			math::Vector2 uvScale = math::Vector2(1.0f, 1.0f);
+			math::Vector3 aabbMin = math::Vector3::Zero;
+			math::Vector3 aabbMax = math::Vector3::Zero;
+		};
+
+		struct GiRuntimeStats
+		{
+			float cpuTriangleBuildMs = 0.0f;
+			float cpuUploadMs = 0.0f;
+			float gpuDispatchMs = 0.0f;
+			float candidateBuildMs = 0.0f;
+			uint64_t uploadBytes = 0ull;
+			uint32_t sourceTriangleCount = 0u;
+			uint32_t candidateTriangleCount = 0u;
+		};
+
 	private:
 		bool CreateClipmapResources();
 		void DestroyClipmapResources();
@@ -169,7 +222,15 @@ namespace HexEngine
 		bool IsMeshStateDirty(StaticMeshComponent* smc, const math::Vector3& worldPos);
 		math::Vector3 GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent);
 		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
+		bool EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity);
 		uint32_t BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out);
+		uint32_t BuildGpuVoxelCandidateList(uint32_t levelIndex, uint32_t sourceTriangleCount);
+		void ExtractGiSceneProxies(
+			Scene* scene,
+			const GiClipmapParams& clipmapParams,
+			std::vector<GiMeshInstanceProxy>& outMeshes,
+			std::vector<GiMaterialProxy>& outMaterials,
+			std::vector<GiLocalLightProxy>& outLights);
 		void RunGpuVoxelization(Scene* scene, uint32_t levelIndex);
 
 		void RenderTracePass(const GBuffer& gbuffer, ITexture2D* beautyTarget);
@@ -218,6 +279,12 @@ namespace HexEngine
 		std::unordered_map<MaterialAlbedoCacheKey, math::Vector3, MaterialAlbedoCacheKeyHash> _materialAlbedoCache;
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleAlbedoCache;
 		std::vector<GpuVoxelTriangle> _voxelTriangleUpload;
+		std::vector<GiMeshInstanceProxy> _giMeshProxies;
+		std::vector<GiMaterialProxy> _giMaterialProxies;
+		std::vector<GiLocalLightProxy> _giLightProxies;
+		std::unordered_map<const Material*, uint32_t> _giMaterialProxyLookup;
+		GiRuntimeStats _stats = {};
+		uint64_t _statsFrameCounter = 0ull;
 
 		ITexture2D* _giHalfRes = nullptr;
 		ITexture2D* _giResolved = nullptr;
@@ -227,11 +294,18 @@ namespace HexEngine
 		ID3D11Buffer* _voxelTriangleBuffer = nullptr;
 		ID3D11ShaderResourceView* _voxelTriangleSrv = nullptr;
 		uint32_t _voxelTriangleCapacity = 0;
+		ID3D11Buffer* _voxelCandidateBuffer = nullptr;
+		ID3D11ShaderResourceView* _voxelCandidateSrv = nullptr;
+		ID3D11UnorderedAccessView* _voxelCandidateUav = nullptr;
+		ID3D11Buffer* _voxelCandidateCountBuffer = nullptr;
+		ID3D11Buffer* _voxelCandidateCountReadback = nullptr;
+		uint32_t _voxelCandidateCapacity = 0;
 
 		std::shared_ptr<IShader> _traceShader;
 		std::shared_ptr<IShader> _resolveShader;
 		std::shared_ptr<IShader> _fullScreenShader;
 		std::shared_ptr<IShader> _voxelizeShader;
+		std::shared_ptr<IShader> _voxelCandidateShader;
 		std::shared_ptr<IShader> _voxelClearShader;
 		std::shared_ptr<IShader> _voxelPropagateShader;
 		std::shared_ptr<IShader> _voxelShiftShader;
