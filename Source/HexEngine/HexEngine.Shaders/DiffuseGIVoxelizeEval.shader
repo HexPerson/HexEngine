@@ -301,6 +301,7 @@
 		const float3 sunDirWs = normalize(g_giParams3.xyz + float3(1e-6f, 1e-6f, 1e-6f));
 		const float3 toSunWs = -sunDirWs;
 		const float sunDirectionality = saturate(g_giParams3.w);
+		const bool gpuComputeBaseSunMode = g_giParams7.y > 0.5f;
 		const float planeThickness = voxelSize * 1.5f;
 		const float2 uv0 = tri.uv0uv1.xy;
 		const float2 uv1 = tri.uv0uv1.zw;
@@ -311,7 +312,9 @@
 		if (materialIndex < materialCount)
 		{
 			const GpuGiMaterial materialProxy = g_giMaterials[materialIndex];
-			const float proxyBlend = saturate(g_giParams7.x);
+			// In GPU base/sun mode we must trust sampled material albedo fully; otherwise fallback proxy tint
+			// (often near-white) washes out GI color bleed.
+			const float proxyBlend = gpuComputeBaseSunMode ? 1.0f : saturate(g_giParams7.x);
 			const float3 materialAlbedo = SampleMaterialAlbedo(materialProxy, triUv);
 			triAlbedoBase = saturate(lerp(triAlbedoBase, materialAlbedo, proxyBlend));
 			const float emissiveStrength = max(0.0f, materialProxy.emissive.a);
@@ -382,7 +385,7 @@
 					const float3 albedoTint = lerp(1.0f.xxx, voxelAlbedo, albedoInfluence);
 					const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
 					float3 injected = tri.radianceOpacity.rgb * visibilityFactor * (albedoTint / tintLuma);
-					const bool gpuComputeBaseSun = g_giParams7.y > 0.5f;
+					const bool gpuComputeBaseSun = gpuComputeBaseSunMode;
 					if (gpuComputeBaseSun)
 					{
 						const float diffuseInject = max(0.0f, g_giParams8.x);
