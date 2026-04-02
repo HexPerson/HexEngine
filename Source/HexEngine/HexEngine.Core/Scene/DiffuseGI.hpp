@@ -91,6 +91,7 @@ namespace HexEngine
 			math::Vector4 params4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 			math::Vector4 params5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
 			math::Vector4 params6; // x=voxelNeighbourBlend, y=shiftSettle, z=voxelAlbedoInfluence, w=reserved
+			math::Vector4 params7; // x=gpuMaterialProxyBlend, yzw=reserved
 		};
 
 		struct GpuVoxelTriangle
@@ -219,6 +220,12 @@ namespace HexEngine
 			math::Vector4 colourType = math::Vector4::Zero;
 		};
 
+		struct GpuGiMaterial
+		{
+			math::Vector4 diffuse = math::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
+			math::Vector4 emissive = math::Vector4::Zero;
+		};
+
 	private:
 		bool CreateClipmapResources();
 		void DestroyClipmapResources();
@@ -231,6 +238,7 @@ namespace HexEngine
 		math::Vector3 GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent);
 		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiLightBuffer(uint32_t elementCapacity);
+		bool EnsureGpuGiMaterialBuffer(uint32_t elementCapacity);
 		bool EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity);
 		uint32_t BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out);
 		uint32_t BuildGpuVoxelCandidateList(uint32_t levelIndex, uint32_t sourceTriangleCount, bool& outDispatchIndirectReady);
@@ -296,6 +304,7 @@ namespace HexEngine
 		std::vector<GiMaterialProxy> _giMaterialProxies;
 		std::vector<GiLocalLightProxy> _giLightProxies;
 		std::vector<GpuGiLight> _gpuGiLightUpload;
+		std::vector<GpuGiMaterial> _gpuGiMaterialUpload;
 		std::unordered_map<const Material*, uint32_t> _giMaterialProxyLookup;
 		GiRuntimeStats _stats = {};
 		uint64_t _statsFrameCounter = 0ull;
@@ -311,6 +320,9 @@ namespace HexEngine
 		ID3D11Buffer* _giLightBuffer = nullptr;
 		ID3D11ShaderResourceView* _giLightSrv = nullptr;
 		uint32_t _giLightCapacity = 0;
+		ID3D11Buffer* _giMaterialBuffer = nullptr;
+		ID3D11ShaderResourceView* _giMaterialSrv = nullptr;
+		uint32_t _giMaterialCapacity = 0;
 		ID3D11Buffer* _voxelCandidateBuffer = nullptr;
 		ID3D11ShaderResourceView* _voxelCandidateSrv = nullptr;
 		ID3D11UnorderedAccessView* _voxelCandidateUav = nullptr;

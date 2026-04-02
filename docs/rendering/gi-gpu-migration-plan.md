@@ -42,6 +42,10 @@ Implemented in branch `codex/gi-gpu-migration-plan`:
   - uploads packed GI light proxies to GPU structured buffer.
   - extracts clipmap-local lights each update, sorts by relevance, and caps upload count for stable cost.
   - skips CPU local-light contribution when `r_giGpuMaterialEval=1`.
+- Added GPU material-proxy bridge path for eval shader:
+  - triangle payload now carries material-proxy index in `p0.w`.
+  - uploads packed `GpuGiMaterial` proxy buffer per clipmap update.
+  - eval shader can blend triangle albedo with material proxy albedo via `r_giGpuMaterialProxyBlend`.
 
 ## Intentional Safety Rules
 

@@ -68,6 +68,7 @@ namespace HexEngine
 	HVar r_giGpuCandidateGen("r_giGpuCandidateGen", "Use GPU append-buffer candidate generation before voxel injection", false, false, true);
 	HVar r_giGpuMaterialEval("r_giGpuMaterialEval", "Use GPU-side local-light evaluation during voxel injection", false, false, true);
 	HVar r_giGpuMaterialEvalMaxLights("r_giGpuMaterialEvalMaxLights", "Maximum local GI lights uploaded/evaluated in GPU material eval mode", 24, 1, 64);
+	HVar r_giGpuMaterialProxyBlend("r_giGpuMaterialProxyBlend", "Blend amount for GPU material proxy albedo in eval path (0=triangle albedo, 1=material proxy)", 0.15f, 0.0f, 1.0f);
 	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters,2=verbose counters)", 0, 0, 2);
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 120, 10, 2000);
@@ -568,6 +569,8 @@ namespace HexEngine
 		SAFE_RELEASE(_voxelTriangleBuffer);
 		SAFE_RELEASE(_giLightSrv);
 		SAFE_RELEASE(_giLightBuffer);
+		SAFE_RELEASE(_giMaterialSrv);
+		SAFE_RELEASE(_giMaterialBuffer);
 		SAFE_RELEASE(_voxelCandidateSrv);
 		SAFE_RELEASE(_voxelCandidateUav);
 		SAFE_RELEASE(_voxelCandidateBuffer);
@@ -576,9 +579,11 @@ namespace HexEngine
 		SAFE_RELEASE(_voxelCandidateDispatchArgs);
 		_voxelTriangleCapacity = 0;
 		_giLightCapacity = 0;
+		_giMaterialCapacity = 0;
 		_voxelCandidateCapacity = 0;
 		_voxelTriangleUpload.clear();
 		_gpuGiLightUpload.clear();
+		_gpuGiMaterialUpload.clear();
 		_stats = {};
 		_statsFrameCounter = 0ull;
 
@@ -1738,6 +1743,11 @@ namespace HexEngine
 			shiftSettle,
 			std::clamp(r_giVoxelAlbedoInfluence._val.f32, 0.0f, 1.0f),
 			0.0f);
+		_constants.params7 = math::Vector4(
+			std::clamp(r_giGpuMaterialProxyBlend._val.f32, 0.0f, 1.0f),
+			0.0f,
+			0.0f,
+			0.0f);
 
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
 		float sunStrength = 0.0f;
@@ -2133,6 +2143,50 @@ namespace HexEngine
 		return true;
 	}
 
+	bool DiffuseGI::EnsureGpuGiMaterialBuffer(uint32_t elementCapacity)
+	{
+		if (elementCapacity == 0u)
+			return false;
+		if (_giMaterialBuffer != nullptr && _giMaterialSrv != nullptr && _giMaterialCapacity >= elementCapacity)
+			return true;
+
+		SAFE_RELEASE(_giMaterialSrv);
+		SAFE_RELEASE(_giMaterialBuffer);
+		_giMaterialCapacity = 0u;
+
+		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		if (device == nullptr)
+			return false;
+
+		D3D11_BUFFER_DESC desc = {};
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		desc.ByteWidth = std::max<uint32_t>(1u, elementCapacity) * static_cast<uint32_t>(sizeof(GpuGiMaterial));
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		desc.Usage = D3D11_USAGE_DYNAMIC;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = sizeof(GpuGiMaterial);
+		if (FAILED(device->CreateBuffer(&desc, nullptr, &_giMaterialBuffer)) || _giMaterialBuffer == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU GI material buffer.");
+			return false;
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = elementCapacity;
+		if (FAILED(device->CreateShaderResourceView(_giMaterialBuffer, &srvDesc, &_giMaterialSrv)) || _giMaterialSrv == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU GI material SRV.");
+			SAFE_RELEASE(_giMaterialBuffer);
+			return false;
+		}
+
+		_giMaterialCapacity = elementCapacity;
+		return true;
+	}
+
 	bool DiffuseGI::EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity)
 	{
 		if (elementCapacity == 0u)
@@ -2515,6 +2569,15 @@ namespace HexEngine
 		clipmapParams.levelIndex = levelIndex;
 		clipmapParams.dirty = level.dirty;
 		ExtractGiSceneProxies(scene, clipmapParams, _giMeshProxies, _giMaterialProxies, _giLightProxies);
+		std::unordered_map<StaticMeshComponent*, uint32_t> meshMaterialProxyIndex;
+		meshMaterialProxyIndex.reserve(_giMeshProxies.size());
+		for (const auto& meshProxy : _giMeshProxies)
+		{
+			if (meshProxy.component != nullptr)
+			{
+				meshMaterialProxyIndex[meshProxy.component] = meshProxy.materialProxyIndex;
+			}
+		}
 		std::vector<StaticMeshComponent*> meshesInBounds;
 		meshesInBounds.reserve(_giMeshProxies.size());
 		for (const auto& meshProxy : _giMeshProxies)
@@ -2844,7 +2907,12 @@ namespace HexEngine
 				}
 
 				GpuVoxelTriangle entry = {};
-				entry.p0 = math::Vector4(p0.x, p0.y, p0.z, 1.0f);
+				uint32_t materialProxyIndex = 0u;
+				if (auto materialProxyIt = meshMaterialProxyIndex.find(smc); materialProxyIt != meshMaterialProxyIndex.end())
+				{
+					materialProxyIndex = materialProxyIt->second;
+				}
+				entry.p0 = math::Vector4(p0.x, p0.y, p0.z, static_cast<float>(materialProxyIndex));
 				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, 1.0f);
 				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, 1.0f);
 
@@ -3085,8 +3153,38 @@ namespace HexEngine
 		}
 
 		uint32_t gpuLightCount = 0u;
+		uint32_t gpuMaterialCount = 0u;
 		if (useGpuMaterialEval)
 		{
+			_gpuGiMaterialUpload.clear();
+			_gpuGiMaterialUpload.reserve(_giMaterialProxies.size());
+			for (const auto& materialProxy : _giMaterialProxies)
+			{
+				GpuGiMaterial packedMaterial = {};
+				packedMaterial.diffuse = materialProxy.diffuse;
+				packedMaterial.emissive = materialProxy.emissive;
+				_gpuGiMaterialUpload.push_back(packedMaterial);
+			}
+			gpuMaterialCount = static_cast<uint32_t>(_gpuGiMaterialUpload.size());
+			if (gpuMaterialCount > 0u && EnsureGpuGiMaterialBuffer(gpuMaterialCount))
+			{
+				D3D11_MAPPED_SUBRESOURCE mappedMaterial = {};
+				if (SUCCEEDED(context->Map(_giMaterialBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedMaterial)))
+				{
+					memcpy(mappedMaterial.pData, _gpuGiMaterialUpload.data(), gpuMaterialCount * sizeof(GpuGiMaterial));
+					context->Unmap(_giMaterialBuffer, 0);
+					_stats.uploadBytes += static_cast<uint64_t>(gpuMaterialCount) * static_cast<uint64_t>(sizeof(GpuGiMaterial));
+				}
+				else
+				{
+					gpuMaterialCount = 0u;
+				}
+			}
+			else
+			{
+				gpuMaterialCount = 0u;
+			}
+
 			GiClipmapParams clipmapParams = {};
 			clipmapParams.center = level.center;
 			clipmapParams.extent = level.extent;
@@ -3223,7 +3321,7 @@ namespace HexEngine
 				sunShadowSrvs[i] = CreateShadowMapSrv(device, shadowMap->GetDepthMap());
 			}
 		}
-		const uint32_t shadowSrvSlot = useGpuMaterialEval ? 4u : 3u;
+		const uint32_t shadowSrvSlot = useGpuMaterialEval ? 5u : 3u;
 		context->CSSetShaderResources(shadowSrvSlot, 6, sunShadowSrvs);
 
 		// Preserve previous frame radiance for approximate sun-visibility queries during injection.
@@ -3244,14 +3342,15 @@ namespace HexEngine
 		{
 			if (useGpuMaterialEval)
 			{
-				ID3D11ShaderResourceView* voxelizeSrvsEval[4] =
+				ID3D11ShaderResourceView* voxelizeSrvsEval[5] =
 				{
 					injectionTriangleSrv,
 					level.radianceScratchSrv,
 					level.albedoScratchSrv,
-					(gpuLightCount > 0u) ? _giLightSrv : nullptr
+					(gpuLightCount > 0u) ? _giLightSrv : nullptr,
+					(gpuMaterialCount > 0u) ? _giMaterialSrv : nullptr
 				};
-				context->CSSetShaderResources(0, 4, voxelizeSrvsEval);
+				context->CSSetShaderResources(0, 5, voxelizeSrvsEval);
 			}
 			else
 			{
@@ -3272,9 +3371,9 @@ namespace HexEngine
 		}
 
 		// Break UAV/SRV hazards between injection and propagation passes.
-		ID3D11ShaderResourceView* nullSrvBetweenPasses[4] = {};
+		ID3D11ShaderResourceView* nullSrvBetweenPasses[5] = {};
 		ID3D11UnorderedAccessView* nullUavBetweenPasses[2] = {};
-		context->CSSetShaderResources(0, 4, nullSrvBetweenPasses);
+		context->CSSetShaderResources(0, 5, nullSrvBetweenPasses);
 		context->CSSetUnorderedAccessViews(0, 2, nullUavBetweenPasses, nullptr);
 
 		ID3D11ShaderResourceView* radianceSrcSrv = level.radianceSrv;
@@ -3313,10 +3412,10 @@ namespace HexEngine
 				reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
 		}
 
-		ID3D11ShaderResourceView* nullSrvs[4] = {};
+		ID3D11ShaderResourceView* nullSrvs[5] = {};
 		ID3D11ShaderResourceView* nullShadowSrvs[6] = {};
 		ID3D11UnorderedAccessView* nullUavs[2] = {};
-		context->CSSetShaderResources(0, 4, nullSrvs);
+		context->CSSetShaderResources(0, 5, nullSrvs);
 		context->CSSetShaderResources(shadowSrvSlot, 6, nullShadowSrvs);
 		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);

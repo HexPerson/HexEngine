@@ -20,11 +20,18 @@
 		float4 colourType;
 	};
 
+	struct GpuGiMaterial
+	{
+		float4 diffuse;
+		float4 emissive;
+	};
+
 	StructuredBuffer<VoxelTriangleData> g_voxelTriangles : register(t0);
 	Texture3D<float4> g_prevVoxelRadiance : register(t1);
 	Texture3D<float4> g_prevVoxelAlbedo : register(t2);
 	StructuredBuffer<GpuGiLight> g_giLights : register(t3);
-	SHADOWMAPS_RESOURCE(4);
+	StructuredBuffer<GpuGiMaterial> g_giMaterials : register(t4);
+	SHADOWMAPS_RESOURCE(5);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
 
@@ -39,6 +46,7 @@
 		float4 g_giParams4;
 		float4 g_giParams5;
 		float4 g_giParams6;
+		float4 g_giParams7;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -207,6 +215,10 @@
 			return;
 
 		const VoxelTriangleData tri = g_voxelTriangles[tid.x];
+		uint materialIndex = (uint)max(0.0f, tri.p0.w);
+		uint materialCount = 0u;
+		uint materialStride = 0u;
+		g_giMaterials.GetDimensions(materialCount, materialStride);
 
 		const uint clipIdx = min((uint)g_giParams0.w, 3u);
 		const float3 clipCenter = g_clipCenterExtent[clipIdx].xyz;
@@ -302,7 +314,15 @@
 					const float visibilityFactor = max(
 						lerp(1.0f, sunVisibility, 0.90f * sunDirectionality),
 						lerp(1.0f, 0.08f, sunDirectionality));
-					const float3 triAlbedo = saturate(tri.albedoWeight.rgb);
+					float3 triAlbedo = saturate(tri.albedoWeight.rgb);
+					float3 emissiveProxy = 0.0f.xxx;
+					if (materialIndex < materialCount)
+					{
+						const GpuGiMaterial materialProxy = g_giMaterials[materialIndex];
+						const float proxyBlend = saturate(g_giParams7.x);
+						triAlbedo = saturate(lerp(triAlbedo, materialProxy.diffuse.rgb, proxyBlend));
+						emissiveProxy = saturate(materialProxy.emissive.rgb) * max(0.0f, materialProxy.emissive.a);
+					}
 
 					// Temporal damping at the voxel-injection stage to reduce frame-to-frame GI shimmer
 					// from triangle-budget/coverage changes while moving clipmaps.
@@ -318,6 +338,7 @@
 					const float3 albedoTint = lerp(1.0f.xxx, voxelAlbedo, albedoInfluence);
 					const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
 					float3 injected = tri.radianceOpacity.rgb * visibilityFactor * (albedoTint / tintLuma);
+					injected += emissiveProxy * 0.25f;
 					injected += EvaluateLocalLights(voxelCenterWs, n, voxelAlbedo, voxelSize);
 					const float injectedLum = dot(injected, float3(0.2126f, 0.7152f, 0.0722f));
 					// If there's little/no new injection, reduce history retention so stale neutral energy fades out.
