@@ -440,6 +440,7 @@ namespace HexEngine
 		_giMaterialProxies.clear();
 		_giLightProxies.clear();
 		_giMaterialProxyLookup.clear();
+		_gpuGiMaterialTexelLookup.clear();
 		_gpuGiMaterialUploadSignature = 0ull;
 		_gpuGiMaterialUploadValid = false;
 		_stats = {};
@@ -559,6 +560,7 @@ namespace HexEngine
 		_giMaterialProxies.clear();
 		_giLightProxies.clear();
 		_giMaterialProxyLookup.clear();
+		_gpuGiMaterialTexelLookup.clear();
 		for (auto& regions : _dirtyRegions)
 		{
 			regions.clear();
@@ -592,6 +594,7 @@ namespace HexEngine
 		_gpuGiLightUpload.clear();
 		_gpuGiMaterialUpload.clear();
 		_gpuGiMaterialTexelUpload.clear();
+		_gpuGiMaterialTexelLookup.clear();
 		_gpuGiMaterialUploadSignature = 0ull;
 		_gpuGiMaterialUploadValid = false;
 		_stats = {};
@@ -3333,8 +3336,8 @@ namespace HexEngine
 			if (rebuildGpuMaterialUploads)
 			{
 				_gpuGiMaterialUpload.clear();
-				_gpuGiMaterialTexelUpload.clear();
 				_gpuGiMaterialUpload.reserve(_giMaterialProxies.size());
+				bool appendedMaterialTexels = false;
 				for (const auto& materialProxy : _giMaterialProxies)
 				{
 					GpuGiMaterial packedMaterial = {};
@@ -3343,30 +3346,66 @@ namespace HexEngine
 					const auto& albedoData = getMaterialAlbedoData(materialProxy.material);
 					if (albedoData.hasTexture && albedoData.width > 0 && albedoData.height > 0)
 					{
-						packedMaterial.texelOffset = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
-						packedMaterial.textureWidth = static_cast<uint32_t>(albedoData.width);
-						packedMaterial.textureHeight = static_cast<uint32_t>(albedoData.height);
-						packedMaterial.flags = 1u | (albedoData.isBgra ? 2u : 0u);
-
-						const size_t texelCount = static_cast<size_t>(albedoData.width) * static_cast<size_t>(albedoData.height);
-						_gpuGiMaterialTexelUpload.reserve(_gpuGiMaterialTexelUpload.size() + texelCount);
-						for (size_t t = 0u; t < texelCount; ++t)
+						GpuGiMaterialTexelBinding binding = {};
+						auto bindingIt = _gpuGiMaterialTexelLookup.find(materialProxy.material);
+						if (bindingIt == _gpuGiMaterialTexelLookup.end())
 						{
-							const size_t idx = t * 4u;
-							if (idx + 3u >= albedoData.pixels.size())
-								break;
-							const uint32_t packed =
-								static_cast<uint32_t>(albedoData.pixels[idx + 0u]) |
-								(static_cast<uint32_t>(albedoData.pixels[idx + 1u]) << 8u) |
-								(static_cast<uint32_t>(albedoData.pixels[idx + 2u]) << 16u) |
-								(static_cast<uint32_t>(albedoData.pixels[idx + 3u]) << 24u);
-							_gpuGiMaterialTexelUpload.push_back(packed);
+							binding.texelOffset = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
+							binding.textureWidth = static_cast<uint32_t>(albedoData.width);
+							binding.textureHeight = static_cast<uint32_t>(albedoData.height);
+							binding.flags = 1u | (albedoData.isBgra ? 2u : 0u);
+
+							const size_t texelCount = static_cast<size_t>(albedoData.width) * static_cast<size_t>(albedoData.height);
+							_gpuGiMaterialTexelUpload.reserve(_gpuGiMaterialTexelUpload.size() + texelCount);
+							for (size_t t = 0u; t < texelCount; ++t)
+							{
+								const size_t idx = t * 4u;
+								if (idx + 3u >= albedoData.pixels.size())
+									break;
+								const uint32_t packed =
+									static_cast<uint32_t>(albedoData.pixels[idx + 0u]) |
+									(static_cast<uint32_t>(albedoData.pixels[idx + 1u]) << 8u) |
+									(static_cast<uint32_t>(albedoData.pixels[idx + 2u]) << 16u) |
+									(static_cast<uint32_t>(albedoData.pixels[idx + 3u]) << 24u);
+								_gpuGiMaterialTexelUpload.push_back(packed);
+							}
+							auto [newIt, _] = _gpuGiMaterialTexelLookup.emplace(materialProxy.material, binding);
+							binding = newIt->second;
+							appendedMaterialTexels = true;
 						}
+						else
+						{
+							binding = bindingIt->second;
+						}
+
+						packedMaterial.texelOffset = binding.texelOffset;
+						packedMaterial.textureWidth = binding.textureWidth;
+						packedMaterial.textureHeight = binding.textureHeight;
+						packedMaterial.flags = binding.flags;
 					}
 					_gpuGiMaterialUpload.push_back(packedMaterial);
 				}
 				_gpuGiMaterialUploadSignature = materialProxySignature;
 				_gpuGiMaterialUploadValid = true;
+
+				const uint32_t persistentTexelCount = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
+				if (persistentTexelCount > 0u)
+				{
+					const bool texelBufferNeedsResize =
+						(_giMaterialTexelBuffer == nullptr) ||
+						(_giMaterialTexelSrv == nullptr) ||
+						(_giMaterialTexelCapacity < persistentTexelCount);
+					if (EnsureGpuGiMaterialTexelBuffer(persistentTexelCount) && (appendedMaterialTexels || texelBufferNeedsResize))
+					{
+						D3D11_MAPPED_SUBRESOURCE mappedMaterialTexels = {};
+						if (SUCCEEDED(context->Map(_giMaterialTexelBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedMaterialTexels)))
+						{
+							memcpy(mappedMaterialTexels.pData, _gpuGiMaterialTexelUpload.data(), persistentTexelCount * sizeof(uint32_t));
+							context->Unmap(_giMaterialTexelBuffer, 0);
+							_stats.uploadBytes += static_cast<uint64_t>(persistentTexelCount) * static_cast<uint64_t>(sizeof(uint32_t));
+						}
+					}
+				}
 			}
 
 			gpuMaterialCount = static_cast<uint32_t>(_gpuGiMaterialUpload.size());
@@ -3392,27 +3431,8 @@ namespace HexEngine
 				gpuMaterialCount = 0u;
 			}
 			gpuMaterialTexelCount = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
-			if (gpuMaterialTexelCount > 0u && EnsureGpuGiMaterialTexelBuffer(gpuMaterialTexelCount))
-			{
-				if (rebuildGpuMaterialUploads)
-				{
-					D3D11_MAPPED_SUBRESOURCE mappedMaterialTexels = {};
-					if (SUCCEEDED(context->Map(_giMaterialTexelBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedMaterialTexels)))
-					{
-						memcpy(mappedMaterialTexels.pData, _gpuGiMaterialTexelUpload.data(), gpuMaterialTexelCount * sizeof(uint32_t));
-						context->Unmap(_giMaterialTexelBuffer, 0);
-						_stats.uploadBytes += static_cast<uint64_t>(gpuMaterialTexelCount) * static_cast<uint64_t>(sizeof(uint32_t));
-					}
-					else
-					{
-						gpuMaterialTexelCount = 0u;
-					}
-				}
-			}
-			else
-			{
+			if (gpuMaterialTexelCount == 0u || _giMaterialTexelSrv == nullptr)
 				gpuMaterialTexelCount = 0u;
-			}
 
 			GiClipmapParams clipmapParams = {};
 			clipmapParams.center = level.center;

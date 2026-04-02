@@ -234,6 +234,14 @@ namespace HexEngine
 			uint32_t flags = 0u; // bit0=hasTexture, bit1=isBgra
 		};
 
+		struct GpuGiMaterialTexelBinding
+		{
+			uint32_t texelOffset = 0u;
+			uint32_t textureWidth = 0u;
+			uint32_t textureHeight = 0u;
+			uint32_t flags = 0u;
+		};
+
 	private:
 		bool CreateClipmapResources();
 		void DestroyClipmapResources();
@@ -317,6 +325,7 @@ namespace HexEngine
 		std::vector<GpuGiLight> _gpuGiLightUpload;
 		std::vector<GpuGiMaterial> _gpuGiMaterialUpload;
 		std::vector<uint32_t> _gpuGiMaterialTexelUpload;
+		std::unordered_map<const Material*, GpuGiMaterialTexelBinding> _gpuGiMaterialTexelLookup;
 		uint64_t _gpuGiMaterialUploadSignature = 0ull;
 		bool _gpuGiMaterialUploadValid = false;
 		std::unordered_map<const Material*, uint32_t> _giMaterialProxyLookup;
