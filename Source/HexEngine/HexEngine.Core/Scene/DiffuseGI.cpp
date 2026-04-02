@@ -69,14 +69,14 @@ namespace HexEngine
 	HVar r_giGpuMaterialEval("r_giGpuMaterialEval", "Use GPU-side local-light evaluation during voxel injection", false, false, true);
 	HVar r_giGpuMaterialEvalMaxLights("r_giGpuMaterialEvalMaxLights", "Maximum local GI lights uploaded/evaluated in GPU material eval mode", 24, 1, 64);
 	HVar r_giGpuMaterialProxyBlend("r_giGpuMaterialProxyBlend", "Blend amount for GPU material proxy albedo in eval path (0=triangle albedo, 1=material proxy)", 0.15f, 0.0f, 1.0f);
-	HVar r_giGpuEvalTriangleBudget("r_giGpuEvalTriangleBudget", "Triangle budget used by GPU material-eval voxelization path", 12000, 512, 300000);
+	HVar r_giGpuEvalTriangleBudget("r_giGpuEvalTriangleBudget", "Triangle budget used by GPU material-eval voxelization path", 7000, 512, 300000);
 	HVar r_giGpuComputeBaseSun("r_giGpuComputeBaseSun", "Compute base diffuse/sun/emissive GI injection in GPU eval path", false, false, true);
-	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 24, 1, 256);
-	HVar r_giGpuSunShadowMode("r_giGpuSunShadowMode", "GPU GI sun-shadow mode (0=off,1=single tap,2=PCF 3x3)", 1, 0, 2);
+	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 64, 1, 256);
+	HVar r_giGpuSunShadowMode("r_giGpuSunShadowMode", "GPU GI sun-shadow mode (0=off,1=single tap,2=PCF 3x3)", 0, 0, 2);
 	HVar r_giGpuSunShadowPerVoxel("r_giGpuSunShadowPerVoxel", "Evaluate GPU GI sun shadow per voxel hit (expensive); when off uses per-triangle sun visibility", false, false, true);
 	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters,2=verbose counters)", 0, 0, 2);
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
-	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 120, 10, 2000);
+	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 300, 10, 2000);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
