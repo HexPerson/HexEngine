@@ -2437,6 +2437,45 @@ namespace HexEngine
 		scene->GatherStaticMeshesInBounds(clipBounds, meshesInBounds, true);
 		outMeshes.reserve(meshesInBounds.size());
 		outMaterials.reserve(meshesInBounds.size());
+		std::sort(meshesInBounds.begin(), meshesInBounds.end(),
+			[](const StaticMeshComponent* a, const StaticMeshComponent* b)
+			{
+				return std::less<const StaticMeshComponent*>()(a, b);
+			});
+
+		std::vector<const Material*> uniqueMaterials;
+		uniqueMaterials.reserve(meshesInBounds.size());
+		for (auto* smc : meshesInBounds)
+		{
+			if (smc == nullptr || smc->GetMesh() == nullptr)
+				continue;
+			auto* entity = smc->GetEntity();
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
+			const auto materialPtr = smc->GetMaterial();
+			const Material* material = materialPtr ? materialPtr.get() : nullptr;
+			if (material != nullptr)
+			{
+				uniqueMaterials.push_back(material);
+			}
+		}
+		std::sort(uniqueMaterials.begin(), uniqueMaterials.end(),
+			[](const Material* a, const Material* b)
+			{
+				return std::less<const Material*>()(a, b);
+			});
+		uniqueMaterials.erase(std::unique(uniqueMaterials.begin(), uniqueMaterials.end()), uniqueMaterials.end());
+
+		for (const Material* material : uniqueMaterials)
+		{
+			GiMaterialProxy proxy = {};
+			proxy.material = material;
+			proxy.diffuse = material->_properties.diffuseColour;
+			proxy.emissive = material->_properties.emissiveColour;
+			proxy.index = static_cast<uint32_t>(outMaterials.size());
+			outMaterials.push_back(proxy);
+			_giMaterialProxyLookup.emplace(material, proxy.index);
+		}
 
 		for (auto* smc : meshesInBounds)
 		{
@@ -2456,19 +2495,7 @@ namespace HexEngine
 			uint32_t materialProxyIndex = 0u;
 			if (material != nullptr)
 			{
-				auto it = _giMaterialProxyLookup.find(material);
-				if (it == _giMaterialProxyLookup.end())
-				{
-					GiMaterialProxy proxy = {};
-					proxy.material = material;
-					proxy.diffuse = material->_properties.diffuseColour;
-					proxy.emissive = material->_properties.emissiveColour;
-					proxy.index = static_cast<uint32_t>(outMaterials.size());
-					outMaterials.push_back(proxy);
-					materialProxyIndex = proxy.index;
-					_giMaterialProxyLookup.emplace(material, materialProxyIndex);
-				}
-				else
+				if (auto it = _giMaterialProxyLookup.find(material); it != _giMaterialProxyLookup.end())
 				{
 					materialProxyIndex = it->second;
 				}
@@ -3427,16 +3454,6 @@ namespace HexEngine
 				_gpuGiMaterialUpload.clear();
 				_gpuGiMaterialUpload.reserve(_giMaterialProxies.size());
 				bool appendedMaterialTexels = false;
-				auto computeTexelHash = [](const std::vector<uint8_t>& pixels) -> uint32_t
-				{
-					uint32_t h = 2166136261u;
-					for (uint8_t b : pixels)
-					{
-						h ^= static_cast<uint32_t>(b);
-						h *= 16777619u;
-					}
-					return h;
-				};
 				for (const auto& materialProxy : _giMaterialProxies)
 				{
 					GpuGiMaterial packedMaterial = {};
@@ -3448,7 +3465,6 @@ namespace HexEngine
 						GpuGiMaterialTexelBinding binding = {};
 						auto bindingIt = _gpuGiMaterialTexelLookup.find(materialProxy.material);
 						const uint32_t flags = 1u | (albedoData.isBgra ? 2u : 0u);
-						const uint32_t contentHash = computeTexelHash(albedoData.pixels);
 						const uint32_t textureWidth = static_cast<uint32_t>(albedoData.width);
 						const uint32_t textureHeight = static_cast<uint32_t>(albedoData.height);
 						const uint32_t texelCount = textureWidth * textureHeight;
@@ -3457,7 +3473,6 @@ namespace HexEngine
 							(bindingIt->second.textureWidth == textureWidth) &&
 							(bindingIt->second.textureHeight == textureHeight) &&
 							(bindingIt->second.flags == flags) &&
-							(bindingIt->second.contentHash == contentHash) &&
 							(bindingIt->second.texelOffset + texelCount <= static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size()));
 
 						if (canReuseExisting)
@@ -3481,7 +3496,7 @@ namespace HexEngine
 								binding.textureWidth = textureWidth;
 								binding.textureHeight = textureHeight;
 								binding.flags = flags;
-								binding.contentHash = contentHash;
+								binding.contentHash = 0u;
 								_gpuGiMaterialTexelUpload.resize(_gpuGiMaterialTexelUpload.size() + texelCount);
 							}
 
@@ -3498,7 +3513,7 @@ namespace HexEngine
 								_gpuGiMaterialTexelUpload[binding.texelOffset + t] = packed;
 							}
 							binding.flags = flags;
-							binding.contentHash = contentHash;
+							binding.contentHash = 0u;
 							_gpuGiMaterialTexelLookup[materialProxy.material] = binding;
 							appendedMaterialTexels = true;
 						}
