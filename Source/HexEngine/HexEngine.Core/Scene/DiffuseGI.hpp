@@ -240,6 +240,7 @@ namespace HexEngine
 			uint32_t textureWidth = 0u;
 			uint32_t textureHeight = 0u;
 			uint32_t flags = 0u;
+			uint32_t contentHash = 0u;
 		};
 
 	private:

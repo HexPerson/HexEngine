@@ -2737,11 +2737,34 @@ namespace HexEngine
 				sunStrength = std::max(0.0f, sun->GetLightMultiplier() * sun->GetLightStrength());
 		}
 		const float clipAttenuation = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
-		auto getMaterialAlbedoData = [&](const Material* material) -> const MaterialTriangleAlbedoCacheEntry&
-		{
-			auto it = _materialTriangleAlbedoCache.find(material);
-			if (it != _materialTriangleAlbedoCache.end())
-				return it->second;
+			auto getMaterialAlbedoData = [&](const Material* material) -> const MaterialTriangleAlbedoCacheEntry&
+			{
+				auto it = _materialTriangleAlbedoCache.find(material);
+				if (it != _materialTriangleAlbedoCache.end())
+				{
+					// Textures can stream in after cache creation; refresh previously texture-less entries.
+					if (material != nullptr && !it->second.hasTexture)
+					{
+						if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
+						{
+							it->second.width = std::max(1, albedoTex->GetWidth());
+							it->second.height = std::max(1, albedoTex->GetHeight());
+							albedoTex->GetPixels(it->second.pixels);
+							const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
+							if (it->second.pixels.size() >= minTightSize)
+							{
+								const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedoTex->GetFormat());
+								it->second.isBgra =
+									(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+									(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+									(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+									(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+								it->second.hasTexture = true;
+							}
+						}
+					}
+					return it->second;
+				}
 
 			MaterialTriangleAlbedoCacheEntry data = {};
 			if (material != nullptr)
@@ -3300,7 +3323,30 @@ namespace HexEngine
 			{
 				auto it = _materialTriangleAlbedoCache.find(material);
 				if (it != _materialTriangleAlbedoCache.end())
+				{
+					// Textures can stream in after cache creation; refresh previously texture-less entries.
+					if (material != nullptr && !it->second.hasTexture)
+					{
+						if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
+						{
+							it->second.width = std::max(1, albedoTex->GetWidth());
+							it->second.height = std::max(1, albedoTex->GetHeight());
+							albedoTex->GetPixels(it->second.pixels);
+							const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
+							if (it->second.pixels.size() >= minTightSize)
+							{
+								const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedoTex->GetFormat());
+								it->second.isBgra =
+									(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+									(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+									(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+									(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+								it->second.hasTexture = true;
+							}
+						}
+					}
 					return it->second;
+				}
 
 				MaterialTriangleAlbedoCacheEntry data = {};
 				if (material != nullptr)
@@ -3338,6 +3384,16 @@ namespace HexEngine
 				_gpuGiMaterialUpload.clear();
 				_gpuGiMaterialUpload.reserve(_giMaterialProxies.size());
 				bool appendedMaterialTexels = false;
+				auto computeTexelHash = [](const std::vector<uint8_t>& pixels) -> uint32_t
+				{
+					uint32_t h = 2166136261u;
+					for (uint8_t b : pixels)
+					{
+						h ^= static_cast<uint32_t>(b);
+						h *= 16777619u;
+					}
+					return h;
+				};
 				for (const auto& materialProxy : _giMaterialProxies)
 				{
 					GpuGiMaterial packedMaterial = {};
@@ -3348,18 +3404,47 @@ namespace HexEngine
 					{
 						GpuGiMaterialTexelBinding binding = {};
 						auto bindingIt = _gpuGiMaterialTexelLookup.find(materialProxy.material);
-						if (bindingIt == _gpuGiMaterialTexelLookup.end())
-						{
-							binding.texelOffset = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
-							binding.textureWidth = static_cast<uint32_t>(albedoData.width);
-							binding.textureHeight = static_cast<uint32_t>(albedoData.height);
-							binding.flags = 1u | (albedoData.isBgra ? 2u : 0u);
+						const uint32_t flags = 1u | (albedoData.isBgra ? 2u : 0u);
+						const uint32_t contentHash = computeTexelHash(albedoData.pixels);
+						const uint32_t textureWidth = static_cast<uint32_t>(albedoData.width);
+						const uint32_t textureHeight = static_cast<uint32_t>(albedoData.height);
+						const uint32_t texelCount = textureWidth * textureHeight;
+						const bool canReuseExisting =
+							(bindingIt != _gpuGiMaterialTexelLookup.end()) &&
+							(bindingIt->second.textureWidth == textureWidth) &&
+							(bindingIt->second.textureHeight == textureHeight) &&
+							(bindingIt->second.flags == flags) &&
+							(bindingIt->second.contentHash == contentHash) &&
+							(bindingIt->second.texelOffset + texelCount <= static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size()));
 
-							const size_t texelCount = static_cast<size_t>(albedoData.width) * static_cast<size_t>(albedoData.height);
-							_gpuGiMaterialTexelUpload.reserve(_gpuGiMaterialTexelUpload.size() + texelCount);
-							for (size_t t = 0u; t < texelCount; ++t)
+						if (canReuseExisting)
+						{
+							binding = bindingIt->second;
+						}
+						else
+						{
+							const bool canOverwriteExistingRange =
+								(bindingIt != _gpuGiMaterialTexelLookup.end()) &&
+								(bindingIt->second.textureWidth == textureWidth) &&
+								(bindingIt->second.textureHeight == textureHeight) &&
+								(bindingIt->second.texelOffset + texelCount <= static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size()));
+							if (canOverwriteExistingRange)
 							{
-								const size_t idx = t * 4u;
+								binding = bindingIt->second;
+							}
+							else
+							{
+								binding.texelOffset = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
+								binding.textureWidth = textureWidth;
+								binding.textureHeight = textureHeight;
+								binding.flags = flags;
+								binding.contentHash = contentHash;
+								_gpuGiMaterialTexelUpload.resize(_gpuGiMaterialTexelUpload.size() + texelCount);
+							}
+
+							for (uint32_t t = 0u; t < texelCount; ++t)
+							{
+								const size_t idx = static_cast<size_t>(t) * 4u;
 								if (idx + 3u >= albedoData.pixels.size())
 									break;
 								const uint32_t packed =
@@ -3367,15 +3452,12 @@ namespace HexEngine
 									(static_cast<uint32_t>(albedoData.pixels[idx + 1u]) << 8u) |
 									(static_cast<uint32_t>(albedoData.pixels[idx + 2u]) << 16u) |
 									(static_cast<uint32_t>(albedoData.pixels[idx + 3u]) << 24u);
-								_gpuGiMaterialTexelUpload.push_back(packed);
+								_gpuGiMaterialTexelUpload[binding.texelOffset + t] = packed;
 							}
-							auto [newIt, _] = _gpuGiMaterialTexelLookup.emplace(materialProxy.material, binding);
-							binding = newIt->second;
+							binding.flags = flags;
+							binding.contentHash = contentHash;
+							_gpuGiMaterialTexelLookup[materialProxy.material] = binding;
 							appendedMaterialTexels = true;
-						}
-						else
-						{
-							binding = bindingIt->second;
 						}
 
 						packedMaterial.texelOffset = binding.texelOffset;
