@@ -368,6 +368,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> _voxelPropagateShader;
 		std::shared_ptr<IShader> _voxelShiftShader;
 		std::array<std::vector<GpuVoxelTriangle>, ClipmapCount> _cachedVoxelTriangles = {};
+		std::array<std::vector<GiMaterialProxy>, ClipmapCount> _cachedGiMaterialProxies = {};
 		std::array<bool, ClipmapCount> _cachedVoxelTrianglesValid = { false, false, false, false };
 		std::array<uint64_t, ClipmapCount> _cachedVoxelTrianglesFrame = { 0ull, 0ull, 0ull, 0ull };
 		std::array<uint32_t, ClipmapCount> _clipmapWarmFramesRemaining = { 0u, 0u, 0u, 0u };

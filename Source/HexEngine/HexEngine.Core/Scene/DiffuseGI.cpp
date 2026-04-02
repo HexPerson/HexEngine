@@ -429,6 +429,7 @@ namespace HexEngine
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
 		{
 			_cachedVoxelTriangles[i].clear();
+			_cachedGiMaterialProxies[i].clear();
 			_cachedVoxelTrianglesValid[i] = false;
 			_cachedVoxelTrianglesFrame[i] = 0ull;
 			_clipmapWarmFramesRemaining[i] = 0u;
@@ -633,6 +634,7 @@ namespace HexEngine
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
 		{
 			_cachedVoxelTriangles[i].clear();
+			_cachedGiMaterialProxies[i].clear();
 			_cachedVoxelTrianglesValid[i] = false;
 			_cachedVoxelTrianglesFrame[i] = 0ull;
 			_clipmapWarmFramesRemaining[i] = 0u;
@@ -1844,6 +1846,7 @@ namespace HexEngine
 			for (uint32_t i = 0; i < ClipmapCount; ++i)
 			{
 				_cachedVoxelTriangles[i].clear();
+				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = 0u;
@@ -1901,6 +1904,7 @@ namespace HexEngine
 			for (uint32_t i = 0; i < ClipmapCount; ++i)
 			{
 				_cachedVoxelTriangles[i].clear();
+				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = 0u;
@@ -1923,6 +1927,7 @@ namespace HexEngine
 			for (uint32_t i = 0; i < ClipmapCount; ++i)
 			{
 				_cachedVoxelTriangles[i].clear();
+				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], 2u);
@@ -1973,6 +1978,7 @@ namespace HexEngine
 			for (uint32_t i = 0; i < ClipmapCount; ++i)
 			{
 				_cachedVoxelTriangles[i].clear();
+				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 			}
@@ -2655,9 +2661,23 @@ namespace HexEngine
 			? (_frameCounter - _cachedVoxelTrianglesFrame[levelIndex])
 			: 0ull;
 		const uint64_t cacheFrames = static_cast<uint64_t>(std::max(1, r_giTriangleCacheFrames._val.i32));
-		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheAge < cacheFrames)
+		const bool preferPersistentTriangleCache =
+			r_giGpuMaterialEval._val.b &&
+			r_giGpuComputeBaseSun._val.b &&
+			!r_giGpuCandidateGen._val.b;
+		const bool cacheStillFresh = preferPersistentTriangleCache || (cacheAge < cacheFrames);
+		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheStillFresh)
 		{
 			out = _cachedVoxelTriangles[levelIndex];
+			_giMaterialProxies = _cachedGiMaterialProxies[levelIndex];
+			_giMaterialProxyLookup.clear();
+			for (const auto& materialProxy : _giMaterialProxies)
+			{
+				if (materialProxy.material != nullptr)
+				{
+					_giMaterialProxyLookup[materialProxy.material] = materialProxy.index;
+				}
+			}
 			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
 			_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
 			return static_cast<uint32_t>(out.size());
@@ -3175,6 +3195,7 @@ namespace HexEngine
 		}
 
 		_cachedVoxelTriangles[levelIndex] = out;
+		_cachedGiMaterialProxies[levelIndex] = _giMaterialProxies;
 		_cachedVoxelTrianglesValid[levelIndex] = true;
 		_cachedVoxelTrianglesFrame[levelIndex] = _frameCounter;
 		_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
