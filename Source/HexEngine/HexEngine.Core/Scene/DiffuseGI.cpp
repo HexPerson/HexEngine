@@ -2654,6 +2654,7 @@ namespace HexEngine
 		const bool disableBaseAndSunInjection = r_giDebugDisableBaseAndSunInjection._val.b;
 		const bool disableBaseInjection = disableBaseAndSunInjection || r_giDebugDisableBaseInjection._val.b;
 		const bool disableSunInjection = disableBaseAndSunInjection || r_giDebugDisableSunInjection._val.b;
+		const uint32_t baseTriangleBudget = static_cast<uint32_t>(std::max(256, r_giVoxelTriangleBudget._val.i32));
 
 		auto& level = _clipmaps[levelIndex];
 		const float voxelSizeWorld = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
@@ -2666,7 +2667,10 @@ namespace HexEngine
 			r_giGpuComputeBaseSun._val.b &&
 			!r_giGpuCandidateGen._val.b;
 		const bool cacheStillFresh = preferPersistentTriangleCache || (cacheAge < cacheFrames);
-		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheStillFresh)
+		const bool cachedTriangleCountAcceptable =
+			!preferPersistentTriangleCache ||
+			(static_cast<uint32_t>(_cachedVoxelTriangles[levelIndex].size()) <= baseTriangleBudget);
+		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheStillFresh && cachedTriangleCountAcceptable)
 		{
 			out = _cachedVoxelTriangles[levelIndex];
 			_giMaterialProxies = _cachedGiMaterialProxies[levelIndex];
@@ -2737,12 +2741,12 @@ namespace HexEngine
 			}
 		}
 
-		uint32_t budget = static_cast<uint32_t>(std::max(256, r_giVoxelTriangleBudget._val.i32));
-		if (level.dirty)
+		uint32_t budget = baseTriangleBudget;
+		if (!preferPersistentTriangleCache && level.dirty)
 		{
 			budget = std::min<uint32_t>(budget * 3u, 300000u);
 		}
-		if (_clipmapWarmFramesRemaining[levelIndex] > 0u)
+		if (!preferPersistentTriangleCache && _clipmapWarmFramesRemaining[levelIndex] > 0u)
 		{
 			budget = std::min<uint32_t>(budget * 3u, 300000u);
 		}
