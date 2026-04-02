@@ -423,8 +423,8 @@
 						const float clipAttenuation = rcp(1.0f + (float)clipIdx * 0.5f);
 						const float sunFacing = triSunFacing;
 						const float sunPresence = saturate(sunStrength * sunInject);
-						const float litFactor = saturate(sunFacing * sunVisibility * sunDirectionality * sunPresence);
-						const float unlitWeight = 1.0f - litFactor;
+						const float litFactor = saturate(sunFacing * sunVisibility * sunPresence);
+						const float unlitWeight = (1.0f - litFactor) * (1.0f - litFactor);
 						const float triLuma = saturate(dot(triAlbedo, float3(0.2126f, 0.7152f, 0.0722f)));
 						const float3 baseDiffuse = triAlbedo * (triLuma * diffuseInject * unlitBase * unlitWeight * 0.60f * clipAttenuation);
 						const float sunDirectional = sunFacing * sunStrength * sunInject * (0.45f + 0.55f * sunBoost);

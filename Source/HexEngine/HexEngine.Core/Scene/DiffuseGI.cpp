@@ -3104,7 +3104,8 @@ namespace HexEngine
 					const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
 					const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
 					const float sunPresence = std::clamp(sunStrength * sunInject, 0.0f, 1.0f);
-					const float unlitWeight = 1.0f - std::clamp(sunFacing * sunPresence, 0.0f, 1.0f);
+					const float litFactor = std::clamp(sunFacing * sunPresence, 0.0f, 1.0f);
+					const float unlitWeight = (1.0f - litFactor) * (1.0f - litFactor);
 					triBaseInjection =
 						(math::Vector3(1.0f, 1.0f, 1.0f) * (triAlbedoLuma * diffuseInject * unlitBase * unlitWeight * (0.55f + bleedBoost * 0.30f) * colourBleedBoost) +
 						(emissiveTint * emissiveStrength * emissiveInject)) * clipAttenuation;
