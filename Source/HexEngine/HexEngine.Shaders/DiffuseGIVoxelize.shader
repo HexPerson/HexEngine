@@ -252,7 +252,7 @@
 					const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 					const float shiftSettle = saturate(g_giParams6.y);
 					const float temporalKeepBase = lerp(0.80f, 0.94f, warmStabilize);
-					const float temporalKeep = lerp(temporalKeepBase, 0.97f, shiftSettle * 0.65f);
+					const float temporalKeep = lerp(temporalKeepBase, 0.95f, shiftSettle * 0.45f);
 					const float albedoKeepBase = lerp(0.75f, 0.93f, warmStabilize);
 					const float albedoKeep = lerp(albedoKeepBase, 0.96f, shiftSettle * 0.55f);
 					const float prevAlbedoW = saturate(previousAlbedo.a) * albedoKeep;
@@ -263,18 +263,18 @@
 					const float albedoInfluence = saturate(g_giParams6.z) * saturate(albedoConfidence * 1.25f);
 					const float3 albedoTint = lerp(1.0f.xxx, voxelAlbedo, albedoInfluence);
 					const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
-					const float motionInjectScale = lerp(1.0f, 0.68f, shiftSettle);
+					const float motionInjectScale = lerp(1.0f, 0.82f, shiftSettle);
 					const float3 injected = tri.radianceOpacity.rgb * visibilityFactor * (albedoTint / tintLuma) * motionInjectScale;
 					const float injectedLum = dot(injected, float3(0.2126f, 0.7152f, 0.0722f));
 					// If there's little/no new injection, reduce history retention so stale neutral energy fades out.
 					const float injectionPresence = saturate(injectedLum * 2.5f);
-					const float minKeep = lerp(0.20f, 0.34f, shiftSettle);
+					const float minKeep = lerp(0.20f, 0.28f, shiftSettle);
 					const float effectiveKeep = lerp(minKeep, temporalKeep, injectionPresence);
 					float3 radiance = previous.rgb * effectiveKeep + injected * (1.0f - effectiveKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
 					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
-					const float3 settleDeltaLimit = 0.04f.xxx + previous.rgb * 0.18f;
+					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
 					const float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
 					radiance = clamp(radiance, previous.rgb - deltaLimit, previous.rgb + deltaLimit);
 					radiance = min(radiance, 32.0f.xxx);
