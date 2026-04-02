@@ -67,32 +67,14 @@
 		return dot(c0, n) >= eps && dot(c1, n) >= eps && dot(c2, n) >= eps;
 	}
 
-	float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
-	{
-		const float3 v0 = b - a;
-		const float3 v1 = c - a;
-		const float3 v2 = p - a;
-		const float d00 = dot(v0, v0);
-		const float d01 = dot(v0, v1);
-		const float d11 = dot(v1, v1);
-		const float d20 = dot(v2, v0);
-		const float d21 = dot(v2, v1);
-		const float denom = d00 * d11 - d01 * d01;
-		if (abs(denom) <= 1e-8f)
-			return float3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f);
-
-		const float v = (d11 * d20 - d01 * d21) / denom;
-		const float w = (d00 * d21 - d01 * d20) / denom;
-		const float u = 1.0f - v - w;
-		return float3(u, v, w);
-	}
-
-	float3 DecodeTexelToLinear(uint packedTexel, bool isBgra)
+	float3 DecodeTexelToLinearFast(uint packedTexel, bool isBgra)
 	{
 		const float rSrgb = ((packedTexel >> (isBgra ? 16u : 0u)) & 0xffu) / 255.0f;
 		const float gSrgb = ((packedTexel >> 8u) & 0xffu) / 255.0f;
 		const float bSrgb = ((packedTexel >> (isBgra ? 0u : 16u)) & 0xffu) / 255.0f;
-		return float3(pow(max(rSrgb, 1e-6f), 2.2f), pow(max(gSrgb, 1e-6f), 2.2f), pow(max(bSrgb, 1e-6f), 2.2f));
+		const float3 srgb = max(float3(rSrgb, gSrgb, bSrgb), 1e-6f.xxx);
+		// Fast approximation is enough for GI tinting; avoids expensive pow() in hot loops.
+		return srgb * srgb;
 	}
 
 	float3 SampleMaterialAlbedo(in GpuGiMaterial material, float2 uv)
@@ -103,22 +85,13 @@
 		if (!hasTexture || material.textureWidth == 0u || material.textureHeight == 0u)
 			return sampled;
 
-		uint texelCount = 0u;
-		uint texelStride = 0u;
-		g_giMaterialTexels.GetDimensions(texelCount, texelStride);
-		if (texelCount == 0u)
-			return sampled;
-
 		const float2 wrappedUv = frac(uv);
 		const uint x = min((uint)(wrappedUv.x * (float)material.textureWidth), material.textureWidth - 1u);
 		const uint y = min((uint)(wrappedUv.y * (float)material.textureHeight), material.textureHeight - 1u);
 		const uint localIdx = y * material.textureWidth + x;
 		const uint texelIdx = material.texelOffset + localIdx;
-		if (texelIdx >= texelCount)
-			return sampled;
-
 		const uint packedTexel = g_giMaterialTexels[texelIdx];
-		sampled = saturate(DecodeTexelToLinear(packedTexel, isBgra) * material.diffuse.rgb);
+		sampled = saturate(DecodeTexelToLinearFast(packedTexel, isBgra) * material.diffuse.rgb);
 		return sampled;
 	}
 
@@ -329,6 +302,21 @@
 		const float3 toSunWs = -sunDirWs;
 		const float sunDirectionality = saturate(g_giParams3.w);
 		const float planeThickness = voxelSize * 1.5f;
+		const float2 uv0 = tri.uv0uv1.xy;
+		const float2 uv1 = tri.uv0uv1.zw;
+		const float2 uv2 = tri.uv2Pad.xy;
+		const float2 triUv = (uv0 + uv1 + uv2) * (1.0f / 3.0f);
+		float3 triAlbedoBase = saturate(tri.albedoWeight.rgb);
+		float3 emissiveProxy = 0.0f.xxx;
+		if (materialIndex < materialCount)
+		{
+			const GpuGiMaterial materialProxy = g_giMaterials[materialIndex];
+			const float proxyBlend = saturate(g_giParams7.x);
+			const float3 materialAlbedo = SampleMaterialAlbedo(materialProxy, triUv);
+			triAlbedoBase = saturate(lerp(triAlbedoBase, materialAlbedo, proxyBlend));
+			const float emissiveStrength = max(0.0f, materialProxy.emissive.a);
+			emissiveProxy = saturate(materialProxy.emissive.rgb) * emissiveStrength;
+		}
 
 		for (uint z = voxelMin.z; z <= voxelMax.z; z += step)
 		{
@@ -346,12 +334,6 @@
 					const float3 projected = voxelCenterWs - n * signedDist;
 					if (!IsPointInTriangle(projected, p0, p1, p2, n))
 						continue;
-
-					const float3 bary = ComputeBarycentric(projected, p0, p1, p2);
-					const float2 uv0 = tri.uv0uv1.xy;
-					const float2 uv1 = tri.uv0uv1.zw;
-					const float2 uv2 = tri.uv2Pad.xy;
-					const float2 triUv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
 
 					// Evaluate direct sun visibility from the real shadow cascades first.
 					float sunVisibility = 1.0f;
@@ -384,17 +366,7 @@
 					const float visibilityFactor = max(
 						lerp(1.0f, sunVisibility, 0.90f * sunDirectionality),
 						lerp(1.0f, 0.08f, sunDirectionality));
-					float3 triAlbedo = saturate(tri.albedoWeight.rgb);
-					float3 emissiveProxy = 0.0f.xxx;
-					if (materialIndex < materialCount)
-					{
-						const GpuGiMaterial materialProxy = g_giMaterials[materialIndex];
-						const float proxyBlend = saturate(g_giParams7.x);
-						const float3 materialAlbedo = SampleMaterialAlbedo(materialProxy, triUv);
-						triAlbedo = saturate(lerp(triAlbedo, materialAlbedo, proxyBlend));
-						const float emissiveStrength = max(0.0f, materialProxy.emissive.a);
-						emissiveProxy = saturate(materialProxy.emissive.rgb) * emissiveStrength;
-					}
+					const float3 triAlbedo = triAlbedoBase;
 
 					// Temporal damping at the voxel-injection stage to reduce frame-to-frame GI shimmer
 					// from triangle-budget/coverage changes while moving clipmaps.

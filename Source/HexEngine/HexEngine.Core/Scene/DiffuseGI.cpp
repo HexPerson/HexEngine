@@ -440,6 +440,8 @@ namespace HexEngine
 		_giMaterialProxies.clear();
 		_giLightProxies.clear();
 		_giMaterialProxyLookup.clear();
+		_gpuGiMaterialUploadSignature = 0ull;
+		_gpuGiMaterialUploadValid = false;
 		_stats = {};
 		_statsFrameCounter = 0ull;
 		for (auto& regions : _dirtyRegions)
@@ -590,6 +592,8 @@ namespace HexEngine
 		_gpuGiLightUpload.clear();
 		_gpuGiMaterialUpload.clear();
 		_gpuGiMaterialTexelUpload.clear();
+		_gpuGiMaterialUploadSignature = 0ull;
+		_gpuGiMaterialUploadValid = false;
 		_stats = {};
 		_statsFrameCounter = 0ull;
 
@@ -2251,6 +2255,31 @@ namespace HexEngine
 		return true;
 	}
 
+	uint64_t DiffuseGI::ComputeGiMaterialProxySignature() const
+	{
+		uint64_t hash = 1469598103934665603ull;
+		auto hashBytes = [&](const void* data, size_t size)
+		{
+			const auto* bytes = reinterpret_cast<const uint8_t*>(data);
+			for (size_t i = 0u; i < size; ++i)
+			{
+				hash ^= static_cast<uint64_t>(bytes[i]);
+				hash *= 1099511628211ull;
+			}
+		};
+
+		const uint32_t count = static_cast<uint32_t>(_giMaterialProxies.size());
+		hashBytes(&count, sizeof(count));
+		for (const auto& materialProxy : _giMaterialProxies)
+		{
+			const uintptr_t materialPtrBits = reinterpret_cast<uintptr_t>(materialProxy.material);
+			hashBytes(&materialPtrBits, sizeof(materialPtrBits));
+			hashBytes(&materialProxy.diffuse, sizeof(materialProxy.diffuse));
+			hashBytes(&materialProxy.emissive, sizeof(materialProxy.emissive));
+		}
+		return hash;
+	}
+
 	bool DiffuseGI::EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity)
 	{
 		if (elementCapacity == 0u)
@@ -3261,6 +3290,9 @@ namespace HexEngine
 		uint32_t gpuMaterialTexelCount = 0u;
 		if (useGpuMaterialEval)
 		{
+			const uint64_t materialProxySignature = ComputeGiMaterialProxySignature();
+			const bool rebuildGpuMaterialUploads =
+				(!_gpuGiMaterialUploadValid) || (_gpuGiMaterialUploadSignature != materialProxySignature);
 			auto getMaterialAlbedoData = [&](const Material* material) -> const MaterialTriangleAlbedoCacheEntry&
 			{
 				auto it = _materialTriangleAlbedoCache.find(material);
@@ -3298,52 +3330,61 @@ namespace HexEngine
 				return insertedIt->second;
 			};
 
-			_gpuGiMaterialUpload.clear();
-			_gpuGiMaterialTexelUpload.clear();
-			_gpuGiMaterialUpload.reserve(_giMaterialProxies.size());
-			for (const auto& materialProxy : _giMaterialProxies)
+			if (rebuildGpuMaterialUploads)
 			{
-				GpuGiMaterial packedMaterial = {};
-				packedMaterial.diffuse = materialProxy.diffuse;
-				packedMaterial.emissive = materialProxy.emissive;
-				const auto& albedoData = getMaterialAlbedoData(materialProxy.material);
-				if (albedoData.hasTexture && albedoData.width > 0 && albedoData.height > 0)
+				_gpuGiMaterialUpload.clear();
+				_gpuGiMaterialTexelUpload.clear();
+				_gpuGiMaterialUpload.reserve(_giMaterialProxies.size());
+				for (const auto& materialProxy : _giMaterialProxies)
 				{
-					packedMaterial.texelOffset = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
-					packedMaterial.textureWidth = static_cast<uint32_t>(albedoData.width);
-					packedMaterial.textureHeight = static_cast<uint32_t>(albedoData.height);
-					packedMaterial.flags = 1u | (albedoData.isBgra ? 2u : 0u);
-
-					const size_t texelCount = static_cast<size_t>(albedoData.width) * static_cast<size_t>(albedoData.height);
-					_gpuGiMaterialTexelUpload.reserve(_gpuGiMaterialTexelUpload.size() + texelCount);
-					for (size_t t = 0u; t < texelCount; ++t)
+					GpuGiMaterial packedMaterial = {};
+					packedMaterial.diffuse = materialProxy.diffuse;
+					packedMaterial.emissive = materialProxy.emissive;
+					const auto& albedoData = getMaterialAlbedoData(materialProxy.material);
+					if (albedoData.hasTexture && albedoData.width > 0 && albedoData.height > 0)
 					{
-						const size_t idx = t * 4u;
-						if (idx + 3u >= albedoData.pixels.size())
-							break;
-						const uint32_t packed =
-							static_cast<uint32_t>(albedoData.pixels[idx + 0u]) |
-							(static_cast<uint32_t>(albedoData.pixels[idx + 1u]) << 8u) |
-							(static_cast<uint32_t>(albedoData.pixels[idx + 2u]) << 16u) |
-							(static_cast<uint32_t>(albedoData.pixels[idx + 3u]) << 24u);
-						_gpuGiMaterialTexelUpload.push_back(packed);
+						packedMaterial.texelOffset = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
+						packedMaterial.textureWidth = static_cast<uint32_t>(albedoData.width);
+						packedMaterial.textureHeight = static_cast<uint32_t>(albedoData.height);
+						packedMaterial.flags = 1u | (albedoData.isBgra ? 2u : 0u);
+
+						const size_t texelCount = static_cast<size_t>(albedoData.width) * static_cast<size_t>(albedoData.height);
+						_gpuGiMaterialTexelUpload.reserve(_gpuGiMaterialTexelUpload.size() + texelCount);
+						for (size_t t = 0u; t < texelCount; ++t)
+						{
+							const size_t idx = t * 4u;
+							if (idx + 3u >= albedoData.pixels.size())
+								break;
+							const uint32_t packed =
+								static_cast<uint32_t>(albedoData.pixels[idx + 0u]) |
+								(static_cast<uint32_t>(albedoData.pixels[idx + 1u]) << 8u) |
+								(static_cast<uint32_t>(albedoData.pixels[idx + 2u]) << 16u) |
+								(static_cast<uint32_t>(albedoData.pixels[idx + 3u]) << 24u);
+							_gpuGiMaterialTexelUpload.push_back(packed);
+						}
 					}
+					_gpuGiMaterialUpload.push_back(packedMaterial);
 				}
-				_gpuGiMaterialUpload.push_back(packedMaterial);
+				_gpuGiMaterialUploadSignature = materialProxySignature;
+				_gpuGiMaterialUploadValid = true;
 			}
+
 			gpuMaterialCount = static_cast<uint32_t>(_gpuGiMaterialUpload.size());
 			if (gpuMaterialCount > 0u && EnsureGpuGiMaterialBuffer(gpuMaterialCount))
 			{
-				D3D11_MAPPED_SUBRESOURCE mappedMaterial = {};
-				if (SUCCEEDED(context->Map(_giMaterialBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedMaterial)))
+				if (rebuildGpuMaterialUploads)
 				{
-					memcpy(mappedMaterial.pData, _gpuGiMaterialUpload.data(), gpuMaterialCount * sizeof(GpuGiMaterial));
-					context->Unmap(_giMaterialBuffer, 0);
-					_stats.uploadBytes += static_cast<uint64_t>(gpuMaterialCount) * static_cast<uint64_t>(sizeof(GpuGiMaterial));
-				}
-				else
-				{
-					gpuMaterialCount = 0u;
+					D3D11_MAPPED_SUBRESOURCE mappedMaterial = {};
+					if (SUCCEEDED(context->Map(_giMaterialBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedMaterial)))
+					{
+						memcpy(mappedMaterial.pData, _gpuGiMaterialUpload.data(), gpuMaterialCount * sizeof(GpuGiMaterial));
+						context->Unmap(_giMaterialBuffer, 0);
+						_stats.uploadBytes += static_cast<uint64_t>(gpuMaterialCount) * static_cast<uint64_t>(sizeof(GpuGiMaterial));
+					}
+					else
+					{
+						gpuMaterialCount = 0u;
+					}
 				}
 			}
 			else
@@ -3353,16 +3394,19 @@ namespace HexEngine
 			gpuMaterialTexelCount = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
 			if (gpuMaterialTexelCount > 0u && EnsureGpuGiMaterialTexelBuffer(gpuMaterialTexelCount))
 			{
-				D3D11_MAPPED_SUBRESOURCE mappedMaterialTexels = {};
-				if (SUCCEEDED(context->Map(_giMaterialTexelBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedMaterialTexels)))
+				if (rebuildGpuMaterialUploads)
 				{
-					memcpy(mappedMaterialTexels.pData, _gpuGiMaterialTexelUpload.data(), gpuMaterialTexelCount * sizeof(uint32_t));
-					context->Unmap(_giMaterialTexelBuffer, 0);
-					_stats.uploadBytes += static_cast<uint64_t>(gpuMaterialTexelCount) * static_cast<uint64_t>(sizeof(uint32_t));
-				}
-				else
-				{
-					gpuMaterialTexelCount = 0u;
+					D3D11_MAPPED_SUBRESOURCE mappedMaterialTexels = {};
+					if (SUCCEEDED(context->Map(_giMaterialTexelBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedMaterialTexels)))
+					{
+						memcpy(mappedMaterialTexels.pData, _gpuGiMaterialTexelUpload.data(), gpuMaterialTexelCount * sizeof(uint32_t));
+						context->Unmap(_giMaterialTexelBuffer, 0);
+						_stats.uploadBytes += static_cast<uint64_t>(gpuMaterialTexelCount) * static_cast<uint64_t>(sizeof(uint32_t));
+					}
+					else
+					{
+						gpuMaterialTexelCount = 0u;
+					}
 				}
 			}
 			else

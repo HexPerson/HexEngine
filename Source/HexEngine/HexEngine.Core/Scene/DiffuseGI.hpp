@@ -249,6 +249,7 @@ namespace HexEngine
 		bool EnsureGpuGiMaterialBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialTexelBuffer(uint32_t elementCapacity);
 		bool EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity);
+		uint64_t ComputeGiMaterialProxySignature() const;
 		uint32_t BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out);
 		uint32_t BuildGpuVoxelCandidateList(uint32_t levelIndex, uint32_t sourceTriangleCount, bool& outDispatchIndirectReady);
 		void ExtractGiSceneProxies(
@@ -316,6 +317,8 @@ namespace HexEngine
 		std::vector<GpuGiLight> _gpuGiLightUpload;
 		std::vector<GpuGiMaterial> _gpuGiMaterialUpload;
 		std::vector<uint32_t> _gpuGiMaterialTexelUpload;
+		uint64_t _gpuGiMaterialUploadSignature = 0ull;
+		bool _gpuGiMaterialUploadValid = false;
 		std::unordered_map<const Material*, uint32_t> _giMaterialProxyLookup;
 		GiRuntimeStats _stats = {};
 		uint64_t _statsFrameCounter = 0ull;
