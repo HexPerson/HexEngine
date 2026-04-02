@@ -2787,7 +2787,16 @@ namespace HexEngine
 				meshSunInjectionNormalize);
 			const auto& worldTM = entity->GetWorldTM();
 			const math::Vector2 uvScale = smc->GetUVScale();
-			const auto& matAlbedoData = getMaterialAlbedoData(material);
+			uint32_t materialProxyIndex = 0u;
+			if (auto materialProxyIt = meshMaterialProxyIndex.find(smc); materialProxyIt != meshMaterialProxyIndex.end())
+			{
+				materialProxyIndex = materialProxyIt->second;
+			}
+			const MaterialTriangleAlbedoCacheEntry* matAlbedoData = nullptr;
+			if (!gpuComputeBaseSunEnabled)
+			{
+				matAlbedoData = &getMaterialAlbedoData(material);
+			}
 			const auto& entityAabb = entity->GetWorldAABB();
 			const math::Vector3 entityCenter(entityAabb.Center.x, entityAabb.Center.y, entityAabb.Center.z);
 			const math::Vector3 entityExtents(entityAabb.Extents.x, entityAabb.Extents.y, entityAabb.Extents.z);
@@ -2882,29 +2891,48 @@ namespace HexEngine
 				const float smallTriDamp = std::clamp(r_giBaseSunSmallTriangleDamp._val.f32, 0.0f, 1.0f);
 				const float baseSunAreaWeight = std::lerp(1.0f, triAreaNorm, smallTriDamp);
 				faceNormal.Normalize();
-				const float u0 = vertices[i0]._texcoord.x * uvScale.x;
-				const float v0 = vertices[i0]._texcoord.y * uvScale.y;
-				const float u1 = vertices[i1]._texcoord.x * uvScale.x;
-				const float v1 = vertices[i1]._texcoord.y * uvScale.y;
-				const float u2 = vertices[i2]._texcoord.x * uvScale.x;
-				const float v2 = vertices[i2]._texcoord.y * uvScale.y;
-				math::Vector3 triAlbedo = sampleLinearAlbedo(matAlbedoData, (u0 + u1 + u2) / 3.0f, (v0 + v1 + v2) / 3.0f);
-				triAlbedo.x = std::clamp(triAlbedo.x, 0.03f, 1.0f);
-				triAlbedo.y = std::clamp(triAlbedo.y, 0.03f, 1.0f);
-				triAlbedo.z = std::clamp(triAlbedo.z, 0.03f, 1.0f);
-				const float triAlbedoMax = std::max(triAlbedo.x, std::max(triAlbedo.y, triAlbedo.z));
-				const float triAlbedoMin = std::min(triAlbedo.x, std::min(triAlbedo.y, triAlbedo.z));
-				const float triAlbedoChroma = std::max(0.0f, triAlbedoMax - triAlbedoMin);
-				const float triAlbedoLuma = std::clamp(triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
-				const float colourBleedBoost = std::clamp(1.0f + triAlbedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
-				const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
-				const math::Vector3 triBaseInjection = (
-					math::Vector3(1.0f, 1.0f, 1.0f) * (triAlbedoLuma * diffuseInject * unlitBase * (0.55f + bleedBoost * 0.30f) * colourBleedBoost) +
-					(emissiveTint * emissiveStrength * emissiveInject)) * clipAttenuation;
-				const math::Vector3 sunEnergyTint = sunTint * (triAlbedoLuma * clipAttenuation);
-				const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
-				const float directSunBounce = sunFacing * sunStrength * sunInject * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
-				const float directionalDiffuseBounce = sunFacing * sunStrength * diffuseInject * (0.28f + bleedBoost * 0.18f) * sunDirectionalBoost * colourBleedBoost;
+
+				math::Vector3 triAlbedo = math::Vector3(0.75f, 0.75f, 0.75f);
+				math::Vector3 triBaseInjection = math::Vector3::Zero;
+				math::Vector3 sunEnergyTint = math::Vector3::Zero;
+				float directSunBounce = 0.0f;
+				float directionalDiffuseBounce = 0.0f;
+				if (gpuComputeBaseSunEnabled)
+				{
+					if (materialProxyIndex < _giMaterialProxies.size())
+					{
+						const auto& materialProxy = _giMaterialProxies[materialProxyIndex];
+						triAlbedo.x = std::clamp(materialProxy.diffuse.x, 0.03f, 1.0f);
+						triAlbedo.y = std::clamp(materialProxy.diffuse.y, 0.03f, 1.0f);
+						triAlbedo.z = std::clamp(materialProxy.diffuse.z, 0.03f, 1.0f);
+					}
+				}
+				else
+				{
+					const float u0 = vertices[i0]._texcoord.x * uvScale.x;
+					const float v0 = vertices[i0]._texcoord.y * uvScale.y;
+					const float u1 = vertices[i1]._texcoord.x * uvScale.x;
+					const float v1 = vertices[i1]._texcoord.y * uvScale.y;
+					const float u2 = vertices[i2]._texcoord.x * uvScale.x;
+					const float v2 = vertices[i2]._texcoord.y * uvScale.y;
+					triAlbedo = sampleLinearAlbedo(*matAlbedoData, (u0 + u1 + u2) / 3.0f, (v0 + v1 + v2) / 3.0f);
+					triAlbedo.x = std::clamp(triAlbedo.x, 0.03f, 1.0f);
+					triAlbedo.y = std::clamp(triAlbedo.y, 0.03f, 1.0f);
+					triAlbedo.z = std::clamp(triAlbedo.z, 0.03f, 1.0f);
+					const float triAlbedoMax = std::max(triAlbedo.x, std::max(triAlbedo.y, triAlbedo.z));
+					const float triAlbedoMin = std::min(triAlbedo.x, std::min(triAlbedo.y, triAlbedo.z));
+					const float triAlbedoChroma = std::max(0.0f, triAlbedoMax - triAlbedoMin);
+					const float triAlbedoLuma = std::clamp(triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
+					const float colourBleedBoost = std::clamp(1.0f + triAlbedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
+					const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
+					triBaseInjection = (
+						math::Vector3(1.0f, 1.0f, 1.0f) * (triAlbedoLuma * diffuseInject * unlitBase * (0.55f + bleedBoost * 0.30f) * colourBleedBoost) +
+						(emissiveTint * emissiveStrength * emissiveInject)) * clipAttenuation;
+					sunEnergyTint = sunTint * (triAlbedoLuma * clipAttenuation);
+					const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
+					directSunBounce = sunFacing * sunStrength * sunInject * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
+					directionalDiffuseBounce = sunFacing * sunStrength * diffuseInject * (0.28f + bleedBoost * 0.18f) * sunDirectionalBoost * colourBleedBoost;
+				}
 
 				if (!meshFullyInsideClip)
 				{
@@ -2925,11 +2953,6 @@ namespace HexEngine
 				}
 
 				GpuVoxelTriangle entry = {};
-				uint32_t materialProxyIndex = 0u;
-				if (auto materialProxyIt = meshMaterialProxyIndex.find(smc); materialProxyIt != meshMaterialProxyIndex.end())
-				{
-					materialProxyIndex = materialProxyIt->second;
-				}
 				entry.p0 = math::Vector4(p0.x, p0.y, p0.z, static_cast<float>(materialProxyIndex));
 				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, 1.0f);
 				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, 1.0f);

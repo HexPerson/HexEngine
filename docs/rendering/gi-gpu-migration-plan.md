@@ -50,6 +50,7 @@ Implemented in branch `codex/gi-gpu-migration-plan`:
 - Added opt-in GPU base/sun/emissive injection bridge:
   - when `r_giGpuComputeBaseSun=1` (with `r_giGpuMaterialEval=1`), eval shader computes base diffuse + sun + emissive bounce.
   - CPU triangle payload can skip precomputed base/sun radiance in this mode to reduce CPU per-triangle work.
+  - CPU bridge fast-path now avoids per-triangle texture albedo sampling in this mode (uses material proxy diffuse).
 
 ## Intentional Safety Rules
 
