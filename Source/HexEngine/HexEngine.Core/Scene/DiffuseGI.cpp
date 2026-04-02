@@ -70,7 +70,9 @@ namespace HexEngine
 	HVar r_giGpuMaterialEvalMaxLights("r_giGpuMaterialEvalMaxLights", "Maximum local GI lights uploaded/evaluated in GPU material eval mode", 24, 1, 64);
 	HVar r_giGpuMaterialProxyBlend("r_giGpuMaterialProxyBlend", "Blend amount for GPU material proxy albedo in eval path (0=triangle albedo, 1=material proxy)", 0.15f, 0.0f, 1.0f);
 	HVar r_giGpuComputeBaseSun("r_giGpuComputeBaseSun", "Compute base diffuse/sun/emissive GI injection in GPU eval path", false, false, true);
-	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 64, 8, 256);
+	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 24, 1, 256);
+	HVar r_giGpuSunShadowMode("r_giGpuSunShadowMode", "GPU GI sun-shadow mode (0=off,1=single tap,2=PCF 3x3)", 1, 0, 2);
+	HVar r_giGpuSunShadowPerVoxel("r_giGpuSunShadowPerVoxel", "Evaluate GPU GI sun shadow per voxel hit (expensive); when off uses per-triangle sun visibility", false, false, true);
 	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters,2=verbose counters)", 0, 0, 2);
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 120, 10, 2000);
@@ -1763,7 +1765,7 @@ namespace HexEngine
 		_constants.params7 = math::Vector4(
 			std::clamp(r_giGpuMaterialProxyBlend._val.f32, 0.0f, 1.0f),
 			(r_giGpuMaterialEval._val.b && r_giGpuComputeBaseSun._val.b) ? 1.0f : 0.0f,
-			0.0f,
+			r_giGpuSunShadowPerVoxel._val.b ? 1.0f : 0.0f,
 			0.0f);
 		_constants.params8 = math::Vector4(
 			std::max(0.0f, r_giDiffuseInjection._val.f32),
@@ -1785,8 +1787,8 @@ namespace HexEngine
 		_constants.params9 = math::Vector4(
 			sunStrength,
 			std::max(0.0f, r_giUnlitAlbedoInjection._val.f32),
-			static_cast<float>(std::clamp(r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32, 8, 256)),
-			0.0f);
+			static_cast<float>(std::clamp(r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32, 1, 256)),
+			static_cast<float>(std::clamp(r_giGpuSunShadowMode._val.i32, 0, 2)));
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresence;
@@ -2053,7 +2055,7 @@ namespace HexEngine
 		if (telemetryEnabled && ((_frameCounter % telemetryPeriod) == 0ull))
 		{
 			LOG_INFO(
-				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s",
+				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s evalMaxTests=%d sunShadowMode=%d sunShadowPerVoxel=%s",
 				static_cast<unsigned long long>(_frameCounter),
 				_stats.cpuTriangleBuildMs,
 				_stats.cpuUploadMs,
@@ -2065,7 +2067,10 @@ namespace HexEngine
 				static_cast<unsigned long long>(_stats.uploadBytes),
 				r_giGpuCandidateGen._val.b ? "on" : "off",
 				r_giGpuMaterialEval._val.b ? "on" : "off",
-				r_giGpuComputeBaseSun._val.b ? "on" : "off");
+				r_giGpuComputeBaseSun._val.b ? "on" : "off",
+				r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32,
+				r_giGpuSunShadowMode._val.i32,
+				r_giGpuSunShadowPerVoxel._val.b ? "on" : "off");
 			if (r_giGpuCompareMode._val.i32 > 1)
 			{
 				const float candidateRatio = (_stats.sourceTriangleCount > 0u)

@@ -142,6 +142,10 @@
 
 	float SampleCascadeShadowVisibility(uint cascadeIdx, float2 uv, float compareDepth)
 	{
+		const uint shadowMode = (uint)max(g_giParams9.w, 0.0f);
+		if (shadowMode == 0u)
+			return 1.0f;
+
 		uint width = 0u;
 		uint height = 0u;
 		GetShadowMapDimensions(cascadeIdx, width, height);
@@ -149,6 +153,13 @@
 			return 1.0f;
 
 		const int2 maxCoord = int2((int)width - 1, (int)height - 1);
+		const int2 centerCoord = clamp((int2)(saturate(uv) * float2((float)width, (float)height)), int2(0, 0), maxCoord);
+		if (shadowMode == 1u)
+		{
+			const float depth = LoadShadowDepth(cascadeIdx, centerCoord);
+			return (compareDepth <= depth) ? 1.0f : 0.0f;
+		}
+
 		const float2 texel = 1.0f / float2((float)width, (float)height);
 		float visibility = 0.0f;
 
@@ -287,7 +298,7 @@
 		const uint spanX = max(1u, voxelMax.x - voxelMin.x + 1u);
 		const uint spanY = max(1u, voxelMax.y - voxelMin.y + 1u);
 		const uint spanZ = max(1u, voxelMax.z - voxelMin.z + 1u);
-		const uint maxVoxelTestsPerTri = max(8u, (uint)g_giParams9.z);
+		const uint maxVoxelTestsPerTri = max(1u, (uint)g_giParams9.z);
 		uint step = 1u;
 		while (((spanX + step - 1u) / step) * ((spanY + step - 1u) / step) * ((spanZ + step - 1u) / step) > maxVoxelTestsPerTri)
 		{
@@ -301,8 +312,10 @@
 		const float3 n = nRaw / nLen;
 		const float3 sunDirWs = normalize(g_giParams3.xyz + float3(1e-6f, 1e-6f, 1e-6f));
 		const float3 toSunWs = -sunDirWs;
+		const float triSunFacing = saturate(dot(n, toSunWs));
 		const float sunDirectionality = saturate(g_giParams3.w);
 		const bool gpuComputeBaseSunMode = g_giParams7.y > 0.5f;
+		const bool sunShadowPerVoxel = g_giParams7.z > 0.5f;
 		const float planeThickness = voxelSize * 1.5f;
 		const float2 uv0 = tri.uv0uv1.xy;
 		const float2 uv1 = tri.uv0uv1.zw;
@@ -320,6 +333,15 @@
 			triAlbedoBase = saturate(lerp(triAlbedoBase, materialAlbedo, proxyBlend));
 			const float emissiveStrength = max(0.0f, materialProxy.emissive.a);
 			emissiveProxy = saturate(materialProxy.emissive.rgb) * emissiveStrength;
+		}
+
+		// Shadow-map evaluation is expensive. Default to one per-triangle visibility sample
+		// and only evaluate per-voxel when explicitly requested via cvar.
+		const float3 triCenterWs = (p0 + p1 + p2) * (1.0f / 3.0f);
+		float triSunVisibility = 1.0f;
+		if (sunDirectionality > 0.001f && triSunFacing > 0.02f)
+		{
+			triSunVisibility = EvaluateSunShadowVisibility(triCenterWs, n, voxelSize);
 		}
 
 		for (uint z = voxelMin.z; z <= voxelMax.z; z += step)
@@ -340,8 +362,8 @@
 						continue;
 
 					// Evaluate direct sun visibility from the real shadow cascades first.
-					float sunVisibility = 1.0f;
-					if (sunDirectionality > 0.001f)
+					float sunVisibility = triSunVisibility;
+					if (sunShadowPerVoxel && sunDirectionality > 0.001f && triSunFacing > 0.02f)
 					{
 						sunVisibility = EvaluateSunShadowVisibility(voxelCenterWs, n, voxelSize);
 
@@ -396,7 +418,7 @@
 						const float sunStrength = max(0.0f, g_giParams9.x);
 						const float unlitBase = max(0.0f, g_giParams9.y);
 						const float clipAttenuation = rcp(1.0f + (float)clipIdx * 0.5f);
-						const float sunFacing = saturate(dot(n, toSunWs));
+						const float sunFacing = triSunFacing;
 						const float triLuma = saturate(dot(triAlbedo, float3(0.2126f, 0.7152f, 0.0722f)));
 						const float3 baseDiffuse = triAlbedo * (triLuma * diffuseInject * unlitBase * 0.60f * clipAttenuation);
 						const float sunDirectional = sunFacing * sunStrength * sunInject * (0.45f + 0.55f * sunBoost);
