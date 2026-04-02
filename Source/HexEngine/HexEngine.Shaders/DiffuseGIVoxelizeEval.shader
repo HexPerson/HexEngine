@@ -48,6 +48,7 @@
 		float4 g_giParams6;
 		float4 g_giParams7;
 		float4 g_giParams8;
+		float4 g_giParams9;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -322,7 +323,8 @@
 						const GpuGiMaterial materialProxy = g_giMaterials[materialIndex];
 						const float proxyBlend = saturate(g_giParams7.x);
 						triAlbedo = saturate(lerp(triAlbedo, materialProxy.diffuse.rgb, proxyBlend));
-						emissiveProxy = saturate(materialProxy.emissive.rgb) * max(0.0f, materialProxy.emissive.a);
+						const float emissiveStrength = max(0.0f, materialProxy.emissive.a);
+						emissiveProxy = saturate(materialProxy.emissive.rgb) * emissiveStrength;
 					}
 
 					// Temporal damping at the voxel-injection stage to reduce frame-to-frame GI shimmer
@@ -346,12 +348,15 @@
 						const float sunInject = max(0.0f, g_giParams8.y);
 						const float sunBoost = max(0.0f, g_giParams8.z);
 						const float emissiveInject = max(0.0f, g_giParams8.w);
+						const float sunStrength = max(0.0f, g_giParams9.x);
+						const float unlitBase = max(0.0f, g_giParams9.y);
+						const float clipAttenuation = rcp(1.0f + (float)clipIdx * 0.5f);
 						const float sunFacing = saturate(dot(n, toSunWs));
 						const float triLuma = saturate(dot(triAlbedo, float3(0.2126f, 0.7152f, 0.0722f)));
-						const float3 baseDiffuse = triAlbedo * (triLuma * diffuseInject * 0.70f);
-						const float sunDirectional = sunFacing * sunInject * (0.45f + 0.55f * sunBoost);
-						const float3 sunBounce = triAlbedo * (triLuma * sunDirectional * visibilityFactor);
-						const float3 emissiveBounce = emissiveProxy * emissiveInject;
+						const float3 baseDiffuse = triAlbedo * (triLuma * diffuseInject * unlitBase * 0.60f * clipAttenuation);
+						const float sunDirectional = sunFacing * sunStrength * sunInject * (0.45f + 0.55f * sunBoost);
+						const float3 sunBounce = triAlbedo * (triLuma * sunDirectional * visibilityFactor * clipAttenuation);
+						const float3 emissiveBounce = emissiveProxy * emissiveInject * clipAttenuation;
 						injected = baseDiffuse + sunBounce + emissiveBounce;
 					}
 					else

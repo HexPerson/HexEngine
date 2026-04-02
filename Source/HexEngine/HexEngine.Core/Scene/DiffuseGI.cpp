@@ -1768,6 +1768,11 @@ namespace HexEngine
 			}
 		}
 		const float sunPresence = std::clamp(sunStrength * std::max(0.0f, r_giSunInjection._val.f32), 0.0f, 1.0f);
+		_constants.params9 = math::Vector4(
+			sunStrength,
+			std::max(0.0f, r_giUnlitAlbedoInjection._val.f32),
+			0.0f,
+			0.0f);
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresence;

@@ -93,6 +93,7 @@ namespace HexEngine
 			math::Vector4 params6; // x=voxelNeighbourBlend, y=shiftSettle, z=voxelAlbedoInfluence, w=reserved
 			math::Vector4 params7; // x=gpuMaterialProxyBlend, y=gpuComputeBaseSunEnabled, zw=reserved
 			math::Vector4 params8; // x=diffuseInject, y=sunInject, z=sunDirectionalBoost, w=emissiveInject
+			math::Vector4 params9; // x=sunStrength, y=unlitAlbedoInjection, zw=reserved
 		};
 
 		struct GpuVoxelTriangle
