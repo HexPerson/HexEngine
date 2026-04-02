@@ -70,6 +70,7 @@ namespace HexEngine
 	HVar r_giGpuMaterialEvalMaxLights("r_giGpuMaterialEvalMaxLights", "Maximum local GI lights uploaded/evaluated in GPU material eval mode", 24, 1, 64);
 	HVar r_giGpuMaterialProxyBlend("r_giGpuMaterialProxyBlend", "Blend amount for GPU material proxy albedo in eval path (0=triangle albedo, 1=material proxy)", 0.15f, 0.0f, 1.0f);
 	HVar r_giGpuComputeBaseSun("r_giGpuComputeBaseSun", "Compute base diffuse/sun/emissive GI injection in GPU eval path", false, false, true);
+	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 64, 8, 256);
 	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters,2=verbose counters)", 0, 0, 2);
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 120, 10, 2000);
@@ -1784,7 +1785,7 @@ namespace HexEngine
 		_constants.params9 = math::Vector4(
 			sunStrength,
 			std::max(0.0f, r_giUnlitAlbedoInjection._val.f32),
-			0.0f,
+			static_cast<float>(std::clamp(r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32, 8, 256)),
 			0.0f);
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f

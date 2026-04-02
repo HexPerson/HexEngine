@@ -287,8 +287,9 @@
 		const uint spanX = max(1u, voxelMax.x - voxelMin.x + 1u);
 		const uint spanY = max(1u, voxelMax.y - voxelMin.y + 1u);
 		const uint spanZ = max(1u, voxelMax.z - voxelMin.z + 1u);
+		const uint maxVoxelTestsPerTri = max(8u, (uint)g_giParams9.z);
 		uint step = 1u;
-		while (((spanX + step - 1u) / step) * ((spanY + step - 1u) / step) * ((spanZ + step - 1u) / step) > 128u)
+		while (((spanX + step - 1u) / step) * ((spanY + step - 1u) / step) * ((spanZ + step - 1u) / step) > maxVoxelTestsPerTri)
 		{
 			++step;
 		}
