@@ -10,6 +10,7 @@ Implemented in branch `codex/gi-gpu-migration-plan`:
   - `r_giGpuCandidateGen`
   - `r_giGpuMaterialEval`
   - `r_giGpuMaterialEvalMaxLights`
+  - `r_giGpuComputeBaseSun`
   - `r_giGpuCompareMode`
   - `r_giTelemetry`
   - `r_giTelemetryLogFrames`
@@ -46,6 +47,9 @@ Implemented in branch `codex/gi-gpu-migration-plan`:
   - triangle payload now carries material-proxy index in `p0.w`.
   - uploads packed `GpuGiMaterial` proxy buffer per clipmap update.
   - eval shader can blend triangle albedo with material proxy albedo via `r_giGpuMaterialProxyBlend`.
+- Added opt-in GPU base/sun/emissive injection bridge:
+  - when `r_giGpuComputeBaseSun=1` (with `r_giGpuMaterialEval=1`), eval shader computes base diffuse + sun + emissive bounce.
+  - CPU triangle payload can skip precomputed base/sun radiance in this mode to reduce CPU per-triangle work.
 
 ## Intentional Safety Rules
 

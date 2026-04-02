@@ -47,6 +47,7 @@
 		float4 g_giParams5;
 		float4 g_giParams6;
 		float4 g_giParams7;
+		float4 g_giParams8;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -338,7 +339,25 @@
 					const float3 albedoTint = lerp(1.0f.xxx, voxelAlbedo, albedoInfluence);
 					const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
 					float3 injected = tri.radianceOpacity.rgb * visibilityFactor * (albedoTint / tintLuma);
-					injected += emissiveProxy * 0.25f;
+					const bool gpuComputeBaseSun = g_giParams7.y > 0.5f;
+					if (gpuComputeBaseSun)
+					{
+						const float diffuseInject = max(0.0f, g_giParams8.x);
+						const float sunInject = max(0.0f, g_giParams8.y);
+						const float sunBoost = max(0.0f, g_giParams8.z);
+						const float emissiveInject = max(0.0f, g_giParams8.w);
+						const float sunFacing = saturate(dot(n, toSunWs));
+						const float triLuma = saturate(dot(triAlbedo, float3(0.2126f, 0.7152f, 0.0722f)));
+						const float3 baseDiffuse = triAlbedo * (triLuma * diffuseInject * 0.70f);
+						const float sunDirectional = sunFacing * sunInject * (0.45f + 0.55f * sunBoost);
+						const float3 sunBounce = triAlbedo * (triLuma * sunDirectional * visibilityFactor);
+						const float3 emissiveBounce = emissiveProxy * emissiveInject;
+						injected = baseDiffuse + sunBounce + emissiveBounce;
+					}
+					else
+					{
+						injected += emissiveProxy * 0.25f;
+					}
 					injected += EvaluateLocalLights(voxelCenterWs, n, voxelAlbedo, voxelSize);
 					const float injectedLum = dot(injected, float3(0.2126f, 0.7152f, 0.0722f));
 					// If there's little/no new injection, reduce history retention so stale neutral energy fades out.

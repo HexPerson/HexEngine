@@ -69,6 +69,7 @@ namespace HexEngine
 	HVar r_giGpuMaterialEval("r_giGpuMaterialEval", "Use GPU-side local-light evaluation during voxel injection", false, false, true);
 	HVar r_giGpuMaterialEvalMaxLights("r_giGpuMaterialEvalMaxLights", "Maximum local GI lights uploaded/evaluated in GPU material eval mode", 24, 1, 64);
 	HVar r_giGpuMaterialProxyBlend("r_giGpuMaterialProxyBlend", "Blend amount for GPU material proxy albedo in eval path (0=triangle albedo, 1=material proxy)", 0.15f, 0.0f, 1.0f);
+	HVar r_giGpuComputeBaseSun("r_giGpuComputeBaseSun", "Compute base diffuse/sun/emissive GI injection in GPU eval path", false, false, true);
 	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters,2=verbose counters)", 0, 0, 2);
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 120, 10, 2000);
@@ -420,6 +421,7 @@ namespace HexEngine
 		_lastMeshSunInjectionNormalization = r_giMeshSunInjectionNormalization._val.f32;
 		_lastMeshBaseInjectionMinScale = r_giMeshBaseInjectionMinScale._val.f32;
 		_lastMeshSunInjectionMinScale = r_giMeshSunInjectionMinScale._val.f32;
+		_lastGpuComputeBaseSunEnabled = r_giGpuComputeBaseSun._val.b;
 		_lastInjectLightSignature = ComputeInjectLightSignature(g_pEnv ? g_pEnv->_sceneManager->GetCurrentScene().get() : nullptr);
 		_lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		_lastSunDirectionInitialized = false;
@@ -613,6 +615,7 @@ namespace HexEngine
 		_lastMeshSunInjectionNormalization = 0.0f;
 		_lastMeshBaseInjectionMinScale = 0.02f;
 		_lastMeshSunInjectionMinScale = 0.20f;
+		_lastGpuComputeBaseSunEnabled = false;
 		_lastInjectLightSignature = 0ull;
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
@@ -1745,9 +1748,14 @@ namespace HexEngine
 			0.0f);
 		_constants.params7 = math::Vector4(
 			std::clamp(r_giGpuMaterialProxyBlend._val.f32, 0.0f, 1.0f),
-			0.0f,
+			(r_giGpuMaterialEval._val.b && r_giGpuComputeBaseSun._val.b) ? 1.0f : 0.0f,
 			0.0f,
 			0.0f);
+		_constants.params8 = math::Vector4(
+			std::max(0.0f, r_giDiffuseInjection._val.f32),
+			std::max(0.0f, r_giSunInjection._val.f32),
+			std::max(0.0f, r_giSunDirectionalBoost._val.f32),
+			std::max(0.0f, r_giEmissiveInjection._val.f32));
 
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
 		float sunStrength = 0.0f;
@@ -1853,7 +1861,8 @@ namespace HexEngine
 			(std::abs(r_giMeshBaseInjectionNormalization._val.f32 - _lastMeshBaseInjectionNormalization) > 1e-4f) ||
 			(std::abs(r_giMeshSunInjectionNormalization._val.f32 - _lastMeshSunInjectionNormalization) > 1e-4f) ||
 			(std::abs(r_giMeshBaseInjectionMinScale._val.f32 - _lastMeshBaseInjectionMinScale) > 1e-4f) ||
-			(std::abs(r_giMeshSunInjectionMinScale._val.f32 - _lastMeshSunInjectionMinScale) > 1e-4f);
+			(std::abs(r_giMeshSunInjectionMinScale._val.f32 - _lastMeshSunInjectionMinScale) > 1e-4f) ||
+			(r_giGpuComputeBaseSun._val.b != _lastGpuComputeBaseSunEnabled);
 		const bool localLightModeToggled = ((!r_giDebugDisableLocalLightInjection._val.b) != _lastLocalLightInjectionEnable);
 		const bool baseSunModeToggled = (r_giDebugDisableBaseAndSunInjection._val.b != _lastDisableBaseAndSunInjection);
 		const bool baseOnlyModeToggled = (r_giDebugDisableBaseInjection._val.b != _lastDisableBaseInjection);
@@ -1917,6 +1926,7 @@ namespace HexEngine
 			_lastMeshSunInjectionNormalization = r_giMeshSunInjectionNormalization._val.f32;
 			_lastMeshBaseInjectionMinScale = r_giMeshBaseInjectionMinScale._val.f32;
 			_lastMeshSunInjectionMinScale = r_giMeshSunInjectionMinScale._val.f32;
+			_lastGpuComputeBaseSunEnabled = r_giGpuComputeBaseSun._val.b;
 			_lastInjectLightSignature = currentInjectLightSignature;
 		}
 
@@ -2020,7 +2030,7 @@ namespace HexEngine
 		if (telemetryEnabled && ((_frameCounter % telemetryPeriod) == 0ull))
 		{
 			LOG_INFO(
-				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s",
+				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s",
 				static_cast<unsigned long long>(_frameCounter),
 				_stats.cpuTriangleBuildMs,
 				_stats.cpuUploadMs,
@@ -2031,7 +2041,8 @@ namespace HexEngine
 				_stats.gpuLightCount,
 				static_cast<unsigned long long>(_stats.uploadBytes),
 				r_giGpuCandidateGen._val.b ? "on" : "off",
-				r_giGpuMaterialEval._val.b ? "on" : "off");
+				r_giGpuMaterialEval._val.b ? "on" : "off",
+				r_giGpuComputeBaseSun._val.b ? "on" : "off");
 			if (r_giGpuCompareMode._val.i32 > 1)
 			{
 				const float candidateRatio = (_stats.sourceTriangleCount > 0u)
@@ -2542,6 +2553,13 @@ namespace HexEngine
 		}
 		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
 		const bool localLightInjectionEnabled = !r_giDebugDisableLocalLightInjection._val.b && !r_giGpuMaterialEval._val.b;
+		const bool gpuComputeBaseSunEnabled =
+			r_giGpuMaterialEval._val.b &&
+			r_giGpuComputeBaseSun._val.b &&
+			!localLightsOnlyDebug &&
+			!r_giDebugDisableBaseAndSunInjection._val.b &&
+			!r_giDebugDisableBaseInjection._val.b &&
+			!r_giDebugDisableSunInjection._val.b;
 		const bool disableBaseAndSunInjection = r_giDebugDisableBaseAndSunInjection._val.b;
 		const bool disableBaseInjection = disableBaseAndSunInjection || r_giDebugDisableBaseInjection._val.b;
 		const bool disableSunInjection = disableBaseAndSunInjection || r_giDebugDisableSunInjection._val.b;
@@ -2915,6 +2933,14 @@ namespace HexEngine
 				entry.p0 = math::Vector4(p0.x, p0.y, p0.z, static_cast<float>(materialProxyIndex));
 				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, 1.0f);
 				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, 1.0f);
+
+				if (gpuComputeBaseSunEnabled)
+				{
+					entry.radianceOpacity = math::Vector4(0.0f, 0.0f, 0.0f, 0.92f);
+					entry.albedoWeight = math::Vector4(triAlbedo.x, triAlbedo.y, triAlbedo.z, triAreaNorm);
+					out.push_back(entry);
+					continue;
+				}
 
 				math::Vector3 localLightBounce = math::Vector3::Zero;
 				float localLightInfluence = 0.0f;

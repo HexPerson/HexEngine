@@ -91,7 +91,8 @@ namespace HexEngine
 			math::Vector4 params4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 			math::Vector4 params5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
 			math::Vector4 params6; // x=voxelNeighbourBlend, y=shiftSettle, z=voxelAlbedoInfluence, w=reserved
-			math::Vector4 params7; // x=gpuMaterialProxyBlend, yzw=reserved
+			math::Vector4 params7; // x=gpuMaterialProxyBlend, y=gpuComputeBaseSunEnabled, zw=reserved
+			math::Vector4 params8; // x=diffuseInject, y=sunInject, z=sunDirectionalBoost, w=emissiveInject
 		};
 
 		struct GpuVoxelTriangle
@@ -288,6 +289,7 @@ namespace HexEngine
 		float _lastMeshSunInjectionNormalization = 0.0f;
 		float _lastMeshBaseInjectionMinScale = 0.02f;
 		float _lastMeshSunInjectionMinScale = 0.20f;
+		bool _lastGpuComputeBaseSunEnabled = false;
 		uint64_t _lastInjectLightSignature = 0ull;
 		math::Vector3 _lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		bool _lastSunDirectionInitialized = false;
