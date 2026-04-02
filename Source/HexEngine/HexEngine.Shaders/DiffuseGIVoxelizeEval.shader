@@ -11,6 +11,8 @@
 		float4 p2;
 		float4 radianceOpacity;
 		float4 albedoWeight;
+		float4 uv0uv1;
+		float4 uv2Pad;
 	};
 
 	struct GpuGiLight
@@ -24,6 +26,10 @@
 	{
 		float4 diffuse;
 		float4 emissive;
+		uint texelOffset;
+		uint textureWidth;
+		uint textureHeight;
+		uint flags;
 	};
 
 	StructuredBuffer<VoxelTriangleData> g_voxelTriangles : register(t0);
@@ -31,7 +37,8 @@
 	Texture3D<float4> g_prevVoxelAlbedo : register(t2);
 	StructuredBuffer<GpuGiLight> g_giLights : register(t3);
 	StructuredBuffer<GpuGiMaterial> g_giMaterials : register(t4);
-	SHADOWMAPS_RESOURCE(5);
+	StructuredBuffer<uint> g_giMaterialTexels : register(t5);
+	SHADOWMAPS_RESOURCE(6);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
 
@@ -58,6 +65,61 @@
 		const float3 c1 = cross(c - b, p - b);
 		const float3 c2 = cross(a - c, p - c);
 		return dot(c0, n) >= eps && dot(c1, n) >= eps && dot(c2, n) >= eps;
+	}
+
+	float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
+	{
+		const float3 v0 = b - a;
+		const float3 v1 = c - a;
+		const float3 v2 = p - a;
+		const float d00 = dot(v0, v0);
+		const float d01 = dot(v0, v1);
+		const float d11 = dot(v1, v1);
+		const float d20 = dot(v2, v0);
+		const float d21 = dot(v2, v1);
+		const float denom = d00 * d11 - d01 * d01;
+		if (abs(denom) <= 1e-8f)
+			return float3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f);
+
+		const float v = (d11 * d20 - d01 * d21) / denom;
+		const float w = (d00 * d21 - d01 * d20) / denom;
+		const float u = 1.0f - v - w;
+		return float3(u, v, w);
+	}
+
+	float3 DecodeTexelToLinear(uint packedTexel, bool isBgra)
+	{
+		const float rSrgb = ((packedTexel >> (isBgra ? 16u : 0u)) & 0xffu) / 255.0f;
+		const float gSrgb = ((packedTexel >> 8u) & 0xffu) / 255.0f;
+		const float bSrgb = ((packedTexel >> (isBgra ? 0u : 16u)) & 0xffu) / 255.0f;
+		return float3(pow(max(rSrgb, 1e-6f), 2.2f), pow(max(gSrgb, 1e-6f), 2.2f), pow(max(bSrgb, 1e-6f), 2.2f));
+	}
+
+	float3 SampleMaterialAlbedo(in GpuGiMaterial material, float2 uv)
+	{
+		const bool hasTexture = (material.flags & 1u) != 0u;
+		const bool isBgra = (material.flags & 2u) != 0u;
+		float3 sampled = saturate(material.diffuse.rgb);
+		if (!hasTexture || material.textureWidth == 0u || material.textureHeight == 0u)
+			return sampled;
+
+		uint texelCount = 0u;
+		uint texelStride = 0u;
+		g_giMaterialTexels.GetDimensions(texelCount, texelStride);
+		if (texelCount == 0u)
+			return sampled;
+
+		const float2 wrappedUv = frac(uv);
+		const uint x = min((uint)(wrappedUv.x * (float)material.textureWidth), material.textureWidth - 1u);
+		const uint y = min((uint)(wrappedUv.y * (float)material.textureHeight), material.textureHeight - 1u);
+		const uint localIdx = y * material.textureWidth + x;
+		const uint texelIdx = material.texelOffset + localIdx;
+		if (texelIdx >= texelCount)
+			return sampled;
+
+		const uint packedTexel = g_giMaterialTexels[texelIdx];
+		sampled = saturate(DecodeTexelToLinear(packedTexel, isBgra) * material.diffuse.rgb);
+		return sampled;
 	}
 
 	bool ProjectToShadowCascade(uint cascadeIdx, float3 positionWs, out float2 uv, out float depth)
@@ -285,6 +347,12 @@
 					if (!IsPointInTriangle(projected, p0, p1, p2, n))
 						continue;
 
+					const float3 bary = ComputeBarycentric(projected, p0, p1, p2);
+					const float2 uv0 = tri.uv0uv1.xy;
+					const float2 uv1 = tri.uv0uv1.zw;
+					const float2 uv2 = tri.uv2Pad.xy;
+					const float2 triUv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
+
 					// Evaluate direct sun visibility from the real shadow cascades first.
 					float sunVisibility = 1.0f;
 					if (sunDirectionality > 0.001f)
@@ -322,7 +390,8 @@
 					{
 						const GpuGiMaterial materialProxy = g_giMaterials[materialIndex];
 						const float proxyBlend = saturate(g_giParams7.x);
-						triAlbedo = saturate(lerp(triAlbedo, materialProxy.diffuse.rgb, proxyBlend));
+						const float3 materialAlbedo = SampleMaterialAlbedo(materialProxy, triUv);
+						triAlbedo = saturate(lerp(triAlbedo, materialAlbedo, proxyBlend));
 						const float emissiveStrength = max(0.0f, materialProxy.emissive.a);
 						emissiveProxy = saturate(materialProxy.emissive.rgb) * emissiveStrength;
 					}

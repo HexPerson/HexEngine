@@ -103,6 +103,8 @@ namespace HexEngine
 			math::Vector4 p2;
 			math::Vector4 radianceOpacity;
 			math::Vector4 albedoWeight;
+			math::Vector4 uv0uv1;
+			math::Vector4 uv2Pad;
 		};
 
 		struct VoxelShiftConstants
@@ -226,6 +228,10 @@ namespace HexEngine
 		{
 			math::Vector4 diffuse = math::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
 			math::Vector4 emissive = math::Vector4::Zero;
+			uint32_t texelOffset = 0u;
+			uint32_t textureWidth = 0u;
+			uint32_t textureHeight = 0u;
+			uint32_t flags = 0u; // bit0=hasTexture, bit1=isBgra
 		};
 
 	private:
@@ -241,6 +247,7 @@ namespace HexEngine
 		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiLightBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialBuffer(uint32_t elementCapacity);
+		bool EnsureGpuGiMaterialTexelBuffer(uint32_t elementCapacity);
 		bool EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity);
 		uint32_t BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out);
 		uint32_t BuildGpuVoxelCandidateList(uint32_t levelIndex, uint32_t sourceTriangleCount, bool& outDispatchIndirectReady);
@@ -308,6 +315,7 @@ namespace HexEngine
 		std::vector<GiLocalLightProxy> _giLightProxies;
 		std::vector<GpuGiLight> _gpuGiLightUpload;
 		std::vector<GpuGiMaterial> _gpuGiMaterialUpload;
+		std::vector<uint32_t> _gpuGiMaterialTexelUpload;
 		std::unordered_map<const Material*, uint32_t> _giMaterialProxyLookup;
 		GiRuntimeStats _stats = {};
 		uint64_t _statsFrameCounter = 0ull;
@@ -326,6 +334,9 @@ namespace HexEngine
 		ID3D11Buffer* _giMaterialBuffer = nullptr;
 		ID3D11ShaderResourceView* _giMaterialSrv = nullptr;
 		uint32_t _giMaterialCapacity = 0;
+		ID3D11Buffer* _giMaterialTexelBuffer = nullptr;
+		ID3D11ShaderResourceView* _giMaterialTexelSrv = nullptr;
+		uint32_t _giMaterialTexelCapacity = 0;
 		ID3D11Buffer* _voxelCandidateBuffer = nullptr;
 		ID3D11ShaderResourceView* _voxelCandidateSrv = nullptr;
 		ID3D11UnorderedAccessView* _voxelCandidateUav = nullptr;

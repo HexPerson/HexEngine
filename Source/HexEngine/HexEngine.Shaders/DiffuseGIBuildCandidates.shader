@@ -11,6 +11,8 @@
 		float4 p2;
 		float4 radianceOpacity;
 		float4 albedoWeight;
+		float4 uv0uv1;
+		float4 uv2Pad;
 	};
 
 	StructuredBuffer<VoxelTriangleData> g_voxelTrianglesIn : register(t0);

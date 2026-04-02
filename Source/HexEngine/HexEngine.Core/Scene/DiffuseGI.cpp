@@ -573,6 +573,8 @@ namespace HexEngine
 		SAFE_RELEASE(_giLightBuffer);
 		SAFE_RELEASE(_giMaterialSrv);
 		SAFE_RELEASE(_giMaterialBuffer);
+		SAFE_RELEASE(_giMaterialTexelSrv);
+		SAFE_RELEASE(_giMaterialTexelBuffer);
 		SAFE_RELEASE(_voxelCandidateSrv);
 		SAFE_RELEASE(_voxelCandidateUav);
 		SAFE_RELEASE(_voxelCandidateBuffer);
@@ -582,10 +584,12 @@ namespace HexEngine
 		_voxelTriangleCapacity = 0;
 		_giLightCapacity = 0;
 		_giMaterialCapacity = 0;
+		_giMaterialTexelCapacity = 0;
 		_voxelCandidateCapacity = 0;
 		_voxelTriangleUpload.clear();
 		_gpuGiLightUpload.clear();
 		_gpuGiMaterialUpload.clear();
+		_gpuGiMaterialTexelUpload.clear();
 		_stats = {};
 		_statsFrameCounter = 0ull;
 
@@ -2203,6 +2207,50 @@ namespace HexEngine
 		return true;
 	}
 
+	bool DiffuseGI::EnsureGpuGiMaterialTexelBuffer(uint32_t elementCapacity)
+	{
+		if (elementCapacity == 0u)
+			return false;
+		if (_giMaterialTexelBuffer != nullptr && _giMaterialTexelSrv != nullptr && _giMaterialTexelCapacity >= elementCapacity)
+			return true;
+
+		SAFE_RELEASE(_giMaterialTexelSrv);
+		SAFE_RELEASE(_giMaterialTexelBuffer);
+		_giMaterialTexelCapacity = 0u;
+
+		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		if (device == nullptr)
+			return false;
+
+		D3D11_BUFFER_DESC desc = {};
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		desc.ByteWidth = std::max<uint32_t>(1u, elementCapacity) * static_cast<uint32_t>(sizeof(uint32_t));
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		desc.Usage = D3D11_USAGE_DYNAMIC;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = sizeof(uint32_t);
+		if (FAILED(device->CreateBuffer(&desc, nullptr, &_giMaterialTexelBuffer)) || _giMaterialTexelBuffer == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU GI material texel buffer.");
+			return false;
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = elementCapacity;
+		if (FAILED(device->CreateShaderResourceView(_giMaterialTexelBuffer, &srvDesc, &_giMaterialTexelSrv)) || _giMaterialTexelSrv == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU GI material texel SRV.");
+			SAFE_RELEASE(_giMaterialTexelBuffer);
+			return false;
+		}
+
+		_giMaterialTexelCapacity = elementCapacity;
+		return true;
+	}
+
 	bool DiffuseGI::EnsureGpuVoxelCandidateBuffer(uint32_t elementCapacity)
 	{
 		if (elementCapacity == 0u)
@@ -2896,6 +2944,12 @@ namespace HexEngine
 				const float smallTriDamp = std::clamp(r_giBaseSunSmallTriangleDamp._val.f32, 0.0f, 1.0f);
 				const float baseSunAreaWeight = std::lerp(1.0f, triAreaNorm, smallTriDamp);
 				faceNormal.Normalize();
+				const float u0 = vertices[i0]._texcoord.x * uvScale.x;
+				const float v0 = vertices[i0]._texcoord.y * uvScale.y;
+				const float u1 = vertices[i1]._texcoord.x * uvScale.x;
+				const float v1 = vertices[i1]._texcoord.y * uvScale.y;
+				const float u2 = vertices[i2]._texcoord.x * uvScale.x;
+				const float v2 = vertices[i2]._texcoord.y * uvScale.y;
 
 				math::Vector3 triAlbedo = math::Vector3(0.75f, 0.75f, 0.75f);
 				math::Vector3 triBaseInjection = math::Vector3::Zero;
@@ -2914,12 +2968,6 @@ namespace HexEngine
 				}
 				else
 				{
-					const float u0 = vertices[i0]._texcoord.x * uvScale.x;
-					const float v0 = vertices[i0]._texcoord.y * uvScale.y;
-					const float u1 = vertices[i1]._texcoord.x * uvScale.x;
-					const float v1 = vertices[i1]._texcoord.y * uvScale.y;
-					const float u2 = vertices[i2]._texcoord.x * uvScale.x;
-					const float v2 = vertices[i2]._texcoord.y * uvScale.y;
 					triAlbedo = sampleLinearAlbedo(*matAlbedoData, (u0 + u1 + u2) / 3.0f, (v0 + v1 + v2) / 3.0f);
 					triAlbedo.x = std::clamp(triAlbedo.x, 0.03f, 1.0f);
 					triAlbedo.y = std::clamp(triAlbedo.y, 0.03f, 1.0f);
@@ -2961,6 +3009,8 @@ namespace HexEngine
 				entry.p0 = math::Vector4(p0.x, p0.y, p0.z, static_cast<float>(materialProxyIndex));
 				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, 1.0f);
 				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, 1.0f);
+				entry.uv0uv1 = math::Vector4(u0, v0, u1, v1);
+				entry.uv2Pad = math::Vector4(u2, v2, 0.0f, 0.0f);
 
 				if (gpuComputeBaseSunEnabled)
 				{
@@ -3208,15 +3258,77 @@ namespace HexEngine
 
 		uint32_t gpuLightCount = 0u;
 		uint32_t gpuMaterialCount = 0u;
+		uint32_t gpuMaterialTexelCount = 0u;
 		if (useGpuMaterialEval)
 		{
+			auto getMaterialAlbedoData = [&](const Material* material) -> const MaterialTriangleAlbedoCacheEntry&
+			{
+				auto it = _materialTriangleAlbedoCache.find(material);
+				if (it != _materialTriangleAlbedoCache.end())
+					return it->second;
+
+				MaterialTriangleAlbedoCacheEntry data = {};
+				if (material != nullptr)
+				{
+					data.diffuseTint = math::Vector3(
+						std::clamp(material->_properties.diffuseColour.x, 0.0f, 1.0f),
+						std::clamp(material->_properties.diffuseColour.y, 0.0f, 1.0f),
+						std::clamp(material->_properties.diffuseColour.z, 0.0f, 1.0f));
+
+					if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
+					{
+						data.width = std::max(1, albedoTex->GetWidth());
+						data.height = std::max(1, albedoTex->GetHeight());
+						albedoTex->GetPixels(data.pixels);
+						const size_t minTightSize = static_cast<size_t>(data.width) * static_cast<size_t>(data.height) * 4u;
+						if (data.pixels.size() >= minTightSize)
+						{
+							const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedoTex->GetFormat());
+							data.isBgra =
+								(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+								(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+								(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+								(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+							data.hasTexture = true;
+						}
+					}
+				}
+
+				auto [insertedIt, _] = _materialTriangleAlbedoCache.emplace(material, std::move(data));
+				return insertedIt->second;
+			};
+
 			_gpuGiMaterialUpload.clear();
+			_gpuGiMaterialTexelUpload.clear();
 			_gpuGiMaterialUpload.reserve(_giMaterialProxies.size());
 			for (const auto& materialProxy : _giMaterialProxies)
 			{
 				GpuGiMaterial packedMaterial = {};
 				packedMaterial.diffuse = materialProxy.diffuse;
 				packedMaterial.emissive = materialProxy.emissive;
+				const auto& albedoData = getMaterialAlbedoData(materialProxy.material);
+				if (albedoData.hasTexture && albedoData.width > 0 && albedoData.height > 0)
+				{
+					packedMaterial.texelOffset = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
+					packedMaterial.textureWidth = static_cast<uint32_t>(albedoData.width);
+					packedMaterial.textureHeight = static_cast<uint32_t>(albedoData.height);
+					packedMaterial.flags = 1u | (albedoData.isBgra ? 2u : 0u);
+
+					const size_t texelCount = static_cast<size_t>(albedoData.width) * static_cast<size_t>(albedoData.height);
+					_gpuGiMaterialTexelUpload.reserve(_gpuGiMaterialTexelUpload.size() + texelCount);
+					for (size_t t = 0u; t < texelCount; ++t)
+					{
+						const size_t idx = t * 4u;
+						if (idx + 3u >= albedoData.pixels.size())
+							break;
+						const uint32_t packed =
+							static_cast<uint32_t>(albedoData.pixels[idx + 0u]) |
+							(static_cast<uint32_t>(albedoData.pixels[idx + 1u]) << 8u) |
+							(static_cast<uint32_t>(albedoData.pixels[idx + 2u]) << 16u) |
+							(static_cast<uint32_t>(albedoData.pixels[idx + 3u]) << 24u);
+						_gpuGiMaterialTexelUpload.push_back(packed);
+					}
+				}
 				_gpuGiMaterialUpload.push_back(packedMaterial);
 			}
 			gpuMaterialCount = static_cast<uint32_t>(_gpuGiMaterialUpload.size());
@@ -3237,6 +3349,25 @@ namespace HexEngine
 			else
 			{
 				gpuMaterialCount = 0u;
+			}
+			gpuMaterialTexelCount = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
+			if (gpuMaterialTexelCount > 0u && EnsureGpuGiMaterialTexelBuffer(gpuMaterialTexelCount))
+			{
+				D3D11_MAPPED_SUBRESOURCE mappedMaterialTexels = {};
+				if (SUCCEEDED(context->Map(_giMaterialTexelBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mappedMaterialTexels)))
+				{
+					memcpy(mappedMaterialTexels.pData, _gpuGiMaterialTexelUpload.data(), gpuMaterialTexelCount * sizeof(uint32_t));
+					context->Unmap(_giMaterialTexelBuffer, 0);
+					_stats.uploadBytes += static_cast<uint64_t>(gpuMaterialTexelCount) * static_cast<uint64_t>(sizeof(uint32_t));
+				}
+				else
+				{
+					gpuMaterialTexelCount = 0u;
+				}
+			}
+			else
+			{
+				gpuMaterialTexelCount = 0u;
 			}
 
 			GiClipmapParams clipmapParams = {};
@@ -3375,7 +3506,7 @@ namespace HexEngine
 				sunShadowSrvs[i] = CreateShadowMapSrv(device, shadowMap->GetDepthMap());
 			}
 		}
-		const uint32_t shadowSrvSlot = useGpuMaterialEval ? 5u : 3u;
+		const uint32_t shadowSrvSlot = useGpuMaterialEval ? 6u : 3u;
 		context->CSSetShaderResources(shadowSrvSlot, 6, sunShadowSrvs);
 
 		// Preserve previous frame radiance for approximate sun-visibility queries during injection.
@@ -3396,15 +3527,16 @@ namespace HexEngine
 		{
 			if (useGpuMaterialEval)
 			{
-				ID3D11ShaderResourceView* voxelizeSrvsEval[5] =
+				ID3D11ShaderResourceView* voxelizeSrvsEval[6] =
 				{
 					injectionTriangleSrv,
 					level.radianceScratchSrv,
 					level.albedoScratchSrv,
 					(gpuLightCount > 0u) ? _giLightSrv : nullptr,
-					(gpuMaterialCount > 0u) ? _giMaterialSrv : nullptr
+					(gpuMaterialCount > 0u) ? _giMaterialSrv : nullptr,
+					(gpuMaterialTexelCount > 0u) ? _giMaterialTexelSrv : nullptr
 				};
-				context->CSSetShaderResources(0, 5, voxelizeSrvsEval);
+				context->CSSetShaderResources(0, 6, voxelizeSrvsEval);
 			}
 			else
 			{
@@ -3425,9 +3557,9 @@ namespace HexEngine
 		}
 
 		// Break UAV/SRV hazards between injection and propagation passes.
-		ID3D11ShaderResourceView* nullSrvBetweenPasses[5] = {};
+		ID3D11ShaderResourceView* nullSrvBetweenPasses[6] = {};
 		ID3D11UnorderedAccessView* nullUavBetweenPasses[2] = {};
-		context->CSSetShaderResources(0, 5, nullSrvBetweenPasses);
+		context->CSSetShaderResources(0, 6, nullSrvBetweenPasses);
 		context->CSSetUnorderedAccessViews(0, 2, nullUavBetweenPasses, nullptr);
 
 		ID3D11ShaderResourceView* radianceSrcSrv = level.radianceSrv;
@@ -3466,10 +3598,10 @@ namespace HexEngine
 				reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
 		}
 
-		ID3D11ShaderResourceView* nullSrvs[5] = {};
+		ID3D11ShaderResourceView* nullSrvs[6] = {};
 		ID3D11ShaderResourceView* nullShadowSrvs[6] = {};
 		ID3D11UnorderedAccessView* nullUavs[2] = {};
-		context->CSSetShaderResources(0, 5, nullSrvs);
+		context->CSSetShaderResources(0, 6, nullSrvs);
 		context->CSSetShaderResources(shadowSrvSlot, 6, nullShadowSrvs);
 		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
