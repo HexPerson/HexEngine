@@ -69,6 +69,7 @@ namespace HexEngine
 	HVar r_giGpuMaterialEval("r_giGpuMaterialEval", "Use GPU-side local-light evaluation during voxel injection", false, false, true);
 	HVar r_giGpuMaterialEvalMaxLights("r_giGpuMaterialEvalMaxLights", "Maximum local GI lights uploaded/evaluated in GPU material eval mode", 24, 1, 64);
 	HVar r_giGpuMaterialProxyBlend("r_giGpuMaterialProxyBlend", "Blend amount for GPU material proxy albedo in eval path (0=triangle albedo, 1=material proxy)", 0.15f, 0.0f, 1.0f);
+	HVar r_giGpuEvalTriangleBudget("r_giGpuEvalTriangleBudget", "Triangle budget used by GPU material-eval voxelization path", 12000, 512, 300000);
 	HVar r_giGpuComputeBaseSun("r_giGpuComputeBaseSun", "Compute base diffuse/sun/emissive GI injection in GPU eval path", false, false, true);
 	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 24, 1, 256);
 	HVar r_giGpuSunShadowMode("r_giGpuSunShadowMode", "GPU GI sun-shadow mode (0=off,1=single tap,2=PCF 3x3)", 1, 0, 2);
@@ -2055,7 +2056,7 @@ namespace HexEngine
 		if (telemetryEnabled && ((_frameCounter % telemetryPeriod) == 0ull))
 		{
 			LOG_INFO(
-				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s evalMaxTests=%d sunShadowMode=%d sunShadowPerVoxel=%s",
+				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s evalTriBudget=%d evalMaxTests=%d sunShadowMode=%d sunShadowPerVoxel=%s",
 				static_cast<unsigned long long>(_frameCounter),
 				_stats.cpuTriangleBuildMs,
 				_stats.cpuUploadMs,
@@ -2068,6 +2069,7 @@ namespace HexEngine
 				r_giGpuCandidateGen._val.b ? "on" : "off",
 				r_giGpuMaterialEval._val.b ? "on" : "off",
 				r_giGpuComputeBaseSun._val.b ? "on" : "off",
+				r_giGpuEvalTriangleBudget._val.i32,
 				r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32,
 				r_giGpuSunShadowMode._val.i32,
 				r_giGpuSunShadowPerVoxel._val.b ? "on" : "off");
@@ -2720,6 +2722,11 @@ namespace HexEngine
 				meshesInBounds.push_back(meshProxy.component);
 			}
 		}
+		std::sort(meshesInBounds.begin(), meshesInBounds.end(),
+			[](const StaticMeshComponent* a, const StaticMeshComponent* b)
+			{
+				return std::less<const StaticMeshComponent*>()(a, b);
+			});
 
 		struct LocalLightSample
 		{
@@ -2748,6 +2755,11 @@ namespace HexEngine
 		}
 
 		uint32_t budget = baseTriangleBudget;
+		if (r_giGpuMaterialEval._val.b)
+		{
+			const uint32_t evalBudget = static_cast<uint32_t>(std::max(512, r_giGpuEvalTriangleBudget._val.i32));
+			budget = std::min(budget, evalBudget);
+		}
 		if (!preferPersistentTriangleCache && level.dirty)
 		{
 			budget = std::min<uint32_t>(budget * 3u, 300000u);
