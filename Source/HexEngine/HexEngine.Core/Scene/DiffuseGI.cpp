@@ -3102,11 +3102,13 @@ namespace HexEngine
 					const float triAlbedoLuma = std::clamp(triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
 					const float colourBleedBoost = std::clamp(1.0f + triAlbedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
 					const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
-					triBaseInjection = (
-						math::Vector3(1.0f, 1.0f, 1.0f) * (triAlbedoLuma * diffuseInject * unlitBase * (0.55f + bleedBoost * 0.30f) * colourBleedBoost) +
+					const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
+					const float sunPresence = std::clamp(sunStrength * sunInject, 0.0f, 1.0f);
+					const float unlitWeight = 1.0f - std::clamp(sunFacing * sunPresence, 0.0f, 1.0f);
+					triBaseInjection =
+						(math::Vector3(1.0f, 1.0f, 1.0f) * (triAlbedoLuma * diffuseInject * unlitBase * unlitWeight * (0.55f + bleedBoost * 0.30f) * colourBleedBoost) +
 						(emissiveTint * emissiveStrength * emissiveInject)) * clipAttenuation;
 					sunEnergyTint = sunTint * (triAlbedoLuma * clipAttenuation);
-					const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
 					directSunBounce = sunFacing * sunStrength * sunInject * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
 					directionalDiffuseBounce = sunFacing * sunStrength * diffuseInject * (0.28f + bleedBoost * 0.18f) * sunDirectionalBoost * colourBleedBoost;
 				}
