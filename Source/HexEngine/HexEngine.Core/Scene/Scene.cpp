@@ -1038,7 +1038,7 @@ namespace HexEngine
 			auto width = g_pEnv->GetScreenWidth();
 			int32_t x = width - 20;
 			int32_t y = 20;
-			auto font = g_pEnv->_commandManager->GetConsole()->GetFont();
+			auto font = g_pEnv->GetUIManager().GetRenderer()->_style.font;
 			auto cameraTransform = _mainCamera->GetEntity()->GetComponent<Transform>();
 			const auto& cameraPos = cameraTransform->GetPosition();
 			auto pvs = _mainCamera->GetPVS();
@@ -1757,9 +1757,14 @@ namespace HexEngine
 			if (entity->HasFlag(EntityFlags::DoNotRender))
 				continue;
 
+			const Layer layer = entity->GetLayer();
+
+			if (layer == Layer::Sky || layer == Layer::Invisible)
+				continue;
+
 			if (!includeDynamic)
 			{
-				const Layer layer = entity->GetLayer();
+				
 				const bool isStaticLayer =
 					layer == Layer::StaticGeometry ||
 					layer == Layer::Decorative ||

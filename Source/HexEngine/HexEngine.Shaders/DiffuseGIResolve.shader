@@ -44,6 +44,7 @@
 		float4 g_giParams4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 		float4 g_giParams5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
 		float4 g_giParams6; // x=voxelNeighbourBlend, y=shiftSettle, z,w=reserved
+		float4 g_giParams7; // x=gpuMaterialProxyBlend, y=gpuComputeBaseSunEnabled, z=sunShadowPerVoxel, w=cameraMotionBlend
 	};
 
 	float3 UpsampleGiBilateral(float2 uv)
@@ -107,6 +108,7 @@
 		const bool historyUvValid = all(historyUv >= 0.0f.xx) && all(historyUv <= 1.0f.xx);
 		const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 		const float shiftSettle = saturate(g_giParams6.y);
+		const float motionClipBias = saturate(g_giParams7.w);
 		float3 history = historyUvValid ? g_historyGi.Sample(g_linearSampler, historyUv).rgb : 0.0f.xxx;
 		const float4 centerNormalDepth = g_normalDepth.Sample(g_pointSampler, uv);
 		const float4 historyNormalDepth = g_normalDepth.Sample(g_pointSampler, saturate(historyUv));
@@ -125,8 +127,9 @@
 		const float pixelMotionStart = max(g_giParams4.z, 0.0f);
 		const float pixelMotionStrength = max(g_giParams4.w, 0.0f);
 		float pixelMotionReject = saturate((pixelMotion - pixelMotionStart) * pixelMotionStrength * 0.65f);
-		// During clipmap shift settle, reduce motion-driven rejection so GI does not "reset then re-brighten".
-		pixelMotionReject *= lerp(1.0f, 0.55f, shiftSettle);
+		// Keep some settle tolerance, but do not preserve enough history to drag a bright
+		// pocket around with the moving clipmap center.
+		pixelMotionReject *= lerp(1.0f, 0.80f, shiftSettle);
 
 		const float currentLum = dot(current, float3(0.2126f, 0.7152f, 0.0722f));
 		const float historyLum = dot(history, float3(0.2126f, 0.7152f, 0.0722f));
@@ -137,9 +140,10 @@
 		const float rejectT = saturate(max(disocclusion * 0.70f, max(pixelMotionReject, luminanceReject)));
 		const float minScale = lerp(0.35f, lerp(0.72f, 0.80f, stabilityPreset), rejectT);
 		const float maxScale = lerp(2.85f, lerp(1.45f, 1.20f, stabilityPreset), rejectT);
+		const float maxScaleMotion = lerp(maxScale, min(maxScale, 1.20f), motionClipBias);
 		const float bias = lerp(0.020f, 0.006f, rejectT);
 		const float3 historyMin = current * minScale;
-		const float3 historyMax = current * maxScale + bias.xxx;
+		const float3 historyMax = current * maxScaleMotion + bias.xxx;
 		history = clamp(history, historyMin, historyMax);
 
 		float historyWeight = lerp(g_giParams1.x, 0.0f, rejectFactor);
@@ -152,8 +156,9 @@
 		}
 		else
 		{
-			// Keep a small stability floor to avoid visible GI shimmer during camera motion.
-			const float stabilityFloor = (1.0f - disocclusion) * (0.38f + 0.20f * shiftSettle) * g_giParams1.x;
+			// Preserve some stability, but lower the floor substantially while moving so
+			// we do not keep an over-bright near-clip solution glued to the camera.
+			const float stabilityFloor = (1.0f - disocclusion) * (0.16f + 0.10f * shiftSettle) * g_giParams1.x * lerp(1.0f, 0.18f, motionClipBias);
 			historyWeight = max(historyWeight, stabilityFloor);
 		}
 

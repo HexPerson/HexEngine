@@ -62,6 +62,7 @@
 		float4 g_giParams4; // x=jitterScale, y=clipBlendWidth, z=pixelMotionStart, w=pixelMotionStrength
 		float4 g_giParams5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
 		float4 g_giParams6; // x=voxelNeighbourBlend, y=shiftSettle, z=voxelAlbedoInfluence, w=reserved
+		float4 g_giParams7; // x=gpuMaterialProxyBlend, y=gpuComputeBaseSunEnabled, z=sunShadowPerVoxel, w=cameraMotionBlend
 	};
 
 	static const float3 kClipDebugColours[4] =
@@ -449,6 +450,7 @@
 		const float pixelMotionStart = max(g_giParams4.z, 0.0f);
 		const float pixelMotionStrength = max(g_giParams4.w, 0.0f);
 		const float motionFactor = saturate((pixelMotion - pixelMotionStart) * pixelMotionStrength);
+		const float motionClipBias = saturate(g_giParams7.w);
 		const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 		const float shiftSettle = saturate(g_giParams6.y);
 
@@ -506,7 +508,7 @@
 			const float edgeDistanceX = min(uvw.x, 1.0f - uvw.x);
 			const float edgeDistanceZ = min(uvw.z, 1.0f - uvw.z);
 			const float edgeDistance = min(edgeDistanceX, edgeDistanceZ);
-			const float blendWidth = max(0.001f, saturate(g_giParams4.y + motionFactor * 0.08f + warmStabilize * 0.08f + shiftSettle * 0.10f));
+			const float blendWidth = max(0.001f, saturate(g_giParams4.y + motionFactor * 0.03f + warmStabilize * 0.08f + shiftSettle * 0.08f));
 			const float edgeWeight = smoothstep(0.0f, blendWidth, edgeDistance);
 			const float fidelityWeight = exp2(-2.0f * (float)i);
 			float clipWeight = edgeWeight * fidelityWeight;
@@ -516,6 +518,13 @@
 			{
 				const float settleBias = lerp(1.0f, exp2(-2.5f * (float)i), shiftSettle);
 				clipWeight *= settleBias;
+			}
+			// Keep some preference for the near clip while moving, but avoid creating
+			// a bright camera-centered bubble by collapsing almost entirely to clip 0.
+			if (motionClipBias > 0.0001f)
+			{
+				const float motionBias = lerp(1.0f, exp2(-1.5f * (float)i), motionClipBias * 0.45f);
+				clipWeight *= motionBias;
 			}
 			if (i == 3u)
 			{
@@ -592,6 +601,9 @@
 		const float sunDirectionality = saturate(g_giParams3.w);
 		const float directMask = sunFacing * sunDirectionality;
 		gi *= lerp(1.0f, 0.38f, directMask);
+		// Motion-time clip stabilization can bias toward near-clip energy.
+		// Compensate while moving to avoid temporary over-brightening.
+		gi *= lerp(1.0f, 0.78f, motionClipBias);
 
 		gi = gi / (1.0f + gi * 0.18f);
 

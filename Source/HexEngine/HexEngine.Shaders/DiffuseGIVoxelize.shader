@@ -13,6 +13,9 @@
 		float4 albedoWeight;
 		float4 uv0uv1;
 		float4 uv2Pad;
+		float4 uvRect;
+		float4 emissiveUvRect;
+		float4 emissivePointRadius;
 	};
 
 	StructuredBuffer<VoxelTriangleData> g_voxelTriangles : register(t0);

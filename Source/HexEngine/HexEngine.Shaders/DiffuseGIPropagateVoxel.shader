@@ -32,7 +32,10 @@
 		const int3 maxP = int3((int)voxelRes - 1, (int)voxelRes - 1, (int)voxelRes - 1);
 		const float4 center = g_voxelRadianceSrc[p];
 		const float3 sunDirWs = normalize(g_giParams3.xyz + float3(1e-6f, 1e-6f, 1e-6f));
-		const float dirStrength = saturate(g_giParams3.w);
+		// Keep sun directionality as a subtle shaping hint during propagation.
+		// If this gets too strong it turns directional GI into a broad white smear on
+		// sun-facing buildings as the sun rotates.
+		const float dirStrength = saturate(g_giParams3.w * 0.35f);
 
 		float3 accum = center.rgb;
 		float accumW = 1.0f;
@@ -51,7 +54,7 @@
 			const int3 np = clamp(p + kOffsets[i], int3(0, 0, 0), maxP);
 			const float4 n = g_voxelRadianceSrc[np];
 			const float3 sampleDir = normalize((float3)kOffsets[i]);
-			const float directionalWeight = 1.0f + saturate(dot(sampleDir, -sunDirWs)) * (0.60f * dirStrength);
+			const float directionalWeight = 1.0f + saturate(dot(sampleDir, -sunDirWs)) * (0.18f * dirStrength);
 			const float w = 0.70f * directionalWeight;
 			accum += n.rgb * w;
 			accumW += w;
@@ -72,9 +75,9 @@
 			}
 		}
 
-		const float propagation = lerp(0.40f, 0.55f, dirStrength);
+		const float propagation = lerp(0.40f, 0.46f, dirStrength);
 		// Use symmetric temporal blending to avoid channel "white locking" from max-only propagation.
-		float3 mixed = lerp(blurred, directionalSample, 0.35f * dirStrength);
+		float3 mixed = lerp(blurred, directionalSample, 0.12f * dirStrength);
 		float3 outRgb = lerp(center.rgb, mixed, propagation);
 		outRgb = min(outRgb, 32.0f.xxx);
 

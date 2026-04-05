@@ -77,6 +77,7 @@ namespace HexEngine
 	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters,2=verbose counters)", 0, 0, 2);
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 300, 10, 2000);
+	HVar r_giEmissiveDebug("r_giEmissiveDebug", "Log emissive GI classification details during triangle rebuilds (0=off,1=summary,2=verbose)", 0, 0, 2);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
@@ -430,22 +431,34 @@ namespace HexEngine
 		_lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
+		_lastCameraPosition = math::Vector3::Zero;
+		_lastCameraPositionInitialized = false;
+		_cameraMotionFramesRemaining = 0u;
+		_cameraMotionBlend = 0.0f;
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
 		{
 			_cachedVoxelTriangles[i].clear();
 			_cachedGiMaterialProxies[i].clear();
 			_cachedVoxelTrianglesValid[i] = false;
 			_cachedVoxelTrianglesFrame[i] = 0ull;
+			_cachedEmissiveMaterialCount[i] = 0u;
+			_cachedEmissiveTriangleCount[i] = 0u;
+			_cachedEmissiveActiveTriangleCount[i] = 0u;
+			_cachedEmissiveTiledTriangleCount[i] = 0u;
+			_cachedEmissiveProxyMaxLuma[i] = 0.0f;
+			_cachedEmissiveProxyMaxStrength[i] = 0.0f;
 			_clipmapWarmFramesRemaining[i] = 0u;
 		}
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
 		_materialTriangleAlbedoCache.clear();
+		_materialTriangleEmissiveCache.clear();
 		_giMeshProxies.clear();
 		_giMaterialProxies.clear();
 		_giLightProxies.clear();
 		_giMaterialProxyLookup.clear();
 		_gpuGiMaterialTexelLookup.clear();
+		_gpuGiEmissiveTexelLookup.clear();
 		_gpuGiMaterialUploadSignature = 0ull;
 		_gpuGiMaterialUploadValid = false;
 		_stats = {};
@@ -460,6 +473,7 @@ namespace HexEngine
 		_fullScreenShader = IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
 		_voxelizeShader = IShader::Create("EngineData.Shaders/DiffuseGIVoxelize.hcs");
 		_voxelizeEvalShader = IShader::Create("EngineData.Shaders/DiffuseGIVoxelizeEval.hcs");
+		_emissivePointShader = IShader::Create("EngineData.Shaders/DiffuseGIInjectEmitters.hcs");
 		_voxelCandidateShader = IShader::Create("EngineData.Shaders/DiffuseGIBuildCandidates.hcs");
 		_voxelClearShader = IShader::Create("EngineData.Shaders/DiffuseGIClearVoxel.hcs");
 		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
@@ -543,6 +557,7 @@ namespace HexEngine
 			 _fullScreenShader != nullptr &&
 			 _voxelizeShader != nullptr &&
 			 _voxelizeEvalShader != nullptr &&
+			 _emissivePointShader != nullptr &&
 			 _voxelClearShader != nullptr &&
 			 _voxelPropagateShader != nullptr &&
 			 _voxelShiftShader != nullptr &&
@@ -561,11 +576,13 @@ namespace HexEngine
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
 		_materialTriangleAlbedoCache.clear();
+		_materialTriangleEmissiveCache.clear();
 		_giMeshProxies.clear();
 		_giMaterialProxies.clear();
 		_giLightProxies.clear();
 		_giMaterialProxyLookup.clear();
 		_gpuGiMaterialTexelLookup.clear();
+		_gpuGiEmissiveTexelLookup.clear();
 		for (auto& regions : _dirtyRegions)
 		{
 			regions.clear();
@@ -578,6 +595,8 @@ namespace HexEngine
 		SAFE_DELETE(_voxelShiftConstantBuffer);
 		SAFE_RELEASE(_voxelTriangleSrv);
 		SAFE_RELEASE(_voxelTriangleBuffer);
+		SAFE_RELEASE(_giEmitterPointSrv);
+		SAFE_RELEASE(_giEmitterPointBuffer);
 		SAFE_RELEASE(_giLightSrv);
 		SAFE_RELEASE(_giLightBuffer);
 		SAFE_RELEASE(_giMaterialSrv);
@@ -591,15 +610,18 @@ namespace HexEngine
 		SAFE_RELEASE(_voxelCandidateCountReadback);
 		SAFE_RELEASE(_voxelCandidateDispatchArgs);
 		_voxelTriangleCapacity = 0;
+		_giEmitterPointCapacity = 0;
 		_giLightCapacity = 0;
 		_giMaterialCapacity = 0;
 		_giMaterialTexelCapacity = 0;
 		_voxelCandidateCapacity = 0;
 		_voxelTriangleUpload.clear();
+		_gpuGiEmitterPointUpload.clear();
 		_gpuGiLightUpload.clear();
 		_gpuGiMaterialUpload.clear();
 		_gpuGiMaterialTexelUpload.clear();
 		_gpuGiMaterialTexelLookup.clear();
+		_gpuGiEmissiveTexelLookup.clear();
 		_gpuGiMaterialUploadSignature = 0ull;
 		_gpuGiMaterialUploadValid = false;
 		_stats = {};
@@ -610,6 +632,7 @@ namespace HexEngine
 		_fullScreenShader = nullptr;
 		_voxelizeShader = nullptr;
 		_voxelizeEvalShader = nullptr;
+		_emissivePointShader = nullptr;
 		_voxelCandidateShader = nullptr;
 		_voxelClearShader = nullptr;
 		_voxelPropagateShader = nullptr;
@@ -635,12 +658,22 @@ namespace HexEngine
 		_lastInjectLightSignature = 0ull;
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
+		_lastCameraPosition = math::Vector3::Zero;
+		_lastCameraPositionInitialized = false;
+		_cameraMotionFramesRemaining = 0u;
+		_cameraMotionBlend = 0.0f;
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
 		{
 			_cachedVoxelTriangles[i].clear();
 			_cachedGiMaterialProxies[i].clear();
 			_cachedVoxelTrianglesValid[i] = false;
 			_cachedVoxelTrianglesFrame[i] = 0ull;
+			_cachedEmissiveMaterialCount[i] = 0u;
+			_cachedEmissiveTriangleCount[i] = 0u;
+			_cachedEmissiveActiveTriangleCount[i] = 0u;
+			_cachedEmissiveTiledTriangleCount[i] = 0u;
+			_cachedEmissiveProxyMaxLuma[i] = 0.0f;
+			_cachedEmissiveProxyMaxStrength[i] = 0.0f;
 			_clipmapWarmFramesRemaining[i] = 0u;
 		}
 	}
@@ -1724,7 +1757,10 @@ namespace HexEngine
 
 		const uint32_t giWidth = _giHalfRes ? static_cast<uint32_t>(std::max(1, _giHalfRes->GetWidth())) : 1u;
 		const uint32_t giHeight = _giHalfRes ? static_cast<uint32_t>(std::max(1, _giHalfRes->GetHeight())) : 1u;
-		const bool clipmapWarmActive = (_clipmapWarmFramesRemaining[0] > 0u) || (_clipmapWarmFramesRemaining[1] > 0u);
+		const bool clipmapWarmActive =
+			(_clipmapWarmFramesRemaining[0] > 0u) ||
+			(_clipmapWarmFramesRemaining[1] > 0u) ||
+			(_cameraMotionBlend > 0.15f);
 		const float stabilityTarget = clipmapWarmActive ? 1.0f : 0.0f;
 		_resolveStabilityBoost = std::clamp(_resolveStabilityBoost + (stabilityTarget - _resolveStabilityBoost) * 0.22f, 0.0f, 1.0f);
 		const float baseHysteresis = r_giHysteresis._val.f32;
@@ -1767,7 +1803,7 @@ namespace HexEngine
 			std::clamp(r_giGpuMaterialProxyBlend._val.f32, 0.0f, 1.0f),
 			(r_giGpuMaterialEval._val.b && r_giGpuComputeBaseSun._val.b) ? 1.0f : 0.0f,
 			r_giGpuSunShadowPerVoxel._val.b ? 1.0f : 0.0f,
-			0.0f);
+			std::clamp(_cameraMotionBlend, 0.0f, 1.0f));
 		_constants.params8 = math::Vector4(
 			std::max(0.0f, r_giDiffuseInjection._val.f32),
 			std::max(0.0f, r_giSunInjection._val.f32),
@@ -1827,6 +1863,31 @@ namespace HexEngine
 
 		if (camera->GetEntity() == nullptr)
 			return;
+		const math::Vector3 cameraPosition = camera->GetEntity()->GetPosition();
+		bool cameraMovedThisFrame = false;
+		if (!_lastCameraPositionInitialized)
+		{
+			_lastCameraPosition = cameraPosition;
+			_lastCameraPositionInitialized = true;
+		}
+		else
+		{
+			const math::Vector3 delta = cameraPosition - _lastCameraPosition;
+			const float moveThreshold = 0.015f;
+			if (delta.LengthSquared() > (moveThreshold * moveThreshold))
+			{
+				cameraMovedThisFrame = true;
+				_cameraMotionFramesRemaining = std::max(_cameraMotionFramesRemaining, 8u);
+			}
+			_lastCameraPosition = cameraPosition;
+		}
+		if (!cameraMovedThisFrame && _cameraMotionFramesRemaining > 0u)
+		{
+			--_cameraMotionFramesRemaining;
+		}
+		const bool movementActive = cameraMovedThisFrame || (_cameraMotionFramesRemaining > 0u);
+		const float movementTarget = movementActive ? 1.0f : 0.0f;
+		_cameraMotionBlend = std::clamp(_cameraMotionBlend + (movementTarget - _cameraMotionBlend) * 0.35f, 0.0f, 1.0f);
 
 		ApplyQualityPreset();
 		_stats = {};
@@ -1988,7 +2049,7 @@ namespace HexEngine
 			}
 		}
 
-		RebuildClipmapTransforms(camera->GetEntity()->GetPosition());
+		RebuildClipmapTransforms(cameraPosition);
 		const math::Vector3 currentSunDirection = ComputeSunDirectionWS(scene);
 		if (!_lastSunDirectionInitialized)
 		{
@@ -2012,12 +2073,24 @@ namespace HexEngine
 		// Keep the nearest clipmap hot every frame for stable local bounce.
 		_activeClipmap = 0;
 		UpdateConstants(scene);
+		const bool clipmapSettling =
+			(_clipmapWarmFramesRemaining[0] > 0u) ||
+			(_clipmapWarmFramesRemaining[1] > 0u) ||
+			(_clipmaps[0].pendingShiftWs.LengthSquared() > 1e-8f) ||
+			(_clipmaps[1].pendingShiftWs.LengthSquared() > 1e-8f) ||
+			movementActive;
 		if (!r_giGpuVoxelize._val.b)
 		{
 			UpdateClipmapData(scene, 0);
-			if ((_frameCounter & 1ull) == 0ull)
+			if (!clipmapSettling && !movementActive && ((_frameCounter & 1ull) == 0ull))
 			{
 				const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 2ull) % (ClipmapCount - 1u));
+				UpdateClipmapData(scene, farClip);
+			}
+			else if (movementActive && ((_frameCounter % 12ull) == 0ull))
+			{
+				// Keep distant emitters alive while moving: update one far clip at low cadence.
+				const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 12ull) % (ClipmapCount - 1u));
 				UpdateClipmapData(scene, farClip);
 			}
 		}
@@ -2033,9 +2106,16 @@ namespace HexEngine
 			else
 			{
 				RunGpuVoxelization(scene, 0);
-				if ((_frameCounter % 4ull) == 0ull)
+				if (!clipmapSettling && !movementActive && ((_frameCounter % 4ull) == 0ull))
 				{
 					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 4ull) % (ClipmapCount - 1u));
+					RunGpuVoxelization(scene, farClip);
+				}
+				else if (movementActive && ((_frameCounter % 16ull) == 0ull))
+				{
+					// Movement-stable mode still refreshes far clips occasionally to avoid
+					// starving distant emissive/sun contribution.
+					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 16ull) % (ClipmapCount - 1u));
 					RunGpuVoxelization(scene, farClip);
 				}
 			}
@@ -2056,7 +2136,7 @@ namespace HexEngine
 		if (telemetryEnabled && ((_frameCounter % telemetryPeriod) == 0ull))
 		{
 			LOG_INFO(
-				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s evalTriBudget=%d evalMaxTests=%d sunShadowMode=%d sunShadowPerVoxel=%s",
+				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u emissiveMats=%u emissiveTri=%u emissiveActiveTri=%u emissiveTiledTri=%u emissivePayloadTri=%u emissivePayloadPoint=%u emissiveMaxL=%.3f emissiveMaxA=%.3f emissivePayloadMaxR=%.3f emissivePayloadMaxRVox=%.3f emissivePayloadMaxH=%.3f gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s evalTriBudget=%d evalMaxTests=%d sunShadowMode=%d sunShadowPerVoxel=%s",
 				static_cast<unsigned long long>(_frameCounter),
 				_stats.cpuTriangleBuildMs,
 				_stats.cpuUploadMs,
@@ -2064,6 +2144,17 @@ namespace HexEngine
 				_stats.gpuDispatchMs,
 				_stats.sourceTriangleCount,
 				_stats.candidateTriangleCount,
+				_stats.emissiveMaterialCount,
+				_stats.emissiveTriangleCount,
+				_stats.emissiveActiveTriangleCount,
+				_stats.emissiveTiledTriangleCount,
+				_stats.emissivePayloadTriangleCount,
+				_stats.emissivePayloadPointCount,
+				_stats.emissiveProxyMaxLuma,
+				_stats.emissiveProxyMaxStrength,
+				_stats.emissivePayloadMaxRadius,
+				_stats.emissivePayloadMaxRadiusVox,
+				_stats.emissivePayloadMaxHint,
 				_stats.gpuLightCount,
 				static_cast<unsigned long long>(_stats.uploadBytes),
 				r_giGpuCandidateGen._val.b ? "on" : "off",
@@ -2094,7 +2185,7 @@ namespace HexEngine
 		++_frameCounter;
 	}
 
-	bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
+bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 	{
 		if (elementCapacity == 0u)
 			return false;
@@ -2137,6 +2228,52 @@ namespace HexEngine
 		}
 
 		_voxelTriangleCapacity = elementCapacity;
+		return true;
+	}
+
+	bool DiffuseGI::EnsureGpuGiEmitterPointBuffer(uint32_t elementCapacity)
+	{
+		if (elementCapacity == 0u)
+			return false;
+		if (_giEmitterPointBuffer != nullptr && _giEmitterPointSrv != nullptr && _giEmitterPointCapacity >= elementCapacity)
+			return true;
+
+		SAFE_RELEASE(_giEmitterPointSrv);
+		SAFE_RELEASE(_giEmitterPointBuffer);
+		_giEmitterPointCapacity = 0u;
+
+		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		if (device == nullptr)
+			return false;
+
+		D3D11_BUFFER_DESC desc = {};
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+		desc.ByteWidth = std::max<uint32_t>(1u, elementCapacity) * static_cast<uint32_t>(sizeof(GpuGiEmitterPoint));
+		desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		desc.Usage = D3D11_USAGE_DYNAMIC;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = sizeof(GpuGiEmitterPoint);
+
+		if (FAILED(device->CreateBuffer(&desc, nullptr, &_giEmitterPointBuffer)) || _giEmitterPointBuffer == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU emissive point buffer.");
+			return false;
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = elementCapacity;
+
+		if (FAILED(device->CreateShaderResourceView(_giEmitterPointBuffer, &srvDesc, &_giEmitterPointSrv)) || _giEmitterPointSrv == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU emissive point SRV.");
+			SAFE_RELEASE(_giEmitterPointBuffer);
+			return false;
+		}
+
+		_giEmitterPointCapacity = elementCapacity;
 		return true;
 	}
 
@@ -2293,6 +2430,15 @@ namespace HexEngine
 			hashBytes(&materialPtrBits, sizeof(materialPtrBits));
 			hashBytes(&materialProxy.diffuse, sizeof(materialProxy.diffuse));
 			hashBytes(&materialProxy.emissive, sizeof(materialProxy.emissive));
+			if (materialProxy.material != nullptr)
+			{
+				const auto albedoTex = materialProxy.material->GetTexture(MaterialTexture::Albedo);
+				const auto emissiveTex = materialProxy.material->GetTexture(MaterialTexture::Emission);
+				const uintptr_t albedoPtrBits = reinterpret_cast<uintptr_t>(albedoTex.get());
+				const uintptr_t emissivePtrBits = reinterpret_cast<uintptr_t>(emissiveTex.get());
+				hashBytes(&albedoPtrBits, sizeof(albedoPtrBits));
+				hashBytes(&emissivePtrBits, sizeof(emissivePtrBits));
+			}
 		}
 		return hash;
 	}
@@ -2671,6 +2817,7 @@ namespace HexEngine
 	{
 		const auto buildStart = std::chrono::high_resolution_clock::now();
 		out.clear();
+		_gpuGiEmitterPointUpload.clear();
 		if (scene == nullptr || levelIndex >= ClipmapCount)
 		{
 			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
@@ -2697,17 +2844,13 @@ namespace HexEngine
 			? (_frameCounter - _cachedVoxelTrianglesFrame[levelIndex])
 			: 0ull;
 		const uint64_t cacheFrames = static_cast<uint64_t>(std::max(1, r_giTriangleCacheFrames._val.i32));
-		const bool preferPersistentTriangleCache =
-			r_giGpuMaterialEval._val.b &&
-			r_giGpuComputeBaseSun._val.b &&
-			!r_giGpuCandidateGen._val.b;
-		const bool cacheStillFresh = preferPersistentTriangleCache || (cacheAge < cacheFrames);
+		const bool cacheStillFresh = (cacheAge < cacheFrames);
 		const bool cachedTriangleCountAcceptable =
-			!preferPersistentTriangleCache ||
 			(static_cast<uint32_t>(_cachedVoxelTriangles[levelIndex].size()) <= baseTriangleBudget);
 		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheStillFresh && cachedTriangleCountAcceptable)
 		{
 			out = _cachedVoxelTriangles[levelIndex];
+			_gpuGiEmitterPointUpload.clear();
 			_giMaterialProxies = _cachedGiMaterialProxies[levelIndex];
 			_giMaterialProxyLookup.clear();
 			for (const auto& materialProxy : _giMaterialProxies)
@@ -2719,6 +2862,12 @@ namespace HexEngine
 			}
 			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
 			_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
+			_stats.emissiveMaterialCount += _cachedEmissiveMaterialCount[levelIndex];
+			_stats.emissiveTriangleCount += _cachedEmissiveTriangleCount[levelIndex];
+			_stats.emissiveActiveTriangleCount += _cachedEmissiveActiveTriangleCount[levelIndex];
+			_stats.emissiveTiledTriangleCount += _cachedEmissiveTiledTriangleCount[levelIndex];
+			_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, _cachedEmissiveProxyMaxLuma[levelIndex]);
+			_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, _cachedEmissiveProxyMaxStrength[levelIndex]);
 			return static_cast<uint32_t>(out.size());
 		}
 
@@ -2731,6 +2880,25 @@ namespace HexEngine
 		clipmapParams.levelIndex = levelIndex;
 		clipmapParams.dirty = level.dirty;
 		ExtractGiSceneProxies(scene, clipmapParams, _giMeshProxies, _giMaterialProxies, _giLightProxies);
+		uint32_t emissiveMaterialCountLocal = 0u;
+		float emissiveProxyMaxLumaLocal = 0.0f;
+		float emissiveProxyMaxStrengthLocal = 0.0f;
+		for (const auto& materialProxy : _giMaterialProxies)
+		{
+			const bool hasEmissiveTex =
+				(materialProxy.material != nullptr) &&
+				(materialProxy.material->GetTexture(MaterialTexture::Emission) != nullptr);
+			const float emissiveLum =
+				std::max(0.0f, materialProxy.emissive.x * 0.2126f + materialProxy.emissive.y * 0.7152f + materialProxy.emissive.z * 0.0722f);
+			emissiveProxyMaxLumaLocal = std::max(emissiveProxyMaxLumaLocal, emissiveLum);
+			emissiveProxyMaxStrengthLocal = std::max(emissiveProxyMaxStrengthLocal, std::max(0.0f, materialProxy.emissive.w));
+			const float emissiveStrength = std::max(std::max(0.0f, materialProxy.emissive.w), emissiveLum > 0.04f ? 1.0f : 0.0f);
+			const float emissiveKey = emissiveStrength * emissiveLum;
+			if (hasEmissiveTex || emissiveKey > 0.01f)
+			{
+				++emissiveMaterialCountLocal;
+			}
+		}
 		std::unordered_map<StaticMeshComponent*, uint32_t> meshMaterialProxyIndex;
 		meshMaterialProxyIndex.reserve(_giMeshProxies.size());
 		for (const auto& meshProxy : _giMeshProxies)
@@ -2749,9 +2917,24 @@ namespace HexEngine
 				meshesInBounds.push_back(meshProxy.component);
 			}
 		}
-		std::sort(meshesInBounds.begin(), meshesInBounds.end(),
-			[](const StaticMeshComponent* a, const StaticMeshComponent* b)
+		auto meshEmissiveKey = [](const StaticMeshComponent* smc) -> float
+		{
+			if (smc == nullptr)
+				return 0.0f;
+			const auto mat = smc->GetMaterial();
+			if (!mat)
+				return 0.0f;
+			const auto emissive = mat->_properties.emissiveColour;
+			const float tintLum = std::max(0.0f, emissive.x * 0.2126f + emissive.y * 0.7152f + emissive.z * 0.0722f);
+			return std::max(0.0f, emissive.w) * tintLum;
+		};
+		std::stable_sort(meshesInBounds.begin(), meshesInBounds.end(),
+			[&](const StaticMeshComponent* a, const StaticMeshComponent* b)
 			{
+				const float ae = meshEmissiveKey(a);
+				const float be = meshEmissiveKey(b);
+				if (ae != be)
+					return ae > be;
 				return std::less<const StaticMeshComponent*>()(a, b);
 			});
 
@@ -2787,16 +2970,45 @@ namespace HexEngine
 			const uint32_t evalBudget = static_cast<uint32_t>(std::max(512, r_giGpuEvalTriangleBudget._val.i32));
 			budget = std::min(budget, evalBudget);
 		}
-		if (!preferPersistentTriangleCache && level.dirty)
+		if (level.dirty)
 		{
 			budget = std::min<uint32_t>(budget * 3u, 300000u);
 		}
-		if (!preferPersistentTriangleCache && _clipmapWarmFramesRemaining[levelIndex] > 0u)
+		if (_clipmapWarmFramesRemaining[levelIndex] > 0u)
 		{
 			budget = std::min<uint32_t>(budget * 3u, 300000u);
 		}
 
 		out.reserve(std::min<uint32_t>(budget, static_cast<uint32_t>(meshesInBounds.size()) * 64u));
+		uint32_t emissiveTriangleCountLocal = 0u;
+		uint32_t emissiveActiveTriangleCountLocal = 0u;
+		uint32_t emissiveTiledTriangleCountLocal = 0u;
+		const int32_t emissiveDebugMode = std::clamp(r_giEmissiveDebug._val.i32, 0, 2);
+		struct EmissiveMeshDebugInfo
+		{
+			std::string entityName;
+			std::string meshName;
+			std::string materialName;
+			bool hasEmissiveTexture = false;
+			bool emissiveCandidate = false;
+			uint32_t sampledTriangles = 0u;
+			uint32_t activeTriangles = 0u;
+			uint32_t emissiveTriangles = 0u;
+			uint32_t tiledTriangles = 0u;
+			uint32_t triStep = 1u;
+			float meshEmissiveScore = 0.0f;
+			float meshEmissiveKey = 0.0f;
+			float maxTriMask = 0.0f;
+			math::Vector2 uvScale = math::Vector2(1.0f, 1.0f);
+			math::Vector4 bestUvRect = math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
+			math::Vector4 bestEmissiveUvRect = math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
+			bool bestTriTiled = false;
+		};
+		std::vector<EmissiveMeshDebugInfo> emissiveDebugInfos;
+		if (emissiveDebugMode > 0)
+		{
+			emissiveDebugInfos.reserve(meshesInBounds.size());
+		}
 		const math::Vector3 sunTint = ComputeSunTint(scene);
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
 		float sunStrength = 0.0f;
@@ -2811,24 +3023,35 @@ namespace HexEngine
 				auto it = _materialTriangleAlbedoCache.find(material);
 				if (it != _materialTriangleAlbedoCache.end())
 				{
-					// Textures can stream in after cache creation; refresh previously texture-less entries.
-					if (material != nullptr && !it->second.hasTexture)
+					// Textures can stream in or be swapped after cache creation; refresh when the source changes.
+					if (material != nullptr)
 					{
-						if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
+						const auto albedoTex = material->GetTexture(MaterialTexture::Albedo);
+						const void* textureIdentity = albedoTex ? static_cast<const void*>(albedoTex.get()) : nullptr;
+						if (textureIdentity != it->second.textureIdentity)
 						{
-							it->second.width = std::max(1, albedoTex->GetWidth());
-							it->second.height = std::max(1, albedoTex->GetHeight());
-							albedoTex->GetPixels(it->second.pixels);
-							const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
-							if (it->second.pixels.size() >= minTightSize)
+							it->second.textureIdentity = textureIdentity;
+							it->second.width = 0;
+							it->second.height = 0;
+							it->second.isBgra = false;
+							it->second.hasTexture = false;
+							it->second.pixels.clear();
+							if (albedoTex)
 							{
-								const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedoTex->GetFormat());
-								it->second.isBgra =
-									(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
-									(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
-									(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
-									(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
-								it->second.hasTexture = true;
+								it->second.width = std::max(1, albedoTex->GetWidth());
+								it->second.height = std::max(1, albedoTex->GetHeight());
+								albedoTex->GetPixels(it->second.pixels);
+								const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
+								if (it->second.pixels.size() >= minTightSize)
+								{
+									const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedoTex->GetFormat());
+									it->second.isBgra =
+										(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+										(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+										(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+										(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+									it->second.hasTexture = true;
+								}
 							}
 						}
 					}
@@ -2908,6 +3131,348 @@ namespace HexEngine
 				std::clamp(tg * data.diffuseTint.y, 0.0f, 1.0f),
 				std::clamp(tb * data.diffuseTint.z, 0.0f, 1.0f));
 		};
+		auto getMaterialEmissiveData = [&](const Material* material) -> const MaterialTriangleAlbedoCacheEntry&
+		{
+			auto it = _materialTriangleEmissiveCache.find(material);
+			if (it != _materialTriangleEmissiveCache.end())
+			{
+				if (material != nullptr && !it->second.hasTexture)
+				{
+					if (auto emissiveTex = material->GetTexture(MaterialTexture::Emission))
+					{
+						it->second.width = std::max(1, emissiveTex->GetWidth());
+						it->second.height = std::max(1, emissiveTex->GetHeight());
+						emissiveTex->GetPixels(it->second.pixels);
+						const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
+						if (it->second.pixels.size() >= minTightSize)
+						{
+							const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(emissiveTex->GetFormat());
+							it->second.isBgra =
+								(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+								(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+								(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+								(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+							it->second.hasTexture = true;
+						}
+					}
+				}
+				return it->second;
+			}
+
+			MaterialTriangleAlbedoCacheEntry data = {};
+			if (material != nullptr)
+			{
+				if (auto emissiveTex = material->GetTexture(MaterialTexture::Emission))
+				{
+					data.width = std::max(1, emissiveTex->GetWidth());
+					data.height = std::max(1, emissiveTex->GetHeight());
+					emissiveTex->GetPixels(data.pixels);
+					const size_t minTightSize = static_cast<size_t>(data.width) * static_cast<size_t>(data.height) * 4u;
+					if (data.pixels.size() >= minTightSize)
+					{
+						const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(emissiveTex->GetFormat());
+						data.isBgra =
+							(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+							(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+							(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+							(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+						data.hasTexture = true;
+					}
+				}
+			}
+			auto [insertedIt, _] = _materialTriangleEmissiveCache.emplace(material, std::move(data));
+			return insertedIt->second;
+		};
+		auto sampleEmissiveLuma = [&](const MaterialTriangleAlbedoCacheEntry& data, float u, float v) -> float
+		{
+			if (!data.hasTexture || data.width <= 0 || data.height <= 0)
+				return 0.0f;
+
+			u = std::clamp(u, 0.0f, 1.0f);
+			v = std::clamp(v, 0.0f, 1.0f);
+			const int32_t x = std::clamp(static_cast<int32_t>(u * static_cast<float>(data.width - 1) + 0.5f), 0, data.width - 1);
+			const int32_t y = std::clamp(static_cast<int32_t>(v * static_cast<float>(data.height - 1) + 0.5f), 0, data.height - 1);
+			const int cR = data.isBgra ? 2 : 0;
+			const int cG = 1;
+			const int cB = data.isBgra ? 0 : 2;
+			const size_t rowPitch = static_cast<size_t>(data.width) * 4u;
+			const size_t idx = static_cast<size_t>(y) * rowPitch + static_cast<size_t>(x) * 4u;
+			if (idx + 3u >= data.pixels.size())
+				return 0.0f;
+			const float r = data.pixels[idx + static_cast<size_t>(cR)] / 255.0f;
+			const float g = data.pixels[idx + static_cast<size_t>(cG)] / 255.0f;
+			const float b = data.pixels[idx + static_cast<size_t>(cB)] / 255.0f;
+			return std::max(0.0f, r * 0.2126f + g * 0.7152f + b * 0.0722f);
+		};
+		auto computeMeshEmissiveScore = [&](StaticMeshComponent* smc, const Material* material) -> float
+		{
+			if (smc == nullptr || material == nullptr)
+				return 0.0f;
+			const auto& data = getMaterialEmissiveData(material);
+			if (!data.hasTexture)
+				return 0.0f;
+
+			const MaterialUvRect uvRect = ResolveMaterialUvRect(smc);
+			const float uMin = std::clamp(uvRect.uMin, 0.0f, 1.0f);
+			const float vMin = std::clamp(uvRect.vMin, 0.0f, 1.0f);
+			const float uMax = std::clamp(uvRect.uMax, 0.0f, 1.0f);
+			const float vMax = std::clamp(uvRect.vMax, 0.0f, 1.0f);
+			const float du = std::max(1e-4f, uMax - uMin);
+			const float dv = std::max(1e-4f, vMax - vMin);
+			const int grid = 12;
+			int bright = 0;
+			float maxLum = 0.0f;
+			for (int y = 0; y < grid; ++y)
+			{
+				for (int x = 0; x < grid; ++x)
+				{
+					const float fu = (static_cast<float>(x) + 0.5f) / static_cast<float>(grid);
+					const float fv = (static_cast<float>(y) + 0.5f) / static_cast<float>(grid);
+					const float u = uMin + du * fu;
+					const float v = vMin + dv * fv;
+					const float lum = sampleEmissiveLuma(data, u, v);
+					maxLum = std::max(maxLum, lum);
+					if (lum > 0.20f)
+						++bright;
+				}
+			}
+			const float coverage = static_cast<float>(bright) / static_cast<float>(grid * grid);
+			return coverage * maxLum;
+		};
+		auto computeTriangleEmissiveMask = [&](const MaterialTriangleAlbedoCacheEntry& data,
+			float u0, float v0, float u1, float v1, float u2, float v2) -> float
+		{
+			if (!data.hasTexture || data.width <= 0 || data.height <= 0)
+				return 0.0f;
+
+			const float uC = (u0 + u1 + u2) / 3.0f;
+			const float vC = (v0 + v1 + v2) / 3.0f;
+			const float u01 = (u0 + u1) * 0.5f;
+			const float v01 = (v0 + v1) * 0.5f;
+			const float u12 = (u1 + u2) * 0.5f;
+			const float v12 = (v1 + v2) * 0.5f;
+			const float u20 = (u2 + u0) * 0.5f;
+			const float v20 = (v2 + v0) * 0.5f;
+
+			const float e0 = sampleEmissiveLuma(data, u0, v0);
+			const float e1 = sampleEmissiveLuma(data, u1, v1);
+			const float e2 = sampleEmissiveLuma(data, u2, v2);
+			const float eC = sampleEmissiveLuma(data, uC, vC);
+			const float e01 = sampleEmissiveLuma(data, u01, v01);
+			const float e12 = sampleEmissiveLuma(data, u12, v12);
+			const float e20 = sampleEmissiveLuma(data, u20, v20);
+
+			const float eAvg = (e0 + e1 + e2 + eC + e01 + e12 + e20) / 7.0f;
+			float eMax = std::max(std::max(std::max(e0, e1), std::max(e2, eC)), std::max(std::max(e01, e12), e20));
+
+			// Sparse emissive texels (e.g. atlas text on dark background) are often missed by vertex/edge samples.
+			// Scan a small grid over the triangle UV AABB to robustly detect emissive presence.
+			const float triMinU = std::clamp(std::min(u0, std::min(u1, u2)), 0.0f, 1.0f);
+			const float triMinV = std::clamp(std::min(v0, std::min(v1, v2)), 0.0f, 1.0f);
+			const float triMaxU = std::clamp(std::max(u0, std::max(u1, u2)), 0.0f, 1.0f);
+			const float triMaxV = std::clamp(std::max(v0, std::max(v1, v2)), 0.0f, 1.0f);
+			const float du = std::max(0.0f, triMaxU - triMinU);
+			const float dv = std::max(0.0f, triMaxV - triMinV);
+			if (du > 1e-5f && dv > 1e-5f)
+			{
+				const int grid = 8;
+				bool foundInteriorSample = false;
+				for (int y = 0; y < grid; ++y)
+				{
+					for (int x = 0; x < grid; ++x)
+					{
+						const float fu = (static_cast<float>(x) + 0.5f) / static_cast<float>(grid);
+						const float fv = (static_cast<float>(y) + 0.5f) / static_cast<float>(grid);
+						const float u = triMinU + du * fu;
+						const float v = triMinV + dv * fv;
+						const float edge0 = (u - u0) * (v1 - v0) - (v - v0) * (u1 - u0);
+						const float edge1 = (u - u1) * (v2 - v1) - (v - v1) * (u2 - u1);
+						const float edge2 = (u - u2) * (v0 - v2) - (v - v2) * (u0 - u2);
+						const bool hasNeg = (edge0 < -1e-6f) || (edge1 < -1e-6f) || (edge2 < -1e-6f);
+						const bool hasPos = (edge0 > 1e-6f) || (edge1 > 1e-6f) || (edge2 > 1e-6f);
+						if (hasNeg && hasPos)
+							continue;
+						foundInteriorSample = true;
+						eMax = std::max(eMax, sampleEmissiveLuma(data, u, v));
+					}
+				}
+				if (!foundInteriorSample)
+					eMax = 0.0f;
+			}
+
+			return std::max(eAvg * 0.55f, eMax);
+		};
+		struct TriangleEmissiveInfo
+		{
+			float mask = 0.0f;
+			float coverage = 0.0f;
+			float rectMinU = 0.0f;
+			float rectMinV = 0.0f;
+			float rectMaxU = 1.0f;
+			float rectMaxV = 1.0f;
+			float centroidU = 0.5f;
+			float centroidV = 0.5f;
+		};
+		auto pointInUvTriangle = [](float u, float v, float u0, float v0, float u1, float v1, float u2, float v2) -> bool
+		{
+			const auto edge = [](float ax, float ay, float bx, float by, float px, float py) -> float
+			{
+				return (px - ax) * (by - ay) - (py - ay) * (bx - ax);
+			};
+			const float e0 = edge(u0, v0, u1, v1, u, v);
+			const float e1 = edge(u1, v1, u2, v2, u, v);
+			const float e2 = edge(u2, v2, u0, v0, u, v);
+			const bool hasNeg = (e0 < -1e-6f) || (e1 < -1e-6f) || (e2 < -1e-6f);
+			const bool hasPos = (e0 > 1e-6f) || (e1 > 1e-6f) || (e2 > 1e-6f);
+			return !(hasNeg && hasPos);
+		};
+		auto computeTriangleEmissiveInfo = [&](const MaterialTriangleAlbedoCacheEntry& data,
+			float u0, float v0, float u1, float v1, float u2, float v2) -> TriangleEmissiveInfo
+		{
+			TriangleEmissiveInfo info = {};
+			if (!data.hasTexture || data.width <= 0 || data.height <= 0)
+				return info;
+
+			info.mask = computeTriangleEmissiveMask(data, u0, v0, u1, v1, u2, v2);
+
+			const float triMinU = std::clamp(std::min(u0, std::min(u1, u2)), 0.0f, 1.0f);
+			const float triMinV = std::clamp(std::min(v0, std::min(v1, v2)), 0.0f, 1.0f);
+			const float triMaxU = std::clamp(std::max(u0, std::max(u1, u2)), 0.0f, 1.0f);
+			const float triMaxV = std::clamp(std::max(v0, std::max(v1, v2)), 0.0f, 1.0f);
+			info.rectMinU = triMinU;
+			info.rectMinV = triMinV;
+			info.rectMaxU = triMaxU;
+			info.rectMaxV = triMaxV;
+
+			const float du = std::max(0.0f, triMaxU - triMinU);
+			const float dv = std::max(0.0f, triMaxV - triMinV);
+			if (du <= 1e-5f || dv <= 1e-5f || info.mask <= 0.001f)
+				return info;
+
+			const int32_t sampleX0 = std::clamp(static_cast<int32_t>(std::floor(triMinU * static_cast<float>(data.width - 1))), 0, data.width - 1);
+			const int32_t sampleY0 = std::clamp(static_cast<int32_t>(std::floor(triMinV * static_cast<float>(data.height - 1))), 0, data.height - 1);
+			const int32_t sampleX1 = std::clamp(static_cast<int32_t>(std::ceil(triMaxU * static_cast<float>(data.width - 1))), 0, data.width - 1);
+			const int32_t sampleY1 = std::clamp(static_cast<int32_t>(std::ceil(triMaxV * static_cast<float>(data.height - 1))), 0, data.height - 1);
+			const int32_t regionW = std::max(1, sampleX1 - sampleX0 + 1);
+			const int32_t regionH = std::max(1, sampleY1 - sampleY0 + 1);
+			const size_t regionPixelCount = static_cast<size_t>(regionW) * static_cast<size_t>(regionH);
+			const int32_t axisStep = std::max<int32_t>(1, static_cast<int32_t>(std::sqrt(static_cast<double>(regionPixelCount) / 4096.0)));
+			float brightMinU = 1.0f;
+			float brightMinV = 1.0f;
+			float brightMaxU = 0.0f;
+			float brightMaxV = 0.0f;
+			float brightWeightSum = 0.0f;
+			float brightWeightedU = 0.0f;
+			float brightWeightedV = 0.0f;
+			uint32_t interiorSampleCount = 0u;
+			uint32_t brightSampleCount = 0u;
+			bool foundBright = false;
+			for (int32_t y = sampleY0; y <= sampleY1; y += axisStep)
+			{
+				for (int32_t x = sampleX0; x <= sampleX1; x += axisStep)
+				{
+					const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(std::max(1, data.width));
+					const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(std::max(1, data.height));
+					if (!pointInUvTriangle(u, v, u0, v0, u1, v1, u2, v2))
+						continue;
+					++interiorSampleCount;
+
+					const float lum = sampleEmissiveLuma(data, u, v);
+					if (lum <= 0.08f)
+						continue;
+
+					info.mask = std::max(info.mask, lum);
+					brightMinU = std::min(brightMinU, u);
+					brightMinV = std::min(brightMinV, v);
+					brightMaxU = std::max(brightMaxU, u);
+					brightMaxV = std::max(brightMaxV, v);
+					brightWeightSum += lum;
+					brightWeightedU += u * lum;
+					brightWeightedV += v * lum;
+					++brightSampleCount;
+					foundBright = true;
+				}
+			}
+			info.coverage = (interiorSampleCount > 0u)
+				? (static_cast<float>(brightSampleCount) / static_cast<float>(interiorSampleCount))
+				: 0.0f;
+
+			if (foundBright)
+			{
+				const float padU = std::max(1.5f / static_cast<float>(std::max(1, data.width)), static_cast<float>(axisStep) / static_cast<float>(std::max(1, data.width)));
+				const float padV = std::max(1.5f / static_cast<float>(std::max(1, data.height)), static_cast<float>(axisStep) / static_cast<float>(std::max(1, data.height)));
+				info.rectMinU = std::clamp(brightMinU - padU, 0.0f, 1.0f);
+				info.rectMinV = std::clamp(brightMinV - padV, 0.0f, 1.0f);
+				info.rectMaxU = std::clamp(brightMaxU + padU, 0.0f, 1.0f);
+				info.rectMaxV = std::clamp(brightMaxV + padV, 0.0f, 1.0f);
+				if (brightWeightSum > 1e-6f)
+				{
+					info.centroidU = std::clamp(brightWeightedU / brightWeightSum, info.rectMinU, info.rectMaxU);
+					info.centroidV = std::clamp(brightWeightedV / brightWeightSum, info.rectMinV, info.rectMaxV);
+				}
+				else
+				{
+					info.centroidU = 0.5f * (info.rectMinU + info.rectMaxU);
+					info.centroidV = 0.5f * (info.rectMinV + info.rectMaxV);
+				}
+			}
+			else
+			{
+				info.mask = 0.0f;
+				info.coverage = 0.0f;
+				info.centroidU = 0.5f * (info.rectMinU + info.rectMaxU);
+				info.centroidV = 0.5f * (info.rectMinV + info.rectMaxV);
+			}
+
+			return info;
+		};
+		auto computeUvBarycentric = [](float u, float v, float u0, float v0, float u1, float v1, float u2, float v2) -> math::Vector3
+		{
+			const float denom = (v1 - v2) * (u0 - u2) + (u2 - u1) * (v0 - v2);
+			if (std::abs(denom) <= 1e-8f)
+				return math::Vector3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f);
+
+			const float b0 = ((v1 - v2) * (u - u2) + (u2 - u1) * (v - v2)) / denom;
+			const float b1 = ((v2 - v0) * (u - u2) + (u0 - u2) * (v - v2)) / denom;
+			const float b2 = 1.0f - b0 - b1;
+			if (!std::isfinite(b0) || !std::isfinite(b1) || !std::isfinite(b2))
+				return math::Vector3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f);
+			return math::Vector3(b0, b1, b2);
+		};
+
+		std::unordered_map<StaticMeshComponent*, float> meshEmissiveScoreMap;
+		meshEmissiveScoreMap.reserve(meshesInBounds.size());
+		for (auto* smc : meshesInBounds)
+		{
+			if (smc == nullptr)
+				continue;
+			const auto mat = smc->GetMaterial();
+			const Material* material = mat ? mat.get() : nullptr;
+			meshEmissiveScoreMap[smc] = computeMeshEmissiveScore(smc, material);
+		}
+		std::stable_sort(meshesInBounds.begin(), meshesInBounds.end(),
+			[&](const StaticMeshComponent* a, const StaticMeshComponent* b)
+			{
+				float as = 0.0f;
+				if (a != nullptr)
+				{
+					if (auto it = meshEmissiveScoreMap.find(const_cast<StaticMeshComponent*>(a)); it != meshEmissiveScoreMap.end())
+						as = it->second;
+				}
+				float bs = 0.0f;
+				if (b != nullptr)
+				{
+					if (auto it = meshEmissiveScoreMap.find(const_cast<StaticMeshComponent*>(b)); it != meshEmissiveScoreMap.end())
+						bs = it->second;
+				}
+				if (as != bs)
+					return as > bs;
+				const float ae = meshEmissiveKey(a);
+				const float be = meshEmissiveKey(b);
+				if (ae != be)
+					return ae > be;
+				return std::less<const StaticMeshComponent*>()(a, b);
+			});
 
 		for (auto* smc : meshesInBounds)
 		{
@@ -2949,7 +3514,41 @@ namespace HexEngine
 				break;
 			const uint32_t triangleCount = static_cast<uint32_t>(indices.size() / 3u);
 			const uint32_t triStep = std::max<uint32_t>(1u, (triangleCount + remaining - 1u) / remaining);
-			const uint32_t sampledTriCount = std::max<uint32_t>(1u, (triangleCount + triStep - 1u) / triStep);
+			const bool meshHasEmissiveTexture =
+				(material != nullptr) &&
+				(material->GetTexture(MaterialTexture::Emission) != nullptr);
+			float meshEmissiveScore = 0.0f;
+			if (meshHasEmissiveTexture)
+			{
+				if (auto it = meshEmissiveScoreMap.find(smc); it != meshEmissiveScoreMap.end())
+					meshEmissiveScore = it->second;
+				else
+					meshEmissiveScore = computeMeshEmissiveScore(smc, material);
+			}
+			const float emissiveStrengthEffective = std::max(0.0f, emissiveStrength);
+			const bool meshHasUsableEmissiveTexture =
+				meshHasEmissiveTexture &&
+				(meshEmissiveScore > 0.004f) &&
+				(emissiveStrengthEffective > 0.001f);
+			const float emissiveLum = emissiveTint.x * 0.2126f + emissiveTint.y * 0.7152f + emissiveTint.z * 0.0722f;
+			const float emissiveKey = emissiveLum * emissiveStrengthEffective;
+			const bool meshEmissiveCandidate = meshHasUsableEmissiveTexture || (emissiveKey > 0.01f);
+			// Emissive atlas details are often tiny (text/logos). Keep full triangle coverage for emissive meshes
+			// so GPU voxel eval has enough candidates to inject visible bounce in the correct location.
+			const uint32_t effectiveTriStep = (meshHasEmissiveTexture || meshEmissiveCandidate) ? 1u : triStep;
+			EmissiveMeshDebugInfo meshDebug = {};
+			if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
+			{
+				meshDebug.entityName = entity ? entity->GetName() : std::string();
+				meshDebug.meshName = mesh ? mesh->GetName() : std::string();
+				meshDebug.materialName = material ? material->GetName() : std::string();
+				meshDebug.hasEmissiveTexture = meshHasEmissiveTexture;
+				meshDebug.emissiveCandidate = meshEmissiveCandidate;
+				meshDebug.triStep = effectiveTriStep;
+				meshDebug.meshEmissiveScore = meshEmissiveScore;
+				meshDebug.meshEmissiveKey = emissiveKey;
+			}
+			const uint32_t sampledTriCount = std::max<uint32_t>(1u, (triangleCount + effectiveTriStep - 1u) / effectiveTriStep);
 			const float meshBaseInjectionNormalize = std::clamp(r_giMeshBaseInjectionNormalization._val.f32, 0.0f, 1.0f);
 			const float meshSunInjectionNormalize = std::clamp(r_giMeshSunInjectionNormalization._val.f32, 0.0f, 1.0f);
 			const float meshBaseMinScale = std::clamp(r_giMeshBaseInjectionMinScale._val.f32, 0.0f, 1.0f);
@@ -2964,6 +3563,10 @@ namespace HexEngine
 				meshSunInjectionNormalize);
 			const auto& worldTM = entity->GetWorldTM();
 			const math::Vector2 uvScale = smc->GetUVScale();
+			if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
+			{
+				meshDebug.uvScale = uvScale;
+			}
 			uint32_t materialProxyIndex = 0u;
 			if (auto materialProxyIt = meshMaterialProxyIndex.find(smc); materialProxyIt != meshMaterialProxyIndex.end())
 			{
@@ -2973,6 +3576,11 @@ namespace HexEngine
 			if (!gpuComputeBaseSunEnabled)
 			{
 				matAlbedoData = &getMaterialAlbedoData(material);
+			}
+			const MaterialTriangleAlbedoCacheEntry* matEmissiveData = nullptr;
+			if (meshHasEmissiveTexture)
+			{
+				matEmissiveData = &getMaterialEmissiveData(material);
 			}
 			const auto& entityAabb = entity->GetWorldAABB();
 			const math::Vector3 entityCenter(entityAabb.Center.x, entityAabb.Center.y, entityAabb.Center.z);
@@ -3043,18 +3651,28 @@ namespace HexEngine
 				(entityMin.y >= clipMin.y && entityMax.y <= clipMax.y) &&
 				(entityMin.z >= clipMin.z && entityMax.z <= clipMax.z);
 
-			for (uint32_t tri = 0u; tri < triangleCount && out.size() < budget; tri += triStep)
+			for (uint32_t tri = 0u; tri < triangleCount && out.size() < budget; tri += effectiveTriStep)
 			{
+				if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
+				{
+					++meshDebug.sampledTriangles;
+				}
 				const uint32_t i0 = indices[tri * 3u + 0u];
 				const uint32_t i1 = indices[tri * 3u + 1u];
 				const uint32_t i2 = indices[tri * 3u + 2u];
 				if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
 					continue;
 
-				const math::Vector4 v0w = math::Vector4::Transform(vertices[i0]._position, worldTM);
-				const math::Vector4 v1w = math::Vector4::Transform(vertices[i1]._position, worldTM);
-				const math::Vector4 v2w = math::Vector4::Transform(vertices[i2]._position, worldTM);
+				// Always rebuild homogeneous positions from xyz here so GI does not depend on
+				// imported vertex.w being valid, and make sure each triangle vertex uses its own index.
+				const auto vp0 = math::Vector4(vertices[i0]._position.x, vertices[i0]._position.y, vertices[i0]._position.z, 1.0f);
+				const auto vp1 = math::Vector4(vertices[i1]._position.x, vertices[i1]._position.y, vertices[i1]._position.z, 1.0f);
+				const auto vp2 = math::Vector4(vertices[i2]._position.x, vertices[i2]._position.y, vertices[i2]._position.z, 1.0f);
 
+				const math::Vector4 v0w = math::Vector4::Transform(vp0, worldTM);
+				const math::Vector4 v1w = math::Vector4::Transform(vp1, worldTM);
+				const math::Vector4 v2w = math::Vector4::Transform(vp2, worldTM);
+			   
 				const math::Vector3 p0(v0w.x, v0w.y, v0w.z);
 				const math::Vector3 p1(v1w.x, v1w.y, v1w.z);
 				const math::Vector3 p2(v2w.x, v2w.y, v2w.z);
@@ -3137,13 +3755,193 @@ namespace HexEngine
 				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, 1.0f);
 				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, 1.0f);
 				entry.uv0uv1 = math::Vector4(u0, v0, u1, v1);
-				entry.uv2Pad = math::Vector4(u2, v2, 0.0f, 0.0f);
+				const float triMinU = std::min(u0, std::min(u1, u2));
+				const float triMinV = std::min(v0, std::min(v1, v2));
+				const float triMaxU = std::max(u0, std::max(u1, u2));
+				const float triMaxV = std::max(v0, std::max(v1, v2));
+				const float triSpanU = triMaxU - triMinU;
+				const float triSpanV = triMaxV - triMinV;
+				const bool triUvLikelyTiled =
+					(triMinU < -0.05f) || (triMinV < -0.05f) ||
+					(triMaxU > 1.05f) || (triMaxV > 1.05f) ||
+					(triSpanU > 1.02f) || (triSpanV > 1.02f) ||
+					!std::isfinite(triMinU) || !std::isfinite(triMinV) ||
+					!std::isfinite(triMaxU) || !std::isfinite(triMaxV);
+				if (triUvLikelyTiled)
+				{
+					++emissiveTiledTriangleCountLocal;
+					if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
+					{
+						++meshDebug.tiledTriangles;
+					}
+				}
+				TriangleEmissiveInfo triEmissiveInfo = {};
+				float triEmissiveMask = 0.0f;
+				bool triEmissiveActive = false;
+				if (!triUvLikelyTiled && matEmissiveData != nullptr && matEmissiveData->hasTexture)
+				{
+					triEmissiveInfo = computeTriangleEmissiveInfo(*matEmissiveData, u0, v0, u1, v1, u2, v2);
+					triEmissiveMask = triEmissiveInfo.mask;
+					const float triUvSpanU = std::max(0.0f, triMaxU - triMinU);
+					const float triUvSpanV = std::max(0.0f, triMaxV - triMinV);
+					const float triUvSpanArea = triUvSpanU * triUvSpanV;
+					const float emissiveRectArea =
+						std::max(0.0f, triEmissiveInfo.rectMaxU - triEmissiveInfo.rectMinU) *
+						std::max(0.0f, triEmissiveInfo.rectMaxV - triEmissiveInfo.rectMinV);
+					const float emissiveRectCoverage = (triUvSpanArea > 1e-6f)
+						? (emissiveRectArea / triUvSpanArea)
+						: triEmissiveInfo.coverage;
+					const bool broadEmissiveSurface =
+						(triEmissiveInfo.coverage > 0.18f) ||
+						(emissiveRectCoverage > 0.35f);
+					triEmissiveActive =
+						(broadEmissiveSurface && triEmissiveMask > 0.02f) ||
+						(triEmissiveMask > 0.25f) ||
+						(triEmissiveMask > 0.12f && triEmissiveInfo.coverage > 0.0f);
+
+					// Some legitimately emissive broad surfaces resolve as emissive at the mesh level but
+					// have near-zero per-triangle texture masks in GI due sparse/degenerate UV sampling.
+					// Restore them from the stronger mesh-level signal. This is intentionally gated hard so
+					// tiny atlas-sign cases do not get promoted across the whole mesh.
+					if (!triEmissiveActive &&
+						meshEmissiveScore > 0.95f &&
+						emissiveKey > 0.01f)
+					{
+						triEmissiveMask = std::max(triEmissiveMask, std::clamp(meshEmissiveScore, 0.75f, 1.0f));
+						triEmissiveInfo.coverage = std::max(triEmissiveInfo.coverage, 1.0f);
+						triEmissiveInfo.rectMinU = std::clamp(triMinU, 0.0f, 1.0f);
+						triEmissiveInfo.rectMinV = std::clamp(triMinV, 0.0f, 1.0f);
+						triEmissiveInfo.rectMaxU = std::clamp(triMaxU, 0.0f, 1.0f);
+						triEmissiveInfo.rectMaxV = std::clamp(triMaxV, 0.0f, 1.0f);
+						triEmissiveInfo.centroidU = std::clamp((u0 + u1 + u2) * (1.0f / 3.0f), 0.0f, 1.0f);
+						triEmissiveInfo.centroidV = std::clamp((v0 + v1 + v2) * (1.0f / 3.0f), 0.0f, 1.0f);
+						triEmissiveActive = true;
+					}
+				}
+				else if (triUvLikelyTiled && matEmissiveData != nullptr && matEmissiveData->hasTexture)
+				{
+					// Tiled UVs are ambiguous for atlas textures, but they are valid for intentionally broad
+					// emissive textures such as solid white/lightmap-style emitters. Preserve those materials
+					// using the strong mesh-level signal instead of dropping all tiled triangles.
+					if (meshEmissiveScore > 0.95f && emissiveKey > 0.01f)
+					{
+						triEmissiveMask = std::max(triEmissiveMask, std::clamp(meshEmissiveScore, 0.75f, 1.0f));
+						triEmissiveInfo.coverage = 1.0f;
+						triEmissiveInfo.rectMinU = 0.0f;
+						triEmissiveInfo.rectMinV = 0.0f;
+						triEmissiveInfo.rectMaxU = 1.0f;
+						triEmissiveInfo.rectMaxV = 1.0f;
+						triEmissiveInfo.centroidU = 0.5f;
+						triEmissiveInfo.centroidV = 0.5f;
+						triEmissiveActive = true;
+					}
+				}
+				else if (!meshHasEmissiveTexture && emissiveKey > 0.01f)
+				{
+					// Scalar-only emissive material (no emissive texture): treat full triangle as emissive.
+					triEmissiveMask = 1.0f;
+					triEmissiveActive = true;
+				}
+				entry.uv2Pad = math::Vector4(u2, v2, triEmissiveActive ? 1.0f : 0.0f, std::clamp(triEmissiveMask, 0.0f, 1.0f));
+				if (triEmissiveActive)
+				{
+					++emissiveActiveTriangleCountLocal;
+					if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
+					{
+						++meshDebug.activeTriangles;
+					}
+				}
+				if (triUvLikelyTiled)
+				{
+					entry.uvRect = math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
+				}
+				else
+				{
+					entry.uvRect = math::Vector4(
+						std::clamp(triMinU, 0.0f, 1.0f),
+						std::clamp(triMinV, 0.0f, 1.0f),
+						std::clamp(triMaxU, 0.0f, 1.0f),
+						std::clamp(triMaxV, 0.0f, 1.0f));
+				}
+				entry.emissiveUvRect = triEmissiveActive
+					? math::Vector4(
+						std::clamp(triEmissiveInfo.rectMinU, 0.0f, 1.0f),
+						std::clamp(triEmissiveInfo.rectMinV, 0.0f, 1.0f),
+						std::clamp(triEmissiveInfo.rectMaxU, 0.0f, 1.0f),
+						std::clamp(triEmissiveInfo.rectMaxV, 0.0f, 1.0f))
+					: math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
+				entry.emissivePointRadius = math::Vector4::Zero;
+				float emissivePointRadiusWs = 0.0f;
+				float emitCoverage = 0.0f;
+				float triUvArea = 0.0f;
+				if (triEmissiveActive)
+				{
+					const math::Vector3 emissiveBary = computeUvBarycentric(
+						triEmissiveInfo.centroidU, triEmissiveInfo.centroidV,
+						u0, v0, u1, v1, u2, v2);
+					const math::Vector3 emissivePointWs = p0 * emissiveBary.x + p1 * emissiveBary.y + p2 * emissiveBary.z;
+					const float edge01 = (p1 - p0).Length();
+					const float edge12 = (p2 - p1).Length();
+					const float edge20 = (p0 - p2).Length();
+					const float triMaxEdgeWs = std::max(edge01, std::max(edge12, edge20));
+					triUvArea = std::abs((u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0)) * 0.5f;
+					const float emitUvArea =
+						std::max(0.0f, triEmissiveInfo.rectMaxU - triEmissiveInfo.rectMinU) *
+						std::max(0.0f, triEmissiveInfo.rectMaxV - triEmissiveInfo.rectMinV);
+					emitCoverage = (triUvArea > 1e-6f)
+						? std::clamp(std::sqrt(std::max(emitUvArea, 1e-8f) / triUvArea), 0.03f, 1.0f)
+						: 0.2f;
+					const bool broadEmissiveProxy =
+						(triEmissiveInfo.coverage > 0.45f) ||
+						(emitCoverage > 0.55f);
+					const float radiusMin = voxelSizeWorld * (broadEmissiveProxy ? 1.0f : 1.5f);
+					const float radiusMax = voxelSizeWorld * (broadEmissiveProxy ? 2.0f : 4.0f);
+					const float edgeDrivenRadius = triMaxEdgeWs * (broadEmissiveProxy ? 0.02f : std::max(0.03f, emitCoverage * 0.12f));
+					emissivePointRadiusWs = std::clamp(edgeDrivenRadius, radiusMin, std::max(radiusMin, radiusMax));
+					entry.emissivePointRadius = math::Vector4(emissivePointWs.x, emissivePointWs.y, emissivePointWs.z, emissivePointRadiusWs);
+
+					// Standalone emissive point promotion is currently disabled. The current point-injection
+					// path can create scene hotspots when the CPU triangle classifier cannot uniquely isolate
+					// tiny atlas details on large shared meshes. Keep emissive on the triangle path until the
+					// emitter-point contract is more trustworthy.
+					const bool useStandaloneEmitterPoint = false;
+					if (useStandaloneEmitterPoint)
+					{
+						math::Vector3 emissivePointColour = emissiveTint;
+						if (emissivePointColour.LengthSquared() < 1e-5f)
+							emissivePointColour = math::Vector3::One;
+						const float emissivePointStrength = std::max(emissiveStrengthEffective, 1.0f) * std::max(triEmissiveMask, 0.10f);
+						GpuGiEmitterPoint point = {};
+						point.positionRadius = math::Vector4(emissivePointWs.x, emissivePointWs.y, emissivePointWs.z, std::max(emissivePointRadiusWs, voxelSizeWorld * 0.75f));
+						point.radianceOpacity = math::Vector4(
+							emissivePointColour.x * emissivePointStrength,
+							emissivePointColour.y * emissivePointStrength,
+							emissivePointColour.z * emissivePointStrength,
+							0.92f);
+						_gpuGiEmitterPointUpload.push_back(point);
+					}
+				}
+				if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate) && triEmissiveMask >= meshDebug.maxTriMask)
+				{
+					meshDebug.maxTriMask = triEmissiveMask;
+					meshDebug.bestUvRect = entry.uvRect;
+					meshDebug.bestEmissiveUvRect = entry.emissiveUvRect;
+					meshDebug.bestTriTiled = triUvLikelyTiled;
+				}
 
 				if (gpuComputeBaseSunEnabled)
 				{
 					entry.radianceOpacity = math::Vector4(0.0f, 0.0f, 0.0f, 0.92f);
 					entry.albedoWeight = math::Vector4(triAlbedo.x, triAlbedo.y, triAlbedo.z, triAreaNorm);
 					out.push_back(entry);
+					if (triEmissiveMask > 0.012f || (!meshHasEmissiveTexture && triEmissiveActive))
+					{
+						++emissiveTriangleCountLocal;
+						if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
+						{
+							++meshDebug.emissiveTriangles;
+						}
+					}
 					continue;
 				}
 
@@ -3243,13 +4041,102 @@ namespace HexEngine
 					0.92f);
 				entry.albedoWeight = math::Vector4(triAlbedo.x, triAlbedo.y, triAlbedo.z, triAreaNorm);
 				out.push_back(entry);
+				if (triEmissiveMask > 0.012f || (!meshHasEmissiveTexture && triEmissiveActive))
+				{
+					++emissiveTriangleCountLocal;
+					if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
+					{
+						++meshDebug.emissiveTriangles;
+					}
+				}
+			}
+			if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
+			{
+				emissiveDebugInfos.push_back(std::move(meshDebug));
 			}
 		}
 
 		_cachedVoxelTriangles[levelIndex] = out;
+		_cachedGiEmitterPoints[levelIndex].clear();
 		_cachedGiMaterialProxies[levelIndex] = _giMaterialProxies;
 		_cachedVoxelTrianglesValid[levelIndex] = true;
 		_cachedVoxelTrianglesFrame[levelIndex] = _frameCounter;
+		_cachedEmissiveMaterialCount[levelIndex] = emissiveMaterialCountLocal;
+		_cachedEmissiveTriangleCount[levelIndex] = emissiveTriangleCountLocal;
+		_cachedEmissiveActiveTriangleCount[levelIndex] = emissiveActiveTriangleCountLocal;
+		_cachedEmissiveTiledTriangleCount[levelIndex] = emissiveTiledTriangleCountLocal;
+		_cachedEmissiveProxyMaxLuma[levelIndex] = emissiveProxyMaxLumaLocal;
+		_cachedEmissiveProxyMaxStrength[levelIndex] = emissiveProxyMaxStrengthLocal;
+		_stats.emissiveMaterialCount += emissiveMaterialCountLocal;
+		_stats.emissiveTriangleCount += emissiveTriangleCountLocal;
+		_stats.emissiveActiveTriangleCount += emissiveActiveTriangleCountLocal;
+		_stats.emissiveTiledTriangleCount += emissiveTiledTriangleCountLocal;
+		_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, emissiveProxyMaxLumaLocal);
+		_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, emissiveProxyMaxStrengthLocal);
+		if (emissiveDebugMode > 0 && !emissiveDebugInfos.empty())
+		{
+			std::stable_sort(emissiveDebugInfos.begin(), emissiveDebugInfos.end(),
+				[](const EmissiveMeshDebugInfo& a, const EmissiveMeshDebugInfo& b)
+				{
+					if (a.hasEmissiveTexture != b.hasEmissiveTexture)
+						return a.hasEmissiveTexture > b.hasEmissiveTexture;
+					if ((a.emissiveTriangles == 0u) != (b.emissiveTriangles == 0u))
+						return (a.emissiveTriangles == 0u) > (b.emissiveTriangles == 0u);
+					if (a.emissiveTriangles != b.emissiveTriangles)
+						return a.emissiveTriangles > b.emissiveTriangles;
+					if (a.maxTriMask != b.maxTriMask)
+						return a.maxTriMask > b.maxTriMask;
+					return a.meshEmissiveScore > b.meshEmissiveScore;
+				});
+			const size_t logCount = (emissiveDebugMode > 1)
+				? emissiveDebugInfos.size()
+				: std::min<size_t>(8u, emissiveDebugInfos.size());
+			LOG_INFO(
+				"GI emissive debug: clip=%u meshes=%zu emissiveMats=%u emissiveTri=%u activeTri=%u tiledTri=%u",
+				levelIndex,
+				emissiveDebugInfos.size(),
+				emissiveMaterialCountLocal,
+				emissiveTriangleCountLocal,
+				emissiveActiveTriangleCountLocal,
+				emissiveTiledTriangleCountLocal);
+			for (size_t i = 0u; i < logCount; ++i)
+			{
+				const auto& info = emissiveDebugInfos[i];
+				LOG_INFO(
+					"GI emissive mesh[%zu]: entity='%s' mesh='%s' material='%s' tex=%s candidate=%s score=%.4f key=%.4f sampled=%u active=%u emit=%u tiled=%u maxMask=%.4f triStep=%u uvScale=(%.3f,%.3f)",
+					i,
+					info.entityName.c_str(),
+					info.meshName.c_str(),
+					info.materialName.c_str(),
+					info.hasEmissiveTexture ? "yes" : "no",
+					info.emissiveCandidate ? "yes" : "no",
+					info.meshEmissiveScore,
+					info.meshEmissiveKey,
+					info.sampledTriangles,
+					info.activeTriangles,
+					info.emissiveTriangles,
+					info.tiledTriangles,
+					info.maxTriMask,
+					info.triStep,
+					info.uvScale.x,
+					info.uvScale.y);
+				if (emissiveDebugMode > 1)
+				{
+					LOG_INFO(
+						"GI emissive rects[%zu]: uvRect=(%.5f,%.5f,%.5f,%.5f) emissiveRect=(%.5f,%.5f,%.5f,%.5f) bestTiled=%s",
+						i,
+						info.bestUvRect.x,
+						info.bestUvRect.y,
+						info.bestUvRect.z,
+						info.bestUvRect.w,
+						info.bestEmissiveUvRect.x,
+						info.bestEmissiveUvRect.y,
+						info.bestEmissiveUvRect.z,
+						info.bestEmissiveUvRect.w,
+						info.bestTriTiled ? "yes" : "no");
+				}
+			}
+		}
 		_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
 		_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
 		return static_cast<uint32_t>(out.size());
@@ -3264,10 +4151,11 @@ namespace HexEngine
 		auto* voxelizeStage = useGpuMaterialEval
 			? (_voxelizeEvalShader ? _voxelizeEvalShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr)
 			: (_voxelizeShader ? _voxelizeShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr);
+		auto* emissivePointStage = _emissivePointShader ? _emissivePointShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
 		auto* clearStage = _voxelClearShader ? _voxelClearShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
 		auto* propagateStage = _voxelPropagateShader ? _voxelPropagateShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
 		auto* shiftStage = _voxelShiftShader ? _voxelShiftShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
-		if (voxelizeStage == nullptr || clearStage == nullptr || propagateStage == nullptr || shiftStage == nullptr)
+		if (voxelizeStage == nullptr || emissivePointStage == nullptr || clearStage == nullptr || propagateStage == nullptr || shiftStage == nullptr)
 			return;
 
 		auto& level = _clipmaps[levelIndex];
@@ -3283,6 +4171,46 @@ namespace HexEngine
 		const bool hasTriangles = (triangleCount > 0u) && EnsureGpuVoxelTriangleBuffer(triangleCount);
 		_stats.sourceTriangleCount = triangleCount;
 		_stats.candidateTriangleCount = triangleCount;
+		uint32_t emissivePayloadTriangleCount = 0u;
+		uint32_t emissivePayloadPointCount = 0u;
+		float emissivePayloadMaxRadius = 0.0f;
+		float emissivePayloadMaxRadiusVox = 0.0f;
+		float emissivePayloadMaxHint = 0.0f;
+		const float clipVoxelSize = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
+		for (uint32_t i = 0u; i < triangleCount; ++i)
+		{
+			const auto& tri = _voxelTriangleUpload[i];
+			if (tri.uv2Pad.z > 0.5f)
+			{
+				++emissivePayloadTriangleCount;
+				emissivePayloadMaxHint = std::max(emissivePayloadMaxHint, std::clamp(tri.uv2Pad.w, 0.0f, 1.0f));
+				if (tri.emissivePointRadius.w > 1e-5f)
+				{
+					++emissivePayloadPointCount;
+					emissivePayloadMaxRadius = std::max(emissivePayloadMaxRadius, tri.emissivePointRadius.w);
+					if (clipVoxelSize > 1e-5f)
+						emissivePayloadMaxRadiusVox = std::max(emissivePayloadMaxRadiusVox, tri.emissivePointRadius.w / clipVoxelSize);
+				}
+			}
+		}
+		_stats.emissivePayloadTriangleCount += emissivePayloadTriangleCount;
+		_stats.emissivePayloadPointCount += emissivePayloadPointCount;
+		_stats.emissivePayloadMaxRadius = std::max(_stats.emissivePayloadMaxRadius, emissivePayloadMaxRadius);
+		_stats.emissivePayloadMaxRadiusVox = std::max(_stats.emissivePayloadMaxRadiusVox, emissivePayloadMaxRadiusVox);
+		_stats.emissivePayloadMaxHint = std::max(_stats.emissivePayloadMaxHint, emissivePayloadMaxHint);
+		if (r_giEmissiveDebug._val.i32 > 0 && (emissivePayloadTriangleCount > 0u || !_gpuGiEmitterPointUpload.empty()))
+		{
+			LOG_INFO(
+				"GI emissive payload: clip=%u uploadTri=%u pointTri=%u standalonePts=%u maxPointR=%.3f maxPointRVox=%.3f maxHint=%.3f candidateGen=%s",
+				levelIndex,
+				emissivePayloadTriangleCount,
+				emissivePayloadPointCount,
+				static_cast<uint32_t>(_gpuGiEmitterPointUpload.size()),
+				emissivePayloadMaxRadius,
+				emissivePayloadMaxRadiusVox,
+				emissivePayloadMaxHint,
+				r_giGpuCandidateGen._val.b ? "on" : "off");
+		}
 		if (!hasTriangles && level.initialized)
 		{
 			// Avoid one-frame GI collapse from transient empty triangle gathers after clipmap shifts.
@@ -3383,6 +4311,20 @@ namespace HexEngine
 				return;
 			}
 		}
+		const uint32_t emitterPointCount = static_cast<uint32_t>(_gpuGiEmitterPointUpload.size());
+		const bool hasEmitterPoints = (emitterPointCount > 0u) && EnsureGpuGiEmitterPointBuffer(emitterPointCount);
+		if (hasEmitterPoints)
+		{
+			const auto uploadStart = std::chrono::high_resolution_clock::now();
+			D3D11_MAPPED_SUBRESOURCE mapped = {};
+			if (SUCCEEDED(context->Map(_giEmitterPointBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+			{
+				memcpy(mapped.pData, _gpuGiEmitterPointUpload.data(), emitterPointCount * sizeof(GpuGiEmitterPoint));
+				context->Unmap(_giEmitterPointBuffer, 0);
+				_stats.uploadBytes += static_cast<uint64_t>(emitterPointCount) * static_cast<uint64_t>(sizeof(GpuGiEmitterPoint));
+				_stats.cpuUploadMs += ElapsedMs(uploadStart);
+			}
+		}
 
 		uint32_t gpuLightCount = 0u;
 		uint32_t gpuMaterialCount = 0u;
@@ -3397,24 +4339,35 @@ namespace HexEngine
 				auto it = _materialTriangleAlbedoCache.find(material);
 				if (it != _materialTriangleAlbedoCache.end())
 				{
-					// Textures can stream in after cache creation; refresh previously texture-less entries.
-					if (material != nullptr && !it->second.hasTexture)
+					// Textures can stream in or be swapped after cache creation; refresh when the source changes.
+					if (material != nullptr)
 					{
-						if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
+						const auto albedoTex = material->GetTexture(MaterialTexture::Albedo);
+						const void* textureIdentity = albedoTex ? static_cast<const void*>(albedoTex.get()) : nullptr;
+						if (textureIdentity != it->second.textureIdentity)
 						{
-							it->second.width = std::max(1, albedoTex->GetWidth());
-							it->second.height = std::max(1, albedoTex->GetHeight());
-							albedoTex->GetPixels(it->second.pixels);
-							const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
-							if (it->second.pixels.size() >= minTightSize)
+							it->second.textureIdentity = textureIdentity;
+							it->second.width = 0;
+							it->second.height = 0;
+							it->second.isBgra = false;
+							it->second.hasTexture = false;
+							it->second.pixels.clear();
+							if (albedoTex)
 							{
-								const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedoTex->GetFormat());
-								it->second.isBgra =
-									(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
-									(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
-									(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
-									(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
-								it->second.hasTexture = true;
+								it->second.width = std::max(1, albedoTex->GetWidth());
+								it->second.height = std::max(1, albedoTex->GetHeight());
+								albedoTex->GetPixels(it->second.pixels);
+								const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
+								if (it->second.pixels.size() >= minTightSize)
+								{
+									const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(albedoTex->GetFormat());
+									it->second.isBgra =
+										(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+										(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+										(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+										(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+									it->second.hasTexture = true;
+								}
 							}
 						}
 					}
@@ -3431,6 +4384,7 @@ namespace HexEngine
 
 					if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
 					{
+						data.textureIdentity = static_cast<const void*>(albedoTex.get());
 						data.width = std::max(1, albedoTex->GetWidth());
 						data.height = std::max(1, albedoTex->GetHeight());
 						albedoTex->GetPixels(data.pixels);
@@ -3451,7 +4405,71 @@ namespace HexEngine
 				auto [insertedIt, _] = _materialTriangleAlbedoCache.emplace(material, std::move(data));
 				return insertedIt->second;
 			};
+			auto getMaterialEmissiveData = [&](const Material* material) -> const MaterialTriangleAlbedoCacheEntry&
+			{
+				auto it = _materialTriangleEmissiveCache.find(material);
+				if (it != _materialTriangleEmissiveCache.end())
+				{
+					if (material != nullptr)
+					{
+						const auto emissiveTex = material->GetTexture(MaterialTexture::Emission);
+						const void* textureIdentity = emissiveTex ? static_cast<const void*>(emissiveTex.get()) : nullptr;
+						if (textureIdentity != it->second.textureIdentity)
+						{
+							it->second.textureIdentity = textureIdentity;
+							it->second.width = 0;
+							it->second.height = 0;
+							it->second.isBgra = false;
+							it->second.hasTexture = false;
+							it->second.pixels.clear();
+							if (emissiveTex)
+							{
+								it->second.width = std::max(1, emissiveTex->GetWidth());
+								it->second.height = std::max(1, emissiveTex->GetHeight());
+								emissiveTex->GetPixels(it->second.pixels);
+								const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
+								if (it->second.pixels.size() >= minTightSize)
+								{
+									const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(emissiveTex->GetFormat());
+									it->second.isBgra =
+										(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+										(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+										(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+										(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+									it->second.hasTexture = true;
+								}
+							}
+						}
+					}
+					return it->second;
+				}
 
+				MaterialTriangleAlbedoCacheEntry data = {};
+				if (material != nullptr)
+				{
+					if (auto emissiveTex = material->GetTexture(MaterialTexture::Emission))
+					{
+						data.textureIdentity = static_cast<const void*>(emissiveTex.get());
+						data.width = std::max(1, emissiveTex->GetWidth());
+						data.height = std::max(1, emissiveTex->GetHeight());
+						emissiveTex->GetPixels(data.pixels);
+						const size_t minTightSize = static_cast<size_t>(data.width) * static_cast<size_t>(data.height) * 4u;
+						if (data.pixels.size() >= minTightSize)
+						{
+							const DXGI_FORMAT fmt = static_cast<DXGI_FORMAT>(emissiveTex->GetFormat());
+							data.isBgra =
+								(fmt == DXGI_FORMAT_B8G8R8A8_UNORM) ||
+								(fmt == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) ||
+								(fmt == DXGI_FORMAT_B8G8R8X8_UNORM) ||
+								(fmt == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB);
+							data.hasTexture = true;
+						}
+					}
+				}
+
+				auto [insertedIt, _] = _materialTriangleEmissiveCache.emplace(material, std::move(data));
+				return insertedIt->second;
+			};
 			if (rebuildGpuMaterialUploads)
 			{
 				_gpuGiMaterialUpload.clear();
@@ -3525,6 +4543,73 @@ namespace HexEngine
 						packedMaterial.textureWidth = binding.textureWidth;
 						packedMaterial.textureHeight = binding.textureHeight;
 						packedMaterial.flags = binding.flags;
+					}
+
+					if (materialProxy.material != nullptr)
+					{
+						const auto& emissiveData = getMaterialEmissiveData(materialProxy.material);
+						if (emissiveData.hasTexture && emissiveData.width > 0 && emissiveData.height > 0)
+						{
+							const uint32_t emissiveFlags = 1u | (emissiveData.isBgra ? 2u : 0u);
+							const uint32_t emissiveTextureWidth = static_cast<uint32_t>(emissiveData.width);
+							const uint32_t emissiveTextureHeight = static_cast<uint32_t>(emissiveData.height);
+							const uint32_t emissiveTexelCount = emissiveTextureWidth * emissiveTextureHeight;
+							GpuGiMaterialTexelBinding emissiveBinding = {};
+							auto emissiveBindingIt = _gpuGiEmissiveTexelLookup.find(materialProxy.material);
+							const bool canReuseExistingEmissive =
+								(emissiveBindingIt != _gpuGiEmissiveTexelLookup.end()) &&
+								(emissiveBindingIt->second.textureWidth == emissiveTextureWidth) &&
+								(emissiveBindingIt->second.textureHeight == emissiveTextureHeight) &&
+								(emissiveBindingIt->second.flags == emissiveFlags) &&
+								(emissiveBindingIt->second.texelOffset + emissiveTexelCount <= static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size()));
+							if (canReuseExistingEmissive)
+							{
+								emissiveBinding = emissiveBindingIt->second;
+							}
+							else
+							{
+								const bool canOverwriteExistingEmissiveRange =
+									(emissiveBindingIt != _gpuGiEmissiveTexelLookup.end()) &&
+									(emissiveBindingIt->second.textureWidth == emissiveTextureWidth) &&
+									(emissiveBindingIt->second.textureHeight == emissiveTextureHeight) &&
+									(emissiveBindingIt->second.texelOffset + emissiveTexelCount <= static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size()));
+								if (canOverwriteExistingEmissiveRange)
+								{
+									emissiveBinding = emissiveBindingIt->second;
+								}
+								else
+								{
+									emissiveBinding.texelOffset = static_cast<uint32_t>(_gpuGiMaterialTexelUpload.size());
+									emissiveBinding.textureWidth = emissiveTextureWidth;
+									emissiveBinding.textureHeight = emissiveTextureHeight;
+									emissiveBinding.flags = emissiveFlags;
+									emissiveBinding.contentHash = 0u;
+									_gpuGiMaterialTexelUpload.resize(_gpuGiMaterialTexelUpload.size() + emissiveTexelCount);
+								}
+
+								for (uint32_t t = 0u; t < emissiveTexelCount; ++t)
+								{
+									const size_t idx = static_cast<size_t>(t) * 4u;
+									if (idx + 3u >= emissiveData.pixels.size())
+										break;
+									const uint32_t packed =
+										static_cast<uint32_t>(emissiveData.pixels[idx + 0u]) |
+										(static_cast<uint32_t>(emissiveData.pixels[idx + 1u]) << 8u) |
+										(static_cast<uint32_t>(emissiveData.pixels[idx + 2u]) << 16u) |
+										(static_cast<uint32_t>(emissiveData.pixels[idx + 3u]) << 24u);
+									_gpuGiMaterialTexelUpload[emissiveBinding.texelOffset + t] = packed;
+								}
+								emissiveBinding.flags = emissiveFlags;
+								emissiveBinding.contentHash = 0u;
+								_gpuGiEmissiveTexelLookup[materialProxy.material] = emissiveBinding;
+								appendedMaterialTexels = true;
+							}
+
+							packedMaterial.emissiveTexelOffset = emissiveBinding.texelOffset;
+							packedMaterial.emissiveTextureWidth = emissiveBinding.textureWidth;
+							packedMaterial.emissiveTextureHeight = emissiveBinding.textureHeight;
+							packedMaterial.emissiveFlags = emissiveBinding.flags;
+						}
 					}
 					_gpuGiMaterialUpload.push_back(packedMaterial);
 				}
@@ -3761,6 +4846,22 @@ namespace HexEngine
 				const uint32_t groups = (injectionTriangleCount + 63u) / 64u;
 				context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
 			}
+		}
+
+		if (hasEmitterPoints && _giEmitterPointSrv != nullptr)
+		{
+			ID3D11ShaderResourceView* pointSrvs[1] = { _giEmitterPointSrv };
+			ID3D11UnorderedAccessView* pointUavs[1] = { level.radianceUav };
+			context->CSSetShaderResources(0, 1, pointSrvs);
+			context->CSSetUnorderedAccessViews(0, 1, pointUavs, nullptr);
+			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(emissivePointStage->GetNativePtr()), nullptr, 0);
+			const uint32_t groups = (emitterPointCount + 63u) / 64u;
+			context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
+
+			ID3D11ShaderResourceView* nullPointSrv[1] = {};
+			ID3D11UnorderedAccessView* nullPointUav[1] = {};
+			context->CSSetShaderResources(0, 1, nullPointSrv);
+			context->CSSetUnorderedAccessViews(0, 1, nullPointUav, nullptr);
 		}
 
 		// Break UAV/SRV hazards between injection and propagation passes.

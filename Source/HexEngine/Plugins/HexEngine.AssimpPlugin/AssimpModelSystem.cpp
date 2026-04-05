@@ -862,7 +862,10 @@ std::shared_ptr<HexEngine::Mesh> AssimpModelImporter::ProcessMesh(std::shared_pt
 	{
 		HexEngine::MeshVertex vertex;
 
-		vertex._position = AI2VEC4(mesh->mVertices[i]);
+		const auto vec3 = AI2VEC3(mesh->mVertices[i]);
+
+		vertex._position = math::Vector4(vec3.x, vec3.y, vec3.z, 1.0f);
+
 		if (applyNodeTransform)
 		{
 			vertex._position = math::Vector4::Transform(vertex._position, transmat);
