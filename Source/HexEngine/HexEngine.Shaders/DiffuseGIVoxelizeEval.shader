@@ -15,7 +15,6 @@
 		float4 uv2Pad;
 		float4 uvRect;
 		float4 emissiveUvRect;
-		float4 emissivePointRadius;
 	};
 
 	struct GpuGiLight
@@ -63,6 +62,7 @@
 		float4 g_giParams7;
 		float4 g_giParams8;
 		float4 g_giParams9;
+		float4 g_giParams10;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -408,14 +408,6 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 		const float3 clipMinWs = clipCenter - clipExtent;
 		const float3 clipMaxWs = clipCenter + clipExtent;
 		const bool triEmissiveActive = tri.uv2Pad.z > 0.5f;
-		const float4 emissivePointRadius = tri.emissivePointRadius;
-		if (triEmissiveActive && emissivePointRadius.w > 1e-5f)
-		{
-			const float3 proxyMinWs = emissivePointRadius.xyz - emissivePointRadius.w.xxx;
-			const float3 proxyMaxWs = emissivePointRadius.xyz + emissivePointRadius.w.xxx;
-			triMinWs = min(triMinWs, proxyMinWs);
-			triMaxWs = max(triMaxWs, proxyMaxWs);
-		}
 		if (any(triMaxWs < clipMinWs) || any(triMinWs > clipMaxWs))
 			return;
 
@@ -509,7 +501,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					triEmissionMask = max(triEmissionMask, rectEmissionMask);
 				}
 				// CPU-side emissive classification already proved there are bright texels inside this triangle.
-				// Keep that signal alive so tiny atlas text still injects once localized by emissivePointRadius.
+				// Keep that signal alive so tiny atlas text still injects on the correct triangle.
 				triEmissionMask = max(triEmissionMask, triEmissiveHint.xxx);
 				emissiveTriangleProxy = emissiveBase * triEmissionMask;
 			}
@@ -525,7 +517,16 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 			step = 1u;
 		}
 
-		const float planeThickness = voxelSize * (triEmissiveActive ? 3.0f : 1.5f);
+		const float planeThickness = voxelSize * (triEmissiveActive ? 3.8f : 1.5f);
+		const uint emissiveVoxelExpand = triEmissiveActive ? 1u : 0u;
+		const uint3 voxelLoopMin = uint3(
+			(voxelMin.x > emissiveVoxelExpand) ? (voxelMin.x - emissiveVoxelExpand) : 0u,
+			(voxelMin.y > emissiveVoxelExpand) ? (voxelMin.y - emissiveVoxelExpand) : 0u,
+			(voxelMin.z > emissiveVoxelExpand) ? (voxelMin.z - emissiveVoxelExpand) : 0u);
+		const uint3 voxelLoopMax = uint3(
+			min(voxelMax.x + emissiveVoxelExpand, voxelRes - 1u),
+			min(voxelMax.y + emissiveVoxelExpand, voxelRes - 1u),
+			min(voxelMax.z + emissiveVoxelExpand, voxelRes - 1u));
 
 		// Shadow-map evaluation is expensive. Default to one per-triangle visibility sample
 		// and only evaluate per-voxel when explicitly requested via cvar.
@@ -536,85 +537,65 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 			triSunVisibility = EvaluateSunShadowVisibility(triCenterWs, n, voxelSize);
 		}
 
-		for (uint z = voxelMin.z; z <= voxelMax.z; z += step)
+		for (uint z = voxelLoopMin.z; z <= voxelLoopMax.z; z += step)
 		{
-			for (uint y = voxelMin.y; y <= voxelMax.y; y += step)
+			for (uint y = voxelLoopMin.y; y <= voxelLoopMax.y; y += step)
 			{
-				for (uint x = voxelMin.x; x <= voxelMax.x; x += step)
+				for (uint x = voxelLoopMin.x; x <= voxelLoopMax.x; x += step)
 				{
 					const uint3 coord = uint3(x, y, z);
 					const float3 uvw = (float3(coord) + 0.5f) / (float)voxelRes;
 					const float3 voxelCenterWs = (uvw - 0.5f.xxx) * (clipExtent * 2.0f) + clipCenter;
 					const float signedDist = dot(n, voxelCenterWs - p0);
 					const float3 projected = voxelCenterWs - n * signedDist;
-					const float proxySupportRadius = max(emissivePointRadius.w, voxelSize * 2.0f);
-					const float proxyDistance = length(voxelCenterWs - emissivePointRadius.xyz);
-					const bool nearEmissiveProxy =
-						triEmissiveActive &&
-						(emissivePointRadius.w > 1e-5f) &&
-						(proxyDistance <= proxySupportRadius);
-					bool triangleVoxelHit = true;
-					if (abs(signedDist) > planeThickness || !IsPointInTriangle(projected, p0, p1, p2, n))
-					{
-						triangleVoxelHit = false;
-						if (!nearEmissiveProxy)
-							continue;
-					}
+					const float3 hitBary = ComputeBarycentric(projected, p0, p1, p2);
+					const float minBary = min(hitBary.x, min(hitBary.y, hitBary.z));
+					const float baryDilate = triEmissiveActive ? 0.22f : 0.0f;
+					const bool insideConservative = (minBary >= -baryDilate);
+					if (abs(signedDist) > planeThickness || !insideConservative)
+						continue;
+					const float planeWeight = saturate(1.0f - abs(signedDist) / max(planeThickness, 1e-5f));
+					const float edgeSoftness = 0.10f;
+					const float edgeWeight = saturate((minBary + baryDilate) / max(edgeSoftness + baryDilate, 1e-5f));
+					const float coverage = saturate(planeWeight * edgeWeight);
 
 					float3 emissiveContribution = 0.0f.xxx;
-					float emissiveProxySupport = 0.0f;
 					if (hasMaterialProxy && materialHasEmissiveTex && triEmissiveActive)
 					{
-						float3 sampled = 0.0f.xxx;
-						if (triangleVoxelHit)
+						const float2 uvHit = uv0 * hitBary.x + uv1 * hitBary.y + uv2 * hitBary.z;
+						float3 sampledMask = SampleMaterialEmissionNeighbourhood(materialProxy, uvHit, uvRect);
+						const float2 emitRectMin = min(emissiveUvRect.xy, emissiveUvRect.zw);
+						const float2 emitRectMax = max(emissiveUvRect.xy, emissiveUvRect.zw);
+						const float2 emitRectSize = max(emitRectMax - emitRectMin, float2(0.0f, 0.0f));
+						if (emitRectSize.x > 1e-5f && emitRectSize.y > 1e-5f)
 						{
-							const float3 bary = ComputeBarycentric(projected, p0, p1, p2);
-							const float2 uvHit = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
-							// Keep CPU triangle classification as an activation gate only.
-							// World-space emissive placement must come from the actual emissive texels,
-							// otherwise sparse atlas content lights the wrong triangle.
-							float3 sampledMask = SampleMaterialEmissionNeighbourhood(materialProxy, uvHit, uvRect);
-							const float2 emitRectMin = min(emissiveUvRect.xy, emissiveUvRect.zw);
-							const float2 emitRectMax = max(emissiveUvRect.xy, emissiveUvRect.zw);
-							const float2 emitRectSize = max(emitRectMax - emitRectMin, float2(0.0f, 0.0f));
-							if (emitRectSize.x > 1e-5f && emitRectSize.y > 1e-5f)
+							const float2 clampedUv = clamp(uvHit, emitRectMin, emitRectMax);
+							const float2 texel = float2(
+								1.0f / max(1.0f, (float)materialProxy.emissiveTextureWidth),
+								1.0f / max(1.0f, (float)materialProxy.emissiveTextureHeight));
+							const float2 outside = abs(uvHit - clampedUv);
+							const float feather = max(max(texel.x, texel.y) * 3.0f, max(emitRectSize.x, emitRectSize.y) * 0.20f);
+							const float rectDist = length(outside);
+							const float rectSupport = saturate(1.0f - rectDist / max(feather, 1e-5f));
+							if (rectSupport > 0.0f)
 							{
-								const float2 clampedUv = clamp(uvHit, emitRectMin, emitRectMax);
-								const float2 texel = float2(
-									1.0f / max(1.0f, (float)materialProxy.emissiveTextureWidth),
-									1.0f / max(1.0f, (float)materialProxy.emissiveTextureHeight));
-								const float2 outside = abs(uvHit - clampedUv);
-								const float feather = max(max(texel.x, texel.y) * 3.0f, max(emitRectSize.x, emitRectSize.y) * 0.20f);
-								const float rectDist = length(outside);
-								const float rectSupport = saturate(1.0f - rectDist / max(feather, 1e-5f));
-								if (rectSupport > 0.0f)
+								float3 rectMask = 0.0f.xxx;
+								[unroll]
+								for (uint sy = 0u; sy < 3u; ++sy)
 								{
-									float3 rectMask = 0.0f.xxx;
 									[unroll]
-									for (uint sy = 0u; sy < 3u; ++sy)
+									for (uint sx = 0u; sx < 3u; ++sx)
 									{
-										[unroll]
-										for (uint sx = 0u; sx < 3u; ++sx)
-										{
-											const float2 f = float2((float)sx, (float)sy) * 0.5f;
-											const float2 probeUv = lerp(emitRectMin, emitRectMax, f);
-											rectMask = max(rectMask, SampleMaterialEmissionNeighbourhood(materialProxy, probeUv, uvRect));
-										}
+										const float2 f = float2((float)sx, (float)sy) * 0.5f;
+										const float2 probeUv = lerp(emitRectMin, emitRectMax, f);
+										rectMask = max(rectMask, SampleMaterialEmissionNeighbourhood(materialProxy, probeUv, uvRect));
 									}
-									sampledMask = max(sampledMask, rectMask * rectSupport);
 								}
+								sampledMask = max(sampledMask, rectMask * rectSupport);
 							}
-							sampled = emissiveBase * saturate(sampledMask);
 						}
-						float3 proxyFallback = 0.0f.xxx;
-						if (emissivePointRadius.w > 1e-5f)
-						{
-							float pointSupport = saturate(1.0f - proxyDistance / max(proxySupportRadius, 1e-5f));
-							pointSupport *= pointSupport;
-							emissiveProxySupport = max(emissiveProxySupport, pointSupport);
-							proxyFallback = emissiveTriangleProxy * pointSupport;
-						}
-						emissiveContribution = max(sampled, proxyFallback);
+						const float3 sampled = emissiveBase * saturate(sampledMask);
+						emissiveContribution = max(sampled, emissiveTriangleProxy);
 					}
 					else if (hasMaterialProxy && !materialHasEmissiveTex && emissiveStrengthBase > 1e-5f)
 					{
@@ -659,11 +640,16 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 					const float shiftSettle = saturate(g_giParams6.y);
 					const float temporalKeepBase = lerp(0.80f, 0.94f, warmStabilize);
-					const float temporalKeep = lerp(temporalKeepBase, 0.95f, shiftSettle * 0.45f);
+					const float temporalKeep = lerp(temporalKeepBase, 0.95f, shiftSettle * 0.12f);
 					const float albedoKeepBase = lerp(0.75f, 0.93f, warmStabilize);
-					const float albedoKeep = lerp(albedoKeepBase, 0.96f, shiftSettle * 0.55f);
+					const float albedoKeep = lerp(albedoKeepBase, 0.96f, shiftSettle * 0.20f);
+					const float triCoverage = saturate(coverage);
+					// Use coverage as an edge softening term, but retain most interior energy.
+					const float coverageRadiance = lerp(1.0f, triCoverage, 0.45f);
+					const float coverageAlbedo = lerp(1.0f, triCoverage, 0.55f);
+					const float coverageOpacity = lerp(1.0f, triCoverage, 0.80f);
 					const float prevAlbedoW = saturate(previousAlbedo.a) * albedoKeep;
-					const float triAlbedoW = saturate(tri.albedoWeight.a);
+					const float triAlbedoW = saturate(tri.albedoWeight.a) * coverageAlbedo;
 					const float albedoW = max(prevAlbedoW + triAlbedoW, 1e-4f);
 					const float3 voxelAlbedo = saturate((previousAlbedo.rgb * prevAlbedoW + triAlbedo * triAlbedoW) / albedoW);
 					const float albedoConfidence = saturate(max(previousAlbedo.a * albedoKeep, triAlbedoW));
@@ -692,10 +678,10 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						const float litFactor = saturate(sunFacingWeight * sunPresence * sunVisible);
 						const float unlitWeight = (1.0f - litFactor) * (1.0f - litFactor);
 						const float triLuma = clamp(dot(triAlbedo, float3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
-						const float3 baseDiffuse = triangleVoxelHit ? (triAlbedo * (triLuma * diffuseInject * unlitBase * unlitWeight * 0.48f * clipAttenuation)) : 0.0f.xxx;
+						const float3 baseDiffuse = triAlbedo * (triLuma * diffuseInject * unlitBase * unlitWeight * 0.48f * clipAttenuation);
 						const float sunDirectionalShape = lerp(0.70f, 1.0f, sunDirectionality);
 						const float sunDirectional = sunFacingWeight * sunStrength * sunInject * sunDirectionalShape * (0.38f + 0.32f * sunBoost);
-						const float3 sunBounce = triangleVoxelHit ? (triAlbedo * (triLuma * sunDirectional * sunVisible * clipAttenuation)) : 0.0f.xxx;
+						const float3 sunBounce = triAlbedo * (triLuma * sunDirectional * sunVisible * clipAttenuation);
 						const float3 emissiveBounce = emissiveContribution * emissiveInject * clipAttenuation;
 						injected = baseDiffuse + sunBounce + emissiveBounce;
 					}
@@ -704,46 +690,72 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						injected += emissiveContribution * emissiveInject * clipAttenuation;
 					}
 					// Motion damping to reduce visible flicker while clipmaps settle.
-					const float motionInjectScale = lerp(1.0f, 0.82f, shiftSettle);
+					// Keep this subtle to avoid visible GI dimming while moving.
+					const float motionInjectScale = 1.0f;
 					injected *= motionInjectScale;
 					injected += EvaluateLocalLights(voxelCenterWs, n, voxelAlbedo, voxelSize) * motionInjectScale;
+					// Sub-voxel edge coverage softens hard transitions when triangle edges do not align to voxel boundaries.
+					injected *= coverageRadiance;
 					const float injectedLum = dot(injected, float3(0.2126f, 0.7152f, 0.0722f));
 					// If there's little/no new injection, reduce history retention so stale neutral energy fades out.
 					const float injectionPresence = saturate(injectedLum * 2.5f);
-					const float minKeep = lerp(0.20f, 0.28f, shiftSettle);
+					// Avoid over-retaining history while moving, which can suppress fresh injection.
+					const float minKeep = 0.20f;
 					float effectiveKeep = lerp(minKeep, temporalKeep, injectionPresence);
+					// Movement compensation: retain less stale history while clipmaps are settling so
+					// fresh GI injection does not appear dim during camera motion.
+					effectiveKeep *= lerp(1.0f, 0.82f, shiftSettle);
 					if (emissiveMaterialActive)
 					{
 						// Let emissive injection respond quickly instead of being trapped by temporal damping.
-						effectiveKeep = min(effectiveKeep, 0.08f);
+						effectiveKeep = min(effectiveKeep, 0.02f);
 					}
+					const float movementGain = lerp(1.0f, 1.10f, shiftSettle);
+					injected *= movementGain;
 					float3 radiance = previous.rgb * effectiveKeep + injected * (1.0f - effectiveKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
 					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
 					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
-					float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
+					float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.20f);
 					if (emissiveMaterialActive)
 					{
 						// Emissive needs larger per-frame headroom or it effectively disappears.
 						deltaLimit = max(deltaLimit, 2.0f.xxx + previous.rgb * 1.5f);
 					}
 					radiance = clamp(radiance, previous.rgb - deltaLimit, previous.rgb + deltaLimit);
+
+					// Step 4: cheap edge-aware smoothing only near sub-voxel triangle boundaries.
+					// We pull from previous-frame neighborhood so this stays stable and inexpensive.
+					const float edgeThreshold = saturate(g_giParams10.x);
+					const float edgeBlendStrength = saturate(g_giParams10.y);
+					const float edgeBand = max(edgeThreshold, 1e-3f);
+					const float edgeBlend = saturate((edgeThreshold - triCoverage) / edgeBand);
+					if (edgeBlend > 1e-3f && !emissiveMaterialActive)
+					{
+						const uint xm = (coord.x > 0u) ? (coord.x - 1u) : 0u;
+						const uint xp = min(coord.x + 1u, voxelRes - 1u);
+						const uint ym = (coord.y > 0u) ? (coord.y - 1u) : 0u;
+						const uint yp = min(coord.y + 1u, voxelRes - 1u);
+						const uint zm = (coord.z > 0u) ? (coord.z - 1u) : 0u;
+						const uint zp = min(coord.z + 1u, voxelRes - 1u);
+						const float3 nsum =
+							g_prevVoxelRadiance.Load(int4(xm, coord.y, coord.z, 0)).rgb +
+							g_prevVoxelRadiance.Load(int4(xp, coord.y, coord.z, 0)).rgb +
+							g_prevVoxelRadiance.Load(int4(coord.x, ym, coord.z, 0)).rgb +
+							g_prevVoxelRadiance.Load(int4(coord.x, yp, coord.z, 0)).rgb +
+							g_prevVoxelRadiance.Load(int4(coord.x, coord.y, zm, 0)).rgb +
+							g_prevVoxelRadiance.Load(int4(coord.x, coord.y, zp, 0)).rgb;
+						const float3 navg = nsum * (1.0f / 6.0f);
+						radiance = lerp(radiance, navg, edgeBlend * edgeBlendStrength);
+					}
+
 					radiance = min(radiance, 32.0f.xxx);
 
-					float opacity = triangleVoxelHit ? max(previous.a, tri.radianceOpacity.a) : previous.a;
-					if (!triangleVoxelHit && emissiveMaterialActive && emissiveProxySupport > 1e-4f)
-					{
-						// Off-surface emissive support needs a small amount of occupancy so propagation/trace
-						// treat it as persistent nearby energy, but keep it low to avoid recreating hotspot blobs.
-						const float emissiveOcc = saturate(0.02f + emissiveProxySupport * 0.10f);
-						opacity = max(opacity, emissiveOcc);
-					}
+					const float triOpacity = saturate(tri.radianceOpacity.a) * coverageOpacity;
+					float opacity = saturate(previous.a + triOpacity * (1.0f - previous.a));
 					g_voxelRadianceOut[coord] = float4(radiance, opacity);
-					if (triangleVoxelHit)
-					{
-						g_voxelAlbedoOut[coord] = float4(voxelAlbedo, albedoConfidence);
-					}
+					g_voxelAlbedoOut[coord] = float4(voxelAlbedo, albedoConfidence);
 				}
 			}
 		}

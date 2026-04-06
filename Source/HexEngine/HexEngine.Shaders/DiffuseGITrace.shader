@@ -601,9 +601,9 @@
 		const float sunDirectionality = saturate(g_giParams3.w);
 		const float directMask = sunFacing * sunDirectionality;
 		gi *= lerp(1.0f, 0.38f, directMask);
-		// Motion-time clip stabilization can bias toward near-clip energy.
-		// Compensate while moving to avoid temporary over-brightening.
-		gi *= lerp(1.0f, 0.78f, motionClipBias);
+		// Do not scale GI intensity by camera-motion bias; this causes visible dimming while moving.
+		// Motion handling should come from sampling/temporal stability, not energy attenuation.
+		gi *= 1.0f;
 
 		gi = gi / (1.0f + gi * 0.18f);
 

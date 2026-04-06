@@ -251,6 +251,8 @@ namespace HexEditor
 		addFloatControl(gi, "r_giResolveLumaReject", L"Resolve Luma Reject", 0.01f, 3);
 		addFloatControl(gi, "r_giResolveDitherDark", L"Resolve Dither Dark", 0.0001f, 4);
 		addFloatControl(gi, "r_giResolveDitherBright", L"Resolve Dither Bright", 0.0001f, 4);
+		addFloatControl(gi, "r_giGpuEdgeSmoothThreshold", L"Edge Smoothing Threshold", 0.001f, 4);
+		addFloatControl(gi, "r_giGpuEdgeSmoothBlendStrength", L"Edge Smoothing Blend Strength", 0.001f, 4);
 		addIntControl(gi, "r_giDebugView", L"Debug View", 1);
 
 		pm->_ocean = makeSectionTab(L"Ocean", L"Ocean");

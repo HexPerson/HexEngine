@@ -93,7 +93,8 @@ namespace HexEngine
 			math::Vector4 params6; // x=voxelNeighbourBlend, y=shiftSettle, z=voxelAlbedoInfluence, w=reserved
 			math::Vector4 params7; // x=gpuMaterialProxyBlend, y=gpuComputeBaseSunEnabled, zw=reserved
 			math::Vector4 params8; // x=diffuseInject, y=sunInject, z=sunDirectionalBoost, w=emissiveInject
-			math::Vector4 params9; // x=sunStrength, y=unlitAlbedoInjection, zw=reserved
+			math::Vector4 params9; // x=sunStrength, y=unlitAlbedoInjection, z=maxVoxelTestsPerTri, w=sunShadowMode
+			math::Vector4 params10; // x=gpuEdgeSmoothThreshold, y=gpuEdgeSmoothBlendStrength, zw=reserved
 		};
 
 		struct GpuVoxelTriangle
@@ -107,13 +108,6 @@ namespace HexEngine
 			math::Vector4 uv2Pad;
 			math::Vector4 uvRect;
 			math::Vector4 emissiveUvRect;
-			math::Vector4 emissivePointRadius;
-		};
-
-		struct GpuGiEmitterPoint
-		{
-			math::Vector4 positionRadius = math::Vector4::Zero;
-			math::Vector4 radianceOpacity = math::Vector4::Zero;
 		};
 
 		struct VoxelShiftConstants
@@ -230,11 +224,8 @@ namespace HexEngine
 			uint32_t emissiveActiveTriangleCount = 0u;
 			uint32_t emissiveTiledTriangleCount = 0u;
 			uint32_t emissivePayloadTriangleCount = 0u;
-			uint32_t emissivePayloadPointCount = 0u;
 			float emissiveProxyMaxLuma = 0.0f;
 			float emissiveProxyMaxStrength = 0.0f;
-			float emissivePayloadMaxRadius = 0.0f;
-			float emissivePayloadMaxRadiusVox = 0.0f;
 			float emissivePayloadMaxHint = 0.0f;
 		};
 
@@ -279,7 +270,6 @@ namespace HexEngine
 		bool IsMeshStateDirty(StaticMeshComponent* smc, const math::Vector3& worldPos);
 		math::Vector3 GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent);
 		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
-		bool EnsureGpuGiEmitterPointBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiLightBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialTexelBuffer(uint32_t elementCapacity);
@@ -351,7 +341,6 @@ namespace HexEngine
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleAlbedoCache;
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleEmissiveCache;
 		std::vector<GpuVoxelTriangle> _voxelTriangleUpload;
-		std::vector<GpuGiEmitterPoint> _gpuGiEmitterPointUpload;
 		std::vector<GiMeshInstanceProxy> _giMeshProxies;
 		std::vector<GiMaterialProxy> _giMaterialProxies;
 		std::vector<GiLocalLightProxy> _giLightProxies;
@@ -374,9 +363,6 @@ namespace HexEngine
 		ID3D11Buffer* _voxelTriangleBuffer = nullptr;
 		ID3D11ShaderResourceView* _voxelTriangleSrv = nullptr;
 		uint32_t _voxelTriangleCapacity = 0;
-		ID3D11Buffer* _giEmitterPointBuffer = nullptr;
-		ID3D11ShaderResourceView* _giEmitterPointSrv = nullptr;
-		uint32_t _giEmitterPointCapacity = 0;
 		ID3D11Buffer* _giLightBuffer = nullptr;
 		ID3D11ShaderResourceView* _giLightSrv = nullptr;
 		uint32_t _giLightCapacity = 0;
@@ -399,13 +385,11 @@ namespace HexEngine
 		std::shared_ptr<IShader> _fullScreenShader;
 		std::shared_ptr<IShader> _voxelizeShader;
 		std::shared_ptr<IShader> _voxelizeEvalShader;
-		std::shared_ptr<IShader> _emissivePointShader;
 		std::shared_ptr<IShader> _voxelCandidateShader;
 		std::shared_ptr<IShader> _voxelClearShader;
 		std::shared_ptr<IShader> _voxelPropagateShader;
 		std::shared_ptr<IShader> _voxelShiftShader;
 		std::array<std::vector<GpuVoxelTriangle>, ClipmapCount> _cachedVoxelTriangles = {};
-		std::array<std::vector<GpuGiEmitterPoint>, ClipmapCount> _cachedGiEmitterPoints = {};
 		std::array<std::vector<GiMaterialProxy>, ClipmapCount> _cachedGiMaterialProxies = {};
 		std::array<bool, ClipmapCount> _cachedVoxelTrianglesValid = { false, false, false, false };
 		std::array<uint64_t, ClipmapCount> _cachedVoxelTrianglesFrame = { 0ull, 0ull, 0ull, 0ull };

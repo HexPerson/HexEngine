@@ -82,10 +82,11 @@ namespace HexEngine
 
 		LineEdit::OnInputEvent(event, data);
 
-		if ((event == InputEvent::Char && data->Char.ch == VK_RETURN) ||
-			(event == InputEvent::KeyDown && data->KeyDown.key == VK_RETURN))
+		if ((event == InputEvent::Char && data->Char.ch == VK_RETURN ||
+			event == InputEvent::KeyDown && data->KeyDown.key == VK_RETURN) && IsInputFocus())
 		{
 			CommitTextValue();
+			SetHasInputFocus(false);
 			return true;
 		}
 

@@ -66,6 +66,22 @@ void Texture2D::GetPixels(std::vector<uint8_t>& buffer)
 
 	buffer.clear();
 	buffer.insert(buffer.end(), pixels, pixels + pixelsSize);
+
+	//D3D11_MAPPED_SUBRESOURCE mapped = {};
+
+	//if (gfxContext->Map(_texture, 0, D3D11_MAP_READ/*D3D11_MAP_WRITE_DISCARD*/, 0, &mapped) == S_OK)
+	//{
+	//	if (buffer.size() > 0)
+	//	{
+	//		memcpy((void*)buffer.data(), mapped.pData, GetWidth() * GetHeight() * 4 * sizeof(uint8_t));
+	//	}
+	//	else
+	//	{
+	//		buffer.insert(buffer.end(), (uint8_t*)mapped.pData, (uint8_t*)mapped.pData + (GetWidth() * GetHeight() * 4 * sizeof(uint8_t)));
+	//	}
+
+	//	gfxContext->Unmap(_texture, 0);
+	//}
 }
 
 void* Texture2D::LockPixels(int32_t* rowPitch)
@@ -116,8 +132,6 @@ void Texture2D::GetPixels(std::vector<float>& buffer)
 		}
 		else
 		{
-			buffer.clear();
-			//buffer.resize(pixelsSize);
 			buffer.insert(buffer.end(), (uint8_t*)mapped.pData, (uint8_t*)mapped.pData + (GetWidth() * GetHeight() * 4 * sizeof(float)));
 		}
 

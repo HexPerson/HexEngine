@@ -79,11 +79,7 @@ bool HLSL::Compile(const fs::path& filePath, std::vector<uint8_t>& dataOut, HexE
 						column = std::stoi(scolumn);
 					}
 
-					auto p = error.find_last_of(':');
-
-					auto errorstr = error.substr(p + 2);
-
-					printf("%S:%d:%d: error: %s\n", filePath.c_str(), line + lineOffsets[stageIdx], column, errorstr.c_str());
+					printf("%S:%d:%d: error: %s\n", filePath.c_str(), line + lineOffsets[stageIdx], column, error.c_str());
 				}
 				return false;
 			}

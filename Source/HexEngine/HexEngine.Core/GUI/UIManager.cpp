@@ -219,7 +219,9 @@ namespace HexEngine
 
 		if (element->OnInputEvent(event, data))
 		{
-			//LOG_DEBUG("Element '%s', handled input", typeid(*element).name());
+			if(event == InputEvent::KeyDown && data->KeyDown.key == VK_RETURN)
+				LOG_DEBUG("Element '%s', handled input", typeid(*element).name());
+
 			return false;
 		}
 

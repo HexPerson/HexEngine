@@ -23,6 +23,8 @@ namespace HexEngine
 	private:
 		void ApplyTextureFromSearch(MaterialTexture type, const AssetSearchResult& result);
 
+	private:
+		ScrollView* _rootView = nullptr;
 		ComponentWidget* _layout = nullptr;
 		AssetSearch* _textures[MaterialTexture::Count] = { nullptr };
 		DragFloat* _smoothness = nullptr;

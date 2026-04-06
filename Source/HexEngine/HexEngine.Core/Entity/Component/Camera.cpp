@@ -9,14 +9,15 @@ namespace HexEngine
 {
 	const float gCameraDefaultFov = 70.0f;
 	const float gViewMatrixBehindDistance = 20.0f;
-	const float gDefaultMaxViewDistance = 350.0f;
+
+	HVar r_cameraViewDistance("r_cameraViewDistance", "The maximum view depth of the camera", 350.0f, 1.0f, 10000.0f);
 
 	extern HVar r_lodPartition;
 
 	Camera::Camera(Entity* entity) :
 		UpdateComponent(entity)
 	{
-		SetPespectiveParameters(gCameraDefaultFov, g_pEnv->GetAspectRatio(), 0.1f, gDefaultMaxViewDistance);
+		SetPespectiveParameters(gCameraDefaultFov, g_pEnv->GetAspectRatio(), 0.1f, r_cameraViewDistance._val.f32);
 
 		uint32_t width, height;
 		g_pEnv->_graphicsDevice->GetBackBufferDimensions(width, height);
@@ -177,6 +178,11 @@ namespace HexEngine
 		{
 			EnableDLSS(_dlssEnabled);
 			_dlssValueChanged = false;
+		}
+
+		if (_screenFar != r_cameraViewDistance._val.f32)
+		{
+			SetPespectiveParameters(_fov, _aspectRatio, _screenNear, r_cameraViewDistance._val.f32);
 		}
 
 		UpdateRotation();

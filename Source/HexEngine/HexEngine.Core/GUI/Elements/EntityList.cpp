@@ -70,8 +70,17 @@ namespace HexEngine
 
 	bool EntityList::OnInputEvent(InputEvent event, InputData* data)
 	{
+		if (_ctx != nullptr && IsMouseOver(_ctx->GetAbsolutePosition(), _ctx->GetSize()) == false)
+		{
+			_ctx->DeleteMe();
+			_ctx = nullptr;
+			return TreeList::OnInputEvent(event, data);
+		}
+
 		if (_ctx && _ctx->IsEnabled())
+		{
 			return false;
+		}
 
 		return TreeList::OnInputEvent(event, data);
 	}
@@ -103,7 +112,7 @@ namespace HexEngine
 				int32_t mx, my;
 				g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
-				Point p(mx, my);
+				Point p(mx - 1, my - 1);
 
 				_ctx = new ContextMenu(this, p.RelativeTo(GetAbsolutePosition()));
 
@@ -118,7 +127,7 @@ namespace HexEngine
 			int32_t mx, my;
 			g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
-			Point p(mx, my);
+			Point p(mx - 1, my - 1);
 
 			_ctx = new ContextMenu(this, p.RelativeTo(GetAbsolutePosition()));
 

@@ -74,10 +74,11 @@ namespace HexEngine
 	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 64, 1, 256);
 	HVar r_giGpuSunShadowMode("r_giGpuSunShadowMode", "GPU GI sun-shadow mode (0=off,1=single tap,2=PCF 3x3)", 0, 0, 2);
 	HVar r_giGpuSunShadowPerVoxel("r_giGpuSunShadowPerVoxel", "Evaluate GPU GI sun shadow per voxel hit (expensive); when off uses per-triangle sun visibility", false, false, true);
+	HVar r_giGpuEdgeSmoothThreshold("r_giGpuEdgeSmoothThreshold", "Coverage threshold where GPU edge smoothing starts (higher = wider smoothing band)", 0.90f, 0.0f, 1.0f);
+	HVar r_giGpuEdgeSmoothBlendStrength("r_giGpuEdgeSmoothBlendStrength", "GPU edge smoothing blend strength from neighboring voxels", 0.22f, 0.0f, 1.0f);
 	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters,2=verbose counters)", 0, 0, 2);
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 300, 10, 2000);
-	HVar r_giEmissiveDebug("r_giEmissiveDebug", "Log emissive GI classification details during triangle rebuilds (0=off,1=summary,2=verbose)", 0, 0, 2);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
@@ -473,7 +474,6 @@ namespace HexEngine
 		_fullScreenShader = IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
 		_voxelizeShader = IShader::Create("EngineData.Shaders/DiffuseGIVoxelize.hcs");
 		_voxelizeEvalShader = IShader::Create("EngineData.Shaders/DiffuseGIVoxelizeEval.hcs");
-		_emissivePointShader = IShader::Create("EngineData.Shaders/DiffuseGIInjectEmitters.hcs");
 		_voxelCandidateShader = IShader::Create("EngineData.Shaders/DiffuseGIBuildCandidates.hcs");
 		_voxelClearShader = IShader::Create("EngineData.Shaders/DiffuseGIClearVoxel.hcs");
 		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
@@ -557,7 +557,6 @@ namespace HexEngine
 			 _fullScreenShader != nullptr &&
 			 _voxelizeShader != nullptr &&
 			 _voxelizeEvalShader != nullptr &&
-			 _emissivePointShader != nullptr &&
 			 _voxelClearShader != nullptr &&
 			 _voxelPropagateShader != nullptr &&
 			 _voxelShiftShader != nullptr &&
@@ -595,8 +594,6 @@ namespace HexEngine
 		SAFE_DELETE(_voxelShiftConstantBuffer);
 		SAFE_RELEASE(_voxelTriangleSrv);
 		SAFE_RELEASE(_voxelTriangleBuffer);
-		SAFE_RELEASE(_giEmitterPointSrv);
-		SAFE_RELEASE(_giEmitterPointBuffer);
 		SAFE_RELEASE(_giLightSrv);
 		SAFE_RELEASE(_giLightBuffer);
 		SAFE_RELEASE(_giMaterialSrv);
@@ -610,13 +607,11 @@ namespace HexEngine
 		SAFE_RELEASE(_voxelCandidateCountReadback);
 		SAFE_RELEASE(_voxelCandidateDispatchArgs);
 		_voxelTriangleCapacity = 0;
-		_giEmitterPointCapacity = 0;
 		_giLightCapacity = 0;
 		_giMaterialCapacity = 0;
 		_giMaterialTexelCapacity = 0;
 		_voxelCandidateCapacity = 0;
 		_voxelTriangleUpload.clear();
-		_gpuGiEmitterPointUpload.clear();
 		_gpuGiLightUpload.clear();
 		_gpuGiMaterialUpload.clear();
 		_gpuGiMaterialTexelUpload.clear();
@@ -632,7 +627,6 @@ namespace HexEngine
 		_fullScreenShader = nullptr;
 		_voxelizeShader = nullptr;
 		_voxelizeEvalShader = nullptr;
-		_emissivePointShader = nullptr;
 		_voxelCandidateShader = nullptr;
 		_voxelClearShader = nullptr;
 		_voxelPropagateShader = nullptr;
@@ -1823,9 +1817,14 @@ namespace HexEngine
 		const float sunPresence = std::clamp(sunStrength * std::max(0.0f, r_giSunInjection._val.f32), 0.0f, 1.0f);
 		_constants.params9 = math::Vector4(
 			sunStrength,
-			std::max(0.0f, r_giUnlitAlbedoInjection._val.f32),
+			std::max(0.0f, r_giUnlitAlbedoInjection._val.f32 * sunPresence),
 			static_cast<float>(std::clamp(r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32, 1, 256)),
 			static_cast<float>(std::clamp(r_giGpuSunShadowMode._val.i32, 0, 2)));
+		_constants.params10 = math::Vector4(
+			std::clamp(r_giGpuEdgeSmoothThreshold._val.f32, 0.0f, 1.0f),
+			std::clamp(r_giGpuEdgeSmoothBlendStrength._val.f32, 0.0f, 1.0f),
+			0.0f,
+			0.0f);
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresence;
@@ -2136,7 +2135,7 @@ namespace HexEngine
 		if (telemetryEnabled && ((_frameCounter % telemetryPeriod) == 0ull))
 		{
 			LOG_INFO(
-				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u emissiveMats=%u emissiveTri=%u emissiveActiveTri=%u emissiveTiledTri=%u emissivePayloadTri=%u emissivePayloadPoint=%u emissiveMaxL=%.3f emissiveMaxA=%.3f emissivePayloadMaxR=%.3f emissivePayloadMaxRVox=%.3f emissivePayloadMaxH=%.3f gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s evalTriBudget=%d evalMaxTests=%d sunShadowMode=%d sunShadowPerVoxel=%s",
+				"GI telemetry: frame=%llu build=%.3fms upload=%.3fms candidate=%.3fms dispatch=%.3fms tri=%u cand=%u emissiveMats=%u emissiveTri=%u emissiveActiveTri=%u emissiveTiledTri=%u emissivePayloadTri=%u emissiveMaxL=%.3f emissiveMaxA=%.3f emissivePayloadMaxH=%.3f gpuLights=%u uploadBytes=%llu gpuCandidate=%s gpuMaterialEval=%s gpuComputeBaseSun=%s evalTriBudget=%d evalMaxTests=%d sunShadowMode=%d sunShadowPerVoxel=%s",
 				static_cast<unsigned long long>(_frameCounter),
 				_stats.cpuTriangleBuildMs,
 				_stats.cpuUploadMs,
@@ -2149,11 +2148,8 @@ namespace HexEngine
 				_stats.emissiveActiveTriangleCount,
 				_stats.emissiveTiledTriangleCount,
 				_stats.emissivePayloadTriangleCount,
-				_stats.emissivePayloadPointCount,
 				_stats.emissiveProxyMaxLuma,
 				_stats.emissiveProxyMaxStrength,
-				_stats.emissivePayloadMaxRadius,
-				_stats.emissivePayloadMaxRadiusVox,
 				_stats.emissivePayloadMaxHint,
 				_stats.gpuLightCount,
 				static_cast<unsigned long long>(_stats.uploadBytes),
@@ -2228,52 +2224,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		}
 
 		_voxelTriangleCapacity = elementCapacity;
-		return true;
-	}
-
-	bool DiffuseGI::EnsureGpuGiEmitterPointBuffer(uint32_t elementCapacity)
-	{
-		if (elementCapacity == 0u)
-			return false;
-		if (_giEmitterPointBuffer != nullptr && _giEmitterPointSrv != nullptr && _giEmitterPointCapacity >= elementCapacity)
-			return true;
-
-		SAFE_RELEASE(_giEmitterPointSrv);
-		SAFE_RELEASE(_giEmitterPointBuffer);
-		_giEmitterPointCapacity = 0u;
-
-		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
-		if (device == nullptr)
-			return false;
-
-		D3D11_BUFFER_DESC desc = {};
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		desc.ByteWidth = std::max<uint32_t>(1u, elementCapacity) * static_cast<uint32_t>(sizeof(GpuGiEmitterPoint));
-		desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-		desc.Usage = D3D11_USAGE_DYNAMIC;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
-		desc.StructureByteStride = sizeof(GpuGiEmitterPoint);
-
-		if (FAILED(device->CreateBuffer(&desc, nullptr, &_giEmitterPointBuffer)) || _giEmitterPointBuffer == nullptr)
-		{
-			LOG_CRIT("DiffuseGI failed to create GPU emissive point buffer.");
-			return false;
-		}
-
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.FirstElement = 0;
-		srvDesc.Buffer.NumElements = elementCapacity;
-
-		if (FAILED(device->CreateShaderResourceView(_giEmitterPointBuffer, &srvDesc, &_giEmitterPointSrv)) || _giEmitterPointSrv == nullptr)
-		{
-			LOG_CRIT("DiffuseGI failed to create GPU emissive point SRV.");
-			SAFE_RELEASE(_giEmitterPointBuffer);
-			return false;
-		}
-
-		_giEmitterPointCapacity = elementCapacity;
 		return true;
 	}
 
@@ -2817,7 +2767,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 	{
 		const auto buildStart = std::chrono::high_resolution_clock::now();
 		out.clear();
-		_gpuGiEmitterPointUpload.clear();
 		if (scene == nullptr || levelIndex >= ClipmapCount)
 		{
 			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
@@ -2850,7 +2799,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheStillFresh && cachedTriangleCountAcceptable)
 		{
 			out = _cachedVoxelTriangles[levelIndex];
-			_gpuGiEmitterPointUpload.clear();
 			_giMaterialProxies = _cachedGiMaterialProxies[levelIndex];
 			_giMaterialProxyLookup.clear();
 			for (const auto& materialProxy : _giMaterialProxies)
@@ -2917,27 +2865,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				meshesInBounds.push_back(meshProxy.component);
 			}
 		}
-		auto meshEmissiveKey = [](const StaticMeshComponent* smc) -> float
-		{
-			if (smc == nullptr)
-				return 0.0f;
-			const auto mat = smc->GetMaterial();
-			if (!mat)
-				return 0.0f;
-			const auto emissive = mat->_properties.emissiveColour;
-			const float tintLum = std::max(0.0f, emissive.x * 0.2126f + emissive.y * 0.7152f + emissive.z * 0.0722f);
-			return std::max(0.0f, emissive.w) * tintLum;
-		};
-		std::stable_sort(meshesInBounds.begin(), meshesInBounds.end(),
-			[&](const StaticMeshComponent* a, const StaticMeshComponent* b)
-			{
-				const float ae = meshEmissiveKey(a);
-				const float be = meshEmissiveKey(b);
-				if (ae != be)
-					return ae > be;
-				return std::less<const StaticMeshComponent*>()(a, b);
-			});
-
 		struct LocalLightSample
 		{
 			math::Vector3 position = math::Vector3::Zero;
@@ -2983,32 +2910,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		uint32_t emissiveTriangleCountLocal = 0u;
 		uint32_t emissiveActiveTriangleCountLocal = 0u;
 		uint32_t emissiveTiledTriangleCountLocal = 0u;
-		const int32_t emissiveDebugMode = std::clamp(r_giEmissiveDebug._val.i32, 0, 2);
-		struct EmissiveMeshDebugInfo
-		{
-			std::string entityName;
-			std::string meshName;
-			std::string materialName;
-			bool hasEmissiveTexture = false;
-			bool emissiveCandidate = false;
-			uint32_t sampledTriangles = 0u;
-			uint32_t activeTriangles = 0u;
-			uint32_t emissiveTriangles = 0u;
-			uint32_t tiledTriangles = 0u;
-			uint32_t triStep = 1u;
-			float meshEmissiveScore = 0.0f;
-			float meshEmissiveKey = 0.0f;
-			float maxTriMask = 0.0f;
-			math::Vector2 uvScale = math::Vector2(1.0f, 1.0f);
-			math::Vector4 bestUvRect = math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
-			math::Vector4 bestEmissiveUvRect = math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
-			bool bestTriTiled = false;
-		};
-		std::vector<EmissiveMeshDebugInfo> emissiveDebugInfos;
-		if (emissiveDebugMode > 0)
-		{
-			emissiveDebugInfos.reserve(meshesInBounds.size());
-		}
 		const math::Vector3 sunTint = ComputeSunTint(scene);
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
 		float sunStrength = 0.0f;
@@ -3426,54 +3327,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 			return info;
 		};
-		auto computeUvBarycentric = [](float u, float v, float u0, float v0, float u1, float v1, float u2, float v2) -> math::Vector3
-		{
-			const float denom = (v1 - v2) * (u0 - u2) + (u2 - u1) * (v0 - v2);
-			if (std::abs(denom) <= 1e-8f)
-				return math::Vector3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f);
-
-			const float b0 = ((v1 - v2) * (u - u2) + (u2 - u1) * (v - v2)) / denom;
-			const float b1 = ((v2 - v0) * (u - u2) + (u0 - u2) * (v - v2)) / denom;
-			const float b2 = 1.0f - b0 - b1;
-			if (!std::isfinite(b0) || !std::isfinite(b1) || !std::isfinite(b2))
-				return math::Vector3(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f);
-			return math::Vector3(b0, b1, b2);
-		};
-
-		std::unordered_map<StaticMeshComponent*, float> meshEmissiveScoreMap;
-		meshEmissiveScoreMap.reserve(meshesInBounds.size());
-		for (auto* smc : meshesInBounds)
-		{
-			if (smc == nullptr)
-				continue;
-			const auto mat = smc->GetMaterial();
-			const Material* material = mat ? mat.get() : nullptr;
-			meshEmissiveScoreMap[smc] = computeMeshEmissiveScore(smc, material);
-		}
-		std::stable_sort(meshesInBounds.begin(), meshesInBounds.end(),
-			[&](const StaticMeshComponent* a, const StaticMeshComponent* b)
-			{
-				float as = 0.0f;
-				if (a != nullptr)
-				{
-					if (auto it = meshEmissiveScoreMap.find(const_cast<StaticMeshComponent*>(a)); it != meshEmissiveScoreMap.end())
-						as = it->second;
-				}
-				float bs = 0.0f;
-				if (b != nullptr)
-				{
-					if (auto it = meshEmissiveScoreMap.find(const_cast<StaticMeshComponent*>(b)); it != meshEmissiveScoreMap.end())
-						bs = it->second;
-				}
-				if (as != bs)
-					return as > bs;
-				const float ae = meshEmissiveKey(a);
-				const float be = meshEmissiveKey(b);
-				if (ae != be)
-					return ae > be;
-				return std::less<const StaticMeshComponent*>()(a, b);
-			});
-
 		for (auto* smc : meshesInBounds)
 		{
 			if (smc == nullptr || smc->GetMesh() == nullptr)
@@ -3520,10 +3373,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			float meshEmissiveScore = 0.0f;
 			if (meshHasEmissiveTexture)
 			{
-				if (auto it = meshEmissiveScoreMap.find(smc); it != meshEmissiveScoreMap.end())
-					meshEmissiveScore = it->second;
-				else
-					meshEmissiveScore = computeMeshEmissiveScore(smc, material);
+				meshEmissiveScore = computeMeshEmissiveScore(smc, material);
 			}
 			const float emissiveStrengthEffective = std::max(0.0f, emissiveStrength);
 			const bool meshHasUsableEmissiveTexture =
@@ -3536,18 +3386,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			// Emissive atlas details are often tiny (text/logos). Keep full triangle coverage for emissive meshes
 			// so GPU voxel eval has enough candidates to inject visible bounce in the correct location.
 			const uint32_t effectiveTriStep = (meshHasEmissiveTexture || meshEmissiveCandidate) ? 1u : triStep;
-			EmissiveMeshDebugInfo meshDebug = {};
-			if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
-			{
-				meshDebug.entityName = entity ? entity->GetName() : std::string();
-				meshDebug.meshName = mesh ? mesh->GetName() : std::string();
-				meshDebug.materialName = material ? material->GetName() : std::string();
-				meshDebug.hasEmissiveTexture = meshHasEmissiveTexture;
-				meshDebug.emissiveCandidate = meshEmissiveCandidate;
-				meshDebug.triStep = effectiveTriStep;
-				meshDebug.meshEmissiveScore = meshEmissiveScore;
-				meshDebug.meshEmissiveKey = emissiveKey;
-			}
 			const uint32_t sampledTriCount = std::max<uint32_t>(1u, (triangleCount + effectiveTriStep - 1u) / effectiveTriStep);
 			const float meshBaseInjectionNormalize = std::clamp(r_giMeshBaseInjectionNormalization._val.f32, 0.0f, 1.0f);
 			const float meshSunInjectionNormalize = std::clamp(r_giMeshSunInjectionNormalization._val.f32, 0.0f, 1.0f);
@@ -3563,10 +3401,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				meshSunInjectionNormalize);
 			const auto& worldTM = entity->GetWorldTM();
 			const math::Vector2 uvScale = smc->GetUVScale();
-			if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
-			{
-				meshDebug.uvScale = uvScale;
-			}
 			uint32_t materialProxyIndex = 0u;
 			if (auto materialProxyIt = meshMaterialProxyIndex.find(smc); materialProxyIt != meshMaterialProxyIndex.end())
 			{
@@ -3653,10 +3487,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 			for (uint32_t tri = 0u; tri < triangleCount && out.size() < budget; tri += effectiveTriStep)
 			{
-				if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
-				{
-					++meshDebug.sampledTriangles;
-				}
 				const uint32_t i0 = indices[tri * 3u + 0u];
 				const uint32_t i1 = indices[tri * 3u + 1u];
 				const uint32_t i2 = indices[tri * 3u + 2u];
@@ -3770,10 +3600,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				if (triUvLikelyTiled)
 				{
 					++emissiveTiledTriangleCountLocal;
-					if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
-					{
-						++meshDebug.tiledTriangles;
-					}
 				}
 				TriangleEmissiveInfo triEmissiveInfo = {};
 				float triEmissiveMask = 0.0f;
@@ -3846,10 +3672,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				if (triEmissiveActive)
 				{
 					++emissiveActiveTriangleCountLocal;
-					if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
-					{
-						++meshDebug.activeTriangles;
-					}
 				}
 				if (triUvLikelyTiled)
 				{
@@ -3870,65 +3692,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 						std::clamp(triEmissiveInfo.rectMaxU, 0.0f, 1.0f),
 						std::clamp(triEmissiveInfo.rectMaxV, 0.0f, 1.0f))
 					: math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
-				entry.emissivePointRadius = math::Vector4::Zero;
-				float emissivePointRadiusWs = 0.0f;
-				float emitCoverage = 0.0f;
-				float triUvArea = 0.0f;
-				if (triEmissiveActive)
-				{
-					const math::Vector3 emissiveBary = computeUvBarycentric(
-						triEmissiveInfo.centroidU, triEmissiveInfo.centroidV,
-						u0, v0, u1, v1, u2, v2);
-					const math::Vector3 emissivePointWs = p0 * emissiveBary.x + p1 * emissiveBary.y + p2 * emissiveBary.z;
-					const float edge01 = (p1 - p0).Length();
-					const float edge12 = (p2 - p1).Length();
-					const float edge20 = (p0 - p2).Length();
-					const float triMaxEdgeWs = std::max(edge01, std::max(edge12, edge20));
-					triUvArea = std::abs((u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0)) * 0.5f;
-					const float emitUvArea =
-						std::max(0.0f, triEmissiveInfo.rectMaxU - triEmissiveInfo.rectMinU) *
-						std::max(0.0f, triEmissiveInfo.rectMaxV - triEmissiveInfo.rectMinV);
-					emitCoverage = (triUvArea > 1e-6f)
-						? std::clamp(std::sqrt(std::max(emitUvArea, 1e-8f) / triUvArea), 0.03f, 1.0f)
-						: 0.2f;
-					const bool broadEmissiveProxy =
-						(triEmissiveInfo.coverage > 0.45f) ||
-						(emitCoverage > 0.55f);
-					const float radiusMin = voxelSizeWorld * (broadEmissiveProxy ? 1.0f : 1.5f);
-					const float radiusMax = voxelSizeWorld * (broadEmissiveProxy ? 2.0f : 4.0f);
-					const float edgeDrivenRadius = triMaxEdgeWs * (broadEmissiveProxy ? 0.02f : std::max(0.03f, emitCoverage * 0.12f));
-					emissivePointRadiusWs = std::clamp(edgeDrivenRadius, radiusMin, std::max(radiusMin, radiusMax));
-					entry.emissivePointRadius = math::Vector4(emissivePointWs.x, emissivePointWs.y, emissivePointWs.z, emissivePointRadiusWs);
-
-					// Standalone emissive point promotion is currently disabled. The current point-injection
-					// path can create scene hotspots when the CPU triangle classifier cannot uniquely isolate
-					// tiny atlas details on large shared meshes. Keep emissive on the triangle path until the
-					// emitter-point contract is more trustworthy.
-					const bool useStandaloneEmitterPoint = false;
-					if (useStandaloneEmitterPoint)
-					{
-						math::Vector3 emissivePointColour = emissiveTint;
-						if (emissivePointColour.LengthSquared() < 1e-5f)
-							emissivePointColour = math::Vector3::One;
-						const float emissivePointStrength = std::max(emissiveStrengthEffective, 1.0f) * std::max(triEmissiveMask, 0.10f);
-						GpuGiEmitterPoint point = {};
-						point.positionRadius = math::Vector4(emissivePointWs.x, emissivePointWs.y, emissivePointWs.z, std::max(emissivePointRadiusWs, voxelSizeWorld * 0.75f));
-						point.radianceOpacity = math::Vector4(
-							emissivePointColour.x * emissivePointStrength,
-							emissivePointColour.y * emissivePointStrength,
-							emissivePointColour.z * emissivePointStrength,
-							0.92f);
-						_gpuGiEmitterPointUpload.push_back(point);
-					}
-				}
-				if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate) && triEmissiveMask >= meshDebug.maxTriMask)
-				{
-					meshDebug.maxTriMask = triEmissiveMask;
-					meshDebug.bestUvRect = entry.uvRect;
-					meshDebug.bestEmissiveUvRect = entry.emissiveUvRect;
-					meshDebug.bestTriTiled = triUvLikelyTiled;
-				}
-
 				if (gpuComputeBaseSunEnabled)
 				{
 					entry.radianceOpacity = math::Vector4(0.0f, 0.0f, 0.0f, 0.92f);
@@ -3937,10 +3700,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					if (triEmissiveMask > 0.012f || (!meshHasEmissiveTexture && triEmissiveActive))
 					{
 						++emissiveTriangleCountLocal;
-						if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
-						{
-							++meshDebug.emissiveTriangles;
-						}
 					}
 					continue;
 				}
@@ -4044,20 +3803,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				if (triEmissiveMask > 0.012f || (!meshHasEmissiveTexture && triEmissiveActive))
 				{
 					++emissiveTriangleCountLocal;
-					if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
-					{
-						++meshDebug.emissiveTriangles;
-					}
 				}
-			}
-			if (emissiveDebugMode > 0 && (meshHasEmissiveTexture || meshEmissiveCandidate))
-			{
-				emissiveDebugInfos.push_back(std::move(meshDebug));
 			}
 		}
 
 		_cachedVoxelTriangles[levelIndex] = out;
-		_cachedGiEmitterPoints[levelIndex].clear();
 		_cachedGiMaterialProxies[levelIndex] = _giMaterialProxies;
 		_cachedVoxelTrianglesValid[levelIndex] = true;
 		_cachedVoxelTrianglesFrame[levelIndex] = _frameCounter;
@@ -4073,70 +3823,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_stats.emissiveTiledTriangleCount += emissiveTiledTriangleCountLocal;
 		_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, emissiveProxyMaxLumaLocal);
 		_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, emissiveProxyMaxStrengthLocal);
-		if (emissiveDebugMode > 0 && !emissiveDebugInfos.empty())
-		{
-			std::stable_sort(emissiveDebugInfos.begin(), emissiveDebugInfos.end(),
-				[](const EmissiveMeshDebugInfo& a, const EmissiveMeshDebugInfo& b)
-				{
-					if (a.hasEmissiveTexture != b.hasEmissiveTexture)
-						return a.hasEmissiveTexture > b.hasEmissiveTexture;
-					if ((a.emissiveTriangles == 0u) != (b.emissiveTriangles == 0u))
-						return (a.emissiveTriangles == 0u) > (b.emissiveTriangles == 0u);
-					if (a.emissiveTriangles != b.emissiveTriangles)
-						return a.emissiveTriangles > b.emissiveTriangles;
-					if (a.maxTriMask != b.maxTriMask)
-						return a.maxTriMask > b.maxTriMask;
-					return a.meshEmissiveScore > b.meshEmissiveScore;
-				});
-			const size_t logCount = (emissiveDebugMode > 1)
-				? emissiveDebugInfos.size()
-				: std::min<size_t>(8u, emissiveDebugInfos.size());
-			LOG_INFO(
-				"GI emissive debug: clip=%u meshes=%zu emissiveMats=%u emissiveTri=%u activeTri=%u tiledTri=%u",
-				levelIndex,
-				emissiveDebugInfos.size(),
-				emissiveMaterialCountLocal,
-				emissiveTriangleCountLocal,
-				emissiveActiveTriangleCountLocal,
-				emissiveTiledTriangleCountLocal);
-			for (size_t i = 0u; i < logCount; ++i)
-			{
-				const auto& info = emissiveDebugInfos[i];
-				LOG_INFO(
-					"GI emissive mesh[%zu]: entity='%s' mesh='%s' material='%s' tex=%s candidate=%s score=%.4f key=%.4f sampled=%u active=%u emit=%u tiled=%u maxMask=%.4f triStep=%u uvScale=(%.3f,%.3f)",
-					i,
-					info.entityName.c_str(),
-					info.meshName.c_str(),
-					info.materialName.c_str(),
-					info.hasEmissiveTexture ? "yes" : "no",
-					info.emissiveCandidate ? "yes" : "no",
-					info.meshEmissiveScore,
-					info.meshEmissiveKey,
-					info.sampledTriangles,
-					info.activeTriangles,
-					info.emissiveTriangles,
-					info.tiledTriangles,
-					info.maxTriMask,
-					info.triStep,
-					info.uvScale.x,
-					info.uvScale.y);
-				if (emissiveDebugMode > 1)
-				{
-					LOG_INFO(
-						"GI emissive rects[%zu]: uvRect=(%.5f,%.5f,%.5f,%.5f) emissiveRect=(%.5f,%.5f,%.5f,%.5f) bestTiled=%s",
-						i,
-						info.bestUvRect.x,
-						info.bestUvRect.y,
-						info.bestUvRect.z,
-						info.bestUvRect.w,
-						info.bestEmissiveUvRect.x,
-						info.bestEmissiveUvRect.y,
-						info.bestEmissiveUvRect.z,
-						info.bestEmissiveUvRect.w,
-						info.bestTriTiled ? "yes" : "no");
-				}
-			}
-		}
 		_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
 		_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
 		return static_cast<uint32_t>(out.size());
@@ -4151,11 +3837,10 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		auto* voxelizeStage = useGpuMaterialEval
 			? (_voxelizeEvalShader ? _voxelizeEvalShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr)
 			: (_voxelizeShader ? _voxelizeShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr);
-		auto* emissivePointStage = _emissivePointShader ? _emissivePointShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
 		auto* clearStage = _voxelClearShader ? _voxelClearShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
 		auto* propagateStage = _voxelPropagateShader ? _voxelPropagateShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
 		auto* shiftStage = _voxelShiftShader ? _voxelShiftShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
-		if (voxelizeStage == nullptr || emissivePointStage == nullptr || clearStage == nullptr || propagateStage == nullptr || shiftStage == nullptr)
+		if (voxelizeStage == nullptr || clearStage == nullptr || propagateStage == nullptr || shiftStage == nullptr)
 			return;
 
 		auto& level = _clipmaps[levelIndex];
@@ -4172,11 +3857,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_stats.sourceTriangleCount = triangleCount;
 		_stats.candidateTriangleCount = triangleCount;
 		uint32_t emissivePayloadTriangleCount = 0u;
-		uint32_t emissivePayloadPointCount = 0u;
-		float emissivePayloadMaxRadius = 0.0f;
-		float emissivePayloadMaxRadiusVox = 0.0f;
 		float emissivePayloadMaxHint = 0.0f;
-		const float clipVoxelSize = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
 		for (uint32_t i = 0u; i < triangleCount; ++i)
 		{
 			const auto& tri = _voxelTriangleUpload[i];
@@ -4184,33 +3865,10 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			{
 				++emissivePayloadTriangleCount;
 				emissivePayloadMaxHint = std::max(emissivePayloadMaxHint, std::clamp(tri.uv2Pad.w, 0.0f, 1.0f));
-				if (tri.emissivePointRadius.w > 1e-5f)
-				{
-					++emissivePayloadPointCount;
-					emissivePayloadMaxRadius = std::max(emissivePayloadMaxRadius, tri.emissivePointRadius.w);
-					if (clipVoxelSize > 1e-5f)
-						emissivePayloadMaxRadiusVox = std::max(emissivePayloadMaxRadiusVox, tri.emissivePointRadius.w / clipVoxelSize);
-				}
 			}
 		}
 		_stats.emissivePayloadTriangleCount += emissivePayloadTriangleCount;
-		_stats.emissivePayloadPointCount += emissivePayloadPointCount;
-		_stats.emissivePayloadMaxRadius = std::max(_stats.emissivePayloadMaxRadius, emissivePayloadMaxRadius);
-		_stats.emissivePayloadMaxRadiusVox = std::max(_stats.emissivePayloadMaxRadiusVox, emissivePayloadMaxRadiusVox);
 		_stats.emissivePayloadMaxHint = std::max(_stats.emissivePayloadMaxHint, emissivePayloadMaxHint);
-		if (r_giEmissiveDebug._val.i32 > 0 && (emissivePayloadTriangleCount > 0u || !_gpuGiEmitterPointUpload.empty()))
-		{
-			LOG_INFO(
-				"GI emissive payload: clip=%u uploadTri=%u pointTri=%u standalonePts=%u maxPointR=%.3f maxPointRVox=%.3f maxHint=%.3f candidateGen=%s",
-				levelIndex,
-				emissivePayloadTriangleCount,
-				emissivePayloadPointCount,
-				static_cast<uint32_t>(_gpuGiEmitterPointUpload.size()),
-				emissivePayloadMaxRadius,
-				emissivePayloadMaxRadiusVox,
-				emissivePayloadMaxHint,
-				r_giGpuCandidateGen._val.b ? "on" : "off");
-		}
 		if (!hasTriangles && level.initialized)
 		{
 			// Avoid one-frame GI collapse from transient empty triangle gathers after clipmap shifts.
@@ -4311,21 +3969,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				return;
 			}
 		}
-		const uint32_t emitterPointCount = static_cast<uint32_t>(_gpuGiEmitterPointUpload.size());
-		const bool hasEmitterPoints = (emitterPointCount > 0u) && EnsureGpuGiEmitterPointBuffer(emitterPointCount);
-		if (hasEmitterPoints)
-		{
-			const auto uploadStart = std::chrono::high_resolution_clock::now();
-			D3D11_MAPPED_SUBRESOURCE mapped = {};
-			if (SUCCEEDED(context->Map(_giEmitterPointBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
-			{
-				memcpy(mapped.pData, _gpuGiEmitterPointUpload.data(), emitterPointCount * sizeof(GpuGiEmitterPoint));
-				context->Unmap(_giEmitterPointBuffer, 0);
-				_stats.uploadBytes += static_cast<uint64_t>(emitterPointCount) * static_cast<uint64_t>(sizeof(GpuGiEmitterPoint));
-				_stats.cpuUploadMs += ElapsedMs(uploadStart);
-			}
-		}
-
 		uint32_t gpuLightCount = 0u;
 		uint32_t gpuMaterialCount = 0u;
 		uint32_t gpuMaterialTexelCount = 0u;
@@ -4846,22 +4489,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				const uint32_t groups = (injectionTriangleCount + 63u) / 64u;
 				context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
 			}
-		}
-
-		if (hasEmitterPoints && _giEmitterPointSrv != nullptr)
-		{
-			ID3D11ShaderResourceView* pointSrvs[1] = { _giEmitterPointSrv };
-			ID3D11UnorderedAccessView* pointUavs[1] = { level.radianceUav };
-			context->CSSetShaderResources(0, 1, pointSrvs);
-			context->CSSetUnorderedAccessViews(0, 1, pointUavs, nullptr);
-			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(emissivePointStage->GetNativePtr()), nullptr, 0);
-			const uint32_t groups = (emitterPointCount + 63u) / 64u;
-			context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
-
-			ID3D11ShaderResourceView* nullPointSrv[1] = {};
-			ID3D11UnorderedAccessView* nullPointUav[1] = {};
-			context->CSSetShaderResources(0, 1, nullPointSrv);
-			context->CSSetUnorderedAccessViews(0, 1, nullPointUav, nullptr);
 		}
 
 		// Break UAV/SRV hazards between injection and propagation passes.

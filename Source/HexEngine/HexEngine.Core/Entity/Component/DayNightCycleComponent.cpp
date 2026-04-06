@@ -342,6 +342,11 @@ namespace HexEngine
 		math::Color::Lerp(_nightAmbientLight, _dayAmbientLight, daylight, ambient);
 
 		scene->SetAmbientLight(ambient);
+
+		if (auto light = GetEntity()->GetComponent<DirectionalLight>(); light != nullptr)
+		{
+			light->SetLightMultiplier(daylight);
+		}
 	}
 
 	float DayNightCycleComponent::ComputeDaylightFactor(float hour) const

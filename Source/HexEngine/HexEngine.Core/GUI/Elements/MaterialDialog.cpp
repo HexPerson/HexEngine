@@ -14,7 +14,9 @@ namespace HexEngine
 		Dialog(parent, position, size, title),
 		_material(material)
 	{
-		_layout = new ComponentWidget(this, Point(10, 10), Point(size.x - 20, size.y), L"Textures");
+		_rootView = new ScrollView(this, Point(10, 10), Point(GetSize().x - 20, GetSize().y - 20));
+
+		_layout = new ComponentWidget(_rootView, Point(10, 10), Point(size.x - 20, size.y), L"Textures");
 
 		for (auto i = 0; i < MaterialTexture::Count; ++i)
 		{
@@ -96,10 +98,19 @@ namespace HexEngine
 	{
 		switch (type)
 		{
-		case MaterialTexture::Emission:
-			ColourPicker* emissiveClr = new ColourPicker(parent, Point(100, 25), Point(200, 18), L"Emission", (math::Color*) & _material->_properties.emissiveColour.x);
-			emissiveClr->SetLabelMinSize(40);
+		case MaterialTexture::Albedo:
+		{
+			ColourPicker* diffuseClr = new ColourPicker(parent, Point(0, 25), Point(250, 20), L"Tint", (math::Color*)&_material->_properties.diffuseColour.x);
+			diffuseClr->SetLabelMinSize(120);
 			break;
+		}
+
+		case MaterialTexture::Emission:
+		{
+			ColourPicker* emissiveClr = new ColourPicker(parent, Point(0, 25), Point(250, 20), L"Emission", (math::Color*)&_material->_properties.emissiveColour.x);
+			emissiveClr->SetLabelMinSize(120);
+			break;
+		}
 		}
 	}
 

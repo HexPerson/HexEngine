@@ -227,7 +227,7 @@ namespace HexEngine
 		injectGI->SetOnCheckFn(std::bind(&Light::SetInjectIntoGI, this, std::placeholders::_2));
 		injectGI->SetPrefabOverrideBinding(GetComponentName(), "/_injectIntoGI");
 
-		DragFloat* strength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Strength", &_strength, 0.1f, 500.0f, 0.1f);
+		DragFloat* strength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Strength", &_strength, 0.1f, 500.0f, 0.0f);
 		//strength->SetLabelMinSize(130);
 		strength->SetPrefabOverrideBinding(GetComponentName(), "/_strength");
 

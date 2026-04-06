@@ -2,10 +2,12 @@
 #include "Console.hpp"
 #include "HCommand.hpp"
 #include "CommandManager.hpp"
+#include "../GUI/Elements/Element.hpp"
 
 namespace HexEngine
 {
 	const int32_t ConsoleFontSize = 14;
+	const int32_t kConsoleMaxLines = 1024;
 
 	HEX_COMMAND(ConsoleToggle)
 	{
@@ -15,16 +17,6 @@ namespace HexEngine
 
 	void Console::Create()
 	{
-		FontImportOptions fontOpts;
-		fontOpts.antialias = false;
-		fontOpts.dpi = 72;
-		fontOpts.sizes.push_back(ConsoleFontSize);
-
-		fontOpts.AddCharacterSet(FontImportOptions::EnglishCharacterSets);
-		//fontOpts.AddCharacterSet(FontImportOptions::SimplifiedChineseCharacterSets);
-
-		_font = dynamic_pointer_cast<IFontResource>(g_pEnv->GetResourceSystem().LoadResource("EngineData.Fonts/Liberation Mono/LiberationMono-Regular.ttf", &fontOpts));
-
 		// Bind the console to the default key
 		//g_pEnv->_commandManager->RegisterCommand(&cmd_ConsoleToggle);
 		g_pEnv->_commandManager->CreateBind(VK_OEM_8, "ConsoleToggle");
@@ -42,11 +34,6 @@ namespace HexEngine
 	{
 	}
 
-	std::shared_ptr<IFontResource> Console::GetFont() const
-	{
-		return _font;
-	}
-
 	void Console::Render(GuiRenderer* renderer)
 	{
 		uint32_t width, height;
@@ -56,7 +43,7 @@ namespace HexEngine
 
 		if (_canvas.BeginDraw(renderer, width, height /*<< 1*/))
 		{
-			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 220)));
+			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 255)));
 			renderer->Line(0, height, width, height, math::Color(HEX_RGBA_TO_FLOAT4(5, 5, 5, 255)));
 
 			std::wstring input = L"] ";
@@ -72,12 +59,12 @@ namespace HexEngine
 				for (auto var : vars)
 				{
 					auto txt = std::wstring(var->_name.begin(), var->_name.end());
-					renderer->PrintText(_font.get(), ConsoleFontSize, 15, promptY, math::Color(1, 1, 1, 1), 0, txt);
+					renderer->PrintText(renderer->_style.font.get(), ConsoleFontSize, 15, promptY, math::Color(1, 1, 1, 1), 0, txt);
 					promptY += ConsoleFontSize;
 				}
 			}
 
-			renderer->PrintText(_font.get(), ConsoleFontSize, 5, height - ConsoleFontSize, math::Color(1, 1, 1, 1), 0, input);
+			renderer->PrintText(renderer->_style.font.get(), ConsoleFontSize, 5, height - ConsoleFontSize, math::Color(1, 1, 1, 1), 0, input);
 
 			static const math::Color colourTable[] = {
 				math::Color(HEX_RGBA_TO_FLOAT4(237, 28, 36, 255)),		// r
@@ -94,7 +81,7 @@ namespace HexEngine
 			for (auto& line : _lines)
 			{
 				std::wstring wline(line.begin(), line.end());
-				math::Color col(1, 1, 0.85, 1);
+				math::Color col(1, 1, 1, 1);
 
 				while (true)
 				{
@@ -103,7 +90,7 @@ namespace HexEngine
 						// render the un-formatted part first
 						if (p > 0)
 						{
-							renderer->PrintText(_font.get(), ConsoleFontSize, 5, y, col, 0, wline.substr(0, p));
+							renderer->PrintText(renderer->_style.font.get(), ConsoleFontSize, 5, y, col, 0, wline.substr(0, p));
 							wline.erase(p);
 							p = 0;
 
@@ -123,8 +110,8 @@ namespace HexEngine
 						if (auto p2 = wline.find_first_of('^'); p2 != wline.npos)
 						{
 							auto sub = wline.substr(0, p2);
-							renderer->PrintText(_font.get(), ConsoleFontSize, x, y, col, 0, sub);
-							_font->MeasureText(ConsoleFontSize, sub, tw, th);
+							renderer->PrintText(renderer->_style.font.get(), ConsoleFontSize, x, y, col, 0, sub);
+							renderer->_style.font->MeasureText(ConsoleFontSize, sub, tw, th);
 
 							wline.erase(0, p2);
 
@@ -132,14 +119,14 @@ namespace HexEngine
 						}
 						else
 						{
-							renderer->PrintText(_font.get(), ConsoleFontSize, x, y, col, 0, wline);
+							renderer->PrintText(renderer->_style.font.get(), ConsoleFontSize, x, y, col, 0, wline);
 							x = 5;
 							break;
 						}
 					}
 					else
 					{
-						renderer->PrintText(_font.get(), ConsoleFontSize, 5, y, col, 0, wline);
+						renderer->PrintText(renderer->_style.font.get(), ConsoleFontSize, 5, y, col, 0, wline);
 						x = 5;
 						break;
 					}
@@ -167,6 +154,11 @@ namespace HexEngine
 		_lines.insert(_lines.begin(), buf);
 
 		_canvas.Redraw();
+
+		if (_lines.size() > kConsoleMaxLines)
+		{
+			_lines.pop_back();
+		}
 
 	}
 

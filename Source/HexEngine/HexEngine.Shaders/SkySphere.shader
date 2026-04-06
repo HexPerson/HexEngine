@@ -124,24 +124,24 @@
 		//if (isCameraUnderWater && input.positionWS.y <= 0.0f)
 		//	colour.rgb = g_oceanConfig.fogColour.rgb;
 
-		float2 noiseSamplePos = projectedPixel.xy * 4.0f;
+		//float2 noiseSamplePos = projectedPixel.xy * 4.0f;
 
-		noiseSamplePos += frac(g_time) * 2.0f;
+		//noiseSamplePos += frac(g_time) * 2.0f;
 
-		float3 noise = g_noiseTexture.Sample(g_pointSampler, noiseSamplePos).rgb;
+		//float3 noise = g_noiseTexture.Sample(g_pointSampler, noiseSamplePos).rgb;
 
-		float3 singleNoiseVal = noise;
+		//float3 singleNoiseVal = noise;
 
 		// move from 0-1 to -1 to +1
 		//singleNoiseVal = (singleNoiseVal * 2.0f) - 1.0f;
 
 		// close the range
-		singleNoiseVal /= 8.0f;
+		//singleNoiseVal /= 8.0f;
 
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
 		//velocity /= float2(g_screenWidth, g_screenHeight);
 
-		output.diff = float4(colour.rgb + singleNoiseVal, -1);// lerp(output.diff, fogColour, fogLerp);
+		output.diff = float4(colour.rgb /* + singleNoiseVal */, -1);// lerp(output.diff, fogColour, fogLerp);
 
 		output.mat = float4(0, 0, 0, 0);
 

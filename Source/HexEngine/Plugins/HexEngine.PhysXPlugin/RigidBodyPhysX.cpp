@@ -578,7 +578,7 @@ HexEngine::ICollider* RigidBodyPhysX::AddBoxCollider(const dx::BoundingBox& box,
 
 	//_shape = g_pPhysx->GetPhysics()->createShape(physx::PxBoxGeometry(box.Extents.x + box.Center.x, box.Extents.y * 0.5f + box.Center.y, box.Extents.z + box.Center.z), *g_pPhysx->GetDefaultMaterial());
 
-	_geometry = new physx::PxBoxGeometry(box.Extents.x, box.Extents.y, box.Extents.z);
+	_geometry = new physx::PxBoxGeometry(std::max(box.Extents.x, 0.1f), std::max(box.Extents.y, 0.1f), std::max(box.Extents.z, 0.1f));
 
 	_shape = g_pPhysx->GetPhysics()->createShape(*(physx::PxBoxGeometry*)_geometry, *g_pPhysx->GetDefaultMaterial(), exclusive);
 
