@@ -1249,6 +1249,9 @@ namespace HexEditor
 		}
 		else if (event == HexEngine::InputEvent::MouseMove)
 		{
+			if (IsMouseOver(true))
+				_canvas.Redraw();
+
 			if (_isMarqueeSelecting)
 			{
 				_marqueeEnd = { (int32_t)data->MouseMove.x, (int32_t)data->MouseMove.y };
@@ -1281,141 +1284,144 @@ namespace HexEditor
 
 		SetManualContentHeight(ComputeRequiredContentHeight());
 
-		_hoveredAsset = nullptr;
-
-		std::wstring fullNameToDraw;
-		int32_t hoverX = 0;
-		int32_t hoverY = 0;
-		const int32_t maxY = pos.y + _size.y;
-		const int32_t startX = pos.x + IconPadding;
-		int32_t x = startX;
-		int32_t y = pos.y + IconPadding - (int32_t)std::round(GetScrollOffset());
-
-		for (auto& asset : _assetsInView)
+		if (_canvas.NeedsRedrawing())
 		{
-			const bool visible = y + IconRowStep > pos.y && y < maxY;
-			bool hovering = false;
-			bool drawFullName = false;
+			_hoveredAsset = nullptr;
 
-			if (visible)
+			std::wstring fullNameToDraw;
+			int32_t hoverX = 0;
+			int32_t hoverY = 0;
+			const int32_t maxY = pos.y + _size.y;
+			const int32_t startX = pos.x + IconPadding;
+			int32_t x = startX;
+			int32_t y = pos.y + IconPadding - (int32_t)std::round(GetScrollOffset());
+
+			for (auto& asset : _assetsInView)
 			{
-				const bool isMouseHover = !_draggingAsset && IsMouseOver(x, y, IconSize, IconSize);
-				if (isMouseHover || asset.selected)
+				const bool visible = y + IconRowStep > pos.y && y < maxY;
+				bool hovering = false;
+				bool drawFullName = false;
+
+				if (visible)
 				{
-					hovering = true;
-					renderer->FillQuad(x - 3, y - 3, IconSize + 6, IconSize + 20, math::Color(HEX_RGBA_TO_FLOAT4(23, 23, 23, 255)));
-
-					if (isMouseHover)
+					const bool isMouseHover = !_draggingAsset && IsMouseOver(x, y, IconSize, IconSize);
+					if (isMouseHover || asset.selected)
 					{
-						_hoveredAsset = &asset;
-					}
+						hovering = true;
+						renderer->FillQuad(x - 3, y - 3, IconSize + 6, IconSize + 20, math::Color(HEX_RGBA_TO_FLOAT4(23, 23, 23, 255)));
 
-					if (isMouseHover && !asset.selected)
-					{
-						if (_hoveredAsset != _lastHoveredAsset)
+						if (isMouseHover)
 						{
-							_hoverStartTime = HexEngine::g_pEnv->_timeManager->_currentTime;
-							_lastHoveredAsset = _hoveredAsset;
+							_hoveredAsset = &asset;
 						}
 
-						if (_hoverStartTime != 0.0f && HexEngine::g_pEnv->_timeManager->_currentTime - _hoverStartTime > 0.1f)
+						if (isMouseHover && !asset.selected)
 						{
-							drawFullName = true;
+							if (_hoveredAsset != _lastHoveredAsset)
+							{
+								_hoverStartTime = HexEngine::g_pEnv->_timeManager->_currentTime;
+								_lastHoveredAsset = _hoveredAsset;
+							}
+
+							if (_hoverStartTime != 0.0f && HexEngine::g_pEnv->_timeManager->_currentTime - _hoverStartTime > 0.1f)
+							{
+								drawFullName = true;
+							}
 						}
 					}
-				}
 
-				if (asset.generatedIcon == nullptr)
-				{
-					asset.generatedIcon = HexEngine::g_pEnv->_iconService->GetIcon(asset.path);
-				}
-
-				if (asset.icon || asset.generatedIcon)
-				{
-					renderer->FillTexturedQuad(asset.generatedIcon ? asset.generatedIcon : asset.icon, x, y, IconSize, IconSize, math::Color(1, 1, 1, 1));
-				}
-
-				if (asset.assetNameFull.empty())
-				{
-					asset.assetNameFull = asset.path.filename().wstring();
-				}
-
-				std::wstring assetNameToDisplay = asset.assetNameFull;
-				if (_assetNameToEdit && _assetNameToEdit->path == asset.path)
-				{
-					drawFullName = true;
-					assetNameToDisplay = _editingAssetTempName + _editingAssetExtension;
-				}
-
-				if (!drawFullName)
-				{
-					if (asset.assetNameShort.empty())
+					if (asset.generatedIcon == nullptr)
 					{
-						while (!assetNameToDisplay.empty())
-						{
-							int32_t width = 0;
-							int32_t height = 0;
-							renderer->_style.font->MeasureText((int32_t)HexEngine::Style::FontSize::Titchy, assetNameToDisplay, width, height);
-
-							if (width < IconSize)
-								break;
-
-							assetNameToDisplay.pop_back();
-						}
-
-						asset.assetNameShort = assetNameToDisplay;
+						asset.generatedIcon = HexEngine::g_pEnv->_iconService->GetIcon(asset.path);
 					}
 
-					assetNameToDisplay = asset.assetNameShort;
-					renderer->PrintText(
-						renderer->_style.font.get(),
-						(uint8_t)HexEngine::Style::FontSize::Titchy,
-						x + IconSize / 2,
-						y + IconSize + 2,
-						hovering ? renderer->_style.text_highlight : renderer->_style.text_regular,
-						HexEngine::FontAlign::CentreLR,
-						assetNameToDisplay);
+					if (asset.icon || asset.generatedIcon)
+					{
+						renderer->FillTexturedQuad(asset.generatedIcon ? asset.generatedIcon : asset.icon, x, y, IconSize, IconSize, math::Color(1, 1, 1, 1));
+					}
+
+					if (asset.assetNameFull.empty())
+					{
+						asset.assetNameFull = asset.path.filename().wstring();
+					}
+
+					std::wstring assetNameToDisplay = asset.assetNameFull;
+					if (_assetNameToEdit && _assetNameToEdit->path == asset.path)
+					{
+						drawFullName = true;
+						assetNameToDisplay = _editingAssetTempName + _editingAssetExtension;
+					}
+
+					if (!drawFullName)
+					{
+						if (asset.assetNameShort.empty())
+						{
+							while (!assetNameToDisplay.empty())
+							{
+								int32_t width = 0;
+								int32_t height = 0;
+								renderer->_style.font->MeasureText((int32_t)HexEngine::Style::FontSize::Titchy, assetNameToDisplay, width, height);
+
+								if (width < IconSize)
+									break;
+
+								assetNameToDisplay.pop_back();
+							}
+
+							asset.assetNameShort = assetNameToDisplay;
+						}
+
+						assetNameToDisplay = asset.assetNameShort;
+						renderer->PrintText(
+							renderer->_style.font.get(),
+							(uint8_t)HexEngine::Style::FontSize::Titchy,
+							x + IconSize / 2,
+							y + IconSize + 2,
+							hovering ? renderer->_style.text_highlight : renderer->_style.text_regular,
+							HexEngine::FontAlign::CentreLR,
+							assetNameToDisplay);
+					}
+					else
+					{
+						hoverX = x + IconSize / 2;
+						hoverY = y + IconSize + 2;
+						fullNameToDraw = assetNameToDisplay;
+					}
 				}
-				else
+
+				x += IconSize + IconSpacing;
+				if (x + IconSize >= pos.x + _size.x - IconPadding)
 				{
-					hoverX = x + IconSize / 2;
-					hoverY = y + IconSize + 2;
-					fullNameToDraw = assetNameToDisplay;
+					x = startX;
+					y += IconRowStep;
 				}
 			}
 
-			x += IconSize + IconSpacing;
-			if (x + IconSize >= pos.x + _size.x - IconPadding)
+			if (!fullNameToDraw.empty())
 			{
-				x = startX;
-				y += IconRowStep;
+				int32_t width = 0;
+				int32_t height = 0;
+				renderer->_style.font->MeasureText((int32_t)HexEngine::Style::FontSize::Titchy, fullNameToDraw, width, height);
+
+				renderer->FillQuad(hoverX - ((width / 2) + 3), hoverY - 1, width + 6, height + 4, math::Color(0.1f, 0.1f, 0.1f, 1.0f));
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)HexEngine::Style::FontSize::Titchy, hoverX, hoverY, renderer->_style.text_highlight, HexEngine::FontAlign::CentreLR, fullNameToDraw);
 			}
-		}
 
-		if (!fullNameToDraw.empty())
-		{
-			int32_t width = 0;
-			int32_t height = 0;
-			renderer->_style.font->MeasureText((int32_t)HexEngine::Style::FontSize::Titchy, fullNameToDraw, width, height);
+			if (_isMarqueeSelecting)
+			{
+				const RECT marquee = NormalizeRect(_marqueeStart, _marqueeEnd);
+				const int32_t width = std::max(0L, marquee.right - marquee.left);
+				const int32_t height = std::max(0L, marquee.bottom - marquee.top);
 
-			renderer->FillQuad(hoverX - ((width / 2) + 3), hoverY - 1, width + 6, height + 4, math::Color(0.1f, 0.1f, 0.1f, 1.0f));
-			renderer->PrintText(renderer->_style.font.get(), (uint8_t)HexEngine::Style::FontSize::Titchy, hoverX, hoverY, renderer->_style.text_highlight, HexEngine::FontAlign::CentreLR, fullNameToDraw);
-		}
+				renderer->FillQuad(marquee.left, marquee.top, width, height, math::Color(0.2f, 0.4f, 1.0f, 0.2f));
+				renderer->Frame(marquee.left, marquee.top, width, height, 1, math::Color(0.2f, 0.6f, 1.0f, 0.9f));
+			}
 
-		if (_isMarqueeSelecting)
-		{
-			const RECT marquee = NormalizeRect(_marqueeStart, _marqueeEnd);
-			const int32_t width = std::max(0L, marquee.right - marquee.left);
-			const int32_t height = std::max(0L, marquee.bottom - marquee.top);
-
-			renderer->FillQuad(marquee.left, marquee.top, width, height, math::Color(0.2f, 0.4f, 1.0f, 0.2f));
-			renderer->Frame(marquee.left, marquee.top, width, height, 1, math::Color(0.2f, 0.6f, 1.0f, 0.9f));
-		}
-
-		if (_hoveredAsset == nullptr)
-		{
-			_lastHoveredAsset = nullptr;
-			_hoverStartTime = 0.0f;
+			if (_hoveredAsset == nullptr)
+			{
+				_lastHoveredAsset = nullptr;
+				_hoverStartTime = 0.0f;
+			}
 		}
 	}
 

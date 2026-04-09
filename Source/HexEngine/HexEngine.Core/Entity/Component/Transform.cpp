@@ -393,6 +393,8 @@ namespace HexEngine
 		{
 			g_pEnv->_chunkManager->OnEntityPositionChanged(GetEntity(), _previous.position, _current.position);
 		}
+
+		_cached.position = _current.position;
 	}
 
 	void Transform::SetPositionNoNotify(const math::Vector3& position)
@@ -403,16 +405,20 @@ namespace HexEngine
 			return;
 		}
 
+		auto entity = GetEntity();
+
 		_previous.position = _current.position;
 		_current.position = position;
 
 		// inform the chunk manager of our new position
-		if (g_pEnv->_chunkManager->HasActiveChunks(GetEntity()->GetScene()))
+		if (g_pEnv->_chunkManager->HasActiveChunks(entity->GetScene()))
 		{
-			g_pEnv->_chunkManager->OnEntityPositionChanged(GetEntity(), _previous.position, _current.position);
-		}
+			g_pEnv->_chunkManager->OnEntityPositionChanged(entity, _previous.position, _current.position);
+		}		
 
-		GetEntity()->ClearTransformCache();
+		entity->ClearTransformCache();
+
+		_cached.position = _current.position;
 	}
 
 	void Transform::SetRotation(const math::Quaternion& rotation)
@@ -422,6 +428,7 @@ namespace HexEngine
 			// it didn't change, so don't waste time updating things that don't need updating
 			return;
 		}
+
 		_needsRotationMatrixUpdate = true;
 
 		math::Quaternion newRot = rotation;
@@ -451,7 +458,7 @@ namespace HexEngine
 
 		GetEntity()->OnMessage(&message, this);
 
-		//GetEntity()->OnTransformChanged(false, true, false);
+		_cached.rotation = rotation;
 	}
 
 	void Transform::SetRotationNoNotify(const math::Quaternion& rotation)
@@ -483,6 +490,8 @@ namespace HexEngine
 		_eulerAnglesDeg.z = ToDegree(_eulerAngles.z);
 
 		GetEntity()->ClearTransformCache();
+
+		_cached.rotation = rotation;
 	}
 
 	void Transform::SetEulerYawPitchRoll(float yaw, float pitch, float roll)
@@ -561,18 +570,22 @@ namespace HexEngine
 
 		GetEntity()->OnMessage(&message, this);
 
-		//GetEntity()->OnTransformChanged(true, false, false);
+		_cached.scale = scale;
 	}
 
 	void Transform::SetScaleNoNotify(const math::Vector3& scale)
 	{
 		if (_current.scale == scale)
+		{
 			return;
+		}
 
 		_previous.scale = _current.scale;
 		_current.scale = scale;
 
 		GetEntity()->ClearTransformCache();
+
+		_cached.scale = scale;
 	}
 
 	/*void Transform::SetRotationMatrix(const math::Matrix& rotation)
@@ -639,9 +652,9 @@ namespace HexEngine
 
 	bool Transform::CreateWidget(ComponentWidget* widget)
 	{
-		Vector3Edit* position = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Position", &_current.position, std::bind(&Entity::ForcePosition, GetEntity(), std::placeholders::_1));
+		Vector3Edit* position = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Position", &_cached.position, std::bind(&Transform::SetPosition, this, std::placeholders::_1));
 		Vector3Edit* rotation = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Rotation", &_eulerAnglesDeg, std::bind(&Transform::SetEulerAnglesDeg, this, std::placeholders::_1));
-		Vector3Edit* scale = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Scale", &_current.scale, std::bind(&Transform::SetScale, this, std::placeholders::_1));
+		Vector3Edit* scale = new Vector3Edit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Scale", &_cached.scale, std::bind(&Transform::SetScale, this, std::placeholders::_1));
 		position->SetPrefabOverrideBinding(GetComponentName(), "/_position");
 		rotation->SetPrefabOverrideBinding(GetComponentName(), "/_rotation");
 		scale->SetPrefabOverrideBinding(GetComponentName(), "/_scale");

@@ -49,59 +49,70 @@ namespace HexEngine
 
 	void DebugGUI::ShowOverlay()
 	{
-		
-		//{
-		//	ImGui::Text("FPS: %d", g_pEnv->_timeManager->_fps);
-		//	ImGui::Text("Time: %.3f", g_pEnv->_timeManager->_currentTime);
-		//	ImGui::Text("Frame time (ms): %f", g_pEnv->_timeManager->_frameTimeMS);			
-		//	ImGui::Text("Average frame time (ms): %f", g_pEnv->_timeManager->_averageFrameTimeMS);
-		//	ImGui::Text("Sim time (ms): %f", g_pEnv->_timeManager->_accumulatedSimulationTime);
+		if (!_profilingEnabled)
+			return;
 
-		//	int32_t mx, my;
-		//	g_pEnv->_inputSystem->GetMousePosition(mx, my);
-		//	ImGui::Text("Mouse %dx%d", mx, my);
-		//	//ImGui::Text("Mouse %dx%d %s", ImGui::GetIO().MousePos.x, ImGui::GetIO().MousePos.y);
-		//	//ImGui::Text("MouseLast %.0fx%.0f", ImGui::GetIO().MousePosPrev.x, ImGui::GetIO().MousePosPrev.y);
-		//	//ImGui::Text("MouseLastValid %.0fx%.0f", _ctx->MouseLastValidPos.x, _ctx->MouseLastValidPos.y);
-		//	
+		_lock.lock();
+		std::sort(_profiles.begin(), _profiles.end(), [](const Profiler* left, const Profiler* right) {
+			//float avg1 = (left->_average / (float)left->_numProfiles);
+			//float avg2 = (right->_average / (float)right->_numProfiles);
+			return left->_peak > right->_peak;
+			});
 
-		
+		int32_t c = 0;
 
-		//	_lock.lock();
-		//	std::sort(_profiles.begin(), _profiles.end(), [](const Profiler* left, const Profiler* right) {
-		//		return left->_average > right->_average;
-		//		});
+		for (auto&& prof : _profiles)
+		{
+			if (prof->_average > 0.0f)
+			{
+				float avg = (prof->_average / (float)prof->_numProfiles);
 
-		//	for (auto&& prof : _profiles)
-		//	{
-		//		if(prof->_average > 0.0f)
-		//			ImGui::Text("Profile '%s' avg. %.6f ms", prof->_func, prof->_average / (float)prof->_numProfiles);
-		//	}
-		//	_lock.unlock();
-		//}
-		//ImGui::End();
+				if (avg < 0.01f)
+					continue;
+
+				std::wstring func(prof->_func.begin(), prof->_func.end());
+
+				g_pEnv->GetUIManager().GetRenderer()->PrintText(
+					g_pEnv->GetUIManager().GetRenderer()->_style.font.get(),
+					(uint8_t)Style::FontSize::Small,
+					650, 100 + 18 * c,
+					math::Color(1, 1, 1, 1),
+					FontAlign::None,
+					std::format(L"Profile '{}:{}' peak: {:.2f} ms, avg: {:.2f} ms", func, prof->_line, prof->_peak, avg),
+					TextEffectSettings::Shadow());
+				++c;
+			}
+
+		}
+		_lock.unlock();
 	}
 
 
 	void DebugGUI::ReportProfile(const Profiler& profile)
 	{
-		bool shouldRecord = false;
+		if (!_profilingEnabled)
+			return;
+
+		bool shouldRecord = true;
 
 		_lock.lock();
 		for (auto&& prof : _profiles)
 		{
-			if (!strcmp(prof->_func, profile._func) && !strcmp(prof->_file, profile._file) && prof->_line == profile._line)
+			if (prof->_func == profile._func && prof->_file == profile._file && prof->_line == profile._line)
 			{
+				shouldRecord = false;
+
 				float duration = (profile._end - profile._start) * 1000.0f;				
 
-				if (duration > FLT_EPSILON)
+				//if (duration > FLT_EPSILON)
 				{
 					prof->_numProfiles++;
 
 					prof->_average += duration;
-					//prof->_average /= (float)prof->_numProfiles;
 
-					shouldRecord = true;
+					if (duration > prof->_peak)
+						prof->_peak = duration;
+				
 				}
 				_lock.unlock();
 				return;

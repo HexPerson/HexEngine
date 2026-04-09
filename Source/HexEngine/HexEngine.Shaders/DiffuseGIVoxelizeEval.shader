@@ -333,7 +333,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 
 		float3 accum = 0.0f.xxx;
 		const uint maxLights = min(lightCount, 64u);
-		[loop]
+		[fastopt] [loop]
 		for (uint i = 0u; i < maxLights; ++i)
 		{
 			const GpuGiLight light = g_giLights[i];
@@ -537,10 +537,13 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 			triSunVisibility = EvaluateSunShadowVisibility(triCenterWs, n, voxelSize);
 		}
 
+		[fastopt][loop]
 		for (uint z = voxelLoopMin.z; z <= voxelLoopMax.z; z += step)
 		{
+			[fastopt][loop]
 			for (uint y = voxelLoopMin.y; y <= voxelLoopMax.y; y += step)
 			{
+				[fastopt][loop]
 				for (uint x = voxelLoopMin.x; x <= voxelLoopMax.x; x += step)
 				{
 					const uint3 coord = uint3(x, y, z);
@@ -580,10 +583,10 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 							if (rectSupport > 0.0f)
 							{
 								float3 rectMask = 0.0f.xxx;
-								[unroll]
+								[fastopt][loop]
 								for (uint sy = 0u; sy < 3u; ++sy)
 								{
-									[unroll]
+									[fastopt][loop]
 									for (uint sx = 0u; sx < 3u; ++sx)
 									{
 										const float2 f = float2((float)sx, (float)sy) * 0.5f;
@@ -611,7 +614,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 
 						// Add short-range occupancy occlusion from last-frame voxels to retain local thickness.
 						float localVoxelOcclusion = 1.0f;
-						[unroll]
+						[fastopt][loop]
 						for (uint s = 1u; s <= 2u; ++s)
 						{
 							const float rayDist = voxelSize * (2.0f * (float)s);

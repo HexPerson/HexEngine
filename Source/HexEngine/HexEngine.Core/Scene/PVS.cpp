@@ -189,9 +189,8 @@ namespace HexEngine
 
 	void PVS::CalculateVisibility(Scene* scene, const PVSParams& params)
 	{
-		
-
-		//scene->Lock();
+		if (_updatesDisabled)
+			return;
 
 		bool needsRebuild = _forceRebuild;
 
@@ -340,10 +339,10 @@ namespace HexEngine
 			});*/
 
 
-		if (_lock.try_lock() == false)
-			return;
+		std::unique_lock lock(_lock, std::try_to_lock);
 
-		std::unique_lock lock(_lock);
+		if (!lock.owns_lock())
+			return;
 
 
 		auto end = _pvs.end();
@@ -618,8 +617,38 @@ namespace HexEngine
 		FlushEntity(entity, true);
 	}
 
+	void PVS::UpdateEntityInstanceCache(Entity* entity)
+	{
+		if (_updatesDisabled)
+			return;
+
+		std::unique_lock lock(_lock, std::try_to_lock);
+
+		if (!lock.owns_lock())
+			return;
+
+		for (auto& renderables : _renderableSnapshot)
+		{
+			for (auto& snapshot : renderables.second)
+			{
+				if (snapshot.entity == entity)
+				{
+					if (auto smc = entity->GetComponent<StaticMeshComponent>())
+					{
+						snapshot.instanceData = smc->GetCachedInstanceData(renderables.first.get());
+						snapshot.shadowInstanceData = smc->GetCachedShadowInstanceData();
+					}
+					return;
+				}
+			}
+		}
+	}
+
 	void PVS::FlushEntity(Entity* entity, bool recache)
 	{
+		/*if (_updatesDisabled)
+			return;*/
+
 		if (!entity)
 			return;
 

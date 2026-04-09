@@ -19,7 +19,7 @@
 	<Target
 	  Name="HexEngineShaderCompiler"
 	  Condition="'@(BuildShader)' != ''"
-	  Inputs="%(BuildShader.FullPath);@(ShaderHeader);@(ShaderInclude);$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(Configuration)\HexEngine.ShaderCompiler.exe"
+	  Inputs="%(BuildShader.FullPath);@(ShaderHeader);@(ShaderInclude)"
 	  Outputs="$(MSBuildProjectDirectory)\Compiled\%(BuildShader.Filename).hcs"
 	  BeforeTargets="ClCompile">
 		<MakeDir Directories="$(MSBuildProjectDirectory)\Compiled" />

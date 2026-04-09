@@ -38,17 +38,24 @@ namespace HexEngine
 	private:
 		RECT GetViewportRect() const;
 		int32_t ComputeContentHeight() const;
+		uint64_t ComputeContentSignature() const;
+		bool HasFocusedDescendant(Element* node) const;
 		float ComputeMaxScroll() const;
 		RECT ComputeScrollbarRect() const;
 		void UpdateScrollbarDrag(int32_t mouseY);
+
+	protected:
+		bool _isCapturing = false;
+		bool _contentRootRenderSuppressed = false;
 
 	private:
 		std::wstring _label;
 		Element* _contentRoot = nullptr;
 		float _scrollOffset = 0.0f;
+		float _lastScrollOffset = 0.0f;
+		uint64_t _lastContentSignature = 0;
 		float _scrollSpeed = 28.0f;
-		int32_t _manualContentHeight = 0;
-		bool _isCapturing = false;
+		int32_t _manualContentHeight = 0;		
 		bool _isDraggingScrollbar = false;
 		int32_t _scrollbarDragStartY = 0;
 		float _scrollbarDragStartOffset = 0.0f;

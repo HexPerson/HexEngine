@@ -337,7 +337,7 @@ namespace HexEditor
 						if (_dragAndDropEntity == nullptr)
 						{
 							_dragAndDropEntity = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(
-								ws2s(draggingAsset->assetNameShort),
+								ws2s(draggingAsset->assetNameFull.stem()),
 								hit.position,
 								math::Quaternion(),
 								math::Vector3(1.0f)

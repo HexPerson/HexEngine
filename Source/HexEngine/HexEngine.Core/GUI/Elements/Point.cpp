@@ -37,6 +37,16 @@ namespace HexEngine
 		return p;;
 	}
 
+	Point Point::operator -(const Point& other) const
+	{
+		Point p = *this;
+
+		p.x -= other.x;
+		p.y -= other.y;
+
+		return p;;
+	}
+
 	Point& Point::operator += (const Point& other)
 	{
 		x += other.x;

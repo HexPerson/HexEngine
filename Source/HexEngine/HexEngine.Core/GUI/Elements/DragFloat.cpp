@@ -2,9 +2,6 @@
 #include "DragFloat.hpp"
 #include "../GuiRenderer.hpp"
 #include "../UIManager.hpp"
-#include <algorithm>
-#include <cmath>
-#include <cwchar>
 
 namespace HexEngine
 {

@@ -15,7 +15,7 @@ namespace HexEditor
 			bool selected = false;
 			bool dragging = false;
 			bool ownsIcon = false;
-			std::wstring assetNameFull;
+			fs::path assetNameFull;
 			std::wstring assetNameShort;
 		};
 

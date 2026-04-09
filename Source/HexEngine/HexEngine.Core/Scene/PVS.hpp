@@ -102,6 +102,10 @@ namespace HexEngine
 
 		RenderBatchSnapshot& GetRenderableSnapshot() { return _renderableSnapshot; }
 
+		void DisableUpdates(bool disable) { _updatesDisabled = disable; }
+
+		void UpdateEntityInstanceCache(Entity* entity);
+
 	private:
 		MeshInstanceMap _pvs;
 		PVSParams _optimisedParams;
@@ -109,6 +113,7 @@ namespace HexEngine
 		bool _hasBuildOptimisation = false;
 		bool _forceRebuild = true;
 		bool _didRebuild = false;
+		bool _updatesDisabled = false;
 		std::recursive_mutex _lock;
 
 		uint32_t _totalEnts = 0;

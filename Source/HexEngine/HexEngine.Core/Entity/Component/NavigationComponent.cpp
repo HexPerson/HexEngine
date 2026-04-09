@@ -133,7 +133,7 @@ namespace HexEngine
 				auto easingFunction = getEasingFunction(EaseOutQuart);
 
 				//if(_hasNewRotation)
-					transform->SetRotation(math::Quaternion::Slerp(transform->GetRotation(), _targetRotation, easingFunction(_rotationTime)));
+					transform->SetRotation(math::Quaternion::Slerp(transform->GetRotation(), _targetRotation, (float)easingFunction(_rotationTime)));
 
 				if (_rotationTime >= 1.0f)
 				{

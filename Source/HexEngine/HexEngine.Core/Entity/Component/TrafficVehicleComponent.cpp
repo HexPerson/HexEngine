@@ -725,12 +725,12 @@ namespace HexEngine
 		}
 
 		currentPosition += toTarget * (_currentSpeed * frameTime);
-		transform->SetPosition(currentPosition);
+		transform->SetPositionNoNotify(currentPosition);
 
 		const float yaw = atan2f(toTarget.x, toTarget.z);
 		const auto targetRotation = math::Quaternion::CreateFromYawPitchRoll(yaw, 0.0f, 0.0f);
 		const float rotationBlend = std::clamp(frameTime * std::max(_rotationLerp, 0.0f), 0.0f, 1.0f);
-		transform->SetRotation(math::Quaternion::Slerp(transform->GetRotation(), targetRotation, rotationBlend));
+		transform->SetRotationNoNotify(math::Quaternion::Slerp(transform->GetRotation(), targetRotation, rotationBlend));
 	}
 
 	void TrafficVehicleComponent::Serialize(json& data, JsonFile* file)

@@ -45,7 +45,7 @@ bool HLSL::Compile(const fs::path& filePath, std::vector<uint8_t>& dataOut, HexE
 				"ShaderMain",
 				targetVer.c_str(),
 #ifdef _DEBUG
-				D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION | D3DCOMPILE_PREFER_FLOW_CONTROL,
+				D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION,
 #else
 				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
 #endif

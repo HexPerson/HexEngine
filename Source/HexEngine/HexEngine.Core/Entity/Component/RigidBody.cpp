@@ -513,7 +513,7 @@ namespace HexEngine
 			GetEntity()->SetLayer(Layer::Trigger);
 		}
 
-		ForceUpdatePose();
+		//ForceUpdatePose();
 		
 	}
 

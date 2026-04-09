@@ -21,11 +21,14 @@ namespace HexEngine
 	{
 		ScrollView::Render(renderer, w, h);
 
-		auto pos = GetAbsolutePosition();
+		if (_isCapturing)
+		{
+			auto pos = GetAbsolutePosition();
 
-		renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.listbox_back);		
+			renderer->FillQuad(pos.x, pos.y, _size.x, _size.y, renderer->_style.listbox_back);
 
-		RenderItems(renderer, pos);
+			RenderItems(renderer, pos);
+		}
 
 		//renderer->Frame(pos.x, pos.y, _size.x, _size.y, 1, renderer->_style.listbox_border);
 	}
@@ -90,6 +93,11 @@ namespace HexEngine
 				if (OnClickItem(this, &_items.at(_hoverIdx)))
 					return true;
 			}
+		}
+		else if (event == InputEvent::MouseMove && IsMouseOver(true))
+		{
+			_canvas.Redraw();
+			return true;
 		}
 
 		return false;

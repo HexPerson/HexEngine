@@ -25,5 +25,6 @@ namespace HexEngine
 		std::function<bool(Button*)> _action;
 		bool _hasHighlightOverride = false;
 		math::Color _highlightOverride;
+		bool _wasHovering = false;
 	};
 }

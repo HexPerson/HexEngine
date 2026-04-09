@@ -2798,25 +2798,76 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			(static_cast<uint32_t>(_cachedVoxelTriangles[levelIndex].size()) <= baseTriangleBudget);
 		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheStillFresh && cachedTriangleCountAcceptable)
 		{
-			out = _cachedVoxelTriangles[levelIndex];
-			_giMaterialProxies = _cachedGiMaterialProxies[levelIndex];
-			_giMaterialProxyLookup.clear();
-			for (const auto& materialProxy : _giMaterialProxies)
+			// Validate cached material pointer identities against currently visible scene materials.
+			// This guards against stale raw pointers when entities/materials are removed or replaced.
+			bool cachedMaterialSetMatchesScene = true;
+			const dx::BoundingBox clipBounds(level.center, math::Vector3(level.extent, level.extent, level.extent));
+			std::vector<StaticMeshComponent*> cacheMeshesInBounds;
+			scene->GatherStaticMeshesInBounds(clipBounds, cacheMeshesInBounds, true);
+			std::vector<const Material*> liveMaterials;
+			liveMaterials.reserve(cacheMeshesInBounds.size());
+			for (auto* smc : cacheMeshesInBounds)
 			{
-				if (materialProxy.material != nullptr)
+				if (smc == nullptr || smc->GetMesh() == nullptr)
+					continue;
+				auto* entity = smc->GetEntity();
+				if (entity == nullptr || entity->IsPendingDeletion())
+					continue;
+				if (auto mat = smc->GetMaterial())
 				{
-					_giMaterialProxyLookup[materialProxy.material] = materialProxy.index;
+					liveMaterials.push_back(mat.get());
 				}
 			}
-			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
-			_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
-			_stats.emissiveMaterialCount += _cachedEmissiveMaterialCount[levelIndex];
-			_stats.emissiveTriangleCount += _cachedEmissiveTriangleCount[levelIndex];
-			_stats.emissiveActiveTriangleCount += _cachedEmissiveActiveTriangleCount[levelIndex];
-			_stats.emissiveTiledTriangleCount += _cachedEmissiveTiledTriangleCount[levelIndex];
-			_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, _cachedEmissiveProxyMaxLuma[levelIndex]);
-			_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, _cachedEmissiveProxyMaxStrength[levelIndex]);
-			return static_cast<uint32_t>(out.size());
+			std::sort(liveMaterials.begin(), liveMaterials.end(),
+				[](const Material* a, const Material* b)
+				{
+					return std::less<const Material*>()(a, b);
+				});
+			liveMaterials.erase(std::unique(liveMaterials.begin(), liveMaterials.end()), liveMaterials.end());
+
+			const auto& cachedMaterials = _cachedGiMaterialProxies[levelIndex];
+			if (cachedMaterials.size() != liveMaterials.size())
+			{
+				cachedMaterialSetMatchesScene = false;
+			}
+			else
+			{
+				for (size_t i = 0; i < cachedMaterials.size(); ++i)
+				{
+					if (cachedMaterials[i].material != liveMaterials[i])
+					{
+						cachedMaterialSetMatchesScene = false;
+						break;
+					}
+				}
+			}
+
+			if (cachedMaterialSetMatchesScene)
+			{
+				out = _cachedVoxelTriangles[levelIndex];
+				_giMaterialProxies = cachedMaterials;
+				_giMaterialProxyLookup.clear();
+				for (const auto& materialProxy : _giMaterialProxies)
+				{
+					if (materialProxy.material != nullptr)
+					{
+						_giMaterialProxyLookup[materialProxy.material] = materialProxy.index;
+					}
+				}
+				_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
+				_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
+				_stats.emissiveMaterialCount += _cachedEmissiveMaterialCount[levelIndex];
+				_stats.emissiveTriangleCount += _cachedEmissiveTriangleCount[levelIndex];
+				_stats.emissiveActiveTriangleCount += _cachedEmissiveActiveTriangleCount[levelIndex];
+				_stats.emissiveTiledTriangleCount += _cachedEmissiveTiledTriangleCount[levelIndex];
+				_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, _cachedEmissiveProxyMaxLuma[levelIndex]);
+				_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, _cachedEmissiveProxyMaxStrength[levelIndex]);
+				return static_cast<uint32_t>(out.size());
+			}
+
+			_cachedVoxelTrianglesValid[levelIndex] = false;
+			_cachedVoxelTrianglesFrame[levelIndex] = 0ull;
+			_cachedGiMaterialProxies[levelIndex].clear();
 		}
 
 		const math::Vector3 clipMin = level.center - math::Vector3(level.extent, level.extent, level.extent);

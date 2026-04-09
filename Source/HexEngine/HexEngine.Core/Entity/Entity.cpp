@@ -428,8 +428,6 @@ namespace HexEngine
 
 	void Entity::ForcePosition(const math::Vector3& position)
 	{
-		ClearTransformCache();
-
 		_cachedTransform->SetPosition(position);
 
 		if (auto body = GetComponent<RigidBody>(); body != nullptr && body->GetIRigidBody() != nullptr && body->GetIRigidBody()->GetBodyType() == IRigidBody::BodyType::Static)
@@ -437,13 +435,11 @@ namespace HexEngine
 			body->GetIRigidBody()->UpdatePosePosition(GetWorldTM().Translation());
 		}
 
-		//SetPosition(position);
+		ClearTransformCache();
 	}
 
 	void Entity::ForceRotation(const math::Quaternion& rotation)
 	{
-		ClearTransformCache();
-
 		_cachedTransform->SetRotation(rotation);
 
 		if (auto body = GetComponent<RigidBody>(); body != nullptr && body->GetIRigidBody() != nullptr && body->GetIRigidBody()->GetBodyType() == IRigidBody::BodyType::Static)
@@ -451,7 +447,7 @@ namespace HexEngine
 			body->GetIRigidBody()->UpdatePoseRotation(GetRotation());
 		}
 
-		//SetPosition(position);
+		ClearTransformCache();
 	}
 
 	void Entity::SetPosition(const math::Vector3& position)
@@ -782,6 +778,14 @@ namespace HexEngine
 		_hasCachedWorldBoundingSphere = false;
 		_hasCachedWorldTMInvert = false;
 		++_transformVersion;
+
+		if (auto mainCamera = _scene->GetMainCamera())
+		{
+			if (auto pvs = mainCamera->GetPVS())
+			{
+				pvs->UpdateEntityInstanceCache(this);
+			}
+		}
 	}
 
 	void Entity::OnMessage(Message* message, MessageListener* sender)
@@ -823,9 +827,12 @@ namespace HexEngine
 				_lastPosition = transformMessage->_position;
 			}
 
-			if (_scene != nullptr)
+			if (auto mainCamera = _scene->GetMainCamera())
 			{
-				_scene->FlushPVS(this);
+				if (auto pvs = mainCamera->GetPVS())
+				{
+					pvs->UpdateEntityInstanceCache(this);
+				}
 			}
 
 			break;

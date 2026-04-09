@@ -1196,13 +1196,17 @@ namespace HexEngine
 
 		if(pvs->DidRebuild())
 		{
-			std::unique_lock lock(_lock);
+			PROFILE();
+
+			//std::unique_lock lock(_lock);
 			const auto& pvsRenderables = pvs->GetRenderables();			
 			snapshot.clear();
 			snapshot.reserve(pvsRenderables.size());
 
 			for (const auto& renderableBatch : pvsRenderables)
 			{
+				PROFILE();
+
 				auto material = renderableBatch.first;
 				if (!material)
 					continue;
@@ -1212,6 +1216,8 @@ namespace HexEngine
 
 				for (const auto& meshEntityPair : renderableBatch.second)
 				{
+					PROFILE();
+
 					auto mesh = std::get<0>(meshEntityPair);
 					auto entity = std::get<1>(meshEntityPair);
 					auto meshComponent = (StaticMeshComponent*)std::get<2>(meshEntityPair);

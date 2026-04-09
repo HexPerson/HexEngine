@@ -90,27 +90,12 @@ namespace HexEngine
 			math::Vector3 right = math::Vector3::Right;
 			math::Vector3 up = math::Vector3::Up;
 			math::Vector3 scale = math::Vector3(1.0f);
-		} _current, _previous, _interpolated;
-
-		//math::Vector3 _position;
-		//math::Quaternion _rotation;
-		//math::Quaternion _previousRotation;
-		//
-		//math::Vector3 _scale = math::Vector3(1.0f);
-		////math::Matrix _rotationMatrix;
-		//math::Vector3 _forward;
-		//math::Vector3 _right;
-		//math::Vector3 _up;
-		//
-
-		//math::Vector3 _previousPosition;
-		//math::Vector3 _interpolatedPosition;
+		} _current, _previous, _interpolated, _cached;
 
 		math::Vector3 _eulerAngles;
 		math::Vector3 _eulerAnglesDeg;
 		bool _needsRotationMatrixUpdate = true;
 
-		//math::Quaternion _interpolatedRotation;
 		uint32_t _lastInterpolationTick = 0;
 		bool _enableInterpolation = false;
 

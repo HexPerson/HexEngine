@@ -58,26 +58,30 @@ namespace HexEngine
 
 		SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
 
-		_hoveredItem = nullptr;
-		_dragTarget = nullptr;
-		int32_t y = pos.y - (int32_t)std::round(GetScrollOffset());
-		UpdateHovering(renderer, _items, y);
-
-		Point drawPos(pos.x, pos.y - (int32_t)std::round(GetScrollOffset()));
-		int32_t c = -1;
-
+		if (_isCapturing)
 		{
-			std::unique_lock lock(_lock);
-			_renderCount = 0;
-			RenderItems(renderer, drawPos, pos, _items, c);
-		}
+			_hoveredItem = nullptr;
+			_dragTarget = nullptr;
 
-		if (_draggedItem != nullptr)
-		{
-			int32_t mx, my;
-			g_pEnv->_inputSystem->GetMousePosition(mx, my);
-			Point hoverPos(mx, my);
-			RenderItem(renderer, hoverPos, Point(mx, my), _draggedItem, nullptr, c);
+			int32_t y = GetAbsolutePosition().y - (int32_t)std::round(GetScrollOffset());		
+			UpdateHovering(renderer, _items, y);
+
+			Point drawPos(pos.x, pos.y - (int32_t)std::round(GetScrollOffset()));
+			int32_t c = -1;
+
+			{
+				std::unique_lock lock(_lock);
+				_renderCount = 0;
+				RenderItems(renderer, drawPos, pos, _items, c);
+			}
+
+			if (_draggedItem != nullptr)
+			{
+				int32_t mx, my;
+				g_pEnv->_inputSystem->GetMousePosition(mx, my);
+				Point hoverPos(mx, my);
+				RenderItem(renderer, hoverPos, Point(mx, my), _draggedItem, nullptr, c);
+			}
 		}
 
 		if (IsMouseOver(true) == false)
@@ -737,8 +741,9 @@ namespace HexEngine
 
 		if (_selectedItem == item)
 		{
+			const int32_t indent = position.x - absolutePos.x;
 			Point highlightPos(position.x, position.y);
-			Point highlightSize(_size.x - position.x - 10, item->GetHeight());
+			Point highlightSize(_size.x - indent - 10, item->GetHeight());
 			renderer->FillQuad(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, math::Color(0.2f, 0.4f, 1.0f, 0.2f));
 			renderer->Frame(highlightPos.x, highlightPos.y, highlightSize.x, highlightSize.y, 1, math::Color(0.2f, 0.6f, 1.0f, 0.9f));
 		}

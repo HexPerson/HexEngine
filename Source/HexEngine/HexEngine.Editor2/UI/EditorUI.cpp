@@ -117,6 +117,8 @@ namespace HexEditor
 
 					_entityList->Repaint();
 
+					HexEngine::g_pEnv->_debugGui->EnableProfiling(true);
+
 					//newScene->GetMainCamera()->SetViewport(math::Viewport(0, 0, _centralDock->GetSize().x, _centralDock->GetSize().y));
 					//g_pEnv->_sceneRenderer->Resize(_centralDock->GetSize().x, _centralDock->GetSize().y);
 

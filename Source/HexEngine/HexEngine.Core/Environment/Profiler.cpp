@@ -7,8 +7,8 @@ namespace HexEngine
 {
 	Profiler::Profiler(const char* file, const char* function, uint32_t line)
 	{
-		strcpy_s(_file, file);
-		strcpy_s(_func, function);
+		_file = file;
+		_func = function;
 		_line = line;
 		_average = 0.0f;
 		_start = g_pEnv->_timeManager->GetTime();
@@ -23,8 +23,8 @@ namespace HexEngine
 
 	Profiler::Profiler(const Profiler& other)
 	{
-		strcpy_s(_file, other._file);
-		strcpy_s(_func, other._func);
+		_file = other._file;
+		_func = other._func;
 		_line = other._line;
 
 		_start = other._start;

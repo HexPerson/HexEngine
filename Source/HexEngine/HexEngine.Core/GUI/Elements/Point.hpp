@@ -15,6 +15,7 @@ namespace HexEngine
 		Point& operator =(const Point& other);
 		Point& operator += (const Point& other);
 		Point operator +(const Point& other) const;
+		Point operator -(const Point& other) const;
 
 		Point GetCenter(const Point& size) const;
 		Point RelativeTo(const Point& other) const;

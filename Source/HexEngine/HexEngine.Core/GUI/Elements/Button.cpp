@@ -19,31 +19,51 @@ namespace HexEngine
 
 	void Button::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
-		auto pos = GetAbsolutePosition();
-		auto centre = pos.GetCenter(_size);
+		auto pos = GetAbsolutePosition();		
 
 		bool hovering = IsMouseOver(true) && IsInputEnabled();
 
-		if(hovering)
-			renderer->FillQuadVerticalGradient(pos.x, pos.y, _size.x, _size.y, _hasHighlightOverride ? _highlightOverride : renderer->_style.button_hover, renderer->_style.button_back2);
-		else
-			renderer->FillQuadVerticalGradient(pos.x, pos.y, _size.x, _size.y, renderer->_style.button_back, renderer->_style.button_back2);
-
-		renderer->Frame(pos.x, pos.y, _size.x, _size.y, 1, renderer->_style.button_border);
-
-		if (_icon)
+		if (hovering != _wasHovering)
 		{
-			renderer->FillTexturedQuad(_icon.get(),
-				centre.x - (_size.y / 2) + 1,
-				centre.y - (_size.y / 2) + 1,
-				_size.y - 2,
-				_size.y - 2,
-				math::Color(0xFFFFFFFF));
+			_wasHovering = hovering;
+			_canvas.Redraw();
 		}
-		else
+
+		if (_canvas.BeginDraw(renderer, _size.x, _size.y))
 		{
-			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, centre.x, centre.y, hovering ? renderer->_style.button_hover_text : renderer->_style.text_regular, FontAlign::CentreLR | FontAlign::CentreUD, _label);
+			int32_t x = 0;
+			int32_t y = 0;
+
+			if (hovering)
+				renderer->FillQuad(x, y, _size.x, _size.y, renderer->_style.button_back2);
+			else
+				renderer->FillQuad(x, y, _size.x, _size.y, renderer->_style.button_back);
+
+			renderer->Frame(x, y, _size.x, _size.y, 1, math::Color(HEX_RGBA_TO_FLOAT4(4, 5, 6, 255)));
+
+			if (hovering)
+				renderer->Frame(x + 1, y + 1, _size.x - 2, _size.y - 2, 1, renderer->_style.button_border);
+
+			auto centre = Point().GetCenter(_size);
+
+			if (_icon)
+			{
+				renderer->FillTexturedQuad(_icon.get(),
+					centre.x - (_size.y / 2) + 1,
+					centre.y - (_size.y / 2) + 1,
+					_size.y - 2,
+					_size.y - 2,
+					math::Color(0xFFFFFFFF));
+			}
+			else
+			{
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Small, centre.x, centre.y, renderer->_style.text_regular, FontAlign::CentreLR | FontAlign::CentreUD, _label);
+			}
+
+			_canvas.EndDraw(renderer);
 		}
+
+		_canvas.Present(renderer, pos.x, pos.y, _size.x, _size.y);
 	}
 
 	void Button::SetIcon(std::shared_ptr<ITexture2D> icon)

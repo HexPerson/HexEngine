@@ -20,7 +20,7 @@ namespace HexEngine
 	uint32_t InstancedStaticMeshComponent::AddInstance(const math::Matrix& mat)
 	{
 		_instances.push_back(mat);
-		return _instances.size() - 1;
+		return (uint32_t)_instances.size() - 1u;
 	}
 
 	void InstancedStaticMeshComponent::RemoveInstance(uint32_t id)

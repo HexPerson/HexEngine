@@ -129,6 +129,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(Configuration)</AdditionalLibraryDirectories>
       <AdditionalDependencies>DirectXTK.lib;HexEngine.Core.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <Profile>false</Profile>
     </Link>
     <PostBuildEvent>
       <Command>copy "$(TargetDir)$(TargetName).exe" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).exe"

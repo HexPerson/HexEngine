@@ -208,15 +208,15 @@ namespace HexEngine
 
 		for (auto& ent : sceneData["entities"].items())
 		{
-			//_scene->Lock();
+			auto entity = Entity::LoadFromFile(ent.value(), ent.key(), loadIntoExistingScene.get(), this);
 
 			createdEnts.push_back({
 				ent.value(),
-				Entity::LoadFromFile(ent.value(), ent.key(), loadIntoExistingScene.get(), this)
+				entity
 				});
-
-			//_scene->Unlock();
 		}
+
+		
 
 		auto& hierarchy = sceneData["hierarchy"];
 
@@ -238,9 +238,9 @@ namespace HexEngine
 		// Deserialize the transforms first, because other components may depends on the transforms being correct
 		for (auto& ent : createdEnts)
 		{
-			loadIntoExistingScene->Lock();
+			//loadIntoExistingScene->Lock();
 			ent.second->Deserialize(ent.first, this, 1 << Transform::_GetComponentId());
-			loadIntoExistingScene->Unlock();
+			//loadIntoExistingScene->Unlock();
 
 			_loadedEntities.push_back(ent.second);
 		}		
@@ -252,19 +252,22 @@ namespace HexEngine
 			if (callback)
 				callback(std::wstring(ent.second->GetName().begin(), ent.second->GetName().end()), loadedCount, (uint32_t)createdEnts.size());
 
-			loadIntoExistingScene->Lock();
+			//loadIntoExistingScene->Lock();
 			ent.second->Deserialize(ent.first, this);
-			loadIntoExistingScene->Unlock();
+			//loadIntoExistingScene->Unlock();
 
 			//  we want to force the PVS to rebuild each time an entity is loaded, in the case of streaming scene files
 			if (auto mainCamera = loadIntoExistingScene->GetMainCamera(); mainCamera != nullptr)
 			{
-				loadIntoExistingScene->Lock();
-				mainCamera->GetPVS()->ForceRebuild();
-				loadIntoExistingScene->Unlock();
+				mainCamera->GetPVS()->DisableUpdates(true);
 			}
 
 			loadedCount++;
+		}
+
+		if (auto mainCamera = loadIntoExistingScene->GetMainCamera(); mainCamera != nullptr)
+		{
+			mainCamera->GetPVS()->DisableUpdates(false);
 		}
 
 		// Rebuild all camera/light PVS sets once after load, instead of flushing per-transform during deserialize.

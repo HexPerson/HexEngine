@@ -36,6 +36,8 @@ namespace HexEngine
 
 		void ShowGizmo(Entity* entity);
 
+		void EnableProfiling(bool enable) { _profilingEnabled = enable; }
+
 	private:
 		void ShowOverlay();
 
@@ -45,6 +47,7 @@ namespace HexEngine
 		std::vector<Profiler*> _profiles;
 		std::vector<IDebugGUICallback*> _callbacks;
 		bool _uiActive = false;
+		bool _profilingEnabled = false;
 
 		std::recursive_mutex _lock;
 
