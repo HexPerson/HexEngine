@@ -175,6 +175,9 @@ namespace HexEngine
 		/** @brief Issues indexed instanced draw call. */
 		virtual void DrawIndexedInstanced(uint32_t numIndices, uint32_t instanceCount) = 0;
 
+		/** @brief Issues indexed instanced indirect draw call. */
+		virtual void DrawIndexedInstancedIndirect(void* argsBuffer, uint32_t alignedByteOffset = 0) = 0;
+
 		/** @brief Issues non-indexed draw call. */
 		virtual void Draw(uint32_t vertexCount, int32_t startVertexLocation = 0) = 0;
 

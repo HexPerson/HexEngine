@@ -128,7 +128,8 @@
 		const float sphereFrontDepthNdc = depthNdc - max(radiusNdc, 0.0f);
 		const bool centerOccluded = sphereFrontDepthNdc > (centerDepth + depthBias);
 		const bool cornerOccluded = sphereFrontDepthNdc > (cornerMinDepth + depthBias);
-		const bool occluded = centerOccluded && cornerOccluded;
+		const bool aggressive = g_cullParams1.w > 0.5f;
+		const bool occluded = aggressive ? (centerOccluded || cornerOccluded) : (centerOccluded && cornerOccluded);
 		if (!occluded)
 			outputFlags |= 2u;
 

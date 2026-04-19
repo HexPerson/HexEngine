@@ -21,12 +21,13 @@ namespace HexEngine
 	HVar r_gpuCullFastCameraDistance("r_gpuCullFastCameraDistance", "Camera movement threshold to suppress occlusion for a frame", 1.0f, 0.0f, 1000.0f);
 	HVar r_gpuCullFastCameraAngleDeg("r_gpuCullFastCameraAngleDeg", "Camera rotation angle (degrees) threshold to suppress occlusion for a frame", 6.0f, 0.0f, 90.0f);
 	HVar r_gpuCullNearBypassDistance("r_gpuCullNearBypassDistance", "Distance where objects bypass occlusion", 1.25f, 0.0f, 250.0f);
-	HVar r_gpuCullLargeSphereBypass("r_gpuCullLargeSphereBypass", "Sphere radius where objects bypass occlusion", 48.0f, 0.0f, 5000.0f);
+	HVar r_gpuCullLargeSphereBypass("r_gpuCullLargeSphereBypass", "Sphere radius where objects bypass occlusion", 5000.0f, 0.0f, 5000.0f);
 	HVar r_gpuCullFrustumRadiusScale("r_gpuCullFrustumRadiusScale", "Radius scale used for conservative GPU frustum tests", 1.05f, 1.0f, 4.0f);
 	HVar r_gpuCullOcclusionDepthBias("r_gpuCullOcclusionDepthBias", "Depth bias for conservative HZB tests", 0.0013f, 0.0f, 0.1f);
 	HVar r_gpuCullMinCandidates("r_gpuCullMinCandidates", "Minimum candidate count before GPU culling path is used", 64, 0, 100000);
 	HVar r_gpuCullOcclusionRejectFrames("r_gpuCullOcclusionRejectFrames", "Consecutive occluded frames required before culling", 2, 1, 8);
 	HVar r_gpuCullOcclusionStableFrames("r_gpuCullOcclusionStableFrames", "Camera-stable frames required before enabling occlusion", 0, 0, 30);
+	HVar r_gpuCullOcclusionAggressive("r_gpuCullOcclusionAggressive", "Use aggressive occlusion decision policy", true, false, true);
 
 	namespace
 	{
@@ -662,7 +663,7 @@ bool GpuVisibilityCulling::GatherCandidates(
 			r_gpuCullNearBypassDistance._val.f32,
 			r_gpuCullLargeSphereBypass._val.f32,
 			r_gpuCullFrustumRadiusScale._val.f32,
-			0.0f);
+			r_gpuCullOcclusionAggressive._val.b ? 1.0f : 0.0f);
 
 		if (_cullConstantBuffer)
 			_cullConstantBuffer->Write(&constants, sizeof(constants));

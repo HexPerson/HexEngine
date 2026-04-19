@@ -157,6 +157,7 @@ public:
 	virtual void DrawIndexed(uint32_t numIndices) override;
 
 	virtual void DrawIndexedInstanced(uint32_t numIndices, uint32_t instanceCount) override;
+	virtual void DrawIndexedInstancedIndirect(void* argsBuffer, uint32_t alignedByteOffset = 0) override;
 
 	virtual void Draw(uint32_t vertexCount, int32_t startVertexLocation = 0) override;
 

@@ -1808,6 +1808,20 @@ void GraphicsDeviceD3D11::DrawIndexedInstanced(uint32_t numIndices, uint32_t ins
 	HexEngine::g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
 }
 
+void GraphicsDeviceD3D11::DrawIndexedInstancedIndirect(void* argsBuffer, uint32_t alignedByteOffset)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	SetConstantBufferVS(1, _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer]);
+	SetConstantBufferPS(1, _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer]);
+
+	if (argsBuffer != nullptr)
+	{
+		_deviceContext->DrawIndexedInstancedIndirect(reinterpret_cast<ID3D11Buffer*>(argsBuffer), alignedByteOffset);
+	}
+	HexEngine::g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+}
+
 void GraphicsDeviceD3D11::Draw(uint32_t vertexCount, int32_t startVertexLocation)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);

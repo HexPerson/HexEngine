@@ -27,6 +27,7 @@ namespace HexEngine
 	HVar r_profileDisableSurfaceMaps("r_profileDisableSurfaceMaps", "Disable roughness, metallic, AO, height, emission and opacity map bindings in static mesh materials for profiling", false, false, true);
 	HVar phys_debug("phys_debug", "Enable the physics debugger (very slow)", false, false, true);
 	HVar r_debugRenderSkips("r_debugRenderSkips", "Log per-pass render skip counters for scene entity rendering", false, false, true);
+	HVar r_gpuCullUseIndirectDraw("r_gpuCullUseIndirectDraw", "Use indexed-instanced indirect draw submission for scene mesh batches", false, false, true);
 
 	void Scene::ComponentPool::EnsureEntityCapacity(uint32_t slotCount)
 	{
@@ -1486,7 +1487,50 @@ namespace HexEngine
 
 			if (numInstances > 0)
 			{
-				g_pEnv->_graphicsDevice->DrawIndexedInstanced(instance->GetMesh()->GetNumIndices(), (uint32_t)numInstances);
+				const uint32_t indexCount = instance->GetMesh()->GetNumIndices();
+				if (r_gpuCullUseIndirectDraw._val.b)
+				{
+					ID3D11Device* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+					ID3D11DeviceContext* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+					if (device != nullptr && context != nullptr)
+					{
+						static ID3D11Buffer* s_indirectArgsBuffer = nullptr;
+						if (s_indirectArgsBuffer == nullptr)
+						{
+							D3D11_BUFFER_DESC argsDesc = {};
+							argsDesc.ByteWidth = sizeof(D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS);
+							argsDesc.Usage = D3D11_USAGE_DEFAULT;
+							argsDesc.BindFlags = 0;
+							argsDesc.CPUAccessFlags = 0;
+							argsDesc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
+							device->CreateBuffer(&argsDesc, nullptr, &s_indirectArgsBuffer);
+						}
+
+						if (s_indirectArgsBuffer != nullptr)
+						{
+							D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS args = {};
+							args.IndexCountPerInstance = indexCount;
+							args.InstanceCount = static_cast<UINT>(numInstances);
+							args.StartIndexLocation = 0u;
+							args.BaseVertexLocation = 0u;
+							args.StartInstanceLocation = 0u;
+							context->UpdateSubresource(s_indirectArgsBuffer, 0, nullptr, &args, 0, 0);
+							g_pEnv->_graphicsDevice->DrawIndexedInstancedIndirect(s_indirectArgsBuffer, 0);
+						}
+						else
+						{
+							g_pEnv->_graphicsDevice->DrawIndexedInstanced(indexCount, static_cast<uint32_t>(numInstances));
+						}
+					}
+					else
+					{
+						g_pEnv->_graphicsDevice->DrawIndexedInstanced(indexCount, static_cast<uint32_t>(numInstances));
+					}
+				}
+				else
+				{
+					g_pEnv->_graphicsDevice->DrawIndexedInstanced(indexCount, static_cast<uint32_t>(numInstances));
+				}
 
 				if (material)
 					material->RestoreRenderState();

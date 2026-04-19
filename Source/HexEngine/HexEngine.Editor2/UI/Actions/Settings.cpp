@@ -259,6 +259,8 @@ namespace HexEditor
 		addToggleControl(gpuCulling, "r_gpuCullEnable", L"Enable GPU Culling");
 		addToggleControl(gpuCulling, "r_gpuCullFrustum", L"Enable Frustum Stage");
 		addToggleControl(gpuCulling, "r_gpuCullOcclusion", L"Enable Occlusion Stage");
+		addToggleControl(gpuCulling, "r_gpuCullOcclusionAggressive", L"Aggressive Occlusion");
+		addToggleControl(gpuCulling, "r_gpuCullUseIndirectDraw", L"Use Indirect Draw");
 		addToggleControl(gpuCulling, "r_gpuCullDepthPrepassFallback", L"Allow Depth Prepass Fallback");
 		addToggleControl(gpuCulling, "r_gpuCullFreeze", L"Freeze Culling Results");
 		addIntControl(gpuCulling, "r_gpuCullGraceFrames", L"Occlusion Grace Frames", 1);
