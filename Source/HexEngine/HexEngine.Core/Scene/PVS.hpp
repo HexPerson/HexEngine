@@ -67,6 +67,12 @@ namespace HexEngine
 		MeshInstanceData instanceData = {};
 		SimpleMeshInstanceData shadowInstanceData = {};
 		Entity* entity = nullptr;
+		uint32_t stableIndex = 0;
+		bool cullEligible = false;
+		bool forceVisible = true;
+		bool gpuVisible = true;
+		bool culledByFrustum = false;
+		bool culledByOcclusion = false;
 	};
 
 	using RenderBatchSnapshot = std::vector<std::pair<std::shared_ptr<Material>, std::vector<RenderableSnapshot>>>;

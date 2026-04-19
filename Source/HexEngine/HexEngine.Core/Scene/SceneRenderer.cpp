@@ -219,6 +219,9 @@ namespace HexEngine
 	HVar r_debugBypassFog("r_debugBypassFog", "Bypass fog compositing pass", false, false, true);
 	HVar r_debugPresentCopy("r_debugPresentCopy", "Present by direct texture copy instead of fullscreen tonemap/overlay shaders", false, false, true);
 	HVar r_debugForceGBufferBeforePresent("r_debugForceGBufferBeforePresent", "Force beauty target from gbuffer diffuse immediately before present", false, false, true);
+	HVar r_gpuCullStatsLog("r_gpuCullStatsLog", "Log GPU culling counters periodically", false, false, true);
+	extern HVar r_gpuCullEnable;
+	extern HVar r_gpuCullDepthPrepassFallback;
 
 	SceneRenderer::SceneRenderer()
 	{}
@@ -256,6 +259,8 @@ namespace HexEngine
 			_cloudShapeNoise = CreateCloudNoiseVolume(shapeResolution, randomSeed, 0.025f, 5, 0.52f, 2.0f);
 			_cloudDetailNoise = CreateCloudNoiseVolume(detailResolution, randomSeed + 137, 0.09f, 4, 0.45f, 2.1f);
 		}
+
+		_gpuVisibilityCulling.Create();
 	}
 
 	void SceneRenderer::Resize(int32_t width, int32_t height)
@@ -285,6 +290,7 @@ namespace HexEngine
 		_gbuffer.Resize(width, height, g_pEnv->_graphicsDevice->GetCurrentMSAALevel());
 
 		CreateRenderTargets(width, height);
+		_gpuVisibilityCulling.Resize((uint32_t)width, (uint32_t)height);
 	}
 
 	void SceneRenderer::Destroy()
@@ -316,6 +322,7 @@ namespace HexEngine
 		SAFE_DELETE(_cloudShapeNoise);
 		SAFE_DELETE(_cloudDetailNoise);
 		SAFE_DELETE(_cloudConstantBuffer);
+		_gpuVisibilityCulling.Destroy();
 		
 		//SAFE_DELETE(_waterDSV);
 
@@ -723,6 +730,7 @@ namespace HexEngine
 
 		_currentShadowCasterForComposition = nullptr;
 		_currentShadowMapForComposition = nullptr;
+		_gpuVisibilityCulling.BeginFrame(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u, _currentCamera);
 
 		assert(_cameraEntity && "Camera entity cannot be null");
 
@@ -776,7 +784,20 @@ namespace HexEngine
 		);
 		_gbuffer.SetAsRenderTargets(_currentCamera->GetViewport());
 
+		if (r_gpuCullEnable._val.b && r_gpuCullDepthPrepassFallback._val.b && !_gpuVisibilityCulling.HasUsableHistory())
+		{
+			_currentScene->RenderEntities(
+				_currentCamera->GetPVS(),
+				LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass),
+				MeshRenderFlags::MeshRenderShadowMap);
+			_gpuVisibilityCulling.BuildDepthPyramid(_gbuffer.GetDepthBuffer());
+			_gpuVisibilityCulling.MarkDepthFallbackUsed();
+			_gbuffer.Clear();
+			_gbuffer.SetAsRenderTargets(_currentCamera->GetViewport());
+		}
+
 		RenderOpaque();
+		_gpuVisibilityCulling.BuildDepthPyramid(_gbuffer.GetDepthBuffer());
 		//AccumulateShadowMaps();
 		
 		
@@ -802,6 +823,21 @@ namespace HexEngine
 		}
 
 		//g_pEnv->_graphicsDevice->SetRenderTarget(g_pEnv->_graphicsDevice->GetBackBuffer());
+
+		if (r_gpuCullStatsLog._val.b && g_pEnv && g_pEnv->_timeManager && (g_pEnv->_timeManager->_frameCount % 120ull) == 0ull)
+		{
+			const auto& stats = _gpuVisibilityCulling.GetStats();
+			LOG_INFO("GPUCull: candidates=%u vis=%u frustumReject=%u occlusionReject=%u draws=%u buildMs=%.3f frustumMs=%.3f occlusionMs=%.3f hzbHistory=%d",
+				stats.totalCandidates,
+				stats.visibleInstances,
+				stats.frustumRejected,
+				stats.occlusionRejected,
+				stats.submittedDraws,
+				stats.cpuBuildMs,
+				stats.gpuFrustumMs,
+				stats.gpuOcclusionMs,
+				_gpuVisibilityCulling.HasUsableHistory() ? 1 : 0);
+		}
 	}
 
 	void SceneRenderer::CollectShadowCasters()

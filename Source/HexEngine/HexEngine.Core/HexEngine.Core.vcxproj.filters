@@ -1066,9 +1066,15 @@
     <ClInclude Include="Scene\DiffuseGI.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Scene\GpuVisibilityCulling.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Scene\DiffuseGI.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Scene\GpuVisibilityCulling.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

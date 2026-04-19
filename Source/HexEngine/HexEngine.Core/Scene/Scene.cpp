@@ -1364,6 +1364,16 @@ namespace HexEngine
 			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Drawn skeletal animators {:d}", pvs->GetTotalSkeletalAnimators())); y += 15;
 			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Draw calls {:d}", _drawCalls)); y += 15;
 			renderer->PrintText(font.get(), 14, x, y, math::Color(1, 1, 1, 1), FontAlign::Right, std::format(L"Chunks visible {:d}", g_pEnv->_chunkManager->GetNumChunksVisible())); y += 15;
+			if (g_pEnv && g_pEnv->_sceneRenderer)
+			{
+				if (auto* gpuCulling = g_pEnv->_sceneRenderer->GetGpuVisibilityCulling(); gpuCulling != nullptr)
+				{
+					const auto& cullStats = gpuCulling->GetStats();
+					renderer->PrintText(font.get(), 14, x, y, math::Color(0.75f, 1.0f, 0.85f, 1.0f), FontAlign::Right, std::format(L"GPU Cull cand {:d} vis {:d}", cullStats.totalCandidates, cullStats.visibleInstances)); y += 15;
+					renderer->PrintText(font.get(), 14, x, y, math::Color(0.75f, 1.0f, 0.85f, 1.0f), FontAlign::Right, std::format(L"GPU Cull reject F {:d} O {:d}", cullStats.frustumRejected, cullStats.occlusionRejected)); y += 15;
+					renderer->PrintText(font.get(), 14, x, y, math::Color(0.75f, 1.0f, 0.85f, 1.0f), FontAlign::Right, std::format(L"GPU Cull ms CPU {:.2f} F {:.2f} O {:.2f}", cullStats.cpuBuildMs, cullStats.gpuFrustumMs, cullStats.gpuOcclusionMs)); y += 15;
+				}
+			}
 		}
 	}
 
@@ -1497,6 +1507,7 @@ namespace HexEngine
 		uint32_t skippedLayerMask = 0;
 		uint32_t skippedLod = 0;
 		uint32_t skippedPrepareRender = 0;
+		uint32_t skippedGpuCulling = 0;
 		uint32_t drawnInstancesTotal = 0;
 
 		if(pvs->DidRebuild())
@@ -1570,6 +1581,26 @@ namespace HexEngine
 		bool isShadowMap = (renderFlags & MeshRenderFlags::MeshRenderShadowMap) != 0;
 		bool isTransparency = (renderFlags & MeshRenderFlags::MeshRenderTransparency) != 0;
 		bool isNormalRender = !isShadowMap && !isTransparency;
+		const bool isOpaqueLayerSet = (layerMask & (LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass))) != 0 &&
+			(layerMask & LAYERMASK(Layer::Sky)) == 0;
+
+		bool usedGpuCulling = false;
+		if (isNormalRender && isOpaqueLayerSet && g_pEnv && g_pEnv->_sceneRenderer)
+		{
+			Camera* cullCamera = GetMainCamera();
+			if (pvs != nullptr)
+			{
+				if (auto* pvsCamera = pvs->GetOptimisedParams().camera; pvsCamera != nullptr)
+				{
+					cullCamera = pvsCamera;
+				}
+			}
+
+			if (auto* gpuCulling = g_pEnv->_sceneRenderer->GetGpuVisibilityCulling(); gpuCulling != nullptr)
+			{
+				usedGpuCulling = gpuCulling->CullOpaqueRenderables(snapshot, cullCamera, layerMask, renderFlags);
+			}
+		}
 
 		if (isNormalRender)
 		{
@@ -1604,6 +1635,12 @@ namespace HexEngine
 					if (!mesh || !instance)
 					{
 						skippedNullMeshOrInstance++;
+						continue;
+					}
+
+					if (usedGpuCulling && !renderable.gpuVisible)
+					{
+						skippedGpuCulling++;
 						continue;
 					}
 
@@ -1718,6 +1755,12 @@ namespace HexEngine
 					if (!mesh || !instance)
 					{
 						skippedNullMeshOrInstance++;
+						continue;
+					}
+
+					if (usedGpuCulling && !renderable.gpuVisible)
+					{
+						skippedGpuCulling++;
 						continue;
 					}
 
@@ -1853,7 +1896,7 @@ namespace HexEngine
 			{
 				lastLoggedFrameByPass[passKey] = frame;
 				LOG_INFO(
-					"RenderEntities pass flags=%u layerMask=0x%08X candidates=%u drawn=%u skip(null=%u,trans=%u,layer=%u,lod=%u,prep=%u) pvsRebuilt=%d snapshotBatches=%zu",
+					"RenderEntities pass flags=%u layerMask=0x%08X candidates=%u drawn=%u skip(null=%u,trans=%u,layer=%u,lod=%u,gpu=%u,prep=%u) pvsRebuilt=%d snapshotBatches=%zu gpuCull=%d",
 					(uint32_t)renderFlags,
 					layerMask,
 					totalCandidates,
@@ -1862,9 +1905,19 @@ namespace HexEngine
 					skippedTransparencyGate,
 					skippedLayerMask,
 					skippedLod,
+					skippedGpuCulling,
 					skippedPrepareRender,
 					pvs->DidRebuild() ? 1 : 0,
-					snapshot.size());
+					snapshot.size(),
+					usedGpuCulling ? 1 : 0);
+			}
+		}
+
+		if (usedGpuCulling && g_pEnv && g_pEnv->_sceneRenderer)
+		{
+			if (auto* gpuCulling = g_pEnv->_sceneRenderer->GetGpuVisibilityCulling(); gpuCulling != nullptr)
+			{
+				gpuCulling->ReportSubmission(_drawCalls, drawnInstancesTotal);
 			}
 		}
 	}
@@ -1893,6 +1946,14 @@ namespace HexEngine
 
 		if(phys_debug._val.b)
 			g_pEnv->_physicsSystem->DebugRender();
+
+		if (g_pEnv && g_pEnv->_sceneRenderer)
+		{
+			if (auto* gpuCulling = g_pEnv->_sceneRenderer->GetGpuVisibilityCulling(); gpuCulling != nullptr)
+			{
+				gpuCulling->DebugDraw(pvs->GetRenderableSnapshot());
+			}
+		}
 
 		g_pEnv->_debugRenderer->FlushBuffers();
 

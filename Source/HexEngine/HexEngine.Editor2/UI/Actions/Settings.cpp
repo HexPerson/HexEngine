@@ -255,6 +255,27 @@ namespace HexEditor
 		addFloatControl(gi, "r_giGpuEdgeSmoothBlendStrength", L"Edge Smoothing Blend Strength", 0.001f, 4);
 		addIntControl(gi, "r_giDebugView", L"Debug View", 1);
 
+		auto* gpuCulling = makeSectionTab(L"GPU Culling", L"GPU Visibility Culling");
+		addToggleControl(gpuCulling, "r_gpuCullEnable", L"Enable GPU Culling");
+		addToggleControl(gpuCulling, "r_gpuCullFrustum", L"Enable Frustum Stage");
+		addToggleControl(gpuCulling, "r_gpuCullOcclusion", L"Enable Occlusion Stage");
+		addToggleControl(gpuCulling, "r_gpuCullDepthPrepassFallback", L"Allow Depth Prepass Fallback");
+		addToggleControl(gpuCulling, "r_gpuCullFreeze", L"Freeze Culling Results");
+		addIntControl(gpuCulling, "r_gpuCullGraceFrames", L"Occlusion Grace Frames", 1);
+		addIntControl(gpuCulling, "r_gpuCullOcclusionRejectFrames", L"Occlusion Reject Frames", 1);
+		addIntControl(gpuCulling, "r_gpuCullOcclusionStableFrames", L"Occlusion Stable Frames", 1);
+		addIntControl(gpuCulling, "r_gpuCullMinCandidates", L"Min Candidates", 1);
+		addFloatControl(gpuCulling, "r_gpuCullFastCameraDistance", L"Fast Camera Distance", 0.05f, 3);
+		addFloatControl(gpuCulling, "r_gpuCullFastCameraAngleDeg", L"Fast Camera Angle (Deg)", 0.1f, 2);
+		addFloatControl(gpuCulling, "r_gpuCullNearBypassDistance", L"Near Bypass Distance", 0.05f, 3);
+		addFloatControl(gpuCulling, "r_gpuCullLargeSphereBypass", L"Large Sphere Bypass Radius", 0.1f, 3);
+		addFloatControl(gpuCulling, "r_gpuCullFrustumRadiusScale", L"Frustum Radius Scale", 0.01f, 3);
+		addFloatControl(gpuCulling, "r_gpuCullOcclusionDepthBias", L"Occlusion Depth Bias", 0.0001f, 5);
+		addToggleControl(gpuCulling, "r_gpuCullDebugBounds", L"Debug Draw Bounds");
+		addToggleControl(gpuCulling, "r_gpuCullDebugFrustumRejected", L"Debug Frustum Rejected");
+		addToggleControl(gpuCulling, "r_gpuCullDebugOcclusionRejected", L"Debug Occlusion Rejected");
+		addToggleControl(gpuCulling, "r_gpuCullStatsLog", L"Log Culling Stats");
+
 		pm->_ocean = makeSectionTab(L"Ocean", L"Ocean");
 		auto& ocean = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetOcean();
 		new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Fresnel Power", &ocean.fresnelPow, 0.1f, 10.0f, 0.1f);

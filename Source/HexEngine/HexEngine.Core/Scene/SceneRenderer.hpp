@@ -8,6 +8,7 @@
 #include "../Graphics/Bloom.hpp"
 #include "CloudVolume.hpp"
 #include "DiffuseGI.hpp"
+#include "GpuVisibilityCulling.hpp"
 #include "../Graphics/TAA.hpp"
 #include "../Graphics/IDenoiserProvider.hpp"
 
@@ -38,6 +39,7 @@ namespace HexEngine
 		void RemoveShadowCaster(Light* light);
 
 		void RenderOverlays(SceneFlags flags, ITexture2D* beauty, ITexture2D* renderTarget);
+		GpuVisibilityCulling* GetGpuVisibilityCulling() { return &_gpuVisibilityCulling; }
 
 	private:
 		void SetupPerFrameBuffer(
@@ -146,6 +148,7 @@ namespace HexEngine
 
 		TAA _taa;
 		DiffuseGI _diffuseGi;
+		GpuVisibilityCulling _gpuVisibilityCulling;
 
 		ITexture2D* _ssrHistory = nullptr;		
 		ITexture2D* _ssrResolved = nullptr;

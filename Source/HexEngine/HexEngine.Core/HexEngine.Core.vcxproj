@@ -482,6 +482,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Required.hpp" />
     <ClInclude Include="Scene\CloudVolume.hpp" />
     <ClInclude Include="Scene\DiffuseGI.hpp" />
+    <ClInclude Include="Scene\GpuVisibilityCulling.hpp" />
     <ClInclude Include="Scene\IEntityListener.hpp" />
     <ClInclude Include="Scene\MeshInstance.hpp" />
     <ClInclude Include="Scene\MeshInstanceManager.hpp" />
@@ -635,6 +636,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Graphics\IInputLayout.cpp" />
     <ClCompile Include="Scene\CloudVolume.cpp" />
     <ClCompile Include="Scene\DiffuseGI.cpp" />
+    <ClCompile Include="Scene\GpuVisibilityCulling.cpp" />
     <ClCompile Include="Scene\Mesh.cpp" />
     <ClCompile Include="Scene\MeshInstance.cpp" />
     <ClCompile Include="Scene\MeshInstanceManager.cpp" />

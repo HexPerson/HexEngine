@@ -151,11 +151,14 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
   </ItemDefinitionGroup>
   <ItemGroup>
     <HexEngineShader Include="BasicDenoise.shader" />
+    <HexEngineShader Include="BuildDepthPyramid.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
     <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
     <HexEngineShader Include="DiffuseGIBuildCandidates.shader" />
     <HexEngineShader Include="DiffuseGIVoxelizeEval.shader" />
     <HexEngineShader Include="DiffuseGIPropagateVoxel.shader" />
+    <HexEngineShader Include="GpuFrustumCull.shader" />
+    <HexEngineShader Include="GpuOcclusionCull.shader" />
     <HexEngineShader Include="DiffuseGIResolve.shader" />
     <HexEngineShader Include="DiffuseGIShiftVoxel.shader" />
     <HexEngineShader Include="DiffuseGITrace.shader">
