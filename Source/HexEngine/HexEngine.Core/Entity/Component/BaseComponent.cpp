@@ -6,12 +6,16 @@
 #include "../../Environment/LogFile.hpp"
 #include "../../Scene/Scene.hpp"
 #include "../../Scene/SceneManager.hpp"
+#include "../Entity.hpp"
 
 namespace HexEngine
 {
 	BaseComponent::BaseComponent(Entity* entity) :
 		_entity(entity)
-	{}
+	{
+		if (_entity != nullptr)
+			_ownerId = _entity->GetId();
+	}
 
 	Entity* BaseComponent::GetEntity() const
 	{
@@ -20,15 +24,24 @@ namespace HexEngine
 
 	void BaseComponent::BroadcastMessage(Message* message)
 	{
-		for (auto& entSet : g_pEnv->_sceneManager->GetCurrentScene()->GetEntities())
-		{
-			for (auto& ent : entSet.second)
-			{
-				if (ent == GetEntity())
-					continue;
+		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr)
+			return;
 
-				ent->OnMessage(message, this);
-			}
+		std::vector<EntityId> liveEntityIds;
+		if (!scene->GetLiveEntityIds(liveEntityIds))
+			return;
+
+		for (const EntityId id : liveEntityIds)
+		{
+			if (id == _ownerId)
+				continue;
+
+			Entity* entity = scene->TryGetEntity(id);
+			if (entity == nullptr)
+				continue;
+
+			entity->OnMessage(message, this);
 		}
 	}
 

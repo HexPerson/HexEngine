@@ -683,12 +683,14 @@ void PhysicsSystemPhysX::onTrigger(physx::PxTriggerPair* pairs, physx::PxU32 cou
 				{
 					HexEngine::LeaveTriggerMessage message;
 					message.trigger = triggerEnt;
+					message.triggerId = triggerEnt->GetId();
 					actorEnt->OnMessage(&message, triggerEnt);
 				}
 				else if (cp.status == physx::PxPairFlag::eNOTIFY_TOUCH_FOUND)
 				{
 					HexEngine::EnterTriggerMessage message;
 					message.trigger = triggerEnt;
+					message.triggerId = triggerEnt->GetId();
 					actorEnt->OnMessage(&message, triggerEnt);
 				}
 			}
@@ -791,11 +793,13 @@ void PhysicsSystemPhysX::onContact(const physx::PxContactPairHeader& pairHeader,
 
 				HexEngine::RigidBodyCollision message;
 				message.collidedWith = px1->GetEntity();
+				message.collidedWithId = message.collidedWith != nullptr ? message.collidedWith->GetId() : HexEngine::InvalidEntityId;
 				message.collisionPoint = p0;
 				px0->GetEntity()->OnMessage(&message, nullptr);
 
 				HexEngine::RigidBodyCollision message2;
 				message2.collidedWith = px0->GetEntity();
+				message2.collidedWithId = message2.collidedWith != nullptr ? message2.collidedWith->GetId() : HexEngine::InvalidEntityId;
 				message2.collisionPoint = p1;
 				px1->GetEntity()->OnMessage(&message2, nullptr);
 

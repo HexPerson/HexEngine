@@ -39,11 +39,11 @@ namespace HexEngine
 	HVar r_cloudDensity("r_cloudDensity", "Cloud density multiplier", 1.0f, 0.05f, 8.0f);
 	HVar r_cloudCoverage("r_cloudCoverage", "Cloud coverage amount", 0.56f, 0.01f, 1.0f);
 	HVar r_cloudErosion("r_cloudErosion", "Small-scale erosion amount", 0.34f, 0.0f, 1.0f);
-	HVar r_cloudLightAbsorption("r_cloudLightAbsorption", "Absorption multiplier for cloud self-shadowing", 0.08f, 0.0f, 8.0f);
+	HVar r_cloudLightAbsorption("r_cloudLightAbsorption", "Absorption multiplier for cloud self-shadowing", 0.14f, 0.0f, 8.0f);
 	HVar r_cloudViewAbsorption("r_cloudViewAbsorption", "Absorption multiplier along view ray inside clouds", 0.42f, 0.0f, 8.0f);
 	HVar r_cloudPowderStrength("r_cloudPowderStrength", "Powder term to brighten cloud edges", 0.38f, 0.0f, 2.0f);
-	HVar r_cloudAmbientStrength("r_cloudAmbientStrength", "Ambient skylight contribution for cloud interiors", 0.65f, 0.0f, 2.0f);
-	HVar r_cloudShadowFloor("r_cloudShadowFloor", "Minimum transmittance floor for cloud self-shadowing", 0.35f, 0.0f, 1.0f);
+	HVar r_cloudAmbientStrength("r_cloudAmbientStrength", "Ambient skylight contribution for cloud interiors", 0.52f, 0.0f, 2.0f);
+	HVar r_cloudShadowFloor("r_cloudShadowFloor", "Minimum transmittance floor for cloud self-shadowing", 0.20f, 0.0f, 1.0f);
 	HVar r_cloudAnisotropy("r_cloudAnisotropy", "Anisotropy term for cloud phase function", 0.35f, -0.95f, 0.95f);
 	HVar r_cloudSilverLiningStrength("r_cloudSilverLiningStrength", "Stylized rim/silver-lining strength", 0.55f, 0.0f, 4.0f);
 	HVar r_cloudSilverLiningExponent("r_cloudSilverLiningExponent", "Stylized rim/silver-lining falloff", 5.0f, 0.5f, 16.0f);
@@ -51,8 +51,8 @@ namespace HexEngine
 	HVar r_cloudHeightTintStrength("r_cloudHeightTintStrength", "Stylized height-based cloud tint strength", 0.35f, 0.0f, 1.0f);
 	HVar r_cloudTintWarmth("r_cloudTintWarmth", "Warm bias for cloud lift/tint lighting", 0.28f, 0.0f, 1.0f);
 	HVar r_cloudSkyTintInfluence("r_cloudSkyTintInfluence", "How much skylight chroma influences cloud tint", 0.42f, 0.0f, 1.0f);
-	HVar r_cloudDirectionalDiffuse("r_cloudDirectionalDiffuse", "Directional-derivative diffuse lighting strength", 0.65f, 0.0f, 2.0f);
-	HVar r_cloudAmbientOcclusion("r_cloudAmbientOcclusion", "Local ambient occlusion strength for cloud interiors", 0.35f, 0.0f, 1.0f);
+	HVar r_cloudDirectionalDiffuse("r_cloudDirectionalDiffuse", "Directional-derivative diffuse lighting strength", 0.78f, 0.0f, 2.0f);
+	HVar r_cloudAmbientOcclusion("r_cloudAmbientOcclusion", "Local ambient occlusion strength for cloud interiors", 0.45f, 0.0f, 1.0f);
 	HVar r_cloudShapeScale("r_cloudShapeScale", "Base cloud shape noise scale", 0.00017f, 0.00001f, 0.01f);
 	HVar r_cloudDetailScale("r_cloudDetailScale", "Cloud detail noise scale", 0.00125f, 0.00005f, 0.05f);
 	HVar r_cloudWindDirection("r_cloudWindDirection", "Cloud wind direction", math::Vector3(1.0f, 0.0f, 0.15f), math::Vector3(-1.0f, -1.0f, -1.0f), math::Vector3(1.0f, 1.0f, 1.0f));

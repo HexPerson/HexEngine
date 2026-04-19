@@ -9,6 +9,7 @@
 #include "Messaging/MessageListener.hpp"
 #include "Messaging/MessageDispatcher.hpp"
 #include "Component/ComponentTypes.hpp"
+#include "EntityId.hpp"
 
 namespace HexEngine
 {
@@ -74,7 +75,7 @@ namespace HexEngine
 	public:
 		//DEFINE_OBJECT_GUID(Entity);
 
-		Entity(Scene* scene);
+		Entity(Scene* scene, EntityId id = InvalidEntityId);
 
 		virtual ~Entity();
 
@@ -97,6 +98,7 @@ namespace HexEngine
 		bool IsEditorGizmoHovered() const { return _isEditorGizmoHovered; }
 
 		Scene* GetScene() const;
+		EntityId GetId() const;
 
 		template <typename T>
 		bool HasA()
@@ -284,6 +286,9 @@ namespace HexEngine
 		};
 		std::vector<EntityGuidComponent> _components;
 		ComponentSignature _componentsSignature = 0;	
+		EntityId _entityId = InvalidEntityId;
+
+		friend class Scene;
 
 	protected:
 		bool _isInPVS = false;

@@ -142,7 +142,7 @@ namespace HexEngine
 		if (scene == nullptr)
 			return;
 
-		const std::string name(value.begin(), value.end());
+		const std::string name = ws2s(value);
 		auto* entity = scene->GetEntityByName(name);
 		if (entity != nullptr && !entity->IsPendingDeletion())
 		{

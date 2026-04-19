@@ -5,6 +5,7 @@
 #include "../Reflection/IObject.hpp"
 #include "../Messaging/MessageListener.hpp"
 #include "ComponentTypes.hpp"
+#include "../EntityId.hpp"
 
 namespace HexEngine
 {
@@ -55,6 +56,7 @@ namespace HexEngine
 		virtual void Destroy() {};
 
 		virtual Entity* GetEntity() const;
+		EntityId GetOwnerId() const { return _ownerId; }
 
 		virtual ComponentId GetComponentId() = 0;
 
@@ -86,6 +88,7 @@ namespace HexEngine
 
 	private:		
 		Entity* _entity = nullptr;
+		EntityId _ownerId = InvalidEntityId;
 
 	public:
 		SerializationState _serializationState = SerializationState::Ready;

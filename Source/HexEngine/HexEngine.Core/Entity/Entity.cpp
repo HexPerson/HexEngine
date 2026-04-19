@@ -23,8 +23,9 @@ namespace HexEngine
 		}
 	}
 
-	Entity::Entity(Scene* scene) :
-		_scene(scene)
+	Entity::Entity(Scene* scene, EntityId id) :
+		_scene(scene),
+		_entityId(id)
 	{
 		SetLayer(Layer::StaticGeometry);
 		SetFlag(EntityFlags::PreviousTransformDirty);
@@ -45,6 +46,11 @@ namespace HexEngine
 	Scene* Entity::GetScene() const
 	{
 		return _scene;
+	}
+
+	EntityId Entity::GetId() const
+	{
+		return _entityId;
 	}
 
 	void Entity::SetName(const std::string& name)
@@ -85,6 +91,7 @@ namespace HexEngine
 		{
 			// Notify all entities first
 			EntityDestroyedMessage message(this);
+			message._entityId = GetId();
 			BroadcastMessage(&message);
 		}
 
@@ -195,6 +202,8 @@ namespace HexEngine
 			previousParent->_children.erase(std::remove(previousParent->_children.begin(), previousParent->_children.end(), this), previousParent->_children.end());
 
 			EntityParentChangedMessage message(this, previousParent, EntityParentChangedMessage::Flags::NoLongerParent);
+			message._entityId = GetId();
+			message._parentId = previousParent != nullptr ? previousParent->GetId() : InvalidEntityId;
 			previousParent->OnMessage(&message, this);
 		}
 
@@ -206,6 +215,8 @@ namespace HexEngine
 				_parent->_children.push_back(this);
 
 			EntityParentChangedMessage message(this, _parent, EntityParentChangedMessage::Flags::BecameParent);
+			message._entityId = GetId();
+			message._parentId = _parent != nullptr ? _parent->GetId() : InvalidEntityId;
 			_parent->OnMessage(&message, this);
 		}
 
@@ -332,11 +343,15 @@ namespace HexEngine
 
 	BaseComponent* Entity::AddComponent(BaseComponent* component)
 	{
-		/*if (auto existingComponent = GetComponentByID(component->GetComponentId()); existingComponent != nullptr)
+		if (component == nullptr)
+			return nullptr;
+
+		if (auto existingComponent = GetComponentByID(component->GetComponentId()); existingComponent != nullptr)
 		{
-			LOG_WARN("An entity is trying to add a %s when it already has one registered!", component->GetComponentName().c_str());
+			LOG_WARN("An entity is trying to add a %s when it already has one registered. Ignoring duplicate.", component->GetComponentName());
+			delete component;
 			return existingComponent;
-		}*/
+		}
 
 		if (component->GetComponentId() == StaticMeshComponent::_GetComponentId())
 		{

@@ -12,6 +12,11 @@
 
 namespace HexEngine
 {
+#if defined(_DEBUG)
+#define HEX_VALIDATE_SCENE_INVARIANTS() ValidateInvariants_NoLock()
+#else
+#define HEX_VALIDATE_SCENE_INVARIANTS() ((void)0)
+#endif
 
 	extern HVar r_debugScene;
 	extern HVar r_interpolate;
@@ -22,6 +27,352 @@ namespace HexEngine
 	HVar r_profileDisableSurfaceMaps("r_profileDisableSurfaceMaps", "Disable roughness, metallic, AO, height, emission and opacity map bindings in static mesh materials for profiling", false, false, true);
 	HVar phys_debug("phys_debug", "Enable the physics debugger (very slow)", false, false, true);
 	HVar r_debugRenderSkips("r_debugRenderSkips", "Log per-pass render skip counters for scene entity rendering", false, false, true);
+
+	void Scene::ComponentPool::EnsureEntityCapacity(uint32_t slotCount)
+	{
+		if (sparseEntityToDense.size() < slotCount)
+		{
+			sparseEntityToDense.resize(slotCount, Scene::InvalidDenseIndex);
+		}
+	}
+
+	BaseComponent* Scene::ComponentPool::Get(EntityId id) const
+	{
+		if (!id.IsValid() || id.index >= sparseEntityToDense.size())
+			return nullptr;
+
+		const uint32_t denseIndex = sparseEntityToDense[id.index];
+		if (denseIndex == Scene::InvalidDenseIndex || denseIndex >= components.size())
+			return nullptr;
+
+		const EntityId owner = owners[denseIndex];
+		if (owner != id)
+			return nullptr;
+
+		return components[denseIndex];
+	}
+
+	bool Scene::ComponentPool::Has(EntityId id) const
+	{
+		return Get(id) != nullptr;
+	}
+
+	uint32_t Scene::ComponentPool::Add(EntityId owner, BaseComponent* component)
+	{
+		EnsureEntityCapacity(owner.index + 1);
+
+		const uint32_t existing = sparseEntityToDense[owner.index];
+		if (existing != Scene::InvalidDenseIndex && existing < owners.size() && owners[existing] == owner)
+		{
+			components[existing] = component;
+			return existing;
+		}
+
+		const uint32_t denseIndex = static_cast<uint32_t>(components.size());
+		components.push_back(component);
+		owners.push_back(owner);
+		sparseEntityToDense[owner.index] = denseIndex;
+		return denseIndex;
+	}
+
+	bool Scene::ComponentPool::Remove(EntityId owner, BaseComponent** outRemoved, EntityId* outMovedOwner, uint32_t* outMovedDenseIndex)
+	{
+		if (!owner.IsValid() || owner.index >= sparseEntityToDense.size())
+			return false;
+
+		const uint32_t denseIndex = sparseEntityToDense[owner.index];
+		if (denseIndex == Scene::InvalidDenseIndex || denseIndex >= owners.size() || owners[denseIndex] != owner)
+			return false;
+
+		if (outRemoved != nullptr)
+			*outRemoved = components[denseIndex];
+
+		const uint32_t lastIndex = static_cast<uint32_t>(components.size() - 1);
+
+		if (denseIndex != lastIndex)
+		{
+			components[denseIndex] = components[lastIndex];
+			const EntityId movedOwner = owners[lastIndex];
+			owners[denseIndex] = movedOwner;
+			sparseEntityToDense[movedOwner.index] = denseIndex;
+
+			if (outMovedOwner != nullptr)
+				*outMovedOwner = movedOwner;
+			if (outMovedDenseIndex != nullptr)
+				*outMovedDenseIndex = denseIndex;
+		}
+		else
+		{
+			if (outMovedOwner != nullptr)
+				*outMovedOwner = InvalidEntityId;
+			if (outMovedDenseIndex != nullptr)
+				*outMovedDenseIndex = InvalidDenseIndex;
+		}
+
+		components.pop_back();
+		owners.pop_back();
+		sparseEntityToDense[owner.index] = Scene::InvalidDenseIndex;
+		return true;
+	}
+
+	Scene::ComponentPool* Scene::GetOrCreateComponentPool(ComponentId componentId)
+	{
+		auto [it, inserted] = _componentPools.try_emplace(componentId);
+		ComponentPool& pool = it->second;
+		if (inserted)
+		{
+			pool.EnsureEntityCapacity(static_cast<uint32_t>(_entitySlots.size()));
+		}
+		return &pool;
+	}
+
+	Scene::ComponentPool* Scene::TryGetComponentPool(ComponentId componentId)
+	{
+		auto it = _componentPools.find(componentId);
+		if (it == _componentPools.end())
+			return nullptr;
+		return &it->second;
+	}
+
+	const Scene::ComponentPool* Scene::TryGetComponentPool(ComponentId componentId) const
+	{
+		auto it = _componentPools.find(componentId);
+		if (it == _componentPools.end())
+			return nullptr;
+		return &it->second;
+	}
+
+	void Scene::EnsureSlotComponentCapacity(EntitySlot& slot, ComponentId componentId)
+	{
+		if (slot.componentDenseIndices.size() <= componentId)
+		{
+			slot.componentDenseIndices.resize(componentId + 1, InvalidDenseIndex);
+		}
+	}
+
+	EntityId Scene::AllocateEntityId(Entity* entity)
+	{
+		uint32_t index = 0;
+
+		if (!_freeEntitySlotIndices.empty())
+		{
+			index = _freeEntitySlotIndices.back();
+			_freeEntitySlotIndices.pop_back();
+		}
+		else
+		{
+			index = static_cast<uint32_t>(_entitySlots.size());
+			_entitySlots.emplace_back();
+		}
+
+		EntitySlot& slot = _entitySlots[index];
+		slot.alive = true;
+		slot.inLiveList = false;
+		slot.denseEntityIndex = InvalidDenseIndex;
+		slot.entity = entity;
+		std::fill(slot.componentDenseIndices.begin(), slot.componentDenseIndices.end(), InvalidDenseIndex);
+		for (auto& poolIt : _componentPools)
+		{
+			poolIt.second.EnsureEntityCapacity(static_cast<uint32_t>(_entitySlots.size()));
+		}
+
+		EntityId id;
+		id.index = index;
+		id.generation = slot.generation;
+		return id;
+	}
+
+	void Scene::FreeEntityId(EntityId id)
+	{
+		if (!id.IsValid() || id.index >= _entitySlots.size())
+			return;
+
+		EntitySlot& slot = _entitySlots[id.index];
+		slot.alive = false;
+		slot.inLiveList = false;
+		slot.denseEntityIndex = InvalidDenseIndex;
+		slot.entity = nullptr;
+		std::fill(slot.componentDenseIndices.begin(), slot.componentDenseIndices.end(), InvalidDenseIndex);
+		++slot.generation;
+		_freeEntitySlotIndices.push_back(id.index);
+	}
+
+	bool Scene::IsValid(EntityId id) const
+	{
+		if (!id.IsValid() || id.index >= _entitySlots.size())
+			return false;
+
+		const EntitySlot& slot = _entitySlots[id.index];
+		return slot.alive && slot.generation == id.generation && slot.entity != nullptr;
+	}
+
+	Entity* Scene::TryGetEntity(EntityId id) const
+	{
+		if (!IsValid(id))
+			return nullptr;
+
+		return _entitySlots[id.index].entity;
+	}
+
+	void Scene::MarkEntityViewDirty()
+	{
+		_entityViewDirty = true;
+	}
+
+	void Scene::RebuildEntityViewCache() const
+	{
+		if (!_entityViewDirty)
+			return;
+
+		_entities.clear();
+
+		for (const EntityId id : _liveEntities)
+		{
+			if (!IsValid(id))
+				continue;
+
+			Entity* entity = _entitySlots[id.index].entity;
+			if (entity == nullptr)
+				continue;
+
+			_entities[entity->GetComponentSignature()].push_back(entity);
+		}
+
+		_entityViewDirty = false;
+	}
+
+	void Scene::ValidateInvariants_NoLock() const
+	{
+#if defined(_DEBUG)
+		for (uint32_t denseIndex = 0; denseIndex < _liveEntities.size(); ++denseIndex)
+		{
+			const EntityId id = _liveEntities[denseIndex];
+			HEX_ASSERT(IsValid(id));
+
+			const EntitySlot& slot = _entitySlots[id.index];
+			HEX_ASSERT(slot.inLiveList);
+			HEX_ASSERT(slot.denseEntityIndex == denseIndex);
+			HEX_ASSERT(slot.entity != nullptr);
+			HEX_ASSERT(slot.entity->GetId() == id);
+		}
+
+		for (uint32_t slotIndex = 0; slotIndex < _entitySlots.size(); ++slotIndex)
+		{
+			const EntitySlot& slot = _entitySlots[slotIndex];
+			if (slot.alive)
+			{
+				HEX_ASSERT(slot.entity != nullptr);
+
+				// Legit transient state: entity slot is allocated and components are being added
+				// before the entity is inserted into the dense live-entity list.
+				if (slot.inLiveList)
+				{
+					HEX_ASSERT(slot.denseEntityIndex < _liveEntities.size());
+					HEX_ASSERT(_liveEntities[slot.denseEntityIndex].index == slotIndex);
+					HEX_ASSERT(_liveEntities[slot.denseEntityIndex].generation == slot.generation);
+				}
+				else
+				{
+					HEX_ASSERT(slot.denseEntityIndex == InvalidDenseIndex);
+				}
+			}
+			else
+			{
+				HEX_ASSERT(slot.entity == nullptr);
+				HEX_ASSERT(slot.inLiveList == false);
+				HEX_ASSERT(slot.denseEntityIndex == InvalidDenseIndex);
+			}
+		}
+
+		for (const auto& [componentId, pool] : _componentPools)
+		{
+			HEX_ASSERT(pool.components.size() == pool.owners.size());
+
+			for (uint32_t denseIndex = 0; denseIndex < pool.components.size(); ++denseIndex)
+			{
+				HEX_ASSERT(pool.components[denseIndex] != nullptr);
+
+				const EntityId owner = pool.owners[denseIndex];
+				HEX_ASSERT(IsValid(owner));
+				HEX_ASSERT(owner.index < pool.sparseEntityToDense.size());
+				HEX_ASSERT(pool.sparseEntityToDense[owner.index] == denseIndex);
+
+				const EntitySlot& ownerSlot = _entitySlots[owner.index];
+				HEX_ASSERT(componentId < ownerSlot.componentDenseIndices.size());
+				HEX_ASSERT(ownerSlot.componentDenseIndices[componentId] == denseIndex);
+			}
+		}
+
+		for (uint32_t slotIndex = 0; slotIndex < _entitySlots.size(); ++slotIndex)
+		{
+			const EntitySlot& slot = _entitySlots[slotIndex];
+			if (!slot.alive)
+				continue;
+
+			for (ComponentId componentId = 0; componentId < slot.componentDenseIndices.size(); ++componentId)
+			{
+				const uint32_t denseIndex = slot.componentDenseIndices[componentId];
+				if (denseIndex == InvalidDenseIndex)
+					continue;
+
+				const auto poolIt = _componentPools.find(componentId);
+				HEX_ASSERT(poolIt != _componentPools.end());
+
+				const ComponentPool& pool = poolIt->second;
+				HEX_ASSERT(denseIndex < pool.components.size());
+				HEX_ASSERT(pool.owners[denseIndex].index == slotIndex);
+				HEX_ASSERT(pool.owners[denseIndex].generation == slot.generation);
+			}
+		}
+
+		HEX_ASSERT(_updateComponents.size() == _updateComponentIndices.size());
+		for (uint32_t denseIndex = 0; denseIndex < _updateComponents.size(); ++denseIndex)
+		{
+			UpdateComponent* component = _updateComponents[denseIndex];
+			HEX_ASSERT(component != nullptr);
+			const auto indexIt = _updateComponentIndices.find(component);
+			HEX_ASSERT(indexIt != _updateComponentIndices.end());
+			HEX_ASSERT(indexIt->second == denseIndex);
+		}
+#endif
+	}
+
+	void Scene::AddUpdateComponent(UpdateComponent* component)
+	{
+		if (component == nullptr)
+			return;
+
+		if (auto it = _updateComponentIndices.find(component); it != _updateComponentIndices.end())
+			return;
+
+		const uint32_t index = static_cast<uint32_t>(_updateComponents.size());
+		_updateComponents.push_back(component);
+		_updateComponentIndices[component] = index;
+		HEX_VALIDATE_SCENE_INVARIANTS();
+	}
+
+	void Scene::RemoveUpdateComponent(UpdateComponent* component)
+	{
+		if (component == nullptr)
+			return;
+
+		auto it = _updateComponentIndices.find(component);
+		if (it == _updateComponentIndices.end())
+			return;
+
+		const uint32_t index = it->second;
+		const uint32_t lastIndex = static_cast<uint32_t>(_updateComponents.size() - 1);
+		if (index != lastIndex)
+		{
+			UpdateComponent* moved = _updateComponents[lastIndex];
+			_updateComponents[index] = moved;
+			_updateComponentIndices[moved] = index;
+		}
+
+		_updateComponents.pop_back();
+		_updateComponentIndices.erase(it);
+		HEX_VALIDATE_SCENE_INVARIANTS();
+	}
 
 	void Scene::Create(bool createSkySphere, IEntityListener* listener)
 	{
@@ -145,11 +496,23 @@ namespace HexEngine
 	void Scene::Clear()
 	{
 		_entities.clear();
+		_entityViewDirty = true;
+		_componentPools.clear();
+		_liveEntities.clear();
+		_entitySlots.clear();
+		_freeEntitySlotIndices.clear();
+		_entNameMap.clear();
+		_cameras.clear();
+		_updateComponents.clear();
+		_updateComponentIndices.clear();
 
 		_pendingAdditions.clear();
 		_pendingRemovals.clear();
 
 		_mainCamera = nullptr;
+		_sunLight = nullptr;
+		_skySphere = nullptr;
+		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
 	void Scene::Destroy()
@@ -157,44 +520,37 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		HandlePendingRemovals();
-
-		// Safely delete all the entities
-		//
-		while (_entities.size() > 0)
+		const std::vector<EntityId> liveCopy = _liveEntities;
+		for (const EntityId id : liveCopy)
 		{
-			bool breakout = false;
-			for (auto it = _entities.begin(); it != _entities.end(); it++)
-			{
-				for (auto&& entity : it->second)
-				{
-					DestroyEntity(entity);
-					breakout = true;
-					break;
-
-					//entity->Destroy();
-					//delete entity;
-				}
-
-				if (breakout)
-					break;
-			}
+			DestroyEntity(id, false);
 		}
 
-		// Clear the list of entities
-		//
 		_entities.clear();
-		_components.clear();
+		_entityViewDirty = true;
+		_componentPools.clear();
+		_liveEntities.clear();
+		_entitySlots.clear();
+		_freeEntitySlotIndices.clear();
+		_entNameMap.clear();
+		_cameras.clear();
+		_updateComponents.clear();
+		_updateComponentIndices.clear();
 
 		_pendingAdditions.clear();
+		_pendingRemovals.clear();
 
 		_sunLight = nullptr;
+		_mainCamera = nullptr;
+		_skySphere = nullptr;
 
 		g_pEnv->_debugGui->RemoveCallback(this);
+		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
-	Entity* Scene::CreateEntity(const std::string& name, const math::Vector3& position, const math::Quaternion& rotation, const math::Vector3& scale)
+	EntityId Scene::CreateEntityId(const std::string& name, const math::Vector3& position, const math::Quaternion& rotation, const math::Vector3& scale)
 	{
-		//std::unique_lock lock(_lock);
+		std::unique_lock lock(_lock);
 
 		PROFILE();
 
@@ -223,11 +579,13 @@ namespace HexEngine
 			else
 			{
 				LOG_WARN("Cannot create an entity named '%s', an existing entity already exists with this name", name.c_str());
-				return existingEnt;
+				return existingEnt->GetId();
 			}
 		}
 
 		Entity* entity = new Entity(this);
+		const EntityId id = AllocateEntityId(entity);
+		entity->_entityId = id;
 
 		// Set the entity name
 		//
@@ -240,25 +598,25 @@ namespace HexEngine
 		entity->SetRotation(rotation);
 		entity->SetScale(scale);
 
-		
 		if (_insideEntityIteration)
 		{
-			_lock.lock();
 			_pendingAdditions.insert(entity);
-			_lock.unlock();
 		}
 		else
 		{
-			//LOG_DEBUG("Adding entity [%p] %s", entity, entity->GetName().c_str());
-
 			AddEntityInternal(entity);
 		}
 
 		if (entity->IsCreated() == false)
 			entity->Create();
 
+		return id;
+	}
 
-		return entity;
+	Entity* Scene::CreateEntity(const std::string& name, const math::Vector3& position, const math::Quaternion& rotation, const math::Vector3& scale)
+	{
+		const EntityId id = CreateEntityId(name, position, rotation, scale);
+		return TryGetEntity(id);
 	}
 
 	Entity* Scene::CloneEntity(Entity* entity, const std::string& name, const math::Vector3& position, const math::Quaternion& rotation, const math::Vector3& scale, bool retainHierarchy)
@@ -377,32 +735,33 @@ namespace HexEngine
 	void Scene::AddEntityInternal(Entity* entity)
 	{
 		std::unique_lock lock(_lock);
+		if (entity == nullptr)
+			return;
 
-		ComponentSignature signature = entity->GetComponentSignature();
+		const EntityId id = entity->GetId();
+		if (!IsValid(id))
+			return;
 
-		{
-			auto it = _entities.find(signature);
+		EntitySlot& slot = _entitySlots[id.index];
+		if (slot.inLiveList)
+			return;
 
-			if (it == _entities.end())
-				_entities[signature].push_back(entity);
-			else
-			{
-				if (std::find(it->second.begin(), it->second.end(), entity) == it->second.end())
-					it->second.push_back(entity);
-			}
-		}
+		slot.denseEntityIndex = static_cast<uint32_t>(_liveEntities.size());
+		_liveEntities.push_back(id);
+		slot.inLiveList = true;
 
 		for (auto&& listener : _entityListeners)
 		{
 			listener->OnAddEntity(entity);
 		}
 
-		//_flushEnts = true;
 		_updateFlags |= SceneUpdateAddedEntity;
 
-		_entNameMap[entity->GetName()] = entity;;
+		_entNameMap[entity->GetName()] = entity;
+		MarkEntityViewDirty();
 
 		FlushPVS(entity);
+		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
 	void Scene::FlushPVS(Entity* entity, bool remove)
@@ -473,8 +832,6 @@ namespace HexEngine
 
 	void Scene::BroadcastMessage(Message* message)
 	{
-		const auto& entities = GetEntities();
-
 		for (auto& listener : _auxMessageListeners)
 		{
 			listener->OnMessage(message, nullptr);
@@ -494,60 +851,18 @@ namespace HexEngine
 	void Scene::RemoveEntityInternal(Entity* entity)
 	{
 		std::unique_lock lock(_lock);		
+		if (entity == nullptr)
+			return;
+
+		const EntityId id = entity->GetId();
 
 		if (entity->GetComponent<DirectionalLight>() == _sunLight)
 		{
 			_sunLight = nullptr;
 		}
 
-		ComponentSignature signature = entity->GetComponentSignature();
-
-		for (auto& set : _entities)
-		{
-			set.second.erase(std::remove(set.second.begin(), set.second.end(), entity), set.second.end());
-
-			
-		}
-
-		// Now we check to see if any of the entity vectors are empty, and remove them if so
-		for (auto it = _entities.begin(); it != _entities.end(); )
-		{
-			if (it->second.size() == 0)
-			{
-				it = _entities.erase(it);
-				//it--;
-			}
-			else
-				it++;
-		}
-
-		for (auto& component : entity->GetAllComponents())
-		{
-			// remove the shadow caster
-			if (auto light = component->CastAs<Light>(); light != nullptr)
-			{
-				if (light->GetDoesCastShadows() == true)
-				{
-					g_pEnv->_sceneRenderer->RemoveShadowCaster(light);
-				}
-			}
-
-			for (auto& set : _components)
-			{
-				set.second.erase(std::remove(set.second.begin(), set.second.end(), component), set.second.end());
-			}
-		}
-
-		// Now we check to see if any of the component vectors are empty, and remove them if so
-		for (auto it = _components.begin(); it != _components.end();)
-		{
-			if (it->second.size() == 0)
-			{
-				it = _components.erase(it);
-			}
-			else
-				it++;
-		}
+		_pendingAdditions.erase(entity);
+		_pendingRemovals.erase(entity);
 
 		for (auto&& listener : _entityListeners)
 		{
@@ -558,28 +873,52 @@ namespace HexEngine
 
 		_entNameMap.erase(entity->GetName());
 
-		//_flushEnts = true;
-		//_didDeleteEnts = true;		
-
-		// forcefully clear the list of renderables to ensure we didn't get any artifacts
 		FlushPVS(entity, true);
+		MarkEntityViewDirty();
 
-		//entity->Destroy();
+		if (IsValid(id))
+		{
+			EntitySlot& slot = _entitySlots[id.index];
+			if (slot.inLiveList && slot.denseEntityIndex < _liveEntities.size())
+			{
+				const uint32_t removeDenseIndex = slot.denseEntityIndex;
+				const uint32_t lastDenseIndex = static_cast<uint32_t>(_liveEntities.size() - 1);
+				if (removeDenseIndex != lastDenseIndex)
+				{
+					const EntityId movedId = _liveEntities[lastDenseIndex];
+					_liveEntities[removeDenseIndex] = movedId;
+					_entitySlots[movedId.index].denseEntityIndex = removeDenseIndex;
+				}
+
+				_liveEntities.pop_back();
+				slot.inLiveList = false;
+				slot.denseEntityIndex = InvalidDenseIndex;
+			}
+		}
+
 		delete entity;
+
+		if (id.IsValid())
+		{
+			FreeEntityId(id);
+		}
+		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
 	uint32_t Scene::GetTotalNumberOfEntities()
 	{
 		std::unique_lock lock(_lock);
+		return static_cast<uint32_t>(_liveEntities.size());
+	}
 
-		uint32_t totalEnts = 0;
+	void Scene::DestroyEntity(EntityId entityId, bool broadcast)
+	{
+		std::unique_lock lock(_lock);
+		Entity* entity = TryGetEntity(entityId);
+		if (entity == nullptr)
+			return;
 
-		for (auto& ents : _entities)
-		{
-			totalEnts += (uint32_t)ents.second.size();
-		}
-
-		return totalEnts;
+		DestroyEntity(entity, broadcast);
 	}
 
 	void Scene::DestroyEntity(Entity* entity, bool broadcast)
@@ -588,9 +927,10 @@ namespace HexEngine
 
 		PROFILE();
 
-		assert(entity != nullptr && "Trying to remove a NULL entity!");
+		if (entity == nullptr)
+			return;
 
-		LOG_DEBUG("Removing entity [%p] %s. There will be %d entities remaining in the scene", entity, entity->GetName().c_str(), GetTotalNumberOfEntities()-1);
+		LOG_DEBUG("Removing entity [%p] %s. There will be %d entities remaining in the scene", entity, entity->GetName().c_str(), GetTotalNumberOfEntities() > 0 ? GetTotalNumberOfEntities() - 1 : 0);
 
 		if (entity == _skySphere)
 		{
@@ -600,9 +940,10 @@ namespace HexEngine
 		if(entity->HasFlag(EntityFlags::IsPendingRemoval) == false)
 			entity->DeleteMe(broadcast);
 
-		for (auto& child : entity->GetChildren())
+		const auto children = entity->GetChildren();
+		for (auto* child : children)
 		{
-			DestroyEntity(child);
+			DestroyEntity(child, broadcast);
 		}
 
 		if (_insideEntityIteration)
@@ -620,107 +961,27 @@ namespace HexEngine
 	void Scene::OnEntityAddComponent(Entity* entity, ComponentSignature previousSignature, BaseComponent* component)
 	{
 		std::unique_lock lock(_lock);
+		(void)previousSignature;
+		if (entity == nullptr || component == nullptr)
+			return;
 
+		const EntityId ownerId = entity->GetId();
+		if (!IsValid(ownerId))
+			return;
+
+		const ComponentId componentId = component->GetComponentId();
+		EntitySlot& slot = _entitySlots[ownerId.index];
+		EnsureSlotComponentCapacity(slot, componentId);
+
+		ComponentPool* pool = GetOrCreateComponentPool(componentId);
+		pool->EnsureEntityCapacity(static_cast<uint32_t>(_entitySlots.size()));
+		uint32_t denseIndex = pool->Add(ownerId, component);
+		slot.componentDenseIndices[componentId] = denseIndex;
+		MarkEntityViewDirty();
+
+		if (auto* updateComponent = component->CastAs<UpdateComponent>(); updateComponent != nullptr)
 		{
-			// Remove it from its old set first
-			auto it = _entities.find(previousSignature);
-
-			if (it != _entities.end())
-			{
-				it->second.erase(std::remove(it->second.begin(), it->second.end(), entity), it->second.end());
-			}
-
-			ComponentSignature newSignature = entity->GetComponentSignature();
-
-			// Now add it to a new set, or create one
-
-			EntityVector* entList = nullptr;
-
-			for (auto& ent : _entities)
-			{
-				if ((ent.first & newSignature) == newSignature)
-				{
-					entList = &ent.second;
-					break;
-				}
-			}
-
-			if (!entList)
-				_entities[newSignature].push_back(entity);
-			else
-			{
-				if (std::find(entList->begin(), entList->end(), entity) == entList->end())
-					entList->push_back(entity);
-			}
-
-			/*it = _entities.find(newSignature);
-
-			if (it == _entities.end())
-			{
-				_entities[newSignature].push_back(entity);
-			}
-			else
-			{
-				it->second.push_back(entity);
-			}*/
-		}
-
-		// now add to the component list
-		{
-			// Remove it from its old set first
-			/*auto it = _components.find(previousSignature);
-
-			if (it != _components.end())
-			{
-				for (auto& oldComp : entity->GetAllComponents())
-				{
-					it->second.erase(std::remove(it->second.begin(), it->second.end(), oldComp), it->second.end());
-				}
-			}*/
-
-			ComponentSignature newSignature = entity->GetComponentSignature();
-
-			// Now add it to a new set, or create one
-			/*EntityComponentVector* entList = nullptr;
-
-			for (auto& ent : _components)
-			{
-				if ((ent.first & newSignature) == newSignature)
-				{
-					entList = &ent.second;
-					break;
-				}
-			}
-
-			if (!entList)*/			
-				_components[component->GetComponentId()].push_back(component);
-			/*else
-			{
-				if (std::find(entList->begin(), entList->end(), component) == entList->end())
-					entList->push_back(component);
-			}*/
-
-			/*it = _components.find(newSignature);
-
-			if (it == _components.end())
-			{
-				_components[newSignature].push_back(component);
-			}
-			else
-			{
-				it->second.push_back(component);
-			}*/
-
-				// add it to the update list too, its a special case where the component should exist in two lists
-				if (entity->HasA<UpdateComponent>())
-				{
-					auto& uit = _components[UpdateComponent::_GetComponentId()];
-
-					if (std::find(uit.begin(), uit.end(), component) == uit.end())
-					{
-						uit.push_back(component);
-					}
-				}
+			AddUpdateComponent(updateComponent);
 		}
 
 		// attempt to automatigally set the main camera, if it hasn't already been set
@@ -729,7 +990,9 @@ namespace HexEngine
 			if(_mainCamera == nullptr)
 				_mainCamera = component->CastAs<Camera>();
 
-			_cameras.push_back(component->CastAs<Camera>());
+			Camera* camera = component->CastAs<Camera>();
+			if (std::find(_cameras.begin(), _cameras.end(), camera) == _cameras.end())
+				_cameras.push_back(camera);
 		}
 
 		if (component->GetComponentId() == DirectionalLight::_GetComponentId() && _sunLight == nullptr)
@@ -741,69 +1004,50 @@ namespace HexEngine
 		{
 			listener->OnAddComponent(entity, component);
 		}
+		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
 	void Scene::OnEntityRemoveComponent(Entity* entity, ComponentSignature previousSignature, BaseComponent* component)
 	{
 		std::unique_lock lock(_lock);
+		(void)previousSignature;
 
 		if (entity == nullptr || component == nullptr)
 			return;
 
 		const bool isEntityPendingDeletion = entity->IsPendingDeletion();
 
-		if (!isEntityPendingDeletion)
+		const EntityId ownerId = entity->GetId();
+		const ComponentId componentId = component->GetComponentId();
+		if (IsValid(ownerId))
 		{
-			// Remove from the previous entity-signature bucket.
-			if (auto it = _entities.find(previousSignature); it != _entities.end())
+			if (auto* pool = TryGetComponentPool(componentId); pool != nullptr)
 			{
-				it->second.erase(std::remove(it->second.begin(), it->second.end(), entity), it->second.end());
+				EntityId movedOwner = InvalidEntityId;
+				uint32_t movedDenseIndex = InvalidDenseIndex;
+				pool->Remove(ownerId, nullptr, &movedOwner, &movedDenseIndex);
+
+				if (movedOwner.IsValid() && IsValid(movedOwner))
+				{
+					EntitySlot& movedSlot = _entitySlots[movedOwner.index];
+					EnsureSlotComponentCapacity(movedSlot, componentId);
+					movedSlot.componentDenseIndices[componentId] = movedDenseIndex;
+				}
+
+				if (pool->components.empty())
+				{
+					_componentPools.erase(componentId);
+				}
 			}
 
-			// Reinsert into the new bucket after the component-signature change.
-			const ComponentSignature newSignature = entity->GetComponentSignature();
-			if (auto it = _entities.find(newSignature); it != _entities.end())
-			{
-				if (std::find(it->second.begin(), it->second.end(), entity) == it->second.end())
-					it->second.push_back(entity);
-			}
-			else
-			{
-				_entities[newSignature].push_back(entity);
-			}
-		}
-		else
-		{
-			// During entity teardown, never re-bucket the entity.
-			for (auto it = _entities.begin(); it != _entities.end();)
-			{
-				it->second.erase(std::remove(it->second.begin(), it->second.end(), entity), it->second.end());
-				if (it->second.empty())
-					it = _entities.erase(it);
-				else
-					++it;
-			}
+			EntitySlot& slot = _entitySlots[ownerId.index];
+			EnsureSlotComponentCapacity(slot, componentId);
+			slot.componentDenseIndices[componentId] = InvalidDenseIndex;
 		}
 
-		// Remove from the per-component cache using the component id (not signature).
-		if (auto it = _components.find(component->GetComponentId()); it != _components.end())
+		if (auto* updateComponent = component->CastAs<UpdateComponent>(); updateComponent != nullptr)
 		{
-			it->second.erase(std::remove(it->second.begin(), it->second.end(), component), it->second.end());
-		}
-
-		// Some components are mirrored in the UpdateComponent list, remove stale entries there too.
-		if (auto it = _components.find(UpdateComponent::_GetComponentId()); it != _components.end())
-		{
-			it->second.erase(std::remove(it->second.begin(), it->second.end(), component), it->second.end());
-		}
-
-		// Remove any empty component buckets.
-		for (auto it = _components.begin(); it != _components.end();)
-		{
-			if (it->second.empty())
-				it = _components.erase(it);
-			else
-				++it;
+			RemoveUpdateComponent(updateComponent);
 		}
 
 		if (component->GetComponentId() == Camera::_GetComponentId())
@@ -814,6 +1058,17 @@ namespace HexEngine
 				_mainCamera = nullptr;
 		}
 
+		if (component->GetComponentId() == DirectionalLight::_GetComponentId() && _sunLight == component->CastAs<DirectionalLight>())
+		{
+			_sunLight = nullptr;
+		}
+
+		if (auto* light = component->CastAs<Light>(); light != nullptr && light->GetDoesCastShadows())
+		{
+			g_pEnv->_sceneRenderer->RemoveShadowCaster(light);
+		}
+		MarkEntityViewDirty();
+
 		if (!isEntityPendingDeletion)
 		{
 			for (auto&& listener : _entityListeners)
@@ -821,6 +1076,7 @@ namespace HexEngine
 				listener->OnRemoveComponent(entity, component);
 			}
 		}
+		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
 	void Scene::HandlePendingRemovals()
@@ -877,9 +1133,11 @@ namespace HexEngine
 				if (!updateComponent)
 					continue;
 
-				if (updateComponent->GetEntity()->IsPendingDeletion())
+				const EntityId ownerId = updateComponent->GetOwnerId();
+				Entity* owner = TryGetEntity(ownerId);
+				if (owner == nullptr || owner->IsPendingDeletion())
 				{
-					DestroyEntity(updateComponent->GetEntity());
+					DestroyEntity(ownerId);
 					continue;
 				}
 
@@ -931,7 +1189,11 @@ namespace HexEngine
 		{
 			for (auto&& component : meshSet)
 			{
-				component->GetEntity()->GetComponent<Transform>()->UpdateInterpolatedPosition(r_interpolate._val.b);
+				const EntityId ownerId = component->GetOwnerId();
+				if (Transform* transform = GetComponent<Transform>(ownerId); transform != nullptr)
+				{
+					transform->UpdateInterpolatedPosition(r_interpolate._val.b);
+				}
 			}
 		}
 
@@ -966,9 +1228,11 @@ namespace HexEngine
 				if (!updateComponent)
 					continue;
 
-				if (updateComponent->GetEntity()->IsPendingDeletion())
+				const EntityId ownerId = updateComponent->GetOwnerId();
+				Entity* owner = TryGetEntity(ownerId);
+				if (owner == nullptr || owner->IsPendingDeletion())
 				{
-					DestroyEntity(updateComponent->GetEntity());
+					DestroyEntity(ownerId);
 					continue;
 				}
 
@@ -1679,22 +1943,64 @@ namespace HexEngine
 
 	const Scene::EntityMap& Scene::GetEntities() const
 	{
+		RebuildEntityViewCache();
 		return _entities;
 	}
 
 	bool Scene::GetEntities(const ComponentSignature signature, std::vector<Entity*>& entities)
 	{
 		std::unique_lock lock(_lock);
+		if (signature == 0)
+			return false;
 
-		for (auto& ent : _entities)
+		if ((signature & (signature - 1)) == 0)
 		{
-			if ((ent.first & signature) != 0)
+			ComponentId componentId = 0;
+			ComponentSignature mask = signature;
+			while ((mask >>= 1) != 0)
 			{
-				entities.insert(entities.end(), ent.second.begin(), ent.second.end());
+				++componentId;
+			}
+
+			if (const auto* pool = TryGetComponentPool(componentId); pool != nullptr)
+			{
+				entities.reserve(entities.size() + pool->owners.size());
+				for (const EntityId owner : pool->owners)
+				{
+					if (!IsValid(owner))
+						continue;
+
+					Entity* entity = _entitySlots[owner.index].entity;
+					if (entity != nullptr)
+						entities.push_back(entity);
+				}
+				return !entities.empty();
+			}
+		}
+
+		for (const EntityId id : _liveEntities)
+		{
+			if (!IsValid(id))
+				continue;
+
+			Entity* entity = _entitySlots[id.index].entity;
+			if (entity == nullptr)
+				continue;
+
+			if ((entity->GetComponentSignature() & signature) != 0)
+			{
+				entities.push_back(entity);
 			}
 		}
 		
 		return entities.size() > 0;
+	}
+
+	bool Scene::GetLiveEntityIds(std::vector<EntityId>& entityIds)
+	{
+		std::unique_lock lock(_lock);
+		entityIds.insert(entityIds.end(), _liveEntities.begin(), _liveEntities.end());
+		return !entityIds.empty();
 	}
 
 	Entity* Scene::GetEntityByName(const std::string& name)
@@ -1780,11 +2086,10 @@ namespace HexEngine
 
 	uint32_t Scene::GetNumberOfComponentsOfType(const ComponentId id)
 	{
-		EntityComponentVector components;
-
-		//GetComponents((1 << id), components);
-
-		return (uint32_t)components.size();
+		std::unique_lock lock(_lock);
+		if (const auto* pool = TryGetComponentPool(id); pool != nullptr)
+			return static_cast<uint32_t>(pool->components.size());
+		return 0;
 	}
 
 	/*bool Scene::GetComponents(ComponentId id, std::vector<BaseComponent*>& components)
@@ -1840,15 +2145,20 @@ namespace HexEngine
 
 	void Scene::CalculateBounds(math::Vector3& min, math::Vector3& max)
 	{
-		std::vector<Entity*> entity;
+		std::unique_lock lock(_lock);
 
 		min = math::Vector3(FLT_MAX);
 		max = math::Vector3(FLT_MIN);
 
-		if (GetEntities(1 << StaticMeshComponent::_GetComponentId(), entity))
+		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
+		if (pool != nullptr)
 		{
-			for (auto& ent : entity)
+			for (const EntityId ownerId : pool->owners)
 			{
+				Entity* ent = TryGetEntity(ownerId);
+				if (ent == nullptr || ent->IsPendingDeletion())
+					continue;
+
 				const auto& worldAABB = ent->GetWorldAABB();
 
 				math::Vector3 bbCentre(worldAABB.Center);
@@ -1874,18 +2184,18 @@ namespace HexEngine
 
 		outComponents.clear();
 
-		auto it = _components.find(StaticMeshComponent::_GetComponentId());
-		if (it == _components.end())
+		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
+		if (pool == nullptr)
 			return false;
 
-		outComponents.reserve(it->second.size());
-		for (BaseComponent* base : it->second)
+		outComponents.reserve(pool->components.size());
+		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
 		{
-			auto* component = static_cast<StaticMeshComponent*>(base);
+			auto* component = static_cast<StaticMeshComponent*>(pool->components[denseIndex]);
 			if (component == nullptr || component->GetMesh() == nullptr)
 				continue;
 
-			Entity* entity = component->GetEntity();
+			Entity* entity = TryGetEntity(pool->owners[denseIndex]);
 			if (entity == nullptr || entity->IsPendingDeletion())
 				continue;
 
@@ -1922,19 +2232,24 @@ namespace HexEngine
 
 	void Scene::CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags)
 	{
+		std::unique_lock lock(_lock);
 		numFaces = 0;
 
-		std::vector<StaticMeshComponent*> smcs;
-		if (GetComponents<StaticMeshComponent>(smcs))
+		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
+		if (pool != nullptr)
 		{
-			for (auto& smc : smcs)
+			for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
 			{
+				auto* smc = static_cast<StaticMeshComponent*>(pool->components[denseIndex]);
+				if (smc == nullptr)
+					continue;
+
 				auto mesh = smc->GetMesh();
 
 				if (!mesh)
 					continue;
 
-				auto entity = smc->GetEntity();
+				Entity* entity = TryGetEntity(pool->owners[denseIndex]);
 
 				if (!entity)
 					continue;
@@ -1959,21 +2274,26 @@ namespace HexEngine
 
 	void Scene::CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags)
 	{
+		std::unique_lock lock(_lock);
 		numFaces = 0;
 
-		std::vector<StaticMeshComponent*> smcs;
-		if (GetComponents<StaticMeshComponent>(smcs))
+		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
+		if (pool != nullptr)
 		{
 			uint32_t indexOffset = 0;
 
-			for (auto& smc : smcs)
+			for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
 			{
+				auto* smc = static_cast<StaticMeshComponent*>(pool->components[denseIndex]);
+				if (smc == nullptr)
+					continue;
+
 				auto mesh = smc->GetMesh();
 
 				if (!mesh)
 					continue;
 
-				auto entity = smc->GetEntity();
+				Entity* entity = TryGetEntity(pool->owners[denseIndex]);
 
 				if (!entity)
 					continue;

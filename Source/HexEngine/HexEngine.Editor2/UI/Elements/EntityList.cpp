@@ -31,6 +31,8 @@ namespace HexEditor
 			if (g_pUIManager != nullptr)
 			{
 				HexEngine::EditorEntityDuplicatedMessage message(sourceEntity, duplicateEntity);
+				message.sourceId = sourceEntity != nullptr ? sourceEntity->GetId() : HexEngine::InvalidEntityId;
+				message.duplicateId = duplicateEntity != nullptr ? duplicateEntity->GetId() : HexEngine::InvalidEntityId;
 				g_pUIManager->BroadcastEditorToolMessage(message);
 			}
 

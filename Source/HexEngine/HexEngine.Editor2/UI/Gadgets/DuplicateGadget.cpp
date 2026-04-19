@@ -140,6 +140,8 @@ namespace HexEditor
 			if (g_pUIManager != nullptr)
 			{
 				HexEngine::EditorEntityDuplicatedMessage message(sourceEntity, duplicatedEntity);
+				message.sourceId = sourceEntity != nullptr ? sourceEntity->GetId() : HexEngine::InvalidEntityId;
+				message.duplicateId = duplicatedEntity != nullptr ? duplicatedEntity->GetId() : HexEngine::InvalidEntityId;
 				g_pUIManager->BroadcastEditorToolMessage(message);
 			}
 

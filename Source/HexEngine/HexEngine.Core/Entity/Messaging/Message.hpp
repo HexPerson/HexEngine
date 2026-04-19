@@ -2,6 +2,7 @@
 #pragma once
 
 #include "../../Required.hpp"
+#include "../EntityId.hpp"
 
 namespace HexEngine
 {
@@ -55,6 +56,7 @@ namespace HexEngine
 		{}
 
 		Entity* _entity;
+		EntityId _entityId;
 	};
 
 	class EntityParentChangedMessage : public Message
@@ -74,6 +76,8 @@ namespace HexEngine
 
 		Entity* _entity;
 		Entity* _parent;
+		EntityId _entityId;
+		EntityId _parentId;
 		Flags _flags;
 	};
 
@@ -112,6 +116,7 @@ namespace HexEngine
 		EnterTriggerMessage() : Message(MessageId::EnterTrigger) {}
 
 		Entity* trigger = nullptr;
+		EntityId triggerId = InvalidEntityId;
 	};
 
 	class LeaveTriggerMessage : public Message
@@ -120,6 +125,7 @@ namespace HexEngine
 		LeaveTriggerMessage() : Message(MessageId::LeaveTrigger) {}
 
 		Entity* trigger = nullptr;
+		EntityId triggerId = InvalidEntityId;
 	};
 
 	class RigidBodyCollision : public Message
@@ -128,6 +134,7 @@ namespace HexEngine
 		RigidBodyCollision() : Message(MessageId::RigidBodyCollision) {}
 
 		Entity* collidedWith = nullptr;
+		EntityId collidedWithId = InvalidEntityId;
 		math::Vector3 collisionPoint;
 	};
 
@@ -160,6 +167,8 @@ namespace HexEngine
 
 		Entity* source = nullptr;
 		Entity* duplicate = nullptr;
+		EntityId sourceId = InvalidEntityId;
+		EntityId duplicateId = InvalidEntityId;
 		bool handled = false;
 	};
 
@@ -173,6 +182,7 @@ namespace HexEngine
 		}
 
 		Entity* entity = nullptr;
+		EntityId entityId = InvalidEntityId;
 		bool handled = false;
 	};
 }

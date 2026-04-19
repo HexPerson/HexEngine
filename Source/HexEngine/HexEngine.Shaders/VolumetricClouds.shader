@@ -108,16 +108,22 @@
 
 		const float shape = g_shapeNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.x + windOffset, 0.0f).r;
 		const float detail = g_detailNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r;
+		const float weather = g_shapeNoise.SampleLevel(g_mirrorSampler, worldPos * (g_cloudParams2.x * 0.32f) + windOffset * 0.45f, 0.0f).r;
 
 		const float height = saturate(localUVW.y);
 		const float heightMask = smoothstep(0.03f, 0.22f, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
+		const float verticalCore = smoothstep(0.05f, 0.55f, height) * (1.0f - smoothstep(0.62f, 0.96f, height));
 
 		const float coverage = saturate(g_cloudParams0.y);
-		const float coverageThreshold = 1.0f - coverage;
+		const float weatherShift = (weather - 0.5f) * 0.35f;
+		const float coverageThreshold = saturate(1.0f - coverage + weatherShift);
 		float cloud = saturate((shape - coverageThreshold) / max(0.001f, coverage));
-		cloud = saturate(cloud - (1.0f - detail) * g_cloudParams0.z);
+		const float erosionByHeight = lerp(1.22f, 0.78f, smoothstep(0.18f, 0.90f, height));
+		cloud = saturate(cloud - (1.0f - detail) * g_cloudParams0.z * erosionByHeight);
+		const float billow = saturate(1.0f + (detail - 0.5f) * 0.28f + (weather - 0.5f) * 0.36f);
+		const float densityShape = lerp(cloud * cloud, cloud, 0.55f);
 
-		return min(cloud * heightMask * g_cloudParams0.x, 2.0f);
+		return min(densityShape * heightMask * verticalCore * billow * g_cloudParams0.x, 2.0f);
 	}
 
 	float MarchToLight(float3 samplePos, float3 boundsMin, float3 boundsMax, float3 windOffset, float3 sunDir, int lightSteps)
@@ -236,8 +242,13 @@
 				const float3 stylizedTint = lerp(1.0f.xxx, heightTint, g_cloudParams4.w);
 				const float localAO = exp(-density * (0.8f + 1.8f * saturate(g_cloudParams5.w)));
 				const float aoTerm = lerp(1.0f, localAO, saturate(g_cloudParams5.w));
-				const float3 directLight = (lightTrans * powder * phase * sunColour + silverLining * sunColour * (0.35f + 0.65f * viewToSun)) * multiScatter * directionalDiffuse;
-				const float3 ambientLight = ambientShaded * (0.35f + shadowAmount * 0.65f) * (1.0f + shadowAmount * 0.25f * g_cloudParams4.z) * aoTerm;
+				const float densityAhead = SampleCloudDensity(samplePos + rayDir * diffuseProbeDistance * 0.7f, boundsMin, boundsMax, windOffset);
+				const float edgeFactor = saturate(abs(density - densityAhead) * 2.4f);
+				const float forwardGlow = pow(viewToSun, 4.0f) * saturate(1.0f - density * 0.95f) * (0.25f + 0.75f * shadowAmount);
+				const float coreDarken = lerp(1.0f, 0.72f, saturate(density * 0.9f));
+				const float edgeBoost = 1.0f + edgeFactor * 0.24f;
+				const float3 directLight = ((lightTrans * powder * phase * sunColour + silverLining * sunColour * (0.35f + 0.65f * viewToSun)) * edgeBoost + sunColour * forwardGlow * g_cloudParams4.x * 0.40f) * multiScatter * directionalDiffuse;
+				const float3 ambientLight = ambientShaded * (0.35f + shadowAmount * 0.65f) * (1.0f + shadowAmount * 0.25f * g_cloudParams4.z) * aoTerm * coreDarken;
 				cloudLight += scatter * (directLight + ambientLight) * stylizedTint;
 
 				transmittance *= exp(-density * baseStep * invCloudHeight * g_cloudParams3.x);
