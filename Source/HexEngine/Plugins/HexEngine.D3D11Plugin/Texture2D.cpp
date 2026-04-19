@@ -298,13 +298,11 @@ void Texture2D::BlendTo_Additive(ITexture2D* other, HexEngine::IShader* optional
 
 	renderer->StartFrame();
 
-	float blend[4] = { 1.0f };
-	float blend2[4] = { 0.0f };
-	gfxContext->OMSetBlendState(g_pGraphics->_states->Additive(), blend, 0xffffffff);
+	g_pGraphics->SetBlendState(HexEngine::BlendState::Additive);
 
 	renderer->FullScreenTexturedQuad(this, optionalShader);
 
-	gfxContext->OMSetBlendState(g_pGraphics->_states->Opaque(), blend2, 0xffffffff);
+	g_pGraphics->SetBlendState(HexEngine::BlendState::Opaque);
 
 	g_pGraphics->Unlock();
 }
@@ -321,13 +319,11 @@ void Texture2D::BlendTo_Additive_Double(ITexture2D* other, HexEngine::IShader* o
 
 	renderer->StartFrame();
 
-	float blend[4] = { 1.0f };
-	float blend2[4] = { 0.0f };
-	gfxContext->OMSetBlendState(g_pGraphics->_states->Additive(), blend, 0xffffffff);
+	g_pGraphics->SetBlendState(HexEngine::BlendState::Additive);
 
 	renderer->DoubleScreenTexturedQuad(this, optionalShader);
 
-	gfxContext->OMSetBlendState(g_pGraphics->_states->Opaque(), blend2, 0xffffffff);
+	g_pGraphics->SetBlendState(HexEngine::BlendState::Opaque);
 
 	g_pGraphics->Unlock();
 }

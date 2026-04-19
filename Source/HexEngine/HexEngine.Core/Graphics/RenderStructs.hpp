@@ -19,6 +19,7 @@ namespace HexEngine
 		Additive,
 		Subtractive,
 		Transparency,
+		TransparencyPreserveAlpha,
 		Count
 	};
 

@@ -254,6 +254,8 @@ private:
 	//ID3D11RasterizerState* _rasterStateCullFront = nullptr;
 	//ID3D11RasterizerState* _rasterStateCullNone = nullptr;
 	ID3D11BlendState* _subtractivetBlendState = nullptr;
+	ID3D11BlendState* _additivePreserveAlphaBlendState = nullptr;
+	ID3D11BlendState* _transparencyPreserveAlphaBlendState = nullptr;
 	//ID3D11Texture2D* _depthStencilBuffer = nullptr;
 
 	std::unordered_map<HexEngine::Window*, DeviceData> _deviceData;

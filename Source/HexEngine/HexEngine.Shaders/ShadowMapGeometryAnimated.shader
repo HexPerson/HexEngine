@@ -47,6 +47,7 @@
 }
 "PixelShader"
 {
+	Texture2D g_albedoMap : register(t0);
 	Texture2D g_opacityMap : register(t7);
 	SamplerState g_textureSampler : register(s0);
 
@@ -60,18 +61,28 @@
 		pixelDepth = pixelDepth / g_frustumDepths[3];
 
 		float opacity = 1.0f;
+		float4 albedo = g_albedoMap.Sample(g_textureSampler, input.texcoord);
 
 		if (g_material.isInTransparencyPhase)
 		{
 			if (g_objectFlags & OBJECT_FLAGS_HAS_OPACITY)
 			{
-				opacity = g_opacityMap.Sample(g_textureSampler, input.texcoord);
-
-				if (opacity < 1.0f)
-				{
-					clip(-1);
-				}
+				opacity = g_opacityMap.Sample(g_textureSampler, input.texcoord).r;
 			}
+
+			if ((g_objectFlags & OBJECT_FLAGS_HAS_OPACITY) == 0)
+			{
+				float minChannel = min(albedo.r, min(albedo.g, albedo.b));
+				float whiteMask = smoothstep(0.85f, 0.995f, minChannel);
+				opacity *= (1.0f - whiteMask);
+			}
+
+			if (opacity <= 0.0f)
+				clip(-1);
+		}
+		else if (albedo.a == 0.0f)
+		{
+			clip(-1);
 		}
 		/*else
 		{

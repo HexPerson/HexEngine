@@ -1,11 +1,13 @@
 
 
 #include "IconService.hpp"
+#include "../FileSystem/PrefabLoader.hpp"
 #include "../Scene/PVS.hpp"
 #include "../Scene/SceneFramingUtils.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <unordered_set>
 
 namespace
@@ -57,6 +59,166 @@ namespace
 		}
 
 		return roots;
+	}
+
+	bool ComputeBoundsFromPreviewRoots(
+		const std::vector<HexEngine::Entity*>& rootEntities,
+		math::Vector3& outBoundsMin,
+		math::Vector3& outBoundsMax)
+	{
+		math::Vector3 meshBoundsMin(std::numeric_limits<float>::max());
+		math::Vector3 meshBoundsMax(std::numeric_limits<float>::lowest());
+		bool hasMeshBounds = false;
+
+		math::Vector3 fallbackBoundsMin(std::numeric_limits<float>::max());
+		math::Vector3 fallbackBoundsMax(std::numeric_limits<float>::lowest());
+		bool hasFallbackBounds = false;
+
+		std::vector<HexEngine::Entity*> entities;
+		entities.reserve(rootEntities.size() * 4);
+		for (auto* root : rootEntities)
+		{
+			CollectHierarchyEntities(root, entities);
+		}
+
+		for (auto* entity : entities)
+		{
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
+
+			if (auto* meshComponent = entity->GetComponent<HexEngine::StaticMeshComponent>(); meshComponent != nullptr && meshComponent->GetMesh() != nullptr)
+			{
+				if (entity->HasFlag(HexEngine::EntityFlags::DoNotRender))
+					continue;
+
+				const auto& worldAabb = entity->GetWorldAABB();
+				const math::Vector3 center(worldAabb.Center);
+				const math::Vector3 extents(worldAabb.Extents);
+				const math::Vector3 aabbMin = center - extents;
+				const math::Vector3 aabbMax = center + extents;
+
+				meshBoundsMin.x = std::min(meshBoundsMin.x, aabbMin.x);
+				meshBoundsMin.y = std::min(meshBoundsMin.y, aabbMin.y);
+				meshBoundsMin.z = std::min(meshBoundsMin.z, aabbMin.z);
+
+				meshBoundsMax.x = std::max(meshBoundsMax.x, aabbMax.x);
+				meshBoundsMax.y = std::max(meshBoundsMax.y, aabbMax.y);
+				meshBoundsMax.z = std::max(meshBoundsMax.z, aabbMax.z);
+
+				hasMeshBounds = true;
+				continue;
+			}
+
+			const auto worldPosition = entity->GetWorldTM().Translation();
+			const math::Vector3 minPos = worldPosition - math::Vector3(0.25f);
+			const math::Vector3 maxPos = worldPosition + math::Vector3(0.25f);
+
+			fallbackBoundsMin.x = std::min(fallbackBoundsMin.x, minPos.x);
+			fallbackBoundsMin.y = std::min(fallbackBoundsMin.y, minPos.y);
+			fallbackBoundsMin.z = std::min(fallbackBoundsMin.z, minPos.z);
+
+			fallbackBoundsMax.x = std::max(fallbackBoundsMax.x, maxPos.x);
+			fallbackBoundsMax.y = std::max(fallbackBoundsMax.y, maxPos.y);
+			fallbackBoundsMax.z = std::max(fallbackBoundsMax.z, maxPos.z);
+
+			hasFallbackBounds = true;
+		}
+
+		if (hasMeshBounds)
+		{
+			outBoundsMin = meshBoundsMin;
+			outBoundsMax = meshBoundsMax;
+			return true;
+		}
+
+		if (hasFallbackBounds)
+		{
+			outBoundsMin = fallbackBoundsMin;
+			outBoundsMax = fallbackBoundsMax;
+			return true;
+		}
+
+		return false;
+	}
+
+	bool FrameCameraToPreviewRoots(
+		HexEngine::Camera* camera,
+		const std::vector<HexEngine::Entity*>& rootEntities)
+	{
+		if (camera == nullptr || camera->GetEntity() == nullptr)
+			return false;
+
+		math::Vector3 boundsMin;
+		math::Vector3 boundsMax;
+		if (!ComputeBoundsFromPreviewRoots(rootEntities, boundsMin, boundsMax))
+			return false;
+
+		const math::Vector3 center = (boundsMin + boundsMax) * 0.5f;
+		const math::Vector3 extents = (boundsMax - boundsMin) * 0.5f;
+		const float radius = std::max(0.5f, extents.Length());
+
+		const float aspectRatio = std::max(0.01f, camera->GetAspectRatio());
+		const float verticalFov = ToRadian(std::clamp(camera->GetFov(), 20.0f, 120.0f));
+		const float horizontalFov = 2.0f * std::atan(std::tan(verticalFov * 0.5f) * aspectRatio);
+		const float fittingHalfFov = std::max(0.1f, std::min(verticalFov, horizontalFov) * 0.5f);
+
+		float distance = (radius / std::tan(fittingHalfFov)) * 1.15f;
+		distance = std::max(distance, camera->GetNearZ() + radius + 0.5f);
+		distance = std::min(distance, camera->GetFarZ() * 0.75f);
+
+		math::Vector3 viewDirection(-1.0f, -0.65f, -1.0f);
+		viewDirection.Normalize();
+
+		const math::Vector3 cameraPosition = center - (viewDirection * distance);
+		camera->GetEntity()->SetPosition(cameraPosition);
+
+		math::Vector3 lookDirection = center - cameraPosition;
+		if (lookDirection.Length() < 0.01f)
+			lookDirection = math::Vector3::Forward;
+		else
+			lookDirection.Normalize();
+
+		const float yaw = ToDegree(std::atan2(-lookDirection.x, -lookDirection.z));
+		const float pitch = ToDegree(std::asin(std::clamp(lookDirection.y, -1.0f, 1.0f)));
+
+		camera->SetYaw(yaw);
+		camera->SetPitch(pitch);
+		camera->SetRoll(0.0f);
+		camera->Update(0.0f);
+		return true;
+	}
+
+	void CollectSceneEntities(
+		HexEngine::Scene* scene,
+		std::vector<HexEngine::Entity*>& outEntities,
+		HexEngine::Entity* excludeA = nullptr,
+		HexEngine::Entity* excludeB = nullptr)
+	{
+		outEntities.clear();
+
+		if (scene == nullptr)
+			return;
+
+		std::unordered_set<HexEngine::Entity*> unique;
+		const auto& buckets = scene->GetEntities();
+		for (const auto& bucket : buckets)
+		{
+			for (auto* entity : bucket.second)
+			{
+				if (entity == nullptr)
+					continue;
+				if (entity->IsPendingDeletion())
+					continue;
+
+				if (entity == excludeA || entity == excludeB)
+					continue;
+
+				if (unique.insert(entity).second)
+				{
+					outEntities.push_back(entity);
+				}
+			}
+		}
 	}
 
 	void SeedPVSForPreview(HexEngine::Scene* scene, HexEngine::Camera* camera, const std::vector<HexEngine::Entity*>& rootEntities)
@@ -163,14 +325,48 @@ namespace HexEngine
 			return;
 		}
 
-		for (auto* entity : _previewRootEntities)
-		{
-			if (entity == nullptr || entity->IsPendingDeletion())
-				continue;
+		_iconScene->Update(0.0f);
 
-			if (entity->GetScene() == _iconScene.get())
+		auto* cameraEntity = _camera ? _camera->GetEntity() : nullptr;
+		auto* sunEntity = _iconScene->GetSunLight() ? _iconScene->GetSunLight()->GetEntity() : nullptr;
+
+		// Sweep the preview scene directly so we never rely on stale tracked roots.
+		for (int32_t pass = 0; pass < 8; ++pass)
+		{
+			std::vector<Entity*> candidates;
+			CollectSceneEntities(_iconScene.get(), candidates, cameraEntity, sunEntity);
+			if (candidates.empty())
+				break;
+
+			std::unordered_set<Entity*> candidateSet(candidates.begin(), candidates.end());
+			std::vector<Entity*> rootsToDestroy;
+			rootsToDestroy.reserve(candidates.size());
+
+			// Destroy roots first; children are removed recursively by Scene::DestroyEntity.
+			for (auto* entity : candidates)
 			{
-				_iconScene->DestroyEntity(entity);
+				if (entity == nullptr || entity->IsPendingDeletion())
+					continue;
+
+				auto* parent = entity->GetParent();
+				if (parent != nullptr && candidateSet.find(parent) != candidateSet.end())
+					continue;
+
+				rootsToDestroy.push_back(entity);
+			}
+
+			if (rootsToDestroy.empty())
+				break;
+
+			for (auto* entity : rootsToDestroy)
+			{
+				if (entity == nullptr || entity->IsPendingDeletion())
+					continue;
+
+				if (entity->GetScene() == _iconScene.get())
+				{
+					_iconScene->DestroyEntity(entity);
+				}
 			}
 		}
 
@@ -283,16 +479,41 @@ namespace HexEngine
 			}
 			else if (extension == ".hprefab")
 			{
-				auto spawnedEntities = g_pEnv->_sceneManager->LoadPrefab(_iconScene, path);
-				_previewRootEntities = CollectUniquePrefabRoots(spawnedEntities);
-				hasPreviewEntities = !_previewRootEntities.empty();
+				auto* cameraEntity = _camera ? _camera->GetEntity() : nullptr;
+				auto* sunEntity = _iconScene->GetSunLight() ? _iconScene->GetSunLight()->GetEntity() : nullptr;
+
+				std::vector<Entity*> existingEntities;
+				CollectSceneEntities(_iconScene.get(), existingEntities, cameraEntity, sunEntity);
+				std::unordered_set<Entity*> existingEntitySet(existingEntities.begin(), existingEntities.end());
+
+				if (g_pEnv->_prefabLoader->LoadPrefabAssetToScene(path, _iconScene))
+				{
+					std::vector<Entity*> loadedEntities;
+					CollectSceneEntities(_iconScene.get(), loadedEntities, cameraEntity, sunEntity);
+
+					std::vector<Entity*> newlyAddedEntities;
+					newlyAddedEntities.reserve(loadedEntities.size());
+					for (auto* entity : loadedEntities)
+					{
+						if (existingEntitySet.find(entity) == existingEntitySet.end())
+						{
+							newlyAddedEntities.push_back(entity);
+						}
+					}
+
+					_previewRootEntities = CollectUniquePrefabRoots(newlyAddedEntities);
+					hasPreviewEntities = !_previewRootEntities.empty();
+				}
 			}
 
 			if (hasPreviewEntities)
 			{
-				if (!SceneFramingUtils::FrameCameraToSceneBounds(_iconScene.get(), _camera, true))
+				if (!FrameCameraToPreviewRoots(_camera, _previewRootEntities))
 				{
-					SceneFramingUtils::FrameCameraToSceneBounds(_iconScene.get(), _camera, false);
+					if (!SceneFramingUtils::FrameCameraToSceneBounds(_iconScene.get(), _camera, true))
+					{
+						SceneFramingUtils::FrameCameraToSceneBounds(_iconScene.get(), _camera, false);
+					}
 				}
 				SeedPVSForPreview(_iconScene.get(), _camera, _previewRootEntities);
 				_generatedPaths.push_back(path);
@@ -333,7 +554,6 @@ namespace HexEngine
 		if (_generatedPaths.size() > 0)
 		{
 			auto lastScene = g_pEnv->_sceneManager->GetCurrentScene();
-			
 			g_pEnv->_sceneManager->SetActiveScene(_iconScene);
 
 			auto path = _generatedPaths[0];
@@ -367,18 +587,15 @@ namespace HexEngine
 
 			auto renderer = g_pEnv->GetUIManager().GetRenderer();
 			{
-				renderer->StartFrame(512,512);
+				renderer->StartFrame(512, 512);
 				renderer->FullScreenTexturedQuad(cameraRT);
 				renderer->EndFrame();
 				//_camera->GetRenderTarget()->CopyTo(_icons[path]);
-
 			}
 
 			GFX_PERF_END();
 
 			_generatedPaths.erase(_generatedPaths.begin());
-
-
 			g_pEnv->_sceneManager->SetActiveScene(lastScene);
 		}
 		else
@@ -426,3 +643,4 @@ namespace HexEngine
 		_icons.erase(it);
 	}
 }
+

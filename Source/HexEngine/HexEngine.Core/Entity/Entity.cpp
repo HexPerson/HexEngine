@@ -88,10 +88,26 @@ namespace HexEngine
 			BroadcastMessage(&message);
 		}
 
-		for (auto&& child : _children)
+		// During destruction we can end up with stale parent pointers in complex
+		// teardown orders. Detach children directly instead of calling SetParent,
+		// which dereferences the previous parent to update its child list.
+		while (!_children.empty())
 		{
+			auto* child = _children.back();
+			_children.pop_back();
+
 			child->SetFlag(EntityFlags::IsPendingRemoval);
-			child->SetParent(nullptr);
+			if (child->_parent == this)
+			{
+				child->_parent = nullptr;
+			}
+
+			child->_hasCachedWorldTM = false;
+			child->_hasCachedWorldAABB = false;
+			child->_hasCachedWorldBoundingSphere = false;
+			child->_hasCachedWorldOBB = false;
+			child->_hasCachedWorldTMTranspose = false;
+			child->_hasCachedWorldTMInvert = false;
 		}
 
 		// if this entity doesn't have an UpdateComponent, give it one so it can be deleted
@@ -168,6 +184,10 @@ namespace HexEngine
 		if (_parent == parent)
 			return;
 
+		// Preserve current world-space position across reparent operations by
+		// converting it back into the new parent's local space after attaching.
+		const math::Vector3 worldPositionBeforeReparent = GetWorldTM().Translation();
+
 		// if it already has a parent, notify that parent that it is no longer the parent
 		if (_parent != nullptr)
 		{
@@ -195,6 +215,17 @@ namespace HexEngine
 		_hasCachedWorldOBB = false;
 		_hasCachedWorldTMTranspose = false;
 		_hasCachedWorldTMInvert = false;
+
+		if (_cachedTransform != nullptr)
+		{
+			math::Vector3 localPosition = worldPositionBeforeReparent;
+			if (_parent != nullptr)
+			{
+				localPosition = math::Vector3::Transform(worldPositionBeforeReparent, _parent->GetWorldTMInvert());
+			}
+
+			_cachedTransform->SetPosition(localPosition);
+		}
 	}
 
 	const std::vector<Entity*>& Entity::GetChildren() const
@@ -444,7 +475,14 @@ namespace HexEngine
 
 		if (auto body = GetComponent<RigidBody>(); body != nullptr && body->GetIRigidBody() != nullptr && body->GetIRigidBody()->GetBodyType() == IRigidBody::BodyType::Static)
 		{
-			body->GetIRigidBody()->UpdatePoseRotation(GetRotation());
+			math::Quaternion worldRotation = GetRotation();
+			for (auto* parent = GetParent(); parent != nullptr; parent = parent->GetParent())
+			{
+				worldRotation = worldRotation * parent->GetRotation();
+				worldRotation.Normalize();
+			}
+
+			body->GetIRigidBody()->UpdatePoseRotation(worldRotation);
 		}
 
 		ClearTransformCache();
@@ -589,11 +627,12 @@ namespace HexEngine
 	}
 
 	void Entity::RecalculateBoundingVolumes(const dx::BoundingBox& aabb)
-	{		 
-		aabb.Transform(_aabb, math::Matrix::CreateScale(GetAbsoluteScale()));
+	{
+		// Keep entity bounds in local mesh space.
+		// World-space scale/rotation/translation is applied in GetWorldOBB/GetWorldAABB.
+		_aabb = aabb;
 
 		dx::BoundingOrientedBox::CreateFromBoundingBox(_obb, _aabb);
-		_obb.Transform(_obb, math::Matrix::CreateFromQuaternion(GetRotation()));
 
 		dx::BoundingSphere::CreateFromBoundingBox(_boundingSphere, _aabb);
 
@@ -712,13 +751,9 @@ namespace HexEngine
 	{
 		if (_hasCachedWorldBoundingSphere == false)
 		{
-			_cachedWorldBoundingSphere = GetBoundingSphere();
-
-			auto position = GetWorldTM().Translation();
-
-			_cachedWorldBoundingSphere.Center.x += position.x;
-			_cachedWorldBoundingSphere.Center.y += position.y;
-			_cachedWorldBoundingSphere.Center.z += position.z;
+			// Derive the world-space sphere from the world AABB so parent transforms
+			// (rotation/scale) and non-centered mesh origins are fully accounted for.
+			dx::BoundingSphere::CreateFromBoundingBox(_cachedWorldBoundingSphere, GetWorldAABB());
 
 			_hasCachedWorldBoundingSphere = true;
 		}
@@ -786,10 +821,44 @@ namespace HexEngine
 				pvs->UpdateEntityInstanceCache(this);
 			}
 		}
+
+		if (auto sun = _scene->GetSunLight())
+		{
+			for (auto i = 0; i < sun->GetMaxSupportedShadowCascades(); ++i)
+			{
+				if (auto pvs = sun->GetPVS(i))
+				{
+					pvs->UpdateEntityInstanceCache(this);
+				}
+			}
+		}
 	}
 
 	void Entity::OnMessage(Message* message, MessageListener* sender)
 	{
+		auto invalidateChildTransformCaches = [](Entity* root, auto&& invalidateRef) -> void
+		{
+			if (root == nullptr)
+				return;
+
+			for (auto* child : root->GetChildren())
+			{
+				if (child == nullptr || child->IsPendingDeletion())
+					continue;
+
+				++child->_transformVersion;
+				child->_hasCachedLocalTM = false;
+				child->_hasCachedWorldTM = false;
+				child->_hasCachedWorldAABB = false;
+				child->_hasCachedWorldOBB = false;
+				child->_hasCachedWorldTMTranspose = false;
+				child->_hasCachedWorldTMInvert = false;
+				child->_hasCachedWorldBoundingSphere = false;
+
+				invalidateRef(child, invalidateRef);
+			}
+		};
+
 		switch (message->_id)
 		{
 		case MessageId::TransformChanged:
@@ -827,11 +896,41 @@ namespace HexEngine
 				_lastPosition = transformMessage->_position;
 			}
 
+			// Parent-space motion invalidates all descendant world transforms/bounds.
+			invalidateChildTransformCaches(this, invalidateChildTransformCaches);
+
+			auto updatePvsForDescendants = [](PVS* pvs, Entity* root, auto&& updateRef) -> void
+			{
+				if (pvs == nullptr || root == nullptr)
+					return;
+
+				for (auto* child : root->GetChildren())
+				{
+					if (child == nullptr || child->IsPendingDeletion())
+						continue;
+
+					pvs->UpdateEntityInstanceCache(child);
+					updateRef(pvs, child, updateRef);
+				}
+			};
+
 			if (auto mainCamera = _scene->GetMainCamera())
 			{
 				if (auto pvs = mainCamera->GetPVS())
 				{
 					pvs->UpdateEntityInstanceCache(this);
+					updatePvsForDescendants(pvs, this, updatePvsForDescendants);
+				}
+			}
+
+			if (auto sun = _scene->GetSunLight())
+			{
+				for (auto i = 0; i < sun->GetMaxSupportedShadowCascades(); ++i)
+				{
+					if (auto pvs = sun->GetPVS(i))
+					{
+						pvs->UpdateEntityInstanceCache(this);
+					}
 				}
 			}
 

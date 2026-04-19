@@ -195,7 +195,7 @@ namespace HexEngine
 
 		void SetBuffers(bool isShadowMap = false);
 
-		virtual void UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId);
+		virtual void UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId, bool isTransparencyPhase = false);
 		
 
 		void Clear();

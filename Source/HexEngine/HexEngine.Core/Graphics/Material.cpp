@@ -92,6 +92,7 @@ namespace HexEngine
 		_format = material._format;
 		_cullDistance = material._cullDistance;
 		_objectFlags = material._objectFlags;
+		_emissiveAffectsGI = material._emissiveAffectsGI;
 	}
 
 	Material::Material(const Material& other)
@@ -135,6 +136,18 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_volumeTexture = texture;
+	}
+
+	void Material::SetEmissiveAffectsGI(bool value)
+	{
+		std::unique_lock lock(_lock);
+
+		_emissiveAffectsGI = value;
+	}
+
+	bool Material::GetEmissiveAffectsGI() const
+	{
+		return _emissiveAffectsGI;
 	}
 
 	void Material::SetStandardShader(const std::shared_ptr<IShader>& shader)

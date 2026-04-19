@@ -63,8 +63,8 @@
 			input.position.y / (float)g_screenHeight * g_bloom.viewportScale
 		);
 
-		const float3 sceneColour = g_backBuffer.SampleLevel(g_pointSampler, screenPos, 0).rgb;
-		const float3 filteredValue = PrefilterPhysical(sceneColour);
+		const float4 sceneColour = g_backBuffer.SampleLevel(g_pointSampler, screenPos, 0);
+		const float3 filteredValue = PrefilterPhysical(sceneColour.rgb);
 
 		return float4(filteredValue, 1.0f);
 	}

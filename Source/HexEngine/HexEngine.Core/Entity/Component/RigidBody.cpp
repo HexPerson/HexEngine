@@ -5,6 +5,16 @@
 
 namespace HexEngine
 {
+	namespace
+	{
+		dx::BoundingBox GetScaledEntityAABB(Entity* entity)
+		{
+			dx::BoundingBox scaled = entity->GetAABB();
+			scaled.Transform(scaled, math::Matrix::CreateScale(entity->GetAbsoluteScale()));
+			return scaled;
+		}
+	}
+
 	RigidBody::RigidBody(Entity* entity, IRigidBody::BodyType bodyType) :
 		BaseComponent(entity),
 		_bodyType(bodyType)
@@ -292,9 +302,9 @@ namespace HexEngine
 			{
 				if (_colliderShape == IRigidBody::ColliderShape::Box)
 				{
-					GetIRigidBody()->UpdateBoxExtents(GetEntity()->GetAABB());
-
-					_colliderData.box.aabb = GetEntity()->GetAABB();
+					auto scaledAabb = GetScaledEntityAABB(GetEntity());
+					GetIRigidBody()->UpdateBoxExtents(scaledAabb);
+					_colliderData.box.aabb = scaledAabb;
 				}
 				else if (_colliderShape == IRigidBody::ColliderShape::TriangleMesh)
 				{
@@ -332,31 +342,24 @@ namespace HexEngine
 		{
 			auto transform = GetEntity()->GetComponent<Transform>();
 
-			auto position = transform->GetPosition();
-			auto rotation = transform->GetRotation();
+			const auto worldTM = GetEntity()->GetWorldTM();
+			const auto worldPosition = worldTM.Translation();
 
-			/*auto parent = transform->GetEntity()->GetParent();
-
-			while (parent)
+			math::Quaternion worldRotation = transform->GetRotation();
+			for (auto* parent = GetEntity()->GetParent(); parent != nullptr; parent = parent->GetParent())
 			{
-				position += parent->GetComponent<Transform>()->GetPosition();
+				worldRotation = worldRotation * parent->GetRotation();
+				worldRotation.Normalize();
+			}
 
-				rotation.RotateTowards(parent->GetComponent<Transform>()->GetRotation(), dx::g_XMTwoPi.f[0]);
-				rotation.Normalize();
-
-				parent = parent->GetParent();
-			}*/
-
-			//rotation.RotateTowards(parent->GetComponent<Transform>()->GetRotation(), dx::g_XMTwoPi.f[0]);
-			//rotation.Normalize();
-
-			GetIRigidBody()->UpdatePosePosition(position);
-			GetIRigidBody()->UpdatePoseRotation(rotation);
+			GetIRigidBody()->UpdatePosePosition(worldPosition);
+			GetIRigidBody()->UpdatePoseRotation(worldRotation);
 		}
 		else if (rb->GetBodyType() == IRigidBody::BodyType::Static)
 		{
 			//auto transform = GetEntity()->GetComponent<Transform>();
 			GetEntity()->ForcePosition(GetEntity()->GetPosition());
+			GetEntity()->ForceRotation(GetEntity()->GetRotation());
 			/*auto transform = GetEntity()->GetComponent<Transform>();
 
 			auto position = transform->GetPosition();
@@ -652,7 +655,7 @@ namespace HexEngine
 
 		RemoveCollider();
 
-		AddBoxCollider(GetEntity()->GetAABB());
+		AddBoxCollider(GetScaledEntityAABB(GetEntity()));
 
 		widget->SetValue(L"Box");
 	}

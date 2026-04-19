@@ -65,19 +65,23 @@ namespace HexEditor
 		}
 
 		bool allPressed = true;
+		bool matchedHotkey = false;
 
 		for (auto& hk : _hotkeys)
 		{
 			if (hk.first == key)
 			{
 				hk.second = true;
+				matchedHotkey = true;
 			}
 
 			if (!hk.second)
 				allPressed = false;
 		}
 
-		if (allPressed && _gadgetStarted == false)
+		// Only start a gadget when the current key belongs to its hotkey set.
+		// This avoids stale-key-state edge cases from retriggering on unrelated keys.
+		if (matchedHotkey && allPressed && _gadgetStarted == false)
 		{
 			_gadgetStarted = StartGadget();
 		}

@@ -60,21 +60,27 @@
 		//pixelDepth = pixelDepth / g_frustumDepths[3];
 
 		float opacity = 1.0f;
+		float4 albedo = g_albedoMap.Sample(g_textureSampler, input.texcoord);
 
 		if (g_material.isInTransparencyPhase)
 		{
 			if (g_objectFlags & OBJECT_FLAGS_HAS_OPACITY)
 			{
-				opacity = g_opacityMap.Sample(g_textureSampler, input.texcoord);
-
-				if (opacity < 1.0f)
-				{
-					clip(-1);
-				}
+				opacity = g_opacityMap.Sample(g_textureSampler, input.texcoord).r;
 			}
+
+			if ((g_objectFlags & OBJECT_FLAGS_HAS_OPACITY) == 0)
+			{
+				float minChannel = min(albedo.r, min(albedo.g, albedo.b));
+				float whiteMask = smoothstep(0.85f, 0.995f, minChannel);
+				opacity *= (1.0f - whiteMask);
+			}
+
+			if (opacity <= 0.0f)
+				clip(-1);
 		}
 
-		if(g_albedoMap.Sample(g_textureSampler, input.texcoord).a == 0.0f && g_material.isInTransparencyPhase == 0)
+		if(albedo.a == 0.0f && g_material.isInTransparencyPhase == 0)
 			clip(-1);
 		/*else
 		{

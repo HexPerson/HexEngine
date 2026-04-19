@@ -40,9 +40,9 @@ namespace HexEngine
 		SAFE_DELETE(_animationBuffer);
 	}
 
-	void AnimatedMesh::UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId)
+	void AnimatedMesh::UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId, bool isTransparencyPhase)
 	{
-		Mesh::UpdateConstantBuffer(entity, localTM, material, instanceId);
+		Mesh::UpdateConstantBuffer(entity, localTM, material, instanceId, isTransparencyPhase);
 
 		if (auto skeletalMeshComp = entity->GetComponent<SkeletalAnimationComponent>(); skeletalMeshComp != nullptr)
 		{

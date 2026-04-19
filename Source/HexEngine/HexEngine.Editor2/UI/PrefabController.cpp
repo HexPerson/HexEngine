@@ -6,6 +6,7 @@
 #include "Elements/EntityList.hpp"
 
 #include <HexEngine.Core\FileSystem\DiskFile.hpp>
+#include <HexEngine.Core\FileSystem\PrefabLoader.hpp>
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
 #include <HexEngine.Core\Scene\SceneFramingUtils.hpp>
 #include <algorithm>
@@ -745,7 +746,7 @@ namespace HexEditor
 				return false;
 
 			auto prefabScene = sceneManager->CreateEmptyScene(false, nullptr, false);
-			if (!sceneManager->LoadPrefabAssetToScene(prefabPath, prefabScene))
+			if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(prefabPath, prefabScene))
 				return false;
 
 			auto* sourceRoot = FindPrefabSourceRootInScene(
@@ -1045,7 +1046,7 @@ namespace HexEditor
 				return false;
 
 			auto baseScene = sceneManager->CreateEmptyScene(false, nullptr, false);
-			if (!sceneManager->LoadPrefabAssetToScene(variantData.basePrefabAbsolutePath, baseScene))
+			if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(variantData.basePrefabAbsolutePath, baseScene))
 				return false;
 
 			auto patches = BuildVariantPatchesFromScenes(baseScene.get(), editedScene);
@@ -1548,7 +1549,7 @@ namespace HexEditor
 			return false;
 
 		auto prefabScene = sceneManager->CreateEmptyScene(false, nullptr, false);
-		if (!sceneManager->LoadPrefabAssetToScene(prefabPath, prefabScene))
+		if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(prefabPath, prefabScene))
 		{
 			LOG_WARN("Failed to reload prefab '%s' for instance propagation.", prefabPath.string().c_str());
 			return false;
@@ -1824,7 +1825,7 @@ namespace HexEditor
 			return false;
 
 		auto prefabScene = sceneManager->CreateEmptyScene(false, nullptr, false);
-		if (!sceneManager->LoadPrefabAssetToScene(prefabPath, prefabScene))
+		if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(prefabPath, prefabScene))
 		{
 			LOG_WARN("Failed to load prefab '%s' while checking instance overrides.", prefabPath.string().c_str());
 			return false;
@@ -2125,7 +2126,7 @@ namespace HexEditor
 			return nullptr;
 
 		auto prefabScene = sceneManager->CreateEmptyScene(false);
-		if (!sceneManager->LoadPrefabAssetToScene(prefabPath, prefabScene))
+		if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(prefabPath, prefabScene))
 		{
 			LOG_WARN("Failed to load prefab '%s' while reverting instance '%s'.", prefabPath.string().c_str(), entity->GetName().c_str());
 			return nullptr;
@@ -2271,7 +2272,7 @@ namespace HexEditor
 			return false;
 
 		auto baseScene = sceneManager->CreateEmptyScene(false, nullptr, false);
-		if (!sceneManager->LoadPrefabAssetToScene(variantData.basePrefabAbsolutePath, baseScene))
+		if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(variantData.basePrefabAbsolutePath, baseScene))
 			return false;
 
 		auto* baseEntity = FindEntityByPrefabNodeIdInScene(baseScene, entity->GetPrefabNodeId());
@@ -2304,7 +2305,7 @@ namespace HexEditor
 			return false;
 
 		auto baseScene = sceneManager->CreateEmptyScene(false, nullptr, false);
-		if (!sceneManager->LoadPrefabAssetToScene(variantData.basePrefabAbsolutePath, baseScene))
+		if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(variantData.basePrefabAbsolutePath, baseScene))
 			return false;
 
 		auto* baseEntity = FindEntityByPrefabNodeIdInScene(baseScene, entity->GetPrefabNodeId());
@@ -2413,7 +2414,7 @@ namespace HexEditor
 		_prefabStage.previousActiveScene = activeScene;
 		_prefabStage.previousSceneFlags.clear();
 
-		if (!sceneManager->LoadPrefabAssetToScene(prefabPath, _prefabStage.stageScene))
+		if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(prefabPath, _prefabStage.stageScene))
 		{
 			LOG_WARN("Failed to open prefab stage for '%s'", prefabPath.string().c_str());
 			_prefabStage.prefabPath.clear();
@@ -2582,3 +2583,4 @@ namespace HexEditor
 		return _prefabStage.active;
 	}
 }
+

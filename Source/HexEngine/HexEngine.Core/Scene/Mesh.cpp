@@ -358,7 +358,7 @@ namespace HexEngine
 		_indices.insert(_indices.end(), indices.begin(), indices.end());
 	}
 
-	void Mesh::UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId)
+	void Mesh::UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId, bool isTransparencyPhase)
 	{
 		// Write the per-object constant buffer
 		auto perObjectBuffer = g_pEnv->_graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerObjectBuffer);
@@ -382,7 +382,7 @@ namespace HexEngine
 		}
 
 		_objectBuffer->_material = material->_properties;
-		_objectBuffer->_material.isInTransparencyPhase = false;
+		_objectBuffer->_material.isInTransparencyPhase = isTransparencyPhase ? 1 : 0;
 
 		perObjectBuffer->Write(_objectBuffer, sizeof(PerObjectBuffer));
 

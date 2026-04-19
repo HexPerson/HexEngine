@@ -1290,8 +1290,8 @@ namespace HexEngine
 	{
 		math::Vector4 p;
 
-		float cx = _screenWidth;
-		float cy = _screenHeight;
+		float cx = (float)_screenWidth;
+		float cy = (float)_screenHeight;
 
 		p.x = 2.0f * x / cx - 1.0f;
 		p.y = 1.0f - 2.0f * y / cy;

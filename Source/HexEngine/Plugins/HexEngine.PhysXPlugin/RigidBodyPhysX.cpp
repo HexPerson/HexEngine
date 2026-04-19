@@ -45,10 +45,17 @@ void RigidBodyPhysX::SetBodyType(BodyType type)
 			PX_RELEASE(_body);
 
 			physx::PxRigidActor* actor = nullptr;
-
-			auto position = _transform->GetPosition();
-
-			physx::PxTransform localTm(*(physx::PxVec3*)&position.x);
+			const auto worldTM = _transform->GetEntity()->GetWorldTM();
+			const auto worldPos = worldTM.Translation();
+			math::Quaternion worldRotation = _transform->GetRotation();
+			for (auto* parent = _transform->GetEntity()->GetParent(); parent != nullptr; parent = parent->GetParent())
+			{
+				worldRotation = worldRotation * parent->GetRotation();
+				worldRotation.Normalize();
+			}
+			physx::PxTransform localTm(
+				physx::PxVec3(worldPos.x, worldPos.y, worldPos.z),
+				physx::PxQuat(worldRotation.x, worldRotation.y, worldRotation.z, worldRotation.w));
 
 			if (type == IRigidBody::BodyType::Static)
 			{
@@ -108,9 +115,9 @@ void RigidBodyPhysX::UpdateBoxExtents(const dx::BoundingBox& box)
 
 			_shape->setLocalPose(physx::PxTransform(physx::PxVec3(box.Center.x, box.Center.y, box.Center.z)));
 
-			geom.halfExtents.x = box.Extents.x;
-			geom.halfExtents.y = box.Extents.y;
-			geom.halfExtents.z = box.Extents.z;
+			geom.halfExtents.x = std::max(box.Extents.x, 0.1f);
+			geom.halfExtents.y = std::max(box.Extents.y, 0.1f);
+			geom.halfExtents.z = std::max(box.Extents.z, 0.1f);
 
 			_shape->setGeometry(geom);
 		}
@@ -179,22 +186,7 @@ math::Vector3 RigidBodyPhysX::GetPhysicsPosition()
 			//auto pose = physx::PxShapeExt::getGlobalPose(*shape, *_body);
 			//const physx::PxMat44 shapePose(physx::PxShapeExt::getGlobalPose(*shape, *_body));
 
-			auto physPos = _body->getGlobalPose().p; //shapePose.getPosition();
-
-			auto parent = GetEntity()->GetParent();
-
-			while (parent)
-			{
-				if (auto rb = parent->GetComponent<HexEngine::RigidBody>(); rb != nullptr)
-				{
-					auto rbParent = (RigidBodyPhysX*)rb->GetIRigidBody();
-					auto parentPose = rbParent->_body->getGlobalPose();
-
-					physPos += parentPose.p;
-				}
-
-				parent = parent->GetParent();
-			}
+			const auto physPos = _body->getGlobalPose().p; // Global/world position already.
 
 			g_pPhysx->GetScene()->unlockRead();
 

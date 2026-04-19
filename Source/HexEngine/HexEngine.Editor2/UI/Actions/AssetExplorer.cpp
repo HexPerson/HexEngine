@@ -375,6 +375,26 @@ namespace HexEditor
 		}
 	}
 
+	void AssetExplorer::CreateNewPrefab(const fs::path& baseDir)
+	{
+		if (_currentlyBrowsedFS == nullptr)
+			return;
+
+		const fs::path newPrefabPath = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(baseDir / L"NewPrefab.hprefab");
+
+		auto* prefab = new HexEngine::Prefab;
+		prefab->SetPaths(newPrefabPath, _currentlyBrowsedFS);
+		prefab->SetLoader(HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hprefab"));
+		prefab->Save();
+
+		UpdateAssets(baseDir, _currentlyBrowsedFS);
+
+		if (auto* assetToEdit = FindAssetInView(newPrefabPath); assetToEdit != nullptr)
+		{
+			EditAssetName(assetToEdit);
+		}
+	}
+
 	void AssetExplorer::ImportAllMeshes()
 	{
 		if (_currentlyBrowsedFS == nullptr)
@@ -1185,6 +1205,28 @@ namespace HexEditor
 					_contextMenu->AddItem(createNewItem);
 					auto* newRoot = _contextMenu->CreateSubMenu(createNewItem);
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Material", std::bind(&AssetExplorer::CreateNewMaterial, this, _currentlyBrowsedFolder)), newRoot);
+					_contextMenu->AddItem(new HexEngine::ContextItem(L"Prefab", std::bind(&AssetExplorer::CreateNewPrefab, this, _currentlyBrowsedFolder)), newRoot);
+
+					// Allow plugins to register their context items
+					const auto& plugins = HexEngine::g_pEnv->_pluginSystem->GetAllPlugins();
+					for (const auto& plugin : plugins)
+					{
+						if (plugin.iface == nullptr)
+							continue;
+
+						if (auto* editorTool = plugin.iface->GetEditorToolPlugin(); editorTool != nullptr)
+						{
+							editorTool->OnAssetExplorerCreateNew(
+								_contextMenu,
+								newRoot,
+								_currentlyBrowsedFolder,
+								_currentlyBrowsedFS,
+								[this]()
+								{
+									UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+								});
+						}
+					}
 				}
 
 				return true;

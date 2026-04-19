@@ -2,12 +2,12 @@
 #include "EntityList.hpp"
 #include "../../FileSystem/FileSystem.hpp"
 #include "../../Entity\Entity.hpp"
-#include "../../Entity/Component/TrafficLaneComponent.hpp"
 #include "../../Environment\IEnvironment.hpp"
 #include "../../Scene\SceneManager.hpp"
 #include <algorithm>
 #include <cwctype>
 #include <unordered_map>
+#include <vector>
 
 namespace HexEngine
 {
@@ -41,15 +41,52 @@ namespace HexEngine
 
 		void TryAutoLinkDuplicatedTrafficLane(Entity* source, Entity* duplicate)
 		{
-			if (source == nullptr || duplicate == nullptr || source == duplicate)
-				return;
+			(void)source;
+			(void)duplicate;
 
-			auto* sourceLane = source->GetComponent<TrafficLaneComponent>();
-			auto* duplicateLane = duplicate->GetComponent<TrafficLaneComponent>();
-			if (sourceLane == nullptr || duplicateLane == nullptr)
-				return;
+			// Core is intentionally plugin-agnostic. Traffic lane relinking is handled by
+			// optional city-simulation tooling when the plugin is available.
+		}
 
-			sourceLane->AddNextLaneEntityName(duplicate->GetName());
+		bool CloneEntityChildrenRecursive(Scene* scene, Entity* sourceParent, Entity* clonedParent)
+		{
+			if (scene == nullptr || sourceParent == nullptr || clonedParent == nullptr)
+				return false;
+
+			const auto sourceChildren = sourceParent->GetChildren();
+			for (auto* sourceChild : sourceChildren)
+			{
+				if (sourceChild == nullptr || sourceChild->IsPendingDeletion())
+					continue;
+
+				auto* clonedChild = scene->CloneEntity(sourceChild, false);
+				if (clonedChild == nullptr)
+					return false;
+
+				clonedChild->SetParent(clonedParent);
+				if (!CloneEntityChildrenRecursive(scene, sourceChild, clonedChild))
+					return false;
+			}
+
+			return true;
+		}
+
+		Entity* CloneEntityHierarchy(Scene* scene, Entity* sourceRoot)
+		{
+			if (scene == nullptr || sourceRoot == nullptr || sourceRoot->IsPendingDeletion())
+				return nullptr;
+
+			auto* clonedRoot = scene->CloneEntity(sourceRoot);
+			if (clonedRoot == nullptr)
+				return nullptr;
+
+			if (!CloneEntityChildrenRecursive(scene, sourceRoot, clonedRoot))
+			{
+				scene->DestroyEntity(clonedRoot);
+				return nullptr;
+			}
+
+			return clonedRoot;
 		}
 	}
 
@@ -70,7 +107,7 @@ namespace HexEngine
 
 	bool EntityList::OnInputEvent(InputEvent event, InputData* data)
 	{
-		if (_ctx != nullptr && IsMouseOver(_ctx->GetAbsolutePosition(), _ctx->GetSize()) == false)
+		if (_ctx != nullptr && IsMouseOver(_ctx->GetAbsolutePosition(), _ctx->GetContextSize()) == false)
 		{
 			_ctx->DeleteMe();
 			_ctx = nullptr;
@@ -393,7 +430,8 @@ namespace HexEngine
 		if (entity == nullptr)
 			return;
 
-		auto* duplicate = g_pEnv->_sceneManager->GetCurrentScene()->CloneEntity(entity, entity->GetName(), entity->GetPosition(), entity->GetRotation(), entity->GetScale());
+		auto* currentScene = g_pEnv->_sceneManager->GetCurrentScene().get();
+		auto* duplicate = CloneEntityHierarchy(currentScene, entity);
 		TryAutoLinkDuplicatedTrafficLane(entity, duplicate);
 		if (_onEntityDuplicated && duplicate != nullptr)
 		{

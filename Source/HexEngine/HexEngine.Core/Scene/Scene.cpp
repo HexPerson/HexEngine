@@ -26,7 +26,13 @@ namespace HexEngine
 	void Scene::Create(bool createSkySphere, IEntityListener* listener)
 	{
 		if (listener)
+		{
 			AddEntityListener(listener);
+			if (auto* messageListener = dynamic_cast<MessageListener*>(listener); messageListener != nullptr)
+			{
+				RegisterMessageListener(messageListener);
+			}
+		}
 
 #if 1//def _DEBUG
 		g_pEnv->_debugGui->AddCallback(this);
@@ -76,7 +82,13 @@ namespace HexEngine
 	void Scene::CreateEmpty(bool createSkySphere, IEntityListener* listener)
 	{
 		if (listener)
+		{
 			AddEntityListener(listener);
+			if (auto* messageListener = dynamic_cast<MessageListener*>(listener); messageListener != nullptr)
+			{
+				RegisterMessageListener(messageListener);
+			}
+		}
 
 #if 1//def _DEBUG
 		g_pEnv->_debugGui->AddCallback(this);
@@ -588,6 +600,11 @@ namespace HexEngine
 		if(entity->HasFlag(EntityFlags::IsPendingRemoval) == false)
 			entity->DeleteMe(broadcast);
 
+		for (auto& child : entity->GetChildren())
+		{
+			DestroyEntity(child);
+		}
+
 		if (_insideEntityIteration)
 		{
 			LOG_DEBUG("Entity [%p] '%s' cannot be removed immediately because iteration is in progress, but will be removed next tick", entity, entity->GetName().c_str());
@@ -597,7 +614,7 @@ namespace HexEngine
 		else
 		{
 			RemoveEntityInternal(entity);			
-		}		
+		}	
 	}
 
 	void Scene::OnEntityAddComponent(Entity* entity, ComponentSignature previousSignature, BaseComponent* component)
@@ -820,6 +837,8 @@ namespace HexEngine
 			}
 
 			_pendingRemovals.clear();
+
+			ForceRebuildPVS();
 		}
 	}
 
@@ -1086,7 +1105,16 @@ namespace HexEngine
 
 	namespace
 	{
-		
+		bool IsMaterialTransparent(const Material* material)
+		{
+			if (!material)
+				return false;
+
+			if (material->_properties.hasTransparency == 1 || material->_properties.isWater == 1)
+				return true;
+
+			return material->GetBlendState() != BlendState::Opaque;
+		}
 
 		bool PrepareMeshRender(Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode)
 		{
@@ -1120,12 +1148,25 @@ namespace HexEngine
 			graphicsDevice->SetVertexShader(shader->GetShaderStage(ShaderStage::VertexShader));
 			graphicsDevice->SetInputLayout(shader->GetInputLayout());
 
+			const bool isTransparency = (flags & MeshRenderFlags::MeshRenderTransparency) != 0;
+			BlendState effectiveBlendState = material->GetBlendState();
+			if (isTransparency)
+			{
+				if (effectiveBlendState == BlendState::Opaque || effectiveBlendState == BlendState::Transparency)
+				{
+					effectiveBlendState = BlendState::TransparencyPreserveAlpha;
+				}
+			}
+			const DepthBufferState effectiveDepthState = isTransparency && material->GetDepthState() == DepthBufferState::DepthDefault
+				? DepthBufferState::DepthRead
+				: material->GetDepthState();
+
 			material->SaveRenderState();
-			graphicsDevice->SetBlendState(material->GetBlendState());
-			graphicsDevice->SetDepthBufferState(material->GetDepthState());
+			graphicsDevice->SetBlendState(effectiveBlendState);
+			graphicsDevice->SetDepthBufferState(effectiveDepthState);
 			graphicsDevice->SetCullingMode(isShadowMap ? shadowCullMode : material->GetCullMode());
 
-			mesh->UpdateConstantBuffer(nullptr, math::Matrix::Identity, material, instanceId);
+			mesh->UpdateConstantBuffer(nullptr, math::Matrix::Identity, material, instanceId, isTransparency);
 
 			auto requirements = shader->GetRequirements();
 			if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresGBuffer))
@@ -1270,184 +1311,272 @@ namespace HexEngine
 		{
 			_drawnEntities = 0;
 			_drawCalls = 0;
-		}		
+		}
 
-		for (auto it = snapshot.begin(); it != snapshot.end(); it++)
+		if (isTransparency)
 		{
-			auto material = it->first;
-
-			bool rendered = false;
-
-			int drawnInstances = 0;		
-			MeshInstance* currentInstance = nullptr;
-			MeshInstance* lastInstance = nullptr;
-
-			/*auto RenderInstance = [&rendered](MeshInstance* instance, uint32_t numInstances, StaticMeshComponent* renderer)
+			struct TransparentRenderItem
 			{
-				if (instance)
+				std::shared_ptr<Material> material;
+				RenderableSnapshot* renderable = nullptr;
+				float distSq = 0.0f;
+			};
+
+			std::vector<TransparentRenderItem> transparentItems;
+			transparentItems.reserve(256);
+			const math::Vector3 cameraPosition = GetMainCamera()->GetEntity()->GetPosition();
+
+			for (auto& batch : snapshot)
+			{
+				auto material = batch.first;
+
+				for (auto& renderable : batch.second)
+				{
+					totalCandidates++;
+
+					auto mesh = renderable.mesh;
+					auto instance = renderable.instance;
+
+					if (!mesh || !instance)
+					{
+						skippedNullMeshOrInstance++;
+						continue;
+					}
+
+					if (!IsMaterialTransparent(material.get()))
+					{
+						skippedTransparencyGate++;
+						continue;
+					}
+
+					if ((layerMask & LAYERMASK(renderable.layer)) == 0)
+					{
+						skippedLayerMask++;
+						continue;
+					}
+
+					if (mesh->GetLodLevel() != -1)
+					{
+						const float lodPartitions = r_lodPartition._val.f32;
+						const float minDistance = lodPartitions * static_cast<float>(mesh->GetLodLevel());
+						const float maxDistance = lodPartitions * static_cast<float>(mesh->GetLodLevel() + 1);
+						const float distance = (renderable.instanceData.worldMatrix.Translation() - cameraPosition).Length();
+
+						if (mesh->GetLodLevel() < 3)
+						{
+							if (distance < minDistance || distance > maxDistance)
+							{
+								skippedLod++;
+								continue;
+							}
+						}
+						else if (distance < minDistance)
+						{
+							skippedLod++;
+							continue;
+						}
+					}
+
+					const math::Vector3 objectPosition = renderable.instanceData.worldMatrix.Translation();
+					TransparentRenderItem item;
+					item.material = material;
+					item.renderable = &renderable;
+					item.distSq = (objectPosition - cameraPosition).LengthSquared();
+					transparentItems.push_back(item);
+				}
+			}
+
+			std::sort(
+				transparentItems.begin(),
+				transparentItems.end(),
+				[](const TransparentRenderItem& left, const TransparentRenderItem& right)
+				{
+					return left.distSq > right.distSq;
+				});
+
+			for (auto& item : transparentItems)
+			{
+				auto* renderable = item.renderable;
+				if (!renderable)
+					continue;
+
+				auto material = item.material;
+				auto mesh = renderable->mesh;
+				auto* instance = renderable->instance;
+
+				if (!mesh || !instance || !material)
+					continue;
+
+				instance->Start();
+				if (!PrepareMeshRender(mesh.get(), material.get(), renderFlags, _drawnEntities, renderable->shadowCullMode))
 				{
 					instance->Finish();
-
-					if (numInstances > 0)
-					{
-						g_pEnv->_graphicsDevice->DrawIndexedInstanced(instance->GetMesh()->GetNumIndices(), (uint32_t)numInstances);
-
-						renderer->GetMaterial()->RestoreRenderState();
-
-						rendered = false;
-					}
-				}
-			};*/
-
-			for (auto&& renderable : it->second)
-			{
-				totalCandidates++;
-
-				auto mesh = renderable.mesh;
-				auto instance = renderable.instance;
-				SimpleMeshInstance* simpleInstance = renderable.simpleInstance;
-
-				if (!mesh || !instance)
-				{
-					skippedNullMeshOrInstance++;
+					skippedPrepareRender++;
 					continue;
 				}
 
-				currentInstance = instance;
-
-				if (isShadowMap)
-					currentInstance = (MeshInstance*)simpleInstance;
-
-				if ((renderFlags & MeshRenderTransparency) == 0)
+				if (renderable->layer == Layer::Sky)
 				{
-					if (material->_properties.hasTransparency == 1 || material->_properties.isWater == 1)
+					renderable->instanceData.worldMatrix = renderable->entity->GetWorldTMTranspose();
+					renderable->instanceData.worldMatrixPrev = renderable->entity->GetWorldTMPrevTranspose();
+					renderable->instanceData.worldMatrixInverseTranspose = renderable->entity->GetWorldTMInvert();
+				}
+
+				instance->Render(renderable->instanceData);
+				instance->Finish();
+				g_pEnv->_graphicsDevice->DrawIndexedInstanced(instance->GetMesh()->GetNumIndices(), 1);
+				material->RestoreRenderState();
+
+				++drawnInstancesTotal;
+				++_drawCalls;
+			}
+		}
+		else
+		{
+			for (auto it = snapshot.begin(); it != snapshot.end(); it++)
+			{
+				auto material = it->first;
+
+				bool rendered = false;
+
+				int drawnInstances = 0;
+				MeshInstance* currentInstance = nullptr;
+				MeshInstance* lastInstance = nullptr;
+
+				for (auto&& renderable : it->second)
+				{
+					totalCandidates++;
+
+					auto mesh = renderable.mesh;
+					auto instance = renderable.instance;
+					SimpleMeshInstance* simpleInstance = renderable.simpleInstance;
+
+					if (!mesh || !instance)
+					{
+						skippedNullMeshOrInstance++;
+						continue;
+					}
+
+					currentInstance = instance;
+
+					if (isShadowMap)
+						currentInstance = (MeshInstance*)simpleInstance;
+
+					if (!IsMaterialTransparent(material.get()))
+					{
+						if (material->DoesHaveAnyReflectivity())
+							_didAnyDrawnItemReflect = true;
+					}
+					else
 					{
 						skippedTransparencyGate++;
 						continue;
 					}
 
-					if (material->DoesHaveAnyReflectivity())
-						_didAnyDrawnItemReflect = true;
-				}
-				else
-				{
-					if (material->_properties.hasTransparency == 0 && material->_properties.isWater == 0)
+					if (currentInstance != lastInstance && lastInstance != nullptr || renderable.hasAnimations)
 					{
-						skippedTransparencyGate++;
+						if (isNormalRender)
+							++_drawCalls;
+
+						if (isShadowMap)
+							RenderInstance((SimpleMeshInstance*)lastInstance, drawnInstances, material.get(), rendered);
+						else
+							RenderInstance(lastInstance, drawnInstances, material.get(), rendered);
+
+						drawnInstances = 0;
+
+						rendered = false;
+					}
+
+					// check this entity is in the layer mask we want
+					if ((layerMask & LAYERMASK(renderable.layer)) == 0)
+					{
+						skippedLayerMask++;
 						continue;
 					}
+
+					// Check for LOD
+#if 1
+					if (mesh->GetLodLevel() != -1)
+					{
+						const float lodPartitions = r_lodPartition._val.f32;
+
+						float minDistance = lodPartitions * (float)(mesh->GetLodLevel());
+						float maxDistance = lodPartitions * (float)(mesh->GetLodLevel() + 1);
+
+						float distance = (renderable.instanceData.worldMatrix.Translation() - GetMainCamera()->GetEntity()->GetPosition()).Length();
+
+						if (mesh->GetLodLevel() < 3)
+						{
+							if (distance < minDistance || distance > maxDistance)
+							{
+								skippedLod++;
+								continue;
+							}
+						}
+						else
+						{
+							if (distance < minDistance)
+							{
+								skippedLod++;
+								continue;
+							}
+						}
+					}
+#endif
+
+					if (!rendered)
+					{
+						if (isShadowMap)
+							simpleInstance->Start();
+						else
+							instance->Start();
+
+						if (PrepareMeshRender(mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode) == false)
+						{
+							LOG_WARN("Failed to prepare mesh render state, ignoring this entity");
+							skippedPrepareRender++;
+							continue;
+						}
+						rendered = true;
+					}
+
+					drawnInstances++;
+					drawnInstancesTotal++;
+					lastInstance = currentInstance;
+
+					if (isShadowMap)
+					{
+						simpleInstance->Render(renderable.shadowInstanceData);
+					}
+					else
+					{
+						// Fix so sky doesn't used cached position
+						if (renderable.layer == Layer::Sky)
+						{
+							renderable.instanceData.worldMatrix = renderable.entity->GetWorldTMTranspose();
+							renderable.instanceData.worldMatrixPrev = renderable.entity->GetWorldTMPrevTranspose();
+							renderable.instanceData.worldMatrixInverseTranspose = renderable.entity->GetWorldTMInvert();
+						}
+
+						instance->Render(renderable.instanceData);
+					}
+
+					if (isNormalRender)
+						_drawnEntities += 1;
 				}
 
-				if (currentInstance != lastInstance && lastInstance != nullptr || renderable.hasAnimations)
+				if (currentInstance && drawnInstances > 0)
 				{
 					if (isNormalRender)
 						++_drawCalls;
 
-					if(isShadowMap)
-						RenderInstance((SimpleMeshInstance*)lastInstance, drawnInstances, material.get(), rendered);
-					else
-						RenderInstance(lastInstance, drawnInstances, material.get(), rendered);
-					
-					drawnInstances = 0;
-
-					rendered = false;
-				}
-
-				// check this entity is in the layer mask we want
-				if ((layerMask & LAYERMASK(renderable.layer)) == 0)
-				{
-					skippedLayerMask++;
-					continue;
-				}
-
-				// Check for LOD
-#if 1
-				if (mesh->GetLodLevel() != -1)
-				{
-					//if (mesh->GetLodLevel() != 1)
-					//	continue;
-
-					const float lodPartitions = r_lodPartition._val.f32;
-
-					float minDistance = lodPartitions * (float)(mesh->GetLodLevel());
-					float maxDistance = lodPartitions * (float)(mesh->GetLodLevel() + 1);
-
-					float distance = (renderable.instanceData.worldMatrix.Translation() - GetMainCamera()->GetEntity()->GetPosition()).Length();
-
-					if (mesh->GetLodLevel() < 3)
-					{
-						// always allow level 3
-						if (distance < minDistance || distance > maxDistance)
-						{
-							//LOG_DEBUG("Entity %p failed LOD test at level %d because distance %.1f is greated then max allowed (%.1f) for this level", entity, mesh->GetLodLevel(), distance, maxDistance);
-							skippedLod++;
-							continue;
-						}
-					}
-					else
-					{
-						if (distance < minDistance)
-						{
-							skippedLod++;
-							continue;
-						}
-					}
-				}
-#endif
-
-				if (!rendered)
-				{
 					if (isShadowMap)
-						simpleInstance->Start();
+						RenderInstance((SimpleMeshInstance*)currentInstance, drawnInstances, material.get(), rendered);
 					else
-						instance->Start();
-
-					if (PrepareMeshRender(mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode) == false)
-					{
-						LOG_WARN("Failed to prepare mesh render state, ignoring this entity");
-						skippedPrepareRender++;
-						continue;
-					}
-					rendered = true;
-				}		
-
-				drawnInstances++;
-				drawnInstancesTotal++;
-				lastInstance = currentInstance;		
-
-				if (isShadowMap)
-				{
-					simpleInstance->Render(renderable.shadowInstanceData);
+						RenderInstance(currentInstance, drawnInstances, material.get(), rendered);
 				}
-				else
-				{
-					// Fix so sky doesn't used cached position
-					if (renderable.layer == Layer::Sky)
-					{
-						renderable.instanceData.worldMatrix = renderable.entity->GetWorldTMTranspose();
-						renderable.instanceData.worldMatrixPrev = renderable.entity->GetWorldTMPrevTranspose();
-						renderable.instanceData.worldMatrixInverseTranspose = renderable.entity->GetWorldTMInvert();
-					}
-
-					instance->Render(renderable.instanceData);
-				}
-
-				if (isNormalRender)
-					_drawnEntities += 1;
 			}
-
-			if (currentInstance && drawnInstances > 0)
-			{
-				if (isNormalRender)
-					++_drawCalls;
-
-				if (isShadowMap)
-					RenderInstance((SimpleMeshInstance*)currentInstance, drawnInstances, material.get(), rendered);
-				else
-					RenderInstance(currentInstance, drawnInstances, material.get(), rendered);
-			}
-
-			
 		}
 
 		if (r_debugRenderSkips._val.b)

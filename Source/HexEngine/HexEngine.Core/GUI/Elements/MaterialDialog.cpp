@@ -3,6 +3,7 @@
 #include "Button.hpp"
 #include "MessageBox.hpp"
 #include "DropDown.hpp"
+#include "Checkbox.hpp"
 #include "ColourPicker.hpp"
 #include "AssetSearch.hpp"
 #include "../../FileSystem/FileSystem.hpp"
@@ -45,6 +46,8 @@ namespace HexEngine
 
 		auto metallicFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Metallic Factor", &material->_properties.metallicFactor, 0.0f, 1.0f, 0.01f, 2);
 		auto roughnessFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Roughness Factor", &material->_properties.roughnessFactor, 0.0f, 1.0f, 0.01f, 2);
+		_emissiveAffectsGI = _material->GetEmissiveAffectsGI();
+		_emissiveGiToggle = new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Emissive Affects GI", &_emissiveAffectsGI);
 
 		auto format = new DropDown(_layout, _layout->GetNextPos(), Point(200, 18), L"Format");
 		format->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&Material::SetFormat, material.get(), MaterialFormat::None)));
@@ -58,6 +61,7 @@ namespace HexEngine
 
 	bool MaterialDialog::Save()
 	{
+		_material->SetEmissiveAffectsGI(_emissiveAffectsGI);
 		_material->Save();
 		DeleteMe();
 		return true;

@@ -450,7 +450,10 @@
 		const float pixelMotionStart = max(g_giParams4.z, 0.0f);
 		const float pixelMotionStrength = max(g_giParams4.w, 0.0f);
 		const float motionFactor = saturate((pixelMotion - pixelMotionStart) * pixelMotionStrength);
-		const float motionClipBias = saturate(g_giParams7.w);
+		// Keep a small baseline near-clip preference even when stationary.
+		// Without this, fully neutral clip blending can over-weight broad sparse clips and
+		// make local GI fade toward black after motion settles.
+		const float motionClipBias = saturate(0.25f + g_giParams7.w * 0.75f);
 		const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 		const float shiftSettle = saturate(g_giParams6.y);
 

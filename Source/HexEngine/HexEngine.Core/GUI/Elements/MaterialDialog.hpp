@@ -9,6 +9,8 @@
 
 namespace HexEngine
 {
+	class Checkbox;
+
 	class HEX_API MaterialDialog : public Dialog
 	{
 	public:
@@ -29,6 +31,8 @@ namespace HexEngine
 		AssetSearch* _textures[MaterialTexture::Count] = { nullptr };
 		DragFloat* _smoothness = nullptr;
 		DragFloat* _specularProbability = nullptr;
+		Checkbox* _emissiveGiToggle = nullptr;
+		bool _emissiveAffectsGI = true;
 		std::shared_ptr<Material> _material;
 	};
 }

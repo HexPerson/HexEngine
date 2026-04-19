@@ -148,7 +148,7 @@ namespace HexEngine
 
 	void DiskFile::WriteString(const std::string& str)
 	{
-		uint32_t len = str.length();
+		uint32_t len = (uint32_t)str.length();
 
 		Write(&len, 4);
 		Write((void*)str.data(), len);

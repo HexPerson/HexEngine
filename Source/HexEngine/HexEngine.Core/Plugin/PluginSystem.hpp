@@ -16,7 +16,7 @@ namespace HexEngine
 		PluginHookId hookId;
 	};
 
-	class PluginSystem
+	class HEX_API PluginSystem
 	{
 	public:
 		struct InitInfo
@@ -39,6 +39,8 @@ namespace HexEngine
 		IPluginInterface* CreateInterface(const std::string& interfaceName);
 
 		bool HasLoadedPlugin(const std::string& name) const;
+
+		const std::vector<InitInfo>& GetAllPlugins() const { return _plugins; }
 
 	private:
 		bool LoadPlugin(const fs::path& path);

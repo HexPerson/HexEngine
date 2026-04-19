@@ -94,7 +94,7 @@ namespace HexEngine
 		//	offsetMatrix = math::Matrix::CreateTranslation(_offsetPosition);
 		//}
 
-		mesh->UpdateConstantBuffer(GetEntity(), /*GetEntity()->GetLocalTM() **/ offsetMatrix, material, instanceId);
+		mesh->UpdateConstantBuffer(GetEntity(), /*GetEntity()->GetLocalTM() **/ offsetMatrix, material, instanceId, (flags & MeshRenderFlags::MeshRenderTransparency) != 0);
 
 		// bind the shader's requirements
 		auto requirements = shader->GetRequirements();
@@ -394,9 +394,6 @@ namespace HexEngine
 
 	bool StaticMeshComponent::CreateWidget(ComponentWidget* widget)
 	{
-		if (!_mesh)
-			return false;
-
 		AssetSearch* meshLine = new AssetSearch(
 			widget,
 			widget->GetNextPos(),
@@ -406,10 +403,13 @@ namespace HexEngine
 			std::bind(&StaticMeshComponent::SetMeshFromWidget, this, std::placeholders::_1, std::placeholders::_2));
 		meshLine->SetPrefabOverrideBinding(GetComponentName(), "/mesh");
 
-		if (!_mesh->GetFileSystemPath().empty())
-			meshLine->SetValue(_mesh->GetFileSystemPath().wstring());
-		else
-			meshLine->SetValue(std::wstring(_mesh->GetName().begin(), _mesh->GetName().end()));
+		if (_mesh)
+		{
+			if (!_mesh->GetFileSystemPath().empty())
+				meshLine->SetValue(_mesh->GetFileSystemPath().wstring());
+			else
+				meshLine->SetValue(std::wstring(_mesh->GetName().begin(), _mesh->GetName().end()));
+		}
 
 		if (auto material = GetMaterial(); material != nullptr)
 		{
@@ -636,6 +636,6 @@ namespace HexEngine
 
 	void StaticMeshComponent::OnRenderEditorGizmo(bool isSelected, bool& isHovering)
 	{
-		g_pEnv->_debugRenderer->DrawAABB(GetEntity()->GetWorldAABB(), math::Color(HEX_RGBA_TO_FLOAT4(255, 127, 40, 255)));
+		g_pEnv->_debugRenderer->DrawOBB(GetEntity()->GetWorldOBB(), math::Color(HEX_RGBA_TO_FLOAT4(255, 127, 40, 255)));
 	}
 }

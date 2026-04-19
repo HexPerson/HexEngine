@@ -123,6 +123,7 @@ namespace HexEngine
 			math::Vector3 position = math::Vector3::Zero;
 			math::Vector4 emissive = math::Vector4::Zero;
 			math::Vector4 diffuse = math::Vector4::Zero;
+			bool emissiveAffectsGI = true;
 		};
 
 		struct MaterialTriangleAlbedoCacheEntry
@@ -183,6 +184,7 @@ namespace HexEngine
 			const Material* material = nullptr;
 			math::Vector4 diffuse = math::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
 			math::Vector4 emissive = math::Vector4::Zero;
+			bool emissiveAffectsGI = true;
 			uint32_t index = 0u;
 		};
 

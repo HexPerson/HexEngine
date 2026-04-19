@@ -19,6 +19,8 @@ namespace HexEngine
 		EntityParentChanged,
 		NavigationTargetReached,
 		PVSVisibilityChanged,
+		EditorEntityDuplicated,
+		EditorEntityCreated,
 
 		CustomMessage,	// custom game messages should start here
 	};
@@ -144,5 +146,33 @@ namespace HexEngine
 		PVSVisibilityChangedMessage() : Message(MessageId::PVSVisibilityChanged) {}
 
 		bool visible = false;
+	};
+
+	class EditorEntityDuplicatedMessage : public Message
+	{
+	public:
+		EditorEntityDuplicatedMessage(Entity* sourceEntity, Entity* duplicatedEntity) :
+			Message(MessageId::EditorEntityDuplicated),
+			source(sourceEntity),
+			duplicate(duplicatedEntity)
+		{
+		}
+
+		Entity* source = nullptr;
+		Entity* duplicate = nullptr;
+		bool handled = false;
+	};
+
+	class EditorEntityCreatedMessage : public Message
+	{
+	public:
+		EditorEntityCreatedMessage(Entity* createdEntity) :
+			Message(MessageId::EditorEntityCreated),
+			entity(createdEntity)
+		{
+		}
+
+		Entity* entity = nullptr;
+		bool handled = false;
 	};
 }

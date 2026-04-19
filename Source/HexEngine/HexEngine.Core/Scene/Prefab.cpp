@@ -1,6 +1,9 @@
 
 #include "Prefab.hpp"
 #include "../Environment/IEnvironment.hpp"
+#include "../FileSystem/SceneSaveFile.hpp"
+#include "SceneManager.hpp"
+#include "../Environment/LogFile.hpp"
 
 namespace HexEngine
 {
@@ -11,12 +14,20 @@ namespace HexEngine
 
 	void Prefab::Save()
 	{
+		auto scene = g_pEnv->_sceneManager->CreateEmptyScene(false);
 
+		SceneSaveFile saveFile(GetAbsolutePath(), std::ios::out | std::ios::trunc, scene, HexEngine::SceneFileFlags::IsPrefab);
+		if (!saveFile.Save(_entities))
+		{
+			LOG_WARN("Failed to save prefab stage: %s", GetAbsolutePath().string().c_str());
+			return;
+		}
 	}
 
 	void Prefab::Destroy()
 	{
-
+		_entities.clear();
+		_scene.reset();
 	}
 
 	ResourceType Prefab::GetResourceType() const

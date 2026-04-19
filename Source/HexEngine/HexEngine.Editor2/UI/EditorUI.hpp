@@ -15,10 +15,13 @@
 namespace HexEditor
 {
 	class Gadget;
+}
 
-	class EditorUI : public HexEngine::UIManager, public HexEngine::IEntityListener
+namespace HexEditor
+{
+	class EditorUI : public HexEngine::UIManager, public HexEngine::IEntityListener, public HexEngine::MessageListener
 	{
-	public:
+public:
 		enum PrimitiveType
 		{
 			Plane,
@@ -49,6 +52,7 @@ namespace HexEditor
 		EntityList* GetEntityTreeList() const { return _entityList; }
 		Inspector* GetInspector() const { return _rightDock; }
 		SceneView* GetSceneView() const { return _sceneView; }
+		void BroadcastEditorToolMessage(HexEngine::Message& message);
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 
@@ -131,12 +135,14 @@ namespace HexEditor
 		virtual void OnAddComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component) override;
 
 		virtual void OnRemoveComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component) override;
+		virtual void OnMessage(HexEngine::Message* message, HexEngine::MessageListener* sender) override;
 
 	private:
 		// menu bar actions
 		void OnCreateNewSceneAction(const std::wstring& sceneName);
 		void OnDeleteSceneAction();
 		void OnStartPaintTreeDialog();
+		void NotifyEditorToolPluginsCreateUI();
 
 
 	private:

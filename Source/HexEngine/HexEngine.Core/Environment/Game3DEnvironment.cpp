@@ -276,13 +276,13 @@ namespace HexEngine
 			SAFE_DELETE(_sceneManager);
 		}		
 
-		SAFE_DELETE(_meshLoader);
-
 		_meshPrimitives->Destroy();
 		SAFE_DELETE(_meshPrimitives);
 
 		_sceneRenderer->Destroy();
 		SAFE_DELETE(_sceneRenderer);
+
+		SAFE_DELETE(_meshLoader);
 
 		SAFE_DELETE(_debugGui);
 		

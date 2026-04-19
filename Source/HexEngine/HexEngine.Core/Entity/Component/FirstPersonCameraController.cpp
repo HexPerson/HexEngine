@@ -121,22 +121,22 @@ namespace HexEngine
 
 		if ((_flags & MoveFlag::MoveForwards) != 0)
 		{
-			moveDir = absForwards * _movementSpeed * kMoveDilation;
+			moveDir += absForwards * _movementSpeed * kMoveDilation;
 		}
 
 		if ((_flags & MoveFlag::MoveBackwards) != 0)
 		{
-			moveDir = -absForwards * _movementSpeed * kMoveDilation;
+			moveDir += -absForwards * _movementSpeed * kMoveDilation;
 		}
 
 		if ((_flags & MoveFlag::MoveRight) != 0)
 		{
-			moveDir = right * _movementSpeed * kMoveDilation;
+			moveDir += right * _movementSpeed * kMoveDilation;
 		}
 
 		if ((_flags & MoveFlag::MoveLeft) != 0)
 		{
-			moveDir = -right * _movementSpeed * kMoveDilation;
+			moveDir += -right * _movementSpeed * kMoveDilation;
 		}
 
 		if (bodyController->IsOnGround() == false)

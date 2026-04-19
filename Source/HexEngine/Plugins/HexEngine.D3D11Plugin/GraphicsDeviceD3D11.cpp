@@ -332,6 +332,8 @@ void GraphicsDeviceD3D11::Destroy()
 	//SAFE_RELEASE(_rasterStateCullFront);
 	//SAFE_RELEASE(_rasterStateCullNone);
 	SAFE_RELEASE(_subtractivetBlendState);
+	SAFE_RELEASE(_additivePreserveAlphaBlendState);
+	SAFE_RELEASE(_transparencyPreserveAlphaBlendState);
 	//SAFE_RELEASE(_depthStencilView);
 
 	/*for (int i = 0; i < _countof(_shadowMap); ++i)
@@ -598,6 +600,28 @@ bool GraphicsDeviceD3D11::CreateInternal()
 	transparentDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_SUBTRACT;
 
 	_device->CreateBlendState(&transparentDesc, &_subtractivetBlendState);
+
+	CD3D11_BLEND_DESC additivePreserveAlphaDesc(def);
+	additivePreserveAlphaDesc.RenderTarget[0].BlendEnable = true;
+	additivePreserveAlphaDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+	additivePreserveAlphaDesc.RenderTarget[0].DestBlend = D3D11_BLEND_ONE;
+	additivePreserveAlphaDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+	// Keep destination alpha intact while additively accumulating RGB.
+	additivePreserveAlphaDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+	additivePreserveAlphaDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+	additivePreserveAlphaDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	_device->CreateBlendState(&additivePreserveAlphaDesc, &_additivePreserveAlphaBlendState);
+
+	CD3D11_BLEND_DESC transparencyPreserveAlphaDesc(def);
+	transparencyPreserveAlphaDesc.RenderTarget[0].BlendEnable = true;
+	transparencyPreserveAlphaDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+	transparencyPreserveAlphaDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+	transparencyPreserveAlphaDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+	// Keep destination alpha intact. Post-process passes use scene alpha for other data.
+	transparencyPreserveAlphaDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+	transparencyPreserveAlphaDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+	transparencyPreserveAlphaDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	_device->CreateBlendState(&transparencyPreserveAlphaDesc, &_transparencyPreserveAlphaBlendState);
 
 	D3D11_SAMPLER_DESC sampDesc;
 	ZeroMemory(&sampDesc, sizeof(sampDesc));
@@ -1975,7 +1999,7 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 		break;
 
 	case HexEngine::BlendState::Additive:
-		_deviceContext->OMSetBlendState(_states->Additive(), blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(_additivePreserveAlphaBlendState != nullptr ? _additivePreserveAlphaBlendState : _states->Additive(), blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Subtractive:
@@ -1984,6 +2008,10 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 
 	case HexEngine::BlendState::Transparency:
 		_deviceContext->OMSetBlendState(_states->NonPremultiplied(), blend, 0xFFFFFFFF);
+		break;
+
+	case HexEngine::BlendState::TransparencyPreserveAlpha:
+		_deviceContext->OMSetBlendState(_transparencyPreserveAlphaBlendState != nullptr ? _transparencyPreserveAlphaBlendState : _states->NonPremultiplied(), blend, 0xFFFFFFFF);
 		break;
 	}
 

@@ -221,9 +221,9 @@ namespace HexEngine
 										uint32_t i1 = indices[i * 3 + 1];
 										uint32_t i2 = indices[i * 3 + 2];
 
-										math::Vector4 v0 = vertices[i0]._position; //+entityPosition;
-										math::Vector4 v1 = vertices[i1]._position; //+entityPosition;
-										math::Vector4 v2 = vertices[i2]._position; //+entityPosition;
+										math::Vector4 v0 = math::Vector4(vertices[i0]._position.x, vertices[i0]._position.y, vertices[i0]._position.z, 1.0f);
+										math::Vector4 v1 = math::Vector4(vertices[i1]._position.x, vertices[i1]._position.y, vertices[i1]._position.z, 1.0f);
+										math::Vector4 v2 = math::Vector4(vertices[i2]._position.x, vertices[i2]._position.y, vertices[i2]._position.z, 1.0f);
 
 										v0 = math::Vector4::Transform(v0, worldMatrix);
 										v1 = math::Vector4::Transform(v1, worldMatrix);

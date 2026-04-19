@@ -259,7 +259,7 @@ namespace HexEngine
 				indices.push_back((int)i + indexOffset);
 			}
 
-			indexOffset += verts.size();
+			indexOffset += (uint32_t)verts.size();
 		}
 	}
 

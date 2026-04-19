@@ -104,7 +104,7 @@ namespace HexEngine
 
 				float duration = (profile._end - profile._start) * 1000.0f;				
 
-				//if (duration > FLT_EPSILON)
+				if (duration > FLT_EPSILON)
 				{
 					prof->_numProfiles++;
 

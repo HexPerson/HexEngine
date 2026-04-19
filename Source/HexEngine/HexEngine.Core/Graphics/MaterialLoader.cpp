@@ -112,7 +112,7 @@ namespace HexEngine
 		for (auto i = 0; i < MaterialTexture::Count; ++i)
 		{
 			auto texName = Material::GetMaterialTextureName((MaterialTexture)i);
-			auto texNameA = std::string(texName.begin(), texName.end());
+			auto texNameA = ws2s(texName);
 
 			if (auto tex = textures.find(texNameA); tex != textures.end())
 				material->SetTexture((MaterialTexture)i, ITexture2D::Create(tex.value()));
@@ -132,6 +132,10 @@ namespace HexEngine
 			file->Deserialize(properties, "hasTransparency", props.hasTransparency);
 			file->Deserialize(properties, "isWater", props.isWater);
 			file->Deserialize(properties, "specularProbability", props.specularProbability);
+
+			bool emissiveAffectsGI = false;
+			file->Deserialize(properties, "emissiveAffectsGI", emissiveAffectsGI);
+			material->SetEmissiveAffectsGI(emissiveAffectsGI);
 		}
 
 		// Load properties
@@ -360,7 +364,7 @@ namespace HexEngine
 				if (tex)
 				{
 					auto texName = Material::GetMaterialTextureName((MaterialTexture)i);
-					auto texNameA = std::string(texName.begin(), texName.end());
+					auto texNameA = ws2s(texName);
 
 					textures[texNameA] = tex->GetFileSystemPath();
 				}
@@ -375,6 +379,7 @@ namespace HexEngine
 			file.Serialize(properties, "emissiveColour", material->_properties.emissiveColour);
 			file.Serialize(properties, "hasTransparency", material->_properties.hasTransparency);
 			file.Serialize(properties, "isWater", material->_properties.isWater);
+			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());
 		}
 
 		auto& renderer = data["renderer"];

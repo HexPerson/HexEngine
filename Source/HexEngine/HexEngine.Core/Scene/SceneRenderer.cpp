@@ -408,7 +408,18 @@ namespace HexEngine
 			return;
 		}
 
-		_waterRT = g_pEnv->_graphicsDevice->CreateTexture(_beautyRT);
+		_waterRT = g_pEnv->_graphicsDevice->CreateTexture2D(
+			width,
+			height,
+			DXGI_FORMAT_R16G16B16A16_FLOAT,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			0, MsaaLevel, 0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 		_waterRT->SetDebugName("_waterRT");
 
 		_particleRT = g_pEnv->_graphicsDevice->CreateTexture2D(
@@ -1849,7 +1860,7 @@ namespace HexEngine
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
-				SetupPerShadowCasterBuffer(light, false, 0, 0, 2, 0.0f);
+				SetupPerShadowCasterBuffer(light, false, 0, 0, 32, 0.0f);
 
 				
 
@@ -2086,25 +2097,14 @@ namespace HexEngine
 	{
 		PROFILE();
 
-		GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin Water");
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin Transparent");
 
-		_waterRT->ClearRenderTargetView(math::Color(0, 0, 0, 0));
-		g_pEnv->_graphicsDevice->SetRenderTarget(_waterRT, _gbuffer.GetDepthBuffer());
+		g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
 
 		_currentScene->RenderEntities(
 			_currentCamera->GetPVS(),
-			LAYERMASK(Layer::StaticGeometry),
+			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass),
 			MeshRenderFlags::MeshRenderTransparency);
-
-		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
-		{
-			guiRenderer->StartFrame();
-
-			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
-			guiRenderer->FullScreenTexturedQuad(_waterRT, _waterBlitEffect.get());
-
-			guiRenderer->EndFrame();
-		}
 
 		GFX_PERF_END();
 

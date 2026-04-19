@@ -16,16 +16,6 @@
 #include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "../Entity/Component/DayNightCycleComponent.hpp"
-#include "../Entity/Component/TrafficLaneComponent.hpp"
-#include "../Entity/Component/TrafficManagerComponent.hpp"
-#include "../Entity/Component/TrafficSpawnerComponent.hpp"
-#include "../Entity/Component/TrafficVehicleComponent.hpp"
-#include "../Entity/Component/RoutineAgentComponent.hpp"
-#include "../Entity/Component/PlaceOfWorkComponent.hpp"
-#include "../Entity/Component/ResidenceComponent.hpp"
-#include "../Entity/Component/ServiceStationComponent.hpp"
-#include "../Entity/Component/CityRoutineSystemComponent.hpp"
-#include "../Entity/Component/CityEmergencyDispatcherSystemComponent.hpp"
 #include "../HexEngine.hpp"
 
 
@@ -69,16 +59,6 @@ namespace HexEngine
 		REG_CLASS(SkeletalAnimationComponent);
 		REG_CLASS(InstancedStaticMeshComponent);
 		REG_CLASS(DayNightCycleComponent);
-		REG_CLASS(TrafficLaneComponent);
-		REG_CLASS(TrafficSpawnerComponent);
-		REG_CLASS(TrafficManagerComponent);
-		REG_CLASS(TrafficVehicleComponent);
-		REG_CLASS(RoutineAgentComponent);
-		REG_CLASS(PlaceOfWorkComponent);
-		REG_CLASS(ResidenceComponent);
-		REG_CLASS(ServiceStationComponent);
-		REG_CLASS(CityRoutineSystemComponent);
-		REG_CLASS(CityEmergencyDispatcherSystemComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

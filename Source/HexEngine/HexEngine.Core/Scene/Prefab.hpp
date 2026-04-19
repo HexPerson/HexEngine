@@ -6,6 +6,7 @@
 namespace HexEngine
 {
 	class Entity;
+	class Scene;
 
 	class HEX_API Prefab : public IResource
 	{
@@ -21,6 +22,7 @@ namespace HexEngine
 		const std::vector<Entity*>& GetLoadedEntities() const;
 
 	private:
+		std::shared_ptr<Scene> _scene;
 		std::vector<Entity*> _entities;
 	};
 }

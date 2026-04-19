@@ -47,7 +47,8 @@ namespace HexEngine
 				_shadowMapShader == other._shadowMapShader &&
 				_blendState == other._blendState &&
 				_depthState == other._depthState &&
-				_cullMode == other._cullMode
+				_cullMode == other._cullMode &&
+				_emissiveAffectsGI == other._emissiveAffectsGI
 				);
 		}
 
@@ -94,6 +95,8 @@ namespace HexEngine
 
 		void SetVolumeTexture(ITexture3D* texture);
 		ITexture3D* GetVolumeTexture() const { return _volumeTexture; }
+		void SetEmissiveAffectsGI(bool value);
+		bool GetEmissiveAffectsGI() const;
 
 		void				SetBlendState(BlendState state);
 		void				SetCullMode(CullingMode mode);
@@ -141,6 +144,7 @@ namespace HexEngine
 		MaterialFormat _format = MaterialFormat::None;
 
 		std::map<std::string, std::string> _soundTags;
+		bool _emissiveAffectsGI = false;
 
 		std::recursive_mutex _lock;
 		uint32_t _objectFlags = 0;

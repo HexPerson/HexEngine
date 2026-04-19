@@ -5,6 +5,50 @@
 #include <HexEngine.Core/HexEngine.hpp>
 #include <extensions\PxExtensionsAPI.h>
 
+namespace
+{
+	math::Quaternion BuildEntityWorldRotation(HexEngine::Entity* entity)
+	{
+		if (entity == nullptr)
+			return math::Quaternion::Identity;
+
+		auto* transform = entity->GetComponent<HexEngine::Transform>();
+		if (transform == nullptr)
+			return math::Quaternion::Identity;
+
+		math::Quaternion worldRotation = transform->GetRotation();
+		for (auto* parent = entity->GetParent(); parent != nullptr; parent = parent->GetParent())
+		{
+			worldRotation = worldRotation * parent->GetRotation();
+			worldRotation.Normalize();
+		}
+
+		return worldRotation;
+	}
+
+	physx::PxTransform BuildWorldPhysXPose(HexEngine::Transform* transform, const math::Vector3& offset = math::Vector3::Zero)
+	{
+		if (transform == nullptr || transform->GetEntity() == nullptr)
+			return physx::PxTransform(physx::PxIdentity);
+
+		auto* entity = transform->GetEntity();
+		const auto worldTM = entity->GetWorldTM();
+		const auto worldPosition = worldTM.Translation();
+		math::Quaternion worldRotation = BuildEntityWorldRotation(entity);
+
+		math::Vector3 worldOffset = offset;
+		if (offset.LengthSquared() > 0.0f)
+		{
+			worldOffset = math::Vector3::Transform(offset, worldRotation);
+		}
+
+		const math::Vector3 finalPosition = worldPosition + worldOffset;
+		return physx::PxTransform(
+			physx::PxVec3(finalPosition.x, finalPosition.y, finalPosition.z),
+			physx::PxQuat(worldRotation.x, worldRotation.y, worldRotation.z, worldRotation.w));
+	}
+}
+
 physx::PxFilterFlags SampleSubmarineFilterShader(
 	physx::PxFilterObjectAttributes attributes0, physx::PxFilterData filterData0,
 	physx::PxFilterObjectAttributes attributes1, physx::PxFilterData filterData1,
@@ -173,36 +217,17 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CreateRigidBody(HexEngine::Transform*
 	_scene->lockWrite();
 	//_scene->lockRead();
 
-	const auto& worldTM = transform->GetEntity()->GetWorldTM();
-
-	auto position = transform->GetPosition();
-	auto rotation = transform->GetRotation();
-
-	auto parent = transform->GetEntity()->GetParent();
-
-	while (parent)
-	{
-		position += parent->GetComponent<HexEngine::Transform>()->GetPosition();
-
-		rotation.RotateTowards(parent->GetComponent<HexEngine::Transform>()->GetRotation(), dx::g_XMTwoPi.f[0]);
-		rotation.Normalize();
-
-		parent = parent->GetParent();
-	}
-
-	//math::Quaternion::CreateFromRotationMatrix()
-
-	physx::PxTransform localTm(*(physx::PxVec3*)&position.x, *(physx::PxQuat*)&rotation.x);
+	const physx::PxTransform worldTm = BuildWorldPhysXPose(transform, offset);
 
 	physx::PxRigidActor* actor = nullptr;
 
 	if (type == HexEngine::IRigidBody::BodyType::Static)
 	{
-		actor = _physics->createRigidStatic(localTm);
+		actor = _physics->createRigidStatic(worldTm);
 	}
 	else
 	{
-		actor = _physics->createRigidDynamic(localTm);
+		actor = _physics->createRigidDynamic(worldTm);
 
 		physx::PxRigidDynamic* dynamic = (physx::PxRigidDynamic*)actor;
 
@@ -237,21 +262,18 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 	_scene->lockWrite();
 	//_scene->lockRead();
 
-	auto position = transform->GetPosition();
-	auto rotation = transform->GetRotation();
-
-	physx::PxTransform localTm(*(physx::PxVec3*)&position.x, *(physx::PxQuat*)&rotation.x);
+	const physx::PxTransform worldTm = BuildWorldPhysXPose(transform);
 
 
 	physx::PxRigidActor* actor = nullptr;
 
 	if (type == HexEngine::IRigidBody::BodyType::Static)
 	{
-		actor = _physics->createRigidStatic(localTm);
+		actor = _physics->createRigidStatic(worldTm);
 	}
 	else
 	{
-		actor = _physics->createRigidDynamic(localTm);
+		actor = _physics->createRigidDynamic(worldTm);
 
 		physx::PxRigidDynamic* dynamic = (physx::PxRigidDynamic*)actor;
 
@@ -402,13 +424,29 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 					if (bodyComponent)
 						bodyComponent->EnableForcePoseUpdates(false);
 
-					transform->SetPosition(body->GetPhysicsPosition());
+					const math::Vector3 worldPosition = body->GetPhysicsPosition();
+					math::Quaternion worldRotation = body->GetPhysicsRotation();
+
+					math::Vector3 localPosition = worldPosition;
+					math::Quaternion localRotation = worldRotation;
+
+					if (auto* parent = transform->GetEntity()->GetParent(); parent != nullptr)
+					{
+						localPosition = math::Vector3::Transform(worldPosition, parent->GetWorldTMInvert());
+
+						math::Quaternion parentWorldRotation = BuildEntityWorldRotation(parent);
+						parentWorldRotation.Conjugate();
+						localRotation = worldRotation * parentWorldRotation;
+						localRotation.Normalize();
+					}
+
+					transform->SetPosition(localPosition);
 
 					auto cct = dynamic_cast<CharacterController*>(body);
 
 					if (cct == nullptr)
 					{
-						transform->SetRotation(body->GetPhysicsRotation());
+						transform->SetRotation(localRotation);
 					}
 
 					if (bodyComponent)

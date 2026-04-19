@@ -26,8 +26,14 @@ namespace HexEditor
 		{
 			SetEntityParent(sourceEntity, targetEntity);
 		};
-		_onEntityDuplicated = [](HexEngine::EntityList*, HexEngine::Entity*, HexEngine::Entity* duplicateEntity)
+		_onEntityDuplicated = [](HexEngine::EntityList*, HexEngine::Entity* sourceEntity, HexEngine::Entity* duplicateEntity)
 		{
+			if (g_pUIManager != nullptr)
+			{
+				HexEngine::EditorEntityDuplicatedMessage message(sourceEntity, duplicateEntity);
+				g_pUIManager->BroadcastEditorToolMessage(message);
+			}
+
 			if (g_pUIManager != nullptr)
 			{
 				g_pUIManager->RecordEntityCreated(duplicateEntity);

@@ -240,12 +240,8 @@ namespace HexEngine
 		line.points[1] = to;
 		line.colour = colour;
 
-		_lines.push_back(line);
-
-		
-	}
-
-	
+		_lines.push_back(line);		
+	}	
 
 	void DebugRenderer::DrawOBB(const dx::BoundingOrientedBox& bbox, const math::Color& colour)
 	{
@@ -254,12 +250,10 @@ namespace HexEngine
 		math::Vector3 corners[8];
 		bbox.GetCorners(corners);
 
-		const math::Color col(0, 1, 0, 0.5f);
-
 		DebugLines line;
 		line.points[0] = corners[2];
 		line.points[1] = corners[6];
-		line.colour = col;
+		line.colour = colour;
 		_lines.push_back(line);
 
 		line.points[0] = corners[6];
@@ -318,30 +312,6 @@ namespace HexEngine
 		line.points[1] = corners[0];
 		line.colour = colour;
 		_lines.push_back(line);
-
-		/*auto graphicsDevice = g_pEnv->_graphicsDevice;
-
-		auto perObjectBuffer = graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerObjectBuffer);
-
-		if (perObjectBuffer)
-		{
-			PerObjectBuffer bufferData;
-			bufferData._worldMatrix = math::Matrix::Identity.Transpose();
-			bufferData._material.diffuseColour = math::Vector4(1.0f, 0.0f, 0.5f, 0.4f);;
-
-			perObjectBuffer->Write(&bufferData, sizeof(bufferData));
-		}
-
-		_lineVBuffer->SetVertexData((uint8_t*)vtx.data(), (uint32_t)vtx.size() * sizeof(DebugVertex));
-
-		graphicsDevice->SetVertexBuffer(0, _lineVBuffer);
-		graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
-		graphicsDevice->SetPixelShader(_debugShader->GetShaderStage(ShaderStage::PixelShader));
-		graphicsDevice->SetVertexShader(_debugShader->GetShaderStage(ShaderStage::VertexShader));
-		graphicsDevice->SetInputLayout(_inputLayout);
-		graphicsDevice->Draw((uint32_t)vtx.size());*/
-
-		//DrawLine()
 	}
 
 	void DebugRenderer::FlushBuffers()

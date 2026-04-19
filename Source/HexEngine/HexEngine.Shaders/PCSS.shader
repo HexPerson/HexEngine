@@ -1,92 +1,125 @@
+"GlobalIncludes"
+{
+	Global
+}
 "Global"
 {
 #ifndef PCSS_SHADER
 #define PCSS_SHADER
 
-#define BLOCKER_SEARCH_NUM_SAMPLES 16
-#define PCF_NUM_SAMPLES 16
-#define NEAR_PLANE 0.01
-#define LIGHT_WORLD_SIZE 2.2
-#define LIGHT_FRUSTUM_WIDTH 4096//3.75
-#define LIGHT_SIZE_UV (LIGHT_WORLD_SIZE / LIGHT_FRUSTUM_WIDTH) 
+	static const int PCSS_MAX_SAMPLES = 64;
+	static const float PCSS_PI2 = 6.28318530718f;
+	static const float PCSS_EPSILON = 1e-5f;
 
-	static const float2 poissonDisk[16] = {
-		 float2(-0.94201624, -0.39906216),
-		 float2(0.94558609, -0.76890725),
-		 float2(-0.094184101, -0.92938870),
-		 float2(0.34495938, 0.29387760),
-		 float2(-0.91588581, 0.45771432),
-		 float2(-0.81544232, -0.87912464),
-		 float2(-0.38277543, 0.27676845),
-		 float2(0.97484398, 0.75648379),
-		 float2(0.44323325, -0.97511554),
-		 float2(0.53742981, -0.47373420),
-		 float2(-0.26496911, -0.41893023),
-		 float2(0.79197514, 0.19090188),
-		 float2(-0.24188840, 0.99706507),
-		 float2(-0.81409955, 0.91437590),
-		 float2(0.19984126, 0.78641367),
-		 float2(0.14383161, -0.14100790)
-	};
-
-	float PenumbraSize(float zReceiver, float zBlocker) //Parallel plane estimation
+	float2 PCSS_VogelDiskSample(int sampleIndex, int samplesCount, float phi)
 	{
-		return (zReceiver - zBlocker) / zBlocker;
+		float goldenAngle = 2.4f;
+		float radius = sqrt((float)sampleIndex + 0.5f) / sqrt((float)samplesCount);
+		float theta = (float)sampleIndex * goldenAngle + phi;
+
+		float s, c;
+		sincos(theta, s, c);
+		return float2(c, s) * radius;
 	}
-	void FindBlocker(
-		Texture2D shadowMapTex, 
-		SamplerState pointSampler,
-		out float avgBlockerDepth,
-		out float numBlockers,
-		float2 uv, float zReceiver)
-	{
-		//This uses similar triangles to compute what
-		//area of the shadow map we should search
-		float searchWidth = LIGHT_SIZE_UV * (zReceiver - NEAR_PLANE) / zReceiver;
-		float blockerSum = 0;
-		numBlockers = 0;
 
-		for (int i = 0; i < BLOCKER_SEARCH_NUM_SAMPLES; ++i)
+	float PCSS_InterleavedGradientNoise(float2 positionScreen)
+	{
+		float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
+		return frac(magic.z * frac(dot(positionScreen, magic.xy)));
+	}
+
+	float PCSS_ComputeSearchRadius(float zReceiver, float texelSize)
+	{
+		float baseRadius = max(g_shadowConfig.penumbraFilterMaxSize, texelSize * 2.0f);
+		float depthScale = saturate(zReceiver * 1.2f);
+		return max(texelSize * 2.0f, baseRadius * (0.35f + 0.65f * depthScale));
+	}
+
+	void PCSS_FindBlockers(
+		Texture2D shadowMapTex,
+		SamplerState pointSampler,
+		float2 uv,
+		float zReceiver,
+		float rotation,
+		int sampleCount,
+		float texelSize,
+		out float avgBlockerDepth,
+		out float blockerCount)
+	{
+		float searchRadius = PCSS_ComputeSearchRadius(zReceiver, texelSize);
+		float blockerDepthBias = max(g_shadowConfig.biasMultiplier * 2.0f, PCSS_EPSILON);
+		float blockerSum = 0.0f;
+		blockerCount = 0.0f;
+
+		[loop]
+		for (int i = 0; i < sampleCount; ++i)
 		{
-			float shadowMapDepth = shadowMapTex.SampleLevel(
-				pointSampler,
-				uv + poissonDisk[i] * searchWidth,
-				0);
-			if (shadowMapDepth < zReceiver) {
-				blockerSum += shadowMapDepth;
-				numBlockers++;
+			float2 offset = PCSS_VogelDiskSample(i, sampleCount, rotation) * searchRadius;
+			float shadowDepth = shadowMapTex.SampleLevel(pointSampler, uv + offset, 0).r;
+
+			if (shadowDepth < (zReceiver - blockerDepthBias))
+			{
+				blockerSum += shadowDepth;
+				blockerCount += 1.0f;
 			}
 		}
-		avgBlockerDepth = blockerSum / numBlockers;
+
+		avgBlockerDepth = (blockerCount > 0.0f) ? blockerSum / blockerCount : 0.0f;
 	}
-	float PCF_Filter(Texture2D shadowMapTex, SamplerComparisonState cmpSampler, float2 uv, float zReceiver, float filterRadiusUV)
+
+	float PCSS_Filter(
+		Texture2D shadowMapTex,
+		SamplerComparisonState cmpSampler,
+		float2 uv,
+		float zReceiver,
+		float rotation,
+		int sampleCount,
+		float filterRadiusUV)
 	{
-		float sum = 0.0f;
-		for (int i = 0; i < PCF_NUM_SAMPLES; ++i)
+		float visibility = 0.0f;
+
+		[loop]
+		for (int i = 0; i < sampleCount; ++i)
 		{
-			float2 offset = poissonDisk[i] * filterRadiusUV;
-			sum += shadowMapTex.SampleCmpLevelZero(cmpSampler, uv + offset, zReceiver);
+			float2 offset = PCSS_VogelDiskSample(i, sampleCount, rotation) * filterRadiusUV;
+			visibility += shadowMapTex.SampleCmpLevelZero(cmpSampler, uv + offset, zReceiver).r;
 		}
-		return sum / PCF_NUM_SAMPLES;
+
+		return visibility / (float)sampleCount;
 	}
-	float PCSS(Texture2D shadowMapTex, SamplerComparisonState cmpSampler, SamplerState pointSampler, float4 coords)
+
+	float PCSS(Texture2D shadowMapTex, SamplerComparisonState cmpSampler, SamplerState pointSampler, float2 uv, float zReceiver, float2 screenPos, int requestedSamples)
 	{
-		float2 uv = coords.xy;
-		float zReceiver = coords.z; // Assumed to be eye-space z in this code
+		screenPos = screenPos;
+		int sampleCount = max(1, min(requestedSamples, PCSS_MAX_SAMPLES));
+		zReceiver = saturate(zReceiver);
+		float texelSize = 1.0f / max(g_shadowConfig.shadowMapSize, 1.0f);
+		float rotation = 0.73f;
 
-		// STEP 1: blocker search
-		float avgBlockerDepth = 0;
-		float numBlockers = 0;
-		FindBlocker(shadowMapTex, pointSampler, avgBlockerDepth, numBlockers, uv, zReceiver);
-		if (numBlockers < 1)
-			//There are no occluders so early out (this saves filtering)
-			return 1.0f;
-		// STEP 2: penumbra size
-		float penumbraRatio = PenumbraSize(zReceiver, avgBlockerDepth);
-		float filterRadiusUV = penumbraRatio * LIGHT_SIZE_UV * NEAR_PLANE / coords.z;
+		int blockerSampleCount = min(PCSS_MAX_SAMPLES, max(sampleCount * 2, 16));
 
-		// STEP 3: filtering
-		return PCF_Filter(shadowMapTex, cmpSampler, uv, zReceiver, filterRadiusUV);
+		float avgBlockerDepth;
+		float blockerCount;
+		PCSS_FindBlockers(shadowMapTex, pointSampler, uv, zReceiver, rotation, blockerSampleCount, texelSize, avgBlockerDepth, blockerCount);
+
+		if (blockerCount < 1.0f)
+		{
+			// Avoid bright "salt" speckles by falling back to hard compare instead of fully lit.
+			return shadowMapTex.SampleCmpLevelZero(cmpSampler, uv, zReceiver).r;
+		}
+
+		float contactDelta = max(zReceiver - avgBlockerDepth, 0.0f);
+		float penumbraSignal = saturate(contactDelta / max(zReceiver, PCSS_EPSILON));
+		penumbraSignal *= penumbraSignal;
+		penumbraSignal = saturate(penumbraSignal * 0.85f);
+
+		float minFilterRadius = texelSize;
+		float maxFilterRadius = max(g_shadowConfig.shadowFilterMaxSize, minFilterRadius);
+		float qualityScale = lerp(0.45f, 1.0f, saturate((float)sampleCount / 16.0f));
+		maxFilterRadius = max(minFilterRadius, maxFilterRadius * qualityScale);
+		float filterRadiusUV = lerp(minFilterRadius, maxFilterRadius, penumbraSignal);
+		int filterSampleCount = min(PCSS_MAX_SAMPLES, max(sampleCount, 12));
+		return PCSS_Filter(shadowMapTex, cmpSampler, uv, zReceiver, rotation, filterSampleCount, filterRadiusUV);
 	}
 
 #endif

@@ -656,8 +656,8 @@ namespace HexEngine
 	{
 		if (_hasCustomVP)
 		{
-			width = _vp.width;
-			height = _vp.height;
+			width = (int32_t)_vp.width;
+			height = (int32_t)_vp.height;
 		}
 		auto projectionMatrix = camera->GetProjectionMatrix();
 		auto viewMatrix = camera->GetViewMatrix();

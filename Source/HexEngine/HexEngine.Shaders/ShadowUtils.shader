@@ -23,99 +23,18 @@
 		return float2(u * 1.0f / g_shadowConfig.shadowMapSize, v * 1.0f / g_shadowConfig.shadowMapSize);
 	}
 
-	float2 VogelDiskSample(int sampleIndex, int samplesCount, float phi)
-	{
-		float GoldenAngle = 2.4f;
-
-		float r = sqrt((float)sampleIndex + 0.5f) / sqrt((float)samplesCount);
-		float theta = (float)sampleIndex * GoldenAngle + phi;
-
-		float sine, cosine;
-		sincos(theta, sine, cosine);
-
-		return float2(r * cosine, r * sine);
-	}
-
 	float InterleavedGradientNoise(float2 position_screen)
 	{
 		float3 magic = float3(0.06711056f, 0.00583715f, 52.9829189f);
 		return frac(magic.z * frac(dot(position_screen, magic.xy)));
 	}
 
-	/*float AvgBlockersDepthToPenumbra(float lightSize, float z_shadowMapView, float avgBlockersDepth)
-	{
-		float penumbra = lightSize * (z_shadowMapView - avgBlockersDepth) / avgBlockersDepth;
-	}*/
-
-	float AvgBlockersDepthToPenumbra(float z_shadowMapView, float avgBlockersDepth)
-	{
-		float penumbra = (z_shadowMapView - avgBlockersDepth) / avgBlockersDepth;
-		penumbra *= penumbra;
-		return saturate(180.0f * penumbra);
-	}
-
-	float Penumbra(float gradientNoise, float2 shadowMapUV, float z_shadowMapView, int samplesCount, Texture2D depthMap, SamplerState pointSampler)
-	{
-		float avgBlockersDepth = 0.0f;
-		float blockersCount = 0.0f;
-		float penumbraFilterMaxSize = g_shadowConfig.penumbraFilterMaxSize;// 0.5f;
-
-		
-		for (int i = 0; i < samplesCount; i++)
-		{
-			float2 sampleUV = VogelDiskSample(i, samplesCount, gradientNoise);
-			sampleUV = shadowMapUV + penumbraFilterMaxSize * sampleUV;
-
-			float sampleDepth = depthMap.SampleLevel(pointSampler, sampleUV, 0).x;
-
-			if (sampleDepth < z_shadowMapView)
-			{
-				avgBlockersDepth += sampleDepth;
-				blockersCount += 1.0f;
-			}
-		}
-
-		if (blockersCount > 0.0f)
-		{
-			avgBlockersDepth /= blockersCount;
-			return AvgBlockersDepthToPenumbra(z_shadowMapView, avgBlockersDepth);
-		}
-		else
-		{
-			return 0.0f;
-		}
-	}
-
 	float SampleDepth(SamplerComparisonState cmpSampler, SamplerState pointSampler, Texture2D depthMap, float lightDepthValue, float2 projectTexCoord, float2 screenPos, int numSamples)
 	{
-		// PCSS: pretty crapp & shitty shadows (imo)
-		//return PCSS(depthMap, cmpSampler, pointSampler, float4(projectTexCoord.x, projectTexCoord.y, lightDepthValue, 0.0f));
-
-		float sum = 0;
-		float x, y;
-		int num = 0;
-
-#if 0
+#if 1
 		if (numSamples > 0)
 		{
-			float gradientNoise = InterleavedGradientNoise(screenPos);
-			float penumbra = Penumbra(gradientNoise, projectTexCoord, lightDepthValue, numSamples, depthMap, pointSampler);
-			float shadowFilterMaxSize = g_shadowConfig.shadowFilterMaxSize;
-
-
-			float shadow = 0.0f;
-
-			[loop]
-			for (int i = 0; i < numSamples; i++)
-			{
-				float2 sampleUV = VogelDiskSample(i, numSamples, gradientNoise * 2 * 3.14159265);
-				sampleUV = projectTexCoord + sampleUV * penumbra * shadowFilterMaxSize;
-
-				shadow += depthMap.SampleCmpLevelZero(cmpSampler, sampleUV/*, projectTexCoord.xy + TexOffset(4.0f * sampleUV.x, 4.0f * sampleUV.y)*/, lightDepthValue).x;
-			}
-			shadow /= (float)numSamples;
-
-			return shadow;
+			return PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples);
 		}
 		else
 		{
@@ -124,6 +43,9 @@
 #else
 		if (numSamples > 0)
 		{
+			float sum = 0;
+			float x, y;
+			int num = 0;
 			const float pcfFactor = (float)numSamples;
 			for (y = -pcfFactor; y <= pcfFactor; y += 1.0)
 			{

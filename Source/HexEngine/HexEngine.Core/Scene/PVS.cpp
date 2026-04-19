@@ -601,8 +601,10 @@ namespace HexEngine
 		switch (params.shapeType)
 		{
 		case PVSParams::ShapeType::Frustum:
-		case PVSParams::ShapeType::Frustum2:
 			return _optimisedParams.shape.frustum.sm.Intersects(bsphere);
+
+		case PVSParams::ShapeType::Frustum2:
+			return _optimisedParams.shape.frustum.lg.Intersects(bsphere);
 
 		case PVSParams::ShapeType::Sphere:
 			return _optimisedParams.shape.sphere.Intersects(bsphere);

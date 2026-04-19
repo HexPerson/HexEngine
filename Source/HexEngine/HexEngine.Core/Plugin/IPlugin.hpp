@@ -3,10 +3,16 @@
 
 #include "../Required.hpp"
 #include "../Environment/IEnvironment.hpp"
+#include "../Entity/Messaging/MessageListener.hpp"
+#include "../Entity/Messaging/Message.hpp"
 
 namespace HexEngine
 {
-
+	class MenuBar;
+	class Entity;
+	class ContextMenu;
+	class FileSystem;
+	struct ContextRoot;
 
 #define DECLARE_PLUGIN_INTERFACE(name, version) static inline const char* InterfaceName = #name#version;
 
@@ -16,6 +22,13 @@ namespace HexEngine
 		virtual bool Create() = 0;
 
 		virtual void Destroy() = 0;
+	};
+
+	class IEditorToolPlugin : public MessageListener
+	{
+	public:
+		virtual void OnCreateUI(MenuBar* menuBar) = 0;
+		virtual void OnAssetExplorerCreateNew(ContextMenu* menu, ContextRoot* rootMenu, const fs::path& baseDir, FileSystem* fileSystem, std::function<void()> onAssetsCreated) = 0;
 	};
 
 	class IPlugin
@@ -49,6 +62,8 @@ namespace HexEngine
 		virtual IPluginInterface* CreateInterface(const std::string& interfaceName) = 0;
 
 		virtual void GetDependencies(std::vector<std::string>& dependencies) const = 0;
+
+		virtual IEditorToolPlugin* GetEditorToolPlugin() { return nullptr; }
 	};
 	#define CREATE_PLUGIN(pointer, cls)	extern "C" __declspec(dllexport) HexEngine::IPlugin* CreatePlugin()\
 	{\

@@ -51,7 +51,7 @@
 
 		float4 pixelColour = g_backBuffer.SampleLevel(g_pointSampler, screenPos, 0);
 
-		float3 filteredValue = Prefilter(pixelColour);
+		float3 filteredValue = Prefilter(pixelColour.rgb);
 
 		//float maxVal = max(max(filteredValue.r, filteredValue.g), filteredValue.b);
 

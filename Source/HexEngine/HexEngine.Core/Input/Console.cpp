@@ -43,7 +43,7 @@ namespace HexEngine
 
 		if (_canvas.BeginDraw(renderer, width, height /*<< 1*/))
 		{
-			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 255)));
+			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 180)));
 			renderer->Line(0, height, width, height, math::Color(HEX_RGBA_TO_FLOAT4(5, 5, 5, 255)));
 
 			std::wstring input = L"] ";

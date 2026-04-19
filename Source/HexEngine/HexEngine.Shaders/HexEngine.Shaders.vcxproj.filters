@@ -27,7 +27,6 @@
     <None Include="Utils.shader" />
     <None Include="WaterMask.shader" />
     <None Include="HexEngine.Shaders.targets" />
-    <None Include="PCSS.shader" />
     <None Include="PBRutils.shader" />
   </ItemGroup>
   <ItemGroup>
@@ -83,5 +82,6 @@
     <HexEngineShader Include="DefaultPixel.shader" />
     <HexEngineShader Include="WaterBlit.shader" />
     <HexEngineShader Include="DiffuseGIShiftVoxel.shader" />
+    <HexEngineShader Include="PCSS.shader" />
   </ItemGroup>
 </Project>

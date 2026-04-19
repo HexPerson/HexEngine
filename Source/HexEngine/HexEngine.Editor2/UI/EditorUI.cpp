@@ -46,6 +46,7 @@ namespace HexEditor
 		CreateDocks(width, height);
 		CreateEntityList();
 		CreateMenuBar();
+		NotifyEditorToolPluginsCreateUI();
 		_prefabController.SetDependencies(this, &_integrator, _rightDock, _entityList, _lowerDock);
 
 		// Always start with the project manager
@@ -343,6 +344,7 @@ namespace HexEditor
 				actionGenerateHlod->name = L"Generate HLOD (Scaffold)";
 				actionGenerateHlod->action = std::bind(&EditorUI::OnGenerateHLOD, this);
 				_mainMenu->AddSubItem(scene, actionGenerateHlod);
+
 			}
 		}
 
@@ -445,6 +447,42 @@ namespace HexEditor
 		HexEngine::Dialog* dlg = new HexEngine::Dialog(HexEngine::g_pEnv->GetUIManager().GetRootElement(), HexEngine::Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2), HexEngine::Point(dlgWidth, dlgHeight), L"Vegetation Paint Tool");
 
 		//LineEdit* meshInput = 
+	}
+
+	void EditorUI::NotifyEditorToolPluginsCreateUI()
+	{
+		if (_mainMenu == nullptr || HexEngine::g_pEnv == nullptr || HexEngine::g_pEnv->_pluginSystem == nullptr)
+			return;
+
+		const auto& plugins = HexEngine::g_pEnv->_pluginSystem->GetAllPlugins();
+		for (const auto& plugin : plugins)
+		{
+			if (plugin.iface == nullptr)
+				continue;
+
+			if (auto* editorTool = plugin.iface->GetEditorToolPlugin(); editorTool != nullptr)
+			{
+				editorTool->OnCreateUI(_mainMenu);
+			}
+		}
+	}
+
+	void EditorUI::BroadcastEditorToolMessage(HexEngine::Message& message)
+	{
+		if (HexEngine::g_pEnv == nullptr || HexEngine::g_pEnv->_pluginSystem == nullptr)
+			return;
+
+		const auto& plugins = HexEngine::g_pEnv->_pluginSystem->GetAllPlugins();
+		for (const auto& plugin : plugins)
+		{
+			if (plugin.iface == nullptr)
+				continue;
+
+			if (auto* editorTool = plugin.iface->GetEditorToolPlugin(); editorTool != nullptr)
+			{
+				editorTool->OnMessage(&message, nullptr);
+			}
+		}
 	}
 
 	void EditorUI::RunGame()
@@ -1180,6 +1218,15 @@ namespace HexEditor
 		auto* focusedElement = g_pUIManager->GetInputFocus();
 		const bool isTypingInLineEdit = dynamic_cast<HexEngine::LineEdit*>(focusedElement) != nullptr;
 
+		// Keep gadget hotkey state in sync even when focused UI widgets consume input.
+		if (event == HexEngine::InputEvent::KeyUp)
+		{
+			for (auto& gadget : _gadgets)
+			{
+				gadget->OnInputEvent(event, data);
+			}
+		}
+
 		// Let gadget hotkeys (e.g. Ctrl+D duplicate) still work even when another
 		// focused widget reports the key event as handled, but never while typing.
 		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook &&
@@ -1537,6 +1584,23 @@ namespace HexEditor
 	void EditorUI::OnRemoveComponent(HexEngine::Entity* entity, HexEngine::BaseComponent* component)
 	{
 
+	}
+
+	void EditorUI::OnMessage(HexEngine::Message* message, HexEngine::MessageListener* sender)
+	{
+		(void)sender;
+
+		if (message == nullptr)
+			return;
+
+		if (auto* created = message->CastAs<HexEngine::EditorEntityCreatedMessage>(); created != nullptr)
+		{
+			if (created->entity != nullptr && !created->entity->IsPendingDeletion())
+			{
+				RecordEntityCreated(created->entity);
+				created->handled = true;
+			}
+		}
 	}
 
 	void EditorUI::RecordEntityPositionChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)

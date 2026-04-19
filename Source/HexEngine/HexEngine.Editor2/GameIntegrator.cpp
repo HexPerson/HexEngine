@@ -207,10 +207,18 @@ namespace HexEditor
 		}
 
 		const fs::path builtGameDllPath = g_pEditor->_projectFS->GetBaseDirectory() / L"Build" / L"Game.dll";
-		if (!BuildGame(_lastBuildProjectFileName))
+
+		if (!fs::exists(builtGameDllPath))
 		{
-			LOG_CRIT("Could not build the game before loading '%S'", builtGameDllPath.wstring().c_str());
-			return false;
+			LOG_INFO("Building game DLL as it was not found");
+
+			if (!BuildGame(_lastBuildProjectFileName))
+			{
+				LOG_CRIT("Could not build the game before loading '%S'", builtGameDllPath.wstring().c_str());
+				return false;
+			}
+
+			LOG_INFO("Game DLL was successfully built");
 		}
 
 		if (!fs::exists(builtGameDllPath))

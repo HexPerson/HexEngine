@@ -1,6 +1,7 @@
 
 #include "SceneView.hpp"
 #include "../EditorUI.hpp"
+#include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
 #include <algorithm>
 #include <unordered_set>
 
@@ -295,7 +296,7 @@ namespace HexEditor
 							auto currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
 							if (currentScene != nullptr)
 							{
-								auto spawnedEntities = HexEngine::g_pEnv->_sceneManager->LoadPrefab(currentScene, droppedAssetPath);
+								auto spawnedEntities = HexEngine::g_pEnv->_prefabLoader->LoadPrefab(currentScene, droppedAssetPath);
 								auto rootEntities = CollectPrefabRoots(spawnedEntities);
 								if (!rootEntities.empty())
 								{
@@ -366,8 +367,9 @@ namespace HexEditor
 							}
 						}
 						else
-						{
+						{							
 							_dragAndDropEntity->SetPosition(hit.position);
+							HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->FlushPVS(_dragAndDropEntity);
 						}
 					}
 				}
@@ -386,7 +388,7 @@ namespace HexEditor
 							if (currentScene == nullptr)
 								return true;
 
-							auto spawnedEntities = HexEngine::g_pEnv->_sceneManager->LoadPrefab(currentScene, draggingAsset->path);
+							auto spawnedEntities = HexEngine::g_pEnv->_prefabLoader->LoadPrefab(currentScene, draggingAsset->path);
 							_dragAndDropPrefabRoots = CollectPrefabRoots(spawnedEntities);
 							_dragAndDropPrefabRootOffsets.clear();
 
@@ -416,6 +418,7 @@ namespace HexEditor
 
 								const auto targetPosition = hit.position + _dragAndDropPrefabRootOffsets[i];
 								rootEntity->SetPosition(targetPosition);
+								HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->FlushPVS(_dragAndDropEntity);
 							}
 						}
 					}
@@ -505,3 +508,4 @@ namespace HexEditor
 		return IsMouseOver(GetSceneViewportAbsolutePosition(), GetSceneViewportSize());
 	}
 }
+

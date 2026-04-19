@@ -2,10 +2,54 @@
 
 #include "DuplicateGadget.hpp"
 #include "../EditorUI.hpp"
-#include <HexEngine.Core\Entity\Component\TrafficLaneComponent.hpp>
+#include <vector>
 
 namespace HexEditor
 {
+	namespace
+	{
+		bool CloneEntityChildrenRecursive(HexEngine::Scene* scene, HexEngine::Entity* sourceParent, HexEngine::Entity* clonedParent)
+		{
+			if (scene == nullptr || sourceParent == nullptr || clonedParent == nullptr)
+				return false;
+
+			const auto sourceChildren = sourceParent->GetChildren();
+			for (auto* sourceChild : sourceChildren)
+			{
+				if (sourceChild == nullptr || sourceChild->IsPendingDeletion())
+					continue;
+
+				auto* clonedChild = scene->CloneEntity(sourceChild, false);
+				if (clonedChild == nullptr)
+					return false;
+
+				clonedChild->SetParent(clonedParent);
+				if (!CloneEntityChildrenRecursive(scene, sourceChild, clonedChild))
+					return false;
+			}
+
+			return true;
+		}
+
+		HexEngine::Entity* CloneEntityHierarchy(HexEngine::Scene* scene, HexEngine::Entity* sourceRoot)
+		{
+			if (scene == nullptr || sourceRoot == nullptr || sourceRoot->IsPendingDeletion())
+				return nullptr;
+
+			auto* clonedRoot = scene->CloneEntity(sourceRoot);
+			if (clonedRoot == nullptr)
+				return nullptr;
+
+			if (!CloneEntityChildrenRecursive(scene, sourceRoot, clonedRoot))
+			{
+				scene->DestroyEntity(clonedRoot);
+				return nullptr;
+			}
+
+			return clonedRoot;
+		}
+	}
+
 	DuplicateGadget::DuplicateGadget() :
 		Gadget({ VK_CONTROL, 'D' }, VK_LBUTTON, VK_RBUTTON)
 	{}
@@ -27,7 +71,8 @@ namespace HexEditor
 			return false;
 
 		_sourceEntity = ent;
-		auto copyEnt = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CloneEntity(ent);
+		auto* currentScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get();
+		auto copyEnt = CloneEntityHierarchy(currentScene, ent);
 		if (copyEnt == nullptr)
 			return false;
 
@@ -92,11 +137,10 @@ namespace HexEditor
 
 		if (action == GadgetAction::Confirm)
 		{
-			auto* sourceLane = sourceEntity != nullptr ? sourceEntity->GetComponent<HexEngine::TrafficLaneComponent>() : nullptr;
-			auto* duplicateLane = duplicatedEntity->GetComponent<HexEngine::TrafficLaneComponent>();
-			if (sourceLane != nullptr && duplicateLane != nullptr)
+			if (g_pUIManager != nullptr)
 			{
-				sourceLane->AddNextLaneEntityName(duplicatedEntity->GetName());
+				HexEngine::EditorEntityDuplicatedMessage message(sourceEntity, duplicatedEntity);
+				g_pUIManager->BroadcastEditorToolMessage(message);
 			}
 
 			g_pUIManager->RecordEntityCreated(duplicatedEntity);

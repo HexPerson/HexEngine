@@ -38,17 +38,9 @@
 
 		bool isInDetailRange = length(input.positionWS.xyz - g_eyePos.xyz) <= g_frustumDepths[3];
 
-		if (g_material.isInTransparencyPhase)
+		if (g_objectFlags & OBJECT_FLAGS_HAS_OPACITY)
 		{
-			if (g_objectFlags & OBJECT_FLAGS_HAS_OPACITY)
-			{
-				opacity = g_opacityMap.Sample(g_textureSampler, input.texcoord);
-
-				if (opacity < 1.0f)
-				{
-					clip(-1);
-				}
-			}
+			opacity = g_opacityMap.Sample(g_textureSampler, input.texcoord).r;
 		}
 
 		if (g_objectFlags & OBJECT_FLAGS_HAS_HEIGHT && isInDetailRange)
@@ -136,21 +128,31 @@
 
 		finalRGB += emission;
 
-		// skip and pixels that have any transparency
-		if (g_objectFlags & OBJECT_FLAGS_HAS_OPACITY)
+		// In the opaque pass we cut out non-opaque pixels; in transparency phase we preserve fractional alpha.
+		if (g_material.isInTransparencyPhase == 0)
 		{
-			opacity = g_opacityMap.Sample(g_textureSampler, input.texcoord).r;
-
-			if (opacity <= 0.0f)
+			if (opacity < 1.0f)
 			{
 				clip(-1);
 			}
+		}
+		else if (opacity <= 0.0f)
+		{
+			clip(-1);
 		}
 
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
 		//velocity *= float2(g_screenWidth, g_screenHeight);
 
-		output.diff = float4(finalRGB, input.instanceID);
+		float transparencyAlpha = saturate(opacity * albedo.a);
+		if (g_material.isInTransparencyPhase && (g_objectFlags & OBJECT_FLAGS_HAS_OPACITY) == 0)
+		{
+			const float minChannel = min(albedo.r, min(albedo.g, albedo.b));
+			const float whiteMask = smoothstep(0.85f, 0.995f, minChannel);
+			transparencyAlpha *= (1.0f - whiteMask);
+		}
+		const float outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;
+		output.diff = float4(finalRGB, outputAlpha);
 
 		// material output is: metallic, roughness, smoothness, specularProbability
 		output.mat = float4(metalness, roughness, g_material.smoothness, g_material.specularProbability);

@@ -490,7 +490,7 @@ float3 GerstnerWave(
 	float4 ShaderMain(MeshPixelInput input) : SV_Target
 	{
 		//return float4(1,0,0,1);
-		float4 albedo = shaderTexture.Sample(g_TexSamplerAniso, input.texcoord);// * input.colour;
+		float4 albedo = shaderTexture.Sample(g_TexSamplerAniso, input.texcoord) * input.colour;
 		//return albedo;
 		//float4 color = albedo * ambientColor;
 

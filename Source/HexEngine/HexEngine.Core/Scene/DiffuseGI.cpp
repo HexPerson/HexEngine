@@ -1112,6 +1112,7 @@ namespace HexEngine
 		{
 			state.emissive = mat->_properties.emissiveColour;
 			state.diffuse = mat->_properties.diffuseColour;
+			state.emissiveAffectsGI = mat->GetEmissiveAffectsGI();
 		}
 
 		const auto nearlyEqual3 = [](const math::Vector3& a, const math::Vector3& b)
@@ -1135,7 +1136,8 @@ namespace HexEngine
 		const bool dirty =
 			!nearlyEqual3(it->second.position, state.position) ||
 			!nearlyEqual4(it->second.emissive, state.emissive) ||
-			!nearlyEqual4(it->second.diffuse, state.diffuse);
+			!nearlyEqual4(it->second.diffuse, state.diffuse) ||
+			it->second.emissiveAffectsGI != state.emissiveAffectsGI;
 
 		if (dirty)
 		{
@@ -1635,7 +1637,10 @@ namespace HexEngine
 				const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
 				const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * 0.8f, 1.0f, 2.0f);
 				injection += albedoTint * std::max(0.0f, r_giDiffuseInjection._val.f32) * colourBleedBoost;
-				injection += math::Vector3(emissive.x, emissive.y, emissive.z) * std::max(0.0f, emissive.w) * std::max(0.0f, r_giEmissiveInjection._val.f32);
+				if (mat->GetEmissiveAffectsGI())
+				{
+					injection += math::Vector3(emissive.x, emissive.y, emissive.z) * std::max(0.0f, emissive.w) * std::max(0.0f, r_giEmissiveInjection._val.f32);
+				}
 			}
 
 			const float clipAttenuation = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
@@ -2380,10 +2385,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			hashBytes(&materialPtrBits, sizeof(materialPtrBits));
 			hashBytes(&materialProxy.diffuse, sizeof(materialProxy.diffuse));
 			hashBytes(&materialProxy.emissive, sizeof(materialProxy.emissive));
+			const uint8_t emissiveAffectsGi = materialProxy.emissiveAffectsGI ? 1u : 0u;
+			hashBytes(&emissiveAffectsGi, sizeof(emissiveAffectsGi));
 			if (materialProxy.material != nullptr)
 			{
 				const auto albedoTex = materialProxy.material->GetTexture(MaterialTexture::Albedo);
-				const auto emissiveTex = materialProxy.material->GetTexture(MaterialTexture::Emission);
+				const auto emissiveTex = materialProxy.emissiveAffectsGI
+					? materialProxy.material->GetTexture(MaterialTexture::Emission)
+					: nullptr;
 				const uintptr_t albedoPtrBits = reinterpret_cast<uintptr_t>(albedoTex.get());
 				const uintptr_t emissivePtrBits = reinterpret_cast<uintptr_t>(emissiveTex.get());
 				hashBytes(&albedoPtrBits, sizeof(albedoPtrBits));
@@ -2567,7 +2576,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			GiMaterialProxy proxy = {};
 			proxy.material = material;
 			proxy.diffuse = material->_properties.diffuseColour;
-			proxy.emissive = material->_properties.emissiveColour;
+			proxy.emissiveAffectsGI = material->GetEmissiveAffectsGI();
+			proxy.emissive = proxy.emissiveAffectsGI ? material->_properties.emissiveColour : math::Vector4::Zero;
 			proxy.index = static_cast<uint32_t>(outMaterials.size());
 			outMaterials.push_back(proxy);
 			_giMaterialProxyLookup.emplace(material, proxy.index);
@@ -2885,6 +2895,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		for (const auto& materialProxy : _giMaterialProxies)
 		{
 			const bool hasEmissiveTex =
+				materialProxy.emissiveAffectsGI &&
 				(materialProxy.material != nullptr) &&
 				(materialProxy.material->GetTexture(MaterialTexture::Emission) != nullptr);
 			const float emissiveLum =
@@ -3400,8 +3411,12 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			{
 				const auto emissive = mat->_properties.emissiveColour;
 				material = mat.get();
-				emissiveTint = math::Vector3(emissive.x, emissive.y, emissive.z);
-				emissiveStrength = std::max(0.0f, emissive.w);
+				const bool materialAllowsEmissiveGI = mat->GetEmissiveAffectsGI();
+				if (materialAllowsEmissiveGI)
+				{
+					emissiveTint = math::Vector3(emissive.x, emissive.y, emissive.z);
+					emissiveStrength = std::max(0.0f, emissive.w);
+				}
 			}
 
 			auto mesh = smc->GetMesh();
@@ -3420,6 +3435,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			const uint32_t triStep = std::max<uint32_t>(1u, (triangleCount + remaining - 1u) / remaining);
 			const bool meshHasEmissiveTexture =
 				(material != nullptr) &&
+				material->GetEmissiveAffectsGI() &&
 				(material->GetTexture(MaterialTexture::Emission) != nullptr);
 			float meshEmissiveScore = 0.0f;
 			if (meshHasEmissiveTexture)
@@ -4239,7 +4255,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 						packedMaterial.flags = binding.flags;
 					}
 
-					if (materialProxy.material != nullptr)
+					if (materialProxy.material != nullptr && materialProxy.emissiveAffectsGI)
 					{
 						const auto& emissiveData = getMaterialEmissiveData(materialProxy.material);
 						if (emissiveData.hasTexture && emissiveData.width > 0 && emissiveData.height > 0)

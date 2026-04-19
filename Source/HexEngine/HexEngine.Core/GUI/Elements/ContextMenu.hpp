@@ -52,6 +52,8 @@ namespace HexEngine
 
 		void DeleteItems(ContextRoot* root);
 
+		Point GetContextSize();
+
 	private:
 		void RenderRoot(ContextRoot* root, GuiRenderer* renderer, int32_t x, int32_t y);
 
