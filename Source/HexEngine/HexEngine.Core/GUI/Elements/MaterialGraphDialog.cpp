@@ -486,7 +486,11 @@ namespace HexEngine
 				{
 					if (const auto* toNode = _graph->FindNode(toNodeId); toNode != nullptr)
 					{
-						return toNode->nodeType == MaterialGraphNodeType::Output;
+						if (toNode->nodeType == MaterialGraphNodeType::Output)
+							return true;
+
+						if (toNode->nodeType == MaterialGraphNodeType::Multiply)
+							return true;
 					}
 				}
 

@@ -15,6 +15,7 @@ namespace HexEngine
 			float scalar = 0.0f;
 			math::Vector4 vector = math::Vector4::Zero;
 			fs::path texturePath;
+			math::Vector4 textureMultiplier = math::Vector4::One;
 		};
 
 		const MaterialGraphParameterOverride* FindOverride(
@@ -199,6 +200,7 @@ namespace HexEngine
 
 				value.type = MaterialGraphValueType::Texture2D;
 				value.texturePath = textureInput.texturePath;
+				value.textureMultiplier = textureInput.textureMultiplier;
 				break;
 			}
 			case MaterialGraphNodeType::Add:
@@ -212,10 +214,33 @@ namespace HexEngine
 					return false;
 				}
 
-				if (a.type == MaterialGraphValueType::Texture2D || b.type == MaterialGraphValueType::Texture2D)
+				const bool isMultiply = node->nodeType == MaterialGraphNodeType::Multiply;
+				const bool aIsTex = a.type == MaterialGraphValueType::Texture2D;
+				const bool bIsTex = b.type == MaterialGraphValueType::Texture2D;
+				if (aIsTex || bIsTex)
 				{
-					errors.push_back(std::format("Node '{}' uses texture math which is unsupported in v1.", node->id));
-					return false;
+					// v1 supports texture multiply by scalar/vector tint for practical artist workflows.
+					// Other texture arithmetic is still unsupported.
+					if (!isMultiply || (aIsTex && bIsTex))
+					{
+						errors.push_back(std::format("Node '{}' uses unsupported texture arithmetic in v1.", node->id));
+						return false;
+					}
+
+					const GraphValue& texValue = aIsTex ? a : b;
+					const GraphValue& otherValue = aIsTex ? b : a;
+
+					math::Vector4 tint = math::Vector4::One;
+					if (!VectorFromValue(otherValue, tint))
+					{
+						errors.push_back(std::format("Node '{}' texture multiply requires scalar/vector tint.", node->id));
+						return false;
+					}
+
+					value.type = MaterialGraphValueType::Texture2D;
+					value.texturePath = texValue.texturePath;
+					value.textureMultiplier = texValue.textureMultiplier * tint;
+					break;
 				}
 
 				float as = 0.0f;
@@ -327,6 +352,7 @@ namespace HexEngine
 				{
 					value.type = MaterialGraphValueType::Texture2D;
 					value.texturePath = normalInput.texturePath;
+					value.textureMultiplier = normalInput.textureMultiplier;
 				}
 				else
 				{
@@ -412,6 +438,7 @@ namespace HexEngine
 			if (baseColor.type == MaterialGraphValueType::Texture2D && !baseColor.texturePath.empty())
 			{
 				material.SetTexture(MaterialTexture::Albedo, ITexture2D::Create(baseColor.texturePath));
+				material._properties.diffuseColour = baseColor.textureMultiplier;
 			}
 			else
 			{
@@ -436,6 +463,7 @@ namespace HexEngine
 			if (roughness.type == MaterialGraphValueType::Texture2D && !roughness.texturePath.empty())
 			{
 				material.SetTexture(MaterialTexture::Roughness, ITexture2D::Create(roughness.texturePath));
+				material._properties.roughnessFactor = std::clamp(roughness.textureMultiplier.x, 0.0f, 1.0f);
 			}
 			else
 			{
@@ -451,6 +479,7 @@ namespace HexEngine
 			if (metallic.type == MaterialGraphValueType::Texture2D && !metallic.texturePath.empty())
 			{
 				material.SetTexture(MaterialTexture::Metallic, ITexture2D::Create(metallic.texturePath));
+				material._properties.metallicFactor = std::clamp(metallic.textureMultiplier.x, 0.0f, 1.0f);
 			}
 			else
 			{
@@ -466,6 +495,7 @@ namespace HexEngine
 			if (emissive.type == MaterialGraphValueType::Texture2D && !emissive.texturePath.empty())
 			{
 				material.SetTexture(MaterialTexture::Emission, ITexture2D::Create(emissive.texturePath));
+				material._properties.emissiveColour = emissive.textureMultiplier;
 			}
 			else
 			{

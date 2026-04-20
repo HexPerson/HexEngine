@@ -74,7 +74,7 @@ Instance overrides do not require shader recompilation in v1.
 
 ## Current Limitations
 - v1 uses a safe master-material compile path (default engine shader) instead of full custom per-graph shader generation.
-- Texture math chains in arithmetic nodes are intentionally rejected by validator/compiler in v1.
+- Texture arithmetic is limited: texture multiply with scalar/vector tint/factor is supported, but add/lerp/one-minus with textures is rejected in v1.
 - UI uses a minimal node canvas (functional, not advanced layout/subgraph tooling).
 - Material instances currently compile/apply override data through loader/runtime paths; graph-structure authoring is done in graph parent materials.
 

@@ -40,7 +40,14 @@ namespace HexEngine
 			{
 				if (const auto* toNode = graph.FindNode(connection.toNodeId); toNode != nullptr)
 				{
-					return toNode->nodeType == MaterialGraphNodeType::Output;
+					if (toNode->nodeType == MaterialGraphNodeType::Output)
+						return true;
+
+					if (toNode->nodeType == MaterialGraphNodeType::Multiply &&
+						(connection.toPinId == "A" || connection.toPinId == "B"))
+					{
+						return true;
+					}
 				}
 			}
 
@@ -167,11 +174,10 @@ namespace HexEngine
 		if (!hasConnectedOutput(MaterialGraphOutputSemantic::Emissive))
 			result.AddError("Missing required output connection: Emissive.");
 
-		// Unsupported operation checks (texture with math is unsupported in this v1 compiler path).
+		// Unsupported operation checks: allow texture multiply tinting, reject other texture arithmetic.
 		for (const auto& node : graph.nodes)
 		{
 			if (node.nodeType != MaterialGraphNodeType::Add &&
-				node.nodeType != MaterialGraphNodeType::Multiply &&
 				node.nodeType != MaterialGraphNodeType::Lerp &&
 				node.nodeType != MaterialGraphNodeType::OneMinus)
 			{
@@ -183,7 +189,7 @@ namespace HexEngine
 				if (pin.valueType == MaterialGraphValueType::Texture2D)
 				{
 					result.AddError(std::format(
-						"Unsupported node configuration for '{}' (texture math is not supported in v1 master-material compile path).",
+						"Unsupported node configuration for '{}' (only texture multiply tinting is supported in v1).",
 						node.displayName.empty() ? node.id : node.displayName));
 					break;
 				}
