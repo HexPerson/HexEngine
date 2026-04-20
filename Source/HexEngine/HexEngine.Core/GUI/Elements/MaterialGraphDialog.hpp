@@ -10,8 +10,6 @@
 
 namespace HexEngine
 {
-	class MaterialGraphCanvas;
-
 	class HEX_API MaterialGraphDialog : public Dialog
 	{
 	public:
@@ -34,7 +32,7 @@ namespace HexEngine
 		void SyncGraphParametersFromNodes();
 	private:
 		std::shared_ptr<Material> _material;
-		MaterialGraphCanvas* _canvas = nullptr;
+		Element* _canvas = nullptr;
 		ComponentWidget* _properties = nullptr;
 		LineEdit* _parameterName = nullptr;
 		DragFloat* _scalarValue = nullptr;

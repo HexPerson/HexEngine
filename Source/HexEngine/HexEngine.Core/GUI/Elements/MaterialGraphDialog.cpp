@@ -3,8 +3,7 @@
 #include "Button.hpp"
 #include "ContextMenu.hpp"
 #include "../../Environment/LogFile.hpp"
-#include <algorithm>
-#include <format>
+#include "../../GUI/UIManager.hpp"
 
 namespace HexEngine
 {
@@ -17,10 +16,10 @@ namespace HexEngine
 			MaterialGraphPinDirection direction = MaterialGraphPinDirection::Input;
 		};
 
-		class MaterialGraphCanvas final : public Element
+		class MaterialGraphCanvasImpl final : public Element
 		{
 		public:
-			MaterialGraphCanvas(Element* parent, const Point& position, const Point& size, MaterialGraphDialog* owner, MaterialGraph* graph) :
+			MaterialGraphCanvasImpl(Element* parent, const Point& position, const Point& size, MaterialGraphDialog* owner, MaterialGraph* graph) :
 				Element(parent, position, size),
 				_owner(owner),
 				_graph(graph)
@@ -555,7 +554,7 @@ namespace HexEngine
 		new Button(this, Point(size.x - 200, 34), Point(90, 24), L"Compile", [this](Button*) { return CompileOnly(); });
 		new Button(this, Point(size.x - 104, 34), Point(90, 24), L"Apply", [this](Button*) { return SaveAndApply(); });
 
-		_canvas = new MaterialGraphCanvas(this, Point(10, 62), Point((size.x * 70) / 100 - 20, size.y - 72), this, &_material->_graph);
+		_canvas = new MaterialGraphCanvasImpl(this, Point(10, 62), Point((size.x * 70) / 100 - 20, size.y - 72), this, &_material->_graph);
 
 		_properties = new ComponentWidget(this, Point((size.x * 70) / 100 + 10, 62), Point(size.x - ((size.x * 70) / 100) - 20, size.y - 72), L"Node Properties");
 
