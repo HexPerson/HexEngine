@@ -341,6 +341,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="GUI\Elements\ListNode.hpp" />
     <ClInclude Include="GUI\Elements\LoadingDialog.hpp" />
     <ClInclude Include="GUI\Elements\MaterialDialog.hpp" />
+    <ClInclude Include="GUI\Elements\MaterialGraphDialog.hpp" />
     <ClInclude Include="GUI\Elements\MessageBox.hpp" />
     <ClInclude Include="GUI\Elements\AssetSearch.hpp" />
     <ClInclude Include="GUI\Elements\QuestionDialog.hpp" />
@@ -441,6 +442,9 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\IFontImporter.hpp" />
     <ClInclude Include="Graphics\ITexture3D.hpp" />
     <ClInclude Include="Graphics\Material.hpp" />
+    <ClInclude Include="Graphics\MaterialGraph.hpp" />
+    <ClInclude Include="Graphics\MaterialGraphCompiler.hpp" />
+    <ClInclude Include="Graphics\MaterialGraphValidator.hpp" />
     <ClInclude Include="Graphics\ShadowMap.hpp" />
     <ClInclude Include="GUI\DebugGUI.hpp" />
     <ClInclude Include="GUI\FontImporter.hpp" />
@@ -531,6 +535,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="GUI\Elements\ListNode.cpp" />
     <ClCompile Include="GUI\Elements\LoadingDialog.cpp" />
     <ClCompile Include="GUI\Elements\MaterialDialog.cpp" />
+    <ClCompile Include="GUI\Elements\MaterialGraphDialog.cpp" />
     <ClCompile Include="GUI\Elements\MessageBox.cpp" />
     <ClCompile Include="GUI\Elements\AssetSearch.cpp" />
     <ClCompile Include="GUI\Elements\QuestionDialog.cpp" />
@@ -612,6 +617,9 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Graphics\BlurEffect.cpp" />
     <ClCompile Include="Graphics\GBuffer.cpp" />
     <ClCompile Include="Graphics\Material.cpp" />
+    <ClCompile Include="Graphics\MaterialGraph.cpp" />
+    <ClCompile Include="Graphics\MaterialGraphCompiler.cpp" />
+    <ClCompile Include="Graphics\MaterialGraphValidator.cpp" />
     <ClCompile Include="Graphics\MaterialLoader.cpp" />
     <ClCompile Include="Graphics\ShadowMap.cpp" />
     <ClCompile Include="GUI\DebugGUI.cpp" />

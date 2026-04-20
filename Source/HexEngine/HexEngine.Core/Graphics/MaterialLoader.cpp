@@ -1,11 +1,13 @@
 
 #include "MaterialLoader.hpp"
 #include "Material.hpp"
+#include "MaterialGraphCompiler.hpp"
 
 #include "../FileSystem/FileSystem.hpp"
 #include "../Environment/IEnvironment.hpp"
 #include "../Environment/LogFile.hpp"
 #include "../GUI/Elements/MaterialDialog.hpp"
+#include "../GUI/Elements/MaterialGraphDialog.hpp"
 #include "../GUI/UIManager.hpp"
 #include "../GUI/Elements/MessageBox.hpp"
 
@@ -104,6 +106,8 @@ namespace HexEngine
 
 	void MaterialLoader::ParseJson(JsonFile* file, json& json, std::shared_ptr<Material>& material)
 	{
+		material->_hasGraph = false;
+		material->_hasGraphInstance = false;
 		
 		// Load textures
 		//
@@ -211,6 +215,64 @@ namespace HexEngine
 			
 			if (auto shader = shaders.find("shadowmap"); shader != shaders.end() && !shader.value().is_null())
 				material->SetShadowMapShader(IShader::Create(shader.value()));
+		}
+
+		// Load graph data
+		//
+		if (auto graphIt = json.find("graph"); graphIt != json.end() && graphIt->is_object())
+		{
+			std::vector<std::string> graphErrors;
+			if (MaterialGraph::Deserialize(*graphIt, material->_graph, &graphErrors))
+			{
+				material->_hasGraph = true;
+			}
+			else
+			{
+				for (const auto& error : graphErrors)
+					LOG_WARN("Material graph parse warning: %s", error.c_str());
+			}
+		}
+
+		// Load graph instance data
+		//
+		if (auto instanceIt = json.find("instance"); instanceIt != json.end() && instanceIt->is_object())
+		{
+			std::vector<std::string> instanceErrors;
+			if (MaterialGraph::DeserializeInstance(*instanceIt, material->_graphInstance, &instanceErrors))
+			{
+				material->_hasGraphInstance = true;
+			}
+			else
+			{
+				for (const auto& error : instanceErrors)
+					LOG_WARN("Material graph instance parse warning: %s", error.c_str());
+			}
+		}
+
+		// Apply instance overrides through the graph compiler.
+		if (material->_hasGraphInstance && !material->_graphInstance.parentMaterialPath.empty())
+		{
+			auto parent = Material::Create(material->_graphInstance.parentMaterialPath);
+			if (parent != nullptr && parent->_hasGraph)
+			{
+				const auto compileResult = MaterialGraphCompiler::ApplyInstanceToMaterial(
+					parent->_graph,
+					material->_graphInstance,
+					*material);
+
+				if (!compileResult.success)
+				{
+					for (const auto& error : compileResult.errors)
+						LOG_WARN("Material instance compile error: %s", error.c_str());
+				}
+			}
+			else
+			{
+				LOG_WARN(
+					"Material instance '%s' could not resolve parent graph material '%s'",
+					material->GetFileSystemPath().string().c_str(),
+					material->_graphInstance.parentMaterialPath.string().c_str());
+			}
 		}
 
 		// Load sounds
@@ -325,14 +387,27 @@ namespace HexEngine
 
 		if (mat)
 		{
-			MaterialDialog* dlg = new MaterialDialog(
-				g_pEnv->GetUIManager().GetRootElement(),
-				Point(cx - dlgW / 2, cy - dlgH / 2),
-				Point(dlgW, dlgH),
-				std::format(L"Editing Material '{}'", paths[0].filename().wstring()),
-				mat);
+			if (mat->_hasGraph)
+			{
+				MaterialGraphDialog* graphDialog = new MaterialGraphDialog(
+					g_pEnv->GetUIManager().GetRootElement(),
+					Point(cx - dlgW / 2, cy - dlgH / 2),
+					Point(dlgW, dlgH),
+					std::format(L"Editing Material Graph '{}'", paths[0].filename().wstring()),
+					mat);
+				return graphDialog;
+			}
+			else
+			{
+				MaterialDialog* dlg = new MaterialDialog(
+					g_pEnv->GetUIManager().GetRootElement(),
+					Point(cx - dlgW / 2, cy - dlgH / 2),
+					Point(dlgW, dlgH),
+					std::format(L"Editing Material '{}'", paths[0].filename().wstring()),
+					mat);
 
-			return dlg;
+				return dlg;
+			}
 		}
 
 		return nullptr;
@@ -397,6 +472,18 @@ namespace HexEngine
 
 			if (auto shader = material->GetShadowMapShader(); shader != nullptr)
 				file.Serialize(shaders, "shadowmap", shader->GetFileSystemPath());
+		}
+
+		if (material->_hasGraph)
+		{
+			auto& graphJson = data["graph"];
+			MaterialGraph::Serialize(graphJson, material->_graph);
+		}
+
+		if (material->_hasGraphInstance)
+		{
+			auto& instanceJson = data["instance"];
+			MaterialGraph::SerializeInstance(instanceJson, material->_graphInstance);
 		}
 
 		auto jsonString = data.dump(2);
