@@ -4,6 +4,8 @@
 #include "ContextMenu.hpp"
 #include "../../Environment/LogFile.hpp"
 #include "../../GUI/UIManager.hpp"
+#include <algorithm>
+#include <format>
 
 namespace HexEngine
 {
@@ -15,6 +17,56 @@ namespace HexEngine
 			std::string pinId;
 			MaterialGraphPinDirection direction = MaterialGraphPinDirection::Input;
 		};
+
+		bool IsMaterialOutputNodeId(const std::string& id)
+		{
+			return id == "output_basecolor" ||
+				id == "output_normal" ||
+				id == "output_roughness" ||
+				id == "output_metallic" ||
+				id == "output_emissive" ||
+				id == "output_opacity";
+		}
+
+		bool TryGetOutputSemanticByNodeId(const std::string& id, MaterialGraphOutputSemantic& outSemantic)
+		{
+			if (id == "output_basecolor") { outSemantic = MaterialGraphOutputSemantic::BaseColor; return true; }
+			if (id == "output_normal") { outSemantic = MaterialGraphOutputSemantic::Normal; return true; }
+			if (id == "output_roughness") { outSemantic = MaterialGraphOutputSemantic::Roughness; return true; }
+			if (id == "output_metallic") { outSemantic = MaterialGraphOutputSemantic::Metallic; return true; }
+			if (id == "output_emissive") { outSemantic = MaterialGraphOutputSemantic::Emissive; return true; }
+			if (id == "output_opacity") { outSemantic = MaterialGraphOutputSemantic::Opacity; return true; }
+			return false;
+		}
+
+		const char* GetOutputNodeIdForSemantic(MaterialGraphOutputSemantic semantic)
+		{
+			switch (semantic)
+			{
+			default:
+			case MaterialGraphOutputSemantic::BaseColor: return "output_basecolor";
+			case MaterialGraphOutputSemantic::Normal: return "output_normal";
+			case MaterialGraphOutputSemantic::Roughness: return "output_roughness";
+			case MaterialGraphOutputSemantic::Metallic: return "output_metallic";
+			case MaterialGraphOutputSemantic::Emissive: return "output_emissive";
+			case MaterialGraphOutputSemantic::Opacity: return "output_opacity";
+			}
+		}
+
+		MaterialGraphNode MakeMaterialOutputNode(
+			const char* id,
+			const char* name,
+			const math::Vector2& position,
+			MaterialGraphValueType valueType)
+		{
+			MaterialGraphNode node;
+			node.id = id;
+			node.nodeType = MaterialGraphNodeType::Output;
+			node.displayName = name;
+			node.position = position;
+			node.inputPins.push_back({ "In", "In", valueType, MaterialGraphPinDirection::Input });
+			return node;
+		}
 
 		class MaterialGraphCanvasImpl final : public Element
 		{
@@ -115,6 +167,20 @@ namespace HexEngine
 												return connection.toNodeId == pinHit.nodeId && connection.toPinId == pinHit.pinId;
 											}),
 										_graph->connections.end());
+
+									MaterialGraphOutputSemantic semantic;
+									if (TryGetOutputSemanticByNodeId(pinHit.nodeId, semantic))
+									{
+										for (auto& output : _graph->outputs)
+										{
+											if (output.semantic == semantic)
+											{
+												output.nodeId.clear();
+												output.pinId.clear();
+												break;
+											}
+										}
+									}
 									_owner->MarkDirty();
 								}
 							}
@@ -376,6 +442,20 @@ namespace HexEngine
 				connection.toPinId = inputPin.pinId;
 				_graph->connections.push_back(std::move(connection));
 
+				MaterialGraphOutputSemantic semantic;
+				if (TryGetOutputSemanticByNodeId(inputPin.nodeId, semantic))
+				{
+					for (auto& output : _graph->outputs)
+					{
+						if (output.semantic == semantic)
+						{
+							output.nodeId = outputPin.nodeId;
+							output.pinId = outputPin.pinId;
+							break;
+						}
+					}
+				}
+
 				_owner->SetStatusText(L"Connected.", false);
 				_owner->MarkDirty();
 			}
@@ -406,6 +486,11 @@ namespace HexEngine
 				const auto selected = _selectedNodeId;
 				if (selected.empty())
 					return;
+				if (IsMaterialOutputNodeId(selected))
+				{
+					_owner->SetStatusText(L"Material output nodes cannot be deleted.", true);
+					return;
+				}
 
 				_graph->nodes.erase(
 					std::remove_if(_graph->nodes.begin(), _graph->nodes.end(),
@@ -728,6 +813,58 @@ namespace HexEngine
 		}
 
 		_material->_graph.EnsureDefaultOutputBindings();
+
+		auto ensureOutputNode = [this](const char* id, const char* name, const math::Vector2& pos, MaterialGraphValueType type)
+		{
+			if (auto* node = _material->_graph.FindNode(id); node == nullptr)
+			{
+				_material->_graph.nodes.push_back(MakeMaterialOutputNode(id, name, pos, type));
+				_isDirty = true;
+			}
+			else
+			{
+				node->nodeType = MaterialGraphNodeType::Output;
+				node->displayName = name;
+				if (node->inputPins.empty())
+				{
+					node->inputPins.push_back({ "In", "In", type, MaterialGraphPinDirection::Input });
+					_isDirty = true;
+				}
+			}
+		};
+
+		ensureOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4);
+		ensureOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4);
+		ensureOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar);
+		ensureOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
+		ensureOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
+		ensureOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
+
+		// Keep visual output-node links in sync with authoritative output bindings.
+		for (const auto& output : _material->_graph.outputs)
+		{
+			if (output.nodeId.empty() || output.pinId.empty())
+				continue;
+
+			const std::string outputNodeId = GetOutputNodeIdForSemantic(output.semantic);
+			const bool hasConnection = std::find_if(
+				_material->_graph.connections.begin(),
+				_material->_graph.connections.end(),
+				[&](const MaterialGraphConnection& connection)
+				{
+					return connection.fromNodeId == output.nodeId &&
+						connection.fromPinId == output.pinId &&
+						connection.toNodeId == outputNodeId &&
+						connection.toPinId == "In";
+				}) != _material->_graph.connections.end();
+
+			if (!hasConnection)
+			{
+				_material->_graph.connections.push_back(
+					{ output.nodeId, output.pinId, outputNodeId, "In" });
+				_isDirty = true;
+			}
+		}
 	}
 
 	void MaterialGraphDialog::MarkDirty()

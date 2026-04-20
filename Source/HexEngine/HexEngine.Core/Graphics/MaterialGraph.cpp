@@ -140,6 +140,34 @@ namespace HexEngine
 		opacity.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
 		graph.nodes.push_back(opacity);
 
+		auto makeOutputNode = [](const char* id, const char* label, const math::Vector2& pos, MaterialGraphValueType inType)
+		{
+			MaterialGraphNode node;
+			node.id = id;
+			node.nodeType = MaterialGraphNodeType::Output;
+			node.displayName = label;
+			node.position = pos;
+			node.inputPins.push_back({ "In", "In", inType, MaterialGraphPinDirection::Input });
+			return node;
+		};
+
+		graph.nodes.push_back(makeOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4));
+		graph.nodes.push_back(makeOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4));
+		graph.nodes.push_back(makeOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar));
+		graph.nodes.push_back(makeOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar));
+		graph.nodes.push_back(makeOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4));
+		graph.nodes.push_back(makeOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar));
+
+		graph.connections =
+		{
+			{ "node_albedo", "out", "output_basecolor", "In" },
+			{ "node_normal", "out", "output_normal", "In" },
+			{ "node_roughness", "out", "output_roughness", "In" },
+			{ "node_metallic", "out", "output_metallic", "In" },
+			{ "node_emissive", "out", "output_emissive", "In" },
+			{ "node_opacity", "out", "output_opacity", "In" }
+		};
+
 		graph.outputs =
 		{
 			{ MaterialGraphOutputSemantic::BaseColor, "node_albedo", "out" },
