@@ -340,6 +340,27 @@ namespace HexEngine
 
 			void ConnectPins(const PinHit& outputPin, const PinHit& inputPin)
 			{
+				const auto* outPin = _graph->FindPin(outputPin.nodeId, outputPin.pinId, MaterialGraphPinDirection::Output);
+				const auto* inPin = _graph->FindPin(inputPin.nodeId, inputPin.pinId, MaterialGraphPinDirection::Input);
+				if (outPin == nullptr || inPin == nullptr)
+				{
+					_owner->SetStatusText(L"Invalid pin selection.", true);
+					return;
+				}
+
+				if (!IsCompatible(outPin->valueType, inPin->valueType))
+				{
+					_owner->SetStatusText(
+						std::format(
+							L"Cannot connect {} to {} (type mismatch: {} -> {}).",
+							s2ws(outputPin.nodeId),
+							s2ws(inputPin.nodeId),
+							s2ws(MaterialGraph::ValueTypeToString(outPin->valueType)),
+							s2ws(MaterialGraph::ValueTypeToString(inPin->valueType))),
+						true);
+					return;
+				}
+
 				_graph->connections.erase(
 					std::remove_if(_graph->connections.begin(), _graph->connections.end(),
 						[&](const MaterialGraphConnection& connection)
@@ -355,7 +376,29 @@ namespace HexEngine
 				connection.toPinId = inputPin.pinId;
 				_graph->connections.push_back(std::move(connection));
 
+				_owner->SetStatusText(L"Connected.", false);
 				_owner->MarkDirty();
+			}
+
+			static bool IsCompatible(MaterialGraphValueType from, MaterialGraphValueType to)
+			{
+				if (from == to)
+					return true;
+
+				if ((from == MaterialGraphValueType::Scalar && to == MaterialGraphValueType::Vector2) ||
+					(from == MaterialGraphValueType::Scalar && to == MaterialGraphValueType::Vector3) ||
+					(from == MaterialGraphValueType::Scalar && to == MaterialGraphValueType::Vector4))
+				{
+					return true;
+				}
+
+				if ((from == MaterialGraphValueType::Vector3 && to == MaterialGraphValueType::Vector4) ||
+					(from == MaterialGraphValueType::Vector4 && to == MaterialGraphValueType::Vector3))
+				{
+					return true;
+				}
+
+				return false;
 			}
 
 			void DeleteSelectedNode()
