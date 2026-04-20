@@ -472,7 +472,6 @@ namespace HexEditor
 		auto* material = new HexEngine::Material;
 		material->SetPaths(newMaterialPath, _currentlyBrowsedFS);
 		material->CopyFrom(HexEngine::Material::GetDefaultMaterial());
-		material->_graph = HexEngine::MaterialGraph::CreateDefaultPbrGraph();
 		material->_hasGraph = true;
 		material->_hasGraphInstance = false;
 		material->SetLoader(HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
