@@ -140,9 +140,6 @@ namespace HexEditor
 
 		_sceneTab = _tabView->AddTab(L"Scene");
 
-		_tabView->AddTab(L"Mesh Inspector");
-		_tabView->AddTab(L"Shader Graph");
-
 		const int32_t tabHeaderHeight = HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.tab_height;
 		_sceneSurface = new SceneSurface(
 			_sceneTab,

@@ -14,15 +14,11 @@ namespace HexEngine
 {
 	const int32_t MaxShadowCasters = 4;
 
-	/*Cvar env_zenithExponent("env_zenithExponent", "Atmospheric zenith component", 4.6f, 1.0f, 10.0f);
-	Cvar env_anisotropicIntensity("env_anisotropicIntensity", "Atmospheric scattering intensity", 0.0f, 0.0f, 10.0f);
-	Cvar env_density("env_density", "The density of the atmosphere", 0.12f, 0.0f, 4.0f);*/
-
 	HVar env_zenithExponent("env_zenithExponent", "Atmospheric zenith component", 4.12f, 1.0f, 10.0f);
 	HVar env_anisotropicIntensity("env_anisotropicIntensity", "Atmospheric scattering intensity", 0.38f, 0.0f, 10.0f);
-		HVar env_density("env_density", "The density of the atmosphere", 0.11f, 0.0f, 4.0f);
-		HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
-		HVar env_volumetricScattering("env_volumetricScattering", "The amount of scattering used in volumetric lighting calculations", -0.43f, -2.0f, 2.0f);
+	HVar env_density("env_density", "The density of the atmosphere", 0.11f, 0.0f, 4.0f);
+	HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
+	HVar env_volumetricScattering("env_volumetricScattering", "The amount of scattering used in volumetric lighting calculations", -0.43f, -2.0f, 2.0f);
 	HVar env_volumetricStrength("env_volumetricStrength", "The strength multiplier of volumetric lighting", 1.0f, 0.1f, 5.0f);
 	HVar env_volumetricSteps("env_volumetricSteps", "The number of iterations over which to calculate volumetric lighting", 100.0f, 10.0f, 500.0f);
 	HVar r_volumetricQuality("r_volumetricQuality", "Volumetric quality preset (0 = performance, 1 = balanced, 2 = quality)", 1, 0, 2);
@@ -69,7 +65,7 @@ namespace HexEngine
 	HVar r_shadowFilterMaxSize("r_shadowFilterMaxSize", "The maximum size of the shadow filter", 0.21f, 0.0f, 10.0f);
 	HVar r_shadowBiasMultiplier("r_shadowBiasMultiplier", "The bias multiplier to use when calculating normal offset", 0.0002f, 0.0f, 1.0f);
 	HVar r_shadowCascadeBlendRange("r_shadowCascadeBlendRange", "The distance to use for blending shadow cascades together", 10.0f, 1.0f, 1000.0f);
-	HEX_API HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
+	HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
 	HVar r_waterResolution("r_waterResolution", "The resolution multiplier at which to render water, a value of 1.0f is full resolution", 1.0f, 0.1f, 1.0f);
 	HVar r_bloomLuminanceThreshold("r_bloomLuminanceThreshold", "Reference luminance where physically-based bloom starts to respond strongly", 1.0f, 0.0f, 32.0f);
 	HVar r_bloomPhysicalIntensity("r_bloomPhysicalIntensity", "Strength multiplier for physically-based bloom", 0.35f, 0.0f, 8.0f);
@@ -79,10 +75,11 @@ namespace HexEngine
 	HVar r_fogDensity("r_fogDensity", "How dense the fog should be", 0.0030f, 0.0f, 1.0f);
 	HVar r_lodPartition("r_lodPartition", "The value that determines where LOD partitions occur", 250.0f, 10.0f, 5000.0f);
 	HVar r_frustumSphereBoundsMultiplier("r_frustumSphereBoundsMultiplier", "The multiplier applied to the frustum bounds in order to calculate culling", 1.15f, 1.0f, 4.0f);
-		HVar r_shadowMinimumLodThreshold("r_shadowMinimumLodLevel", "The lowest LOD level allowed for shadow maps. A high number will improve performance at the expensve of shadow fidelity", 0, 0, 3);
-		HVar r_taa("r_taa", "Enable or disable temporal anti-aliasing", true, false, true);
-		HVar r_shadowNearClip("r_shadowNearClip", "How much clipping offset to apply to directional lights, larger scenes typically require a higher value", 150.0f, -1000.0f, 1000.0f);
-		HVar r_colourFilter("r_colourFilter", "The filter colour to use for colour grading", math::Vector3(1.00f, 0.98f, 0.97f), math::Vector3(0.0f), math::Vector3(1.0f));
+	HVar r_shadowMinimumLodThreshold("r_shadowMinimumLodLevel", "The lowest LOD level allowed for shadow maps. A high number will improve performance at the expensve of shadow fidelity", 0, 0, 3);
+	HVar r_taa("r_taa", "Enable or disable temporal anti-aliasing", true, false, true);
+	HVar r_shadowNearClip("r_shadowNearClip", "How much clipping offset to apply to directional lights, larger scenes typically require a higher value", 150.0f, -1000.0f, 1000.0f);
+	HVar r_colourFilter("r_colourFilter", "The filter colour to use for colour grading", math::Vector3(1.00f, 0.98f, 0.97f), math::Vector3(0.0f), math::Vector3(1.0f));
+	HVar r_shadowSamples("r_shadowSamples", "How many samples to use in shadow map filtering", 32, 2, 128);
 
 		static int32_t GetVolumetricEffectiveSteps()
 		{
@@ -1896,7 +1893,7 @@ namespace HexEngine
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
-				SetupPerShadowCasterBuffer(light, false, 0, 0, 32, 0.0f);
+				SetupPerShadowCasterBuffer(light, false, 0, 0, r_shadowSamples._val.i32, 0.0f);
 
 				
 
