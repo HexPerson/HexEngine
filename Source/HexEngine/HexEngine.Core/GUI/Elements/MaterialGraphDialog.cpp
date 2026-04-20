@@ -540,23 +540,28 @@ namespace HexEngine
 		const Point& position,
 		const Point& size,
 		const std::wstring& title,
-		const std::shared_ptr<Material>& material) :
+		const std::shared_ptr<Material>& material,
+		bool embeddedMode) :
 		Dialog(parent, position, size, title),
-		_material(material)
+		_material(material),
+		_embeddedMode(embeddedMode)
 	{
 		EnsureGraphExists();
 
-		_statusLine = new LineEdit(this, Point(10, 36), Point(size.x - 220, 20), L"Status");
+		const int32_t topOffset = _embeddedMode ? 8 : 36;
+		const int32_t graphTop = _embeddedMode ? 34 : 62;
+
+		_statusLine = new LineEdit(this, Point(10, topOffset), Point(size.x - 220, 20), L"Status");
 		_statusLine->SetDoesCallbackWaitForReturn(false);
 		_statusLine->SetValue(L"Ready");
 		_statusLine->DisableRecursive();
 
-		new Button(this, Point(size.x - 200, 34), Point(90, 24), L"Compile", [this](Button*) { return CompileOnly(); });
-		new Button(this, Point(size.x - 104, 34), Point(90, 24), L"Apply", [this](Button*) { return SaveAndApply(); });
+		new Button(this, Point(size.x - 200, topOffset - 2), Point(90, 24), L"Compile", [this](Button*) { return CompileOnly(); });
+		new Button(this, Point(size.x - 104, topOffset - 2), Point(90, 24), L"Apply", [this](Button*) { return SaveAndApply(); });
 
-		_canvas = new MaterialGraphCanvasImpl(this, Point(10, 62), Point((size.x * 70) / 100 - 20, size.y - 72), this, &_material->_graph);
+		_canvas = new MaterialGraphCanvasImpl(this, Point(10, graphTop), Point((size.x * 70) / 100 - 20, size.y - graphTop - 10), this, &_material->_graph);
 
-		_properties = new ComponentWidget(this, Point((size.x * 70) / 100 + 10, 62), Point(size.x - ((size.x * 70) / 100) - 20, size.y - 72), L"Node Properties");
+		_properties = new ComponentWidget(this, Point((size.x * 70) / 100 + 10, graphTop), Point(size.x - ((size.x * 70) / 100) - 20, size.y - graphTop - 10), L"Node Properties");
 
 		_selectedNodeLabel = new LineEdit(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 20), L"Selected Node");
 		_selectedNodeLabel->SetDoesCallbackWaitForReturn(false);
@@ -631,6 +636,35 @@ namespace HexEngine
 		new Button(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 22), L"Bind As Opacity", [this](Button*) { BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Opacity); return true; });
 
 		RebuildPropertyPanel();
+	}
+
+	void MaterialGraphDialog::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
+	{
+		if (!_embeddedMode)
+		{
+			Dialog::Render(renderer, w, h);
+			return;
+		}
+
+		const auto abs = Element::GetAbsolutePosition();
+		renderer->FillQuad(abs.x, abs.y, _size.x, _size.y, renderer->_style.win_back);
+		renderer->Frame(abs.x, abs.y, _size.x, _size.y, 1, renderer->_style.win_border);
+	}
+
+	bool MaterialGraphDialog::OnInputEvent(InputEvent event, InputData* data)
+	{
+		if (!_embeddedMode)
+			return Dialog::OnInputEvent(event, data);
+
+		return Element::OnInputEvent(event, data);
+	}
+
+	Point MaterialGraphDialog::GetAbsolutePosition() const
+	{
+		if (!_embeddedMode)
+			return Dialog::GetAbsolutePosition();
+
+		return Element::GetAbsolutePosition();
 	}
 
 	void MaterialGraphDialog::EnsureGraphExists()

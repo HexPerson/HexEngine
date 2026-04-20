@@ -90,7 +90,8 @@ namespace HexEditor
 				HexEngine::Point(0, tabHeaderHeight),
 				HexEngine::Point(tabSize.x, std::max(1, tabSize.y - tabHeaderHeight)),
 				std::format(L"Material Graph '{}'", materialPath.filename().wstring()),
-				material);
+				material,
+				true);
 			sceneView->SetActiveWorkspaceTab(tab);
 			return true;
 		}

@@ -13,8 +13,11 @@ namespace HexEngine
 	class HEX_API MaterialGraphDialog : public Dialog
 	{
 	public:
-		MaterialGraphDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title, const std::shared_ptr<Material>& material);
+		MaterialGraphDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title, const std::shared_ptr<Material>& material, bool embeddedMode = false);
 		virtual ~MaterialGraphDialog() = default;
+		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
+		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
+		virtual Point GetAbsolutePosition() const override;
 
 		bool SaveAndApply();
 		bool CompileOnly();
@@ -45,5 +48,6 @@ namespace HexEngine
 		bool _isDirty = false;
 		LineEdit* _statusLine = nullptr;
 		bool _statusIsError = false;
+		bool _embeddedMode = false;
 	};
 }
