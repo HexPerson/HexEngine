@@ -8,7 +8,11 @@ namespace HexEngine
 {
 	namespace
 	{
-		bool IsCompatible(MaterialGraphValueType from, MaterialGraphValueType to)
+		bool IsCompatible(
+			const MaterialGraph& graph,
+			const MaterialGraphConnection& connection,
+			MaterialGraphValueType from,
+			MaterialGraphValueType to)
 		{
 			if (from == to)
 				return true;
@@ -24,6 +28,20 @@ namespace HexEngine
 				(from == MaterialGraphValueType::Vector4 && to == MaterialGraphValueType::Vector3))
 			{
 				return true;
+			}
+
+			// Allow texture references to feed material output nodes in v1.
+			// The compiler resolves these into material texture slots.
+			if (from == MaterialGraphValueType::Texture2D &&
+				(to == MaterialGraphValueType::Scalar ||
+					to == MaterialGraphValueType::Vector2 ||
+					to == MaterialGraphValueType::Vector3 ||
+					to == MaterialGraphValueType::Vector4))
+			{
+				if (const auto* toNode = graph.FindNode(connection.toNodeId); toNode != nullptr)
+				{
+					return toNode->nodeType == MaterialGraphNodeType::Output;
+				}
 			}
 
 			return false;
@@ -71,7 +89,7 @@ namespace HexEngine
 				continue;
 			}
 
-			if (!IsCompatible(fromPin->valueType, toPin->valueType))
+			if (!IsCompatible(graph, connection, fromPin->valueType, toPin->valueType))
 			{
 				result.AddError(std::format(
 					"Type mismatch for connection '{}:{}' ({}) -> '{}:{}' ({}).",

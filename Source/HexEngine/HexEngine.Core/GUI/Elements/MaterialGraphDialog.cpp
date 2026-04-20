@@ -414,7 +414,7 @@ namespace HexEngine
 					return;
 				}
 
-				if (!IsCompatible(outPin->valueType, inPin->valueType))
+				if (!IsCompatible(inputPin.nodeId, outPin->valueType, inPin->valueType))
 				{
 					_owner->SetStatusText(
 						std::format(
@@ -460,7 +460,7 @@ namespace HexEngine
 				_owner->MarkDirty();
 			}
 
-			static bool IsCompatible(MaterialGraphValueType from, MaterialGraphValueType to)
+			bool IsCompatible(const std::string& toNodeId, MaterialGraphValueType from, MaterialGraphValueType to) const
 			{
 				if (from == to)
 					return true;
@@ -476,6 +476,18 @@ namespace HexEngine
 					(from == MaterialGraphValueType::Vector4 && to == MaterialGraphValueType::Vector3))
 				{
 					return true;
+				}
+
+				if (from == MaterialGraphValueType::Texture2D &&
+					(to == MaterialGraphValueType::Scalar ||
+						to == MaterialGraphValueType::Vector2 ||
+						to == MaterialGraphValueType::Vector3 ||
+						to == MaterialGraphValueType::Vector4))
+				{
+					if (const auto* toNode = _graph->FindNode(toNodeId); toNode != nullptr)
+					{
+						return toNode->nodeType == MaterialGraphNodeType::Output;
+					}
 				}
 
 				return false;
