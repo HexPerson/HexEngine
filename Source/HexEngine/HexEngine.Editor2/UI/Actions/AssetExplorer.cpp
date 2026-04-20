@@ -462,6 +462,91 @@ namespace HexEditor
 		}
 	}
 
+	void AssetExplorer::CreateNewMaterialGraph(const fs::path& baseDir)
+	{
+		if (_currentlyBrowsedFS == nullptr)
+			return;
+
+		const fs::path newMaterialPath = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(baseDir / L"NewMaterialGraph.hmat");
+
+		auto* material = new HexEngine::Material;
+		material->SetPaths(newMaterialPath, _currentlyBrowsedFS);
+		material->CopyFrom(HexEngine::Material::GetDefaultMaterial());
+		material->_graph = HexEngine::MaterialGraph::CreateDefaultPbrGraph();
+		material->_hasGraph = true;
+		material->_hasGraphInstance = false;
+		material->SetLoader(HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
+		material->Save();
+
+		UpdateAssets(baseDir, _currentlyBrowsedFS);
+
+		if (auto* assetToEdit = FindAssetInView(newMaterialPath); assetToEdit != nullptr)
+		{
+			EditAssetName(assetToEdit);
+		}
+	}
+
+	void AssetExplorer::CreateNewMaterialInstance(const fs::path& baseDir)
+	{
+		if (_currentlyBrowsedFS == nullptr)
+			return;
+
+		fs::path parentGraphPath;
+		for (const auto& asset : _assetsInView)
+		{
+			if (!asset.selected || asset.path.extension() != ".hmat")
+				continue;
+
+			auto parent = HexEngine::Material::Create(asset.path);
+			if (parent != nullptr && parent->_hasGraph)
+			{
+				parentGraphPath = parent->GetFileSystemPath();
+				break;
+			}
+		}
+
+		if (parentGraphPath.empty())
+		{
+			// Fallback: first graph material in the view.
+			for (const auto& asset : _assetsInView)
+			{
+				if (asset.path.extension() != ".hmat")
+					continue;
+
+				auto parent = HexEngine::Material::Create(asset.path);
+				if (parent != nullptr && parent->_hasGraph)
+				{
+					parentGraphPath = parent->GetFileSystemPath();
+					break;
+				}
+			}
+		}
+
+		if (parentGraphPath.empty())
+		{
+			LOG_WARN("Cannot create material instance because no graph-authored material was found/selected.");
+			return;
+		}
+
+		const fs::path instancePath = _currentlyBrowsedFS->GetLocalAbsoluteDataPath(baseDir / L"NewMaterialInstance.hmat");
+
+		auto* material = new HexEngine::Material;
+		material->SetPaths(instancePath, _currentlyBrowsedFS);
+		material->CopyFrom(HexEngine::Material::GetDefaultMaterial());
+		material->_hasGraph = false;
+		material->_hasGraphInstance = true;
+		material->_graphInstance.parentMaterialPath = parentGraphPath;
+		material->SetLoader(HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
+		material->Save();
+
+		UpdateAssets(baseDir, _currentlyBrowsedFS);
+
+		if (auto* assetToEdit = FindAssetInView(instancePath); assetToEdit != nullptr)
+		{
+			EditAssetName(assetToEdit);
+		}
+	}
+
 	void AssetExplorer::ShowCreatePrefabVariantDialog()
 	{
 		CloseContextMenu();
@@ -1205,6 +1290,8 @@ namespace HexEditor
 					_contextMenu->AddItem(createNewItem);
 					auto* newRoot = _contextMenu->CreateSubMenu(createNewItem);
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Material", std::bind(&AssetExplorer::CreateNewMaterial, this, _currentlyBrowsedFolder)), newRoot);
+					_contextMenu->AddItem(new HexEngine::ContextItem(L"Material Graph", std::bind(&AssetExplorer::CreateNewMaterialGraph, this, _currentlyBrowsedFolder)), newRoot);
+					_contextMenu->AddItem(new HexEngine::ContextItem(L"Material Instance", std::bind(&AssetExplorer::CreateNewMaterialInstance, this, _currentlyBrowsedFolder)), newRoot);
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Prefab", std::bind(&AssetExplorer::CreateNewPrefab, this, _currentlyBrowsedFolder)), newRoot);
 
 					// Allow plugins to register their context items
