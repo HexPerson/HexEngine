@@ -138,24 +138,25 @@ namespace HexEditor
 				});
 		};
 
-			pm->_widgetBase = makeSectionTab(L"Environment", L"Environment");
-			addFloatControl(pm->_widgetBase, "env_zenithExponent", L"Zenith Exponent", 0.01f, 3);
-			addFloatControl(pm->_widgetBase, "env_anisotropicIntensity", L"Anisotropic Intensity", 0.01f, 3);
-			addFloatControl(pm->_widgetBase, "env_density", L"Density", 0.01f, 3);
-			addFloatControl(pm->_widgetBase, "env_volumetricScattering", L"Volumetric Scattering", 0.01f, 3);
-			addFloatControl(pm->_widgetBase, "env_volumetricStrength", L"Volumetric Strength", 0.01f, 3);
-			addIntControl(pm->_widgetBase, "r_volumetricQuality", L"Volumetric Quality Preset", 1);
-			addFloatControl(pm->_widgetBase, "env_volumetricSteps", L"Volumetric Steps", 1.0f, 3);
-			addFloatControl(pm->_widgetBase, "env_volumetricStepIncrement", L"Volumetric Step Scale", 0.1f, 3);
-			addFloatControl(pm->_widgetBase, "env_volumetricPointInsideMin", L"Point Inside Gain Min", 0.01f, 3);
-			addFloatControl(pm->_widgetBase, "env_volumetricPointInsideMax", L"Point Inside Gain Max", 0.01f, 3);
-			addFloatControl(pm->_widgetBase, "env_volumetricSpotInsideMin", L"Spot Inside Gain Min", 0.01f, 3);
-			addFloatControl(pm->_widgetBase, "env_volumetricSpotInsideMax", L"Spot Inside Gain Max", 0.01f, 3);
+		pm->_widgetBase = makeSectionTab(L"Environment", L"Environment");
+		addFloatControl(pm->_widgetBase, "env_zenithExponent", L"Zenith Exponent", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_anisotropicIntensity", L"Anisotropic Intensity", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_density", L"Density", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_volumetricScattering", L"Volumetric Scattering", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_volumetricStrength", L"Volumetric Strength", 0.01f, 3);
+		addIntControl(pm->_widgetBase, "r_volumetricQuality", L"Volumetric Quality Preset", 1);
+		addFloatControl(pm->_widgetBase, "env_volumetricSteps", L"Volumetric Steps", 1.0f, 3);
+		addFloatControl(pm->_widgetBase, "env_volumetricStepIncrement", L"Volumetric Step Scale", 0.1f, 3);
+		addFloatControl(pm->_widgetBase, "env_volumetricPointInsideMin", L"Point Inside Gain Min", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_volumetricPointInsideMax", L"Point Inside Gain Max", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_volumetricSpotInsideMin", L"Spot Inside Gain Min", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_volumetricSpotInsideMax", L"Spot Inside Gain Max", 0.01f, 3);
 
 		pm->_shadowSettings = makeSectionTab(L"Shadow", L"Shadow");
 		addFloatControl(pm->_shadowSettings, "r_penumbraFilterMaxSize", L"Penumbra Filter Max Size", 0.0001f, 6);
 		addFloatControl(pm->_shadowSettings, "r_shadowFilterMaxSize", L"Shadow Filter Max Size", 0.0001f, 6);
 		addFloatControl(pm->_shadowSettings, "r_shadowBiasMultiplier", L"Shadow Bias Multiplier", 0.0001f, 6);
+		addIntControl(pm->_shadowSettings, "r_shadowSamples", L"Shadow Samples", 1);
 
 		pm->_colouring = makeSectionTab(L"Colouring", L"Colouring");
 		addFloatControl(pm->_colouring, "r_contrast", L"Contrast", 0.01f, 3);

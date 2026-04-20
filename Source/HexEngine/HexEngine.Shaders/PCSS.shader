@@ -94,6 +94,7 @@
 		int sampleCount = max(1, min(requestedSamples, PCSS_MAX_SAMPLES));
 		zReceiver = saturate(zReceiver);
 		float texelSize = 1.0f / max(g_shadowConfig.shadowMapSize, 1.0f);
+		uv = (floor(uv * g_shadowConfig.shadowMapSize) + 0.5f) * texelSize;
 		float rotation = 0.73f;
 
 		int blockerSampleCount = min(PCSS_MAX_SAMPLES, max(sampleCount * 2, 16));

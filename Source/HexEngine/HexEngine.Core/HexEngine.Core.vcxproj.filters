@@ -279,6 +279,15 @@
     <ClInclude Include="Graphics\Material.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Graphics\MaterialGraph.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Graphics\MaterialGraphCompiler.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Graphics\MaterialGraphValidator.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Scene\MeshPrimitives.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -549,6 +558,9 @@
     <ClInclude Include="GUI\Elements\MaterialDialog.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="GUI\Elements\MaterialGraphDialog.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="GUI\Elements\TextureSearch.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -777,6 +789,15 @@
     <ClCompile Include="Graphics\Material.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Graphics\MaterialGraph.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Graphics\MaterialGraphCompiler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Graphics\MaterialGraphValidator.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Scene\MeshPrimitives.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1003,6 +1024,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="GUI\Elements\MaterialDialog.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="GUI\Elements\MaterialGraphDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="GUI\Elements\TextureSearch.cpp">

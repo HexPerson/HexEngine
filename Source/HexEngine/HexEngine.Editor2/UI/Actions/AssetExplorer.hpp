@@ -34,6 +34,8 @@ namespace HexEditor
 
 	private:
 		void CreateNewMaterial(const fs::path& baseDir);
+		void CreateNewMaterialGraph(const fs::path& baseDir);
+		void CreateNewMaterialInstance(const fs::path& baseDir);
 		void CreateNewPrefab(const fs::path& baseDir);
 		void SelectAll();
 		void SetMassMaterial();

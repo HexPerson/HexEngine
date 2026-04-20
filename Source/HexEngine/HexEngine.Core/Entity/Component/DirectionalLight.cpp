@@ -169,7 +169,7 @@ namespace HexEngine
 		auto sunDistance = camera->GetFarZ();// _lightBoundingSphere[cascadeIdx].Radius;
 
 		float diagonalLength = _lightBoundingSphere[cascadeIdx].Radius * 2.0f;
-		float texelsPerUnit = (float)DirectionalLightShadowMapResolution / diagonalLength;
+		float worldUnitsPerTexel = diagonalLength / (float)DirectionalLightShadowMapResolution;
 
 
 
@@ -212,6 +212,15 @@ namespace HexEngine
 		
 		
 
+		{
+			// Snap cascade center in light-view space to shadow texel increments to reduce shimmering.
+			auto snapView = math::Matrix::CreateLookAt(lightPosCenter - (lookDir * sunDistance), lightPosCenter, math::Vector3::Up);
+			auto centerLS = math::Vector3::Transform(lightPosCenter, snapView);
+			centerLS.x = floor((centerLS.x / worldUnitsPerTexel) + 0.5f) * worldUnitsPerTexel;
+			centerLS.y = floor((centerLS.y / worldUnitsPerTexel) + 0.5f) * worldUnitsPerTexel;
+			lightPosCenter = math::Vector3::Transform(centerLS, snapView.Invert());
+		}
+
 		_viewMatrix[cascadeIdx] = math::Matrix::CreateLookAt(lightPosCenter - (lookDir * sunDistance), lightPosCenter, math::Vector3::Up);
 		//_viewMatrix[cascadeIdx] *= scalingMatrix;
 
@@ -228,8 +237,6 @@ namespace HexEngine
 
 		//mins = -math::Vector3(sphereLightView.Radius);
 		//maxs = math::Vector3(sphereLightView.Radius);
-
-		float worldsUnitsPerTexel = diagonalLength / (float)DirectionalLightShadowMapResolution;
 
 		/*math::Vector3 vBorderOffset = (math::Vector3(diagonalLength, diagonalLength, diagonalLength) - (maxs - mins)) * 0.5f;
 		maxs += vBorderOffset;

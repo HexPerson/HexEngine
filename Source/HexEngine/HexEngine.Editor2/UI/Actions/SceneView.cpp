@@ -140,9 +140,6 @@ namespace HexEditor
 
 		_sceneTab = _tabView->AddTab(L"Scene");
 
-		_tabView->AddTab(L"Mesh Inspector");
-		_tabView->AddTab(L"Shader Graph");
-
 		const int32_t tabHeaderHeight = HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.tab_height;
 		_sceneSurface = new SceneSurface(
 			_sceneTab,
@@ -469,6 +466,14 @@ namespace HexEditor
 			return nullptr;
 
 		return _tabView->AddTab(label);
+	}
+
+	void SceneView::SetActiveWorkspaceTab(HexEngine::TabItem* tab)
+	{
+		if (_tabView == nullptr || tab == nullptr)
+			return;
+
+		_tabView->SetActiveTab(tab);
 	}
 
 	bool SceneView::IsSceneTabActive() const

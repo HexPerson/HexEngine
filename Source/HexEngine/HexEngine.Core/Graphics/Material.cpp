@@ -93,6 +93,10 @@ namespace HexEngine
 		_cullDistance = material._cullDistance;
 		_objectFlags = material._objectFlags;
 		_emissiveAffectsGI = material._emissiveAffectsGI;
+		_graph = material._graph;
+		_graphInstance = material._graphInstance;
+		_hasGraph = material._hasGraph;
+		_hasGraphInstance = material._hasGraphInstance;
 	}
 
 	Material::Material(const Material& other)
@@ -114,9 +118,6 @@ namespace HexEngine
 
 	void Material::SetTexture(MaterialTexture type, const std::shared_ptr<ITexture2D>& texture)
 	{
-		if (!texture)
-			return;
-
 		std::unique_lock lock(_lock);
 
 		_textures[type] = texture;

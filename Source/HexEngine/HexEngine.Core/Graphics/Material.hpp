@@ -6,6 +6,7 @@
 #include "ITexture3D.hpp"
 #include "IShader.hpp"
 #include "RenderStructs.hpp"
+#include "MaterialGraph.hpp"
 #include "../FileSystem/IResource.hpp"
 #include "../FileSystem/JsonFile.hpp"
 
@@ -123,6 +124,10 @@ namespace HexEngine
 
 	public:
 		MaterialProperties _properties;
+		MaterialGraph _graph;
+		MaterialGraphInstanceData _graphInstance;
+		bool _hasGraph = false;
+		bool _hasGraphInstance = false;
 
 	private:
 		uint32_t _materialId = 0;

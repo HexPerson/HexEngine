@@ -29,12 +29,29 @@
 		return frac(magic.z * frac(dot(position_screen, magic.xy)));
 	}
 
-	float SampleDepth(SamplerComparisonState cmpSampler, SamplerState pointSampler, Texture2D depthMap, float lightDepthValue, float2 projectTexCoord, float2 screenPos, int numSamples)
+	float SampleDepth(SamplerComparisonState cmpSampler, SamplerState pointSampler, Texture2D depthMap, float lightDepthValue, float2 projectTexCoord, float2 screenPos, int numSamples, int cascadeIndex)
 	{
 #if 1
 		if (numSamples > 0)
 		{
-			return PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples);
+			if (cascadeIndex == 0)
+			{
+				return PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples);
+			}
+			else
+			{
+				// Stable fixed-radius PCF for cascades > 0 to preserve distant shadow quality.
+				float sum = 0.0f;
+				float pcfRadius = 1.0f;
+				for (float y = -pcfRadius; y <= pcfRadius; y += 1.0f)
+				{
+					for (float x = -pcfRadius; x <= pcfRadius; x += 1.0f)
+					{
+						sum += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + TexOffset(x, y), lightDepthValue).r;
+					}
+				}
+				return sum / 9.0f;
+			}
 		}
 		else
 		{
@@ -87,6 +104,7 @@
 		float4 lightViewPosition;
 		float shadowDelta = 0.0f;
 		float lightDepthValue;
+		float cameraDistance = distance(g_eyePos.xyz, input.positionWS.xyz);
 		//float bias = 0.000001f;
 
 		if (g_shadowConfig.cascadeOverride != -1)
@@ -96,25 +114,25 @@
 		}
 		else
 		{
-			if (input.pixelDepth <= g_frustumDepths[0])
+			if (cameraDistance <= g_frustumDepths[0])
 			{
 				index = 0;
-				shadowDelta = g_frustumDepths[0] - input.pixelDepth;
+				shadowDelta = g_frustumDepths[0] - cameraDistance;
 			}
-			else if (input.pixelDepth <= g_frustumDepths[1])
+			else if (cameraDistance <= g_frustumDepths[1])
 			{
 				index = 1;
-				shadowDelta = g_frustumDepths[1] - input.pixelDepth;
+				shadowDelta = g_frustumDepths[1] - cameraDistance;
 			}
-			else if (input.pixelDepth <= g_frustumDepths[2])
+			else if (cameraDistance <= g_frustumDepths[2])
 			{
 				index = 2;
-				shadowDelta = g_frustumDepths[2] - input.pixelDepth;
+				shadowDelta = g_frustumDepths[2] - cameraDistance;
 			}
 			else
 			{
 				index = 3;
-				shadowDelta = g_frustumDepths[3] - input.pixelDepth;
+				shadowDelta = g_frustumDepths[3] - cameraDistance;
 			}
 		}
 
@@ -145,14 +163,20 @@
 
 
 
-						depthValue = SampleDepth(cmpSampler, pointSampler, depthMaps[i], lightDepthValue, projectTexCoord, input.positionSS, input.samples);
+						depthValue = SampleDepth(cmpSampler, pointSampler, depthMaps[i], lightDepthValue, projectTexCoord, input.positionSS, input.samples, i);
 
 
 
 						//lowestDepth = min(depthValue, lowestDepth);
 
 						// sample the next depth and lerp between them
-						if (shadowDelta < g_shadowConfig.cascadeBlendRange && i < MAX_SHADOW_CASCADES - 1)
+						float cascadeBlendRange = g_shadowConfig.cascadeBlendRange;
+						if (i == 0)
+						{
+							cascadeBlendRange *= 0.35f;
+						}
+
+						if (shadowDelta < cascadeBlendRange && i < MAX_SHADOW_CASCADES - 1)
 						{
 							float4 nextLightViewPosition = CalculateLightViewPosition(i + 1, input.positionWS);
 
@@ -163,9 +187,9 @@
 							{
 								float lightDepthValueNext = (nextLightViewPosition.z / nextLightViewPosition.w) - bias;
 
-								float nextCascadeDepth = SampleDepth(cmpSampler, pointSampler, depthMaps[i + 1], lightDepthValueNext, projectTexCoord, input.positionSS, input.samples);
+								float nextCascadeDepth = SampleDepth(cmpSampler, pointSampler, depthMaps[i + 1], lightDepthValueNext, projectTexCoord, input.positionSS, input.samples, i + 1);
 
-								float lerpValue = shadowDelta / g_shadowConfig.cascadeBlendRange;
+								float lerpValue = shadowDelta / max(cascadeBlendRange, 0.0001f);
 
 								depthValue = lerp(depthValue, nextCascadeDepth, 1.0f - lerpValue);
 							}
