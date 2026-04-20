@@ -10,9 +10,40 @@
 #include "../GUI/Elements/MaterialGraphDialog.hpp"
 #include "../GUI/UIManager.hpp"
 #include "../GUI/Elements/MessageBox.hpp"
+#include <chrono>
+#include <thread>
 
 namespace HexEngine
 {
+	namespace
+	{
+		bool TryParseMaterialJson(const std::string& data, json& outJson)
+		{
+			outJson = json::parse(data, nullptr, false, true);
+			return !outJson.is_discarded();
+		}
+
+		bool TryReadAndParseMaterialJson(const fs::path& absolutePath, json& outJson, int32_t attempts = 3, int32_t retryDelayMs = 15)
+		{
+			for (int32_t attempt = 0; attempt < attempts; ++attempt)
+			{
+				JsonFile file(absolutePath, std::ios::in);
+				if (!file.DoesExist() || !file.Open())
+					return false;
+
+				std::string data;
+				file.ReadAll(data);
+				if (TryParseMaterialJson(data, outJson))
+					return true;
+
+				if (attempt + 1 < attempts)
+					std::this_thread::sleep_for(std::chrono::milliseconds(retryDelayMs));
+			}
+
+			return false;
+		}
+	}
+
 	MaterialLoader::MaterialLoader()
 	{
 		g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
@@ -36,13 +67,12 @@ namespace HexEngine
 		LOG_INFO("Loading material '%s'", absolutePath.filename().string().c_str());
 
 		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material, ResourceDeleter());
-
-		file.Open();
-
-		std::string data;
-		file.ReadAll(data);
-
-		json matData = json::parse(data);		
+		json matData;
+		if (!TryReadAndParseMaterialJson(absolutePath, matData))
+		{
+			LOG_WARN("Failed to parse material json '%s'", absolutePath.string().c_str());
+			return nullptr;
+		}
 
 		ParseJson(&file, matData, material);
 
@@ -55,7 +85,7 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> MaterialLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		std::string materialData = (const char*)data.data();
+		std::string materialData((const char*)data.data(), data.size());
 
 		KeyValues kv;
 		if(kv.Parse(materialData) == false)
@@ -66,7 +96,12 @@ namespace HexEngine
 
 		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material, ResourceDeleter());
 		
-		json matData = json::parse(data);
+		json matData;
+		if (!TryParseMaterialJson(materialData, matData))
+		{
+			LOG_WARN("Failed to parse material json from memory '%s'", relativePath.string().c_str());
+			return nullptr;
+		}
 
 		//ParseJson(&file, matData, material);
 
@@ -94,12 +129,12 @@ namespace HexEngine
 
 		std::shared_ptr<Material> materialToReload = dynamic_pointer_cast<Material>(resource);
 
-		file.Open();
-
-		std::string data;
-		file.ReadAll(data);
-
-		json matData = json::parse(data);
+		json matData;
+		if (!TryReadAndParseMaterialJson(resource->GetAbsolutePath(), matData))
+		{
+			LOG_WARN("Skipping material hot-reload; json parse failed for '%s' (likely mid-write).", resource->GetAbsolutePath().string().c_str());
+			return;
+		}
 
 		ParseJson(&file, matData, materialToReload);
 	}
