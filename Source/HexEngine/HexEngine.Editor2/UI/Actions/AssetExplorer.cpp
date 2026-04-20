@@ -85,9 +85,10 @@ namespace HexEditor
 
 			const int32_t tabHeaderHeight = HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.tab_height;
 			const auto tabSize = tab->GetSize();
+			const int32_t tabOffsetX = tab->GetPosition().x;
 			new HexEngine::MaterialGraphDialog(
 				tab,
-				HexEngine::Point(0, tabHeaderHeight),
+				HexEngine::Point(-tabOffsetX, tabHeaderHeight),
 				HexEngine::Point(tabSize.x, std::max(1, tabSize.y - tabHeaderHeight)),
 				std::format(L"Material Graph '{}'", materialPath.filename().wstring()),
 				material,
