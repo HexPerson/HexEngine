@@ -1,9 +1,11 @@
 #include "AssetExplorer.hpp"
 #include "../../Editor.hpp"
 #include "../EditorUI.hpp"
+#include <HexEngine.Core\GUI\Elements\MaterialGraphDialog.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cwctype>
+#include <format>
 #include <fstream>
 
 namespace HexEditor
@@ -65,6 +67,32 @@ namespace HexEditor
 			}
 
 			return result;
+		}
+
+		bool OpenGraphMaterialInSceneWorkspace(const fs::path& materialPath)
+		{
+			if (g_pUIManager == nullptr || g_pUIManager->GetSceneView() == nullptr)
+				return false;
+
+			auto material = HexEngine::Material::Create(materialPath);
+			if (material == nullptr || !material->_hasGraph)
+				return false;
+
+			auto* sceneView = g_pUIManager->GetSceneView();
+			auto* tab = sceneView->AddWorkspaceTab(std::format(L"Material: {}", materialPath.stem().wstring()));
+			if (tab == nullptr)
+				return false;
+
+			const int32_t tabHeaderHeight = HexEngine::g_pEnv->GetUIManager().GetRenderer()->_style.tab_height;
+			const auto tabSize = tab->GetSize();
+			new HexEngine::MaterialGraphDialog(
+				tab,
+				HexEngine::Point(0, tabHeaderHeight),
+				HexEngine::Point(tabSize.x, std::max(1, tabSize.y - tabHeaderHeight)),
+				std::format(L"Material Graph '{}'", materialPath.filename().wstring()),
+				material);
+			sceneView->SetActiveWorkspaceTab(tab);
+			return true;
 		}
 	}
 
@@ -1161,6 +1189,12 @@ namespace HexEditor
 				if (_hoveredAsset->path.extension() == ".hprefab" && g_pUIManager != nullptr)
 				{
 					g_pUIManager->OpenPrefabStage(_hoveredAsset->path);
+					_hoveredAsset = nullptr;
+					return true;
+				}
+
+				if (_hoveredAsset->path.extension() == ".hmat" && OpenGraphMaterialInSceneWorkspace(_hoveredAsset->path))
+				{
 					_hoveredAsset = nullptr;
 					return true;
 				}

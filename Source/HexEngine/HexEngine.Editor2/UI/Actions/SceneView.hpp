@@ -48,6 +48,7 @@ namespace HexEditor
 		}
 
 		HexEngine::TabItem* AddWorkspaceTab(const std::wstring& label);
+		void SetActiveWorkspaceTab(HexEngine::TabItem* tab);
 		bool IsSceneTabActive() const;
 		bool IsMouseOverSceneViewport() const;
 		HexEngine::Point GetSceneViewportAbsolutePosition() const;

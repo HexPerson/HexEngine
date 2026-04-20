@@ -471,6 +471,14 @@ namespace HexEditor
 		return _tabView->AddTab(label);
 	}
 
+	void SceneView::SetActiveWorkspaceTab(HexEngine::TabItem* tab)
+	{
+		if (_tabView == nullptr || tab == nullptr)
+			return;
+
+		_tabView->SetActiveTab(tab);
+	}
+
 	bool SceneView::IsSceneTabActive() const
 	{
 		return _tabView && _tabView->GetCurrentTabIndex() == 0;
