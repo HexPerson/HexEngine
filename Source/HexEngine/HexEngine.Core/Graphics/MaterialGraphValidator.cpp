@@ -31,24 +31,14 @@ namespace HexEngine
 			}
 
 			// Allow texture references to feed material output nodes in v1.
-			// The compiler resolves these into material texture slots.
+			// The compiler resolves texture objects into sampled values when needed.
 			if (from == MaterialGraphValueType::Texture2D &&
 				(to == MaterialGraphValueType::Scalar ||
 					to == MaterialGraphValueType::Vector2 ||
 					to == MaterialGraphValueType::Vector3 ||
 					to == MaterialGraphValueType::Vector4))
 			{
-				if (const auto* toNode = graph.FindNode(connection.toNodeId); toNode != nullptr)
-				{
-					if (toNode->nodeType == MaterialGraphNodeType::Output)
-						return true;
-
-					if (toNode->nodeType == MaterialGraphNodeType::Multiply &&
-						(connection.toPinId == "A" || connection.toPinId == "B"))
-					{
-						return true;
-					}
-				}
+				return true;
 			}
 
 			return false;
@@ -173,28 +163,6 @@ namespace HexEngine
 			result.AddError("Missing required output connection: Metallic.");
 		if (!hasConnectedOutput(MaterialGraphOutputSemantic::Emissive))
 			result.AddError("Missing required output connection: Emissive.");
-
-		// Unsupported operation checks: allow texture multiply tinting, reject other texture arithmetic.
-		for (const auto& node : graph.nodes)
-		{
-			if (node.nodeType != MaterialGraphNodeType::Add &&
-				node.nodeType != MaterialGraphNodeType::Lerp &&
-				node.nodeType != MaterialGraphNodeType::OneMinus)
-			{
-				continue;
-			}
-
-			for (const auto& pin : node.inputPins)
-			{
-				if (pin.valueType == MaterialGraphValueType::Texture2D)
-				{
-					result.AddError(std::format(
-						"Unsupported node configuration for '{}' (only texture multiply tinting is supported in v1).",
-						node.displayName.empty() ? node.id : node.displayName));
-					break;
-				}
-			}
-		}
 
 		return result;
 	}

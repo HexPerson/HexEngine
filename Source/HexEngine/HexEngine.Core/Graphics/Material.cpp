@@ -132,13 +132,6 @@ namespace HexEngine
 		}
 	}
 
-	void Material::SetVolumeTexture(ITexture3D* texture)
-	{
-		std::unique_lock lock(_lock);
-
-		_volumeTexture = texture;
-	}
-
 	void Material::SetEmissiveAffectsGI(bool value)
 	{
 		std::unique_lock lock(_lock);
@@ -345,6 +338,26 @@ namespace HexEngine
 	void Material::Unlock()
 	{
 		_lock.unlock();
+	}
+
+	void Material::IncrementEditorOpenCount()
+	{
+		_editorOpenCount.fetch_add(1, std::memory_order_relaxed);
+	}
+
+	void Material::DecrementEditorOpenCount()
+	{
+		int32_t current = _editorOpenCount.load(std::memory_order_relaxed);
+		while (current > 0)
+		{
+			if (_editorOpenCount.compare_exchange_weak(current, current - 1, std::memory_order_relaxed))
+				break;
+		}
+	}
+
+	bool Material::IsHotReloadSuppressed() const
+	{
+		return _editorOpenCount.load(std::memory_order_relaxed) > 0;
 	}
 
 	const std::wstring& Material::GetMaterialTextureName(MaterialTexture type)

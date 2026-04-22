@@ -6,6 +6,13 @@
 
 namespace HexEngine
 {
+	struct MeshLoadOptions : ResourceLoadOptions
+	{
+		bool createBuffers = true;
+		bool createMaterial = true;
+		bool populateVertices = true;
+	};
+
 	class MeshLoader : public IResourceLoader
 	{
 	public:

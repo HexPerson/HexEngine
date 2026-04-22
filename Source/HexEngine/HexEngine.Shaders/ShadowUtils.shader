@@ -36,21 +36,38 @@
 		{
 			if (cascadeIndex == 0)
 			{
-				return PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples);
+				float pcssShadow = PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples);
+
+				// Extra stable AA pass for near cascade: helps thin/elongated jagged edges.
+				float shadowMapSize = max(g_shadowConfig.shadowMapSize, 1.0f);
+				float aaRadiusUV = 1.25f / shadowMapSize;
+				float aa = 0.0f;
+				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2(-aaRadiusUV, -aaRadiusUV), lightDepthValue).r;
+				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2( aaRadiusUV, -aaRadiusUV), lightDepthValue).r;
+				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2(-aaRadiusUV,  aaRadiusUV), lightDepthValue).r;
+				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2( aaRadiusUV,  aaRadiusUV), lightDepthValue).r;
+				aa *= 0.25f;
+
+				return lerp(pcssShadow, aa, 0.4f);
 			}
 			else
 			{
-				// Stable fixed-radius PCF for cascades > 0 to preserve distant shadow quality.
-				float sum = 0.0f;
-				float pcfRadius = 1.0f;
-				for (float y = -pcfRadius; y <= pcfRadius; y += 1.0f)
+				// Deterministic PCF for cascades > 0 to avoid motion shimmer from derivative/noise-driven kernels.
+				float shadowMapSize = max(g_shadowConfig.shadowMapSize, 1.0f);
+				float baseRadiusTexels = lerp(1.5f, 2.75f, saturate((float)cascadeIndex / 3.0f));
+				float radiusUV = baseRadiusTexels / shadowMapSize;
+				float rotation = (float)cascadeIndex * 1.0471975512f;
+				int sampleCount = max(numSamples, 16);
+
+				float visibility = 0.0f;
+				[loop]
+				for (int s = 0; s < sampleCount; ++s)
 				{
-					for (float x = -pcfRadius; x <= pcfRadius; x += 1.0f)
-					{
-						sum += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + TexOffset(x, y), lightDepthValue).r;
-					}
+					float2 offset = PCSS_VogelDiskSample(s, sampleCount, rotation) * radiusUV;
+					visibility += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + offset, lightDepthValue).r;
 				}
-				return sum / 9.0f;
+
+				return visibility / (float)sampleCount;
 			}
 		}
 		else

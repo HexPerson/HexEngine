@@ -1509,6 +1509,7 @@ namespace HexEditor
 				{
 					HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
 					mx -= centerLoc.x;
+					my -= centerLoc.y;
 				}
 				else
 				{
@@ -1529,6 +1530,8 @@ namespace HexEditor
 				ray.position = mainCamera->GetEntity()->GetPosition();
 
 				HexEngine::RayHit hit;
+
+				hit.position = ray.position + ray.direction * mainCamera->GetFarZ() * 0.25f;
 
 				if (HexEngine::PhysUtils::RayCast(
 					ray,

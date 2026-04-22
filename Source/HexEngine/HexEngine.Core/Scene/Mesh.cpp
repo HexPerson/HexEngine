@@ -107,6 +107,11 @@ namespace HexEngine
 		return dynamic_pointer_cast<Mesh>(g_pEnv->GetResourceSystem().LoadResource(path));
 	}
 
+	std::shared_ptr<Mesh> Mesh::Create(const fs::path& path, MeshLoadOptions* options)
+	{
+		return dynamic_pointer_cast<Mesh>(g_pEnv->GetResourceSystem().LoadResource(path, options));
+	}
+
 	std::shared_ptr<Mesh> Mesh::CreateAsync(const fs::path& path, ResourceLoadedFn fn)
 	{
 		return dynamic_pointer_cast<Mesh>(g_pEnv->GetResourceSystem().LoadResourceAsync(path, fn));

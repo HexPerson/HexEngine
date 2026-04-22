@@ -9,6 +9,7 @@
 #include "MaterialGraph.hpp"
 #include "../FileSystem/IResource.hpp"
 #include "../FileSystem/JsonFile.hpp"
+#include <atomic>
 
 namespace HexEngine
 {
@@ -94,8 +95,6 @@ namespace HexEngine
 		const std::shared_ptr<ITexture2D>& GetTexture(MaterialTexture type) const;
 		uint32_t GetObjectFlags() const;
 
-		void SetVolumeTexture(ITexture3D* texture);
-		ITexture3D* GetVolumeTexture() const { return _volumeTexture; }
 		void SetEmissiveAffectsGI(bool value);
 		bool GetEmissiveAffectsGI() const;
 
@@ -119,6 +118,9 @@ namespace HexEngine
 
 		void Lock();
 		void Unlock();
+		void IncrementEditorOpenCount();
+		void DecrementEditorOpenCount();
+		bool IsHotReloadSuppressed() const;
 
 		bool DoesHaveAnyReflectivity();
 
@@ -132,7 +134,6 @@ namespace HexEngine
 	private:
 		uint32_t _materialId = 0;
 		std::shared_ptr<ITexture2D> _textures[MaterialTexture::Count];
-		ITexture3D* _volumeTexture = nullptr;
 		std::shared_ptr<IShader> _standardShader;
 		std::shared_ptr<IShader> _shadowMapShader = nullptr;
 		std::string _name;
@@ -153,5 +154,6 @@ namespace HexEngine
 
 		std::recursive_mutex _lock;
 		uint32_t _objectFlags = 0;
+		std::atomic<int32_t> _editorOpenCount = 0;
 	};
 }

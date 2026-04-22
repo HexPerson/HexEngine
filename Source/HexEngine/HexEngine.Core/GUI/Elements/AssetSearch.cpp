@@ -63,8 +63,9 @@ namespace HexEngine
 					isVisibleInPopup = rowBottom > viewTop && rowTop < viewBottom;
 				}
 
-				if (isVisibleInPopup && result.preview == nullptr && !result.absolutePath.empty() && g_pEnv->_iconService != nullptr)
+				if (isVisibleInPopup && !result.absolutePath.empty() && g_pEnv->_iconService != nullptr)
 				{
+					// Refresh every frame so we do not hold stale raw icon pointers after icon regeneration/removal.
 					result.preview = g_pEnv->_iconService->GetIcon(result.absolutePath);
 					if (result.preview == nullptr && !result.previewRequested)
 					{
@@ -270,8 +271,9 @@ namespace HexEngine
 		if (_hasSelection == false)
 			return;
 
-		if (_selectedResult.preview == nullptr && !_selectedResult.absolutePath.empty() && g_pEnv->_iconService != nullptr)
+		if (!_selectedResult.absolutePath.empty() && g_pEnv->_iconService != nullptr)
 		{
+			// Refresh every frame so we do not hold stale raw icon pointers after icon regeneration/removal.
 			_selectedResult.preview = g_pEnv->_iconService->GetIcon(_selectedResult.absolutePath);
 			if (_selectedResult.preview == nullptr && !_selectedResult.previewRequested)
 			{

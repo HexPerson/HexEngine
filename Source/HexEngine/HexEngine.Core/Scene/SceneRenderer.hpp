@@ -6,7 +6,6 @@
 #include "../Graphics/GBuffer.hpp"
 #include "../Graphics/BlurEffect.hpp"
 #include "../Graphics/Bloom.hpp"
-#include "CloudVolume.hpp"
 #include "DiffuseGI.hpp"
 #include "GpuVisibilityCulling.hpp"
 #include "../Graphics/TAA.hpp"
@@ -130,14 +129,8 @@ namespace HexEngine
 		std::shared_ptr<IShader> _waterBlitEffect;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
 
-		//BlurEffect* _volumetricBlur = nullptr;
-		//BlurEffect* _waterBlur = nullptr;
-		//BlurEffect* _ssrBlur = nullptr;
-		//ITexture2D* _blueNoise = nullptr;
-
 		Bloom* _bloomEffect = nullptr;
 
-		//CloudVolume* _clouds = nullptr;
 		ITexture3D* _cloudShapeNoise = nullptr;
 		ITexture3D* _cloudDetailNoise = nullptr;
 		IConstantBuffer* _cloudConstantBuffer = nullptr;
@@ -152,8 +145,6 @@ namespace HexEngine
 
 		ITexture2D* _ssrHistory = nullptr;		
 		ITexture2D* _ssrResolved = nullptr;
-
-		//TAA _ssrResolver;
 
 		DenoiserFrameData _denoiseFD;
 	};

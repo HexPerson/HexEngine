@@ -3,6 +3,8 @@
 #include "AssimpModelSystem.hpp"
 #include <HexEngine.Core\Graphics\MaterialLoader.hpp>
 #include <HexEngine.Core\GUI\Elements\DragFloat.hpp>
+#include <functional>
+#include <map>
 
 #define AI2VEC2(val) math::Vector2(val.x, val.y);
 #define AI2VEC3(val) math::Vector3(val.x, val.y, val.z);
@@ -151,9 +153,10 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 
 	auto importAnims = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Import animations", &_importOpts.importAnimations);
 	auto createAnims = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Create materials", &_importOpts.tryAndCreateMaterials);
+	auto mergeChildMeshes = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(320, 20), L"Merge child meshes by material", &_importOpts.mergeChildMeshesByMaterial);
 	auto renameFiles = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Rename files", &_importOpts.renameFiles);
 	auto deleteOriginals = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Delete originals after import", &_importOpts.deleteOriginalsAfterImport);
-	auto importScale = new HexEngine::DragFloat(layout, layout->GetNextPos(), HexEngine::Point(220, 20), L"Import Scale", &_importOpts.importScale, 0.01f, 100.0f, 0.01f, 2);
+	auto importScale = new HexEngine::DragFloat(layout, layout->GetNextPos(), HexEngine::Point(320, 20), L"Import Scale", &_importOpts.importScale, 0.01f, 100.0f, 0.01f, 2);
 
 	constexpr int32_t kTexturePathArrayHeight = 240;
 	auto array = new HexEngine::ArrayElement<std::wstring>(
@@ -312,8 +315,28 @@ std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromFile(
 		ProcessAnimations(model, modelScene);
 
 	std::vector<HexEngine::AnimChannel*> parents(modelScene->mNumAnimations);
+	bool canMergeChildMeshes = _importOpts.mergeChildMeshesByMaterial && !modelScene->HasAnimations();
+	if (canMergeChildMeshes)
+	{
+		for (uint32_t i = 0; i < modelScene->mNumMeshes; ++i)
+		{
+			if (modelScene->mMeshes[i] && modelScene->mMeshes[i]->mNumBones > 0)
+			{
+				canMergeChildMeshes = false;
+				LOG_WARN("Skipping merge-child-meshes import option for '%S' because skinned meshes were detected", path.filename().c_str());
+				break;
+			}
+		}
+	}
 
-	ProcessNode(model, modelScene->mRootNode, parents, modelScene, fileSystem);
+	if (canMergeChildMeshes)
+	{
+		ProcessMergedStaticMeshes(model, modelScene, fileSystem);
+	}
+	else
+	{
+		ProcessNode(model, modelScene->mRootNode, parents, modelScene, fileSystem);
+	}
 
 	for (auto& mesh : _createdMeshes)
 	{
@@ -453,8 +476,28 @@ std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromMemor
 	ProcessAnimations(model, modelScene);
 
 	std::vector<HexEngine::AnimChannel*> parentAnims(modelScene->mNumAnimations);
+	bool canMergeChildMeshes = _importOpts.mergeChildMeshesByMaterial && !modelScene->HasAnimations();
+	if (canMergeChildMeshes)
+	{
+		for (uint32_t i = 0; i < modelScene->mNumMeshes; ++i)
+		{
+			if (modelScene->mMeshes[i] && modelScene->mMeshes[i]->mNumBones > 0)
+			{
+				canMergeChildMeshes = false;
+				LOG_WARN("Skipping merge-child-meshes import option for '%S' because skinned meshes were detected", relativePath.filename().c_str());
+				break;
+			}
+		}
+	}
 
-	ProcessNode(model, modelScene->mRootNode, parentAnims, modelScene, fileSystem);
+	if (canMergeChildMeshes)
+	{
+		ProcessMergedStaticMeshes(model, modelScene, fileSystem);
+	}
+	else
+	{
+		ProcessNode(model, modelScene->mRootNode, parentAnims, modelScene, fileSystem);
+	}
 
 	/*for (auto& mesh : model->GetMeshes())
 	{
@@ -578,6 +621,211 @@ std::wstring AssimpModelImporter::GetResourceDirectory() const
 void AssimpModelImporter::UnloadResource(HexEngine::IResource* resource)
 {
 	SAFE_DELETE(resource);
+}
+
+void AssimpModelImporter::ProcessMergedStaticMeshes(std::shared_ptr<HexEngine::Model>& model, const aiScene* scene, HexEngine::FileSystem* fileSystem)
+{
+	struct MeshNodePair
+	{
+		aiMesh* mesh = nullptr;
+		aiNode* node = nullptr;
+	};
+
+	std::map<uint32_t, std::vector<MeshNodePair>> materialGroups;
+
+	std::function<void(aiNode*)> gatherNodeMeshes = [&](aiNode* node)
+	{
+		if (!node)
+			return;
+
+		for (uint32_t i = 0; i < node->mNumMeshes; ++i)
+		{
+			const uint32_t meshIndex = node->mMeshes[i];
+			if (meshIndex >= scene->mNumMeshes)
+				continue;
+
+			aiMesh* mesh = scene->mMeshes[meshIndex];
+			if (!mesh)
+				continue;
+
+			materialGroups[mesh->mMaterialIndex].push_back({ mesh, node });
+		}
+
+		for (uint32_t i = 0; i < node->mNumChildren; ++i)
+		{
+			gatherNodeMeshes(node->mChildren[i]);
+		}
+	};
+
+	gatherNodeMeshes(scene->mRootNode);
+
+	const float importScale = std::clamp(_importOpts.importScale, 0.01f, 100.0f);
+
+	for (const auto& [materialIndex, meshesForMaterial] : materialGroups)
+	{
+		if (meshesForMaterial.empty())
+			continue;
+
+		aiMaterial* material = nullptr;
+		if (materialIndex < scene->mNumMaterials)
+			material = scene->mMaterials[materialIndex];
+
+		std::string mergedMeshName;
+		if (material)
+		{
+			mergedMeshName = material->GetName().C_Str();
+		}
+		if (mergedMeshName.empty())
+		{
+			mergedMeshName = "Material_" + std::to_string(materialIndex);
+		}
+
+		mergedMeshName.erase(std::remove(mergedMeshName.begin(), mergedMeshName.end(), ':'));
+		mergedMeshName.erase(std::remove(mergedMeshName.begin(), mergedMeshName.end(), '.'));
+		std::replace(mergedMeshName.begin(), mergedMeshName.end(), '/', '_');
+		std::replace(mergedMeshName.begin(), mergedMeshName.end(), '\\', '_');
+		std::replace(mergedMeshName.begin(), mergedMeshName.end(), '|', '_');
+		std::replace(mergedMeshName.begin(), mergedMeshName.end(), '?', '_');
+		std::replace(mergedMeshName.begin(), mergedMeshName.end(), '*', '_');
+		std::replace(mergedMeshName.begin(), mergedMeshName.end(), '<', '_');
+		std::replace(mergedMeshName.begin(), mergedMeshName.end(), '>', '_');
+		std::replace(mergedMeshName.begin(), mergedMeshName.end(), '"', '_');
+
+		if (mergedMeshName.empty())
+		{
+			mergedMeshName = "MergedMesh_" + std::to_string(materialIndex);
+		}
+
+		auto modelMesh = std::shared_ptr<HexEngine::Mesh>(new HexEngine::Mesh(model, mergedMeshName), HexEngine::ResourceDeleter());
+
+		auto fixedExtensionPath = _currentPath;
+
+		if (_importOpts.renameFiles == false)
+			fixedExtensionPath.replace_filename(_currentPath.stem().string());
+		else
+			fixedExtensionPath.replace_filename(_currentPath.stem().string() + "_" + mergedMeshName);
+
+		fixedExtensionPath.replace_extension(".hmesh_tmp");
+
+		int32_t count = 0;
+		while (true)
+		{
+			bool found = false;
+
+			for (auto& createdMesh : _createdMeshes)
+			{
+				if (createdMesh.first == fixedExtensionPath)
+				{
+					fixedExtensionPath.replace_filename(_currentPath.stem().string() + "_" + mergedMeshName + "_" + std::to_string(count));
+					fixedExtensionPath.replace_extension(".hmesh_tmp");
+					count++;
+					found = true;
+					break;
+				}
+			}
+
+			if (!found)
+				break;
+		}
+
+		modelMesh->SetPaths(fixedExtensionPath, fileSystem);
+		modelMesh->SetLoader(HexEngine::g_pEnv->_meshLoader);
+
+		std::vector<math::Vector4> points;
+		uint32_t totalFaceCount = 0;
+
+		for (const auto& meshNodePair : meshesForMaterial)
+		{
+			aiMesh* sourceMesh = meshNodePair.mesh;
+			aiNode* sourceNode = meshNodePair.node;
+			if (!sourceMesh || !sourceNode)
+				continue;
+
+			totalFaceCount += sourceMesh->mNumFaces;
+
+			auto transformation = sourceNode->mTransformation;
+			auto parent = sourceNode->mParent;
+			while (parent)
+			{
+				transformation *= parent->mTransformation;
+				parent = parent->mParent;
+			}
+
+			math::Matrix transmat = *(math::Matrix*)&transformation.a1;
+			transmat = transmat.Transpose();
+
+			const HexEngine::MeshIndexFormat indexOffset = static_cast<HexEngine::MeshIndexFormat>(modelMesh->GetNumVertices());
+
+			for (uint32_t i = 0; i < sourceMesh->mNumVertices; ++i)
+			{
+				HexEngine::MeshVertex vertex;
+				const auto vec3 = AI2VEC3(sourceMesh->mVertices[i]);
+				vertex._position = math::Vector4(vec3.x, vec3.y, vec3.z, 1.0f);
+				vertex._position = math::Vector4::Transform(vertex._position, transmat);
+				vertex._position *= importScale;
+
+				points.push_back(vertex._position);
+
+				if (sourceMesh->mTextureCoords[0])
+					vertex._texcoord = AI2VEC2(sourceMesh->mTextureCoords[0][i]);
+
+				if (sourceMesh->mTangents != nullptr)
+				{
+					vertex._tangent = AI2VEC3(sourceMesh->mTangents[i]);
+					vertex._bitangent = AI2VEC3(sourceMesh->mBitangents[i]);
+					vertex._tangent = math::Vector3::TransformNormal(vertex._tangent, transmat);
+					vertex._bitangent = math::Vector3::TransformNormal(vertex._bitangent, transmat);
+					vertex._tangent.Normalize();
+					vertex._bitangent.Normalize();
+				}
+
+				if (sourceMesh->mNormals != nullptr)
+				{
+					vertex._normal = AI2VEC3(sourceMesh->mNormals[i]);
+					vertex._normal = math::Vector3::TransformNormal(vertex._normal, transmat);
+					vertex._normal.Normalize();
+				}
+
+				modelMesh->AddVertex(vertex);
+			}
+
+			for (uint32_t i = 0; i < sourceMesh->mNumFaces; ++i)
+			{
+				aiFace& face = sourceMesh->mFaces[i];
+				for (uint32_t j = 0; j < face.mNumIndices; ++j)
+				{
+					modelMesh->AddIndex(indexOffset + static_cast<HexEngine::MeshIndexFormat>(face.mIndices[j]));
+				}
+			}
+		}
+
+		if (modelMesh->GetNumVertices() == 0 || modelMesh->GetNumIndices() == 0)
+		{
+			continue;
+		}
+
+		modelMesh->SetNumFaces(totalFaceCount);
+
+		if (!points.empty())
+		{
+			dx::BoundingBox abb;
+			dx::BoundingBox::CreateFromPoints(abb, points.size(), (const math::Vector3*)points.data(), sizeof(math::Vector4));
+			modelMesh->SetAABB(abb);
+
+			dx::BoundingOrientedBox obb;
+			dx::BoundingOrientedBox::CreateFromBoundingBox(obb, modelMesh->GetAABB());
+			modelMesh->SetOBB(obb);
+		}
+
+		if (_importOpts.tryAndCreateMaterials && material)
+		{
+			modelMesh->SetMaterialName(material->GetName().C_Str());
+			ProcessMaterial(modelMesh, scene, material, fileSystem);
+		}
+
+		model->AddMesh(modelMesh);
+		_createdMeshes.push_back({ fixedExtensionPath, modelMesh });
+	}
 }
 
 void AssimpModelImporter::ProcessNode(std::shared_ptr<HexEngine::Model>& model, aiNode* node, std::vector<HexEngine::AnimChannel*> parentAnims, const aiScene* scene, HexEngine::FileSystem* fileSystem)
@@ -1326,6 +1574,11 @@ std::shared_ptr<HexEngine::ITexture2D> AssimpModelImporter::LoadTexture(std::sha
 		material->GetTexture(type, 0, &str);
 
 		std::string path = str.C_Str();
+		for (char& c : path)
+		{
+			if (c == '\\')
+				c = '/';
+		}
 
 		LOG_DEBUG("Texture '%s' has %d textures!", path.c_str(), count);
 
@@ -1398,7 +1651,8 @@ std::shared_ptr<HexEngine::ITexture2D> AssimpModelImporter::LoadTexture(std::sha
 			}
 		}
 
-		auto texture = HexEngine::ITexture2D::Create(fsPath);
+		const fs::path normalizedFsPath = fs::path(fsPath.generic_string());
+		auto texture = HexEngine::ITexture2D::Create(normalizedFsPath);
 
 		if (!texture)
 		{

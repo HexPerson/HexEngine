@@ -330,7 +330,7 @@ namespace HexEditor
 				{
 					auto hit = g_pUIManager->RayCastWorld({ _dragAndDropEntity });
 
-					if (hit.entity != nullptr)
+					//if (hit.entity != nullptr)
 					{
 						if (_dragAndDropEntity == nullptr)
 						{

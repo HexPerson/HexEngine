@@ -48,6 +48,7 @@ struct AssimpImportOptions
 {
 	bool importAnimations = true;
 	bool tryAndCreateMaterials = false;
+	bool mergeChildMeshesByMaterial = false;
 	bool renameFiles = true;
 	bool deleteOriginalsAfterImport = true;
 	float importScale = 1.0f;
@@ -78,6 +79,7 @@ public:
 
 private:
 	void							ProcessNode(std::shared_ptr<HexEngine::Model>& model, aiNode* node, std::vector<HexEngine::AnimChannel*> parentAnims, const aiScene* scene, HexEngine::FileSystem* fileSystem);
+	void							ProcessMergedStaticMeshes(std::shared_ptr<HexEngine::Model>& model, const aiScene* scene, HexEngine::FileSystem* fileSystem);
 	std::shared_ptr<HexEngine::Mesh>			ProcessMesh(std::shared_ptr<HexEngine::Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, HexEngine::FileSystem* fileSystem);
 	std::shared_ptr<HexEngine::AnimatedMesh>	ProcessAnimatedMesh(std::shared_ptr<HexEngine::Model>& model, aiMesh* mesh, const aiScene* scene, aiNode* node, HexEngine::FileSystem* fileSystem);
 	void							ProcessMaterial(std::shared_ptr<HexEngine::Mesh> mesh, const aiScene* scene, aiMaterial* material, HexEngine::FileSystem* fileSystem);

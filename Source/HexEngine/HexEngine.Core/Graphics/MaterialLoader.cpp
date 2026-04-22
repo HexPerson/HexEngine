@@ -128,6 +128,13 @@ namespace HexEngine
 		}
 
 		std::shared_ptr<Material> materialToReload = dynamic_pointer_cast<Material>(resource);
+		if (materialToReload != nullptr && materialToReload->IsHotReloadSuppressed())
+		{
+			LOG_DEBUG(
+				"Skipping material hot-reload for '%s' while material graph editor is open.",
+				resource->GetAbsolutePath().string().c_str());
+			return;
+		}
 
 		json matData;
 		if (!TryReadAndParseMaterialJson(resource->GetAbsolutePath(), matData))
@@ -299,6 +306,11 @@ namespace HexEngine
 				{
 					for (const auto& error : compileResult.errors)
 						LOG_WARN("Material instance compile error: %s", error.c_str());
+				}
+				else
+				{
+					for (const auto& warning : compileResult.warnings)
+						LOG_WARN("Material instance compile warning: %s", warning.c_str());
 				}
 			}
 			else

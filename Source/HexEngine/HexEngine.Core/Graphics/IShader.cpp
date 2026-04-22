@@ -5,6 +5,11 @@
 
 namespace HexEngine
 {
+	IShader::~IShader()
+	{
+		Destroy();
+	}
+
 	void IShader::Destroy()
 	{
 		for (auto& stage : _stages)
@@ -13,6 +18,7 @@ namespace HexEngine
 			{
 				stage->Destroy();
 				delete stage;
+				stage = nullptr;
 			}
 		}
 	}

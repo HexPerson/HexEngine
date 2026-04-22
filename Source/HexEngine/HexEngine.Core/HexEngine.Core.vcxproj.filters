@@ -1,1111 +1,357 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Source Files">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;def;odl;idl;hpj;bat;asm;asmx</Extensions>
-    </Filter>
-    <Filter Include="Header Files">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
-    </Filter>
-    <Filter Include="Resource Files">
-      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
-      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
-    </Filter>
+    <ClCompile Include="Audio\AudioManager.cpp" />
+    <ClCompile Include="Audio\SoundEffect.cpp" />
+    <ClCompile Include="Entity\Component\InstancedStaticMeshComponent.cpp" />
+    <ClCompile Include="Entity\Component\NavigationComponent.cpp" />
+    <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp" />
+    <ClCompile Include="Entity\Entity.cpp" />
+    <ClCompile Include="Entity\Component\AudioListener.cpp" />
+    <ClCompile Include="Entity\Component\AudioSource.cpp" />
+    <ClCompile Include="Entity\Component\HingeJoint.cpp" />
+    <ClCompile Include="Entity\Component\Joint.cpp" />
+    <ClCompile Include="Entity\Component\MotorComponent.cpp" />
+    <ClCompile Include="Entity\Component\ScriptComponent.cpp" />
+    <ClCompile Include="Entity\Component\ThirdPersonCameraController.cpp" />
+    <ClCompile Include="Environment\HeadlessEnvironment.cpp" />
+    <ClCompile Include="FileSystem\AssetFile.cpp" />
+    <ClCompile Include="FileSystem\AssetPackage.cpp" />
+    <ClCompile Include="FileSystem\AssetPackageManager.cpp" />
+    <ClCompile Include="FileSystem\IResource.cpp" />
+    <ClCompile Include="FileSystem\PrefabLoader.cpp" />
+    <ClCompile Include="FileSystem\ProjectFile.cpp" />
+    <ClCompile Include="Graphics\IFontResource.cpp" />
+    <ClCompile Include="Graphics\MeshLoader.cpp" />
+    <ClCompile Include="Graphics\TextureLoader.cpp" />
+    <ClCompile Include="GUI\Elements\Canvas.cpp" />
+    <ClCompile Include="GUI\Elements\ArrayElementBase.cpp" />
+    <ClCompile Include="GUI\Elements\LineEditDialog.cpp" />
+    <ClCompile Include="GUI\Elements\ListNode.cpp" />
+    <ClCompile Include="GUI\Elements\LoadingDialog.cpp" />
+    <ClCompile Include="GUI\Elements\MaterialDialog.cpp" />
+    <ClCompile Include="GUI\Elements\MaterialGraphDialog.cpp" />
+    <ClCompile Include="GUI\Elements\MessageBox.cpp" />
+    <ClCompile Include="GUI\Elements\AssetSearch.cpp" />
+    <ClCompile Include="GUI\Elements\QuestionDialog.cpp" />
+    <ClCompile Include="GUI\Elements\TextureSearch.cpp" />
+    <ClCompile Include="GUI\Elements\Vector2Edit.cpp" />
+    <ClCompile Include="Scene\AnimatedMesh.cpp" />
+    <ClCompile Include="Scene\Prefab.cpp" />
+    <ClCompile Include="Scripting\ScriptFile.cpp" />
+    <ClCompile Include="Graphics\Bloom.cpp" />
+    <ClCompile Include="Graphics\IconService.cpp" />
+    <ClCompile Include="Graphics\LogWindowMessages.cpp" />
+    <ClCompile Include="Graphics\TAA.cpp" />
+    <ClCompile Include="Graphics\TextureAtlas.cpp" />
+    <ClCompile Include="Graphics\UIInstance.cpp" />
+    <ClCompile Include="GUI\Elements\Button.cpp" />
+    <ClCompile Include="GUI\Elements\Checkbox.cpp" />
+    <ClCompile Include="GUI\Elements\ColourPicker.cpp" />
+    <ClCompile Include="GUI\Elements\ComponentWidget.cpp" />
+    <ClCompile Include="GUI\Elements\ContextMenu.cpp" />
+    <ClCompile Include="GUI\Elements\Dialog.cpp" />
+    <ClCompile Include="GUI\Elements\DragFloat.cpp" />
+    <ClCompile Include="GUI\Elements\DragInt.cpp" />
+    <ClCompile Include="GUI\Elements\DropDown.cpp" />
+    <ClCompile Include="GUI\Elements\Element.cpp" />
+    <ClCompile Include="GUI\Elements\EntityList.cpp" />
+    <ClCompile Include="GUI\Elements\EntitySelector.cpp" />
+    <ClCompile Include="GUI\Elements\EntitySearch.cpp" />
+    <ClCompile Include="GUI\Elements\GroupBox.cpp" />
+    <ClCompile Include="GUI\Elements\ImmediateMode.cpp" />
+    <ClCompile Include="GUI\Elements\InputFloat.cpp" />
+    <ClCompile Include="GUI\Elements\LineEdit.cpp" />
+    <ClCompile Include="GUI\Elements\ListBox.cpp" />
+    <ClCompile Include="GUI\Elements\MenuBar.cpp" />
+    <ClCompile Include="GUI\Elements\Point.cpp" />
+    <ClCompile Include="GUI\Elements\ScrollView.cpp" />
+    <ClCompile Include="GUI\Elements\Style.cpp" />
+    <ClCompile Include="GUI\Elements\TabItem.cpp" />
+    <ClCompile Include="GUI\Elements\TabView.cpp" />
+    <ClCompile Include="GUI\Elements\TreeList.cpp" />
+    <ClCompile Include="GUI\Elements\Vector3Edit.cpp" />
+    <ClCompile Include="GUI\Elements\VerticalLayout.cpp" />
+    <ClCompile Include="GUI\UIManager.cpp" />
+    <ClCompile Include="Input\Console.cpp" />
+    <ClCompile Include="Input\HCommand.cpp" />
+    <ClCompile Include="Input\InputDevice.cpp" />
+    <ClCompile Include="Input\MouseInputDevice.cpp" />
+    <ClCompile Include="Input\StandardCommands.cpp" />
+    <ClCompile Include="Math\easing.cpp" />
+    <ClCompile Include="Physics\PhysUtils.cpp" />
+    <ClCompile Include="Plugin\PluginSystem.cpp" />
+    <ClCompile Include="Scene\PVS.cpp" />
+    <ClCompile Include="Scene\SceneFramingUtils.cpp" />
+    <ClCompile Include="Terrain\Chunk.cpp" />
+    <ClCompile Include="Terrain\ChunkManager.cpp" />
+    <ClCompile Include="Entity\Component\BaseComponent.cpp" />
+    <ClCompile Include="Entity\Component\Billboard.cpp" />
+    <ClCompile Include="Entity\Component\Camera.cpp" />
+    <ClCompile Include="Entity\Component\Collider.cpp" />
+    <ClCompile Include="Entity\Component\InteractionComponent.cpp" />
+    <ClCompile Include="Entity\Component\Light.cpp" />
+    <ClCompile Include="Entity\Component\SpotLight.cpp" />
+    <ClCompile Include="Entity\Component\FirstPersonCameraController.cpp" />
+    <ClCompile Include="Entity\Component\StaticMeshComponent.cpp" />
+    <ClCompile Include="Entity\Component\RigidBody.cpp" />
+    <ClCompile Include="Entity\Component\RTSCameraController.cpp" />
+    <ClCompile Include="Entity\Component\SphereCollider.cpp" />
+    <ClCompile Include="Entity\Component\PointLight.cpp" />
+    <ClCompile Include="Entity\Component\DirectionalLight.cpp" />
+    <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp" />
+    <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp" />
+    <ClCompile Include="Entity\Component\Transform.cpp" />
+    <ClCompile Include="Entity\Component\UpdateComponent.cpp" />
+    <ClCompile Include="Entity\Messaging\MessageDispatcher.cpp" />
+    <ClCompile Include="Environment\ClassRegistry.cpp" />
+    <ClCompile Include="Environment\Game3DEnvironment.cpp" />
+    <ClCompile Include="Environment\IEnvironment.cpp" />
+    <ClCompile Include="Environment\Profiler.cpp" />
+    <ClCompile Include="FileSystem\SceneSaveFile.cpp" />
+    <ClCompile Include="Graphics\BlurEffect.cpp" />
+    <ClCompile Include="Graphics\GBuffer.cpp" />
+    <ClCompile Include="Graphics\Material.cpp" />
+    <ClCompile Include="Graphics\MaterialGraph.cpp" />
+    <ClCompile Include="Graphics\MaterialGraphCompiler.cpp" />
+    <ClCompile Include="Graphics\MaterialGraphValidator.cpp" />
+    <ClCompile Include="Graphics\MaterialLoader.cpp" />
+    <ClCompile Include="Graphics\ShadowMap.cpp" />
+    <ClCompile Include="GUI\DebugGUI.cpp" />
+    <ClCompile Include="GUI\FontImporter.cpp" />
+    <ClCompile Include="GUI\GuiRenderer.cpp" />
+    <ClCompile Include="Input\HVar.cpp" />
+    <ClCompile Include="Input\CommandManager.cpp" />
+    <ClCompile Include="Input\InputSystem.cpp" />
+    <ClCompile Include="Environment\LogFile.cpp" />
+    <ClCompile Include="Environment\TimeManager.cpp" />
+    <ClCompile Include="FileSystem\FileSystem.cpp" />
+    <ClCompile Include="FileSystem\DiskFile.cpp" />
+    <ClCompile Include="FileSystem\KeyValues.cpp" />
+    <ClCompile Include="FileSystem\ResourceSystem.cpp" />
+    <ClCompile Include="Graphics\DebugRenderer.cpp" />
+    <ClCompile Include="Graphics\IShader.cpp" />
+    <ClCompile Include="Graphics\ITexture2D.cpp" />
+    <ClCompile Include="Graphics\ShaderSystem.cpp" />
+    <ClCompile Include="Graphics\Window.cpp" />
+    <ClCompile Include="Math\Bezier.cpp" />
+    <ClCompile Include="Math\FloatMath.cpp" />
+    <ClCompile Include="Graphics\IInputLayout.cpp" />
+    <ClCompile Include="Scene\DiffuseGI.cpp" />
+    <ClCompile Include="Scene\GpuVisibilityCulling.cpp" />
+    <ClCompile Include="Scene\Mesh.cpp" />
+    <ClCompile Include="Scene\MeshInstance.cpp" />
+    <ClCompile Include="Scene\MeshInstanceManager.cpp" />
+    <ClCompile Include="Scene\MeshPrimitives.cpp" />
+    <ClCompile Include="Scene\Model.cpp" />
+    <ClCompile Include="Scene\Scene.cpp" />
+    <ClCompile Include="Scene\SceneManager.cpp" />
+    <ClCompile Include="Scene\SceneRenderer.cpp" />
+    <ClCompile Include="Terrain\HeightMapGenerator.cpp" />
+    <ClCompile Include="Terrain\TerrainGenerator.cpp" />
+    <ClCompile Include="Utility\MemoryManager.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Required.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\Window.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\IEnvironment.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\Game3DEnvironment.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\TimeManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\LogFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\IFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\DiskFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\IModelSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\Mesh.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\Model.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\ITexture.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\ArchitectEnvironment.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IGraphicsDevice.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\ITexture2D.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IVertexBuffer.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IIndexBuffer.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\RenderList.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\KeyValues.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\IResource.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\ResourceSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\FileSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\ShaderSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IShader.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IShaderStage.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IInputLayout.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\INativeGraphicsResource.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Entity.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IConstantBuffer.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\SceneManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\Scene.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\IGameExtension.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\DebugRenderer.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\MeshInstance.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\RenderState.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\FirstPersonCameraController.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Reflection\GUID.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Reflection\IObject.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Reflection\GUID.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Reflection\IObject.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Input\IInputSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Input\InputSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Physics\IPhysicsSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\Collider.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\SphereCollider.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\Transform.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\BaseComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Physics\IRigidBody.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\RigidBody.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Physics\ICollider.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\StaticMeshComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\GuiRenderer.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\FontImporter.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IFontImporter.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IFontResource.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\RTSCameraController.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\MeshInstanceManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\DebugGUI.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\Profiler.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Input\CommandManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Input\HVar.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Math\FloatMath.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Utility\MemoryManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\Octree.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Terrain\Chunk.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Math\Bezier.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Terrain\ChunkManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Audio\AudioManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Audio\SoundEffect.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Physics\IController.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\Camera.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\SpotLight.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\PointLight.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\Light.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\Billboard.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\UpdateComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Messaging\MessageListener.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Messaging\Message.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Messaging\MessageDispatcher.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\DirectionalLight.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\InteractionComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\IEntityListener.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\SceneSaveFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Utility\CRC32.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\ShadowMap.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\Material.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\MaterialGraph.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\MaterialGraphCompiler.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\MaterialGraphValidator.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\MeshPrimitives.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\SceneRenderer.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\GBuffer.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\CloudVolume.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\ITexture3D.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\ClassRegistry.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\ComponentTypes.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="HexEngine.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\BlurEffect.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Terrain\MarchingCubes.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\MaterialLoader.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\Bloom.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\LogWindowMessages.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Math\easing.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Plugin\PluginSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Plugin\IPlugin.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\ISSAOProvider.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\AssetFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\ICompressionProvider.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Environment\HeadlessEnvironment.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\AssetPackageManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Input\InputDevice.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Input\MouseInputDevice.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Button.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Dialog.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Element.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\GroupBox.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\LineEdit.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ListBox.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\MenuBar.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Point.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ScrollView.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Style.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\TabView.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\TreeList.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\VerticalLayout.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\UIManager.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ImmediateMode.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\InputFloat.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Input\HCommand.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Input\Console.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\MotorComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ContextMenu.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ComponentWidget.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Vector3Edit.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Checkbox.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\DragFloat.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\DropDown.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\ProjectFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\AssetPackage.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IParticleSystem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\TabItem.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\ThirdPersonCameraController.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\TAA.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Terrain\HeightMapGenerator.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Terrain\TerrainGenerator.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\DragInt.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ColourPicker.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\PVS.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\SceneFramingUtils.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\RenderStructs.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IconService.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Physics\PhysUtils.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\Joint.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\HingeJoint.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\EntitySelector.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\EntityList.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\EntitySearch.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\XmlFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\JsonFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\UIInstance.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\TextureAtlas.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\DrawList.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\AudioListener.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\AudioSource.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\ScriptComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scripting\ScriptFile.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scripting\IScriptEngine.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\LineEditDialog.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\QuestionDialog.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\LoadingDialog.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\AnimatedMesh.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ListNode.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Vector2Edit.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\Canvas.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ArrayElement.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\ArrayElementBase.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IDenoiserProvider.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\IStreamlineProvider.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\MaterialDialog.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\MaterialGraphDialog.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\TextureSearch.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\AssetSearch.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GUI\Elements\MessageBox.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\MeshLoader.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Graphics\TextureLoader.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\IResourceLoader.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\INavMeshProvider.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\NavigationComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Entity\Component\InstancedStaticMeshComponent.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileSystem\PrefabLoader.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\Prefab.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="Graphics\Window.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Environment\IEnvironment.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Environment\Game3DEnvironment.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Environment\TimeManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\DiskFile.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Environment\LogFile.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\Model.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\Mesh.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\KeyValues.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\ResourceSystem.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\FileSystem.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\ShaderSystem.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\IShader.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Entity.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\SceneManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\Scene.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\DebugRenderer.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\MeshInstance.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\ITexture2D.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\FirstPersonCameraController.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Input\InputSystem.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\SphereCollider.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\Transform.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\BaseComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\Collider.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\RigidBody.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\StaticMeshComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\IInputLayout.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\GuiRenderer.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\FontImporter.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\RTSCameraController.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\MeshInstanceManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\DebugGUI.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Environment\Profiler.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Input\HVar.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Input\CommandManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Math\FloatMath.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Utility\MemoryManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Terrain\Chunk.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Math\Bezier.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Terrain\ChunkManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Audio\AudioManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\Camera.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\SpotLight.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\PointLight.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\Billboard.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Messaging\MessageDispatcher.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\DirectionalLight.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\InteractionComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\SceneSaveFile.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\UpdateComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\Light.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\ShadowMap.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\Material.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\MaterialGraph.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\MaterialGraphCompiler.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\MaterialGraphValidator.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\MeshPrimitives.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\SceneRenderer.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\GBuffer.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Environment\ClassRegistry.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\BlurEffect.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\MaterialLoader.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\CloudVolume.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Audio\SoundEffect.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\Bloom.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\LogWindowMessages.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Math\easing.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Plugin\PluginSystem.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Environment\HeadlessEnvironment.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\AssetFile.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Input\InputDevice.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Input\MouseInputDevice.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Button.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Dialog.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Element.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\GroupBox.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\LineEdit.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\ListBox.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\MenuBar.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Point.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\ScrollView.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Style.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\TabView.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\TreeList.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\VerticalLayout.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\UIManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\ImmediateMode.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\InputFloat.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Input\HCommand.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Input\StandardCommands.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Input\Console.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\MotorComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\ContextMenu.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\ComponentWidget.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Vector3Edit.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Checkbox.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\DragFloat.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\DropDown.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\ProjectFile.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\AssetPackageManager.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\AssetPackage.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\TabItem.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\ThirdPersonCameraController.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\TAA.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Terrain\HeightMapGenerator.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Terrain\TerrainGenerator.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\DragInt.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\ColourPicker.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\PVS.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\SceneFramingUtils.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\IconService.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Physics\PhysUtils.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\Joint.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\HingeJoint.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\EntitySelector.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\EntityList.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\EntitySearch.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\UIInstance.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\TextureAtlas.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\AudioListener.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\AudioSource.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\ScriptComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scripting\ScriptFile.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\LineEditDialog.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\QuestionDialog.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\LoadingDialog.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\AnimatedMesh.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\ListNode.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Vector2Edit.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\Canvas.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\ArrayElementBase.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\MaterialDialog.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\MaterialGraphDialog.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\TextureSearch.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\AssetSearch.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GUI\Elements\MessageBox.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\IResource.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\MeshLoader.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\TextureLoader.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\NavigationComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Entity\Component\InstancedStaticMeshComponent.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="FileSystem\PrefabLoader.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Graphics\IFontResource.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\Prefab.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="Scene\DiffuseGI.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scene\GpuVisibilityCulling.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="Scene\DiffuseGI.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Scene\GpuVisibilityCulling.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <None Include="HexEngine.Shaders.targets" />
+    <ClInclude Include="Audio\AudioManager.hpp" />
+    <ClInclude Include="Audio\SoundEffect.hpp" />
+    <ClInclude Include="Entity\Component\InstancedStaticMeshComponent.hpp" />
+    <ClInclude Include="Entity\Component\NavigationComponent.hpp" />
+    <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp" />
+    <ClInclude Include="Entity\Entity.hpp" />
+    <ClInclude Include="Entity\Component\AudioListener.hpp" />
+    <ClInclude Include="Entity\Component\AudioSource.hpp" />
+    <ClInclude Include="Entity\Component\HingeJoint.hpp" />
+    <ClInclude Include="Entity\Component\Joint.hpp" />
+    <ClInclude Include="Entity\Component\MotorComponent.hpp" />
+    <ClInclude Include="Entity\Component\ScriptComponent.hpp" />
+    <ClInclude Include="Entity\Component\ThirdPersonCameraController.hpp" />
+    <ClInclude Include="Environment\HeadlessEnvironment.hpp" />
+    <ClInclude Include="FileSystem\AssetFile.hpp" />
+    <ClInclude Include="FileSystem\AssetPackage.hpp" />
+    <ClInclude Include="FileSystem\AssetPackageManager.hpp" />
+    <ClInclude Include="FileSystem\ICompressionProvider.hpp" />
+    <ClInclude Include="FileSystem\IResourceLoader.hpp" />
+    <ClInclude Include="FileSystem\JsonFile.hpp" />
+    <ClInclude Include="FileSystem\PrefabLoader.hpp" />
+    <ClInclude Include="FileSystem\ProjectFile.hpp" />
+    <ClInclude Include="Graphics\IDenoiserProvider.hpp" />
+    <ClInclude Include="Graphics\IStreamlineProvider.hpp" />
+    <ClInclude Include="Graphics\MeshLoader.hpp" />
+    <ClInclude Include="Graphics\TextureLoader.hpp" />
+    <ClInclude Include="GUI\Elements\Canvas.hpp" />
+    <ClInclude Include="GUI\Elements\ArrayElement.hpp" />
+    <ClInclude Include="GUI\Elements\ArrayElementBase.hpp" />
+    <ClInclude Include="GUI\Elements\LineEditDialog.hpp" />
+    <ClInclude Include="GUI\Elements\ListNode.hpp" />
+    <ClInclude Include="GUI\Elements\LoadingDialog.hpp" />
+    <ClInclude Include="GUI\Elements\MaterialDialog.hpp" />
+    <ClInclude Include="GUI\Elements\MaterialGraphDialog.hpp" />
+    <ClInclude Include="GUI\Elements\MessageBox.hpp" />
+    <ClInclude Include="GUI\Elements\AssetSearch.hpp" />
+    <ClInclude Include="GUI\Elements\QuestionDialog.hpp" />
+    <ClInclude Include="GUI\Elements\TextureSearch.hpp" />
+    <ClInclude Include="GUI\Elements\Vector2Edit.hpp" />
+    <ClInclude Include="Scene\AnimatedMesh.hpp" />
+    <ClInclude Include="Scene\INavMeshProvider.hpp" />
+    <ClInclude Include="Scene\Prefab.hpp" />
+    <ClInclude Include="Scripting\ScriptFile.hpp" />
+    <ClInclude Include="FileSystem\XmlFile.hpp" />
+    <ClInclude Include="Graphics\Bloom.hpp" />
+    <ClInclude Include="Graphics\IconService.hpp" />
+    <ClInclude Include="Graphics\IParticleSystem.hpp" />
+    <ClInclude Include="Graphics\ISSAOProvider.hpp" />
+    <ClInclude Include="Graphics\LogWindowMessages.hpp" />
+    <ClInclude Include="Graphics\RenderStructs.hpp" />
+    <ClInclude Include="Graphics\TAA.hpp" />
+    <ClInclude Include="Graphics\TextureAtlas.hpp" />
+    <ClInclude Include="Graphics\UIInstance.hpp" />
+    <ClInclude Include="GUI\DrawList.hpp" />
+    <ClInclude Include="GUI\Elements\Button.hpp" />
+    <ClInclude Include="GUI\Elements\Checkbox.hpp" />
+    <ClInclude Include="GUI\Elements\ColourPicker.hpp" />
+    <ClInclude Include="GUI\Elements\ComponentWidget.hpp" />
+    <ClInclude Include="GUI\Elements\ContextMenu.hpp" />
+    <ClInclude Include="GUI\Elements\Dialog.hpp" />
+    <ClInclude Include="GUI\Elements\DragFloat.hpp" />
+    <ClInclude Include="GUI\Elements\DragInt.hpp" />
+    <ClInclude Include="GUI\Elements\DropDown.hpp" />
+    <ClInclude Include="GUI\Elements\Element.hpp" />
+    <ClInclude Include="GUI\Elements\EntityList.hpp" />
+    <ClInclude Include="GUI\Elements\EntitySelector.hpp" />
+    <ClInclude Include="GUI\Elements\EntitySearch.hpp" />
+    <ClInclude Include="GUI\Elements\GroupBox.hpp" />
+    <ClInclude Include="GUI\Elements\ImmediateMode.hpp" />
+    <ClInclude Include="GUI\Elements\InputFloat.hpp" />
+    <ClInclude Include="GUI\Elements\LineEdit.hpp" />
+    <ClInclude Include="GUI\Elements\ListBox.hpp" />
+    <ClInclude Include="GUI\Elements\MenuBar.hpp" />
+    <ClInclude Include="GUI\Elements\Point.hpp" />
+    <ClInclude Include="GUI\Elements\ScrollView.hpp" />
+    <ClInclude Include="GUI\Elements\Style.hpp" />
+    <ClInclude Include="GUI\Elements\TabItem.hpp" />
+    <ClInclude Include="GUI\Elements\TabView.hpp" />
+    <ClInclude Include="GUI\Elements\TreeList.hpp" />
+    <ClInclude Include="GUI\Elements\Vector3Edit.hpp" />
+    <ClInclude Include="GUI\Elements\VerticalLayout.hpp" />
+    <ClInclude Include="GUI\UIManager.hpp" />
+    <ClInclude Include="Input\Console.hpp" />
+    <ClInclude Include="Input\HCommand.hpp" />
+    <ClInclude Include="Input\InputDevice.hpp" />
+    <ClInclude Include="Input\MouseInputDevice.hpp" />
+    <ClInclude Include="Math\easing.h" />
+    <ClInclude Include="Physics\PhysUtils.hpp" />
+    <ClInclude Include="Plugin\IPlugin.hpp" />
+    <ClInclude Include="Plugin\PluginSystem.hpp" />
+    <ClInclude Include="Scene\PVS.hpp" />
+    <ClInclude Include="Scene\SceneFramingUtils.hpp" />
+    <ClInclude Include="Scripting\IScriptEngine.hpp" />
+    <ClInclude Include="Terrain\Chunk.hpp" />
+    <ClInclude Include="Terrain\ChunkManager.hpp" />
+    <ClInclude Include="Entity\Component\BaseComponent.hpp" />
+    <ClInclude Include="Entity\Component\Billboard.hpp" />
+    <ClInclude Include="Entity\Component\Camera.hpp" />
+    <ClInclude Include="Entity\Component\Collider.hpp" />
+    <ClInclude Include="Entity\Component\ComponentTypes.hpp" />
+    <ClInclude Include="Graphics\BlurEffect.hpp" />
+    <ClInclude Include="Graphics\MaterialLoader.hpp" />
+    <ClInclude Include="HexEngine.hpp" />
+    <ClInclude Include="Entity\Component\InteractionComponent.hpp" />
+    <ClInclude Include="Entity\Component\SpotLight.hpp" />
+    <ClInclude Include="Entity\Component\FirstPersonCameraController.hpp" />
+    <ClInclude Include="Entity\Component\Light.hpp" />
+    <ClInclude Include="Entity\Component\StaticMeshComponent.hpp" />
+    <ClInclude Include="Entity\Component\RigidBody.hpp" />
+    <ClInclude Include="Entity\Component\RTSCameraController.hpp" />
+    <ClInclude Include="Entity\Component\SphereCollider.hpp" />
+    <ClInclude Include="Entity\Component\PointLight.hpp" />
+    <ClInclude Include="Entity\Component\DirectionalLight.hpp" />
+    <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp" />
+    <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp" />
+    <ClInclude Include="Entity\Component\Transform.hpp" />
+    <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
+    <ClInclude Include="Entity\Messaging\Message.hpp" />
+    <ClInclude Include="Entity\Messaging\MessageDispatcher.hpp" />
+    <ClInclude Include="Entity\Messaging\MessageListener.hpp" />
+    <ClInclude Include="Entity\Reflection\GUID.hpp" />
+    <ClInclude Include="Entity\Reflection\IObject.hpp" />
+    <ClInclude Include="Environment\ClassRegistry.hpp" />
+    <ClInclude Include="Environment\ArchitectEnvironment.hpp" />
+    <ClInclude Include="Environment\Game3DEnvironment.hpp" />
+    <ClInclude Include="Environment\IEnvironment.hpp" />
+    <ClInclude Include="Environment\IGameExtension.hpp" />
+    <ClInclude Include="Environment\Profiler.hpp" />
+    <ClInclude Include="FileSystem\SceneSaveFile.hpp" />
+    <ClInclude Include="Graphics\GBuffer.hpp" />
+    <ClInclude Include="Graphics\IFontResource.hpp" />
+    <ClInclude Include="Graphics\IFontImporter.hpp" />
+    <ClInclude Include="Graphics\ITexture3D.hpp" />
+    <ClInclude Include="Graphics\Material.hpp" />
+    <ClInclude Include="Graphics\MaterialGraph.hpp" />
+    <ClInclude Include="Graphics\MaterialGraphCompiler.hpp" />
+    <ClInclude Include="Graphics\MaterialGraphValidator.hpp" />
+    <ClInclude Include="Graphics\ShadowMap.hpp" />
+    <ClInclude Include="GUI\DebugGUI.hpp" />
+    <ClInclude Include="GUI\FontImporter.hpp" />
+    <ClInclude Include="GUI\GuiRenderer.hpp" />
+    <ClInclude Include="Input\HVar.hpp" />
+    <ClInclude Include="Input\CommandManager.hpp" />
+    <ClInclude Include="Input\IInputSystem.hpp" />
+    <ClInclude Include="Input\InputSystem.hpp" />
+    <ClInclude Include="Environment\LogFile.hpp" />
+    <ClInclude Include="Environment\TimeManager.hpp" />
+    <ClInclude Include="FileSystem\FileSystem.hpp" />
+    <ClInclude Include="FileSystem\DiskFile.hpp" />
+    <ClInclude Include="FileSystem\IFile.hpp" />
+    <ClInclude Include="FileSystem\IResource.hpp" />
+    <ClInclude Include="FileSystem\KeyValues.hpp" />
+    <ClInclude Include="FileSystem\ResourceSystem.hpp" />
+    <ClInclude Include="Graphics\DebugRenderer.hpp" />
+    <ClInclude Include="Graphics\IConstantBuffer.hpp" />
+    <ClInclude Include="Graphics\IGraphicsDevice.hpp" />
+    <ClInclude Include="Graphics\IIndexBuffer.hpp" />
+    <ClInclude Include="Graphics\IInputLayout.hpp" />
+    <ClInclude Include="Graphics\INativeGraphicsResource.hpp" />
+    <ClInclude Include="Graphics\IShader.hpp" />
+    <ClInclude Include="Graphics\IShaderStage.hpp" />
+    <ClInclude Include="Graphics\RenderList.hpp" />
+    <ClInclude Include="Graphics\ITexture.hpp" />
+    <ClInclude Include="Graphics\ITexture2D.hpp" />
+    <ClInclude Include="Graphics\IVertexBuffer.hpp" />
+    <ClInclude Include="Graphics\ShaderSystem.hpp" />
+    <ClInclude Include="Graphics\Window.hpp" />
+    <ClInclude Include="Math\Bezier.hpp" />
+    <ClInclude Include="Math\FloatMath.hpp" />
+    <ClInclude Include="Physics\ICollider.hpp" />
+    <ClInclude Include="Physics\IController.hpp" />
+    <ClInclude Include="Physics\IPhysicsSystem.hpp" />
+    <ClInclude Include="Physics\IRigidBody.hpp" />
+    <ClInclude Include="Reflection\GUID.hpp" />
+    <ClInclude Include="Reflection\IObject.hpp" />
+    <ClInclude Include="Required.hpp" />
+    <ClInclude Include="Scene\DiffuseGI.hpp" />
+    <ClInclude Include="Scene\GpuVisibilityCulling.hpp" />
+    <ClInclude Include="Scene\IEntityListener.hpp" />
+    <ClInclude Include="Scene\MeshInstance.hpp" />
+    <ClInclude Include="Scene\MeshInstanceManager.hpp" />
+    <ClInclude Include="Scene\MeshPrimitives.hpp" />
+    <ClInclude Include="Scene\Model.hpp" />
+    <ClInclude Include="Scene\IModelSystem.hpp" />
+    <ClInclude Include="Scene\Octree.hpp" />
+    <ClInclude Include="Scene\RenderState.hpp" />
+    <ClInclude Include="Scene\Scene.hpp" />
+    <ClInclude Include="Scene\Mesh.hpp" />
+    <ClInclude Include="Scene\SceneManager.hpp" />
+    <ClInclude Include="Scene\SceneRenderer.hpp" />
+    <ClInclude Include="Terrain\HeightMapGenerator.hpp" />
+    <ClInclude Include="Terrain\MarchingCubes.hpp" />
+    <ClInclude Include="Terrain\TerrainGenerator.hpp" />
+    <ClInclude Include="Utility\CRC32.hpp" />
+    <ClInclude Include="Utility\MemoryManager.hpp" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="shader.xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="HexEngine.Shaders.targets" />
   </ItemGroup>
 </Project>

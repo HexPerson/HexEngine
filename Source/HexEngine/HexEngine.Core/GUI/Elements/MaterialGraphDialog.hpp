@@ -14,7 +14,7 @@ namespace HexEngine
 	{
 	public:
 		MaterialGraphDialog(Element* parent, const Point& position, const Point& size, const std::wstring& title, const std::shared_ptr<Material>& material, bool embeddedMode = false);
-		virtual ~MaterialGraphDialog() = default;
+		virtual ~MaterialGraphDialog() override;
 		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
 		virtual Point GetAbsolutePosition() const override;
@@ -25,7 +25,6 @@ namespace HexEngine
 		void OnNodeSelectionChanged(const std::string& nodeId);
 		void MarkDirty();
 		void SetStatusText(const std::wstring& text, bool isError);
-		void BindSelectedNodeToOutput(MaterialGraphOutputSemantic semantic, const std::string& outputPinId = "Out");
 
 	private:
 		void RebuildPropertyPanel();
@@ -33,6 +32,8 @@ namespace HexEngine
 		void EnsureGraphExists();
 		void SyncParameterDefinition(const MaterialGraphNode& node);
 		void SyncGraphParametersFromNodes();
+		void UpdateCompileMessages(const MaterialGraphCompileResult& compileResult);
+		void FocusFirstErrorNode(const MaterialGraphCompileResult& compileResult);
 	private:
 		std::shared_ptr<Material> _material;
 		Element* _canvas = nullptr;
@@ -47,6 +48,7 @@ namespace HexEngine
 		std::string _selectedNodeId;
 		bool _isDirty = false;
 		LineEdit* _statusLine = nullptr;
+		LineEdit* _compileMessages[6] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		bool _statusIsError = false;
 		bool _embeddedMode = false;
 	};

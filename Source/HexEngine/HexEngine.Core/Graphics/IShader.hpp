@@ -61,6 +61,8 @@ namespace HexEngine
 		friend class ShaderSystem;
 
 	public:
+		virtual ~IShader() override;
+
 		/**
 		 * @brief Loads a shader from an engine shader asset path.
 		 * @param path Absolute or virtual asset path.

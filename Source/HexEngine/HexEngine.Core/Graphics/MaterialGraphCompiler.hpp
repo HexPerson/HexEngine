@@ -13,6 +13,7 @@ namespace HexEngine
 		bool success = false;
 		std::vector<std::string> errors;
 		std::vector<std::string> warnings;
+		std::vector<std::pair<std::string, int32_t>> textureParameterSlots;
 	};
 
 	class HEX_API MaterialGraphCompiler

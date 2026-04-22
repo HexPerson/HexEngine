@@ -21,6 +21,8 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> MeshLoader::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
+		const MeshLoadOptions* meshOpts = reinterpret_cast<const MeshLoadOptions*>(options);
+
 		DiskFile file(absolutePath, std::ios::in | std::ios::binary);
 
 		if (file.Open() == false)
@@ -173,9 +175,12 @@ namespace HexEngine
 			std::vector<MeshIndexFormat> indices(numIndices);
 			file.Read((uint8_t*)indices.data(), (uint32_t)indices.size() * sizeof(MeshIndexFormat));
 
-			mesh->SetNumFaces(numFaces);
-			mesh->AddVertices(vertices);
-			mesh->AddIndices(indices);
+			if ((meshOpts && meshOpts->populateVertices) || meshOpts == nullptr)
+			{
+				mesh->SetNumFaces(numFaces);
+				mesh->AddVertices(vertices);
+				mesh->AddIndices(indices);
+			}
 		}
 
 		// read the material
@@ -192,6 +197,8 @@ namespace HexEngine
 		{
 			matName = "EngineData.Materials/DefaultAnimated.hmat";
 		}
+
+		mesh->SetMaterialName(matName);
 		
 		dx::BoundingBox aabb = file.Read<dx::BoundingBox>();
 		dx::BoundingOrientedBox obb = file.Read<dx::BoundingOrientedBox>();
@@ -199,16 +206,20 @@ namespace HexEngine
 		mesh->SetAABB(aabb);
 		mesh->SetOBB(obb);
 
-		if (matName.length() > 0)
+		if ((meshOpts && meshOpts->createMaterial) || meshOpts == nullptr)
 		{
-			mesh->SetMaterial(Material::Create(matName));
-		}
-		else
-		{
-			mesh->SetMaterial(Material::GetDefaultMaterial());
+			if (matName.length() > 0)
+			{
+				mesh->SetMaterial(Material::Create(matName));
+			}
+			else
+			{
+				mesh->SetMaterial(Material::GetDefaultMaterial());
+			}
 		}
 
-		mesh->CreateBuffers();
+		if((meshOpts && meshOpts->createBuffers) || meshOpts == nullptr)
+			mesh->CreateBuffers();
 
 		// finally close the file
 		file.Close();

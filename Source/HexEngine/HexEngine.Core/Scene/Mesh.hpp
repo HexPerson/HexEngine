@@ -180,6 +180,7 @@ namespace HexEngine
 		virtual ~Mesh();
 
 		static std::shared_ptr<Mesh> Create(const fs::path& path);
+		static std::shared_ptr<Mesh> Create(const fs::path& path, struct MeshLoadOptions* options);
 		static std::shared_ptr<Mesh> CreateAsync(const fs::path& path, ResourceLoadedFn fn);
 
 		//static Mesh* CreatePlane(uint32_t resolution, float uvScale = 1.0f);

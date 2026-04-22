@@ -1474,6 +1474,32 @@ void GraphicsDeviceD3D11::SetTexture2D(uint32_t slot, HexEngine::ITexture2D* tex
 
 	if (texture)
 	{
+		const auto hasOutputHazard = [this, texture]()
+		{
+			if (texture == _boundDepthStencil)
+			{
+				return true;
+			}
+
+			for (HexEngine::ITexture2D* boundTarget : _boundRenderTargets)
+			{
+				if (texture == boundTarget)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		if (hasOutputHazard())
+		{
+			// SRV/RTV-DSV overlap is invalid in D3D11; unbind outputs first.
+			_deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+			_boundRenderTargets.clear();
+			_boundDepthStencil = nullptr;
+		}
+
 		auto tex = reinterpret_cast<Texture2D*>(texture);
 
 		SetPixelShaderResource(slot, tex->_shaderResourceView);
@@ -1515,6 +1541,32 @@ void GraphicsDeviceD3D11::SetTexture2D(HexEngine::ITexture2D* texture)
 	{
 		LOG_CRIT("tex->_shaderResourceView cannot be NULL!");
 		return;
+	}
+
+	const auto hasOutputHazard = [this, texture]()
+	{
+		if (texture == _boundDepthStencil)
+		{
+			return true;
+		}
+
+		for (HexEngine::ITexture2D* boundTarget : _boundRenderTargets)
+		{
+			if (texture == boundTarget)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	};
+
+	if (hasOutputHazard())
+	{
+		// SRV/RTV-DSV overlap is invalid in D3D11; unbind outputs first.
+		_deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+		_boundRenderTargets.clear();
+		_boundDepthStencil = nullptr;
 	}
 
 	SetPixelShaderResource(tex->_shaderResourceView);
@@ -1719,6 +1771,43 @@ void GraphicsDeviceD3D11::SetPixelShaderResource(uint32_t slot, ID3D11ShaderReso
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
+	if (resource != nullptr)
+	{
+		const auto hasOutputHazard = [this, resource]()
+		{
+			if (_boundDepthStencil != nullptr)
+			{
+				auto* depth = reinterpret_cast<Texture2D*>(_boundDepthStencil);
+				if (depth != nullptr && depth->_shaderResourceView == resource)
+				{
+					return true;
+				}
+			}
+
+			for (HexEngine::ITexture2D* boundTarget : _boundRenderTargets)
+			{
+				if (boundTarget == nullptr)
+					continue;
+
+				auto* tex = reinterpret_cast<Texture2D*>(boundTarget);
+				if (tex != nullptr && tex->_shaderResourceView == resource)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		if (hasOutputHazard())
+		{
+			// SRV/RTV-DSV overlap is invalid in D3D11; unbind outputs first.
+			_deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+			_boundRenderTargets.clear();
+			_boundDepthStencil = nullptr;
+		}
+	}
+
 	_deviceContext->PSSetShaderResources(slot, 1, &resource);
 
 	_currentlyBoundSRVIndex = slot + 1;
@@ -1727,6 +1816,43 @@ void GraphicsDeviceD3D11::SetPixelShaderResource(uint32_t slot, ID3D11ShaderReso
 void GraphicsDeviceD3D11::SetPixelShaderResource(ID3D11ShaderResourceView* resource)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (resource != nullptr)
+	{
+		const auto hasOutputHazard = [this, resource]()
+		{
+			if (_boundDepthStencil != nullptr)
+			{
+				auto* depth = reinterpret_cast<Texture2D*>(_boundDepthStencil);
+				if (depth != nullptr && depth->_shaderResourceView == resource)
+				{
+					return true;
+				}
+			}
+
+			for (HexEngine::ITexture2D* boundTarget : _boundRenderTargets)
+			{
+				if (boundTarget == nullptr)
+					continue;
+
+				auto* tex = reinterpret_cast<Texture2D*>(boundTarget);
+				if (tex != nullptr && tex->_shaderResourceView == resource)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		};
+
+		if (hasOutputHazard())
+		{
+			// SRV/RTV-DSV overlap is invalid in D3D11; unbind outputs first.
+			_deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+			_boundRenderTargets.clear();
+			_boundDepthStencil = nullptr;
+		}
+	}
 
 	_deviceContext->PSSetShaderResources(_currentlyBoundSRVIndex, 1, &resource);
 	++_currentlyBoundSRVIndex;

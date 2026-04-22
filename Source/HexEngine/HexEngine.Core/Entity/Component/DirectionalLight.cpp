@@ -10,7 +10,7 @@ namespace HexEngine
 {
 	extern HVar r_shadowCascades;
 
-	const int32_t DirectionalLightShadowMapResolution = 4096;
+	const int32_t DirectionalLightShadowMapResolution = 8192;
 
 	extern HVar r_shadowNearClip;
 

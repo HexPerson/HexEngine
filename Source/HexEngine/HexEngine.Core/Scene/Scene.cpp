@@ -12,7 +12,7 @@
 
 namespace HexEngine
 {
-#if defined(_DEBUG)
+#if 0//defined(_DEBUG)
 #define HEX_VALIDATE_SCENE_INVARIANTS() ValidateInvariants_NoLock()
 #else
 #define HEX_VALIDATE_SCENE_INVARIANTS() ((void)0)

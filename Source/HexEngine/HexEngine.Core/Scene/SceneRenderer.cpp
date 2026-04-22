@@ -1110,7 +1110,7 @@ namespace HexEngine
 				}
 
 				auto shadowMapSize = shadowCaster->GetShadowMap() ? shadowCaster->GetShadowMap()->GetViewport().width : 0.0f;
-				float shadowVarsMultiplier = (4096.0f / shadowMapSize);
+				float shadowVarsMultiplier = (8192.0f / shadowMapSize);
 
 				if (shadowVarsMultiplier > 1.0f)
 					shadowVarsMultiplier *= 2.0f;

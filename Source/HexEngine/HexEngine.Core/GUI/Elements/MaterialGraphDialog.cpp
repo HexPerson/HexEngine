@@ -39,6 +39,37 @@ namespace HexEngine
 			return false;
 		}
 
+		std::string TryExtractNodeIdFromMessage(const std::string& message)
+		{
+			const size_t nodePos = message.find("node_");
+			const size_t outputPos = message.find("output_");
+			size_t pos = std::string::npos;
+			if (nodePos != std::string::npos)
+				pos = nodePos;
+			else if (outputPos != std::string::npos)
+				pos = outputPos;
+
+			if (pos == std::string::npos)
+				return {};
+
+			size_t end = pos;
+			while (end < message.size())
+			{
+				const char c = message[end];
+				if ((c >= 'a' && c <= 'z') ||
+					(c >= 'A' && c <= 'Z') ||
+					(c >= '0' && c <= '9') ||
+					c == '_')
+				{
+					++end;
+					continue;
+				}
+				break;
+			}
+
+			return message.substr(pos, end - pos);
+		}
+
 		const char* GetOutputNodeIdForSemantic(MaterialGraphOutputSemantic semantic)
 		{
 			switch (semantic)
@@ -220,14 +251,6 @@ namespace HexEngine
 				}
 				else if (data->MouseDown.button == VK_RBUTTON && IsMouseOver(true))
 				{
-					PinHit pinHit;
-					if (TryHitPin(data->MouseDown.xpos, data->MouseDown.ypos, pinHit) &&
-						pinHit.direction == MaterialGraphPinDirection::Output)
-					{
-						OpenBindOutputMenu(pinHit, Point(data->MouseDown.xpos, data->MouseDown.ypos));
-						return true;
-					}
-
 					OpenAddNodeMenu(Point(data->MouseDown.xpos, data->MouseDown.ypos));
 					return true;
 				}
@@ -484,14 +507,7 @@ namespace HexEngine
 						to == MaterialGraphValueType::Vector3 ||
 						to == MaterialGraphValueType::Vector4))
 				{
-					if (const auto* toNode = _graph->FindNode(toNodeId); toNode != nullptr)
-					{
-						if (toNode->nodeType == MaterialGraphNodeType::Output)
-							return true;
-
-						if (toNode->nodeType == MaterialGraphNodeType::Multiply)
-							return true;
-					}
+					return true;
 				}
 
 				return false;
@@ -589,6 +605,7 @@ namespace HexEngine
 				case MaterialGraphNodeType::NormalMap:
 					return { { "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output } };
 				case MaterialGraphNodeType::TextureSample:
+					return { { "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output } };
 				case MaterialGraphNodeType::TextureParameter:
 					return { { "Out", "Out", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Output } };
 				case MaterialGraphNodeType::TexCoord:
@@ -642,30 +659,6 @@ namespace HexEngine
 				_contextMenu->AddItem(new ContextItem(L"Texture Parameter", [this, mousePos](const std::wstring&) { AddNode(MaterialGraphNodeType::TextureParameter, mousePos); }));
 			}
 
-			void OpenBindOutputMenu(const PinHit& outputPin, const Point& mousePos)
-			{
-				if (_contextMenu != nullptr)
-				{
-					_contextMenu->DeleteMe();
-					_contextMenu = nullptr;
-				}
-
-				auto* root = g_pEnv->GetUIManager().GetRootElement();
-				if (root == nullptr)
-					return;
-
-				_contextMenu = new ContextMenu(root, Point(mousePos.x - root->GetAbsolutePosition().x, mousePos.y - root->GetAbsolutePosition().y));
-				_contextMenu->AddItem(new ContextItem(L"Bind As BaseColor", [this, outputPin](const std::wstring&) { _owner->BindSelectedNodeToOutput(MaterialGraphOutputSemantic::BaseColor, outputPin.pinId); }));
-				_contextMenu->AddItem(new ContextItem(L"Bind As Normal", [this, outputPin](const std::wstring&) { _owner->BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Normal, outputPin.pinId); }));
-				_contextMenu->AddItem(new ContextItem(L"Bind As Roughness", [this, outputPin](const std::wstring&) { _owner->BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Roughness, outputPin.pinId); }));
-				_contextMenu->AddItem(new ContextItem(L"Bind As Metallic", [this, outputPin](const std::wstring&) { _owner->BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Metallic, outputPin.pinId); }));
-				_contextMenu->AddItem(new ContextItem(L"Bind As Emissive", [this, outputPin](const std::wstring&) { _owner->BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Emissive, outputPin.pinId); }));
-				_contextMenu->AddItem(new ContextItem(L"Bind As Opacity", [this, outputPin](const std::wstring&) { _owner->BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Opacity, outputPin.pinId); }));
-
-				_selectedNodeId = outputPin.nodeId;
-				_owner->OnNodeSelectionChanged(_selectedNodeId);
-			}
-
 		private:
 			MaterialGraphDialog* _owner = nullptr;
 			MaterialGraph* _graph = nullptr;
@@ -690,6 +683,9 @@ namespace HexEngine
 		_material(material),
 		_embeddedMode(embeddedMode)
 	{
+		if (_material != nullptr)
+			_material->IncrementEditorOpenCount();
+
 		EnsureGraphExists();
 
 		const int32_t topOffset = _embeddedMode ? 8 : 36;
@@ -772,14 +768,24 @@ namespace HexEngine
 				}
 			});
 
-		new Button(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 22), L"Bind As BaseColor", [this](Button*) { BindSelectedNodeToOutput(MaterialGraphOutputSemantic::BaseColor); return true; });
-		new Button(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 22), L"Bind As Normal", [this](Button*) { BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Normal); return true; });
-		new Button(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 22), L"Bind As Roughness", [this](Button*) { BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Roughness); return true; });
-		new Button(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 22), L"Bind As Metallic", [this](Button*) { BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Metallic); return true; });
-		new Button(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 22), L"Bind As Emissive", [this](Button*) { BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Emissive); return true; });
-		new Button(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 22), L"Bind As Opacity", [this](Button*) { BindSelectedNodeToOutput(MaterialGraphOutputSemantic::Opacity); return true; });
+		for (int32_t i = 0; i < 6; ++i)
+		{
+			_compileMessages[i] = new LineEdit(
+				_properties,
+				_properties->GetNextPos(),
+				Point(_properties->GetSize().x - 20, 20),
+				i == 0 ? L"Compile Messages" : L"");
+			_compileMessages[i]->SetDoesCallbackWaitForReturn(false);
+			_compileMessages[i]->DisableRecursive();
+		}
 
 		RebuildPropertyPanel();
+	}
+
+	MaterialGraphDialog::~MaterialGraphDialog()
+	{
+		if (_material != nullptr)
+			_material->DecrementEditorOpenCount();
 	}
 
 	void MaterialGraphDialog::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)
@@ -1008,28 +1014,44 @@ namespace HexEngine
 			SyncParameterDefinition(node);
 	}
 
-	void MaterialGraphDialog::BindSelectedNodeToOutput(MaterialGraphOutputSemantic semantic, const std::string& outputPinId)
+	void MaterialGraphDialog::UpdateCompileMessages(const MaterialGraphCompileResult& compileResult)
 	{
-		auto* node = GetSelectedNode();
-		if (node == nullptr)
-			return;
-
-		const auto pinId = outputPinId.empty() ? std::string("Out") : outputPinId;
-		const auto* outputPin = _material->_graph.FindPin(node->id, pinId, MaterialGraphPinDirection::Output);
-		if (outputPin == nullptr)
-			return;
-
-		_material->_graph.EnsureDefaultOutputBindings();
-		for (auto& output : _material->_graph.outputs)
+		size_t writeIndex = 0;
+		for (const auto& error : compileResult.errors)
 		{
-			if (output.semantic == semantic)
-			{
-				output.nodeId = node->id;
-				output.pinId = pinId;
-				MarkDirty();
-				RebuildPropertyPanel();
-				return;
-			}
+			if (writeIndex >= 6)
+				break;
+			_compileMessages[writeIndex++]->SetValue(std::format(L"Error: {}", s2ws(error)));
+		}
+		for (const auto& warning : compileResult.warnings)
+		{
+			if (writeIndex >= 6)
+				break;
+			_compileMessages[writeIndex++]->SetValue(std::format(L"Warning: {}", s2ws(warning)));
+		}
+		for (; writeIndex < 6; ++writeIndex)
+		{
+			_compileMessages[writeIndex]->SetValue(L"");
+		}
+	}
+
+	void MaterialGraphDialog::FocusFirstErrorNode(const MaterialGraphCompileResult& compileResult)
+	{
+		for (const auto& error : compileResult.errors)
+		{
+			const auto nodeId = TryExtractNodeIdFromMessage(error);
+			if (nodeId.empty())
+				continue;
+
+			if (_material->_graph.FindNode(nodeId) == nullptr)
+				continue;
+
+			_selectedNodeId = nodeId;
+			if (auto* canvas = static_cast<MaterialGraphCanvasImpl*>(_canvas); canvas != nullptr)
+				canvas->SetSelectedNodeId(nodeId);
+
+			OnNodeSelectionChanged(nodeId);
+			break;
 		}
 	}
 
@@ -1040,6 +1062,7 @@ namespace HexEngine
 
 		SyncGraphParametersFromNodes();
 		const auto compileResult = MaterialGraphCompiler::CompileToMaterial(_material->_graph, *_material, nullptr);
+		UpdateCompileMessages(compileResult);
 		if (!compileResult.success)
 		{
 			std::wstring message = L"Compile failed: ";
@@ -1049,10 +1072,18 @@ namespace HexEngine
 				message += s2ws(compileResult.errors[i]);
 			}
 			SetStatusText(message, true);
+			FocusFirstErrorNode(compileResult);
 			return false;
 		}
 
-		SetStatusText(L"Compile succeeded.", false);
+		if (compileResult.warnings.empty())
+		{
+			SetStatusText(L"Compile succeeded.", false);
+		}
+		else
+		{
+			SetStatusText(std::format(L"Compile succeeded ({} warning(s)).", compileResult.warnings.size()), false);
+		}
 		return true;
 	}
 

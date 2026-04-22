@@ -146,8 +146,9 @@ namespace HexEngine
 		{
 			if (reloadedShader->_stages[i] != nullptr)
 			{
+				// Transfer ownership of the newly created shader stage to the hot-reloaded shader.
 				shaderToReload->_stages[i] = reloadedShader->_stages[i];
-				shaderToReload->_stages[i]->CopyFrom(reloadedShader->_stages[i]);
+				reloadedShader->_stages[i] = nullptr;
 			}
 		}
 
@@ -180,8 +181,9 @@ namespace HexEngine
 			{
 				if (reloadedShader->_stages[i] != nullptr)
 				{
+					// Transfer ownership of the newly created shader stage to the live shader.
 					sp->_stages[i] = reloadedShader->_stages[i];
-					sp->_stages[i]->CopyFrom(reloadedShader->_stages[i]);
+					reloadedShader->_stages[i] = nullptr;
 				}
 			}			
 		}
