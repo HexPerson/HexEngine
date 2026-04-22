@@ -32,6 +32,7 @@ namespace HexEngine
 		std::string extensionLower;
 		State state = State::Queued;
 		std::shared_ptr<Mesh> loadedMesh;
+		uint8_t asyncLoadAttempts = 0;
 	};
 	class HEX_API IconService
 	{

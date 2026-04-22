@@ -164,6 +164,8 @@ namespace HexEngine
 		class INavMeshProvider* _navMeshProvider = nullptr;
 		MeshLoader* _meshLoader = nullptr;
 		class PrefabLoader* _prefabLoader = nullptr;
+		class ParticleEffectLoader* _particleEffectLoader = nullptr;
+		class ParticleWorldSystem* _particleWorldSystem = nullptr;
 
 	protected:
 		class FileSystem* _fileSystem = nullptr;

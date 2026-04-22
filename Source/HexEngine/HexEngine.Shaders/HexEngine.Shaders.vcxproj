@@ -152,6 +152,8 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
   <ItemGroup>
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="BuildDepthPyramid.shader" />
+    <HexEngineShader Include="ParticleSimulate.shader" />
+    <HexEngineShader Include="ParticleBillboardLit.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
     <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
     <HexEngineShader Include="DiffuseGIBuildCandidates.shader" />
@@ -299,3 +301,5 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <Import Project="HexEngine.Shaders.targets" />
   </ImportGroup>
 </Project>
+
+

@@ -22,6 +22,8 @@
 #include "../Graphics/IDenoiserProvider.hpp"
 #include "../Graphics/MeshLoader.hpp"
 #include "../FileSystem/PrefabLoader.hpp"
+#include "../FileSystem/ParticleEffectLoader.hpp"
+#include "../Scene/ParticleWorldSystem.hpp"
 
 #define USE_MULTITHREADED_PHYSICS 0
 
@@ -94,6 +96,7 @@ namespace HexEngine
 		env->_commandManager->Create();
 
 		env->_prefabLoader = new PrefabLoader;
+		env->_particleEffectLoader = new ParticleEffectLoader;
 		
 		if (!HEX_HASFLAG(options.flags, GameOptions::GameOptions_NoRenderer))
 		{
@@ -171,6 +174,9 @@ namespace HexEngine
 		env->_sceneManager = new SceneManager;
 		env->_sceneRenderer = new SceneRenderer;
 		env->_sceneRenderer->Create();
+
+		env->_particleWorldSystem = new ParticleWorldSystem;
+		env->_particleWorldSystem->Create();
 
 		env->_debugRenderer = new DebugRenderer;
 		env->_debugRenderer->Create();
@@ -282,6 +288,12 @@ namespace HexEngine
 		_sceneRenderer->Destroy();
 		SAFE_DELETE(_sceneRenderer);
 
+		if (_particleWorldSystem)
+		{
+			_particleWorldSystem->Destroy();
+			SAFE_DELETE(_particleWorldSystem);
+		}
+
 		SAFE_DELETE(_meshLoader);
 
 		SAFE_DELETE(_debugGui);
@@ -328,6 +340,7 @@ namespace HexEngine
 
 		SAFE_DELETE(_shaderLoader);
 		SAFE_DELETE(_prefabLoader);
+		SAFE_DELETE(_particleEffectLoader);
 
 		if (_resourceSystem)
 		{

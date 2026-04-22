@@ -19,6 +19,7 @@
 #include "FileSystem/AssetPackage.hpp"
 #include "FileSystem/AssetPackageManager.hpp"
 #include "FileSystem/DiskFile.hpp"
+#include "FileSystem/ParticleEffectLoader.hpp"
 
 #include "Scripting/ScriptFile.hpp"
 #include "Scripting/IScriptEngine.hpp"
@@ -41,6 +42,8 @@
 #include "Scene/AnimatedMesh.hpp"
 #include "Scene/INavMeshProvider.hpp"
 #include "Scene/Prefab.hpp"
+#include "Scene/ParticleEffect.hpp"
+#include "Scene/ParticleWorldSystem.hpp"
 
 #include "Input/InputSystem.hpp"
 #include "Input/CommandManager.hpp"
@@ -101,6 +104,7 @@
 #include "Entity/Component/NavigationComponent.hpp"
 #include "Entity/Component/SkeletalAnimationComponent.hpp"
 #include "Entity/Component/DayNightCycleComponent.hpp"
+#include "Entity/Component/ParticleSystemComponent.hpp"
 
 #include "Plugin/PluginSystem.hpp"
 

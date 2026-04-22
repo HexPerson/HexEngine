@@ -2132,12 +2132,32 @@ namespace HexEngine
 
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin Transparent");
 
-		g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
+		// Transparent shaders (notably water) sample the beauty texture.
+		// Render transparency into a separate RT to avoid SRV/RTV hazards on _beautyRT.
+		if (_waterRT)
+		{
+			_beautyRT->CopyTo(_waterRT);
+			g_pEnv->_graphicsDevice->SetRenderTarget(_waterRT, _gbuffer.GetDepthBuffer());
+		}
+		else
+		{
+			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
+		}
 
 		_currentScene->RenderEntities(
 			_currentCamera->GetPVS(),
-			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass),
+			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass) | LAYERMASK(Layer::Water),
 			MeshRenderFlags::MeshRenderTransparency);
+
+		if (g_pEnv && g_pEnv->_particleWorldSystem)
+		{
+			g_pEnv->_particleWorldSystem->Render(_currentScene, _currentCamera, _waterRT ? _waterRT : _beautyRT, _gbuffer.GetDepthBuffer());
+		}
+
+		if (_waterRT)
+		{
+			_waterRT->CopyTo(_beautyRT);
+		}
 
 		GFX_PERF_END();
 

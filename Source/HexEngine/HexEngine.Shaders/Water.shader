@@ -720,7 +720,7 @@ float3 GerstnerWave(
 
 		//return retCol /* + worldAlbedoInfluence */ + ( albedo * lightIntensity) + specular;
 
-		return retCol * lightIntensity + specular;
+		return retCol + (albedo * lightIntensity) + specular;
 
 		//float4 finalColour = albedo * color;
 		//color = finalColour;// color* albedo;

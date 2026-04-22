@@ -1424,10 +1424,17 @@ namespace HexEngine
 			graphicsDevice->SetInputLayout(shader->GetInputLayout());
 
 			const bool isTransparency = (flags & MeshRenderFlags::MeshRenderTransparency) != 0;
+			const bool isWaterMaterial = material->_properties.isWater == 1;
 			BlendState effectiveBlendState = material->GetBlendState();
 			if (isTransparency)
 			{
-				if (effectiveBlendState == BlendState::Opaque || effectiveBlendState == BlendState::Transparency)
+				// Water shader already composites scene lighting/refraction into its output;
+				// keep it opaque to avoid double alpha blending in the transparent pass.
+				if (isWaterMaterial)
+				{
+					effectiveBlendState = BlendState::Opaque;
+				}
+				else if (effectiveBlendState == BlendState::Opaque || effectiveBlendState == BlendState::Transparency)
 				{
 					effectiveBlendState = BlendState::TransparencyPreserveAlpha;
 				}

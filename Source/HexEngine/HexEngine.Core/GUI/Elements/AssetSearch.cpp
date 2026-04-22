@@ -696,6 +696,9 @@ namespace HexEngine
 		if (ext == L".hmat")
 			return ResourceType::Material;
 
+		if (ext == L".hparticles")
+			return ResourceType::ParticleEffect;
+
 		return ResourceType::None;
 	}
 

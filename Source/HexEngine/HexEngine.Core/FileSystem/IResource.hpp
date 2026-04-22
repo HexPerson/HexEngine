@@ -26,6 +26,7 @@ namespace HexEngine
 		Font,
 		Prefab,
 		Material,
+		ParticleEffect,
 	};
 
 	class HEX_API IResource

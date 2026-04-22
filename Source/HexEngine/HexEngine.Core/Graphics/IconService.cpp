@@ -10,10 +10,11 @@
 #include <limits>
 #include <unordered_set>
 
-constexpr int32_t kIconSize = 1024;
+constexpr int32_t kIconSize = 800;
 constexpr size_t kMaxAsyncMeshPreviewLoads = 3;
 constexpr size_t kMaxResidentGeneratedIcons = 512;
 constexpr int32_t kDiskCacheVersion = 1;
+constexpr uint8_t kMaxAsyncMeshPreviewRetries = 2;
 
 namespace
 {
@@ -535,6 +536,13 @@ namespace HexEngine
 
 	void IconService::BeginAsyncMeshLoad(IconPending& pending)
 	{
+		if (pending.asyncLoadAttempts >= kMaxAsyncMeshPreviewRetries)
+		{
+			pending.state = IconPending::State::Failed;
+			return;
+		}
+
+		++pending.asyncLoadAttempts;
 		pending.state = IconPending::State::LoadingMeshAsync;
 		const fs::path key = pending.path;
 
@@ -617,6 +625,13 @@ namespace HexEngine
 				continue;
 			if (it->extensionLower == ".hmesh" && it->state == IconPending::State::Queued)
 				continue;
+			if (it->extensionLower == ".hmesh" && it->state == IconPending::State::Failed && it->asyncLoadAttempts < kMaxAsyncMeshPreviewRetries)
+			{
+				// Transient async failures can happen under heavy IO pressure.
+				// Move back to queued so PumpAsyncMeshLoads can retry.
+				it->state = IconPending::State::Queued;
+				continue;
+			}
 
 			outPending = std::move(*it);
 			_pendingPaths.erase(it);

@@ -329,6 +329,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="FileSystem\IResourceLoader.hpp" />
     <ClInclude Include="FileSystem\JsonFile.hpp" />
     <ClInclude Include="FileSystem\PrefabLoader.hpp" />
+    <ClInclude Include="FileSystem\ParticleEffectLoader.hpp" />
     <ClInclude Include="FileSystem\ProjectFile.hpp" />
     <ClInclude Include="Graphics\IDenoiserProvider.hpp" />
     <ClInclude Include="Graphics\IStreamlineProvider.hpp" />
@@ -350,6 +351,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Scene\AnimatedMesh.hpp" />
     <ClInclude Include="Scene\INavMeshProvider.hpp" />
     <ClInclude Include="Scene\Prefab.hpp" />
+    <ClInclude Include="Scene\ParticleEffect.hpp" />
+    <ClInclude Include="Scene\ParticleWorldSystem.hpp" />
     <ClInclude Include="Scripting\ScriptFile.hpp" />
     <ClInclude Include="FileSystem\XmlFile.hpp" />
     <ClInclude Include="Graphics\Bloom.hpp" />
@@ -423,6 +426,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\DirectionalLight.hpp" />
     <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp" />
     <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp" />
+    <ClInclude Include="Entity\Component\ParticleSystemComponent.hpp" />
     <ClInclude Include="Entity\Component\Transform.hpp" />
     <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
     <ClInclude Include="Entity\Messaging\Message.hpp" />
@@ -524,6 +528,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="FileSystem\AssetPackageManager.cpp" />
     <ClCompile Include="FileSystem\IResource.cpp" />
     <ClCompile Include="FileSystem\PrefabLoader.cpp" />
+    <ClCompile Include="FileSystem\ParticleEffectLoader.cpp" />
     <ClCompile Include="FileSystem\ProjectFile.cpp" />
     <ClCompile Include="Graphics\IFontResource.cpp" />
     <ClCompile Include="Graphics\MeshLoader.cpp" />
@@ -542,6 +547,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="GUI\Elements\Vector2Edit.cpp" />
     <ClCompile Include="Scene\AnimatedMesh.cpp" />
     <ClCompile Include="Scene\Prefab.cpp" />
+    <ClCompile Include="Scene\ParticleEffect.cpp" />
+    <ClCompile Include="Scene\ParticleWorldSystem.cpp" />
     <ClCompile Include="Scripting\ScriptFile.cpp" />
     <ClCompile Include="Graphics\Bloom.cpp" />
     <ClCompile Include="Graphics\IconService.cpp" />
@@ -605,6 +612,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\DirectionalLight.cpp" />
     <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp" />
     <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp" />
+    <ClCompile Include="Entity\Component\ParticleSystemComponent.cpp" />
     <ClCompile Include="Entity\Component\Transform.cpp" />
     <ClCompile Include="Entity\Component\UpdateComponent.cpp" />
     <ClCompile Include="Entity\Messaging\MessageDispatcher.cpp" />
@@ -666,3 +674,4 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <Import Project="..\HexEngine.Shaders\HexEngine.Shaders.targets" />
   </ImportGroup>
 </Project>
+

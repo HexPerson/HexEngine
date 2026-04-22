@@ -261,10 +261,6 @@ namespace HexEngine
 				if (ec || trueLocalPath.empty())
 					continue;
 
-				const auto relStr = trueLocalPath.generic_string();
-				if (relStr.size() >= 2 && relStr[0] == '.' && relStr[1] == '.')
-					continue;
-
 				trueLocalPath = trueLocalPath.lexically_normal();
 
 				// do a second check for the loaded resource, as the local path might be correct now
