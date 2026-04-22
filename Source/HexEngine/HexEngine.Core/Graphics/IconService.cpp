@@ -4,14 +4,44 @@
 #include "../FileSystem/PrefabLoader.hpp"
 #include "../Scene/PVS.hpp"
 #include "../Scene/SceneFramingUtils.hpp"
-
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <limits>
 #include <unordered_set>
 
+constexpr int32_t kIconSize = 1024;
+constexpr size_t kMaxAsyncMeshPreviewLoads = 3;
+constexpr size_t kMaxResidentGeneratedIcons = 512;
+constexpr int32_t kDiskCacheVersion = 1;
+
 namespace
 {
+	fs::path NormalizeIconPath(const fs::path& input)
+	{
+		if (input.empty())
+			return {};
+
+		fs::path normalized = input.lexically_normal();
+		try
+		{
+			if (fs::exists(normalized))
+				normalized = fs::weakly_canonical(normalized);
+		}
+		catch (...)
+		{
+		}
+
+#ifdef _WIN32
+		std::wstring lower = normalized.make_preferred().wstring();
+		std::transform(lower.begin(), lower.end(), lower.begin(),
+			[](wchar_t c) { return static_cast<wchar_t>(::towlower(c)); });
+		return fs::path(lower);
+#else
+		return normalized.make_preferred();
+#endif
+	}
+
 	bool IsImageExtension(const std::string& extLower)
 	{
 		return extLower == ".png" ||
@@ -280,11 +310,46 @@ namespace
 		params.camera = camera;
 		cameraPvs->CalculateVisibility(scene, params);
 	}
+
+	int64_t ToFileTimeTicks(const fs::file_time_type& time)
+	{
+		return time.time_since_epoch().count();
+	}
+
 }
 
 namespace HexEngine
 {
 	//const int32_t IconCanvasSize = 400;
+
+	int64_t IconService::GetFileWriteTimeTicks(const fs::path& path)
+	{
+		std::error_code ec;
+		auto time = fs::last_write_time(path, ec);
+		if (ec)
+			return 0;
+
+		return ToFileTimeTicks(time);
+	}
+
+	uintmax_t IconService::GetFileSizeSafe(const fs::path& path)
+	{
+		std::error_code ec;
+		const auto fileSize = fs::file_size(path, ec);
+		if (ec)
+			return 0;
+
+		return fileSize;
+	}
+
+	std::string IconService::BuildCacheFileName(const fs::path& normalizedPath)
+	{
+		const auto input = normalizedPath.generic_string();
+		const uint64_t h = std::hash<std::string>{}(input);
+		char buffer[32] = {};
+		snprintf(buffer, sizeof(buffer), "%016llx.png", static_cast<unsigned long long>(h));
+		return std::string(buffer);
+	}
 
 	void IconService::Create(const std::wstring& sceneName)
 	{
@@ -298,23 +363,118 @@ namespace HexEngine
 		_iconScene->SetName(sceneName);
 		g_pEnv->_debugGui->RemoveCallback(_iconScene.get());
 
-		uint32_t width, height;
-		g_pEnv->_graphicsDevice->GetBackBufferDimensions(width, height);
-
 		auto cameraEnt = _iconScene->CreateEntity("IconCamera", math::Vector3(0.0f, 0.0f, -50.0f));
 		cameraEnt->SetFlag(EntityFlags::DoNotSave);
 		_camera = cameraEnt->AddComponent<Camera>();
+		_iconScene->SetMainCamera(_camera);
 		_camera->SetPespectiveParameters(60.0f, 1.0f, 1.0f, 2000.0f);
-		_camera->SetViewport(math::Viewport(0.0f, 0.0f, (float)width, (float)height));
+		_camera->SetViewport(math::Viewport(0.0f, 0.0f, (float)kIconSize, (float)kIconSize));
 
 		_previewRootEntities.clear();
+
+		_diskCacheRoot = g_pEnv->GetFileSystem().GetLocalAbsolutePath(fs::path(L"Data/Cache/Icons"));
+		_diskCacheIndexFile = _diskCacheRoot / fs::path(L"index.json");
+		std::error_code ec;
+		fs::create_directories(_diskCacheRoot, ec);
+		LoadDiskCacheIndex();
 		
 	}
 
 	void IconService::Destroy()
 	{
 		ClearPreviewEntities();
+		_pendingPaths.clear();
+		_queuedPaths.clear();
+		for (auto& [_, icon] : _icons)
+		{
+			SAFE_DELETE(icon);
+		}
+		_icons.clear();
+		_resourceIcons.clear();
+		_iconLru.clear();
+		_iconLruIndex.clear();
+		SaveDiskCacheIndex();
 		//g_pEnv->_sceneManager->UnloadScene(_iconScene.get());
+	}
+
+	void IconService::LoadDiskCacheIndex()
+	{
+		_diskCacheIndex.clear();
+		_diskCacheDirty = false;
+
+		if (_diskCacheIndexFile.empty() || !fs::exists(_diskCacheIndexFile))
+			return;
+
+		std::ifstream file(_diskCacheIndexFile, std::ios::in | std::ios::binary);
+		if (!file.is_open())
+			return;
+
+		json root;
+		try
+		{
+			file >> root;
+		}
+		catch (...)
+		{
+			return;
+		}
+
+		if (!root.contains("version") || root["version"].get<int32_t>() != kDiskCacheVersion)
+			return;
+
+		if (!root.contains("entries") || !root["entries"].is_array())
+			return;
+
+		for (const auto& item : root["entries"])
+		{
+			if (!item.is_object())
+				continue;
+			if (!item.contains("source") || !item.contains("cache"))
+				continue;
+
+			const fs::path source = NormalizeIconPath(item["source"].get<std::string>());
+			if (source.empty())
+				continue;
+
+			IconDiskCacheEntry entry;
+			entry.cacheFileName = item["cache"].get<std::string>();
+			if (item.contains("writeTime"))
+				entry.sourceWriteTime = item["writeTime"].get<int64_t>();
+			if (item.contains("fileSize"))
+				entry.sourceFileSize = item["fileSize"].get<uintmax_t>();
+
+			_diskCacheIndex[source] = std::move(entry);
+		}
+	}
+
+	void IconService::SaveDiskCacheIndex()
+	{
+		if (!_diskCacheDirty || _diskCacheIndexFile.empty())
+			return;
+
+		std::error_code ec;
+		fs::create_directories(_diskCacheRoot, ec);
+
+		json root = json::object();
+		root["version"] = kDiskCacheVersion;
+		root["entries"] = json::array();
+
+		for (const auto& [sourcePath, entry] : _diskCacheIndex)
+		{
+			json item = json::object();
+			item["source"] = sourcePath.generic_string();
+			item["cache"] = entry.cacheFileName;
+			item["writeTime"] = entry.sourceWriteTime;
+			item["fileSize"] = entry.sourceFileSize;
+			root["entries"].push_back(std::move(item));
+		}
+
+		std::ofstream file(_diskCacheIndexFile, std::ios::out | std::ios::trunc | std::ios::binary);
+		if (!file.is_open())
+			return;
+
+		file << root.dump(1, '\t');
+		_diskCacheDirty = false;
 	}
 
 	void IconService::ClearPreviewEntities()
@@ -373,36 +533,301 @@ namespace HexEngine
 		_previewRootEntities.clear();
 	}
 
+	void IconService::BeginAsyncMeshLoad(IconPending& pending)
+	{
+		pending.state = IconPending::State::LoadingMeshAsync;
+		const fs::path key = pending.path;
+
+		Mesh::CreateAsync(key, [this, key](std::shared_ptr<IResource> resource)
+		{
+			auto* request = FindPendingByPath(key);
+			if (request == nullptr)
+				return;
+
+			auto mesh = std::dynamic_pointer_cast<Mesh>(resource);
+			if (mesh != nullptr)
+			{
+				request->loadedMesh = mesh;
+				request->state = IconPending::State::ReadyToRender;
+			}
+			else
+			{
+				request->state = IconPending::State::Failed;
+			}
+		});
+	}
+
+	void IconService::PumpAsyncMeshLoads()
+	{
+		size_t activeMeshLoads = 0;
+		for (const auto& pending : _pendingPaths)
+		{
+			if (pending.extensionLower == ".hmesh" && pending.state == IconPending::State::LoadingMeshAsync)
+			{
+				++activeMeshLoads;
+			}
+		}
+
+		if (activeMeshLoads >= kMaxAsyncMeshPreviewLoads)
+			return;
+
+		for (auto& pending : _pendingPaths)
+		{
+			if (activeMeshLoads >= kMaxAsyncMeshPreviewLoads)
+				break;
+
+			if (pending.extensionLower != ".hmesh")
+				continue;
+
+			if (pending.state != IconPending::State::Queued)
+				continue;
+
+			BeginAsyncMeshLoad(pending);
+			++activeMeshLoads;
+		}
+	}
+
+	IconPending* IconService::FindPendingByPath(const fs::path& path)
+	{
+		for (auto& pending : _pendingPaths)
+		{
+			if (pending.path == path)
+				return &pending;
+		}
+		return nullptr;
+	}
+
+	void IconService::RemovePendingByPath(const fs::path& path)
+	{
+		for (auto it = _pendingPaths.begin(); it != _pendingPaths.end(); ++it)
+		{
+			if (it->path == path)
+			{
+				_pendingPaths.erase(it);
+				return;
+			}
+		}
+	}
+
+	bool IconService::PopNextRenderablePending(IconPending& outPending)
+	{
+		for (auto it = _pendingPaths.begin(); it != _pendingPaths.end(); ++it)
+		{
+			if (it->state == IconPending::State::LoadingMeshAsync)
+				continue;
+			if (it->extensionLower == ".hmesh" && it->state == IconPending::State::Queued)
+				continue;
+
+			outPending = std::move(*it);
+			_pendingPaths.erase(it);
+			return true;
+		}
+
+		return false;
+	}
+
+	void IconService::TouchIconLru(const fs::path& path)
+	{
+		auto it = _iconLruIndex.find(path);
+		if (it != _iconLruIndex.end())
+		{
+			_iconLru.erase(it->second);
+			_iconLruIndex.erase(it);
+		}
+
+		_iconLru.push_back(path);
+		auto newIt = _iconLru.end();
+		--newIt;
+		_iconLruIndex[path] = newIt;
+	}
+
+	void IconService::EnforceIconMemoryBudget()
+	{
+		while (_icons.size() > kMaxResidentGeneratedIcons && !_iconLru.empty())
+		{
+			const fs::path victim = _iconLru.front();
+			_iconLru.pop_front();
+			_iconLruIndex.erase(victim);
+
+			auto it = _icons.find(victim);
+			if (it == _icons.end())
+				continue;
+
+			SAFE_DELETE(it->second);
+			_icons.erase(it);
+		}
+	}
+
+	void IconService::SaveIconToDiskCache(const fs::path& sourcePath, ITexture2D* texture)
+	{
+		if (texture == nullptr || sourcePath.empty() || _diskCacheRoot.empty())
+			return;
+
+		const std::string cacheFile = BuildCacheFileName(sourcePath);
+		const fs::path cachePath = _diskCacheRoot / fs::path(cacheFile);
+		const fs::path baseDir = g_pEnv->GetFileSystem().GetBaseDirectory();
+		std::error_code ec;
+		fs::path cachePathRelative = fs::relative(cachePath, baseDir, ec);
+		if (ec || cachePathRelative.empty())
+			cachePathRelative = fs::path(L"Data/Cache/Icons") / fs::path(cacheFile);
+
+		texture->SaveToFile(cachePathRelative);
+
+		IconDiskCacheEntry entry;
+		entry.cacheFileName = cacheFile;
+		entry.sourceWriteTime = GetFileWriteTimeTicks(sourcePath);
+		entry.sourceFileSize = GetFileSizeSafe(sourcePath);
+		_diskCacheIndex[sourcePath] = std::move(entry);
+		_diskCacheDirty = true;
+	}
+
+	bool IconService::TryLoadIconFromDiskCache(const fs::path& sourcePath)
+	{
+		if (sourcePath.empty())
+			return false;
+
+		auto itEntry = _diskCacheIndex.find(sourcePath);
+		if (itEntry == _diskCacheIndex.end())
+			return false;
+
+		const auto& entry = itEntry->second;
+		const int64_t currentWriteTime = GetFileWriteTimeTicks(sourcePath);
+		const uintmax_t currentFileSize = GetFileSizeSafe(sourcePath);
+		if (currentWriteTime == 0 || currentFileSize == 0 ||
+			entry.sourceWriteTime != currentWriteTime ||
+			entry.sourceFileSize != currentFileSize)
+		{
+			RemoveIconFromDiskCache(sourcePath);
+			return false;
+		}
+
+		const fs::path cachePath = _diskCacheRoot / fs::path(entry.cacheFileName);
+		if (!fs::exists(cachePath))
+		{
+			RemoveIconFromDiskCache(sourcePath);
+			return false;
+		}
+
+		auto tex = ITexture2D::Create(cachePath);
+		if (tex == nullptr)
+		{
+			RemoveIconFromDiskCache(sourcePath);
+			return false;
+		}
+
+		const int32_t texWidth = std::max(1, tex->GetWidth());
+		const int32_t texHeight = std::max(1, tex->GetHeight());
+		const DXGI_FORMAT texFormat = static_cast<DXGI_FORMAT>(tex->GetFormat());
+
+		auto* clone = g_pEnv->_graphicsDevice->CreateTexture2D(
+			texWidth,
+			texHeight,
+			texFormat == DXGI_FORMAT_UNKNOWN ? DXGI_FORMAT_R8G8B8A8_UNORM : texFormat,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			0, 1, 0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D);
+		if (clone == nullptr)
+			return false;
+
+		const RECT srcRect = { 0, 0, texWidth, texHeight };
+		const RECT dstRect = { 0, 0, texWidth, texHeight };
+		tex->CopyTo(clone, srcRect, dstRect);
+
+		_icons[sourcePath] = clone;
+		TouchIconLru(sourcePath);
+		EnforceIconMemoryBudget();
+		return true;
+	}
+
+	void IconService::RemoveIconFromDiskCache(const fs::path& sourcePath)
+	{
+		auto it = _diskCacheIndex.find(sourcePath);
+		if (it == _diskCacheIndex.end())
+			return;
+
+		if (!it->second.cacheFileName.empty() && !_diskCacheRoot.empty())
+		{
+			const fs::path cachePath = _diskCacheRoot / fs::path(it->second.cacheFileName);
+			std::error_code ec;
+			fs::remove(cachePath, ec);
+		}
+
+		_diskCacheIndex.erase(it);
+		_diskCacheDirty = true;
+	}
+
 	void IconService::PushFilePathForIconGeneration(const fs::path& path)
 	{
-		auto it = _icons.find(path);
-		auto itRes = _resourceIcons.find(path);
+		const fs::path key = NormalizeIconPath(path);
+		auto it = _icons.find(key);
+		auto itRes = _resourceIcons.find(key);
+		auto itQueued = _queuedPaths.find(key);
 
-		// Only add a request if the icon hasn't already been generated
-		if (it == _icons.end() && itRes == _resourceIcons.end())
+		if (it != _icons.end())
 		{
-			LOG_INFO("IconService: An icon was requested for: %s", path.string().c_str());
+			TouchIconLru(key);
+			return;
+		}
+		if (itRes != _resourceIcons.end())
+		{
+			return;
+		}
+
+		if (TryLoadIconFromDiskCache(key))
+			return;
+
+		// Only add a request if the icon hasn't already been generated or queued.
+		if (itQueued == _queuedPaths.end())
+		{
+			LOG_INFO("IconService: An icon was requested for: %s", key.string().c_str());
 
 			IconPending pending;
-			pending.path = path;
-			_pendingPaths.push_back(pending);
+			pending.path = key;
+			pending.extensionLower = key.extension().string();
+			std::transform(pending.extensionLower.begin(), pending.extensionLower.end(), pending.extensionLower.begin(), ::tolower);
+			_pendingPaths.push_back(std::move(pending));
+			_queuedPaths.insert(key);
 		}
 	}
 
 	void IconService::PushAssetPathForIconGeneration(const std::wstring& assetPackage, const fs::path& assetPath)
 	{
-		auto it = _icons.find(assetPath);
-		auto itRes = _resourceIcons.find(assetPath);
+		const fs::path key = NormalizeIconPath(assetPath);
+		auto it = _icons.find(key);
+		auto itRes = _resourceIcons.find(key);
+		auto itQueued = _queuedPaths.find(key);
 
-		// Only add a request if the icon hasn't already been generated
-		if (it == _icons.end() && itRes == _resourceIcons.end())
+		if (it != _icons.end())
 		{
-			LOG_INFO("IconService: An icon was requested for: %s", assetPath.string().c_str());
+			TouchIconLru(key);
+			return;
+		}
+		if (itRes != _resourceIcons.end())
+		{
+			return;
+		}
+
+		if (TryLoadIconFromDiskCache(key))
+			return;
+
+		// Only add a request if the icon hasn't already been generated or queued.
+		if (itQueued == _queuedPaths.end())
+		{
+			LOG_INFO("IconService: An icon was requested for: %s", key.string().c_str());
 
 			IconPending pending;
-			pending.path = assetPath;
+			pending.path = key;
 			pending.isAsset = true;
-			_pendingPaths.push_back(pending);
+			pending.assetPackage = assetPackage;
+			pending.extensionLower = key.extension().string();
+			std::transform(pending.extensionLower.begin(), pending.extensionLower.end(), pending.extensionLower.begin(), ::tolower);
+			_pendingPaths.push_back(std::move(pending));
+			_queuedPaths.insert(key);
 		}
 	}
 
@@ -410,16 +835,37 @@ namespace HexEngine
 	{
 		if (_pendingPaths.size() > 0)
 		{
+			PumpAsyncMeshLoads();
+
+			IconPending pending;
+			if (!PopNextRenderablePending(pending))
+			{
+				_iconScene->SetFlags(SceneFlags::Utility);
+				if (_camera && _camera->GetPVS())
+				{
+					_camera->GetPVS()->ClearPVS();
+				}
+				if (auto* sun = _iconScene->GetSunLight(); sun != nullptr)
+				{
+					for (int32_t i = 0; i < sun->GetMaxSupportedShadowCascades(); ++i)
+					{
+						sun->GetPVS(i)->ClearPVS();
+					}
+				}
+				return;
+			}
+
 			_iconScene->SetFlags(SceneFlags::Renderable);
 
 			g_pEnv->GetGraphicsDevice().SetClearColour(math::Color(HEX_RGB_TO_FLOAT3(40, 44, 48)));
 
-			const auto& pending = _pendingPaths[0];
-
-			auto path = pending.path;
-			auto extension = path.extension().string();
-
-			std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+			const auto path = pending.path;
+			std::string extension = pending.extensionLower;
+			if (extension.empty())
+			{
+				extension = path.extension().string();
+				std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+			}
 
 			// Textures can be used directly as icons; no preview scene render required.
 			if (IsImageExtension(extension))
@@ -427,10 +873,10 @@ namespace HexEngine
 				auto texture = ITexture2D::Create(path);
 				if (texture != nullptr)
 				{
-					_resourceIcons[path] = texture;
+					_resourceIcons[NormalizeIconPath(path)] = texture;
 				}
 
-				_pendingPaths.erase(_pendingPaths.begin());
+				_queuedPaths.erase(path);
 				return;
 			}
 
@@ -442,20 +888,16 @@ namespace HexEngine
 
 			if (extension == ".hmesh")
 			{
-				auto* dummyEnt = _iconScene->CreateEntity("DummyEnt");
-				dummyEnt->AddComponent<StaticMeshComponent>();
-				auto* meshRenderer = dummyEnt->GetComponent<StaticMeshComponent>();
-
-				auto mesh = Mesh::Create(path);
+				auto mesh = pending.loadedMesh;
 				if (mesh != nullptr)
 				{
+					auto* dummyEnt = _iconScene->CreateEntity("DummyEnt");
+					dummyEnt->AddComponent<StaticMeshComponent>();
+					auto* meshRenderer = dummyEnt->GetComponent<StaticMeshComponent>();
+
 					meshRenderer->SetMesh(mesh);
 					_previewRootEntities.push_back(dummyEnt);
 					hasPreviewEntities = true;
-				}
-				else
-				{
-					_iconScene->DestroyEntity(dummyEnt);
 				}
 			}
 			else if (extension == ".hmat")
@@ -516,7 +958,46 @@ namespace HexEngine
 					}
 				}
 				SeedPVSForPreview(_iconScene.get(), _camera, _previewRootEntities);
-				_generatedPaths.push_back(path);
+
+				// Render and capture immediately so icon generation does not rely on external frame ordering.
+				g_pEnv->_sceneRenderer->RenderScene(_iconScene.get(), _camera, _iconScene->GetFlags());
+
+				auto* cameraRT = _camera->GetRenderTarget();
+				if (cameraRT != nullptr)
+				{
+					auto* iconTexture = g_pEnv->_graphicsDevice->CreateTexture2D(
+						kIconSize,
+						kIconSize,
+						DXGI_FORMAT_R8G8B8A8_UNORM,
+						1,
+						D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+						0, 1, 0,
+						nullptr,
+						(D3D11_CPU_ACCESS_FLAG)0,
+						D3D11_RTV_DIMENSION_TEXTURE2D,
+						D3D11_UAV_DIMENSION_UNKNOWN,
+						D3D11_SRV_DIMENSION_TEXTURE2D);
+
+					if (iconTexture != nullptr)
+					{
+						// Keep icon alpha opaque so UI thumbnail blending does not hide valid RGB.
+						iconTexture->ClearRenderTargetView(math::Color(0, 0, 0, 1));
+						cameraRT->BlendTo_Additive(iconTexture, nullptr);
+
+						if (auto it = _icons.find(path); it != _icons.end())
+						{
+							SAFE_DELETE(it->second);
+							it->second = iconTexture;
+						}
+						else
+						{
+							_icons[path] = iconTexture;
+						}
+						TouchIconLru(path);
+						EnforceIconMemoryBudget();
+						SaveIconToDiskCache(path, iconTexture);
+					}
+				}
 			}
 			else
 			{
@@ -534,10 +1015,12 @@ namespace HexEngine
 				}
 			}
 
-			_pendingPaths.erase(_pendingPaths.begin());
+			_queuedPaths.erase(path);
 		}
 		else
 		{
+			SaveDiskCacheIndex();
+
 			_iconScene->SetFlags(SceneFlags::Utility);
 
 			_camera->GetPVS()->ClearPVS();
@@ -568,8 +1051,8 @@ namespace HexEngine
 			}*/
 
 			_icons[path] = g_pEnv->_graphicsDevice->CreateTexture2D(
-				512,
-				512,
+				kIconSize,
+				kIconSize,
 				DXGI_FORMAT_R8G8B8A8_UNORM,
 				1, 
 				D3D11_BIND_RENDER_TARGET|D3D11_BIND_SHADER_RESOURCE,
@@ -583,11 +1066,11 @@ namespace HexEngine
 			_icons[path]->ClearRenderTargetView(math::Color(1, 0, 0, 1));
 			g_pEnv->_graphicsDevice->SetRenderTarget(_icons[path]);
 
-			g_pEnv->_graphicsDevice->SetViewport(*math::Viewport(0, 0, 512, 512).Get11());
+			g_pEnv->_graphicsDevice->SetViewport(*math::Viewport(0, 0, kIconSize, kIconSize).Get11());
 
 			auto renderer = g_pEnv->GetUIManager().GetRenderer();
 			{
-				renderer->StartFrame(512, 512);
+				renderer->StartFrame(kIconSize, kIconSize);
 				renderer->FullScreenTexturedQuad(cameraRT);
 				renderer->EndFrame();
 				//_camera->GetRenderTarget()->CopyTo(_icons[path]);
@@ -614,33 +1097,58 @@ namespace HexEngine
 
 	ITexture2D* IconService::GetIcon(const fs::path& path)
 	{
-		if (auto itRes = _resourceIcons.find(path); itRes != _resourceIcons.end())
+		const fs::path key = NormalizeIconPath(path);
+
+		if (auto itRes = _resourceIcons.find(key); itRes != _resourceIcons.end())
 		{
 			return itRes->second.get();
 		}
 
-		auto it = _icons.find(path);
+		auto it = _icons.find(key);
+		if (it != _icons.end())
+		{
+			TouchIconLru(key);
+			return it->second;
+		}
 
-		if (it == _icons.end())
-			return nullptr;
+		if (TryLoadIconFromDiskCache(key))
+		{
+			auto itDisk = _icons.find(key);
+			if (itDisk != _icons.end())
+			{
+				return itDisk->second;
+			}
+		}
 
-		return it->second;
+		return nullptr;
 	}
 
 	void IconService::RemoveIcon(const fs::path& path)
 	{
-		auto itRes = _resourceIcons.find(path);
+		const fs::path key = NormalizeIconPath(path);
+		_queuedPaths.erase(key);
+		RemovePendingByPath(key);
+		RemoveIconFromDiskCache(key);
+
+		auto itRes = _resourceIcons.find(key);
 		if (itRes != _resourceIcons.end())
 		{
 			_resourceIcons.erase(itRes);
 		}
 
-		auto it = _icons.find(path);
+		auto it = _icons.find(key);
 
 		if (it == _icons.end())
 			return;
 
+		SAFE_DELETE(it->second);
 		_icons.erase(it);
+		auto itLru = _iconLruIndex.find(key);
+		if (itLru != _iconLruIndex.end())
+		{
+			_iconLru.erase(itLru->second);
+			_iconLruIndex.erase(itLru);
+		}
 	}
 }
 

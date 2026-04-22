@@ -96,6 +96,7 @@ namespace HexEditor
 			sceneView->SetActiveWorkspaceTab(tab);
 			return true;
 		}
+
 	}
 
 	AssetExplorer::AssetExplorer(HexEngine::Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
@@ -141,6 +142,7 @@ namespace HexEditor
 		if (auto* asset = FindAssetInView(assetPath); asset != nullptr)
 		{
 			asset->generatedIcon = nullptr;
+			asset->previewRequested = false;
 			_canvas.Redraw();
 		}
 	}
@@ -291,71 +293,8 @@ namespace HexEditor
 
 			AssetDesc desc;
 			desc.path = p.path();
-			desc.generatedIcon = HexEngine::g_pEnv->_iconService->GetIcon(desc.path);
-
-			if (desc.generatedIcon == nullptr)
-			{
-				HexEngine::g_pEnv->_iconService->PushFilePathForIconGeneration(desc.path);
-
-				SHFILEINFO stFileInfo = {};
-				SHGetFileInfo(
-					desc.path.wstring().c_str(),
-					FILE_ATTRIBUTE_NORMAL,
-					&stFileInfo,
-					sizeof(stFileInfo),
-					SHGFI_ICON | SHGFI_USEFILEATTRIBUTES | SHGFI_LARGEICON);
-
-				ICONINFO stIconInfo = {};
-				if (stFileInfo.hIcon != nullptr && GetIconInfo(stFileInfo.hIcon, &stIconInfo))
-				{
-					BITMAP bm = {};
-					GetObject(stIconInfo.hbmColor, sizeof(bm), &bm);
-
-					const int32_t bpp = (bm.bmBitsPixel / 8);
-					if (bpp >= 4)
-					{
-						auto* data = new uint8_t[bm.bmWidth * bm.bmHeight * bpp];
-						GetBitmapBits(stIconInfo.hbmColor, bm.bmWidth * bm.bmHeight * bpp, data);
-
-						for (int32_t i = 0; i < bm.bmHeight * bm.bmWidth; ++i)
-						{
-							const int32_t idxBlue = i * bpp;
-							const int32_t idxRed = i * bpp + 2;
-							std::swap(data[idxBlue], data[idxRed]);
-						}
-
-						D3D11_SUBRESOURCE_DATA pixelData = {};
-						pixelData.pSysMem = data;
-						pixelData.SysMemPitch = bm.bmWidth * bpp;
-
-						desc.icon = HexEngine::g_pEnv->_graphicsDevice->CreateTexture2D(
-							bm.bmWidth,
-							bm.bmHeight,
-							DXGI_FORMAT_R8G8B8A8_UNORM,
-							1,
-							D3D11_BIND_SHADER_RESOURCE,
-							0,
-							1,
-							0,
-							&pixelData,
-							(D3D11_CPU_ACCESS_FLAG)0,
-							D3D11_RTV_DIMENSION_UNKNOWN,
-							D3D11_UAV_DIMENSION_UNKNOWN,
-							D3D11_SRV_DIMENSION_TEXTURE2D);
-
-						desc.ownsIcon = desc.icon != nullptr;
-						delete[] data;
-					}
-
-					if (stIconInfo.hbmColor)
-						DeleteObject(stIconInfo.hbmColor);
-					if (stIconInfo.hbmMask)
-						DeleteObject(stIconInfo.hbmMask);
-				}
-
-				if (stFileInfo.hIcon)
-					DestroyIcon(stFileInfo.hIcon);
-			}
+			desc.generatedIcon = nullptr;
+			desc.previewRequested = false;
 
 			_assetsInView.push_back(desc);
 		}
@@ -489,6 +428,7 @@ namespace HexEditor
 
 			HexEngine::g_pEnv->_iconService->RemoveIcon(asset.path);
 			asset.generatedIcon = nullptr;
+			asset.previewRequested = false;
 		}
 	}
 
@@ -891,7 +831,12 @@ namespace HexEditor
 			if (!asset.selected || asset.path.extension() != ".hmesh")
 				continue;
 
-			auto mesh = HexEngine::Mesh::Create(asset.path);
+			HexEngine::MeshLoadOptions options;
+			options.createBuffers = false;
+			options.createMaterial = false;
+			options.populateVertices = false;
+
+			auto mesh = HexEngine::Mesh::Create(asset.path, &options);
 			if (!mesh)
 				continue;
 
@@ -899,13 +844,10 @@ namespace HexEditor
 				continue;
 
 			std::wstring materialKey = L"Default";
-			if (auto mat = mesh->GetMaterial(); mat != nullptr)
+			const auto& materialName = mesh->GetMaterialName();
+			if (!materialName.empty())
 			{
-				const auto& materialPath = mat->GetFileSystemPath();
-				if (!materialPath.empty())
-				{
-					materialKey = materialPath.wstring();
-				}
+				materialKey = fs::path(materialName).wstring();
 			}
 
 			groupedByMaterial[materialKey].push_back(asset.path);
@@ -949,11 +891,15 @@ namespace HexEditor
 		combinedVertices.reserve(4096);
 		combinedIndices.reserve(4096);
 
-		std::shared_ptr<HexEngine::Material> firstMaterial;
+		fs::path firstMaterialPath;
 
 		for (const auto& meshPath : meshPaths)
 		{
-			auto mesh = HexEngine::Mesh::Create(meshPath);
+			HexEngine::MeshLoadOptions options;
+			options.createBuffers = false;
+			options.createMaterial = false;
+
+			auto mesh = HexEngine::Mesh::Create(meshPath, &options);
 			if (!mesh)
 			{
 				LOG_WARN("Skipping mesh '%s' while combining because it failed to load", meshPath.string().c_str());
@@ -971,9 +917,13 @@ namespace HexEditor
 			if (sourceVertices.empty() || sourceIndices.empty())
 				continue;
 
-			if (!firstMaterial && mesh->GetMaterial())
+			if (firstMaterialPath.empty())
 			{
-				firstMaterial = mesh->GetMaterial();
+				const auto& materialName = mesh->GetMaterialName();
+				if (!materialName.empty())
+				{
+					firstMaterialPath = fs::path(materialName);
+				}
 			}
 
 			const HexEngine::MeshIndexFormat indexOffset = static_cast<HexEngine::MeshIndexFormat>(combinedVertices.size());
@@ -1036,9 +986,9 @@ namespace HexEditor
 		dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
 		combinedMesh->SetOBB(obb);
 
-		if (firstMaterial)
+		if (!firstMaterialPath.empty())
 		{
-			combinedMesh->SetMaterial(firstMaterial);
+			combinedMesh->SetMaterial(HexEngine::Material::Create(firstMaterialPath));
 		}
 		else
 		{
@@ -1497,6 +1447,15 @@ namespace HexEditor
 					if (asset.generatedIcon == nullptr)
 					{
 						asset.generatedIcon = HexEngine::g_pEnv->_iconService->GetIcon(asset.path);
+						if (asset.generatedIcon == nullptr && !asset.previewRequested)
+						{
+							HexEngine::g_pEnv->_iconService->PushFilePathForIconGeneration(asset.path);
+							asset.previewRequested = true;
+						}
+					}
+					else
+					{
+						asset.previewRequested = false;
 					}
 
 					if (asset.icon || asset.generatedIcon)

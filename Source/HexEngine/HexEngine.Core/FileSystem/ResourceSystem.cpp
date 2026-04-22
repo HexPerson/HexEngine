@@ -2,6 +2,27 @@
 
 #include "ResourceSystem.hpp"
 #include "../HexEngine.hpp"
+#include <algorithm>
+#include <cwctype>
+
+namespace
+{
+	fs::path NormalizeAbsoluteResourcePath(const fs::path& input)
+	{
+		if (input.empty())
+			return {};
+
+		fs::path normalized = input.lexically_normal().make_preferred();
+#ifdef _WIN32
+		std::wstring lower = normalized.wstring();
+		std::transform(lower.begin(), lower.end(), lower.begin(),
+			[](wchar_t c) { return static_cast<wchar_t>(::towlower(c)); });
+		return fs::path(lower);
+#else
+		return normalized;
+#endif
+	}
+}
 
 namespace HexEngine
 {
@@ -26,7 +47,9 @@ namespace HexEngine
 		for (auto&& resource : _loadedResources)
 		{
 			LOG_DEBUG("** WARNING ** Unloaded resource: '%S' RefCount = %d", resource.first.c_str(), resource.second.use_count());
-		}		
+		}
+
+		_loadedResourcesByAbsolute.clear();
 	}
 
 	void ResourceSystem::AddFileSystem(FileSystem* fileSystem)
@@ -101,7 +124,7 @@ namespace HexEngine
 			else
 				_lock.unlock();
 
-			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+			std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		}
 	}
 
@@ -198,32 +221,19 @@ namespace HexEngine
 			if (!absolutePath.is_absolute())
 				return nullptr;
 
-			const fs::path normalizedAbsolute = absolutePath.lexically_normal();
+			const fs::path absoluteKey = NormalizeAbsoluteResourcePath(absolutePath);
+			auto it = _loadedResourcesByAbsolute.find(absoluteKey);
+			if (it == _loadedResourcesByAbsolute.end())
+				return nullptr;
 
-			for (auto it = _loadedResources.begin(); it != _loadedResources.end(); )
+			auto loaded = it->second.lock();
+			if (!loaded)
 			{
-				auto loaded = it->second.lock();
-				if (!loaded)
-				{
-					it = _loadedResources.erase(it);
-					continue;
-				}
-
-				const fs::path loadedAbsolute = loaded->GetAbsolutePath();
-				if (!loadedAbsolute.empty())
-				{
-					std::error_code ec;
-					if (fs::equivalent(loadedAbsolute, normalizedAbsolute, ec) && !ec)
-						return loaded;
-
-					if (loadedAbsolute.lexically_normal() == normalizedAbsolute)
-						return loaded;
-				}
-
-				++it;
+				_loadedResourcesByAbsolute.erase(it);
+				return nullptr;
 			}
 
-			return nullptr;
+			return loaded;
 		};
 
 		if (auto loaded = tryGetLoadedByKey(localPath); loaded != nullptr)
@@ -345,6 +355,7 @@ namespace HexEngine
 			resource->_id = _currentResourceId++;
 
 			_loadedResources[resource->GetFileSystemPath()] = resource;
+			_loadedResourcesByAbsolute[NormalizeAbsoluteResourcePath(resource->_absolutePath)] = resource;
 			_idToResourceMap[resource->_id] = resource;
 
 			return resource;
@@ -368,6 +379,7 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_loadedResources.erase(resource->GetFileSystemPath());
+		_loadedResourcesByAbsolute.erase(NormalizeAbsoluteResourcePath(resource->GetAbsolutePath()));
 		_idToResourceMap.erase(resource->GetId());
 
 		LOG_INFO("Unloading resource '%S'", resource->GetFileSystemPath().wstring().c_str());

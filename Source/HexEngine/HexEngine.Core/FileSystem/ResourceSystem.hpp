@@ -64,6 +64,7 @@ namespace HexEngine
 		std::vector<IResourceLoader*> _resourceLoaders;
 
 		std::map<fs::path, std::weak_ptr<IResource>> _loadedResources;
+		std::map<fs::path, std::weak_ptr<IResource>> _loadedResourcesByAbsolute;
 		std::map<ResourceId, std::weak_ptr<IResource>> _idToResourceMap;
 		std::list<std::pair<fs::path, ResourceLoadedFn>> _queuedResources;
 		std::list<std::pair<std::shared_ptr<IResource>, ResourceLoadedFn>> _asyncLoadedForCallback;
