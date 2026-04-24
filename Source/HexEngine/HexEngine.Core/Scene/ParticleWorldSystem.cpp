@@ -3,6 +3,8 @@
 #include "ParticleEffect.hpp"
 #include "Scene.hpp"
 #include "../Entity/Component/ParticleSystemComponent.hpp"
+#include "../Entity/Component/PointLight.hpp"
+#include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/Transform.hpp"
 #include "../Environment/IEnvironment.hpp"
 #include "../Environment/LogFile.hpp"
@@ -21,6 +23,10 @@ namespace HexEngine
 	HVar r_particleMaxEmitters("r_particleMaxEmitters", "Global max number of active GPU emitters", 1024, 1, 4096);
 	HVar r_particleDeltaClamp("r_particleDeltaClamp", "Clamp particle simulation delta time", 0.033f, 0.001f, 0.2f);
 	HVar r_particleDebugStats("r_particleDebugStats", "Log periodic GPU particle stats", false, false, true);
+	HVar r_particleDepthJitterBias("r_particleDepthJitterBias", "View-depth jitter bias for particle self-overlap reduction", 0.01f, 0.0f, 0.05f);
+	HVar r_particleTransparencyAssist("r_particleTransparencyAssist", "Enable transparency self-overlap assist for particles", false, false, true);
+	HVar r_particleTransparencyDepthBias("r_particleTransparencyDepthBias", "Depth bias strength for transparency assist", 0.25f, 0.0f, 1.0f);
+	HVar r_particleTransparencyDither("r_particleTransparencyDither", "Dither strength for transparency assist", 0.12f, 0.0f, 1.0f);
 
 	namespace
 	{
@@ -35,6 +41,23 @@ namespace HexEngine
 
 		constexpr uint32_t ParticleFlags_FacingShift = 8;
 		constexpr uint32_t ParticleFlags_AlphaCurve3 = HEX_BITSET(16);
+		constexpr uint32_t ParticleFlags_ReceiveLighting = HEX_BITSET(17);
+
+		BlendState ToBlendState(ParticleBlendMode mode)
+		{
+			switch (mode)
+			{
+			case ParticleBlendMode::Opaque:
+				return BlendState::Opaque;
+			case ParticleBlendMode::Additive:
+				return BlendState::Additive;
+			case ParticleBlendMode::PremultipliedAlpha:
+				return BlendState::TransparencyPreserveAlpha;
+			case ParticleBlendMode::AlphaBlended:
+			default:
+				return BlendState::Transparency;
+			}
+		}
 
 		uint32_t ToShapeFlag(ParticleShapeType type)
 		{
@@ -67,6 +90,7 @@ namespace HexEngine
 		_simulateShader = IShader::Create("EngineData.Shaders/ParticleSimulate.hcs");
 		_litSpriteShader = IShader::Create("EngineData.Shaders/ParticleBillboardLit.hcs");
 		_simConstants = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(ParticleSimConstants));
+		_lightConstants = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(ParticleLightConstants));
 
 		_spriteMesh = Mesh::Create("EngineData.Models/Primitives/billboard.hmesh");
 		if (_spriteMesh == nullptr)
@@ -76,9 +100,9 @@ namespace HexEngine
 		_defaultSpriteMaterial = Material::Create("EngineData.Materials/Billboard.hmat");
 		_activeSpriteMaterial = _defaultSpriteMaterial;
 		_activeSpriteTexture.reset();
+		_activeBlendState = BlendState::Transparency;
 		_activeSpriteMaterialPath.clear();
 		_activeSpriteTexturePath.clear();
-		_activeSpriteReceiveLighting = false;
 	}
 
 	void ParticleWorldSystem::Destroy()
@@ -96,20 +120,23 @@ namespace HexEngine
 		SAFE_RELEASE(_emitterSrv);
 		SAFE_RELEASE(_emitterBuffer);
 
-		SAFE_RELEASE(_instanceAppendUav);
-		SAFE_RELEASE(_instanceAppendSrv);
-		SAFE_RELEASE(_instanceAppendBuffer);
-		SAFE_RELEASE(_instanceVertexBuffer);
-
-		SAFE_RELEASE(_drawArgsBuffer);
+		for (uint32_t i = 0; i < TransparentDepthBinCount; ++i)
+		{
+			SAFE_RELEASE(_instanceAppendUav[i]);
+			SAFE_RELEASE(_instanceAppendSrv[i]);
+			SAFE_RELEASE(_instanceAppendBuffer[i]);
+			SAFE_RELEASE(_instanceVertexBuffer[i]);
+			SAFE_RELEASE(_drawArgsBuffer[i]);
+		}
 
 		SAFE_DELETE(_simConstants);
+		SAFE_DELETE(_lightConstants);
 		_litSpriteShader.reset();
 		_activeSpriteMaterial.reset();
 		_activeSpriteTexture.reset();
+		_activeBlendState = BlendState::Transparency;
 		_activeSpriteMaterialPath.clear();
 		_activeSpriteTexturePath.clear();
-		_activeSpriteReceiveLighting = false;
 		_maxParticles = 0;
 		_maxEmitters = 0;
 		_activeParticleCapacity = 0;
@@ -175,7 +202,7 @@ namespace HexEngine
 			return;
 
 		RunSimulationCompute(dt, camera);
-		RenderSprites(camera, target, depthStencil);
+		RenderSprites(scene, camera, target, depthStencil);
 
 		if (r_particleDebugStats._val.b && g_pEnv && g_pEnv->_timeManager && (g_pEnv->_timeManager->_frameCount % 120ull) == 0ull)
 		{
@@ -194,7 +221,7 @@ namespace HexEngine
 		_frameEmitterGpu.clear();
 		fs::path requestedMaterialPath;
 		fs::path requestedTexturePath;
-		bool requestedReceiveLighting = false;
+		BlendState requestedBlendState = BlendState::Transparency;
 		bool hasRequestedRenderResource = false;
 
 		const uint32_t maxParticlesBudget = (uint32_t)std::max(1024, r_particleMaxParticles._val.i32);
@@ -232,7 +259,7 @@ namespace HexEngine
 				{
 					requestedMaterialPath = emitter.materialPath;
 					requestedTexturePath = emitter.texturePath;
-					requestedReceiveLighting = component->GetReceiveLighting();
+					requestedBlendState = ToBlendState(emitter.blendMode);
 					hasRequestedRenderResource = true;
 				}
 
@@ -296,6 +323,13 @@ namespace HexEngine
 					emitter.alphaOverLifetimeCurve.y,
 					emitter.alphaOverLifetimeCurve.z,
 					std::clamp(emitter.alphaOverLifetimeCurveMidpoint, 0.001f, 0.999f));
+				const float flipRows = (float)std::max(1u, emitter.flipbook.rows);
+				const float flipCols = (float)std::max(1u, emitter.flipbook.columns);
+				const float flipFps = std::max(0.0f, emitter.flipbook.framesPerSecond);
+				float flipMode = 0.0f;
+				if (emitter.flipbook.enabled && emitter.flipbook.rows > 0 && emitter.flipbook.columns > 0 && (emitter.flipbook.rows * emitter.flipbook.columns) > 1)
+					flipMode = emitter.flipbook.stretchToLifetime ? 1.0f : 2.0f; // 1=lifetime stretch, 2=absolute fps loop
+				gpu.simulation5 = math::Vector4(flipRows, flipCols, flipFps, flipMode);
 				gpu.colorStart = emitter.startColor;
 				gpu.colorEnd = emitter.endColor;
 				gpu.lifeParams = math::Vector4(
@@ -309,6 +343,10 @@ namespace HexEngine
 				gpu.flags = ToShapeFlag(emitter.shape.type) | ((uint32_t)emitter.facingMode << ParticleFlags_FacingShift);
 				if ((component->GetLocalSpaceOverrideEnabled() && component->GetLocalSpaceOverride()) || (!component->GetLocalSpaceOverrideEnabled() && emitter.simulateInLocalSpace))
 					gpu.flags |= ParticleFlags_LocalSpace;
+
+				const bool effectiveReceiveLighting = emitter.overrideReceiveLightingEnabled ? emitter.overrideReceiveLighting : component->GetReceiveLighting();
+				if (effectiveReceiveLighting)
+					gpu.flags |= ParticleFlags_ReceiveLighting;
 				if (emitter.useThreePointAlphaCurve)
 					gpu.flags |= ParticleFlags_AlphaCurve3;
 
@@ -326,6 +364,7 @@ namespace HexEngine
 
 		if (hasRequestedRenderResource)
 		{
+			_activeBlendState = requestedBlendState;
 			if (requestedMaterialPath != _activeSpriteMaterialPath)
 			{
 				_activeSpriteMaterialPath = requestedMaterialPath;
@@ -356,12 +395,20 @@ namespace HexEngine
 				}
 			}
 
-			_activeSpriteReceiveLighting = requestedReceiveLighting;
 		}
 
 		_activeParticleCapacity = particleOffset;
 		EnsureBuffers(std::max(1u, particleOffset), std::max(1u, (uint32_t)_frameEmitters.size()));
-		return _particleStateBuffer != nullptr && _emitterBuffer != nullptr && _instanceAppendBuffer != nullptr && _instanceVertexBuffer != nullptr;
+		if (_particleStateBuffer == nullptr || _emitterBuffer == nullptr)
+			return false;
+
+		for (uint32_t i = 0; i < TransparentDepthBinCount; ++i)
+		{
+			if (_instanceAppendBuffer[i] == nullptr || _instanceVertexBuffer[i] == nullptr || _drawArgsBuffer[i] == nullptr)
+				return false;
+		}
+
+		return true;
 	}
 
 	void ParticleWorldSystem::EnsureBuffers(uint32_t maxParticles, uint32_t maxEmitters)
@@ -375,11 +422,14 @@ namespace HexEngine
 		SAFE_RELEASE(_emitterUav);
 		SAFE_RELEASE(_emitterSrv);
 		SAFE_RELEASE(_emitterBuffer);
-		SAFE_RELEASE(_instanceAppendUav);
-		SAFE_RELEASE(_instanceAppendSrv);
-		SAFE_RELEASE(_instanceAppendBuffer);
-		SAFE_RELEASE(_instanceVertexBuffer);
-		SAFE_RELEASE(_drawArgsBuffer);
+		for (uint32_t i = 0; i < TransparentDepthBinCount; ++i)
+		{
+			SAFE_RELEASE(_instanceAppendUav[i]);
+			SAFE_RELEASE(_instanceAppendSrv[i]);
+			SAFE_RELEASE(_instanceAppendBuffer[i]);
+			SAFE_RELEASE(_instanceVertexBuffer[i]);
+			SAFE_RELEASE(_drawArgsBuffer[i]);
+		}
 
 		ID3D11Device* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
 		if (device == nullptr)
@@ -434,38 +484,36 @@ namespace HexEngine
 		emitterUavDesc.Buffer.NumElements = _maxEmitters;
 		CHECK_HR(device->CreateUnorderedAccessView(_emitterBuffer, &emitterUavDesc, &_emitterUav));
 
+		const uint32_t perBinCapacity = std::max(1u, (_maxParticles + TransparentDepthBinCount - 1u) / TransparentDepthBinCount);
+
 		D3D11_BUFFER_DESC instanceAppendDesc = {};
-		instanceAppendDesc.ByteWidth = sizeof(MeshInstanceData) * _maxParticles;
+		instanceAppendDesc.ByteWidth = sizeof(MeshInstanceData) * perBinCapacity;
 		instanceAppendDesc.Usage = D3D11_USAGE_DEFAULT;
 		instanceAppendDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		instanceAppendDesc.CPUAccessFlags = 0;
 		instanceAppendDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		instanceAppendDesc.StructureByteStride = sizeof(MeshInstanceData);
-		CHECK_HR(device->CreateBuffer(&instanceAppendDesc, nullptr, &_instanceAppendBuffer));
 
 		D3D11_SHADER_RESOURCE_VIEW_DESC instanceAppendSrvDesc = {};
 		instanceAppendSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
 		instanceAppendSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
 		instanceAppendSrvDesc.Buffer.FirstElement = 0;
-		instanceAppendSrvDesc.Buffer.NumElements = _maxParticles;
-		CHECK_HR(device->CreateShaderResourceView(_instanceAppendBuffer, &instanceAppendSrvDesc, &_instanceAppendSrv));
+		instanceAppendSrvDesc.Buffer.NumElements = perBinCapacity;
 
 		D3D11_UNORDERED_ACCESS_VIEW_DESC instanceAppendUavDesc = {};
 		instanceAppendUavDesc.Format = DXGI_FORMAT_UNKNOWN;
 		instanceAppendUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
 		instanceAppendUavDesc.Buffer.FirstElement = 0;
-		instanceAppendUavDesc.Buffer.NumElements = _maxParticles;
+		instanceAppendUavDesc.Buffer.NumElements = perBinCapacity;
 		instanceAppendUavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_APPEND;
-		CHECK_HR(device->CreateUnorderedAccessView(_instanceAppendBuffer, &instanceAppendUavDesc, &_instanceAppendUav));
 
 		D3D11_BUFFER_DESC instanceVertexDesc = {};
-		instanceVertexDesc.ByteWidth = sizeof(MeshInstanceData) * _maxParticles;
+		instanceVertexDesc.ByteWidth = sizeof(MeshInstanceData) * perBinCapacity;
 		instanceVertexDesc.Usage = D3D11_USAGE_DEFAULT;
 		instanceVertexDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
 		instanceVertexDesc.CPUAccessFlags = 0;
 		instanceVertexDesc.MiscFlags = 0;
 		instanceVertexDesc.StructureByteStride = 0;
-		CHECK_HR(device->CreateBuffer(&instanceVertexDesc, nullptr, &_instanceVertexBuffer));
 
 		D3D11_BUFFER_DESC argsDesc = {};
 		argsDesc.ByteWidth = sizeof(D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS);
@@ -473,7 +521,15 @@ namespace HexEngine
 		argsDesc.BindFlags = 0;
 		argsDesc.CPUAccessFlags = 0;
 		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
-		CHECK_HR(device->CreateBuffer(&argsDesc, nullptr, &_drawArgsBuffer));
+
+		for (uint32_t i = 0; i < TransparentDepthBinCount; ++i)
+		{
+			CHECK_HR(device->CreateBuffer(&instanceAppendDesc, nullptr, &_instanceAppendBuffer[i]));
+			CHECK_HR(device->CreateShaderResourceView(_instanceAppendBuffer[i], &instanceAppendSrvDesc, &_instanceAppendSrv[i]));
+			CHECK_HR(device->CreateUnorderedAccessView(_instanceAppendBuffer[i], &instanceAppendUavDesc, &_instanceAppendUav[i]));
+			CHECK_HR(device->CreateBuffer(&instanceVertexDesc, nullptr, &_instanceVertexBuffer[i]));
+			CHECK_HR(device->CreateBuffer(&argsDesc, nullptr, &_drawArgsBuffer[i]));
+		}
 
 		ClearGpuBuffers();
 	}
@@ -487,8 +543,11 @@ namespace HexEngine
 		UINT clearData[4] = { 0, 0, 0, 0 };
 		if (_particleStateUav)
 			context->ClearUnorderedAccessViewUint(_particleStateUav, clearData);
-		if (_instanceAppendUav)
-			context->ClearUnorderedAccessViewUint(_instanceAppendUav, clearData);
+		for (uint32_t i = 0; i < TransparentDepthBinCount; ++i)
+		{
+			if (_instanceAppendUav[i])
+				context->ClearUnorderedAccessViewUint(_instanceAppendUav[i], clearData);
+		}
 	}
 
 	void ParticleWorldSystem::RunSimulationCompute(float dt, Camera* camera)
@@ -513,7 +572,11 @@ namespace HexEngine
 		simConstants.cameraUp = math::Vector4(camUp.x, camUp.y, camUp.z, 0.0f);
 		simConstants.cameraForward = math::Vector4(camForward.x, camForward.y, camForward.z, 0.0f);
 		simConstants.dtTime = math::Vector4(dt, g_pEnv->_timeManager ? (float)g_pEnv->_timeManager->GetTime() : 0.0f, 0.0f, 0.0f);
-		simConstants.globalParams = math::Vector4((float)_activeParticleCapacity, (float)_frameEmitters.size(), (float)_frameIndex, 0.0f);
+		simConstants.globalParams = math::Vector4(
+			(float)_activeParticleCapacity,
+			(float)_frameEmitters.size(),
+			(float)_frameIndex,
+			std::clamp(r_particleDepthJitterBias._val.f32, 0.0f, 0.05f));
 		if (_simConstants)
 			_simConstants->Write(&simConstants, sizeof(simConstants));
 
@@ -523,46 +586,58 @@ namespace HexEngine
 		args.StartIndexLocation = 0;
 		args.BaseVertexLocation = 0;
 		args.StartInstanceLocation = 0;
-		context->UpdateSubresource(_drawArgsBuffer, 0, nullptr, &args, 0, 0);
+		for (uint32_t i = 0; i < TransparentDepthBinCount; ++i)
+		{
+			context->UpdateSubresource(_drawArgsBuffer[i], 0, nullptr, &args, 0, 0);
+		}
 
 		auto* computeStage = _simulateShader->GetShaderStage(ShaderStage::ComputeShader);
 		if (computeStage == nullptr)
 			return;
 
 		ID3D11Buffer* cbs[1] = { _simConstants ? reinterpret_cast<ID3D11Buffer*>(_simConstants->GetNativePtr()) : nullptr };
-		ID3D11UnorderedAccessView* uavs[3] = { _particleStateUav, _emitterUav, _instanceAppendUav };
-		UINT initialCounts[3] = { (UINT)-1, (UINT)-1, 0 };
+		ID3D11UnorderedAccessView* uavs[2 + TransparentDepthBinCount] = { _particleStateUav, _emitterUav };
+		UINT initialCounts[2 + TransparentDepthBinCount] = { (UINT)-1, (UINT)-1 };
+		for (uint32_t i = 0; i < TransparentDepthBinCount; ++i)
+		{
+			uavs[2 + i] = _instanceAppendUav[i];
+			initialCounts[2 + i] = 0;
+		}
 
 		context->CSSetConstantBuffers(6, 1, cbs);
-		context->CSSetUnorderedAccessViews(0, 3, uavs, initialCounts);
+		context->CSSetUnorderedAccessViews(0, 2 + TransparentDepthBinCount, uavs, initialCounts);
 		context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(computeStage->GetNativePtr()), nullptr, 0);
 		context->Dispatch(std::max(1u, (_activeParticleCapacity + 63u) / 64u), 1, 1);
 
-		ID3D11UnorderedAccessView* nullUavs[3] = {};
+		ID3D11UnorderedAccessView* nullUavs[2 + TransparentDepthBinCount] = {};
 		ID3D11Buffer* nullCbs[1] = {};
-		context->CSSetUnorderedAccessViews(0, 3, nullUavs, nullptr);
+		context->CSSetUnorderedAccessViews(0, 2 + TransparentDepthBinCount, nullUavs, nullptr);
 		context->CSSetConstantBuffers(6, 1, nullCbs);
 		context->CSSetShader(nullptr, nullptr, 0);
 
-		context->CopyStructureCount(_drawArgsBuffer, offsetof(D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS, InstanceCount), _instanceAppendUav);
-		if (_instanceVertexBuffer && _instanceAppendBuffer)
-			context->CopyResource(_instanceVertexBuffer, _instanceAppendBuffer);
+		for (uint32_t i = 0; i < TransparentDepthBinCount; ++i)
+		{
+			context->CopyStructureCount(_drawArgsBuffer[i], offsetof(D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS, InstanceCount), _instanceAppendUav[i]);
+			if (_instanceVertexBuffer[i] && _instanceAppendBuffer[i])
+				context->CopyResource(_instanceVertexBuffer[i], _instanceAppendBuffer[i]);
+		}
 		++_frameIndex;
 	}
 
-	void ParticleWorldSystem::RenderSprites(Camera* camera, ITexture2D* target, ITexture2D* depthStencil)
+	void ParticleWorldSystem::RenderSprites(Scene* scene, Camera* camera, ITexture2D* target, ITexture2D* depthStencil)
 	{
-		if (_spriteMesh == nullptr || _defaultSpriteMaterial == nullptr || _drawArgsBuffer == nullptr)
+		if (_spriteMesh == nullptr || _defaultSpriteMaterial == nullptr)
 			return;
 
 		auto material = _activeSpriteMaterial ? _activeSpriteMaterial : _defaultSpriteMaterial;
-		auto shader = (_activeSpriteReceiveLighting && _litSpriteShader) ? _litSpriteShader : material->GetStandardShader();
+		auto shader = _litSpriteShader ? _litSpriteShader : material->GetStandardShader();
 		if (shader == nullptr)
 			return;
 
 		auto* graphics = g_pEnv->_graphicsDevice;
+		material->SaveRenderState();
 		graphics->SetRenderTarget(target, depthStencil);
-		graphics->SetBlendState(BlendState::Transparency);
+		graphics->SetBlendState(_activeBlendState);
 		graphics->SetDepthBufferState(DepthBufferState::DepthRead);
 		graphics->SetCullingMode(CullingMode::NoCulling);
 
@@ -570,7 +645,14 @@ namespace HexEngine
 		graphics->SetVertexShader(shader->GetShaderStage(ShaderStage::VertexShader));
 		graphics->SetInputLayout(shader->GetInputLayout());
 
-		material->SaveRenderState();
+		if (_lightConstants != nullptr && scene != nullptr)
+		{
+			ParticleLightConstants lightData = {};
+			BuildLightConstants(scene, lightData);
+			_lightConstants->Write(&lightData, sizeof(lightData));
+			graphics->SetConstantBufferPS(7, _lightConstants);
+		}
+
 		_spriteMesh->UpdateConstantBuffer(nullptr, math::Matrix::Identity, material.get(), 0, true);
 
 		const uint32_t slotIdx = graphics->GetBoundResourceIndex();
@@ -597,12 +679,77 @@ namespace HexEngine
 		{
 			UINT stride = sizeof(MeshInstanceData);
 			UINT offset = 0;
-			ID3D11Buffer* instanceBuffer = _instanceVertexBuffer;
-			context->IASetVertexBuffers(1, 1, &instanceBuffer, &stride, &offset);
+			for (uint32_t bin = 0; bin < TransparentDepthBinCount; ++bin)
+			{
+				if (_instanceVertexBuffer[bin] == nullptr || _drawArgsBuffer[bin] == nullptr)
+					continue;
+
+				ID3D11Buffer* instanceBuffer = _instanceVertexBuffer[bin];
+				context->IASetVertexBuffers(1, 1, &instanceBuffer, &stride, &offset);
+				graphics->DrawIndexedInstancedIndirect(_drawArgsBuffer[bin], 0);
+			}
+		}
+		material->RestoreRenderState();
+	}
+
+	void ParticleWorldSystem::BuildLightConstants(Scene* scene, ParticleLightConstants& outLightData) const
+	{
+		if (scene == nullptr)
+			return;
+
+		std::vector<PointLight*> pointLights;
+		scene->GetComponents<PointLight>(pointLights);
+
+		uint32_t pointCount = 0;
+		for (auto* light : pointLights)
+		{
+			if (light == nullptr || light->GetEntity() == nullptr || light->GetEntity()->IsPendingDeletion())
+				continue;
+			if (pointCount >= MaxParticlePointLights)
+				break;
+
+			auto* transform = light->GetEntity()->GetComponent<Transform>();
+			const math::Vector3 pos = transform ? transform->GetPosition() : light->GetEntity()->GetPosition();
+			const auto clr = light->GetDiffuseColour();
+			const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+			const float radius = std::max(0.05f, light->GetRadius());
+
+			outLightData.pointPosRadius[pointCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
+			outLightData.pointColorStrength[pointCount] = math::Vector4(clr.x, clr.y, clr.z, strength);
+			++pointCount;
 		}
 
-		graphics->DrawIndexedInstancedIndirect(_drawArgsBuffer, 0);
-		material->RestoreRenderState();
+		std::vector<SpotLight*> spotLights;
+		scene->GetComponents<SpotLight>(spotLights);
+
+		uint32_t spotCount = 0;
+		for (auto* light : spotLights)
+		{
+			if (light == nullptr || light->GetEntity() == nullptr || light->GetEntity()->IsPendingDeletion())
+				continue;
+			if (spotCount >= MaxParticleSpotLights)
+				break;
+
+			auto* transform = light->GetEntity()->GetComponent<Transform>();
+			const math::Vector3 pos = transform ? transform->GetPosition() : light->GetEntity()->GetPosition();
+			const math::Vector3 fwd = transform ? transform->GetForward() : math::Vector3::Forward;
+			const auto clr = light->GetDiffuseColour();
+			const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+			const float radius = std::max(0.05f, light->GetRadius());
+			const float cosHalfCone = cosf(ToRadian(std::max(0.1f, light->GetConeSize()) * 0.5f));
+
+			outLightData.spotPosRadius[spotCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
+			outLightData.spotDirCone[spotCount] = math::Vector4(fwd.x, fwd.y, fwd.z, cosHalfCone);
+			outLightData.spotColorStrength[spotCount] = math::Vector4(clr.x, clr.y, clr.z, strength);
+			++spotCount;
+		}
+
+		outLightData.countsAndParams = math::Vector4((float)pointCount, (float)spotCount, 24.0f, 0.0f);
+		outLightData.transparencyAssist = math::Vector4(
+			r_particleTransparencyAssist._val.b ? 1.0f : 0.0f,
+			std::clamp(r_particleTransparencyDepthBias._val.f32, 0.0f, 1.0f),
+			std::clamp(r_particleTransparencyDither._val.f32, 0.0f, 1.0f),
+			0.0f);
 	}
 
 	uint64_t ParticleWorldSystem::MakeComponentKey(ParticleSystemComponent* component, uint32_t emitterIndex) const

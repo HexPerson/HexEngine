@@ -50,7 +50,7 @@
 		float4 g_cloudParams4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
 		float4 g_cloudParams5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
 		float4 g_cloudWindDirection; // xyz=wind direction, w=quality preset
-		float4 g_cloudMarch; // x=view steps, y=light steps
+		float4 g_cloudMarch; // x=view steps, y=light steps, z=ground shadow steps, w=ground shadow strength
 	};
 
 	static const float PI = 3.14159265f;

@@ -32,6 +32,7 @@
     <ClCompile Include="GUI\Elements\LoadingDialog.cpp" />
     <ClCompile Include="GUI\Elements\MaterialDialog.cpp" />
     <ClCompile Include="GUI\Elements\MaterialGraphDialog.cpp" />
+    <ClCompile Include="GUI\Elements\ParticleEffectDialog.cpp" />
     <ClCompile Include="GUI\Elements\MessageBox.cpp" />
     <ClCompile Include="GUI\Elements\AssetSearch.cpp" />
     <ClCompile Include="GUI\Elements\QuestionDialog.cpp" />
@@ -191,6 +192,7 @@
     <ClInclude Include="GUI\Elements\LoadingDialog.hpp" />
     <ClInclude Include="GUI\Elements\MaterialDialog.hpp" />
     <ClInclude Include="GUI\Elements\MaterialGraphDialog.hpp" />
+    <ClInclude Include="GUI\Elements\ParticleEffectDialog.hpp" />
     <ClInclude Include="GUI\Elements\MessageBox.hpp" />
     <ClInclude Include="GUI\Elements\AssetSearch.hpp" />
     <ClInclude Include="GUI\Elements\QuestionDialog.hpp" />

@@ -81,6 +81,8 @@ namespace HexEngine
 		ParticleFacingMode facingMode = ParticleFacingMode::CameraFacing;
 		ParticleBlendMode blendMode = ParticleBlendMode::AlphaBlended;
 		bool softParticles = false;
+		bool overrideReceiveLightingEnabled = false;
+		bool overrideReceiveLighting = false;
 
 		ParticleEmissionModule emission;
 		ParticleShapeModule shape;

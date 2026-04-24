@@ -85,33 +85,30 @@
 		projectedSun = input.sunScreenPos.xy / input.sunScreenPos.w / 2.f + 0.5f;
 		projectedPixel = input.skyPixelPos.xy / input.skyPixelPos.w / 2.f + 0.5f;
 
-		float3 atmosphereColour;
+		// passIndex==0: base sky only (for fog sampling texture)
+		// passIndex==1: full sky (visible frame)
+		// default: full sky (backwards-compatible)
+		bool sunVisible = input.sunScreenPos.w > 0.0f;
+		float3 atmosphereBase = getAtmosphericScattering(
+			-g_lightDirection.y * 2.0f,
+			height * 2.0f,
+			projectedPixel.xy * 2.0f,
+			projectedSun.xy * 2.0f,
+			aspect,
+			false);
 
-		if (input.sunScreenPos.w > 0.0f)
-		{
-			atmosphereColour = getAtmosphericScattering(
-				-g_lightDirection.y * 2.0f,
-				height * 2.0f,
-				projectedPixel.xy * 2.0f,
-				projectedSun.xy * 2.0f,
-				aspect,
-				true);
-		}
-		else
-		{
+		float3 atmosphereFull = getAtmosphericScattering(
+			-g_lightDirection.y * 2.0f,
+			height * 2.0f,
+			projectedPixel.xy * 2.0f,
+			projectedSun.xy * 2.0f,
+			aspect,
+			sunVisible);
 
-			atmosphereColour = getAtmosphericScattering(
-				-g_lightDirection.y * 2.0f,
-				height * 2.0f,
-				projectedPixel.xy * 2.0f,
-				projectedSun.xy * 2.0f,
-				aspect,
-				false);
-
-		}
+		float3 atmosphereColour = (g_shadowConfig.passIndex == 0) ? atmosphereBase : atmosphereFull;
 
 		atmosphereColour = jodieReinhardTonemap(atmosphereColour);
-		atmosphereColour = pow(atmosphereColour, float3(2.2, 2.2, 2.2));
+		atmosphereColour = pow(atmosphereColour, float3(2.2f, 2.2f, 2.2f));
 
 		colour = float4(atmosphereColour, 1.0f);
 		

@@ -81,7 +81,7 @@ bool RoutineAgentComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 	roleTags->SetDoesCallbackWaitForReturn(false);
 	roleTags->SetOnInputFn([this](HexEngine::LineEdit* edit, const std::wstring& value)
 		{
-			_roleTagsCsv = std::string(value.begin(), value.end());
+			_roleTagsCsv = ws2s(value);
 			RebuildRoleTags();
 		});
 
@@ -89,7 +89,7 @@ bool RoutineAgentComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 	home->SetValue(std::wstring(_homeEntityName.begin(), _homeEntityName.end()));
 	home->SetOnInputFn([this](HexEngine::EntitySearch* search, const std::wstring& value)
 		{
-			_homeEntityName = std::string(value.begin(), value.end());
+			_homeEntityName = ws2s(value);
 		});
 	home->SetOnSelectFn([this](HexEngine::EntitySearch* search, const HexEngine::EntitySearchResult& result)
 		{
@@ -100,7 +100,7 @@ bool RoutineAgentComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 	workplace->SetValue(std::wstring(_assignedWorkplaceEntityName.begin(), _assignedWorkplaceEntityName.end()));
 	workplace->SetOnInputFn([this](HexEngine::EntitySearch* search, const std::wstring& value)
 		{
-			_assignedWorkplaceEntityName = std::string(value.begin(), value.end());
+			_assignedWorkplaceEntityName = ws2s(value);
 		});
 	workplace->SetOnSelectFn([this](HexEngine::EntitySearch* search, const HexEngine::EntitySearchResult& result)
 		{

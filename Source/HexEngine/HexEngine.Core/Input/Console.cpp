@@ -6,7 +6,7 @@
 
 namespace HexEngine
 {
-	const int32_t ConsoleFontSize = 14;
+	const int32_t ConsoleFontSize = (int32_t)Style::FontSize::Tiny;
 	const int32_t kConsoleMaxLines = 1024;
 
 	HEX_COMMAND(ConsoleToggle)

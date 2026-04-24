@@ -2134,6 +2134,11 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 
 	switch (state)
 	{
+	case HexEngine::BlendState::Invalid:
+		_deviceContext->OMSetBlendState(_states->Opaque(), blend, 0xFFFFFFFF);
+		state = HexEngine::BlendState::Opaque;
+		break;
+
 	case HexEngine::BlendState::Opaque:
 		_deviceContext->OMSetBlendState(_states->Opaque(), blend, 0xFFFFFFFF);
 		break;
@@ -2152,6 +2157,11 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 
 	case HexEngine::BlendState::TransparencyPreserveAlpha:
 		_deviceContext->OMSetBlendState(_transparencyPreserveAlphaBlendState != nullptr ? _transparencyPreserveAlphaBlendState : _states->NonPremultiplied(), blend, 0xFFFFFFFF);
+		break;
+
+	default:
+		_deviceContext->OMSetBlendState(_states->Opaque(), blend, 0xFFFFFFFF);
+		state = HexEngine::BlendState::Opaque;
 		break;
 	}
 

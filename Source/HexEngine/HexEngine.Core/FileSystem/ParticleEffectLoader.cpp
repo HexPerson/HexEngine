@@ -5,6 +5,8 @@
 #include "../Environment/IEnvironment.hpp"
 #include "../Environment/LogFile.hpp"
 #include "../FileSystem/JsonFile.hpp"
+#include "../GUI/Elements/ParticleEffectDialog.hpp"
+#include "../GUI/UIManager.hpp"
 #include "../Scene/ParticleEffect.hpp"
 
 namespace HexEngine
@@ -174,6 +176,28 @@ namespace HexEngine
 		return L"Particles";
 	}
 
+	Dialog* ParticleEffectLoader::CreateEditorDialog(const std::vector<fs::path>& paths)
+	{
+		if (paths.empty())
+			return nullptr;
+
+		auto effect = std::dynamic_pointer_cast<ParticleEffect>(g_pEnv->GetResourceSystem().LoadResource(paths[0]));
+		if (effect == nullptr)
+			return nullptr;
+
+		const int32_t cx = g_pEnv->GetUIManager().GetRootElement()->GetSize().x / 2;
+		const int32_t cy = g_pEnv->GetUIManager().GetRootElement()->GetSize().y / 2;
+		const int32_t dlgW = 920;
+		const int32_t dlgH = 700;
+
+		return new ParticleEffectDialog(
+			g_pEnv->GetUIManager().GetRootElement(),
+			Point(cx - dlgW / 2, cy - dlgH / 2),
+			Point(dlgW, dlgH),
+			std::format(L"Editing Particle Effect '{}'", paths[0].filename().wstring()),
+			effect);
+	}
+
 	void ParticleEffectLoader::SaveResource(IResource* resource, const fs::path& path)
 	{
 		auto effect = dynamic_cast<ParticleEffect*>(resource);
@@ -229,6 +253,8 @@ namespace HexEngine
 				emitter.facingMode = (ParticleFacingMode)facingMode;
 				emitter.blendMode = (ParticleBlendMode)blendMode;
 				ReadValue(emitterJson, "softParticles", emitter.softParticles);
+				ReadValue(emitterJson, "overrideReceiveLightingEnabled", emitter.overrideReceiveLightingEnabled);
+				ReadValue(emitterJson, "overrideReceiveLighting", emitter.overrideReceiveLighting);
 
 				if (auto emissionIt = emitterJson.find("emission"); emissionIt != emitterJson.end() && emissionIt->is_object())
 				{
@@ -327,6 +353,8 @@ namespace HexEngine
 			WriteValue(emitterJson, "facingMode", (int32_t)emitter.facingMode);
 			WriteValue(emitterJson, "blendMode", (int32_t)emitter.blendMode);
 			WriteValue(emitterJson, "softParticles", emitter.softParticles);
+			WriteValue(emitterJson, "overrideReceiveLightingEnabled", emitter.overrideReceiveLightingEnabled);
+			WriteValue(emitterJson, "overrideReceiveLighting", emitter.overrideReceiveLighting);
 
 			auto& emissionJson = emitterJson["emission"];
 			WriteValue(emissionJson, "enabled", emitter.emission.enabled);

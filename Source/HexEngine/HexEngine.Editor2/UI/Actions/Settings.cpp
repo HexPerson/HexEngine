@@ -170,6 +170,10 @@ namespace HexEditor
 
 		pm->_clouds = makeSectionTab(L"Clouds", L"Volumetric Clouds");
 		addToggleControl(pm->_clouds, "r_cloudEnable", L"Clouds on/off");
+		addToggleControl(pm->_clouds, "r_cloudFollowCameraXZ", L"Follow Camera X/Z");
+		addToggleControl(pm->_clouds, "r_cloudCastShadows", L"Cast Ground Shadows");
+		addFloatControl(pm->_clouds, "r_cloudShadowStrength", L"Ground Shadow Strength", 0.01f, 3);
+		addIntControl(pm->_clouds, "r_cloudShadowSteps", L"Ground Shadow Steps", 1);
 		addIntControl(pm->_clouds, "r_cloudQuality", L"Quality Preset", 1);
 		addVector3Control(pm->_clouds, "r_cloudAabbMin", L"AABB Min");
 		addVector3Control(pm->_clouds, "r_cloudAabbMax", L"AABB Max");

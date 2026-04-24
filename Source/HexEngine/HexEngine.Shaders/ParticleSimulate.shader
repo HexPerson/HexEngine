@@ -25,6 +25,7 @@
 		float4 simulation2;
 		float4 simulation3;
 		float4 simulation4;
+		float4 simulation5;
 		float4 colorStart;
 		float4 colorEnd;
 		float4 lifeParams;
@@ -33,6 +34,8 @@
 		int spawnRemaining;
 		uint flags;
 	};
+
+	static const uint ParticleFlags_ReceiveLighting = (1u << 17u);
 
 	struct MeshInstanceData
 	{
@@ -150,6 +153,47 @@
 		return lerp(emitter.simulation4.y, emitter.simulation4.z, t);
 	}
 
+	void ComputeFlipbookUv(EmitterGpu emitter, float lifeN, out float2 uvScale, out float2 uvOffset)
+	{
+		uvScale = float2(1.0f, 1.0f);
+		uvOffset = float2(0.0f, 0.0f);
+
+		const float modeVal = emitter.simulation5.w;
+		const bool stretchToLifetime = (modeVal > 0.5f && modeVal < 1.5f);
+		const bool fpsLoop = (modeVal >= 1.5f);
+		if (!stretchToLifetime && !fpsLoop)
+			return;
+
+		const uint rows = max(1u, (uint)round(emitter.simulation5.x));
+		const uint cols = max(1u, (uint)round(emitter.simulation5.y));
+		const uint frameCount = rows * cols;
+		if (frameCount <= 1u)
+			return;
+
+		float frameF = 0.0f;
+		if (stretchToLifetime)
+		{
+			frameF = saturate(lifeN) * (float)(frameCount - 1u);
+		}
+		else
+		{
+			const float fps = max(0.0f, emitter.simulation5.z);
+			frameF = g_dtTime.y * fps;
+		}
+
+		uint frameIndex = (uint)floor(max(0.0f, frameF));
+		if (!stretchToLifetime)
+			frameIndex = frameIndex % frameCount;
+		else
+			frameIndex = min(frameIndex, frameCount - 1u);
+
+		const uint frameX = frameIndex % cols;
+		const uint frameY = frameIndex / cols;
+
+		uvScale = float2(1.0f / (float)cols, 1.0f / (float)rows);
+		uvOffset = float2((float)frameX, (float)frameY) * uvScale;
+	}
+
 	void SpawnParticle(inout ParticleStateGpu state, EmitterGpu emitter, uint particleIndex, uint emitterIndex, uint localIndexInPool)
 	{
 		const uint spawnQuota = (uint)max(emitter.spawnRemaining, 0);
@@ -243,11 +287,25 @@
 				float4(normalize(cross(camRight, camUp)) * size, 0.0f),
 				float4(state.position.xyz, 1.0f));
 
+			const float depthJitterBias = max(0.0f, g_globalParams.w);
+			if (depthJitterBias > 0.000001f)
+			{
+				const float jitter = (Hash01((uint)state.misc1.y + 991u) * 2.0f - 1.0f) * depthJitterBias;
+				world[3].xyz += normalize(g_cameraForward.xyz) * jitter;
+			}
+
 			inst.world = world;
 			inst.worldInverseTranspose = world;
 			inst.worldPrev = world;
+			float2 uvScale;
+			float2 uvOffset;
+			float lifeN = saturate(state.misc0.z / max(0.01f, state.misc0.w));
+			ComputeFlipbookUv(emitter, lifeN, uvScale, uvOffset);
+			inst.worldPrev[3].xy = uvOffset;
+			inst.worldPrev[3].z = ((emitter.flags & ParticleFlags_ReceiveLighting) != 0u) ? 1.0f : 0.0f;
 			inst.color = state.color;
-			inst.uvScale = float2(1.0f, 1.0f);
+			inst.uvScale = uvScale;
+
 			g_instances.Append(inst);
 		}
 

@@ -29,6 +29,10 @@ namespace HexEngine
 	HVar env_waterNormalInfluence("env_waterNormalInfluence", "The strength of the normal maps when rendering water", 0.4f, 0.0f, 4.0f);
 	HVar env_volumetricStepIncrement("env_volumetricStepIncrement", "Global scale multiplier applied to adaptive volumetric ray-march step size", 1.0f, 0.1f, 100.0f);
 	HVar r_cloudEnable("r_cloudEnable", "Enable or disable volumetric cloud rendering", true, false, true);
+	HVar r_cloudFollowCameraXZ("r_cloudFollowCameraXZ", "Anchor cloud volume to camera X/Z position", true, false, true);
+	HVar r_cloudCastShadows("r_cloudCastShadows", "Enable cloud shadows on scene lighting", true, false, true);
+	HVar r_cloudShadowStrength("r_cloudShadowStrength", "Strength of cloud-cast shadows on scene lighting", 0.6f, 0.0f, 1.0f);
+	HVar r_cloudShadowSteps("r_cloudShadowSteps", "Cloud shadow ray-march step count", 6, 1, 32);
 	HVar r_cloudQuality("r_cloudQuality", "Cloud quality preset (0 = performance, 1 = balanced, 2 = quality)", 1, 0, 2);
 	HVar r_cloudAabbMin("r_cloudAabbMin", "Minimum world-space bounds of cloud AABB", math::Vector3(-600.0f, 100.0f, -600.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
 	HVar r_cloudAabbMax("r_cloudAabbMax", "Maximum world-space bounds of cloud AABB", math::Vector3(600.0f, 200.0f, 600.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
@@ -148,6 +152,81 @@ namespace HexEngine
 
 			const int32_t steps = static_cast<int32_t>(baseSteps * scale);
 			return std::clamp(steps, minSteps, maxSteps);
+		}
+
+		static bool BuildCloudConstants(Camera* camera, CloudConstants& constants)
+		{
+			if (camera == nullptr)
+				return false;
+
+			math::Vector3 boundsMin = r_cloudAabbMin._val.v3;
+			math::Vector3 boundsMax = r_cloudAabbMax._val.v3;
+
+			if (boundsMin.x > boundsMax.x) std::swap(boundsMin.x, boundsMax.x);
+			if (boundsMin.y > boundsMax.y) std::swap(boundsMin.y, boundsMax.y);
+			if (boundsMin.z > boundsMax.z) std::swap(boundsMin.z, boundsMax.z);
+
+			if (r_cloudFollowCameraXZ._val.b)
+			{
+				const math::Vector3 originalCenter = (boundsMin + boundsMax) * 0.5f;
+				const math::Vector3 halfExtent = (boundsMax - boundsMin) * 0.5f;
+				const math::Vector3 cameraPos = camera->GetEntity() ? camera->GetEntity()->GetPosition() : math::Vector3::Zero;
+				const math::Vector3 recentered(cameraPos.x, originalCenter.y, cameraPos.z);
+				boundsMin = recentered - halfExtent;
+				boundsMax = recentered + halfExtent;
+			}
+
+			const math::Vector3 extents = boundsMax - boundsMin;
+			if (extents.x < 1.0f || extents.y < 1.0f || extents.z < 1.0f)
+				return false;
+
+			math::Vector3 windDir = r_cloudWindDirection._val.v3;
+			if (windDir.LengthSquared() <= 0.0001f)
+				windDir = math::Vector3::Forward;
+			else
+				windDir.Normalize();
+
+			constants = {};
+			constants.boundsMin = math::Vector4(boundsMin.x, boundsMin.y, boundsMin.z, 0.0f);
+			constants.boundsMax = math::Vector4(boundsMax.x, boundsMax.y, boundsMax.z, 0.0f);
+			constants.params0 = math::Vector4(
+				r_cloudDensity._val.f32,
+				r_cloudCoverage._val.f32,
+				r_cloudErosion._val.f32,
+				r_cloudMaxDistance._val.f32);
+			constants.params1 = math::Vector4(
+				r_cloudLightAbsorption._val.f32,
+				r_cloudPowderStrength._val.f32,
+				r_cloudAnisotropy._val.f32,
+				r_cloudStepScale._val.f32);
+			constants.params2 = math::Vector4(
+				r_cloudShapeScale._val.f32,
+				r_cloudDetailScale._val.f32,
+				r_cloudWindSpeed._val.f32,
+				r_cloudAnimationSpeed._val.f32);
+			constants.params3 = math::Vector4(
+				r_cloudViewAbsorption._val.f32,
+				r_cloudAmbientStrength._val.f32,
+				r_cloudShadowFloor._val.f32,
+				1.55f);
+			constants.params4 = math::Vector4(
+				r_cloudSilverLiningStrength._val.f32,
+				r_cloudSilverLiningExponent._val.f32,
+				r_cloudMultiScatterStrength._val.f32,
+				r_cloudHeightTintStrength._val.f32);
+			constants.params5 = math::Vector4(
+				r_cloudTintWarmth._val.f32,
+				r_cloudSkyTintInfluence._val.f32,
+				r_cloudDirectionalDiffuse._val.f32,
+				r_cloudAmbientOcclusion._val.f32);
+			constants.windDirection = math::Vector4(windDir.x, windDir.y, windDir.z, (float)GetCloudQualityPreset());
+			constants.marchParams = math::Vector4(
+				(float)GetCloudEffectiveSteps(r_cloudViewSteps._val.f32, 8, 256),
+				(float)GetCloudEffectiveSteps(r_cloudLightSteps._val.f32, 2, 64),
+				(float)GetCloudEffectiveSteps((float)r_cloudShadowSteps._val.i32, 1, 32),
+				(r_cloudEnable._val.b && r_cloudCastShadows._val.b) ? r_cloudShadowStrength._val.f32 : 0.0f);
+
+			return true;
 		}
 
 		static ITexture3D* CreateCloudNoiseVolume(int32_t resolution, int32_t seed, float frequency, int32_t octaves, float gain, float lacunarity)
@@ -1060,6 +1139,9 @@ namespace HexEngine
 		if (perFrameBuffer)
 		{
 			PerShadowCasterBuffer bufferData = {};
+			bufferData._shadowConfig.passIndex = passIdx;
+			bufferData._shadowConfig.cascadeOverride = forceCascade ? passIdx : -1;
+			bufferData._shadowConfig.lightIndex = lightIndex;
 
 			// Shadowmap data
 			if (shadowCaster != nullptr)
@@ -1127,9 +1209,6 @@ namespace HexEngine
 				bufferData._spotLightConeSize = (coneSize);
 				bufferData._shadowConfig.shadowMapSize = shadowMapSize;
 
-				bufferData._shadowConfig.passIndex = passIdx;
-				bufferData._shadowConfig.cascadeOverride = forceCascade ? passIdx : -1;
-				bufferData._shadowConfig.lightIndex = lightIndex;
 			}
 
 			perFrameBuffer->Write(&bufferData, sizeof(bufferData));
@@ -1152,12 +1231,21 @@ namespace HexEngine
 
 		//_currentScene->RenderSkySphere();
 
+		// Pass 0: base sky only (no direct sun/mie). This is what fog samples from _atmosphereRT.
+		SetupPerShadowCasterBuffer(nullptr, false, 0, 0, 0, 0.0f);
 		_currentScene->RenderEntities(
 			_currentCamera->GetPVS(),
 			LAYERMASK(Layer::Sky),
 			MeshRenderFlags::MeshRenderNormal);
 
 		_gbuffer.GetDiffuse()->CopyTo(_atmosphereRT);
+
+		// Pass 1: full sky for the visible frame (includes sun/sunset/mie).
+		SetupPerShadowCasterBuffer(nullptr, false, 1, 0, 0, 0.0f);
+		_currentScene->RenderEntities(
+			_currentCamera->GetPVS(),
+			LAYERMASK(Layer::Sky),
+			MeshRenderFlags::MeshRenderNormal);
 
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::FrontFace);
 
@@ -1848,7 +1936,15 @@ namespace HexEngine
 		if (_currentScene->GetComponents<DirectionalLight>(directionalLights) == false)
 			return;
 
-		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
+		CloudConstants cloudConstants = {};
+		const bool hasCloudShadowData = (_cloudConstantBuffer != nullptr && _cloudShapeNoise != nullptr && _cloudDetailNoise != nullptr)
+			&& BuildCloudConstants(_currentCamera, cloudConstants);
+
+		if (hasCloudShadowData)
+		{
+			_cloudConstantBuffer->Write(&cloudConstants, sizeof(cloudConstants));
+			g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _cloudConstantBuffer);
+		}
 
 		
 
@@ -1889,6 +1985,23 @@ namespace HexEngine
 					}
 
 					shadowMap->BindAsShaderResource();
+				}
+
+				if (hasCloudShadowData)
+				{
+					// Deferred uses SHADOWMAPS at t6..t11, so skip t10/t11 before binding cloud 3D noise at t12/t13.
+					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+					g_pEnv->_graphicsDevice->SetTexture3D(_cloudShapeNoise);
+					g_pEnv->_graphicsDevice->SetTexture3D(_cloudDetailNoise);
+				}
+				else
+				{
+					// Keep register progression consistent even when cloud shadows are disabled.
+					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
+					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
 				}
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
@@ -2420,62 +2533,9 @@ namespace HexEngine
 		if (bbvp.width <= 1.0f || bbvp.height <= 1.0f)
 			return;
 
-		math::Vector3 boundsMin = r_cloudAabbMin._val.v3;
-		math::Vector3 boundsMax = r_cloudAabbMax._val.v3;
-
-		if (boundsMin.x > boundsMax.x) std::swap(boundsMin.x, boundsMax.x);
-		if (boundsMin.y > boundsMax.y) std::swap(boundsMin.y, boundsMax.y);
-		if (boundsMin.z > boundsMax.z) std::swap(boundsMin.z, boundsMax.z);
-
-		const math::Vector3 extents = boundsMax - boundsMin;
-		if (extents.x < 1.0f || extents.y < 1.0f || extents.z < 1.0f)
-			return;
-
-		math::Vector3 windDir = r_cloudWindDirection._val.v3;
-		if (windDir.LengthSquared() <= 0.0001f)
-			windDir = math::Vector3::Forward;
-		else
-			windDir.Normalize();
-
 		CloudConstants constants = {};
-		constants.boundsMin = math::Vector4(boundsMin.x, boundsMin.y, boundsMin.z, 0.0f);
-		constants.boundsMax = math::Vector4(boundsMax.x, boundsMax.y, boundsMax.z, 0.0f);
-		constants.params0 = math::Vector4(
-			r_cloudDensity._val.f32,
-			r_cloudCoverage._val.f32,
-			r_cloudErosion._val.f32,
-			r_cloudMaxDistance._val.f32);
-		constants.params1 = math::Vector4(
-			r_cloudLightAbsorption._val.f32,
-			r_cloudPowderStrength._val.f32,
-			r_cloudAnisotropy._val.f32,
-			r_cloudStepScale._val.f32);
-		constants.params2 = math::Vector4(
-			r_cloudShapeScale._val.f32,
-			r_cloudDetailScale._val.f32,
-			r_cloudWindSpeed._val.f32,
-			r_cloudAnimationSpeed._val.f32);
-		constants.params3 = math::Vector4(
-			r_cloudViewAbsorption._val.f32,
-			r_cloudAmbientStrength._val.f32,
-			r_cloudShadowFloor._val.f32,
-			1.55f);
-		constants.params4 = math::Vector4(
-			r_cloudSilverLiningStrength._val.f32,
-			r_cloudSilverLiningExponent._val.f32,
-			r_cloudMultiScatterStrength._val.f32,
-			r_cloudHeightTintStrength._val.f32);
-		constants.params5 = math::Vector4(
-			r_cloudTintWarmth._val.f32,
-			r_cloudSkyTintInfluence._val.f32,
-			r_cloudDirectionalDiffuse._val.f32,
-			r_cloudAmbientOcclusion._val.f32);
-		constants.windDirection = math::Vector4(windDir.x, windDir.y, windDir.z, (float)GetCloudQualityPreset());
-		constants.marchParams = math::Vector4(
-			(float)GetCloudEffectiveSteps(r_cloudViewSteps._val.f32, 8, 256),
-			(float)GetCloudEffectiveSteps(r_cloudLightSteps._val.f32, 2, 64),
-			0.0f,
-			0.0f);
+		if (!BuildCloudConstants(_currentCamera, constants))
+			return;
 
 		_cloudConstantBuffer->Write(&constants, sizeof(constants));
 		g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _cloudConstantBuffer);

@@ -19,9 +19,10 @@
 		input.position.w = 1.0f;
 
 		output.position = mul(input.position, instance.world);
+		output.positionWS = output.position;
 		output.position = mul(output.position, g_viewProjectionMatrix);
 
-		output.texcoord = input.texcoord;
+		output.texcoord = input.texcoord * instance.uvScale + instance.worldPrev[3].xy;
 
 		output.normal = mul(input.normal, (float3x3)instance.world);
 		output.normal = normalize(output.normal);
@@ -37,6 +38,7 @@
 
 		// Normalize the viewing direction vector.
 		output.viewDirection.xyz = normalize(output.viewDirection.xyz);
+		output.viewDirection.w = 0.0f;
 
 		output.colour = instance.colour;
 
@@ -45,23 +47,12 @@
 }
 "PixelShader"
 {
-	Texture2D g_splatMap : register(t0);
-
-	Texture2D g_diffuseMap : register(t1);
-	Texture2D g_normalMap : register(t2);
-	Texture2D g_specularMap : register(t3);
-	Texture2D g_noiseMap : register(t4);
-	Texture2D g_heightMap : register(t5);
-	Texture2D g_emissionMap : register(t6);
-	Texture2D g_opacityMap : register(t7);
-
-	//Texture2D g_depthMaps[4] : register(t4);
+	Texture2D g_albedoMap : register(t0);
 
 	SamplerState g_textureSampler : register(s0);
-	SamplerComparisonState g_cmpSampler : register(s1);
 
 	float4 ShaderMain(MeshPixelInput input) : SV_Target
 	{
-		return g_diffuseMap.Sample(g_textureSampler, input.texcoord) * input.colour;
+		return g_albedoMap.Sample(g_textureSampler, input.texcoord) * input.colour;
 	}
 }

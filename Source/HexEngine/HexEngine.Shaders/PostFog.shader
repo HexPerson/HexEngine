@@ -67,42 +67,17 @@
 
 		float pixelDepth = pixelNormal.w;
 
-		float4 fogColour;// = float4(g_globalLight[1], g_globalLight[2], g_globalLight[3], 1);
+		// Fog tint from base-sky pass.
+		float3 atmosphericFogColour = g_atmosphereTexture.Sample(g_textureSampler, screenPos).rgb;
 
-		/// --------- CALCULATE FOG ----------- //
-		
-
-#if 1
-
-		float4 pixelPos = mul(worldPos, g_viewMatrix);
-		pixelPos = mul(pixelPos, g_projectionMatrix);
-
-		float4 sunPosition = g_lightPosition;
-		sunPosition.w = 1.0f;
-		sunPosition = mul(sunPosition, Identity);
-		sunPosition = mul(sunPosition, g_viewMatrix);
-		sunPosition = mul(sunPosition, g_projectionMatrix);
-
-		float2 projectedPixel = pixelPos.xy / pixelPos.w / 2.f + 0.5f;
-		float2 projectedSun = sunPosition.xy / sunPosition.w / 2.f + 0.5f;
-
-		float aspect = (float)g_screenWidth / (float)g_screenHeight;
-
-		float3 atmosphericFogColour = getAtmosphereColour(
-			(worldPos.y / 12000.0f),
-			projectedPixel.xy * 1.0f,
-			projectedSun.xy * 1.0f,
-			aspect,
-			false/*sunPosition.w > 0.0f*/);
-
-		atmosphericFogColour = jodieReinhardTonemap(atmosphericFogColour);
-		atmosphericFogColour = pow(atmosphericFogColour, float3(2.2, 2.2, 2.2));
-		fogColour = float4(atmosphericFogColour.rgb, 1.0f);
-#else
-
-		// use ATMOSPHERE COLOUR?
-		fogColour = float4(getSunColour() * 0.8, 1.0f);//g_atmosphereTexture.Sample(g_pointSampler, screenPos);
-#endif
+		float3 authoredFogColour = float3(g_globalLight[1], g_globalLight[2], g_globalLight[3]);
+		float3 ambientFogBase = lerp(g_atmosphere.ambientLight.rgb, authoredFogColour, 0.08f);
+		if (dot(atmosphericFogColour, atmosphericFogColour) < 0.0001f)
+		{
+			// Safe fallback when atmosphere RT is unavailable or invalid.
+			atmosphericFogColour = ambientFogBase;
+		}
+		float4 fogColour = float4(atmosphericFogColour, 1.0f);
 
 
 		float fogStart = 140.0f;
