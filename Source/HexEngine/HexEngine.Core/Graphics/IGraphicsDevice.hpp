@@ -11,6 +11,7 @@
 #include "IShaderStage.hpp"
 #include "IInputLayout.hpp"
 #include "IConstantBuffer.hpp"
+#include "IStructuredBuffer.hpp"
 #include "../FileSystem/ResourceSystem.hpp"
 #include "Material.hpp"
 #include "../Plugin/IPlugin.hpp"
@@ -125,14 +126,25 @@ namespace HexEngine
 		/** @brief Creates a compiled pixel shader stage object. */
 		virtual IShaderStage* CreatePixelShader(std::vector<uint8_t>& shaderCode) = 0;
 
+		/** @brief Creates a compiled geometry shader stage object. */
+		virtual IShaderStage* CreateGeometryShader(std::vector<uint8_t>& shaderCode) = 0;
+
 		/** @brief Creates a compiled compute shader stage object. */
 		virtual IShaderStage* CreateComputeShader(std::vector<uint8_t>& shaderCode) = 0;
+		virtual IShaderStage* CreateComputeShaderFromSource(const std::string& shaderSource, const std::string& entryPoint = "MainCS") = 0;
 
 		/** @brief Creates an input layout from descriptor + vertex shader bytecode. */
 		virtual IInputLayout* CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary) = 0;
 
 		/** @brief Creates a constant buffer. */
 		virtual IConstantBuffer* CreateConstantBuffer(uint32_t size) = 0;
+		virtual IStructuredBuffer* CreateStructuredBuffer(
+			uint32_t elementStride,
+			uint32_t elementCount,
+			StructuredBufferFlags flags,
+			D3D11_USAGE usage = D3D11_USAGE_DEFAULT,
+			uint32_t cpuAccessFlags = 0,
+			const void* initialData = nullptr) = 0;
 
 		/** @brief Returns one of the engine-owned global constant buffers. */
 		virtual IConstantBuffer* GetEngineConstantBuffer(EngineConstantBuffer buffer) = 0;
@@ -140,6 +152,9 @@ namespace HexEngine
 		virtual void SetConstantBufferVS(uint32_t slot, IConstantBuffer* buffer) = 0;
 
 		virtual void SetConstantBufferPS(uint32_t slot, IConstantBuffer* buffer) = 0;
+		virtual void SetConstantBufferGS(uint32_t slot, IConstantBuffer* buffer) = 0;
+
+		virtual void SetConstantBufferCS(uint32_t slot, IConstantBuffer* buffer) = 0;
 
 		virtual void SetIndexBuffer(IIndexBuffer* buffer) = 0;
 
@@ -150,6 +165,9 @@ namespace HexEngine
 		virtual void SetVertexShader(IShaderStage* shader) = 0;
 
 		virtual void SetPixelShader(IShaderStage* shader) = 0;		
+		virtual void SetGeometryShader(IShaderStage* shader) = 0;
+
+		virtual void SetComputeShader(IShaderStage* shader) = 0;
 
 		virtual void SetInputLayout(IInputLayout* layout) = 0;
 
@@ -158,6 +176,20 @@ namespace HexEngine
 		virtual void SetTexture2D(ITexture2D* texture) = 0;
 
 		virtual void SetTexture3D(ITexture3D* texture) = 0;
+		virtual void SetGeometryTexture3D(uint32_t slot, ITexture3D* texture) = 0;
+		virtual void SetVertexStructuredBuffer(uint32_t slot, IStructuredBuffer* buffer) = 0;
+		virtual void SetGeometryStructuredBuffer(uint32_t slot, IStructuredBuffer* buffer) = 0;
+		virtual void SetComputeTexture3D(uint32_t slot, ITexture3D* texture) = 0;
+		virtual void SetComputeRwTexture3D(uint32_t slot, ITexture3D* texture) = 0;
+		virtual void SetComputeStructuredBuffer(uint32_t slot, IStructuredBuffer* buffer) = 0;
+		virtual void SetComputeRwStructuredBuffer(uint32_t slot, IStructuredBuffer* buffer, uint32_t initialCount = 0xFFFFFFFFu) = 0;
+		virtual void ClearGeometryTexture3D(uint32_t slot) = 0;
+		virtual void ClearVertexStructuredBuffer(uint32_t slot) = 0;
+		virtual void ClearComputeTexture3D(uint32_t slot) = 0;
+		virtual void ClearComputeRwTexture3D(uint32_t slot) = 0;
+		virtual void ClearGeometryStructuredBuffer(uint32_t slot) = 0;
+		virtual void ClearComputeStructuredBuffer(uint32_t slot) = 0;
+		virtual void ClearComputeRwStructuredBuffer(uint32_t slot) = 0;
 
 		virtual void SetTexture2DArray(uint32_t slot, const std::vector<ITexture2D*>& textures) = 0;
 
@@ -180,6 +212,10 @@ namespace HexEngine
 
 		/** @brief Issues non-indexed draw call. */
 		virtual void Draw(uint32_t vertexCount, int32_t startVertexLocation = 0) = 0;
+		virtual void DrawInstancedIndirect(IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset = 0) = 0;
+		virtual void Dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) = 0;
+		virtual void DispatchIndirect(IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset = 0) = 0;
+		virtual void CopyStructureCount(IStructuredBuffer* sourceBuffer, IStructuredBuffer* destinationBuffer, uint32_t destinationByteOffset = 0) = 0;
 
 		virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) = 0;
 

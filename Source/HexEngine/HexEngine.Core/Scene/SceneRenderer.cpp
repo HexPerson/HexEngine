@@ -15,8 +15,16 @@ namespace HexEngine
 	const int32_t MaxShadowCasters = 4;
 
 	HVar env_zenithExponent("env_zenithExponent", "Atmospheric zenith component", 4.12f, 1.0f, 10.0f);
+	HVar env_atmospherePreset("env_atmospherePreset", "Named atmosphere preset selector", 0, 0, 4);
 	HVar env_anisotropicIntensity("env_anisotropicIntensity", "Atmospheric scattering intensity", 0.38f, 0.0f, 10.0f);
 	HVar env_density("env_density", "The density of the atmosphere", 0.11f, 0.0f, 4.0f);
+	HVar env_rayleighStrength("env_rayleighStrength", "Strength of Rayleigh scattering in the physical atmosphere", 1.0f, 0.0f, 4.0f);
+	HVar env_mieStrength("env_mieStrength", "Strength of Mie scattering / aerial haze in the physical atmosphere", 1.0f, 0.0f, 4.0f);
+	HVar env_ambientSkyStrength("env_ambientSkyStrength", "Amount of ambient sky fill added to atmospheric scattering", 1.0f, 0.0f, 4.0f);
+	HVar env_sunHazeStrength("env_sunHazeStrength", "Strength of sun-facing atmospheric haze in the physical sky", 1.0f, 0.0f, 4.0f);
+	HVar env_sunsetWarmStrength("env_sunsetWarmStrength", "Strength of warm sunset colours near the sun and horizon", 1.0f, 0.0f, 4.0f);
+	HVar env_sunsetCoolStrength("env_sunsetCoolStrength", "Strength of cool purple/violet sunset colours away from the sun", 1.0f, 0.0f, 4.0f);
+	HVar env_sunsetGlowStrength("env_sunsetGlowStrength", "Strength of the sunset sun halo and dusk glow", 1.0f, 0.0f, 4.0f);
 	HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
 	HVar env_volumetricScattering("env_volumetricScattering", "The amount of scattering used in volumetric lighting calculations", -0.43f, -2.0f, 2.0f);
 	HVar env_volumetricStrength("env_volumetricStrength", "The strength multiplier of volumetric lighting", 1.0f, 0.1f, 5.0f);
@@ -77,6 +85,17 @@ namespace HexEngine
 	HVar r_fxaa("r_fxaa", "Whether or not to use the FXAA anti-aliasing method", 1, 0, 1);
 	HVar r_fog("r_fog", "Enable or disable fog effect", 1, 0, 1);
 	HVar r_fogDensity("r_fogDensity", "How dense the fog should be", 0.0030f, 0.0f, 1.0f);
+	HVar r_fogStartDistance("r_fogStartDistance", "Distance from the camera before height fog starts accumulating", 45.0f, 0.0f, 5000.0f);
+	HVar r_fogHeightDensity("r_fogHeightDensity", "Additional distance-scaled fog density contributed by low-altitude air", 0.00310f, 0.0f, 1.0f);
+	HVar r_fogHeightFalloff("r_fogHeightFalloff", "How quickly height fog thins out as altitude increases", 0.0150f, 0.0001f, 1.0f);
+	HVar r_fogHeightPivot("r_fogHeightPivot", "Reference world height used for the fog height falloff curve", 18.0f, -5000.0f, 5000.0f);
+	HVar r_fogSkyTintInfluence("r_fogSkyTintInfluence", "How strongly the sampled atmosphere colour tints distant fog", 0.26f, 0.0f, 1.0f);
+	HVar r_fogFarDesaturate("r_fogFarDesaturate", "How much distant fog desaturates toward luminance", 0.18f, 0.0f, 1.0f);
+	HVar r_fogAtmosphereBlendStart("r_fogAtmosphereBlendStart", "Distance where fog begins blending fully into the atmosphere colour", 220.0f, 0.0f, 50000.0f);
+	HVar r_fogAtmosphereBlendRange("r_fogAtmosphereBlendRange", "Distance span over which far fog transitions into the atmosphere colour", 380.0f, 1.0f, 50000.0f);
+	HVar r_fogSunsetRange("r_fogSunsetRange", "Sun elevation range around horizon where sunset fog warmth ramps in/out", 0.30f, 0.01f, 1.0f);
+	HVar r_fogSunsetWarmthStrength("r_fogSunsetWarmthStrength", "Strength of sunset warm hue contribution to atmospheric fog tint", 0.30f, 0.0f, 1.0f);
+	HVar r_fogFarAtmosphereMatchStrength("r_fogFarAtmosphereMatchStrength", "How strongly very distant fog converges toward atmosphere colour", 0.60f, 0.0f, 1.0f);
 	HVar r_lodPartition("r_lodPartition", "The value that determines where LOD partitions occur", 250.0f, 10.0f, 5000.0f);
 	HVar r_frustumSphereBoundsMultiplier("r_frustumSphereBoundsMultiplier", "The multiplier applied to the frustum bounds in order to calculate culling", 1.15f, 1.0f, 4.0f);
 	HVar r_shadowMinimumLodThreshold("r_shadowMinimumLodLevel", "The lowest LOD level allowed for shadow maps. A high number will improve performance at the expensve of shadow fidelity", 0, 0, 3);
@@ -1090,7 +1109,27 @@ namespace HexEngine
 			bufferData._atmosphere.zenithExponent = env_zenithExponent._val.f32;
 			bufferData._atmosphere.anisotropicIntensity = env_anisotropicIntensity._val.f32;
 			bufferData._atmosphere.density = env_density._val.f32;
+			bufferData._atmosphere.rayleighStrength = env_rayleighStrength._val.f32;
+			bufferData._atmosphere.mieStrength = env_mieStrength._val.f32;
+			bufferData._atmosphere.ambientStrength = env_ambientSkyStrength._val.f32;
+			bufferData._atmosphere.sunHazeStrength = env_sunHazeStrength._val.f32;
+			bufferData._atmosphere.sunsetWarmStrength = env_sunsetWarmStrength._val.f32;
+			bufferData._atmosphere.sunsetCoolStrength = env_sunsetCoolStrength._val.f32;
+			bufferData._atmosphere.sunsetGlowStrength = env_sunsetGlowStrength._val.f32;
+			bufferData._atmosphere.atmospherePad0 = 0.0f;
 			bufferData._atmosphere.fogDensity = r_fogDensity._val.f32;
+			bufferData._atmosphere.fogStartDistance = r_fogStartDistance._val.f32;
+			bufferData._atmosphere.fogHeightDensity = r_fogHeightDensity._val.f32;
+			bufferData._atmosphere.fogHeightFalloff = r_fogHeightFalloff._val.f32;
+			bufferData._atmosphere.fogHeightPivot = r_fogHeightPivot._val.f32;
+			bufferData._atmosphere.fogSkyTintInfluence = r_fogSkyTintInfluence._val.f32;
+			bufferData._atmosphere.fogFarDesaturate = r_fogFarDesaturate._val.f32;
+			bufferData._atmosphere.fogAtmosphereBlendStart = r_fogAtmosphereBlendStart._val.f32;
+			bufferData._atmosphere.fogAtmosphereBlendRange = r_fogAtmosphereBlendRange._val.f32;
+			bufferData._atmosphere.fogSunsetRange = r_fogSunsetRange._val.f32;
+			bufferData._atmosphere.fogSunsetWarmthStrength = r_fogSunsetWarmthStrength._val.f32;
+			bufferData._atmosphere.fogFarAtmosphereMatchStrength = r_fogFarAtmosphereMatchStrength._val.f32;
+			bufferData._atmosphere.fog_pad0 = 0.0f;
 
 			bufferData._atmosphere.ambientLight = _currentScene->GetAmbientColour();
 
@@ -1253,6 +1292,7 @@ namespace HexEngine
 			_currentCamera->GetPVS(),
 			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass),
 			MeshRenderFlags::MeshRenderNormal);
+		_currentScene->RenderCustom(_currentScene, _currentCamera, MeshRenderFlags::MeshRenderNormal);
 
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
 

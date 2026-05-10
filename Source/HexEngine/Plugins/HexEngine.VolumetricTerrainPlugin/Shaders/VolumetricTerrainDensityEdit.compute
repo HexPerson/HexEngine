@@ -1,0 +1,88 @@
+cbuffer BrushData : register(b0)
+{
+    float4 BrushCenterRadius;
+    float4 BrushParams0;
+    float4 ChunkOriginVoxel;
+    int4 IntParams0;
+    int4 IntParams1;
+    float TargetHeight;
+    float3 Padding0;
+};
+
+RWTexture3D<float> DensityField : register(u0);
+
+float SmoothMinField(float a, float b, float k)
+{
+    if (k <= 0.0001) return min(a, b);
+    float h = saturate(0.5 + 0.5 * (b - a) / k);
+    return lerp(b, a, h) - k * h * (1.0 - h);
+}
+
+float SmoothMaxField(float a, float b, float k)
+{
+    return -SmoothMinField(-a, -b, k);
+}
+
+[numthreads(8, 8, 8)]
+void MainCS(uint3 id : SV_DispatchThreadID)
+{
+    const float3 BrushCenter = BrushCenterRadius.xyz;
+    const float BrushRadius = BrushCenterRadius.w;
+    const float BrushStrength = BrushParams0.x;
+    const float DeltaTime = BrushParams0.y;
+    const float Hardness = BrushParams0.z;
+    const float FalloffPower = BrushParams0.w;
+    const float3 ChunkOrigin = ChunkOriginVoxel.xyz;
+    const float VoxelSize = ChunkOriginVoxel.w;
+    const int BrushMode = IntParams0.x;
+    const int PointsPerAxis = IntParams0.y;
+    const int MinX = IntParams0.z;
+    const int MinY = IntParams0.w;
+    const int MinZ = IntParams1.x;
+    const int MaxX = IntParams1.y;
+    const int MaxY = IntParams1.z;
+    const int MaxZ = IntParams1.w;
+
+    int3 voxel = int3(id.x + MinX, id.y + MinY, id.z + MinZ);
+    if (voxel.x >= MaxX || voxel.y >= MaxY || voxel.z >= MaxZ) return;
+    if (voxel.x < 0 || voxel.y < 0 || voxel.z < 0 || voxel.x >= PointsPerAxis || voxel.y >= PointsPerAxis || voxel.z >= PointsPerAxis) return;
+
+    float3 worldPos = ChunkOrigin + float3(voxel) * VoxelSize;
+    float3 delta = worldPos - BrushCenter;
+    float dist = length(delta);
+    if (dist > BrushRadius) return;
+
+    float t = saturate(1.0 - (dist / max(BrushRadius, 0.0001)));
+    float falloff = pow(t, max(0.1, FalloffPower));
+    float hardness = lerp(0.15, 1.0, saturate(Hardness));
+    float amount = BrushStrength * falloff * hardness * max(0.001, DeltaTime);
+    float sphereSdf = dist - BrushRadius;
+    float smoothK = max(VoxelSize * lerp(0.35, 2.25, 1.0 - saturate(Hardness)), 0.0001);
+
+    float density = DensityField[voxel];
+    if (BrushMode == 0)
+    {
+        float addAmount = amount * 0.12;
+        float addSmoothK = smoothK * 2.35;
+        float targetSolid = sphereSdf - addAmount;
+        float blended = SmoothMinField(density, targetSolid, addSmoothK);
+        density = lerp(density, blended, saturate(0.16 + (falloff * 0.42)));
+    }
+    else if (BrushMode == 1 || BrushMode == 7)
+    {
+        float targetEmpty = -sphereSdf + (amount * 0.35);
+        density = SmoothMaxField(density, targetEmpty, smoothK);
+    }
+    else if (BrushMode == 2)
+    {
+        density -= amount;
+    }
+    else if (BrushMode == 3)
+    {
+        float targetDensity = worldPos.y - TargetHeight;
+        float blend = saturate(falloff * max(0.02, DeltaTime * BrushStrength));
+        density = lerp(density, targetDensity, blend);
+    }
+
+    DensityField[voxel] = density;
+}

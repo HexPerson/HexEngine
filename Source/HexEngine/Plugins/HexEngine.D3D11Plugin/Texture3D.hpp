@@ -35,8 +35,8 @@ public:
 	virtual void ClearRenderTargetView(const math::Color& colour) override;
 
 	virtual void GetPixels(std::vector<uint8_t>& buffer) override;
-
-	virtual void GetPixels(std::vector<float>& buffer) override {}
+	virtual void GetPixels(std::vector<float>& buffer) override;
+	virtual bool SupportsRandomWrite() const override { return _unorderedAccessView != nullptr; }
 
 	virtual void* GetSharedHandle() override;
 
@@ -51,6 +51,7 @@ private:
 	int32_t _depth = 0;
 	ID3D11RenderTargetView* _renderTargetView = nullptr;
 	ID3D11ShaderResourceView* _shaderResourceView = nullptr;
+	ID3D11UnorderedAccessView* _unorderedAccessView = nullptr;
 	ID3D11DepthStencilView* _depthStencilView = nullptr;
 
 	D3D11_RTV_DIMENSION _rtvDimension;

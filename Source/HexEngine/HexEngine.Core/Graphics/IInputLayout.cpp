@@ -34,6 +34,9 @@ namespace HexEngine
 	{
 		switch (id)
 		{
+		case InputLayoutId::None:
+			return nullptr;
+
 		case InputLayoutId::Pos:
 			return GetLayout_Pos(vertexStage);
 
@@ -111,6 +114,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayoutPosNormTanBinTex_INSTANCED = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayoutPosNormTanBinTex_INSTANCED->_layoutId = InputLayoutId::PosNormTanBinTex_INSTANCED;
 			}
 		}
 
@@ -157,6 +161,7 @@ namespace HexEngine
 				g_pLayoutPosNormTanBinTexBoned_INSTANCED = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
 
 				g_pLayoutPosNormTanBinTexBoned_INSTANCED->SetDebugName("PosNormTanBinTexBoned_INSTANCED");
+				g_pLayoutPosNormTanBinTexBoned_INSTANCED->_layoutId = InputLayoutId::PosNormTanBinTexBoned_INSTANCED;
 			}
 		}
 
@@ -187,6 +192,7 @@ namespace HexEngine
 				g_pLayoutPosTexBoned_INSTANCED_SIMPLE = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
 
 				g_pLayoutPosTexBoned_INSTANCED_SIMPLE->SetDebugName("PosNormTanBinTexBoned_INSTANCED_SIMPLE");
+				g_pLayoutPosTexBoned_INSTANCED_SIMPLE->_layoutId = InputLayoutId::PosTexBoned_INSTANCED_SIMPLE;
 			}
 		}
 
@@ -205,6 +211,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayoutPos = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayoutPos->_layoutId = InputLayoutId::Pos;
 			}
 		}
 
@@ -242,6 +249,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayoutPos_INSTANCED = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayoutPos_INSTANCED->_layoutId = InputLayoutId::Pos_INSTANCED;
 			}
 		}
 
@@ -282,6 +290,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayout_PosTex_INSTANCED = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayout_PosTex_INSTANCED->_layoutId = InputLayoutId::PosTex_INSTANCED;
 			}
 		}
 
@@ -307,6 +316,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayout_PosTex_INSTANCED_SIMPLE = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayout_PosTex_INSTANCED_SIMPLE->_layoutId = InputLayoutId::PosTex_INSTANCED_SIMPLE;
 			}
 		}
 
@@ -326,6 +336,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayout_PosTex = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayout_PosTex->_layoutId = InputLayoutId::PosTex;
 			}
 		}
 
@@ -345,6 +356,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayout_PosColour = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayout_PosColour->_layoutId = InputLayoutId::PosColour;
 			}
 		}
 
@@ -365,6 +377,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayout_PosTexColour = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayout_PosTexColour->_layoutId = InputLayoutId::PosTexColour;
 			}
 		}
 
@@ -397,6 +410,7 @@ namespace HexEngine
 			if (vertexShaderStage->GetBinaryCode(vertexShaderCode))
 			{
 				g_pLayout_UI_INSTANCED = g_pEnv->_graphicsDevice->CreateInputLayout(inputDesc, _countof(inputDesc), vertexShaderCode);
+				g_pLayout_UI_INSTANCED->_layoutId = InputLayoutId::UI_INSTANCED;
 			}
 		}
 

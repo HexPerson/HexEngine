@@ -11,6 +11,7 @@
 	UICommon
 	ShadowUtils
 	Atmosphere
+	AtmospherePhysical
 	Utils
 }
 "VertexShader"
@@ -256,7 +257,12 @@
 
 		accumFog /= max(0.0001f, marchedDistance);
 
-		return saturate(getSunColour() * accumFog);
+		float3 sunDir = normalize(-g_lightDirection.xyz);
+		float3 physicalSunColour = ComputePhysicalSunColour(g_eyePos.xyz, sunDir);
+		float sunLuma = max(dot(physicalSunColour, float3(0.299f, 0.587f, 0.114f)), 0.001f);
+		float3 shaftHue = physicalSunColour / sunLuma;
+		float3 shaftColour = shaftHue * max(g_globalLight[0], 0.35f) * 0.55f;
+		return saturate(shaftColour * accumFog);
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_TARGET

@@ -190,6 +190,9 @@ namespace HexEngine
 		void						SetMaterial(std::shared_ptr<Material> material);
 
 		virtual bool CreateBuffers();
+		virtual bool CreateDynamicBuffers(uint32_t vertexCapacity, uint32_t indexCapacity);
+		virtual bool UpdateDynamicGeometry(const std::vector<MeshVertex>& vertices, const std::vector<MeshIndexFormat>& indices);
+		bool IsDynamicMesh() const { return _isDynamicMesh; }
 		//bool CreateBuffers(bool dynamic, uint32_t stride, uint32_t count, void* data);
 
 		virtual void Destroy() override;
@@ -251,6 +254,10 @@ namespace HexEngine
 		IVertexBuffer* _simpleVertexBuffer = nullptr;
 		IIndexBuffer* _indexBuffer = nullptr;
 		std::vector<MeshIndexFormat> _indices;
+		uint32_t _vertexBufferCapacity = 0;
+		uint32_t _simpleVertexBufferCapacity = 0;
+		uint32_t _indexBufferCapacity = 0;
+		bool _isDynamicMesh = false;
 
 	private:
 		std::shared_ptr<Model> _model;

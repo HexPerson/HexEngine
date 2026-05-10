@@ -39,7 +39,27 @@
 		float zenithExponent;
 		float anisotropicIntensity;
 		float density;
+		float rayleighStrength;
+		float mieStrength;
+		float ambientStrength;
+		float sunHazeStrength;
+		float sunsetWarmStrength;
+		float sunsetCoolStrength;
+		float sunsetGlowStrength;
+		float atmospherePad0;
 		float fogDensity;
+		float fogStartDistance;
+		float fogHeightDensity;
+		float fogHeightFalloff;
+		float fogHeightPivot;
+		float fogSkyTintInfluence;
+		float fogFarDesaturate;
+		float fogAtmosphereBlendStart;
+		float fogAtmosphereBlendRange;
+		float fogSunsetRange;
+		float fogSunsetWarmthStrength;
+		float fogFarAtmosphereMatchStrength;
+		float fog_pad0;
 
 		float volumetricScattering;
 		float volumetricStrength;

@@ -150,6 +150,8 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <HexEngineShader Include="Atmosphere.shader" />
+    <HexEngineShader Include="AtmospherePhysical.shader" />
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="BuildDepthPyramid.shader" />
     <HexEngineShader Include="ParticleSimulate.shader" />
@@ -279,6 +281,12 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="VolumetricClouds.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="VolumetricTerrainExtract.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="VolumetricTerrainSurface.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="VolumetricLighting.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
@@ -301,5 +309,3 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <Import Project="HexEngine.Shaders.targets" />
   </ImportGroup>
 </Project>
-
-

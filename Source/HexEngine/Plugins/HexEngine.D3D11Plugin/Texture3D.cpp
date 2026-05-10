@@ -16,6 +16,7 @@ void Texture3D::Destroy()
 	SAFE_RELEASE(_texture);
 	SAFE_RELEASE(_renderTargetView);
 	SAFE_RELEASE(_shaderResourceView);
+	SAFE_RELEASE(_unorderedAccessView);
 	SAFE_RELEASE(_depthStencilView);
 }
 
@@ -26,16 +27,15 @@ void* Texture3D::GetNativePtr()
 
 void Texture3D::SetPixels(uint8_t* data, uint32_t size, int32_t slice)
 {
-	D3D11_MAPPED_SUBRESOURCE mapped = {};
-
-	auto gfxDevice = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
-
-	if (gfxDevice->Map(_texture, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped) == S_OK)
+	if (_texture == nullptr || data == nullptr || size == 0)
 	{
-		memcpy(mapped.pData, data, size);
-
-		gfxDevice->Unmap(_texture, 0);
+		return;
 	}
+
+	auto* gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
+	const uint32_t rowPitch = static_cast<uint32_t>(_width * sizeof(float));
+	const uint32_t depthPitch = static_cast<uint32_t>(_width * _height * sizeof(float));
+	gfxContext->UpdateSubresource(_texture, 0, nullptr, data, rowPitch, depthPitch);
 }
 
 void* Texture3D::LockPixels(int32_t* rowPitch)
@@ -91,6 +91,62 @@ void Texture3D::GetPixels(std::vector<uint8_t>& buffer)
 
 	buffer.clear();
 	buffer.insert(buffer.end(), pixels, pixels + pixelsSize);
+}
+
+void Texture3D::GetPixels(std::vector<float>& buffer)
+{
+	if (_texture == nullptr || _width <= 0 || _height <= 0 || _depth <= 0)
+	{
+		buffer.clear();
+		return;
+	}
+
+	auto* gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
+	auto* gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
+
+	D3D11_TEXTURE3D_DESC desc = {};
+	_texture->GetDesc(&desc);
+
+	D3D11_TEXTURE3D_DESC stagingDesc = desc;
+	stagingDesc.Usage = D3D11_USAGE_STAGING;
+	stagingDesc.BindFlags = 0;
+	stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	stagingDesc.MiscFlags = 0;
+
+	ID3D11Texture3D* staging = nullptr;
+	if (FAILED(gfxDevice->CreateTexture3D(&stagingDesc, nullptr, &staging)) || staging == nullptr)
+	{
+		buffer.clear();
+		return;
+	}
+
+	gfxContext->CopyResource(staging, _texture);
+
+	D3D11_MAPPED_SUBRESOURCE mapped = {};
+	if (FAILED(gfxContext->Map(staging, 0, D3D11_MAP_READ, 0, &mapped)) || mapped.pData == nullptr)
+	{
+		SAFE_RELEASE(staging);
+		buffer.clear();
+		return;
+	}
+
+	const size_t voxelCount = static_cast<size_t>(_width) * static_cast<size_t>(_height) * static_cast<size_t>(_depth);
+	buffer.resize(voxelCount);
+	const size_t rowBytes = static_cast<size_t>(_width) * sizeof(float);
+	const uint8_t* srcBase = reinterpret_cast<const uint8_t*>(mapped.pData);
+
+	for (int32_t z = 0; z < _depth; ++z)
+	{
+		for (int32_t y = 0; y < _height; ++y)
+		{
+			const uint8_t* srcRow = srcBase + (static_cast<size_t>(z) * mapped.DepthPitch) + (static_cast<size_t>(y) * mapped.RowPitch);
+			float* dstRow = buffer.data() + (static_cast<size_t>(z) * static_cast<size_t>(_height) * static_cast<size_t>(_width)) + (static_cast<size_t>(y) * static_cast<size_t>(_width));
+			memcpy(dstRow, srcRow, rowBytes);
+		}
+	}
+
+	gfxContext->Unmap(staging, 0);
+	SAFE_RELEASE(staging);
 }
 
 void Texture3D::SaveToFile(const fs::path& path)

@@ -48,7 +48,9 @@ bool BaseCompiler::ReadShader(const fs::path& path, std::string shaderData[(uint
 			layoutName.erase(0,1);
 		//std::getline(std::stringstream(inputLayout->second), layoutName);
 
-		if (layoutName == "Pos")
+		if (layoutName == "None")
+			layoutId = HexEngine::InputLayoutId::None;
+		else if (layoutName == "Pos")
 			layoutId = HexEngine::InputLayoutId::Pos;
 		else if (layoutName == "Pos_INSTANCED")
 			layoutId = HexEngine::InputLayoutId::Pos_INSTANCED;

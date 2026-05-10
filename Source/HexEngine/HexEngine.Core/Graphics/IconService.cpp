@@ -53,6 +53,44 @@ namespace
 			extLower == ".bmp";
 	}
 
+	bool IsBonedInputLayout(const std::shared_ptr<HexEngine::Material>& material)
+	{
+		if (material == nullptr)
+			return false;
+
+		auto shader = material->GetStandardShader();
+		if (shader == nullptr)
+			return false;
+
+		auto* vertexStage = shader->GetShaderStage(HexEngine::ShaderStage::VertexShader);
+		auto* inputLayout = shader->GetInputLayout();
+		if (vertexStage == nullptr || inputLayout == nullptr)
+			return false;
+
+		return inputLayout->_layoutId == HexEngine::InputLayoutId::PosNormTanBinTexBoned_INSTANCED ||
+			inputLayout->_layoutId == HexEngine::InputLayoutId::PosTexBoned_INSTANCED_SIMPLE;
+	}
+
+	std::shared_ptr<HexEngine::Material> BuildIconPreviewMaterial(const fs::path& path)
+	{
+		auto sourceMaterial = HexEngine::Material::Create(path);
+		if (sourceMaterial == nullptr)
+			return nullptr;
+
+		if (!IsBonedInputLayout(sourceMaterial))
+			return sourceMaterial;
+
+		auto defaultMaterial = HexEngine::Material::GetDefaultMaterial();
+		if (defaultMaterial == nullptr)
+			return sourceMaterial;
+
+		auto previewMaterial = std::make_shared<HexEngine::Material>();
+		previewMaterial->CopyFrom(sourceMaterial);
+		previewMaterial->SetStandardShader(defaultMaterial->GetStandardShader());
+		previewMaterial->SetShadowMapShader(defaultMaterial->GetShadowMapShader());
+		return previewMaterial;
+	}
+
 	void CollectHierarchyEntities(HexEngine::Entity* root, std::vector<HexEngine::Entity*>& outEntities)
 	{
 		if (root == nullptr || root->IsPendingDeletion())
@@ -924,8 +962,16 @@ namespace HexEngine
 				auto mesh = Mesh::Create("EngineData.Models/Primitives/sphere.hmesh");
 				if (mesh != nullptr)
 				{
+					auto material = BuildIconPreviewMaterial(path);
+					if (material == nullptr)
+					{
+						_iconScene->DestroyEntity(dummyEnt);
+						_queuedPaths.erase(path);
+						return;
+					}
+
 					meshRenderer->SetMesh(mesh);
-					meshRenderer->SetMaterial(Material::Create(path));
+					meshRenderer->SetMaterial(material);
 					_previewRootEntities.push_back(dummyEnt);
 					hasPreviewEntities = true;
 				}

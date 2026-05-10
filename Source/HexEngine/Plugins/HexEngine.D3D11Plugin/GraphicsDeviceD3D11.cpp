@@ -11,9 +11,11 @@
 #include <HexEngine.Core/Graphics/IStreamlineProvider.hpp>
 
 #include <DirectXTex\DirectXTex.h>
+#include <d3dcompiler.h>
 #include <dxgi1_6.h>
 
 #pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d3dcompiler.lib")
 #pragma comment(lib, "dxgi.lib")
 
 HexEngine::HVar r_vsync("r_vsync", "The type of V-Sync to use. 0 = Off, 1 = Full, 2 = Half", 0, 0, 2);
@@ -1056,10 +1058,14 @@ HexEngine::ITexture3D* GraphicsDeviceD3D11::CreateTexture3D(
 	desc.Width = width;
 	desc.Height = height;
 	desc.Depth = depth;
-	desc.MipLevels = mipLevels != 1 ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
+	desc.MipLevels = std::max(1, mipLevels);
 	desc.Usage = D3D11_USAGE_DEFAULT;
 	desc.CPUAccessFlags = 0;
-	desc.MiscFlags = 0;
+	const bool supportsAutoMipGen =
+		(desc.MipLevels != 1) &&
+		((bindFlags & D3D11_BIND_RENDER_TARGET) != 0) &&
+		((bindFlags & D3D11_BIND_SHADER_RESOURCE) != 0);
+	desc.MiscFlags = supportsAutoMipGen ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
 
 	/*D3D11_SUBRESOURCE_DATA data;
 	data.pSysMem = initialData.data();
@@ -1108,6 +1114,20 @@ HexEngine::ITexture3D* GraphicsDeviceD3D11::CreateTexture3D(
 
 			texture->_shaderResourceView = shaderResourceView;
 		}
+	}
+
+	if (bindFlags & D3D11_BIND_UNORDERED_ACCESS)
+	{
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = format;
+		uavDesc.ViewDimension = uavDimension == D3D11_UAV_DIMENSION_UNKNOWN ? D3D11_UAV_DIMENSION_TEXTURE3D : uavDimension;
+		uavDesc.Texture3D.MipSlice = 0;
+		uavDesc.Texture3D.FirstWSlice = 0;
+		uavDesc.Texture3D.WSize = static_cast<UINT>(depth);
+
+		ID3D11UnorderedAccessView* unorderedAccessView = nullptr;
+		CHECK_HR(_device->CreateUnorderedAccessView(texture->_texture, &uavDesc, &unorderedAccessView));
+		texture->_unorderedAccessView = unorderedAccessView;
 	}
 
 	if (bindFlags & D3D11_BIND_DEPTH_STENCIL)
@@ -1281,6 +1301,56 @@ ShaderStageImpl<ID3D11ComputeShader>* GraphicsDeviceD3D11::CreateComputeShader(s
 	return shader;
 }
 
+ShaderStageImpl<ID3D11GeometryShader>* GraphicsDeviceD3D11::CreateGeometryShader(std::vector<uint8_t>& shaderCode)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	ID3D11GeometryShader* d3dShader = nullptr;
+	CHECK_HR(_device->CreateGeometryShader(shaderCode.data(), shaderCode.size(), nullptr, &d3dShader));
+
+	auto* shader = new ShaderStageImpl<ID3D11GeometryShader>;
+	shader->_shader = d3dShader;
+	shader->_shaderCode = shaderCode;
+	return shader;
+}
+
+ShaderStageImpl<ID3D11ComputeShader>* GraphicsDeviceD3D11::CreateComputeShaderFromSource(const std::string& shaderSource, const std::string& entryPoint)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	ID3DBlob* shaderBlob = nullptr;
+	ID3DBlob* errorBlob = nullptr;
+	const HRESULT compileHr = D3DCompile(
+		shaderSource.data(),
+		shaderSource.size(),
+		"RuntimeComputeShader",
+		nullptr,
+		nullptr,
+		entryPoint.c_str(),
+		"cs_5_0",
+		0,
+		0,
+		&shaderBlob,
+		&errorBlob);
+
+	if (FAILED(compileHr) || shaderBlob == nullptr)
+	{
+		if (errorBlob != nullptr)
+		{
+			LOG_CRIT("CreateComputeShaderFromSource compile failed: %s", reinterpret_cast<const char*>(errorBlob->GetBufferPointer()));
+			errorBlob->Release();
+		}
+		SAFE_RELEASE(shaderBlob);
+		return nullptr;
+	}
+
+	std::vector<uint8_t> shaderCode(shaderBlob->GetBufferSize());
+	memcpy(shaderCode.data(), shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize());
+	SAFE_RELEASE(shaderBlob);
+	SAFE_RELEASE(errorBlob);
+	return CreateComputeShader(shaderCode);
+}
+
 InputLayout* GraphicsDeviceD3D11::CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
@@ -1311,6 +1381,85 @@ ConstantBuffer* GraphicsDeviceD3D11::CreateConstantBuffer(uint32_t size)
 
 	ConstantBuffer* buffer = new ConstantBuffer(size);
 	buffer->_buffer = d3dBuffer;
+
+	return buffer;
+}
+
+StructuredBuffer* GraphicsDeviceD3D11::CreateStructuredBuffer(
+	uint32_t elementStride,
+	uint32_t elementCount,
+	HexEngine::StructuredBufferFlags flags,
+	D3D11_USAGE usage,
+	uint32_t cpuAccessFlags,
+	const void* initialData)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (elementStride == 0 || elementCount == 0)
+	{
+		return nullptr;
+	}
+
+	D3D11_BUFFER_DESC desc = {};
+	desc.ByteWidth = elementStride * elementCount;
+	desc.Usage = usage;
+	desc.BindFlags = 0;
+	if (HEX_HASFLAG(flags, HexEngine::StructuredBufferFlags::ShaderResource))
+	{
+		desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+	}
+	if (HEX_HASFLAG(flags, HexEngine::StructuredBufferFlags::UnorderedAccess))
+	{
+		desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+	}
+	desc.CPUAccessFlags = cpuAccessFlags;
+	desc.MiscFlags = HEX_HASFLAG(flags, HexEngine::StructuredBufferFlags::DrawIndirectArgs) ?
+		D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS :
+		D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+	desc.StructureByteStride = HEX_HASFLAG(flags, HexEngine::StructuredBufferFlags::DrawIndirectArgs) ? 0u : elementStride;
+
+	D3D11_SUBRESOURCE_DATA initial = {};
+	D3D11_SUBRESOURCE_DATA* initialPtr = nullptr;
+	if (initialData != nullptr)
+	{
+		initial.pSysMem = initialData;
+		initialPtr = &initial;
+	}
+
+	ID3D11Buffer* d3dBuffer = nullptr;
+	CHECK_HR(_device->CreateBuffer(&desc, initialPtr, &d3dBuffer));
+
+	auto* buffer = new StructuredBuffer;
+	buffer->_buffer = d3dBuffer;
+	buffer->_elementStride = elementStride;
+	buffer->_elementCount = elementCount;
+	buffer->_cpuAccessFlags = cpuAccessFlags;
+	buffer->_usage = usage;
+	buffer->_flags = flags;
+
+	if (HEX_HASFLAG(flags, HexEngine::StructuredBufferFlags::ShaderResource))
+	{
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = elementCount;
+		CHECK_HR(_device->CreateShaderResourceView(d3dBuffer, &srvDesc, &buffer->_shaderResourceView));
+	}
+
+	if (HEX_HASFLAG(flags, HexEngine::StructuredBufferFlags::UnorderedAccess))
+	{
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.FirstElement = 0;
+		uavDesc.Buffer.NumElements = elementCount;
+		if (HEX_HASFLAG(flags, HexEngine::StructuredBufferFlags::AppendConsume))
+		{
+			uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_APPEND;
+		}
+		CHECK_HR(_device->CreateUnorderedAccessView(d3dBuffer, &uavDesc, &buffer->_unorderedAccessView));
+	}
 
 	return buffer;
 }
@@ -1430,14 +1579,27 @@ void GraphicsDeviceD3D11::SetPixelShader(HexEngine::IShaderStage* shader)
 	}
 }
 
-void GraphicsDeviceD3D11::SetInputLayout(HexEngine::IInputLayout* layout)
+void GraphicsDeviceD3D11::SetGeometryShader(HexEngine::IShaderStage* shader)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
-	if (layout == nullptr)
-		return;
+	if (shader != _prevRenderState._geometryShader)
+	{
+		_deviceContext->GSSetShader(shader ? reinterpret_cast<ID3D11GeometryShader*>(shader->GetNativePtr()) : nullptr, nullptr, 0);
+		_prevRenderState._geometryShader = shader;
+	}
+}
 
-	_deviceContext->IASetInputLayout(reinterpret_cast<ID3D11InputLayout*>(layout->GetNativePtr()));
+void GraphicsDeviceD3D11::SetComputeShader(HexEngine::IShaderStage* shader)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	_deviceContext->CSSetShader(shader ? reinterpret_cast<ID3D11ComputeShader*>(shader->GetNativePtr()) : nullptr, nullptr, 0);
+}
+
+void GraphicsDeviceD3D11::SetInputLayout(HexEngine::IInputLayout* layout)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	_deviceContext->IASetInputLayout(layout ? reinterpret_cast<ID3D11InputLayout*>(layout->GetNativePtr()) : nullptr);
 }
 
 void GraphicsDeviceD3D11::SetConstantBufferVS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
@@ -1446,7 +1608,7 @@ void GraphicsDeviceD3D11::SetConstantBufferVS(uint32_t slot, HexEngine::IConstan
 
 	if (_prevRenderState._vsConstant != buffer)
 	{
-		ID3D11Buffer* bufferArray[] = { reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) };
+		ID3D11Buffer* bufferArray[] = { buffer ? reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) : nullptr };
 
 		_deviceContext->VSSetConstantBuffers(slot, 1, bufferArray);
 
@@ -1460,12 +1622,31 @@ void GraphicsDeviceD3D11::SetConstantBufferPS(uint32_t slot, HexEngine::IConstan
 
 	if (_prevRenderState._psConstant != buffer)
 	{
-		ID3D11Buffer* bufferArray[] = { reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) };
+		ID3D11Buffer* bufferArray[] = { buffer ? reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) : nullptr };
 
 		_deviceContext->PSSetConstantBuffers(slot, 1, bufferArray);
 
 		_prevRenderState._psConstant = buffer;
 	}
+}
+
+void GraphicsDeviceD3D11::SetConstantBufferGS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (_prevRenderState._gsConstant != buffer)
+	{
+		ID3D11Buffer* bufferArray[] = { buffer ? reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) : nullptr };
+		_deviceContext->GSSetConstantBuffers(slot, 1, bufferArray);
+		_prevRenderState._gsConstant = buffer;
+	}
+}
+
+void GraphicsDeviceD3D11::SetConstantBufferCS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11Buffer* bufferArray[] = { buffer ? reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) : nullptr };
+	_deviceContext->CSSetConstantBuffers(slot, 1, bufferArray);
 }
 
 void GraphicsDeviceD3D11::SetTexture2D(uint32_t slot, HexEngine::ITexture2D* texture)
@@ -1590,6 +1771,112 @@ void GraphicsDeviceD3D11::SetTexture3D(HexEngine::ITexture3D* texture)
 	}
 
 	SetPixelShaderResource(tex->_shaderResourceView);
+}
+
+void GraphicsDeviceD3D11::SetGeometryTexture3D(uint32_t slot, HexEngine::ITexture3D* texture)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* tex = reinterpret_cast<Texture3D*>(texture);
+	ID3D11ShaderResourceView* srv = tex ? tex->_shaderResourceView : nullptr;
+	_deviceContext->GSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::SetVertexStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* structured = static_cast<StructuredBuffer*>(buffer);
+	ID3D11ShaderResourceView* srv = structured ? structured->_shaderResourceView : nullptr;
+	_deviceContext->VSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::SetGeometryStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* structured = static_cast<StructuredBuffer*>(buffer);
+	ID3D11ShaderResourceView* srv = structured ? structured->_shaderResourceView : nullptr;
+	_deviceContext->GSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::SetComputeTexture3D(uint32_t slot, HexEngine::ITexture3D* texture)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* tex = reinterpret_cast<Texture3D*>(texture);
+	ID3D11ShaderResourceView* srv = tex ? tex->_shaderResourceView : nullptr;
+	_deviceContext->CSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::SetComputeRwTexture3D(uint32_t slot, HexEngine::ITexture3D* texture)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* tex = reinterpret_cast<Texture3D*>(texture);
+	ID3D11UnorderedAccessView* uav = tex ? tex->_unorderedAccessView : nullptr;
+	_deviceContext->CSSetUnorderedAccessViews(slot, 1, &uav, nullptr);
+}
+
+void GraphicsDeviceD3D11::SetComputeStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* structured = static_cast<StructuredBuffer*>(buffer);
+	ID3D11ShaderResourceView* srv = structured ? structured->_shaderResourceView : nullptr;
+	_deviceContext->CSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::SetComputeRwStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer, uint32_t initialCount)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* structured = static_cast<StructuredBuffer*>(buffer);
+	ID3D11UnorderedAccessView* uav = structured ? structured->_unorderedAccessView : nullptr;
+	UINT count = initialCount;
+	_deviceContext->CSSetUnorderedAccessViews(slot, 1, &uav, &count);
+}
+
+void GraphicsDeviceD3D11::ClearComputeTexture3D(uint32_t slot)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11ShaderResourceView* srv = nullptr;
+	_deviceContext->CSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::ClearComputeStructuredBuffer(uint32_t slot)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11ShaderResourceView* srv = nullptr;
+	_deviceContext->CSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::ClearGeometryTexture3D(uint32_t slot)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11ShaderResourceView* srv = nullptr;
+	_deviceContext->GSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::ClearVertexStructuredBuffer(uint32_t slot)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11ShaderResourceView* srv = nullptr;
+	_deviceContext->VSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::ClearGeometryStructuredBuffer(uint32_t slot)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11ShaderResourceView* srv = nullptr;
+	_deviceContext->GSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::ClearComputeRwTexture3D(uint32_t slot)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11UnorderedAccessView* uav = nullptr;
+	_deviceContext->CSSetUnorderedAccessViews(slot, 1, &uav, nullptr);
+}
+
+void GraphicsDeviceD3D11::ClearComputeRwStructuredBuffer(uint32_t slot)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11UnorderedAccessView* uav = nullptr;
+	_deviceContext->CSSetUnorderedAccessViews(slot, 1, &uav, nullptr);
 }
 
 void GraphicsDeviceD3D11::SetTexture2DArray(uint32_t slot, const std::vector<HexEngine::ITexture2D*>& textures)
@@ -1957,6 +2244,53 @@ void GraphicsDeviceD3D11::Draw(uint32_t vertexCount, int32_t startVertexLocation
 
 	_deviceContext->Draw(vertexCount, startVertexLocation);
 	HexEngine::g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+}
+
+void GraphicsDeviceD3D11::DrawInstancedIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (argsBuffer == nullptr)
+	{
+		return;
+	}
+
+	SetConstantBufferVS(1, _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer]);
+	SetConstantBufferPS(1, _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer]);
+	_deviceContext->DrawInstancedIndirect(reinterpret_cast<ID3D11Buffer*>(argsBuffer->GetNativePtr()), alignedByteOffset);
+	HexEngine::g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+}
+
+void GraphicsDeviceD3D11::Dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	_deviceContext->Dispatch(groupCountX, groupCountY, groupCountZ);
+}
+
+void GraphicsDeviceD3D11::DispatchIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (argsBuffer == nullptr)
+	{
+		return;
+	}
+
+	_deviceContext->DispatchIndirect(reinterpret_cast<ID3D11Buffer*>(argsBuffer->GetNativePtr()), alignedByteOffset);
+}
+
+void GraphicsDeviceD3D11::CopyStructureCount(HexEngine::IStructuredBuffer* sourceBuffer, HexEngine::IStructuredBuffer* destinationBuffer, uint32_t destinationByteOffset)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	auto* src = static_cast<StructuredBuffer*>(sourceBuffer);
+	auto* dst = static_cast<StructuredBuffer*>(destinationBuffer);
+	if (src == nullptr || dst == nullptr || src->_unorderedAccessView == nullptr || dst->_buffer == nullptr)
+	{
+		return;
+	}
+
+	_deviceContext->CopyStructureCount(dst->_buffer, destinationByteOffset, src->_unorderedAccessView);
 }
 
 TextureImporter* GraphicsDeviceD3D11::GetTextureLoader()

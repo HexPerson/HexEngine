@@ -11,7 +11,7 @@
 	UICommon
 	ShadowUtils
 	Atmosphere
-	Water
+	AtmospherePhysical
 }
 "VertexShader"
 {
@@ -31,19 +31,9 @@
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	Texture2D g_atmosphereTexture : register(t5);
 
-	//Texture2D g_inputTex : register(t0);
-
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
-
-	static matrix Identity =
-	{
-		{ 1, 0, 0, 0 },
-		{ 0, 1, 0, 0 },
-		{ 0, 0, 1, 0 },
-		{ 0, 0, 0, 1 }
-	};
 
 	float4 ShaderMain(UIPixelInput input) : SV_TARGET
 	{
@@ -65,116 +55,108 @@
 			return float4(pixelColour.rgb, 1.0f);
 		}
 
-		float pixelDepth = pixelNormal.w;
+		float fogDist = length(worldPos.xyz - g_eyePos.xyz);
+		float startDistance = max(0.0f, g_atmosphere.fogStartDistance);
+		float distanceDensity = max(0.0f, g_atmosphere.fogDensity);
+		float heightDensity = max(0.0f, g_atmosphere.fogHeightDensity);
+		float heightFalloff = max(0.0001f, g_atmosphere.fogHeightFalloff);
+		float heightPivot = g_atmosphere.fogHeightPivot;
+		float skyTintInfluence = saturate(g_atmosphere.fogSkyTintInfluence);
+		float farDesatStrength = saturate(g_atmosphere.fogFarDesaturate);
+		float atmosphereBlendStart = max(startDistance, g_atmosphere.fogAtmosphereBlendStart);
+		float atmosphereBlendRange = max(1.0f, g_atmosphere.fogAtmosphereBlendRange);
+		float sunsetRange = max(0.02f, g_atmosphere.fogSunsetRange);
+		float sunsetWarmthStrength = saturate(g_atmosphere.fogSunsetWarmthStrength);
+		float farAtmosphereMatchStrength = saturate(g_atmosphere.fogFarAtmosphereMatchStrength);
 
-		// Fog tint from base-sky pass.
-		float3 atmosphericFogColour = g_atmosphereTexture.Sample(g_textureSampler, screenPos).rgb;
+		float effectiveDist = max(0.0f, fogDist - startDistance);
+		if (effectiveDist <= 0.0001f)
+			return float4(pixelColour.rgb, 1.0f);
 
-		float3 authoredFogColour = float3(g_globalLight[1], g_globalLight[2], g_globalLight[3]);
-		float3 ambientFogBase = lerp(g_atmosphere.ambientLight.rgb, authoredFogColour, 0.08f);
-		if (dot(atmosphericFogColour, atmosphericFogColour) < 0.0001f)
-		{
-			// Safe fallback when atmosphere RT is unavailable or invalid.
-			atmosphericFogColour = ambientFogBase;
-		}
-		float4 fogColour = float4(atmosphericFogColour, 1.0f);
+		// Integrate height fog along the ray so density placement does not depend on camera height alone.
+		float distExtinction = effectiveDist * distanceDensity;
+		float rayHeightDelta = worldPos.y - g_eyePos.y;
+		float heightRayMid = g_eyePos.y + rayHeightDelta * 0.5f;
+		float heightRaySpan = abs(rayHeightDelta) * 0.5f + 1.0f;
+		float heightBandBase = exp2(-(heightRayMid - heightPivot) * heightFalloff);
+		float heightVariation = saturate(rayHeightDelta * heightFalloff / heightRaySpan);
+		float heightExtinction = heightBandBase * heightDensity * effectiveDist;
+		heightExtinction *= lerp(1.0f, 0.82f, heightVariation);
+		float extinction = distExtinction + heightExtinction;
+		float fogFactor = saturate(1.0f - exp2(-extinction));
 
+		float3 rayDir = normalize(worldPos.xyz - g_eyePos.xyz);
+		float3 sunDir = normalize(-g_lightDirection.xyz);
 
-		float fogStart = 140.0f;
-		float fogEnd = 1050.0f;
-		float fogRange = fogEnd - fogStart;
+		// Use the physical model for spectral attenuation along the view ray.
+		const int fogSteps = 12;
+		PhysicalAtmosphereSample raySample = IntegrateAtmospherePhysical(
+			g_eyePos.xyz + rayDir * startDistance,
+			rayDir,
+			effectiveDist,
+			sunDir,
+			fogSteps,
+			false);
 
-		float fogStrength = 1.0f;
+		// Probe the atmosphere from a stable reference origin so fog colour is independent of fog band placement.
+		const float3 fogProbeOrigin = float3(0.0f, 0.0f, 0.0f);
 
-		
+		// Probe the atmosphere with stable, camera-independent directions for fog colour.
+		float3 zenithDir = float3(0.0f, 1.0f, 0.0f);
+		float3 antiSunDir = normalize(float3(-sunDir.x, 0.18f, -sunDir.z));
+		float3 nearSunDir = normalize(float3(sunDir.x, 0.16f, sunDir.z));
 
-		//if (pixelDepth >= 0.0f)
-		{
-			float fogDepth = g_frustumDepths[3] - pixelDepth;
-			float fogDist = length(worldPos.xyz - g_eyePos.xyz);
+		PhysicalAtmosphereSample zenithProbe = IntegrateAtmospherePhysical(fogProbeOrigin, zenithDir, g_frustumDepths[3], sunDir, 18, false);
+		PhysicalAtmosphereSample horizonProbe = IntegrateAtmospherePhysical(fogProbeOrigin, antiSunDir, g_frustumDepths[3], sunDir, 18, false);
+		PhysicalAtmosphereSample sunsetProbe = IntegrateAtmospherePhysical(fogProbeOrigin, nearSunDir, g_frustumDepths[3], sunDir, 18, false);
+		float3 farSkyColour = g_atmosphereTexture.Sample(g_textureSampler, screenPos).rgb;
 
-			float waveHeightAtWorldPos = 0.0f;
-			float startPos = 0.0f;
-				
-			waveHeightAtWorldPos += GerstnerWaveHeight(_WaveA, startPos);
-			waveHeightAtWorldPos += GerstnerWaveHeight(_WaveB, startPos);
-			waveHeightAtWorldPos += GerstnerWaveHeight(_WaveC, startPos);
-			waveHeightAtWorldPos += GerstnerWaveHeight(_WaveD, startPos);
+		float3 ambientFogBase = max(g_atmosphere.ambientLight.rgb, float3(0.001f, 0.001f, 0.001f));
 
-			//waveHeightAtWorldPos -= 1.5f;
+		float heightFogWeight = saturate(heightExtinction / max(extinction, 0.001f));
+		float raySampleLuma = max(dot(raySample.inscatter, float3(0.299f, 0.587f, 0.114f)), 0.001f);
+		float3 viewRayFog = raySample.inscatter / raySampleLuma;
 
-			bool isPixelUnderWater = waveHeightAtWorldPos <= 0.0f;
-			bool isCameraUnderWater = g_eyePos.y <= waveHeightAtWorldPos;
+		float sunElevation = -g_lightDirection.y;
+		float sunsetWeight = saturate((sunsetRange - sunElevation) / max(sunsetRange, 0.02f)) * (1.0f - saturate((-0.02f - sunElevation) / 0.10f));
+		float nightWeight = saturate((-sunElevation + 0.02f) / 0.20f);
+		float distanceAtmosphereBlend = saturate((fogDist - atmosphereBlendStart) / atmosphereBlendRange);
+		float horizonColourMix = lerp(0.80f, 0.54f, nightWeight);
+		float3 directionalFog = lerp(horizonProbe.inscatter, raySample.inscatter, saturate(0.28f + distanceAtmosphereBlend * 0.34f));
+		float3 farMatchedFog = lerp(directionalFog, farSkyColour, farAtmosphereMatchStrength * distanceAtmosphereBlend);
+		float3 heightDominantFog = lerp(farMatchedFog, horizonProbe.inscatter, heightFogWeight * 0.72f);
+		float3 baseAtmosphereFog = lerp(heightDominantFog, zenithProbe.inscatter, nightWeight * 0.18f);
+		baseAtmosphereFog = lerp(baseAtmosphereFog, horizonProbe.inscatter, horizonColourMix * 0.22f);
+		float sunsetBlend = sunsetWeight * distanceAtmosphereBlend * sunsetWarmthStrength * 0.18f;
+		float3 physicalFogColour = lerp(baseAtmosphereFog, sunsetProbe.inscatter, sunsetBlend);
 
-			if(isCameraUnderWater)
-			{
-				if(pixelDepth >= g_frustumDepths[3] /* || pixelDepth == -1 */)
-					fogDist = 10.0f;
-			}
+		// At night, pull back toward cooler zenith/ambient haze so the fog does not keep the horizon's warm tint.
+		float3 coolNightFog = lerp(zenithProbe.inscatter, ambientFogBase, 0.10f);
+		physicalFogColour = lerp(physicalFogColour, coolNightFog, nightWeight * 0.65f);
 
-			const float waterFogOffset = 10.0f;
-			const float waterFogFadeDistance = 30.0f;
-			
-			if(false && worldPos.y <= waveHeightAtWorldPos /* - waterFogOffset */ /* && isCameraUnderWater */)
-			{
-				// exponential
-				float fogFactor = saturate(exp2(-( g_frustumDepths[3] - (fogDist * 5.1f) ) * (g_atmosphere.fogDensity / 2.8)  /*0.0030f*/));
+		// Preserve atmospheric hue while only using ambient light as an energy floor, not as an authored tint.
+		float physicalLuma = max(dot(physicalFogColour, float3(0.299f, 0.587f, 0.114f)), 0.001f);
+		float baseLuma = max(dot(ambientFogBase, float3(0.299f, 0.587f, 0.114f)), 0.001f);
+		float3 physicalHue = physicalFogColour / physicalLuma;
+		float hueStrength = saturate((physicalHue.b - max(physicalHue.r, physicalHue.g)) * 0.45f);
+		physicalHue = lerp(physicalHue, viewRayFog, 0.18f + heightFogWeight * 0.22f);
+		physicalHue = lerp(physicalHue, normalize(max(physicalFogColour, 0.0001f)) * 1.732f, hueStrength * 0.18f);
+		physicalFogColour = saturate(physicalHue * max(physicalLuma, baseLuma * 0.35f));
 
-				// linear
-				//float fogFactor = saturate((1500 - (g_frustumDepths[3] - pixelDepth)) / 300);
+		float fogSkyAmount = saturate(skyTintInfluence * 0.62f + distanceAtmosphereBlend * (0.20f + farAtmosphereMatchStrength * 0.26f));
+		fogSkyAmount = lerp(fogSkyAmount, fogSkyAmount * 0.70f, nightWeight);
+		float3 fogColour = lerp(ambientFogBase, physicalFogColour, fogSkyAmount);
+		fogColour = lerp(fogColour, farSkyColour, farAtmosphereMatchStrength * distanceAtmosphereBlend * saturate(fogFactor + heightFogWeight * 0.35f));
+		float fogLuma = dot(fogColour, float3(0.299f, 0.587f, 0.114f));
+		float dayWeight = 1.0f - nightWeight;
+		float distanceDesat = farDesatStrength * distanceAtmosphereBlend * lerp(0.30f, 0.10f, dayWeight);
+		fogColour = lerp(fogColour, fogLuma.xxx, distanceDesat);
 
-				const float3 underWaterFogColour = float3(27.0f / 255.0f, 45.0f / 255.0f, 51.0f / 255.0f) * g_globalLight[0];
+		// Use spectral transmittance from the physical ray march, but keep the old height fog amount.
+		float3 surfaceAttenuation = lerp(float3(1.0f, 1.0f, 1.0f), raySample.transmittance, fogFactor);
+		float3 foggedAlbedo = pixelColour.rgb * surfaceAttenuation;
+		foggedAlbedo = lerp(foggedAlbedo, fogColour, fogFactor);
 
-				float heightFactor = 1.0f - saturate(exp2(-(/* waveHeightAtWorldPos */0.0f - worldPos.y - waterFogOffset) / waterFogFadeDistance));
-
-				//if(isCameraUnderWater == false)
-				{
-					//float heightFadeFactorFromSurface = saturate((waveHeightAtWorldPos - g_eyePos.y) / 50.0f);
-					
-					//fogFactor = lerp(0.0f, 1.0f, heightFadeFactorFromSurface);
-
-					//heightFactor =min(heightFactor, 0.66f);
-				}
-
-				float3 foggedAlbedo = lerp(pixelColour.rgb, underWaterFogColour, fogFactor * heightFactor);
-
-				
-
-				return float4(foggedAlbedo, 1.0f);
-			}
-			else
-			{
-				// exponential
-				float fogFactor = saturate(exp2(-(g_frustumDepths[3]-fogDist) /** fogDepth*/ * g_atmosphere.fogDensity /*0.0030f*/));
-
-				// linear
-				//float fogFactor = saturate((fogEnd - (g_frustumDepths[3] - pixelDepth)) / fogRange);
-
-				float3 foggedAlbedo = lerp(pixelColour.rgb, fogColour, fogFactor);
-
-				return float4(foggedAlbedo, 1.0f);
-			}
-			
-			// handle fog when under water
-			/*if (isCameraUnderWater)
-			{
-				// exponential
-				//float fogFactor = saturate(exp2(-fogDepth * fogDepth * 0.00000007));
-
-				//float fogFactor = saturate(exp2(-fogDepth * 0.0002));
-
-				// linear
-				//float fogFactor = saturate(((g_frustumDepths[3] - fogEnd) - (g_frustumDepths[3] - pixelDepth)) / fogRange);
-
-				
-
-				float fogFactor = saturate((fogStart + fogDist) / fogRange);
-
-				float3 foggedAlbedo = lerp(pixelColour.rgb, g_oceanConfig.fogColour.rgb, fogFactor);
-
-				return float4(foggedAlbedo, 1.0f);
-			}*/
-		}
-		return float4(pixelColour.rgb, 1.0f);
+		return float4(saturate(foggedAlbedo), 1.0f);
 	}
 }

@@ -9,6 +9,7 @@
 #include "Shader.hpp"
 #include "InputLayout.hpp"
 #include "ConstantBuffer.hpp"
+#include "StructuredBuffer.hpp"
 #include "TextureImporter.hpp"
 
 #include <CommonStates.h>
@@ -114,11 +115,21 @@ public:
 
 	virtual ShaderStageImpl<ID3D11PixelShader>* CreatePixelShader(std::vector<uint8_t>& shaderCode) override;
 
+	virtual ShaderStageImpl<ID3D11GeometryShader>* CreateGeometryShader(std::vector<uint8_t>& shaderCode) override;
+
 	virtual ShaderStageImpl<ID3D11ComputeShader>* CreateComputeShader(std::vector<uint8_t>& shaderCode) override;
+	virtual ShaderStageImpl<ID3D11ComputeShader>* CreateComputeShaderFromSource(const std::string& shaderSource, const std::string& entryPoint = "MainCS") override;
 
 	virtual InputLayout* CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary) override;
 
 	virtual ConstantBuffer* CreateConstantBuffer(uint32_t size);
+	virtual StructuredBuffer* CreateStructuredBuffer(
+		uint32_t elementStride,
+		uint32_t elementCount,
+		HexEngine::StructuredBufferFlags flags,
+		D3D11_USAGE usage = D3D11_USAGE_DEFAULT,
+		uint32_t cpuAccessFlags = 0,
+		const void* initialData = nullptr) override;
 
 	virtual ConstantBuffer* GetEngineConstantBuffer(HexEngine::EngineConstantBuffer buffer) override;
 
@@ -131,18 +142,36 @@ public:
 	virtual void SetVertexShader(HexEngine::IShaderStage* shader) override;
 
 	virtual void SetPixelShader(HexEngine::IShaderStage* shader) override;
+	virtual void SetGeometryShader(HexEngine::IShaderStage* shader) override;
+	virtual void SetComputeShader(HexEngine::IShaderStage* shader) override;
 
 	virtual void SetInputLayout(HexEngine::IInputLayout* layout) override;
 
 	virtual void SetConstantBufferVS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 
 	virtual void SetConstantBufferPS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
+	virtual void SetConstantBufferGS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
+	virtual void SetConstantBufferCS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 
 	virtual void SetTexture2D(uint32_t slot, HexEngine::ITexture2D* texture) override;
 
 	virtual void SetTexture2D(HexEngine::ITexture2D* texture) override;
 
 	virtual void SetTexture3D(HexEngine::ITexture3D* texture) override;
+	virtual void SetGeometryTexture3D(uint32_t slot, HexEngine::ITexture3D* texture) override;
+	virtual void SetVertexStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer) override;
+	virtual void SetGeometryStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer) override;
+	virtual void SetComputeTexture3D(uint32_t slot, HexEngine::ITexture3D* texture) override;
+	virtual void SetComputeRwTexture3D(uint32_t slot, HexEngine::ITexture3D* texture) override;
+	virtual void SetComputeStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer) override;
+	virtual void SetComputeRwStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer, uint32_t initialCount = 0xFFFFFFFFu) override;
+	virtual void ClearGeometryTexture3D(uint32_t slot) override;
+	virtual void ClearVertexStructuredBuffer(uint32_t slot) override;
+	virtual void ClearComputeTexture3D(uint32_t slot) override;
+	virtual void ClearComputeRwTexture3D(uint32_t slot) override;
+	virtual void ClearGeometryStructuredBuffer(uint32_t slot) override;
+	virtual void ClearComputeStructuredBuffer(uint32_t slot) override;
+	virtual void ClearComputeRwStructuredBuffer(uint32_t slot) override;
 
 	virtual void SetTexture2DArray(uint32_t slot, const std::vector<HexEngine::ITexture2D*>& textures) override;
 
@@ -160,6 +189,10 @@ public:
 	virtual void DrawIndexedInstancedIndirect(void* argsBuffer, uint32_t alignedByteOffset = 0) override;
 
 	virtual void Draw(uint32_t vertexCount, int32_t startVertexLocation = 0) override;
+	virtual void DrawInstancedIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset = 0) override;
+	virtual void Dispatch(uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) override;
+	virtual void DispatchIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset = 0) override;
+	virtual void CopyStructureCount(HexEngine::IStructuredBuffer* sourceBuffer, HexEngine::IStructuredBuffer* destinationBuffer, uint32_t destinationByteOffset = 0) override;
 
 	virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) override;
 

@@ -6,6 +6,7 @@
 #include "../Entity/Component/Light.hpp"
 #include "../Entity/Component/DirectionalLight.hpp"
 #include "IEntityListener.hpp"
+#include "ISceneCustomRenderer.hpp"
 #include "../Graphics/IGraphicsDevice.hpp"
 #include "../GUI/DebugGUI.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
@@ -123,6 +124,7 @@ namespace HexEngine
 		void ForceRebuildPVS();
 
 		void RenderEntities(PVS* pvs, LayerMask layerMask, MeshRenderFlags renderFlags);
+		void RenderCustom(Scene* scene, Camera* camera, MeshRenderFlags renderFlags);
 
 		void OnGUI();
 
@@ -237,6 +239,8 @@ namespace HexEngine
 
 		void RegisterMessageListener(MessageListener* listener);
 		void UnregisterMessageListener(MessageListener* listener);
+		void RegisterCustomRenderer(ISceneCustomRenderer* renderer);
+		void UnregisterCustomRenderer(ISceneCustomRenderer* renderer);
 		void BroadcastMessage(Message* message);
 
 		void Save(json& key, JsonFile* file);
@@ -339,6 +343,7 @@ namespace HexEngine
 		std::recursive_mutex _lock;
 
 		std::vector<MessageListener*> _auxMessageListeners;
+		std::vector<ISceneCustomRenderer*> _customRenderers;
 
 		bool _didAnyDrawnItemReflect = false;
 		bool _wasPvsReset = true;

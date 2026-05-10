@@ -1,0 +1,45 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="Header Files\Terrain">
+      <UniqueIdentifier>{A0D85BF2-E30F-42D5-8B64-6656A9D6F3CC}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\Terrain">
+      <UniqueIdentifier>{C5A428C7-31D4-4E73-BD3A-8D054830CCA8}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Shaders">
+      <UniqueIdentifier>{D9B14C2A-F05C-4A33-97EF-9A38E278A8F6}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="Plugin.hpp"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="VolumetricTerrainEditorTool.hpp"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="VolumetricTerrainInterface.hpp"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="Terrain\MarchingCubes.hpp"><Filter>Header Files\Terrain</Filter></ClInclude>
+    <ClInclude Include="Terrain\SdfTerrainGenerator.hpp"><Filter>Header Files\Terrain</Filter></ClInclude>
+    <ClInclude Include="Terrain\VolumetricTerrain.hpp"><Filter>Header Files\Terrain</Filter></ClInclude>
+    <ClInclude Include="Terrain\VolumetricTerrainChunk.hpp"><Filter>Header Files\Terrain</Filter></ClInclude>
+    <ClInclude Include="Terrain\VolumetricTerrainComponent.hpp"><Filter>Header Files\Terrain</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Plugin.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="VolumetricTerrainEditorTool.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="VolumetricTerrainInterface.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="Terrain\MarchingCubes.cpp"><Filter>Source Files\Terrain</Filter></ClCompile>
+    <ClCompile Include="Terrain\SdfTerrainGenerator.cpp"><Filter>Source Files\Terrain</Filter></ClCompile>
+    <ClCompile Include="Terrain\VolumetricTerrain.cpp"><Filter>Source Files\Terrain</Filter></ClCompile>
+    <ClCompile Include="Terrain\VolumetricTerrainChunk.cpp"><Filter>Source Files\Terrain</Filter></ClCompile>
+    <ClCompile Include="Terrain\VolumetricTerrainComponent.cpp"><Filter>Source Files\Terrain</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Shaders\VolumetricTerrainDensityEdit.compute"><Filter>Shaders</Filter></None>
+  </ItemGroup>
+</Project>

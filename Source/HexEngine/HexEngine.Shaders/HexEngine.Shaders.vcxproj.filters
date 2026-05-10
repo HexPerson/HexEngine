@@ -59,6 +59,8 @@
     <HexEngineShader Include="UIBasicHDRCanvas.shader" />
     <HexEngineShader Include="UIInstancedHDR.shader" />
     <HexEngineShader Include="VolumetricClouds.shader" />
+    <HexEngineShader Include="VolumetricTerrainExtract.shader" />
+    <HexEngineShader Include="VolumetricTerrainSurface.shader" />
     <HexEngineShader Include="VolumetricLighting.shader" />
     <HexEngineShader Include="Water.shader" />
     <HexEngineShader Include="SSR.shader" />
@@ -88,7 +90,7 @@
     <HexEngineShader Include="WaterBlit.shader" />
     <HexEngineShader Include="DiffuseGIShiftVoxel.shader" />
     <HexEngineShader Include="PCSS.shader" />
+    <HexEngineShader Include="AtmospherePhysical.shader" />
+    <HexEngineShader Include="Atmosphere.shader" />
   </ItemGroup>
 </Project>
-
-

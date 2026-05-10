@@ -24,6 +24,7 @@ namespace HexEngine
 		PosColour,
 		PosTexColour,
 		UI_INSTANCED,
+		None,
 
 		Count
 	};
@@ -54,6 +55,9 @@ namespace HexEngine
 		static IInputLayout* GetLayout_PosColour(IShaderStage* vertexShaderStage);
 		static IInputLayout* GetLayout_PosTexColour(IShaderStage* vertexShaderStage);
 		static IInputLayout* GetLayout_UI_INSTANCED(IShaderStage* vertexShaderStage);
+
+	public:
+		InputLayoutId _layoutId = (InputLayoutId)-1;
 	};
 
 }

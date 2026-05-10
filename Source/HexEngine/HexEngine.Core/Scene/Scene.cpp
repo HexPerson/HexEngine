@@ -401,7 +401,7 @@ namespace HexEngine
 		//
 		CreateDefaultSunLight();
 
-		SetFogColour(math::Color(HEX_RGB_TO_FLOAT3(95, 241, 242)));
+		SetFogColour(math::Color(HEX_RGB_TO_FLOAT3(95, 95, 95)));
 
 		_ambientLight = math::Vector4(0.14f, 0.14f, 0.145f, 1.0f);
 
@@ -446,7 +446,7 @@ namespace HexEngine
 		g_pEnv->_debugGui->AddCallback(this);
 #endif
 
-		SetFogColour(math::Color(HEX_RGB_TO_FLOAT3(95, 241, 242)));
+		SetFogColour(math::Color(HEX_RGB_TO_FLOAT3(95, 95, 95)));
 
 		_ambientLight = math::Vector4(0.14f, 0.14f, 0.145f, 1.0f);
 
@@ -844,9 +844,29 @@ namespace HexEngine
 		_auxMessageListeners.push_back(listener);
 	}
 
+	void Scene::RegisterCustomRenderer(ISceneCustomRenderer* renderer)
+	{
+		if (renderer == nullptr)
+		{
+			return;
+		}
+
+		std::unique_lock lock(_lock);
+		if (std::find(_customRenderers.begin(), _customRenderers.end(), renderer) == _customRenderers.end())
+		{
+			_customRenderers.push_back(renderer);
+		}
+	}
+
 	void Scene::UnregisterMessageListener(MessageListener* listener)
 	{
 		_auxMessageListeners.erase(std::remove(_auxMessageListeners.begin(), _auxMessageListeners.end(), listener));
+	}
+
+	void Scene::UnregisterCustomRenderer(ISceneCustomRenderer* renderer)
+	{
+		std::unique_lock lock(_lock);
+		_customRenderers.erase(std::remove(_customRenderers.begin(), _customRenderers.end(), renderer), _customRenderers.end());
 	}
 
 	void Scene::RemoveEntityInternal(Entity* entity)
@@ -1084,19 +1104,37 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		if (_pendingRemovals.size() > 0)
-		{
-			for (auto& ent : _pendingRemovals)
-			{
-				LOG_DEBUG("Entity [%p] was deferred removed", ent);
+		bool removedAny = false;
 
-				RemoveEntityInternal(ent);
+		// Drain in batches: RemoveEntityInternal mutates _pendingRemovals, so iterating
+		// the set directly can invalidate iterators (and crash). Snapshot then clear first.
+		while (_pendingRemovals.size() > 0)
+		{
+			std::vector<EntityId> pendingBatch;
+			pendingBatch.reserve(_pendingRemovals.size());
+			for (auto* ent : _pendingRemovals)
+			{
+				if (ent != nullptr)
+					pendingBatch.push_back(ent->GetId());
 			}
 
 			_pendingRemovals.clear();
 
-			ForceRebuildPVS();
+			for (const EntityId id : pendingBatch)
+			{
+				Entity* ent = TryGetEntity(id);
+				if (ent == nullptr)
+					continue;
+
+				LOG_DEBUG("Entity [%p] was deferred removed", ent);
+
+				removedAny = true;
+				RemoveEntityInternal(ent);
+			}
 		}
+
+		if (removedAny)
+			ForceRebuildPVS();
 	}
 
 	void Scene::HandlePendingAdditions()
@@ -1969,6 +2007,25 @@ namespace HexEngine
 			if (auto* gpuCulling = g_pEnv->_sceneRenderer->GetGpuVisibilityCulling(); gpuCulling != nullptr)
 			{
 				gpuCulling->ReportSubmission(_drawCalls, drawnInstancesTotal);
+			}
+		}
+	}
+
+	void Scene::RenderCustom(Scene* scene, Camera* camera, MeshRenderFlags renderFlags)
+	{
+		(void)scene;
+
+		std::vector<ISceneCustomRenderer*> renderers;
+		{
+			std::unique_lock lock(_lock);
+			renderers = _customRenderers;
+		}
+
+		for (ISceneCustomRenderer* renderer : renderers)
+		{
+			if (renderer != nullptr)
+			{
+				renderer->RenderCustom(this, camera, renderFlags);
 			}
 		}
 	}

@@ -243,6 +243,10 @@ namespace HexEngine
 					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreatePixelShader(shaderBlobs[stage]);
 					break;
 
+				case ShaderStage::GeometryShader:
+					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateGeometryShader(shaderBlobs[stage]);
+					break;
+
 				case ShaderStage::ComputeShader:
 					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateComputeShader(shaderBlobs[stage]);
 					break;
@@ -310,6 +314,10 @@ namespace HexEngine
 
 				case ShaderStage::PixelShader:
 					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreatePixelShader(shaderBlobs[stage]);
+					break;
+
+				case ShaderStage::GeometryShader:
+					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateGeometryShader(shaderBlobs[stage]);
 					break;
 
 				case ShaderStage::ComputeShader:

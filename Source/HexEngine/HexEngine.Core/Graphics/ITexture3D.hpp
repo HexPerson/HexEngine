@@ -36,6 +36,7 @@ namespace HexEngine
 
 		/** @brief Copies the full texture to another 3D texture. */
 		virtual void CopyTo(ITexture3D* other) = 0;
+		virtual bool SupportsRandomWrite() const = 0;
 
 		virtual void SetDebugName(const std::string& name) override
 		{

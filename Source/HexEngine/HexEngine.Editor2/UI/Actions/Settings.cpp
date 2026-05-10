@@ -8,8 +8,6 @@
 namespace HexEngine
 {
 	//extern HVar env_zenithExponent;
-	extern HVar env_anisotropicIntensity;
-	extern HVar env_density;
 	extern HVar env_volumetricScattering;
 	extern HVar env_volumetricStrength;
 	extern HVar env_waterNormalInfluence;
@@ -17,10 +15,93 @@ namespace HexEngine
 	extern HVar r_volumetricQuality;
 	extern HVar r_fog;
 	extern HVar r_fogDensity;
+	extern HVar r_fogStartDistance;
+	extern HVar r_fogHeightDensity;
+	extern HVar r_fogHeightFalloff;
+	extern HVar r_fogHeightPivot;
+	extern HVar r_fogSkyTintInfluence;
+	extern HVar r_fogFarDesaturate;
+	extern HVar r_fogAtmosphereBlendStart;
+	extern HVar r_fogAtmosphereBlendRange;
+	extern HVar r_fogSunsetRange;
+	extern HVar r_fogSunsetWarmthStrength;
+	extern HVar r_fogFarAtmosphereMatchStrength;
 }
 
 namespace HexEditor
 {
+	namespace
+	{
+		struct AtmospherePresetValues
+		{
+			float anisotropicIntensity;
+			float density;
+			float rayleighStrength;
+			float mieStrength;
+			float ambientSkyStrength;
+			float sunHazeStrength;
+			float sunsetWarmStrength;
+			float sunsetCoolStrength;
+			float sunsetGlowStrength;
+		};
+
+		static HexEngine::HVar* FindNamedHVar(const char* name)
+		{
+			return HexEngine::g_pEnv ? HexEngine::g_pEnv->_commandManager->FindHVar(name) : nullptr;
+		}
+
+		static void SetNamedHVarFloat(const char* name, float value)
+		{
+			if (HexEngine::HVar* var = FindNamedHVar(name))
+			{
+				var->_val.f32 = value;
+				var->Clamp();
+			}
+		}
+
+		static int32_t GetNamedHVarInt(const char* name, int32_t fallback = 0)
+		{
+			if (HexEngine::HVar* var = FindNamedHVar(name))
+				return var->_val.i32;
+			return fallback;
+		}
+
+		static void SetNamedHVarInt(const char* name, int32_t value)
+		{
+			if (HexEngine::HVar* var = FindNamedHVar(name))
+			{
+				var->_val.i32 = value;
+				var->Clamp();
+			}
+		}
+
+		static void ApplyAtmospherePreset(int32_t presetIndex)
+		{
+			static const AtmospherePresetValues presets[] =
+			{
+				{ 0.38f, 0.11f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f }, // Custom / current defaults
+				{ 0.30f, 0.085f, 0.78f, 0.50f, 0.72f, 0.62f, 1.18f, 1.10f, 1.08f }, // Crisp Alpine
+				{ 0.34f, 0.105f, 0.70f, 0.72f, 0.88f, 0.78f, 1.35f, 1.22f, 1.18f }, // Warm Plains
+				{ 0.26f, 0.070f, 0.62f, 0.38f, 0.60f, 0.48f, 1.10f, 1.30f, 1.12f }, // High Altitude Clear
+				{ 0.33f, 0.095f, 0.74f, 0.64f, 0.78f, 0.86f, 1.55f, 1.38f, 1.35f }, // Golden Hour
+			};
+
+			const int32_t clampedPreset = std::clamp(presetIndex, 0, 4);
+			SetNamedHVarInt("env_atmospherePreset", clampedPreset);
+
+			const AtmospherePresetValues& preset = presets[clampedPreset];
+			SetNamedHVarFloat("env_anisotropicIntensity", preset.anisotropicIntensity);
+			SetNamedHVarFloat("env_density", preset.density);
+			SetNamedHVarFloat("env_rayleighStrength", preset.rayleighStrength);
+			SetNamedHVarFloat("env_mieStrength", preset.mieStrength);
+			SetNamedHVarFloat("env_ambientSkyStrength", preset.ambientSkyStrength);
+			SetNamedHVarFloat("env_sunHazeStrength", preset.sunHazeStrength);
+			SetNamedHVarFloat("env_sunsetWarmStrength", preset.sunsetWarmStrength);
+			SetNamedHVarFloat("env_sunsetCoolStrength", preset.sunsetCoolStrength);
+			SetNamedHVarFloat("env_sunsetGlowStrength", preset.sunsetGlowStrength);
+		}
+	}
+
 	Settings::Settings(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 		Dialog(parent, position, size, L"Scene Settings")
 	{
@@ -139,9 +220,61 @@ namespace HexEditor
 		};
 
 		pm->_widgetBase = makeSectionTab(L"Environment", L"Environment");
+		auto* atmospherePreset = new HexEngine::DropDown(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_widgetBase), 18), L"Atmosphere Preset");
+		const auto setPresetLabel = [atmospherePreset](int32_t preset)
+		{
+			switch (preset)
+			{
+			case 1: atmospherePreset->SetValue(L"Crisp Alpine"); break;
+			case 2: atmospherePreset->SetValue(L"Warm Plains"); break;
+			case 3: atmospherePreset->SetValue(L"High Altitude Clear"); break;
+			case 4: atmospherePreset->SetValue(L"Golden Hour"); break;
+			case 0:
+			default: atmospherePreset->SetValue(L"Custom"); break;
+			}
+		};
+		setPresetLabel(GetNamedHVarInt("env_atmospherePreset", 0));
+		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"Custom",
+			[setPresetLabel](const std::wstring&)
+			{
+				SetNamedHVarInt("env_atmospherePreset", 0);
+				setPresetLabel(0);
+			}));
+		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"Crisp Alpine",
+			[setPresetLabel](const std::wstring&)
+			{
+				ApplyAtmospherePreset(1);
+				setPresetLabel(1);
+			}));
+		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"Warm Plains",
+			[setPresetLabel](const std::wstring&)
+			{
+				ApplyAtmospherePreset(2);
+				setPresetLabel(2);
+			}));
+		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"High Altitude Clear",
+			[setPresetLabel](const std::wstring&)
+			{
+				ApplyAtmospherePreset(3);
+				setPresetLabel(3);
+			}));
+		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"Golden Hour",
+			[setPresetLabel](const std::wstring&)
+			{
+				ApplyAtmospherePreset(4);
+				setPresetLabel(4);
+			}));
+
 		addFloatControl(pm->_widgetBase, "env_zenithExponent", L"Zenith Exponent", 0.01f, 3);
 		addFloatControl(pm->_widgetBase, "env_anisotropicIntensity", L"Anisotropic Intensity", 0.01f, 3);
 		addFloatControl(pm->_widgetBase, "env_density", L"Density", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_rayleighStrength", L"Rayleigh Strength", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_mieStrength", L"Mie Strength", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_ambientSkyStrength", L"Ambient Sky Fill", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_sunHazeStrength", L"Sun-side Haze", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_sunsetWarmStrength", L"Sunset Warmth", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_sunsetCoolStrength", L"Sunset Cool", 0.01f, 3);
+		addFloatControl(pm->_widgetBase, "env_sunsetGlowStrength", L"Sunset Glow", 0.01f, 3);
 		addFloatControl(pm->_widgetBase, "env_volumetricScattering", L"Volumetric Scattering", 0.01f, 3);
 		addFloatControl(pm->_widgetBase, "env_volumetricStrength", L"Volumetric Strength", 0.01f, 3);
 		addIntControl(pm->_widgetBase, "r_volumetricQuality", L"Volumetric Quality Preset", 1);
@@ -167,6 +300,17 @@ namespace HexEditor
 		pm->_fog = makeSectionTab(L"Fog", L"Fog");
 		addToggleControl(pm->_fog, "r_fog", L"Fog on/off");
 		addFloatControl(pm->_fog, "r_fogDensity", L"Fog Density", 0.0001f, 5);
+		addFloatControl(pm->_fog, "r_fogStartDistance", L"Fog Start Distance", 0.5f, 2);
+		addFloatControl(pm->_fog, "r_fogHeightDensity", L"Height Density", 0.0001f, 5);
+		addFloatControl(pm->_fog, "r_fogHeightFalloff", L"Height Falloff", 0.0001f, 5);
+		addFloatControl(pm->_fog, "r_fogHeightPivot", L"Height Pivot", 0.5f, 2);
+		addFloatControl(pm->_fog, "r_fogSkyTintInfluence", L"Sky Tint Influence", 0.01f, 3);
+		addFloatControl(pm->_fog, "r_fogFarDesaturate", L"Far Desaturate", 0.01f, 3);
+		addFloatControl(pm->_fog, "r_fogAtmosphereBlendStart", L"Atmosphere Blend Start", 1.0f, 1);
+		addFloatControl(pm->_fog, "r_fogAtmosphereBlendRange", L"Atmosphere Blend Range", 1.0f, 1);
+		addFloatControl(pm->_fog, "r_fogSunsetRange", L"Sunset Range", 0.01f, 3);
+		addFloatControl(pm->_fog, "r_fogSunsetWarmthStrength", L"Sunset Warmth", 0.01f, 3);
+		addFloatControl(pm->_fog, "r_fogFarAtmosphereMatchStrength", L"Far Atmosphere Match", 0.01f, 3);
 
 		pm->_clouds = makeSectionTab(L"Clouds", L"Volumetric Clouds");
 		addToggleControl(pm->_clouds, "r_cloudEnable", L"Clouds on/off");

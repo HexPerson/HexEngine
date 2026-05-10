@@ -183,7 +183,11 @@ namespace HexEngine
 		//
 		SAFE_DELETE(_vertexBuffer);
 		SAFE_DELETE(_indexBuffer);
-		SAFE_DELETE(_simpleVertexBuffer);		
+		SAFE_DELETE(_simpleVertexBuffer);
+		_vertexBufferCapacity = 0;
+		_simpleVertexBufferCapacity = 0;
+		_indexBufferCapacity = 0;
+		_isDynamicMesh = false;
 
 		// And finally delete the mesh instance
 		//
@@ -201,6 +205,7 @@ namespace HexEngine
 	{
 		_vertices.clear();
 		_indices.clear();
+		_simpleVertices.clear();
 	}
 
 	Mesh* Mesh::Clone()
@@ -264,6 +269,7 @@ namespace HexEngine
 
 	bool Mesh::CreateBuffers()
 	{
+		_isDynamicMesh = false;
 		if (_vertexBuffer != nullptr || _indexBuffer != nullptr)
 		{
 			LOG_WARN("Trying to create vertex or index buffers for a Mesh when it already has a buffer is ok, but might indicate resources are being wasted");
@@ -283,6 +289,8 @@ namespace HexEngine
 			{
 				return false;
 			}
+
+			_vertexBufferCapacity = static_cast<uint32_t>(_vertices.size());
 		}
 
 		if (_simpleVertexBuffer == nullptr)
@@ -298,6 +306,8 @@ namespace HexEngine
 			{
 				return false;
 			}
+
+			_simpleVertexBufferCapacity = static_cast<uint32_t>(_simpleVertices.size());
 		}
 
 		if (_indexBuffer == nullptr)
@@ -313,8 +323,104 @@ namespace HexEngine
 			{
 				return false;
 			}
+
+			_indexBufferCapacity = static_cast<uint32_t>(_indices.size());
 		}
 
+		return true;
+	}
+
+	bool Mesh::CreateDynamicBuffers(uint32_t vertexCapacity, uint32_t indexCapacity)
+	{
+		const uint32_t safeVertexCapacity = std::max(1u, vertexCapacity);
+		const uint32_t safeIndexCapacity = std::max(1u, indexCapacity);
+
+		SAFE_DELETE(_vertexBuffer);
+		SAFE_DELETE(_simpleVertexBuffer);
+		SAFE_DELETE(_indexBuffer);
+
+		_vertexBuffer = g_pEnv->_graphicsDevice->CreateVertexBuffer(
+			static_cast<int32_t>(safeVertexCapacity * sizeof(MeshVertex)),
+			sizeof(MeshVertex),
+			D3D11_USAGE_DYNAMIC,
+			D3D11_CPU_ACCESS_WRITE);
+		if (_vertexBuffer == nullptr)
+		{
+			return false;
+		}
+
+		_simpleVertexBuffer = g_pEnv->_graphicsDevice->CreateVertexBuffer(
+			static_cast<int32_t>(safeVertexCapacity * sizeof(SimpleMeshVertex)),
+			sizeof(SimpleMeshVertex),
+			D3D11_USAGE_DYNAMIC,
+			D3D11_CPU_ACCESS_WRITE);
+		if (_simpleVertexBuffer == nullptr)
+		{
+			SAFE_DELETE(_vertexBuffer);
+			return false;
+		}
+
+		_indexBuffer = g_pEnv->_graphicsDevice->CreateIndexBuffer(
+			static_cast<int32_t>(safeIndexCapacity * sizeof(MeshIndexFormat)),
+			sizeof(MeshIndexFormat),
+			D3D11_USAGE_DYNAMIC,
+			D3D11_CPU_ACCESS_WRITE);
+		if (_indexBuffer == nullptr)
+		{
+			SAFE_DELETE(_vertexBuffer);
+			SAFE_DELETE(_simpleVertexBuffer);
+			return false;
+		}
+
+		_vertexBufferCapacity = safeVertexCapacity;
+		_simpleVertexBufferCapacity = safeVertexCapacity;
+		_indexBufferCapacity = safeIndexCapacity;
+		_isDynamicMesh = true;
+		return true;
+	}
+
+	bool Mesh::UpdateDynamicGeometry(const std::vector<MeshVertex>& vertices, const std::vector<MeshIndexFormat>& indices)
+	{
+		if (!_isDynamicMesh)
+		{
+			return false;
+		}
+
+		if (vertices.empty() || indices.empty())
+		{
+			Clear();
+			_faceCount = 0;
+			return true;
+		}
+
+		if (_vertexBuffer == nullptr || _simpleVertexBuffer == nullptr || _indexBuffer == nullptr ||
+			static_cast<uint32_t>(vertices.size()) > _vertexBufferCapacity ||
+			static_cast<uint32_t>(indices.size()) > _indexBufferCapacity)
+		{
+			const uint32_t growVertexCapacity = std::max(static_cast<uint32_t>(vertices.size()), std::max(1u, _vertexBufferCapacity * 2u));
+			const uint32_t growIndexCapacity = std::max(static_cast<uint32_t>(indices.size()), std::max(1u, _indexBufferCapacity * 2u));
+			if (!CreateDynamicBuffers(growVertexCapacity, growIndexCapacity))
+			{
+				return false;
+			}
+		}
+
+		_vertices = vertices;
+		_indices = indices;
+		_simpleVertices.clear();
+		_simpleVertices.reserve(vertices.size());
+		for (const auto& vertex : vertices)
+		{
+			SimpleMeshVertex smv;
+			smv._position = vertex._position;
+			smv._texcoord = vertex._texcoord;
+			_simpleVertices.push_back(smv);
+		}
+
+		_vertexBuffer->SetVertexData(reinterpret_cast<uint8_t*>(_vertices.data()), static_cast<uint32_t>(_vertices.size() * sizeof(MeshVertex)));
+		_simpleVertexBuffer->SetVertexData(reinterpret_cast<uint8_t*>(_simpleVertices.data()), static_cast<uint32_t>(_simpleVertices.size() * sizeof(SimpleMeshVertex)));
+		_indexBuffer->SetIndexData(reinterpret_cast<uint8_t*>(_indices.data()), static_cast<uint32_t>(_indices.size() * sizeof(MeshIndexFormat)));
+		_faceCount = static_cast<uint32_t>(_indices.size() / 3);
 		return true;
 	}
 
