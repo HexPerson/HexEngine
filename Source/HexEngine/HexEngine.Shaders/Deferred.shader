@@ -12,6 +12,7 @@
 	ShadowUtils
 	LightingUtils
 	Atmosphere
+	AtmospherePhysical
 	PBRutils
 }
 "VertexShader"
@@ -216,6 +217,12 @@
 		float depthValue = CalculateShadows(shadow, g_cmpSampler, g_pointSampler, SHADOWMAPS, bias);
 		depthValue *= CalculateCloudShadow(pixelPosWS.xyz, lightDir);
 
+		float3 legacySunColour = getSunColour();
+		float3 physicalSunColour = ComputePhysicalSunColour(pixelPosWS.xyz, lightDir);
+		const float legacySunLuma = dot(legacySunColour, float3(0.2126f, 0.7152f, 0.0722f));
+		const float physicalSunLuma = max(dot(physicalSunColour, float3(0.2126f, 0.7152f, 0.0722f)), 1e-4f);
+		physicalSunColour *= legacySunLuma / physicalSunLuma;
+
 		float4 pbr = CalculatePBR(
 			GBUFFER_SPECULAR, 
 			g_pointSampler,
@@ -223,7 +230,7 @@
 			pixelNormal.xyz, 
 			pixelPosWS.xyz, 
 			lightDir, 
-			getSunColour(), 
+			physicalSunColour, 
 			pixelColour.rgb,
 			depthValue,
 			g_globalLight[0]);

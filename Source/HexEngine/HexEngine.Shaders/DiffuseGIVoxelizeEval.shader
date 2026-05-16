@@ -64,6 +64,7 @@
 		float4 g_giParams8;
 		float4 g_giParams9;
 		float4 g_giParams10;
+		float4 g_giParams11;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -372,7 +373,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 
 		const float lum = dot(accum, float3(0.2126f, 0.7152f, 0.0722f));
 		accum = accum / (1.0f + lum * 0.5f);
-		const float localInject = 2.5f;
+		const float localInject = max(g_giParams11.x, 0.0f);
 		const float3 bounced = accum * (localInject * 0.55f) * saturate(albedo);
 		return min(bounced, 32.0f.xxx);
 	}
@@ -669,11 +670,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					const float albedoW = max(prevAlbedoW + triAlbedoW, 1e-4f);
 					const float3 voxelAlbedo = saturate((previousAlbedo.rgb * prevAlbedoW + triAlbedo * triAlbedoW) / albedoW);
 					const float albedoConfidence = saturate(max(previousAlbedo.a * albedoKeep, triAlbedoW));
-					const float albedoInfluence = saturate(g_giParams6.z) * saturate(albedoConfidence * 1.25f);
-					const float3 albedoTint = lerp(1.0f.xxx, voxelAlbedo, albedoInfluence);
-					const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
-					const float3 tintRatio = min(albedoTint / tintLuma, 1.12f.xxx);
-					float3 injected = tri.radianceOpacity.rgb * visibilityFactor * tintRatio;
+					float3 injected = tri.radianceOpacity.rgb * visibilityFactor;
 					const bool gpuComputeBaseSun = gpuComputeBaseSunMode;
 					const float emissiveInject = max(0.0f, g_giParams8.w);
 					const float emissiveLuma = dot(max(emissiveContribution, 0.0f.xxx), float3(0.2126f, 0.7152f, 0.0722f));
@@ -686,20 +683,24 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						const float sunStrength = max(0.0f, g_giParams9.x);
 						const float unlitBase = max(0.0f, g_giParams9.y);
 						const float sunFacing = saturate(triSunFacing);
-						const float sunPresence = saturate(sunStrength * sunInject);
+						const float clipAttenuation = max(g_giParams11.y, 0.0f);
+						const float baseInjectionScale = max(tri.p1.w, 0.0f);
+						const float sunInjectionScale = max(tri.p2.w, 0.0f);
+						const float sunPresenceRaw = sunStrength * sunInject;
+						const float sunPresenceMask = saturate(sunPresenceRaw);
 						const float sunVisible = saturate(sunVisibility);
 						// Treat directionality as a shaping control, not an energy multiplier.
 						// The actual sun-driven GI still requires both facing and visibility.
 						const float sunFacingWeight = sunFacing;
-						const float litFactor = saturate(sunFacingWeight * sunPresence * sunVisible);
+						const float litFactor = saturate(sunFacingWeight * sunPresenceMask * sunVisible);
 						const float unlitWeight = (1.0f - litFactor) * (1.0f - litFactor);
 						const float3 triTransportAlbedo = RemapBounceTransportAlbedo(triAlbedo);
 						const float triTransportLuma = clamp(dot(triTransportAlbedo, float3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
-						const float3 baseDiffuse = triTransportAlbedo * (triTransportLuma * diffuseInject * unlitBase * unlitWeight * 0.48f);
+						const float3 baseDiffuse = triTransportAlbedo * (triTransportLuma * diffuseInject * unlitBase * unlitWeight * 0.48f * clipAttenuation * baseInjectionScale);
 						const float sunDirectionalShape = lerp(0.70f, 1.0f, sunDirectionality);
-						const float sunDirectional = sunFacingWeight * sunStrength * sunInject * sunDirectionalShape * (0.38f + 0.32f * sunBoost);
-						const float3 sunBounce = triTransportAlbedo * (triTransportLuma * sunDirectional * sunVisible);
-						const float3 emissiveBounce = emissiveContribution * emissiveInject;
+						const float sunDirectional = sunFacingWeight * sunPresenceRaw * sunDirectionalShape * (0.38f + 0.32f * sunBoost);
+						const float3 sunBounce = triTransportAlbedo * (triTransportLuma * sunDirectional * sunVisible * clipAttenuation * sunInjectionScale);
+						const float3 emissiveBounce = emissiveContribution * emissiveInject * clipAttenuation * baseInjectionScale;
 						injected = baseDiffuse + sunBounce + emissiveBounce;
 					}
 					else

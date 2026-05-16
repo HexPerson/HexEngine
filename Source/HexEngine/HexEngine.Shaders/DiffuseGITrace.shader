@@ -408,24 +408,6 @@
 		gi *= lerp(0.55f, 1.0f, horizon);
 		gi *= (1.0f - voxelOcc * 0.12f);
 		gi += screenBounce * g_giParams2.x;
-		const float albedoConfidenceSoft = smoothstep(0.15f, 0.80f, voxelAlbedoConfidence);
-		const float albedoInfluence = saturate(g_giParams6.z) * albedoConfidenceSoft;
-		const float3 stableAlbedo = max(voxelAlbedo, float3(0.35f, 0.35f, 0.35f));
-		const float3 albedoTint = lerp(1.0f.xxx, stableAlbedo, albedoInfluence * 0.85f);
-		const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
-		const float3 albedoTintRatio = min(albedoTint / tintLuma, 1.12f.xxx);
-		gi *= albedoTintRatio;
-
-		// Preserve voxel tint in high-chroma regions after probe/screen blending.
-		const float giLum = dot(gi, float3(0.2126f, 0.7152f, 0.0722f));
-		const float voxelLum = dot(voxelRadiance, float3(0.2126f, 0.7152f, 0.0722f));
-		if (voxelLum > 1e-4f && giLum > 1e-4f)
-		{
-			const float3 voxelTint = min(max(0.0f.xxx, voxelRadiance / voxelLum), 1.15f.xxx);
-			const float3 giTinted = voxelTint * giLum;
-			const float tintStrength = saturate(chromaGuidance * 1.2f) * saturate(voxelLum * 1.1f);
-			gi = lerp(gi, giTinted, tintStrength * 0.35f);
-		}
 
 		voxelRadianceOut = voxelRadiance;
 		voxelOccOut = voxelOcc;

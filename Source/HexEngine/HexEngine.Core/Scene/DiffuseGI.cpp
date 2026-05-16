@@ -1958,6 +1958,11 @@ namespace HexEngine
 			std::clamp(r_giGpuEdgeSmoothBlendStrength._val.f32, 0.0f, 1.0f),
 			std::clamp(r_giBounceAlbedoMinLuma._val.f32, 0.0f, 1.0f),
 			std::clamp(r_giBounceAlbedoRemapAmount._val.f32, 0.0f, 1.0f));
+		_constants.params11 = math::Vector4(
+			std::max(0.0f, r_giLocalLightInjection._val.f32),
+			0.0f,
+			0.0f,
+			0.0f);
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresenceMask;
@@ -3893,8 +3898,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 				GpuVoxelTriangle entry = {};
 				entry.p0 = math::Vector4(p0.x, p0.y, p0.z, static_cast<float>(materialProxyIndex));
-				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, 1.0f);
-				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, 1.0f);
+				entry.p1 = math::Vector4(p1.x, p1.y, p1.z, baseSunAreaWeight * meshBaseInjectionScale);
+				entry.p2 = math::Vector4(p2.x, p2.y, p2.z, baseSunAreaWeight * meshSunInjectionScale);
 				entry.uv0uv1 = math::Vector4(u0, v0, u1, v1);
 				const float triMinU = std::min(u0, std::min(u1, u2));
 				const float triMinV = std::min(v0, std::min(v1, v2));
@@ -4761,6 +4766,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_constants.clipPreviousCenterExtent[levelIndex].w =
 			(level.pendingShiftWs.LengthSquared() > 1e-8f) ? 1.0f : 0.0f;
 		_constants.params6.w = static_cast<float>(gpuLightCount);
+		_constants.params11.y = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
 		if (_constantBuffer)
 		{
 			_constantBuffer->Write(&_constants, sizeof(_constants));
