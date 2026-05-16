@@ -1,5 +1,6 @@
-﻿#pragma once
+#pragma once
 
+#include <array>
 #include <compare>
 
 #include "MarchingCubes.hpp"
@@ -57,6 +58,8 @@ namespace HexEngine::VolumetricTerrain
 	class VolumetricTerrainChunk
 	{
 	public:
+		static constexpr uint32_t kGpuSurfaceLodCount = 3;
+
 		// Density convention used throughout volumetric terrain:
 		// density < 0 -> solid voxel space, density >= 0 -> empty space.
 		~VolumetricTerrainChunk();
@@ -73,9 +76,10 @@ namespace HexEngine::VolumetricTerrain
 		bool ApplyBrush(const math::Vector3& center, const BrushSettings& settings, float deltaTime);
 		void ReleaseEntityReferences(bool queueDeleteEntity);
 		void SyncDensityToGpu();
+		void SyncMaterialsToGpu();
 		void SetVisualMeshHidden(bool hidden);
-		bool BuildGpuSurface();
-		void RenderGpuSurface();
+		bool BuildGpuSurface(uint32_t lodIndex);
+		void RenderGpuSurface(uint32_t lodIndex);
 
 		void MarkDirtyAll();
 		void MarkDirtyMeshOnly();
@@ -83,6 +87,7 @@ namespace HexEngine::VolumetricTerrain
 		const ChunkCoord& GetCoord() const { return _coord; }
 		const dx::BoundingBox& GetBounds() const { return _bounds; }
 		bool HasEdits() const { return _hasEdits; }
+		bool HasMaterialEdits() const { return _hasMaterialEdits; }
 		bool IsGenerated() const { return _generated; }
 		bool IsDensityDirty() const { return _densityDirty; }
 		bool IsMeshDirty() const { return _meshDirty; }
@@ -96,11 +101,14 @@ namespace HexEngine::VolumetricTerrain
 
 		const std::vector<float>& GetDensities() const { return _densities; }
 		const std::vector<uint8_t>& GetMaterials() const { return _materials; }
+		const std::vector<uint8_t>& GetMaterialWeights() const { return _materialWeights; }
 		float GetDensityAt(int32_t x, int32_t y, int32_t z) const;
 		void SetDensityAt(int32_t x, int32_t y, int32_t z, float density);
 		uint8_t GetMaterialAt(int32_t x, int32_t y, int32_t z) const;
 		void SetMaterialAt(int32_t x, int32_t y, int32_t z, uint8_t material);
-		void SetEditedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials);
+		std::array<uint8_t, 4> GetMaterialWeightsAt(int32_t x, int32_t y, int32_t z) const;
+		void SetMaterialWeightsAt(int32_t x, int32_t y, int32_t z, const std::array<uint8_t, 4>& weights);
+		void SetEditedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials, const std::vector<uint8_t>& materialWeights = {});
 
 		int32_t GetResolution() const { return _params.chunkResolution; }
 		float GetVoxelSize() const { return _voxelSize; }
@@ -108,8 +116,9 @@ namespace HexEngine::VolumetricTerrain
 		Entity* GetEntity() const { return _entity; }
 		float SampleDensityNearestWorld(const math::Vector3& worldPosition) const;
 		bool EnsureGpuSurfacePipeline();
-		bool EnsureGpuSurfaceResources();
+		bool EnsureGpuSurfaceResources(uint32_t lodIndex);
 		void ReleaseGpuSurfaceResources();
+		void OffsetWorld(const math::Vector3& delta);
 
 	private:
 		float SmoothMin(float a, float b, float k) const;
@@ -126,11 +135,21 @@ namespace HexEngine::VolumetricTerrain
 			int32_t maxZ);
 		bool IsGpuBrushMode(BrushMode mode) const;
 		bool EnsureGpuDensityResources();
+		bool EnsureGpuMaterialResources();
 		void ReleaseGpuDensityResources();
+		void ReleaseGpuMaterialResources();
 		void UploadDensityToGpu();
+		void UploadMaterialsToGpu();
 		void ReadbackDensityFromGpu();
+		std::array<uint8_t, 4> ComputeAutoMaterialWeightsAt(int32_t x, int32_t y, int32_t z) const;
+		void InitializeAutoMaterialWeights();
+		void InitializeMaterialWeightsFromIndices();
+		void SetMaterialWeightsOneHot(size_t voxelIndex, uint8_t materialIndex);
+		void BlendMaterialWeight(size_t voxelIndex, uint8_t materialIndex, float amount);
 		bool ApplyBrushCpu(const math::Vector3& center, const BrushSettings& settings, float deltaTime, bool uploadGpuAfterModify, bool runRelaxation);
 		bool ApplyBrushGpu(const math::Vector3& center, const BrushSettings& settings, float deltaTime);
+		uint32_t GetGpuLodStep(uint32_t lodIndex) const;
+		uint32_t GetGpuLodResolution(uint32_t lodIndex) const;
 		int32_t Index(int32_t x, int32_t y, int32_t z) const;
 		float ComputeFalloff(float distance, float radius, float falloffPower) const;
 		std::vector<float> BuildCollisionDensityField(int32_t collisionResolution) const;
@@ -145,23 +164,24 @@ namespace HexEngine::VolumetricTerrain
 
 		std::vector<float> _densities;
 		std::vector<uint8_t> _materials;
+		std::vector<uint8_t> _materialWeights;
 		bool _generated = false;
 		bool _densityDirty = true;
 		bool _meshDirty = true;
 		bool _collisionDirty = true;
 		bool _materialDirty = true;
 		bool _hasEdits = false;
+		bool _hasMaterialEdits = false;
 
 		Entity* _entity = nullptr;
 		StaticMeshComponent* _meshComponent = nullptr;
 		RigidBody* _rigidBody = nullptr;
 		std::shared_ptr<Mesh> _mesh;
 		ITexture3D* _gpuDensityTexture = nullptr;
-		IStructuredBuffer* _gpuSurfaceTriangles = nullptr;
-		IStructuredBuffer* _gpuSurfaceDrawArgs = nullptr;
-		uint32_t _gpuSurfaceTriangleCapacity = 0;
-		bool _gpuSurfaceReady = false;
+		ITexture3D* _gpuMaterialTexture = nullptr;
+		IStructuredBuffer* _gpuSurfaceTriangles[kGpuSurfaceLodCount] = {};
+		IStructuredBuffer* _gpuSurfaceDrawArgs[kGpuSurfaceLodCount] = {};
+		uint32_t _gpuSurfaceTriangleCapacity[kGpuSurfaceLodCount] = {};
+		bool _gpuSurfaceReady[kGpuSurfaceLodCount] = {};
 	};
 }
-
-

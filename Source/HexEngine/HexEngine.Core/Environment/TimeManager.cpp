@@ -13,6 +13,11 @@ namespace HexEngine
 	using Clock = std::chrono::high_resolution_clock;
 	using TimePointC = std::chrono::time_point<Clock, TimeDuration>;
 
+	namespace
+	{
+		constexpr float kMaxAccumulatedSimulationTime = 0.25f;
+	}
+
 	TimeManager::TimeManager() :
 		_currentTime(0.0f),
 		_frameTime(0.0f),
@@ -108,12 +113,12 @@ namespace HexEngine
 		//	_fps = 0;
 		//}
 
-		// clamp the accumulated time to 5 seconds
-		if (_accumulatedSimulationTime >= 5.0f)
+		// Avoid a long post-hitch catch-up burst after a stalled render frame.
+		if (_accumulatedSimulationTime >= kMaxAccumulatedSimulationTime)
 		{
 			LOG_DEBUG("Very high simulation-time detected (%.3f). This is usually a CPU-bound bottleneck somewhere in the Update or Render chain", _accumulatedSimulationTime);
 
-			_accumulatedSimulationTime = 5.0f;			
+			_accumulatedSimulationTime = kMaxAccumulatedSimulationTime;
 		}
 
 		/*if (_frameTime <= (1.0f / 60.0f))

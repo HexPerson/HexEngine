@@ -6,6 +6,7 @@
 #include "../Entity/Component/Transform.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
 #include "../Entity/Component/PointLight.hpp"
+#include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/FirstPersonCameraController.hpp"
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "PVS.hpp"
@@ -28,6 +29,17 @@ namespace HexEngine
 	HVar phys_debug("phys_debug", "Enable the physics debugger (very slow)", false, false, true);
 	HVar r_debugRenderSkips("r_debugRenderSkips", "Log per-pass render skip counters for scene entity rendering", false, false, true);
 	HVar r_gpuCullUseIndirectDraw("r_gpuCullUseIndirectDraw", "Use indexed-instanced indirect draw submission for scene mesh batches", false, false, true);
+
+	namespace
+	{
+		constexpr float kGiSpatialCellSize = 32.0f;
+		constexpr int32_t kGiSpatialMaxCoveredCells = 512;
+
+		inline int32_t GiSpatialCellCoord(float value)
+		{
+			return static_cast<int32_t>(std::floor(value / kGiSpatialCellSize));
+		}
+	}
 
 	void Scene::ComponentPool::EnsureEntityCapacity(uint32_t slotCount)
 	{
@@ -218,6 +230,154 @@ namespace HexEngine
 	void Scene::MarkEntityViewDirty()
 	{
 		_entityViewDirty = true;
+	}
+
+	uint64_t Scene::GetGiGeometryRevision() const
+	{
+		return _giGeometryRevision;
+	}
+
+	uint64_t Scene::GetGiMaterialRevision() const
+	{
+		return _giMaterialRevision;
+	}
+
+	uint64_t Scene::GetGiLightRevision() const
+	{
+		return _giLightRevision;
+	}
+
+	void Scene::NotifyGiMaterialStateChanged()
+	{
+		std::unique_lock lock(_lock);
+		++_giMaterialRevision;
+	}
+
+	void Scene::NotifyGiLightStateChanged()
+	{
+		std::unique_lock lock(_lock);
+		++_giLightRevision;
+	}
+
+	void Scene::NotifyStaticMeshChanged(StaticMeshComponent* component, bool geometryChanged, bool materialChanged)
+	{
+		std::unique_lock lock(_lock);
+		if (component == nullptr)
+			return;
+
+		if (geometryChanged)
+		{
+			++_giGeometryRevision;
+			_giSpatialCacheDirty = true;
+		}
+
+		if (materialChanged)
+		{
+			++_giMaterialRevision;
+		}
+	}
+
+	void Scene::NotifyEntityTransformChanged(Entity* entity)
+	{
+		std::unique_lock lock(_lock);
+		if (entity == nullptr)
+			return;
+
+		if (auto* staticMesh = entity->GetComponent<StaticMeshComponent>(); staticMesh != nullptr && staticMesh->GetMesh() != nullptr)
+		{
+			++_giGeometryRevision;
+			_giSpatialCacheDirty = true;
+		}
+
+		if (entity->GetComponent<PointLight>() != nullptr ||
+			entity->GetComponent<SpotLight>() != nullptr ||
+			entity->GetComponent<DirectionalLight>() != nullptr)
+		{
+			++_giLightRevision;
+		}
+	}
+
+	bool Scene::IsGiStaticLayer(Layer layer) const
+	{
+		return
+			layer == Layer::StaticGeometry ||
+			layer == Layer::Decorative ||
+			layer == Layer::Grass;
+	}
+
+	void Scene::RebuildGiSpatialCache_NoLock()
+	{
+		_giSpatialEntries.clear();
+		_giSpatialCells.clear();
+		_giSpatialOverflowEntries.clear();
+		_giSpatialQueryStampByComponent.clear();
+		_giSpatialQueryStamp = 1u;
+
+		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
+		if (pool == nullptr)
+		{
+			_giSpatialCacheDirty = false;
+			return;
+		}
+
+		_giSpatialEntries.reserve(pool->components.size());
+		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
+		{
+			auto* component = static_cast<StaticMeshComponent*>(pool->components[denseIndex]);
+			if (component == nullptr || component->GetMesh() == nullptr)
+				continue;
+
+			Entity* entity = TryGetEntity(pool->owners[denseIndex]);
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
+			if (entity->HasFlag(EntityFlags::DoNotRender) && !component->GetIncludeInGIWhenHidden())
+				continue;
+
+			const Layer layer = entity->GetLayer();
+			if (layer == Layer::Sky || layer == Layer::Invisible)
+				continue;
+
+			GiSpatialEntry entry = {};
+			entry.component = component;
+			entry.entity = entity;
+			entry.worldBounds = entity->GetWorldAABB();
+			entry.isStaticLayer = IsGiStaticLayer(layer);
+			const uint32_t entryIndex = static_cast<uint32_t>(_giSpatialEntries.size());
+			_giSpatialEntries.push_back(entry);
+
+			const math::Vector3 center(entry.worldBounds.Center.x, entry.worldBounds.Center.y, entry.worldBounds.Center.z);
+			const math::Vector3 extents(entry.worldBounds.Extents.x, entry.worldBounds.Extents.y, entry.worldBounds.Extents.z);
+			const math::Vector3 min = center - extents;
+			const math::Vector3 max = center + extents;
+			const int32_t minCellX = GiSpatialCellCoord(min.x);
+			const int32_t minCellY = GiSpatialCellCoord(min.y);
+			const int32_t minCellZ = GiSpatialCellCoord(min.z);
+			const int32_t maxCellX = GiSpatialCellCoord(max.x);
+			const int32_t maxCellY = GiSpatialCellCoord(max.y);
+			const int32_t maxCellZ = GiSpatialCellCoord(max.z);
+			const int64_t spanX = static_cast<int64_t>(maxCellX) - static_cast<int64_t>(minCellX) + 1ll;
+			const int64_t spanY = static_cast<int64_t>(maxCellY) - static_cast<int64_t>(minCellY) + 1ll;
+			const int64_t spanZ = static_cast<int64_t>(maxCellZ) - static_cast<int64_t>(minCellZ) + 1ll;
+			const int64_t coveredCells = spanX * spanY * spanZ;
+			if (coveredCells <= 0ll || coveredCells > kGiSpatialMaxCoveredCells)
+			{
+				_giSpatialOverflowEntries.push_back(entryIndex);
+				continue;
+			}
+
+			for (int32_t z = minCellZ; z <= maxCellZ; ++z)
+			{
+				for (int32_t y = minCellY; y <= maxCellY; ++y)
+				{
+					for (int32_t x = minCellX; x <= maxCellX; ++x)
+					{
+						_giSpatialCells[GiSpatialCellKey{ x, y, z }].push_back(entryIndex);
+					}
+				}
+			}
+		}
+
+		_giSpatialCacheDirty = false;
 	}
 
 	void Scene::RebuildEntityViewCache() const
@@ -1021,6 +1181,17 @@ namespace HexEngine
 			_sunLight = component->CastAs<DirectionalLight>();
 		}
 
+		if (component->GetComponentId() == StaticMeshComponent::_GetComponentId())
+		{
+			++_giGeometryRevision;
+			++_giMaterialRevision;
+			_giSpatialCacheDirty = true;
+		}
+		else if (component->CastAs<Light>() != nullptr)
+		{
+			++_giLightRevision;
+		}
+
 		for (auto&& listener : _entityListeners)
 		{
 			listener->OnAddComponent(entity, component);
@@ -1087,6 +1258,17 @@ namespace HexEngine
 		if (auto* light = component->CastAs<Light>(); light != nullptr && light->GetDoesCastShadows())
 		{
 			g_pEnv->_sceneRenderer->RemoveShadowCaster(light);
+		}
+
+		if (component->GetComponentId() == StaticMeshComponent::_GetComponentId())
+		{
+			++_giGeometryRevision;
+			++_giMaterialRevision;
+			_giSpatialCacheDirty = true;
+		}
+		else if (component->CastAs<Light>() != nullptr)
+		{
+			++_giLightRevision;
 		}
 		MarkEntityViewDirty();
 
@@ -1222,17 +1404,14 @@ namespace HexEngine
 			}
 		}
 
-		std::vector<StaticMeshComponent*> meshSet;
+		std::vector<Transform*> transformSet;
 
-		if (GetComponents<StaticMeshComponent>(meshSet))
+		if (GetComponents<Transform>(transformSet))
 		{
-			for (auto&& component : meshSet)
+			for (auto&& transform : transformSet)
 			{
-				const EntityId ownerId = component->GetOwnerId();
-				if (Transform* transform = GetComponent<Transform>(ownerId); transform != nullptr)
-				{
+				if (transform != nullptr)
 					transform->UpdateInterpolatedPosition(r_interpolate._val.b);
-				}
 			}
 		}
 
@@ -1304,6 +1483,11 @@ namespace HexEngine
 		_ambientLight = ambient;
 	}
 
+	void Scene::SetWeatherSurfaceParams(const WeatherSurfaceParams& params)
+	{
+		_weatherSurfaceParams = params;
+	}
+
 	const math::Color& Scene::GetFogColour() const
 	{
 		return _fogColour;
@@ -1312,6 +1496,11 @@ namespace HexEngine
 	const math::Vector4& Scene::GetAmbientColour() const
 	{
 		return _ambientLight;
+	}
+
+	const WeatherSurfaceParams& Scene::GetWeatherSurfaceParams() const
+	{
+		return _weatherSurfaceParams;
 	}
 
 	void Scene::Lock()
@@ -1477,7 +1666,8 @@ namespace HexEngine
 					effectiveBlendState = BlendState::TransparencyPreserveAlpha;
 				}
 			}
-			const DepthBufferState effectiveDepthState = isTransparency && material->GetDepthState() == DepthBufferState::DepthDefault
+			const DepthBufferState effectiveDepthState =
+				(isTransparency && !isWaterMaterial && material->GetDepthState() == DepthBufferState::DepthDefault)
 				? DepthBufferState::DepthRead
 				: material->GetDepthState();
 
@@ -2353,47 +2543,75 @@ namespace HexEngine
 
 		outComponents.clear();
 
-		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
-		if (pool == nullptr)
+		if (_giSpatialCacheDirty)
+		{
+			RebuildGiSpatialCache_NoLock();
+		}
+		if (_giSpatialEntries.empty())
 			return false;
 
-		outComponents.reserve(pool->components.size());
-		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
+		auto appendEntry = [&](uint32_t entryIndex)
 		{
-			auto* component = static_cast<StaticMeshComponent*>(pool->components[denseIndex]);
-			if (component == nullptr || component->GetMesh() == nullptr)
-				continue;
+			if (entryIndex >= _giSpatialEntries.size())
+				return;
 
-			Entity* entity = TryGetEntity(pool->owners[denseIndex]);
-			if (entity == nullptr || entity->IsPendingDeletion())
-				continue;
+			const GiSpatialEntry& entry = _giSpatialEntries[entryIndex];
+			if (entry.component == nullptr || entry.entity == nullptr)
+				return;
+			if (!includeDynamic && !entry.isStaticLayer)
+				return;
+			if (!bounds.Intersects(entry.worldBounds))
+				return;
 
-			if (entity->HasFlag(EntityFlags::DoNotRender))
-				continue;
+			uint32_t& stamp = _giSpatialQueryStampByComponent[entry.component];
+			if (stamp == _giSpatialQueryStamp)
+				return;
+			stamp = _giSpatialQueryStamp;
+			outComponents.push_back(entry.component);
+		};
 
-			const Layer layer = entity->GetLayer();
+		if (_giSpatialQueryStamp == std::numeric_limits<uint32_t>::max())
+		{
+			_giSpatialQueryStampByComponent.clear();
+			_giSpatialQueryStamp = 1u;
+		}
+		else
+		{
+			++_giSpatialQueryStamp;
+		}
 
-			if (layer == Layer::Sky || layer == Layer::Invisible)
-				continue;
+		const math::Vector3 center(bounds.Center.x, bounds.Center.y, bounds.Center.z);
+		const math::Vector3 extents(bounds.Extents.x, bounds.Extents.y, bounds.Extents.z);
+		const math::Vector3 min = center - extents;
+		const math::Vector3 max = center + extents;
+		const int32_t minCellX = GiSpatialCellCoord(min.x);
+		const int32_t minCellY = GiSpatialCellCoord(min.y);
+		const int32_t minCellZ = GiSpatialCellCoord(min.z);
+		const int32_t maxCellX = GiSpatialCellCoord(max.x);
+		const int32_t maxCellY = GiSpatialCellCoord(max.y);
+		const int32_t maxCellZ = GiSpatialCellCoord(max.z);
 
-			if (!includeDynamic)
+		for (int32_t z = minCellZ; z <= maxCellZ; ++z)
+		{
+			for (int32_t y = minCellY; y <= maxCellY; ++y)
 			{
-				
-				const bool isStaticLayer =
-					layer == Layer::StaticGeometry ||
-					layer == Layer::Decorative ||
-					layer == Layer::Grass /*||
-					layer == Layer::Sky*/;
+				for (int32_t x = minCellX; x <= maxCellX; ++x)
+				{
+					const auto it = _giSpatialCells.find(GiSpatialCellKey{ x, y, z });
+					if (it == _giSpatialCells.end())
+						continue;
 
-				if (!isStaticLayer)
-					continue;
+					for (uint32_t entryIndex : it->second)
+					{
+						appendEntry(entryIndex);
+					}
+				}
 			}
+		}
 
-			const auto& worldAabb = entity->GetWorldAABB();
-			if (!bounds.Intersects(worldAabb))
-				continue;
-
-			outComponents.push_back(component);
+		for (uint32_t entryIndex : _giSpatialOverflowEntries)
+		{
+			appendEntry(entryIndex);
 		}
 
 		return !outComponents.empty();

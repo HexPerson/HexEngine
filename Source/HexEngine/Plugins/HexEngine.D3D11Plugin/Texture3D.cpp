@@ -33,8 +33,30 @@ void Texture3D::SetPixels(uint8_t* data, uint32_t size, int32_t slice)
 	}
 
 	auto* gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
-	const uint32_t rowPitch = static_cast<uint32_t>(_width * sizeof(float));
-	const uint32_t depthPitch = static_cast<uint32_t>(_width * _height * sizeof(float));
+	uint32_t bytesPerTexel = sizeof(float);
+	switch (_format)
+	{
+	case DXGI_FORMAT_R8_UINT:
+	case DXGI_FORMAT_R8_UNORM:
+		bytesPerTexel = sizeof(uint8_t);
+		break;
+	case DXGI_FORMAT_R8G8B8A8_UNORM:
+		bytesPerTexel = sizeof(uint8_t) * 4u;
+		break;
+	case DXGI_FORMAT_R16_FLOAT:
+		bytesPerTexel = sizeof(uint16_t);
+		break;
+	case DXGI_FORMAT_R16G16B16A16_FLOAT:
+		bytesPerTexel = sizeof(uint16_t) * 4u;
+		break;
+	case DXGI_FORMAT_R32_FLOAT:
+	default:
+		bytesPerTexel = sizeof(float);
+		break;
+	}
+
+	const uint32_t rowPitch = static_cast<uint32_t>(_width * bytesPerTexel);
+	const uint32_t depthPitch = static_cast<uint32_t>(_width * _height * bytesPerTexel);
 	gfxContext->UpdateSubresource(_texture, 0, nullptr, data, rowPitch, depthPitch);
 }
 

@@ -47,6 +47,9 @@ namespace HexEngine
 		float _sunsetEndHour = 19.0f;
 		float _minSegmentLength = 1.0f;
 		float _sunYawDegrees = 0.0f;
+		float _prevSunPitch = 0.0f;
+		float _prevSunYaw = 0.0f;
+		float _sunLightBoost = 1.0f;
 		math::Color _dayAmbientLight = math::Color(0.14f, 0.14f, 0.145f, 1.0f);
 		math::Color _nightAmbientLight = math::Color(9.0f / 255.0f, 14.0f / 255.0f, 44.0f / 255.0f, 1.0f);
 	};

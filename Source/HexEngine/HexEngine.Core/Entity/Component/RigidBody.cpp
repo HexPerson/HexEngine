@@ -683,6 +683,9 @@ namespace HexEngine
 			g_pEnv->_physicsSystem->DestroyRigidBody(_rigidBody);			
 		}
 
+		if (transform)
+			transform->EnableInterpolation(true);
+
 		_rigidBody = g_pEnv->_physicsSystem->CreateController(params, transform);
 	}
 }

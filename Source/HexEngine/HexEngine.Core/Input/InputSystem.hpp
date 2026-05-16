@@ -152,6 +152,8 @@ namespace HexEngine
 
 		bool IsMouseCursorVisible() { return _mouseCursorVisible; }
 
+		bool IsPositionWithinInputViewport(int32_t x, int32_t y);
+
 		void FireEvent(InputEvent event, InputData* data);
 
 		void Update(float frameTime);

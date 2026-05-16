@@ -84,8 +84,17 @@ namespace HexEngine::VolumetricTerrain
 		file->Deserialize(data, "_brushMaterialIndex", _brush.materialIndex);
 		file->Deserialize(data, "_brushUseGpu", _brush.useGpu);
 
-		_terrain.Initialize(GetEntity(), GetGenerationParams());
-		_terrain.Deserialize(data, file);
+		const bool persistentFile = (file != nullptr && !file->GetAbsolutePath().empty());
+		if (persistentFile)
+		{
+			_terrain.SetOwner(GetEntity());
+			_terrain.Deserialize(data, file);
+		}
+
+		if (!_terrain.IsInitialized())
+		{
+			_terrain.Initialize(GetEntity(), GetGenerationParams());
+		}
 		_initialized = true;
 	}
 
@@ -129,7 +138,11 @@ namespace HexEngine::VolumetricTerrain
 		new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 20), L"Regenerate Terrain",
 			[this](Button*) -> bool
 			{
-				InitializeTerrain();
+				_terrain.Regenerate(true);
+				_initialized = _terrain.IsInitialized();
+				_brushApplyAccumulator = 0.0f;
+				_hasLastBrushApplyPosition = false;
+				_hasBrushPreview = false;
 				return true;
 			});
 
@@ -160,23 +173,13 @@ namespace HexEngine::VolumetricTerrain
 		int32_t my = 0;
 		g_pEnv->_inputSystem->GetMousePosition(mx, my);
 
+		if (!g_pEnv->_inputSystem->IsPositionWithinInputViewport(mx, my))
+			return false;
+
 		auto rayDir = g_pEnv->_inputSystem->GetScreenToWorldRay(camera, mx, my);
 		math::Ray ray;
 		ray.position = camera->GetEntity()->GetWorldTM().Translation();
 		ray.direction = rayDir;
-
-		if (PhysUtils::RayCast(
-			ray,
-			camera->GetFarZ(),
-			0xFFFFFFFFu,
-			&hit,
-			{}))
-		{
-			if (_terrain.FindChunkEntityFromRayHit(hit.entity) != nullptr)
-			{
-				return true;
-			}
-		}
 
 		math::Vector3 fallbackPosition = math::Vector3::Zero;
 		if (_terrain.RaycastTerrainSurface(ray, camera->GetFarZ(), fallbackPosition))
@@ -186,6 +189,28 @@ namespace HexEngine::VolumetricTerrain
 			hit.distance = (fallbackPosition - ray.position).Length();
 			hit.normal = math::Vector3::Up;
 			return true;
+		}
+
+		if (_terrain.RaycastTerrainBounds(ray, fallbackPosition))
+		{
+			hit.position = fallbackPosition;
+			hit.entity = _terrain.GetRootEntity();
+			hit.distance = (fallbackPosition - ray.position).Length();
+			hit.normal = math::Vector3::Up;
+			return true;
+		}
+
+		if (PhysUtils::RayCast(
+			ray,
+			camera->GetFarZ(),
+			LAYERMASK(Layer::StaticGeometry),
+			&hit,
+			{}))
+		{
+			if (_terrain.FindChunkEntityFromRayHit(hit.entity) != nullptr)
+			{
+				return true;
+			}
 		}
 
 		return false;
@@ -264,7 +289,7 @@ namespace HexEngine::VolumetricTerrain
 
 	void VolumetricTerrainComponent::OnDebugRender()
 	{
-		if (!_showDebugBounds || !_initialized)
+		if (!_initialized || (!_showDebugBounds && !_sculptEnabled))
 			return;
 
 		RayHit hit;
@@ -284,10 +309,13 @@ namespace HexEngine::VolumetricTerrain
 			return;
 		}
 
-		dx::BoundingBox brushBox;
-		brushBox.Center = previewPosition;
-		brushBox.Extents = math::Vector3(_brush.radius, _brush.radius, _brush.radius);
-		g_pEnv->_debugRenderer->DrawAABB(brushBox, math::Color(0.1f, 0.8f, 0.2f, 1.0f));
+		if (_sculptEnabled)
+		{
+			dx::BoundingBox brushBox;
+			brushBox.Center = previewPosition;
+			brushBox.Extents = math::Vector3(_brush.radius, _brush.radius, _brush.radius);
+			g_pEnv->_debugRenderer->DrawAABB(brushBox, math::Color(0.1f, 0.8f, 0.2f, 1.0f));
+		}
 	}
 
 	bool VolumetricTerrainComponent::OnInputEvent(InputEvent event, InputData* data)

@@ -144,6 +144,7 @@ namespace HexEngine
 			math::Vector4 params4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
 			math::Vector4 params5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
 			math::Vector4 windDirection; // xyz=windDir, w=qualityPreset
+			math::Vector4 windOffset; // xyz=accumulated wind offset, w=reserved
 			math::Vector4 marchParams; // x=viewSteps, y=lightSteps, z=reserved, w=reserved
 		};
 
@@ -175,6 +176,9 @@ namespace HexEngine
 
 		static bool BuildCloudConstants(Camera* camera, CloudConstants& constants)
 		{
+			static math::Vector3 accumulatedWindOffset = math::Vector3::Zero;
+			static uint64_t lastCloudFrame = 0ull;
+
 			if (camera == nullptr)
 				return false;
 
@@ -204,6 +208,15 @@ namespace HexEngine
 				windDir = math::Vector3::Forward;
 			else
 				windDir.Normalize();
+
+			const uint64_t frameNow = (g_pEnv && g_pEnv->_timeManager) ? g_pEnv->_timeManager->_frameCount : 0ull;
+			if (frameNow != lastCloudFrame)
+			{
+				const float dt = (g_pEnv && g_pEnv->_timeManager) ? std::clamp((float)g_pEnv->_timeManager->_frameTime, 0.0f, 0.1f) : (1.0f / 60.0f);
+				const float windDistance = r_cloudWindSpeed._val.f32 * r_cloudAnimationSpeed._val.f32 * dt * 0.01f;
+				accumulatedWindOffset += windDir * windDistance;
+				lastCloudFrame = frameNow;
+			}
 
 			constants = {};
 			constants.boundsMin = math::Vector4(boundsMin.x, boundsMin.y, boundsMin.z, 0.0f);
@@ -239,6 +252,7 @@ namespace HexEngine
 				r_cloudDirectionalDiffuse._val.f32,
 				r_cloudAmbientOcclusion._val.f32);
 			constants.windDirection = math::Vector4(windDir.x, windDir.y, windDir.z, (float)GetCloudQualityPreset());
+			constants.windOffset = math::Vector4(accumulatedWindOffset.x, accumulatedWindOffset.y, accumulatedWindOffset.z, 0.0f);
 			constants.marchParams = math::Vector4(
 				(float)GetCloudEffectiveSteps(r_cloudViewSteps._val.f32, 8, 256),
 				(float)GetCloudEffectiveSteps(r_cloudLightSteps._val.f32, 2, 64),
@@ -1059,6 +1073,7 @@ namespace HexEngine
 			bufferData._colourGrading.exposure = r_exposure._val.f32;
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
+			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
 
 			// Shadowmap data
 			
@@ -1669,11 +1684,11 @@ namespace HexEngine
 
 			RenderLights();
 			RenderDiffuseGI();
+			RenderTransparent();
 			RenderFog();
 			//RenderWater();
 			RenderVolumetricLighting();
 			RenderVolumetricClouds();
-			RenderTransparent();
 
 			// don't bother doing this if we don't need to, its expensive!
 			if(_currentScene->DidAnyDrawnItemReflect())
@@ -2347,6 +2362,7 @@ namespace HexEngine
 			// Render fog as a post process
 			_gbuffer.BindAsShaderResource(_beautyRT);
 			g_pEnv->_graphicsDevice->SetTexture2D(_atmosphereRT);
+			g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetDepthBuffer());
 			guiRenderer->FullScreenTexturedQuad(nullptr, _fogEffect.get());
 
 			//_fogBuffer->CopyTo(_gbuffer.GetDiffuse());

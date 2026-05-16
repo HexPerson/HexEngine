@@ -153,6 +153,13 @@ namespace HexEngine
 
 		void CalculateBounds(math::Vector3& min, math::Vector3& max);
 		bool GatherStaticMeshesInBounds(const dx::BoundingBox& bounds, std::vector<StaticMeshComponent*>& outComponents, bool includeDynamic = true);
+		uint64_t GetGiGeometryRevision() const;
+		uint64_t GetGiMaterialRevision() const;
+		uint64_t GetGiLightRevision() const;
+		void NotifyGiMaterialStateChanged();
+		void NotifyGiLightStateChanged();
+		void NotifyStaticMeshChanged(StaticMeshComponent* component, bool geometryChanged, bool materialChanged);
+		void NotifyEntityTransformChanged(Entity* entity);
 		void CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
 		void CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
 
@@ -212,8 +219,10 @@ namespace HexEngine
 
 		void SetFogColour(const math::Color& colour);
 		void SetAmbientLight(const math::Vector4& ambient);
+		void SetWeatherSurfaceParams(const WeatherSurfaceParams& params);
 		const math::Color& GetFogColour() const;
 		const math::Vector4& GetAmbientColour() const;
+		const WeatherSurfaceParams& GetWeatherSurfaceParams() const;
 
 		//void RenderSkySphere();
 
@@ -298,8 +307,41 @@ namespace HexEngine
 
 		void AddEntityInternal(Entity* entity);
 		void RemoveEntityInternal(Entity* entity);
+		bool IsGiStaticLayer(Layer layer) const;
+		void RebuildGiSpatialCache_NoLock();
 
 	private:
+		struct GiSpatialCellKey
+		{
+			int32_t x = 0;
+			int32_t y = 0;
+			int32_t z = 0;
+
+			bool operator==(const GiSpatialCellKey& other) const
+			{
+				return x == other.x && y == other.y && z == other.z;
+			}
+		};
+
+		struct GiSpatialCellKeyHash
+		{
+			size_t operator()(const GiSpatialCellKey& key) const
+			{
+				size_t hash = std::hash<int32_t>{}(key.x);
+				hash ^= std::hash<int32_t>{}(key.y) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+				hash ^= std::hash<int32_t>{}(key.z) + 0x9e3779b9u + (hash << 6) + (hash >> 2);
+				return hash;
+			}
+		};
+
+		struct GiSpatialEntry
+		{
+			StaticMeshComponent* component = nullptr;
+			Entity* entity = nullptr;
+			dx::BoundingBox worldBounds = {};
+			bool isStaticLayer = false;
+		};
+
 		std::wstring _name;
 		EntityNamingPolicy _namingPolicy = EntityNamingPolicy::AutoRename;
 
@@ -339,6 +381,7 @@ namespace HexEngine
 		std::vector<IEntityListener*> _entityListeners;
 
 		OceanSettings _oceanSettings;
+		WeatherSurfaceParams _weatherSurfaceParams;
 
 		std::recursive_mutex _lock;
 
@@ -347,6 +390,15 @@ namespace HexEngine
 
 		bool _didAnyDrawnItemReflect = false;
 		bool _wasPvsReset = true;
+		uint64_t _giGeometryRevision = 1ull;
+		uint64_t _giMaterialRevision = 1ull;
+		uint64_t _giLightRevision = 1ull;
+		bool _giSpatialCacheDirty = true;
+		std::vector<GiSpatialEntry> _giSpatialEntries;
+		std::unordered_map<GiSpatialCellKey, std::vector<uint32_t>, GiSpatialCellKeyHash> _giSpatialCells;
+		std::vector<uint32_t> _giSpatialOverflowEntries;
+		std::unordered_map<StaticMeshComponent*, uint32_t> _giSpatialQueryStampByComponent;
+		uint32_t _giSpatialQueryStamp = 1u;
 		
 	};
 }

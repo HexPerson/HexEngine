@@ -179,6 +179,10 @@ namespace HexEngine
 			file->Deserialize(properties, "isWater", props.isWater);
 			file->Deserialize(properties, "specularProbability", props.specularProbability);
 
+			bool affectsGI = true;
+			file->Deserialize(properties, "affectsGI", affectsGI);
+			material->SetAffectsGI(affectsGI);
+
 			bool emissiveAffectsGI = false;
 			file->Deserialize(properties, "emissiveAffectsGI", emissiveAffectsGI);
 			material->SetEmissiveAffectsGI(emissiveAffectsGI);
@@ -501,6 +505,7 @@ namespace HexEngine
 			file.Serialize(properties, "emissiveColour", material->_properties.emissiveColour);
 			file.Serialize(properties, "hasTransparency", material->_properties.hasTransparency);
 			file.Serialize(properties, "isWater", material->_properties.isWater);
+			file.Serialize(properties, "affectsGI", material->GetAffectsGI());
 			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());
 		}
 

@@ -69,6 +69,7 @@ namespace HexEngine
 		SERIALIZE_VALUE(_sunYawDegrees);
 		SERIALIZE_VALUE(_dayAmbientLight);
 		SERIALIZE_VALUE(_nightAmbientLight);
+		SERIALIZE_VALUE(_sunLightBoost);
 	}
 
 	void DayNightCycleComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
@@ -88,6 +89,7 @@ namespace HexEngine
 		DESERIALIZE_VALUE(_sunYawDegrees);
 		DESERIALIZE_VALUE(_dayAmbientLight);
 		DESERIALIZE_VALUE(_nightAmbientLight);
+		DESERIALIZE_VALUE(_sunLightBoost);
 
 		SetHoursPerDay(_hoursPerDay);
 		SetSunriseStartHour(_sunriseStartHour);
@@ -282,6 +284,22 @@ namespace HexEngine
 			SetMinSegmentLength(value);
 		});
 
+		auto* sunLightBoost = new DragFloat(
+			widget,
+			widget->GetNextPos(),
+			Point(widget->GetSize().x - 140, 18),
+			L"Sun Light Boost",
+			&_sunLightBoost,
+			0.01f,
+			10.0f,
+			0.01f,
+			2);
+		sunLightBoost->SetPrefabOverrideBinding(GetComponentName(), "/_sunLightBoost");
+		sunLightBoost->SetOnDrag([this](float value, float, float)
+			{
+				_sunLightBoost = value;
+			});
+
 		auto* dayAmbient = new ColourPicker(
 			widget,
 			widget->GetNextPos(),
@@ -327,8 +345,14 @@ namespace HexEngine
 		if (pitch > 180.0f)
 			pitch -= 360.0f;
 
-		const auto rotation = math::Quaternion::CreateFromYawPitchRoll(ToRadian(_sunYawDegrees), ToRadian(pitch), ToRadian(0.0f));
-		transform->SetRotationNoNotify(rotation);
+		if (fabs(_prevSunPitch - pitch) >= 0.01f || fabs(_sunYawDegrees - _prevSunYaw) >= 0.01f)
+		{
+			const auto rotation = math::Quaternion::CreateFromYawPitchRoll(ToRadian(_sunYawDegrees), ToRadian(pitch), ToRadian(0.0f));
+			transform->SetRotation(rotation);
+
+			_prevSunPitch = pitch;
+			_prevSunYaw = _sunYawDegrees;
+		}
 	}
 
 	void DayNightCycleComponent::ApplyAmbientLight()
@@ -345,7 +369,7 @@ namespace HexEngine
 
 		if (auto light = GetEntity()->GetComponent<DirectionalLight>(); light != nullptr)
 		{
-			light->SetLightMultiplier(daylight);
+			light->SetLightMultiplier(daylight * _sunLightBoost);
 		}
 	}
 

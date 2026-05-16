@@ -110,6 +110,24 @@
 		float colour_pad;
 	};
 
+	struct WeatherSurfaceParams
+	{
+		float wetness;
+		float puddleAmount;
+		float snowCoverage;
+		float snowMelt;
+		float dirtAmount;
+		float temperatureBias;
+		float precipitationIntensity;
+		float lightningFlash;
+		float4 windDirectionAndSpeed;
+		float4 lightningBoltData;
+		float4 lightningBoltDirection;
+		float4 auroraParams;
+		float4 auroraColorA;
+		float4 auroraColorB;
+	};
+
 	// This is the constant buffer that is updated once per frame
 	cbuffer PerFrameBuffer : register(b0)
 	{
@@ -165,6 +183,7 @@
 		Bloom g_bloom;
 		OceanSettings g_oceanConfig;
 		ColourGradeSettings g_colourGrading;
+		WeatherSurfaceParams g_weatherSurface;
 
 		float2 g_jitterOffsets;
 		uint g_frame;

@@ -168,18 +168,12 @@ namespace HexEngine
 					cacheNeedsClearing = true;
 				}
 
-				//_previousPosition = _position;
-				_previous.position = _interpolated.position;
-
 				_interpolated.rotation = math::Quaternion::Slerp(_previous.rotation, _current.rotation, (float)g_pEnv->_timeManager->_interpolationFactor);
 
 				if (_interpolated.rotation != _previous.rotation)
 				{
 					cacheNeedsClearing = true;
 				}
-
-				//_previousRotation = _rotation;
-				_previous.rotation = _interpolated.rotation;
 
 				if (cacheNeedsClearing)
 				{
@@ -458,6 +452,8 @@ namespace HexEngine
 
 		GetEntity()->OnMessage(&message, this);
 
+		GetEntity()->ClearTransformCache();
+
 		_cached.rotation = rotation;
 	}
 
@@ -489,7 +485,7 @@ namespace HexEngine
 		_eulerAnglesDeg.y = ToDegree(_eulerAngles.y);
 		_eulerAnglesDeg.z = ToDegree(_eulerAngles.z);
 
-		GetEntity()->ClearTransformCache();
+		GetEntity()->ClearTransformCache(false);
 
 		_cached.rotation = rotation;
 	}

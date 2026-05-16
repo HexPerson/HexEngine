@@ -30,6 +30,7 @@
 {
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	Texture2D g_atmosphereTexture : register(t5);
+	Texture2D g_depthTexture : register(t6);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -46,16 +47,20 @@
 		// Sample the gbuffer
 		//
 		float4 pixelColour = GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos);
-		float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
-		float4 worldPos = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
+		float depthSample = g_depthTexture.Sample(g_pointSampler, screenPos).r;
 
 		// don't fog over emissive pixels
-		if (pixelNormal.w == g_frustumDepths[3])
+		if (depthSample >= 0.999999f)
 		{
 			return float4(pixelColour.rgb, 1.0f);
 		}
 
-		float fogDist = length(worldPos.xyz - g_eyePos.xyz);
+		float2 ndcXY = float2(screenPos.x * 2.0f - 1.0f, (1.0f - screenPos.y) * 2.0f - 1.0f);
+		float4 clipPos = float4(ndcXY, depthSample, 1.0f);
+		float4 worldPosH = mul(clipPos, g_viewProjectionMatrixInverse);
+		float3 worldPos = worldPosH.xyz / max(worldPosH.w, 1e-5f);
+
+		float fogDist = length(worldPos - g_eyePos.xyz);
 		float startDistance = max(0.0f, g_atmosphere.fogStartDistance);
 		float distanceDensity = max(0.0f, g_atmosphere.fogDensity);
 		float heightDensity = max(0.0f, g_atmosphere.fogHeightDensity);
@@ -85,7 +90,7 @@
 		float extinction = distExtinction + heightExtinction;
 		float fogFactor = saturate(1.0f - exp2(-extinction));
 
-		float3 rayDir = normalize(worldPos.xyz - g_eyePos.xyz);
+		float3 rayDir = normalize(worldPos - g_eyePos.xyz);
 		float3 sunDir = normalize(-g_lightDirection.xyz);
 
 		// Use the physical model for spectral attenuation along the view ray.
@@ -151,6 +156,15 @@
 		float dayWeight = 1.0f - nightWeight;
 		float distanceDesat = farDesatStrength * distanceAtmosphereBlend * lerp(0.30f, 0.10f, dayWeight);
 		fogColour = lerp(fogColour, fogLuma.xxx, distanceDesat);
+
+		float lightningFlash = saturate(g_weatherSurface.lightningFlash);
+		if (lightningFlash > 0.0001f)
+		{
+			float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+			float forwardScatter = saturate(dot(rayDir, lightningDir) * 0.5f + 0.5f);
+			float3 lightningFog = float3(0.62f, 0.76f, 1.0f) * lightningFlash;
+			fogColour += lightningFog * (0.10f + 0.24f * fogFactor + 0.22f * heightFogWeight + 0.16f * forwardScatter);
+		}
 
 		// Use spectral transmittance from the physical ray march, but keep the old height fog amount.
 		float3 surfaceAttenuation = lerp(float3(1.0f, 1.0f, 1.0f), raySample.transmittance, fogFactor);

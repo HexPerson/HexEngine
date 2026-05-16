@@ -564,7 +564,7 @@ namespace HexEngine
 
 				if (entity->GetScene() == _iconScene.get())
 				{
-					_iconScene->DestroyEntity(entity);
+					_iconScene->DestroyEntity(entity, false);
 				}
 			}
 		}
@@ -965,7 +965,7 @@ namespace HexEngine
 					auto material = BuildIconPreviewMaterial(path);
 					if (material == nullptr)
 					{
-						_iconScene->DestroyEntity(dummyEnt);
+						_iconScene->DestroyEntity(dummyEnt, false);
 						_queuedPaths.erase(path);
 						return;
 					}
@@ -977,7 +977,7 @@ namespace HexEngine
 				}
 				else
 				{
-					_iconScene->DestroyEntity(dummyEnt);
+					_iconScene->DestroyEntity(dummyEnt, false);
 				}
 			}
 			else if (extension == ".hprefab")

@@ -5,6 +5,7 @@
 #include "UpdateComponent.hpp"
 #include "../../Math/FloatMath.hpp"
 #include "../../HexEngine.hpp"
+#include "../../Scene/Scene.hpp"
 
 namespace HexEngine
 {
@@ -132,7 +133,10 @@ namespace HexEngine
 
 	void Light::SetLightMultiplier(float value)
 	{
-		_lightMultiplier = std::clamp(value, 0.0f, 1.0f);
+		//const float clamped = std::clamp(value, 0.0f, 1.0f);
+		//if (std::abs(_lightMultiplier - clamped) <= 1e-4f)
+		//	return;
+		_lightMultiplier = value;
 	}
 
 	float Light::GetLightMultiplier() const
@@ -142,8 +146,14 @@ namespace HexEngine
 
 	void Light::SetLightStength(float value)
 	{
+		if (std::abs(_strength - value) <= 1e-4f && std::abs(_originalStrength - value) <= 1e-4f)
+			return;
 		_strength = value;
 		_originalStrength = value;
+		if (auto* entity = GetEntity(); entity != nullptr && entity->GetScene() != nullptr)
+		{
+			entity->GetScene()->NotifyGiLightStateChanged();
+		}
 	}
 
 	float Light::GetLightStrength() const
@@ -163,7 +173,13 @@ namespace HexEngine
 
 	void Light::SetInjectIntoGI(bool injectIntoGI)
 	{
+		if (_injectIntoGI == injectIntoGI)
+			return;
 		_injectIntoGI = injectIntoGI;
+		if (auto* entity = GetEntity(); entity != nullptr && entity->GetScene() != nullptr)
+		{
+			entity->GetScene()->NotifyGiLightStateChanged();
+		}
 	}
 
 	bool Light::GetInjectIntoGI() const

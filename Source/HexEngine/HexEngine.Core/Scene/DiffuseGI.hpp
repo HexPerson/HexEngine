@@ -51,6 +51,7 @@ namespace HexEngine
 		struct ClipmapLevel
 		{
 			math::Vector3 center = math::Vector3::Zero;
+			math::Vector3 previousCenter = math::Vector3::Zero;
 			math::Vector3 targetCenter = math::Vector3::Zero;
 			float extent = 64.0f;
 			uint32_t resolution = 48;
@@ -83,6 +84,7 @@ namespace HexEngine
 		struct GIConstants
 		{
 			math::Vector4 clipCenterExtent[ClipmapCount];
+			math::Vector4 clipPreviousCenterExtent[ClipmapCount];
 			math::Vector4 clipVoxelInfo[ClipmapCount];
 			math::Vector4 params0; // x=intensity, y=energyClamp, z=debugMode, w=activeClipmap
 			math::Vector4 params1; // x=hysteresis, y=historyReject, z=halfResInvW, w=halfResInvH
@@ -94,7 +96,7 @@ namespace HexEngine
 			math::Vector4 params7; // x=gpuMaterialProxyBlend, y=gpuComputeBaseSunEnabled, zw=reserved
 			math::Vector4 params8; // x=diffuseInject, y=sunInject, z=sunDirectionalBoost, w=emissiveInject
 			math::Vector4 params9; // x=sunStrength, y=unlitAlbedoInjection, z=maxVoxelTestsPerTri, w=sunShadowMode
-			math::Vector4 params10; // x=gpuEdgeSmoothThreshold, y=gpuEdgeSmoothBlendStrength, zw=reserved
+			math::Vector4 params10; // x=gpuEdgeSmoothThreshold, y=gpuEdgeSmoothBlendStrength, z=bounceAlbedoMinLuma, w=bounceAlbedoRemapAmount
 		};
 
 		struct GpuVoxelTriangle
@@ -135,6 +137,15 @@ namespace HexEngine
 			bool hasTexture = false;
 			const void* textureIdentity = nullptr;
 			std::vector<uint8_t> pixels;
+		};
+
+		struct MeshEmissiveCacheEntry
+		{
+			const Material* material = nullptr;
+			uint64_t transformVersion = 0ull;
+			math::Vector2 uvScale = math::Vector2(1.0f, 1.0f);
+			float score = 0.0f;
+			math::Vector4 uvRect = math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
 		};
 
 		struct MaterialAlbedoCacheKey
@@ -264,7 +275,7 @@ namespace HexEngine
 	private:
 		bool CreateClipmapResources();
 		void DestroyClipmapResources();
-		void RebuildClipmapTransforms(const math::Vector3& cameraPosition);
+		void RebuildClipmapTransforms(const math::Vector3& cameraPosition, bool movementActive);
 		void UpdateClipmapData(Scene* scene, uint32_t levelIndex);
 		void UpdateProbeAtlases(ClipmapLevel& level);
 		void UpdateConstants(Scene* scene);
@@ -325,11 +336,16 @@ namespace HexEngine
 		float _lastMeshSunInjectionNormalization = 0.0f;
 		float _lastMeshBaseInjectionMinScale = 0.02f;
 		float _lastMeshSunInjectionMinScale = 0.20f;
+		float _lastBounceAlbedoMinLuma = 0.22f;
+		float _lastBounceAlbedoRemapAmount = 0.75f;
+		bool _lastTerrainProxyEnable = false;
+		float _lastTerrainProxyInjectionScale = 0.02f;
 		bool _lastGpuComputeBaseSunEnabled = false;
 		uint64_t _lastInjectLightSignature = 0ull;
 		math::Vector3 _lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		bool _lastSunDirectionInitialized = false;
 		uint32_t _sunRelightFramesRemaining = 0;
+		uint32_t _lightResetFramesRemaining = 0u;
 		math::Vector3 _lastCameraPosition = math::Vector3::Zero;
 		bool _lastCameraPositionInitialized = false;
 		uint32_t _cameraMotionFramesRemaining = 0u;
@@ -342,6 +358,7 @@ namespace HexEngine
 		std::unordered_map<MaterialAlbedoCacheKey, math::Vector3, MaterialAlbedoCacheKeyHash> _materialAlbedoCache;
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleAlbedoCache;
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleEmissiveCache;
+		std::unordered_map<StaticMeshComponent*, MeshEmissiveCacheEntry> _meshEmissiveCache;
 		std::vector<GpuVoxelTriangle> _voxelTriangleUpload;
 		std::vector<GiMeshInstanceProxy> _giMeshProxies;
 		std::vector<GiMaterialProxy> _giMaterialProxies;
@@ -401,6 +418,12 @@ namespace HexEngine
 		std::array<uint32_t, ClipmapCount> _cachedEmissiveTiledTriangleCount = { 0u, 0u, 0u, 0u };
 		std::array<float, ClipmapCount> _cachedEmissiveProxyMaxLuma = { 0.0f, 0.0f, 0.0f, 0.0f };
 		std::array<float, ClipmapCount> _cachedEmissiveProxyMaxStrength = { 0.0f, 0.0f, 0.0f, 0.0f };
+		std::array<uint64_t, ClipmapCount> _cachedSceneGeometryRevision = { 0ull, 0ull, 0ull, 0ull };
+		std::array<uint64_t, ClipmapCount> _cachedSceneMaterialRevision = { 0ull, 0ull, 0ull, 0ull };
+		std::array<uint64_t, ClipmapCount> _cachedSceneLightRevision = { 0ull, 0ull, 0ull, 0ull };
 		std::array<uint32_t, ClipmapCount> _clipmapWarmFramesRemaining = { 0u, 0u, 0u, 0u };
+		std::array<uint64_t, ClipmapCount> _clipmapLastVoxelizationFrame = { 0ull, 0ull, 0ull, 0ull };
+		uint32_t _sunRelightCooldownFrames = 0u;
+		uint64_t _lastObservedSceneLightRevision = 0ull;
 	};
 }

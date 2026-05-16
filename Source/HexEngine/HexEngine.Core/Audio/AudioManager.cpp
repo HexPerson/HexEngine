@@ -16,7 +16,7 @@ namespace HexEngine
 	{
 		std::shared_ptr<SoundEffect> effect = std::shared_ptr<SoundEffect>(new SoundEffect, ResourceDeleter());
 
-		effect->_effect = new dx::SoundEffect(this->_engine, absolutePath.c_str());
+		effect->_effect = std::make_shared<dx::SoundEffect>(this->_engine, absolutePath.c_str());
 		effect->_instance = effect->_effect->CreateInstance(dx::SoundEffectInstance_Use3D /*| dx::SoundEffectInstance_ReverbUseFilters*/);
 
 		_createdSounds.push_back(effect);
@@ -31,11 +31,9 @@ namespace HexEngine
 		effect->_wavData = std::make_unique<uint8_t[]>(data.size());
 		memcpy(effect->_wavData.get(), data.data(), data.size());
 
-		effect->_wavInfo = malloc(sizeof(dx::WAVData));
+		dx::WAVData wavData;
 
-		dx::WAVData* wd = (dx::WAVData*)effect->_wavInfo;
-
-		HRESULT hr = dx::LoadWAVAudioInMemoryEx(effect->_wavData.get(), data.size(), *wd);
+		HRESULT hr = dx::LoadWAVAudioInMemoryEx(effect->_wavData.get(), data.size(), wavData);
 
 		if (FAILED(hr))
 		{
@@ -44,7 +42,7 @@ namespace HexEngine
 			return nullptr;
 		}		
 
-		effect->_effect = new dx::SoundEffect(this->_engine, effect->_wavData, wd->wfx, wd->startAudio, wd->audioBytes);// , wavInfo.seek, wavInfo.seekCount);
+		effect->_effect = std::make_shared<dx::SoundEffect>(this->_engine, effect->_wavData, wavData.wfx, wavData.startAudio, wavData.audioBytes);
 		effect->_instance = effect->_effect->CreateInstance(dx::SoundEffectInstance_Use3D /*| dx::SoundEffectInstance_ReverbUseFilters*/);
 
 		_createdSounds.push_back(effect);
@@ -120,9 +118,14 @@ namespace HexEngine
 				_listener.SetPosition(mainCamera->GetEntity()->GetPosition());
 				_listener.SetOrientation(mainCamera->GetEntity()->GetComponent<Transform>()->GetForward(), math::Vector3::Up);
 
-				for (auto& sound : _createdSounds)
+				for (auto it = _createdSounds.begin(); it != _createdSounds.end(); )
 				{
-					auto sp = sound.lock();
+					auto sp = it->lock();
+					if (!sp)
+					{
+						it = _createdSounds.erase(it);
+						continue;
+					}
 
 					if (sp->_is3D && sp->IsPlaying())
 					{
@@ -137,6 +140,8 @@ namespace HexEngine
 						//sound->_emitter.SetPosition(sound->_emitter.Position);// .x, math::Vector3::Up, g_pEnv->_timeManager->_frameTime);
 						sp->_instance->Apply3D(_listener, sp->_emitter);
 					}
+
+					++it;
 				}
 			}
 		}
@@ -145,6 +150,7 @@ namespace HexEngine
 	void AudioManager::Play(const std::shared_ptr<SoundEffect>& effect)
 	{
 		//effect->_effect->Play(effect->_volume, 0.0f, 0.0f);
+		effect->_is3D = false;
 		effect->_instance->Stop(true);
 		effect->_instance->SetVolume(effect->_volume);
 		effect->_instance->Play(false);
@@ -152,6 +158,7 @@ namespace HexEngine
 
 	void AudioManager::Loop(const std::shared_ptr<SoundEffect>& effect)
 	{
+		effect->_is3D = false;
 		effect->_instance->Stop(true);
 		effect->_instance->Play(true);
 	}

@@ -8,6 +8,15 @@ namespace HexEngine
 {
 	namespace
 	{
+		bool IsNumericValueType(MaterialGraphValueType type)
+		{
+			return type == MaterialGraphValueType::Scalar ||
+				type == MaterialGraphValueType::Vector2 ||
+				type == MaterialGraphValueType::Vector3 ||
+				type == MaterialGraphValueType::Vector4 ||
+				type == MaterialGraphValueType::UV;
+		}
+
 		bool IsCompatible(
 			const MaterialGraph& graph,
 			const MaterialGraphConnection& connection,
@@ -15,6 +24,9 @@ namespace HexEngine
 			MaterialGraphValueType to)
 		{
 			if (from == to)
+				return true;
+
+			if (IsNumericValueType(from) && IsNumericValueType(to))
 				return true;
 
 			if ((from == MaterialGraphValueType::Scalar && to == MaterialGraphValueType::Vector2) ||
@@ -26,6 +38,13 @@ namespace HexEngine
 
 			if ((from == MaterialGraphValueType::Vector3 && to == MaterialGraphValueType::Vector4) ||
 				(from == MaterialGraphValueType::Vector4 && to == MaterialGraphValueType::Vector3))
+			{
+				return true;
+			}
+
+			if ((from == MaterialGraphValueType::Vector2 && to == MaterialGraphValueType::Scalar) ||
+				(from == MaterialGraphValueType::Vector3 && to == MaterialGraphValueType::Scalar) ||
+				(from == MaterialGraphValueType::Vector4 && to == MaterialGraphValueType::Scalar))
 			{
 				return true;
 			}

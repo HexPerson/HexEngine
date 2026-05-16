@@ -9,8 +9,7 @@ namespace HexEngine
 	constexpr X3DAUDIO_DISTANCE_CURVE_POINT c_defaultCurvePoints[2] = { { 0.0f, 1.0f }, { 1.0f, 0.0f } };
 	constexpr X3DAUDIO_DISTANCE_CURVE c_defaultCurve = { const_cast<X3DAUDIO_DISTANCE_CURVE_POINT*>(c_defaultCurvePoints), 2 };
 
-	SoundEffect::SoundEffect() :
-		_wavInfo(nullptr)
+	SoundEffect::SoundEffect()
 	{
 		//_emitter.EnableDefaultCurves();	
 	}
@@ -20,6 +19,28 @@ namespace HexEngine
 		return dynamic_pointer_cast<SoundEffect>(g_pEnv->GetResourceSystem().LoadResource(path));
 	}
 #pragma optimize("", on)
+
+	std::shared_ptr<SoundEffect> SoundEffect::CreatePlaybackClone() const
+	{
+		if (_effect == nullptr)
+			return nullptr;
+
+		std::shared_ptr<SoundEffect> clone(new SoundEffect(), [](SoundEffect* sound)
+			{
+				if (sound != nullptr)
+				{
+					sound->Destroy();
+					delete sound;
+				}
+			});
+		clone->_effect = _effect;
+		clone->_volume = _volume;
+		clone->_emitter = _emitter;
+		clone->_is3D = _is3D;
+		clone->_radius = _radius;
+		clone->_instance = _effect->CreateInstance(dx::SoundEffectInstance_Use3D);
+		return clone;
+	}
 
 	void SoundEffect::SetVolume(float volume)
 	{
@@ -46,17 +67,17 @@ namespace HexEngine
 
 	float SoundEffect::GetDuration()
 	{
-		return (float)(_effect->GetSampleDurationMS() / 1000);
+		return _effect ? (float)(_effect->GetSampleDurationMS() / 1000) : 0.0f;
 	}
 
 	bool SoundEffect::IsInUse() const
 	{
-		return _effect->IsInUse();
+		return _effect ? _effect->IsInUse() : false;
 	}
 
 	bool SoundEffect::IsPlaying() const
 	{
-		return _instance->GetState() == dx::SoundState::PLAYING;
+		return _instance && _instance->GetState() == dx::SoundState::PLAYING;
 	}
 
 	float SoundEffect::GetRadius() const

@@ -54,6 +54,7 @@
 	cbuffer GIConstants : register(b4)
 	{
 		float4 g_clipCenterExtent[4];
+		float4 g_clipPreviousCenterExtent[4];
 		float4 g_clipVoxelInfo[4];
 		float4 g_giParams0; // x=intensity, y=energyClamp, z=debugMode, w=activeClipmap
 		float4 g_giParams1; // x=hysteresis, y=historyReject, z=halfInvW, w=halfInvH
@@ -403,7 +404,7 @@
 		// Keep probe contribution lower in strongly chromatic voxel regions (typical local colored lights)
 		// to avoid desaturating into neutral/white halos.
 		const float probeBlend = probeBlendBase * (1.0f - chromaGuidance * 0.75f);
-		float3 gi = lerp(voxelRadiance * 0.85f, probeGi, saturate(probeBlend));
+		float3 gi = lerp(voxelRadiance * 0.92f, probeGi, saturate(probeBlend));
 		gi *= lerp(0.55f, 1.0f, horizon);
 		gi *= (1.0f - voxelOcc * 0.12f);
 		gi += screenBounce * g_giParams2.x;
@@ -412,17 +413,18 @@
 		const float3 stableAlbedo = max(voxelAlbedo, float3(0.35f, 0.35f, 0.35f));
 		const float3 albedoTint = lerp(1.0f.xxx, stableAlbedo, albedoInfluence * 0.85f);
 		const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
-		gi *= (albedoTint / tintLuma);
+		const float3 albedoTintRatio = min(albedoTint / tintLuma, 1.12f.xxx);
+		gi *= albedoTintRatio;
 
 		// Preserve voxel tint in high-chroma regions after probe/screen blending.
 		const float giLum = dot(gi, float3(0.2126f, 0.7152f, 0.0722f));
 		const float voxelLum = dot(voxelRadiance, float3(0.2126f, 0.7152f, 0.0722f));
 		if (voxelLum > 1e-4f && giLum > 1e-4f)
 		{
-			const float3 voxelTint = max(0.0f.xxx, voxelRadiance / voxelLum);
+			const float3 voxelTint = min(max(0.0f.xxx, voxelRadiance / voxelLum), 1.15f.xxx);
 			const float3 giTinted = voxelTint * giLum;
-			const float tintStrength = saturate(chromaGuidance * 1.8f) * saturate(voxelLum * 1.4f);
-			gi = lerp(gi, giTinted, tintStrength * 0.75f);
+			const float tintStrength = saturate(chromaGuidance * 1.2f) * saturate(voxelLum * 1.1f);
+			gi = lerp(gi, giTinted, tintStrength * 0.35f);
 		}
 
 		voxelRadianceOut = voxelRadiance;
@@ -456,6 +458,7 @@
 		const float motionClipBias = saturate(0.25f + g_giParams7.w * 0.75f);
 		const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 		const float shiftSettle = saturate(g_giParams6.y);
+		const float clip0Block = shiftSettle;
 
 		const float3 worldNormal = normalize(pixelNormalDepth.xyz);
 		const float3 screenBounce = (g_giParams2.x > 0.0001f)
@@ -481,6 +484,8 @@
 		for (uint i = 0; i < 4; ++i)
 		{
 			const float3 clipCenter = g_clipCenterExtent[i].xyz;
+			const float3 previousClipCenter = g_clipPreviousCenterExtent[i].xyz;
+			const float clipSettle = saturate(g_clipPreviousCenterExtent[i].w);
 			const float clipExtent = max(g_clipCenterExtent[i].w, 1e-3f);
 			const float3 uvw = ((pixelPosWS.xyz - clipCenter) / (clipExtent * 2.0f)) + 0.5f;
 			if (!IsInside01(uvw))
@@ -506,27 +511,45 @@
 					Hash12(seed.yx + float2(5.71f, 29.37f)),
 					Hash12(seed + float2(41.27f, 3.97f))) - float3(0.5f, 0.5f, 0.5f)) * (invRes * jitterScale);
 			EvaluateClipContribution(i, uvw, jitterUVW, worldNormal, screenBounce, voxelCurrent, occCurrent, probeCurrent, giCurrent);
-
 			// Blend all overlapping clipmaps with normalized weights to avoid visible handoff rings.
 			const float edgeDistanceX = min(uvw.x, 1.0f - uvw.x);
 			const float edgeDistanceZ = min(uvw.z, 1.0f - uvw.z);
 			const float edgeDistance = min(edgeDistanceX, edgeDistanceZ);
 			const float blendWidth = max(0.001f, saturate(g_giParams4.y + motionFactor * 0.03f + warmStabilize * 0.08f + shiftSettle * 0.08f));
 			const float edgeWeight = smoothstep(0.0f, blendWidth, edgeDistance);
-			const float fidelityWeight = exp2(-2.0f * (float)i);
+			const float fidelityWeight = rcp(1.0f + 0.35f * (float)i);
 			float clipWeight = edgeWeight * fidelityWeight;
-			// During clipmap shift settle, reduce cross-clip weight churn by biasing toward
-			// higher-fidelity clipmaps (especially clip 0 when available).
-			if (shiftSettle > 0.0001f)
+			if (clipSettle > 0.0001f)
 			{
-				const float settleBias = lerp(1.0f, exp2(-2.5f * (float)i), shiftSettle);
-				clipWeight *= settleBias;
+				float stabilityScale = 1.0f;
+				if (i == 0u)
+				{
+					stabilityScale = lerp(1.0f, 0.93f, clipSettle);
+				}
+				else if (i == 1u)
+				{
+					stabilityScale = lerp(1.0f, 1.05f, clipSettle);
+				}
+				else
+				{
+					stabilityScale = lerp(1.0f, 1.01f, clipSettle * 0.10f);
+				}
+				clipWeight *= stabilityScale;
+			}
+			// Only de-emphasize clip 0 while there is an actual voxel-field shift in progress.
+			if (i == 0u)
+			{
+				clipWeight *= lerp(1.0f, 0.85f, clip0Block);
+			}
+			else if (i == 1u)
+			{
+				clipWeight *= lerp(1.0f, 1.10f, clip0Block);
 			}
 			// Keep some preference for the near clip while moving, but avoid creating
 			// a bright camera-centered bubble by collapsing almost entirely to clip 0.
-			if (motionClipBias > 0.0001f)
+			if (motionClipBias > 0.0001f && clip0Block < 0.001f)
 			{
-				const float motionBias = lerp(1.0f, exp2(-1.5f * (float)i), motionClipBias * 0.45f);
+				const float motionBias = lerp(1.0f, rcp(1.0f + 0.20f * (float)i), motionClipBias * 0.35f);
 				clipWeight *= motionBias;
 			}
 			if (i == 3u)
@@ -592,7 +615,8 @@
 
 		const float raysPerProbe = foundClip ? g_clipVoxelInfo[chosenClip].w : 1.0f;
 		const float rayQuality = saturate((raysPerProbe - 1.0f) / 7.0f);
-		gi *= lerp(0.85f, 1.0f, rayQuality);
+		const float probeUsage = saturate(g_giParams2.y * 4.0f);
+		gi *= lerp(1.0f, lerp(0.85f, 1.0f, rayQuality), probeUsage);
 		gi *= lerp(0.35f.xxx, 1.00f.xxx, saturate(pixelDiffuse.rgb));
 
 		// Reduce indirect on strongly sun-facing receivers to avoid same-surface "self-bounce"

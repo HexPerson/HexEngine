@@ -18,6 +18,7 @@
 	ShadowUtils
 	Utils
 	LightingUtils
+	PBRutils
 }
 "VertexShader"
 {

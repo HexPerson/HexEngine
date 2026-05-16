@@ -219,7 +219,7 @@ namespace HexEngine
 		const math::Matrix& GetLocalTM();
 		uint64_t GetTransformVersion() const { return _transformVersion; }
 
-		void ClearTransformCache();
+		void ClearTransformCache(bool notify=true);
 
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
 		void BroadcastMessage(Message* message);

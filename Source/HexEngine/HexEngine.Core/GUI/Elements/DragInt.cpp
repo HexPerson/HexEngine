@@ -28,6 +28,7 @@ namespace HexEngine
 
 			if (delta != 0)
 			{
+				_canvas.Redraw();
 
 				*_value += delta * _scale;
 
@@ -59,7 +60,7 @@ namespace HexEngine
 
 	bool DragInt::OnInputEvent(InputEvent event, InputData* data)
 	{
-		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _hovering)
+		if (event == InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && IsMouseOver(true))
 		{
 			if (_startDrag == -1)
 			{

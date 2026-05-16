@@ -141,6 +141,21 @@
 			clip(-1);
 		}
 
+		if (g_material.isInTransparencyPhase != 0)
+		{
+			const float4 litSurface = CalculatePBRSurface(
+				metalness,
+				roughness,
+				worldNormal,
+				input.positionWS.xyz,
+				-normalize(g_lightDirection.xyz),
+				getSunColour(),
+				albedo.rgb,
+				1.0f,
+				g_globalLight[0]);
+			finalRGB = litSurface.rgb + emission;
+		}
+
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
 		//velocity *= float2(g_screenWidth, g_screenHeight);
 

@@ -8,6 +8,7 @@
 #include "AssetSearch.hpp"
 #include "../../FileSystem/FileSystem.hpp"
 #include "../../Environment/LogFile.hpp"
+#include "../../Scene/SceneManager.hpp"
 
 namespace HexEngine
 {
@@ -46,6 +47,8 @@ namespace HexEngine
 
 		auto metallicFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Metallic Factor", &material->_properties.metallicFactor, 0.0f, 1.0f, 0.01f, 2);
 		auto roughnessFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Roughness Factor", &material->_properties.roughnessFactor, 0.0f, 1.0f, 0.01f, 2);
+		_affectsGI = _material->GetAffectsGI();
+		_affectsGiToggle = new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Affects GI", &_affectsGI);
 		_emissiveAffectsGI = _material->GetEmissiveAffectsGI();
 		_emissiveGiToggle = new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Emissive Affects GI", &_emissiveAffectsGI);
 
@@ -61,7 +64,12 @@ namespace HexEngine
 
 	bool MaterialDialog::Save()
 	{
+		_material->SetAffectsGI(_affectsGI);
 		_material->SetEmissiveAffectsGI(_emissiveAffectsGI);
+		if (auto scene = g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr ? g_pEnv->_sceneManager->GetCurrentScene() : nullptr; scene != nullptr)
+		{
+			scene->NotifyGiMaterialStateChanged();
+		}
 		_material->Save();
 		DeleteMe();
 		return true;

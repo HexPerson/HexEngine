@@ -153,6 +153,25 @@ namespace HexEngine
 		float colour_pad;
 	};
 
+	/** @brief Weather surface/material parameters uploaded per frame for weather-aware shaders. */
+	struct WeatherSurfaceParams
+	{
+		float wetness = 0.0f;
+		float puddleAmount = 0.0f;
+		float snowCoverage = 0.0f;
+		float snowMelt = 0.0f;
+		float dirtAmount = 0.0f;
+		float temperatureBias = 0.0f;
+		float precipitationIntensity = 0.0f;
+		float lightningFlash = 0.0f;
+		math::Vector4 windDirectionAndSpeed = math::Vector4(0.0f, 0.0f, 1.0f, 0.0f);
+		math::Vector4 lightningBoltData = math::Vector4::Zero; // x=intensity y=seed z=progress w=width
+		math::Vector4 lightningBoltDirection = math::Vector4(0.0f, 1.0f, 0.0f, 0.0f); // xyz=sky direction w=branching
+		math::Vector4 auroraParams = math::Vector4::Zero; // x=intensity y=speed z=banding w=height
+		math::Vector4 auroraColorA = math::Vector4(0.10f, 0.90f, 0.65f, 1.0f);
+		math::Vector4 auroraColorB = math::Vector4(0.32f, 0.38f, 1.00f, 1.0f);
+	};
+
 	/** @brief Cached graphics state snapshot used to reduce redundant state changes. */
 	struct RenderState
 	{
@@ -219,6 +238,7 @@ namespace HexEngine
 		BloomParams _bloom;
 		OceanSettings _oceanConfig;
 		ColourGradeSettings _colourGrading;
+		WeatherSurfaceParams _weatherSurface;
 
 		math::Vector2 _jitterOffsets;
 		uint32_t _frame;

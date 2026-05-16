@@ -9,7 +9,7 @@
 "PixelShaderIncludes"
 {
 	UICommon
-	Atmosphere
+	AtmospherePhysical
 	Utils
 }
 "VertexShader"
@@ -50,6 +50,7 @@
 		float4 g_cloudParams4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
 		float4 g_cloudParams5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
 		float4 g_cloudWindDirection; // xyz=wind direction, w=quality preset
+		float4 g_cloudWindOffset; // xyz=accumulated wind offset, w=reserved
 		float4 g_cloudMarch; // x=view steps, y=light steps, z=ground shadow steps, w=ground shadow strength
 	};
 
@@ -196,19 +197,32 @@
 		const float noise = g_noiseTexture.Sample(g_linearSampler, noiseUv).r;
 		const float jitter = frac(noise + Hash12(input.position.xy) + frac(g_time * 0.1337f));
 
-		const float3 windDir = normalize(g_cloudWindDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
-		const float3 windOffset = windDir * g_cloudParams2.z * g_cloudParams2.w * (g_time * 0.01f);
+		const float3 windOffset = g_cloudWindOffset.xyz;
 		const float3 sunDir = normalize(-g_lightDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
-		const float3 sunColour = getSunColour() * max(0.0f, g_globalLight[0]);
+		const float3 cloudProbeOrigin = float3(0.0f, lerp(boundsMin.y, boundsMax.y, 0.58f), 0.0f);
+		const float3 cloudSunRadiance = ComputePhysicalSunColour(cloudProbeOrigin, sunDir);
+		const float cloudSunLuma = max(dot(cloudSunRadiance, float3(0.299f, 0.587f, 0.114f)), 0.001f);
+		const float3 cloudSunHue = cloudSunRadiance / cloudSunLuma;
+		const float sunElevation = -g_lightDirection.y;
+		const float sunsetAmount = saturate((0.22f - sunElevation) / 0.32f);
+		const float3 cloudSunBalancedHue = lerp(cloudSunHue, float3(1.0f, 0.78f, 0.58f), sunsetAmount * 0.55f);
+		const float3 cloudSunColour = cloudSunBalancedHue * max(g_globalLight[0], 0.35f) * 0.55f;
+		const float3 horizonProbeDir = normalize(float3(-sunDir.x, 0.10f, -sunDir.z));
+		const float3 zenithProbeDir = float3(0.0f, 1.0f, 0.0f);
+		const PhysicalAtmosphereSample cloudHorizonProbe = IntegrateAtmospherePhysical(cloudProbeOrigin, horizonProbeDir, g_frustumDepths[3], sunDir, 12, false);
+		const PhysicalAtmosphereSample cloudZenithProbe = IntegrateAtmospherePhysical(cloudProbeOrigin, zenithProbeDir, g_frustumDepths[3], sunDir, 12, false);
+		const float lightningFlash = saturate(g_weatherSurface.lightningFlash);
+		const float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+		const float3 lightningColour = float3(0.64f, 0.78f, 1.0f) * lightningFlash;
 		const float hgPhase = HenyeyGreenstein(dot(rayDir, sunDir), g_cloudParams1.z);
 		const float isotropicPhase = 1.0f / (4.0f * PI);
 		const float phase = lerp(isotropicPhase, hgPhase, 0.75f) * g_cloudParams3.w;
-		const float3 ambientSky = lerp(g_globalLight.yzw, g_atmosphere.ambientLight.rgb, 0.60f) * g_cloudParams3.y;
+		const float3 ambientSky = lerp(cloudHorizonProbe.inscatter, cloudZenithProbe.inscatter, 0.30f) * g_cloudParams3.y;
 		const float skyLuma = dot(ambientSky, float3(0.299f, 0.587f, 0.114f));
 		const float3 ambientNeutral = skyLuma.xxx;
 		const float3 ambientChromatic = lerp(ambientNeutral, ambientSky, saturate(g_cloudParams5.y));
-		const float3 ambientShaded = lerp(ambientChromatic, sunColour, saturate(g_cloudParams5.x) * 0.45f);
-		const float3 topTint = lerp(ambientShaded, sunColour, 0.70f);
+		const float3 ambientShaded = lerp(ambientChromatic, cloudSunColour, saturate(g_cloudParams5.x) * 0.28f);
+		const float3 topTint = lerp(ambientShaded, cloudSunColour, 0.48f);
 		const float3 bottomTint = lerp(ambientNeutral, ambientShaded, 0.88f);
 
 		float transmittance = 1.0f;
@@ -235,6 +249,8 @@
 				const float densityTowardSun = SampleCloudDensity(samplePos + sunDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
 				const float derivativeDiffuse = saturate((density - densityTowardSun) * 2.25f + 0.12f);
 				const float directionalDiffuse = lerp(1.0f, derivativeDiffuse, saturate(g_cloudParams5.z));
+				const float densityTowardLightning = SampleCloudDensity(samplePos + lightningDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
+				const float lightningDerivative = saturate((density - densityTowardLightning) * 2.0f + 0.10f);
 				const float silverLining = pow(saturate(shadowAmount), max(0.5f, g_cloudParams4.y)) * g_cloudParams4.x;
 				const float multiScatter = 1.0f + shadowAmount * g_cloudParams4.z;
 				const float height01 = saturate((samplePos.y - boundsMin.y) / max(1.0f, boundsMax.y - boundsMin.y));
@@ -247,9 +263,12 @@
 				const float forwardGlow = pow(viewToSun, 4.0f) * saturate(1.0f - density * 0.95f) * (0.25f + 0.75f * shadowAmount);
 				const float coreDarken = lerp(1.0f, 0.72f, saturate(density * 0.9f));
 				const float edgeBoost = 1.0f + edgeFactor * 0.24f;
-				const float3 directLight = ((lightTrans * powder * phase * sunColour + silverLining * sunColour * (0.35f + 0.65f * viewToSun)) * edgeBoost + sunColour * forwardGlow * g_cloudParams4.x * 0.40f) * multiScatter * directionalDiffuse;
-				const float3 ambientLight = ambientShaded * (0.35f + shadowAmount * 0.65f) * (1.0f + shadowAmount * 0.25f * g_cloudParams4.z) * aoTerm * coreDarken;
-				cloudLight += scatter * (directLight + ambientLight) * stylizedTint;
+				const float3 directLight = ((lightTrans * powder * phase * cloudSunColour + silverLining * cloudSunColour * (0.22f + 0.48f * viewToSun)) * edgeBoost + cloudSunColour * forwardGlow * g_cloudParams4.x * 0.22f) * multiScatter * directionalDiffuse;
+				const float lightningScatterPhase = 0.35f + 0.65f * saturate(dot(rayDir, lightningDir) * 0.5f + 0.5f);
+				const float lightningEdge = pow(saturate(1.0f - density), 1.4f);
+				const float3 lightningLight = lightningColour * (0.34f + lightningDerivative * 0.66f) * lightningScatterPhase * (0.55f + lightningEdge * 0.45f);
+				const float3 ambientLight = (ambientShaded * (0.35f + shadowAmount * 0.65f) + lightningColour * (0.08f + 0.14f * lightningEdge)) * (1.0f + shadowAmount * 0.25f * g_cloudParams4.z) * aoTerm * coreDarken;
+				cloudLight += scatter * (directLight + ambientLight + lightningLight) * stylizedTint;
 
 				transmittance *= exp(-density * baseStep * invCloudHeight * g_cloudParams3.x);
 				if (transmittance < 0.01f)

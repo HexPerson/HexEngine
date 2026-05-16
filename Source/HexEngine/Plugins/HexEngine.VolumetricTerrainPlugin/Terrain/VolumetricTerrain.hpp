@@ -19,6 +19,8 @@ namespace HexEngine::VolumetricTerrain
 		ChunkCoord coord;
 		std::vector<float> densities;
 		std::vector<uint8_t> materials;
+		std::vector<uint8_t> materialWeights;
+		bool hasMaterialEdits = false;
 	};
 
 	class VolumetricTerrain : public HexEngine::ISceneCustomRenderer
@@ -28,12 +30,14 @@ public:
 		~VolumetricTerrain();
 
 		void Initialize(Entity* owner, const SdfTerrainGenerationParams& params);
+		void Regenerate(bool preserveEdits);
 		void RebuildAll(bool rebuildCollision);
 		void Tick(float deltaTime);
 		bool ApplyBrush(const math::Vector3& worldPosition, const BrushSettings& settings, float deltaTime);
 		void QueueCollisionRefresh();
 		void FlushCollisionRefresh();
 		void SetSculptingActive(bool active) { _sculptingActive = active; }
+		void SetOwner(Entity* owner);
 
 		void Serialize(json& data, JsonFile* file);
 		void Deserialize(json& data, JsonFile* file);
@@ -52,6 +56,7 @@ public:
 		virtual void RenderCustom(Scene* scene, Camera* camera, MeshRenderFlags renderFlags) override;
 
 	private:
+		void BuildGpuVisualsOrFallback(bool rebuildCollisionFallback);
 		void BuildChunks();
 		void StitchChunkBorders();
 		void StitchChunkBordersAt(const ChunkCoord& coord);
@@ -64,6 +69,7 @@ public:
 	private:
 		Entity* _owner = nullptr;
 		Entity* _rootEntity = nullptr;
+		math::Vector3 _lastOwnerPosition = math::Vector3::Zero;
 		SdfTerrainGenerationParams _params;
 		BrushSettings _brush;
 		MarchingCubes _marchingCubes;

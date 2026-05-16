@@ -6,6 +6,30 @@
 #include <HexEngine.Core/Environment/LogFile.hpp>
 #include <HexEngine.Core/Entity/Entity.hpp>
 #include <HexEngine.Core/Entity/Component/RigidBody.hpp>
+#include <cmath>
+
+namespace
+{
+	constexpr float kMinTriangleMeshScale = 0.001f;
+	constexpr float kTriangleMeshWeldTolerance = 0.001f;
+
+	float SanitizeTriangleMeshScaleAxis(float value)
+	{
+		if (!std::isfinite(value))
+			return 1.0f;
+
+		const float absValue = std::abs(value);
+		return absValue < kMinTriangleMeshScale ? kMinTriangleMeshScale : absValue;
+	}
+
+	physx::PxMeshScale BuildSafeTriangleMeshScale(const math::Vector3& requestedScale)
+	{
+		return physx::PxMeshScale(physx::PxVec3(
+			SanitizeTriangleMeshScaleAxis(requestedScale.x),
+			SanitizeTriangleMeshScaleAxis(requestedScale.y),
+			SanitizeTriangleMeshScaleAxis(requestedScale.z)));
+	}
+}
 
 RigidBodyPhysX::RigidBodyPhysX(physx::PxRigidActor* body, HexEngine::RigidBody* bodyComponent, HexEngine::Entity* entity) :
 	_body(body),
@@ -136,10 +160,8 @@ void RigidBodyPhysX::UpdateTriangleMeshScale(const math::Vector3& scale)
 			const physx::PxTriangleMeshGeometry& geom = static_cast<const physx::PxTriangleMeshGeometry&>(_shape->getGeometry());
 
 			physx::PxTriangleMeshGeometry newGeom = geom;
-
-			newGeom.scale.scale.x = scale.x;
-			newGeom.scale.scale.y = scale.y;
-			newGeom.scale.scale.z = scale.z;
+			const math::Vector3 absoluteScale = _entity ? _entity->GetAbsoluteScale() : scale;
+			newGeom.scale = BuildSafeTriangleMeshScale(absoluteScale);
 
 			_shape->setGeometry(newGeom);
 		}
@@ -393,6 +415,13 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 {
 	g_pPhysx->GetScene()->lockWrite();
 
+	if (vertices.empty() || faceCount == 0 || indices.size() < static_cast<size_t>(faceCount) * 3)
+	{
+		LOG_CRIT("Invalid triangle mesh collider input: vertices=%zu indices=%zu faceCount=%u", vertices.size(), indices.size(), faceCount);
+		g_pPhysx->GetScene()->unlockWrite();
+		return nullptr;
+	}
+
 	physx::PxTriangleMeshDesc meshDesc;
 	meshDesc.points.count = (uint32_t)vertices.size();
 	meshDesc.points.stride = sizeof(physx::PxVec3);
@@ -406,13 +435,22 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 
 	physx::PxTolerancesScale scale;
 	physx::PxCookingParams params(scale);
-	// disable mesh cleaning - perform mesh validation on development configurations
-	params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_CLEAN_MESH;
+	// Triangle meshes used by the character controller must be cleaned; otherwise a
+	// single bad triangle can survive cooking and crash later in sweep tests.
+	// Use a small weld tolerance to collapse near-duplicate vertices without
+	// materially changing normal scene geometry.
+	params.meshWeldTolerance = kTriangleMeshWeldTolerance;
+	params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eWELD_VERTICES;
 	// disable edge precompute, edges are set for each triangle, slows contact generation
 	params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
 	// lower hierarchy for internal mesh
 	//params.meshCookingHint = physx::PxMeshCookingHint::eCOOKING_PERFORMANCE;
 	params.midphaseDesc.setToDefault(physx::PxMeshMidPhase::eBVH34);
+
+	if (!PxValidateTriangleMesh(params, meshDesc))
+	{
+		LOG_WARN("Triangle mesh collider failed PhysX validation before cooking; attempting cleaned+welded cook anyway (weldTolerance=%f)", kTriangleMeshWeldTolerance);
+	}
 
 	//g_pPhysx->GetCooking()->setParams(params);
 
@@ -429,10 +467,22 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 	auto mesh = g_pPhysx->GetPhysics()->createTriangleMesh(readBuffer);
 #else
 	physx::PxDefaultMemoryOutputStream buf;
-	PxCookTriangleMesh(params, meshDesc, buf);
+	physx::PxTriangleMeshCookingResult::Enum result = physx::PxTriangleMeshCookingResult::eFAILURE;
+	if (!PxCookTriangleMesh(params, meshDesc, buf, &result))
+	{
+		LOG_CRIT("PxCookTriangleMesh failed for collider mesh (result=%u, vertices=%zu, faces=%u)", static_cast<uint32_t>(result), vertices.size(), faceCount);
+		g_pPhysx->GetScene()->unlockWrite();
+		return nullptr;
+	}
 
 	physx::PxDefaultMemoryInputData input(buf.getData(), buf.getSize());
 	physx::PxTriangleMesh* mesh = g_pPhysx->GetPhysics()->createTriangleMesh(input);
+	if (mesh == nullptr)
+	{
+		LOG_CRIT("createTriangleMesh() returned null after successful cooking");
+		g_pPhysx->GetScene()->unlockWrite();
+		return nullptr;
+	}
 
 	//auto mesh = g_pPhysx->GetCooking()->createTriangleMesh(meshDesc, g_pPhysx->GetPhysics()->getPhysicsInsertionCallback());
 #endif
@@ -440,17 +490,10 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 
 	physx::PxTriangleMeshGeometry* triGeom = (physx::PxTriangleMeshGeometry*)_geometry;
 
-	auto realScale = _transform->GetScale();
-
-	auto parent = GetEntity()->GetParent();
-	while (parent)
-	{
-		realScale *= parent->GetComponent<HexEngine::Transform>()->GetScale();
-		parent = parent->GetParent();
-	}
+	const math::Vector3 realScale = _entity ? _entity->GetAbsoluteScale() : _transform->GetScale();
 
 	triGeom->triangleMesh = mesh;
-	triGeom->scale = physx::PxMeshScale(*(physx::PxVec3*)&realScale.x);
+	triGeom->scale = BuildSafeTriangleMeshScale(realScale);
 
 	_shape = g_pPhysx->GetPhysics()->createShape(*triGeom, *g_pPhysx->GetDefaultMaterial(), exclusive);
 

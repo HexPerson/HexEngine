@@ -24,6 +24,7 @@
 		float4 g_chunkGrassColor;
 		float4 g_chunkRockColor;
 		float4 g_chunkSnowColor;
+		float4 g_chunkDirtColor;
 	};
 
 	static const int2 kTetEdges[6] =
@@ -71,10 +72,10 @@
 		return g_densityField.Load(int4(p, 0));
 	}
 
-	float3 CellCornerWorld(int3 cell, int corner, float voxelSize, float3 chunkOrigin)
+	float3 CellCornerWorld(int3 coarseCell, int corner, float voxelSize, float3 chunkOrigin)
 	{
 		int3 o = int3(kCornerX[corner], kCornerY[corner], kCornerZ[corner]);
-		return chunkOrigin + float3(cell + o) * voxelSize;
+		return chunkOrigin + float3(coarseCell + o) * voxelSize;
 	}
 
 	float3 InterpolateIso(float3 a, float3 b, float da, float db)
@@ -126,24 +127,28 @@
 	[numthreads(4, 4, 4)]
 	void ShaderMain(uint3 id : SV_DispatchThreadID)
 	{
-		const int resolution = (int)g_chunkWorldInfo.x;
-		if (id.x >= (uint)resolution || id.y >= (uint)resolution || id.z >= (uint)resolution)
+		const int extractResolution = (int)g_chunkWorldInfo.x;
+		const int baseResolution = (int)g_chunkWorldInfo.y;
+		const int lodStep = max(1, (int)g_chunkWorldInfo.w);
+		if (id.x >= (uint)extractResolution || id.y >= (uint)extractResolution || id.z >= (uint)extractResolution)
 		{
 			return;
 		}
 
-		const int pointsPerAxis = resolution + 1;
-		const float voxelSize = g_chunkOriginVoxel.w;
+		const int pointsPerAxis = baseResolution + 1;
+		const float baseVoxelSize = g_chunkOriginVoxel.w;
+		const float voxelSize = baseVoxelSize * lodStep;
 		const float3 chunkOrigin = g_chunkOriginVoxel.xyz;
-		const int3 cell = int3(id);
+		const int3 coarseCell = int3(id);
+		const int3 cell = coarseCell * lodStep;
 
 		float3 corners[8];
 		float densities[8];
 		[unroll] for (int i = 0; i < 8; ++i)
 		{
-			corners[i] = CellCornerWorld(cell, i, voxelSize, chunkOrigin);
-			int3 o = int3(kCornerX[i], kCornerY[i], kCornerZ[i]);
-			densities[i] = DensityAt(cell + o);
+			corners[i] = CellCornerWorld(coarseCell, i, voxelSize, chunkOrigin);
+			int3 o = int3(kCornerX[i], kCornerY[i], kCornerZ[i]) * lodStep;
+			densities[i] = DensityAt(min(cell + o, pointsPerAxis - 1));
 		}
 
 		[unroll] for (int t = 0; t < 6; ++t)
@@ -174,7 +179,7 @@
 				if (e0 < 0) break;
 				int e1 = kTetTriTable[mask][i + 1];
 				int e2 = kTetTriTable[mask][i + 2];
-				EmitTriangle(edgeVerts[e0], edgeVerts[e1], edgeVerts[e2], voxelSize, chunkOrigin, pointsPerAxis);
+				EmitTriangle(edgeVerts[e0], edgeVerts[e1], edgeVerts[e2], baseVoxelSize, chunkOrigin, pointsPerAxis);
 			}
 		}
 	}

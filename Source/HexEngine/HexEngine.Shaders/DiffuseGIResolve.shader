@@ -36,6 +36,7 @@
 	cbuffer GIConstants : register(b4)
 	{
 		float4 g_clipCenterExtent[4];
+		float4 g_clipPreviousCenterExtent[4];
 		float4 g_clipVoxelInfo[4];
 		float4 g_giParams0; // x=intensity, y=energyClamp, z=debugMode, w=activeClipmap
 		float4 g_giParams1; // x=hysteresis, y=historyReject, z=halfInvW, w=halfInvH
@@ -126,22 +127,26 @@
 		// Be less aggressive while moving camera to avoid GI scintillation.
 		const float pixelMotionStart = max(g_giParams4.z, 0.0f);
 		const float pixelMotionStrength = max(g_giParams4.w, 0.0f);
-		float pixelMotionReject = saturate((pixelMotion - pixelMotionStart) * pixelMotionStrength * 0.65f);
+		float pixelMotionReject = saturate((pixelMotion - pixelMotionStart) * pixelMotionStrength * 0.42f);
 		// Keep some settle tolerance, but do not preserve enough history to drag a bright
 		// pocket around with the moving clipmap center.
-		pixelMotionReject *= lerp(1.0f, 0.80f, shiftSettle);
+		pixelMotionReject *= lerp(1.0f, 0.86f, shiftSettle);
 
 		const float currentLum = dot(current, float3(0.2126f, 0.7152f, 0.0722f));
 		const float historyLum = dot(history, float3(0.2126f, 0.7152f, 0.0722f));
-		const float luminanceReject = saturate(abs(historyLum - currentLum) * max(g_giParams5.x, 0.0f));
+		const float stableBright = saturate(currentLum * 1.4f) * (1.0f - disocclusion) * (1.0f - motionClipBias);
+		const float luminanceRejectScale = max(g_giParams5.x, 0.0f) * lerp(1.0f, 0.28f, stableBright) * lerp(1.0f, 0.45f, motionClipBias);
+		const float luminanceReject = saturate(abs(historyLum - currentLum) * luminanceRejectScale);
+		const float brightHistoryExcess = max(historyLum - (currentLum * 1.25f + 0.03f), 0.0f);
+		const float brightHistoryReject = saturate(brightHistoryExcess * 1.8f);
 		const float stabilityPreset = saturate(g_giParams5.w * 0.5f);
 
 		// Clamp history near current to avoid long ghost trails when GI updates rapidly.
-		const float rejectT = saturate(max(disocclusion * 0.70f, max(pixelMotionReject, luminanceReject)));
-		const float minScale = lerp(0.35f, lerp(0.72f, 0.80f, stabilityPreset), rejectT);
-		const float maxScale = lerp(2.85f, lerp(1.45f, 1.20f, stabilityPreset), rejectT);
-		const float maxScaleMotion = lerp(maxScale, min(maxScale, 1.20f), motionClipBias);
-		const float bias = lerp(0.020f, 0.006f, rejectT);
+		const float rejectT = saturate(max(disocclusion * 0.70f, max(pixelMotionReject, max(luminanceReject, brightHistoryReject))));
+		const float minScale = lerp(0.45f, lerp(0.76f, 0.84f, stabilityPreset), rejectT);
+		const float maxScale = lerp(1.95f, lerp(1.30f, 1.12f, stabilityPreset), rejectT);
+		const float maxScaleMotion = lerp(maxScale, min(maxScale, 1.10f), motionClipBias);
+		const float bias = lerp(0.012f, 0.003f, rejectT);
 		const float3 historyMin = current * minScale;
 		const float3 historyMax = current * maxScaleMotion + bias.xxx;
 		history = clamp(history, historyMin, historyMax);
@@ -149,6 +154,7 @@
 		float historyWeight = lerp(g_giParams1.x, 0.0f, rejectFactor);
 		historyWeight *= (1.0f - pixelMotionReject);
 		historyWeight *= (1.0f - luminanceReject);
+		historyWeight *= (1.0f - brightHistoryReject * 0.92f);
 		historyWeight *= (1.0f - disocclusion * 0.55f);
 		if (!historyUvValid)
 		{
@@ -158,7 +164,7 @@
 		{
 			// Preserve some stability, but lower the floor substantially while moving so
 			// we do not keep an over-bright near-clip solution glued to the camera.
-			const float stabilityFloor = (1.0f - disocclusion) * (0.16f + 0.10f * shiftSettle) * g_giParams1.x * lerp(1.0f, 0.18f, motionClipBias);
+			const float stabilityFloor = (1.0f - disocclusion) * (0.24f + 0.12f * shiftSettle + 0.08f * stableBright) * g_giParams1.x * lerp(1.0f, 0.55f, motionClipBias);
 			historyWeight = max(historyWeight, stabilityFloor);
 		}
 
@@ -170,8 +176,8 @@
 		if (historyUvValid && (warmStabilize > 0.0f || shiftSettle > 0.0f))
 		{
 			const float deltaLumScale = 0.08f + currentLum * 0.12f;
-			const float3 looseLimit = (0.22f + deltaLumScale).xxx;
-			const float3 tightLimit = (0.06f + deltaLumScale * 0.45f).xxx;
+			const float3 looseLimit = (0.28f + deltaLumScale).xxx;
+			const float3 tightLimit = (0.10f + deltaLumScale * 0.60f).xxx;
 			const float settleAmount = saturate(max(warmStabilize, shiftSettle));
 			const float3 deltaLimit = lerp(looseLimit, tightLimit, settleAmount);
 			resolved = clamp(resolved, history - deltaLimit, history + deltaLimit);
@@ -181,9 +187,10 @@
 		const float2 pixelCoord = uv * float2((float)g_screenWidth, (float)g_screenHeight);
 		const float dither = Hash12(pixelCoord) - 0.5f;
 		const float lum = dot(resolved, float3(0.2126f, 0.7152f, 0.0722f));
-		const float ditherAmp = lerp(max(g_giParams5.y, 0.0f), max(g_giParams5.z, 0.0f), saturate(lum * 2.0f)) * 0.55f;
+		const float ditherAmp = lerp(max(g_giParams5.y, 0.0f), max(g_giParams5.z, 0.0f), saturate(lum * 2.0f)) * 0.30f;
 		const float motionDitherScale = (1.0f - saturate(pixelMotionReject * 0.85f)) * (1.0f - warmStabilize * 0.85f);
-		resolved = max(0.0f.xxx, resolved + dither.xxx * ditherAmp * motionDitherScale);
+		const float stabilityDitherScale = (1.0f - saturate(historyWeight * 0.85f)) * (1.0f - stableBright * 0.85f);
+		resolved = max(0.0f.xxx, resolved + dither.xxx * ditherAmp * motionDitherScale * stabilityDitherScale);
 
 		if (debugMode == 1.0f)
 		{

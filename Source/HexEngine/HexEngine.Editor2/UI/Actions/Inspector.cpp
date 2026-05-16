@@ -69,6 +69,8 @@ namespace HexEditor
 			_revertPrefabBtn->DisableRecursive();
 			_applyPrefabBtn->DisableRecursive();
 			_prefabOverridesBtn->DisableRecursive();
+			_componentScroll = new HexEngine::ScrollView(entityTab, HexEngine::Point(5, 165), HexEngine::Point(size.x - 10, std::max(40, size.y - 175)));
+			_componentScroll->SetManualContentHeight(0);
 		}
 
 		auto resourceTab = _tabs->AddTab(L"Resource");
@@ -154,6 +156,11 @@ namespace HexEditor
 			widget->DeleteMe();
 		}
 		_componentWidgets.clear();
+		if (_componentScroll != nullptr)
+		{
+			_componentScroll->SetManualContentHeight(0);
+			_componentScroll->SetScrollOffset(0.0f);
+		}
 
 		_canvas.Redraw();
 	}
@@ -420,15 +427,22 @@ namespace HexEditor
 			_inspecting->SetFlag(HexEngine::EntityFlags::SelectedInEditor);
 
 			int32_t y = showPrefabButtons ? 165 : 130;
+			if (_componentScroll != nullptr)
+			{
+				const int32_t scrollTop = showPrefabButtons ? 165 : 130;
+				const int32_t scrollBottomMargin = 10;
+				_componentScroll->SetPosition(HexEngine::Point(5, scrollTop));
+				_componentScroll->SetSize(HexEngine::Point(size.x, std::max(40, GetSize().y - scrollTop - scrollBottomMargin)));
+				_componentScroll->SetScrollOffset(0.0f);
+			}
 
-			if (hasPrefabOverrides)
-				y += 10;
+			y = 0;
 
 			for (auto& component : entity->GetAllComponents())
 			{
 				auto componentName = component->GetComponentName();
 
-				HexEngine::ComponentWidget* widget = new HexEngine::ComponentWidget(this, HexEngine::Point(5, y), HexEngine::Point(size.x, size.y), s2ws(componentName));
+				HexEngine::ComponentWidget* widget = new HexEngine::ComponentWidget(_componentScroll, HexEngine::Point(0, y), HexEngine::Point(size.x - 20, size.y), s2ws(componentName));
 
 				if (component->CreateWidget(widget) == false)
 				{
@@ -489,6 +503,9 @@ namespace HexEditor
 
 				y += widget->GetTotalHeight() + 10;
 			}
+
+			if (_componentScroll != nullptr)
+				_componentScroll->SetManualContentHeight(std::max(0, y));
 		}
 		else
 		{
@@ -554,6 +571,16 @@ namespace HexEditor
 		//_addComponentBtn->EnableInput(false);
 
 		return true;
+	}
+
+	bool Inspector::OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data)
+	{
+		if (event == HexEngine::InputEvent::KeyDown && data->KeyDown.key == VK_DELETE && _inspecting != nullptr)
+		{
+			OnDeleteEntity(nullptr);
+		}
+
+		return Element::OnInputEvent(event, data);
 	}
 
 	void Inspector::OnClickAddComponentItem(const std::wstring& name, HexEngine::ComponentId compId)

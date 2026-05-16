@@ -2,6 +2,7 @@
 
 #include "StaticMeshComponent.hpp"
 #include "../Entity.hpp"
+#include "../../Scene/Scene.hpp"
 #include "../../HexEngine.hpp"
 #include "../../Terrain/TerrainGenerator.hpp"
 #include "../../Graphics/MaterialLoader.hpp"
@@ -18,6 +19,7 @@ namespace HexEngine
 		BaseComponent(entity)
 	{
 		_uvScale = clone->_uvScale;
+		_includeInGIWhenHidden = clone->_includeInGIWhenHidden;
 
 		SetMesh(clone->GetMesh());
 
@@ -164,6 +166,10 @@ namespace HexEngine
 		if (!mesh)
 		{
 			_mesh.reset();
+			if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+			{
+				scene->NotifyStaticMeshChanged(this, true, false);
+			}
 			return;
 		}
 
@@ -186,6 +192,10 @@ namespace HexEngine
 		}
 
 		mesh->CreateInstance();
+		if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->NotifyStaticMeshChanged(this, true, false);
+		}
 	}
 
 	std::shared_ptr<Mesh> StaticMeshComponent::GetMesh() const
@@ -219,6 +229,7 @@ namespace HexEngine
 			materials.push_back(material->GetFileSystemPath().string());
 
 		SERIALIZE_VALUE(_uvScale);
+		SERIALIZE_VALUE(_includeInGIWhenHidden);
 		SERIALIZE_VALUE(_shadowCullingMode);
 		SERIALIZE_VALUE(_offsetPosition);
 	}
@@ -230,6 +241,12 @@ namespace HexEngine
 		for(auto& mesh : data["mesh"].items())
 		{
 			auto path = mesh.key();
+
+			if (path.empty())
+			{
+				LOG_WARN("Skipping StaticMeshComponent with empty path");
+				continue;
+			}
 
 			if (path == "TERRAIN")
 			{
@@ -322,6 +339,7 @@ namespace HexEngine
 		}
 
 		DESERIALIZE_VALUE(_uvScale);
+		DESERIALIZE_VALUE(_includeInGIWhenHidden);
 		DESERIALIZE_VALUE(_shadowCullingMode);
 		DESERIALIZE_VALUE(_offsetPosition);
 	}
@@ -334,6 +352,27 @@ namespace HexEngine
 	void StaticMeshComponent::SetUVScale(const math::Vector2& uvScale)
 	{
 		_uvScale = uvScale;
+		if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->NotifyStaticMeshChanged(this, false, true);
+		}
+	}
+
+	void StaticMeshComponent::SetIncludeInGIWhenHidden(bool value)
+	{
+		if (_includeInGIWhenHidden == value)
+			return;
+
+		_includeInGIWhenHidden = value;
+		if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->NotifyStaticMeshChanged(this, true, false);
+		}
+	}
+
+	bool StaticMeshComponent::GetIncludeInGIWhenHidden() const
+	{
+		return _includeInGIWhenHidden;
 	}
 
 	const math::Vector3& StaticMeshComponent::GetOffsetPosition() const
@@ -619,11 +658,22 @@ namespace HexEngine
 
 		if (_material != material)
 		{
-			material->Lock();
+			if (material)
+			{
+				material->Lock();
+			}
 
 			_material = material;
 
-			material->Unlock();
+			if (material)
+			{
+				material->Unlock();
+			}
+
+			if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+			{
+				scene->NotifyStaticMeshChanged(this, false, true);
+			}
 		}
 	}
 
@@ -632,6 +682,10 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_material.reset();
+		if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->NotifyStaticMeshChanged(this, false, true);
+		}
 	}
 
 	void StaticMeshComponent::OnRenderEditorGizmo(bool isSelected, bool& isHovering)

@@ -34,13 +34,17 @@ namespace HexEngine
 		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
 
 		virtual void Update(float frameTime) override;
+		virtual void FixedUpdate(float frameTime) override;
 
 		void AddInputFlag(MoveFlag flag);
 		void RemoveInputFlag(MoveFlag flag);
 
 	private:
-		float _movementSpeed = 40.0f;
-		float _strafeMovementSpeed = 30.0f;
+		float _movementSpeed = 4.0f;
+		float _strafeMovementSpeed = 3.0f;
+		float _verticalMovementSpeed = 4.0f;
+		float _gravityAcceleration = 9.81f * 2.0f;
+		float _verticalVelocity = 0.0f;
 		MoveFlag _flags = MoveNone;
 		//float _pitchSensitivity = 200.0f;
 		//float _yawSensitivity = 200.0f;

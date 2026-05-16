@@ -193,6 +193,12 @@
 
 		// Set the default output color to the ambient light value for all pixels.
 		color = albedo * g_atmosphere.ambientLight;
+		{
+			float lightningFlash = saturate(g_weatherSurface.lightningFlash);
+			float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+			float lightningNdotL = saturate(dot(normalize(input.normal.xyz), lightningDir));
+			color.rgb += float3(0.62f, 0.76f, 1.0f) * lightningFlash * albedo.rgb * lightningNdotL * 0.48f;
+		}
 
 		// Initialize the specular color.
 		specular = float4(0.0f, 0.0f, 0.0f, 0.0f);

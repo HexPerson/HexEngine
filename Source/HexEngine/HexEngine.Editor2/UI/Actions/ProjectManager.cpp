@@ -229,7 +229,7 @@ namespace HexEditor
 		// add the project
 		AddNewProjectPath(projectFilePath);		
 
-		std::string projectName(_projectName->GetValue().begin(), _projectName->GetValue().end());
+		std::string projectName = ws2s(_projectName->GetValue());
 
 		if (_onCompleted)
 		{

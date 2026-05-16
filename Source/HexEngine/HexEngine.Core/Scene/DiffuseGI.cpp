@@ -27,15 +27,15 @@ namespace HexEngine
 	HVar r_giMovementPreset("r_giMovementPreset", "GI movement stability preset (0=off, 1=stable, 2=ultra stable)", 0, 0, 2);
 	HVar r_giProbeBudget("r_giProbeBudget", "Maximum dynamic probe/object updates per frame", 64, 4, 4096);
 	HVar r_giRaysPerProbe("r_giRaysPerProbe", "Logical rays-per-probe budget hint", 1, 1, 8);
-	HVar r_giHysteresis("r_giHysteresis", "Temporal history blend amount for GI resolve", 0.72f, 0.0f, 0.99f);
+	HVar r_giHysteresis("r_giHysteresis", "Temporal history blend amount for GI resolve", 0.62f, 0.0f, 0.99f);
 	HVar r_giHistoryReject("r_giHistoryReject", "Velocity threshold for GI history rejection", 0.006f, 0.0001f, 1.0f);
-	HVar r_giJitterScale("r_giJitterScale", "World-space jitter scale for clipmap sampling", 0.45f, 0.0f, 1.5f);
+	HVar r_giJitterScale("r_giJitterScale", "World-space jitter scale for clipmap sampling", 0.30f, 0.0f, 1.5f);
 	HVar r_giClipBlendWidth("r_giClipBlendWidth", "Width used to blend overlapping clipmaps", 0.50f, 0.01f, 0.95f);
 	HVar r_giResolvePixelMotionStart("r_giResolvePixelMotionStart", "Pixel-motion threshold where GI history rejection begins", 1.25f, 0.0f, 8.0f);
 	HVar r_giResolvePixelMotionStrength("r_giResolvePixelMotionStrength", "Strength of pixel-motion GI history rejection", 0.30f, 0.0f, 2.0f);
 	HVar r_giResolveLumaReject("r_giResolveLumaReject", "Luminance-delta multiplier for GI history rejection", 1.0f, 0.0f, 8.0f);
-	HVar r_giResolveDitherDark("r_giResolveDitherDark", "Dither amplitude on dark GI resolve regions", 0.0020f, 0.0f, 0.01f);
-	HVar r_giResolveDitherBright("r_giResolveDitherBright", "Dither amplitude on bright GI resolve regions", 0.0008f, 0.0f, 0.01f);
+	HVar r_giResolveDitherDark("r_giResolveDitherDark", "Dither amplitude on dark GI resolve regions", 0.0012f, 0.0f, 0.01f);
+	HVar r_giResolveDitherBright("r_giResolveDitherBright", "Dither amplitude on bright GI resolve regions", 0.0f, 0.0f, 0.01f);
 	HVar r_giEnergyClamp("r_giEnergyClamp", "Maximum GI radiance contribution before clamp", 1.25f, 0.1f, 32.0f);
 	HVar r_giIntensity("r_giIntensity", "Final GI intensity multiplier", 0.85f, 0.0f, 8.0f);
 	HVar r_giSunInjection("r_giSunInjection", "Sunlight energy injected into the GI voxel clipmaps", 0.25f, 0.0f, 8.0f);
@@ -45,6 +45,10 @@ namespace HexEngine
 	HVar r_giUnlitAlbedoInjection("r_giUnlitAlbedoInjection", "Baseline diffuse albedo injection independent of direct lighting", 0.0f, 0.0f, 1.0f);
 	HVar r_giAlbedoBleedBoost("r_giAlbedoBleedBoost", "Boost for albedo-colored diffuse bounce injection", 3.0f, 0.0f, 12.0f);
 	HVar r_giColourBleedStrength("r_giColourBleedStrength", "Extra multiplier for saturated color transfer (red/green/blue bleed)", 1.0f, 0.0f, 4.0f);
+	HVar r_giBounceAlbedoMinLuma("r_giBounceAlbedoMinLuma", "Minimum luminance used for GI bounce transport albedo remap", 0.14f, 0.0f, 1.0f);
+	HVar r_giBounceAlbedoRemapAmount("r_giBounceAlbedoRemapAmount", "Blend amount for luminance-preserving GI bounce albedo remap", 0.45f, 0.0f, 1.0f);
+	HVar r_giTerrainProxyEnable("r_giTerrainProxyEnable", "Allow hidden terrain GI proxy meshes to inject into GI", false, false, true);
+	HVar r_giTerrainProxyInjectionScale("r_giTerrainProxyInjectionScale", "Extra scale applied to hidden terrain GI proxy injection", 0.02f, 0.0f, 0.25f);
 	HVar r_giEmissiveInjection("r_giEmissiveInjection", "Emissive energy injected into GI voxels", 0.75f, 0.0f, 16.0f);
 	HVar r_giLocalLightInjection("r_giLocalLightInjection", "Point/spot light energy injected into GI voxels", 2.5f, 0.0f, 32.0f);
 	HVar r_giDebugDisableLocalLightInjection("r_giDebugDisableLocalLightInjection", "Debug: disable local point/spot light injection into GI", false, false, true);
@@ -80,7 +84,7 @@ namespace HexEngine
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 300, 10, 2000);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
-	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.965f, 0.5f, 0.999f);
+	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.94f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
 	HVar r_giVoxelAlbedoInfluence("r_giVoxelAlbedoInfluence", "How strongly voxelized albedo tints GI bounce (0=energy only, 1=full albedo tint)", 1.0f, 0.0f, 1.0f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
@@ -256,6 +260,11 @@ namespace
 		base.x = std::max(base.x, 0.05f);
 		base.y = std::max(base.y, 0.05f);
 		base.z = std::max(base.z, 0.05f);
+		const float baseLuma = std::max(base.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.05f);
+		const math::Vector3 baseNeutral(baseLuma, baseLuma, baseLuma);
+		// Ambient light is an energy floor, not an authored GI hue. Keep only a small amount of
+		// its chroma so scene-wide indirect does not swing fully red/blue from ambient settings.
+		base = baseNeutral * 0.85f + base * 0.15f;
 
 		auto* sun = scene->GetSunLight();
 		if (sun == nullptr)
@@ -265,8 +274,32 @@ namespace
 
 		const auto sunColour = sun->GetDiffuseColour();
 		const float sunStrength = std::max(0.0f, sun->GetLightMultiplier() * sun->GetLightStrength());
-		const math::Vector3 scaledSun(sunColour.x, sunColour.y, sunColour.z);
+		math::Vector3 scaledSun(
+			std::max(0.0f, sunColour.x),
+			std::max(0.0f, sunColour.y),
+			std::max(0.0f, sunColour.z));
+		const float sunLuma = std::max(scaledSun.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.001f);
+		const math::Vector3 sunNeutral(sunLuma, sunLuma, sunLuma);
+		// Preserve some sun hue, but keep the shared GI tint largely energy-driven and near-neutral.
+		scaledSun = sunNeutral * 0.75f + scaledSun * 0.25f;
 		return base + scaledSun * (0.10f * sunStrength);
+	}
+
+	static math::Vector3 RemapGiBounceTransportAlbedo(const math::Vector3& albedo, float minLuma, float amount)
+	{
+		math::Vector3 clamped(
+			std::clamp(albedo.x, 0.0f, 1.0f),
+			std::clamp(albedo.y, 0.0f, 1.0f),
+			std::clamp(albedo.z, 0.0f, 1.0f));
+		const float luma = std::max(clamped.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 1e-4f);
+		const math::Vector3 chroma = clamped / luma;
+		const float liftedLuma = std::max(luma, std::clamp(minLuma, 0.0f, 1.0f));
+		const float transportLuma = luma + (liftedLuma - luma) * std::clamp(amount, 0.0f, 1.0f);
+		math::Vector3 remapped = chroma * transportLuma;
+		remapped.x = std::clamp(remapped.x, 0.0f, 1.0f);
+		remapped.y = std::clamp(remapped.y, 0.0f, 1.0f);
+		remapped.z = std::clamp(remapped.z, 0.0f, 1.0f);
+		return remapped;
 	}
 
 	static math::Vector3 ComputeSunDirectionWS(HexEngine::Scene* scene)
@@ -427,11 +460,18 @@ namespace HexEngine
 		_lastMeshSunInjectionNormalization = r_giMeshSunInjectionNormalization._val.f32;
 		_lastMeshBaseInjectionMinScale = r_giMeshBaseInjectionMinScale._val.f32;
 		_lastMeshSunInjectionMinScale = r_giMeshSunInjectionMinScale._val.f32;
+		_lastBounceAlbedoMinLuma = r_giBounceAlbedoMinLuma._val.f32;
+		_lastBounceAlbedoRemapAmount = r_giBounceAlbedoRemapAmount._val.f32;
+		_lastTerrainProxyEnable = r_giTerrainProxyEnable._val.b;
+		_lastTerrainProxyInjectionScale = r_giTerrainProxyInjectionScale._val.f32;
 		_lastGpuComputeBaseSunEnabled = r_giGpuComputeBaseSun._val.b;
 		_lastInjectLightSignature = ComputeInjectLightSignature(g_pEnv ? g_pEnv->_sceneManager->GetCurrentScene().get() : nullptr);
 		_lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
+		_lightResetFramesRemaining = 0u;
+		_sunRelightCooldownFrames = 0u;
+		_lastObservedSceneLightRevision = 0ull;
 		_lastCameraPosition = math::Vector3::Zero;
 		_lastCameraPositionInitialized = false;
 		_cameraMotionFramesRemaining = 0u;
@@ -448,12 +488,17 @@ namespace HexEngine
 			_cachedEmissiveTiledTriangleCount[i] = 0u;
 			_cachedEmissiveProxyMaxLuma[i] = 0.0f;
 			_cachedEmissiveProxyMaxStrength[i] = 0.0f;
+			_cachedSceneGeometryRevision[i] = 0ull;
+			_cachedSceneMaterialRevision[i] = 0ull;
+			_cachedSceneLightRevision[i] = 0ull;
 			_clipmapWarmFramesRemaining[i] = 0u;
+			_clipmapLastVoxelizationFrame[i] = 0ull;
 		}
 		_meshTracking.clear();
 		_materialAlbedoCache.clear();
 		_materialTriangleAlbedoCache.clear();
 		_materialTriangleEmissiveCache.clear();
+		_meshEmissiveCache.clear();
 		_giMeshProxies.clear();
 		_giMaterialProxies.clear();
 		_giLightProxies.clear();
@@ -648,10 +693,17 @@ namespace HexEngine
 		_lastMeshSunInjectionNormalization = 0.0f;
 		_lastMeshBaseInjectionMinScale = 0.02f;
 		_lastMeshSunInjectionMinScale = 0.20f;
+		_lastBounceAlbedoMinLuma = 0.22f;
+		_lastBounceAlbedoRemapAmount = 0.75f;
+		_lastTerrainProxyEnable = false;
+		_lastTerrainProxyInjectionScale = 0.02f;
 		_lastGpuComputeBaseSunEnabled = false;
 		_lastInjectLightSignature = 0ull;
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
+		_lightResetFramesRemaining = 0u;
+		_sunRelightCooldownFrames = 0u;
+		_lastObservedSceneLightRevision = 0ull;
 		_lastCameraPosition = math::Vector3::Zero;
 		_lastCameraPositionInitialized = false;
 		_cameraMotionFramesRemaining = 0u;
@@ -668,8 +720,13 @@ namespace HexEngine
 			_cachedEmissiveTiledTriangleCount[i] = 0u;
 			_cachedEmissiveProxyMaxLuma[i] = 0.0f;
 			_cachedEmissiveProxyMaxStrength[i] = 0.0f;
+			_cachedSceneGeometryRevision[i] = 0ull;
+			_cachedSceneMaterialRevision[i] = 0ull;
+			_cachedSceneLightRevision[i] = 0ull;
 			_clipmapWarmFramesRemaining[i] = 0u;
+			_clipmapLastVoxelizationFrame[i] = 0ull;
 		}
+		_meshEmissiveCache.clear();
 	}
 
 	void DiffuseGI::Resize(uint32_t width, uint32_t height)
@@ -702,7 +759,7 @@ namespace HexEngine
 		default:
 			r_giVoxelResolution._val.i32 = std::clamp(r_giVoxelResolution._val.i32, 40, 256);
 			r_giProbeBudget._val.i32 = std::clamp(r_giProbeBudget._val.i32, 48, 64);
-			r_giRaysPerProbe._val.i32 = std::clamp(r_giRaysPerProbe._val.i32, 1, 2);
+			r_giRaysPerProbe._val.i32 = std::clamp(r_giRaysPerProbe._val.i32, 1, r_giRaysPerProbe._max.i32);
 			break;
 		}
 
@@ -715,23 +772,23 @@ namespace HexEngine
 
 		if (movementPreset == 1)
 		{
-			r_giJitterScale._val.f32 = std::min(r_giJitterScale._val.f32, 0.38f);
+			r_giJitterScale._val.f32 = std::min(r_giJitterScale._val.f32, 0.24f);
 			r_giClipBlendWidth._val.f32 = std::max(r_giClipBlendWidth._val.f32, 0.58f);
 			r_giResolvePixelMotionStart._val.f32 = std::max(r_giResolvePixelMotionStart._val.f32, 1.6f);
 			r_giResolvePixelMotionStrength._val.f32 = std::min(r_giResolvePixelMotionStrength._val.f32, 0.22f);
 			r_giResolveLumaReject._val.f32 = std::min(r_giResolveLumaReject._val.f32, 0.85f);
-			r_giResolveDitherDark._val.f32 = std::max(r_giResolveDitherDark._val.f32, 0.0022f);
-			r_giResolveDitherBright._val.f32 = std::max(r_giResolveDitherBright._val.f32, 0.0010f);
+			r_giResolveDitherDark._val.f32 = std::max(r_giResolveDitherDark._val.f32, 0.0012f);
+			r_giResolveDitherBright._val.f32 = std::max(r_giResolveDitherBright._val.f32, 0.0f);
 		}
 		else if (movementPreset >= 2)
 		{
-			r_giJitterScale._val.f32 = std::min(r_giJitterScale._val.f32, 0.30f);
+			r_giJitterScale._val.f32 = std::min(r_giJitterScale._val.f32, 0.18f);
 			r_giClipBlendWidth._val.f32 = std::max(r_giClipBlendWidth._val.f32, 0.68f);
 			r_giResolvePixelMotionStart._val.f32 = std::max(r_giResolvePixelMotionStart._val.f32, 2.0f);
 			r_giResolvePixelMotionStrength._val.f32 = std::min(r_giResolvePixelMotionStrength._val.f32, 0.16f);
 			r_giResolveLumaReject._val.f32 = std::min(r_giResolveLumaReject._val.f32, 0.65f);
-			r_giResolveDitherDark._val.f32 = std::max(r_giResolveDitherDark._val.f32, 0.0028f);
-			r_giResolveDitherBright._val.f32 = std::max(r_giResolveDitherBright._val.f32, 0.0014f);
+			r_giResolveDitherDark._val.f32 = std::max(r_giResolveDitherDark._val.f32, 0.0015f);
+			r_giResolveDitherBright._val.f32 = std::max(r_giResolveDitherBright._val.f32, 0.0f);
 		}
 	}
 
@@ -1020,39 +1077,78 @@ namespace HexEngine
 		}
 	}
 
-	void DiffuseGI::RebuildClipmapTransforms(const math::Vector3& cameraPosition)
+	void DiffuseGI::RebuildClipmapTransforms(const math::Vector3& cameraPosition, bool movementActive)
 	{
 		const uint32_t resolution = GetVoxelResolution();
 		const float baseExtent = GetBaseExtent();
+		int32_t movementPreset = std::clamp(r_giMovementPreset._val.i32, 0, 2);
+		if (movementPreset == 0 && g_pEnv != nullptr && g_pEnv->IsEditorMode())
+		{
+			movementPreset = 1;
+		}
 
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
 		{
 			auto& level = _clipmaps[i];
 			const float extent = baseExtent * std::pow(2.0f, static_cast<float>(i));
 			const float voxelSize = (extent * 2.0f) / static_cast<float>(resolution);
-			const float snapFactor = (i == 0u) ? 1.0f : ((i == 1u) ? 2.0f : 3.0f);
+			float snapFactor = (i == 0u) ? 1.0f : ((i == 1u) ? 2.0f : 3.0f);
+			if (movementActive)
+			{
+				if (i == 0u)
+				{
+					snapFactor = (movementPreset >= 2) ? 6.0f : 4.0f;
+				}
+				else if (i == 1u)
+				{
+					snapFactor = (movementPreset >= 2) ? 5.0f : 3.0f;
+				}
+				else
+				{
+					snapFactor = std::max(snapFactor, (movementPreset >= 2) ? 4.0f : 3.0f);
+				}
+			}
 			const float scrollStep = std::max(voxelSize * snapFactor, 1e-3f);
 
-			const math::Vector3 snapped(
+			math::Vector3 snapped(
 				std::round(cameraPosition.x / scrollStep) * scrollStep,
 				std::round(cameraPosition.y / scrollStep) * scrollStep,
 				std::round(cameraPosition.z / scrollStep) * scrollStep);
+			if (movementActive && level.initialized)
+			{
+				float holdRadiusVoxels = 0.0f;
+				if (i == 0u)
+					holdRadiusVoxels = (movementPreset >= 2) ? 8.0f : 6.0f;
+				else if (i == 1u)
+					holdRadiusVoxels = (movementPreset >= 2) ? 7.0f : 5.0f;
+				else
+					holdRadiusVoxels = (movementPreset >= 2) ? 5.0f : 4.0f;
+
+				const float holdRadius = std::max(scrollStep, voxelSize * holdRadiusVoxels);
+				const math::Vector3 holdDelta = cameraPosition - level.center;
+				if (holdDelta.LengthSquared() <= (holdRadius * holdRadius))
+				{
+					snapped = level.center;
+				}
+			}
 			// Keep sample center (level.center) tied to the actual shifted voxel volume.
 			// targetCenter follows camera snapping immediately; pendingShiftWs carries the
 			// delta until this clipmap is actually processed.
 			if (!level.initialized)
 			{
 				level.center = snapped;
+				level.previousCenter = snapped;
 				level.targetCenter = snapped;
 				level.pendingShiftWs = math::Vector3::Zero;
 				level.dirty = true;
 				_cachedVoxelTrianglesValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
-				_clipmapWarmFramesRemaining[i] = (i == 0u) ? 4u : 2u;
+				_clipmapWarmFramesRemaining[i] = (i == 0u) ? 2u : 1u;
 			}
 			else
 			{
-				const bool targetChanged = (level.targetCenter - snapped).LengthSquared() > scrollStep * scrollStep * 0.25f;
+				const float targetThresholdScale = movementActive ? 1.0f : 0.25f;
+				const bool targetChanged = (level.targetCenter - snapped).LengthSquared() > scrollStep * scrollStep * targetThresholdScale;
 				if (targetChanged)
 				{
 					level.targetCenter = snapped;
@@ -1067,11 +1163,11 @@ namespace HexEngine
 					{
 						_cachedVoxelTrianglesValid[i] = false;
 						_cachedVoxelTrianglesFrame[i] = 0ull;
-						_clipmapWarmFramesRemaining[i] = (i == 0u) ? 4u : 2u;
+						_clipmapWarmFramesRemaining[i] = (i == 0u) ? 2u : 1u;
 					}
 					else
 					{
-						_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], (i == 0u) ? 2u : 1u);
+						_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], 1u);
 					}
 				}
 
@@ -1626,6 +1722,9 @@ namespace HexEngine
 				++step;
 			}
 
+			const bool terrainGiProxyEnabled =
+				smc->GetIncludeInGIWhenHidden() &&
+				r_giTerrainProxyEnable._val.b;
 			math::Vector3 injection = sunTint * std::max(0.0f, r_giSunInjection._val.f32) * sunInjectScale;
 			if (auto mat = smc->GetMaterial())
 			{
@@ -1634,17 +1733,30 @@ namespace HexEngine
 				const float albedoMax = std::max(albedoTint.x, std::max(albedoTint.y, albedoTint.z));
 				const float albedoMin = std::min(albedoTint.x, std::min(albedoTint.y, albedoTint.z));
 				const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
+				const float albedoLuma = std::clamp(albedoTint.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
 				const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
 				const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * 0.8f, 1.0f, 2.0f);
-				injection += albedoTint * std::max(0.0f, r_giDiffuseInjection._val.f32) * colourBleedBoost;
+				if (terrainGiProxyEnabled)
+				{
+					const math::Vector3 neutralTerrainBounce(albedoLuma, albedoLuma, albedoLuma);
+					injection += neutralTerrainBounce * std::max(0.0f, r_giDiffuseInjection._val.f32) * 0.08f;
+				}
+				else
+				{
+					injection += albedoTint * std::max(0.0f, r_giDiffuseInjection._val.f32) * colourBleedBoost;
+				}
 				if (mat->GetEmissiveAffectsGI())
 				{
 					injection += math::Vector3(emissive.x, emissive.y, emissive.z) * std::max(0.0f, emissive.w) * std::max(0.0f, r_giEmissiveInjection._val.f32);
 				}
 			}
 
+			const bool terrainGiProxy = terrainGiProxyEnabled;
 			const float clipAttenuation = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
-			injection *= clipAttenuation;
+			const float terrainProxyInjectionScale = terrainGiProxy
+				? std::clamp(r_giTerrainProxyInjectionScale._val.f32, 0.0f, 1.0f)
+				: 1.0f;
+			injection *= clipAttenuation * terrainProxyInjectionScale;
 
 			for (uint32_t vz = vz0; vz <= vz1; vz += step)
 			{
@@ -1740,7 +1852,10 @@ namespace HexEngine
 		{
 			const auto& level = _clipmaps[i];
 			const float voxelSize = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
+			const bool hasPendingShift = level.pendingShiftWs.LengthSquared() > 1e-8f;
+			const float clipSettle = hasPendingShift ? 1.0f : 0.0f;
 			_constants.clipCenterExtent[i] = math::Vector4(level.center.x, level.center.y, level.center.z, level.extent);
+			_constants.clipPreviousCenterExtent[i] = math::Vector4(level.previousCenter.x, level.previousCenter.y, level.previousCenter.z, clipSettle);
 			_constants.clipVoxelInfo[i] = math::Vector4(
 				voxelSize,
 				voxelSize > 0.0f ? 1.0f / voxelSize : 0.0f,
@@ -1760,6 +1875,9 @@ namespace HexEngine
 			(_clipmapWarmFramesRemaining[0] > 0u) ||
 			(_clipmapWarmFramesRemaining[1] > 0u) ||
 			(_cameraMotionBlend > 0.15f);
+		const bool clipmapShiftActive =
+			(_clipmaps[0].pendingShiftWs.LengthSquared() > 1e-8f) ||
+			(_clipmaps[1].pendingShiftWs.LengthSquared() > 1e-8f);
 		const float stabilityTarget = clipmapWarmActive ? 1.0f : 0.0f;
 		_resolveStabilityBoost = std::clamp(_resolveStabilityBoost + (stabilityTarget - _resolveStabilityBoost) * 0.22f, 0.0f, 1.0f);
 		const float baseHysteresis = r_giHysteresis._val.f32;
@@ -1778,15 +1896,24 @@ namespace HexEngine
 			1.0f / static_cast<float>(giWidth),
 			1.0f / static_cast<float>(giHeight));
 		const float baseDecay = std::clamp(r_giVoxelDecay._val.f32, 0.5f, 0.999f);
-		const float effectiveDecay = (_sunRelightFramesRemaining > 0u)
-			? std::min(baseDecay, 0.72f)
-			: baseDecay;
+		float effectiveDecay = baseDecay;
+		if (_sunRelightFramesRemaining > 0u)
+		{
+			effectiveDecay = std::min(effectiveDecay, 0.72f);
+		}
+		if (_cameraMotionBlend > 0.05f || clipmapShiftActive)
+		{
+			effectiveDecay = std::min(effectiveDecay, 0.84f);
+		}
+		if (clipmapShiftActive)
+		{
+			effectiveDecay = std::min(effectiveDecay, 0.76f);
+		}
 		float shiftSettle = 0.0f;
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
 		{
 			const bool hasPendingShift = _clipmaps[i].pendingShiftWs.LengthSquared() > 1e-8f;
-			const float warmFactor = std::clamp(static_cast<float>(_clipmapWarmFramesRemaining[i]) / 4.0f, 0.0f, 1.0f);
-			shiftSettle = std::max(shiftSettle, hasPendingShift ? 1.0f : warmFactor);
+			shiftSettle = std::max(shiftSettle, hasPendingShift ? 1.0f : 0.0f);
 		}
 		_constants.params2 = math::Vector4(
 			(r_giLocalLightsOnlyDebug._val.b || r_giDebugDisableLocalLightInjection._val.b) ? 0.0f : r_giScreenBounce._val.f32,
@@ -1819,20 +1946,21 @@ namespace HexEngine
 					sunStrength = std::max(0.0f, sun->GetLightStrength() * sun->GetLightMultiplier());
 			}
 		}
-		const float sunPresence = std::clamp(sunStrength * std::max(0.0f, r_giSunInjection._val.f32), 0.0f, 1.0f);
+		const float sunPresenceRaw = sunStrength * std::max(0.0f, r_giSunInjection._val.f32);
+		const float sunPresenceMask = std::clamp(sunPresenceRaw, 0.0f, 1.0f);
 		_constants.params9 = math::Vector4(
 			sunStrength,
-			std::max(0.0f, r_giUnlitAlbedoInjection._val.f32 * sunPresence),
+			std::max(0.0f, r_giUnlitAlbedoInjection._val.f32 * sunPresenceMask),
 			static_cast<float>(std::clamp(r_giGpuEvalMaxVoxelTestsPerTriangle._val.i32, 1, 256)),
 			static_cast<float>(std::clamp(r_giGpuSunShadowMode._val.i32, 0, 2)));
 		_constants.params10 = math::Vector4(
 			std::clamp(r_giGpuEdgeSmoothThreshold._val.f32, 0.0f, 1.0f),
 			std::clamp(r_giGpuEdgeSmoothBlendStrength._val.f32, 0.0f, 1.0f),
-			0.0f,
-			0.0f);
+			std::clamp(r_giBounceAlbedoMinLuma._val.f32, 0.0f, 1.0f),
+			std::clamp(r_giBounceAlbedoRemapAmount._val.f32, 0.0f, 1.0f));
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
-			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresence;
+			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresenceMask;
 		_constants.params3 = math::Vector4(sunDirection.x, sunDirection.y, sunDirection.z, sunDirectionality);
 		const int32_t movementPreset = (r_giMovementPreset._val.i32 == 0 && g_pEnv != nullptr && g_pEnv->IsEditorMode())
 			? 1
@@ -1881,7 +2009,7 @@ namespace HexEngine
 			if (delta.LengthSquared() > (moveThreshold * moveThreshold))
 			{
 				cameraMovedThisFrame = true;
-				_cameraMotionFramesRemaining = std::max(_cameraMotionFramesRemaining, 8u);
+				_cameraMotionFramesRemaining = std::max(_cameraMotionFramesRemaining, 2u);
 			}
 			_lastCameraPosition = cameraPosition;
 		}
@@ -1891,7 +2019,7 @@ namespace HexEngine
 		}
 		const bool movementActive = cameraMovedThisFrame || (_cameraMotionFramesRemaining > 0u);
 		const float movementTarget = movementActive ? 1.0f : 0.0f;
-		_cameraMotionBlend = std::clamp(_cameraMotionBlend + (movementTarget - _cameraMotionBlend) * 0.35f, 0.0f, 1.0f);
+		_cameraMotionBlend = std::clamp(_cameraMotionBlend + (movementTarget - _cameraMotionBlend) * 0.50f, 0.0f, 1.0f);
 
 		ApplyQualityPreset();
 		_stats = {};
@@ -1950,14 +2078,19 @@ namespace HexEngine
 			(std::abs(r_giMeshSunInjectionNormalization._val.f32 - _lastMeshSunInjectionNormalization) > 1e-4f) ||
 			(std::abs(r_giMeshBaseInjectionMinScale._val.f32 - _lastMeshBaseInjectionMinScale) > 1e-4f) ||
 			(std::abs(r_giMeshSunInjectionMinScale._val.f32 - _lastMeshSunInjectionMinScale) > 1e-4f) ||
+			(std::abs(r_giBounceAlbedoMinLuma._val.f32 - _lastBounceAlbedoMinLuma) > 1e-4f) ||
+			(std::abs(r_giBounceAlbedoRemapAmount._val.f32 - _lastBounceAlbedoRemapAmount) > 1e-4f) ||
+			(r_giTerrainProxyEnable._val.b != _lastTerrainProxyEnable) ||
+			(std::abs(r_giTerrainProxyInjectionScale._val.f32 - _lastTerrainProxyInjectionScale) > 1e-4f) ||
 			(r_giGpuComputeBaseSun._val.b != _lastGpuComputeBaseSunEnabled);
 		const bool localLightModeToggled = ((!r_giDebugDisableLocalLightInjection._val.b) != _lastLocalLightInjectionEnable);
 		const bool baseSunModeToggled = (r_giDebugDisableBaseAndSunInjection._val.b != _lastDisableBaseAndSunInjection);
 		const bool baseOnlyModeToggled = (r_giDebugDisableBaseInjection._val.b != _lastDisableBaseInjection);
 		const bool sunOnlyModeToggled = (r_giDebugDisableSunInjection._val.b != _lastDisableSunInjection);
+		const bool terrainProxyModeToggled = (r_giTerrainProxyEnable._val.b != _lastTerrainProxyEnable);
 		const uint64_t currentInjectLightSignature = ComputeInjectLightSignature(scene);
 		const bool injectLightSetChanged = (currentInjectLightSignature != _lastInjectLightSignature);
-		if (localLightModeToggled || baseSunModeToggled || baseOnlyModeToggled || sunOnlyModeToggled)
+		if (localLightModeToggled || baseSunModeToggled || baseOnlyModeToggled || sunOnlyModeToggled || terrainProxyModeToggled)
 		{
 			// Hard reset when local injection mode flips so no historical local-light energy remains.
 			DestroyClipmapResources();
@@ -2016,6 +2149,10 @@ namespace HexEngine
 			_lastMeshSunInjectionNormalization = r_giMeshSunInjectionNormalization._val.f32;
 			_lastMeshBaseInjectionMinScale = r_giMeshBaseInjectionMinScale._val.f32;
 			_lastMeshSunInjectionMinScale = r_giMeshSunInjectionMinScale._val.f32;
+			_lastBounceAlbedoMinLuma = r_giBounceAlbedoMinLuma._val.f32;
+			_lastBounceAlbedoRemapAmount = r_giBounceAlbedoRemapAmount._val.f32;
+			_lastTerrainProxyEnable = r_giTerrainProxyEnable._val.b;
+			_lastTerrainProxyInjectionScale = r_giTerrainProxyInjectionScale._val.f32;
 			_lastGpuComputeBaseSunEnabled = r_giGpuComputeBaseSun._val.b;
 			_lastInjectLightSignature = currentInjectLightSignature;
 		}
@@ -2053,7 +2190,14 @@ namespace HexEngine
 			}
 		}
 
-		RebuildClipmapTransforms(cameraPosition);
+		const uint64_t sceneLightRevision = scene->GetGiLightRevision();
+		const bool giLightStateChanged = (sceneLightRevision != _lastObservedSceneLightRevision);
+		if (giLightStateChanged)
+		{
+			_lastObservedSceneLightRevision = sceneLightRevision;
+		}
+
+		RebuildClipmapTransforms(cameraPosition, movementActive);
 		const math::Vector3 currentSunDirection = ComputeSunDirectionWS(scene);
 		if (!_lastSunDirectionInitialized)
 		{
@@ -2063,26 +2207,61 @@ namespace HexEngine
 		else
 		{
 			const float sunDirDot = std::clamp(_lastSunDirection.Dot(currentSunDirection), -1.0f, 1.0f);
-			if (sunDirDot < 0.9995f)
+			if (_sunRelightCooldownFrames == 0u && sunDirDot < 0.9950f)
 			{
-				_sunRelightFramesRemaining = 10u;
-				for (auto& level : _clipmaps)
+				_sunRelightFramesRemaining = ClipmapCount;
+				_sunRelightCooldownFrames = 45u;
+				for (uint32_t i = 0u; i < ClipmapCount; ++i)
 				{
-					level.dirty = true;
+					_clipmaps[i].dirty = true;
+					_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], (i == 0u) ? 2u : 1u);
 				}
+				_lastSunDirection = currentSunDirection;
 			}
-			_lastSunDirection = currentSunDirection;
+		}
+		if (_sunRelightCooldownFrames > 0u)
+		{
+			--_sunRelightCooldownFrames;
 		}
 
 		// Keep the nearest clipmap hot every frame for stable local bounce.
 		_activeClipmap = 0;
 		UpdateConstants(scene);
+		const uint64_t sceneGeometryRevision = scene->GetGiGeometryRevision();
+		const uint64_t sceneMaterialRevision = scene->GetGiMaterialRevision();
+		auto shouldRunGpuClip = [&](uint32_t clipIndex) -> bool
+		{
+			if (clipIndex >= ClipmapCount)
+				return false;
+			const auto& clip = _clipmaps[clipIndex];
+			const uint64_t framesSinceVoxelization =
+				(_clipmapLastVoxelizationFrame[clipIndex] > 0ull && _frameCounter >= _clipmapLastVoxelizationFrame[clipIndex])
+				? (_frameCounter - _clipmapLastVoxelizationFrame[clipIndex])
+				: std::numeric_limits<uint64_t>::max();
+			const uint64_t maxIdleFrames =
+				(clipIndex == 0u) ? (movementActive ? 4ull : 10ull) :
+				(clipIndex == 1u) ? (movementActive ? 12ull : 24ull) :
+				(movementActive ? 48ull : 96ull);
+			if (!clip.initialized || clip.dirty || _clipmapWarmFramesRemaining[clipIndex] > 0u || clip.pendingShiftWs.LengthSquared() > 1e-8f)
+				return true;
+			if (!_cachedVoxelTrianglesValid[clipIndex])
+				return true;
+			if (_cachedSceneGeometryRevision[clipIndex] != sceneGeometryRevision ||
+				_cachedSceneMaterialRevision[clipIndex] != sceneMaterialRevision)
+			{
+				return true;
+			}
+			if (framesSinceVoxelization >= maxIdleFrames)
+			{
+				return true;
+			}
+			return false;
+		};
 		const bool clipmapSettling =
 			(_clipmapWarmFramesRemaining[0] > 0u) ||
 			(_clipmapWarmFramesRemaining[1] > 0u) ||
 			(_clipmaps[0].pendingShiftWs.LengthSquared() > 1e-8f) ||
-			(_clipmaps[1].pendingShiftWs.LengthSquared() > 1e-8f) ||
-			movementActive;
+			(_clipmaps[1].pendingShiftWs.LengthSquared() > 1e-8f);
 		if (!r_giGpuVoxelize._val.b)
 		{
 			UpdateClipmapData(scene, 0);
@@ -2102,25 +2281,44 @@ namespace HexEngine
 		{
 			if (_sunRelightFramesRemaining > 0u)
 			{
-				for (uint32_t i = 0u; i < ClipmapCount; ++i)
+				const uint32_t relightClip = (ClipmapCount - std::min<uint32_t>(_sunRelightFramesRemaining, ClipmapCount)) % ClipmapCount;
+				if (shouldRunGpuClip(0u))
 				{
-					RunGpuVoxelization(scene, i);
+					RunGpuVoxelization(scene, 0u);
+				}
+				const uint32_t secondaryClip = (relightClip == 0u) ? 1u : relightClip;
+				if (secondaryClip < ClipmapCount && shouldRunGpuClip(secondaryClip))
+				{
+					RunGpuVoxelization(scene, secondaryClip);
 				}
 			}
 			else
 			{
-				RunGpuVoxelization(scene, 0);
+				if (shouldRunGpuClip(0u))
+				{
+					RunGpuVoxelization(scene, 0u);
+				}
+				if (!movementActive && clipmapSettling && shouldRunGpuClip(1u))
+				{
+					RunGpuVoxelization(scene, 1u);
+				}
 				if (!clipmapSettling && !movementActive && ((_frameCounter % 4ull) == 0ull))
 				{
 					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 4ull) % (ClipmapCount - 1u));
-					RunGpuVoxelization(scene, farClip);
+					if (shouldRunGpuClip(farClip))
+					{
+						RunGpuVoxelization(scene, farClip);
+					}
 				}
-				else if (movementActive && ((_frameCounter % 16ull) == 0ull))
+				else if (movementActive && (_clipmaps[0].pendingShiftWs.LengthSquared() <= 1e-8f) && ((_frameCounter % 16ull) == 0ull))
 				{
 					// Movement-stable mode still refreshes far clips occasionally to avoid
 					// starving distant emissive/sun contribution.
 					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 16ull) % (ClipmapCount - 1u));
-					RunGpuVoxelization(scene, farClip);
+					if (shouldRunGpuClip(farClip))
+					{
+						RunGpuVoxelization(scene, farClip);
+					}
 				}
 			}
 		}
@@ -2129,6 +2327,10 @@ namespace HexEngine
 			if (_clipmapWarmFramesRemaining[i] > 0u)
 			{
 				--_clipmapWarmFramesRemaining[i];
+			}
+			if (_clipmapWarmFramesRemaining[i] == 0u && _clipmaps[i].pendingShiftWs.LengthSquared() <= 1e-8f)
+			{
+				_clipmaps[i].previousCenter = _clipmaps[i].center;
 			}
 		}
 		if (_sunRelightFramesRemaining > 0u)
@@ -2557,9 +2759,12 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			auto* entity = smc->GetEntity();
 			if (entity == nullptr || entity->IsPendingDeletion())
 				continue;
+			const bool hiddenButGiAllowed = false;
+			if (entity->HasFlag(EntityFlags::DoNotRender) && !hiddenButGiAllowed)
+				continue;
 			const auto materialPtr = smc->GetMaterial();
 			const Material* material = materialPtr ? materialPtr.get() : nullptr;
-			if (material != nullptr)
+			if (material != nullptr && material->GetAffectsGI())
 			{
 				uniqueMaterials.push_back(material);
 			}
@@ -2591,6 +2796,9 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			auto* entity = smc->GetEntity();
 			if (entity == nullptr || entity->IsPendingDeletion())
 				continue;
+			const bool hiddenButGiAllowed = false;
+			if (entity->HasFlag(EntityFlags::DoNotRender) && !hiddenButGiAllowed)
+				continue;
 
 			auto meshPtr = smc->GetMesh();
 			if (!meshPtr)
@@ -2598,6 +2806,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 			const auto materialPtr = smc->GetMaterial();
 			const Material* material = materialPtr ? materialPtr.get() : nullptr;
+			if (material != nullptr && !material->GetAffectsGI())
+				continue;
 			uint32_t materialProxyIndex = 0u;
 			if (material != nullptr)
 			{
@@ -2714,7 +2924,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		outDispatchIndirectReady = false;
 		if (sourceTriangleCount == 0u || levelIndex >= ClipmapCount)
 			return 0u;
-		if (!r_giGpuCandidateGen._val.b)
+		if (!r_giGpuCandidateGen._val.b && !r_giGpuMaterialEval._val.b)
 			return sourceTriangleCount;
 		if (_voxelCandidateShader == nullptr)
 			return sourceTriangleCount;
@@ -2796,6 +3006,9 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		const bool disableBaseInjection = disableBaseAndSunInjection || r_giDebugDisableBaseInjection._val.b;
 		const bool disableSunInjection = disableBaseAndSunInjection || r_giDebugDisableSunInjection._val.b;
 		const uint32_t baseTriangleBudget = static_cast<uint32_t>(std::max(256, r_giVoxelTriangleBudget._val.i32));
+		const uint64_t sceneGeometryRevision = scene->GetGiGeometryRevision();
+		const uint64_t sceneMaterialRevision = scene->GetGiMaterialRevision();
+		const uint64_t sceneLightRevision = scene->GetGiLightRevision();
 
 		auto& level = _clipmaps[levelIndex];
 		const float voxelSizeWorld = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
@@ -2803,82 +3016,58 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			? (_frameCounter - _cachedVoxelTrianglesFrame[levelIndex])
 			: 0ull;
 		const uint64_t cacheFrames = static_cast<uint64_t>(std::max(1, r_giTriangleCacheFrames._val.i32));
+		const uint64_t movementCacheFrames = static_cast<uint64_t>(std::max<int32_t>(r_giTriangleCacheFrames._val.i32, 48));
 		const bool cacheStillFresh = (cacheAge < cacheFrames);
 		const bool cachedTriangleCountAcceptable =
 			(static_cast<uint32_t>(_cachedVoxelTriangles[levelIndex].size()) <= baseTriangleBudget);
-		if (_cachedVoxelTrianglesValid[levelIndex] && !level.dirty && cacheStillFresh && cachedTriangleCountAcceptable)
+		const bool lightStateAffectsTriangleCache = !r_giGpuMaterialEval._val.b;
+		const bool cachedSceneStateMatches =
+			(_cachedSceneGeometryRevision[levelIndex] == sceneGeometryRevision) &&
+			(_cachedSceneMaterialRevision[levelIndex] == sceneMaterialRevision) &&
+			(!lightStateAffectsTriangleCache || (_cachedSceneLightRevision[levelIndex] == sceneLightRevision));
+		const bool movementCacheStillFresh =
+			cachedSceneStateMatches &&
+			cachedTriangleCountAcceptable &&
+			(cacheAge < movementCacheFrames) &&
+			(_cameraMotionBlend > 0.05f);
+		const float pendingShiftDistance = std::sqrt(std::max(0.0f, level.pendingShiftWs.LengthSquared()));
+		const bool shiftOnlyDirty =
+			level.dirty &&
+			cachedSceneStateMatches &&
+			cachedTriangleCountAcceptable &&
+			(_cameraMotionBlend > 0.05f) &&
+			pendingShiftDistance > 1e-4f;
+		if (_cachedVoxelTrianglesValid[levelIndex] &&
+			(cacheStillFresh || movementCacheStillFresh) &&
+			cachedTriangleCountAcceptable &&
+			cachedSceneStateMatches &&
+			(!level.dirty || shiftOnlyDirty || movementCacheStillFresh))
 		{
-			// Validate cached material pointer identities against currently visible scene materials.
-			// This guards against stale raw pointers when entities/materials are removed or replaced.
-			bool cachedMaterialSetMatchesScene = true;
-			const dx::BoundingBox clipBounds(level.center, math::Vector3(level.extent, level.extent, level.extent));
-			std::vector<StaticMeshComponent*> cacheMeshesInBounds;
-			scene->GatherStaticMeshesInBounds(clipBounds, cacheMeshesInBounds, true);
-			std::vector<const Material*> liveMaterials;
-			liveMaterials.reserve(cacheMeshesInBounds.size());
-			for (auto* smc : cacheMeshesInBounds)
-			{
-				if (smc == nullptr || smc->GetMesh() == nullptr)
-					continue;
-				auto* entity = smc->GetEntity();
-				if (entity == nullptr || entity->IsPendingDeletion())
-					continue;
-				if (auto mat = smc->GetMaterial())
-				{
-					liveMaterials.push_back(mat.get());
-				}
-			}
-			std::sort(liveMaterials.begin(), liveMaterials.end(),
-				[](const Material* a, const Material* b)
-				{
-					return std::less<const Material*>()(a, b);
-				});
-			liveMaterials.erase(std::unique(liveMaterials.begin(), liveMaterials.end()), liveMaterials.end());
-
 			const auto& cachedMaterials = _cachedGiMaterialProxies[levelIndex];
-			if (cachedMaterials.size() != liveMaterials.size())
+			out = _cachedVoxelTriangles[levelIndex];
+			_giMaterialProxies = cachedMaterials;
+			_giMaterialProxyLookup.clear();
+			for (const auto& materialProxy : _giMaterialProxies)
 			{
-				cachedMaterialSetMatchesScene = false;
-			}
-			else
-			{
-				for (size_t i = 0; i < cachedMaterials.size(); ++i)
+				if (materialProxy.material != nullptr)
 				{
-					if (cachedMaterials[i].material != liveMaterials[i])
-					{
-						cachedMaterialSetMatchesScene = false;
-						break;
-					}
+					_giMaterialProxyLookup[materialProxy.material] = materialProxy.index;
 				}
 			}
-
-			if (cachedMaterialSetMatchesScene)
-			{
-				out = _cachedVoxelTriangles[levelIndex];
-				_giMaterialProxies = cachedMaterials;
-				_giMaterialProxyLookup.clear();
-				for (const auto& materialProxy : _giMaterialProxies)
-				{
-					if (materialProxy.material != nullptr)
-					{
-						_giMaterialProxyLookup[materialProxy.material] = materialProxy.index;
-					}
-				}
-				_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
-				_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
-				_stats.emissiveMaterialCount += _cachedEmissiveMaterialCount[levelIndex];
-				_stats.emissiveTriangleCount += _cachedEmissiveTriangleCount[levelIndex];
-				_stats.emissiveActiveTriangleCount += _cachedEmissiveActiveTriangleCount[levelIndex];
-				_stats.emissiveTiledTriangleCount += _cachedEmissiveTiledTriangleCount[levelIndex];
-				_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, _cachedEmissiveProxyMaxLuma[levelIndex]);
-				_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, _cachedEmissiveProxyMaxStrength[levelIndex]);
-				return static_cast<uint32_t>(out.size());
-			}
-
-			_cachedVoxelTrianglesValid[levelIndex] = false;
-			_cachedVoxelTrianglesFrame[levelIndex] = 0ull;
-			_cachedGiMaterialProxies[levelIndex].clear();
+			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
+			_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
+			_stats.emissiveMaterialCount += _cachedEmissiveMaterialCount[levelIndex];
+			_stats.emissiveTriangleCount += _cachedEmissiveTriangleCount[levelIndex];
+			_stats.emissiveActiveTriangleCount += _cachedEmissiveActiveTriangleCount[levelIndex];
+			_stats.emissiveTiledTriangleCount += _cachedEmissiveTiledTriangleCount[levelIndex];
+			_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, _cachedEmissiveProxyMaxLuma[levelIndex]);
+			_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, _cachedEmissiveProxyMaxStrength[levelIndex]);
+			return static_cast<uint32_t>(out.size());
 		}
+
+		_cachedVoxelTrianglesValid[levelIndex] = false;
+		_cachedVoxelTrianglesFrame[levelIndex] = 0ull;
+		_cachedGiMaterialProxies[levelIndex].clear();
 
 		const math::Vector3 clipMin = level.center - math::Vector3(level.extent, level.extent, level.extent);
 		const math::Vector3 clipMax = level.center + math::Vector3(level.extent, level.extent, level.extent);
@@ -2959,14 +3148,15 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			const uint32_t evalBudget = static_cast<uint32_t>(std::max(512, r_giGpuEvalTriangleBudget._val.i32));
 			budget = std::min(budget, evalBudget);
 		}
-		if (level.dirty)
+		if (level.dirty && _cameraMotionBlend <= 0.05f)
 		{
 			budget = std::min<uint32_t>(budget * 3u, 300000u);
 		}
-		if (_clipmapWarmFramesRemaining[levelIndex] > 0u)
+		if (_clipmapWarmFramesRemaining[levelIndex] > 0u && _cameraMotionBlend <= 0.05f)
 		{
 			budget = std::min<uint32_t>(budget * 3u, 300000u);
 		}
+		const bool coarseEmissiveMode = r_giGpuMaterialEval._val.b;
 
 		out.reserve(std::min<uint32_t>(budget, static_cast<uint32_t>(meshesInBounds.size()) * 64u));
 		uint32_t emissiveTriangleCountLocal = 0u;
@@ -3171,18 +3361,31 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		{
 			if (smc == nullptr || material == nullptr)
 				return 0.0f;
+
+			const uint64_t transformVersion = smc->GetEntity() ? smc->GetEntity()->GetTransformVersion() : 0ull;
+			const math::Vector2 uvScale = smc->GetUVScale();
+			const MaterialUvRect uvRect = ResolveMaterialUvRect(smc);
+			if (auto it = _meshEmissiveCache.find(smc); it != _meshEmissiveCache.end())
+			{
+				if (it->second.material == material &&
+					it->second.transformVersion == transformVersion &&
+					it->second.uvScale == uvScale)
+				{
+					return it->second.score;
+				}
+			}
+
 			const auto& data = getMaterialEmissiveData(material);
 			if (!data.hasTexture)
 				return 0.0f;
 
-			const MaterialUvRect uvRect = ResolveMaterialUvRect(smc);
 			const float uMin = std::clamp(uvRect.uMin, 0.0f, 1.0f);
 			const float vMin = std::clamp(uvRect.vMin, 0.0f, 1.0f);
 			const float uMax = std::clamp(uvRect.uMax, 0.0f, 1.0f);
 			const float vMax = std::clamp(uvRect.vMax, 0.0f, 1.0f);
 			const float du = std::max(1e-4f, uMax - uMin);
 			const float dv = std::max(1e-4f, vMax - vMin);
-			const int grid = 12;
+			const int grid = 6;
 			int bright = 0;
 			float maxLum = 0.0f;
 			for (int y = 0; y < grid; ++y)
@@ -3200,7 +3403,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				}
 			}
 			const float coverage = static_cast<float>(bright) / static_cast<float>(grid * grid);
-			return coverage * maxLum;
+			MeshEmissiveCacheEntry cacheEntry = {};
+			cacheEntry.material = material;
+			cacheEntry.transformVersion = transformVersion;
+			cacheEntry.uvScale = uvScale;
+			cacheEntry.score = coverage * maxLum;
+			cacheEntry.uvRect = math::Vector4(uMin, vMin, uMax, vMax);
+			_meshEmissiveCache[smc] = cacheEntry;
+			return cacheEntry.score;
 		};
 		auto computeTriangleEmissiveMask = [&](const MaterialTriangleAlbedoCacheEntry& data,
 			float u0, float v0, float u1, float v1, float u2, float v2) -> float
@@ -3422,6 +3632,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			auto mesh = smc->GetMesh();
 			if (!mesh)
 				continue;
+			const bool terrainGiProxy = smc->GetIncludeInGIWhenHidden();
+			if (terrainGiProxy)
+			{
+				// Hidden terrain GI proxy meshes are currently unsafe in the GPU voxelization path.
+				// They can dominate the clipmap with broad false colour even when heavily attenuated,
+				// so GPU GI ignores them entirely until there is a terrain-specific injection path.
+				continue;
+			}
 
 			const auto& vertices = mesh->GetVertices();
 			const auto& indices = mesh->GetIndices();
@@ -3438,9 +3656,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				material->GetEmissiveAffectsGI() &&
 				(material->GetTexture(MaterialTexture::Emission) != nullptr);
 			float meshEmissiveScore = 0.0f;
+			math::Vector4 meshEmissiveUvRect = math::Vector4(0.0f, 0.0f, 1.0f, 1.0f);
 			if (meshHasEmissiveTexture)
 			{
 				meshEmissiveScore = computeMeshEmissiveScore(smc, material);
+				if (auto it = _meshEmissiveCache.find(smc); it != _meshEmissiveCache.end())
+				{
+					meshEmissiveUvRect = it->second.uvRect;
+				}
 			}
 			const float emissiveStrengthEffective = std::max(0.0f, emissiveStrength);
 			const bool meshHasUsableEmissiveTexture =
@@ -3458,14 +3681,17 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			const float meshSunInjectionNormalize = std::clamp(r_giMeshSunInjectionNormalization._val.f32, 0.0f, 1.0f);
 			const float meshBaseMinScale = std::clamp(r_giMeshBaseInjectionMinScale._val.f32, 0.0f, 1.0f);
 			const float meshSunMinScale = std::clamp(r_giMeshSunInjectionMinScale._val.f32, 0.0f, 1.0f);
+			const float terrainProxyInjectionScale = terrainGiProxy
+				? std::clamp(r_giTerrainProxyInjectionScale._val.f32, 0.0f, 1.0f)
+				: 1.0f;
 			const float meshBaseInjectionScale = std::lerp(
 				1.0f,
 				std::max(meshBaseMinScale, 1.0f / static_cast<float>(sampledTriCount)),
-				meshBaseInjectionNormalize);
+				meshBaseInjectionNormalize) * terrainProxyInjectionScale;
 			const float meshSunInjectionScale = std::lerp(
 				1.0f,
 				std::max(meshSunMinScale, 1.0f / static_cast<float>(sampledTriCount)),
-				meshSunInjectionNormalize);
+				meshSunInjectionNormalize) * terrainProxyInjectionScale;
 			const auto& worldTM = entity->GetWorldTM();
 			const math::Vector2 uvScale = smc->GetUVScale();
 			uint32_t materialProxyIndex = 0u;
@@ -3615,18 +3841,36 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					const float triAlbedoMin = std::min(triAlbedo.x, std::min(triAlbedo.y, triAlbedo.z));
 					const float triAlbedoChroma = std::max(0.0f, triAlbedoMax - triAlbedoMin);
 					const float triAlbedoLuma = std::clamp(triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
+					const math::Vector3 triTransportAlbedo = RemapGiBounceTransportAlbedo(
+						triAlbedo,
+						r_giBounceAlbedoMinLuma._val.f32,
+						r_giBounceAlbedoRemapAmount._val.f32);
+					const float triTransportLuma = std::clamp(triTransportAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
 					const float colourBleedBoost = std::clamp(1.0f + triAlbedoChroma * colourBleedStrength * (0.75f + bleedBoost * 0.10f), 1.0f, 3.0f);
 					const float unlitBase = std::max(0.0f, r_giUnlitAlbedoInjection._val.f32);
 					const float sunFacing = std::max(faceNormal.Dot(-sunDirection), 0.0f);
-					const float sunPresence = std::clamp(sunStrength * sunInject, 0.0f, 1.0f);
-					const float litFactor = std::clamp(sunFacing * sunPresence, 0.0f, 1.0f);
+					const float sunPresenceRaw = sunStrength * sunInject;
+					const float sunPresenceMask = std::clamp(sunPresenceRaw, 0.0f, 1.0f);
+					const float litFactor = std::clamp(sunFacing * sunPresenceMask, 0.0f, 1.0f);
 					const float unlitWeight = (1.0f - litFactor) * (1.0f - litFactor);
 					triBaseInjection =
-						(math::Vector3(1.0f, 1.0f, 1.0f) * (triAlbedoLuma * diffuseInject * unlitBase * unlitWeight * (0.55f + bleedBoost * 0.30f) * colourBleedBoost) +
+						(math::Vector3(1.0f, 1.0f, 1.0f) * (triTransportLuma * diffuseInject * unlitBase * unlitWeight * (0.55f + bleedBoost * 0.30f) * colourBleedBoost) +
 						(emissiveTint * emissiveStrength * emissiveInject)) * clipAttenuation;
-					sunEnergyTint = sunTint * (triAlbedoLuma * clipAttenuation);
-					directSunBounce = sunFacing * sunStrength * sunInject * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
+					sunEnergyTint = sunTint * (triTransportLuma * clipAttenuation);
+					directSunBounce = sunFacing * sunPresenceRaw * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
 					directionalDiffuseBounce = sunFacing * sunStrength * diffuseInject * (0.28f + bleedBoost * 0.18f) * sunDirectionalBoost * colourBleedBoost;
+					if (terrainGiProxy)
+					{
+						const math::Vector3 neutralTerrainBounce(triAlbedoLuma, triAlbedoLuma, triAlbedoLuma);
+						// Terrain GI proxies are coarse hidden helper meshes, not true visible receivers.
+						// Keep them on a tightly capped neutral bounce path so global unlit-bounce tuning
+						// cannot turn them into a broad interior light source.
+						const float terrainUnlitBase = std::min(unlitBase, 0.06f);
+						triBaseInjection = neutralTerrainBounce * (diffuseInject * terrainUnlitBase * sunPresenceMask * unlitWeight * 0.08f * clipAttenuation);
+						sunEnergyTint = math::Vector3::Zero;
+						directSunBounce = 0.0f;
+						directionalDiffuseBounce = 0.0f;
+					}
 				}
 
 				if (!meshFullyInsideClip)
@@ -3671,7 +3915,27 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				TriangleEmissiveInfo triEmissiveInfo = {};
 				float triEmissiveMask = 0.0f;
 				bool triEmissiveActive = false;
-				if (!triUvLikelyTiled && matEmissiveData != nullptr && matEmissiveData->hasTexture)
+				if (coarseEmissiveMode)
+				{
+					if (meshHasUsableEmissiveTexture)
+					{
+						triEmissiveMask = std::clamp(meshEmissiveScore, 0.0f, 1.0f);
+						triEmissiveActive = triEmissiveMask > 0.02f;
+						triEmissiveInfo.coverage = triEmissiveMask;
+						triEmissiveInfo.rectMinU = meshEmissiveUvRect.x;
+						triEmissiveInfo.rectMinV = meshEmissiveUvRect.y;
+						triEmissiveInfo.rectMaxU = meshEmissiveUvRect.z;
+						triEmissiveInfo.rectMaxV = meshEmissiveUvRect.w;
+						triEmissiveInfo.centroidU = 0.5f * (meshEmissiveUvRect.x + meshEmissiveUvRect.z);
+						triEmissiveInfo.centroidV = 0.5f * (meshEmissiveUvRect.y + meshEmissiveUvRect.w);
+					}
+					else if (!meshHasEmissiveTexture && emissiveKey > 0.01f)
+					{
+						triEmissiveMask = 1.0f;
+						triEmissiveActive = true;
+					}
+				}
+				else if (!triUvLikelyTiled && matEmissiveData != nullptr && matEmissiveData->hasTexture)
 				{
 					triEmissiveInfo = computeTriangleEmissiveInfo(*matEmissiveData, u0, v0, u1, v1, u2, v2);
 					triEmissiveMask = triEmissiveInfo.mask;
@@ -3762,7 +4026,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				if (gpuComputeBaseSunEnabled)
 				{
 					entry.radianceOpacity = math::Vector4(0.0f, 0.0f, 0.0f, 0.92f);
-					entry.albedoWeight = math::Vector4(triAlbedo.x, triAlbedo.y, triAlbedo.z, triAreaNorm);
+					const float storedTriAlbedoLuma = std::clamp(
+						triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)),
+						0.02f,
+						1.0f);
+					const math::Vector3 storedTriAlbedo = terrainGiProxy
+						? math::Vector3(storedTriAlbedoLuma, storedTriAlbedoLuma, storedTriAlbedoLuma)
+						: triAlbedo;
+					entry.albedoWeight = math::Vector4(storedTriAlbedo.x, storedTriAlbedo.y, storedTriAlbedo.z, triAreaNorm);
 					out.push_back(entry);
 					if (triEmissiveMask > 0.012f || (!meshHasEmissiveTexture && triEmissiveActive))
 					{
@@ -3859,13 +4130,20 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					baseInjection = baseInjection * (1.0f - tintAmount) + baseTintedByLocal * tintAmount;
 				}
 				const math::Vector3 triInjectionFinal =
-					baseInjection * baseScale + localLightBounce;
+					(baseInjection * baseScale + localLightBounce);
 				entry.radianceOpacity = math::Vector4(
 					std::clamp(triInjectionFinal.x, 0.0f, 32.0f),
 					std::clamp(triInjectionFinal.y, 0.0f, 32.0f),
 					std::clamp(triInjectionFinal.z, 0.0f, 32.0f),
 					0.92f);
-				entry.albedoWeight = math::Vector4(triAlbedo.x, triAlbedo.y, triAlbedo.z, triAreaNorm);
+				const float storedTriAlbedoLuma = std::clamp(
+					triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)),
+					0.02f,
+					1.0f);
+				const math::Vector3 storedTriAlbedo = terrainGiProxy
+					? math::Vector3(storedTriAlbedoLuma, storedTriAlbedoLuma, storedTriAlbedoLuma)
+					: triAlbedo;
+				entry.albedoWeight = math::Vector4(storedTriAlbedo.x, storedTriAlbedo.y, storedTriAlbedo.z, triAreaNorm);
 				out.push_back(entry);
 				if (triEmissiveMask > 0.012f || (!meshHasEmissiveTexture && triEmissiveActive))
 				{
@@ -3884,6 +4162,9 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_cachedEmissiveTiledTriangleCount[levelIndex] = emissiveTiledTriangleCountLocal;
 		_cachedEmissiveProxyMaxLuma[levelIndex] = emissiveProxyMaxLumaLocal;
 		_cachedEmissiveProxyMaxStrength[levelIndex] = emissiveProxyMaxStrengthLocal;
+		_cachedSceneGeometryRevision[levelIndex] = sceneGeometryRevision;
+		_cachedSceneMaterialRevision[levelIndex] = sceneMaterialRevision;
+		_cachedSceneLightRevision[levelIndex] = sceneLightRevision;
 		_stats.emissiveMaterialCount += emissiveMaterialCountLocal;
 		_stats.emissiveTriangleCount += emissiveTriangleCountLocal;
 		_stats.emissiveActiveTriangleCount += emissiveActiveTriangleCountLocal;
@@ -3901,6 +4182,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			return;
 
 		const bool useGpuMaterialEval = r_giGpuMaterialEval._val.b;
+		const bool useGpuCandidateGen = r_giGpuCandidateGen._val.b || useGpuMaterialEval;
 		auto* voxelizeStage = useGpuMaterialEval
 			? (_voxelizeEvalShader ? _voxelizeEvalShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr)
 			: (_voxelizeShader ? _voxelizeShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr);
@@ -3954,9 +4236,27 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		if (level.initialized && level.pendingShiftWs.LengthSquared() > 1e-8f && level.radianceSrv != nullptr && level.radianceScratchUav != nullptr)
 		{
 			const float voxelSize = (level.extent * 2.0f) / static_cast<float>(std::max(1u, level.resolution));
-			const int32_t shiftX = static_cast<int32_t>(std::round(level.pendingShiftWs.x / std::max(voxelSize, 1e-6f)));
-			const int32_t shiftY = static_cast<int32_t>(std::round(level.pendingShiftWs.y / std::max(voxelSize, 1e-6f)));
-			const int32_t shiftZ = static_cast<int32_t>(std::round(level.pendingShiftWs.z / std::max(voxelSize, 1e-6f)));
+			const math::Vector3 previousCenter = level.center;
+			const float safeVoxelSize = std::max(voxelSize, 1e-6f);
+			const int32_t rawShiftX = static_cast<int32_t>(std::round(level.pendingShiftWs.x / safeVoxelSize));
+			const int32_t rawShiftY = static_cast<int32_t>(std::round(level.pendingShiftWs.y / safeVoxelSize));
+			const int32_t rawShiftZ = static_cast<int32_t>(std::round(level.pendingShiftWs.z / safeVoxelSize));
+			int32_t maxShiftPerUpdate = 3;
+			if (levelIndex == 0u)
+			{
+				maxShiftPerUpdate = (_cameraMotionBlend > 0.05f) ? 1 : 2;
+			}
+			else if (levelIndex == 1u)
+			{
+				maxShiftPerUpdate = (_cameraMotionBlend > 0.05f) ? 2 : 3;
+			}
+			else if (_cameraMotionBlend > 0.05f)
+			{
+				maxShiftPerUpdate = 2;
+			}
+			const int32_t shiftX = std::clamp(rawShiftX, -maxShiftPerUpdate, maxShiftPerUpdate);
+			const int32_t shiftY = std::clamp(rawShiftY, -maxShiftPerUpdate, maxShiftPerUpdate);
+			const int32_t shiftZ = std::clamp(rawShiftZ, -maxShiftPerUpdate, maxShiftPerUpdate);
 			bool appliedShift = false;
 			math::Vector3 appliedShiftWs = math::Vector3::Zero;
 			if (shiftX != 0 || shiftY != 0 || shiftZ != 0)
@@ -4006,12 +4306,20 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 			if (appliedShift)
 			{
+				level.previousCenter = previousCenter;
 				level.center += appliedShiftWs;
+				_clipmapWarmFramesRemaining[levelIndex] = std::max(
+					_clipmapWarmFramesRemaining[levelIndex],
+					(levelIndex == 0u) ? 2u : 1u);
 			}
 			else
 			{
 				// Pending shift was below one voxel after quantization; snap sampled center to target.
+				level.previousCenter = previousCenter;
 				level.center = level.targetCenter;
+				_clipmapWarmFramesRemaining[levelIndex] = std::max(
+					_clipmapWarmFramesRemaining[levelIndex],
+					1u);
 			}
 			level.pendingShiftWs = level.targetCenter - level.center;
 			if (level.pendingShiftWs.LengthSquared() <= 1e-8f)
@@ -4447,6 +4755,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_constants.clipCenterExtent[levelIndex].y = level.center.y;
 		_constants.clipCenterExtent[levelIndex].z = level.center.z;
 		_constants.clipCenterExtent[levelIndex].w = level.extent;
+		_constants.clipPreviousCenterExtent[levelIndex].x = level.previousCenter.x;
+		_constants.clipPreviousCenterExtent[levelIndex].y = level.previousCenter.y;
+		_constants.clipPreviousCenterExtent[levelIndex].z = level.previousCenter.z;
+		_constants.clipPreviousCenterExtent[levelIndex].w =
+			(level.pendingShiftWs.LengthSquared() > 1e-8f) ? 1.0f : 0.0f;
 		_constants.params6.w = static_cast<float>(gpuLightCount);
 		if (_constantBuffer)
 		{
@@ -4455,7 +4768,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		uint32_t injectionTriangleCount = triangleCount;
 		ID3D11ShaderResourceView* injectionTriangleSrv = _voxelTriangleSrv;
 		bool useCandidateIndirectDispatch = false;
-		if (hasTriangles && r_giGpuCandidateGen._val.b)
+		if (hasTriangles && useGpuCandidateGen)
 		{
 			bool candidateIndirectReady = false;
 			const uint32_t candidateCount = BuildGpuVoxelCandidateList(levelIndex, triangleCount, candidateIndirectReady);
@@ -4569,35 +4882,29 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		{
 			ID3D11ShaderResourceView* srcSrv[1] = { radianceSrcSrv };
 			ID3D11UnorderedAccessView* dstUav[1] = { level.radianceScratchUav };
+			const bool clipSettlingNow =
+				(level.pendingShiftWs.LengthSquared() > 1e-8f) ||
+				(_clipmapWarmFramesRemaining[levelIndex] > 0u) ||
+				(_cameraMotionBlend > 0.05f);
+			const uint32_t propagationIterations = clipSettlingNow ? 1u : 2u;
 
-			context->CSSetShaderResources(0, 1, srcSrv);
-			context->CSSetUnorderedAccessViews(0, 1, dstUav, nullptr);
-			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(propagateStage->GetNativePtr()), nullptr, 0);
-			context->Dispatch(clearGroups, clearGroups, clearGroups);
+			for (uint32_t iter = 0u; iter < propagationIterations; ++iter)
+			{
+				context->CSSetShaderResources(0, 1, srcSrv);
+				context->CSSetUnorderedAccessViews(0, 1, dstUav, nullptr);
+				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(propagateStage->GetNativePtr()), nullptr, 0);
+				context->Dispatch(clearGroups, clearGroups, clearGroups);
 
-			ID3D11ShaderResourceView* nullSrvForProp[1] = {};
-			ID3D11UnorderedAccessView* nullUavForProp[1] = {};
-			context->CSSetShaderResources(0, 1, nullSrvForProp);
-			context->CSSetUnorderedAccessViews(0, 1, nullUavForProp, nullptr);
-			context->CSSetShader(nullptr, nullptr, 0);
+				ID3D11ShaderResourceView* nullSrvForProp[1] = {};
+				ID3D11UnorderedAccessView* nullUavForProp[1] = {};
+				context->CSSetShaderResources(0, 1, nullSrvForProp);
+				context->CSSetUnorderedAccessViews(0, 1, nullUavForProp, nullptr);
+				context->CSSetShader(nullptr, nullptr, 0);
 
-			context->CopyResource(
-				reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
-				reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
-
-			// Second propagation iteration to improve bounce spread in larger interiors.
-			context->CSSetShaderResources(0, 1, srcSrv);
-			context->CSSetUnorderedAccessViews(0, 1, dstUav, nullptr);
-			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(propagateStage->GetNativePtr()), nullptr, 0);
-			context->Dispatch(clearGroups, clearGroups, clearGroups);
-
-			context->CSSetShaderResources(0, 1, nullSrvForProp);
-			context->CSSetUnorderedAccessViews(0, 1, nullUavForProp, nullptr);
-			context->CSSetShader(nullptr, nullptr, 0);
-
-			context->CopyResource(
-				reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
-				reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
+				context->CopyResource(
+					reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
+					reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
+			}
 		}
 
 		ID3D11ShaderResourceView* nullSrvs[6] = {};
@@ -4615,6 +4922,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 		level.initialized = true;
 		level.dirty = false;
+		_clipmapLastVoxelizationFrame[levelIndex] = _frameCounter;
 	}
 
 	void DiffuseGI::RenderTracePass(const GBuffer& gbuffer, ITexture2D* beautyTarget)

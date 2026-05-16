@@ -212,6 +212,7 @@ namespace HexEngine
 
 	bool ParticleWorldSystem::BuildEmitters(Scene* scene, Camera* camera, float dt)
 	{
+		(void)camera;
 		std::vector<ParticleSystemComponent*> components;
 		scene->GetComponents<ParticleSystemComponent>(components);
 		if (components.empty())
@@ -227,7 +228,34 @@ namespace HexEngine
 		const uint32_t maxParticlesBudget = (uint32_t)std::max(1024, r_particleMaxParticles._val.i32);
 		const uint32_t maxEmittersBudget = (uint32_t)std::max(1, r_particleMaxEmitters._val.i32);
 
+		uint32_t candidateEmitterCount = 0;
+		uint64_t candidateParticleDemand = 0;
+		for (auto* component : components)
+		{
+			if (component == nullptr || component->GetEntity() == nullptr || component->GetEntity()->IsPendingDeletion())
+				continue;
+
+			auto effect = component->GetEffect();
+			if (effect == nullptr)
+				continue;
+
+			for (const auto& emitter : effect->emitters)
+			{
+				if (!emitter.enabled)
+					continue;
+
+				++candidateEmitterCount;
+				candidateParticleDemand += std::max(1u, emitter.maxParticles);
+				if (candidateEmitterCount >= maxEmittersBudget)
+					break;
+			}
+
+			if (candidateEmitterCount >= maxEmittersBudget)
+				break;
+		}
+
 		uint32_t particleOffset = 0;
+		uint64_t remainingParticleDemand = std::max<uint64_t>(1ull, candidateParticleDemand);
 		for (auto* component : components)
 		{
 			if (component == nullptr || component->GetEntity() == nullptr || component->GetEntity()->IsPendingDeletion())
@@ -255,6 +283,8 @@ namespace HexEngine
 				if (!emitter.enabled)
 					continue;
 
+				const uint32_t requestedEmitterParticles = std::max(1u, emitter.maxParticles);
+
 				if (!hasRequestedRenderResource)
 				{
 					requestedMaterialPath = emitter.materialPath;
@@ -263,9 +293,19 @@ namespace HexEngine
 					hasRequestedRenderResource = true;
 				}
 
-				const uint32_t emitterMaxParticles = std::max(1u, emitter.maxParticles);
-				if (particleOffset + emitterMaxParticles > maxParticlesBudget)
+				const uint32_t remainingParticleBudget = (particleOffset < maxParticlesBudget) ? (maxParticlesBudget - particleOffset) : 0u;
+				if (remainingParticleBudget == 0u)
+				{
+					remainingParticleDemand = (remainingParticleDemand > requestedEmitterParticles) ? (remainingParticleDemand - requestedEmitterParticles) : 1ull;
 					continue;
+				}
+
+				const uint32_t weightedShareParticles = std::max(
+					1u,
+					(uint32_t)std::min<uint64_t>(
+						remainingParticleBudget,
+						(std::max<uint64_t>(1ull, (uint64_t)remainingParticleBudget * (uint64_t)requestedEmitterParticles)) / std::max<uint64_t>(1ull, remainingParticleDemand)));
+				const uint32_t emitterMaxParticles = std::min(requestedEmitterParticles, weightedShareParticles);
 
 				EmitterBuildData build;
 				build.component = component;
@@ -337,9 +377,12 @@ namespace HexEngine
 					emitter.lifetimeRange.y,
 					emitter.speedRange.x,
 					emitter.speedRange.y);
+				const uint64_t emitterKey = MakeComponentKey(component, emitterIdx);
+				const uint32_t stableSpawnOffset = runtimeState.needsReset ? 0u : (_stableSpawnIndexByEmitter.contains(emitterKey) ? _stableSpawnIndexByEmitter[emitterKey] : 0u);
 				gpu.poolStart = build.poolStart;
 				gpu.poolCount = build.poolCount;
 				gpu.spawnRemaining = (int32_t)build.spawnThisFrame;
+				gpu.spawnOffset = (build.poolCount > 0u) ? (stableSpawnOffset % build.poolCount) : 0u;
 				gpu.flags = ToShapeFlag(emitter.shape.type) | ((uint32_t)emitter.facingMode << ParticleFlags_FacingShift);
 				if ((component->GetLocalSpaceOverrideEnabled() && component->GetLocalSpaceOverride()) || (!component->GetLocalSpaceOverrideEnabled() && emitter.simulateInLocalSpace))
 					gpu.flags |= ParticleFlags_LocalSpace;
@@ -353,7 +396,13 @@ namespace HexEngine
 				_frameEmitters.push_back(build);
 				_frameEmitterGpu.push_back(gpu);
 
+				if (build.poolCount > 0u)
+				{
+					_stableSpawnIndexByEmitter[emitterKey] = (gpu.spawnOffset + build.spawnThisFrame) % build.poolCount;
+				}
+
 				particleOffset += emitterMaxParticles;
+				remainingParticleDemand = (remainingParticleDemand > requestedEmitterParticles) ? (remainingParticleDemand - requestedEmitterParticles) : 1ull;
 			}
 
 			runtimeState.needsReset = false;

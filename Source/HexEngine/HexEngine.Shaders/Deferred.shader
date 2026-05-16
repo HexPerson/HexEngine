@@ -52,6 +52,7 @@
 		float4 g_cloudParams4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
 		float4 g_cloudParams5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
 		float4 g_cloudWindDirection; // xyz=wind direction, w=quality preset
+		float4 g_cloudWindOffset; // xyz=accumulated wind offset, w=reserved
 		float4 g_cloudMarch; // x=view steps, y=light steps, z=ground shadow steps, w=ground shadow strength
 	};
 
@@ -120,8 +121,7 @@
 		if (hit.y <= 0.0f)
 			return 1.0f;
 
-		const float3 windDir = normalize(g_cloudWindDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
-		const float3 windOffset = windDir * g_cloudParams2.z * g_cloudParams2.w * (g_time * 0.01f);
+		const float3 windOffset = g_cloudWindOffset.xyz;
 
 		const float invCloudHeight = rcp(max(100.0f, boundsMax.y - boundsMin.y));
 		const float stepLen = max(1.0f, hit.y / (float)shadowSteps);
@@ -274,7 +274,14 @@
 				diffuse,
 				specular);
 
-			float3 finalColour = ambient + diffuse + specular;
+			float lightningFlash = saturate(g_weatherSurface.lightningFlash);
+			float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+			float lightningNdotL = saturate(dot(normalize(pixelNormal.xyz), lightningDir));
+			float lightningSpec = pow(saturate(dot(normalize(normalize(pixelNormal.xyz) + eyeVector), lightningDir)), lerp(44.0f, 14.0f, saturate(pixelSpecular.r)));
+			float3 lightningColour = float3(0.62f, 0.76f, 1.0f);
+			float3 lightningContribution = lightningColour * lightningFlash * (pixelColour.rgb * lightningNdotL * 0.42f + lightningSpec * 0.62f);
+
+			float3 finalColour = ambient + diffuse + specular + lightningContribution;
 
 			float4 result = float4(finalColour.rgb, 1.0f);
 			return /*saturate*/(result);

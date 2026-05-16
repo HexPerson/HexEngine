@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <cstdint>
 #include <format>
 #include <sstream>
@@ -109,6 +110,103 @@ namespace HexEngine
 		std::string ToFloat3(CompilerContext& ctx, const GraphExpression& expr);
 		std::string ToFloat4(CompilerContext& ctx, const GraphExpression& expr);
 		std::string ToScalar(CompilerContext& ctx, const GraphExpression& expr);
+
+		bool IsNumericGraphType(MaterialGraphValueType type)
+		{
+			return type == MaterialGraphValueType::Scalar ||
+				type == MaterialGraphValueType::Vector2 ||
+				type == MaterialGraphValueType::Vector3 ||
+				type == MaterialGraphValueType::Vector4 ||
+				type == MaterialGraphValueType::UV;
+		}
+
+		int32_t GraphTypeWidth(MaterialGraphValueType type)
+		{
+			switch (type)
+			{
+			case MaterialGraphValueType::Scalar: return 1;
+			case MaterialGraphValueType::Vector2:
+			case MaterialGraphValueType::UV: return 2;
+			case MaterialGraphValueType::Vector3: return 3;
+			case MaterialGraphValueType::Vector4: return 4;
+			default: return 0;
+			}
+		}
+
+		MaterialGraphValueType NumericTypeFromWidth(int32_t width)
+		{
+			switch (width)
+			{
+			case 1: return MaterialGraphValueType::Scalar;
+			case 2: return MaterialGraphValueType::Vector2;
+			case 3: return MaterialGraphValueType::Vector3;
+			case 4:
+			default:
+				return MaterialGraphValueType::Vector4;
+			}
+		}
+
+		MaterialGraphValueType PromoteNumericTypes(MaterialGraphValueType a, MaterialGraphValueType b)
+		{
+			return NumericTypeFromWidth(std::max(GraphTypeWidth(a), GraphTypeWidth(b)));
+		}
+
+		std::string ToTypedNumeric(CompilerContext& ctx, const GraphExpression& expr, MaterialGraphValueType type)
+		{
+			switch (type)
+			{
+			case MaterialGraphValueType::Scalar: return ToScalar(ctx, expr);
+			case MaterialGraphValueType::Vector2:
+			case MaterialGraphValueType::UV: return ToFloat2(ctx, expr);
+			case MaterialGraphValueType::Vector3: return ToFloat3(ctx, expr);
+			case MaterialGraphValueType::Vector4: return ToFloat4(ctx, expr);
+			default: break;
+			}
+
+			return ToFloat4(ctx, expr);
+		}
+
+		bool TryParseConstantScalarExpression(const std::string& expr, float& outValue)
+		{
+			std::string trimmed;
+			trimmed.reserve(expr.size());
+			for (const char c : expr)
+			{
+				if (c != ' ' && c != '\t' && c != '\r' && c != '\n')
+					trimmed.push_back(c);
+			}
+
+			while (!trimmed.empty() && trimmed.front() == '(' && trimmed.back() == ')')
+			{
+				trimmed = trimmed.substr(1, trimmed.size() - 2);
+			}
+
+			if (trimmed.empty())
+				return false;
+
+			char* endPtr = nullptr;
+			const float parsed = strtof(trimmed.c_str(), &endPtr);
+			if (endPtr == nullptr || *endPtr != '\0')
+				return false;
+
+			outValue = parsed;
+			return true;
+		}
+
+		bool IsDefinitelyOpaqueOpacityExpression(const GraphExpression* opacityExpr)
+		{
+			if (opacityExpr == nullptr)
+				return false;
+
+			if (opacityExpr->type != MaterialGraphValueType::Scalar)
+				return false;
+
+			float value = 0.0f;
+			if (!TryParseConstantScalarExpression(opacityExpr->code, value))
+				return false;
+
+			return value >= 0.999f;
+		}
 
 		int32_t AcquireTextureSlot(CompilerContext& ctx, const fs::path& texturePath, const std::string& stableKey = {})
 		{
@@ -354,6 +452,54 @@ namespace HexEngine
 				}
 				break;
 			}
+			case MaterialGraphNodeType::WeatherScalar:
+			{
+				value.type = MaterialGraphValueType::Scalar;
+				const std::string key = node->parameterName;
+				if (key == "wetness")
+					value.code = "g_weatherSurface.wetness";
+				else if (key == "puddleAmount" || key == "puddles")
+					value.code = "g_weatherSurface.puddleAmount";
+				else if (key == "snowCoverage" || key == "snow")
+					value.code = "g_weatherSurface.snowCoverage";
+				else if (key == "snowMelt")
+					value.code = "g_weatherSurface.snowMelt";
+				else if (key == "dirtAmount" || key == "sand")
+					value.code = "g_weatherSurface.dirtAmount";
+				else if (key == "temperatureBias" || key == "temperature")
+					value.code = "g_weatherSurface.temperatureBias";
+				else if (key == "precipitationIntensity" || key == "precipitation")
+					value.code = "g_weatherSurface.precipitationIntensity";
+				else if (key == "lightningFlash" || key == "lightning")
+					value.code = "g_weatherSurface.lightningFlash";
+				else
+				{
+					ctx.errors.push_back(std::format(
+						"WeatherScalar '{}' uses unsupported key '{}'.",
+						node->id,
+						key));
+					return false;
+				}
+				break;
+			}
+			case MaterialGraphNodeType::WeatherVector:
+			{
+				value.type = MaterialGraphValueType::Vector4;
+				const std::string key = node->parameterName.empty() ? "windDirectionAndSpeed" : node->parameterName;
+				if (key == "windDirectionAndSpeed" || key == "wind")
+				{
+					value.code = "g_weatherSurface.windDirectionAndSpeed";
+				}
+				else
+				{
+					ctx.errors.push_back(std::format(
+						"WeatherVector '{}' uses unsupported key '{}'.",
+						node->id,
+						key));
+					return false;
+				}
+				break;
+			}
 			case MaterialGraphNodeType::TextureSample:
 			{
 				GraphExpression textureInput;
@@ -396,16 +542,18 @@ namespace HexEngine
 					return false;
 				}
 
-				if (a.type == MaterialGraphValueType::Scalar && b.type == MaterialGraphValueType::Scalar)
+				if (!IsNumericGraphType(a.type) || !IsNumericGraphType(b.type))
 				{
-					value.type = MaterialGraphValueType::Scalar;
-					value.code = std::format("({} {} {})", ToScalar(ctx, a), node->nodeType == MaterialGraphNodeType::Add ? "+" : "*", ToScalar(ctx, b));
+					ctx.errors.push_back(std::format("Node '{}' only supports scalar/vector numeric inputs.", node->id));
+					return false;
 				}
-				else
-				{
-					value.type = MaterialGraphValueType::Vector4;
-					value.code = std::format("({} {} {})", ToFloat4(ctx, a), node->nodeType == MaterialGraphNodeType::Add ? "+" : "*", ToFloat4(ctx, b));
-				}
+
+				value.type = PromoteNumericTypes(a.type, b.type);
+				value.code = std::format(
+					"({} {} {})",
+					ToTypedNumeric(ctx, a, value.type),
+					node->nodeType == MaterialGraphNodeType::Add ? "+" : "*",
+					ToTypedNumeric(ctx, b, value.type));
 				break;
 			}
 			case MaterialGraphNodeType::Lerp:
@@ -419,16 +567,18 @@ namespace HexEngine
 					return false;
 				}
 
-				if (a.type == MaterialGraphValueType::Scalar && b.type == MaterialGraphValueType::Scalar)
+				if (!IsNumericGraphType(a.type) || !IsNumericGraphType(b.type))
 				{
-					value.type = MaterialGraphValueType::Scalar;
-					value.code = std::format("lerp({}, {}, {})", ToScalar(ctx, a), ToScalar(ctx, b), ToScalar(ctx, alpha));
+					ctx.errors.push_back(std::format("Lerp node '{}' only supports scalar/vector numeric inputs.", node->id));
+					return false;
 				}
-				else
-				{
-					value.type = MaterialGraphValueType::Vector4;
-					value.code = std::format("lerp({}, {}, {})", ToFloat4(ctx, a), ToFloat4(ctx, b), ToScalar(ctx, alpha));
-				}
+
+				value.type = PromoteNumericTypes(a.type, b.type);
+				value.code = std::format(
+					"lerp({}, {}, {})",
+					ToTypedNumeric(ctx, a, value.type),
+					ToTypedNumeric(ctx, b, value.type),
+					ToScalar(ctx, alpha));
 				break;
 			}
 			case MaterialGraphNodeType::OneMinus:
@@ -440,16 +590,14 @@ namespace HexEngine
 					return false;
 				}
 
-				if (input.type == MaterialGraphValueType::Scalar)
+				if (!IsNumericGraphType(input.type))
 				{
-					value.type = MaterialGraphValueType::Scalar;
-					value.code = std::format("(1.0f - {})", ToScalar(ctx, input));
+					ctx.errors.push_back(std::format("OneMinus node '{}' only supports scalar/vector numeric input.", node->id));
+					return false;
 				}
-				else
-				{
-					value.type = MaterialGraphValueType::Vector4;
-					value.code = std::format("(float4(1.0f, 1.0f, 1.0f, 1.0f) - {})", ToFloat4(ctx, input));
-				}
+
+				value.type = input.type == MaterialGraphValueType::UV ? MaterialGraphValueType::Vector2 : input.type;
+				value.code = std::format("(1.0f - {})", ToTypedNumeric(ctx, input, value.type));
 				break;
 			}
 			case MaterialGraphNodeType::NormalMap:
@@ -490,7 +638,36 @@ namespace HexEngine
 				if (output.nodeId.empty() || output.pinId.empty())
 					return false;
 
-				return EvaluateNodeOutput(ctx, output.nodeId, output.pinId, outExpr);
+				if (!EvaluateNodeOutput(ctx, output.nodeId, output.pinId, outExpr))
+					return false;
+
+				// Treat normal outputs as tangent-space normals by default unless a
+				// dedicated NormalMap node has already transformed them into world space.
+				if (semantic == MaterialGraphOutputSemantic::Normal)
+				{
+					const auto* sourceNode = ctx.graph.FindNode(output.nodeId);
+					if (sourceNode != nullptr && sourceNode->nodeType != MaterialGraphNodeType::NormalMap)
+					{
+						std::string tangentSpaceNormal;
+						if (outExpr.type == MaterialGraphValueType::Texture2D)
+						{
+							tangentSpaceNormal = std::format(
+								"{}.Sample(g_textureSampler, input.texcoord).xyz",
+								outExpr.code);
+						}
+						else
+						{
+							tangentSpaceNormal = ToFloat3(ctx, outExpr);
+						}
+
+						outExpr.type = MaterialGraphValueType::Vector3;
+						outExpr.code = std::format(
+							"normalize(mul(normalize({} * 2.0f - 1.0f), float3x3(input.tangent, input.binormal, normalize(input.normal))))",
+							tangentSpaceNormal);
+					}
+				}
+
+				return true;
 			}
 
 			return false;
@@ -510,7 +687,7 @@ namespace HexEngine
 			ss << "\"Requirements\"\n{\n}\n";
 			ss << "\"InputLayout\"\n{\n\tPosNormTanBinTex_INSTANCED\n}\n";
 			ss << "\"VertexShaderIncludes\"\n{\n\tMeshCommon\n\tUtils\n}\n";
-			ss << "\"PixelShaderIncludes\"\n{\n\tMeshCommon\n\tUtils\n}\n";
+			ss << "\"PixelShaderIncludes\"\n{\n\tMeshCommon\n\tUtils\n\tAtmosphere\n\tPBRutils\n}\n";
 			ss << "\"VertexShader\"\n{\n";
 			ss << "\tMeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)\n\t{\n";
 			ss << "\t\tMeshPixelInput output;\n";
@@ -581,6 +758,11 @@ namespace HexEngine
 			ss << "\t\tif (baseColor.a <= 0.0f && g_material.isInTransparencyPhase == 0)\n\t\t\tclip(-1);\n";
 			ss << "\t\tif (g_material.isInTransparencyPhase == 0)\n\t\t{\n\t\t\tif (opacity < 1.0f)\n\t\t\t\tclip(-1);\n\t\t}\n\t\telse if (opacity <= 0.0f)\n\t\t{\n\t\t\tclip(-1);\n\t\t}\n";
 			ss << "\t\tfloat3 finalRGB = baseColor.rgb + emission;\n";
+			ss << "\t\tif (g_material.isInTransparencyPhase != 0)\n";
+			ss << "\t\t{\n";
+			ss << "\t\t\tfloat4 litSurface = CalculatePBRSurface(metallic, roughness, worldNormal, input.positionWS.xyz, -normalize(g_lightDirection.xyz), getSunColour(), baseColor.rgb, 1.0f, g_globalLight[0]);\n";
+			ss << "\t\t\tfinalRGB = litSurface.rgb + emission;\n";
+			ss << "\t\t}\n";
 			ss << "\t\tfloat2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));\n";
 			ss << "\t\tfloat transparencyAlpha = saturate(opacity * baseColor.a);\n";
 			ss << "\t\tfloat outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;\n";
@@ -819,7 +1001,7 @@ namespace HexEngine
 				kMaxGraphTextureSlots));
 		}
 
-		material._properties.hasTransparency = opacityPtr != nullptr ? 1 : 0;
+		material._properties.hasTransparency = (opacityPtr != nullptr && !IsDefinitelyOpaqueOpacityExpression(opacityPtr)) ? 1 : 0;
 
 		const fs::path generatedShaderDirectory = ResolveGeneratedShaderDirectory(material);
 		if (generatedShaderDirectory.empty())
@@ -851,19 +1033,19 @@ namespace HexEngine
 		const fs::path hashedShaderSource = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + sourceHash + ".shader");
 		fs::path generatedShaderOutput = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + sourceHash + ".hcs");
 
+		DiskFile shaderFile(hashedShaderSource, std::ios::out | std::ios::trunc);
+		if (!shaderFile.Open())
+		{
+			result.errors.push_back(std::format("Failed to open generated shader source '{}' for writing.", hashedShaderSource.string()));
+			return result;
+		}
+
+		shaderFile.Write((void*)shaderSource.data(), (uint32_t)shaderSource.size());
+		shaderFile.Flush();
+		shaderFile.Close();
+
 		if (!fs::exists(generatedShaderOutput))
 		{
-			DiskFile shaderFile(hashedShaderSource, std::ios::out | std::ios::trunc);
-			if (!shaderFile.Open())
-			{
-				result.errors.push_back(std::format("Failed to open generated shader source '{}' for writing.", hashedShaderSource.string()));
-				return result;
-			}
-
-			shaderFile.Write((void*)shaderSource.data(), (uint32_t)shaderSource.size());
-			shaderFile.Flush();
-			shaderFile.Close();
-
 			std::vector<fs::path> includeSearchPaths;
 			const fs::path includeDir = ResolveShaderIncludeDirectory(&includeSearchPaths);
 			if (includeDir.empty())

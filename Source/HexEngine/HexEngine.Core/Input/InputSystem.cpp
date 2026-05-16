@@ -554,9 +554,36 @@ namespace HexEngine
 		return (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
 	}
 
+	bool InputSystem::IsPositionWithinInputViewport(int32_t x, int32_t y)
+	{
+		if (_hasCustomVP)
+		{
+			if (x >= _vp.x && y >= _vp.y && x < _vp.x + _vp.width && y < _vp.y + _vp.height)
+				return true;
+		}
+		else
+		{
+			uint32_t width, height;
+			g_pEnv->GetScreenSize(width, height);
+
+			if (x >= 0 && y >= 0 && x < width && y < height)
+				return true;
+		}
+		return false;
+	}
+
 	math::Vector3 InputSystem::GetScreenToWorldRay(Camera* camera, int32_t screenX, int32_t screenY, int32_t screenWidth, int32_t screenHeight)
 	{
 		math::Vector3 start_point, end_point;
+
+		if (_hasCustomVP)
+		{
+			screenWidth = (int32_t)_vp.width;
+			screenHeight = (int32_t)_vp.height;
+
+			screenX -= _vp.x;
+			screenY -= _vp.y;
+		}
 
 		// begin the ray right where the camera is at (in world space)
 		start_point = camera->GetEntity()->GetPosition();

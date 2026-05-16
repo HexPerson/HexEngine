@@ -4,9 +4,29 @@
 #include "RigidBodyPhysX.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
 #include <extensions\PxExtensionsAPI.h>
+#include <cmath>
 
 namespace
 {
+	constexpr float kMinTriangleMeshScale = 0.001f;
+
+	float SanitizeTriangleMeshScaleAxis(float value)
+	{
+		if (!std::isfinite(value))
+			return 1.0f;
+
+		const float absValue = std::abs(value);
+		return absValue < kMinTriangleMeshScale ? kMinTriangleMeshScale : absValue;
+	}
+
+	physx::PxMeshScale BuildSafeTriangleMeshScale(const math::Vector3& requestedScale)
+	{
+		return physx::PxMeshScale(physx::PxVec3(
+			SanitizeTriangleMeshScaleAxis(requestedScale.x),
+			SanitizeTriangleMeshScaleAxis(requestedScale.y),
+			SanitizeTriangleMeshScaleAxis(requestedScale.z)));
+	}
+
 	math::Quaternion BuildEntityWorldRotation(HexEngine::Entity* entity)
 	{
 		if (entity == nullptr)
@@ -294,7 +314,7 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 		// if the shape is exclusive then we must make a new shape, it cannot be copied
 		if (bodyComponent->IsExclusive())
 		{
-			const auto scale = transform->GetScale();
+			const auto scale = transform->GetEntity()->GetAbsoluteScale();
 
 			switch (physxBody->_geometry->getType())
 			{
@@ -302,7 +322,7 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 			{
 				physx::PxTriangleMeshGeometry* triGeom = (physx::PxTriangleMeshGeometry*)physxBody->_geometry;
 
-				physx::PxTriangleMeshGeometry* geomCopy = new physx::PxTriangleMeshGeometry(triGeom->triangleMesh, physx::PxMeshScale(*(physx::PxVec3*)&scale.x));
+				physx::PxTriangleMeshGeometry* geomCopy = new physx::PxTriangleMeshGeometry(triGeom->triangleMesh, BuildSafeTriangleMeshScale(scale));
 
 				rigidBody->_geometry = geomCopy;
 				rigidBody->_shape = _physics->createShape(*geomCopy, *_defaultMaterial, true);

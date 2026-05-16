@@ -221,6 +221,8 @@ namespace HexEngine
 		if (text == "ScalarParameter") { outType = MaterialGraphNodeType::ScalarParameter; return true; }
 		if (text == "VectorParameter") { outType = MaterialGraphNodeType::VectorParameter; return true; }
 		if (text == "TextureParameter") { outType = MaterialGraphNodeType::TextureParameter; return true; }
+		if (text == "WeatherScalar") { outType = MaterialGraphNodeType::WeatherScalar; return true; }
+		if (text == "WeatherVector") { outType = MaterialGraphNodeType::WeatherVector; return true; }
 		return false;
 	}
 
@@ -242,6 +244,8 @@ namespace HexEngine
 		case MaterialGraphNodeType::ScalarParameter: return "ScalarParameter";
 		case MaterialGraphNodeType::VectorParameter: return "VectorParameter";
 		case MaterialGraphNodeType::TextureParameter: return "TextureParameter";
+		case MaterialGraphNodeType::WeatherScalar: return "WeatherScalar";
+		case MaterialGraphNodeType::WeatherVector: return "WeatherVector";
 		}
 	}
 

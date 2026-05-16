@@ -2,6 +2,7 @@
 #include "Entity.hpp"
 #include "Component\Transform.hpp"
 #include "../HexEngine.hpp"
+#include "../Scene/Scene.hpp"
 #include "Component\StaticMeshComponent.hpp"
 #include "Component\FirstPersonCameraController.hpp"
 #include "Component\RTSCameraController.hpp"
@@ -818,7 +819,7 @@ namespace HexEngine
 		return _cachedWorldOBB;
 	}
 
-	void Entity::ClearTransformCache()
+	void Entity::ClearTransformCache(bool notify)
 	{
 		_hasCachedLocalTM = false;
 		_hasCachedWorldTM = false;
@@ -828,6 +829,11 @@ namespace HexEngine
 		_hasCachedWorldBoundingSphere = false;
 		_hasCachedWorldTMInvert = false;
 		++_transformVersion;
+
+		if (_scene != nullptr && notify)
+		{
+			_scene->NotifyEntityTransformChanged(this);
+		}
 
 		if (auto mainCamera = _scene->GetMainCamera())
 		{
@@ -869,6 +875,10 @@ namespace HexEngine
 				child->_hasCachedWorldTMTranspose = false;
 				child->_hasCachedWorldTMInvert = false;
 				child->_hasCachedWorldBoundingSphere = false;
+				if (child->_scene != nullptr)
+				{
+					child->_scene->NotifyEntityTransformChanged(child);
+				}
 
 				invalidateRef(child, invalidateRef);
 			}

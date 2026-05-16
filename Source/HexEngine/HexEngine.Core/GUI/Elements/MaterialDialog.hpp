@@ -31,7 +31,9 @@ namespace HexEngine
 		AssetSearch* _textures[MaterialTexture::Count] = { nullptr };
 		DragFloat* _smoothness = nullptr;
 		DragFloat* _specularProbability = nullptr;
+		Checkbox* _affectsGiToggle = nullptr;
 		Checkbox* _emissiveGiToggle = nullptr;
+		bool _affectsGI = true;
 		bool _emissiveAffectsGI = true;
 		std::shared_ptr<Material> _material;
 	};

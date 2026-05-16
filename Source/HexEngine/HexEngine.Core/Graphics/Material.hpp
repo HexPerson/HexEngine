@@ -50,6 +50,7 @@ namespace HexEngine
 				_blendState == other._blendState &&
 				_depthState == other._depthState &&
 				_cullMode == other._cullMode &&
+				_affectsGI == other._affectsGI &&
 				_emissiveAffectsGI == other._emissiveAffectsGI
 				);
 		}
@@ -97,6 +98,8 @@ namespace HexEngine
 
 		void SetEmissiveAffectsGI(bool value);
 		bool GetEmissiveAffectsGI() const;
+		void SetAffectsGI(bool value);
+		bool GetAffectsGI() const;
 
 		void				SetBlendState(BlendState state);
 		void				SetCullMode(CullingMode mode);
@@ -150,6 +153,7 @@ namespace HexEngine
 		MaterialFormat _format = MaterialFormat::None;
 
 		std::map<std::string, std::string> _soundTags;
+		bool _affectsGI = true;
 		bool _emissiveAffectsGI = false;
 
 		std::recursive_mutex _lock;

@@ -39,6 +39,15 @@ namespace HexEngine
 			return false;
 		}
 
+		bool IsNumericValueType(MaterialGraphValueType type)
+		{
+			return type == MaterialGraphValueType::Scalar ||
+				type == MaterialGraphValueType::Vector2 ||
+				type == MaterialGraphValueType::Vector3 ||
+				type == MaterialGraphValueType::Vector4 ||
+				type == MaterialGraphValueType::UV;
+		}
+
 		std::string TryExtractNodeIdFromMessage(const std::string& message)
 		{
 			const size_t nodePos = message.find("node_");
@@ -97,6 +106,148 @@ namespace HexEngine
 			node.position = position;
 			node.inputPins.push_back({ "In", "In", valueType, MaterialGraphPinDirection::Input });
 			return node;
+		}
+
+		MaterialGraphNode MakeGraphNode(const std::string& id, MaterialGraphNodeType type, const std::string& name, const math::Vector2& position)
+		{
+			MaterialGraphNode node;
+			node.id = id;
+			node.nodeType = type;
+			node.displayName = name;
+			node.position = position;
+			return node;
+		}
+
+		void AddConnection(MaterialGraph& graph, const std::string& fromNode, const std::string& fromPin, const std::string& toNode, const std::string& toPin)
+		{
+			graph.connections.push_back({ fromNode, fromPin, toNode, toPin });
+		}
+
+		MaterialGraph BuildGraphFromMaterial(const Material& material)
+		{
+			MaterialGraph graph;
+			graph.version = MaterialGraph::kVersion;
+
+			auto addVectorConstant = [&](const char* id, const char* label, const math::Vector2& pos, const math::Vector4& value)
+			{
+				auto node = MakeGraphNode(id, MaterialGraphNodeType::VectorConstant, label, pos);
+				node.vectorValue = value;
+				node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+				graph.nodes.push_back(std::move(node));
+			};
+
+			auto addScalarConstant = [&](const char* id, const char* label, const math::Vector2& pos, float value)
+			{
+				auto node = MakeGraphNode(id, MaterialGraphNodeType::ScalarConstant, label, pos);
+				node.scalarValue = value;
+				node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
+				graph.nodes.push_back(std::move(node));
+			};
+
+			auto addTextureChain = [&](MaterialTexture textureType, const char* paramId, const char* sampleId, const char* label, const math::Vector2& pos, bool useNormalMap) -> std::string
+			{
+				const auto texture = material.GetTexture(textureType);
+				if (!texture)
+					return {};
+
+				auto textureNode = MakeGraphNode(paramId, MaterialGraphNodeType::TextureParameter, label, pos);
+				textureNode.texturePath = texture->GetFileSystemPath();
+				textureNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Output });
+				graph.nodes.push_back(std::move(textureNode));
+
+				if (useNormalMap)
+				{
+					auto normalNode = MakeGraphNode(sampleId, MaterialGraphNodeType::NormalMap, "NormalMap", pos + math::Vector2(180.0f, 0.0f));
+					normalNode.inputPins.push_back({ "Normal", "Normal", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Input });
+					normalNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+					graph.nodes.push_back(std::move(normalNode));
+					AddConnection(graph, paramId, "Out", sampleId, "Normal");
+				}
+				else
+				{
+					auto sampleNode = MakeGraphNode(sampleId, MaterialGraphNodeType::TextureSample, "TextureSample", pos + math::Vector2(180.0f, 0.0f));
+					sampleNode.inputPins.push_back({ "Tex", "Tex", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Input });
+					sampleNode.inputPins.push_back({ "UV", "UV", MaterialGraphValueType::UV, MaterialGraphPinDirection::Input });
+					sampleNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+					graph.nodes.push_back(std::move(sampleNode));
+					AddConnection(graph, paramId, "Out", sampleId, "Tex");
+				}
+
+				return sampleId;
+			};
+
+			const math::Vector3 emissive(
+				material._properties.emissiveColour.x * material._properties.emissiveColour.w,
+				material._properties.emissiveColour.y * material._properties.emissiveColour.w,
+				material._properties.emissiveColour.z * material._properties.emissiveColour.w);
+
+			std::string baseColorSource = addTextureChain(MaterialTexture::Albedo, "node_albedo_tex", "node_albedo_sample", "Albedo Texture", math::Vector2(40.0f, 60.0f), false);
+			if (baseColorSource.empty())
+			{
+				addVectorConstant("node_albedo", "Base Color", math::Vector2(80.0f, 80.0f), material._properties.diffuseColour);
+				baseColorSource = "node_albedo";
+			}
+
+			std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", math::Vector2(40.0f, 150.0f), true);
+			if (normalSource.empty())
+			{
+				addVectorConstant("node_normal", "Normal", math::Vector2(80.0f, 160.0f), math::Vector4(0.5f, 0.5f, 1.0f, 1.0f));
+				normalSource = "node_normal";
+			}
+
+			std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", math::Vector2(40.0f, 230.0f), false);
+			if (roughnessSource.empty())
+			{
+				addScalarConstant("node_roughness", "Roughness", math::Vector2(80.0f, 240.0f), material._properties.roughnessFactor);
+				roughnessSource = "node_roughness";
+			}
+
+			std::string metallicSource = addTextureChain(MaterialTexture::Metallic, "node_metallic_tex", "node_metallic_sample", "Metallic Texture", math::Vector2(40.0f, 310.0f), false);
+			if (metallicSource.empty())
+			{
+				addScalarConstant("node_metallic", "Metallic", math::Vector2(80.0f, 320.0f), material._properties.metallicFactor);
+				metallicSource = "node_metallic";
+			}
+
+			std::string emissiveSource = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", math::Vector2(40.0f, 390.0f), false);
+			if (emissiveSource.empty())
+			{
+				addVectorConstant("node_emissive", "Emissive", math::Vector2(80.0f, 400.0f), math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+				emissiveSource = "node_emissive";
+			}
+
+			std::string opacitySource = addTextureChain(MaterialTexture::Opacity, "node_opacity_tex", "node_opacity_sample", "Opacity Texture", math::Vector2(40.0f, 470.0f), false);
+			if (opacitySource.empty())
+			{
+				addScalarConstant("node_opacity", "Opacity", math::Vector2(80.0f, 480.0f), 1.0f);
+				opacitySource = "node_opacity";
+			}
+
+			graph.nodes.push_back(MakeMaterialOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4));
+			graph.nodes.push_back(MakeMaterialOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4));
+			graph.nodes.push_back(MakeMaterialOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar));
+			graph.nodes.push_back(MakeMaterialOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar));
+			graph.nodes.push_back(MakeMaterialOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4));
+			graph.nodes.push_back(MakeMaterialOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar));
+
+			AddConnection(graph, baseColorSource, "Out", "output_basecolor", "In");
+			AddConnection(graph, normalSource, "Out", "output_normal", "In");
+			AddConnection(graph, roughnessSource, "Out", "output_roughness", "In");
+			AddConnection(graph, metallicSource, "Out", "output_metallic", "In");
+			AddConnection(graph, emissiveSource, "Out", "output_emissive", "In");
+			AddConnection(graph, opacitySource, "Out", "output_opacity", "In");
+
+			graph.outputs =
+			{
+				{ MaterialGraphOutputSemantic::BaseColor, baseColorSource, "Out" },
+				{ MaterialGraphOutputSemantic::Normal, normalSource, "Out" },
+				{ MaterialGraphOutputSemantic::Roughness, roughnessSource, "Out" },
+				{ MaterialGraphOutputSemantic::Metallic, metallicSource, "Out" },
+				{ MaterialGraphOutputSemantic::Emissive, emissiveSource, "Out" },
+				{ MaterialGraphOutputSemantic::Opacity, opacitySource, "Out" }
+			};
+
+			return graph;
 		}
 
 		class MaterialGraphCanvasImpl final : public Element
@@ -488,6 +639,9 @@ namespace HexEngine
 				if (from == to)
 					return true;
 
+				if (IsNumericValueType(from) && IsNumericValueType(to))
+					return true;
+
 				if ((from == MaterialGraphValueType::Scalar && to == MaterialGraphValueType::Vector2) ||
 					(from == MaterialGraphValueType::Scalar && to == MaterialGraphValueType::Vector3) ||
 					(from == MaterialGraphValueType::Scalar && to == MaterialGraphValueType::Vector4))
@@ -497,6 +651,13 @@ namespace HexEngine
 
 				if ((from == MaterialGraphValueType::Vector3 && to == MaterialGraphValueType::Vector4) ||
 					(from == MaterialGraphValueType::Vector4 && to == MaterialGraphValueType::Vector3))
+				{
+					return true;
+				}
+
+				if ((from == MaterialGraphValueType::Vector2 && to == MaterialGraphValueType::Scalar) ||
+					(from == MaterialGraphValueType::Vector3 && to == MaterialGraphValueType::Scalar) ||
+					(from == MaterialGraphValueType::Vector4 && to == MaterialGraphValueType::Scalar))
 				{
 					return true;
 				}
@@ -595,9 +756,11 @@ namespace HexEngine
 				{
 				case MaterialGraphNodeType::ScalarConstant:
 				case MaterialGraphNodeType::ScalarParameter:
+				case MaterialGraphNodeType::WeatherScalar:
 					return { { "Out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output } };
 				case MaterialGraphNodeType::VectorConstant:
 				case MaterialGraphNodeType::VectorParameter:
+				case MaterialGraphNodeType::WeatherVector:
 				case MaterialGraphNodeType::Add:
 				case MaterialGraphNodeType::Multiply:
 				case MaterialGraphNodeType::Lerp:
@@ -657,6 +820,8 @@ namespace HexEngine
 				_contextMenu->AddItem(new ContextItem(L"Scalar Parameter", [this, mousePos](const std::wstring&) { AddNode(MaterialGraphNodeType::ScalarParameter, mousePos); }));
 				_contextMenu->AddItem(new ContextItem(L"Vector Parameter", [this, mousePos](const std::wstring&) { AddNode(MaterialGraphNodeType::VectorParameter, mousePos); }));
 				_contextMenu->AddItem(new ContextItem(L"Texture Parameter", [this, mousePos](const std::wstring&) { AddNode(MaterialGraphNodeType::TextureParameter, mousePos); }));
+				_contextMenu->AddItem(new ContextItem(L"Weather Scalar", [this, mousePos](const std::wstring&) { AddNode(MaterialGraphNodeType::WeatherScalar, mousePos); }));
+				_contextMenu->AddItem(new ContextItem(L"Weather Vector", [this, mousePos](const std::wstring&) { AddNode(MaterialGraphNodeType::WeatherVector, mousePos); }));
 			}
 
 		private:
@@ -824,13 +989,13 @@ namespace HexEngine
 
 		if (!_material->_hasGraph)
 		{
-			_material->_graph = MaterialGraph::CreateDefaultPbrGraph();
+			_material->_graph = BuildGraphFromMaterial(*_material);
 			_material->_hasGraph = true;
 			_isDirty = true;
 		}
 		else if (_material->_graph.nodes.empty())
 		{
-			_material->_graph = MaterialGraph::CreateDefaultPbrGraph();
+			_material->_graph = BuildGraphFromMaterial(*_material);
 			_isDirty = true;
 		}
 
@@ -933,10 +1098,15 @@ namespace HexEngine
 		}
 
 		const bool hasNode = node != nullptr;
-		const bool isScalarNode = hasNode && (node->nodeType == MaterialGraphNodeType::ScalarConstant || node->nodeType == MaterialGraphNodeType::ScalarParameter);
-		const bool isVectorNode = hasNode && (node->nodeType == MaterialGraphNodeType::VectorConstant || node->nodeType == MaterialGraphNodeType::VectorParameter);
+		const bool isScalarNode = hasNode && (node->nodeType == MaterialGraphNodeType::ScalarConstant || node->nodeType == MaterialGraphNodeType::ScalarParameter || node->nodeType == MaterialGraphNodeType::WeatherScalar);
+		const bool isVectorNode = hasNode && (node->nodeType == MaterialGraphNodeType::VectorConstant || node->nodeType == MaterialGraphNodeType::VectorParameter || node->nodeType == MaterialGraphNodeType::WeatherVector);
 		const bool isTextureNode = hasNode && (node->nodeType == MaterialGraphNodeType::TextureSample || node->nodeType == MaterialGraphNodeType::TextureParameter);
-		const bool isParameterNode = hasNode && (node->nodeType == MaterialGraphNodeType::ScalarParameter || node->nodeType == MaterialGraphNodeType::VectorParameter || node->nodeType == MaterialGraphNodeType::TextureParameter);
+		const bool isParameterNode = hasNode &&
+			(node->nodeType == MaterialGraphNodeType::ScalarParameter ||
+				node->nodeType == MaterialGraphNodeType::VectorParameter ||
+				node->nodeType == MaterialGraphNodeType::TextureParameter ||
+				node->nodeType == MaterialGraphNodeType::WeatherScalar ||
+				node->nodeType == MaterialGraphNodeType::WeatherVector);
 
 		_parameterName->SetValue(hasNode ? s2ws(node->parameterName) : L"");
 		if (isParameterNode) _parameterName->EnableRecursive(); else _parameterName->DisableRecursive();

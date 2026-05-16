@@ -1,10 +1,31 @@
 #include "VolumetricTerrainChunk.hpp"
 #include <cstring>
+#include <HexEngine.Core/Graphics/ITexture2D.hpp>
 
 namespace HexEngine::VolumetricTerrain
 {
 	namespace
 	{
+		std::shared_ptr<Material> CreateTerrainGiProxyMaterial()
+		{
+			auto material = std::make_shared<Material>();
+			material->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
+			if (auto defaultMaterial = Material::Create("EngineData.Materials/Default.hmat"); defaultMaterial != nullptr)
+			{
+				material->CopyFrom(defaultMaterial);
+			}
+
+			// GI sees these hidden chunk meshes as the terrain proxy. Use a subdued average terrain
+			// tint and remove the default bright albedo texture so terrain bounce is not blown out.
+			material->_properties.diffuseColour = math::Vector4(0.38f, 0.46f, 0.32f, 1.0f);
+			material->_properties.emissiveColour = math::Vector4::Zero;
+			material->SetTexture(MaterialTexture::Albedo, nullptr);
+			material->SetTexture(MaterialTexture::Emission, nullptr);
+			material->SetAffectsGI(true);
+			material->SetEmissiveAffectsGI(false);
+			return material;
+		}
+
 		struct GpuBrushParams
 		{
 			float brushCenterRadius[4] = { 0, 0, 0, 1 };
@@ -30,6 +51,7 @@ namespace HexEngine::VolumetricTerrain
 			float grassColor[4] = { 0.42f, 0.57f, 0.28f, 1.0f };
 			float rockColor[4] = { 0.46f, 0.42f, 0.38f, 1.0f };
 			float snowColor[4] = { 0.92f, 0.94f, 0.97f, 1.0f };
+			float dirtColor[4] = { 0.50f, 0.40f, 0.27f, 1.0f };
 		};
 		static_assert((sizeof(GpuSurfaceChunkParams) % 16) == 0, "GpuSurfaceChunkParams must be 16-byte aligned.");
 
@@ -39,6 +61,12 @@ namespace HexEngine::VolumetricTerrain
 		IConstantBuffer* g_gpuSurfaceChunkBuffer = nullptr;
 		std::shared_ptr<IShader> g_gpuSurfaceShader;
 		std::shared_ptr<IShader> g_gpuSurfaceExtractShader;
+		std::shared_ptr<ITexture2D> g_gpuTerrainLayerAlbedo[4];
+		std::shared_ptr<ITexture2D> g_gpuTerrainLayerNormal[4];
+		std::shared_ptr<ITexture2D> g_gpuTerrainLayerAo[4];
+		std::shared_ptr<ITexture2D> g_gpuTerrainLayerHeight[4];
+		std::shared_ptr<ITexture2D> g_gpuTerrainLayerRoughness[4];
+		std::shared_ptr<ITexture2D> g_gpuTerrainLayerMetallic[4];
 		bool g_gpuSurfaceInitTried = false;
 
 		bool EnsureGpuSurfaceShaders()
@@ -60,6 +88,56 @@ namespace HexEngine::VolumetricTerrain
 			if (g_gpuSurfaceExtractShader != nullptr)
 			{
 				g_gpuSurfaceExtractCs = g_gpuSurfaceExtractShader->GetShaderStage(ShaderStage::ComputeShader);
+			}
+			g_gpuTerrainLayerAlbedo[0] = ITexture2D::Create("EngineData.Textures/Terrain/grass1-albedo3.png");
+			g_gpuTerrainLayerNormal[0] = ITexture2D::Create("EngineData.Textures/Terrain/grass1-normal1-ogl.png");
+			g_gpuTerrainLayerAo[0] = ITexture2D::Create("EngineData.Textures/Terrain/grass1-ao.png");
+			g_gpuTerrainLayerHeight[0] = ITexture2D::Create("EngineData.Textures/Terrain/grass1-height.png");
+
+			g_gpuTerrainLayerAlbedo[1] = ITexture2D::Create("EngineData.Textures/Terrain/rocky-worn-ground-albedo.png");
+			g_gpuTerrainLayerNormal[1] = ITexture2D::Create("EngineData.Textures/Terrain/rocky-worn-ground-normal-ogl.png");
+			g_gpuTerrainLayerAo[1] = ITexture2D::Create("EngineData.Textures/Terrain/rocky-worn-ground-ao.png");
+			g_gpuTerrainLayerHeight[1] = ITexture2D::GetDefaultTexture();
+
+			g_gpuTerrainLayerAlbedo[2] = ITexture2D::Create("EngineData.Textures/Terrain/Crusted_snow2_Base_Color.png");
+			g_gpuTerrainLayerNormal[2] = ITexture2D::Create("EngineData.Textures/Terrain/Crusted_snow2_Normal-ogl.png");
+			g_gpuTerrainLayerAo[2] = ITexture2D::Create("EngineData.Textures/Terrain/Crusted_snow2_ao.png");
+			g_gpuTerrainLayerHeight[2] = ITexture2D::Create("EngineData.Textures/Terrain/Crusted_snow2_Height.png");
+
+			g_gpuTerrainLayerAlbedo[3] = ITexture2D::Create("EngineData.Textures/Terrain/sand-dunes1_albedo.png");
+			g_gpuTerrainLayerNormal[3] = ITexture2D::Create("EngineData.Textures/Terrain/sand-dunes1_normal-ogl.png");
+			g_gpuTerrainLayerAo[3] = ITexture2D::Create("EngineData.Textures/Terrain/sand-dunes1_ao.png");
+			g_gpuTerrainLayerHeight[3] = ITexture2D::Create("EngineData.Textures/Terrain/sand-dunes1_height.png");
+			const auto defaultTexture = ITexture2D::GetDefaultTexture();
+			for (uint32_t layer = 0; layer < 4; ++layer)
+			{
+				if (g_gpuTerrainLayerAlbedo[layer] == nullptr)
+				{
+					g_gpuTerrainLayerAlbedo[layer] = defaultTexture;
+				}
+				if (g_gpuTerrainLayerAo[layer] == nullptr)
+				{
+					g_gpuTerrainLayerAo[layer] = defaultTexture;
+				}
+				if (g_gpuTerrainLayerHeight[layer] == nullptr)
+				{
+					g_gpuTerrainLayerHeight[layer] = defaultTexture;
+				}
+				if (g_gpuTerrainLayerRoughness[layer] == nullptr)
+				{
+					g_gpuTerrainLayerRoughness[layer] = defaultTexture;
+				}
+				if (g_gpuTerrainLayerMetallic[layer] == nullptr)
+				{
+					g_gpuTerrainLayerMetallic[layer] = defaultTexture;
+				}
+			}
+			for (uint32_t layer = 0; layer < 4; ++layer)
+			{
+				if (g_gpuTerrainLayerNormal[layer] == nullptr)
+				{
+					g_gpuTerrainLayerNormal[layer] = defaultTexture;
+				}
 			}
 			g_gpuSurfaceChunkBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(static_cast<uint32_t>(sizeof(GpuSurfaceChunkParams)));
 			return g_gpuSurfaceVs != nullptr && g_gpuSurfacePs != nullptr && g_gpuSurfaceExtractCs != nullptr && g_gpuSurfaceChunkBuffer != nullptr;
@@ -165,6 +243,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 	{
 		ReleaseGpuSurfaceResources();
 		ReleaseGpuDensityResources();
+		ReleaseGpuMaterialResources();
 		ReleaseEntityReferences(true);
 	}
 
@@ -186,6 +265,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		const size_t voxelCount = static_cast<size_t>(points * points * points);
 		_densities.resize(voxelCount, 1.0f);
 		_materials.resize(voxelCount, 0);
+		_materialWeights.resize(voxelCount * 4ull, 0u);
 
 		if (parentEntity != nullptr && parentEntity->GetScene() != nullptr)
 		{
@@ -194,8 +274,10 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			if (_entity != nullptr)
 			{
 				_entity->SetParent(parentEntity);
-				_entity->SetFlag(EntityFlags::ExcludeFromHLOD);
+				_entity->SetFlag(EntityFlags::ExcludeFromHLOD | EntityFlags::DoNotSave);
+				_entity->SetLayer(Layer::StaticGeometry);
 				_meshComponent = _entity->AddComponent<StaticMeshComponent>();
+				_meshComponent->SetIncludeInGIWhenHidden(true);
 				_rigidBody = _entity->AddComponent<RigidBody>(IRigidBody::BodyType::Static);
 			}
 		}
@@ -218,10 +300,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 					const float d = generator.SampleDensity(wp, h);
 					_densities[static_cast<size_t>(Index(x, y, z))] = d;
 
-					uint8_t material = 0;
-					if (wp.y > (_params.chunkWorldSize * _params.chunksY * 0.6f)) material = 2;
-					else if (wp.y > (_params.chunkWorldSize * _params.chunksY * 0.35f)) material = 1;
-					_materials[static_cast<size_t>(Index(x, y, z))] = material;
+					_materials[static_cast<size_t>(Index(x, y, z))] = 0;
 				}
 			}
 		}
@@ -231,7 +310,10 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_meshDirty = true;
 		_collisionDirty = true;
 		_materialDirty = false;
+		_hasMaterialEdits = false;
+		InitializeAutoMaterialWeights();
 		UploadDensityToGpu();
+		UploadMaterialsToGpu();
 	}
 
 	int32_t VolumetricTerrainChunk::Index(int32_t x, int32_t y, int32_t z) const
@@ -435,6 +517,8 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		const int32_t points = _params.chunkResolution + 1;
 		const float radiusSq = settings.radius * settings.radius;
 		bool modified = false;
+		bool geometryModified = false;
+		bool materialModified = false;
 
 		const math::Vector3 localCenter = (center - _origin) / std::max(0.0001f, _voxelSize);
 		const int32_t vxRadius = std::max(1, static_cast<int32_t>(ceilf(settings.radius / std::max(0.0001f, _voxelSize))));
@@ -478,22 +562,26 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 						const float targetSolid = sphereSdf - addOffset;
 						const float blended = SmoothMin(density, targetSolid, addSmoothK);
 						density = std::lerp(density, blended, std::clamp(0.16f + (falloff * 0.42f), 0.0f, 0.85f));
+						geometryModified = true;
 						break;
 					}
 					case BrushMode::Elevate:
 						density -= delta;
+						geometryModified = true;
 						break;
 					case BrushMode::Subtract:
 					case BrushMode::Tunnel:
 					{
 						const float targetEmpty = -sphereSdf + brushOffset;
 						density = SmoothMax(density, targetEmpty, smoothK);
+						geometryModified = true;
 						break;
 					}
 					case BrushMode::Flatten:
 					{
 						const float target = wp.y - settings.targetHeight;
 						density = std::lerp(density, target, std::clamp(falloff * std::max(0.02f, deltaTime * settings.strength), 0.0f, 1.0f));
+						geometryModified = true;
 						break;
 					}
 					case BrushMode::Smooth:
@@ -518,22 +606,30 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 						{
 							density = std::lerp(density, accum / static_cast<float>(count), std::clamp(falloff * 0.45f, 0.0f, 1.0f));
 						}
+						geometryModified = true;
 						break;
 					}
 					case BrushMode::Erode:
 					{
 						const float targetEmpty = -sphereSdf + (brushOffset * 0.35f);
 						density = std::lerp(density, SmoothMax(density, targetEmpty, smoothK), std::clamp(falloff * 0.5f * hard, 0.0f, 1.0f));
+						geometryModified = true;
 						break;
 					}
 					case BrushMode::PaintMaterial:
-						_materials[static_cast<size_t>(Index(x, y, z))] = static_cast<uint8_t>(std::clamp(settings.materialIndex, 0, 255));
+					{
+						const size_t voxelIndex = static_cast<size_t>(Index(x, y, z));
+						BlendMaterialWeight(voxelIndex, static_cast<uint8_t>(std::clamp(settings.materialIndex, 0, 3)), std::clamp(falloff * deltaTime * settings.strength * 0.4f, 0.0f, 1.0f));
 						_materialDirty = true;
+						materialModified = true;
+						_hasMaterialEdits = true;
 						break;
+					}
 					case BrushMode::Noise:
 					{
 						const float n = sinf((wp.x + wp.y + wp.z) * std::max(0.01f, settings.noiseScale) * 0.25f);
 						density += n * delta;
+						geometryModified = true;
 						break;
 					}
 					default:
@@ -547,7 +643,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 		if (modified)
 		{
-			if (runRelaxation && (settings.mode == BrushMode::Add ||
+			if (geometryModified && runRelaxation && (settings.mode == BrushMode::Add ||
 				settings.mode == BrushMode::Subtract ||
 				settings.mode == BrushMode::Tunnel ||
 				settings.mode == BrushMode::Erode))
@@ -561,12 +657,25 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			}
 
 			_hasEdits = true;
-			_densityDirty = false;
-			_meshDirty = true;
-			_collisionDirty = true;
-			if (uploadGpuAfterModify)
+			if (geometryModified)
 			{
-				UploadDensityToGpu();
+				if (!_hasMaterialEdits)
+				{
+					InitializeAutoMaterialWeights();
+				}
+				_densityDirty = false;
+				_meshDirty = true;
+				_collisionDirty = true;
+				if (uploadGpuAfterModify)
+				{
+					UploadDensityToGpu();
+				}
+			}
+
+			if (materialModified)
+			{
+				_materialDirty = true;
+				UploadMaterialsToGpu();
 			}
 		}
 
@@ -634,9 +743,13 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			_entity->SetOBB(output.obb);
 			_entity->RecalculateBoundingVolumes(output.aabb);
 		}
-		if (_meshComponent->GetMaterial() == nullptr)
+		const auto currentMaterial = _meshComponent->GetMaterial();
+		const bool needsGiProxyMaterial =
+			(currentMaterial == nullptr) ||
+			(currentMaterial->GetFileSystemPath() == "EngineData.Materials/Default.hmat");
+		if (needsGiProxyMaterial)
 		{
-			_meshComponent->SetMaterial(Material::Create("EngineData.Materials/Default.hmat"));
+			_meshComponent->SetMaterial(CreateTerrainGiProxyMaterial());
 		}
 
 		if (rebuildCollision)
@@ -703,8 +816,12 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_collisionDirty = true;
 	}
 
-	void VolumetricTerrainChunk::SetEditedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials)
+	void VolumetricTerrainChunk::SetEditedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials, const std::vector<uint8_t>& materialWeights)
 	{
+		const bool hasExplicitMaterialData =
+			(materials.size() == _materials.size()) ||
+			(materialWeights.size() == _materialWeights.size());
+
 		if (densities.size() == _densities.size())
 		{
 			_densities = densities;
@@ -712,12 +829,49 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			_hasEdits = true;
 			_meshDirty = true;
 			_collisionDirty = true;
+
+			if (!hasExplicitMaterialData && !_hasMaterialEdits)
+			{
+				InitializeAutoMaterialWeights();
+			}
 		}
 
 		if (materials.size() == _materials.size())
 		{
 			_materials = materials;
 			_materialDirty = true;
+			_hasMaterialEdits = true;
+			if (materialWeights.size() != _materialWeights.size())
+			{
+				InitializeMaterialWeightsFromIndices();
+			}
+		}
+
+		if (materialWeights.size() == _materialWeights.size())
+		{
+			_materialWeights = materialWeights;
+			_hasMaterialEdits = true;
+			for (size_t voxelIndex = 0; voxelIndex < _materials.size(); ++voxelIndex)
+			{
+				const size_t weightBase = voxelIndex * 4ull;
+				uint8_t dominantLayer = 0;
+				uint8_t dominantWeight = _materialWeights[weightBase + 0];
+				for (uint8_t layer = 1; layer < 4; ++layer)
+				{
+					const uint8_t layerWeight = _materialWeights[weightBase + layer];
+					if (layerWeight > dominantWeight)
+					{
+						dominantWeight = layerWeight;
+						dominantLayer = layer;
+					}
+				}
+				_materials[voxelIndex] = dominantLayer;
+			}
+		}
+
+		if (_materialDirty)
+		{
+			UploadMaterialsToGpu();
 		}
 	}
 
@@ -744,6 +898,173 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		UploadDensityToGpu();
 	}
 
+	void VolumetricTerrainChunk::SyncMaterialsToGpu()
+	{
+		UploadMaterialsToGpu();
+	}
+
+	std::array<uint8_t, 4> VolumetricTerrainChunk::ComputeAutoMaterialWeightsAt(int32_t x, int32_t y, int32_t z) const
+	{
+		const int32_t points = _params.chunkResolution + 1;
+		const int32_t x0 = std::clamp(x - 1, 0, points - 1);
+		const int32_t x1 = std::clamp(x + 1, 0, points - 1);
+		const int32_t y0 = std::clamp(y - 1, 0, points - 1);
+		const int32_t y1 = std::clamp(y + 1, 0, points - 1);
+		const int32_t z0 = std::clamp(z - 1, 0, points - 1);
+		const int32_t z1 = std::clamp(z + 1, 0, points - 1);
+
+		const float dx = GetDensityAt(x1, y, z) - GetDensityAt(x0, y, z);
+		const float dy = GetDensityAt(x, y1, z) - GetDensityAt(x, y0, z);
+		const float dz = GetDensityAt(x, y, z1) - GetDensityAt(x, y, z0);
+		math::Vector3 gradient(dx, dy, dz);
+		if (gradient.LengthSquared() <= 0.000001f)
+		{
+			gradient = math::Vector3::Up;
+		}
+		gradient.Normalize();
+
+		const math::Vector3 wp = DensityToWorld(x, y, z);
+		const float worldHeight = std::max(_params.chunkWorldSize * _params.chunksY, 1.0f);
+		const float height01 = std::clamp(wp.y / worldHeight, 0.0f, 1.0f);
+		const float slope = std::clamp(1.0f - fabsf(gradient.y), 0.0f, 1.0f);
+		const float flatness = 1.0f - slope;
+
+		float grass = std::clamp((1.0f - height01 * 0.85f) * flatness * 1.15f, 0.0f, 1.0f);
+		float rock = std::clamp((slope * 1.35f) + (height01 * 0.15f), 0.0f, 1.0f);
+		float snow = std::clamp(((height01 - 0.58f) / 0.22f) * (0.55f + flatness * 0.45f), 0.0f, 1.0f);
+		float dirt = std::clamp(((0.35f - height01) / 0.35f) * (0.55f + flatness * 0.45f), 0.0f, 1.0f);
+
+		grass = std::max(0.0f, grass - (snow * 0.35f));
+		dirt = std::max(0.0f, dirt - (snow * 0.20f));
+		rock = std::max(rock, slope * 0.9f);
+
+		const float weightSum = std::max(grass + rock + snow + dirt, 0.0001f);
+		std::array<uint8_t, 4> packed =
+		{
+			static_cast<uint8_t>(std::clamp((grass / weightSum) * 255.0f, 0.0f, 255.0f)),
+			static_cast<uint8_t>(std::clamp((rock / weightSum) * 255.0f, 0.0f, 255.0f)),
+			static_cast<uint8_t>(std::clamp((snow / weightSum) * 255.0f, 0.0f, 255.0f)),
+			static_cast<uint8_t>(std::clamp((dirt / weightSum) * 255.0f, 0.0f, 255.0f))
+		};
+
+		uint32_t total = static_cast<uint32_t>(packed[0]) + packed[1] + packed[2] + packed[3];
+		if (total == 0u)
+		{
+			packed[0] = 255u;
+		}
+		else if (total != 255u)
+		{
+			int32_t delta = 255 - static_cast<int32_t>(total);
+			uint8_t maxLayer = 0;
+			for (uint8_t layer = 1; layer < 4; ++layer)
+			{
+				if (packed[layer] > packed[maxLayer])
+				{
+					maxLayer = layer;
+				}
+			}
+			packed[maxLayer] = static_cast<uint8_t>(std::clamp(static_cast<int32_t>(packed[maxLayer]) + delta, 0, 255));
+		}
+
+		return packed;
+	}
+
+	void VolumetricTerrainChunk::InitializeAutoMaterialWeights()
+	{
+		_materialWeights.assign(_materials.size() * 4ull, 0u);
+		const int32_t points = _params.chunkResolution + 1;
+		for (int32_t z = 0; z < points; ++z)
+		{
+			for (int32_t y = 0; y < points; ++y)
+			{
+				for (int32_t x = 0; x < points; ++x)
+				{
+					const size_t voxelIndex = static_cast<size_t>(Index(x, y, z));
+					const auto weights = ComputeAutoMaterialWeightsAt(x, y, z);
+					SetMaterialWeightsAt(x, y, z, weights);
+				}
+			}
+		}
+		_materialDirty = true;
+	}
+
+	void VolumetricTerrainChunk::InitializeMaterialWeightsFromIndices()
+	{
+		_materialWeights.assign(_materials.size() * 4ull, 0u);
+		for (size_t voxelIndex = 0; voxelIndex < _materials.size(); ++voxelIndex)
+		{
+			SetMaterialWeightsOneHot(voxelIndex, _materials[voxelIndex]);
+		}
+	}
+
+	void VolumetricTerrainChunk::SetMaterialWeightsOneHot(size_t voxelIndex, uint8_t materialIndex)
+	{
+		if ((_materialWeights.size() / 4ull) <= voxelIndex)
+		{
+			return;
+		}
+
+		const size_t weightBase = voxelIndex * 4ull;
+		_materialWeights[weightBase + 0] = 0u;
+		_materialWeights[weightBase + 1] = 0u;
+		_materialWeights[weightBase + 2] = 0u;
+		_materialWeights[weightBase + 3] = 0u;
+		_materialWeights[weightBase + std::min<size_t>(materialIndex, 3u)] = 255u;
+	}
+
+	void VolumetricTerrainChunk::BlendMaterialWeight(size_t voxelIndex, uint8_t materialIndex, float amount)
+	{
+		if ((_materialWeights.size() / 4ull) <= voxelIndex)
+		{
+			return;
+		}
+
+		const float blend = std::clamp(amount, 0.0f, 1.0f);
+		const size_t weightBase = voxelIndex * 4ull;
+		float weights[4] =
+		{
+			static_cast<float>(_materialWeights[weightBase + 0]),
+			static_cast<float>(_materialWeights[weightBase + 1]),
+			static_cast<float>(_materialWeights[weightBase + 2]),
+			static_cast<float>(_materialWeights[weightBase + 3])
+		};
+
+		for (uint8_t layer = 0; layer < 4; ++layer)
+		{
+			if (layer == materialIndex)
+			{
+				weights[layer] += (255.0f - weights[layer]) * blend;
+			}
+			else
+			{
+				weights[layer] *= (1.0f - blend);
+			}
+		}
+
+		float weightSum = weights[0] + weights[1] + weights[2] + weights[3];
+		if (weightSum <= 0.001f)
+		{
+			SetMaterialWeightsOneHot(voxelIndex, materialIndex);
+			_materials[voxelIndex] = materialIndex;
+			return;
+		}
+
+		uint8_t dominantLayer = 0;
+		float dominantWeight = weights[0];
+		for (uint8_t layer = 0; layer < 4; ++layer)
+		{
+			const uint8_t packed = static_cast<uint8_t>(std::clamp((weights[layer] / weightSum) * 255.0f, 0.0f, 255.0f));
+			_materialWeights[weightBase + layer] = packed;
+			if (weights[layer] > dominantWeight)
+			{
+				dominantWeight = weights[layer];
+				dominantLayer = layer;
+			}
+		}
+
+		_materials[voxelIndex] = dominantLayer;
+	}
+
 	uint8_t VolumetricTerrainChunk::GetMaterialAt(int32_t x, int32_t y, int32_t z) const
 	{
 		const int32_t points = _params.chunkResolution + 1;
@@ -753,19 +1074,67 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		return _materials[static_cast<size_t>(Index(sx, sy, sz))];
 	}
 
+	std::array<uint8_t, 4> VolumetricTerrainChunk::GetMaterialWeightsAt(int32_t x, int32_t y, int32_t z) const
+	{
+		const int32_t points = _params.chunkResolution + 1;
+		const int32_t sx = std::clamp(x, 0, points - 1);
+		const int32_t sy = std::clamp(y, 0, points - 1);
+		const int32_t sz = std::clamp(z, 0, points - 1);
+		const size_t voxelIndex = static_cast<size_t>(Index(sx, sy, sz));
+		const size_t weightBase = voxelIndex * 4ull;
+		return
+		{
+			_materialWeights[weightBase + 0],
+			_materialWeights[weightBase + 1],
+			_materialWeights[weightBase + 2],
+			_materialWeights[weightBase + 3]
+		};
+	}
+
 	void VolumetricTerrainChunk::SetMaterialAt(int32_t x, int32_t y, int32_t z, uint8_t material)
 	{
 		const int32_t points = _params.chunkResolution + 1;
 		const int32_t sx = std::clamp(x, 0, points - 1);
 		const int32_t sy = std::clamp(y, 0, points - 1);
 		const int32_t sz = std::clamp(z, 0, points - 1);
-		_materials[static_cast<size_t>(Index(sx, sy, sz))] = material;
+		const size_t voxelIndex = static_cast<size_t>(Index(sx, sy, sz));
+		_materials[voxelIndex] = material;
+		SetMaterialWeightsOneHot(voxelIndex, material);
+	}
+
+	void VolumetricTerrainChunk::SetMaterialWeightsAt(int32_t x, int32_t y, int32_t z, const std::array<uint8_t, 4>& weights)
+	{
+		const int32_t points = _params.chunkResolution + 1;
+		const int32_t sx = std::clamp(x, 0, points - 1);
+		const int32_t sy = std::clamp(y, 0, points - 1);
+		const int32_t sz = std::clamp(z, 0, points - 1);
+		const size_t voxelIndex = static_cast<size_t>(Index(sx, sy, sz));
+		const size_t weightBase = voxelIndex * 4ull;
+
+		_materialWeights[weightBase + 0] = weights[0];
+		_materialWeights[weightBase + 1] = weights[1];
+		_materialWeights[weightBase + 2] = weights[2];
+		_materialWeights[weightBase + 3] = weights[3];
+		_materialDirty = true;
+
+		uint8_t dominantLayer = 0;
+		uint8_t dominantWeight = weights[0];
+		for (uint8_t layer = 1; layer < 4; ++layer)
+		{
+			if (weights[layer] > dominantWeight)
+			{
+				dominantWeight = weights[layer];
+				dominantLayer = layer;
+			}
+		}
+		_materials[voxelIndex] = dominantLayer;
 	}
 
 	void VolumetricTerrainChunk::ReleaseEntityReferences(bool queueDeleteEntity)
 	{
 		if (queueDeleteEntity && _entity != nullptr && _entity->GetScene() != nullptr)
 		{
+			_entity->SetParent(nullptr);
 			_entity->DeleteMe(false);
 		}
 
@@ -788,6 +1157,12 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 				_entity->ClearFlags(EntityFlags::DoNotRender);
 			}
 		}
+	}
+
+	void VolumetricTerrainChunk::OffsetWorld(const math::Vector3& delta)
+	{
+		_origin += delta;
+		*(math::Vector3*)&_bounds.Center.x += delta;
 	}
 
 float VolumetricTerrainChunk::SampleDensityNearestWorld(const math::Vector3& worldPosition) const
@@ -814,24 +1189,52 @@ bool VolumetricTerrainChunk::EnsureGpuSurfacePipeline()
 	return EnsureGpuSurfaceShaders();
 }
 
-bool VolumetricTerrainChunk::EnsureGpuSurfaceResources()
+uint32_t VolumetricTerrainChunk::GetGpuLodStep(uint32_t lodIndex) const
 {
+	switch (std::min(lodIndex, kGpuSurfaceLodCount - 1))
+	{
+	case 0: return 1u;
+	case 1: return 2u;
+	default: return 4u;
+	}
+}
+
+uint32_t VolumetricTerrainChunk::GetGpuLodResolution(uint32_t lodIndex) const
+{
+	const uint32_t baseResolution = static_cast<uint32_t>(std::max(1, _params.chunkResolution));
+	const uint32_t step = GetGpuLodStep(lodIndex);
+	return std::max(1u, (baseResolution + step - 1u) / step);
+}
+
+bool VolumetricTerrainChunk::EnsureGpuSurfaceResources(uint32_t lodIndex)
+{
+	if (lodIndex >= kGpuSurfaceLodCount)
+	{
+		return false;
+	}
+
 	if (!EnsureGpuSurfacePipeline())
 	{
 		return false;
 	}
 
-	const uint32_t resolution = static_cast<uint32_t>(std::max(1, _params.chunkResolution));
-	const uint32_t cellCount = resolution * resolution * resolution;
-	// Marching tetrahedra can emit multiple triangles per cell under aggressive edits.
-	// Keep generous headroom here to avoid append-buffer overflow corrupting the visible surface.
-	const uint32_t desiredTriangleCapacity = std::max(cellCount * 12u, resolution * resolution * 96u);
-	if (_gpuSurfaceTriangles != nullptr && _gpuSurfaceDrawArgs != nullptr && _gpuSurfaceTriangleCapacity == desiredTriangleCapacity)
+	const uint32_t resolution = GetGpuLodResolution(lodIndex);
+	// Visible terrain is a surface problem, not a volume problem.
+	// Sizing the append buffer from volumetric worst case (O(n^3)) explodes memory for large worlds.
+	// Use a surface-area-biased budget instead, with enough headroom for caves / overhangs.
+	const uint32_t surfaceArea = resolution * resolution;
+	const uint32_t desiredTriangleCapacity = std::max(65536u, surfaceArea * 24u);
+	if (_gpuSurfaceTriangles[lodIndex] != nullptr &&
+		_gpuSurfaceDrawArgs[lodIndex] != nullptr &&
+		_gpuSurfaceTriangleCapacity[lodIndex] == desiredTriangleCapacity)
 	{
 		return true;
 	}
 
-	ReleaseGpuSurfaceResources();
+	SAFE_DELETE(_gpuSurfaceTriangles[lodIndex]);
+	SAFE_DELETE(_gpuSurfaceDrawArgs[lodIndex]);
+	_gpuSurfaceTriangleCapacity[lodIndex] = 0;
+	_gpuSurfaceReady[lodIndex] = false;
 
 	struct DrawArgs
 	{
@@ -851,40 +1254,45 @@ bool VolumetricTerrainChunk::EnsureGpuSurfaceResources()
 		float n2[4];
 	};
 
-	_gpuSurfaceTriangles = g_pEnv->_graphicsDevice->CreateStructuredBuffer(
+	_gpuSurfaceTriangles[lodIndex] = g_pEnv->_graphicsDevice->CreateStructuredBuffer(
 		static_cast<uint32_t>(sizeof(GpuTerrainTriangle)),
 		desiredTriangleCapacity,
 		StructuredBufferFlags::ShaderResource | StructuredBufferFlags::UnorderedAccess | StructuredBufferFlags::AppendConsume);
-	if (_gpuSurfaceTriangles == nullptr)
+	if (_gpuSurfaceTriangles[lodIndex] == nullptr)
 	{
-		ReleaseGpuSurfaceResources();
+		SAFE_DELETE(_gpuSurfaceTriangles[lodIndex]);
+		SAFE_DELETE(_gpuSurfaceDrawArgs[lodIndex]);
 		return false;
 	}
 
 	const DrawArgs initialArgs{ 3u, 0u, 0u, 0u };
-	_gpuSurfaceDrawArgs = g_pEnv->_graphicsDevice->CreateStructuredBuffer(
+	_gpuSurfaceDrawArgs[lodIndex] = g_pEnv->_graphicsDevice->CreateStructuredBuffer(
 		static_cast<uint32_t>(sizeof(DrawArgs)),
 		1u,
 		StructuredBufferFlags::DrawIndirectArgs,
 		D3D11_USAGE_DEFAULT,
 		0u,
 		&initialArgs);
-	if (_gpuSurfaceDrawArgs == nullptr)
+	if (_gpuSurfaceDrawArgs[lodIndex] == nullptr)
 	{
-		ReleaseGpuSurfaceResources();
+		SAFE_DELETE(_gpuSurfaceTriangles[lodIndex]);
+		SAFE_DELETE(_gpuSurfaceDrawArgs[lodIndex]);
 		return false;
 	}
 
-	_gpuSurfaceTriangleCapacity = desiredTriangleCapacity;
+	_gpuSurfaceTriangleCapacity[lodIndex] = desiredTriangleCapacity;
 	return true;
 }
 
 void VolumetricTerrainChunk::ReleaseGpuSurfaceResources()
 {
-	SAFE_DELETE(_gpuSurfaceTriangles);
-	SAFE_DELETE(_gpuSurfaceDrawArgs);
-	_gpuSurfaceTriangleCapacity = 0;
-	_gpuSurfaceReady = false;
+	for (uint32_t lodIndex = 0; lodIndex < kGpuSurfaceLodCount; ++lodIndex)
+	{
+		SAFE_DELETE(_gpuSurfaceTriangles[lodIndex]);
+		SAFE_DELETE(_gpuSurfaceDrawArgs[lodIndex]);
+		_gpuSurfaceTriangleCapacity[lodIndex] = 0;
+		_gpuSurfaceReady[lodIndex] = false;
+	}
 }
 
 bool VolumetricTerrainChunk::EnsureGpuDensityResources()
@@ -917,11 +1325,52 @@ bool VolumetricTerrainChunk::EnsureGpuDensityResources()
 	return _gpuDensityTexture != nullptr && _gpuDensityTexture->SupportsRandomWrite();
 }
 
-bool VolumetricTerrainChunk::BuildGpuSurface()
+bool VolumetricTerrainChunk::EnsureGpuMaterialResources()
 {
-	if (!_generated || !EnsureGpuDensityResources() || !EnsureGpuSurfaceResources() || _gpuDensityTexture == nullptr || _gpuSurfaceTriangles == nullptr || _gpuSurfaceDrawArgs == nullptr)
+	const int32_t points = _params.chunkResolution + 1;
+	if (points <= 1)
 	{
-		_gpuSurfaceReady = false;
+		return false;
+	}
+
+	if (_gpuMaterialTexture == nullptr)
+	{
+		_gpuMaterialTexture = g_pEnv->_graphicsDevice->CreateTexture3D(
+			points,
+			points,
+			points,
+			DXGI_FORMAT_R8G8B8A8_UNORM,
+			1,
+			D3D11_BIND_SHADER_RESOURCE,
+			1,
+			1,
+			0,
+			nullptr,
+			D3D11_RTV_DIMENSION_UNKNOWN,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE3D,
+			D3D11_DSV_DIMENSION_UNKNOWN);
+	}
+
+	return _gpuMaterialTexture != nullptr;
+}
+
+bool VolumetricTerrainChunk::BuildGpuSurface(uint32_t lodIndex)
+{
+	if (lodIndex >= kGpuSurfaceLodCount ||
+		!_generated ||
+		!EnsureGpuDensityResources() ||
+		!EnsureGpuMaterialResources() ||
+		!EnsureGpuSurfaceResources(lodIndex) ||
+		_gpuDensityTexture == nullptr ||
+		_gpuMaterialTexture == nullptr ||
+		_gpuSurfaceTriangles[lodIndex] == nullptr ||
+		_gpuSurfaceDrawArgs[lodIndex] == nullptr)
+	{
+		if (lodIndex < kGpuSurfaceLodCount)
+		{
+			_gpuSurfaceReady[lodIndex] = false;
+		}
 		return false;
 	}
 
@@ -938,28 +1387,28 @@ bool VolumetricTerrainChunk::BuildGpuSurface()
 	params.chunkOriginVoxel[1] = _origin.y;
 	params.chunkOriginVoxel[2] = _origin.z;
 	params.chunkOriginVoxel[3] = _voxelSize;
-	params.worldInfo[0] = static_cast<float>(_params.chunkResolution);
-	params.worldInfo[1] = static_cast<float>(_params.chunkWorldSize);
+	params.worldInfo[0] = static_cast<float>(GetGpuLodResolution(lodIndex));
+	params.worldInfo[1] = static_cast<float>(_params.chunkResolution);
 	params.worldInfo[2] = static_cast<float>(_params.chunkWorldSize * _params.chunksY);
-	params.worldInfo[3] = static_cast<float>(_gpuSurfaceTriangleCapacity);
+	params.worldInfo[3] = static_cast<float>(GetGpuLodStep(lodIndex));
 	g_gpuSurfaceChunkBuffer->Write(&params, sizeof(params));
 
 	const DrawArgs initialArgs{ 3u, 0u, 0u, 0u };
-	_gpuSurfaceDrawArgs->SetData(&initialArgs, sizeof(initialArgs));
+	_gpuSurfaceDrawArgs[lodIndex]->SetData(&initialArgs, sizeof(initialArgs));
 
 	auto* graphics = g_pEnv->_graphicsDevice;
 	graphics->SetConstantBufferCS(6, g_gpuSurfaceChunkBuffer);
 	graphics->SetComputeTexture3D(0, _gpuDensityTexture);
-	graphics->SetComputeRwStructuredBuffer(0, _gpuSurfaceTriangles, 0u);
+	graphics->SetComputeRwStructuredBuffer(0, _gpuSurfaceTriangles[lodIndex], 0u);
 	graphics->SetComputeShader(g_gpuSurfaceExtractCs);
-	const uint32_t groups = static_cast<uint32_t>((std::max(1, _params.chunkResolution) + 3) / 4);
+	const uint32_t groups = static_cast<uint32_t>((GetGpuLodResolution(lodIndex) + 3u) / 4u);
 	graphics->Dispatch(groups, groups, groups);
 	graphics->SetComputeShader(nullptr);
 	graphics->ClearComputeTexture3D(0);
 	graphics->ClearComputeRwStructuredBuffer(0);
 	graphics->SetConstantBufferCS(6, nullptr);
-	graphics->CopyStructureCount(_gpuSurfaceTriangles, _gpuSurfaceDrawArgs, sizeof(uint32_t));
-	_gpuSurfaceReady = true;
+	graphics->CopyStructureCount(_gpuSurfaceTriangles[lodIndex], _gpuSurfaceDrawArgs[lodIndex], sizeof(uint32_t));
+	_gpuSurfaceReady[lodIndex] = true;
 	_meshDirty = false;
 	return true;
 }
@@ -967,6 +1416,11 @@ bool VolumetricTerrainChunk::BuildGpuSurface()
 void VolumetricTerrainChunk::ReleaseGpuDensityResources()
 {
 	SAFE_DELETE(_gpuDensityTexture);
+}
+
+void VolumetricTerrainChunk::ReleaseGpuMaterialResources()
+{
+	SAFE_DELETE(_gpuMaterialTexture);
 }
 
 void VolumetricTerrainChunk::UploadDensityToGpu()
@@ -981,6 +1435,22 @@ void VolumetricTerrainChunk::UploadDensityToGpu()
 		return;
 	}
 	_gpuDensityTexture->SetPixels(reinterpret_cast<uint8_t*>(_densities.data()), static_cast<uint32_t>(_densities.size() * sizeof(float)));
+}
+
+void VolumetricTerrainChunk::UploadMaterialsToGpu()
+{
+	if (!EnsureGpuMaterialResources())
+	{
+		return;
+	}
+
+	if (_gpuMaterialTexture == nullptr || _materialWeights.empty())
+	{
+		return;
+	}
+
+	_gpuMaterialTexture->SetPixels(_materialWeights.data(), static_cast<uint32_t>(_materialWeights.size() * sizeof(uint8_t)));
+	_materialDirty = false;
 }
 
 void VolumetricTerrainChunk::ReadbackDensityFromGpu()
@@ -1072,9 +1542,14 @@ bool VolumetricTerrainChunk::ApplyBrushGpu(const math::Vector3& center, const Br
 	return true;
 }
 
-void VolumetricTerrainChunk::RenderGpuSurface()
+void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 {
-	if (!_generated || !EnsureGpuSurfacePipeline() || !_gpuSurfaceReady || _gpuSurfaceTriangles == nullptr || _gpuSurfaceDrawArgs == nullptr)
+	if (lodIndex >= kGpuSurfaceLodCount ||
+		!_generated ||
+		!EnsureGpuSurfacePipeline() ||
+		!_gpuSurfaceReady[lodIndex] ||
+		_gpuSurfaceTriangles[lodIndex] == nullptr ||
+		_gpuSurfaceDrawArgs[lodIndex] == nullptr)
 	{
 		return;
 	}
@@ -1084,10 +1559,10 @@ void VolumetricTerrainChunk::RenderGpuSurface()
 	params.chunkOriginVoxel[1] = _origin.y;
 	params.chunkOriginVoxel[2] = _origin.z;
 	params.chunkOriginVoxel[3] = _voxelSize;
-	params.worldInfo[0] = static_cast<float>(_params.chunkResolution);
-	params.worldInfo[1] = static_cast<float>(_params.chunkWorldSize);
+	params.worldInfo[0] = static_cast<float>(GetGpuLodResolution(lodIndex));
+	params.worldInfo[1] = static_cast<float>(_params.chunkResolution);
 	params.worldInfo[2] = static_cast<float>(_params.chunkWorldSize * _params.chunksY);
-	params.worldInfo[3] = 0.0f;
+	params.worldInfo[3] = static_cast<float>(GetGpuLodStep(lodIndex));
 	g_gpuSurfaceChunkBuffer->Write(&params, sizeof(params));
 
 	auto* graphics = g_pEnv->_graphicsDevice;
@@ -1101,11 +1576,38 @@ void VolumetricTerrainChunk::RenderGpuSurface()
 	graphics->SetConstantBufferPS(2, graphics->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer));
 	graphics->SetConstantBufferVS(6, g_gpuSurfaceChunkBuffer);
 	graphics->SetConstantBufferPS(6, g_gpuSurfaceChunkBuffer);
-	graphics->SetVertexStructuredBuffer(0, _gpuSurfaceTriangles);
+	graphics->UnbindAllPixelShaderResources();
+	graphics->SetTexture3D(_gpuMaterialTexture);
+	graphics->SetTexture2D(1, g_gpuTerrainLayerAlbedo[0].get());
+	graphics->SetTexture2D(2, g_gpuTerrainLayerAlbedo[1].get());
+	graphics->SetTexture2D(3, g_gpuTerrainLayerAlbedo[2].get());
+	graphics->SetTexture2D(4, g_gpuTerrainLayerAlbedo[3].get());
+	graphics->SetTexture2D(5, g_gpuTerrainLayerNormal[0].get());
+	graphics->SetTexture2D(6, g_gpuTerrainLayerNormal[1].get());
+	graphics->SetTexture2D(7, g_gpuTerrainLayerNormal[2].get());
+	graphics->SetTexture2D(8, g_gpuTerrainLayerNormal[3].get());
+	graphics->SetTexture2D(9, g_gpuTerrainLayerAo[0].get());
+	graphics->SetTexture2D(10, g_gpuTerrainLayerAo[1].get());
+	graphics->SetTexture2D(11, g_gpuTerrainLayerAo[2].get());
+	graphics->SetTexture2D(12, g_gpuTerrainLayerAo[3].get());
+	graphics->SetTexture2D(13, g_gpuTerrainLayerHeight[0].get());
+	graphics->SetTexture2D(14, g_gpuTerrainLayerHeight[1].get());
+	graphics->SetTexture2D(15, g_gpuTerrainLayerHeight[2].get());
+	graphics->SetTexture2D(16, g_gpuTerrainLayerHeight[3].get());
+	graphics->SetTexture2D(17, g_gpuTerrainLayerRoughness[0].get());
+	graphics->SetTexture2D(18, g_gpuTerrainLayerRoughness[1].get());
+	graphics->SetTexture2D(19, g_gpuTerrainLayerRoughness[2].get());
+	graphics->SetTexture2D(20, g_gpuTerrainLayerRoughness[3].get());
+	graphics->SetTexture2D(21, g_gpuTerrainLayerMetallic[0].get());
+	graphics->SetTexture2D(22, g_gpuTerrainLayerMetallic[1].get());
+	graphics->SetTexture2D(23, g_gpuTerrainLayerMetallic[2].get());
+	graphics->SetTexture2D(24, g_gpuTerrainLayerMetallic[3].get());
+	graphics->SetVertexStructuredBuffer(0, _gpuSurfaceTriangles[lodIndex]);
 	graphics->SetBlendState(BlendState::Opaque);
 	graphics->SetDepthBufferState(DepthBufferState::DepthDefault);
-	graphics->SetCullingMode(CullingMode::NoCulling);
-	graphics->DrawInstancedIndirect(_gpuSurfaceDrawArgs);
+	graphics->SetCullingMode(CullingMode::BackFace);
+	graphics->DrawInstancedIndirect(_gpuSurfaceDrawArgs[lodIndex]);
+	graphics->UnbindAllPixelShaderResources();
 	graphics->ClearVertexStructuredBuffer(0);
 	graphics->SetConstantBufferVS(6, nullptr);
 	graphics->SetConstantBufferPS(6, nullptr);

@@ -17,6 +17,8 @@
 	ShadowUtils
 	Utils
 	Atmosphere
+	AtmospherePhysical
+	PBRutils
 }
 "GlobalIncludes"
 {
@@ -532,7 +534,7 @@ float3 GerstnerWave(
 		
 
 		// get the original diffuse colour
-		float4 worldDiffuse = GBUFFER_DIFFUSE.Sample(g_TexSamplerPoint, screenPos);
+		float4 worldDiffuse = beautyTexture.Sample(g_TexSamplerPoint, screenPos);
 		worldDiffuse.a = 1.0f;
 
 		// make a copy, we might need this again
@@ -601,18 +603,26 @@ float3 GerstnerWave(
 			// Saturate the final light color.
 			//color = saturate(color);
 
-			// Calculate the reflection vector based on the light intensity, normal vector, and light direction.
-			reflection = normalize(2 * lightIntensity * worldNormal - lightDir);
-
-			float shinyPower = 120;//g_material.shininess;
-
-			if (shinyPower < 10.0f)
-				shinyPower = 10.0f;
-
-			float rDotL = dot(reflection, eyeVector);
-
-			// Determine the amount of specular light based on the reflection vector, viewing direction, and specular power.
-			specular = float4(getSunColour(), 1.0f) * pow(saturate(rDotL), shinyPower);// * g_material.shininessStrength;
+			const float waterPerceptualRoughnessBase = 0.08f;
+			const float waterMetallic = 0.0f;
+			const float3 viewDir = normalize(g_eyePos.xyz - input.positionWS.xyz);
+			const float3 halfVector = normalize(lightDir + viewDir);
+			const float3 specularNormal = normalize(lerp(originalWorldNormal, worldNormal, 0.35f));
+			const float NdotL = clamp(dot(specularNormal, lightDir), 0.001f, 1.0f);
+			const float NdotV = abs(dot(specularNormal, viewDir)) + 0.001f;
+			const float NdotH = saturate(dot(specularNormal, halfVector));
+			const float VdotH = saturate(dot(viewDir, halfVector));
+			float waterPerceptualRoughness = ApplySpecularAntiAliasing(specularNormal, waterPerceptualRoughnessBase);
+			const float alphaRoughness = waterPerceptualRoughness * waterPerceptualRoughness;
+			const float3 specularColor = lerp(f0, float3(1.0f, 1.0f, 1.0f), waterMetallic);
+			const float reflectance = max(max(specularColor.r, specularColor.g), specularColor.b);
+			const float reflectance90 = saturate(reflectance * 25.0f);
+			const float3 F = specularReflection(specularColor, float3(1.0f, 1.0f, 1.0f) * reflectance90, VdotH);
+			const float G = geometricOcclusion(NdotL, NdotV, alphaRoughness);
+			const float D = microfacetDistribution(NdotH, alphaRoughness);
+			const float3 directSpecular = F * G * D / max(4.0f * NdotL * NdotV, 0.001f);
+			const float sunSpecularBoost = 5.75f;
+			specular = float4(ComputePhysicalSunColour(input.positionWS.xyz, lightDir) * (NdotL * directSpecular * sunSpecularBoost), 1.0f);
 
 			//return specular;
 			if ((g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS) != 0)
@@ -647,6 +657,7 @@ float3 GerstnerWave(
 		//return float4(relativeDepth, relativeDepth, relativeDepth, 1.0f);
 
 		float depthMultiplier = saturate(relativeDepth * g_frustumDepths[3]);
+		float transmission = exp(-relativeDepth * max(g_oceanConfig.fadeFactor, 0.001f));
 
 		float4 worldAlbedoInfluence = float4(worldDiffuse.rgb * depthMultiplier, 1.0f/*albedo.a*/);
 
@@ -672,7 +683,9 @@ float3 GerstnerWave(
 		if (g_eyePos.y <= 0.0f)
 			finalFadeFactor *= 0.35f;
 
-		float4 retCol = lerp(worldDiffuse, finalColour, finalFadeFactor);
+		float3 transmittedColour = lerp(fadeColour.rgb, worldDiffuse.rgb, transmission);
+		float3 waterBodyColour = lerp(transmittedColour, finalColour.rgb + (ambient.rgb * 0.35f), finalFadeFactor);
+		float4 retCol = float4(waterBodyColour, 1.0f);
 
 		
 		
@@ -718,9 +731,9 @@ float3 GerstnerWave(
 
 		//return float4(1,0,0,1);
 
-		//return retCol /* + worldAlbedoInfluence */ + ( albedo * lightIntensity) + specular;
+		//return retCol /* + worldAlbedoInfluence */ + ( albedo * lightIntensity) /* + specular */;
 
-		return retCol + (albedo * lightIntensity) + specular;
+		return retCol;
 
 		//float4 finalColour = albedo * color;
 		//color = finalColour;// color* albedo;

@@ -25,6 +25,8 @@ namespace HexEditor
 		bool IsInspectingResource() const;
 		HexEngine::Entity* GetInspectingEntity() const;
 
+		virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data) override;
+
 	private:
 		void InspectComponent(HexEngine::Point& pos, HexEngine::BaseComponent* component, HexEngine::GuiRenderer* renderer);
 		bool OnAddComponent(HexEngine::Button* button);
@@ -77,6 +79,7 @@ namespace HexEditor
 		HexEngine::Button* _revertPrefabBtn = nullptr;
 		HexEngine::Button* _applyPrefabBtn = nullptr;
 		HexEngine::Button* _prefabOverridesBtn = nullptr;
+		HexEngine::ScrollView* _componentScroll = nullptr;
 		HexEngine::TabView* _tabs = nullptr;
 		HexEngine::ContextMenu* _addComponentContextMenu = nullptr;
 		HexEngine::Dialog* _prefabOverridesDialog = nullptr;

@@ -32,6 +32,7 @@
 		uint poolStart;
 		uint poolCount;
 		int spawnRemaining;
+		uint spawnOffset;
 		uint flags;
 	};
 
@@ -197,7 +198,11 @@
 	void SpawnParticle(inout ParticleStateGpu state, EmitterGpu emitter, uint particleIndex, uint emitterIndex, uint localIndexInPool)
 	{
 		const uint spawnQuota = (uint)max(emitter.spawnRemaining, 0);
-		if (localIndexInPool >= spawnQuota)
+		if (spawnQuota == 0u || emitter.poolCount == 0u)
+			return;
+
+		const uint rotatedIndex = (localIndexInPool + emitter.poolCount - (emitter.spawnOffset % emitter.poolCount)) % emitter.poolCount;
+		if (rotatedIndex >= spawnQuota)
 			return;
 
 		uint seed = HashU32(particleIndex * 1664525u + (uint)g_dtTime.y + emitterIndex * 1013904223u);

@@ -72,6 +72,8 @@ namespace HexEngine
 
 		const math::Vector2& GetUVScale() const;
 		void SetUVScale(const math::Vector2& uvScale);
+		void SetIncludeInGIWhenHidden(bool value);
+		bool GetIncludeInGIWhenHidden() const;
 		const math::Vector3& GetOffsetPosition() const;
 		void SetOffsetPosition(const math::Vector3& offsetPosition);
 		const MeshInstanceData& GetCachedInstanceData(Material* material);
@@ -92,6 +94,7 @@ namespace HexEngine
 		std::shared_ptr<Mesh> _mesh = nullptr;
 		std::shared_ptr<Material> _material;
 		mutable std::recursive_mutex _lock;
+		bool _includeInGIWhenHidden = false;
 
 		math::Vector2 _uvScale;
 		math::Vector3 _offsetPosition;

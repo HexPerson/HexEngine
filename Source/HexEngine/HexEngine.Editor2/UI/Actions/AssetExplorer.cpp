@@ -432,6 +432,109 @@ namespace HexEditor
 		}
 	}
 
+	void AssetExplorer::RecenterSelectedMeshToOrigin()
+	{
+		CloseContextMenu();
+
+		fs::path selectedMeshPath;
+		AssetDesc* selectedAsset = nullptr;
+
+		for (auto& asset : _assetsInView)
+		{
+			if (!asset.selected || asset.path.extension() != ".hmesh")
+				continue;
+
+			if (!selectedMeshPath.empty())
+			{
+				LOG_WARN("Recenter mesh operation requires exactly one selected .hmesh file.");
+				return;
+			}
+
+			selectedMeshPath = asset.path;
+			selectedAsset = &asset;
+		}
+
+		if (selectedMeshPath.empty())
+		{
+			LOG_WARN("Recenter mesh operation requires exactly one selected .hmesh file.");
+			return;
+		}
+
+		HexEngine::MeshLoadOptions options;
+		options.createBuffers = false;
+		options.createMaterial = true;
+		options.populateVertices = true;
+
+		auto mesh = HexEngine::Mesh::Create(selectedMeshPath, &options);
+		if (!mesh)
+		{
+			LOG_WARN("Failed to load mesh '%s' for recentering.", selectedMeshPath.string().c_str());
+			return;
+		}
+
+		if (mesh->HasAnimations())
+		{
+			LOG_WARN("Recenter mesh operation does not currently support animated meshes: '%s'.", selectedMeshPath.string().c_str());
+			return;
+		}
+
+		const auto sourceVertices = mesh->GetVertices();
+		const auto sourceIndices = mesh->GetIndices();
+		if (sourceVertices.empty())
+		{
+			LOG_WARN("Mesh '%s' has no vertices to recenter.", selectedMeshPath.string().c_str());
+			return;
+		}
+
+		const math::Vector3 center = mesh->GetAABB().Center;
+		if (center.LengthSquared() <= 0.000001f)
+		{
+			LOG_INFO("Mesh '%s' is already centered at the origin.", selectedMeshPath.string().c_str());
+			return;
+		}
+
+		std::vector<HexEngine::MeshVertex> recenteredVertices = sourceVertices;
+		for (auto& vertex : recenteredVertices)
+		{
+			vertex._position.x -= center.x;
+			vertex._position.y -= center.y;
+			vertex._position.z -= center.z;
+		}
+
+		mesh->Clear();
+		mesh->SetNumFaces(static_cast<uint32_t>(sourceIndices.size() / 3));
+		mesh->AddVertices(recenteredVertices);
+		mesh->AddIndices(sourceIndices);
+
+		dx::BoundingBox aabb;
+		dx::BoundingBox::CreateFromPoints(
+			aabb,
+			static_cast<size_t>(recenteredVertices.size()),
+			reinterpret_cast<const math::Vector3*>(recenteredVertices.data()),
+			sizeof(HexEngine::MeshVertex));
+		mesh->SetAABB(aabb);
+
+		dx::BoundingOrientedBox obb;
+		dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
+		mesh->SetOBB(obb);
+
+		mesh->Save();
+		InvalidateAssetPreview(selectedMeshPath);
+
+		if (selectedAsset != nullptr)
+		{
+			selectedAsset->generatedIcon = nullptr;
+			selectedAsset->previewRequested = false;
+		}
+
+		LOG_INFO(
+			"Recentered mesh '%s' by offset (%0.3f, %0.3f, %0.3f).",
+			selectedMeshPath.string().c_str(),
+			center.x,
+			center.y,
+			center.z);
+	}
+
 	void AssetExplorer::CreateNewMaterialGraph(const fs::path& baseDir)
 	{
 		if (_currentlyBrowsedFS == nullptr)
@@ -1247,6 +1350,11 @@ namespace HexEditor
 					if (numSelection == 1 && numSelectedPrefabs == 1)
 					{
 						_contextMenu->AddItem(new HexEngine::ContextItem(L"Create prefab variant...", std::bind(&AssetExplorer::ShowCreatePrefabVariantDialog, this)));
+					}
+
+					if (numSelection == 1 && numSelectedMeshes == 1)
+					{
+						_contextMenu->AddItem(new HexEngine::ContextItem(L"Recenter mesh to origin", std::bind(&AssetExplorer::RecenterSelectedMeshToOrigin, this)));
 					}
 
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&AssetExplorer::SetMassMaterial, this)));

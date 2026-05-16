@@ -10,6 +10,7 @@
 #include "../../Scene/SceneManager.hpp"
 #include "../../Input/CommandManager.hpp"
 #include "../../Input/HCommand.hpp"
+#include <cfloat>
 
 namespace HexEngine
 {
@@ -76,6 +77,9 @@ namespace HexEngine
 	FirstPersonCameraController::FirstPersonCameraController(Entity* entity) :
 		UpdateComponent(entity)
 	{
+		if (auto* transform = entity->GetComponent<Transform>())
+			transform->EnableInterpolation(true);
+
 		g_pEnv->_inputSystem->AddInputListener(this, InputEvent::KeyDown | InputEvent::KeyUp | InputEvent::MouseDown | InputEvent::MouseUp | InputEvent::MouseWheel | InputEvent::MouseMove);
 
 		g_pEnv->_commandManager->CreateBind('W', "MoveForwards", this);
@@ -89,6 +93,9 @@ namespace HexEngine
 	FirstPersonCameraController::FirstPersonCameraController(Entity* entity, FirstPersonCameraController* clone) :
 		UpdateComponent(entity)
 	{
+		if (auto* transform = entity->GetComponent<Transform>())
+			transform->EnableInterpolation(true);
+
 		g_pEnv->_inputSystem->AddInputListener(this, InputEvent::KeyDown | InputEvent::KeyUp | InputEvent::MouseDown | InputEvent::MouseUp | InputEvent::MouseWheel | InputEvent::MouseMove);
 
 		g_pEnv->_commandManager->CreateBind('W', "MoveForwards", this);
@@ -106,50 +113,65 @@ namespace HexEngine
 
 	void FirstPersonCameraController::Update(float frameTime)
 	{
-		math::Vector3 moveDir;
-		auto transform = GetEntity()->GetComponent<Transform>();
-		auto rigidBody = GetEntity()->GetComponent<RigidBody>();
-		auto bodyController = rigidBody ? rigidBody->GetIRigidBody() : nullptr;
+		(void)frameTime;
+	}
 
-		if (!bodyController)
+	void FirstPersonCameraController::FixedUpdate(float frameTime)
+	{
+		if (frameTime <= 0.0f)
 			return;
 
-		const float kMoveDilation = 0.001f;
+		auto* transform = GetEntity()->GetComponent<Transform>();
+		auto* rigidBody = GetEntity()->GetComponent<RigidBody>();
+		auto* bodyController = rigidBody ? rigidBody->GetIRigidBody() : nullptr;
 
-		auto right = transform->GetRight();
-		auto absForwards = -right.Cross(math::Vector3::Up);
+		if (!transform || !bodyController)
+			return;
+
+		math::Vector3 planarRight = transform->GetRight();
+		planarRight.y = 0.0f;
+
+		if (planarRight.Length() <= FLT_EPSILON)
+			planarRight = math::Vector3::Right;
+		else
+			planarRight.Normalize();
+
+		math::Vector3 planarForward = -planarRight.Cross(math::Vector3::Up);
+
+		if (planarForward.Length() <= FLT_EPSILON)
+			planarForward = math::Vector3::Forward;
+		else
+			planarForward.Normalize();
+
+		math::Vector3 planarVelocity;
 
 		if ((_flags & MoveFlag::MoveForwards) != 0)
-		{
-			moveDir += absForwards * _movementSpeed * kMoveDilation;
-		}
+			planarVelocity += planarForward * _movementSpeed;
 
 		if ((_flags & MoveFlag::MoveBackwards) != 0)
-		{
-			moveDir += -absForwards * _movementSpeed * kMoveDilation;
-		}
+			planarVelocity -= planarForward * _movementSpeed;
 
 		if ((_flags & MoveFlag::MoveRight) != 0)
-		{
-			moveDir += right * _movementSpeed * kMoveDilation;
-		}
+			planarVelocity += planarRight * _strafeMovementSpeed;
 
 		if ((_flags & MoveFlag::MoveLeft) != 0)
-		{
-			moveDir += -right * _movementSpeed * kMoveDilation;
-		}
+			planarVelocity -= planarRight * _strafeMovementSpeed;
 
-		if (bodyController->IsOnGround() == false)
-		{
-			moveDir.y -= 9.81f * kMoveDilation * 4.0f;
-		}
+		const bool isOnGround = bodyController->IsOnGround();
+		if (isOnGround && _verticalVelocity < 0.0f)
+			_verticalVelocity = 0.0f;
+		else if (!isOnGround)
+			_verticalVelocity -= _gravityAcceleration * frameTime;
 
-		if (moveDir.Length() > 0.0f)
-		{
-			bool a = false;
-		}
+		float manualVerticalVelocity = 0.0f;
+		if ((_flags & MoveFlag::MoveUp) != 0)
+			manualVerticalVelocity += _verticalMovementSpeed;
 
-		bodyController->Move(moveDir, 0.0f, frameTime);
+		if ((_flags & MoveFlag::MoveDown) != 0)
+			manualVerticalVelocity -= _verticalMovementSpeed;
+
+		math::Vector3 displacement = (planarVelocity + (math::Vector3::Up * (_verticalVelocity + manualVerticalVelocity))) * frameTime;
+		bodyController->Move(displacement, 0.0f, frameTime);
 	}
 
 	void FirstPersonCameraController::AddInputFlag(MoveFlag flag)

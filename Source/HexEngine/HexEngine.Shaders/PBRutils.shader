@@ -56,6 +56,34 @@
 		return saturate(max(perceptualRoughness, sqrt(kernelRoughness)));
 	}
 
+	float3 CalculateLightningSurfaceLighting(
+		float3 normal,
+		float3 positionWorld,
+		float3 baseColor,
+		float perceptualRoughness,
+		float metallic)
+	{
+		const float lightningFlash = saturate(g_weatherSurface.lightningFlash);
+		if (lightningFlash <= 0.0001f)
+			return 0.0f.xxx;
+
+		const float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+		const float3 V = normalize(g_eyePos.xyz - positionWorld);
+		const float3 L = lightningDir;
+		const float3 H = normalize(L + V);
+		const float NdotL = saturate(dot(normal, L));
+		const float NdotH = saturate(dot(normal, H));
+		const float VdotH = saturate(dot(V, H));
+
+		const float3 lightningColor = float3(0.64f, 0.78f, 1.0f);
+		const float3 diffuseTerm = baseColor * (0.22f + 0.78f * (1.0f - metallic)) * NdotL;
+		const float specTightness = lerp(56.0f, 16.0f, perceptualRoughness);
+		const float fresnel = pow(1.0f - VdotH, 5.0f);
+		const float specularTerm = pow(max(NdotH, 0.0f), specTightness) * (0.35f + 0.65f * (1.0f - perceptualRoughness) + fresnel * 0.45f);
+		const float horizonLift = saturate(0.35f + 0.65f * lightningDir.y);
+		return lightningColor * lightningFlash * horizonLift * (diffuseTerm * 0.55f + specularTerm * 0.85f);
+	}
+
 	float4 CalculatePBR(
 		Texture2D materialTex,
 		SamplerState samp,
@@ -120,10 +148,56 @@
 		float3 ambient = pixelColour.rgb * g_atmosphere.ambientLight.rgb;
 
 		color += ambient;
+		color += CalculateLightningSurfaceLighting(normal, PositionWorld, baseColor, perceptualRoughness, metallic);
 
 		// Calculate lighting contribution from image based lighting source (IBL)
 		//color += getIBLContribution(perceptualRoughness, NdotV, diffuseColor, specularColor, n, reflection);
 
+		return float4(color, 1.0f);
+	}
+
+	float4 CalculatePBRSurface(
+		float metallic,
+		float perceptualRoughness,
+		float3 normal,
+		float3 PositionWorld,
+		float3 LightDirection,
+		float3 LightColor,
+		float3 pixelColour,
+		float depthValue,
+		float attenuation)
+	{
+		const float3 baseColor = pixelColour;
+		metallic = saturate(metallic);
+		perceptualRoughness = clamp(perceptualRoughness, MinRoughness, 1.0f);
+		perceptualRoughness = ApplySpecularAntiAliasing(normal, perceptualRoughness);
+		const float alphaRoughness = perceptualRoughness * perceptualRoughness;
+
+		const float3 diffuseColor = (baseColor.rgb * (float3(1.0, 1.0, 1.0) - f0)) * (1.0 - metallic);
+		const float3 specularColor = lerp(f0, baseColor.rgb, metallic);
+		const float reflectance = max(max(specularColor.r, specularColor.g), specularColor.b);
+		const float reflectance90 = saturate(reflectance * 25.0);
+		const float3 specularEnvironmentR0 = specularColor.rgb;
+		const float3 specularEnvironmentR90 = float3(1.0, 1.0, 1.0) * reflectance90;
+
+		const float3 v = normalize(g_eyePos.xyz - PositionWorld);
+		const float3 l = normalize(LightDirection);
+		const float3 h = normalize(l + v);
+
+		const float NdotL = clamp(dot(normal, l), 0.001, 1.0);
+		const float NdotV = abs(dot(normal, v)) + 0.001;
+		const float NdotH = saturate(dot(normal, h));
+		const float VdotH = saturate(dot(v, h));
+
+		const float3 F = specularReflection(specularEnvironmentR0, specularEnvironmentR90, VdotH);
+		const float G = geometricOcclusion(NdotL, NdotV, alphaRoughness);
+		const float D = microfacetDistribution(NdotH, alphaRoughness);
+
+		const float3 diffuseContrib = (1.0 - F) * diffuse(diffuseColor);
+		const float3 specContrib = F * G * D / (4.0 * NdotL * NdotV);
+		float3 color = NdotL * LightColor * attenuation * (diffuseContrib + specContrib) * depthValue;
+		color += pixelColour.rgb * g_atmosphere.ambientLight.rgb;
+		color += CalculateLightningSurfaceLighting(normal, PositionWorld, baseColor, perceptualRoughness, metallic);
 		return float4(color, 1.0f);
 	}
 

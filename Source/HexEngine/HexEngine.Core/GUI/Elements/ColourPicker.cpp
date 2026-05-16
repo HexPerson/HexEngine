@@ -566,11 +566,10 @@ namespace HexEngine
 
 	ColourPicker::~ColourPicker()
 	{
-		if (_popup != nullptr && !_popup->WantsDeletion())
-		{
-			_popup->DeleteMe();
-			_popup = nullptr;
-		}
+		// UIManager may already be inside HandleDeletions() when the owning picker is destroyed.
+		// Triggering a second DeleteMe() cascade from here can recurse through unrelated UI trees.
+		// Leave popup teardown to the normal UI deletion path instead of initiating it from the destructor.
+		_popup = nullptr;
 	}
 
 	void ColourPicker::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)

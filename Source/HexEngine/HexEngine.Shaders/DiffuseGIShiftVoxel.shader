@@ -12,6 +12,7 @@
 	cbuffer GIConstants : register(b4)
 	{
 		float4 g_clipCenterExtent[4];
+		float4 g_clipPreviousCenterExtent[4];
 		float4 g_clipVoxelInfo[4];
 		float4 g_giParams0;
 		float4 g_giParams1;

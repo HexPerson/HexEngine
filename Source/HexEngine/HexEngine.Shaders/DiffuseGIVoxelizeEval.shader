@@ -51,6 +51,7 @@
 	cbuffer GIConstants : register(b4)
 	{
 		float4 g_clipCenterExtent[4];
+		float4 g_clipPreviousCenterExtent[4];
 		float4 g_clipVoxelInfo[4];
 		float4 g_giParams0;
 		float4 g_giParams1;
@@ -376,6 +377,18 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 		return min(bounced, 32.0f.xxx);
 	}
 
+	float3 RemapBounceTransportAlbedo(float3 albedo)
+	{
+		const float minLuma = saturate(g_giParams10.z);
+		const float amount = saturate(g_giParams10.w);
+		albedo = saturate(albedo);
+		const float luma = max(dot(albedo, float3(0.2126f, 0.7152f, 0.0722f)), 1e-4f);
+		const float3 chroma = albedo / luma;
+		const float liftedLuma = max(luma, minLuma);
+		const float transportLuma = luma + (liftedLuma - luma) * amount;
+		return saturate(chroma * transportLuma);
+	}
+
 	[numthreads(64, 1, 1)]
 	void ShaderMain(uint3 tid : SV_DispatchThreadID)
 	{
@@ -659,10 +672,10 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					const float albedoInfluence = saturate(g_giParams6.z) * saturate(albedoConfidence * 1.25f);
 					const float3 albedoTint = lerp(1.0f.xxx, voxelAlbedo, albedoInfluence);
 					const float tintLuma = max(dot(albedoTint, float3(0.2126f, 0.7152f, 0.0722f)), 0.35f);
-					float3 injected = tri.radianceOpacity.rgb * visibilityFactor * (albedoTint / tintLuma);
+					const float3 tintRatio = min(albedoTint / tintLuma, 1.12f.xxx);
+					float3 injected = tri.radianceOpacity.rgb * visibilityFactor * tintRatio;
 					const bool gpuComputeBaseSun = gpuComputeBaseSunMode;
 					const float emissiveInject = max(0.0f, g_giParams8.w);
-					const float clipAttenuation = rcp(1.0f + (float)clipIdx * 0.5f);
 					const float emissiveLuma = dot(max(emissiveContribution, 0.0f.xxx), float3(0.2126f, 0.7152f, 0.0722f));
 					const bool emissiveMaterialActive = emissiveLuma > 1e-4f;
 					if (gpuComputeBaseSun)
@@ -680,17 +693,18 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						const float sunFacingWeight = sunFacing;
 						const float litFactor = saturate(sunFacingWeight * sunPresence * sunVisible);
 						const float unlitWeight = (1.0f - litFactor) * (1.0f - litFactor);
-						const float triLuma = clamp(dot(triAlbedo, float3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
-						const float3 baseDiffuse = triAlbedo * (triLuma * diffuseInject * unlitBase * unlitWeight * 0.48f * clipAttenuation);
+						const float3 triTransportAlbedo = RemapBounceTransportAlbedo(triAlbedo);
+						const float triTransportLuma = clamp(dot(triTransportAlbedo, float3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
+						const float3 baseDiffuse = triTransportAlbedo * (triTransportLuma * diffuseInject * unlitBase * unlitWeight * 0.48f);
 						const float sunDirectionalShape = lerp(0.70f, 1.0f, sunDirectionality);
 						const float sunDirectional = sunFacingWeight * sunStrength * sunInject * sunDirectionalShape * (0.38f + 0.32f * sunBoost);
-						const float3 sunBounce = triAlbedo * (triLuma * sunDirectional * sunVisible * clipAttenuation);
-						const float3 emissiveBounce = emissiveContribution * emissiveInject * clipAttenuation;
+						const float3 sunBounce = triTransportAlbedo * (triTransportLuma * sunDirectional * sunVisible);
+						const float3 emissiveBounce = emissiveContribution * emissiveInject;
 						injected = baseDiffuse + sunBounce + emissiveBounce;
 					}
 					else
 					{
-						injected += emissiveContribution * emissiveInject * clipAttenuation;
+						injected += emissiveContribution * emissiveInject;
 					}
 					// Motion damping to reduce visible flicker while clipmaps settle.
 					// Keep this subtle to avoid visible GI dimming while moving.
@@ -713,8 +727,6 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						// Let emissive injection respond quickly instead of being trapped by temporal damping.
 						effectiveKeep = min(effectiveKeep, 0.02f);
 					}
-					const float movementGain = lerp(1.0f, 1.10f, shiftSettle);
-					injected *= movementGain;
 					float3 radiance = previous.rgb * effectiveKeep + injected * (1.0f - effectiveKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.

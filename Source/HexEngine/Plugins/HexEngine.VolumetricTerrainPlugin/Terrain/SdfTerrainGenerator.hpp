@@ -8,15 +8,15 @@ namespace HexEngine::VolumetricTerrain
 	struct SdfTerrainGenerationParams
 	{
 		uint32_t seed = 1337;
-		int32_t chunkResolution = 48;
-		int32_t collisionResolution = 24;
+		int32_t chunkResolution = 32;
+		int32_t collisionResolution = 16;
 		float chunkWorldSize = 96.0f;
-		int32_t chunksX = 4;
+		int32_t chunksX = 3;
 		int32_t chunksY = 2;
-		int32_t chunksZ = 4;
+		int32_t chunksZ = 3;
 		float terrainHeightScale = 1.0f;
 		float surfaceNoiseFrequency = 0.0012f;
-		float surfaceNoiseStrength = 32.0f;
+		float surfaceNoiseStrength = 0.0f;
 		float caveFrequency = 0.01f;
 		float caveStrength = 6.0f;
 		float caveThreshold = 0.8f;

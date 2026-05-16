@@ -44,6 +44,8 @@ namespace HexEngine
 	void ListBox::RenderItems(GuiRenderer* renderer, const Point& position)
 	{
 		_hoverIdx = -1;
+
+		
 		{
 			const int32_t lineHeight = 20;
 			Point size(_size.x, lineHeight);

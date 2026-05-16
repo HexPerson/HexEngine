@@ -79,6 +79,7 @@ namespace HexEngine
 			uint32_t poolStart = 0;
 			uint32_t poolCount = 0;
 			int32_t spawnRemaining = 0;
+			uint32_t spawnOffset = 0;
 			uint32_t flags = 0;
 		};
 

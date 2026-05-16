@@ -29,7 +29,9 @@ namespace HexEngine
 		NormalMap,
 		ScalarParameter,
 		VectorParameter,
-		TextureParameter
+		TextureParameter,
+		WeatherScalar,
+		WeatherVector
 	};
 
 	enum class MaterialGraphPinDirection : uint8_t

@@ -92,6 +92,7 @@ namespace HexEngine
 		_format = material._format;
 		_cullDistance = material._cullDistance;
 		_objectFlags = material._objectFlags;
+		_affectsGI = material._affectsGI;
 		_emissiveAffectsGI = material._emissiveAffectsGI;
 		_graph = material._graph;
 		_graphInstance = material._graphInstance;
@@ -142,6 +143,18 @@ namespace HexEngine
 	bool Material::GetEmissiveAffectsGI() const
 	{
 		return _emissiveAffectsGI;
+	}
+
+	void Material::SetAffectsGI(bool value)
+	{
+		std::unique_lock lock(_lock);
+
+		_affectsGI = value;
+	}
+
+	bool Material::GetAffectsGI() const
+	{
+		return _affectsGI;
 	}
 
 	void Material::SetStandardShader(const std::shared_ptr<IShader>& shader)
