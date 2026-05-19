@@ -42,7 +42,7 @@ private:
 	bool CreateAuxiliaryTextures(HexEngine::ITexture2D* specularSignalInput);
 	bool CreateTexture(TextureBinding& binding, uint32_t width, uint32_t height, DXGI_FORMAT format, UINT bindFlags);
 	bool CreateExternalBinding(TextureBinding& binding, HexEngine::ITexture2D* texture);
-	TextureBinding* ResolveResource(const nrd::ResourceDesc& resource, nrd::Identifier identifier);
+	TextureBinding* ResolveResource(const nrd::ResourceDesc& resource);
 	bool RunPreprocess(const HexEngine::DenoiserFrameData& fd);
 	bool RunDenoiser(const HexEngine::DenoiserFrameData& fd);
 	bool RunResolve(const HexEngine::DenoiserFrameData& fd, HexEngine::ITexture2D* output);
@@ -65,15 +65,9 @@ private:
 	TextureBinding _specularHitDistanceInput;
 	TextureBinding _normalAndDepthInput;
 	TextureBinding _materialInput;
-	TextureBinding _surfaceMotionVectorsInput;
 	TextureBinding _motionVectorsInput;
 	TextureBinding _normalRoughness;
 	TextureBinding _viewZ;
-	TextureBinding _previousViewZ;
-	TextureBinding _specularNormalRoughness;
-	TextureBinding _specularViewZ;
-	TextureBinding _previousSpecularViewZ;
-	TextureBinding _specularMotionVectors;
 	TextureBinding _diffuseRadianceHitDistance;
 	TextureBinding _specularRadianceHitDistance;
 	TextureBinding _denoisedDiffuseRadianceHitDistance;
