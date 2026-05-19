@@ -2496,6 +2496,10 @@ namespace HexEngine
 		{
 			guiRenderer->StartFrame();
 
+			// Ensure the auto-slot SRV counter starts at zero so the bindings below land at
+			// the registers the SSR shader declares (gbuffer=t0..t4, then t5..t8, then GI).
+			g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+
 			// Render fog as a post process
 			_gbuffer.BindAsShaderResource();
 
@@ -2503,6 +2507,10 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
 			g_pEnv->_graphicsDevice->SetTexture2D(_ssrHistory);
 			g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetVelocity());
+
+			// Bind voxel GI clipmaps + GIConstants (b4) so SSR can fall back to GI on miss.
+			// Continues from slot t9 (gbuffer=0-4, beauty=5, noise=6, history=7, velocity=8).
+			_diffuseGi.BindVoxelsForReflection();
 
 			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader.get());
 
