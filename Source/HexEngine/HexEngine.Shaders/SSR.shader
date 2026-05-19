@@ -438,27 +438,39 @@
 			return float4(hit.colour, 1.0f);
 		}
 
-		// Either the ray fell back to the last in-screen sample, or it never had any.
-		// Cone-trace voxel GI for a directional radiance estimate at the source point. We then
-		// blend with the in-screen fallback (if present) so noise stays low and NRD has spatially
-		// coherent data to work with.
-		float traceDistance = 0.0f;
-		const float3 giRadiance = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, rayDir, traceDistance);
+		// Miss path. We deliberately AVOID sampling the voxel GI along rayDir here: the voxel
+		// grid is spatially coherent across neighbouring pixels (adjacent rays go through
+		// adjacent voxels), so a directional sample produces the same value for entire columns
+		// of pixels - which NRD correctly preserves as signal and renders as long stripes /
+		// stable curved patterns following the voxel grid topology.
+		//
+		// Instead, the surface's OWN beauty value is the smoothest plausible fallback: it's
+		// already lit by direct + diffuse-GI (DiffuseGI runs before SSR), it varies smoothly
+		// per pixel, and matches water.shader's "return originalColour" pattern. The visual
+		// effect is that miss-rays carry the surface's ambient/GI-lit colour rather than a
+		// hard voxel value or black.
+		float4 srcView = mul(float4(worldPos, 1.0f), g_viewMatrix);
+		float4 srcClip = mul(srcView, g_projectionMatrix);
+		srcClip.xy /= srcClip.w;
+		const float2 srcUV = float2(srcClip.x * 0.5f + 0.5f, 1.0f - (srcClip.y * 0.5f + 0.5f));
+		const float3 sourceBeauty = g_beautyTexture.Sample(g_pointSampler, srcUV).rgb;
 
 		didReflect = true;
 
 		if (hit.didFallback)
 		{
-			// Blend the last in-screen beauty sample with the voxel GI estimate. The beauty sample
-			// gives smooth, locally coherent values; voxel GI fills in directional information.
-			const float3 blended = lerp(giRadiance, hit.colour, 0.65f);
+			// Loop ran out of steps while still in-screen. Use the last in-screen beauty value
+			// rather than the source-pixel beauty, since at least directionally that's closer
+			// to what the ray was heading toward.
 			hitDistance = max(hit.hitDistance, 1.0f);
-			return float4(blended, 1.0f);
+			return float4(hit.colour, 1.0f);
 		}
 
-		// Pure GI fallback - use the trace distance so NRD treats this as a far hit.
-		hitDistance = max(traceDistance, 8.0f);
-		return float4(giRadiance, 1.0f);
+		// Pure miss (screen-exit). Return the source surface's own GI-lit colour. NRD will
+		// blend this with the spatially-neighbouring hits, so the miss region picks up the
+		// general reflection brightness rather than a wrong directional sample.
+		hitDistance = 100.0f;
+		return float4(sourceBeauty, 1.0f);
 	}
 
 	SSROut ShaderMain(UIPixelInput input)
