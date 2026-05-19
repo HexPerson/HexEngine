@@ -248,12 +248,15 @@
 		float3 prevFragPos = origin;
 		float prevTotalDistance = 0.0f;
 
-		// Last in-screen sample state - used as a "best effort" fallback (water.shader pattern)
-		// when the march exhausts its budget without registering a hit, so we don't streak black
-		// (or, with voxel GI fallback, streak whatever the cone trace happens to hit).
+		// Last in-screen sample state - used as a best-effort fallback ONLY when the loop
+		// exhausts its budget while still inside the screen (water.shader pattern). This is
+		// deliberately NOT used on off-screen exits: for a floor-pixel reflection going
+		// up+forward, the ray inevitably exits the top of the screen, and the "last in-screen
+		// tex" was just below the top edge - i.e. the back wall - so every front-floor pixel
+		// would end up reflecting the back wall and produce the long stripe artifact.
 		float2 lastInScreenTex = float2(-1.0f, -1.0f);
-		float lastInScreenActualDepth = 0.0f;
 		float lastInScreenDistance = 0.0f;
+		bool exitedScreen = false;
 
 		[loop]
 		for (int i = 0; i < stepCount; ++i)
@@ -280,17 +283,20 @@
 			const float2 fragNDC = fragClip.xy * 0.5f + 0.5f;
 			const float2 fragTex = float2(fragNDC.x, 1.0f - fragNDC.y);
 
-			// Off-screen: stop marching. We'll use either the last in-screen tex or GI fallback below.
+			// Off-screen: stop marching and skip the last-tex fallback entirely. The pure
+			// voxel-GI cone trace path will handle directional radiance for these rays.
 			if (any(fragTex < 0.0f) || any(fragTex > 1.0f))
+			{
+				exitedScreen = true;
 				break;
+			}
 
 			const float4 normalDepth = GBUFFER_NORMAL.Sample(g_pointSampler, fragTex);
 			const float actualDepth = normalDepth.w;
 			const bool didHitSky = (actualDepth == g_frustumDepths[3]);
 
-			// Remember this position as the last valid in-screen sample, regardless of hit outcome.
+			// Remember this in-screen sample for the loop-exhaustion fallback only.
 			lastInScreenTex = fragTex;
-			lastInScreenActualDepth = actualDepth;
 			lastInScreenDistance = totalDistance;
 
 			if (didHitSky)
@@ -369,11 +375,14 @@
 			}
 		}
 
-		// No real screen-space hit. Use the water.shader pattern: if the ray got at least one valid
-		// in-screen sample whose surface sits beyond the source surface, return that beauty value
-		// as a best-effort directional sample. This avoids the long streaks NRD can't denoise away
-		// when individual rays return wildly varying voxel-GI values on miss.
-		if (lastInScreenTex.x >= 0.0f)
+		// No real screen-space hit. Only use the water.shader last-in-screen-tex fallback when
+		// the loop exhausted INSIDE the screen (i.e. the ray was still progressing across valid
+		// geometry but ran out of step budget). For rays that exited screen, leave didFallback
+		// false and rely on the pure voxel-GI cone trace in GetReflection - that direction is
+		// genuinely "outside what we can see", so the last in-screen tex is meaningless and
+		// would produce the stripe artifact along surfaces whose reflections all exit the same
+		// screen edge.
+		if (!exitedScreen && lastInScreenTex.x >= 0.0f)
 		{
 			result.didHit = true;
 			result.didHitSky = false;
