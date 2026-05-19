@@ -38,6 +38,7 @@
 #include <unordered_set>
 #include <atomic>
 #include <queue>
+#include <windowsx.h>
 
 #ifdef _DEBUG // for perf
 	#include <d3d9.h>

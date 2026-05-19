@@ -6,6 +6,106 @@ namespace HexEngine::VolumetricTerrain
 {
 	namespace
 	{
+		std::shared_ptr<Material> CreateTerrainGiProxyMaterial();
+
+		static constexpr math::Vector3 kTerrainGiLayerColours[4] =
+		{
+			math::Vector3(0.42f, 0.57f, 0.28f),
+			math::Vector3(0.46f, 0.42f, 0.38f),
+			math::Vector3(0.92f, 0.94f, 0.97f),
+			math::Vector3(0.50f, 0.40f, 0.27f)
+		};
+
+		math::Vector4 ComputeTerrainGiAverageColour(
+			const std::vector<float>& densities,
+			const std::vector<uint8_t>& materialWeights,
+			float voxelSize)
+		{
+			if (densities.empty() || materialWeights.size() < 4ull)
+			{
+				return math::Vector4(0.38f, 0.46f, 0.32f, 1.0f);
+			}
+
+			const float surfaceBand = std::max(0.75f, voxelSize * 1.5f);
+			math::Vector3 accum = math::Vector3::Zero;
+			float accumWeight = 0.0f;
+
+			for (size_t voxelIndex = 0; voxelIndex < densities.size(); ++voxelIndex)
+			{
+				const float densityAbs = std::abs(densities[voxelIndex]);
+				const float surfaceWeight = std::max(0.0f, 1.0f - densityAbs / surfaceBand);
+				if (surfaceWeight <= 1e-4f)
+				{
+					continue;
+				}
+
+				const size_t weightBase = voxelIndex * 4ull;
+				if ((weightBase + 3ull) >= materialWeights.size())
+				{
+					break;
+				}
+
+				math::Vector3 blended = math::Vector3::Zero;
+				float layerSum = 0.0f;
+				for (size_t layer = 0; layer < 4ull; ++layer)
+				{
+					const float layerWeight = static_cast<float>(materialWeights[weightBase + layer]) / 255.0f;
+					blended += kTerrainGiLayerColours[layer] * layerWeight;
+					layerSum += layerWeight;
+				}
+
+				if (layerSum <= 1e-4f)
+				{
+					continue;
+				}
+
+				accum += (blended / layerSum) * surfaceWeight;
+				accumWeight += surfaceWeight;
+			}
+
+			if (accumWeight <= 1e-4f)
+			{
+				return math::Vector4(0.38f, 0.46f, 0.32f, 1.0f);
+			}
+
+			accum /= accumWeight;
+			return math::Vector4(
+				std::clamp(accum.x, 0.0f, 1.0f),
+				std::clamp(accum.y, 0.0f, 1.0f),
+				std::clamp(accum.z, 0.0f, 1.0f),
+				1.0f);
+		}
+
+		void RefreshTerrainGiMaterial(
+			StaticMeshComponent* meshComponent,
+			const std::vector<float>& densities,
+			const std::vector<uint8_t>& materialWeights,
+			float voxelSize)
+		{
+			if (meshComponent == nullptr)
+			{
+				return;
+			}
+
+			auto material = meshComponent->GetMaterial();
+			if (material == nullptr || material->GetFileSystemPath() == "EngineData.Materials/Default.hmat")
+			{
+				material = CreateTerrainGiProxyMaterial();
+				meshComponent->SetMaterial(material);
+			}
+			if (material == nullptr)
+			{
+				return;
+			}
+
+			material->_properties.diffuseColour = ComputeTerrainGiAverageColour(densities, materialWeights, voxelSize);
+			material->_properties.emissiveColour = math::Vector4::Zero;
+			material->SetTexture(MaterialTexture::Albedo, nullptr);
+			material->SetTexture(MaterialTexture::Emission, nullptr);
+			material->SetAffectsGI(true);
+			material->SetEmissiveAffectsGI(false);
+		}
+
 		std::shared_ptr<Material> CreateTerrainGiProxyMaterial()
 		{
 			auto material = std::make_shared<Material>();
@@ -751,7 +851,6 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		{
 			_meshComponent->SetMaterial(CreateTerrainGiProxyMaterial());
 		}
-
 		if (rebuildCollision)
 		{
 			RebuildCollision();

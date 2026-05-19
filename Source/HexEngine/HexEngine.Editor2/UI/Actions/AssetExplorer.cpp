@@ -117,6 +117,21 @@ namespace HexEditor
 		return _draggingAsset;
 	}
 
+	bool AssetExplorer::GetPrimarySelectedAssetPath(fs::path& outPath) const
+	{
+		for (const auto& asset : _assetsInView)
+		{
+			if (asset.selected)
+			{
+				outPath = asset.path;
+				return !outPath.empty();
+			}
+		}
+
+		outPath.clear();
+		return false;
+	}
+
 	bool AssetExplorer::ConsumeRecentlyDroppedAssetPath(fs::path& outPath)
 	{
 		if (!_hasRecentlyDroppedAsset)

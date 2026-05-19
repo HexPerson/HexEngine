@@ -204,28 +204,13 @@ namespace HexEngine
 
 		//LOG_DEBUG("Loading %d entities", header.numEnts);
 
-		struct SceneLoadLockGuard
-		{
-			explicit SceneLoadLockGuard(const std::shared_ptr<Scene>& inScene) : scene(inScene)
-			{
-				if (scene != nullptr)
-					scene->Lock();
-			}
-
-			~SceneLoadLockGuard()
-			{
-				if (scene != nullptr)
-					scene->Unlock();
-			}
-
-			std::shared_ptr<Scene> scene;
-		} sceneLoadGuard(loadIntoExistingScene);
-
 		std::vector<std::pair<json, Entity*>> createdEnts;
 
 		for (auto& ent : sceneData["entities"].items())
 		{
+			loadIntoExistingScene->Lock();
 			auto entity = Entity::LoadFromFile(ent.value(), ent.key(), loadIntoExistingScene.get(), this);
+			loadIntoExistingScene->Unlock();
 
 			createdEnts.push_back({
 				ent.value(),
@@ -244,7 +229,9 @@ namespace HexEngine
 
 			if (child && parent)
 			{
+				loadIntoExistingScene->Lock();
 				child->SetParent(parent);
+				loadIntoExistingScene->Unlock();
 			}
 		}
 
@@ -253,7 +240,9 @@ namespace HexEngine
 		// Deserialize the transforms first, because other components may depends on the transforms being correct
 		for (auto& ent : createdEnts)
 		{
+			loadIntoExistingScene->Lock();
 			ent.second->Deserialize(ent.first, this, 1 << Transform::_GetComponentId());
+			loadIntoExistingScene->Unlock();
 
 			_loadedEntities.push_back(ent.second);
 		}		
@@ -265,7 +254,9 @@ namespace HexEngine
 			if (callback)
 				callback(std::wstring(ent.second->GetName().begin(), ent.second->GetName().end()), loadedCount, (uint32_t)createdEnts.size());
 
+			loadIntoExistingScene->Lock();
 			ent.second->Deserialize(ent.first, this);
+			loadIntoExistingScene->Unlock();
 
 			//  we want to force the PVS to rebuild each time an entity is loaded, in the case of streaming scene files
 			if (auto mainCamera = loadIntoExistingScene->GetMainCamera(); mainCamera != nullptr)

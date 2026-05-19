@@ -301,6 +301,11 @@ namespace HexEditor
 		return _assetExplorer ? _assetExplorer->GetCurrentlyDraggedAsset() : nullptr;
 	}
 
+	bool Explorer::GetPrimarySelectedAssetPath(fs::path& outPath) const
+	{
+		return _assetExplorer ? _assetExplorer->GetPrimarySelectedAssetPath(outPath) : false;
+	}
+
 	bool Explorer::ConsumeRecentlyDroppedAssetPath(fs::path& outPath)
 	{
 		return _assetExplorer ? _assetExplorer->ConsumeRecentlyDroppedAssetPath(outPath) : false;

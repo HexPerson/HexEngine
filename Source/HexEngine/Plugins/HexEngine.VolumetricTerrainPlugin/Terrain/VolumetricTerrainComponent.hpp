@@ -20,6 +20,7 @@ public:
 		virtual void OnGUI() override;
 		virtual void OnDebugRender() override;
 		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
+		bool RayCastTerrain(const math::Ray& ray, float maxDistance, const std::vector<Entity*>& entsToIgnore, RayHit& hit) const;
 
 		SdfTerrainGenerationParams& GetGenerationParams() { return _terrain.GetGenerationParams(); }
 		BrushSettings& GetBrushSettings() { return _brush; }

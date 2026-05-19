@@ -330,6 +330,7 @@ Global
 		{880558E4-10E4-4970-991C-A38C5692A36E}.Release|x86.ActiveCfg = Release|Win32
 		{880558E4-10E4-4970-991C-A38C5692A36E}.Release|x86.Build.0 = Release|Win32
 		{81B51237-5572-443C-8A68-DBC54F02F624}.Debug|x64.ActiveCfg = Debug|x64
+		{81B51237-5572-443C-8A68-DBC54F02F624}.Debug|x64.Build.0 = Debug|x64
 		{81B51237-5572-443C-8A68-DBC54F02F624}.Debug|x86.ActiveCfg = Debug|Win32
 		{81B51237-5572-443C-8A68-DBC54F02F624}.Debug|x86.Build.0 = Debug|Win32
 		{81B51237-5572-443C-8A68-DBC54F02F624}.Release_DEBUG|x64.ActiveCfg = Release|x64
@@ -409,7 +410,7 @@ Global
 		{D1A6D78F-7D86-4CB8-86A2-6FC1ACF1CC6D} = {FB9A261D-5A41-4139-9B3F-F8922326A9D1}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
-		SolutionGuid = {DB1DC007-5C32-45FB-A793-07226ECC6F64}
 		VisualSVNWorkingCopyRoot = .
+		SolutionGuid = {DB1DC007-5C32-45FB-A793-07226ECC6F64}
 	EndGlobalSection
 EndGlobal

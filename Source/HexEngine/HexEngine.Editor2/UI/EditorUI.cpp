@@ -1329,7 +1329,23 @@ namespace HexEditor
 
 		
 		
-		if (event == HexEngine::InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _sceneView->IsMouseOverSceneViewport())
+		if (event == HexEngine::InputEvent::MouseMove && _sceneView->IsMouseOverSceneViewport())
+		{
+			auto hit = RayCastWorld();
+
+			HexEngine::EditorSceneViewportMouseMoveMessage sceneMoveMessage;
+			sceneMoveMessage.screenX = static_cast<int32_t>(std::round(data->MouseMove.x));
+			sceneMoveMessage.screenY = static_cast<int32_t>(std::round(data->MouseMove.y));
+			sceneMoveMessage.hasHit = hit.entity != nullptr;
+			sceneMoveMessage.worldPosition = hit.position;
+			sceneMoveMessage.hitEntity = hit.entity;
+			if (hit.entity != nullptr)
+			{
+				sceneMoveMessage.hitEntityId = hit.entity->GetId();
+			}
+			BroadcastEditorToolMessage(sceneMoveMessage);
+		}
+		else if (event == HexEngine::InputEvent::MouseDown && data->MouseDown.button == VK_LBUTTON && _sceneView->IsMouseOverSceneViewport())
 		{
 			if (auto inspecting = _rightDock->GetInspectingEntity(); inspecting != nullptr && inspecting->IsEditorGizmoHovered())
 			{
@@ -1337,6 +1353,23 @@ namespace HexEditor
 			}
 
 			auto hit = RayCastWorld();
+
+			HexEngine::EditorSceneViewportMouseDownMessage sceneClickMessage;
+			sceneClickMessage.button = data->MouseDown.button;
+			sceneClickMessage.screenX = data->MouseDown.xpos;
+			sceneClickMessage.screenY = data->MouseDown.ypos;
+			sceneClickMessage.hasHit = hit.entity != nullptr;
+			sceneClickMessage.worldPosition = hit.position;
+			sceneClickMessage.hitEntity = hit.entity;
+			if (hit.entity != nullptr)
+			{
+				sceneClickMessage.hitEntityId = hit.entity->GetId();
+			}
+			BroadcastEditorToolMessage(sceneClickMessage);
+			if (sceneClickMessage.handled)
+			{
+				return false;
+			}
 
 			if (hit.entity)
 			{
@@ -1530,7 +1563,7 @@ namespace HexEditor
 				ray.position = mainCamera->GetEntity()->GetPosition();
 
 				HexEngine::RayHit hit;
-
+				bool hasHit = false;
 				hit.position = ray.position + ray.direction * mainCamera->GetFarZ() * 0.25f;
 
 				if (HexEngine::PhysUtils::RayCast(
@@ -1541,6 +1574,39 @@ namespace HexEditor
 					&hit,
 					entsToIgnore)
 					)
+				{
+					hasHit = true;
+				}
+
+				HexEngine::EditorWorldRayCastMessage pluginRayCast;
+				pluginRayCast.rayOrigin = ray.position;
+				pluginRayCast.rayDirection = ray.direction;
+				pluginRayCast.maxDistance = mainCamera->GetFarZ();
+				pluginRayCast.mask =
+					LAYERMASK(HexEngine::Layer::StaticGeometry) |
+					LAYERMASK(HexEngine::Layer::DynamicGeometry);
+				pluginRayCast.ignoredEntities = entsToIgnore;
+				pluginRayCast.hasHit = hasHit;
+				if (hasHit)
+				{
+					pluginRayCast.hitEntity = hit.entity;
+					pluginRayCast.hitEntityId = hit.entity != nullptr ? hit.entity->GetId() : HexEngine::InvalidEntityId;
+					pluginRayCast.hitPosition = hit.position;
+					pluginRayCast.hitNormal = hit.normal;
+					pluginRayCast.hitDistance = hit.distance;
+				}
+
+				BroadcastEditorToolMessage(pluginRayCast);
+				if (pluginRayCast.hasHit)
+				{
+					hit.entity = pluginRayCast.hitEntity;
+					hit.position = pluginRayCast.hitPosition;
+					hit.normal = pluginRayCast.hitNormal;
+					hit.distance = pluginRayCast.hitDistance;
+					hasHit = true;
+				}
+
+				if (hasHit)
 				{
 					return hit;
 				}

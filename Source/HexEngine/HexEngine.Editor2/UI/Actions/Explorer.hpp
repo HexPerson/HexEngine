@@ -29,6 +29,7 @@ namespace HexEditor
 		virtual void OnLogMessage(const HexEngine::LogMessage& message) override;
 
 		AssetDesc* GetCurrentlyDraggedAsset() const;
+		bool GetPrimarySelectedAssetPath(fs::path& outPath) const;
 		bool ConsumeRecentlyDroppedAssetPath(fs::path& outPath);
 
 	private:

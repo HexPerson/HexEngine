@@ -125,7 +125,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(SolutionDir)..\..\ThirdParty\oidn\lib\;$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\..\ThirdParty\oidn\build-cuda\Release\;$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\</AdditionalLibraryDirectories>
       <AdditionalDependencies>OpenImageDenoise.lib;HexEngine.Core.lib;DirectXTK.lib;DirectXTex.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>

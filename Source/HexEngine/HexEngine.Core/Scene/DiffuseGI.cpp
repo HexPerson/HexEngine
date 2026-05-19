@@ -47,6 +47,8 @@ namespace HexEngine
 	HVar r_giColourBleedStrength("r_giColourBleedStrength", "Extra multiplier for saturated color transfer (red/green/blue bleed)", 1.0f, 0.0f, 4.0f);
 	HVar r_giBounceAlbedoMinLuma("r_giBounceAlbedoMinLuma", "Minimum luminance used for GI bounce transport albedo remap", 0.14f, 0.0f, 1.0f);
 	HVar r_giBounceAlbedoRemapAmount("r_giBounceAlbedoRemapAmount", "Blend amount for luminance-preserving GI bounce albedo remap", 0.45f, 0.0f, 1.0f);
+	HVar r_giReceiverMinLuma("r_giReceiverMinLuma", "Minimum receiver luminance used for final indirect GI response remap", 0.22f, 0.0f, 1.0f);
+	HVar r_giReceiverRemapAmount("r_giReceiverRemapAmount", "Blend amount for receiver-side indirect GI response remap", 0.55f, 0.0f, 1.0f);
 	HVar r_giTerrainProxyEnable("r_giTerrainProxyEnable", "Allow hidden terrain GI proxy meshes to inject into GI", false, false, true);
 	HVar r_giTerrainProxyInjectionScale("r_giTerrainProxyInjectionScale", "Extra scale applied to hidden terrain GI proxy injection", 0.02f, 0.0f, 0.25f);
 	HVar r_giEmissiveInjection("r_giEmissiveInjection", "Emissive energy injected into GI voxels", 0.75f, 0.0f, 16.0f);
@@ -1722,9 +1724,6 @@ namespace HexEngine
 				++step;
 			}
 
-			const bool terrainGiProxyEnabled =
-				smc->GetIncludeInGIWhenHidden() &&
-				r_giTerrainProxyEnable._val.b;
 			math::Vector3 injection = sunTint * std::max(0.0f, r_giSunInjection._val.f32) * sunInjectScale;
 			if (auto mat = smc->GetMaterial())
 			{
@@ -1733,30 +1732,17 @@ namespace HexEngine
 				const float albedoMax = std::max(albedoTint.x, std::max(albedoTint.y, albedoTint.z));
 				const float albedoMin = std::min(albedoTint.x, std::min(albedoTint.y, albedoTint.z));
 				const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
-				const float albedoLuma = std::clamp(albedoTint.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
 				const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
 				const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * 0.8f, 1.0f, 2.0f);
-				if (terrainGiProxyEnabled)
-				{
-					const math::Vector3 neutralTerrainBounce(albedoLuma, albedoLuma, albedoLuma);
-					injection += neutralTerrainBounce * std::max(0.0f, r_giDiffuseInjection._val.f32) * 0.08f;
-				}
-				else
-				{
-					injection += albedoTint * std::max(0.0f, r_giDiffuseInjection._val.f32) * colourBleedBoost;
-				}
+				injection += albedoTint * std::max(0.0f, r_giDiffuseInjection._val.f32) * colourBleedBoost;
 				if (mat->GetEmissiveAffectsGI())
 				{
 					injection += math::Vector3(emissive.x, emissive.y, emissive.z) * std::max(0.0f, emissive.w) * std::max(0.0f, r_giEmissiveInjection._val.f32);
 				}
 			}
 
-			const bool terrainGiProxy = terrainGiProxyEnabled;
 			const float clipAttenuation = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
-			const float terrainProxyInjectionScale = terrainGiProxy
-				? std::clamp(r_giTerrainProxyInjectionScale._val.f32, 0.0f, 1.0f)
-				: 1.0f;
-			injection *= clipAttenuation * terrainProxyInjectionScale;
+			injection *= clipAttenuation;
 
 			for (uint32_t vz = vz0; vz <= vz1; vz += step)
 			{
@@ -1961,8 +1947,8 @@ namespace HexEngine
 		_constants.params11 = math::Vector4(
 			std::max(0.0f, r_giLocalLightInjection._val.f32),
 			0.0f,
-			0.0f,
-			0.0f);
+			std::clamp(r_giReceiverMinLuma._val.f32, 0.0f, 1.0f),
+			std::clamp(r_giReceiverRemapAmount._val.f32, 0.0f, 1.0f));
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresenceMask;
@@ -3645,7 +3631,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				// so GPU GI ignores them entirely until there is a terrain-specific injection path.
 				continue;
 			}
-
 			const auto& vertices = mesh->GetVertices();
 			const auto& indices = mesh->GetIndices();
 			if (vertices.empty() || indices.size() < 3u)
@@ -3686,17 +3671,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			const float meshSunInjectionNormalize = std::clamp(r_giMeshSunInjectionNormalization._val.f32, 0.0f, 1.0f);
 			const float meshBaseMinScale = std::clamp(r_giMeshBaseInjectionMinScale._val.f32, 0.0f, 1.0f);
 			const float meshSunMinScale = std::clamp(r_giMeshSunInjectionMinScale._val.f32, 0.0f, 1.0f);
-			const float terrainProxyInjectionScale = terrainGiProxy
-				? std::clamp(r_giTerrainProxyInjectionScale._val.f32, 0.0f, 1.0f)
-				: 1.0f;
 			const float meshBaseInjectionScale = std::lerp(
 				1.0f,
 				std::max(meshBaseMinScale, 1.0f / static_cast<float>(sampledTriCount)),
-				meshBaseInjectionNormalize) * terrainProxyInjectionScale;
+				meshBaseInjectionNormalize);
 			const float meshSunInjectionScale = std::lerp(
 				1.0f,
 				std::max(meshSunMinScale, 1.0f / static_cast<float>(sampledTriCount)),
-				meshSunInjectionNormalize) * terrainProxyInjectionScale;
+				meshSunInjectionNormalize);
 			const auto& worldTM = entity->GetWorldTM();
 			const math::Vector2 uvScale = smc->GetUVScale();
 			uint32_t materialProxyIndex = 0u;
@@ -3864,18 +3846,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					sunEnergyTint = sunTint * (triTransportLuma * clipAttenuation);
 					directSunBounce = sunFacing * sunPresenceRaw * (0.50f + bleedBoost * 0.34f) * sunDirectionalBoost;
 					directionalDiffuseBounce = sunFacing * sunStrength * diffuseInject * (0.28f + bleedBoost * 0.18f) * sunDirectionalBoost * colourBleedBoost;
-					if (terrainGiProxy)
-					{
-						const math::Vector3 neutralTerrainBounce(triAlbedoLuma, triAlbedoLuma, triAlbedoLuma);
-						// Terrain GI proxies are coarse hidden helper meshes, not true visible receivers.
-						// Keep them on a tightly capped neutral bounce path so global unlit-bounce tuning
-						// cannot turn them into a broad interior light source.
-						const float terrainUnlitBase = std::min(unlitBase, 0.06f);
-						triBaseInjection = neutralTerrainBounce * (diffuseInject * terrainUnlitBase * sunPresenceMask * unlitWeight * 0.08f * clipAttenuation);
-						sunEnergyTint = math::Vector3::Zero;
-						directSunBounce = 0.0f;
-						directionalDiffuseBounce = 0.0f;
-					}
 				}
 
 				if (!meshFullyInsideClip)
@@ -4031,14 +4001,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				if (gpuComputeBaseSunEnabled)
 				{
 					entry.radianceOpacity = math::Vector4(0.0f, 0.0f, 0.0f, 0.92f);
-					const float storedTriAlbedoLuma = std::clamp(
-						triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)),
-						0.02f,
-						1.0f);
-					const math::Vector3 storedTriAlbedo = terrainGiProxy
-						? math::Vector3(storedTriAlbedoLuma, storedTriAlbedoLuma, storedTriAlbedoLuma)
-						: triAlbedo;
-					entry.albedoWeight = math::Vector4(storedTriAlbedo.x, storedTriAlbedo.y, storedTriAlbedo.z, triAreaNorm);
+					entry.albedoWeight = math::Vector4(triAlbedo.x, triAlbedo.y, triAlbedo.z, triAreaNorm);
 					out.push_back(entry);
 					if (triEmissiveMask > 0.012f || (!meshHasEmissiveTexture && triEmissiveActive))
 					{
@@ -4141,14 +4104,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					std::clamp(triInjectionFinal.y, 0.0f, 32.0f),
 					std::clamp(triInjectionFinal.z, 0.0f, 32.0f),
 					0.92f);
-				const float storedTriAlbedoLuma = std::clamp(
-					triAlbedo.Dot(math::Vector3(0.2126f, 0.7152f, 0.0722f)),
-					0.02f,
-					1.0f);
-				const math::Vector3 storedTriAlbedo = terrainGiProxy
-					? math::Vector3(storedTriAlbedoLuma, storedTriAlbedoLuma, storedTriAlbedoLuma)
-					: triAlbedo;
-				entry.albedoWeight = math::Vector4(storedTriAlbedo.x, storedTriAlbedo.y, storedTriAlbedo.z, triAreaNorm);
+				entry.albedoWeight = math::Vector4(triAlbedo.x, triAlbedo.y, triAlbedo.z, triAreaNorm);
 				out.push_back(entry);
 				if (triEmissiveMask > 0.012f || (!meshHasEmissiveTexture && triEmissiveActive))
 				{

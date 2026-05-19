@@ -112,7 +112,7 @@ namespace HexEngine
 
 		void OnKeyUp(int32_t key);
 
-		void OnMouseDown(int32_t key);
+		void OnMouseDown(int32_t key, int32_t x, int32_t y);
 
 		void OnMouseDoubleClick(int32_t key);
 

@@ -35,6 +35,7 @@ void NRDPlugin::GetVersionData(VersionData* data)
 	data->majorVersion = 1;
 	data->minorVersion = 0;
 	data->name = "HexEngine.NRDPlugin";
+	data->enabled = true;
 }
 
 /// <summary>

@@ -27,6 +27,7 @@ namespace HexEditor
 		void UpdateAssets(const fs::path& relativePath, HexEngine::FileSystem* fs);
 		void InvalidateAssetPreview(const fs::path& assetPath);
 		AssetDesc* GetCurrentlyDraggedAsset() const;
+		bool GetPrimarySelectedAssetPath(fs::path& outPath) const;
 		bool ConsumeRecentlyDroppedAssetPath(fs::path& outPath);
 
 		virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override;

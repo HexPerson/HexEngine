@@ -22,6 +22,9 @@ namespace HexEngine
 		PVSVisibilityChanged,
 		EditorEntityDuplicated,
 		EditorEntityCreated,
+		EditorSceneViewportMouseDown,
+		EditorSceneViewportMouseMove,
+		EditorWorldRayCast,
 
 		CustomMessage,	// custom game messages should start here
 	};
@@ -184,5 +187,61 @@ namespace HexEngine
 		Entity* entity = nullptr;
 		EntityId entityId = InvalidEntityId;
 		bool handled = false;
+	};
+
+	class EditorSceneViewportMouseDownMessage : public Message
+	{
+	public:
+		EditorSceneViewportMouseDownMessage() :
+			Message(MessageId::EditorSceneViewportMouseDown)
+		{
+		}
+
+		int32_t button = 0;
+		int32_t screenX = 0;
+		int32_t screenY = 0;
+		bool hasHit = false;
+		math::Vector3 worldPosition = math::Vector3::Zero;
+		Entity* hitEntity = nullptr;
+		EntityId hitEntityId = InvalidEntityId;
+		bool handled = false;
+	};
+
+	class EditorSceneViewportMouseMoveMessage : public Message
+	{
+	public:
+		EditorSceneViewportMouseMoveMessage() :
+			Message(MessageId::EditorSceneViewportMouseMove)
+		{
+		}
+
+		int32_t screenX = 0;
+		int32_t screenY = 0;
+		bool hasHit = false;
+		math::Vector3 worldPosition = math::Vector3::Zero;
+		Entity* hitEntity = nullptr;
+		EntityId hitEntityId = InvalidEntityId;
+		bool handled = false;
+	};
+
+	class EditorWorldRayCastMessage : public Message
+	{
+	public:
+		EditorWorldRayCastMessage() :
+			Message(MessageId::EditorWorldRayCast)
+		{
+		}
+
+		math::Vector3 rayOrigin = math::Vector3::Zero;
+		math::Vector3 rayDirection = math::Vector3::Forward;
+		float maxDistance = 0.0f;
+		uint32_t mask = 0;
+		std::vector<Entity*> ignoredEntities;
+		bool hasHit = false;
+		math::Vector3 hitPosition = math::Vector3::Zero;
+		math::Vector3 hitNormal = math::Vector3::Up;
+		Entity* hitEntity = nullptr;
+		EntityId hitEntityId = InvalidEntityId;
+		float hitDistance = 0.0f;
 	};
 }

@@ -41,6 +41,7 @@ namespace HexEngine
 		 * @brief Renders GI (half-res trace + full-res resolve) and composites to beauty target.
 		 */
 		void Render(Scene* scene, Camera* camera, const GBuffer& gbuffer, ITexture2D* beautyTarget);
+		ITexture2D* GetResolvedTexture() const { return _giResolved; }
 
 	private:
 		static constexpr uint32_t ClipmapCount = 4;
@@ -97,7 +98,7 @@ namespace HexEngine
 			math::Vector4 params8; // x=diffuseInject, y=sunInject, z=sunDirectionalBoost, w=emissiveInject
 			math::Vector4 params9; // x=sunStrength, y=unlitAlbedoInjection, z=maxVoxelTestsPerTri, w=sunShadowMode
 			math::Vector4 params10; // x=gpuEdgeSmoothThreshold, y=gpuEdgeSmoothBlendStrength, z=bounceAlbedoMinLuma, w=bounceAlbedoRemapAmount
-			math::Vector4 params11; // x=localLightInjection, y=clipAttenuation, z,w=reserved
+			math::Vector4 params11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
 		};
 
 		struct GpuVoxelTriangle

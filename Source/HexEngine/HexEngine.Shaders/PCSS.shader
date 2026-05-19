@@ -30,7 +30,7 @@
 
 	float PCSS_ComputeSearchRadius(float zReceiver, float texelSize)
 	{
-		float baseRadius = max(g_shadowConfig.penumbraFilterMaxSize, texelSize * 2.0f);
+		float baseRadius = max(g_shadowConfig.penumbraFilterMaxSize * texelSize, texelSize * 2.0f);
 		float depthScale = saturate(zReceiver * 1.2f);
 		return max(texelSize * 2.0f, baseRadius * (0.35f + 0.65f * depthScale));
 	}
@@ -90,11 +90,10 @@
 
 	float PCSS(Texture2D shadowMapTex, SamplerComparisonState cmpSampler, SamplerState pointSampler, float2 uv, float zReceiver, float2 screenPos, int requestedSamples)
 	{
-		screenPos = screenPos;
 		int sampleCount = max(1, min(requestedSamples, PCSS_MAX_SAMPLES));
 		zReceiver = saturate(zReceiver);
 		float texelSize = 1.0f / max(g_shadowConfig.shadowMapSize, 1.0f);
-		float rotation = 0.73f;
+		float rotation = PCSS_InterleavedGradientNoise(screenPos) * PCSS_PI2;
 
 		int blockerSampleCount = min(PCSS_MAX_SAMPLES, max(sampleCount * 2, 16));
 
@@ -114,7 +113,7 @@
 		penumbraSignal = saturate(penumbraSignal * 0.85f);
 
 		float minFilterRadius = texelSize;
-		float maxFilterRadius = max(g_shadowConfig.shadowFilterMaxSize, minFilterRadius);
+		float maxFilterRadius = max(g_shadowConfig.shadowFilterMaxSize * texelSize, minFilterRadius);
 		float qualityScale = lerp(0.45f, 1.0f, saturate((float)sampleCount / 16.0f));
 		maxFilterRadius = max(minFilterRadius, maxFilterRadius * qualityScale);
 		float filterRadiusUV = lerp(minFilterRadius, maxFilterRadius, penumbraSignal);

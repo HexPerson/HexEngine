@@ -64,6 +64,10 @@
 		float4 g_giParams5; // x=luminanceRejectScale, y=ditherDarkAmp, z=ditherBrightAmp, w=movementPreset
 		float4 g_giParams6; // x=voxelNeighbourBlend, y=shiftSettle, z=voxelAlbedoInfluence, w=reserved
 		float4 g_giParams7; // x=gpuMaterialProxyBlend, y=gpuComputeBaseSunEnabled, z=sunShadowPerVoxel, w=cameraMotionBlend
+		float4 g_giParams8;
+		float4 g_giParams9;
+		float4 g_giParams10;
+		float4 g_giParams11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
 	};
 
 	static const float3 kClipDebugColours[4] =
@@ -599,7 +603,15 @@
 		const float rayQuality = saturate((raysPerProbe - 1.0f) / 7.0f);
 		const float probeUsage = saturate(g_giParams2.y * 4.0f);
 		gi *= lerp(1.0f, lerp(0.85f, 1.0f, rayQuality), probeUsage);
-		gi *= lerp(0.35f.xxx, 1.00f.xxx, saturate(pixelDiffuse.rgb));
+		const float3 receiverAlbedo = saturate(pixelDiffuse.rgb);
+		const float receiverLuma = max(dot(receiverAlbedo, float3(0.2126f, 0.7152f, 0.0722f)), 1e-4f);
+		const float receiverMinLuma = saturate(g_giParams11.z);
+		const float receiverRemapAmount = saturate(g_giParams11.w);
+		const float receiverLiftedLuma = max(receiverLuma, receiverMinLuma);
+		const float receiverTransportLuma = lerp(receiverLuma, receiverLiftedLuma, receiverRemapAmount);
+		const float3 receiverChroma = receiverAlbedo / receiverLuma;
+		const float3 receiverIndirectAlbedo = saturate(receiverChroma * receiverTransportLuma);
+		gi *= receiverIndirectAlbedo;
 
 		// Reduce indirect on strongly sun-facing receivers to avoid same-surface "self-bounce"
 		// dominating over neighboring bounce transfer.

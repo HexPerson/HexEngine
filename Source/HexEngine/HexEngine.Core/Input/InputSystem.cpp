@@ -216,7 +216,7 @@ namespace HexEngine
 
 		case WM_LBUTTONDOWN:
 			if (_rawInputEnabled == false)
-				OnMouseDown(VK_LBUTTON);
+				OnMouseDown(VK_LBUTTON, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			break;
 
 		case WM_LBUTTONDBLCLK:
@@ -231,7 +231,7 @@ namespace HexEngine
 
 		case WM_RBUTTONDOWN:
 			if (_rawInputEnabled == false)
-				OnMouseDown(VK_RBUTTON);
+				OnMouseDown(VK_RBUTTON, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			break;
 
 		case WM_RBUTTONDBLCLK:
@@ -246,7 +246,7 @@ namespace HexEngine
 
 		case WM_MBUTTONDOWN:
 			if (_rawInputEnabled == false)
-				OnMouseDown(VK_MBUTTON);
+				OnMouseDown(VK_MBUTTON, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			break;
 
 		case WM_MBUTTONUP:
@@ -256,7 +256,7 @@ namespace HexEngine
 
 		case WM_XBUTTONDOWN:
 			if (_rawInputEnabled == false)
-				OnMouseDown(VK_XBUTTON1 + (GET_XBUTTON_WPARAM(wParam) - 1));
+				OnMouseDown(VK_XBUTTON1 + (GET_XBUTTON_WPARAM(wParam) - 1), GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam));
 			break;
 
 		case WM_XBUTTONUP:
@@ -316,7 +316,7 @@ namespace HexEngine
 					switch (raw->data.mouse.usButtonFlags)
 					{
 					case RI_MOUSE_LEFT_BUTTON_DOWN:
-						OnMouseDown(VK_LBUTTON);
+						OnMouseDown(VK_LBUTTON, mouseX, mouseY);
 						break;
 
 					case RI_MOUSE_LEFT_BUTTON_UP:
@@ -324,7 +324,7 @@ namespace HexEngine
 						break;
 
 					case RI_MOUSE_RIGHT_BUTTON_DOWN:
-						OnMouseDown(VK_RBUTTON);
+						OnMouseDown(VK_RBUTTON, mouseX, mouseY);
 						break;
 
 					case RI_MOUSE_RIGHT_BUTTON_UP:
@@ -332,7 +332,7 @@ namespace HexEngine
 						break;
 
 					case RI_MOUSE_MIDDLE_BUTTON_DOWN:
-						OnMouseDown(VK_MBUTTON);
+						OnMouseDown(VK_MBUTTON, mouseX, mouseY);
 						break;
 
 					case RI_MOUSE_MIDDLE_BUTTON_UP:
@@ -340,7 +340,7 @@ namespace HexEngine
 						break;
 
 					case RI_MOUSE_BUTTON_4_DOWN:
-						OnMouseDown(VK_XBUTTON1);
+						OnMouseDown(VK_XBUTTON1, mouseX, mouseY);
 						break;
 
 					case RI_MOUSE_BUTTON_4_UP:
@@ -348,7 +348,7 @@ namespace HexEngine
 						break;
 
 					case RI_MOUSE_BUTTON_5_DOWN:
-						OnMouseDown(VK_XBUTTON2);
+						OnMouseDown(VK_XBUTTON2, mouseX, mouseY);
 						break;
 
 					case RI_MOUSE_BUTTON_5_UP:
@@ -409,12 +409,12 @@ namespace HexEngine
 		FireEvent(InputEvent::KeyUp, &data);
 	}
 
-	void InputSystem::OnMouseDown(int32_t key)
+	void InputSystem::OnMouseDown(int32_t key, int32_t x, int32_t y)
 	{
 		InputData data;
 		data.MouseDown.button = key;		
 
-		POINT p = { _mouseX, _mouseY };
+		POINT p = { x, y };
 		//ScreenToClient(_targetWnd, &p);
 
 		data.MouseDown.xpos = p.x;

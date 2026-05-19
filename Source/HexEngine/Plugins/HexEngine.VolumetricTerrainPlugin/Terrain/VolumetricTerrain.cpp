@@ -1061,8 +1061,11 @@ namespace HexEngine::VolumetricTerrain
 			}
 		}
 
-		ApplyEditedChunkData(edited);
-		BuildGpuVisualsOrFallback(true);
+		if (!edited.empty())
+		{
+			ApplyEditedChunkData(edited);
+			BuildGpuVisualsOrFallback(true);
+		}
 	}
 
 	Entity* VolumetricTerrain::FindChunkEntityFromRayHit(Entity* hitEntity) const

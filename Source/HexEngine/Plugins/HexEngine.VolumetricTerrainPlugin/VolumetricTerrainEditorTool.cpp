@@ -98,8 +98,58 @@ namespace HexEngine::VolumetricTerrain
 
 	void VolumetricTerrainEditorTool::OnMessage(Message* message, MessageListener* sender)
 	{
-		(void)message;
 		(void)sender;
+
+		if (message == nullptr)
+			return;
+
+		auto* rayCast = message->CastAs<EditorWorldRayCastMessage>();
+		if (rayCast == nullptr)
+			return;
+
+		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr)
+			return;
+
+		std::vector<VolumetricTerrainComponent*> terrains;
+		scene->GetComponents<VolumetricTerrainComponent>(terrains);
+
+		math::Ray ray;
+		ray.position = rayCast->rayOrigin;
+		ray.direction = rayCast->rayDirection;
+
+		RayHit nearestHit;
+		bool foundHit = false;
+		float nearestDistance = rayCast->hasHit ? rayCast->hitDistance : rayCast->maxDistance;
+		if (nearestDistance <= 0.0f)
+			nearestDistance = FLT_MAX;
+
+		for (auto* terrain : terrains)
+		{
+			if (terrain == nullptr)
+				continue;
+
+			RayHit candidateHit;
+			if (!terrain->RayCastTerrain(ray, rayCast->maxDistance, rayCast->ignoredEntities, candidateHit))
+				continue;
+
+			if (candidateHit.distance < nearestDistance)
+			{
+				nearestHit = candidateHit;
+				nearestDistance = candidateHit.distance;
+				foundHit = true;
+			}
+		}
+
+		if (foundHit)
+		{
+			rayCast->hasHit = true;
+			rayCast->hitEntity = nearestHit.entity;
+			rayCast->hitEntityId = nearestHit.entity != nullptr ? nearestHit.entity->GetId() : InvalidEntityId;
+			rayCast->hitPosition = nearestHit.position;
+			rayCast->hitNormal = nearestHit.normal;
+			rayCast->hitDistance = nearestHit.distance;
+		}
 	}
 }
 

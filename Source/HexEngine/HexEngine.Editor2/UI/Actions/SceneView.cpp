@@ -102,6 +102,7 @@ namespace HexEditor
 
 			return roots;
 		}
+
 	}
 
 	SceneView::SceneView(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :

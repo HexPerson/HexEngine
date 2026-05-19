@@ -28,7 +28,26 @@ namespace HexEngine
 
 		bool HEX_API RayCast(const math::Ray& ray, float maxDistance, LayerMask mask, RayHit* hitInfo, const std::vector<Entity*>& entsToIgnore)
 		{
-			g_pEnv->_sceneManager->GetCurrentScene()->Lock();
+			auto currentScene = g_pEnv->_sceneManager->GetCurrentScene();
+			if (currentScene == nullptr)
+				return false;
+
+			struct SceneRayCastLockGuard
+			{
+				explicit SceneRayCastLockGuard(const std::shared_ptr<Scene>& inScene) : scene(inScene)
+				{
+					if (scene != nullptr)
+						scene->Lock();
+				}
+
+				~SceneRayCastLockGuard()
+				{
+					if (scene != nullptr)
+						scene->Unlock();
+				}
+
+				std::shared_ptr<Scene> scene;
+			} sceneLockGuard(currentScene);
 
 			//PROFILE();
 
@@ -141,7 +160,7 @@ namespace HexEngine
 				// use the list of renderables, because we know they have already been tested for visibility
 				//
 				std::vector<StaticMeshComponent*> entities;
-				g_pEnv->_sceneManager->GetCurrentScene()->GetComponents<StaticMeshComponent>(entities);
+				currentScene->GetComponents<StaticMeshComponent>(entities);
 
 				for (auto&& component : entities)
 				{

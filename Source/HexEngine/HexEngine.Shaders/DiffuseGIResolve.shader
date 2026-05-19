@@ -144,8 +144,8 @@
 		// Clamp history near current to avoid long ghost trails when GI updates rapidly.
 		const float rejectT = saturate(max(disocclusion * 0.70f, max(pixelMotionReject, max(luminanceReject, brightHistoryReject))));
 		const float minScale = lerp(0.45f, lerp(0.76f, 0.84f, stabilityPreset), rejectT);
-		const float maxScale = lerp(1.95f, lerp(1.30f, 1.12f, stabilityPreset), rejectT);
-		const float maxScaleMotion = lerp(maxScale, min(maxScale, 1.10f), motionClipBias);
+		const float maxScale = lerp(1.55f, lerp(1.16f, 1.06f, stabilityPreset), rejectT);
+		const float maxScaleMotion = lerp(maxScale, min(maxScale, 1.04f), motionClipBias);
 		const float bias = lerp(0.012f, 0.003f, rejectT);
 		const float3 historyMin = current * minScale;
 		const float3 historyMax = current * maxScaleMotion + bias.xxx;
@@ -164,7 +164,12 @@
 		{
 			// Preserve some stability, but lower the floor substantially while moving so
 			// we do not keep an over-bright near-clip solution glued to the camera.
-			const float stabilityFloor = (1.0f - disocclusion) * (0.24f + 0.12f * shiftSettle + 0.08f * stableBright) * g_giParams1.x * lerp(1.0f, 0.55f, motionClipBias);
+			const float stabilityFloor =
+				(1.0f - disocclusion) *
+				(0.08f + 0.04f * shiftSettle) *
+				(1.0f - stableBright * 0.75f) *
+				g_giParams1.x *
+				lerp(1.0f, 0.35f, motionClipBias);
 			historyWeight = max(historyWeight, stabilityFloor);
 		}
 

@@ -34,7 +34,7 @@
 #if 1
 		if (numSamples > 0)
 		{
-			if (cascadeIndex == 0)
+			//if (cascadeIndex == 0)
 			{
 				float pcssShadow = PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples);
 
@@ -50,7 +50,8 @@
 
 				return lerp(pcssShadow, aa, 0.4f);
 			}
-			else
+			//else
+			#if 0
 			{
 				// Deterministic PCF for cascades > 0 to avoid motion shimmer from derivative/noise-driven kernels.
 				float shadowMapSize = max(g_shadowConfig.shadowMapSize, 1.0f);
@@ -69,6 +70,7 @@
 
 				return visibility / (float)sampleCount;
 			}
+			#endif
 		}
 		else
 		{

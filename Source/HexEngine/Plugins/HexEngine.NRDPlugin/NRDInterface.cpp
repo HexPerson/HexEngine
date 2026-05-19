@@ -34,7 +34,8 @@ namespace
 	HexEngine::HVar r_nrdRelaxAntilagSpatialSigma("r_nrdRelaxAntilagSpatialSigma", "RELAX anti-lag spatial sigma scale", 3.0f, 0.1f, 8.0f);
 	HexEngine::HVar r_nrdRelaxAntilagTemporalSigma("r_nrdRelaxAntilagTemporalSigma", "RELAX anti-lag temporal sigma scale", 0.25f, 0.01f, 4.0f);
 	HexEngine::HVar r_nrdRelaxAntilagReset("r_nrdRelaxAntilagReset", "RELAX anti-lag reset amount", 0.6f, 0.0f, 1.0f);
-	constexpr nrd::Identifier gDenoiserIdentifier = 0;
+	constexpr nrd::Identifier gDiffuseDenoiserIdentifier = 0;
+	constexpr nrd::Identifier gSpecularDenoiserIdentifier = 1;
 
 	class ShaderInclude : public ID3DInclude
 	{
@@ -154,19 +155,17 @@ nrd::Denoiser NRDInterface::GetSelectedDenoiser()
 		static bool loggedReblurFallback = false;
 		if (!loggedReblurFallback)
 		{
-			LOG_WARN("REBLUR_SPECULAR is not supported by the current D3D11 NRD backend because REBLUR uses Gather on R16_UINT history textures; falling back to RELAX_DIFFUSE_SPECULAR");
+			LOG_WARN("REBLUR_SPECULAR is not supported by the current D3D11 NRD backend because REBLUR uses Gather on R16_UINT history textures; falling back to split RELAX diffuse/specular");
 			loggedReblurFallback = true;
 		}
-
-		return nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
 	}
 
-	return nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
+	return nrd::Denoiser::RELAX_SPECULAR;
 }
 
 bool NRDInterface::IsUsingReblur() const
 {
-    return _activeDenoiser == nrd::Denoiser::REBLUR_SPECULAR;
+	return false;
 }
 
 void NRDInterface::TextureBinding::Reset()
@@ -245,9 +244,15 @@ void NRDInterface::DestroyNrdResources()
 	_specularHitDistanceInput.Reset();
 	_normalAndDepthInput.Reset();
 	_materialInput.Reset();
+	_surfaceMotionVectorsInput.Reset();
 	_motionVectorsInput.Reset();
 	_normalRoughness.Reset();
 	_viewZ.Reset();
+	_previousViewZ.Reset();
+	_specularNormalRoughness.Reset();
+	_specularViewZ.Reset();
+	_previousSpecularViewZ.Reset();
+	_specularMotionVectors.Reset();
 	_diffuseRadianceHitDistance.Reset();
 	_specularRadianceHitDistance.Reset();
 	_denoisedDiffuseRadianceHitDistance.Reset();
@@ -327,7 +332,7 @@ bool NRDInterface::RecreateResources(int32_t width, int32_t height, HexEngine::I
 		!CreateExternalBinding(_specularHitDistanceInput, specularHitDistance) ||
 		!CreateExternalBinding(_normalAndDepthInput, normalAndDepth) ||
 		!CreateExternalBinding(_materialInput, material) ||
-		!CreateExternalBinding(_motionVectorsInput, motionVectors))
+		!CreateExternalBinding(_surfaceMotionVectorsInput, motionVectors))
 	{
 		return false;
 	}
@@ -337,13 +342,15 @@ bool NRDInterface::RecreateResources(int32_t width, int32_t height, HexEngine::I
 
 bool NRDInterface::CreateInstance()
 {
-	nrd::DenoiserDesc denoiserDesc = {};
-	denoiserDesc.identifier = gDenoiserIdentifier;
-	denoiserDesc.denoiser = _activeDenoiser;
+	nrd::DenoiserDesc denoiserDescs[2] = {};
+	denoiserDescs[0].identifier = gDiffuseDenoiserIdentifier;
+	denoiserDescs[0].denoiser = nrd::Denoiser::RELAX_DIFFUSE;
+	denoiserDescs[1].identifier = gSpecularDenoiserIdentifier;
+	denoiserDescs[1].denoiser = nrd::Denoiser::RELAX_SPECULAR;
 
 	nrd::InstanceCreationDesc createDesc = {};
-	createDesc.denoisers = &denoiserDesc;
-	createDesc.denoisersNum = 1;
+	createDesc.denoisers = denoiserDescs;
+	createDesc.denoisersNum = 2;
 	createDesc.allocationCallbacks.Allocate = Allocate;
 	createDesc.allocationCallbacks.Reallocate = Reallocate;
 	createDesc.allocationCallbacks.Free = Free;
@@ -446,6 +453,9 @@ Texture2D<float4> gSpecularSignal : register(t2);
 Texture2D<float4> gSpecularHitDistance : register(t3);
 Texture2D<float4> gNormalDepth : register(t4);
 Texture2D<float4> gMaterial : register(t5);
+Texture2D<float4> gMotionVectors : register(t6);
+Texture2D<float> gPrevViewZ : register(t7);
+Texture2D<float> gPrevSpecViewZ : register(t8);
 SamplerState gLinearClamp : register(s0);
 struct VSOut
 {
@@ -458,6 +468,10 @@ struct PSOut
 	float viewZ : SV_Target1;
 	float4 diffuseRadianceHitDist : SV_Target2;
 	float4 specularRadianceHitDist : SV_Target3;
+	float4 motionVectors : SV_Target4;
+	float4 specularNormalRoughness : SV_Target5;
+	float specularViewZ : SV_Target6;
+	float4 specularMotionVectors : SV_Target7;
 };
 PSOut ShaderMain(VSOut input)
 {
@@ -468,13 +482,29 @@ PSOut ShaderMain(VSOut input)
 	const float4 specularHitDistance = gSpecularHitDistance.SampleLevel(gLinearClamp, input.uv, 0.0f);
 	const float4 normalDepth = gNormalDepth.SampleLevel(gLinearClamp, input.uv, 0.0f);
 	const float4 material = gMaterial.SampleLevel(gLinearClamp, input.uv, 0.0f);
+	const float2 motionVectors = gMotionVectors.SampleLevel(gLinearClamp, input.uv, 0.0f).xy;
 	const float3 normal = normalize(normalDepth.xyz);
 	const float roughness = saturate(material.y);
-	const float viewZ = max(normalDepth.w, 1e-4f);
+	const float smoothness = saturate(1.0f - roughness);
+	const float specularProbability = saturate(material.w);
+	const float specularWeight = max(specularProbability * smoothness, 1e-3f);
+	// NRD expects view-space Z, while the engine stores positive linear depth in .w.
+	const float viewZ = -max(normalDepth.w, 1e-4f);
+	const float2 prevUv = saturate(input.uv + motionVectors);
+	const float prevViewZ = gPrevViewZ.SampleLevel(gLinearClamp, prevUv, 0.0f);
+	const float motionZ = abs(prevViewZ) > 1e-6f ? (prevViewZ - viewZ) : 0.0f;
 	output.normalRoughness = NRD_FrontEnd_PackNormalAndRoughness(normal, roughness, 0.0f);
 	output.viewZ = viewZ;
-	output.diffuseRadianceHitDist = RELAX_FrontEnd_PackRadianceAndHitDist(max(diffuseSignal.rgb, 0.0f), max(diffuseHitDistance.w, 0.0f), true);
-	output.specularRadianceHitDist = RELAX_FrontEnd_PackRadianceAndHitDist(max(specularSignal.rgb, 0.0f), max(specularHitDistance.w, 0.0f), true);
+	const float diffuseDenoiseMask = diffuseSignal.a > 0.0f ? 1.0f : 0.0f;
+	output.diffuseRadianceHitDist = RELAX_FrontEnd_PackRadianceAndHitDist(max(diffuseSignal.rgb, 0.0f) * diffuseDenoiseMask, max(diffuseHitDistance.w, 0.0f) * diffuseDenoiseMask, true);
+	// Feed NRD the unweighted reflection radiance so the denoiser works on the raw SSR signal.
+	const float specularDenoiseMask = specularSignal.a > 0.0f ? 1.0f : 0.0f;
+	const float3 specularRadiance = specularDenoiseMask > 0.0f ? max(specularSignal.rgb / specularWeight, 0.0f) : 0.0f.xxx;
+	output.specularRadianceHitDist = RELAX_FrontEnd_PackRadianceAndHitDist(specularRadiance, max(specularHitDistance.w, 0.0f) * specularDenoiseMask, true);
+	output.motionVectors = float4(motionVectors, motionZ, 0.0f);
+	output.specularNormalRoughness = output.normalRoughness;
+	output.specularViewZ = viewZ;
+	output.specularMotionVectors = output.motionVectors;
 	return output;
 }
 )";
@@ -484,6 +514,7 @@ Texture2D<float4> gDiffuseSignal : register(t0);
 Texture2D<float4> gSpecularSignal : register(t1);
 Texture2D<float4> gDenoisedDiffuse : register(t2);
 Texture2D<float4> gDenoisedSpecular : register(t3);
+Texture2D<float4> gMaterial : register(t4);
 SamplerState gLinearClamp : register(s0);
 struct VSOut
 {
@@ -492,20 +523,22 @@ struct VSOut
 };
 float3 ResolveChannel(float3 original, float3 denoised)
 {
-    const float denoisedPeak = max(denoised.r, max(denoised.g, denoised.b));
-    const float originalPeak = max(original.r, max(original.g, original.b));
     const bool invalidDenoised = any(isnan(denoised)) || any(isinf(denoised));
-    const bool collapsedToBlack = denoisedPeak < 1e-5f && originalPeak > 1e-4f;
-    return (invalidDenoised || collapsedToBlack) ? original : denoised;
+    return invalidDenoised ? original : denoised;
 }
 float4 ShaderMain(VSOut input) : SV_Target0
 {
-    const float3 diffuseSignal = gDiffuseSignal.SampleLevel(gLinearClamp, input.uv, 0.0f).rgb;
-    const float3 specularSignal = gSpecularSignal.SampleLevel(gLinearClamp, input.uv, 0.0f).rgb;
+    const float4 diffuseSignal = gDiffuseSignal.SampleLevel(gLinearClamp, input.uv, 0.0f);
+    const float4 specularSignal = gSpecularSignal.SampleLevel(gLinearClamp, input.uv, 0.0f);
     const float3 denoisedDiffuse = gDenoisedDiffuse.SampleLevel(gLinearClamp, input.uv, 0.0f).rgb;
     const float3 denoisedSpecular = gDenoisedSpecular.SampleLevel(gLinearClamp, input.uv, 0.0f).rgb;
-    const float3 resolvedDiffuse = ResolveChannel(diffuseSignal, denoisedDiffuse);
-    const float3 resolvedSpecular = ResolveChannel(specularSignal, denoisedSpecular);
+    const float4 material = gMaterial.SampleLevel(gLinearClamp, input.uv, 0.0f);
+    const float roughness = saturate(material.y);
+	const float smoothness = saturate(1.0f - roughness);
+	const float specularProbability = saturate(material.w);
+	const float specularWeight = specularProbability * smoothness;
+    const float3 resolvedDiffuse = diffuseSignal.a > 0.0f ? ResolveChannel(diffuseSignal.rgb, denoisedDiffuse) : diffuseSignal.rgb;
+    const float3 resolvedSpecular = specularSignal.a > 0.0f ? ResolveChannel(specularSignal.rgb, denoisedSpecular * specularWeight) : specularSignal.rgb;
     return float4(resolvedDiffuse + resolvedSpecular, 1.0f);
 }
 )";
@@ -715,12 +748,18 @@ bool NRDInterface::CreateAuxiliaryTextures(HexEngine::ITexture2D* specularSignal
 		CreateTexture(_viewZ, _width, _height, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
 		CreateTexture(_diffuseRadianceHitDistance, _width, _height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
 		CreateTexture(_specularRadianceHitDistance, _width, _height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
+		CreateTexture(_motionVectorsInput, _width, _height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
+		CreateTexture(_previousViewZ, _width, _height, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
+		CreateTexture(_specularNormalRoughness, _width, _height, DXGI_FORMAT_R10G10B10A2_UNORM, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
+		CreateTexture(_specularViewZ, _width, _height, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
+		CreateTexture(_previousSpecularViewZ, _width, _height, DXGI_FORMAT_R32_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
+		CreateTexture(_specularMotionVectors, _width, _height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET) &&
 		CreateTexture(_denoisedDiffuseRadianceHitDistance, _width, _height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS) &&
 		CreateTexture(_denoisedSpecularRadianceHitDistance, _width, _height, DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS) &&
 		CreateTexture(_resolvedSignal, _width, _height, signalFormat, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 }
 
-NRDInterface::TextureBinding* NRDInterface::ResolveResource(const nrd::ResourceDesc& resource)
+NRDInterface::TextureBinding* NRDInterface::ResolveResource(const nrd::ResourceDesc& resource, nrd::Identifier identifier)
 {
 	switch (resource.type)
 	{
@@ -757,8 +796,15 @@ bool NRDInterface::RunPreprocess(const HexEngine::DenoiserFrameData&)
 	D3D11_VIEWPORT oldViewport = {};
 	_context->RSGetViewports(&numViewports, &oldViewport);
 
-	ID3D11RenderTargetView* rtvs[] = { _normalRoughness.rtv, _viewZ.rtv, _diffuseRadianceHitDistance.rtv, _specularRadianceHitDistance.rtv };
-	_context->OMSetRenderTargets(4, rtvs, nullptr);
+	if (_resetHistory && _previousViewZ.rtv)
+	{
+		const float clearValues[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		_context->ClearRenderTargetView(_previousViewZ.rtv, clearValues);
+		_context->ClearRenderTargetView(_previousSpecularViewZ.rtv, clearValues);
+	}
+
+	ID3D11RenderTargetView* rtvs[] = { _normalRoughness.rtv, _viewZ.rtv, _diffuseRadianceHitDistance.rtv, _specularRadianceHitDistance.rtv, _motionVectorsInput.rtv, _specularNormalRoughness.rtv, _specularViewZ.rtv, _specularMotionVectors.rtv };
+	_context->OMSetRenderTargets(8, rtvs, nullptr);
 
 	const D3D11_VIEWPORT viewport = { 0.0f, 0.0f, static_cast<float>(_width), static_cast<float>(_height), 0.0f, 1.0f };
 	_context->RSSetViewports(1, &viewport);
@@ -767,14 +813,14 @@ bool NRDInterface::RunPreprocess(const HexEngine::DenoiserFrameData&)
 	_context->VSSetShader(_fullscreenVS, nullptr, 0);
 	_context->PSSetShader(_preprocessPS, nullptr, 0);
 
-	ID3D11ShaderResourceView* srvs[] = { _diffuseSignalInput.srv, _diffuseHitDistanceInput.srv, _specularSignalInput.srv, _specularHitDistanceInput.srv, _normalAndDepthInput.srv, _materialInput.srv };
-	_context->PSSetShaderResources(0, 6, srvs);
+	ID3D11ShaderResourceView* srvs[] = { _diffuseSignalInput.srv, _diffuseHitDistanceInput.srv, _specularSignalInput.srv, _specularHitDistanceInput.srv, _normalAndDepthInput.srv, _materialInput.srv, _surfaceMotionVectorsInput.srv, _previousViewZ.srv, _previousSpecularViewZ.srv };
+	_context->PSSetShaderResources(0, 9, srvs);
 	ID3D11SamplerState* samplers[] = { _linearClampSampler };
 	_context->PSSetSamplers(0, 1, samplers);
 	_context->Draw(3, 0);
 
-	ID3D11ShaderResourceView* nullSrvs[] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
-	_context->PSSetShaderResources(0, 6, nullSrvs);
+	ID3D11ShaderResourceView* nullSrvs[] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
+	_context->PSSetShaderResources(0, 9, nullSrvs);
 	_context->PSSetShader(nullptr, nullptr, 0);
 	_context->VSSetShader(nullptr, nullptr, 0);
 	_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, oldRtvs, oldDsv);
@@ -798,11 +844,13 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 	memcpy(settings.worldToViewMatrixPrev, fd.camera->GetViewMatrixPrev().m, sizeof(settings.worldToViewMatrixPrev));
 	settings.motionVectorScale[0] = 1.0f;
 	settings.motionVectorScale[1] = 1.0f;
-	settings.motionVectorScale[2] = 0.0f;
-	settings.cameraJitter[0] = -fd.jitter.x;
-	settings.cameraJitter[1] = -fd.jitter.y;
-	settings.cameraJitterPrev[0] = -_previousJitter.x;
-	settings.cameraJitterPrev[1] = -_previousJitter.y;
+	settings.motionVectorScale[2] = 1.0f;
+	// The engine renders with non-jittered matrices and applies the jitter in the raster path,
+	// so NRD should receive the same jitter offsets, not their negation.
+	settings.cameraJitter[0] = fd.jitter.x;
+	settings.cameraJitter[1] = fd.jitter.y;
+	settings.cameraJitterPrev[0] = _previousJitter.x;
+	settings.cameraJitterPrev[1] = _previousJitter.y;
 	settings.resourceSize[0] = static_cast<uint16_t>(_width);
 	settings.resourceSize[1] = static_cast<uint16_t>(_height);
 	settings.resourceSizePrev[0] = static_cast<uint16_t>(_width);
@@ -837,7 +885,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 		reblurSettings.antilagSettings.luminanceSensitivity = 2.0f;
 		reblurSettings.antilagSettings.hitDistanceSensitivity = 1.5f;
 
-		if (nrd::SetDenoiserSettings(*_instance, gDenoiserIdentifier, &reblurSettings) != nrd::Result::SUCCESS)
+		if (nrd::SetDenoiserSettings(*_instance, gSpecularDenoiserIdentifier, &reblurSettings) != nrd::Result::SUCCESS)
 		{
 			LOG_CRIT("Failed to apply NRD REBLUR settings");
 			return false;
@@ -872,21 +920,21 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 		{
 		case 1: // stable
 			diffMaxFrames = 8;
-			specMaxFrames = 10;
+			specMaxFrames = 16;
 			diffFastFrames = 2;
-			specFastFrames = 3;
-			historyFixFrames = 2;
+			specFastFrames = 6;
+			historyFixFrames = 3;
 			diffPrepassBlur = 14.0f;
-			specPrepassBlur = 32.0f;
+			specPrepassBlur = 44.0f;
 			historyClampSigma = 1.4f;
 			lobeAngleFraction = 0.45f;
-			roughnessFraction = 0.15f;
+			roughnessFraction = 0.18f;
 			diffPhiLuminance = 2.4f;
-			specPhiLuminance = 1.2f;
+			specPhiLuminance = 1.6f;
 			specVarianceBoost = 0.0f;
 			enableAntiFirefly = true;
 			enableRoughnessEdgeStopping = true;
-			hitDistanceMode = nrd::HitDistanceReconstructionMode::OFF;
+			hitDistanceMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
 			enableAntilag = true;
 			antilagAcceleration = 0.0f;
 			antilagSpatialSigma = 4.5f;
@@ -894,22 +942,22 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			antilagReset = 0.0f;
 			break;
 		case 2: // balanced
-			diffMaxFrames = 4;
-			specMaxFrames = 6;
+			diffMaxFrames = 5;
+			specMaxFrames = 14;
 			diffFastFrames = 1;
-			specFastFrames = 2;
-			historyFixFrames = 2;
+			specFastFrames = 5;
+			historyFixFrames = 3;
 			diffPrepassBlur = 10.0f;
-			specPrepassBlur = 24.0f;
+			specPrepassBlur = 40.0f;
 			historyClampSigma = 1.0f;
 			lobeAngleFraction = 0.35f;
-			roughnessFraction = 0.12f;
+			roughnessFraction = 0.15f;
 			diffPhiLuminance = 2.0f;
-			specPhiLuminance = 1.0f;
+			specPhiLuminance = 1.45f;
 			specVarianceBoost = 0.0f;
 			enableAntiFirefly = true;
 			enableRoughnessEdgeStopping = true;
-			hitDistanceMode = nrd::HitDistanceReconstructionMode::OFF;
+			hitDistanceMode = nrd::HitDistanceReconstructionMode::AREA_3X3;
 			enableAntilag = true;
 			antilagAcceleration = 0.0f;
 			antilagSpatialSigma = 4.5f;
@@ -983,7 +1031,8 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			relaxSettings.antilagSettings.resetAmount = 0.0f;
 		}
 
-		if (nrd::SetDenoiserSettings(*_instance, gDenoiserIdentifier, &relaxSettings) != nrd::Result::SUCCESS)
+		if (nrd::SetDenoiserSettings(*_instance, gDiffuseDenoiserIdentifier, &relaxSettings) != nrd::Result::SUCCESS ||
+			nrd::SetDenoiserSettings(*_instance, gSpecularDenoiserIdentifier, &relaxSettings) != nrd::Result::SUCCESS)
 		{
 			LOG_CRIT("Failed to apply NRD RELAX settings");
 			return false;
@@ -993,7 +1042,8 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 
 	const nrd::DispatchDesc* dispatches = nullptr;
 	uint32_t dispatchCount = 0;
-	if (nrd::GetComputeDispatches(*_instance, &gDenoiserIdentifier, 1, dispatches, dispatchCount) != nrd::Result::SUCCESS)
+	const nrd::Identifier identifiers[] = { gDiffuseDenoiserIdentifier, gSpecularDenoiserIdentifier };
+	if (nrd::GetComputeDispatches(*_instance, identifiers, 2, dispatches, dispatchCount) != nrd::Result::SUCCESS)
 	{
 		LOG_CRIT("Failed to get NRD compute dispatches");
 		return false;
@@ -1029,7 +1079,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 				std::vector<ID3D11ShaderResourceView*> srvs(range.descriptorsNum, nullptr);
 				for (uint32_t j = 0; j < range.descriptorsNum; ++j)
 				{
-					if (auto* resource = ResolveResource(dispatchDesc.resources[resourceOffset + j]); resource != nullptr)
+					if (auto* resource = ResolveResource(dispatchDesc.resources[resourceOffset + j], dispatchDesc.identifier); resource != nullptr)
 						srvs[j] = resource->srv;
 				}
 				_context->CSSetShaderResources(range.baseRegisterIndex, range.descriptorsNum, srvs.data());
@@ -1039,7 +1089,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 				std::vector<ID3D11UnorderedAccessView*> uavs(range.descriptorsNum, nullptr);
 				for (uint32_t j = 0; j < range.descriptorsNum; ++j)
 				{
-					if (auto* resource = ResolveResource(dispatchDesc.resources[resourceOffset + j]); resource != nullptr)
+					if (auto* resource = ResolveResource(dispatchDesc.resources[resourceOffset + j], dispatchDesc.identifier); resource != nullptr)
 						uavs[j] = resource->uav;
 				}
 				_context->CSSetUnorderedAccessViews(range.baseRegisterIndex, range.descriptorsNum, uavs.data(), nullptr);
@@ -1103,14 +1153,14 @@ bool NRDInterface::RunResolve(const HexEngine::DenoiserFrameData& fd, HexEngine:
 	_context->VSSetShader(_fullscreenVS, nullptr, 0);
 	_context->PSSetShader(_resolvePS, nullptr, 0);
 
-	ID3D11ShaderResourceView* srvs[] = { _diffuseSignalInput.srv, _specularSignalInput.srv, _denoisedDiffuseRadianceHitDistance.srv, _denoisedSpecularRadianceHitDistance.srv };
-	_context->PSSetShaderResources(0, 4, srvs);
+	ID3D11ShaderResourceView* srvs[] = { _diffuseSignalInput.srv, _specularSignalInput.srv, _denoisedDiffuseRadianceHitDistance.srv, _denoisedSpecularRadianceHitDistance.srv, _materialInput.srv };
+	_context->PSSetShaderResources(0, 5, srvs);
 	ID3D11SamplerState* samplers[] = { _linearClampSampler };
 	_context->PSSetSamplers(0, 1, samplers);
 	_context->Draw(3, 0);
 
-	ID3D11ShaderResourceView* nullSrvs[] = { nullptr, nullptr, nullptr, nullptr };
-	_context->PSSetShaderResources(0, 4, nullSrvs);
+	ID3D11ShaderResourceView* nullSrvs[] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+	_context->PSSetShaderResources(0, 5, nullSrvs);
 	_context->PSSetShader(nullptr, nullptr, 0);
 	_context->VSSetShader(nullptr, nullptr, 0);
 	_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, oldRtvs, oldDsv);
@@ -1150,6 +1200,15 @@ void NRDInterface::FilterFrame(const HexEngine::DenoiserFrameData& fd, HexEngine
 		return;
 
 	RunResolve(fd, output);
+
+	if (_previousViewZ.texture && _viewZ.texture)
+	{
+		_context->CopyResource(_previousViewZ.texture, _viewZ.texture);
+	}
+	if (_previousSpecularViewZ.texture && _specularViewZ.texture)
+	{
+		_context->CopyResource(_previousSpecularViewZ.texture, _specularViewZ.texture);
+	}
 
 	HexEngine::g_pEnv->GetGraphicsDevice().ResetState();
 }

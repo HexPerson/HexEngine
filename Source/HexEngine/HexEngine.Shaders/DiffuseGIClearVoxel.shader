@@ -29,22 +29,10 @@
 		if (any(tid >= voxelRes))
 			return;
 
-		const float decay = saturate(g_giParams2.z);
-		float4 value = g_voxelRadianceOut[tid];
-		value.rgb *= decay;
-		value.a *= decay;
-		if (value.a < 0.01f)
-		{
-			value = 0.0f.xxxx;
-		}
-		g_voxelRadianceOut[tid] = value;
-
-		float4 albedo = g_voxelAlbedoOut[tid];
-		albedo.a *= decay;
-		if (albedo.a < 0.01f)
-		{
-			albedo = 0.0f.xxxx;
-		}
-		g_voxelAlbedoOut[tid] = albedo;
+		// This pass is a true clear. Prior voxel state is preserved explicitly in the scratch
+		// volumes and consumed by voxel injection/trace where needed; keeping additional decayed
+		// state here causes stale bright energy to survive and be re-propagated indefinitely.
+		g_voxelRadianceOut[tid] = 0.0f.xxxx;
+		g_voxelAlbedoOut[tid] = 0.0f.xxxx;
 	}
 }

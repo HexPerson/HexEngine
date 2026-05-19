@@ -242,7 +242,7 @@
 						sunVisibility *= lerp(1.0f, localVoxelOcclusion, 0.35f);
 					}
 
-					const float4 previous = g_voxelRadianceOut[coord];
+					const float4 previous = g_prevVoxelRadiance[coord];
 					const float4 previousAlbedo = g_prevVoxelAlbedo[coord];
 					const float visibilityFactor = lerp(1.0f, sunVisibility, 0.90f * sunDirectionality);
 					const float3 triAlbedo = saturate(tri.albedoWeight.rgb);
@@ -273,7 +273,8 @@
 					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
 					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
 					const float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
-					radiance = clamp(radiance, previous.rgb - deltaLimit, previous.rgb + deltaLimit);
+					radiance = min(radiance, previous.rgb + deltaLimit);
+					radiance = max(radiance, 0.0f.xxx);
 					radiance = min(radiance, 32.0f.xxx);
 
 					const float opacity = max(previous.a, tri.radianceOpacity.a);

@@ -216,6 +216,38 @@ namespace HexEngine::VolumetricTerrain
 		return false;
 	}
 
+	bool VolumetricTerrainComponent::RayCastTerrain(const math::Ray& ray, float maxDistance, const std::vector<Entity*>& entsToIgnore, RayHit& hit) const
+	{
+		if (!_initialized || GetEntity() == nullptr)
+			return false;
+
+		for (auto* ignored : entsToIgnore)
+		{
+			if (ignored == nullptr)
+				continue;
+
+			for (auto* current = ignored; current != nullptr; current = current->GetParent())
+			{
+				if (current == GetEntity())
+					return false;
+			}
+		}
+
+		math::Vector3 hitPosition = math::Vector3::Zero;
+		if (_terrain.RaycastTerrainSurface(ray, maxDistance, hitPosition) ||
+			_terrain.RaycastTerrainBounds(ray, hitPosition))
+		{
+			hit.start = ray.position;
+			hit.position = hitPosition;
+			hit.normal = math::Vector3::Up;
+			hit.entity = _terrain.GetRootEntity();
+			hit.distance = (hitPosition - ray.position).Length();
+			return true;
+		}
+
+		return false;
+	}
+
 	void VolumetricTerrainComponent::ApplyRealtimeBrush(float deltaTime)
 	{
 		if (!_sculptEnabled || !_initialized)

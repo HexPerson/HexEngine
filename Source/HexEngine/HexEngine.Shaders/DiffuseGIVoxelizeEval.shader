@@ -645,7 +645,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						sunVisibility *= lerp(1.0f, localVoxelOcclusion, 0.35f);
 					}
 
-					const float4 previous = g_voxelRadianceOut[coord];
+					const float4 previous = g_prevVoxelRadiance[coord];
 					const float4 previousAlbedo = g_prevVoxelAlbedo[coord];
 					// Shadow visibility should attenuate sun-driven GI; forcing a floor here was
 					// blowing out shadowed and back-facing surfaces.
@@ -739,7 +739,8 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						// Emissive needs larger per-frame headroom or it effectively disappears.
 						deltaLimit = max(deltaLimit, 2.0f.xxx + previous.rgb * 1.5f);
 					}
-					radiance = clamp(radiance, previous.rgb - deltaLimit, previous.rgb + deltaLimit);
+					radiance = min(radiance, previous.rgb + deltaLimit);
+					radiance = max(radiance, 0.0f.xxx);
 
 					// Step 4: cheap edge-aware smoothing only near sub-voxel triangle boundaries.
 					// We pull from previous-frame neighborhood so this stays stable and inexpensive.
