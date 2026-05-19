@@ -43,6 +43,7 @@
 		float2 screenPos = float2(input.position.x / (float)g_screenWidth , input.position.y / (float)g_screenHeight ); //input.texcoord
 
 		float4 pixels = shaderTexture.Sample(LinearSampler, input.texcoord);
+		//return pixels;
 		return float4(pixels.rgb, 1.0f);
 
 #if 0

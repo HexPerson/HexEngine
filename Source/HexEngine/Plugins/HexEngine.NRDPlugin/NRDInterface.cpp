@@ -11,23 +11,45 @@
 
 namespace
 {
-	HexEngine::HVar r_nrdDenoiser("r_nrdDenoiser", "NRD denoiser mode: 0 = RELAX_SPECULAR, 1 = REBLUR_SPECULAR", 0, 0, 1);
+	// All denoiser modes effectively run RELAX_DIFFUSE_SPECULAR (REBLUR_SPECULAR is requested by
+	// mode 1 but the D3D11 backend can't support it - falls back). Both diffuse and specular
+	// channels of the SSR output are denoised in either case.
+	HexEngine::HVar r_nrdDenoiser("r_nrdDenoiser", "NRD denoiser mode: 0 = RELAX_DIFFUSE_SPECULAR (default), 1 = REBLUR_SPECULAR (D3D11 falls back to RELAX_DIFFUSE_SPECULAR)", 0, 0, 1);
 	HexEngine::HVar r_nrdRelaxPreset("r_nrdRelaxPreset", "RELAX preset: 0 = custom, 1 = stable, 2 = balanced, 3 = responsive", 2, 0, 3);
-	HexEngine::HVar r_nrdRelaxDiffMaxFrames("r_nrdRelaxDiffMaxFrames", "RELAX diffuse maximum accumulated frames", 4, 0, 63);
-	HexEngine::HVar r_nrdRelaxSpecMaxFrames("r_nrdRelaxSpecMaxFrames", "RELAX specular maximum accumulated frames", 6, 0, 63);
-	HexEngine::HVar r_nrdRelaxDiffFastFrames("r_nrdRelaxDiffFastFrames", "RELAX diffuse fast-history accumulated frames", 1, 0, 63);
-	HexEngine::HVar r_nrdRelaxSpecFastFrames("r_nrdRelaxSpecFastFrames", "RELAX specular fast-history accumulated frames", 2, 0, 63);
-	HexEngine::HVar r_nrdRelaxHistoryFixFrames("r_nrdRelaxHistoryFixFrames", "RELAX history-fix frame count", 2, 0, 3);
-	HexEngine::HVar r_nrdRelaxDiffPrepassBlur("r_nrdRelaxDiffPrepassBlur", "RELAX diffuse prepass blur radius", 10.0f, 0.0f, 70.0f);
+	// Accumulation frame counts. TAA uses a 16-sample Halton sequence so we need at least 16
+	// frames of specular history to fully average out sub-pixel TAA jitter on the gbuffer
+	// worldPos that SSR reads each frame. Defaults below match NRD's own recommended values.
+	HexEngine::HVar r_nrdRelaxDiffMaxFrames("r_nrdRelaxDiffMaxFrames", "RELAX diffuse maximum accumulated frames", 30, 0, 63);
+	HexEngine::HVar r_nrdRelaxSpecMaxFrames("r_nrdRelaxSpecMaxFrames", "RELAX specular maximum accumulated frames", 30, 0, 63);
+	HexEngine::HVar r_nrdRelaxDiffFastFrames("r_nrdRelaxDiffFastFrames", "RELAX diffuse fast-history accumulated frames", 6, 0, 63);
+	HexEngine::HVar r_nrdRelaxSpecFastFrames("r_nrdRelaxSpecFastFrames", "RELAX specular fast-history accumulated frames", 6, 0, 63);
+	// History-fix at >0 frames runs an aggressive spatial blur on the specular signal for the
+	// first N frames after a disocclusion. With our deterministic mirror SSR + the dense
+	// back-wall reflections it paints a visible doubled / curved smear on the floor. Default 0.
+	HexEngine::HVar r_nrdRelaxHistoryFixFrames("r_nrdRelaxHistoryFixFrames", "RELAX history-fix frame count", 0, 0, 3);
+	// Diffuse prepass blur radius. SSR's diffuse signal now comes from a voxel-GI cone trace
+	// rather than a random-hemisphere ray, so the input has no stochastic noise to filter -
+	// but it does have visible voxel-cell-boundary discontinuities (the "blockiness"). A wider
+	// pre-blur (e.g. 30+) helps smooth those boundaries before the temporal accumulation locks
+	// them into the history. Bumped from 10 -> 30 to match the new input characteristics.
+	HexEngine::HVar r_nrdRelaxDiffPrepassBlur("r_nrdRelaxDiffPrepassBlur", "RELAX diffuse prepass blur radius", 30.0f, 0.0f, 70.0f);
 	HexEngine::HVar r_nrdRelaxSpecPrepassBlur("r_nrdRelaxSpecPrepassBlur", "RELAX specular prepass blur radius", 24.0f, 0.0f, 70.0f);
-	HexEngine::HVar r_nrdRelaxHistoryClampSigma("r_nrdRelaxHistoryClampSigma", "RELAX history clamp sigma scale", 1.0f, 0.1f, 4.0f);
+	// At 1.0 the 5x5 neighbourhood mean+/-sigma clamp on accumulated history was too tight for
+	// our high-contrast specular signal (bright windows + dark frames at adjacent pixels). The
+	// clamp rejected accumulated history every frame, preventing convergence and showing as
+	// shimmer on reflections. 4.0 widens the box enough for 16+ frames of TAA-jittered samples
+	// to actually accumulate. Range bumped to 8.0 so users can experiment further if needed.
+	HexEngine::HVar r_nrdRelaxHistoryClampSigma("r_nrdRelaxHistoryClampSigma", "RELAX history clamp sigma scale", 4.0f, 0.1f, 8.0f);
 	HexEngine::HVar r_nrdRelaxLobeAngleFraction("r_nrdRelaxLobeAngleFraction", "RELAX lobe angle fraction", 0.35f, 0.01f, 1.0f);
 	HexEngine::HVar r_nrdRelaxRoughnessFraction("r_nrdRelaxRoughnessFraction", "RELAX roughness fraction", 0.12f, 0.01f, 1.0f);
 	HexEngine::HVar r_nrdRelaxDiffPhiLuminance("r_nrdRelaxDiffPhiLuminance", "RELAX diffuse luminance edge stopping", 2.0f, 0.1f, 8.0f);
 	HexEngine::HVar r_nrdRelaxSpecPhiLuminance("r_nrdRelaxSpecPhiLuminance", "RELAX specular luminance edge stopping", 1.0f, 0.1f, 8.0f);
 	HexEngine::HVar r_nrdRelaxSpecVarianceBoost("r_nrdRelaxSpecVarianceBoost", "RELAX specular variance boost", 0.0f, 0.0f, 8.0f);
 	HexEngine::HVar r_nrdRelaxHitDistanceReconstruction("r_nrdRelaxHitDistanceReconstruction", "RELAX hit distance reconstruction mode: 0 = off, 1 = 3x3, 2 = 5x5", 0, 0, 2);
-	HexEngine::HVar r_nrdRelaxAntiFirefly("r_nrdRelaxAntiFirefly", "Enable RELAX anti-firefly suppression", true, false, true);
+	// Anti-firefly clips outlier-bright pixels. For SSR the bright pixels are real (sky-lit
+	// window reflections) not stochastic fireflies, and the suppression reintroduces flicker
+	// at the boundaries. Default off; enable only if you actually need firefly suppression.
+	HexEngine::HVar r_nrdRelaxAntiFirefly("r_nrdRelaxAntiFirefly", "Enable RELAX anti-firefly suppression", false, false, true);
 	HexEngine::HVar r_nrdRelaxRoughnessEdgeStopping("r_nrdRelaxRoughnessEdgeStopping", "Enable RELAX roughness edge stopping", true, false, true);
 	HexEngine::HVar r_nrdRelaxAntilag("r_nrdRelaxAntilag", "Enable RELAX anti-lag", false, false, true);
 	HexEngine::HVar r_nrdRelaxAntilagAcceleration("r_nrdRelaxAntilagAcceleration", "RELAX anti-lag acceleration amount", 0.25f, 0.0f, 1.0f);
@@ -803,13 +825,30 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 	memcpy(settings.viewToClipMatrixPrev, fd.camera->GetProjectionMatrixPrev().m, sizeof(settings.viewToClipMatrixPrev));
 	memcpy(settings.worldToViewMatrix, fd.camera->GetViewMatrix().m, sizeof(settings.worldToViewMatrix));
 	memcpy(settings.worldToViewMatrixPrev, fd.camera->GetViewMatrixPrev().m, sizeof(settings.worldToViewMatrixPrev));
+	// Our CalcVelocity (Utils.shader) writes motion as (oldClipY - newClipY) in [0..1] with no
+	// Y flip - so the Y component is in clip-Y-up space while NRD samples its textures in
+	// screen-UV-Y-down. Negate Y here so NRD's reprojection lands on the correct row; the X
+	// channel agrees on direction so it stays 1.0. .z = 0 means 2D screen-space motion.
 	settings.motionVectorScale[0] = 1.0f;
-	settings.motionVectorScale[1] = 1.0f;
+	settings.motionVectorScale[1] = -1.0f;
 	settings.motionVectorScale[2] = 0.0f;
-	settings.cameraJitter[0] = -fd.jitter.x;
-	settings.cameraJitter[1] = -fd.jitter.y;
-	settings.cameraJitterPrev[0] = -_previousJitter.x;
-	settings.cameraJitterPrev[1] = -_previousJitter.y;
+	// NRD's cameraJitter is in PIXEL units, range [-0.5, 0.5] (asserted internally). Our TAA
+	// (TAA.cpp:GetJitterOffset) returns the jitter in NDC units (post-division by W/2 from the
+	// original [-0.5, 0.5] pixel-space jitter pattern). Multiply by half-resolution to recover
+	// the pixel-space value NRD expects. Without this conversion NRD reads jitter as ~0.0005
+	// (basically zero), skips sub-pixel reprojection, and the half-pixel-per-frame TAA offset
+	// accumulates into a curved trail in the temporal history.
+	//
+	// Sign: HexEngine's vertex jitter `output.position.xy += g_jitterOffsets * w` shifts the
+	// rasterised image by (+jx, +jy) in clip space. In screen-UV-Y-down that's (+jx, -jy). The
+	// jittered pixel is sampling a world point offset accordingly, so cameraJitter follows the
+	// image-shift sign with a Y flip to convert clip-Y-up -> screen-UV-Y-down.
+	const float halfW = static_cast<float>(_width) * 0.5f;
+	const float halfH = static_cast<float>(_height) * 0.5f;
+	settings.cameraJitter[0] = fd.jitter.x * halfW;
+	settings.cameraJitter[1] = -fd.jitter.y * halfH;
+	settings.cameraJitterPrev[0] = _previousJitter.x * halfW;
+	settings.cameraJitterPrev[1] = -_previousJitter.y * halfH;
 	settings.resourceSize[0] = static_cast<uint16_t>(_width);
 	settings.resourceSize[1] = static_cast<uint16_t>(_height);
 	settings.resourceSizePrev[0] = static_cast<uint16_t>(_width);
@@ -878,20 +917,20 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 		switch (r_nrdRelaxPreset._val.i32)
 		{
 		case 1: // stable
-			diffMaxFrames = 8;
-			specMaxFrames = 10;
-			diffFastFrames = 2;
-			specFastFrames = 3;
-			historyFixFrames = 2;
-			diffPrepassBlur = 14.0f;
-			specPrepassBlur = 32.0f;
-			historyClampSigma = 1.4f;
+			diffMaxFrames = 60;
+			specMaxFrames = 60;
+			diffFastFrames = 8;
+			specFastFrames = 8;
+			historyFixFrames = 0;
+			diffPrepassBlur = 50.0f; // wide blur for voxel-cone-trace cell boundaries
+			specPrepassBlur = 0.0f;
+			historyClampSigma = 6.0f;
 			lobeAngleFraction = 0.45f;
 			roughnessFraction = 0.15f;
 			diffPhiLuminance = 2.4f;
 			specPhiLuminance = 1.2f;
 			specVarianceBoost = 0.0f;
-			enableAntiFirefly = true;
+			enableAntiFirefly = false;
 			enableRoughnessEdgeStopping = true;
 			hitDistanceMode = nrd::HitDistanceReconstructionMode::OFF;
 			enableAntilag = true;
@@ -901,20 +940,38 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			antilagReset = 0.0f;
 			break;
 		case 2: // balanced
-			diffMaxFrames = 4;
-			specMaxFrames = 6;
-			diffFastFrames = 1;
-			specFastFrames = 2;
-			historyFixFrames = 2;
-			diffPrepassBlur = 10.0f;
-			specPrepassBlur = 24.0f;
-			historyClampSigma = 1.0f;
+			// SSR shader produces a deterministic mirror direction for specular (no
+			// probabilistic per-pixel sampling), so the spec prepass blur isn't needed
+			// to reconstruct missing samples - it just smears the crisp signal. Drop
+			// it to 0. History-fix similarly applies aggressive spatial blur to fill in
+			// low-confidence history pixels; disabling that pass (frames=0) stops it
+			// from painting the doubled / curved smear visible on the floor reflection.
+			// Accumulation frames need to be >=16 to fully average out TAA's 16-sample
+			// jitter sequence on the gbuffer worldPos read by SSR (otherwise reflections
+			// shimmer as each frame's ray hits a sub-pixel-shifted point on the wall).
+			//
+			// historyClampSigma at 1.0 was too tight: the 5x5 responsive-neighbourhood
+			// statistics for a floor pixel reflecting bright windows + dark frames produce
+			// a wide sigma, and clamping current frame to mean +/- 1 sigma kept rejecting
+			// accumulated history every frame, preventing convergence and showing as shimmer.
+			// Boost to 4.0 so the clamp window is wide enough that 16+ frames of TAA-jittered
+			// samples can actually accumulate. Anti-firefly likewise rejects bright reflected
+			// window pixels as "fireflies" amongst dim neighbours and reintroduces flicker -
+			// turn it off for SSR, the underlying signal isn't actually firefly-noisy.
+			diffMaxFrames = 30;
+			specMaxFrames = 30;
+			diffFastFrames = 6;
+			specFastFrames = 6;
+			historyFixFrames = 0;
+			diffPrepassBlur = 30.0f; // smooth voxel-GI cone trace cell boundaries
+			specPrepassBlur = 0.0f;
+			historyClampSigma = 4.0f;
 			lobeAngleFraction = 0.35f;
 			roughnessFraction = 0.12f;
 			diffPhiLuminance = 2.0f;
 			specPhiLuminance = 1.0f;
 			specVarianceBoost = 0.0f;
-			enableAntiFirefly = true;
+			enableAntiFirefly = false;
 			enableRoughnessEdgeStopping = true;
 			hitDistanceMode = nrd::HitDistanceReconstructionMode::OFF;
 			enableAntilag = true;
@@ -924,20 +981,20 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			antilagReset = 0.0f;
 			break;
 		case 3: // responsive
-			diffMaxFrames = 3;
-			specMaxFrames = 4;
-			diffFastFrames = 1;
-			specFastFrames = 1;
-			historyFixFrames = 1;
-			diffPrepassBlur = 6.0f;
-			specPrepassBlur = 18.0f;
-			historyClampSigma = 0.8f;
+			diffMaxFrames = 16;
+			specMaxFrames = 16;
+			diffFastFrames = 4;
+			specFastFrames = 4;
+			historyFixFrames = 0;
+			diffPrepassBlur = 20.0f; // moderate blur for voxel-cone-trace cell boundaries
+			specPrepassBlur = 0.0f;
+			historyClampSigma = 3.0f;
 			lobeAngleFraction = 0.25f;
 			roughnessFraction = 0.10f;
 			diffPhiLuminance = 1.6f;
 			specPhiLuminance = 0.85f;
 			specVarianceBoost = 0.25f;
-			enableAntiFirefly = true;
+			enableAntiFirefly = false;
 			enableRoughnessEdgeStopping = true;
 			hitDistanceMode = nrd::HitDistanceReconstructionMode::OFF;
 			enableAntilag = true;

@@ -315,6 +315,7 @@ namespace HexEngine
 	HVar r_saturation("r_saturation", "How much to saturate the final render", 1.05f, 0.1f, 3.0f);
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
+	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
 	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
 	HVar r_profileDisableDirectionalLights("r_profileDisableDirectionalLights", "Disable directional light rendering for profiling", false, false, true);
@@ -2521,49 +2522,67 @@ namespace HexEngine
             _denoiseFD.camera = _currentCamera;
             _denoiseFD.jitter = _taa.GetJitterOffset(bbvp.width, bbvp.height);
 
-#if 1
-			// use NRD
-            g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
-            g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _ssrResolved);
+			if (r_ssrDenoise._val.b)
+			{
+				// NRD-denoised path: pack diffuse + specular SSR signals + their hit distances,
+				// run NRD's RELAX_DIFFUSE_SPECULAR, then composite the resolved signal additively.
+				g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
+				g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _ssrResolved);
 
-            _ssrResolved->CopyTo(_ssrHistory);
+				_ssrResolved->CopyTo(_ssrHistory);
 
-			// This needs to be set again as NRD overwrites it
-			auto sunLight = _currentScene->GetSunLight();
+				// NRD overwrites our per-frame constant buffer state; re-upload it.
+				auto sunLight = _currentScene->GetSunLight();
 
-			SetupPerFrameBuffer(
-				_currentCamera->GetViewMatrix(),
-				_currentCamera->GetProjectionMatrix(),
-				_currentCamera->GetViewMatrixPrev(),
-				_currentCamera->GetProjectionMatrixPrev(),
-				r_shadowCascades._val.i32,
-				sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
-				_currentCamera->GetViewport(),
-				6,
-				sunLight ? sunLight->GetLightMultiplier() : 1.0f
-			);
+				SetupPerFrameBuffer(
+					_currentCamera->GetViewMatrix(),
+					_currentCamera->GetProjectionMatrix(),
+					_currentCamera->GetViewMatrixPrev(),
+					_currentCamera->GetProjectionMatrixPrev(),
+					r_shadowCascades._val.i32,
+					sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
+					_currentCamera->GetViewport(),
+					6,
+					sunLight ? sunLight->GetLightMultiplier() : 1.0f
+				);
 
-			guiRenderer->StartFrame();
-			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
-			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
-			GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve");
-			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
-			guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
-			//_ssrResolved->BlendTo_Additive(_beautyRT);
-			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+				guiRenderer->StartFrame();
+				g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+				g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve");
+				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+				guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
+				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+			}
+			else
+			{
+				auto sunLight = _currentScene->GetSunLight();
 
-#else
+				SetupPerFrameBuffer(
+					_currentCamera->GetViewMatrix(),
+					_currentCamera->GetProjectionMatrix(),
+					_currentCamera->GetViewMatrixPrev(),
+					_currentCamera->GetProjectionMatrixPrev(),
+					r_shadowCascades._val.i32,
+					sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
+					_currentCamera->GetViewport(),
+					6,
+					sunLight ? sunLight->GetLightMultiplier() : 1.0f
+				);
 
-			// do not use NRD
-			guiRenderer->StartFrame();
-			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
-			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
-			GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve");
-			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
-			guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
-			//_ssrResolved->BlendTo_Additive(_beautyRT);
-			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
-#endif
+				// NRD-bypass path: composite the raw SSR diffuse + specular textures directly
+				// onto beauty. Use this to verify whether artifacts originate from the SSR shader
+				// or from NRD's denoising. If artifacts disappear here, the shader output is OK
+				// and the problem lives in NRD's preprocess / matrices / hit-distance interpretation.
+				guiRenderer->StartFrame();
+				g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+				g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve (no denoise)");
+				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+				guiRenderer->FullScreenTexturedQuad(_ssrDiffuseTexture, _ssrResolve.get());
+				//guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
+				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+			}
 
 			//guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
 			//_ssrResolved->CopyTo(_beautyRT);

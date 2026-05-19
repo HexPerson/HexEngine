@@ -50,12 +50,16 @@
 
 		float depth = depthTexture.Sample(PointSampler, input.texcoord).w;
 
-		float velocityConfidence = saturate(1.f - length(velocity.xy) / FRAME_VELOCITY_IN_TEXELS_DIFF);
+		// NOTE: a previous "velocityConfidence" term fell to zero whenever |velocity| exceeded
+		// 0.01 UV (~ a couple of pixels of motion), which is essentially any camera movement.
+		// That zeroed out the modulationFactor below, making TAA output the current frame only
+		// during motion - completely defeating the temporal AA and causing the walls to shimmer
+		// the moment the camera moved. The neighbourhood box clamp lower down already handles
+		// the genuinely-stale-history case (it clamps the reprojected history to the current
+		// frame's local color range), so we don't need a separate motion-based reject term.
 
 		//if(depth == g_frustumDepths[3])
 		//	return float4(colour, 1.0f);
-
-		//velocity *= velocityConfidence;
 
 		/*if (velocity.x == 999 && velocity.y == 999)
 		{h
@@ -87,7 +91,7 @@
 
 		history = clamp(history, BoxMin, BoxMax);
 
-		float modulationFactor = 0.8f * velocityConfidence;
+		float modulationFactor = 0.9f;
 
 		float3 resolvedColour = lerp(colour, history, modulationFactor);
 
