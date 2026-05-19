@@ -5078,4 +5078,20 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		CompositeToBeauty(beautyTarget);
 		DebugDrawProbeGrid(_activeClipmap);
 	}
+
+	void DiffuseGI::BindVoxelsForReflection() const
+	{
+		if (!_created)
+			return;
+
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].radianceVolume);
+			g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].opacityVolume);
+			g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].albedoVolume);
+		}
+
+		if (_constantBuffer)
+			g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _constantBuffer);
+	}
 }

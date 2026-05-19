@@ -42,6 +42,13 @@ namespace HexEngine
 		 */
 		void Render(Scene* scene, Camera* camera, const GBuffer& gbuffer, ITexture2D* beautyTarget);
 
+		/**
+		 * @brief Binds the 4 clipmaps' voxel radiance/opacity/albedo (12 SRVs) via the auto-slot
+		 * SetTexture3D path and the GI constant buffer on PS b4. The caller is responsible for
+		 * having advanced the auto SRV slot to the desired starting register before calling.
+		 */
+		void BindVoxelsForReflection() const;
+
 	private:
 		static constexpr uint32_t ClipmapCount = 4;
 		static constexpr uint32_t ProbeGridX = 16;

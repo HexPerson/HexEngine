@@ -446,7 +446,8 @@ Texture2D<float4> gSpecularSignal : register(t2);
 Texture2D<float4> gSpecularHitDistance : register(t3);
 Texture2D<float4> gNormalDepth : register(t4);
 Texture2D<float4> gMaterial : register(t5);
-SamplerState gLinearClamp : register(s0);
+SamplerState gPointClamp : register(s0);
+SamplerState gLinearClamp : register(s1);
 struct VSOut
 {
 	float4 position : SV_Position;
@@ -462,12 +463,16 @@ struct PSOut
 PSOut ShaderMain(VSOut input)
 {
 	PSOut output;
+	// Radiance buffers: linear sampling is fine and helps smooth fine variance.
 	const float4 diffuseSignal = gDiffuseSignal.SampleLevel(gLinearClamp, input.uv, 0.0f);
-	const float4 diffuseHitDistance = gDiffuseHitDistance.SampleLevel(gLinearClamp, input.uv, 0.0f);
 	const float4 specularSignal = gSpecularSignal.SampleLevel(gLinearClamp, input.uv, 0.0f);
-	const float4 specularHitDistance = gSpecularHitDistance.SampleLevel(gLinearClamp, input.uv, 0.0f);
-	const float4 normalDepth = gNormalDepth.SampleLevel(gLinearClamp, input.uv, 0.0f);
-	const float4 material = gMaterial.SampleLevel(gLinearClamp, input.uv, 0.0f);
+	// Hit distance + gbuffer (normal/depth/material) must be POINT sampled - linear filtering
+	// across silhouette edges produces garbage normals and averaged depths that break NRD's
+	// edge-aware kernels (and were the cause of the denoiser ignoring most of the input).
+	const float4 diffuseHitDistance = gDiffuseHitDistance.SampleLevel(gPointClamp, input.uv, 0.0f);
+	const float4 specularHitDistance = gSpecularHitDistance.SampleLevel(gPointClamp, input.uv, 0.0f);
+	const float4 normalDepth = gNormalDepth.SampleLevel(gPointClamp, input.uv, 0.0f);
+	const float4 material = gMaterial.SampleLevel(gPointClamp, input.uv, 0.0f);
 	const float3 normal = normalize(normalDepth.xyz);
 	const float roughness = saturate(material.y);
 	const float viewZ = max(normalDepth.w, 1e-4f);
@@ -769,8 +774,10 @@ bool NRDInterface::RunPreprocess(const HexEngine::DenoiserFrameData&)
 
 	ID3D11ShaderResourceView* srvs[] = { _diffuseSignalInput.srv, _diffuseHitDistanceInput.srv, _specularSignalInput.srv, _specularHitDistanceInput.srv, _normalAndDepthInput.srv, _materialInput.srv };
 	_context->PSSetShaderResources(0, 6, srvs);
-	ID3D11SamplerState* samplers[] = { _linearClampSampler };
-	_context->PSSetSamplers(0, 1, samplers);
+	// s0 must be point-clamp for gbuffer/hit-distance sampling so silhouette edges aren't
+	// linearly interpolated into bogus normals/depths. s1 keeps linear-clamp for radiance.
+	ID3D11SamplerState* samplers[] = { _pointClampSampler, _linearClampSampler };
+	_context->PSSetSamplers(0, 2, samplers);
 	_context->Draw(3, 0);
 
 	ID3D11ShaderResourceView* nullSrvs[] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
