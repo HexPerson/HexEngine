@@ -370,7 +370,29 @@
 		}
 	}
 
-	void SpawnPreviewMeshCell(Entity* wrapper, const fs::path& assetPath, const std::shared_ptr<Material>& previewMaterial)
+	// Records `entity` for explicit teardown by the preview destructor. Why this exists:
+	// Entity::DeleteMe(parent) empties parent->_children and detaches each immediate child
+	// (parent=nullptr, IsPendingRemoval=true), but does NOT touch the grandchildren - their
+	// _children list survives intact. Scene::DestroyEntity(parent) then reads an empty
+	// child list and never recurses, so the immediate children are orphaned+flagged but
+	// never Scene-removed -> they keep rendering through their last PVS snapshot.
+	//
+	// We do NOT recurse into descendants here. Scene::DestroyEntity, when called later on
+	// an already-flagged entity (e.g. one of these orphaned immediate children), takes the
+	// "skip DeleteMe" path and DOES then walk the entity's preserved _children list and
+	// destroy each recursively (because those grandchildren are unflagged and follow the
+	// normal cascade). Tracking grandchildren explicitly would cause them to be destroyed
+	// twice - once via the cascade, then again from the outer destruction loop on a
+	// dangling pointer.
+	void TrackPreviewEntity(Entity* entity, std::vector<Entity*>& outEntities)
+	{
+		if (entity == nullptr)
+			return;
+
+		outEntities.push_back(entity);
+	}
+
+	void SpawnPreviewMeshCell(Entity* wrapper, const fs::path& assetPath, const std::shared_ptr<Material>& previewMaterial, std::vector<Entity*>& outSpawnedEntities)
 	{
 		if (wrapper == nullptr || wrapper->GetScene() == nullptr)
 			return;
@@ -395,6 +417,11 @@
 		// SetMesh because SetMesh assigns the mesh's authored material first.
 		staticMesh->SetMaterial(previewMaterial);
 		scene->FlushPVS(child);
+
+		// Track the immediate child explicitly so the destructor can call
+		// Scene::DestroyEntity on it after wrapper's DeleteMe has orphaned it (mesh has no
+		// further children, so no risk of double-destroy through cascade).
+		TrackPreviewEntity(child, outSpawnedEntities);
 	}
 
 	void SpawnPrefabCell(Entity* wrapper, const fs::path& assetPath)
@@ -426,7 +453,7 @@
 		}
 	}
 
-	void SpawnPreviewPrefabCell(Entity* wrapper, const fs::path& assetPath, const std::shared_ptr<Material>& previewMaterial)
+	void SpawnPreviewPrefabCell(Entity* wrapper, const fs::path& assetPath, const std::shared_ptr<Material>& previewMaterial, std::vector<Entity*>& outSpawnedEntities)
 	{
 		if (wrapper == nullptr || wrapper->GetScene() == nullptr)
 			return;
@@ -455,6 +482,13 @@
 			// under intermediate transforms; we have to retint every mesh, not just the root.
 			OverridePreviewMaterialRecursive(root, previewMaterial);
 			wrapper->GetScene()->FlushPVS(root);
+
+			// Track each immediate prefab root - NOT its descendants. When the destructor
+			// later calls Scene::DestroyEntity on this root, it will be flagged-but-with-
+			// intact-children (because wrapper's DeleteMe only touched its immediate kids),
+			// and Scene::DestroyEntity's already-flagged path correctly recurses through
+			// the root's preserved _children list to destroy the prefab subtree.
+			TrackPreviewEntity(root, outSpawnedEntities);
 		}
 	}
 
@@ -664,14 +698,28 @@ void CitySimulationEditorToolPlugin::DestroyRoadPainterPreviewEntities()
 
 	if (scene != nullptr)
 	{
-		for (auto* wrapper : _roadPainterPreviewEntities)
+		// Tear down in FORWARD insertion order: wrappers come before their children, so the
+		// wrapper goes first. Entity::DeleteMe(wrapper) snapshots+empties wrapper->_children
+		// and detaches each child (_parent = nullptr) but does NOT cascade Scene-level
+		// removal into them - those children just get their IsPendingRemoval flag set and
+		// keep rendering through the last PVS snapshot. The earlier version of this loop
+		// relied on Scene::DestroyEntity recursing into children, which it cannot do
+		// because DeleteMe has already emptied the child list by then.
+		//
+		// Doing this in REVERSE would be a use-after-free: destroying the child first
+		// `delete`s it (Scene::RemoveEntityInternal), but wrapper->_children still holds
+		// the dangling pointer until DeleteMe(wrapper) tries to dereference it.
+		//
+		// In forward order, after wrapper is destroyed each child is left flagged-but-alive.
+		// Calling Scene::DestroyEntity(child) skips the already-flagged DeleteMe path but
+		// still unconditionally runs RemoveEntityInternal (Scene.cpp ~line 1138), which is
+		// what actually removes the child from PVS and frees it.
+		for (auto* entity : _roadPainterPreviewEntities)
 		{
-			if (wrapper == nullptr || wrapper->IsPendingDeletion())
+			if (entity == nullptr)
 				continue;
 
-			// Scene::DestroyEntity walks children, so destroying the wrapper takes the
-			// spawned mesh entity (or all entities of an unrolled prefab) with it.
-			scene->DestroyEntity(wrapper);
+			scene->DestroyEntity(entity);
 		}
 	}
 
@@ -787,13 +835,18 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		if (wrapper == nullptr)
 			continue;
 
+		// Track the wrapper FIRST so it leads the destruction order; subsequent
+		// SpawnPreviewMeshCell/PrefabCell appends its children, which get destroyed before
+		// the wrapper itself (we tear down in reverse). That ordering is what matters in
+		// edge cases where a child's RemoveEntityInternal touches parent state.
+		_roadPainterPreviewEntities.push_back(wrapper);
+
 		if (placement.isPrefab)
-			SpawnPreviewPrefabCell(wrapper, placement.assetPath, previewMaterial);
+			SpawnPreviewPrefabCell(wrapper, placement.assetPath, previewMaterial, _roadPainterPreviewEntities);
 		else
-			SpawnPreviewMeshCell(wrapper, placement.assetPath, previewMaterial);
+			SpawnPreviewMeshCell(wrapper, placement.assetPath, previewMaterial, _roadPainterPreviewEntities);
 
 		scene->FlushPVS(wrapper);
-		_roadPainterPreviewEntities.push_back(wrapper);
 	}
 
 	_roadPainterHasPreviewKey = true;
