@@ -7,6 +7,7 @@
 #include <HexEngine.Core/Entity/Component/StaticMeshComponent.hpp>
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
 #include <HexEngine.Core/FileSystem/SceneSaveFile.hpp>
+#include <HexEngine.Core/Graphics/Material.hpp>
 #include <HexEngine.Core/GUI/Elements/AssetSearch.hpp>
 #include <HexEngine.Core/GUI/Elements/Button.hpp>
 #include <HexEngine.Core/GUI/Elements/Checkbox.hpp>
@@ -30,6 +31,7 @@
 		using namespace HexEngine;
 
 	constexpr const char* kRoadPainterWrapperPrefix = "CityRoadDraw_";
+	constexpr const char* kRoadPainterPreviewPrefix = "CityRoadPreview_";
 	constexpr float kHalfPi = 1.57079632679f;
 
 	int32_t NormalizeQuarterTurns(int32_t quarterTurns)
@@ -347,6 +349,54 @@
 		wrapper->GetScene()->FlushPVS(wrapper);
 	}
 
+	// Recursively overrides the material on every StaticMeshComponent under `entity`. Used
+	// to tint preview-only entities blue so the player can distinguish the ghost from the
+	// real committed road meshes. The override material has hasTransparency=1 + Transparency
+	// blend state so the preview goes through the engine's transparent-render path rather
+	// than the gbuffer/SSR pipeline.
+	void OverridePreviewMaterialRecursive(Entity* entity, const std::shared_ptr<Material>& previewMaterial)
+	{
+		if (entity == nullptr || previewMaterial == nullptr)
+			return;
+
+		if (auto* smc = entity->GetComponent<StaticMeshComponent>(); smc != nullptr)
+		{
+			smc->SetMaterial(previewMaterial);
+		}
+
+		for (auto* child : entity->GetChildren())
+		{
+			OverridePreviewMaterialRecursive(child, previewMaterial);
+		}
+	}
+
+	void SpawnPreviewMeshCell(Entity* wrapper, const fs::path& assetPath, const std::shared_ptr<Material>& previewMaterial)
+	{
+		if (wrapper == nullptr || wrapper->GetScene() == nullptr)
+			return;
+
+		auto mesh = Mesh::Create(assetPath);
+		if (mesh == nullptr)
+			return;
+
+		auto* scene = wrapper->GetScene();
+		auto* child = scene->CreateEntity(std::format("{}_Mesh", wrapper->GetName()), wrapper->GetPosition(), math::Quaternion::Identity, math::Vector3(1.0f));
+		if (child == nullptr)
+			return;
+
+		child->SetParent(wrapper);
+		auto* staticMesh = child->AddComponent<StaticMeshComponent>();
+		if (staticMesh == nullptr)
+			return;
+
+		staticMesh->SetMesh(mesh);
+		// Preview-only: no RigidBody/collider, otherwise the editor's pick-ray would hit the
+		// ghost and the painter would anchor onto its own preview. Material override after
+		// SetMesh because SetMesh assigns the mesh's authored material first.
+		staticMesh->SetMaterial(previewMaterial);
+		scene->FlushPVS(child);
+	}
+
 	void SpawnPrefabCell(Entity* wrapper, const fs::path& assetPath)
 	{
 		if (wrapper == nullptr || wrapper->GetScene() == nullptr)
@@ -373,6 +423,38 @@
 			root->ForcePosition(wrapper->GetPosition() + worldOffset);
 			root->SetParent(wrapper);
 			root->SetCastsShadows(false);
+		}
+	}
+
+	void SpawnPreviewPrefabCell(Entity* wrapper, const fs::path& assetPath, const std::shared_ptr<Material>& previewMaterial)
+	{
+		if (wrapper == nullptr || wrapper->GetScene() == nullptr)
+			return;
+
+		auto spawnedEntities = g_pEnv->_prefabLoader->LoadPrefab(HexEngine::g_pEnv->_sceneManager->GetCurrentScene(), assetPath);
+		if (spawnedEntities.empty())
+			return;
+
+		std::vector<Entity*> roots;
+		CollectPrefabRoots(spawnedEntities, roots);
+		if (roots.empty())
+			return;
+
+		const math::Vector3 anchorPosition = roots.front()->GetPosition();
+		const math::Quaternion wrapperRotation = wrapper->GetRotation();
+		for (auto* root : roots)
+		{
+			if (root == nullptr)
+				continue;
+
+			const math::Vector3 authoredOffset = root->GetPosition() - anchorPosition;
+			const math::Vector3 worldOffset = math::Vector3::Transform(authoredOffset, wrapperRotation);
+			root->ForcePosition(wrapper->GetPosition() + worldOffset);
+			root->SetParent(wrapper);
+			// Recurse into the spawned tree because prefabs typically nest StaticMeshComponents
+			// under intermediate transforms; we have to retint every mesh, not just the root.
+			OverridePreviewMaterialRecursive(root, previewMaterial);
+			wrapper->GetScene()->FlushPVS(root);
 		}
 	}
 
@@ -537,11 +619,188 @@ CitySimulationEditorToolPlugin::CitySimulationEditorToolPlugin(CitySimulationInt
 
 CitySimulationEditorToolPlugin::~CitySimulationEditorToolPlugin()
 {
+	DestroyRoadPainterPreviewEntities();
 	if (_roadPainterRegisteredScene != nullptr)
 	{
 		_roadPainterRegisteredScene->UnregisterCustomRenderer(this);
 		_roadPainterRegisteredScene = nullptr;
 	}
+}
+
+std::shared_ptr<HexEngine::Material> CitySimulationEditorToolPlugin::GetOrCreatePreviewMaterial()
+{
+	if (_roadPainterPreviewMaterial != nullptr)
+		return _roadPainterPreviewMaterial;
+
+	// Clone the default material so the preview gets a valid shader + sampler setup, then
+	// flip it into the transparency path with a blue diffuse multiplier. Vector4(rgb, a):
+	// rgb tints the underlying texture; a controls how see-through the ghost is. Blue >1
+	// pushes the tint past the typically dark road texture so the preview reads as blue
+	// against the terrain rather than as dark grey.
+	auto material = std::make_shared<HexEngine::Material>();
+	if (auto defaultMaterial = HexEngine::Material::GetDefaultMaterial(); defaultMaterial != nullptr)
+	{
+		material->CopyFrom(defaultMaterial);
+	}
+	material->_properties.diffuseColour = math::Vector4(0.35f, 0.7f, 1.3f, 0.55f);
+	material->_properties.hasTransparency = 1;
+	material->SetBlendState(HexEngine::BlendState::Transparency);
+	// AffectsGI off so the ghost mesh never feeds the voxel-GI clipmaps - otherwise an
+	// in-flight preview would smear blue indirect light onto nearby surfaces every time
+	// the user hovers a new cell.
+	material->SetAffectsGI(false);
+	material->SetEmissiveAffectsGI(false);
+	material->SetName("CityRoadPreview");
+
+	_roadPainterPreviewMaterial = material;
+	return _roadPainterPreviewMaterial;
+}
+
+void CitySimulationEditorToolPlugin::DestroyRoadPainterPreviewEntities()
+{
+	auto* scene = HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_sceneManager != nullptr
+		? HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get()
+		: nullptr;
+
+	if (scene != nullptr)
+	{
+		for (auto* wrapper : _roadPainterPreviewEntities)
+		{
+			if (wrapper == nullptr || wrapper->IsPendingDeletion())
+				continue;
+
+			// Scene::DestroyEntity walks children, so destroying the wrapper takes the
+			// spawned mesh entity (or all entities of an unrolled prefab) with it.
+			scene->DestroyEntity(wrapper);
+		}
+	}
+
+	_roadPainterPreviewEntities.clear();
+	_roadPainterHasPreviewKey = false;
+}
+
+void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
+{
+	if (!_roadPainterEnabled || !_roadPainterHasAnchor || !_roadPainterHasHover)
+	{
+		DestroyRoadPainterPreviewEntities();
+		return;
+	}
+
+	// Bail out cheaply if the (anchor, hover) snapped grid pair is unchanged; the run cells
+	// only depend on the snapped pair, not on raw mouse position. This is what keeps mouse-
+	// move from rebuilding the preview every pixel of motion.
+	if (_roadPainterHasPreviewKey
+		&& _roadPainterPreviewAnchorX == _roadPainterAnchorX
+		&& _roadPainterPreviewAnchorZ == _roadPainterAnchorZ
+		&& _roadPainterPreviewHoverX == _roadPainterHoverX
+		&& _roadPainterPreviewHoverZ == _roadPainterHoverZ)
+	{
+		return;
+	}
+
+	DestroyRoadPainterPreviewEntities();
+
+	auto* scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get();
+	if (scene == nullptr)
+		return;
+
+	PlacementSpec straightSpec;
+	if (!TryBuildPlacementSpec(_roadPainterStraightPath, _roadPainterYawQuarterTurns, straightSpec))
+		return;
+
+	std::optional<PlacementSpec> cornerSpec;
+	std::optional<PlacementSpec> crossroadSpec;
+	std::optional<PlacementSpec> tJunctionSpec;
+	PlacementSpec tempSpec;
+	if (TryBuildPlacementSpec(_roadPainterCornerPath, _roadPainterYawQuarterTurns, tempSpec)) cornerSpec = tempSpec;
+	if (TryBuildPlacementSpec(_roadPainterCrossroadPath, _roadPainterYawQuarterTurns, tempSpec)) crossroadSpec = tempSpec;
+	if (TryBuildPlacementSpec(_roadPainterTJunctionPath, _roadPainterYawQuarterTurns, tempSpec)) tJunctionSpec = tempSpec;
+
+	// Mirror PaintOrthogonalRun's cell selection. The preview shape decisions need to see
+	// what the network would look like AFTER this run commits, so we union existing managed
+	// cells with the new run cells before computing direction masks.
+	std::unordered_map<GridCoord, float, GridCoordHash> existingHeights;
+	std::vector<HexEngine::Entity*> existingWrappers;
+	GatherManagedRoadCells(scene, existingHeights, existingWrappers);
+
+	std::vector<GridCoord> runCells;
+	const GridCoord start{ _roadPainterAnchorX, _roadPainterAnchorZ };
+	const GridCoord end{ _roadPainterHoverX, _roadPainterHoverZ };
+	const int32_t deltaX = std::abs(end.x - start.x);
+	const int32_t deltaZ = std::abs(end.z - start.z);
+	if (deltaX >= deltaZ)
+	{
+		const int32_t step = end.x >= start.x ? 1 : -1;
+		for (int32_t x = start.x;; x += step)
+		{
+			runCells.push_back({ x, start.z });
+			if (x == end.x)
+				break;
+		}
+	}
+	else
+	{
+		const int32_t step = end.z >= start.z ? 1 : -1;
+		for (int32_t z = start.z;; z += step)
+		{
+			runCells.push_back({ start.x, z });
+			if (z == end.z)
+				break;
+		}
+	}
+
+	std::unordered_map<GridCoord, float, GridCoordHash> combinedHeights = existingHeights;
+	for (const auto& coord : runCells)
+	{
+		combinedHeights[coord] = _roadPainterAnchorHeight;
+	}
+
+	auto previewMaterial = GetOrCreatePreviewMaterial();
+
+	auto hasCell = [&combinedHeights](const GridCoord& coord) -> bool
+	{
+		return combinedHeights.find(coord) != combinedHeights.end();
+	};
+
+	for (const auto& coord : runCells)
+	{
+		// Skip cells that already exist as committed roads - their real (opaque) mesh is
+		// already visible and double-spawning a preview on top would just stack a tinted
+		// copy in the same place. We do NOT update those committed pieces' shapes here;
+		// the commit pass handles that via RebuildManagedRoadNetwork.
+		if (existingHeights.find(coord) != existingHeights.end())
+			continue;
+
+		uint8_t mask = DirectionNone;
+		if (hasCell({ coord.x, coord.z + 1 })) mask |= DirectionNorth;
+		if (hasCell({ coord.x + 1, coord.z })) mask |= DirectionEast;
+		if (hasCell({ coord.x, coord.z - 1 })) mask |= DirectionSouth;
+		if (hasCell({ coord.x - 1, coord.z })) mask |= DirectionWest;
+
+		CellPlacement placement;
+		if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, placement))
+			continue;
+
+		const std::string wrapperName = std::format("{}{}_{}", kRoadPainterPreviewPrefix, coord.x, coord.z);
+		auto* wrapper = scene->CreateEntity(wrapperName, GridToWorld(coord, straightSpec.length, _roadPainterAnchorHeight), placement.rotation, math::Vector3(1.0f));
+		if (wrapper == nullptr)
+			continue;
+
+		if (placement.isPrefab)
+			SpawnPreviewPrefabCell(wrapper, placement.assetPath, previewMaterial);
+		else
+			SpawnPreviewMeshCell(wrapper, placement.assetPath, previewMaterial);
+
+		scene->FlushPVS(wrapper);
+		_roadPainterPreviewEntities.push_back(wrapper);
+	}
+
+	_roadPainterHasPreviewKey = true;
+	_roadPainterPreviewAnchorX = _roadPainterAnchorX;
+	_roadPainterPreviewAnchorZ = _roadPainterAnchorZ;
+	_roadPainterPreviewHoverX = _roadPainterHoverX;
+	_roadPainterPreviewHoverZ = _roadPainterHoverZ;
 }
 
 void CitySimulationEditorToolPlugin::OnCreateUI(HexEngine::MenuBar* menuBar)
@@ -619,52 +878,24 @@ void CitySimulationEditorToolPlugin::RenderCustom(HexEngine::Scene* scene, HexEn
 	(void)camera;
 	(void)renderFlags;
 
-	if (!_roadPainterEnabled || !_roadPainterHasAnchor || !_roadPainterHasHover)
+	if (!_roadPainterEnabled || !_roadPainterHasAnchor)
 		return;
 
-	const math::Color previewColour(0.15f, 0.7f, 1.0f, 0.95f);
+	// The ghost-mesh preview shows what *will* be placed; this debug-line square just marks
+	// the current start anchor so the user can find it at a glance, especially before they
+	// move the mouse into a valid hover cell. Drawn slightly above ground to avoid z-fight.
 	const math::Color anchorColour(1.0f, 0.85f, 0.2f, 0.95f);
-
-	const int32_t deltaX = std::abs(_roadPainterHoverX - _roadPainterAnchorX);
-	const int32_t deltaZ = std::abs(_roadPainterHoverZ - _roadPainterAnchorZ);
-	const bool horizontal = deltaX >= deltaZ;
-	const float y = _roadPainterAnchorHeight + 0.05f;
 	const float halfCell = _roadPainterCellSize * 0.5f;
-
-	auto drawCell = [halfCell](const math::Vector3& center, const math::Color& colour)
-	{
-		const math::Vector3 a(center.x - halfCell, center.y, center.z - halfCell);
-		const math::Vector3 b(center.x + halfCell, center.y, center.z - halfCell);
-		const math::Vector3 c(center.x + halfCell, center.y, center.z + halfCell);
-		const math::Vector3 d(center.x - halfCell, center.y, center.z + halfCell);
-		HexEngine::g_pEnv->_debugRenderer->DrawLine(a, b, colour);
-		HexEngine::g_pEnv->_debugRenderer->DrawLine(b, c, colour);
-		HexEngine::g_pEnv->_debugRenderer->DrawLine(c, d, colour);
-		HexEngine::g_pEnv->_debugRenderer->DrawLine(d, a, colour);
-	};
-
-	drawCell(math::Vector3(static_cast<float>(_roadPainterAnchorX) * _roadPainterCellSize, y, static_cast<float>(_roadPainterAnchorZ) * _roadPainterCellSize), anchorColour);
-
-	if (horizontal)
-	{
-		const int32_t step = _roadPainterHoverX >= _roadPainterAnchorX ? 1 : -1;
-		for (int32_t x = _roadPainterAnchorX;; x += step)
-		{
-			drawCell(math::Vector3(static_cast<float>(x) * _roadPainterCellSize, y, static_cast<float>(_roadPainterAnchorZ) * _roadPainterCellSize), previewColour);
-			if (x == _roadPainterHoverX)
-				break;
-		}
-	}
-	else
-	{
-		const int32_t step = _roadPainterHoverZ >= _roadPainterAnchorZ ? 1 : -1;
-		for (int32_t z = _roadPainterAnchorZ;; z += step)
-		{
-			drawCell(math::Vector3(static_cast<float>(_roadPainterAnchorX) * _roadPainterCellSize, y, static_cast<float>(z) * _roadPainterCellSize), previewColour);
-			if (z == _roadPainterHoverZ)
-				break;
-		}
-	}
+	const float y = _roadPainterAnchorHeight + 0.05f;
+	const math::Vector3 center(static_cast<float>(_roadPainterAnchorX) * _roadPainterCellSize, y, static_cast<float>(_roadPainterAnchorZ) * _roadPainterCellSize);
+	const math::Vector3 a(center.x - halfCell, center.y, center.z - halfCell);
+	const math::Vector3 b(center.x + halfCell, center.y, center.z - halfCell);
+	const math::Vector3 c(center.x + halfCell, center.y, center.z + halfCell);
+	const math::Vector3 d(center.x - halfCell, center.y, center.z + halfCell);
+	HexEngine::g_pEnv->_debugRenderer->DrawLine(a, b, anchorColour);
+	HexEngine::g_pEnv->_debugRenderer->DrawLine(b, c, anchorColour);
+	HexEngine::g_pEnv->_debugRenderer->DrawLine(c, d, anchorColour);
+	HexEngine::g_pEnv->_debugRenderer->DrawLine(d, a, anchorColour);
 }
 
 void CitySimulationEditorToolPlugin::ShowRoadPainterDialog()
@@ -758,6 +989,7 @@ void CitySimulationEditorToolPlugin::ShowRoadPainterDialog()
 			{
 				_roadPainterHasAnchor = false;
 				_roadPainterHasHover = false;
+				DestroyRoadPainterPreviewEntities();
 				UpdateRoadPainterRendererRegistration();
 			}
 		});
@@ -766,6 +998,7 @@ void CitySimulationEditorToolPlugin::ShowRoadPainterDialog()
 		[this](HexEngine::Button*) -> bool
 		{
 			_roadPainterHasAnchor = false;
+			DestroyRoadPainterPreviewEntities();
 			return true;
 		});
 
@@ -802,11 +1035,13 @@ bool CitySimulationEditorToolPlugin::ToggleRoadPainterActive()
 		_roadPainterEnabled = false;
 		_roadPainterHasAnchor = false;
 		_roadPainterHasHover = false;
+		DestroyRoadPainterPreviewEntities();
 		return false;
 	}
 
 	_roadPainterHasAnchor = false;
 	_roadPainterHasHover = false;
+	DestroyRoadPainterPreviewEntities();
 	UpdateRoadPainterRendererRegistration();
 	return true;
 }
@@ -837,11 +1072,13 @@ void CitySimulationEditorToolPlugin::HandleSceneViewportMouseDown(HexEngine::Edi
 		_roadPainterHoverZ = _roadPainterAnchorZ;
 		_roadPainterHoverHeight = _roadPainterAnchorHeight;
 		_roadPainterHasHover = true;
+		RefreshRoadPainterPreview();
 		message->handled = true;
 		return;
 	}
 
 	PaintOrthogonalRun(message->worldPosition);
+	RefreshRoadPainterPreview();
 	message->handled = true;
 }
 
@@ -852,7 +1089,11 @@ void CitySimulationEditorToolPlugin::HandleSceneViewportMouseMove(HexEngine::Edi
 
 	if (!message->hasHit)
 	{
-		_roadPainterHasHover = false;
+		if (_roadPainterHasHover)
+		{
+			_roadPainterHasHover = false;
+			DestroyRoadPainterPreviewEntities();
+		}
 		return;
 	}
 
@@ -863,6 +1104,10 @@ void CitySimulationEditorToolPlugin::HandleSceneViewportMouseMove(HexEngine::Edi
 	_roadPainterHoverZ = SnapToGrid(message->worldPosition.z, _roadPainterCellSize);
 	_roadPainterHoverHeight = message->worldPosition.y;
 	_roadPainterHasHover = true;
+	// Refresh is cheap when the snapped (anchor, hover) hasn't changed - the function does
+	// its own deduplication. Calling here unconditionally is what makes the preview track
+	// the cursor as it crosses cell boundaries during a single drag.
+	RefreshRoadPainterPreview();
 }
 
 bool CitySimulationEditorToolPlugin::MeasureStraightAsset(float& outSpacing, bool& outUsesXAxis) const

@@ -3,6 +3,10 @@
 #include <HexEngine.Core/HexEngine.hpp>
 #include <HexEngine.Core/Scene/ISceneCustomRenderer.hpp>
 
+#include <memory>
+#include <vector>
+
+namespace HexEngine { class Material; }
 class CitySimulationInterface;
 
 class CitySimulationEditorToolPlugin final : public HexEngine::IEditorToolPlugin, public HexEngine::ISceneCustomRenderer
@@ -26,6 +30,9 @@ private:
 	void PaintOrthogonalRun(const math::Vector3& worldPosition);
 	void RebuildRoadPainterNetwork(float defaultHeight) const;
 	void UpdateRoadPainterRendererRegistration();
+	void RefreshRoadPainterPreview();
+	void DestroyRoadPainterPreviewEntities();
+	std::shared_ptr<HexEngine::Material> GetOrCreatePreviewMaterial();
 	void CreateRoadPrefab(const fs::path& baseDir, HexEngine::FileSystem* fileSystem, const std::function<void()>& onAssetsCreated);
 	void CreateVehiclePrefab(const fs::path& baseDir, HexEngine::FileSystem* fileSystem, const std::function<void()>& onAssetsCreated);
 
@@ -62,4 +69,11 @@ private:
 	int32_t _roadPainterHoverZ = 0;
 	float _roadPainterHoverHeight = 0.0f;
 	HexEngine::Scene* _roadPainterRegisteredScene = nullptr;
+	std::vector<HexEngine::Entity*> _roadPainterPreviewEntities;
+	std::shared_ptr<HexEngine::Material> _roadPainterPreviewMaterial;
+	bool _roadPainterHasPreviewKey = false;
+	int32_t _roadPainterPreviewAnchorX = 0;
+	int32_t _roadPainterPreviewAnchorZ = 0;
+	int32_t _roadPainterPreviewHoverX = 0;
+	int32_t _roadPainterPreviewHoverZ = 0;
 };
