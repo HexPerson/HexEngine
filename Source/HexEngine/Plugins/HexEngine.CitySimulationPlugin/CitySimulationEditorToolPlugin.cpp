@@ -644,6 +644,177 @@
 
 		scene->ForceRebuildPVS();
 	}
+
+	// Returns the managed-road wrapper at `coord` if one exists in the scene, else nullptr.
+	// O(log N) via Scene::GetEntityByName, which is backed by an std::map<string, Entity*>.
+	// Replaces O(scene) full-scan lookups (GatherManagedRoadCells) for the hot-path
+	// per-coord checks that the incremental paint flow needs.
+	Entity* FindManagedRoadCell(Scene* scene, const GridCoord& coord)
+	{
+		if (scene == nullptr)
+			return nullptr;
+
+		Entity* entity = scene->GetEntityByName(MakeManagedWrapperName(coord));
+		if (entity == nullptr || entity->IsPendingDeletion())
+			return nullptr;
+
+		// GatherManagedRoadCells filters out non-root wrappers; mirror that here so the
+		// incremental path agrees with the full-rebuild path on what counts as "the cell".
+		if (entity->GetParent() != nullptr)
+			return nullptr;
+
+		return entity;
+	}
+
+	// Incremental version of RebuildManagedRoadNetwork. Used by PaintOrthogonalRun and any
+	// other path that adds a small set of new cells onto an existing managed network.
+	//
+	// Cost: O(|runCells|) scene lookups and at most |runCells| + 4*|runCells| entity
+	// respawns - independent of the total network size. Compare with the full rebuild,
+	// which destroys and respawns every existing cell every commit.
+	//
+	// Algorithm:
+	//   1. Touched cells = runCells (cells the new run wants placed) plus every existing
+	//      managed neighbour of a runCell. These are the only cells whose direction mask
+	//      can change as a result of this commit.
+	//   2. For each touched cell, compute the post-commit mask (would-be-existing after
+	//      this run) and, if it already exists, the pre-commit mask. If the masks match
+	//      then the cell's placement is unchanged and we skip it entirely (no destroy,
+	//      no respawn) - this is the optimisation that makes overdrawing the same line
+	//      essentially free.
+	//   3. Stage destroy + respawn decisions before mutating the scene, so the lookups in
+	//      step 2 see a stable pre-commit world. Then commit them in a single pass.
+	void ApplyIncrementalRoadNetworkChange(
+		Scene* scene,
+		const std::vector<GridCoord>& runCells,
+		float anchorHeight,
+		const PlacementSpec& straightSpec,
+		const std::optional<PlacementSpec>& cornerSpec,
+		const std::optional<PlacementSpec>& crossroadSpec,
+		const std::optional<PlacementSpec>& tJunctionSpec,
+		int32_t yawQuarterTurns,
+		float cellSpacing,
+		bool addPhysics)
+	{
+		if (scene == nullptr)
+			return;
+
+		// Match RebuildManagedRoadNetwork's spacing fallback: 0 means "use the raw mesh
+		// length" so callers that haven't computed a scaled cell size still work.
+		const float spacing = (cellSpacing > 0.0f) ? cellSpacing : straightSpec.length;
+
+		// Fast-membership set for cells in this run.
+		std::unordered_set<GridCoord, GridCoordHash> runSet;
+		runSet.reserve(runCells.size());
+		for (const auto& c : runCells)
+			runSet.insert(c);
+
+		// Pre-commit existence: does a CityRoadDraw_ wrapper exist at coord right now?
+		// Cached so we don't repeat name lookups during mask computation.
+		std::unordered_map<GridCoord, Entity*, GridCoordHash> existingByCoord;
+		auto existingBefore = [&](const GridCoord& c) -> Entity*
+		{
+			auto it = existingByCoord.find(c);
+			if (it != existingByCoord.end())
+				return it->second;
+			Entity* e = FindManagedRoadCell(scene, c);
+			existingByCoord.emplace(c, e);
+			return e;
+		};
+
+		auto existsBefore = [&](const GridCoord& c) { return existingBefore(c) != nullptr; };
+		auto existsAfter  = [&](const GridCoord& c) { return existsBefore(c) || runSet.count(c) > 0; };
+
+		auto computeMask = [](const auto& exists, const GridCoord& c) -> uint8_t
+		{
+			uint8_t mask = DirectionNone;
+			if (exists({ c.x, c.z + 1 })) mask |= DirectionNorth;
+			if (exists({ c.x + 1, c.z })) mask |= DirectionEast;
+			if (exists({ c.x, c.z - 1 })) mask |= DirectionSouth;
+			if (exists({ c.x - 1, c.z })) mask |= DirectionWest;
+			return mask;
+		};
+
+		// Touched cells: run cells + run cells' existing-managed neighbours. Bounded by
+		// 5 * |runCells|, so the work scales with the run, not the network.
+		std::unordered_set<GridCoord, GridCoordHash> touched;
+		touched.reserve(runCells.size() * 5);
+		for (const auto& c : runCells)
+		{
+			touched.insert(c);
+			const GridCoord neighbours[4] = {
+				{ c.x, c.z + 1 }, { c.x + 1, c.z }, { c.x, c.z - 1 }, { c.x - 1, c.z }
+			};
+			for (const auto& n : neighbours)
+			{
+				if (existsBefore(n))
+					touched.insert(n);
+			}
+		}
+
+		struct CellAction
+		{
+			GridCoord coord;
+			Entity* existingWrapper;  // nullptr when we're adding a brand-new cell
+			CellPlacement placement;
+			float height;
+		};
+
+		std::vector<CellAction> actions;
+		actions.reserve(touched.size());
+
+		// Phase 1: decide what changes. No scene mutation here, so existsBefore lookups
+		// remain consistent across the whole loop.
+		for (const auto& coord : touched)
+		{
+			Entity* existing = existingBefore(coord);
+			const uint8_t newMask = computeMask(existsAfter, coord);
+
+			if (existing != nullptr)
+			{
+				const uint8_t oldMask = computeMask(existsBefore, coord);
+				if (oldMask == newMask)
+				{
+					// Mask unchanged -> placement chooser would give the same asset+rotation
+					// it produced last time. Skip the destroy+respawn entirely; this is the
+					// hot path when the new run extends a straight line and most neighbours
+					// see no topology change.
+					continue;
+				}
+			}
+
+			CellPlacement placement;
+			if (!TryChoosePlacement(newMask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, placement))
+				continue;
+
+			// Re-use the existing wrapper's height when reshaping an already-placed cell;
+			// only brand-new cells take the anchor height of this run.
+			const float height = (existing != nullptr) ? existing->GetPosition().y : anchorHeight;
+
+			actions.push_back({ coord, existing, placement, height });
+		}
+
+		// Phase 2: apply. Now that all decisions are made, mutating the scene won't
+		// corrupt later lookups.
+		for (const auto& action : actions)
+		{
+			if (action.existingWrapper != nullptr)
+				scene->DestroyEntity(action.existingWrapper);
+
+			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(action.coord), GridToWorld(action.coord, spacing, action.height), action.placement.rotation, math::Vector3(1.0f));
+			if (wrapper == nullptr)
+				continue;
+
+			wrapper->SetCastsShadows(false);
+
+			if (action.placement.isPrefab)
+				SpawnPrefabCell(wrapper, action.placement.assetPath);
+			else
+				SpawnMeshCell(wrapper, action.placement.assetPath, addPhysics);
+
+			scene->FlushPVS(wrapper);
+		}
+	}
 }
 
 CitySimulationEditorToolPlugin::CitySimulationEditorToolPlugin(CitySimulationInterface* citySimulationInterface) :
@@ -765,13 +936,6 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 	if (TryBuildPlacementSpec(_roadPainterCrossroadPath, _roadPainterYawQuarterTurns, tempSpec)) crossroadSpec = tempSpec;
 	if (TryBuildPlacementSpec(_roadPainterTJunctionPath, _roadPainterYawQuarterTurns, tempSpec)) tJunctionSpec = tempSpec;
 
-	// Mirror PaintOrthogonalRun's cell selection. The preview shape decisions need to see
-	// what the network would look like AFTER this run commits, so we union existing managed
-	// cells with the new run cells before computing direction masks.
-	std::unordered_map<GridCoord, float, GridCoordHash> existingHeights;
-	std::vector<HexEngine::Entity*> existingWrappers;
-	GatherManagedRoadCells(scene, existingHeights, existingWrappers);
-
 	std::vector<GridCoord> runCells;
 	const GridCoord start{ _roadPainterAnchorX, _roadPainterAnchorZ };
 	const GridCoord end{ _roadPainterHoverX, _roadPainterHoverZ };
@@ -798,17 +962,35 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		}
 	}
 
-	std::unordered_map<GridCoord, float, GridCoordHash> combinedHeights = existingHeights;
-	for (const auto& coord : runCells)
-	{
-		combinedHeights[coord] = _roadPainterAnchorHeight;
-	}
+	// runSet for fast membership of "is this coord in the new run we're previewing".
+	std::unordered_set<GridCoord, GridCoordHash> runSet;
+	runSet.reserve(runCells.size());
+	for (const auto& c : runCells)
+		runSet.insert(c);
 
 	auto previewMaterial = GetOrCreatePreviewMaterial();
 
-	auto hasCell = [&combinedHeights](const GridCoord& coord) -> bool
+	// Per-coord lookup against the committed network. O(log N) per call via
+	// Scene::GetEntityByName, with a small memo cache so the typical case of asking
+	// "is this neighbour an existing cell?" five times for a 5-cell preview run doesn't
+	// hit the name map dozens of times. This replaces the previous O(scene) full-scan
+	// (GatherManagedRoadCells) that ran on every hover-cell change as the user dragged.
+	std::unordered_map<GridCoord, bool, GridCoordHash> existsCache;
+	auto cellExistsInNetwork = [&](const GridCoord& c) -> bool
 	{
-		return combinedHeights.find(coord) != combinedHeights.end();
+		auto it = existsCache.find(c);
+		if (it != existsCache.end())
+			return it->second;
+		const bool exists = FindManagedRoadCell(scene, c) != nullptr;
+		existsCache.emplace(c, exists);
+		return exists;
+	};
+
+	// Combined existence: in the run, OR an existing committed cell. This is the "future
+	// network state" the preview is trying to visualise.
+	auto hasCell = [&](const GridCoord& coord) -> bool
+	{
+		return runSet.count(coord) > 0 || cellExistsInNetwork(coord);
 	};
 
 	for (const auto& coord : runCells)
@@ -816,8 +998,8 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		// Skip cells that already exist as committed roads - their real (opaque) mesh is
 		// already visible and double-spawning a preview on top would just stack a tinted
 		// copy in the same place. We do NOT update those committed pieces' shapes here;
-		// the commit pass handles that via RebuildManagedRoadNetwork.
-		if (existingHeights.find(coord) != existingHeights.end())
+		// the commit pass handles that via ApplyIncrementalRoadNetworkChange.
+		if (cellExistsInNetwork(coord))
 			continue;
 
 		uint8_t mask = DirectionNone;
@@ -830,15 +1012,22 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, placement))
 			continue;
 
+		// Use the painter's scaled cell spacing (not raw straightSpec.length) so the preview
+		// aligns exactly with where the commit will eventually place the cell - otherwise
+		// the ghost would sit at the raw-mesh spacing while the committed road lands on the
+		// user's scaled grid, and the preview would drift away from the actual placement.
+		const float previewSpacing = (_roadPainterCellSize > 0.0f) ? _roadPainterCellSize : straightSpec.length;
 		const std::string wrapperName = std::format("{}{}_{}", kRoadPainterPreviewPrefix, coord.x, coord.z);
-		auto* wrapper = scene->CreateEntity(wrapperName, GridToWorld(coord, straightSpec.length, _roadPainterAnchorHeight), placement.rotation, math::Vector3(1.0f));
+		auto* wrapper = scene->CreateEntity(wrapperName, GridToWorld(coord, previewSpacing, _roadPainterAnchorHeight), placement.rotation, math::Vector3(1.0f));
 		if (wrapper == nullptr)
 			continue;
 
-		// Track the wrapper FIRST so it leads the destruction order; subsequent
-		// SpawnPreviewMeshCell/PrefabCell appends its children, which get destroyed before
-		// the wrapper itself (we tear down in reverse). That ordering is what matters in
-		// edge cases where a child's RemoveEntityInternal touches parent state.
+		// Push the wrapper FIRST so the forward-order teardown in
+		// DestroyRoadPainterPreviewEntities destroys it before its immediate children. That
+		// order matters: DeleteMe(wrapper) detaches the children (sets _parent=nullptr,
+		// flags them) but does NOT scene-remove them, so we have to destroy each child
+		// explicitly afterwards. Doing it in reverse would `delete` the child before
+		// DeleteMe(wrapper) ran, leaving wrapper->_children with a dangling pointer.
 		_roadPainterPreviewEntities.push_back(wrapper);
 
 		if (placement.isPrefab)
@@ -1184,13 +1373,16 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 	if (scene == nullptr)
 		return;
 
-	std::unordered_map<GridCoord, float, GridCoordHash> heights;
-	std::vector<HexEngine::Entity*> wrappers;
-	GatherManagedRoadCells(scene, heights, wrappers);
-
 	const GridCoord start{ _roadPainterAnchorX, _roadPainterAnchorZ };
 	const GridCoord end{ SnapToGrid(worldPosition.x, _roadPainterCellSize), SnapToGrid(worldPosition.z, _roadPainterCellSize) };
 
+	// Build the orthogonal run as a flat list of cell coordinates. Used to be merged into
+	// a heights map alongside ALL existing managed cells and handed to RebuildManagedRoadNetwork,
+	// which destroyed+respawned every road in the network on every click - O(network size)
+	// per commit, so each successive line drawn got slower as the city grew. Now we keep
+	// the run cells separate and hand them to ApplyIncrementalRoadNetworkChange, which only
+	// touches the new cells and their immediate existing neighbours.
+	std::vector<GridCoord> runCells;
 	const int32_t deltaX = std::abs(end.x - start.x);
 	const int32_t deltaZ = std::abs(end.z - start.z);
 	if (deltaX >= deltaZ)
@@ -1198,7 +1390,7 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 		const int32_t step = end.x >= start.x ? 1 : -1;
 		for (int32_t x = start.x;; x += step)
 		{
-			heights[{ x, start.z }] = _roadPainterAnchorHeight;
+			runCells.push_back({ x, start.z });
 			if (x == end.x)
 				break;
 		}
@@ -1208,7 +1400,7 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 		const int32_t step = end.z >= start.z ? 1 : -1;
 		for (int32_t z = start.z;; z += step)
 		{
-			heights[{ start.x, z }] = _roadPainterAnchorHeight;
+			runCells.push_back({ start.x, z });
 			if (z == end.z)
 				break;
 		}
@@ -1226,7 +1418,7 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 	if (TryBuildPlacementSpec(_roadPainterCrossroadPath, _roadPainterYawQuarterTurns, tempSpec)) crossroadSpec = tempSpec;
 	if (TryBuildPlacementSpec(_roadPainterTJunctionPath, _roadPainterYawQuarterTurns, tempSpec)) tJunctionSpec = tempSpec;
 
-	RebuildManagedRoadNetwork(scene, heights, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, _roadPainterCellSize, _roadPainterAddCollisions);
+	ApplyIncrementalRoadNetworkChange(scene, runCells, _roadPainterAnchorHeight, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, _roadPainterCellSize, _roadPainterAddCollisions);
 
 	_roadPainterAnchorX = end.x;
 	_roadPainterAnchorZ = end.z;
