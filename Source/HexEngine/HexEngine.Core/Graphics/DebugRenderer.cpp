@@ -57,7 +57,10 @@ namespace HexEngine
 	{
 		SAFE_DELETE(_lineVBuffer);
 		SAFE_DELETE(_lineIBuffer);
-	}	
+		SAFE_DELETE(_polyVBuffer);
+		SAFE_DELETE(_polyIBuffer);
+		_debugShader.reset();
+	}
 
 	void DebugRenderer::DrawPolygon(const std::vector<std::pair<math::Vector3, math::Color>>& vertices)
 	{

@@ -22,6 +22,7 @@ namespace HexEngine
 		SAFE_DELETE(_normalTex);
 		SAFE_DELETE(_specularTex);
 		SAFE_DELETE(_positionTex);
+		SAFE_DELETE(_velocityTex);
 		SAFE_DELETE(_depthBuffer);
 
 		_diffuseTex = g_pEnv->_graphicsDevice->CreateTexture2D(

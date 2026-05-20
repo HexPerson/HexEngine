@@ -6,6 +6,7 @@
 #include "../Graphics/GBuffer.hpp"
 #include "../Graphics/BlurEffect.hpp"
 #include "../Graphics/Bloom.hpp"
+#include "../Graphics/AutoExposure.hpp"
 #include "DiffuseGI.hpp"
 #include "GpuVisibilityCulling.hpp"
 #include "../Graphics/TAA.hpp"
@@ -74,7 +75,26 @@ namespace HexEngine
 		void RenderDiffuseGI();
 		void RenderVignette();
 		void SetStreamlineConstants();
-		
+
+		// Gathers the closest point + spot lights in the scene and uploads them to the
+		// forward-lights constant buffer (PS slot b7). Used by the transparency pass so glass /
+		// alpha-blended surfaces can sample the same dynamic lighting as opaque surfaces.
+		void SetupForwardLights();
+
+	public:
+		static constexpr uint32_t kMaxForwardPointLights = 16;
+		static constexpr uint32_t kMaxForwardSpotLights = 16;
+
+		struct ForwardLightConstants
+		{
+			math::Vector4 countsAndParams = math::Vector4::Zero;       // x=pointCount, y=spotCount
+			math::Vector4 reserved = math::Vector4::Zero;
+			math::Vector4 pointPosRadius[kMaxForwardPointLights];
+			math::Vector4 pointColorStrength[kMaxForwardPointLights];
+			math::Vector4 spotPosRadius[kMaxForwardSpotLights];
+			math::Vector4 spotDirCone[kMaxForwardSpotLights];
+			math::Vector4 spotColorStrength[kMaxForwardSpotLights];
+		};
 
 	private:
 		Scene* _currentScene = nullptr;
@@ -130,10 +150,12 @@ namespace HexEngine
 		std::shared_ptr<IShader> _fullScreenQuadShader;
 
 		Bloom* _bloomEffect = nullptr;
+		AutoExposure _autoExposure;
 
 		ITexture3D* _cloudShapeNoise = nullptr;
 		ITexture3D* _cloudDetailNoise = nullptr;
 		IConstantBuffer* _cloudConstantBuffer = nullptr;
+		IConstantBuffer* _forwardLightsBuffer = nullptr;
 		std::shared_ptr<Mesh> _sphereMesh = nullptr;
 		Entity* _sphereEntity = nullptr;
 		std::shared_ptr<Material> _pointLightMaterial;

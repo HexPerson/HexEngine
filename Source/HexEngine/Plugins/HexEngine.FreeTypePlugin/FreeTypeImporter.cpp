@@ -51,12 +51,19 @@ std::shared_ptr<HexEngine::IResource> FreeTypeImporter::LoadResourceFromFile(con
 	
 	for (auto size : importOptions->sizes)
 	{
-		FT_Face face;
+		FT_Face face = nullptr;
 
 		auto error = FT_New_Face(_library,
 			absolutePath.string().c_str(),
 			0,
 			&face);
+
+		if (error != 0 || face == nullptr)
+		{
+			LOG_CRIT("FT_New_Face failed for '%s' (code %d)", absolutePath.string().c_str(), error);
+			font.reset();
+			return nullptr;
+		}
 
 		if (LoadFontInternal(font, face, size, importOptions) == false)
 		{
@@ -90,7 +97,7 @@ std::shared_ptr<HexEngine::IResource> FreeTypeImporter::LoadResourceFromMemory(c
 
 	for (auto size : importOptions->sizes)
 	{
-		FT_Face face;
+		FT_Face face = nullptr;
 
 		auto error = FT_New_Memory_Face(
 			_library,
@@ -98,6 +105,13 @@ std::shared_ptr<HexEngine::IResource> FreeTypeImporter::LoadResourceFromMemory(c
 			data.size(),
 			0,
 			&face);
+
+		if (error != 0 || face == nullptr)
+		{
+			LOG_CRIT("FT_New_Memory_Face failed for '%s' (code %d)", relativePath.string().c_str(), error);
+			font.reset();
+			return nullptr;
+		}
 
 		if (LoadFontInternal(font, face, size, importOptions) == false)
 		{
@@ -410,7 +424,13 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 		D3D11_SRV_DIMENSION_TEXTURE2D);
 
 	if (!atlas)
+	{
+		// Atlas creation failed: face and the staging buffer would otherwise leak because
+		// ownership normally transfers to FreeTypeFont below, which never happens here.
+		FT_Done_Face(face);
+		SAFE_DELETE_ARRAY(pixelData);
 		return false;
+	}
 
 	FreeTypeFont::SizedAtlas sizedAtlas;
 

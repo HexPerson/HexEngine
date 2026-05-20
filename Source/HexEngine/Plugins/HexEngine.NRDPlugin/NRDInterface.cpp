@@ -33,7 +33,15 @@ namespace
 	// pre-blur (e.g. 30+) helps smooth those boundaries before the temporal accumulation locks
 	// them into the history. Bumped from 10 -> 30 to match the new input characteristics.
 	HexEngine::HVar r_nrdRelaxDiffPrepassBlur("r_nrdRelaxDiffPrepassBlur", "RELAX diffuse prepass blur radius", 30.0f, 0.0f, 70.0f);
-	HexEngine::HVar r_nrdRelaxSpecPrepassBlur("r_nrdRelaxSpecPrepassBlur", "RELAX specular prepass blur radius", 24.0f, 0.0f, 70.0f);
+	// Specular prepass blur. NRD scales this internally by roughness via GetSpecMagicCurve, so
+	// mirror surfaces (roughness 0) get ~0 effective blur (stay sharp) while glossy surfaces
+	// get progressively wider blur. This is constant-per-frame spatial smoothing that doesn't
+	// decay with history length - which fixes a NRD pathology where the a-trous filter's
+	// variance estimate drops as history accumulates and the per-pixel cone-perturbation noise
+	// (small but real, ~1deg at smoothness 0.85) starts to show through on stationary cameras.
+	// During motion the specular virtual-MV reprojection covers for this implicitly, which is
+	// why moving reflections look smoother than stationary ones without the prepass blur.
+	HexEngine::HVar r_nrdRelaxSpecPrepassBlur("r_nrdRelaxSpecPrepassBlur", "RELAX specular prepass blur radius (scaled internally by roughness)", 24.0f, 0.0f, 70.0f);
 	// At 1.0 the 5x5 neighbourhood mean+/-sigma clamp on accumulated history was too tight for
 	// our high-contrast specular signal (bright windows + dark frames at adjacent pixels). The
 	// clamp rejected accumulated history every frame, preventing convergence and showing as
@@ -923,7 +931,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			specFastFrames = 8;
 			historyFixFrames = 0;
 			diffPrepassBlur = 50.0f; // wide blur for voxel-cone-trace cell boundaries
-			specPrepassBlur = 0.0f;
+			specPrepassBlur = 32.0f; // roughness-scaled by NRD internally; mirrors stay sharp
 			historyClampSigma = 6.0f;
 			lobeAngleFraction = 0.45f;
 			roughnessFraction = 0.15f;
@@ -964,7 +972,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			specFastFrames = 6;
 			historyFixFrames = 0;
 			diffPrepassBlur = 30.0f; // smooth voxel-GI cone trace cell boundaries
-			specPrepassBlur = 0.0f;
+			specPrepassBlur = 24.0f; // roughness-scaled by NRD internally; mirrors stay sharp
 			historyClampSigma = 4.0f;
 			lobeAngleFraction = 0.35f;
 			roughnessFraction = 0.12f;
@@ -987,7 +995,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 			specFastFrames = 4;
 			historyFixFrames = 0;
 			diffPrepassBlur = 20.0f; // moderate blur for voxel-cone-trace cell boundaries
-			specPrepassBlur = 0.0f;
+			specPrepassBlur = 16.0f; // roughness-scaled by NRD internally; mirrors stay sharp
 			historyClampSigma = 3.0f;
 			lobeAngleFraction = 0.25f;
 			roughnessFraction = 0.10f;

@@ -124,15 +124,20 @@ HRESULT Streamline::CreateDXGIFactory1(REFIID riid, _COM_Outptr_ void** ppFactor
 
 	IDXGIFactory1* pFactory = reinterpret_cast<IDXGIFactory1*>(*ppFactory);
 
-	IDXGIAdapter* adapter;
+	IDXGIAdapter* adapter = nullptr;
 	uint32_t i = 0;
 	while (pFactory->EnumAdapters(i, &adapter) != DXGI_ERROR_NOT_FOUND)
 	{
 		DXGI_ADAPTER_DESC desc{};
 		if (SUCCEEDED(adapter->GetDesc(&desc)))
 		{
+			// Copy the LUID into a local with a stable address before handing a pointer to
+			// Streamline. The original code pointed at desc.AdapterLuid directly which is
+			// safe only as long as slIsFeatureSupported is synchronous; copying decouples
+			// us from that assumption.
+			LUID luid = desc.AdapterLuid;
 			sl::AdapterInfo adapterInfo{};
-			adapterInfo.deviceLUID = (uint8_t*)&desc.AdapterLuid;
+			adapterInfo.deviceLUID = reinterpret_cast<uint8_t*>(&luid);
 			adapterInfo.deviceLUIDSizeInBytes = sizeof(LUID);
 
 			if (SL_FAILED(result, slIsFeatureSupported(sl::kFeatureDLSS, adapterInfo)))
@@ -155,6 +160,10 @@ HRESULT Streamline::CreateDXGIFactory1(REFIID riid, _COM_Outptr_ void** ppFactor
 				_supportedFeatures |= HexEngine::StreamlineFeature::NRD;
 			}
 		}
+
+		// EnumAdapters returns an implicit-AddRef'd pointer; release it before next iteration.
+		adapter->Release();
+		adapter = nullptr;
 		i++;
 	}
 

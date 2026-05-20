@@ -357,6 +357,11 @@ namespace HexEngine
 			_cloudConstantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(CloudConstants));
 		}
 
+		if (_forwardLightsBuffer == nullptr)
+		{
+			_forwardLightsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(ForwardLightConstants));
+		}
+
 		if (_cloudShapeNoise == nullptr || _cloudDetailNoise == nullptr)
 		{
 			const int32_t shapeResolution = 96;
@@ -371,6 +376,7 @@ namespace HexEngine
 		}
 
 		_gpuVisibilityCulling.Create();
+		_autoExposure.Create();
 	}
 
 	void SceneRenderer::Resize(int32_t width, int32_t height)
@@ -432,8 +438,10 @@ namespace HexEngine
 		SAFE_DELETE(_cloudShapeNoise);
 		SAFE_DELETE(_cloudDetailNoise);
 		SAFE_DELETE(_cloudConstantBuffer);
+		SAFE_DELETE(_forwardLightsBuffer);
 		_gpuVisibilityCulling.Destroy();
-		
+		_autoExposure.Destroy();
+
 		//SAFE_DELETE(_waterDSV);
 
 		//SAFE_DELETE(_volumetricBlur);
@@ -1071,7 +1079,9 @@ namespace HexEngine
 
 			bufferData._colourGrading.colourFilter = r_colourFilter._val.v3;
 			bufferData._colourGrading.contrast = r_contrast._val.f32;
-			bufferData._colourGrading.exposure = r_exposure._val.f32;
+			// Auto exposure multiplies into the user-set r_exposure. When auto exposure is
+			// disabled the multiplier is 1.0, so r_exposure passes through unchanged.
+			bufferData._colourGrading.exposure = r_exposure._val.f32 * _autoExposure.GetExposureMultiplier();
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
@@ -1147,7 +1157,67 @@ namespace HexEngine
 			bufferData._atmosphere.fogFarAtmosphereMatchStrength = r_fogFarAtmosphereMatchStrength._val.f32;
 			bufferData._atmosphere.fog_pad0 = 0.0f;
 
-			bufferData._atmosphere.ambientLight = _currentScene->GetAmbientColour();
+			// Sunset/night-aware ambient + fog/atmosphere modulation.
+			//
+			// Background: the weather plugin's presets are tuned for daylight conditions -
+			// fog densities of 0.004-0.009 (vs scene default 0.003), Mie strengths of 1.45-
+			// 2.45 (vs default 1.0). At night those values still drive AtmospherePhysical's
+			// inscatter integration, and combined with the `max(g_globalLight[0], 0.35f) *
+			// 19.4f` sun-floor inside that integration, the resulting `physicalFogColour` in
+			// PostFog stays much brighter than appropriate for a night scene. Visible
+			// symptom: a flat white/whitewash fog at night when the weather component is
+			// enabled, even though no weather is enabled the scene-default fog looks fine.
+			//
+			// Fix: at the single point where atmosphere parameters enter the per-frame
+			// cbuffer, modulate them by the same sun-elevation curve I use for ambient.
+			//   - Ambient tints warm at sunset, cool at night (PostFog also reads this as
+			//     ambientFogBase so fog colour matches).
+			//   - Fog density, height-density and Mie strength are scaled down at night so
+			//     daylight-tuned presets don't blow out the night sky.
+			{
+				const math::Vector4 staticAmbient = _currentScene->GetAmbientColour();
+				const float sunElevation = -lightDir.y; // lightDir points from sun to scene; -y -> sun above horizon
+				const float sunsetRange = 0.30f;        // matches r_fogSunsetRange default; tunable later if needed
+				const float sunsetWeight = std::clamp((sunsetRange - sunElevation) / sunsetRange, 0.0f, 1.0f)
+				                           * (1.0f - std::clamp((-0.02f - sunElevation) / 0.10f, 0.0f, 1.0f));
+				const float nightWeight = std::clamp((-sunElevation + 0.02f) / 0.20f, 0.0f, 1.0f);
+
+				// --- Ambient tint ---
+				// Warm and cool tints applied multiplicatively so the preset's brightness
+				// envelope is preserved - only the hue shifts.
+				const math::Vector3 warmTint(1.40f, 0.78f, 0.50f);
+				const math::Vector3 coolNightTint(0.55f, 0.65f, 0.95f);
+
+				const float sunsetW = std::min(0.85f, sunsetWeight * env_sunsetWarmStrength._val.f32 * 0.85f);
+				const float nightW  = std::min(0.85f, nightWeight  * env_sunsetCoolStrength._val.f32 * 0.65f);
+
+				math::Vector3 ambientRgb(staticAmbient.x, staticAmbient.y, staticAmbient.z);
+				const math::Vector3 ambientWarm(ambientRgb.x * warmTint.x, ambientRgb.y * warmTint.y, ambientRgb.z * warmTint.z);
+				ambientRgb.x = ambientRgb.x + (ambientWarm.x - ambientRgb.x) * sunsetW;
+				ambientRgb.y = ambientRgb.y + (ambientWarm.y - ambientRgb.y) * sunsetW;
+				ambientRgb.z = ambientRgb.z + (ambientWarm.z - ambientRgb.z) * sunsetW;
+
+				const math::Vector3 ambientCool(ambientRgb.x * coolNightTint.x, ambientRgb.y * coolNightTint.y, ambientRgb.z * coolNightTint.z);
+				ambientRgb.x = ambientRgb.x + (ambientCool.x - ambientRgb.x) * nightW;
+				ambientRgb.y = ambientRgb.y + (ambientCool.y - ambientRgb.y) * nightW;
+				ambientRgb.z = ambientRgb.z + (ambientCool.z - ambientRgb.z) * nightW;
+
+				bufferData._atmosphere.ambientLight = math::Vector4(ambientRgb.x, ambientRgb.y, ambientRgb.z, staticAmbient.w);
+
+				// --- Fog / atmosphere dimming at night ---
+				// At night, dim the parameters that drive PostFog's physical inscatter so
+				// daylight-tuned weather presets don't produce a bright fog whiteout. We don't
+				// zero them out (fog should still be visible at night, just darker) - 60%
+				// scale at deep night is the sweet spot that keeps fog readable without
+				// looking artificial.
+				const float fogNightDim = 1.0f - nightWeight * 0.60f;     // -> 0.40 at deep night
+				const float mieNightDim = 1.0f - nightWeight * 0.55f;     // -> 0.45 at deep night
+				const float densityNightDim = 1.0f - nightWeight * 0.45f; // -> 0.55 at deep night
+				bufferData._atmosphere.fogDensity       *= fogNightDim;
+				bufferData._atmosphere.fogHeightDensity *= fogNightDim;
+				bufferData._atmosphere.mieStrength      *= mieNightDim;
+				bufferData._atmosphere.density          *= densityNightDim;
+			}
 
 			bufferData._atmosphere.volumetricScattering = env_volumetricScattering._val.f32;
 			bufferData._atmosphere.volumetricStrength = env_volumetricStrength._val.f32;
@@ -1703,6 +1773,30 @@ namespace HexEngine
 			if (!r_profileDisableBloom._val.b)
 			{
 				_bloomEffect->Render(_currentCamera, _beautyRT, _beautyRT);
+			}
+
+			// Auto exposure: sample the post-bloom beauty for adaptive eye-adaption metering.
+			// Runs after bloom so bright bloom glare is counted by the meter (matching how
+			// the viewer perceives the scene); runs before colour grading so the resulting
+			// multiplier can be applied via r_exposure in the per-frame buffer.
+			//
+			// Passing sun elevation lets AutoExposure switch its target luma and max
+			// multiplier to night-time values as the sun descends - without this, the meter
+			// drives a dark night scene back up toward daytime middle-grey, undoing the
+			// authored mood entirely.
+			{
+				const float dt = (g_pEnv && g_pEnv->_timeManager)
+					? std::clamp(static_cast<float>(g_pEnv->_timeManager->_frameTime), 0.0f, 0.1f)
+					: (1.0f / 60.0f);
+				float sunElevation = 1.0f;
+				if (auto* sunLight = _currentScene ? _currentScene->GetSunLight() : nullptr)
+				{
+					if (auto* sunTransform = sunLight->GetEntity() ? sunLight->GetEntity()->GetComponent<Transform>() : nullptr)
+					{
+						sunElevation = -sunTransform->GetForward().y;
+					}
+				}
+				_autoExposure.Update(_beautyRT, dt, sunElevation);
 			}
 			
 			//_beautyRT->GetPixels(_denoiseFD.colour);
@@ -2295,15 +2389,83 @@ namespace HexEngine
 	}
 #endif
 
+	void SceneRenderer::SetupForwardLights()
+	{
+		if (_forwardLightsBuffer == nullptr || _currentScene == nullptr)
+			return;
+
+		ForwardLightConstants data = {};
+		uint32_t pointCount = 0;
+		uint32_t spotCount = 0;
+
+		// Point lights: same selection rule the deferred path uses (skip empties / zero-alpha).
+		// Capped at kMaxForwardPointLights — anything beyond is dropped silently.
+		std::vector<PointLight*> pointLights;
+		if (_currentScene->GetComponents<PointLight>(pointLights))
+		{
+			for (auto* light : pointLights)
+			{
+				if (light == nullptr || light->GetEntity() == nullptr || light->GetEntity()->IsPendingDeletion())
+					continue;
+				const auto diffuse = light->GetDiffuseColour();
+				if (diffuse.w <= 0.0f)
+					continue;
+				if (pointCount >= kMaxForwardPointLights)
+					break;
+
+				const auto pos = light->GetEntity()->GetPosition();
+				const float radius = std::max(0.05f, light->GetRadius());
+				const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+
+				data.pointPosRadius[pointCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
+				data.pointColorStrength[pointCount] = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
+				++pointCount;
+			}
+		}
+
+		std::vector<SpotLight*> spotLights;
+		if (_currentScene->GetComponents<SpotLight>(spotLights))
+		{
+			for (auto* light : spotLights)
+			{
+				if (light == nullptr || light->GetEntity() == nullptr || light->GetEntity()->IsPendingDeletion())
+					continue;
+				const auto diffuse = light->GetDiffuseColour();
+				if (diffuse.w <= 0.0f)
+					continue;
+				if (spotCount >= kMaxForwardSpotLights)
+					break;
+
+				auto* lightEnt = light->GetEntity();
+				const auto pos = lightEnt->GetWorldTM().Translation();
+				const auto fwd = lightEnt->GetWorldTM().Forward();
+				const float radius = std::max(0.05f, light->GetRadius());
+				const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+				// cos(half-cone-angle); shader uses smoothstep around this for soft falloff.
+				const float cosHalfCone = std::cos(ToRadian(std::max(0.1f, light->GetConeSize()) * 0.5f));
+
+				data.spotPosRadius[spotCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
+				data.spotDirCone[spotCount] = math::Vector4(fwd.x, fwd.y, fwd.z, cosHalfCone);
+				data.spotColorStrength[spotCount] = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
+				++spotCount;
+			}
+		}
+
+		data.countsAndParams = math::Vector4(static_cast<float>(pointCount), static_cast<float>(spotCount), 0.0f, 0.0f);
+		_forwardLightsBuffer->Write(&data, sizeof(data));
+	}
+
 	void SceneRenderer::RenderTransparent()
 	{
 		PROFILE();
 
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin Transparent");
 
-		// Transparent shaders (notably water) sample the beauty texture.
-		// Render transparency into a separate RT to avoid SRV/RTV hazards on _beautyRT.
-		if (_waterRT)
+		// Transparent shaders (notably water, but also any alpha-blended mesh) sample the
+		// beauty texture for reflection / refraction. Render transparency into a separate RT
+		// to avoid SRV/RTV hazards on _beautyRT, then copy back at the end.
+		const bool haveSnapshotForReflection = (_waterRT != nullptr);
+		if (haveSnapshotForReflection)
 		{
 			_beautyRT->CopyTo(_waterRT);
 			g_pEnv->_graphicsDevice->SetRenderTarget(_waterRT, _gbuffer.GetDepthBuffer());
@@ -2313,10 +2475,47 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
 		}
 
+		// Populate b7 with the current frame's dynamic point/spot lights so transparent meshes
+		// can do forward PBR lighting (Default.shader transparency path samples this).
+		SetupForwardLights();
+		if (_forwardLightsBuffer != nullptr)
+		{
+			g_pEnv->_graphicsDevice->SetConstantBufferPS(7, _forwardLightsBuffer);
+		}
+
+		// Bind the opaque scene colour (snapshot from CopyTo above) and the G-buffer normal/
+		// position so the transparency shader can do an inline SSR ray-march. Material
+		// textures live at t0..t7; slot 11 (depth) is left empty because the depth buffer is
+		// currently bound as DSV and the engine's hazard handler would unbind our render
+		// target. The shader reads view-space depth from the normal texture's .w channel.
+		if (haveSnapshotForReflection && _beautyRT != nullptr)
+			g_pEnv->_graphicsDevice->SetTexture2D(10, _beautyRT);
+		if (_gbuffer.GetNormal() != nullptr)
+			g_pEnv->_graphicsDevice->SetTexture2D(12, _gbuffer.GetNormal());
+		if (_gbuffer.GetPosition() != nullptr)
+			g_pEnv->_graphicsDevice->SetTexture2D(13, _gbuffer.GetPosition());
+
+		// CRITICAL: SetTexture2D(slot, ...) advances the device's "next implicit slot" counter.
+		// Scene::RenderEntities reads that counter to decide where to bind each mesh's
+		// material textures (albedo/normal/etc at t0..t7). If we leave the counter at 14,
+		// materials end up at t14..t21 and the shader reads garbage from t0..t7 (whole frame
+		// renders desaturated / black). Reset it now — the SRVs at slots 10/12/13 remain bound.
+		g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+
 		_currentScene->RenderEntities(
 			_currentCamera->GetPVS(),
 			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass) | LAYERMASK(Layer::Water),
 			MeshRenderFlags::MeshRenderTransparency);
+
+		// Unbind so the next pass doesn't get a stale SRV (and to silence the D3D11 debug
+		// layer when these textures are reused as render targets later in the frame). Then
+		// reset the counter to whatever RenderEntities left it at — explicit-slot binds bump
+		// the counter and we don't want the fog/post-process passes to inherit slot 14.
+		const uint32_t postMaterialIndex = g_pEnv->_graphicsDevice->GetBoundResourceIndex();
+		g_pEnv->_graphicsDevice->SetTexture2D(10, nullptr);
+		g_pEnv->_graphicsDevice->SetTexture2D(12, nullptr);
+		g_pEnv->_graphicsDevice->SetTexture2D(13, nullptr);
+		g_pEnv->_graphicsDevice->SetBoundResourceIndex(postMaterialIndex);
 
 		if (g_pEnv && g_pEnv->_particleWorldSystem)
 		{
@@ -2511,7 +2710,21 @@ namespace HexEngine
 
 			// Bind voxel GI clipmaps + GIConstants (b4) so SSR can fall back to GI on miss.
 			// Continues from slot t9 (gbuffer=0-4, beauty=5, noise=6, history=7, velocity=8).
-			_diffuseGi.BindVoxelsForReflection();
+			//
+			// Critically: only bind when GI is actually enabled. DiffuseGI::Update/Render both
+			// early-return when r_giEnable is false, so the voxel textures freeze at whatever
+			// state they had when GI was last on - including any bright/saturated patches that
+			// were accumulating at that moment. If we kept binding them here, SSR's fallback
+			// would keep sampling that stale data forever and produce a persistent coloured
+			// blowout on terrain/walls even after the user disabled GI. By skipping the bind
+			// the SSR shader sees unbound voxel SRVs which sample as black, so the GI fallback
+			// path naturally returns zero contribution.
+			HVar* giEnableVar = g_pEnv->_commandManager->FindHVar("r_giEnable");
+			const bool giEnabled = (giEnableVar != nullptr) ? giEnableVar->_val.b : true;
+			if (giEnabled)
+			{
+				_diffuseGi.BindVoxelsForReflection();
+			}
 
 			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader.get());
 

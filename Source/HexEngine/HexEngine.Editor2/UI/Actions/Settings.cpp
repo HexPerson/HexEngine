@@ -296,6 +296,18 @@ namespace HexEditor
 		addFloatControl(pm->_colouring, "r_exposure", L"Exposure", 0.01f, 3);
 		addFloatControl(pm->_colouring, "r_hueShift", L"Hue Shift", 0.01f, 3);
 		addFloatControl(pm->_colouring, "r_saturation", L"Saturatuin", 0.01f, 3);
+		// Auto exposure controls. r_exposure above acts as a manual offset multiplied into the
+		// auto-exposure result when r_autoExposure is on; when r_autoExposure is off, r_exposure
+		// is the only exposure factor and the auto pass is bypassed entirely.
+		addToggleControl(pm->_colouring, "r_autoExposure", L"Auto Exposure");
+		addFloatControl(pm->_colouring, "r_autoExposureTargetLuma", L"Auto Exposure Target Luma", 0.01f, 3);
+		addFloatControl(pm->_colouring, "r_autoExposureMin", L"Auto Exposure Min", 0.01f, 3);
+		addFloatControl(pm->_colouring, "r_autoExposureMax", L"Auto Exposure Max", 0.05f, 3);
+		addFloatControl(pm->_colouring, "r_autoExposureSpeed", L"Auto Exposure Adapt Speed", 0.05f, 2);
+		addIntControl(pm->_colouring, "r_autoExposureSampleStride", L"Auto Exposure Sample Stride", 1);
+		addFloatControl(pm->_colouring, "r_autoExposureNightTargetLuma", L"Auto Exposure Night Target Luma", 0.005f, 3);
+		addFloatControl(pm->_colouring, "r_autoExposureNightMax", L"Auto Exposure Night Max", 0.05f, 2);
+		addToggleControl(pm->_colouring, "r_autoExposureDebug", L"Auto Exposure Debug Log");
 
 		pm->_fog = makeSectionTab(L"Fog", L"Fog");
 		addToggleControl(pm->_fog, "r_fog", L"Fog on/off");
@@ -367,6 +379,10 @@ namespace HexEditor
 		addFloatControl(gi, "r_giUnlitAlbedoInjection", L"Unlit Albedo Injection", 0.01f, 3);
 		addFloatControl(gi, "r_giAlbedoBleedBoost", L"Albedo Bleed Boost", 0.05f, 3);
 		addFloatControl(gi, "r_giColourBleedStrength", L"Colour Bleed Strength", 0.05f, 3);
+		addFloatControl(gi, "r_giBounceAlbedoMinLuma", L"Bounce Min. Luma", 0.01f, 3);
+		addFloatControl(gi, "r_giBounceAlbedoRemapAmount", L"Bounce Remap Amount", 0.01f, 3);
+		addFloatControl(gi, "r_giReceiverMinLuma", L"Receiver Min Luma", 0.01f, 3);
+		addFloatControl(gi, "r_giReceiverRemapAmount", L"Receiver Remap Amount", 0.01f, 3);
 		addFloatControl(gi, "r_giEmissiveInjection", L"Emissive Injection", 0.01f, 3);
 		addFloatControl(gi, "r_giLocalLightInjection", L"Local Light Injection", 0.01f, 3);
 		addToggleControl(gi, "r_giDebugDisableLocalLightInjection", L"Debug Disable Local Light Injection");

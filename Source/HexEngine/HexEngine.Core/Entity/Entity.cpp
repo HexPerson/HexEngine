@@ -540,11 +540,25 @@ namespace HexEngine
 
 	const math::Matrix& Entity::GetWorldTM()
 	{
+		// Per-frame advancement of _cachedWorldTMPrev. Without this, the only thing that
+		// updates prev is the cache-miss path below (triggered by a TransformChanged
+		// message), so any entity that moved once and then stopped keeps emitting its
+		// pre-move world as "previous" forever - and the GBuffer velocity for that entity
+		// reads as a large phantom motion vector every static frame. Under TAA this
+		// reprojects history onto the wrong screen position and shows up as a persistent
+		// ghost trail. By gating on the engine's frame counter we update prev exactly once
+		// per frame regardless of how many times GetWorldTM() is called, so the first call
+		// of frame N captures "where the entity was at the end of frame N-1" and subsequent
+		// calls in the same frame don't clobber it (which would zero out velocity mid-frame
+		// for legitimately animating entities).
+		const uint64_t currentFrame = (g_pEnv && g_pEnv->_timeManager)
+			? static_cast<uint64_t>(g_pEnv->_timeManager->_frameCount)
+			: 0;
+		const bool firstAccessThisFrame = (currentFrame != _prevTMFrame);
+
 		if (!_hasCachedWorldTM)
 		{
 			auto transform = GetLocalTM();
-
-			//math::Vector3 position = transform->GetRenderPosition();
 
 			auto parent = GetParent();
 
@@ -553,32 +567,39 @@ namespace HexEngine
 				transform *= parent->GetLocalTM();
 				parent = parent->GetParent();
 			}
-				//position += GetParent()->GetComponent<Transform>()->GetRenderPosition();
-
-			//position += _renderOffset;
-
-			//_cachedWorldTM = math::Matrix::CreateScale(transform->GetScale()) * math::Matrix::CreateWorld(transform->GetPosition(), transform->GetForward() /*math::Vector3::Transform(math::Vector3::Forward, transform->GetRotation())*/, math::Vector3::Up);
-
-			//_cachedWorldTM = math::Matrix::CreateScale(transform->GetScale()) * math::Matrix::CreateWorld(transform->GetPosition(), math::Vector3::Transform(math::Vector3::Forward, transform->GetRotation()), math::Vector3::Up);
 
 			if (HasFlag(EntityFlags::PreviousTransformDirty))
 			{
 				_cachedWorldTMPrev = transform;
 				ClearFlags(EntityFlags::PreviousTransformDirty);
 			}
-			else
+			else if (firstAccessThisFrame)
+			{
+				// First time we're touching this entity this frame and the cache was
+				// invalid - capture the pre-update value as prev so velocity correctly
+				// represents end-of-last-frame -> this-frame motion.
 				_cachedWorldTMPrev = _cachedWorldTM;
+			}
+			// else: cache was already invalidated and recomputed earlier this same frame
+			// (e.g. mid-frame transform change). Keep the prev we already captured for
+			// this frame, otherwise we'd overwrite it with the just-modified _cachedWorldTM
+			// and lose the velocity signal.
 
 			_cachedWorldTMPrevTranspose = _cachedWorldTMPrev.Transpose();
-
-			
-			_cachedWorldTM = transform;// math::Matrix::CreateScale(transform->GetScale())* math::Matrix::CreateFromQuaternion(transform->GetRenderRotation())* math::Matrix::CreateWorld(position, math::Vector3::Forward, math::Vector3::Up);
-
-			
-
+			_cachedWorldTM = transform;
 			_hasCachedWorldTM = true;
 		}
+		else if (firstAccessThisFrame)
+		{
+			// Cache hit on the first call of a new frame: entity didn't move between this
+			// frame and the previous one, so prev should equal current (zero velocity).
+			// Without this, prev stays at whatever value it was set to the last time the
+			// cache was invalidated, which produces the stale-prev phantom-velocity bug.
+			_cachedWorldTMPrev = _cachedWorldTM;
+			_cachedWorldTMPrevTranspose = _cachedWorldTMPrev.Transpose();
+		}
 
+		_prevTMFrame = currentFrame;
 		return _cachedWorldTM;
 	}
 

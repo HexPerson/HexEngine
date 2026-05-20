@@ -104,9 +104,151 @@
 	Texture2D g_opacityMap : register(t6);
 	Texture2D g_ambientOcclusionMap : register(t7);
 
+	// Screen-space inputs for transparency-phase PBR (bound by SceneRenderer::RenderTransparent).
+	Texture2D g_sceneColourTex   : register(t10);
+	Texture2D g_sceneDepthTex    : register(t11);
+	Texture2D g_sceneNormalTex   : register(t12);
+	Texture2D g_scenePositionTex : register(t13);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
+
+	cbuffer ForwardLightsBuffer : register(b7)
+	{
+		float4 g_fwdCountsAndParams;
+		float4 g_fwdReserved;
+		float4 g_fwdPointPosRadius[16];
+		float4 g_fwdPointColorStrength[16];
+		float4 g_fwdSpotPosRadius[16];
+		float4 g_fwdSpotDirCone[16];
+		float4 g_fwdSpotColorStrength[16];
+	};
+
+	// Direct-only PBR (no ambient). See DefaultPixel.shader for full notes; same body.
+	float3 PBRDirectLight(float3 worldPos, float3 worldNormal, float3 baseColour,
+		float metalness, float perceptualRoughness, float3 L, float3 lightColour, float attenuation)
+	{
+		metalness = saturate(metalness);
+		perceptualRoughness = clamp(perceptualRoughness, MinRoughness, 1.0f);
+		perceptualRoughness = ApplySpecularAntiAliasing(worldNormal, perceptualRoughness);
+		const float alphaRoughness = perceptualRoughness * perceptualRoughness;
+
+		const float3 diffuseColor = (baseColour * (float3(1.0f, 1.0f, 1.0f) - f0)) * (1.0f - metalness);
+		const float3 specularColor = lerp(f0, baseColour, metalness);
+		const float reflectance = max(max(specularColor.r, specularColor.g), specularColor.b);
+		const float reflectance90 = saturate(reflectance * 25.0f);
+		const float3 R0 = specularColor;
+		const float3 R90 = float3(1.0f, 1.0f, 1.0f) * reflectance90;
+
+		const float3 V = normalize(g_eyePos.xyz - worldPos);
+		const float3 H = normalize(L + V);
+		const float NdotL = clamp(dot(worldNormal, L), 0.001f, 1.0f);
+		const float NdotV = abs(dot(worldNormal, V)) + 0.001f;
+		const float NdotH = saturate(dot(worldNormal, H));
+		const float VdotH = saturate(dot(V, H));
+
+		const float3 F = specularReflection(R0, R90, VdotH);
+		const float G = geometricOcclusion(NdotL, NdotV, alphaRoughness);
+		const float D = microfacetDistribution(NdotH, alphaRoughness);
+		const float3 diffuseContrib = (1.0f - F) * diffuse(diffuseColor);
+		const float3 specContrib = F * G * D / (4.0f * NdotL * NdotV);
+		return NdotL * lightColour * attenuation * (diffuseContrib + specContrib);
+	}
+
+	float3 AccumulateForwardLights_PBR(float3 worldPos, float3 worldNormal, float3 baseColour,
+		float metalness, float roughness)
+	{
+		float3 accum = float3(0.0f, 0.0f, 0.0f);
+		const uint pointCount = min((uint)g_fwdCountsAndParams.x, 16u);
+		[loop]
+		for (uint pi = 0u; pi < pointCount; ++pi)
+		{
+			const float3 lightPos = g_fwdPointPosRadius[pi].xyz;
+			const float radius = max(0.05f, g_fwdPointPosRadius[pi].w);
+			const float3 toLight = lightPos - worldPos;
+			const float distSq = dot(toLight, toLight);
+			const float radiusSq = radius * radius;
+			if (distSq >= radiusSq)
+				continue;
+			const float dist = sqrt(max(1e-6f, distSq));
+			const float3 L = toLight / dist;
+			float atten = saturate(1.0f - distSq / radiusSq);
+			atten *= atten;
+			const float3 colour = g_fwdPointColorStrength[pi].rgb * g_fwdPointColorStrength[pi].w;
+			accum += PBRDirectLight(worldPos, worldNormal, baseColour, metalness, roughness,
+				L, colour, atten);
+		}
+
+		const uint spotCount = min((uint)g_fwdCountsAndParams.y, 16u);
+		[loop]
+		for (uint si = 0u; si < spotCount; ++si)
+		{
+			const float3 lightPos = g_fwdSpotPosRadius[si].xyz;
+			const float radius = max(0.05f, g_fwdSpotPosRadius[si].w);
+			const float3 toLight = lightPos - worldPos;
+			const float distSq = dot(toLight, toLight);
+			const float radiusSq = radius * radius;
+			if (distSq >= radiusSq)
+				continue;
+			const float dist = sqrt(max(1e-6f, distSq));
+			const float3 L = toLight / dist;
+			const float3 spotFwd = normalize(g_fwdSpotDirCone[si].xyz);
+			const float coneCos = g_fwdSpotDirCone[si].w;
+			const float cosAngle = dot(-L, spotFwd);
+			const float coneAtten = smoothstep(coneCos, saturate(coneCos + 0.08f), cosAngle);
+			if (coneAtten <= 0.0f)
+				continue;
+			float atten = saturate(1.0f - distSq / radiusSq);
+			atten *= atten * coneAtten;
+			const float3 colour = g_fwdSpotColorStrength[si].rgb * g_fwdSpotColorStrength[si].w;
+			accum += PBRDirectLight(worldPos, worldNormal, baseColour, metalness, roughness,
+				L, colour, atten);
+		}
+
+		return accum;
+	}
+
+	bool TraceTransparentSSR(float3 surfaceWorldPos, float3 reflectDirWorld, float roughness,
+		out float3 reflectedColour, out float hitConfidence)
+	{
+		reflectedColour = float3(0.0f, 0.0f, 0.0f);
+		hitConfidence = 0.0f;
+		if (roughness > 0.85f)
+			return false;
+
+		const int kMaxSteps = 48;
+		const float kStrideWorld = 0.12f;
+		const float kThicknessWorld = 0.35f;
+		const float distFromEye = length(g_eyePos.xyz - surfaceWorldPos);
+		const float strideWorld = kStrideWorld * max(0.5f, distFromEye * 0.08f);
+
+		float3 rayPos = surfaceWorldPos + reflectDirWorld * (strideWorld * 0.5f);
+		[loop]
+		for (int step = 0; step < kMaxSteps; ++step)
+		{
+			rayPos += reflectDirWorld * strideWorld;
+			const float4 clip = mul(float4(rayPos, 1.0f), g_viewProjectionMatrix);
+			if (clip.w <= 0.0f)
+				return false;
+			const float2 ndc = clip.xy / clip.w;
+			if (any(abs(ndc) > 1.0f))
+				return false;
+			const float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+			const float rayViewZ = -mul(float4(rayPos, 1.0f), g_viewMatrix).z;
+			const float sceneViewZ = g_sceneNormalTex.SampleLevel(g_textureSampler, uv, 0).w;
+			if (sceneViewZ <= 0.0f || sceneViewZ >= g_frustumDepths[3] * 0.999f)
+				continue;
+			const float dz = rayViewZ - sceneViewZ;
+			if (dz > 0.0f && dz < kThicknessWorld)
+			{
+				reflectedColour = g_sceneColourTex.SampleLevel(g_textureSampler, uv, 0).rgb;
+				const float2 edgeFade = smoothstep(0.0f, 0.1f, uv) * smoothstep(0.0f, 0.1f, 1.0f - uv);
+				hitConfidence = saturate(edgeFade.x * edgeFade.y);
+				return true;
+			}
+		}
+		return false;
+	}
 
 	GBufferOut ShaderMain(MeshPixelInput input)
 	{
@@ -218,7 +360,7 @@
 
 		if (g_material.isInTransparencyPhase != 0)
 		{
-			const float4 litSurface = CalculatePBRSurface(
+			const float4 sunLit = CalculatePBRSurface(
 				metalness,
 				roughness,
 				worldNormal,
@@ -228,7 +370,31 @@
 				albedo.rgb,
 				1.0f,
 				g_globalLight[0]);
-			finalRGB = litSurface.rgb + (g_material.emissiveColour.rgb * g_material.emissiveColour.a * emission);
+
+			const float3 forwardDirect = AccumulateForwardLights_PBR(input.positionWS.xyz,
+				worldNormal, albedo.rgb, metalness, roughness);
+
+			const float3 V = normalize(g_eyePos.xyz - input.positionWS.xyz);
+			const float3 R = reflect(-V, worldNormal);
+			const float NdotV = saturate(dot(worldNormal, V));
+			const float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedo.rgb, metalness);
+			const float fresnel = pow(1.0f - NdotV, 5.0f);
+			const float3 F = F0 + (float3(1.0f, 1.0f, 1.0f) - F0) * fresnel;
+
+			float3 reflection = float3(0.0f, 0.0f, 0.0f);
+			float reflectionWeight = 0.0f;
+			float3 ssrColour = float3(0.0f, 0.0f, 0.0f);
+			float ssrConfidence = 0.0f;
+			if (TraceTransparentSSR(input.positionWS.xyz, R, roughness, ssrColour, ssrConfidence))
+			{
+				const float glossiness = saturate(1.0f - roughness);
+				reflectionWeight = ssrConfidence * glossiness;
+				reflection = ssrColour;
+			}
+
+			const float3 specularReflectionTerm = F * reflection * reflectionWeight;
+			const float3 emissiveTerm = g_material.emissiveColour.rgb * g_material.emissiveColour.a * emission;
+			finalRGB = sunLit.rgb + forwardDirect + specularReflectionTerm + emissiveTerm;
 		}
 
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));

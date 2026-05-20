@@ -330,6 +330,13 @@ namespace HexEngine
 		bool _hasCachedWorldBoundingSphere = false;
 		bool _hasCachedWorldOcclusionVolume = true;
 		uint64_t _transformVersion = 1;
+		// Frame number that last refreshed _cachedWorldTMPrev. Used by GetWorldTM() to
+		// advance prev<-current at the first call of each new frame even when the world TM
+		// cache itself is still valid (i.e. the entity hasn't moved). Without this, an
+		// entity that moved once and then stopped keeps emitting a stale (pre-move) prev
+		// matrix every subsequent frame, producing phantom motion vectors visible as a
+		// constant ghost trail under TAA.
+		uint64_t _prevTMFrame = 0;
 		Transform* _cachedTransform = nullptr;
 		StaticMeshComponent* _cachedMeshRenderer = nullptr;
 		bool _canCastShadows = true;

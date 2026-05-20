@@ -262,18 +262,32 @@
 					const float albedoConfidence = saturate(max(previousAlbedo.a * albedoKeep, triAlbedoW));
 					const float motionInjectScale = lerp(1.0f, 0.82f, shiftSettle);
 					const float3 injected = tri.radianceOpacity.rgb * visibilityFactor * motionInjectScale;
-					const float injectedLum = dot(injected, float3(0.2126f, 0.7152f, 0.0722f));
-					// If there's little/no new injection, reduce history retention so stale neutral energy fades out.
-					const float injectionPresence = saturate(injectedLum * 2.5f);
-					const float minKeep = lerp(0.20f, 0.28f, shiftSettle);
-					const float effectiveKeep = lerp(minKeep, temporalKeep, injectionPresence);
-					float3 radiance = previous.rgb * effectiveKeep + injected * (1.0f - effectiveKeep);
+
+					// Fixed-retention temporal blend. The previous version computed an
+					// `injectionPresence` from the current frame's injected luminance and
+					// collapsed `effectiveKeep` to ~0.20 whenever a voxel happened not to
+					// receive bright injection that frame. That was the immediate cause of the
+					// "breathing" GI: any voxel whose triangle coverage briefly dropped (sparse
+					// coverage, occlusion, or just the far-clipmap refresh cycle landing on a
+					// frame with no usable triangle) lost 80% of its accumulated value in a
+					// single frame, then recovered slowly as injection returned. Now we always
+					// keep the accumulated history at the `temporalKeep` rate (~0.94) and let
+					// new injection blend in at the matching 6%. Stale data still fades because
+					// frames without injection just lerp toward zero at the same rate.
+					float3 radiance = previous.rgb * temporalKeep + injected * (1.0f - temporalKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
+					// Symmetric clamp - applies to BOTH increases (cap brightening) AND decreases
+					// (cap darkening). Previously only the upper clamp existed, so the
+					// effectiveKeep-collapse could drive a voxel from full to 20% in one frame
+					// with no brake. With the lower clamp in place, any single-frame darkening
+					// is also bounded - safety net even after the fix above eliminates the
+					// primary cause.
 					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
 					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
 					const float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
 					radiance = min(radiance, previous.rgb + deltaLimit);
+					radiance = max(radiance, previous.rgb - deltaLimit);
 					radiance = max(radiance, 0.0f.xxx);
 					radiance = min(radiance, 32.0f.xxx);
 

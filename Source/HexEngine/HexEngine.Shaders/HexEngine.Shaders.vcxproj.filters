@@ -92,5 +92,6 @@
     <HexEngineShader Include="PCSS.shader" />
     <HexEngineShader Include="AtmospherePhysical.shader" />
     <HexEngineShader Include="Atmosphere.shader" />
+    <HexEngineShader Include="AutoExposureLuminance.shader" />
   </ItemGroup>
 </Project>

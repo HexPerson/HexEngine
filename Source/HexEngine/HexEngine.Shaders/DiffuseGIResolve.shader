@@ -91,6 +91,21 @@
 		return frac(sin(h) * 43758.5453123f);
 	}
 
+	// Final safety clamp on resolved GI. Dual cap with 1.0x channel ratio - both luminance
+	// and peak channel capped at maxLuma. The previous 1.5x ratio let pure single-channel
+	// inputs (saturated red/green bounce) pass through and visibly tint receiver surfaces.
+	float3 LuminanceClamp(float3 rgb, float maxLuma)
+	{
+		const float lum = dot(rgb, float3(0.2126f, 0.7152f, 0.0722f));
+		const float channelMax = max(max(rgb.r, rgb.g), rgb.b);
+		float scale = 1.0f;
+		if (lum > maxLuma && lum > 1e-6f)
+			scale = min(scale, maxLuma / lum);
+		if (channelMax > maxLuma && channelMax > 1e-6f)
+			scale = min(scale, maxLuma / channelMax);
+		return rgb * scale;
+	}
+
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		const float2 uv = input.texcoord;
@@ -101,7 +116,7 @@
 		// the stabilized GI path instead of raw noisy half-res data.
 		if (debugMode >= 2.0f)
 		{
-			return float4(min(current, g_giParams0.y.xxx), 1.0f);
+			return float4(LuminanceClamp(current, g_giParams0.y), 1.0f);
 		}
 
 		const float2 velocity = g_motionVectors.Sample(g_pointSampler, uv).xy;
@@ -174,7 +189,7 @@
 		}
 
 		float3 resolved = lerp(current, history, historyWeight);
-		resolved = min(resolved, g_giParams0.y.xxx);
+		resolved = LuminanceClamp(resolved, g_giParams0.y);
 
 		// During clipmap warm-up we temporarily cap per-frame GI deltas to suppress residual
 		// recenter flicker (single-frame dark/bright spikes).

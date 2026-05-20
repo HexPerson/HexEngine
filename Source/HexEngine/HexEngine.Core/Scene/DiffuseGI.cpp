@@ -4844,11 +4844,17 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		{
 			ID3D11ShaderResourceView* srcSrv[1] = { radianceSrcSrv };
 			ID3D11UnorderedAccessView* dstUav[1] = { level.radianceScratchUav };
-			const bool clipSettlingNow =
-				(level.pendingShiftWs.LengthSquared() > 1e-8f) ||
-				(_clipmapWarmFramesRemaining[levelIndex] > 0u) ||
-				(_cameraMotionBlend > 0.05f);
-			const uint32_t propagationIterations = clipSettlingNow ? 1u : 2u;
+			// Single propagation iteration, constant across motion states. Two iterations per
+			// refresh diffuses ~68% of a voxel's value in a single dispatch, which is fine for
+			// clip 0 (refreshes every frame, change averages out over frames) but for far clips
+			// (refreshed once per 4-12 frames on the rotating cycle) each refresh becomes a
+			// large step-change in that clip's voxel field. The trace samples the union of all
+			// clips so the cycle through far-clip refreshes appears as a slow ~5Hz pulse.
+			// One iteration halves the per-refresh delta, smoothing the cycle below visibility.
+			// The previous motion-conditional 2 -> 1 was masking this pulse during the post-
+			// motion warm period at the cost of "brightening during motion" inconsistency;
+			// going to 1 always fixes both symptoms.
+			const uint32_t propagationIterations = 1u;
 
 			for (uint32_t iter = 0u; iter < propagationIterations; ++iter)
 			{

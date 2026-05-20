@@ -315,7 +315,14 @@
 			return;
 
 		auto* scene = wrapper->GetScene();
-		auto* child = scene->CreateEntity(std::format("{}_Mesh", wrapper->GetName()), wrapper->GetPosition(), math::Quaternion::Identity, math::Vector3(1.0f));
+		// Create the mesh child at the IDENTITY local transform. After re-parenting to the
+		// wrapper, the child's world transform is `local * wrapper.world`, so an identity
+		// local correctly places it at the wrapper's world position and rotation. Passing
+		// `wrapper->GetPosition()` as the local position (the previous behaviour) caused
+		// the position to be applied TWICE - once as local-pos-rotated-through-wrapper, plus
+		// the wrapper's own translation - producing a doubled-and-rotation-skewed offset
+		// that manifested as roads being "wrongly spaced according to their rotation".
+		auto* child = scene->CreateEntity(std::format("{}_Mesh", wrapper->GetName()), math::Vector3(0.0f, 0.0f, 0.0f), math::Quaternion::Identity, math::Vector3(1.0f));
 		if (child == nullptr)
 			return;
 
@@ -343,16 +350,24 @@
 		if (roots.empty())
 			return;
 
+		// Re-parent each prefab root to the wrapper at the AUTHORED offset (the prefab-local
+		// position relative to the first root). After re-parenting, the engine composes
+		// `root.world = root.local * wrapper.world`, so the wrapper's rotation+translation
+		// automatically positions and orients each root correctly without us pre-applying
+		// either transform here. The previous code pre-applied `wrapper->GetPosition()` and
+		// pre-rotated the offset by the wrapper's rotation before calling ForcePosition -
+		// which the subsequent SetParent then layered the same parent transform on top of,
+		// producing a doubled-and-rotation-skewed final position. That's the source of the
+		// "rotated by 90 degrees incorrectly and wrongly spaced according to their rotation"
+		// symptom on the painted grid.
 		const math::Vector3 anchorPosition = roots.front()->GetPosition();
-		const math::Quaternion wrapperRotation = wrapper->GetRotation();
 		for (auto* root : roots)
 		{
 			if (root == nullptr)
 				continue;
 
 			const math::Vector3 authoredOffset = root->GetPosition() - anchorPosition;
-			const math::Vector3 worldOffset = math::Vector3::Transform(authoredOffset, wrapperRotation);
-			root->ForcePosition(wrapper->GetPosition() + worldOffset);
+			root->ForcePosition(authoredOffset);
 			root->SetParent(wrapper);
 			wrapper->GetScene()->FlushPVS(root);
 		}

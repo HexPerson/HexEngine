@@ -231,6 +231,8 @@ public:
 
 	virtual uint32_t GetBoundResourceIndex() override;
 
+	virtual void SetBoundResourceIndex(uint32_t value) override;
+
 	virtual void BeginFrame(HexEngine::Window* window, HexEngine::ITexture2D* depthBuffer) override;
 
 	virtual void EndFrame(HexEngine::Window* window) override;

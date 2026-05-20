@@ -654,7 +654,7 @@
 		const float fresnelExp = pow(1.0f - NdotV, 5.0f);
 		const float3 fresnel = F0 + (1.0f.xxx - F0) * fresnelExp;
 		const float3 specularWeight = fresnel;
-		const float3 diffuseWeightRGB = (1.0f.xxx - fresnel) * (1.0f - metalness);
+		const float3 diffuseWeightRGB = ((1.0f.xxx - fresnel) * (1.0f -  metalness)) * 0.75f;
 		// Scalar threshold for the diffuse-ray gate, using the luminance of the weight.
 		const float diffuseWeightLuma = dot(diffuseWeightRGB, float3(0.2126f, 0.7152f, 0.0722f));
 

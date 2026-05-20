@@ -21,6 +21,21 @@
 		float4 g_giParams6;
 	};
 
+	// Dual cap: luminance AND peak channel both <= maxLuma. The 1.0x channel ratio prevents
+	// pure single-channel values like (0, 8, 0) from slipping past the luma test (whose
+	// weighted luma is only 5.7) and propagating outward to dominate downstream sampling.
+	float3 LuminanceClamp(float3 rgb, float maxLuma)
+	{
+		const float lum = dot(rgb, float3(0.2126f, 0.7152f, 0.0722f));
+		const float channelMax = max(max(rgb.r, rgb.g), rgb.b);
+		float scale = 1.0f;
+		if (lum > maxLuma && lum > 1e-6f)
+			scale = min(scale, maxLuma / lum);
+		if (channelMax > maxLuma && channelMax > 1e-6f)
+			scale = min(scale, maxLuma / channelMax);
+		return rgb * scale;
+	}
+
 	[numthreads(8, 8, 8)]
 	void ShaderMain(uint3 tid : SV_DispatchThreadID)
 	{
@@ -80,7 +95,9 @@
 		// Use symmetric temporal blending to avoid channel "white locking" from max-only propagation.
 		float3 mixed = lerp(blurred, directionalSample, 0.12f * dirStrength);
 		float3 outRgb = lerp(center.rgb, mixed, propagation);
-		outRgb = min(outRgb, 32.0f.xxx);
+		// Propagation cap matches voxel write cap (4) so propagation can't amplify a voxel
+		// past what the write stage allowed. Both luma and peak channel are bounded.
+		outRgb = LuminanceClamp(outRgb, 4.0f);
 
 		const float outOcc = saturate(max(center.a * 0.985f, maxOcc * 0.95f));
 		g_voxelRadianceOut[p] = float4(outRgb, outOcc);

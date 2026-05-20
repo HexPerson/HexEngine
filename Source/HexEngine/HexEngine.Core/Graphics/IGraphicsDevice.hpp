@@ -252,6 +252,13 @@ namespace HexEngine
 
 		virtual uint32_t GetBoundResourceIndex() = 0;
 
+		// Force the running "next implicit-slot to bind to" counter without affecting any
+		// already-bound SRVs. Useful when a pass binds SRVs at fixed high slots but a later
+		// pass relies on the counter being back at a known low value (e.g. Scene::RenderEntities
+		// reads it to decide where to place material textures). Tread carefully: callers must
+		// ensure the slots between [value, previous-counter) are not relied on elsewhere.
+		virtual void SetBoundResourceIndex(uint32_t value) = 0;
+
 		//virtual void BindGBuffer() = 0;
 
 		//virtual void BindShadowMaps() = 0;

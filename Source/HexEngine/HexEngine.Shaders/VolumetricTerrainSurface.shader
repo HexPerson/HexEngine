@@ -13,6 +13,7 @@
 "PixelShaderIncludes"
 {
 	Global
+	Utils
 }
 "VertexShader"
 {
@@ -33,6 +34,14 @@
 		float4 position : SV_Position;
 		float3 worldPos : TEXCOORD0;
 		float3 normal : TEXCOORD1;
+		// Unjittered clip-space positions for the current and previous frame, used by the PS
+		// to compute per-pixel motion vectors. Terrain is static, so the only motion comes
+		// from the camera (encoded in the difference between g_viewProjectionMatrix and
+		// g_viewProjectionMatrixPrev). Without these the velocity RT stays zero and TAA
+		// reprojection cannot keep history aligned with the surface, producing visible
+		// ghosting whenever the camera moves.
+		float4 currentPositionUnjittered  : TEXCOORD2;
+		float4 previousPositionUnjittered : TEXCOORD3;
 	};
 
 	VSOut ShaderMain(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
@@ -54,7 +63,17 @@
 
 		o.worldPos = worldPos;
 		o.normal = normalize(normal);
-		o.position = mul(float4(worldPos, 1.0f), g_viewProjectionMatrix);
+
+		// Compute current/previous clip positions; these feed CalcVelocity in the pixel
+		// shader so TAA can reproject this frame's terrain pixels onto where the same world
+		// point appeared in last frame's history.
+		const float4 currClip = mul(float4(worldPos, 1.0f), g_viewProjectionMatrix);
+		const float4 prevClip = mul(float4(worldPos, 1.0f), g_viewProjectionMatrixPrev);
+		o.currentPositionUnjittered  = currClip;
+		o.previousPositionUnjittered = prevClip;
+
+		o.position = currClip;
+		o.position.xy += g_jitterOffsets * o.position.w;
 		return o;
 	}
 }
@@ -92,6 +111,9 @@
 		float4 position : SV_Position;
 		float3 worldPos : TEXCOORD0;
 		float3 normal : TEXCOORD1;
+		// Must match the VS output layout. PS reads these to compute motion vectors.
+		float4 currentPositionUnjittered  : TEXCOORD2;
+		float4 previousPositionUnjittered : TEXCOORD3;
 	};
 
 	cbuffer VolumetricTerrainChunkBuffer : register(b6)
@@ -260,7 +282,10 @@
 		output.mat = float4(metallic, roughness, smoothness, specularProbability);
 		output.norm = float4(N, pixelDepth);
 		output.pos = float4(input.worldPos, 0.0f);
-		output.velocity = float2(0.0f, 0.0f);
+		// Per-pixel screen-space motion from the camera moving relative to this static surface.
+		// CalcVelocity divides by .w and converts NDC -> UV so the result drops straight into
+		// the velocity RT in the same units TAA expects.
+		output.velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
 		return output;
 	}
 }

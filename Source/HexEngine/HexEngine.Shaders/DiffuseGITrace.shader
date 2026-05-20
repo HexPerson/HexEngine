@@ -88,6 +88,36 @@
 		return all(uvw >= 0.0f.xxx) && all(uvw <= 1.0f.xxx);
 	}
 
+	// Luminance-preserving compression. Compresses overall brightness through a Reinhard
+	// curve while keeping channel ratios fixed - avoids the per-channel-Reinhard hue shift
+	// where a saturated channel desaturates faster than its neighbours and forces the output
+	// toward gray (or, with the prior `min(., k.xxx)`, lets the saturated channel pin to k).
+	float3 ReinhardCompressLuminance(float3 rgb, float k)
+	{
+		const float lum = dot(rgb, float3(0.2126f, 0.7152f, 0.0722f));
+		if (lum <= 1e-6f)
+		{
+			return rgb;
+		}
+		const float compressed = lum / (1.0f + lum * k);
+		return rgb * (compressed / lum);
+	}
+
+	float3 LuminanceClamp(float3 rgb, float maxLuma)
+	{
+		// Dual cap with 1.0x channel ratio - both luminance and peak channel capped at the
+		// same threshold. Earlier 1.5x ratio let saturated single-channel values like
+		// (0, 8, 0) slip through unclamped (luma 5.7 < cap, channel 8 < 1.5*cap=12).
+		const float lum = dot(rgb, float3(0.2126f, 0.7152f, 0.0722f));
+		const float channelMax = max(max(rgb.r, rgb.g), rgb.b);
+		float scale = 1.0f;
+		if (lum > maxLuma && lum > 1e-6f)
+			scale = min(scale, maxLuma / lum);
+		if (channelMax > maxLuma && channelMax > 1e-6f)
+			scale = min(scale, maxLuma / channelMax);
+		return rgb * scale;
+	}
+
 	float Hash12(float2 p)
 	{
 		const float h = dot(p, float2(127.1f, 311.7f));
@@ -505,32 +535,17 @@
 			const float edgeWeight = smoothstep(0.0f, blendWidth, edgeDistance);
 			const float fidelityWeight = rcp(1.0f + 0.35f * (float)i);
 			float clipWeight = edgeWeight * fidelityWeight;
-			if (clipSettle > 0.0001f)
-			{
-				float stabilityScale = 1.0f;
-				if (i == 0u)
-				{
-					stabilityScale = lerp(1.0f, 0.93f, clipSettle);
-				}
-				else if (i == 1u)
-				{
-					stabilityScale = lerp(1.0f, 1.05f, clipSettle);
-				}
-				else
-				{
-					stabilityScale = lerp(1.0f, 1.01f, clipSettle * 0.10f);
-				}
-				clipWeight *= stabilityScale;
-			}
-			// Only de-emphasize clip 0 while there is an actual voxel-field shift in progress.
-			if (i == 0u)
-			{
-				clipWeight *= lerp(1.0f, 0.85f, clip0Block);
-			}
-			else if (i == 1u)
-			{
-				clipWeight *= lerp(1.0f, 1.10f, clip0Block);
-			}
+			// Per-clipmap stabilityScale rebalance during shift frames was removed: it scaled
+			// clip 0 down to 0.93x and clip 1 up to 1.05x for the duration of a pending shift,
+			// which biased the trace toward the larger-volume clip 1 (typically carrying more
+			// accumulated bounced light) every time a shift triggered. With camera movement
+			// continually triggering shifts, this contributed a small but visible motion-state
+			// brightening on top of the propagation-iteration effect. Removed for consistent
+			// GI magnitude across motion states.
+			// Clip 0 / clip 1 rebalancing during shifts also removed: it scaled clip 0 down to
+			// 0.85x and clip 1 up to 1.10x while clip0Block (= shiftSettle) was non-zero, which
+			// is exactly during the frames camera movement triggers a voxel-field shift. Same
+			// motion-state-brightness inconsistency as the per-clip stability rebalance above.
 			// Keep some preference for the near clip while moving, but avoid creating
 			// a bright camera-centered bubble by collapsing almost entirely to clip 0.
 			if (motionClipBias > 0.0001f && clip0Block < 0.001f)
@@ -626,10 +641,18 @@
 		// Motion handling should come from sampling/temporal stability, not energy attenuation.
 		gi *= 1.0f;
 
-		gi = gi / (1.0f + gi * 0.18f);
+		// Luminance Reinhard (was per-channel `gi / (1 + gi * 0.18)`). The per-channel form
+		// compressed each channel independently, so a saturated single-channel input like
+		// (24, 1, 1) collapsed to (4.4, 0.85, 0.85) - a strong hue shift toward white that
+		// then drove the temporal history clamp to bake in the desaturated colour. Compressing
+		// by luminance preserves the (R,G,B) ratio.
+		gi = ReinhardCompressLuminance(gi, 0.18f);
 
 		gi *= g_giParams0.x;
-		gi = min(gi, g_giParams0.y.xxx);
+		// Final safety clamp - was a per-channel min, which under saturated-channel inputs
+		// would pin one channel to the cap and leave the others below it, producing the
+		// R/G/B blowouts seen in-game.
+		gi = LuminanceClamp(gi, g_giParams0.y);
 		return float4(gi, 1.0f);
 	}
 }

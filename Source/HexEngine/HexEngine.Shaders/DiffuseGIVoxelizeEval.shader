@@ -327,6 +327,25 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 		return 1.0f;
 	}
 
+	// Scale RGB down so BOTH its perceptual luminance AND its peak channel stay <= maxLuma.
+	// Earlier this used a 1.5x ratio for the channel arm, which let pure single-channel
+	// inputs like (0, 8, 0) slip through (luma 5.7 under cap, channel 8 under 12) - SSR's
+	// voxel fallback then sampled the raw value and produced the saturated green blowout
+	// the user reported. Tightening the channel arm to 1.0x maxLuma binds saturated colours
+	// at the same magnitude as neutral whites - hue is still preserved (we scale all
+	// channels by the same factor), only the absolute peak is capped.
+	float3 LuminanceClamp(float3 rgb, float maxLuma)
+	{
+		const float lum = dot(rgb, float3(0.2126f, 0.7152f, 0.0722f));
+		const float channelMax = max(max(rgb.r, rgb.g), rgb.b);
+		float scale = 1.0f;
+		if (lum > maxLuma && lum > 1e-6f)
+			scale = min(scale, maxLuma / lum);
+		if (channelMax > maxLuma && channelMax > 1e-6f)
+			scale = min(scale, maxLuma / channelMax);
+		return rgb * scale;
+	}
+
 	float3 EvaluateLocalLights(float3 positionWs, float3 normalWs, float3 albedo, float voxelSize)
 	{
 		const uint lightCount = (uint)max(g_giParams6.w, 0.0f);
@@ -375,7 +394,8 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 		accum = accum / (1.0f + lum * 0.5f);
 		const float localInject = max(g_giParams11.x, 0.0f);
 		const float3 bounced = accum * (localInject * 0.55f) * saturate(albedo);
-		return min(bounced, 32.0f.xxx);
+		// Luminance + per-channel preserving cap.
+		return LuminanceClamp(bounced, 6.0f);
 	}
 
 	float3 RemapBounceTransportAlbedo(float3 albedo)
@@ -674,7 +694,15 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					const bool gpuComputeBaseSun = gpuComputeBaseSunMode;
 					const float emissiveInject = max(0.0f, g_giParams8.w);
 					const float emissiveLuma = dot(max(emissiveContribution, 0.0f.xxx), float3(0.2126f, 0.7152f, 0.0722f));
-					const bool emissiveMaterialActive = emissiveLuma > 1e-4f;
+					// Smooth emissive activation factor (0.0 = no emissive, 1.0 = strongly emissive)
+					// instead of a binary bool. The previous boolean threshold at 1e-4 flickered
+					// on/off per triangle/sample, switching effectiveKeep between 0.02 and ~0.95
+					// each frame - that's exactly what produced the pulsing/oscillating coloured
+					// blowouts the user reported on specific spots. Using a smoothstep instead
+					// gradually interpolates the temporal-blend parameters, which damps the
+					// flicker while still letting genuinely-emissive surfaces respond quickly.
+					const float emissiveActivation = smoothstep(0.02f, 0.20f, emissiveLuma);
+					const bool emissiveMaterialActive = emissiveActivation > 0.0f;
 					if (gpuComputeBaseSun)
 					{
 						const float diffuseInject = max(0.0f, g_giParams8.x);
@@ -714,32 +742,43 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					injected += EvaluateLocalLights(voxelCenterWs, n, voxelAlbedo, voxelSize) * motionInjectScale;
 					// Sub-voxel edge coverage softens hard transitions when triangle edges do not align to voxel boundaries.
 					injected *= coverageRadiance;
-					const float injectedLum = dot(injected, float3(0.2126f, 0.7152f, 0.0722f));
-					// If there's little/no new injection, reduce history retention so stale neutral energy fades out.
-					const float injectionPresence = saturate(injectedLum * 2.5f);
-					// Avoid over-retaining history while moving, which can suppress fresh injection.
-					const float minKeep = 0.20f;
-					float effectiveKeep = lerp(minKeep, temporalKeep, injectionPresence);
-					// Movement compensation: retain less stale history while clipmaps are settling so
-					// fresh GI injection does not appear dim during camera motion.
-					effectiveKeep *= lerp(1.0f, 0.82f, shiftSettle);
-					if (emissiveMaterialActive)
-					{
-						// Let emissive injection respond quickly instead of being trapped by temporal damping.
-						effectiveKeep = min(effectiveKeep, 0.02f);
-					}
+					// Fixed-retention temporal blend. The previous version derived an
+					// `injectionPresence` from current-frame injected luminance and collapsed
+					// `effectiveKeep` to ~0.20 whenever a voxel didn't happen to receive bright
+					// injection that frame. That caused the GI "breathing" - any voxel whose
+					// triangle coverage briefly dropped lost 80% of its accumulated history in
+					// one frame. Now we keep history at the `temporalKeep` rate every frame and
+					// let new injection blend at the matching 6%; stale data still fades because
+					// injection-less frames lerp toward zero at the same rate.
+					// Emissive surfaces still need a fast-response override - emissive injection
+					// can dwarf the accumulated history and we don't want it temporally damped.
+					// Lerp temporalKeep toward the fast-emissive value (0.20 instead of the prior
+					// 0.02) based on the smoothed emissive activation. 0.20 still leaves emissive
+					// surfaces visibly bright but smooths the per-frame oscillation enough that
+					// per-triangle flicker doesn't translate into pulsing voxel output. The
+					// smoothstep on emissiveActivation means a triangle whose emissive sample
+					// crosses the threshold by a sliver no longer trips a hard 0.95 -> 0.02 switch.
+					const float emissiveTargetKeep = 0.20f;
+					const float effectiveKeep = lerp(temporalKeep, emissiveTargetKeep, emissiveActivation);
 					float3 radiance = previous.rgb * effectiveKeep + injected * (1.0f - effectiveKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
+					// Symmetric clamp - applies to BOTH increases and decreases. Previously only
+					// the upper clamp existed, so the effectiveKeep-collapse could drive a voxel
+					// from full to 20% in one frame with no brake. With the lower clamp in place,
+					// any single-frame darkening is also bounded - safety net even after the fix
+					// above eliminates the primary cause.
 					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
 					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
 					float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.20f);
-					if (emissiveMaterialActive)
-					{
-						// Emissive needs larger per-frame headroom or it effectively disappears.
-						deltaLimit = max(deltaLimit, 2.0f.xxx + previous.rgb * 1.5f);
-					}
+					// Smoothly grow per-frame delta headroom for emissive surfaces (previously a
+					// binary bool that contributed to the on/off pulse). At full emissive
+					// activation we add up to (1.0 + previous*0.75) of headroom; at zero we
+					// stay on the default delta limit.
+					const float3 emissiveExtraDelta = (1.0f.xxx + previous.rgb * 0.75f) * emissiveActivation;
+					deltaLimit = max(deltaLimit, deltaLimit + emissiveExtraDelta);
 					radiance = min(radiance, previous.rgb + deltaLimit);
+					radiance = max(radiance, previous.rgb - deltaLimit);
 					radiance = max(radiance, 0.0f.xxx);
 
 					// Step 4: cheap edge-aware smoothing only near sub-voxel triangle boundaries.
@@ -767,7 +806,14 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						radiance = lerp(radiance, navg, edgeBlend * edgeBlendStrength);
 					}
 
-					radiance = min(radiance, 32.0f.xxx);
+					// Voxel radiance cap. Lowered to 4 because SSR samples voxel data directly as
+					// a reflection fallback (bypassing the final clamps in trace/resolve), so the
+					// voxel's raw magnitude is what determines worst-case visible brightness for
+					// reflection paths. With dual luma + per-channel arms at 4, any single colour
+					// channel is capped at 4 - bright enough for legitimate HDR bounce, low enough
+					// that random saturated voxels can't produce the R/G/B blowouts the user
+					// reported across red/blue/yellow/cyan/orange/white.
+					radiance = LuminanceClamp(radiance, 4.0f);
 
 					const float triOpacity = saturate(tri.radianceOpacity.a) * coverageOpacity;
 					float opacity = saturate(previous.a + triOpacity * (1.0f - previous.a));

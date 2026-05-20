@@ -403,6 +403,20 @@ namespace HexEngine
 			_cachedRenderColour = colour;
 			_cachedRenderUvScale = _uvScale;
 		}
+		else
+		{
+			// Cache hit: transform did not change this frame, so by definition there is no
+			// motion between previous and current frame for this entity. Refresh
+			// worldMatrixPrev to match the cached worldMatrix so velocity reads as zero.
+			// Without this refresh the cached "prev" stays at whatever value was captured
+			// the last time the entity moved (typically during scene load), so every
+			// subsequent static frame emits the SAME one-frame motion delta forever - which
+			// shows up as a persistent screen-space velocity gradient on every entity that
+			// ever moved, even though the entity is now sitting still. The cache-miss path
+			// above is unaffected: it correctly captures the real motion vector for whichever
+			// frame the entity actually moves.
+			_cachedInstanceData.worldMatrixPrev = _cachedInstanceData.worldMatrix;
+		}
 
 		return _cachedInstanceData;
 	}

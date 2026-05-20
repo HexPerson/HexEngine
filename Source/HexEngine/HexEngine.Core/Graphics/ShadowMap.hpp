@@ -40,8 +40,9 @@ namespace HexEngine
 		ITexture2D* _depthMap = nullptr;
 		//TAA _taa;
 
-#if 1//def _DEBUG
+		// Colour render target paired with _depthMap. Originally a debug-only visualisation
+		// surface, now always allocated because SetRenderTarget()/RenderDebugTargets() use it
+		// in all configurations.
 		ITexture2D* _depthMapRT = nullptr;
-#endif
 	};
 }

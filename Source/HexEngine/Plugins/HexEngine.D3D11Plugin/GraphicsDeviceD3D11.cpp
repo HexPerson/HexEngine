@@ -2054,6 +2054,12 @@ uint32_t GraphicsDeviceD3D11::GetBoundResourceIndex()
 	return _currentlyBoundSRVIndex;
 }
 
+void GraphicsDeviceD3D11::SetBoundResourceIndex(uint32_t value)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	_currentlyBoundSRVIndex = value;
+}
+
 void GraphicsDeviceD3D11::SetPixelShaderResource(uint32_t slot, ID3D11ShaderResourceView* resource)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
@@ -2376,7 +2382,7 @@ void GraphicsDeviceD3D11::ResetState()
 	_prevRenderState.Reset();
 	_deviceContext->ClearState();
 
-	ID3D11SamplerState* samplers[] = { _states->AnisotropicWrap(), _texSamplerComparison, _states->PointWrap(), _texSamplerMirrored, _states->LinearWrap() };
+	ID3D11SamplerState* samplers[] = { _states->AnisotropicWrap(), _texSamplerComparison, _states->PointWrap(), _texSamplerMirrored, _states->LinearClamp() };
 	_deviceContext->PSSetSamplers(0, 5, samplers);
 }
 

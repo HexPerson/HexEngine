@@ -24,11 +24,8 @@ namespace HexEngine
 
     void ShadowMap::Destroy()
     {
-        SAFE_DELETE(_depthMap);    
-
-#ifdef _DEBUG
+        SAFE_DELETE(_depthMap);
         SAFE_DELETE(_depthMapRT);
-#endif
     }
 
 	void ShadowMap::Create()
@@ -47,7 +44,6 @@ namespace HexEngine
             D3D11_SRV_DIMENSION_TEXTURE2D,
             D3D11_DSV_DIMENSION_TEXTURE2D);
 
-#if 1//def _DEBUG
         _depthMapRT = (ITexture2D*)g_pEnv->_graphicsDevice->CreateTexture2D(
             (int32_t)_viewport.width,
             (int32_t)_viewport.height,
@@ -61,7 +57,6 @@ namespace HexEngine
             D3D11_UAV_DIMENSION_UNKNOWN,
             D3D11_SRV_DIMENSION_TEXTURE2D,
             D3D11_DSV_DIMENSION_UNKNOWN);
-#endif
 
         //_taa.Create(_depthMapRT);
 	}
@@ -69,15 +64,9 @@ namespace HexEngine
     void ShadowMap::SetRenderTarget()
     {
         g_pEnv->_graphicsDevice->SetViewports({ _viewport });
-       
 
-#if 1//def _DEBUG
         _depthMapRT->ClearRenderTargetView(math::Color(0, 0, 0, 1));
         g_pEnv->_graphicsDevice->SetRenderTargets(1, { _depthMapRT }, _depthMap);
-
-#else
-        g_pEnv->_graphicsDevice->SetRenderTargets(1, { nullptr }, _depthMap);
-#endif
 
         _depthMap->ClearDepth(D3D11_CLEAR_DEPTH);
     }
@@ -94,9 +83,7 @@ namespace HexEngine
 
     void ShadowMap::RenderDebugTargets(int32_t x, int32_t y, int32_t size, GuiRenderer* renderer)
     {
-#if 1//def _DEBUG
         renderer->FillTexturedQuad(_depthMapRT, x, y, size, size, math::Color(0xFFFFFFFF));
-#endif
     }
 
     const math::Viewport& ShadowMap::GetViewport() const

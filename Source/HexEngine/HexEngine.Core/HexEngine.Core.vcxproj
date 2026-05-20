@@ -356,6 +356,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Scene\ParticleWorldSystem.hpp" />
     <ClInclude Include="Scripting\ScriptFile.hpp" />
     <ClInclude Include="FileSystem\XmlFile.hpp" />
+    <ClInclude Include="Graphics\AutoExposure.hpp" />
     <ClInclude Include="Graphics\Bloom.hpp" />
     <ClInclude Include="Graphics\IconService.hpp" />
     <ClInclude Include="Graphics\IParticleSystem.hpp" />
@@ -552,6 +553,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Scene\ParticleEffect.cpp" />
     <ClCompile Include="Scene\ParticleWorldSystem.cpp" />
     <ClCompile Include="Scripting\ScriptFile.cpp" />
+    <ClCompile Include="Graphics\AutoExposure.cpp" />
     <ClCompile Include="Graphics\Bloom.cpp" />
     <ClCompile Include="Graphics\IconService.cpp" />
     <ClCompile Include="Graphics\LogWindowMessages.cpp" />
