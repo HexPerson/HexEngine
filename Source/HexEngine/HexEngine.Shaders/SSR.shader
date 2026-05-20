@@ -171,24 +171,6 @@
 		}
 	}
 
-	// Sample voxel radiance at a world-space position by picking the finest clipmap that contains it.
-	float3 SampleVoxelRadianceAtWorld(float3 worldPos)
-	{
-		[unroll]
-		for (uint i = 0; i < 4; ++i)
-		{
-			const float3 clipCenter = g_clipCenterExtent[i].xyz;
-			const float clipExtent = max(g_clipCenterExtent[i].w, 1e-3f);
-			const float3 uvw = ((worldPos - clipCenter) / (clipExtent * 2.0f)) + 0.5f;
-			if (IsInsideUnit(uvw))
-			{
-				const float4 voxel = SampleVoxelRadianceClip(i, uvw);
-				return voxel.rgb * max(g_giParams0.x, 0.0f);
-			}
-		}
-		return 0.0f.xxx;
-	}
-
 	// Tiny cone trace along rayDir using the voxel clipmaps for a fallback "indirect bounce"
 	// in directions where SSR didn't find a screen-space hit. Steps until the voxel field becomes
 	// opaque or we leave all clipmaps.
@@ -239,58 +221,6 @@
 		}
 
 		return accumRadiance * max(g_giParams0.x, 0.0f);
-	}
-
-	// Hemispherical voxel-GI integration for diffuse SSR. Traces 5 cones over the hemisphere
-	// (1 along the normal, 4 tilted ~45 degrees in cardinal tangent directions) and combines
-	// them with cosine weights. A single-cone trace looks blocky because every pixel samples
-	// the same axis through the voxel grid, so cell boundaries show up as discrete steps in
-	// the result. Spreading the integration across multiple directions averages those
-	// boundary steps and produces a smooth irradiance estimate.
-	float3 ConeTraceDiffuseHemisphere(float3 worldPos, float3 normal)
-	{
-		// Build a tangent frame from the normal. Pick world-up unless we're parallel to it.
-		const float3 up = abs(normal.y) < 0.999f ? float3(0.0f, 1.0f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
-		const float3 t = normalize(cross(up, normal));
-		const float3 b = cross(normal, t);
-
-		// 45-degree tilt off the normal axis for the 4 side cones.
-		const float cosTilt = 0.7071068f;  // cos(45)
-		const float sinTilt = 0.7071068f;  // sin(45)
-
-		const float3 origin = worldPos + normal * 0.25f;
-
-		float traceDist;
-		float3 total = 0.0f.xxx;
-		float totalWeight = 0.0f;
-
-		// Centre cone along the normal (cosine weight = 1).
-		total += ConeTraceVoxelGI(origin, normal, traceDist);
-		totalWeight += 1.0f;
-
-		// 4 side cones - cosine-weighted by cos(45) so they contribute less than the centre.
-		{
-			const float3 dir1 = normalize(cosTilt * normal + sinTilt * t);
-			total += ConeTraceVoxelGI(origin, dir1, traceDist) * cosTilt;
-			totalWeight += cosTilt;
-		}
-		{
-			const float3 dir2 = normalize(cosTilt * normal - sinTilt * t);
-			total += ConeTraceVoxelGI(origin, dir2, traceDist) * cosTilt;
-			totalWeight += cosTilt;
-		}
-		{
-			const float3 dir3 = normalize(cosTilt * normal + sinTilt * b);
-			total += ConeTraceVoxelGI(origin, dir3, traceDist) * cosTilt;
-			totalWeight += cosTilt;
-		}
-		{
-			const float3 dir4 = normalize(cosTilt * normal - sinTilt * b);
-			total += ConeTraceVoxelGI(origin, dir4, traceDist) * cosTilt;
-			totalWeight += cosTilt;
-		}
-
-		return total / max(totalWeight, 1e-3f);
 	}
 
 	struct HitResult
@@ -511,29 +441,60 @@
 		didReflect = false;
 		hitDistance = 0.0f;
 
-		// Diffuse path takes a completely different route from specular. Single-sample
-		// per-pixel hemisphere ray-tracing produces noise that no in-shader trick smooths
-		// without a temporal accumulator, so for diffuse we voxel-cone-trace along the
-		// surface normal instead. The voxel field is pre-filtered (linearly interpolated
-		// across many world-space samples per fetch) so the result is smooth by construction
-		// and doesn't depend on per-pixel rng or hemisphere flips - no scene-feature leakage
-		// in the output. Trade-off: limited spatial resolution (whatever the voxel clipmaps
-		// resolve) and a single forward-cone instead of a true hemisphere integral, but for
-		// SSR diffuse that's exactly the right precision/speed point - DiffuseGI runs before
-		// SSR for the hemisphere-averaged baseline; SSR's job is just the directionally-
-		// preferred bounce on top of that.
+		// Diffuse path: stochastic single-direction hemisphere raymarch contributing ONLY
+		// the screen-space DELTA over DiffuseGI's voxel-cone baseline.
+		//
+		// Why a delta and not a full hemisphere integral: DiffuseGI runs immediately before
+		// SSR and writes a hemisphere-integrated voxel-GI value to beauty for every diffuse
+		// pixel. SSR is additively composited onto beauty (SceneRenderer::RenderSSR), so any
+		// full re-integration of the voxel hemisphere here would literally double-count GI -
+		// which is exactly what blew matte surfaces out in the previous version. Instead we
+		// fire one screen-space ray per pixel per frame in a random hemisphere direction and
+		// add (screenHit - voxelBaselineInSameDirection) when there is a true screen hit:
+		//   - When voxel already had a good estimate for that direction, delta ~= 0.
+		//   - When the screen sees something sharper/brighter than the voxel approximated
+		//     (high-freq lit geometry that doesn't fit the clipmap resolution), the delta
+		//     contributes that extra detail on top of GI.
+		// Clamped non-negative so we never punch dark holes in GI when the voxel happened
+		// to over-estimate that direction.
+		//
+		// Single-sample-per-pixel variance is denoised by NRD's diffuse channel; many pixels
+		// and frames together approximate the hemisphere integral of the delta.
 		if (!wantSpecular)
 		{
-			// 5-cone hemispherical voxel-GI integration. Smooths out the single-axis blockiness
-			// the previous single-cone version showed by averaging over multiple directions in
-			// the surface hemisphere.
-			const float3 giRadiance = ConeTraceDiffuseHemisphere(worldPos, worldNormal);
 			didReflect = true;
-			// Effective hit distance ~= the average cone trace length. Not used precisely by
-			// NRD's diffuse path (which is hemisphere-integrated rather than virtual-position-
-			// reprojected like specular), so a small constant works.
+
+			const float3 diffuseDir = RandomDirectionInDirectionOfNormal(worldNormal, rngState);
+			const float NdotL = saturate(dot(diffuseDir, worldNormal));
+			const float jitter = RandomValue(rngState);
+
+			// rayRoughness=1.0 -> wide first-step jitter, which is what we want for a diffuse
+			// stochastic sample (decorrelates adjacent pixels so NRD can integrate spatially).
+			const HitResult hit = RaymarchReflection(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f);
+
+			// Only true screen-space hits contribute - skip the in-screen loop-exhaustion
+			// fallback (hit.didFallback) here because that path returns last-in-screen beauty
+			// regardless of actual ray geometry, which for random hemisphere directions is
+			// directionally meaningless and would just stamp screen-edge colour onto matte
+			// surfaces.
+			if (hit.didHit && !hit.didFallback)
+			{
+				// Voxel-GI cone in the same direction = the baseline DiffuseGI's cone trace
+				// already added to beauty. Subtract so we only contribute the screen-space
+				// delta. Clamp non-negative.
+				float voxelTraceDist;
+				const float3 voxelBaseline = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, diffuseDir, voxelTraceDist);
+				const float3 delta = max(0.0f.xxx, hit.colour - voxelBaseline);
+
+				hitDistance = max(hit.hitDistance, 1.0f);
+				return float4(delta * NdotL, 1.0f);
+			}
+
+			// Miss (off-screen exit or pure no-hit): contribute nothing. DiffuseGI already
+			// covered this direction at low frequency; the voxel cone-trace fallback that the
+			// specular path uses is redundant here and would re-introduce the double-count.
 			hitDistance = 4.0f;
-			return float4(giRadiance, 1.0f);
+			return float4(0.0f.xxx, 1.0f);
 		}
 
 		// Specular: ray-marched mirror reflection with roughness-scaled cone perturbation.
@@ -679,21 +640,21 @@
 		float diffuseSamples = 0.0f;
 		float specularSamples = 0.0f;
 
-		// Diffuse SSR rays are disabled. A single random-hemisphere sample per pixel produces
-		// dominant spatial variance (diagonal noise across surfaces) that no in-shader trick
-		// can integrate down to a smooth irradiance - it needs a temporal accumulator to
-		// average many hemisphere samples per pixel over many frames. Even with that, the
-		// result duplicates work the diffuse-GI pass and voxel-GI cone trace already do better:
-		//   - DiffuseGI runs before SSR and applies hemisphere-averaged GI to beauty.
-		//   - GetReflection's miss fallback already cone-traces voxel GI in the ray direction.
-		// Keeping the loop scaffold (DiffuseRays=0) so it's a one-line toggle for experiments.
+		// Diffuse SSR: one stochastic hemisphere ray per pixel per frame. The diffuse path in
+		// GetReflection contributes only the screen-space DELTA over DiffuseGI's voxel-cone
+		// baseline (see the long comment there), so this loop is safe to leave at 1 - it does
+		// NOT double-count voxel GI even though DiffuseGI runs immediately before SSR.
+		// More rays per pixel would converge faster but NRD's spatial+temporal denoising on
+		// the diffuse channel already integrates across pixels and frames, so 1 is enough.
 		const uint DiffuseRays = 1u;
 		const uint SpecularRays = 1u;
 
-		// Gate diffuse SSR on Fresnel-derived diffuse weight luminance. Random-hemisphere rays
-		// produce dominant per-frame variance (shimmer) and are only worth firing when the
-		// diffuse contribution to the final reflection is large.
-		if (diffuseWeightLuma > 0.5f)
+		// Gate diffuse SSR on Fresnel-derived diffuse weight luminance. Skip pure metals and
+		// highly Fresnel-dominated grazing pixels where the diffuse contribution to the final
+		// composite is negligible; the threshold is low because diffuse SSR contributes only
+		// a screen-space delta over DiffuseGI now, not a full integration, so it's cheap and
+		// safe to fire on most diffuse surfaces.
+		if (diffuseWeightLuma > 0.05f)
 		{
 			uint rng = baseRngState ^ 0x68bc21ebu;
 			[loop]
