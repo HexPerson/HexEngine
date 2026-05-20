@@ -1051,7 +1051,24 @@ namespace HexEngine
 
 	bool Entity::GetCastsShadows()
 	{
-		return _canCastShadows;
+		// Walk up the parent chain so a non-casting ancestor propagates to all descendants.
+		// Previously this returned only the entity's own flag, which meant setting
+		// `wrapper->SetCastsShadows(false)` (or `root->SetCastsShadows(false)` on a prefab
+		// root) had no effect on nested children that owned the actual StaticMeshComponent -
+		// those children still defaulted to true and the shadow PVS included them. With this
+		// change, marking a parent non-casting cascades to anything beneath it in the
+		// hierarchy, which is the natural semantic for opting an entire prefab/group out
+		// of shadow casting.
+		if (!_canCastShadows)
+			return false;
+
+		for (Entity* parent = _parent; parent != nullptr; parent = parent->_parent)
+		{
+			if (!parent->_canCastShadows)
+				return false;
+		}
+
+		return true;
 	}
 
 	void Entity::Serialize(json& data, JsonFile* file)

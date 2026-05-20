@@ -693,16 +693,20 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					float3 injected = tri.radianceOpacity.rgb * visibilityFactor;
 					const bool gpuComputeBaseSun = gpuComputeBaseSunMode;
 					const float emissiveInject = max(0.0f, g_giParams8.w);
-					const float emissiveLuma = dot(max(emissiveContribution, 0.0f.xxx), float3(0.2126f, 0.7152f, 0.0722f));
-					// Smooth emissive activation factor (0.0 = no emissive, 1.0 = strongly emissive)
-					// instead of a binary bool. The previous boolean threshold at 1e-4 flickered
-					// on/off per triangle/sample, switching effectiveKeep between 0.02 and ~0.95
-					// each frame - that's exactly what produced the pulsing/oscillating coloured
-					// blowouts the user reported on specific spots. Using a smoothstep instead
-					// gradually interpolates the temporal-blend parameters, which damps the
-					// flicker while still letting genuinely-emissive surfaces respond quickly.
-					const float emissiveActivation = smoothstep(0.02f, 0.20f, emissiveLuma);
-					const bool emissiveMaterialActive = emissiveActivation > 0.0f;
+					// Emissive surfaces still contribute additively to `injected` below, but they
+					// do NOT modify the temporal blend rate or per-frame delta limit. The earlier
+					// emissive fast-response path (lower `effectiveKeep`, larger `deltaLimit`)
+					// produced a pulsing/strobing blowout because the activation factor oscillates:
+					// per-voxel emissive texture sampling jumps between bright and dark texels of
+					// the same atlas, and any material whose emissive luminance hovers near the
+					// classification threshold flickers between "emissive" and "not emissive"
+					// every frame. That toggled the blend rate and let runaway energy land in a
+					// single frame. With the fast-response removed the emissive contribution
+					// averages into the voxel at the same steady rate as everything else, which
+					// kills the pulsing while still allowing genuinely emissive surfaces to light
+					// the scene (their injected luma is just integrated over more frames).
+					const float emissiveActivation = 0.0f;
+					const bool emissiveMaterialActive = false;
 					if (gpuComputeBaseSun)
 					{
 						const float diffuseInject = max(0.0f, g_giParams8.x);

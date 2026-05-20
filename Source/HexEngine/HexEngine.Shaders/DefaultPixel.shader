@@ -369,7 +369,7 @@
 		output.diff = float4(finalRGB, outputAlpha);
 
 		// material output is: metallic, roughness, smoothness, specularProbability
-		output.mat = float4(metalness, roughness, g_material.smoothness, g_material.specularProbability);
+		output.mat = float4(metalness, roughness, max(g_material.smoothness, 0.01f), g_material.specularProbability);
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 

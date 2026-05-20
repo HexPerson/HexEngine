@@ -12,6 +12,7 @@
 #include <HexEngine.Core/GUI/Elements/Checkbox.hpp>
 #include <HexEngine.Core/GUI/Elements/ComponentWidget.hpp>
 #include <HexEngine.Core/GUI/Elements/Dialog.hpp>
+#include <HexEngine.Core/GUI/Elements/DragFloat.hpp>
 #include <HexEngine.Core/GUI/Elements/DropDown.hpp>
 #include <HexEngine.Core/Physics/IRigidBody.hpp>
 #include <HexEngine.Core/Scene/Mesh.hpp>
@@ -193,21 +194,19 @@
 		return false;
 	}
 
-	bool TryMeasureMeshAsset(const fs::path& assetPath, float& outLength, bool& outUsesXAxis)
+	bool TryMeasureMeshAsset(const fs::path& assetPath, float& outSizeX, float& outSizeZ)
 	{
 		auto mesh = Mesh::Create(assetPath);
 		if (mesh == nullptr)
 			return false;
 
 		const auto bounds = mesh->GetAABB();
-		const float sizeX = std::max(bounds.Extents.x * 2.0f, 0.01f);
-		const float sizeZ = std::max(bounds.Extents.z * 2.0f, 0.01f);
-		outUsesXAxis = sizeX >= sizeZ;
-		outLength = std::max(outUsesXAxis ? sizeX : sizeZ, 0.01f);
+		outSizeX = std::max(bounds.Extents.x * 2.0f, 0.01f);
+		outSizeZ = std::max(bounds.Extents.z * 2.0f, 0.01f);
 		return true;
 	}
 
-	bool TryMeasurePrefabAsset(const fs::path& assetPath, float& outLength, bool& outUsesXAxis)
+	bool TryMeasurePrefabAsset(const fs::path& assetPath, float& outSizeX, float& outSizeZ)
 	{
 		auto tempScene = g_pEnv->_sceneManager->CreateEmptyScene(false);
 		if (tempScene == nullptr)
@@ -226,6 +225,9 @@
 			if (entity == nullptr || entity->IsPendingDeletion())
 				continue;
 
+			if (entity->HasA<StaticMeshComponent>() == false)
+				continue;
+
 			const auto worldBounds = entity->GetWorldAABB();
 			const math::Vector3 center(worldBounds.Center);
 			const math::Vector3 extents(worldBounds.Extents);
@@ -240,10 +242,8 @@
 			return false;
 
 		const math::Vector3 size = boundsMax - boundsMin;
-		const float sizeX = std::max(size.x, 0.01f);
-		const float sizeZ = std::max(size.z, 0.01f);
-		outUsesXAxis = sizeX >= sizeZ;
-		outLength = std::max(outUsesXAxis ? sizeX : sizeZ, 0.01f);
+		outSizeX = std::max(size.x, 0.01f);
+		outSizeZ = std::max(size.z, 0.01f);
 		return true;
 	}
 
@@ -255,13 +255,27 @@
 		outSpec = {};
 		outSpec.assetPath = assetPath;
 		outSpec.isPrefab = assetPath.extension() == ".hprefab";
+		float sizeX = 0.0f;
+		float sizeZ = 0.0f;
 		const bool measured = outSpec.isPrefab
-			? TryMeasurePrefabAsset(assetPath, outSpec.length, outSpec.usesXAxis)
-			: TryMeasureMeshAsset(assetPath, outSpec.length, outSpec.usesXAxis);
+			? TryMeasurePrefabAsset(assetPath, sizeX, sizeZ)
+			: TryMeasureMeshAsset(assetPath, sizeX, sizeZ);
 		if (!measured)
 			return false;
 
-		outSpec.usesXAxis = ApplyQuarterTurnToAxis(outSpec.usesXAxis, yawQuarterTurns);
+		// Convention: road meshes are authored with the travel/connection direction along +Z,
+		// so the mesh's Z-extent IS the cell-to-cell spacing (length of one road segment)
+		// and the natural base-mask is (N|S). The user-set Straight Yaw Offset rotates this
+		// for meshes authored along a different axis - for an odd quarter-turn the connection
+		// direction becomes X, so the cell-to-cell spacing switches to the mesh's X-extent.
+		// The previous auto-detection picked whichever axis was LONGER as the connection
+		// direction, which mis-classified wider-than-long meshes (e.g. a road with curbs/
+		// sidewalks that's 12m across and 4m long) and produced the "rotated 90 degrees
+		// incorrectly and wrongly spaced according to their rotation" symptom.
+		const int32_t turns = NormalizeQuarterTurns(yawQuarterTurns);
+		const bool rotatedOntoX = (turns % 2) != 0;
+		outSpec.usesXAxis = rotatedOntoX;
+		outSpec.length = std::max(rotatedOntoX ? sizeX : sizeZ, 0.01f);
 		return true;
 	}
 
@@ -305,7 +319,7 @@
 		rigidBody->AddBoxCollider(mesh->GetAABB());
 	}
 
-	void SpawnMeshCell(Entity* wrapper, const fs::path& assetPath)
+	void SpawnMeshCell(Entity* wrapper, const fs::path& assetPath, bool addPhysics)
 	{
 		if (wrapper == nullptr || wrapper->GetScene() == nullptr)
 			return;
@@ -314,26 +328,23 @@
 		if (mesh == nullptr)
 			return;
 
-		auto* scene = wrapper->GetScene();
-		// Create the mesh child at the IDENTITY local transform. After re-parenting to the
-		// wrapper, the child's world transform is `local * wrapper.world`, so an identity
-		// local correctly places it at the wrapper's world position and rotation. Passing
-		// `wrapper->GetPosition()` as the local position (the previous behaviour) caused
-		// the position to be applied TWICE - once as local-pos-rotated-through-wrapper, plus
-		// the wrapper's own translation - producing a doubled-and-rotation-skewed offset
-		// that manifested as roads being "wrongly spaced according to their rotation".
-		auto* child = scene->CreateEntity(std::format("{}_Mesh", wrapper->GetName()), math::Vector3(0.0f, 0.0f, 0.0f), math::Quaternion::Identity, math::Vector3(1.0f));
-		if (child == nullptr)
-			return;
-
-		child->SetParent(wrapper);
-		auto* staticMesh = child->AddComponent<StaticMeshComponent>();
+		// Put the mesh component directly on the wrapper instead of creating a child entity.
+		// At several hundred painted cells the previous wrapper+child structure roughly
+		// doubled the per-frame CPU work for the same number of rendered instances - the
+		// scene still has to iterate every entity for PVS visibility, transform caches and
+		// AABB updates even when the child has the same transform as the wrapper. Attaching
+		// the StaticMeshComponent directly to the wrapper gives the same visual result with
+		// half the entity count.
+		auto* staticMesh = wrapper->AddComponent<StaticMeshComponent>();
 		if (staticMesh == nullptr)
 			return;
 
 		staticMesh->SetMesh(mesh);
-		EnsureMeshPhysics(child, mesh);
-		scene->FlushPVS(child);
+		if (addPhysics)
+		{
+			EnsureMeshPhysics(wrapper, mesh);
+		}
+		wrapper->GetScene()->FlushPVS(wrapper);
 	}
 
 	void SpawnPrefabCell(Entity* wrapper, const fs::path& assetPath)
@@ -350,26 +361,18 @@
 		if (roots.empty())
 			return;
 
-		// Re-parent each prefab root to the wrapper at the AUTHORED offset (the prefab-local
-		// position relative to the first root). After re-parenting, the engine composes
-		// `root.world = root.local * wrapper.world`, so the wrapper's rotation+translation
-		// automatically positions and orients each root correctly without us pre-applying
-		// either transform here. The previous code pre-applied `wrapper->GetPosition()` and
-		// pre-rotated the offset by the wrapper's rotation before calling ForcePosition -
-		// which the subsequent SetParent then layered the same parent transform on top of,
-		// producing a doubled-and-rotation-skewed final position. That's the source of the
-		// "rotated by 90 degrees incorrectly and wrongly spaced according to their rotation"
-		// symptom on the painted grid.
 		const math::Vector3 anchorPosition = roots.front()->GetPosition();
+		const math::Quaternion wrapperRotation = wrapper->GetRotation();
 		for (auto* root : roots)
 		{
 			if (root == nullptr)
 				continue;
 
 			const math::Vector3 authoredOffset = root->GetPosition() - anchorPosition;
-			root->ForcePosition(authoredOffset);
+			const math::Vector3 worldOffset = math::Vector3::Transform(authoredOffset, wrapperRotation);
+			root->ForcePosition(wrapper->GetPosition() + worldOffset);
 			root->SetParent(wrapper);
-			wrapper->GetScene()->FlushPVS(root);
+			root->SetCastsShadows(false);
 		}
 	}
 
@@ -433,7 +436,13 @@
 
 		if (!ComputeRotationForMask(straightMask, straightBaseMask, outPlacement.rotation))
 			outPlacement.rotation = math::Quaternion::Identity;
-		ApplyQuarterTurnRotation(outPlacement.rotation, yawQuarterTurns);
+		// Intentionally NOT calling ApplyQuarterTurnRotation here. For straights, the user's
+		// yawQuarterTurns is already baked into straightBaseMask via PlacementSpec::usesXAxis
+		// (set in TryBuildPlacementSpec) and into the cell-size via PlacementSpec::length.
+		// ComputeRotationForMask therefore already produces the correct rotation for the
+		// desired connection direction with the yaw-adjusted base mask, and adding another
+		// yawQuarterTurns rotation here would double-apply the offset and place the mesh
+		// 90 degrees off (visible as a row of perpendicular/edge-on segments).
 		return true;
 	}
 
@@ -472,7 +481,9 @@
 		const std::optional<PlacementSpec>& cornerSpec,
 		const std::optional<PlacementSpec>& crossroadSpec,
 		const std::optional<PlacementSpec>& tJunctionSpec,
-		int32_t yawQuarterTurns)
+		int32_t yawQuarterTurns,
+		float cellSpacing,
+		bool addPhysics)
 	{
 		if (scene == nullptr)
 			return;
@@ -490,6 +501,7 @@
 			return heights.find(coord) != heights.end();
 		};
 
+		const float spacing = (cellSpacing > 0.0f) ? cellSpacing : straightSpec.length;
 		for (const auto& [coord, height] : heights)
 		{
 			uint8_t mask = DirectionNone;
@@ -502,17 +514,19 @@
 			if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, placement))
 				continue;
 
-			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(coord), GridToWorld(coord, straightSpec.length, height), placement.rotation, math::Vector3(1.0f));
+			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(coord), GridToWorld(coord, spacing, height), placement.rotation, math::Vector3(1.0f));
 			if (wrapper == nullptr)
 				continue;
+
+			wrapper->SetCastsShadows(false);
 
 			if (placement.isPrefab)
 				SpawnPrefabCell(wrapper, placement.assetPath);
 			else
-				SpawnMeshCell(wrapper, placement.assetPath);
-
-			scene->FlushPVS(wrapper);
+				SpawnMeshCell(wrapper, placement.assetPath, addPhysics);
 		}
+
+		scene->ForceRebuildPVS();
 	}
 }
 
@@ -703,6 +717,15 @@ void CitySimulationEditorToolPlugin::ShowRoadPainterDialog()
 	bindAssetSearch(L"Crossroad Piece", _roadPainterCrossroadPath);
 	bindAssetSearch(L"T-Junction Piece", _roadPainterTJunctionPath);
 
+	auto* cellSizeScale = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Cell Size Scale", &_roadPainterCellSizeScale, 0.5f, 2.0f, 0.005f, 3);
+	cellSizeScale->SetOnDrag([this](float, float, float)
+	{
+		if (_roadPainterEnabled)
+		{
+			MeasureStraightAsset(_roadPainterCellSize, _roadPainterUsesXAxis);
+		}
+	});
+
 	auto* straightYawOffset = new HexEngine::DropDown(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Straight Yaw Offset");
 	straightYawOffset->SetValue(QuarterTurnLabel(_roadPainterYawQuarterTurns));
 	auto setStraightYawOffset = [this, straightYawOffset](int32_t quarterTurns)
@@ -718,6 +741,8 @@ void CitySimulationEditorToolPlugin::ShowRoadPainterDialog()
 	straightYawOffset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"90", [setStraightYawOffset](const std::wstring&) { setStraightYawOffset(1); }));
 	straightYawOffset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"180", [setStraightYawOffset](const std::wstring&) { setStraightYawOffset(2); }));
 	straightYawOffset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"270", [setStraightYawOffset](const std::wstring&) { setStraightYawOffset(3); }));
+
+	new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Add Collisions", &_roadPainterAddCollisions);
 
 	auto* enablePainter = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Enable Painter", &_roadPainterEnabled);
 	enablePainter->SetOnCheckFn([this](HexEngine::Checkbox*, bool checked)
@@ -846,7 +871,11 @@ bool CitySimulationEditorToolPlugin::MeasureStraightAsset(float& outSpacing, boo
 	if (!TryBuildPlacementSpec(_roadPainterStraightPath, _roadPainterYawQuarterTurns, spec))
 		return false;
 
-	outSpacing = spec.length;
+	// Apply the user-configurable scale so spacing can be tuned without re-authoring the
+	// mesh. Default 1.0 uses the raw AABB extent; values < 1.0 tighten the grid (good for
+	// meshes that include caps/curbs that overshoot the road body) and > 1.0 loosen it.
+	const float scale = (_roadPainterCellSizeScale > 0.0f) ? _roadPainterCellSizeScale : 1.0f;
+	outSpacing = std::max(spec.length * scale, 0.01f);
 	outUsesXAxis = spec.usesXAxis;
 	return true;
 }
@@ -899,7 +928,7 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 	if (TryBuildPlacementSpec(_roadPainterCrossroadPath, _roadPainterYawQuarterTurns, tempSpec)) crossroadSpec = tempSpec;
 	if (TryBuildPlacementSpec(_roadPainterTJunctionPath, _roadPainterYawQuarterTurns, tempSpec)) tJunctionSpec = tempSpec;
 
-	RebuildManagedRoadNetwork(scene, heights, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns);
+	RebuildManagedRoadNetwork(scene, heights, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, _roadPainterCellSize, _roadPainterAddCollisions);
 
 	_roadPainterAnchorX = end.x;
 	_roadPainterAnchorZ = end.z;
@@ -938,7 +967,7 @@ void CitySimulationEditorToolPlugin::RebuildRoadPainterNetwork(float defaultHeig
 			height = defaultHeight;
 	}
 
-	RebuildManagedRoadNetwork(scene, heights, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns);
+	RebuildManagedRoadNetwork(scene, heights, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, _roadPainterCellSize, _roadPainterAddCollisions);
 }
 
 void CitySimulationEditorToolPlugin::UpdateRoadPainterRendererRegistration()

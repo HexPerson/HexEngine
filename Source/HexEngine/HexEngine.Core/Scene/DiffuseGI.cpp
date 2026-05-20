@@ -3084,7 +3084,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			emissiveProxyMaxStrengthLocal = std::max(emissiveProxyMaxStrengthLocal, std::max(0.0f, materialProxy.emissive.w));
 			const float emissiveStrength = std::max(std::max(0.0f, materialProxy.emissive.w), emissiveLum > 0.04f ? 1.0f : 0.0f);
 			const float emissiveKey = emissiveStrength * emissiveLum;
-			if (hasEmissiveTex || emissiveKey > 0.01f)
+			if (hasEmissiveTex || emissiveKey > 0.05f)
 			{
 				++emissiveMaterialCountLocal;
 			}
@@ -3662,7 +3662,13 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				(emissiveStrengthEffective > 0.001f);
 			const float emissiveLum = emissiveTint.x * 0.2126f + emissiveTint.y * 0.7152f + emissiveTint.z * 0.0722f;
 			const float emissiveKey = emissiveLum * emissiveStrengthEffective;
-			const bool meshEmissiveCandidate = meshHasUsableEmissiveTexture || (emissiveKey > 0.01f);
+			// Threshold raised from 0.01 to 0.05 so materials with incidental low-strength
+			// emissive (e.g. emissive_colour = (0.5, 0.5, 0.5, 0.05) saved by the material
+			// dialog when the user never explicitly authored emission) are NOT classified
+			// as emissive candidates. At 0.01 the system happily pulled the entire road
+			// network into the emissive payload and the per-voxel sampling fluctuations
+			// drove the pulsing blowouts the user reported.
+			const bool meshEmissiveCandidate = meshHasUsableEmissiveTexture || (emissiveKey > 0.05f);
 			// Emissive atlas details are often tiny (text/logos). Keep full triangle coverage for emissive meshes
 			// so GPU voxel eval has enough candidates to inject visible bounce in the correct location.
 			const uint32_t effectiveTriStep = (meshHasEmissiveTexture || meshEmissiveCandidate) ? 1u : triStep;
@@ -3904,7 +3910,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 						triEmissiveInfo.centroidU = 0.5f * (meshEmissiveUvRect.x + meshEmissiveUvRect.z);
 						triEmissiveInfo.centroidV = 0.5f * (meshEmissiveUvRect.y + meshEmissiveUvRect.w);
 					}
-					else if (!meshHasEmissiveTexture && emissiveKey > 0.01f)
+					else if (!meshHasEmissiveTexture && emissiveKey > 0.05f)
 					{
 						triEmissiveMask = 1.0f;
 						triEmissiveActive = true;
@@ -3937,7 +3943,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					// tiny atlas-sign cases do not get promoted across the whole mesh.
 					if (!triEmissiveActive &&
 						meshEmissiveScore > 0.95f &&
-						emissiveKey > 0.01f)
+						emissiveKey > 0.05f)
 					{
 						triEmissiveMask = std::max(triEmissiveMask, std::clamp(meshEmissiveScore, 0.75f, 1.0f));
 						triEmissiveInfo.coverage = std::max(triEmissiveInfo.coverage, 1.0f);
@@ -3955,7 +3961,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					// Tiled UVs are ambiguous for atlas textures, but they are valid for intentionally broad
 					// emissive textures such as solid white/lightmap-style emitters. Preserve those materials
 					// using the strong mesh-level signal instead of dropping all tiled triangles.
-					if (meshEmissiveScore > 0.95f && emissiveKey > 0.01f)
+					if (meshEmissiveScore > 0.95f && emissiveKey > 0.05f)
 					{
 						triEmissiveMask = std::max(triEmissiveMask, std::clamp(meshEmissiveScore, 0.75f, 1.0f));
 						triEmissiveInfo.coverage = 1.0f;
@@ -3968,7 +3974,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 						triEmissiveActive = true;
 					}
 				}
-				else if (!meshHasEmissiveTexture && emissiveKey > 0.01f)
+				else if (!meshHasEmissiveTexture && emissiveKey > 0.05f)
 				{
 					// Scalar-only emissive material (no emissive texture): treat full triangle as emissive.
 					triEmissiveMask = 1.0f;

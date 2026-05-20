@@ -84,5 +84,9 @@ namespace HexEngine
 		std::shared_ptr<Scene> _iconScene;
 		Camera* _camera = nullptr;
 		std::vector<Entity*> _previewRootEntities;
+		// True while the icon scene contains preview state that needs cleaning up at the
+		// next CompletedFrame. Lets us early-out of per-frame Update/PVS work whenever
+		// nothing has been rendered into the icon scene since the last cleanup.
+		bool _previewDirty = false;
 	};
 }

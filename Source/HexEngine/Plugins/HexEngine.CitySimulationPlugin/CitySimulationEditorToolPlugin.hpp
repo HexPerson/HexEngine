@@ -41,6 +41,17 @@ private:
 	bool _roadPainterEnabled = false;
 	bool _roadPainterHasAnchor = false;
 	float _roadPainterCellSize = 1.0f;
+	// Multiplier applied to the auto-measured straight asset extent before using it as
+	// cell-to-cell spacing. Lets the user tune the spacing if their mesh's AABB is
+	// slightly larger or smaller than the visible road geometry (e.g. an asset that
+	// authors caps/curbs slightly beyond the road surface ends up needing a value just
+	// under 1.0 to make consecutive segments touch cleanly).
+	float _roadPainterCellSizeScale = 1.0f;
+	// Whether to attach a static box collider to each painted road tile. 484+ static
+	// colliders in a city grid is significant per-frame physics overhead (broad-phase
+	// AABB updates, scene-query book-keeping) so leave this off until you actually have
+	// vehicles/agents that need to interact with the roads.
+	bool _roadPainterAddCollisions = false;
 	bool _roadPainterUsesXAxis = false;
 	int32_t _roadPainterYawQuarterTurns = 0;
 	int32_t _roadPainterAnchorX = 0;

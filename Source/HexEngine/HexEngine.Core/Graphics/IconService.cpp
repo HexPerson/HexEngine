@@ -1011,6 +1011,12 @@ namespace HexEngine
 
 			if (hasPreviewEntities)
 			{
+				// Mark the icon scene as dirty so CompletedFrame knows it has cleanup work
+				// to do on subsequent frames. Without this flag the cleanup branch would
+				// either run every frame (wasting Update/PVS time) or never run after the
+				// preview state cleared (leaking).
+				_previewDirty = true;
+
 				if (!FrameCameraToPreviewRoots(_camera, _previewRootEntities))
 				{
 					if (!SceneFramingUtils::FrameCameraToSceneBounds(_iconScene.get(), _camera, true))
@@ -1144,6 +1150,16 @@ namespace HexEngine
 		}
 		else
 		{
+			// No icon work pending. If there is also nothing to clean up, return
+			// immediately - ClearPreviewEntities below calls _iconScene->Update(0.0f) which
+			// fans out to Camera::Update and PVS::CalculateVisibility, and at scenes with
+			// many entities that's a measurable per-frame cost (profiling showed ~7% of the
+			// frame disappearing into PVS work on the icon scene even though no icons were
+			// being requested). Tracking whether the preview state is actually dirty lets
+			// us skip that work entirely on steady-state frames.
+			if (_previewRootEntities.empty() && !_previewDirty)
+				return;
+
 			_iconScene->SetFlags(SceneFlags::Utility);
 
 			_camera->GetPVS()->ClearPVS();
@@ -1153,6 +1169,7 @@ namespace HexEngine
 				_iconScene->GetSunLight()->GetPVS(i)->ClearPVS();
 			}
 			ClearPreviewEntities();
+			_previewDirty = false;
 		}
 	}
 
