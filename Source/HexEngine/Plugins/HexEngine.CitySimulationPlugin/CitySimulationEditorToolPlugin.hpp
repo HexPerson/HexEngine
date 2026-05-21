@@ -54,6 +54,13 @@ private:
 	// authors caps/curbs slightly beyond the road surface ends up needing a value just
 	// under 1.0 to make consecutive segments touch cleanly).
 	float _roadPainterCellSizeScale = 1.0f;
+	// Y offset applied to the initial road placement (the click that sets a fresh
+	// anchor). The raycast hit lands ON the terrain; adding a small positive offset
+	// lifts the road just above the ground to avoid Z-fighting with the terrain mesh
+	// or to clear small surface variations. Subsequent clicks inherit the height from
+	// the existing anchor cell, so the offset only needs to be applied once per paint
+	// session.
+	float _roadPainterInitialYOffset = 0.0f;
 	// Whether to attach a static box collider to each painted road tile. 484+ static
 	// colliders in a city grid is significant per-frame physics overhead (broad-phase
 	// AABB updates, scene-query book-keeping) so leave this off until you actually have

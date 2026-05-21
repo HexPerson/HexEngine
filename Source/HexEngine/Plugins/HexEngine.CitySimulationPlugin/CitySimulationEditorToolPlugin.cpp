@@ -1435,6 +1435,13 @@ void CitySimulationEditorToolPlugin::ShowRoadPainterDialog()
 		}
 	});
 
+	// Initial Y offset applied to the first click of a paint session. Range is generous
+	// (-10..+10) because terrain scales vary widely - a small positive value (0.02 or so)
+	// is typical for nudging meshes off the ground to avoid Z-fighting, but volumetric
+	// terrains with large vertical scales may want more. Drag step is fine (0.01) for
+	// precision tuning.
+	new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Initial Y Offset", &_roadPainterInitialYOffset, -10.0f, 10.0f, 0.01f, 3);
+
 	auto* straightYawOffset = new HexEngine::DropDown(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Straight Yaw Offset");
 	straightYawOffset->SetValue(QuarterTurnLabel(_roadPainterYawQuarterTurns));
 	auto setStraightYawOffset = [this, straightYawOffset](int32_t quarterTurns)
@@ -1570,7 +1577,13 @@ void CitySimulationEditorToolPlugin::HandleSceneViewportMouseDown(HexEngine::Edi
 	{
 		_roadPainterAnchorX = SnapToGrid(message->worldPosition.x, _roadPainterCellSize);
 		_roadPainterAnchorZ = SnapToGrid(message->worldPosition.z, _roadPainterCellSize);
-		_roadPainterAnchorHeight = message->worldPosition.y;
+		// Apply the configured Y offset ONLY here, at the very first click that creates
+		// a fresh anchor. After this point the height inherits forward via the
+		// anchor-cell lookup in PaintOrthogonalRun (and via _roadPainterAnchorHeight on
+		// fresh-session fallback) so the offset is baked in once and propagates without
+		// being re-added on every click. The raycast hit lands on the ground; lifting
+		// by a small amount keeps the road from Z-fighting with the terrain surface.
+		_roadPainterAnchorHeight = message->worldPosition.y + _roadPainterInitialYOffset;
 		_roadPainterHasAnchor = true;
 		_roadPainterHoverX = _roadPainterAnchorX;
 		_roadPainterHoverZ = _roadPainterAnchorZ;
