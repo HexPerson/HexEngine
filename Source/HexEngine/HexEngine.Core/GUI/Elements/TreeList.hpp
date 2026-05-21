@@ -3,6 +3,7 @@
 
 #include "ScrollView.hpp"
 #include "ListNode.hpp"
+#include <unordered_set>
 
 namespace HexEngine
 {
@@ -40,6 +41,17 @@ namespace HexEngine
 		void SetSelectedItem(ListNode* item, bool scrollIntoView = true);
 		ListNode* GetSelectedItem() const;
 
+		// Multi-selection support: a parallel set of nodes that get the same selection
+		// highlight as _selectedItem in RenderItem. The single-selection mechanism above
+		// (SetSelectedItem / _selectedItem) stays unchanged and is the focused/anchor item
+		// used for keyboard nav; this set is purely an additional visual selection layer
+		// callers can drive with their own click semantics (e.g. Ctrl-click toggling).
+		void                                AddToMultiSelection(ListNode* item);
+		void                                RemoveFromMultiSelection(ListNode* item);
+		void                                ClearMultiSelection();
+		bool                                IsInMultiSelection(ListNode* item) const;
+		const std::unordered_set<ListNode*>& GetMultiSelection() const { return _multiSelection; }
+
 		//void SetOnSelectItem(OnSelectItem cb);
 
 		virtual bool OnInputEvent(InputEvent event, InputData* data) override;
@@ -73,6 +85,7 @@ namespace HexEngine
 		ListNode* _draggedItem = nullptr;
 		ListNode* _dragTarget = nullptr;
 		ListNode* _selectedItem = nullptr;
+		std::unordered_set<ListNode*> _multiSelection;
 		std::recursive_mutex _lock;
 		int32_t _currentNodeId = 0;
 		//ITexture2D* _renderTarget = nullptr;

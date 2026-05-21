@@ -35,6 +35,11 @@ namespace HexEngine
 			std::wstring filterText;
 			std::vector<std::wstring> filterTokens;
 			Entity* selectedEntity = nullptr;
+			// Order-preserving list of multi-selected entities. INVARIANT: when non-empty,
+			// the *first* entry is the "anchor" or "survivor" - the entity any merge action
+			// keeps and merges the rest into. New Ctrl-click selections are appended at the
+			// end so the user's first picked entity remains the anchor through the session.
+			std::vector<Entity*> selectedEntities;
 		};
 
 		std::unordered_map<const EntityList*, EntityListState> g_entityListStates;
@@ -188,14 +193,23 @@ namespace HexEngine
 			return extras;
 		}
 
-		// Builds the combined mesh, saves it to disk, swaps it onto `root`, and destroys
-		// every contributor other than the root. Returns true on success.
+		// Builds the combined mesh, saves it to disk, swaps it onto `survivor`, and then
+		// destroys every entity in `entitiesToDestroyAfter` (and their descendants, via
+		// id-resolved walks). Returns true on success.
 		//
-		// `outputName` is the bare filename (no extension); we append .hmesh and place it in
-		// EngineData/Meshes/Merged/, suffixing with _N if a file with the same stem exists.
-		bool ExecuteStaticMeshMerge(Entity* root, const std::vector<MergeSource>& sources, const std::wstring& outputName)
+		// `outputName` is the bare filename (no extension); we append .hmesh and place it
+		// in EngineData/Meshes/Merged/, suffixing with _N if a file with the same stem
+		// exists. `entitiesToDestroyAfter` is owned by the caller and may safely include
+		// entries that are equal to `survivor` (we skip them) - this is what keeps the two
+		// callers (hierarchy vs flat selection) sharing the same execution path even though
+		// each has a different definition of what to clean up.
+		bool ExecuteStaticMeshMerge(
+			Entity* survivor,
+			const std::vector<MergeSource>& sources,
+			const std::vector<Entity*>& entitiesToDestroyAfter,
+			const std::wstring& outputName)
 		{
-			if (root == nullptr || sources.size() < 2)
+			if (survivor == nullptr || sources.size() < 2)
 			{
 				LOG_WARN("ExecuteStaticMeshMerge needs at least two source meshes");
 				return false;
@@ -320,52 +334,60 @@ namespace HexEngine
 			// resource reload round-trip.
 			combinedMesh->CreateBuffers();
 
-			// Swap the merged mesh onto the root. Re-uses the existing SMC if root already
-			// had one, otherwise adds a fresh one.
-			auto* rootSmc = root->GetComponent<StaticMeshComponent>();
-			if (rootSmc == nullptr)
+			// Swap the merged mesh onto the survivor. Re-uses the existing SMC if one is
+			// already there, otherwise adds a fresh one.
+			auto* survivorSmc = survivor->GetComponent<StaticMeshComponent>();
+			if (survivorSmc == nullptr)
 			{
-				rootSmc = root->AddComponent<StaticMeshComponent>();
+				survivorSmc = survivor->AddComponent<StaticMeshComponent>();
 			}
-			if (rootSmc != nullptr)
+			if (survivorSmc != nullptr)
 			{
-				rootSmc->SetMesh(combinedMesh);
+				survivorSmc->SetMesh(combinedMesh);
 			}
 
-			// Destroy every descendant of root, not just the SMC-bearing contributors. Pure-
-			// transform nodes and non-SMC nodes nested under contributors would otherwise
-			// be orphaned-flagged-but-not-removed when their parent's DeleteMe empties its
-			// _children list without cascading scene-level removal (same root cause as the
-			// road-painter ghost-preview bug).
+			// Destroy the caller-supplied list, expanded to also include every descendant
+			// of each requested entity. Cleaning up descendants (not just the entity itself)
+			// matters because Entity::DeleteMe(parent) only flags the immediate children -
+			// any deeper subtree would otherwise be orphaned-flagged-but-not-scene-removed
+			// (same root cause as the road-painter ghost-preview bug).
 			//
-			// Implementation note: Scene::DestroyEntity on an already-flagged entity DOES
-			// recurse into its preserved _children (its flagged path), so a parent's
-			// destruction can transitively destroy a deeper descendant we have a separate
-			// pointer to. Iterate descendant IDs (which become invalid on free) instead of
-			// raw Entity*, and re-resolve via TryGetEntity each iteration so we no-op on
-			// anything a prior cascade already removed.
-			Scene* scene = root->GetScene();
+			// Implementation note: Scene::DestroyEntity on an already-flagged entity runs
+			// RemoveEntityInternal unconditionally, and its flagged path DOES recurse into
+			// the entity's preserved _children. We therefore work with EntityIds (not raw
+			// pointers) and re-resolve each via TryGetEntity per iteration, so any entity
+			// a prior cascade already freed safely no-ops.
+			Scene* scene = survivor->GetScene();
 			if (scene != nullptr)
 			{
-				std::vector<EntityId> descendantIds;
+				std::unordered_set<EntityId, EntityIdHasher> idSet;
+				std::vector<EntityId> destroyIdsOrdered;
+				auto stageEntity = [&](Entity* ent)
 				{
+					if (ent == nullptr || ent == survivor)
+						return;
+					const EntityId id = ent->GetId();
+					if (idSet.insert(id).second)
+						destroyIdsOrdered.push_back(id);
+				};
+
+				for (auto* requested : entitiesToDestroyAfter)
+				{
+					if (requested == nullptr || requested == survivor || requested->IsPendingDeletion())
+						continue;
+
+					stageEntity(requested);
+
 					std::vector<Entity*> descendants;
-					CollectAllDescendants(root, descendants);
-					descendantIds.reserve(descendants.size());
+					CollectAllDescendants(requested, descendants);
 					for (auto* d : descendants)
 					{
-						if (d != nullptr)
-							descendantIds.push_back(d->GetId());
+						stageEntity(d);
 					}
 				}
 
-				for (const auto& id : descendantIds)
+				for (const auto& id : destroyIdsOrdered)
 				{
-					// Skip ONLY when the slot is gone (already fully removed by a cascade).
-					// A flagged-but-not-yet-removed entity is exactly what we want to call
-					// DestroyEntity on - its already-flagged path runs RemoveEntityInternal
-					// unconditionally, which is what actually frees the slot. Skipping
-					// flagged entities here would leak them just like the road painter bug.
 					Entity* live = scene->TryGetEntity(id);
 					if (live == nullptr)
 						continue;
@@ -553,7 +575,241 @@ namespace HexEngine
 					std::vector<std::pair<Entity*, std::vector<std::string>>> liveConflicts;
 					if (PrepareStaticMeshMergeSources(liveRoot, liveSources, liveConflicts))
 					{
-						ExecuteStaticMeshMerge(liveRoot, liveSources, outputName->GetValue());
+						// Hierarchy mode destroys EVERY descendant of the survivor so the
+						// post-merge subtree has only `liveRoot` left holding the combined
+						// mesh. Pass them all as the destroy list - ExecuteStaticMeshMerge
+						// will further expand each into its own subtree if needed.
+						std::vector<Entity*> destroyList;
+						CollectAllDescendants(liveRoot, destroyList);
+						ExecuteStaticMeshMerge(liveRoot, liveSources, destroyList, outputName->GetValue());
+					}
+
+					dlg->DeleteMe();
+					return true;
+				});
+		}
+
+		// Selection-mode source preparation. `selected[0]` is the survivor; every other
+		// selected entity that has a StaticMeshComponent becomes a MergeSource. Non-survivor
+		// selected entities with non-Transform/non-SMC components are recorded as conflicts
+		// just like in the hierarchy path - they're about to be destroyed and the user
+		// should know the side-component data goes with them.
+		bool PrepareStaticMeshMergeSourcesFromSelection(
+			const std::vector<Entity*>& selected,
+			Entity*& outSurvivor,
+			std::vector<MergeSource>& outSources,
+			std::vector<std::pair<Entity*, std::vector<std::string>>>& outConflicts)
+		{
+			outSources.clear();
+			outConflicts.clear();
+			outSurvivor = nullptr;
+
+			if (selected.size() < 2)
+				return false;
+
+			// First valid entity in the snapshot wins survivor status. Filtering null /
+			// pending-deletion up-front guards against stale selections (the user might
+			// have deleted something between Ctrl-click and right-click).
+			Entity* survivor = nullptr;
+			for (auto* candidate : selected)
+			{
+				if (candidate != nullptr && !candidate->IsPendingDeletion())
+				{
+					survivor = candidate;
+					break;
+				}
+			}
+			if (survivor == nullptr)
+				return false;
+
+			Scene* survivorScene = survivor->GetScene();
+			const math::Matrix survivorWorldInv = survivor->GetWorldTMInvert();
+
+			for (auto* ent : selected)
+			{
+				if (ent == nullptr || ent->IsPendingDeletion())
+					continue;
+				// Cross-scene selections are not coherent for a merge - the survivor's
+				// scene is the only valid frame of reference. Skip mismatches silently.
+				if (ent->GetScene() != survivorScene)
+					continue;
+
+				auto* smc = ent->GetComponent<StaticMeshComponent>();
+				if (smc == nullptr)
+				{
+					// Non-SMC entry in the selection: not a contributor, but if it's not
+					// the survivor it'll still be destroyed at merge time, so flag any
+					// extra components it carries.
+					if (ent != survivor)
+					{
+						auto extras = CollectExtraComponentNames(ent);
+						if (!extras.empty())
+							outConflicts.emplace_back(ent, std::move(extras));
+					}
+					continue;
+				}
+
+				auto mesh = smc->GetMesh();
+				if (mesh == nullptr)
+					continue;
+
+				MergeSource source;
+				source.entity = ent;
+				source.mesh = mesh;
+				source.entityToRootLocal = ent->GetWorldTM() * survivorWorldInv;
+				outSources.push_back(std::move(source));
+
+				if (ent != survivor)
+				{
+					auto extras = CollectExtraComponentNames(ent);
+					if (!extras.empty())
+						outConflicts.emplace_back(ent, std::move(extras));
+				}
+			}
+
+			outSurvivor = survivor;
+			return outSources.size() >= 2;
+		}
+
+		void ShowMergeSelectedStaticMeshesDialog(const std::vector<Entity*>& selected)
+		{
+			Entity* survivor = nullptr;
+			std::vector<MergeSource> sources;
+			std::vector<std::pair<Entity*, std::vector<std::string>>> conflicts;
+			if (!PrepareStaticMeshMergeSourcesFromSelection(selected, survivor, sources, conflicts))
+			{
+				LOG_WARN("Cannot merge selection: needs at least two entities with StaticMeshComponent");
+				return;
+			}
+
+			// Dialog body is identical in shape to the hierarchy dialog - same conflict-
+			// list + force-merge ergonomics. Survivor name drives the default output stem
+			// so the user can tell which entity will hold the merged mesh.
+			const int32_t dlgWidth = 480;
+			const int32_t baseHeight = 160;
+			const int32_t conflictPaneHeight = conflicts.empty() ? 0 : 180;
+			const int32_t dlgHeight = baseHeight + conflictPaneHeight;
+
+			auto* dlg = new Dialog(
+				g_pEnv->GetUIManager().GetRootElement(),
+				Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2),
+				Point(dlgWidth, dlgHeight),
+				L"Merge Selected Static Meshes");
+
+			auto* outputName = new LineEdit(
+				dlg,
+				Point(12, 12),
+				Point(dlgWidth - 24, 24),
+				L"Output mesh name");
+			outputName->SetValue(std::wstring(survivor->GetName().begin(), survivor->GetName().end()) + L"_Merged");
+			outputName->SetDoesCallbackWaitForReturn(false);
+
+			auto forceMergeFlag = std::make_shared<bool>(false);
+
+			int32_t cursorY = 46;
+			if (!conflicts.empty())
+			{
+				auto* group = new GroupBox(
+					dlg,
+					Point(12, cursorY),
+					Point(dlgWidth - 24, conflictPaneHeight - 8),
+					L"Selected entities with extra components");
+
+				auto* list = new ListBox(
+					group,
+					Point(8, 18),
+					Point(dlgWidth - 40, conflictPaneHeight - 36));
+				for (const auto& [conflictEntity, extras] : conflicts)
+				{
+					std::wstring label;
+					label.append(conflictEntity->GetName().begin(), conflictEntity->GetName().end());
+					label += L": ";
+					for (size_t i = 0; i < extras.size(); ++i)
+					{
+						if (i > 0)
+							label += L", ";
+						label.append(extras[i].begin(), extras[i].end());
+					}
+					list->AddItem(label);
+				}
+
+				cursorY += conflictPaneHeight;
+
+				new Checkbox(
+					dlg,
+					Point(12, cursorY),
+					Point(dlgWidth - 24, 22),
+					L"Force merge (extra components will be lost with their entities)",
+					forceMergeFlag.get());
+				cursorY += 30;
+			}
+
+			// Capture selection by EntityId so a stale-pointer race after dialog open
+			// never crashes - the Merge button re-resolves each id at execute time.
+			Scene* scene = survivor->GetScene();
+			std::vector<EntityId> selectionIds;
+			selectionIds.reserve(selected.size());
+			for (auto* e : selected)
+			{
+				if (e != nullptr)
+					selectionIds.push_back(e->GetId());
+			}
+			const bool hasConflicts = !conflicts.empty();
+
+			new Button(
+				dlg,
+				Point(dlgWidth - 180, dlgHeight - 36),
+				Point(78, 24),
+				L"Cancel",
+				[dlg](Button*) {
+					dlg->DeleteMe();
+					return true;
+				});
+
+			new Button(
+				dlg,
+				Point(dlgWidth - 92, dlgHeight - 36),
+				Point(78, 24),
+				L"Merge",
+				[dlg, outputName, forceMergeFlag, scene, selectionIds, hasConflicts](Button*) {
+					if (hasConflicts && !(*forceMergeFlag))
+					{
+						LOG_WARN("Merge cancelled: extras present and force-merge not enabled");
+						dlg->DeleteMe();
+						return true;
+					}
+
+					if (scene == nullptr)
+					{
+						LOG_WARN("Merge cancelled: scene unavailable");
+						dlg->DeleteMe();
+						return true;
+					}
+
+					// Re-resolve every id at execute time so any entity destroyed between
+					// dialog-open and Merge-click is silently filtered out.
+					std::vector<Entity*> liveSelected;
+					liveSelected.reserve(selectionIds.size());
+					for (const auto& id : selectionIds)
+					{
+						if (Entity* live = scene->TryGetEntity(id); live != nullptr && !live->IsPendingDeletion())
+							liveSelected.push_back(live);
+					}
+
+					Entity* liveSurvivor = nullptr;
+					std::vector<MergeSource> liveSources;
+					std::vector<std::pair<Entity*, std::vector<std::string>>> liveConflicts;
+					if (PrepareStaticMeshMergeSourcesFromSelection(liveSelected, liveSurvivor, liveSources, liveConflicts))
+					{
+						// Selection mode: destroy every selected entity except the survivor
+						// (ExecuteStaticMeshMerge expands each into its own subtree).
+						std::vector<Entity*> destroyList;
+						for (auto* e : liveSelected)
+						{
+							if (e != liveSurvivor)
+								destroyList.push_back(e);
+						}
+						ExecuteStaticMeshMerge(liveSurvivor, liveSources, destroyList, outputName->GetValue());
 					}
 
 					dlg->DeleteMe();
@@ -594,6 +850,22 @@ namespace HexEngine
 		return TreeList::OnInputEvent(event, data);
 	}
 
+	// Syncs the TreeList's multi-selection set to whatever entities are currently in
+	// `state.selectedEntities`, so the visual highlight matches the logical selection.
+	// Called whenever the click handler mutates the selection.
+	void EntityList::SyncMultiSelectionRendering()
+	{
+		ClearMultiSelection();
+		const auto& state = GetState(this);
+		for (auto* ent : state.selectedEntities)
+		{
+			if (ent == nullptr)
+				continue;
+			if (auto* node = FindItemByObjectPtr(ent))
+				AddToMultiSelection(node);
+		}
+	}
+
 	void EntityList::OnClickEntityInList(ListNode* item, int32_t mouseButton)
 	{
 		if (item == nullptr)
@@ -606,7 +878,37 @@ namespace HexEngine
 				return;
 
 			auto& state = GetState(this);
+			const bool ctrlHeld = g_pEnv != nullptr && g_pEnv->_inputSystem != nullptr && g_pEnv->_inputSystem->IsCtrlDown();
+
+			if (ctrlHeld)
+			{
+				// Ctrl-click toggles `entity` in the multi-selection without disturbing
+				// the focused/anchor entity (which stays on whatever was previously
+				// active so keyboard nav doesn't jump around mid-multi-select).
+				auto it = std::find(state.selectedEntities.begin(), state.selectedEntities.end(), entity);
+				if (it != state.selectedEntities.end())
+				{
+					state.selectedEntities.erase(it);
+				}
+				else
+				{
+					// First Ctrl-click also needs to include the previously focused entity
+					// in the multi-set, otherwise the user appears to "lose" the original
+					// selection the moment they Ctrl-click a second entity.
+					if (state.selectedEntities.empty() && state.selectedEntity != nullptr && state.selectedEntity != entity)
+						state.selectedEntities.push_back(state.selectedEntity);
+					state.selectedEntities.push_back(entity);
+				}
+				SyncMultiSelectionRendering();
+				// Don't fire _onEntityClicked here: that drives Inspector focus, which a
+				// multi-select toggle shouldn't change.
+				return;
+			}
+
+			// Plain click: drop the multi-selection, replace with the single focused entity.
 			state.selectedEntity = entity;
+			state.selectedEntities.clear();
+			SyncMultiSelectionRendering();
 			FocusEntity(entity);
 
 			if (_onEntityClicked)
@@ -643,17 +945,33 @@ namespace HexEngine
 			_ctx->AddItem(new ContextItem(L"Duplicate", std::bind(&EntityList::DuplicateEntity, this, entity)));
 			_ctx->AddItem(new ContextItem(L"Save as prefab", std::bind(&EntityList::SaveAsPrefab, this, entity, &g_pEnv->GetFileSystem())));
 
-			// "Merge Child Static Meshes" - only offered when there's something to merge.
-			// CollectStaticMeshSources walks `entity` + descendants; we need >=2 with a
-			// StaticMeshComponent for the action to produce a meaningful result. Hiding the
-			// item below that threshold keeps the menu from showing a no-op verb.
+			// Merge menu items - two shapes depending on what the user has selected:
+			//   * Selection mode: if 2+ entities are in the multi-select set AND the
+			//     right-clicked entity is one of them, offer "Merge Selected Static Meshes"
+			//     which operates on the flat selection (anchor = first selected).
+			//   * Hierarchy mode: otherwise, if the right-clicked entity (plus descendants)
+			//     contains 2+ StaticMeshComponents, offer "Merge Child Static Meshes" which
+			//     walks the subtree under that single entity.
+			// Both share the same merge plumbing (PerformStaticMeshMerge) - only how the
+			// contributor set is gathered differs.
 			{
-				std::vector<Entity*> meshSources;
-				CollectStaticMeshSources(entity, meshSources);
-				if (meshSources.size() >= 2)
+				const auto& multiSelected = GetState(this).selectedEntities;
+				const bool isRightClickedInMulti = std::find(multiSelected.begin(), multiSelected.end(), entity) != multiSelected.end();
+				if (isRightClickedInMulti && multiSelected.size() >= 2)
 				{
-					_ctx->AddItem(new ContextItem(L"Merge Child Static Meshes",
-						[entity](const std::wstring&) { ShowMergeStaticMeshesDialog(entity); }));
+					std::vector<Entity*> selectionSnapshot = multiSelected;
+					_ctx->AddItem(new ContextItem(L"Merge Selected Static Meshes",
+						[selectionSnapshot](const std::wstring&) { ShowMergeSelectedStaticMeshesDialog(selectionSnapshot); }));
+				}
+				else
+				{
+					std::vector<Entity*> meshSources;
+					CollectStaticMeshSources(entity, meshSources);
+					if (meshSources.size() >= 2)
+					{
+						_ctx->AddItem(new ContextItem(L"Merge Child Static Meshes",
+							[entity](const std::wstring&) { ShowMergeStaticMeshesDialog(entity); }));
+					}
 				}
 			}
 		}

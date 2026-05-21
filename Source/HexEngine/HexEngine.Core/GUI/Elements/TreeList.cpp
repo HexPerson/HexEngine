@@ -506,6 +506,38 @@ namespace HexEngine
 		return _selectedItem;
 	}
 
+	void TreeList::AddToMultiSelection(ListNode* item)
+	{
+		if (item == nullptr)
+			return;
+		std::unique_lock lock(_lock);
+		_multiSelection.insert(item);
+		_canvas.Redraw();
+	}
+
+	void TreeList::RemoveFromMultiSelection(ListNode* item)
+	{
+		if (item == nullptr)
+			return;
+		std::unique_lock lock(_lock);
+		_multiSelection.erase(item);
+		_canvas.Redraw();
+	}
+
+	void TreeList::ClearMultiSelection()
+	{
+		std::unique_lock lock(_lock);
+		if (_multiSelection.empty())
+			return;
+		_multiSelection.clear();
+		_canvas.Redraw();
+	}
+
+	bool TreeList::IsInMultiSelection(ListNode* item) const
+	{
+		return _multiSelection.count(item) > 0;
+	}
+
 	bool TreeList::ScrollToItem(ListNode* item, int32_t padding)
 	{
 		if (item == nullptr)
@@ -739,7 +771,7 @@ namespace HexEngine
 		if (position.y > absolutePos.y + _size.y)
 			return false;
 
-		if (_selectedItem == item)
+		if (_selectedItem == item || _multiSelection.count(item) > 0)
 		{
 			const int32_t indent = position.x - absolutePos.x;
 			Point highlightPos(position.x, position.y);

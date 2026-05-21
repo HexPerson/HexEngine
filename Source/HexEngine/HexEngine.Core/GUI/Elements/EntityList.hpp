@@ -45,6 +45,7 @@ namespace HexEngine
 
 	private:
 		void OnClickEntityInList(ListNode* item, int32_t mouseButton);
+		void SyncMultiSelectionRendering();
 		bool OnDragAndDropEntity(TreeList* list, ListNode* dragSource, ListNode* dragTarget);
 		void OnLoadScene(SceneListNode* node);
 		Entity* ResolveEntityNode(const ListNode* node) const;
