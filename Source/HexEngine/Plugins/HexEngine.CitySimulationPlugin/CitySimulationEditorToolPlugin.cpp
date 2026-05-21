@@ -563,6 +563,23 @@
 		}
 	}
 
+	// Walks the preview wrapper subtree and flags every entity as un-pickable so the
+	// editor's RayCastWorld retry loop skips past them. Necessary because prefab-based
+	// previews carry through their authored RigidBody / colliders (kept intact so the
+	// committed version of the same asset behaves correctly) and without the flag those
+	// colliders intercept the picking ray - the ghost ends up snapping the cursor to
+	// itself and drifting closer to the camera every frame.
+	void FlagPreviewSubtreeAsUnpickable(Entity* entity)
+	{
+		if (entity == nullptr)
+			return;
+		entity->SetFlag(EntityFlags::DoNotPickInEditor);
+		for (auto* child : entity->GetChildren())
+		{
+			FlagPreviewSubtreeAsUnpickable(child);
+		}
+	}
+
 	// Records `entity` for explicit teardown by the preview destructor. Why this exists:
 	// Entity::DeleteMe(parent) empties parent->_children and detaches each immediate child
 	// (parent=nullptr, IsPendingRemoval=true), but does NOT touch the grandchildren - their
@@ -1703,6 +1720,12 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 			SpawnPreviewPrefabCell(wrapper, placement.assetPath, previewMaterial, _roadPainterPreviewEntities);
 		else
 			SpawnPreviewMeshCell(wrapper, placement.assetPath, previewMaterial, _roadPainterPreviewEntities);
+
+		// Mark wrapper + everything spawned under it as un-pickable. Done AFTER spawn so
+		// the recursion picks up the prefab subtree that LoadPrefab attached. Without this
+		// the picking ray hits the ghost's own colliders and the cursor drifts toward the
+		// camera each frame.
+		FlagPreviewSubtreeAsUnpickable(wrapper);
 
 		scene->FlushPVS(wrapper);
 	}

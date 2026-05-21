@@ -64,7 +64,16 @@ namespace HexEngine
 		DoNotBlockNavMesh		= HEX_BITSET(4),
 		DoNotRender				= HEX_BITSET(5),
 		SelectedInEditor		= HEX_BITSET(6),
-		ExcludeFromHLOD			= HEX_BITSET(7)
+		ExcludeFromHLOD			= HEX_BITSET(7),
+		// Editor-only: the picking ray skips entities with this flag. Used by tools that
+		// spawn ghost / preview meshes which need to render and have colliders for their
+		// own purposes (e.g. so the COMMITTED version of the same asset behaves correctly
+		// the moment it's promoted) but shouldn't intercept the editor's mouse-pick ray -
+		// otherwise the tool's own preview snaps the cursor to itself and drifts on each
+		// frame as the ray hits the ghost slightly closer to the camera than the terrain
+		// below it. Honored by EditorUI::RayCastWorld via a retry loop that adds flagged
+		// hits to the ignore list and re-casts until a non-flagged surface is found.
+		DoNotPickInEditor		= HEX_BITSET(8)
 	};
 	DEFINE_ENUM_FLAG_OPERATORS(EntityFlags);
 

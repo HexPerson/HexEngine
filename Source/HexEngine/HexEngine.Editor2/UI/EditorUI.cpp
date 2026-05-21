@@ -1567,16 +1567,35 @@ namespace HexEditor
 				bool hasHit = false;
 				hit.position = ray.position + ray.direction * mainCamera->GetFarZ() * 0.25f;
 
-				if (HexEngine::PhysUtils::RayCast(
-					ray,
-					mainCamera->GetFarZ(),
-					LAYERMASK(HexEngine::Layer::StaticGeometry) |
-					LAYERMASK(HexEngine::Layer::DynamicGeometry),
-					&hit,
-					entsToIgnore)
-					)
+				// Retry loop honoring EntityFlags::DoNotPickInEditor: any flagged entity we
+				// hit gets added to the ignore list and we re-cast through it. Keeps tool
+				// preview ghosts (e.g. the road painter's transparent ghost) out of the pick
+				// path even though they keep their colliders so the committed version behaves
+				// correctly. Bound iterations to avoid infinite loops if a flagged entity is
+				// somehow re-emitted by the physics layer despite being in the ignore list.
+				std::vector<HexEngine::Entity*> liveIgnoreList = entsToIgnore;
+				constexpr int32_t kMaxPickRetries = 32;
+				for (int32_t attempt = 0; attempt < kMaxPickRetries; ++attempt)
 				{
+					if (!HexEngine::PhysUtils::RayCast(
+						ray,
+						mainCamera->GetFarZ(),
+						LAYERMASK(HexEngine::Layer::StaticGeometry) |
+						LAYERMASK(HexEngine::Layer::DynamicGeometry),
+						&hit,
+						liveIgnoreList))
+					{
+						break;
+					}
+
+					if (hit.entity != nullptr && hit.entity->HasFlag(HexEngine::EntityFlags::DoNotPickInEditor))
+					{
+						liveIgnoreList.push_back(hit.entity);
+						continue;
+					}
+
 					hasHit = true;
+					break;
 				}
 
 				HexEngine::EditorWorldRayCastMessage pluginRayCast;
