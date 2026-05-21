@@ -1680,7 +1680,23 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 	if (TryBuildPlacementSpec(_roadPainterCrossroadPath, _roadPainterYawQuarterTurns, tempSpec)) crossroadSpec = tempSpec;
 	if (TryBuildPlacementSpec(_roadPainterTJunctionPath, _roadPainterYawQuarterTurns, tempSpec)) tJunctionSpec = tempSpec;
 
-	ApplyIncrementalRoadNetworkChange(scene, runCells, _roadPainterAnchorHeight,
+	// When extending an existing road, lock new cells to the anchor cell's Y rather than
+	// the raycast hit Y. The raycast lands on the terrain under the mouse, which steps
+	// the road up/down with whatever ground is below the cursor - jarring on sloped
+	// terrain and visibly wrong where the new road meets a previously placed straight at
+	// a different height. Reading height from the existing wrapper at `start` keeps the
+	// whole road at a consistent level set by the very first click that put road down.
+	//
+	// Only fall back to _roadPainterAnchorHeight (the raycast Y stored on the previous
+	// click) when there's no managed cell at the anchor - i.e. when this is the first
+	// click of a fresh paint session and there's nothing to inherit from yet.
+	float runHeight = _roadPainterAnchorHeight;
+	if (auto* existingAtAnchor = FindManagedRoadCell(scene, start); existingAtAnchor != nullptr)
+	{
+		runHeight = existingAtAnchor->GetPosition().y;
+	}
+
+	ApplyIncrementalRoadNetworkChange(scene, runCells, runHeight,
 		straightSpec, cornerSpec, crossroadSpec, tJunctionSpec,
 		_roadPainterYawQuarterTurns,
 		_roadPainterCornerYawQuarterTurns,
@@ -1703,11 +1719,16 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 
 	_roadPainterAnchorX = lastPlaced.x;
 	_roadPainterAnchorZ = lastPlaced.z;
-	_roadPainterAnchorHeight = worldPosition.y;
+	// Keep the anchor at the run's Y, not the raycast click Y - otherwise the next
+	// click's "extending an existing road" lookup would still see this cell's actual
+	// position.y (which is correct), but if the user immediately starts a NEW paint
+	// session by clicking off-road, _roadPainterAnchorHeight is the fallback and we
+	// want it consistent with what we just placed rather than stale raycast data.
+	_roadPainterAnchorHeight = runHeight;
 	_roadPainterHasAnchor = true;
 	_roadPainterHoverX = lastPlaced.x;
 	_roadPainterHoverZ = lastPlaced.z;
-	_roadPainterHoverHeight = worldPosition.y;
+	_roadPainterHoverHeight = runHeight;
 	_roadPainterHasHover = true;
 }
 
