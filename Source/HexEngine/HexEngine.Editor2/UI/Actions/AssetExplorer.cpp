@@ -7,6 +7,7 @@
 #include <cwctype>
 #include <format>
 #include <fstream>
+#include <sstream>
 
 namespace HexEditor
 {
@@ -336,6 +337,341 @@ namespace HexEditor
 		_assetNameToEdit = asset;
 		_editingAssetTempName = asset->path.stem().wstring();
 		_editingAssetExtension = asset->path.extension().wstring();
+	}
+
+	namespace
+	{
+		// True if `ext` matches any of the engine-managed text-asset formats whose contents
+		// embed fs-relative paths to other assets. Keeping this list explicit (rather than
+		// scanning every file under Data) avoids accidentally rewriting unrelated binaries
+		// or third-party text whose content happens to contain a matching substring.
+		bool IsAssetTextContainer(const fs::path& path)
+		{
+			const auto ext = path.extension().string();
+			return ext == ".hscene"
+				|| ext == ".hprefab"
+				|| ext == ".hmat"
+				|| ext == ".hmesh";
+		}
+
+		std::string ReadEntireFile(const fs::path& path)
+		{
+			std::ifstream in(path, std::ios::binary);
+			if (!in.is_open())
+				return std::string();
+			std::ostringstream ss;
+			ss << in.rdbuf();
+			return ss.str();
+		}
+
+		bool WriteEntireFile(const fs::path& path, const std::string& content)
+		{
+			std::ofstream out(path, std::ios::binary | std::ios::trunc);
+			if (!out.is_open())
+				return false;
+			out.write(content.data(), static_cast<std::streamsize>(content.size()));
+			return out.good();
+		}
+
+		// Replace all non-overlapping occurrences of `needle` with `replacement`.
+		// Returns the number of replacements applied.
+		size_t ReplaceAllInPlace(std::string& haystack, const std::string& needle, const std::string& replacement)
+		{
+			if (needle.empty())
+				return 0;
+			size_t count = 0;
+			size_t pos = 0;
+			while ((pos = haystack.find(needle, pos)) != std::string::npos)
+			{
+				haystack.replace(pos, needle.length(), replacement);
+				pos += replacement.length();
+				++count;
+			}
+			return count;
+		}
+
+		// Builds the variants of an fs-relative asset path that might appear in a saved
+		// asset file. Older serializations write forward-slash paths (paths authored or
+		// imported as text); fs::path::string() on Windows produces native backslash
+		// paths, and the JSON writer escapes those to `\\` on disk. We emit BOTH variants
+		// so we don't miss either format - the path itself is the only piece of the
+		// reference that varies, the surrounding JSON structure stays put.
+		void BuildAssetPathVariants(
+			const std::wstring& fsName,
+			const fs::path& relPath,
+			std::string& outForwardSlash,
+			std::string& outEscapedBackslash)
+		{
+			const std::wstring forward = fsName + L"." + relPath.generic_wstring();
+			const fs::path nativePath = fs::path(fsName + L".") / relPath;
+			const std::wstring native = nativePath.wstring();
+
+			// On non-Windows the native form already uses forward slashes, so the two
+			// outputs end up identical - that's fine, ReplaceAllInPlace just does the
+			// same work twice.
+			outForwardSlash.assign(forward.begin(), forward.end());
+
+			// JSON escapes backslashes as "\\". The on-disk file content therefore
+			// contains TWO backslashes per native separator; build that representation
+			// directly so std::string::find lines up against what's in the file.
+			std::string escaped;
+			escaped.reserve(native.size() * 2);
+			for (wchar_t wc : native)
+			{
+				if (wc == L'\\')
+				{
+					escaped.push_back('\\');
+					escaped.push_back('\\');
+				}
+				else
+				{
+					escaped.push_back(static_cast<char>(wc));
+				}
+			}
+			outEscapedBackslash = std::move(escaped);
+		}
+	}
+
+	void AssetExplorer::FindAssetReferences(const fs::path& assetAbsolutePath, std::vector<fs::path>& outReferencingFiles) const
+	{
+		outReferencingFiles.clear();
+		if (_currentlyBrowsedFS == nullptr)
+			return;
+
+		const fs::path dataDir = _currentlyBrowsedFS->GetDataDirectory();
+		if (dataDir.empty() || !fs::exists(dataDir))
+			return;
+
+		const fs::path relPath = fs::relative(assetAbsolutePath, dataDir);
+		if (relPath.empty() || relPath.string().rfind("..", 0) == 0)
+			return; // asset isn't under the project's data dir; nothing meaningful to scan
+
+		std::string variantForward;
+		std::string variantEscaped;
+		BuildAssetPathVariants(_currentlyBrowsedFS->GetName(), relPath, variantForward, variantEscaped);
+
+		std::error_code ec;
+		for (auto it = fs::recursive_directory_iterator(dataDir, fs::directory_options::skip_permission_denied, ec);
+			it != fs::recursive_directory_iterator();
+			it.increment(ec))
+		{
+			if (ec)
+				continue;
+			const fs::directory_entry& entry = *it;
+			if (!entry.is_regular_file(ec))
+				continue;
+
+			const fs::path& candidate = entry.path();
+			if (!IsAssetTextContainer(candidate))
+				continue;
+			if (fs::equivalent(candidate, assetAbsolutePath, ec))
+				continue; // skip the asset itself
+
+			const std::string content = ReadEntireFile(candidate);
+			if (content.empty())
+				continue;
+
+			if (content.find(variantForward) != std::string::npos ||
+				(variantForward != variantEscaped && content.find(variantEscaped) != std::string::npos))
+			{
+				outReferencingFiles.push_back(candidate);
+			}
+		}
+	}
+
+	bool AssetExplorer::ExecuteRenameAndUpdateReferences(const fs::path& oldAbsolutePath, const std::wstring& newStem, const std::vector<fs::path>& referencingFiles)
+	{
+		if (_currentlyBrowsedFS == nullptr || newStem.empty())
+			return false;
+
+		const fs::path dataDir = _currentlyBrowsedFS->GetDataDirectory();
+		const fs::path newAbsolutePath = oldAbsolutePath.parent_path() / (newStem + oldAbsolutePath.extension().wstring());
+
+		if (newAbsolutePath == oldAbsolutePath)
+			return true; // no-op rename
+
+		if (fs::exists(newAbsolutePath))
+		{
+			LOG_WARN("Rename refused: target '%s' already exists", newAbsolutePath.string().c_str());
+			return false;
+		}
+
+		const fs::path oldRel = fs::relative(oldAbsolutePath, dataDir);
+		const fs::path newRel = fs::relative(newAbsolutePath, dataDir);
+		if (oldRel.empty() || newRel.empty())
+		{
+			LOG_WARN("Rename refused: paths are not relative to the project data directory");
+			return false;
+		}
+
+		std::string oldForward, oldEscaped, newForward, newEscaped;
+		BuildAssetPathVariants(_currentlyBrowsedFS->GetName(), oldRel, oldForward, oldEscaped);
+		BuildAssetPathVariants(_currentlyBrowsedFS->GetName(), newRel, newForward, newEscaped);
+
+		// Rewrite each referencing file in place. Read the whole content into memory,
+		// substitute both path variants, then write it back atomically (truncate + write).
+		// If a file fails to update we log and continue - partial application is better
+		// than aborting halfway through, because some references being updated is closer
+		// to "correct" than dropping the rename entirely; the user can re-run to mop up.
+		for (const auto& refFile : referencingFiles)
+		{
+			std::string content = ReadEntireFile(refFile);
+			if (content.empty())
+				continue;
+
+			size_t totalReplacements = 0;
+			totalReplacements += ReplaceAllInPlace(content, oldForward, newForward);
+			if (oldForward != oldEscaped)
+				totalReplacements += ReplaceAllInPlace(content, oldEscaped, newEscaped);
+
+			if (totalReplacements == 0)
+				continue;
+
+			if (!WriteEntireFile(refFile, content))
+			{
+				LOG_WARN("Failed to update references in '%s'", refFile.string().c_str());
+			}
+		}
+
+		// Now do the actual rename on disk. Done LAST so a failed rename leaves the
+		// reference updates intact but logs an error; if we renamed first and reference
+		// updates failed mid-loop we'd end up with both stale and rewritten paths in the
+		// project.
+		std::error_code ec;
+		fs::rename(oldAbsolutePath, newAbsolutePath, ec);
+		if (ec)
+		{
+			LOG_WARN("Rename failed: %s", ec.message().c_str());
+			return false;
+		}
+
+		return true;
+	}
+
+	void AssetExplorer::ShowRenameAssetDialog(AssetDesc* asset)
+	{
+		CloseContextMenu();
+
+		if (asset == nullptr || _currentlyBrowsedFS == nullptr)
+			return;
+
+		// Snapshot the asset's absolute path - the AssetDesc* may be invalidated by any
+		// UpdateAssets call (e.g. via a file-change notification) before the user clicks
+		// Rename, so we don't rely on the pointer staying live.
+		const fs::path assetPath = asset->path;
+		const std::wstring originalStem = assetPath.stem().wstring();
+		const std::wstring assetExtension = assetPath.extension().wstring();
+
+		std::vector<fs::path> referencingFiles;
+		FindAssetReferences(assetPath, referencingFiles);
+
+		const int32_t dlgWidth = 540;
+		const int32_t baseHeight = 200;
+		const int32_t refPaneHeight = referencingFiles.empty() ? 0 : 200;
+		const int32_t dlgHeight = baseHeight + refPaneHeight;
+
+		auto* dlg = new HexEngine::Dialog(
+			HexEngine::g_pEnv->GetUIManager().GetRootElement(),
+			HexEngine::Point::GetScreenCenterWithOffset(-dlgWidth / 2, -dlgHeight / 2),
+			HexEngine::Point(dlgWidth, dlgHeight),
+			L"Rename Asset");
+
+		auto* newNameEdit = new HexEngine::LineEdit(
+			dlg,
+			HexEngine::Point(12, 12),
+			HexEngine::Point(dlgWidth - 24, 24),
+			L"New name");
+		newNameEdit->SetValue(originalStem);
+		newNameEdit->SetDoesCallbackWaitForReturn(false);
+
+		int32_t cursorY = 46;
+
+		if (referencingFiles.empty())
+		{
+			// Use a Button as a pseudo-label - the GUI library has no dedicated read-only
+			// text widget at this level, and an inert Button renders the message cleanly
+			// without needing a custom Render override on the dialog.
+			auto* note = new HexEngine::Button(
+				dlg,
+				HexEngine::Point(12, cursorY),
+				HexEngine::Point(dlgWidth - 24, 22),
+				L"No references to this asset were found.",
+				[](HexEngine::Button*) { return true; });
+			(void)note;
+			cursorY += 30;
+		}
+		else
+		{
+			auto* group = new HexEngine::GroupBox(
+				dlg,
+				HexEngine::Point(12, cursorY),
+				HexEngine::Point(dlgWidth - 24, refPaneHeight - 8),
+				L"References that will be updated");
+
+			auto* list = new HexEngine::ListBox(
+				group,
+				HexEngine::Point(8, 18),
+				HexEngine::Point(dlgWidth - 40, refPaneHeight - 36));
+			for (const auto& refPath : referencingFiles)
+			{
+				// Show paths relative to the data dir so the user sees something readable
+				// (`Scenes/foo.hscene`) instead of a full C:\ absolute path.
+				std::error_code ec;
+				fs::path display = fs::relative(refPath, _currentlyBrowsedFS->GetDataDirectory(), ec);
+				const std::wstring label = (ec || display.empty()) ? refPath.wstring() : display.generic_wstring();
+				list->AddItem(label);
+			}
+
+			cursorY += refPaneHeight;
+		}
+
+		// Buttons at the bottom-right.
+		new HexEngine::Button(
+			dlg,
+			HexEngine::Point(dlgWidth - 180, dlgHeight - 36),
+			HexEngine::Point(78, 24),
+			L"Cancel",
+			[dlg](HexEngine::Button*) {
+				dlg->DeleteMe();
+				return true;
+			});
+
+		new HexEngine::Button(
+			dlg,
+			HexEngine::Point(dlgWidth - 92, dlgHeight - 36),
+			HexEngine::Point(78, 24),
+			L"Rename",
+			[this, dlg, newNameEdit, assetPath, originalStem, assetExtension, referencingFiles](HexEngine::Button*) {
+				const std::wstring newStem = newNameEdit->GetValue();
+				if (newStem.empty())
+				{
+					LOG_WARN("Rename refused: name cannot be empty");
+					return true;
+				}
+				if (newStem == originalStem)
+				{
+					// No change - just close.
+					dlg->DeleteMe();
+					return true;
+				}
+				// Block characters that are illegal in filenames on Windows. NTFS bans
+				// these AND posix-style slashes; refusing them up-front gives a cleaner
+				// error than letting fs::rename fail later with a generic code.
+				const std::wstring illegal = L"\\/:*?\"<>|";
+				if (newStem.find_first_of(illegal) != std::wstring::npos)
+				{
+					LOG_WARN("Rename refused: name contains an illegal character");
+					return true;
+				}
+
+				if (ExecuteRenameAndUpdateReferences(assetPath, newStem, referencingFiles))
+				{
+					UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+				}
+
+				dlg->DeleteMe();
+				return true;
+			});
 	}
 
 	void AssetExplorer::CreateNewMaterial(const fs::path& baseDir)
@@ -1370,6 +1706,19 @@ namespace HexEditor
 					if (numSelection == 1 && numSelectedMeshes == 1)
 					{
 						_contextMenu->AddItem(new HexEngine::ContextItem(L"Recenter mesh to origin", std::bind(&AssetExplorer::RecenterSelectedMeshToOrigin, this)));
+					}
+
+					// Rename is single-selection only - bulk rename would need a separate
+					// flow (name templates, conflict resolution, etc.) that's out of scope
+					// here. Use _hoveredAsset captured at right-click time as the rename
+					// target since the user clicked through it to reach the menu.
+					if (numSelection == 1 && _hoveredAsset != nullptr)
+					{
+						AssetDesc* renameTarget = _hoveredAsset;
+						_contextMenu->AddItem(new HexEngine::ContextItem(L"Rename...",
+							[this, renameTarget](const std::wstring&) {
+								ShowRenameAssetDialog(renameTarget);
+							}));
 					}
 
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&AssetExplorer::SetMassMaterial, this)));
