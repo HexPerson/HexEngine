@@ -235,6 +235,76 @@
 		}
 	}
 
+	// Strips a wrapper's content (children + mesh/physics components) without destroying
+	// the wrapper itself. Used by the corner-upgrade path: when a straight cell becomes a
+	// corner we want to KEEP the wrapper entity (and its scene name "CityRoadDraw_X_Z")
+	// because Scene::CreateEntity with a duplicate name either returns the existing entity
+	// or auto-renames the new one - both leave the OLD wrapper alive and rendering its
+	// stale straight mesh on top of the new corner. By re-using the wrapper we sidestep
+	// the duplicate-name path entirely: the wrapper persists across the upgrade, only its
+	// children and components change.
+	//
+	// Uses the same bottom-up + detach destruction as DestroyWrapperAndDescendants, just
+	// applied to each child subtree rather than starting from the wrapper itself. See that
+	// function's comment for why Scene::DestroyEntity alone is insufficient.
+	void ClearWrapperContent(Scene* scene, Entity* wrapper)
+	{
+		if (scene == nullptr || wrapper == nullptr)
+			return;
+
+		std::vector<EntityId> destroyOrder;
+		std::function<void(Entity*)> collect = [&](Entity* e)
+		{
+			if (e == nullptr)
+				return;
+			const std::vector<Entity*> children = e->GetChildren();
+			for (auto* child : children)
+			{
+				if (child == nullptr)
+					continue;
+				collect(child);
+			}
+			destroyOrder.push_back(e->GetId());
+		};
+
+		// Snapshot top-level children once, then recurse - we want each subtree fully
+		// collected before any destruction starts so the live _children mutations don't
+		// trip the traversal.
+		const std::vector<Entity*> directChildren = wrapper->GetChildren();
+		for (auto* child : directChildren)
+		{
+			if (child == nullptr)
+				continue;
+			collect(child);
+		}
+
+		for (const auto& id : destroyOrder)
+		{
+			Entity* e = scene->TryGetEntity(id);
+			if (e == nullptr)
+				continue;
+			if (auto* parent = e->GetParent(); parent != nullptr)
+			{
+				e->SetParent(nullptr);
+			}
+			scene->DestroyEntity(e);
+		}
+
+		// Strip wrapper-level components that the spawn paths add. SpawnMeshCell attaches
+		// a StaticMeshComponent (and optionally a RigidBody) directly to the wrapper, so
+		// without removing them an upgrade from mesh->prefab (or mesh->mesh with a different
+		// asset) would inherit the previous cell's mesh component on top of the new prefab
+		// subtree and you'd see both meshes overlapping.
+		if (auto* smc = wrapper->GetComponent<HexEngine::StaticMeshComponent>(); smc != nullptr)
+		{
+			wrapper->RemoveComponent<HexEngine::StaticMeshComponent>();
+		}
+		if (auto* rb = wrapper->GetComponent<HexEngine::RigidBody>(); rb != nullptr)
+		{
+			wrapper->RemoveComponent<HexEngine::RigidBody>();
+		}
+	}
+
 	uint8_t RotateMaskClockwise(uint8_t mask)
 	{
 		uint8_t rotated = DirectionNone;
@@ -929,20 +999,41 @@
 
 		// Phase 2: apply. Now that all decisions are made, mutating the scene won't
 		// corrupt later lookups.
+		//
+		// For UPGRADES (existing wrapper at this coord), we re-use the wrapper entity
+		// rather than destroy+CreateEntity-with-same-name. Reason: Scene::CreateEntity
+		// resolves duplicate names by either (a) returning the existing entity if the
+		// naming policy isn't AutoRename, or (b) auto-renaming the new entity with a
+		// numeric suffix. Either branch leaves the OLD wrapper alive and rendering its
+		// stale subtree on top of whatever the new wrapper draws - which is the visible
+		// symptom of "corner cell retains its straight piece". The dup-name issue is
+		// timing-dependent: Scene::DestroyEntity defers the actual removal when called
+		// during entity iteration (`_insideEntityIteration`), so even though we called
+		// destroy, the old wrapper is still in `_entNameMap` when CreateEntity hits.
+		//
+		// By re-using the wrapper we never reach that race: we just strip its existing
+		// children/components via ClearWrapperContent, update its transform, and respawn
+		// content onto the same entity. ForcePosition + SetRotation are immediate (no
+		// scene-level book-keeping) so this is atomic from the scene's point of view.
 		for (const auto& action : actions)
 		{
+			Entity* wrapper = nullptr;
+			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(action.coord, spacing, action.height), action.placement.aabbCenterXZ, action.placement.rotation);
+
 			if (action.existingWrapper != nullptr)
 			{
-				// Use the descendant-aware destroy so prefab-based road pieces don't
-				// leave their prefab subtree orphaned-but-still-rendering when their
-				// wrapper gets replaced (e.g. a straight upgrading to a corner).
-				DestroyWrapperAndDescendants(scene, action.existingWrapper);
+				wrapper = action.existingWrapper;
+				ClearWrapperContent(scene, wrapper);
+				wrapper->ForcePosition(wrapperWorld);
+				wrapper->SetRotation(action.placement.rotation);
+				wrapper->SetScale(math::Vector3(1.0f));
 			}
-
-			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(action.coord, spacing, action.height), action.placement.aabbCenterXZ, action.placement.rotation);
-			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(action.coord), wrapperWorld, action.placement.rotation, math::Vector3(1.0f));
-			if (wrapper == nullptr)
-				continue;
+			else
+			{
+				wrapper = scene->CreateEntity(MakeManagedWrapperName(action.coord), wrapperWorld, action.placement.rotation, math::Vector3(1.0f));
+				if (wrapper == nullptr)
+					continue;
+			}
 
 			wrapper->SetCastsShadows(false);
 
