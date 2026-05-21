@@ -2338,9 +2338,16 @@ namespace HexEngine
 				// instead of one batched call, but N is small (<= a few dozen lights
 				// typically) and each draw is a low-poly sphere so the GPU work dominates
 				// the per-draw fixed cost.
-				g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
-				g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
+				//
+				// Important: blend / depth / culling state MUST be set per-iteration AFTER
+				// RenderMesh, because StaticMeshComponent::RenderMesh calls SetBlendState
+				// / SetDepthBufferState / SetCullingMode from the spot-light material's
+				// defaults (Opaque, DepthDefault, BackFace). Setting them once before the
+				// loop is silently undone on the first RenderMesh call - we'd then render
+				// with depth-test on (sphere clipped behind scene geometry, including
+				// when the camera is inside the bounding sphere where the back faces are
+				// behind the near plane) and opaque blending (replaces beauty instead of
+				// adding to it).
 
 				int32_t numSpotLightsRendered = 0;
 
@@ -2397,10 +2404,15 @@ namespace HexEngine
 
 					instance->Finish();
 
-					// RenderMesh sets up vertex/index/material bindings against the sphere
-					// mesh. Called once per light so the instance buffer slot it references
-					// matches the single instance we just wrote.
+					// RenderMesh sets up vertex/index/material bindings AND - critically -
+					// resets blend/depth/cull to the material's defaults. We override
+					// those AFTER the call so the actual draw runs with additive blending,
+					// depth-test off, and the inside/outside-bounding-sphere culling mode.
 					renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
+
+					g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
+					g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+					g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
 
 					GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin SpotLight");
 					g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), 1);

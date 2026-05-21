@@ -140,12 +140,18 @@
 			{
 				lightToSample /= d;
 
-				// Same inverse-square + smooth-window attenuation as the surface path
-				// so volumetric fog matches direct lighting through the volume.
-				const float minDistSqr = 0.01f * 0.01f;
+				// Softened inverse-square for the volumetric path - see the matching
+				// comment in PointLight.shader. Hard 1/d^2 across only ~14 ray samples
+				// collapses the cone to one spike per ray, breaking the visual into a
+				// bright blob near the source and a lit floor patch with nothing in
+				// between. Soft denominator (d*d + softness^2) caps the peak smoothly so
+				// every sample inside the cone contributes a meaningful amount. Surface
+				// path still uses strict 1/d^2 below.
+				const float softness = max(radius * 0.08f, 0.5f);
+				const float softnessSqr = softness * softness;
 				float distanceFalloff = saturate(1.0f - pow(d / radius, 4.0f));
 				distanceFalloff *= distanceFalloff;
-				float attenuation = distanceFalloff / max(d * d, minDistSqr);
+				float attenuation = distanceFalloff / (d * d + softnessSqr);
 
 				// Soft cone: smoothstep between the cosines of the outer and inner cone
 				// angles. Outside the outer cone the contribution is 0, inside the inner

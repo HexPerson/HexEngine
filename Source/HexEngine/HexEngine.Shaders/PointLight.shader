@@ -131,14 +131,21 @@
 			float d = length(lightToSample);
 			if (d > 0.0001f)
 			{
-				// Match the surface-shading attenuation curve so volumetric and direct
-				// lighting agree on how the light falls off through the volume - using
-				// the inverse-square + smooth-window form for both keeps the fog and
-				// the lit surfaces visually consistent at every distance.
-				const float minDistSqr = 0.01f * 0.01f;
+				// Volumetric uses the same smooth-window cutoff as surface shading but a
+				// SOFTER 1/d^2 peak: with only ~14 ray-march samples a strict 1/d^2 at
+				// the source dominates one sample per ray and collapses the rest of the
+				// cone to invisible (the "single bright blob near the source + lit floor
+				// patch with empty space between" failure mode). Replacing the hard floor
+				// `max(d*d, eps)` with the soft denominator `d*d + softness^2` caps the
+				// peak at 1/softness^2 and gives a smooth curve that 14 samples can
+				// integrate across the cone without spikes. Surface shading keeps the
+				// strict 1/d^2 in the pixel path because it sees an actual hit surface
+				// rather than a quadrature approximation.
+				const float softness = max(radius * 0.08f, 0.5f);
+				const float softnessSqr = softness * softness;
 				float distanceFalloff = saturate(1.0f - pow(d / radius, 4.0f));
 				distanceFalloff *= distanceFalloff;
-				float attenuation = distanceFalloff / max(d * d, minDistSqr);
+				float attenuation = distanceFalloff / (d * d + softnessSqr);
 
 				float3 lightDirection = normalize(currentPos - lightPos);
 				float phase = ComputeScattering(dot(direction, lightDirection));
