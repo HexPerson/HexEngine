@@ -179,52 +179,59 @@
 		return math::Vector3(gridWorld.x - centerWorld.x, gridWorld.y, gridWorld.z - centerWorld.z);
 	}
 
-	// Destroys `wrapper` AND every descendant that was parented under it. Necessary
-	// because Scene::DestroyEntity(parent) only flags the immediate children with
-	// IsPendingRemoval and zeroes their _parent pointer - it does NOT cascade
-	// Scene-level removal into them. DeleteMe(parent) empties parent->_children
-	// BEFORE the recursive loop in Scene::DestroyEntity reads it, so the cascade
-	// runs against an empty list and the children stay orphaned-but-still-in-the-
-	// scene. For prefab-based road pieces this manifests as "stale straight mesh
-	// stays visible after the wrapper is replaced by a corner" - the wrapper's
-	// gone but its prefab subtree is still rendering off its last PVS snapshot.
+	// Destroys `wrapper` AND every descendant that was parented under it. The
+	// straightforward Scene::DestroyEntity(parent) call leaves children orphaned
+	// because DeleteMe(parent) empties parent->_children before Scene::DestroyEntity's
+	// internal recursive loop reads it, so the cascade runs against an empty list
+	// and the deeper subtree stays in the scene with IsPendingRemoval set,
+	// rendering off its last PVS snapshot. For prefab-based road pieces this shows
+	// up as a stale straight mesh hanging around after a corner replaces it.
 	//
-	// Snapshot the descendant tree FIRST (DeleteMe will mutate it), then destroy
-	// the wrapper, then re-resolve each descendant via TryGetEntity and call
-	// DestroyEntity on whatever's still alive - that path's RemoveEntityInternal
-	// runs unconditionally on already-flagged entities (Scene.cpp ~ line 1138)
-	// and is what actually removes them from the scene + PVS.
+	// Implementation: post-order traversal (leaves first), and each entity detaches
+	// itself from its parent BEFORE being destroyed. The detach matters - if we
+	// destroyed a child without detaching, its parent's _children would still hold
+	// the now-dangling pointer and the parent's later DeleteMe would dereference
+	// it (use-after-free). Doing the work bottom-up means by the time we reach the
+	// wrapper, every entity below it is already gone and the wrapper's children
+	// list is genuinely empty - no relying on Scene::DestroyEntity's cascade at
+	// all.
 	void DestroyWrapperAndDescendants(Scene* scene, Entity* wrapper)
 	{
 		if (scene == nullptr || wrapper == nullptr)
 			return;
 
-		std::vector<EntityId> descendantIds;
+		std::vector<EntityId> destroyOrder;
 		std::function<void(Entity*)> collect = [&](Entity* e)
 		{
 			if (e == nullptr)
 				return;
-			for (auto* child : e->GetChildren())
+			// Snapshot the children list - destruction will mutate the live one,
+			// and we need to recurse over what's there BEFORE we touch anything.
+			const std::vector<Entity*> children = e->GetChildren();
+			for (auto* child : children)
 			{
 				if (child == nullptr)
 					continue;
-				descendantIds.push_back(child->GetId());
 				collect(child);
 			}
+			destroyOrder.push_back(e->GetId());
 		};
 		collect(wrapper);
 
-		// Destroy the wrapper first. This flags its immediate children pending-
-		// removal; deeper descendants are still unflagged. We tear those down
-		// individually below.
-		scene->DestroyEntity(wrapper);
-
-		for (const auto& id : descendantIds)
+		for (const auto& id : destroyOrder)
 		{
-			Entity* live = scene->TryGetEntity(id);
-			if (live == nullptr)
-				continue; // already cleaned up by a flagged-path cascade
-			scene->DestroyEntity(live);
+			Entity* e = scene->TryGetEntity(id);
+			if (e == nullptr)
+				continue; // already gone (shouldn't happen in post-order, defensive)
+
+			// Detach from parent before destroying so the parent's _children doesn't
+			// hold a dangling pointer when its own destruction iterates the list.
+			if (auto* parent = e->GetParent(); parent != nullptr)
+			{
+				e->SetParent(nullptr);
+			}
+
+			scene->DestroyEntity(e);
 		}
 	}
 
