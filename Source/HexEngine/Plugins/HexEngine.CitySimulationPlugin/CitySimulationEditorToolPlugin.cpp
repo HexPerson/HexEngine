@@ -33,6 +33,7 @@
 
 	constexpr const char* kRoadPainterWrapperPrefix = "CityRoadDraw_";
 	constexpr const char* kRoadPainterPreviewPrefix = "CityRoadPreview_";
+	constexpr const char* kRoadNetworkRootName = "RoadNetwork";
 	constexpr float kHalfPi = 1.57079632679f;
 
 	int32_t NormalizeQuarterTurns(int32_t quarterTurns)
@@ -758,6 +759,354 @@
 		return true;
 	}
 
+	// Returns the existing RoadNetwork root if one is present in the scene, or nullptr.
+	// Used by the section-organisation pass and the "is this a managed cell" check
+	// (a CityRoadDraw_ wrapper that doesn't sit under a RoadNetwork ancestor is probably
+	// a stray from before the hierarchy work landed - we still pick it up by name, but
+	// new commits re-parent it into the network).
+	Entity* FindRoadNetworkRoot(Scene* scene)
+	{
+		if (scene == nullptr)
+			return nullptr;
+
+		Entity* existing = scene->GetEntityByName(kRoadNetworkRootName);
+		if (existing == nullptr || existing->IsPendingDeletion())
+			return nullptr;
+		return existing;
+	}
+
+	// Lazy-creates the singleton RoadNetwork root entity. Created at origin with identity
+	// rotation so road wrappers' world positions equal their local positions out of the
+	// box - the user can later move the whole network as a single entity and all road
+	// children follow via the usual parent-child transform inheritance.
+	Entity* GetOrCreateRoadNetworkRoot(Scene* scene)
+	{
+		if (scene == nullptr)
+			return nullptr;
+
+		if (auto* existing = FindRoadNetworkRoot(scene); existing != nullptr)
+			return existing;
+
+		return scene->CreateEntity(kRoadNetworkRootName, math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(1.0f));
+	}
+
+	// Pool of presentable street names the auto-naming code cycles through. When the
+	// pool is exhausted, AllocateStreetName falls back to "<base> 2", "<base> 3", ...
+	const std::vector<std::string>& StreetNamePool()
+	{
+		static const std::vector<std::string> pool = {
+			"Main Street", "Oak Avenue", "Elm Street", "Maple Lane", "Park Road",
+			"River Way", "Birch Boulevard", "Cedar Crescent", "Pine Way", "High Street",
+			"Church Road", "Mill Lane", "Bridge Street", "Spring Avenue", "Sunset Boulevard",
+			"Vine Street", "Willow Way", "Cherry Lane", "Walnut Drive", "Greenway Drive",
+			"Linden Avenue", "Hawthorn Road", "Juniper Lane", "Magnolia Way", "Sycamore Street",
+			"Ashford Lane", "Brookside Drive", "Castle Road", "Dogwood Avenue", "Forest Way"
+		};
+		return pool;
+	}
+
+	// Picks a street name not currently in use. Falls back to numeric-suffixed variants
+	// of the base pool when every base name is taken, so the assignment never blocks
+	// even on enormous networks.
+	std::string AllocateStreetName(const std::unordered_set<std::string>& usedNames)
+	{
+		const auto& pool = StreetNamePool();
+		for (const auto& name : pool)
+		{
+			if (usedNames.count(name) == 0)
+				return name;
+		}
+		for (int32_t suffix = 2; suffix < 10000; ++suffix)
+		{
+			for (const auto& name : pool)
+			{
+				std::string candidate = name + " " + std::to_string(suffix);
+				if (usedNames.count(candidate) == 0)
+					return candidate;
+			}
+		}
+		return "Unnamed Street";
+	}
+
+	// Returns true if `entity` is part of the RoadNetwork hierarchy - either parented
+	// directly under it or under one of its section children. Used to filter out stray
+	// CityRoadDraw_ wrappers that might exist outside the network (e.g. left over from
+	// a partially-deleted older network).
+	bool IsUnderRoadNetwork(Entity* entity, Entity* networkRoot)
+	{
+		if (entity == nullptr || networkRoot == nullptr)
+			return false;
+		Entity* current = entity->GetParent();
+		while (current != nullptr)
+		{
+			if (current == networkRoot)
+				return true;
+			current = current->GetParent();
+		}
+		return false;
+	}
+
+	// Re-parents every managed road wrapper into the RoadNetwork hierarchy, grouping
+	// continuous runs of straight cells under named section entities and parking
+	// corners / T-junctions / crossroads directly under the root. Called as a post-pass
+	// on every commit so the entity tree stays organised even as the network grows.
+	//
+	// Section identity is recovered across edits by reading each cell's current section
+	// parent name and letting the new section inherit whichever name has the most cells
+	// in it - so extending a straight keeps its name, and splitting a straight in two
+	// (a corner placed in the middle) preserves the name on whichever half is bigger.
+	// Truly new sections allocate a fresh street name from the pool. Empty section
+	// entities left behind after a split / shrink are destroyed.
+	void OrganizeRoadNetworkHierarchy(Scene* scene, bool defaultUsesXAxis)
+	{
+		if (scene == nullptr)
+			return;
+
+		// 1. Collect every managed road wrapper currently in the scene.
+		std::unordered_map<GridCoord, Entity*, GridCoordHash> wrappersByCoord;
+		for (const auto& bySignature : scene->GetEntities())
+		{
+			for (auto* entity : bySignature.second)
+			{
+				if (entity == nullptr || entity->IsPendingDeletion())
+					continue;
+				GridCoord coord;
+				if (!TryParseManagedWrapperName(entity->GetName(), coord))
+					continue;
+				wrappersByCoord[coord] = entity;
+			}
+		}
+
+		if (wrappersByCoord.empty())
+		{
+			// Nothing to organise; if a RoadNetwork root exists and is empty, leave it
+			// alone - the user might be about to draw more.
+			return;
+		}
+
+		Entity* networkRoot = GetOrCreateRoadNetworkRoot(scene);
+		if (networkRoot == nullptr)
+			return;
+
+		auto hasCell = [&](const GridCoord& c) { return wrappersByCoord.count(c) > 0; };
+		auto computeMask = [&](const GridCoord& c) -> uint8_t
+		{
+			uint8_t mask = DirectionNone;
+			if (hasCell({ c.x, c.z + 1 })) mask |= DirectionNorth;
+			if (hasCell({ c.x + 1, c.z })) mask |= DirectionEast;
+			if (hasCell({ c.x, c.z - 1 })) mask |= DirectionSouth;
+			if (hasCell({ c.x - 1, c.z })) mask |= DirectionWest;
+			return mask;
+		};
+
+		// 2. Classify each cell as a straight (with axis) or a junction. Junctions don't
+		//    get grouped into named sections - they sit at network-root level. Straights
+		//    are grouped by walking continuous runs along their axis.
+		enum class CellKind { StraightX, StraightZ, Junction };
+		std::unordered_map<GridCoord, CellKind, GridCoordHash> cellKinds;
+		for (const auto& [coord, wrapper] : wrappersByCoord)
+		{
+			const uint8_t mask = computeMask(coord);
+			const int32_t conns = CountConnections(mask);
+			const bool hasXMask = (mask & (DirectionEast | DirectionWest)) != 0;
+			const bool hasZMask = (mask & (DirectionNorth | DirectionSouth)) != 0;
+
+			CellKind kind;
+			if (conns >= 3)
+				kind = CellKind::Junction;
+			else if (conns == 2 && !IsOpposingStraight(mask))
+				kind = CellKind::Junction;
+			else if (conns == 0)
+				kind = defaultUsesXAxis ? CellKind::StraightX : CellKind::StraightZ;
+			else if (hasXMask)
+				kind = CellKind::StraightX;
+			else if (hasZMask)
+				kind = CellKind::StraightZ;
+			else
+				kind = CellKind::Junction; // defensive
+
+			cellKinds[coord] = kind;
+		}
+
+		// 3. Walk the straights to build sections. Each section is a maximal run of
+		//    straights of the same kind along the same axis line (same Z for X-sections,
+		//    same X for Z-sections).
+		struct Section
+		{
+			std::vector<GridCoord> cells;
+			bool isX = true;
+			std::string assignedName;
+		};
+		std::vector<Section> sections;
+		std::unordered_set<GridCoord, GridCoordHash> visited;
+
+		auto walkSection = [&](const GridCoord& seed, CellKind kind) -> Section
+		{
+			Section section;
+			section.isX = (kind == CellKind::StraightX);
+			// Walk in the negative direction first.
+			if (section.isX)
+			{
+				int32_t x = seed.x;
+				while (true)
+				{
+					GridCoord c{ x, seed.z };
+					auto it = cellKinds.find(c);
+					if (it == cellKinds.end() || it->second != CellKind::StraightX) break;
+					if (visited.count(c)) break;
+					section.cells.push_back(c);
+					visited.insert(c);
+					--x;
+				}
+				x = seed.x + 1;
+				while (true)
+				{
+					GridCoord c{ x, seed.z };
+					auto it = cellKinds.find(c);
+					if (it == cellKinds.end() || it->second != CellKind::StraightX) break;
+					if (visited.count(c)) break;
+					section.cells.push_back(c);
+					visited.insert(c);
+					++x;
+				}
+			}
+			else
+			{
+				int32_t z = seed.z;
+				while (true)
+				{
+					GridCoord c{ seed.x, z };
+					auto it = cellKinds.find(c);
+					if (it == cellKinds.end() || it->second != CellKind::StraightZ) break;
+					if (visited.count(c)) break;
+					section.cells.push_back(c);
+					visited.insert(c);
+					--z;
+				}
+				z = seed.z + 1;
+				while (true)
+				{
+					GridCoord c{ seed.x, z };
+					auto it = cellKinds.find(c);
+					if (it == cellKinds.end() || it->second != CellKind::StraightZ) break;
+					if (visited.count(c)) break;
+					section.cells.push_back(c);
+					visited.insert(c);
+					++z;
+				}
+			}
+			return section;
+		};
+
+		for (const auto& [coord, kind] : cellKinds)
+		{
+			if (kind == CellKind::Junction) continue;
+			if (visited.count(coord)) continue;
+			sections.push_back(walkSection(coord, kind));
+		}
+
+		// 4. Recover stable section names. For each new section, count votes for each
+		//    distinct existing parent-section name among its member cells. The name with
+		//    the most votes wins (ties go to the first-seen name, which is fine for our
+		//    purposes - both halves of a split would prefer the original name and only
+		//    one can keep it). Sections with no votes get a fresh name from the pool.
+		auto cellSectionName = [&](const GridCoord& coord) -> std::string
+		{
+			auto wIt = wrappersByCoord.find(coord);
+			if (wIt == wrappersByCoord.end()) return "";
+			Entity* wrapper = wIt->second;
+			Entity* parent = wrapper->GetParent();
+			if (parent == nullptr || parent == networkRoot) return "";
+			// A valid section parent is a child of networkRoot whose name isn't itself a
+			// managed-wrapper name.
+			if (parent->GetParent() != networkRoot) return "";
+			GridCoord dummy;
+			if (TryParseManagedWrapperName(parent->GetName(), dummy)) return "";
+			return parent->GetName();
+		};
+
+		std::unordered_set<std::string> usedNames;
+		// Names already in use by sections we'll keep - seeded as we assign.
+		for (auto& section : sections)
+		{
+			std::unordered_map<std::string, int32_t> votes;
+			for (const auto& cell : section.cells)
+			{
+				std::string existing = cellSectionName(cell);
+				if (!existing.empty())
+					++votes[existing];
+			}
+			std::string chosen;
+			int32_t best = 0;
+			for (const auto& [name, count] : votes)
+			{
+				if (count > best && usedNames.count(name) == 0)
+				{
+					best = count;
+					chosen = name;
+				}
+			}
+			if (chosen.empty())
+				chosen = AllocateStreetName(usedNames);
+			usedNames.insert(chosen);
+			section.assignedName = chosen;
+		}
+
+		// 5. Apply parenting. Section entities are looked up by name (since they were
+		//    previously created or are being created now). Wrapper world positions are
+		//    preserved by SetParent's local-position recompute.
+		for (auto& section : sections)
+		{
+			Entity* sectionEntity = scene->GetEntityByName(section.assignedName);
+			if (sectionEntity != nullptr && sectionEntity->IsPendingDeletion())
+				sectionEntity = nullptr;
+			if (sectionEntity == nullptr)
+			{
+				sectionEntity = scene->CreateEntity(section.assignedName, math::Vector3::Zero, math::Quaternion::Identity, math::Vector3(1.0f));
+				if (sectionEntity == nullptr)
+					continue;
+				sectionEntity->SetParent(networkRoot);
+			}
+			else if (sectionEntity->GetParent() != networkRoot)
+			{
+				sectionEntity->SetParent(networkRoot);
+			}
+
+			for (const auto& cell : section.cells)
+			{
+				auto wIt = wrappersByCoord.find(cell);
+				if (wIt == wrappersByCoord.end()) continue;
+				if (wIt->second->GetParent() != sectionEntity)
+					wIt->second->SetParent(sectionEntity);
+			}
+		}
+
+		// 6. Junctions live directly under the network root.
+		for (const auto& [coord, kind] : cellKinds)
+		{
+			if (kind != CellKind::Junction) continue;
+			auto wIt = wrappersByCoord.find(coord);
+			if (wIt == wrappersByCoord.end()) continue;
+			if (wIt->second->GetParent() != networkRoot)
+				wIt->second->SetParent(networkRoot);
+		}
+
+		// 7. Clean up empty section entities that no longer have any road children
+		//    (happens after a split or after a section was completely overwritten). We
+		//    do this in a snapshot pass because DestroyEntity mutates the children list.
+		std::vector<Entity*> rootChildren = networkRoot->GetChildren();
+		for (auto* child : rootChildren)
+		{
+			if (child == nullptr || child->IsPendingDeletion()) continue;
+			// Skip cells - they're junctions parked here.
+			GridCoord dummy;
+			if (TryParseManagedWrapperName(child->GetName(), dummy)) continue;
+			// Section entity: destroy if empty.
+			if (child->GetChildren().empty())
+				scene->DestroyEntity(child);
+		}
+	}
+
 	void GatherManagedRoadCells(
 		Scene* scene,
 		std::unordered_map<GridCoord, float, GridCoordHash>& outHeights,
@@ -765,6 +1114,8 @@
 	{
 		if (scene == nullptr)
 			return;
+
+		Entity* networkRoot = FindRoadNetworkRoot(scene);
 
 		for (const auto& bySignature : scene->GetEntities())
 		{
@@ -777,7 +1128,13 @@
 				if (!TryParseManagedWrapperName(entity->GetName(), coord))
 					continue;
 
-				if (entity->GetParent() != nullptr)
+				// Accept road cells if they're top-level (legacy / not-yet-organised)
+				// or anywhere under the RoadNetwork hierarchy (the normal case after
+				// OrganizeRoadNetworkHierarchy has run). Reject cells whose parent chain
+				// goes elsewhere - those are probably children of unrelated prefabs and
+				// shouldn't be picked up by the painter's rebuild.
+				Entity* parent = entity->GetParent();
+				if (parent != nullptr && !IsUnderRoadNetwork(entity, networkRoot))
 					continue;
 
 				outHeights[coord] = entity->GetPosition().y;
@@ -841,6 +1198,11 @@
 			else
 				SpawnMeshCell(wrapper, placement.assetPath, addPhysics);
 		}
+
+		// Re-organise so every wrapper lands under the RoadNetwork hierarchy and straights
+		// get grouped into named section entities. Has to run AFTER spawn so the new
+		// wrappers exist and can be picked up.
+		OrganizeRoadNetworkHierarchy(scene, straightSpec.usesXAxis);
 
 		scene->ForceRebuildPVS();
 	}
@@ -1024,6 +1386,15 @@
 			{
 				wrapper = action.existingWrapper;
 				ClearWrapperContent(scene, wrapper);
+				// ForcePosition writes the LOCAL position. Detach from any current
+				// section parent first so the value we pass (world coords from
+				// ApplyMeshCentreCorrection / GridToWorld) is interpreted correctly -
+				// otherwise the wrapper would land at parent_world + wrapperWorld
+				// once a non-origin section gets in the chain. The post-spawn
+				// OrganizeRoadNetworkHierarchy pass re-parents it into the right
+				// section, preserving the world position via SetParent's local-recompute.
+				if (wrapper->GetParent() != nullptr)
+					wrapper->SetParent(nullptr);
 				wrapper->ForcePosition(wrapperWorld);
 				wrapper->SetRotation(action.placement.rotation);
 				wrapper->SetScale(math::Vector3(1.0f));
@@ -1044,6 +1415,13 @@
 
 			scene->FlushPVS(wrapper);
 		}
+
+		// Re-organise after the new cells exist so they get parented under the
+		// RoadNetwork root and the appropriate named section. Sections that are
+		// extended keep their previous name (vote-by-overlap); freshly-created sections
+		// get a new street name from the pool. Cheap: O(cells) walks + O(cells)
+		// reparenting, with no scene-wide work.
+		OrganizeRoadNetworkHierarchy(scene, straightSpec.usesXAxis);
 	}
 }
 
