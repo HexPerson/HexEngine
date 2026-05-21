@@ -1429,6 +1429,17 @@ namespace HexEditor
 		}
 		else if (event == HexEngine::InputEvent::KeyDown && data->KeyDown.key == VK_RETURN)
 		{
+			// Suppress when the user is actively typing into any LineEdit. Without this,
+			// pressing Enter to commit a value in the inspector (rotation field, etc.)
+			// also falls through here and spawns a new entity from whatever mesh asset
+			// happens to still be selected in the asset explorer - the "duplicate entity
+			// on rotation enter" bug. Mirror the same focus-aware guard EditorUI uses for
+			// its global gadget hotkeys.
+			auto* focusedElement = HexEngine::g_pEnv->GetUIManager().GetInputFocus();
+			const bool isTypingInLineEdit = dynamic_cast<HexEngine::LineEdit*>(focusedElement) != nullptr;
+			if (isTypingInLineEdit)
+				return false;
+
 			for (auto& asset : _assetsInView)
 			{
 				if (asset.selected)
