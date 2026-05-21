@@ -153,16 +153,43 @@
 		}
 	}
 
-	int32_t SnapToGrid(float worldValue, float cellSize)
+	// Snap a world-space value to the editor's translate-snap grid (the same grid the
+	// translation gizmo uses, controlled by ed_translateSnap + ed_translateSnapSize).
+	// Used for FIRST-CLICK placement so the anchor lands on the editor's fine grid
+	// instead of the much coarser road cell size. Returns `value` unchanged when
+	// snapping is disabled or the HVars are unavailable.
+	float SnapToEditorGrid(float value)
+	{
+		if (g_pEnv == nullptr || g_pEnv->_commandManager == nullptr)
+			return value;
+		auto* enabledVar = g_pEnv->_commandManager->FindHVar("ed_translateSnap");
+		auto* sizeVar = g_pEnv->_commandManager->FindHVar("ed_translateSnapSize");
+		if (enabledVar == nullptr || sizeVar == nullptr)
+			return value;
+		if (!enabledVar->_val.b)
+			return value;
+		const float snapSize = std::max(sizeVar->_val.f32, 0.001f);
+		return std::round(value / snapSize) * snapSize;
+	}
+
+	// Snap a world coord into a cell index relative to an arbitrary origin offset.
+	// Reads "how many cellSize steps from origin is worldValue?" - the network origin
+	// (cell (0,0)'s world position) need NOT be at world (0,0,0); it's the snapped
+	// position of the FIRST click, so the road grid is anchored wherever the user
+	// initially placed it rather than to absolute world coordinates.
+	int32_t SnapToGrid(float worldValue, float originOffset, float cellSize)
 	{
 		if (cellSize <= 0.0001f)
 			return 0;
-		return static_cast<int32_t>(std::lround(worldValue / cellSize));
+		return static_cast<int32_t>(std::lround((worldValue - originOffset) / cellSize));
 	}
 
-	math::Vector3 GridToWorld(const GridCoord& coord, float cellSize, float y)
+	math::Vector3 GridToWorld(const GridCoord& coord, const math::Vector2& origin, float cellSize, float y)
 	{
-		return math::Vector3(static_cast<float>(coord.x) * cellSize, y, static_cast<float>(coord.z) * cellSize);
+		return math::Vector3(
+			origin.x + static_cast<float>(coord.x) * cellSize,
+			y,
+			origin.y + static_cast<float>(coord.z) * cellSize);
 	}
 
 	// Subtracts the rotated mesh-local AABB centre from the cell's grid-world
@@ -1146,6 +1173,7 @@
 	void RebuildManagedRoadNetwork(
 		Scene* scene,
 		const std::unordered_map<GridCoord, float, GridCoordHash>& heights,
+		const math::Vector2& origin,
 		const PlacementSpec& straightSpec,
 		const std::optional<PlacementSpec>& cornerSpec,
 		const std::optional<PlacementSpec>& crossroadSpec,
@@ -1186,7 +1214,7 @@
 			if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, cornerYawQuarterTurns, tJunctionYawQuarterTurns, crossroadYawQuarterTurns, placement))
 				continue;
 
-			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(coord, spacing, height), placement.aabbCenterXZ, placement.rotation);
+			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(coord, origin, spacing, height), placement.aabbCenterXZ, placement.rotation);
 			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(coord), wrapperWorld, placement.rotation, math::Vector3(1.0f));
 			if (wrapper == nullptr)
 				continue;
@@ -1220,10 +1248,17 @@
 		if (entity == nullptr || entity->IsPendingDeletion())
 			return nullptr;
 
-		// GatherManagedRoadCells filters out non-root wrappers; mirror that here so the
-		// incremental path agrees with the full-rebuild path on what counts as "the cell".
-		if (entity->GetParent() != nullptr)
-			return nullptr;
+		// Accept wrappers that are top-level (legacy layouts predating the RoadNetwork
+		// hierarchy) or anywhere under the RoadNetwork root (the normal post-organise
+		// state). Reject wrappers parented elsewhere - those are not part of the network
+		// we manage. Mirrors GatherManagedRoadCells.
+		Entity* parent = entity->GetParent();
+		if (parent != nullptr)
+		{
+			Entity* networkRoot = FindRoadNetworkRoot(scene);
+			if (!IsUnderRoadNetwork(entity, networkRoot))
+				return nullptr;
+		}
 
 		return entity;
 	}
@@ -1249,6 +1284,7 @@
 	void ApplyIncrementalRoadNetworkChange(
 		Scene* scene,
 		const std::vector<GridCoord>& runCells,
+		const math::Vector2& origin,
 		float anchorHeight,
 		const PlacementSpec& straightSpec,
 		const std::optional<PlacementSpec>& cornerSpec,
@@ -1380,7 +1416,7 @@
 		for (const auto& action : actions)
 		{
 			Entity* wrapper = nullptr;
-			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(action.coord, spacing, action.height), action.placement.aabbCenterXZ, action.placement.rotation);
+			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(action.coord, origin, spacing, action.height), action.placement.aabbCenterXZ, action.placement.rotation);
 
 			if (action.existingWrapper != nullptr)
 			{
@@ -1644,7 +1680,8 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		// the ghost would sit at the raw-mesh spacing while the committed road lands on the
 		// user's scaled grid, and the preview would drift away from the actual placement.
 		const float previewSpacing = (_roadPainterCellSize > 0.0f) ? _roadPainterCellSize : straightSpec.length;
-		const math::Vector3 previewWorld = ApplyMeshCentreCorrection(GridToWorld(coord, previewSpacing, effAnchorHeight), placement.aabbCenterXZ, placement.rotation);
+		const math::Vector2 previewOrigin(_roadPainterOriginX, _roadPainterOriginZ);
+		const math::Vector3 previewWorld = ApplyMeshCentreCorrection(GridToWorld(coord, previewOrigin, previewSpacing, effAnchorHeight), placement.aabbCenterXZ, placement.rotation);
 		const std::string wrapperName = std::format("{}{}_{}", kRoadPainterPreviewPrefix, coord.x, coord.z);
 		auto* wrapper = scene->CreateEntity(wrapperName, previewWorld, placement.rotation, math::Vector3(1.0f));
 		if (wrapper == nullptr)
@@ -1967,8 +2004,28 @@ void CitySimulationEditorToolPlugin::HandleSceneViewportMouseDown(HexEngine::Edi
 
 	if (!_roadPainterHasAnchor)
 	{
-		_roadPainterAnchorX = SnapToGrid(message->worldPosition.x, _roadPainterCellSize);
-		_roadPainterAnchorZ = SnapToGrid(message->worldPosition.z, _roadPainterCellSize);
+		// First click of a paint session - lock in the network origin. If a RoadNetwork
+		// already exists in the scene (extending an existing network), inherit its
+		// position as the origin so new cells align with what's already there. Else
+		// snap the click position to the EDITOR's translate-snap grid (typically much
+		// finer than cellSize) - this is the user's preference for where the network
+		// should sit, and we capture it at the first click so the painter can use the
+		// finer grid for placement instead of cellSize multiples.
+		auto* scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get();
+		if (Entity* existingRoot = (scene != nullptr) ? FindRoadNetworkRoot(scene) : nullptr; existingRoot != nullptr)
+		{
+			const math::Vector3 rootPos = existingRoot->GetPosition();
+			_roadPainterOriginX = rootPos.x;
+			_roadPainterOriginZ = rootPos.z;
+		}
+		else
+		{
+			_roadPainterOriginX = SnapToEditorGrid(message->worldPosition.x);
+			_roadPainterOriginZ = SnapToEditorGrid(message->worldPosition.z);
+		}
+
+		_roadPainterAnchorX = SnapToGrid(message->worldPosition.x, _roadPainterOriginX, _roadPainterCellSize);
+		_roadPainterAnchorZ = SnapToGrid(message->worldPosition.z, _roadPainterOriginZ, _roadPainterCellSize);
 		// Apply the configured Y offset ONLY here, at the very first click that creates
 		// a fresh anchor. After this point the height inherits forward via the
 		// anchor-cell lookup in PaintOrthogonalRun (and via _roadPainterAnchorHeight on
@@ -2009,8 +2066,36 @@ void CitySimulationEditorToolPlugin::HandleSceneViewportMouseMove(HexEngine::Edi
 	if (!MeasureStraightAsset(_roadPainterCellSize, _roadPainterUsesXAxis))
 		return;
 
-	_roadPainterHoverX = SnapToGrid(message->worldPosition.x, _roadPainterCellSize);
-	_roadPainterHoverZ = SnapToGrid(message->worldPosition.z, _roadPainterCellSize);
+	// Keep the origin in sync with the world. Before the first click of a session
+	// (HasAnchor false) the origin tracks the editor-snapped hover position so the
+	// pre-click ghost lands on the editor's fine grid - showing the user where the
+	// click would actually land. Once they have an anchor we instead sync from the
+	// RoadNetwork entity's position (so dragging the network in the editor and then
+	// drawing more roads keeps the new cells aligned to the network's new location).
+	auto* scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get();
+	if (!_roadPainterHasAnchor)
+	{
+		if (Entity* existingRoot = (scene != nullptr) ? FindRoadNetworkRoot(scene) : nullptr; existingRoot != nullptr)
+		{
+			const math::Vector3 rootPos = existingRoot->GetPosition();
+			_roadPainterOriginX = rootPos.x;
+			_roadPainterOriginZ = rootPos.z;
+		}
+		else
+		{
+			_roadPainterOriginX = SnapToEditorGrid(message->worldPosition.x);
+			_roadPainterOriginZ = SnapToEditorGrid(message->worldPosition.z);
+		}
+	}
+	else if (Entity* existingRoot = (scene != nullptr) ? FindRoadNetworkRoot(scene) : nullptr; existingRoot != nullptr)
+	{
+		const math::Vector3 rootPos = existingRoot->GetPosition();
+		_roadPainterOriginX = rootPos.x;
+		_roadPainterOriginZ = rootPos.z;
+	}
+
+	_roadPainterHoverX = SnapToGrid(message->worldPosition.x, _roadPainterOriginX, _roadPainterCellSize);
+	_roadPainterHoverZ = SnapToGrid(message->worldPosition.z, _roadPainterOriginZ, _roadPainterCellSize);
 	_roadPainterHoverHeight = message->worldPosition.y;
 	_roadPainterHasHover = true;
 	// Refresh is cheap when the snapped (anchor, hover) hasn't changed - the function does
@@ -2041,7 +2126,10 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 		return;
 
 	const GridCoord start{ _roadPainterAnchorX, _roadPainterAnchorZ };
-	const GridCoord end{ SnapToGrid(worldPosition.x, _roadPainterCellSize), SnapToGrid(worldPosition.z, _roadPainterCellSize) };
+	const GridCoord end{
+		SnapToGrid(worldPosition.x, _roadPainterOriginX, _roadPainterCellSize),
+		SnapToGrid(worldPosition.z, _roadPainterOriginZ, _roadPainterCellSize)
+	};
 
 	// Build the orthogonal run as a flat list of cell coordinates. Used to be merged into
 	// a heights map alongside ALL existing managed cells and handed to RebuildManagedRoadNetwork,
@@ -2101,7 +2189,21 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 		runHeight = existingAtAnchor->GetPosition().y;
 	}
 
-	ApplyIncrementalRoadNetworkChange(scene, runCells, runHeight,
+	// Ensure the RoadNetwork root exists at the painter's locked origin BEFORE the
+	// commit so the wrappers we create have a parent to attach to with the right
+	// world transform. If a root already exists we leave its position alone (the user
+	// may have moved it, and we want new cells to land relative to its CURRENT pos -
+	// _roadPainterOriginX/Z is kept in sync by the mouse-move handler).
+	if (FindRoadNetworkRoot(scene) == nullptr)
+	{
+		scene->CreateEntity(kRoadNetworkRootName,
+			math::Vector3(_roadPainterOriginX, 0.0f, _roadPainterOriginZ),
+			math::Quaternion::Identity,
+			math::Vector3(1.0f));
+	}
+
+	const math::Vector2 origin(_roadPainterOriginX, _roadPainterOriginZ);
+	ApplyIncrementalRoadNetworkChange(scene, runCells, origin, runHeight,
 		straightSpec, cornerSpec, crossroadSpec, tJunctionSpec,
 		_roadPainterYawQuarterTurns,
 		_roadPainterCornerYawQuarterTurns,
@@ -2164,7 +2266,17 @@ void CitySimulationEditorToolPlugin::RebuildRoadPainterNetwork(float defaultHeig
 			height = defaultHeight;
 	}
 
-	RebuildManagedRoadNetwork(scene, heights,
+	// Read origin from the RoadNetwork entity if it exists (full rebuild typically
+	// operates on a network that was previously painted) - falls back to the painter's
+	// stored origin which is kept in sync with the network entity by mouse handlers.
+	math::Vector2 origin(_roadPainterOriginX, _roadPainterOriginZ);
+	if (auto* root = FindRoadNetworkRoot(scene); root != nullptr)
+	{
+		const math::Vector3 p = root->GetPosition();
+		origin = math::Vector2(p.x, p.z);
+	}
+
+	RebuildManagedRoadNetwork(scene, heights, origin,
 		straightSpec, cornerSpec, crossroadSpec, tJunctionSpec,
 		_roadPainterYawQuarterTurns,
 		_roadPainterCornerYawQuarterTurns,

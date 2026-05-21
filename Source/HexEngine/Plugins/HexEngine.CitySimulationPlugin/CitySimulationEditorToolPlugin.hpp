@@ -61,6 +61,16 @@ private:
 	// the existing anchor cell, so the offset only needs to be applied once per paint
 	// session.
 	float _roadPainterInitialYOffset = 0.0f;
+	// World-space (X, Z) of cell coord (0, 0). Snapping is "snap to a grid of step
+	// cellSize starting at the origin" rather than "snap to multiples of cellSize from
+	// world zero" so that the very first click can land on the editor's fine grid
+	// (ed_translateSnapSize, typically 1.0) instead of the much coarser cell size
+	// (typically 2-4 units). After the first click the origin is locked and all
+	// subsequent cells snap at cellSize intervals from it. Mirrors the RoadNetwork
+	// entity's position once that entity exists - if the user moves the network in
+	// the editor, the origin re-syncs on the next mouse event.
+	float _roadPainterOriginX = 0.0f;
+	float _roadPainterOriginZ = 0.0f;
 	// Whether to attach a static box collider to each painted road tile. 484+ static
 	// colliders in a city grid is significant per-frame physics overhead (broad-phase
 	// AABB updates, scene-query book-keeping) so leave this off until you actually have
