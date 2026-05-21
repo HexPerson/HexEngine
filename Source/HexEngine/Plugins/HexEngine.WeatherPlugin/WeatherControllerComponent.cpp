@@ -3,6 +3,7 @@
 #include "WeatherZoneComponent.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <climits>
 #include <random>
@@ -61,6 +62,65 @@ namespace HexEngine::Weather
 				return minValue;
 			std::uniform_real_distribution<float> dist(minValue, maxValue);
 			return dist(rng);
+		}
+
+		// Authored transitions for natural progression. Each preset lists the
+		// presets it can "evolve" into, picked uniformly at the next cycle step.
+		// Bidirectional in most cases (Rain<->HeavyRain) so the weather can both
+		// intensify and ease off; one-way only at the extremes (Thunderstorm
+		// doesn't fall straight back to Clear without passing through something
+		// in between). Skipping Custom everywhere - that's the editor placeholder
+		// for a hand-tuned state and shouldn't be entered by the cycle.
+		const std::vector<WeatherPresetId>& GetNaturalNeighbours(WeatherPresetId current)
+		{
+			static const std::vector<WeatherPresetId> kClear        = { WeatherPresetId::Overcast, WeatherPresetId::Hot };
+			static const std::vector<WeatherPresetId> kOvercast     = { WeatherPresetId::Clear, WeatherPresetId::Rain, WeatherPresetId::Snow };
+			static const std::vector<WeatherPresetId> kRain         = { WeatherPresetId::Overcast, WeatherPresetId::HeavyRain };
+			static const std::vector<WeatherPresetId> kHeavyRain    = { WeatherPresetId::Rain, WeatherPresetId::Storm };
+			static const std::vector<WeatherPresetId> kStorm        = { WeatherPresetId::HeavyRain, WeatherPresetId::Thunderstorm };
+			static const std::vector<WeatherPresetId> kThunderstorm = { WeatherPresetId::Storm, WeatherPresetId::HeavyRain };
+			static const std::vector<WeatherPresetId> kSnow         = { WeatherPresetId::Overcast, WeatherPresetId::Blizzard };
+			static const std::vector<WeatherPresetId> kBlizzard     = { WeatherPresetId::Snow, WeatherPresetId::Storm };
+			static const std::vector<WeatherPresetId> kHot          = { WeatherPresetId::Clear, WeatherPresetId::Sandstorm };
+			static const std::vector<WeatherPresetId> kSandstorm    = { WeatherPresetId::Hot };
+			static const std::vector<WeatherPresetId> kEmpty;
+
+			switch (current)
+			{
+			case WeatherPresetId::Clear:        return kClear;
+			case WeatherPresetId::Overcast:     return kOvercast;
+			case WeatherPresetId::Rain:         return kRain;
+			case WeatherPresetId::HeavyRain:    return kHeavyRain;
+			case WeatherPresetId::Storm:        return kStorm;
+			case WeatherPresetId::Thunderstorm: return kThunderstorm;
+			case WeatherPresetId::Snow:         return kSnow;
+			case WeatherPresetId::Blizzard:     return kBlizzard;
+			case WeatherPresetId::Hot:          return kHot;
+			case WeatherPresetId::Sandstorm:    return kSandstorm;
+			case WeatherPresetId::Custom:
+			default:
+				return kEmpty;
+			}
+		}
+
+		bool IsPresetEnabledForCycling(uint32_t mask, WeatherPresetId presetId)
+		{
+			const uint32_t bit = 1u << static_cast<uint32_t>(presetId);
+			return (mask & bit) != 0;
+		}
+
+		// xorshift32 - tiny, fast, and we own the state so the global rng can stay
+		// untouched. Seed lazily so each scene start picks a different sequence.
+		uint32_t NextRng(uint32_t& state)
+		{
+			if (state == 0)
+				state = static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count() | 1u);
+			uint32_t x = state;
+			x ^= x << 13;
+			x ^= x >> 17;
+			x ^= x << 5;
+			state = x;
+			return x;
 		}
 
 		bool NearlyEqualFloat(float a, float b, float epsilon = 0.0001f)
@@ -253,6 +313,50 @@ namespace HexEngine::Weather
 		}
 	}
 
+	WeatherPresetId WeatherControllerComponent::PickNextCyclePreset(WeatherPresetId current) const
+	{
+		// Build the candidate list and uniform-pick from it. Two flavours:
+		//   natural progression: neighbours of current preset, filtered by mask.
+		//   random: every non-Custom preset that's allowed by the mask.
+		std::vector<WeatherPresetId> candidates;
+		if (_naturalProgression)
+		{
+			for (auto neighbour : GetNaturalNeighbours(current))
+			{
+				if (IsPresetEnabledForCycling(_enabledPresetMask, neighbour))
+					candidates.push_back(neighbour);
+			}
+			// If the natural-progression neighbours are all disabled by the mask,
+			// fall through to a global pick rather than getting stuck. This keeps
+			// the cycle alive even when the user has unchecked a chunk of presets.
+		}
+		if (candidates.empty())
+		{
+			for (int32_t i = static_cast<int32_t>(WeatherPresetId::Clear); i <= static_cast<int32_t>(WeatherPresetId::Sandstorm); ++i)
+			{
+				const auto candidate = static_cast<WeatherPresetId>(i);
+				if (candidate == current) continue;
+				if (IsPresetEnabledForCycling(_enabledPresetMask, candidate))
+					candidates.push_back(candidate);
+			}
+		}
+		if (candidates.empty())
+			return current; // Nothing the user enabled - leave the preset alone.
+
+		const uint32_t r = NextRng(_cycleRngState);
+		return candidates[r % candidates.size()];
+	}
+
+	void WeatherControllerComponent::AdvanceRandomCycle()
+	{
+		const WeatherPresetId next = PickNextCyclePreset(_globalPresetId);
+		if (next != _globalPresetId)
+		{
+			ApplyPreset(next);
+		}
+		_cycleElapsedSeconds = 0.0f;
+	}
+
 	void WeatherControllerComponent::Update(float frameTime)
 	{
 		UpdateComponent::Update(frameTime);
@@ -260,6 +364,23 @@ namespace HexEngine::Weather
 		Scene* scene = GetEntity()->GetScene();
 		if (scene == nullptr || !_previewEnabled)
 			return;
+
+		// Random preset cycling. Accumulate frameTime and step the cycle when the
+		// configured interval is reached. Bound the interval at 1s to keep the
+		// editor from spinning the cycle on every frame if the user types 0.
+		if (_randomCyclingEnabled)
+		{
+			const float interval = std::max(_cycleIntervalSeconds, 1.0f);
+			_cycleElapsedSeconds += frameTime;
+			if (_cycleElapsedSeconds >= interval)
+			{
+				AdvanceRandomCycle();
+			}
+		}
+		else
+		{
+			_cycleElapsedSeconds = 0.0f;
+		}
 
 		Camera* camera = scene->GetMainCamera();
 		const math::Vector3 samplePosition =
@@ -330,6 +451,10 @@ namespace HexEngine::Weather
 		file->Serialize(data, "_globalPresetId", presetId);
 		file->Serialize(data, "_defaultTransitionSeconds", _defaultTransitionSeconds);
 		file->Serialize(data, "_previewEnabled", _previewEnabled);
+		file->Serialize(data, "_randomCyclingEnabled", _randomCyclingEnabled);
+		file->Serialize(data, "_naturalProgression", _naturalProgression);
+		file->Serialize(data, "_cycleIntervalSeconds", _cycleIntervalSeconds);
+		file->Serialize(data, "_enabledPresetMask", _enabledPresetMask);
 		SerializeWeatherState(_globalState, data["_globalState"], file);
 
 		json& audioData = data["_audio"];
@@ -370,6 +495,10 @@ namespace HexEngine::Weather
 		_globalPresetId = static_cast<WeatherPresetId>(presetId);
 		file->Deserialize(data, "_defaultTransitionSeconds", _defaultTransitionSeconds);
 		file->Deserialize(data, "_previewEnabled", _previewEnabled);
+		file->Deserialize(data, "_randomCyclingEnabled", _randomCyclingEnabled);
+		file->Deserialize(data, "_naturalProgression", _naturalProgression);
+		file->Deserialize(data, "_cycleIntervalSeconds", _cycleIntervalSeconds);
+		file->Deserialize(data, "_enabledPresetMask", _enabledPresetMask);
 		if (data.contains("_globalState"))
 			DeserializeWeatherState(_globalState, data["_globalState"], file);
 		if (data.contains("_audio"))
@@ -423,10 +552,59 @@ namespace HexEngine::Weather
 		preview->SetPrefabOverrideBinding(GetComponentName(), "/_previewEnabled");
 
 		auto* preset = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Global Preset");
-		PopulatePresetDropDown(preset, _globalPresetId, [this](WeatherPresetId presetId)
+		PopulatePresetDropDown(preset, _globalPresetId, [this, preset](WeatherPresetId presetId)
 		{
 			ApplyPreset(presetId);
+			preset->SetValue(GetPresetDisplayName(presetId));
 		});
+
+		// --- Random preset cycling ---
+		// Group all the cycling UI here so it's visually one block. Order: master
+		// enable, interval, natural-progression toggle, manual cycle button,
+		// per-preset inclusion mask.
+		new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Random Cycling", &_randomCyclingEnabled);
+
+		// Interval bound 1 second .. 7 days. The big upper bound is intentional -
+		// players often want "one preset per real-world hour" or "per in-game day"
+		// and forcing them to lower the cap by hand is annoying. Defaults to
+		// 3600s (1 hour) which is the most common case.
+		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Cycle Interval (s)", &_cycleIntervalSeconds, 1.0f, 604800.0f, 1.0f, 1);
+		new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Natural Progression", &_naturalProgression);
+
+		new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 22), L"Cycle Now",
+			[this, preset](Button*) -> bool
+			{
+				AdvanceRandomCycle();
+				preset->SetValue(GetPresetDisplayName(_globalPresetId));
+				return true;
+			});
+
+		// Per-preset inclusion mask. Each non-Custom preset gets its own toggle so
+		// the user can keep e.g. Sandstorm out of rotation for a city scene that
+		// shouldn't ever see desert weather. Bindings are stored as members
+		// (_presetMaskBindings) so they survive inspector rebuilds and don't dangle
+		// when the component is destroyed - Checkbox holds a raw bool* into the
+		// binding, which has to outlive the widget.
+		_presetMaskBindings.clear();
+		for (int32_t i = static_cast<int32_t>(WeatherPresetId::Clear); i <= static_cast<int32_t>(WeatherPresetId::Sandstorm); ++i)
+		{
+			const auto presetId = static_cast<WeatherPresetId>(i);
+			auto binding = std::make_shared<PresetMaskBinding>();
+			binding->presetId = presetId;
+			binding->enabled = IsPresetEnabledForCycling(_enabledPresetMask, presetId);
+			_presetMaskBindings.push_back(binding);
+
+			std::wstring label = std::wstring(L"  Include: ") + GetPresetDisplayName(presetId);
+			auto* cb = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), label, &binding->enabled);
+			cb->SetOnCheckFn([this, bindingPtr = binding.get()](Checkbox*, bool)
+			{
+				const uint32_t bit = 1u << static_cast<uint32_t>(bindingPtr->presetId);
+				if (bindingPtr->enabled)
+					_enabledPresetMask |= bit;
+				else
+					_enabledPresetMask &= ~bit;
+			});
+		}
 
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Transition Seconds", &_defaultTransitionSeconds, 0.0f, 120.0f, 0.05f, 2);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Precip Intensity", &_globalState.precipitationIntensity, 0.0f, 1.0f, 0.01f, 3);
