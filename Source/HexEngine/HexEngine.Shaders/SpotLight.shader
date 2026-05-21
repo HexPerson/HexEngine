@@ -257,7 +257,15 @@
 
 		float depthValue = 1.0f;
 
-		float4 pbr = CalculatePBRSpotLighting(			
+		// CalculatePBRSpotLighting applies `attenuation` internally (line ~333 in
+		// PBRutils.shader: `color *= attenuation;`). Pass attenuation*coneAtten to the
+		// PBR function and DO NOT re-multiply by them outside - the previous code
+		// applied them on both sides, squaring the falloff (typically 0.01 -> 0.0001
+		// at the cone center 8m below an 8m lamp). The visible symptom was a wide
+		// volumetric cone visible in the air but a virtually unlit ground patch
+		// underneath. Matches the PointLight shader's pattern, which already passes
+		// attenuation to PBR and multiplies the result only by lightIntensity.
+		float4 pbr = CalculatePBRSpotLighting(
 			GBUFFER_SPECULAR,
 			g_pointSampler,
 			screenPos,
@@ -270,7 +278,7 @@
 			attenuation * coneAtten
 			);
 
-		float3 lightContribution = max((pbr.rgb * lightIntensity * attenuation * coneAtten), 0.0f);
+		float3 lightContribution = max((pbr.rgb * lightIntensity), 0.0f);
 		lightContribution += volumetricContribution;
 		if (!all(isfinite(lightContribution)))
 			lightContribution = 0.0f.xxx;
