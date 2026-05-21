@@ -106,6 +106,16 @@ namespace HexEngine
 			math::Vector4 spotPosRadius[MaxParticleSpotLights];
 			math::Vector4 spotDirCone[MaxParticleSpotLights];
 			math::Vector4 spotColorStrength[MaxParticleSpotLights];
+			// MUST stay in lockstep with SceneRenderer::ForwardLightConstants. Both buffers
+			// bind to PS register b7 (the particle path here, the opaque/transparent mesh
+			// path via SceneRenderer's _forwardLightsBuffer) and DefaultPixel.shader's
+			// ForwardLightsBuffer cbuffer declares 1568 bytes. Without this trailing array
+			// the particle buffer was only 1312 bytes; when a particle pass left it bound
+			// and the next opaque mesh draw inherited the binding, D3D11 logged a
+			// "Constant Buffer too small" warning (1312 provided, 1568 expected). The
+			// particle shader itself doesn't read spotInnerCone, but the bytes have to be
+			// there so any shader that picks up the leftover binding sees the right size.
+			math::Vector4 spotInnerCone[MaxParticleSpotLights];
 		};
 
 		bool BuildEmitters(Scene* scene, Camera* camera, float dt);

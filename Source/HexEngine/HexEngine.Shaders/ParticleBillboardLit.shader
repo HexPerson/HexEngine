@@ -55,6 +55,13 @@
 		float4 g_spotLightPosRadius[16];
 		float4 g_spotLightDirCone[16];
 		float4 g_spotLightColorStrength[16];
+		// Padding to keep this cbuffer the same total size (1568 bytes) as
+		// DefaultPixel.shader's ForwardLightsBuffer, which also binds to b7. Both buffers
+		// share the slot and either may be left bound when the other shader runs; if the
+		// sizes don't match, D3D11 logs "Constant Buffer too small" the first time a draw
+		// inherits the smaller binding. The particle shader doesn't currently use the
+		// inner-cone field but the slot has to exist for the layout to match.
+		float4 g_spotLightInnerCone[16];
 	};
 
 	float Hash12(float2 p)
