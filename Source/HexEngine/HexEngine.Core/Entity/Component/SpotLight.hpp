@@ -41,8 +41,21 @@ namespace HexEngine
 
 		dx::BoundingSphere GetLightBoundingSphere();
 
+		// Outer cone angle in degrees - the FULL angle of the cone (not half-angle).
+		// Past this angle from the light's forward axis a fragment receives zero light.
+		// GetConeSize() / SetConeSize() are kept as aliases for the outer angle so older
+		// callers (shadow projection FOV, GI bookkeeping, etc.) keep compiling.
 		float GetConeSize() const;
 		void SetConeSize(float cone);
+
+		float GetOuterConeAngle() const;
+		void SetOuterConeAngle(float degrees);
+
+		// Inner cone angle in degrees - inside this cone the fragment receives full
+		// intensity; between inner and outer the cone falloff smoothsteps. Default is
+		// slightly smaller than outer so the soft edge is visible without tuning.
+		float GetInnerConeAngle() const;
+		void SetInnerConeAngle(float degrees);
 
 		virtual void Serialize(json& data, JsonFile* file) override;
 
@@ -55,7 +68,13 @@ namespace HexEngine
 		math::Matrix _viewMatrix;
 		math::Matrix _projectionMatrix;
 		float _yaw = -90.0f;
-		float _coneSize = 10.0f;
+		// Outer cone angle (degrees, FULL angle). Historic name kept for serialization
+		// compatibility - the old `_coneSize` field this replaces was always treated as
+		// the outer cone too, just without a matching inner one. Deserialise migrates the
+		// old value into here.
+		float _outerConeAngle = 45.0f;
+		// Inner cone angle (degrees, FULL angle). Must be <= outer; clamped at runtime.
+		float _innerConeAngle = 35.0f;
 		dx::BoundingSphere _lightBoundingSphere;
 		dx::BoundingFrustum _lightBoundingFrustum;
 		

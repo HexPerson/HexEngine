@@ -8,6 +8,7 @@
 #include "../../Environment/IEnvironment.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
 #include "../../GUI/Elements/ComponentWidget.hpp"
+#include <algorithm>
 
 namespace HexEngine
 {
@@ -44,12 +45,36 @@ namespace HexEngine
 
 	float SpotLight::GetConeSize() const
 	{
-		return _coneSize;
+		return _outerConeAngle;
 	}
 
 	void SpotLight::SetConeSize(float cone)
 	{
-		_coneSize = cone;
+		SetOuterConeAngle(cone);
+	}
+
+	float SpotLight::GetOuterConeAngle() const
+	{
+		return _outerConeAngle;
+	}
+
+	void SpotLight::SetOuterConeAngle(float degrees)
+	{
+		_outerConeAngle = std::clamp(degrees, 1.0f, 179.0f);
+		// Keep inner <= outer at all times; nudging inner along avoids the user having to
+		// fix both when they drag the outer slider below the current inner value.
+		if (_innerConeAngle > _outerConeAngle)
+			_innerConeAngle = _outerConeAngle;
+	}
+
+	float SpotLight::GetInnerConeAngle() const
+	{
+		return _innerConeAngle;
+	}
+
+	void SpotLight::SetInnerConeAngle(float degrees)
+	{
+		_innerConeAngle = std::clamp(degrees, 0.0f, _outerConeAngle);
 	}
 
 	ShadowMap* SpotLight::GetShadowMap(int32_t index) const
@@ -110,14 +135,28 @@ namespace HexEngine
 	{
 		Light::CreateWidget(widget);
 
-		auto coneSize = new DragFloat(
+		// Outer cone widget pushes through SetOuterConeAngle to keep inner <= outer
+		// invariant after every drag. DragFloat binds the value pointer directly so the
+		// inspector display tracks live, but the OnDrag callback re-runs the clamp.
+		auto outerCone = new DragFloat(
 			widget,
 			widget->GetNextPos(),
 			Point(widget->GetSize().x - 20, 18),
-			L"Cone Size",
-			&_coneSize, 0.1f, 50.0f,
+			L"Outer Cone (deg)",
+			&_outerConeAngle, 1.0f, 179.0f,
 			0.1f);
-		coneSize->SetPrefabOverrideBinding(GetComponentName(), "/_coneSize");
+		outerCone->SetOnDrag([this](float v, float, float) { SetOuterConeAngle(v); });
+		outerCone->SetPrefabOverrideBinding(GetComponentName(), "/_outerConeAngle");
+
+		auto innerCone = new DragFloat(
+			widget,
+			widget->GetNextPos(),
+			Point(widget->GetSize().x - 20, 18),
+			L"Inner Cone (deg)",
+			&_innerConeAngle, 0.0f, 179.0f,
+			0.1f);
+		innerCone->SetOnDrag([this](float v, float, float) { SetInnerConeAngle(v); });
+		innerCone->SetPrefabOverrideBinding(GetComponentName(), "/_innerConeAngle");
 
 		return true;
 	}
@@ -126,14 +165,49 @@ namespace HexEngine
 	{
 		Light::Serialize(data, file);
 
-		SERIALIZE_VALUE(_coneSize);
+		SERIALIZE_VALUE(_outerConeAngle);
+		SERIALIZE_VALUE(_innerConeAngle);
 	}
 
 	void SpotLight::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
 		Light::Deserialize(data, file, mask);
 
-		DESERIALIZE_VALUE(_coneSize);
+		// Migrate legacy `_coneSize` field if present and the new outer-cone field hasn't
+		// been written yet. The old _coneSize was always interpreted as the FULL cone
+		// angle (forward-light path used `_coneSize * 0.5` for the half-angle, and the
+		// shadow projection FOV used ToRadian(_coneSize)), so it maps 1:1 to the new
+		// outer cone. Inner cone gets seeded a touch below outer so old assets get a
+		// visible soft edge without authoring effort.
+		bool hasOuter = data.contains("_outerConeAngle");
+		bool hasInner = data.contains("_innerConeAngle");
+		bool hasLegacy = data.contains("_coneSize");
+
+		if (!hasOuter && hasLegacy)
+		{
+			float legacyConeSize = _outerConeAngle;
+			file->Deserialize(data, "_coneSize", legacyConeSize);
+			_outerConeAngle = std::clamp(legacyConeSize, 1.0f, 179.0f);
+		}
+		else if (hasOuter)
+		{
+			DESERIALIZE_VALUE(_outerConeAngle);
+		}
+
+		if (hasInner)
+		{
+			DESERIALIZE_VALUE(_innerConeAngle);
+		}
+		else
+		{
+			// 85% of outer = a small but visible soft edge band. Roughly matches what
+			// the old Phong-exponent cone produced for typical content.
+			_innerConeAngle = _outerConeAngle * 0.85f;
+		}
+
+		// Final invariant check after migration / re-serialise.
+		_outerConeAngle = std::clamp(_outerConeAngle, 1.0f, 179.0f);
+		_innerConeAngle = std::clamp(_innerConeAngle, 0.0f, _outerConeAngle);
 	}
 
 	/*DirectionalLight* DirectionalLight::Load(DiskFile* file)

@@ -131,8 +131,14 @@
 			float d = length(lightToSample);
 			if (d > 0.0001f)
 			{
-				float attenuation = saturate(1.0f - saturate(d / radius));
-				attenuation = attenuation * attenuation;
+				// Match the surface-shading attenuation curve so volumetric and direct
+				// lighting agree on how the light falls off through the volume - using
+				// the inverse-square + smooth-window form for both keeps the fog and
+				// the lit surfaces visually consistent at every distance.
+				const float minDistSqr = 0.01f * 0.01f;
+				float distanceFalloff = saturate(1.0f - pow(d / radius, 4.0f));
+				distanceFalloff *= distanceFalloff;
+				float attenuation = distanceFalloff / max(d * d, minDistSqr);
 
 				float3 lightDirection = normalize(currentPos - lightPos);
 				float phase = ComputeScattering(dot(direction, lightDirection));
@@ -195,8 +201,20 @@
 			return float4(volumetricContribution, 1.0f);
 		lightToPixelVec /= d;
 
-		float attenuation = saturate(1.0f - saturate(d / lightRange));
-		attenuation = attenuation * attenuation;
+		// Physical distance attenuation: classic inverse-square law (1/d^2) with a
+		// smooth window that drives the contribution cleanly to zero at lightRange.
+		// This is the standard UE4 / Frostbite / Filament punctual-light formulation:
+		//   window(x) = saturate(1 - (d/r)^4)
+		//   att      = window(d/r)^2 / max(d^2, eps^2)
+		// The (d/r)^4 windowing keeps the curve close to true inverse-square through
+		// most of the volume and only kicks in near the edge to hit zero; squaring
+		// gives a C1 transition (no visible seam at the boundary). Clamping d^2 from
+		// below avoids blow-up right at the light center - 1cm is the typical lower
+		// bound used by physically based engines to represent the light source size.
+		const float minDistSqr = 0.01f * 0.01f;
+		float distanceFalloff = saturate(1.0f - pow(d / lightRange, 4.0f));
+		distanceFalloff *= distanceFalloff;
+		float attenuation = distanceFalloff / max(d * d, minDistSqr);
 
 		float4 pbr = CalculatePBRPointLighting(
 			GBUFFER_SPECULAR,

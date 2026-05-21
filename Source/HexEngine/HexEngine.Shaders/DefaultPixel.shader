@@ -33,8 +33,9 @@
 		float4 g_fwdPointPosRadius[16];
 		float4 g_fwdPointColorStrength[16];
 		float4 g_fwdSpotPosRadius[16];
-		float4 g_fwdSpotDirCone[16];
+		float4 g_fwdSpotDirCone[16];           // (dir.xyz, cos(outerHalfAngle))
 		float4 g_fwdSpotColorStrength[16];
+		float4 g_fwdSpotInnerCone[16];         // .x = cos(innerHalfAngle)
 	};
 
 	// Direct-only PBR shading for a single analytical light (no ambient, no lightning extras).
@@ -89,8 +90,13 @@
 				continue;
 			const float dist = sqrt(max(1e-6f, distSq));
 			const float3 L = toLight / dist;
-			float atten = saturate(1.0f - distSq / radiusSq);
-			atten *= atten;
+			// Physical inverse-square + smooth-window attenuation, same form as the
+			// deferred PointLight/SpotLight shaders so forward-transparent surfaces
+			// (glass, alpha-blended decals) match the opaque pipeline's falloff.
+			const float minDistSqr = 0.01f * 0.01f;
+			float distanceFalloff = saturate(1.0f - pow(dist / radius, 4.0f));
+			distanceFalloff *= distanceFalloff;
+			const float atten = distanceFalloff / max(distSq, minDistSqr);
 			const float3 colour = g_fwdPointColorStrength[pi].rgb * g_fwdPointColorStrength[pi].w;
 			accum += PBRDirectLight(worldPos, worldNormal, baseColour, metalness, roughness,
 				L, colour, atten);
@@ -110,13 +116,19 @@
 			const float dist = sqrt(max(1e-6f, distSq));
 			const float3 L = toLight / dist;
 			const float3 spotFwd = normalize(g_fwdSpotDirCone[si].xyz);
-			const float coneCos = g_fwdSpotDirCone[si].w;
+			const float cosOuter = g_fwdSpotDirCone[si].w;
+			// Inner-cone cosine pulled from the parallel array. CPU clamps inner <= outer
+			// so cosInner >= cosOuter; we still guard the smoothstep against equal cosines
+			// to avoid a divide-by-zero shape at the boundary.
+			const float cosInner = max(g_fwdSpotInnerCone[si].x, cosOuter + 1e-4f);
 			const float cosAngle = dot(-L, spotFwd);
-			const float coneAtten = smoothstep(coneCos, saturate(coneCos + 0.08f), cosAngle);
+			const float coneAtten = smoothstep(cosOuter, cosInner, cosAngle);
 			if (coneAtten <= 0.0f)
 				continue;
-			float atten = saturate(1.0f - distSq / radiusSq);
-			atten *= atten * coneAtten;
+			const float minDistSqr = 0.01f * 0.01f;
+			float distanceFalloff = saturate(1.0f - pow(dist / radius, 4.0f));
+			distanceFalloff *= distanceFalloff;
+			const float atten = (distanceFalloff / max(distSq, minDistSqr)) * coneAtten;
 			const float3 colour = g_fwdSpotColorStrength[si].rgb * g_fwdSpotColorStrength[si].w;
 			accum += PBRDirectLight(worldPos, worldNormal, baseColour, metalness, roughness,
 				L, colour, atten);

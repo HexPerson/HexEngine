@@ -1332,6 +1332,29 @@ namespace HexEngine
 				bufferData._shadowCasterLightDir = shadowCaster->GetEntity()->GetWorldTM().Forward();
 				bufferData._lightRadius = shadowCaster->GetRadius();
 				bufferData._spotLightConeSize = (coneSize);
+
+				// Populate the soft-cone cosines for SpotLights so the new physical
+				// shader can do smoothstep(cosOuter, cosInner, cosTheta). Done here
+				// (rather than at every spot-light draw site) so any future caller of
+				// SetupPerShadowCasterBuffer that hands in a SpotLight automatically
+				// gets the per-light cone state - the previous coneSize-only field was
+				// the source of "all batched spot lights share the last light's cone"
+				// because callers pushed it via a per-pass constant just before doing a
+				// single batched DrawIndexedInstanced.
+				if (auto* spot = dynamic_cast<SpotLight*>(shadowCaster); spot != nullptr)
+				{
+					constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+					const float innerHalfRad = std::max(0.0f, spot->GetInnerConeAngle()) * 0.5f * kDegToRad;
+					const float outerHalfRad = std::max(0.0001f, spot->GetOuterConeAngle()) * 0.5f * kDegToRad;
+					bufferData._spotLightCosInner = std::cos(innerHalfRad);
+					bufferData._spotLightCosOuter = std::cos(outerHalfRad);
+				}
+				else
+				{
+					bufferData._spotLightCosInner = 0.0f;
+					bufferData._spotLightCosOuter = 0.0f;
+				}
+
 				bufferData._shadowConfig.shadowMapSize = shadowMapSize;
 
 			}
@@ -2306,9 +2329,20 @@ namespace HexEngine
 
 		auto renderLightList = [&](const std::vector<SpotLight*>& lights, CullingMode cullMode)
 			{
-				renderedSphere = false;
+				// One draw call per light. The previous version batched all spot lights
+				// into a single DrawIndexedInstanced, but it also wrote per-light cone
+				// state and shadow-map bindings into PER-PASS constants/SRVs before each
+				// instance::Render - which the batched draw silently collapsed to the
+				// LAST light's values. Per-light dispatching keeps the per-pass state in
+				// sync with the instance being drawn; the cost is N small draw calls
+				// instead of one batched call, but N is small (<= a few dozen lights
+				// typically) and each draw is a low-poly sphere so the GPU work dominates
+				// the per-draw fixed cost.
+				g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
+				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+				g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
+
 				int32_t numSpotLightsRendered = 0;
-				instance->Start();
 
 				for (auto& comp : lights)
 				{
@@ -2323,62 +2357,61 @@ namespace HexEngine
 					const auto& lightPos = lightEnt->GetWorldTM().Translation();
 					const float lightRad = light->GetRadius();
 
+					// Per-pass state for THIS light: light dir, cone size + cosines, shadow
+					// caster matrices. Reading the new physical cone constants out of the
+					// shader without this would still leave the previous light's cosines in
+					// the constant buffer.
 					SetupPerShadowCasterBuffer(light, true, 0, numSpotLightsRendered, 2, light->GetConeSize());
 
-					if (renderedSphere == false)
+					_gbuffer.BindAsShaderResource();
+
+					// Bind this light's shadow maps. Earlier code only bound on the first
+					// iteration, leaving subsequent lights sampling the first light's
+					// depth - visible as the wrong shadows landing on lights past the
+					// first.
+					for (int32_t i = 0; i < 6; ++i)
 					{
-						_gbuffer.BindAsShaderResource();
-
-						for (int32_t i = 0; i < 6; ++i)
-						{
-							auto shadowMap = light->GetShadowMap(i);
-
-							if (shadowMap)
-							{
-								shadowMap->BindAsShaderResource();
-							}
-							else
-								g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-						}
-
-						renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, numSpotLightsRendered);
-
-						renderedSphere = true;
+						auto shadowMap = light->GetShadowMap(i);
+						if (shadowMap != nullptr)
+							shadowMap->BindAsShaderResource();
+						else
+							g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 					}
+
+					// One-instance buffer: Start/Render/Finish each iteration so the
+					// instance vertex buffer has exactly this light's data when the draw
+					// fires. Allocates a fresh upload each frame per light which is the
+					// price we pay for per-light state correctness.
+					instance->Start();
 
 					_sphereEntity->SetPosition(lightPos);
 					_sphereEntity->SetScale(math::Vector3(lightRad));
 
-					g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
-	
-					const auto& lightForward = lightEnt->GetWorldTM().Forward();// GetComponent<Transform>()->GetForward();
-					const math::Matrix lightMatrix = math::Matrix::CreateScale(lightRad) * math::Matrix::CreateWorld(lightPos, lightForward, math::Vector3::Up);
 					instance->Render(
 						_sphereEntity->GetWorldTM(),
-						_sphereEntity->GetWorldTMTranspose()/*lightMatrix.Transpose()*/,
+						_sphereEntity->GetWorldTMTranspose(),
 						_sphereEntity->GetWorldTMPrevTranspose(),
 						_sphereEntity->GetWorldTMInvert(),
 						diffuse,
 						math::Vector2(lightRad, light->GetLightStrength()));
 
+					instance->Finish();
+
+					// RenderMesh sets up vertex/index/material bindings against the sphere
+					// mesh. Called once per light so the instance buffer slot it references
+					// matches the single instance we just wrote.
+					renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
+
+					GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin SpotLight");
+					g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), 1);
+					GFX_PERF_END();
+
 					numSpotLightsRendered++;
 				}
 
-				instance->Finish();
-
-				if (numSpotLightsRendered > 0)
-				{
-					g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
-					g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthNone);
-
-					GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin SpotLight");
-
-					g_pEnv->_graphicsDevice->DrawIndexedInstanced(_sphereMesh->GetNumIndices(), numSpotLightsRendered);
-
-					GFX_PERF_END();
-				}
-
-				
+				// renderedSphere flag was used by the old batched path; left at the outer
+				// scope as a no-op for any code below that might read it.
+				renderedSphere = numSpotLightsRendered > 0;
 			};
 
 		renderLightList(spotLightsInsideVolume, CullingMode::FrontFace);
@@ -2441,12 +2474,18 @@ namespace HexEngine
 				const auto fwd = lightEnt->GetWorldTM().Forward();
 				const float radius = std::max(0.05f, light->GetRadius());
 				const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
-				// cos(half-cone-angle); shader uses smoothstep around this for soft falloff.
-				const float cosHalfCone = std::cos(ToRadian(std::max(0.1f, light->GetConeSize()) * 0.5f));
+				// cos(half-cone-angle) for both outer and inner. Shader does
+				// smoothstep(cosOuter, cosInner, cosTheta) -> soft edge between the
+				// two angles. cosInner > cosOuter (smaller angle = larger cosine).
+				const float outerAngle = std::max(0.1f, light->GetOuterConeAngle());
+				const float innerAngle = std::clamp(light->GetInnerConeAngle(), 0.0f, outerAngle);
+				const float cosOuter = std::cos(ToRadian(outerAngle * 0.5f));
+				const float cosInner = std::cos(ToRadian(innerAngle * 0.5f));
 
 				data.spotPosRadius[spotCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
-				data.spotDirCone[spotCount] = math::Vector4(fwd.x, fwd.y, fwd.z, cosHalfCone);
+				data.spotDirCone[spotCount] = math::Vector4(fwd.x, fwd.y, fwd.z, cosOuter);
 				data.spotColorStrength[spotCount] = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
+				data.spotInnerCone[spotCount] = math::Vector4(cosInner, 0.0f, 0.0f, 0.0f);
 				++spotCount;
 			}
 		}

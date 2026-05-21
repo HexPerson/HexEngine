@@ -92,8 +92,15 @@ namespace HexEngine
 			math::Vector4 pointPosRadius[kMaxForwardPointLights];
 			math::Vector4 pointColorStrength[kMaxForwardPointLights];
 			math::Vector4 spotPosRadius[kMaxForwardSpotLights];
+			// spotDirCone[i] = (dir.xyz, cos(outerHalfAngle)).
 			math::Vector4 spotDirCone[kMaxForwardSpotLights];
 			math::Vector4 spotColorStrength[kMaxForwardSpotLights];
+			// spotInnerCone[i].x = cos(innerHalfAngle). The shader does
+			// smoothstep(cosOuter, cosInner, cosTheta) for a soft, energy-conserving
+			// cone falloff. Stored as a separate array (rather than packed into a
+			// spare slot of an existing vec4) so adding it doesn't reshuffle the
+			// existing fields and break older shader bindings.
+			math::Vector4 spotInnerCone[kMaxForwardSpotLights];
 		};
 
 	private:

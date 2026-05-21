@@ -140,14 +140,33 @@
 			{
 				lightToSample /= d;
 
-				float attenuation = saturate(1.0f - saturate(d / radius));
-				attenuation = attenuation * attenuation;
+				// Same inverse-square + smooth-window attenuation as the surface path
+				// so volumetric fog matches direct lighting through the volume.
+				const float minDistSqr = 0.01f * 0.01f;
+				float distanceFalloff = saturate(1.0f - pow(d / radius, 4.0f));
+				distanceFalloff *= distanceFalloff;
+				float attenuation = distanceFalloff / max(d * d, minDistSqr);
 
+				// Soft cone: smoothstep between the cosines of the outer and inner cone
+				// angles. Outside the outer cone the contribution is 0, inside the inner
+				// cone it's 1, and between them it's a Hermite blend (zero derivative at
+				// both ends so the cone edge doesn't band). Falls back to the legacy
+				// Phong-exponent shape when cosOuter/cosInner are zero (means "no
+				// SpotLight pushed its per-light cone state into the buffer", e.g. an
+				// older code path that only set g_spotLightConeSize).
 				float coneDot = dot(-lightToSample, lightDir);
-				float coneAtten = pow(max(coneDot, 0.0f), g_spotLightConeSize);
+				float coneAtten;
+				if (g_spotLightCosOuter > 0.0f || g_spotLightCosInner > 0.0f)
+				{
+					coneAtten = smoothstep(g_spotLightCosOuter, max(g_spotLightCosInner, g_spotLightCosOuter + 1e-4f), coneDot);
+				}
+				else
+				{
+					coneAtten = pow(max(coneDot, 0.0f), g_spotLightConeSize);
+				}
 
 				accumFog += phase * coneAtten * attenuation * stepDistance;
-			}			
+			}
 
 			currentPos += direction * stepDistance;
 		}
@@ -208,12 +227,27 @@
 			return float4(volumetricContribution, 1.0f);
 		lightToPixelVec /= d;
 
-		float attenuation = saturate(1.0f - saturate(d / lightRange));
-		attenuation = attenuation * attenuation;
+		// Physical distance attenuation (same form as PointLight; see comment there).
+		const float minDistSqr = 0.01f * 0.01f;
+		float distanceFalloff = saturate(1.0f - pow(d / lightRange, 4.0f));
+		distanceFalloff *= distanceFalloff;
+		float attenuation = distanceFalloff / max(d * d, minDistSqr);
 
-		const float cone = g_spotLightConeSize;
+		// Soft cone falloff via smoothstep between cos(outer) and cos(inner). At
+		// cosTheta >= cosInner the surface is fully lit by the spot; below cosOuter
+		// it's dark; the band between is a Hermite blend. Legacy callers that only
+		// populated g_spotLightConeSize still produce reasonable output via the
+		// pow() fallback - matters during the deserialise window for old scenes.
 		float coneDot = dot(-lightToPixelVec, lightDir);
-		float coneAtten = pow(max(coneDot, 0.0f), cone);
+		float coneAtten;
+		if (g_spotLightCosOuter > 0.0f || g_spotLightCosInner > 0.0f)
+		{
+			coneAtten = smoothstep(g_spotLightCosOuter, max(g_spotLightCosInner, g_spotLightCosOuter + 1e-4f), coneDot);
+		}
+		else
+		{
+			coneAtten = pow(max(coneDot, 0.0f), g_spotLightConeSize);
+		}
 
 		float depthValue = 1.0f;
 

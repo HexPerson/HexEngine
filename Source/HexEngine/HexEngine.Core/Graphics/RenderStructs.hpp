@@ -255,9 +255,15 @@ namespace HexEngine
 		math::Vector3 _shadowCasterLightDir;
 		float _lightRadius;
 
+		// Legacy Phong-exponent cone size kept here so shaders that still expect this
+		// field bind without a rewrite. The new soft-cone model uses _spotLightCosInner
+		// and _spotLightCosOuter (cosines of the full inner and outer cone angles, in
+		// radians). When both are populated the shader does smoothstep(cosOuter,
+		// cosInner, cosTheta); when they're 0 (e.g. pre-update shadow setup with no
+		// active spot) the shader falls back to the legacy formula.
 		float _spotLightConeSize;
-		float pad0;
-		float pad1;
+		float _spotLightCosInner;
+		float _spotLightCosOuter;
 		float pad2;
 
 		ShadowSettings _shadowConfig;

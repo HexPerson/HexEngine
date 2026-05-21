@@ -253,8 +253,14 @@
 		float g_lightRadius;
 
 		float g_spotLightConeSize;
-		float PerShadowCasterBuffer_pad0;
-		float PerShadowCasterBuffer_pad1;
+		// Cosines of the full inner / outer cone angles (i.e. cos(innerAngle) and
+		// cos(outerAngle)). When the shader sees both non-zero, it uses
+		// smoothstep(g_spotLightCosOuter, g_spotLightCosInner, dot(-L, lightDir)) for
+		// physically-shaped soft-edge cone falloff. Zero means "no spot configured" -
+		// the volumetric path and any caller that didn't update the per-pass buffer
+		// (e.g. directional-shadow rendering) gets a clean disable instead of garbage.
+		float g_spotLightCosInner;
+		float g_spotLightCosOuter;
 		float PerShadowCasterBuffer_pad2;
 
 		ShadowSettings g_shadowConfig;
