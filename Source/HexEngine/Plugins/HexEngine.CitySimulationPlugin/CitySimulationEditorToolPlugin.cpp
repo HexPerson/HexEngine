@@ -1564,14 +1564,18 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		? _roadPainterAnchorHeight
 		: (_roadPainterHoverHeight + _roadPainterInitialYOffset);
 
-	// Bail out cheaply if the (anchor, hover) snapped grid pair is unchanged; the run cells
-	// only depend on the snapped pair, not on raw mouse position. This is what keeps mouse-
-	// move from rebuilding the preview every pixel of motion.
+	// Bail out cheaply if the (anchor, hover, origin) tuple is unchanged; the run cells +
+	// their world positions only depend on these three, not on raw mouse position. Origin
+	// is included because before the first click the hover snaps to coord (0,0) and stays
+	// there as the cursor moves - it's the ORIGIN that's sliding to the editor-snapped
+	// mouse pos. Without it in the key, the preview would freeze at the first hover.
 	if (_roadPainterHasPreviewKey
 		&& _roadPainterPreviewAnchorX == effAnchorX
 		&& _roadPainterPreviewAnchorZ == effAnchorZ
 		&& _roadPainterPreviewHoverX == _roadPainterHoverX
-		&& _roadPainterPreviewHoverZ == _roadPainterHoverZ)
+		&& _roadPainterPreviewHoverZ == _roadPainterHoverZ
+		&& _roadPainterPreviewOriginX == _roadPainterOriginX
+		&& _roadPainterPreviewOriginZ == _roadPainterOriginZ)
 	{
 		return;
 	}
@@ -1708,6 +1712,8 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 	_roadPainterPreviewAnchorZ = effAnchorZ;
 	_roadPainterPreviewHoverX = _roadPainterHoverX;
 	_roadPainterPreviewHoverZ = _roadPainterHoverZ;
+	_roadPainterPreviewOriginX = _roadPainterOriginX;
+	_roadPainterPreviewOriginZ = _roadPainterOriginZ;
 }
 
 void CitySimulationEditorToolPlugin::OnCreateUI(HexEngine::MenuBar* menuBar)

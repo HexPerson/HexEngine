@@ -102,4 +102,10 @@ private:
 	int32_t _roadPainterPreviewAnchorZ = 0;
 	int32_t _roadPainterPreviewHoverX = 0;
 	int32_t _roadPainterPreviewHoverZ = 0;
+	// Origin used the last time we built a preview - the world position of cell (0,0).
+	// Has to participate in the dedup key because before the first click the hover stays
+	// at coord (0,0) while the origin slides with the cursor; without this field the
+	// dedup would think "nothing changed" and the ghost would stick to its first position.
+	float _roadPainterPreviewOriginX = 0.0f;
+	float _roadPainterPreviewOriginZ = 0.0f;
 };
