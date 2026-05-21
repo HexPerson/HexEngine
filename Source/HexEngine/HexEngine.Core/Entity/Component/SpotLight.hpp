@@ -15,7 +15,22 @@ namespace HexEngine
 
 		SpotLight(Entity* entity);
 
-		SpotLight(Entity* entity, SpotLight* copy) : Light(entity, copy) {}
+		SpotLight(Entity* entity, SpotLight* copy)
+			: Light(entity, copy)
+			, _direction(copy != nullptr ? copy->_direction : math::Vector3::Zero)
+			, _yaw(copy != nullptr ? copy->_yaw : -90.0f)
+			, _outerConeAngle(copy != nullptr ? copy->_outerConeAngle : 45.0f)
+			, _innerConeAngle(copy != nullptr ? copy->_innerConeAngle : 35.0f)
+		{
+			// The original copy ctor only forwarded to Light(entity, copy) and ignored
+			// SpotLight's own state - so CloneEntity (used by prefab spawn) produced a
+			// SpotLight with default cone angles (45 / 35) regardless of what the source
+			// authored. Inspector-visible cones plus the actual lighting/shadow frustum
+			// were wrong on every prefab-instantiated spot light. We DON'T copy the cached
+			// matrices / bounds (_viewMatrix, _projectionMatrix, _lightBoundingSphere,
+			// _lightBoundingFrustum) - those get rebuilt by ConstructMatrices on the next
+			// render pass from these primary fields.
+		}
 
 		virtual void Destroy() override;
 
