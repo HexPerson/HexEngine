@@ -180,7 +180,19 @@ namespace HexEngine
 		void SetTag(int32_t tag);
 
 		Entity* GetParent() const;
-		void SetParent(Entity* parent);
+		// preserveWorldPosition (default true):
+		//   true:  preserve the entity's WORLD position across the reparent by
+		//          recomputing local = worldBefore * parent.worldInverse. Use this
+		//          when picking the entity up and dropping it elsewhere in the
+		//          hierarchy at runtime - the user-visible position shouldn't jump.
+		//   false: keep the entity's existing LOCAL position as-is and just change
+		//          its parent. Use this when the local is ALREADY correct for the
+		//          new parent - notably during scene/prefab load, where the
+		//          deserialized local is authored relative to whatever parent the
+		//          hierarchy table says, and the world-preservation recompute would
+		//          actively corrupt the value (since at load-time most parents are
+		//          still at default (0,0,0) when SetParent runs).
+		void SetParent(Entity* parent, bool preserveWorldPosition = true);
 		const std::vector<Entity*>& GetChildren() const;
 
 		// Helper funcs for transform

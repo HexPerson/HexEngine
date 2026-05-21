@@ -230,7 +230,22 @@ namespace HexEngine
 			if (child && parent)
 			{
 				loadIntoExistingScene->Lock();
-				child->SetParent(parent);
+				// preserveWorldPosition=false: the entity's saved _position is the
+				// LOCAL position relative to the parent we're about to attach. The
+				// default SetParent behavior (preserve world by recomputing local)
+				// would corrupt that value, because at hierarchy-loop time the
+				// transforms haven't been deserialized yet - every entity has its
+				// default position (0,0,0). SetParent would then compute
+				// new_local = (0 - parent.world) for every child, and the upcoming
+				// SetPositionNoNotify in the transform-deserialize pass early-
+				// returns when the saved value happens to match the (0,0,0) that
+				// SetParent just wrote - silently dropping the authored local on
+				// any entity whose intended local is (0,0,0) (prefab roots
+				// attached to a wrapper, road-painter sections under wrappers,
+				// etc.). Skipping the recompute keeps the load order
+				// (hierarchy -> transforms) intact while letting the transform
+				// pass write the correct values.
+				child->SetParent(parent, false);
 				loadIntoExistingScene->Unlock();
 			}
 		}

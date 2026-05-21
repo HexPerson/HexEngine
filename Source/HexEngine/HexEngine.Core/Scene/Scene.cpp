@@ -884,25 +884,16 @@ namespace HexEngine
 
 				if (clonedParent)
 				{
-					// Subtle: Entity::SetParent preserves WORLD position by recomputing
-					// the entity's local position relative to the new parent. But at
-					// this point the cloned entity has no parent yet, so its position
-					// field holds the source entity's LOCAL position (just being
-					// interpreted as world because there's no parent above it). If we
-					// let SetParent do its world-preservation thing it would compute a
-					// bogus new local = (source.local - parent.world), which is wrong
-					// for a prefab whose author intended `_position` to be local
-					// already. Snapshot the authored local position first, reparent,
-					// then write it back as local via ForcePosition.
-					//
-					// Concrete repro: a prefab with StreetLight at local (0,0,-6.5) and
-					// a SpotLight CHILD at local (0, 8.75, 2.0) ended up with SpotLight
-					// local Z of 8.5 after spawn (2.0 - (-6.5)), because the SpotLight's
-					// "world position" before reparent was (0, 8.75, 2.0) and the parent's
-					// world was (0, 0, -6.5).
-					const math::Vector3 authoredLocalPos = clonedEnt->GetPosition();
-					clonedEnt->SetParent(clonedParent);
-					clonedEnt->ForcePosition(authoredLocalPos);
+					// preserveWorldPosition=false: the cloned entity's current local
+					// position IS the source's authored local (CloneEntity copied it
+					// into _current). Letting SetParent's world-preservation recompute
+					// run here would treat that value as the entity's current WORLD
+					// position (the clone has no parent yet, so world == local), then
+					// compute new_local = source.local - parent.world - giving a
+					// completely different value from what the prefab author intended.
+					// The new param keeps the cloned local as-is and only changes the
+					// parent link.
+					clonedEnt->SetParent(clonedParent, false);
 				}
 			}
 		}

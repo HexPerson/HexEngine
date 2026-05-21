@@ -181,7 +181,7 @@ namespace HexEngine
 		return _lastChunk;
 	}
 
-	void Entity::SetParent(Entity* parent)
+	void Entity::SetParent(Entity* parent, bool preserveWorldPosition)
 	{
 		if (parent == this)
 		{
@@ -192,9 +192,12 @@ namespace HexEngine
 		if (_parent == parent)
 			return;
 
-		// Preserve current world-space position across reparent operations by
-		// converting it back into the new parent's local space after attaching.
-		const math::Vector3 worldPositionBeforeReparent = GetWorldTM().Translation();
+		// Snapshot the current world position only when we need to preserve it
+		// across the reparent. Skipping the GetWorldTM call in the !preserve case
+		// also avoids populating the world-TM cache with a value computed against
+		// the OLD parent chain - which during scene load is mostly defaults and
+		// would just have to be invalidated again below.
+		const math::Vector3 worldPositionBeforeReparent = preserveWorldPosition ? GetWorldTM().Translation() : math::Vector3::Zero;
 
 		// if it already has a parent, notify that parent that it is no longer the parent
 		if (_parent != nullptr)
@@ -228,7 +231,7 @@ namespace HexEngine
 		_hasCachedWorldTMTranspose = false;
 		_hasCachedWorldTMInvert = false;
 
-		if (_cachedTransform != nullptr)
+		if (preserveWorldPosition && _cachedTransform != nullptr)
 		{
 			math::Vector3 localPosition = worldPositionBeforeReparent;
 			if (_parent != nullptr)
@@ -238,6 +241,9 @@ namespace HexEngine
 
 			_cachedTransform->SetPosition(localPosition);
 		}
+		// preserveWorldPosition == false: leave _cachedTransform's local position
+		// untouched. Caller is asserting the local value is already what it should
+		// be relative to the new parent (the scene-load / prefab-spawn case).
 	}
 
 	const std::vector<Entity*>& Entity::GetChildren() const
