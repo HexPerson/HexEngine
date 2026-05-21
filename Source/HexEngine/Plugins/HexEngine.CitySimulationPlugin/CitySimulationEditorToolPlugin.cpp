@@ -102,6 +102,16 @@
 		bool isPrefab = false;
 		float length = 1.0f;
 		bool usesXAxis = false;
+		// Mesh-local AABB centre in the XZ plane. Used by the spawn code to subtract
+		// the rotated centre from the wrapper position, so that whether the user
+		// authored their road piece with origin at the centre, at a corner, or
+		// anywhere in between, the visual extent lands centred on the cell's grid
+		// coord. Without this correction a corner-authored mesh (origin at one edge)
+		// renders offset by half a cell, which silently mis-aligns the snap grid
+		// versus where the road piece actually sits - the user clicks the visual end
+		// expecting to land on that cell, but the click snaps to the NEXT cell over
+		// and the would-be corner cell gets no second connection.
+		math::Vector2 aabbCenterXZ = math::Vector2(0.0f, 0.0f);
 	};
 
 	struct CellPlacement
@@ -109,6 +119,9 @@
 		fs::path assetPath;
 		bool isPrefab = false;
 		math::Quaternion rotation = math::Quaternion::Identity;
+		// Copied from PlacementSpec at choose time so the spawner can apply the
+		// centring offset without having to look up which spec drove the placement.
+		math::Vector2 aabbCenterXZ = math::Vector2(0.0f, 0.0f);
 	};
 
 	std::string MakeManagedWrapperName(const GridCoord& coord)
@@ -148,6 +161,21 @@
 	math::Vector3 GridToWorld(const GridCoord& coord, float cellSize, float y)
 	{
 		return math::Vector3(static_cast<float>(coord.x) * cellSize, y, static_cast<float>(coord.z) * cellSize);
+	}
+
+	// Subtracts the rotated mesh-local AABB centre from the cell's grid-world
+	// position so the placed mesh's visual centre ends up exactly on the grid
+	// coord. Corrects for road assets authored with origin at a corner (or any
+	// off-centre origin): without this correction the visual extent runs from
+	// grid*L to (grid+1)*L while the snap grid + anchor wireframe centre at
+	// grid*L, so clicking the visual right edge of a cell snaps to the NEXT
+	// cell - which is why perpendicular runs failed to overlap the previous
+	// run's last cell and corners never formed.
+	math::Vector3 ApplyMeshCentreCorrection(const math::Vector3& gridWorld, const math::Vector2& aabbCenterXZ, const math::Quaternion& rotation)
+	{
+		const math::Vector3 centerLocal(aabbCenterXZ.x, 0.0f, aabbCenterXZ.y);
+		const math::Vector3 centerWorld = math::Vector3::Transform(centerLocal, rotation);
+		return math::Vector3(gridWorld.x - centerWorld.x, gridWorld.y, gridWorld.z - centerWorld.z);
 	}
 
 	uint8_t RotateMaskClockwise(uint8_t mask)
@@ -196,7 +224,7 @@
 		return false;
 	}
 
-	bool TryMeasureMeshAsset(const fs::path& assetPath, float& outSizeX, float& outSizeZ)
+	bool TryMeasureMeshAsset(const fs::path& assetPath, float& outSizeX, float& outSizeZ, math::Vector2& outCenterXZ)
 	{
 		auto mesh = Mesh::Create(assetPath);
 		if (mesh == nullptr)
@@ -205,10 +233,11 @@
 		const auto bounds = mesh->GetAABB();
 		outSizeX = std::max(bounds.Extents.x * 2.0f, 0.01f);
 		outSizeZ = std::max(bounds.Extents.z * 2.0f, 0.01f);
+		outCenterXZ = math::Vector2(bounds.Center.x, bounds.Center.z);
 		return true;
 	}
 
-	bool TryMeasurePrefabAsset(const fs::path& assetPath, float& outSizeX, float& outSizeZ)
+	bool TryMeasurePrefabAsset(const fs::path& assetPath, float& outSizeX, float& outSizeZ, math::Vector2& outCenterXZ)
 	{
 		auto tempScene = g_pEnv->_sceneManager->CreateEmptyScene(false);
 		if (tempScene == nullptr)
@@ -246,6 +275,12 @@
 		const math::Vector3 size = boundsMax - boundsMin;
 		outSizeX = std::max(size.x, 0.01f);
 		outSizeZ = std::max(size.z, 0.01f);
+		// Centre of the prefab's combined AABB. Same role as the mesh-asset path's
+		// AABB centre - lets the spawn code shift the wrapper position so the
+		// prefab's visual extent ends up centred on the cell's grid coord regardless
+		// of how the prefab was authored relative to its own origin.
+		outCenterXZ.x = (boundsMin.x + boundsMax.x) * 0.5f;
+		outCenterXZ.y = (boundsMin.z + boundsMax.z) * 0.5f;
 		return true;
 	}
 
@@ -259,11 +294,14 @@
 		outSpec.isPrefab = assetPath.extension() == ".hprefab";
 		float sizeX = 0.0f;
 		float sizeZ = 0.0f;
+		math::Vector2 centerXZ(0.0f, 0.0f);
 		const bool measured = outSpec.isPrefab
-			? TryMeasurePrefabAsset(assetPath, sizeX, sizeZ)
-			: TryMeasureMeshAsset(assetPath, sizeX, sizeZ);
+			? TryMeasurePrefabAsset(assetPath, sizeX, sizeZ, centerXZ)
+			: TryMeasureMeshAsset(assetPath, sizeX, sizeZ, centerXZ);
 		if (!measured)
 			return false;
+
+		outSpec.aabbCenterXZ = centerXZ;
 
 		// Convention: road meshes are authored with the travel/connection direction along +Z,
 		// so the mesh's Z-extent IS the cell-to-cell spacing (length of one road segment)
@@ -534,6 +572,7 @@
 		{
 			outPlacement.assetPath = crossroadSpec->assetPath;
 			outPlacement.isPrefab = crossroadSpec->isPrefab;
+			outPlacement.aabbCenterXZ = crossroadSpec->aabbCenterXZ;
 			// Crossroads are 4-fold rotationally symmetric, so the rotation is just
 			// identity - whatever yaw the user picked, a crossroad still looks like a
 			// crossroad. The authoring offset is still applied because some custom
@@ -548,6 +587,7 @@
 		{
 			outPlacement.assetPath = tJunctionSpec->assetPath;
 			outPlacement.isPrefab = tJunctionSpec->isPrefab;
+			outPlacement.aabbCenterXZ = tJunctionSpec->aabbCenterXZ;
 			if (!ComputeRotationForMask(desiredMask, tBaseMask, outPlacement.rotation))
 				outPlacement.rotation = math::Quaternion::Identity;
 			ApplyQuarterTurnRotation(outPlacement.rotation, tJunctionYawQuarterTurns);
@@ -558,6 +598,7 @@
 		{
 			outPlacement.assetPath = cornerSpec->assetPath;
 			outPlacement.isPrefab = cornerSpec->isPrefab;
+			outPlacement.aabbCenterXZ = cornerSpec->aabbCenterXZ;
 			if (!ComputeRotationForMask(desiredMask, cornerBaseMask, outPlacement.rotation))
 				outPlacement.rotation = math::Quaternion::Identity;
 			ApplyQuarterTurnRotation(outPlacement.rotation, cornerYawQuarterTurns);
@@ -566,6 +607,7 @@
 
 		outPlacement.assetPath = straightSpec.assetPath;
 		outPlacement.isPrefab = straightSpec.isPrefab;
+		outPlacement.aabbCenterXZ = straightSpec.aabbCenterXZ;
 
 		uint8_t straightMask = desiredMask;
 		if (connections == 0)
@@ -660,7 +702,8 @@
 			if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, cornerYawQuarterTurns, tJunctionYawQuarterTurns, crossroadYawQuarterTurns, placement))
 				continue;
 
-			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(coord), GridToWorld(coord, spacing, height), placement.rotation, math::Vector3(1.0f));
+			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(coord, spacing, height), placement.aabbCenterXZ, placement.rotation);
+			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(coord), wrapperWorld, placement.rotation, math::Vector3(1.0f));
 			if (wrapper == nullptr)
 				continue;
 
@@ -834,7 +877,8 @@
 			if (action.existingWrapper != nullptr)
 				scene->DestroyEntity(action.existingWrapper);
 
-			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(action.coord), GridToWorld(action.coord, spacing, action.height), action.placement.rotation, math::Vector3(1.0f));
+			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(action.coord, spacing, action.height), action.placement.aabbCenterXZ, action.placement.rotation);
+			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(action.coord), wrapperWorld, action.placement.rotation, math::Vector3(1.0f));
 			if (wrapper == nullptr)
 				continue;
 
@@ -1055,8 +1099,9 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		// the ghost would sit at the raw-mesh spacing while the committed road lands on the
 		// user's scaled grid, and the preview would drift away from the actual placement.
 		const float previewSpacing = (_roadPainterCellSize > 0.0f) ? _roadPainterCellSize : straightSpec.length;
+		const math::Vector3 previewWorld = ApplyMeshCentreCorrection(GridToWorld(coord, previewSpacing, _roadPainterAnchorHeight), placement.aabbCenterXZ, placement.rotation);
 		const std::string wrapperName = std::format("{}{}_{}", kRoadPainterPreviewPrefix, coord.x, coord.z);
-		auto* wrapper = scene->CreateEntity(wrapperName, GridToWorld(coord, previewSpacing, _roadPainterAnchorHeight), placement.rotation, math::Vector3(1.0f));
+		auto* wrapper = scene->CreateEntity(wrapperName, previewWorld, placement.rotation, math::Vector3(1.0f));
 		if (wrapper == nullptr)
 			continue;
 
