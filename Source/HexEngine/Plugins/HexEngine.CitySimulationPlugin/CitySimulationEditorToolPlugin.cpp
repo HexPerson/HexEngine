@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <unordered_map>
@@ -176,6 +177,55 @@
 		const math::Vector3 centerLocal(aabbCenterXZ.x, 0.0f, aabbCenterXZ.y);
 		const math::Vector3 centerWorld = math::Vector3::Transform(centerLocal, rotation);
 		return math::Vector3(gridWorld.x - centerWorld.x, gridWorld.y, gridWorld.z - centerWorld.z);
+	}
+
+	// Destroys `wrapper` AND every descendant that was parented under it. Necessary
+	// because Scene::DestroyEntity(parent) only flags the immediate children with
+	// IsPendingRemoval and zeroes their _parent pointer - it does NOT cascade
+	// Scene-level removal into them. DeleteMe(parent) empties parent->_children
+	// BEFORE the recursive loop in Scene::DestroyEntity reads it, so the cascade
+	// runs against an empty list and the children stay orphaned-but-still-in-the-
+	// scene. For prefab-based road pieces this manifests as "stale straight mesh
+	// stays visible after the wrapper is replaced by a corner" - the wrapper's
+	// gone but its prefab subtree is still rendering off its last PVS snapshot.
+	//
+	// Snapshot the descendant tree FIRST (DeleteMe will mutate it), then destroy
+	// the wrapper, then re-resolve each descendant via TryGetEntity and call
+	// DestroyEntity on whatever's still alive - that path's RemoveEntityInternal
+	// runs unconditionally on already-flagged entities (Scene.cpp ~ line 1138)
+	// and is what actually removes them from the scene + PVS.
+	void DestroyWrapperAndDescendants(Scene* scene, Entity* wrapper)
+	{
+		if (scene == nullptr || wrapper == nullptr)
+			return;
+
+		std::vector<EntityId> descendantIds;
+		std::function<void(Entity*)> collect = [&](Entity* e)
+		{
+			if (e == nullptr)
+				return;
+			for (auto* child : e->GetChildren())
+			{
+				if (child == nullptr)
+					continue;
+				descendantIds.push_back(child->GetId());
+				collect(child);
+			}
+		};
+		collect(wrapper);
+
+		// Destroy the wrapper first. This flags its immediate children pending-
+		// removal; deeper descendants are still unflagged. We tear those down
+		// individually below.
+		scene->DestroyEntity(wrapper);
+
+		for (const auto& id : descendantIds)
+		{
+			Entity* live = scene->TryGetEntity(id);
+			if (live == nullptr)
+				continue; // already cleaned up by a flagged-path cascade
+			scene->DestroyEntity(live);
+		}
 	}
 
 	uint8_t RotateMaskClockwise(uint8_t mask)
@@ -681,7 +731,7 @@
 		GatherManagedRoadCells(scene, ignoredHeights, wrappersToDelete);
 		for (auto* wrapper : wrappersToDelete)
 		{
-			scene->DestroyEntity(wrapper);
+			DestroyWrapperAndDescendants(scene, wrapper);
 		}
 
 		auto hasCell = [&heights](const GridCoord& coord) -> bool
@@ -875,7 +925,12 @@
 		for (const auto& action : actions)
 		{
 			if (action.existingWrapper != nullptr)
-				scene->DestroyEntity(action.existingWrapper);
+			{
+				// Use the descendant-aware destroy so prefab-based road pieces don't
+				// leave their prefab subtree orphaned-but-still-rendering when their
+				// wrapper gets replaced (e.g. a straight upgrading to a corner).
+				DestroyWrapperAndDescendants(scene, action.existingWrapper);
+			}
 
 			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(action.coord, spacing, action.height), action.placement.aabbCenterXZ, action.placement.rotation);
 			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(action.coord), wrapperWorld, action.placement.rotation, math::Vector3(1.0f));
