@@ -115,8 +115,10 @@ namespace HexEngine
 		// StaticMeshComponent into a single combined static mesh assigned to `root`.
 		// Each descendant's vertices are baked into root-local space (so root's own
 		// transform survives intact), the combined mesh is written to disk as a fresh
-		// .hmesh under EngineData/Meshes/Merged, and every descendant whose mesh got
-		// folded in is destroyed.
+		// .hmesh under <originating-FS>/Meshes/Merged (the FS picked from the first
+		// source mesh that has one, so a project's GameData meshes merge back into
+		// GameData rather than landing in EngineData), and every descendant whose mesh
+		// got folded in is destroyed.
 		//
 		// Counts every contributor: root included if it has its own StaticMeshComponent.
 		// "Extras" = components other than Transform and StaticMeshComponent. If any
@@ -198,8 +200,8 @@ namespace HexEngine
 		// id-resolved walks). Returns true on success.
 		//
 		// `outputName` is the bare filename (no extension); we append .hmesh and place it
-		// in EngineData/Meshes/Merged/, suffixing with _N if a file with the same stem
-		// exists. `entitiesToDestroyAfter` is owned by the caller and may safely include
+		// in <originating-FS>/Meshes/Merged/, suffixing with _N if a file with the same
+		// stem exists. `entitiesToDestroyAfter` is owned by the caller and may safely include
 		// entries that are equal to `survivor` (we skip them) - this is what keeps the two
 		// callers (hierarchy vs flat selection) sharing the same execution path even though
 		// each has a different definition of what to clean up.
@@ -282,16 +284,42 @@ namespace HexEngine
 				return false;
 			}
 
+			// Pick the destination FileSystem from the source meshes themselves rather
+			// than defaulting to the engine FS (g_pEnv->GetFileSystem(), i.e. EngineData).
+			// Engine assets live in EngineData and are typically read-only / shipped;
+			// merged meshes derived from a project's GameData meshes belong NEXT TO those
+			// inputs, otherwise the merge ends up writing into the engine's shared asset
+			// tree and the project's references to the new mesh point cross-FS.
+			//
+			// Strategy: first source with an owning FileSystem wins. Falls back to the
+			// engine FS only when none of the contributors are anchored to a filesystem
+			// (e.g. transient meshes constructed in code without SetPaths).
+			FileSystem* destinationFs = nullptr;
+			for (const auto& source : sources)
+			{
+				if (source.mesh == nullptr)
+					continue;
+				if (auto* fs = source.mesh->GetOwningFileSystem(); fs != nullptr)
+				{
+					destinationFs = fs;
+					break;
+				}
+			}
+			if (destinationFs == nullptr)
+			{
+				destinationFs = &g_pEnv->GetFileSystem();
+			}
+
 			// Resolve output path. Default to a per-project Meshes/Merged subdirectory; bump
 			// the suffix if a file already exists so successive merges never silently stomp.
 			std::wstring stem = outputName.empty() ? std::wstring(L"MergedMesh") : outputName;
 			fs::path relativeDir = fs::path(L"Meshes") / L"Merged";
-			fs::path outputPath = g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath(relativeDir / (stem + L".hmesh"));
+			fs::path outputPath = destinationFs->GetLocalAbsoluteDataPath(relativeDir / (stem + L".hmesh"));
 			if (fs::exists(outputPath))
 			{
 				for (int32_t i = 1; i < 4096; ++i)
 				{
-					fs::path candidate = g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath(relativeDir / (stem + L"_" + std::to_wstring(i) + L".hmesh"));
+					fs::path candidate = destinationFs->GetLocalAbsoluteDataPath(relativeDir / (stem + L"_" + std::to_wstring(i) + L".hmesh"));
 					if (!fs::exists(candidate))
 					{
 						outputPath = candidate;
@@ -301,7 +329,7 @@ namespace HexEngine
 			}
 
 			auto combinedMesh = std::shared_ptr<Mesh>(new Mesh(nullptr, outputPath.stem().string()), ResourceDeleter());
-			combinedMesh->SetPaths(outputPath, &g_pEnv->GetFileSystem());
+			combinedMesh->SetPaths(outputPath, destinationFs);
 			combinedMesh->SetLoader(g_pEnv->_meshLoader);
 			combinedMesh->SetNumFaces(static_cast<uint32_t>(combinedIndices.size() / 3));
 			combinedMesh->AddVertices(combinedVertices);
