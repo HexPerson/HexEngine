@@ -499,6 +499,13 @@
 		const std::optional<PlacementSpec>& crossroadSpec,
 		const std::optional<PlacementSpec>& tJunctionSpec,
 		int32_t yawQuarterTurns,
+		// Per-piece authoring-orientation corrections. Applied to the rotation AFTER
+		// ComputeRotationForMask, so the user can rotate a mis-authored corner / T /
+		// crossroad mesh into the engine's expected base-mask convention without
+		// re-exporting the asset. Defaults of 0 give back the previous behaviour.
+		int32_t cornerYawQuarterTurns,
+		int32_t tJunctionYawQuarterTurns,
+		int32_t crossroadYawQuarterTurns,
 		CellPlacement& outPlacement)
 	{
 		const int32_t connections = CountConnections(desiredMask);
@@ -529,9 +536,11 @@
 			outPlacement.isPrefab = crossroadSpec->isPrefab;
 			// Crossroads are 4-fold rotationally symmetric, so the rotation is just
 			// identity - whatever yaw the user picked, a crossroad still looks like a
-			// crossroad. (If a custom crossroad asset has asymmetric markings the user
-			// can fold the offset into the mesh.)
+			// crossroad. The authoring offset is still applied because some custom
+			// crossroad assets carry directional markings (lane arrows, signage) that
+			// the user may want to rotate.
 			outPlacement.rotation = math::Quaternion::Identity;
+			ApplyQuarterTurnRotation(outPlacement.rotation, crossroadYawQuarterTurns);
 			return true;
 		}
 
@@ -541,6 +550,7 @@
 			outPlacement.isPrefab = tJunctionSpec->isPrefab;
 			if (!ComputeRotationForMask(desiredMask, tBaseMask, outPlacement.rotation))
 				outPlacement.rotation = math::Quaternion::Identity;
+			ApplyQuarterTurnRotation(outPlacement.rotation, tJunctionYawQuarterTurns);
 			return true;
 		}
 
@@ -550,6 +560,7 @@
 			outPlacement.isPrefab = cornerSpec->isPrefab;
 			if (!ComputeRotationForMask(desiredMask, cornerBaseMask, outPlacement.rotation))
 				outPlacement.rotation = math::Quaternion::Identity;
+			ApplyQuarterTurnRotation(outPlacement.rotation, cornerYawQuarterTurns);
 			return true;
 		}
 
@@ -614,6 +625,9 @@
 		const std::optional<PlacementSpec>& crossroadSpec,
 		const std::optional<PlacementSpec>& tJunctionSpec,
 		int32_t yawQuarterTurns,
+		int32_t cornerYawQuarterTurns,
+		int32_t tJunctionYawQuarterTurns,
+		int32_t crossroadYawQuarterTurns,
 		float cellSpacing,
 		bool addPhysics)
 	{
@@ -643,7 +657,7 @@
 			if (hasCell({ coord.x - 1, coord.z })) mask |= DirectionWest;
 
 			CellPlacement placement;
-			if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, placement))
+			if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, cornerYawQuarterTurns, tJunctionYawQuarterTurns, crossroadYawQuarterTurns, placement))
 				continue;
 
 			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(coord), GridToWorld(coord, spacing, height), placement.rotation, math::Vector3(1.0f));
@@ -709,6 +723,9 @@
 		const std::optional<PlacementSpec>& crossroadSpec,
 		const std::optional<PlacementSpec>& tJunctionSpec,
 		int32_t yawQuarterTurns,
+		int32_t cornerYawQuarterTurns,
+		int32_t tJunctionYawQuarterTurns,
+		int32_t crossroadYawQuarterTurns,
 		float cellSpacing,
 		bool addPhysics)
 	{
@@ -800,7 +817,7 @@
 			}
 
 			CellPlacement placement;
-			if (!TryChoosePlacement(newMask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, placement))
+			if (!TryChoosePlacement(newMask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, cornerYawQuarterTurns, tJunctionYawQuarterTurns, crossroadYawQuarterTurns, placement))
 				continue;
 
 			// Re-use the existing wrapper's height when reshaping an already-placed cell;
@@ -1025,7 +1042,12 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		if (hasCell({ coord.x - 1, coord.z })) mask |= DirectionWest;
 
 		CellPlacement placement;
-		if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, placement))
+		if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec,
+				_roadPainterYawQuarterTurns,
+				_roadPainterCornerYawQuarterTurns,
+				_roadPainterTJunctionYawQuarterTurns,
+				_roadPainterCrossroadYawQuarterTurns,
+				placement))
 			continue;
 
 		// Use the painter's scaled cell spacing (not raw straightSpec.length) so the preview
@@ -1231,6 +1253,32 @@ void CitySimulationEditorToolPlugin::ShowRoadPainterDialog()
 	straightYawOffset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"180", [setStraightYawOffset](const std::wstring&) { setStraightYawOffset(2); }));
 	straightYawOffset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"270", [setStraightYawOffset](const std::wstring&) { setStraightYawOffset(3); }));
 
+	// Per-piece authoring offsets - apply a corrective quarter-turn to corner / T /
+	// crossroad placements when the asset was authored facing a different direction
+	// than the engine's base-mask convention expects (corner: N+E open ends;
+	// T: N+E+W open ends). Saves the user from re-exporting the prefab.
+	//
+	// Local helper that builds one of these dropdowns. The captured `binding` is the
+	// member backing the value; the captured drop pointer is used to refresh the
+	// label after each pick. setter is invoked with the new quarter-turn count.
+	auto addQuarterTurnDropdown = [&](const std::wstring& label, int32_t& binding)
+	{
+		auto* drop = new HexEngine::DropDown(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), label);
+		drop->SetValue(QuarterTurnLabel(binding));
+		auto setter = [&binding, drop](int32_t qt)
+		{
+			binding = NormalizeQuarterTurns(qt);
+			drop->SetValue(QuarterTurnLabel(binding));
+		};
+		drop->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"0",   [setter](const std::wstring&) { setter(0); }));
+		drop->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"90",  [setter](const std::wstring&) { setter(1); }));
+		drop->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"180", [setter](const std::wstring&) { setter(2); }));
+		drop->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"270", [setter](const std::wstring&) { setter(3); }));
+	};
+	addQuarterTurnDropdown(L"Corner Yaw Offset",    _roadPainterCornerYawQuarterTurns);
+	addQuarterTurnDropdown(L"T-Junction Yaw Offset", _roadPainterTJunctionYawQuarterTurns);
+	addQuarterTurnDropdown(L"Crossroad Yaw Offset",  _roadPainterCrossroadYawQuarterTurns);
+
 	new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Add Collisions", &_roadPainterAddCollisions);
 
 	auto* enablePainter = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Enable Painter", &_roadPainterEnabled);
@@ -1434,7 +1482,13 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 	if (TryBuildPlacementSpec(_roadPainterCrossroadPath, _roadPainterYawQuarterTurns, tempSpec)) crossroadSpec = tempSpec;
 	if (TryBuildPlacementSpec(_roadPainterTJunctionPath, _roadPainterYawQuarterTurns, tempSpec)) tJunctionSpec = tempSpec;
 
-	ApplyIncrementalRoadNetworkChange(scene, runCells, _roadPainterAnchorHeight, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, _roadPainterCellSize, _roadPainterAddCollisions);
+	ApplyIncrementalRoadNetworkChange(scene, runCells, _roadPainterAnchorHeight,
+		straightSpec, cornerSpec, crossroadSpec, tJunctionSpec,
+		_roadPainterYawQuarterTurns,
+		_roadPainterCornerYawQuarterTurns,
+		_roadPainterTJunctionYawQuarterTurns,
+		_roadPainterCrossroadYawQuarterTurns,
+		_roadPainterCellSize, _roadPainterAddCollisions);
 
 	_roadPainterAnchorX = end.x;
 	_roadPainterAnchorZ = end.z;
@@ -1473,7 +1527,13 @@ void CitySimulationEditorToolPlugin::RebuildRoadPainterNetwork(float defaultHeig
 			height = defaultHeight;
 	}
 
-	RebuildManagedRoadNetwork(scene, heights, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, _roadPainterYawQuarterTurns, _roadPainterCellSize, _roadPainterAddCollisions);
+	RebuildManagedRoadNetwork(scene, heights,
+		straightSpec, cornerSpec, crossroadSpec, tJunctionSpec,
+		_roadPainterYawQuarterTurns,
+		_roadPainterCornerYawQuarterTurns,
+		_roadPainterTJunctionYawQuarterTurns,
+		_roadPainterCrossroadYawQuarterTurns,
+		_roadPainterCellSize, _roadPainterAddCollisions);
 }
 
 void CitySimulationEditorToolPlugin::UpdateRoadPainterRendererRegistration()

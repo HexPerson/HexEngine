@@ -61,6 +61,15 @@ private:
 	bool _roadPainterAddCollisions = false;
 	bool _roadPainterUsesXAxis = false;
 	int32_t _roadPainterYawQuarterTurns = 0;
+	// Per-piece authoring-orientation offsets, in quarter turns (0/1/2/3).
+	// The placement code expects corner / T-junction / crossroad meshes to be
+	// authored with their connection sides facing specific WORLD-space directions
+	// (corner: N+E, T: N+E+W) at identity rotation. If an asset was authored facing
+	// a different direction the user dials in the offset here and the placement
+	// composes it onto the computed mask rotation - no asset re-authoring needed.
+	int32_t _roadPainterCornerYawQuarterTurns = 0;
+	int32_t _roadPainterTJunctionYawQuarterTurns = 0;
+	int32_t _roadPainterCrossroadYawQuarterTurns = 0;
 	int32_t _roadPainterAnchorX = 0;
 	int32_t _roadPainterAnchorZ = 0;
 	float _roadPainterAnchorHeight = 0.0f;
