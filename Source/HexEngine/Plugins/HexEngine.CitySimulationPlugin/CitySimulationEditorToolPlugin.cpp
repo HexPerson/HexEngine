@@ -1508,18 +1508,32 @@ void CitySimulationEditorToolPlugin::DestroyRoadPainterPreviewEntities()
 
 void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 {
-	if (!_roadPainterEnabled || !_roadPainterHasAnchor || !_roadPainterHasHover)
+	// Drop the anchor requirement: hover alone is enough to draw a single-cell ghost at
+	// the cursor before the first click, so the user can line up where the start of the
+	// run will land. The "anchor + hover" case (mid-drag, after a first click) still
+	// renders the full run, this just lets the no-anchor case render a single tile.
+	if (!_roadPainterEnabled || !_roadPainterHasHover)
 	{
 		DestroyRoadPainterPreviewEntities();
 		return;
 	}
 
+	// Effective anchor: the painter's anchor if set, else the hover itself so the
+	// single-cell preview at the cursor still has a valid start/end pair. Height also
+	// picks up _roadPainterInitialYOffset when previewing pre-anchor, since that's what
+	// the eventual first click will apply.
+	const int32_t effAnchorX = _roadPainterHasAnchor ? _roadPainterAnchorX : _roadPainterHoverX;
+	const int32_t effAnchorZ = _roadPainterHasAnchor ? _roadPainterAnchorZ : _roadPainterHoverZ;
+	const float effAnchorHeight = _roadPainterHasAnchor
+		? _roadPainterAnchorHeight
+		: (_roadPainterHoverHeight + _roadPainterInitialYOffset);
+
 	// Bail out cheaply if the (anchor, hover) snapped grid pair is unchanged; the run cells
 	// only depend on the snapped pair, not on raw mouse position. This is what keeps mouse-
 	// move from rebuilding the preview every pixel of motion.
 	if (_roadPainterHasPreviewKey
-		&& _roadPainterPreviewAnchorX == _roadPainterAnchorX
-		&& _roadPainterPreviewAnchorZ == _roadPainterAnchorZ
+		&& _roadPainterPreviewAnchorX == effAnchorX
+		&& _roadPainterPreviewAnchorZ == effAnchorZ
 		&& _roadPainterPreviewHoverX == _roadPainterHoverX
 		&& _roadPainterPreviewHoverZ == _roadPainterHoverZ)
 	{
@@ -1545,7 +1559,7 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 	if (TryBuildPlacementSpec(_roadPainterTJunctionPath, _roadPainterYawQuarterTurns, tempSpec)) tJunctionSpec = tempSpec;
 
 	std::vector<GridCoord> runCells;
-	const GridCoord start{ _roadPainterAnchorX, _roadPainterAnchorZ };
+	const GridCoord start{ effAnchorX, effAnchorZ };
 	const GridCoord end{ _roadPainterHoverX, _roadPainterHoverZ };
 	const int32_t deltaX = std::abs(end.x - start.x);
 	const int32_t deltaZ = std::abs(end.z - start.z);
@@ -1630,7 +1644,7 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 		// the ghost would sit at the raw-mesh spacing while the committed road lands on the
 		// user's scaled grid, and the preview would drift away from the actual placement.
 		const float previewSpacing = (_roadPainterCellSize > 0.0f) ? _roadPainterCellSize : straightSpec.length;
-		const math::Vector3 previewWorld = ApplyMeshCentreCorrection(GridToWorld(coord, previewSpacing, _roadPainterAnchorHeight), placement.aabbCenterXZ, placement.rotation);
+		const math::Vector3 previewWorld = ApplyMeshCentreCorrection(GridToWorld(coord, previewSpacing, effAnchorHeight), placement.aabbCenterXZ, placement.rotation);
 		const std::string wrapperName = std::format("{}{}_{}", kRoadPainterPreviewPrefix, coord.x, coord.z);
 		auto* wrapper = scene->CreateEntity(wrapperName, previewWorld, placement.rotation, math::Vector3(1.0f));
 		if (wrapper == nullptr)
@@ -1653,8 +1667,8 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 	}
 
 	_roadPainterHasPreviewKey = true;
-	_roadPainterPreviewAnchorX = _roadPainterAnchorX;
-	_roadPainterPreviewAnchorZ = _roadPainterAnchorZ;
+	_roadPainterPreviewAnchorX = effAnchorX;
+	_roadPainterPreviewAnchorZ = effAnchorZ;
 	_roadPainterPreviewHoverX = _roadPainterHoverX;
 	_roadPainterPreviewHoverZ = _roadPainterHoverZ;
 }

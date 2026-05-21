@@ -1533,30 +1533,31 @@ namespace HexEditor
 			if (mainCamera)
 			{
 				int32_t mx, my;
-				const HexEngine::Point centerSize = _sceneView->GetSceneViewportSize();
-				HexEngine::Point centerLoc = _sceneView->GetSceneViewportAbsolutePosition();
-				HexEngine::Point centerPos = centerLoc.GetCenter(centerSize);
-				const auto& vp = mainCamera->GetViewport();
 
+				// Pass ABSOLUTE screen-space coordinates to GetScreenToWorldRay - it has
+				// _hasCustomVP / _vp set up by Editor::OnResize + EditorUI::OnInit, so it
+				// internally strips _vp.x/y to make the input viewport-local and divides
+				// by _vp.width/height for NDC. The previous code subtracted centerLoc.x/y
+				// here AND let the function subtract _vp.x/y (which is the same as
+				// centerLoc) - net result was double-offset by the scene surface's screen
+				// position, so the picked ray was offset by exactly that many pixels.
+				// Likewise, scaling mx by vp.width/centerSize.x is a no-op for NDC math
+				// (the position-over-size ratio is the same in either pixel space) and
+				// only adds rounding error - dropping it.
 				if (useMousePos)
 				{
 					HexEngine::g_pEnv->_inputSystem->GetMousePosition(mx, my);
-					mx -= centerLoc.x;
-					my -= centerLoc.y;
 				}
 				else
 				{
-					mx = centerPos.x - centerLoc.x;
-					my = centerPos.y - centerLoc.y;
+					const HexEngine::Point centerSize = _sceneView->GetSceneViewportSize();
+					const HexEngine::Point centerLoc = _sceneView->GetSceneViewportAbsolutePosition();
+					const HexEngine::Point centerPos = centerLoc.GetCenter(centerSize);
+					mx = centerPos.x;
+					my = centerPos.y;
 				}
 
-				float scaleX = vp.width / (float)centerSize.x;
-				float scaleY = vp.height / (float)centerSize.y;
-
-				float fmx = (float)mx * scaleX;
-				float fmy = (float)my * scaleY;
-
-				auto screenRay = HexEngine::g_pEnv->_inputSystem->GetScreenToWorldRay(mainCamera, fmx, fmy/*, _centralDock->GetSize().x, _centralDock->GetSize().y*/);
+				auto screenRay = HexEngine::g_pEnv->_inputSystem->GetScreenToWorldRay(mainCamera, mx, my);
 
 				math::Ray ray;
 				ray.direction = screenRay;
