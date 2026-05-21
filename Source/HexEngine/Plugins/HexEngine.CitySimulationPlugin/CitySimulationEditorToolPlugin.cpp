@@ -1535,12 +1535,25 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 		_roadPainterCrossroadYawQuarterTurns,
 		_roadPainterCellSize, _roadPainterAddCollisions);
 
-	_roadPainterAnchorX = end.x;
-	_roadPainterAnchorZ = end.z;
+	// The run only spans the major axis (deltaX >= deltaZ -> X, else Z); the
+	// perpendicular component of `end` was never placed as a cell. Advancing the
+	// anchor to `end` directly leaves it stranded N or E of the actual last placed
+	// cell - and the next click's run starts from that stranded anchor instead of
+	// the road end, so the perpendicular run's first cell has NO connection to the
+	// previous run's last cell and the would-be corner is never detected (it has
+	// only one connection direction in its mask). Pin the anchor to the last cell
+	// actually written, i.e. the run's tail (which is `end` along the major axis
+	// and `start` along the minor).
+	const GridCoord lastPlaced = (deltaX >= deltaZ)
+		? GridCoord{ end.x, start.z }
+		: GridCoord{ start.x, end.z };
+
+	_roadPainterAnchorX = lastPlaced.x;
+	_roadPainterAnchorZ = lastPlaced.z;
 	_roadPainterAnchorHeight = worldPosition.y;
 	_roadPainterHasAnchor = true;
-	_roadPainterHoverX = end.x;
-	_roadPainterHoverZ = end.z;
+	_roadPainterHoverX = lastPlaced.x;
+	_roadPainterHoverZ = lastPlaced.z;
 	_roadPainterHoverHeight = worldPosition.y;
 	_roadPainterHasHover = true;
 }
