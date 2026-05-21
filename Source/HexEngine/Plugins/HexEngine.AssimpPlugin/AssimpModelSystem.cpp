@@ -264,8 +264,39 @@ std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromFile(
 
 	if (modelScene == nullptr)
 	{
+		const char* assimpErrorCStr = importer.GetErrorString();
+		const std::string assimpError = assimpErrorCStr != nullptr ? assimpErrorCStr : "";
 
-		LOG_WARN("Failed to load model: %s!", importer.GetErrorString());
+		// .blend file imports through Assimp's bundled Blender loader break on modern
+		// Blender (4.x+) files. Blender restructured mesh data away from the
+		// MPoly/MLoop/MEdge layout the loader's DNA table was written against, so
+		// pointer types in the file no longer match what the loader expects and
+		// BlenderDNA throws "Expected target to be of type `MLoop` but seemingly it
+		// is a `MEdge` instead" (or similar). Assimp upstream still hasn't shipped a
+		// fix; until they do, the only workable path for users is re-exporting from
+		// Blender as a portable interchange format.
+		//
+		// Emit a clearer, actionable message specifically for .blend failures so the
+		// user isn't left guessing what to do with the raw DNA error. Pre-checking
+		// the extension means even .blend files that fail for OTHER reasons (e.g. a
+		// missing texture path the importer trips on) still get the guidance, which
+		// is fine - export-to-FBX is the recommended workflow regardless.
+		const auto ext = path.extension().wstring();
+		const bool isBlendFile = ext == L".blend" || ext == L".BLEND";
+		if (isBlendFile)
+		{
+			LOG_WARN(
+				"Failed to load .blend file '%S': %s. "
+				"The bundled Blender importer doesn't fully support modern Blender (4.x+) "
+				"meshes where MPoly/MLoop/MEdge were replaced by attribute arrays. "
+				"Re-export from Blender as .fbx, .gltf/.glb, or .obj and import that instead.",
+				path.filename().c_str(),
+				assimpError.c_str());
+		}
+		else
+		{
+			LOG_WARN("Failed to load model: %s!", assimpError.c_str());
+		}
 		return nullptr;
 	}
 
