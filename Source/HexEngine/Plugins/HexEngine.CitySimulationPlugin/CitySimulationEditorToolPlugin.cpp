@@ -508,12 +508,30 @@
 
 		outPlacement = {};
 
+		// Corner / T / crossroad base masks are expressed in WORLD-space directions
+		// (cornerBaseMask = N|E, tBaseMask = N|E|W). ComputeRotationForMask therefore
+		// already produces the correct world-space rotation that maps the authored
+		// connection layout onto the cell's desired mask - no additional yaw turn
+		// belongs here.
+		//
+		// The straight path applies its yaw via PlacementSpec::usesXAxis (which flips
+		// straightBaseMask from N|S to E|W on odd quarter turns) and skips the post-
+		// rotation for the same reason; previously corner/T/crossroad called
+		// ApplyQuarterTurnRotation after ComputeRotationForMask which DOUBLE-applied
+		// the offset and was the source of "corners face the wrong direction with yaw
+		// 90 set". Removing it makes these placements behave consistently across all
+		// yaw values - the user-visible result depends only on how their corner / T /
+		// crossroad assets are authored.
+
 		if (connections >= 4 && crossroadSpec.has_value())
 		{
 			outPlacement.assetPath = crossroadSpec->assetPath;
 			outPlacement.isPrefab = crossroadSpec->isPrefab;
+			// Crossroads are 4-fold rotationally symmetric, so the rotation is just
+			// identity - whatever yaw the user picked, a crossroad still looks like a
+			// crossroad. (If a custom crossroad asset has asymmetric markings the user
+			// can fold the offset into the mesh.)
 			outPlacement.rotation = math::Quaternion::Identity;
-			ApplyQuarterTurnRotation(outPlacement.rotation, yawQuarterTurns);
 			return true;
 		}
 
@@ -523,7 +541,6 @@
 			outPlacement.isPrefab = tJunctionSpec->isPrefab;
 			if (!ComputeRotationForMask(desiredMask, tBaseMask, outPlacement.rotation))
 				outPlacement.rotation = math::Quaternion::Identity;
-			ApplyQuarterTurnRotation(outPlacement.rotation, yawQuarterTurns);
 			return true;
 		}
 
@@ -533,7 +550,6 @@
 			outPlacement.isPrefab = cornerSpec->isPrefab;
 			if (!ComputeRotationForMask(desiredMask, cornerBaseMask, outPlacement.rotation))
 				outPlacement.rotation = math::Quaternion::Identity;
-			ApplyQuarterTurnRotation(outPlacement.rotation, yawQuarterTurns);
 			return true;
 		}
 
