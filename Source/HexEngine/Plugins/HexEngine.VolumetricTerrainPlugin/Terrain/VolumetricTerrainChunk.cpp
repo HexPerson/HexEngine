@@ -1,6 +1,7 @@
 #include "VolumetricTerrainChunk.hpp"
 #include <cstring>
 #include <HexEngine.Core/Graphics/ITexture2D.hpp>
+#include <HexEngine.Core/Graphics/RenderStructs.hpp>
 
 namespace HexEngine::VolumetricTerrain
 {
@@ -1705,6 +1706,33 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 	graphics->SetBlendState(BlendState::Opaque);
 	graphics->SetDepthBufferState(DepthBufferState::DepthDefault);
 	graphics->SetCullingMode(CullingMode::BackFace);
+
+	// Clean the engine's PerObjectBuffer before issuing the draw. GraphicsDeviceD3D11's
+	// Draw*Indirect path unconditionally rebinds the engine PerObjectBuffer at PS slot 1
+	// (= HLSL register b1), and whatever was last written to it by the opaque mesh path
+	// (the last material's MaterialProperties: smoothness, specularProbability, isWater,
+	// hasTransparency, etc.) is still resident. The terrain surface shader's main
+	// function doesn't reference g_material directly, but included translation units
+	// and downstream passes do, and DefaultPixel.shader writes g_material.smoothness /
+	// specularProbability into the gbuffer mat channel for the materials it shades -
+	// any shader reading PerObjectBuffer fields during the terrain's render slot
+	// inherits the LAST material's values. User-visible symptom: terrain takes on the
+	// reflection params and normal-map behaviour of whichever mesh was drawn last.
+	// Writing terrain-appropriate defaults (matte, non-reflective, non-water,
+	// non-transparent, identity world) guarantees the slot has clean data regardless
+	// of what came before.
+	if (auto* perObjectBuffer = graphics->GetEngineConstantBuffer(EngineConstantBuffer::PerObjectBuffer))
+	{
+		PerObjectBuffer cleanObject = {};
+		cleanObject._worldMatrix = math::Matrix::Identity.Transpose();
+		cleanObject._flags = 0;
+		cleanObject.entityId = -1;
+		cleanObject.cullDistance = 0.0f;
+		cleanObject.pad = 0;
+		cleanObject._material = MaterialProperties{}; // default-constructed: matte, non-reflective.
+		perObjectBuffer->Write(&cleanObject, sizeof(cleanObject));
+	}
+
 	graphics->DrawInstancedIndirect(_gpuSurfaceDrawArgs[lodIndex]);
 	graphics->UnbindAllPixelShaderResources();
 	graphics->ClearVertexStructuredBuffer(0);
