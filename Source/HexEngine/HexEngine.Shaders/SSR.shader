@@ -472,6 +472,8 @@
 			// stochastic sample (decorrelates adjacent pixels so NRD can integrate spatially).
 			const HitResult hit = RaymarchReflection(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f);
 
+			
+
 			// Only true screen-space hits contribute - skip the in-screen loop-exhaustion
 			// fallback (hit.didFallback) here because that path returns last-in-screen beauty
 			// regardless of actual ray geometry, which for random hemisphere directions is
@@ -484,7 +486,7 @@
 				// delta. Clamp non-negative.
 				float voxelTraceDist;
 				const float3 voxelBaseline = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, diffuseDir, voxelTraceDist);
-				const float3 delta = max(0.0f.xxx, hit.colour - voxelBaseline);
+				const float3 delta = max(0.0f.xxx, hit.colour  - voxelBaseline);
 
 				hitDistance = max(hit.hitDistance, 1.0f);
 				return float4(delta * NdotL, 1.0f);
@@ -615,7 +617,7 @@
 		const float fresnelExp = pow(1.0f - NdotV, 5.0f);
 		const float3 fresnel = F0 + (1.0f.xxx - F0) * fresnelExp;
 		const float3 specularWeight = fresnel;
-		const float3 diffuseWeightRGB = ((1.0f.xxx - fresnel) * (1.0f -  metalness)) * 0.75f;
+		const float3 diffuseWeightRGB = ((1.0f.xxx - fresnel) * (1.0f -  metalness));
 		// Scalar threshold for the diffuse-ray gate, using the luminance of the weight.
 		const float diffuseWeightLuma = dot(diffuseWeightRGB, float3(0.2126f, 0.7152f, 0.0722f));
 
@@ -674,9 +676,12 @@
 					false,
 					instanceID);
 
-				diffuseAccum += reflected.rgb;
-				diffuseHitDistAccum += hitDistance;
-				diffuseSamples += 1.0f;
+					//if(didReflect)
+					{
+						diffuseAccum += reflected.rgb;
+						diffuseHitDistAccum += hitDistance;
+						diffuseSamples += 1.0f;
+					}
 			}
 		}
 
@@ -703,9 +708,12 @@
 					true,
 					instanceID);
 
-				specularAccum += reflected.rgb;
-				specularHitDistAccum += hitDistance;
-				specularSamples += 1.0f;
+				//if(didReflect)
+				{
+					specularAccum += reflected.rgb;
+					specularHitDistAccum += hitDistance;
+					specularSamples += 1.0f;
+				}
 			}
 		}
 
