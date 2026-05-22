@@ -23,6 +23,7 @@ namespace HexEngine
 		SAFE_DELETE(_specularTex);
 		SAFE_DELETE(_positionTex);
 		SAFE_DELETE(_velocityTex);
+		SAFE_DELETE(_featuresTex);
 		SAFE_DELETE(_depthBuffer);
 
 		_diffuseTex = g_pEnv->_graphicsDevice->CreateTexture2D(
@@ -106,6 +107,26 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			msaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
+		// Material features RT. RGBA8 is enough for the per-pixel material params we
+		// need (model id, mask, secondary, tertiary). Cheap (~8MB at 1080p) but
+		// unlocks SSS, clearcoat, anisotropy, sheen, etc. without packing tricks
+		// on the other gbuffer channels. Cleared to (0,0,0,0) every frame so every
+		// pixel defaults to "standard PBR".
+		_featuresTex = g_pEnv->_graphicsDevice->CreateTexture2D(
+			width,
+			height,
+			DXGI_FORMAT_R8G8B8A8_UNORM,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			0,
+			msaaLevel,
+			0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			msaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			msaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
+
 		_depthBuffer = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
 			height,
@@ -126,6 +147,7 @@ namespace HexEngine
 		_normalTex->SetDebugName("GBuffer_NormalAndDepth");
 		_positionTex->SetDebugName("GBuffer_WorldPosition");
 		_velocityTex->SetDebugName("GBuffer_Velocity");
+		_featuresTex->SetDebugName("GBuffer_Features");
 #endif
 	}
 
@@ -136,12 +158,19 @@ namespace HexEngine
 		SAFE_DELETE(_specularTex);
 		SAFE_DELETE(_positionTex);
 		SAFE_DELETE(_velocityTex);
+		SAFE_DELETE(_featuresTex);
 		SAFE_DELETE(_depthBuffer);
 		//SAFE_DELETE(_waterMaskTexture);
 	}
 
 	void GBuffer::BindAsShaderResource(ITexture2D* albedoOverride) const
 	{
+		// Bind the 5 "standard" gbuffer SRVs at t0..t4. The features RT lives at a
+		// separate slot (typically t14+, picked per-shader) because t5 is reused by
+		// several shaders for unrelated bindings - Deferred.shader puts beauty at
+		// t5, BuildShadowMask/SpotLight/VolumetricLighting put shadowmaps at t5 -
+		// and SetTexture2DArray here would overwrite those. Shaders that want the
+		// features RT bind it explicitly via SetTexture2D(slot, gbuffer.GetFeatures()).
 		g_pEnv->_graphicsDevice->SetTexture2DArray({
 			albedoOverride ? albedoOverride : _diffuseTex,
 			_specularTex,
@@ -160,6 +189,7 @@ namespace HexEngine
 		_specularTex->ClearRenderTargetView(clearColour);
 		_positionTex->ClearRenderTargetView(clearColour);
 		_velocityTex->ClearRenderTargetView(clearColour);
+		_featuresTex->ClearRenderTargetView(clearColour); // (0,0,0,0) = standard PBR
 		_depthBuffer->ClearDepth(D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL);
 	}
 
@@ -170,7 +200,8 @@ namespace HexEngine
 			_specularTex,
 			_normalTex,
 			_positionTex,
-			_velocityTex
+			_velocityTex,
+			_featuresTex
 			},
 			_depthBuffer);
 
@@ -190,6 +221,7 @@ namespace HexEngine
 		renderer->FillTexturedQuad(_normalTex, x, y, size, size, math::Color(0xFFFFFFFF)); x += size + 10;
 		renderer->FillTexturedQuad(_positionTex, x, y, size, size, math::Color(0xFFFFFFFF)); x += size + 10;
 		renderer->FillTexturedQuad(_velocityTex, x, y, size, size, math::Color(0xFFFFFFFF)); x += size + 10;
+		renderer->FillTexturedQuad(_featuresTex, x, y, size, size, math::Color(0xFFFFFFFF)); x += size + 10;
 	}
 
 	ITexture2D* GBuffer::GetDiffuse() const
@@ -215,6 +247,11 @@ namespace HexEngine
 	ITexture2D* GBuffer::GetVelocity() const
 	{
 		return _velocityTex;
+	}
+
+	ITexture2D* GBuffer::GetFeatures() const
+	{
+		return _featuresTex;
 	}
 
 	ITexture2D* GBuffer::GetDepthBuffer() const

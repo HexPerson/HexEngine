@@ -286,6 +286,8 @@
 		// CalcVelocity divides by .w and converts NDC -> UV so the result drops straight into
 		// the velocity RT in the same units TAA expects.
 		output.velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
+		// Terrain is standard PBR.
+		output.feat = float4(0.0f, 0.0f, 0.0f, 0.0f);
 		return output;
 	}
 }

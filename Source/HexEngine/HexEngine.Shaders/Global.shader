@@ -25,6 +25,24 @@
 	Texture2D GBUFFER_POSITION : register(MERGE(t, idx3));\
 	Texture2D GBUFFER_VELOCITY : register(MERGE(t, idx4));
 
+// Material-features GBuffer SRV. Bound at a per-shader slot since t5 collides with
+// beauty / shadowmap bindings in various places. Layout:
+//   .r = material model id (0=standard, 1=SSS, 2=clearcoat, 3=anisotropic, 4=sheen)
+//   .g = primary parameter
+//   .b = secondary parameter
+//   .a = tertiary parameter
+// See GBuffer::GetFeatures() in C++ for the full convention table.
+#define GBUFFER_FEATURES_RESOURCE(idx) Texture2D GBUFFER_FEATURES : register(MERGE(t, idx));
+
+// Material model ids - keep in sync with the C++ side and any code that branches
+// on the gbuffer .r channel. Encoded as a 0..255 value in the unorm RT, so the
+// shader does ids reads via uint(gbuffer.r * 255.0 + 0.5).
+static const uint MATERIAL_MODEL_STANDARD     = 0;
+static const uint MATERIAL_MODEL_SSS          = 1;
+static const uint MATERIAL_MODEL_CLEARCOAT    = 2;
+static const uint MATERIAL_MODEL_ANISOTROPIC  = 3;
+static const uint MATERIAL_MODEL_SHEEN        = 4;
+
 #define SHADOWMAPS_RESOURCE(idx) Texture2D SHADOWMAPS[6] : register(t##idx);
 
 	static const float WaveSizeMultiplier = 4.9f;
@@ -279,6 +297,9 @@
 		float4 norm : SV_TARGET2;
 		float4 pos :  SV_TARGET3;
 		float2 velocity : SV_TARGET4;
+		// Material-features RT. Layout: see GBUFFER_FEATURES_RESOURCE / MATERIAL_MODEL_* above.
+		// Pixels that don't write this leave the cleared (0,0,0,0) value = standard PBR.
+		float4 feat : SV_TARGET5;
 	};
 
 	struct SSROut

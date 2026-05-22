@@ -389,6 +389,11 @@
 
 		output.velocity = velocity;
 
+		// Material-features RT. Standard PBR by default - subsequent fidelity work
+		// (SSS, clearcoat, anisotropy, sheen) lights this up per-material from
+		// g_material flags. Layout: (model_id, param1, param2, param3).
+		output.feat = float4(0.0f, 0.0f, 0.0f, 0.0f);
+
 		return output;
 	}
 }

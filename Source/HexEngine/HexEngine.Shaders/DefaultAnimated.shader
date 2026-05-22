@@ -427,6 +427,9 @@
 
 		output.velocity = velocity;
 
+		// Material-features RT, standard PBR default. See DefaultPixel.shader.
+		output.feat = float4(0.0f, 0.0f, 0.0f, 0.0f);
+
 		return output;
 	}
 }
