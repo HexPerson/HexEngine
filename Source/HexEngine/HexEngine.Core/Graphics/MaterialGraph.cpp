@@ -307,8 +307,37 @@ namespace HexEngine
 			metallicSource = "node_metallic";
 		}
 
-		std::string emissiveSource = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", math::Vector2(40.0f, 390.0f), false);
-		if (emissiveSource.empty())
+		// Emission is special - the standard DefaultPixel shader gates emission on
+		// emissiveColour.a (strength), so a material with an emission texture bound
+		// but strength=0 produces no emission. The naive conversion that just wires
+		// TextureSample.Out -> Emissive ignored this and dumped the raw texture as
+		// emission, which (because emission is added on top of the lit albedo and
+		// bypasses lighting) showed up as "fully bright / unlit" surfaces on any
+		// material whose Emission slot was filled by a Simplygon-style bulk importer
+		// even when the author never intended emission. We now mirror the standard
+		// shader exactly: TextureSample * (tint.rgb * strength) -> Emissive.
+		std::string emissiveSource;
+		const std::string emissiveTextureSourceId = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", math::Vector2(40.0f, 390.0f), false);
+		if (!emissiveTextureSourceId.empty())
+		{
+			// Tint+strength constant; equivalent to g_material.emissiveColour.rgb *
+			// emissiveColour.a in DefaultPixel.shader. Stored as a Vector4 with
+			// alpha=1 so the Multiply downstream doesn't accidentally zero the .a.
+			addVectorConstant("node_emissive_tint", "Emission Tint",
+				math::Vector2(40.0f, 420.0f),
+				math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+
+			auto multiplyNode = makeNode("node_emissive_mul", MaterialGraphNodeType::Multiply, "Emission * Tint", math::Vector2(260.0f, 405.0f));
+			multiplyNode.inputPins.push_back({ "A", "A", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
+			multiplyNode.inputPins.push_back({ "B", "B", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
+			multiplyNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+			graph.nodes.push_back(std::move(multiplyNode));
+
+			addConnection(emissiveTextureSourceId, "Out", "node_emissive_mul", "A");
+			addConnection("node_emissive_tint", "out", "node_emissive_mul", "B");
+			emissiveSource = "node_emissive_mul";
+		}
+		else
 		{
 			addVectorConstant("node_emissive", "Emissive", math::Vector2(80.0f, 400.0f), math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
 			emissiveSource = "node_emissive";
