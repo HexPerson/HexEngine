@@ -142,10 +142,20 @@ namespace HexEngine
 	// early-out skips the gather for sharp pixels too, so the cost is one
 	// texture read on the dominant in-focus region).
 	HVar r_dof("r_dof", "Enable bokeh depth-of-field post-process", false, false, true);
-	HVar r_dofFocusDistance("r_dofFocusDistance", "Depth of the in-focus plane (metres)", 5.0f, 0.1f, 1000.0f);
-	HVar r_dofFocusRange("r_dofFocusRange", "Width of the fully-sharp band around the focus plane (metres)", 1.0f, 0.0f, 50.0f);
-	HVar r_dofAperture("r_dofAperture", "Blur scale - bigger aperture = stronger out-of-focus blur", 1.0f, 0.0f, 8.0f);
-	HVar r_dofMaxBlur("r_dofMaxBlur", "Maximum CoC radius in pixels (clamps far-field blur from exploding)", 24.0f, 1.0f, 96.0f);
+	HVar r_dofFocusDistance("r_dofFocusDistance", "Depth of the in-focus plane (metres)", 8.0f, 0.1f, 1000.0f);
+	HVar r_dofFocusRange("r_dofFocusRange", "Width of the fully-sharp band around the focus plane (metres)", 4.0f, 0.0f, 50.0f);
+	// Aperture is the strongest dial here - at 1.0 a pixel at 2x focus distance
+	// already reaches ~50% CoC, and the user wants the chunkiest blur usually
+	// concentrated on the far field only. 0.4 is a subtle photo-realistic default
+	// that gives noticeable but not overwhelming bokeh; users wanting cinema
+	// shallow-DoF should bump to 1-2.
+	HVar r_dofAperture("r_dofAperture", "Blur scale - bigger aperture = stronger out-of-focus blur", 0.4f, 0.0f, 8.0f);
+	// maxBlur is the pixel radius at coc=1.0 (which the hyperbolic curve never
+	// quite reaches). At 1080p, 8px gives a soft photographic bokeh; 16+ is
+	// cinematic; 32+ is dreamy/extreme. The previous 24 default combined with
+	// the old saturate() coc curve produced a near-uniform screen blur on most
+	// scenes, which read as "grey screen".
+	HVar r_dofMaxBlur("r_dofMaxBlur", "Maximum CoC radius in pixels (clamps far-field blur from exploding)", 8.0f, 1.0f, 96.0f);
 
 		static int32_t GetVolumetricEffectiveSteps()
 		{

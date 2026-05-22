@@ -59,19 +59,25 @@
 	//   negative = closer than focus -> "near" out-of-focus (CoC magnitude)
 	//   zero     = in focus
 	//   positive = farther than focus -> "far" out-of-focus
-	// The magnitude is the linear distance-from-focus normalised by focus
-	// distance, scaled by aperture. Both near and far blur the same way for
-	// this simplified single-pass version.
+	//
+	// Curve is hyperbolic: reach=(signedDelta/focusDistance)*aperture, then
+	// coc = reach/(1+reach). This asymptotes to 1.0 at "infinity" rather than
+	// snapping to 1.0 immediately past the focus band. With the old saturate
+	// form, a pixel 2x focusDistance past the band would already hit max blur
+	// (aperture=1 -> coc=1 at signedDelta=focusDistance), so the entire mid-
+	// to-far field rendered fully-blurred and the gather averaged most of the
+	// image to a uniform grey. The hyperbolic curve keeps that pixel at ~50%
+	// blur and only approaches max at 10x+ focus distance, which matches the
+	// out-of-focus falloff a real lens produces and keeps the gathered colour
+	// localized to nearby pixels rather than the entire screen.
 	float ComputeCoC(float depthMetres, float focusDistance, float focusRange, float aperture)
 	{
 		const float signedDelta = depthMetres - focusDistance;
 		const float magnitude = max(abs(signedDelta) - focusRange * 0.5f, 0.0f);
-		// Hyperfocal-ish scaling: blur grows faster for far-than-focus regions
-		// than near (matches how real lenses bokeh distant objects more), so we
-		// gate the divisor on depth rather than focus.
 		const float divisor = max(focusDistance, 0.5f);
-		const float coc = (magnitude / divisor) * aperture;
-		return sign(signedDelta) * saturate(coc);
+		const float reach = (magnitude / divisor) * aperture;
+		const float coc = reach / (1.0f + reach);
+		return sign(signedDelta) * coc;
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
@@ -159,10 +165,11 @@
 		}
 
 		const float3 blurred = colourSum / max(weightSum, 0.0001f);
-		// Lerp by CoC magnitude so the transition from sharp to blurred is
-		// smooth - hard cutoff at the band edges would show as a visible ring
-		// on a smooth depth gradient (sky -> mid -> close).
-		const float blendFactor = saturate(centreCoCMagnitude * 1.5f);
+		// Lerp by CoC magnitude directly (no 1.5x amplification) so the
+		// blend curve matches the CoC curve. The previous 1.5x meant a pixel
+		// with coc=0.67 was already 100% blurred, so even slightly-out-of-
+		// focus regions got the full-radius gather averaged colour.
+		const float blendFactor = saturate(centreCoCMagnitude);
 		return float4(lerp(centre.rgb, blurred, blendFactor), centre.a);
 	}
 }
