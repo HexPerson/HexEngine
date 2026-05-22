@@ -286,12 +286,15 @@ namespace HexEngine
 			baseColorSource = "node_albedo";
 		}
 
-		std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", math::Vector2(40.0f, 150.0f), true);
-		if (normalSource.empty())
-		{
-			addVectorConstant("node_normal", "Normal", math::Vector2(80.0f, 160.0f), math::Vector4(0.5f, 0.5f, 1.0f, 1.0f));
-			normalSource = "node_normal";
-		}
+		// Normal is special: when the source material has no normal map, leave
+		// the Normal output unwired so the compiler falls back to the
+		// geometry-interpolated input.normal. Seeding a VectorConstant default
+		// here would silently override the geometry normal with a constant
+		// (treated as a tangent-space normal, decoded + multiplied by TBN, then
+		// applied per-pixel) - which a (0.5, 0.5, 1.0) flat-tangent value
+		// happens to approximate, but any user who edits the constant gets
+		// instant lighting breakage. Disconnected = "use the surface".
+		const std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", math::Vector2(40.0f, 150.0f), true);
 
 		std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", math::Vector2(40.0f, 230.0f), false);
 		if (roughnessSource.empty())
@@ -372,7 +375,8 @@ namespace HexEngine
 		makeOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar);
 
 		addConnection(baseColorSource, "Out", "output_basecolor", "In");
-		addConnection(normalSource, "Out", "output_normal", "In");
+		if (!normalSource.empty())
+			addConnection(normalSource, "Out", "output_normal", "In");
 		addConnection(roughnessSource, "Out", "output_roughness", "In");
 		addConnection(metallicSource, "Out", "output_metallic", "In");
 		addConnection(emissiveSource, "Out", "output_emissive", "In");
@@ -382,7 +386,10 @@ namespace HexEngine
 		graph.outputs =
 		{
 			{ MaterialGraphOutputSemantic::BaseColor, baseColorSource, "Out" },
-			{ MaterialGraphOutputSemantic::Normal, normalSource, "Out" },
+			// Normal binding is intentionally empty when no normal map exists -
+			// the compiler treats an empty nodeId/pinId as "use the geometry
+			// normal" via the input.normal fallback in BuildGraphShaderSource.
+			{ MaterialGraphOutputSemantic::Normal, normalSource, normalSource.empty() ? std::string{} : std::string("Out") },
 			{ MaterialGraphOutputSemantic::Roughness, roughnessSource, "Out" },
 			{ MaterialGraphOutputSemantic::Metallic, metallicSource, "Out" },
 			{ MaterialGraphOutputSemantic::Emissive, emissiveSource, "Out" },
