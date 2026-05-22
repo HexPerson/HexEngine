@@ -771,6 +771,18 @@ namespace HexEngine
 			ss << "\t\toutput.norm = float4(worldNormal.xyz, pixelDepth);\n";
 			ss << "\t\toutput.pos = float4(input.positionWS.xyz, length(emission));\n";
 			ss << "\t\toutput.velocity = velocity;\n";
+			// Mirror DefaultPixel: encode model id + modelParams.w into the features RT.
+			// Without this the graph-compiled shader would leave the features RT pixel
+			// at whatever was there from an earlier draw at the same screen position
+			// (or undefined if no earlier draw), and the deferred / SSS / clearcoat /
+			// sheen passes would pick up a stale non-zero model id and shade with the
+			// wrong lobe — user-visible as e.g. graph-authored road materials suddenly
+			// gaining a sharp specular highlight from a neighbouring SSS / clearcoat
+			// material's features that bled through.
+			ss << "\t\tconst uint matIdByte = (uint)g_material.materialModel;\n";
+			ss << "\t\tconst float matWQuant = floor(saturate(g_material.modelParams.w) * 31.0f + 0.5f);\n";
+			ss << "\t\tconst float matPackedR = ((float)matIdByte * 32.0f + matWQuant) / 255.0f;\n";
+			ss << "\t\toutput.feat = float4(matPackedR, g_material.modelParams.x, g_material.modelParams.y, g_material.modelParams.z);\n";
 			ss << "\t\treturn output;\n\t}\n}\n";
 
 			return ss.str();

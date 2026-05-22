@@ -178,6 +178,19 @@ namespace HexEngine
 			file->Deserialize(properties, "hasTransparency", props.hasTransparency);
 			file->Deserialize(properties, "isWater", props.isWater);
 			file->Deserialize(properties, "specularProbability", props.specularProbability);
+			// smoothness was historically authored via the MaterialDialog slider but
+			// never persisted - the only place that drove the on-disk value was the
+			// engine's default-constructor, so a freshly-loaded material always had
+			// smoothness=0 regardless of what the editor showed. That's harmless when
+			// the user hasn't touched the slider but quietly resets the value on every
+			// reload. Now it round-trips like the other PBR scalars.
+			file->Deserialize(properties, "smoothness", props.smoothness);
+			// Shading model + per-model params (added with the fidelity push). Default
+			// to 0 / zero-vec if the field is absent in the JSON (i.e. materials
+			// authored before these were a thing) so old assets keep rendering as
+			// standard PBR.
+			file->Deserialize(properties, "materialModel", props.materialModel);
+			file->Deserialize(properties, "modelParams", props.modelParams);
 
 			bool affectsGI = true;
 			file->Deserialize(properties, "affectsGI", affectsGI);
@@ -505,6 +518,17 @@ namespace HexEngine
 			file.Serialize(properties, "emissiveColour", material->_properties.emissiveColour);
 			file.Serialize(properties, "hasTransparency", material->_properties.hasTransparency);
 			file.Serialize(properties, "isWater", material->_properties.isWater);
+			// Round-trip the PBR scalars the loader recovers. Historically smoothness
+			// + specularProbability were authored via the dialog but never written
+			// here, so a save+reload silently reset them to 0. That's the source of
+			// "edit material, looks fine; press Play, road is wrong" reports - the
+			// in-memory dialog edits were lost on the path through Save -> game
+			// runtime load. Persisting them now makes the round-trip honest.
+			file.Serialize(properties, "smoothness", material->_properties.smoothness);
+			file.Serialize(properties, "specularProbability", material->_properties.specularProbability);
+			// Shading model + per-model params (clearcoat / SSS / aniso / sheen).
+			file.Serialize(properties, "materialModel", material->_properties.materialModel);
+			file.Serialize(properties, "modelParams", material->_properties.modelParams);
 			file.Serialize(properties, "affectsGI", material->GetAffectsGI());
 			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());
 		}
