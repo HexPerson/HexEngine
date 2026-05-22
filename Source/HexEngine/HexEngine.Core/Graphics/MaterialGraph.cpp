@@ -62,7 +62,8 @@ namespace HexEngine
 			MaterialGraphOutputSemantic::Roughness,
 			MaterialGraphOutputSemantic::Metallic,
 			MaterialGraphOutputSemantic::Emissive,
-			MaterialGraphOutputSemantic::Opacity
+			MaterialGraphOutputSemantic::Opacity,
+			MaterialGraphOutputSemantic::Smoothness
 		};
 
 		for (const auto semantic : semantics)
@@ -141,6 +142,15 @@ namespace HexEngine
 		opacity.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
 		graph.nodes.push_back(opacity);
 
+		MaterialGraphNode smoothness;
+		smoothness.id = "node_smoothness";
+		smoothness.nodeType = MaterialGraphNodeType::ScalarConstant;
+		smoothness.displayName = "Smoothness";
+		smoothness.position = math::Vector2(80.0f, 560.0f);
+		smoothness.scalarValue = 0.0f;
+		smoothness.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
+		graph.nodes.push_back(smoothness);
+
 		auto makeOutputNode = [](const char* id, const char* label, const math::Vector2& pos, MaterialGraphValueType inType)
 		{
 			MaterialGraphNode node;
@@ -158,6 +168,7 @@ namespace HexEngine
 		graph.nodes.push_back(makeOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar));
 		graph.nodes.push_back(makeOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4));
 		graph.nodes.push_back(makeOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar));
+		graph.nodes.push_back(makeOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar));
 
 		graph.connections =
 		{
@@ -166,7 +177,8 @@ namespace HexEngine
 			{ "node_roughness", "out", "output_roughness", "In" },
 			{ "node_metallic", "out", "output_metallic", "In" },
 			{ "node_emissive", "out", "output_emissive", "In" },
-			{ "node_opacity", "out", "output_opacity", "In" }
+			{ "node_opacity", "out", "output_opacity", "In" },
+			{ "node_smoothness", "out", "output_smoothness", "In" }
 		};
 
 		graph.outputs =
@@ -176,7 +188,8 @@ namespace HexEngine
 			{ MaterialGraphOutputSemantic::Roughness, "node_roughness", "out" },
 			{ MaterialGraphOutputSemantic::Metallic, "node_metallic", "out" },
 			{ MaterialGraphOutputSemantic::Emissive, "node_emissive", "out" },
-			{ MaterialGraphOutputSemantic::Opacity, "node_opacity", "out" }
+			{ MaterialGraphOutputSemantic::Opacity, "node_opacity", "out" },
+			{ MaterialGraphOutputSemantic::Smoothness, "node_smoothness", "out" }
 		};
 
 		return graph;
@@ -308,6 +321,12 @@ namespace HexEngine
 			opacitySource = "node_opacity";
 		}
 
+		// No texture-slot equivalent for smoothness on the standard-material side,
+		// so always seed from the scalar field. Users can wire up a TextureSample
+		// chain manually in the graph editor after conversion.
+		addScalarConstant("node_smoothness", "Smoothness", math::Vector2(80.0f, 560.0f), material._properties.smoothness);
+		const std::string smoothnessSource = "node_smoothness";
+
 		auto makeOutputNode = [&](const char* id, const char* name, const math::Vector2& position, MaterialGraphValueType valueType)
 		{
 			auto node = makeNode(id, MaterialGraphNodeType::Output, name, position);
@@ -321,6 +340,7 @@ namespace HexEngine
 		makeOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
 		makeOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
 		makeOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
+		makeOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar);
 
 		addConnection(baseColorSource, "Out", "output_basecolor", "In");
 		addConnection(normalSource, "Out", "output_normal", "In");
@@ -328,6 +348,7 @@ namespace HexEngine
 		addConnection(metallicSource, "Out", "output_metallic", "In");
 		addConnection(emissiveSource, "Out", "output_emissive", "In");
 		addConnection(opacitySource, "Out", "output_opacity", "In");
+		addConnection(smoothnessSource, "out", "output_smoothness", "In");
 
 		graph.outputs =
 		{
@@ -336,7 +357,8 @@ namespace HexEngine
 			{ MaterialGraphOutputSemantic::Roughness, roughnessSource, "Out" },
 			{ MaterialGraphOutputSemantic::Metallic, metallicSource, "Out" },
 			{ MaterialGraphOutputSemantic::Emissive, emissiveSource, "Out" },
-			{ MaterialGraphOutputSemantic::Opacity, opacitySource, "Out" }
+			{ MaterialGraphOutputSemantic::Opacity, opacitySource, "Out" },
+			{ MaterialGraphOutputSemantic::Smoothness, smoothnessSource, "out" }
 		};
 
 		return graph;
@@ -418,6 +440,7 @@ namespace HexEngine
 		if (text == "Metallic") { outSemantic = MaterialGraphOutputSemantic::Metallic; return true; }
 		if (text == "Emissive") { outSemantic = MaterialGraphOutputSemantic::Emissive; return true; }
 		if (text == "Opacity") { outSemantic = MaterialGraphOutputSemantic::Opacity; return true; }
+		if (text == "Smoothness") { outSemantic = MaterialGraphOutputSemantic::Smoothness; return true; }
 		return false;
 	}
 
@@ -432,6 +455,7 @@ namespace HexEngine
 		case MaterialGraphOutputSemantic::Metallic: return "Metallic";
 		case MaterialGraphOutputSemantic::Emissive: return "Emissive";
 		case MaterialGraphOutputSemantic::Opacity: return "Opacity";
+		case MaterialGraphOutputSemantic::Smoothness: return "Smoothness";
 		}
 	}
 

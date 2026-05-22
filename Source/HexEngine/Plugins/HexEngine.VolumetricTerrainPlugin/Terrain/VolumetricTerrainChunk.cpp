@@ -1710,11 +1710,11 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 	// Clean the engine's PerObjectBuffer before issuing the draw. GraphicsDeviceD3D11's
 	// Draw*Indirect path unconditionally rebinds the engine PerObjectBuffer at PS slot 1
 	// (= HLSL register b1), and whatever was last written to it by the opaque mesh path
-	// (the last material's MaterialProperties: smoothness, specularProbability, isWater,
+	// (the last material's MaterialProperties: smoothness, isWater,
 	// hasTransparency, etc.) is still resident. The terrain surface shader's main
 	// function doesn't reference g_material directly, but included translation units
-	// and downstream passes do, and DefaultPixel.shader writes g_material.smoothness /
-	// specularProbability into the gbuffer mat channel for the materials it shades -
+	// and downstream passes do, and DefaultPixel.shader writes g_material.smoothness
+	// into the gbuffer mat channel for the materials it shades -
 	// any shader reading PerObjectBuffer fields during the terrain's render slot
 	// inherits the LAST material's values. User-visible symptom: terrain takes on the
 	// reflection params and normal-map behaviour of whichever mesh was drawn last.

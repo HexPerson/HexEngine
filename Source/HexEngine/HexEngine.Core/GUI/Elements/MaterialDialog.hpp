@@ -30,7 +30,6 @@ namespace HexEngine
 		ComponentWidget* _layout = nullptr;
 		AssetSearch* _textures[MaterialTexture::Count] = { nullptr };
 		DragFloat* _smoothness = nullptr;
-		DragFloat* _specularProbability = nullptr;
 		Checkbox* _affectsGiToggle = nullptr;
 		Checkbox* _emissiveGiToggle = nullptr;
 		bool _affectsGI = true;

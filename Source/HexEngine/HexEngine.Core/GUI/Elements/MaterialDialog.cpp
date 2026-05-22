@@ -43,7 +43,6 @@ namespace HexEngine
 		}
 
 		_smoothness = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Smoothness", &material->_properties.smoothness, 0.0f, 1.0f, 0.01f, 2);
-		_specularProbability = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Specular Probability", &material->_properties.specularProbability, 0.0f, 1.0f, 0.01f, 2);
 
 		auto metallicFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Metallic Factor", &material->_properties.metallicFactor, 0.0f, 1.0f, 0.01f, 2);
 		auto roughnessFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Roughness Factor", &material->_properties.roughnessFactor, 0.0f, 1.0f, 0.01f, 2);

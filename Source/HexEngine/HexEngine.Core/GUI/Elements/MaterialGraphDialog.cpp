@@ -25,7 +25,8 @@ namespace HexEngine
 				id == "output_roughness" ||
 				id == "output_metallic" ||
 				id == "output_emissive" ||
-				id == "output_opacity";
+				id == "output_opacity" ||
+				id == "output_smoothness";
 		}
 
 		bool TryGetOutputSemanticByNodeId(const std::string& id, MaterialGraphOutputSemantic& outSemantic)
@@ -36,6 +37,7 @@ namespace HexEngine
 			if (id == "output_metallic") { outSemantic = MaterialGraphOutputSemantic::Metallic; return true; }
 			if (id == "output_emissive") { outSemantic = MaterialGraphOutputSemantic::Emissive; return true; }
 			if (id == "output_opacity") { outSemantic = MaterialGraphOutputSemantic::Opacity; return true; }
+			if (id == "output_smoothness") { outSemantic = MaterialGraphOutputSemantic::Smoothness; return true; }
 			return false;
 		}
 
@@ -90,6 +92,7 @@ namespace HexEngine
 			case MaterialGraphOutputSemantic::Metallic: return "output_metallic";
 			case MaterialGraphOutputSemantic::Emissive: return "output_emissive";
 			case MaterialGraphOutputSemantic::Opacity: return "output_opacity";
+			case MaterialGraphOutputSemantic::Smoothness: return "output_smoothness";
 			}
 		}
 
@@ -891,6 +894,7 @@ namespace HexEngine
 		ensureOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
 		ensureOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
 		ensureOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
+		ensureOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar);
 
 		// Keep visual output-node links in sync with authoritative output bindings.
 		for (const auto& output : _material->_graph.outputs)

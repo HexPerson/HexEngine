@@ -213,7 +213,11 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float metallicFactor;
 		float roughnessFactor;
 		float smoothness;
-		float specularProbability;
+		// Reserved slot - used to hold specularProbability but nothing actually
+		// sampled .a from the mat gbuffer RT so it was dead weight. Kept here to
+		// preserve the cbuffer offset of diffuseColour and the overall struct
+		// size; HLSL would pad to 16 anyway, this just makes the layout explicit.
+		float _pad0;
 
 		float4 diffuseColour;
 		float4 emissiveColour;

@@ -308,7 +308,7 @@ namespace HexEngine
 			metallicFactor(0.0f),
 			roughnessFactor(0.5f),
 			smoothness(0.0f),
-			specularProbability(0.0f),
+			_pad0(0.0f),
 			diffuseColour(1.0f),
 			hasTransparency(0),
 			isWater(0),
@@ -334,7 +334,14 @@ namespace HexEngine
 		float metallicFactor;
 		float roughnessFactor;
 		float smoothness;
-		float specularProbability;
+		// Pads the (metallic, roughness, smoothness) triplet up to a 16-byte
+		// boundary so the following diffuseColour Vector4 lands at offset 16 -
+		// matches the HLSL cbuffer's implicit padding rules. Previously this
+		// slot held specularProbability, which was dead weight: nothing read
+		// pixelSpecular.a from the gbuffer and the BRDF lobes only consume
+		// .r (metallic) and .g (roughness). Removed to free the slot; named
+		// explicitly so future fields can claim it without an ABI rev.
+		float _pad0;
 		math::Vector4 diffuseColour;
 		math::Vector4 emissiveColour;
 

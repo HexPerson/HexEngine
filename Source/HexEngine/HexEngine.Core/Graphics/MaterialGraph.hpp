@@ -49,7 +49,13 @@ namespace HexEngine
 		Roughness,
 		Metallic,
 		Emissive,
-		Opacity
+		Opacity,
+		// Smoothness drives gbuffer.mat.b - read by SSR as both the reflection-
+		// enable gate AND the reflection-sharpness control (1-smoothness becomes
+		// the SSR ray roughness). Defaults to the standard material's smoothness
+		// scalar when the graph doesn't bind it, preserving back-compat with
+		// pre-graph materials.
+		Smoothness
 	};
 
 	struct MaterialGraphPin

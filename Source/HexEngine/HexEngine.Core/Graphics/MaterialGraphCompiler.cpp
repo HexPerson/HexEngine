@@ -680,7 +680,8 @@ namespace HexEngine
 			const GraphExpression* roughnessExpr,
 			const GraphExpression* metallicExpr,
 			const GraphExpression* emissiveExpr,
-			const GraphExpression* opacityExpr)
+			const GraphExpression* opacityExpr,
+			const GraphExpression* smoothnessExpr)
 		{
 			std::stringstream ss;
 
@@ -767,7 +768,15 @@ namespace HexEngine
 			ss << "\t\tfloat transparencyAlpha = saturate(opacity * baseColor.a);\n";
 			ss << "\t\tfloat outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;\n";
 			ss << "\t\toutput.diff = float4(finalRGB, outputAlpha);\n";
-			ss << "\t\toutput.mat = float4(metallic, roughness, g_material.smoothness, g_material.specularProbability);\n";
+			// Smoothness can be graph-driven via the Smoothness output semantic;
+			// fall back to the standard material's smoothness scalar when the graph
+			// doesn't bind one. .a is reserved (specularProbability was removed -
+			// nothing read it).
+			if (smoothnessExpr != nullptr)
+				ss << std::format("\t\tfloat smoothness = saturate({});\n", ToScalar(ctx, *smoothnessExpr));
+			else
+				ss << "\t\tfloat smoothness = g_material.smoothness;\n";
+			ss << "\t\toutput.mat = float4(metallic, roughness, smoothness, 0.0f);\n";
 			ss << "\t\toutput.norm = float4(worldNormal.xyz, pixelDepth);\n";
 			ss << "\t\toutput.pos = float4(input.positionWS.xyz, length(emission));\n";
 			ss << "\t\toutput.velocity = velocity;\n";
@@ -975,6 +984,7 @@ namespace HexEngine
 		GraphExpression metallic;
 		GraphExpression emissive;
 		GraphExpression opacity;
+		GraphExpression smoothness;
 
 		GraphExpression* baseColorPtr = nullptr;
 		GraphExpression* normalPtr = nullptr;
@@ -982,6 +992,7 @@ namespace HexEngine
 		GraphExpression* metallicPtr = nullptr;
 		GraphExpression* emissivePtr = nullptr;
 		GraphExpression* opacityPtr = nullptr;
+		GraphExpression* smoothnessPtr = nullptr;
 
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::BaseColor, baseColor)) baseColorPtr = &baseColor;
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Normal, normal)) normalPtr = &normal;
@@ -989,6 +1000,7 @@ namespace HexEngine
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Metallic, metallic)) metallicPtr = &metallic;
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Emissive, emissive)) emissivePtr = &emissive;
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Opacity, opacity)) opacityPtr = &opacity;
+		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Smoothness, smoothness)) smoothnessPtr = &smoothness;
 
 		if (!ctx.errors.empty())
 		{
@@ -1039,7 +1051,8 @@ namespace HexEngine
 			roughnessPtr,
 			metallicPtr,
 			emissivePtr,
-			opacityPtr);
+			opacityPtr,
+			smoothnessPtr);
 		const std::string sourceHash = ComputeShaderSourceHash(shaderSource);
 
 		const fs::path hashedShaderSource = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + sourceHash + ".shader");

@@ -177,7 +177,6 @@ namespace HexEngine
 			file->Deserialize(properties, "emissiveColour", props.emissiveColour);
 			file->Deserialize(properties, "hasTransparency", props.hasTransparency);
 			file->Deserialize(properties, "isWater", props.isWater);
-			file->Deserialize(properties, "specularProbability", props.specularProbability);
 			// smoothness was historically authored via the MaterialDialog slider but
 			// never persisted - the only place that drove the on-disk value was the
 			// engine's default-constructor, so a freshly-loaded material always had
@@ -185,6 +184,10 @@ namespace HexEngine
 			// the user hasn't touched the slider but quietly resets the value on every
 			// reload. Now it round-trips like the other PBR scalars.
 			file->Deserialize(properties, "smoothness", props.smoothness);
+			// specularProbability used to live here. The field was removed (nothing in
+			// the renderer actually read pixelSpecular.a from the mat gbuffer RT, so
+			// it was dead weight) - older materials may still have the key in their
+			// JSON; we just ignore it on load, no migration needed.
 			// Shading model + per-model params (added with the fidelity push). Default
 			// to 0 / zero-vec if the field is absent in the JSON (i.e. materials
 			// authored before these were a thing) so old assets keep rendering as
@@ -518,14 +521,13 @@ namespace HexEngine
 			file.Serialize(properties, "emissiveColour", material->_properties.emissiveColour);
 			file.Serialize(properties, "hasTransparency", material->_properties.hasTransparency);
 			file.Serialize(properties, "isWater", material->_properties.isWater);
-			// Round-trip the PBR scalars the loader recovers. Historically smoothness
-			// + specularProbability were authored via the dialog but never written
-			// here, so a save+reload silently reset them to 0. That's the source of
-			// "edit material, looks fine; press Play, road is wrong" reports - the
-			// in-memory dialog edits were lost on the path through Save -> game
-			// runtime load. Persisting them now makes the round-trip honest.
+			// Round-trip smoothness. Historically authored via the dialog but never
+			// written here, so a save+reload silently reset it to 0 - the source of
+			// "edit material, looks fine; press Play, road is wrong" reports, since
+			// the in-memory dialog edit was lost on the path through Save -> game
+			// runtime load. specularProbability used to round-trip too but has been
+			// removed entirely (nothing read it).
 			file.Serialize(properties, "smoothness", material->_properties.smoothness);
-			file.Serialize(properties, "specularProbability", material->_properties.specularProbability);
 			// Shading model + per-model params (clearcoat / SSS / aniso / sheen).
 			file.Serialize(properties, "materialModel", material->_properties.materialModel);
 			file.Serialize(properties, "modelParams", material->_properties.modelParams);
