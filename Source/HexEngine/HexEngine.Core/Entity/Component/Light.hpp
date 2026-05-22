@@ -114,6 +114,14 @@ namespace HexEngine
 
 		float _strength = 1.0f;
 		float _originalStrength = 1.0f;
+		// Last strength we notified the DiffuseGI system about. Hysteresis
+		// baseline for SetLightStength - small per-frame changes (e.g. the
+		// weather controller lerping sun intensity between presets) only bump
+		// _strength but DON'T fire NotifyGiLightStateChanged, which would
+		// otherwise invalidate the per-clipmap voxel-triangle cache every
+		// frame during the transition and cause noticeable stutter while the
+		// cache rebuilds. Larger or sudden changes still notify normally.
+		float _giNotifiedStrength = 1.0f;
 		math::Color _diffuseColour;
 
 		// Effect data
