@@ -239,6 +239,12 @@
 		int	  pad0;
 		int	  pad1;
 		int	  pad2;
+
+		// Screen-space contact shadow settings:
+		//   x = enabled (1/0), y = step count, z = max length (m), w = thickness (m)
+		// Only the directional light populates this; other shadow casters leave it
+		// zeroed so the enabled check disables contact shadows automatically.
+		float4 contactShadowParams;
 	};
 
 	cbuffer PerShadowCasterBuffer : register(b2)

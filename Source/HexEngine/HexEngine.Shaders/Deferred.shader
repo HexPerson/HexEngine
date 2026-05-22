@@ -217,6 +217,31 @@
 		float depthValue = CalculateShadows(shadow, g_cmpSampler, g_pointSampler, SHADOWMAPS, bias);
 		depthValue *= CalculateCloudShadow(pixelPosWS.xyz, lightDir);
 
+		// Screen-space contact shadow. Fills the near-camera detail gap PCSS cascades
+		// can't resolve (fine geometry contact like fingers, foliage, hair). Marches
+		// the depth buffer toward the sun; if a closer pixel intercepts the ray
+		// before our shading point would have reached light, we're contact-shadowed.
+		// Cheap (configurable step count), runs in the same deferred light pass so no
+		// extra bandwidth. Multiply into the cascade term - both must agree the pixel
+		// is lit for it to be lit. Settings come from r_contactShadows* HVars, packed
+		// into g_shadowConfig.contactShadowParams by SetupPerShadowCasterBuffer; the
+		// .x channel is the enable flag, zero on non-directional casters so the
+		// branch naturally collapses.
+		if (g_shadowConfig.contactShadowParams.x > 0.5f)
+		{
+			const float contactShadow = ScreenSpaceContactShadow(
+				pixelPosWS.xyz,
+				lightDir,
+				normalize(pixelNormal.xyz),
+				GBUFFER_NORMAL,
+				g_pointSampler,
+				input.position.xy,
+				(int)g_shadowConfig.contactShadowParams.y,
+				g_shadowConfig.contactShadowParams.z,
+				g_shadowConfig.contactShadowParams.w);
+			depthValue *= contactShadow;
+		}
+
 		float3 legacySunColour = getSunColour();
 		float3 physicalSunColour = ComputePhysicalSunColour(pixelPosWS.xyz, lightDir);
 		const float legacySunLuma = dot(legacySunColour, float3(0.2126f, 0.7152f, 0.0722f));

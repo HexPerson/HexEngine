@@ -112,6 +112,16 @@ namespace HexEngine
 		int	  pad0;
 		int	  pad1;
 		int	  pad2;
+
+		// Screen-space contact shadow settings, packed as a vec4 for cbuffer alignment.
+		// Only the directional light populates these; other shadow casters leave them
+		// zeroed so the shader's enabled-check naturally disables them.
+		//   x = enabled (1 = on, 0 = off)
+		//   y = step count
+		//   z = max ray length in world units (metres)
+		//   w = thickness window (metres) - blocker must be within this depth of the
+		//       ray for the test to count, otherwise we'd shadow through walls.
+		math::Vector4 contactShadowParams;
 	};
 
 	/** @brief Ocean rendering settings uploaded in the per-frame constant buffer. */

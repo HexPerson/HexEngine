@@ -103,6 +103,13 @@ namespace HexEngine
 	HVar r_shadowNearClip("r_shadowNearClip", "How much clipping offset to apply to directional lights, larger scenes typically require a higher value", 150.0f, -1000.0f, 1000.0f);
 	HVar r_colourFilter("r_colourFilter", "The filter colour to use for colour grading", math::Vector3(1.00f, 0.98f, 0.97f), math::Vector3(0.0f), math::Vector3(1.0f));
 	HVar r_shadowSamples("r_shadowSamples", "How many samples to use in shadow map filtering", 32, 2, 128);
+	// Screen-space contact shadows - fills the near-camera detail gap PCSS cascades
+	// can't resolve. Cheap (one extra ray-march in the deferred light pass) and
+	// hugely improves perceived shadow quality on close-up geometry.
+	HVar r_contactShadows("r_contactShadows", "Enable screen-space contact shadows on the directional light", true, false, true);
+	HVar r_contactShadowSteps("r_contactShadowSteps", "Ray-march step count for contact shadows", 12, 4, 64);
+	HVar r_contactShadowLength("r_contactShadowLength", "Maximum world-space length of the contact shadow ray (metres)", 1.5f, 0.05f, 32.0f);
+	HVar r_contactShadowThickness("r_contactShadowThickness", "Thickness window for blocker acceptance (metres) - prevents see-through behind walls", 0.2f, 0.01f, 5.0f);
 
 		static int32_t GetVolumetricEffectiveSteps()
 		{
@@ -1357,6 +1364,24 @@ namespace HexEngine
 
 				bufferData._shadowConfig.shadowMapSize = shadowMapSize;
 
+				// Contact shadow params - only populated for the directional light
+				// (other shadow casters leave the vec4 zeroed, which the shader reads as
+				// "disabled" via the .x channel check). Sun is the dominant light source
+				// and the one most likely to need the near-field detail contact shadows
+				// provide; spot/point shadow maps already have enough resolution for
+				// their typical use cases.
+				if (dynamic_cast<DirectionalLight*>(shadowCaster) != nullptr && r_contactShadows._val.b)
+				{
+					bufferData._shadowConfig.contactShadowParams = math::Vector4(
+						1.0f,
+						static_cast<float>(r_contactShadowSteps._val.i32),
+						r_contactShadowLength._val.f32,
+						r_contactShadowThickness._val.f32);
+				}
+				else
+				{
+					bufferData._shadowConfig.contactShadowParams = math::Vector4::Zero;
+				}
 			}
 
 			perFrameBuffer->Write(&bufferData, sizeof(bufferData));
