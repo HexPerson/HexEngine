@@ -2241,6 +2241,12 @@ namespace HexEngine
 					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
 					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
 				}
+
+				// Material-features RT at the slot Deferred.shader's
+				// GBUFFER_FEATURES_RESOURCE binds to (t14). The extended shading
+				// model lobes (clearcoat / anisotropy / sheen) read this; Standard
+				// PBR pixels see (0,0,0,0) (cleared each frame) and early-out.
+				g_pEnv->_graphicsDevice->SetTexture2D(14, _gbuffer.GetFeatures());
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
@@ -2266,6 +2272,11 @@ namespace HexEngine
 			return;
 
 		g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
+
+		// Material-features RT for PointLight.shader's GBUFFER_FEATURES_RESOURCE
+		// at t5. Point lights only use t0-4 (gbuffer) and t13 (beauty), so t5 is
+		// the first free slot. Set once for the pass since all point lights share it.
+		g_pEnv->_graphicsDevice->SetTexture2D(5, _gbuffer.GetFeatures());
 
 		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
 
@@ -2449,6 +2460,13 @@ namespace HexEngine
 						else
 							g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 					}
+
+					// Material-features RT at slot 11 - SpotLight.shader's
+					// GBUFFER_FEATURES_RESOURCE binds there (gbuffer = t0..4,
+					// shadowmaps = t5..10, features = t11). Bound per-light because
+					// the gbuffer rebind + shadowmap loop above advances the slot
+					// state and would otherwise leave t11 stale.
+					g_pEnv->_graphicsDevice->SetTexture2D(11, _gbuffer.GetFeatures());
 
 					// One-instance buffer: Start/Render/Finish each iteration so the
 					// instance vertex buffer has exactly this light's data when the draw

@@ -46,6 +46,10 @@
 
 	Texture2D g_beautyTex : register(t13);
 
+	// Material-features RT. Point/spot lights only use t0-4 for the gbuffer, so
+	// t5 is the first free slot. Standard PBR pixels see (0,0,0,0) and early-out.
+	GBUFFER_FEATURES_RESOURCE(5)
+
 	SamplerState g_textureSampler : register(s0);
 	SamplerState g_pointSampler : register(s2);
 
@@ -235,6 +239,28 @@
 			1.0f,
 			attenuation
 		);
+
+		// Per-model feature lobes (clearcoat / aniso / sheen). Same per-pixel
+		// model id and params as the directional path - so a clearcoated car gets
+		// sharp specular highlights from point lights the same way it gets them
+		// from the sun.
+		const float4 featurePx = GBUFFER_FEATURES.Sample(g_pointSampler, screenPos);
+		const uint modelId = DecodeMaterialModelId(featurePx.r);
+		if (modelId != MATERIAL_MODEL_STANDARD)
+		{
+			const float perceptualRoughnessForFeatures = clamp(GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos).g, MinRoughness, 1.0f);
+			const float3 viewDir = g_eyePos.xyz - pixelPosWS.xyz;
+			pbr.rgb += ApplyMaterialFeatures(
+				modelId,
+				float4(featurePx.g, featurePx.b, featurePx.a, 1.0f - 0.5f * (featurePx.b + featurePx.a)),
+				normalWS,
+				viewDir,
+				lightToPixelVec,
+				input.colour.rgb,
+				perceptualRoughnessForFeatures,
+				1.0f,
+				attenuation);
+		}
 
 		float3 lightContribution = max(pbr.rgb * lightIntensity, 0.0f);
 		lightContribution += volumetricContribution;

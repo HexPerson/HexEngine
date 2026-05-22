@@ -35,6 +35,10 @@
 	SHADOWMAPS_RESOURCE(6);
 	Texture3D g_cloudShapeNoise : register(t12);
 	Texture3D g_cloudDetailNoise : register(t13);
+	// Material-features RT (model id + per-model parameters). t14 is the first
+	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
+	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
+	GBUFFER_FEATURES_RESOURCE(14)
 	
 
 	SamplerState g_textureSampler : register(s0);
@@ -249,16 +253,42 @@
 		physicalSunColour *= legacySunLuma / physicalSunLuma;
 
 		float4 pbr = CalculatePBR(
-			GBUFFER_SPECULAR, 
+			GBUFFER_SPECULAR,
 			g_pointSampler,
-			screenPos, 
-			pixelNormal.xyz, 
-			pixelPosWS.xyz, 
-			lightDir, 
-			physicalSunColour, 
+			screenPos,
+			pixelNormal.xyz,
+			pixelPosWS.xyz,
+			lightDir,
+			physicalSunColour,
 			pixelColour.rgb,
 			depthValue,
 			g_globalLight[0]);
+
+		// Extended shading-model lobes (clearcoat / anisotropic / sheen). The
+		// features RT carries the model id + per-model parameters - see
+		// ApplyMaterialFeatures for the param layout. Standard PBR + SSS take the
+		// early-out and add nothing here. We re-sample the metallic/roughness
+		// gbuffer for the perceptual roughness used by the aniso/sheen lobes; the
+		// cost is one extra sample on the same texture the PBR path already
+		// resolved, so it stays in cache.
+		const float4 features = GBUFFER_FEATURES.Sample(g_pointSampler, screenPos);
+		const uint modelId = DecodeMaterialModelId(features.r);
+		if (modelId != MATERIAL_MODEL_STANDARD)
+		{
+			const float perceptualRoughnessForFeatures = clamp(GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos).g, MinRoughness, 1.0f);
+			const float3 viewDir = g_eyePos.xyz - pixelPosWS.xyz;
+			const float3 featureBonus = ApplyMaterialFeatures(
+				modelId,
+				float4(features.g, features.b, features.a, 1.0f - 0.5f * (features.b + features.a)),
+				normalize(pixelNormal.xyz),
+				viewDir,
+				lightDir,
+				physicalSunColour * g_globalLight[0],
+				perceptualRoughnessForFeatures,
+				depthValue,
+				1.0f);
+			pbr.rgb += featureBonus;
+		}
 
 		return pbr;
 
