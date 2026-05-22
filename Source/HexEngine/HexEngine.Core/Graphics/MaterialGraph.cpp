@@ -1,4 +1,5 @@
 #include "MaterialGraph.hpp"
+#include "Material.hpp"
 #include <algorithm>
 #include <format>
 
@@ -176,6 +177,166 @@ namespace HexEngine
 			{ MaterialGraphOutputSemantic::Metallic, "node_metallic", "out" },
 			{ MaterialGraphOutputSemantic::Emissive, "node_emissive", "out" },
 			{ MaterialGraphOutputSemantic::Opacity, "node_opacity", "out" }
+		};
+
+		return graph;
+	}
+
+	MaterialGraph MaterialGraph::CreateFromStandardMaterial(const Material& material)
+	{
+		// Originally a private helper inside MaterialGraphDialog.cpp; promoted to
+		// MaterialGraph so the AssetExplorer's "Convert to material graph" context
+		// menu can call it without having to open the graph dialog first.
+
+		MaterialGraph graph;
+		graph.version = kVersion;
+
+		auto makeNode = [](const std::string& id, MaterialGraphNodeType type, const std::string& name, const math::Vector2& position)
+		{
+			MaterialGraphNode node;
+			node.id = id;
+			node.nodeType = type;
+			node.displayName = name;
+			node.position = position;
+			return node;
+		};
+
+		auto addConnection = [&graph](const std::string& fromNode, const std::string& fromPin, const std::string& toNode, const std::string& toPin)
+		{
+			graph.connections.push_back({ fromNode, fromPin, toNode, toPin });
+		};
+
+		auto addVectorConstant = [&](const char* id, const char* label, const math::Vector2& pos, const math::Vector4& value)
+		{
+			auto node = makeNode(id, MaterialGraphNodeType::VectorConstant, label, pos);
+			node.vectorValue = value;
+			node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+			graph.nodes.push_back(std::move(node));
+		};
+
+		auto addScalarConstant = [&](const char* id, const char* label, const math::Vector2& pos, float value)
+		{
+			auto node = makeNode(id, MaterialGraphNodeType::ScalarConstant, label, pos);
+			node.scalarValue = value;
+			node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
+			graph.nodes.push_back(std::move(node));
+		};
+
+		// Builds a TextureParameter (+ optional NormalMap or TextureSample) chain
+		// for one of the standard material's bound texture slots. Returns the node
+		// id whose "Out" pin should be wired to the corresponding output node, or
+		// empty if the material has no texture bound for that slot (caller falls
+		// back to a Vector/Scalar constant in that case).
+		auto addTextureChain = [&](MaterialTexture textureType, const char* paramId, const char* sampleId, const char* label, const math::Vector2& pos, bool useNormalMap) -> std::string
+		{
+			const auto texture = material.GetTexture(textureType);
+			if (!texture)
+				return {};
+
+			auto textureNode = makeNode(paramId, MaterialGraphNodeType::TextureParameter, label, pos);
+			textureNode.texturePath = texture->GetFileSystemPath();
+			textureNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Output });
+			graph.nodes.push_back(std::move(textureNode));
+
+			if (useNormalMap)
+			{
+				auto normalNode = makeNode(sampleId, MaterialGraphNodeType::NormalMap, "NormalMap", pos + math::Vector2(180.0f, 0.0f));
+				normalNode.inputPins.push_back({ "Normal", "Normal", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Input });
+				normalNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+				graph.nodes.push_back(std::move(normalNode));
+				addConnection(paramId, "Out", sampleId, "Normal");
+			}
+			else
+			{
+				auto sampleNode = makeNode(sampleId, MaterialGraphNodeType::TextureSample, "TextureSample", pos + math::Vector2(180.0f, 0.0f));
+				sampleNode.inputPins.push_back({ "Tex", "Tex", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Input });
+				sampleNode.inputPins.push_back({ "UV", "UV", MaterialGraphValueType::UV, MaterialGraphPinDirection::Input });
+				sampleNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+				graph.nodes.push_back(std::move(sampleNode));
+				addConnection(paramId, "Out", sampleId, "Tex");
+			}
+
+			return sampleId;
+		};
+
+		// Pre-multiply emissive by the alpha-channel strength so the graph encodes
+		// the same lit emission the standard material was producing.
+		const math::Vector3 emissive(
+			material._properties.emissiveColour.x * material._properties.emissiveColour.w,
+			material._properties.emissiveColour.y * material._properties.emissiveColour.w,
+			material._properties.emissiveColour.z * material._properties.emissiveColour.w);
+
+		std::string baseColorSource = addTextureChain(MaterialTexture::Albedo, "node_albedo_tex", "node_albedo_sample", "Albedo Texture", math::Vector2(40.0f, 60.0f), false);
+		if (baseColorSource.empty())
+		{
+			addVectorConstant("node_albedo", "Base Color", math::Vector2(80.0f, 80.0f), material._properties.diffuseColour);
+			baseColorSource = "node_albedo";
+		}
+
+		std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", math::Vector2(40.0f, 150.0f), true);
+		if (normalSource.empty())
+		{
+			addVectorConstant("node_normal", "Normal", math::Vector2(80.0f, 160.0f), math::Vector4(0.5f, 0.5f, 1.0f, 1.0f));
+			normalSource = "node_normal";
+		}
+
+		std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", math::Vector2(40.0f, 230.0f), false);
+		if (roughnessSource.empty())
+		{
+			addScalarConstant("node_roughness", "Roughness", math::Vector2(80.0f, 240.0f), material._properties.roughnessFactor);
+			roughnessSource = "node_roughness";
+		}
+
+		std::string metallicSource = addTextureChain(MaterialTexture::Metallic, "node_metallic_tex", "node_metallic_sample", "Metallic Texture", math::Vector2(40.0f, 310.0f), false);
+		if (metallicSource.empty())
+		{
+			addScalarConstant("node_metallic", "Metallic", math::Vector2(80.0f, 320.0f), material._properties.metallicFactor);
+			metallicSource = "node_metallic";
+		}
+
+		std::string emissiveSource = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", math::Vector2(40.0f, 390.0f), false);
+		if (emissiveSource.empty())
+		{
+			addVectorConstant("node_emissive", "Emissive", math::Vector2(80.0f, 400.0f), math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+			emissiveSource = "node_emissive";
+		}
+
+		std::string opacitySource = addTextureChain(MaterialTexture::Opacity, "node_opacity_tex", "node_opacity_sample", "Opacity Texture", math::Vector2(40.0f, 470.0f), false);
+		if (opacitySource.empty())
+		{
+			addScalarConstant("node_opacity", "Opacity", math::Vector2(80.0f, 480.0f), 1.0f);
+			opacitySource = "node_opacity";
+		}
+
+		auto makeOutputNode = [&](const char* id, const char* name, const math::Vector2& position, MaterialGraphValueType valueType)
+		{
+			auto node = makeNode(id, MaterialGraphNodeType::Output, name, position);
+			node.inputPins.push_back({ "In", "In", valueType, MaterialGraphPinDirection::Input });
+			graph.nodes.push_back(std::move(node));
+		};
+
+		makeOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4);
+		makeOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4);
+		makeOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar);
+		makeOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
+		makeOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
+		makeOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
+
+		addConnection(baseColorSource, "Out", "output_basecolor", "In");
+		addConnection(normalSource, "Out", "output_normal", "In");
+		addConnection(roughnessSource, "Out", "output_roughness", "In");
+		addConnection(metallicSource, "Out", "output_metallic", "In");
+		addConnection(emissiveSource, "Out", "output_emissive", "In");
+		addConnection(opacitySource, "Out", "output_opacity", "In");
+
+		graph.outputs =
+		{
+			{ MaterialGraphOutputSemantic::BaseColor, baseColorSource, "Out" },
+			{ MaterialGraphOutputSemantic::Normal, normalSource, "Out" },
+			{ MaterialGraphOutputSemantic::Roughness, roughnessSource, "Out" },
+			{ MaterialGraphOutputSemantic::Metallic, metallicSource, "Out" },
+			{ MaterialGraphOutputSemantic::Emissive, emissiveSource, "Out" },
+			{ MaterialGraphOutputSemantic::Opacity, opacitySource, "Out" }
 		};
 
 		return graph;
