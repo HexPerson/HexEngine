@@ -256,6 +256,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="SpotLight.shader" />
     <HexEngineShader Include="SSR.shader" />
     <HexEngineShader Include="SubsurfaceScattering.shader" />
+    <HexEngineShader Include="BokehDoF.shader" />
     <HexEngineShader Include="TAAResolve.shader" />
     <HexEngineShader Include="Tonemap.shader">
       <FileType>Document</FileType>

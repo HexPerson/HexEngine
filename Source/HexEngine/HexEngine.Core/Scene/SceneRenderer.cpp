@@ -117,6 +117,19 @@ namespace HexEngine
 	HVar r_sssRadius("r_sssRadius", "World-space SSS scattering radius (metres)", 0.012f, 0.0f, 0.5f);
 	HVar r_sssIntensity("r_sssIntensity", "Global multiplier on SSS blur intensity (final blended fraction)", 1.0f, 0.0f, 2.0f);
 
+	// Bokeh depth-of-field. Single-pass, 32-tap Vogel disk gathered around each
+	// pixel proportional to its circle-of-confusion. Runs after tonemap so the
+	// bokeh discs reflect post-tonemap colour - matters because pre-tonemap HDR
+	// highlights would saturate the gathered colour buckets and lose the bokeh
+	// "ball" shape on bright sources. r_dofAperture = 0 disables (the shader's
+	// early-out skips the gather for sharp pixels too, so the cost is one
+	// texture read on the dominant in-focus region).
+	HVar r_dof("r_dof", "Enable bokeh depth-of-field post-process", false, false, true);
+	HVar r_dofFocusDistance("r_dofFocusDistance", "Depth of the in-focus plane (metres)", 5.0f, 0.1f, 1000.0f);
+	HVar r_dofFocusRange("r_dofFocusRange", "Width of the fully-sharp band around the focus plane (metres)", 1.0f, 0.0f, 50.0f);
+	HVar r_dofAperture("r_dofAperture", "Blur scale - bigger aperture = stronger out-of-focus blur", 1.0f, 0.0f, 8.0f);
+	HVar r_dofMaxBlur("r_dofMaxBlur", "Maximum CoC radius in pixels (clamps far-field blur from exploding)", 24.0f, 1.0f, 96.0f);
+
 		static int32_t GetVolumetricEffectiveSteps()
 		{
 			const int32_t qualityPreset = r_volumetricQuality._val.i32 < 0 ? 0 : (r_volumetricQuality._val.i32 > 2 ? 2 : r_volumetricQuality._val.i32);
@@ -454,6 +467,7 @@ namespace HexEngine
 		SAFE_DELETE(_forwardLightsBuffer);
 		SAFE_DELETE(_subsurfaceIntermediateRT);
 		SAFE_DELETE(_subsurfaceParamsBuffer);
+		SAFE_DELETE(_bokehDoFParamsBuffer);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
 
@@ -487,12 +501,19 @@ namespace HexEngine
 		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
 		_fullScreenQuadShader		= IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
 		_subsurfaceShader			= IShader::Create("EngineData.Shaders/SubsurfaceScattering.hcs");
+		_bokehDoFShader				= IShader::Create("EngineData.Shaders/BokehDoF.hcs");
 
 		// Tiny float4 cbuffer that drives the SSS pass direction + radius + intensity.
 		// Built lazily once and reused across frames since the layout is constant.
 		if (_subsurfaceParamsBuffer == nullptr)
 		{
 			_subsurfaceParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+		}
+
+		// DoF params cbuffer at b6: (focusDistance, focusRange, aperture, maxCocPixels).
+		if (_bokehDoFParamsBuffer == nullptr)
+		{
+			_bokehDoFParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
 		}
 
 		if (!_compositionShader)
@@ -2001,6 +2022,19 @@ namespace HexEngine
 				outputShader = _hdrOutputShader.get();
 			}
 
+			// Bokeh DoF runs FIRST in the overlay chain so it gathers
+			// pre-tonemap linear HDR colour. The "big bright bokeh ball" look
+			// depends on this - sampling post-tonemap colour clamps bright
+			// highlights to roughly 1.0 and squashes the disc shape on the
+			// brightest sources (the most visually distinctive bokeh pixels).
+			// Internally this swaps beauty <-> _subsurfaceIntermediateRT, which
+			// SSS has already finished using by this point.
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"Bokeh DoF");
+			{
+				RenderBokehDoF();
+			}
+			GFX_PERF_END();
+
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Colour grading");
 			{
 				guiRenderer->FullScreenTexturedQuad(beauty, _colourGradingShader.get());
@@ -2723,6 +2757,56 @@ namespace HexEngine
 		graphics->SetTexture2D(0, nullptr);
 		graphics->SetTexture2D(1, nullptr);
 		graphics->SetTexture2D(2, nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
+	}
+
+	void SceneRenderer::RenderBokehDoF()
+	{
+		if (!r_dof._val.b || _bokehDoFShader == nullptr || _beautyRT == nullptr ||
+			_subsurfaceIntermediateRT == nullptr || _bokehDoFParamsBuffer == nullptr)
+			return;
+
+		PROFILE();
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		auto* normalDepthTex = _gbuffer.GetNormal();
+		if (normalDepthTex == nullptr)
+			return;
+
+		// Reuse the SSS intermediate as a scratch RT - SSS has already finished
+		// for this frame and the format/size match exactly, so allocating a
+		// dedicated DoF scratch is wasteful. The bokeh pass reads beauty, writes
+		// scratch, then we copy scratch back into beauty so downstream effects
+		// (colour grading, vignette, etc.) see the DoF'd image.
+		auto* scratchRT = _subsurfaceIntermediateRT;
+
+		// Cbuffer at b6: (focusDistance, focusRange, aperture, maxCocPixels).
+		math::Vector4 params(
+			r_dofFocusDistance._val.f32,
+			r_dofFocusRange._val.f32,
+			r_dofAperture._val.f32,
+			r_dofMaxBlur._val.f32);
+		math::Vector4 paramsCopy = params; // Write takes void* (non-const)
+		_bokehDoFParamsBuffer->Write(&paramsCopy, sizeof(paramsCopy));
+		graphics->SetConstantBufferPS(6, _bokehDoFParamsBuffer);
+
+		guiRenderer->StartFrame();
+		graphics->SetRenderTarget(scratchRT);
+		graphics->SetTexture2D(0, _beautyRT);
+		graphics->SetTexture2D(1, normalDepthTex);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _bokehDoFShader.get());
+		guiRenderer->EndFrame();
+
+		// Copy back so beauty carries the DoF'd image into the rest of the post
+		// chain. Cheap on D3D11 (a single CopyResource on same-format RTs).
+		scratchRT->CopyTo(_beautyRT);
+
+		graphics->SetTexture2D(0, nullptr);
+		graphics->SetTexture2D(1, nullptr);
 		graphics->SetConstantBufferPS(6, nullptr);
 	}
 
