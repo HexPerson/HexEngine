@@ -427,8 +427,13 @@
 
 		output.velocity = velocity;
 
-		// Material-features RT, standard PBR default. See DefaultPixel.shader.
-		output.feat = float4(0.0f, 0.0f, 0.0f, 0.0f);
+		// Mirror DefaultPixel: encode model id + params into the features RT.
+		const float modelChannel = saturate((float)g_material.materialModel / 4.0f);
+		output.feat = float4(
+			modelChannel,
+			g_material.modelParams.x,
+			g_material.modelParams.y,
+			g_material.modelParams.z);
 
 		return output;
 	}

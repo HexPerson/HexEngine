@@ -314,7 +314,8 @@ namespace HexEngine
 			isWater(0),
 			emissiveColour(0.0f),
 			isInTransparencyPhase(0),
-			pad2(0)
+			materialModel(0),
+			modelParams(0.0f, 0.0f, 0.0f, 0.0f)
 		{
 		}
 
@@ -340,7 +341,20 @@ namespace HexEngine
 		int hasTransparency;
 		int isWater;
 		int isInTransparencyPhase;
-		int pad2;
+		// Shading-model selector for the new material-features RT path. 0 = standard
+		// PBR (existing behaviour). Non-zero ids unlock the extended shading models
+		// (subsurface scattering, clearcoat, anisotropic, sheen, ...) at the cost of
+		// occupying the .r channel of the features gbuffer plus a model-specific
+		// post-process pass. See MATERIAL_MODEL_* in Global.shader.
+		int materialModel;
+
+		// Per-model parameter vec4. Interpretation depends on materialModel:
+		//   SSS:        .x = mask, .yzw = scatter color tint (linear)
+		//   Clearcoat:  .x = strength, .y = roughness, .z = ior tweak, .w = unused
+		//   Anisotropic:.x = anisotropy [-1..1], .yz = tangent direction.xy, .w = unused
+		//   Sheen:      .x = strength, .yzw = sheen tint
+		// Zero default = "feature off".
+		math::Vector4 modelParams;
 	};
 
 	/** @brief Per-object constants uploaded for each draw call. */

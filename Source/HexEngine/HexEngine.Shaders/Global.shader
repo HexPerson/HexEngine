@@ -221,7 +221,14 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		int hasTransparency;
 		int isWater;
 		int isInTransparencyPhase;
-		int pad5;
+		// Shading-model selector (MATERIAL_MODEL_* constants). 0 = standard PBR;
+		// non-zero values branch into the feature-gbuffer-driven extended shading
+		// models (SSS, clearcoat, anisotropic, sheen, ...).
+		int materialModel;
+
+		// Per-model param vec4. See RenderStructs.hpp for the per-model layout
+		// table (SSS = mask + scatter colour, clearcoat = strength + roughness, etc.)
+		float4 modelParams;
 	};
 	
 	cbuffer PerObjectBuffer : register(b1)

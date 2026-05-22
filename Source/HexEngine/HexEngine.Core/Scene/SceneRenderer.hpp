@@ -73,6 +73,13 @@ namespace HexEngine
 		void RenderSpotLights();
 		void RenderDirectionalLights();
 		void RenderDiffuseGI();
+		// Two-pass separable screen-space subsurface scattering. Reads the beauty
+		// RT, the features gbuffer (model-id channel gates the work), and the
+		// normal/depth target (depth-aware kernel weighting); writes back into
+		// beauty after both passes. Runs early in post (after lighting+GI, before
+		// fog/clouds) so the SSS scatter happens in linear HDR space and fog/cloud
+		// volumetrics aren't blurred through skin.
+		void RenderSubsurfaceScattering();
 		void RenderVignette();
 		void SetStreamlineConstants();
 
@@ -155,6 +162,12 @@ namespace HexEngine
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _waterBlitEffect;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
+		// Screen-space subsurface scattering (Jorge Jimenez separable). Run twice
+		// per frame as a two-pass post (horizontal then vertical), gated by the
+		// features gbuffer's material-model channel.
+		std::shared_ptr<IShader> _subsurfaceShader;
+		IConstantBuffer* _subsurfaceParamsBuffer = nullptr;
+		ITexture2D* _subsurfaceIntermediateRT = nullptr;
 
 		Bloom* _bloomEffect = nullptr;
 		AutoExposure _autoExposure;

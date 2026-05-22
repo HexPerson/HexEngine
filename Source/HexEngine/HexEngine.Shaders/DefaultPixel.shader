@@ -389,10 +389,18 @@
 
 		output.velocity = velocity;
 
-		// Material-features RT. Standard PBR by default - subsequent fidelity work
-		// (SSS, clearcoat, anisotropy, sheen) lights this up per-material from
-		// g_material flags. Layout: (model_id, param1, param2, param3).
-		output.feat = float4(0.0f, 0.0f, 0.0f, 0.0f);
+		// Material-features RT. Encodes shading-model id + per-model params for the
+		// post-process passes (SSS, clearcoat, anisotropic, sheen). Layout:
+		//   .r = model_id / 4 (so the byte value 0..63 maps to ids 0..3 etc.)
+		//   .gba = the model's params (MaterialProps.modelParams.xyz for SSS, etc.)
+		// (0,0,0,0) = standard PBR which preserves existing behaviour for materials
+		// that don't opt into a non-default model.
+		const float modelChannel = saturate((float)g_material.materialModel / 4.0f);
+		output.feat = float4(
+			modelChannel,
+			g_material.modelParams.x,
+			g_material.modelParams.y,
+			g_material.modelParams.z);
 
 		return output;
 	}

@@ -110,6 +110,12 @@ namespace HexEngine
 	HVar r_contactShadowSteps("r_contactShadowSteps", "Ray-march step count for contact shadows", 12, 4, 64);
 	HVar r_contactShadowLength("r_contactShadowLength", "Maximum world-space length of the contact shadow ray (metres)", 1.5f, 0.05f, 32.0f);
 	HVar r_contactShadowThickness("r_contactShadowThickness", "Thickness window for blocker acceptance (metres) - prevents see-through behind walls", 0.2f, 0.01f, 5.0f);
+	// Screen-space subsurface scattering. Cheap (2 fullscreen passes, 11 taps each)
+	// but huge for character / foliage / wax fidelity. Gated by the per-pixel
+	// features gbuffer so non-SSS pixels pay a single texture sample + early-out.
+	HVar r_sss("r_sss", "Enable screen-space subsurface scattering post-process", true, false, true);
+	HVar r_sssRadius("r_sssRadius", "World-space SSS scattering radius (metres)", 0.012f, 0.0f, 0.5f);
+	HVar r_sssIntensity("r_sssIntensity", "Global multiplier on SSS blur intensity (final blended fraction)", 1.0f, 0.0f, 2.0f);
 
 		static int32_t GetVolumetricEffectiveSteps()
 		{
@@ -446,6 +452,8 @@ namespace HexEngine
 		SAFE_DELETE(_cloudDetailNoise);
 		SAFE_DELETE(_cloudConstantBuffer);
 		SAFE_DELETE(_forwardLightsBuffer);
+		SAFE_DELETE(_subsurfaceIntermediateRT);
+		SAFE_DELETE(_subsurfaceParamsBuffer);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
 
@@ -478,6 +486,14 @@ namespace HexEngine
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
 		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
 		_fullScreenQuadShader		= IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
+		_subsurfaceShader			= IShader::Create("EngineData.Shaders/SubsurfaceScattering.hcs");
+
+		// Tiny float4 cbuffer that drives the SSS pass direction + radius + intensity.
+		// Built lazily once and reused across frames since the layout is constant.
+		if (_subsurfaceParamsBuffer == nullptr)
+		{
+			_subsurfaceParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+		}
 
 		if (!_compositionShader)
 		{
@@ -553,6 +569,24 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 		_waterRT->SetDebugName("_waterRT");
+
+		// SSS intermediate RT - same format as beauty so the two-pass separable
+		// blur preserves HDR precision through the horizontal step. Reused every
+		// frame between the H and V passes, no temporal history kept here.
+		SAFE_DELETE(_subsurfaceIntermediateRT);
+		_subsurfaceIntermediateRT = g_pEnv->_graphicsDevice->CreateTexture2D(
+			width,
+			height,
+			BEAUTY_FORMAT,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			0, MsaaLevel, 0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
+		if (_subsurfaceIntermediateRT) _subsurfaceIntermediateRT->SetDebugName("_sssIntermediate");
 
 		_particleRT = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
@@ -1803,6 +1837,12 @@ namespace HexEngine
 
 			RenderLights();
 			RenderDiffuseGI();
+			// SSS sits after direct lighting + GI but BEFORE transparency / fog /
+			// volumetrics. We want the scatter to operate on opaque lit colour in
+			// linear HDR space; running it after fog would blur fog through skin
+			// (incorrect), and after transparency would force overlapping
+			// alpha-blended geometry to be re-sampled into the scatter kernel.
+			RenderSubsurfaceScattering();
 			RenderTransparent();
 			RenderFog();
 			//RenderWater();
@@ -2606,6 +2646,66 @@ namespace HexEngine
 		GFX_PERF_END();
 
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
+	}
+
+	void SceneRenderer::RenderSubsurfaceScattering()
+	{
+		if (!r_sss._val.b || _subsurfaceShader == nullptr || _beautyRT == nullptr || _subsurfaceIntermediateRT == nullptr || _subsurfaceParamsBuffer == nullptr)
+			return;
+
+		PROFILE();
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		// Shared bindings: features gbuffer at t1 (model id + per-pixel params) and
+		// normal/depth at t2 (depth-aware kernel weighting). The shader's t0 is the
+		// source colour - beauty for the horizontal pass, intermediate for the
+		// vertical pass. We swap that explicitly between passes below.
+		auto* featuresTex = _gbuffer.GetFeatures();
+		auto* normalDepthTex = _gbuffer.GetNormal();
+		if (featuresTex == nullptr || normalDepthTex == nullptr)
+			return;
+
+		// Cbuffer at b6 - matches the shader's `cbuffer SssParams : register(b6)`.
+		// x = pass direction (0=H, 1=V), y = world-space radius, z = global intensity.
+		auto writeParams = [&](float direction)
+		{
+			const math::Vector4 params(
+				direction,
+				r_sssRadius._val.f32,
+				r_sssIntensity._val.f32,
+				0.0f);
+			math::Vector4 paramsCopy = params; // Write takes void* (non-const)
+			_subsurfaceParamsBuffer->Write(&paramsCopy, sizeof(paramsCopy));
+			graphics->SetConstantBufferPS(6, _subsurfaceParamsBuffer);
+		};
+
+		// --- Horizontal pass: beauty -> intermediate ---
+		guiRenderer->StartFrame();
+		graphics->SetRenderTarget(_subsurfaceIntermediateRT);
+		graphics->SetTexture2D(0, _beautyRT);
+		graphics->SetTexture2D(1, featuresTex);
+		graphics->SetTexture2D(2, normalDepthTex);
+		writeParams(0.0f);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _subsurfaceShader.get());
+
+		// --- Vertical pass: intermediate -> beauty ---
+		graphics->SetRenderTarget(_beautyRT);
+		graphics->SetTexture2D(0, _subsurfaceIntermediateRT);
+		graphics->SetTexture2D(1, featuresTex);
+		graphics->SetTexture2D(2, normalDepthTex);
+		writeParams(1.0f);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _subsurfaceShader.get());
+		guiRenderer->EndFrame();
+
+		// Unbind the SSS-specific SRVs so later passes don't inherit stale bindings.
+		graphics->SetTexture2D(0, nullptr);
+		graphics->SetTexture2D(1, nullptr);
+		graphics->SetTexture2D(2, nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
 	}
 
 	void SceneRenderer::RenderFog()
