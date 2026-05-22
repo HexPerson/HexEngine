@@ -180,8 +180,16 @@ namespace HexEngine
 			result.AddError("Missing required output connection: Roughness.");
 		if (!hasConnectedOutput(MaterialGraphOutputSemantic::Metallic))
 			result.AddError("Missing required output connection: Metallic.");
-		if (!hasConnectedOutput(MaterialGraphOutputSemantic::Emissive))
-			result.AddError("Missing required output connection: Emissive.");
+		// Emissive, Opacity and Smoothness are intentionally NOT required. The
+		// compiler defaults each of them to a safe value when the graph leaves
+		// them disconnected:
+		//   - Emissive  -> g_material.emissiveColour.rgb * g_material.emissiveColour.a
+		//   - Opacity   -> 1.0 (fully opaque)
+		//   - Smoothness -> g_material.smoothness
+		// Forcing the author to wire them up just to delete the auto-created
+		// nodes (e.g. a road material that doesn't author emission at all) used
+		// to surface as a confusing "Missing required output connection: Emissive."
+		// at save time. Leave them optional.
 
 		return result;
 	}

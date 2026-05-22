@@ -342,6 +342,36 @@ namespace HexEngine
 			}
 		}
 
+		// Auto-recompile graph materials whose cached "standard" shader is
+		// missing, points at a stale path, or the JSON dropped it entirely.
+		// Without this, hand-editing the graph JSON (or moving / clearing the
+		// generated shader cache) leaves the material with a null standard
+		// shader and meshes that reference it fail to render. Instances are
+		// handled by the ApplyInstanceToMaterial block above and don't need a
+		// fresh compile of their own.
+		if (material->_hasGraph && !material->_hasGraphInstance && material->GetStandardShader() == nullptr)
+		{
+			LOG_INFO(
+				"Material '%s' has a graph but no resolved standard shader; recompiling from the graph.",
+				material->GetFileSystemPath().string().c_str());
+
+			const auto compileResult = MaterialGraphCompiler::CompileToMaterial(
+				material->_graph,
+				*material,
+				nullptr);
+
+			if (!compileResult.success)
+			{
+				for (const auto& error : compileResult.errors)
+					LOG_WARN("Material graph auto-recompile error: %s", error.c_str());
+			}
+			else
+			{
+				for (const auto& warning : compileResult.warnings)
+					LOG_WARN("Material graph auto-recompile warning: %s", warning.c_str());
+			}
+		}
+
 		// Load sounds
 		//
 		/*if (auto properties = kvMap.find("Sounds"); properties != kvMap.end())
