@@ -995,8 +995,17 @@ namespace HexEngine
 			if (isVectorNode) _vectorDrags[i]->EnableRecursive(); else _vectorDrags[i]->DisableRecursive();
 		}
 
-		if (hasNode && !node->texturePath.empty())
+		// Always sync the AssetSearch to the selected node's state, including
+		// clearing it when the node has no texture. The old code only called
+		// SetValue when texturePath was non-empty, which meant the widget kept
+		// showing the PREVIOUSLY-selected node's path - users would see a
+		// texture in the field, think they'd assigned it, and then the
+		// compiler would error with "missing a texture input" because the
+		// actual node->texturePath was still empty.
+		if (hasNode)
 			_texturePath->SetValue(node->texturePath.wstring());
+		else
+			_texturePath->SetValue(L"");
 		if (isTextureNode) _texturePath->EnableRecursive(); else _texturePath->DisableRecursive();
 	}
 
