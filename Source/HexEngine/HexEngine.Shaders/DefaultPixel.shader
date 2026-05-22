@@ -391,13 +391,20 @@
 
 		// Material-features RT. Encodes shading-model id + per-model params for the
 		// post-process passes (SSS, clearcoat, anisotropic, sheen). Layout:
-		//   .r = model_id / 4 (so the byte value 0..63 maps to ids 0..3 etc.)
-		//   .gba = the model's params (MaterialProps.modelParams.xyz for SSS, etc.)
+		//   .r = (modelId * 32 + modelParams.w_quant) / 255
+		//        i.e. upper 3 bits of the byte = model id (range 0..7), lower 5
+		//        bits = quantised modelParams.w (32 levels). This lets sheen
+		//        (which needs all four modelParam channels for strength + RGB tint)
+		//        carry tint.b through the otherwise-full features RT - we'd run
+		//        out of channels packing modelId + 4 modelParams into 4 RT slots.
+		//   .gba = modelParams.xyz (strength + the first two tint / shape params)
 		// (0,0,0,0) = standard PBR which preserves existing behaviour for materials
 		// that don't opt into a non-default model.
-		const float modelChannel = saturate((float)g_material.materialModel / 4.0f);
+		const uint idByte = (uint)g_material.materialModel;
+		const float wQuant = floor(saturate(g_material.modelParams.w) * 31.0f + 0.5f);
+		const float packedR = ((float)idByte * 32.0f + wQuant) / 255.0f;
 		output.feat = float4(
-			modelChannel,
+			packedR,
 			g_material.modelParams.x,
 			g_material.modelParams.y,
 			g_material.modelParams.z);

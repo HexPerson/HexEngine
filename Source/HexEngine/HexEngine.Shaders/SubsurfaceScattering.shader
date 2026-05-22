@@ -55,10 +55,11 @@
 
 	float ModelIdChannelToModel(float r)
 	{
-		// We encoded model_id as (id / 4) into the unorm RT byte. Recover with a
-		// rounded multiply; tolerant to RGBA8 quantisation since the gap between
-		// consecutive ids is 0.25 vs ~0.004 of quantisation noise.
-		return floor(r * 4.0f + 0.5f);
+		// Features .r packs (modelId << 5) | modelParams.w_quant (see
+		// DefaultPixel). Upper 3 bits = id; recover by scaling to byte space and
+		// taking the high nibble.
+		const uint byteVal = (uint)floor(r * 255.0f + 0.5f);
+		return (float)(byteVal >> 5);
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target

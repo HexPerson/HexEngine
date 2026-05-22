@@ -252,7 +252,7 @@
 			const float3 viewDir = g_eyePos.xyz - pixelPosWS.xyz;
 			pbr.rgb += ApplyMaterialFeatures(
 				modelId,
-				float4(featurePx.g, featurePx.b, featurePx.a, 1.0f - 0.5f * (featurePx.b + featurePx.a)),
+				float4(featurePx.g, featurePx.b, featurePx.a, DecodePackedModelParamW(featurePx.r)),
 				normalWS,
 				viewDir,
 				lightToPixelVec,

@@ -57,12 +57,29 @@
 	}
 
 	// Decode the per-material-model id from the features GBuffer .r channel. The
-	// channel is an unorm encoding of (id / 4) (see DefaultPixel), so we recover
-	// with a multiply + round. Tolerant to RGBA8 quantisation since adjacent ids
-	// are 0.25 apart vs ~0.004 of quantisation noise.
+	// channel packs (modelId << 5) | (modelParams.w_quant) into a single RGBA8
+	// byte; upper 3 bits = id (0..7 supported, 0..4 used), lower 5 bits = a
+	// quantised modelParams.w (needed by sheen for tint.b - the fourth modelParam
+	// we couldn't otherwise store with only 4 RT channels). See DefaultPixel for
+	// the encoding side. Tolerant to point sampling; linear filtering at material
+	// boundaries (e.g. SSS pixel next to standard pixel) corrupts both fields,
+	// which is acceptable since the SSS/etc post-effects already gate on
+	// strength / mask and silently no-op on the ambiguous boundary pixels.
 	uint DecodeMaterialModelId(float r)
 	{
-		return (uint)floor(r * 4.0f + 0.5f);
+		const uint byteVal = (uint)floor(r * 255.0f + 0.5f);
+		return byteVal >> 5;
+	}
+
+	// Recover the quantised modelParams.w from the same packed .r channel as
+	// DecodeMaterialModelId. Range [0,1] with 5-bit quantisation (32 levels) -
+	// adequate for sheen tint .b which is the only consumer; visible banding
+	// would only show up if we were modulating a high-frequency parameter,
+	// which sheen tint is not.
+	float DecodePackedModelParamW(float r)
+	{
+		const uint byteVal = (uint)floor(r * 255.0f + 0.5f);
+		return (float)(byteVal & 31u) / 31.0f;
 	}
 
 	// Anisotropic GGX normal distribution. Two roughness axes (alongTangent /

@@ -106,10 +106,27 @@ namespace HexEngine
 	// Screen-space contact shadows - fills the near-camera detail gap PCSS cascades
 	// can't resolve. Cheap (one extra ray-march in the deferred light pass) and
 	// hugely improves perceived shadow quality on close-up geometry.
-	HVar r_contactShadows("r_contactShadows", "Enable screen-space contact shadows on the directional light", true, false, true);
+	// Contact shadows ship OFF by default. The current implementation uses
+	// interleaved-gradient-noise screen-space jitter, which is camera-space
+	// stable on a static camera but produces per-pixel noise that shifts as
+	// the camera moves. Under TAA the per-pixel noise should average out, but
+	// on grazing-angle geometry (notably volumetric-terrain slopes at mid-
+	// depth) adjacent pixels disagree about whether the ray enters the
+	// terrain, and TAA can't fully reconcile that frame-to-frame - visible
+	// flicker on the slope. Re-enabling needs a TAA-friendly noise source
+	// (e.g. blue noise indexed by world position or frame-stable jitter)
+	// and probably a distance fade so the cost+artifact concentrate near the
+	// camera where contact shadows actually add value.
+	HVar r_contactShadows("r_contactShadows", "Enable screen-space contact shadows on the directional light", false, false, true);
 	HVar r_contactShadowSteps("r_contactShadowSteps", "Ray-march step count for contact shadows", 12, 4, 64);
 	HVar r_contactShadowLength("r_contactShadowLength", "Maximum world-space length of the contact shadow ray (metres)", 1.5f, 0.05f, 32.0f);
 	HVar r_contactShadowThickness("r_contactShadowThickness", "Thickness window for blocker acceptance (metres) - prevents see-through behind walls", 0.2f, 0.01f, 5.0f);
+	// Distance fade for contact shadows. Pixels beyond this many metres from
+	// the camera get a reduced contact-shadow contribution that smoothly fades
+	// to zero over the next half of this range, hiding the screen-space jitter
+	// noise on distant pixels (where terrain dominates the artifact). Tweakable
+	// because aggressive fade nukes the effect entirely on long view distances.
+	HVar r_contactShadowFadeStart("r_contactShadowFadeStart", "View-space depth (m) where contact shadows begin to fade out", 25.0f, 1.0f, 1000.0f);
 	// Screen-space subsurface scattering. Cheap (2 fullscreen passes, 11 taps each)
 	// but huge for character / foliage / wax fidelity. Gated by the per-pixel
 	// features gbuffer so non-SSS pixels pay a single texture sample + early-out.
@@ -1427,8 +1444,17 @@ namespace HexEngine
 				// their typical use cases.
 				if (dynamic_cast<DirectionalLight*>(shadowCaster) != nullptr && r_contactShadows._val.b)
 				{
+					// .x intentionally carries the fade-start distance rather than a
+					// boolean enable flag. The deferred shader treats .x > 0 as enabled
+					// AND uses the magnitude as the start of a smoothstep distance fade
+					// out to 1.5x that range, so contact shadows concentrate near the
+					// camera (where they're visible + useful) and don't add noise to
+					// distant terrain (where TAA can't reconcile the screen-space jitter
+					// across camera motion - the volumetric-terrain mid-depth flicker
+					// we saw). Disabling contact shadows still zeros the whole vec4 via
+					// the else branch below.
 					bufferData._shadowConfig.contactShadowParams = math::Vector4(
-						1.0f,
+						r_contactShadowFadeStart._val.f32,
 						static_cast<float>(r_contactShadowSteps._val.i32),
 						r_contactShadowLength._val.f32,
 						r_contactShadowThickness._val.f32);
@@ -2794,12 +2820,15 @@ namespace HexEngine
 		_bokehDoFParamsBuffer->Write(&paramsCopy, sizeof(paramsCopy));
 		graphics->SetConstantBufferPS(6, _bokehDoFParamsBuffer);
 
-		guiRenderer->StartFrame();
+		// NOTE: do NOT wrap this in guiRenderer->StartFrame()/EndFrame() - this
+		// path runs from inside RenderOverlays which has already begun a frame,
+		// and a nested EndFrame would flush the outer draw list against our
+		// scratch RT (visible as a grey screen because the queued UI draws land
+		// in the wrong place and then get copied over the beauty buffer).
 		graphics->SetRenderTarget(scratchRT);
 		graphics->SetTexture2D(0, _beautyRT);
 		graphics->SetTexture2D(1, normalDepthTex);
 		guiRenderer->FullScreenTexturedQuad(nullptr, _bokehDoFShader.get());
-		guiRenderer->EndFrame();
 
 		// Copy back so beauty carries the DoF'd image into the rest of the post
 		// chain. Cheap on D3D11 (a single CopyResource on same-format RTs).

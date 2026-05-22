@@ -427,10 +427,14 @@
 
 		output.velocity = velocity;
 
-		// Mirror DefaultPixel: encode model id + params into the features RT.
-		const float modelChannel = saturate((float)g_material.materialModel / 4.0f);
+		// Mirror DefaultPixel: encode (modelId, modelParams.w_quant) packed into
+		// .r so sheen can use all four modelParam channels for strength + RGB tint.
+		// See DefaultPixel.shader for the full layout description.
+		const uint idByte = (uint)g_material.materialModel;
+		const float wQuant = floor(saturate(g_material.modelParams.w) * 31.0f + 0.5f);
+		const float packedR = ((float)idByte * 32.0f + wQuant) / 255.0f;
 		output.feat = float4(
-			modelChannel,
+			packedR,
 			g_material.modelParams.x,
 			g_material.modelParams.y,
 			g_material.modelParams.z);

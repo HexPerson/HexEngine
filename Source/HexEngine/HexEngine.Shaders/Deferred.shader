@@ -231,19 +231,33 @@
 		// into g_shadowConfig.contactShadowParams by SetupPerShadowCasterBuffer; the
 		// .x channel is the enable flag, zero on non-directional casters so the
 		// branch naturally collapses.
-		if (g_shadowConfig.contactShadowParams.x > 0.5f)
+		// .x carries the fade-START distance (metres). Zero = disabled. The fade
+		// runs out to 1.5x that distance via smoothstep, so contact shadows
+		// concentrate near the camera and don't add screen-space-jitter noise to
+		// distant terrain (where TAA can't reconcile the noise across camera
+		// motion - the previously-observed volumetric-terrain mid-depth flicker).
+		if (g_shadowConfig.contactShadowParams.x > 0.0f)
 		{
-			const float contactShadow = ScreenSpaceContactShadow(
-				pixelPosWS.xyz,
-				lightDir,
-				normalize(pixelNormal.xyz),
-				GBUFFER_NORMAL,
-				g_pointSampler,
-				input.position.xy,
-				(int)g_shadowConfig.contactShadowParams.y,
-				g_shadowConfig.contactShadowParams.z,
-				g_shadowConfig.contactShadowParams.w);
-			depthValue *= contactShadow;
+			const float fadeStart = g_shadowConfig.contactShadowParams.x;
+			const float fadeEnd = fadeStart * 1.5f;
+			const float fadeWeight = 1.0f - smoothstep(fadeStart, fadeEnd, pixelNormal.w);
+			if (fadeWeight > 0.001f)
+			{
+				const float contactShadow = ScreenSpaceContactShadow(
+					pixelPosWS.xyz,
+					lightDir,
+					normalize(pixelNormal.xyz),
+					GBUFFER_NORMAL,
+					g_pointSampler,
+					input.position.xy,
+					(int)g_shadowConfig.contactShadowParams.y,
+					g_shadowConfig.contactShadowParams.z,
+					g_shadowConfig.contactShadowParams.w);
+				// Lerp between unshadowed (1.0) and contactShadow result based on
+				// distance fade so the multiply into depthValue is identity past
+				// the fade-end distance.
+				depthValue *= lerp(1.0f, contactShadow, fadeWeight);
+			}
 		}
 
 		float3 legacySunColour = getSunColour();
@@ -279,7 +293,7 @@
 			const float3 viewDir = g_eyePos.xyz - pixelPosWS.xyz;
 			const float3 featureBonus = ApplyMaterialFeatures(
 				modelId,
-				float4(features.g, features.b, features.a, 1.0f - 0.5f * (features.b + features.a)),
+				float4(features.g, features.b, features.a, DecodePackedModelParamW(features.r)),
 				normalize(pixelNormal.xyz),
 				viewDir,
 				lightDir,
