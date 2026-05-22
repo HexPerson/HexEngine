@@ -83,7 +83,11 @@ namespace HexEngine::Weather
 		float cloudAnimationSpeed = 1.0f;
 
 		math::Vector3 windDirection = math::Vector3(1.0f, 0.0f, 0.15f);
-		float windSpeed = 34.0f;
+		// Halved from the original tuning - the old defaults (e.g. 34 for the
+		// fallback, 58 for sandstorm) produced visibly fast-moving cloud / debris
+		// motion that looked more like time-lapse than weather. Per-preset values
+		// in MakePresetState are halved to match.
+		float windSpeed = 17.0f;
 
 		float precipitationIntensity = 0.0f;
 		float precipitationAreaRadius = 30.0f;

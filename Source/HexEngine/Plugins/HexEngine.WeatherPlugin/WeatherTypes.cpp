@@ -65,7 +65,7 @@ namespace HexEngine::Weather
 			state.cloudCoverage = 0.18f;
 			state.cloudDensity = 0.55f;
 			state.cloudErosion = 0.45f;
-			state.windSpeed = 18.0f;
+			state.windSpeed = 9.0f;
 			state.fogDensity = 0.0012f;
 			state.fogHeightDensity = 0.0010f;
 			state.surface.temperatureBias = 0.2f;
@@ -121,7 +121,7 @@ namespace HexEngine::Weather
 			state.fogDensity = 0.0052f;
 			state.fogHeightDensity = 0.0056f;
 			state.fogSkyTintInfluence = 0.04f;
-			state.windSpeed = 26.0f;
+			state.windSpeed = 13.0f;
 			break;
 		case WeatherPresetId::HeavyRain:
 			state = MakePresetState(WeatherPresetId::Rain);
@@ -152,7 +152,7 @@ namespace HexEngine::Weather
 			state.fogDensity = 0.0068f;
 			state.fogHeightDensity = 0.0072f;
 			state.fogSkyTintInfluence = 0.02f;
-			state.windSpeed = 36.0f;
+			state.windSpeed = 18.0f;
 			break;
 		case WeatherPresetId::Storm:
 			state = MakePresetState(WeatherPresetId::HeavyRain);
@@ -185,7 +185,7 @@ namespace HexEngine::Weather
 			state.fogDensity = 0.0085f;
 			state.fogHeightDensity = 0.0090f;
 			state.fogSkyTintInfluence = 0.0f;
-			state.windSpeed = 42.0f;
+			state.windSpeed = 21.0f;
 			break;
 		case WeatherPresetId::Thunderstorm:
 			state = MakePresetState(WeatherPresetId::Storm);
@@ -223,7 +223,7 @@ namespace HexEngine::Weather
 			state.fogDensity = 0.0048f;
 			state.fogHeightDensity = 0.0052f;
 			state.fogSkyTintInfluence = 0.04f;
-			state.windSpeed = 16.0f;
+			state.windSpeed = 8.0f;
 			state.auroraIntensity = 0.0f;
 			break;
 		case WeatherPresetId::Blizzard:
@@ -255,7 +255,7 @@ namespace HexEngine::Weather
 			state.fogDensity = 0.0080f;
 			state.fogHeightDensity = 0.0086f;
 			state.fogSkyTintInfluence = 0.02f;
-			state.windSpeed = 48.0f;
+			state.windSpeed = 24.0f;
 			state.auroraIntensity = 0.0f;
 			break;
 		case WeatherPresetId::Hot:
@@ -267,7 +267,7 @@ namespace HexEngine::Weather
 			state.mieStrength = 1.45f;
 			state.sunHazeStrength = 1.35f;
 			state.fogDensity = 0.0018f;
-			state.windSpeed = 10.0f;
+			state.windSpeed = 5.0f;
 			break;
 		case WeatherPresetId::Sandstorm:
 			state.precipitationType = WeatherPrecipitationType::Sand;
@@ -284,7 +284,7 @@ namespace HexEngine::Weather
 			state.fogColour = math::Color(0.72f, 0.58f, 0.39f, 1.0f);
 			state.ambientLight = math::Vector4(0.42f, 0.34f, 0.24f, 1.0f);
 			state.windDirection = math::Vector3(0.75f, 0.0f, 0.35f);
-			state.windSpeed = 58.0f;
+			state.windSpeed = 29.0f;
 			break;
 		case WeatherPresetId::Custom:
 		default:
