@@ -1182,8 +1182,8 @@ namespace HexEngine
 			bufferData._colourGrading.exposure = r_exposure._val.f32 * _autoExposure.GetExposureMultiplier();
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
-			bufferData._colourGrading.hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
-			bufferData._colourGrading.hdrPeakNits = r_hdrPeakNits._val.f32;
+			bufferData._hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
+			bufferData._hdrPeakNits = r_hdrPeakNits._val.f32;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
 
 			// Shadowmap data

@@ -161,20 +161,6 @@ namespace HexEngine
 
 		math::Vector3 colourFilter;
 		float colour_pad;
-
-		// HDR display calibration. Driven by r_hdrPaperWhiteNits /
-		// r_hdrPeakNits HVars, consumed by TonemapHDR.shader to map
-		// post-tonemap output into absolute nits so the same scene reads
-		// the same brightness regardless of whether the swap chain is
-		// going through DWM composition (editor windowed) or Independent
-		// Flip (launcher fullscreen-borderless). Without these two paths
-		// disagreed by up to 2x because DWM rescales scRGB against the
-		// Windows "SDR content brightness" slider while Independent Flip
-		// hands the linear values to the display verbatim.
-		float hdrPaperWhiteNits;   // scRGB output value 1.0 lands here in nits (Win11 default ~200)
-		float hdrPeakNits;         // display max luminance from MaxLuminance (typically 600-1500)
-		float hdr_pad0;
-		float hdr_pad1;
 	};
 
 	/** @brief Weather surface/material parameters uploaded per frame for weather-aware shaders. */
@@ -267,6 +253,24 @@ namespace HexEngine
 		math::Vector2 _jitterOffsets;
 		uint32_t _frame;
 		float _chromaticAbberationAmmount;
+
+		// HDR display calibration. Driven by r_hdrPaperWhiteNits /
+		// r_hdrPeakNits HVars, consumed by TonemapHDR.shader to map
+		// post-tonemap output into absolute nits so the same scene reads
+		// the same brightness regardless of whether the swap chain is
+		// going through DWM composition (editor windowed) or Independent
+		// Flip (launcher fullscreen-borderless).
+		//
+		// IMPORTANT: keep these at the END of the cbuffer. The shader
+		// build system only recompiles .shader files whose own source
+		// changed - if we add fields mid-buffer, any shader that wasn't
+		// touched still has the old offsets and reads garbage for every
+		// field past the insertion point. Appending at the end is safe
+		// because old shaders ignore the trailing bytes.
+		float _hdrPaperWhiteNits;
+		float _hdrPeakNits;
+		float _hdr_pad0;
+		float _hdr_pad1;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

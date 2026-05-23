@@ -126,15 +126,6 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 
 		float3 colourFilter;
 		float colour_pad;
-
-		// HDR display calibration. See RenderStructs.hpp ColourGradeSettings
-		// for the full reasoning; in short these let TonemapHDR.shader
-		// output absolute nits via the scRGB scale 1.0 = 80 nits so DWM
-		// composition and Independent Flip paths produce the same brightness.
-		float hdrPaperWhiteNits;
-		float hdrPeakNits;
-		float hdr_pad0;
-		float hdr_pad1;
 	};
 
 	struct WeatherSurfaceParams
@@ -215,6 +206,16 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float2 g_jitterOffsets;
 		uint g_frame;
 		float g_chromaticAbberationAmmount;
+
+		// HDR display calibration. Kept at the END of the cbuffer so
+		// shaders not recompiled when these were added still have
+		// correct offsets for the rest of the buffer (old shaders just
+		// don't read these last 16 bytes). See RenderStructs.hpp for
+		// the full reasoning.
+		float g_hdrPaperWhiteNits;
+		float g_hdrPeakNits;
+		float g_hdr_pad0;
+		float g_hdr_pad1;
 	};
 
 	struct MaterialProps

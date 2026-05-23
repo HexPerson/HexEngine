@@ -60,12 +60,12 @@
 		// over 1.0 = 1 stop of headroom consumed); divided by 4 it takes
 		// ~16x over-white to consume the full headroom, which leaves room
 		// for very bright sources without clipping the display.
-		const float headroomNits = max(g_colourGrading.hdrPeakNits - g_colourGrading.hdrPaperWhiteNits, 0.0f);
+		const float headroomNits = max(g_hdrPeakNits - g_hdrPaperWhiteNits, 0.0f);
 		const float3 highlightLog = log2(1.0f + max(colour - 1.0f, 0.0f));
 		const float3 highlightNits = saturate(highlightLog * 0.25f) * headroomNits;
 
 		// Compose absolute nits, then convert to scRGB (1.0 = 80 nits).
-		const float3 totalNits = baseRange * g_colourGrading.hdrPaperWhiteNits + highlightNits;
+		const float3 totalNits = baseRange * g_hdrPaperWhiteNits + highlightNits;
 		return totalNits / 80.0f;
 	}
 
