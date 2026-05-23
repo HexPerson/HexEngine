@@ -27,6 +27,19 @@ namespace HexEngine
 		bool Load(SceneSaveProgressCallback callback = nullptr);
 		bool Load(std::shared_ptr<Scene> loadIntoExistingScene, SceneSaveProgressCallback callback = nullptr);
 
+		// Load entry points that bypass disk I/O - used by PrefabLoader's
+		// LoadResourceFromMemory path so prefabs streamed out of an
+		// AssetPackage (.pkg) can be deserialized without ever touching the
+		// disk. Internally route to the same LoadFromJson body the disk
+		// Load() does.
+		bool LoadFromMemory(const std::vector<uint8_t>& data, std::shared_ptr<Scene> loadIntoExistingScene, SceneSaveProgressCallback callback = nullptr);
+		// Non-const json& because the downstream Scene::Load(json&, JsonFile*)
+		// hook takes a mutable reference (deserialization sometimes mutates the
+		// document, e.g. fixing up legacy fields in-place). Callers always
+		// construct a local json from the buffer/file so handing it through
+		// mutable is fine.
+		bool LoadFromJson(json& sceneData, std::shared_ptr<Scene> loadIntoExistingScene, SceneSaveProgressCallback callback = nullptr);
+
 		// Save all entities in the scene
 		bool Save();
 

@@ -28,5 +28,13 @@ namespace HexEngine
 		virtual Dialog*						CreateEditorDialog(const std::vector<fs::path>& paths) override;
 		virtual void						SaveResource(IResource* resource, const fs::path& path) override;
 		virtual bool						DoesSupportHotLoading() override { return true; }
+
+	private:
+		// Shared parsing body used by both the file-path and memory loading
+		// entry points. Takes any DiskFile-derived reader (real DiskFile when
+		// loading from disk, MemoryFile when loading from a .pkg buffer) - all
+		// the binary parsing uses the inherited Read<T> / ReadString templates
+		// which route through the virtual Read(void*, uint32_t) override.
+		std::shared_ptr<IResource>	ParseMeshFromReader(class DiskFile& reader, const fs::path& sourcePath, const fs::path& relativeKey, FileSystem* fileSystem, const struct MeshLoadOptions* meshOpts);
 	};
 }

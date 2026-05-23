@@ -447,18 +447,21 @@ std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromMemor
 		return (char)c;
 		});
 
+	// Assimp's memory-importer needs the extension WITHOUT the dot as a
+	// format hint so it can route to the right codec. e.g. ".fbx" -> "fbx".
 	std::string hint = relativePath.extension().string();
+	if (!hint.empty() && hint.front() == '.')
+		hint.erase(0, 1);
 
-	/*const aiScene* modelScene = importer.ReadFileFromMemory(
+	// Was previously calling importer.ReadFile() which only works for assets
+	// on disk - that broke the moment LoadResourceFromMemory was called on a
+	// model streamed out of an AssetPackage. ReadFileFromMemory takes the
+	// bytes + the format hint and does the same thing.
+	const aiScene* modelScene = importer.ReadFileFromMemory(
 		data.data(),
 		data.size(),
 		AssimpImportFlags,
-		newPath.c_str()
-	);*/
-
-	const aiScene* modelScene = importer.ReadFile(
-		newPath,
-		AssimpImportFlags
+		hint.c_str()
 	);
 
 	if (modelScene == nullptr)

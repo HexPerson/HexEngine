@@ -85,17 +85,10 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> MaterialLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		std::string materialData((const char*)data.data(), data.size());
-
-		KeyValues kv;
-		if(kv.Parse(materialData) == false)
-		{
-			LOG_CRIT("Failed to parse key values from material file '%s'", relativePath.string().c_str());
-			return nullptr;
-		}
+		std::string materialData(reinterpret_cast<const char*>(data.data()), data.size());
 
 		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material, ResourceDeleter());
-		
+
 		json matData;
 		if (!TryParseMaterialJson(materialData, matData))
 		{
@@ -103,7 +96,15 @@ namespace HexEngine
 			return nullptr;
 		}
 
-		//ParseJson(&file, matData, material);
+		// ParseJson uses JsonFile only for its Deserialize template methods,
+		// which operate purely on the in-memory json object - they don't touch
+		// the file stream. So a stack-only JsonFile constructed with the
+		// virtual relative path (no Open() call) is enough to drive the
+		// existing parsing code unchanged. Keeps the file-mode and memory-mode
+		// paths converging on the same ParseJson entry point so material
+		// features added in either don't drift.
+		JsonFile virtualFile(relativePath, std::ios::in);
+		ParseJson(&virtualFile, matData, material);
 
 		_loadedMaterials[relativePath] = material;
 
