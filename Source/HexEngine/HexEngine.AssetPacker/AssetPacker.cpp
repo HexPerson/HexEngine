@@ -182,6 +182,23 @@ int main(int argc, const char* argv[])
 				std::replace(entry.relativePath.begin(), entry.relativePath.end(), L'\\', L'/');
 				entry.uncompressedSize = fileSize;
 
+				// AssetTocEntry::relativePath is wchar_t[128]; anything that
+				// would overflow it must be skipped here. wcscpy_s in the
+				// write step would otherwise invoke MSVC's invariant handler
+				// (abort) on the over-long copy - which was the silent crash
+				// observed between "Adding N files..." and "Successfully
+				// wrote..." on projects with deeply nested assets.
+				constexpr size_t kMaxRelativePathChars = 127;
+				if (entry.relativePath.size() > kMaxRelativePathChars)
+				{
+					std::lock_guard<std::mutex> lock(logMutex);
+					std::wcerr << L"Skipping '" << entry.relativePath
+						<< L"': relative path is " << entry.relativePath.size()
+						<< L" wide chars, exceeds the " << kMaxRelativePathChars
+						<< L"-char limit of AssetTocEntry::relativePath." << std::endl;
+					continue;
+				}
+
 				const bool tryCompress = compress && !isAlreadyCompressed(path);
 				if (tryCompress)
 				{
@@ -259,7 +276,11 @@ int main(int argc, const char* argv[])
 	{
 		HexEngine::AssetTocEntry& toc = tocEntries[i];
 		std::memset(&toc, 0, sizeof(toc));
-		wcscpy_s(toc.relativePath, entries[i].relativePath.c_str());
+		// _TRUNCATE prevents wcsncpy_s from invoking the invariant handler
+		// even if a too-long path somehow slipped past the worker's filter
+		// above; the worker already warns + skips, so we should never hit
+		// the truncation case here in practice.
+		wcsncpy_s(toc.relativePath, entries[i].relativePath.c_str(), _TRUNCATE);
 		toc.offset = cursor;
 		toc.compressedSize = static_cast<uint32_t>(entries[i].diskBytes.size());
 		toc.uncompressedSize = entries[i].uncompressedSize;
