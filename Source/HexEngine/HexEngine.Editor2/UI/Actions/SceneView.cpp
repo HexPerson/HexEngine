@@ -2,6 +2,7 @@
 #include "SceneView.hpp"
 #include "../EditorUI.hpp"
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
+#include <HexEngine.Core/Graphics/IShader.hpp>
 #include <algorithm>
 #include <unordered_set>
 
@@ -50,7 +51,16 @@ namespace HexEditor
 			SceneSurface(HexEngine::Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
 				HexEngine::Element(parent, position, size)
 			{
+				// Lazy-load on first render. Same shader the launcher uses to
+				// copy the camera RT to the HDR backbuffer - using it here
+				// keeps the editor preview in lockstep with the shipped game.
+				_hdrPresentShader = HexEngine::IShader::Create("EngineData.Shaders/PresentHDR.hcs");
 			}
+
+		private:
+			std::shared_ptr<HexEngine::IShader> _hdrPresentShader;
+
+		public:
 
 			virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override
 			{
@@ -60,10 +70,44 @@ namespace HexEditor
 					{
 						const auto absPos = GetAbsolutePosition();
 
-						renderer->FillTexturedQuad(mainCamera->GetRenderTarget(),
-							absPos.x, absPos.y,
-							_size.x, _size.y,
-							math::Color(1, 1, 1, 1));
+						// Display the camera RT via the scene-RT present shader,
+						// not the default UI shader. On an HDR backbuffer the
+						// default (UIBasicHDR) applies saturate + sRGB gamma +
+						// 1.9x scale which is correct for sRGB UI textures but
+						// destroys the already-tonemapped scRGB content the
+						// camera RT contains (clips all HDR values above 1.0,
+						// re-gammas, and over-brightens). The launcher uses
+						// PresentHDR.hcs for this same job - match it here so
+						// the editor preview faithfully reflects what ships.
+						//
+						// On SDR backbuffers the default shader is correct: the
+						// camera RT contains gamma-encoded sRGB output from
+						// Tonemap.hcs and the swap chain expects gamma-encoded
+						// sRGB. So gate the HDR-shader override on backbuffer
+						// format, mirroring the launcher's gate in
+						// Game3DEnvironment::Run.
+						auto* backBuffer = HexEngine::g_pEnv->_graphicsDevice->GetBackBuffer();
+						const bool hdrBackBuffer = backBuffer != nullptr
+							&& backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT;
+						HexEngine::IShader* presentShader = hdrBackBuffer
+							? _hdrPresentShader.get()
+							: nullptr;
+
+						if (presentShader != nullptr)
+						{
+							renderer->FillTexturedQuadWithShader(mainCamera->GetRenderTarget(),
+								absPos.x, absPos.y,
+								_size.x, _size.y,
+								math::Color(1, 1, 1, 1),
+								presentShader);
+						}
+						else
+						{
+							renderer->FillTexturedQuad(mainCamera->GetRenderTarget(),
+								absPos.x, absPos.y,
+								_size.x, _size.y,
+								math::Color(1, 1, 1, 1));
+						}
 					}
 				}
 			}

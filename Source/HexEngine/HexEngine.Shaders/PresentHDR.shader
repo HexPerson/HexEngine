@@ -26,37 +26,21 @@
 	Texture2D shaderTexture : register(t0);
 	SamplerState PointSampler : register(s3);
 
-	// Match UIBasicHDR.hcs exactly. This shader is run by the launcher to
-	// copy the camera RT to the HDR backbuffer; the editor displays the
-	// same camera RT via FillTexturedQuad which routes through
-	// _activeBasicShader = UIBasicHDR on an HDR backbuffer. If the two
-	// shaders disagree, the launcher's shipped view diverges from the
-	// editor preview the user authors against. Keeping them in lockstep
-	// is more important than the HDR-purity argument for a "proper"
-	// passthrough - the editor preview defines authored intent.
+	// True passthrough. The camera RT already contains fully-tonemapped
+	// scRGB output from TonemapHDR.hcs (post-ACES values converted to
+	// absolute nits via r_hdrPaperWhiteNits / r_hdrPeakNits, then divided
+	// by 80 to land in scRGB where 1.0 = 80 nits). The HDR backbuffer
+	// expects scRGB linear, so any transformation here (saturate / gamma /
+	// scale) would corrupt the calibrated tonemap output.
 	//
-	// Specifically:
-	//   - saturate() clips above 1.0 so all bright pixels clump at the
-	//     same peak value (the perceptual "HDR pop" the user sees in the
-	//     editor). Real HDR extended-range output would spread bright
-	//     values across the headroom and read as flat-by-comparison.
-	//   - pow(..., 2.2) gamma-decodes assuming input is sRGB encoded.
-	//     The camera RT isn't really sRGB after TonemapHDR but the curve
-	//     pushes mid-tones up in a way the user has authored against.
-	//   - 1.9x scale brightens to compete with bright HDR UI tints on a
-	//     real HDR display.
-	float3 SrgbToLinear(float3 colour)
-	{
-		return pow(saturate(colour), 2.2f);
-	}
-
-	static const float kHdrUiScale = 1.9f;
-
+	// This is the SCENE-RT present shader specifically; UI elements drawn
+	// on top of the scene use UIBasicHDR.hcs (also via _activeBasicShader)
+	// which DOES apply saturate + gamma + 1.9x scaling, because UI assets
+	// are sRGB-encoded textures that need decoding and brightening to
+	// composite correctly on an HDR-display backbuffer. The two shaders
+	// look similar but have different jobs - don't merge them.
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
-		float4 texel = shaderTexture.Sample(PointSampler, input.texcoord);
-		float3 linearTexture = SrgbToLinear(texel.rgb);
-		float3 linearTint = SrgbToLinear(input.colour.rgb);
-		return float4(linearTexture * linearTint * kHdrUiScale, texel.a * input.colour.a);
+		return shaderTexture.Sample(PointSampler, input.texcoord) * input.colour;
 	}
 }
