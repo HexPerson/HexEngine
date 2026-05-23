@@ -19,7 +19,16 @@
 #pragma comment(lib, "dxgi.lib")
 
 HexEngine::HVar r_vsync("r_vsync", "The type of V-Sync to use. 0 = Off, 1 = Full, 2 = Half", 0, 0, 2);
-HexEngine::HVar r_hdrOutput("r_hdrOutput", "Enable HDR scRGB output when supported by the active display", true, false, true);
+// Default OFF. HDR-display reporting on Windows is unreliable - many
+// "HDR400" panels and several HDMI links report HDR-capable but render
+// scRGB-tonemapped output as if the swap chain were SDR, blowing the
+// whole frame out (the TonemapHDR shader's 1.45x scene scale + log
+// highlights are calibrated for a genuinely HDR-mapped display). Same
+// trap Unreal/Unity hit, both ship with HDR output disabled by default
+// for the same reason. Users who actually have a calibrated HDR
+// display can flip this on via Settings; the editor preview never
+// touches this path so it's only the shipped launcher that's affected.
+HexEngine::HVar r_hdrOutput("r_hdrOutput", "Enable HDR scRGB output when supported by the active display", false, false, true);
 
 /*GraphicsSystemD3D11::GraphicsSystemD3D11() :
 	_device(nullptr),
