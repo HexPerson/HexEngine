@@ -135,7 +135,7 @@
       <Command>copy "$(TargetDir)$(TargetName).exe" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).exe"
 
 cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
-::"HexEngine.AssetPacker.exe"  --input "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)\Data" --output "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)\Data\AssetPackages\StandardAssets.pkg"</Command>
+::"HexEngine.AssetPacker.exe"  --input "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)\Data" --output "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)\Data\AssetPackages\EngineData.pkg"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -173,6 +173,7 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClInclude Include="UI\Elements\EntityList.hpp" />
     <ClInclude Include="UI\Actions\MaterialEditor.hpp" />
     <ClInclude Include="UI\Actions\NavMeshTool.hpp" />
+    <ClInclude Include="UI\Actions\BuildDialog.hpp" />
     <ClInclude Include="UI\Actions\ProjectGenerator.hpp" />
     <ClInclude Include="UI\Actions\ProjectManager.hpp" />
     <ClInclude Include="UI\Actions\Settings.hpp" />
@@ -196,6 +197,7 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClCompile Include="UI\Elements\EntityList.cpp" />
     <ClCompile Include="UI\Actions\MaterialEditor.cpp" />
     <ClCompile Include="UI\Actions\NavMeshTool.cpp" />
+    <ClCompile Include="UI\Actions\BuildDialog.cpp" />
     <ClCompile Include="UI\Actions\ProjectGenerator.cpp" />
     <ClCompile Include="UI\Actions\ProjectManager.cpp" />
     <ClCompile Include="UI\Actions\Explorer.cpp" />

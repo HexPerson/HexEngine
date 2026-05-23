@@ -295,6 +295,149 @@ namespace HexEditor
 		return buildService.Build(_buildProjectPath, g_pEditor->_projectFS->GetBaseDirectory(), msbuildPath, _reloadGeneration);
 	}
 
+	bool GameIntegrator::PackageAssets(bool compress, const fs::path& outputPkg)
+	{
+		if (g_pEditor == nullptr || g_pEditor->_projectFS == nullptr)
+		{
+			LOG_CRIT("Cannot package assets: editor project is not open.");
+			return false;
+		}
+
+		const fs::path projectBaseDir = g_pEditor->_projectFS->GetBaseDirectory();
+		const fs::path dataDir = projectBaseDir / L"Data";
+		if (!fs::exists(dataDir) || !fs::is_directory(dataDir))
+		{
+			LOG_CRIT("Cannot package assets: project Data directory does not exist at '%S'.", dataDir.wstring().c_str());
+			return false;
+		}
+
+		const fs::path resolvedOutput = outputPkg.empty()
+			? (projectBaseDir / L"Build" / L"GameData.pkg")
+			: outputPkg;
+		std::error_code ec;
+		fs::create_directories(resolvedOutput.parent_path(), ec);
+
+		// Locate the AssetPacker executable. The editor exe and the asset packer
+		// exe are both built into the engine's output bin directory next to
+		// HexEngine.Launcher.exe / HexEngine.Editor.exe; look there first.
+		wchar_t exeBuf[MAX_PATH] = {};
+		GetModuleFileNameW(nullptr, exeBuf, MAX_PATH);
+		const fs::path editorExeDir = fs::path(exeBuf).parent_path();
+		const fs::path packerExe = editorExeDir / L"HexEngine.AssetPacker.exe";
+		if (!fs::exists(packerExe))
+		{
+			LOG_CRIT("Cannot package assets: HexEngine.AssetPacker.exe not found next to the editor at '%S'.", packerExe.wstring().c_str());
+			return false;
+		}
+
+		const fs::path logPath = projectBaseDir / L"Build" / L"AssetPack.log";
+		fs::create_directories(logPath.parent_path(), ec);
+
+		SECURITY_ATTRIBUTES sa = {};
+		sa.nLength = sizeof(sa);
+		sa.bInheritHandle = TRUE;
+
+		HANDLE logFile = CreateFileW(
+			logPath.wstring().c_str(),
+			GENERIC_WRITE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE,
+			&sa,
+			CREATE_ALWAYS,
+			FILE_ATTRIBUTE_NORMAL,
+			nullptr);
+		if (logFile == INVALID_HANDLE_VALUE)
+		{
+			LOG_CRIT("Could not create asset pack log file '%S'. Error: %d", logPath.wstring().c_str(), GetLastError());
+			return false;
+		}
+
+		// cxxopts needs `-C true` / `-C false` explicitly; the AssetPacker's
+		// compression flag is `cxxopts::value<bool>()` without an implicit
+		// value, so we always pass it explicitly.
+		std::wstring commandLine = std::format(
+			L"{} -I {} -O {} -C {}",
+			QuoteForCommandLine(packerExe),
+			QuoteForCommandLine(dataDir),
+			QuoteForCommandLine(resolvedOutput),
+			compress ? L"true" : L"false");
+
+		STARTUPINFOW si = {};
+		si.cb = sizeof(si);
+		si.dwFlags = STARTF_USESTDHANDLES;
+		si.hStdOutput = logFile;
+		si.hStdError = logFile;
+		si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+		PROCESS_INFORMATION pi = {};
+		std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
+		mutableCommand.push_back(L'\0');
+
+		LOG_INFO("Packaging game assets with command: %S", commandLine.c_str());
+		LOG_INFO("Writing asset pack log to '%S'", logPath.wstring().c_str());
+
+		if (!CreateProcessW(
+			nullptr,
+			mutableCommand.data(),
+			nullptr,
+			nullptr,
+			TRUE,
+			CREATE_NO_WINDOW,
+			nullptr,
+			editorExeDir.wstring().c_str(),
+			&si,
+			&pi))
+		{
+			const auto error = GetLastError();
+			CloseHandle(logFile);
+			LOG_CRIT("Could not start AssetPacker. Error: %d", error);
+			return false;
+		}
+
+		WaitForSingleObject(pi.hProcess, INFINITE);
+
+		DWORD exitCode = 1;
+		GetExitCodeProcess(pi.hProcess, &exitCode);
+		CloseHandle(pi.hThread);
+		CloseHandle(pi.hProcess);
+		CloseHandle(logFile);
+
+		if (exitCode != 0)
+		{
+			// Tail the log on failure so the user sees the AssetPacker error in
+			// the editor console without having to dig out a file.
+			std::ifstream logStream(logPath);
+			if (logStream)
+			{
+				std::deque<std::string> tail;
+				std::string line;
+				while (std::getline(logStream, line))
+				{
+					if (!line.empty())
+					{
+						tail.push_back(line);
+						if (tail.size() > 12)
+							tail.pop_front();
+					}
+				}
+
+				for (const auto& tailLine : tail)
+					LOG_WARN("AssetPacker: %s", tailLine.c_str());
+			}
+
+			LOG_CRIT("AssetPacker failed with exit code %d. See '%S'", exitCode, logPath.wstring().c_str());
+			return false;
+		}
+
+		if (!fs::exists(resolvedOutput))
+		{
+			LOG_CRIT("AssetPacker reported success but '%S' does not exist", resolvedOutput.wstring().c_str());
+			return false;
+		}
+
+		LOG_INFO("Asset package written to '%S'", resolvedOutput.wstring().c_str());
+		return true;
+	}
+
 	bool GameIntegrator::RunGame()
 	{
 		if ((!_gameExtension || !_runtimeFS || !_gameDll) && !LoadGame())

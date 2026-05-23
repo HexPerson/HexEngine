@@ -36,6 +36,23 @@ namespace HexEditor
 		 * @return True when build succeeded.
 		 */
 		bool BuildGame(const std::wstring& projectFileName = L"");
+
+		/**
+		 * @brief Packages the project's Data/ folder into GameData.pkg via the
+		 *        HexEngine.AssetPacker.exe tool.
+		 *
+		 * The output `.pkg` is dropped at `<projectBaseDir>/Build/GameData.pkg`
+		 * unless a custom output path is provided. The shipped game runtime
+		 * auto-mounts any GameData.pkg sitting next to its executable.
+		 *
+		 * @param compress  Pass-through to AssetPacker's `--compression` flag.
+		 *                  Brotli-compresses the final blob; trades startup
+		 *                  decode time for on-disk size.
+		 * @param outputPkg Optional override for the .pkg destination. Empty
+		 *                  uses the default `<project>/Build/GameData.pkg`.
+		 * @return True if AssetPacker exits 0 AND the output file exists.
+		 */
+		bool PackageAssets(bool compress = true, const fs::path& outputPkg = {});
 		/** @brief Loads the game DLL and creates the game extension instance. */
 		bool LoadGame();
 		/** @brief Enters play mode and invokes game startup callbacks. */
