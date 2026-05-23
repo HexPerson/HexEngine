@@ -26,19 +26,37 @@
 	Texture2D shaderTexture : register(t0);
 	SamplerState PointSampler : register(s3);
 
-	// Pure passthrough. The camera RT already contains the fully tonemapped
-	// scRGB output from TonemapHDR.hcs (which maps post-ACES values into
-	// absolute nits via r_hdrPaperWhiteNits / r_hdrPeakNits, then converts
-	// to scRGB with the canonical 1.0 = 80 nits scale). Any extra multiply
-	// here gets applied ON TOP of the calibrated output and only happens in
-	// the launcher (Game3DEnvironment::Run gates this present pass behind
-	// !_inEditorMode), so it shows up as a launcher-only over-brightness
-	// vs the editor preview. The previous 1.15x "scene scale" was leftover
-	// compensation for the old TonemapHDR's broken pre-multiply (the same
-	// kind of double-scale bug as the 1.45x kHdrSceneViewScale we already
-	// removed from TonemapHDR.shader).
+	// Match UIBasicHDR.hcs exactly. This shader is run by the launcher to
+	// copy the camera RT to the HDR backbuffer; the editor displays the
+	// same camera RT via FillTexturedQuad which routes through
+	// _activeBasicShader = UIBasicHDR on an HDR backbuffer. If the two
+	// shaders disagree, the launcher's shipped view diverges from the
+	// editor preview the user authors against. Keeping them in lockstep
+	// is more important than the HDR-purity argument for a "proper"
+	// passthrough - the editor preview defines authored intent.
+	//
+	// Specifically:
+	//   - saturate() clips above 1.0 so all bright pixels clump at the
+	//     same peak value (the perceptual "HDR pop" the user sees in the
+	//     editor). Real HDR extended-range output would spread bright
+	//     values across the headroom and read as flat-by-comparison.
+	//   - pow(..., 2.2) gamma-decodes assuming input is sRGB encoded.
+	//     The camera RT isn't really sRGB after TonemapHDR but the curve
+	//     pushes mid-tones up in a way the user has authored against.
+	//   - 1.9x scale brightens to compete with bright HDR UI tints on a
+	//     real HDR display.
+	float3 SrgbToLinear(float3 colour)
+	{
+		return pow(saturate(colour), 2.2f);
+	}
+
+	static const float kHdrUiScale = 1.9f;
+
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
-		return shaderTexture.Sample(PointSampler, input.texcoord) * input.colour;
+		float4 texel = shaderTexture.Sample(PointSampler, input.texcoord);
+		float3 linearTexture = SrgbToLinear(texel.rgb);
+		float3 linearTint = SrgbToLinear(input.colour.rgb);
+		return float4(linearTexture * linearTint * kHdrUiScale, texel.a * input.colour.a);
 	}
 }
