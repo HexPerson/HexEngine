@@ -24,5 +24,10 @@ public:
 	virtual bool DecompressData(const std::vector<uint8_t>& data, std::vector<uint8_t>& output) override;
 
 private:
-	const uint32_t CompressionQuality = 9;
+	// Brotli's cost curve is non-linear: quality 11 is ~10x slower than 9
+	// and ~80x slower than 4 with single-digit % size win. Quality 5 is the
+	// usual sweet spot for build-time / runtime packing (AssetPacker,
+	// VolumetricTerrain chunk persistence). Bump only if you're shipping a
+	// static-distribution artifact where pack time is irrelevant.
+	const uint32_t CompressionQuality = 5;
 };

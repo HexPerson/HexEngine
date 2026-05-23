@@ -4,6 +4,12 @@
 #include <cxxopts.hpp>
 #include <brotli\encode.h>
 #include <cstring>
+#include <algorithm>
+#include <atomic>
+#include <cwctype>
+#include <mutex>
+#include <set>
+#include <thread>
 
 //HVar* HexEngine::g_hvars = nullptr;
 //HCommand* HexEngine::g_commands = nullptr;
@@ -85,80 +91,140 @@ int main(int argc, const char* argv[])
 		bool isCompressed = false;
 	};
 
-	std::vector<PackerFileEntry> entries;
-
+	// Walk the input tree once on a single thread, collecting candidate
+	// file paths. Filesystem enumeration is cheap; the slow part is the
+	// per-file read + Brotli encode, which we farm out to a thread pool
+	// below.
+	std::vector<fs::path> candidatePaths;
 	for (auto const& dir_entry : std::filesystem::recursive_directory_iterator{ inputPath })
 	{
 		if (dir_entry.is_directory())
 			continue;
-
 		if (dir_entry.is_regular_file() == false)
 			continue;
 
 		const auto& path = dir_entry.path();
-
 		if (path.string().find("\\Cache\\") != std::string::npos)
 			continue;
-
 		if (path.string().find(".pkg") != std::string::npos)
 			continue;
 
-		HexEngine::DiskFile diskFile(path, std::ios::binary | std::ios::in);
+		candidatePaths.push_back(path);
+	}
 
-		if (diskFile.Open() == false)
-			continue;
+	if (candidatePaths.empty())
+	{
+		std::cerr << "No files were added to the archive" << std::endl;
+		return 0;
+	}
 
-		const uint32_t fileSize = diskFile.GetSize();
+	// Extensions whose contents are already compressed (DEFLATE, DCT,
+	// block-compressed textures, etc.). Brotli almost never beats their
+	// existing entropy and the encode time is pure waste, so we skip the
+	// compression attempt entirely and write the bytes raw.
+	auto isAlreadyCompressed = [](const fs::path& p) -> bool
+	{
+		static const std::set<std::wstring> kSkip = {
+			L".png", L".jpg", L".jpeg", L".gif", L".webp", L".dds", L".ktx", L".ktx2",
+			L".ogg", L".mp3", L".m4a", L".aac", L".opus", L".flac",
+			L".mp4", L".webm", L".mkv", L".mov",
+			L".zip", L".7z", L".gz", L".bz2", L".xz", L".rar", L".lz4", L".zst",
+			L".woff", L".woff2",
+		};
+		auto ext = p.extension().wstring();
+		std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+		return kSkip.count(ext) > 0;
+	};
 
-		std::vector<uint8_t> raw(fileSize);
-		diskFile.Read(raw.data(), fileSize);
-		diskFile.Close();
+	// Result slots are pre-sized; each worker writes to its own index so
+	// there's no contention on the output vector. A default-constructed
+	// PackerFileEntry has an empty relativePath, which we use as a "skip"
+	// sentinel after the workers finish (e.g. for files that failed to
+	// open).
+	std::vector<PackerFileEntry> entries(candidatePaths.size());
 
-		PackerFileEntry entry;
-		entry.relativePath = fs::relative(path, inputPath).wstring();
-		std::replace(entry.relativePath.begin(), entry.relativePath.end(), L'\\', L'/');
-		entry.uncompressedSize = fileSize;
+	std::atomic<size_t> nextIndex{ 0 };
+	std::mutex logMutex;
+	const unsigned threadCount = std::max(1u, std::thread::hardware_concurrency());
 
-		if (compress)
+	std::cout << "Packing " << candidatePaths.size() << " files with "
+		<< threadCount << " worker thread(s)..." << std::endl;
+
+	std::vector<std::thread> workers;
+	workers.reserve(threadCount);
+	for (unsigned t = 0; t < threadCount; ++t)
+	{
+		workers.emplace_back([&]()
 		{
-			std::vector<uint8_t> compressedBytes;
-			if (HexEngine::g_pEnv->_compressionProvider->CompressData(raw, compressedBytes))
+			while (true)
 			{
-				// Only adopt the compressed form when it actually saves space;
-				// already-compressed assets (png, dds with DXTn, etc.) can
-				// blow up under another pass of Brotli.
-				if (compressedBytes.size() < raw.size())
+				const size_t i = nextIndex.fetch_add(1, std::memory_order_relaxed);
+				if (i >= candidatePaths.size())
+					return;
+
+				const auto& path = candidatePaths[i];
+
+				HexEngine::DiskFile diskFile(path, std::ios::binary | std::ios::in);
+				if (diskFile.Open() == false)
 				{
-					entry.diskBytes = std::move(compressedBytes);
-					entry.isCompressed = true;
+					std::lock_guard<std::mutex> lock(logMutex);
+					std::cerr << "Failed to open '" << path.string() << "', skipping." << std::endl;
+					continue;
+				}
+
+				const uint32_t fileSize = diskFile.GetSize();
+				std::vector<uint8_t> raw(fileSize);
+				diskFile.Read(raw.data(), fileSize);
+				diskFile.Close();
+
+				PackerFileEntry entry;
+				entry.relativePath = fs::relative(path, inputPath).wstring();
+				std::replace(entry.relativePath.begin(), entry.relativePath.end(), L'\\', L'/');
+				entry.uncompressedSize = fileSize;
+
+				const bool tryCompress = compress && !isAlreadyCompressed(path);
+				if (tryCompress)
+				{
+					std::vector<uint8_t> compressedBytes;
+					if (HexEngine::g_pEnv->_compressionProvider->CompressData(raw, compressedBytes)
+						&& compressedBytes.size() < raw.size())
+					{
+						entry.diskBytes = std::move(compressedBytes);
+						entry.isCompressed = true;
+					}
+					else
+					{
+						entry.diskBytes = std::move(raw);
+						entry.isCompressed = false;
+					}
 				}
 				else
 				{
 					entry.diskBytes = std::move(raw);
 					entry.isCompressed = false;
 				}
-			}
-			else
-			{
-				std::cerr << "Brotli compression failed for '" << path.string() << "', writing raw." << std::endl;
-				entry.diskBytes = std::move(raw);
-				entry.isCompressed = false;
-			}
-		}
-		else
-		{
-			entry.diskBytes = std::move(raw);
-			entry.isCompressed = false;
-		}
 
-		std::wcout << L"Adding file to archive: " << entry.relativePath
-			<< L", uncompressed = " << std::dec << entry.uncompressedSize
-			<< L", disk = " << entry.diskBytes.size()
-			<< (entry.isCompressed ? L" [brotli]" : L" [raw]")
-			<< std::endl;
+				{
+					std::lock_guard<std::mutex> lock(logMutex);
+					std::wcout << L"Adding file to archive: " << entry.relativePath
+						<< L", uncompressed = " << std::dec << entry.uncompressedSize
+						<< L", disk = " << entry.diskBytes.size()
+						<< (entry.isCompressed ? L" [brotli]" : L" [raw]")
+						<< std::endl;
+				}
 
-		entries.push_back(std::move(entry));
+				entries[i] = std::move(entry);
+			}
+		});
 	}
+	for (auto& th : workers)
+		th.join();
+
+	// Drop any slots whose worker failed to open the file (relativePath empty).
+	entries.erase(
+		std::remove_if(entries.begin(), entries.end(),
+			[](const PackerFileEntry& e) { return e.relativePath.empty(); }),
+		entries.end());
 
 	if (entries.empty())
 	{
