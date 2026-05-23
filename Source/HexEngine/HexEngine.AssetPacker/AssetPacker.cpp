@@ -82,7 +82,10 @@ int main(int argc, const char* argv[])
 
 		const auto& path = dir_entry.path();
 
-		if (path.string().find("AssetPackages") != std::string::npos)
+		if (path.string().find("\\Cache\\") != std::string::npos)
+			continue;
+
+		if (path.string().find(".pkg") != std::string::npos)
 			continue;		
 
 		HexEngine::DiskFile diskFile(path, std::ios::binary | std::ios::in);

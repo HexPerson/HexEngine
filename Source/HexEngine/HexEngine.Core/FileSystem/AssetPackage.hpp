@@ -7,10 +7,15 @@
 
 namespace HexEngine
 {
-	class AssetPackage : public IResource, public FileSystem
+	struct AssetPackageLoadOptions : ResourceLoadOptions
+	{
+		std::wstring fsName;
+	};
+
+	class HEX_API AssetPackage : public IResource, public FileSystem
 	{
 	public:
-		AssetPackage();
+		AssetPackage(const std::wstring& fsName);
 
 		void AddAsset(AssetHeader* file);
 
@@ -27,6 +32,8 @@ namespace HexEngine
 		virtual void GetFileData(const fs::path& absolutePath, std::vector<uint8_t>& data) override;
 
 		const std::map<std::wstring, std::vector<uint8_t>>& GetAssetMap() const;
+
+		static std::shared_ptr<AssetPackage> Create(const fs::path& path, const std::wstring& fsName);
 
 	private:
 		std::map<std::wstring, std::vector<uint8_t>> _assetMap;

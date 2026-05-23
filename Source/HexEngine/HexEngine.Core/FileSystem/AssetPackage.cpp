@@ -6,10 +6,10 @@
 
 namespace HexEngine
 {
-	AssetPackage::AssetPackage() :
-		FileSystem(GetAbsolutePath().filename().wstring())
+	AssetPackage::AssetPackage(const std::wstring& fsName) :
+		FileSystem(fsName)
 	{
-		g_pEnv->GetResourceSystem().AddFileSystem(this);
+		
 	}
 
 	void AssetPackage::Destroy()
@@ -68,5 +68,18 @@ namespace HexEngine
 	const std::map<std::wstring, std::vector<uint8_t>>& AssetPackage::GetAssetMap() const
 	{
 		return _assetMap;
+	}
+
+	std::shared_ptr<AssetPackage> AssetPackage::Create(const fs::path& path, const std::wstring& fsName)
+	{
+		AssetPackageLoadOptions opts;
+		opts.fsName = fsName;
+
+		auto ret = dynamic_pointer_cast<AssetPackage>(g_pEnv->GetResourceSystem().LoadResource(path, &opts));
+
+		if(ret)
+			g_pEnv->GetResourceSystem().AddFileSystem(ret.get());
+
+		return ret;
 	}
 }

@@ -63,8 +63,35 @@ namespace HexEngine
 
 		// Set up the file system
 		//
-		env->_fileSystem = new FileSystem(L"EngineData");	
-		env->_fileSystem->SetBaseDirectory(fs::current_path());		
+		// load the standard assets
+		// Create the resource system
+		//
+		env->_resourceSystem = new ResourceSystem;
+		env->_resourceSystem->Create();
+
+		env->_assetPackageManager = new AssetPackageManager;
+
+		if (fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
+		{
+			FileSystem* tempFs = new FileSystem(L"EngineDataTmp");
+			tempFs->SetBaseDirectory(fs::current_path());
+			env->_resourceSystem->AddFileSystem(tempFs);
+
+			LOG_INFO("Loading standard asset package");
+			env->_standardAssets = AssetPackage::Create("EngineDataTmp.AssetPackages/EngineAssets.pkg", L"EngineData");
+
+			if(env->_standardAssets)
+				env->_fileSystem = env->_standardAssets.get();
+
+			env->_resourceSystem->RemoveFileSystem(tempFs);
+
+			delete tempFs;
+		}
+		else
+		{
+			env->_fileSystem = new FileSystem(L"EngineData");
+			env->_fileSystem->SetBaseDirectory(fs::current_path());
+		}
 
 		// Create the log file
 		//
@@ -84,10 +111,7 @@ namespace HexEngine
 
 		LOG_DEBUG("TimeManager was successfully created (0x%p)", env->_timeManager);
 
-		// Create the resource system
-		//
-		env->_resourceSystem = new ResourceSystem;
-		env->_resourceSystem->Create();
+		
 		env->_resourceSystem->AddFileSystem(env->_fileSystem);
 
 		env->_inputSystem = new InputSystem;
@@ -111,8 +135,6 @@ namespace HexEngine
 				env->_inputSystem->SetMousePosition(options.window->GetClientWidth() / 2, options.window->GetClientHeight() / 2, true);
 			}
 		}
-
-		env->_assetPackageManager = new AssetPackageManager;
 
 		env->_pluginSystem = new PluginSystem;
 		if (auto numPluginsLoaded = env->_pluginSystem->LoadAllPlugins(); numPluginsLoaded > 0)
@@ -162,12 +184,6 @@ namespace HexEngine
 			env->_ssaoProvider = (ISSAOProvider*)env->_pluginSystem->CreateInterface(ISSAOProvider::InterfaceName);
 			env->_ssaoProvider->Create();
 		}
-
-		// load the standard assets
-#ifndef _DEBUG
-		//LOG_INFO("Loading standard asset package");
-		//env->_standardAssets = dynamic_pointer_cast<AssetPackage>(env->_resourceSystem->LoadResource("EnigneData.AssetPackages/StandardAssets.pkg"));
-#endif
 
 		env->_debugGui = new DebugGUI;
 
@@ -633,6 +649,9 @@ namespace HexEngine
 
 	void Game3DEnvironment::CreateLogFile(const Game3DOptions& options)
 	{
+		if (!_fileSystem)
+			return;
+
 		// Initialise a new log file instance
 		//
 		std::wstring logName = L"Logs/LogFile_" + options.applicationName + L".txt";
