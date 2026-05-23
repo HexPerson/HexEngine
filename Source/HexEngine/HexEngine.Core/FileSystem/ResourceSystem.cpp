@@ -273,18 +273,39 @@ namespace HexEngine
 			}
 			else
 			{
-				// else the file path is not relative, but might use the virtual filesystem path convention
-				if (auto p = trueLocalPath.wstring().find_first_of('.'); p != std::wstring::npos)
+				// The path is relative; it may carry a virtual-FS prefix like
+				// "EngineData.Materials/Main.hmat" or be a plain in-FS path
+				// like "Textures/Universe/foo.png".
+				//
+				// The convention: an FS prefix is only valid when the dot
+				// separating it from the rest appears BEFORE the first path
+				// separator. find_first_of('.') alone matches the file
+				// extension's dot for any plain path (e.g. ".png"), causing
+				// every plain path to be treated as having an invalid FS
+				// prefix and getting skipped on every file system - assets
+				// referenced by their relative path (which is the common
+				// case for textures stored on materials) would silently
+				// fail to load. Restrict the dot search to the segment
+				// before the first \ or / so plain paths fall through to
+				// the normal resolution against this FS.
+				const std::wstring pathStr = trueLocalPath.wstring();
+				const auto firstSep = pathStr.find_first_of(L"\\/");
+				const auto dotInPrefix = pathStr.find_first_of(L'.');
+
+				if (dotInPrefix != std::wstring::npos && (firstSep == std::wstring::npos || dotInPrefix < firstSep))
 				{
-					auto virtualFsName = trueLocalPath.wstring().substr(0, p);
+					const std::wstring virtualFsName = pathStr.substr(0, dotInPrefix);
 
 					if (virtualFsName == fs->GetName())
 					{
-						trueLocalPath = trueLocalPath.wstring().substr(p + 1);
+						trueLocalPath = pathStr.substr(dotInPrefix + 1);
 					}
 					else
 						continue;
 				}
+				// else: no FS prefix - fall through and let the rest of the
+				// loop body try to resolve trueLocalPath verbatim against
+				// the current file system.
 
 				// non-prefixed relative path may still map to an already-loaded resource via fs-relative key
 				const fs::path fsPath = fs->GetRelativeResourcePath(trueLocalPath.wstring());
