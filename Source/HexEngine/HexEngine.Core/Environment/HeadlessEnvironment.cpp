@@ -82,8 +82,11 @@ namespace HexEngine
 			LOG_INFO("Loaded %d plugins", numPluginsLoaded);
 		}
 
-		env->_physicsSystem = (IPhysicsSystem*)env->_pluginSystem->CreateInterface(IPhysicsSystem::InterfaceName);
-		env->_physicsSystem->Create();
+		if (options.requirePhysicsSystem)
+		{
+			env->_physicsSystem = (IPhysicsSystem*)env->_pluginSystem->CreateInterface(IPhysicsSystem::InterfaceName);
+			env->_physicsSystem->Create();
+		}
 
 		env->_compressionProvider = (ICompressionProvider*)env->_pluginSystem->CreateInterface(ICompressionProvider::InterfaceName);
 		env->_compressionProvider->Create();

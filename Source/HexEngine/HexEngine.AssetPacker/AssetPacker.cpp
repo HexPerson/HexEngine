@@ -22,6 +22,11 @@ int main(int argc, const char* argv[])
 
 	HexEngine::HeadlessOptions o;
 	o.gameExtension = nullptr;
+	// AssetPacker only needs the compression provider + DiskFile - no physics.
+	// Asking for physics here would trigger a LOG_CRIT (and the MessageBox /
+	// DebugBreak that comes with it) on machines whose runtime layout next to
+	// the packer exe doesn't ship a physics plugin.
+	o.requirePhysicsSystem = false;
 
 	HexEngine::HeadlessEnvironment::Create(o);
 

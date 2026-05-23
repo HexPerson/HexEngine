@@ -9,6 +9,13 @@ namespace HexEngine
 	struct HeadlessOptions
 	{
 		IGameExtension* gameExtension = nullptr;
+
+		// Spin up the physics plugin during Create(). Tools that just need
+		// the file system / compression provider (AssetPacker, etc.) should
+		// leave this off so they don't drag in a physics plugin dependency
+		// they never use - missing physics on a headless tool used to abort
+		// the process via the LOG_CRIT in PluginSystem::CreateInterface.
+		bool requirePhysicsSystem = true;
 	};
 
 	class HEX_API HeadlessEnvironment : public IEnvironment
