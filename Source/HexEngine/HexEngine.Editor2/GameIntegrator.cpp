@@ -54,7 +54,51 @@ namespace HexEditor
 			const fs::path hotReloadDir = projectBaseDir / L"Build" / L"HotReload";
 			fs::create_directories(hotReloadDir);
 
-			const auto reloadId = ++reloadGeneration;
+			// Pick a reload id strictly higher than any Game_XXXXXX.pdb already
+			// on disk. The previous behaviour just used ++reloadGeneration (so
+			// the first build of an editor session always wrote Game_000001.pdb),
+			// which collides with any DLL currently loaded by the editor whose
+			// PDB metadata still points at the previous session's Game_000001.pdb -
+			// the linker can't overwrite a mapped PDB and bails with LNK1201.
+			// Scanning the directory once before each build and starting above
+			// the max guarantees the new PDB has no readers regardless of what
+			// the editor currently has loaded.
+			uint64_t maxExistingId = reloadGeneration;
+			std::error_code scanEc;
+			for (const auto& entry : fs::directory_iterator(hotReloadDir, scanEc))
+			{
+				if (scanEc)
+					break;
+				if (!entry.is_regular_file())
+					continue;
+				const auto filename = entry.path().filename().wstring();
+				// Match both Game_NNNNNN.pdb and Game_Loaded_NNNNNN.dll - either
+				// could be holding a previous-gen PDB mapping open.
+				constexpr std::wstring_view kGamePrefix = L"Game_";
+				if (filename.compare(0, kGamePrefix.size(), kGamePrefix) != 0)
+					continue;
+				// Find the trailing 6-digit number (last run of digits before the ext).
+				const auto dotPos = filename.find_last_of(L'.');
+				if (dotPos == std::wstring::npos)
+					continue;
+				size_t digitsEnd = dotPos;
+				size_t digitsBegin = digitsEnd;
+				while (digitsBegin > 0 && filename[digitsBegin - 1] >= L'0' && filename[digitsBegin - 1] <= L'9')
+					--digitsBegin;
+				if (digitsBegin == digitsEnd)
+					continue;
+				try
+				{
+					const uint64_t n = std::stoull(std::wstring(filename.substr(digitsBegin, digitsEnd - digitsBegin)));
+					maxExistingId = std::max(maxExistingId, n);
+				}
+				catch (...)
+				{
+				}
+			}
+
+			reloadGeneration = maxExistingId + 1;
+			const auto reloadId = reloadGeneration;
 			const fs::path pdbPath = hotReloadDir / std::format(L"Game_{:06}.pdb", reloadId);
 			const fs::path overridePropsPath = hotReloadDir / std::format(L"HotReload_{:06}.props", reloadId);
 			{
