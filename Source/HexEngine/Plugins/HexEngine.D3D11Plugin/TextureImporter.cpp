@@ -45,7 +45,17 @@ TextureImporter::~TextureImporter()
 
 std::shared_ptr<HexEngine::IResource> TextureImporter::LoadResourceFromFile(const fs::path& absolutePath, HexEngine::FileSystem* fileSystem, const HexEngine::ResourceLoadOptions* options /*= nullptr*/)
 {
-	if (HexEngine::g_pEnv->GetFileSystem().DoesAbsolutePathExist(absolutePath) == false)
+	// Existence check must go through the FILE SYSTEM the resource came from
+	// (the one ResourceSystem matched), not g_pEnv->GetFileSystem(). The
+	// engine's default filesystem might be a package-backed AssetPackage
+	// (post EngineAssets.pkg mount) - its DoesAbsolutePathExist only checks
+	// its TOC, so any texture living in a different filesystem (e.g. a
+	// GameData disk FS rooted at the project) was wrongly reported as
+	// missing and the loader bailed before reading the file. The previous
+	// behaviour happened to work only because the engine FS used to be a
+	// disk FS that delegates to fs::exists for any absolute path.
+	const auto* effectiveFs = fileSystem ? fileSystem : &HexEngine::g_pEnv->GetFileSystem();
+	if (effectiveFs->DoesAbsolutePathExist(absolutePath) == false)
 	{
 		LOG_WARN("The texture at path '%s' does not exist, cannot load!", absolutePath.u8string().c_str());
 		return nullptr;
