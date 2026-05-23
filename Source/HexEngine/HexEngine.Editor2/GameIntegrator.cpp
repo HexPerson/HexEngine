@@ -419,6 +419,15 @@ namespace HexEditor
 		LOG_INFO("Packaging game assets with command: %S", commandLine.c_str());
 		LOG_INFO("Writing asset pack log to '%S'", logPath.wstring().c_str());
 
+		// Inherit the editor's cwd rather than parking the child in editorExeDir.
+		// The two diverge in source builds: the editor exe sits in
+		// <repo>/Source/HexEngine/x64/Debug/ while its working directory is
+		// the run-from layout under <repo>/Bin/x64/Debug/ which is the only
+		// place a Plugins/ folder actually exists. AssetPacker's
+		// HeadlessEnvironment::Create resolves "Plugins" relative to cwd
+		// (via fs::current_path()), so parking it next to the editor exe
+		// made plugin discovery silently find nothing - which is what
+		// reported "ICompressionProvider001 not found" on export.
 		if (!CreateProcessW(
 			nullptr,
 			mutableCommand.data(),
@@ -427,7 +436,7 @@ namespace HexEditor
 			TRUE,
 			CREATE_NO_WINDOW,
 			nullptr,
-			editorExeDir.wstring().c_str(),
+			nullptr,
 			&si,
 			&pi))
 		{
