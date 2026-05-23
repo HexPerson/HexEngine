@@ -47,12 +47,20 @@ void Texture2D::GetPixels(std::vector<uint8_t>& buffer)
 	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
 
+	// CaptureTexture internally allocates a staging texture, CopyResource's
+	// the source into it, then Map/Unmap's the staging - all on the immediate
+	// context. Without the device lock, any other thread driving the context
+	// (background streaming, async loaders, etc.) races us and the D3D11
+	// debug layer flags MISCELLANEOUS CORRUPTION #28 / CORRUPTED_MULTITHREADING.
 	DirectX::ScratchImage scratch;
-	CHECK_HR(DirectX::CaptureTexture(
+	g_pGraphics->Lock();
+	const HRESULT captureHr = DirectX::CaptureTexture(
 		gfxDevice,
 		gfxContext,
 		_texture,
-		scratch));
+		scratch);
+	g_pGraphics->Unlock();
+	CHECK_HR(captureHr);
 
 	auto pixelsSize = scratch.GetPixelsSize();
 
@@ -124,6 +132,7 @@ void Texture2D::GetPixels(std::vector<float>& buffer)
 
 	D3D11_MAPPED_SUBRESOURCE mapped = {};
 
+	g_pGraphics->Lock();
 	if (gfxContext->Map(_texture, 0, D3D11_MAP_READ/*D3D11_MAP_WRITE_DISCARD*/, 0, &mapped) == S_OK)
 	{
 		if (buffer.size() > 0)
@@ -137,6 +146,7 @@ void Texture2D::GetPixels(std::vector<float>& buffer)
 
 		gfxContext->Unmap(_texture, 0);
 	}
+	g_pGraphics->Unlock();
 
 #else
 	DirectX::ScratchImage scratch;
