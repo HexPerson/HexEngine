@@ -174,8 +174,35 @@ namespace HexEngine
 
 		auto ret = dynamic_pointer_cast<AssetPackage>(g_pEnv->GetResourceSystem().LoadResource(path, &opts));
 
-		if(ret)
+		if (ret)
+		{
+			// Anchor the package's inherited FileSystem to the working
+			// directory. Without this, GetLocalAbsolutePath returns just
+			// the relative bit ("Plugins", "Logs", etc.) because the
+			// AssetPackage ctor doesn't call SetBaseDirectory - causing
+			// downstream code that expects an absolute path off the
+			// engine's filesystem to break.
+			//
+			// Specifically: PluginSystem::LoadAllPlugins enumerates
+			// "<base>/Plugins" via directory_iterator and then calls
+			// LoadLibrary on each .dll. When the path is relative the
+			// directory_iterator may still succeed against cwd, but
+			// Windows's LoadLibrary then searches for the plugin's
+			// dependency DLLs in the EXECUTABLE'S directory rather than
+			// the plugin's own directory - so assimp-vc143-mt.dll in
+			// Plugins/ becomes invisible and LoadLibrary fails with
+			// ERROR_MOD_NOT_FOUND (126) for the assimp plugin (and any
+			// other plugin with non-system dependencies sitting in
+			// Plugins/).
+			//
+			// With the AssetPackage's base anchored to cwd, the absolute
+			// "<cwd>/Plugins/<plugin>.dll" path goes to LoadLibrary, and
+			// Windows correctly searches the plugin's directory for
+			// dependencies.
+			ret->SetBaseDirectory(fs::current_path());
+
 			g_pEnv->GetResourceSystem().AddFileSystem(ret.get());
+		}
 
 		return ret;
 	}
