@@ -161,6 +161,20 @@ namespace HexEngine
 
 		math::Vector3 colourFilter;
 		float colour_pad;
+
+		// HDR display calibration. Driven by r_hdrPaperWhiteNits /
+		// r_hdrPeakNits HVars, consumed by TonemapHDR.shader to map
+		// post-tonemap output into absolute nits so the same scene reads
+		// the same brightness regardless of whether the swap chain is
+		// going through DWM composition (editor windowed) or Independent
+		// Flip (launcher fullscreen-borderless). Without these two paths
+		// disagreed by up to 2x because DWM rescales scRGB against the
+		// Windows "SDR content brightness" slider while Independent Flip
+		// hands the linear values to the display verbatim.
+		float hdrPaperWhiteNits;   // scRGB output value 1.0 lands here in nits (Win11 default ~200)
+		float hdrPeakNits;         // display max luminance from MaxLuminance (typically 600-1500)
+		float hdr_pad0;
+		float hdr_pad1;
 	};
 
 	/** @brief Weather surface/material parameters uploaded per frame for weather-aware shaders. */

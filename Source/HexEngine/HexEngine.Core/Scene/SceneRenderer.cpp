@@ -366,6 +366,15 @@ namespace HexEngine
 	HVar r_exposure("r_exposure", "How much exposure to apply to the final render", 1.0f, 0.1f, 3.0f);
 	HVar r_hueShift("r_hueShift", "How much to adjust the hue by in the final render", 0.0f, -3.0f, 3.0f);
 	HVar r_saturation("r_saturation", "How much to saturate the final render", 1.05f, 0.1f, 3.0f);
+	// HDR display calibration. scRGB linear is defined such that 1.0 = 80
+	// nits, but DWM composition and Independent Flip pick different paper-
+	// white targets, so the HDR tonemap shader needs to know the target
+	// nits to scale into. 200 nits is the Windows 11 default; users can
+	// adjust if they've moved Windows' "SDR content brightness" slider.
+	// Peak nits should match the display's MaxLuminance - common values
+	// are 600 (HDR600), 1000 (HDR1000), 1500+ (mastering displays).
+	HVar r_hdrPaperWhiteNits("r_hdrPaperWhiteNits", "Target nits for post-tonemap 'screen white' on HDR displays (Win11 default 200)", 200.0f, 80.0f, 1000.0f);
+	HVar r_hdrPeakNits("r_hdrPeakNits", "Display peak luminance for HDR highlight headroom (match display's HDR rating)", 1000.0f, 200.0f, 4000.0f);
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
@@ -1173,6 +1182,8 @@ namespace HexEngine
 			bufferData._colourGrading.exposure = r_exposure._val.f32 * _autoExposure.GetExposureMultiplier();
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
+			bufferData._colourGrading.hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
+			bufferData._colourGrading.hdrPeakNits = r_hdrPeakNits._val.f32;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
 
 			// Shadowmap data

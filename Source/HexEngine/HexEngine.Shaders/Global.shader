@@ -120,12 +120,21 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	struct ColourGradeSettings
 	{
 		float contrast;
-		float exposure;		
+		float exposure;
 		float hueShift;
 		float saturation;
 
 		float3 colourFilter;
 		float colour_pad;
+
+		// HDR display calibration. See RenderStructs.hpp ColourGradeSettings
+		// for the full reasoning; in short these let TonemapHDR.shader
+		// output absolute nits via the scRGB scale 1.0 = 80 nits so DWM
+		// composition and Independent Flip paths produce the same brightness.
+		float hdrPaperWhiteNits;
+		float hdrPeakNits;
+		float hdr_pad0;
+		float hdr_pad1;
 	};
 
 	struct WeatherSurfaceParams
