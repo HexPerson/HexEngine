@@ -3115,13 +3115,18 @@ namespace HexEngine
 				// onto beauty. Use this to verify whether artifacts originate from the SSR shader
 				// or from NRD's denoising. If artifacts disappear here, the shader output is OK
 				// and the problem lives in NRD's preprocess / matrices / hit-distance interpretation.
+				//
+				// Specular reflection (_ssrTexture) is the shiny / mirror channel that produces
+				// the visible reflections on wet surfaces; without it, r_ssrDenoise=0 looked like
+				// "reflections vanished entirely" and made the diagnostic useless. Composite both
+				// diffuse and specular so the toggle isolates NRD vs the raw shader honestly.
 				guiRenderer->StartFrame();
 				g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
 				g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve (no denoise)");
 				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
 				guiRenderer->FullScreenTexturedQuad(_ssrDiffuseTexture, _ssrResolve.get());
-				//guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
+				guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
 				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 			}
 
