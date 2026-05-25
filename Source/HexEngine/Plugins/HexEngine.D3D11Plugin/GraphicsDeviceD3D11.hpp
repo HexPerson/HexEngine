@@ -42,6 +42,8 @@ public:
 	virtual void Lock() override;
 	virtual void Unlock() override;
 
+	virtual float GetDisplayPeakNits() const override { return _displayPeakNits; }
+
 	virtual bool Create() override;
 
 	virtual void Destroy() override;
@@ -301,6 +303,9 @@ private:
 	//GBuffer _gbuffer;
 	uint32_t _bbufferWidth = 0;
 	uint32_t _bbufferHeight = 0;
+	// Cached at AttachToWindow time from IDXGIOutput6::GetDesc1::MaxLuminance.
+	// 0 when the active display isn't HDR-capable or the query failed.
+	float _displayPeakNits = 0.0f;
 	TextureImporter* _textureLoader = nullptr;
 	//ID3D11SamplerState* _texSamplerClamp = nullptr;
 	//ID3D11SamplerState* _texSamplerWrap = nullptr;

@@ -1199,6 +1199,29 @@ namespace HexEngine
 			bufferData._colourGrading.exposure = r_exposure._val.f32 * _autoExposure.GetExposureMultiplier();
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
+			// One-time auto-calibration of r_hdrPeakNits from the active display's
+			// IDXGIOutput6::GetDesc1::MaxLuminance. Saves users from having to know
+			// whether they have an HDR400/HDR600/HDR1000+ panel - the system already
+			// knows. Only runs once per session, only when the device reports a real
+			// value, and only if the user hasn't already touched the HVar (so manual
+			// overrides via console / saved config keep working). Wrapped in a static
+			// init flag rather than guarded against the default 1000.0 sentinel
+			// because the user might legitimately want to pin 1000 as their target.
+			static bool sHdrPeakAutoCalibrated = false;
+			if (!sHdrPeakAutoCalibrated)
+			{
+				if (g_pEnv && g_pEnv->_graphicsDevice)
+				{
+					const float devicePeak = g_pEnv->_graphicsDevice->GetDisplayPeakNits();
+					if (devicePeak > 0.0f)
+					{
+						r_hdrPeakNits._val.f32 = std::clamp(devicePeak, r_hdrPeakNits._min.f32, r_hdrPeakNits._max.f32);
+						LOG_INFO("r_hdrPeakNits auto-calibrated to %.1f nits from display MaxLuminance", r_hdrPeakNits._val.f32);
+					}
+				}
+				sHdrPeakAutoCalibrated = true;
+			}
+
 			bufferData._hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
 			bufferData._hdrPeakNits = r_hdrPeakNits._val.f32;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
