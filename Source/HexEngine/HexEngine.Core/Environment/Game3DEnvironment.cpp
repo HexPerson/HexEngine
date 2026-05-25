@@ -33,6 +33,7 @@ namespace HexEngine
 	HVar cl_simulationRate("cl_simulationRate", "The speed at which physics is simulated in hz", 120.0f, 1.0f, 240.0f);
 	HVar cl_showfps("cl_showfps", "Draw the current frames per-second on the screen", false, false, true);
 	HVar cl_forcelagframe("cl_forcelagframe", "Forcefully delay each frame by this amount (in milliseconds)", 0, 0, 1000);
+	HVar r_debugFrameInfo("r_debugFrameInfo", "Draws per-frame renderer diagnostics (weather, HDR, SSR/TAA state, camera) as text overlay", false, false, true);
 
 	Game3DEnvironment::Game3DEnvironment() :
 		_running(false)
@@ -73,19 +74,17 @@ namespace HexEngine
 
 		if (fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
 		{
-			FileSystem* tempFs = new FileSystem(L"EngineDataTmp");
-			tempFs->SetBaseDirectory(fs::current_path());
-			env->_resourceSystem->AddFileSystem(tempFs);
+			FileSystem tempFs(L"EngineDataBootStrap");
+			tempFs.SetBaseDirectory(fs::current_path());
+			env->_resourceSystem->AddFileSystem(&tempFs);
 
 			LOG_INFO("Loading standard asset package");
-			env->_standardAssets = AssetPackage::Create("EngineDataTmp.AssetPackages/EngineAssets.pkg", L"EngineData");
+			env->_standardAssets = AssetPackage::Create("EngineDataBootStrap.AssetPackages/EngineAssets.pkg", L"EngineData");
 
 			if(env->_standardAssets)
 				env->_fileSystem = env->_standardAssets.get();
 
-			env->_resourceSystem->RemoveFileSystem(tempFs);
-
-			delete tempFs;
+			env->_resourceSystem->RemoveFileSystem(&tempFs);
 		}
 		else
 		{
@@ -561,6 +560,85 @@ namespace HexEngine
 						if (cl_showfps._val.b)
 						{
 							_uiManager->GetRenderer()->PrintText(_uiManager->GetRenderer()->_style.font.get(), (uint8_t)Style::FontSize::Small, 5, 5, math::Color(1, 1, 1, 1), 0, std::format(L"FPS: {:d}", _timeManager->_fps));
+						}
+
+						// Side-by-side diagnostic overlay - sample any per-frame
+						// renderer inputs that legitimately can diverge between
+						// editor and launcher (weather state, HDR calibration,
+						// SSR/TAA toggles, camera state) and draw them as text.
+						// Enables quick visual A/B without needing a graphics
+						// debugger attached, which has been intermittently
+						// failing to capture this engine's swap chain.
+						if (r_debugFrameInfo._val.b)
+						{
+							auto* renderer = _uiManager->GetRenderer();
+							auto* font = renderer->_style.font.get();
+							const uint8_t fs = (uint8_t)Style::FontSize::Small;
+							const math::Color col(1.0f, 1.0f, 0.6f, 1.0f);
+
+							int32_t y = 30;
+							auto line = [&](const std::wstring& s)
+							{
+								renderer->PrintText(font, fs, 5, y, col, 0, s);
+								y += 14;
+							};
+
+							line(std::format(L"-- r_debugFrameInfo --"));
+							line(std::format(L"editorMode: {}", _inEditorMode ? L"true" : L"false"));
+
+							uint32_t sw = 0, sh = 0;
+							_graphicsDevice->GetBackBufferDimensions(sw, sh);
+							line(std::format(L"backbuffer: {}x{}", sw, sh));
+							if (auto* bb = _graphicsDevice->GetBackBuffer(); bb != nullptr)
+							{
+								line(std::format(L"backbuffer fmt: {} (hdr={})",
+									(int32_t)bb->GetFormat(),
+									bb->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT ? L"yes" : L"no"));
+							}
+
+							// HDR HVars - easy lookups by name to avoid extern wiring.
+							auto getf = [this](const char* n) -> float {
+								if (auto* h = _commandManager->FindHVar(n)) return h->_val.f32;
+								return -1.0f;
+							};
+							auto getb = [this](const char* n) -> bool {
+								if (auto* h = _commandManager->FindHVar(n)) return h->_val.b;
+								return false;
+							};
+							auto geti = [this](const char* n) -> int32_t {
+								if (auto* h = _commandManager->FindHVar(n)) return h->_val.i32;
+								return -1;
+							};
+
+							line(std::format(L"r_hdrOutput: {}", getb("r_hdrOutput") ? L"1" : L"0"));
+							line(std::format(L"r_hdrPaperWhiteNits: {:.1f}", getf("r_hdrPaperWhiteNits")));
+							line(std::format(L"r_hdrPeakNits: {:.1f}", getf("r_hdrPeakNits")));
+							line(std::format(L"r_ssr: {}  r_ssrDenoise: {}  r_taa: {}",
+								getb("r_ssr") ? L"1" : L"0",
+								getb("r_ssrDenoise") ? L"1" : L"0",
+								geti("r_taa")));
+							line(std::format(L"r_exposure: {:.2f}  r_autoExposureMax: {:.1f}",
+								getf("r_exposure"), getf("r_autoExposureMax")));
+
+							if (auto scene = _sceneManager ? _sceneManager->GetCurrentScene() : nullptr; scene != nullptr)
+							{
+								const auto& wsp = scene->GetWeatherSurfaceParams();
+								line(std::format(L"weather wetness: {:.3f}  puddle: {:.3f}",
+									wsp.wetness, wsp.puddleAmount));
+								line(std::format(L"weather precip: {:.3f}  snow: {:.3f}",
+									wsp.precipitationIntensity, wsp.snowCoverage));
+
+								if (auto cam = scene->GetMainCamera(); cam != nullptr && cam->GetEntity() != nullptr)
+								{
+									auto p = cam->GetEntity()->GetPosition();
+									line(std::format(L"camera pos: ({:.2f}, {:.2f}, {:.2f})", p.x, p.y, p.z));
+									const auto& vp = cam->GetViewport();
+									line(std::format(L"camera viewport: {}x{}", (int32_t)vp.width, (int32_t)vp.height));
+									line(std::format(L"camera fov: {:.3f}", cam->GetFov()));
+								}
+							}
+
+							line(std::format(L"frame: {}", _timeManager ? _timeManager->_frameCount : 0u));
 						}
 
 						_uiManager->GetRenderer()->EnableScaling(false);
