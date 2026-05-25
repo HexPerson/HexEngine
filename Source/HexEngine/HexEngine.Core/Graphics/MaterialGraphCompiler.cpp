@@ -776,7 +776,7 @@ namespace HexEngine
 				ss << std::format("\t\tfloat smoothness = saturate({});\n", ToScalar(ctx, *smoothnessExpr));
 			else
 				ss << "\t\tfloat smoothness = g_material.smoothness;\n";
-			ss << "\t\toutput.mat = float4(metallic, roughness, smoothness, 0.0f);\n";
+			ss << "\t\toutput.mat = float4(metallic, roughness, smoothness, 1.0f);\n";
 			ss << "\t\toutput.norm = float4(worldNormal.xyz, pixelDepth);\n";
 			ss << "\t\toutput.pos = float4(input.positionWS.xyz, length(emission));\n";
 			ss << "\t\toutput.velocity = velocity;\n";
@@ -955,6 +955,60 @@ namespace HexEngine
 			const uint64_t hashValue = static_cast<uint64_t>(std::hash<std::string>{}(shaderSource));
 			return std::format("{:016x}", hashValue);
 		}
+
+		// Hashes the contents of every .shader file in the include directory so the
+		// generated-shader cache filename invalidates whenever an engine-side include
+		// (Global.shader, MeshCommon.shader, PBRutils.shader, etc.) changes.
+		//
+		// Without this, the cache key is the graph source hash only - and the graph
+		// source doesn't change when Global.shader gains new cbuffer fields or
+		// MeshCommon's helpers get rewritten. Stale .hcs files keep getting reused
+		// against fresh engine code, which is exactly the cbuffer-layout-mismatch class
+		// of bug we already chased (the trailing-HDR-fields-in-PerFrameBuffer mid-add
+		// was specifically silent on this because no shader source files changed).
+		//
+		// Sorted by filename so file-system enumeration order doesn't perturb the hash.
+		// Cost is "read all engine .shader files once per material compile, hash" -
+		// negligible at the rate compiles actually happen.
+		std::string ComputeIncludesHash(const fs::path& includeDir)
+		{
+			if (includeDir.empty() || !fs::exists(includeDir) || !fs::is_directory(includeDir))
+				return "0000000000000000";
+
+			std::vector<fs::path> includeFiles;
+			std::error_code ec;
+			for (const auto& entry : fs::directory_iterator(includeDir, ec))
+			{
+				if (ec)
+					break;
+				if (!entry.is_regular_file())
+					continue;
+				if (entry.path().extension() != L".shader")
+					continue;
+				includeFiles.push_back(entry.path());
+			}
+
+			std::sort(includeFiles.begin(), includeFiles.end());
+
+			std::string combined;
+			combined.reserve(64 * 1024);
+			for (const auto& p : includeFiles)
+			{
+				combined += p.filename().string();
+				combined += '\0';
+				std::ifstream f(p, std::ios::binary);
+				if (f)
+				{
+					std::ostringstream oss;
+					oss << f.rdbuf();
+					combined += oss.str();
+				}
+				combined += '\0';
+			}
+
+			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
+			return std::format("{:016x}", h);
+		}
 	}
 
 	MaterialGraphCompileResult MaterialGraphCompiler::CompileToMaterial(
@@ -1053,10 +1107,21 @@ namespace HexEngine
 			emissivePtr,
 			opacityPtr,
 			smoothnessPtr);
-		const std::string sourceHash = ComputeShaderSourceHash(shaderSource);
 
-		const fs::path hashedShaderSource = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + sourceHash + ".shader");
-		fs::path generatedShaderOutput = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + sourceHash + ".hcs");
+		// Cache key = hash(graph-generated source) XOR hash(all engine .shader
+		// includes). Either part changing invalidates the cached .hcs. The
+		// includes hash catches the case where a header like Global.shader gains
+		// new cbuffer fields - source unchanged, but the compiled bytecode now
+		// has a different cbuffer layout, so the old .hcs would mismatch the
+		// C++ struct that uploads PerFrameBuffer.
+		std::vector<fs::path> includeSearchPaths;
+		const fs::path includeDir = ResolveShaderIncludeDirectory(&includeSearchPaths);
+		const std::string sourceHash = ComputeShaderSourceHash(shaderSource);
+		const std::string includesHash = ComputeIncludesHash(includeDir);
+		const std::string combinedHash = std::format("{}_{}", sourceHash, includesHash);
+
+		const fs::path hashedShaderSource = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + combinedHash + ".shader");
+		fs::path generatedShaderOutput = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + combinedHash + ".hcs");
 
 		DiskFile shaderFile(hashedShaderSource, std::ios::out | std::ios::trunc);
 		if (!shaderFile.Open())
@@ -1071,8 +1136,8 @@ namespace HexEngine
 
 		if (!fs::exists(generatedShaderOutput))
 		{
-			std::vector<fs::path> includeSearchPaths;
-			const fs::path includeDir = ResolveShaderIncludeDirectory(&includeSearchPaths);
+			// includeDir / includeSearchPaths were resolved above for the hash;
+			// reuse them here instead of re-walking the candidate list.
 			if (includeDir.empty())
 			{
 				std::string searchList;
