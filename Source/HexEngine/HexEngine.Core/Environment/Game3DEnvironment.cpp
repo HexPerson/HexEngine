@@ -85,11 +85,19 @@ namespace HexEngine
 				env->_fileSystem = env->_standardAssets.get();
 
 			env->_resourceSystem->RemoveFileSystem(&tempFs);
+			// AssetPackage::Create already calls AddFileSystem internally; do
+			// NOT add env->_fileSystem again below (this used to show up as a
+			// double "EngineData" entry in the resource system's mount list
+			// until the AddFileSystem dedup was added; the dedup catches it
+			// now but the second call was still pointless).
 		}
 		else
 		{
 			env->_fileSystem = new FileSystem(L"EngineData");
 			env->_fileSystem->SetBaseDirectory(fs::current_path());
+			// Disk-based fallback was never registered with ResourceSystem
+			// by anyone else, so add it here. Pkg-loaded path already did.
+			env->_resourceSystem->AddFileSystem(env->_fileSystem);
 		}
 
 		// Create the log file
@@ -110,8 +118,10 @@ namespace HexEngine
 
 		LOG_DEBUG("TimeManager was successfully created (0x%p)", env->_timeManager);
 
-		
-		env->_resourceSystem->AddFileSystem(env->_fileSystem);
+		// (AddFileSystem for env->_fileSystem now happens above, inside whichever
+		// branch created/loaded it - pkg path via AssetPackage::Create, loose-
+		// data path via the explicit else branch. The previous unconditional
+		// add here double-registered the pkg.)
 
 		env->_inputSystem = new InputSystem;
 
