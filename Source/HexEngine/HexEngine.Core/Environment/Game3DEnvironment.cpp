@@ -631,7 +631,19 @@ namespace HexEngine
 								if (auto cam = scene->GetMainCamera(); cam != nullptr && cam->GetEntity() != nullptr)
 								{
 									auto p = cam->GetEntity()->GetPosition();
-									line(std::format(L"camera pos: ({:.2f}, {:.2f}, {:.2f})", p.x, p.y, p.z));
+									line(std::format(L"camera pos: ({:.4f}, {:.4f}, {:.4f})", p.x, p.y, p.z));
+
+									// Per-frame delta - if the player is "stationary" but
+									// the camera entity is creeping by gravity / physics /
+									// lerp smoothing, NRD reads the velocity buffer as
+									// scene motion and accumulates a reprojection trail.
+									// Shows micro-motion the user can't see directly.
+									static math::Vector3 sPrevCamPos = p;
+									const math::Vector3 d = p - sPrevCamPos;
+									sPrevCamPos = p;
+									line(std::format(L"camera delta: ({:.6f}, {:.6f}, {:.6f}) |d|={:.6f}",
+										d.x, d.y, d.z, d.Length()));
+
 									const auto& vp = cam->GetViewport();
 									line(std::format(L"camera viewport: {}x{}", (int32_t)vp.width, (int32_t)vp.height));
 									line(std::format(L"camera fov: {:.3f}", cam->GetFov()));
