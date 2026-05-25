@@ -356,7 +356,7 @@ namespace HexEditor
 		}
 
 		const fs::path resolvedOutput = outputPkg.empty()
-			? (projectBaseDir / L"Build" / L"GameData.pkg")
+			? (projectBaseDir / L"Build" / L"Data" / L"AssetPackages" / L"GameData.pkg")
 			: outputPkg;
 		std::error_code ec;
 		fs::create_directories(resolvedOutput.parent_path(), ec);
@@ -489,6 +489,130 @@ namespace HexEditor
 
 		LOG_INFO("Asset package written to '%S'", resolvedOutput.wstring().c_str());
 		return true;
+	}
+
+	bool GameIntegrator::DeployEngineBinaries(const fs::path& destDir)
+	{
+		std::error_code ec;
+		fs::create_directories(destDir, ec);
+		if (ec)
+		{
+			LOG_CRIT("DeployEngineBinaries: could not create destination '%S': %s",
+				destDir.wstring().c_str(), ec.message().c_str());
+			return false;
+		}
+
+		// Resolve the editor's currently-loaded Core.dll via its module handle
+		// rather than guessing a path. The post-build copy from
+		// Source/HexEngine/x64/Debug -> Bin/x64/Debug can silently fail if the
+		// editor had Bin's Core.dll locked at link time, leaving Bin stale even
+		// though the editor itself is running on the fresh source-built copy.
+		// GetModuleFileNameW on the live handle gives us the actual bits the
+		// editor is using.
+		HMODULE coreModule = GetModuleHandleW(L"HexEngine.Core.dll");
+		if (coreModule == nullptr)
+		{
+			LOG_CRIT("DeployEngineBinaries: HexEngine.Core.dll module handle not found in this process");
+			return false;
+		}
+
+		wchar_t coreModuleBuf[MAX_PATH] = {};
+		if (GetModuleFileNameW(coreModule, coreModuleBuf, MAX_PATH) == 0)
+		{
+			LOG_CRIT("DeployEngineBinaries: GetModuleFileName for Core.dll failed (error %d)", GetLastError());
+			return false;
+		}
+
+		const fs::path coreSrcPath = coreModuleBuf;
+		const fs::path coreDstPath = destDir / L"HexEngine.Core.dll";
+
+		auto copyFileWithLog = [](const fs::path& src, const fs::path& dst) -> bool
+		{
+			std::error_code copyEc;
+			fs::create_directories(dst.parent_path(), copyEc);
+			fs::copy_file(src, dst, fs::copy_options::overwrite_existing, copyEc);
+			if (copyEc)
+			{
+				LOG_CRIT("DeployEngineBinaries: copy '%S' -> '%S' failed: %s",
+					src.wstring().c_str(), dst.wstring().c_str(), copyEc.message().c_str());
+				return false;
+			}
+			LOG_INFO("DeployEngineBinaries: copied '%S' -> '%S'",
+				src.filename().wstring().c_str(), dst.wstring().c_str());
+			return true;
+		};
+
+		bool ok = true;
+
+		// Core.dll - required.
+		ok &= copyFileWithLog(coreSrcPath, coreDstPath);
+
+		// Plugins: enumerate <editorCwd>/Plugins/ and copy every .dll there into
+		// <destDir>/Plugins/. The launcher's PluginSystem loads plugins from
+		// cwd/Plugins/ (cwd = launcher folder), so the destination layout mirrors
+		// the editor's source layout one-for-one.
+		const fs::path pluginsSrcDir = fs::current_path() / L"Plugins";
+		const fs::path pluginsDstDir = destDir / L"Plugins";
+
+		if (fs::exists(pluginsSrcDir) && fs::is_directory(pluginsSrcDir))
+		{
+			fs::create_directories(pluginsDstDir, ec);
+			if (ec)
+			{
+				LOG_CRIT("DeployEngineBinaries: could not create Plugins/ at '%S': %s",
+					pluginsDstDir.wstring().c_str(), ec.message().c_str());
+				ok = false;
+			}
+			else
+			{
+				std::error_code iterEc;
+				for (const auto& entry : fs::directory_iterator(pluginsSrcDir, iterEc))
+				{
+					if (iterEc)
+						break;
+					if (!entry.is_regular_file())
+						continue;
+					if (entry.path().extension() != L".dll")
+						continue;
+
+					ok &= copyFileWithLog(entry.path(), pluginsDstDir / entry.path().filename());
+				}
+			}
+		}
+		else
+		{
+			LOG_WARN("DeployEngineBinaries: editor cwd has no Plugins/ directory at '%S' - "
+				"shipped launcher may not have any plugins available.",
+				pluginsSrcDir.wstring().c_str());
+		}
+
+		// EngineAssets.pkg - optional but typically required for shaders /
+		// engine textures / built-in materials. Skip silently if not present
+		// (some dev configs use loose Data/ instead of the .pkg).
+		const fs::path engineAssetsSrc = fs::current_path() / L"Data" / L"AssetPackages" / L"EngineAssets.pkg";
+		const fs::path engineAssetsDst = destDir / L"Data" / L"AssetPackages" / L"EngineAssets.pkg";
+		if (fs::exists(engineAssetsSrc))
+		{
+			ok &= copyFileWithLog(engineAssetsSrc, engineAssetsDst);
+		}
+		else
+		{
+			LOG_INFO("DeployEngineBinaries: no EngineAssets.pkg at '%S' (dev loose-Data mode?). Skipped.",
+				engineAssetsSrc.wstring().c_str());
+		}
+
+		// Braces required - LOG_* macros expand to `if(env){body}` and a
+		// bare if/else around them dangles the else onto the inner if.
+		if (ok)
+		{
+			LOG_INFO("DeployEngineBinaries: engine binaries deployed to '%S'", destDir.wstring().c_str());
+		}
+		else
+		{
+			LOG_WARN("DeployEngineBinaries: deployment to '%S' had errors - shipped launcher may not run cleanly.", destDir.wstring().c_str());
+		}
+
+		return ok;
 	}
 
 	bool GameIntegrator::RunGame()

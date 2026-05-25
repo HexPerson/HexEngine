@@ -53,6 +53,31 @@ namespace HexEditor
 		 * @return True if AssetPacker exits 0 AND the output file exists.
 		 */
 		bool PackageAssets(bool compress = true, const fs::path& outputPkg = {});
+
+		/**
+		 * @brief Deploys engine-side runtime binaries to a target folder so a
+		 *        shipped launcher can run cleanly without the user manually
+		 *        copying DLLs / packages each time engine code changes.
+		 *
+		 * Copies, from the editor's runtime layout:
+		 *   - HexEngine.Core.dll (sourced from the currently-loaded module
+		 *     path so we always get the bits the editor is actually using,
+		 *     not a possibly-stale post-build copy)
+		 *   - All *.dll under <editorCwd>/Plugins/ into <destDir>/Plugins/
+		 *   - <editorCwd>/Data/AssetPackages/EngineAssets.pkg into
+		 *     <destDir>/Data/AssetPackages/ (if it exists)
+		 *
+		 * Does NOT touch the launcher executable, the game DLL, or
+		 * GameData.pkg - those are produced/owned by other steps (the
+		 * launcher is the user's own exe, the others come from BuildGame /
+		 * PackageAssets).
+		 *
+		 * @param destDir Destination root (typically the project's Build/).
+		 * @return True on full success, false if any required file was
+		 *         missing or could not be copied.
+		 */
+		bool DeployEngineBinaries(const fs::path& destDir);
+
 		/** @brief Loads the game DLL and creates the game extension instance. */
 		bool LoadGame();
 		/** @brief Enters play mode and invokes game startup callbacks. */

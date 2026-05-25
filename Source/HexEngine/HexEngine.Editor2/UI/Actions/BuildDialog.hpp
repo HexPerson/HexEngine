@@ -36,12 +36,17 @@ namespace HexEditor
 		HexEngine::Checkbox* _buildCodeToggle = nullptr;
 		HexEngine::Checkbox* _packageAssetsToggle = nullptr;
 		HexEngine::Checkbox* _compressAssetsToggle = nullptr;
+		HexEngine::Checkbox* _deployEngineToggle = nullptr;
 		HexEngine::LineEdit* _status = nullptr;
 		HexEngine::Button* _buildButton = nullptr;
 
 		bool _buildCode = true;
 		bool _packageAssets = true;
 		bool _compressAssets = true;
+		// Default true - this is the single biggest source of "I changed
+		// engine code but the launcher still runs the stale Core.dll"
+		// frustration, and copying a handful of DLLs is cheap.
+		bool _deployEngine = true;
 		GameIntegrator* _integrator = nullptr;
 	};
 }

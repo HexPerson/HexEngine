@@ -32,6 +32,13 @@ namespace HexEditor
 			L"Compress assets (Brotli)",
 			&_compressAssets);
 
+		_deployEngineToggle = new HexEngine::Checkbox(
+			_widgetBase,
+			_widgetBase->GetNextPos(),
+			HexEngine::Point(_widgetBase->GetSize().x - 20, 20),
+			L"Deploy engine binaries (Core.dll, Plugins, EngineAssets.pkg)",
+			&_deployEngine);
+
 		_status = new HexEngine::LineEdit(
 			_widgetBase,
 			_widgetBase->GetNextPos(),
@@ -61,7 +68,7 @@ namespace HexEditor
 		// Centre the dialog over the editor UI root. Sized to comfortably hold
 		// the toggles + status line + button without scrolling.
 		constexpr int32_t kWidth = 520;
-		constexpr int32_t kHeight = 280;
+		constexpr int32_t kHeight = 320;
 
 		const auto centre = HexEngine::Point::GetScreenCenterWithOffset(-kWidth / 2, -kHeight / 2);
 		return new BuildDialog(parent, centre, HexEngine::Point(kWidth, kHeight), integrator);
@@ -105,7 +112,25 @@ namespace HexEditor
 			}
 		}
 
-		if (!_buildCode && !_packageAssets)
+		if (_deployEngine)
+		{
+			SetStatus(L"Deploying engine binaries...");
+			const fs::path buildDir = g_pEditor && g_pEditor->_projectFS != nullptr
+				? g_pEditor->_projectFS->GetBaseDirectory() / L"Build"
+				: fs::path{};
+			if (buildDir.empty())
+			{
+				SetStatus(L"Cannot deploy engine binaries: no project open.", true);
+				return;
+			}
+			if (!integrator->DeployEngineBinaries(buildDir))
+			{
+				SetStatus(L"Engine binary deployment had errors - see editor console.", true);
+				return;
+			}
+		}
+
+		if (!_buildCode && !_packageAssets && !_deployEngine)
 		{
 			SetStatus(L"Nothing selected. Tick at least one option.", true);
 			return;
