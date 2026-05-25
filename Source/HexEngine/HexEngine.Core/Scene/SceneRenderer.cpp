@@ -1172,7 +1172,24 @@ namespace HexEngine
 			bufferData._projectionMatrixInversePrev = projectionMatrixPrev.Invert().Transpose();
 			bufferData._viewProjectionMatrixInversePrev = (viewMatrixPrev * projectionMatrixPrev).Invert().Transpose();
 
-			bufferData._eyePos = math::Vector4(_cameraEntity->GetPosition().x, _cameraEntity->GetPosition().y, _cameraEntity->GetPosition().z, 1.0f);
+			// The view matrix is built with (entity.position + camera.viewOffset)
+			// (see Camera::ConstructViewMatrix), so the actual eye position is
+			// shifted by viewOffset from the camera entity's transform. If we
+			// only put the bare entity position into g_eyePos here, every
+			// shader that computes view-relative vectors from g_eyePos (SSR's
+			// eyeVector, PBR specular Fresnel, sky-dir, etc.) disagrees with
+			// where the view matrix actually places the eye - on a wet road
+			// with a player-eye-offset of (0, 1.4, 0), the SSR reflection
+			// vector calculation produced near-horizontal rays for ground
+			// pixels (eyeVector was treated as ground-to-ground horizontal
+			// instead of head-to-ground downward), which then never exited
+			// the top of screen during raymarch and hit SSR's lastInScreenTex
+			// fallback - producing long vertical stripe artifacts on the road
+			// that did NOT appear in the editor because the editor's
+			// free-cam uses no viewOffset.
+			const math::Vector3 eyePos = _cameraEntity->GetPosition()
+				+ (_currentCamera ? _currentCamera->GetViewOffset() : math::Vector3::Zero);
+			bufferData._eyePos = math::Vector4(eyePos.x, eyePos.y, eyePos.z, 1.0f);
 			bufferData._eyeDir = _currentCamera ? math::Vector4(_currentCamera->GetLookDir()) : math::Vector4();
 
 			bufferData._colourGrading.colourFilter = r_colourFilter._val.v3;
