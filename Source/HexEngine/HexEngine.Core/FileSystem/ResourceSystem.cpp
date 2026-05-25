@@ -54,6 +54,17 @@ namespace HexEngine
 
 	void ResourceSystem::AddFileSystem(FileSystem* fileSystem)
 	{
+		// Idempotent. AssetPackage::Create adds itself, and several callers
+		// (Game3DEnvironment::Create, WinMain MountGameData, GameIntegrator
+		// runtime mount) ALSO add the same package as their env's
+		// _fileSystem via a second AddFileSystem call. Without this guard
+		// the same package landed in _fileSystems twice, causing path
+		// resolution to iterate it twice (returning the same resource
+		// pointer from two different "branches" of the search, doubling
+		// refcounts on lookup, and showing up as two "EngineData" entries
+		// in any filesystem-listing UI). Dedup by pointer at the source.
+		if (std::find(_fileSystems.begin(), _fileSystems.end(), fileSystem) != _fileSystems.end())
+			return;
 		_fileSystems.push_back(fileSystem);
 	}
 
