@@ -500,6 +500,26 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 	_bbufferWidth = width;
 	_bbufferHeight = height;
 
+	// IDXGISwapChain::ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
+	// (0x887A0001) if anything still holds an outstanding reference to the
+	// existing backbuffer - including the device context's bound RTV/SRV
+	// slots, even if no draws are in flight. Tooling like RenderDoc / PIX
+	// triggers an unscheduled Resize while the context still has the old
+	// backbuffer bound from the previous frame's last draw, hitting this
+	// crash. Defensively unbind all RTVs and shader resources from the
+	// immediate context, then drop our own backbuffer wrapper (which
+	// releases the RTV/SRV held by Texture2D's destructor) before the
+	// resize call.
+	if (_deviceContext != nullptr)
+	{
+		_deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
+		ID3D11ShaderResourceView* nullSRVs[16] = {};
+		_deviceContext->PSSetShaderResources(0, 16, nullSRVs);
+		_deviceContext->VSSetShaderResources(0, 16, nullSRVs);
+		_deviceContext->CSSetShaderResources(0, 16, nullSRVs);
+		_deviceContext->Flush();
+	}
+
 	SAFE_DELETE(device.backbuffer);
 
 	LOG_DEBUG("Resizing graphics device to %dx%d", width, height);
