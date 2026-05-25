@@ -497,26 +497,33 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 
 	auto& device = it->second;
 
+	// Zero dimensions happen on minimize (Windows sends WM_SIZE 0x0). DXGI
+	// either no-ops or fails the resize - either way there's nothing useful
+	// to do. Also catches RenderDoc / PIX sending a probe resize during
+	// their attach handshake.
+	if (width == 0 || height == 0)
+		return;
+
 	_bbufferWidth = width;
 	_bbufferHeight = height;
 
 	// IDXGISwapChain::ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
 	// (0x887A0001) if anything still holds an outstanding reference to the
-	// existing backbuffer - including the device context's bound RTV/SRV
-	// slots, even if no draws are in flight. Tooling like RenderDoc / PIX
-	// triggers an unscheduled Resize while the context still has the old
-	// backbuffer bound from the previous frame's last draw, hitting this
-	// crash. Defensively unbind all RTVs and shader resources from the
-	// immediate context, then drop our own backbuffer wrapper (which
-	// releases the RTV/SRV held by Texture2D's destructor) before the
-	// resize call.
+	// existing backbuffer - including the device context's bound RTV/SRV/
+	// UAV slots in ANY shader stage, plus any cached pipeline state. Tooling
+	// like RenderDoc / PIX triggers an unscheduled Resize while the context
+	// still has the old backbuffer bound from the previous frame's last
+	// draw, hitting this crash.
+	//
+	// ClearState() is the nuclear option that drops every binding in one
+	// call: render targets, shader resources for all stages (VS/HS/DS/GS/
+	// PS/CS), UAVs, samplers, shaders, constants. After Flush() the GPU
+	// has no in-flight references either. Then we drop our own backbuffer
+	// wrapper (which releases the RTV/SRV via Texture2D's destructor),
+	// leaving zero refs at the moment of ResizeBuffers.
 	if (_deviceContext != nullptr)
 	{
-		_deviceContext->OMSetRenderTargets(0, nullptr, nullptr);
-		ID3D11ShaderResourceView* nullSRVs[16] = {};
-		_deviceContext->PSSetShaderResources(0, 16, nullSRVs);
-		_deviceContext->VSSetShaderResources(0, 16, nullSRVs);
-		_deviceContext->CSSetShaderResources(0, 16, nullSRVs);
+		_deviceContext->ClearState();
 		_deviceContext->Flush();
 	}
 
