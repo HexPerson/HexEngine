@@ -306,6 +306,23 @@ namespace HexEngine
 		return _rigidBody != nullptr && _rigidBody->HasAsyncColliderInFlight();
 	}
 
+	void RigidBody::AddTriangleMeshColliderFromCookedBuffer(const std::vector<uint8_t>& cookedBuffer, bool exclusive)
+	{
+		if (!_rigidBody)
+			_rigidBody = g_pEnv->_physicsSystem->CreateRigidBody(GetEntity()->GetComponent<Transform>(), this, _bodyType);
+
+		_colliderShape = IRigidBody::ColliderShape::TriangleMesh;
+		_exclusive = exclusive;
+
+		_rigidBody->AddTriangleMeshColliderFromCookedBuffer(cookedBuffer, exclusive);
+	}
+
+	const std::vector<uint8_t>& RigidBody::GetLastCookedBuffer() const
+	{
+		static const std::vector<uint8_t> empty;
+		return _rigidBody != nullptr ? _rigidBody->GetLastCookedBuffer() : empty;
+	}
+
 	void RigidBody::AddConvexMeshCollider(Mesh* meshIn, bool exclusive)
 	{
 		if (!_rigidBody)

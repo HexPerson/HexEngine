@@ -110,6 +110,20 @@ namespace HexEngine::VolumetricTerrain
 		 */
 		bool ApplyBakedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials, const std::vector<uint8_t>& materialWeights);
 
+		// Cooked PhysX collision blob cache. The runtime stashes the result of
+		// PxCookTriangleMesh here when an async cook completes, the editor
+		// reads it on Save (so the .hscene captures pre-cooked bytes), and
+		// Deserialize feeds it back on Load. When non-empty AND the chunk's
+		// density wasn't edited since the cook, AttachCachedCookedCollision()
+		// skips PxCookTriangleMesh entirely and just calls createTriangleMesh
+		// + createShape + attach (~5ms vs ~75ms).
+		void SetCachedCookedCollisionBlob(std::vector<uint8_t> blob) { _cachedCookedCollisionBlob = std::move(blob); }
+		const std::vector<uint8_t>& GetCachedCookedCollisionBlob() const { return _cachedCookedCollisionBlob; }
+		bool HasCachedCookedCollision() const { return !_cachedCookedCollisionBlob.empty(); }
+
+		/** @brief Attach collider directly from the cached cooked blob, skipping PxCookTriangleMesh. */
+		bool AttachCachedCookedCollision();
+
 		void RebuildMesh(const MarchingCubes& marchingCubes, bool rebuildCollision);
 		void RebuildCollision();
 		bool ApplyBrush(const math::Vector3& center, const BrushSettings& settings, float deltaTime);
@@ -204,6 +218,7 @@ namespace HexEngine::VolumetricTerrain
 		std::vector<float> _densities;
 		std::vector<uint8_t> _materials;
 		std::vector<uint8_t> _materialWeights;
+		std::vector<uint8_t> _cachedCookedCollisionBlob;
 		bool _generated = false;
 		bool _densityDirty = true;
 		bool _meshDirty = true;

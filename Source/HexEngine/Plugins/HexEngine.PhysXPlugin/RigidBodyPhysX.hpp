@@ -52,9 +52,15 @@ public:
 		uint32_t faceCount,
 		bool exclusive) override;
 
+	virtual HexEngine::ICollider* AddTriangleMeshColliderFromCookedBuffer(
+		const std::vector<uint8_t>& cookedBuffer,
+		bool exclusive) override;
+
 	virtual bool TryFinishAsyncCollider() override;
 
 	virtual bool HasAsyncColliderInFlight() const override;
+
+	virtual const std::vector<uint8_t>& GetLastCookedBuffer() const override { return _lastCookedBuffer; }
 
 	virtual HexEngine::ICollider* AddConvexMeshCollider(const std::vector<math::Vector3>& vertices, const std::vector<HexEngine::MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive) override;
 
@@ -145,6 +151,10 @@ private:
 	std::future<AsyncTriMeshCookOutput> _asyncCookFuture;
 	std::shared_ptr<AsyncTriMeshCookInput> _asyncCookInput;
 	std::atomic<bool> _asyncCookInFlight{ false };
+	// Cooked-bytes archive from the most recently completed async cook.
+	// Stays valid past finalise so the caller can read it (e.g. the
+	// volumetric terrain stashes it for save-to-disk caching).
+	std::vector<uint8_t> _lastCookedBuffer;
 
 	HexEngine::Transform* _transform = nullptr;
 	physx::PxRigidActor* _body = nullptr;

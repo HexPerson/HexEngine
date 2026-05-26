@@ -65,6 +65,17 @@ namespace HexEngine
 		bool TryFinishAsyncCollider();
 		bool HasAsyncColliderInFlight() const;
 
+		/**
+		 * @brief Attach a triangle-mesh collider using a previously-cooked
+		 *        binary buffer (output of PxCookTriangleMesh stored to disk).
+		 *        Bypasses the cook step entirely - ~5ms per chunk vs ~75ms
+		 *        for the sync cook path.
+		 */
+		void AddTriangleMeshColliderFromCookedBuffer(const std::vector<uint8_t>& cookedBuffer, bool exclusive);
+
+		/** @brief Bytes from the most recently completed async cook. */
+		const std::vector<uint8_t>& GetLastCookedBuffer() const;
+
 		void CreateCharacterController(const ControllerParameters& params, Transform* transform);
 
 		void RemoveCollider();

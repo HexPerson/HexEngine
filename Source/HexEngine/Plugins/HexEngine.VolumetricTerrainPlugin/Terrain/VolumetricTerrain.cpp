@@ -12,7 +12,10 @@ namespace HexEngine::VolumetricTerrain
 {
 	namespace
 	{
-		static constexpr uint32_t kEditedChunkPayloadVersion = 1u;
+		// Bumped to 2 when cookedCollisionBlob was added at the tail of the
+		// payload. v1 payloads still load (the blob is left empty), v2
+		// payloads gain a "cooked PhysX bytes" tail.
+		static constexpr uint32_t kEditedChunkPayloadVersion = 2u;
 
 		struct QuantizedDensityBlob
 		{
@@ -202,6 +205,17 @@ namespace HexEngine::VolumetricTerrain
 				}
 			}
 
+			// v2 tail: cooked PhysX collision blob. uint32 count + raw bytes.
+			// When the runtime hasn't cooked this chunk yet (fresh terrain
+			// before the first collision refresh) the count is 0 and the load
+			// path falls back to the normal cook-on-demand flow.
+			const uint32_t cookedBlobSize = static_cast<uint32_t>(chunk.cookedCollisionBlob.size());
+			WriteValue(payload, cookedBlobSize);
+			if (cookedBlobSize > 0)
+			{
+				WriteBytes(payload, chunk.cookedCollisionBlob.data(), cookedBlobSize);
+			}
+
 			std::vector<uint8_t> compressed;
 			if (g_pEnv->_compressionProvider != nullptr && g_pEnv->_compressionProvider->CompressData(payload, compressed) && !compressed.empty())
 			{
@@ -232,7 +246,7 @@ namespace HexEngine::VolumetricTerrain
 
 			size_t offset = 0;
 			uint32_t version = 0;
-			if (!ReadValue(payload, offset, version) || version != kEditedChunkPayloadVersion)
+			if (!ReadValue(payload, offset, version) || version < 1u || version > kEditedChunkPayloadVersion)
 			{
 				return false;
 			}
@@ -280,6 +294,31 @@ namespace HexEngine::VolumetricTerrain
 					}
 					memcpy(chunk.materialWeights.data(), payload.data() + offset, materialWeightCount);
 					offset += materialWeightCount;
+				}
+			}
+
+			// v2 tail: cached cooked-PhysX collision blob. v1 payloads stop
+			// here and leave cookedCollisionBlob empty (forcing a re-cook on
+			// load); v2 payloads have a size + bytes block.
+			if (version >= 2u)
+			{
+				uint32_t cookedBlobSize = 0;
+				if (ReadValue(payload, offset, cookedBlobSize))
+				{
+					chunk.cookedCollisionBlob.resize(cookedBlobSize);
+					if (cookedBlobSize > 0)
+					{
+						if ((offset + cookedBlobSize) > payload.size())
+						{
+							// Partial blob - treat as missing, fall through to cook-on-demand.
+							chunk.cookedCollisionBlob.clear();
+						}
+						else
+						{
+							memcpy(chunk.cookedCollisionBlob.data(), payload.data() + offset, cookedBlobSize);
+							offset += cookedBlobSize;
+						}
+					}
 				}
 			}
 
@@ -480,6 +519,12 @@ namespace HexEngine::VolumetricTerrain
 					if (baked != _bakedChunks.end()
 						&& chunk->ApplyBakedData(baked->second.densities, baked->second.materials, baked->second.materialWeights))
 					{
+						// Snapshot also carries the pre-cooked PhysX collision
+						// blob when one was saved - hand it to the chunk so
+						// the upcoming collision refresh can take the cache
+						// fast path instead of running PxCookTriangleMesh.
+						if (!baked->second.cookedCollisionBlob.empty())
+							chunk->SetCachedCookedCollisionBlob(baked->second.cookedCollisionBlob);
 						bakedAppliedCount.fetch_add(1, std::memory_order_relaxed);
 					}
 					else
@@ -993,6 +1038,7 @@ namespace HexEngine::VolumetricTerrain
 		// worker.
 		int32_t kickedOff = 0;
 		int32_t finalised = 0;
+		int32_t cacheHits = 0;
 		bool anyRemaining = false;
 
 		for (auto& [coord, chunk] : _chunks)
@@ -1014,6 +1060,29 @@ namespace HexEngine::VolumetricTerrain
 			if (!(chunk->IsCollisionDirty() || chunk->IsMeshDirty()))
 				continue;
 
+			// (b) cached cook fast path. If the chunk loaded a pre-cooked
+			// PhysX blob from disk, we still need to build the visual mesh
+			// (the SDF density was loaded but the visible triangle list
+			// wasn't), but we can SKIP the cook entirely - just attach the
+			// pre-cooked bytes via createTriangleMesh/createShape.
+			if (chunk->HasCachedCookedCollision())
+			{
+				if (kickedOff >= chunkBudget)
+				{
+					anyRemaining = true;
+					continue;
+				}
+				chunk->RebuildMesh(_marchingCubes, false);
+				if (_gpuVisualsEnabled)
+					chunk->SetVisualMeshHidden(true);
+				if (chunk->AttachCachedCookedCollision())
+				{
+					++cacheHits;
+					++kickedOff;  // counts against budget so we don't hog the frame
+				}
+				continue;
+			}
+
 			if (kickedOff >= chunkBudget)
 			{
 				anyRemaining = true;
@@ -1034,11 +1103,11 @@ namespace HexEngine::VolumetricTerrain
 			}
 		}
 
-		if (kickedOff > 0 || finalised > 0)
+		if (kickedOff > 0 || finalised > 0 || cacheHits > 0)
 		{
 			const double stepMs = std::chrono::duration<double, std::milli>(clk::now() - stepStart).count();
-			LOG_INFO("VolumetricTerrain::ProcessCollisionRefreshStep: %d cook(s) kicked off, %d cook(s) finalised, step=%.1fms  remaining=%d",
-				kickedOff, finalised, stepMs, anyRemaining ? 1 : 0);
+			LOG_INFO("VolumetricTerrain::ProcessCollisionRefreshStep: %d cache-hit(s), %d cook(s) kicked off, %d cook(s) finalised, step=%.1fms  remaining=%d",
+				cacheHits, kickedOff - cacheHits, finalised, stepMs, anyRemaining ? 1 : 0);
 		}
 
 		return !anyRemaining;
@@ -1153,6 +1222,11 @@ namespace HexEngine::VolumetricTerrain
 			blob.materials = chunk->GetMaterials();
 			blob.materialWeights = chunk->GetMaterialWeights();
 			blob.hasMaterialEdits = chunk->HasMaterialEdits();
+			// Pull the cached cooked-PhysX blob too, if the chunk has one.
+			// Capturing here means the .hscene save embeds the cook output
+			// alongside the density snapshot - so the next load skips both
+			// SDF generation AND PxCookTriangleMesh.
+			blob.cookedCollisionBlob = chunk->GetCachedCookedCollisionBlob();
 
 			json out;
 			out["coord"] = { coord.x, coord.y, coord.z };

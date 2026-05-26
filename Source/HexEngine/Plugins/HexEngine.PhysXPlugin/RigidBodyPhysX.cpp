@@ -547,6 +547,10 @@ bool RigidBodyPhysX::BeginAddTriangleMeshColliderAsync(
 	input->exclusive = exclusive;
 	_asyncCookInput = input;
 	_asyncCookInFlight.store(true, std::memory_order_release);
+	// Discard any previously-cached cooked buffer - it's about to be
+	// replaced by the result of this cook. Don't keep a stale snapshot
+	// from a previous Begin/TryFinish cycle.
+	_lastCookedBuffer.clear();
 
 	_asyncCookFuture = std::async(std::launch::async, [input]()
 	{
@@ -592,6 +596,49 @@ bool RigidBodyPhysX::HasAsyncColliderInFlight() const
 	return _asyncCookInFlight.load(std::memory_order_acquire);
 }
 
+HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshColliderFromCookedBuffer(const std::vector<uint8_t>& cookedBuffer, bool exclusive)
+{
+	if (cookedBuffer.empty())
+		return nullptr;
+
+	g_pPhysx->GetScene()->lockWrite();
+
+	physx::PxDefaultMemoryInputData input(
+		const_cast<uint8_t*>(cookedBuffer.data()),
+		static_cast<uint32_t>(cookedBuffer.size()));
+	physx::PxTriangleMesh* mesh = g_pPhysx->GetPhysics()->createTriangleMesh(input);
+	if (mesh == nullptr)
+	{
+		LOG_CRIT("createTriangleMesh() returned null from cached cooked buffer (size=%zu)", cookedBuffer.size());
+		g_pPhysx->GetScene()->unlockWrite();
+		return nullptr;
+	}
+
+	_geometry = new physx::PxTriangleMeshGeometry;
+	auto* triGeom = static_cast<physx::PxTriangleMeshGeometry*>(_geometry);
+
+	const math::Vector3 realScale = _entity ? _entity->GetAbsoluteScale() : _transform->GetScale();
+	triGeom->triangleMesh = mesh;
+	triGeom->scale = BuildSafeTriangleMeshScale(realScale);
+
+	_shape = g_pPhysx->GetPhysics()->createShape(*triGeom, *g_pPhysx->GetDefaultMaterial(), exclusive);
+	if (_shape == nullptr)
+	{
+		LOG_CRIT("createShape() returned null from cached cooked buffer");
+		g_pPhysx->GetScene()->unlockWrite();
+		return nullptr;
+	}
+
+	_body->attachShape(*_shape);
+	_shape->release();
+
+	_collider = new ColliderPhysX(_shape, this);
+
+	g_pPhysx->GetScene()->unlockWrite();
+	g_pPhysx->_resetDebug = true;
+	return _collider;
+}
+
 bool RigidBodyPhysX::TryFinishAsyncCollider()
 {
 	if (!_asyncCookInFlight.load(std::memory_order_acquire))
@@ -621,6 +668,9 @@ bool RigidBodyPhysX::TryFinishAsyncCollider()
 		LOG_CRIT("Async triangle mesh cook failed");
 		return false;
 	}
+
+	// Stash the cooked bytes so the caller can save them for next-load reuse.
+	_lastCookedBuffer = cooked.cookedBuffer;
 
 	// Finalise on the main thread - createTriangleMesh / createShape /
 	// attachShape all touch the PhysX device + scene and aren't safe to

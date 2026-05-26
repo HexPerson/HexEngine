@@ -917,6 +917,16 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_meshDirty = false;
 	}
 
+	bool VolumetricTerrainChunk::AttachCachedCookedCollision()
+	{
+		if (_rigidBody == nullptr || _cachedCookedCollisionBlob.empty())
+			return false;
+		_rigidBody->RemoveCollider();
+		_rigidBody->AddTriangleMeshColliderFromCookedBuffer(_cachedCookedCollisionBlob, true);
+		_collisionDirty = false;
+		return true;
+	}
+
 	bool VolumetricTerrainChunk::BeginAsyncCollisionRebuild()
 	{
 		if (_rigidBody == nullptr)
@@ -982,7 +992,16 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			return false;
 		if (!_rigidBody->HasAsyncColliderInFlight())
 			return false;
-		return _rigidBody->TryFinishAsyncCollider();
+		const bool finished = _rigidBody->TryFinishAsyncCollider();
+		if (finished)
+		{
+			// Capture the cook output so a subsequent scene save can persist
+			// it - next load reuses the bytes via the cache fast path.
+			const auto& buffer = _rigidBody->GetLastCookedBuffer();
+			if (!buffer.empty())
+				_cachedCookedCollisionBlob = buffer;
+		}
+		return finished;
 	}
 
 	bool VolumetricTerrainChunk::HasAsyncCollisionInFlight() const
