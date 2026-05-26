@@ -375,6 +375,11 @@ namespace HexEngine
 	// are 600 (HDR600), 1000 (HDR1000), 1500+ (mastering displays).
 	HVar r_hdrPaperWhiteNits("r_hdrPaperWhiteNits", "Target nits for post-tonemap 'screen white' on HDR displays (Win11 default 200)", 200.0f, 80.0f, 1000.0f);
 	HVar r_hdrPeakNits("r_hdrPeakNits", "Display peak luminance for HDR highlight headroom (match display's HDR rating)", 1000.0f, 200.0f, 4000.0f);
+	// Tonemap operator selector. Maps to ApplyTonemap in TonemapOperators.shader.
+	// 0=Reinhard 1=ReinhardExtended 2=ACES Fitted (default) 3=Uncharted 2 / Hable
+	// 4=Lottes 5=Linear (debug pass-through). Affects both SDR Tonemap.hcs and
+	// HDR TonemapHDR.hcs base curve.
+	HVar r_tonemapOperator("r_tonemapOperator", "Tonemap operator: 0=Reinhard 1=ReinhardExt 2=ACES 3=Uncharted2 4=Lottes 5=Linear", 2, 0, 5);
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
@@ -1224,6 +1229,7 @@ namespace HexEngine
 
 			bufferData._hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
 			bufferData._hdrPeakNits = r_hdrPeakNits._val.f32;
+			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 5));
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
 
 			// Shadowmap data

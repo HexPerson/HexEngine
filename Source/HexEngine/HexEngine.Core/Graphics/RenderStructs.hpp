@@ -269,7 +269,10 @@ namespace HexEngine
 		// because old shaders ignore the trailing bytes.
 		float _hdrPaperWhiteNits;
 		float _hdrPeakNits;
-		float _hdr_pad0;
+		// Tonemap operator id - matches the TonemapOperator enum in
+		// SceneRenderer.cpp (0=Reinhard, 2=ACES Fitted default, etc.).
+		// Stored as float for HLSL alignment uniformity; shader casts to int.
+		float _tonemapOperator;
 		float _hdr_pad1;
 	};
 

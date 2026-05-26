@@ -214,7 +214,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// the full reasoning.
 		float g_hdrPaperWhiteNits;
 		float g_hdrPeakNits;
-		float g_hdr_pad0;
+		// Tonemap operator id - cast to int in the tonemap shaders to
+		// pick a curve from TonemapOperators.shader::ApplyTonemap.
+		float g_tonemapOperator;
 		float g_hdr_pad1;
 	};
 

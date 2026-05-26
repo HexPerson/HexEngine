@@ -10,6 +10,7 @@
 {
 	UICommon
 	Global
+	TonemapOperators
 }
 "VertexShader"
 {
@@ -28,16 +29,6 @@
 	Texture2D shaderTexture : register(t0);
 	SamplerState PointSampler : register(s2);
 
-	float3 AcesFitted(float3 colour)
-	{
-		const float a = 2.51f;
-		const float b = 0.03f;
-		const float c = 2.43f;
-		const float d = 0.59f;
-		const float e = 0.14f;
-		return saturate((colour * (a * colour + b)) / (colour * (c * colour + d) + e));
-	}
-
 	float3 ApplyHdrDisplayMap(float3 colour)
 	{
 		// Output is scRGB linear (1.0 = 80 nits per Windows definition), but
@@ -50,10 +41,13 @@
 		// and peak-nit targets, then convert nits -> scRGB at the end.
 		colour = max(colour, 0.0f);
 
-		// Mid-tones: same ACES curve as the SDR path. AcesFitted saturates at
-		// ~0.866 for input >= 1.0, so the [0,1] input range maps into
-		// [0, 0.866] which we'll then scale into [0, paperWhiteNits].
-		const float3 baseRange = AcesFitted(min(colour, 1.0f));
+		// Mid-tones: route through the selected tonemap operator. All
+		// operators normalise their output to roughly [0, 1], which we then
+		// scale into [0, paperWhiteNits]. For ACES specifically this lands
+		// at ~0.866 * paperWhite for fully-saturated SDR-equivalent input;
+		// other operators have similar but distinct rolloffs.
+		const int op = (int)g_tonemapOperator;
+		const float3 baseRange = ApplyTonemap(min(colour, 1.0f), op);
 
 		// Highlights: extend input values above 1.0 into the headroom between
 		// paper white and display peak. log2(1+x) is gentle (1 stop of input
