@@ -1060,11 +1060,18 @@ namespace HexEngine::VolumetricTerrain
 			if (!(chunk->IsCollisionDirty() || chunk->IsMeshDirty()))
 				continue;
 
-			// (b) cached cook fast path. If the chunk loaded a pre-cooked
-			// PhysX blob from disk, we still need to build the visual mesh
-			// (the SDF density was loaded but the visible triangle list
-			// wasn't), but we can SKIP the cook entirely - just attach the
-			// pre-cooked bytes via createTriangleMesh/createShape.
+			// (b) cached cook fast path. If the chunk has a pre-cooked PhysX
+			// blob, we can attach collision directly via
+			// createTriangleMesh/createShape without ever running
+			// PxCookTriangleMesh (~5ms vs ~75ms).
+			//
+			// Visual mesh handling on this path:
+			//   - GPU visuals enabled: the CPU mesh isn't rendered (the
+			//     chunk's volume is rendered via the GPU surface compute
+			//     pipeline). RebuildMesh is purely wasted marching-cubes
+			//     work (~80ms per chunk at res 40). Skip it.
+			//   - GPU visuals disabled: the CPU mesh IS the visible
+			//     geometry, so we have to run RebuildMesh.
 			if (chunk->HasCachedCookedCollision())
 			{
 				if (kickedOff >= chunkBudget)
@@ -1072,9 +1079,10 @@ namespace HexEngine::VolumetricTerrain
 					anyRemaining = true;
 					continue;
 				}
-				chunk->RebuildMesh(_marchingCubes, false);
-				if (_gpuVisualsEnabled)
-					chunk->SetVisualMeshHidden(true);
+				if (!_gpuVisualsEnabled)
+				{
+					chunk->RebuildMesh(_marchingCubes, false);
+				}
 				if (chunk->AttachCachedCookedCollision())
 				{
 					++cacheHits;
@@ -1089,12 +1097,24 @@ namespace HexEngine::VolumetricTerrain
 				continue;
 			}
 
-			// Need the chunk's visual mesh to exist before the collision mesh
-			// can be derived. RebuildMesh(false) updates the mesh + skips the
-			// synchronous collision build (we kick collision async right after).
-			chunk->RebuildMesh(_marchingCubes, false);
-			if (_gpuVisualsEnabled)
-				chunk->SetVisualMeshHidden(true);
+			// RebuildMesh is only needed when:
+			//   - GPU visuals are disabled (CPU mesh = visible geometry), OR
+			//   - collisionResolution >= chunkResolution (collision shares
+			//     the visual triangulation rather than using its own
+			//     low-res density field).
+			// In the common case (GPU visuals on + low collision res), the
+			// per-chunk ~80ms marching-cubes pass is pure waste - the visible
+			// surface is the GPU compute pipeline and the collision builds
+			// its own mesh internally.
+			const bool needsVisualMesh =
+				!_gpuVisualsEnabled
+				|| (_params.collisionResolution >= _params.chunkResolution);
+			if (needsVisualMesh)
+			{
+				chunk->RebuildMesh(_marchingCubes, false);
+				if (_gpuVisualsEnabled)
+					chunk->SetVisualMeshHidden(true);
+			}
 
 			if (chunk->BeginAsyncCollisionRebuild())
 			{

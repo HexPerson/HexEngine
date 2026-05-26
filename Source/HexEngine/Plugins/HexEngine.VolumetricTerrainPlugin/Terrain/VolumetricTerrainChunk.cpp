@@ -940,24 +940,25 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		// collider first so the body has nothing attached while the new
 		// cook runs.
 		_rigidBody->RemoveCollider();
-		if (_mesh == nullptr)
-		{
-			_collisionDirty = false;
-			return false;
-		}
 
 		const int32_t collisionResolution = std::clamp(_params.collisionResolution, 4, std::max(4, _params.chunkResolution));
 
+		// High-collision-resolution path uses the same triangles as the
+		// visual mesh, so we need _mesh to exist. Low-res path builds its
+		// own collision-only marching cubes from a downsampled density
+		// field - _mesh is not consulted, so we can run it even when the
+		// visual mesh wasn't built (GPU visuals path skips RebuildMesh to
+		// save ~80ms per chunk).
 		if (collisionResolution >= _params.chunkResolution)
 		{
-			if (_mesh->GetNumFaces() == 0)
+			if (_mesh == nullptr || _mesh->GetNumFaces() == 0)
 			{
 				_collisionDirty = false;
 				return false;
 			}
 			const bool queued = _rigidBody->BeginAddTriangleMeshColliderAsync(_mesh.get(), true);
 			if (queued)
-				_collisionDirty = false;  // dirty cleared on queue; cook completion is tracked separately
+				_collisionDirty = false;
 			return queued;
 		}
 
