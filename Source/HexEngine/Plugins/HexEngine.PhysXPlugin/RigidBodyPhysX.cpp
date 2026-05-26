@@ -6,6 +6,7 @@
 #include <HexEngine.Core/Environment/LogFile.hpp>
 #include <HexEngine.Core/Entity/Entity.hpp>
 #include <HexEngine.Core/Entity/Component/RigidBody.hpp>
+#include <chrono>
 #include <cmath>
 
 namespace
@@ -524,6 +525,140 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 	g_pPhysx->_resetDebug = true;
 
 	return _collider;
+}
+
+bool RigidBodyPhysX::BeginAddTriangleMeshColliderAsync(
+	const std::vector<math::Vector3>& vertices,
+	const std::vector<HexEngine::MeshIndexFormat>& indices,
+	uint32_t faceCount,
+	bool exclusive)
+{
+	if (_asyncCookInFlight.load(std::memory_order_acquire))
+		return false;
+	if (vertices.empty() || faceCount == 0 || indices.size() < static_cast<size_t>(faceCount) * 3)
+		return false;
+
+	// Snapshot the inputs so the worker thread sees a stable copy even if the
+	// caller frees / rebuilds the source vectors before the cook completes.
+	auto input = std::make_shared<AsyncTriMeshCookInput>();
+	input->vertices = vertices;
+	input->indices = indices;
+	input->faceCount = faceCount;
+	input->exclusive = exclusive;
+	_asyncCookInput = input;
+	_asyncCookInFlight.store(true, std::memory_order_release);
+
+	_asyncCookFuture = std::async(std::launch::async, [input]()
+	{
+		AsyncTriMeshCookOutput out;
+
+		physx::PxTriangleMeshDesc meshDesc;
+		meshDesc.points.count = static_cast<uint32_t>(input->vertices.size());
+		meshDesc.points.stride = sizeof(physx::PxVec3);
+		meshDesc.points.data = input->vertices.data();
+
+		meshDesc.triangles.count = input->faceCount;
+		meshDesc.triangles.stride = 3 * sizeof(HexEngine::MeshIndexFormat);
+		meshDesc.triangles.data = input->indices.data();
+
+		physx::PxTolerancesScale scale;
+		physx::PxCookingParams params(scale);
+		params.meshWeldTolerance = kTriangleMeshWeldTolerance;
+		params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eWELD_VERTICES;
+		params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
+		params.midphaseDesc.setToDefault(physx::PxMeshMidPhase::eBVH34);
+
+		// PxCookTriangleMesh is documented as thread-safe (it's a pure
+		// algorithmic function operating on the input meshDesc) so multiple
+		// workers can cook in parallel without coordination.
+		physx::PxDefaultMemoryOutputStream buf;
+		physx::PxTriangleMeshCookingResult::Enum result = physx::PxTriangleMeshCookingResult::eFAILURE;
+		if (!PxCookTriangleMesh(params, meshDesc, buf, &result))
+		{
+			out.success = false;
+			return out;
+		}
+
+		out.cookedBuffer.assign(buf.getData(), buf.getData() + buf.getSize());
+		out.success = true;
+		return out;
+	});
+
+	return true;
+}
+
+bool RigidBodyPhysX::HasAsyncColliderInFlight() const
+{
+	return _asyncCookInFlight.load(std::memory_order_acquire);
+}
+
+bool RigidBodyPhysX::TryFinishAsyncCollider()
+{
+	if (!_asyncCookInFlight.load(std::memory_order_acquire))
+		return false;
+	if (!_asyncCookFuture.valid())
+	{
+		// Defensive: state desynced. Clear the flag so we don't loop forever.
+		_asyncCookInFlight.store(false, std::memory_order_release);
+		_asyncCookInput.reset();
+		return false;
+	}
+
+	// Poll without blocking. Frame budget here is "the main thread checks
+	// once per Update tick and only finalises if the worker has finished" -
+	// if the cook isn't done yet, return immediately and try again next
+	// frame.
+	if (_asyncCookFuture.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+		return false;
+
+	AsyncTriMeshCookOutput cooked = _asyncCookFuture.get();
+	const bool exclusive = _asyncCookInput ? _asyncCookInput->exclusive : true;
+	_asyncCookInput.reset();
+	_asyncCookInFlight.store(false, std::memory_order_release);
+
+	if (!cooked.success)
+	{
+		LOG_CRIT("Async triangle mesh cook failed");
+		return false;
+	}
+
+	// Finalise on the main thread - createTriangleMesh / createShape /
+	// attachShape all touch the PhysX device + scene and aren't safe to
+	// invoke from the worker.
+	g_pPhysx->GetScene()->lockWrite();
+
+	physx::PxDefaultMemoryInputData input(cooked.cookedBuffer.data(), static_cast<uint32_t>(cooked.cookedBuffer.size()));
+	physx::PxTriangleMesh* mesh = g_pPhysx->GetPhysics()->createTriangleMesh(input);
+	if (mesh == nullptr)
+	{
+		LOG_CRIT("createTriangleMesh() returned null after successful async cook");
+		g_pPhysx->GetScene()->unlockWrite();
+		return false;
+	}
+
+	_geometry = new physx::PxTriangleMeshGeometry;
+	auto* triGeom = static_cast<physx::PxTriangleMeshGeometry*>(_geometry);
+
+	const math::Vector3 realScale = _entity ? _entity->GetAbsoluteScale() : _transform->GetScale();
+	triGeom->triangleMesh = mesh;
+	triGeom->scale = BuildSafeTriangleMeshScale(realScale);
+
+	_shape = g_pPhysx->GetPhysics()->createShape(*triGeom, *g_pPhysx->GetDefaultMaterial(), exclusive);
+	if (_shape == nullptr)
+	{
+		LOG_CRIT("createShape() returned null in async finalise");
+		g_pPhysx->GetScene()->unlockWrite();
+		return false;
+	}
+
+	_body->attachShape(*_shape);
+	_shape->release();
+
+	_collider = new ColliderPhysX(_shape, this);
+
+	g_pPhysx->GetScene()->unlockWrite();
+	g_pPhysx->_resetDebug = true;
+	return true;
 }
 
 HexEngine::ICollider* RigidBodyPhysX::AddConvexMeshCollider(const std::vector<math::Vector3>& vertices, const std::vector<HexEngine::MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive)

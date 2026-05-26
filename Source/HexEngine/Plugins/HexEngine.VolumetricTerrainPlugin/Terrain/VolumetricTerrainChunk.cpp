@@ -873,6 +873,79 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_meshDirty = false;
 	}
 
+	bool VolumetricTerrainChunk::BeginAsyncCollisionRebuild()
+	{
+		if (_rigidBody == nullptr)
+			return false;
+		if (_rigidBody->HasAsyncColliderInFlight())
+			return false;  // already cooking, leave it alone
+
+		// Same data-shaping as RebuildCollision (the synchronous version),
+		// but we hand the vertex/index arrays to the async cook API instead
+		// of the blocking AddTriangleMeshCollider call. Drop the existing
+		// collider first so the body has nothing attached while the new
+		// cook runs.
+		_rigidBody->RemoveCollider();
+		if (_mesh == nullptr)
+		{
+			_collisionDirty = false;
+			return false;
+		}
+
+		const int32_t collisionResolution = std::clamp(_params.collisionResolution, 4, std::max(4, _params.chunkResolution));
+
+		if (collisionResolution >= _params.chunkResolution)
+		{
+			if (_mesh->GetNumFaces() == 0)
+			{
+				_collisionDirty = false;
+				return false;
+			}
+			const bool queued = _rigidBody->BeginAddTriangleMeshColliderAsync(_mesh.get(), true);
+			if (queued)
+				_collisionDirty = false;  // dirty cleared on queue; cook completion is tracked separately
+			return queued;
+		}
+
+		const std::vector<float> collisionDensities = BuildCollisionDensityField(collisionResolution);
+		const float collisionVoxelSize = _params.chunkWorldSize / static_cast<float>(std::max(1, collisionResolution));
+		MarchingCubes collisionMarching;
+		auto collisionOutput = collisionMarching.Build(collisionDensities, collisionResolution, collisionVoxelSize, _origin, _params.uvScale);
+		if (collisionOutput.vertices.empty() || collisionOutput.indices.empty())
+		{
+			_collisionDirty = false;
+			return false;
+		}
+
+		std::vector<math::Vector3> collisionVertices;
+		collisionVertices.reserve(collisionOutput.vertices.size());
+		for (const auto& vertex : collisionOutput.vertices)
+			collisionVertices.emplace_back(vertex._position.x, vertex._position.y, vertex._position.z);
+
+		const bool queued = _rigidBody->BeginAddTriangleMeshColliderAsync(
+			collisionVertices,
+			collisionOutput.indices,
+			static_cast<uint32_t>(collisionOutput.indices.size() / 3),
+			true);
+		if (queued)
+			_collisionDirty = false;
+		return queued;
+	}
+
+	bool VolumetricTerrainChunk::PollAsyncCollisionFinish()
+	{
+		if (_rigidBody == nullptr)
+			return false;
+		if (!_rigidBody->HasAsyncColliderInFlight())
+			return false;
+		return _rigidBody->TryFinishAsyncCollider();
+	}
+
+	bool VolumetricTerrainChunk::HasAsyncCollisionInFlight() const
+	{
+		return _rigidBody != nullptr && _rigidBody->HasAsyncColliderInFlight();
+	}
+
 	void VolumetricTerrainChunk::RebuildCollision()
 	{
 		if (_rigidBody == nullptr)

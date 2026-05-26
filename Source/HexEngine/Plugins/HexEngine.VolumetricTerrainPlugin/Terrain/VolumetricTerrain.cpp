@@ -784,13 +784,27 @@ namespace HexEngine::VolumetricTerrain
 		if (_pendingCollisionRefresh)
 		{
 			_collisionDebounce += deltaTime;
-			if (!_sculptingActive && _collisionDebounce > 2.0f)
+			// Debounce was 2s to wait out user sculpting before re-cooking.
+			// With the async cook pipeline, cooks happen on worker threads
+			// and don't block the main thread; the cost of starting one
+			// extra cook that gets superseded by a still-newer edit is
+			// small, so a much shorter debounce is fine. For non-sculpting
+			// (initial load) we want to kick cooks off immediately so the
+			// terrain has collision available as quickly as possible.
+			const float debounceTarget = _sculptingActive ? 0.5f : 0.05f;
+			if (_collisionDebounce > debounceTarget)
 			{
 				_collisionStepAccumulator += deltaTime;
 				if (_collisionStepAccumulator >= 0.05f)
 				{
 					_collisionStepAccumulator = 0.0f;
-					if (ProcessCollisionRefreshStep(1))
+					// Budget = hardware_concurrency() so all available cores
+					// can be cooking at once. The cooks run on worker threads,
+					// so the main-thread cost per tick is just the kickoff
+					// (~0.1ms each) + any finalise calls for cooks that have
+					// completed since last tick (~5-15ms each, polled).
+					const int32_t cookBudget = std::max(1, static_cast<int32_t>(std::thread::hardware_concurrency()));
+					if (ProcessCollisionRefreshStep(cookBudget))
 					{
 						_pendingCollisionRefresh = false;
 						_collisionRefreshStarted = false;
@@ -952,44 +966,62 @@ namespace HexEngine::VolumetricTerrain
 			_collisionRefreshStarted = true;
 		}
 
-		int32_t processed = 0;
+		// Two-phase: (a) finalise any async cooks that finished since the last
+		// tick - these are cheap (~5-15ms each, mostly createTriangleMesh +
+		// createShape + attach), and we want them committed promptly so the
+		// terrain has collision available; (b) for chunks that still need
+		// collision and have no cook in flight, kick off a new async cook.
+		// Step a) doesn't count against chunkBudget because the main-thread
+		// cost is bounded. Step b) does count because each kicks off another
+		// worker.
+		int32_t kickedOff = 0;
+		int32_t finalised = 0;
 		bool anyRemaining = false;
+
 		for (auto& [coord, chunk] : _chunks)
 		{
 			(void)coord;
 			if (chunk == nullptr)
+				continue;
+
+			// (a) finalise completed cooks first.
+			if (chunk->HasAsyncCollisionInFlight())
 			{
+				if (chunk->PollAsyncCollisionFinish())
+					++finalised;
+				else
+					anyRemaining = true;  // still cooking
 				continue;
 			}
 
 			if (!(chunk->IsCollisionDirty() || chunk->IsMeshDirty()))
-			{
 				continue;
-			}
-			if (processed >= chunkBudget)
+
+			if (kickedOff >= chunkBudget)
 			{
 				anyRemaining = true;
 				continue;
 			}
 
-			chunk->RebuildMesh(_marchingCubes, true);
+			// Need the chunk's visual mesh to exist before the collision mesh
+			// can be derived. RebuildMesh(false) updates the mesh + skips the
+			// synchronous collision build (we kick collision async right after).
+			chunk->RebuildMesh(_marchingCubes, false);
 			if (_gpuVisualsEnabled)
-			{
 				chunk->SetVisualMeshHidden(true);
+
+			if (chunk->BeginAsyncCollisionRebuild())
+			{
+				++kickedOff;
+				anyRemaining = true;  // cook just started, will need a poll next tick
 			}
-			++processed;
 		}
 
-		// Log only when something happened, to keep the log signal/noise reasonable.
-		// This catches the main-thread "lazy collision refresh stutter": each step
-		// blocks the main thread for as long as PhysX cooking takes for the chunks
-		// in this step. Drop the budget if these get long.
-		if (processed > 0)
+		if (kickedOff > 0 || finalised > 0)
 		{
 			const double stepMs = std::chrono::duration<double, std::milli>(clk::now() - stepStart).count();
-			LOG_INFO("VolumetricTerrain::ProcessCollisionRefreshStep: %d chunk(s) processed in %.1fms (%.2fms/chunk avg)  remaining=%d",
-				processed, stepMs, stepMs / static_cast<double>(processed),
-				anyRemaining ? 1 : 0);
+			LOG_INFO("VolumetricTerrain::ProcessCollisionRefreshStep: %d cook(s) kicked off, %d cook(s) finalised, step=%.1fms  remaining=%d",
+				kickedOff, finalised, stepMs, anyRemaining ? 1 : 0);
 		}
 
 		return !anyRemaining;

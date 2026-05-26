@@ -72,6 +72,16 @@ namespace HexEngine::VolumetricTerrain
 
 		void Generate(SdfTerrainGenerator& generator);
 
+		// Async collision rebuild API. Pairs with the IRigidBody async cook
+		// pipeline: BeginAsync queues a worker-thread PxCookTriangleMesh and
+		// returns immediately; PollAsyncCollisionFinish should be called
+		// once per Update tick on the main thread to commit completed
+		// cooks. Returns true when the cook finished THIS call (so the
+		// caller can clear collisionDirty etc.).
+		bool BeginAsyncCollisionRebuild();
+		bool PollAsyncCollisionFinish();
+		bool HasAsyncCollisionInFlight() const;
+
 		// Two-phase Generate: the CPU half (SDF sampling + auto-material
 		// weights) is per-chunk independent and thread-safe (SdfTerrainGenerator's
 		// FastNoiseLite GetNoise() reads don't mutate noise state, and each chunk

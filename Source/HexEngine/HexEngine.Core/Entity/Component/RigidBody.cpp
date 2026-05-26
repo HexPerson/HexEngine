@@ -268,6 +268,44 @@ namespace HexEngine
 		_rigidBody->AddTriangleMeshCollider(mesh.vertices, mesh.indices, mesh.faceCount, exclusive);
 	}
 
+	bool RigidBody::BeginAddTriangleMeshColliderAsync(const std::vector<math::Vector3>& vertices, const std::vector<MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive)
+	{
+		if (!_rigidBody)
+			_rigidBody = g_pEnv->_physicsSystem->CreateRigidBody(GetEntity()->GetComponent<Transform>(), this, _bodyType);
+
+		// Mirror the bookkeeping the sync version does so that downstream
+		// state queries (collider shape kind, exclusive flag, stored mesh
+		// data for serialisation / debug) match either path.
+		IRigidBody::ColliderData::Mesh mesh;
+		mesh.vertices = vertices;
+		mesh.indices = indices;
+		mesh.faceCount = faceCount;
+		_colliderData.meshes.push_back(mesh);
+		_colliderShape = IRigidBody::ColliderShape::TriangleMesh;
+		_exclusive = exclusive;
+
+		return _rigidBody->BeginAddTriangleMeshColliderAsync(vertices, indices, faceCount, exclusive);
+	}
+
+	bool RigidBody::BeginAddTriangleMeshColliderAsync(Mesh* meshIn, bool exclusive)
+	{
+		std::vector<math::Vector3> verts;
+		verts.reserve(meshIn->GetVertices().size());
+		for (auto& v : meshIn->GetVertices())
+			verts.push_back(math::Vector3(v._position));
+		return BeginAddTriangleMeshColliderAsync(verts, meshIn->GetIndices(), meshIn->GetNumFaces(), exclusive);
+	}
+
+	bool RigidBody::TryFinishAsyncCollider()
+	{
+		return _rigidBody != nullptr && _rigidBody->TryFinishAsyncCollider();
+	}
+
+	bool RigidBody::HasAsyncColliderInFlight() const
+	{
+		return _rigidBody != nullptr && _rigidBody->HasAsyncColliderInFlight();
+	}
+
 	void RigidBody::AddConvexMeshCollider(Mesh* meshIn, bool exclusive)
 	{
 		if (!_rigidBody)
