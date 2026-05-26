@@ -1,5 +1,6 @@
 #include "VolumetricTerrain.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -349,14 +350,33 @@ namespace HexEngine::VolumetricTerrain
 			}
 		}
 
-		//std::thread thread([&]()
-		//	{
-				BuildChunks();
-				StitchChunkBorders();
-				BuildGpuVisualsOrFallback(true);
-				_initialized = true;
-			//});
-		//thread.detach();
+		// Phase timings for terrain load - 30s+ stutter has been observed and
+		// we need to know where the time actually goes before optimising.
+		// Logged at INFO so it shows up in normal runs without needing
+		// LOG_DEBUG enabled.
+		using clk = std::chrono::high_resolution_clock;
+		const auto t0 = clk::now();
+
+		BuildChunks();
+		const auto t1 = clk::now();
+
+		StitchChunkBorders();
+		const auto t2 = clk::now();
+
+		BuildGpuVisualsOrFallback(true);
+		const auto t3 = clk::now();
+
+		_initialized = true;
+
+		const int32_t chunkCount = _params.chunksX * _params.chunksY * _params.chunksZ;
+		const auto ms = [](auto a, auto b) {
+			return std::chrono::duration<double, std::milli>(b - a).count();
+		};
+		LOG_INFO("VolumetricTerrain::Initialize: %d chunks (%dx%dx%d) @ res %d  total=%.1fms  BuildChunks=%.1fms  StitchBorders=%.1fms  BuildGpuVisualsOrFallback=%.1fms",
+			chunkCount,
+			_params.chunksX, _params.chunksY, _params.chunksZ,
+			_params.chunkResolution,
+			ms(t0, t3), ms(t0, t1), ms(t1, t2), ms(t2, t3));
 	}
 
 	void VolumetricTerrain::Regenerate(bool preserveEdits)
@@ -397,6 +417,13 @@ namespace HexEngine::VolumetricTerrain
 		const float halfX = (_params.chunksX * _params.chunkWorldSize) * 0.5f;
 		const float halfZ = (_params.chunksZ * _params.chunkWorldSize) * 0.5f;
 
+		// Sub-phase timings: how much of BuildChunks is "ctor + entity create"
+		// (touches the scene, hard to parallelise) vs Generate() (pure SDF
+		// math + density buffer fill, embarrassingly parallel per-chunk).
+		using clk = std::chrono::high_resolution_clock;
+		double ctorMs = 0.0;
+		double generateMs = 0.0;
+
 		for (int32_t z = 0; z < _params.chunksZ; ++z)
 		{
 			for (int32_t y = 0; y < _params.chunksY; ++y)
@@ -409,12 +436,24 @@ namespace HexEngine::VolumetricTerrain
 						_owner->GetPosition().y + (y * _params.chunkWorldSize),
 						_owner->GetPosition().z - halfZ + (z * _params.chunkWorldSize));
 
+					const auto a = clk::now();
 					auto chunk = std::make_unique<VolumetricTerrainChunk>(coord, _params, origin, _rootEntity);
+					const auto b = clk::now();
 					chunk->Generate(*_generator);
+					const auto c = clk::now();
+
+					ctorMs     += std::chrono::duration<double, std::milli>(b - a).count();
+					generateMs += std::chrono::duration<double, std::milli>(c - b).count();
+
 					_chunks.emplace(coord, std::move(chunk));
 				}
 			}
 		}
+
+		LOG_INFO("VolumetricTerrain::BuildChunks: ctor+entity total=%.1fms  Generate total=%.1fms (per-chunk: ctor=%.2fms, gen=%.2fms)",
+			ctorMs, generateMs,
+			_chunks.empty() ? 0.0 : ctorMs / static_cast<double>(_chunks.size()),
+			_chunks.empty() ? 0.0 : generateMs / static_cast<double>(_chunks.size()));
 	}
 
 	void VolumetricTerrain::RebuildAll(bool rebuildCollision)
@@ -432,10 +471,15 @@ namespace HexEngine::VolumetricTerrain
 
 	void VolumetricTerrain::BuildGpuVisualsOrFallback(bool rebuildCollisionFallback)
 	{
+		using clk = std::chrono::high_resolution_clock;
+		const auto pathStart = clk::now();
+
 		if (_owner == nullptr || _owner->GetScene() == nullptr)
 		{
 			_gpuVisualsEnabled = false;
 			RebuildAll(rebuildCollisionFallback);
+			LOG_INFO("VolumetricTerrain::BuildGpuVisualsOrFallback: no scene -> RebuildAll fallback took %.1fms",
+				std::chrono::duration<double, std::milli>(clk::now() - pathStart).count());
 			return;
 		}
 
@@ -464,6 +508,8 @@ namespace HexEngine::VolumetricTerrain
 			}
 		}
 
+		const auto gpuPipelineDoneAt = clk::now();
+
 		_owner->GetScene()->RegisterCustomRenderer(this);
 		_gpuVisualsEnabled = canUseGpuVisuals;
 		for (auto& [coord, chunk] : _chunks)
@@ -481,10 +527,16 @@ namespace HexEngine::VolumetricTerrain
 			_collisionRefreshStarted = false;
 			_collisionDebounce = 0.0f;
 			_collisionStepAccumulator = 0.0f;
+			LOG_INFO("VolumetricTerrain::BuildGpuVisualsOrFallback: GPU path enabled  pipeline+surfaces=%.1fms  (collision queued for lazy refresh)",
+				std::chrono::duration<double, std::milli>(gpuPipelineDoneAt - pathStart).count());
 			return;
 		}
 
+		const auto fallbackStart = clk::now();
 		RebuildAll(rebuildCollisionFallback);
+		LOG_INFO("VolumetricTerrain::BuildGpuVisualsOrFallback: CPU fallback  gpu-attempt=%.1fms  RebuildAll=%.1fms (this includes per-chunk marching cubes + PhysX cook)",
+			std::chrono::duration<double, std::milli>(gpuPipelineDoneAt - pathStart).count(),
+			std::chrono::duration<double, std::milli>(clk::now() - fallbackStart).count());
 	}
 
 	void VolumetricTerrain::StitchChunkBorders()
@@ -844,6 +896,9 @@ namespace HexEngine::VolumetricTerrain
 			return true;
 		}
 
+		using clk = std::chrono::high_resolution_clock;
+		const auto stepStart = clk::now();
+
 		if (!_collisionRefreshStarted)
 		{
 			StitchChunkBorders();
@@ -876,6 +931,18 @@ namespace HexEngine::VolumetricTerrain
 				chunk->SetVisualMeshHidden(true);
 			}
 			++processed;
+		}
+
+		// Log only when something happened, to keep the log signal/noise reasonable.
+		// This catches the main-thread "lazy collision refresh stutter": each step
+		// blocks the main thread for as long as PhysX cooking takes for the chunks
+		// in this step. Drop the budget if these get long.
+		if (processed > 0)
+		{
+			const double stepMs = std::chrono::duration<double, std::milli>(clk::now() - stepStart).count();
+			LOG_INFO("VolumetricTerrain::ProcessCollisionRefreshStep: %d chunk(s) processed in %.1fms (%.2fms/chunk avg)  remaining=%d",
+				processed, stepMs, stepMs / static_cast<double>(processed),
+				anyRemaining ? 1 : 0);
 		}
 
 		return !anyRemaining;
