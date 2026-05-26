@@ -95,6 +95,21 @@ namespace HexEngine::VolumetricTerrain
 		// speedup on hardware_concurrency() cores.
 		void GenerateCpu(SdfTerrainGenerator& generator);
 		void UploadGeneratedToGpu();
+
+		/**
+		 * @brief Populate density/material/weight buffers from a pre-baked
+		 *        snapshot, skipping SDF generation entirely.
+		 *
+		 * Unlike SetEditedData (which flags the chunk as user-edited so it
+		 * persists separately in scene saves), ApplyBakedData treats the
+		 * snapshot as the ground-truth generation result. The chunk is
+		 * marked generated and ready to mesh/cook, NOT marked as edited.
+		 *
+		 * Returns false if the densities array doesn't match the chunk's
+		 * expected size - caller must fall back to Generate() in that case.
+		 */
+		bool ApplyBakedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials, const std::vector<uint8_t>& materialWeights);
+
 		void RebuildMesh(const MarchingCubes& marchingCubes, bool rebuildCollision);
 		void RebuildCollision();
 		bool ApplyBrush(const math::Vector3& center, const BrushSettings& settings, float deltaTime);

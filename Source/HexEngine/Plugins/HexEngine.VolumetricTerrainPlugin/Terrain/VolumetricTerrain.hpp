@@ -75,6 +75,14 @@ public:
 		MarchingCubes _marchingCubes;
 		std::unique_ptr<SdfTerrainGenerator> _generator;
 		std::unordered_map<ChunkCoord, std::unique_ptr<VolumetricTerrainChunk>, ChunkCoordHash> _chunks;
+
+		// Pre-baked per-chunk snapshot data populated by Deserialize, consumed
+		// by BuildChunks. When a chunk's coord has an entry here, BuildChunks
+		// skips SDF generation for that chunk entirely and applies the
+		// snapshot directly via VolumetricTerrainChunk::ApplyBakedData. Empty
+		// (no entries) when the scene was authored without a snapshot - in
+		// which case BuildChunks runs the original SDF generation flow.
+		std::unordered_map<ChunkCoord, EditedChunkBlob, ChunkCoordHash> _bakedChunks;
 		TerrainStats _stats;
 		bool _gpuVisualsEnabled = false;
 		bool _initialized = false;

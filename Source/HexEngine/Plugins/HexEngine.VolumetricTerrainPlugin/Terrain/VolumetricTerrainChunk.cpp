@@ -430,6 +430,50 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		UploadMaterialsToGpu();
 	}
 
+	bool VolumetricTerrainChunk::ApplyBakedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials, const std::vector<uint8_t>& materialWeights)
+	{
+		// Hard requirement: density buffer must match the chunk's resolution.
+		// If it doesn't, the snapshot is for a different chunkResolution and
+		// we have no choice but to fall back to fresh SDF generation.
+		if (densities.size() != _densities.size())
+			return false;
+
+		_densities = densities;
+
+		// Optional material data. When absent we fall back to the auto-weight
+		// init that Generate() would have done.
+		const bool hasMaterials = (materials.size() == _materials.size());
+		const bool hasWeights = (materialWeights.size() == _materialWeights.size());
+
+		if (hasMaterials)
+			_materials = materials;
+		// else leave _materials at the post-resize 0-fill from the constructor.
+
+		if (hasWeights)
+		{
+			_materialWeights = materialWeights;
+		}
+		else if (hasMaterials)
+		{
+			InitializeMaterialWeightsFromIndices();
+		}
+		else
+		{
+			InitializeAutoMaterialWeights();
+		}
+
+		_generated = true;
+		_densityDirty = false;
+		_meshDirty = true;
+		_collisionDirty = true;
+		_materialDirty = false;
+		_hasMaterialEdits = false;
+		// Critically NOT setting _hasEdits = true - this is a baked snapshot,
+		// not a runtime edit. Subsequent scene saves should treat the chunk
+		// as unedited (matching the baked snapshot is the default state).
+		return true;
+	}
+
 	int32_t VolumetricTerrainChunk::Index(int32_t x, int32_t y, int32_t z) const
 	{
 		const int32_t points = _params.chunkResolution + 1;

@@ -450,14 +450,15 @@ namespace HexEngine::VolumetricTerrain
 		}
 		const auto ctorDone = clk::now();
 
-		// Phase B (parallel, on worker threads): per-chunk SDF sampling +
-		// auto-material weight init. Each chunk writes only into its own
-		// _densities / _materials / _materialWeights arrays; the shared
-		// _generator's noise calls are read-only from FastNoiseLite's
-		// perspective so concurrent samples don't race. This is the ~10s
-		// of work for 100 chunks @ res 40 that previously ran serially on
-		// the main thread.
+		// Phase B (parallel, on worker threads): for each chunk, either
+		// apply pre-baked snapshot data (if the scene was saved with one)
+		// or run SDF generation. ApplyBakedData is a memcpy + small CPU
+		// bookkeeping (negligible vs ~100ms of SDF eval per chunk), so
+		// the parallel scheduling still benefits even if every chunk
+		// has a snapshot - and crucially eliminates the SDF cost entirely.
 		std::atomic<size_t> nextIndex{ 0 };
+		std::atomic<int32_t> bakedAppliedCount{ 0 };
+		std::atomic<int32_t> sdfGeneratedCount{ 0 };
 		const unsigned hw = std::thread::hardware_concurrency();
 		// Leave one core for the main thread so we don't compete for the
 		// scheduler with whatever else the engine is doing this frame.
@@ -474,7 +475,18 @@ namespace HexEngine::VolumetricTerrain
 					const size_t i = nextIndex.fetch_add(1, std::memory_order_relaxed);
 					if (i >= chunkPtrs.size())
 						return;
-					chunkPtrs[i]->GenerateCpu(*_generator);
+					auto* chunk = chunkPtrs[i];
+					const auto baked = _bakedChunks.find(chunk->GetCoord());
+					if (baked != _bakedChunks.end()
+						&& chunk->ApplyBakedData(baked->second.densities, baked->second.materials, baked->second.materialWeights))
+					{
+						bakedAppliedCount.fetch_add(1, std::memory_order_relaxed);
+					}
+					else
+					{
+						chunk->GenerateCpu(*_generator);
+						sdfGeneratedCount.fetch_add(1, std::memory_order_relaxed);
+					}
 				}
 			});
 		}
@@ -496,11 +508,16 @@ namespace HexEngine::VolumetricTerrain
 		const double ctorMs = ms(ctorStart, ctorDone);
 		const double parallelGenMs = ms(ctorDone, cpuGenDone);
 		const double uploadMs = ms(cpuGenDone, uploadDone);
-		LOG_INFO("VolumetricTerrain::BuildChunks (parallel, %u workers): ctor+entity=%.1fms  parallel-Generate=%.1fms  GPU-upload=%.1fms (per-chunk avg: ctor=%.2f gen-wall=%.2f upload=%.2f)",
-			threadCount, ctorMs, parallelGenMs, uploadMs,
-			chunkPtrs.empty() ? 0.0 : ctorMs / static_cast<double>(chunkPtrs.size()),
-			chunkPtrs.empty() ? 0.0 : parallelGenMs / static_cast<double>(chunkPtrs.size()),
-			chunkPtrs.empty() ? 0.0 : uploadMs / static_cast<double>(chunkPtrs.size()));
+		LOG_INFO("VolumetricTerrain::BuildChunks (parallel, %u workers): ctor+entity=%.1fms  parallel-Generate=%.1fms (baked=%d, sdf=%d)  GPU-upload=%.1fms",
+			threadCount, ctorMs, parallelGenMs,
+			bakedAppliedCount.load(), sdfGeneratedCount.load(),
+			uploadMs);
+
+		// Snapshot data has now been consumed (or fallen through to SDF
+		// generation per chunk). Free the memory - keeping it around would
+		// double the working set, and any future Regenerate would either
+		// run with fresh SDF or be re-fed by a fresh Deserialize.
+		_bakedChunks.clear();
 	}
 
 	void VolumetricTerrain::RebuildAll(bool rebuildCollision)
@@ -1112,40 +1129,59 @@ namespace HexEngine::VolumetricTerrain
 			return;
 		}
 
-		std::vector<EditedChunkBlob> edited;
-		GatherEditedChunkData(edited);
-
-		// Save format:
-		// - generation params are persisted once
-		// - only edited chunks serialize density/material blobs
-		// This avoids storing the full generated world volume on disk.
-		json editedChunks = json::array();
-		for (const auto& chunk : edited)
+		// Save EVERY chunk's data as a baked snapshot. Loading the scene then
+		// becomes a parallel memcpy + GPU upload per chunk instead of running
+		// the SDF evaluator across every voxel of every chunk; for 100 chunks
+		// @ res 40 this turns a ~10s synchronous load into ~150ms of CPU work
+		// (the GPU upload phase, which is now the bottleneck).
+		//
+		// Storage cost: densities are quantised to uint16, materials are uint8,
+		// the per-chunk payload is Brotli-compressed inside
+		// SerializeEditedChunkBlobBinary - so the on-disk hit is moderate
+		// (~5-15MB for a 100-chunk scene) and tractable for the asset packer's
+		// pipeline. Worth it for the load-time win.
+		json bakedChunks = json::array();
+		bakedChunks.get_ptr<json::array_t*>()->reserve(_chunks.size());
+		for (const auto& [coord, chunk] : _chunks)
 		{
+			if (chunk == nullptr)
+				continue;
+
+			EditedChunkBlob blob;
+			blob.coord = coord;
+			blob.densities = chunk->GetDensities();
+			blob.materials = chunk->GetMaterials();
+			blob.materialWeights = chunk->GetMaterialWeights();
+			blob.hasMaterialEdits = chunk->HasMaterialEdits();
+
 			json out;
-			out["coord"] = { chunk.coord.x, chunk.coord.y, chunk.coord.z };
+			out["coord"] = { coord.x, coord.y, coord.z };
 			std::string payload;
-			if (SerializeEditedChunkBlobBinary(chunk, payload))
+			if (SerializeEditedChunkBlobBinary(blob, payload))
 			{
 				out["payload"] = std::move(payload);
 			}
 			else
 			{
-				const QuantizedDensityBlob packed = QuantizeDensities(chunk.densities);
+				const QuantizedDensityBlob packed = QuantizeDensities(blob.densities);
 				out["densityMin"] = packed.minValue;
 				out["densityMax"] = packed.maxValue;
 				out["densitiesQ"] = packed.values;
-				out["hasMaterialEdits"] = chunk.hasMaterialEdits;
-				if (chunk.hasMaterialEdits)
+				out["hasMaterialEdits"] = blob.hasMaterialEdits;
+				if (blob.hasMaterialEdits)
 				{
-					out["materials"] = chunk.materials;
-					out["materialWeights"] = chunk.materialWeights;
+					out["materials"] = blob.materials;
+					out["materialWeights"] = blob.materialWeights;
 				}
 			}
-			editedChunks.push_back(std::move(out));
+			bakedChunks.push_back(std::move(out));
 		}
 
-		terrain["editedChunks"] = std::move(editedChunks);
+		terrain["bakedChunks"] = std::move(bakedChunks);
+		// editedChunks key remains for back-compat with v2 scenes that only
+		// have edits (no full bake). Empty in the new format - everything is
+		// in bakedChunks now.
+		terrain["editedChunks"] = json::array();
 	}
 
 	void VolumetricTerrain::Deserialize(json& data, JsonFile* file)
@@ -1159,6 +1195,64 @@ namespace HexEngine::VolumetricTerrain
 		if (terrain.contains("generation"))
 		{
 			loadedParams.Deserialize(terrain["generation"], file);
+		}
+
+		// Pre-Initialize phase: parse the baked snapshot (if present) into
+		// _bakedChunks BEFORE Initialize runs. BuildChunks consults this
+		// map per chunk and skips SDF generation when there's a hit. Done
+		// before Initialize because Initialize -> BuildChunks needs to see
+		// the populated map.
+		auto decodeBlob = [](const json& item, EditedChunkBlob& chunk) -> bool
+		{
+			if (!item.is_object() || !item.contains("coord") || !item["coord"].is_array())
+				return false;
+			chunk.coord.x = item["coord"][0].get<int32_t>();
+			chunk.coord.y = item["coord"][1].get<int32_t>();
+			chunk.coord.z = item["coord"][2].get<int32_t>();
+			if (item.contains("payload") && item["payload"].is_string())
+			{
+				if (!DeserializeEditedChunkBlobBinary(item["payload"].get<std::string>(), chunk))
+					return false;
+			}
+			else
+			{
+				chunk.hasMaterialEdits = item.value("hasMaterialEdits", item.contains("materialWeights") || item.contains("materials"));
+				if (item.contains("densitiesQ"))
+				{
+					QuantizedDensityBlob packed;
+					packed.minValue = item.value("densityMin", 0.0f);
+					packed.maxValue = item.value("densityMax", packed.minValue);
+					packed.values = item["densitiesQ"].get<std::vector<uint16_t>>();
+					chunk.densities = DequantizeDensities(packed);
+				}
+				else if (item.contains("densities"))
+				{
+					chunk.densities = item["densities"].get<std::vector<float>>();
+				}
+				else
+				{
+					return false;
+				}
+				if (chunk.hasMaterialEdits)
+				{
+					if (item.contains("materials"))
+						chunk.materials = item["materials"].get<std::vector<uint8_t>>();
+					if (item.contains("materialWeights"))
+						chunk.materialWeights = item["materialWeights"].get<std::vector<uint8_t>>();
+				}
+			}
+			return true;
+		};
+
+		_bakedChunks.clear();
+		if (terrain.contains("bakedChunks") && terrain["bakedChunks"].is_array())
+		{
+			for (const auto& item : terrain["bakedChunks"])
+			{
+				EditedChunkBlob chunk;
+				if (decodeBlob(item, chunk))
+					_bakedChunks[chunk.coord] = std::move(chunk);
+			}
 		}
 
 		Initialize(_owner, loadedParams);
