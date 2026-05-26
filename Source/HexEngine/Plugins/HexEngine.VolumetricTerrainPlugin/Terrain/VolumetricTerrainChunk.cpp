@@ -386,6 +386,15 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 	void VolumetricTerrainChunk::Generate(SdfTerrainGenerator& generator)
 	{
+		// Backwards-compatible single-call path. Callers wanting parallel
+		// generation across many chunks should use GenerateCpu() in worker
+		// threads + UploadGeneratedToGpu() on the main thread.
+		GenerateCpu(generator);
+		UploadGeneratedToGpu();
+	}
+
+	void VolumetricTerrainChunk::GenerateCpu(SdfTerrainGenerator& generator)
+	{
 		const int32_t points = _params.chunkResolution + 1;
 		const math::Vector3 center = _origin + math::Vector3(_params.chunkWorldSize * 0.5f, 0.0f, _params.chunkWorldSize * 0.5f);
 		const auto heightMap = generator.GenerateHeightSeedMap(center, _params.chunkResolution, _params.chunkWorldSize);
@@ -413,6 +422,10 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_materialDirty = false;
 		_hasMaterialEdits = false;
 		InitializeAutoMaterialWeights();
+	}
+
+	void VolumetricTerrainChunk::UploadGeneratedToGpu()
+	{
 		UploadDensityToGpu();
 		UploadMaterialsToGpu();
 	}

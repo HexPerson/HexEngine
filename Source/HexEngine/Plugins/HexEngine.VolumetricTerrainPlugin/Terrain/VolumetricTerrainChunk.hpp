@@ -71,6 +71,20 @@ namespace HexEngine::VolumetricTerrain
 			Entity* parentEntity);
 
 		void Generate(SdfTerrainGenerator& generator);
+
+		// Two-phase Generate: the CPU half (SDF sampling + auto-material
+		// weights) is per-chunk independent and thread-safe (SdfTerrainGenerator's
+		// FastNoiseLite GetNoise() reads don't mutate noise state, and each chunk
+		// writes only into its own _densities / _materials / _materialWeights
+		// arrays). The GPU upload half MUST run on the main thread because it
+		// touches the immediate device context.
+		//
+		// VolumetricTerrain::BuildChunks uses these to parallelise the SDF
+		// generation across worker threads then serialise the GPU uploads -
+		// turning ~10s of synchronous main-thread work into a near-linear
+		// speedup on hardware_concurrency() cores.
+		void GenerateCpu(SdfTerrainGenerator& generator);
+		void UploadGeneratedToGpu();
 		void RebuildMesh(const MarchingCubes& marchingCubes, bool rebuildCollision);
 		void RebuildCollision();
 		bool ApplyBrush(const math::Vector3& center, const BrushSettings& settings, float deltaTime);

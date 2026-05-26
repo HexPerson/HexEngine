@@ -1,9 +1,11 @@
 #include "VolumetricTerrain.hpp"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <limits>
 #include <string>
+#include <thread>
 #include <unordered_set>
 
 namespace HexEngine::VolumetricTerrain
@@ -417,12 +419,16 @@ namespace HexEngine::VolumetricTerrain
 		const float halfX = (_params.chunksX * _params.chunkWorldSize) * 0.5f;
 		const float halfZ = (_params.chunksZ * _params.chunkWorldSize) * 0.5f;
 
-		// Sub-phase timings: how much of BuildChunks is "ctor + entity create"
-		// (touches the scene, hard to parallelise) vs Generate() (pure SDF
-		// math + density buffer fill, embarrassingly parallel per-chunk).
 		using clk = std::chrono::high_resolution_clock;
-		double ctorMs = 0.0;
-		double generateMs = 0.0;
+
+		// Phase A (serial, on main thread): construct all chunk wrappers,
+		// which creates the per-chunk Entity + StaticMeshComponent + RigidBody.
+		// These touch the scene graph and Scene::CreateEntity isn't safe to
+		// call from worker threads. Cheap (under 2ms per chunk in our
+		// measurements) so serial here is fine.
+		const auto ctorStart = clk::now();
+		std::vector<VolumetricTerrainChunk*> chunkPtrs;
+		chunkPtrs.reserve(static_cast<size_t>(_params.chunksX * _params.chunksY * _params.chunksZ));
 
 		for (int32_t z = 0; z < _params.chunksZ; ++z)
 		{
@@ -436,24 +442,65 @@ namespace HexEngine::VolumetricTerrain
 						_owner->GetPosition().y + (y * _params.chunkWorldSize),
 						_owner->GetPosition().z - halfZ + (z * _params.chunkWorldSize));
 
-					const auto a = clk::now();
 					auto chunk = std::make_unique<VolumetricTerrainChunk>(coord, _params, origin, _rootEntity);
-					const auto b = clk::now();
-					chunk->Generate(*_generator);
-					const auto c = clk::now();
-
-					ctorMs     += std::chrono::duration<double, std::milli>(b - a).count();
-					generateMs += std::chrono::duration<double, std::milli>(c - b).count();
-
+					chunkPtrs.push_back(chunk.get());
 					_chunks.emplace(coord, std::move(chunk));
 				}
 			}
 		}
+		const auto ctorDone = clk::now();
 
-		LOG_INFO("VolumetricTerrain::BuildChunks: ctor+entity total=%.1fms  Generate total=%.1fms (per-chunk: ctor=%.2fms, gen=%.2fms)",
-			ctorMs, generateMs,
-			_chunks.empty() ? 0.0 : ctorMs / static_cast<double>(_chunks.size()),
-			_chunks.empty() ? 0.0 : generateMs / static_cast<double>(_chunks.size()));
+		// Phase B (parallel, on worker threads): per-chunk SDF sampling +
+		// auto-material weight init. Each chunk writes only into its own
+		// _densities / _materials / _materialWeights arrays; the shared
+		// _generator's noise calls are read-only from FastNoiseLite's
+		// perspective so concurrent samples don't race. This is the ~10s
+		// of work for 100 chunks @ res 40 that previously ran serially on
+		// the main thread.
+		std::atomic<size_t> nextIndex{ 0 };
+		const unsigned hw = std::thread::hardware_concurrency();
+		// Leave one core for the main thread so we don't compete for the
+		// scheduler with whatever else the engine is doing this frame.
+		const unsigned threadCount = std::max(1u, hw > 1 ? hw - 1 : 1u);
+
+		std::vector<std::thread> workers;
+		workers.reserve(threadCount);
+		for (unsigned t = 0; t < threadCount; ++t)
+		{
+			workers.emplace_back([&]()
+			{
+				while (true)
+				{
+					const size_t i = nextIndex.fetch_add(1, std::memory_order_relaxed);
+					if (i >= chunkPtrs.size())
+						return;
+					chunkPtrs[i]->GenerateCpu(*_generator);
+				}
+			});
+		}
+		for (auto& w : workers)
+			w.join();
+		const auto cpuGenDone = clk::now();
+
+		// Phase C (serial, on main thread): per-chunk GPU upload. The D3D11
+		// immediate context isn't safe to drive from multiple threads so we
+		// can't trivially parallelise this; in practice GPU upload is a small
+		// fraction of the SDF eval cost so leaving it serial is fine.
+		for (auto* chunk : chunkPtrs)
+			chunk->UploadGeneratedToGpu();
+		const auto uploadDone = clk::now();
+
+		const auto ms = [](auto a, auto b) {
+			return std::chrono::duration<double, std::milli>(b - a).count();
+		};
+		const double ctorMs = ms(ctorStart, ctorDone);
+		const double parallelGenMs = ms(ctorDone, cpuGenDone);
+		const double uploadMs = ms(cpuGenDone, uploadDone);
+		LOG_INFO("VolumetricTerrain::BuildChunks (parallel, %u workers): ctor+entity=%.1fms  parallel-Generate=%.1fms  GPU-upload=%.1fms (per-chunk avg: ctor=%.2f gen-wall=%.2f upload=%.2f)",
+			threadCount, ctorMs, parallelGenMs, uploadMs,
+			chunkPtrs.empty() ? 0.0 : ctorMs / static_cast<double>(chunkPtrs.size()),
+			chunkPtrs.empty() ? 0.0 : parallelGenMs / static_cast<double>(chunkPtrs.size()),
+			chunkPtrs.empty() ? 0.0 : uploadMs / static_cast<double>(chunkPtrs.size()));
 	}
 
 	void VolumetricTerrain::RebuildAll(bool rebuildCollision)
