@@ -1181,7 +1181,13 @@
 				if (parent != nullptr && !IsUnderRoadNetwork(entity, networkRoot))
 					continue;
 
-				outHeights[coord] = entity->GetPosition().y;
+				// World Y, not local. GridToWorld feeds this back as a world coord when
+				// the new wrapper is created top-level, and OrganizeRoadNetworkHierarchy
+				// then reparents under a section (under RoadNetwork) preserving world
+				// position. If we read local Y here and the parent chain's world Y is
+				// non-zero (e.g. the user moved the RoadNetwork entity in Y), each
+				// rebuild would shift the wrapper's world Y by -section.world.y.
+				outHeights[coord] = entity->GetWorldTM().Translation().y;
 				outWrappers.push_back(entity);
 			}
 		}
@@ -1406,8 +1412,11 @@
 				continue;
 
 			// Re-use the existing wrapper's height when reshaping an already-placed cell;
-			// only brand-new cells take the anchor height of this run.
-			const float height = (existing != nullptr) ? existing->GetPosition().y : anchorHeight;
+			// only brand-new cells take the anchor height of this run. Read WORLD Y -
+			// height feeds GridToWorld which produces a world coord, and the wrapper is
+			// then placed top-level before the post-spawn reparent. Reading local Y here
+			// would drift the wrapper down by section.world.y on every upgrade.
+			const float height = (existing != nullptr) ? existing->GetWorldTM().Translation().y : anchorHeight;
 
 			actions.push_back({ coord, existing, placement, height });
 		}
@@ -2215,7 +2224,10 @@ void CitySimulationEditorToolPlugin::PaintOrthogonalRun(const math::Vector3& wor
 	float runHeight = _roadPainterAnchorHeight;
 	if (auto* existingAtAnchor = FindManagedRoadCell(scene, start); existingAtAnchor != nullptr)
 	{
-		runHeight = existingAtAnchor->GetPosition().y;
+		// World Y - runHeight is used as the world height for new cells in this run.
+		// Local Y would drift roads up/down by section.world.y on each extend if the
+		// RoadNetwork entity has been moved off Y=0.
+		runHeight = existingAtAnchor->GetWorldTM().Translation().y;
 	}
 
 	// Ensure the RoadNetwork root exists at the painter's locked origin BEFORE the
