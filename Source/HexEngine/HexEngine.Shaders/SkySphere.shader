@@ -337,6 +337,10 @@
 
 		output.pos = float4(worldSpacePos, -1.0f);
 
+		// Sky doesn't need any of the material features - emits its own colour through
+		// the standard deferred path's sky branch (diff.a == -1).
+		output.feat = float4(0.0f, 0.0f, 0.0f, 0.0f);
+
 		return output;
 	}
 }

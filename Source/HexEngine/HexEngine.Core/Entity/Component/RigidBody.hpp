@@ -44,6 +44,38 @@ namespace HexEngine
 
 		void AddConvexMeshCollider(Mesh* mesh, bool exclusive);
 
+		/**
+		 * @brief Async-cook version of AddTriangleMeshCollider.
+		 *
+		 * Returns true when the cook was queued. The caller is then
+		 * responsible for polling TryFinishAsyncCollider() each frame
+		 * until it returns true (at which point the collider is fully
+		 * attached). HasAsyncColliderInFlight() reports the in-flight
+		 * state; until it goes false, the body has no triangle-mesh
+		 * collider attached.
+		 *
+		 * Suitable for batch-loading scenarios where dozens of chunks
+		 * all need triangle-mesh colliders (volumetric terrain) - cooks
+		 * run in parallel on worker threads, main thread only takes the
+		 * cheap ~5-15ms finalisation hit per chunk per frame instead of
+		 * the full ~75ms cook+finalise.
+		 */
+		bool BeginAddTriangleMeshColliderAsync(const std::vector<math::Vector3>& vertices, const std::vector<MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive);
+		bool BeginAddTriangleMeshColliderAsync(Mesh* mesh, bool exclusive);
+		bool TryFinishAsyncCollider();
+		bool HasAsyncColliderInFlight() const;
+
+		/**
+		 * @brief Attach a triangle-mesh collider using a previously-cooked
+		 *        binary buffer (output of PxCookTriangleMesh stored to disk).
+		 *        Bypasses the cook step entirely - ~5ms per chunk vs ~75ms
+		 *        for the sync cook path.
+		 */
+		void AddTriangleMeshColliderFromCookedBuffer(const std::vector<uint8_t>& cookedBuffer, bool exclusive);
+
+		/** @brief Bytes from the most recently completed async cook. */
+		const std::vector<uint8_t>& GetLastCookedBuffer() const;
+
 		void CreateCharacterController(const ControllerParameters& params, Transform* transform);
 
 		void RemoveCollider();

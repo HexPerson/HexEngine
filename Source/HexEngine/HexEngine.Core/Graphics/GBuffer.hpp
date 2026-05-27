@@ -27,6 +27,15 @@ namespace HexEngine
 		ITexture2D* GetNormal() const;
 		ITexture2D* GetPosition() const;
 		ITexture2D* GetVelocity() const;
+		// Material-feature RT (RGBA8). Packs per-pixel data for non-standard shading
+		// models. Layout convention:
+		//   .r = material model id (0=standard, 1=SSS, 2=clearcoat, 3=anisotropic, 4=sheen)
+		//   .g = primary parameter (model-dependent: SSS mask, clearcoat strength,
+		//        anisotropy strength, sheen factor, ...)
+		//   .b = secondary parameter (clearcoat roughness, anisotropy tangent.x, sheen tint.r, ...)
+		//   .a = tertiary parameter (sss profile id, anisotropy tangent.y, sheen tint.g, ...)
+		// All zero = standard PBR. Writers that don't care leave it at the clear value.
+		ITexture2D* GetFeatures() const;
 		ITexture2D* GetDepthBuffer() const;
 
 	private:
@@ -35,6 +44,7 @@ namespace HexEngine
 		ITexture2D* _normalTex = nullptr;
 		ITexture2D* _positionTex = nullptr;
 		ITexture2D* _velocityTex = nullptr;
+		ITexture2D* _featuresTex = nullptr;
 
 		ITexture2D* _depthBuffer = nullptr;
 	};

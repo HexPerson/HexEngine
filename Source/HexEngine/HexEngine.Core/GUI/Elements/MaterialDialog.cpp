@@ -43,7 +43,6 @@ namespace HexEngine
 		}
 
 		_smoothness = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Smoothness", &material->_properties.smoothness, 0.0f, 1.0f, 0.01f, 2);
-		_specularProbability = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Specular Probability", &material->_properties.specularProbability, 0.0f, 1.0f, 0.01f, 2);
 
 		auto metallicFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Metallic Factor", &material->_properties.metallicFactor, 0.0f, 1.0f, 0.01f, 2);
 		auto roughnessFactor = new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18), L"Roughness Factor", &material->_properties.roughnessFactor, 0.0f, 1.0f, 0.01f, 2);
@@ -56,6 +55,39 @@ namespace HexEngine
 		format->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&Material::SetFormat, material.get(), MaterialFormat::None)));
 		format->GetContextMenu()->AddItem(new ContextItem(L"ORM", std::bind(&Material::SetFormat, material.get(), MaterialFormat::ORM)));
 		format->GetContextMenu()->AddItem(new ContextItem(L"RMA", std::bind(&Material::SetFormat, material.get(), MaterialFormat::RMA)));
+
+		// Shading model selector. Standard = existing PBR (the only path until now).
+		// Non-standard models route through the material-features GBuffer and
+		// matching post-process passes (SubsurfaceScattering for SSS, etc).
+		auto shadingModel = new DropDown(_layout, _layout->GetNextPos(), Point(200, 18), L"Shading Model");
+		shadingModel->GetContextMenu()->AddItem(new ContextItem(L"Standard PBR",
+			[material](const std::wstring&) { material->_properties.materialModel = 0; }));
+		shadingModel->GetContextMenu()->AddItem(new ContextItem(L"Subsurface (SSS)",
+			[material](const std::wstring&) { material->_properties.materialModel = 1; }));
+		shadingModel->GetContextMenu()->AddItem(new ContextItem(L"Clearcoat",
+			[material](const std::wstring&) { material->_properties.materialModel = 2; }));
+		shadingModel->GetContextMenu()->AddItem(new ContextItem(L"Anisotropic",
+			[material](const std::wstring&) { material->_properties.materialModel = 3; }));
+		shadingModel->GetContextMenu()->AddItem(new ContextItem(L"Sheen / Cloth",
+			[material](const std::wstring&) { material->_properties.materialModel = 4; }));
+
+		// Per-model parameter sliders. Meaning depends on the active model - the
+		// MaterialProperties.modelParams docstring lists the layout per model. We
+		// expose all four as raw floats so the user can drive whichever the chosen
+		// model interprets. (No need to gate on materialModel since modelParams is
+		// ignored for Standard PBR.)
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Model Param X (SSS mask / clearcoat str / aniso / sheen str)",
+			&material->_properties.modelParams.x, 0.0f, 1.0f, 0.01f, 3);
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Model Param Y (SSS tint R / clearcoat rough / tangent.x / sheen.r)",
+			&material->_properties.modelParams.y, -1.0f, 1.0f, 0.01f, 3);
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Model Param Z (SSS tint G / clearcoat IOR / tangent.y / sheen.g)",
+			&material->_properties.modelParams.z, -1.0f, 1.0f, 0.01f, 3);
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Model Param W (unused / clearcoat unused / unused / sheen.b)",
+			&material->_properties.modelParams.w, -1.0f, 1.0f, 0.01f, 3);
 
 		auto save = new Button(_layout, _layout->GetNextPos(), Point(80, 20), L"Save", std::bind(&MaterialDialog::Save, this));
 

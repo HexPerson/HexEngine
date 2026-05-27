@@ -184,7 +184,36 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> SceneManager::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		return nullptr;
+		// Mirror LoadResourceFromFile's branching: the loader is registered
+		// only for ".hscene", but the file path also handles ".hprefab"
+		// defensively, so do the same here for symmetry.
+		if (relativePath.extension() == ".hprefab")
+		{
+			if (g_pEnv != nullptr && g_pEnv->_prefabLoader != nullptr)
+			{
+				// Delegate to the prefab loader's own memory path so prefabs
+				// streamed from an AssetPackage don't fall back to disk.
+				return g_pEnv->_prefabLoader->LoadResourceFromMemory(data, relativePath, fileSystem, options);
+			}
+			return nullptr;
+		}
+
+		// Standard .hscene path. SceneSaveFile::LoadFromMemory already exists
+		// (it was added when PrefabLoader was wired up for memory loads); it
+		// internally builds a json document from the bytes and routes through
+		// the same LoadFromJson body the disk Load() ends up at, so packaged
+		// scenes deserialise identically to disk scenes.
+		auto scene = CreateEmptyScene(false, nullptr, true);
+
+		SceneSaveFile file(relativePath, std::ios::in, scene);
+		if (!file.LoadFromMemory(data, scene))
+		{
+			LOG_CRIT("Failed to load scene from memory: %s", relativePath.string().c_str());
+			UnloadScene(scene.get());
+			return nullptr;
+		}
+
+		return scene;
 	}
 
 	void SceneManager::UnloadResource(IResource* resource)

@@ -394,6 +394,14 @@ namespace
 		return appliedAny;
 	}
 
+	// Forward declaration so the disk + memory wrapper functions below can
+	// call the parsing impl that lives further down.
+	bool TryParsePrefabVariantDataFromJson(const json& rootJson, const fs::path& prefabAssetPath, PrefabVariantData& outData);
+
+	// Disk-side reader: pulls the prefab JSON off disk, parses it, then
+	// hands off to the JSON-side variant-detect helper. Kept so the
+	// existing LoadPrefabAssetToSceneRecursive (file mode) doesn't need
+	// to thread its own buffer through.
 	bool TryReadPrefabVariantData(const fs::path& prefabAssetPath, PrefabVariantData& outData)
 	{
 		outData = {};
@@ -416,6 +424,40 @@ namespace
 		{
 			return false;
 		}
+
+		return TryParsePrefabVariantDataFromJson(rootJson, prefabAssetPath, outData);
+	}
+
+	// Memory-side reader: same logic but parses an already-loaded byte
+	// buffer (the AssetPackage path streams the .hprefab body in as a
+	// std::vector<uint8_t>).
+	bool TryReadPrefabVariantDataFromMemory(const std::vector<uint8_t>& data, const fs::path& prefabAssetPath, PrefabVariantData& outData)
+	{
+		outData = {};
+		if (data.empty())
+			return false;
+
+		json rootJson;
+		try
+		{
+			rootJson = json::parse(
+				reinterpret_cast<const char*>(data.data()),
+				reinterpret_cast<const char*>(data.data()) + data.size());
+		}
+		catch (const std::exception&)
+		{
+			return false;
+		}
+
+		return TryParsePrefabVariantDataFromJson(rootJson, prefabAssetPath, outData);
+	}
+
+	// Static-checked variant-detect step that takes an already-parsed json
+	// document. Both disk-side and memory-side paths converge here so the
+	// variant rules (basePrefab + patches) stay defined once.
+	bool TryParsePrefabVariantDataFromJson(const json& rootJson, const fs::path& prefabAssetPath, PrefabVariantData& outData)
+	{
+		outData = {};
 
 		const auto variantIt = rootJson.find("variant");
 		if (variantIt == rootJson.end() || !variantIt->is_object())
@@ -499,6 +541,54 @@ namespace
 		}
 
 		recursionGuard.erase(recursionKey);
+		return loaded;
+	}
+
+	// Memory-mode prefab loader. Used by PrefabLoader::LoadResourceFromMemory
+	// when an asset comes out of a .pkg buffer rather than a disk file.
+	// Variants are detected and applied the same way as the disk-mode path,
+	// but the BASE prefab lookup (when variant) goes back through the
+	// resource system via Prefab::Create, which routes through the normal
+	// FileSystem chain so the base can be in another package OR on disk.
+	bool LoadPrefabAssetToSceneFromMemory(
+		const std::vector<uint8_t>& data,
+		const fs::path& prefabAssetPath,
+		const std::shared_ptr<HexEngine::Scene>& targetScene,
+		std::unordered_set<std::wstring>& recursionGuard)
+	{
+		if (targetScene == nullptr || data.empty())
+			return false;
+
+		const std::wstring recursionKey = BuildComparablePath(prefabAssetPath);
+		if (!recursionKey.empty() && !recursionGuard.insert(recursionKey).second)
+		{
+			LOG_CRIT("Detected prefab variant recursion while resolving '%s'.", prefabAssetPath.string().c_str());
+			return false;
+		}
+
+		PrefabVariantData variantData;
+		const bool isVariant = TryReadPrefabVariantDataFromMemory(data, prefabAssetPath, variantData);
+		bool loaded = false;
+
+		if (isVariant)
+		{
+			// Recurse via the path-based loader so the base prefab gets
+			// resolved through ALL mounted file systems - disk first, then
+			// packages. Whichever mount owns the base supplies its bytes.
+			loaded = LoadPrefabAssetToSceneRecursive(variantData.basePrefabPath, targetScene, recursionGuard);
+			if (loaded)
+			{
+				ApplyVariantPatchesToScene(targetScene.get(), variantData.patches);
+			}
+		}
+		else
+		{
+			HexEngine::SceneSaveFile file(prefabAssetPath, std::ios::in, targetScene, HexEngine::SceneFileFlags::IsPrefab);
+			loaded = file.LoadFromMemory(data, targetScene);
+		}
+
+		if (!recursionKey.empty())
+			recursionGuard.erase(recursionKey);
 		return loaded;
 	}
 
@@ -619,11 +709,34 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> PrefabLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		(void)data;
-		(void)relativePath;
 		(void)fileSystem;
 		(void)options;
-		return nullptr;
+
+		if (g_pEnv == nullptr || g_pEnv->_sceneManager == nullptr)
+		{
+			LOG_CRIT("Cannot load prefab '%s' because SceneManager is unavailable.", relativePath.string().c_str());
+			return nullptr;
+		}
+
+		if (data.empty())
+		{
+			LOG_CRIT("Prefab '%s' has no data in the package.", relativePath.string().c_str());
+			return nullptr;
+		}
+
+		auto prefabScene = g_pEnv->_sceneManager->CreateEmptyScene(false);
+
+		std::unordered_set<std::wstring> recursionGuard;
+		if (!LoadPrefabAssetToSceneFromMemory(data, relativePath, prefabScene, recursionGuard))
+		{
+			LOG_CRIT("Failed to load packaged prefab: %s", relativePath.filename().string().c_str());
+			return nullptr;
+		}
+
+		auto prefab = std::shared_ptr<Prefab>(new Prefab, ResourceDeleter());
+		prefab->_scene = prefabScene;
+		prefab->_entities = CollectSavableEntities(prefabScene);
+		return prefab;
 	}
 
 	void PrefabLoader::OnResourceChanged(std::shared_ptr<IResource> resource)

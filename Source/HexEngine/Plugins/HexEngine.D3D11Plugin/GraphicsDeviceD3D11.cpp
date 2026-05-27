@@ -50,14 +50,21 @@ namespace
 		}
 	}
 
-	bool WindowSupportsHDR(IDXGIAdapter* adapter, HWND hwnd)
+	struct DisplayHdrInfo
 	{
+		bool hdrSupported = false;
+		float maxLuminance = 0.0f;  // peak nits the display can hit, from IDXGIOutput6::GetDesc1
+	};
+
+	DisplayHdrInfo QueryDisplayHdrInfo(IDXGIAdapter* adapter, HWND hwnd)
+	{
+		DisplayHdrInfo info;
 		if (!adapter || !hwnd)
-			return false;
+			return info;
 
 		const HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
 		if (!monitor)
-			return false;
+			return info;
 
 		for (UINT outputIndex = 0;; ++outputIndex)
 		{
@@ -76,23 +83,30 @@ namespace
 				continue;
 			}
 
-			bool hdrSupported = false;
 			IDXGIOutput6* output6 = nullptr;
 			if (SUCCEEDED(output->QueryInterface(__uuidof(IDXGIOutput6), reinterpret_cast<void**>(&output6))) && output6)
 			{
 				DXGI_OUTPUT_DESC1 outputDesc1 = {};
 				if (SUCCEEDED(output6->GetDesc1(&outputDesc1)))
 				{
-					hdrSupported = IsHdrOutputColorSpace(outputDesc1.ColorSpace) && outputDesc1.MaxLuminance > 0.0f;
+					info.hdrSupported = IsHdrOutputColorSpace(outputDesc1.ColorSpace) && outputDesc1.MaxLuminance > 0.0f;
+					info.maxLuminance = outputDesc1.MaxLuminance;
 				}
 			}
 
 			SAFE_RELEASE(output6);
 			SAFE_RELEASE(output);
-			return hdrSupported;
+			return info;
 		}
 
-		return false;
+		return info;
+	}
+
+	// Backwards-compat thin wrapper - keeps the existing AttachToWindow
+	// callsite readable. Callers that need MaxLuminance use the struct directly.
+	bool WindowSupportsHDR(IDXGIAdapter* adapter, HWND hwnd)
+	{
+		return QueryDisplayHdrInfo(adapter, hwnd).hdrSupported;
 	}
 
 	void ConfigureSwapChainColorSpace(IDXGISwapChain* swapchain, bool hdrOutputActive)
@@ -391,7 +405,9 @@ bool GraphicsDeviceD3D11::AttachToWindow(HexEngine::Window* window)
 
 	HRESULT hr;
 
-	const bool hdrOutputActive = r_hdrOutput._val.b && WindowSupportsHDR(_dxgiAdapter, window->GetHandle());
+	const DisplayHdrInfo displayHdr = QueryDisplayHdrInfo(_dxgiAdapter, window->GetHandle());
+	const bool hdrOutputActive = r_hdrOutput._val.b && displayHdr.hdrSupported;
+	_displayPeakNits = displayHdr.maxLuminance;  // cached for GetDisplayPeakNits()
 	const DXGI_FORMAT backbufferFormat = GetPresentationFormat(hdrOutputActive);
 
 	UINT quality = 0;
@@ -497,8 +513,35 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 
 	auto& device = it->second;
 
+	// Zero dimensions happen on minimize (Windows sends WM_SIZE 0x0). DXGI
+	// either no-ops or fails the resize - either way there's nothing useful
+	// to do. Also catches RenderDoc / PIX sending a probe resize during
+	// their attach handshake.
+	if (width == 0 || height == 0)
+		return;
+
 	_bbufferWidth = width;
 	_bbufferHeight = height;
+
+	// IDXGISwapChain::ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
+	// (0x887A0001) if anything still holds an outstanding reference to the
+	// existing backbuffer - including the device context's bound RTV/SRV/
+	// UAV slots in ANY shader stage, plus any cached pipeline state. Tooling
+	// like RenderDoc / PIX triggers an unscheduled Resize while the context
+	// still has the old backbuffer bound from the previous frame's last
+	// draw, hitting this crash.
+	//
+	// ClearState() is the nuclear option that drops every binding in one
+	// call: render targets, shader resources for all stages (VS/HS/DS/GS/
+	// PS/CS), UAVs, samplers, shaders, constants. After Flush() the GPU
+	// has no in-flight references either. Then we drop our own backbuffer
+	// wrapper (which releases the RTV/SRV via Texture2D's destructor),
+	// leaving zero refs at the moment of ResizeBuffers.
+	if (_deviceContext != nullptr)
+	{
+		_deviceContext->ClearState();
+		_deviceContext->Flush();
+	}
 
 	SAFE_DELETE(device.backbuffer);
 

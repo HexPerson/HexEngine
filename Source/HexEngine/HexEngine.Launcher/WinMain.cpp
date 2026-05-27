@@ -1,11 +1,70 @@
 
 
 #include "../HexEngine.Core/HexEngine.hpp"
+#include "../HexEngine.Core/FileSystem/AssetPackage.hpp"
 
 //HVar* HexEngine::g_hvars = nullptr;
 //HCommand* HexEngine::g_commands = nullptr;
 //int32_t HexEngine::g_numVars = 0;
 //int32_t HexEngine::g_numCommands = 0;
+
+// Holds the lifetime of the GameData mount so the AssetPackage isn't freed
+// while the game is still loading resources from it. Kept at file scope rather
+// than as a local in WinMain because the package needs to outlive the game
+// loop without forcing every game-side resource load to keep its own ref.
+static std::shared_ptr<HexEngine::AssetPackage> g_gameDataPackage;
+static HexEngine::FileSystem* g_gameDataDiskFs = nullptr;
+
+// Auto-mounts the game's data so resource loads find their assets. Two
+// scenarios:
+//   1. Shipped game next to GameData.pkg -> mount the pkg under the
+//      "GameData" filesystem name; resource loads stream from the package.
+//   2. Dev / loose-asset launch with a Data/ folder next to the exe ->
+//      mount that folder as a regular FileSystem under "GameData". The
+//      editor takes a different path (Editor.cpp creates a "GameData"
+//      FileSystem rooted at the project folder), so neither double-mounts.
+static void MountGameData()
+{
+	if (HexEngine::g_pEnv == nullptr)
+		return;
+
+	const fs::path exeDir = fs::current_path();
+	const fs::path packagePath = exeDir / L"GameData.pkg";
+
+	if (fs::exists(packagePath))
+	{
+		// A bootstrap FileSystem rooted at exeDir gives AssetPackage::Create
+		// a place to resolve the loader path; the pkg's loader needs a
+		// hosting FileSystem entry the resource system can walk.
+		HexEngine::FileSystem* bootstrapFs = new HexEngine::FileSystem(L"GameDataBootstrap");
+		bootstrapFs->SetBaseDirectory(exeDir);
+		HexEngine::g_pEnv->GetResourceSystem().AddFileSystem(bootstrapFs);
+
+		LOG_INFO("Loading game asset package from '%S'", packagePath.wstring().c_str());
+		g_gameDataPackage = HexEngine::AssetPackage::Create(L"GameDataBootstrap.GameData.pkg", L"GameData");
+
+		HexEngine::g_pEnv->GetResourceSystem().RemoveFileSystem(bootstrapFs);
+		delete bootstrapFs;
+
+		if (!g_gameDataPackage)
+		{
+			LOG_CRIT("Failed to load GameData.pkg from '%S'; game asset lookups will fail until a Data/ folder is mounted.", packagePath.wstring().c_str());
+		}
+		return;
+	}
+
+	const fs::path looseDataDir = exeDir / L"Data";
+	if (fs::exists(looseDataDir) && fs::is_directory(looseDataDir))
+	{
+		g_gameDataDiskFs = new HexEngine::FileSystem(L"GameData");
+		g_gameDataDiskFs->SetBaseDirectory(exeDir);
+		HexEngine::g_pEnv->GetResourceSystem().AddFileSystem(g_gameDataDiskFs);
+		LOG_INFO("Loading game data from loose directory '%S'", looseDataDir.wstring().c_str());
+		return;
+	}
+
+	LOG_WARN("No GameData.pkg or Data/ directory found next to the executable. Game.dll resource lookups will fail.");
+}
 
 HexEngine::IGameExtension* LoadGameExtension()
 {
@@ -69,6 +128,11 @@ int WinMain(
 		// Add an error message here?
 		return EXIT_FAILURE;
 	}
+
+	// Mount the game's data BEFORE the game extension's OnRegisterClasses /
+	// OnLoadGameWorld runs so resource lookups it kicks off can resolve
+	// against the package (or loose Data/ fallback) immediately.
+	MountGameData();
 
 	auto pGameExtension = LoadGameExtension();
 

@@ -380,14 +380,36 @@
 		const float outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;
 		output.diff = float4(finalRGB, outputAlpha);
 
-		// material output is: metallic, roughness, smoothness, specularProbability
-		output.mat = float4(metalness, roughness, max(g_material.smoothness, 0.01f), g_material.specularProbability);
+		// material output is: metallic, roughness, smoothness, reserved (0)
+		// (specularProbability used to live in .a but nothing read it; channel is
+		// kept zero so future repurposing of .a starts from a clean clear value).
+		output.mat = float4(metalness, roughness, g_material.smoothness, 0.0f);
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 
 		output.pos = float4(input.positionWS.xyz, length(emission));
 
 		output.velocity = velocity;
+
+		// Material-features RT. Encodes shading-model id + per-model params for the
+		// post-process passes (SSS, clearcoat, anisotropic, sheen). Layout:
+		//   .r = (modelId * 32 + modelParams.w_quant) / 255
+		//        i.e. upper 3 bits of the byte = model id (range 0..7), lower 5
+		//        bits = quantised modelParams.w (32 levels). This lets sheen
+		//        (which needs all four modelParam channels for strength + RGB tint)
+		//        carry tint.b through the otherwise-full features RT - we'd run
+		//        out of channels packing modelId + 4 modelParams into 4 RT slots.
+		//   .gba = modelParams.xyz (strength + the first two tint / shape params)
+		// (0,0,0,0) = standard PBR which preserves existing behaviour for materials
+		// that don't opt into a non-default model.
+		const uint idByte = (uint)g_material.materialModel;
+		const float wQuant = floor(saturate(g_material.modelParams.w) * 31.0f + 0.5f);
+		const float packedR = ((float)idByte * 32.0f + wQuant) / 255.0f;
+		output.feat = float4(
+			packedR,
+			g_material.modelParams.x,
+			g_material.modelParams.y,
+			g_material.modelParams.z);
 
 		return output;
 	}

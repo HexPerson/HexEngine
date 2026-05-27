@@ -152,7 +152,21 @@ namespace HexEngine
 		_originalStrength = value;
 		if (auto* entity = GetEntity(); entity != nullptr && entity->GetScene() != nullptr)
 		{
-			entity->GetScene()->NotifyGiLightStateChanged();
+			// Hysteresis on GI invalidation: only notify when the cumulative
+			// drift from the last GI-notified strength crosses kGiNotifyThreshold.
+			// Per-frame weather lerps deliver tiny deltas (e.g. 0.02 / frame for
+			// a multi-second transition) that would otherwise re-bump
+			// _giLightRevision every frame and force the DiffuseGI voxel-triangle
+			// cache to invalidate + rebuild every frame for the duration of the
+			// transition. With a 0.05 threshold the cache only rebuilds when the
+			// accumulated drift actually warrants it (a few times per transition,
+			// or instantly for a sudden change).
+			constexpr float kGiNotifyThreshold = 0.05f;
+			if (std::abs(value - _giNotifiedStrength) > kGiNotifyThreshold)
+			{
+				_giNotifiedStrength = value;
+				entity->GetScene()->NotifyGiLightStateChanged();
+			}
 		}
 	}
 

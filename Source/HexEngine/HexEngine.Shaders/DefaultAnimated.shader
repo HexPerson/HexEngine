@@ -418,14 +418,27 @@
 		const float outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;
 		output.diff = float4(finalRGB, outputAlpha);
 
-		// material output is: metallic, roughness, smoothness, specularProbability
-		output.mat = float4(metalness, roughness, g_material.smoothness, g_material.specularProbability);
+		// material output is: metallic, roughness, smoothness, reserved (0)
+		// See DefaultPixel.shader for the rationale on the .a being zeroed.
+		output.mat = float4(metalness, roughness, g_material.smoothness, 0.0f);
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 
 		output.pos = float4(input.positionWS.xyz, g_material.emissiveColour.a * emission);
 
 		output.velocity = velocity;
+
+		// Mirror DefaultPixel: encode (modelId, modelParams.w_quant) packed into
+		// .r so sheen can use all four modelParam channels for strength + RGB tint.
+		// See DefaultPixel.shader for the full layout description.
+		const uint idByte = (uint)g_material.materialModel;
+		const float wQuant = floor(saturate(g_material.modelParams.w) * 31.0f + 0.5f);
+		const float packedR = ((float)idByte * 32.0f + wQuant) / 255.0f;
+		output.feat = float4(
+			packedR,
+			g_material.modelParams.x,
+			g_material.modelParams.y,
+			g_material.modelParams.z);
 
 		return output;
 	}

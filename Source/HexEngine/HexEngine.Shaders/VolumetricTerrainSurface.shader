@@ -269,23 +269,22 @@
 			(0.14f * heightWeighted.y) +
 			(0.24f * heightWeighted.z) +
 			(0.08f * heightWeighted.w);
-		float specularProbability =
-			(0.08f * heightWeighted.x) +
-			(0.15f * heightWeighted.y) +
-			(0.13f * heightWeighted.z) +
-			(0.06f * heightWeighted.w);
-
 		float4 viewPos = mul(float4(input.worldPos, 1.0f), g_viewMatrix);
 		float pixelDepth = -viewPos.z;
 
 		output.diff = float4(baseColor, 1.0f);
-		output.mat = float4(metallic, roughness, smoothness, specularProbability);
+		// .a was the per-layer specularProbability blend - removed along with the
+		// MaterialProperties::specularProbability field, since nothing in the
+		// renderer actually sampled mat.a. Writes 0 to keep the channel clean.
+		output.mat = float4(metallic, roughness, smoothness, 0.0f);
 		output.norm = float4(N, pixelDepth);
 		output.pos = float4(input.worldPos, 0.0f);
 		// Per-pixel screen-space motion from the camera moving relative to this static surface.
 		// CalcVelocity divides by .w and converts NDC -> UV so the result drops straight into
 		// the velocity RT in the same units TAA expects.
 		output.velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
+		// Terrain is standard PBR.
+		output.feat = float4(0.0f, 0.0f, 0.0f, 0.0f);
 		return output;
 	}
 }

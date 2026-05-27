@@ -5,6 +5,8 @@
 
 namespace HexEngine
 {
+	class Material;
+
 	enum class MaterialGraphValueType : uint8_t
 	{
 		Scalar = 0,
@@ -47,7 +49,13 @@ namespace HexEngine
 		Roughness,
 		Metallic,
 		Emissive,
-		Opacity
+		Opacity,
+		// Smoothness drives gbuffer.mat.b - read by SSR as both the reflection-
+		// enable gate AND the reflection-sharpness control (1-smoothness becomes
+		// the SSR ray roughness). Defaults to the standard material's smoothness
+		// scalar when the graph doesn't bind it, preserving back-compat with
+		// pre-graph materials.
+		Smoothness
 	};
 
 	struct MaterialGraphPin
@@ -132,6 +140,24 @@ namespace HexEngine
 
 		void EnsureDefaultOutputBindings();
 		static MaterialGraph CreateDefaultPbrGraph();
+
+		/**
+		 * @brief Build a graph that mirrors a standard-material's PBR inputs.
+		 *
+		 * For each PBR channel (BaseColor, Normal, Roughness, Metallic, Emissive,
+		 * Opacity) the resulting graph either:
+		 *   - emits a TextureParameter + TextureSample chain (TextureParameter +
+		 *     NormalMap for the Normal channel) if the standard material has a
+		 *     texture bound for that slot, or
+		 *   - emits a Vector/Scalar Constant seeded with the material's scalar /
+		 *     colour property (diffuseColour, roughnessFactor, etc.)
+		 *
+		 * Each source feeds the matching `output_*` node so the new graph renders
+		 * identically to the standard material it came from. Used by the graph
+		 * dialog when "promoting" a non-graph material on-open, and by the
+		 * AssetExplorer "Convert to material graph" context-menu action.
+		 */
+		static MaterialGraph CreateFromStandardMaterial(const Material& material);
 
 		static bool ParseValueType(const std::string& text, MaterialGraphValueType& outType);
 		static const char* ValueTypeToString(MaterialGraphValueType type);

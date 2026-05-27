@@ -94,6 +94,76 @@ namespace HexEngine
 
 		virtual ICollider* AddTriangleMeshCollider(const std::vector<math::Vector3>& vertices, const std::vector<MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive) = 0;
 
+		/**
+		 * @brief Async two-phase triangle-mesh collider construction.
+		 *
+		 * PxCookTriangleMesh is pure CPU work that produces a memory blob
+		 * (~50-70ms per mesh) and doesn't need the PhysX scene; the only
+		 * main-thread bottleneck is the subsequent createTriangleMesh /
+		 * createShape / attach calls (~5-15ms). This API lets callers (the
+		 * volumetric terrain especially, with dozens of chunks all needing
+		 * collision baked) kick the cook to a worker thread and finalise
+		 * on the main thread when the worker reports done.
+		 *
+		 * Sync vs async semantics:
+		 *   - sync AddTriangleMeshCollider blocks the main thread for the
+		 *     full cook + finalise (~75ms).
+		 *   - BeginAddTriangleMeshColliderAsync returns immediately. The
+		 *     collider is NOT attached until TryFinishAsyncCollider returns
+		 *     true; calls into the rigid body in the meantime see no
+		 *     collider (this is correct - the chunk's collision is just
+		 *     "still cooking").
+		 *
+		 * Returns false if the call could not be queued (already a cook
+		 * in flight on this body, invalid input, plugin not init'd).
+		 */
+		virtual bool BeginAddTriangleMeshColliderAsync(
+			const std::vector<math::Vector3>& vertices,
+			const std::vector<MeshIndexFormat>& indices,
+			uint32_t faceCount,
+			bool exclusive) { return false; }
+
+		/**
+		 * @brief Attach a triangle-mesh collider using a pre-cooked buffer
+		 *        (output of a previous PxCookTriangleMesh call).
+		 *
+		 * Skips the slow cook step entirely - just feeds the buffer into
+		 * createTriangleMesh, builds a shape, and attaches. ~5ms per call
+		 * on the main thread, vs ~75ms for the sync cook path. Used by the
+		 * volumetric terrain to apply cached collision blobs read off disk.
+		 *
+		 * Returns the new collider on success or nullptr on failure (cooked
+		 * buffer corrupt, plugin not init'd, etc.).
+		 */
+		virtual ICollider* AddTriangleMeshColliderFromCookedBuffer(
+			const std::vector<uint8_t>& cookedBuffer,
+			bool exclusive) { return nullptr; }
+
+		/**
+		 * @brief Polls the in-flight async cook started by
+		 *        BeginAddTriangleMeshColliderAsync. When the worker has
+		 *        finished, finalises on the main thread (createTriangleMesh
+		 *        + createShape + attach) and returns true. Returns false
+		 *        when the cook is still in flight or no cook was queued.
+		 */
+		virtual bool TryFinishAsyncCollider() { return false; }
+
+		/** @brief True while an async cook is in flight on this body. */
+		virtual bool HasAsyncColliderInFlight() const { return false; }
+
+		/**
+		 * @brief Returns the most recently completed async cook's cooked
+		 *        buffer, intended for caching to disk so subsequent loads
+		 *        can use AddTriangleMeshColliderFromCookedBuffer instead of
+		 *        re-cooking. Cleared whenever a new async cook begins.
+		 *        Empty when no cook has completed yet.
+		 */
+		virtual const std::vector<uint8_t>& GetLastCookedBuffer() const
+		{
+			static const std::vector<uint8_t> empty;
+			return empty;
+		}
+
 		virtual ICollider* AddConvexMeshCollider(const std::vector<math::Vector3>& vertices, const std::vector<MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive) = 0;
 
 		virtual void UpdateBoxExtents(const dx::BoundingBox& box) = 0;

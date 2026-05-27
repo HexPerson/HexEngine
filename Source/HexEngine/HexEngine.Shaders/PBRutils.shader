@@ -56,6 +56,164 @@
 		return saturate(max(perceptualRoughness, sqrt(kernelRoughness)));
 	}
 
+	// Decode the per-material-model id from the features GBuffer .r channel. The
+	// channel packs (modelId << 5) | (modelParams.w_quant) into a single RGBA8
+	// byte; upper 3 bits = id (0..7 supported, 0..4 used), lower 5 bits = a
+	// quantised modelParams.w (needed by sheen for tint.b - the fourth modelParam
+	// we couldn't otherwise store with only 4 RT channels). See DefaultPixel for
+	// the encoding side. Tolerant to point sampling; linear filtering at material
+	// boundaries (e.g. SSS pixel next to standard pixel) corrupts both fields,
+	// which is acceptable since the SSS/etc post-effects already gate on
+	// strength / mask and silently no-op on the ambiguous boundary pixels.
+	uint DecodeMaterialModelId(float r)
+	{
+		const uint byteVal = (uint)floor(r * 255.0f + 0.5f);
+		return byteVal >> 5;
+	}
+
+	// Recover the quantised modelParams.w from the same packed .r channel as
+	// DecodeMaterialModelId. Range [0,1] with 5-bit quantisation (32 levels) -
+	// adequate for sheen tint .b which is the only consumer; visible banding
+	// would only show up if we were modulating a high-frequency parameter,
+	// which sheen tint is not.
+	float DecodePackedModelParamW(float r)
+	{
+		const uint byteVal = (uint)floor(r * 255.0f + 0.5f);
+		return (float)(byteVal & 31u) / 31.0f;
+	}
+
+	// Anisotropic GGX normal distribution. Two roughness axes (alongTangent /
+	// alongBitangent); when alphaX == alphaY this collapses to standard isotropic
+	// GGX, so we use this for the aniso case only and let the base path keep the
+	// cheaper isotropic version.
+	float MicrofacetDistributionAniso(float NdotH, float TdotH, float BdotH, float alphaX, float alphaY)
+	{
+		const float ax2 = alphaX * alphaX;
+		const float ay2 = alphaY * alphaY;
+		const float denom = (TdotH * TdotH) / max(ax2, 1e-6f)
+		                  + (BdotH * BdotH) / max(ay2, 1e-6f)
+		                  + NdotH * NdotH;
+		return 1.0f / max(PI * alphaX * alphaY * denom * denom, 1e-6f);
+	}
+
+	// Charlie sheen distribution (Estevez & Kulla 2017). Mimics retroreflective
+	// fuzz - the bright rim on velvet / cloth / leaves at grazing angles.
+	float SheenDistribution(float NdotH, float sheenRoughness)
+	{
+		const float invR = 1.0f / max(sheenRoughness, 0.04f);
+		const float cos2 = NdotH * NdotH;
+		const float sin2 = max(1.0f - cos2, 0.0f);
+		return (2.0f + invR) * pow(sin2, invR * 0.5f) / (2.0f * PI);
+	}
+
+	// Add the extra BRDF lobes that the per-pixel shading model demands. For
+	// MATERIAL_MODEL_STANDARD (0) and MATERIAL_MODEL_SSS (1) this is a no-op:
+	// standard surfaces only use the base PBR lobes, and SSS is handled by the
+	// screen-space SSS post-process (the underlying surface still shades as
+	// standard PBR here).
+	//
+	// modelParams layout:
+	//   Clearcoat:   x = strength [0,1], y = roughness [0,1]
+	//   Anisotropic: x = anisotropy [0,1] mapped to [-1,1], y/z = tangent.xy
+	//                (z reconstructed via sqrt). Strength scaled by x's magnitude.
+	//   Sheen:       x = strength [0,1], y/z/w = sheen tint RGB
+	//
+	// All lobes return contribution PER LIGHT (multiplied by NdotL and the light
+	// colour); the caller adds this on top of the base CalculatePBR result, so a
+	// material can mix base PBR + clearcoat (clearcoat over a metal/paint base),
+	// base PBR + sheen, etc.
+	float3 ApplyMaterialFeatures(
+		uint modelId,
+		float4 modelParams,
+		float3 normal,
+		float3 viewDir,      // surface -> camera
+		float3 lightDir,     // surface -> light (already normalised)
+		float3 lightColor,
+		float perceptualRoughness,
+		float depthValue,
+		float attenuation)
+	{
+		if (modelId == MATERIAL_MODEL_STANDARD || modelId == MATERIAL_MODEL_SSS)
+			return 0.0f.xxx;
+
+		const float3 V = normalize(viewDir);
+		const float3 L = normalize(lightDir);
+		const float3 H = normalize(L + V);
+		const float NdotL = saturate(dot(normal, L));
+		if (NdotL <= 0.0f)
+			return 0.0f.xxx;
+		const float NdotV = abs(dot(normal, V)) + 0.001f;
+		const float NdotH = saturate(dot(normal, H));
+		const float VdotH = saturate(dot(V, H));
+
+		if (modelId == MATERIAL_MODEL_CLEARCOAT)
+		{
+			// Thin dielectric (IOR ~ 1.5, F0 = 0.04) layer sitting on top of the
+			// base shading. Adds a sharp specular highlight even on rough/metallic
+			// bases - the wet-coat / car-paint / lacquered-wood look.
+			const float ccStrength = saturate(modelParams.x);
+			if (ccStrength <= 0.0001f)
+				return 0.0f.xxx;
+			const float ccRoughness = max(lerp(0.02f, 0.6f, saturate(modelParams.y)), 0.04f);
+			const float ccAlpha = ccRoughness * ccRoughness;
+			const float ccF = 0.04f + 0.96f * pow(1.0f - VdotH, 5.0f);
+			const float ccG = geometricOcclusion(NdotL, NdotV, ccAlpha);
+			const float ccD = microfacetDistribution(NdotH, ccAlpha);
+			const float ccSpec = (ccF * ccG * ccD) / (4.0f * NdotL * NdotV);
+			return NdotL * lightColor * attenuation * depthValue * ccSpec * ccStrength;
+		}
+
+		if (modelId == MATERIAL_MODEL_ANISOTROPIC)
+		{
+			// Brushed-metal / hair / fabric-weave shading. Tangent provided in
+			// modelParams.yz (xy, with z reconstructed); anisotropy strength in
+			// modelParams.x (0=isotropic, 1=fully stretched along tangent).
+			const float anisoStrength = saturate(modelParams.x);
+			if (anisoStrength <= 0.0001f)
+				return 0.0f.xxx;
+			float3 tangent;
+			tangent.xy = modelParams.yz;
+			tangent.z = sqrt(saturate(1.0f - dot(tangent.xy, tangent.xy)));
+			// Project onto the tangent plane so it lies on the surface.
+			tangent = normalize(tangent - normal * dot(tangent, normal) + 1e-5f.xxx);
+			const float3 bitangent = normalize(cross(normal, tangent));
+			const float baseAlpha = max(perceptualRoughness * perceptualRoughness, 0.0016f);
+			const float alphaX = max(baseAlpha * (1.0f + anisoStrength * 1.5f), 0.0016f);
+			const float alphaY = max(baseAlpha * (1.0f - anisoStrength * 0.85f), 0.0016f);
+			const float TdotH = dot(tangent, H);
+			const float BdotH = dot(bitangent, H);
+			const float D = MicrofacetDistributionAniso(NdotH, TdotH, BdotH, alphaX, alphaY);
+			const float G = geometricOcclusion(NdotL, NdotV, max(alphaX, alphaY));
+			const float F = 0.04f + 0.96f * pow(1.0f - VdotH, 5.0f);
+			const float spec = (D * G * F) / (4.0f * NdotL * NdotV);
+			// Subtract the equivalent isotropic specular so we only contribute the
+			// anisotropic delta - the base PBR pass already laid down isotropic spec.
+			const float isoD = microfacetDistribution(NdotH, baseAlpha);
+			const float isoG = geometricOcclusion(NdotL, NdotV, baseAlpha);
+			const float isoSpec = (isoD * isoG * F) / (4.0f * NdotL * NdotV);
+			return NdotL * lightColor * attenuation * depthValue * max(spec - isoSpec, 0.0f) * anisoStrength;
+		}
+
+		if (modelId == MATERIAL_MODEL_SHEEN)
+		{
+			// Velvet / cloth / dust / foliage backscatter. Charlie distribution.
+			const float sheenStrength = saturate(modelParams.x);
+			if (sheenStrength <= 0.0001f)
+				return 0.0f.xxx;
+			const float3 sheenTint = saturate(float3(modelParams.y, modelParams.z, modelParams.w));
+			// Anchor sheen roughness to surface roughness - rougher surfaces fuzz wider.
+			const float sheenRoughness = max(perceptualRoughness, 0.1f);
+			const float D = SheenDistribution(NdotH, sheenRoughness);
+			// Neubelt & Pettineo cloth visibility term (avoids the energy spike at
+			// grazing angles that the cook-torrance G gives for low NdotV).
+			const float V_term = 1.0f / (4.0f * (NdotL + NdotV - NdotL * NdotV));
+			const float3 sheenSpec = sheenTint * D * V_term;
+			return NdotL * lightColor * attenuation * depthValue * sheenSpec * sheenStrength;
+		}
+
+		return 0.0f.xxx;
+	}
+
 	float3 CalculateLightningSurfaceLighting(
 		float3 normal,
 		float3 positionWorld,

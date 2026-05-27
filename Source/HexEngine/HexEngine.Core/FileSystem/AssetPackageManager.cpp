@@ -18,7 +18,9 @@ namespace HexEngine
 	{
 		AssetFile assetFile(absolutePath);
 
-		std::shared_ptr<AssetPackage> package = std::shared_ptr<AssetPackage>(new AssetPackage, ResourceDeleter());
+		const AssetPackageLoadOptions* loadOpts = options ? reinterpret_cast<const AssetPackageLoadOptions*>(options) : nullptr;
+
+		std::shared_ptr<AssetPackage> package = std::shared_ptr<AssetPackage>(new AssetPackage(loadOpts->fsName), ResourceDeleter());
 
 		assetFile.Unpack(package);
 

@@ -35,6 +35,10 @@
 	SHADOWMAPS_RESOURCE(6);
 	Texture3D g_cloudShapeNoise : register(t12);
 	Texture3D g_cloudDetailNoise : register(t13);
+	// Material-features RT (model id + per-model parameters). t14 is the first
+	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
+	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
+	GBUFFER_FEATURES_RESOURCE(14)
 	
 
 	SamplerState g_textureSampler : register(s0);
@@ -217,6 +221,45 @@
 		float depthValue = CalculateShadows(shadow, g_cmpSampler, g_pointSampler, SHADOWMAPS, bias);
 		depthValue *= CalculateCloudShadow(pixelPosWS.xyz, lightDir);
 
+		// Screen-space contact shadow. Fills the near-camera detail gap PCSS cascades
+		// can't resolve (fine geometry contact like fingers, foliage, hair). Marches
+		// the depth buffer toward the sun; if a closer pixel intercepts the ray
+		// before our shading point would have reached light, we're contact-shadowed.
+		// Cheap (configurable step count), runs in the same deferred light pass so no
+		// extra bandwidth. Multiply into the cascade term - both must agree the pixel
+		// is lit for it to be lit. Settings come from r_contactShadows* HVars, packed
+		// into g_shadowConfig.contactShadowParams by SetupPerShadowCasterBuffer; the
+		// .x channel is the enable flag, zero on non-directional casters so the
+		// branch naturally collapses.
+		// .x carries the fade-START distance (metres). Zero = disabled. The fade
+		// runs out to 1.5x that distance via smoothstep, so contact shadows
+		// concentrate near the camera and don't add screen-space-jitter noise to
+		// distant terrain (where TAA can't reconcile the noise across camera
+		// motion - the previously-observed volumetric-terrain mid-depth flicker).
+		if (g_shadowConfig.contactShadowParams.x > 0.0f)
+		{
+			const float fadeStart = g_shadowConfig.contactShadowParams.x;
+			const float fadeEnd = fadeStart * 1.5f;
+			const float fadeWeight = 1.0f - smoothstep(fadeStart, fadeEnd, pixelNormal.w);
+			if (fadeWeight > 0.001f)
+			{
+				const float contactShadow = ScreenSpaceContactShadow(
+					pixelPosWS.xyz,
+					lightDir,
+					normalize(pixelNormal.xyz),
+					GBUFFER_NORMAL,
+					g_pointSampler,
+					input.position.xy,
+					(int)g_shadowConfig.contactShadowParams.y,
+					g_shadowConfig.contactShadowParams.z,
+					g_shadowConfig.contactShadowParams.w);
+				// Lerp between unshadowed (1.0) and contactShadow result based on
+				// distance fade so the multiply into depthValue is identity past
+				// the fade-end distance.
+				depthValue *= lerp(1.0f, contactShadow, fadeWeight);
+			}
+		}
+
 		float3 legacySunColour = getSunColour();
 		float3 physicalSunColour = ComputePhysicalSunColour(pixelPosWS.xyz, lightDir);
 		const float legacySunLuma = dot(legacySunColour, float3(0.2126f, 0.7152f, 0.0722f));
@@ -224,16 +267,42 @@
 		physicalSunColour *= legacySunLuma / physicalSunLuma;
 
 		float4 pbr = CalculatePBR(
-			GBUFFER_SPECULAR, 
+			GBUFFER_SPECULAR,
 			g_pointSampler,
-			screenPos, 
-			pixelNormal.xyz, 
-			pixelPosWS.xyz, 
-			lightDir, 
-			physicalSunColour, 
+			screenPos,
+			pixelNormal.xyz,
+			pixelPosWS.xyz,
+			lightDir,
+			physicalSunColour,
 			pixelColour.rgb,
 			depthValue,
 			g_globalLight[0]);
+
+		// Extended shading-model lobes (clearcoat / anisotropic / sheen). The
+		// features RT carries the model id + per-model parameters - see
+		// ApplyMaterialFeatures for the param layout. Standard PBR + SSS take the
+		// early-out and add nothing here. We re-sample the metallic/roughness
+		// gbuffer for the perceptual roughness used by the aniso/sheen lobes; the
+		// cost is one extra sample on the same texture the PBR path already
+		// resolved, so it stays in cache.
+		const float4 features = GBUFFER_FEATURES.Sample(g_pointSampler, screenPos);
+		const uint modelId = DecodeMaterialModelId(features.r);
+		if (modelId != MATERIAL_MODEL_STANDARD)
+		{
+			const float perceptualRoughnessForFeatures = clamp(GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos).g, MinRoughness, 1.0f);
+			const float3 viewDir = g_eyePos.xyz - pixelPosWS.xyz;
+			const float3 featureBonus = ApplyMaterialFeatures(
+				modelId,
+				float4(features.g, features.b, features.a, DecodePackedModelParamW(features.r)),
+				normalize(pixelNormal.xyz),
+				viewDir,
+				lightDir,
+				physicalSunColour * g_globalLight[0],
+				perceptualRoughnessForFeatures,
+				depthValue,
+				1.0f);
+			pbr.rgb += featureBonus;
+		}
 
 		return pbr;
 

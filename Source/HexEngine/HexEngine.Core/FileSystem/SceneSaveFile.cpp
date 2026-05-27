@@ -177,6 +177,7 @@ namespace HexEngine
 
 		std::string data;
 		ReadAll(data);
+		Close();
 
 		if (data.length() == 0)
 		{
@@ -184,8 +185,41 @@ namespace HexEngine
 			return false;
 		}
 
-		json sceneData = json::parse(data);
+		json sceneData = json::parse(data, nullptr, false);
+		if (sceneData.is_discarded())
+		{
+			LOG_CRIT("Failed to parse scene JSON from '%s'", _fsPathObj.string().c_str());
+			return false;
+		}
 
+		return LoadFromJson(sceneData, loadIntoExistingScene, callback);
+	}
+
+	bool SceneSaveFile::LoadFromMemory(const std::vector<uint8_t>& data, std::shared_ptr<Scene> loadIntoExistingScene, SceneSaveProgressCallback callback)
+	{
+		if (data.empty())
+		{
+			LOG_CRIT("Scene memory buffer for '%s' is empty", _fsPathObj.string().c_str());
+			return false;
+		}
+
+		json sceneData = json::parse(
+			reinterpret_cast<const char*>(data.data()),
+			reinterpret_cast<const char*>(data.data()) + data.size(),
+			nullptr,
+			false);
+
+		if (sceneData.is_discarded())
+		{
+			LOG_CRIT("Failed to parse scene JSON from memory buffer '%s'", _fsPathObj.string().c_str());
+			return false;
+		}
+
+		return LoadFromJson(sceneData, loadIntoExistingScene, callback);
+	}
+
+	bool SceneSaveFile::LoadFromJson(json& sceneData, std::shared_ptr<Scene> loadIntoExistingScene, SceneSaveProgressCallback callback)
+	{
 		bool isPrefab = HEX_HASFLAG(_flags, SceneFileFlags::IsPrefab);
 
 		if (isPrefab == false)
@@ -294,8 +328,9 @@ namespace HexEngine
 
 		LOG_DEBUG("Scene save file successfully loaded");
 
-		Close();
-
+		// File close is the caller's responsibility (the disk Load() entry
+		// closes the stream right after ReadAll). LoadFromMemory has no
+		// stream to close. LoadFromJson is a pure JSON->scene step.
 		return true;
 	}
 

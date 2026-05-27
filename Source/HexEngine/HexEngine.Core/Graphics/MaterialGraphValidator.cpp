@@ -174,14 +174,22 @@ namespace HexEngine
 
 		if (!hasConnectedOutput(MaterialGraphOutputSemantic::BaseColor))
 			result.AddError("Missing required output connection: BaseColor.");
-		if (!hasConnectedOutput(MaterialGraphOutputSemantic::Normal))
-			result.AddError("Missing required output connection: Normal.");
 		if (!hasConnectedOutput(MaterialGraphOutputSemantic::Roughness))
 			result.AddError("Missing required output connection: Roughness.");
 		if (!hasConnectedOutput(MaterialGraphOutputSemantic::Metallic))
 			result.AddError("Missing required output connection: Metallic.");
-		if (!hasConnectedOutput(MaterialGraphOutputSemantic::Emissive))
-			result.AddError("Missing required output connection: Emissive.");
+		// Normal, Emissive, Opacity and Smoothness are intentionally NOT
+		// required. The compiler defaults each of them to a safe value when
+		// the graph leaves them disconnected:
+		//   - Normal    -> input.normal (geometry-interpolated world-space normal)
+		//   - Emissive  -> g_material.emissiveColour.rgb * g_material.emissiveColour.a
+		//   - Opacity   -> 1.0 (fully opaque)
+		//   - Smoothness -> g_material.smoothness
+		// Forcing the author to wire them up just to delete the auto-created
+		// nodes (e.g. a road material with no normal map, or one that doesn't
+		// author emission at all) used to surface as confusing
+		// "Missing required output connection: <X>." errors at save time.
+		// Leave them optional.
 
 		return result;
 	}

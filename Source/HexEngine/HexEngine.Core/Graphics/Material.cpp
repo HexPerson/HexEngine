@@ -391,7 +391,27 @@ namespace HexEngine
 
 	bool Material::DoesHaveAnyReflectivity()
 	{
-		if (_properties.metallicFactor > 0.0f && _properties.smoothness > 0.0f)
+		// "Reflective" here means "this material wants the SSR pass to run on
+		// pixels it covers". Two cases that qualify:
+		//
+		// 1. The static MaterialProperties scalars (metallicFactor or smoothness)
+		//    are non-zero. The old check required BOTH non-zero - a glass-smooth
+		//    dielectric (metallic=0, smoothness=1) wrongly returned false and
+		//    SSR was skipped entirely. OR is correct: either dimension alone is
+		//    enough to want screen-space reflections.
+		//
+		// 2. The material owns a graph or a graph-instance, in which case
+		//    smoothness / metallic can be driven per-pixel from texture samples,
+		//    weather scalars, etc. - the static fields will be 0 even when the
+		//    runtime value isn't. Conservatively treat any graph material as
+		//    potentially reflective rather than introspect the graph (false
+		//    positives just cost a single SSR pass when nothing onscreen actually
+		//    reflects; false negatives are silent material breakage of the kind
+		//    that hides wet-road smoothness changes).
+		if (_properties.metallicFactor > 0.0f || _properties.smoothness > 0.0f)
+			return true;
+
+		if (_hasGraph || _hasGraphInstance)
 			return true;
 
 		return false;

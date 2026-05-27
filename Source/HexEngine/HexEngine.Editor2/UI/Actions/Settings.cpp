@@ -309,6 +309,58 @@ namespace HexEditor
 		addFloatControl(pm->_colouring, "r_autoExposureNightMax", L"Auto Exposure Night Max", 0.05f, 2);
 		addToggleControl(pm->_colouring, "r_autoExposureDebug", L"Auto Exposure Debug Log");
 
+		// HDR display + tonemap. Lives on its own tab because the controls behave
+		// very differently from the artist-facing colour-grading knobs above: paper
+		// white / peak nits only have an effect when the swap chain is in HDR mode
+		// (R16G16B16A16_FLOAT), and the tonemap operator picks the curve applied to
+		// the scene RT before either the SDR gamma path or the HDR nits remap. See
+		// SceneRenderer's r_hdrPaperWhiteNits / r_hdrPeakNits / r_tonemapOperator
+		// declarations and TonemapOperators.shader::ApplyTonemap for the mapping
+		// from operator id to curve.
+		auto* display = makeSectionTab(L"Display", L"HDR & Tonemap");
+		addToggleControl(display, "r_hdrOutput", L"HDR Output (when display supports)");
+		addFloatControl(display, "r_hdrPaperWhiteNits", L"Paper White (nits)", 1.0f, 1);
+		addFloatControl(display, "r_hdrPeakNits", L"Peak Highlight (nits)", 10.0f, 0);
+
+		// Named dropdown matching the atmosphere-preset pattern further up. The
+		// raw int HVar is what the shaders read; the dropdown is just a labelled
+		// front-end so artists pick "ACES" instead of "2". Keep the labels in sync
+		// with TonemapOperators.shader's switch statement.
+		auto* tonemapDropdown = new HexEngine::DropDown(
+			display,
+			display->GetNextPos(),
+			HexEngine::Point(controlWidthFor(display), 18),
+			L"Tonemap Operator");
+		const auto setTonemapLabel = [tonemapDropdown](int32_t op)
+		{
+			switch (op)
+			{
+			case 0: tonemapDropdown->SetValue(L"Reinhard"); break;
+			case 1: tonemapDropdown->SetValue(L"Reinhard Extended"); break;
+			case 2: tonemapDropdown->SetValue(L"ACES (Fitted)"); break;
+			case 3: tonemapDropdown->SetValue(L"Uncharted 2 / Hable"); break;
+			case 4: tonemapDropdown->SetValue(L"Lottes"); break;
+			case 5: tonemapDropdown->SetValue(L"Linear (debug)"); break;
+			default: tonemapDropdown->SetValue(L"ACES (Fitted)"); break;
+			}
+		};
+		setTonemapLabel(GetNamedHVarInt("r_tonemapOperator", 2));
+		const auto addTonemapItem = [&](const std::wstring& label, int32_t op)
+		{
+			tonemapDropdown->GetContextMenu()->AddItem(new HexEngine::ContextItem(label,
+				[setTonemapLabel, op](const std::wstring&)
+				{
+					SetNamedHVarInt("r_tonemapOperator", op);
+					setTonemapLabel(op);
+				}));
+		};
+		addTonemapItem(L"Reinhard", 0);
+		addTonemapItem(L"Reinhard Extended", 1);
+		addTonemapItem(L"ACES (Fitted)", 2);
+		addTonemapItem(L"Uncharted 2 / Hable", 3);
+		addTonemapItem(L"Lottes", 4);
+		addTonemapItem(L"Linear (debug)", 5);
+
 		pm->_fog = makeSectionTab(L"Fog", L"Fog");
 		addToggleControl(pm->_fog, "r_fog", L"Fog on/off");
 		addFloatControl(pm->_fog, "r_fogDensity", L"Fog Density", 0.0001f, 5);

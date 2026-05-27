@@ -103,6 +103,59 @@ namespace HexEngine
 	HVar r_shadowNearClip("r_shadowNearClip", "How much clipping offset to apply to directional lights, larger scenes typically require a higher value", 150.0f, -1000.0f, 1000.0f);
 	HVar r_colourFilter("r_colourFilter", "The filter colour to use for colour grading", math::Vector3(1.00f, 0.98f, 0.97f), math::Vector3(0.0f), math::Vector3(1.0f));
 	HVar r_shadowSamples("r_shadowSamples", "How many samples to use in shadow map filtering", 32, 2, 128);
+	// Screen-space contact shadows - fills the near-camera detail gap PCSS cascades
+	// can't resolve. Cheap (one extra ray-march in the deferred light pass) and
+	// hugely improves perceived shadow quality on close-up geometry.
+	// Contact shadows ship OFF by default. The current implementation uses
+	// interleaved-gradient-noise screen-space jitter, which is camera-space
+	// stable on a static camera but produces per-pixel noise that shifts as
+	// the camera moves. Under TAA the per-pixel noise should average out, but
+	// on grazing-angle geometry (notably volumetric-terrain slopes at mid-
+	// depth) adjacent pixels disagree about whether the ray enters the
+	// terrain, and TAA can't fully reconcile that frame-to-frame - visible
+	// flicker on the slope. Re-enabling needs a TAA-friendly noise source
+	// (e.g. blue noise indexed by world position or frame-stable jitter)
+	// and probably a distance fade so the cost+artifact concentrate near the
+	// camera where contact shadows actually add value.
+	HVar r_contactShadows("r_contactShadows", "Enable screen-space contact shadows on the directional light", false, false, true);
+	HVar r_contactShadowSteps("r_contactShadowSteps", "Ray-march step count for contact shadows", 12, 4, 64);
+	HVar r_contactShadowLength("r_contactShadowLength", "Maximum world-space length of the contact shadow ray (metres)", 1.5f, 0.05f, 32.0f);
+	HVar r_contactShadowThickness("r_contactShadowThickness", "Thickness window for blocker acceptance (metres) - prevents see-through behind walls", 0.2f, 0.01f, 5.0f);
+	// Distance fade for contact shadows. Pixels beyond this many metres from
+	// the camera get a reduced contact-shadow contribution that smoothly fades
+	// to zero over the next half of this range, hiding the screen-space jitter
+	// noise on distant pixels (where terrain dominates the artifact). Tweakable
+	// because aggressive fade nukes the effect entirely on long view distances.
+	HVar r_contactShadowFadeStart("r_contactShadowFadeStart", "View-space depth (m) where contact shadows begin to fade out", 25.0f, 1.0f, 1000.0f);
+	// Screen-space subsurface scattering. Cheap (2 fullscreen passes, 11 taps each)
+	// but huge for character / foliage / wax fidelity. Gated by the per-pixel
+	// features gbuffer so non-SSS pixels pay a single texture sample + early-out.
+	HVar r_sss("r_sss", "Enable screen-space subsurface scattering post-process", true, false, true);
+	HVar r_sssRadius("r_sssRadius", "World-space SSS scattering radius (metres)", 0.012f, 0.0f, 0.5f);
+	HVar r_sssIntensity("r_sssIntensity", "Global multiplier on SSS blur intensity (final blended fraction)", 1.0f, 0.0f, 2.0f);
+
+	// Bokeh depth-of-field. Single-pass, 32-tap Vogel disk gathered around each
+	// pixel proportional to its circle-of-confusion. Runs after tonemap so the
+	// bokeh discs reflect post-tonemap colour - matters because pre-tonemap HDR
+	// highlights would saturate the gathered colour buckets and lose the bokeh
+	// "ball" shape on bright sources. r_dofAperture = 0 disables (the shader's
+	// early-out skips the gather for sharp pixels too, so the cost is one
+	// texture read on the dominant in-focus region).
+	HVar r_dof("r_dof", "Enable bokeh depth-of-field post-process", false, false, true);
+	HVar r_dofFocusDistance("r_dofFocusDistance", "Depth of the in-focus plane (metres)", 8.0f, 0.1f, 1000.0f);
+	HVar r_dofFocusRange("r_dofFocusRange", "Width of the fully-sharp band around the focus plane (metres)", 4.0f, 0.0f, 50.0f);
+	// Aperture is the strongest dial here - at 1.0 a pixel at 2x focus distance
+	// already reaches ~50% CoC, and the user wants the chunkiest blur usually
+	// concentrated on the far field only. 0.4 is a subtle photo-realistic default
+	// that gives noticeable but not overwhelming bokeh; users wanting cinema
+	// shallow-DoF should bump to 1-2.
+	HVar r_dofAperture("r_dofAperture", "Blur scale - bigger aperture = stronger out-of-focus blur", 0.4f, 0.0f, 8.0f);
+	// maxBlur is the pixel radius at coc=1.0 (which the hyperbolic curve never
+	// quite reaches). At 1080p, 8px gives a soft photographic bokeh; 16+ is
+	// cinematic; 32+ is dreamy/extreme. The previous 24 default combined with
+	// the old saturate() coc curve produced a near-uniform screen blur on most
+	// scenes, which read as "grey screen".
+	HVar r_dofMaxBlur("r_dofMaxBlur", "Maximum CoC radius in pixels (clamps far-field blur from exploding)", 8.0f, 1.0f, 96.0f);
 
 		static int32_t GetVolumetricEffectiveSteps()
 		{
@@ -313,6 +366,20 @@ namespace HexEngine
 	HVar r_exposure("r_exposure", "How much exposure to apply to the final render", 1.0f, 0.1f, 3.0f);
 	HVar r_hueShift("r_hueShift", "How much to adjust the hue by in the final render", 0.0f, -3.0f, 3.0f);
 	HVar r_saturation("r_saturation", "How much to saturate the final render", 1.05f, 0.1f, 3.0f);
+	// HDR display calibration. scRGB linear is defined such that 1.0 = 80
+	// nits, but DWM composition and Independent Flip pick different paper-
+	// white targets, so the HDR tonemap shader needs to know the target
+	// nits to scale into. 200 nits is the Windows 11 default; users can
+	// adjust if they've moved Windows' "SDR content brightness" slider.
+	// Peak nits should match the display's MaxLuminance - common values
+	// are 600 (HDR600), 1000 (HDR1000), 1500+ (mastering displays).
+	HVar r_hdrPaperWhiteNits("r_hdrPaperWhiteNits", "Target nits for post-tonemap 'screen white' on HDR displays (Win11 default 200)", 200.0f, 80.0f, 1000.0f);
+	HVar r_hdrPeakNits("r_hdrPeakNits", "Display peak luminance for HDR highlight headroom (match display's HDR rating)", 1000.0f, 200.0f, 4000.0f);
+	// Tonemap operator selector. Maps to ApplyTonemap in TonemapOperators.shader.
+	// 0=Reinhard 1=ReinhardExtended 2=ACES Fitted (default) 3=Uncharted 2 / Hable
+	// 4=Lottes 5=Linear (debug pass-through). Affects both SDR Tonemap.hcs and
+	// HDR TonemapHDR.hcs base curve.
+	HVar r_tonemapOperator("r_tonemapOperator", "Tonemap operator: 0=Reinhard 1=ReinhardExt 2=ACES 3=Uncharted2 4=Lottes 5=Linear", 2, 0, 5);
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
@@ -439,6 +506,9 @@ namespace HexEngine
 		SAFE_DELETE(_cloudDetailNoise);
 		SAFE_DELETE(_cloudConstantBuffer);
 		SAFE_DELETE(_forwardLightsBuffer);
+		SAFE_DELETE(_subsurfaceIntermediateRT);
+		SAFE_DELETE(_subsurfaceParamsBuffer);
+		SAFE_DELETE(_bokehDoFParamsBuffer);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
 
@@ -471,6 +541,21 @@ namespace HexEngine
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
 		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
 		_fullScreenQuadShader		= IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
+		_subsurfaceShader			= IShader::Create("EngineData.Shaders/SubsurfaceScattering.hcs");
+		_bokehDoFShader				= IShader::Create("EngineData.Shaders/BokehDoF.hcs");
+
+		// Tiny float4 cbuffer that drives the SSS pass direction + radius + intensity.
+		// Built lazily once and reused across frames since the layout is constant.
+		if (_subsurfaceParamsBuffer == nullptr)
+		{
+			_subsurfaceParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+		}
+
+		// DoF params cbuffer at b6: (focusDistance, focusRange, aperture, maxCocPixels).
+		if (_bokehDoFParamsBuffer == nullptr)
+		{
+			_bokehDoFParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+		}
 
 		if (!_compositionShader)
 		{
@@ -546,6 +631,24 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 		_waterRT->SetDebugName("_waterRT");
+
+		// SSS intermediate RT - same format as beauty so the two-pass separable
+		// blur preserves HDR precision through the horizontal step. Reused every
+		// frame between the H and V passes, no temporal history kept here.
+		SAFE_DELETE(_subsurfaceIntermediateRT);
+		_subsurfaceIntermediateRT = g_pEnv->_graphicsDevice->CreateTexture2D(
+			width,
+			height,
+			BEAUTY_FORMAT,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			0, MsaaLevel, 0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
+		if (_subsurfaceIntermediateRT) _subsurfaceIntermediateRT->SetDebugName("_sssIntermediate");
 
 		_particleRT = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
@@ -1074,7 +1177,24 @@ namespace HexEngine
 			bufferData._projectionMatrixInversePrev = projectionMatrixPrev.Invert().Transpose();
 			bufferData._viewProjectionMatrixInversePrev = (viewMatrixPrev * projectionMatrixPrev).Invert().Transpose();
 
-			bufferData._eyePos = math::Vector4(_cameraEntity->GetPosition().x, _cameraEntity->GetPosition().y, _cameraEntity->GetPosition().z, 1.0f);
+			// The view matrix is built with (entity.position + camera.viewOffset)
+			// (see Camera::ConstructViewMatrix), so the actual eye position is
+			// shifted by viewOffset from the camera entity's transform. If we
+			// only put the bare entity position into g_eyePos here, every
+			// shader that computes view-relative vectors from g_eyePos (SSR's
+			// eyeVector, PBR specular Fresnel, sky-dir, etc.) disagrees with
+			// where the view matrix actually places the eye - on a wet road
+			// with a player-eye-offset of (0, 1.4, 0), the SSR reflection
+			// vector calculation produced near-horizontal rays for ground
+			// pixels (eyeVector was treated as ground-to-ground horizontal
+			// instead of head-to-ground downward), which then never exited
+			// the top of screen during raymarch and hit SSR's lastInScreenTex
+			// fallback - producing long vertical stripe artifacts on the road
+			// that did NOT appear in the editor because the editor's
+			// free-cam uses no viewOffset.
+			const math::Vector3 eyePos = _cameraEntity->GetPosition()
+				+ (_currentCamera ? _currentCamera->GetViewOffset() : math::Vector3::Zero);
+			bufferData._eyePos = math::Vector4(eyePos.x, eyePos.y, eyePos.z, 1.0f);
 			bufferData._eyeDir = _currentCamera ? math::Vector4(_currentCamera->GetLookDir()) : math::Vector4();
 
 			bufferData._colourGrading.colourFilter = r_colourFilter._val.v3;
@@ -1084,6 +1204,32 @@ namespace HexEngine
 			bufferData._colourGrading.exposure = r_exposure._val.f32 * _autoExposure.GetExposureMultiplier();
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
+			// One-time auto-calibration of r_hdrPeakNits from the active display's
+			// IDXGIOutput6::GetDesc1::MaxLuminance. Saves users from having to know
+			// whether they have an HDR400/HDR600/HDR1000+ panel - the system already
+			// knows. Only runs once per session, only when the device reports a real
+			// value, and only if the user hasn't already touched the HVar (so manual
+			// overrides via console / saved config keep working). Wrapped in a static
+			// init flag rather than guarded against the default 1000.0 sentinel
+			// because the user might legitimately want to pin 1000 as their target.
+			static bool sHdrPeakAutoCalibrated = false;
+			if (!sHdrPeakAutoCalibrated)
+			{
+				if (g_pEnv && g_pEnv->_graphicsDevice)
+				{
+					const float devicePeak = g_pEnv->_graphicsDevice->GetDisplayPeakNits();
+					if (devicePeak > 0.0f)
+					{
+						r_hdrPeakNits._val.f32 = std::clamp(devicePeak, r_hdrPeakNits._min.f32, r_hdrPeakNits._max.f32);
+						LOG_INFO("r_hdrPeakNits auto-calibrated to %.1f nits from display MaxLuminance", r_hdrPeakNits._val.f32);
+					}
+				}
+				sHdrPeakAutoCalibrated = true;
+			}
+
+			bufferData._hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
+			bufferData._hdrPeakNits = r_hdrPeakNits._val.f32;
+			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 5));
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
 
 			// Shadowmap data
@@ -1357,6 +1503,33 @@ namespace HexEngine
 
 				bufferData._shadowConfig.shadowMapSize = shadowMapSize;
 
+				// Contact shadow params - only populated for the directional light
+				// (other shadow casters leave the vec4 zeroed, which the shader reads as
+				// "disabled" via the .x channel check). Sun is the dominant light source
+				// and the one most likely to need the near-field detail contact shadows
+				// provide; spot/point shadow maps already have enough resolution for
+				// their typical use cases.
+				if (dynamic_cast<DirectionalLight*>(shadowCaster) != nullptr && r_contactShadows._val.b)
+				{
+					// .x intentionally carries the fade-start distance rather than a
+					// boolean enable flag. The deferred shader treats .x > 0 as enabled
+					// AND uses the magnitude as the start of a smoothstep distance fade
+					// out to 1.5x that range, so contact shadows concentrate near the
+					// camera (where they're visible + useful) and don't add noise to
+					// distant terrain (where TAA can't reconcile the screen-space jitter
+					// across camera motion - the volumetric-terrain mid-depth flicker
+					// we saw). Disabling contact shadows still zeros the whole vec4 via
+					// the else branch below.
+					bufferData._shadowConfig.contactShadowParams = math::Vector4(
+						r_contactShadowFadeStart._val.f32,
+						static_cast<float>(r_contactShadowSteps._val.i32),
+						r_contactShadowLength._val.f32,
+						r_contactShadowThickness._val.f32);
+				}
+				else
+				{
+					bufferData._shadowConfig.contactShadowParams = math::Vector4::Zero;
+				}
 			}
 
 			perFrameBuffer->Write(&bufferData, sizeof(bufferData));
@@ -1778,6 +1951,12 @@ namespace HexEngine
 
 			RenderLights();
 			RenderDiffuseGI();
+			// SSS sits after direct lighting + GI but BEFORE transparency / fog /
+			// volumetrics. We want the scatter to operate on opaque lit colour in
+			// linear HDR space; running it after fog would blur fog through skin
+			// (incorrect), and after transparency would force overlapping
+			// alpha-blended geometry to be re-sampled into the scatter kernel.
+			RenderSubsurfaceScattering();
 			RenderTransparent();
 			RenderFog();
 			//RenderWater();
@@ -1935,6 +2114,19 @@ namespace HexEngine
 			{
 				outputShader = _hdrOutputShader.get();
 			}
+
+			// Bokeh DoF runs FIRST in the overlay chain so it gathers
+			// pre-tonemap linear HDR colour. The "big bright bokeh ball" look
+			// depends on this - sampling post-tonemap colour clamps bright
+			// highlights to roughly 1.0 and squashes the disc shape on the
+			// brightest sources (the most visually distinctive bokeh pixels).
+			// Internally this swaps beauty <-> _subsurfaceIntermediateRT, which
+			// SSS has already finished using by this point.
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"Bokeh DoF");
+			{
+				RenderBokehDoF();
+			}
+			GFX_PERF_END();
 
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Colour grading");
 			{
@@ -2176,6 +2368,12 @@ namespace HexEngine
 					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
 					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
 				}
+
+				// Material-features RT at the slot Deferred.shader's
+				// GBUFFER_FEATURES_RESOURCE binds to (t14). The extended shading
+				// model lobes (clearcoat / anisotropy / sheen) read this; Standard
+				// PBR pixels see (0,0,0,0) (cleared each frame) and early-out.
+				g_pEnv->_graphicsDevice->SetTexture2D(14, _gbuffer.GetFeatures());
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
@@ -2201,6 +2399,11 @@ namespace HexEngine
 			return;
 
 		g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
+
+		// Material-features RT for PointLight.shader's GBUFFER_FEATURES_RESOURCE
+		// at t5. Point lights only use t0-4 (gbuffer) and t13 (beauty), so t5 is
+		// the first free slot. Set once for the pass since all point lights share it.
+		g_pEnv->_graphicsDevice->SetTexture2D(5, _gbuffer.GetFeatures());
 
 		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
 
@@ -2384,6 +2587,13 @@ namespace HexEngine
 						else
 							g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 					}
+
+					// Material-features RT at slot 11 - SpotLight.shader's
+					// GBUFFER_FEATURES_RESOURCE binds there (gbuffer = t0..4,
+					// shadowmaps = t5..10, features = t11). Bound per-light because
+					// the gbuffer rebind + shadowmap loop above advances the slot
+					// state and would otherwise leave t11 stale.
+					g_pEnv->_graphicsDevice->SetTexture2D(11, _gbuffer.GetFeatures());
 
 					// One-instance buffer: Start/Render/Finish each iteration so the
 					// instance vertex buffer has exactly this light's data when the draw
@@ -2581,6 +2791,119 @@ namespace HexEngine
 		GFX_PERF_END();
 
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
+	}
+
+	void SceneRenderer::RenderSubsurfaceScattering()
+	{
+		if (!r_sss._val.b || _subsurfaceShader == nullptr || _beautyRT == nullptr || _subsurfaceIntermediateRT == nullptr || _subsurfaceParamsBuffer == nullptr)
+			return;
+
+		PROFILE();
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		// Shared bindings: features gbuffer at t1 (model id + per-pixel params) and
+		// normal/depth at t2 (depth-aware kernel weighting). The shader's t0 is the
+		// source colour - beauty for the horizontal pass, intermediate for the
+		// vertical pass. We swap that explicitly between passes below.
+		auto* featuresTex = _gbuffer.GetFeatures();
+		auto* normalDepthTex = _gbuffer.GetNormal();
+		if (featuresTex == nullptr || normalDepthTex == nullptr)
+			return;
+
+		// Cbuffer at b6 - matches the shader's `cbuffer SssParams : register(b6)`.
+		// x = pass direction (0=H, 1=V), y = world-space radius, z = global intensity.
+		auto writeParams = [&](float direction)
+		{
+			const math::Vector4 params(
+				direction,
+				r_sssRadius._val.f32,
+				r_sssIntensity._val.f32,
+				0.0f);
+			math::Vector4 paramsCopy = params; // Write takes void* (non-const)
+			_subsurfaceParamsBuffer->Write(&paramsCopy, sizeof(paramsCopy));
+			graphics->SetConstantBufferPS(6, _subsurfaceParamsBuffer);
+		};
+
+		// --- Horizontal pass: beauty -> intermediate ---
+		guiRenderer->StartFrame();
+		graphics->SetRenderTarget(_subsurfaceIntermediateRT);
+		graphics->SetTexture2D(0, _beautyRT);
+		graphics->SetTexture2D(1, featuresTex);
+		graphics->SetTexture2D(2, normalDepthTex);
+		writeParams(0.0f);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _subsurfaceShader.get());
+
+		// --- Vertical pass: intermediate -> beauty ---
+		graphics->SetRenderTarget(_beautyRT);
+		graphics->SetTexture2D(0, _subsurfaceIntermediateRT);
+		graphics->SetTexture2D(1, featuresTex);
+		graphics->SetTexture2D(2, normalDepthTex);
+		writeParams(1.0f);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _subsurfaceShader.get());
+		guiRenderer->EndFrame();
+
+		// Unbind the SSS-specific SRVs so later passes don't inherit stale bindings.
+		graphics->SetTexture2D(0, nullptr);
+		graphics->SetTexture2D(1, nullptr);
+		graphics->SetTexture2D(2, nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
+	}
+
+	void SceneRenderer::RenderBokehDoF()
+	{
+		if (!r_dof._val.b || _bokehDoFShader == nullptr || _beautyRT == nullptr ||
+			_subsurfaceIntermediateRT == nullptr || _bokehDoFParamsBuffer == nullptr)
+			return;
+
+		PROFILE();
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		auto* normalDepthTex = _gbuffer.GetNormal();
+		if (normalDepthTex == nullptr)
+			return;
+
+		// Reuse the SSS intermediate as a scratch RT - SSS has already finished
+		// for this frame and the format/size match exactly, so allocating a
+		// dedicated DoF scratch is wasteful. The bokeh pass reads beauty, writes
+		// scratch, then we copy scratch back into beauty so downstream effects
+		// (colour grading, vignette, etc.) see the DoF'd image.
+		auto* scratchRT = _subsurfaceIntermediateRT;
+
+		// Cbuffer at b6: (focusDistance, focusRange, aperture, maxCocPixels).
+		math::Vector4 params(
+			r_dofFocusDistance._val.f32,
+			r_dofFocusRange._val.f32,
+			r_dofAperture._val.f32,
+			r_dofMaxBlur._val.f32);
+		math::Vector4 paramsCopy = params; // Write takes void* (non-const)
+		_bokehDoFParamsBuffer->Write(&paramsCopy, sizeof(paramsCopy));
+		graphics->SetConstantBufferPS(6, _bokehDoFParamsBuffer);
+
+		// NOTE: do NOT wrap this in guiRenderer->StartFrame()/EndFrame() - this
+		// path runs from inside RenderOverlays which has already begun a frame,
+		// and a nested EndFrame would flush the outer draw list against our
+		// scratch RT (visible as a grey screen because the queued UI draws land
+		// in the wrong place and then get copied over the beauty buffer).
+		graphics->SetRenderTarget(scratchRT);
+		graphics->SetTexture2D(0, _beautyRT);
+		graphics->SetTexture2D(1, normalDepthTex);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _bokehDoFShader.get());
+
+		// Copy back so beauty carries the DoF'd image into the rest of the post
+		// chain. Cheap on D3D11 (a single CopyResource on same-format RTs).
+		scratchRT->CopyTo(_beautyRT);
+
+		graphics->SetTexture2D(0, nullptr);
+		graphics->SetTexture2D(1, nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
 	}
 
 	void SceneRenderer::RenderFog()
@@ -2838,13 +3161,18 @@ namespace HexEngine
 				// onto beauty. Use this to verify whether artifacts originate from the SSR shader
 				// or from NRD's denoising. If artifacts disappear here, the shader output is OK
 				// and the problem lives in NRD's preprocess / matrices / hit-distance interpretation.
+				//
+				// Specular reflection (_ssrTexture) is the shiny / mirror channel that produces
+				// the visible reflections on wet surfaces; without it, r_ssrDenoise=0 looked like
+				// "reflections vanished entirely" and made the diagnostic useless. Composite both
+				// diffuse and specular so the toggle isolates NRD vs the raw shader honestly.
 				guiRenderer->StartFrame();
 				g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
 				g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve (no denoise)");
 				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
 				guiRenderer->FullScreenTexturedQuad(_ssrDiffuseTexture, _ssrResolve.get());
-				//guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
+				guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
 				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 			}
 

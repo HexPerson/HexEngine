@@ -24,7 +24,13 @@ namespace HexEngine
 	HVar r_giEnable("r_giEnable", "Enable runtime diffuse global illumination", true, false, true);
 	HVar r_giQuality("r_giQuality", "GI quality preset (0 = low, 1 = medium, 2 = high)", 2, 0, 2);
 	HVar r_giHalfRes("r_giHalfRes", "Run GI trace pass at half resolution", true, false, true);
-	HVar r_giMovementPreset("r_giMovementPreset", "GI movement stability preset (0=off, 1=stable, 2=ultra stable)", 0, 0, 2);
+	// Default 1 (stable) so editor preview and launcher agree. Previously
+	// defaulted to 0 (off) with a "force to 1 in editor mode" override -
+	// which made the editor preview look smoother than the shipped game's
+	// GI (and by extension SSR fallback, which samples the GI clipmaps).
+	// Users who actually want the unfiltered look can set this to 0
+	// explicitly; ultra-stable users can set 2.
+	HVar r_giMovementPreset("r_giMovementPreset", "GI movement stability preset (0=off, 1=stable, 2=ultra stable)", 1, 0, 2);
 	HVar r_giProbeBudget("r_giProbeBudget", "Maximum dynamic probe/object updates per frame", 64, 4, 4096);
 	HVar r_giRaysPerProbe("r_giRaysPerProbe", "Logical rays-per-probe budget hint", 1, 1, 8);
 	HVar r_giHysteresis("r_giHysteresis", "Temporal history blend amount for GI resolve", 0.62f, 0.0f, 0.99f);
@@ -765,12 +771,12 @@ namespace HexEngine
 			break;
 		}
 
+		// No editor-mode override - r_giMovementPreset default of 1 now
+		// gives both editor and launcher the same baseline GI stability,
+		// so the editor preview honestly reflects what the shipped game
+		// renders. Users who want the unfiltered look can set the HVar
+		// to 0 explicitly.
 		int32_t movementPreset = std::clamp(r_giMovementPreset._val.i32, 0, 2);
-		if (movementPreset == 0 && g_pEnv != nullptr && g_pEnv->IsEditorMode())
-		{
-			// In editor, default to a more stable profile unless the user explicitly picks another mode.
-			movementPreset = 1;
-		}
 
 		if (movementPreset == 1)
 		{
@@ -1084,10 +1090,6 @@ namespace HexEngine
 		const uint32_t resolution = GetVoxelResolution();
 		const float baseExtent = GetBaseExtent();
 		int32_t movementPreset = std::clamp(r_giMovementPreset._val.i32, 0, 2);
-		if (movementPreset == 0 && g_pEnv != nullptr && g_pEnv->IsEditorMode())
-		{
-			movementPreset = 1;
-		}
 
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
 		{
@@ -1953,9 +1955,7 @@ namespace HexEngine
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresenceMask;
 		_constants.params3 = math::Vector4(sunDirection.x, sunDirection.y, sunDirection.z, sunDirectionality);
-		const int32_t movementPreset = (r_giMovementPreset._val.i32 == 0 && g_pEnv != nullptr && g_pEnv->IsEditorMode())
-			? 1
-			: std::clamp(r_giMovementPreset._val.i32, 0, 2);
+		const int32_t movementPreset = std::clamp(r_giMovementPreset._val.i32, 0, 2);
 		const float basePixelMotionStart = std::max(0.0f, r_giResolvePixelMotionStart._val.f32);
 		const float basePixelMotionStrength = std::max(0.0f, r_giResolvePixelMotionStrength._val.f32);
 		const float warmPixelMotionStart = std::max(basePixelMotionStart, 2.2f);

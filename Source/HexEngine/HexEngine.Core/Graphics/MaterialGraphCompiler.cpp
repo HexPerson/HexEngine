@@ -680,7 +680,8 @@ namespace HexEngine
 			const GraphExpression* roughnessExpr,
 			const GraphExpression* metallicExpr,
 			const GraphExpression* emissiveExpr,
-			const GraphExpression* opacityExpr)
+			const GraphExpression* opacityExpr,
+			const GraphExpression* smoothnessExpr)
 		{
 			std::stringstream ss;
 
@@ -767,10 +768,30 @@ namespace HexEngine
 			ss << "\t\tfloat transparencyAlpha = saturate(opacity * baseColor.a);\n";
 			ss << "\t\tfloat outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;\n";
 			ss << "\t\toutput.diff = float4(finalRGB, outputAlpha);\n";
-			ss << "\t\toutput.mat = float4(metallic, roughness, g_material.smoothness, g_material.specularProbability);\n";
+			// Smoothness can be graph-driven via the Smoothness output semantic;
+			// fall back to the standard material's smoothness scalar when the graph
+			// doesn't bind one. .a is reserved (specularProbability was removed -
+			// nothing read it).
+			if (smoothnessExpr != nullptr)
+				ss << std::format("\t\tfloat smoothness = saturate({});\n", ToScalar(ctx, *smoothnessExpr));
+			else
+				ss << "\t\tfloat smoothness = g_material.smoothness;\n";
+			ss << "\t\toutput.mat = float4(metallic, roughness, smoothness, 1.0f);\n";
 			ss << "\t\toutput.norm = float4(worldNormal.xyz, pixelDepth);\n";
 			ss << "\t\toutput.pos = float4(input.positionWS.xyz, length(emission));\n";
 			ss << "\t\toutput.velocity = velocity;\n";
+			// Mirror DefaultPixel: encode model id + modelParams.w into the features RT.
+			// Without this the graph-compiled shader would leave the features RT pixel
+			// at whatever was there from an earlier draw at the same screen position
+			// (or undefined if no earlier draw), and the deferred / SSS / clearcoat /
+			// sheen passes would pick up a stale non-zero model id and shade with the
+			// wrong lobe — user-visible as e.g. graph-authored road materials suddenly
+			// gaining a sharp specular highlight from a neighbouring SSS / clearcoat
+			// material's features that bled through.
+			ss << "\t\tconst uint matIdByte = (uint)g_material.materialModel;\n";
+			ss << "\t\tconst float matWQuant = floor(saturate(g_material.modelParams.w) * 31.0f + 0.5f);\n";
+			ss << "\t\tconst float matPackedR = ((float)matIdByte * 32.0f + matWQuant) / 255.0f;\n";
+			ss << "\t\toutput.feat = float4(matPackedR, g_material.modelParams.x, g_material.modelParams.y, g_material.modelParams.z);\n";
 			ss << "\t\treturn output;\n\t}\n}\n";
 
 			return ss.str();
@@ -934,6 +955,60 @@ namespace HexEngine
 			const uint64_t hashValue = static_cast<uint64_t>(std::hash<std::string>{}(shaderSource));
 			return std::format("{:016x}", hashValue);
 		}
+
+		// Hashes the contents of every .shader file in the include directory so the
+		// generated-shader cache filename invalidates whenever an engine-side include
+		// (Global.shader, MeshCommon.shader, PBRutils.shader, etc.) changes.
+		//
+		// Without this, the cache key is the graph source hash only - and the graph
+		// source doesn't change when Global.shader gains new cbuffer fields or
+		// MeshCommon's helpers get rewritten. Stale .hcs files keep getting reused
+		// against fresh engine code, which is exactly the cbuffer-layout-mismatch class
+		// of bug we already chased (the trailing-HDR-fields-in-PerFrameBuffer mid-add
+		// was specifically silent on this because no shader source files changed).
+		//
+		// Sorted by filename so file-system enumeration order doesn't perturb the hash.
+		// Cost is "read all engine .shader files once per material compile, hash" -
+		// negligible at the rate compiles actually happen.
+		std::string ComputeIncludesHash(const fs::path& includeDir)
+		{
+			if (includeDir.empty() || !fs::exists(includeDir) || !fs::is_directory(includeDir))
+				return "0000000000000000";
+
+			std::vector<fs::path> includeFiles;
+			std::error_code ec;
+			for (const auto& entry : fs::directory_iterator(includeDir, ec))
+			{
+				if (ec)
+					break;
+				if (!entry.is_regular_file())
+					continue;
+				if (entry.path().extension() != L".shader")
+					continue;
+				includeFiles.push_back(entry.path());
+			}
+
+			std::sort(includeFiles.begin(), includeFiles.end());
+
+			std::string combined;
+			combined.reserve(64 * 1024);
+			for (const auto& p : includeFiles)
+			{
+				combined += p.filename().string();
+				combined += '\0';
+				std::ifstream f(p, std::ios::binary);
+				if (f)
+				{
+					std::ostringstream oss;
+					oss << f.rdbuf();
+					combined += oss.str();
+				}
+				combined += '\0';
+			}
+
+			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
+			return std::format("{:016x}", h);
+		}
 	}
 
 	MaterialGraphCompileResult MaterialGraphCompiler::CompileToMaterial(
@@ -963,6 +1038,7 @@ namespace HexEngine
 		GraphExpression metallic;
 		GraphExpression emissive;
 		GraphExpression opacity;
+		GraphExpression smoothness;
 
 		GraphExpression* baseColorPtr = nullptr;
 		GraphExpression* normalPtr = nullptr;
@@ -970,6 +1046,7 @@ namespace HexEngine
 		GraphExpression* metallicPtr = nullptr;
 		GraphExpression* emissivePtr = nullptr;
 		GraphExpression* opacityPtr = nullptr;
+		GraphExpression* smoothnessPtr = nullptr;
 
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::BaseColor, baseColor)) baseColorPtr = &baseColor;
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Normal, normal)) normalPtr = &normal;
@@ -977,6 +1054,7 @@ namespace HexEngine
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Metallic, metallic)) metallicPtr = &metallic;
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Emissive, emissive)) emissivePtr = &emissive;
 		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Opacity, opacity)) opacityPtr = &opacity;
+		if (EvaluateOutputExpression(ctx, MaterialGraphOutputSemantic::Smoothness, smoothness)) smoothnessPtr = &smoothness;
 
 		if (!ctx.errors.empty())
 		{
@@ -1027,11 +1105,23 @@ namespace HexEngine
 			roughnessPtr,
 			metallicPtr,
 			emissivePtr,
-			opacityPtr);
-		const std::string sourceHash = ComputeShaderSourceHash(shaderSource);
+			opacityPtr,
+			smoothnessPtr);
 
-		const fs::path hashedShaderSource = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + sourceHash + ".shader");
-		fs::path generatedShaderOutput = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + sourceHash + ".hcs");
+		// Cache key = hash(graph-generated source) XOR hash(all engine .shader
+		// includes). Either part changing invalidates the cached .hcs. The
+		// includes hash catches the case where a header like Global.shader gains
+		// new cbuffer fields - source unchanged, but the compiled bytecode now
+		// has a different cbuffer layout, so the old .hcs would mismatch the
+		// C++ struct that uploads PerFrameBuffer.
+		std::vector<fs::path> includeSearchPaths;
+		const fs::path includeDir = ResolveShaderIncludeDirectory(&includeSearchPaths);
+		const std::string sourceHash = ComputeShaderSourceHash(shaderSource);
+		const std::string includesHash = ComputeIncludesHash(includeDir);
+		const std::string combinedHash = std::format("{}_{}", sourceHash, includesHash);
+
+		const fs::path hashedShaderSource = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + combinedHash + ".shader");
+		fs::path generatedShaderOutput = generatedShaderDirectory / (materialStem.generic_string() + "_graph_" + combinedHash + ".hcs");
 
 		DiskFile shaderFile(hashedShaderSource, std::ios::out | std::ios::trunc);
 		if (!shaderFile.Open())
@@ -1046,8 +1136,8 @@ namespace HexEngine
 
 		if (!fs::exists(generatedShaderOutput))
 		{
-			std::vector<fs::path> includeSearchPaths;
-			const fs::path includeDir = ResolveShaderIncludeDirectory(&includeSearchPaths);
+			// includeDir / includeSearchPaths were resolved above for the hash;
+			// reuse them here instead of re-walking the candidate list.
 			if (includeDir.empty())
 			{
 				std::string searchList;

@@ -21,6 +21,17 @@ namespace HexEngine::VolumetricTerrain
 		std::vector<uint8_t> materials;
 		std::vector<uint8_t> materialWeights;
 		bool hasMaterialEdits = false;
+
+		// Pre-cooked PhysX triangle mesh for this chunk's collision. Populated
+		// either:
+		//   - on the editor's save path, after the async cook finishes (so the
+		//     scene file captures the cooked bytes), OR
+		//   - on Deserialize when loading a scene that has the cached blob
+		// When present and the chunk's density hasn't been edited, the runtime
+		// can skip PxCookTriangleMesh entirely and feed these bytes directly
+		// into PxPhysics::createTriangleMesh - turning ~50-70ms of CPU cook
+		// work per chunk into a ~5ms shape-create on the main thread.
+		std::vector<uint8_t> cookedCollisionBlob;
 	};
 
 	class VolumetricTerrain : public HexEngine::ISceneCustomRenderer
@@ -75,6 +86,14 @@ public:
 		MarchingCubes _marchingCubes;
 		std::unique_ptr<SdfTerrainGenerator> _generator;
 		std::unordered_map<ChunkCoord, std::unique_ptr<VolumetricTerrainChunk>, ChunkCoordHash> _chunks;
+
+		// Pre-baked per-chunk snapshot data populated by Deserialize, consumed
+		// by BuildChunks. When a chunk's coord has an entry here, BuildChunks
+		// skips SDF generation for that chunk entirely and applies the
+		// snapshot directly via VolumetricTerrainChunk::ApplyBakedData. Empty
+		// (no entries) when the scene was authored without a snapshot - in
+		// which case BuildChunks runs the original SDF generation flow.
+		std::unordered_map<ChunkCoord, EditedChunkBlob, ChunkCoordHash> _bakedChunks;
 		TerrainStats _stats;
 		bool _gpuVisualsEnabled = false;
 		bool _initialized = false;

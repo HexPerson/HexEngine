@@ -73,6 +73,19 @@ namespace HexEngine
 		void RenderSpotLights();
 		void RenderDirectionalLights();
 		void RenderDiffuseGI();
+		// Two-pass separable screen-space subsurface scattering. Reads the beauty
+		// RT, the features gbuffer (model-id channel gates the work), and the
+		// normal/depth target (depth-aware kernel weighting); writes back into
+		// beauty after both passes. Runs early in post (after lighting+GI, before
+		// fog/clouds) so the SSS scatter happens in linear HDR space and fog/cloud
+		// volumetrics aren't blurred through skin.
+		void RenderSubsurfaceScattering();
+		// Bokeh depth-of-field. Single-pass 32-tap Vogel disk gather sized by
+		// per-pixel circle-of-confusion. Runs after tonemap so the bokeh discs
+		// reflect post-tonemap colour - matters because pre-tonemap HDR
+		// highlights would saturate the gathered buckets and lose the "ball"
+		// shape on bright sources. Gated by r_dof.
+		void RenderBokehDoF();
 		void RenderVignette();
 		void SetStreamlineConstants();
 
@@ -155,6 +168,18 @@ namespace HexEngine
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _waterBlitEffect;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
+		// Screen-space subsurface scattering (Jorge Jimenez separable). Run twice
+		// per frame as a two-pass post (horizontal then vertical), gated by the
+		// features gbuffer's material-model channel.
+		std::shared_ptr<IShader> _subsurfaceShader;
+		IConstantBuffer* _subsurfaceParamsBuffer = nullptr;
+		ITexture2D* _subsurfaceIntermediateRT = nullptr;
+		// Bokeh DoF. Single fullscreen PS that reads beauty + normal/depth and
+		// writes back into beauty in-place via a scratch RT swap (we reuse the
+		// SSS intermediate RT for the scratch since both run on the same beauty
+		// format and never overlap in the post chain).
+		std::shared_ptr<IShader> _bokehDoFShader;
+		IConstantBuffer* _bokehDoFParamsBuffer = nullptr;
 
 		Bloom* _bloomEffect = nullptr;
 		AutoExposure _autoExposure;

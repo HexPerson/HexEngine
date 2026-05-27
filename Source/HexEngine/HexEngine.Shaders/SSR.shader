@@ -529,30 +529,28 @@
 		}
 
 		// Miss path - cone-trace the voxel GI clipmaps in the ray direction for an indirect-
-		// bounce fallback. Both the in-screen loop-exhaustion and screen-exit cases hit this.
-		// For loop-exhaustion (didFallback=true) we still have a last in-screen beauty value
-		// from the march, which is directionally accurate; blend it with the voxel trace so
-		// we keep that screen-space hit information when it's available. For pure miss we
-		// just use the voxel trace alone.
+		// bounce fallback.
 		//
-		// Note: prior versions wrote zero-alpha here to avoid NRD's 3x3 minHitDist sampling
-		// leaking miscomputed virtual reprojection positions onto fallback pixels. The voxel
-		// trace gives a real radiance from the ray direction so it's a closer match to what
-		// NRD's spec virtual-MV path assumes (signal lives along the ray at hitDistance), and
-		// the cone trace's own distance fits that better than the previous source-beauty
-		// fallback ever did.
+		// Previously, when the raymarch loop exhausted INSIDE the screen (hit.didFallback=true),
+		// we blended 65% lastInScreenTex beauty with 35% voxel GI. The intent was to keep some
+		// "screen-space hit information when it's available" - but lastInScreenTex is only
+		// meaningful when the ray was close to a real hit (e.g. ran out of refinement budget).
+		// When the ray ran its full step budget through empty space (e.g. a road pixel
+		// reflecting upward, the ray marches up-and-forward through empty air for 28 steps,
+		// stays in-screen the whole time because there's nothing above to exit it past), the
+		// "last in-screen tex" is just whatever screen pixel happened to be sampled at iteration
+		// 27 - directionally meaningless and per-pixel coherent (every road pixel sees the same
+		// vertical column smeared down).
+		//
+		// The diffuse path explicitly skips didFallback for this exact reason
+		// (RaymarchReflection comment also flags the "long stripe artifact"). Specular must
+		// do the same: hand off to the voxel GI cone trace uniformly for any non-real-hit case.
+		// The cone trace is a genuine directional radiance estimate from the same ray direction,
+		// which is the right answer for "no screen-space hit found".
 		float traceDistance = 0.0f;
 		const float3 giRadiance = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, rayDir, traceDistance);
 
 		didReflect = true;
-
-		if (hit.didFallback)
-		{
-			const float3 blended = lerp(giRadiance, hit.colour, 0.65f);
-			hitDistance = max(hit.hitDistance, 1.0f);
-			return float4(blended, 1.0f);
-		}
-
 		hitDistance = max(traceDistance, 8.0f);
 		return float4(giRadiance, 1.0f);
 	}

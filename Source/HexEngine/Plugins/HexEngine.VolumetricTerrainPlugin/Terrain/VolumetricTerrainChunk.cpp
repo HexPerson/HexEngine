@@ -386,6 +386,15 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 	void VolumetricTerrainChunk::Generate(SdfTerrainGenerator& generator)
 	{
+		// Backwards-compatible single-call path. Callers wanting parallel
+		// generation across many chunks should use GenerateCpu() in worker
+		// threads + UploadGeneratedToGpu() on the main thread.
+		GenerateCpu(generator);
+		UploadGeneratedToGpu();
+	}
+
+	void VolumetricTerrainChunk::GenerateCpu(SdfTerrainGenerator& generator)
+	{
 		const int32_t points = _params.chunkResolution + 1;
 		const math::Vector3 center = _origin + math::Vector3(_params.chunkWorldSize * 0.5f, 0.0f, _params.chunkWorldSize * 0.5f);
 		const auto heightMap = generator.GenerateHeightSeedMap(center, _params.chunkResolution, _params.chunkWorldSize);
@@ -413,8 +422,56 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_materialDirty = false;
 		_hasMaterialEdits = false;
 		InitializeAutoMaterialWeights();
+	}
+
+	void VolumetricTerrainChunk::UploadGeneratedToGpu()
+	{
 		UploadDensityToGpu();
 		UploadMaterialsToGpu();
+	}
+
+	bool VolumetricTerrainChunk::ApplyBakedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials, const std::vector<uint8_t>& materialWeights)
+	{
+		// Hard requirement: density buffer must match the chunk's resolution.
+		// If it doesn't, the snapshot is for a different chunkResolution and
+		// we have no choice but to fall back to fresh SDF generation.
+		if (densities.size() != _densities.size())
+			return false;
+
+		_densities = densities;
+
+		// Optional material data. When absent we fall back to the auto-weight
+		// init that Generate() would have done.
+		const bool hasMaterials = (materials.size() == _materials.size());
+		const bool hasWeights = (materialWeights.size() == _materialWeights.size());
+
+		if (hasMaterials)
+			_materials = materials;
+		// else leave _materials at the post-resize 0-fill from the constructor.
+
+		if (hasWeights)
+		{
+			_materialWeights = materialWeights;
+		}
+		else if (hasMaterials)
+		{
+			InitializeMaterialWeightsFromIndices();
+		}
+		else
+		{
+			InitializeAutoMaterialWeights();
+		}
+
+		_generated = true;
+		_densityDirty = false;
+		_meshDirty = true;
+		_collisionDirty = true;
+		_materialDirty = false;
+		_hasMaterialEdits = false;
+		// Critically NOT setting _hasEdits = true - this is a baked snapshot,
+		// not a runtime edit. Subsequent scene saves should treat the chunk
+		// as unedited (matching the baked snapshot is the default state).
+		return true;
 	}
 
 	int32_t VolumetricTerrainChunk::Index(int32_t x, int32_t y, int32_t z) const
@@ -858,6 +915,99 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		}
 
 		_meshDirty = false;
+	}
+
+	bool VolumetricTerrainChunk::AttachCachedCookedCollision()
+	{
+		if (_rigidBody == nullptr || _cachedCookedCollisionBlob.empty())
+			return false;
+		_rigidBody->RemoveCollider();
+		_rigidBody->AddTriangleMeshColliderFromCookedBuffer(_cachedCookedCollisionBlob, true);
+		_collisionDirty = false;
+		return true;
+	}
+
+	bool VolumetricTerrainChunk::BeginAsyncCollisionRebuild()
+	{
+		if (_rigidBody == nullptr)
+			return false;
+		if (_rigidBody->HasAsyncColliderInFlight())
+			return false;  // already cooking, leave it alone
+
+		// Same data-shaping as RebuildCollision (the synchronous version),
+		// but we hand the vertex/index arrays to the async cook API instead
+		// of the blocking AddTriangleMeshCollider call. Drop the existing
+		// collider first so the body has nothing attached while the new
+		// cook runs.
+		_rigidBody->RemoveCollider();
+
+		const int32_t collisionResolution = std::clamp(_params.collisionResolution, 4, std::max(4, _params.chunkResolution));
+
+		// High-collision-resolution path uses the same triangles as the
+		// visual mesh, so we need _mesh to exist. Low-res path builds its
+		// own collision-only marching cubes from a downsampled density
+		// field - _mesh is not consulted, so we can run it even when the
+		// visual mesh wasn't built (GPU visuals path skips RebuildMesh to
+		// save ~80ms per chunk).
+		if (collisionResolution >= _params.chunkResolution)
+		{
+			if (_mesh == nullptr || _mesh->GetNumFaces() == 0)
+			{
+				_collisionDirty = false;
+				return false;
+			}
+			const bool queued = _rigidBody->BeginAddTriangleMeshColliderAsync(_mesh.get(), true);
+			if (queued)
+				_collisionDirty = false;
+			return queued;
+		}
+
+		const std::vector<float> collisionDensities = BuildCollisionDensityField(collisionResolution);
+		const float collisionVoxelSize = _params.chunkWorldSize / static_cast<float>(std::max(1, collisionResolution));
+		MarchingCubes collisionMarching;
+		auto collisionOutput = collisionMarching.Build(collisionDensities, collisionResolution, collisionVoxelSize, _origin, _params.uvScale);
+		if (collisionOutput.vertices.empty() || collisionOutput.indices.empty())
+		{
+			_collisionDirty = false;
+			return false;
+		}
+
+		std::vector<math::Vector3> collisionVertices;
+		collisionVertices.reserve(collisionOutput.vertices.size());
+		for (const auto& vertex : collisionOutput.vertices)
+			collisionVertices.emplace_back(vertex._position.x, vertex._position.y, vertex._position.z);
+
+		const bool queued = _rigidBody->BeginAddTriangleMeshColliderAsync(
+			collisionVertices,
+			collisionOutput.indices,
+			static_cast<uint32_t>(collisionOutput.indices.size() / 3),
+			true);
+		if (queued)
+			_collisionDirty = false;
+		return queued;
+	}
+
+	bool VolumetricTerrainChunk::PollAsyncCollisionFinish()
+	{
+		if (_rigidBody == nullptr)
+			return false;
+		if (!_rigidBody->HasAsyncColliderInFlight())
+			return false;
+		const bool finished = _rigidBody->TryFinishAsyncCollider();
+		if (finished)
+		{
+			// Capture the cook output so a subsequent scene save can persist
+			// it - next load reuses the bytes via the cache fast path.
+			const auto& buffer = _rigidBody->GetLastCookedBuffer();
+			if (!buffer.empty())
+				_cachedCookedCollisionBlob = buffer;
+		}
+		return finished;
+	}
+
+	bool VolumetricTerrainChunk::HasAsyncCollisionInFlight() const
+	{
+		return _rigidBody != nullptr && _rigidBody->HasAsyncColliderInFlight();
 	}
 
 	void VolumetricTerrainChunk::RebuildCollision()
@@ -1710,11 +1860,11 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 	// Clean the engine's PerObjectBuffer before issuing the draw. GraphicsDeviceD3D11's
 	// Draw*Indirect path unconditionally rebinds the engine PerObjectBuffer at PS slot 1
 	// (= HLSL register b1), and whatever was last written to it by the opaque mesh path
-	// (the last material's MaterialProperties: smoothness, specularProbability, isWater,
+	// (the last material's MaterialProperties: smoothness, isWater,
 	// hasTransparency, etc.) is still resident. The terrain surface shader's main
 	// function doesn't reference g_material directly, but included translation units
-	// and downstream passes do, and DefaultPixel.shader writes g_material.smoothness /
-	// specularProbability into the gbuffer mat channel for the materials it shades -
+	// and downstream passes do, and DefaultPixel.shader writes g_material.smoothness
+	// into the gbuffer mat channel for the materials it shades -
 	// any shader reading PerObjectBuffer fields during the terrain's render slot
 	// inherits the LAST material's values. User-visible symptom: terrain takes on the
 	// reflection params and normal-map behaviour of whichever mesh was drawn last.

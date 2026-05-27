@@ -463,6 +463,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Environment\TimeManager.hpp" />
     <ClInclude Include="FileSystem\FileSystem.hpp" />
     <ClInclude Include="FileSystem\DiskFile.hpp" />
+    <ClInclude Include="FileSystem\MemoryFile.hpp" />
     <ClInclude Include="FileSystem\IFile.hpp" />
     <ClInclude Include="FileSystem\IResource.hpp" />
     <ClInclude Include="FileSystem\KeyValues.hpp" />
@@ -643,6 +644,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Environment\TimeManager.cpp" />
     <ClCompile Include="FileSystem\FileSystem.cpp" />
     <ClCompile Include="FileSystem\DiskFile.cpp" />
+    <ClCompile Include="FileSystem\MemoryFile.cpp" />
     <ClCompile Include="FileSystem\KeyValues.cpp" />
     <ClCompile Include="FileSystem\ResourceSystem.cpp" />
     <ClCompile Include="Graphics\DebugRenderer.cpp" />

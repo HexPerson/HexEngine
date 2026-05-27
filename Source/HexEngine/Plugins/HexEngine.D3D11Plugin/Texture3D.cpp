@@ -94,12 +94,18 @@ void Texture3D::GetPixels(std::vector<uint8_t>& buffer)
 	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
 
+	// Lock for the same reason as Texture2D::GetPixels - CaptureTexture
+	// drives the immediate context (CreateStaging + CopyResource + Map/Unmap)
+	// and must not race other context users.
 	DirectX::ScratchImage scratch;
-	CHECK_HR(DirectX::CaptureTexture(
+	g_pGraphics->Lock();
+	const HRESULT captureHr = DirectX::CaptureTexture(
 		gfxDevice,
 		gfxContext,
 		_texture,
-		scratch));
+		scratch);
+	g_pGraphics->Unlock();
+	CHECK_HR(captureHr);
 
 	auto pixelsSize = scratch.GetPixelsSize();
 
@@ -142,11 +148,17 @@ void Texture3D::GetPixels(std::vector<float>& buffer)
 		return;
 	}
 
+	// CopyResource + Map/Unmap drive the immediate context - serialise against
+	// any other thread that may also be touching it (background streaming,
+	// async loaders, etc.) or the D3D11 debug layer reports
+	// MISCELLANEOUS CORRUPTION #28 / CORRUPTED_MULTITHREADING.
+	g_pGraphics->Lock();
 	gfxContext->CopyResource(staging, _texture);
 
 	D3D11_MAPPED_SUBRESOURCE mapped = {};
 	if (FAILED(gfxContext->Map(staging, 0, D3D11_MAP_READ, 0, &mapped)) || mapped.pData == nullptr)
 	{
+		g_pGraphics->Unlock();
 		SAFE_RELEASE(staging);
 		buffer.clear();
 		return;
@@ -168,6 +180,7 @@ void Texture3D::GetPixels(std::vector<float>& buffer)
 	}
 
 	gfxContext->Unmap(staging, 0);
+	g_pGraphics->Unlock();
 	SAFE_RELEASE(staging);
 }
 
@@ -176,12 +189,16 @@ void Texture3D::SaveToFile(const fs::path& path)
 	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
 
+	// CaptureTexture drives the immediate context - lock for the same
+	// reason as GetPixels above.
 	DirectX::ScratchImage scratch;
+	g_pGraphics->Lock();
 	DirectX::CaptureTexture(
 		gfxDevice,
 		gfxContext,
 		_texture,
 		scratch);
+	g_pGraphics->Unlock();
 
 	DirectX::SaveToWICFile(
 		scratch.GetImages(),

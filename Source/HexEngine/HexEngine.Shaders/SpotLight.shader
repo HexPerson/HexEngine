@@ -50,6 +50,9 @@
 {
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	SHADOWMAPS_RESOURCE(5);
+	// Material-features RT. SHADOWMAPS occupies t5..t10, so t11 is the first
+	// free slot for the features SRV.
+	GBUFFER_FEATURES_RESOURCE(11)
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -277,6 +280,26 @@
 			depthValue,
 			attenuation * coneAtten
 			);
+
+		// Per-model feature lobes (clearcoat / aniso / sheen). Same approach as
+		// the directional + point paths so spot lights stay consistent.
+		const float4 featurePx = GBUFFER_FEATURES.Sample(g_pointSampler, screenPos);
+		const uint modelId = DecodeMaterialModelId(featurePx.r);
+		if (modelId != MATERIAL_MODEL_STANDARD)
+		{
+			const float perceptualRoughnessForFeatures = clamp(GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos).g, MinRoughness, 1.0f);
+			const float3 viewDir = g_eyePos.xyz - pixelPosWS.xyz;
+			pbr.rgb += ApplyMaterialFeatures(
+				modelId,
+				float4(featurePx.g, featurePx.b, featurePx.a, DecodePackedModelParamW(featurePx.r)),
+				normalWS,
+				viewDir,
+				lightToPixelVec,
+				input.colour.rgb,
+				perceptualRoughnessForFeatures,
+				depthValue,
+				attenuation * coneAtten);
+		}
 
 		float3 lightContribution = max((pbr.rgb * lightIntensity), 0.0f);
 		lightContribution += volumetricContribution;

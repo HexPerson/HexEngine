@@ -231,5 +231,94 @@
 		return max(0.00f, saturate(depthValue));
 	}
 
+	// Screen-space contact shadows. PCSS cascades blur out near-camera detail (the
+	// closest cascade still covers many world metres and its resolution can't resolve
+	// e.g. a finger casting a shadow on a palm, or hair-on-shoulder contact). This
+	// fills the gap by raymarching the depth buffer from each shaded pixel toward
+	// the sun: if the ray hits a pixel that's closer to the camera than the ray's
+	// own depth (and within a thickness window so we don't see-through walls), the
+	// pixel is in contact shadow. Returns 1 = lit, 0 = contact-shadowed; multiply
+	// into the cascade shadow term.
+	//
+	// Cost: numSteps depth samples per fullscreen pixel. 12-16 steps is plenty.
+	// Worst-case cliff failure mode is "ray exits the screen / hits sky" - we
+	// early-out cleanly so off-screen geometry simply doesn't contact-shadow.
+	float ScreenSpaceContactShadow(
+		float3 positionWS,        // world position of the shaded pixel
+		float3 lightDirectionWS,  // direction TOWARDS the sun (i.e. -g_lightDirection)
+		float3 normalWS,          // surface normal (used for self-bias)
+		Texture2D viewDepthSource,// gbuffer normal/depth texture (.w = view-space depth)
+		SamplerState pointSampler,
+		float2 screenPos,         // pixel screen coords (for jitter)
+		int numSteps,
+		float maxWorldLength,
+		float thicknessThreshold)
+	{
+		// Self-bias along the surface normal so the ray's first step doesn't
+		// immediately self-intersect. 0.05m matches the ~minDistSqr clamp used
+		// by the punctual light shaders for the same reason.
+		const float3 biasedOrigin = positionWS + normalWS * 0.05f;
+
+		// Per-pixel jitter breaks the banding that comes from every pixel
+		// stepping to the same set of distances. Cheap interleaved gradient noise
+		// (same as the cascade sampler uses) - keeps the noise pattern stable
+		// frame-to-frame so TAA can resolve it.
+		const float jitter = InterleavedGradientNoise(screenPos);
+
+		const float stepLen = maxWorldLength / max((float)numSteps, 1.0f);
+		const float3 stepWS = lightDirectionWS * stepLen;
+
+		// Start the march at jitter*stepLen instead of 0 so neighboring pixels
+		// sample different distances - the resulting noise dithers out under TAA.
+		float3 samplePos = biasedOrigin + stepWS * jitter;
+
+		float occlusion = 0.0f;
+		[loop]
+		for (int i = 1; i <= numSteps; ++i)
+		{
+			samplePos += stepWS;
+
+			// Project to clip space, then screen UV.
+			float4 clip = mul(float4(samplePos, 1.0f), g_viewProjectionMatrix);
+			if (clip.w <= 0.0f)
+				break; // behind camera
+
+			float2 ndc = clip.xy / clip.w;
+			float2 uv = float2(ndc.x, -ndc.y) * 0.5f + 0.5f;
+
+			// Off-screen samples can't be tested; if the ray leaves the frustum,
+			// just stop - we deliberately don't carry "uncertain" occlusion past
+			// the screen edge because that produces dark halos at borders.
+			if (any(uv < 0.0f) || any(uv > 1.0f))
+				break;
+
+			// Sample the scene's view-space depth at the projected UV.
+			const float sceneViewDepth = viewDepthSource.SampleLevel(pointSampler, uv, 0).w;
+			if (sceneViewDepth <= 0.0f)
+				continue; // sky or invalid sample
+
+			// Our sample's view-space depth (positive = distance into the scene).
+			float4 viewSample = mul(float4(samplePos, 1.0f), g_viewMatrix);
+			const float rayViewDepth = -viewSample.z;
+
+			// Ray went BEHIND visible geometry along the projected pixel - blocker.
+			// The thicknessThreshold gate ensures we don't shadow through a thin
+			// surface (e.g. a wall whose far side is way past the ray); without
+			// this the contact-shadow term darkens distant geometry seen through
+			// any near-camera object.
+			const float blockerDepth = rayViewDepth - sceneViewDepth;
+			if (blockerDepth > 0.0f && blockerDepth < thicknessThreshold)
+			{
+				// Fade the last few steps so the contact shadow edge is soft
+				// rather than a hard step (otherwise the dither pattern shows).
+				const float falloff = saturate(1.0f - (float)i / (float)numSteps);
+				occlusion = max(occlusion, falloff);
+				break;
+			}
+		}
+
+		return 1.0f - occlusion;
+	}
+
 #endif
 }

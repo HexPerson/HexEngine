@@ -1,4 +1,5 @@
 #include "MaterialGraph.hpp"
+#include "Material.hpp"
 #include <algorithm>
 #include <format>
 
@@ -61,7 +62,8 @@ namespace HexEngine
 			MaterialGraphOutputSemantic::Roughness,
 			MaterialGraphOutputSemantic::Metallic,
 			MaterialGraphOutputSemantic::Emissive,
-			MaterialGraphOutputSemantic::Opacity
+			MaterialGraphOutputSemantic::Opacity,
+			MaterialGraphOutputSemantic::Smoothness
 		};
 
 		for (const auto semantic : semantics)
@@ -140,6 +142,15 @@ namespace HexEngine
 		opacity.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
 		graph.nodes.push_back(opacity);
 
+		MaterialGraphNode smoothness;
+		smoothness.id = "node_smoothness";
+		smoothness.nodeType = MaterialGraphNodeType::ScalarConstant;
+		smoothness.displayName = "Smoothness";
+		smoothness.position = math::Vector2(80.0f, 560.0f);
+		smoothness.scalarValue = 0.0f;
+		smoothness.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
+		graph.nodes.push_back(smoothness);
+
 		auto makeOutputNode = [](const char* id, const char* label, const math::Vector2& pos, MaterialGraphValueType inType)
 		{
 			MaterialGraphNode node;
@@ -157,6 +168,7 @@ namespace HexEngine
 		graph.nodes.push_back(makeOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar));
 		graph.nodes.push_back(makeOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4));
 		graph.nodes.push_back(makeOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar));
+		graph.nodes.push_back(makeOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar));
 
 		graph.connections =
 		{
@@ -165,7 +177,8 @@ namespace HexEngine
 			{ "node_roughness", "out", "output_roughness", "In" },
 			{ "node_metallic", "out", "output_metallic", "In" },
 			{ "node_emissive", "out", "output_emissive", "In" },
-			{ "node_opacity", "out", "output_opacity", "In" }
+			{ "node_opacity", "out", "output_opacity", "In" },
+			{ "node_smoothness", "out", "output_smoothness", "In" }
 		};
 
 		graph.outputs =
@@ -175,7 +188,213 @@ namespace HexEngine
 			{ MaterialGraphOutputSemantic::Roughness, "node_roughness", "out" },
 			{ MaterialGraphOutputSemantic::Metallic, "node_metallic", "out" },
 			{ MaterialGraphOutputSemantic::Emissive, "node_emissive", "out" },
-			{ MaterialGraphOutputSemantic::Opacity, "node_opacity", "out" }
+			{ MaterialGraphOutputSemantic::Opacity, "node_opacity", "out" },
+			{ MaterialGraphOutputSemantic::Smoothness, "node_smoothness", "out" }
+		};
+
+		return graph;
+	}
+
+	MaterialGraph MaterialGraph::CreateFromStandardMaterial(const Material& material)
+	{
+		// Originally a private helper inside MaterialGraphDialog.cpp; promoted to
+		// MaterialGraph so the AssetExplorer's "Convert to material graph" context
+		// menu can call it without having to open the graph dialog first.
+
+		MaterialGraph graph;
+		graph.version = kVersion;
+
+		auto makeNode = [](const std::string& id, MaterialGraphNodeType type, const std::string& name, const math::Vector2& position)
+		{
+			MaterialGraphNode node;
+			node.id = id;
+			node.nodeType = type;
+			node.displayName = name;
+			node.position = position;
+			return node;
+		};
+
+		auto addConnection = [&graph](const std::string& fromNode, const std::string& fromPin, const std::string& toNode, const std::string& toPin)
+		{
+			graph.connections.push_back({ fromNode, fromPin, toNode, toPin });
+		};
+
+		auto addVectorConstant = [&](const char* id, const char* label, const math::Vector2& pos, const math::Vector4& value)
+		{
+			auto node = makeNode(id, MaterialGraphNodeType::VectorConstant, label, pos);
+			node.vectorValue = value;
+			node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+			graph.nodes.push_back(std::move(node));
+		};
+
+		auto addScalarConstant = [&](const char* id, const char* label, const math::Vector2& pos, float value)
+		{
+			auto node = makeNode(id, MaterialGraphNodeType::ScalarConstant, label, pos);
+			node.scalarValue = value;
+			node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
+			graph.nodes.push_back(std::move(node));
+		};
+
+		// Builds a TextureParameter (+ optional NormalMap or TextureSample) chain
+		// for one of the standard material's bound texture slots. Returns the node
+		// id whose "Out" pin should be wired to the corresponding output node, or
+		// empty if the material has no texture bound for that slot (caller falls
+		// back to a Vector/Scalar constant in that case).
+		auto addTextureChain = [&](MaterialTexture textureType, const char* paramId, const char* sampleId, const char* label, const math::Vector2& pos, bool useNormalMap) -> std::string
+		{
+			const auto texture = material.GetTexture(textureType);
+			if (!texture)
+				return {};
+
+			auto textureNode = makeNode(paramId, MaterialGraphNodeType::TextureParameter, label, pos);
+			textureNode.texturePath = texture->GetFileSystemPath();
+			textureNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Output });
+			graph.nodes.push_back(std::move(textureNode));
+
+			if (useNormalMap)
+			{
+				auto normalNode = makeNode(sampleId, MaterialGraphNodeType::NormalMap, "NormalMap", pos + math::Vector2(180.0f, 0.0f));
+				normalNode.inputPins.push_back({ "Normal", "Normal", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Input });
+				normalNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+				graph.nodes.push_back(std::move(normalNode));
+				addConnection(paramId, "Out", sampleId, "Normal");
+			}
+			else
+			{
+				auto sampleNode = makeNode(sampleId, MaterialGraphNodeType::TextureSample, "TextureSample", pos + math::Vector2(180.0f, 0.0f));
+				sampleNode.inputPins.push_back({ "Tex", "Tex", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Input });
+				sampleNode.inputPins.push_back({ "UV", "UV", MaterialGraphValueType::UV, MaterialGraphPinDirection::Input });
+				sampleNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+				graph.nodes.push_back(std::move(sampleNode));
+				addConnection(paramId, "Out", sampleId, "Tex");
+			}
+
+			return sampleId;
+		};
+
+		// Pre-multiply emissive by the alpha-channel strength so the graph encodes
+		// the same lit emission the standard material was producing.
+		const math::Vector3 emissive(
+			material._properties.emissiveColour.x * material._properties.emissiveColour.w,
+			material._properties.emissiveColour.y * material._properties.emissiveColour.w,
+			material._properties.emissiveColour.z * material._properties.emissiveColour.w);
+
+		std::string baseColorSource = addTextureChain(MaterialTexture::Albedo, "node_albedo_tex", "node_albedo_sample", "Albedo Texture", math::Vector2(40.0f, 60.0f), false);
+		if (baseColorSource.empty())
+		{
+			addVectorConstant("node_albedo", "Base Color", math::Vector2(80.0f, 80.0f), material._properties.diffuseColour);
+			baseColorSource = "node_albedo";
+		}
+
+		// Normal is special: when the source material has no normal map, leave
+		// the Normal output unwired so the compiler falls back to the
+		// geometry-interpolated input.normal. Seeding a VectorConstant default
+		// here would silently override the geometry normal with a constant
+		// (treated as a tangent-space normal, decoded + multiplied by TBN, then
+		// applied per-pixel) - which a (0.5, 0.5, 1.0) flat-tangent value
+		// happens to approximate, but any user who edits the constant gets
+		// instant lighting breakage. Disconnected = "use the surface".
+		const std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", math::Vector2(40.0f, 150.0f), true);
+
+		std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", math::Vector2(40.0f, 230.0f), false);
+		if (roughnessSource.empty())
+		{
+			addScalarConstant("node_roughness", "Roughness", math::Vector2(80.0f, 240.0f), material._properties.roughnessFactor);
+			roughnessSource = "node_roughness";
+		}
+
+		std::string metallicSource = addTextureChain(MaterialTexture::Metallic, "node_metallic_tex", "node_metallic_sample", "Metallic Texture", math::Vector2(40.0f, 310.0f), false);
+		if (metallicSource.empty())
+		{
+			addScalarConstant("node_metallic", "Metallic", math::Vector2(80.0f, 320.0f), material._properties.metallicFactor);
+			metallicSource = "node_metallic";
+		}
+
+		// Emission is special - the standard DefaultPixel shader gates emission on
+		// emissiveColour.a (strength), so a material with an emission texture bound
+		// but strength=0 produces no emission. The naive conversion that just wires
+		// TextureSample.Out -> Emissive ignored this and dumped the raw texture as
+		// emission, which (because emission is added on top of the lit albedo and
+		// bypasses lighting) showed up as "fully bright / unlit" surfaces on any
+		// material whose Emission slot was filled by a Simplygon-style bulk importer
+		// even when the author never intended emission. We now mirror the standard
+		// shader exactly: TextureSample * (tint.rgb * strength) -> Emissive.
+		std::string emissiveSource;
+		const std::string emissiveTextureSourceId = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", math::Vector2(40.0f, 390.0f), false);
+		if (!emissiveTextureSourceId.empty())
+		{
+			// Tint+strength constant; equivalent to g_material.emissiveColour.rgb *
+			// emissiveColour.a in DefaultPixel.shader. Stored as a Vector4 with
+			// alpha=1 so the Multiply downstream doesn't accidentally zero the .a.
+			addVectorConstant("node_emissive_tint", "Emission Tint",
+				math::Vector2(40.0f, 420.0f),
+				math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+
+			auto multiplyNode = makeNode("node_emissive_mul", MaterialGraphNodeType::Multiply, "Emission * Tint", math::Vector2(260.0f, 405.0f));
+			multiplyNode.inputPins.push_back({ "A", "A", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
+			multiplyNode.inputPins.push_back({ "B", "B", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
+			multiplyNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+			graph.nodes.push_back(std::move(multiplyNode));
+
+			addConnection(emissiveTextureSourceId, "Out", "node_emissive_mul", "A");
+			addConnection("node_emissive_tint", "out", "node_emissive_mul", "B");
+			emissiveSource = "node_emissive_mul";
+		}
+		else
+		{
+			addVectorConstant("node_emissive", "Emissive", math::Vector2(80.0f, 400.0f), math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+			emissiveSource = "node_emissive";
+		}
+
+		std::string opacitySource = addTextureChain(MaterialTexture::Opacity, "node_opacity_tex", "node_opacity_sample", "Opacity Texture", math::Vector2(40.0f, 470.0f), false);
+		if (opacitySource.empty())
+		{
+			addScalarConstant("node_opacity", "Opacity", math::Vector2(80.0f, 480.0f), 1.0f);
+			opacitySource = "node_opacity";
+		}
+
+		// No texture-slot equivalent for smoothness on the standard-material side,
+		// so always seed from the scalar field. Users can wire up a TextureSample
+		// chain manually in the graph editor after conversion.
+		addScalarConstant("node_smoothness", "Smoothness", math::Vector2(80.0f, 560.0f), material._properties.smoothness);
+		const std::string smoothnessSource = "node_smoothness";
+
+		auto makeOutputNode = [&](const char* id, const char* name, const math::Vector2& position, MaterialGraphValueType valueType)
+		{
+			auto node = makeNode(id, MaterialGraphNodeType::Output, name, position);
+			node.inputPins.push_back({ "In", "In", valueType, MaterialGraphPinDirection::Input });
+			graph.nodes.push_back(std::move(node));
+		};
+
+		makeOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4);
+		makeOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4);
+		makeOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar);
+		makeOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
+		makeOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
+		makeOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
+		makeOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar);
+
+		addConnection(baseColorSource, "Out", "output_basecolor", "In");
+		if (!normalSource.empty())
+			addConnection(normalSource, "Out", "output_normal", "In");
+		addConnection(roughnessSource, "Out", "output_roughness", "In");
+		addConnection(metallicSource, "Out", "output_metallic", "In");
+		addConnection(emissiveSource, "Out", "output_emissive", "In");
+		addConnection(opacitySource, "Out", "output_opacity", "In");
+		addConnection(smoothnessSource, "out", "output_smoothness", "In");
+
+		graph.outputs =
+		{
+			{ MaterialGraphOutputSemantic::BaseColor, baseColorSource, "Out" },
+			// Normal binding is intentionally empty when no normal map exists -
+			// the compiler treats an empty nodeId/pinId as "use the geometry
+			// normal" via the input.normal fallback in BuildGraphShaderSource.
+			{ MaterialGraphOutputSemantic::Normal, normalSource, normalSource.empty() ? std::string{} : std::string("Out") },
+			{ MaterialGraphOutputSemantic::Roughness, roughnessSource, "Out" },
+			{ MaterialGraphOutputSemantic::Metallic, metallicSource, "Out" },
+			{ MaterialGraphOutputSemantic::Emissive, emissiveSource, "Out" },
+			{ MaterialGraphOutputSemantic::Opacity, opacitySource, "Out" },
+			{ MaterialGraphOutputSemantic::Smoothness, smoothnessSource, "out" }
 		};
 
 		return graph;
@@ -257,6 +476,7 @@ namespace HexEngine
 		if (text == "Metallic") { outSemantic = MaterialGraphOutputSemantic::Metallic; return true; }
 		if (text == "Emissive") { outSemantic = MaterialGraphOutputSemantic::Emissive; return true; }
 		if (text == "Opacity") { outSemantic = MaterialGraphOutputSemantic::Opacity; return true; }
+		if (text == "Smoothness") { outSemantic = MaterialGraphOutputSemantic::Smoothness; return true; }
 		return false;
 	}
 
@@ -271,6 +491,7 @@ namespace HexEngine
 		case MaterialGraphOutputSemantic::Metallic: return "Metallic";
 		case MaterialGraphOutputSemantic::Emissive: return "Emissive";
 		case MaterialGraphOutputSemantic::Opacity: return "Opacity";
+		case MaterialGraphOutputSemantic::Smoothness: return "Smoothness";
 		}
 	}
 

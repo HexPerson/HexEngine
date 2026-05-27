@@ -82,13 +82,14 @@ namespace HexEngine
 			LOG_INFO("Loaded %d plugins", numPluginsLoaded);
 		}
 
-		env->_physicsSystem = (IPhysicsSystem*)env->_pluginSystem->CreateInterface(IPhysicsSystem::InterfaceName);
-		env->_physicsSystem->Create();
+		if (options.requirePhysicsSystem)
+		{
+			env->_physicsSystem = (IPhysicsSystem*)env->_pluginSystem->CreateInterface(IPhysicsSystem::InterfaceName);
+			env->_physicsSystem->Create();
+		}
 
 		env->_compressionProvider = (ICompressionProvider*)env->_pluginSystem->CreateInterface(ICompressionProvider::InterfaceName);
 		env->_compressionProvider->Create();
-
-		//env->_testModel = env->_modelSystem->LoadFromDisk(env->_fileSystem->GetLocalAbsolutePath(L"Models/Sponza/Sponza.obj"));
 
 		LOG_INFO("HexEngine setup complete");
 
@@ -96,7 +97,8 @@ namespace HexEngine
 			options.gameExtension->OnCreateGame();
 
 		// Rebuild the PVS after game launch
-		g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
+		if(g_pEnv->_sceneManager)
+			g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 
 		// We can now set the engine to "running" mode so the main loop can proceed
 		//

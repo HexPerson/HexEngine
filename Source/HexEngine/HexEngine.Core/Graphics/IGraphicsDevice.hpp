@@ -219,6 +219,21 @@ namespace HexEngine
 
 		virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) = 0;
 
+		/**
+		 * @brief Returns the active display's HDR peak luminance in nits.
+		 *
+		 * Backed by IDXGIOutput6::GetDesc1::MaxLuminance on the D3D11 path.
+		 * Returns 0 when no HDR-capable display is active (SDR backbuffer
+		 * mode), when the query failed, or when the backend doesn't support
+		 * the query. Callers should treat 0 as "unknown / use your own
+		 * fallback" rather than "no headroom".
+		 *
+		 * Used by SceneRenderer to seed r_hdrPeakNits with a display-
+		 * appropriate default so users don't have to know whether they have
+		 * an HDR400 / HDR600 / HDR1000+ panel to get a sane tonemap.
+		 */
+		virtual float GetDisplayPeakNits() const { return 0.0f; }
+
 		virtual IResourceLoader* GetTextureLoader() = 0;
 
 		virtual void SetDepthBufferState(DepthBufferState state) = 0;

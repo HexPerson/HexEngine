@@ -25,7 +25,8 @@ namespace HexEngine
 				id == "output_roughness" ||
 				id == "output_metallic" ||
 				id == "output_emissive" ||
-				id == "output_opacity";
+				id == "output_opacity" ||
+				id == "output_smoothness";
 		}
 
 		bool TryGetOutputSemanticByNodeId(const std::string& id, MaterialGraphOutputSemantic& outSemantic)
@@ -36,6 +37,7 @@ namespace HexEngine
 			if (id == "output_metallic") { outSemantic = MaterialGraphOutputSemantic::Metallic; return true; }
 			if (id == "output_emissive") { outSemantic = MaterialGraphOutputSemantic::Emissive; return true; }
 			if (id == "output_opacity") { outSemantic = MaterialGraphOutputSemantic::Opacity; return true; }
+			if (id == "output_smoothness") { outSemantic = MaterialGraphOutputSemantic::Smoothness; return true; }
 			return false;
 		}
 
@@ -90,6 +92,7 @@ namespace HexEngine
 			case MaterialGraphOutputSemantic::Metallic: return "output_metallic";
 			case MaterialGraphOutputSemantic::Emissive: return "output_emissive";
 			case MaterialGraphOutputSemantic::Opacity: return "output_opacity";
+			case MaterialGraphOutputSemantic::Smoothness: return "output_smoothness";
 			}
 		}
 
@@ -108,147 +111,12 @@ namespace HexEngine
 			return node;
 		}
 
-		MaterialGraphNode MakeGraphNode(const std::string& id, MaterialGraphNodeType type, const std::string& name, const math::Vector2& position)
-		{
-			MaterialGraphNode node;
-			node.id = id;
-			node.nodeType = type;
-			node.displayName = name;
-			node.position = position;
-			return node;
-		}
-
-		void AddConnection(MaterialGraph& graph, const std::string& fromNode, const std::string& fromPin, const std::string& toNode, const std::string& toPin)
-		{
-			graph.connections.push_back({ fromNode, fromPin, toNode, toPin });
-		}
-
-		MaterialGraph BuildGraphFromMaterial(const Material& material)
-		{
-			MaterialGraph graph;
-			graph.version = MaterialGraph::kVersion;
-
-			auto addVectorConstant = [&](const char* id, const char* label, const math::Vector2& pos, const math::Vector4& value)
-			{
-				auto node = MakeGraphNode(id, MaterialGraphNodeType::VectorConstant, label, pos);
-				node.vectorValue = value;
-				node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
-				graph.nodes.push_back(std::move(node));
-			};
-
-			auto addScalarConstant = [&](const char* id, const char* label, const math::Vector2& pos, float value)
-			{
-				auto node = MakeGraphNode(id, MaterialGraphNodeType::ScalarConstant, label, pos);
-				node.scalarValue = value;
-				node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
-				graph.nodes.push_back(std::move(node));
-			};
-
-			auto addTextureChain = [&](MaterialTexture textureType, const char* paramId, const char* sampleId, const char* label, const math::Vector2& pos, bool useNormalMap) -> std::string
-			{
-				const auto texture = material.GetTexture(textureType);
-				if (!texture)
-					return {};
-
-				auto textureNode = MakeGraphNode(paramId, MaterialGraphNodeType::TextureParameter, label, pos);
-				textureNode.texturePath = texture->GetFileSystemPath();
-				textureNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Output });
-				graph.nodes.push_back(std::move(textureNode));
-
-				if (useNormalMap)
-				{
-					auto normalNode = MakeGraphNode(sampleId, MaterialGraphNodeType::NormalMap, "NormalMap", pos + math::Vector2(180.0f, 0.0f));
-					normalNode.inputPins.push_back({ "Normal", "Normal", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Input });
-					normalNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
-					graph.nodes.push_back(std::move(normalNode));
-					AddConnection(graph, paramId, "Out", sampleId, "Normal");
-				}
-				else
-				{
-					auto sampleNode = MakeGraphNode(sampleId, MaterialGraphNodeType::TextureSample, "TextureSample", pos + math::Vector2(180.0f, 0.0f));
-					sampleNode.inputPins.push_back({ "Tex", "Tex", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Input });
-					sampleNode.inputPins.push_back({ "UV", "UV", MaterialGraphValueType::UV, MaterialGraphPinDirection::Input });
-					sampleNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
-					graph.nodes.push_back(std::move(sampleNode));
-					AddConnection(graph, paramId, "Out", sampleId, "Tex");
-				}
-
-				return sampleId;
-			};
-
-			const math::Vector3 emissive(
-				material._properties.emissiveColour.x * material._properties.emissiveColour.w,
-				material._properties.emissiveColour.y * material._properties.emissiveColour.w,
-				material._properties.emissiveColour.z * material._properties.emissiveColour.w);
-
-			std::string baseColorSource = addTextureChain(MaterialTexture::Albedo, "node_albedo_tex", "node_albedo_sample", "Albedo Texture", math::Vector2(40.0f, 60.0f), false);
-			if (baseColorSource.empty())
-			{
-				addVectorConstant("node_albedo", "Base Color", math::Vector2(80.0f, 80.0f), material._properties.diffuseColour);
-				baseColorSource = "node_albedo";
-			}
-
-			std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", math::Vector2(40.0f, 150.0f), true);
-			if (normalSource.empty())
-			{
-				addVectorConstant("node_normal", "Normal", math::Vector2(80.0f, 160.0f), math::Vector4(0.5f, 0.5f, 1.0f, 1.0f));
-				normalSource = "node_normal";
-			}
-
-			std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", math::Vector2(40.0f, 230.0f), false);
-			if (roughnessSource.empty())
-			{
-				addScalarConstant("node_roughness", "Roughness", math::Vector2(80.0f, 240.0f), material._properties.roughnessFactor);
-				roughnessSource = "node_roughness";
-			}
-
-			std::string metallicSource = addTextureChain(MaterialTexture::Metallic, "node_metallic_tex", "node_metallic_sample", "Metallic Texture", math::Vector2(40.0f, 310.0f), false);
-			if (metallicSource.empty())
-			{
-				addScalarConstant("node_metallic", "Metallic", math::Vector2(80.0f, 320.0f), material._properties.metallicFactor);
-				metallicSource = "node_metallic";
-			}
-
-			std::string emissiveSource = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", math::Vector2(40.0f, 390.0f), false);
-			if (emissiveSource.empty())
-			{
-				addVectorConstant("node_emissive", "Emissive", math::Vector2(80.0f, 400.0f), math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
-				emissiveSource = "node_emissive";
-			}
-
-			std::string opacitySource = addTextureChain(MaterialTexture::Opacity, "node_opacity_tex", "node_opacity_sample", "Opacity Texture", math::Vector2(40.0f, 470.0f), false);
-			if (opacitySource.empty())
-			{
-				addScalarConstant("node_opacity", "Opacity", math::Vector2(80.0f, 480.0f), 1.0f);
-				opacitySource = "node_opacity";
-			}
-
-			graph.nodes.push_back(MakeMaterialOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4));
-			graph.nodes.push_back(MakeMaterialOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4));
-			graph.nodes.push_back(MakeMaterialOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar));
-			graph.nodes.push_back(MakeMaterialOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar));
-			graph.nodes.push_back(MakeMaterialOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4));
-			graph.nodes.push_back(MakeMaterialOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar));
-
-			AddConnection(graph, baseColorSource, "Out", "output_basecolor", "In");
-			AddConnection(graph, normalSource, "Out", "output_normal", "In");
-			AddConnection(graph, roughnessSource, "Out", "output_roughness", "In");
-			AddConnection(graph, metallicSource, "Out", "output_metallic", "In");
-			AddConnection(graph, emissiveSource, "Out", "output_emissive", "In");
-			AddConnection(graph, opacitySource, "Out", "output_opacity", "In");
-
-			graph.outputs =
-			{
-				{ MaterialGraphOutputSemantic::BaseColor, baseColorSource, "Out" },
-				{ MaterialGraphOutputSemantic::Normal, normalSource, "Out" },
-				{ MaterialGraphOutputSemantic::Roughness, roughnessSource, "Out" },
-				{ MaterialGraphOutputSemantic::Metallic, metallicSource, "Out" },
-				{ MaterialGraphOutputSemantic::Emissive, emissiveSource, "Out" },
-				{ MaterialGraphOutputSemantic::Opacity, opacitySource, "Out" }
-			};
-
-			return graph;
-		}
+		// BuildGraphFromMaterial + MakeGraphNode + AddConnection helpers were
+		// moved to MaterialGraph::CreateFromStandardMaterial so the AssetExplorer
+		// "Convert to material graph" action can use the same conversion without
+		// pulling in this dialog. MakeMaterialOutputNode above stays - it's also
+		// used by EnsureGraphExists to backfill missing output nodes on existing
+		// graphs.
 
 		class MaterialGraphCanvasImpl final : public Element
 		{
@@ -989,13 +857,13 @@ namespace HexEngine
 
 		if (!_material->_hasGraph)
 		{
-			_material->_graph = BuildGraphFromMaterial(*_material);
+			_material->_graph = MaterialGraph::CreateFromStandardMaterial(*_material);
 			_material->_hasGraph = true;
 			_isDirty = true;
 		}
 		else if (_material->_graph.nodes.empty())
 		{
-			_material->_graph = BuildGraphFromMaterial(*_material);
+			_material->_graph = MaterialGraph::CreateFromStandardMaterial(*_material);
 			_isDirty = true;
 		}
 
@@ -1026,6 +894,7 @@ namespace HexEngine
 		ensureOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
 		ensureOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
 		ensureOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
+		ensureOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar);
 
 		// Keep visual output-node links in sync with authoritative output bindings.
 		for (const auto& output : _material->_graph.outputs)
@@ -1130,8 +999,17 @@ namespace HexEngine
 			if (isVectorNode) _vectorDrags[i]->EnableRecursive(); else _vectorDrags[i]->DisableRecursive();
 		}
 
-		if (hasNode && !node->texturePath.empty())
+		// Always sync the AssetSearch to the selected node's state, including
+		// clearing it when the node has no texture. The old code only called
+		// SetValue when texturePath was non-empty, which meant the widget kept
+		// showing the PREVIOUSLY-selected node's path - users would see a
+		// texture in the field, think they'd assigned it, and then the
+		// compiler would error with "missing a texture input" because the
+		// actual node->texturePath was still empty.
+		if (hasNode)
 			_texturePath->SetValue(node->texturePath.wstring());
+		else
+			_texturePath->SetValue(L"");
 		if (isTextureNode) _texturePath->EnableRecursive(); else _texturePath->DisableRecursive();
 	}
 

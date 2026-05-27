@@ -112,6 +112,16 @@ namespace HexEngine
 		int	  pad0;
 		int	  pad1;
 		int	  pad2;
+
+		// Screen-space contact shadow settings, packed as a vec4 for cbuffer alignment.
+		// Only the directional light populates these; other shadow casters leave them
+		// zeroed so the shader's enabled-check naturally disables them.
+		//   x = enabled (1 = on, 0 = off)
+		//   y = step count
+		//   z = max ray length in world units (metres)
+		//   w = thickness window (metres) - blocker must be within this depth of the
+		//       ray for the test to count, otherwise we'd shadow through walls.
+		math::Vector4 contactShadowParams;
 	};
 
 	/** @brief Ocean rendering settings uploaded in the per-frame constant buffer. */
@@ -243,6 +253,27 @@ namespace HexEngine
 		math::Vector2 _jitterOffsets;
 		uint32_t _frame;
 		float _chromaticAbberationAmmount;
+
+		// HDR display calibration. Driven by r_hdrPaperWhiteNits /
+		// r_hdrPeakNits HVars, consumed by TonemapHDR.shader to map
+		// post-tonemap output into absolute nits so the same scene reads
+		// the same brightness regardless of whether the swap chain is
+		// going through DWM composition (editor windowed) or Independent
+		// Flip (launcher fullscreen-borderless).
+		//
+		// IMPORTANT: keep these at the END of the cbuffer. The shader
+		// build system only recompiles .shader files whose own source
+		// changed - if we add fields mid-buffer, any shader that wasn't
+		// touched still has the old offsets and reads garbage for every
+		// field past the insertion point. Appending at the end is safe
+		// because old shaders ignore the trailing bytes.
+		float _hdrPaperWhiteNits;
+		float _hdrPeakNits;
+		// Tonemap operator id - matches the TonemapOperator enum in
+		// SceneRenderer.cpp (0=Reinhard, 2=ACES Fitted default, etc.).
+		// Stored as float for HLSL alignment uniformity; shader casts to int.
+		float _tonemapOperator;
+		float _hdr_pad1;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */
@@ -298,13 +329,14 @@ namespace HexEngine
 			metallicFactor(0.0f),
 			roughnessFactor(0.5f),
 			smoothness(0.0f),
-			specularProbability(0.0f),
+			_pad0(0.0f),
 			diffuseColour(1.0f),
 			hasTransparency(0),
 			isWater(0),
 			emissiveColour(0.0f),
 			isInTransparencyPhase(0),
-			pad2(0)
+			materialModel(0),
+			modelParams(0.0f, 0.0f, 0.0f, 0.0f)
 		{
 		}
 
@@ -323,14 +355,34 @@ namespace HexEngine
 		float metallicFactor;
 		float roughnessFactor;
 		float smoothness;
-		float specularProbability;
+		// Pads the (metallic, roughness, smoothness) triplet up to a 16-byte
+		// boundary so the following diffuseColour Vector4 lands at offset 16 -
+		// matches the HLSL cbuffer's implicit padding rules. Previously this
+		// slot held specularProbability, which was dead weight: nothing read
+		// pixelSpecular.a from the gbuffer and the BRDF lobes only consume
+		// .r (metallic) and .g (roughness). Removed to free the slot; named
+		// explicitly so future fields can claim it without an ABI rev.
+		float _pad0;
 		math::Vector4 diffuseColour;
 		math::Vector4 emissiveColour;
 
 		int hasTransparency;
 		int isWater;
 		int isInTransparencyPhase;
-		int pad2;
+		// Shading-model selector for the new material-features RT path. 0 = standard
+		// PBR (existing behaviour). Non-zero ids unlock the extended shading models
+		// (subsurface scattering, clearcoat, anisotropic, sheen, ...) at the cost of
+		// occupying the .r channel of the features gbuffer plus a model-specific
+		// post-process pass. See MATERIAL_MODEL_* in Global.shader.
+		int materialModel;
+
+		// Per-model parameter vec4. Interpretation depends on materialModel:
+		//   SSS:        .x = mask, .yzw = scatter color tint (linear)
+		//   Clearcoat:  .x = strength, .y = roughness, .z = ior tweak, .w = unused
+		//   Anisotropic:.x = anisotropy [-1..1], .yz = tangent direction.xy, .w = unused
+		//   Sheen:      .x = strength, .yzw = sheen tint
+		// Zero default = "feature off".
+		math::Vector4 modelParams;
 	};
 
 	/** @brief Per-object constants uploaded for each draw call. */

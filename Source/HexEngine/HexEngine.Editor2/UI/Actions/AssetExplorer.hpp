@@ -38,6 +38,12 @@ namespace HexEditor
 		void CreateNewMaterial(const fs::path& baseDir);
 		void CreateNewMaterialGraph(const fs::path& baseDir);
 		void CreateNewMaterialInstance(const fs::path& baseDir);
+		// In-place "Convert to material graph": loads the standard .hmat at
+		// targetPath, seeds a graph that mirrors its textures + scalar properties
+		// (via MaterialGraph::CreateFromStandardMaterial), flips _hasGraph to true,
+		// and saves. The material then opens in the graph editor on the next
+		// double-click. No-op if the material is already a graph or an instance.
+		void ConvertStandardMaterialToGraph(const fs::path& targetPath);
 		void CreateNewPrefab(const fs::path& baseDir);
 		void SelectAll();
 		void SetMassMaterial();

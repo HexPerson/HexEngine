@@ -54,7 +54,51 @@ namespace HexEditor
 			const fs::path hotReloadDir = projectBaseDir / L"Build" / L"HotReload";
 			fs::create_directories(hotReloadDir);
 
-			const auto reloadId = ++reloadGeneration;
+			// Pick a reload id strictly higher than any Game_XXXXXX.pdb already
+			// on disk. The previous behaviour just used ++reloadGeneration (so
+			// the first build of an editor session always wrote Game_000001.pdb),
+			// which collides with any DLL currently loaded by the editor whose
+			// PDB metadata still points at the previous session's Game_000001.pdb -
+			// the linker can't overwrite a mapped PDB and bails with LNK1201.
+			// Scanning the directory once before each build and starting above
+			// the max guarantees the new PDB has no readers regardless of what
+			// the editor currently has loaded.
+			uint64_t maxExistingId = reloadGeneration;
+			std::error_code scanEc;
+			for (const auto& entry : fs::directory_iterator(hotReloadDir, scanEc))
+			{
+				if (scanEc)
+					break;
+				if (!entry.is_regular_file())
+					continue;
+				const auto filename = entry.path().filename().wstring();
+				// Match both Game_NNNNNN.pdb and Game_Loaded_NNNNNN.dll - either
+				// could be holding a previous-gen PDB mapping open.
+				constexpr std::wstring_view kGamePrefix = L"Game_";
+				if (filename.compare(0, kGamePrefix.size(), kGamePrefix) != 0)
+					continue;
+				// Find the trailing 6-digit number (last run of digits before the ext).
+				const auto dotPos = filename.find_last_of(L'.');
+				if (dotPos == std::wstring::npos)
+					continue;
+				size_t digitsEnd = dotPos;
+				size_t digitsBegin = digitsEnd;
+				while (digitsBegin > 0 && filename[digitsBegin - 1] >= L'0' && filename[digitsBegin - 1] <= L'9')
+					--digitsBegin;
+				if (digitsBegin == digitsEnd)
+					continue;
+				try
+				{
+					const uint64_t n = std::stoull(std::wstring(filename.substr(digitsBegin, digitsEnd - digitsBegin)));
+					maxExistingId = std::max(maxExistingId, n);
+				}
+				catch (...)
+				{
+				}
+			}
+
+			reloadGeneration = maxExistingId + 1;
+			const auto reloadId = reloadGeneration;
 			const fs::path pdbPath = hotReloadDir / std::format(L"Game_{:06}.pdb", reloadId);
 			const fs::path overridePropsPath = hotReloadDir / std::format(L"HotReload_{:06}.props", reloadId);
 			{
@@ -293,6 +337,282 @@ namespace HexEditor
 
 		MSBuildGameBuildService buildService;
 		return buildService.Build(_buildProjectPath, g_pEditor->_projectFS->GetBaseDirectory(), msbuildPath, _reloadGeneration);
+	}
+
+	bool GameIntegrator::PackageAssets(bool compress, const fs::path& outputPkg)
+	{
+		if (g_pEditor == nullptr || g_pEditor->_projectFS == nullptr)
+		{
+			LOG_CRIT("Cannot package assets: editor project is not open.");
+			return false;
+		}
+
+		const fs::path projectBaseDir = g_pEditor->_projectFS->GetBaseDirectory();
+		const fs::path dataDir = projectBaseDir / L"Data";
+		if (!fs::exists(dataDir) || !fs::is_directory(dataDir))
+		{
+			LOG_CRIT("Cannot package assets: project Data directory does not exist at '%S'.", dataDir.wstring().c_str());
+			return false;
+		}
+
+		const fs::path resolvedOutput = outputPkg.empty()
+			? (projectBaseDir / L"Build" / L"Data" / L"AssetPackages" / L"GameData.pkg")
+			: outputPkg;
+		std::error_code ec;
+		fs::create_directories(resolvedOutput.parent_path(), ec);
+
+		// Locate the AssetPacker executable. The editor exe and the asset packer
+		// exe are both built into the engine's output bin directory next to
+		// HexEngine.Launcher.exe / HexEngine.Editor.exe; look there first.
+		wchar_t exeBuf[MAX_PATH] = {};
+		GetModuleFileNameW(nullptr, exeBuf, MAX_PATH);
+		const fs::path editorExeDir = fs::path(exeBuf).parent_path();
+		const fs::path packerExe = editorExeDir / L"HexEngine.AssetPacker.exe";
+		if (!fs::exists(packerExe))
+		{
+			LOG_CRIT("Cannot package assets: HexEngine.AssetPacker.exe not found next to the editor at '%S'.", packerExe.wstring().c_str());
+			return false;
+		}
+
+		const fs::path logPath = projectBaseDir / L"Build" / L"AssetPack.log";
+		fs::create_directories(logPath.parent_path(), ec);
+
+		SECURITY_ATTRIBUTES sa = {};
+		sa.nLength = sizeof(sa);
+		sa.bInheritHandle = TRUE;
+
+		HANDLE logFile = CreateFileW(
+			logPath.wstring().c_str(),
+			GENERIC_WRITE,
+			FILE_SHARE_READ | FILE_SHARE_WRITE,
+			&sa,
+			CREATE_ALWAYS,
+			FILE_ATTRIBUTE_NORMAL,
+			nullptr);
+		if (logFile == INVALID_HANDLE_VALUE)
+		{
+			LOG_CRIT("Could not create asset pack log file '%S'. Error: %d", logPath.wstring().c_str(), GetLastError());
+			return false;
+		}
+
+		// cxxopts needs `-C true` / `-C false` explicitly; the AssetPacker's
+		// compression flag is `cxxopts::value<bool>()` without an implicit
+		// value, so we always pass it explicitly.
+		std::wstring commandLine = std::format(
+			L"{} -I {} -O {} -C {}",
+			QuoteForCommandLine(packerExe),
+			QuoteForCommandLine(dataDir),
+			QuoteForCommandLine(resolvedOutput),
+			compress ? L"true" : L"false");
+
+		STARTUPINFOW si = {};
+		si.cb = sizeof(si);
+		si.dwFlags = STARTF_USESTDHANDLES;
+		si.hStdOutput = logFile;
+		si.hStdError = logFile;
+		si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+
+		PROCESS_INFORMATION pi = {};
+		std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
+		mutableCommand.push_back(L'\0');
+
+		LOG_INFO("Packaging game assets with command: %S", commandLine.c_str());
+		LOG_INFO("Writing asset pack log to '%S'", logPath.wstring().c_str());
+
+		// Inherit the editor's cwd rather than parking the child in editorExeDir.
+		// The two diverge in source builds: the editor exe sits in
+		// <repo>/Source/HexEngine/x64/Debug/ while its working directory is
+		// the run-from layout under <repo>/Bin/x64/Debug/ which is the only
+		// place a Plugins/ folder actually exists. AssetPacker's
+		// HeadlessEnvironment::Create resolves "Plugins" relative to cwd
+		// (via fs::current_path()), so parking it next to the editor exe
+		// made plugin discovery silently find nothing - which is what
+		// reported "ICompressionProvider001 not found" on export.
+		if (!CreateProcessW(
+			nullptr,
+			mutableCommand.data(),
+			nullptr,
+			nullptr,
+			TRUE,
+			CREATE_NO_WINDOW,
+			nullptr,
+			nullptr,
+			&si,
+			&pi))
+		{
+			const auto error = GetLastError();
+			CloseHandle(logFile);
+			LOG_CRIT("Could not start AssetPacker. Error: %d", error);
+			return false;
+		}
+
+		WaitForSingleObject(pi.hProcess, INFINITE);
+
+		DWORD exitCode = 1;
+		GetExitCodeProcess(pi.hProcess, &exitCode);
+		CloseHandle(pi.hThread);
+		CloseHandle(pi.hProcess);
+		CloseHandle(logFile);
+
+		if (exitCode != 0)
+		{
+			// Tail the log on failure so the user sees the AssetPacker error in
+			// the editor console without having to dig out a file.
+			std::ifstream logStream(logPath);
+			if (logStream)
+			{
+				std::deque<std::string> tail;
+				std::string line;
+				while (std::getline(logStream, line))
+				{
+					if (!line.empty())
+					{
+						tail.push_back(line);
+						if (tail.size() > 12)
+							tail.pop_front();
+					}
+				}
+
+				for (const auto& tailLine : tail)
+					LOG_WARN("AssetPacker: %s", tailLine.c_str());
+			}
+
+			LOG_CRIT("AssetPacker failed with exit code %d. See '%S'", exitCode, logPath.wstring().c_str());
+			return false;
+		}
+
+		if (!fs::exists(resolvedOutput))
+		{
+			LOG_CRIT("AssetPacker reported success but '%S' does not exist", resolvedOutput.wstring().c_str());
+			return false;
+		}
+
+		LOG_INFO("Asset package written to '%S'", resolvedOutput.wstring().c_str());
+		return true;
+	}
+
+	bool GameIntegrator::DeployEngineBinaries(const fs::path& destDir)
+	{
+		std::error_code ec;
+		fs::create_directories(destDir, ec);
+		if (ec)
+		{
+			LOG_CRIT("DeployEngineBinaries: could not create destination '%S': %s",
+				destDir.wstring().c_str(), ec.message().c_str());
+			return false;
+		}
+
+		// Resolve the editor's currently-loaded Core.dll via its module handle
+		// rather than guessing a path. The post-build copy from
+		// Source/HexEngine/x64/Debug -> Bin/x64/Debug can silently fail if the
+		// editor had Bin's Core.dll locked at link time, leaving Bin stale even
+		// though the editor itself is running on the fresh source-built copy.
+		// GetModuleFileNameW on the live handle gives us the actual bits the
+		// editor is using.
+		HMODULE coreModule = GetModuleHandleW(L"HexEngine.Core.dll");
+		if (coreModule == nullptr)
+		{
+			LOG_CRIT("DeployEngineBinaries: HexEngine.Core.dll module handle not found in this process");
+			return false;
+		}
+
+		wchar_t coreModuleBuf[MAX_PATH] = {};
+		if (GetModuleFileNameW(coreModule, coreModuleBuf, MAX_PATH) == 0)
+		{
+			LOG_CRIT("DeployEngineBinaries: GetModuleFileName for Core.dll failed (error %d)", GetLastError());
+			return false;
+		}
+
+		const fs::path coreSrcPath = coreModuleBuf;
+		const fs::path coreDstPath = destDir / L"HexEngine.Core.dll";
+
+		auto copyFileWithLog = [](const fs::path& src, const fs::path& dst) -> bool
+		{
+			std::error_code copyEc;
+			fs::create_directories(dst.parent_path(), copyEc);
+			fs::copy_file(src, dst, fs::copy_options::overwrite_existing, copyEc);
+			if (copyEc)
+			{
+				LOG_CRIT("DeployEngineBinaries: copy '%S' -> '%S' failed: %s",
+					src.wstring().c_str(), dst.wstring().c_str(), copyEc.message().c_str());
+				return false;
+			}
+			LOG_INFO("DeployEngineBinaries: copied '%S' -> '%S'",
+				src.filename().wstring().c_str(), dst.wstring().c_str());
+			return true;
+		};
+
+		bool ok = true;
+
+		// Core.dll - required.
+		ok &= copyFileWithLog(coreSrcPath, coreDstPath);
+
+		// Plugins: enumerate <editorCwd>/Plugins/ and copy every .dll there into
+		// <destDir>/Plugins/. The launcher's PluginSystem loads plugins from
+		// cwd/Plugins/ (cwd = launcher folder), so the destination layout mirrors
+		// the editor's source layout one-for-one.
+		const fs::path pluginsSrcDir = fs::current_path() / L"Plugins";
+		const fs::path pluginsDstDir = destDir / L"Plugins";
+
+		if (fs::exists(pluginsSrcDir) && fs::is_directory(pluginsSrcDir))
+		{
+			fs::create_directories(pluginsDstDir, ec);
+			if (ec)
+			{
+				LOG_CRIT("DeployEngineBinaries: could not create Plugins/ at '%S': %s",
+					pluginsDstDir.wstring().c_str(), ec.message().c_str());
+				ok = false;
+			}
+			else
+			{
+				std::error_code iterEc;
+				for (const auto& entry : fs::directory_iterator(pluginsSrcDir, iterEc))
+				{
+					if (iterEc)
+						break;
+					if (!entry.is_regular_file())
+						continue;
+					if (entry.path().extension() != L".dll")
+						continue;
+
+					ok &= copyFileWithLog(entry.path(), pluginsDstDir / entry.path().filename());
+				}
+			}
+		}
+		else
+		{
+			LOG_WARN("DeployEngineBinaries: editor cwd has no Plugins/ directory at '%S' - "
+				"shipped launcher may not have any plugins available.",
+				pluginsSrcDir.wstring().c_str());
+		}
+
+		// EngineAssets.pkg - optional but typically required for shaders /
+		// engine textures / built-in materials. Skip silently if not present
+		// (some dev configs use loose Data/ instead of the .pkg).
+		const fs::path engineAssetsSrc = fs::current_path() / L"Data" / L"AssetPackages" / L"EngineAssets.pkg";
+		const fs::path engineAssetsDst = destDir / L"Data" / L"AssetPackages" / L"EngineAssets.pkg";
+		if (fs::exists(engineAssetsSrc))
+		{
+			ok &= copyFileWithLog(engineAssetsSrc, engineAssetsDst);
+		}
+		else
+		{
+			LOG_INFO("DeployEngineBinaries: no EngineAssets.pkg at '%S' (dev loose-Data mode?). Skipped.",
+				engineAssetsSrc.wstring().c_str());
+		}
+
+		// Braces required - LOG_* macros expand to `if(env){body}` and a
+		// bare if/else around them dangles the else onto the inner if.
+		if (ok)
+		{
+			LOG_INFO("DeployEngineBinaries: engine binaries deployed to '%S'", destDir.wstring().c_str());
+		}
+		else
+		{
+			LOG_WARN("DeployEngineBinaries: deployment to '%S' had errors - shipped launcher may not run cleanly.", destDir.wstring().c_str());
+		}
+
+		return ok;
 	}
 
 	bool GameIntegrator::RunGame()

@@ -71,6 +71,59 @@ namespace HexEngine::VolumetricTerrain
 			Entity* parentEntity);
 
 		void Generate(SdfTerrainGenerator& generator);
+
+		// Async collision rebuild API. Pairs with the IRigidBody async cook
+		// pipeline: BeginAsync queues a worker-thread PxCookTriangleMesh and
+		// returns immediately; PollAsyncCollisionFinish should be called
+		// once per Update tick on the main thread to commit completed
+		// cooks. Returns true when the cook finished THIS call (so the
+		// caller can clear collisionDirty etc.).
+		bool BeginAsyncCollisionRebuild();
+		bool PollAsyncCollisionFinish();
+		bool HasAsyncCollisionInFlight() const;
+
+		// Two-phase Generate: the CPU half (SDF sampling + auto-material
+		// weights) is per-chunk independent and thread-safe (SdfTerrainGenerator's
+		// FastNoiseLite GetNoise() reads don't mutate noise state, and each chunk
+		// writes only into its own _densities / _materials / _materialWeights
+		// arrays). The GPU upload half MUST run on the main thread because it
+		// touches the immediate device context.
+		//
+		// VolumetricTerrain::BuildChunks uses these to parallelise the SDF
+		// generation across worker threads then serialise the GPU uploads -
+		// turning ~10s of synchronous main-thread work into a near-linear
+		// speedup on hardware_concurrency() cores.
+		void GenerateCpu(SdfTerrainGenerator& generator);
+		void UploadGeneratedToGpu();
+
+		/**
+		 * @brief Populate density/material/weight buffers from a pre-baked
+		 *        snapshot, skipping SDF generation entirely.
+		 *
+		 * Unlike SetEditedData (which flags the chunk as user-edited so it
+		 * persists separately in scene saves), ApplyBakedData treats the
+		 * snapshot as the ground-truth generation result. The chunk is
+		 * marked generated and ready to mesh/cook, NOT marked as edited.
+		 *
+		 * Returns false if the densities array doesn't match the chunk's
+		 * expected size - caller must fall back to Generate() in that case.
+		 */
+		bool ApplyBakedData(const std::vector<float>& densities, const std::vector<uint8_t>& materials, const std::vector<uint8_t>& materialWeights);
+
+		// Cooked PhysX collision blob cache. The runtime stashes the result of
+		// PxCookTriangleMesh here when an async cook completes, the editor
+		// reads it on Save (so the .hscene captures pre-cooked bytes), and
+		// Deserialize feeds it back on Load. When non-empty AND the chunk's
+		// density wasn't edited since the cook, AttachCachedCookedCollision()
+		// skips PxCookTriangleMesh entirely and just calls createTriangleMesh
+		// + createShape + attach (~5ms vs ~75ms).
+		void SetCachedCookedCollisionBlob(std::vector<uint8_t> blob) { _cachedCookedCollisionBlob = std::move(blob); }
+		const std::vector<uint8_t>& GetCachedCookedCollisionBlob() const { return _cachedCookedCollisionBlob; }
+		bool HasCachedCookedCollision() const { return !_cachedCookedCollisionBlob.empty(); }
+
+		/** @brief Attach collider directly from the cached cooked blob, skipping PxCookTriangleMesh. */
+		bool AttachCachedCookedCollision();
+
 		void RebuildMesh(const MarchingCubes& marchingCubes, bool rebuildCollision);
 		void RebuildCollision();
 		bool ApplyBrush(const math::Vector3& center, const BrushSettings& settings, float deltaTime);
@@ -165,6 +218,7 @@ namespace HexEngine::VolumetricTerrain
 		std::vector<float> _densities;
 		std::vector<uint8_t> _materials;
 		std::vector<uint8_t> _materialWeights;
+		std::vector<uint8_t> _cachedCookedCollisionBlob;
 		bool _generated = false;
 		bool _densityDirty = true;
 		bool _meshDirty = true;

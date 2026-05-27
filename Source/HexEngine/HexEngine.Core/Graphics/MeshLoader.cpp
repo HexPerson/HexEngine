@@ -5,6 +5,7 @@
 #include "../Scene/Mesh.hpp"
 #include "../Scene/AnimatedMesh.hpp"
 #include "../FileSystem/FileSystem.hpp"
+#include "../FileSystem/MemoryFile.hpp"
 #include "Material.hpp"
 
 namespace HexEngine
@@ -33,13 +34,40 @@ namespace HexEngine
 
 		LOG_INFO("Loading mesh '%s'", absolutePath.filename().string().c_str());
 
+		// Use absolutePath both as "where I came from" (for resolving the
+		// relative mesh name used when constructing Mesh/AnimatedMesh) and as
+		// the cache key for the loaded resource - the file path is the canonical
+		// identity for disk-loaded meshes.
+		auto result = ParseMeshFromReader(file, absolutePath, absolutePath, fileSystem, meshOpts);
+		file.Close();
+		return result;
+	}
+
+	std::shared_ptr<IResource> MeshLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
+	{
+		const MeshLoadOptions* meshOpts = reinterpret_cast<const MeshLoadOptions*>(options);
+
+		MemoryFile file(data, relativePath);
+		if (!file.Open() || file.GetSize() == 0)
+		{
+			LOG_CRIT("Mesh memory buffer for '%s' is empty or invalid", relativePath.string().c_str());
+			return nullptr;
+		}
+
+		LOG_INFO("Loading packaged mesh '%s'", relativePath.filename().string().c_str());
+
+		return ParseMeshFromReader(file, relativePath, relativePath, fileSystem, meshOpts);
+	}
+
+	std::shared_ptr<IResource> MeshLoader::ParseMeshFromReader(DiskFile& file, const fs::path& sourcePath, const fs::path& relativeKey, FileSystem* fileSystem, const MeshLoadOptions* meshOpts)
+	{
 		std::shared_ptr<Mesh> mesh;
 
 		bool hasAnimations = file.Read<bool>();
 
 		if (hasAnimations)
 		{
-			mesh = std::shared_ptr<AnimatedMesh>(new AnimatedMesh(nullptr, fs::relative(absolutePath, fileSystem->GetDataDirectory()).string()), ResourceDeleter());
+			mesh = std::shared_ptr<AnimatedMesh>(new AnimatedMesh(nullptr, fs::relative(sourcePath, fileSystem->GetDataDirectory()).string()), ResourceDeleter());
 
 			AnimatedMesh* animatedMesh = reinterpret_cast<AnimatedMesh*>(mesh.get());
 
@@ -159,7 +187,7 @@ namespace HexEngine
 		}
 		else
 		{
-			mesh = std::shared_ptr<Mesh>(new Mesh(nullptr, fs::relative(absolutePath, fileSystem->GetDataDirectory()).string()), ResourceDeleter());
+			mesh = std::shared_ptr<Mesh>(new Mesh(nullptr, fs::relative(sourcePath, fileSystem->GetDataDirectory()).string()), ResourceDeleter());
 
 			// read the number of faces
 			uint32_t numFaces;
@@ -221,15 +249,11 @@ namespace HexEngine
 		if((meshOpts && meshOpts->createBuffers) || meshOpts == nullptr)
 			mesh->CreateBuffers();
 
-		// finally close the file
-		file.Close();
-
+		// NOTE: caller (LoadResourceFromFile / LoadResourceFromMemory) closes
+		// the reader. We deliberately don't close `file` here so the helper
+		// stays neutral to the underlying file kind.
+		(void)relativeKey;
 		return mesh;
-	}
-
-	std::shared_ptr<IResource> MeshLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
-	{
-		return nullptr;
 	}
 
 	void MeshLoader::UnloadResource(IResource* resource)

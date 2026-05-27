@@ -909,6 +909,46 @@ namespace HexEditor
 		}
 	}
 
+	void AssetExplorer::ConvertStandardMaterialToGraph(const fs::path& targetPath)
+	{
+		CloseContextMenu();
+
+		auto material = HexEngine::Material::Create(targetPath);
+		if (material == nullptr)
+		{
+			LOG_WARN("Convert to material graph: could not load '%s'.", targetPath.string().c_str());
+			return;
+		}
+
+		// Guard rails: graph and instance materials already have their own
+		// authoring paths. The menu entry filters these out but we double-check
+		// here in case the material state changed between right-click and click.
+		if (material->_hasGraph)
+		{
+			LOG_INFO("Convert to material graph: '%s' is already a graph material, skipping.", targetPath.string().c_str());
+			return;
+		}
+		if (material->_hasGraphInstance)
+		{
+			LOG_INFO("Convert to material graph: '%s' is a material instance, skipping.", targetPath.string().c_str());
+			return;
+		}
+
+		// Seed the graph from the standard material's scalars + bound textures so
+		// the converted material renders identically out-of-the-box. The user can
+		// then open the graph editor to add nodes / wire effects on top.
+		material->_graph = HexEngine::MaterialGraph::CreateFromStandardMaterial(*material);
+		material->_hasGraph = true;
+		material->_hasGraphInstance = false;
+		material->Save();
+
+		LOG_INFO("Convert to material graph: promoted '%s' to a graph material.", targetPath.string().c_str());
+
+		// Refresh the current folder view so any thumbnail / icon-state caches
+		// pick up the new authoring mode.
+		UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+	}
+
 	void AssetExplorer::CreateNewMaterialInstance(const fs::path& baseDir)
 	{
 		if (_currentlyBrowsedFS == nullptr)
@@ -1706,6 +1746,24 @@ namespace HexEditor
 					if (numSelection == 1 && numSelectedMeshes == 1)
 					{
 						_contextMenu->AddItem(new HexEngine::ContextItem(L"Recenter mesh to origin", std::bind(&AssetExplorer::RecenterSelectedMeshToOrigin, this)));
+					}
+
+					// "Convert to material graph": offered when the single selected asset
+					// is a standard (non-graph, non-instance) .hmat. Loading the material
+					// to check _hasGraph / _hasGraphInstance is cheap because it's already
+					// cached by the resource system from earlier asset-preview activity.
+					if (numSelection == 1 && _hoveredAsset != nullptr && _hoveredAsset->path.extension() == ".hmat")
+					{
+						auto candidateMaterial = HexEngine::Material::Create(_hoveredAsset->path);
+						if (candidateMaterial != nullptr && !candidateMaterial->_hasGraph && !candidateMaterial->_hasGraphInstance)
+						{
+							const fs::path targetPath = _hoveredAsset->path;
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Convert to material graph",
+								[this, targetPath](const std::wstring&)
+								{
+									ConvertStandardMaterialToGraph(targetPath);
+								}));
+						}
 					}
 
 					// Rename is single-selection only - bulk rename would need a separate

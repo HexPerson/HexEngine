@@ -5,6 +5,10 @@
 #include <HexEngine.Core/Physics/IRigidBody.hpp>
 #include "ColliderPhysX.hpp"
 #include <PxPhysicsAPI.h>
+#include <atomic>
+#include <future>
+#include <memory>
+#include <vector>
 
 namespace HexEngine
 {
@@ -41,6 +45,22 @@ public:
 	virtual HexEngine::ICollider* AddBoxCollider(const dx::BoundingBox& box, bool exclusive) override;
 
 	virtual HexEngine::ICollider* AddTriangleMeshCollider(const std::vector<math::Vector3>& vertices, const std::vector<HexEngine::MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive) override;
+
+	virtual bool BeginAddTriangleMeshColliderAsync(
+		const std::vector<math::Vector3>& vertices,
+		const std::vector<HexEngine::MeshIndexFormat>& indices,
+		uint32_t faceCount,
+		bool exclusive) override;
+
+	virtual HexEngine::ICollider* AddTriangleMeshColliderFromCookedBuffer(
+		const std::vector<uint8_t>& cookedBuffer,
+		bool exclusive) override;
+
+	virtual bool TryFinishAsyncCollider() override;
+
+	virtual bool HasAsyncColliderInFlight() const override;
+
+	virtual const std::vector<uint8_t>& GetLastCookedBuffer() const override { return _lastCookedBuffer; }
 
 	virtual HexEngine::ICollider* AddConvexMeshCollider(const std::vector<math::Vector3>& vertices, const std::vector<HexEngine::MeshIndexFormat>& indices, uint32_t faceCount, bool exclusive) override;
 
@@ -107,6 +127,35 @@ public:
 	virtual void UpdatePoseRotation(const math::Quaternion& rotation) override;
 
 private:
+	// Snapshot of the input data + cook params for an in-flight async triangle
+	// mesh cook. We copy the vertex/index arrays into the snapshot rather than
+	// taking spans because the calling code (volumetric terrain) may free or
+	// rebuild the source vectors before the worker finishes.
+	struct AsyncTriMeshCookInput
+	{
+		std::vector<math::Vector3> vertices;
+		std::vector<HexEngine::MeshIndexFormat> indices;
+		uint32_t faceCount = 0;
+		bool exclusive = true;
+	};
+
+	// Worker-thread output. cookedBuffer is the binary cooked mesh produced by
+	// PxCookTriangleMesh; main thread feeds it back into createTriangleMesh to
+	// produce the live PxTriangleMesh.
+	struct AsyncTriMeshCookOutput
+	{
+		std::vector<uint8_t> cookedBuffer;
+		bool success = false;
+	};
+
+	std::future<AsyncTriMeshCookOutput> _asyncCookFuture;
+	std::shared_ptr<AsyncTriMeshCookInput> _asyncCookInput;
+	std::atomic<bool> _asyncCookInFlight{ false };
+	// Cooked-bytes archive from the most recently completed async cook.
+	// Stays valid past finalise so the caller can read it (e.g. the
+	// volumetric terrain stashes it for save-to-disk caching).
+	std::vector<uint8_t> _lastCookedBuffer;
+
 	HexEngine::Transform* _transform = nullptr;
 	physx::PxRigidActor* _body = nullptr;
 	ColliderPhysX* _collider = nullptr;

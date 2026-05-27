@@ -6,6 +6,7 @@
 #include "Actions\Settings.hpp"
 #include "Actions\Terrain.hpp"
 #include "Actions\NavMeshTool.hpp"
+#include "Actions\BuildDialog.hpp"
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
 
 #include "Gadgets\ScaleGadget.hpp"
@@ -933,18 +934,14 @@ namespace HexEditor
 
 	void EditorUI::OnExportAction()
 	{
+		// Save the project file first so anything the user just authored is
+		// on disk before we hand off to MSBuild / AssetPacker.
 		if (_projectFile)
 			_projectFile->Save();
-		/*auto fileName = _projectPath;
 
-		HexEngine::SceneSaveFile file(fileName, std::ios::out | std::ios::binary);
-
-		if (!file.Save())
-		{
-			LOG_CRIT("Failed to save file: %S", fileName.c_str());
-		}
-
-		file.Close();*/
+		BuildDialog::CreateBuildDialog(
+			HexEngine::g_pEnv->GetUIManager().GetRootElement(),
+			&_integrator);
 	}
 
 	void EditorUI::OnAddLight()

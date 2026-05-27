@@ -539,9 +539,29 @@ namespace HexEngine::Weather
 				file->Deserialize(thunderData, "radius", _thunderAudio[i].radius);
 			}
 		}
-		_currentState = _globalState;
-		_transitionSourceState = _globalState;
-		_transitionTargetState = _globalState;
+		// Seed the live state from the preset (not from _globalState which is
+		// only the authored "Custom" override and is at default zeros for any
+		// other preset). Otherwise _currentState starts at all-zero values
+		// after deserialise, and the next Update() detects desiredState !=
+		// _transitionTargetState and starts a 2-second lerp from zero to the
+		// preset values. That lerp is invisible in the editor because the
+		// scene has been running for ages and the lerp has long since
+		// completed, but the launcher starts fresh and the screenshot lands
+		// during the ramp - leaving e.g. g_weatherSurface.wetness at ~0,
+		// which any material graph that reads it (wet road shaders driving
+		// smoothness off wetness) interprets as "dry" and renders matte.
+		// Reflections that the editor previews don't appear in the shipped
+		// launcher until the ramp completes a couple of seconds in.
+		//
+		// Snapping the state machine to the resolved preset here means the
+		// first frame already has the correct atmospheric / surface values,
+		// matching what the editor preview shows.
+		const WeatherState initialState = (_globalPresetId == WeatherPresetId::Custom)
+			? _globalState
+			: MakePresetState(_globalPresetId);
+		_currentState = initialState;
+		_transitionSourceState = initialState;
+		_transitionTargetState = initialState;
 		_transitionElapsed = 0.0f;
 		_transitionDuration = 0.0f;
 	}

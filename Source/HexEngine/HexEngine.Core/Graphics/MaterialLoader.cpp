@@ -85,17 +85,10 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> MaterialLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
-		std::string materialData((const char*)data.data(), data.size());
-
-		KeyValues kv;
-		if(kv.Parse(materialData) == false)
-		{
-			LOG_CRIT("Failed to parse key values from material file '%s'", relativePath.string().c_str());
-			return nullptr;
-		}
+		std::string materialData(reinterpret_cast<const char*>(data.data()), data.size());
 
 		std::shared_ptr<Material> material = std::shared_ptr<Material>(new Material, ResourceDeleter());
-		
+
 		json matData;
 		if (!TryParseMaterialJson(materialData, matData))
 		{
@@ -103,7 +96,15 @@ namespace HexEngine
 			return nullptr;
 		}
 
-		//ParseJson(&file, matData, material);
+		// ParseJson uses JsonFile only for its Deserialize template methods,
+		// which operate purely on the in-memory json object - they don't touch
+		// the file stream. So a stack-only JsonFile constructed with the
+		// virtual relative path (no Open() call) is enough to drive the
+		// existing parsing code unchanged. Keeps the file-mode and memory-mode
+		// paths converging on the same ParseJson entry point so material
+		// features added in either don't drift.
+		JsonFile virtualFile(relativePath, std::ios::in);
+		ParseJson(&virtualFile, matData, material);
 
 		_loadedMaterials[relativePath] = material;
 
@@ -177,7 +178,23 @@ namespace HexEngine
 			file->Deserialize(properties, "emissiveColour", props.emissiveColour);
 			file->Deserialize(properties, "hasTransparency", props.hasTransparency);
 			file->Deserialize(properties, "isWater", props.isWater);
-			file->Deserialize(properties, "specularProbability", props.specularProbability);
+			// smoothness was historically authored via the MaterialDialog slider but
+			// never persisted - the only place that drove the on-disk value was the
+			// engine's default-constructor, so a freshly-loaded material always had
+			// smoothness=0 regardless of what the editor showed. That's harmless when
+			// the user hasn't touched the slider but quietly resets the value on every
+			// reload. Now it round-trips like the other PBR scalars.
+			file->Deserialize(properties, "smoothness", props.smoothness);
+			// specularProbability used to live here. The field was removed (nothing in
+			// the renderer actually read pixelSpecular.a from the mat gbuffer RT, so
+			// it was dead weight) - older materials may still have the key in their
+			// JSON; we just ignore it on load, no migration needed.
+			// Shading model + per-model params (added with the fidelity push). Default
+			// to 0 / zero-vec if the field is absent in the JSON (i.e. materials
+			// authored before these were a thing) so old assets keep rendering as
+			// standard PBR.
+			file->Deserialize(properties, "materialModel", props.materialModel);
+			file->Deserialize(properties, "modelParams", props.modelParams);
 
 			bool affectsGI = true;
 			file->Deserialize(properties, "affectsGI", affectsGI);
@@ -323,6 +340,36 @@ namespace HexEngine
 					"Material instance '%s' could not resolve parent graph material '%s'",
 					material->GetFileSystemPath().string().c_str(),
 					material->_graphInstance.parentMaterialPath.string().c_str());
+			}
+		}
+
+		// Auto-recompile graph materials whose cached "standard" shader is
+		// missing, points at a stale path, or the JSON dropped it entirely.
+		// Without this, hand-editing the graph JSON (or moving / clearing the
+		// generated shader cache) leaves the material with a null standard
+		// shader and meshes that reference it fail to render. Instances are
+		// handled by the ApplyInstanceToMaterial block above and don't need a
+		// fresh compile of their own.
+		if (material->_hasGraph && !material->_hasGraphInstance && material->GetStandardShader() == nullptr)
+		{
+			LOG_INFO(
+				"Material '%s' has a graph but no resolved standard shader; recompiling from the graph.",
+				material->GetFileSystemPath().string().c_str());
+
+			const auto compileResult = MaterialGraphCompiler::CompileToMaterial(
+				material->_graph,
+				*material,
+				nullptr);
+
+			if (!compileResult.success)
+			{
+				for (const auto& error : compileResult.errors)
+					LOG_WARN("Material graph auto-recompile error: %s", error.c_str());
+			}
+			else
+			{
+				for (const auto& warning : compileResult.warnings)
+					LOG_WARN("Material graph auto-recompile warning: %s", warning.c_str());
 			}
 		}
 
@@ -505,6 +552,16 @@ namespace HexEngine
 			file.Serialize(properties, "emissiveColour", material->_properties.emissiveColour);
 			file.Serialize(properties, "hasTransparency", material->_properties.hasTransparency);
 			file.Serialize(properties, "isWater", material->_properties.isWater);
+			// Round-trip smoothness. Historically authored via the dialog but never
+			// written here, so a save+reload silently reset it to 0 - the source of
+			// "edit material, looks fine; press Play, road is wrong" reports, since
+			// the in-memory dialog edit was lost on the path through Save -> game
+			// runtime load. specularProbability used to round-trip too but has been
+			// removed entirely (nothing read it).
+			file.Serialize(properties, "smoothness", material->_properties.smoothness);
+			// Shading model + per-model params (clearcoat / SSS / aniso / sheen).
+			file.Serialize(properties, "materialModel", material->_properties.materialModel);
+			file.Serialize(properties, "modelParams", material->_properties.modelParams);
 			file.Serialize(properties, "affectsGI", material->GetAffectsGI());
 			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());
 		}
