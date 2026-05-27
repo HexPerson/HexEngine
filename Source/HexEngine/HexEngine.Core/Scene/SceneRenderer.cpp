@@ -2997,6 +2997,18 @@ namespace HexEngine
 		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
 		graphics->SetCullingMode(CullingMode::NoCulling);
 
+		// Clear stale PS SRVs from prior passes BEFORE binding our own. The
+		// previous (opaque / depth-pyramid / shadow) passes leave assorted SRVs
+		// bound at higher slots - notably a position-format (R32G32B32A32_FLOAT)
+		// SRV around t6 and the engine's comparison sampler at s1. D3D11's
+		// validator pairs every bound SRV against every bound sampler regardless
+		// of whether the shader actually references them, and an R32G32B32A32_FLOAT
+		// SRV + a SamplerComparisonState binding is flagged as an invalid combo
+		// (DEVICE_DRAW_RESOURCE_FORMAT_SAMPLE_C_UNSUPPORTED #372). Wiping all PS
+		// SRVs first gives the decal pass a clean slot table and avoids the
+		// false-positive validation error.
+		graphics->UnbindAllPixelShaderResources();
+
 		// Decal shader expects:
 		//   t0 = position copy  (set once for the whole pass)
 		//   t1 = decal albedo   (set per-decal)
