@@ -105,6 +105,7 @@
 #include "Entity/Component/SkeletalAnimationComponent.hpp"
 #include "Entity/Component/DayNightCycleComponent.hpp"
 #include "Entity/Component/ParticleSystemComponent.hpp"
+#include "Entity/Component/DecalComponent.hpp"
 
 #include "Plugin/PluginSystem.hpp"
 

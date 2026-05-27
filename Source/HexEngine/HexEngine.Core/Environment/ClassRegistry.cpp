@@ -17,6 +17,7 @@
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "../Entity/Component/DayNightCycleComponent.hpp"
 #include "../Entity/Component/ParticleSystemComponent.hpp"
+#include "../Entity/Component/DecalComponent.hpp"
 #include "../HexEngine.hpp"
 
 
@@ -61,6 +62,7 @@ namespace HexEngine
 		REG_CLASS(InstancedStaticMeshComponent);
 		REG_CLASS(DayNightCycleComponent);
 		REG_CLASS(ParticleSystemComponent);
+		REG_CLASS(DecalComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

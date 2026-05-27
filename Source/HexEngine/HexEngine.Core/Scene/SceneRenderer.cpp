@@ -3,6 +3,9 @@
 #include "../HexEngine.hpp"
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/PointLight.hpp"
+#include "../Entity/Component/DecalComponent.hpp"
+#include "../Graphics/IVertexBuffer.hpp"
+#include "../Graphics/IIndexBuffer.hpp"
 #include "../Math/FloatMath.hpp"
 #include <fastnoiselite/Cpp/FastNoiseLite.h>
 #include <cstdint>
@@ -465,6 +468,9 @@ namespace HexEngine
 		SAFE_DELETE(_ssrTexture);
 		SAFE_DELETE(_ssrHitInfo);
 		SAFE_DELETE(_dlssTarget);
+		// Position-copy RT shadows the GBuffer position layout (RGBA32F).
+		// Recreated below in CreateRenderTargets at the new dimensions.
+		SAFE_DELETE(_decalPositionCopy);
 
 		SAFE_DELETE(_bloomEffect);
 
@@ -509,6 +515,10 @@ namespace HexEngine
 		SAFE_DELETE(_subsurfaceIntermediateRT);
 		SAFE_DELETE(_subsurfaceParamsBuffer);
 		SAFE_DELETE(_bokehDoFParamsBuffer);
+		SAFE_DELETE(_decalConstantsBuffer);
+		SAFE_DELETE(_decalPositionCopy);
+		SAFE_DELETE(_decalCubeVB);
+		SAFE_DELETE(_decalCubeIB);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
 
@@ -543,6 +553,7 @@ namespace HexEngine
 		_fullScreenQuadShader		= IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
 		_subsurfaceShader			= IShader::Create("EngineData.Shaders/SubsurfaceScattering.hcs");
 		_bokehDoFShader				= IShader::Create("EngineData.Shaders/BokehDoF.hcs");
+		_decalShader				= IShader::Create("EngineData.Shaders/Decal.hcs");
 
 		// Tiny float4 cbuffer that drives the SSS pass direction + radius + intensity.
 		// Built lazily once and reused across frames since the layout is constant.
@@ -555,6 +566,54 @@ namespace HexEngine
 		if (_bokehDoFParamsBuffer == nullptr)
 		{
 			_bokehDoFParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+		}
+
+		// Decal constants cbuffer at b4 (PerFrameBuffer is b0, PerObject b1, etc;
+		// b4 is otherwise used by the GI / cloud passes which don't overlap with
+		// the decal pass in time). Layout: matrix (64b) + 3 float4 (48b) = 112b.
+		if (_decalConstantsBuffer == nullptr)
+		{
+			_decalConstantsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Matrix) + sizeof(math::Vector4) * 3);
+		}
+
+		// Unit cube VB / IB shared by every decal. 8 vertices, 36 indices (12 tris).
+		// Vertices are at [-0.5, 0.5]^3 so the decal world matrix (entity transform
+		// with extents baked into scale) places them in world space directly.
+		if (_decalCubeVB == nullptr)
+		{
+			const math::Vector3 cubeVerts[8] = {
+				{ -0.5f, -0.5f, -0.5f }, {  0.5f, -0.5f, -0.5f },
+				{  0.5f,  0.5f, -0.5f }, { -0.5f,  0.5f, -0.5f },
+				{ -0.5f, -0.5f,  0.5f }, {  0.5f, -0.5f,  0.5f },
+				{  0.5f,  0.5f,  0.5f }, { -0.5f,  0.5f,  0.5f },
+			};
+			_decalCubeVB = g_pEnv->_graphicsDevice->CreateVertexBuffer(
+				(int32_t)sizeof(cubeVerts),
+				(uint32_t)sizeof(math::Vector3),
+				D3D11_USAGE_IMMUTABLE,
+				0,
+				(void*)cubeVerts);
+		}
+		if (_decalCubeIB == nullptr)
+		{
+			// Two triangles per cube face, CCW when viewed from outside. Cull mode
+			// is None during the decal pass so winding doesn't matter for visibility
+			// - but using consistent CCW keeps the geometry valid if some future
+			// debug-rendering path reuses the buffer.
+			const uint32_t cubeIndices[36] = {
+				0, 2, 1,  0, 3, 2, // -Z
+				4, 5, 6,  4, 6, 7, // +Z
+				0, 4, 7,  0, 7, 3, // -X
+				1, 2, 6,  1, 6, 5, // +X
+				0, 1, 5,  0, 5, 4, // -Y
+				3, 7, 6,  3, 6, 2, // +Y
+			};
+			_decalCubeIB = g_pEnv->_graphicsDevice->CreateIndexBuffer(
+				(int32_t)sizeof(cubeIndices),
+				(uint32_t)sizeof(uint32_t),
+				D3D11_USAGE_IMMUTABLE,
+				0,
+				(void*)cubeIndices);
 		}
 
 		if (!_compositionShader)
@@ -728,6 +787,26 @@ namespace HexEngine
 
 		_ssrHistory->SetDebugName("_ssrHistory");
 		_ssrResolved->SetDebugName("_ssrResolved");
+
+		// Position-copy RT for the decal pass. Same R32G32B32A32_FLOAT format as
+		// GBuffer position so a straight CopyTo works. MSAA disabled - decals
+		// don't need per-sample data and we want a plain SRV for the PS to sample
+		// with a point sampler. Recreated alongside the SSR/shadow RTs whenever
+		// the viewport resizes.
+		SAFE_DELETE(_decalPositionCopy);
+		_decalPositionCopy = g_pEnv->_graphicsDevice->CreateTexture2D(
+			width,
+			height,
+			DXGI_FORMAT_R32G32B32A32_FLOAT,
+			1,
+			D3D11_BIND_SHADER_RESOURCE,
+			0, 1, 0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_UNKNOWN,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D);
+		_decalPositionCopy->SetDebugName("_decalPositionCopy");
 
 		_shadowMapsRT = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
@@ -1019,6 +1098,15 @@ namespace HexEngine
 
 		RenderOpaque();
 		_gpuVisibilityCulling.BuildDepthPyramid(_gbuffer.GetDepthBuffer());
+
+		// Deferred decal pass. Runs straight after the opaque GBuffer fill (and
+		// after the depth-pyramid build, which only reads the depth buffer that
+		// the decal pass leaves alone) and before lighting / SSR. Decals modify
+		// diffuse + mat in-place so the subsequent lighting pass sees the patched
+		// surface naturally - puddles get smooth-roughness lighting, blood gets
+		// dark albedo, etc. v1 is gated on the decal shader + component being
+		// present (RenderDecals early-outs if there are no decals).
+		RenderDecals();
 		//AccumulateShadowMaps();
 		
 		
@@ -2851,6 +2939,167 @@ namespace HexEngine
 		graphics->SetTexture2D(1, nullptr);
 		graphics->SetTexture2D(2, nullptr);
 		graphics->SetConstantBufferPS(6, nullptr);
+	}
+
+	void SceneRenderer::RenderDecals()
+	{
+		// Required resources: shader + cube buffers + position-copy RT + cbuffer.
+		// All allocated in CreateShaders / CreateRenderTargets. The GBuffer must
+		// be fully populated by RenderOpaque before we run (we need the position
+		// RT to snapshot).
+		if (_decalShader == nullptr || _decalCubeVB == nullptr || _decalCubeIB == nullptr ||
+			_decalConstantsBuffer == nullptr || _decalPositionCopy == nullptr ||
+			_currentScene == nullptr)
+			return;
+
+		std::vector<DecalComponent*> decals;
+		if (_currentScene->GetComponents<DecalComponent>(decals) == false)
+			return;
+
+		// Cheap early-out before paying the RT copy cost. Skip disabled-or-zero-
+		// opacity decals here; the per-decal loop will revisit IsRenderable().
+		bool anyVisible = false;
+		for (auto* d : decals)
+		{
+			if (d != nullptr && d->IsRenderable())
+			{
+				anyVisible = true;
+				break;
+			}
+		}
+		if (!anyVisible)
+			return;
+
+		PROFILE();
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+
+		// Snapshot the GBuffer position into the decal pass's read RT. Position is
+		// bound for write during the opaque pass and during the upcoming lighting
+		// passes; the decal PS needs to sample it while diff/mat are bound for
+		// write, which is only legal if we read from a copy.
+		_gbuffer.GetPosition()->CopyTo(_decalPositionCopy);
+
+		// Bind only the GBuffer RTs we intend to write. Position / velocity /
+		// normal / features stay unbound so they aren't clobbered by zeroed writes
+		// and so we can keep reading position from our snapshot.
+		std::vector<ITexture2D*> decalRTs = { _gbuffer.GetDiffuse(), _gbuffer.GetSpecular() };
+		graphics->SetRenderTargets(decalRTs, _gbuffer.GetDepthBuffer());
+
+		// Set state: standard alpha blend (RT0 + RT1 both get src.a * src + (1-src.a) * dst),
+		// no depth test (decal box itself is independent of scene depth - containment
+		// is decided in the PS by sampling the position copy), and no face culling
+		// because the camera might be inside the decal box for a low ceiling-projector.
+		const BlendState        prevBlend = graphics->GetBlendState();
+		const DepthBufferState  prevDepth = graphics->GetDepthBufferState();
+		const CullingMode       prevCull  = graphics->GetCullingMode();
+		graphics->SetBlendState(BlendState::Transparency);
+		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
+		graphics->SetCullingMode(CullingMode::NoCulling);
+
+		// Decal shader expects:
+		//   t0 = position copy  (set once for the whole pass)
+		//   t1 = decal albedo   (set per-decal)
+		//   t2 = decal normal   (reserved v1)
+		//   t3 = decal mat      (set per-decal)
+		// VS + PS + cbuffer b4 also bound per-decal.
+		graphics->SetTexture2D(0, _decalPositionCopy);
+
+		IShaderStage* vs = _decalShader->GetShaderStage(ShaderStage::VertexShader);
+		IShaderStage* ps = _decalShader->GetShaderStage(ShaderStage::PixelShader);
+		graphics->SetVertexShader(vs);
+		graphics->SetPixelShader(ps);
+		graphics->SetInputLayout(_decalShader->GetInputLayout());
+		graphics->SetTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		graphics->SetVertexBuffer(0, _decalCubeVB);
+		graphics->SetIndexBuffer(_decalCubeIB);
+		graphics->SetConstantBufferPS(4, _decalConstantsBuffer);
+
+		// Per-decal constants payload. Must match Decal.shader's cbuffer DecalConstants.
+		struct DecalGpuConstants
+		{
+			math::Matrix worldInverse;
+			math::Vector4 weights;    // albedo, normal (rsvd), mat, opacity
+			math::Vector4 overrides;  // roughness, metallic, normalCutoff, albedoBound
+			math::Vector4 flags;      // normalBound (rsvd), matBound, _, _
+		};
+
+		auto* perObjectBuffer = graphics->GetEngineConstantBuffer(EngineConstantBuffer::PerObjectBuffer);
+
+		for (auto* decal : decals)
+		{
+			if (decal == nullptr || !decal->IsRenderable())
+				continue;
+
+			auto* entity = decal->GetEntity();
+			if (entity == nullptr)
+				continue;
+
+			// World matrix from the entity's transform. The unit cube vertices live
+			// in [-0.5, 0.5]^3 so the entity's scale acts as the decal extents
+			// directly - artists set "size" via the standard Transform scale gizmo,
+			// no extra UI required.
+			const math::Matrix world = entity->GetWorldTM();
+			const math::Matrix worldInverse = world.Invert();
+
+			// Update PerObjectBuffer with the decal's world matrix (the shader reads
+			// g_worldMatrix for the VS transform AND for extracting world-space
+			// basis axes in the PS). Material props left default - the decal shader
+			// doesn't look at g_material.
+			if (perObjectBuffer != nullptr)
+			{
+				PerObjectBuffer perObj = {};
+				perObj._worldMatrix = world.Transpose(); // engine uploads matrices transposed
+				perObj._flags = 0;
+				perObj.entityId = -1;
+				perObj.cullDistance = 0.0f;
+				perObj.pad = 0;
+				perObj._material = MaterialProperties{};
+				perObjectBuffer->Write(&perObj, sizeof(perObj));
+			}
+
+			DecalGpuConstants consts;
+			consts.worldInverse = worldInverse.Transpose();
+			consts.weights = math::Vector4(
+				decal->GetAlbedoWeight(),
+				decal->GetNormalWeight(),
+				decal->GetMatWeight(),
+				decal->GetOpacity());
+			const bool hasAlbedo = decal->GetAlbedoTexture() != nullptr;
+			const bool hasNormal = decal->GetNormalTexture() != nullptr;
+			const bool hasMat    = decal->GetMatTexture()    != nullptr;
+			consts.overrides = math::Vector4(
+				decal->GetRoughnessOverride(),
+				decal->GetMetallicOverride(),
+				decal->GetNormalCutoff(),
+				hasAlbedo ? 1.0f : 0.0f);
+			consts.flags = math::Vector4(
+				hasNormal ? 1.0f : 0.0f,
+				hasMat    ? 1.0f : 0.0f,
+				0.0f, 0.0f);
+			_decalConstantsBuffer->Write(&consts, sizeof(consts));
+
+			// Decal textures. Slots match Decal.shader's t1/t2/t3. Null is fine -
+			// the PS checks the bound flags before sampling.
+			graphics->SetTexture2D(1, decal->GetAlbedoTexture());
+			graphics->SetTexture2D(2, decal->GetNormalTexture());
+			graphics->SetTexture2D(3, decal->GetMatTexture());
+
+			graphics->DrawIndexed(36);
+		}
+
+		// Restore state. Unbind decal SRVs so the next pass doesn't accidentally
+		// sample stale decal textures, and put the GBuffer RTs back to the canonical
+		// SetAsRenderTargets binding for downstream passes.
+		graphics->SetTexture2D(0, nullptr);
+		graphics->SetTexture2D(1, nullptr);
+		graphics->SetTexture2D(2, nullptr);
+		graphics->SetTexture2D(3, nullptr);
+		graphics->SetConstantBufferPS(4, nullptr);
+
+		graphics->SetBlendState(prevBlend);
+		graphics->SetDepthBufferState(prevDepth);
+		graphics->SetCullingMode(prevCull);
 	}
 
 	void SceneRenderer::RenderBokehDoF()

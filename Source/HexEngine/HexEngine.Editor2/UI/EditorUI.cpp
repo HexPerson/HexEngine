@@ -321,6 +321,15 @@ namespace HexEditor
 				actionNewBB->action = std::bind(&EditorUI::OnAddBillboard, this);
 				_mainMenu->AddSubItem(scene, actionNewBB);
 
+				// Add decal -> spawns a flat decal entity at the cursor with sensible
+				// puddle-style defaults (mostly-smooth roughness, no metallic, normal
+				// cutoff for floor-only projection). Artists then drop a texture onto
+				// the Albedo / Mat slots in the inspector.
+				HexEngine::MenuBar::Item* actionNewDecal = new HexEngine::MenuBar::Item;
+				actionNewDecal->name = L"Add decal";
+				actionNewDecal->action = std::bind(&EditorUI::OnAddDecal, this);
+				_mainMenu->AddSubItem(scene, actionNewDecal);
+
 				HexEngine::MenuBar::Item* actionNewTerrain = new HexEngine::MenuBar::Item;
 				actionNewTerrain->name = L"Add terrain";
 				actionNewTerrain->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Terrain);
@@ -957,6 +966,34 @@ namespace HexEditor
 		RecordEntityCreated(light);
 
 		GetInspector()->InspectEntity(light);
+	}
+
+	void EditorUI::OnAddDecal()
+	{
+		auto hit = RayCastWorld({}, false);
+
+		auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		if (!scene)
+			return;
+
+		// Decal placement: drop the entity at the hit point with a default 1m^3
+		// box (artists rescale via the Transform gizmo). The DecalComponent on
+		// its own has no visible mesh - the rendered effect comes from the decal
+		// pass painting into the GBuffer at this entity's transform, so the
+		// inspector is the primary editing surface (texture pickers, opacity,
+		// per-channel weights).
+		HexEngine::Entity* decalEnt = scene->CreateEntity("Decal", hit.position);
+		if (decalEnt == nullptr)
+			return;
+
+		// Default extents: 2m XZ x 0.5m Y. Puddles want a flat, wide footprint.
+		decalEnt->SetScale(math::Vector3(2.0f, 0.5f, 2.0f));
+
+		decalEnt->AddComponent<HexEngine::DecalComponent>();
+
+		RecordEntityCreated(decalEnt);
+
+		GetInspector()->InspectEntity(decalEnt);
 	}
 
 	void EditorUI::OnAddEmptyEntity()

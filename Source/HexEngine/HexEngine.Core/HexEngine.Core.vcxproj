@@ -428,6 +428,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\DirectionalLight.hpp" />
     <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp" />
     <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp" />
+    <ClInclude Include="Entity\Component\DecalComponent.hpp" />
     <ClInclude Include="Entity\Component\ParticleSystemComponent.hpp" />
     <ClInclude Include="Entity\Component\Transform.hpp" />
     <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
@@ -617,6 +618,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\DirectionalLight.cpp" />
     <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp" />
     <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp" />
+    <ClCompile Include="Entity\Component\DecalComponent.cpp" />
     <ClCompile Include="Entity\Component\ParticleSystemComponent.cpp" />
     <ClCompile Include="Entity\Component\Transform.cpp" />
     <ClCompile Include="Entity\Component\UpdateComponent.cpp" />

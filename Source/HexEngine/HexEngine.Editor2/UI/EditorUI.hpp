@@ -117,6 +117,7 @@ public:
 		void OnSaveAction();
 		void OnExportAction();
 		void OnAddBillboard();
+		void OnAddDecal();
 		void OnGenerateHLOD();
 		void OnProjectManagerCompleted(const fs::path& projectFolder, const std::string& projectName, bool didLoadExisting, const std::wstring& namespaceName, HexEngine::LoadingDialog* loadingDlg);
 		void OnAddPrimitive(PrimitiveType type);

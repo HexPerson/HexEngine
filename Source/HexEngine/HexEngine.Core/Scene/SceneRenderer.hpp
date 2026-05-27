@@ -17,6 +17,8 @@ namespace HexEngine
 	class Camera;
 	class ITexture3D;
 	class IConstantBuffer;
+	class IVertexBuffer;
+	class IIndexBuffer;
 
 	class SceneRenderer
 	{
@@ -86,6 +88,13 @@ namespace HexEngine
 		// highlights would saturate the gathered buckets and lose the "ball"
 		// shape on bright sources. Gated by r_dof.
 		void RenderBokehDoF();
+		// Deferred decal pass. Runs after the GBuffer opaque fill and before the
+		// beauty copy / lighting pass so subsequent shading sees the decal-modified
+		// surface (puddles get smooth roughness fed into lighting + reflections,
+		// blood gets dark albedo lit normally, etc.). v1 writes only diffuse + mat;
+		// normal/position/velocity/features are untouched. See Decal.shader for the
+		// per-pixel projection details and DecalComponent for placement.
+		void RenderDecals();
 		void RenderVignette();
 		void SetStreamlineConstants();
 
@@ -180,6 +189,17 @@ namespace HexEngine
 		// format and never overlap in the post chain).
 		std::shared_ptr<IShader> _bokehDoFShader;
 		IConstantBuffer* _bokehDoFParamsBuffer = nullptr;
+
+		// Decal pass. The position RT is bound for write during GBuffer fill, so we
+		// snapshot it into _decalPositionCopy each frame before the decal pass and
+		// bind that as the SRV the decal PS samples. The cube VB/IB is a single
+		// shared unit cube used by every decal (the decal renderer just rebinds
+		// per-decal world matrix + constants).
+		std::shared_ptr<IShader> _decalShader;
+		IConstantBuffer* _decalConstantsBuffer = nullptr;
+		ITexture2D* _decalPositionCopy = nullptr;
+		IVertexBuffer* _decalCubeVB = nullptr;
+		IIndexBuffer* _decalCubeIB = nullptr;
 
 		Bloom* _bloomEffect = nullptr;
 		AutoExposure _autoExposure;
