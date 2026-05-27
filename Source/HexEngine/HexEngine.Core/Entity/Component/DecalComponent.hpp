@@ -79,6 +79,14 @@ namespace HexEngine
 		float GetMetallicOverride() const  { return _metallicOverride; }
 		void SetMetallicOverride(float v)  { _metallicOverride = v; }
 
+		// When true, the decal's effective opacity is multiplied by the global
+		// weather puddleAmount (0..1) at draw time. Use for puddle decals so
+		// they fade in/out with rain automatically; leave OFF for blood, paint,
+		// scorch marks, graffiti and similar persistent decals that should
+		// ignore the weather.
+		bool GetRespondsToWeather() const { return _respondsToWeather; }
+		void SetRespondsToWeather(bool v) { _respondsToWeather = v; }
+
 		// Returns true when the decal has anything to render (at least one texture
 		// bound OR a non-default mat override). Skip culled decals here so the
 		// renderer doesn't enumerate them every frame.
@@ -102,5 +110,6 @@ namespace HexEngine
 		float _matWeight          = 1.0f;
 		float _roughnessOverride  = 0.05f; // smooth - puddles default
 		float _metallicOverride   = 0.0f;
+		bool  _respondsToWeather  = false;
 	};
 }

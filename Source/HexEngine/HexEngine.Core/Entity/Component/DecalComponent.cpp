@@ -6,6 +6,7 @@
 #include "../../GUI/Elements/ComponentWidget.hpp"
 #include "../../GUI/Elements/AssetSearch.hpp"
 #include "../../GUI/Elements/DragFloat.hpp"
+#include "../../GUI/Elements/Checkbox.hpp"
 
 namespace HexEngine
 {
@@ -33,6 +34,7 @@ namespace HexEngine
 		_matWeight         = copy->_matWeight;
 		_roughnessOverride = copy->_roughnessOverride;
 		_metallicOverride  = copy->_metallicOverride;
+		_respondsToWeather = copy->_respondsToWeather;
 	}
 
 	void DecalComponent::SetAlbedoTexture(const std::shared_ptr<ITexture2D>& tex)
@@ -81,6 +83,7 @@ namespace HexEngine
 		SERIALIZE_VALUE(_matWeight);
 		SERIALIZE_VALUE(_roughnessOverride);
 		SERIALIZE_VALUE(_metallicOverride);
+		SERIALIZE_VALUE(_respondsToWeather);
 	}
 
 	void DecalComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
@@ -121,6 +124,7 @@ namespace HexEngine
 		DESERIALIZE_VALUE(_matWeight);
 		DESERIALIZE_VALUE(_roughnessOverride);
 		DESERIALIZE_VALUE(_metallicOverride);
+		DESERIALIZE_VALUE(_respondsToWeather);
 
 		_serializationState = BaseComponent::SerializationState::Ready;
 	}
@@ -170,6 +174,12 @@ namespace HexEngine
 		new DragFloat(widget, widget->GetNextPos(), Point(fullWidth, 18), L"Mat Weight",         &_matWeight,         0.0f, 1.0f, 0.01f);
 		new DragFloat(widget, widget->GetNextPos(), Point(fullWidth, 18), L"Roughness Override", &_roughnessOverride, 0.0f, 1.0f, 0.01f);
 		new DragFloat(widget, widget->GetNextPos(), Point(fullWidth, 18), L"Metallic Override",  &_metallicOverride,  0.0f, 1.0f, 0.01f);
+
+		// Weather-driven puddles. When ticked, the decal's opacity is multiplied
+		// by g_weatherSurface.puddleAmount each frame so the decal fades out when
+		// it's dry and fades back in when it rains. Leave OFF for blood, paint,
+		// scorch marks and other persistent decals.
+		new Checkbox(widget, widget->GetNextPos(), Point(fullWidth, 18), L"Responds to weather", &_respondsToWeather);
 
 		return true;
 	}

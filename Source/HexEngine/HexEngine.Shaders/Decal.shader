@@ -86,7 +86,11 @@
 		float4 g_decalOverrides;
 
 		// x = normal-bound flag (reserved v1), y = mat-bound flag,
-		// z/w = reserved for v2 (per-decal sort priority, fade distance)
+		// z = responds-to-weather flag (multiplies opacity by
+		//     g_weatherSurface.puddleAmount each frame - puddle decals fade in/out
+		//     with rain automatically while other decals (blood, paint, scorch
+		//     marks) stay put with the flag at 0),
+		// w = reserved for v2 (per-decal sort priority, fade distance)
 		float4 g_decalFlags;
 	};
 
@@ -148,7 +152,12 @@
 		const float3 edgeDist = saturate((0.5f - abs(localPos)) * 4.0f);
 		const float  edgeFade = edgeDist.x * edgeDist.y * edgeDist.z;
 
-		const float baseAlpha = g_decalWeights.w * edgeFade * facingFade;
+		// Weather-driven puddles. When the flag is set, multiply opacity by the
+		// global puddleAmount so the decal fades out when it's dry and fades back
+		// in when it rains. lerp(1, puddle, flag) keeps non-weather decals at full
+		// opacity (flag == 0 -> 1.0 multiplier).
+		const float weatherMul = lerp(1.0f, g_weatherSurface.puddleAmount, g_decalFlags.z);
+		const float baseAlpha  = g_decalWeights.w * edgeFade * facingFade * weatherMul;
 
 		// Diffuse channel ------------------------------------------------------
 		float4 decalAlbedo = float4(0.0f, 0.0f, 0.0f, 0.0f);

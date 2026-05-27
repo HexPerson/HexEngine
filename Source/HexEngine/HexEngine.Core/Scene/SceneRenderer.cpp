@@ -3088,7 +3088,8 @@ namespace HexEngine
 			consts.flags = math::Vector4(
 				hasNormal ? 1.0f : 0.0f,
 				hasMat    ? 1.0f : 0.0f,
-				0.0f, 0.0f);
+				decal->GetRespondsToWeather() ? 1.0f : 0.0f,
+				0.0f);
 			_decalConstantsBuffer->Write(&consts, sizeof(consts));
 
 			// Decal textures. Slots match Decal.shader's t1/t2/t3. Null is fine -
