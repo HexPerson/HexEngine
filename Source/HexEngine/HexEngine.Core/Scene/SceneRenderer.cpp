@@ -3112,6 +3112,18 @@ namespace HexEngine
 		graphics->SetBlendState(prevBlend);
 		graphics->SetDepthBufferState(prevDepth);
 		graphics->SetCullingMode(prevCull);
+
+		// Reset the implicit "next-bind" PS SRV counter to 0. The engine's slot-
+		// less SetTexture2D / SetTexture2DArray paths advance this counter and
+		// subsequent passes (notably _gbuffer.BindAsShaderResource() in
+		// RenderDirectionalLights) rely on it being 0 so their SetTexture2DArray
+		// lands the GBuffer at t0..t4 - which is what every deferred shader
+		// expects. Our explicit-slot SetTexture2D(3, nullptr) at the unbind step
+		// above sets the counter to 4 instead, which would shift the GBuffer
+		// position RT into slot 7 and cause D3D11 validation to flag the
+		// R32G32B32A32_FLOAT SRV at slot 6 against the engine's comparison
+		// sampler at s1 (DEVICE_DRAW_RESOURCE_FORMAT_SAMPLE_C_UNSUPPORTED).
+		graphics->SetBoundResourceIndex(0);
 	}
 
 	void SceneRenderer::RenderBokehDoF()
