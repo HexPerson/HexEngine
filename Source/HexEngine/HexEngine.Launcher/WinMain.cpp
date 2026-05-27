@@ -29,7 +29,7 @@ static void MountGameData()
 		return;
 
 	const fs::path exeDir = fs::current_path();
-	const fs::path packagePath = exeDir / L"GameData.pkg";
+	const fs::path packagePath = exeDir / L"Data" / L"AssetPackages" / L"GameData.pkg";
 
 	if (fs::exists(packagePath))
 	{
@@ -41,7 +41,7 @@ static void MountGameData()
 		HexEngine::g_pEnv->GetResourceSystem().AddFileSystem(bootstrapFs);
 
 		LOG_INFO("Loading game asset package from '%S'", packagePath.wstring().c_str());
-		g_gameDataPackage = HexEngine::AssetPackage::Create(L"GameDataBootstrap.GameData.pkg", L"GameData");
+		g_gameDataPackage = HexEngine::AssetPackage::Create(L"GameDataBootstrap.AssetPackages/GameData.pkg", L"GameData");
 
 		HexEngine::g_pEnv->GetResourceSystem().RemoveFileSystem(bootstrapFs);
 		delete bootstrapFs;
