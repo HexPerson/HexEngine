@@ -1,23 +1,41 @@
 "InputLayout"
 {
-	PosTexColour
+	Pos
 }
 "VertexShaderIncludes"
 {
-	UICommon
+	Global
 }
 "PixelShaderIncludes"
 {
-	UICommon
 	Global
 }
 "VertexShader"
 {
-	UIPixelInput ShaderMain(UIVertexInput input)
+	// The auto-puddle quad lives in clip space directly - vertex positions are
+	// (-1, -1, 0)..(1, 1, 0). No transforms in the VS. Bypasses the GuiRenderer
+	// fullscreen path because that path only writes to RT0 (FullScreenTexturedQuad
+	// is single-target), and the auto-puddle pass needs to write both diff and
+	// mat in one draw.
+	struct AutoPuddleVSIn
 	{
-		UIPixelInput output;
-		output.position = input.position;
-		output.texcoord = input.texcoord;
+		float3 position : POSITION;
+	};
+
+	struct AutoPuddlePSIn
+	{
+		float4 position : SV_POSITION;
+		float2 texcoord : TEXCOORD0;
+	};
+
+	AutoPuddlePSIn ShaderMain(AutoPuddleVSIn input)
+	{
+		AutoPuddlePSIn output;
+		output.position = float4(input.position, 1.0f);
+		// Map clip-space [-1, 1] to UV [0, 1]. Y is flipped because D3D's clip Y
+		// is up while UV Y is down.
+		output.texcoord = float2((input.position.x + 1.0f) * 0.5f,
+		                         (1.0f - input.position.y) * 0.5f);
 		return output;
 	}
 }
@@ -53,6 +71,12 @@
 		//     without setting up a WeatherController)
 		// z/w reserved
 		float4 g_autoPuddleAppearance;
+	};
+
+	struct AutoPuddlePSIn
+	{
+		float4 position : SV_POSITION;
+		float2 texcoord : TEXCOORD0;
 	};
 
 	struct AutoPuddleOut
@@ -104,7 +128,7 @@
 		return n / 1.5f;
 	}
 
-	AutoPuddleOut ShaderMain(UIPixelInput input)
+	AutoPuddleOut ShaderMain(AutoPuddlePSIn input)
 	{
 		AutoPuddleOut o = (AutoPuddleOut)0;
 

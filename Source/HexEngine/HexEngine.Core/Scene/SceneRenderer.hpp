@@ -207,6 +207,11 @@ namespace HexEngine
 		// bindings (diff + mat) so it can run inline at the end of RenderDecals.
 		std::shared_ptr<IShader> _autoPuddlesShader;
 		IConstantBuffer* _autoPuddlesConstantsBuffer = nullptr;
+		// Dedicated fullscreen-quad VB/IB. We don't use GuiRenderer's
+		// FullScreenTexturedQuad because that path only writes RT0; the auto-
+		// puddle pass needs MRT (diff + mat) in a single draw.
+		IVertexBuffer* _autoPuddlesQuadVB = nullptr;
+		IIndexBuffer*  _autoPuddlesQuadIB = nullptr;
 
 		Bloom* _bloomEffect = nullptr;
 		AutoExposure _autoExposure;

@@ -551,6 +551,8 @@ namespace HexEngine
 		SAFE_DELETE(_decalCubeVB);
 		SAFE_DELETE(_decalCubeIB);
 		SAFE_DELETE(_autoPuddlesConstantsBuffer);
+		SAFE_DELETE(_autoPuddlesQuadVB);
+		SAFE_DELETE(_autoPuddlesQuadIB);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
 
@@ -615,6 +617,34 @@ namespace HexEngine
 		if (_autoPuddlesConstantsBuffer == nullptr)
 		{
 			_autoPuddlesConstantsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4) * 2);
+		}
+
+		// Fullscreen quad in clip space. The auto-puddle shader is direct-clip-
+		// space (no view/world transform), so we just need a (-1,-1)..(1,1) quad.
+		if (_autoPuddlesQuadVB == nullptr)
+		{
+			const math::Vector3 quadVerts[4] = {
+				{ -1.0f, -1.0f, 0.0f },
+				{  1.0f, -1.0f, 0.0f },
+				{  1.0f,  1.0f, 0.0f },
+				{ -1.0f,  1.0f, 0.0f },
+			};
+			_autoPuddlesQuadVB = g_pEnv->_graphicsDevice->CreateVertexBuffer(
+				(int32_t)sizeof(quadVerts),
+				(uint32_t)sizeof(math::Vector3),
+				D3D11_USAGE_IMMUTABLE,
+				0,
+				(void*)quadVerts);
+		}
+		if (_autoPuddlesQuadIB == nullptr)
+		{
+			const uint32_t quadIndices[6] = { 0, 2, 1,  0, 3, 2 };
+			_autoPuddlesQuadIB = g_pEnv->_graphicsDevice->CreateIndexBuffer(
+				(int32_t)sizeof(quadIndices),
+				(uint32_t)sizeof(uint32_t),
+				D3D11_USAGE_IMMUTABLE,
+				0,
+				(void*)quadIndices);
 		}
 
 		// Unit cube VB / IB shared by every decal. 8 vertices, 36 indices (12 tris).
@@ -3150,7 +3180,7 @@ namespace HexEngine
 		// The shader checks puddleAmount > 0 internally so we don't need a
 		// per-frame "is it raining" gate in C++; the gate that DOES matter is
 		// the HVar toggle (artists turn the whole system off without recompiling).
-		if (autoPuddlesOn)
+		if (autoPuddlesOn && _autoPuddlesQuadVB != nullptr && _autoPuddlesQuadIB != nullptr)
 		{
 			// Bind the live GBuffer normal RT as SRV at t1 (we don't write to it
 			// during the decal/auto-puddle pass so reading is legal). The auto-
@@ -3161,7 +3191,7 @@ namespace HexEngine
 			struct AutoPuddleGpuConstants
 			{
 				math::Vector4 params;     // scale, threshold, normalCutoff, opacity
-				math::Vector4 appearance; // darken, _, _, _
+				math::Vector4 appearance; // darken, forceRain, _, _
 			};
 			AutoPuddleGpuConstants apc;
 			apc.params = math::Vector4(
@@ -3176,19 +3206,24 @@ namespace HexEngine
 			_autoPuddlesConstantsBuffer->Write(&apc, sizeof(apc));
 			graphics->SetConstantBufferPS(4, _autoPuddlesConstantsBuffer);
 
-			// Draw a single fullscreen quad through the GuiRenderer's fullscreen
-			// path. FullScreenTexturedQuad handles the input layout / vertex
-			// buffer for us and runs the supplied shader.
-			if (auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
-			{
-				guiRenderer->StartFrame();
-				guiRenderer->FullScreenTexturedQuad(nullptr, _autoPuddlesShader.get());
-				guiRenderer->EndFrame();
-			}
+			// Direct fullscreen quad draw - we deliberately bypass the GuiRenderer's
+			// FullScreenTexturedQuad path because that one is built for single-RT
+			// writes only (it doesn't preserve multi-RT setup on some paths). Our
+			// own VB/IB is a clip-space (-1, -1, 0)..(1, 1, 0) quad and the
+			// AutoPuddles VS takes positions through to SV_POSITION as-is. Uses
+			// the same `Pos` input layout the decal cube uses.
+			IShaderStage* apVS = _autoPuddlesShader->GetShaderStage(ShaderStage::VertexShader);
+			IShaderStage* apPS = _autoPuddlesShader->GetShaderStage(ShaderStage::PixelShader);
+			graphics->SetVertexShader(apVS);
+			graphics->SetPixelShader(apPS);
+			graphics->SetInputLayout(_autoPuddlesShader->GetInputLayout());
+			graphics->SetTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			graphics->SetVertexBuffer(0, _autoPuddlesQuadVB);
+			graphics->SetIndexBuffer(_autoPuddlesQuadIB);
+			graphics->DrawIndexed(6);
 
-			// Clear t1 specifically since the manual-decal cleanup below assumes
-			// nothing's at t1 from the decal-pass binding (it nulls slots 0-3,
-			// but we just rebound t1 to GBuffer normal - need a fresh null).
+			// Clear t1 so the cleanup below doesn't leave the normal RT bound as
+			// SRV across into the next pass.
 			graphics->SetTexture2D(1, nullptr);
 		}
 
