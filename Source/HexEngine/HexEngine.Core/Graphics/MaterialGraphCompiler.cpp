@@ -1245,4 +1245,45 @@ namespace HexEngine
 
 		return result;
 	}
+
+	bool MaterialGraphCompiler::IsCachedGraphShaderStale(const fs::path& cachedShaderPath)
+	{
+		// Filename pattern: "<materialStem>_graph_<srcHash>_<incHash>.hcs". Both
+		// hashes are 16 lowercase hex chars. Anything not matching = treat as
+		// stale (better to recompile once than to silently render against a
+		// shader whose origin we can't verify).
+		if (cachedShaderPath.empty())
+			return true;
+
+		const std::string stem = cachedShaderPath.stem().string(); // strips .hcs
+		const auto graphTokenPos = stem.find("_graph_");
+		if (graphTokenPos == std::string::npos)
+			return true;
+
+		// Everything after "_graph_" is "<srcHash>_<incHash>". Split on the LAST
+		// underscore so we tolerate material stems that happen to contain
+		// underscores themselves earlier in the name.
+		const std::string hashes = stem.substr(graphTokenPos + 7); // 7 = strlen("_graph_")
+		const auto sep = hashes.rfind('_');
+		if (sep == std::string::npos)
+			return true;
+		const std::string cachedIncHash = hashes.substr(sep + 1);
+		if (cachedIncHash.size() != 16)
+			return true;
+
+		// Compute the current expected includesHash using the same logic the
+		// graph compiler uses at compile time.
+		std::vector<fs::path> dummy;
+		const fs::path includeDir = ResolveShaderIncludeDirectory(&dummy);
+		const std::string currentIncHash = ComputeIncludesHash(includeDir);
+		if (currentIncHash == "0000000000000000")
+		{
+			// No include dir found - we can't verify, so leave the cached shader
+			// alone. Forcing recompile here would break runtime / packaged builds
+			// where the source .shader files aren't present.
+			return false;
+		}
+
+		return cachedIncHash != currentIncHash;
+	}
 }

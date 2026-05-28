@@ -356,6 +356,29 @@ namespace HexEngine
 		// shader and meshes that reference it fail to render. Instances are
 		// handled by the ApplyInstanceToMaterial block above and don't need a
 		// fresh compile of their own.
+		//
+		// ALSO: detect a cached shader whose includes-hash portion no longer
+		// matches the current ComputeIncludesHash (i.e. engine .shader files
+		// were edited since the cache was built). Engine shader changes don't
+		// touch the graph source, so the saved standard-shader path keeps
+		// loading the old .hcs with the old engine includes baked in even after
+		// PBRutils / Global / etc. were rewritten. Clear the standard shader
+		// pointer here so the recompile block below fires.
+		if (material->_hasGraph && !material->_hasGraphInstance && material->GetStandardShader() != nullptr)
+		{
+			fs::path cachedPath;
+			if (auto shaderIt = json["shaders"].find("standard"); shaderIt != json["shaders"].end() && !shaderIt.value().is_null())
+				cachedPath = shaderIt.value().get<std::string>();
+			if (MaterialGraphCompiler::IsCachedGraphShaderStale(cachedPath))
+			{
+				LOG_INFO(
+					"Material '%s' standard shader '%s' is from a stale includes hash; clearing for recompile.",
+					material->GetFileSystemPath().string().c_str(),
+					cachedPath.string().c_str());
+				material->SetStandardShader(nullptr);
+			}
+		}
+
 		if (material->_hasGraph && !material->_hasGraphInstance && material->GetStandardShader() == nullptr)
 		{
 			LOG_INFO(
