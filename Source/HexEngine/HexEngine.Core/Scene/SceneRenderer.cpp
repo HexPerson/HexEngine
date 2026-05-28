@@ -160,6 +160,30 @@ namespace HexEngine
 	// scenes, which read as "grey screen".
 	HVar r_dofMaxBlur("r_dofMaxBlur", "Maximum CoC radius in pixels (clamps far-field blur from exploding)", 8.0f, 1.0f, 96.0f);
 
+	// Auto-puddles: procedural fullscreen pass driven by world-space noise +
+	// surface normal + weather puddleAmount. Off by default to preserve existing
+	// scene look; ticking the HVar (or future Settings UI toggle) starts painting
+	// puddles wherever the surface is flat enough and the noise mask matches.
+	HVar r_autoPuddles("r_autoPuddles", "Enable procedural puddles driven by weather + surface normal + noise", false, false, true);
+	// Larger scale = bigger, sparser puddles. 5 m gives kerb-scale puddles; 15 m
+	// gives big floods. Picks the world-space size of each noise cell.
+	HVar r_autoPuddlesScale("r_autoPuddlesScale", "World-space noise scale for procedural puddles (metres per cell)", 5.0f, 0.5f, 50.0f);
+	// Threshold cuts how much of the surface receives puddles. 0.55 means the top
+	// ~45% of noise values become puddles - giving a typical wet-pavement look.
+	// Higher = sparser puddles (only the very-puddle-prone spots).
+	HVar r_autoPuddlesThreshold("r_autoPuddlesThreshold", "Noise threshold for procedural puddles (higher = sparser)", 0.55f, 0.0f, 0.95f);
+	// Minimum dot(normal, world-up) for a pixel to be considered for puddles. 0.9
+	// gives a ~25-degree allowance off horizontal which catches roads with normal
+	// camber but skips walls. Drop towards 0.7 if you want puddles on sloped
+	// surfaces too.
+	HVar r_autoPuddlesNormalCutoff("r_autoPuddlesNormalCutoff", "Min surface normal.y for procedural puddles (1.0 = perfectly flat)", 0.9f, 0.0f, 1.0f);
+	// Master opacity scale. 1.0 = full strength; lower for subtler "always-damp"
+	// look or higher to exaggerate during heavy rain.
+	HVar r_autoPuddlesOpacity("r_autoPuddlesOpacity", "Master opacity scale for procedural puddles", 1.0f, 0.0f, 1.0f);
+	// How much puddles darken the underlying albedo. 0 = mat-only (just smoother),
+	// 1 = full black puddle. 0.4 is a realistic "dark water on light pavement" look.
+	HVar r_autoPuddlesDarken("r_autoPuddlesDarken", "Albedo darkening applied where puddles are (0 = none, 1 = full black)", 0.4f, 0.0f, 1.0f);
+
 		static int32_t GetVolumetricEffectiveSteps()
 		{
 			const int32_t qualityPreset = r_volumetricQuality._val.i32 < 0 ? 0 : (r_volumetricQuality._val.i32 > 2 ? 2 : r_volumetricQuality._val.i32);
@@ -519,6 +543,7 @@ namespace HexEngine
 		SAFE_DELETE(_decalPositionCopy);
 		SAFE_DELETE(_decalCubeVB);
 		SAFE_DELETE(_decalCubeIB);
+		SAFE_DELETE(_autoPuddlesConstantsBuffer);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
 
@@ -554,6 +579,7 @@ namespace HexEngine
 		_subsurfaceShader			= IShader::Create("EngineData.Shaders/SubsurfaceScattering.hcs");
 		_bokehDoFShader				= IShader::Create("EngineData.Shaders/BokehDoF.hcs");
 		_decalShader				= IShader::Create("EngineData.Shaders/Decal.hcs");
+		_autoPuddlesShader			= IShader::Create("EngineData.Shaders/AutoPuddles.hcs");
 
 		// Tiny float4 cbuffer that drives the SSS pass direction + radius + intensity.
 		// Built lazily once and reused across frames since the layout is constant.
@@ -574,6 +600,14 @@ namespace HexEngine
 		if (_decalConstantsBuffer == nullptr)
 		{
 			_decalConstantsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Matrix) + sizeof(math::Vector4) * 3);
+		}
+
+		// Auto-puddles cbuffer at b4 (same slot as the decal constants - the two
+		// can't run simultaneously since they share render targets, so reusing
+		// the slot is fine; we rebind right before each draw). Layout: 2 float4 = 32b.
+		if (_autoPuddlesConstantsBuffer == nullptr)
+		{
+			_autoPuddlesConstantsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4) * 2);
 		}
 
 		// Unit cube VB / IB shared by every decal. 8 vertices, 36 indices (12 tris).
@@ -2956,18 +2990,21 @@ namespace HexEngine
 		if (_currentScene->GetComponents<DecalComponent>(decals) == false)
 			return;
 
-		// Cheap early-out before paying the RT copy cost. Skip disabled-or-zero-
-		// opacity decals here; the per-decal loop will revisit IsRenderable().
-		bool anyVisible = false;
+		// Cheap early-out before paying the RT copy cost. We do work in this pass
+		// if EITHER (a) there are renderable manual decals OR (b) the auto-puddle
+		// system is enabled (it always paints a fullscreen quad once on, and
+		// uses puddleAmount=0 as its own per-frame early-out inside the shader).
+		bool anyManualDecal = false;
 		for (auto* d : decals)
 		{
 			if (d != nullptr && d->IsRenderable())
 			{
-				anyVisible = true;
+				anyManualDecal = true;
 				break;
 			}
 		}
-		if (!anyVisible)
+		const bool autoPuddlesOn = r_autoPuddles._val.b && _autoPuddlesShader != nullptr && _autoPuddlesConstantsBuffer != nullptr;
+		if (!anyManualDecal && !autoPuddlesOn)
 			return;
 
 		PROFILE();
@@ -3099,6 +3136,52 @@ namespace HexEngine
 			graphics->SetTexture2D(3, decal->GetMatTexture());
 
 			graphics->DrawIndexed(36);
+		}
+
+		// Auto-puddles: one fullscreen draw after the manual decal loop. Reuses
+		// the same RT binding (diff + mat) and the same position-copy SRV at t0.
+		// The shader checks puddleAmount > 0 internally so we don't need a
+		// per-frame "is it raining" gate in C++; the gate that DOES matter is
+		// the HVar toggle (artists turn the whole system off without recompiling).
+		if (autoPuddlesOn)
+		{
+			// Bind the live GBuffer normal RT as SRV at t1 (we don't write to it
+			// during the decal/auto-puddle pass so reading is legal). The auto-
+			// puddle PS samples it for the per-pixel flatness test.
+			graphics->SetTexture2D(1, _gbuffer.GetNormal());
+
+			// Pack the HVar-driven config into the auto-puddle cbuffer.
+			struct AutoPuddleGpuConstants
+			{
+				math::Vector4 params;     // scale, threshold, normalCutoff, opacity
+				math::Vector4 appearance; // darken, _, _, _
+			};
+			AutoPuddleGpuConstants apc;
+			apc.params = math::Vector4(
+				r_autoPuddlesScale._val.f32,
+				r_autoPuddlesThreshold._val.f32,
+				r_autoPuddlesNormalCutoff._val.f32,
+				r_autoPuddlesOpacity._val.f32);
+			apc.appearance = math::Vector4(
+				r_autoPuddlesDarken._val.f32,
+				0.0f, 0.0f, 0.0f);
+			_autoPuddlesConstantsBuffer->Write(&apc, sizeof(apc));
+			graphics->SetConstantBufferPS(4, _autoPuddlesConstantsBuffer);
+
+			// Draw a single fullscreen quad through the GuiRenderer's fullscreen
+			// path. FullScreenTexturedQuad handles the input layout / vertex
+			// buffer for us and runs the supplied shader.
+			if (auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
+			{
+				guiRenderer->StartFrame();
+				guiRenderer->FullScreenTexturedQuad(nullptr, _autoPuddlesShader.get());
+				guiRenderer->EndFrame();
+			}
+
+			// Clear t1 specifically since the manual-decal cleanup below assumes
+			// nothing's at t1 from the decal-pass binding (it nulls slots 0-3,
+			// but we just rebound t1 to GBuffer normal - need a fresh null).
+			graphics->SetTexture2D(1, nullptr);
 		}
 
 		// Restore state. Unbind decal SRVs so the next pass doesn't accidentally

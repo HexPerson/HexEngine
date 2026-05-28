@@ -201,6 +201,13 @@ namespace HexEngine
 		IVertexBuffer* _decalCubeVB = nullptr;
 		IIndexBuffer* _decalCubeIB = nullptr;
 
+		// Auto-puddles. A single fullscreen PS that paints procedural puddles
+		// into the GBuffer where surfaces are flat + a noise mask + the weather
+		// system's puddleAmount line up. Shares the decal pass's render-target
+		// bindings (diff + mat) so it can run inline at the end of RenderDecals.
+		std::shared_ptr<IShader> _autoPuddlesShader;
+		IConstantBuffer* _autoPuddlesConstantsBuffer = nullptr;
+
 		Bloom* _bloomEffect = nullptr;
 		AutoExposure _autoExposure;
 
