@@ -3023,14 +3023,15 @@ namespace HexEngine
 			_currentScene == nullptr)
 			return;
 
+		// We do work in this pass if EITHER (a) there are renderable manual decals
+		// OR (b) the auto-puddle system is enabled. CRITICAL: do NOT early-out on
+		// "scene has zero DecalComponents" before evaluating the auto-puddle branch -
+		// auto-puddles is meant to work in scenes that have never had a single
+		// manual decal placed, and bailing out on an empty decal list here would
+		// make the feature appear broken whenever no manual decal happens to exist.
 		std::vector<DecalComponent*> decals;
-		if (_currentScene->GetComponents<DecalComponent>(decals) == false)
-			return;
+		_currentScene->GetComponents<DecalComponent>(decals); // may return false; either way `decals` is the list (possibly empty)
 
-		// Cheap early-out before paying the RT copy cost. We do work in this pass
-		// if EITHER (a) there are renderable manual decals OR (b) the auto-puddle
-		// system is enabled (it always paints a fullscreen quad once on, and
-		// uses puddleAmount=0 as its own per-frame early-out inside the shader).
 		bool anyManualDecal = false;
 		for (auto* d : decals)
 		{
