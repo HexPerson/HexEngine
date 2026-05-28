@@ -782,6 +782,14 @@ namespace HexEngine
 			ss << "\t\tfloat2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));\n";
 			ss << "\t\tfloat transparencyAlpha = saturate(opacity * baseColor.a);\n";
 			ss << "\t\tfloat outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;\n";
+			// Rain-drip cell-grid diagnostic (see r_rainDripDebug) - same as
+			// DefaultPixel.shader so graph-compiled materials show the same
+			// visualization when the flag is on.
+			ss << "\t\tif (g_rainDripDebug > 0.5f)\n";
+			ss << "\t\t{\n";
+			ss << "\t\t\tconst float __isHorizDebug = step(0.5f, worldNormal.y);\n";
+			ss << "\t\t\tfinalRGB = RainDripsCellGridDebug(worldNormal, input.positionWS.xyz, g_time, __isHorizDebug);\n";
+			ss << "\t\t}\n";
 			ss << "\t\toutput.diff = float4(finalRGB, outputAlpha);\n";
 			// Smoothness can be graph-driven via the Smoothness output semantic;
 			// fall back to the standard material's smoothness scalar when the graph

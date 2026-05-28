@@ -197,6 +197,13 @@ namespace HexEngine
 	// the pass isn't drawing - either RenderDecals is early-outing, the shader
 	// failed to load, or the RT binding got clobbered.
 	HVar r_autoPuddlesDebugSolid("r_autoPuddlesDebugSolid", "Diagnostic: paint solid red regardless of all checks", false, false, true);
+	// Rain-drip cell-grid visualizer. Paints cellFrac.x in R, cellFrac.y in G,
+	// and a thin grid line in B straight into the surface colour - lets us see
+	// the rain-drip basis (square cells = good 2D basis; horizontal stripes =
+	// degenerate basis) and the streak direction (cells should slide DOWN over
+	// time on vertical surfaces). Bypasses every other rain-drip check so it
+	// works on dry materials too.
+	HVar r_rainDripDebug("r_rainDripDebug", "Diagnostic: paint rain-drip cell grid on every material", false, false, true);
 
 		static int32_t GetVolumetricEffectiveSteps()
 		{
@@ -1396,6 +1403,7 @@ namespace HexEngine
 			bufferData._hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
 			bufferData._hdrPeakNits = r_hdrPeakNits._val.f32;
 			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 5));
+			bufferData._rainDripDebug = r_rainDripDebug._val.b ? 1.0f : 0.0f;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
 
 			// Shadowmap data

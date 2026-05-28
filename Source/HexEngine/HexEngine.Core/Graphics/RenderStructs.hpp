@@ -273,7 +273,13 @@ namespace HexEngine
 		// SceneRenderer.cpp (0=Reinhard, 2=ACES Fitted default, etc.).
 		// Stored as float for HLSL alignment uniformity; shader casts to int.
 		float _tonemapOperator;
-		float _hdr_pad1;
+		// Debug visualization flag for the rain-drip system. 0 = normal output,
+		// > 0.5 = ApplyRainDroplets writes its cell-grid (cellFrac as R/G channels)
+		// straight into the surface colour so we can see the basis + scroll
+		// direction visually. Plumbed via PerFrameBuffer because it has to reach
+		// every material shader path (DefaultPixel + DefaultAnimated + graph-
+		// compiled materials) without per-shader cbuffer rewiring.
+		float _rainDripDebug;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

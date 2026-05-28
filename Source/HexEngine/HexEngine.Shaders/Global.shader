@@ -217,7 +217,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// Tonemap operator id - cast to int in the tonemap shaders to
 		// pick a curve from TonemapOperators.shader::ApplyTonemap.
 		float g_tonemapOperator;
-		float g_hdr_pad1;
+		// Diagnostic flag for rain-drip visualization. 0 = normal,
+		// > 0.5 = paint cell grid (cellFrac.x in R, cellFrac.y in G) instead of
+		// running the normal-perturbation path. Driven from r_rainDripDebug.
+		float g_rainDripDebug;
 	};
 
 	struct MaterialProps

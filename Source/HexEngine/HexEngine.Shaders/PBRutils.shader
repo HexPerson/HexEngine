@@ -534,6 +534,27 @@
 		return frac((p3.xx + p3.yz) * p3.zy);
 	}
 
+	// Computes the cell grid the rain-drip system uses, independent of wetness.
+	// Used by the debug visualizer so we can SEE the basis the noise samples
+	// (squares = good 2D basis; horizontal stripes = degenerate basis) and the
+	// scroll direction (the grid should slide DOWN over time on walls).
+	// Returns (cellFrac.x, cellFrac.y, gridLine) in [0, 1].
+	float3 RainDripsCellGridDebug(float3 baseNormalWS, float3 worldPos, float time, float isHorizontal)
+	{
+		const float kCellSize = 0.15f;
+		const float3 worldUp = float3(0.0f, 1.0f, 0.0f);
+		const float3 horizAxis = normalize(cross(worldUp, baseNormalWS) + float3(1e-4f, 0.0f, 0.0f));
+		const float wallHorizCoord = dot(worldPos, horizAxis);
+		float2 uv = lerp(float2(wallHorizCoord, worldPos.y), worldPos.xz, isHorizontal) / kCellSize;
+		const float streakSpeed = 0.6f;
+		uv.y += time * streakSpeed * (1.0f - isHorizontal);
+		const float2 cellFrac = frac(uv);
+		// Thin grid line at cell boundaries so the cell shape is visible at a
+		// glance - tells us whether cells are 2D squares (good) or 1D stripes (bad).
+		const float gridLine = step(0.95f, max(cellFrac.x, cellFrac.y));
+		return float3(cellFrac.x, cellFrac.y, gridLine);
+	}
+
 	float4 ApplyRainDroplets(
 		float3 baseNormalWS,
 		float3 worldPos,

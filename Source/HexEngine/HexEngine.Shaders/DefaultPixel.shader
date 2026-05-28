@@ -406,6 +406,18 @@
 			transparencyAlpha *= (1.0f - whiteMask);
 		}
 		const float outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;
+
+		// Rain-drip diagnostic: when r_rainDripDebug is on, paint the cell-grid
+		// pattern straight into the surface colour so we can see the basis and
+		// streak direction visually. cellFrac.x in R, cellFrac.y in G, thin grid
+		// line in B. Should look like proper 2D squares sliding down on walls;
+		// any horizontal stripe artifact would be immediately obvious.
+		if (g_rainDripDebug > 0.5f)
+		{
+			const float isHorizDebug = step(0.5f, worldNormal.y);
+			finalRGB = RainDripsCellGridDebug(worldNormal, input.positionWS.xyz, g_time, isHorizDebug);
+		}
+
 		output.diff = float4(finalRGB, outputAlpha);
 
 		// material output is: metallic, roughness, smoothness, reserved (0)
