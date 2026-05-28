@@ -193,6 +193,20 @@
 		float4 pixelColour = g_beautyTex.Sample(g_pointSampler, screenPos);
 		float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
 		float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
+
+		// Rain-drip cell-grid diagnostic. Runs in the deferred lighting pass so
+		// it bypasses every per-material surface shader path - if a pixel has
+		// valid GBuffer data (any opaque surface, regardless of which shader
+		// wrote it), it gets the grid here. Lets us tell whether a mesh that
+		// doesn't show the grid is failing to write the GBuffer or just using
+		// a surface shader without my injected per-PS debug check.
+		if (g_rainDripDebug > 0.5f && pixelNormal.w > 0.0f)
+		{
+			const float3 nWS = normalize(pixelNormal.xyz);
+			const float  isHoriz = step(0.5f, nWS.y);
+			const float3 grid = RainDripsCellGridDebug(nWS, pixelPosWS.xyz, g_time, isHoriz);
+			return float4(grid, 1.0f);
+		}
 		//float4 pixelMaterial = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 		
 		//return float4(pixelColour.aaa, 1.0f);
