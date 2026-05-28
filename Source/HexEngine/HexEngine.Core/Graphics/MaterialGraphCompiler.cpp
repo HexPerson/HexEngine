@@ -746,6 +746,21 @@ namespace HexEngine
 			else
 				ss << "\t\tfloat metallic = saturate(g_material.metallicFactor);\n";
 
+			// Rain droplets - mirror what DefaultPixel.shader does so graph-authored
+			// materials get the same wet-with-droplets look when they opt in via the
+			// MaterialDialog's Rain Drip Intensity slider. ApplyRainDroplets comes
+			// from PBRutils (already in our PixelShaderIncludes above). World-space
+			// noise stays anchored as the camera moves; isHorizontal switches between
+			// "drops bead" (floor / road) and "drops streak" (vertical surfaces).
+			ss << "\t\tconst float __rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;\n";
+			ss << "\t\tif (__rainStrength > 0.001f)\n";
+			ss << "\t\t{\n";
+			ss << "\t\t\tconst float __isHorizontal = step(0.5f, worldNormal.y);\n";
+			ss << "\t\t\tconst float4 __rainResult = ApplyRainDroplets(worldNormal, input.positionWS.xyz, input.tangent, input.binormal, __rainStrength, g_time, __isHorizontal);\n";
+			ss << "\t\t\tworldNormal = __rainResult.xyz;\n";
+			ss << "\t\t\troughness = max(roughness * __rainResult.w, MinRoughness);\n";
+			ss << "\t\t}\n";
+
 			if (emissiveExpr != nullptr)
 				ss << std::format("\t\tfloat3 emission = {};\n", ToFloat3(ctx, *emissiveExpr));
 			else
