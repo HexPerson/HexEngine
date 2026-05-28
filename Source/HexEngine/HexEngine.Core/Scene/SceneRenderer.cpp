@@ -183,6 +183,13 @@ namespace HexEngine
 	// How much puddles darken the underlying albedo. 0 = mat-only (just smoother),
 	// 1 = full black puddle. 0.4 is a realistic "dark water on light pavement" look.
 	HVar r_autoPuddlesDarken("r_autoPuddlesDarken", "Albedo darkening applied where puddles are (0 = none, 1 = full black)", 0.4f, 0.0f, 1.0f);
+	// Debug / "look at the puddles without setting up rain" override. The shader
+	// uses max(g_weatherSurface.puddleAmount, this) as its effective rain value -
+	// so at 0 (default) the system follows the weather as normal, at 1 it forces
+	// full-strength puddles regardless of the weather state. Useful for verifying
+	// the system is wired correctly when no WeatherController is animating
+	// puddleAmount yet.
+	HVar r_autoPuddlesForceRain("r_autoPuddlesForceRain", "Override puddleAmount minimum (0 = follow weather, 1 = force full puddles)", 0.0f, 0.0f, 1.0f);
 
 		static int32_t GetVolumetricEffectiveSteps()
 		{
@@ -3164,7 +3171,8 @@ namespace HexEngine
 				r_autoPuddlesOpacity._val.f32);
 			apc.appearance = math::Vector4(
 				r_autoPuddlesDarken._val.f32,
-				0.0f, 0.0f, 0.0f);
+				r_autoPuddlesForceRain._val.f32,
+				0.0f, 0.0f);
 			_autoPuddlesConstantsBuffer->Write(&apc, sizeof(apc));
 			graphics->SetConstantBufferPS(4, _autoPuddlesConstantsBuffer);
 

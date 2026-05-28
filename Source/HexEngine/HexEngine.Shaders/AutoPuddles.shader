@@ -48,7 +48,10 @@
 		float4 g_autoPuddleParams;
 
 		// x = darken amount (multiplies surface albedo by 1 - x at full puddle)
-		// y/z/w reserved
+		// y = force-rain override (max'd against g_weatherSurface.puddleAmount
+		//     so debug / first-look-at-the-feature workflows can crank puddles
+		//     without setting up a WeatherController)
+		// z/w reserved
 		float4 g_autoPuddleAppearance;
 	};
 
@@ -117,8 +120,10 @@
 		}
 
 		// Skip when the weather system says it's dry - cheap early-out before the
-		// noise eval, which keeps the pass essentially free in clear weather.
-		const float rainMul = saturate(g_weatherSurface.puddleAmount);
+		// noise eval, which keeps the pass essentially free in clear weather. The
+		// debug-force override (g_autoPuddleAppearance.y) raises the minimum so
+		// users can preview puddles without wiring up rain in their scene.
+		const float rainMul = saturate(max(g_weatherSurface.puddleAmount, g_autoPuddleAppearance.y));
 		if (rainMul <= 0.0f)
 		{
 			o.diff = float4(0, 0, 0, 0);
