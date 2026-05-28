@@ -736,6 +736,15 @@ namespace HexEngine
 
 		_properties = new ComponentWidget(this, Point((size.x * 70) / 100 + 10, graphTop), Point(size.x - ((size.x * 70) / 100) - 20, size.y - graphTop - 10), L"Node Properties");
 
+		// Material-level scalars that aren't node-driven. Placed at the top of the
+		// properties panel so they're always visible regardless of which node is
+		// selected. rainDripIntensity multiplies g_weatherSurface.wetness in the
+		// graph-compiled PS to drive procedural rain droplets - turn this up on
+		// the dome / car / glass materials so they bead with rain, leave at 0 for
+		// surfaces that should look the same regardless of weather.
+		new DragFloat(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 20),
+			L"Rain Drip Intensity", &_material->_properties.rainDripIntensity, 0.0f, 1.0f, 0.01f, 2);
+
 		_selectedNodeLabel = new LineEdit(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 20), L"Selected Node");
 		_selectedNodeLabel->SetDoesCallbackWaitForReturn(false);
 		_selectedNodeLabel->DisableRecursive();
