@@ -549,16 +549,27 @@
 		if (wetness <= 0.001f)
 			return float4(baseNormalWS, 1.0f);
 
-		// Drop pattern: cell noise in world XZ for horizontal surfaces, world XY
-		// for vertical (streaks fall in Y). Picking the dominant projection plane
-		// from isHorizontal lets the SAME function handle both cases cleanly.
+		// Drop pattern: cell noise sampled in the two world axes that vary across
+		// the surface. For a horizontal floor that's XZ. For a wall that's NOT
+		// XY across the board - if the wall's normal points along world X (i.e.
+		// the wall lies in the YZ plane), then worldX is CONSTANT across the
+		// wall and only Y/Z vary, so sampling on XY produces 1-D noise that
+		// renders as horizontal stripes. Project onto a tangent basis derived
+		// from the surface normal so we always see proper 2D variation:
+		//   - horiz axis = cross(world up, normal) - sweeps left/right across the wall
+		//   - vert axis  = world Y                  - sweeps up/down
 		const float kCellSize = 0.15f; // ~15 cm between drop centres
-		float2 uv = lerp(worldPos.xy, worldPos.xz, isHorizontal) / kCellSize;
+		const float3 worldUp = float3(0.0f, 1.0f, 0.0f);
+		const float3 horizAxis = normalize(cross(worldUp, baseNormalWS) + float3(1e-4f, 0.0f, 0.0f));
+		const float wallHorizCoord = dot(worldPos, horizAxis);
+		float2 uv = lerp(float2(wallHorizCoord, worldPos.y), worldPos.xz, isHorizontal) / kCellSize;
 
-		// Vertical surfaces: scroll the UV along world -Y over time so drops
-		// streak downward. Horizontal: time-pulse drops in place.
+		// Vertical surfaces: scroll the UV along +Y over time so the noise
+		// pattern slides DOWN in world space (drops fall). The previous -=
+		// made features slide upward toward the sky. Horizontal: no scroll;
+		// drops just pulse in place via their per-cell phase.
 		const float streakSpeed = 0.6f;
-		uv.y -= time * streakSpeed * (1.0f - isHorizontal);
+		uv.y += time * streakSpeed * (1.0f - isHorizontal);
 
 		const float2 cell     = floor(uv);
 		const float2 cellFrac = frac(uv);
