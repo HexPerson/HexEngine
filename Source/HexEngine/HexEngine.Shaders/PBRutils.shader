@@ -496,4 +496,110 @@
 
 		return float4(color, 1.0f);
 	}
+
+	// =====================================================================
+	// Procedural rain droplets
+	//
+	// Cheap world-space "wet surface with rain drops" effect. Two-layer cell
+	// noise drives discrete drop impacts (cell centres) overlaid with a slow
+	// running-streak pattern that drifts downward along world -Y. Returns
+	// {perturbed normal, roughness multiplier} so the caller can drop normal
+	// + lower roughness in one shot.
+	//
+	// Inputs:
+	//   baseNormalWS - the surface normal BEFORE droplet perturbation (world space)
+	//   worldPos     - the surface world-space position
+	//   tangentWS    - any world-space tangent direction (for offsetting the normal)
+	//   binormalWS   - the world-space binormal (typically cross(normal, tangent))
+	//   wetness      - scalar 0..1 driving overall droplet density + amplitude
+	//   time         - per-frame g_time, for animation
+	//   isHorizontal - 1 if the surface is mostly up-facing (drops bead), 0 if
+	//                  vertical (drops streak downward)
+	//
+	// Outputs:
+	//   .xyz = perturbed normal (already normalized)
+	//   .w   = roughness multiplier (1 = no change, 0 = mirror)
+	// =====================================================================
+	float Hash21_Rain(float2 p)
+	{
+		p = frac(p * float2(123.34f, 456.21f));
+		p += dot(p, p + 45.32f);
+		return frac(p.x * p.y);
+	}
+
+	float2 Hash22_Rain(float2 p)
+	{
+		float3 p3 = frac(float3(p.xyx) * float3(0.1031f, 0.1030f, 0.0973f));
+		p3 += dot(p3, p3.yzx + 33.33f);
+		return frac((p3.xx + p3.yz) * p3.zy);
+	}
+
+	float4 ApplyRainDroplets(
+		float3 baseNormalWS,
+		float3 worldPos,
+		float3 tangentWS,
+		float3 binormalWS,
+		float wetness,
+		float time,
+		float isHorizontal)
+	{
+		// Cheap early-out so dry materials cost nothing - this gets called on
+		// every pixel in DefaultPixel so we want the no-op path to be a single
+		// branch.
+		if (wetness <= 0.001f)
+			return float4(baseNormalWS, 1.0f);
+
+		// Drop pattern: cell noise in world XZ for horizontal surfaces, world XY
+		// for vertical (streaks fall in Y). Picking the dominant projection plane
+		// from isHorizontal lets the SAME function handle both cases cleanly.
+		const float kCellSize = 0.15f; // ~15 cm between drop centres
+		float2 uv = lerp(worldPos.xy, worldPos.xz, isHorizontal) / kCellSize;
+
+		// Vertical surfaces: scroll the UV along world -Y over time so drops
+		// streak downward. Horizontal: time-pulse drops in place.
+		const float streakSpeed = 0.6f;
+		uv.y -= time * streakSpeed * (1.0f - isHorizontal);
+
+		const float2 cell     = floor(uv);
+		const float2 cellFrac = frac(uv);
+
+		// Drop centre within the cell, jittered randomly so the grid isn't visible.
+		const float2 dropCentre = Hash22_Rain(cell) * 0.6f + 0.2f;
+
+		// Lifetime: each drop has a per-cell phase + period. Pulses between 0..1
+		// using a sin curve so drops grow then shrink rather than blinking on/off.
+		const float dropPhase  = Hash21_Rain(cell + 7.13f);
+		const float dropPeriod = 1.5f + dropPhase * 1.5f; // 1.5..3 sec per drop
+		const float t          = (time + dropPhase * 10.0f) / dropPeriod;
+		const float lifetime   = saturate(sin(t * 6.2831f) * 0.5f + 0.5f);
+
+		// Max drop radius (relative to cell), modulated by wetness + lifetime.
+		const float maxRadius  = 0.35f * wetness * lifetime;
+
+		// Distance from this pixel to drop centre.
+		const float2 toCentre  = cellFrac - dropCentre;
+		const float  dist      = length(toCentre);
+
+		// Drop height field: 1 at centre, 0 at radius edge, smoothstep falloff.
+		const float dropMask   = saturate(1.0f - dist / max(maxRadius, 0.001f));
+		const float dropHeight = smoothstep(0.0f, 1.0f, dropMask);
+
+		// Normal perturbation: gradient of the height field points outward from
+		// the drop centre. Project that into the tangent-space basis to get a
+		// world-space offset we can add to the base normal. The 2.0 multiplier
+		// is just a strength dial - higher = more dramatic drops.
+		const float2 dir = (dist > 0.001f) ? (toCentre / dist) : float2(0.0f, 0.0f);
+		const float  amp = dropHeight * dropHeight * 0.8f * wetness;
+		const float3 perturbWS = (dir.x * tangentWS + dir.y * binormalWS) * amp;
+		const float3 newNormal = normalize(baseNormalWS - perturbWS);
+
+		// Wet area is also smoother (lower roughness) - between drops the
+		// thin water film already smooths the surface, drops just punch it more.
+		// Mix between 1.0 (dry) and ~0.25 (full wet) by the dropMask, so drops
+		// stand out as the smoothest pixels.
+		const float wetFloor = lerp(1.0f, 0.55f, wetness);   // base "wet but no drop"
+		const float roughMul = lerp(wetFloor, 0.25f, dropMask * wetness);
+
+		return float4(newNormal, roughMul);
+	}
 }

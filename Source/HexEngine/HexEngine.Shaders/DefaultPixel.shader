@@ -1,6 +1,6 @@
 "GlobalIncludes"
 {
-	MeshCommon	
+	MeshCommon
 	Utils
 }
 "Global"
@@ -293,6 +293,34 @@
 			{
 				albedo.rgb *= g_ambientOcclusionMap.Sample(g_textureSampler, input.texcoord).r;
 			}
+		}
+
+		// Rain droplets: when the material opts in (rainDripIntensity > 0) and
+		// it's actually raining (g_weatherSurface.wetness > 0), perturb the
+		// normal + drop roughness via procedural droplet noise so the surface
+		// reads as "wet with rain hitting it". Reuses the same TBN basis the
+		// normal-map sampling above used. World-space noise so drops stay
+		// anchored as the camera moves - fine for static geometry, would slide
+		// on rotating meshes (acceptable v1 limit).
+		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
+		if (rainStrength > 0.001f)
+		{
+			// Surface up-facing-ness selects between "drops bead in place" (horizontal)
+			// and "drops streak downward" (vertical). 0.5 splits a 60deg cone of
+			// flat-ish surfaces from the rest.
+			const float isHorizontal = step(0.5f, worldNormal.y);
+			const float4 rainResult = ApplyRainDroplets(
+				worldNormal,
+				input.positionWS.xyz,
+				input.tangent,
+				input.binormal,
+				rainStrength,
+				g_time,
+				isHorizontal);
+			worldNormal = rainResult.xyz;
+			// Roughness multiplier. Clamps to avoid over-smoothing pure black-mirror
+			// (which would explode SSR sample radii).
+			roughness   = max(roughness * rainResult.w, MinRoughness);
 		}
 
 		float3 finalRGB = albedo.rgb;

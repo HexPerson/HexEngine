@@ -196,6 +196,12 @@ namespace HexEngine
 			file->Deserialize(properties, "materialModel", props.materialModel);
 			file->Deserialize(properties, "modelParams", props.modelParams);
 
+			// Per-material rain-drip intensity (added with the rain-droplet effect).
+			// Absent from older materials -> defaults to 0 = ignore weather. Authors
+			// turn this up for surfaces that should bead/streak in rain (car bodies,
+			// glass, polished pavement, etc.) and leave it at 0 for dry-only surfaces.
+			file->Deserialize(properties, "rainDripIntensity", props.rainDripIntensity);
+
 			bool affectsGI = true;
 			file->Deserialize(properties, "affectsGI", affectsGI);
 			material->SetAffectsGI(affectsGI);
@@ -562,6 +568,7 @@ namespace HexEngine
 			// Shading model + per-model params (clearcoat / SSS / aniso / sheen).
 			file.Serialize(properties, "materialModel", material->_properties.materialModel);
 			file.Serialize(properties, "modelParams", material->_properties.modelParams);
+			file.Serialize(properties, "rainDripIntensity", material->_properties.rainDripIntensity);
 			file.Serialize(properties, "affectsGI", material->GetAffectsGI());
 			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());
 		}

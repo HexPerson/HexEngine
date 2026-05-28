@@ -329,7 +329,7 @@ namespace HexEngine
 			metallicFactor(0.0f),
 			roughnessFactor(0.5f),
 			smoothness(0.0f),
-			_pad0(0.0f),
+			rainDripIntensity(0.0f),
 			diffuseColour(1.0f),
 			hasTransparency(0),
 			isWater(0),
@@ -355,14 +355,14 @@ namespace HexEngine
 		float metallicFactor;
 		float roughnessFactor;
 		float smoothness;
-		// Pads the (metallic, roughness, smoothness) triplet up to a 16-byte
-		// boundary so the following diffuseColour Vector4 lands at offset 16 -
-		// matches the HLSL cbuffer's implicit padding rules. Previously this
-		// slot held specularProbability, which was dead weight: nothing read
-		// pixelSpecular.a from the gbuffer and the BRDF lobes only consume
-		// .r (metallic) and .g (roughness). Removed to free the slot; named
-		// explicitly so future fields can claim it without an ABI rev.
-		float _pad0;
+		// Per-material rain-drip intensity (0..1). When non-zero AND the global
+		// g_weatherSurface.wetness > 0, DefaultPixel.shader perturbs the surface
+		// normal + drops roughness via procedural droplet noise so the material
+		// reads as "wet with rain droplets". 0 = ignore weather entirely; 1 =
+		// full droplet displacement. Previously this 4-byte slot was a
+		// specularProbability pad that nothing consumed - repurposed without an
+		// ABI rev because the cbuffer offset of diffuseColour is unchanged.
+		float rainDripIntensity;
 		math::Vector4 diffuseColour;
 		math::Vector4 emissiveColour;
 

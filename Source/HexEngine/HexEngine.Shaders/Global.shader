@@ -225,11 +225,12 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float metallicFactor;
 		float roughnessFactor;
 		float smoothness;
-		// Reserved slot - used to hold specularProbability but nothing actually
-		// sampled .a from the mat gbuffer RT so it was dead weight. Kept here to
-		// preserve the cbuffer offset of diffuseColour and the overall struct
-		// size; HLSL would pad to 16 anyway, this just makes the layout explicit.
-		float _pad0;
+		// Per-material rain-drip intensity (0..1). When non-zero AND
+		// g_weatherSurface.wetness > 0, DefaultPixel.shader's rain-droplet
+		// perturbation activates - normal pushed toward random tangent-space
+		// offsets to read as drops, roughness drops to read as wet. Previously
+		// this slot held a dead specularProbability pad.
+		float rainDripIntensity;
 
 		float4 diffuseColour;
 		float4 emissiveColour;

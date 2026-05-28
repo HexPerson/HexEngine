@@ -89,6 +89,14 @@ namespace HexEngine
 			L"Model Param W (unused / clearcoat unused / unused / sheen.b)",
 			&material->_properties.modelParams.w, -1.0f, 1.0f, 0.01f, 3);
 
+		// Rain-drip intensity. Multiplied by g_weatherSurface.wetness in the
+		// surface shader; 0 = ignore weather, 1 = full drip displacement when
+		// it's raining hard. Authored per-material so glass / car bodies /
+		// polished pavement opt in but brick walls and interiors stay dry.
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Rain Drip Intensity",
+			&material->_properties.rainDripIntensity, 0.0f, 1.0f, 0.01f, 2);
+
 		auto save = new Button(_layout, _layout->GetNextPos(), Point(80, 20), L"Save", std::bind(&MaterialDialog::Save, this));
 
 		

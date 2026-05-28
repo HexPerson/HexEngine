@@ -341,6 +341,26 @@
 			albedo.rgb *= g_ambientOcclusionMap.Sample(g_textureSampler, input.texcoord).r;
 		}
 
+		// Rain droplets - same procedural perturbation DefaultPixel uses. See
+		// ApplyRainDroplets in PBRutils.shader for the full doc. Animated meshes
+		// hit this less often (skinned characters in rain), but if the user opts
+		// in via the material slider they get the same wet-surface look.
+		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
+		if (rainStrength > 0.001f)
+		{
+			const float isHorizontal = step(0.5f, worldNormal.y);
+			const float4 rainResult = ApplyRainDroplets(
+				worldNormal,
+				input.positionWS.xyz,
+				input.tangent,
+				input.binormal,
+				rainStrength,
+				g_time,
+				isHorizontal);
+			worldNormal = rainResult.xyz;
+			roughness   = max(roughness * rainResult.w, MinRoughness);
+		}
+
 		float3 finalRGB = albedo.rgb;
 
 		// Apply emission, if there was any and multiply it by the emission colours and factor
