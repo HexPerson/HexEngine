@@ -69,7 +69,10 @@
 		// y = force-rain override (max'd against g_weatherSurface.puddleAmount
 		//     so debug / first-look-at-the-feature workflows can crank puddles
 		//     without setting up a WeatherController)
-		// z/w reserved
+		// z = DEBUG: solid-red bypass. When > 0.5 the PS outputs solid red on diff
+		//     + bright-blue on mat at full alpha, bypassing every check. Tells us
+		//     whether the pass is even running / the RT binding is valid.
+		// w reserved
 		float4 g_autoPuddleAppearance;
 	};
 
@@ -131,6 +134,17 @@
 	AutoPuddleOut ShaderMain(AutoPuddlePSIn input)
 	{
 		AutoPuddleOut o = (AutoPuddleOut)0;
+
+		// DEBUG: solid-red bypass for diagnosing "puddles do not show". If this
+		// turns the screen red, the pass + RT bindings are good and the issue is
+		// in the puddle decision logic. If the screen stays normal, the pass
+		// isn't reaching the OM (no draw / wrong RTs / clobbered state).
+		if (g_autoPuddleAppearance.z > 0.5f)
+		{
+			o.diff = float4(1.0f, 0.0f, 0.0f, 1.0f);
+			o.mat  = float4(0.0f, 0.0f, 1.0f, 1.0f);
+			return o;
+		}
 
 		const float4 surfacePos = g_positionTex.Sample(g_pointSampler, input.texcoord);
 

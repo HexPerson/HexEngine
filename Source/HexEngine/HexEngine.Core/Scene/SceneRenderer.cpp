@@ -190,6 +190,13 @@ namespace HexEngine
 	// the system is wired correctly when no WeatherController is animating
 	// puddleAmount yet.
 	HVar r_autoPuddlesForceRain("r_autoPuddlesForceRain", "Override puddleAmount minimum (0 = follow weather, 1 = force full puddles)", 0.0f, 0.0f, 1.0f);
+	// Diagnostic: when ON, the auto-puddle shader bypasses ALL checks and outputs
+	// solid red on diff + bright-blue on mat at full alpha. If the screen turns
+	// red with r_autoPuddles 1 + this, the pass + RT binding are correct and the
+	// problem is in the puddle decision logic. If the screen does NOT turn red,
+	// the pass isn't drawing - either RenderDecals is early-outing, the shader
+	// failed to load, or the RT binding got clobbered.
+	HVar r_autoPuddlesDebugSolid("r_autoPuddlesDebugSolid", "Diagnostic: paint solid red regardless of all checks", false, false, true);
 
 		static int32_t GetVolumetricEffectiveSteps()
 		{
@@ -3183,6 +3190,19 @@ namespace HexEngine
 		// the HVar toggle (artists turn the whole system off without recompiling).
 		if (autoPuddlesOn && _autoPuddlesQuadVB != nullptr && _autoPuddlesQuadIB != nullptr)
 		{
+			// Rate-limited "I am running" log so the user can sanity-check whether
+			// the auto-puddle pass is even being entered without needing PIX. Hits
+			// the log roughly every 2 seconds at 60 fps.
+			{
+				static int sAutoPuddleLogCounter = 0;
+				if ((sAutoPuddleLogCounter++ % 120) == 0)
+				{
+					LOG_INFO("AutoPuddles pass running (forceRain=%.2f, debugSolid=%d)",
+						r_autoPuddlesForceRain._val.f32,
+						r_autoPuddlesDebugSolid._val.b ? 1 : 0);
+				}
+			}
+
 			// Bind the live GBuffer normal RT as SRV at t1 (we don't write to it
 			// during the decal/auto-puddle pass so reading is legal). The auto-
 			// puddle PS samples it for the per-pixel flatness test.
@@ -3203,7 +3223,8 @@ namespace HexEngine
 			apc.appearance = math::Vector4(
 				r_autoPuddlesDarken._val.f32,
 				r_autoPuddlesForceRain._val.f32,
-				0.0f, 0.0f);
+				r_autoPuddlesDebugSolid._val.b ? 1.0f : 0.0f,
+				0.0f);
 			_autoPuddlesConstantsBuffer->Write(&apc, sizeof(apc));
 			graphics->SetConstantBufferPS(4, _autoPuddlesConstantsBuffer);
 
