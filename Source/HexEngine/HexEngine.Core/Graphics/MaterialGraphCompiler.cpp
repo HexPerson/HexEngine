@@ -1248,42 +1248,73 @@ namespace HexEngine
 
 	bool MaterialGraphCompiler::IsCachedGraphShaderStale(const fs::path& cachedShaderPath)
 	{
-		// Filename pattern: "<materialStem>_graph_<srcHash>_<incHash>.hcs". Both
-		// hashes are 16 lowercase hex chars. Anything not matching = treat as
-		// stale (better to recompile once than to silently render against a
-		// shader whose origin we can't verify).
 		if (cachedShaderPath.empty())
 			return true;
 
-		const std::string stem = cachedShaderPath.stem().string(); // strips .hcs
-		const auto graphTokenPos = stem.find("_graph_");
-		if (graphTokenPos == std::string::npos)
-			return true;
-
-		// Everything after "_graph_" is "<srcHash>_<incHash>". Split on the LAST
-		// underscore so we tolerate material stems that happen to contain
-		// underscores themselves earlier in the name.
-		const std::string hashes = stem.substr(graphTokenPos + 7); // 7 = strlen("_graph_")
-		const auto sep = hashes.rfind('_');
-		if (sep == std::string::npos)
-			return true;
-		const std::string cachedIncHash = hashes.substr(sep + 1);
-		if (cachedIncHash.size() != 16)
-			return true;
-
-		// Compute the current expected includesHash using the same logic the
-		// graph compiler uses at compile time.
+		// First: hash-based check. Filename pattern is
+		// "<materialStem>_graph_<srcHash>_<incHash>.hcs"; extract <incHash> and
+		// compare against the currently-resolvable include directory's hash.
+		// Catches the common case where engine .shader files were edited.
 		std::vector<fs::path> dummy;
 		const fs::path includeDir = ResolveShaderIncludeDirectory(&dummy);
 		const std::string currentIncHash = ComputeIncludesHash(includeDir);
-		if (currentIncHash == "0000000000000000")
+		const bool hasIncludeDir = (currentIncHash != "0000000000000000");
+
+		if (hasIncludeDir)
 		{
-			// No include dir found - we can't verify, so leave the cached shader
-			// alone. Forcing recompile here would break runtime / packaged builds
-			// where the source .shader files aren't present.
+			const std::string stem = cachedShaderPath.stem().string();
+			const auto graphTokenPos = stem.find("_graph_");
+			if (graphTokenPos != std::string::npos)
+			{
+				const std::string hashes = stem.substr(graphTokenPos + 7);
+				const auto sep = hashes.rfind('_');
+				if (sep != std::string::npos)
+				{
+					const std::string cachedIncHash = hashes.substr(sep + 1);
+					if (cachedIncHash.size() == 16 && cachedIncHash != currentIncHash)
+						return true; // hash explicitly differs -> stale
+				}
+			}
+
+			// Second: mtime-based fallback. Regardless of whether the filename
+			// parsed cleanly or the hashes happen to match (collisions /
+			// recompiles preserved the same hash by coincidence), if the cached
+			// .hcs file is older than ANY .shader file in the current include
+			// directory, treat it as stale. This is the belt-and-braces check
+			// that catches "I edited PBRutils.shader, rebuilt, but the per-
+			// material .hcs in the generated-shaders folder is still from
+			// last week" - the failure mode the user keeps hitting.
+			std::error_code mtec;
+			const auto cachedMtime = fs::last_write_time(cachedShaderPath, mtec);
+			if (mtec)
+				return true; // can't read mtime -> can't verify -> safest to recompile
+
+			std::error_code dirEc;
+			for (const auto& entry : fs::directory_iterator(includeDir, dirEc))
+			{
+				if (dirEc)
+					break;
+				if (!entry.is_regular_file())
+					continue;
+				if (entry.path().extension() != L".shader")
+					continue;
+
+				std::error_code fec;
+				const auto srcMtime = fs::last_write_time(entry.path(), fec);
+				if (fec)
+					continue;
+				if (srcMtime > cachedMtime)
+					return true; // an include is newer than the cache -> stale
+			}
+
+			// All include files are older than (or equal to) the cached .hcs and
+			// the includes-hash matched. The cache is current.
 			return false;
 		}
 
-		return cachedIncHash != currentIncHash;
+		// No include directory resolvable (e.g. shipping build with stripped
+		// source). Leave the cached shader alone - forcing recompile would
+		// either fail or pick up the wrong source.
+		return false;
 	}
 }
