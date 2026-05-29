@@ -564,84 +564,150 @@
 		float time,
 		float isHorizontal)
 	{
-		// Cheap early-out so dry materials cost nothing - this gets called on
-		// every pixel in DefaultPixel so we want the no-op path to be a single
-		// branch.
+		// Cheap early-out so dry materials cost nothing.
 		if (wetness <= 0.001f)
 			return float4(baseNormalWS, 1.0f);
 
-		// Drop pattern: cell noise sampled in the two world axes that vary across
-		// the surface. For a horizontal floor that's XZ. For a wall that's NOT
-		// XY across the board - if the wall's normal points along world X (i.e.
-		// the wall lies in the YZ plane), then worldX is CONSTANT across the
-		// wall and only Y/Z vary, so sampling on XY produces 1-D noise that
-		// renders as horizontal stripes. Project onto a tangent basis derived
-		// from the surface normal so we always see proper 2D variation:
-		//   - horiz axis = cross(world up, normal) - sweeps left/right across the wall
-		//   - vert axis  = world Y                  - sweeps up/down
-		const float kCellSize = 0.15f; // ~15 cm between drop centres
-		const float3 worldUp = float3(0.0f, 1.0f, 0.0f);
+		// Surface-local horizontal axis. cross(up, normal) sweeps left/right
+		// across any vertical wall regardless of which world axis the wall is
+		// aligned to. The 1e-4 bias keeps the normalize stable for surfaces with
+		// normals close to world up; those go through the isHorizontal path
+		// anyway so the bias never matters visually.
+		const float3 worldUp   = float3(0.0f, 1.0f, 0.0f);
 		const float3 horizAxis = normalize(cross(worldUp, baseNormalWS) + float3(1e-4f, 0.0f, 0.0f));
 		const float wallHorizCoord = dot(worldPos, horizAxis);
-		float2 uv = lerp(float2(wallHorizCoord, worldPos.y), worldPos.xz, isHorizontal) / kCellSize;
 
-		// Vertical surfaces: scroll the UV along +Y over time so the noise
-		// pattern slides DOWN in world space (drops fall). The previous -=
-		// made features slide upward toward the sky. Horizontal: no scroll;
-		// drops just pulse in place via their per-cell phase.
-		const float streakSpeed = 0.6f;
-		uv.y += time * streakSpeed * (1.0f - isHorizontal);
+		// Output accumulators. Start with a base "wet film" roughness drop
+		// (whole surface gets slightly smoother in rain) and the unperturbed
+		// normal. Layers below add to these.
+		float3 perturbedNormal = baseNormalWS;
+		float  roughMul        = lerp(1.0f, 0.55f, wetness);
 
-		const float2 cell     = floor(uv);
-		const float2 cellFrac = frac(uv);
+		// =====================================================================
+		// LAYER A: small static beads
+		//
+		// Cell-based pulsing drops that don't translate over time - they grow
+		// in then fade out in place via a per-cell sin lifetime. Matches the
+		// fine stippling visible between the streaks on a real wet window.
+		// World-XZ space for floors / world-(horizAxis, Y) for walls.
+		// Amplitude is deliberately reduced from earlier versions - this layer
+		// is supporting texture now, the dominant effect on walls comes from
+		// the streak layer below.
+		// =====================================================================
+		{
+			const float kCellSize = 0.12f;
+			const float2 uvA = lerp(float2(wallHorizCoord, worldPos.y), worldPos.xz, isHorizontal) / kCellSize;
+			const float2 cellA     = floor(uvA);
+			const float2 cellFracA = frac(uvA);
 
-		// Drop centre within the cell, jittered randomly so the grid isn't visible.
-		const float2 dropCentre = Hash22_Rain(cell) * 0.6f + 0.2f;
+			const float2 dropCentre = Hash22_Rain(cellA) * 0.6f + 0.2f;
+			const float  dropPhase  = Hash21_Rain(cellA + 7.13f);
+			const float  dropPeriod = 1.5f + dropPhase * 1.5f;
+			const float  tA         = (time + dropPhase * 10.0f) / dropPeriod;
+			const float  lifetime   = saturate(sin(tA * 6.2831f) * 0.5f + 0.5f);
+			const float  maxRadius  = 0.28f * wetness * lifetime;
 
-		// Lifetime: each drop has a per-cell phase + period. Pulses between 0..1
-		// using a sin curve so drops grow then shrink rather than blinking on/off.
-		const float dropPhase  = Hash21_Rain(cell + 7.13f);
-		const float dropPeriod = 1.5f + dropPhase * 1.5f; // 1.5..3 sec per drop
-		const float t          = (time + dropPhase * 10.0f) / dropPeriod;
-		const float lifetime   = saturate(sin(t * 6.2831f) * 0.5f + 0.5f);
+			const float2 toCentre  = cellFracA - dropCentre;
+			const float  dist      = length(toCentre);
+			const float  dropMask  = saturate(1.0f - dist / max(maxRadius, 0.001f));
+			const float  dropH     = smoothstep(0.0f, 1.0f, dropMask);
 
-		// Max drop radius (relative to cell), modulated by wetness + lifetime.
-		const float maxRadius  = 0.35f * wetness * lifetime;
+			if (dist > 0.001f && dropH > 0.001f)
+			{
+				const float2 dir = toCentre / dist;
+				// Reduced amp (0.45 vs 0.9) since this layer is the supporting one.
+				// Convex bump: ADD the outward gradient.
+				const float  amp = dropH * dropH * 0.45f * wetness;
+				perturbedNormal += (dir.x * tangentWS + dir.y * binormalWS) * amp;
+			}
+			roughMul = lerp(roughMul, 0.25f, dropMask * wetness);
+		}
 
-		// Aspect ratio: walls stretch the drop vertically so it reads as the
-		// start of a runs-down-the-window streak rather than a perfect circle.
-		// 0.55 means the Y "radius" is ~1.8x the X radius. Horizontal surfaces
-		// stay round (1.0). The metric is applied to toCentre before length()
-		// so the drop mask and hence the bump silhouette becomes elliptical.
-		const float2 distMetric = lerp(float2(1.0f, 0.55f), float2(1.0f, 1.0f), isHorizontal);
-		const float2 toCentre        = cellFrac - dropCentre;
-		const float2 toCentreScaled  = toCentre * distMetric;
-		const float  dist            = length(toCentreScaled);
+		// =====================================================================
+		// LAYER B: sliding streaks (walls only)
+		//
+		// For each "lane" (vertical strip of the wall) we drop a single bead
+		// that falls top-to-bottom at a per-lane RANDOM velocity, with a thin
+		// trail above the current head position (where the bead has just been).
+		// Per-lane random parameters break the lockstep uniform-scroll look
+		// from the previous design:
+		//   - velocity in [0.4, 1.4] m/s -> visibly different fall rates
+		//   - lane height in [2, 4] m   -> stacks don't repeat at a fixed period
+		//   - phase offset random       -> drops don't all spawn together
+		//
+		// We sample 3 adjacent lanes per pixel so streaks aren't snapped to a
+		// hard grid - neighbouring lanes' streaks at different horizontal
+		// offsets will overlap at lane boundaries and give a natural variation
+		// in horizontal spacing.
+		// =====================================================================
+		if (isHorizontal < 0.5f)
+		{
+			const float kLaneWidth = 0.18f;
 
-		// Drop height field: 1 at centre, 0 at radius edge, smoothstep falloff.
-		const float dropMask   = saturate(1.0f - dist / max(maxRadius, 0.001f));
-		const float dropHeight = smoothstep(0.0f, 1.0f, dropMask);
+			[unroll]
+			for (int laneOff = -1; laneOff <= 1; ++laneOff)
+			{
+				const float laneIdx     = floor(wallHorizCoord / kLaneWidth) + (float)laneOff;
+				const float laneCenterX = (laneIdx + 0.5f) * kLaneWidth;
 
-		// Normal perturbation: gradient of the height field points outward from
-		// the drop centre. For a CONVEX bump (water beads up due to surface
-		// tension, the standard rain-droplet look) the surface normal at each
-		// point tilts AWAY from the drop centre. Previously this code subtracted
-		// the outward direction from the base normal, which tilted the normal
-		// TOWARD the centre - turning every drop into a dark concave pit (the
-		// "bullet hole" look user reported). Flipping the sign turns them into
-		// the bright reflective beads we want.
-		const float2 dir = (dist > 0.001f) ? (toCentreScaled / dist) : float2(0.0f, 0.0f);
-		const float  amp = dropHeight * dropHeight * 0.9f * wetness;
-		const float3 perturbWS = (dir.x * tangentWS + dir.y * binormalWS) * amp;
-		const float3 newNormal = normalize(baseNormalWS + perturbWS);
+				const float2 hLane     = Hash22_Rain(float2(laneIdx, 17.0f));
+				const float  vel       = lerp(0.4f, 1.4f, hLane.x);
+				const float  cycleTime = lerp(2.5f, 5.0f, hLane.y);
+				const float  phase     = hLane.x * 17.13f + (float)laneOff * 3.7f;
+				const float  laneH     = vel * cycleTime; // total fall distance per cycle
 
-		// Wet area is also smoother (lower roughness) - between drops the
-		// thin water film already smooths the surface, drops just punch it more.
-		// Mix between 1.0 (dry) and ~0.25 (full wet) by the dropMask, so drops
-		// stand out as the smoothest pixels.
-		const float wetFloor = lerp(1.0f, 0.55f, wetness);   // base "wet but no drop"
-		const float roughMul = lerp(wetFloor, 0.25f, dropMask * wetness);
+				// Pixel's position within the lane (mod laneH).
+				const float pixelInLane = frac((worldPos.y + phase * 13.7f) / laneH) * laneH;
 
-		return float4(newNormal, roughMul);
+				// Drop's current position within the lane. Drop starts at top (laneH)
+				// at the beginning of each cycle and falls to 0 at the end. Cycle
+				// resets via frac.
+				const float dropAge      = frac((time + phase) / cycleTime) * cycleTime;
+				const float dropPosInLane = laneH - vel * dropAge;
+
+				// dy = how far the pixel is ABOVE the drop's current head.
+				//   dy > 0  -> drop has already passed here; we're in the trail above it
+				//   dy ~ 0  -> we ARE the drop head
+				//   dy < 0  -> drop hasn't reached us yet; no effect
+				const float dy = pixelInLane - dropPosInLane;
+
+				const float kTrailLength = 0.35f;
+				if (dy < -0.04f || dy > kTrailLength) continue;
+
+				// Horizontal mask: streak is narrow, only a couple of cm wide.
+				const float kStreakHalfWidth = 0.022f;
+				const float dxFromCenter = wallHorizCoord - laneCenterX;
+				if (abs(dxFromCenter) > kStreakHalfWidth) continue;
+				const float hMask = saturate(1.0f - abs(dxFromCenter) / kStreakHalfWidth);
+
+				// Head: localised bump at dy ~ 0 with a small vertical extent.
+				const float kHeadHalfHeight = 0.03f;
+				const float headMask = saturate(1.0f - abs(dy) / kHeadHalfHeight);
+
+				// Trail: linear fade going up from the head along the path the
+				// drop has taken. Weaker than the head so the trail reads as a
+				// thin water film, not another bump.
+				const float trailMask = (dy > 0.0f) ? saturate(1.0f - dy / kTrailLength) * 0.5f : 0.0f;
+
+				const float streakIntensity = (headMask + trailMask) * hMask * wetness;
+
+				// Streak roughness: very smooth - water on glass is essentially a mirror.
+				roughMul = lerp(roughMul, 0.12f, streakIntensity);
+
+				// Normal perturbation. Only the HEAD perturbs the normal - the
+				// trail leaves the surface flat (thin film, no bump). For a
+				// convex bead at the head:
+				//   x: tilt away from lane centre (horizontal direction)
+				//   y: tilt away from head centre (vertical direction)
+				// Adding signed amounts so pixels on either side / above / below
+				// the head get the right tilt for a CONVEX bump (matches the
+				// LAYER A logic).
+				const float xPerturbAmp = (dxFromCenter / max(kStreakHalfWidth, 0.001f)) * headMask * 0.5f * wetness;
+				const float yPerturbAmp = (dy           / max(kHeadHalfHeight, 0.001f)) * headMask * 0.4f * wetness;
+				perturbedNormal += horizAxis * xPerturbAmp + worldUp * yPerturbAmp;
+			}
+		}
+
+		return float4(normalize(perturbedNormal), saturate(roughMul));
 	}
 }
