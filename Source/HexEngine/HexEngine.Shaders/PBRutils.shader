@@ -567,6 +567,106 @@
 		return float3(cellFrac.x, cellFrac.y, max(gridLine, pulse * 0.6f));
 	}
 
+	// Cheap 3D hash + value noise helpers used by the snow / drip layers below.
+	// Standard iq-style hash; good enough for spatially-coherent procedural
+	// patterns at the scales we sample (cm to metres in world space).
+	float Hash13_PBR(float3 p)
+	{
+		p = frac(p * 0.1031f);
+		p += dot(p, p.yzx + 33.33f);
+		return frac((p.x + p.y) * p.z);
+	}
+
+	float ValueNoise3(float3 p)
+	{
+		const float3 pi = floor(p);
+		const float3 pf = frac(p);
+		const float3 w  = pf * pf * (3.0f - 2.0f * pf);
+
+		const float n000 = Hash13_PBR(pi + float3(0,0,0));
+		const float n100 = Hash13_PBR(pi + float3(1,0,0));
+		const float n010 = Hash13_PBR(pi + float3(0,1,0));
+		const float n110 = Hash13_PBR(pi + float3(1,1,0));
+		const float n001 = Hash13_PBR(pi + float3(0,0,1));
+		const float n101 = Hash13_PBR(pi + float3(1,0,1));
+		const float n011 = Hash13_PBR(pi + float3(0,1,1));
+		const float n111 = Hash13_PBR(pi + float3(1,1,1));
+
+		const float nx00 = lerp(n000, n100, w.x);
+		const float nx10 = lerp(n010, n110, w.x);
+		const float nx01 = lerp(n001, n101, w.x);
+		const float nx11 = lerp(n011, n111, w.x);
+		const float nxy0 = lerp(nx00, nx10, w.y);
+		const float nxy1 = lerp(nx01, nx11, w.y);
+		return lerp(nxy0, nxy1, w.z);
+	}
+
+	// =====================================================================
+	// Snow accumulation
+	//
+	// Drives the surface toward white-albedo + soft-roughness when the weather
+	// system reports snow on upward-facing geometry. Unlike rain drips this is
+	// applied globally (no per-material opt-in slider) - any horizontal-ish
+	// surface naturally takes snow during a snowfall regardless of material.
+	// Vertical walls / ceilings stay clear (no normal.y component to catch the
+	// snow). The slope falloff is soft so eaves / cambered roads get partial
+	// snow on the upward side and dry on the downward side - more natural than
+	// a hard step.
+	//
+	// Inputs:
+	//   baseAlbedo   - albedo BEFORE snow modification
+	//   baseRoughness - perceptual roughness BEFORE snow
+	//   worldNormalWS - surface normal (world space)
+	//   worldPos      - surface world position (for noise)
+	//   snowCoverage  - g_weatherSurface.snowCoverage (0..1)
+	//
+	// Returns: float4(modifiedAlbedo, modifiedRoughness) - drop into the
+	// existing gbuffer write.
+	// =====================================================================
+	float4 ApplySnowAccumulation(
+		float3 baseAlbedo,
+		float baseRoughness,
+		float3 worldNormalWS,
+		float3 worldPos,
+		float snowCoverage)
+	{
+		if (snowCoverage <= 0.001f)
+			return float4(baseAlbedo, baseRoughness);
+
+		// Slope mask: smoothstep 0.35 -> 0.85 on normal.y gives partial snow
+		// from "slight slope" up to full snow on perfectly flat surfaces. Below
+		// 0.35 (~70 degrees from horizontal) no snow forms.
+		const float slopeMask = smoothstep(0.35f, 0.85f, worldNormalWS.y);
+		if (slopeMask <= 0.0f)
+			return float4(baseAlbedo, baseRoughness);
+
+		// Procedural noise so snow patches read as "actual snow with texture",
+		// not a flat white paint. Two-octave value noise at world-space XZ so
+		// the pattern stays anchored as the camera moves.
+		const float kNoiseScale = 0.45f; // 45 cm per noise cycle - snow drift scale
+		const float n1 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / kNoiseScale);
+		const float n2 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / (kNoiseScale * 0.4f));
+		const float patchNoise = saturate((n1 * 0.65f + n2 * 0.35f) - (1.0f - snowCoverage) * 0.45f);
+
+		// Snow mask: combine slope + patch noise + global coverage.
+		// At snowCoverage = 1, almost everything in the slope-permissive band
+		// is white. At snowCoverage ~ 0.3 only the densest patch-noise areas
+		// catch snow, giving the "dusting -> blanket" progression.
+		const float snowMask = saturate(slopeMask * (0.2f + patchNoise * 1.4f) * snowCoverage);
+
+		// Snow colour: very slightly blue-tinted white (real snow scatters short
+		// wavelengths more, plus diffuse sky tint). Pure-white reads as paint.
+		const float3 snowColour = float3(0.92f, 0.94f, 0.98f);
+		const float3 newAlbedo = lerp(baseAlbedo, snowColour, snowMask);
+
+		// Snow is highly diffuse (lots of micro-scattering between snowflakes)
+		// so roughness goes UP, not down. 0.85 is the typical snow roughness
+		// in PBR refs.
+		const float newRoughness = lerp(baseRoughness, 0.85f, snowMask);
+
+		return float4(newAlbedo, newRoughness);
+	}
+
 	float4 ApplyRainDroplets(
 		float3 baseNormalWS,
 		float3 worldPos,

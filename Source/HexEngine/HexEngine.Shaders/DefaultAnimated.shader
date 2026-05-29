@@ -361,6 +361,17 @@
 			roughness   = max(roughness * rainResult.w, MinRoughness);
 		}
 
+		// Snow accumulation. Same global-no-opt-in semantics as DefaultPixel -
+		// any upward-facing animated surface catches snow. See PBRutils.
+		if (g_weatherSurface.snowCoverage > 0.001f)
+		{
+			const float4 snowResult = ApplySnowAccumulation(
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
+				g_weatherSurface.snowCoverage);
+			albedo.rgb = snowResult.rgb;
+			roughness  = snowResult.w;
+		}
+
 		float3 finalRGB = albedo.rgb;
 
 		// Apply emission, if there was any and multiply it by the emission colours and factor

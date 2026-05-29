@@ -318,6 +318,20 @@
 			pbr.rgb += featureBonus;
 		}
 
+		// Lightning flash. Briefly boost overall brightness with a cool tint
+		// (~6500K bias toward blue) when g_weatherSurface.lightningFlash > 0.
+		// The weather controller already drives this between 0 and 1; values
+		// fade off quickly so the flash reads as a 50-100 ms strobe rather than
+		// a sustained brighten. Cap at 3.5x boost - any higher and HDR display
+		// modes lose the highlight headroom for the actual sun. Applied AFTER
+		// PBR + feature lobes so every shading path catches it uniformly.
+		if (g_weatherSurface.lightningFlash > 0.001f)
+		{
+			const float3 flashTint = float3(0.85f, 0.92f, 1.10f);
+			const float  flashMul  = 1.0f + g_weatherSurface.lightningFlash * 2.5f;
+			pbr.rgb *= flashTint * flashMul;
+		}
+
 		return pbr;
 
 	#if 0

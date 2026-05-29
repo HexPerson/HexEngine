@@ -323,6 +323,20 @@
 			roughness   = max(roughness * rainResult.w, MinRoughness);
 		}
 
+		// Snow accumulation. Applied AFTER rain because in real life snow lays on
+		// top of wet surfaces (the geometry that was wet is also where snow
+		// accumulates, snow then dominates the visual). No per-material opt-in -
+		// any upward-facing surface naturally catches snow when the weather
+		// system reports snowCoverage > 0. See ApplySnowAccumulation in PBRutils.
+		if (g_weatherSurface.snowCoverage > 0.001f)
+		{
+			const float4 snowResult = ApplySnowAccumulation(
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
+				g_weatherSurface.snowCoverage);
+			albedo.rgb = snowResult.rgb;
+			roughness  = snowResult.w;
+		}
+
 		float3 finalRGB = albedo.rgb;
 
 		// Apply emission, if there was any and multiply it by the emission colours and factor

@@ -761,6 +761,17 @@ namespace HexEngine
 			ss << "\t\t\troughness = max(roughness * __rainResult.w, MinRoughness);\n";
 			ss << "\t\t}\n";
 
+			// Snow accumulation. Global driver from g_weatherSurface.snowCoverage,
+			// applied to baseColor + roughness for any upward-facing surface. No
+			// per-material slider; the snow shader's own slope mask handles
+			// which surfaces visually catch the snow.
+			ss << "\t\tif (g_weatherSurface.snowCoverage > 0.001f)\n";
+			ss << "\t\t{\n";
+			ss << "\t\t\tconst float4 __snowResult = ApplySnowAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, g_weatherSurface.snowCoverage);\n";
+			ss << "\t\t\tbaseColor.rgb = __snowResult.rgb;\n";
+			ss << "\t\t\troughness     = __snowResult.w;\n";
+			ss << "\t\t}\n";
+
 			if (emissiveExpr != nullptr)
 				ss << std::format("\t\tfloat3 emission = {};\n", ToFloat3(ctx, *emissiveExpr));
 			else
