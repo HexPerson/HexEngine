@@ -659,10 +659,16 @@
 			// wall with rare invisible streaks. Tightening the lane spacing AND
 			// widening the streak so coverage is ~65%, which reads as "wall with
 			// many rain streaks running down" - the look the user wants.
-			const float kLaneWidth        = 0.12f; // 12 cm between streaks
-			const float kStreakHalfWidth  = 0.04f; // 8 cm wide streak (~67% lane coverage)
-			const float kHeadHalfHeight   = 0.045f;
-			const float kTrailLength      = 0.55f; // 55 cm trail above each head
+			// Streak sizing. Earlier visibility pass overshot - 8 cm wide streaks
+			// with 4.5 cm heads looked like "wet patches" rather than rain.
+			// Real rain droplets on glass are mm-scale; at this stylised game
+			// scale ~2 cm wide reads as proper streaks, ~1.5 cm tall heads stay
+			// readable but don't blob out. Lanes are 6 cm apart for density,
+			// trails kept generous at 60 cm so the runs-down character is clear.
+			const float kLaneWidth        = 0.06f;  // 6 cm between streaks
+			const float kStreakHalfWidth  = 0.012f; // 2.4 cm wide streak (~40% lane coverage)
+			const float kHeadHalfHeight   = 0.018f; // 1.8 cm tall head
+			const float kTrailLength      = 0.6f;   // 60 cm trail
 
 			[unroll]
 			for (int laneOff = -1; laneOff <= 1; ++laneOff)
@@ -699,8 +705,12 @@
 
 				roughMul = lerp(roughMul, 0.10f, streakIntensity);
 
-				const float xPerturbAmp = (dxFromCenter / max(kStreakHalfWidth, 0.001f)) * headMask * 0.6f * wetness;
-				const float yPerturbAmp = (dy           / max(kHeadHalfHeight, 0.001f)) * headMask * 0.5f * wetness;
+				// Reduced normal-perturbation strength to match the smaller head
+				// size - was 0.6/0.5 when heads were 4.5 cm; for 1.8 cm heads we
+				// want less aggressive bumping so the heads read as small beads,
+				// not raised blisters.
+				const float xPerturbAmp = (dxFromCenter / max(kStreakHalfWidth, 0.001f)) * headMask * 0.35f * wetness;
+				const float yPerturbAmp = (dy           / max(kHeadHalfHeight, 0.001f)) * headMask * 0.30f * wetness;
 				perturbedNormal += horizAxis * xPerturbAmp + worldUp * yPerturbAmp;
 			}
 		}
