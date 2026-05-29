@@ -264,11 +264,17 @@
 			(0.72f * rockRoughness * heightWeighted.y) +
 			(0.52f * snowRoughness * heightWeighted.z) +
 			(0.86f * dirtRoughness * heightWeighted.w);
-		float smoothness =
-			(0.10f * heightWeighted.x) +
-			(0.14f * heightWeighted.y) +
-			(0.24f * heightWeighted.z) +
-			(0.08f * heightWeighted.w);
+		// Smoothness is the SSR enable gate (mat.b - read by SSR as both the
+		// "should this pixel reflect?" test and the reflection-sharpness scale).
+		// Previously the blend baked in per-layer smoothness contributions
+		// (0.08..0.24) which looked matte at a glance but triggered noticeable
+		// SSR pulls of nearby buildings / sky onto open ground - the "terrain
+		// mistakenly reflecting" symptom. Terrain (grass / rock / dirt / dry
+		// snow) has essentially zero macroscopic specular gloss in real life;
+		// the high-frequency glare you do see on damp grass or fresh snow is
+		// the weather/wetness layer's job, not the base terrain shader's.
+		// Force smoothness to 0 so SSR is disabled for dry terrain pixels.
+		float smoothness = 0.0f;
 		float4 viewPos = mul(float4(input.worldPos, 1.0f), g_viewMatrix);
 		float pixelDepth = -viewPos.z;
 
@@ -276,7 +282,7 @@
 		// .a was the per-layer specularProbability blend - removed along with the
 		// MaterialProperties::specularProbability field, since nothing in the
 		// renderer actually sampled mat.a. Writes 0 to keep the channel clean.
-		output.mat = float4(metallic, roughness, smoothness, 0.0f);
+		output.mat = float4(metallic, roughness, 0.0f, 0.0f);
 		output.norm = float4(N, pixelDepth);
 		output.pos = float4(input.worldPos, 0.0f);
 		// Per-pixel screen-space motion from the camera moving relative to this static surface.
