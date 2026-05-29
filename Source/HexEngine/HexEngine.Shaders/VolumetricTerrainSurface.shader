@@ -14,6 +14,7 @@
 {
 	Global
 	Utils
+	PBRutils
 }
 "VertexShader"
 {
@@ -275,6 +276,19 @@
 		// the weather/wetness layer's job, not the base terrain shader's.
 		// Force smoothness to 0 so SSR is disabled for dry terrain pixels.
 		float smoothness = 0.0f;
+
+		// Snow accumulation. Same global driver from g_weatherSurface.snowCoverage
+		// that DefaultPixel / DefaultAnimated / graph-compiled PSs use - just
+		// called explicitly here so terrain (which has its own surface shader,
+		// not Default) also catches snow. See ApplySnowAccumulation in
+		// PBRutils.shader for the full doc.
+		if (g_weatherSurface.snowCoverage > 0.001f)
+		{
+			const float4 __snowResult = ApplySnowAccumulation(baseColor, roughness, N, input.worldPos, g_weatherSurface.snowCoverage);
+			baseColor = __snowResult.rgb;
+			roughness = __snowResult.w;
+		}
+
 		float4 viewPos = mul(float4(input.worldPos, 1.0f), g_viewMatrix);
 		float pixelDepth = -viewPos.z;
 
