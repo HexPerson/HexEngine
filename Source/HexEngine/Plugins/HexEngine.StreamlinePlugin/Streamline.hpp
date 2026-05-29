@@ -78,6 +78,7 @@ private:
 	} _importedFuncs;
 
 	bool _enabled = false;
+	HMODULE _interposerModule = nullptr;
 	sl::ViewportHandle _viewport = { 0 };
 	uint32_t _supportedFeatures = 0;
 	sl::DLSSOptions _dlssOptions;

@@ -36,10 +36,10 @@ void StreamlinePlugin::Destroy()
 void StreamlinePlugin::GetVersionData(VersionData* data)
 {
 	data->author = "HexPerson";
-	data->description = "A short description of what your plugin does";
+	data->description = "NVIDIA Streamline integration (DLSS / NRD)";
 	data->majorVersion = 1;
 	data->minorVersion = 0;
-	data->name = "NRD Plugin";
+	data->name = "Streamline Plugin";
 }
 
 /// <summary>

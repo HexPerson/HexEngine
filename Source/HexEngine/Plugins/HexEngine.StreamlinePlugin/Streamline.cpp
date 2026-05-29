@@ -18,33 +18,48 @@ bool Streamline::Create()
 
 	if (!sl::security::verifyEmbeddedSignature(interposerPath.c_str()))
 	{
-		LOG_CRIT("Streamline validation failed!");
+		LOG_WARN("Streamline interposer DLL not present or unsigned at '%S'; DLSS / NRD disabled this run", interposerPath.c_str());
 		return false;
 	}
 
-	auto mod = LoadLibraryW(interposerPath.c_str());
+	_interposerModule = LoadLibraryW(interposerPath.c_str());
+	if (_interposerModule == nullptr)
+	{
+		LOG_WARN("LoadLibraryW failed for Streamline interposer (gle=%lu); DLSS / NRD disabled this run", GetLastError());
+		return false;
+	}
 
 	// Map functions from SL and use them instead of standard DXGI/D3D12 API
-	_importedFuncs._createFactory = reinterpret_cast<PFunCreateDXGIFactory>(GetProcAddress(mod, "CreateDXGIFactory"));
-	_importedFuncs._createFactory1 = reinterpret_cast<PFunCreateDXGIFactory1>(GetProcAddress(mod, "CreateDXGIFactory1"));
-	_importedFuncs._createFactory2 = reinterpret_cast<PFunCreateDXGIFactory2>(GetProcAddress(mod, "CreateDXGIFactory2"));
-	_importedFuncs._getDebugInterface1 = reinterpret_cast<PFunDXGIGetDebugInterface1>(GetProcAddress(mod, "DXGIGetDebugInterface1"));
-	_importedFuncs._d3d11CreateDevice = reinterpret_cast<PFunD3D11CreateDevice>(GetProcAddress(mod, "D3D11CreateDevice"));
+	_importedFuncs._createFactory = reinterpret_cast<PFunCreateDXGIFactory>(GetProcAddress(_interposerModule, "CreateDXGIFactory"));
+	_importedFuncs._createFactory1 = reinterpret_cast<PFunCreateDXGIFactory1>(GetProcAddress(_interposerModule, "CreateDXGIFactory1"));
+	_importedFuncs._createFactory2 = reinterpret_cast<PFunCreateDXGIFactory2>(GetProcAddress(_interposerModule, "CreateDXGIFactory2"));
+	_importedFuncs._getDebugInterface1 = reinterpret_cast<PFunDXGIGetDebugInterface1>(GetProcAddress(_interposerModule, "DXGIGetDebugInterface1"));
+	_importedFuncs._d3d11CreateDevice = reinterpret_cast<PFunD3D11CreateDevice>(GetProcAddress(_interposerModule, "D3D11CreateDevice"));
 
-	wchar_t binaryPathStr[MAX_PATH];
-	wcscpy_s(binaryPathStr, binaryPath.string().length() + 1, binaryPath.wstring().c_str());
+	// The destination buffer's element count (MAX_PATH wide chars), NOT the
+	// source's narrow-char length - the previous count derivation
+	// (binaryPath.string().length() + 1) was the source byte count and bypassed
+	// wcscpy_s's buffer-overflow check entirely for UTF-8 paths with multi-byte
+	// chars.
+	wchar_t binaryPathStr[MAX_PATH] = {};
+	wcscpy_s(binaryPathStr, MAX_PATH, binaryPath.wstring().c_str());
 
 	const wchar_t* binaryPathList[1] = {
 		binaryPathStr
 	};
 
 	sl::Preferences pref;
-	pref.showConsole = true;                        // for debugging, set to false in production
+#if defined(_DEBUG)
+	pref.showConsole = true;
 	pref.logLevel = sl::LogLevel::eVerbose;
-	pref.pathsToPlugins = binaryPathList; // change this if Streamline plugins are not located next to the executable
-	pref.numPathsToPlugins = 1; // change this if Streamline plugins are not located next to the executable
-	pref.pathToLogsAndData = {};                    // change this to enable logging to a file
-	pref.logMessageCallback = LogCallback; // highly recommended to track warning/error messages in your callback
+#else
+	pref.showConsole = false;
+	pref.logLevel = sl::LogLevel::eDefault;
+#endif
+	pref.pathsToPlugins = binaryPathList;
+	pref.numPathsToPlugins = 1;
+	pref.pathToLogsAndData = {};
+	pref.logMessageCallback = LogCallback;
 	pref.applicationId = 531313132;
 	pref.renderAPI = sl::RenderAPI::eD3D11;
 	pref.engine = sl::EngineType::eCustom;
@@ -59,7 +74,9 @@ bool Streamline::Create()
 
 	if (SL_FAILED(result, slInit(pref)))
 	{
-		LOG_CRIT("Failed to initialize Streamline");
+		LOG_WARN("slInit failed (code %d); DLSS / NRD disabled this run", result);
+		FreeLibrary(_interposerModule);
+		_interposerModule = nullptr;
 		return false;
 	}
 
@@ -70,7 +87,19 @@ bool Streamline::Create()
 
 void Streamline::Destroy()
 {
-	slShutdown();
+	// Only call slShutdown when slInit actually succeeded; calling it against
+	// an uninitialised SL state can crash inside the SDK on some driver
+	// versions. _enabled is the same flag the Create-success path sets.
+	if (_enabled)
+	{
+		slShutdown();
+		_enabled = false;
+	}
+	if (_interposerModule != nullptr)
+	{
+		FreeLibrary(_interposerModule);
+		_interposerModule = nullptr;
+	}
 }
 
 HRESULT Streamline::D3D11CreateDevice(
@@ -303,6 +332,13 @@ void Streamline::SetCommonConstants(const HexEngine::StreamlineConstants& consta
 	consts.motionVectorsJittered = constants.motionVectorsJittered ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 
 	consts.minRelativeLinearDepthObjectSeparation = constants.minRelativeLinearDepthObjectSeparation;
+
+	// Frame token must exist before per-frame constants are submitted. The
+	// renderer calls BeginFrame() to allocate one each frame; if a caller
+	// hits SetCommonConstants without that ordering (e.g. uninitialised SL
+	// state) the deref of _frameToken below would crash. Bail quietly.
+	if (!_enabled || _frameToken == nullptr)
+		return;
 
 	if (SL_FAILED(result, slSetConstants(consts, *_frameToken, _viewport))) // constants are changing per frame so frame index is required
 	{
