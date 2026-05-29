@@ -541,18 +541,30 @@
 	// Returns (cellFrac.x, cellFrac.y, gridLine) in [0, 1].
 	float3 RainDripsCellGridDebug(float3 baseNormalWS, float3 worldPos, float time, float isHorizontal)
 	{
-		const float kCellSize = 0.15f;
+		// Mirror the *new* (v2) ApplyRainDroplets behaviour exactly:
+		//   - LAYER A cells DO NOT scroll over time (drops pulse in place)
+		//   - cell size matches LAYER A's kCellSize (0.12)
+		// So a viewer looking at this debug output should see cells STATIC in
+		// world space, NOT translating. If you see cells scrolling vertically,
+		// the runtime is still loading the v1 .hcs (uniform UV scroll) and the
+		// pkg has stale compiled shaders even though PBRutils source was edited.
+		// Definitive "is the new code actually loaded?" test.
+		const float kCellSize = 0.12f;
 		const float3 worldUp = float3(0.0f, 1.0f, 0.0f);
 		const float3 horizAxis = normalize(cross(worldUp, baseNormalWS) + float3(1e-4f, 0.0f, 0.0f));
 		const float wallHorizCoord = dot(worldPos, horizAxis);
-		float2 uv = lerp(float2(wallHorizCoord, worldPos.y), worldPos.xz, isHorizontal) / kCellSize;
-		const float streakSpeed = 0.6f;
-		uv.y += time * streakSpeed * (1.0f - isHorizontal);
+		const float2 uv = lerp(float2(wallHorizCoord, worldPos.y), worldPos.xz, isHorizontal) / kCellSize;
+		// NO scroll - matches LAYER A's "pulse in place" model.
 		const float2 cellFrac = frac(uv);
-		// Thin grid line at cell boundaries so the cell shape is visible at a
-		// glance - tells us whether cells are 2D squares (good) or 1D stripes (bad).
+		// Additionally pulse the cells via a per-cell sin so you can see the
+		// per-cell lifetime variation (matches dropPhase logic in LAYER A).
+		const float2 cell = floor(uv);
+		const float dropPhase = Hash21_Rain(cell + 7.13f);
+		const float pulse = saturate(sin((time + dropPhase * 10.0f) * 2.0f) * 0.5f + 0.5f);
 		const float gridLine = step(0.95f, max(cellFrac.x, cellFrac.y));
-		return float3(cellFrac.x, cellFrac.y, gridLine);
+		// Encode pulse into the blue channel so observers can see cells "blinking"
+		// at different phases - confirms the new per-cell lifetime is wired up.
+		return float3(cellFrac.x, cellFrac.y, max(gridLine, pulse * 0.6f));
 	}
 
 	float4 ApplyRainDroplets(
