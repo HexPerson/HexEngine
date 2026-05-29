@@ -642,7 +642,15 @@
 		// =====================================================================
 		if (isHorizontal < 0.5f)
 		{
-			const float kLaneWidth = 0.18f;
+			// Lane / streak sizing dial. Previous values had lanes 18 cm apart
+			// with streaks 2.2 cm wide ~= 12% horizontal coverage = mostly-dry
+			// wall with rare invisible streaks. Tightening the lane spacing AND
+			// widening the streak so coverage is ~65%, which reads as "wall with
+			// many rain streaks running down" - the look the user wants.
+			const float kLaneWidth        = 0.12f; // 12 cm between streaks
+			const float kStreakHalfWidth  = 0.04f; // 8 cm wide streak (~67% lane coverage)
+			const float kHeadHalfHeight   = 0.045f;
+			const float kTrailLength      = 0.55f; // 55 cm trail above each head
 
 			[unroll]
 			for (int laneOff = -1; laneOff <= 1; ++laneOff)
@@ -651,59 +659,36 @@
 				const float laneCenterX = (laneIdx + 0.5f) * kLaneWidth;
 
 				const float2 hLane     = Hash22_Rain(float2(laneIdx, 17.0f));
-				const float  vel       = lerp(0.4f, 1.4f, hLane.x);
+				// Slower default velocity range - water clinging to a wall by
+				// surface tension moves slowly until it gets heavy. 0.2 to 0.8
+				// m/s reads as "running down the window" rather than "sprayed".
+				const float  vel       = lerp(0.2f, 0.8f, hLane.x);
 				const float  cycleTime = lerp(2.5f, 5.0f, hLane.y);
 				const float  phase     = hLane.x * 17.13f + (float)laneOff * 3.7f;
 				const float  laneH     = vel * cycleTime; // total fall distance per cycle
 
-				// Pixel's position within the lane (mod laneH).
 				const float pixelInLane = frac((worldPos.y + phase * 13.7f) / laneH) * laneH;
-
-				// Drop's current position within the lane. Drop starts at top (laneH)
-				// at the beginning of each cycle and falls to 0 at the end. Cycle
-				// resets via frac.
 				const float dropAge      = frac((time + phase) / cycleTime) * cycleTime;
 				const float dropPosInLane = laneH - vel * dropAge;
 
-				// dy = how far the pixel is ABOVE the drop's current head.
-				//   dy > 0  -> drop has already passed here; we're in the trail above it
-				//   dy ~ 0  -> we ARE the drop head
-				//   dy < 0  -> drop hasn't reached us yet; no effect
 				const float dy = pixelInLane - dropPosInLane;
+				if (dy < -0.05f || dy > kTrailLength) continue;
 
-				const float kTrailLength = 0.35f;
-				if (dy < -0.04f || dy > kTrailLength) continue;
-
-				// Horizontal mask: streak is narrow, only a couple of cm wide.
-				const float kStreakHalfWidth = 0.022f;
 				const float dxFromCenter = wallHorizCoord - laneCenterX;
 				if (abs(dxFromCenter) > kStreakHalfWidth) continue;
 				const float hMask = saturate(1.0f - abs(dxFromCenter) / kStreakHalfWidth);
 
-				// Head: localised bump at dy ~ 0 with a small vertical extent.
-				const float kHeadHalfHeight = 0.03f;
 				const float headMask = saturate(1.0f - abs(dy) / kHeadHalfHeight);
 
-				// Trail: linear fade going up from the head along the path the
-				// drop has taken. Weaker than the head so the trail reads as a
-				// thin water film, not another bump.
-				const float trailMask = (dy > 0.0f) ? saturate(1.0f - dy / kTrailLength) * 0.5f : 0.0f;
+				// Trail is brighter so it reads against the dry-ish neighbours.
+				const float trailMask = (dy > 0.0f) ? saturate(1.0f - dy / kTrailLength) * 0.7f : 0.0f;
 
 				const float streakIntensity = (headMask + trailMask) * hMask * wetness;
 
-				// Streak roughness: very smooth - water on glass is essentially a mirror.
-				roughMul = lerp(roughMul, 0.12f, streakIntensity);
+				roughMul = lerp(roughMul, 0.10f, streakIntensity);
 
-				// Normal perturbation. Only the HEAD perturbs the normal - the
-				// trail leaves the surface flat (thin film, no bump). For a
-				// convex bead at the head:
-				//   x: tilt away from lane centre (horizontal direction)
-				//   y: tilt away from head centre (vertical direction)
-				// Adding signed amounts so pixels on either side / above / below
-				// the head get the right tilt for a CONVEX bump (matches the
-				// LAYER A logic).
-				const float xPerturbAmp = (dxFromCenter / max(kStreakHalfWidth, 0.001f)) * headMask * 0.5f * wetness;
-				const float yPerturbAmp = (dy           / max(kHeadHalfHeight, 0.001f)) * headMask * 0.4f * wetness;
+				const float xPerturbAmp = (dxFromCenter / max(kStreakHalfWidth, 0.001f)) * headMask * 0.6f * wetness;
+				const float yPerturbAmp = (dy           / max(kHeadHalfHeight, 0.001f)) * headMask * 0.5f * wetness;
 				perturbedNormal += horizAxis * xPerturbAmp + worldUp * yPerturbAmp;
 			}
 		}
