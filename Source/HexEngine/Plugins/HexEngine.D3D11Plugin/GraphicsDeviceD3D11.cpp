@@ -350,6 +350,7 @@ void GraphicsDeviceD3D11::Destroy()
 	SAFE_RELEASE(_subtractivetBlendState);
 	SAFE_RELEASE(_additivePreserveAlphaBlendState);
 	SAFE_RELEASE(_transparencyPreserveAlphaBlendState);
+	SAFE_RELEASE(_multiplicativeBlendState);
 	//SAFE_RELEASE(_depthStencilView);
 
 	/*for (int i = 0; i < _countof(_shadowMap); ++i)
@@ -667,6 +668,20 @@ bool GraphicsDeviceD3D11::CreateInternal()
 	transparencyPreserveAlphaDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
 	transparencyPreserveAlphaDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	_device->CreateBlendState(&transparencyPreserveAlphaDesc, &_transparencyPreserveAlphaBlendState);
+
+	// Multiplicative: dst = src * dst. Used by AO modulation passes - source
+	// colour is the AO factor (1.0 = no occlusion, 0.0 = fully occluded), so
+	// (src * dst) darkens the existing beauty by the AO amount. Alpha is left
+	// alone to preserve scene-alpha state for downstream passes.
+	CD3D11_BLEND_DESC multiplicativeDesc(def);
+	multiplicativeDesc.RenderTarget[0].BlendEnable = true;
+	multiplicativeDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ZERO;
+	multiplicativeDesc.RenderTarget[0].DestBlend = D3D11_BLEND_SRC_COLOR;
+	multiplicativeDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+	multiplicativeDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+	multiplicativeDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+	multiplicativeDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	_device->CreateBlendState(&multiplicativeDesc, &_multiplicativeBlendState);
 
 	D3D11_SAMPLER_DESC sampDesc;
 	ZeroMemory(&sampDesc, sizeof(sampDesc));
@@ -2532,6 +2547,10 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 
 	case HexEngine::BlendState::Subtractive:
 		_deviceContext->OMSetBlendState(_subtractivetBlendState, blend, 0xFFFFFFFF);
+		break;
+
+	case HexEngine::BlendState::Multiplicative:
+		_deviceContext->OMSetBlendState(_multiplicativeBlendState, blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Transparency:

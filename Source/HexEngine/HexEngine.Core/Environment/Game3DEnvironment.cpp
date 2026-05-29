@@ -13,6 +13,7 @@
 #include "../Input/InputSystem.hpp"
 #include "../Graphics/DebugRenderer.hpp"
 #include "../Graphics/ISSAOProvider.hpp"
+#include "../Graphics/DiffuseGIAOProvider.hpp"
 #include "../Input/Hvar.hpp"
 #include "../Terrain/ChunkManager.hpp"
 #include "../Plugin/PluginSystem.hpp"
@@ -191,6 +192,17 @@ namespace HexEngine
 			}
 
 			env->_ssaoProvider = (ISSAOProvider*)env->_pluginSystem->CreateInterface(ISSAOProvider::InterfaceName);
+			// Fall back to the GI-derived AO provider when no plugin SSAO is
+			// loaded (e.g. HBAOPlus DLL missing). The provider pulls AO from
+			// the DiffuseGI volume's voxel cone trace alpha so we get a free
+			// AO signal without a dedicated screen-space pass. _diffuseGi
+			// pointer is filled in lazily by the provider's first
+			// ApplyAmbientOcclusion call - SceneRenderer (and hence
+			// _diffuseGi) doesn't exist yet at this point in startup.
+			if (env->_ssaoProvider == nullptr)
+			{
+				env->_ssaoProvider = new DiffuseGIAOProvider(nullptr);
+			}
 			env->_ssaoProvider->Create();
 		}
 

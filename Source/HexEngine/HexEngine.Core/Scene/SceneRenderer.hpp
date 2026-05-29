@@ -42,6 +42,10 @@ namespace HexEngine
 
 		void RenderOverlays(SceneFlags flags, ITexture2D* beauty, ITexture2D* renderTarget);
 		GpuVisibilityCulling* GetGpuVisibilityCulling() { return &_gpuVisibilityCulling; }
+		// Exposed so DiffuseGIAOProvider (which derives AO from the GI volume's
+		// trace alpha) can grab the resolved RT without going through the
+		// scene-renderer's private members.
+		DiffuseGI* GetDiffuseGI() { return &_diffuseGi; }
 
 	private:
 		void SetupPerFrameBuffer(

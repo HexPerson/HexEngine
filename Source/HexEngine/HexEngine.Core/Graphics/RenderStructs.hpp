@@ -20,6 +20,11 @@ namespace HexEngine
 		Subtractive,
 		Transparency,
 		TransparencyPreserveAlpha,
+		// Multiplicative: target = target * src. Used by AO modulation passes
+		// where the source colour is an AO factor in [0, 1] and we want to
+		// darken the existing beauty by that factor. dst = src * dst (BlendOp
+		// = ADD, SrcBlend = ZERO, DestBlend = SRC_COLOR).
+		Multiplicative,
 		Count
 	};
 

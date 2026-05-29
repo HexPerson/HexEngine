@@ -249,9 +249,10 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
       <SubSystem>Console</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(Configuration)</AdditionalLibraryDirectories>
       <AdditionalDependencies>DirectXTK.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AssemblyDebug>true</AssemblyDebug>
     </Link>
     <Lib>
       <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
@@ -361,6 +362,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\IconService.hpp" />
     <ClInclude Include="Graphics\IParticleSystem.hpp" />
     <ClInclude Include="Graphics\ISSAOProvider.hpp" />
+    <ClInclude Include="Graphics\DiffuseGIAOProvider.hpp" />
     <ClInclude Include="Graphics\LogWindowMessages.hpp" />
     <ClInclude Include="Graphics\RenderStructs.hpp" />
     <ClInclude Include="Graphics\TAA.hpp" />
@@ -658,6 +660,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Math\FloatMath.cpp" />
     <ClCompile Include="Graphics\IInputLayout.cpp" />
     <ClCompile Include="Scene\DiffuseGI.cpp" />
+    <ClCompile Include="Graphics\DiffuseGIAOProvider.cpp" />
     <ClCompile Include="Scene\GpuVisibilityCulling.cpp" />
     <ClCompile Include="Scene\Mesh.cpp" />
     <ClCompile Include="Scene\MeshInstance.cpp" />
@@ -682,4 +685,3 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <Import Project="..\HexEngine.Shaders\HexEngine.Shaders.targets" />
   </ImportGroup>
 </Project>
-

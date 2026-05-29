@@ -5,6 +5,9 @@
 
 namespace HexEngine
 {
+	class Camera;
+	class ITexture2D;
+
 	/** @brief Plugin interface for screen-space ambient occlusion providers. */
 	class ISSAOProvider : public IPluginInterface
 	{
