@@ -673,8 +673,8 @@
 			[unroll]
 			for (int laneOff = -1; laneOff <= 1; ++laneOff)
 			{
-				const float laneIdx     = floor(wallHorizCoord / kLaneWidth) + (float)laneOff;
-				const float laneCenterX = (laneIdx + 0.5f) * kLaneWidth;
+				const float laneIdx          = floor(wallHorizCoord / kLaneWidth) + (float)laneOff;
+				const float laneCenterXBase  = (laneIdx + 0.5f) * kLaneWidth;
 
 				const float2 hLane     = Hash22_Rain(float2(laneIdx, 17.0f));
 				// Slower default velocity range - water clinging to a wall by
@@ -691,6 +691,21 @@
 
 				const float dy = pixelInLane - dropPosInLane;
 				if (dy < -0.05f || dy > kTrailLength) continue;
+
+				// Lateral wiggle: water droplets running down a real surface follow
+				// a curved path because gravity isn't perfectly aligned with the
+				// wall's tangent plane (micro-imperfections, surface tension
+				// asymmetry). Modelled here as the sum of two sin waves at
+				// different frequencies + random per-lane phase:
+				//   high freq (~3 cycles/m) gives small jitter
+				//   low  freq (~0.7 cycles/m) gives long sweeping arcs
+				// Each pixel computes the centre line at its OWN worldY, so the
+				// trail naturally follows the curve the drop took on the way down.
+				// Total max drift is ~1.2cm, kept under kLaneWidth/2 so streaks
+				// stay mostly within their lane.
+				const float wiggleHi = sin(worldPos.y * 18.85f + phase * 7.31f) * 0.006f;
+				const float wiggleLo = sin(worldPos.y *  4.40f + phase * 11.7f) * 0.008f;
+				const float laneCenterX = laneCenterXBase + wiggleHi + wiggleLo;
 
 				const float dxFromCenter = wallHorizCoord - laneCenterX;
 				if (abs(dxFromCenter) > kStreakHalfWidth) continue;
