@@ -34,6 +34,7 @@
 #include "Graphics/IconService.hpp"
 #include "Graphics/IStreamlineProvider.hpp"
 #include "Graphics/IDenoiserProvider.hpp"
+#include "Steam/ISteamworksProvider.hpp"
 
 #include "Scene/IModelSystem.hpp"
 #include "Scene/SceneManager.hpp"

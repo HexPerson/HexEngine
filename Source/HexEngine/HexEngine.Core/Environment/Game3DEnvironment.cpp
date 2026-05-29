@@ -21,6 +21,7 @@
 #include "../Graphics/IconService.hpp"
 #include "../Scripting/IScriptEngine.hpp"
 #include "../Graphics/IDenoiserProvider.hpp"
+#include "../Steam/ISteamworksProvider.hpp"
 #include "../Graphics/MeshLoader.hpp"
 #include "../FileSystem/PrefabLoader.hpp"
 #include "../FileSystem/ParticleEffectLoader.hpp"
@@ -181,6 +182,25 @@ namespace HexEngine
 
 		env->_denoiserProvider = (IDenoiserProvider*)env->_pluginSystem->CreateInterface(IDenoiserProvider::InterfaceName);
 		env->_denoiserProvider->Create();
+
+		// Steamworks integration - optional. TryCreateInterface returns null
+		// silently when no plugin provides it OR when running outside Steam
+		// (no app launched via Steam = SteamAPI_Init fails inside the plugin
+		// and Create returns false - we surface that as "not initialised" via
+		// IsInitialised() rather than leaving a half-dead provider around).
+		env->_steamworksProvider = (ISteamworksProvider*)env->_pluginSystem->TryCreateInterface(ISteamworksProvider::InterfaceName);
+		if (env->_steamworksProvider != nullptr)
+		{
+			if (!env->_steamworksProvider->Create())
+			{
+				// Steam isn't running / app id mismatch / DRM rejected. Drop the
+				// provider so game code's "if (_steamworksProvider != null)"
+				// guards do the right thing.
+				env->_steamworksProvider->Destroy();
+				delete env->_steamworksProvider;
+				env->_steamworksProvider = nullptr;
+			}
+		}
 
 		// Create the graphics engine
 		//
@@ -345,6 +365,15 @@ namespace HexEngine
 		_ssaoProvider->Destroy();
 		SAFE_DELETE(_ssaoProvider);
 
+		// Steamworks may have been declined at Create() (no Steam running etc)
+		// so the provider pointer is null on the no-steam path. Only release
+		// when we actually got an instance.
+		if (_steamworksProvider != nullptr)
+		{
+			_steamworksProvider->Destroy();
+			SAFE_DELETE(_steamworksProvider);
+		}
+
 		_compressionProvider->Destroy();
 		SAFE_DELETE(_compressionProvider);
 
@@ -462,9 +491,17 @@ namespace HexEngine
 			window->Update();
 		}
 		
-		const float timeStep = 1.0f / cl_simulationRate._val.f32;	
+		const float timeStep = 1.0f / cl_simulationRate._val.f32;
 
-		_inputSystem->Update(_timeManager->_frameTime);		
+		_inputSystem->Update(_timeManager->_frameTime);
+
+		// Steamworks callbacks. Must run on the main thread once per frame
+		// BEFORE any other Steam call so overlay-activated / achievement /
+		// stat callbacks have a chance to fire. Calling later in the frame
+		// would still pump them but they'd be one frame stale for any code
+		// that read provider state during the frame.
+		if (_steamworksProvider != nullptr)
+			_steamworksProvider->Tick();
 
 		while (_timeManager->_accumulatedSimulationTime >= timeStep)
 		{

@@ -7,14 +7,10 @@
 /// <summary>
 /// The sample plugin class. Overrides IPlugin
 /// </summary>
-class SteamworksPlugin : public IPlugin
+class SteamworksPlugin : public HexEngine::IPlugin
 {
 public:
-	/// <summary>
-	/// Called after the plugin is loaded
-	/// </summary>
-	/// <returns></returns>
-	virtual bool Create() override;
+	SteamworksPlugin();
 
 	/// <summary>
 	/// Called just before the plugin is unloaded
@@ -32,7 +28,7 @@ public:
 	/// </summary>
 	/// <param name="interfaceName">The name of the interface being searched for</param>
 	/// <returns>A pointer to an implemented interface if found, or null if not.</returns>
-	virtual IPluginInterface* CreateInterface(const std::string& interfaceName) override;
+	virtual HexEngine::IPluginInterface* CreateInterface(const std::string& interfaceName) override;
 
 	virtual void GetDependencies(std::vector<std::string>& dependencies) const override;
 

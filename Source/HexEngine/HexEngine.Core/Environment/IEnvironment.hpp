@@ -160,6 +160,11 @@ namespace HexEngine
 		class IconService* _iconService = nullptr;
 		//class IScriptEngine* _scriptEngine = nullptr; // disabled currently
 		class IStreamlineProvider* _streamlineProvider = nullptr;
+		// Optional Steamworks integration. Null when not running under Steam,
+		// SteamAPI_Init failed, or the plugin DLL isn't present - callers
+		// should null-check and treat it as a "graceful disable" rather than
+		// an error.
+		class ISteamworksProvider* _steamworksProvider = nullptr;
 		class IDenoiserProvider* _denoiserProvider = nullptr;
 		class INavMeshProvider* _navMeshProvider = nullptr;
 		MeshLoader* _meshLoader = nullptr;

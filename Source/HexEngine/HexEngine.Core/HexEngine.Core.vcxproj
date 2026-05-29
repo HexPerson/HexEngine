@@ -363,6 +363,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\IParticleSystem.hpp" />
     <ClInclude Include="Graphics\ISSAOProvider.hpp" />
     <ClInclude Include="Graphics\DiffuseGIAOProvider.hpp" />
+    <ClInclude Include="Steam\ISteamworksProvider.hpp" />
     <ClInclude Include="Graphics\LogWindowMessages.hpp" />
     <ClInclude Include="Graphics\RenderStructs.hpp" />
     <ClInclude Include="Graphics\TAA.hpp" />

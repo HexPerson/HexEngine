@@ -156,6 +156,8 @@
     <ClCompile Include="Terrain\HeightMapGenerator.cpp" />
     <ClCompile Include="Terrain\TerrainGenerator.cpp" />
     <ClCompile Include="Utility\MemoryManager.cpp" />
+    <ClCompile Include="Entity\Component\DecalComponent.cpp" />
+    <ClCompile Include="FileSystem\MemoryFile.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Audio\AudioManager.hpp" />
@@ -359,6 +361,8 @@
     <ClInclude Include="Terrain\TerrainGenerator.hpp" />
     <ClInclude Include="Utility\CRC32.hpp" />
     <ClInclude Include="Utility\MemoryManager.hpp" />
+    <ClInclude Include="Entity\Component\DecalComponent.hpp" />
+    <ClInclude Include="FileSystem\MemoryFile.hpp" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="shader.xml" />
@@ -367,4 +371,3 @@
     <None Include="HexEngine.Shaders.targets" />
   </ItemGroup>
 </Project>
-

@@ -3,15 +3,15 @@
 
 CREATE_PLUGIN(g_pSteamworksPlugin, SteamworksPlugin);
 
-/// <summary>
-/// Called after the plugin is loaded
-/// </summary>
-/// <returns></returns>
-bool SteamworksPlugin::Create()
+SteamworksPlugin::SteamworksPlugin()
 {
+	// Allocate the provider in the ctor (NOT a separate Create() call): IPlugin
+	// doesn't have a virtual Create(), so any Create() we declared here would
+	// never be invoked by the plugin loader. Mirror the StreamlinePlugin
+	// pattern where the inner provider is built at construction time and
+	// Destroy() releases it. The engine calls Provider::Create() (SteamAPI_Init)
+	// later, via the env's TryCreateInterface lookup.
 	_interface = new Steamworks;
-
-	return true;
 }
 
 /// <summary>
@@ -29,10 +29,10 @@ void SteamworksPlugin::Destroy()
 void SteamworksPlugin::GetVersionData(VersionData* data)
 {
 	data->author = "HexPerson";
-	data->description = "A short description of what your plugin does";
+	data->description = "Steamworks integration (achievements, stats, rich presence, overlay)";
 	data->majorVersion = 1;
 	data->minorVersion = 0;
-	data->name = "SamplePlugin";
+	data->name = "Steamworks Plugin";
 }
 
 /// <summary>
@@ -40,12 +40,12 @@ void SteamworksPlugin::GetVersionData(VersionData* data)
 /// </summary>
 /// <param name="interfaceName">The name of the interface being searched for</param>
 /// <returns>A pointer to an implemented interface if found, or null if not.</returns>
-IPluginInterface* SteamworksPlugin::CreateInterface(const std::string& interfaceName)
+HexEngine::IPluginInterface* SteamworksPlugin::CreateInterface(const std::string& interfaceName)
 {
 	// generally you'd use a InterfaceName from the interface you want to override, e.g. IModelImporter::InterfaceName as this is guaranteed to be correct for the version being implemented.
 	// You can use string literals too, but its not recommended
 	//
-	if (interfaceName == "SomeInterfaceToImplementInThisPlugin")
+	if (interfaceName == HexEngine::ISteamworksProvider::InterfaceName)
 		return _interface;
 
 	return nullptr;
