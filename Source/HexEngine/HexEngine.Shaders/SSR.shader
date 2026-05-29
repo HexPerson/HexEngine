@@ -319,7 +319,14 @@
 				break;
 			}
 
-			const float4 normalDepth = GBUFFER_NORMAL.Sample(g_pointSampler, fragTex);
+			// SampleLevel(..., 0) instead of Sample() because we're inside a
+			// variable-iteration ray-march loop. HLSL release-mode (warnings ->
+			// errors) flags Sample()'s implicit ddx/ddy gradient calculations
+			// as undefined in this context: lanes can be at different iterations
+			// so cross-lane derivative reads are garbage. Explicit mip 0 is what
+			// we want anyway - the GBuffer is screen-resolution and we never
+			// want a mipped read.
+			const float4 normalDepth = GBUFFER_NORMAL.SampleLevel(g_pointSampler, fragTex, 0);
 			const float actualDepth = normalDepth.w;
 
 			// Remember this in-screen sample for the loop-exhaustion fallback only.
@@ -367,7 +374,10 @@
 						continue;
 					}
 
-					const float midActual = GBUFFER_NORMAL.Sample(g_pointSampler, midTex).w;
+					// SampleLevel(..., 0) - same rationale as the outer loop: implicit
+					// derivatives inside variable-iteration loops are undefined under
+					// HLSL release mode.
+					const float midActual = GBUFFER_NORMAL.SampleLevel(g_pointSampler, midTex, 0).w;
 
 					if (midDepth >= midActual)
 					{
@@ -385,11 +395,11 @@
 
 				// Reject self-hits at the very source surface; the next iteration will progress
 				// further along the ray.
-				const uint hitInstance = (uint)GBUFFER_DIFFUSE.Sample(g_pointSampler, refinedTex).w;
+				const uint hitInstance = (uint)GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, refinedTex, 0).w;
 				if (hitInstance == sourceInstanceID && refinedDistance < 4.0f)
 					continue;
 
-				const float4 hitPosWS = GBUFFER_POSITION.Sample(g_pointSampler, refinedTex);
+				const float4 hitPosWS = GBUFFER_POSITION.SampleLevel(g_pointSampler, refinedTex, 0);
 				// Linear-sample the beauty at the hit point. Note: the beauty texture is rendered
 				// with TAA jitter per-vertex, so its sub-pixel content rotates frame-to-frame
 				// through the 16-sample Halton sequence. No single-frame sample is fully stable;
@@ -399,7 +409,7 @@
 				// that residual variance is NRD's temporal accumulation (or TAA on the SSR
 				// output) - shader-side single-frame tricks (jitter UV offset etc.) just trade
 				// one set of sub-pixel weights for another.
-				const float3 hitColour = g_beautyTexture.Sample(g_textureSampler, refinedTex).rgb;
+				const float3 hitColour = g_beautyTexture.SampleLevel(g_textureSampler, refinedTex, 0).rgb;
 
 				result.didHit = true;
 				result.colour = hitColour;
@@ -419,7 +429,7 @@
 		{
 			result.didHit = true;
 			result.didFallback = true;
-			result.colour = g_beautyTexture.Sample(g_textureSampler, lastInScreenTex).rgb;
+			result.colour = g_beautyTexture.SampleLevel(g_textureSampler, lastInScreenTex, 0).rgb;
 			result.hitDistance = max(lastInScreenDistance, 1.0f);
 		}
 
@@ -657,7 +667,10 @@
 		if (diffuseWeightLuma > 0.05f)
 		{
 			uint rng = baseRngState ^ 0x68bc21ebu;
-			[loop]
+			// DiffuseRays is a const 1 right now so HLSL release-mode flags
+			// the [loop] attribute as overkill (the compiler proves the loop
+			// runs exactly once). Dropped - if we bump DiffuseRays > 1 later
+			// the compiler will unroll a small fixed count cleanly without it.
 			for (uint i = 0; i < DiffuseRays; ++i)
 			{
 				bool didReflect = false;
