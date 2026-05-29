@@ -191,16 +191,18 @@ namespace HexEngine
 				return nullptr;
 			}
 
-			env->_ssaoProvider = (ISSAOProvider*)env->_pluginSystem->CreateInterface(ISSAOProvider::InterfaceName);
-			// Fall back to the GI-derived AO provider when no plugin SSAO is
-			// loaded (e.g. HBAOPlus DLL missing). The provider pulls AO from
-			// the DiffuseGI volume's voxel cone trace alpha so we get a free
-			// AO signal without a dedicated screen-space pass. _diffuseGi
-			// pointer is filled in lazily by the provider's first
-			// ApplyAmbientOcclusion call - SceneRenderer (and hence
-			// _diffuseGi) doesn't exist yet at this point in startup.
+			// TryCreateInterface (vs CreateInterface): silently returns null
+			// when no plugin SSAO is loaded, so we can fall back to the
+			// in-engine DiffuseGIAOProvider without raising the modal
+			// "Critical Error" dialog that LOG_CRIT pops up.
+			env->_ssaoProvider = (ISSAOProvider*)env->_pluginSystem->TryCreateInterface(ISSAOProvider::InterfaceName);
 			if (env->_ssaoProvider == nullptr)
 			{
+				// The provider pulls AO from the DiffuseGI volume's voxel cone
+				// trace alpha so we get a free AO signal without a dedicated
+				// screen-space pass. _gi pointer is filled in lazily on first
+				// ApplyAmbientOcclusion call - SceneRenderer (and hence
+				// _diffuseGi) doesn't exist yet at this point in startup.
 				env->_ssaoProvider = new DiffuseGIAOProvider(nullptr);
 			}
 			env->_ssaoProvider->Create();

@@ -38,6 +38,13 @@ namespace HexEngine
 
 		IPluginInterface* CreateInterface(const std::string& interfaceName);
 
+		// Non-fatal variant of CreateInterface. Used when the caller has a
+		// in-engine fallback for an interface that may or may not be provided
+		// by a plugin (e.g. ISSAOProvider falling back to DiffuseGIAOProvider
+		// when HBAOPlus isn't loaded). Returns nullptr silently if nothing
+		// matches - no LOG_CRIT, no modal "Critical Error" dialog.
+		IPluginInterface* TryCreateInterface(const std::string& interfaceName);
+
 		bool HasLoadedPlugin(const std::string& name) const;
 
 		const std::vector<InitInfo>& GetAllPlugins() const { return _plugins; }

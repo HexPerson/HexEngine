@@ -200,4 +200,21 @@ namespace HexEngine
 
 		return nullptr;
 	}
+
+	IPluginInterface* PluginSystem::TryCreateInterface(const std::string& interfaceName)
+	{
+		for (auto& plugin : _plugins)
+		{
+			if (plugin.iface)
+			{
+				if (auto exposedInterface = plugin.iface->CreateInterface(interfaceName); exposedInterface != nullptr)
+				{
+					LOG_INFO("Found an optional interface for '%s' at %p", interfaceName.c_str(), exposedInterface);
+					return exposedInterface;
+				}
+			}
+		}
+		// No LOG_CRIT - caller already has a fallback ready.
+		return nullptr;
+	}
 }
