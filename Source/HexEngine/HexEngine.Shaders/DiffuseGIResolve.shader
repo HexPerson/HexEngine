@@ -48,14 +48,18 @@
 		float4 g_giParams7; // x=gpuMaterialProxyBlend, y=gpuComputeBaseSunEnabled, z=sunShadowPerVoxel, w=cameraMotionBlend
 	};
 
-	float3 UpsampleGiBilateral(float2 uv)
+	// Returns float4(rgb = upsampled GI, a = upsampled accumulated occlusion).
+	// The trace shader packs voxelOcc into alpha; bilateral upsampling uses
+	// the same edge-aware weights for both signals so AO follows surface
+	// discontinuities just like the GI lighting does.
+	float4 UpsampleGiBilateral(float2 uv)
 	{
 		const float2 halfTexel = max(g_giParams1.zw, float2(1.0f / 4096.0f, 1.0f / 4096.0f));
 		const float4 centerNormalDepth = g_normalDepth.Sample(g_pointSampler, uv);
 		const float3 centerNormal = normalize(centerNormalDepth.xyz + float3(1e-5f, 1e-5f, 1e-5f));
 		const float centerDepth = centerNormalDepth.w;
 
-		float3 accum = 0.0f.xxx;
+		float4 accum = 0.0f.xxxx;
 		float accumWeight = 0.0f;
 
 		[unroll]
@@ -67,7 +71,7 @@
 				const float2 offset = float2((float)x, (float)y) * halfTexel;
 				const float2 sampleUv = saturate(uv + offset);
 
-				const float3 giSample = g_currentGiHalfRes.Sample(g_linearSampler, sampleUv).rgb;
+				const float4 giSample = g_currentGiHalfRes.Sample(g_linearSampler, sampleUv);
 				const float4 ndSample = g_normalDepth.Sample(g_pointSampler, sampleUv);
 				const float3 normalSample = normalize(ndSample.xyz + float3(1e-5f, 1e-5f, 1e-5f));
 
@@ -109,14 +113,16 @@
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		const float2 uv = input.texcoord;
-		const float3 current = UpsampleGiBilateral(uv);
+		const float4 currentRGBA = UpsampleGiBilateral(uv);
+		const float3 current     = currentRGBA.rgb;
+		const float  currentOcc  = currentRGBA.a;
 		const float debugMode = g_giParams0.z;
 
 		// Keep temporal resolve active in debug mode 1 (indirect-only) so debugging reflects
 		// the stabilized GI path instead of raw noisy half-res data.
 		if (debugMode >= 2.0f)
 		{
-			return float4(LuminanceClamp(current, g_giParams0.y), 1.0f);
+			return float4(LuminanceClamp(current, g_giParams0.y), currentOcc);
 		}
 
 		const float2 velocity = g_motionVectors.Sample(g_pointSampler, uv).xy;
@@ -125,7 +131,9 @@
 		const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 		const float shiftSettle = saturate(g_giParams6.y);
 		const float motionClipBias = saturate(g_giParams7.w);
-		float3 history = historyUvValid ? g_historyGi.Sample(g_linearSampler, historyUv).rgb : 0.0f.xxx;
+		const float4 historyRGBA = historyUvValid ? g_historyGi.Sample(g_linearSampler, historyUv) : 0.0f.xxxx;
+		float3 history    = historyRGBA.rgb;
+		float  historyOcc = historyRGBA.a;
 		const float4 centerNormalDepth = g_normalDepth.Sample(g_pointSampler, uv);
 		const float4 historyNormalDepth = g_normalDepth.Sample(g_pointSampler, saturate(historyUv));
 		const float3 centerNormal = normalize(centerNormalDepth.xyz + float3(1e-5f, 1e-5f, 1e-5f));
@@ -191,6 +199,14 @@
 		float3 resolved = lerp(current, history, historyWeight);
 		resolved = LuminanceClamp(resolved, g_giParams0.y);
 
+		// Same temporal accumulation applied to the AO signal we pack into .a.
+		// AO is in [0, 1] so we don't need the LuminanceClamp on it. Reuse the
+		// same historyWeight so AO inherits the same disocclusion / motion /
+		// luminance-reject behaviour as the GI lighting - keeps the two
+		// channels consistent and prevents ghosting mismatches between them.
+		float resolvedOcc = lerp(currentOcc, historyOcc, historyWeight);
+		resolvedOcc = saturate(resolvedOcc);
+
 		// During clipmap warm-up we temporarily cap per-frame GI deltas to suppress residual
 		// recenter flicker (single-frame dark/bright spikes).
 		if (historyUvValid && (warmStabilize > 0.0f || shiftSettle > 0.0f))
@@ -215,8 +231,8 @@
 		if (debugMode == 1.0f)
 		{
 			float3 visual = resolved / (1.0f + resolved);
-			return float4(visual, 1.0f);
+			return float4(visual, resolvedOcc);
 		}
-		return float4(resolved, 1.0f);
+		return float4(resolved, resolvedOcc);
 	}
 }

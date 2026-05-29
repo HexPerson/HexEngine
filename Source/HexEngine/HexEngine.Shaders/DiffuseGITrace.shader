@@ -653,6 +653,13 @@
 		// would pin one channel to the cap and leave the others below it, producing the
 		// R/G/B blowouts seen in-game.
 		gi = LuminanceClamp(gi, g_giParams0.y);
-		return float4(gi, 1.0f);
+
+		// Pack the per-pixel accumulated voxel occlusion into the alpha channel.
+		// voxelOcc is already in [0, 1] after all the EvaluateClipContribution +
+		// fallback resolves above; storing it here lets the resolve pass run
+		// the same temporal accumulation on it as on the RGB GI, and lets the
+		// DiffuseGIAOProvider read it back as a free SSAO signal without an
+		// extra trace pass. (1 - alpha) at sample time becomes the AO factor.
+		return float4(gi, saturate(voxelOcc));
 	}
 }
