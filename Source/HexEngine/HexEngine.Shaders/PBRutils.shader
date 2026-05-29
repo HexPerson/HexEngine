@@ -608,22 +608,32 @@
 		// Max drop radius (relative to cell), modulated by wetness + lifetime.
 		const float maxRadius  = 0.35f * wetness * lifetime;
 
-		// Distance from this pixel to drop centre.
-		const float2 toCentre  = cellFrac - dropCentre;
-		const float  dist      = length(toCentre);
+		// Aspect ratio: walls stretch the drop vertically so it reads as the
+		// start of a runs-down-the-window streak rather than a perfect circle.
+		// 0.55 means the Y "radius" is ~1.8x the X radius. Horizontal surfaces
+		// stay round (1.0). The metric is applied to toCentre before length()
+		// so the drop mask and hence the bump silhouette becomes elliptical.
+		const float2 distMetric = lerp(float2(1.0f, 0.55f), float2(1.0f, 1.0f), isHorizontal);
+		const float2 toCentre        = cellFrac - dropCentre;
+		const float2 toCentreScaled  = toCentre * distMetric;
+		const float  dist            = length(toCentreScaled);
 
 		// Drop height field: 1 at centre, 0 at radius edge, smoothstep falloff.
 		const float dropMask   = saturate(1.0f - dist / max(maxRadius, 0.001f));
 		const float dropHeight = smoothstep(0.0f, 1.0f, dropMask);
 
 		// Normal perturbation: gradient of the height field points outward from
-		// the drop centre. Project that into the tangent-space basis to get a
-		// world-space offset we can add to the base normal. The 2.0 multiplier
-		// is just a strength dial - higher = more dramatic drops.
-		const float2 dir = (dist > 0.001f) ? (toCentre / dist) : float2(0.0f, 0.0f);
-		const float  amp = dropHeight * dropHeight * 0.8f * wetness;
+		// the drop centre. For a CONVEX bump (water beads up due to surface
+		// tension, the standard rain-droplet look) the surface normal at each
+		// point tilts AWAY from the drop centre. Previously this code subtracted
+		// the outward direction from the base normal, which tilted the normal
+		// TOWARD the centre - turning every drop into a dark concave pit (the
+		// "bullet hole" look user reported). Flipping the sign turns them into
+		// the bright reflective beads we want.
+		const float2 dir = (dist > 0.001f) ? (toCentreScaled / dist) : float2(0.0f, 0.0f);
+		const float  amp = dropHeight * dropHeight * 0.9f * wetness;
 		const float3 perturbWS = (dir.x * tangentWS + dir.y * binormalWS) * amp;
-		const float3 newNormal = normalize(baseNormalWS - perturbWS);
+		const float3 newNormal = normalize(baseNormalWS + perturbWS);
 
 		// Wet area is also smoother (lower roughness) - between drops the
 		// thin water film already smooths the surface, drops just punch it more.
