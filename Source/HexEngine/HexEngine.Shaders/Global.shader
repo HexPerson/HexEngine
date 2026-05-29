@@ -84,7 +84,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		int volumetricStepsMax;
 		float volumetricStepIncrement;
 		int volumetricQuality;
-		int volumetric_pad0;
+		// Max camera-to-light distance (metres) at which the per-pixel volumetric
+		// scattering loop still runs. Beyond this the light still shades the
+		// surface but the expensive ray-march is skipped.
+		float volumetricLightMaxDistance;
 		int volumetric_pad1;
 		int volumetric_pad2;
 		float volumetricPointInsideMin;

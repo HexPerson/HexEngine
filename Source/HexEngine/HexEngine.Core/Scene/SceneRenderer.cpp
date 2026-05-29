@@ -39,6 +39,18 @@ namespace HexEngine
 	HVar env_volumetricSpotInsideMax("env_volumetricSpotInsideMax", "Spot-light volumetric gain when camera is near light radius edge", 0.88f, 0.0f, 2.0f);
 	HVar env_waterNormalInfluence("env_waterNormalInfluence", "The strength of the normal maps when rendering water", 0.4f, 0.0f, 4.0f);
 	HVar env_volumetricStepIncrement("env_volumetricStepIncrement", "Global scale multiplier applied to adaptive volumetric ray-march step size", 1.0f, 0.1f, 100.0f);
+
+	// Point / spot light render caps. Sort by camera distance ascending and
+	// keep the closest N. Lights beyond the cap are dropped entirely (no
+	// surface lighting + no volumetric). Defaults tuned for a typical mid-range
+	// GPU; bump up if you have headroom, drop down for low-end / debug.
+	HVar r_maxPointLights("r_maxPointLights", "Max point lights rendered per frame (closest-N by camera distance)", 32, 1, 256);
+	HVar r_maxSpotLights("r_maxSpotLights",  "Max spot lights rendered per frame (closest-N by camera distance)",  32, 1, 256);
+	// Per-light volumetric scattering distance cutoff. Lights closer than this
+	// run the full per-pixel ray-march loop. Further ones still shade the
+	// surface but skip the volumetric loop entirely - typically the dominant
+	// cost of dense scenes with many volumetric lights.
+	HVar r_volumetricLightMaxDistance("r_volumetricLightMaxDistance", "Camera-to-light distance (m) beyond which volumetric scattering is skipped", 50.0f, 0.0f, 500.0f);
 	HVar r_cloudEnable("r_cloudEnable", "Enable or disable volumetric cloud rendering", true, false, true);
 	HVar r_cloudFollowCameraXZ("r_cloudFollowCameraXZ", "Anchor cloud volume to camera X/Z position", true, false, true);
 	HVar r_cloudCastShadows("r_cloudCastShadows", "Enable cloud shadows on scene lighting", true, false, true);
@@ -1544,6 +1556,7 @@ namespace HexEngine
 			bufferData._atmosphere.volumetricSteps = GetVolumetricEffectiveSteps();
 			bufferData._atmosphere.volumetricStepIncrement = env_volumetricStepIncrement._val.f32;
 			bufferData._atmosphere.volumetricQuality = r_volumetricQuality._val.i32;
+			bufferData._atmosphere.volumetricLightMaxDistance = r_volumetricLightMaxDistance._val.f32;
 			bufferData._atmosphere.volumetricPointInsideMin = env_volumetricPointInsideMin._val.f32;
 			bufferData._atmosphere.volumetricPointInsideMax = env_volumetricPointInsideMax._val.f32;
 			bufferData._atmosphere.volumetricSpotInsideMin = env_volumetricSpotInsideMin._val.f32;
@@ -2572,14 +2585,30 @@ namespace HexEngine
 		if (_currentScene->GetComponents<PointLight>(pointLights) == false)
 			return;
 
+		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
+
+		// Sort the light list by camera distance ascending and truncate to the
+		// configured cap. Distant lights are cheap-to-skip here (one
+		// LengthSquared per light) and expensive-to-keep further down (each
+		// rendered light pays for a full screen-space sphere pass + a per-pixel
+		// volumetric ray-march). Cull instead of clamping the GPU cost.
+		std::sort(pointLights.begin(), pointLights.end(),
+			[&cameraPos](PointLight* a, PointLight* b)
+			{
+				const float da = (a->GetEntity()->GetPosition() - cameraPos).LengthSquared();
+				const float db = (b->GetEntity()->GetPosition() - cameraPos).LengthSquared();
+				return da < db;
+			});
+		const size_t maxLights = static_cast<size_t>(std::max(1, r_maxPointLights._val.i32));
+		if (pointLights.size() > maxLights)
+			pointLights.resize(maxLights);
+
 		g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
 
 		// Material-features RT for PointLight.shader's GBUFFER_FEATURES_RESOURCE
 		// at t5. Point lights only use t0-4 (gbuffer) and t13 (beauty), so t5 is
 		// the first free slot. Set once for the pass since all point lights share it.
 		g_pEnv->_graphicsDevice->SetTexture2D(5, _gbuffer.GetFeatures());
-
-		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
 
 		auto renderer = _sphereEntity->GetComponent<StaticMeshComponent>();
 		renderer->SetMaterial(_pointLightMaterial);
@@ -2672,6 +2701,21 @@ namespace HexEngine
 			return;
 
 		const auto& cameraPos = _currentCamera->GetEntity()->GetPosition();
+
+		// Closest-N cap (same rationale as RenderPointLights): sort by camera
+		// distance ascending and truncate. Spot lights each pay the additional
+		// cost of a shadow-map render + per-pass constant upload, so capping
+		// here is even more valuable than for point lights.
+		std::sort(spotLights.begin(), spotLights.end(),
+			[&cameraPos](SpotLight* a, SpotLight* b)
+			{
+				const float da = (a->GetEntity()->GetWorldTM().Translation() - cameraPos).LengthSquared();
+				const float db = (b->GetEntity()->GetWorldTM().Translation() - cameraPos).LengthSquared();
+				return da < db;
+			});
+		const size_t maxLights = static_cast<size_t>(std::max(1, r_maxSpotLights._val.i32));
+		if (spotLights.size() > maxLights)
+			spotLights.resize(maxLights);
 
 		std::vector<SpotLight*> spotLightsInsideVolume, spotLightOutsideVolume;
 

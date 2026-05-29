@@ -96,6 +96,14 @@
 
 	float CalculateVolumetricScattering(float3 raySurfacePos, float3 lightPos, float3 lightDir, float radius, float lightStrength, float sceneDepth)
 	{
+		// Per-light distance gate. See PointLight.shader for full rationale -
+		// the ray-march loop is the dominant per-pixel cost on scenes with many
+		// volumetric lights and most viewers won't notice the missing fog cone
+		// on a distant light.
+		const float maxDistSqr = g_atmosphere.volumetricLightMaxDistance * g_atmosphere.volumetricLightMaxDistance;
+		if (maxDistSqr > 0.0f && dot(lightPos - g_eyePos.xyz, lightPos - g_eyePos.xyz) > maxDistSqr)
+			return 0.0f;
+
 		if (radius <= 0.0001f || lightStrength <= 0.0f || g_atmosphere.volumetricStrength <= 0.0f)
 			return 0.0f;
 

@@ -77,7 +77,12 @@ namespace HexEngine
 		int volumetricSteps;
 		float volumetricStepIncrement;
 		int volumetricQuality;
-		int volumetric_pad0;
+		// Maximum camera-to-light distance (metres) at which the per-pixel
+		// volumetric scattering loop still runs for a punctual light. Beyond
+		// this the light's volume mesh still rasterises (cheap) and the surface
+		// lighting still computes, but the expensive 14..20-sample ray-march
+		// loop in the PS is skipped. Driven from r_volumetricLightMaxDistance.
+		float volumetricLightMaxDistance;
 		int volumetric_pad1;
 		int volumetric_pad2;
 		float volumetricPointInsideMin;
