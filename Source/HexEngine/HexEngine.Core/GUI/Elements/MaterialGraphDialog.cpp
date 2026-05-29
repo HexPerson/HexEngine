@@ -810,6 +810,158 @@ namespace HexEngine
 				}
 			});
 
+		// PbrOutput per-material widgets. Created once here, enabled only when
+		// a PbrOutput node is selected. Each widget's on-edit callback writes
+		// back to the currently-selected PbrOutput node's pbrOutputProperties
+		// AND mirrors into a scratch field (so the widget can show a stable
+		// value when nothing's selected).
+		const auto pbrRowSize = Point(_properties->GetSize().x - 20, 20);
+
+		_pbrTransparencyToggle = new Checkbox(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Has Transparency", &_pbrHasTransparency);
+		_pbrTransparencyToggle->SetOnCheckFn([this](Checkbox*, bool v)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				n->pbrOutputProperties.hasTransparency = v ? 1 : 0; MarkDirty();
+			}
+		});
+
+		_pbrAffectsGiToggle = new Checkbox(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Affects GI", &_pbrAffectsGI);
+		_pbrAffectsGiToggle->SetOnCheckFn([this](Checkbox*, bool v)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				n->pbrOutputProperties.affectsGI = v ? 1 : 0; MarkDirty();
+			}
+		});
+
+		_pbrEmissiveGiToggle = new Checkbox(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Emissive Affects GI", &_pbrEmissiveAffectsGI);
+		_pbrEmissiveGiToggle->SetOnCheckFn([this](Checkbox*, bool v)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				n->pbrOutputProperties.emissiveAffectsGI = v ? 1 : 0; MarkDirty();
+			}
+		});
+
+		_pbrRainDripDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Rain Drip Intensity", &_pbrRainDripIntensity, 0.0f, 1.0f, 0.01f, 2);
+		_pbrRainDripDrag->SetOnDrag([this](float v, float, float)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				n->pbrOutputProperties.rainDripIntensity = v; MarkDirty();
+			}
+		});
+
+		_pbrCullDistanceDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Cull Distance", &_pbrCullDistance, 0.0f, 10000.0f, 1.0f, 1);
+		_pbrCullDistanceDrag->SetOnDrag([this](float v, float, float)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				n->pbrOutputProperties.cullDistance = v; MarkDirty();
+			}
+		});
+
+		for (int32_t i = 0; i < 4; ++i)
+		{
+			_pbrModelParamDrags[i] = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+				std::format(L"Model Param {}", i), &_pbrModelParams[i], -1.0f, 1.0f, 0.01f, 3);
+			_pbrModelParamDrags[i]->SetOnDrag([this, i](float v, float, float)
+			{
+				if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+				{
+					switch (i)
+					{
+					case 0: n->pbrOutputProperties.modelParams.x = v; break;
+					case 1: n->pbrOutputProperties.modelParams.y = v; break;
+					case 2: n->pbrOutputProperties.modelParams.z = v; break;
+					case 3: n->pbrOutputProperties.modelParams.w = v; break;
+					}
+					MarkDirty();
+				}
+			});
+		}
+
+		// Shading-model dropdown. Mirrors MaterialDialog's options.
+		_pbrShadingModelDrop = new DropDown(_properties, _properties->GetNextPos(), Point(200, 18), L"Shading Model");
+		{
+			auto setModel = [this](int m) {
+				if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+				{
+					n->pbrOutputProperties.materialModel = m; MarkDirty();
+				}
+			};
+			_pbrShadingModelDrop->GetContextMenu()->AddItem(new ContextItem(L"Standard PBR",      [setModel](const std::wstring&) { setModel(0); }));
+			_pbrShadingModelDrop->GetContextMenu()->AddItem(new ContextItem(L"Subsurface (SSS)",  [setModel](const std::wstring&) { setModel(1); }));
+			_pbrShadingModelDrop->GetContextMenu()->AddItem(new ContextItem(L"Clearcoat",          [setModel](const std::wstring&) { setModel(2); }));
+			_pbrShadingModelDrop->GetContextMenu()->AddItem(new ContextItem(L"Anisotropic",        [setModel](const std::wstring&) { setModel(3); }));
+			_pbrShadingModelDrop->GetContextMenu()->AddItem(new ContextItem(L"Sheen / Cloth",      [setModel](const std::wstring&) { setModel(4); }));
+		}
+
+		// Depth-state dropdown.
+		_pbrDepthStateDrop = new DropDown(_properties, _properties->GetNextPos(), Point(200, 18), L"Depth State");
+		{
+			auto setDS = [this](DepthBufferState ds) {
+				if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+				{
+					n->pbrOutputProperties.depthState = ds; MarkDirty();
+				}
+			};
+			_pbrDepthStateDrop->GetContextMenu()->AddItem(new ContextItem(L"None",          [setDS](const std::wstring&) { setDS(DepthBufferState::DepthNone); }));
+			_pbrDepthStateDrop->GetContextMenu()->AddItem(new ContextItem(L"Default",       [setDS](const std::wstring&) { setDS(DepthBufferState::DepthDefault); }));
+			_pbrDepthStateDrop->GetContextMenu()->AddItem(new ContextItem(L"Read",          [setDS](const std::wstring&) { setDS(DepthBufferState::DepthRead); }));
+			_pbrDepthStateDrop->GetContextMenu()->AddItem(new ContextItem(L"Reverse-Z",     [setDS](const std::wstring&) { setDS(DepthBufferState::DepthReverseZ); }));
+			_pbrDepthStateDrop->GetContextMenu()->AddItem(new ContextItem(L"Read Reverse-Z",[setDS](const std::wstring&) { setDS(DepthBufferState::DepthReadReverseZ); }));
+		}
+
+		// Blend-state dropdown.
+		_pbrBlendStateDrop = new DropDown(_properties, _properties->GetNextPos(), Point(200, 18), L"Blend State");
+		{
+			auto setBS = [this](BlendState bs) {
+				if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+				{
+					n->pbrOutputProperties.blendState = bs; MarkDirty();
+				}
+			};
+			_pbrBlendStateDrop->GetContextMenu()->AddItem(new ContextItem(L"Opaque",       [setBS](const std::wstring&) { setBS(BlendState::Opaque); }));
+			_pbrBlendStateDrop->GetContextMenu()->AddItem(new ContextItem(L"Additive",     [setBS](const std::wstring&) { setBS(BlendState::Additive); }));
+			_pbrBlendStateDrop->GetContextMenu()->AddItem(new ContextItem(L"Subtractive",  [setBS](const std::wstring&) { setBS(BlendState::Subtractive); }));
+			_pbrBlendStateDrop->GetContextMenu()->AddItem(new ContextItem(L"Transparency", [setBS](const std::wstring&) { setBS(BlendState::Transparency); }));
+		}
+
+		// Culling-mode dropdown.
+		_pbrCullModeDrop = new DropDown(_properties, _properties->GetNextPos(), Point(200, 18), L"Culling Mode");
+		{
+			auto setCM = [this](CullingMode cm) {
+				if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+				{
+					n->pbrOutputProperties.cullMode = cm; MarkDirty();
+				}
+			};
+			_pbrCullModeDrop->GetContextMenu()->AddItem(new ContextItem(L"None",       [setCM](const std::wstring&) { setCM(CullingMode::NoCulling); }));
+			_pbrCullModeDrop->GetContextMenu()->AddItem(new ContextItem(L"Back Face",  [setCM](const std::wstring&) { setCM(CullingMode::BackFace); }));
+			_pbrCullModeDrop->GetContextMenu()->AddItem(new ContextItem(L"Front Face", [setCM](const std::wstring&) { setCM(CullingMode::FrontFace); }));
+		}
+
+		// Material-format (texture packing) dropdown.
+		_pbrFormatDrop = new DropDown(_properties, _properties->GetNextPos(), Point(200, 18), L"Material Format");
+		{
+			auto setF = [this](MaterialFormat f) {
+				if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+				{
+					n->pbrOutputProperties.materialFormat = f; MarkDirty();
+				}
+			};
+			_pbrFormatDrop->GetContextMenu()->AddItem(new ContextItem(L"None", [setF](const std::wstring&) { setF(MaterialFormat::None); }));
+			_pbrFormatDrop->GetContextMenu()->AddItem(new ContextItem(L"ORM",  [setF](const std::wstring&) { setF(MaterialFormat::ORM); }));
+			_pbrFormatDrop->GetContextMenu()->AddItem(new ContextItem(L"RMA",  [setF](const std::wstring&) { setF(MaterialFormat::RMA); }));
+		}
+
 		for (int32_t i = 0; i < 6; ++i)
 		{
 			_compileMessages[i] = new LineEdit(
@@ -878,57 +1030,94 @@ namespace HexEngine
 
 		_material->_graph.EnsureDefaultOutputBindings();
 
-		auto ensureOutputNode = [this](const char* id, const char* name, const math::Vector2& pos, MaterialGraphValueType type)
+		// Two output layouts coexist: the legacy "seven separate Output nodes"
+		// and the unified PbrOutput node. New graphs get the unified one; old
+		// graphs keep their legacy nodes so we don't churn existing files. The
+		// decision is per-graph based on what's already in there:
+		//   - PbrOutput node present  -> unified layout, skip legacy backfill
+		//   - Any legacy output_* node present -> legacy layout, backfill the
+		//     missing ones so artists who started with a partial set get a
+		//     complete row
+		//   - Neither -> fresh graph, insert a PbrOutput
+		const bool hasPbrOutput = _material->_graph.FindPbrOutputNode() != nullptr;
+		const bool hasAnyLegacyOutputNode =
+			_material->_graph.FindNode("output_basecolor")  != nullptr ||
+			_material->_graph.FindNode("output_normal")     != nullptr ||
+			_material->_graph.FindNode("output_roughness")  != nullptr ||
+			_material->_graph.FindNode("output_metallic")   != nullptr ||
+			_material->_graph.FindNode("output_emissive")   != nullptr ||
+			_material->_graph.FindNode("output_opacity")    != nullptr ||
+			_material->_graph.FindNode("output_smoothness") != nullptr;
+
+		if (hasPbrOutput)
 		{
-			if (auto* node = _material->_graph.FindNode(id); node == nullptr)
+			// New layout - the PbrOutput's input-pin connections already drive
+			// graph.outputs via EnsureDefaultOutputBindings above. Nothing else
+			// to do.
+		}
+		else if (hasAnyLegacyOutputNode)
+		{
+			// Legacy layout - backfill any missing output_* nodes so the
+			// artist's canvas always has the full row.
+			auto ensureOutputNode = [this](const char* id, const char* name, const math::Vector2& pos, MaterialGraphValueType type)
 			{
-				_material->_graph.nodes.push_back(MakeMaterialOutputNode(id, name, pos, type));
-				_isDirty = true;
-			}
-			else
-			{
-				node->nodeType = MaterialGraphNodeType::Output;
-				node->displayName = name;
-				if (node->inputPins.empty())
+				if (auto* node = _material->_graph.FindNode(id); node == nullptr)
 				{
-					node->inputPins.push_back({ "In", "In", type, MaterialGraphPinDirection::Input });
+					_material->_graph.nodes.push_back(MakeMaterialOutputNode(id, name, pos, type));
+					_isDirty = true;
+				}
+				else
+				{
+					node->nodeType = MaterialGraphNodeType::Output;
+					node->displayName = name;
+					if (node->inputPins.empty())
+					{
+						node->inputPins.push_back({ "In", "In", type, MaterialGraphPinDirection::Input });
+						_isDirty = true;
+					}
+				}
+			};
+
+			ensureOutputNode("output_basecolor",  "BaseColor",  math::Vector2(620.0f, 80.0f),  MaterialGraphValueType::Vector4);
+			ensureOutputNode("output_normal",     "Normal",     math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4);
+			ensureOutputNode("output_roughness",  "Roughness",  math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar);
+			ensureOutputNode("output_metallic",   "Metallic",   math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
+			ensureOutputNode("output_emissive",   "Emissive",   math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
+			ensureOutputNode("output_opacity",    "Opacity",    math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
+			ensureOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar);
+
+			// Keep visual output-node links in sync with authoritative output bindings.
+			for (const auto& output : _material->_graph.outputs)
+			{
+				if (output.nodeId.empty() || output.pinId.empty())
+					continue;
+
+				const std::string outputNodeId = GetOutputNodeIdForSemantic(output.semantic);
+				const bool hasConnection = std::find_if(
+					_material->_graph.connections.begin(),
+					_material->_graph.connections.end(),
+					[&](const MaterialGraphConnection& connection)
+					{
+						return connection.fromNodeId == output.nodeId &&
+							connection.fromPinId == output.pinId &&
+							connection.toNodeId == outputNodeId &&
+							connection.toPinId == "In";
+					}) != _material->_graph.connections.end();
+
+				if (!hasConnection)
+				{
+					_material->_graph.connections.push_back(
+						{ output.nodeId, output.pinId, outputNodeId, "In" });
 					_isDirty = true;
 				}
 			}
-		};
-
-		ensureOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4);
-		ensureOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4);
-		ensureOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar);
-		ensureOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
-		ensureOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
-		ensureOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
-		ensureOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar);
-
-		// Keep visual output-node links in sync with authoritative output bindings.
-		for (const auto& output : _material->_graph.outputs)
+		}
+		else
 		{
-			if (output.nodeId.empty() || output.pinId.empty())
-				continue;
-
-			const std::string outputNodeId = GetOutputNodeIdForSemantic(output.semantic);
-			const bool hasConnection = std::find_if(
-				_material->_graph.connections.begin(),
-				_material->_graph.connections.end(),
-				[&](const MaterialGraphConnection& connection)
-				{
-					return connection.fromNodeId == output.nodeId &&
-						connection.fromPinId == output.pinId &&
-						connection.toNodeId == outputNodeId &&
-						connection.toPinId == "In";
-				}) != _material->_graph.connections.end();
-
-			if (!hasConnection)
-			{
-				_material->_graph.connections.push_back(
-					{ output.nodeId, output.pinId, outputNodeId, "In" });
-				_isDirty = true;
-			}
+			// Fresh graph - drop in a unified PbrOutput node so the canvas
+			// has somewhere for wires to terminate.
+			_material->_graph.nodes.push_back(MaterialGraph::CreatePbrOutputNode("output_pbr", math::Vector2(620.0f, 300.0f)));
+			_isDirty = true;
 		}
 	}
 
@@ -1020,6 +1209,44 @@ namespace HexEngine
 		else
 			_texturePath->SetValue(L"");
 		if (isTextureNode) _texturePath->EnableRecursive(); else _texturePath->DisableRecursive();
+
+		// PbrOutput widgets: only enabled when a PbrOutput node is selected.
+		// Sync local scratch vars to the node's properties so the widgets show
+		// the right values on selection change.
+		const bool isPbrOutputNode = hasNode && node->nodeType == MaterialGraphNodeType::PbrOutput;
+		if (isPbrOutputNode)
+		{
+			const auto& p = node->pbrOutputProperties;
+			_pbrHasTransparency    = (p.hasTransparency    != 0);
+			_pbrAffectsGI          = (p.affectsGI          != 0);
+			_pbrEmissiveAffectsGI  = (p.emissiveAffectsGI  != 0);
+			_pbrRainDripIntensity  = p.rainDripIntensity;
+			_pbrCullDistance       = p.cullDistance;
+			_pbrModelParams[0]     = p.modelParams.x;
+			_pbrModelParams[1]     = p.modelParams.y;
+			_pbrModelParams[2]     = p.modelParams.z;
+			_pbrModelParams[3]     = p.modelParams.w;
+			if (_pbrRainDripDrag)    _pbrRainDripDrag->SetValue(std::format(L"{:.3f}", _pbrRainDripIntensity));
+			if (_pbrCullDistanceDrag)_pbrCullDistanceDrag->SetValue(std::format(L"{:.1f}", _pbrCullDistance));
+			for (int32_t i = 0; i < 4; ++i)
+				if (_pbrModelParamDrags[i]) _pbrModelParamDrags[i]->SetValue(std::format(L"{:.3f}", _pbrModelParams[i]));
+		}
+		const auto setPbrEnabled = [isPbrOutputNode](Element* e) {
+			if (e == nullptr) return;
+			if (isPbrOutputNode) e->EnableRecursive(); else e->DisableRecursive();
+		};
+		setPbrEnabled(_pbrTransparencyToggle);
+		setPbrEnabled(_pbrAffectsGiToggle);
+		setPbrEnabled(_pbrEmissiveGiToggle);
+		setPbrEnabled(_pbrRainDripDrag);
+		setPbrEnabled(_pbrCullDistanceDrag);
+		for (int32_t i = 0; i < 4; ++i)
+			setPbrEnabled(_pbrModelParamDrags[i]);
+		setPbrEnabled(_pbrShadingModelDrop);
+		setPbrEnabled(_pbrDepthStateDrop);
+		setPbrEnabled(_pbrBlendStateDrop);
+		setPbrEnabled(_pbrCullModeDrop);
+		setPbrEnabled(_pbrFormatDrop);
 	}
 
 	void MaterialGraphDialog::SyncParameterDefinition(const MaterialGraphNode& node)

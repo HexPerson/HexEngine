@@ -37,6 +37,47 @@ namespace HexEngine
 		return nullptr;
 	}
 
+	MaterialGraphNode* MaterialGraph::FindPbrOutputNode()
+	{
+		for (auto& node : nodes)
+		{
+			if (node.nodeType == MaterialGraphNodeType::PbrOutput)
+				return &node;
+		}
+		return nullptr;
+	}
+
+	const MaterialGraphNode* MaterialGraph::FindPbrOutputNode() const
+	{
+		for (const auto& node : nodes)
+		{
+			if (node.nodeType == MaterialGraphNodeType::PbrOutput)
+				return &node;
+		}
+		return nullptr;
+	}
+
+	MaterialGraphNode MaterialGraph::CreatePbrOutputNode(const std::string& id, const math::Vector2& position)
+	{
+		// Pin ids match the seven MaterialGraphOutputSemantic names so the
+		// compiler can map pin -> semantic by string. Display labels match
+		// the seven original Output nodes so artists migrating from the old
+		// layout see familiar labels.
+		MaterialGraphNode node;
+		node.id = id;
+		node.nodeType = MaterialGraphNodeType::PbrOutput;
+		node.displayName = "PBR Output";
+		node.position = position;
+		node.inputPins.push_back({ "BaseColor",  "BaseColor",  MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
+		node.inputPins.push_back({ "Normal",     "Normal",     MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
+		node.inputPins.push_back({ "Roughness",  "Roughness",  MaterialGraphValueType::Scalar,  MaterialGraphPinDirection::Input });
+		node.inputPins.push_back({ "Metallic",   "Metallic",   MaterialGraphValueType::Scalar,  MaterialGraphPinDirection::Input });
+		node.inputPins.push_back({ "Emissive",   "Emissive",   MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
+		node.inputPins.push_back({ "Opacity",    "Opacity",    MaterialGraphValueType::Scalar,  MaterialGraphPinDirection::Input });
+		node.inputPins.push_back({ "Smoothness", "Smoothness", MaterialGraphValueType::Scalar,  MaterialGraphPinDirection::Input });
+		return node;
+	}
+
 	const MaterialGraphPin* MaterialGraph::FindPin(const std::string& nodeId, const std::string& pinId, MaterialGraphPinDirection direction) const
 	{
 		const auto* node = FindNode(nodeId);
@@ -79,6 +120,69 @@ namespace HexEngine
 				MaterialGraphOutputBinding b;
 				b.semantic = semantic;
 				outputs.push_back(std::move(b));
+			}
+		}
+
+		// When the graph uses the unified PBR Output node (new layout), sync the
+		// outputs vector from that node's input-pin connections. Each pin id
+		// matches a semantic name (BaseColor, Normal, ...) so the mapping is
+		// direct - we just look up which source node/pin feeds each PbrOutput
+		// input pin and write that into the corresponding outputs binding.
+		//
+		// This makes the unified node the source of truth for new graphs while
+		// the existing `outputs` array (and all the compiler code that walks it)
+		// stays unchanged. Old graphs using the seven separate Output nodes
+		// don't have a PbrOutput so this is a no-op for them.
+		const MaterialGraphNode* pbrOut = FindPbrOutputNode();
+		if (pbrOut != nullptr)
+		{
+			const auto pinNameToSemantic = [](const std::string& pinId) -> MaterialGraphOutputSemantic
+			{
+				MaterialGraphOutputSemantic s;
+				if (MaterialGraph::ParseOutputSemantic(pinId, s))
+					return s;
+				return MaterialGraphOutputSemantic::BaseColor; // unreachable when pin ids match enum names
+			};
+
+			for (const auto& pin : pbrOut->inputPins)
+			{
+				MaterialGraphOutputSemantic semantic;
+				if (!MaterialGraph::ParseOutputSemantic(pin.id, semantic))
+					continue; // pin name isn't a semantic - skip (defensive)
+
+				// Find the connection feeding this PbrOutput input pin.
+				const auto connIt = std::find_if(connections.begin(), connections.end(),
+					[&pbrOut, &pin](const MaterialGraphConnection& c)
+					{
+						return c.toNodeId == pbrOut->id && c.toPinId == pin.id;
+					});
+
+				// Find/create the outputs binding for this semantic.
+				auto bindIt = std::find_if(outputs.begin(), outputs.end(),
+					[semantic](const MaterialGraphOutputBinding& b)
+					{
+						return b.semantic == semantic;
+					});
+				if (bindIt == outputs.end())
+				{
+					MaterialGraphOutputBinding b;
+					b.semantic = semantic;
+					outputs.push_back(b);
+					bindIt = outputs.end() - 1;
+				}
+
+				if (connIt != connections.end())
+				{
+					bindIt->nodeId = connIt->fromNodeId;
+					bindIt->pinId  = connIt->fromPinId;
+				}
+				else
+				{
+					// Pin is unconnected. Clear so the compiler falls back to
+					// the per-channel default (g_material.* values).
+					bindIt->nodeId.clear();
+					bindIt->pinId.clear();
+				}
 			}
 		}
 	}
@@ -162,23 +266,22 @@ namespace HexEngine
 			return node;
 		};
 
-		graph.nodes.push_back(makeOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4));
-		graph.nodes.push_back(makeOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4));
-		graph.nodes.push_back(makeOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar));
-		graph.nodes.push_back(makeOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar));
-		graph.nodes.push_back(makeOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4));
-		graph.nodes.push_back(makeOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar));
-		graph.nodes.push_back(makeOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar));
+		// Unified PBR Output node. Replaces the seven output_* stubs of the v1
+		// graph layout - one node with seven input pins instead of seven
+		// terminal nodes. Connections from the source constant nodes go to the
+		// matching pin (pin id == semantic name) so the compiler can resolve
+		// the PbrOutput's inputs directly without going via graph.outputs.
+		graph.nodes.push_back(CreatePbrOutputNode("output_pbr", math::Vector2(620.0f, 300.0f)));
 
 		graph.connections =
 		{
-			{ "node_albedo", "out", "output_basecolor", "In" },
-			{ "node_normal", "out", "output_normal", "In" },
-			{ "node_roughness", "out", "output_roughness", "In" },
-			{ "node_metallic", "out", "output_metallic", "In" },
-			{ "node_emissive", "out", "output_emissive", "In" },
-			{ "node_opacity", "out", "output_opacity", "In" },
-			{ "node_smoothness", "out", "output_smoothness", "In" }
+			{ "node_albedo",     "out", "output_pbr", "BaseColor"  },
+			{ "node_normal",     "out", "output_pbr", "Normal"     },
+			{ "node_roughness",  "out", "output_pbr", "Roughness"  },
+			{ "node_metallic",   "out", "output_pbr", "Metallic"   },
+			{ "node_emissive",   "out", "output_pbr", "Emissive"   },
+			{ "node_opacity",    "out", "output_pbr", "Opacity"    },
+			{ "node_smoothness", "out", "output_pbr", "Smoothness" }
 		};
 
 		graph.outputs =
@@ -359,43 +462,42 @@ namespace HexEngine
 		addScalarConstant("node_smoothness", "Smoothness", math::Vector2(80.0f, 560.0f), material._properties.smoothness);
 		const std::string smoothnessSource = "node_smoothness";
 
-		auto makeOutputNode = [&](const char* id, const char* name, const math::Vector2& position, MaterialGraphValueType valueType)
-		{
-			auto node = makeNode(id, MaterialGraphNodeType::Output, name, position);
-			node.inputPins.push_back({ "In", "In", valueType, MaterialGraphPinDirection::Input });
-			graph.nodes.push_back(std::move(node));
-		};
+		// Use the unified PBR Output node (new layout) rather than seven separate
+		// output_* stubs. Connections wire each source to the matching input pin
+		// (pin id matches the semantic name).
+		graph.nodes.push_back(MaterialGraph::CreatePbrOutputNode("output_pbr", math::Vector2(620.0f, 300.0f)));
 
-		makeOutputNode("output_basecolor", "BaseColor", math::Vector2(620.0f, 80.0f), MaterialGraphValueType::Vector4);
-		makeOutputNode("output_normal", "Normal", math::Vector2(620.0f, 160.0f), MaterialGraphValueType::Vector4);
-		makeOutputNode("output_roughness", "Roughness", math::Vector2(620.0f, 240.0f), MaterialGraphValueType::Scalar);
-		makeOutputNode("output_metallic", "Metallic", math::Vector2(620.0f, 320.0f), MaterialGraphValueType::Scalar);
-		makeOutputNode("output_emissive", "Emissive", math::Vector2(620.0f, 400.0f), MaterialGraphValueType::Vector4);
-		makeOutputNode("output_opacity", "Opacity", math::Vector2(620.0f, 480.0f), MaterialGraphValueType::Scalar);
-		makeOutputNode("output_smoothness", "Smoothness", math::Vector2(620.0f, 560.0f), MaterialGraphValueType::Scalar);
-
-		addConnection(baseColorSource, "Out", "output_basecolor", "In");
+		addConnection(baseColorSource, "Out", "output_pbr", "BaseColor");
 		if (!normalSource.empty())
-			addConnection(normalSource, "Out", "output_normal", "In");
-		addConnection(roughnessSource, "Out", "output_roughness", "In");
-		addConnection(metallicSource, "Out", "output_metallic", "In");
-		addConnection(emissiveSource, "Out", "output_emissive", "In");
-		addConnection(opacitySource, "Out", "output_opacity", "In");
-		addConnection(smoothnessSource, "out", "output_smoothness", "In");
+			addConnection(normalSource, "Out", "output_pbr", "Normal");
+		addConnection(roughnessSource, "Out", "output_pbr", "Roughness");
+		addConnection(metallicSource, "Out", "output_pbr", "Metallic");
+		addConnection(emissiveSource, "Out", "output_pbr", "Emissive");
+		addConnection(opacitySource, "Out", "output_pbr", "Opacity");
+		addConnection(smoothnessSource, "out", "output_pbr", "Smoothness");
 
-		graph.outputs =
+		// Seed the PbrOutput node's per-material constants from the standard
+		// material's existing properties so a converted graph renders the same
+		// as the source material on first compile.
 		{
-			{ MaterialGraphOutputSemantic::BaseColor, baseColorSource, "Out" },
-			// Normal binding is intentionally empty when no normal map exists -
-			// the compiler treats an empty nodeId/pinId as "use the geometry
-			// normal" via the input.normal fallback in BuildGraphShaderSource.
-			{ MaterialGraphOutputSemantic::Normal, normalSource, normalSource.empty() ? std::string{} : std::string("Out") },
-			{ MaterialGraphOutputSemantic::Roughness, roughnessSource, "Out" },
-			{ MaterialGraphOutputSemantic::Metallic, metallicSource, "Out" },
-			{ MaterialGraphOutputSemantic::Emissive, emissiveSource, "Out" },
-			{ MaterialGraphOutputSemantic::Opacity, opacitySource, "Out" },
-			{ MaterialGraphOutputSemantic::Smoothness, smoothnessSource, "out" }
-		};
+			auto& p = graph.nodes.back().pbrOutputProperties;
+			p.hasTransparency   = material._properties.hasTransparency;
+			p.materialModel     = material._properties.materialModel;
+			p.modelParams       = material._properties.modelParams;
+			p.rainDripIntensity = material._properties.rainDripIntensity;
+			p.affectsGI         = material.GetAffectsGI() ? 1 : 0;
+			p.emissiveAffectsGI = material.GetEmissiveAffectsGI() ? 1 : 0;
+			p.depthState        = material.GetDepthState();
+			p.blendState        = material.GetBlendState();
+			p.cullMode          = material.GetCullMode();
+			p.materialFormat    = material.GetFormat();
+			p.cullDistance      = material.GetCullDistance();
+		}
+
+		// graph.outputs left empty here - EnsureDefaultOutputBindings() (called by
+		// the dialog / loader on first use) will derive it from the PbrOutput's
+		// pin connections.
+		graph.EnsureDefaultOutputBindings();
 
 		return graph;
 	}
@@ -442,6 +544,7 @@ namespace HexEngine
 		if (text == "TextureParameter") { outType = MaterialGraphNodeType::TextureParameter; return true; }
 		if (text == "WeatherScalar") { outType = MaterialGraphNodeType::WeatherScalar; return true; }
 		if (text == "WeatherVector") { outType = MaterialGraphNodeType::WeatherVector; return true; }
+		if (text == "PbrOutput") { outType = MaterialGraphNodeType::PbrOutput; return true; }
 		return false;
 	}
 
@@ -465,6 +568,7 @@ namespace HexEngine
 		case MaterialGraphNodeType::TextureParameter: return "TextureParameter";
 		case MaterialGraphNodeType::WeatherScalar: return "WeatherScalar";
 		case MaterialGraphNodeType::WeatherVector: return "WeatherVector";
+		case MaterialGraphNodeType::PbrOutput: return "PbrOutput";
 		}
 	}
 
@@ -536,6 +640,28 @@ namespace HexEngine
 						{ "name", pin.name },
 						{ "valueType", ValueTypeToString(pin.valueType) }
 					});
+			}
+
+			// PbrOutput node properties. Round-trip the per-material constants
+			// the unified PBR output exposes (render state, model selection,
+			// rain-drip intensity, etc.). Stored under a "pbrOutput" sub-object
+			// so old graphs that don't have one still deserialise cleanly.
+			if (node.nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				const auto& p = node.pbrOutputProperties;
+				n["pbrOutput"] = {
+					{ "hasTransparency", p.hasTransparency },
+					{ "materialModel", p.materialModel },
+					{ "modelParams", { p.modelParams.x, p.modelParams.y, p.modelParams.z, p.modelParams.w } },
+					{ "rainDripIntensity", p.rainDripIntensity },
+					{ "affectsGI", p.affectsGI },
+					{ "emissiveAffectsGI", p.emissiveAffectsGI },
+					{ "depthState", static_cast<int>(p.depthState) },
+					{ "blendState", static_cast<int>(p.blendState) },
+					{ "cullMode", static_cast<int>(p.cullMode) },
+					{ "materialFormat", static_cast<int>(p.materialFormat) },
+					{ "cullDistance", p.cullDistance }
+				};
 			}
 		}
 
@@ -634,6 +760,34 @@ namespace HexEngine
 					parsePins(*pins, MaterialGraphPinDirection::Input, node.inputPins);
 				if (const auto pins = n.find("outputPins"); pins != n.end())
 					parsePins(*pins, MaterialGraphPinDirection::Output, node.outputPins);
+
+				// PbrOutput per-material constants. Sub-object only present on
+				// the unified output node; older graphs and non-PbrOutput nodes
+				// just get default-constructed properties.
+				if (node.nodeType == MaterialGraphNodeType::PbrOutput)
+				{
+					if (const auto poIt = n.find("pbrOutput"); poIt != n.end() && poIt->is_object())
+					{
+						auto& p = node.pbrOutputProperties;
+						p.hasTransparency    = poIt->value("hasTransparency", 0);
+						p.materialModel      = poIt->value("materialModel", 0);
+						p.rainDripIntensity  = poIt->value("rainDripIntensity", 0.0f);
+						p.affectsGI          = poIt->value("affectsGI", 1);
+						p.emissiveAffectsGI  = poIt->value("emissiveAffectsGI", 0);
+						p.depthState         = static_cast<DepthBufferState>(poIt->value("depthState",     static_cast<int>(DepthBufferState::DepthDefault)));
+						p.blendState         = static_cast<BlendState>(       poIt->value("blendState",     static_cast<int>(BlendState::Opaque)));
+						p.cullMode           = static_cast<CullingMode>(      poIt->value("cullMode",       static_cast<int>(CullingMode::BackFace)));
+						p.materialFormat     = static_cast<MaterialFormat>(   poIt->value("materialFormat", static_cast<int>(MaterialFormat::None)));
+						p.cullDistance       = poIt->value("cullDistance", 0.0f);
+						if (const auto mp = poIt->find("modelParams"); mp != poIt->end() && mp->is_array() && mp->size() >= 4)
+						{
+							p.modelParams.x = (*mp)[0].get<float>();
+							p.modelParams.y = (*mp)[1].get<float>();
+							p.modelParams.z = (*mp)[2].get<float>();
+							p.modelParams.w = (*mp)[3].get<float>();
+						}
+					}
+				}
 
 				outGraph.nodes.push_back(std::move(node));
 			}

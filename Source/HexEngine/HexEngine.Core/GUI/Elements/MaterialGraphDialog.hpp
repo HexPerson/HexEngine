@@ -5,6 +5,8 @@
 #include "AssetSearch.hpp"
 #include "LineEdit.hpp"
 #include "DragFloat.hpp"
+#include "Checkbox.hpp"
+#include "DropDown.hpp"
 #include "../../Graphics/Material.hpp"
 #include "../../Graphics/MaterialGraphCompiler.hpp"
 
@@ -45,6 +47,29 @@ namespace HexEngine
 		DragFloat* _vectorDrags[4] = { nullptr, nullptr, nullptr, nullptr };
 		AssetSearch* _texturePath = nullptr;
 		LineEdit* _selectedNodeLabel = nullptr;
+
+		// PbrOutput per-material widgets. Only enabled when the selected node
+		// is a PbrOutput; otherwise hidden. They bind directly to whichever
+		// PbrOutput node is currently selected via raw pointers refreshed in
+		// RebuildPropertyPanel - so flipping nodes doesn't accidentally edit a
+		// stale node.
+		bool        _pbrAffectsGI = true;
+		bool        _pbrEmissiveAffectsGI = false;
+		bool        _pbrHasTransparency = false;
+		float       _pbrRainDripIntensity = 0.0f;
+		float       _pbrCullDistance = 0.0f;
+		float       _pbrModelParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		Checkbox*   _pbrAffectsGiToggle = nullptr;
+		Checkbox*   _pbrEmissiveGiToggle = nullptr;
+		Checkbox*   _pbrTransparencyToggle = nullptr;
+		DragFloat*  _pbrRainDripDrag = nullptr;
+		DragFloat*  _pbrCullDistanceDrag = nullptr;
+		DragFloat*  _pbrModelParamDrags[4] = { nullptr, nullptr, nullptr, nullptr };
+		DropDown*   _pbrShadingModelDrop = nullptr;
+		DropDown*   _pbrDepthStateDrop = nullptr;
+		DropDown*   _pbrBlendStateDrop = nullptr;
+		DropDown*   _pbrCullModeDrop = nullptr;
+		DropDown*   _pbrFormatDrop = nullptr;
 		std::string _selectedNodeId;
 		bool _isDirty = false;
 		LineEdit* _statusLine = nullptr;

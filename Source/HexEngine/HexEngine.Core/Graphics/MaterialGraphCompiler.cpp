@@ -1115,6 +1115,36 @@ namespace HexEngine
 
 		material._properties.hasTransparency = (opacityPtr != nullptr && !IsDefinitelyOpaqueOpacityExpression(opacityPtr)) ? 1 : 0;
 
+		// When the graph uses the unified PbrOutput node, push its per-material
+		// constants (render state, model selection, rain-drip intensity, etc.)
+		// onto the Material. These properties are also authored via the simple
+		// MaterialDialog so we only overwrite when the unified node is present
+		// (otherwise we'd stomp on the artist's sliders every compile).
+		if (const auto* pbrOut = ctx.graph.FindPbrOutputNode(); pbrOut != nullptr)
+		{
+			const auto& p = pbrOut->pbrOutputProperties;
+			// Material property flags - written to _properties so the cbuffer
+			// gets them at next upload + the simple MaterialDialog reads back the
+			// same values if the user reopens.
+			material._properties.materialModel       = p.materialModel;
+			material._properties.modelParams         = p.modelParams;
+			material._properties.rainDripIntensity   = p.rainDripIntensity;
+			// `hasTransparency` is already inferred above from opacityPtr; respect
+			// the artist's explicit override too (any-of: graph opacity says
+			// transparent OR the artist ticked the box).
+			if (p.hasTransparency != 0)
+				material._properties.hasTransparency = 1;
+			material.SetAffectsGI(p.affectsGI != 0);
+			material.SetEmissiveAffectsGI(p.emissiveAffectsGI != 0);
+
+			// Render state.
+			material.SetDepthState(p.depthState);
+			material.SetBlendState(p.blendState);
+			material.SetCullMode(p.cullMode);
+			material.SetFormat(p.materialFormat);
+			material.SetCullDistance(p.cullDistance);
+		}
+
 		const fs::path generatedShaderDirectory = ResolveGeneratedShaderDirectory(material);
 		if (generatedShaderDirectory.empty())
 		{

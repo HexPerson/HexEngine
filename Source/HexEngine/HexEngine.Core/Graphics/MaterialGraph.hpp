@@ -33,7 +33,15 @@ namespace HexEngine
 		VectorParameter,
 		TextureParameter,
 		WeatherScalar,
-		WeatherVector
+		WeatherVector,
+		// Unified "single output node" replacing the seven separate output_*
+		// nodes. Carries all 7 shading channels as input pins AND a bundle of
+		// per-material constants (depth/blend state, cullDistance, flags,
+		// model params, etc.) so a graph only needs one terminal node instead
+		// of the old "spread your wires across 7 separate stubs" pattern.
+		// Both layouts coexist - old graphs with seven Output nodes still
+		// load and compile identically.
+		PbrOutput
 	};
 
 	enum class MaterialGraphPinDirection : uint8_t
@@ -66,6 +74,32 @@ namespace HexEngine
 		MaterialGraphPinDirection direction = MaterialGraphPinDirection::Input;
 	};
 
+	// Bundle of per-material constants exposed by the PbrOutput node. These are
+	// values that don't make sense to drive per-pixel - render state, material
+	// model selection, etc. - and that are read by the graph compiler at compile
+	// time to populate the resulting Material's properties / render state.
+	// Defaults match what a freshly-created Material would have.
+	struct MaterialGraphPbrOutputProperties
+	{
+		// Material property flags (also exposed via the simple MaterialDialog).
+		int hasTransparency = 0;
+		int materialModel = 0;
+		math::Vector4 modelParams = math::Vector4::Zero;
+		float rainDripIntensity = 0.0f;
+		int affectsGI = 1;
+		int emissiveAffectsGI = 0;
+
+		// Render state - read once by the graph compiler and written into the
+		// Material before its standard shader is compiled, so artists can drive
+		// blend mode / culling / depth from the graph editor without separately
+		// editing the simple material dialog.
+		DepthBufferState depthState = DepthBufferState::DepthDefault;
+		BlendState blendState = BlendState::Opaque;
+		CullingMode cullMode = CullingMode::BackFace;
+		MaterialFormat materialFormat = MaterialFormat::None;
+		float cullDistance = 0.0f;
+	};
+
 	struct MaterialGraphNode
 	{
 		std::string id;
@@ -81,6 +115,10 @@ namespace HexEngine
 
 		std::vector<MaterialGraphPin> inputPins;
 		std::vector<MaterialGraphPin> outputPins;
+
+		// Only populated when nodeType == PbrOutput. Carried on every node so
+		// there's no separate side-table to keep in sync with the nodes vector.
+		MaterialGraphPbrOutputProperties pbrOutputProperties;
 	};
 
 	struct MaterialGraphConnection
@@ -140,6 +178,19 @@ namespace HexEngine
 
 		void EnsureDefaultOutputBindings();
 		static MaterialGraph CreateDefaultPbrGraph();
+
+		// Build a PbrOutput node with the seven shading-input pins + default
+		// PbrOutputProperties. Used by CreateDefaultPbrGraph and the graph
+		// dialog's "Add PBR Output" path. Position is the canvas coord the
+		// caller wants the node to land at.
+		static MaterialGraphNode CreatePbrOutputNode(const std::string& id, const math::Vector2& position);
+
+		// Walks the graph and returns a pointer to the first PbrOutput node (or
+		// nullptr if none exists - old graphs that still use the seven separate
+		// Output nodes). The compiler / dialog use this to decide which output
+		// layout to honour.
+		MaterialGraphNode* FindPbrOutputNode();
+		const MaterialGraphNode* FindPbrOutputNode() const;
 
 		/**
 		 * @brief Build a graph that mirrors a standard-material's PBR inputs.
