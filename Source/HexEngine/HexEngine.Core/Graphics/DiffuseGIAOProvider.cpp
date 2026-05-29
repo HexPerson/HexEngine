@@ -115,8 +115,23 @@ namespace HexEngine
 		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
 		graphics->SetCullingMode(CullingMode::NoCulling);
 
-		// Bind the GI resolved texture (AO in .a) at t0 for the shader.
-		graphics->SetTexture2D(0, giResolved);
+		// Bind GBuffer at t0..t4 (the shader uses GBUFFER_DIFFUSE + GBUFFER_NORMAL
+		// to identify sky pixels and skip them) and the GI resolved RT at t5
+		// (AO is in its .a channel). Without the sky-pixel skip the GI alpha
+		// occasionally drifts above 0 on sky pixels and the multiplicative
+		// blend silently fades the sky toward black.
+		if (g_pEnv->_sceneRenderer != nullptr)
+		{
+			if (const auto* gbuffer = g_pEnv->_sceneRenderer->GetGBuffer(); gbuffer != nullptr)
+			{
+				graphics->SetTexture2D(0, gbuffer->GetDiffuse());
+				graphics->SetTexture2D(1, gbuffer->GetSpecular());
+				graphics->SetTexture2D(2, gbuffer->GetNormal());
+				graphics->SetTexture2D(3, gbuffer->GetPosition());
+				graphics->SetTexture2D(4, gbuffer->GetVelocity());
+			}
+		}
+		graphics->SetTexture2D(5, giResolved);
 
 		// The GuiRenderer's fullscreen path is the right tool here - same
 		// surface that Tonemap / ColourGrade / etc use. It draws a unit
@@ -128,11 +143,12 @@ namespace HexEngine
 			guiRenderer->EndFrame();
 		}
 
-		// Cleanup. Unbind our t0 so the next pass doesn't see stale GI alpha,
-		// reset the implicit-slot counter to 0 so downstream slot-less SRV
-		// binds start at the expected base (mirrors the same fix we did for
-		// the decal pass).
-		graphics->SetTexture2D(0, nullptr);
+		// Cleanup. Unbind our t0..t5 so the next pass doesn't see stale GBuffer
+		// + GI alpha, reset the implicit-slot counter to 0 so downstream
+		// slot-less SRV binds start at the expected base (mirrors the same fix
+		// we did for the decal pass).
+		for (uint32_t slot = 0; slot <= 5; ++slot)
+			graphics->SetTexture2D(slot, nullptr);
 		graphics->SetConstantBufferPS(4, nullptr);
 		graphics->SetBoundResourceIndex(0);
 

@@ -30,7 +30,8 @@
 	// existing beauty RT gets dst = dst * src. Source is greyscale AO, so RGB
 	// channels all carry the same multiplier; alpha is left at 1 to avoid
 	// disturbing whatever the beauty RT's alpha is being used for downstream.
-	Texture2D g_giResolved : register(t0);
+	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
+	Texture2D g_giResolved : register(t5);
 	SamplerState g_pointSampler : register(s2);
 
 	// Cbuffer at b4 - DecalConstants / GIConstants slot is free during this
@@ -42,6 +43,19 @@
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
+		// Sky / no-geometry guard. The GI trace shader emits alpha=0 for sky
+		// pixels (no occlusion) but be defensive in case the resolve / temporal
+		// path bleeds something else in: also check the gbuffer signals that
+		// the rest of the deferred pipeline uses to identify the sky. Returning
+		// 1.0 multiplier here leaves the beauty RT unchanged for sky pixels -
+		// without this we silently multiplied the sky toward black whenever
+		// the GI's alpha drifted above 0.
+		const float4 diff = GBUFFER_DIFFUSE.Sample(g_pointSampler, input.texcoord);
+		const float4 nd   = GBUFFER_NORMAL.Sample(g_pointSampler, input.texcoord);
+		const bool skyPixel = (diff.a == -1.0f) || (nd.w <= 0.0f);
+		if (skyPixel)
+			return float4(1.0f, 1.0f, 1.0f, 1.0f);
+
 		// Voxel occlusion was packed into .a by DiffuseGITrace.shader. Higher
 		// alpha = more occlusion (closer to 1 = fully occluded).
 		const float occlusion = saturate(g_giResolved.Sample(g_pointSampler, input.texcoord).a);

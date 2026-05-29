@@ -460,8 +460,12 @@
 
 		const float depth = pixelNormalDepth.w;
 		const bool skyPixel = (pixelDiffuse.a == -1.0f) || (depth <= 0.0f);
+		// Sky pixels: zero GI contribution AND zero alpha so the AO consumer
+		// reads "no occlusion" here. With the v1 layout (alpha used as
+		// occlusion factor) returning alpha=1 here would tell the AO apply
+		// pass to fully occlude every sky pixel, blacking out the sky.
 		if (skyPixel)
-			return float4(0.0f, 0.0f, 0.0f, 1.0f);
+			return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
 		const float2 velPixels = abs(pixelVelocity) * float2((float)g_screenWidth, (float)g_screenHeight);
 		const float pixelMotion = max(velPixels.x, velPixels.y);
