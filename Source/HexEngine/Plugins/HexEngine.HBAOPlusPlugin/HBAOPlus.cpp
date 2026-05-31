@@ -6,7 +6,18 @@ HexEngine::HVar hbao_unitscale("hbao_unitscale", "Metres to view-space units", 1
 
 bool HBAOPlus::Create()
 {
-	GFSDK_SSAO_Status status;	
+	// Backend gate: this integration uses GFSDK_SSAO_CreateContext_D3D11 which
+	// only accepts an ID3D11Device. The HBAO+ SDK also ships a _D3D12 entry
+	// point we could route through later; for now refuse to come up under any
+	// non-D3D11 backend rather than cast a D3D12 device into a D3D11 one.
+	if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_graphicsDevice != nullptr &&
+		HexEngine::g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
+	{
+		LOG_WARN("HexEngine.HBAOPlusPlugin: disabled (active backend is not D3D11; per-backend port pending)");
+		return false;
+	}
+
+	GFSDK_SSAO_Status status;
 
 	status = GFSDK_SSAO_CreateContext_D3D11(
 		(ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice(),
@@ -17,8 +28,6 @@ bool HBAOPlus::Create()
 		LOG_CRIT("HBAOPlus failed to initialize: %d", status);
 		return false;
 	}
-
-	//g_pEnv->_commandManager->RegisterVar(&hbao_unitscale);
 
 	return true;
 }

@@ -62,11 +62,10 @@ namespace HexEngine
 		/** @brief Blends this texture into `other` using non-premultiplied alpha. */
 		virtual void BlendTo_NonPremultiplied(ITexture2D* other, IShader* optionalShader = nullptr) = 0;
 
-		virtual void SetDebugName(const std::string& name) override
-		{
-#ifdef _DEBUG
-			((ID3D11Texture2D*)GetNativePtr())->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)name.length(), name.data());
-#endif
-		}		
+		// SetDebugName is inherited from INativeGraphicsResource and implemented
+		// in each backend plugin (Texture2D::SetDebugName in HexEngine.D3D11Plugin
+		// for example). The previous inline implementation here cast GetNativePtr()
+		// to ID3D11Texture2D* which only worked under the D3D11 backend.
+
 	};
 }

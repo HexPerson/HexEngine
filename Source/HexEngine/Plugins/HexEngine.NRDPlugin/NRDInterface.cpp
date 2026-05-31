@@ -221,6 +221,18 @@ void NRDInterface::TextureBinding::Reset()
 
 bool NRDInterface::Create()
 {
+	// Backend gate: NRD's integration here is hand-written D3D11 code (the
+	// vendor SDK also exposes a D3D12 path which we haven't ported yet). Refuse
+	// to activate under any non-D3D11 backend so that running the engine under
+	// r_renderer = "d3d12" doesn't crash inside this plugin with a bad
+	// reinterpret_cast on GetNativeDevice().
+	if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_graphicsDevice != nullptr &&
+		HexEngine::g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
+	{
+		LOG_WARN("HexEngine.NRDPlugin: disabled (active backend is not D3D11; per-backend port pending)");
+		return false;
+	}
+
 	_device = nullptr;
 	_context = nullptr;
 	_created = true;

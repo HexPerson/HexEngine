@@ -37,6 +37,14 @@ namespace HexEngine
 	HVar cl_forcelagframe("cl_forcelagframe", "Forcefully delay each frame by this amount (in milliseconds)", 0, 0, 1000);
 	HVar r_debugFrameInfo("r_debugFrameInfo", "Draws per-frame renderer diagnostics (weather, HDR, SSR/TAA state, camera) as text overlay", false, false, true);
 
+	// 0 = auto (prefer the highest-tier backend whose plugin is loaded), 1 = D3D11, 2 = D3D12.
+	// Each renderer plugin's CreateInterface() honours this: plugins whose backend tag doesn't
+	// match the selection return nullptr, so only the correct plugin's IGraphicsDevice is
+	// handed to the engine. In auto-mode for now we resolve to D3D11 because D3D12 is a Phase B
+	// implementation - update the resolution rule in IGraphicsDevice::ShouldActivateBackend once
+	// the D3D12 plugin is feature-complete.
+	HEX_API HVar r_renderer("r_renderer", "Renderer backend selection. 0 = auto, 1 = D3D11, 2 = D3D12", 0, 0, 2);
+
 	Game3DEnvironment::Game3DEnvironment() :
 		_running(false)
 	{
@@ -177,8 +185,8 @@ namespace HexEngine
 
 		env->_materialLoader = new MaterialLoader;
 
-		//env->_streamlineProvider = (IStreamlineProvider*)env->_pluginSystem->CreateInterface(IStreamlineProvider::InterfaceName);
-		//env->_streamlineProvider->Create();
+		env->_streamlineProvider = (IStreamlineProvider*)env->_pluginSystem->CreateInterface(IStreamlineProvider::InterfaceName);
+		env->_streamlineProvider->Create();
 
 		env->_denoiserProvider = (IDenoiserProvider*)env->_pluginSystem->CreateInterface(IDenoiserProvider::InterfaceName);
 		env->_denoiserProvider->Create();

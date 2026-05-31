@@ -43,6 +43,14 @@ public:
 	virtual void* LockPixels(int32_t* rowPitch = nullptr) override;
 	virtual void UnlockPixels() override;
 
+	virtual void SetDebugName(const std::string& name) override
+	{
+#ifdef _DEBUG
+		if (_texture != nullptr)
+			_texture->SetPrivateData(WKPDID_D3DDebugObjectName, (UINT)name.length(), name.data());
+#endif
+	}
+
 private:
 	ID3D11Texture3D* _texture = nullptr;
 	DXGI_FORMAT _format = DXGI_FORMAT::DXGI_FORMAT_UNKNOWN;

@@ -10,6 +10,18 @@ void LogCallback(sl::LogType type, const char* msg)
 
 bool Streamline::Create()
 {
+	// Backend gate: this plugin's D3D11CreateDevice / CreateDXGIFactory1
+	// interception hooks (used by GraphicsDeviceD3D11) are D3D11-specific.
+	// Streamline supports D3D12 natively in the SDK but the integration entry
+	// points here aren't wired for it yet. Refuse to come up under any other
+	// backend so we don't try to interpose D3D11 calls in a D3D12 process.
+	if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_graphicsDevice != nullptr &&
+		HexEngine::g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
+	{
+		LOG_WARN("HexEngine.StreamlinePlugin: disabled (active backend is not D3D11; per-backend port pending)");
+		return false;
+	}
+
 	_dlssOptions.mode = (sl::DLSSMode)-1;
 
 	auto binaryPath = HexEngine::g_pEnv->GetFileSystem().GetBinaryDirectory();
@@ -215,7 +227,7 @@ bool Streamline::QueryOptimalDLSSSettings(
 	opts.mode = (sl::DLSSMode)mode;
 	opts.outputWidth = desiredWidth;    // e.g 1920;
 	opts.outputHeight = desiredHeight; // e.g. 1080;
-	opts.colorBuffersHDR = sl::Boolean::eFalse;
+	opts.colorBuffersHDR = sl::Boolean::eTrue;
 
 
 

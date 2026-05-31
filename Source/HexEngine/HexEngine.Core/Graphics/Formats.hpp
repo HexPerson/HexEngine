@@ -27,6 +27,36 @@ namespace HexEngine
 	};
 
 	/**
+	 * @brief Resolves whether a renderer plugin with `selfBackend` should activate
+	 *        given the current `r_renderer` cvar value.
+	 *
+	 * Plugin contract: each renderer plugin's CreateInterface() calls this with
+	 * its own GraphicsBackend tag. If it returns false, the plugin returns nullptr
+	 * from CreateInterface and the engine falls back to whichever other renderer
+	 * plugin claims IGraphicsDevice. The check guarantees that at most one
+	 * renderer plugin per run hands its IGraphicsDevice to the engine.
+	 *
+	 * Cvar values (from Game3DEnvironment.cpp):
+	 *   0 = auto -> currently prefers D3D11 (until D3D12 implementation is complete)
+	 *   1 = D3D11
+	 *   2 = D3D12
+	 */
+	inline bool ShouldActivateBackend(GraphicsBackend selfBackend, int32_t rendererCvar)
+	{
+		switch (rendererCvar)
+		{
+		case 1: return selfBackend == GraphicsBackend::D3D11;
+		case 2: return selfBackend == GraphicsBackend::D3D12;
+		case 0: // auto
+		default:
+			// Phase A bias: D3D11 wins auto-mode because the D3D12 plugin is a
+			// non-functional stub. When D3D12 reaches feature parity, flip the
+			// auto-mode preference here and document the cutover.
+			return selfBackend == GraphicsBackend::D3D11;
+		}
+	}
+
+	/**
 	 * @brief Pixel / vertex / typed-buffer format.
 	 *
 	 * Mirrors the closed set of DXGI_FORMAT values the engine actually uses.

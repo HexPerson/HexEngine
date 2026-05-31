@@ -31,6 +31,17 @@ bool OIDN::Create()
 	if (_created)
 		return true;
 
+	// Backend gate: GPU interop in this plugin shares D3D11 textures with OIDN.
+	// Refuse to come up under any non-D3D11 backend - the resource sharing path
+	// would otherwise reinterpret_cast a non-D3D11 device handle from
+	// GetNativeDevice() and crash.
+	if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_graphicsDevice != nullptr &&
+		HexEngine::g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
+	{
+		LOG_WARN("HexEngine.OIDNPlugin: disabled (active backend is not D3D11; per-backend port pending)");
+		return false;
+	}
+
 	_created = CreateDevice();
 	return _created;
 }
