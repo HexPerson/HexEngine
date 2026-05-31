@@ -295,13 +295,20 @@ void Streamline::PrepareFrameResources(void* colourIn, void* colourOut, void* mo
 void Streamline::SetCommonConstants(const HexEngine::StreamlineConstants& constants)
 {
 	sl::Constants consts = {};
-	// Set motion vector scaling based on your setup
-	//consts.mvecScale = { 1,1 }; // Values in eMotionVectors are in [-1,1] range
-	//consts.mvecScale = { 1,1 }; // Values in eMotionVectors are in [-1,1] range
-	consts.mvecScale = { 1.0f / _renderExtent.width, 1.0f / _renderExtent.height }; // Values in eMotionVectors are in pixel space
-	//consts.mvecScale = myCustomScaling; // Custom scaling to ensure values end up in [-1,1] range
 
-	//newPos.xy = (newPos.xy * 2) + 0.5;
+	// Motion vector scaling.
+	//
+	// CalcVelocity (Utils.shader) writes per-pixel velocity as a UV-space delta:
+	//     (oldClipPos.xy / oldClipPos.w) * 0.5 + 0.5  -  (newClip.xy / newClip.w) * 0.5 + 0.5
+	// so the values are already roughly in [-1, 1] across the screen. Streamline
+	// expects mvecScale to bring the buffer into [-1, 1], which for our convention
+	// means an identity scale on X.
+	//
+	// The Y sign is flipped because CalcVelocity skips the Y flip when going
+	// NDC -> UV - the resulting Y component is in clip-Y-up space while DLSS
+	// samples motion in screen-UV-Y-down. The NRD plugin documents the same
+	// inversion (NRDInterface.cpp: motionVectorScale[1] = -1.0f).
+	consts.mvecScale = { 1.0f, -1.0f };
 
 	consts.cameraViewToClip = *(sl::float4x4*)&constants.cameraViewToClip.m[0][0];
 	consts.clipToCameraView = *(sl::float4x4*)&constants.clipToCameraView.m[0][0];
@@ -309,7 +316,17 @@ void Streamline::SetCommonConstants(const HexEngine::StreamlineConstants& consta
 	consts.clipToPrevClip = *(sl::float4x4*)&constants.clipToPrevClip.m[0][0];
 	consts.prevClipToClip = *(sl::float4x4*)&constants.prevClipToClip.m[0][0];
 
-	consts.jitterOffset = *(sl::float2*)&constants.jitterOffset.x;
+	// Jitter offset units: Streamline (sl_consts.h) wants this in *pixel space*,
+	// roughly [-0.5, 0.5]. TAA::GetJitterOffset divides by half-resolution and
+	// returns NDC-space jitter; pre-converting here means at 1080p we were
+	// sending ~0.0005 instead of ~0.5, so DLSS effectively saw "no jitter" and
+	// could not resolve sub-pixel detail.
+	//
+	// Y sign matches the mvecScale rationale - clip-Y-up -> screen-UV-Y-down.
+	const float halfW = static_cast<float>(_renderExtent.width)  * 0.5f;
+	const float halfH = static_cast<float>(_renderExtent.height) * 0.5f;
+	consts.jitterOffset.x =  constants.jitterOffset.x * halfW;
+	consts.jitterOffset.y = -constants.jitterOffset.y * halfH;
 	consts.cameraPinholeOffset = *(sl::float2*)&constants.cameraPinholeOffset.x;
 
 	consts.cameraPos = *(sl::float3*)&constants.cameraPos.x;
