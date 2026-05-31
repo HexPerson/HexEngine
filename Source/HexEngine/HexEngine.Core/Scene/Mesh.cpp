@@ -431,7 +431,7 @@ namespace HexEngine
 		// Set the vertex and index buffers
 		graphicsDevice->SetIndexBuffer(_indexBuffer);
 		graphicsDevice->SetVertexBuffer(0, isShadowMap ? _simpleVertexBuffer : _vertexBuffer);
-		graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 	}	
 
 	void Mesh::AddVertex(const MeshVertex& vertex)

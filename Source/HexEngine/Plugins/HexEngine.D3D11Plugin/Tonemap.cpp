@@ -6,7 +6,7 @@
 
 void Tonemap::Create(int32_t width, int32_t height)
 {
-	_renderTarget = g_pGraphics->CreateTexture2D(
+	_renderTarget = (Texture2D*)g_pGraphics->CreateTexture2D(
 		width, height,
 		DXGI_FORMAT_R16G16B16A16_UNORM,
 		1,
@@ -37,7 +37,7 @@ void Tonemap::Render(ID3D11ShaderResourceView* bbSRV)
 	deviceContext->OMSetRenderTargets(1, &_renderTarget->_renderTargetView, nullptr);
 	deviceContext->ClearRenderTargetView(_renderTarget->_renderTargetView, math::Color(0, 0, 0, 1));
 
-	g_pGraphics->SetPixelShaderResource(bbSRV);
+	g_pGraphics->SetPixelShaderResourceRaw(bbSRV);
 
 	renderer->FullScreenTexturedQuad(nullptr);
 }

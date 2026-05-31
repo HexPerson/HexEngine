@@ -4,6 +4,7 @@
 
 #include <HexEngine.Core/Graphics/IGraphicsDevice.hpp>
 #include "Texture2D.hpp"
+#include "Texture3D.hpp"
 #include "VertexBuffer.hpp"
 #include "IndexBuffer.hpp"
 #include "Shader.hpp"
@@ -39,6 +40,25 @@ public:
 
 	//GraphicsSystemD3D11();
 
+	virtual HexEngine::GraphicsBackend GetBackend() const override { return HexEngine::GraphicsBackend::D3D11; }
+
+	// Bring the base-class D3D11 compatibility overloads back into scope on
+	// the derived class - the neutral-typed virtual overrides below would
+	// otherwise hide them through the usual C++ overload-hiding rule.
+	using HexEngine::IGraphicsDevice::CreateTexture2D;
+	using HexEngine::IGraphicsDevice::CreateTexture3D;
+	using HexEngine::IGraphicsDevice::CreateVertexBuffer;
+	using HexEngine::IGraphicsDevice::CreateIndexBuffer;
+	using HexEngine::IGraphicsDevice::CreateStructuredBuffer;
+	using HexEngine::IGraphicsDevice::CreateInputLayout;
+	using HexEngine::IGraphicsDevice::SetTopology;
+	using HexEngine::IGraphicsDevice::SetViewport;
+	using HexEngine::IGraphicsDevice::SetViewports;
+	using HexEngine::IGraphicsDevice::SetScissorRect;
+	using HexEngine::IGraphicsDevice::SetScissorRects;
+	using HexEngine::IGraphicsDevice::SetPixelShaderResource;
+	using HexEngine::IGraphicsDevice::SetPixelShaderResources;
+
 	virtual void Lock() override;
 	virtual void Unlock() override;
 
@@ -56,62 +76,13 @@ public:
 
 	virtual Texture2D* CreateTexture(HexEngine::ITexture2D* clone) override;
 
-	virtual Texture2D* CreateTexture2D(
-		int32_t width,
-		int32_t height,
-		DXGI_FORMAT format,
-		int32_t arraySize,
-		uint32_t bindFlags,
-		int32_t mipLevels,
-		int32_t sampleCount,
-		int32_t sampleQuality,
-		D3D11_SUBRESOURCE_DATA* initialData = nullptr,
-		D3D11_CPU_ACCESS_FLAG access = (D3D11_CPU_ACCESS_FLAG)0,
-		D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
-		D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
-		D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
-		D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN,
-		D3D11_USAGE usage = D3D11_USAGE_DEFAULT,
-		uint32_t miscFlags = 0) override;
+	virtual Texture2D*    CreateTexture2D(const HexEngine::TextureDesc& desc, const HexEngine::SubresourceData* initialData = nullptr) override;
 
-	/*virtual Texture2D* CreateTexture2D(
-		int32_t width,
-		int32_t height,
-		DXGI_FORMAT format,
-		int32_t arraySize,
-		uint32_t bindFlags,
-		int32_t mipLevels,
-		int32_t sampleCount,
-		int32_t sampleQuality,
-		D3D11_SUBRESOURCE_DATA* initialData,
-		D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
-		D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
-		D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
-		D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) override;*/
+	virtual Texture3D*    CreateTexture3D(const HexEngine::TextureDesc& desc, const HexEngine::SubresourceData* initialData = nullptr) override;
 
-	virtual HexEngine::ITexture3D* CreateTexture3D(
-		int32_t width,
-		int32_t height,
-		int32_t depth,
-		DXGI_FORMAT format,
-		int32_t arraySize,
-		uint32_t bindFlags,
-		int32_t mipLevels,
-		int32_t sampleCount,
-		int32_t sampleQuality,
-		D3D11_SUBRESOURCE_DATA* initialData,
-		D3D11_RTV_DIMENSION rtvDimension = D3D11_RTV_DIMENSION_UNKNOWN,
-		D3D11_UAV_DIMENSION uavDimension = D3D11_UAV_DIMENSION_UNKNOWN,
-		D3D11_SRV_DIMENSION srvDimension = D3D11_SRV_DIMENSION_UNKNOWN,
-		D3D11_DSV_DIMENSION dsvDimension = D3D11_DSV_DIMENSION_UNKNOWN) override;
+	virtual VertexBuffer* CreateVertexBuffer(const HexEngine::BufferDesc& desc, const void* initialData = nullptr) override;
 
-	virtual VertexBuffer* CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags) override;
-
-	virtual VertexBuffer* CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* vertices) override;
-
-	virtual IndexBuffer* CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags) override;
-
-	virtual IndexBuffer* CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* indices) override;
+	virtual IndexBuffer*  CreateIndexBuffer(const HexEngine::BufferDesc& desc, const void* initialData = nullptr) override;
 
 	virtual ShaderStageImpl<ID3D11VertexShader>* CreateVertexShader(std::vector<uint8_t>& shaderCode) override;
 
@@ -122,15 +93,15 @@ public:
 	virtual ShaderStageImpl<ID3D11ComputeShader>* CreateComputeShader(std::vector<uint8_t>& shaderCode) override;
 	virtual ShaderStageImpl<ID3D11ComputeShader>* CreateComputeShaderFromSource(const std::string& shaderSource, const std::string& entryPoint = "MainCS") override;
 
-	virtual InputLayout* CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary) override;
+	virtual InputLayout*     CreateInputLayout(const HexEngine::InputElement* elements, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary) override;
 
-	virtual ConstantBuffer* CreateConstantBuffer(uint32_t size);
+	virtual ConstantBuffer*  CreateConstantBuffer(uint32_t size) override;
 	virtual StructuredBuffer* CreateStructuredBuffer(
 		uint32_t elementStride,
 		uint32_t elementCount,
 		HexEngine::StructuredBufferFlags flags,
-		D3D11_USAGE usage = D3D11_USAGE_DEFAULT,
-		uint32_t cpuAccessFlags = 0,
+		HexEngine::ResourceUsage usage = HexEngine::ResourceUsage::Default,
+		HexEngine::CpuAccess cpuAccess = HexEngine::CpuAccess::None,
 		const void* initialData = nullptr) override;
 
 	virtual ConstantBuffer* GetEngineConstantBuffer(HexEngine::EngineConstantBuffer buffer) override;
@@ -139,7 +110,7 @@ public:
 
 	virtual void SetVertexBuffer(uint32_t slot, HexEngine::IVertexBuffer* buffer) override;
 
-	virtual void SetTopology(D3D_PRIMITIVE_TOPOLOGY topology) override;
+	virtual void SetTopology(HexEngine::PrimitiveTopology topology) override;
 
 	virtual void SetVertexShader(HexEngine::IShaderStage* shader) override;
 
@@ -215,13 +186,18 @@ public:
 
 	virtual bool GetSupportedDisplayModes(std::vector<HexEngine::ScreenDisplayMode>& modes) override;
 
-	virtual void SetPixelShaderResource(uint32_t slot, ID3D11ShaderResourceView* resource) override;
+	virtual void SetPixelShaderResource(uint32_t slot, HexEngine::ITexture2D* texture) override;
+	virtual void SetPixelShaderResource(HexEngine::ITexture2D* texture) override;
+	virtual void SetPixelShaderResources(uint32_t slot, const std::vector<HexEngine::ITexture2D*>& textures) override;
+	virtual void SetPixelShaderResources(const std::vector<HexEngine::ITexture2D*>& textures) override;
 
-	virtual void SetPixelShaderResource(ID3D11ShaderResourceView* resource) override;
-
-	virtual void SetPixelShaderResources(uint32_t slot, const std::vector<ID3D11ShaderResourceView*>& resources) override;
-
-	virtual void SetPixelShaderResources(const std::vector<ID3D11ShaderResourceView*>& resources) override;
+	// D3D11-internal overloads kept for use by other D3D11 plugin classes that
+	// pre-built ID3D11ShaderResourceView objects (e.g. TextureImporter, Shader).
+	// Not part of the public IGraphicsDevice interface.
+	void SetPixelShaderResourceRaw(uint32_t slot, ID3D11ShaderResourceView* resource);
+	void SetPixelShaderResourceRaw(ID3D11ShaderResourceView* resource);
+	void SetPixelShaderResourcesRaw(uint32_t slot, const std::vector<ID3D11ShaderResourceView*>& resources);
+	void SetPixelShaderResourcesRaw(const std::vector<ID3D11ShaderResourceView*>& resources);
 
 	virtual void SetRenderTargets(uint32_t numTargets, const std::vector<HexEngine::ITexture2D*>& targets, HexEngine::ITexture2D* depthStencil) override;
 
@@ -239,11 +215,9 @@ public:
 
 	virtual void EndFrame(HexEngine::Window* window) override;
 
-	virtual void SetViewports(const std::vector<D3D11_VIEWPORT>& viewports) override;
-
-	virtual void SetViewport(const D3D11_VIEWPORT& viewport) override;
-
-	virtual const D3D11_VIEWPORT& GetBackBufferViewport() const override;
+	virtual void SetViewports(const std::vector<HexEngine::Viewport>& viewports) override;
+	virtual void SetViewport(const HexEngine::Viewport& viewport) override;
+	virtual HexEngine::Viewport GetBackBufferViewport() const override;
 
 	virtual void SetBlendState(HexEngine::BlendState state) override;
 
@@ -251,9 +225,8 @@ public:
 
 	virtual int32_t GetCurrentMSAALevel() const override;
 
-	virtual void SetScissorRect(const RECT& rect) override;
-
-	virtual void SetScissorRects(const std::vector<RECT>& rects) override;
+	virtual void SetScissorRect(const HexEngine::ScissorRect& rect) override;
+	virtual void SetScissorRects(const std::vector<HexEngine::ScissorRect>& rects) override;
 
 	virtual void ClearScissorRect() override;
 
@@ -265,6 +238,48 @@ private:
 	bool CreateInternal();
 
 	void DestroyInternal();
+
+	// Backwards-compatible internal helpers that still take D3D11-typed args.
+	// The public IGraphicsDevice methods take HexEngine::TextureDesc /
+	// BufferDesc and translate to D3D11 enums via FormatsD3D11.hpp before
+	// dispatching here.
+	Texture2D* CreateTexture2D_Internal(
+		int32_t width,
+		int32_t height,
+		DXGI_FORMAT format,
+		int32_t arraySize,
+		uint32_t bindFlags,
+		int32_t mipLevels,
+		int32_t sampleCount,
+		int32_t sampleQuality,
+		D3D11_SUBRESOURCE_DATA* initialData,
+		D3D11_CPU_ACCESS_FLAG access,
+		D3D11_RTV_DIMENSION rtvDimension,
+		D3D11_UAV_DIMENSION uavDimension,
+		D3D11_SRV_DIMENSION srvDimension,
+		D3D11_DSV_DIMENSION dsvDimension,
+		D3D11_USAGE usage,
+		uint32_t miscFlags);
+
+	Texture3D* CreateTexture3D_Internal(
+		int32_t width,
+		int32_t height,
+		int32_t depth,
+		DXGI_FORMAT format,
+		int32_t arraySize,
+		uint32_t bindFlags,
+		int32_t mipLevels,
+		int32_t sampleCount,
+		int32_t sampleQuality,
+		D3D11_SUBRESOURCE_DATA* initialData,
+		D3D11_RTV_DIMENSION rtvDimension,
+		D3D11_UAV_DIMENSION uavDimension,
+		D3D11_SRV_DIMENSION srvDimension,
+		D3D11_DSV_DIMENSION dsvDimension);
+
+	VertexBuffer* CreateVertexBuffer_Internal(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, const void* vertices);
+	IndexBuffer*  CreateIndexBuffer_Internal(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, const void* indices);
+	InputLayout*  CreateInputLayout_Internal(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary);
 
 private:
 	IDXGIDevice* _dxgiDevice = nullptr;

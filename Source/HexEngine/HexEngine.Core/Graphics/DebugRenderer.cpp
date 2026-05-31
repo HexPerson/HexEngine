@@ -387,7 +387,7 @@ namespace HexEngine
 
 			graphicsDevice->SetVertexBuffer(0, _lineVBuffer);
 			graphicsDevice->SetIndexBuffer(_lineIBuffer);
-			graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+			graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::LineList);
 			graphicsDevice->SetPixelShader(_debugShader->GetShaderStage(ShaderStage::PixelShader));
 			graphicsDevice->SetVertexShader(_debugShader->GetShaderStage(ShaderStage::VertexShader));
 			graphicsDevice->SetInputLayout(_debugShader->GetInputLayout());
@@ -426,7 +426,7 @@ namespace HexEngine
 
 			graphicsDevice->SetVertexBuffer(0, _polyVBuffer);
 			graphicsDevice->SetIndexBuffer(_polyIBuffer);
-			graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 			graphicsDevice->SetPixelShader(_debugShader->GetShaderStage(ShaderStage::PixelShader));
 			graphicsDevice->SetVertexShader(_debugShader->GetShaderStage(ShaderStage::VertexShader));
 			graphicsDevice->SetInputLayout(_debugShader->GetInputLayout());

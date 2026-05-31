@@ -1,6 +1,7 @@
 
 
 #include "GraphicsDeviceD3D11.hpp"
+#include "FormatsD3D11.hpp"
 #include "Texture3D.hpp"
 #include "Shader.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
@@ -862,7 +863,38 @@ Texture2D* GraphicsDeviceD3D11::CreateTexture(HexEngine::ITexture2D* clone)
 	return texture;
 }
 
-Texture2D* GraphicsDeviceD3D11::CreateTexture2D(
+Texture2D* GraphicsDeviceD3D11::CreateTexture2D(const HexEngine::TextureDesc& d, const HexEngine::SubresourceData* initial)
+{
+	D3D11_SUBRESOURCE_DATA subres = {};
+	D3D11_SUBRESOURCE_DATA* subresPtr = nullptr;
+	if (initial != nullptr && initial->data != nullptr)
+	{
+		subres.pSysMem          = initial->data;
+		subres.SysMemPitch      = initial->rowPitchBytes;
+		subres.SysMemSlicePitch = initial->slicePitchBytes;
+		subresPtr = &subres;
+	}
+
+	return CreateTexture2D_Internal(
+		d.width,
+		d.height,
+		HexEngine::ToDXGI(d.format),
+		d.arraySize,
+		HexEngine::ToD3D11BindFlags(d.bindFlags),
+		d.mipLevels,
+		d.sampleCount,
+		d.sampleQuality,
+		subresPtr,
+		static_cast<D3D11_CPU_ACCESS_FLAG>(HexEngine::ToD3D11CpuAccessFlags(d.cpuAccess)),
+		HexEngine::ToD3D11RtvDim(d.dimension, d.sampleCount),
+		HexEngine::ToD3D11UavDim(d.dimension),
+		HexEngine::ToD3D11SrvDim(d.dimension, d.arraySize, d.sampleCount),
+		HexEngine::ToD3D11DsvDim(d.dimension, d.sampleCount),
+		HexEngine::ToD3D11Usage(d.usage),
+		HexEngine::ToD3D11MiscFlags(d.miscFlags));
+}
+
+Texture2D* GraphicsDeviceD3D11::CreateTexture2D_Internal(
 	int32_t width,
 	int32_t height,
 	DXGI_FORMAT format,
@@ -1090,7 +1122,36 @@ Texture2D* GraphicsDeviceD3D11::CreateTexture2D(
 //	return texture;
 //}
 
-HexEngine::ITexture3D* GraphicsDeviceD3D11::CreateTexture3D(
+Texture3D* GraphicsDeviceD3D11::CreateTexture3D(const HexEngine::TextureDesc& d, const HexEngine::SubresourceData* initial)
+{
+	D3D11_SUBRESOURCE_DATA subres = {};
+	D3D11_SUBRESOURCE_DATA* subresPtr = nullptr;
+	if (initial != nullptr && initial->data != nullptr)
+	{
+		subres.pSysMem          = initial->data;
+		subres.SysMemPitch      = initial->rowPitchBytes;
+		subres.SysMemSlicePitch = initial->slicePitchBytes;
+		subresPtr = &subres;
+	}
+
+	return CreateTexture3D_Internal(
+		d.width,
+		d.height,
+		d.depth,
+		HexEngine::ToDXGI(d.format),
+		d.arraySize,
+		HexEngine::ToD3D11BindFlags(d.bindFlags),
+		d.mipLevels,
+		d.sampleCount,
+		d.sampleQuality,
+		subresPtr,
+		HexEngine::ToD3D11RtvDim(d.dimension == HexEngine::ResourceDimension::Unknown ? HexEngine::ResourceDimension::Texture3D : d.dimension, d.sampleCount),
+		HexEngine::ToD3D11UavDim(d.dimension == HexEngine::ResourceDimension::Unknown ? HexEngine::ResourceDimension::Texture3D : d.dimension),
+		HexEngine::ToD3D11SrvDim(d.dimension == HexEngine::ResourceDimension::Unknown ? HexEngine::ResourceDimension::Texture3D : d.dimension, d.arraySize, d.sampleCount),
+		HexEngine::ToD3D11DsvDim(d.dimension, d.sampleCount));
+}
+
+Texture3D* GraphicsDeviceD3D11::CreateTexture3D_Internal(
 	int32_t width,
 	int32_t height,
 	int32_t depth,
@@ -1216,30 +1277,17 @@ void GraphicsDeviceD3D11::GetBackBufferDimensions(uint32_t& width, uint32_t& hei
 	height = _bbufferHeight;
 }
 
-VertexBuffer* GraphicsDeviceD3D11::CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags)
+VertexBuffer* GraphicsDeviceD3D11::CreateVertexBuffer(const HexEngine::BufferDesc& d, const void* initialData)
 {
-	std::lock_guard<std::recursive_mutex> lock(_lock);
-
-	D3D11_BUFFER_DESC desc;
-	desc.ByteWidth = byteWidth;
-	desc.StructureByteStride = byteStride;
-	desc.Usage = usage;
-	desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
-	desc.CPUAccessFlags = cpuAccessFlags;
-	desc.MiscFlags = 0;
-
-	ID3D11Buffer* d3dBuffer;
-	CHECK_HR(_device->CreateBuffer(&desc, nullptr, &d3dBuffer));
-
-	VertexBuffer* buffer = new VertexBuffer;
-
-	buffer->_buffer = d3dBuffer;
-	buffer->_stride = byteStride;
-
-	return buffer;
+	return CreateVertexBuffer_Internal(
+		static_cast<int32_t>(d.byteWidth),
+		d.byteStride,
+		HexEngine::ToD3D11Usage(d.usage),
+		HexEngine::ToD3D11CpuAccessFlags(d.cpuAccess),
+		initialData);
 }
 
-VertexBuffer* GraphicsDeviceD3D11::CreateVertexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* vertices)
+VertexBuffer* GraphicsDeviceD3D11::CreateVertexBuffer_Internal(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, const void* vertices)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
@@ -1252,47 +1300,40 @@ VertexBuffer* GraphicsDeviceD3D11::CreateVertexBuffer(int32_t byteWidth, uint32_
 	desc.MiscFlags = 0;
 
 	D3D11_SUBRESOURCE_DATA vertexData = { 0 };
-	vertexData.pSysMem = vertices;
-	vertexData.SysMemPitch = 0;
-	vertexData.SysMemSlicePitch = 0;
+	D3D11_SUBRESOURCE_DATA* initPtr = nullptr;
+	if (vertices != nullptr)
+	{
+		vertexData.pSysMem = vertices;
+		vertexData.SysMemPitch = 0;
+		vertexData.SysMemSlicePitch = 0;
+		initPtr = &vertexData;
+	}
 
 	ID3D11Buffer* d3dBuffer;
-	CHECK_HR(_device->CreateBuffer(&desc, &vertexData, &d3dBuffer));
+	CHECK_HR(_device->CreateBuffer(&desc, initPtr, &d3dBuffer));
 
 	VertexBuffer* buffer = new VertexBuffer;
-
 	buffer->_buffer = d3dBuffer;
 	buffer->_stride = byteStride;
 
 	return buffer;
 }
 
-IndexBuffer* GraphicsDeviceD3D11::CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags)
+IndexBuffer* GraphicsDeviceD3D11::CreateIndexBuffer(const HexEngine::BufferDesc& d, const void* initialData)
 {
-	std::lock_guard<std::recursive_mutex> lock(_lock);
-
-	D3D11_BUFFER_DESC desc;
-	desc.ByteWidth = byteWidth;
-	desc.StructureByteStride = byteStride;
-	desc.Usage = usage;
-	desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
-	desc.CPUAccessFlags = cpuAccessFlags;
-	desc.MiscFlags = 0;
-
-	ID3D11Buffer* d3dBuffer;
-	CHECK_HR(_device->CreateBuffer(&desc, nullptr, &d3dBuffer));
-
-	IndexBuffer* buffer = new IndexBuffer;
-	buffer->_buffer = d3dBuffer;
-
-	return buffer;
+	return CreateIndexBuffer_Internal(
+		static_cast<int32_t>(d.byteWidth),
+		d.byteStride,
+		HexEngine::ToD3D11Usage(d.usage),
+		HexEngine::ToD3D11CpuAccessFlags(d.cpuAccess),
+		initialData);
 }
 
-IndexBuffer* GraphicsDeviceD3D11::CreateIndexBuffer(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, void* indices)
+IndexBuffer* GraphicsDeviceD3D11::CreateIndexBuffer_Internal(int32_t byteWidth, uint32_t byteStride, D3D11_USAGE usage, uint32_t cpuAccessFlags, const void* indices)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
-	if (cpuAccessFlags != 0)
+	if (indices != nullptr && cpuAccessFlags != 0)
 	{
 		LOG_CRIT("An index buffer must have CPU access flags with 0 when created with initial data. CPUAccessFlags = 0x%X", cpuAccessFlags);
 		return nullptr;
@@ -1307,10 +1348,15 @@ IndexBuffer* GraphicsDeviceD3D11::CreateIndexBuffer(int32_t byteWidth, uint32_t 
 	desc.MiscFlags = 0;
 
 	D3D11_SUBRESOURCE_DATA indexData = { 0 };
-	indexData.pSysMem = indices;
+	D3D11_SUBRESOURCE_DATA* initPtr = nullptr;
+	if (indices != nullptr)
+	{
+		indexData.pSysMem = indices;
+		initPtr = &indexData;
+	}
 
 	ID3D11Buffer* d3dBuffer;
-	CHECK_HR(_device->CreateBuffer(&desc, &indexData, &d3dBuffer));
+	CHECK_HR(_device->CreateBuffer(&desc, initPtr, &d3dBuffer));
 
 	IndexBuffer* buffer = new IndexBuffer;
 	buffer->_buffer = d3dBuffer;
@@ -1409,7 +1455,32 @@ ShaderStageImpl<ID3D11ComputeShader>* GraphicsDeviceD3D11::CreateComputeShaderFr
 	return CreateComputeShader(shaderCode);
 }
 
-InputLayout* GraphicsDeviceD3D11::CreateInputLayout(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary)
+InputLayout* GraphicsDeviceD3D11::CreateInputLayout(const HexEngine::InputElement* elements, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary)
+{
+	if (elements == nullptr || numElements == 0)
+		return nullptr;
+
+	// Convert each HexEngine::InputElement to D3D11_INPUT_ELEMENT_DESC.
+	// We keep the semantic-name strings alive via a local vector since
+	// D3D11_INPUT_ELEMENT_DESC stores raw const char* pointers.
+	std::vector<D3D11_INPUT_ELEMENT_DESC> d3dElems(numElements);
+	for (uint32_t i = 0; i < numElements; ++i)
+	{
+		const auto& e = elements[i];
+		auto& out = d3dElems[i];
+		out.SemanticName         = e.semanticName.c_str();
+		out.SemanticIndex        = e.semanticIndex;
+		out.Format               = HexEngine::ToDXGI(e.format);
+		out.InputSlot            = e.inputSlot;
+		out.AlignedByteOffset    = (e.alignedByteOffset == 0xFFFFFFFFu) ? D3D11_APPEND_ALIGNED_ELEMENT : e.alignedByteOffset;
+		out.InputSlotClass       = e.perInstance ? D3D11_INPUT_PER_INSTANCE_DATA : D3D11_INPUT_PER_VERTEX_DATA;
+		out.InstanceDataStepRate = e.instanceDataStepRate;
+	}
+
+	return CreateInputLayout_Internal(d3dElems.data(), numElements, vertexShaderBinary);
+}
+
+InputLayout* GraphicsDeviceD3D11::CreateInputLayout_Internal(D3D11_INPUT_ELEMENT_DESC* desc, uint32_t numElements, const std::vector<uint8_t>& vertexShaderBinary)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
@@ -1447,10 +1518,12 @@ StructuredBuffer* GraphicsDeviceD3D11::CreateStructuredBuffer(
 	uint32_t elementStride,
 	uint32_t elementCount,
 	HexEngine::StructuredBufferFlags flags,
-	D3D11_USAGE usage,
-	uint32_t cpuAccessFlags,
+	HexEngine::ResourceUsage usageNeutral,
+	HexEngine::CpuAccess cpuAccessNeutral,
 	const void* initialData)
 {
+	const D3D11_USAGE usage = HexEngine::ToD3D11Usage(usageNeutral);
+	const uint32_t cpuAccessFlags = HexEngine::ToD3D11CpuAccessFlags(cpuAccessNeutral);
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
 	if (elementStride == 0 || elementCount == 0)
@@ -1587,8 +1660,9 @@ void GraphicsDeviceD3D11::SetIndexBuffer(HexEngine::IIndexBuffer* buffer)
 	}
 }
 
-void GraphicsDeviceD3D11::SetTopology(D3D_PRIMITIVE_TOPOLOGY topology)
+void GraphicsDeviceD3D11::SetTopology(HexEngine::PrimitiveTopology topologyNeutral)
 {
+	const D3D_PRIMITIVE_TOPOLOGY topology = HexEngine::ToD3D11Topology(topologyNeutral);
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
 	if (topology != _prevRenderState._topology)
@@ -1741,11 +1815,11 @@ void GraphicsDeviceD3D11::SetTexture2D(uint32_t slot, HexEngine::ITexture2D* tex
 
 		auto tex = reinterpret_cast<Texture2D*>(texture);
 
-		SetPixelShaderResource(slot, tex->_shaderResourceView);
+		SetPixelShaderResourceRaw(slot, tex->_shaderResourceView);
 	}
 	else
 	{
-		SetPixelShaderResource(slot, nullptr);
+		SetPixelShaderResourceRaw(slot, (ID3D11ShaderResourceView*)nullptr);
 	}
 
 	//if (texture)
@@ -1771,7 +1845,7 @@ void GraphicsDeviceD3D11::SetTexture2D(HexEngine::ITexture2D* texture)
 
 	if (texture == nullptr)
 	{
-		SetPixelShaderResource(nullptr);
+		SetPixelShaderResourceRaw((ID3D11ShaderResourceView*)nullptr);
 		return;
 	}
 	auto tex = reinterpret_cast<Texture2D*>(texture);
@@ -1808,7 +1882,7 @@ void GraphicsDeviceD3D11::SetTexture2D(HexEngine::ITexture2D* texture)
 		_boundDepthStencil = nullptr;
 	}
 
-	SetPixelShaderResource(tex->_shaderResourceView);
+	SetPixelShaderResourceRaw(tex->_shaderResourceView);
 }
 
 void GraphicsDeviceD3D11::SetTexture3D(HexEngine::ITexture3D* texture)
@@ -1817,7 +1891,7 @@ void GraphicsDeviceD3D11::SetTexture3D(HexEngine::ITexture3D* texture)
 
 	if (texture == nullptr)
 	{
-		SetPixelShaderResource(nullptr);
+		SetPixelShaderResourceRaw((ID3D11ShaderResourceView*)nullptr);
 		return;
 	}
 	auto tex = reinterpret_cast<Texture3D*>(texture);
@@ -1828,7 +1902,7 @@ void GraphicsDeviceD3D11::SetTexture3D(HexEngine::ITexture3D* texture)
 		return;
 	}
 
-	SetPixelShaderResource(tex->_shaderResourceView);
+	SetPixelShaderResourceRaw(tex->_shaderResourceView);
 }
 
 void GraphicsDeviceD3D11::SetGeometryTexture3D(uint32_t slot, HexEngine::ITexture3D* texture)
@@ -2118,7 +2192,45 @@ void GraphicsDeviceD3D11::SetBoundResourceIndex(uint32_t value)
 	_currentlyBoundSRVIndex = value;
 }
 
-void GraphicsDeviceD3D11::SetPixelShaderResource(uint32_t slot, ID3D11ShaderResourceView* resource)
+// ITexture2D* → SRV public wrappers. The Raw methods below do the actual D3D11
+// PSSetShaderResources work; the wrappers extract the SRV from the engine
+// texture wrapper.
+
+void GraphicsDeviceD3D11::SetPixelShaderResource(uint32_t slot, HexEngine::ITexture2D* texture)
+{
+	ID3D11ShaderResourceView* srv = texture != nullptr
+		? reinterpret_cast<Texture2D*>(texture)->_shaderResourceView
+		: nullptr;
+	SetPixelShaderResourceRaw(slot, srv);
+}
+
+void GraphicsDeviceD3D11::SetPixelShaderResource(HexEngine::ITexture2D* texture)
+{
+	ID3D11ShaderResourceView* srv = texture != nullptr
+		? reinterpret_cast<Texture2D*>(texture)->_shaderResourceView
+		: nullptr;
+	SetPixelShaderResourceRaw(srv);
+}
+
+void GraphicsDeviceD3D11::SetPixelShaderResources(uint32_t slot, const std::vector<HexEngine::ITexture2D*>& textures)
+{
+	std::vector<ID3D11ShaderResourceView*> srvs;
+	srvs.reserve(textures.size());
+	for (auto* t : textures)
+		srvs.push_back(t != nullptr ? reinterpret_cast<Texture2D*>(t)->_shaderResourceView : nullptr);
+	SetPixelShaderResourcesRaw(slot, srvs);
+}
+
+void GraphicsDeviceD3D11::SetPixelShaderResources(const std::vector<HexEngine::ITexture2D*>& textures)
+{
+	std::vector<ID3D11ShaderResourceView*> srvs;
+	srvs.reserve(textures.size());
+	for (auto* t : textures)
+		srvs.push_back(t != nullptr ? reinterpret_cast<Texture2D*>(t)->_shaderResourceView : nullptr);
+	SetPixelShaderResourcesRaw(srvs);
+}
+
+void GraphicsDeviceD3D11::SetPixelShaderResourceRaw(uint32_t slot, ID3D11ShaderResourceView* resource)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
@@ -2164,7 +2276,7 @@ void GraphicsDeviceD3D11::SetPixelShaderResource(uint32_t slot, ID3D11ShaderReso
 	_currentlyBoundSRVIndex = slot + 1;
 }
 
-void GraphicsDeviceD3D11::SetPixelShaderResource(ID3D11ShaderResourceView* resource)
+void GraphicsDeviceD3D11::SetPixelShaderResourceRaw(ID3D11ShaderResourceView* resource)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
@@ -2245,7 +2357,7 @@ void GraphicsDeviceD3D11::BindShadowMaps()
 	}
 }*/
 
-void GraphicsDeviceD3D11::SetPixelShaderResources(uint32_t slot, const std::vector<ID3D11ShaderResourceView*>& resources)
+void GraphicsDeviceD3D11::SetPixelShaderResourcesRaw(uint32_t slot, const std::vector<ID3D11ShaderResourceView*>& resources)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
@@ -2254,7 +2366,7 @@ void GraphicsDeviceD3D11::SetPixelShaderResources(uint32_t slot, const std::vect
 	_currentlyBoundSRVIndex = slot + resources.size();
 }
 
-void GraphicsDeviceD3D11::SetPixelShaderResources(const std::vector<ID3D11ShaderResourceView*>& resources)
+void GraphicsDeviceD3D11::SetPixelShaderResourcesRaw(const std::vector<ID3D11ShaderResourceView*>& resources)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
@@ -2495,30 +2607,40 @@ void GraphicsDeviceD3D11::EndFrame(HexEngine::Window* window)
 	UnbindAllPixelShaderResources();
 }
 
-void GraphicsDeviceD3D11::SetViewports(const std::vector<D3D11_VIEWPORT>& viewports)
+void GraphicsDeviceD3D11::SetViewports(const std::vector<HexEngine::Viewport>& viewports)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
 
-	_deviceContext->RSSetViewports(viewports.size(), viewports.data());
+	std::vector<D3D11_VIEWPORT> d3dVps;
+	d3dVps.reserve(viewports.size());
+	for (const auto& v : viewports)
+		d3dVps.push_back(HexEngine::ToD3D11Viewport(v));
 
-	std::vector<RECT> rects;
-	for (auto& vp : viewports)
+	_deviceContext->RSSetViewports(static_cast<UINT>(d3dVps.size()), d3dVps.data());
+
+	std::vector<HexEngine::ScissorRect> rects;
+	rects.reserve(viewports.size());
+	for (const auto& vp : viewports)
 	{
-		rects.push_back({ (long)vp.TopLeftX, (long)vp.TopLeftY, (long)vp.TopLeftX + (long)vp.Width, (long)vp.TopLeftY + (long)vp.Height });
+		rects.push_back(HexEngine::ScissorRect(
+			(int32_t)vp.x,
+			(int32_t)vp.y,
+			(int32_t)(vp.x + vp.width),
+			(int32_t)(vp.y + vp.height)));
 	}
 	SetScissorRects(rects);
 }
 
-void GraphicsDeviceD3D11::SetViewport(const D3D11_VIEWPORT& viewport)
+void GraphicsDeviceD3D11::SetViewport(const HexEngine::Viewport& viewport)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
-
-	_deviceContext->RSSetViewports(1, &viewport);
+	const D3D11_VIEWPORT vp = HexEngine::ToD3D11Viewport(viewport);
+	_deviceContext->RSSetViewports(1, &vp);
 }
 
-const D3D11_VIEWPORT& GraphicsDeviceD3D11::GetBackBufferViewport() const
+HexEngine::Viewport GraphicsDeviceD3D11::GetBackBufferViewport() const
 {
-	return _bbufferViewport;
+	return HexEngine::FromD3D11Viewport(_bbufferViewport);
 }
 
 void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
@@ -2590,19 +2712,27 @@ void GraphicsDeviceD3D11::Unlock()
 	_lock.unlock();
 }
 
-void GraphicsDeviceD3D11::SetScissorRect(const RECT& rect)
+void GraphicsDeviceD3D11::SetScissorRect(const HexEngine::ScissorRect& rect)
 {
-	_deviceContext->RSSetScissorRects(1, &rect);
+	const D3D11_RECT r = HexEngine::ToD3D11Rect(rect);
+	_deviceContext->RSSetScissorRects(1, &r);
 }
 
-void GraphicsDeviceD3D11::SetScissorRects(const std::vector<RECT>& rects)
+void GraphicsDeviceD3D11::SetScissorRects(const std::vector<HexEngine::ScissorRect>& rects)
 {
-	_deviceContext->RSSetScissorRects(rects.size(), rects.data());
+	std::vector<D3D11_RECT> d3dRects;
+	d3dRects.reserve(rects.size());
+	for (const auto& r : rects)
+		d3dRects.push_back(HexEngine::ToD3D11Rect(r));
+	_deviceContext->RSSetScissorRects(static_cast<UINT>(d3dRects.size()), d3dRects.data());
 }
 
 void GraphicsDeviceD3D11::ClearScissorRect()
 {
 	const auto& vp = _bbufferViewport;
-
-	SetScissorRect({ (long)vp.TopLeftX, (long)vp.TopLeftY, (long)vp.TopLeftX + (long)vp.Width, (long)vp.TopLeftY + (long)vp.Height });
+	SetScissorRect(HexEngine::ScissorRect(
+		(int32_t)vp.TopLeftX,
+		(int32_t)vp.TopLeftY,
+		(int32_t)(vp.TopLeftX + vp.Width),
+		(int32_t)(vp.TopLeftY + vp.Height)));
 }

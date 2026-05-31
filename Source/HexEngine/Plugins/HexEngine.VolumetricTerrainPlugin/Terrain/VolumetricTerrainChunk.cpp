@@ -1816,7 +1816,7 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 	g_gpuSurfaceChunkBuffer->Write(&params, sizeof(params));
 
 	auto* graphics = g_pEnv->_graphicsDevice;
-	graphics->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	graphics->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 	graphics->SetInputLayout(nullptr);
 	graphics->SetVertexBuffer(0, nullptr);
 	graphics->SetVertexShader(g_gpuSurfaceVs);

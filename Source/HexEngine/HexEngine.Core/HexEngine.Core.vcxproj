@@ -365,6 +365,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\DiffuseGIAOProvider.hpp" />
     <ClInclude Include="Steam\ISteamworksProvider.hpp" />
     <ClInclude Include="Graphics\LogWindowMessages.hpp" />
+    <ClInclude Include="Graphics\Formats.hpp" />
     <ClInclude Include="Graphics\RenderStructs.hpp" />
     <ClInclude Include="Graphics\TAA.hpp" />
     <ClInclude Include="Graphics\TextureAtlas.hpp" />

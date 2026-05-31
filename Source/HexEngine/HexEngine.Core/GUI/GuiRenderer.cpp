@@ -171,7 +171,7 @@ namespace HexEngine
 		gfxDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 
 		gfxDevice->SetInputLayout(_inputLayout);
-		//gfxDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		//gfxDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 
 		gfxDevice->SetIndexBuffer(_indexBuffer);
 		gfxDevice->SetVertexBuffer(0, _vertexBuffer);
@@ -273,7 +273,7 @@ namespace HexEngine
 
 			gfxDevice->SetTexture2D(list->_atlas.GetAtlasTexture());
 			gfxDevice->SetInputLayout(_instancedInputLayout);
-			gfxDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			gfxDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 			gfxDevice->SetIndexBuffer(_instancedIndexBuffer);
 			gfxDevice->SetVertexBuffer(0, _instancedVertexBuffer);
 
@@ -362,7 +362,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex.get());
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
 	}
 
@@ -511,7 +511,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex.get());
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
 	}
 
@@ -619,7 +619,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex.get());
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::LineList);
 		g_pEnv->_graphicsDevice->DrawIndexed(2);
 	}
 
@@ -666,7 +666,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetTexture2D(0, _basicWhiteTex.get());
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_LINELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::LineList);
 		g_pEnv->_graphicsDevice->DrawIndexed(2);
 	}
 
@@ -787,7 +787,7 @@ namespace HexEngine
 		// We use basic white texture
 		//
 		g_pEnv->_graphicsDevice->SetTexture2D(texture);
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
@@ -888,7 +888,7 @@ namespace HexEngine
 		// We use basic white texture
 		//
 		g_pEnv->_graphicsDevice->SetTexture2D(texture);
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
@@ -1055,7 +1055,7 @@ namespace HexEngine
 		if(texture)
 			g_pEnv->_graphicsDevice->SetTexture2D(texture);
 
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
@@ -1135,7 +1135,7 @@ namespace HexEngine
 		if (texture)
 			g_pEnv->_graphicsDevice->SetTexture2D(texture);
 
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
@@ -1215,7 +1215,7 @@ namespace HexEngine
 		if (texture)
 			g_pEnv->_graphicsDevice->SetTexture2D(texture);
 
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _vertexBuffer);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_indexBuffer);
 		g_pEnv->_graphicsDevice->DrawIndexed(6);
@@ -1453,7 +1453,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetVertexShader(_activeBasicShader->GetShaderStage(ShaderStage::VertexShader));
 		g_pEnv->_graphicsDevice->SetPixelShader(_activeBasicShader->GetShaderStage(ShaderStage::PixelShader));
 		g_pEnv->_graphicsDevice->SetInputLayout(_inputLayout);
-		g_pEnv->_graphicsDevice->SetTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
 		g_pEnv->_graphicsDevice->SetIndexBuffer(_fontIndexBuffer);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(0, _fontVertexBuffer);
 		g_pEnv->_graphicsDevice->SetVertexBuffer(1, nullptr);
