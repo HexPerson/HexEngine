@@ -43,10 +43,51 @@ namespace HexEngine
 
 	DEFINE_ENUM_FLAG_OPERATORS(ShaderRequirements);
 
-	/** @brief Serialized header used by the engine shader binary format. */
+	/**
+	 * @brief Identifies which compiled-shader bytecode dialect a blob is.
+	 *
+	 * V1 .hcs files implicitly hold one DXBC blob per stage (D3D11 / SM5).
+	 * V2 files (Phase B addition) carry a per-blob backend tag so the same
+	 * asset can ship DXBC + DXIL + SPIR-V side by side; the runtime loader
+	 * picks whichever blob matches the active IGraphicsDevice's backend.
+	 *
+	 * Backend tags are stable serialised identifiers - do NOT renumber.
+	 */
+	enum class ShaderBlobBackend : uint32_t
+	{
+		DXBC_SM5 = 1, ///< D3D11 / FXC. The only payload v1 .hcs files contain.
+		DXIL_SM6 = 2, ///< D3D12 / DXC. Reserved for the Phase B shader-compiler bring-up.
+		SPIRV    = 3, ///< Future Vulkan backend.
+	};
+
+	/**
+	 * @brief Serialized header used by the engine shader binary format.
+	 *
+	 * V1 layout (current; what HexEngine.ShaderCompiler emits today):
+	 *   { _version=1, _flags, _inputLayout, _requirements,
+	 *     _shaderSizes[6] }
+	 *   followed by concatenated bytecode blobs in stage order, one blob per
+	 *   stage that has its presence flag set. Each blob is implicitly DXBC.
+	 *
+	 * V2 layout (reserved; not yet emitted - bring-up planned in Phase B
+	 * when the D3D12 plugin starts loading real shaders):
+	 *   { _version=2, _flags, _inputLayout, _requirements,
+	 *     _shaderSizes[6],
+	 *     _backendBitmap[6] }   <-- new in v2, one bit per ShaderBlobBackend
+	 *   followed, per present stage in stage order, by repeated:
+	 *     { uint32_t backendId, uint32_t blobBytes, uint8_t blob[blobBytes] }
+	 *   one entry per set bit in _backendBitmap[stage]. The runtime loader
+	 *   picks the entry whose backendId matches the active backend (via
+	 *   IGraphicsDevice::GetExpectedShaderBlobBackend()).
+	 *
+	 * Loader supports both versions; compiler currently emits v1 only.
+	 */
 	struct ShaderFileFormat
 	{
-		static const int32_t SHADER_FILE_VERSION = 1;
+		// Bumped when the asset layout changes in a way that requires
+		// a re-bake. V1 = legacy single-DXBC layout. V2 = multi-backend.
+		static const int32_t SHADER_FILE_VERSION    = 1;
+		static const int32_t SHADER_FILE_VERSION_V2 = 2;
 
 		int32_t _version;
 		ShaderFileFlags _flags;
@@ -54,6 +95,20 @@ namespace HexEngine
 		ShaderRequirements _requirements;
 		uint32_t _shaderSizes[(uint32_t)ShaderStage::NumShaderStages];
 	};
+
+	/** @brief Extension of ShaderFileFormat - only valid when _version == SHADER_FILE_VERSION_V2. */
+	struct ShaderFileFormatV2Tail
+	{
+		uint32_t _backendBitmap[(uint32_t)ShaderStage::NumShaderStages]; ///< one bit per ShaderBlobBackend value
+	};
+
+	/** @brief Per-blob header used inside a v2 file body. */
+	struct ShaderBlobHeader
+	{
+		uint32_t _backendId; ///< value cast from ShaderBlobBackend
+		uint32_t _blobBytes; ///< size of the bytecode blob following this header
+	};
+
 
 	/** @brief Compiled multi-stage shader resource loaded by the shader system. */
 	class HEX_API IShader : public IResource
