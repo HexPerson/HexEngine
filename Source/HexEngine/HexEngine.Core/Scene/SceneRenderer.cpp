@@ -1066,7 +1066,15 @@ namespace HexEngine
 		_taa.Create(_beautyRT);
 		_diffuseGi.Create(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
 
-		g_pEnv->_denoiserProvider->CreateBuffers(width, height, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
+		// _denoiserProvider may be null if NRD's plugin self-rejected (e.g. running under a
+		// non-D3D11 backend, or the plugin DLL just isn't installed). The denoise pass below
+		// is also guarded; both guards together let the engine boot + render fine without
+		// NRD. This call is what triggers the DLSS-render-extent rebuild of NRD's pool when
+		// SceneRenderer::Resize fires from Camera::EnableDLSS.
+		if (g_pEnv->_denoiserProvider != nullptr)
+		{
+			g_pEnv->_denoiserProvider->CreateBuffers(width, height, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
+		}
 	}
 
 	const std::vector<Light*>& SceneRenderer::GetShadowCasters() const
@@ -3583,10 +3591,13 @@ namespace HexEngine
             _denoiseFD.camera = _currentCamera;
             _denoiseFD.jitter = _taa.GetJitterOffset(bbvp.width, bbvp.height);
 
-			if (r_ssrDenoise._val.b)
+			if (r_ssrDenoise._val.b && g_pEnv->_denoiserProvider != nullptr)
 			{
 				// NRD-denoised path: pack diffuse + specular SSR signals + their hit distances,
 				// run NRD's RELAX_DIFFUSE_SPECULAR, then composite the resolved signal additively.
+				// FilterFrame compares the input texture size against NRD's last-bound size and
+				// rebuilds the pool internally when they differ - that's the DLSS-toggle safety
+				// net in case SceneRenderer::Resize's explicit CreateBuffers call is missed.
 				g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
 				g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _ssrResolved);
 

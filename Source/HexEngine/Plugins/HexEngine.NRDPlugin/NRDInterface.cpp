@@ -310,12 +310,23 @@ void NRDInterface::DestroyNrdResources()
 
 void NRDInterface::CreateBuffers(int32_t width, int32_t height, HexEngine::ITexture2D* diffuseSignalInput, HexEngine::ITexture2D* diffuseHitDistance, HexEngine::ITexture2D* specularSignalInput, HexEngine::ITexture2D* specularHitDistance, HexEngine::ITexture2D* normalAndDepth, HexEngine::ITexture2D* material, HexEngine::ITexture2D* motionVectors)
 {
-	if (!_loggedCreateBuffers)
+	// Log on first-ever call and on every viewport-size change. The DLSS
+	// toggle path resizes SceneRenderer's RTs (DLSS render extent vs. full
+	// output extent), so this fires both when DLSS turns on AND off. Helpful
+	// for confirming at runtime that NRD's pool actually follows the DLSS
+	// render resolution.
+	const bool sizeChanged =
+		_width  != static_cast<uint32_t>(width) ||
+		_height != static_cast<uint32_t>(height);
+
+	if (sizeChanged || !_loggedCreateBuffers)
 	{
 		LOG_DEBUG(
-			"NRD CreateBuffers: %dx%d diffSignal=%d diffHit=%d specSignal=%d specHit=%d normalDepth=%d material=%d motion=%d",
+			"NRD CreateBuffers: %dx%d (prev %ux%u) diffSignal=%d diffHit=%d specSignal=%d specHit=%d normalDepth=%d material=%d motion=%d",
 			width,
 			height,
+			_width,
+			_height,
 			diffuseSignalInput ? diffuseSignalInput->GetFormat() : -1,
 			diffuseHitDistance ? diffuseHitDistance->GetFormat() : -1,
 			specularSignalInput ? specularSignalInput->GetFormat() : -1,
@@ -347,9 +358,18 @@ bool NRDInterface::RecreateResources(int32_t width, int32_t height, HexEngine::I
 
 	const nrd::Denoiser selectedDenoiser = GetSelectedDenoiser();
 	const bool denoiserChanged = _activeDenoiser != selectedDenoiser;
-	const bool needsRecreate = !_instance || denoiserChanged || _width != static_cast<uint32_t>(width) || _height != static_cast<uint32_t>(height);
+	const bool sizeChanged = _width != static_cast<uint32_t>(width) || _height != static_cast<uint32_t>(height);
+	const bool needsRecreate = !_instance || denoiserChanged || sizeChanged;
 	if (needsRecreate)
 	{
+		// Size change is the DLSS-toggle path: SceneRenderer::Resize -> CreateRenderTargets ->
+		// CreateBuffers feeds us the new (smaller) render extent when DLSS turns on and the
+		// full backbuffer size when it turns off. FilterFrame also calls back here per-frame
+		// with the size of `fd.specularSignalInput`, so if the toplevel resize path is ever
+		// missed the per-frame check picks it up and triggers a rebuild here.
+		LOG_INFO("NRD: rebuilding resources (%ux%u -> %dx%d, denoiserChanged=%d)",
+			_width, _height, width, height, denoiserChanged ? 1 : 0);
+
 		DestroyNrdResources();
 
 		_width = static_cast<uint32_t>(width);
