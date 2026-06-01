@@ -1,130 +1,442 @@
 
 #include "GraphicsDeviceD3D12.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
+#include <HexEngine.Core/Graphics/Window.hpp>
 
-// Phase A skeleton. Every method is a stub - Create() returns false so the
-// engine fails fast and the rest of the surface is never exercised. The macro
-// keeps the noise low while making it obvious which methods still need a real
-// D3D12 implementation when Phase B begins.
-#define D3D12_STUB(name) LOG_CRIT("GraphicsDeviceD3D12::" name " not implemented (Phase A skeleton)")
+#pragma comment(lib, "d3d12.lib")
+#pragma comment(lib, "dxgi.lib")
+
+using Microsoft::WRL::ComPtr;
+
+// ---------------------------------------------------------------------------
+// Lifecycle
+// ---------------------------------------------------------------------------
 
 bool GraphicsDeviceD3D12::Create()
 {
-	LOG_WARN("HexEngine.D3D12Plugin: Create() called on the Phase A skeleton - D3D12 backend is not yet implemented. Set r_renderer = 1 (D3D11) or 0 (auto) to use the working backend.");
-	return false;
+	if (!CreateDeviceAndQueue())
+		return false;
+
+	// Per-frame allocators - one per swap-chain frame so we can record the
+	// next frame's commands while the previous one is still in flight.
+	for (uint32_t i = 0; i < kFrameCount; ++i)
+	{
+		HRESULT hr = _device->CreateCommandAllocator(
+			D3D12_COMMAND_LIST_TYPE_DIRECT,
+			IID_PPV_ARGS(&_frames[i].alloc));
+		if (FAILED(hr))
+		{
+			LOG_CRIT("D3D12: CreateCommandAllocator[%u] failed (0x%X)", i, hr);
+			return false;
+		}
+	}
+
+	// One reusable command list - we Reset it onto whichever allocator
+	// matches the current frame index each BeginFrame.
+	HRESULT hr = _device->CreateCommandList(
+		0,
+		D3D12_COMMAND_LIST_TYPE_DIRECT,
+		_frames[0].alloc.Get(),
+		nullptr,
+		IID_PPV_ARGS(&_cmdList));
+	if (FAILED(hr))
+	{
+		LOG_CRIT("D3D12: CreateCommandList failed (0x%X)", hr);
+		return false;
+	}
+	// Lists come out of CreateCommandList in the recording state - close it
+	// immediately so BeginFrame can Reset cleanly.
+	_cmdList->Close();
+
+	hr = _device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&_fence));
+	if (FAILED(hr))
+	{
+		LOG_CRIT("D3D12: CreateFence failed (0x%X)", hr);
+		return false;
+	}
+
+	_fenceEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+	if (_fenceEvent == nullptr)
+	{
+		LOG_CRIT("D3D12: CreateEventW failed (gle=%lu)", GetLastError());
+		return false;
+	}
+
+	LOG_INFO("HexEngine.D3D12Plugin: device + direct queue + %u-frame command ring created", kFrameCount);
+	return true;
 }
 
-void GraphicsDeviceD3D12::Destroy() {}
+bool GraphicsDeviceD3D12::CreateDeviceAndQueue()
+{
+	UINT dxgiFlags = 0;
+#ifdef _DEBUG
+	// Pull in the D3D12 debug layer. Failure here isn't fatal (might not be
+	// installed on a clean machine), but the validation output is worth a lot
+	// during bring-up - chase down any DEBUG_LAYER unavailable warnings before
+	// shipping.
+	{
+		ComPtr<ID3D12Debug> debug;
+		if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug))))
+		{
+			debug->EnableDebugLayer();
+			dxgiFlags |= DXGI_CREATE_FACTORY_DEBUG;
+			LOG_INFO("D3D12: debug layer enabled");
+		}
+	}
+#endif
 
-bool GraphicsDeviceD3D12::AttachToWindow(HexEngine::Window*)                     { D3D12_STUB("AttachToWindow"); return false; }
-void GraphicsDeviceD3D12::Resize(HexEngine::Window*, uint32_t, uint32_t)         { D3D12_STUB("Resize"); }
-HexEngine::ITexture2D* GraphicsDeviceD3D12::GetBackBuffer(HexEngine::Window*)    { D3D12_STUB("GetBackBuffer"); return nullptr; }
-HexEngine::ITexture2D* GraphicsDeviceD3D12::CreateTexture(HexEngine::ITexture2D*) { D3D12_STUB("CreateTexture"); return nullptr; }
-HexEngine::ITexture2D* GraphicsDeviceD3D12::CreateTexture2D(const HexEngine::TextureDesc&, const HexEngine::SubresourceData*) { D3D12_STUB("CreateTexture2D"); return nullptr; }
-HexEngine::ITexture3D* GraphicsDeviceD3D12::CreateTexture3D(const HexEngine::TextureDesc&, const HexEngine::SubresourceData*) { D3D12_STUB("CreateTexture3D"); return nullptr; }
-HexEngine::IVertexBuffer* GraphicsDeviceD3D12::CreateVertexBuffer(const HexEngine::BufferDesc&, const void*) { D3D12_STUB("CreateVertexBuffer"); return nullptr; }
-HexEngine::IIndexBuffer*  GraphicsDeviceD3D12::CreateIndexBuffer(const HexEngine::BufferDesc&, const void*)  { D3D12_STUB("CreateIndexBuffer"); return nullptr; }
+	HRESULT hr = CreateDXGIFactory2(dxgiFlags, IID_PPV_ARGS(&_dxgiFactory));
+	if (FAILED(hr))
+	{
+		LOG_CRIT("D3D12: CreateDXGIFactory2 failed (0x%X)", hr);
+		return false;
+	}
 
-HexEngine::IShaderStage* GraphicsDeviceD3D12::CreateVertexShader(std::vector<uint8_t>&)   { D3D12_STUB("CreateVertexShader"); return nullptr; }
-HexEngine::IShaderStage* GraphicsDeviceD3D12::CreatePixelShader(std::vector<uint8_t>&)    { D3D12_STUB("CreatePixelShader"); return nullptr; }
-HexEngine::IShaderStage* GraphicsDeviceD3D12::CreateGeometryShader(std::vector<uint8_t>&) { D3D12_STUB("CreateGeometryShader"); return nullptr; }
-HexEngine::IShaderStage* GraphicsDeviceD3D12::CreateComputeShader(std::vector<uint8_t>&)  { D3D12_STUB("CreateComputeShader"); return nullptr; }
-HexEngine::IShaderStage* GraphicsDeviceD3D12::CreateComputeShaderFromSource(const std::string&, const std::string&) { D3D12_STUB("CreateComputeShaderFromSource"); return nullptr; }
-HexEngine::IInputLayout* GraphicsDeviceD3D12::CreateInputLayout(const HexEngine::InputElement*, uint32_t, const std::vector<uint8_t>&) { D3D12_STUB("CreateInputLayout"); return nullptr; }
+	// Prefer the highest-perf hardware adapter that supports FL 11_0+ D3D12.
+	for (UINT i = 0; ; ++i)
+	{
+		ComPtr<IDXGIAdapter1> adapter;
+		if (_dxgiFactory->EnumAdapterByGpuPreference(i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE, IID_PPV_ARGS(&adapter)) == DXGI_ERROR_NOT_FOUND)
+			break;
 
-HexEngine::IConstantBuffer* GraphicsDeviceD3D12::CreateConstantBuffer(uint32_t) { D3D12_STUB("CreateConstantBuffer"); return nullptr; }
-HexEngine::IStructuredBuffer* GraphicsDeviceD3D12::CreateStructuredBuffer(uint32_t, uint32_t, HexEngine::StructuredBufferFlags, HexEngine::ResourceUsage, HexEngine::CpuAccess, const void*) { D3D12_STUB("CreateStructuredBuffer"); return nullptr; }
-HexEngine::IConstantBuffer* GraphicsDeviceD3D12::GetEngineConstantBuffer(HexEngine::EngineConstantBuffer) { D3D12_STUB("GetEngineConstantBuffer"); return nullptr; }
+		DXGI_ADAPTER_DESC1 desc;
+		adapter->GetDesc1(&desc);
+		if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+			continue;
 
-void GraphicsDeviceD3D12::SetConstantBufferVS(uint32_t, HexEngine::IConstantBuffer*) {}
-void GraphicsDeviceD3D12::SetConstantBufferPS(uint32_t, HexEngine::IConstantBuffer*) {}
-void GraphicsDeviceD3D12::SetConstantBufferGS(uint32_t, HexEngine::IConstantBuffer*) {}
-void GraphicsDeviceD3D12::SetConstantBufferCS(uint32_t, HexEngine::IConstantBuffer*) {}
+		if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&_device))))
+		{
+			_dxgiAdapter = adapter;
+			char name[128];
+			WideCharToMultiByte(CP_UTF8, 0, desc.Description, -1, name, sizeof(name), nullptr, nullptr);
+			LOG_INFO("D3D12: using adapter '%s' (%llu MB dedicated VRAM)", name, (uint64_t)desc.DedicatedVideoMemory / (1024 * 1024));
+			break;
+		}
+	}
 
-void GraphicsDeviceD3D12::SetIndexBuffer(HexEngine::IIndexBuffer*) {}
-void GraphicsDeviceD3D12::SetVertexBuffer(uint32_t, HexEngine::IVertexBuffer*) {}
-void GraphicsDeviceD3D12::SetTopology(HexEngine::PrimitiveTopology) {}
+	if (!_device)
+	{
+		LOG_CRIT("D3D12: no D3D12-capable hardware adapter found");
+		return false;
+	}
 
-void GraphicsDeviceD3D12::SetVertexShader(HexEngine::IShaderStage*) {}
-void GraphicsDeviceD3D12::SetPixelShader(HexEngine::IShaderStage*) {}
-void GraphicsDeviceD3D12::SetGeometryShader(HexEngine::IShaderStage*) {}
-void GraphicsDeviceD3D12::SetComputeShader(HexEngine::IShaderStage*) {}
-void GraphicsDeviceD3D12::SetInputLayout(HexEngine::IInputLayout*) {}
+	D3D12_COMMAND_QUEUE_DESC qDesc = {};
+	qDesc.Type     = D3D12_COMMAND_LIST_TYPE_DIRECT;
+	qDesc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+	qDesc.Flags    = D3D12_COMMAND_QUEUE_FLAG_NONE;
+	qDesc.NodeMask = 0;
+	hr = _device->CreateCommandQueue(&qDesc, IID_PPV_ARGS(&_directQueue));
+	if (FAILED(hr))
+	{
+		LOG_CRIT("D3D12: CreateCommandQueue(DIRECT) failed (0x%X)", hr);
+		return false;
+	}
 
-void GraphicsDeviceD3D12::SetTexture2D(uint32_t, HexEngine::ITexture2D*) {}
-void GraphicsDeviceD3D12::SetTexture2D(HexEngine::ITexture2D*) {}
-void GraphicsDeviceD3D12::SetTexture3D(HexEngine::ITexture3D*) {}
-void GraphicsDeviceD3D12::SetGeometryTexture3D(uint32_t, HexEngine::ITexture3D*) {}
-void GraphicsDeviceD3D12::SetVertexStructuredBuffer(uint32_t, HexEngine::IStructuredBuffer*) {}
-void GraphicsDeviceD3D12::SetGeometryStructuredBuffer(uint32_t, HexEngine::IStructuredBuffer*) {}
-void GraphicsDeviceD3D12::SetComputeTexture3D(uint32_t, HexEngine::ITexture3D*) {}
-void GraphicsDeviceD3D12::SetComputeRwTexture3D(uint32_t, HexEngine::ITexture3D*) {}
-void GraphicsDeviceD3D12::SetComputeStructuredBuffer(uint32_t, HexEngine::IStructuredBuffer*) {}
-void GraphicsDeviceD3D12::SetComputeRwStructuredBuffer(uint32_t, HexEngine::IStructuredBuffer*, uint32_t) {}
-void GraphicsDeviceD3D12::ClearGeometryTexture3D(uint32_t) {}
-void GraphicsDeviceD3D12::ClearVertexStructuredBuffer(uint32_t) {}
-void GraphicsDeviceD3D12::ClearComputeTexture3D(uint32_t) {}
-void GraphicsDeviceD3D12::ClearComputeRwTexture3D(uint32_t) {}
-void GraphicsDeviceD3D12::ClearGeometryStructuredBuffer(uint32_t) {}
-void GraphicsDeviceD3D12::ClearComputeStructuredBuffer(uint32_t) {}
-void GraphicsDeviceD3D12::ClearComputeRwStructuredBuffer(uint32_t) {}
+	return true;
+}
 
-void GraphicsDeviceD3D12::SetTexture2DArray(uint32_t, const std::vector<HexEngine::ITexture2D*>&) {}
-void GraphicsDeviceD3D12::SetTexture2DArray(const std::vector<HexEngine::ITexture2D*>&) {}
+void GraphicsDeviceD3D12::Destroy()
+{
+	if (_device && _directQueue && _fence && _fenceEvent != nullptr)
+		WaitForGpu();
 
-void GraphicsDeviceD3D12::SetRenderTarget(HexEngine::ITexture2D*, HexEngine::ITexture2D*) {}
-void GraphicsDeviceD3D12::SetRenderTargets(const std::vector<HexEngine::ITexture2D*>&, HexEngine::ITexture2D*) {}
-void GraphicsDeviceD3D12::GetRenderTargets(std::vector<HexEngine::ITexture2D*>&, HexEngine::ITexture2D**) {}
-void GraphicsDeviceD3D12::SetRenderTargets(uint32_t, const std::vector<HexEngine::ITexture2D*>&, HexEngine::ITexture2D*) {}
+	_windowCtx.clear();
+	_cmdList.Reset();
+	for (auto& f : _frames)
+	{
+		f.alloc.Reset();
+		f.fenceValue = 0;
+	}
+	_fence.Reset();
+	if (_fenceEvent != nullptr)
+	{
+		CloseHandle(_fenceEvent);
+		_fenceEvent = nullptr;
+	}
+	_directQueue.Reset();
+	_device.Reset();
+	_dxgiAdapter.Reset();
+	_dxgiFactory.Reset();
+}
 
-void GraphicsDeviceD3D12::DrawIndexed(uint32_t) {}
-void GraphicsDeviceD3D12::DrawIndexedInstanced(uint32_t, uint32_t) {}
-void GraphicsDeviceD3D12::DrawIndexedInstancedIndirect(void*, uint32_t) {}
-void GraphicsDeviceD3D12::Draw(uint32_t, int32_t) {}
-void GraphicsDeviceD3D12::DrawInstancedIndirect(HexEngine::IStructuredBuffer*, uint32_t) {}
-void GraphicsDeviceD3D12::Dispatch(uint32_t, uint32_t, uint32_t) {}
-void GraphicsDeviceD3D12::DispatchIndirect(HexEngine::IStructuredBuffer*, uint32_t) {}
-void GraphicsDeviceD3D12::CopyStructureCount(HexEngine::IStructuredBuffer*, HexEngine::IStructuredBuffer*, uint32_t) {}
+void GraphicsDeviceD3D12::WaitForGpu()
+{
+	// Drop a fence value into the queue then block until the GPU reaches it.
+	// Conservative - used at Destroy and Resize where we need every prior frame
+	// to have completed before we can release backbuffer resources.
+	const uint64_t signalValue = _nextFenceValue++;
+	if (FAILED(_directQueue->Signal(_fence.Get(), signalValue)))
+		return;
 
-void GraphicsDeviceD3D12::GetBackBufferDimensions(uint32_t& width, uint32_t& height) { width = 0; height = 0; }
-HexEngine::IResourceLoader* GraphicsDeviceD3D12::GetTextureLoader() { return nullptr; }
+	if (_fence->GetCompletedValue() < signalValue)
+	{
+		if (SUCCEEDED(_fence->SetEventOnCompletion(signalValue, _fenceEvent)))
+			WaitForSingleObject(_fenceEvent, INFINITE);
+	}
+}
 
-void GraphicsDeviceD3D12::SetDepthBufferState(HexEngine::DepthBufferState) {}
-HexEngine::DepthBufferState GraphicsDeviceD3D12::GetDepthBufferState() const { return HexEngine::DepthBufferState::DepthDefault; }
+// ---------------------------------------------------------------------------
+// Swap chain attach + resize
+// ---------------------------------------------------------------------------
 
-void GraphicsDeviceD3D12::SetClearColour(const math::Color&) {}
-void GraphicsDeviceD3D12::SetCullingMode(HexEngine::CullingMode) {}
-HexEngine::CullingMode GraphicsDeviceD3D12::GetCullingMode() const { return HexEngine::CullingMode::BackFace; }
+bool GraphicsDeviceD3D12::AttachToWindow(HexEngine::Window* window)
+{
+	if (window == nullptr)
+		return false;
 
-void* GraphicsDeviceD3D12::GetNativeDevice() { return nullptr; }
-void* GraphicsDeviceD3D12::GetNativeDeviceContext() { return nullptr; }
+	WindowContext& ctx = _windowCtx[window];
 
-bool GraphicsDeviceD3D12::GetSupportedDisplayModes(std::vector<HexEngine::ScreenDisplayMode>&) { return false; }
+	RECT rc{};
+	GetClientRect(window->GetHandle(), &rc);
+	ctx.width  = std::max<LONG>(1, rc.right  - rc.left);
+	ctx.height = std::max<LONG>(1, rc.bottom - rc.top);
 
-void GraphicsDeviceD3D12::SetPixelShaderResource(uint32_t, HexEngine::ITexture2D*) {}
-void GraphicsDeviceD3D12::SetPixelShaderResource(HexEngine::ITexture2D*) {}
-void GraphicsDeviceD3D12::SetPixelShaderResources(uint32_t, const std::vector<HexEngine::ITexture2D*>&) {}
-void GraphicsDeviceD3D12::SetPixelShaderResources(const std::vector<HexEngine::ITexture2D*>&) {}
-void GraphicsDeviceD3D12::UnbindAllPixelShaderResources() {}
+	DXGI_SWAP_CHAIN_DESC1 desc = {};
+	desc.Width            = ctx.width;
+	desc.Height           = ctx.height;
+	desc.Format           = DXGI_FORMAT_R8G8B8A8_UNORM; // Phase B2 SDR-only; B5 picks up HDR scRGB once tonemap lands
+	desc.SampleDesc.Count = 1;
+	desc.BufferUsage      = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+	desc.BufferCount      = kFrameCount;
+	desc.SwapEffect       = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+	desc.AlphaMode        = DXGI_ALPHA_MODE_IGNORE;
+	desc.Scaling          = DXGI_SCALING_STRETCH;
+	desc.Flags            = 0;
 
-uint32_t GraphicsDeviceD3D12::GetBoundResourceIndex() { return 0; }
-void GraphicsDeviceD3D12::SetBoundResourceIndex(uint32_t) {}
+	ComPtr<IDXGISwapChain1> sc1;
+	HRESULT hr = _dxgiFactory->CreateSwapChainForHwnd(
+		_directQueue.Get(),
+		window->GetHandle(),
+		&desc,
+		nullptr,
+		nullptr,
+		&sc1);
+	if (FAILED(hr))
+	{
+		LOG_CRIT("D3D12: CreateSwapChainForHwnd failed (0x%X)", hr);
+		return false;
+	}
+	hr = sc1.As(&ctx.swapChain);
+	if (FAILED(hr))
+		return false;
 
-void GraphicsDeviceD3D12::BeginFrame(HexEngine::Window*, HexEngine::ITexture2D*) {}
-void GraphicsDeviceD3D12::EndFrame(HexEngine::Window*) {}
+	// Disable DXGI's alt-enter takeover; HexEngine controls fullscreen state.
+	_dxgiFactory->MakeWindowAssociation(window->GetHandle(), DXGI_MWA_NO_ALT_ENTER);
 
-void GraphicsDeviceD3D12::SetViewports(const std::vector<HexEngine::Viewport>&) {}
-void GraphicsDeviceD3D12::SetViewport(const HexEngine::Viewport&) {}
-HexEngine::Viewport GraphicsDeviceD3D12::GetBackBufferViewport() const { return HexEngine::Viewport(); }
+	// RTV heap with one slot per backbuffer.
+	D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+	rtvHeapDesc.NumDescriptors = kFrameCount;
+	rtvHeapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+	rtvHeapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+	hr = _device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&ctx.rtvHeap));
+	if (FAILED(hr))
+	{
+		LOG_CRIT("D3D12: CreateDescriptorHeap(RTV) failed (0x%X)", hr);
+		return false;
+	}
+	ctx.rtvDescriptorSize = _device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
-void GraphicsDeviceD3D12::SetBlendState(HexEngine::BlendState) {}
-HexEngine::BlendState GraphicsDeviceD3D12::GetBlendState() const { return HexEngine::BlendState::Opaque; }
-int32_t GraphicsDeviceD3D12::GetCurrentMSAALevel() const { return 1; }
+	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = ctx.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	for (uint32_t i = 0; i < kFrameCount; ++i)
+	{
+		Texture2DD3D12& bb = ctx.backbuffers[i];
+		hr = ctx.swapChain->GetBuffer(i, IID_PPV_ARGS(&bb._resource));
+		if (FAILED(hr))
+		{
+			LOG_CRIT("D3D12: SwapChain::GetBuffer[%u] failed (0x%X)", i, hr);
+			return false;
+		}
+		_device->CreateRenderTargetView(bb._resource.Get(), nullptr, rtvHandle);
+		bb._rtv          = rtvHandle;
+		bb._format       = desc.Format;
+		bb._width        = (int32_t)ctx.width;
+		bb._height       = (int32_t)ctx.height;
+		bb._currentState = D3D12_RESOURCE_STATE_PRESENT;
+		bb._ownsResource = false; // swap chain owns it
 
-void GraphicsDeviceD3D12::SetScissorRect(const HexEngine::ScissorRect&) {}
-void GraphicsDeviceD3D12::SetScissorRects(const std::vector<HexEngine::ScissorRect>&) {}
-void GraphicsDeviceD3D12::ClearScissorRect() {}
+		char dbgName[64];
+		_snprintf_s(dbgName, sizeof(dbgName), "D3D12Backbuffer[%u]", i);
+		bb.SetDebugName(dbgName);
 
-void GraphicsDeviceD3D12::ResetState() {}
+		rtvHandle.ptr += ctx.rtvDescriptorSize;
+	}
 
-#undef D3D12_STUB
+	ctx.currentFrameIndex = ctx.swapChain->GetCurrentBackBufferIndex();
+	_activeWindow = &ctx;
+
+	_backBufferViewport = HexEngine::Viewport(0.0f, 0.0f, (float)ctx.width, (float)ctx.height);
+
+	LOG_INFO("D3D12: swap chain attached to window (%ux%u, %u backbuffers)", ctx.width, ctx.height, kFrameCount);
+	return true;
+}
+
+void GraphicsDeviceD3D12::Resize(HexEngine::Window* window, uint32_t width, uint32_t height)
+{
+	auto it = _windowCtx.find(window);
+	if (it == _windowCtx.end() || width == 0 || height == 0)
+		return;
+
+	WindowContext& ctx = it->second;
+	if (ctx.width == width && ctx.height == height)
+		return;
+
+	// Backbuffers can't be released while in flight - drain the GPU first.
+	WaitForGpu();
+
+	for (uint32_t i = 0; i < kFrameCount; ++i)
+		ctx.backbuffers[i]._resource.Reset();
+
+	HRESULT hr = ctx.swapChain->ResizeBuffers(kFrameCount, width, height, DXGI_FORMAT_UNKNOWN, 0);
+	if (FAILED(hr))
+	{
+		LOG_CRIT("D3D12: SwapChain::ResizeBuffers failed (0x%X)", hr);
+		return;
+	}
+
+	ctx.width  = width;
+	ctx.height = height;
+
+	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = ctx.rtvHeap->GetCPUDescriptorHandleForHeapStart();
+	for (uint32_t i = 0; i < kFrameCount; ++i)
+	{
+		Texture2DD3D12& bb = ctx.backbuffers[i];
+		ctx.swapChain->GetBuffer(i, IID_PPV_ARGS(&bb._resource));
+		_device->CreateRenderTargetView(bb._resource.Get(), nullptr, rtvHandle);
+		bb._rtv          = rtvHandle;
+		bb._width        = (int32_t)width;
+		bb._height       = (int32_t)height;
+		bb._currentState = D3D12_RESOURCE_STATE_PRESENT;
+		rtvHandle.ptr += ctx.rtvDescriptorSize;
+	}
+
+	ctx.currentFrameIndex = ctx.swapChain->GetCurrentBackBufferIndex();
+	_backBufferViewport = HexEngine::Viewport(0.0f, 0.0f, (float)width, (float)height);
+}
+
+// ---------------------------------------------------------------------------
+// Frame submission
+// ---------------------------------------------------------------------------
+
+void GraphicsDeviceD3D12::BeginFrame(HexEngine::Window* window, HexEngine::ITexture2D* /*depthBuffer*/)
+{
+	auto it = _windowCtx.find(window);
+	if (it == _windowCtx.end())
+		return;
+	WindowContext& ctx = it->second;
+	_activeWindow = &ctx;
+
+	const uint32_t frameIdx = ctx.currentFrameIndex;
+	FrameContext& frame = _frames[frameIdx];
+
+	// Block until the GPU has finished any prior submission that used this
+	// frame's allocator. Without this, Reset() on an in-flight allocator
+	// returns E_FAIL.
+	if (_fence->GetCompletedValue() < frame.fenceValue)
+	{
+		if (SUCCEEDED(_fence->SetEventOnCompletion(frame.fenceValue, _fenceEvent)))
+			WaitForSingleObject(_fenceEvent, INFINITE);
+	}
+
+	frame.alloc->Reset();
+	_cmdList->Reset(frame.alloc.Get(), nullptr);
+
+	Texture2DD3D12& bb = ctx.backbuffers[frameIdx];
+
+	// PRESENT -> RENDER_TARGET, clear, leave bound as the RT.
+	TransitionResource(&bb, D3D12_RESOURCE_STATE_RENDER_TARGET);
+
+	const float clear[4] = { _clearColour.R(), _clearColour.G(), _clearColour.B(), _clearColour.A() };
+	_cmdList->ClearRenderTargetView(bb._rtv, clear, 0, nullptr);
+	_cmdList->OMSetRenderTargets(1, &bb._rtv, FALSE, nullptr);
+
+	D3D12_VIEWPORT vp = { 0.0f, 0.0f, (float)ctx.width, (float)ctx.height, 0.0f, 1.0f };
+	_cmdList->RSSetViewports(1, &vp);
+	D3D12_RECT sr = { 0, 0, (LONG)ctx.width, (LONG)ctx.height };
+	_cmdList->RSSetScissorRects(1, &sr);
+}
+
+void GraphicsDeviceD3D12::EndFrame(HexEngine::Window* window)
+{
+	auto it = _windowCtx.find(window);
+	if (it == _windowCtx.end())
+		return;
+	WindowContext& ctx = it->second;
+
+	const uint32_t frameIdx = ctx.currentFrameIndex;
+	Texture2DD3D12& bb = ctx.backbuffers[frameIdx];
+
+	TransitionResource(&bb, D3D12_RESOURCE_STATE_PRESENT);
+	_cmdList->Close();
+
+	ID3D12CommandList* lists[] = { _cmdList.Get() };
+	_directQueue->ExecuteCommandLists(1, lists);
+
+	// Schedule the fence-signal AFTER this frame's work, then record the value
+	// against the allocator we used. Next BeginFrame that lands on this slot
+	// will block on it.
+	const uint64_t signalValue = _nextFenceValue++;
+	_directQueue->Signal(_fence.Get(), signalValue);
+	_frames[frameIdx].fenceValue = signalValue;
+
+	ctx.swapChain->Present(0, 0);
+	ctx.currentFrameIndex = ctx.swapChain->GetCurrentBackBufferIndex();
+}
+
+// ---------------------------------------------------------------------------
+// Misc
+// ---------------------------------------------------------------------------
+
+HexEngine::ITexture2D* GraphicsDeviceD3D12::GetBackBuffer(HexEngine::Window* window)
+{
+	WindowContext* ctx = _activeWindow;
+	if (window != nullptr)
+	{
+		auto it = _windowCtx.find(window);
+		if (it != _windowCtx.end())
+			ctx = &it->second;
+	}
+	if (ctx == nullptr)
+		return nullptr;
+	return &ctx->backbuffers[ctx->currentFrameIndex];
+}
+
+void GraphicsDeviceD3D12::GetBackBufferDimensions(uint32_t& width, uint32_t& height)
+{
+	if (_activeWindow != nullptr)
+	{
+		width  = _activeWindow->width;
+		height = _activeWindow->height;
+	}
+	else
+	{
+		width  = 0;
+		height = 0;
+	}
+}
+
+void GraphicsDeviceD3D12::SetRenderTarget(HexEngine::ITexture2D* renderTarget, HexEngine::ITexture2D* /*depthStencil*/)
+{
+	if (renderTarget == nullptr || _cmdList == nullptr)
+		return;
+	auto* tex = static_cast<Texture2DD3D12*>(renderTarget);
+	TransitionResource(tex, D3D12_RESOURCE_STATE_RENDER_TARGET);
+	_cmdList->OMSetRenderTargets(1, &tex->_rtv, FALSE, nullptr);
+}
+
+void GraphicsDeviceD3D12::TransitionResource(Texture2DD3D12* tex, D3D12_RESOURCE_STATES newState)
+{
+	if (tex == nullptr || tex->_resource == nullptr || _cmdList == nullptr)
+		return;
+	if (tex->_currentState == newState)
+		return;
+
+	D3D12_RESOURCE_BARRIER barrier = {};
+	barrier.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+	barrier.Flags                  = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+	barrier.Transition.pResource   = tex->_resource.Get();
+	barrier.Transition.StateBefore = tex->_currentState;
+	barrier.Transition.StateAfter  = newState;
+	barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+	_cmdList->ResourceBarrier(1, &barrier);
+	tex->_currentState = newState;
+}
