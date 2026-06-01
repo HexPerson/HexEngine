@@ -3,10 +3,15 @@
 #include "HLSL.hpp"
 
 #include <sstream>
+#include <ShaderConductor/ShaderConductor.hpp>
 
 #pragma comment(lib,"d3dcompiler.lib")
 
-const std::string gShaderStageToVersion[(uint32_t)HexEngine::ShaderStage::NumShaderStages] = {
+// Per-stage HLSL profile strings.
+// DXBC path uses FXC (D3DCompile) at SM 5.0 - the legacy D3D11 path.
+// DXIL path uses ShaderConductor (DXC) at SM 6.0 - the D3D12 path. The same
+// HLSL source compiles to both unless it uses SM 6.0+-only features.
+static const std::string gShaderStageToSm5Version[(uint32_t)HexEngine::ShaderStage::NumShaderStages] = {
 	"vs_5_0",
 	"ps_5_0",
 	"gs_5_0",
@@ -15,28 +20,50 @@ const std::string gShaderStageToVersion[(uint32_t)HexEngine::ShaderStage::NumSha
 	"cs_5_0"
 };
 
-bool HLSL::Compile(const fs::path& filePath, std::vector<uint8_t>& dataOut, HexEngine::ShaderFileFormat& shader)
+static ShaderConductor::ShaderStage HexStageToScStage(HexEngine::ShaderStage s)
+{
+	switch (s)
+	{
+	case HexEngine::ShaderStage::VertexShader:   return ShaderConductor::ShaderStage::VertexShader;
+	case HexEngine::ShaderStage::PixelShader:    return ShaderConductor::ShaderStage::PixelShader;
+	case HexEngine::ShaderStage::GeometryShader: return ShaderConductor::ShaderStage::GeometryShader;
+	case HexEngine::ShaderStage::HullShader:     return ShaderConductor::ShaderStage::HullShader;
+	case HexEngine::ShaderStage::DomainShader:   return ShaderConductor::ShaderStage::DomainShader;
+	case HexEngine::ShaderStage::ComputeShader:  return ShaderConductor::ShaderStage::ComputeShader;
+	default:                                     return ShaderConductor::ShaderStage::NumShaderStages;
+	}
+}
+
+bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 {
 	std::string shaderData[(uint32_t)ShaderStage::NumShaderStages];
 	int32_t lineOffsets[(uint32_t)ShaderStage::NumShaderStages];
 
-	ReadShader(filePath, shaderData, shader._inputLayout, shader._requirements, lineOffsets);
+	if (!ReadShader(filePath, shaderData, out.inputLayout, out.requirements, lineOffsets))
+		return false;
 
-	int32_t stageIdx = 0;
+	bool anyStageCompiled = false;
 
-	for (auto& data : shaderData)
+	for (uint32_t stageIdx = 0; stageIdx < (uint32_t)ShaderStage::NumShaderStages; ++stageIdx)
 	{
-		if (data.length() > 0)
+		auto& data = shaderData[stageIdx];
+		if (data.empty())
+			continue;
+
+		const HexEngine::ShaderStage stage = static_cast<HexEngine::ShaderStage>(stageIdx);
+
+		bool stageEmittedSomething = false;
+
+		// ----- DXBC (FXC / SM 5.0) -----
+		// This is the canonical D3D11 path. Failure here is treated as a
+		// hard error - the engine still ships the D3D11 backend as primary.
 		{
-			ID3DBlob* pCode, * pErrors;
+			ID3DBlob* pCode = nullptr;
+			ID3DBlob* pErrors = nullptr;
 
-			const HexEngine::ShaderStage stage = static_cast<HexEngine::ShaderStage>(stageIdx);
+			auto targetVer = gShaderStageToSm5Version[stageIdx];
 
-			//printf("Stage %d line is %d\n", stage, lineOffsets[stageIdx]);
-
-			auto targetVer = gShaderStageToVersion[(&data - shaderData)];
-
-			if (HRESULT hr = D3DCompile(
+			HRESULT hr = D3DCompile(
 				data.data(),
 				data.size(),
 				nullptr,
@@ -51,55 +78,128 @@ bool HLSL::Compile(const fs::path& filePath, std::vector<uint8_t>& dataOut, HexE
 #endif
 				0,
 				&pCode,
-				&pErrors); hr != S_OK)
+				&pErrors);
+
+			if (hr != S_OK)
 			{
-				std::stringstream errorstr;
-				errorstr << (const char*)pErrors->GetBufferPointer();
-
-				std::string error;
-
-				while (std::getline(errorstr, error))
+				if (pErrors != nullptr)
 				{
-					int line = 0;
-					int column = 0;
+					std::stringstream errorstr;
+					errorstr << (const char*)pErrors->GetBufferPointer();
 
-					if (auto p = error.find('('); p != error.npos)
+					std::string error;
+					while (std::getline(errorstr, error))
 					{
-						auto p2 = error.find(',', p);
+						int line = 0;
+						int column = 0;
 
-						auto sline = error.substr(p + 1, p2 - p - 1);
+						if (auto p = error.find('('); p != error.npos)
+						{
+							auto p2 = error.find(',', p);
+							auto sline = error.substr(p + 1, p2 - p - 1);
+							line = std::stoi(sline);
 
-						line = std::stoi(sline);
+							auto p3 = error.find('-', p);
+							auto scolumn = error.substr(p2 + 1, p3 - p2 - 1);
+							column = std::stoi(scolumn);
+						}
 
-
-						auto p3 = error.find('-', p);
-
-						auto scolumn = error.substr(p2 + 1, p3 - p2 - 1);
-
-						column = std::stoi(scolumn);
+						printf("%S:%d:%d: error (DXBC): %s\n", filePath.c_str(), line + lineOffsets[stageIdx], column, error.c_str());
 					}
-
-					printf("%S:%d:%d: error: %s\n", filePath.c_str(), line + lineOffsets[stageIdx], column, error.c_str());
+					pErrors->Release();
 				}
+				if (pCode) pCode->Release();
 				return false;
 			}
 
 			auto size = pCode->GetBufferSize();
+			printf("%S stage %u: DXBC compiled, %lld bytes\n", filePath.filename().c_str(), stageIdx, size);
 
-			//size += 800;
+			CompiledStage::Blob blob;
+			blob.backend = HexEngine::ShaderBlobBackend::DXBC_SM5;
+			blob.bytes.resize(size);
+			memcpy(blob.bytes.data(), pCode->GetBufferPointer(), size);
+			out.stages[stageIdx].blobs.push_back(std::move(blob));
 
-			printf("%S %d compiled successfully! Size is %lld\n", filePath.filename().c_str(), stageIdx, size);
+			pCode->Release();
+			if (pErrors) pErrors->Release();
 
-			dataOut.insert(dataOut.end(), (uint8_t*)pCode->GetBufferPointer(), (uint8_t*)pCode->GetBufferPointer() + size);
-
-			shader._shaderSizes[stageIdx] = (uint32_t)size;
-			shader._flags |= (HexEngine::ShaderFileFlags)HEX_BITSET((uint8_t)stageIdx);
+			stageEmittedSomething = true;
 		}
 
-		++stageIdx;
+		// ----- DXIL (ShaderConductor / DXC / SM 6.0) -----
+		// This path is best-effort. If a shader uses constructs DXC rejects
+		// (rare for engine-written SM 5.0 HLSL but it happens with some
+		// register() declarations or implicit conversions), we log the
+		// failure and ship DXBC-only - the v2 .hcs loader will refuse to load
+		// the shader under D3D12 with a clear "re-bake" message.
+		{
+			ShaderConductor::Compiler::SourceDesc src{};
+			src.source     = data.c_str();
+			src.fileName   = nullptr;
+			src.entryPoint = "ShaderMain";
+			src.stage      = HexStageToScStage(stage);
+			src.defines    = nullptr;
+			src.numDefines = 0;
+			src.loadIncludeCallback = [this](const char* includeName) -> ShaderConductor::Blob
+			{
+				const void* data  = nullptr;
+				UINT        bytes = 0;
+				if (FAILED(this->Open(D3D_INCLUDE_LOCAL, includeName, nullptr, &data, &bytes)))
+					return ShaderConductor::Blob();
+				ShaderConductor::Blob out(data, bytes);
+				this->Close(data);
+				return out;
+			};
+
+			ShaderConductor::Compiler::Options opts{};
+			opts.packMatricesInRowMajor = true;
+			opts.enable16bitTypes       = false;
+			opts.optimizationLevel      = 3;
+			opts.shaderModel            = {6, 0};
+#ifdef _DEBUG
+			opts.enableDebugInfo     = true;
+			opts.disableOptimizations = true;
+#endif
+
+			ShaderConductor::Compiler::TargetDesc tgt{};
+			tgt.language = ShaderConductor::ShadingLanguage::Dxil;
+			tgt.version  = nullptr;
+			tgt.asModule = false;
+
+			ShaderConductor::Compiler::ResultDesc result = ShaderConductor::Compiler::Compile(src, opts, tgt);
+
+			if (result.hasError)
+			{
+				const char* msg = result.errorWarningMsg.Size() > 0
+					? reinterpret_cast<const char*>(result.errorWarningMsg.Data())
+					: "<no error message>";
+				printf("%S stage %u: DXIL compile failed (D3D12 will reject this shader): %s\n",
+					filePath.filename().c_str(), stageIdx, msg);
+			}
+			else if (result.target.Size() == 0)
+			{
+				printf("%S stage %u: DXIL compile produced no output (skipping D3D12)\n",
+					filePath.filename().c_str(), stageIdx);
+			}
+			else
+			{
+				printf("%S stage %u: DXIL compiled, %u bytes\n",
+					filePath.filename().c_str(), stageIdx, result.target.Size());
+
+				CompiledStage::Blob blob;
+				blob.backend = HexEngine::ShaderBlobBackend::DXIL_SM6;
+				blob.bytes.resize(result.target.Size());
+				memcpy(blob.bytes.data(), result.target.Data(), result.target.Size());
+				out.stages[stageIdx].blobs.push_back(std::move(blob));
+			}
+		}
+
+		if (stageEmittedSomething)
+			anyStageCompiled = true;
 	}
 
-	return true;
+	return anyStageCompiled;
 }
 
 HRESULT HLSL::Open(D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID pParentData, LPCVOID* ppData, UINT* pBytes)
@@ -116,8 +216,6 @@ HRESULT HLSL::Open(D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID pPare
 	shaderPath += fileName;
 
 	HexEngine::DiskFile file(shaderPath, std::ios::in);
-
-	//printf("Opening '%s' as a shader include\n", pFileName);
 
 	if (!file.Open())
 	{

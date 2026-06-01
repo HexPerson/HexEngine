@@ -10,7 +10,7 @@ class HLSL :
 	public ID3DInclude
 {
 public:
-	virtual bool Compile(const fs::path& filePath, std::vector<uint8_t>& dataOut, HexEngine::ShaderFileFormat& shader) override;
+	virtual bool Compile(const fs::path& filePath, CompiledShader& out) override;
 
 	// virtual overrides from ID3DInclude
 	virtual HRESULT Open(D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID pParentData, LPCVOID* ppData, UINT* pBytes) override;
