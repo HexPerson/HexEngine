@@ -197,6 +197,11 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 
 	auto& dxc = Dxc();
 
+	// Track whether any stage actually produced bytecode. Pure-include shaders
+	// (Atmosphere.shader, Default.shader etc - just a Global section, no per-
+	// stage HLSL) end up with all stages empty. We still return success in
+	// that case so the MSBuild target writes an empty placeholder .hcs and
+	// doesn't keep rebuilding every run.
 	bool anyStageCompiled = false;
 
 	for (uint32_t stageIdx = 0; stageIdx < (uint32_t)ShaderStage::NumShaderStages; ++stageIdx)
@@ -206,7 +211,6 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			continue;
 
 		const HexEngine::ShaderStage stage = static_cast<HexEngine::ShaderStage>(stageIdx);
-		bool stageEmittedSomething = false;
 
 		// ----- DXBC (FXC / SM 5.0) -----
 		// This is the canonical D3D11 path. Failure here is treated as a hard
@@ -278,7 +282,7 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			pCode->Release();
 			if (pErrors) pErrors->Release();
 
-			stageEmittedSomething = true;
+			anyStageCompiled = true;
 		}
 
 		// ----- DXIL (DXC via IDxcCompiler3 / SM 6.0) -----
@@ -293,7 +297,7 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			if (FAILED(hr))
 			{
 				printf("%S stage %u: DXC CreateBlob failed (0x%08X) - shipping DXBC-only\n", filePath.filename().c_str(), stageIdx, hr);
-				if (stageEmittedSomething) anyStageCompiled = true;
+				
 				continue;
 			}
 
@@ -333,7 +337,7 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			if (FAILED(hr))
 			{
 				printf("%S stage %u: DXC Compile failed (0x%08X) - shipping DXBC-only\n", filePath.filename().c_str(), stageIdx, hr);
-				if (stageEmittedSomething) anyStageCompiled = true;
+				
 				continue;
 			}
 
@@ -350,7 +354,7 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			{
 				printf("%S stage %u: DXIL compile failed (status 0x%08X) - shipping DXBC-only\n",
 					filePath.filename().c_str(), stageIdx, status);
-				if (stageEmittedSomething) anyStageCompiled = true;
+				
 				continue;
 			}
 
@@ -360,7 +364,7 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			{
 				printf("%S stage %u: DXIL compile produced no output (shipping DXBC-only)\n",
 					filePath.filename().c_str(), stageIdx);
-				if (stageEmittedSomething) anyStageCompiled = true;
+				
 				continue;
 			}
 
@@ -373,12 +377,18 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			memcpy(blob.bytes.data(), dxilBlob->GetBufferPointer(), dxilBlob->GetBufferSize());
 			out.stages[stageIdx].blobs.push_back(std::move(blob));
 		}
-
-		if (stageEmittedSomething)
-			anyStageCompiled = true;
 	}
 
-	return anyStageCompiled;
+	if (!anyStageCompiled)
+	{
+		// Pure-include / Global-only shader. Caller (Main.cpp) still writes an
+		// empty v2 .hcs so MSBuild's Outputs="*.hcs" check is satisfied and
+		// the target doesn't re-run every build. The runtime loader is happy
+		// with a header whose _flags = 0 (no stages present).
+		printf("%S has no per-stage HLSL (pure include / Global-only) - emitting empty .hcs\n",
+			filePath.filename().c_str());
+	}
+	return true;
 }
 
 HRESULT HLSL::Open(D3D_INCLUDE_TYPE IncludeType, LPCSTR pFileName, LPCVOID pParentData, LPCVOID* ppData, UINT* pBytes)
