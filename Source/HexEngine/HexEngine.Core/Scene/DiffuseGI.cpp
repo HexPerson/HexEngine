@@ -958,7 +958,18 @@ namespace HexEngine
 				return false;
 			}
 
-			auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+			// Direct-D3D11 hot path: DiffuseGI builds its own UAVs against the
+			// native ID3D11Device for the GI clipmaps to avoid going through
+			// the abstraction's per-resource UAV (different SR/UAV format
+			// reinterpretation, mainly). Under D3D12 the GetNativeDevice
+			// pointer is an ID3D12Device which doesn't accept these calls -
+			// skip the whole block and leave the manual UAV pointers null.
+			// The DiffuseGI dispatch code paths that consume them are
+			// D3D11-only too (see same backend gates further down), so this
+			// is consistent. D3D12-native GI lands as part of Phase B5.
+			auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11)
+				? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice())
+				: nullptr;
 			if (device != nullptr)
 			{
 				D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
@@ -1550,7 +1561,7 @@ namespace HexEngine
 			}
 		}
 
-		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		auto* context = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()) : nullptr;
 		if (!context)
 			return;
 
@@ -1801,7 +1812,7 @@ namespace HexEngine
 			}
 		}
 
-		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		auto* context = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()) : nullptr;
 		if (context != nullptr && level.radianceVolume != nullptr && level.opacityVolume != nullptr)
 		{
 			const uint32_t rowPitchRadiance = voxelRes * 4u * sizeof(float);
@@ -2390,7 +2401,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		SAFE_RELEASE(_voxelTriangleBuffer);
 		_voxelTriangleCapacity = 0;
 
-		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
 		if (device == nullptr)
 			return false;
 
@@ -2436,7 +2447,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		SAFE_RELEASE(_giLightBuffer);
 		_giLightCapacity = 0u;
 
-		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
 		if (device == nullptr)
 			return false;
 
@@ -2480,7 +2491,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		SAFE_RELEASE(_giMaterialBuffer);
 		_giMaterialCapacity = 0u;
 
-		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
 		if (device == nullptr)
 			return false;
 
@@ -2524,7 +2535,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		SAFE_RELEASE(_giMaterialTexelBuffer);
 		_giMaterialTexelCapacity = 0u;
 
-		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
 		if (device == nullptr)
 			return false;
 
@@ -2618,7 +2629,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		SAFE_RELEASE(_voxelCandidateDispatchArgs);
 		_voxelCandidateCapacity = 0u;
 
-		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
 		if (device == nullptr)
 			return false;
 
@@ -2922,7 +2933,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		if (!EnsureGpuVoxelCandidateBuffer(sourceTriangleCount))
 			return sourceTriangleCount;
 
-		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		auto* context = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()) : nullptr;
 		auto* stage = _voxelCandidateShader->GetShaderStage(ShaderStage::ComputeShader);
 		if (context == nullptr || stage == nullptr || _voxelTriangleSrv == nullptr)
 			return sourceTriangleCount;
@@ -4194,8 +4205,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			return;
 		}
 
-		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
-		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
+		auto* context = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()) : nullptr;
 		if (device == nullptr || context == nullptr)
 			return;
 
