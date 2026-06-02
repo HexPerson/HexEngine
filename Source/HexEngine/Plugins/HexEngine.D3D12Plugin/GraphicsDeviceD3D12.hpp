@@ -121,7 +121,10 @@ public:
 	virtual void CopyStructureCount(HexEngine::IStructuredBuffer*, HexEngine::IStructuredBuffer*, uint32_t = 0) override {}
 
 	virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) override;
-	virtual HexEngine::IResourceLoader* GetTextureLoader() override { return nullptr; }
+	// Defined in the .cpp so the forward-declared TextureImporterD3D12 type
+	// can be implicitly converted to IResourceLoader* there (the header
+	// doesn't include the importer's full definition).
+	virtual HexEngine::IResourceLoader* GetTextureLoader() override;
 
 	virtual void SetDepthBufferState(HexEngine::DepthBufferState state) override { _depthState = state; }
 	virtual HexEngine::DepthBufferState GetDepthBufferState() const override { return _depthState; }
@@ -247,4 +250,9 @@ private:
 	HexEngine::CullingMode                           _cullingMode  = HexEngine::CullingMode::BackFace;
 	HexEngine::DepthBufferState                      _depthState   = HexEngine::DepthBufferState::DepthDefault;
 	uint32_t                                         _boundResourceIndex = 0;
+
+	// PNG/JPG/DDS/etc decoder + IResource factory. Created in Create() once
+	// the device is up so it has somewhere to allocate textures from. The
+	// ResourceSystem owns the registration lifetime.
+	class TextureImporterD3D12*                      _textureLoader = nullptr;
 };

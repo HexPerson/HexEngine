@@ -2,6 +2,7 @@
 #include "GraphicsDeviceD3D12.hpp"
 #include "FormatsD3D12.hpp"
 #include "ShaderStageD3D12.hpp"
+#include "TextureImporterD3D12.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
 #include <HexEngine.Core/Graphics/Window.hpp>
 
@@ -115,7 +116,12 @@ bool GraphicsDeviceD3D12::Create()
 	if (!_dsvHeap.Create(_device.Get(),       D3D12_DESCRIPTOR_HEAP_TYPE_DSV,         64,  /*shaderVisible=*/false))   return false;
 	if (!_cbvSrvUavHeap.Create(_device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 8192,/*shaderVisible=*/false))   return false;
 
-	LOG_INFO("HexEngine.D3D12Plugin: device + queue + %u-frame ring + descriptor heaps ready", kFrameCount);
+	// Texture file loader (png/jpg/dds/...). Registers itself with the
+	// ResourceSystem in its ctor. Must come AFTER descriptor heaps so its
+	// CreateTexture2D path has somewhere to allocate SRVs from.
+	_textureLoader = new TextureImporterD3D12();
+
+	LOG_INFO("HexEngine.D3D12Plugin: device + queue + %u-frame ring + descriptor heaps + texture loader ready", kFrameCount);
 	return true;
 }
 
@@ -172,6 +178,7 @@ void GraphicsDeviceD3D12::Destroy()
 {
 	if (_device && _directQueue && _fence && _fenceEvent) WaitForGpu();
 
+	if (_textureLoader) { delete _textureLoader; _textureLoader = nullptr; }
 	_pendingUploads.clear();
 	_windowCtx.clear();
 	_cbvSrvUavHeap.Destroy();
@@ -388,6 +395,11 @@ HexEngine::ITexture2D* GraphicsDeviceD3D12::GetBackBuffer(HexEngine::Window* win
 	}
 	if (ctx == nullptr) return nullptr;
 	return &ctx->backbuffers[ctx->currentFrameIndex];
+}
+
+HexEngine::IResourceLoader* GraphicsDeviceD3D12::GetTextureLoader()
+{
+	return _textureLoader;
 }
 
 void GraphicsDeviceD3D12::GetBackBufferDimensions(uint32_t& width, uint32_t& height)
