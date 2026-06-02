@@ -748,7 +748,7 @@ namespace HexEngine
 
 		auto MsaaLevel = g_pEnv->_graphicsDevice->GetCurrentMSAALevel();
 
-		const DXGI_FORMAT BEAUTY_FORMAT = (DXGI_FORMAT)g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat();
+		const DXGI_FORMAT BEAUTY_FORMAT = HexEngine::detail::ShimToDxgiFormat(g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat());
 
 		_beautyRT = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,

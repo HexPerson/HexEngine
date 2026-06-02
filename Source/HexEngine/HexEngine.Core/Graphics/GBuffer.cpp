@@ -29,7 +29,7 @@ namespace HexEngine
 		_diffuseTex = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
 			height,
-			(DXGI_FORMAT)g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat(),
+			HexEngine::detail::ShimToDxgiFormat(g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat()),
 			1,
 			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
 			0,
