@@ -168,8 +168,17 @@ void GraphicsDeviceD3D12::ResetPendingForBeginFrame()
 
 bool GraphicsDeviceD3D12::FlushGraphics()
 {
-	if (_cmdList == nullptr || _activeWindow == nullptr) return false;
-	if (_pending.vs == nullptr || _pending.ps == nullptr) return false;
+	// One-shot bring-up diagnostics. The "still no geometry" debugging path
+	// needs to know which guard is rejecting draws. Each LOG_INFO fires only
+	// once per app run via a static bool, so this isn't log spam in steady
+	// state. Pull these out once D3D12 reaches scene parity.
+	static bool warnedNoCmdList = false, warnedNoWindow = false, warnedNoVS = false, warnedNoPS = false;
+	static bool firstFlushOK = false;
+
+	if (_cmdList == nullptr)     { if (!warnedNoCmdList) { LOG_WARN("D3D12 FlushGraphics: no command list - draw skipped"); warnedNoCmdList = true; } return false; }
+	if (_activeWindow == nullptr) { if (!warnedNoWindow)  { LOG_WARN("D3D12 FlushGraphics: no active window - draw skipped"); warnedNoWindow = true; } return false; }
+	if (_pending.vs == nullptr)  { if (!warnedNoVS)      { LOG_WARN("D3D12 FlushGraphics: no vertex shader bound - draw skipped. Check that shaders were rebuilt for v2 .hcs (DXIL) and that ShaderSystem found the DXIL_SM6 blob."); warnedNoVS = true; } return false; }
+	if (_pending.ps == nullptr)  { if (!warnedNoPS)      { LOG_WARN("D3D12 FlushGraphics: no pixel shader bound - draw skipped"); warnedNoPS = true; } return false; }
 
 	GfxPsoKey key = {};
 	key.vsBytecode  = _pending.vs->_bytecode.data();
@@ -207,7 +216,22 @@ bool GraphicsDeviceD3D12::FlushGraphics()
 		key.psBytecode, _pending.ps->_bytecode.size(),
 		key.gsBytecode, _pending.gs ? _pending.gs->_bytecode.size() : 0,
 		inputElems, inputCnt);
-	if (pso == nullptr) return false;
+	if (pso == nullptr)
+	{
+		static bool warnedPsoFail = false;
+		if (!warnedPsoFail)
+		{
+			LOG_WARN("D3D12 FlushGraphics: PSO resolve returned null - check earlier 'PsoCache::ResolveGraphics CreateGraphicsPipelineState failed' lines for the HR. Most likely RT/DS format mismatch, shader bytecode invalid for SM 6.0, or input layout incompatible with vertex shader.");
+			warnedPsoFail = true;
+		}
+		return false;
+	}
+
+	if (!firstFlushOK)
+	{
+		LOG_INFO("D3D12 FlushGraphics: first successful flush. PSO bound, descriptor tables set. Subsequent draws should now hit the GPU.");
+		firstFlushOK = true;
+	}
 
 	_cmdList->SetPipelineState(pso);
 	_cmdList->SetGraphicsRootSignature(_rootSig.Get());

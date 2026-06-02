@@ -854,6 +854,20 @@ HexEngine::IConstantBuffer* GraphicsDeviceD3D12::GetEngineConstantBuffer(HexEngi
 
 HexEngine::IShaderStage* GraphicsDeviceD3D12::CreateVertexShader(std::vector<uint8_t>& code)
 {
+	// One-shot diagnostic: log the first VS that lands and what its bytes look
+	// like. DXIL bytecode starts with "DXBC" (yes, ironic - DXIL containers
+	// reuse the DXBC container header), then a specific subblob layout for
+	// SM 6.x. If the bytes start with anything else, the ShaderSystem v2
+	// loader didn't actually pick the DXIL blob.
+	static bool warnedFirstVS = false;
+	if (!warnedFirstVS && !code.empty())
+	{
+		warnedFirstVS = true;
+		char fourcc[5] = {};
+		if (code.size() >= 4) memcpy(fourcc, code.data(), 4);
+		LOG_INFO("D3D12 CreateVertexShader: first VS received, %llu bytes, fourcc='%s' (expect 'DXBC' for both DXBC SM5 and DXIL SM6 containers)",
+			(uint64_t)code.size(), fourcc);
+	}
 	auto* s = new ShaderStageD3D12();
 	s->_bytecode = code;
 	return s;
