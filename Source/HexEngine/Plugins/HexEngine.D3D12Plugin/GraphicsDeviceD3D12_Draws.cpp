@@ -45,12 +45,36 @@ void GraphicsDeviceD3D12::SetGeometryShader(HexEngine::IShaderStage* s)         
 void GraphicsDeviceD3D12::SetComputeShader(HexEngine::IShaderStage* s)                                   { _pending.cs = static_cast<ShaderStageD3D12*>(s); }
 void GraphicsDeviceD3D12::SetInputLayout(HexEngine::IInputLayout* l)                                     { _pending.inputLayout = static_cast<InputLayoutD3D12*>(l); _pending.dirty = true; }
 
+void GraphicsDeviceD3D12::UnbindAsRenderTargetIfBound(HexEngine::ITexture2D* tex)
+{
+	if (tex == nullptr || _cmdList == nullptr) return;
+	bool wasRT = false;
+	for (uint32_t i = 0; i < _pending.rtCount; ++i)
+	{
+		if (_pending.rtvs[i] == tex) wasRT = true;
+	}
+	if (_pending.dsv == tex) wasRT = true;
+	if (!wasRT) return;
+
+	// Drop the OMSetRenderTargets binding so the SRV transition is safe.
+	// The engine's existing render-pass code calls SetRenderTarget(new) before
+	// the next draw - which will re-OMSetRenderTargets and transition the new
+	// RT into RENDER_TARGET state. Same contract the D3D11 plugin assumes.
+	_pending.rtCount = 0;
+	for (auto& r : _pending.rtvs) r = nullptr;
+	_pending.dsv = nullptr;
+	_cmdList->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
+}
+
 void GraphicsDeviceD3D12::SetTexture2D(uint32_t slot, HexEngine::ITexture2D* tex)
 {
 	if (slot >= RootSignatureD3D12::kSrvCount) return;
 	auto* t = static_cast<Texture2DD3D12*>(tex);
 	if (t != nullptr)
+	{
+		UnbindAsRenderTargetIfBound(t); // hazard: SRV-and-RTV on the same resource
 		TransitionResource(t, (D3D12_RESOURCE_STATES)(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE));
+	}
 	_bindings.srvs[slot] = t ? t->_srv : D3D12_CPU_DESCRIPTOR_HANDLE{};
 	if (t && slot + 1 > _bindings.srvHighWater) _bindings.srvHighWater = slot + 1;
 }

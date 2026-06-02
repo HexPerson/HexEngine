@@ -313,4 +313,13 @@ private:
 	bool   FlushGraphics();   ///< called by Draw* before issuing the draw
 	bool   FlushCompute();    ///< called by Dispatch* before issuing the dispatch
 	void   ResetPendingForBeginFrame();
+
+	// D3D11->D3D12 hazard fix: D3D11 silently auto-unbinds an RT/DS when you
+	// bind it as an SRV. D3D12 doesn't - the next draw validates the bound
+	// RTV's state and errors out. This helper mirrors the D3D11 plugin's
+	// SetPixelShaderResource hazard check: if `tex` is currently bound as an
+	// RTV or DSV, drop the OMSetRenderTargets state (the caller is then
+	// expected to SetRenderTarget back to a usable target before the next
+	// draw, which is exactly what the engine's pipeline ordering does).
+	void   UnbindAsRenderTargetIfBound(HexEngine::ITexture2D* tex);
 };
