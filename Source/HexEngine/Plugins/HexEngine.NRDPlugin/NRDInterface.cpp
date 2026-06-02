@@ -221,18 +221,12 @@ void NRDInterface::TextureBinding::Reset()
 
 bool NRDInterface::Create()
 {
-	// Backend gate: NRD's integration here is hand-written D3D11 code (the
-	// vendor SDK also exposes a D3D12 path which we haven't ported yet). Refuse
-	// to activate under any non-D3D11 backend so that running the engine under
-	// r_renderer = "d3d12" doesn't crash inside this plugin with a bad
-	// reinterpret_cast on GetNativeDevice().
-	if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_graphicsDevice != nullptr &&
-		HexEngine::g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
-	{
-		LOG_WARN("HexEngine.NRDPlugin: disabled (active backend is not D3D11; per-backend port pending)");
-		return false;
-	}
-
+	// NOTE: We can't backend-gate here because Game3DEnvironment creates the
+	// denoiser provider BEFORE the graphics device exists (initialization
+	// order: providers, then CreateGraphicsSystem). The gate has to live at
+	// EnsureDevice / RecreateResources where _graphicsDevice is guaranteed
+	// non-null. Keep this Create() unconditionally successful; the actual
+	// no-op happens further in.
 	_device = nullptr;
 	_context = nullptr;
 	_created = true;
@@ -259,6 +253,24 @@ bool NRDInterface::EnsureDevice()
 {
 	if (!HexEngine::g_pEnv || !HexEngine::g_pEnv->_graphicsDevice)
 		return false;
+
+	// Backend gate: NRD's integration here is hand-written D3D11 code (the
+	// vendor SDK also exposes a D3D12 path we haven't ported). Under any
+	// non-D3D11 backend, GetNativeDevice() returns an ID3D12Device* that
+	// these reinterpret_casts would silently lie about, and the next
+	// D3D11-API call would crash (E_INVALIDARG inside the runtime).
+	// Refuse to come up here - every NRD entry point goes through
+	// EnsureDevice, so this single check disables the whole plugin. Log
+	// once to avoid spamming the every-frame FilterFrame path.
+	if (HexEngine::g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
+	{
+		if (!_warnedNonD3D11Backend)
+		{
+			LOG_WARN("HexEngine.NRDPlugin: disabled (active backend is not D3D11; per-backend port pending)");
+			_warnedNonD3D11Backend = true;
+		}
+		return false;
+	}
 
 	_device = reinterpret_cast<ID3D11Device*>(HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice());
 	_context = reinterpret_cast<ID3D11DeviceContext*>(HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext());

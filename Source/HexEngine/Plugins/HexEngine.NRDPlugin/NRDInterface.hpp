@@ -82,6 +82,10 @@ private:
 	bool _created = false;
 	bool _loggedCreateBuffers = false;
 	bool _resetHistory = true;
+	// One-shot flag for the "active backend is not D3D11" warning in
+	// EnsureDevice. Without this, FilterFrame's per-frame call would log
+	// every frame under D3D12.
+	bool _warnedNonD3D11Backend = false;
 	uint32_t _width = 0;
 	uint32_t _height = 0;
 	math::Vector2 _previousJitter;
