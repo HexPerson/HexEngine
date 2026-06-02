@@ -921,14 +921,24 @@ Texture2D* GraphicsDeviceD3D11::CreateTexture2D_Internal(
 	desc.BindFlags = bindFlags;
 	desc.Width = width;
 	desc.Height = height;
-	// MipLevels semantics: pass through the caller's value. D3D11 already
-	// interprets 0 as "generate the full mip chain"; any positive N means N
-	// explicit mips. The previous line here compared mipLevels against
-	// D3D11_RESOURCE_MISC_GENERATE_MIPS (= 0x1, a *misc-flag* value) and then
-	// wrote that flag back as a mip count, so callers passing mipLevels=1
-	// got desc.MipLevels=0 (full chain) and the format had to support
-	// mipmapping or D3D11 errored out with CREATETEXTURE2D_INVALIDMIPLEVELS.
-	desc.MipLevels = mipLevels;
+	// MipLevels semantics. D3D11 native: 0 = "generate full chain" (but only
+	// if BIND_RENDER_TARGET is also set so the runtime can populate it),
+	// positive N = exactly N explicit mips.
+	//
+	// HexEngine convention is different: nearly every existing call site
+	// passes mipLevels=0 to mean "just one mip, no chain". The old impl of
+	// this line accidentally clamped 0 -> 1 via a nonsense comparison
+	// against D3D11_RESOURCE_MISC_GENERATE_MIPS (a misc-flag, not a count),
+	// which is why call sites have stayed working for years. Passing
+	// mipLevels through verbatim broke SHADER_RESOURCE-only textures (like
+	// FreeType's font atlas) that pass 0 but never set BIND_RENDER_TARGET -
+	// D3D11 rejects "MipLevels=0 without RENDER_TARGET" because it can't
+	// auto-generate the chain without the RTV.
+	//
+	// Honour the engine convention: 0 -> 1. Callers that genuinely want
+	// auto-mip-gen should pass a real count AND set RENDER_TARGET +
+	// ResourceMiscFlags::GenerateMips.
+	desc.MipLevels = mipLevels <= 0 ? 1 : mipLevels;
 	desc.ArraySize = arraySize;
 	desc.SampleDesc.Count = sampleCount;
 	desc.SampleDesc.Quality = sampleQuality;
