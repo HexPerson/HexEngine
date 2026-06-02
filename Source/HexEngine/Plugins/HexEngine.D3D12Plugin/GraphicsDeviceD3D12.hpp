@@ -11,6 +11,9 @@
 #include <deque>
 
 #include "DescriptorHeapAllocator.hpp"
+#include "RootSignatureD3D12.hpp"
+#include "PsoCache.hpp"
+#include "ShaderVisibleHeap.hpp"
 #include "Texture2DD3D12.hpp"
 #include "Texture3DD3D12.hpp"
 #include "VertexBufferD3D12.hpp"
@@ -18,6 +21,7 @@
 #include "ConstantBufferD3D12.hpp"
 #include "StructuredBufferD3D12.hpp"
 #include "InputLayoutD3D12.hpp"
+#include "ShaderStageD3D12.hpp"
 
 /**
  * @brief D3D12 IGraphicsDevice implementation.
@@ -72,52 +76,52 @@ public:
 		const void* initialData = nullptr) override;
 	virtual HexEngine::IConstantBuffer*   GetEngineConstantBuffer(HexEngine::EngineConstantBuffer buffer) override;
 
-	// -- State setters (still no-ops in B3; B4 routes them to the command list) --
-	virtual void SetConstantBufferVS(uint32_t, HexEngine::IConstantBuffer*) override {}
-	virtual void SetConstantBufferPS(uint32_t, HexEngine::IConstantBuffer*) override {}
-	virtual void SetConstantBufferGS(uint32_t, HexEngine::IConstantBuffer*) override {}
-	virtual void SetConstantBufferCS(uint32_t, HexEngine::IConstantBuffer*) override {}
-	virtual void SetIndexBuffer(HexEngine::IIndexBuffer*) override {}
-	virtual void SetVertexBuffer(uint32_t, HexEngine::IVertexBuffer*) override {}
-	virtual void SetTopology(HexEngine::PrimitiveTopology) override {}
-	virtual void SetVertexShader(HexEngine::IShaderStage*) override {}
-	virtual void SetPixelShader(HexEngine::IShaderStage*) override {}
-	virtual void SetGeometryShader(HexEngine::IShaderStage*) override {}
-	virtual void SetComputeShader(HexEngine::IShaderStage*) override {}
-	virtual void SetInputLayout(HexEngine::IInputLayout*) override {}
-	virtual void SetTexture2D(uint32_t, HexEngine::ITexture2D*) override {}
-	virtual void SetTexture2D(HexEngine::ITexture2D*) override {}
-	virtual void SetTexture3D(HexEngine::ITexture3D*) override {}
-	virtual void SetGeometryTexture3D(uint32_t, HexEngine::ITexture3D*) override {}
-	virtual void SetVertexStructuredBuffer(uint32_t, HexEngine::IStructuredBuffer*) override {}
-	virtual void SetGeometryStructuredBuffer(uint32_t, HexEngine::IStructuredBuffer*) override {}
-	virtual void SetComputeTexture3D(uint32_t, HexEngine::ITexture3D*) override {}
-	virtual void SetComputeRwTexture3D(uint32_t, HexEngine::ITexture3D*) override {}
-	virtual void SetComputeStructuredBuffer(uint32_t, HexEngine::IStructuredBuffer*) override {}
-	virtual void SetComputeRwStructuredBuffer(uint32_t, HexEngine::IStructuredBuffer*, uint32_t = 0xFFFFFFFFu) override {}
-	virtual void ClearGeometryTexture3D(uint32_t) override {}
-	virtual void ClearVertexStructuredBuffer(uint32_t) override {}
-	virtual void ClearComputeTexture3D(uint32_t) override {}
-	virtual void ClearComputeRwTexture3D(uint32_t) override {}
-	virtual void ClearGeometryStructuredBuffer(uint32_t) override {}
-	virtual void ClearComputeStructuredBuffer(uint32_t) override {}
-	virtual void ClearComputeRwStructuredBuffer(uint32_t) override {}
-	virtual void SetTexture2DArray(uint32_t, const std::vector<HexEngine::ITexture2D*>&) override {}
-	virtual void SetTexture2DArray(const std::vector<HexEngine::ITexture2D*>&) override {}
+	// -- State setters (B4 routes them through the pending-state struct) --
+	virtual void SetConstantBufferVS(uint32_t slot, HexEngine::IConstantBuffer* buf) override;
+	virtual void SetConstantBufferPS(uint32_t slot, HexEngine::IConstantBuffer* buf) override;
+	virtual void SetConstantBufferGS(uint32_t slot, HexEngine::IConstantBuffer* buf) override;
+	virtual void SetConstantBufferCS(uint32_t slot, HexEngine::IConstantBuffer* buf) override;
+	virtual void SetIndexBuffer(HexEngine::IIndexBuffer* buf) override;
+	virtual void SetVertexBuffer(uint32_t slot, HexEngine::IVertexBuffer* buf) override;
+	virtual void SetTopology(HexEngine::PrimitiveTopology t) override;
+	virtual void SetVertexShader(HexEngine::IShaderStage* s) override;
+	virtual void SetPixelShader(HexEngine::IShaderStage* s) override;
+	virtual void SetGeometryShader(HexEngine::IShaderStage* s) override;
+	virtual void SetComputeShader(HexEngine::IShaderStage* s) override;
+	virtual void SetInputLayout(HexEngine::IInputLayout* l) override;
+	virtual void SetTexture2D(uint32_t slot, HexEngine::ITexture2D* tex) override;
+	virtual void SetTexture2D(HexEngine::ITexture2D* tex) override;
+	virtual void SetTexture3D(HexEngine::ITexture3D* tex) override;
+	virtual void SetGeometryTexture3D(uint32_t slot, HexEngine::ITexture3D* tex) override;
+	virtual void SetVertexStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buf) override;
+	virtual void SetGeometryStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buf) override;
+	virtual void SetComputeTexture3D(uint32_t slot, HexEngine::ITexture3D* tex) override;
+	virtual void SetComputeRwTexture3D(uint32_t slot, HexEngine::ITexture3D* tex) override;
+	virtual void SetComputeStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buf) override;
+	virtual void SetComputeRwStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buf, uint32_t = 0xFFFFFFFFu) override;
+	virtual void ClearGeometryTexture3D(uint32_t slot) override;
+	virtual void ClearVertexStructuredBuffer(uint32_t slot) override;
+	virtual void ClearComputeTexture3D(uint32_t slot) override;
+	virtual void ClearComputeRwTexture3D(uint32_t slot) override;
+	virtual void ClearGeometryStructuredBuffer(uint32_t slot) override;
+	virtual void ClearComputeStructuredBuffer(uint32_t slot) override;
+	virtual void ClearComputeRwStructuredBuffer(uint32_t slot) override;
+	virtual void SetTexture2DArray(uint32_t slot, const std::vector<HexEngine::ITexture2D*>& textures) override;
+	virtual void SetTexture2DArray(const std::vector<HexEngine::ITexture2D*>& textures) override;
 
 	virtual void SetRenderTarget(HexEngine::ITexture2D* renderTarget, HexEngine::ITexture2D* depthStencil = nullptr) override;
 	virtual void SetRenderTargets(const std::vector<HexEngine::ITexture2D*>&, HexEngine::ITexture2D* = nullptr) override {}
 	virtual void GetRenderTargets(std::vector<HexEngine::ITexture2D*>&, HexEngine::ITexture2D** = nullptr) override {}
 	virtual void SetRenderTargets(uint32_t, const std::vector<HexEngine::ITexture2D*>&, HexEngine::ITexture2D*) override {}
 
-	// -- Draw / dispatch (no-ops in B3; B4 implements them) --
-	virtual void DrawIndexed(uint32_t) override {}
-	virtual void DrawIndexedInstanced(uint32_t, uint32_t) override {}
-	virtual void DrawIndexedInstancedIndirect(void*, uint32_t = 0) override {}
-	virtual void Draw(uint32_t, int32_t = 0) override {}
-	virtual void DrawInstancedIndirect(HexEngine::IStructuredBuffer*, uint32_t = 0) override {}
-	virtual void Dispatch(uint32_t, uint32_t, uint32_t) override {}
-	virtual void DispatchIndirect(HexEngine::IStructuredBuffer*, uint32_t = 0) override {}
+	// -- Draw / dispatch (B4 real impls) --
+	virtual void DrawIndexed(uint32_t numIndices) override;
+	virtual void DrawIndexedInstanced(uint32_t numIndices, uint32_t instanceCount) override;
+	virtual void DrawIndexedInstancedIndirect(void* argsBuffer, uint32_t alignedByteOffset = 0) override;
+	virtual void Draw(uint32_t vertexCount, int32_t startVertexLocation = 0) override;
+	virtual void DrawInstancedIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset = 0) override;
+	virtual void Dispatch(uint32_t gx, uint32_t gy, uint32_t gz) override;
+	virtual void DispatchIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset = 0) override;
 	virtual void CopyStructureCount(HexEngine::IStructuredBuffer*, HexEngine::IStructuredBuffer*, uint32_t = 0) override {}
 
 	virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) override;
@@ -138,11 +142,11 @@ public:
 
 	virtual bool GetSupportedDisplayModes(std::vector<HexEngine::ScreenDisplayMode>&) override { return false; }
 
-	virtual void SetPixelShaderResource(uint32_t, HexEngine::ITexture2D*) override {}
-	virtual void SetPixelShaderResource(HexEngine::ITexture2D*) override {}
-	virtual void SetPixelShaderResources(uint32_t, const std::vector<HexEngine::ITexture2D*>&) override {}
-	virtual void SetPixelShaderResources(const std::vector<HexEngine::ITexture2D*>&) override {}
-	virtual void UnbindAllPixelShaderResources() override {}
+	virtual void SetPixelShaderResource(uint32_t slot, HexEngine::ITexture2D* tex) override;
+	virtual void SetPixelShaderResource(HexEngine::ITexture2D* tex) override;
+	virtual void SetPixelShaderResources(uint32_t slot, const std::vector<HexEngine::ITexture2D*>& textures) override;
+	virtual void SetPixelShaderResources(const std::vector<HexEngine::ITexture2D*>& textures) override;
+	virtual void UnbindAllPixelShaderResources() override;
 
 	virtual uint32_t GetBoundResourceIndex() override { return _boundResourceIndex; }
 	virtual void SetBoundResourceIndex(uint32_t value) override { _boundResourceIndex = value; }
@@ -150,17 +154,17 @@ public:
 	virtual void BeginFrame(HexEngine::Window* window, HexEngine::ITexture2D* depthBuffer = nullptr) override;
 	virtual void EndFrame(HexEngine::Window* window) override;
 
-	virtual void SetViewports(const std::vector<HexEngine::Viewport>&) override {}
-	virtual void SetViewport(const HexEngine::Viewport& viewport) override { _viewport = viewport; }
+	virtual void SetViewports(const std::vector<HexEngine::Viewport>& viewports) override;
+	virtual void SetViewport(const HexEngine::Viewport& viewport) override;
 	virtual HexEngine::Viewport GetBackBufferViewport() const override { return _backBufferViewport; }
 
 	virtual void SetBlendState(HexEngine::BlendState state) override { _blendState = state; }
 	virtual HexEngine::BlendState GetBlendState() const override { return _blendState; }
 	virtual int32_t GetCurrentMSAALevel() const override { return 1; }
 
-	virtual void SetScissorRect(const HexEngine::ScissorRect& rect) override { _scissor = rect; }
-	virtual void SetScissorRects(const std::vector<HexEngine::ScissorRect>&) override {}
-	virtual void ClearScissorRect() override {}
+	virtual void SetScissorRect(const HexEngine::ScissorRect& rect) override;
+	virtual void SetScissorRects(const std::vector<HexEngine::ScissorRect>& rects) override;
+	virtual void ClearScissorRect() override;
 
 	virtual void ResetState() override {}
 
@@ -255,4 +259,58 @@ private:
 	// the device is up so it has somewhere to allocate textures from. The
 	// ResourceSystem owns the registration lifetime.
 	class TextureImporterD3D12*                      _textureLoader = nullptr;
+
+	// ---- B4: pipeline + bind plumbing ----
+
+	RootSignatureD3D12                               _rootSig;
+	PsoCache                                         _psoCache;
+	ShaderVisibleHeap                                _shaderVisibleHeap;
+
+	// Pending pipeline state - state setters fill these in; the next draw
+	// hashes them into a PSO key and resolves the cache. Compute shader
+	// stays in here too; Dispatch reads it independently.
+	struct PendingState
+	{
+		ShaderStageD3D12*       vs              = nullptr;
+		ShaderStageD3D12*       ps              = nullptr;
+		ShaderStageD3D12*       gs              = nullptr;
+		ShaderStageD3D12*       cs              = nullptr;
+		InputLayoutD3D12*       inputLayout     = nullptr;
+		HexEngine::PrimitiveTopology topology   = HexEngine::PrimitiveTopology::TriangleList;
+		// Currently-bound RTVs and depth; flush() also infers the PSO's RTV
+		// formats from here.
+		HexEngine::ITexture2D*  rtvs[8]         = {};
+		uint32_t                rtCount         = 0;
+		HexEngine::ITexture2D*  dsv             = nullptr;
+		// Vertex / index buffers as they were last set.
+		HexEngine::IVertexBuffer* vbs[8]        = {};
+		HexEngine::IIndexBuffer*  ib            = nullptr;
+		bool                    dirty = true;
+	};
+
+	// Currently-bound resource handles. We keep CPU descriptor handles here
+	// (sourced from each resource's per-type heap slot) and copy them into the
+	// shader-visible heap at draw time.
+	struct PendingBindings
+	{
+		D3D12_CPU_DESCRIPTOR_HANDLE cbvs[RootSignatureD3D12::kCbvCount] = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE srvs[RootSignatureD3D12::kSrvCount] = {};
+		D3D12_CPU_DESCRIPTOR_HANDLE uavs[RootSignatureD3D12::kUavCount] = {};
+		// Highest slot index used + 1 - lets the bind shrink the descriptor-
+		// table copy to "only what's actually filled in".
+		uint32_t cbvHighWater = 0;
+		uint32_t srvHighWater = 0;
+		uint32_t uavHighWater = 0;
+	};
+
+	PendingState     _pending;
+	PendingBindings  _bindings;
+	// Tracks where SetPixelShaderResource(slot=auto) writes to next - matches
+	// the D3D11 plugin's bound-resource-index behaviour so call sites that
+	// rely on the running counter stay consistent.
+	uint32_t         _autoBindCursor = 0;
+
+	bool   FlushGraphics();   ///< called by Draw* before issuing the draw
+	bool   FlushCompute();    ///< called by Dispatch* before issuing the dispatch
+	void   ResetPendingForBeginFrame();
 };

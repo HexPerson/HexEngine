@@ -95,7 +95,11 @@
   <ItemGroup>
     <ClCompile Include="DescriptorHeapAllocator.cpp" />
     <ClCompile Include="GraphicsDeviceD3D12.cpp" />
+    <ClCompile Include="GraphicsDeviceD3D12_Draws.cpp" />
     <ClCompile Include="Plugin.cpp" />
+    <ClCompile Include="PsoCache.cpp" />
+    <ClCompile Include="RootSignatureD3D12.cpp" />
+    <ClCompile Include="ShaderVisibleHeap.cpp" />
     <ClCompile Include="StructuredBufferD3D12.cpp" />
     <ClCompile Include="Texture2DD3D12.cpp" />
     <ClCompile Include="Texture3DD3D12.cpp" />
@@ -103,6 +107,9 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ConstantBufferD3D12.hpp" />
+    <ClInclude Include="PsoCache.hpp" />
+    <ClInclude Include="RootSignatureD3D12.hpp" />
+    <ClInclude Include="ShaderVisibleHeap.hpp" />
     <ClInclude Include="DescriptorHeapAllocator.hpp" />
     <ClInclude Include="FormatsD3D12.hpp" />
     <ClInclude Include="GraphicsDeviceD3D12.hpp" />

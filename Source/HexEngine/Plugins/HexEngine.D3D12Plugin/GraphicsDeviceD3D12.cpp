@@ -121,7 +121,12 @@ bool GraphicsDeviceD3D12::Create()
 	// CreateTexture2D path has somewhere to allocate SRVs from.
 	_textureLoader = new TextureImporterD3D12();
 
-	LOG_INFO("HexEngine.D3D12Plugin: device + queue + %u-frame ring + descriptor heaps + texture loader ready", kFrameCount);
+	// B4: universal root sig + PSO cache + shader-visible heap for draws.
+	if (!_rootSig.Create(_device.Get())) { LOG_CRIT("D3D12: root signature creation failed"); return false; }
+	_psoCache.Create(_device.Get(), _rootSig.Get());
+	if (!_shaderVisibleHeap.Create(_device.Get())) { LOG_CRIT("D3D12: shader-visible heap creation failed"); return false; }
+
+	LOG_INFO("HexEngine.D3D12Plugin: device + queue + %u-frame ring + descriptor heaps + texture loader + B4 PSO/RootSig ready", kFrameCount);
 	return true;
 }
 
@@ -179,6 +184,9 @@ void GraphicsDeviceD3D12::Destroy()
 	if (_device && _directQueue && _fence && _fenceEvent) WaitForGpu();
 
 	if (_textureLoader) { delete _textureLoader; _textureLoader = nullptr; }
+	_shaderVisibleHeap.Destroy();
+	_psoCache.Destroy();
+	_rootSig.Destroy();
 	_pendingUploads.clear();
 	_windowCtx.clear();
 	_cbvSrvUavHeap.Destroy();
@@ -337,6 +345,11 @@ void GraphicsDeviceD3D12::BeginFrame(HexEngine::Window* window, HexEngine::IText
 	frame.alloc->Reset();
 	_cmdList->Reset(frame.alloc.Get(), nullptr);
 
+	// Reset shader-visible heap bump pointer + pending-state bookkeeping for
+	// the new frame.
+	_shaderVisibleHeap.BeginFrame();
+	ResetPendingForBeginFrame();
+
 	Texture2DD3D12& bb = ctx.backbuffers[frameIdx];
 	TransitionResource(&bb, D3D12_RESOURCE_STATE_RENDER_TARGET);
 
@@ -408,12 +421,35 @@ void GraphicsDeviceD3D12::GetBackBufferDimensions(uint32_t& width, uint32_t& hei
 	else                          { width = 0; height = 0; }
 }
 
-void GraphicsDeviceD3D12::SetRenderTarget(HexEngine::ITexture2D* renderTarget, HexEngine::ITexture2D* /*depthStencil*/)
+void GraphicsDeviceD3D12::SetRenderTarget(HexEngine::ITexture2D* renderTarget, HexEngine::ITexture2D* depthStencil)
 {
-	if (renderTarget == nullptr || _cmdList == nullptr) return;
-	auto* tex = static_cast<Texture2DD3D12*>(renderTarget);
-	TransitionResource(tex, D3D12_RESOURCE_STATE_RENDER_TARGET);
-	_cmdList->OMSetRenderTargets(1, &tex->_rtv, FALSE, nullptr);
+	if (_cmdList == nullptr) return;
+	auto* rt = static_cast<Texture2DD3D12*>(renderTarget);
+	auto* ds = static_cast<Texture2DD3D12*>(depthStencil);
+
+	// Track on _pending so FlushGraphics can build a PSO whose RT/DS formats
+	// match what's actually bound. Without this, PSO format-validation rejects
+	// the draw.
+	_pending.rtCount = (rt != nullptr) ? 1u : 0u;
+	_pending.rtvs[0] = rt;
+	_pending.dsv     = ds;
+	_pending.dirty = true;
+
+	D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = {};
+	if (rt != nullptr)
+	{
+		TransitionResource(rt, D3D12_RESOURCE_STATE_RENDER_TARGET);
+		rtvHandle = rt->_rtv;
+	}
+	D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = {};
+	D3D12_CPU_DESCRIPTOR_HANDLE* dsvPtr = nullptr;
+	if (ds != nullptr)
+	{
+		TransitionResource(ds, D3D12_RESOURCE_STATE_DEPTH_WRITE);
+		dsvHandle = ds->_dsv;
+		dsvPtr    = &dsvHandle;
+	}
+	_cmdList->OMSetRenderTargets(rt != nullptr ? 1 : 0, rt != nullptr ? &rtvHandle : nullptr, FALSE, dsvPtr);
 }
 
 // ---------------------------------------------------------------------------
