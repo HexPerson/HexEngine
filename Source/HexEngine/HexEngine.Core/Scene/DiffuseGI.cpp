@@ -534,7 +534,7 @@ namespace HexEngine
 		_constantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(GIConstants));
 		_voxelShiftConstantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(VoxelShiftConstants));
 
-		const DXGI_FORMAT colourFormat = static_cast<DXGI_FORMAT>(g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat());
+		const DXGI_FORMAT colourFormat = HexEngine::detail::ShimToDxgiFormat(g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat());
 		const uint32_t halfWidth = r_giHalfRes._val.b ? _halfWidth : _width;
 		const uint32_t halfHeight = r_giHalfRes._val.b ? _halfHeight : _height;
 

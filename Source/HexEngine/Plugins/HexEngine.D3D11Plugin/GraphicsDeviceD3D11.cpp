@@ -921,7 +921,14 @@ Texture2D* GraphicsDeviceD3D11::CreateTexture2D_Internal(
 	desc.BindFlags = bindFlags;
 	desc.Width = width;
 	desc.Height = height;
-	desc.MipLevels = mipLevels != D3D11_RESOURCE_MISC_GENERATE_MIPS ? D3D11_RESOURCE_MISC_GENERATE_MIPS : 0;
+	// MipLevels semantics: pass through the caller's value. D3D11 already
+	// interprets 0 as "generate the full mip chain"; any positive N means N
+	// explicit mips. The previous line here compared mipLevels against
+	// D3D11_RESOURCE_MISC_GENERATE_MIPS (= 0x1, a *misc-flag* value) and then
+	// wrote that flag back as a mip count, so callers passing mipLevels=1
+	// got desc.MipLevels=0 (full chain) and the format had to support
+	// mipmapping or D3D11 errored out with CREATETEXTURE2D_INVALIDMIPLEVELS.
+	desc.MipLevels = mipLevels;
 	desc.ArraySize = arraySize;
 	desc.SampleDesc.Count = sampleCount;
 	desc.SampleDesc.Quality = sampleQuality;
