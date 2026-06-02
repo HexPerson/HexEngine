@@ -5,35 +5,41 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
-// Phase B2/B3: D3D12 backing for HexEngine::ITexture2D.
-//
-// The class doubles as the engine's backbuffer wrapper - GraphicsDeviceD3D12
-// creates one of these per swap-chain frame, pointing at the swap chain's
-// backbuffer ID3D12Resource. Phase B3 will extend it to back regular
-// textures too.
-//
-// `_currentState` tracks the resource's last-issued ResourceBarrier state so
-// the device can insert transitions automatically without each caller having
-// to thread the state through every API surface. Backbuffers start in
-// D3D12_RESOURCE_STATE_PRESENT immediately after swap-chain creation.
+/**
+ * @brief D3D12 backing for HexEngine::ITexture2D.
+ *
+ * Doubles as the backbuffer wrapper (created in AttachToWindow) and as the
+ * general-purpose 2D texture (created from a TextureDesc).
+ *
+ * Each view handle is a CPU-only descriptor allocated from the device's
+ * per-type DescriptorHeapAllocator. The integer index alongside lets us
+ * Free() the slot at Destroy time. UINT32_MAX = "no view of this type".
+ *
+ * `_currentState` tracks the last-issued ResourceBarrier state so the device
+ * can insert transitions automatically without each caller threading the
+ * state through every API surface. Backbuffers start in PRESENT; general
+ * textures start at whatever InitialStateFromBindFlags picked.
+ */
 class Texture2DD3D12 : public HexEngine::ITexture2D
 {
 public:
-	virtual ~Texture2DD3D12() override = default;
+	virtual ~Texture2DD3D12() override;
 
 	virtual int32_t GetWidth()  override { return _width; }
 	virtual int32_t GetHeight() override { return _height; }
 
-	virtual void  Destroy()                                    override { _resource.Reset(); }
-	virtual void* GetNativePtr()                               override { return _resource.Get(); }
-	virtual uint32_t GetFormat()                               override { return (uint32_t)_format; }
+	virtual void  Destroy() override;
+	virtual void* GetNativePtr() override { return _resource.Get(); }
+	virtual uint32_t GetFormat() override { return (uint32_t)_format; }
 
-	// The following are unused in B2 (no rendering happens beyond the clear);
-	// B3 fills them in with real implementations.
-	virtual void SetPixels(uint8_t*, uint32_t)                                              override {}
+	// Pixel upload via temporary upload-heap stage + CopyTextureRegion on the
+	// device's open command list.
+	virtual void SetPixels(uint8_t* data, uint32_t size) override;
+
+	// B5 territory; B3 only needs the bare metal so init can succeed.
 	virtual void SaveToFile(const fs::path&)                                                override {}
-	virtual void ClearDepth(uint32_t)                                                       override {}
-	virtual void CopyTo(ITexture2D*)                                                        override {}
+	virtual void ClearDepth(uint32_t)                                                       override;
+	virtual void CopyTo(ITexture2D*)                                                        override;
 	virtual void CopyTo(ITexture2D*, const RECT&, const RECT&)                              override {}
 	virtual void BlendTo_Additive(ITexture2D*, HexEngine::IShader*)                         override {}
 	virtual void BlendTo_Additive_Double(ITexture2D*, HexEngine::IShader*)                  override {}
@@ -45,10 +51,6 @@ public:
 	virtual void* LockPixels(int32_t*)                                                      override { return nullptr; }
 	virtual void  UnlockPixels()                                                            override {}
 
-	// The actual clear runs on the device's command list because clears are
-	// command-list operations in D3D12 (not resource-level). GraphicsDeviceD3D12
-	// implements this by transitioning to RENDER_TARGET if needed and issuing
-	// ClearRenderTargetView on the bound RTV.
 	virtual void ClearRenderTargetView(const math::Color& colour) override;
 
 	virtual void SetDebugName(const std::string& name) override
@@ -64,12 +66,24 @@ public:
 
 public:
 	Microsoft::WRL::ComPtr<ID3D12Resource> _resource;
-	D3D12_CPU_DESCRIPTOR_HANDLE             _rtv = {};
 	DXGI_FORMAT                             _format = DXGI_FORMAT_UNKNOWN;
+
+	D3D12_CPU_DESCRIPTOR_HANDLE             _rtv = {};
+	D3D12_CPU_DESCRIPTOR_HANDLE             _dsv = {};
+	D3D12_CPU_DESCRIPTOR_HANDLE             _srv = {};
+	D3D12_CPU_DESCRIPTOR_HANDLE             _uav = {};
+	uint32_t                                _rtvIndex = UINT32_MAX;
+	uint32_t                                _dsvIndex = UINT32_MAX;
+	uint32_t                                _srvIndex = UINT32_MAX;
+	uint32_t                                _uavIndex = UINT32_MAX;
+
 	D3D12_RESOURCE_STATES                   _currentState = D3D12_RESOURCE_STATE_COMMON;
-	int32_t                                 _width = 0;
+	int32_t                                 _width  = 0;
 	int32_t                                 _height = 0;
+	int32_t                                 _arraySize  = 1;
+	int32_t                                 _sampleCount = 1;
+	int32_t                                 _mipLevels   = 1;
 	// Backbuffer instances opt out of releasing the underlying resource - the
-	// swap chain owns it. Regular textures (B3+) own theirs.
+	// swap chain owns it. Regular textures own theirs.
 	bool                                    _ownsResource = true;
 };

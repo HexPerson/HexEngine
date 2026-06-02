@@ -51,7 +51,7 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NOMINMAX;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\directxtk\inc\</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
@@ -74,7 +74,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NOMINMAX;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\directxtk\inc\</AdditionalIncludeDirectories>
@@ -93,14 +93,26 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="DescriptorHeapAllocator.cpp" />
     <ClCompile Include="GraphicsDeviceD3D12.cpp" />
     <ClCompile Include="Plugin.cpp" />
+    <ClCompile Include="StructuredBufferD3D12.cpp" />
     <ClCompile Include="Texture2DD3D12.cpp" />
+    <ClCompile Include="Texture3DD3D12.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ConstantBufferD3D12.hpp" />
+    <ClInclude Include="DescriptorHeapAllocator.hpp" />
+    <ClInclude Include="FormatsD3D12.hpp" />
     <ClInclude Include="GraphicsDeviceD3D12.hpp" />
+    <ClInclude Include="IndexBufferD3D12.hpp" />
+    <ClInclude Include="InputLayoutD3D12.hpp" />
     <ClInclude Include="Plugin.hpp" />
+    <ClInclude Include="ShaderStageD3D12.hpp" />
+    <ClInclude Include="StructuredBufferD3D12.hpp" />
     <ClInclude Include="Texture2DD3D12.hpp" />
+    <ClInclude Include="Texture3DD3D12.hpp" />
+    <ClInclude Include="VertexBufferD3D12.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />

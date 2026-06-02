@@ -7,23 +7,30 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <unordered_map>
+#include <vector>
+#include <deque>
 
+#include "DescriptorHeapAllocator.hpp"
 #include "Texture2DD3D12.hpp"
+#include "Texture3DD3D12.hpp"
+#include "VertexBufferD3D12.hpp"
+#include "IndexBufferD3D12.hpp"
+#include "ConstantBufferD3D12.hpp"
+#include "StructuredBufferD3D12.hpp"
+#include "InputLayoutD3D12.hpp"
 
 /**
  * @brief D3D12 IGraphicsDevice implementation.
  *
- * Phase B2 (current): real device, command queue, swap chain, frame fencing,
- * backbuffer wrapping, BeginFrame/EndFrame with backbuffer clear + present.
- * The rest of the IGraphicsDevice surface is silent no-ops returning
- * nullptr/defaults so the engine boots without crashing inside vtable
- * dispatch. Without B3+ no scene geometry actually renders.
- *
- * Phase B3+ (future): textures, buffers, descriptor heaps, PSOs.
+ * Phase B3 (current): real device + swap chain + descriptor heaps + every
+ * resource creation method (textures, all buffer types, input layouts).
+ * The state setters / draw calls remain no-ops - that's B4. So r_renderer = 2
+ * now boots through engine init without crashing, presents a clear-coloured
+ * backbuffer, but no scene geometry renders.
  *
  * Important: this header MUST NOT include <d3d11.h>. The D3D11 compat shims
  * on IGraphicsDevice are gated on `__d3d11_h__` and would leak D3D11 into the
- * D3D12 plugin if we ever transitively pulled in that header.
+ * D3D12 plugin if anything transitively pulled in that header.
  */
 class GraphicsDeviceD3D12 : public HexEngine::IGraphicsDevice
 {
@@ -33,36 +40,39 @@ public:
 
 	virtual HexEngine::GraphicsBackend GetBackend() const override { return HexEngine::GraphicsBackend::D3D12; }
 
-	// -- Lifecycle (real B2 implementations) --
+	// -- Lifecycle --
 	virtual bool Create() override;
 	virtual void Destroy() override;
 	virtual bool AttachToWindow(HexEngine::Window* window) override;
 	virtual void Resize(HexEngine::Window* window, uint32_t width, uint32_t height) override;
 
-	// -- Resources --
+	// -- Resource creation (B3 real impls) --
 	virtual HexEngine::ITexture2D* GetBackBuffer(HexEngine::Window* window = nullptr) override;
-	virtual HexEngine::ITexture2D* CreateTexture(HexEngine::ITexture2D*) override { return nullptr; }
-	virtual HexEngine::ITexture2D* CreateTexture2D(const HexEngine::TextureDesc&, const HexEngine::SubresourceData* = nullptr) override { return nullptr; }
-	virtual HexEngine::ITexture3D* CreateTexture3D(const HexEngine::TextureDesc&, const HexEngine::SubresourceData* = nullptr) override { return nullptr; }
-	virtual HexEngine::IVertexBuffer* CreateVertexBuffer(const HexEngine::BufferDesc&, const void* = nullptr) override { return nullptr; }
-	virtual HexEngine::IIndexBuffer*  CreateIndexBuffer(const HexEngine::BufferDesc&, const void* = nullptr)  override { return nullptr; }
+	virtual HexEngine::ITexture2D* CreateTexture(HexEngine::ITexture2D* clone) override;
+	virtual HexEngine::ITexture2D* CreateTexture2D(const HexEngine::TextureDesc& desc, const HexEngine::SubresourceData* initialData = nullptr) override;
+	virtual HexEngine::ITexture3D* CreateTexture3D(const HexEngine::TextureDesc& desc, const HexEngine::SubresourceData* initialData = nullptr) override;
+	virtual HexEngine::IVertexBuffer* CreateVertexBuffer(const HexEngine::BufferDesc& desc, const void* initialData = nullptr) override;
+	virtual HexEngine::IIndexBuffer*  CreateIndexBuffer(const HexEngine::BufferDesc& desc, const void* initialData = nullptr) override;
 
-	virtual HexEngine::IShaderStage* CreateVertexShader(std::vector<uint8_t>&)   override { return nullptr; }
-	virtual HexEngine::IShaderStage* CreatePixelShader(std::vector<uint8_t>&)    override { return nullptr; }
-	virtual HexEngine::IShaderStage* CreateGeometryShader(std::vector<uint8_t>&) override { return nullptr; }
-	virtual HexEngine::IShaderStage* CreateComputeShader(std::vector<uint8_t>&)  override { return nullptr; }
+	// Shader / input layout creation. Shader stages currently just hold the
+	// bytecode blob; B4 wires them into PSOs.
+	virtual HexEngine::IShaderStage* CreateVertexShader(std::vector<uint8_t>&)   override;
+	virtual HexEngine::IShaderStage* CreatePixelShader(std::vector<uint8_t>&)    override;
+	virtual HexEngine::IShaderStage* CreateGeometryShader(std::vector<uint8_t>&) override;
+	virtual HexEngine::IShaderStage* CreateComputeShader(std::vector<uint8_t>&)  override;
 	virtual HexEngine::IShaderStage* CreateComputeShaderFromSource(const std::string&, const std::string& = "MainCS") override { return nullptr; }
-	virtual HexEngine::IInputLayout* CreateInputLayout(const HexEngine::InputElement*, uint32_t, const std::vector<uint8_t>&) override { return nullptr; }
+	virtual HexEngine::IInputLayout* CreateInputLayout(const HexEngine::InputElement*, uint32_t, const std::vector<uint8_t>&) override;
 
-	virtual HexEngine::IConstantBuffer* CreateConstantBuffer(uint32_t) override { return nullptr; }
+	virtual HexEngine::IConstantBuffer*   CreateConstantBuffer(uint32_t size) override;
 	virtual HexEngine::IStructuredBuffer* CreateStructuredBuffer(
-		uint32_t, uint32_t, HexEngine::StructuredBufferFlags,
-		HexEngine::ResourceUsage = HexEngine::ResourceUsage::Default,
-		HexEngine::CpuAccess = HexEngine::CpuAccess::None,
-		const void* = nullptr) override { return nullptr; }
-	virtual HexEngine::IConstantBuffer* GetEngineConstantBuffer(HexEngine::EngineConstantBuffer) override { return nullptr; }
+		uint32_t elementStride, uint32_t elementCount,
+		HexEngine::StructuredBufferFlags flags,
+		HexEngine::ResourceUsage usage = HexEngine::ResourceUsage::Default,
+		HexEngine::CpuAccess cpuAccess = HexEngine::CpuAccess::None,
+		const void* initialData = nullptr) override;
+	virtual HexEngine::IConstantBuffer*   GetEngineConstantBuffer(HexEngine::EngineConstantBuffer buffer) override;
 
-	// -- State setters (silent no-ops in B2; B4 wires them to command list) --
+	// -- State setters (still no-ops in B3; B4 routes them to the command list) --
 	virtual void SetConstantBufferVS(uint32_t, HexEngine::IConstantBuffer*) override {}
 	virtual void SetConstantBufferPS(uint32_t, HexEngine::IConstantBuffer*) override {}
 	virtual void SetConstantBufferGS(uint32_t, HexEngine::IConstantBuffer*) override {}
@@ -100,7 +110,7 @@ public:
 	virtual void GetRenderTargets(std::vector<HexEngine::ITexture2D*>&, HexEngine::ITexture2D** = nullptr) override {}
 	virtual void SetRenderTargets(uint32_t, const std::vector<HexEngine::ITexture2D*>&, HexEngine::ITexture2D*) override {}
 
-	// -- Draw / dispatch (no-ops in B2; B4 implements them) --
+	// -- Draw / dispatch (no-ops in B3; B4 implements them) --
 	virtual void DrawIndexed(uint32_t) override {}
 	virtual void DrawIndexedInstanced(uint32_t, uint32_t) override {}
 	virtual void DrawIndexedInstancedIndirect(void*, uint32_t = 0) override {}
@@ -151,14 +161,37 @@ public:
 
 	virtual void ResetState() override {}
 
-	// Public so Texture2DD3D12::ClearRenderTargetView can reach the active
-	// command list + insert the state transition before clearing.
+	/** @brief Returns the recording command list for B2's clear path. */
 	ID3D12GraphicsCommandList* GetActiveCommandList() const { return _cmdList.Get(); }
+
+	/** @brief Inserts a single-subresource TRANSITION barrier and updates the resource's tracked state. */
 	void TransitionResource(Texture2DD3D12* tex, D3D12_RESOURCE_STATES newState);
+	void TransitionResource(Texture3DD3D12* tex, D3D12_RESOURCE_STATES newState);
+	void TransitionResource(StructuredBufferD3D12* buf, D3D12_RESOURCE_STATES newState);
+
+	/**
+	 * @brief Stages `byteSize` bytes from `src` into `dst` via a temporary
+	 *        upload buffer and a CopyBufferRegion call on the open list.
+	 *
+	 * Used by StructuredBufferD3D12::SetData when the buffer lives in the
+	 * default heap. The upload buffer is kept alive in `_pendingUploads`
+	 * until the matching frame fence completes.
+	 */
+	bool UploadBufferData(StructuredBufferD3D12* dst, const void* src, uint32_t byteSize, uint32_t dstByteOffset);
+
+	/** @brief Stages texture pixel data via a temporary upload buffer. */
+	bool UploadTextureData(Texture2DD3D12* dst, const void* src, uint32_t byteSize);
+	bool UploadTextureData(Texture3DD3D12* dst, const void* src, uint32_t byteSize);
+
+	// Descriptor heap access for resource classes.
+	DescriptorHeapAllocator& RtvHeap()   { return _rtvHeap; }
+	DescriptorHeapAllocator& DsvHeap()   { return _dsvHeap; }
+	DescriptorHeapAllocator& CbvSrvUavHeap() { return _cbvSrvUavHeap; }
 
 private:
 	bool CreateDeviceAndQueue();
 	void WaitForGpu();
+	void FlushPendingUploads();
 
 	static constexpr uint32_t kFrameCount = 3;
 
@@ -179,24 +212,34 @@ private:
 	HANDLE                                           _fenceEvent     = nullptr;
 	uint64_t                                         _nextFenceValue = 1;
 
-	// One swap-chain + RTV heap per window. Per-frame backbuffers live in
-	// _backbuffers[]; the swap chain reports which one is current via
-	// GetCurrentBackBufferIndex().
 	struct WindowContext
 	{
 		Microsoft::WRL::ComPtr<IDXGISwapChain3>      swapChain;
-		Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> rtvHeap;
 		Texture2DD3D12                                backbuffers[kFrameCount];
-		UINT                                          rtvDescriptorSize = 0;
 		uint32_t                                      width  = 0;
 		uint32_t                                      height = 0;
 		uint32_t                                      currentFrameIndex = 0;
 	};
 	std::unordered_map<HexEngine::Window*, WindowContext> _windowCtx;
-
 	WindowContext*                                   _activeWindow = nullptr;
 
-	math::Color                                      _clearColour {0.32f, 0.36f, 0.43f, 1.0f}; // matches D3D11 clear
+	// CPU-only descriptor heaps. B4 will add a shader-visible heap for binding
+	// at draw time; B3 only needs the per-resource slots.
+	DescriptorHeapAllocator                          _rtvHeap;
+	DescriptorHeapAllocator                          _dsvHeap;
+	DescriptorHeapAllocator                          _cbvSrvUavHeap;
+
+	// Upload buffers awaiting fence completion - we keep them alive until the
+	// GPU's done copying out of them. Each entry pairs the resource with the
+	// fence value it has to outlive.
+	struct PendingUpload
+	{
+		Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+		uint64_t                                fenceValue = 0;
+	};
+	std::deque<PendingUpload>                        _pendingUploads;
+
+	math::Color                                      _clearColour {0.32f, 0.36f, 0.43f, 1.0f};
 	HexEngine::Viewport                              _viewport;
 	HexEngine::Viewport                              _backBufferViewport;
 	HexEngine::ScissorRect                           _scissor;
