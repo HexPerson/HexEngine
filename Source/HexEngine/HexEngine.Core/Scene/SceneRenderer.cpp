@@ -6,6 +6,8 @@
 #include "../Entity/Component/DecalComponent.hpp"
 #include "../Graphics/IVertexBuffer.hpp"
 #include "../Graphics/IIndexBuffer.hpp"
+#include "../Graphics/ISSAOProvider.hpp"
+#include "../Graphics/DiffuseGIAOProvider.hpp"
 #include "../Math/FloatMath.hpp"
 #include <fastnoiselite/Cpp/FastNoiseLite.h>
 #include <cstdint>
@@ -2141,6 +2143,20 @@ namespace HexEngine
 					nullptr/*_gbuffer.GetNormal()*/,
 					_beautyRT);
 			}
+			// Sibling GI-AO pass: only runs when a plugin SSAO is loaded
+			// AND r_useGIAO is set. Reads DiffuseGI's bilateral-blurred AO
+			// target (produced by RenderDiffuseGI() below, so we're sampling
+			// the previous frame's result - acceptable given GI's own
+			// temporal accumulation; avoids a costly restructure of the
+			// render order just for one frame of latency).
+			if (r_useGIAO._val.b && g_pEnv->_giAOProvider != nullptr)
+			{
+				g_pEnv->_giAOProvider->ApplyAmbientOcclusion(
+					_currentCamera,
+					_gbuffer.GetDepthBuffer(),
+					nullptr/*_gbuffer.GetNormal()*/,
+					_beautyRT);
+			}
 
 			//_gbuffer.GetDiffuse()->CopyTo(_compositionRT);
 
@@ -2208,6 +2224,15 @@ namespace HexEngine
 				_gbuffer.GetDepthBuffer(),
 				nullptr/*_gbuffer.GetNormal()*/,
 				_beautyRT);
+			// Mirror the other call site's r_useGIAO sibling pass.
+			if (r_useGIAO._val.b && g_pEnv->_giAOProvider != nullptr)
+			{
+				g_pEnv->_giAOProvider->ApplyAmbientOcclusion(
+					_currentCamera,
+					_gbuffer.GetDepthBuffer(),
+					nullptr/*_gbuffer.GetNormal()*/,
+					_beautyRT);
+			}
 
 			//_gbuffer.GetDiffuse()->CopyTo(_compositionRT);
 			RenderLights();

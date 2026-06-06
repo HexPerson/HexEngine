@@ -4,44 +4,57 @@
 #include <HexEngine.Core/Graphics/IVertexBuffer.hpp>
 #include <d3d12.h>
 #include <wrl/client.h>
+#include <vector>
+
+class GraphicsDeviceD3D12;
 
 /**
- * @brief D3D12 vertex buffer (upload-heap-backed, persistent-mapped).
+ * @brief D3D12 vertex buffer with a per-buffer growable upload pool.
  *
- * Simple and works for both static and per-frame-updated buffers without a
- * separate copy queue / staging buffer. Trade-off vs default-heap: upload
- * memory is system RAM accessed by the GPU over PCIe. B5 can promote large
- * static VBs to a default-heap copy if profiling shows it matters.
+ * Problem: D3D11's MAP_WRITE_DISCARD silently renames the underlying storage
+ * on every Map() so the GPU's queued read of the old data is unaffected by
+ * the CPU's new write. D3D12 has no equivalent. HexEngine's GuiRenderer
+ * shares ONE 4-vertex VB and rewrites it for every UI quad via SetVertexData
+ * - hundreds of writes per frame. A single underlying resource means each
+ * write trashes the data the GPU is still about to read from the previous
+ * draw. Visual result: most quads degenerate, only a handful happen to
+ * survive.
+ *
+ * Fix: each SetVertexData picks an upload-heap sub-resource whose last-write
+ * fence has already completed (i.e. GPU is done with it), or allocates a new
+ * one if none are free. The view's BufferLocation rotates to whichever
+ * sub-resource we just wrote, so the in-flight draws keep their own
+ * snapshots.
+ *
+ * Static buffers (written once at init, never updated) keep exactly one
+ * sub-resource forever. Dynamic buffers grow on demand to whatever depth
+ * the worst-case-per-frame write count requires. Sub-resources are sized
+ * to the requested _byteSize, so a 4-vertex VB grows to N tiny 4-vertex
+ * allocations rather than one giant ring.
  */
 class VertexBufferD3D12 : public HexEngine::IVertexBuffer
 {
 public:
 	virtual ~VertexBufferD3D12() override { Destroy(); }
 
-	virtual void  Destroy() override
-	{
-		if (_resource && _mapped)
-		{
-			_resource->Unmap(0, nullptr);
-			_mapped = nullptr;
-		}
-		_resource.Reset();
-	}
-
-	virtual void* GetNativePtr() override { return _resource.Get(); }
+	virtual void  Destroy() override;
+	virtual void* GetNativePtr() override { return _activeResource; }
 	virtual uint32_t GetStride() override { return _stride; }
 
-	virtual void SetVertexData(uint8_t* data, uint32_t size, uint32_t offset = 0) override
-	{
-		if (_mapped == nullptr || data == nullptr || size == 0) return;
-		if (offset + size > _byteSize) return;
-		memcpy(static_cast<uint8_t*>(_mapped) + offset, data, size);
-	}
+	virtual void SetVertexData(uint8_t* data, uint32_t size, uint32_t offset = 0) override;
 
 public:
-	Microsoft::WRL::ComPtr<ID3D12Resource> _resource;
-	D3D12_VERTEX_BUFFER_VIEW                _view = {};
-	void*                                    _mapped = nullptr;
+	struct UploadEntry
+	{
+		Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+		void*    mapped = nullptr;
+		uint64_t fence  = 0; ///< value of the EndFrame signal after this entry was last written; reuse once GPU completes it
+	};
+
+	std::vector<UploadEntry>                _uploads;
+	ID3D12Resource*                          _activeResource = nullptr; ///< raw ptr to the entry whose BufferLocation the view currently points at
+	D3D12_VERTEX_BUFFER_VIEW                 _view = {};
 	uint32_t                                 _stride = 0;
 	uint32_t                                 _byteSize = 0;
+	GraphicsDeviceD3D12*                     _device = nullptr;
 };

@@ -301,15 +301,23 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 				continue;
 			}
 
-			// Build the DXC argv. Mirrors the FXC defines: matrix major matches
-			// HexEngine convention (row major in the C++ side, packed via
-			// /Zpr); HLSL 2021 stays opt-in so SM 5.0 source stays valid.
+			// Build the DXC argv. Must match FXC's defaults closely:
+			//   - Matrix packing: FXC defaults to column-major (no
+			//     D3DCOMPILE_PACK_MATRIX_ROW_MAJOR passed above). DXC also
+			//     defaults to column-major, so we DO NOT pass -Zpr.
+			//   - HLSL version: FXC compiles as classic HLSL (SM 5.x). DXC's
+			//     default HLSL 2018 has stricter strict-init / vec-init /
+			//     short-circuit-eval semantics. Force -HV 2018 explicitly so
+			//     this stays stable across DXC versions.
+			//   - SPIRV/etc: not relevant; we're targeting DXIL only here.
+			// A mismatch in any of these between FXC and DXC was producing
+			// the radial-triangle-streak corruption on every scene mesh under
+			// D3D12, while D3D11 (FXC) rendered identical assets correctly.
 			std::vector<LPCWSTR> args;
 			args.push_back(L"-T");
 			args.push_back(gShaderStageToSm6Target[stageIdx]);
 			args.push_back(L"-E");
 			args.push_back(L"ShaderMain");
-			args.push_back(L"-Zpr"); // pack matrices in row-major
 #ifdef _DEBUG
 			args.push_back(L"-Zi"); // embed debug info
 			args.push_back(L"-Od"); // disable optimisations

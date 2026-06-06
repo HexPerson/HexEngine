@@ -6,6 +6,7 @@
 #include "../Scene/SceneFramingUtils.hpp"
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <unordered_set>
@@ -567,6 +568,35 @@ namespace HexEngine
 					_iconScene->DestroyEntity(entity, false);
 				}
 			}
+
+			// Drain any entities that DestroyEntity deferred into
+			// _pendingRemovals (which happens when iteration is in
+			// progress on the scene). Without this, the entity stays in
+			// scene->GetEntities() with IsPendingDeletion=true and the
+			// outer "for (pass < 8)" loop terminates as soon as
+			// CollectSceneEntities skips it - but the entity ALSO never
+			// actually leaves the bucket, so subsequent icon renders
+			// snapshot it back into the PVS and the prefab "leaks"
+			// into the next icon.
+			_iconScene->DrainPendingRemovals();
+		}
+
+		// Belt-and-braces: with all preview entities gone, force the camera
+		// and shadow PVS to drop any references they cached. Without this,
+		// the next FrameCamera + SeedPVS pair runs against PVS state that
+		// still has the destroyed prefab's entries baked in, and the next
+		// RenderScene draws phantom prefab geometry on top of the new
+		// preview. Cheap (PVS clear is just a hash-set wipe) and run only
+		// when there were entities to destroy.
+		if (auto* pvs = _camera ? _camera->GetPVS() : nullptr; pvs != nullptr)
+			pvs->ClearPVS();
+		if (auto* sun = _iconScene->GetSunLight(); sun != nullptr)
+		{
+			for (int32_t i = 0; i < sun->GetMaxSupportedShadowCascades(); ++i)
+			{
+				if (auto* shadowPvs = sun->GetPVS(i); shadowPvs != nullptr)
+					shadowPvs->ClearPVS();
+			}
 		}
 
 		_previewRootEntities.clear();
@@ -795,6 +825,46 @@ namespace HexEngine
 		TouchIconLru(sourcePath);
 		EnforceIconMemoryBudget();
 		return true;
+	}
+
+	bool IconService::IsIconStale(const fs::path& sourcePath)
+	{
+		// Resource icons (static engine textures, builtin badges) have no
+		// source file behind them - they're never stale.
+		if (sourcePath.empty())
+			return false;
+
+		// Without a disk-cache entry we have no recorded baseline to
+		// compare against, so we can't tell if the file changed. The icon
+		// was rendered to memory only and there's no protocol to know
+		// when to refresh it - fall back to "not stale" (existing
+		// behaviour for non-cached icons).
+		auto itEntry = _diskCacheIndex.find(sourcePath);
+		if (itEntry == _diskCacheIndex.end())
+			return false;
+
+		// TTL gate: cap the file-system stat rate per path. GetIcon is
+		// called once per visible asset per frame by the asset explorer,
+		// so without throttling we'd be doing 30-60 stats per asset per
+		// second.
+		const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+		auto itLast = _lastStaleCheckTime.find(sourcePath);
+		if (itLast != _lastStaleCheckTime.end() && (nowMs - itLast->second) < kStaleCheckIntervalMs)
+			return false;
+		_lastStaleCheckTime[sourcePath] = nowMs;
+
+		const int64_t currentWriteTime = GetFileWriteTimeTicks(sourcePath);
+		const uintmax_t currentFileSize = GetFileSizeSafe(sourcePath);
+		if (currentWriteTime == 0 || currentFileSize == 0)
+		{
+			// File vanished / unreadable. Treat as stale so the caller
+			// drops the in-memory icon - asset explorer will then show
+			// the placeholder until the asset reappears.
+			return true;
+		}
+		return (itEntry->second.sourceWriteTime != currentWriteTime)
+			|| (itEntry->second.sourceFileSize != currentFileSize);
 	}
 
 	void IconService::RemoveIconFromDiskCache(const fs::path& sourcePath)
@@ -1185,6 +1255,23 @@ namespace HexEngine
 		auto it = _icons.find(key);
 		if (it != _icons.end())
 		{
+			// Stale check: if the source file (prefab / material / scene /
+			// etc.) has been re-saved since this icon was baked, evict the
+			// resident icon and fall through to the re-render path. Without
+			// this, GetIcon would keep returning the pre-save snapshot
+			// indefinitely - that's what was happening to prefab thumbnails
+			// after edits. The check is TTL-throttled (kStaleCheckIntervalMs)
+			// so per-frame asset-explorer redraws don't stat the file system
+			// per visible asset per frame.
+			if (IsIconStale(key))
+			{
+				RemoveIcon(key);
+				// Fall through - returns nullptr below so the caller's
+				// re-queue path (or next frame's render pump) regenerates
+				// the icon from the updated source.
+				return nullptr;
+			}
+
 			TouchIconLru(key);
 			return it->second;
 		}
@@ -1207,6 +1294,7 @@ namespace HexEngine
 		_queuedPaths.erase(key);
 		RemovePendingByPath(key);
 		RemoveIconFromDiskCache(key);
+		_lastStaleCheckTime.erase(key);
 
 		auto itRes = _resourceIcons.find(key);
 		if (itRes != _resourceIcons.end())

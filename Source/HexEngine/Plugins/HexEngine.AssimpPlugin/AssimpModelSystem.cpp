@@ -3,8 +3,126 @@
 #include "AssimpModelSystem.hpp"
 #include <HexEngine.Core\Graphics\MaterialLoader.hpp>
 #include <HexEngine.Core\GUI\Elements\DragFloat.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/config.h>
 #include <functional>
 #include <map>
+#include <unordered_map>
+
+namespace
+{
+	// Assimp's FBX loader, by default, decomposes each joint's transform
+	// into a chain of synthetic helper nodes named
+	// "<bone>_$AssimpFbx$_Translation" / "_$AssimpFbx$_Rotation" /
+	// "_$AssimpFbx$_Scaling" / "_$AssimpFbx$_PreRotation" /
+	// "_$AssimpFbx$_PostRotation" - this preserves FBX's per-axis pivot
+	// stack losslessly. The catch: animation channels attach to the
+	// SYNTHETIC node names, but the engine's bone-name map only knows the
+	// real joint names. Result: a subset of joints (the ones that needed
+	// pivot decomposition - typically forearm/hand twist bones with non-
+	// trivial pre/post rotation in the source rig) stay in bind pose
+	// because their animation channels never resolve to a bone index.
+	//
+	// We KEEP PRESERVE_PIVOTS=true (Assimp's default) - setting it to
+	// false makes Assimp drop the animation keys when collapsing the
+	// synthetic chain back together. Instead, we post-process the
+	// channels ourselves: see CoalesceSyntheticPivotChannels below.
+	void ConfigureForFbx(Assimp::Importer& /*importer*/)
+	{
+		// Intentionally empty. Kept as a hook in case future Assimp flags
+		// need to be set on every Importer we create.
+	}
+
+	// Renames synthetic FBX-pivot channels onto the real bone they refer
+	// to. Each "_$AssimpFbx$_<TRS>" suffix carries one slice of a joint's
+	// local TRS, so we copy the keys into the matching slot of the bone's
+	// merged channel.
+	//
+	// Example - for a Mixamo forearm twist authored against the FBX pivot
+	// stack, Assimp emits:
+	//   mixamorig:LeftForeArm_$AssimpFbx$_Rotation  (rotationKeys)
+	//   mixamorig:LeftForeArm_$AssimpFbx$_Scaling   (scaleKeys, if present)
+	// Both target the same real bone. After this pass, both have been
+	// folded into a single channel named "mixamorig:LeftForeArm".
+	//
+	// Static-only synthetic nodes (PreRotation / PostRotation / Geometric*
+	// / *Pivot / *PivotInverse / *Offset) typically carry no animation
+	// keys - their contribution lives in the scene-tree node's
+	// mTransformation and is already encoded in the real-bone's
+	// nodeTransform via Assimp's chain composition. We drop them.
+	void CoalesceSyntheticPivotChannels(HexEngine::Animation& anim)
+	{
+		static const std::string marker = "_$AssimpFbx$_";
+
+		// Pass 1: bucket channels by real-bone name; keep insertion order
+		// stable so the resulting channel list is reproducible.
+		std::vector<std::string> realNamesInOrder;
+		std::unordered_map<std::string, HexEngine::AnimChannel> bucket;
+
+		auto upsert = [&](const std::string& realName) -> HexEngine::AnimChannel&
+		{
+			auto it = bucket.find(realName);
+			if (it == bucket.end())
+			{
+				realNamesInOrder.push_back(realName);
+				HexEngine::AnimChannel fresh;
+				fresh.nodeName = realName;
+				it = bucket.emplace(realName, std::move(fresh)).first;
+			}
+			return it->second;
+		};
+
+		for (auto& chan : anim.channels)
+		{
+			const auto pos = chan.nodeName.find(marker);
+			if (pos == std::string::npos)
+			{
+				// Already a real-bone channel (no synthetic suffix). Take
+				// its keys wholesale. If a synthetic sibling also targets
+				// this bone, the bucket merge below combines them.
+				auto& tgt = upsert(chan.nodeName);
+				if (!chan.positionKeys.empty()) tgt.positionKeys = std::move(chan.positionKeys);
+				if (!chan.rotationKeys.empty()) tgt.rotationKeys = std::move(chan.rotationKeys);
+				if (!chan.scaleKeys.empty())    tgt.scaleKeys    = std::move(chan.scaleKeys);
+				continue;
+			}
+
+			const std::string realName = chan.nodeName.substr(0, pos);
+			const std::string suffix   = chan.nodeName.substr(pos + marker.size());
+
+			// Only Translation / Rotation / Scaling synthetics typically
+			// carry animation keys. The other pivot/offset synthetics are
+			// static and fold into the scene tree's mTransformation - no
+			// need to act on them here.
+			if (suffix == "Translation")
+			{
+				auto& tgt = upsert(realName);
+				if (!chan.positionKeys.empty()) tgt.positionKeys = std::move(chan.positionKeys);
+			}
+			else if (suffix == "Rotation")
+			{
+				auto& tgt = upsert(realName);
+				if (!chan.rotationKeys.empty()) tgt.rotationKeys = std::move(chan.rotationKeys);
+			}
+			else if (suffix == "Scaling")
+			{
+				auto& tgt = upsert(realName);
+				if (!chan.scaleKeys.empty()) tgt.scaleKeys = std::move(chan.scaleKeys);
+			}
+			// else: PreRotation / PostRotation / GeometricTranslation /
+			// GeometricRotation / GeometricScaling / RotationPivot* /
+			// ScalingPivot* / *Offset - static; drop.
+		}
+
+		// Pass 2: rebuild anim.channels from the bucket in insertion
+		// order. Channel addresses are reset here, so this MUST run
+		// BEFORE ProcessNode caches AnimChannel* into _rootNode/children.
+		anim.channels.clear();
+		anim.channels.reserve(realNamesInOrder.size());
+		for (const auto& name : realNamesInOrder)
+			anim.channels.push_back(std::move(bucket[name]));
+	}
+}
 
 #define AI2VEC2(val) math::Vector2(val.x, val.y);
 #define AI2VEC3(val) math::Vector3(val.x, val.y, val.z);
@@ -152,6 +270,13 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 		L"");
 
 	auto importAnims = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Import animations", &_importOpts.importAnimations);
+	// Folder-merge mode for character packs: scans the parent directory for
+	// sibling .fbx files after the primary loads and merges their animations
+	// onto the primary's AnimationData (each sibling becomes one named clip,
+	// using the file stem as the clip name). Intended for Mixamo / RPM /
+	// ActorCore / similar layouts where the rigged mesh and animations ship
+	// in separate FBX files in the same folder.
+	auto mergeSiblings = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(400, 20), L"Merge sibling .fbx animations into primary", &_importOpts.mergeSiblingAnimations);
 	auto createAnims = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Create materials", &_importOpts.tryAndCreateMaterials);
 	auto mergeChildMeshes = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(320, 20), L"Merge child meshes by material", &_importOpts.mergeChildMeshesByMaterial);
 	auto renameFiles = new HexEngine::Checkbox(layout, layout->GetNextPos(), HexEngine::Point(200, 20), L"Rename files", &_importOpts.renameFiles);
@@ -250,6 +375,7 @@ std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromFile(
 		return nullptr;
 
 	Assimp::Importer importer;
+	ConfigureForFbx(importer);
 
 	LOG_DEBUG("Loading model '%S'", path.filename().c_str());
 
@@ -345,7 +471,123 @@ std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromFile(
 	if (_importOpts.importAnimations)
 		ProcessAnimations(model, modelScene);
 
-	std::vector<HexEngine::AnimChannel*> parents(modelScene->mNumAnimations);
+	// Merge sibling-FBX animations into the primary's AnimationData. Run
+	// BEFORE ProcessNode so the channel-hierarchy hookup pass (which
+	// iterates every animation in lockstep with the primary's node tree)
+	// hooks up the appended channels too. Each sibling FBX is opened with
+	// its own Assimp::Importer because Importer owns the aiScene and we
+	// don't want it freed out from under the channel pointers.
+	//
+	// Has to also handle the "primary FBX has no animations of its own"
+	// case (skeleton-only rig + N animation-only sibling files): lazy-
+	// create the AnimationData here when it doesn't exist yet so the
+	// appended siblings have somewhere to land.
+	std::vector<std::unique_ptr<Assimp::Importer>> _siblingImporterLifetimes;
+	if (_importOpts.importAnimations && _importOpts.mergeSiblingAnimations)
+	{
+		if (!model->GetAnimationData())
+		{
+			auto seed = std::make_shared<HexEngine::AnimationData>();
+			seed->_globalInverseTransform = math::Matrix(&modelScene->mRootNode->mTransformation.a1);
+			model->SetAnimatioData(seed);
+		}
+		auto* animData = model->GetAnimationData().get();
+
+		const fs::path parentDir = path.parent_path();
+		std::error_code ec;
+		if (fs::is_directory(parentDir, ec))
+		{
+			for (const auto& entry : fs::directory_iterator(parentDir, ec))
+			{
+				if (!entry.is_regular_file()) continue;
+				const fs::path& sibling = entry.path();
+				if (sibling == path) continue; // skip the primary
+
+				// Only treat .fbx siblings as animation sources. .obj /
+				// .gltf etc would also work via Assimp but they rarely
+				// ship as animation-only files in practice; restrict to
+				// .fbx to avoid silently swallowing static-mesh siblings.
+				auto ext = sibling.extension().wstring();
+				std::transform(ext.begin(), ext.end(), ext.begin(), ::towlower);
+				if (ext != L".fbx") continue;
+
+				auto siblingImporter = std::make_unique<Assimp::Importer>();
+				ConfigureForFbx(*siblingImporter);
+				std::string siblingPathUtf8;
+				{
+					std::wstring sw = sibling.wstring();
+					std::transform(sw.begin(), sw.end(), std::back_inserter(siblingPathUtf8),
+						[](wchar_t c) { return (char)c; });
+				}
+				const aiScene* siblingScene = siblingImporter->ReadFile(siblingPathUtf8, AssimpImportFlags);
+				if (siblingScene == nullptr)
+				{
+					LOG_WARN("Sibling animation FBX '%S' failed to load: %s. Skipping.",
+						sibling.filename().c_str(),
+						siblingImporter->GetErrorString());
+					continue;
+				}
+				if (siblingScene->mNumAnimations == 0)
+				{
+					// Static mesh sibling, or rig-only file. Not an error -
+					// just nothing to merge from it.
+					continue;
+				}
+
+				const std::string nameOverride = sibling.stem().string();
+				const uint32_t beforeCount = (uint32_t)animData->_animations.size();
+				AppendAnimationsFromScene(animData, siblingScene, nameOverride);
+				const uint32_t added = (uint32_t)animData->_animations.size() - beforeCount;
+				LOG_INFO("Merged %u animation%s from sibling '%S' as '%s'",
+					added, added == 1 ? "" : "s",
+					sibling.filename().c_str(),
+					nameOverride.c_str());
+
+				// Keep the importer (and thus the aiScene) alive until
+				// after ProcessNode runs - the appended AnimChannels'
+				// internal data was deep-copied, so this is actually
+				// safe to release here, but we hold on as belt-and-
+				// braces in case future refactors start aliasing.
+				_siblingImporterLifetimes.push_back(std::move(siblingImporter));
+			}
+		}
+	}
+
+	// Sized to the FINAL animation count (primary + merged siblings) so
+	// ProcessNode's per-animation parent tracking has a slot for every
+	// animation. Falls back to mNumAnimations when no AnimationData exists.
+	const size_t totalAnimCount = model->GetAnimationData()
+		? model->GetAnimationData()->_animations.size()
+		: (size_t)modelScene->mNumAnimations;
+	std::vector<HexEngine::AnimChannel*> parents(totalAnimCount);
+
+	// Synthesize static channels for any scene tree node that the current
+	// animation doesn't keyframe. Has to run AFTER the merge (so siblings
+	// also get full coverage) and BEFORE ProcessNode (so the synthesized
+	// channels are present when the hierarchy hookup runs and the channels
+	// vector address-stable before any AnimChannel* references are taken).
+	// IMPORTANT: reserve each anim.channels to the maximum it could grow to
+	// (current_size + scene_node_count). Without the reservation, push_back
+	// inside EnsureChannelsCoverSceneTree could reallocate the vector,
+	// invalidating addresses we'd later store in `_rootNode` / `children`.
+	if (_importOpts.importAnimations && model->GetAnimationData())
+	{
+		uint32_t sceneNodeCount = 0;
+		std::function<void(const aiNode*)> countNodes = [&](const aiNode* n)
+		{
+			if (!n) return;
+			++sceneNodeCount;
+			for (uint32_t i = 0; i < n->mNumChildren; ++i)
+				countNodes(n->mChildren[i]);
+		};
+		countNodes(modelScene->mRootNode);
+
+		for (auto& anim : model->GetAnimationData()->_animations)
+		{
+			anim.channels.reserve(anim.channels.size() + sceneNodeCount);
+			EnsureChannelsCoverSceneTree(anim, modelScene->mRootNode);
+		}
+	}
 	bool canMergeChildMeshes = _importOpts.mergeChildMeshesByMaterial && !modelScene->HasAnimations();
 	if (canMergeChildMeshes)
 	{
@@ -433,6 +675,7 @@ std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromMemor
 		return nullptr;
 
 	Assimp::Importer importer;
+	ConfigureForFbx(importer);
 
 	_defaultIoSystem = importer.GetIOHandler();
 
@@ -592,23 +835,74 @@ void AssimpModelImporter::ProcessAnimations(std::shared_ptr<HexEngine::Model>& m
 	if (!scene->mNumAnimations)
 		return;
 
-	auto animData = std::make_shared<HexEngine::AnimationData>();	
+	auto animData = std::make_shared<HexEngine::AnimationData>();
 
 	animData->_globalInverseTransform = math::Matrix(&scene->mRootNode->mTransformation.a1);
 	//model->_animData->_globalInverseTransform = model->_animData->_globalInverseTransform.Invert(); // do we need this?
 
+	// All per-animation channel copying lives in AppendAnimationsFromScene
+	// so the sibling-FBX merge path can reuse exactly the same conversion.
+	// Pass the primary scene's root transform so every appended Animation
+	// records the right per-anim _globalInverseTransform.
+	AppendAnimationsFromScene(animData.get(), scene, /*nameOverride=*/"");
 
-	for (auto i = 0u; i < scene->mNumAnimations; ++i)
+	model->SetAnimatioData(animData);
+}
+
+void AssimpModelImporter::AppendAnimationsFromScene(HexEngine::AnimationData* dst, const aiScene* src, const std::string& nameOverride)
+{
+	if (dst == nullptr || src == nullptr || src->mNumAnimations == 0)
+		return;
+
+	// Assimp emits generic sentinel names for animations split out of source
+	// DCC tools - Mixamo always reports "mixamo.com", legacy FBX exporters
+	// report "Take 001", various Blender exports prefix bones with
+	// "Armature|". When merging sibling FBX files, the filename stem is the
+	// only meaningful name we have, so substitute it for any sentinel.
+	auto isSentinelName = [](const std::string& name)
 	{
-		auto animation = scene->mAnimations[i];
+		if (name.empty())
+			return true;
+		if (name == "mixamo.com")
+			return true;
+		if (name.rfind("Take 0", 0) == 0)
+			return true;
+		if (name.rfind("Armature|", 0) == 0)
+			return true;
+		return false;
+	};
+
+	// Each source scene carries its own root-node coordinate frame; capture it
+	// once and stamp every animation pulled from this scene with it. This is
+	// what makes Mixamo-style "one rigged mesh + N animation FBX siblings"
+	// content play correctly after merging - without it, sibling clips end up
+	// inheriting the primary's root transform and the mesh rotates/skews when
+	// you select one of them.
+	const math::Matrix sceneRootXform = src->mRootNode
+		? math::Matrix(&src->mRootNode->mTransformation.a1)
+		: math::Matrix::Identity;
+
+	for (auto i = 0u; i < src->mNumAnimations; ++i)
+	{
+		auto animation = src->mAnimations[i];
 
 		if (!animation)
 			continue;
 
 		HexEngine::Animation anim;
 		anim.name = animation->mName.data;
+		if (!nameOverride.empty() && isSentinelName(anim.name))
+		{
+			// If the override file produces multiple animations, suffix to
+			// keep names unique - otherwise the dropdown widget shows N
+			// identical entries.
+			anim.name = (src->mNumAnimations > 1)
+				? (nameOverride + "_" + std::to_string(i))
+				: nameOverride;
+		}
 		anim.duration = (float)animation->mDuration;
 		anim.ticksPerSecond = (float)animation->mTicksPerSecond;
+		anim._globalInverseTransform = sceneRootXform;
 
 		for (uint32_t j = 0; j < animation->mNumChannels; ++j)
 		{
@@ -636,10 +930,16 @@ void AssimpModelImporter::ProcessAnimations(std::shared_ptr<HexEngine::Model>& m
 			anim.channels.push_back(chan);
 		}
 
-		animData->_animations.push_back(anim);
-	}
+		// Collapse Assimp's "<bone>_$AssimpFbx$_Translation/Rotation/Scaling"
+		// pivot channels onto a single channel per real bone. Must happen
+		// BEFORE the appended animation is referenced anywhere (Process-
+		// Node hooks AnimChannel* into _rootNode/children later in the
+		// pipeline; this pass rewrites anim.channels so all addresses are
+		// fresh after it runs).
+		CoalesceSyntheticPivotChannels(anim);
 
-	model->SetAnimatioData(animData);
+		dst->_animations.push_back(std::move(anim));
+	}
 }
 
 std::vector<std::string> AssimpModelImporter::GetSupportedResourceExtensions()
@@ -974,6 +1274,41 @@ void AssimpModelImporter::ProcessNode(std::shared_ptr<HexEngine::Model>& model, 
 	{
 		ProcessNode(model, node->mChildren[i], parentAnims, scene, fileSystem);
 	}
+}
+
+void AssimpModelImporter::EnsureChannelsCoverSceneTree(HexEngine::Animation& anim, const aiNode* node)
+{
+	if (node == nullptr)
+		return;
+
+	const std::string nodeName = node->mName.data;
+
+	bool hasChannel = false;
+	for (const auto& chan : anim.channels)
+	{
+		if (chan.nodeName == nodeName)
+		{
+			hasChannel = true;
+			break;
+		}
+	}
+
+	if (!hasChannel)
+	{
+		// Synthetic / static channel - empty key arrays signal to
+		// SkeletalAnimationComponent::ReadNodeHierarchy that it should
+		// use the channel's nodeTransform directly (the bone's bind-pose
+		// transform, populated by ProcessNode when it matches the
+		// channel against this scene node). The channel still
+		// participates in the parent / child hookup so the
+		// GlobalTransformation walk visits every bone in order.
+		HexEngine::AnimChannel chan;
+		chan.nodeName = nodeName;
+		anim.channels.push_back(std::move(chan));
+	}
+
+	for (uint32_t i = 0; i < node->mNumChildren; ++i)
+		EnsureChannelsCoverSceneTree(anim, node->mChildren[i]);
 }
 
 HexEngine::AnimChannel* AssimpModelImporter::FindAnimChannelFromNodeName(std::shared_ptr<HexEngine::Model>& model, const std::string& nodeName)

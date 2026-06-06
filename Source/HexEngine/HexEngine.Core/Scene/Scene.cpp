@@ -800,7 +800,20 @@ namespace HexEngine
 		}
 
 		if (retainHierarchy && entity->GetParent())
-			clone->SetParent(entity->GetParent());
+		{
+			// preserveWorldPosition MUST be false here. At this point the
+			// clone was just created at root with local = source's local
+			// (passed into CreateEntity above), so its "world" position is
+			// really just that local-space value sitting in a worldspace
+			// slot. Reparenting with the default preserveWorldPosition=true
+			// would re-derive a new local from that bogus world via
+			// parent.worldInverse, placing the duplicate at roughly
+			// (source.local - parent.translation) instead of alongside
+			// source. We want the clone's existing local kept as-is and
+			// just attached to the source's parent, which is exactly what
+			// preserveWorldPosition=false does.
+			clone->SetParent(entity->GetParent(), false);
+		}
 
 		for (auto& comp : entity->GetAllComponents())
 		{
@@ -1627,7 +1640,7 @@ namespace HexEngine
 			return material->GetBlendState() != BlendState::Opaque;
 		}
 
-		bool PrepareMeshRender(Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode)
+		bool PrepareMeshRender(Entity* entity, Mesh* mesh, Material* material, MeshRenderFlags flags, int32_t instanceId, CullingMode shadowCullMode)
 		{
 			if (!mesh || !material)
 				return false;
@@ -1685,7 +1698,7 @@ namespace HexEngine
 			graphicsDevice->SetDepthBufferState(effectiveDepthState);
 			graphicsDevice->SetCullingMode(isShadowMap ? shadowCullMode : material->GetCullMode());
 
-			mesh->UpdateConstantBuffer(nullptr, math::Matrix::Identity, material, instanceId, isTransparency);
+			mesh->UpdateConstantBuffer(entity, math::Matrix::Identity, material, instanceId, isTransparency);
 
 			auto requirements = shader->GetRequirements();
 			if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresGBuffer))
@@ -1732,7 +1745,18 @@ namespace HexEngine
 			if (numInstances > 0)
 			{
 				const uint32_t indexCount = instance->GetMesh()->GetNumIndices();
-				if (r_gpuCullUseIndirectDraw._val.b)
+				// Indirect-draw path is hard-coded to D3D11 (ID3D11Buffer,
+				// D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS, UpdateSubresource).
+				// Under D3D12 the reinterpret_cast of GetNativeDevice() to
+				// ID3D11Device* lands on a totally different vtable slot - the
+				// resulting `device->CreateBuffer` dispatches to ID3D12Device's
+				// GetPrivateData and the debug layer flags
+				// CORRUPTED_PARAMETER2. Fall back to the direct DrawIndexed
+				// path under non-D3D11 backends until a per-backend indirect
+				// path (ID3D12CommandSignature + ExecuteIndirect) lands.
+				const bool useIndirect = r_gpuCullUseIndirectDraw._val.b &&
+					g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11;
+				if (useIndirect)
 				{
 					ID3D11Device* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
 					ID3D11DeviceContext* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
@@ -1997,7 +2021,7 @@ namespace HexEngine
 					continue;
 
 				instance->Start();
-				if (!PrepareMeshRender(mesh.get(), material.get(), renderFlags, _drawnEntities, renderable->shadowCullMode))
+				if (!PrepareMeshRender(renderable->entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable->shadowCullMode))
 				{
 					instance->Finish();
 					skippedPrepareRender++;
@@ -2009,6 +2033,27 @@ namespace HexEngine
 					renderable->instanceData.worldMatrix = renderable->entity->GetWorldTMTranspose();
 					renderable->instanceData.worldMatrixPrev = renderable->entity->GetWorldTMPrevTranspose();
 					renderable->instanceData.worldMatrixInverseTranspose = renderable->entity->GetWorldTMInvert();
+				}
+
+				// Bone-bound attachments need their world matrix refreshed
+				// every draw, not just on PVS rebuild. PVS only re-snapshots
+				// when the camera / static-mesh population changes, so a
+				// static camera would freeze the attachment at whatever
+				// pose the bone had at snapshot time. Recomputing here from
+				// the live bone state (via GetOffsetMatrixTranspose, which
+				// builds the matrix from the SkeletalAnimationComponent's
+				// per-frame Position/Rotation updates) keeps hats/weapons/
+				// scabbards tracking the parent animation regardless of
+				// camera movement.
+				if (renderable->isBoundToBone)
+				{
+					if (auto* smc = renderable->entity->GetComponent<StaticMeshComponent>(); smc != nullptr)
+					{
+						renderable->instanceData.worldMatrix              = renderable->entity->GetWorldTMTranspose() * smc->GetOffsetMatrixTranspose();
+						renderable->instanceData.worldMatrixPrev          = renderable->entity->GetWorldTMPrevTranspose();
+						renderable->instanceData.worldMatrixInverseTranspose = renderable->entity->GetWorldTMInvert();
+						renderable->shadowInstanceData.worldMatrix        = renderable->instanceData.worldMatrix;
+					}
 				}
 
 				instance->Render(renderable->instanceData);
@@ -2127,7 +2172,7 @@ namespace HexEngine
 						else
 							instance->Start();
 
-						if (PrepareMeshRender(mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode) == false)
+						if (PrepareMeshRender(renderable.entity, mesh.get(), material.get(), renderFlags, _drawnEntities, renderable.shadowCullMode) == false)
 						{
 							LOG_WARN("Failed to prepare mesh render state, ignoring this entity");
 							skippedPrepareRender++;
@@ -2139,6 +2184,23 @@ namespace HexEngine
 					drawnInstances++;
 					drawnInstancesTotal++;
 					lastInstance = currentInstance;
+
+					// Per-draw refresh of bone-bound attachments. PVS snapshots
+					// freeze the offset matrix; the live bone pose updates
+					// every animation tick, so we have to pull it again here
+					// for hats/weapons/scabbards to keep up. Done BEFORE the
+					// shadow vs main split so shadow-map rendering of bound
+					// attachments tracks the bone too.
+					if (renderable.isBoundToBone)
+					{
+						if (auto* smc = renderable.entity->GetComponent<StaticMeshComponent>(); smc != nullptr)
+						{
+							renderable.instanceData.worldMatrix              = renderable.entity->GetWorldTMTranspose() * smc->GetOffsetMatrixTranspose();
+							renderable.instanceData.worldMatrixPrev          = renderable.entity->GetWorldTMPrevTranspose();
+							renderable.instanceData.worldMatrixInverseTranspose = renderable.entity->GetWorldTMInvert();
+							renderable.shadowInstanceData.worldMatrix        = renderable.instanceData.worldMatrix;
+						}
+					}
 
 					if (isShadowMap)
 					{

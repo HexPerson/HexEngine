@@ -12,6 +12,79 @@
 
 namespace HexEngine
 {
+	// Inverse of ToDXGI12 - used by the clone-an-existing-texture path which
+	// queries the source resource's D3D12_RESOURCE_DESC and needs to round-trip
+	// the format back through the neutral TextureFormat enum so the standard
+	// CreateTexture2D path can be reused. Unknown / unmapped formats fall
+	// through to TextureFormat::Unknown - caller should treat that as a clone
+	// failure.
+	inline TextureFormat FromDXGI12(DXGI_FORMAT f)
+	{
+		switch (f)
+		{
+		case DXGI_FORMAT_UNKNOWN:                    return TextureFormat::Unknown;
+		case DXGI_FORMAT_R8_UNORM:                   return TextureFormat::R8_UNORM;
+		case DXGI_FORMAT_R8_SNORM:                   return TextureFormat::R8_SNORM;
+		case DXGI_FORMAT_R8_UINT:                    return TextureFormat::R8_UINT;
+		case DXGI_FORMAT_R8_SINT:                    return TextureFormat::R8_SINT;
+		case DXGI_FORMAT_R8G8_UNORM:                 return TextureFormat::R8G8_UNORM;
+		case DXGI_FORMAT_R8G8_SNORM:                 return TextureFormat::R8G8_SNORM;
+		case DXGI_FORMAT_R8G8_UINT:                  return TextureFormat::R8G8_UINT;
+		case DXGI_FORMAT_R8G8_SINT:                  return TextureFormat::R8G8_SINT;
+		case DXGI_FORMAT_R8G8B8A8_UNORM:             return TextureFormat::R8G8B8A8_UNORM;
+		case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:        return TextureFormat::R8G8B8A8_UNORM_SRGB;
+		case DXGI_FORMAT_R8G8B8A8_SNORM:             return TextureFormat::R8G8B8A8_SNORM;
+		case DXGI_FORMAT_R8G8B8A8_UINT:              return TextureFormat::R8G8B8A8_UINT;
+		case DXGI_FORMAT_R8G8B8A8_SINT:              return TextureFormat::R8G8B8A8_SINT;
+		case DXGI_FORMAT_B8G8R8A8_UNORM:             return TextureFormat::B8G8R8A8_UNORM;
+		case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:        return TextureFormat::B8G8R8A8_UNORM_SRGB;
+		case DXGI_FORMAT_B8G8R8X8_UNORM:             return TextureFormat::B8G8R8X8_UNORM;
+		case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:        return TextureFormat::B8G8R8X8_UNORM_SRGB;
+		case DXGI_FORMAT_R16_TYPELESS:               return TextureFormat::R16_TYPELESS;
+		case DXGI_FORMAT_R16_UNORM:                  return TextureFormat::R16_UNORM;
+		case DXGI_FORMAT_R16_SNORM:                  return TextureFormat::R16_SNORM;
+		case DXGI_FORMAT_R16_UINT:                   return TextureFormat::R16_UINT;
+		case DXGI_FORMAT_R16_SINT:                   return TextureFormat::R16_SINT;
+		case DXGI_FORMAT_R16_FLOAT:                  return TextureFormat::R16_FLOAT;
+		case DXGI_FORMAT_R16G16_UNORM:               return TextureFormat::R16G16_UNORM;
+		case DXGI_FORMAT_R16G16_SNORM:               return TextureFormat::R16G16_SNORM;
+		case DXGI_FORMAT_R16G16_UINT:                return TextureFormat::R16G16_UINT;
+		case DXGI_FORMAT_R16G16_SINT:                return TextureFormat::R16G16_SINT;
+		case DXGI_FORMAT_R16G16_FLOAT:               return TextureFormat::R16G16_FLOAT;
+		case DXGI_FORMAT_R16G16B16A16_UNORM:         return TextureFormat::R16G16B16A16_UNORM;
+		case DXGI_FORMAT_R16G16B16A16_SNORM:         return TextureFormat::R16G16B16A16_SNORM;
+		case DXGI_FORMAT_R16G16B16A16_UINT:          return TextureFormat::R16G16B16A16_UINT;
+		case DXGI_FORMAT_R16G16B16A16_SINT:          return TextureFormat::R16G16B16A16_SINT;
+		case DXGI_FORMAT_R16G16B16A16_FLOAT:         return TextureFormat::R16G16B16A16_FLOAT;
+		case DXGI_FORMAT_R32_TYPELESS:               return TextureFormat::R32_TYPELESS;
+		case DXGI_FORMAT_R32_UINT:                   return TextureFormat::R32_UINT;
+		case DXGI_FORMAT_R32_SINT:                   return TextureFormat::R32_SINT;
+		case DXGI_FORMAT_R32_FLOAT:                  return TextureFormat::R32_FLOAT;
+		case DXGI_FORMAT_R32G32_UINT:                return TextureFormat::R32G32_UINT;
+		case DXGI_FORMAT_R32G32_SINT:                return TextureFormat::R32G32_SINT;
+		case DXGI_FORMAT_R32G32_FLOAT:               return TextureFormat::R32G32_FLOAT;
+		case DXGI_FORMAT_R32G32B32_UINT:             return TextureFormat::R32G32B32_UINT;
+		case DXGI_FORMAT_R32G32B32_SINT:             return TextureFormat::R32G32B32_SINT;
+		case DXGI_FORMAT_R32G32B32_FLOAT:            return TextureFormat::R32G32B32_FLOAT;
+		case DXGI_FORMAT_R32G32B32A32_UINT:          return TextureFormat::R32G32B32A32_UINT;
+		case DXGI_FORMAT_R32G32B32A32_SINT:          return TextureFormat::R32G32B32A32_SINT;
+		case DXGI_FORMAT_R32G32B32A32_FLOAT:         return TextureFormat::R32G32B32A32_FLOAT;
+		case DXGI_FORMAT_R10G10B10A2_UNORM:          return TextureFormat::R10G10B10A2_UNORM;
+		case DXGI_FORMAT_R10G10B10A2_UINT:           return TextureFormat::R10G10B10A2_UINT;
+		case DXGI_FORMAT_R11G11B10_FLOAT:            return TextureFormat::R11G11B10_FLOAT;
+		case DXGI_FORMAT_R9G9B9E5_SHAREDEXP:         return TextureFormat::R9G9B9E5_SHAREDEXP;
+		case DXGI_FORMAT_D16_UNORM:                  return TextureFormat::D16_UNORM;
+		case DXGI_FORMAT_D24_UNORM_S8_UINT:          return TextureFormat::D24_UNORM_S8_UINT;
+		case DXGI_FORMAT_D32_FLOAT:                  return TextureFormat::D32_FLOAT;
+		case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:       return TextureFormat::D32_FLOAT_S8X24_UINT;
+		case DXGI_FORMAT_R24G8_TYPELESS:             return TextureFormat::R24G8_TYPELESS;
+		case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:      return TextureFormat::R24_UNORM_X8_TYPELESS;
+		case DXGI_FORMAT_R32G8X24_TYPELESS:          return TextureFormat::R32G8X24_TYPELESS;
+		case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:   return TextureFormat::R32_FLOAT_X8X24_TYPELESS;
+		default:                                     return TextureFormat::Unknown;
+		}
+	}
+
 	inline DXGI_FORMAT ToDXGI12(TextureFormat f)
 	{
 		switch (f)

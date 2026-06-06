@@ -566,7 +566,7 @@ namespace HexEngine
 			uint32_t width, height;
 			g_pEnv->GetScreenSize(width, height);
 
-			if (x >= 0 && y >= 0 && x < width && y < height)
+			if (x >= 0 && y >= 0 && x < (int32_t)width && y < (int32_t)height)
 				return true;
 		}
 		return false;
@@ -581,8 +581,8 @@ namespace HexEngine
 			screenWidth = (int32_t)_vp.width;
 			screenHeight = (int32_t)_vp.height;
 
-			screenX -= _vp.x;
-			screenY -= _vp.y;
+			screenX -= (int32_t)_vp.x;
+			screenY -= (int32_t)_vp.y;
 		}
 
 		// begin the ray right where the camera is at (in world space)
@@ -703,9 +703,9 @@ namespace HexEngine
 		screenVec.z /= screenVec.w;		
 
 		if (width == 0)
-			width = camera->GetViewport().width;
+			width = (int32_t)camera->GetViewport().width;
 		if (height == 0)
-			height = camera->GetViewport().height;
+			height = (int32_t)camera->GetViewport().height;
 
 		x = (int32_t)((screenVec.x + 1.0f) * ((float)width * 0.5f));
 		y = (int32_t)((screenVec.y + 1.0f) * ((float)height * 0.5f));
@@ -720,8 +720,8 @@ namespace HexEngine
 
 		if (_hasCustomVP)
 		{
-			x += _vp.x;
-			y += _vp.y;
+			x += (int32_t)_vp.x;
+			y += (int32_t)_vp.y;
 		}
 
 		return true;

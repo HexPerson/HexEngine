@@ -30,7 +30,7 @@ public:
 
 	virtual void Destroy() override;
 
-	virtual bool IsEnabled() override { return _enabled; }
+	virtual bool IsEnabled() override;
 
 	virtual HRESULT D3D11CreateDevice(
 		IDXGIAdapter* pAdapter,

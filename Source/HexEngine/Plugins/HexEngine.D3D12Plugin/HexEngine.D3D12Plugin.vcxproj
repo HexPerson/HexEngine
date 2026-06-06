@@ -93,9 +93,11 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ConstantBufferD3D12.cpp" />
     <ClCompile Include="DescriptorHeapAllocator.cpp" />
     <ClCompile Include="GraphicsDeviceD3D12.cpp" />
     <ClCompile Include="GraphicsDeviceD3D12_Draws.cpp" />
+    <ClCompile Include="IndexBufferD3D12.cpp" />
     <ClCompile Include="Plugin.cpp" />
     <ClCompile Include="PsoCache.cpp" />
     <ClCompile Include="RootSignatureD3D12.cpp" />
@@ -104,6 +106,7 @@
     <ClCompile Include="Texture2DD3D12.cpp" />
     <ClCompile Include="Texture3DD3D12.cpp" />
     <ClCompile Include="TextureImporterD3D12.cpp" />
+    <ClCompile Include="VertexBufferD3D12.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ConstantBufferD3D12.hpp" />

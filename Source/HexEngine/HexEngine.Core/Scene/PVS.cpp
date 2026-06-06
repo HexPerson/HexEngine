@@ -350,7 +350,23 @@ namespace HexEngine
 
 		for (auto&& component : components)
 		{
+			if (component == nullptr)
+				continue;
+
 			auto entity = component->GetEntity();
+
+			// Defensive: skip components whose backing entity is gone or
+			// marked for deletion. Scene::GetComponents<StaticMeshComponent>
+			// returns whatever is currently in the pool; if entity teardown
+			// left a stale entry (which the IconService preview-scene
+			// teardown demonstrated could happen), the PVS rebuild would
+			// pick it up and the dangling-pointer-via-GetEntity dereference
+			// down this loop would crash. More importantly for icon
+			// rendering, the stale component's mesh would be rasterised into
+			// the next icon - producing the "prefab leaks into the next
+			// icon" symptom we saw with IconService.
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
 
 			if (entity->GetLayer() == Layer::Invisible || entity->GetLayer() == Layer::Trigger || entity->HasFlag(EntityFlags::DoNotRender))
 				continue;

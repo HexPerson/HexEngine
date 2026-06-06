@@ -23,7 +23,14 @@ namespace HexEditor
 				if (clonedChild == nullptr)
 					return false;
 
-				clonedChild->SetParent(clonedParent);
+				// preserveWorldPosition=false: the clone was just created at
+				// root with its local matching sourceChild's local relative
+				// to sourceParent. We want that local kept verbatim under
+				// clonedParent so the cloned hierarchy mirrors the source's
+				// shape exactly (same offsets, same world layout). Default
+				// true would re-derive local from a bogus root-space "world"
+				// and shift the child away from its sibling-correct slot.
+				clonedChild->SetParent(clonedParent, false);
 				if (!CloneEntityChildrenRecursive(scene, sourceChild, clonedChild))
 					return false;
 			}
@@ -91,7 +98,11 @@ namespace HexEditor
 			scrx, scry,
 			viewportSize.x, viewportSize.y))
 		{
-			_originalPosition = copyEnt->GetPosition();
+			// Anchor in WORLD space so the drag delta - which is a camera
+			// right/up vector in world space - composes correctly even when
+			// the duplicated entity is parented under something rotated or
+			// scaled. Update() converts back to local before writing.
+			_originalWorldPosition = copyEnt->GetWorldTM().Translation();
 
 			_adjustStartX = mx;
 			_adjustStartY = my;
@@ -117,11 +128,28 @@ namespace HexEditor
 		math::Vector3 upVec = math::Vector3::Transform(math::Vector3::Up, _cameraRotation);
 		math::Vector3 forwardVec = math::Vector3::Transform(math::Vector3::Forward, _cameraRotation);
 
-		math::Vector3 newPos = _originalPosition;
-		newPos += rightVec * (float)dx;
-		newPos -= upVec * (float)dy;
+		// Compose the drag in world space against the world-space anchor
+		// captured in StartGadget.
+		math::Vector3 newWorldPos = _originalWorldPosition;
+		newWorldPos += rightVec * (float)dx;
+		newWorldPos -= upVec * (float)dy;
 
-		_duplicatedEntity->ForcePosition(newPos);
+		// ForcePosition writes the LOCAL position, so convert back through
+		// the parent's inverse world transform when the duplicate is parented.
+		// Without this, dragging an entity whose parent has non-identity
+		// rotation/scale would move it along the parent's local axes instead
+		// of the camera plane the user is dragging on - and any non-zero
+		// parent translation would compound into the wrong final world
+		// position. Unparented entities have world == local, so the inverse
+		// step is a no-op there.
+		math::Vector3 newLocalPos = newWorldPos;
+		if (auto* parent = _duplicatedEntity->GetParent(); parent != nullptr)
+		{
+			const math::Matrix& parentWorldInv = parent->GetWorldTMInvert();
+			newLocalPos = math::Vector3::Transform(newWorldPos, parentWorldInv);
+		}
+
+		_duplicatedEntity->ForcePosition(newLocalPos);
 	}
 
 	void DuplicateGadget::StopGadget(GadgetAction action)

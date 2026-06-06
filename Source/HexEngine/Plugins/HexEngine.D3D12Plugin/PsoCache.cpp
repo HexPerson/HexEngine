@@ -156,6 +156,17 @@ ID3D12PipelineState* PsoCache::ResolveGraphics(const GfxPsoKey& key,
 	desc.NodeMask                        = 0;
 	desc.Flags                           = D3D12_PIPELINE_STATE_FLAG_NONE;
 
+	// Diagnostic log: emit shader pointers + key BEFORE CreateGraphicsPipelineState
+	// so the next-following debug-layer #679 warning can be correlated to a
+	// specific shader. Cross-reference with the "Shader bytecode map:" lines
+	// in ShaderSystem.cpp to identify which .hcs.
+	LOG_INFO("PSO new: vs=%p ps=%p gs=%p rtCount=%u rtFmt=[%u %u %u %u %u %u %u %u] ds=%u",
+		vsBytes, psBytes, gsBytes,
+		key.rtCount,
+		key.rtFormats[0], key.rtFormats[1], key.rtFormats[2], key.rtFormats[3],
+		key.rtFormats[4], key.rtFormats[5], key.rtFormats[6], key.rtFormats[7],
+		key.dsFormat);
+
 	Microsoft::WRL::ComPtr<ID3D12PipelineState> pso;
 	HRESULT hr = _device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pso));
 	if (FAILED(hr))

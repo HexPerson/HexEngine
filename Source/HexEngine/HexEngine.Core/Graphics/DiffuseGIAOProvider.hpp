@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ISSAOProvider.hpp"
+#include "../Input/HVar.hpp"
 
 namespace HexEngine
 {
@@ -9,6 +10,16 @@ namespace HexEngine
 	class IShader;
 	class IConstantBuffer;
 	class ITexture2D;
+
+	// Defined in DiffuseGIAOProvider.cpp. Exposed so SceneRenderer can gate
+	// the optional sibling GI-AO pass when a plugin SSAO is loaded. The
+	// underlying voxel-trace AO is wide-bilateral-blurred by DiffuseGI's
+	// RenderAoBlurPass before being sampled here, so per-voxel grid
+	// artifacts that killed earlier versions of this feature are smoothed
+	// away while geometric edges are preserved by the bilateral weights.
+	extern HEX_API HVar r_useGIAO;
+	extern HEX_API HVar r_giAOIntensity;
+	extern HEX_API HVar r_giAOContrast;
 
 	/**
 	 * @brief ISSAOProvider implementation that derives AO from the diffuse-GI
@@ -31,7 +42,10 @@ namespace HexEngine
 	 *     contact gaps) that horizon-based SSAO catches more sharply.
 	 *
 	 * Hooked into Game3DEnvironment as the fallback when no SSAO plugin
-	 * registers, and force-enabled when r_useGIAO is set.
+	 * registers, AND as the sibling pass when a plugin SSAO IS loaded and
+	 * r_useGIAO is set. The earlier per-voxel grid artifact issue is
+	 * resolved by the bilateral blur in DiffuseGI::RenderAoBlurPass which
+	 * smooths the AO across flat surfaces while preserving geometric edges.
 	 */
 	class HEX_API DiffuseGIAOProvider : public ISSAOProvider
 	{

@@ -262,6 +262,15 @@ namespace HexEngine
 
 		bool DidPvsReset() const { return _wasPvsReset; }
 
+		// Drains entities that DestroyEntity deferred into _pendingRemovals
+		// (i.e. destroyed during iteration). Normally happens automatically
+		// at the next Update; expose it so callers that need a synchronous
+		// "this scene is clean RIGHT NOW" guarantee (e.g. IconService
+		// resetting its preview scene between two icon renders in the
+		// same frame) can force the drain immediately. Safe to call when
+		// the pending set is empty.
+		void DrainPendingRemovals() { HandlePendingRemovals(); }
+
 	private:
 		struct ComponentPool
 		{

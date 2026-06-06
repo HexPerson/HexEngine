@@ -50,10 +50,38 @@ namespace HexEngine
 		CullingMode GetShadowCullMode() const;
 		void		SetShadowCullMode(CullingMode mode);
 
-		bool IsBoundToBone() const { return _boundBone != nullptr; }
+		// IsBoundToBone is the gate that the PVS / Scene render snapshot
+		// uses to switch between "cached entity transform" (unbound) and
+		// "entity * bone-offset" (bound). Non-const because it performs
+		// lazy resolution via TryResolveBoundBone() - a name was
+		// deserialized but the BoneInfo* hadn't been resolved yet.
+		bool IsBoundToBone();
 		void BindToBone(BoneInfo* boneInfo) { _boundBone = boneInfo; }
-		const math::Matrix& GetOffsetMatrix() const { return _offsetMatrix; }
-		const math::Matrix& GetOffsetMatrixTranspose() const { return _offsetMatrixTranspose; }
+		// Offset accessors RECOMPUTE the matrix from the current bone
+		// pose each call (cheap: one quaternion -> matrix + one
+		// translation multiply). The cached _offsetMatrix used to be
+		// updated inside the legacy RenderMesh path; that path is no
+		// longer in the render pipeline, so the only correct source of
+		// truth is _boundBone->Position / Rotation which the
+		// SkeletalAnimationComponent updates every animation tick.
+		const math::Matrix& GetOffsetMatrix();
+		const math::Matrix& GetOffsetMatrixTranspose();
+
+		// Bone-binding by name. `_boundBoneName` is what gets serialized;
+		// `_boundBone` (a raw BoneInfo*) is a runtime cache resolved via
+		// TryResolveBoundBone() against a SkeletalAnimationComponent found
+		// on this entity or a parent (typical: hat/weapon child entity
+		// attaches to a bone on the character parent). Setting an empty
+		// name clears the binding.
+		const std::string& GetBoundBoneName() const { return _boundBoneName; }
+		void SetBoundBoneName(const std::string& name);
+
+		/** Walks the entity's component graph (self first, then up the
+		 *  parent chain) looking for a SkeletalAnimationComponent whose
+		 *  bone map contains `_boundBoneName`. Caches the result in
+		 *  `_boundBone`. No-op if `_boundBoneName` is empty or `_boundBone`
+		 *  is already set. Returns true on a successful (re-)resolution. */
+		bool TryResolveBoundBone();
 
 		/*void				SetBlendState(BlendState state);
 		void				SetCullMode(CullingMode mode);
@@ -100,6 +128,7 @@ namespace HexEngine
 		math::Vector3 _offsetPosition;
 
 		BoneInfo* _boundBone = nullptr;
+		std::string _boundBoneName;
 		math::Matrix _offsetMatrix;
 		math::Matrix _offsetMatrixTranspose;
 

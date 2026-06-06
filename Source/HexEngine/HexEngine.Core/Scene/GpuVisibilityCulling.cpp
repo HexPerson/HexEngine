@@ -139,6 +139,12 @@ namespace HexEngine
 		if (candidateCount <= _candidateCapacity)
 			return;
 
+		// Defensive: this is also called from CullOpaqueRenderables which is
+		// already gated, but keep the check here so any future direct caller
+		// can't accidentally bypass it.
+		if (g_pEnv->_graphicsDevice->GetBackend() != GraphicsBackend::D3D11)
+			return;
+
 		const uint32_t newCapacity = std::max(candidateCount, (_candidateCapacity * 2u) + 256u);
 		DestroyBuffers();
 
@@ -211,6 +217,11 @@ namespace HexEngine
 	void GpuVisibilityCulling::EnsureHzb(uint32_t width, uint32_t height)
 	{
 		if (width == 0 || height == 0)
+			return;
+
+		// Defensive: BuildDepthPyramid is already gated, but keep the check
+		// here so a future direct caller can't accidentally bypass it.
+		if (g_pEnv->_graphicsDevice->GetBackend() != GraphicsBackend::D3D11)
 			return;
 
 		if (_hzbRead.texture != nullptr && _hzbWrite.texture != nullptr && _hzbWidth == width && _hzbHeight == height)
@@ -594,6 +605,12 @@ bool GpuVisibilityCulling::GatherCandidates(
 		if (!r_gpuCullEnable._val.b)
 			return false;
 
+		// Same backend gate as BuildDepthPyramid - all the GPU-side work
+		// below (Dispatch{Frustum,Occlusion}Pass, ReadbackVisibility,
+		// EnsureCandidateCapacity) is raw D3D11.
+		if (g_pEnv->_graphicsDevice->GetBackend() != GraphicsBackend::D3D11)
+			return false;
+
 		const bool isOpaquePass = (renderFlags & MeshRenderFlags::MeshRenderNormal) != 0 &&
 			(renderFlags & MeshRenderFlags::MeshRenderTransparency) == 0 &&
 			(renderFlags & MeshRenderFlags::MeshRenderShadowMap) == 0;
@@ -784,6 +801,16 @@ bool GpuVisibilityCulling::GatherCandidates(
 	void GpuVisibilityCulling::BuildDepthPyramid(ITexture2D* depthSource)
 	{
 		if (!_buildDepthPyramidShader || depthSource == nullptr)
+			return;
+
+		// GPU visibility culling is built on raw D3D11 (UAVs, CS dispatches,
+		// staging readback, GetDesc on ID3D11Texture2D). Under non-D3D11
+		// backends every reinterpret_cast below lands on the wrong vtable
+		// slot - the reported CreateUnorderedAccessView E_INVALIDARG comes
+		// from the D3D12 device's vtable serving a totally different method
+		// at that ordinal. Bypass the entire path until a per-backend port
+		// of the HZB / cull pipeline lands in B5.
+		if (g_pEnv->_graphicsDevice->GetBackend() != GraphicsBackend::D3D11)
 			return;
 
 		auto* depthTexture = reinterpret_cast<ID3D11Texture2D*>(depthSource->GetNativePtr());

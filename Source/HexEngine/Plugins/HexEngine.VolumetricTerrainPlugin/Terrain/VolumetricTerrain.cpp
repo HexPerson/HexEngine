@@ -346,6 +346,27 @@ namespace HexEngine::VolumetricTerrain
 
 	void VolumetricTerrain::Initialize(Entity* owner, const SdfTerrainGenerationParams& params)
 	{
+		// Volumetric terrain end-to-end (chunk generation, GPU surface build,
+		// mesh upload, custom material render) is built around raw D3D11 and
+		// has been observed to hang the GPU on D3D12 inside the terrain
+		// material shader (DRED breadcrumbs land on a DRAWINDEXEDINSTANCED
+		// right after BuildChunks). Skip the whole subsystem under non-D3D11
+		// until a per-backend port lands - the entity stays in the scene but
+		// produces no chunks or meshes.
+		if (g_pEnv->_graphicsDevice != nullptr &&
+			g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
+		{
+			static bool warned = false;
+			if (!warned)
+			{
+				LOG_WARN("VolumetricTerrain: disabled under non-D3D11 backend (terrain material shader hangs the GPU under D3D12). Per-backend port pending in B5.");
+				warned = true;
+			}
+			_chunks.clear();
+			_gpuVisualsEnabled = false;
+			return;
+		}
+
 		// Regenerate safety: tear down old runtime hierarchy first so we don't
 		// parent new chunk entities into objects pending deletion.
 		for (auto& [coord, chunk] : _chunks)
@@ -589,6 +610,26 @@ namespace HexEngine::VolumetricTerrain
 			RebuildAll(rebuildCollisionFallback);
 			LOG_INFO("VolumetricTerrain::BuildGpuVisualsOrFallback: no scene -> RebuildAll fallback took %.1fms",
 				std::chrono::duration<double, std::milli>(clk::now() - pathStart).count());
+			return;
+		}
+
+		// GPU surface build path uses raw compute dispatches with bare
+		// reinterpret_cast<ID3D11*> on GetNativeDevice / GetNativeDeviceContext.
+		// Under D3D12 those casts land on the wrong vtable AND the dispatches
+		// happen on a worker thread during scene Deserialize - both broken
+		// in distinct ways. Force the CPU fallback path until a per-backend
+		// port of the SDF marching-cubes compute pass lands in B5.
+		if (g_pEnv->_graphicsDevice != nullptr &&
+			g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
+		{
+			_gpuVisualsEnabled = false;
+			RebuildAll(rebuildCollisionFallback);
+			static bool warned = false;
+			if (!warned)
+			{
+				LOG_WARN("VolumetricTerrain: GPU surface path disabled under non-D3D11 backend; falling back to CPU marching cubes. Per-backend port pending in B5.");
+				warned = true;
+			}
 			return;
 		}
 

@@ -13,6 +13,8 @@ void Texture3DD3D12::Destroy()
 		if (_rtvIndex != UINT32_MAX) { device->RtvHeap().Free(_rtvIndex);       _rtvIndex = UINT32_MAX; }
 		if (_srvIndex != UINT32_MAX) { device->CbvSrvUavHeap().Free(_srvIndex); _srvIndex = UINT32_MAX; }
 		if (_uavIndex != UINT32_MAX) { device->CbvSrvUavHeap().Free(_uavIndex); _uavIndex = UINT32_MAX; }
+		if (_resource)
+			device->DeferredRelease(std::move(_resource));
 	}
 	_resource.Reset();
 }

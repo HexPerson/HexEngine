@@ -83,7 +83,12 @@ namespace HexEngine
 				if (clonedChild == nullptr)
 					return false;
 
-				clonedChild->SetParent(clonedParent);
+				// preserveWorldPosition=false: the clone was created at root
+				// with its local matching sourceChild's local relative to
+				// sourceParent. We want that local kept verbatim under
+				// clonedParent. Default true would recompute local from a
+				// bogus root-space world and offset the child wrongly.
+				clonedChild->SetParent(clonedParent, false);
 				if (!CloneEntityChildrenRecursive(scene, sourceChild, clonedChild))
 					return false;
 			}

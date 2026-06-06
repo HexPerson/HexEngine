@@ -57,7 +57,7 @@ namespace HexEngine
 
 	Point ContextMenu::GetContextSize()
 	{
-		return Point(_root->largestWidth, _root->items.size() * ((int32_t)Style::FontSize::Tiny + 4));
+		return Point(_root->largestWidth, (int32_t)_root->items.size() * ((int32_t)Style::FontSize::Tiny + 4));
 	}
 
 	void ContextMenu::AddItems(const std::vector<ContextItem*>& items, ContextRoot* parent)

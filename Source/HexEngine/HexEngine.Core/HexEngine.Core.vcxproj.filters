@@ -158,6 +158,7 @@
     <ClCompile Include="Utility\MemoryManager.cpp" />
     <ClCompile Include="Entity\Component\DecalComponent.cpp" />
     <ClCompile Include="FileSystem\MemoryFile.cpp" />
+    <ClCompile Include="Graphics\DiffuseGIAOProvider.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Audio\AudioManager.hpp" />
@@ -363,6 +364,10 @@
     <ClInclude Include="Utility\MemoryManager.hpp" />
     <ClInclude Include="Entity\Component\DecalComponent.hpp" />
     <ClInclude Include="FileSystem\MemoryFile.hpp" />
+    <ClInclude Include="Graphics\DiffuseGIAOProvider.hpp" />
+    <ClInclude Include="Steam\ISteamworksProvider.hpp" />
+    <ClInclude Include="Graphics\Formats.hpp" />
+    <ClInclude Include="Graphics\IStructuredBuffer.hpp" />
   </ItemGroup>
   <ItemGroup>
     <Xml Include="shader.xml" />

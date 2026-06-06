@@ -203,6 +203,19 @@ namespace HexEngine
 			return;
 		}
 
+		// AutoExposure has direct D3D11 dependencies (raw ID3D11Buffer / UAV /
+		// staging-readback / CSSetShader calls below). Under non-D3D11
+		// backends the reinterpret_cast of GetNativeDevice() to ID3D11Device*
+		// lands on the wrong vtable slot and the debug layer flags
+		// CORRUPTED_PARAMETER. Bail to a neutral 1.0 exposure until a
+		// per-backend port lands.
+		if (g_pEnv->_graphicsDevice->GetBackend() != GraphicsBackend::D3D11)
+		{
+			_smoothedExposure = 1.0f;
+			_hasPendingReadback = false;
+			return;
+		}
+
 		auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
 		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
 		if (device == nullptr || context == nullptr)

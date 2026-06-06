@@ -42,6 +42,11 @@ namespace HexEngine
 		 */
 		void Render(Scene* scene, Camera* camera, const GBuffer& gbuffer, ITexture2D* beautyTarget);
 		ITexture2D* GetResolvedTexture() const { return _giResolved; }
+		// Bilateral-blurred AO single-channel target. Null until the first
+		// frame after Create() runs the blur pass, or if the engine was built
+		// without the blur shader. DiffuseGIAOProvider reads .r from this in
+		// preference to _giResolved.a when r_useGIAO compound mode is active.
+		ITexture2D* GetBlurredAOTexture() const { return _giAoBlurred; }
 
 		/**
 		 * @brief Binds the 4 clipmaps' voxel radiance/opacity/albedo (12 SRVs) via the auto-slot
@@ -313,6 +318,10 @@ namespace HexEngine
 
 		void RenderTracePass(const GBuffer& gbuffer, ITexture2D* beautyTarget);
 		void RenderResolvePass(const GBuffer& gbuffer);
+		// Two-pass separable bilateral blur on _giResolved.a into
+		// _giAoBlurred. Runs every frame so r_useGIAO can be flipped at
+		// runtime without a setup delay; cost is two fullscreen quads.
+		void RenderAoBlurPass(const GBuffer& gbuffer);
 		void CompositeToBeauty(ITexture2D* beautyTarget);
 		void DebugDrawProbeGrid(uint32_t levelIndex) const;
 		void ApplyQualityPreset();
@@ -386,8 +395,17 @@ namespace HexEngine
 		ITexture2D* _giHalfRes = nullptr;
 		ITexture2D* _giResolved = nullptr;
 		ITexture2D* _giHistory = nullptr;
+		// AO blur targets: _giResolved.a → bilateral H pass → _giAoBlurredH →
+		// bilateral V pass → _giAoBlurred. The provider samples _giAoBlurred
+		// so r_useGIAO compound mode contributes smooth medium-scale AO
+		// instead of the per-voxel grid pattern the raw alpha shows.
+		ITexture2D* _giAoBlurredH = nullptr;
+		ITexture2D* _giAoBlurred  = nullptr;
 		IConstantBuffer* _constantBuffer = nullptr;
 		IConstantBuffer* _voxelShiftConstantBuffer = nullptr;
+		// Single float4 cbuffer feeding the blur shader: (dirX, dirY, sourceChannel, depthScale).
+		// Re-bound each pass with the appropriate direction / source channel selector.
+		IConstantBuffer* _aoBlurConstantBuffer = nullptr;
 		ID3D11Buffer* _voxelTriangleBuffer = nullptr;
 		ID3D11ShaderResourceView* _voxelTriangleSrv = nullptr;
 		uint32_t _voxelTriangleCapacity = 0;
@@ -411,6 +429,11 @@ namespace HexEngine
 		std::shared_ptr<IShader> _traceShader;
 		std::shared_ptr<IShader> _resolveShader;
 		std::shared_ptr<IShader> _fullScreenShader;
+		// Wide separable bilateral blur on the GI AO alpha (see
+		// DiffuseGIAOBlur.shader). Two passes - horizontal then vertical -
+		// share the same shader; the direction is fed via the
+		// _aoBlurConstantBuffer cbuffer above.
+		std::shared_ptr<IShader> _aoBlurShader;
 		std::shared_ptr<IShader> _voxelizeShader;
 		std::shared_ptr<IShader> _voxelizeEvalShader;
 		std::shared_ptr<IShader> _voxelCandidateShader;

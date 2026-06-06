@@ -155,9 +155,10 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
       <SubSystem>Windows</SubSystem>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(Configuration)</AdditionalLibraryDirectories>
       <AdditionalDependencies>DirectXTK.lib;HexEngine.Core.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AssemblyDebug>true</AssemblyDebug>
     </Link>
     <PostBuildEvent>
       <Command>copy "$(TargetDir)$(TargetName).exe" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\$(TargetName).exe"

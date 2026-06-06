@@ -17,6 +17,18 @@ void Texture2DD3D12::Destroy()
 		if (_dsvIndex != UINT32_MAX) { device->DsvHeap().Free(_dsvIndex);       _dsvIndex = UINT32_MAX; }
 		if (_srvIndex != UINT32_MAX) { device->CbvSrvUavHeap().Free(_srvIndex); _srvIndex = UINT32_MAX; }
 		if (_uavIndex != UINT32_MAX) { device->CbvSrvUavHeap().Free(_uavIndex); _uavIndex = UINT32_MAX; }
+
+		// Defer the underlying ID3D12Resource's release until in-flight
+		// command lists are done. Without this, a TAA / GBuffer / cloned
+		// texture destroyed mid-frame (engine resize, DLSS toggle) leaves
+		// dangling RTV / SRV bindings in the still-recording cmd list,
+		// which Close() flags as OBJECT_DELETED_WHILE_STILL_IN_USE and the
+		// GPU eventually hangs. Backbuffers skip this - the swap chain
+		// owns them and our wrapper just drops its non-owning ref.
+		if (_ownsResource && _resource)
+		{
+			device->DeferredRelease(std::move(_resource));
+		}
 	}
 	if (_ownsResource)
 		_resource.Reset();
@@ -53,6 +65,15 @@ void Texture2DD3D12::CopyTo(ITexture2D* other)
 	device->TransitionResource(this, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	device->TransitionResource(dst,  D3D12_RESOURCE_STATE_COPY_DEST);
 	cmd->CopyResource(dst->_resource.Get(), _resource.Get());
+
+	// D3D11 copies are state-neutral; the engine routinely leaves the source
+	// RT bound as the OM target across a copy and expects to keep drawing
+	// into it (e.g. TAA::Resolve does SetRenderTarget(rt) -> Draw -> rt.CopyTo
+	// -> next-frame draws still bound to rt). D3D12 requires us to transition
+	// the resource back to its bound role so the next draw doesn't fail
+	// INVALID_SUBRESOURCE_STATE.
+	device->RestoreBoundRoleIfNeeded(this);
+	device->RestoreBoundRoleIfNeeded(dst);
 }
 
 void Texture2DD3D12::ClearRenderTargetView(const math::Color& colour)

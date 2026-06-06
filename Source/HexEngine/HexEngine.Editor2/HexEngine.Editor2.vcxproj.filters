@@ -78,6 +78,9 @@
     <ClInclude Include="UI\PrefabController.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="UI\Actions\BuildDialog.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Editor.cpp">
@@ -141,6 +144,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\PrefabController.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\Actions\BuildDialog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

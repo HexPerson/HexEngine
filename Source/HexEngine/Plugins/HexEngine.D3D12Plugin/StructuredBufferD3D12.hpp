@@ -21,18 +21,7 @@ class StructuredBufferD3D12 : public HexEngine::IStructuredBuffer
 public:
 	virtual ~StructuredBufferD3D12() override { Destroy(); }
 
-	virtual void  Destroy() override
-	{
-		if (_resource && _mapped)
-		{
-			_resource->Unmap(0, nullptr);
-			_mapped = nullptr;
-		}
-		_resource.Reset();
-		_counterResource.Reset();
-		_srvIndex = UINT32_MAX;
-		_uavIndex = UINT32_MAX;
-	}
+	virtual void  Destroy() override;
 
 	virtual void* GetNativePtr() override { return _resource.Get(); }
 

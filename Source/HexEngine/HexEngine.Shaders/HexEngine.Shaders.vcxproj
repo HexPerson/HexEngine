@@ -154,6 +154,9 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="DiffuseGIAmbientOcclusion.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="DiffuseGIAOBlur.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="AtmospherePhysical.shader" />
     <HexEngineShader Include="AutoExposureLuminance.shader" />
     <HexEngineShader Include="BasicDenoise.shader" />

@@ -41,6 +41,7 @@ namespace HexEngine
 
 	private:
 		float _movementSpeed = 4.0f;
+		float _runMultiplier = 2.0f;
 		float _strafeMovementSpeed = 3.0f;
 		float _verticalMovementSpeed = 4.0f;
 		float _gravityAcceleration = 9.81f * 2.0f;

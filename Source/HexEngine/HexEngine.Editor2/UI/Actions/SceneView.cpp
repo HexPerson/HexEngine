@@ -388,9 +388,15 @@ namespace HexEditor
 
 							auto staticMesh = _dragAndDropEntity->AddComponent<HexEngine::StaticMeshComponent>();
 							auto rigidBody = _dragAndDropEntity->AddComponent<HexEngine::RigidBody>();
-							auto mesh = HexEngine::Mesh::Create(draggingAsset->path);
+							auto mesh = HexEngine::Mesh::Create(draggingAsset->path);							
 
 							staticMesh->SetMesh(mesh);
+
+							if (mesh->HasAnimations())
+							{
+								auto skeleton = _dragAndDropEntity->AddComponent<HexEngine::SkeletalAnimationComponent>();
+								skeleton->SetAnimationData(dynamic_pointer_cast<HexEngine::AnimatedMesh>(mesh), mesh->GetAnimationData());
+							}
 
 							if (mesh != nullptr)
 							{

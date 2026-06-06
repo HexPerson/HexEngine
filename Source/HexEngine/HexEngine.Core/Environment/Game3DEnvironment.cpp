@@ -224,6 +224,7 @@ namespace HexEngine
 			// in-engine DiffuseGIAOProvider without raising the modal
 			// "Critical Error" dialog that LOG_CRIT pops up.
 			env->_ssaoProvider = (ISSAOProvider*)env->_pluginSystem->TryCreateInterface(ISSAOProvider::InterfaceName);
+			const bool hadPluginSsao = env->_ssaoProvider != nullptr;
 			if (env->_ssaoProvider == nullptr)
 			{
 				// The provider pulls AO from the DiffuseGI volume's voxel cone
@@ -234,6 +235,21 @@ namespace HexEngine
 				env->_ssaoProvider = new DiffuseGIAOProvider(nullptr);
 			}
 			env->_ssaoProvider->Create();
+
+			// When a plugin SSAO is loaded, also stand up a sibling
+			// DiffuseGIAOProvider for the r_useGIAO compound path. The
+			// sibling samples DiffuseGI's bilateral-blurred AO target, so
+			// it adds smooth medium-scale ambient occlusion on top of the
+			// plugin's fine screen-space crevices without the per-voxel
+			// grid artifacts that killed the unblurred version of this
+			// feature. Skipped when no plugin SSAO is present - in that
+			// configuration _ssaoProvider IS already a DiffuseGIAOProvider
+			// and stacking would double-multiply the same signal.
+			if (hadPluginSsao)
+			{
+				env->_giAOProvider = new DiffuseGIAOProvider(nullptr);
+				env->_giAOProvider->Create();
+			}
 		}
 
 		env->_debugGui = new DebugGUI;
@@ -372,6 +388,14 @@ namespace HexEngine
 
 		_ssaoProvider->Destroy();
 		SAFE_DELETE(_ssaoProvider);
+
+		// Sibling r_useGIAO provider is only allocated when a plugin SSAO
+		// was loaded at Create() time, so null in the fallback config.
+		if (_giAOProvider != nullptr)
+		{
+			_giAOProvider->Destroy();
+			SAFE_DELETE(_giAOProvider);
+		}
 
 		// Steamworks may have been declined at Create() (no Steam running etc)
 		// so the provider pointer is null on the no-steam path. Only release

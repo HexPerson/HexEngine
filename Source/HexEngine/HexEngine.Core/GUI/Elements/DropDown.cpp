@@ -27,6 +27,7 @@ namespace HexEngine
 	{
 		SetValue(item->name);
 		_context->Disable();
+		_canvas.Redraw();
 	}
 
 	void DropDown::Render(GuiRenderer* renderer, uint32_t w, uint32_t h)

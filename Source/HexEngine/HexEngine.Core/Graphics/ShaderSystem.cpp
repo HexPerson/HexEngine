@@ -1,6 +1,7 @@
 
 
 #include "ShaderSystem.hpp"
+#include "MaterialGraphCompiler.hpp"
 #include "../HexEngine.hpp"
 
 namespace HexEngine
@@ -18,6 +19,54 @@ namespace HexEngine
 		case GraphicsBackend::D3D11:
 		default:                     return ShaderBlobBackend::DXBC_SM5;
 		}
+	}
+
+	bool ShaderSystem::IsCachedShaderUsable(const fs::path& absolutePath)
+	{
+		if (!fs::exists(absolutePath))
+			return false;
+
+		DiskFile file(absolutePath, std::ios::in | std::ios::binary);
+		if (!file.Open())
+			return false;
+
+		ShaderFileFormat header = {};
+		if (file.GetSize() < sizeof(header))
+			return false;
+		file.Read(&header, sizeof(header));
+
+		const bool isV1 = header._version == ShaderFileFormat::SHADER_FILE_VERSION;
+		const bool isV2 = header._version == ShaderFileFormat::SHADER_FILE_VERSION_V2;
+		if (!isV1 && !isV2)
+			return false;
+
+		const ShaderBlobBackend wantBackend = ExpectedShaderBlobForDevice(g_pEnv ? g_pEnv->_graphicsDevice : nullptr);
+
+		// v1 implicitly holds DXBC; it can ONLY be used under D3D11. Anything
+		// else needs a rebake. This is the case that fires today when an
+		// editor session previously D3D11-baked a material-graph cache and
+		// the engine now boots under D3D12.
+		if (isV1)
+			return wantBackend == ShaderBlobBackend::DXBC_SM5;
+
+		// v2 carries a per-stage backend bitmap. The file is usable iff every
+		// present stage advertises the wanted backend. Reading the tail is
+		// cheap (sizeof = 4 * NumShaderStages = 24 bytes).
+		ShaderFileFormatV2Tail tail = {};
+		if (file.GetSize() < sizeof(header) + sizeof(tail))
+			return false;
+		file.Read(&tail, sizeof(tail));
+
+		const uint32_t wantBit = 1u << (uint32_t)wantBackend;
+		for (uint32_t stage = 0; stage < (uint32_t)ShaderStage::NumShaderStages; ++stage)
+		{
+			const bool stagePresent = HEX_HASFLAG(header._flags, (ShaderFileFlags)HEX_BITSET((uint8_t)stage));
+			if (!stagePresent)
+				continue;
+			if ((tail._backendBitmap[stage] & wantBit) == 0)
+				return false;
+		}
+		return true;
 	}
 
 	ShaderSystem::ShaderSystem()
@@ -43,7 +92,15 @@ namespace HexEngine
 
 		if (!shader)
 		{
-			LOG_CRIT("Failed to parse shader!");
+			// Non-fatal: ParseShaderInternal already logged the specific reason
+			// (version mismatch, corrupt header, stage size = 0, etc.). Callers
+			// like MaterialLoader::ParseJson treat a null IShader as "rebake
+			// needed" and drive the recompile path themselves; popping a
+			// LOG_CRIT dialog here would block that flow and looks like a
+			// fatal crash to the user even when the runtime is about to
+			// recover.
+			LOG_WARN("ShaderSystem: failed to parse shader '%s' - returning null so caller can recover.",
+				absolutePath.filename().generic_u8string().c_str());
 			return nullptr;
 		}
 
@@ -63,6 +120,23 @@ namespace HexEngine
 		}
 
 		_loadedShaders[relativePath] = shader;
+
+		// Bytecode-pointer log keyed on the source's relative path - the
+		// in-memory ParseShaderInternal overload has no path context, so we
+		// emit the map here at the LoadResourceFromMemory boundary where
+		// the path is available.
+		{
+			auto* vs = shader->_stages[(uint32_t)ShaderStage::VertexShader];
+			auto* ps = shader->_stages[(uint32_t)ShaderStage::PixelShader];
+			auto* gs = shader->_stages[(uint32_t)ShaderStage::GeometryShader];
+			auto* cs = shader->_stages[(uint32_t)ShaderStage::ComputeShader];
+			LOG_INFO("Shader bytecode map: '%s' vs=%p ps=%p gs=%p cs=%p",
+				relativePath.filename().generic_u8string().c_str(),
+				vs ? vs->GetNativePtr() : nullptr,
+				ps ? ps->GetNativePtr() : nullptr,
+				gs ? gs->GetNativePtr() : nullptr,
+				cs ? cs->GetNativePtr() : nullptr);
+		}
 
 		return shader;
 	}
@@ -243,14 +317,28 @@ namespace HexEngine
 
 		const ShaderBlobBackend wantBackend = ExpectedShaderBlobForDevice(g_pEnv->_graphicsDevice);
 
-		// V1 implicit-DXBC: refuse to load under a non-D3D11 backend rather
-		// than feed DXBC to a DXIL-expecting plugin. Phase B re-bakes shaders
-		// in v2 to remove this restriction.
+		// V1 implicit-DXBC blob under a non-D3D11 backend. The MaterialLoader's
+		// auto-recompile path only fires for materials that still carry their
+		// graph data inline - many in-tree projects don't, so we can't rely on
+		// it. Instead, attempt to rebake right here from the sibling .shader
+		// source that MaterialGraphCompiler persists next to every generated
+		// .hcs. If that succeeds we reopen and reparse the file under the
+		// new dialect; if not, we fall through and return null.
 		if (isV1 && wantBackend != ShaderBlobBackend::DXBC_SM5)
 		{
-			LOG_CRIT("Shader '%s' is a v1 (DXBC-only) blob but active backend expects backendId=%u. Re-bake into v2 with the matching dialect.",
+			LOG_INFO("Shader '%s' is a v1 cache; rebaking from sibling source for backendId=%u.",
 				absolutePath.filename().generic_u8string().c_str(),
 				(uint32_t)wantBackend);
+			file.Close();
+			if (MaterialGraphCompiler::TryRebakeCachedShader(absolutePath))
+			{
+				// Recurse once - the .hcs on disk is now v2 with the wanted
+				// dialect. Bounded recursion: the rebake either produces a
+				// matching v2 or fails (we only recurse on success).
+				return ParseShaderInternal(absolutePath);
+			}
+			LOG_WARN("Shader '%s' is a v1 (DXBC-only) blob and could not be rebaked. Returning null.",
+				absolutePath.filename().generic_u8string().c_str());
 			return nullptr;
 		}
 
@@ -341,24 +429,80 @@ namespace HexEngine
 		}
 		shader->_requirements = shaderFile._requirements;
 
+		// Log the native bytecode pointers alongside the shader's source
+		// path. The D3D12 plugin's draw-trace ring records vsBytecode /
+		// psBytecode pointers on every Draw; pairing those raw addresses
+		// with the human-readable shader name in the log lets us identify
+		// the failing shader when DRED dumps the trace on a GPU hang.
+		{
+			auto* vs = shader->_stages[(uint32_t)ShaderStage::VertexShader];
+			auto* ps = shader->_stages[(uint32_t)ShaderStage::PixelShader];
+			auto* gs = shader->_stages[(uint32_t)ShaderStage::GeometryShader];
+			auto* cs = shader->_stages[(uint32_t)ShaderStage::ComputeShader];
+			LOG_INFO("Shader bytecode map: '%s' vs=%p ps=%p gs=%p cs=%p",
+				absolutePath.filename().generic_u8string().c_str(),
+				vs ? vs->GetNativePtr() : nullptr,
+				ps ? ps->GetNativePtr() : nullptr,
+				gs ? gs->GetNativePtr() : nullptr,
+				cs ? cs->GetNativePtr() : nullptr);
+		}
+
 		return shader;
 	}
 
 	std::shared_ptr<IShader> ShaderSystem::ParseShaderInternal(const std::vector<uint8_t>& data)
 	{
-		uint8_t* p = (uint8_t*)data.data();
+		const uint8_t* base = data.data();
+		const uint8_t* end  = data.data() + data.size();
+		const uint8_t* p    = base;
 
-		// Read the header first
-		//
-		ShaderFileFormat* shaderFile = (ShaderFileFormat*)p;
+		if (p + sizeof(ShaderFileFormat) > end)
+		{
+			LOG_CRIT("Shader memory blob (%zu bytes) is too small for header", data.size());
+			return nullptr;
+		}
+
+		const ShaderFileFormat* shaderFile = reinterpret_cast<const ShaderFileFormat*>(p);
 		p += sizeof(ShaderFileFormat);
 
-		// check the shader version, it must match our current version
-		if (shaderFile->_version != ShaderFileFormat::SHADER_FILE_VERSION)
-		{
-			LOG_CRIT("Shader was built using an outdated version. Current = %d, Shader = %d",
-				ShaderFileFormat::SHADER_FILE_VERSION, shaderFile->_version);
+		// Mirror the file-path variant: accept both v1 (legacy single-DXBC) and
+		// v2 (multi-backend per-stage). v2 carries the per-stage
+		// backend bitmap in a tail struct, followed by a stage body which is a
+		// sequence of (ShaderBlobHeader + payload) entries. v1's stage body is
+		// the raw bytecode for the stage.
+		const bool isV1 = shaderFile->_version == ShaderFileFormat::SHADER_FILE_VERSION;
+		const bool isV2 = shaderFile->_version == ShaderFileFormat::SHADER_FILE_VERSION_V2;
 
+		if (!isV1 && !isV2)
+		{
+			LOG_CRIT("Shader memory blob is an unsupported version. Loader supports v%d/v%d, blob is v%d",
+				ShaderFileFormat::SHADER_FILE_VERSION,
+				ShaderFileFormat::SHADER_FILE_VERSION_V2,
+				shaderFile->_version);
+			return nullptr;
+		}
+
+		ShaderFileFormatV2Tail v2Tail = {};
+		if (isV2)
+		{
+			if (p + sizeof(ShaderFileFormatV2Tail) > end)
+			{
+				LOG_CRIT("Shader memory blob is v2 but too small for V2 tail");
+				return nullptr;
+			}
+			std::memcpy(&v2Tail, p, sizeof(v2Tail));
+			p += sizeof(v2Tail);
+		}
+
+		const ShaderBlobBackend wantBackend = ExpectedShaderBlobForDevice(g_pEnv->_graphicsDevice);
+
+		// v1 blob under a non-D3D11 backend: the rebake path is path-based
+		// (sibling .shader source), which we don't have for an in-memory load.
+		// Refuse cleanly so the caller can decide what to do.
+		if (isV1 && wantBackend != ShaderBlobBackend::DXBC_SM5)
+		{
+			LOG_WARN("Shader memory blob is v1 (DXBC-only) under non-D3D11 backend (backendId=%u); cannot rebake from memory. Returning null.",
+				(uint32_t)wantBackend);
 			return nullptr;
 		}
 
@@ -376,12 +520,52 @@ namespace HexEngine
 					return nullptr;
 				}
 
-				// Read the vertex shader data
-				//
-				shaderBlobs[stage].resize(shaderFile->_shaderSizes[stage]);
+				if (p + shaderFile->_shaderSizes[stage] > end)
+				{
+					LOG_CRIT("Shader memory blob stage %d body (%d bytes) overruns blob end", stage, shaderFile->_shaderSizes[stage]);
+					return nullptr;
+				}
 
-				memcpy(shaderBlobs[stage].data(), p, shaderFile->_shaderSizes[stage]);
-				p += shaderFile->_shaderSizes[stage];
+				if (isV2)
+				{
+					// Scan the stage body for an entry whose backendId matches.
+					const uint8_t* stageBody    = p;
+					const uint32_t stageBodyLen = shaderFile->_shaderSizes[stage];
+					uint32_t cursor = 0;
+					bool found = false;
+					while (cursor + sizeof(ShaderBlobHeader) <= stageBodyLen)
+					{
+						const ShaderBlobHeader* hdr = reinterpret_cast<const ShaderBlobHeader*>(stageBody + cursor);
+						cursor += sizeof(ShaderBlobHeader);
+						if (cursor + hdr->_blobBytes > stageBodyLen)
+						{
+							LOG_CRIT("Shader memory blob stage %d v2 entry overruns stage body", stage);
+							return nullptr;
+						}
+						if (hdr->_backendId == (uint32_t)wantBackend)
+						{
+							shaderBlobs[stage].assign(stageBody + cursor, stageBody + cursor + hdr->_blobBytes);
+							found = true;
+							break;
+						}
+						cursor += hdr->_blobBytes;
+					}
+					p += stageBodyLen;
+
+					if (!found)
+					{
+						LOG_CRIT("Shader memory blob stage %d has no v2 blob for backendId=%u (bitmap=0x%x)",
+							stage, (uint32_t)wantBackend, v2Tail._backendBitmap[stage]);
+						return nullptr;
+					}
+				}
+				else
+				{
+					// v1: raw stage bytecode.
+					shaderBlobs[stage].resize(shaderFile->_shaderSizes[stage]);
+					std::memcpy(shaderBlobs[stage].data(), p, shaderFile->_shaderSizes[stage]);
+					p += shaderFile->_shaderSizes[stage];
+				}
 
 				switch (static_cast<ShaderStage>(stage))
 				{
@@ -413,6 +597,24 @@ namespace HexEngine
 			shader->_inputLayout = nullptr;
 		}
 		shader->_requirements = shaderFile->_requirements;
+
+		// Bytecode-pointer log for hang diagnostics (matches the file-path
+		// variant above). This overload is the in-memory load path used by
+		// shaders coming from packaged data, hot reload, and runtime-built
+		// material-graph rebakes. No source path is available here, so we
+		// log "<memory:%zu bytes>" as the identifier.
+		{
+			auto* vs = shader->_stages[(uint32_t)ShaderStage::VertexShader];
+			auto* ps = shader->_stages[(uint32_t)ShaderStage::PixelShader];
+			auto* gs = shader->_stages[(uint32_t)ShaderStage::GeometryShader];
+			auto* cs = shader->_stages[(uint32_t)ShaderStage::ComputeShader];
+			LOG_INFO("Shader bytecode map: '<memory:%zu bytes>' vs=%p ps=%p gs=%p cs=%p",
+				data.size(),
+				vs ? vs->GetNativePtr() : nullptr,
+				ps ? ps->GetNativePtr() : nullptr,
+				gs ? gs->GetNativePtr() : nullptr,
+				cs ? cs->GetNativePtr() : nullptr);
+		}
 
 		return shader;
 	}

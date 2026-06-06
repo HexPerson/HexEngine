@@ -3,6 +3,28 @@
 #include "GraphicsDeviceD3D12.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
 
+void StructuredBufferD3D12::Destroy()
+{
+	if (_resource && _mapped)
+	{
+		_resource->Unmap(0, nullptr);
+		_mapped = nullptr;
+	}
+	if (HexEngine::g_pEnv && HexEngine::g_pEnv->_graphicsDevice)
+	{
+		auto* device = static_cast<GraphicsDeviceD3D12*>(HexEngine::g_pEnv->_graphicsDevice);
+		// Same deferred-release rationale as Texture2DD3D12: in-flight cmd
+		// lists may have UAV bindings or barriers on this resource and
+		// dropping the ComPtr now would trip OBJECT_DELETED_WHILE_STILL_IN_USE.
+		if (_resource)         device->DeferredRelease(std::move(_resource));
+		if (_counterResource)  device->DeferredRelease(std::move(_counterResource));
+	}
+	_resource.Reset();
+	_counterResource.Reset();
+	_srvIndex = UINT32_MAX;
+	_uavIndex = UINT32_MAX;
+}
+
 bool StructuredBufferD3D12::SetData(const void* data, uint32_t byteSize, uint32_t dstByteOffset)
 {
 	if (_resource == nullptr || data == nullptr || byteSize == 0)

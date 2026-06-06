@@ -3,6 +3,7 @@
 #include "IShader.hpp"
 #include "ITexture2D.hpp"
 #include "RenderStructs.hpp"
+#include "ShaderSystem.hpp"
 #include "../HexEngine.hpp"
 
 #include <algorithm>
@@ -1045,6 +1046,40 @@ namespace HexEngine
 		}
 	}
 
+	bool MaterialGraphCompiler::TryRebakeCachedShader(const fs::path& cachedHcsPath)
+	{
+		// Sibling .shader source is written next to the .hcs by CompileToMaterial
+		// (see line ~1187 above). If it's missing we can't rebake.
+		fs::path sourcePath = cachedHcsPath;
+		sourcePath.replace_extension(".shader");
+		if (!fs::exists(sourcePath))
+		{
+			LOG_WARN("MaterialGraphCompiler::TryRebakeCachedShader: sibling source '%s' not found, can't rebake.",
+				sourcePath.string().c_str());
+			return false;
+		}
+
+		const fs::path includeDir = ResolveShaderIncludeDirectory();
+		if (includeDir.empty())
+		{
+			LOG_WARN("MaterialGraphCompiler::TryRebakeCachedShader: could not resolve shader include directory; rebake aborted.");
+			return false;
+		}
+
+		std::vector<std::string> errors;
+		if (!CompileGeneratedShader(sourcePath, cachedHcsPath, includeDir, errors))
+		{
+			for (const auto& e : errors)
+				LOG_WARN("MaterialGraphCompiler::TryRebakeCachedShader: %s", e.c_str());
+			return false;
+		}
+
+		LOG_INFO("MaterialGraphCompiler::TryRebakeCachedShader: rebaked '%s' from '%s' for current backend.",
+			cachedHcsPath.filename().string().c_str(),
+			sourcePath.filename().string().c_str());
+		return true;
+	}
+
 	MaterialGraphCompileResult MaterialGraphCompiler::CompileToMaterial(
 		const MaterialGraph& graph,
 		Material& material,
@@ -1198,7 +1233,15 @@ namespace HexEngine
 		shaderFile.Flush();
 		shaderFile.Close();
 
-		if (!fs::exists(generatedShaderOutput))
+		// Recompile if the cache is absent OR if it exists but can't satisfy
+		// the active backend (e.g. a v1 DXBC-only blob baked under D3D11 that
+		// the engine now needs to load under D3D12). Without this second
+		// branch the engine LoadResource'd the v1 file directly and crashed
+		// with "Re-bake into v2 with the matching dialect."
+		const bool needsBake = !fs::exists(generatedShaderOutput)
+		                    || !ShaderSystem::IsCachedShaderUsable(generatedShaderOutput);
+
+		if (needsBake)
 		{
 			// includeDir / includeSearchPaths were resolved above for the hash;
 			// reuse them here instead of re-walking the candidate list.

@@ -1,11 +1,13 @@
 
 
 #include "StaticMeshComponent.hpp"
+#include "SkeletalAnimationComponent.hpp"
 #include "../Entity.hpp"
 #include "../../Scene/Scene.hpp"
 #include "../../HexEngine.hpp"
 #include "../../Terrain/TerrainGenerator.hpp"
 #include "../../Graphics/MaterialLoader.hpp"
+#include "../../GUI/Elements/LineEdit.hpp"
 
 namespace HexEngine
 {
@@ -20,9 +22,14 @@ namespace HexEngine
 	{
 		_uvScale = clone->_uvScale;
 		_includeInGIWhenHidden = clone->_includeInGIWhenHidden;
+		// Carry the bound bone name across the clone so prefab-spawned
+		// instances can re-resolve against the spawned entity's skeletal
+		// component. _boundBone itself stays null - it's a runtime cache
+		// resolved lazily via TryResolveBoundBone().
+		_boundBoneName = clone->_boundBoneName;
+		_offsetPosition = clone->_offsetPosition;
 
 		SetMesh(clone->GetMesh());
-
 		SetMaterial(clone->GetMaterial());
 	}
 
@@ -86,7 +93,14 @@ namespace HexEngine
 		// Update the per-object constant buffer
 		//
 		math::Matrix offsetMatrix;
-		
+
+		// Lazy-resolve the bound bone if a name was deserialized but the
+		// SkeletalAnimationComponent wasn't ready at deserialize time.
+		// No-op when _boundBone is already cached or _boundBoneName is
+		// empty.
+		if (_boundBone == nullptr && !_boundBoneName.empty())
+			TryResolveBoundBone();
+
 		if (_boundBone)
 		{
 			_offsetMatrix = math::Matrix::CreateFromQuaternion(_boundBone->Rotation) * math::Matrix::CreateTranslation(_boundBone->Position);//_boundBone->FinalTransformation.Invert().Transpose();//* math::Matrix::CreateTranslation(_boundBone->Position);
@@ -203,6 +217,90 @@ namespace HexEngine
 		return _mesh;
 	}
 
+	void StaticMeshComponent::SetBoundBoneName(const std::string& name)
+	{
+		_boundBoneName = name;
+		// Invalidate the cached pointer - the next render tick will
+		// re-resolve. Clearing here (rather than resolving immediately)
+		// keeps SetBoundBoneName usable from any thread/context without
+		// needing the skeletal component to already be wired up.
+		_boundBone = nullptr;
+
+		if (!_boundBoneName.empty())
+			TryResolveBoundBone();
+	}
+
+	bool StaticMeshComponent::IsBoundToBone()
+	{
+		// PVS / Scene call this every frame to decide whether to apply
+		// the bone offset to the entity's world matrix. Run the lazy
+		// resolve here so deserialized / prefab-cloned components that
+		// only have _boundBoneName (no live BoneInfo*) get hooked up on
+		// first use.
+		if (_boundBone == nullptr && !_boundBoneName.empty())
+			TryResolveBoundBone();
+		return _boundBone != nullptr;
+	}
+
+	const math::Matrix& StaticMeshComponent::GetOffsetMatrix()
+	{
+		// Refresh from the current bone pose on every read. The
+		// SkeletalAnimationComponent updates _boundBone->Position /
+		// Rotation per animation tick; we can't cache here because
+		// nothing else writes back to _offsetMatrix any more.
+		if (_boundBone == nullptr && !_boundBoneName.empty())
+			TryResolveBoundBone();
+
+		if (_boundBone != nullptr)
+		{
+			_offsetMatrix =
+				math::Matrix::CreateFromQuaternion(_boundBone->Rotation) *
+				math::Matrix::CreateTranslation(_boundBone->Position + _offsetPosition);
+			_offsetMatrixTranspose = _offsetMatrix.Transpose();
+		}
+		return _offsetMatrix;
+	}
+
+	const math::Matrix& StaticMeshComponent::GetOffsetMatrixTranspose()
+	{
+		// Cheap path: just delegate to GetOffsetMatrix() which keeps
+		// _offsetMatrixTranspose in sync alongside _offsetMatrix.
+		GetOffsetMatrix();
+		return _offsetMatrixTranspose;
+	}
+
+	bool StaticMeshComponent::TryResolveBoundBone()
+	{
+		if (_boundBone != nullptr)
+			return true;
+		if (_boundBoneName.empty())
+			return false;
+
+		// Try the owning entity first (a character with its own body mesh
+		// rigged to its own skeleton), then walk up parents (typical
+		// attachment case: hat / weapon child whose StaticMeshComponent
+		// binds to a bone on the parent character entity).
+		Entity* e = GetEntity();
+		while (e != nullptr)
+		{
+			if (auto* skel = e->GetComponent<SkeletalAnimationComponent>(); skel != nullptr)
+			{
+				// SkeletalAnimationComponent auto-binds its AnimationData
+				// from the entity's StaticMeshComponent on first Update /
+				// CreateWidget. Try once here in case render happens
+				// before Update has had a chance.
+				skel->TryAutoBindFromEntityMesh();
+				if (auto* bi = skel->GetBoneInfoByName(_boundBoneName); bi != nullptr)
+				{
+					_boundBone = bi;
+					return true;
+				}
+			}
+			e = e->GetParent();
+		}
+		return false;
+	}
+
 	void StaticMeshComponent::Serialize(json& data, JsonFile* file)
 	{
 		auto mesh = GetMesh();		
@@ -232,6 +330,7 @@ namespace HexEngine
 		SERIALIZE_VALUE(_includeInGIWhenHidden);
 		SERIALIZE_VALUE(_shadowCullingMode);
 		SERIALIZE_VALUE(_offsetPosition);
+		SERIALIZE_VALUE(_boundBoneName);
 	}
 
 	void StaticMeshComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
@@ -342,6 +441,12 @@ namespace HexEngine
 		DESERIALIZE_VALUE(_includeInGIWhenHidden);
 		DESERIALIZE_VALUE(_shadowCullingMode);
 		DESERIALIZE_VALUE(_offsetPosition);
+		DESERIALIZE_VALUE(_boundBoneName);
+		// _boundBone (the cached BoneInfo*) stays null until the owning
+		// entity (or a parent) has its SkeletalAnimationComponent and
+		// AnimatedMesh resolved. TryResolveBoundBone() does the
+		// lookup lazily - safest place is on the first render/update tick
+		// after deserialize, called via the operator[] in the render path.
 	}
 
 	const math::Vector2& StaticMeshComponent::GetUVScale() const
@@ -494,6 +599,27 @@ namespace HexEngine
 		uvScale->SetPrefabOverrideBinding(GetComponentName(), "/_uvScale");
 		offetPos->SetPrefabOverrideBinding(GetComponentName(), "/_offsetPosition");
 
+		// Bound bone name. On commit we hand the new name to
+		// SetBoundBoneName which walks self + parents for a
+		// SkeletalAnimationComponent, looks the bone up by name, and
+		// caches the BoneInfo* pointer used by the render path. Empty
+		// string clears the binding. Validation is best-effort: if no
+		// matching bone is found the name is still saved (so a later
+		// attachment to a freshly-skinned parent will resolve on its own)
+		// but we LOG_WARN so the user knows the look-up failed right now.
+		LineEdit* boneEdit = new LineEdit(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Bound Bone");
+		boneEdit->SetValue(std::wstring(_boundBoneName.begin(), _boundBoneName.end()));
+		boneEdit->SetDoesCallbackWaitForReturn(true);
+		boneEdit->SetOnInputFn([this](LineEdit*, const std::wstring& text)
+		{
+			std::string narrow = ws2s(text);
+			SetBoundBoneName(narrow);
+			if (!narrow.empty() && _boundBone == nullptr)
+			{
+				LOG_WARN("StaticMeshComponent: no bone named '%s' found on this entity or its parent chain. The binding will retry each frame in case the skeletal component arrives later.", narrow.c_str());
+			}
+		});
+		boneEdit->SetPrefabOverrideBinding(GetComponentName(), "/_boundBoneName");
 
 		return true;
 	}

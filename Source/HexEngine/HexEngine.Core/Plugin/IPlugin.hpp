@@ -16,7 +16,7 @@ namespace HexEngine
 
 #define DECLARE_PLUGIN_INTERFACE(name, version) static inline const char* InterfaceName = #name#version;
 
-	class IPluginInterface
+	class HEX_API IPluginInterface
 	{
 	public:
 		virtual bool Create() = 0;

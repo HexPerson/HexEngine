@@ -206,7 +206,7 @@ namespace HexEngine
 
 		if (std::isalnum(ch) || ch == ' ' || ch == '^' || ch == '_' || ch == '.' || ch == '-' || ch == '+')
 		{
-			_input.push_back(ch);
+			_input.push_back((char)ch);
 
 			_canvas.Redraw();
 		}		

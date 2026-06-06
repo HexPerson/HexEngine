@@ -5,6 +5,7 @@
 // implementations; no new types.
 
 #include "GraphicsDeviceD3D12.hpp"
+#include "FormatsD3D12.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
 
 namespace
@@ -198,14 +199,39 @@ bool GraphicsDeviceD3D12::FlushGraphics()
 	}
 	else
 	{
-		key.rtCount = _pending.rtCount;
-		for (uint32_t i = 0; i < _pending.rtCount; ++i)
+		// Compact: only feed non-null RTs into the PSO key. Engine code can
+		// leave nulls in _pending.rtvs between valid entries (legacy sparse
+		// binding semantics from the D3D11 shim), but D3D12 PSO descriptors
+		// don't accept DXGI_FORMAT_UNKNOWN in the middle of NumRenderTargets
+		// - it triggers RENDERTARGETVIEW_NOT_SET and the resulting PSO
+		// produces a GPU hang on first use.
+		key.rtCount = 0;
+		for (uint32_t i = 0; i < 8 && key.rtCount < _pending.rtCount; ++i)
 		{
 			auto* rt = static_cast<Texture2DD3D12*>(_pending.rtvs[i]);
-			key.rtFormats[i] = rt ? rt->_format : DXGI_FORMAT_UNKNOWN;
+			if (rt == nullptr) continue;
+			key.rtFormats[key.rtCount++] = rt->_format;
+		}
+		if (key.rtCount == 0)
+		{
+			// All entries were null - fall back to the backbuffer format so
+			// the PSO at least has a valid single RT, matching the
+			// rtCount==0 branch above.
+			auto& bb = _activeWindow->backbuffers[_activeWindow->currentFrameIndex];
+			key.rtCount      = 1;
+			key.rtFormats[0] = bb._format;
 		}
 	}
-	key.dsFormat    = _pending.dsv ? (DXGI_FORMAT)_pending.dsv->GetFormat() : DXGI_FORMAT_UNKNOWN;
+	// Depth textures are typically created as R32_TYPELESS / R24G8_TYPELESS so
+	// the same resource can be sampled as an SRV and bound as a DSV. The
+	// PSO's DSVFormat field needs the TYPED depth view format
+	// (D32_FLOAT / D24_UNORM_S8_UINT) - otherwise the GPU sees a typeless
+	// format and the debug layer flags
+	// DEPTH_STENCIL_FORMAT_MISMATCH_PIPELINE_STATE. GetDsvFormatD3D12 does
+	// this mapping and is a no-op for already-typed depth formats.
+	key.dsFormat = _pending.dsv
+		? HexEngine::GetDsvFormatD3D12((DXGI_FORMAT)_pending.dsv->GetFormat())
+		: DXGI_FORMAT_UNKNOWN;
 	key.sampleCount = 1;
 
 	auto* inputElems  = _pending.inputLayout ? _pending.inputLayout->_elements.data() : nullptr;
@@ -239,23 +265,27 @@ bool GraphicsDeviceD3D12::FlushGraphics()
 	_cmdList->SetDescriptorHeaps(1, heaps);
 
 	const UINT incr = _shaderVisibleHeap.GetDescriptorSize();
-	auto bindTable = [&](uint32_t rootParam, uint32_t count, const D3D12_CPU_DESCRIPTOR_HANDLE* src)
+	auto bindTable = [&](uint32_t rootParam, uint32_t count, const D3D12_CPU_DESCRIPTOR_HANDLE* src, D3D12_CPU_DESCRIPTOR_HANDLE nullDesc)
 	{
 		D3D12_CPU_DESCRIPTOR_HANDLE cpu; D3D12_GPU_DESCRIPTOR_HANDLE gpu;
 		if (!_shaderVisibleHeap.Allocate(count, cpu, gpu)) return;
 		for (uint32_t i = 0; i < count; ++i)
 		{
-			if (src[i].ptr != 0)
-			{
-				D3D12_CPU_DESCRIPTOR_HANDLE dst = cpu; dst.ptr += i * incr;
-				_device->CopyDescriptorsSimple(1, dst, src[i], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-			}
+			D3D12_CPU_DESCRIPTOR_HANDLE dst = cpu; dst.ptr += i * incr;
+			// Always write a descriptor - either the bound resource's CPU
+			// descriptor or the pre-created null one. The shader-visible
+			// heap is NOT zero-initialised between frames; leaving stale
+			// bits from prior draws in slots the current shader's root
+			// signature reserves causes undefined GPU behaviour (TDR has
+			// been observed for trivial shaders like UIBasic).
+			const D3D12_CPU_DESCRIPTOR_HANDLE source = (src[i].ptr != 0) ? src[i] : nullDesc;
+			_device->CopyDescriptorsSimple(1, dst, source, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 		}
 		_cmdList->SetGraphicsRootDescriptorTable(rootParam, gpu);
 	};
-	bindTable(RootSignatureD3D12::kCbvRootParam, RootSignatureD3D12::kCbvCount, _bindings.cbvs);
-	bindTable(RootSignatureD3D12::kSrvRootParam, RootSignatureD3D12::kSrvCount, _bindings.srvs);
-	bindTable(RootSignatureD3D12::kUavRootParam, RootSignatureD3D12::kUavCount, _bindings.uavs);
+	bindTable(RootSignatureD3D12::kCbvRootParam, RootSignatureD3D12::kCbvCount, _bindings.cbvs, _nullCbv);
+	bindTable(RootSignatureD3D12::kSrvRootParam, RootSignatureD3D12::kSrvCount, _bindings.srvs, _nullSrv);
+	bindTable(RootSignatureD3D12::kUavRootParam, RootSignatureD3D12::kUavCount, _bindings.uavs, _nullUav);
 
 	D3D12_PRIMITIVE_TOPOLOGY topo = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
 	switch (_pending.topology)
@@ -303,23 +333,23 @@ bool GraphicsDeviceD3D12::FlushCompute()
 	_cmdList->SetDescriptorHeaps(1, heaps);
 
 	const UINT incr = _shaderVisibleHeap.GetDescriptorSize();
-	auto bindTable = [&](uint32_t rootParam, uint32_t count, const D3D12_CPU_DESCRIPTOR_HANDLE* src)
+	auto bindTable = [&](uint32_t rootParam, uint32_t count, const D3D12_CPU_DESCRIPTOR_HANDLE* src, D3D12_CPU_DESCRIPTOR_HANDLE nullDesc)
 	{
 		D3D12_CPU_DESCRIPTOR_HANDLE cpu; D3D12_GPU_DESCRIPTOR_HANDLE gpu;
 		if (!_shaderVisibleHeap.Allocate(count, cpu, gpu)) return;
 		for (uint32_t i = 0; i < count; ++i)
 		{
-			if (src[i].ptr != 0)
-			{
-				D3D12_CPU_DESCRIPTOR_HANDLE dst = cpu; dst.ptr += i * incr;
-				_device->CopyDescriptorsSimple(1, dst, src[i], D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-			}
+			D3D12_CPU_DESCRIPTOR_HANDLE dst = cpu; dst.ptr += i * incr;
+			// See FlushGraphics: unbound slots must still carry a valid
+			// (null) descriptor or the GPU reads stale bits and may TDR.
+			const D3D12_CPU_DESCRIPTOR_HANDLE source = (src[i].ptr != 0) ? src[i] : nullDesc;
+			_device->CopyDescriptorsSimple(1, dst, source, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 		}
 		_cmdList->SetComputeRootDescriptorTable(rootParam, gpu);
 	};
-	bindTable(RootSignatureD3D12::kCbvRootParam, RootSignatureD3D12::kCbvCount, _bindings.cbvs);
-	bindTable(RootSignatureD3D12::kSrvRootParam, RootSignatureD3D12::kSrvCount, _bindings.srvs);
-	bindTable(RootSignatureD3D12::kUavRootParam, RootSignatureD3D12::kUavCount, _bindings.uavs);
+	bindTable(RootSignatureD3D12::kCbvRootParam, RootSignatureD3D12::kCbvCount, _bindings.cbvs, _nullCbv);
+	bindTable(RootSignatureD3D12::kSrvRootParam, RootSignatureD3D12::kSrvCount, _bindings.srvs, _nullSrv);
+	bindTable(RootSignatureD3D12::kUavRootParam, RootSignatureD3D12::kUavCount, _bindings.uavs, _nullUav);
 	return true;
 }
 
@@ -327,23 +357,66 @@ bool GraphicsDeviceD3D12::FlushCompute()
 
 void GraphicsDeviceD3D12::DrawIndexed(uint32_t numIndices)
 {
-	if (!FlushGraphics()) return;
+	// Mirror D3D11 plugin: implicitly bind the per-object constant buffer at
+	// slot b1 (VS + PS) for every draw. The engine writes per-object state
+	// (worldMatrix, material flags, entityId, etc.) into this CB right before
+	// calling Draw, but never explicitly binds it - it relies on the device
+	// to wire it up. Without this, shaders see stale or uninitialised b1.
+	if (auto* cb = _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer])
+	{
+		SetConstantBufferVS(1, cb);
+		SetConstantBufferPS(1, cb);
+	}
+	if (!FlushGraphics()) { UnbindAllPixelShaderResources(); return; }
+	// Record into the draw trace ring just before submission so a GPU hang
+	// preserves the identity of the failing draw.
+	{
+		const uint64_t idx = _drawTraceCount++;
+		auto& slot = _drawTrace[idx % kDrawTraceCapacity];
+		slot.drawIndex     = idx;
+		slot.vsBytecode    = _pending.vs ? (void*)_pending.vs->_bytecode.data() : nullptr;
+		slot.psBytecode    = _pending.ps ? (void*)_pending.ps->_bytecode.data() : nullptr;
+		slot.indexCount    = numIndices;
+		slot.instanceCount = 1;
+		slot.rtCount       = _pending.rtCount;
+		slot.dsBound       = _pending.dsv ? 1 : 0;
+	}
 	_cmdList->DrawIndexedInstanced(numIndices, 1, 0, 0, 0);
+	// Mirror the D3D11 plugin: every Draw* clears pixel-shader resource
+	// bindings and resets the auto-bind cursor to 0. Engine code (GuiRenderer,
+	// SceneRenderer, etc.) relies on this implicit reset so the next batch's
+	// parameterless SetTexture2D(tex) lands at slot 0, where shaders expect
+	// their primary sampled texture. Without it the cursor grows unbounded
+	// and textures end up bound to slots the shaders never read.
+	UnbindAllPixelShaderResources();
 }
 void GraphicsDeviceD3D12::DrawIndexedInstanced(uint32_t numIndices, uint32_t instanceCount)
 {
-	if (!FlushGraphics()) return;
+	if (auto* cb = _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer])
+	{
+		SetConstantBufferVS(1, cb);
+		SetConstantBufferPS(1, cb);
+	}
+	if (!FlushGraphics()) { UnbindAllPixelShaderResources(); return; }
 	_cmdList->DrawIndexedInstanced(numIndices, instanceCount, 0, 0, 0);
+	UnbindAllPixelShaderResources();
 }
 void GraphicsDeviceD3D12::DrawIndexedInstancedIndirect(void*, uint32_t)
 {
 	static bool warned = false;
 	if (!warned) { LOG_WARN("D3D12: DrawIndexedInstancedIndirect not implemented yet (needs ID3D12CommandSignature)"); warned = true; }
+	UnbindAllPixelShaderResources();
 }
 void GraphicsDeviceD3D12::Draw(uint32_t vertexCount, int32_t startVertexLocation)
 {
-	if (!FlushGraphics()) return;
+	if (auto* cb = _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer])
+	{
+		SetConstantBufferVS(1, cb);
+		SetConstantBufferPS(1, cb);
+	}
+	if (!FlushGraphics()) { UnbindAllPixelShaderResources(); return; }
 	_cmdList->DrawInstanced(vertexCount, 1, (UINT)startVertexLocation, 0);
+	UnbindAllPixelShaderResources();
 }
 void GraphicsDeviceD3D12::DrawInstancedIndirect(HexEngine::IStructuredBuffer*, uint32_t)
 {

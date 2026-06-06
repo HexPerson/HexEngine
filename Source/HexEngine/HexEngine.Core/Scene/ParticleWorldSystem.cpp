@@ -195,6 +195,15 @@ namespace HexEngine
 		if (_simulateShader == nullptr || _spriteMesh == nullptr || _defaultSpriteMaterial == nullptr)
 			return;
 
+		// EnsureBuffers / RunSimulationCompute / ClearGpuBuffers all do raw
+		// D3D11 (ID3D11Buffer / UAV / CS dispatch). Under non-D3D11 backends
+		// the reinterpret_cast of GetNativeDevice() to ID3D11Device* lands on
+		// ID3D12Device's GetPrivateData and the debug layer flags
+		// CORRUPTED_PARAMETER2. Bypass particle simulation until a per-
+		// backend port lands in B5.
+		if (g_pEnv->_graphicsDevice->GetBackend() != GraphicsBackend::D3D11)
+			return;
+
 		float dt = g_pEnv && g_pEnv->_timeManager ? (float)g_pEnv->_timeManager->_frameTime : _frameTime;
 		dt = std::clamp(dt, 0.0f, r_particleDeltaClamp._val.f32);
 
@@ -334,7 +343,7 @@ namespace HexEngine
 
 					if (runtimeState.needsReset && emitter.prewarm)
 					{
-						spawnCount += (uint32_t)std::min<float>(emitterMaxParticles, emitter.emission.rate * emitter.emission.prewarmTime);
+						spawnCount += (uint32_t)std::min<float>((float)emitterMaxParticles, emitter.emission.rate * emitter.emission.prewarmTime);
 					}
 				}
 

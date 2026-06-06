@@ -334,6 +334,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="FileSystem\ProjectFile.hpp" />
     <ClInclude Include="Graphics\IDenoiserProvider.hpp" />
     <ClInclude Include="Graphics\IStreamlineProvider.hpp" />
+    <ClInclude Include="Graphics\IStructuredBuffer.hpp" />
     <ClInclude Include="Graphics\MeshLoader.hpp" />
     <ClInclude Include="Graphics\TextureLoader.hpp" />
     <ClInclude Include="GUI\Elements\Canvas.hpp" />

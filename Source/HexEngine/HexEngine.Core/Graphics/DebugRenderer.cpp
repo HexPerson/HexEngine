@@ -350,7 +350,7 @@ namespace HexEngine
 				SAFE_DELETE(_lineVBuffer);
 
 				_lineVBuffer = g_pEnv->_graphicsDevice->CreateVertexBuffer(
-					sizeof(DebugVertex) * vtx.size(),
+					sizeof(DebugVertex) * (int32_t)vtx.size(),
 					sizeof(DebugVertex),
 					D3D11_USAGE_DYNAMIC,
 					D3D11_CPU_ACCESS_WRITE);
@@ -360,7 +360,7 @@ namespace HexEngine
 				SAFE_DELETE(_lineIBuffer);
 
 				_lineIBuffer = g_pEnv->_graphicsDevice->CreateIndexBuffer(
-					idx.size() * sizeof(MeshIndexFormat),
+					(int32_t)idx.size() * sizeof(MeshIndexFormat),
 					sizeof(MeshIndexFormat),
 					D3D11_USAGE_DYNAMIC,
 					D3D11_CPU_ACCESS_WRITE);

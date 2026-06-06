@@ -27,6 +27,21 @@ namespace HexEngine
 
 		void ReloadAllShaders();
 
+		/**
+		 * @brief Returns false if a cached .hcs at `absolutePath` cannot
+		 *        satisfy the active backend - either because it doesn't
+		 *        exist, fails to open, has a corrupt header, or holds blob
+		 *        data in a dialect the backend can't consume.
+		 *
+		 * Used by callers that persist their compiled shaders to disk and
+		 * want to know whether to recompile or whether the on-disk file
+		 * is still usable (e.g. the material-graph compiler skipping
+		 * recompilation when the cache is fresh). v1 (DXBC-only) caches
+		 * become unusable when the engine boots under D3D12 - this lets
+		 * the cache be invalidated and rebaked transparently.
+		 */
+		static bool IsCachedShaderUsable(const fs::path& absolutePath);
+
 	private:
 		std::shared_ptr<IShader> ParseShaderInternal(const fs::path& absolutePath);
 		std::shared_ptr<IShader> ParseShaderInternal(const std::vector<uint8_t>& data);

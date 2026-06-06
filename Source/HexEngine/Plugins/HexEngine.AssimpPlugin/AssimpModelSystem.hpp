@@ -51,6 +51,12 @@ struct AssimpImportOptions
 	bool mergeChildMeshesByMaterial = false;
 	bool renameFiles = true;
 	bool deleteOriginalsAfterImport = true;
+	// When true, after importing the primary FBX the importer scans the
+	// parent folder for sibling .fbx files and appends their animations
+	// onto the primary's AnimationData before the node-hierarchy hook-up
+	// step. Designed for Mixamo/RPM/ActorCore-style character packs where
+	// a single skinned mesh ships alongside many animation-only FBX files.
+	bool mergeSiblingAnimations = false;
 	float importScale = 1.0f;
 	std::vector<std::wstring> textureSearchPaths;
 	std::wstring replaceTextureExtension;
@@ -85,6 +91,22 @@ private:
 	void							ProcessMaterial(std::shared_ptr<HexEngine::Mesh> mesh, const aiScene* scene, aiMaterial* material, HexEngine::FileSystem* fileSystem);
 	std::shared_ptr<HexEngine::ITexture2D>		LoadTexture(std::shared_ptr<HexEngine::Mesh>& mesh, const aiTextureType type, const aiScene* scene, const aiMaterial* material, HexEngine::FileSystem* fileSystem);
 	void							ProcessAnimations(std::shared_ptr<HexEngine::Model>& model, const aiScene* scene);
+	// Append every animation in `src->mAnimations` onto `dst->_animations`.
+	// If `nameOverride` is non-empty AND the Assimp-reported name is empty or
+	// matches a known sentinel ("mixamo.com", "Take 001", "Armature|"), use
+	// the override instead. Used to merge animations from sibling FBX files
+	// where each file conceptually IS a single clip but the embedded name
+	// is generic.
+	void							AppendAnimationsFromScene(HexEngine::AnimationData* dst, const aiScene* src, const std::string& nameOverride);
+	// Walk `node` recursively and, for every scene node that doesn't yet have
+	// a matching channel in `anim`, append a static channel with empty key
+	// arrays. ProcessNode then hooks the synthetic channel into the
+	// animation's `_rootNode` / `children` hierarchy alongside the real
+	// channels. Without this, FBX files where some bones have no keyframes
+	// (e.g. a spine-only Mixamo idle) leave gaps in the channel hierarchy
+	// and the runtime's GlobalTransformation walk drops the missing bones'
+	// bind-pose contribution, collapsing their children to origin.
+	void							EnsureChannelsCoverSceneTree(HexEngine::Animation& anim, const aiNode* node);
 	HexEngine::AnimChannel* FindAnimChannelFromNodeName(std::shared_ptr<HexEngine::Model>& model, const std::string& nodeName);
 	bool OnBrowseFolderPath(HexEngine::LineEdit* edit);
 

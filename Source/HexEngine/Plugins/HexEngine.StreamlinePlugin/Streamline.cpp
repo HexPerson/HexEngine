@@ -3,22 +3,49 @@
 
 #include <sl_security.h>
 
+namespace HexEngine { extern HEX_API HVar r_renderer; bool ShouldActivateBackend(GraphicsBackend, int); }
+
 void LogCallback(sl::LogType type, const char* msg)
 {
 	LOG_DEBUG(msg);
 }
 
-bool Streamline::Create()
+bool Streamline::IsEnabled()
 {
-	// Backend gate: this plugin's D3D11CreateDevice / CreateDXGIFactory1
-	// interception hooks (used by GraphicsDeviceD3D11) are D3D11-specific.
-	// Streamline supports D3D12 natively in the SDK but the integration entry
-	// points here aren't wired for it yet. Refuse to come up under any other
-	// backend so we don't try to interpose D3D11 calls in a D3D12 process.
+	// Backend re-check on each query. Create() runs at Game3DEnvironment line
+	// 189 - BEFORE CreateGraphicsSystem at line 217 - so _graphicsDevice is
+	// null at the time Create() looks at it and the original gate falls
+	// through. By the time IsEnabled() is called from SceneRenderer the
+	// device is up, so this is the actual chokepoint.
+	if (!_enabled)
+		return false;
 	if (HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->_graphicsDevice != nullptr &&
 		HexEngine::g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
 	{
-		LOG_WARN("HexEngine.StreamlinePlugin: disabled (active backend is not D3D11; per-backend port pending)");
+		static bool warnedNonD3D11Backend = false;
+		if (!warnedNonD3D11Backend)
+		{
+			LOG_WARN("HexEngine.StreamlinePlugin: disabled (active backend is not D3D11; per-backend port pending)");
+			warnedNonD3D11Backend = true;
+		}
+		return false;
+	}
+	return true;
+}
+
+bool Streamline::Create()
+{
+	// Backend gate via the r_renderer cvar rather than _graphicsDevice (which
+	// hasn't been created yet at this point - Game3DEnvironment runs
+	// Streamline::Create at line 189, CreateGraphicsSystem at line 217). The
+	// device-pointer check we had before was a no-op for exactly this reason
+	// and `slInit` ran unconditionally, installing the interposer hooks. The
+	// interposer then intercepted D3D12 calls (GetPrivateData with bad args)
+	// and eventually caused DXGI_ERROR_DEVICE_REMOVED.
+	if (!HexEngine::ShouldActivateBackend(HexEngine::GraphicsBackend::D3D11, HexEngine::r_renderer._val.i32))
+	{
+		LOG_WARN("HexEngine.StreamlinePlugin: r_renderer=%d selected a non-D3D11 backend; standing down (per-backend port pending).",
+			HexEngine::r_renderer._val.i32);
 		return false;
 	}
 
@@ -63,7 +90,7 @@ bool Streamline::Create()
 	sl::Preferences pref;
 #if defined(_DEBUG)
 	pref.showConsole = true;
-	pref.logLevel = sl::LogLevel::eVerbose;
+	pref.logLevel = sl::LogLevel::eDefault;
 #else
 	pref.showConsole = false;
 	pref.logLevel = sl::LogLevel::eDefault;

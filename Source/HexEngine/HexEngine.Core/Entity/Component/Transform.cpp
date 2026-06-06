@@ -410,7 +410,7 @@ namespace HexEngine
 			g_pEnv->_chunkManager->OnEntityPositionChanged(entity, _previous.position, _current.position);
 		}		
 
-		entity->ClearTransformCache();
+		entity->ClearTransformCache(false);
 
 		_cached.position = _current.position;
 	}

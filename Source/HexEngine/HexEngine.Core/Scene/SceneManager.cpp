@@ -160,10 +160,27 @@ namespace HexEngine
 	std::shared_ptr<IResource> SceneManager::LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		if (absolutePath.extension() == ".hprefab")
-		{			
+		{
+			// Defensive fallback for .hprefab requests that somehow end up
+			// in this loader (PrefabLoader is the canonical handler, but we
+			// stay registered as a backstop). Delegate to PrefabLoader so
+			// the caller gets a proper Prefab resource back.
+			//
+			// The previous behaviour here was to call
+			// _prefabLoader->LoadPrefab(GetCurrentScene(), absolutePath)
+			// which DUMPED prefab entities into whatever scene happened to
+			// be active right now. That side-effect was correct for game-
+			// scene loads but catastrophic for IconService: while it's
+			// rendering it sets the icon scene as active, so ANY async
+			// .hprefab resource resolution (asset explorer enumeration,
+			// dependency walk, etc.) would inject the prefab's entities
+			// into the icon scene mid-render. Result: the next icon (e.g.
+			// a mesh thumbnail) shows the previously-rendered prefab
+			// merged in. Returning a normal Prefab resource leaves
+			// instantiation to whoever explicitly asks for it.
 			if (g_pEnv != nullptr && g_pEnv->_prefabLoader != nullptr)
 			{
-				g_pEnv->_prefabLoader->LoadPrefab(GetCurrentScene(), absolutePath);
+				return g_pEnv->_prefabLoader->LoadResourceFromFile(absolutePath, fileSystem, options);
 			}
 			return nullptr;
 		}

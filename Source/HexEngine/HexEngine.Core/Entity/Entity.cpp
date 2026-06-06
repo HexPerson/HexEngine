@@ -880,6 +880,11 @@ namespace HexEngine
 				}
 			}
 		}
+
+		for (auto& child : _children)
+		{
+			child->ClearTransformCache(notify);
+		}
 	}
 
 	void Entity::OnMessage(Message* message, MessageListener* sender)

@@ -44,6 +44,15 @@ namespace HexEngine
 	{
 		Mesh::UpdateConstantBuffer(entity, localTM, material, instanceId, isTransparencyPhase);
 
+		// The icon-preview pipeline (IconService::Render -> SceneRenderer ->
+		// Scene::RenderEntities) walks meshes WITHOUT an owning Entity in
+		// order to rasterise a thumbnail straight from disk. `entity` is
+		// nullptr in that path - skipping the SkeletalAnimationComponent
+		// lookup means the thumbnail renders in T-pose (no bone transforms
+		// uploaded), which is the desired behaviour for an asset preview.
+		if (entity == nullptr)
+			return;
+
 		if (auto skeletalMeshComp = entity->GetComponent<SkeletalAnimationComponent>(); skeletalMeshComp != nullptr)
 		{
 			// Write the per-object constant buffer
@@ -130,6 +139,20 @@ namespace HexEngine
 	void AnimatedMesh::AddVertices(const std::vector<AnimatedMeshVertex>& vertex)
 	{
 		_vertices.insert(_vertices.end(), vertex.begin(), vertex.end());
+
+		// Mirror the bulk add into the base Mesh::_vertices container so
+		// downstream consumers that operate on the un-skinned topology -
+		// notably the triangle-mesh physics collider in RigidBody, but also
+		// any code calling mesh->GetVertices() expecting the base
+		// std::vector<MeshVertex> - see the geometry. AddVertex (singular)
+		// does this via Mesh::AddVertex; AddVertices (bulk) used to skip
+		// it, which left the base container empty for every loaded
+		// AnimatedMesh and made triangle-collider attach throw
+		// "vertices=0 indices=N" the moment the mesh was dragged into a
+		// scene. AnimatedMeshVertex publicly derives from MeshVertex, so
+		// the range-insert here slices each entry cleanly (bone IDs /
+		// weights drop off, all base fields preserved).
+		Mesh::AddVertices(std::vector<MeshVertex>(vertex.begin(), vertex.end()));
 
 		for (auto& vert : vertex)
 		{

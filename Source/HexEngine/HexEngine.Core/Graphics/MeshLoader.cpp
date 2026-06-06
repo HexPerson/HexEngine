@@ -161,6 +161,17 @@ namespace HexEngine
 						}
 					}
 				}
+
+				// Per-animation root-coordinate-frame transform. Mixamo-style
+				// sibling-merged FBX content needs this to be the SOURCE
+				// scene's root transform, not the primary's, otherwise the
+				// runtime applies the wrong axis flip / unit scale and the
+				// mesh renders 90-degrees rotated or sheared. Writer always
+				// emits the matrix. Reader expects it; pre-this-format-bump
+				// .hmesh files must be re-imported (only animated meshes
+				// affected - static .hmesh files use the unanimated branch
+				// above which is unchanged).
+				anim._globalInverseTransform = file.Read<math::Matrix>();
 			}
 
 			animData->_globalInverseTransform = file.Read<math::Matrix>();
@@ -320,27 +331,27 @@ namespace HexEngine
 
 				file.WriteString(anim._rootNode ? anim._rootNode->nodeName : "");
 
-				file.Write<uint32_t>(anim.channels.size());
+				file.Write<uint32_t>((uint32_t)anim.channels.size());
 
 				for (auto& chan : anim.channels)
 				{
 					file.WriteString(chan.nodeName);
 
-					file.Write<uint32_t>(chan.positionKeys.size());
+					file.Write<uint32_t>((uint32_t)chan.positionKeys.size());
 					for (auto& pk : chan.positionKeys)
 					{
 						file.Write<float>(pk.first);
 						file.Write<math::Vector3>(pk.second);
 					}
 
-					file.Write<uint32_t>(chan.rotationKeys.size());
+					file.Write<uint32_t>((uint32_t)chan.rotationKeys.size());
 					for (auto& pk : chan.rotationKeys)
 					{
 						file.Write<float>(pk.first);
 						file.Write<math::Quaternion>(pk.second);
 					}
 
-					file.Write<uint32_t>(chan.scaleKeys.size());
+					file.Write<uint32_t>((uint32_t)chan.scaleKeys.size());
 					for (auto& pk : chan.scaleKeys)
 					{
 						file.Write<float>(pk.first);
@@ -349,7 +360,7 @@ namespace HexEngine
 
 					file.Write<math::Matrix>(chan.nodeTransform);
 
-					file.Write<uint32_t>(chan.children.size());
+					file.Write<uint32_t>((uint32_t)chan.children.size());
 				}
 
 				for (auto& chan : anim.channels)
@@ -359,11 +370,19 @@ namespace HexEngine
 						file.WriteString(child->nodeName);
 					}
 				}
+
+				// Per-animation root-coordinate-frame transform. Captured
+				// from the SOURCE FBX scene (primary OR sibling) when the
+				// animation was imported; sibling-merged clips need this to
+				// be different from the primary's so the runtime applies
+				// the right axis flip / unit scale at playback. See the
+				// matching Read site above.
+				file.Write<math::Matrix>(anim._globalInverseTransform);
 			}
 
 			file.Write<math::Matrix>(animData->_globalInverseTransform);
 
-			file.Write<uint32_t>(animatedMesh->GetBoneMap().size());
+			file.Write<uint32_t>((uint32_t)animatedMesh->GetBoneMap().size());
 
 			for (auto& bone : animatedMesh->GetBoneMap())
 			{

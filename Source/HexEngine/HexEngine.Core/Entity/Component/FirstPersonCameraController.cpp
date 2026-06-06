@@ -74,6 +74,16 @@ namespace HexEngine
 			controller->RemoveInputFlag(MoveFlag::MoveDown);
 	}
 
+	HEX_COMMAND(MoveRun)
+	{
+		auto controller = reinterpret_cast<FirstPersonCameraController*>(param);
+
+		if (pressed)
+			controller->AddInputFlag(MoveFlag::MoveSprint);
+		else
+			controller->RemoveInputFlag(MoveFlag::MoveSprint);
+	}
+
 	FirstPersonCameraController::FirstPersonCameraController(Entity* entity) :
 		UpdateComponent(entity)
 	{
@@ -88,6 +98,7 @@ namespace HexEngine
 		g_pEnv->_commandManager->CreateBind('D', "MoveRight", this);
 		g_pEnv->_commandManager->CreateBind(VK_SPACE, "MoveUp", this);
 		g_pEnv->_commandManager->CreateBind(VK_CONTROL, "MoveDown", this);
+		g_pEnv->_commandManager->CreateBind(VK_SHIFT, "MoveRun", this);
 	}
 
 	FirstPersonCameraController::FirstPersonCameraController(Entity* entity, FirstPersonCameraController* clone) :
@@ -104,6 +115,7 @@ namespace HexEngine
 		g_pEnv->_commandManager->CreateBind('D', "MoveRight", this);
 		g_pEnv->_commandManager->CreateBind(VK_SPACE, "MoveUp", this);
 		g_pEnv->_commandManager->CreateBind(VK_CONTROL, "MoveDown", this);
+		g_pEnv->_commandManager->CreateBind(VK_SHIFT, "MoveRun", this);
 	}
 
 	FirstPersonCameraController::~FirstPersonCameraController()
@@ -146,7 +158,12 @@ namespace HexEngine
 		math::Vector3 planarVelocity;
 
 		if ((_flags & MoveFlag::MoveForwards) != 0)
-			planarVelocity += planarForward * _movementSpeed;
+		{
+			bool run = (_flags & MoveFlag::MoveSprint) != 0;
+			const float moveSpeed = run ? _movementSpeed * _runMultiplier : _movementSpeed;
+
+			planarVelocity += planarForward * moveSpeed;
+		}
 
 		if ((_flags & MoveFlag::MoveBackwards) != 0)
 			planarVelocity -= planarForward * _movementSpeed;

@@ -136,6 +136,16 @@ namespace HexEngine
 		AnimChannel* _rootNode = nullptr;
 		std::vector<AnimChannel> channels;
 		//std::unordered_map<std::string, AnimChannel*> nodeToAnimMap;
+
+		// Per-animation coordinate-conversion root transform. Sibling-merged
+		// animation FBX files (Mixamo / RPM / ActorCore) frequently each
+		// carry their OWN root-node transform that bakes in an axis flip or
+		// unit scale - applying the primary's instead skews every bone,
+		// producing a mesh that looks roughly right but is rotated 90 degrees
+		// or stretched. ReadNodeHierarchy prefers this per-animation matrix
+		// when non-identity, falling back to AnimationData's value (which is
+		// what pre-this-change .hmesh files implicitly used).
+		math::Matrix _globalInverseTransform = math::Matrix::Identity;
 	};
 
 	struct AnimationData

@@ -153,7 +153,17 @@ namespace HexEngine
 		class ClassRegistry* _classRegistry = nullptr;
 		class MaterialLoader* _materialLoader = nullptr;
 		class PluginSystem* _pluginSystem = nullptr;
+		// Primary AO provider: a plugin's ISSAOProvider when one loads,
+		// otherwise the in-engine DiffuseGIAOProvider as a fallback. Runs
+		// every frame.
 		class ISSAOProvider* _ssaoProvider = nullptr;
+		// Optional sibling GI-AO pass enabled by r_useGIAO. Only populated
+		// when a plugin SSAO loaded (otherwise _ssaoProvider IS a
+		// DiffuseGIAOProvider and stacking would double-multiply the same
+		// signal). Reads DiffuseGI's bilateral-blurred AO target rather
+		// than the raw voxel-trace alpha so the per-voxel grid pattern that
+		// killed earlier attempts at this feature is smoothed away.
+		class DiffuseGIAOProvider* _giAOProvider = nullptr;
 		class ICompressionProvider* _compressionProvider = nullptr;
 		
 		class AssetPackageManager* _assetPackageManager = nullptr;

@@ -9,17 +9,17 @@
 
 namespace HexEngine
 {
-	HVar r_useGIAO(
+	HEX_API HVar r_useGIAO(
 		"r_useGIAO",
-		"Force GI-derived AO via DiffuseGIAOProvider even if a plugin SSAO is loaded",
+		"When a plugin SSAO is loaded, also run DiffuseGIAOProvider as a second pre-lighting AO pass using the bilateral-blurred voxel-trace occlusion. Catches medium-scale ambient occlusion (overhangs, room interiors) the screen-space SSAO can't reach. No-op when no plugin SSAO is loaded (DiffuseGIAOProvider is already the primary AO in that configuration).",
 		false, false, true);
-	HVar r_giAOIntensity(
+	HEX_API HVar r_giAOIntensity(
 		"r_giAOIntensity",
-		"Strength of GI-derived AO modulation [0..1] (1 = full beauty * AO)",
+		"Strength of GI-derived AO modulation [0..1] (1 = full beauty * AO in fully-occluded pixels)",
 		0.85f, 0.0f, 1.0f);
-	HVar r_giAOContrast(
+	HEX_API HVar r_giAOContrast(
 		"r_giAOContrast",
-		"Power applied to AO before modulation - higher = more contrasty crevices",
+		"Power applied to blurred occlusion before modulation. Higher = more contrasty crevices; with the bilateral blur in place the raw voxel grid is gone so the original 1.4 default is usable again.",
 		1.4f, 0.25f, 4.0f);
 
 	DiffuseGIAOProvider::DiffuseGIAOProvider(DiffuseGI* gi) :
@@ -87,11 +87,14 @@ namespace HexEngine
 				return;
 		}
 
-		// The GI must have run already this frame and produced a valid resolved
-		// texture with AO in its alpha. If GI was disabled / not yet warm we
-		// just skip - leaves beauty unmodified.
-		ITexture2D* giResolved = _gi->GetResolvedTexture();
-		if (giResolved == nullptr)
+		// The GI must have run already this frame and produced a valid
+		// bilateral-blurred AO target. If GI was disabled / not yet warm we
+		// just skip - leaves beauty unmodified. The raw _giResolved.a is no
+		// longer sampled directly because its per-voxel grid pattern is
+		// visible at screen resolution; DiffuseGI::RenderAoBlurPass wide-
+		// blurs it into _giAoBlurred each frame for us to read here.
+		ITexture2D* giAo = _gi->GetBlurredAOTexture();
+		if (giAo == nullptr)
 			return;
 
 		// Pack the artist-facing dials into the cbuffer (params.x = intensity,
@@ -116,10 +119,11 @@ namespace HexEngine
 		graphics->SetCullingMode(CullingMode::NoCulling);
 
 		// Bind GBuffer at t0..t4 (the shader uses GBUFFER_DIFFUSE + GBUFFER_NORMAL
-		// to identify sky pixels and skip them) and the GI resolved RT at t5
-		// (AO is in its .a channel). Without the sky-pixel skip the GI alpha
-		// occasionally drifts above 0 on sky pixels and the multiplicative
-		// blend silently fades the sky toward black.
+		// to identify sky pixels and skip them) and the blurred AO single-
+		// channel RT at t5. Without the sky-pixel skip the GI alpha used to
+		// occasionally drift above 0 on sky pixels and the multiplicative
+		// blend silently faded the sky toward black; the blur shader now
+		// also writes 1.0 on sky pixels for belt-and-braces.
 		if (g_pEnv->_sceneRenderer != nullptr)
 		{
 			if (const auto* gbuffer = g_pEnv->_sceneRenderer->GetGBuffer(); gbuffer != nullptr)
@@ -131,7 +135,7 @@ namespace HexEngine
 				graphics->SetTexture2D(4, gbuffer->GetVelocity());
 			}
 		}
-		graphics->SetTexture2D(5, giResolved);
+		graphics->SetTexture2D(5, giAo);
 
 		// The GuiRenderer's fullscreen path is the right tool here - same
 		// surface that Tonemap / ColourGrade / etc use. It draws a unit

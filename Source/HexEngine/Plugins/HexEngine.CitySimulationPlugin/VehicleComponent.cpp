@@ -64,6 +64,8 @@ void VehicleComponent::Deserialize(json& data, HexEngine::JsonFile* file, uint32
 	_baseMeshPath = baseMeshPath.empty() ? fs::path() : fs::path(baseMeshPath);
 	_glassMeshPath = glassMeshPath.empty() ? fs::path() : fs::path(glassMeshPath);
 	_trunkMeshPath = trunkMeshPath.empty() ? fs::path() : fs::path(trunkMeshPath);
+
+	RebuildGeneratedEntities();
 }
 
 bool VehicleComponent::CreateWidget(HexEngine::ComponentWidget* widget)

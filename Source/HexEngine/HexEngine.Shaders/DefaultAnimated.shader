@@ -318,27 +318,65 @@
 
 		//float4 specular = float4(0.0f, 0.0f, 0.0f, 0.0f);
 		float4 albedo = g_albedoMap.Sample(g_textureSampler, input.texcoord) * input.colour;
-		
-		
-		float metalness = 0.0f;
-		float roughness = 0.0f;
 
-		// Get the roughness
-		if ((g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS) != 0)
-		{
-			roughness = lerp(1.0f, g_roughnessMap.Sample(g_textureSampler, input.texcoord).r, g_material.roughnessFactor);
-		}		
+		// Initialise from the material factors so a material with no PBR
+		// textures bound but artist-set metallic/roughness sliders still works.
+		// (Previously these were init to 0, silently dropping the slider
+		// values whenever the material lacked maps - matte-plastic look on
+		// every animated mesh missing a roughness/metallic texture.) Mirrors
+		// DefaultPixel.shader exactly so static + animated meshes shade
+		// identically given the same material.
+		float metalness = g_material.metallicFactor;
+		float roughness = g_material.roughnessFactor;
 
-		// Get metallicness
-		if (g_objectFlags & OBJECT_FLAGS_HAS_METALLIC)
+		// Packed PBR formats. ORM (R=AO, G=roughness, B=metallic) and RMA
+		// (R=roughness, G=AO, B=metallic) are the two glTF-style conventions
+		// the engine supports. The static path branches on these flags - the
+		// animated path used to skip them entirely, so any ORM/RMA material
+		// applied to a skinned mesh sampled nothing and ended up at default
+		// zero metalness/roughness regardless of authoring.
+		if (g_objectFlags & OBJECT_FLAGS_ORM_FORMAT)
 		{
-			metalness = g_metallicMap.Sample(g_textureSampler, input.texcoord).r * g_material.metallicFactor;
-		}	
-		
-		// ambient occlusion
-		if (g_objectFlags & OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION)
+			if (g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS)
+			{
+				float3 orm = g_roughnessMap.Sample(g_textureSampler, input.texcoord).rgb;
+				roughness  = lerp(1.0f, orm.g, g_material.roughnessFactor);
+				metalness  = orm.b * g_material.metallicFactor;
+				albedo.rgb *= orm.r;
+			}
+		}
+		else if (g_objectFlags & OBJECT_FLAGS_RMA_FORMAT)
 		{
-			albedo.rgb *= g_ambientOcclusionMap.Sample(g_textureSampler, input.texcoord).r;
+			if (g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS)
+			{
+				float3 rma = g_roughnessMap.Sample(g_textureSampler, input.texcoord).rgb;
+				roughness  = lerp(1.0f, rma.r, g_material.roughnessFactor);
+				metalness  = rma.b * g_material.metallicFactor;
+				albedo.rgb *= rma.g;
+			}
+		}
+		else
+		{
+			// Get the roughness
+			if ((g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS) != 0)
+			{
+				roughness = lerp(1.0f, g_roughnessMap.Sample(g_textureSampler, input.texcoord).r, g_material.roughnessFactor);
+			}
+
+			// Get metallicness. lerp(1, map, factor) instead of map*factor
+			// so factor=0 means "fully use map" the same way roughness does
+			// and the way the static path always has - the editor slider
+			// expects this convention.
+			if (g_objectFlags & OBJECT_FLAGS_HAS_METALLIC)
+			{
+				metalness = lerp(1.0f, g_metallicMap.Sample(g_textureSampler, input.texcoord).r, g_material.metallicFactor);
+			}
+
+			// ambient occlusion
+			if (g_objectFlags & OBJECT_FLAGS_HAS_AMBIENT_OCCLUSION)
+			{
+				albedo.rgb *= g_ambientOcclusionMap.Sample(g_textureSampler, input.texcoord).r;
+			}
 		}
 
 		// Rain droplets - same procedural perturbation DefaultPixel uses. See
@@ -449,9 +487,13 @@
 		const float outputAlpha = g_material.isInTransparencyPhase ? transparencyAlpha : input.instanceID;
 		output.diff = float4(finalRGB, outputAlpha);
 
-		// material output is: metallic, roughness, smoothness, reserved (0)
-		// See DefaultPixel.shader for the rationale on the .a being zeroed.
-		output.mat = float4(metalness, roughness, g_material.smoothness, 0.0f);
+		// material output is: metallic, roughness, smoothness, geometry-mask
+		// .a = 1 marks this as a real geometry pixel - downstream sky-guard
+		// paths (deferred lighting, GI sky-skip, etc) treat .a == 0 as sky.
+		// Previously this shader wrote 0 here (with a misleading "see
+		// DefaultPixel for rationale" comment - DefaultPixel actually writes
+		// 1), which meant animated meshes were being classified as sky.
+		output.mat = float4(metalness, roughness, g_material.smoothness, 1.0f);
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 

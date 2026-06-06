@@ -62,6 +62,20 @@ namespace HexEngine
 		void SaveIconToDiskCache(const fs::path& sourcePath, ITexture2D* texture);
 		bool TryLoadIconFromDiskCache(const fs::path& sourcePath);
 		void RemoveIconFromDiskCache(const fs::path& sourcePath);
+
+		// Called from GetIcon for any resident `_icons` entry: stats the
+		// source file, compares write-time / size against the recorded
+		// disk-cache entry, and evicts both the in-memory icon and disk
+		// cache entry if the file has changed since the icon was baked.
+		// Without this hook, saving a prefab / material / scene leaves the
+		// previously-rendered icon resident forever - GetIcon would keep
+		// returning the stale texture because the existing freshness check
+		// was only inside TryLoadIconFromDiskCache (which never runs once
+		// the entry is in `_icons`). Per-path TTL via _lastStaleCheckTime
+		// caps the stat rate at one call per `kStaleCheckIntervalMs` per
+		// path, so per-frame GetIcon spam from the asset explorer doesn't
+		// hammer the file system.
+		bool IsIconStale(const fs::path& sourcePath);
 		void LoadDiskCacheIndex();
 		void SaveDiskCacheIndex();
 		static int64_t GetFileWriteTimeTicks(const fs::path& path);
@@ -76,6 +90,12 @@ namespace HexEngine
 		std::list<fs::path> _iconLru;
 		std::unordered_map<fs::path, std::list<fs::path>::iterator> _iconLruIndex;
 		std::unordered_map<fs::path, IconDiskCacheEntry> _diskCacheIndex;
+		// Per-path tick-count of the last freshness stat, used by
+		// IsIconStale to throttle file-system calls from GetIcon's
+		// per-frame call path. Tracks against std::chrono::steady_clock
+		// milliseconds.
+		std::unordered_map<fs::path, int64_t> _lastStaleCheckTime;
+		static constexpr int64_t kStaleCheckIntervalMs = 500;
 		fs::path _diskCacheRoot;
 		fs::path _diskCacheIndexFile;
 		bool _diskCacheDirty = false;

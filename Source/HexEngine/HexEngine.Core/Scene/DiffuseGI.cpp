@@ -531,8 +531,10 @@ namespace HexEngine
 		_voxelClearShader = IShader::Create("EngineData.Shaders/DiffuseGIClearVoxel.hcs");
 		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
 		_voxelShiftShader = IShader::Create("EngineData.Shaders/DiffuseGIShiftVoxel.hcs");
+		_aoBlurShader = IShader::Create("EngineData.Shaders/DiffuseGIAOBlur.hcs");
 		_constantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(GIConstants));
 		_voxelShiftConstantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(VoxelShiftConstants));
+		_aoBlurConstantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
 
 		const DXGI_FORMAT colourFormat = HexEngine::detail::ShimToDxgiFormat(g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat());
 		const uint32_t halfWidth = r_giHalfRes._val.b ? _halfWidth : _width;
@@ -592,12 +594,56 @@ namespace HexEngine
 			D3D11_USAGE_DEFAULT,
 			0);
 
+		// Single-channel R8 targets for the two-pass AO bilateral blur.
+		// Full-res so the provider can sample 1:1 against the beauty buffer
+		// without an extra upsample. R8 is enough precision - AO is a soft
+		// modulator and we already pow()/intensity-clamp it before applying.
+		_giAoBlurredH = g_pEnv->_graphicsDevice->CreateTexture2D(
+			static_cast<int32_t>(_width),
+			static_cast<int32_t>(_height),
+			DXGI_FORMAT_R8_UNORM,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			1,
+			1,
+			0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D,
+			D3D11_DSV_DIMENSION_UNKNOWN,
+			D3D11_USAGE_DEFAULT,
+			0);
+
+		_giAoBlurred = g_pEnv->_graphicsDevice->CreateTexture2D(
+			static_cast<int32_t>(_width),
+			static_cast<int32_t>(_height),
+			DXGI_FORMAT_R8_UNORM,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			1,
+			1,
+			0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D,
+			D3D11_DSV_DIMENSION_UNKNOWN,
+			D3D11_USAGE_DEFAULT,
+			0);
+
 		if (_giHalfRes)
 			_giHalfRes->SetDebugName("GI_HalfRes");
 		if (_giResolved)
 			_giResolved->SetDebugName("GI_Resolved");
 		if (_giHistory)
 			_giHistory->SetDebugName("GI_History");
+		if (_giAoBlurredH)
+			_giAoBlurredH->SetDebugName("GI_AoBlurredH");
+		if (_giAoBlurred)
+			_giAoBlurred->SetDebugName("GI_AoBlurred");
 
 		const bool clipmapsOk = CreateClipmapResources();
 		_created =
@@ -643,8 +689,11 @@ namespace HexEngine
 		SAFE_DELETE(_giHalfRes);
 		SAFE_DELETE(_giResolved);
 		SAFE_DELETE(_giHistory);
+		SAFE_DELETE(_giAoBlurredH);
+		SAFE_DELETE(_giAoBlurred);
 		SAFE_DELETE(_constantBuffer);
 		SAFE_DELETE(_voxelShiftConstantBuffer);
+		SAFE_DELETE(_aoBlurConstantBuffer);
 		SAFE_RELEASE(_voxelTriangleSrv);
 		SAFE_RELEASE(_voxelTriangleBuffer);
 		SAFE_RELEASE(_giLightSrv);
@@ -684,6 +733,7 @@ namespace HexEngine
 		_voxelClearShader = nullptr;
 		_voxelPropagateShader = nullptr;
 		_voxelShiftShader = nullptr;
+		_aoBlurShader = nullptr;
 		_created = false;
 		_resolveStabilityBoost = 0.0f;
 		_lastLocalLightsOnlyDebug = false;
@@ -4987,6 +5037,90 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
 	}
 
+	void DiffuseGI::RenderAoBlurPass(const GBuffer& gbuffer)
+	{
+		// Wide separable bilateral blur of _giResolved.a into _giAoBlurred.
+		// Done unconditionally each frame (cheap) so r_useGIAO can be toggled
+		// at runtime with zero setup latency. Bails silently if any of the
+		// required resources is missing - the provider's r_useGIAO compound
+		// path will then see a null blurred target and skip, falling back to
+		// the standard SSAO path.
+		if (_giResolved == nullptr ||
+			_giAoBlurredH == nullptr ||
+			_giAoBlurred == nullptr ||
+			_aoBlurShader == nullptr ||
+			_aoBlurConstantBuffer == nullptr)
+		{
+			return;
+		}
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (graphics == nullptr || guiRenderer == nullptr)
+			return;
+
+		// Stride is in pixels; convert to UV via 1/dimension. Picked to
+		// span ~96 pixels per axis (radius 6 * stride 16) which covers the
+		// typical projected size of a single voxel cell at mid-range view
+		// distances. Tune later if grids still show at extreme close-up or
+		// across very oblique viewing angles.
+		const float stridePixels = 16.0f;
+		const float invW = (_width  > 0) ? 1.0f / static_cast<float>(_width)  : 0.0f;
+		const float invH = (_height > 0) ? 1.0f / static_cast<float>(_height) : 0.0f;
+		// Depth-weight scale: 3.5 means a 0.3m view-space gap halves the
+		// weight, ~1m kills it. Matches the rough scale at which AO should
+		// stop bleeding across surfaces.
+		const float depthScale = 3.5f;
+
+		D3D11_VIEWPORT vp = {};
+		vp.TopLeftX = 0.0f;
+		vp.TopLeftY = 0.0f;
+		vp.Width  = static_cast<float>(_width);
+		vp.Height = static_cast<float>(_height);
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		graphics->SetViewport(vp);
+
+		// PASS 1: horizontal. Source = _giResolved.a (channel selector 0).
+		{
+			graphics->UnbindAllPixelShaderResources();
+			graphics->SetRenderTarget(_giAoBlurredH);
+			_giAoBlurredH->ClearRenderTargetView(math::Color(1.0f, 1.0f, 1.0f, 1.0f));
+
+			const math::Vector4 params(stridePixels * invW, 0.0f, 0.0f /* read .a */, depthScale);
+			_aoBlurConstantBuffer->Write((void*)&params, sizeof(params));
+			graphics->SetConstantBufferPS(4, _aoBlurConstantBuffer);
+
+			graphics->SetTexture2D(0, _giResolved);
+			graphics->SetTexture2D(1, gbuffer.GetNormal());
+
+			guiRenderer->StartFrame();
+			guiRenderer->FullScreenTexturedQuad(nullptr, _aoBlurShader.get());
+			guiRenderer->EndFrame();
+		}
+
+		// PASS 2: vertical. Source = _giAoBlurredH.r (channel selector 1).
+		{
+			graphics->UnbindAllPixelShaderResources();
+			graphics->SetRenderTarget(_giAoBlurred);
+			_giAoBlurred->ClearRenderTargetView(math::Color(1.0f, 1.0f, 1.0f, 1.0f));
+
+			const math::Vector4 params(0.0f, stridePixels * invH, 1.0f /* read .r */, depthScale);
+			_aoBlurConstantBuffer->Write((void*)&params, sizeof(params));
+			graphics->SetConstantBufferPS(4, _aoBlurConstantBuffer);
+
+			graphics->SetTexture2D(0, _giAoBlurredH);
+			graphics->SetTexture2D(1, gbuffer.GetNormal());
+
+			guiRenderer->StartFrame();
+			guiRenderer->FullScreenTexturedQuad(nullptr, _aoBlurShader.get());
+			guiRenderer->EndFrame();
+		}
+
+		graphics->UnbindAllPixelShaderResources();
+		graphics->SetConstantBufferPS(4, nullptr);
+	}
+
 	void DiffuseGI::CompositeToBeauty(ITexture2D* beautyTarget)
 	{
 		if (beautyTarget == nullptr || _giResolved == nullptr)
@@ -5054,6 +5188,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 		RenderTracePass(gbuffer, beautyTarget);
 		RenderResolvePass(gbuffer);
+		// Blur the AO alpha into _giAoBlurred so DiffuseGIAOProvider can
+		// read smoothed AO when r_useGIAO compound mode is active. Cost is
+		// two fullscreen quads; runs unconditionally so the cvar toggles
+		// without a first-frame stall.
+		RenderAoBlurPass(gbuffer);
 		CompositeToBeauty(beautyTarget);
 		DebugDrawProbeGrid(_activeClipmap);
 	}

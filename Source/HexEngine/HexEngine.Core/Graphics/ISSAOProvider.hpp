@@ -9,7 +9,7 @@ namespace HexEngine
 	class ITexture2D;
 
 	/** @brief Plugin interface for screen-space ambient occlusion providers. */
-	class ISSAOProvider : public IPluginInterface
+	class HEX_API ISSAOProvider : public IPluginInterface
 	{
 	public:
 		DECLARE_PLUGIN_INTERFACE(ISSAOProvider, 001);

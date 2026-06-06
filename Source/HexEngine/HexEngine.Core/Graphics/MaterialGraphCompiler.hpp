@@ -40,5 +40,17 @@ namespace HexEngine
 		// are treated as stale to be safe (better to recompile than to render
 		// against a cached shader from an unknown era).
 		static bool IsCachedGraphShaderStale(const fs::path& cachedShaderPath);
+
+		// Re-runs HexEngine.ShaderCompiler.exe against the sibling .shader
+		// source of `cachedHcsPath`, overwriting the .hcs. Used to rebake a
+		// stale cache without needing the original MaterialGraph data - the
+		// generated .shader source is persisted next to the .hcs at compile
+		// time (see CompileToMaterial), so the runtime can recover from a
+		// version / dialect mismatch (e.g. v1 DXBC under D3D12) by recompiling
+		// straight from disk. Returns true iff the .hcs was successfully
+		// regenerated. Errors are emitted via LOG_WARN; not appended to a
+		// result vector because callers (ShaderSystem at load time) don't
+		// have one.
+		static bool TryRebakeCachedShader(const fs::path& cachedHcsPath);
 	};
 }
