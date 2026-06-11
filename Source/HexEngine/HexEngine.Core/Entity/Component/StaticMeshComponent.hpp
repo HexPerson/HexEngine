@@ -102,6 +102,15 @@ namespace HexEngine
 		void SetUVScale(const math::Vector2& uvScale);
 		void SetIncludeInGIWhenHidden(bool value);
 		bool GetIncludeInGIWhenHidden() const;
+		// Per-instance "render normally but skip GI" switch. When true this mesh
+		// is excluded from the GI voxelization (it neither casts a bounce nor
+		// contributes its albedo/emissive), while still rendering and lighting
+		// as usual. Use for meshes that pollute GI - movable props, characters,
+		// vehicles, decorative geometry the artist doesn't want baking colour
+		// bleed into static surroundings. Unlike Material::AffectsGI (shared by
+		// every instance of that material) this is granular to the one entity.
+		void SetExcludeFromGI(bool value);
+		bool GetExcludeFromGI() const;
 		const math::Vector3& GetOffsetPosition() const;
 		void SetOffsetPosition(const math::Vector3& offsetPosition);
 		const MeshInstanceData& GetCachedInstanceData(Material* material);
@@ -123,6 +132,7 @@ namespace HexEngine
 		std::shared_ptr<Material> _material;
 		mutable std::recursive_mutex _lock;
 		bool _includeInGIWhenHidden = false;
+		bool _excludeFromGI = false;
 
 		math::Vector2 _uvScale;
 		math::Vector3 _offsetPosition;

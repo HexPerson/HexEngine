@@ -1115,6 +1115,13 @@ namespace HexEngine
 			_sphereEntity->SetLayer(Layer::Invisible);
 			_sphereEntity->SetFlag(EntityFlags::DoNotSave | EntityFlags::ExcludeFromHLOD);
 			auto sphereMeshRenderer = _sphereEntity->AddComponent<StaticMeshComponent>();
+			// This sphere is a transient deferred-light-volume helper: it is
+			// repositioned, rescaled and re-materialed every frame (its material
+			// is swapped between the point and spot passes). It must never enter
+			// GI - both for correctness and because those per-frame mutations
+			// would otherwise bump the GI revisions and thrash the voxel triangle
+			// cache. Flag it before SetMesh/SetMaterial so neither notifies.
+			sphereMeshRenderer->SetExcludeFromGI(true);
 			sphereMeshRenderer->SetMesh(_sphereMesh);
 			sphereMeshRenderer->SetMaterial(_pointLightMaterial);
 		}

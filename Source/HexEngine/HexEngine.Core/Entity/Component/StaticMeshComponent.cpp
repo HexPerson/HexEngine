@@ -8,6 +8,7 @@
 #include "../../Terrain/TerrainGenerator.hpp"
 #include "../../Graphics/MaterialLoader.hpp"
 #include "../../GUI/Elements/LineEdit.hpp"
+#include "../../GUI/Elements/Checkbox.hpp"
 
 namespace HexEngine
 {
@@ -22,6 +23,7 @@ namespace HexEngine
 	{
 		_uvScale = clone->_uvScale;
 		_includeInGIWhenHidden = clone->_includeInGIWhenHidden;
+		_excludeFromGI = clone->_excludeFromGI;
 		// Carry the bound bone name across the clone so prefab-spawned
 		// instances can re-resolve against the spawned entity's skeletal
 		// component. _boundBone itself stays null - it's a runtime cache
@@ -180,7 +182,7 @@ namespace HexEngine
 		if (!mesh)
 		{
 			_mesh.reset();
-			if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+			if (auto* scene = (!_excludeFromGI && GetEntity()) ? GetEntity()->GetScene() : nullptr; scene != nullptr)
 			{
 				scene->NotifyStaticMeshChanged(this, true, false);
 			}
@@ -206,7 +208,7 @@ namespace HexEngine
 		}
 
 		mesh->CreateInstance();
-		if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		if (auto* scene = (!_excludeFromGI && GetEntity()) ? GetEntity()->GetScene() : nullptr; scene != nullptr)
 		{
 			scene->NotifyStaticMeshChanged(this, true, false);
 		}
@@ -328,6 +330,7 @@ namespace HexEngine
 
 		SERIALIZE_VALUE(_uvScale);
 		SERIALIZE_VALUE(_includeInGIWhenHidden);
+		SERIALIZE_VALUE(_excludeFromGI);
 		SERIALIZE_VALUE(_shadowCullingMode);
 		SERIALIZE_VALUE(_offsetPosition);
 		SERIALIZE_VALUE(_boundBoneName);
@@ -439,6 +442,7 @@ namespace HexEngine
 
 		DESERIALIZE_VALUE(_uvScale);
 		DESERIALIZE_VALUE(_includeInGIWhenHidden);
+		DESERIALIZE_VALUE(_excludeFromGI);
 		DESERIALIZE_VALUE(_shadowCullingMode);
 		DESERIALIZE_VALUE(_offsetPosition);
 		DESERIALIZE_VALUE(_boundBoneName);
@@ -478,6 +482,26 @@ namespace HexEngine
 	bool StaticMeshComponent::GetIncludeInGIWhenHidden() const
 	{
 		return _includeInGIWhenHidden;
+	}
+
+	void StaticMeshComponent::SetExcludeFromGI(bool value)
+	{
+		if (_excludeFromGI == value)
+			return;
+
+		_excludeFromGI = value;
+		// Mark GI dirty so the clipmap re-voxelizes this region - toggling the
+		// flag must add or remove this mesh's contribution immediately, same as
+		// IncludeInGIWhenHidden above.
+		if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->NotifyStaticMeshChanged(this, true, false);
+		}
+	}
+
+	bool StaticMeshComponent::GetExcludeFromGI() const
+	{
+		return _excludeFromGI;
 	}
 
 	const math::Vector3& StaticMeshComponent::GetOffsetPosition() const
@@ -620,6 +644,20 @@ namespace HexEngine
 			}
 		});
 		boneEdit->SetPrefabOverrideBinding(GetComponentName(), "/_boundBoneName");
+
+		// Per-instance GI exclusion. The bool* binding toggles _excludeFromGI
+		// directly; the OnCheck callback marks the GI clipmap dirty so the mesh
+		// drops out of (or back into) the bounce immediately. We mark dirty
+		// inline rather than calling SetExcludeFromGI here because the checkbox
+		// has already flipped the bool, so SetExcludeFromGI's equality guard
+		// would early-out before notifying.
+		Checkbox* excludeGi = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Exclude From GI", &_excludeFromGI);
+		excludeGi->SetOnCheckFn([this](Checkbox*, bool)
+		{
+			if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+				scene->NotifyStaticMeshChanged(this, true, false);
+		});
+		excludeGi->SetPrefabOverrideBinding(GetComponentName(), "/_excludeFromGI");
 
 		return true;
 	}
@@ -810,7 +848,12 @@ namespace HexEngine
 				material->Unlock();
 			}
 
-			if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+			// A mesh excluded from GI contributes nothing to the voxel world, so
+			// swapping its material must NOT bump the GI material revision -
+			// otherwise per-frame render helpers (e.g. the shared light-volume
+			// sphere, whose material is swapped between the point and spot passes
+			// every frame) invalidate the GI triangle cache continuously.
+			if (auto* scene = (!_excludeFromGI && GetEntity()) ? GetEntity()->GetScene() : nullptr; scene != nullptr)
 			{
 				scene->NotifyStaticMeshChanged(this, false, true);
 			}
@@ -822,7 +865,7 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_material.reset();
-		if (auto* scene = GetEntity() ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		if (auto* scene = (!_excludeFromGI && GetEntity()) ? GetEntity()->GetScene() : nullptr; scene != nullptr)
 		{
 			scene->NotifyStaticMeshChanged(this, false, true);
 		}

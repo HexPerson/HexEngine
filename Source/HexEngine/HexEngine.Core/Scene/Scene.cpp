@@ -283,10 +283,18 @@ namespace HexEngine
 		if (entity == nullptr)
 			return;
 
-		if (auto* staticMesh = entity->GetComponent<StaticMeshComponent>(); staticMesh != nullptr && staticMesh->GetMesh() != nullptr)
+		if (auto* staticMesh = entity->GetComponent<StaticMeshComponent>();
+			staticMesh != nullptr && staticMesh->GetMesh() != nullptr && !staticMesh->GetExcludeFromGI())
 		{
+			// A mesh flagged out of GI isn't part of the voxel world, so moving
+			// it must NOT bump the geometry revision - otherwise constantly-
+			// moving excluded geometry (traffic, characters) invalidates the GI
+			// triangle cache every frame and forces a full, expensive
+			// BuildGpuVoxelTriangleList rebuild despite contributing nothing.
 			++_giGeometryRevision;
 			_giSpatialCacheDirty = true;
+
+			LOG_DEBUG("Entity '%s' caused GI rebuild", entity->GetName().c_str());
 		}
 
 		if (entity->GetComponent<PointLight>() != nullptr ||

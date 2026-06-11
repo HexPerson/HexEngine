@@ -1685,6 +1685,15 @@ namespace HexEngine
 
 		std::vector<StaticMeshComponent*> meshesInBounds;
 		scene->GatherStaticMeshesInBounds(clipBounds, meshesInBounds, true);
+		// Drop meshes flagged "Exclude From GI" before any voxelization or
+		// material/emissive gathering, so the flagged instance neither casts a
+		// colour bounce nor occludes - it just isn't part of the GI world. This
+		// is per-instance (StaticMeshComponent), unlike Material::AffectsGI
+		// which is shared across every mesh using that material.
+		meshesInBounds.erase(
+			std::remove_if(meshesInBounds.begin(), meshesInBounds.end(),
+				[](StaticMeshComponent* smc) { return smc != nullptr && smc->GetExcludeFromGI(); }),
+			meshesInBounds.end());
 
 		std::vector<StaticMeshComponent*> prioritized;
 		std::vector<StaticMeshComponent*> regular;
@@ -2794,6 +2803,15 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			math::Vector3(clipmapParams.extent, clipmapParams.extent, clipmapParams.extent));
 		std::vector<StaticMeshComponent*> meshesInBounds;
 		scene->GatherStaticMeshesInBounds(clipBounds, meshesInBounds, true);
+		// Drop meshes flagged "Exclude From GI" before any voxelization or
+		// material/emissive gathering, so the flagged instance neither casts a
+		// colour bounce nor occludes - it just isn't part of the GI world. This
+		// is per-instance (StaticMeshComponent), unlike Material::AffectsGI
+		// which is shared across every mesh using that material.
+		meshesInBounds.erase(
+			std::remove_if(meshesInBounds.begin(), meshesInBounds.end(),
+				[](StaticMeshComponent* smc) { return smc != nullptr && smc->GetExcludeFromGI(); }),
+			meshesInBounds.end());
 		outMeshes.reserve(meshesInBounds.size());
 		outMaterials.reserve(meshesInBounds.size());
 		std::sort(meshesInBounds.begin(), meshesInBounds.end(),
@@ -3842,9 +3860,9 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 				// Always rebuild homogeneous positions from xyz here so GI does not depend on
 				// imported vertex.w being valid, and make sure each triangle vertex uses its own index.
-				const auto vp0 = math::Vector4(vertices[i0]._position.x, vertices[i0]._position.y, vertices[i0]._position.z, 1.0f);
-				const auto vp1 = math::Vector4(vertices[i1]._position.x, vertices[i1]._position.y, vertices[i1]._position.z, 1.0f);
-				const auto vp2 = math::Vector4(vertices[i2]._position.x, vertices[i2]._position.y, vertices[i2]._position.z, 1.0f);
+				const auto vp0 = vertices[i0]._position;//math::Vector4(vertices[i0]._position.x, vertices[i0]._position.y, vertices[i0]._position.z, 1.0f);
+				const auto vp1 = vertices[i1]._position;//math::Vector4(vertices[i1]._position.x, vertices[i1]._position.y, vertices[i1]._position.z, 1.0f);
+				const auto vp2 = vertices[i2]._position;//math::Vector4(vertices[i2]._position.x, vertices[i2]._position.y, vertices[i2]._position.z, 1.0f);
 
 				const math::Vector4 v0w = math::Vector4::Transform(vp0, worldTM);
 				const math::Vector4 v1w = math::Vector4::Transform(vp1, worldTM);
