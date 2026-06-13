@@ -145,6 +145,8 @@ namespace HexEngine
 
 		Camera* GetCameraAtIndex(uint32_t index);
 
+		uint32_t GetNumCameras() const { return (uint32_t)_cameras.size(); }
+
 		Camera* GetMainCamera();
 
 		void SetMainCamera(Camera* camera);

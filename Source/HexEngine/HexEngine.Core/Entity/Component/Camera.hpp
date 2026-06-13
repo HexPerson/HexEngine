@@ -17,6 +17,7 @@ namespace HexEngine
 
 	class MeshInstance;
 	class PVS;
+	enum class SceneFlags;   // defined in Scene.hpp; masked per-camera at render time
 
 	enum class CameraEffect
 	{
@@ -50,6 +51,18 @@ namespace HexEngine
 
 		ITexture2D* GetRenderTarget() const;
 		//ITexture2D* GetFullScreenRenderTarget() const;
+
+		// Opt-in: when true, SceneManager renders this (non-main) camera into its
+		// own render target each frame. Used for secondary views such as a
+		// top-down map. Defaults false so ordinary cameras are not auto-rendered.
+		void SetRendersToTarget(bool enable) { _rendersToTarget = enable; }
+		bool RendersToTarget() const { return _rendersToTarget; }
+
+		// Per-camera scene-flag mask, AND-ed with the scene's flags at render time.
+		// Defaults to all bits (no masking). Lets a secondary view (e.g. the map)
+		// skip passes like PostProcessingEnabled it doesn't need.
+		void SetSceneFlagMask(SceneFlags mask);
+		SceneFlags GetSceneFlagMask() const;
 
 		void EnableDLSS(bool enable);
 		bool IsDLSSEnabled() const;
@@ -123,6 +136,8 @@ namespace HexEngine
 		math::Viewport _dlssViewport;
 		ITexture2D* _renderTarget = nullptr;
 		//ITexture2D* _fullScreenRenderTarget = nullptr;
+		bool _rendersToTarget = false;
+		int32_t _sceneFlagMask = -1;   // all bits set = no masking; stored as int (SceneFlags is fwd-declared)
 		CameraProjectionMode _projectionMode = CameraProjectionMode::PerspectiveProjection;
 		math::Matrix _projectionMatrix;
 		math::Matrix _largerProjectionMatrix;

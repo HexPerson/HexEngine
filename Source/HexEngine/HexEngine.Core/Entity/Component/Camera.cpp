@@ -4,6 +4,7 @@
 #include "Transform.hpp"
 #include "../../HexEngine.hpp"
 #include "../../Scene/PVS.hpp"
+#include "../../Scene/Scene.hpp"   // SceneFlags (forward-declared in Camera.hpp)
 
 namespace HexEngine
 {
@@ -133,6 +134,16 @@ namespace HexEngine
 	ITexture2D* Camera::GetRenderTarget() const
 	{
 		return _renderTarget;
+	}
+
+	void Camera::SetSceneFlagMask(SceneFlags mask)
+	{
+		_sceneFlagMask = (int32_t)mask;
+	}
+
+	SceneFlags Camera::GetSceneFlagMask() const
+	{
+		return (SceneFlags)_sceneFlagMask;
 	}
 
 	/*ITexture2D* Camera::GetFullScreenRenderTarget() const

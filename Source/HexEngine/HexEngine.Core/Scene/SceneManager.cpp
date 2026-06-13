@@ -145,7 +145,27 @@ namespace HexEngine
 				GFX_PERF_BEGIN(0xffffffff, std::format(L"Rendering scene '{}'", scene->GetName()).c_str());
 
 				_currentScene = scene;
-				g_pEnv->_sceneRenderer->RenderScene(scene.get(), scene->GetMainCamera(), scene->GetFlags());
+
+				Camera* mainCam = scene->GetMainCamera();
+				const SceneFlags mainFlags = mainCam != nullptr
+					? (scene->GetFlags() & mainCam->GetSceneFlagMask())
+					: scene->GetFlags();
+				g_pEnv->_sceneRenderer->RenderScene(scene.get(), mainCam, mainFlags);
+
+				// Render any opt-in secondary cameras into their own render targets
+				// (e.g. the in-game map's top-down view). The main loop only presents
+				// the main camera's target; these are sampled by game UI. Each camera's
+				// SceneFlagMask lets it skip passes (e.g. PostProcessingEnabled).
+				for (uint32_t i = 0; i < scene->GetNumCameras(); ++i)
+				{
+					Camera* secondary = scene->GetCameraAtIndex(i);
+					if (secondary != nullptr && secondary != mainCam &&
+						secondary->RendersToTarget() && secondary->GetRenderTarget() != nullptr)
+					{
+						g_pEnv->_sceneRenderer->RenderScene(scene.get(), secondary,
+							scene->GetFlags() & secondary->GetSceneFlagMask());
+					}
+				}
 
 				GFX_PERF_END();
 			}
