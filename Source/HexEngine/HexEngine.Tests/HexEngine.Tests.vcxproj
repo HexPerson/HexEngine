@@ -62,6 +62,7 @@
     <ClCompile Include="TestMain.cpp" />
     <!-- Pure sources under test, compiled directly (no Core link needed). -->
     <ClCompile Include="..\HexEngine.Core\Plugin\PluginManifest.cpp" />
+    <ClCompile Include="..\HexEngine.Core\FileSystem\PackageManifest.cpp" />
     <ClCompile Include="..\HexEngine.Core\Utility\Sha256.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

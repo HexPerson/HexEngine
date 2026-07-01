@@ -487,6 +487,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Environment\TimeManager.hpp" />
     <ClInclude Include="FileSystem\FileSystem.hpp" />
     <ClInclude Include="FileSystem\BinaryReader.hpp" />
+    <ClInclude Include="FileSystem\PackageVerification.hpp" />
+    <ClInclude Include="FileSystem\PackageManifest.hpp" />
     <ClInclude Include="FileSystem\DiskFile.hpp" />
     <ClInclude Include="FileSystem\MemoryFile.hpp" />
     <ClInclude Include="FileSystem\IFile.hpp" />
@@ -558,6 +560,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\ThirdPersonCameraController.cpp" />
     <ClCompile Include="Environment\HeadlessEnvironment.cpp" />
     <ClCompile Include="FileSystem\AssetFile.cpp" />
+    <ClCompile Include="FileSystem\PackageManifest.cpp" />
     <ClCompile Include="FileSystem\AssetPackage.cpp" />
     <ClCompile Include="FileSystem\AssetPackageManager.cpp" />
     <ClCompile Include="FileSystem\IResource.cpp" />

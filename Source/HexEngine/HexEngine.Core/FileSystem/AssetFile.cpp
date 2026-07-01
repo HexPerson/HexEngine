@@ -1,13 +1,74 @@
 
 #include "AssetFile.hpp"
 #include "BinaryReader.hpp"
+#include "PackageVerification.hpp"
+#include "PackageManifest.hpp"
+#include "../Utility/Sha256.hpp"
 #include "../Environment/IEnvironment.hpp"
 #include "../Environment/LogFile.hpp"
 #include "../FileSystem/ICompressionProvider.hpp"
 #include "AssetPackage.hpp"
 
+#include <fstream>
+#include <iterator>
+
 namespace HexEngine
 {
+	namespace
+	{
+		// Verify a package against its `.hashmanifest` sidecar (if present).
+		// Returns true when it's safe to proceed - either the package hashed
+		// clean, or no sidecar exists (unsigned packages still load, with a
+		// warning). Returns false only when a manifest IS present but is broken
+		// or its hash doesn't match (tampering) - the package must be refused.
+		bool VerifyPackageIntegrity(const fs::path& packagePath)
+		{
+			fs::path sidecar = packagePath;
+			sidecar += L".hashmanifest";
+
+			if (!fs::exists(sidecar))
+			{
+				LOG_WARN("Asset package '%S' has no .hashmanifest sidecar - integrity NOT verified",
+					packagePath.filename().wstring().c_str());
+				return true;
+			}
+
+			std::ifstream in(sidecar, std::ios::in | std::ios::binary);
+			if (!in.is_open())
+			{
+				LOG_CRIT("Failed to open hash manifest '%S'", sidecar.wstring().c_str());
+				return false;
+			}
+			std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+			in.close();
+
+			PackageManifest manifest;
+			std::string err;
+			if (!ParsePackageManifest(text, manifest, err))
+			{
+				LOG_CRIT("Asset package hash manifest '%S' is invalid: %s", sidecar.wstring().c_str(), err.c_str());
+				return false;
+			}
+
+			std::string actualHash, hashErr;
+			if (!Sha256File(packagePath, actualHash, hashErr))
+			{
+				LOG_CRIT("Failed to hash asset package '%S': %s", packagePath.wstring().c_str(), hashErr.c_str());
+				return false;
+			}
+
+			if (!HashesEqual(actualHash, manifest.packageSha256))
+			{
+				LOG_CRIT("Asset package '%S' FAILED integrity check (hash mismatch) - refusing to load",
+					packagePath.filename().wstring().c_str());
+				return false;
+			}
+
+			LOG_INFO("Asset package '%S' integrity verified (sha256 ok)", packagePath.filename().wstring().c_str());
+			return true;
+		}
+	}
+
 	AssetFile::AssetFile(const fs::path& absolutePath) :
 		DiskFile(absolutePath, std::ios::binary | std::ios::in)
 	{}
@@ -23,6 +84,15 @@ namespace HexEngine
 		if (GetSize() < sizeof(AssetFileHeader))
 		{
 			LOG_CRIT("Asset package is smaller than its header (%u bytes) - truncated or not a package", GetSize());
+			Close();
+			return false;
+		}
+
+		// Integrity gate: if a hash manifest is shipped alongside the package,
+		// the whole file must hash to the recorded SHA-256 before we parse a
+		// single byte of it. Tampered packages are refused here.
+		if (!VerifyPackageIntegrity(GetAbsolutePath()))
+		{
 			Close();
 			return false;
 		}
@@ -181,6 +251,30 @@ namespace HexEngine
 				LOG_CRIT("V2 asset package TOC truncated: read %u of %llu bytes", got, (unsigned long long)expectedTocBytes);
 				Close();
 				return false;
+			}
+
+			// Per-entry bounds check: each blob must lie wholly inside the data
+			// section of the file. offset/compressedSize come straight off disk;
+			// without this a corrupt TOC would drive GetFileData to seek out of
+			// bounds or allocate a bogus (huge) buffer. Reject the WHOLE package
+			// if any entry is inconsistent - a partially-valid TOC isn't safe to
+			// stream from.
+			const uint64_t dataStart = (uint64_t)sizeof(AssetFileHeader) + expectedTocBytes;
+			const uint64_t fileSize  = (uint64_t)GetSize();
+			for (const auto& entry : entries)
+			{
+				if (!IsPackageBlobInBounds(entry.offset, entry.compressedSize, entry.uncompressedSize,
+					dataStart, fileSize, kDefaultMaxUncompressedAssetBytes))
+				{
+					LOG_CRIT("V2 asset package entry '%S' is out of bounds (offset %llu, size %u, uncompressed %u, file %llu) - refusing to load",
+						entry.relativePath,
+						(unsigned long long)entry.offset,
+						entry.compressedSize,
+						entry.uncompressedSize,
+						(unsigned long long)fileSize);
+					Close();
+					return false;
+				}
 			}
 
 			for (const auto& entry : entries)

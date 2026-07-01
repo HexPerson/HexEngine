@@ -18,6 +18,8 @@
 #include "../HexEngine.Core/Utility/Sha256.hpp"
 #include "../HexEngine.Core/FileSystem/BinaryReader.hpp"
 #include "../HexEngine.Core/Utility/BlockingQueue.hpp"
+#include "../HexEngine.Core/FileSystem/PackageVerification.hpp"
+#include "../HexEngine.Core/FileSystem/PackageManifest.hpp"
 
 using namespace HexEngine;
 
@@ -451,6 +453,66 @@ static void TestDirectoryWatchStopJoin()
 	CloseHandle(stop);
 }
 
+// --- Package verification -------------------------------------------------
+
+static void TestPackageBlobBounds()
+{
+	// A realistic V2 layout: 64-byte header, 2 TOC entries (dataStart = 64+X),
+	// file is 1000 bytes.
+	const uint64_t dataStart = 300;
+	const uint64_t fileSize  = 1000;
+	const uint64_t maxUncmp  = kDefaultMaxUncompressedAssetBytes;
+
+	// Valid blob wholly inside the data section.
+	CHECK(IsPackageBlobInBounds(/*off*/300, /*csize*/200, /*usize*/500, dataStart, fileSize, maxUncmp));
+	// Blob ending exactly at EOF is fine.
+	CHECK(IsPackageBlobInBounds(800, 200, 200, dataStart, fileSize, maxUncmp));
+	// Zero-size blob at a valid offset is fine.
+	CHECK(IsPackageBlobInBounds(500, 0, 0, dataStart, fileSize, maxUncmp));
+
+	// Offset inside the header/TOC region -> reject (would let a blob overlap
+	// metadata).
+	CHECK(!IsPackageBlobInBounds(299, 10, 10, dataStart, fileSize, maxUncmp));
+	// Offset past EOF -> reject.
+	CHECK(!IsPackageBlobInBounds(1001, 0, 0, dataStart, fileSize, maxUncmp));
+	// Blob runs off the end of the file -> reject.
+	CHECK(!IsPackageBlobInBounds(900, 200, 200, dataStart, fileSize, maxUncmp));
+	// offset + size overflow attempt (huge size) -> reject, no wraparound.
+	CHECK(!IsPackageBlobInBounds(400, 0xFFFFFFFFFFFFFF00ull, 0, dataStart, fileSize, maxUncmp));
+	// Decompression bomb: claimed uncompressed size over the cap -> reject.
+	CHECK(!IsPackageBlobInBounds(300, 10, maxUncmp + 1, dataStart, fileSize, maxUncmp));
+}
+
+static void TestPackageManifestRoundtrip()
+{
+	PackageManifest m;
+	m.version = 1;
+	m.packageFileName = "GameData.pkg";
+	m.packageSha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+	m.packageSize = 123456;
+
+	std::string text = SerializePackageManifest(m);
+
+	PackageManifest parsed; std::string err;
+	CHECK(ParsePackageManifest(text, parsed, err));
+	CHECK(parsed.version == 1);
+	CHECK(parsed.packageFileName == "GameData.pkg");
+	CHECK(parsed.packageSha256 == m.packageSha256);
+	CHECK(parsed.packageSize == 123456);
+
+	// Case-insensitive hash comparison (packer/reader may differ in case).
+	CHECK(HashesEqual("ABCDEF", "abcdef"));
+	CHECK(!HashesEqual("abcdef", "abcde0"));
+	CHECK(!HashesEqual("", ""));                 // empty never matches
+
+	// Rejections.
+	PackageManifest bad; std::string e2;
+	CHECK(!ParsePackageManifest("{ not json", bad, e2));                      // malformed
+	CHECK(!ParsePackageManifest(R"({"package":{"sha256":"x"}})", bad, e2));   // missing version
+	CHECK(!ParsePackageManifest(R"({"version":1})", bad, e2));                // missing package obj
+	CHECK(!ParsePackageManifest(R"({"version":1,"package":{"sha256":"tooshort"}})", bad, e2)); // sha not 64 chars
+}
+
 int main()
 {
 	std::printf("HexEngine.Tests\n");
@@ -465,6 +527,8 @@ int main()
 	TestBlockingQueueBasics();
 	TestBlockingQueueConcurrent();
 	TestDirectoryWatchStopJoin();
+	TestPackageBlobBounds();
+	TestPackageManifestRoundtrip();
 	std::printf("\n%d/%d checks passed.\n", g_total - g_fail, g_total);
 	std::printf(g_fail == 0 ? "RESULT: OK\n" : "RESULT: FAILED\n");
 	return g_fail == 0 ? 0 : 1;

@@ -1,6 +1,7 @@
 
 
 #include "AssetPacker.hpp"
+#include "../HexEngine.Core/Utility/Sha256.hpp"
 #include <cxxopts.hpp>
 #include <brotli\encode.h>
 #include <cstring>
@@ -9,6 +10,7 @@
 #include <cwctype>
 #include <mutex>
 #include <set>
+#include <string>
 #include <thread>
 
 //HVar* HexEngine::g_hvars = nullptr;
@@ -302,6 +304,58 @@ int main(int argc, const char* argv[])
 
 	std::cout << "Successfully wrote v2 archive (per-file compression: "
 		<< (compress ? "on" : "off") << ")" << std::endl;
+
+	// Write a `.hashmanifest` sidecar next to the package: a SHA-256 over the
+	// whole .pkg so the runtime can detect tampering at mount
+	// (AssetFile::Unpack -> VerifyPackageIntegrity). The JSON schema here must
+	// match ParsePackageManifest in the engine (version + package.{file,sha256,
+	// size}). Emitted by hand so the packer needs no JSON dependency.
+	{
+		std::string hashHex, hashErr;
+		if (HexEngine::Sha256File(output, hashHex, hashErr))
+		{
+			const uint64_t pkgSize = static_cast<uint64_t>(fs::file_size(output));
+
+			// JSON-escape the file name (backslashes / quotes).
+			std::string escaped;
+			for (char c : output.filename().string())
+			{
+				if (c == '\\' || c == '"')
+					escaped.push_back('\\');
+				escaped.push_back(c);
+			}
+
+			const std::string json =
+				"{\n"
+				"  \"version\": 1,\n"
+				"  \"package\": {\n"
+				"    \"file\": \"" + escaped + "\",\n"
+				"    \"sha256\": \"" + hashHex + "\",\n"
+				"    \"size\": " + std::to_string(pkgSize) + "\n"
+				"  }\n"
+				"}\n";
+
+			fs::path manifestPath = output;
+			manifestPath += ".hashmanifest";
+
+			HexEngine::DiskFile manifestFile(manifestPath, std::ios::out | std::ios::binary | std::ios::trunc, HexEngine::DiskFileOptions::CreateSubDirs);
+			if (manifestFile.Open())
+			{
+				manifestFile.Write((void*)json.data(), static_cast<uint32_t>(json.size()));
+				manifestFile.Close();
+				std::cout << "Wrote hash manifest: " << manifestPath.string()
+					<< " (sha256 " << hashHex << ")" << std::endl;
+			}
+			else
+			{
+				std::cerr << "WARNING: failed to write hash manifest " << manifestPath.string() << std::endl;
+			}
+		}
+		else
+		{
+			std::cerr << "WARNING: failed to hash package for manifest: " << hashErr << std::endl;
+		}
+	}
 
 	return 0;
 }
