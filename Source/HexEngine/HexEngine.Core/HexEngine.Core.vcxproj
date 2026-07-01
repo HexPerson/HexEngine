@@ -420,6 +420,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Physics\PhysUtils.hpp" />
     <ClInclude Include="Plugin\IPlugin.hpp" />
     <ClInclude Include="Plugin\PluginSystem.hpp" />
+    <ClInclude Include="Plugin\PluginManifest.hpp" />
+    <ClInclude Include="Plugin\ScopedModule.hpp" />
     <ClInclude Include="Scene\PVS.hpp" />
     <ClInclude Include="Scene\SceneFramingUtils.hpp" />
     <ClInclude Include="Scripting\IScriptEngine.hpp" />
@@ -531,6 +533,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Terrain\MarchingCubes.hpp" />
     <ClInclude Include="Terrain\TerrainGenerator.hpp" />
     <ClInclude Include="Utility\CRC32.hpp" />
+    <ClInclude Include="Utility\Sha256.hpp" />
     <ClInclude Include="Utility\MemoryManager.hpp" />
   </ItemGroup>
   <ItemGroup>
@@ -623,6 +626,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Math\easing.cpp" />
     <ClCompile Include="Physics\PhysUtils.cpp" />
     <ClCompile Include="Plugin\PluginSystem.cpp" />
+    <ClCompile Include="Plugin\PluginManifest.cpp" />
+    <ClCompile Include="Utility\Sha256.cpp" />
     <ClCompile Include="Scene\PVS.cpp" />
     <ClCompile Include="Scene\SceneFramingUtils.cpp" />
     <ClCompile Include="Terrain\Chunk.cpp" />

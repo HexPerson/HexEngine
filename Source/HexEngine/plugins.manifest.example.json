@@ -1,0 +1,9 @@
+{
+  "_comment": "Example plugin manifest. Deploy as 'Plugins/plugins.json' next to the plugin DLLs. In Production plugin policy this is the allowlist: only listed + enabled plugins load, and any entry with an 'sha256' must match the DLL's SHA-256 (lowercase hex) or it is refused. In Developer policy unlisted DLLs still load (with a warning). Generate hashes with the SHA-256 helper / packaging step (see PR7). Selecting production: PluginSystem::SetLoadPolicy(PluginLoadPolicy::Production) or env HEXENGINE_PLUGIN_POLICY=production.",
+  "plugins": [
+    { "name": "PhysX",              "module": "HexEngine.PhysXPlugin.dll",              "enabled": true, "sha256": "" },
+    { "name": "D3D11",              "module": "HexEngine.D3D11Plugin.dll",              "enabled": true, "sha256": "" },
+    { "name": "RecastNavigation",   "module": "HexEngine.RecastNavigationPlugin.dll",   "enabled": true, "sha256": "" },
+    { "name": "CitySimulation",     "module": "HexEngine.CitySimulationPlugin.dll",     "enabled": true, "sha256": "" }
+  ]
+}
