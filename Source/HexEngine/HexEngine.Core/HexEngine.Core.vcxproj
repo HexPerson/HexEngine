@@ -486,6 +486,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Environment\LogFile.hpp" />
     <ClInclude Include="Environment\TimeManager.hpp" />
     <ClInclude Include="FileSystem\FileSystem.hpp" />
+    <ClInclude Include="FileSystem\BinaryReader.hpp" />
     <ClInclude Include="FileSystem\DiskFile.hpp" />
     <ClInclude Include="FileSystem\MemoryFile.hpp" />
     <ClInclude Include="FileSystem\IFile.hpp" />

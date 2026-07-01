@@ -1,6 +1,7 @@
 
 
 #include "DiskFile.hpp"
+#include "BinaryReader.hpp"
 #include "../HexEngine.hpp"
 
 namespace HexEngine
@@ -156,12 +157,38 @@ namespace HexEngine
 
 	std::string DiskFile::ReadString()
 	{
-		uint32_t len;
-		Read(&len, 4);
+		// Hardened read: never trust the on-disk length prefix. A corrupt or
+		// hostile file can claim any 32-bit length; the original code (a) read
+		// from a possibly-uninitialised `len` when fewer than 4 bytes remained,
+		// and (b) allocated `len` bytes outright - up to 4 GB - before reading,
+		// an easy OOM / denial-of-service. We now:
+		//   1. require the full 4-byte prefix (else return empty),
+		//   2. cap the claimed length at a sane maximum, and
+		//   3. grow the buffer only as real bytes arrive, so a bogus huge length
+		//      allocates no more than the file actually contains.
+		// A well-formed string (written by WriteString) round-trips unchanged.
+		uint32_t len = 0;
+		if (Read(&len, sizeof(len)) != sizeof(len))
+			return {};                                  // truncated / missing prefix
 
-		std::string str(len, '\0');
-		Read(str.data(), len);
+		const uint32_t cap = (static_cast<size_t>(len) < BinaryReader::kDefaultMaxStringLength)
+			? len
+			: static_cast<uint32_t>(BinaryReader::kDefaultMaxStringLength);
 
+		std::string str;
+		char buf[4096];
+		uint32_t remaining = cap;
+		while (remaining > 0)
+		{
+			const uint32_t want = remaining < sizeof(buf) ? remaining : static_cast<uint32_t>(sizeof(buf));
+			const uint32_t got  = Read(buf, want);
+			if (got == 0)
+				break;                                  // hit EOF before `len` bytes
+			str.append(buf, got);
+			remaining -= got;
+			if (got < want)
+				break;                                  // short read -> EOF
+		}
 		return str;
 	}
 }
