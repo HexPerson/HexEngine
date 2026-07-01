@@ -533,6 +533,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Terrain\HeightMapGenerator.hpp" />
     <ClInclude Include="Terrain\MarchingCubes.hpp" />
     <ClInclude Include="Terrain\TerrainGenerator.hpp" />
+    <ClInclude Include="Utility\BlockingQueue.hpp" />
     <ClInclude Include="Utility\CRC32.hpp" />
     <ClInclude Include="Utility\Sha256.hpp" />
     <ClInclude Include="Utility\MemoryManager.hpp" />

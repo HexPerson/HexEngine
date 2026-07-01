@@ -7,9 +7,13 @@
 #include <vector>
 #include <cstdint>
 
+#include <thread>
+#include <atomic>
+
 #include "../HexEngine.Core/Plugin/PluginManifest.hpp"
 #include "../HexEngine.Core/Utility/Sha256.hpp"
 #include "../HexEngine.Core/FileSystem/BinaryReader.hpp"
+#include "../HexEngine.Core/Utility/BlockingQueue.hpp"
 
 using namespace HexEngine;
 
@@ -319,6 +323,87 @@ static void TestBinaryReaderPackedWalk()
 	}
 }
 
+// --- BlockingQueue --------------------------------------------------------
+
+static void TestBlockingQueueBasics()
+{
+	BlockingQueue<int> q;
+	CHECK(q.Empty() && q.Size() == 0 && !q.IsShutdown());
+
+	q.Push(1); q.Push(2); q.Push(3);
+	CHECK(q.Size() == 3);
+
+	int v = 0;
+	// FIFO order.
+	CHECK(q.WaitPop(v) && v == 1);
+	CHECK(q.WaitPop(v) && v == 2);
+	CHECK(q.TryPop(v) && v == 3);
+	CHECK(!q.TryPop(v));            // now empty
+	CHECK(q.Empty());
+
+	// Shutdown makes WaitPop return false and refuses new work.
+	q.Shutdown();
+	CHECK(q.IsShutdown());
+	q.Push(99);                     // ignored while shut down
+	CHECK(q.Empty());
+	int untouched = 42;
+	CHECK(!q.WaitPop(untouched) && untouched == 42);
+}
+
+static void TestBlockingQueueConcurrent()
+{
+	// Multi-producer / multi-consumer: every produced item is consumed exactly
+	// once, and Shutdown() reliably wakes idle consumers so nothing hangs.
+	BlockingQueue<int> q;
+	const int producers = 4;
+	const int perProducer = 1000;
+	const int total = producers * perProducer;
+
+	std::atomic<int> consumedCount{ 0 };
+	std::atomic<long long> consumedSum{ 0 };
+
+	std::vector<std::thread> consumers;
+	for (int c = 0; c < 3; ++c)
+	{
+		consumers.emplace_back([&]
+		{
+			int v = 0;
+			while (q.WaitPop(v))
+			{
+				consumedCount.fetch_add(1, std::memory_order_relaxed);
+				consumedSum.fetch_add(v, std::memory_order_relaxed);
+			}
+		});
+	}
+
+	long long expectedSum = 0;
+	std::vector<std::thread> prods;
+	for (int p = 0; p < producers; ++p)
+	{
+		for (int i = 0; i < perProducer; ++i)
+			expectedSum += (p * perProducer + i);
+
+		prods.emplace_back([&, p]
+		{
+			for (int i = 0; i < perProducer; ++i)
+				q.Push(p * perProducer + i);
+		});
+	}
+
+	for (auto& t : prods) t.join();
+
+	// Wait for consumers to drain everything before shutting down (Shutdown
+	// drops any still-queued items, so we must let them all be consumed first).
+	while (consumedCount.load(std::memory_order_relaxed) < total || !q.Empty())
+		std::this_thread::yield();
+
+	q.Shutdown();
+	for (auto& t : consumers) t.join();  // must not hang - Shutdown woke them
+
+	CHECK(consumedCount.load() == total);
+	CHECK(consumedSum.load() == expectedSum);
+}
+
 int main()
 {
 	std::printf("HexEngine.Tests\n");
@@ -330,6 +415,8 @@ int main()
 	TestBinaryReaderString();
 	TestBinaryReaderCount();
 	TestBinaryReaderPackedWalk();
+	TestBlockingQueueBasics();
+	TestBlockingQueueConcurrent();
 	std::printf("\n%d/%d checks passed.\n", g_total - g_fail, g_total);
 	std::printf(g_fail == 0 ? "RESULT: OK\n" : "RESULT: FAILED\n");
 	return g_fail == 0 ? 0 : 1;

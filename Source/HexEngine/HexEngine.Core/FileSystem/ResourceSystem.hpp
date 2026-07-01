@@ -4,6 +4,7 @@
 
 #include "IResource.hpp"
 #include "IResourceLoader.hpp"
+#include "../Utility/BlockingQueue.hpp"
 
 namespace HexEngine
 {
@@ -66,12 +67,21 @@ namespace HexEngine
 		std::map<fs::path, std::weak_ptr<IResource>> _loadedResources;
 		std::map<fs::path, std::weak_ptr<IResource>> _loadedResourcesByAbsolute;
 		std::map<ResourceId, std::weak_ptr<IResource>> _idToResourceMap;
-		std::list<std::pair<fs::path, ResourceLoadedFn>> _queuedResources;
+
+		// Async load pipeline. Producers (LoadResourceAsync) push onto
+		// _jobQueue; the worker threads block on it (no polling) and, once a
+		// resource is loaded, hand it back to the main thread via
+		// _asyncLoadedForCallback which Update() drains and fires callbacks on.
+		using AsyncJob = std::pair<fs::path, ResourceLoadedFn>;
+		BlockingQueue<AsyncJob> _jobQueue;
 		std::list<std::pair<std::shared_ptr<IResource>, ResourceLoadedFn>> _asyncLoadedForCallback;
 		std::thread _jobThread[MaxAsyncResourceLoaders];
+
+		// Guards the resource maps above. Recursive because LoadResource can
+		// re-enter itself (loading a mesh triggers loading its material) while
+		// already holding the lock.
 		mutable std::recursive_mutex _lock;
 		std::mutex _resourceLoadedCallbackLock;
-		bool _running = true;
 		ResourceId _currentResourceId = 1;
 	};
 }

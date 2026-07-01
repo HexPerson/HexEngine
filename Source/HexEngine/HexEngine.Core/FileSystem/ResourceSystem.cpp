@@ -39,10 +39,13 @@ namespace HexEngine
 
 	void ResourceSystem::Destroy()
 	{
-		_running = false;
+		// Wake every worker blocked in WaitPop so they exit promptly instead of
+		// waiting out a poll interval.
+		_jobQueue.Shutdown();
 
 		for(auto i = 0; i < MaxAsyncResourceLoaders; ++i)
-			_jobThread[i].join();
+			if (_jobThread[i].joinable())
+				_jobThread[i].join();
 
 		for (auto&& resource : _loadedResources)
 		{
@@ -101,41 +104,34 @@ namespace HexEngine
 
 	void ResourceSystem::Update()
 	{
-		_resourceLoadedCallbackLock.lock();
-
-		while (_asyncLoadedForCallback.size() > 0)
-		{		
-			auto& resourceToLoad = _asyncLoadedForCallback.front();
-
-			resourceToLoad.second(resourceToLoad.first);
-
-			_asyncLoadedForCallback.pop_front();
+		// Swap the pending list out under the lock, then fire callbacks with the
+		// lock released. A callback is arbitrary user code (it may queue further
+		// async loads, or run for a while) - holding the lock across it would
+		// needlessly block the worker threads that push completed loads, and any
+		// exception it throws can no longer leave the mutex locked (RAII).
+		std::list<std::pair<std::shared_ptr<IResource>, ResourceLoadedFn>> pending;
+		{
+			std::lock_guard<std::mutex> lock(_resourceLoadedCallbackLock);
+			pending.swap(_asyncLoadedForCallback);
 		}
 
-		_resourceLoadedCallbackLock.unlock();
+		for (auto& item : pending)
+		{
+			if (item.second)
+				item.second(item.first);
+		}
 	}
 
 	void ResourceSystem::JobLoader()
 	{
-		while (_running)
+		// Block until a job arrives (or the queue is shut down) - no polling.
+		AsyncJob job;
+		while (_jobQueue.WaitPop(job))
 		{
-			_lock.lock();
-			if (_queuedResources.size() > 0)
-			{
-				auto resourceToLoad = _queuedResources.front();
-				_queuedResources.pop_front();
-				_lock.unlock();
+			auto resource = LoadResource(job.first);
 
-				auto resource = LoadResource(resourceToLoad.first);
-
-				_resourceLoadedCallbackLock.lock();
-				_asyncLoadedForCallback.push_back({ resource, resourceToLoad.second });
-				_resourceLoadedCallbackLock.unlock();
-			}
-			else
-				_lock.unlock();
-
-			std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			std::lock_guard<std::mutex> lock(_resourceLoadedCallbackLock);
+			_asyncLoadedForCallback.push_back({ resource, std::move(job.second) });
 		}
 	}
 
@@ -395,9 +391,9 @@ namespace HexEngine
 
 	std::shared_ptr<IResource> ResourceSystem::LoadResourceAsync(const fs::path& path, ResourceLoadedFn callback)
 	{
-		std::unique_lock lock(_lock);
-
-		_queuedResources.push_back({ path, callback });
+		// The job queue has its own lock + condition_variable; pushing wakes a
+		// waiting worker immediately (no need to touch the resource-map _lock).
+		_jobQueue.Push({ path, std::move(callback) });
 
 		return nullptr;
 	}
