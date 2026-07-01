@@ -1,0 +1,57 @@
+name: CodeQL
+
+# Semantic security scanning (CodeQL) for the C++ engine. CodeQL must observe a
+# real compile, so this reuses the SAME cmake-preset build steps as the modern
+# build workflow (known-good) and analyses everything the solution compiles -
+# Core plus plugins - with the security-extended query pack. Runs on pushes and
+# PRs to main plus a weekly schedule (CodeQL picks up newly published queries).
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '23 4 * * 1'   # Mondays 04:23 UTC
+
+jobs:
+  analyze:
+    name: Analyze (cpp)
+    runs-on: windows-2022
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          submodules: recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: cpp
+          queries: security-extended
+
+      - name: Configure (Debug)
+        run: cmake --preset vs2022-x64-debug
+
+      - name: Minimal Bootstrap (Debug)
+        run: cmake --build --preset minimal-bootstrap-debug
+
+      - name: Build Solution Modern (Debug)
+        run: cmake --build --preset sln-build-debug-modern
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:cpp"

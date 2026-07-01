@@ -1,0 +1,70 @@
+name: Static Analysis
+
+# Advisory static-analysis pass: clang-format (style) and clang-tidy (defect
+# checks). Both run in ADVISORY mode - findings surface in the job log via
+# continue-on-error so they don't block merges while the ~existing codebase is
+# brought into conformance incrementally. The configs (.clang-format /
+# .clang-tidy at the repo root) are the canonical target; a future sweep can
+# flip these gates to blocking.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  clang-format:
+    name: clang-format (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+
+      - name: Check formatting of hardening sources
+        continue-on-error: true
+        run: |
+          set -x
+          files="
+            Source/HexEngine/HexEngine.Core/FileSystem/BinaryReader.hpp
+            Source/HexEngine/HexEngine.Core/Utility/BlockingQueue.hpp
+            Source/HexEngine/HexEngine.Core/Utility/Sha256.hpp
+            Source/HexEngine/HexEngine.Core/Utility/Sha256.cpp
+            Source/HexEngine/HexEngine.Core/Plugin/PluginManifest.hpp
+            Source/HexEngine/HexEngine.Core/Plugin/PluginManifest.cpp
+            Source/HexEngine/HexEngine.Core/Plugin/ScopedModule.hpp
+            Source/HexEngine/HexEngine.Tests/TestMain.cpp
+          "
+          clang-format --version
+          clang-format --dry-run --Werror $files
+
+  clang-tidy:
+    name: clang-tidy (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install clang-tidy + nlohmann-json
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy nlohmann-json3-dev
+
+      - name: Lint portable hardening TUs
+        continue-on-error: true
+        run: |
+          set -x
+          clang-tidy --version
+          # Only the portable (non-Win32) translation units - Sha256/DiskFile etc.
+          # pull in <windows.h> which isn't available on the Linux tidy runner.
+          # nlohmann-json3-dev supplies <nlohmann/json.hpp> on the default system
+          # include path.
+          clang-tidy --quiet \
+            Source/HexEngine/HexEngine.Core/Plugin/PluginManifest.cpp \
+            -- -std=c++17 \
+               -ISource/HexEngine/HexEngine.Core

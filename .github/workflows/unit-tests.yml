@@ -1,0 +1,61 @@
+name: Unit Tests
+
+# Builds and runs the HexEngine.Tests project - the dependency-free unit-test
+# harness introduced by the production-hardening initiative (plugin manifest /
+# SHA-256 / BinaryReader bounds checks / BlockingQueue concurrency / directory-
+# watcher shutdown). It compiles the pure sources under test directly (no vcpkg
+# restore, no engine link), so it's a fast, reliable gate that runs on every
+# push and PR. A non-zero exit from the test binary fails the job.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  unit-tests:
+    name: Build & run HexEngine.Tests (Debug|x64)
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Install nlohmann-json (header-only)
+        shell: pwsh
+        run: |
+          # The only external dependency of the test TUs (PluginManifest.cpp
+          # parses JSON via <nlohmann/json.hpp>). It's header-only, so a single
+          # targeted vcpkg install is fast and avoids restoring the full engine
+          # manifest (PhysX/GNS/etc.). vcpkg is preinstalled on the runner.
+          vcpkg install nlohmann-json:x64-windows
+          if ($LASTEXITCODE -ne 0) { Write-Error "vcpkg install failed ($LASTEXITCODE)"; exit 1 }
+
+      - name: Build HexEngine.Tests
+        shell: pwsh
+        run: |
+          # Expose the vcpkg include dir to cl.exe via the INCLUDE env var, so we
+          # don't have to touch the project's hard-coded (repo-local) paths.
+          $inc = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows\include"
+          $env:INCLUDE = "$env:INCLUDE;$inc"
+          msbuild Source\HexEngine\HexEngine.Tests\HexEngine.Tests.vcxproj `
+            /p:Configuration=Debug /p:Platform=x64 `
+            /p:SolutionDir=${{ github.workspace }}\Source\HexEngine\ `
+            /m /nologo
+          if ($LASTEXITCODE -ne 0) { Write-Error "Build failed ($LASTEXITCODE)"; exit 1 }
+
+      - name: Run unit tests
+        shell: pwsh
+        run: |
+          $exe = "Source\HexEngine\x64\Debug\HexEngine.Tests.exe"
+          if (-not (Test-Path $exe)) { Write-Error "Test binary not found at $exe"; exit 1 }
+          & $exe
+          if ($LASTEXITCODE -ne 0) { Write-Error "Unit tests FAILED (exit $LASTEXITCODE)"; exit 1 }
+          Write-Host "Unit tests passed."

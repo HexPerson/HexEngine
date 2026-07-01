@@ -1,0 +1,29 @@
+# HexEngine clang-tidy configuration.
+#
+# High-signal, low-noise check set focused on real defects (the sort of
+# memory-safety / lifetime issues the production-hardening pass targets)
+# rather than pure style. Runs in ADVISORY mode in CI (WarningsAsErrors is
+# empty), so findings surface in the job log without blocking merges while
+# the codebase is brought into conformance incrementally.
+Checks: >
+  -*,
+  bugprone-*,
+  cert-*,
+  performance-*,
+  portability-*,
+  misc-*,
+  concurrency-*,
+  clang-analyzer-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions,
+  -cert-err58-cpp,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-include-cleaner
+
+WarningsAsErrors: ''
+
+# Only lint our own sources, not vendored third-party headers.
+HeaderFilterRegex: 'Source[\\/]HexEngine[\\/]HexEngine\.(Core|Tests)[\\/].*'
+
+FormatStyle: file

@@ -1,0 +1,35 @@
+# HexEngine C++ style.
+#
+# This reflects the existing hand-written house style (tabs, Allman braces,
+# namespace-indented). It is the canonical target for a future formatting
+# sweep; until that lands the CI clang-format job runs in ADVISORY mode
+# (it reports diffs but does not fail the build), so this file is a baseline,
+# not yet an enforced gate.
+---
+Language: Cpp
+BasedOnStyle: Microsoft
+
+# Indentation: real tabs, 4 wide.
+UseTab: Always
+TabWidth: 4
+IndentWidth: 4
+AccessModifierOffset: -4
+NamespaceIndentation: All
+
+# Braces on their own line (Allman), matching the codebase.
+BreakBeforeBraces: Allman
+
+# Pointers/refs bind to the type: `Foo* p`, `const Foo& r`.
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# Do NOT reflow long lines or reorder includes - the source has intentional
+# line breaks and include ordering we don't want a formatter to churn.
+ColumnLimit: 0
+SortIncludes: false
+
+# Keep short constructs readable without collapsing them onto one line.
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+FixNamespaceComments: true
