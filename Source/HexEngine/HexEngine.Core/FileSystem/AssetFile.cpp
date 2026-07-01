@@ -1,5 +1,6 @@
 
 #include "AssetFile.hpp"
+#include "BinaryReader.hpp"
 #include "../Environment/IEnvironment.hpp"
 #include "../Environment/LogFile.hpp"
 #include "../FileSystem/ICompressionProvider.hpp"
@@ -16,12 +17,27 @@ namespace HexEngine
 		if (!Open())
 			return false;
 
+		// A well-formed package is at least a full header. Anything smaller is
+		// truncated/garbage - reject before we read a partial (uninitialised)
+		// header off the stream.
+		if (GetSize() < sizeof(AssetFileHeader))
+		{
+			LOG_CRIT("Asset package is smaller than its header (%u bytes) - truncated or not a package", GetSize());
+			Close();
+			return false;
+		}
+
 		// Peek the header so we can tell V1 from V2 before deciding how to
 		// load. Both versions start with the same {version, numFiles}
 		// prefix; the rest of the header differs and downstream parsing
 		// branches accordingly.
 		AssetFileHeader headerProbe = {};
-		Read(&headerProbe, sizeof(AssetFileHeader));
+		if (Read(&headerProbe, sizeof(AssetFileHeader)) != sizeof(AssetFileHeader))
+		{
+			LOG_CRIT("Failed to read asset package header");
+			Close();
+			return false;
+		}
 
 		if (headerProbe.version < AssetFileHeader::MinSupportedVersion ||
 			headerProbe.version > AssetFileHeader::AssetVersion)
@@ -40,6 +56,10 @@ namespace HexEngine
 		// then walk the inlined AssetHeader+data blocks and copy each
 		// asset's bytes into AssetPackage::_assetMap. Asset bytes stay
 		// resident in memory for the package's entire lifetime.
+		//
+		// Every block is validated against the bytes actually present: a
+		// corrupt AssetHeader::size can no longer walk the cursor off the end
+		// of the buffer (an out-of-bounds heap read in the original code).
 		// -----------------------------------------------------------------
 		if (headerProbe.version == 1)
 		{
@@ -52,25 +72,66 @@ namespace HexEngine
 			ReadAll(data);
 			Close();
 
-			uint8_t* p = data.data();
-			AssetFileHeader* header = reinterpret_cast<AssetFileHeader*>(p);
+			if (data.size() < sizeof(AssetFileHeader))
+			{
+				LOG_CRIT("V1 asset package truncated before header");
+				return false;
+			}
+
+			// The header is read raw at the front; if the package was
+			// whole-package compressed, the walked bytes live in the
+			// decompressed buffer instead.
+			const uint8_t* base = data.data();
+			size_t         baseSize = data.size();
+			AssetFileHeader* header = reinterpret_cast<AssetFileHeader*>(data.data());
 
 			if (header->compressed)
 			{
 				if (!g_pEnv->_compressionProvider->DecompressData(data, _decompressed))
 					return false;
-				p = _decompressed.data();
-				header = reinterpret_cast<AssetFileHeader*>(p);
+
+				if (_decompressed.size() < sizeof(AssetFileHeader))
+				{
+					LOG_CRIT("V1 asset package decompressed payload is smaller than its header");
+					return false;
+				}
+
+				base = _decompressed.data();
+				baseSize = _decompressed.size();
+				header = reinterpret_cast<AssetFileHeader*>(_decompressed.data());
 			}
 
-			p += sizeof(AssetFileHeader);
+			const uint32_t numFiles = header->numFiles;
 
-			for (uint32_t i = 0; i < header->numFiles; ++i)
+			BinaryReader r(base, baseSize);
+			if (!r.Skip(sizeof(AssetFileHeader)))
 			{
-				AssetHeader* fileHeader = reinterpret_cast<AssetHeader*>(p);
+				LOG_CRIT("V1 asset package header overruns its payload");
+				return false;
+			}
+
+			for (uint32_t i = 0; i < numFiles; ++i)
+			{
+				// Validate the AssetHeader is fully present...
+				const uint8_t* headerPtr = r.ReadInPlace(sizeof(AssetHeader));
+				if (!headerPtr)
+				{
+					LOG_CRIT("V1 asset package truncated: entry %u/%u header runs past end of payload", i, numFiles);
+					return false;
+				}
+
+				AssetHeader* fileHeader = reinterpret_cast<AssetHeader*>(const_cast<uint8_t*>(headerPtr));
+
+				// ...then that its inline data bytes are all present before
+				// AddAsset copies them (it reads `size` bytes past the header).
+				if (!r.Skip(fileHeader->size))
+				{
+					LOG_CRIT("V1 asset package corrupt: entry %u/%u claims %u data bytes past end of payload", i, numFiles, fileHeader->size);
+					return false;
+				}
+
 				LOG_INFO("Asset (v1): %S, size %u", fileHeader->relativePath, fileHeader->size);
 				package->AddAsset(fileHeader);
-				p += (sizeof(AssetHeader) + fileHeader->size);
 			}
 
 			return true;
@@ -87,19 +148,40 @@ namespace HexEngine
 		LOG_INFO("Loading v2 asset package with %u files (lazy streaming)", headerProbe.numFiles);
 
 		// Header is already consumed; TOC immediately follows.
-		std::vector<AssetTocEntry> entries(headerProbe.numFiles);
 		if (headerProbe.numFiles > 0)
 		{
-			const uint32_t expectedTocBytes = headerProbe.numFiles * sizeof(AssetTocEntry);
+			// 64-bit product so a large count can't wrap when sized against the
+			// entry stride.
+			const uint64_t expectedTocBytes = (uint64_t)headerProbe.numFiles * sizeof(AssetTocEntry);
+
 			if (headerProbe.tocSize != expectedTocBytes)
 			{
-				LOG_CRIT("V2 asset package TOC size mismatch: expected %u bytes, file says %u",
-					expectedTocBytes, headerProbe.tocSize);
+				LOG_CRIT("V2 asset package TOC size mismatch: expected %llu bytes, file says %u",
+					(unsigned long long)expectedTocBytes, headerProbe.tocSize);
 				Close();
 				return false;
 			}
 
-			Read(entries.data(), expectedTocBytes);
+			// The TOC must physically fit in the file after the header, else a
+			// bogus numFiles would drive an over-read (and an over-allocation
+			// of `entries`).
+			const uint64_t bytesAfterHeader = (uint64_t)GetSize() - sizeof(AssetFileHeader);
+			if (expectedTocBytes > bytesAfterHeader)
+			{
+				LOG_CRIT("V2 asset package TOC (%llu bytes) does not fit in the file (%llu bytes after header)",
+					(unsigned long long)expectedTocBytes, (unsigned long long)bytesAfterHeader);
+				Close();
+				return false;
+			}
+
+			std::vector<AssetTocEntry> entries(headerProbe.numFiles);
+			const uint32_t got = Read(entries.data(), (uint32_t)expectedTocBytes);
+			if (got != expectedTocBytes)
+			{
+				LOG_CRIT("V2 asset package TOC truncated: read %u of %llu bytes", got, (unsigned long long)expectedTocBytes);
+				Close();
+				return false;
+			}
 
 			for (const auto& entry : entries)
 			{

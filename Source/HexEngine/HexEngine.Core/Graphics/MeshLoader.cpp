@@ -5,7 +5,8 @@
 #include "../Scene/Mesh.hpp"
 #include "../Scene/AnimatedMesh.hpp"
 #include "../FileSystem/FileSystem.hpp"
-#include "../FileSystem/MemoryFile.hpp"
+#include "../FileSystem/DiskFile.hpp"
+#include "../FileSystem/BinaryReader.hpp"
 #include "Material.hpp"
 
 namespace HexEngine
@@ -34,21 +35,28 @@ namespace HexEngine
 
 		LOG_INFO("Loading mesh '%s'", absolutePath.filename().string().c_str());
 
+		// Slurp the whole .hmesh into memory and parse it through a
+		// bounds-checked BinaryReader. The parser never trusts a file-provided
+		// count or length - every allocation is validated against the bytes
+		// actually present - so a corrupt or hostile .hmesh fails cleanly
+		// instead of over-allocating or reading out of bounds.
+		std::vector<uint8_t> bytes;
+		file.ReadAll(bytes);
+		file.Close();
+
 		// Use absolutePath both as "where I came from" (for resolving the
 		// relative mesh name used when constructing Mesh/AnimatedMesh) and as
 		// the cache key for the loaded resource - the file path is the canonical
 		// identity for disk-loaded meshes.
-		auto result = ParseMeshFromReader(file, absolutePath, absolutePath, fileSystem, meshOpts);
-		file.Close();
-		return result;
+		BinaryReader reader(bytes);
+		return ParseMeshFromReader(reader, absolutePath, absolutePath, fileSystem, meshOpts);
 	}
 
 	std::shared_ptr<IResource> MeshLoader::LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options)
 	{
 		const MeshLoadOptions* meshOpts = reinterpret_cast<const MeshLoadOptions*>(options);
 
-		MemoryFile file(data, relativePath);
-		if (!file.Open() || file.GetSize() == 0)
+		if (data.empty())
 		{
 			LOG_CRIT("Mesh memory buffer for '%s' is empty or invalid", relativePath.string().c_str());
 			return nullptr;
@@ -56,14 +64,36 @@ namespace HexEngine
 
 		LOG_INFO("Loading packaged mesh '%s'", relativePath.filename().string().c_str());
 
-		return ParseMeshFromReader(file, relativePath, relativePath, fileSystem, meshOpts);
+		// The .pkg already handed us the full asset bytes; parse them in place.
+		BinaryReader reader(data);
+		return ParseMeshFromReader(reader, relativePath, relativePath, fileSystem, meshOpts);
 	}
 
-	std::shared_ptr<IResource> MeshLoader::ParseMeshFromReader(DiskFile& file, const fs::path& sourcePath, const fs::path& relativeKey, FileSystem* fileSystem, const MeshLoadOptions* meshOpts)
+	// Bail out of a parse on the first sign of corruption/truncation. `sourcePath`
+	// is captured from the enclosing function's parameter.
+	#define MESH_REQUIRE(expr) do { if (!(expr)) { \
+		LOG_CRIT("Corrupt or truncated mesh '%s' (failed check: %s)", sourcePath.string().c_str(), #expr); \
+		return nullptr; } } while(0)
+
+	std::shared_ptr<IResource> MeshLoader::ParseMeshFromReader(BinaryReader& r, const fs::path& sourcePath, const fs::path& relativeKey, FileSystem* fileSystem, const MeshLoadOptions* meshOpts)
 	{
+		// Conservative lower bounds on the on-disk byte footprint of one element,
+		// used to bound a file-provided count BEFORE we resize(): count * floor
+		// must fit the bytes that remain, so a bogus count can't drive a huge
+		// allocation. Exact for fixed-size records; a hard lower bound for the
+		// variable-size ones (which assume empty strings / zero sub-counts - the
+		// smallest a real element can be), which is all the guard needs.
+		const size_t kAnimFloor    = 4 + 4 + 4 + 4 + 4 + sizeof(math::Matrix); // name+ticks+dur+root+chanCount+globalInv
+		const size_t kChannelFloor = 4 + 4 + 4 + 4 + sizeof(math::Matrix) + 4; // name+3 keyCounts+nodeXform+childCount
+		const size_t kNameFloor    = 4;                                        // a length-prefixed string is >= 4 bytes
+		const size_t kPosKeyBytes  = sizeof(float) + sizeof(math::Vector3);
+		const size_t kRotKeyBytes  = sizeof(float) + sizeof(math::Quaternion);
+		const size_t kScaleKeyBytes = sizeof(float) + sizeof(math::Vector3);
+
 		std::shared_ptr<Mesh> mesh;
 
-		bool hasAnimations = file.Read<bool>();
+		bool hasAnimations = false;
+		MESH_REQUIRE(r.Read(hasAnimations));
 
 		if (hasAnimations)
 		{
@@ -72,18 +102,22 @@ namespace HexEngine
 			AnimatedMesh* animatedMesh = reinterpret_cast<AnimatedMesh*>(mesh.get());
 
 			// read the number of faces
-			uint32_t numFaces;
-			file.Read<uint32_t>(&numFaces);
+			uint32_t numFaces = 0;
+			MESH_REQUIRE(r.Read(numFaces));
 
 			// Read the vertices
-			uint32_t numVertices = file.Read<uint32_t>();
+			uint32_t numVertices = 0;
+			MESH_REQUIRE(r.ReadCount(numVertices, sizeof(AnimatedMeshVertex)));
 			std::vector<AnimatedMeshVertex> vertices(numVertices);
-			file.Read((uint8_t*)vertices.data(), numVertices * sizeof(AnimatedMeshVertex));
+			if (numVertices > 0)
+				MESH_REQUIRE(r.ReadBytes(vertices.data(), (size_t)numVertices * sizeof(AnimatedMeshVertex)));
 
 			// read the index data
-			uint32_t numIndices = file.Read<uint32_t>();
+			uint32_t numIndices = 0;
+			MESH_REQUIRE(r.ReadCount(numIndices, sizeof(MeshIndexFormat)));
 			std::vector<MeshIndexFormat> indices(numIndices);
-			file.Read((uint8_t*)indices.data(), (uint32_t)indices.size() * sizeof(MeshIndexFormat));
+			if (numIndices > 0)
+				MESH_REQUIRE(r.ReadBytes(indices.data(), (size_t)numIndices * sizeof(MeshIndexFormat)));
 
 			animatedMesh->SetNumFaces(numFaces);
 			animatedMesh->AddVertices(vertices);
@@ -91,55 +125,65 @@ namespace HexEngine
 
 			auto animData = animatedMesh->CreateAnimationData();
 
-			animData->_animations.resize(file.Read<uint32_t>());
+			uint32_t numAnims = 0;
+			MESH_REQUIRE(r.ReadCount(numAnims, kAnimFloor));
+			animData->_animations.resize(numAnims);
 
-			//for(uint32_t i = 0; i < animData->_animations.size(); ++i)
 			for (auto& anim : animData->_animations)
 			{
-				//auto& anim = animData->_animations[i];
+				MESH_REQUIRE(r.ReadString(anim.name));
 
-				anim.name = file.ReadString();
+				MESH_REQUIRE(r.Read(anim.ticksPerSecond));
+				MESH_REQUIRE(r.Read(anim.duration));
 
-				anim.ticksPerSecond = file.Read<float>();
-				anim.duration = file.Read<float>();
+				std::string rootNodeName;
+				MESH_REQUIRE(r.ReadString(rootNodeName));
 
-				auto rootNodeName = file.ReadString();
-
-				anim.channels.resize(file.Read<uint32_t>());
+				uint32_t numChannels = 0;
+				MESH_REQUIRE(r.ReadCount(numChannels, kChannelFloor));
+				anim.channels.resize(numChannels);
 
 				for (auto& chan : anim.channels)
 				{
-					chan.nodeName = file.ReadString();
+					MESH_REQUIRE(r.ReadString(chan.nodeName));
 
 					if (chan.nodeName == rootNodeName)
 					{
 						anim._rootNode = &chan;
 					}
 
-					chan.positionKeys.resize(file.Read<uint32_t>());
+					uint32_t numPosKeys = 0;
+					MESH_REQUIRE(r.ReadCount(numPosKeys, kPosKeyBytes));
+					chan.positionKeys.resize(numPosKeys);
 					for (auto& pk : chan.positionKeys)
 					{
-						pk.first = file.Read<float>();
-						pk.second = file.Read<math::Vector3>();
+						MESH_REQUIRE(r.Read(pk.first));
+						MESH_REQUIRE(r.Read(pk.second));
 					}
 
-					chan.rotationKeys.resize(file.Read<uint32_t>());
+					uint32_t numRotKeys = 0;
+					MESH_REQUIRE(r.ReadCount(numRotKeys, kRotKeyBytes));
+					chan.rotationKeys.resize(numRotKeys);
 					for (auto& pk : chan.rotationKeys)
 					{
-						pk.first = file.Read<float>();
-						pk.second = file.Read<math::Quaternion>();
+						MESH_REQUIRE(r.Read(pk.first));
+						MESH_REQUIRE(r.Read(pk.second));
 					}
 
-					chan.scaleKeys.resize(file.Read<uint32_t>());
+					uint32_t numScaleKeys = 0;
+					MESH_REQUIRE(r.ReadCount(numScaleKeys, kScaleKeyBytes));
+					chan.scaleKeys.resize(numScaleKeys);
 					for (auto& pk : chan.scaleKeys)
 					{
-						pk.first = file.Read<float>();
-						pk.second = file.Read<math::Vector3>();
+						MESH_REQUIRE(r.Read(pk.first));
+						MESH_REQUIRE(r.Read(pk.second));
 					}
 
-					chan.nodeTransform = file.Read<math::Matrix>();
-					chan.children.resize(file.Read<uint32_t>());
-					
+					MESH_REQUIRE(r.Read(chan.nodeTransform));
+
+					uint32_t numChildren = 0;
+					MESH_REQUIRE(r.ReadCount(numChildren, kNameFloor));
+					chan.children.resize(numChildren);
 				}
 
 				// read the child hierarchy
@@ -147,7 +191,8 @@ namespace HexEngine
 				{
 					for (auto& child : chan.children)
 					{
-						auto childNodeName = file.ReadString();
+						std::string childNodeName;
+						MESH_REQUIRE(r.ReadString(childNodeName));
 
 						auto it = std::find_if(anim.channels.begin(), anim.channels.end(),
 							[childNodeName](const AnimChannel& c)
@@ -171,18 +216,26 @@ namespace HexEngine
 				// .hmesh files must be re-imported (only animated meshes
 				// affected - static .hmesh files use the unanimated branch
 				// above which is unchanged).
-				anim._globalInverseTransform = file.Read<math::Matrix>();
+				MESH_REQUIRE(r.Read(anim._globalInverseTransform));
 			}
 
-			animData->_globalInverseTransform = file.Read<math::Matrix>();
+			MESH_REQUIRE(r.Read(animData->_globalInverseTransform));
 
-			uint32_t numBones = file.Read<uint32_t>();
+			uint32_t numBones = 0;
+			MESH_REQUIRE(r.Read(numBones));
+			// The bone info is stored in a fixed std::array<BoneInfo, MAX_BONES>;
+			// a file-provided count above the cap would index out of bounds in the
+			// loop below (before SetBoneMap's own guard could reject it), so refuse
+			// the file outright.
+			MESH_REQUIRE(numBones <= (uint32_t)MAX_BONES);
 
 			AnimatedMesh::BoneNameMap bones;
 			for (uint32_t i = 0; i < numBones; ++i)
 			{
-				auto boneName = file.ReadString();
-				auto boneId = file.Read<uint32_t>();
+				std::string boneName;
+				MESH_REQUIRE(r.ReadString(boneName));
+				uint32_t boneId = 0;
+				MESH_REQUIRE(r.Read(boneId));
 
 				bones[boneName] = boneId;
 			}
@@ -190,7 +243,8 @@ namespace HexEngine
 			AnimatedMesh::BoneInfoArray boneInfo;
 			for (uint32_t i = 0; i < numBones; ++i)
 			{
-				BoneInfo bi = file.Read<BoneInfo>();
+				BoneInfo bi{};
+				MESH_REQUIRE(r.Read(bi));
 				boneInfo[i] = bi;
 			}
 			animatedMesh->SetBoneMap(numBones, bones, boneInfo);
@@ -201,18 +255,22 @@ namespace HexEngine
 			mesh = std::shared_ptr<Mesh>(new Mesh(nullptr, fs::relative(sourcePath, fileSystem->GetDataDirectory()).string()), ResourceDeleter());
 
 			// read the number of faces
-			uint32_t numFaces;
-			file.Read<uint32_t>(&numFaces);
+			uint32_t numFaces = 0;
+			MESH_REQUIRE(r.Read(numFaces));
 
 			// Read the vertices
-			uint32_t numVertices = file.Read<uint32_t>();
+			uint32_t numVertices = 0;
+			MESH_REQUIRE(r.ReadCount(numVertices, sizeof(MeshVertex)));
 			std::vector<MeshVertex> vertices(numVertices);
-			file.Read((uint8_t*)vertices.data(), numVertices * sizeof(MeshVertex));
+			if (numVertices > 0)
+				MESH_REQUIRE(r.ReadBytes(vertices.data(), (size_t)numVertices * sizeof(MeshVertex)));
 
 			// read the index data
-			uint32_t numIndices = file.Read<uint32_t>();
+			uint32_t numIndices = 0;
+			MESH_REQUIRE(r.ReadCount(numIndices, sizeof(MeshIndexFormat)));
 			std::vector<MeshIndexFormat> indices(numIndices);
-			file.Read((uint8_t*)indices.data(), (uint32_t)indices.size() * sizeof(MeshIndexFormat));
+			if (numIndices > 0)
+				MESH_REQUIRE(r.ReadBytes(indices.data(), (size_t)numIndices * sizeof(MeshIndexFormat)));
 
 			if ((meshOpts && meshOpts->populateVertices) || meshOpts == nullptr)
 			{
@@ -223,12 +281,13 @@ namespace HexEngine
 		}
 
 		// read the material
-		bool hasMaterial = file.Read<bool>();
+		bool hasMaterial = false;
+		MESH_REQUIRE(r.Read(hasMaterial));
 		std::string matName;
 
 		if (hasMaterial)
 		{
-			matName = file.ReadString();
+			MESH_REQUIRE(r.ReadString(matName));
 		}
 
 		// force the animated shader, otherwise the mesh won't be animated
@@ -238,12 +297,19 @@ namespace HexEngine
 		}
 
 		mesh->SetMaterialName(matName);
-		
-		dx::BoundingBox aabb = file.Read<dx::BoundingBox>();
-		dx::BoundingOrientedBox obb = file.Read<dx::BoundingOrientedBox>();
-		
+
+		dx::BoundingBox aabb{};
+		dx::BoundingOrientedBox obb{};
+		MESH_REQUIRE(r.Read(aabb));
+		MESH_REQUIRE(r.Read(obb));
+
 		mesh->SetAABB(aabb);
 		mesh->SetOBB(obb);
+
+		// Final integrity gate: if any read past this point (or earlier scalar
+		// reads) ran the stream dry, the reader has latched failure - reject the
+		// whole mesh rather than hand back a half-populated one.
+		MESH_REQUIRE(r.Good());
 
 		if ((meshOpts && meshOpts->createMaterial) || meshOpts == nullptr)
 		{
@@ -260,12 +326,11 @@ namespace HexEngine
 		if((meshOpts && meshOpts->createBuffers) || meshOpts == nullptr)
 			mesh->CreateBuffers();
 
-		// NOTE: caller (LoadResourceFromFile / LoadResourceFromMemory) closes
-		// the reader. We deliberately don't close `file` here so the helper
-		// stays neutral to the underlying file kind.
 		(void)relativeKey;
 		return mesh;
 	}
+
+	#undef MESH_REQUIRE
 
 	void MeshLoader::UnloadResource(IResource* resource)
 	{
@@ -415,8 +480,8 @@ namespace HexEngine
 
 			// write the index data
 			file.Write<uint32_t>((uint32_t)indices.size());
-			file.Write((uint8_t*)indices.data(), (uint32_t)indices.size() * sizeof(MeshIndexFormat));			
-		}		
+			file.Write((uint8_t*)indices.data(), (uint32_t)indices.size() * sizeof(MeshIndexFormat));
+		}
 
 		// write the material
 		auto material = mesh->GetMaterial();
@@ -428,7 +493,7 @@ namespace HexEngine
 		else
 		{
 			file.Write<bool>(false);
-		}		
+		}
 
 		// write the aabb + obb
 		file.Write<dx::BoundingBox>(mesh->GetAABB());

@@ -31,10 +31,11 @@ namespace HexEngine
 
 	private:
 		// Shared parsing body used by both the file-path and memory loading
-		// entry points. Takes any DiskFile-derived reader (real DiskFile when
-		// loading from disk, MemoryFile when loading from a .pkg buffer) - all
-		// the binary parsing uses the inherited Read<T> / ReadString templates
-		// which route through the virtual Read(void*, uint32_t) override.
-		std::shared_ptr<IResource>	ParseMeshFromReader(class DiskFile& reader, const fs::path& sourcePath, const fs::path& relativeKey, FileSystem* fileSystem, const struct MeshLoadOptions* meshOpts);
+		// entry points. Both entries materialise the full asset bytes (slurped
+		// from disk, or handed over by the .pkg) and parse them through a
+		// bounds-checked BinaryReader: every file-provided count/length is
+		// validated against the bytes actually present before it drives an
+		// allocation or a bulk read, so a corrupt/hostile .hmesh fails cleanly.
+		std::shared_ptr<IResource>	ParseMeshFromReader(class BinaryReader& r, const fs::path& sourcePath, const fs::path& relativeKey, FileSystem* fileSystem, const struct MeshLoadOptions* meshOpts);
 	};
 }

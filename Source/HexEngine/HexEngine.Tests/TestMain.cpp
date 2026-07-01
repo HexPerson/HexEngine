@@ -263,6 +263,62 @@ static void TestBinaryReaderCount()
 	}
 }
 
+// Mirrors the AssetFile V1 block walk: a stream of {fixed record header, then
+// `size` inline payload bytes}. The hardened walk uses ReadInPlace(headerSize) +
+// Skip(size); a record whose size runs past the buffer must be rejected instead
+// of walking the cursor out of bounds (the original OOB heap read).
+static bool WalkPackedBlocks(const std::vector<uint8_t>& buf, uint32_t numBlocks, size_t headerSize, int& outWalked)
+{
+	outWalked = 0;
+	BinaryReader r(buf);
+	for (uint32_t i = 0; i < numBlocks; ++i)
+	{
+		const uint8_t* hdr = r.ReadInPlace(headerSize);
+		if (!hdr)
+			return false;                 // header runs past end
+		uint32_t size = 0;
+		std::memcpy(&size, hdr, sizeof(size)); // first field of the record is the payload size
+		if (!r.Skip(size))
+			return false;                 // payload runs past end
+		++outWalked;
+	}
+	return true;
+}
+
+static void TestBinaryReaderPackedWalk()
+{
+	const size_t headerSize = 8; // {uint32 size; uint32 pad;}
+
+	// Two well-formed blocks: sizes 3 and 2.
+	{
+		std::vector<uint8_t> buf;
+		PushU32(buf, 3); PushU32(buf, 0); buf.insert(buf.end(), { 'a','b','c' });
+		PushU32(buf, 2); PushU32(buf, 0); buf.insert(buf.end(), { 'd','e' });
+		int walked = 0;
+		CHECK(WalkPackedBlocks(buf, 2, headerSize, walked));
+		CHECK(walked == 2);
+	}
+
+	// Malicious: header claims a 4 GB payload in a tiny buffer -> rejected, and
+	// the walk stops without ever dereferencing out of bounds.
+	{
+		std::vector<uint8_t> buf;
+		PushU32(buf, 0xFFFFFFFFu); PushU32(buf, 0); buf.insert(buf.end(), { 'x','y' });
+		int walked = 0;
+		CHECK(!WalkPackedBlocks(buf, 1, headerSize, walked));
+		CHECK(walked == 0);
+	}
+
+	// Count claims more blocks than the buffer holds -> second header read fails.
+	{
+		std::vector<uint8_t> buf;
+		PushU32(buf, 1); PushU32(buf, 0); buf.insert(buf.end(), { 'z' });
+		int walked = 0;
+		CHECK(!WalkPackedBlocks(buf, 5, headerSize, walked)); // asks for 5, only 1 present
+		CHECK(walked == 1);
+	}
+}
+
 int main()
 {
 	std::printf("HexEngine.Tests\n");
@@ -273,6 +329,7 @@ int main()
 	TestBinaryReaderBytesAndSeek();
 	TestBinaryReaderString();
 	TestBinaryReaderCount();
+	TestBinaryReaderPackedWalk();
 	std::printf("\n%d/%d checks passed.\n", g_total - g_fail, g_total);
 	std::printf(g_fail == 0 ? "RESULT: OK\n" : "RESULT: FAILED\n");
 	return g_fail == 0 ? 0 : 1;
