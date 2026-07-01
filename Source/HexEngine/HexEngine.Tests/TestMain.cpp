@@ -10,6 +10,10 @@
 #include <thread>
 #include <atomic>
 
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+
 #include "../HexEngine.Core/Plugin/PluginManifest.hpp"
 #include "../HexEngine.Core/Utility/Sha256.hpp"
 #include "../HexEngine.Core/FileSystem/BinaryReader.hpp"
@@ -404,6 +408,49 @@ static void TestBlockingQueueConcurrent()
 	CHECK(consumedSum.load() == expectedSum);
 }
 
+// --- DirectoryWatcher shutdown contract -----------------------------------
+
+static void TestDirectoryWatchStopJoin()
+{
+	// Mirrors FileSystem's watcher shutdown: a worker blocks on
+	// WaitForMultipleObjects({completion, stop}, INFINITE); signalling the
+	// manual-reset stop event must wake it so the owning thread's join()
+	// returns instead of hanging (the whole point of moving off a detached
+	// thread + synchronous ReadDirectoryChangesW).
+	HANDLE completion = CreateEventW(NULL, FALSE, FALSE, NULL); // auto-reset
+	HANDLE stop       = CreateEventW(NULL, TRUE,  FALSE, NULL); // manual-reset
+	CHECK(completion != NULL && stop != NULL);
+
+	std::atomic<bool> exited{ false };
+	std::atomic<int>  iterations{ 0 };
+	std::thread worker([&]
+	{
+		HANDLE handles[2] = { completion, stop };
+		while (true)
+		{
+			iterations.fetch_add(1, std::memory_order_relaxed);
+			DWORD r = WaitForMultipleObjects(2, handles, FALSE, INFINITE);
+			if (r != WAIT_OBJECT_0)   // stop signalled (WAIT_OBJECT_0+1) or failure
+				break;
+			// completion signalled -> re-arm (loop again)
+		}
+		exited.store(true, std::memory_order_relaxed);
+	});
+
+	// Poke completion twice to prove the loop re-arms and does NOT exit early...
+	SetEvent(completion);
+	SetEvent(completion);
+	// ...then request stop and join. This must return promptly, not hang.
+	SetEvent(stop);
+	worker.join();
+
+	CHECK(exited.load(std::memory_order_relaxed));
+	CHECK(iterations.load(std::memory_order_relaxed) >= 1);
+
+	CloseHandle(completion);
+	CloseHandle(stop);
+}
+
 int main()
 {
 	std::printf("HexEngine.Tests\n");
@@ -417,6 +464,7 @@ int main()
 	TestBinaryReaderPackedWalk();
 	TestBlockingQueueBasics();
 	TestBlockingQueueConcurrent();
+	TestDirectoryWatchStopJoin();
 	std::printf("\n%d/%d checks passed.\n", g_total - g_fail, g_total);
 	std::printf(g_fail == 0 ? "RESULT: OK\n" : "RESULT: FAILED\n");
 	return g_fail == 0 ? 0 : 1;
