@@ -151,10 +151,40 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
   </ItemDefinitionGroup>
   <ItemGroup>
     <HexEngineShader Include="Atmosphere.shader" />
+    <HexEngineShader Include="OutlineSeed.shader" />
+    <HexEngineShader Include="OutlineJFA.shader" />
+    <HexEngineShader Include="OutlineComposite.shader" />
     <HexEngineShader Include="DiffuseGIAmbientOcclusion.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
     <HexEngineShader Include="DiffuseGIAOBlur.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="AtmosphereCommon.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="AtmosphereTransmittanceLUT.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="AtmosphereMultiScatteringLUT.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="AtmosphereSkyViewLUT.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="AtmosphereAerialPerspectiveLUT.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="AtmosphereAerialPerspectiveApply.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="VolumetricScatterDensity.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="VolumetricScatterIntegrate.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="VolumetricScatterApply.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
     <HexEngineShader Include="AtmospherePhysical.shader" />

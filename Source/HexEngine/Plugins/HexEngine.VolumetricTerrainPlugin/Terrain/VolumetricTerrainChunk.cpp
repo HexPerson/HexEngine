@@ -375,7 +375,10 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			if (_entity != nullptr)
 			{
 				_entity->SetParent(parentEntity);
-				_entity->SetFlag(EntityFlags::ExcludeFromHLOD | EntityFlags::DoNotSave);
+				// DoNotBlockNavMesh: keep the volumetric terrain out of scene navmesh
+				// bakes (CalculateSceneStats skips this flag) so agents navigate the
+				// roads/floors, not the landscape.
+				_entity->SetFlag(EntityFlags::ExcludeFromHLOD | EntityFlags::DoNotSave | EntityFlags::DoNotBlockNavMesh);
 				_entity->SetLayer(Layer::StaticGeometry);
 				_meshComponent = _entity->AddComponent<StaticMeshComponent>();
 				_meshComponent->SetIncludeInGIWhenHidden(true);

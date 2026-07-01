@@ -47,7 +47,23 @@ void VertexBufferD3D12::Destroy()
 void VertexBufferD3D12::SetVertexData(uint8_t* data, uint32_t size, uint32_t offset /*= 0*/)
 {
 	if (data == nullptr || size == 0 || _byteSize == 0 || _device == nullptr) return;
-	if (offset + size > _byteSize) return;
+	if (offset + size > _byteSize)
+	{
+		// B5 visual-parity debug: a dropped upload leaves this buffer holding
+		// stale/garbage geometry while the draw still references it - a prime
+		// suspect for the "some meshes scramble / reversed winding" corruption.
+		// D3D11's SetVertexData never drops (persistent MAP_WRITE_DISCARD), so
+		// this path is a backend divergence. If it fires, the buffer was created
+		// too small for the data the engine later writes.
+		static int s_drop = 0;
+		if (s_drop < 16)
+		{
+			++s_drop;
+			LOG_WARN("D3D12 VB SetVertexData DROPPED upload: offset=%u size=%u > byteSize=%u (stride=%u) - mesh keeps stale geometry",
+				offset, size, _byteSize, _stride);
+		}
+		return;
+	}
 
 	const uint64_t completed = _device->GetCompletedFenceValue();
 

@@ -1,6 +1,7 @@
 
 
 #include "SoundEffect.hpp"
+#include "AudioManager.hpp"
 #include "../Environment/IEnvironment.hpp"
 #include "../FileSystem/ResourceSystem.hpp"
 
@@ -39,6 +40,13 @@ namespace HexEngine
 		clone->_is3D = _is3D;
 		clone->_radius = _radius;
 		clone->_instance = _effect->CreateInstance(dx::SoundEffectInstance_Use3D);
+		// Register so the AudioManager's per-frame Apply3D loop picks
+		// the clone up. Without this the clone's 3D position is fixed
+		// at whatever Loop()/Play() set it to - moving emitters
+		// (vehicles, projectiles) appear stuck at their spawn point.
+		// Resource-loaded SoundEffects auto-register in LoadResource*().
+		if (g_pEnv != nullptr && g_pEnv->_audioManager != nullptr)
+			g_pEnv->_audioManager->RegisterPlaybackInstance(clone);
 		return clone;
 	}
 
@@ -50,12 +58,16 @@ namespace HexEngine
 
 	void SoundEffect::SetPitch(float pitch)
 	{
-		_instance->SetPitch(pitch);
+		// DirectX SoundEffectInstance::SetPitch is asserts-on-out-of-range
+		// in [-1, 1] (semi-octave: -1 = down one octave, +1 = up one
+		// octave, 0 = original). Clamp here so a caller passing a stale
+		// or unconverted value doesn't crash the audio thread.
+		_instance->SetPitch(std::clamp(pitch, -1.0f, 1.0f));
 	}
 
 	void SoundEffect::SetRadius(float radius)
 	{
-		//_emitter.EnableDefaultCurves();		
+		//_emitter.EnableDefaultCurves();
 
 		_emitter.pVolumeCurve = const_cast<X3DAUDIO_DISTANCE_CURVE*>(&c_defaultCurve);
 		_emitter.pLFECurve = const_cast<X3DAUDIO_DISTANCE_CURVE*>(&c_defaultCurve);
@@ -63,6 +75,14 @@ namespace HexEngine
 
 		_emitter.CurveDistanceScaler = radius;
 		_radius = radius;
+	}
+
+	void SoundEffect::SetPosition(const math::Vector3& position)
+	{
+		// AudioManager::Update() re-applies Apply3D each frame using the
+		// emitter's stored position, so updating it here is enough to
+		// move a playing/looping sound without a restart.
+		_emitter.SetPosition(position);
 	}
 
 	float SoundEffect::GetDuration()

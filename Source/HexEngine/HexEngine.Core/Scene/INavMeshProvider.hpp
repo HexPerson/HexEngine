@@ -2,6 +2,8 @@
 #pragma once
 
 #include "../Plugin/IPlugin.hpp"
+#include <vector>
+#include <cstdint>
 
 namespace HexEngine
 {
@@ -10,6 +12,31 @@ namespace HexEngine
 
 	const int32_t MaxPaths = 256;
 	using NavMeshId = uint32_t;
+
+	// A navmesh area-modifier footprint, gathered from NavMeshBlockingVolume
+	// components and applied during the Recast build. `corners` is the box's base
+	// quad in world space (XZ used for the convex footprint); `ymin`/`ymax` bound the
+	// vertical extent. mode: 0 = Block (carve unwalkable), 1 = ForceWalkable (restore
+	// walkability, e.g. a crossing over a blocked road).
+	struct NavMeshBlockingBox
+	{
+		math::Vector3 corners[4];
+		float ymin = 0.0f;
+		float ymax = 0.0f;
+		int32_t mode = 0;
+	};
+
+	// An off-mesh connection gathered from NavMeshLinkComponent components and fed to
+	// Detour at build time. start/end are world-space; agents can path start->end (and
+	// end->start when bidirectional) even with no walkable polygon between the two
+	// points. Both endpoints must be on/near existing navmesh for Detour to bind them.
+	struct NavMeshLink
+	{
+		math::Vector3 start;
+		math::Vector3 end;
+		float radius = 0.6f;
+		bool  bidirectional = true;
+	};
 
 	class INavMeshProvider : public IPluginInterface
 	{
@@ -94,9 +121,16 @@ namespace HexEngine
 			float detailSampleDist;
 
 			/// The maximum distance the detail mesh surface should deviate from heightfield
-			/// data. (For height detail only.) [Limit: >=0] [Units: wu] 
+			/// data. (For height detail only.) [Limit: >=0] [Units: wu]
 			float detailSampleMaxError;
-		};		
+
+			/// World-units to lower the baked navmesh surface by, to compensate for the
+			/// Cell-Height (ch) voxel quantization that otherwise leaves the navmesh
+			/// floating ~ch above the floor (and agents hovering). Applied to the detail
+			/// mesh at bake time, so both pathing height and the debug overlay sit on the
+			/// floor with zero runtime cost. Typically ch * 0.5. [Units: wu]
+			float heightBias = 0.0f;
+		};
 
 		struct PathParams
 		{
@@ -126,6 +160,11 @@ namespace HexEngine
 		virtual bool CreateNavMeshForChunk(Scene* scene, Chunk* chunk, const NavMeshCreationParams& params, NavMeshId* navMesh) = 0;
 
 		virtual bool RebuildMesh(NavMeshId id) = 0;
+
+		// Serialize a built navmesh to a byte blob, and rebuild one from a blob (no
+		// re-bake). Used to persist the navmesh in the scene's save (sidecar file).
+		virtual bool GetNavMeshBytes(NavMeshId id, std::vector<uint8_t>& outData) = 0;
+		virtual bool LoadNavMeshFromBytes(Scene* scene, const std::vector<uint8_t>& data, NavMeshId* outNavMesh) = 0;
 
 		virtual void FindPath(const PathParams& params, PathResult& result) = 0;
 

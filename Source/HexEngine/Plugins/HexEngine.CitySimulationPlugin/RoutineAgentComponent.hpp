@@ -74,6 +74,10 @@ public:
 	void SetCurrentVehicleEntityName(const std::string& value) { _currentVehicleEntityName = value; }
 	void SetBusy(bool value) { _isBusy = value; }
 	void SetOnShift(bool value) { _isOnShift = value; }
+	void SetHomeEntityName(const std::string& value) { _homeEntityName = value; }
+	void SetRoleTagsCsv(const std::string& value) { _roleTagsCsv = value; RebuildRoleTags(); }
+	void SetPreferredVehiclePrefabPath(const std::string& value) { _preferredVehiclePrefabPath = value; }
+	void SetEmergencyEligible(bool value) { _isEmergencyEligible = value; }
 
 	void EnqueueTask(const RoutineTaskSpec& task);
 	bool HasQueuedTasks() const { return !_taskQueue.empty(); }

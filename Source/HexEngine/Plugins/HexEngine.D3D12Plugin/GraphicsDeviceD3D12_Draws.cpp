@@ -6,6 +6,7 @@
 
 #include "GraphicsDeviceD3D12.hpp"
 #include "FormatsD3D12.hpp"
+#include "StructuredBufferD3D12.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
 
 namespace
@@ -401,10 +402,25 @@ void GraphicsDeviceD3D12::DrawIndexedInstanced(uint32_t numIndices, uint32_t ins
 	_cmdList->DrawIndexedInstanced(numIndices, instanceCount, 0, 0, 0);
 	UnbindAllPixelShaderResources();
 }
-void GraphicsDeviceD3D12::DrawIndexedInstancedIndirect(void*, uint32_t)
+void GraphicsDeviceD3D12::DrawIndexedInstancedIndirect(void* argsBuffer, uint32_t alignedByteOffset)
 {
-	static bool warned = false;
-	if (!warned) { LOG_WARN("D3D12: DrawIndexedInstancedIndirect not implemented yet (needs ID3D12CommandSignature)"); warned = true; }
+	// The void* form takes a RAW native args resource with no wrapper, so we
+	// can't state-track it. It is also unreachable under D3D12 by design: the
+	// only abstraction caller (Scene::RenderInstanced) gates the indirect path
+	// on GetBackend()==D3D11, and the particle system fills an ID3D11Buffer
+	// directly. The state-trackable IStructuredBuffer* forms below
+	// (DrawInstancedIndirect / DispatchIndirect) are the D3D12 path. If a
+	// future caller routes a D3D12 args buffer here it MUST leave it in
+	// D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT first.
+	if (argsBuffer == nullptr || !EnsureIndirectSignatures()) { UnbindAllPixelShaderResources(); return; }
+	if (auto* cb = _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer])
+	{
+		SetConstantBufferVS(1, cb);
+		SetConstantBufferPS(1, cb);
+	}
+	if (!FlushGraphics()) { UnbindAllPixelShaderResources(); return; }
+	auto* res = reinterpret_cast<ID3D12Resource*>(argsBuffer);
+	_cmdList->ExecuteIndirect(_drawIndexedIndirectSig.Get(), 1, res, alignedByteOffset, nullptr, 0);
 	UnbindAllPixelShaderResources();
 }
 void GraphicsDeviceD3D12::Draw(uint32_t vertexCount, int32_t startVertexLocation)
@@ -418,20 +434,116 @@ void GraphicsDeviceD3D12::Draw(uint32_t vertexCount, int32_t startVertexLocation
 	_cmdList->DrawInstanced(vertexCount, 1, (UINT)startVertexLocation, 0);
 	UnbindAllPixelShaderResources();
 }
-void GraphicsDeviceD3D12::DrawInstancedIndirect(HexEngine::IStructuredBuffer*, uint32_t)
+void GraphicsDeviceD3D12::DrawInstancedIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset)
 {
-	static bool warned = false;
-	if (!warned) { LOG_WARN("D3D12: DrawInstancedIndirect not implemented yet (needs ID3D12CommandSignature)"); warned = true; }
+	auto* sb = static_cast<StructuredBufferD3D12*>(argsBuffer);
+	if (sb == nullptr || sb->_resource == nullptr || !EnsureIndirectSignatures()) return;
+	if (auto* cb = _engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer])
+	{
+		SetConstantBufferVS(1, cb);
+		SetConstantBufferPS(1, cb);
+	}
+	if (!FlushGraphics()) { UnbindAllPixelShaderResources(); return; }
+	// The args buffer was last written by a compute UAV; move it to
+	// INDIRECT_ARGUMENT before ExecuteIndirect reads it. (Within a command
+	// list the buffer won't auto-promote - it's no longer in COMMON - so the
+	// explicit transition is required.)
+	TransitionResource(sb, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+	_cmdList->ExecuteIndirect(_drawIndirectSig.Get(), 1, sb->_resource.Get(), alignedByteOffset, nullptr, 0);
+	UnbindAllPixelShaderResources();
 }
 void GraphicsDeviceD3D12::Dispatch(uint32_t gx, uint32_t gy, uint32_t gz)
 {
 	if (!FlushCompute()) return;
 	_cmdList->Dispatch(gx, gy, gz);
 }
-void GraphicsDeviceD3D12::DispatchIndirect(HexEngine::IStructuredBuffer*, uint32_t)
+void GraphicsDeviceD3D12::DispatchIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset)
 {
-	static bool warned = false;
-	if (!warned) { LOG_WARN("D3D12: DispatchIndirect not implemented yet (needs ID3D12CommandSignature)"); warned = true; }
+	auto* sb = static_cast<StructuredBufferD3D12*>(argsBuffer);
+	if (sb == nullptr || sb->_resource == nullptr || !EnsureIndirectSignatures()) return;
+	if (!FlushCompute()) return;
+	TransitionResource(sb, D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+	_cmdList->ExecuteIndirect(_dispatchIndirectSig.Get(), 1, sb->_resource.Get(), alignedByteOffset, nullptr, 0);
+}
+
+bool GraphicsDeviceD3D12::EnsureIndirectSignatures()
+{
+	if (_drawIndexedIndirectSig && _drawIndirectSig && _dispatchIndirectSig)
+		return true;
+	if (_device == nullptr)
+		return false;
+
+	auto make = [&](D3D12_INDIRECT_ARGUMENT_TYPE type, UINT stride,
+		Microsoft::WRL::ComPtr<ID3D12CommandSignature>& out) -> bool
+	{
+		if (out) return true;
+		D3D12_INDIRECT_ARGUMENT_DESC arg = {};
+		arg.Type = type;
+		D3D12_COMMAND_SIGNATURE_DESC desc = {};
+		desc.ByteStride       = stride;
+		desc.NumArgumentDescs = 1;
+		desc.pArgumentDescs   = &arg;
+		// Root signature is only required when a command signature changes root
+		// arguments; these are pure draw/dispatch signatures, so pass nullptr.
+		HRESULT hr = _device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(&out));
+		if (FAILED(hr)) { LOG_WARN("D3D12: CreateCommandSignature failed (hr=0x%08X)", (unsigned)hr); return false; }
+		return true;
+	};
+
+	const bool ok =
+		make(D3D12_INDIRECT_ARGUMENT_TYPE_DRAW_INDEXED, sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), _drawIndexedIndirectSig) &&
+		make(D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,         sizeof(D3D12_DRAW_ARGUMENTS),         _drawIndirectSig) &&
+		make(D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH,     sizeof(D3D12_DISPATCH_ARGUMENTS),     _dispatchIndirectSig);
+	return ok;
+}
+
+void GraphicsDeviceD3D12::CopyStructureCount(
+	HexEngine::IStructuredBuffer* sourceBuffer,
+	HexEngine::IStructuredBuffer* destinationBuffer,
+	uint32_t destinationByteOffset)
+{
+	// D3D11's CopyStructureCount(dst, offset, srcUAV) extracts the hidden
+	// append/consume counter of `src` into `dst`. D3D12 stores that counter as
+	// a separate 4-byte resource (StructuredBufferD3D12::_counterResource), so
+	// we copy those 4 bytes with CopyBufferRegion, bracketing it with the
+	// required state transitions.
+	auto* src = static_cast<StructuredBufferD3D12*>(sourceBuffer);
+	auto* dst = static_cast<StructuredBufferD3D12*>(destinationBuffer);
+	if (src == nullptr || dst == nullptr || _cmdList == nullptr) return;
+	if (src->_counterResource == nullptr || dst->_resource == nullptr) return;
+
+	auto barrier = [&](ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
+	{
+		if (before == after) return;
+		D3D12_RESOURCE_BARRIER b = {};
+		b.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+		b.Transition.pResource   = res;
+		b.Transition.StateBefore = before;
+		b.Transition.StateAfter  = after;
+		b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+		_cmdList->ResourceBarrier(1, &b);
+	};
+
+	// State assumptions, valid for the real usage pattern (a compute pass
+	// appends into `src` this frame, then CopyStructureCount feeds an indirect
+	// draw): both the counter and the main buffer were just written via their
+	// UAVs, so both are in UNORDERED_ACCESS at this point in the command list.
+	// We transition each to its copy role, copy the 4-byte counter, then put
+	// them back. The counter returns to UNORDERED_ACCESS (next append); the
+	// destination args buffer also returns to UNORDERED_ACCESS and we keep
+	// _currentState truthful so the following ExecuteIndirect's
+	// UNORDERED_ACCESS->INDIRECT_ARGUMENT transition has the correct
+	// StateBefore.
+	barrier(src->_counterResource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	barrier(dst->_resource.Get(),        dst->_currentState,                    D3D12_RESOURCE_STATE_COPY_DEST);
+
+	_cmdList->CopyBufferRegion(dst->_resource.Get(), destinationByteOffset,
+		src->_counterResource.Get(), 0, sizeof(uint32_t));
+
+	barrier(src->_counterResource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	src->_counterState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+	barrier(dst->_resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+	dst->_currentState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 }
 
 // ---- viewport / scissor ---------------------------------------------------

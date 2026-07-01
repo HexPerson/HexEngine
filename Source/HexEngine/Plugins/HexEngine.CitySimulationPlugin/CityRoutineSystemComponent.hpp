@@ -34,6 +34,9 @@ public:
 	uint32_t ReportEmergency(const math::Vector3& worldPosition, const std::string& requiredServiceTag = "Medical");
 	bool ResolveEmergency(uint32_t incidentId);
 
+	void SetNavMeshId(uint32_t id) { _navMeshId = id; }
+	uint32_t GetNavMeshId() const { return _navMeshId; }
+
 private:
 	void RegisterEntityListener();
 	void UnregisterEntityListener();

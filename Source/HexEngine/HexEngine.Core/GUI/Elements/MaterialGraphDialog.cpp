@@ -962,6 +962,53 @@ namespace HexEngine
 			_pbrFormatDrop->GetContextMenu()->AddItem(new ContextItem(L"RMA",  [setF](const std::wstring&) { setF(MaterialFormat::RMA); }));
 		}
 
+		// Footstep sounds. Unlike the PBR widgets above (which drive the selected
+		// PbrOutput node and are applied on compile), footstep data is a pure
+		// material-level attribute with no graph node - it bypasses the graph and
+		// writes straight to the Material, persisted by Save() via MaterialLoader.
+		// Mirrors the controls in MaterialDialog so either editor can author them.
+		const auto footstepRowSize = Point(_properties->GetSize().x - 20, 80);
+
+		auto* graphFootstepSearch = new AssetSearch(
+			_properties, _properties->GetNextPos(), footstepRowSize,
+			L"Footstep Sound", { ResourceType::Audio },
+			[this](AssetSearch*, const AssetSearchResult& result)
+			{
+				const fs::path chosen = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+				_material->SetFootstepSoundPath(chosen.string());
+				MarkDirty();
+			});
+		if (const std::string& fsp = _material->GetFootstepSoundPath(); !fsp.empty())
+			graphFootstepSearch->SetValue(std::wstring(fsp.begin(), fsp.end()));
+
+		auto* graphSurfaceMapSearch = new AssetSearch(
+			_properties, _properties->GetNextPos(), footstepRowSize,
+			L"Footstep Surface Map (red = id)", { ResourceType::Image },
+			[this](AssetSearch*, const AssetSearchResult& result)
+			{
+				const fs::path chosen = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+				_material->SetFootstepSurfaceMapPath(chosen.string());
+				MarkDirty();
+			});
+		if (const std::string& smp = _material->GetFootstepSurfaceMapPath(); !smp.empty())
+			graphSurfaceMapSearch->SetValue(std::wstring(smp.begin(), smp.end()));
+
+		const int kGraphFootstepSurfaceSlots = 8;
+		for (int id = 0; id < kGraphFootstepSurfaceSlots; ++id)
+		{
+			auto* slot = new AssetSearch(
+				_properties, _properties->GetNextPos(), footstepRowSize,
+				L"Surface " + std::to_wstring(id) + L" Sound", { ResourceType::Audio },
+				[this, id](AssetSearch*, const AssetSearchResult& result)
+				{
+					const fs::path chosen = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+					_material->SetFootstepSurfaceSound(id, chosen.string());
+					MarkDirty();
+				});
+			if (const std::string& s = _material->GetFootstepSurfaceSound(id); !s.empty())
+				slot->SetValue(std::wstring(s.begin(), s.end()));
+		}
+
 		for (int32_t i = 0; i < 6; ++i)
 		{
 			_compileMessages[i] = new LineEdit(

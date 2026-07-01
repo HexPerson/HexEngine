@@ -92,6 +92,14 @@ namespace HexEditor
 		HexEngine::Entity* _pendingRefreshEntity = nullptr;
 		std::vector<HexEngine::ComponentWidget*> _componentWidgets;
 		std::shared_ptr<HexEngine::ITexture2D> _visBtnTextures[2];
+
+		// Backing booleans for the entity-flag checkboxes (curated, safe-to-toggle
+		// subset). Refreshed from the inspected entity each rebuild; the checkboxes
+		// bind to these and their callbacks set/clear the flag on the entity.
+		bool _flagDoNotBlockNavMesh = false;
+		bool _flagDoNotSave = false;
+		bool _flagExcludeFromHLOD = false;
+		bool _flagDoNotPickInEditor = false;
 		//DrawList _drawList;
 		//Canvas _canvas;
 	};

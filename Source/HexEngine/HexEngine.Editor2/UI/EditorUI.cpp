@@ -6,8 +6,10 @@
 #include "Actions\Settings.hpp"
 #include "Actions\Terrain.hpp"
 #include "Actions\NavMeshTool.hpp"
+#include "Actions\MultiplayerTool.hpp"
 #include "Actions\BuildDialog.hpp"
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
+#include <HexEngine.Core\Entity\Component\PlayerStartComponent.hpp>
 
 #include "Gadgets\ScaleGadget.hpp"
 #include "Gadgets\PositionGadget.hpp"
@@ -330,6 +332,14 @@ namespace HexEditor
 				actionNewDecal->action = std::bind(&EditorUI::OnAddDecal, this);
 				_mainMenu->AddSubItem(scene, actionNewDecal);
 
+				// Player Start -> drops a marker the engine spawns the player at
+				// when the game is run (GameIntegrator::RunGame moves the main
+				// camera to its transform before OnCreateGame).
+				HexEngine::MenuBar::Item* actionNewPlayerStart = new HexEngine::MenuBar::Item;
+				actionNewPlayerStart->name = L"Player Start";
+				actionNewPlayerStart->action = std::bind(&EditorUI::OnAddPlayerStart, this);
+				_mainMenu->AddSubItem(scene, actionNewPlayerStart);
+
 				HexEngine::MenuBar::Item* actionNewTerrain = new HexEngine::MenuBar::Item;
 				actionNewTerrain->name = L"Add terrain";
 				actionNewTerrain->action = std::bind(&EditorUI::OnAddPrimitive, this, PrimitiveType::Terrain);
@@ -349,6 +359,11 @@ namespace HexEditor
 				actionNavMesh->name = L"Navigation Mesh...";
 				actionNavMesh->action = std::bind(&EditorUI::ShowNavMeshDialog, this);
 				_mainMenu->AddSubItem(scene, actionNavMesh);
+
+				HexEngine::MenuBar::Item* actionMultiplayer = new HexEngine::MenuBar::Item;
+				actionMultiplayer->name = L"Multiplayer...";
+				actionMultiplayer->action = std::bind(&EditorUI::ShowMultiplayerDialog, this);
+				_mainMenu->AddSubItem(scene, actionMultiplayer);
 
 				HexEngine::MenuBar::Item* actionGenerateHlod = new HexEngine::MenuBar::Item;
 				actionGenerateHlod->name = L"Generate HLOD (Scaffold)";
@@ -616,6 +631,11 @@ namespace HexEditor
 	void EditorUI::ShowNavMeshDialog()
 	{
 		auto* navMeshDialog = NavMeshTool::CreateEditorDialog(_rootElement);
+	}
+
+	void EditorUI::ShowMultiplayerDialog()
+	{
+		auto* mpDialog = MultiplayerTool::CreateEditorDialog(_rootElement);
 	}
 
 	void EditorUI::OnAddPrimitive(PrimitiveType type)
@@ -994,6 +1014,30 @@ namespace HexEditor
 		RecordEntityCreated(decalEnt);
 
 		GetInspector()->InspectEntity(decalEnt);
+	}
+
+	void EditorUI::OnAddPlayerStart()
+	{
+		auto hit = RayCastWorld({}, false);
+
+		auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		if (!scene)
+			return;
+
+		// Drop the marker at the cursor hit, facing the editor camera's heading
+		// so the default forward is sensible (the user rotates it via the
+		// Transform gizmo). The PlayerStartComponent itself has no mesh - the
+		// gold box + blue arrow gizmo shows where and which way the player
+		// spawns; the engine reads this entity's transform on game run.
+		HexEngine::Entity* startEnt = scene->CreateEntity("PlayerStart", hit.position);
+		if (startEnt == nullptr)
+			return;
+
+		startEnt->AddComponent<HexEngine::PlayerStartComponent>();
+
+		RecordEntityCreated(startEnt);
+
+		GetInspector()->InspectEntity(startEnt);
 	}
 
 	void EditorUI::OnAddEmptyEntity()

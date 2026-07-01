@@ -447,8 +447,8 @@ namespace HexEngine
 
 		if (existingBind != _binds.end())
 		{
-			LOG_WARN("Attempting to bind a key which is already bound, unbind the key first then rebind");
-			return;
+			LOG_WARN("Attempting to bind a key which is already bound, unbinding the key so it can be rebound");
+			RemoveBind(key);
 		}
 
 		_binds[key] = std::make_pair(command, param);
@@ -464,6 +464,14 @@ namespace HexEngine
 		}
 
 		ProcessCommandInput(existingBind->second.first, pressed, existingBind->second.second);
+	}
+
+	void CommandManager::RemoveBind(int32_t key)
+	{
+		if (auto it = _binds.find(key); it != _binds.end())
+		{
+			_binds.erase(it);
+		}
 	}
 
 	Console* CommandManager::GetConsole()

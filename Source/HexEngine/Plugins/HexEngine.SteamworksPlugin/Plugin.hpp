@@ -3,6 +3,7 @@
 
 #include <HexEngine.Core\HexEngine.hpp>
 #include "Steamworks.hpp"
+#include "SteamNetworkingSystem.hpp"
 
 /// <summary>
 /// The sample plugin class. Overrides IPlugin
@@ -34,6 +35,9 @@ public:
 
 private:
 	Steamworks* _interface = nullptr;
+	// Steam P2P networking transport, exposed as INetworkSystem when the user
+	// selects net_backend == 2 (Steam). Independent of the Steamworks provider.
+	SteamNetworkingSystem* _netInterface = nullptr;
 };
 
 inline SteamworksPlugin* g_pSteamworksPlugin = nullptr;

@@ -68,6 +68,25 @@ namespace HexEngine
 		void SetName(const std::string& name);
 		const std::string& GetName() const;
 
+		// Resource path of the footstep sound played when a character walks on a
+		// surface using this material (empty = use the controller's default).
+		void SetFootstepSoundPath(const std::string& path);
+		const std::string& GetFootstepSoundPath() const;
+
+		// Per-region footstep surfaces for atlas / splatmap materials. The surface
+		// map is a texture aligned to the albedo UVs whose RED channel encodes a
+		// surface id (0..N-1); the footstep system samples it at the hit UV and
+		// plays the matching entry from the surface-sound table. Empty map = fall
+		// back to the single GetFootstepSoundPath(). See FirstPersonCameraController.
+		void SetFootstepSurfaceMapPath(const std::string& path);
+		const std::string& GetFootstepSurfaceMapPath() const;
+		void SetFootstepSurfaceSounds(const std::vector<std::string>& sounds);
+		const std::vector<std::string>& GetFootstepSurfaceSounds() const;
+		// Assigns the sound for a single surface id, growing the table as needed.
+		void SetFootstepSurfaceSound(int32_t id, const std::string& path);
+		// Sound for surface id, or empty string if id is unmapped / out of range.
+		const std::string& GetFootstepSurfaceSound(int32_t id) const;
+
 		static std::shared_ptr<Material> Create(const fs::path& path);
 		static std::shared_ptr<Material> CreateAsync(const fs::path& path, ResourceLoadedFn fn);
 		static std::shared_ptr<Material> GetDefaultMaterial();
@@ -140,6 +159,9 @@ namespace HexEngine
 		std::shared_ptr<IShader> _standardShader;
 		std::shared_ptr<IShader> _shadowMapShader = nullptr;
 		std::string _name;
+		std::string _footstepSoundPath;
+		std::string _footstepSurfaceMapPath;
+		std::vector<std::string> _footstepSurfaceSounds;
 
 
 		BlendState _blendState = BlendState::Opaque;

@@ -26,6 +26,7 @@ namespace HexEngine
 		math::Vector3 start;
 		math::Vector3 position;
 		math::Vector3 normal;
+		math::Vector2 uv;            // interpolated texcoord at the hit point (mesh ray-tri path only; (0,0) otherwise)
 		Entity* entity = nullptr;
 		float distance = 0.0f;
 		std::weak_ptr<Material> material;

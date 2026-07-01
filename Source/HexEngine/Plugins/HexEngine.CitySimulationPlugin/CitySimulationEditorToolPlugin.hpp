@@ -21,6 +21,7 @@ public:
 	virtual void RenderCustom(HexEngine::Scene* scene, HexEngine::Camera* camera, HexEngine::MeshRenderFlags renderFlags) override;
 
 private:
+	void AutoWireRoutineSim();   // tag buildings + place waypoints from the scene geometry
 	void ShowRoadPainterDialog();
 	void CloseRoadPainterDialog();
 	bool ToggleRoadPainterActive();

@@ -232,11 +232,19 @@ namespace HexEngine
 		_lightBoundingSphere[cascadeIdx].Transform(sphereLightView, _viewMatrix[cascadeIdx]);
 
 
-		mins = sphereLightView.Center - math::Vector3(sphereLightView.Radius);
-		maxs = sphereLightView.Center + math::Vector3(sphereLightView.Radius);
-
-		//mins = -math::Vector3(sphereLightView.Radius);
-		//maxs = math::Vector3(sphereLightView.Radius);
+		// X/Y: symmetric [-r, +r] so the texel snap actually takes effect. The view
+		// already looks at the texel-SNAPPED centre; deriving the X/Y extent from the
+		// transformed (unsnapped) sphere centre re-added a per-frame sub-texel offset
+		// that cancelled the snap - imperceptible on cascade 0 (cm texels) but visible
+		// crawl on far cascades (metre texels). A symmetric box leaves only the
+		// whole-texel snap motion, so the grid stays aligned and edges stop shimmering.
+		//
+		// Z: KEEP the centre offset. Z is the depth bracket along the light dir and
+		// must stay on the geometry (centre.z is ~ -sunDistance) - it has nothing to
+		// do with texel snapping. (Zeroing it moved cascade 0's near/far off the
+		// scene and wrecked its fidelity.)
+		mins = math::Vector3(-sphereLightView.Radius, -sphereLightView.Radius, sphereLightView.Center.z - sphereLightView.Radius);
+		maxs = math::Vector3( sphereLightView.Radius,  sphereLightView.Radius, sphereLightView.Center.z + sphereLightView.Radius);
 
 		/*math::Vector3 vBorderOffset = (math::Vector3(diagonalLength, diagonalLength, diagonalLength) - (maxs - mins)) * 0.5f;
 		maxs += vBorderOffset;

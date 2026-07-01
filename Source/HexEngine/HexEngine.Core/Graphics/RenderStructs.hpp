@@ -75,7 +75,12 @@ namespace HexEngine
 		float fogSunsetRange;
 		float fogSunsetWarmthStrength;
 		float fogFarAtmosphereMatchStrength;
-		float fog_pad0;
+		// 1.0 when the aerial-perspective volume is producing the
+		// distance-haze pass (r_atmosphereLUTs on). PostFog uses this to
+		// skip its own analytic distance atmosphere integration so the
+		// two systems don't compound and over-tint. Height fog / sunset
+		// shaping / lightning are unaffected.
+		float fogUseAerialPerspective;
 
 		float volumetricScattering;
 		float volumetricStrength;
@@ -119,7 +124,13 @@ namespace HexEngine
 		int	  cascadeOverride;
 		float shadowMapSize;
 		int   lightIndex;
-		int	  pad0;
+		// Non-zero if the current shadow-casting light's depth map is bound and valid
+		// (set by SetupPerShadowCasterBuffer from Light::GetDoesCastShadows()). The
+		// per-pixel spot/point-light shaders check this before sampling SHADOWMAPS[0..N];
+		// without the gate, non-shadow-casting lights would sample a nulled SRV via
+		// SampleCmpLevelZero and read 0 = "fully occluded", turning every fragment inside
+		// the cone/sphere black.
+		int	  castsShadowsFlag;
 		int	  pad1;
 		int	  pad2;
 

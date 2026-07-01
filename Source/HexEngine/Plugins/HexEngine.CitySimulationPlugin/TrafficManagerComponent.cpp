@@ -6,28 +6,26 @@
 
 namespace
 {
-	bool IsSpawnPointClear(HexEngine::Scene* scene, const math::Vector3& spawnPoint, float minDistance)
+	// Use the spatial grid (built once per frame in TrafficManager::Update)
+	// instead of scene->GetComponents<TrafficVehicleComponent>(), which
+	// allocates a fresh vector and scans the full ECS each spawn attempt.
+	bool IsSpawnPointClear(const math::Vector3& spawnPoint, float minDistance)
 	{
-		if (scene == nullptr || minDistance <= 0.0f)
+		if (minDistance <= 0.0f)
 			return true;
 
-		std::vector<TrafficVehicleComponent*> vehicles;
-		scene->GetComponents<TrafficVehicleComponent>(vehicles);
+		thread_local std::vector<TrafficVehicleComponent*> nearby;
+		TrafficVehicleComponent::QueryNearbyVehicles(spawnPoint, minDistance + 2.0f, nearby);
+
 		const float minDistanceSq = minDistance * minDistance;
-
-		for (auto* vehicle : vehicles)
+		for (auto* vehicle : nearby)
 		{
-			if (vehicle == nullptr)
-				continue;
-
+			if (vehicle == nullptr) continue;
 			auto* entity = vehicle->GetEntity();
-			if (entity == nullptr || entity->IsPendingDeletion())
-				continue;
-
+			if (entity == nullptr || entity->IsPendingDeletion()) continue;
 			if ((entity->GetWorldTM().Translation() - spawnPoint).LengthSquared() < minDistanceSq)
 				return false;
 		}
-
 		return true;
 	}
 }
@@ -117,7 +115,7 @@ int32_t TrafficManagerComponent::SpawnVehicleFromSpawner(TrafficSpawnerComponent
 	if (lanePoints.empty())
 		return 0;
 
-	if (!IsSpawnPointClear(scene, lanePoints.front(), spawner->GetSpawnClearanceDistance()))
+	if (!IsSpawnPointClear(lanePoints.front(), spawner->GetSpawnClearanceDistance()))
 		return 0;
 
 	const auto& prefabPaths = spawner->GetVehiclePrefabPaths();
@@ -141,6 +139,21 @@ int32_t TrafficManagerComponent::SpawnVehicleFromSpawner(TrafficSpawnerComponent
 	if (spawnedEntities.empty())
 		return 0;
 
+	// Spawned traffic is TRANSIENT - the manager re-creates it every run. Mark
+	// the whole prefab instance (root + children) DoNotSave so it never gets
+	// baked into a saved scene. Without this, saving while the sim is running
+	// persisted the live vehicles; on reload they deserialized as orphan
+	// "ghost" entities not owned by any spawner, with stale/unresolved lane
+	// references - they sat wherever the save put them (under the map) and
+	// never moved because their lane never resolved. Flagging them out of the
+	// save removes the entire failure mode; the spawner makes fresh, working
+	// vehicles when the scene next runs.
+	for (auto* spawned : spawnedEntities)
+	{
+		if (spawned != nullptr)
+			spawned->SetFlag(HexEngine::EntityFlags::DoNotSave);
+	}
+
 	std::vector<HexEngine::Entity*> rootEntities;
 	rootEntities.reserve(spawnedEntities.size());
 	for (auto* spawned : spawnedEntities)
@@ -150,6 +163,19 @@ int32_t TrafficManagerComponent::SpawnVehicleFromSpawner(TrafficSpawnerComponent
 
 		if (spawned->GetParent() == nullptr)
 			rootEntities.push_back(spawned);
+
+		if (auto mesh = spawned->GetComponent<HexEngine::StaticMeshComponent>(); mesh != nullptr)
+		{
+			mesh->SetExcludeFromGI(true);
+		}
+
+		for (auto& child : spawned->GetChildren())
+		{
+			if (auto mesh = child->GetComponent<HexEngine::StaticMeshComponent>(); mesh != nullptr)
+			{
+				mesh->SetExcludeFromGI(true);
+			}
+		}
 	}
 
 	if (rootEntities.empty())
@@ -204,16 +230,14 @@ void TrafficManagerComponent::UpdateSpawner(TrafficSpawnerComponent* spawner, He
 
 	if (!active)
 	{
-		if (spawner->ShouldDespawnWhenInactive())
-			activeGlobalCount = std::max(0, activeGlobalCount - DespawnSpawnerVehicles(spawner));
+		// Spawner out of range - just stop SPAWNING new vehicles. We used
+		// to also bulk-despawn every vehicle this spawner had created
+		// (gated on ShouldDespawnWhenInactive), which made the world
+		// feel jarringly empty whenever the player drove away and then
+		// turned back. Existing vehicles now keep driving wherever they
+		// were going; only new spawns are suppressed.
 		return;
 	}
-
-	if (static_cast<int32_t>(spawner->ActiveVehicles().size()) >= spawner->GetMaxActiveVehicles())
-		return;
-
-	if (activeGlobalCount >= _globalMaxActiveVehicles)
-		return;
 
 	float& timer = spawner->SpawnTimerRef();
 	timer += frameTime;
@@ -222,11 +246,34 @@ void TrafficManagerComponent::UpdateSpawner(TrafficSpawnerComponent* spawner, He
 	if (timer < interval)
 		return;
 
-	timer = 0.0f;
-	const int32_t spawnedVehicles = SpawnVehicleFromSpawner(spawner);
-	if (spawnedVehicles > 0)
+	// Catch-up loop: drain the accumulated time at `interval`-sized steps
+	// so a lag spike doesn't lose spawns (old `timer = 0` discarded any
+	// leftover). Hard cap on spawns per frame avoids burst storms after
+	// huge spikes; the spawner cap and global cap also act as throttles.
+	constexpr int32_t kMaxCatchUpSpawnsPerFrame = 3;
+	int32_t spawnedThisFrame = 0;
+	while (timer >= interval && spawnedThisFrame < kMaxCatchUpSpawnsPerFrame)
 	{
-		activeGlobalCount += spawnedVehicles;
+		if (static_cast<int32_t>(spawner->ActiveVehicles().size()) >= spawner->GetMaxActiveVehicles())
+			break;
+		if (activeGlobalCount >= _globalMaxActiveVehicles)
+			break;
+
+		timer -= interval;
+		const int32_t spawnedVehicles = SpawnVehicleFromSpawner(spawner);
+		if (spawnedVehicles > 0)
+		{
+			activeGlobalCount += spawnedVehicles;
+			++spawnedThisFrame;
+		}
+		else
+		{
+			// Spawn failed (likely no clearance at front of lane). Don't
+			// loop and keep retrying every frame at full burst - reset
+			// the timer to wait one more interval before trying again.
+			timer = 0.0f;
+			break;
+		}
 	}
 }
 
@@ -245,12 +292,20 @@ void TrafficManagerComponent::Update(float frameTime)
 	if (camera == nullptr || camera->GetEntity() == nullptr)
 		return;
 
+	// Rebuild the spatial grid ONCE per frame, before any vehicle ticks
+	// and before spawn-clearance checks. Drops per-vehicle avoidance
+	// from O(N) full-list scan to O(local-density) cell query, AND
+	// avoids scene->GetComponents<TrafficVehicleComponent>() per spawn
+	// attempt. Cheap (a single pass over the existing s_allVehicles).
+	TrafficVehicleComponent::RebuildSpatialGrid();
+
 	std::vector<TrafficSpawnerComponent*> spawners;
 	scene->GetComponents<TrafficSpawnerComponent>(spawners);
 
-	std::vector<TrafficVehicleComponent*> activeVehicles;
-	scene->GetComponents<TrafficVehicleComponent>(activeVehicles);
-	int32_t activeGlobalCount = static_cast<int32_t>(activeVehicles.size());
+	// Global active count via the cheap static registry, not a full
+	// ECS scan. s_allVehicles is maintained by TrafficVehicleComponent's
+	// ctor/dtor so it's always current.
+	int32_t activeGlobalCount = static_cast<int32_t>(TrafficVehicleComponent::GetAliveVehicleCount());
 	for (auto* spawner : spawners)
 	{
 		if (spawner == nullptr || spawner->GetEntity() == nullptr || spawner->GetEntity()->IsPendingDeletion())

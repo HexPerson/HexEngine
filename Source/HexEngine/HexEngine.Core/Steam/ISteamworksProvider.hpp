@@ -97,6 +97,35 @@ namespace HexEngine
 
 		// === Overlay state (driven by GameOverlayActivated_t callback) ===
 
+		// === Lobbies / invites (Steam matchmaking, for P2P) ===
+		// Non-pure so a provider only implements what it supports. These drive the
+		// Steam P2P networking flow: the host creates a lobby and invites friends;
+		// an invited friend auto-joins the lobby, and the networking bridge reads
+		// the ConsumePending* signals to StartHostP2P / ConnectP2P automatically.
+
+		/** @brief Create a friends-only Steam lobby (async). On success IsInLobby()
+		 * becomes true and ConsumePendingHostStart() fires once. */
+		virtual bool CreateLobby(int32_t maxMembers) { (void)maxMembers; return false; }
+
+		/** @brief Leave the current lobby (if any). */
+		virtual void LeaveLobby() {}
+
+		virtual bool IsInLobby() const { return false; }
+		virtual bool IsLobbyHost() const { return false; }
+		virtual uint64_t GetLobbyId() const { return 0; }
+		virtual uint64_t GetLobbyOwner() const { return 0; }
+
+		/** @brief Open the Steam overlay's invite-friends dialog for the current lobby. */
+		virtual void OpenInviteOverlay() {}
+
+		/** @brief One-shot: true exactly once after a lobby is created as host - the
+		 * networking bridge then calls INetworkSystem::StartHostP2P(). */
+		virtual bool ConsumePendingHostStart() { return false; }
+
+		/** @brief One-shot: true exactly once after entering a lobby as a client;
+		 * outHostSteamId is the lobby owner to ConnectP2P() to. */
+		virtual bool ConsumePendingClientConnect(uint64_t& outHostSteamId) { (void)outHostSteamId; return false; }
+
 		/**
 		 * @brief Returns true when the Steam overlay is currently up. The plugin
 		 * automatically pauses input via g_pEnv->_inputSystem->EnableInput(false)

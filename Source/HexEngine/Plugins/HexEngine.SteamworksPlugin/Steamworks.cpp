@@ -246,3 +246,119 @@ void Steamworks::OnAchievementStored(UserAchievementStored_t* pCallback)
 		pCallback->m_nCurProgress,
 		pCallback->m_nMaxProgress);
 }
+
+// === Lobbies / invites ===
+
+bool Steamworks::CreateLobby(int32_t maxMembers)
+{
+	if (!_initialised || SteamMatchmaking() == nullptr)
+		return false;
+	if (maxMembers < 2)
+		maxMembers = 2;
+
+	SteamAPICall_t call = SteamMatchmaking()->CreateLobby(k_ELobbyTypeFriendsOnly, maxMembers);
+	_lobbyCreatedResult.Set(call, this, &Steamworks::OnLobbyCreated);
+	LOG_INFO("Steamworks: creating lobby (max %d members) ...", maxMembers);
+	return true;
+}
+
+void Steamworks::OnLobbyCreated(LobbyCreated_t* pResult, bool bIOFailure)
+{
+	if (bIOFailure || pResult == nullptr || pResult->m_eResult != k_EResultOK)
+	{
+		LOG_WARN("Steamworks: lobby creation failed (result %d, ioFailure %d).",
+			pResult != nullptr ? (int)pResult->m_eResult : -1, bIOFailure ? 1 : 0);
+		return;
+	}
+
+	_lobbyId = CSteamID(pResult->m_ulSteamIDLobby);
+	_isLobbyHost = true;
+	_pendingHostStart = true; // net bridge will StartHostP2P
+
+	// Publish the host SteamID so joiners can also read it from lobby data
+	// (GetLobbyOwner already gives it, but this is explicit + future-proof).
+	if (SteamMatchmaking() != nullptr)
+	{
+		char idStr[32];
+		std::snprintf(idStr, sizeof(idStr), "%llu", (unsigned long long)GetSteamID());
+		SteamMatchmaking()->SetLobbyData(_lobbyId, "host_steamid", idStr);
+	}
+	LOG_INFO("Steamworks: lobby %llu created; you are the host.", (unsigned long long)_lobbyId.ConvertToUint64());
+}
+
+void Steamworks::OnGameLobbyJoinRequested(GameLobbyJoinRequested_t* pCallback)
+{
+	// A friend accepted our invite (or the user clicked "Join Game" in the
+	// friends list). Join the lobby; OnLobbyEntered then triggers ConnectP2P.
+	if (pCallback == nullptr || SteamMatchmaking() == nullptr)
+		return;
+	LOG_INFO("Steamworks: join requested for lobby %llu; joining ...",
+		(unsigned long long)pCallback->m_steamIDLobby.ConvertToUint64());
+	SteamMatchmaking()->JoinLobby(pCallback->m_steamIDLobby);
+}
+
+void Steamworks::OnLobbyEntered(LobbyEnter_t* pCallback)
+{
+	if (pCallback == nullptr)
+		return;
+
+	_lobbyId = CSteamID(pCallback->m_ulSteamIDLobby);
+	const uint64_t me = GetSteamID();
+	const uint64_t owner = GetLobbyOwner();
+
+	if (owner == me)
+	{
+		_isLobbyHost = true; // host already started (or will) via OnLobbyCreated
+		LOG_INFO("Steamworks: entered own lobby %llu as host.", (unsigned long long)_lobbyId.ConvertToUint64());
+	}
+	else
+	{
+		_isLobbyHost = false;
+		_pendingConnectHost = owner;
+		_pendingClientConnect = true; // net bridge will ConnectP2P(owner)
+		LOG_INFO("Steamworks: entered lobby %llu; host is %llu, connecting P2P.",
+			(unsigned long long)_lobbyId.ConvertToUint64(), (unsigned long long)owner);
+	}
+}
+
+void Steamworks::LeaveLobby()
+{
+	if (SteamMatchmaking() != nullptr && _lobbyId.IsValid())
+		SteamMatchmaking()->LeaveLobby(_lobbyId);
+	_lobbyId = CSteamID();
+	_isLobbyHost = false;
+	_pendingHostStart = false;
+	_pendingClientConnect = false;
+	_pendingConnectHost = 0;
+}
+
+uint64_t Steamworks::GetLobbyOwner() const
+{
+	if (SteamMatchmaking() != nullptr && _lobbyId.IsValid())
+		return SteamMatchmaking()->GetLobbyOwner(_lobbyId).ConvertToUint64();
+	return 0;
+}
+
+void Steamworks::OpenInviteOverlay()
+{
+	if (SteamFriends() != nullptr && _lobbyId.IsValid())
+		SteamFriends()->ActivateGameOverlayInviteDialog(_lobbyId);
+	else
+		LOG_WARN("Steamworks: OpenInviteOverlay ignored (no active lobby).");
+}
+
+bool Steamworks::ConsumePendingHostStart()
+{
+	const bool p = _pendingHostStart;
+	_pendingHostStart = false;
+	return p;
+}
+
+bool Steamworks::ConsumePendingClientConnect(uint64_t& outHostSteamId)
+{
+	if (!_pendingClientConnect)
+		return false;
+	_pendingClientConnect = false;
+	outHostSteamId = _pendingConnectHost;
+	return true;
+}

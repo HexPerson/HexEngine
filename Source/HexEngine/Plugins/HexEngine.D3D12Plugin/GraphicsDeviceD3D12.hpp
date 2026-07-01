@@ -124,7 +124,7 @@ public:
 	virtual void DrawInstancedIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset = 0) override;
 	virtual void Dispatch(uint32_t gx, uint32_t gy, uint32_t gz) override;
 	virtual void DispatchIndirect(HexEngine::IStructuredBuffer* argsBuffer, uint32_t alignedByteOffset = 0) override;
-	virtual void CopyStructureCount(HexEngine::IStructuredBuffer*, HexEngine::IStructuredBuffer*, uint32_t = 0) override {}
+	virtual void CopyStructureCount(HexEngine::IStructuredBuffer* sourceBuffer, HexEngine::IStructuredBuffer* destinationBuffer, uint32_t destinationByteOffset = 0) override;
 
 	virtual void GetBackBufferDimensions(uint32_t& width, uint32_t& height) override;
 	// Defined in the .cpp so the forward-declared TextureImporterD3D12 type
@@ -316,6 +316,18 @@ private:
 	Microsoft::WRL::ComPtr<ID3D12Fence>              _fence;
 	HANDLE                                           _fenceEvent     = nullptr;
 	uint64_t                                         _nextFenceValue = 1;
+
+	// Indirect-execution command signatures, created lazily on first use by
+	// EnsureIndirectSignatures(). D3D12 (unlike D3D11) requires an
+	// ID3D12CommandSignature describing the argument layout before
+	// ExecuteIndirect. All three are "simple" signatures (a single draw /
+	// dispatch argument, no root-argument changes) so they need no root
+	// signature. Byte strides match the corresponding D3D12_*_ARGUMENTS
+	// structs, which are layout-identical to the D3D11 indirect-args the
+	// engine already fills.
+	Microsoft::WRL::ComPtr<ID3D12CommandSignature>   _drawIndexedIndirectSig;
+	Microsoft::WRL::ComPtr<ID3D12CommandSignature>   _drawIndirectSig;
+	Microsoft::WRL::ComPtr<ID3D12CommandSignature>   _dispatchIndirectSig;
 	Microsoft::WRL::ComPtr<ID3D12InfoQueue>          _infoQueue; // Debug-only; polled in EndFrame to mirror validation messages into LogFile.
 	// True when _cmdList is in the recording state and safe to write commands
 	// into. Initialised to true at Create() so init-time resource uploads
@@ -507,6 +519,7 @@ private:
 	bool   FlushGraphics();   ///< called by Draw* before issuing the draw
 	bool   FlushCompute();    ///< called by Dispatch* before issuing the dispatch
 	void   ResetPendingForBeginFrame();
+	bool   EnsureIndirectSignatures(); ///< lazily creates the 3 ExecuteIndirect command signatures
 
 	// D3D11->D3D12 hazard fix: D3D11 silently auto-unbinds an RT/DS when you
 	// bind it as an SRV. D3D12 doesn't - the next draw validates the bound

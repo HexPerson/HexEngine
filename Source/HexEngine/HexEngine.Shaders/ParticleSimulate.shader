@@ -258,12 +258,32 @@
 				float noiseAmp = emitter.simulation2.x;
 				if (noiseAmp > 0.0001f)
 				{
-					uint seed = (uint)state.misc1.y + (uint)(g_dtTime.y * 60.0f);
-					float3 noise = float3(
+					// COHERENT gust field + per-particle jitter. The previous
+					// noise was pure per-frame white jitter, which reads as a
+					// faint shimmer - particles still stream in dead-straight
+					// lines under any constant wind because the jitter
+					// averages out. Real wind-borne snow/dust swirls in
+					// EDDIES: nearby particles share the same local gust.
+					// The sine field below is a cheap curl-ish flow sampled
+					// by world position (scaled by noiseFrequency in
+					// simulation2.y) and time, so flakes in the same region
+					// veer together, gusts travel through the volume, and
+					// individual particles still de-correlate over distance.
+					const float gustTime = g_dtTime.y;
+					const float noiseFreq = max(emitter.simulation2.y, 0.01f);
+					const float3 np = state.position.xyz * noiseFreq;
+					const float3 gust = float3(
+						sin(np.y * 1.7f + gustTime * 1.6f) + sin(np.z * 1.3f + gustTime * 0.9f),
+						0.35f * (sin(np.x * 1.1f + gustTime * 1.2f) + sin(np.z * 1.9f + gustTime * 0.8f)),
+						sin(np.x * 1.5f + gustTime * 1.4f) + sin(np.y * 0.9f + gustTime * 1.1f));
+
+					uint seed = (uint)state.misc1.y + (uint)(gustTime * 60.0f);
+					const float3 jitter = float3(
 						Hash01(seed + 41u) * 2.0f - 1.0f,
 						Hash01(seed + 59u) * 2.0f - 1.0f,
 						Hash01(seed + 73u) * 2.0f - 1.0f);
-					accel += noise * noiseAmp;
+
+					accel += (gust * 0.8f + jitter * 0.4f) * noiseAmp;
 				}
 
 				state.velocity.xyz += accel * dt;
@@ -286,10 +306,48 @@
 			float3 camRight = normalize(g_cameraRight.xyz);
 			float3 camUp = normalize(g_cameraUp.xyz);
 
+			// Facing mode lives in emitter.flags bits 8..9 (the CPU has
+			// always packed ParticleFacingMode there - see ParticleWorldSystem
+			// ParticleFlags_FacingShift - but this builder ignored it and
+			// built camera-facing quads unconditionally. Weather rain asked
+			// for velocity-aligned stretched streaks and silently got 2cm
+			// camera-facing specks instead; the only visible "raindrops"
+			// were the big slow mist sprites, which read as floating).
+			//   0 = camera-facing, 1 = velocity-aligned (+motion stretch),
+			//   2 = axis-locked (not yet implemented, falls back to camera).
+			float3 axisRight = camRight;
+			float3 axisUp = camUp;
+			float lengthSize = size;
+			const uint facingMode = (emitter.flags >> 8u) & 3u;
+			if (facingMode == 1u)
+			{
+				const float3 vel = state.velocity.xyz;
+				const float speed = length(vel);
+				if (speed > 0.05f)
+				{
+					const float3 dir = vel / speed;
+					// Width axis: perpendicular to motion, as camera-facing
+					// as possible. Degenerates when motion is parallel to
+					// the view axis - keep the camera-facing fallback then.
+					const float3 r = cross(dir, normalize(g_cameraForward.xyz));
+					const float rLen = length(r);
+					if (rLen > 0.01f)
+					{
+						axisUp = dir;
+						axisRight = r / rLen;
+						// Motion stretch: the streak spans the distance the
+						// particle covers in ~12ms (a 1/85s "shutter").
+						// 11 m/s terminal-velocity rain -> ~13cm streaks;
+						// slow drifting snow stays round.
+						lengthSize = max(size, speed * 0.012f);
+					}
+				}
+			}
+
 			float4x4 world = float4x4(
-				float4(camRight * size, 0.0f),
-				float4(camUp * size, 0.0f),
-				float4(normalize(cross(camRight, camUp)) * size, 0.0f),
+				float4(axisRight * size, 0.0f),
+				float4(axisUp * lengthSize, 0.0f),
+				float4(normalize(cross(axisRight, axisUp)) * size, 0.0f),
 				float4(state.position.xyz, 1.0f));
 
 			const float depthJitterBias = max(0.0f, g_globalParams.w);
@@ -308,6 +366,10 @@
 			ComputeFlipbookUv(emitter, lifeN, uvScale, uvOffset);
 			inst.worldPrev[3].xy = uvOffset;
 			inst.worldPrev[3].z = ((emitter.flags & ParticleFlags_ReceiveLighting) != 0u) ? 1.0f : 0.0f;
+			// Texture slot index from emitter flags bits 28..29 - lets each
+			// emitter use its own texture within the single shared render
+			// pass (selected in ParticleBillboardLit's pixel shader).
+			inst.worldPrev[3].w = (float)((emitter.flags >> 28u) & 3u);
 			inst.color = state.color;
 			inst.uvScale = uvScale;
 

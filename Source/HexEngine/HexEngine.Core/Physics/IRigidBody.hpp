@@ -221,5 +221,12 @@ namespace HexEngine
 		virtual void UpdatePosePosition(const math::Vector3& position) = 0;
 
 		virtual void UpdatePoseRotation(const math::Quaternion& rotation) = 0;
+
+		// True only for character-controller bodies. Their pose is authoritative
+		// from Move()/the physics read-back, so transform-change force-pose updates
+		// must NOT drive them - doing so fights the controller and (because each
+		// setFootPosition runs overlap recovery against world geometry) is very
+		// expensive when fired every frame by e.g. mouse-look rotation.
+		virtual bool IsCharacterController() const { return false; }
 	};
 }

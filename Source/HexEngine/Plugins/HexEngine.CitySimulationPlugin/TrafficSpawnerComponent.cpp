@@ -150,7 +150,10 @@ bool TrafficSpawnerComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 		});
 
 	auto* enabled = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Enabled", &_enabled);
-	auto* despawnInactive = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Despawn Inactive", &_despawnWhenInactive);
+	// "Despawn Inactive" checkbox removed - the bulk-despawn-when-far
+	// behaviour was deleted (felt jarring to come back to an empty
+	// city). The _despawnWhenInactive field is still serialised so
+	// existing scenes load cleanly, but it's ignored at runtime.
 	auto* drawDebug = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Draw Debug", &_drawDebug);
 	auto* interval = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Spawn Interval (s)", &_spawnIntervalSeconds, 0.05f, 600.0f, 0.1f, 2);
 	auto* maxActive = new HexEngine::DragInt(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Max Active", &_maxActiveVehicles, 0, 10000, 1);
@@ -159,7 +162,6 @@ bool TrafficSpawnerComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 
 	laneName->SetPrefabOverrideBinding(GetComponentName(), "/_laneEntityName");
 	enabled->SetPrefabOverrideBinding(GetComponentName(), "/_enabled");
-	despawnInactive->SetPrefabOverrideBinding(GetComponentName(), "/_despawnWhenInactive");
 	drawDebug->SetPrefabOverrideBinding(GetComponentName(), "/_drawDebug");
 	interval->SetPrefabOverrideBinding(GetComponentName(), "/_spawnIntervalSeconds");
 	maxActive->SetPrefabOverrideBinding(GetComponentName(), "/_maxActiveVehicles");

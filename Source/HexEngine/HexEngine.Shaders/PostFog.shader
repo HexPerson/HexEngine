@@ -78,14 +78,29 @@
 		if (effectiveDist <= 0.0001f)
 			return float4(pixelColour.rgb, 1.0f);
 
-		// Integrate height fog along the ray so density placement does not depend on camera height alone.
-		float distExtinction = effectiveDist * distanceDensity;
+		// Distance-based fog extinction. Suppressed when AP is active -
+		// the aerial-perspective volume is doing the distance haze
+		// physically, so adding fog density on top compounds the tinting
+		// and over-blues nearby geometry (200m-1km objects get 50%+
+		// replaced by fog colour at default r_fogDensity=0.003).
+		const bool apActive = g_atmosphere.fogUseAerialPerspective >= 0.5f;
+		float distExtinction = apActive ? 0.0f : (effectiveDist * distanceDensity);
+		// Height fog is preserved when AP is active but dampened. The
+		// current height-fog formula multiplies density by effectiveDist,
+		// which means ground-level horizontal views (eye and pixel both
+		// near ground, default heightPivot=0) accumulate the full ~1km of
+		// "low altitude air" along the ray and hit fogFactor=0.9 even at
+		// 1 km of view distance - looks identical to old distance fog.
+		// The 0.20 scale keeps the artistic effect (visible mist in
+		// valleys when looking down into them from above) while removing
+		// the spurious horizontal-view-through-ground haze.
+		const float heightFogApScale = apActive ? 0.20f : 1.0f;
 		float rayHeightDelta = worldPos.y - g_eyePos.y;
 		float heightRayMid = g_eyePos.y + rayHeightDelta * 0.5f;
 		float heightRaySpan = abs(rayHeightDelta) * 0.5f + 1.0f;
 		float heightBandBase = exp2(-(heightRayMid - heightPivot) * heightFalloff);
 		float heightVariation = saturate(rayHeightDelta * heightFalloff / heightRaySpan);
-		float heightExtinction = heightBandBase * heightDensity * effectiveDist;
+		float heightExtinction = heightBandBase * heightDensity * effectiveDist * heightFogApScale;
 		heightExtinction *= lerp(1.0f, 0.82f, heightVariation);
 		float extinction = distExtinction + heightExtinction;
 		float fogFactor = saturate(1.0f - exp2(-extinction));
@@ -93,70 +108,98 @@
 		float3 rayDir = normalize(worldPos - g_eyePos.xyz);
 		float3 sunDir = normalize(-g_lightDirection.xyz);
 
-		// Use the physical model for spectral attenuation along the view ray.
-		const int fogSteps = 12;
-		PhysicalAtmosphereSample raySample = IntegrateAtmospherePhysical(
-			g_eyePos.xyz + rayDir * startDistance,
-			rayDir,
-			effectiveDist,
-			sunDir,
-			fogSteps,
-			false);
-
-		// Probe the atmosphere from a stable reference origin so fog colour is independent of fog band placement.
-		const float3 fogProbeOrigin = float3(0.0f, 0.0f, 0.0f);
-
-		// Probe the atmosphere with stable, camera-independent directions for fog colour.
-		float3 zenithDir = float3(0.0f, 1.0f, 0.0f);
-		float3 antiSunDir = normalize(float3(-sunDir.x, 0.18f, -sunDir.z));
-		float3 nearSunDir = normalize(float3(sunDir.x, 0.16f, sunDir.z));
-
-		PhysicalAtmosphereSample zenithProbe = IntegrateAtmospherePhysical(fogProbeOrigin, zenithDir, g_frustumDepths[3], sunDir, 18, false);
-		PhysicalAtmosphereSample horizonProbe = IntegrateAtmospherePhysical(fogProbeOrigin, antiSunDir, g_frustumDepths[3], sunDir, 18, false);
-		PhysicalAtmosphereSample sunsetProbe = IntegrateAtmospherePhysical(fogProbeOrigin, nearSunDir, g_frustumDepths[3], sunDir, 18, false);
+		// Sky-colour sample (LUT-driven when r_atmosphereLUTs is on) - reused
+		// by both paths below as the colour the fog tints toward.
 		float3 farSkyColour = g_atmosphereTexture.Sample(g_textureSampler, screenPos).rgb;
-
 		float3 ambientFogBase = max(g_atmosphere.ambientLight.rgb, float3(0.001f, 0.001f, 0.001f));
 
 		float heightFogWeight = saturate(heightExtinction / max(extinction, 0.001f));
-		float raySampleLuma = max(dot(raySample.inscatter, float3(0.299f, 0.587f, 0.114f)), 0.001f);
-		float3 viewRayFog = raySample.inscatter / raySampleLuma;
-
 		float sunElevation = -g_lightDirection.y;
-		float sunsetWeight = saturate((sunsetRange - sunElevation) / max(sunsetRange, 0.02f)) * (1.0f - saturate((-0.02f - sunElevation) / 0.10f));
 		float nightWeight = saturate((-sunElevation + 0.02f) / 0.20f);
 		float distanceAtmosphereBlend = saturate((fogDist - atmosphereBlendStart) / atmosphereBlendRange);
-		float horizonColourMix = lerp(0.80f, 0.54f, nightWeight);
-		float3 directionalFog = lerp(horizonProbe.inscatter, raySample.inscatter, saturate(0.28f + distanceAtmosphereBlend * 0.34f));
-		float3 farMatchedFog = lerp(directionalFog, farSkyColour, farAtmosphereMatchStrength * distanceAtmosphereBlend);
-		float3 heightDominantFog = lerp(farMatchedFog, horizonProbe.inscatter, heightFogWeight * 0.72f);
-		float3 baseAtmosphereFog = lerp(heightDominantFog, zenithProbe.inscatter, nightWeight * 0.18f);
-		baseAtmosphereFog = lerp(baseAtmosphereFog, horizonProbe.inscatter, horizonColourMix * 0.22f);
-		float sunsetBlend = sunsetWeight * distanceAtmosphereBlend * sunsetWarmthStrength * 0.18f;
-		float3 physicalFogColour = lerp(baseAtmosphereFog, sunsetProbe.inscatter, sunsetBlend);
 
-		// At night, pull back toward cooler zenith/ambient haze so the fog does not keep the horizon's warm tint.
-		float3 coolNightFog = lerp(zenithProbe.inscatter, ambientFogBase, 0.10f);
-		physicalFogColour = lerp(physicalFogColour, coolNightFog, nightWeight * 0.65f);
+		float3 fogColour;
+		float3 surfaceAttenuation;
 
-		// Preserve atmospheric hue while only using ambient light as an energy floor, not as an authored tint.
-		float physicalLuma = max(dot(physicalFogColour, float3(0.299f, 0.587f, 0.114f)), 0.001f);
-		float baseLuma = max(dot(ambientFogBase, float3(0.299f, 0.587f, 0.114f)), 0.001f);
-		float3 physicalHue = physicalFogColour / physicalLuma;
-		float hueStrength = saturate((physicalHue.b - max(physicalHue.r, physicalHue.g)) * 0.45f);
-		physicalHue = lerp(physicalHue, viewRayFog, 0.18f + heightFogWeight * 0.22f);
-		physicalHue = lerp(physicalHue, normalize(max(physicalFogColour, 0.0001f)) * 1.732f, hueStrength * 0.18f);
-		physicalFogColour = saturate(physicalHue * max(physicalLuma, baseLuma * 0.35f));
+		if (apActive)
+		{
+			// AP-active path. The aerial-perspective volume is producing
+			// physically-correct distance haze for opaque geometry after
+			// this pass runs. To avoid compounding, we skip the analytic
+			// atmosphere integration entirely and pick a fog colour
+			// driven only by the sky texture (which already reflects the
+			// LUT-based sky shading) and the ambient floor. Height fog,
+			// lightning, and the final fogFactor composite still apply,
+			// so authored low-altitude haze and storm effects survive.
+			float fogSkyAmount = saturate(skyTintInfluence * 0.62f + distanceAtmosphereBlend * 0.20f);
+			fogSkyAmount = lerp(fogSkyAmount, fogSkyAmount * 0.70f, nightWeight);
+			fogColour = lerp(ambientFogBase, farSkyColour, fogSkyAmount);
+			// No spectral transmittance available without the analytic
+			// march - use a scalar attenuation. AP will refine the
+			// per-channel transmittance for distant pixels itself.
+			surfaceAttenuation = float3(1.0f, 1.0f, 1.0f);
+		}
+		else
+		{
+			// Original analytic path - kept for backward compat when the
+			// LUT system is disabled (r_atmosphereLUTs 0 or LUT init
+			// failed). The full Hillaire-style integration runs here.
+			const int fogSteps = 12;
+			PhysicalAtmosphereSample raySample = IntegrateAtmospherePhysical(
+				g_eyePos.xyz + rayDir * startDistance,
+				rayDir,
+				effectiveDist,
+				sunDir,
+				fogSteps,
+				false);
 
-		float fogSkyAmount = saturate(skyTintInfluence * 0.62f + distanceAtmosphereBlend * (0.20f + farAtmosphereMatchStrength * 0.26f));
-		fogSkyAmount = lerp(fogSkyAmount, fogSkyAmount * 0.70f, nightWeight);
-		float3 fogColour = lerp(ambientFogBase, physicalFogColour, fogSkyAmount);
-		fogColour = lerp(fogColour, farSkyColour, farAtmosphereMatchStrength * distanceAtmosphereBlend * saturate(fogFactor + heightFogWeight * 0.35f));
-		float fogLuma = dot(fogColour, float3(0.299f, 0.587f, 0.114f));
-		float dayWeight = 1.0f - nightWeight;
-		float distanceDesat = farDesatStrength * distanceAtmosphereBlend * lerp(0.30f, 0.10f, dayWeight);
-		fogColour = lerp(fogColour, fogLuma.xxx, distanceDesat);
+			const float3 fogProbeOrigin = float3(0.0f, 0.0f, 0.0f);
+			float3 zenithDir = float3(0.0f, 1.0f, 0.0f);
+			float3 antiSunDir = normalize(float3(-sunDir.x, 0.18f, -sunDir.z));
+			float3 nearSunDir = normalize(float3(sunDir.x, 0.16f, sunDir.z));
 
+			PhysicalAtmosphereSample zenithProbe = IntegrateAtmospherePhysical(fogProbeOrigin, zenithDir, g_frustumDepths[3], sunDir, 18, false);
+			PhysicalAtmosphereSample horizonProbe = IntegrateAtmospherePhysical(fogProbeOrigin, antiSunDir, g_frustumDepths[3], sunDir, 18, false);
+			PhysicalAtmosphereSample sunsetProbe = IntegrateAtmospherePhysical(fogProbeOrigin, nearSunDir, g_frustumDepths[3], sunDir, 18, false);
+
+			float raySampleLuma = max(dot(raySample.inscatter, float3(0.299f, 0.587f, 0.114f)), 0.001f);
+			float3 viewRayFog = raySample.inscatter / raySampleLuma;
+
+			float sunsetWeight = saturate((sunsetRange - sunElevation) / max(sunsetRange, 0.02f)) * (1.0f - saturate((-0.02f - sunElevation) / 0.10f));
+			float horizonColourMix = lerp(0.80f, 0.54f, nightWeight);
+			float3 directionalFog = lerp(horizonProbe.inscatter, raySample.inscatter, saturate(0.28f + distanceAtmosphereBlend * 0.34f));
+			float3 farMatchedFog = lerp(directionalFog, farSkyColour, farAtmosphereMatchStrength * distanceAtmosphereBlend);
+			float3 heightDominantFog = lerp(farMatchedFog, horizonProbe.inscatter, heightFogWeight * 0.72f);
+			float3 baseAtmosphereFog = lerp(heightDominantFog, zenithProbe.inscatter, nightWeight * 0.18f);
+			baseAtmosphereFog = lerp(baseAtmosphereFog, horizonProbe.inscatter, horizonColourMix * 0.22f);
+			float sunsetBlend = sunsetWeight * distanceAtmosphereBlend * sunsetWarmthStrength * 0.18f;
+			float3 physicalFogColour = lerp(baseAtmosphereFog, sunsetProbe.inscatter, sunsetBlend);
+
+			float3 coolNightFog = lerp(zenithProbe.inscatter, ambientFogBase, 0.10f);
+			physicalFogColour = lerp(physicalFogColour, coolNightFog, nightWeight * 0.65f);
+
+			float physicalLuma = max(dot(physicalFogColour, float3(0.299f, 0.587f, 0.114f)), 0.001f);
+			float baseLuma = max(dot(ambientFogBase, float3(0.299f, 0.587f, 0.114f)), 0.001f);
+			float3 physicalHue = physicalFogColour / physicalLuma;
+			float hueStrength = saturate((physicalHue.b - max(physicalHue.r, physicalHue.g)) * 0.45f);
+			physicalHue = lerp(physicalHue, viewRayFog, 0.18f + heightFogWeight * 0.22f);
+			physicalHue = lerp(physicalHue, normalize(max(physicalFogColour, 0.0001f)) * 1.732f, hueStrength * 0.18f);
+			physicalFogColour = saturate(physicalHue * max(physicalLuma, baseLuma * 0.35f));
+
+			float fogSkyAmount = saturate(skyTintInfluence * 0.62f + distanceAtmosphereBlend * (0.20f + farAtmosphereMatchStrength * 0.26f));
+			fogSkyAmount = lerp(fogSkyAmount, fogSkyAmount * 0.70f, nightWeight);
+			fogColour = lerp(ambientFogBase, physicalFogColour, fogSkyAmount);
+			fogColour = lerp(fogColour, farSkyColour, farAtmosphereMatchStrength * distanceAtmosphereBlend * saturate(fogFactor + heightFogWeight * 0.35f));
+			float fogLuma = dot(fogColour, float3(0.299f, 0.587f, 0.114f));
+			float dayWeight = 1.0f - nightWeight;
+			float distanceDesat = farDesatStrength * distanceAtmosphereBlend * lerp(0.30f, 0.10f, dayWeight);
+			fogColour = lerp(fogColour, fogLuma.xxx, distanceDesat);
+
+			surfaceAttenuation = lerp(float3(1.0f, 1.0f, 1.0f), raySample.transmittance, fogFactor);
+		}
+
+		// Lightning flash adds a forward-scattering bright tint to the fog
+		// colour regardless of which path computed the base colour above.
 		float lightningFlash = saturate(g_weatherSurface.lightningFlash);
 		if (lightningFlash > 0.0001f)
 		{
@@ -166,8 +209,6 @@
 			fogColour += lightningFog * (0.10f + 0.24f * fogFactor + 0.22f * heightFogWeight + 0.16f * forwardScatter);
 		}
 
-		// Use spectral transmittance from the physical ray march, but keep the old height fog amount.
-		float3 surfaceAttenuation = lerp(float3(1.0f, 1.0f, 1.0f), raySample.transmittance, fogFactor);
 		float3 foggedAlbedo = pixelColour.rgb * surfaceAttenuation;
 		foggedAlbedo = lerp(foggedAlbedo, fogColour, fogFactor);
 

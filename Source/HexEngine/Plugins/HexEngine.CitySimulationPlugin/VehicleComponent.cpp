@@ -286,7 +286,8 @@ void VehicleComponent::EnsureGeneratedMeshChild(const std::string& childName, co
 	child->SetFlag(HexEngine::EntityFlags::ExcludeFromHLOD);
 
 	auto* meshComponent = child->AddComponent<HexEngine::StaticMeshComponent>();
-	meshComponent->SetMesh(mesh);
+	meshComponent->SetExcludeFromGI(true);
+	meshComponent->SetMesh(mesh);	
 }
 
 std::vector<fs::path> VehicleComponent::ToPathList(const std::vector<std::string>& paths)

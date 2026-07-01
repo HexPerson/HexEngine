@@ -7,6 +7,7 @@
 
 #include "RecastInterface.hpp"
 #include <algorithm>
+#include <cstring>
 
 enum PolyAreas
 {
@@ -27,6 +28,77 @@ enum PolyFlags
 	POLYFLAGS_DISABLED = 0x10,		// Disabled polygon
 	POLYFLAGS_ALL = 0xffff	// All abilities.
 };
+
+namespace
+{
+	// Standard even-odd point-in-polygon on the XZ plane (verts are float[n*3]).
+	bool PointInXZPoly(int32_t nverts, const float* verts, float px, float pz)
+	{
+		bool inside = false;
+		for (int32_t i = 0, j = nverts - 1; i < nverts; j = i++)
+		{
+			const float* vi = &verts[i * 3];
+			const float* vj = &verts[j * 3];
+			if (((vi[2] > pz) != (vj[2] > pz)) &&
+				(px < (vj[0] - vi[0]) * (pz - vi[2]) / (vj[2] - vi[2]) + vi[0]))
+				inside = !inside;
+		}
+		return inside;
+	}
+
+	// Like rcMarkConvexPolyArea, but force-sets matching spans to RC_WALKABLE_AREA
+	// even where they were already carved to RC_NULL_AREA. rcMarkConvexPolyArea skips
+	// null spans, so it can't restore walkability over a block volume - this can,
+	// letting a ForceWalkable (crossing) volume win over an overlapping Block (road).
+	void ForceWalkableConvexPoly(const float* verts, int32_t nverts, float hmin, float hmax, rcCompactHeightfield& chf)
+	{
+		float bmin[3], bmax[3];
+		bmin[0] = bmax[0] = verts[0];
+		bmin[2] = bmax[2] = verts[2];
+		for (int32_t i = 1; i < nverts; ++i)
+		{
+			bmin[0] = std::min(bmin[0], verts[i * 3 + 0]);
+			bmax[0] = std::max(bmax[0], verts[i * 3 + 0]);
+			bmin[2] = std::min(bmin[2], verts[i * 3 + 2]);
+			bmax[2] = std::max(bmax[2], verts[i * 3 + 2]);
+		}
+		bmin[1] = hmin;
+		bmax[1] = hmax;
+
+		int32_t minx = (int32_t)((bmin[0] - chf.bmin[0]) / chf.cs);
+		int32_t miny = (int32_t)((bmin[1] - chf.bmin[1]) / chf.ch);
+		int32_t minz = (int32_t)((bmin[2] - chf.bmin[2]) / chf.cs);
+		int32_t maxx = (int32_t)((bmax[0] - chf.bmin[0]) / chf.cs);
+		int32_t maxy = (int32_t)((bmax[1] - chf.bmin[1]) / chf.ch);
+		int32_t maxz = (int32_t)((bmax[2] - chf.bmin[2]) / chf.cs);
+
+		if (maxx < 0 || minx >= chf.width || maxz < 0 || minz >= chf.height)
+			return;
+		if (minx < 0) minx = 0;
+		if (maxx >= chf.width) maxx = chf.width - 1;
+		if (minz < 0) minz = 0;
+		if (maxz >= chf.height) maxz = chf.height - 1;
+
+		for (int32_t z = minz; z <= maxz; ++z)
+		{
+			for (int32_t x = minx; x <= maxx; ++x)
+			{
+				const rcCompactCell& cell = chf.cells[x + z * chf.width];
+				for (int32_t i = (int32_t)cell.index, ni = (int32_t)(cell.index + cell.count); i < ni; ++i)
+				{
+					const rcCompactSpan& s = chf.spans[i];
+					if ((int32_t)s.y < miny || (int32_t)s.y > maxy)
+						continue;
+
+					const float px = chf.bmin[0] + (x + 0.5f) * chf.cs;
+					const float pz = chf.bmin[2] + (z + 0.5f) * chf.cs;
+					if (PointInXZPoly(nverts, verts, px, pz))
+						chf.areas[i] = RC_WALKABLE_AREA;
+				}
+			}
+		}
+	}
+}
 
 
 bool RecastInterface::Create()
@@ -262,6 +334,45 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 		return false;
 	}
 
+	// Apply NavMeshBlockingVolume footprints. Carve every Block volume out first
+	// (RC_NULL_AREA), then restore every ForceWalkable volume - so a crossing always
+	// wins over an overlapping road block. Runs for both scene and chunk bakes; the
+	// mark calls clip to this heightfield's bounds.
+	{
+		std::vector<HexEngine::NavMeshBlockingBox> navVolumes;
+		scene->GatherNavMeshBlockingVolumes(navVolumes);
+
+		for (const auto& v : navVolumes)
+		{
+			if (v.mode != 0) // 0 = Block
+				continue;
+
+			const float verts[12] =
+			{
+				v.corners[0].x, v.corners[0].y, v.corners[0].z,
+				v.corners[1].x, v.corners[1].y, v.corners[1].z,
+				v.corners[2].x, v.corners[2].y, v.corners[2].z,
+				v.corners[3].x, v.corners[3].y, v.corners[3].z,
+			};
+			rcMarkConvexPolyArea(this, verts, 4, v.ymin, v.ymax, RC_NULL_AREA, *_compactHF);
+		}
+
+		for (const auto& v : navVolumes)
+		{
+			if (v.mode != 1) // 1 = ForceWalkable
+				continue;
+
+			const float verts[12] =
+			{
+				v.corners[0].x, v.corners[0].y, v.corners[0].z,
+				v.corners[1].x, v.corners[1].y, v.corners[1].z,
+				v.corners[2].x, v.corners[2].y, v.corners[2].z,
+				v.corners[3].x, v.corners[3].y, v.corners[3].z,
+			};
+			ForceWalkableConvexPoly(verts, 4, v.ymin, v.ymax, *_compactHF);
+		}
+	}
+
 
 	// waterhsed partitioning:
 	// Prepare for region partitioning, by calculating distance field along the walkable surface.
@@ -380,6 +491,53 @@ bool RecastInterface::CreateRoutingData(HexEngine::Scene* scene, HexEngine::Chun
 
 	_filter.setIncludeFlags(POLYFLAGS_ALL ^ POLYFLAGS_DISABLED);
 
+	// Lower the baked navmesh by the configured height bias to cancel the Cell-Height
+	// (ch) voxel quantization that otherwise floats the mesh ~ch above the floor and
+	// leaves agents hovering. Applied to the detail mesh - what getPolyHeight (agent
+	// placement) and the debug overlay both read - so it's a zero-runtime-cost fix.
+	// The detail mesh is rebuilt every bake, so this never compounds across rebakes.
+	if (params.heightBias != 0.0f && _detailMesh != nullptr && _detailMesh->verts != nullptr)
+	{
+		for (int i = 0; i < _detailMesh->nverts; ++i)
+			_detailMesh->verts[i * 3 + 1] -= params.heightBias;
+	}
+
+	// Off-mesh connections from NavMeshLinkComponent. Each link binds its two
+	// endpoints to nearby polys, letting agents path across a gap with no walkable
+	// polygon between them (e.g. stitching two navmesh islands over excluded grass).
+	// Areas/flags match the walkable ground polys so the query filter includes them.
+	// These buffers must outlive dtCreateNavMeshData below.
+	std::vector<float>          offMeshVerts;   // [count*6] : start xyz, end xyz
+	std::vector<float>          offMeshRad;     // [count]
+	std::vector<unsigned char>  offMeshDir;     // [count] : 0 = one-way, DT_OFFMESH_CON_BIDIR = both
+	std::vector<unsigned char>  offMeshAreas;   // [count]
+	std::vector<unsigned short> offMeshFlags;   // [count]
+	std::vector<unsigned int>   offMeshUserID;  // [count]
+	int32_t                     offMeshCount = 0;
+
+	if (scene != nullptr)
+	{
+		// Scene-level links; for chunk bakes Detour only binds endpoints that land on
+		// this tile (a link spanning two chunks won't connect - use a scene navmesh).
+		std::vector<HexEngine::NavMeshLink> links;
+		scene->GatherNavMeshLinks(links);
+
+		for (const auto& l : links)
+		{
+			offMeshVerts.push_back(l.start.x); offMeshVerts.push_back(l.start.y); offMeshVerts.push_back(l.start.z);
+			offMeshVerts.push_back(l.end.x);   offMeshVerts.push_back(l.end.y);   offMeshVerts.push_back(l.end.z);
+			offMeshRad.push_back(l.radius);
+			offMeshDir.push_back(l.bidirectional ? (unsigned char)DT_OFFMESH_CON_BIDIR : (unsigned char)0);
+			offMeshAreas.push_back((unsigned char)POLYAREA_GROUND);
+			offMeshFlags.push_back((unsigned short)POLYFLAGS_WALK);
+			offMeshUserID.push_back((unsigned int)(1000 + offMeshCount));
+			++offMeshCount;
+		}
+
+		if (offMeshCount > 0)
+			LOG_INFO("Navmesh: adding %d off-mesh link(s).", offMeshCount);
+	}
+
 	dtNavMeshCreateParams dtparams;
 	memset(&dtparams, 0, sizeof(dtparams));
 	dtparams.verts = _polyMesh->verts;
@@ -394,18 +552,27 @@ bool RecastInterface::CreateRoutingData(HexEngine::Scene* scene, HexEngine::Chun
 	dtparams.detailVertsCount = _detailMesh->nverts;
 	dtparams.detailTris = _detailMesh->tris;
 	dtparams.detailTriCount = _detailMesh->ntris;
-	dtparams.offMeshConVerts = nullptr;
-	dtparams.offMeshConRad = nullptr;
-	dtparams.offMeshConDir = nullptr;
-	dtparams.offMeshConAreas = nullptr;
-	dtparams.offMeshConFlags = nullptr;
-	dtparams.offMeshConUserID = nullptr;
-	dtparams.offMeshConCount = 0;
+	dtparams.offMeshConVerts  = offMeshCount > 0 ? offMeshVerts.data()  : nullptr;
+	dtparams.offMeshConRad    = offMeshCount > 0 ? offMeshRad.data()    : nullptr;
+	dtparams.offMeshConDir    = offMeshCount > 0 ? offMeshDir.data()    : nullptr;
+	dtparams.offMeshConAreas  = offMeshCount > 0 ? offMeshAreas.data()  : nullptr;
+	dtparams.offMeshConFlags  = offMeshCount > 0 ? offMeshFlags.data()  : nullptr;
+	dtparams.offMeshConUserID = offMeshCount > 0 ? offMeshUserID.data() : nullptr;
+	dtparams.offMeshConCount  = offMeshCount;
 	dtparams.walkableHeight = _creationParams.walkableHeight;
 	dtparams.walkableRadius = _creationParams.walkableRadius;
 	dtparams.walkableClimb = _creationParams.walkableClimb;
 	rcVcopy(dtparams.bmin, _polyMesh->bmin);
 	rcVcopy(dtparams.bmax, _polyMesh->bmax);
+
+	// Sink the whole navmesh by the height bias. Poly-mesh verts are stored quantized
+	// and dequantized at runtime as header.bmin.y + v.y*ch, so lowering bmin/bmax .y
+	// drops every poly vert by heightBias. This is what fixes FLAT polys (sidewalks,
+	// floors) - they carry no interior detail verts, so their height comes from these
+	// poly-mesh boundary verts, not the detail verts lowered above. Together the two
+	// edits drop the entire surface uniformly onto the floor.
+	dtparams.bmin[1] -= params.heightBias;
+	dtparams.bmax[1] -= params.heightBias;
 	dtparams.cs = _creationParams.cs;
 	dtparams.ch = _creationParams.ch;
 	dtparams.buildBvTree = true;
@@ -424,6 +591,7 @@ bool RecastInterface::CreateRoutingData(HexEngine::Scene* scene, HexEngine::Chun
 		LOG_CRIT("Could not build Detour navmesh.");
 		return false;
 	}
+	stored.navMeshDataSize = navDataSize;
 
 	stored.navMesh = dtAllocNavMesh();
 	if (!stored.navMesh)
@@ -468,6 +636,57 @@ bool RecastInterface::CreateRoutingData(HexEngine::Scene* scene, HexEngine::Chun
 	return true;
 }
 
+bool RecastInterface::GetNavMeshBytes(HexEngine::NavMeshId id, std::vector<uint8_t>& outData)
+{
+	if (id >= _navMeshes.size())
+		return false;
+	const NavMeshes& m = _navMeshes[(size_t)id];
+	if (m.navMeshData == nullptr || m.navMeshDataSize <= 0)
+		return false;
+	outData.assign(m.navMeshData, m.navMeshData + m.navMeshDataSize);
+	return true;
+}
+
+bool RecastInterface::LoadNavMeshFromBytes(HexEngine::Scene* scene, const std::vector<uint8_t>& data, HexEngine::NavMeshId* outNavMesh)
+{
+	if (data.empty() || outNavMesh == nullptr)
+		return false;
+
+	NavMeshes stored;
+	stored.scene = scene;
+	stored.navMeshDataSize = (int32_t)data.size();
+	// dtNavMesh (DT_TILE_FREE_DATA) takes ownership of the buffer, so allocate via dtAlloc.
+	stored.navMeshData = (uint8_t*)dtAlloc((int)data.size(), DT_ALLOC_PERM);
+	if (stored.navMeshData == nullptr)
+		return false;
+	memcpy(stored.navMeshData, data.data(), data.size());
+
+	stored.navMesh = dtAllocNavMesh();
+	if (!stored.navMesh)
+	{
+		dtFree(stored.navMeshData);
+		return false;
+	}
+	if (dtStatusFailed(stored.navMesh->init(stored.navMeshData, (int)data.size(), DT_TILE_FREE_DATA)))
+	{
+		FreeNavMesh(stored);
+		LOG_CRIT("Could not init Detour navmesh from bytes.");
+		return false;
+	}
+
+	stored.navMeshQuery = dtAllocNavMeshQuery();
+	if (!stored.navMeshQuery || dtStatusFailed(stored.navMeshQuery->init(stored.navMesh, 2048)))
+	{
+		FreeNavMesh(stored);
+		LOG_CRIT("Could not init Detour navmesh query from bytes.");
+		return false;
+	}
+
+	_navMeshes.push_back(stored);
+	*outNavMesh = (HexEngine::NavMeshId)(_navMeshes.size() - 1);
+	return true;
+}
+
 void RecastInterface::DebugRender()
 {
 	// Draw only the latest navmesh per (scene, chunk) pair to avoid visual overlap
@@ -486,7 +705,11 @@ void RecastInterface::DebugRender()
 			continue;
 
 		drawnPairs.push_back(key);
-		duDebugDrawNavMesh(&_debugRenderer, *nav.navMesh, DU_DRAWNAVMESH_COLOR_TILES);
+		// COLOR_TILES tints polys per tile; OFFMESHCONS draws off-mesh links
+		// (NavMeshLinkComponent) as an arc + endpoint circles - without that flag the
+		// links bake but are never rendered. Endpoint circles draw red when that end
+		// failed to bind to a poly, which doubles as a connection diagnostic.
+		duDebugDrawNavMesh(&_debugRenderer, *nav.navMesh, DU_DRAWNAVMESH_COLOR_TILES | DU_DRAWNAVMESH_OFFMESHCONS);
 
 		//duDebugDrawCompactHeightfieldSolid(&_debugRenderer, *_compactHF);
 	}
@@ -781,48 +1004,39 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 			}
 			break;
 		}
-#if 0
-		else if (offMeshConnection && inRange(&result.currentPos.x, steerPos, SLOP, 1.0f))
+		else if (offMeshConnection && inRange(&currentPos.x, steerPos, SLOP, 1.0f))
 		{
-			// Reached off-mesh connection.
+			// Reached an off-mesh connection (e.g. a NavMeshLinkComponent stitching
+			// pavement to a house). Advance the corridor up to and over the link,
+			// emit the entry point, then move currentPos to the far endpoint so the
+			// smoothed path continues on the other side instead of stalling here.
 			float startPos[3], endPos[3];
 
-			// Advance the path up to and over the off-mesh connection.
-			dtPolyRef prevRef = 0, polyRef = polys[0];
+			dtPolyRef prevRef = 0, polyRef = pathRefs[0];
 			int npos = 0;
-			while (npos < npolys && polyRef != steerPosRef)
+			while (npos < pathCount && polyRef != steerPosRef)
 			{
 				prevRef = polyRef;
-				polyRef = polys[npos];
+				polyRef = pathRefs[npos];
 				npos++;
 			}
-			for (int i = npos; i < npolys; ++i)
-				polys[i - npos] = polys[i];
-			npolys -= npos;
+			for (int i = npos; i < pathCount; ++i)
+				pathRefs[i - npos] = pathRefs[i];
+			pathCount -= npos;
 
-			// Handle the connection.
-			dtStatus status = m_navMesh->getOffMeshConnectionPolyEndPoints(prevRef, polyRef, startPos, endPos);
-			if (dtStatusSucceed(status))
+			if (dtStatusSucceed(navMesh.navMesh->getOffMeshConnectionPolyEndPoints(prevRef, polyRef, startPos, endPos)))
 			{
-				if (m_nsmoothPath < MAX_SMOOTH)
-				{
-					dtVcopy(&m_smoothPath[m_nsmoothPath * 3], startPos);
-					m_nsmoothPath++;
-					// Hack to make the dotted path not visible during off-mesh connection.
-					if (m_nsmoothPath & 1)
-					{
-						dtVcopy(&m_smoothPath[m_nsmoothPath * 3], startPos);
-						m_nsmoothPath++;
-					}
-				}
-				// Move position at the other side of the off-mesh link.
-				dtVcopy(iterPos, endPos);
+				if (result.path.size() < MAX_SMOOTH)
+					result.path.push_back(math::Vector3(startPos[0], startPos[1], startPos[2]));
+
+				// Hop to the far side of the link, then snap to the ground height of
+				// the next corridor poly so smoothing resumes on the house side.
+				dtVcopy(&currentPos.x, endPos);
 				float eh = 0.0f;
-				m_navQuery->getPolyHeight(polys[0], iterPos, &eh);
-				iterPos[1] = eh;
+				if (pathCount > 0 && dtStatusSucceed(navMesh.navMeshQuery->getPolyHeight(pathRefs[0], &currentPos.x, &eh)))
+					currentPos.y = eh;
 			}
 		}
-#endif
 
 		// Store results.
 		if (result.path.size() < MAX_SMOOTH)

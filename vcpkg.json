@@ -8,6 +8,7 @@
     "directxtk",
     "directxtex",
     "freetype",
+    "gamenetworkingsockets",
     "nlohmann-json"
   ]
 }

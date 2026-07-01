@@ -259,6 +259,30 @@ namespace HexEngine
 											tempHit.normal.Normalize();
 											tempHit.material = meshRenderer->GetMaterial();
 
+											// Barycentric interpolation of the hit UV so callers can sample
+											// per-region surface data (e.g. footstep surface-ID maps). Tri and
+											// hit point are both in world space here.
+											{
+												const math::Vector3 a(v0), b(v1), c(v2);
+												const math::Vector3 e0 = b - a, e1 = c - a, e2 = tempHit.position - a;
+												const float d00 = e0.Dot(e0);
+												const float d01 = e0.Dot(e1);
+												const float d11 = e1.Dot(e1);
+												const float d20 = e2.Dot(e0);
+												const float d21 = e2.Dot(e1);
+												const float denom = d00 * d11 - d01 * d01;
+												if (fabsf(denom) > 1e-12f)
+												{
+													const float vB = (d11 * d20 - d01 * d21) / denom;
+													const float wB = (d00 * d21 - d01 * d20) / denom;
+													const float uB = 1.0f - vB - wB;
+													tempHit.uv =
+														vertices[i0]._texcoord * uB +
+														vertices[i1]._texcoord * vB +
+														vertices[i2]._texcoord * wB;
+												}
+											}
+
 											hits.push_back(tempHit);
 											break;
 										}
@@ -543,7 +567,7 @@ namespace HexEngine
 				// use the list of renderables, because we know they have already been tested for visibility
 				//
 				EntityComponentVector entities;
-				GetComponents((ComponentSignature)(1 << MeshRenderer::_GetComponentId()), entities);
+				GetComponents(((ComponentSignature)1 << MeshRenderer::_GetComponentId()), entities);
 
 				for (auto&& component : entities)
 				{

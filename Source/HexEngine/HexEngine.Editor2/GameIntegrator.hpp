@@ -105,7 +105,20 @@ namespace HexEditor
 		static bool IsWatchedCodeFile(const fs::path& path);
 		static bool IsIntermediateCodePath(const fs::path& path);
 
+		// Capture every entity's authored transform at play start and put it back on
+		// stop, so a run can't leave the scene mutated (doors left open, props
+		// shoved, the camera at the spawn point, ...). The editor doesn't otherwise
+		// snapshot the scene across play/stop.
+		void SnapshotSceneState();
+		void RestoreSceneState();
+
 	private:
+		// Temp .hscene written at play start; on stop it's reloaded over the live
+		// scene via SceneSaveFile with a load override that restores into existing
+		// entities (keeping editor-held pointers valid) instead of recreating the
+		// scene. Empty when no snapshot is held.
+		fs::path _playSnapshotPath;
+
 		std::vector<HexEngine::Entity*> _tempEntitiesCreated;
 		HexEngine::FileSystem* _runtimeFS = nullptr;
 		HMODULE _gameDll = 0;

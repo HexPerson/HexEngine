@@ -49,7 +49,7 @@ namespace HexEngine::Weather
 		WeatherPrecipitationType precipitationType = WeatherPrecipitationType::None;
 		WeatherSurfaceResponse surface;
 
-		math::Vector4 ambientLight = math::Vector4(0.14f, 0.14f, 0.145f, 1.0f);
+		math::Vector4 ambientLight = math::Vector4(0.10f, 0.10f, 0.105f, 1.0f);
 		math::Color fogColour = math::Color(HEX_RGB_TO_FLOAT3(95, 95, 95));
 		math::Color sunColour = math::Color(1.0f, 0.98f, 0.94f, 1.0f);
 		float sunIntensity = 1.0f;

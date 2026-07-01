@@ -30,6 +30,14 @@ namespace HexEngine
 			// matrices / bounds (_viewMatrix, _projectionMatrix, _lightBoundingSphere,
 			// _lightBoundingFrustum) - those get rebuilt by ConstructMatrices on the next
 			// render pass from these primary fields.
+			//
+			// Same gap as the cone angles, for shadows: Light(entity, copy) copied
+			// _doesCastShadows but not the shadow map, which SetDoesCastShadows
+			// allocates lazily. Re-run it so a cloned/prefab-spawned shadow-casting
+			// spot light actually has its map instead of rendering no shadows until
+			// the checkbox is re-toggled. (Virtual dispatch reaches SpotLight's
+			// override here - the base is already constructed.)
+			SetDoesCastShadows(_doesCastShadows);
 		}
 
 		virtual void Destroy() override;

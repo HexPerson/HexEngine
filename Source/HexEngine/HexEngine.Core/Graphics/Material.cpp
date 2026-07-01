@@ -42,6 +42,53 @@ namespace HexEngine
 		return _name;
 	}
 
+	void Material::SetFootstepSoundPath(const std::string& path)
+	{
+		_footstepSoundPath = path;
+	}
+
+	const std::string& Material::GetFootstepSoundPath() const
+	{
+		return _footstepSoundPath;
+	}
+
+	void Material::SetFootstepSurfaceMapPath(const std::string& path)
+	{
+		_footstepSurfaceMapPath = path;
+	}
+
+	const std::string& Material::GetFootstepSurfaceMapPath() const
+	{
+		return _footstepSurfaceMapPath;
+	}
+
+	void Material::SetFootstepSurfaceSounds(const std::vector<std::string>& sounds)
+	{
+		_footstepSurfaceSounds = sounds;
+	}
+
+	const std::vector<std::string>& Material::GetFootstepSurfaceSounds() const
+	{
+		return _footstepSurfaceSounds;
+	}
+
+	void Material::SetFootstepSurfaceSound(int32_t id, const std::string& path)
+	{
+		if (id < 0)
+			return;
+		if (static_cast<size_t>(id) >= _footstepSurfaceSounds.size())
+			_footstepSurfaceSounds.resize(static_cast<size_t>(id) + 1u);
+		_footstepSurfaceSounds[static_cast<size_t>(id)] = path;
+	}
+
+	const std::string& Material::GetFootstepSurfaceSound(int32_t id) const
+	{
+		static const std::string kEmpty;
+		if (id < 0 || static_cast<size_t>(id) >= _footstepSurfaceSounds.size())
+			return kEmpty;
+		return _footstepSurfaceSounds[static_cast<size_t>(id)];
+	}
+
 	void Material::Destroy()
 	{
 	}
@@ -94,6 +141,9 @@ namespace HexEngine
 		_objectFlags = material._objectFlags;
 		_affectsGI = material._affectsGI;
 		_emissiveAffectsGI = material._emissiveAffectsGI;
+		_footstepSoundPath = material._footstepSoundPath;
+		_footstepSurfaceMapPath = material._footstepSurfaceMapPath;
+		_footstepSurfaceSounds = material._footstepSurfaceSounds;
 		_graph = material._graph;
 		_graphInstance = material._graphInstance;
 		_hasGraph = material._hasGraph;

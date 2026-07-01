@@ -11,6 +11,8 @@
 #include "../Graphics/MaterialLoader.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "../Input/InputSystem.hpp"
+#include "../Graphics/AtmosphereLUTs.hpp"
+#include "../Graphics/VolumetricScattering.hpp"
 #include "../Graphics/DebugRenderer.hpp"
 #include "../Graphics/ISSAOProvider.hpp"
 #include "../Graphics/DiffuseGIAOProvider.hpp"
@@ -22,6 +24,8 @@
 #include "../Scripting/IScriptEngine.hpp"
 #include "../Graphics/IDenoiserProvider.hpp"
 #include "../Steam/ISteamworksProvider.hpp"
+#include "../Network/INetworkSystem.hpp"
+#include "../Scene/NetworkReplicationSystem.hpp"
 #include "../Graphics/MeshLoader.hpp"
 #include "../FileSystem/PrefabLoader.hpp"
 #include "../FileSystem/ParticleEffectLoader.hpp"
@@ -44,6 +48,13 @@ namespace HexEngine
 	// implementation - update the resolution rule in IGraphicsDevice::ShouldActivateBackend once
 	// the D3D12 plugin is feature-complete.
 	HEX_API HVar r_renderer("r_renderer", "Renderer backend selection. 0 = auto, 1 = D3D11, 2 = D3D12", 0, 0, 2);
+
+	// Networking backend selection, honoured by each networking plugin's
+	// CreateInterface() (self-rejection, same pattern as r_renderer):
+	//   0 = auto / GameNetworkingSockets direct-IP (default, no Steam needed)
+	//   1 = GameNetworkingSockets (direct IP / LAN / port-forwarded)
+	//   2 = Steam P2P (SteamID + SDR relay/NAT-punch; requires Steam running)
+	HEX_API HVar net_backend("net_backend", "Networking backend. 0 = auto/GNS direct-IP, 1 = GNS, 2 = Steam P2P", 0, 0, 2);
 
 	Game3DEnvironment::Game3DEnvironment() :
 		_running(false)
@@ -82,6 +93,7 @@ namespace HexEngine
 
 		env->_assetPackageManager = new AssetPackageManager;
 
+#if 1//ndef _DEBUG
 		if (fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
 		{
 			FileSystem tempFs(L"EngineDataBootStrap");
@@ -102,6 +114,7 @@ namespace HexEngine
 			// now but the second call was still pointless).
 		}
 		else
+#endif
 		{
 			env->_fileSystem = new FileSystem(L"EngineData");
 			env->_fileSystem->SetBaseDirectory(fs::current_path());
@@ -210,6 +223,21 @@ namespace HexEngine
 			}
 		}
 
+		// Game networking transport - optional. TryCreateInterface returns null
+		// when the GameNetworkingSockets plugin (or its vcpkg-built deps) isn't
+		// present; we then run single-player. Create() initialises the GNS lib;
+		// if it fails, drop the provider so g_pEnv->_networkSystem stays null.
+		env->_networkSystem = (INetworkSystem*)env->_pluginSystem->TryCreateInterface(INetworkSystem::InterfaceName);
+		if (env->_networkSystem != nullptr)
+		{
+			if (!env->_networkSystem->Create())
+			{
+				env->_networkSystem->Destroy();
+				delete env->_networkSystem;
+				env->_networkSystem = nullptr;
+			}
+		}
+
 		// Create the graphics engine
 		//
 		if (!HEX_HASFLAG(options.flags, GameOptions::GameOptions_NoRenderer))
@@ -253,6 +281,26 @@ namespace HexEngine
 		}
 
 		env->_debugGui = new DebugGUI;
+
+		// Atmosphere LUT subsystem - lives alongside the renderer and is
+		// driven from SceneRenderer::RenderEnvironment each frame. Created
+		// here (not inside SceneRenderer) so its lifetime spans level
+		// reloads and so other systems can sample its LUTs without having
+		// to reach through the SceneRenderer.
+		env->_atmosphereLUTs = new AtmosphereLUTs;
+		if (!env->_atmosphereLUTs->Create())
+		{
+			LOG_WARN("AtmosphereLUTs creation failed - sky/aerial-perspective will fall back to the analytic path");
+		}
+
+		// Phase D volumetric scattering. Independent of atmosphere LUTs but
+		// runs in the same per-frame slot. Failure is non-fatal: the legacy
+		// VolumetricLighting per-pixel march continues to handle sun shafts.
+		env->_volumetricScattering = new VolumetricScattering;
+		if (!env->_volumetricScattering->Create())
+		{
+			LOG_WARN("VolumetricScattering creation failed - falling back to per-pixel volumetric lighting");
+		}
 
 		env->_sceneManager = new SceneManager;
 		env->_sceneRenderer = new SceneRenderer;
@@ -397,6 +445,20 @@ namespace HexEngine
 			SAFE_DELETE(_giAOProvider);
 		}
 
+		// Atmosphere LUTs - safe to delete unconditionally; Destroy() is a
+		// no-op when Create() bailed (e.g. graphics device wasn't ready).
+		if (_atmosphereLUTs != nullptr)
+		{
+			_atmosphereLUTs->Destroy();
+			SAFE_DELETE(_atmosphereLUTs);
+		}
+
+		if (_volumetricScattering != nullptr)
+		{
+			_volumetricScattering->Destroy();
+			SAFE_DELETE(_volumetricScattering);
+		}
+
 		// Steamworks may have been declined at Create() (no Steam running etc)
 		// so the provider pointer is null on the no-steam path. Only release
 		// when we actually got an instance.
@@ -404,6 +466,13 @@ namespace HexEngine
 		{
 			_steamworksProvider->Destroy();
 			SAFE_DELETE(_steamworksProvider);
+		}
+
+		// Networking transport is optional (null when the plugin isn't loaded).
+		if (_networkSystem != nullptr)
+		{
+			_networkSystem->Destroy();
+			SAFE_DELETE(_networkSystem);
 		}
 
 		_compressionProvider->Destroy();
@@ -535,6 +604,17 @@ namespace HexEngine
 		if (_steamworksProvider != nullptr)
 			_steamworksProvider->Tick();
 
+		// Pump the networking transport once per frame (runs socket callbacks,
+		// buffers inbound messages/events), then have the scene's replication
+		// system drain + apply them BEFORE the scene updates - so this frame's
+		// component Update()/interpolation sees freshly-applied remote state.
+		if (_networkSystem != nullptr)
+		{
+			_networkSystem->Tick();
+			if (auto scene = _sceneManager->GetCurrentScene())
+				scene->GetNetworkReplicationSystem()->Pump(_timeManager->_frameTime);
+		}
+
 		while (_timeManager->_accumulatedSimulationTime >= timeStep)
 		{
 			_sceneManager->FixedUpdate(timeStep);
@@ -575,7 +655,15 @@ namespace HexEngine
 
 				_uiManager->Update(_timeManager->_frameTime);
 
-				_sceneManager->Update(_timeManager->_frameTime);				
+				_sceneManager->Update(_timeManager->_frameTime);
+
+				// Host: broadcast transform snapshots now the scene's transforms are
+				// final for this frame (runs outside the scene update lock).
+				if (_networkSystem != nullptr)
+				{
+					if (auto scene = _sceneManager->GetCurrentScene())
+						scene->GetNetworkReplicationSystem()->SendUpdates(_timeManager->_frameTime);
+				}
 
 				_resourceSystem->Update();
 

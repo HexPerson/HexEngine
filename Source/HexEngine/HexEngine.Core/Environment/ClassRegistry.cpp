@@ -13,11 +13,18 @@
 #include "../Entity/Component/HingeJoint.hpp"
 #include "../Entity/Component/ScriptComponent.hpp"
 #include "../Entity/Component/NavigationComponent.hpp"
+#include "../Entity/Component/NetworkComponent.hpp"
+#include "../Entity/Component/NetworkPlayerComponent.hpp"
+#include "../Entity/Component/HealthComponent.hpp"
 #include "../Entity/Component/SkeletalAnimationComponent.hpp"
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
 #include "../Entity/Component/DayNightCycleComponent.hpp"
 #include "../Entity/Component/ParticleSystemComponent.hpp"
 #include "../Entity/Component/DecalComponent.hpp"
+#include "../Entity/Component/PlayerStartComponent.hpp"
+#include "../Entity/Component/DoorComponent.hpp"
+#include "../Entity/Component/NavMeshBlockingVolume.hpp"
+#include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "../HexEngine.hpp"
 
 
@@ -58,11 +65,18 @@ namespace HexEngine
 		REG_CLASS(HingeJoint);
 		REG_CLASS(ScriptComponent);
 		REG_CLASS(NavigationComponent);
+		REG_CLASS(NetworkComponent);
+		REG_CLASS(NetworkPlayerComponent);
+		REG_CLASS(HealthComponent);
 		REG_CLASS(SkeletalAnimationComponent);
 		REG_CLASS(InstancedStaticMeshComponent);
 		REG_CLASS(DayNightCycleComponent);
 		REG_CLASS(ParticleSystemComponent);
 		REG_CLASS(DecalComponent);
+		REG_CLASS(PlayerStartComponent);
+		REG_CLASS(DoorComponent);
+		REG_CLASS(NavMeshBlockingVolume);
+		REG_CLASS(NavMeshLinkComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

@@ -35,9 +35,27 @@ public:
 
 	virtual bool IsOverlayActive() const override { return _overlayActive; }
 
+	// Lobbies / invites -------------------------------------------------------
+	virtual bool CreateLobby(int32_t maxMembers) override;
+	virtual void LeaveLobby() override;
+	virtual bool IsInLobby() const override { return _lobbyId.IsValid(); }
+	virtual bool IsLobbyHost() const override { return _isLobbyHost; }
+	virtual uint64_t GetLobbyId() const override { return _lobbyId.ConvertToUint64(); }
+	virtual uint64_t GetLobbyOwner() const override;
+	virtual void OpenInviteOverlay() override;
+	virtual bool ConsumePendingHostStart() override;
+	virtual bool ConsumePendingClientConnect(uint64_t& outHostSteamId) override;
+
 private:
 	bool _initialised = false;
 	bool _overlayActive = false;
+
+	// Lobby state (invalid CSteamID _lobbyId when not in a lobby).
+	CSteamID _lobbyId;
+	bool     _isLobbyHost = false;
+	bool     _pendingHostStart = false;     // set on lobby-created; drained by the net bridge
+	bool     _pendingClientConnect = false; // set on entering a lobby as a client
+	uint64_t _pendingConnectHost = 0;
 
 	// True after ISteamUserStats::RequestCurrentStats has returned (delivered
 	// via the UserStatsReceived_t callback). Achievement / stat queries before
@@ -50,4 +68,12 @@ private:
 	STEAM_CALLBACK(Steamworks, OnUserStatsReceived,    UserStatsReceived_t);
 	STEAM_CALLBACK(Steamworks, OnUserStatsStored,      UserStatsStored_t);
 	STEAM_CALLBACK(Steamworks, OnAchievementStored,    UserAchievementStored_t);
+
+	// Lobby callbacks. LobbyEnter fires for both host and joiner; GameLobbyJoin-
+	// Requested fires when a friend accepts an invite from the overlay/friends
+	// list. CreateLobby's result comes back via the _lobbyCreatedResult call-result.
+	STEAM_CALLBACK(Steamworks, OnLobbyEntered,          LobbyEnter_t);
+	STEAM_CALLBACK(Steamworks, OnGameLobbyJoinRequested, GameLobbyJoinRequested_t);
+	CCallResult<Steamworks, LobbyCreated_t> _lobbyCreatedResult;
+	void OnLobbyCreated(LobbyCreated_t* pResult, bool bIOFailure);
 };

@@ -112,23 +112,35 @@ namespace HexEngine
 
 	void SpotLight::ConstructMatrices(Camera* camera, float zMin, float zMax, int32_t cascadeIdx)
 	{
-		auto transform = GetEntity()->GetComponent<Transform>();
+		// WORLD space, not local. transform->GetPosition() / GetForward()
+		// return values in the entity's PARENT space - if the spot is a
+		// child of another entity (e.g. lamp glass parented to a lamp
+		// post, or a hand-held flashlight parented to a character bone),
+		// the local-space values disagree with where the light actually
+		// IS in the world.
+		auto* entity = GetEntity();
+		const auto worldTM = entity->GetWorldTM();
+		const math::Vector3 worldPos = worldTM.Translation();
+		const math::Vector3 worldForward = worldTM.Forward();
 
-		//math::Vector3 forward(cos(g_pEnv->_timeManager->_currentTime), 0.0f, sin(g_pEnv->_timeManager->_currentTime));
+		// Choose an up vector that's NOT parallel to forward. The naive
+		// math::Vector3::Up = (0,1,0) is degenerate for downward-pointing
+		// spots (e.g. streetlamps, ceiling lights, drone-cams): the
+		// CreateLookAt cross product forward x up = 0, producing a zero
+		// view matrix. Result: shadow map renders all geometry collapsed
+		// to a single point, looks like an empty/cleared map at any
+        // sampled UV. Fall back to world Z when forward is near-vertical.
+		math::Vector3 up = math::Vector3::Up;
+		if (std::abs(worldForward.y) > 0.95f)
+			up = math::Vector3::Forward; // (0, 0, 1) - perpendicular to vertical forward
 
-		_viewMatrix = math::Matrix::CreateLookAt(transform->GetPosition(), transform->GetPosition() + transform->GetForward(), math::Vector3::Up);		
-		
-		const float nearClipOffset = 0.0f;
-
-		const auto& shadowViewport = _shadowMaps[0]->GetViewport();
-				
+		_viewMatrix = math::Matrix::CreateLookAt(worldPos, worldPos + worldForward, up);
 		_projectionMatrix = math::Matrix::CreatePerspectiveFieldOfView(ToRadian(GetConeSize()), 1.0f, 0.01f, GetRadius());
 
 		dx::BoundingFrustum::CreateFromMatrix(_lightBoundingFrustum, _projectionMatrix, true);
-
 		_lightBoundingFrustum.Transform(_lightBoundingFrustum, _viewMatrix.Invert());
 
-		_lightBoundingSphere = dx::BoundingSphere(transform->GetPosition(), GetRadius());
+		_lightBoundingSphere = dx::BoundingSphere(worldPos, GetRadius());
 	}
 
 	bool SpotLight::CreateWidget(ComponentWidget* widget)

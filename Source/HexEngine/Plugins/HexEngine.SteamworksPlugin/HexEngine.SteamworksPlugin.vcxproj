@@ -157,10 +157,12 @@ if exist "$(ProjectDir)sdk\redistributable_bin\win64\steam_api64.dll" copy /Y "$
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="Steamworks.hpp" />
+    <ClInclude Include="SteamNetworkingSystem.hpp" />
     <ClInclude Include="Plugin.hpp" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Steamworks.cpp" />
+    <ClCompile Include="SteamNetworkingSystem.cpp" />
     <ClCompile Include="Plugin.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

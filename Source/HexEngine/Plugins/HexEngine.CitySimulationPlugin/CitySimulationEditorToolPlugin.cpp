@@ -2,6 +2,11 @@
 #include "CitySimulationInterface.hpp"
 #include "RoadComponent.hpp"
 #include "VehicleComponent.hpp"
+#include "ResidenceComponent.hpp"
+#include "PlaceOfWorkComponent.hpp"
+#include "RoutineAgentComponent.hpp"
+#include "CityRoutineSystemComponent.hpp"
+#include "TrafficLaneComponent.hpp"
 
 #include <HexEngine.Core/Entity/Component/RigidBody.hpp>
 #include <HexEngine.Core/Entity/Component/StaticMeshComponent.hpp>
@@ -1154,7 +1159,8 @@
 	void GatherManagedRoadCells(
 		Scene* scene,
 		std::unordered_map<GridCoord, float, GridCoordHash>& outHeights,
-		std::vector<Entity*>& outWrappers)
+		std::vector<Entity*>& outWrappers,
+		std::unordered_map<GridCoord, math::Vector3, GridCoordHash>* outWorldPositions = nullptr)
 	{
 		if (scene == nullptr)
 			return;
@@ -1187,8 +1193,18 @@
 				// position. If we read local Y here and the parent chain's world Y is
 				// non-zero (e.g. the user moved the RoadNetwork entity in Y), each
 				// rebuild would shift the wrapper's world Y by -section.world.y.
-				outHeights[coord] = entity->GetWorldTM().Translation().y;
+				const math::Vector3 worldPos = entity->GetWorldTM().Translation();
+				outHeights[coord] = worldPos.y;
 				outWrappers.push_back(entity);
+				// Full world XZ is also captured for the full-rebuild path. The painter's
+				// tool-state origin / cell-size aren't persisted across sessions, so
+				// recomputing positions via GridToWorld(coord, origin, spacing) on rebuild
+				// after a fresh scene load shifts the whole network by (originalOrigin -
+				// currentOrigin). Storing each existing wrapper's actual world position
+				// lets RebuildManagedRoadNetwork respawn cells exactly where they were
+				// instead of re-deriving from stale tool state.
+				if (outWorldPositions != nullptr)
+					(*outWorldPositions)[coord] = worldPos;
 			}
 		}
 	}
@@ -1206,7 +1222,8 @@
 		int32_t tJunctionYawQuarterTurns,
 		int32_t crossroadYawQuarterTurns,
 		float cellSpacing,
-		bool addPhysics)
+		bool addPhysics,
+		const std::unordered_map<GridCoord, math::Vector3, GridCoordHash>* existingWorldPositions = nullptr)
 	{
 		if (scene == nullptr)
 			return;
@@ -1237,7 +1254,26 @@
 			if (!TryChoosePlacement(mask, straightSpec, cornerSpec, crossroadSpec, tJunctionSpec, yawQuarterTurns, cornerYawQuarterTurns, tJunctionYawQuarterTurns, crossroadYawQuarterTurns, placement))
 				continue;
 
-			const math::Vector3 wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(coord, origin, spacing, height), placement.aabbCenterXZ, placement.rotation);
+			// Prefer the cell's previous world position when we have one. The painter's
+			// origin / cell-size tool state isn't persisted across sessions, so feeding
+			// (coord, origin, spacing) into GridToWorld after a fresh scene load shifts
+			// the whole network by the difference between the original paint-session's
+			// origin and the current (often stale / zeroed) one. The stored position
+			// already has ApplyMeshCentreCorrection baked in from the original placement,
+			// so we don't reapply it here.
+			math::Vector3 wrapperWorld;
+			if (existingWorldPositions != nullptr)
+			{
+				auto posIt = existingWorldPositions->find(coord);
+				if (posIt != existingWorldPositions->end())
+					wrapperWorld = posIt->second;
+				else
+					wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(coord, origin, spacing, height), placement.aabbCenterXZ, placement.rotation);
+			}
+			else
+			{
+				wrapperWorld = ApplyMeshCentreCorrection(GridToWorld(coord, origin, spacing, height), placement.aabbCenterXZ, placement.rotation);
+			}
 			auto* wrapper = scene->CreateEntity(MakeManagedWrapperName(coord), wrapperWorld, placement.rotation, math::Vector3(1.0f));
 			if (wrapper == nullptr)
 				continue;
@@ -1748,6 +1784,135 @@ void CitySimulationEditorToolPlugin::RefreshRoadPainterPreview()
 	_roadPainterPreviewOriginZ = _roadPainterOriginZ;
 }
 
+void CitySimulationEditorToolPlugin::AutoWireRoutineSim()
+{
+	using namespace HexEngine;
+
+	Scene* scene = g_pEnv->_sceneManager->GetCurrentScene().get();
+	if (scene == nullptr)
+	{
+		LOG_WARN("Auto-wire: no active scene.");
+		return;
+	}
+
+	// 1. Ensure a single CityRoutineSystem driver exists.
+	std::vector<CityRoutineSystemComponent*> systems;
+	scene->GetComponents<CityRoutineSystemComponent>(systems);
+	if (systems.empty())
+	{
+		if (Entity* sysEnt = scene->CreateEntity("CityRoutineSystem", math::Vector3::Zero, math::Quaternion::Identity); sysEnt != nullptr)
+			sysEnt->AddComponent<CityRoutineSystemComponent>();
+		LOG_INFO("Auto-wire: created CityRoutineSystem.");
+	}
+
+	// 2. Existing TrafficLane waypoints — agents park at the nearest one (it's already
+	// part of the drivable lane graph, so vehicles can route to/from it).
+	std::vector<Entity*> laneWaypoints;
+	std::vector<TrafficLaneComponent*> lanes;
+	scene->GetComponents<TrafficLaneComponent>(lanes);
+	for (auto* l : lanes)
+		if (l != nullptr)
+			l->GatherLaneWaypointEntities(laneWaypoints);
+	if (laneWaypoints.empty())
+	{
+		LOG_WARN("Auto-wire: no traffic-lane waypoints found; build the lane network first.");
+		return;
+	}
+
+	auto nearestWaypoint = [&](const math::Vector3& p) -> Entity*
+	{
+		Entity* best = nullptr;
+		float bestSq = std::numeric_limits<float>::max();
+		for (auto* wp : laneWaypoints)
+		{
+			if (wp == nullptr || wp->IsPendingDeletion())
+				continue;
+			const float d = (wp->GetWorldTM().Translation() - p).LengthSquared();
+			if (best == nullptr || d < bestSq) { bestSq = d; best = wp; }
+		}
+		return best;
+	};
+
+	// 3. Group building mesh pieces by base name (strip the trailing "_<piece>" suffix).
+	auto baseName = [](const std::string& n) -> std::string
+	{
+		const size_t us = n.find_last_of('_');
+		return (us != std::string::npos && us > 0) ? n.substr(0, us) : n;
+	};
+
+	struct Group { math::Vector3 sum = math::Vector3::Zero; int32_t count = 0; Entity* rep = nullptr; bool home = false; };
+	std::unordered_map<std::string, Group> groups;
+	for (const auto& bySig : scene->GetEntities())
+	{
+		for (auto* e : bySig.second)
+		{
+			if (e == nullptr) continue;
+			const std::string& n = e->GetName();
+			const bool home = n.find("House") != std::string::npos;
+			const bool work = n.find("Shop") != std::string::npos || n.find("Store") != std::string::npos;
+			if (!home && !work) continue;
+			Group& g = groups[baseName(n)];
+			g.sum += e->GetWorldTM().Translation();
+			g.count++;
+			g.home = home;
+			if (g.rep == nullptr) g.rep = e;
+		}
+	}
+
+	auto ensureWaypoint = [&](const std::string& name, const math::Vector3& pos) -> Entity*
+	{
+		Entity* e = scene->GetEntityByName(name);
+		if (e == nullptr) e = scene->CreateEntity(name, pos, math::Quaternion::Identity);
+		else e->SetPosition(pos);
+		return e;
+	};
+
+	int32_t homes = 0, works = 0;
+	for (auto& kv : groups)
+	{
+		Group& g = kv.second;
+		if (g.rep == nullptr || g.count == 0) continue;
+
+		const math::Vector3 centre = g.sum * (1.0f / (float)g.count);
+		Entity* park = nearestWaypoint(centre);   // existing lane waypoint = where the agent parks
+		if (park == nullptr) continue;
+		math::Vector3 dir = park->GetWorldTM().Translation() - centre;
+		if (dir.LengthSquared() > 0.0001f) dir.Normalize();
+		const math::Vector3 entryPos = centre + dir * 3.0f;   // just outside the building, toward the road
+
+		Entity* entryE = ensureWaypoint(kv.first + "_Entry", entryPos);
+		if (entryE == nullptr) continue;
+		const std::string parkName = park->GetName();
+
+		if (g.home)
+		{
+			auto* rc = g.rep->GetComponent<ResidenceComponent>();
+			if (rc == nullptr) rc = g.rep->AddComponent<ResidenceComponent>();
+			if (rc != nullptr)
+			{
+				rc->SetEntryWaypointEntityName(entryE->GetName());
+				rc->SetParkingWaypointEntityName(parkName);
+				++homes;
+			}
+		}
+		else
+		{
+			auto* wc = g.rep->GetComponent<PlaceOfWorkComponent>();
+			if (wc == nullptr) wc = g.rep->AddComponent<PlaceOfWorkComponent>();
+			if (wc != nullptr)
+			{
+				wc->SetRoleTagsCsv("Citizen");   // match the default agent role tag
+				wc->SetShiftWindowsCsv("9-17");
+				wc->SetEntryWaypointEntityName(entryE->GetName());
+				wc->SetParkingWaypointEntityName(parkName);
+				++works;
+			}
+		}
+	}
+
+	LOG_INFO("Auto-wire: tagged %d homes and %d workplaces; entry/parking waypoints placed. Save the scene to keep.", homes, works);
+}
+
 void CitySimulationEditorToolPlugin::OnCreateUI(HexEngine::MenuBar* menuBar)
 {
 	if (_uiCreated || menuBar == nullptr)
@@ -1765,6 +1930,14 @@ void CitySimulationEditorToolPlugin::OnCreateUI(HexEngine::MenuBar* menuBar)
 			ShowRoadPainterDialog();
 		};
 	menuBar->AddSubItem(_citySimMenuRoot, roadPainterItem);
+
+	auto* autoWireItem = new HexEngine::MenuBar::Item;
+	autoWireItem->name = L"Auto-wire Routine Sim";
+	autoWireItem->action = [this](HexEngine::MenuBar::Item*)
+		{
+			AutoWireRoutineSim();
+		};
+	menuBar->AddSubItem(_citySimMenuRoot, autoWireItem);
 }
 
 void CitySimulationEditorToolPlugin::OnAssetExplorerCreateNew(HexEngine::ContextMenu* menu, HexEngine::ContextRoot* rootMenu, const fs::path& baseDir, HexEngine::FileSystem* fileSystem, std::function<void()> onAssetsCreated)
@@ -2300,7 +2473,14 @@ void CitySimulationEditorToolPlugin::RebuildRoadPainterNetwork(float defaultHeig
 
 	std::unordered_map<GridCoord, float, GridCoordHash> heights;
 	std::vector<HexEngine::Entity*> wrappers;
-	GatherManagedRoadCells(scene, heights, wrappers);
+	// Capture existing wrappers' actual world positions so the rebuild can put each
+	// cell back exactly where it was, independent of the painter's (possibly stale)
+	// tool-state origin / cell-size. Without this, loading a scene with previously
+	// painted roads and clicking Rebuild Managed Network shifts the whole network
+	// by the difference between the original paint session's origin and the
+	// current session's default origin.
+	std::unordered_map<GridCoord, math::Vector3, GridCoordHash> existingPositions;
+	GatherManagedRoadCells(scene, heights, wrappers, &existingPositions);
 	for (auto& [coord, height] : heights)
 	{
 		if (!std::isfinite(height))
@@ -2310,6 +2490,9 @@ void CitySimulationEditorToolPlugin::RebuildRoadPainterNetwork(float defaultHeig
 	// Read origin from the RoadNetwork entity if it exists (full rebuild typically
 	// operates on a network that was previously painted) - falls back to the painter's
 	// stored origin which is kept in sync with the network entity by mouse handlers.
+	// NOTE: this is only consulted for cells that have no recorded existing position
+	// (which, on a pure rebuild, should never happen - existingPositions has every cell
+	// in heights). Kept as a safety fallback.
 	math::Vector2 origin(_roadPainterOriginX, _roadPainterOriginZ);
 	if (auto* root = FindRoadNetworkRoot(scene); root != nullptr)
 	{
@@ -2323,7 +2506,8 @@ void CitySimulationEditorToolPlugin::RebuildRoadPainterNetwork(float defaultHeig
 		_roadPainterCornerYawQuarterTurns,
 		_roadPainterTJunctionYawQuarterTurns,
 		_roadPainterCrossroadYawQuarterTurns,
-		_roadPainterCellSize, _roadPainterAddCollisions);
+		_roadPainterCellSize, _roadPainterAddCollisions,
+		&existingPositions);
 }
 
 void CitySimulationEditorToolPlugin::UpdateRoadPainterRendererRegistration()

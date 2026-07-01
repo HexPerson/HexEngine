@@ -3,6 +3,8 @@
 #include "../EditorUI.hpp"
 #include <HexEngine.Core\GUI\Elements\Dialog.hpp>
 #include <HexEngine.Core\GUI\Elements\ContextMenu.hpp>
+#include <HexEngine.Core\GUI\Elements\ComponentWidget.hpp>
+#include <HexEngine.Core\GUI\Elements\Checkbox.hpp>
 #include "../Gadgets/Gadget.hpp"
 #include <algorithm>
 #include <cwctype>
@@ -438,6 +440,38 @@ namespace HexEditor
 
 			y = 0;
 
+			// Entity-level flags editor (curated, safe-to-toggle subset). Rendered as
+			// a pseudo-component at the top of the scroll so it scrolls with the rest
+			// and is torn down by ClearInspectorWidgets like any component widget.
+			{
+				auto* flagsWidget = new HexEngine::ComponentWidget(_componentScroll, HexEngine::Point(0, y), HexEngine::Point(size.x - 20, size.y), L"Entity Flags");
+				const int32_t flagWidth = flagsWidget->GetSize().x - 20;
+
+				const auto addFlagCheckbox = [&](const wchar_t* label, bool* cache, HexEngine::EntityFlags flag)
+				{
+					*cache = _inspecting->HasFlag(flag);
+					auto* box = new HexEngine::Checkbox(flagsWidget, flagsWidget->GetNextPos(), HexEngine::Point(flagWidth, 18), label, cache);
+					box->SetOnCheckFn([this, flag](HexEngine::Checkbox*, bool value)
+					{
+						if (_inspecting == nullptr)
+							return;
+						if (value)
+							_inspecting->SetFlag(flag);
+						else
+							_inspecting->ClearFlags(flag);
+					});
+				};
+
+				addFlagCheckbox(L"Don't block navmesh", &_flagDoNotBlockNavMesh,  HexEngine::EntityFlags::DoNotBlockNavMesh);
+				addFlagCheckbox(L"Don't save",          &_flagDoNotSave,         HexEngine::EntityFlags::DoNotSave);
+				addFlagCheckbox(L"Exclude from HLOD",   &_flagExcludeFromHLOD,   HexEngine::EntityFlags::ExcludeFromHLOD);
+				addFlagCheckbox(L"Don't pick in editor",&_flagDoNotPickInEditor, HexEngine::EntityFlags::DoNotPickInEditor);
+
+				flagsWidget->CalculateLargestLabelWidth();
+				_componentWidgets.push_back(flagsWidget);
+				y += flagsWidget->GetTotalHeight() + 10;
+			}
+
 			for (auto& component : entity->GetAllComponents())
 			{
 				auto componentName = component->GetComponentName();
@@ -615,11 +649,23 @@ namespace HexEditor
 				return;
 			}
 
-			_inspecting->AddComponent(component);
+			// AddComponent rejects a duplicate component type: it DELETES the
+			// instance we just made and returns the pre-existing one. The engine
+			// keys components by type (32-bit signature + by-id lookup), so an
+			// entity can only hold one of each type. Use the return value - touching
+			// the original `component` after a rejected add is a use-after-free
+			// (RecordComponentAdded -> CaptureComponentSnapshot crashed on it).
+			HexEngine::BaseComponent* added = _inspecting->AddComponent(component);
 
-			if (g_pUIManager != nullptr)
+			if (added != component)
 			{
-				g_pUIManager->RecordComponentAdded(component);
+				// Duplicate of an existing component type - our instance was deleted.
+				LOG_WARN("Entity '%s' already has a '%S' component; the engine supports only one of each type - add another entity instead.",
+					_inspecting->GetName().c_str(), name.c_str());
+			}
+			else if (g_pUIManager != nullptr)
+			{
+				g_pUIManager->RecordComponentAdded(added);
 			}
 		}
 

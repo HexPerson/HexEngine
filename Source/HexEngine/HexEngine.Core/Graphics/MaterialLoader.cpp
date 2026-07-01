@@ -209,6 +209,18 @@ namespace HexEngine
 			bool emissiveAffectsGI = false;
 			file->Deserialize(properties, "emissiveAffectsGI", emissiveAffectsGI);
 			material->SetEmissiveAffectsGI(emissiveAffectsGI);
+
+			std::string footstepSoundPath;
+			file->Deserialize(properties, "footstepSoundPath", footstepSoundPath);
+			material->SetFootstepSoundPath(footstepSoundPath);
+
+			std::string footstepSurfaceMap;
+			file->Deserialize(properties, "footstepSurfaceMap", footstepSurfaceMap);
+			material->SetFootstepSurfaceMapPath(footstepSurfaceMap);
+
+			std::vector<std::string> footstepSurfaceSounds;
+			file->Deserialize(properties, "footstepSurfaceSounds", footstepSurfaceSounds);
+			material->SetFootstepSurfaceSounds(footstepSurfaceSounds);
 		}
 
 		// Load properties
@@ -594,6 +606,9 @@ namespace HexEngine
 			file.Serialize(properties, "rainDripIntensity", material->_properties.rainDripIntensity);
 			file.Serialize(properties, "affectsGI", material->GetAffectsGI());
 			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());
+			file.Serialize(properties, "footstepSoundPath", material->GetFootstepSoundPath());
+			file.Serialize(properties, "footstepSurfaceMap", material->GetFootstepSurfaceMapPath());
+			file.Serialize(properties, "footstepSurfaceSounds", material->GetFootstepSurfaceSounds());
 		}
 
 		auto& renderer = data["renderer"];

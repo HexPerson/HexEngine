@@ -76,7 +76,7 @@ namespace HexEngine
 
 	void HingeJoint::CreateEntityList(ComponentWidget* widget, LineEdit* entitySelect)
 	{
-		EntitySelector* selector = new EntitySelector(widget, Point(0, 0), Point(widget->GetSize().x, 250), L"Select Rigid Body", (ComponentSignature)(1 << RigidBody::_GetComponentId()));
+		EntitySelector* selector = new EntitySelector(widget, Point(0, 0), Point(widget->GetSize().x, 250), L"Select Rigid Body", ((ComponentSignature)1 << RigidBody::_GetComponentId()));
 
 		selector->BringToFront();
 

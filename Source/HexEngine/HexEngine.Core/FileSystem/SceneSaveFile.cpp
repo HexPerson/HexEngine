@@ -243,7 +243,11 @@ namespace HexEngine
 		for (auto& ent : sceneData["entities"].items())
 		{
 			loadIntoExistingScene->Lock();
-			auto entity = Entity::LoadFromFile(ent.value(), ent.key(), loadIntoExistingScene.get(), this);
+			// A load override (e.g. editor play/stop restore) can return an existing
+			// entity to reconstruct into rather than always creating a fresh one.
+			auto entity = _loadOverride
+				? _loadOverride(ent.value(), ent.key(), loadIntoExistingScene.get(), this)
+				: Entity::LoadFromFile(ent.value(), ent.key(), loadIntoExistingScene.get(), this);
 			loadIntoExistingScene->Unlock();
 
 			createdEnts.push_back({

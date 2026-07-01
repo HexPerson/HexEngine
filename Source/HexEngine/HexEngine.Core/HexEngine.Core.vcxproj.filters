@@ -157,8 +157,12 @@
     <ClCompile Include="Terrain\TerrainGenerator.cpp" />
     <ClCompile Include="Utility\MemoryManager.cpp" />
     <ClCompile Include="Entity\Component\DecalComponent.cpp" />
+    <ClCompile Include="Entity\Component\NavMeshBlockingVolume.cpp" />
+    <ClCompile Include="Entity\Component\PlayerStartComponent.cpp" />
     <ClCompile Include="FileSystem\MemoryFile.cpp" />
     <ClCompile Include="Graphics\DiffuseGIAOProvider.cpp" />
+    <ClCompile Include="Graphics\AtmosphereLUTs.cpp" />
+    <ClCompile Include="Graphics\VolumetricScattering.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Audio\AudioManager.hpp" />
@@ -363,8 +367,12 @@
     <ClInclude Include="Utility\CRC32.hpp" />
     <ClInclude Include="Utility\MemoryManager.hpp" />
     <ClInclude Include="Entity\Component\DecalComponent.hpp" />
+    <ClInclude Include="Entity\Component\NavMeshBlockingVolume.hpp" />
+    <ClInclude Include="Entity\Component\PlayerStartComponent.hpp" />
     <ClInclude Include="FileSystem\MemoryFile.hpp" />
     <ClInclude Include="Graphics\DiffuseGIAOProvider.hpp" />
+    <ClInclude Include="Graphics\AtmosphereLUTs.hpp" />
+    <ClInclude Include="Graphics\VolumetricScattering.hpp" />
     <ClInclude Include="Steam\ISteamworksProvider.hpp" />
     <ClInclude Include="Graphics\Formats.hpp" />
     <ClInclude Include="Graphics\IStructuredBuffer.hpp" />

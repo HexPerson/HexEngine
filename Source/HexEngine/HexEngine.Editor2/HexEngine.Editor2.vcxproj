@@ -174,6 +174,7 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClInclude Include="UI\Elements\EntityList.hpp" />
     <ClInclude Include="UI\Actions\MaterialEditor.hpp" />
     <ClInclude Include="UI\Actions\NavMeshTool.hpp" />
+    <ClInclude Include="UI\Actions\MultiplayerTool.hpp" />
     <ClInclude Include="UI\Actions\BuildDialog.hpp" />
     <ClInclude Include="UI\Actions\ProjectGenerator.hpp" />
     <ClInclude Include="UI\Actions\ProjectManager.hpp" />
@@ -198,6 +199,7 @@ cd "$(SolutionDir)..\..\Bin\$(Platform)\$(Configuration)"
     <ClCompile Include="UI\Elements\EntityList.cpp" />
     <ClCompile Include="UI\Actions\MaterialEditor.cpp" />
     <ClCompile Include="UI\Actions\NavMeshTool.cpp" />
+    <ClCompile Include="UI\Actions\MultiplayerTool.cpp" />
     <ClCompile Include="UI\Actions\BuildDialog.cpp" />
     <ClCompile Include="UI\Actions\ProjectGenerator.cpp" />
     <ClCompile Include="UI\Actions\ProjectManager.cpp" />

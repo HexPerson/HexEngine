@@ -1,6 +1,10 @@
 
 #include "GameIntegrator.hpp"
 #include "Editor.hpp"
+#include <HexEngine.Core\Entity\Component\PlayerStartComponent.hpp>
+#include <HexEngine.Core\Entity\Component\RigidBody.hpp>
+#include <HexEngine.Core\Environment\LogFile.hpp>
+#include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
 
 #include <array>
 #include <deque>
@@ -629,8 +633,60 @@ namespace HexEditor
 		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->AddEntityListener(this);
 
 		// make a backup of the main camera for restoring after the game stops
-		_origMainCamera = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetMainCamera();
+		auto* runScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get();
+		_origMainCamera = runScene->GetMainCamera();
 
+		// Snapshot all authored transforms before play mutates anything, so StopGame
+		// can put the scene back exactly as it was.
+		SnapshotSceneState();
+
+		// Spawn the player at the Player Start, if the scene has one. We move the
+		// MAIN CAMERA's entity to the marker's transform BEFORE OnCreateGame, so
+		// a game that simply attaches a camera controller to the main camera
+		// begins play at the Player Start with the authored facing. Running
+		// before OnCreateGame (rather than after) means it's a sensible default
+		// the game can still override with bespoke spawn logic. Restored to the
+		// editor camera by StopGame via _origMainCamera.
+		if (runScene != nullptr && _origMainCamera != nullptr && _origMainCamera->GetEntity() != nullptr)
+		{
+			std::vector<HexEngine::PlayerStartComponent*> starts;
+			if (runScene->GetComponents<HexEngine::PlayerStartComponent>(starts) && !starts.empty())
+			{
+				// Prefer a start flagged primary; fall back to the first found.
+				HexEngine::PlayerStartComponent* chosen = starts.front();
+				for (auto* s : starts)
+				{
+					if (s != nullptr && s->IsPrimary()) { chosen = s; break; }
+				}
+
+				if (chosen != nullptr && chosen->GetEntity() != nullptr)
+				{
+					HexEngine::Entity* startEnt = chosen->GetEntity();
+					HexEngine::Entity* camEnt   = _origMainCamera->GetEntity();
+					const auto spawnPos = startEnt->GetWorldTM().Translation();
+					camEnt->SetPosition(spawnPos);
+					camEnt->SetRotation(startEnt->GetRotation());
+
+					// The player transform has interpolation enabled (the camera controller
+					// turns it on), so GetWorldTM keeps returning the pre-spawn interpolated
+					// position until an interpolation tick runs. That matters because the
+					// character controller is (re)built from the entity's world matrix during
+					// OnCreateGame below - if the matrix is still stale the capsule spawns at
+					// the old location and the player ends up under/away from the map. Snap
+					// the interpolation so the world matrix is authoritative right now.
+					if (auto* tf = camEnt->GetComponent<HexEngine::Transform>(); tf != nullptr)
+						tf->SnapInterpolation();
+
+					// If a physics body/controller already exists (built at scene load rather
+					// than in OnCreateGame), teleport it explicitly - SnapInterpolation only
+					// fixes what the transform reports, not an already-placed capsule.
+					if (auto* rb = camEnt->GetComponent<HexEngine::RigidBody>(); rb != nullptr && rb->GetIRigidBody() != nullptr)
+						rb->GetIRigidBody()->UpdatePosePosition(spawnPos);
+				}
+			}
+		}
+
+		HexEngine::g_pEnv->SetGameRunning(true);
 		_gameExtension->OnCreateGame();
 
 		_state = GameTestState::Started;
@@ -658,8 +714,18 @@ namespace HexEditor
 		_tempEntitiesCreated.clear();
 
 		_gameExtension->OnStopGame();
+		HexEngine::g_pEnv->SetGameRunning(false);
 
+		// Restore the whole scene to its authored state first (undoes door swings,
+		// physics displacement, the camera spawn move, any runtime field changes,
+		// re-creates entities destroyed during play). The load override reuses the
+		// existing entities, so _origMainCamera stays valid across this.
+		RestoreSceneState();
+
+		// Then make sure the editor camera is the active one (restore may have
+		// re-applied the authored main-camera designation; this keeps it explicit).
 		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->SetMainCamera(_origMainCamera);
+
 		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->ForceRebuildPVS();
 
 		HexEngine::g_pEnv->SetEditorMode(true);
@@ -668,6 +734,66 @@ namespace HexEditor
 
 		_state = GameTestState::Stopped;
 		return true;
+	}
+
+	void GameIntegrator::SnapshotSceneState()
+	{
+		_playSnapshotPath.clear();
+
+		auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		if (!scene)
+			return;
+
+		std::error_code ec;
+		const fs::path path = fs::temp_directory_path(ec) / L"HexEngine_PlayModeSnapshot.hscene";
+		if (ec)
+		{
+			LOG_WARN("Play-mode snapshot: no temp dir; scene won't be restored on stop.");
+			return;
+		}
+
+		// Full serialised snapshot of the scene via the normal save codec.
+		HexEngine::SceneSaveFile save(path, std::ios::out | std::ios::trunc, scene);
+		if (save.Save())
+			_playSnapshotPath = path;
+		else
+			LOG_WARN("Play-mode snapshot save failed; scene won't be restored on stop.");
+	}
+
+	void GameIntegrator::RestoreSceneState()
+	{
+		if (_playSnapshotPath.empty())
+			return;
+
+		auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene)
+		{
+			// Load() renames the scene to the snapshot file's stem - preserve the
+			// real name across the restore.
+			const auto sceneName = scene->GetName();
+
+			HexEngine::SceneSaveFile load(_playSnapshotPath, std::ios::in, scene);
+
+			// Restore into entities that still exist (keeps editor-held pointers -
+			// selection, gizmo target, _origMainCamera - valid); only recreate ones
+			// that were destroyed during play. The deserialize passes are idempotent
+			// per component, so reusing an entity restores it in place.
+			load.SetLoadOverride(
+				[](json& data, const std::string& name, HexEngine::Scene* s, HexEngine::SceneSaveFile* f) -> HexEngine::Entity*
+				{
+					if (auto* existing = s->GetEntityByName(name); existing != nullptr)
+						return existing;
+					return HexEngine::Entity::LoadFromFile(data, name, s, f);
+				});
+
+			load.Load(scene);
+
+			scene->SetName(sceneName);
+		}
+
+		std::error_code ec;
+		fs::remove(_playSnapshotPath, ec);
+		_playSnapshotPath.clear();
 	}
 
 	GameTestState GameIntegrator::GetState() const

@@ -77,7 +77,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float fogSunsetRange;
 		float fogSunsetWarmthStrength;
 		float fogFarAtmosphereMatchStrength;
-		float fog_pad0;
+		// 1.0 when the aerial-perspective volume is doing distance haze
+		// (see g_pEnv->_atmosphereLUTs). PostFog gates its analytic
+		// atmosphere integration on this so the two passes don't compound.
+		float fogUseAerialPerspective;
 
 		float volumetricScattering;
 		float volumetricStrength;
@@ -284,7 +287,13 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float shadowMapSize;
 
 		int   lightIndex;
-		int	  pad0;
+		// Non-zero when the per-light shadow map(s) bound at SHADOWMAPS[*] are valid for
+		// this draw. Per-pixel spot/point-light shaders gate their SampleCmpLevelZero on
+		// this flag: sampling a null SRV with a comparison sampler reads 0 = fully
+		// occluded, which would black out every fragment inside the cone/sphere of any
+		// non-shadow-casting light. Populated by SetupPerShadowCasterBuffer from
+		// Light::GetDoesCastShadows().
+		int	  castsShadowsFlag;
 		int	  pad1;
 		int	  pad2;
 

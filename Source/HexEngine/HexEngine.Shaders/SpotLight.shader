@@ -58,6 +58,65 @@
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
 
+	// Per-pixel spot shadow term. Samples the spot's depth map (already bound at
+	// SHADOWMAPS[0] by RenderSpotLights' per-light loop) using the world->light-clip
+	// matrix populated by SetupPerShadowCasterBuffer at slot [0]. Returns 1=lit,
+	// 0=fully shadowed; intermediate values from the PCF filter.
+	//
+	// Why this works without any new bindings: the volumetric scatter compute already
+	// uses the exact same shadow data per spot, and the surface SpotLight.shader runs
+	// one draw per light with that data refreshed each iteration - so the only thing
+	// missing was the actual sample, which previously was hard-coded to 1.0f and left
+	// every cone unshadowed in the deferred surface pass.
+	float CalculateSpotShadowSample(float3 worldPos, float3 worldNormal, float3 lightDir)
+	{
+		// Non-shadow-casting spots: the loop in RenderSpotLights binds null at
+		// SHADOWMAPS[0] for these, and SampleCmpLevelZero against a null SRV reads
+		// 0 = fully occluded. Without this gate every fragment inside a non-caster's
+		// cone would go black.
+		if (g_shadowConfig.castsShadowsFlag == 0)
+			return 1.0f;
+
+		float4 lightClip = mul(float4(worldPos, 1.0f), g_lightViewProjectionMatrix[0]);
+		if (lightClip.w <= 0.0f)
+			return 1.0f; // Fragment is behind the light camera - outside its frustum.
+
+		float3 lightNdc = lightClip.xyz / lightClip.w;
+		// Outside the shadow camera's depth range.
+		if (lightNdc.z <= 0.0f || lightNdc.z >= 1.0f)
+			return 1.0f;
+
+		// NDC -> UV. Y flips because D3D's screen-UV origin is top-left while clip
+		// space is bottom-up.
+		float2 uv = float2(lightNdc.x * 0.5f + 0.5f, -lightNdc.y * 0.5f + 0.5f);
+		if (any(uv < 0.0f) || any(uv > 1.0f))
+			return 1.0f; // Outside the shadow map's footprint = unshadowed.
+
+		// Slope-scaled bias. Surfaces nearly perpendicular to the light direction
+		// (small N.L) suffer the worst self-shadow acne because their projected
+		// depth slope is steep relative to the shadow texel grid. Scaling bias by
+		// (1 - NdotL) eats the worst of it without losing contact-shadow detail on
+		// well-facing surfaces. The constant term covers near-grazing edge cases
+		// where N.L is still high but floating-point depth still aliases.
+		float NdotL = saturate(dot(worldNormal, -lightDir));
+		float slopeBias = 0.001f * (1.0f - NdotL) + 0.0005f;
+		float sampleDepth = lightNdc.z - slopeBias;
+
+		// 5-tap PCF: centre + 4 corners. Cheap (5 hardware comparisons) and gives a
+		// soft enough edge for the typical 512-1024 spot shadow map at the typical
+		// per-spot screen footprint. Heavier kernels (Vogel disk + PCSS) are used by
+		// the directional cascade in ShadowUtils; spot shadows here favour cost
+		// because lights multiply N-fold and the cones are usually small on screen.
+		float texel = 1.0f / max(g_shadowConfig.shadowMapSize, 1.0f);
+		float visible = 0.0f;
+		visible += SHADOWMAPS[0].SampleCmpLevelZero(g_cmpSampler, uv,                          sampleDepth).r;
+		visible += SHADOWMAPS[0].SampleCmpLevelZero(g_cmpSampler, uv + float2( texel,  texel), sampleDepth).r;
+		visible += SHADOWMAPS[0].SampleCmpLevelZero(g_cmpSampler, uv + float2(-texel,  texel), sampleDepth).r;
+		visible += SHADOWMAPS[0].SampleCmpLevelZero(g_cmpSampler, uv + float2( texel, -texel), sampleDepth).r;
+		visible += SHADOWMAPS[0].SampleCmpLevelZero(g_cmpSampler, uv + float2(-texel, -texel), sampleDepth).r;
+		return saturate(visible * 0.2f);
+	}
+
 	float ComputeScattering(float lightDotView)
 	{
 		float result = 1.0f - g_atmosphere.volumetricScattering * g_atmosphere.volumetricScattering;
@@ -266,7 +325,11 @@
 			coneAtten = pow(max(coneDot, 0.0f), g_spotLightConeSize);
 		}
 
-		float depthValue = 1.0f;
+		// Per-pixel shadow term. Sampling the same depth map the volumetric scatter
+		// compute already uses for this spot - so a surface fragment in the shadow of
+		// e.g. a pillar inside the cone gets correctly dark instead of fully lit, and
+		// the surface lighting matches the cone of light visible in the volumetric haze.
+		float depthValue = CalculateSpotShadowSample(pixelPosWS.xyz, normalWS, lightDir);
 
 		// CalculatePBRSpotLighting applies `attenuation` internally (line ~333 in
 		// PBRutils.shader: `color *= attenuation;`). Pass attenuation*coneAtten to the

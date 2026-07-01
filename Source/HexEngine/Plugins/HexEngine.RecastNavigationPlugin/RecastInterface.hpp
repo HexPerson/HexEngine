@@ -15,6 +15,7 @@ public:
 	{
 		dtNavMesh* navMesh = nullptr;
 		uint8_t* navMeshData = nullptr;
+		int32_t navMeshDataSize = 0;
 		dtNavMeshQuery* navMeshQuery = nullptr;
 		HexEngine::Scene* scene = nullptr;
 		HexEngine::Chunk* chunk = nullptr;
@@ -32,6 +33,9 @@ public:
 	virtual bool CreateNavMeshForChunk(HexEngine::Scene* scene, HexEngine::Chunk* chunk, const NavMeshCreationParams& params, HexEngine::NavMeshId* navMesh) override;
 
 	virtual bool RebuildMesh(HexEngine::NavMeshId id) override;
+
+	virtual bool GetNavMeshBytes(HexEngine::NavMeshId id, std::vector<uint8_t>& outData) override;
+	virtual bool LoadNavMeshFromBytes(HexEngine::Scene* scene, const std::vector<uint8_t>& data, HexEngine::NavMeshId* outNavMesh) override;
 
 	virtual void DebugRender() override;
 

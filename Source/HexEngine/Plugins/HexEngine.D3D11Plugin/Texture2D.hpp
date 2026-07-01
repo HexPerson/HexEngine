@@ -20,6 +20,8 @@ public:
 
 	virtual void* GetNativePtr() override;
 
+	virtual void* GetNativeShaderView() override { return _shaderResourceView; }
+
 	virtual void SetPixels(uint8_t* data, uint32_t size) override;
 
 	virtual void SaveToFile(const fs::path& path) override;

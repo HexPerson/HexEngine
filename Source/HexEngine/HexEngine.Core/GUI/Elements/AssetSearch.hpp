@@ -4,6 +4,7 @@
 #include "LineEdit.hpp"
 #include "ScrollView.hpp"
 #include "../../FileSystem/IResource.hpp"
+#include <chrono>
 
 namespace HexEngine
 {
@@ -62,7 +63,14 @@ namespace HexEngine
 
 	private:
 		class AssetSearchRow;
+		// Keystroke handler: schedules a debounced query instead of running it
+		// immediately, so holding/typing fast doesn't run the (potentially
+		// expensive) filesystem scan on every character.
 		void OnSearchTextChanged(LineEdit* edit, const std::wstring& value);
+		// The actual filter -> query -> sort -> popup-rebuild. Called from the
+		// per-frame tick once the debounce delay elapses, and immediately by
+		// RefreshResults (explicit user action - clicking the field).
+		void PerformSearch(const std::wstring& value);
 		void OnPickResult(size_t index);
 		void OpenPopup();
 		void ClosePopup();
@@ -93,5 +101,14 @@ namespace HexEngine
 		size_t _maxResults = 200;
 		OnDragAndDropFn _onDragAndDropFn;
 		OnDoubleClickFn _onDoubleClickFn;
+
+		// Debounced-search state. A keystroke stashes the latest filter and a
+		// deadline; the per-frame tick (PostRenderChildren) runs the query once
+		// the deadline passes with no further typing. ~200ms feels instant once
+		// you stop typing but coalesces a burst of keystrokes into one query.
+		std::wstring _pendingFilter;
+		bool _searchPending = false;
+		std::chrono::steady_clock::time_point _searchDeadline;
+		static constexpr int kSearchDebounceMs = 200;
 	};
 }

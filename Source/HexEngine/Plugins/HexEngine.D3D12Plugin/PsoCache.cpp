@@ -136,7 +136,12 @@ ID3D12PipelineState* PsoCache::ResolveGraphics(const GfxPsoKey& key,
 	D3D12_RASTERIZER_DESC rast = {};
 	rast.FillMode              = D3D12_FILL_MODE_SOLID;
 	rast.CullMode              = Cull(key.cullingMode);
-	rast.FrontCounterClockwise = FALSE;
+	// The engine authors geometry counter-clockwise = front face: the D3D11
+	// plugin's rasterizer sets FrontCounterClockwise = TRUE
+	// (GraphicsDeviceD3D11.cpp). D3D12 must match, or every triangle's facing
+	// is inverted - front faces get back-face-culled and the scene renders
+	// inside-out (the "every mesh has reversed winding" corruption).
+	rast.FrontCounterClockwise = TRUE;
 	rast.DepthClipEnable       = TRUE;
 	rast.MultisampleEnable     = (key.sampleCount > 1);
 	rast.AntialiasedLineEnable = FALSE;

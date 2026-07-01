@@ -122,24 +122,25 @@ namespace HexEngine
 
 	void AnimatedMesh::AddVertex(const AnimatedMeshVertex& vertex)
 	{
-		_vertices.push_back(vertex);
-		_transformedVertices.push_back(vertex);
+		AnimatedMeshVertex vertexFixed = vertex;
+		vertexFixed._position.w = 1.0f;
 
-		Mesh::AddVertex(vertex);
+		_vertices.push_back(vertexFixed);
+		_transformedVertices.push_back(vertexFixed);
+
+		Mesh::AddVertex(vertexFixed);
 
 		SimpleAnimatedMeshVertex simpleVertex;
-		simpleVertex._position = vertex._position;
-		simpleVertex._texcoord = vertex._texcoord;
-		simpleVertex._boneIds = vertex._boneIds;
-		simpleVertex._boneWeights = vertex._boneWeights;
+		simpleVertex._position = vertexFixed._position;
+		simpleVertex._texcoord = vertexFixed._texcoord;
+		simpleVertex._boneIds = vertexFixed._boneIds;
+		simpleVertex._boneWeights = vertexFixed._boneWeights;
 
 		_simpleVertices.push_back(simpleVertex);
 	}
 
 	void AnimatedMesh::AddVertices(const std::vector<AnimatedMeshVertex>& vertex)
 	{
-		_vertices.insert(_vertices.end(), vertex.begin(), vertex.end());
-
 		// Mirror the bulk add into the base Mesh::_vertices container so
 		// downstream consumers that operate on the un-skinned topology -
 		// notably the triangle-mesh physics collider in RigidBody, but also
@@ -156,13 +157,7 @@ namespace HexEngine
 
 		for (auto& vert : vertex)
 		{
-			SimpleAnimatedMeshVertex simpleVertex;
-			simpleVertex._position = vert._position;
-			simpleVertex._texcoord = vert._texcoord;
-			simpleVertex._boneIds = vert._boneIds;
-			simpleVertex._boneWeights = vert._boneWeights;
-
-			_simpleVertices.push_back(simpleVertex);
+			AddVertex(vert);
 		}
 	}
 

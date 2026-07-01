@@ -56,6 +56,15 @@ namespace HexEngine
 
 		void EnableInterpolation(bool enable);
 
+		// Collapse the interpolation history (previous/interpolated) onto the
+		// current state so GetPosition(Interpolated) - and therefore GetWorldTM -
+		// reflects the current position immediately instead of lerping up from the
+		// stale previous value over the next frame. Call after teleporting an
+		// entity (spawn/respawn) so anything reading the interpolated world matrix
+		// that same frame (e.g. character-controller creation/placement) doesn't
+		// pick up the pre-teleport location.
+		void SnapInterpolation();
+
 		void SetPosition(const math::Vector3& position);
 		void SetPositionNoNotify(const math::Vector3& position);
 		void SetRotation(const math::Quaternion& rotation);

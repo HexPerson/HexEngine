@@ -313,6 +313,10 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Audio\SoundEffect.hpp" />
     <ClInclude Include="Entity\Component\InstancedStaticMeshComponent.hpp" />
     <ClInclude Include="Entity\Component\NavigationComponent.hpp" />
+    <ClInclude Include="Entity\Component\NetworkComponent.hpp" />
+    <ClInclude Include="Entity\Component\NetworkPlayerComponent.hpp" />
+    <ClInclude Include="Scene\NetworkMessages.hpp" />
+    <ClInclude Include="Scene\NetworkReplicationSystem.hpp" />
     <ClInclude Include="Entity\Component\SkeletalAnimationComponent.hpp" />
     <ClInclude Include="Entity\Entity.hpp" />
     <ClInclude Include="Entity\Component\AudioListener.hpp" />
@@ -364,7 +368,15 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\IParticleSystem.hpp" />
     <ClInclude Include="Graphics\ISSAOProvider.hpp" />
     <ClInclude Include="Graphics\DiffuseGIAOProvider.hpp" />
+    <ClInclude Include="Graphics\AtmosphereLUTs.hpp" />
+    <ClInclude Include="Graphics\VolumetricScattering.hpp" />
     <ClInclude Include="Steam\ISteamworksProvider.hpp" />
+    <ClInclude Include="Network\INetworkSystem.hpp" />
+    <ClInclude Include="Network\NetSerialization.hpp" />
+    <ClInclude Include="Network\IReplicated.hpp" />
+    <ClInclude Include="Network\IRpc.hpp" />
+    <ClInclude Include="Network\Net.hpp" />
+    <ClInclude Include="Entity\Component\HealthComponent.hpp" />
     <ClInclude Include="Graphics\LogWindowMessages.hpp" />
     <ClInclude Include="Graphics\Formats.hpp" />
     <ClInclude Include="Graphics\RenderStructs.hpp" />
@@ -422,6 +434,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\MaterialLoader.hpp" />
     <ClInclude Include="HexEngine.hpp" />
     <ClInclude Include="Entity\Component\InteractionComponent.hpp" />
+    <ClInclude Include="Entity\Component\DoorComponent.hpp" />
     <ClInclude Include="Entity\Component\SpotLight.hpp" />
     <ClInclude Include="Entity\Component\FirstPersonCameraController.hpp" />
     <ClInclude Include="Entity\Component\Light.hpp" />
@@ -434,6 +447,9 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp" />
     <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp" />
     <ClInclude Include="Entity\Component\DecalComponent.hpp" />
+    <ClInclude Include="Entity\Component\NavMeshBlockingVolume.hpp" />
+    <ClInclude Include="Entity\Component\NavMeshLinkComponent.hpp" />
+    <ClInclude Include="Entity\Component\PlayerStartComponent.hpp" />
     <ClInclude Include="Entity\Component\ParticleSystemComponent.hpp" />
     <ClInclude Include="Entity\Component\Transform.hpp" />
     <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
@@ -522,6 +538,10 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Audio\SoundEffect.cpp" />
     <ClCompile Include="Entity\Component\InstancedStaticMeshComponent.cpp" />
     <ClCompile Include="Entity\Component\NavigationComponent.cpp" />
+    <ClCompile Include="Entity\Component\NetworkComponent.cpp" />
+    <ClCompile Include="Entity\Component\NetworkPlayerComponent.cpp" />
+    <ClCompile Include="Entity\Component\HealthComponent.cpp" />
+    <ClCompile Include="Scene\NetworkReplicationSystem.cpp" />
     <ClCompile Include="Entity\Component\SkeletalAnimationComponent.cpp" />
     <ClCompile Include="Entity\Entity.cpp" />
     <ClCompile Include="Entity\Component\AudioListener.cpp" />
@@ -612,6 +632,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\Camera.cpp" />
     <ClCompile Include="Entity\Component\Collider.cpp" />
     <ClCompile Include="Entity\Component\InteractionComponent.cpp" />
+    <ClCompile Include="Entity\Component\DoorComponent.cpp" />
     <ClCompile Include="Entity\Component\Light.cpp" />
     <ClCompile Include="Entity\Component\SpotLight.cpp" />
     <ClCompile Include="Entity\Component\FirstPersonCameraController.cpp" />
@@ -624,6 +645,9 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp" />
     <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp" />
     <ClCompile Include="Entity\Component\DecalComponent.cpp" />
+    <ClCompile Include="Entity\Component\NavMeshBlockingVolume.cpp" />
+    <ClCompile Include="Entity\Component\NavMeshLinkComponent.cpp" />
+    <ClCompile Include="Entity\Component\PlayerStartComponent.cpp" />
     <ClCompile Include="Entity\Component\ParticleSystemComponent.cpp" />
     <ClCompile Include="Entity\Component\Transform.cpp" />
     <ClCompile Include="Entity\Component\UpdateComponent.cpp" />
@@ -664,13 +688,17 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Graphics\IInputLayout.cpp" />
     <ClCompile Include="Scene\DiffuseGI.cpp" />
     <ClCompile Include="Graphics\DiffuseGIAOProvider.cpp" />
+    <ClCompile Include="Graphics\AtmosphereLUTs.cpp" />
+    <ClCompile Include="Graphics\VolumetricScattering.cpp" />
     <ClCompile Include="Scene\GpuVisibilityCulling.cpp" />
     <ClCompile Include="Scene\Mesh.cpp" />
     <ClCompile Include="Scene\MeshInstance.cpp" />
     <ClCompile Include="Scene\MeshInstanceManager.cpp" />
     <ClCompile Include="Scene\MeshPrimitives.cpp" />
     <ClCompile Include="Scene\Model.cpp" />
-    <ClCompile Include="Scene\Scene.cpp" />
+    <ClCompile Include="Scene\Scene.cpp">
+      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="Scene\SceneManager.cpp" />
     <ClCompile Include="Scene\SceneRenderer.cpp" />
     <ClCompile Include="Terrain\HeightMapGenerator.cpp" />

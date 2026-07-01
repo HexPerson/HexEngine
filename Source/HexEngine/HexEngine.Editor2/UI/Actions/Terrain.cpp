@@ -212,7 +212,14 @@ namespace HexEditor
 				}
 
 				terrainEnt->SetParent(parentEnt);
-				terrainEnt->SetFlag(HexEngine::EntityFlags::ExcludeFromHLOD);
+
+				// Water-material terrain (the "Add ocean" path) must not contribute to
+				// scene navmesh bakes — agents navigate land, not the sea surface.
+				// CalculateSceneStats skips DoNotBlockNavMesh, mirroring volumetric terrain.
+				HexEngine::EntityFlags terrainFlags = HexEngine::EntityFlags::ExcludeFromHLOD;
+				if (terrainMaterial && terrainMaterial->_properties.isWater)
+					terrainFlags = terrainFlags | HexEngine::EntityFlags::DoNotBlockNavMesh;
+				terrainEnt->SetFlag(terrainFlags);
 
 				if(_parent == false)
 					_created.push_back(terrainEnt);

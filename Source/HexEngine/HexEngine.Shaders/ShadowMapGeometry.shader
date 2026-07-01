@@ -95,6 +95,17 @@
 			}
 		}*/
 
-		return float4(1.0f.rrr, opacity);
+		// Write the post-rasterizer NDC.z (input.position.z is already divided by w by
+		// the rasterizer) into the R32_FLOAT colour RT. This gives the volumetric's point-
+		// shadow cubemap-array path a CLEAN, RT-bound source texture to CopySubresourceRegion
+		// from. The previous "return 1.0" only let the volumetric copy the underlying DSV-
+		// bound R32_TYPELESS depth texture, and some D3D11 drivers silently zero that copy
+		// when the source still carries DEPTH_STENCIL bind state - the symptom was every
+		// cube face reading 0 (occluder at near plane), collapsing point-light volumetric
+		// contribution to a tiny 2m cube-shape around the light. Writing depth into the
+		// colour RT makes the cube-array copy source a plain R32_FLOAT shader resource
+		// with no implicit depth-state baggage, which works on all drivers we've tested.
+		// Alpha keeps `opacity` so callers that look at coverage still get it.
+		return float4(input.position.z.rrr, opacity);
 	}
 }

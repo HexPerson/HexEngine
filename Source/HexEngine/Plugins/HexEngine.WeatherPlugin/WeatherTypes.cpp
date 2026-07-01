@@ -61,13 +61,25 @@ namespace HexEngine::Weather
 
 		switch (presetId)
 		{
+		// fogDensity is the uniform extinction (per metre) of the froxel fog
+		// medium - it is now a REAL participating-media coefficient, lit and
+		// shadowed by the volumetric system, with analytic continuation past
+		// the froxel range. Values derive from meteorological visibility via
+		// Koschmieder: extinction = 3.912 / visibility_metres.
+		//   0.0002 = ~20 km (clear)    0.0085 = ~450 m (heavy rain)
+		//   0.0013 = ~3 km (overcast)  0.015  = ~260 m (storm)
+		//   0.0035 = ~1.1 km (rain)    0.046  = ~85 m  (blizzard)
+		//   0.006  = ~650 m (snow)     0.060  = ~65 m  (sandstorm)
+		// The previous values (0.0012..0.009) compressed every preset into a
+		// 2x band that the froxel system never even consumed (baseExt was
+		// hardcoded 0) - all weathers rendered with identical visibility.
 		case WeatherPresetId::Clear:
 			state.cloudCoverage = 0.18f;
 			state.cloudDensity = 0.55f;
 			state.cloudErosion = 0.45f;
 			state.windSpeed = 9.0f;
-			state.fogDensity = 0.0012f;
-			state.fogHeightDensity = 0.0010f;
+			state.fogDensity = 0.0002f;
+			state.fogHeightDensity = 0.0008f;
 			state.surface.temperatureBias = 0.2f;
 			break;
 		case WeatherPresetId::Overcast:
@@ -90,8 +102,10 @@ namespace HexEngine::Weather
 			state.sunsetWarmStrength = 0.08f;
 			state.sunsetCoolStrength = 0.20f;
 			state.sunsetGlowStrength = 0.08f;
-			state.fogDensity = 0.0042f;
-			state.fogHeightDensity = 0.0046f;
+			// Overcast is grey skies, not fog - keep visibility long (~3km)
+			// and let the cloud deck + dimmed sun carry the mood.
+			state.fogDensity = 0.0013f;
+			state.fogHeightDensity = 0.0030f;
 			state.fogSkyTintInfluence = 0.08f;
 			break;
 		case WeatherPresetId::Rain:
@@ -118,8 +132,10 @@ namespace HexEngine::Weather
 			state.sunsetWarmStrength = 0.04f;
 			state.sunsetCoolStrength = 0.14f;
 			state.sunsetGlowStrength = 0.04f;
-			state.fogDensity = 0.0052f;
-			state.fogHeightDensity = 0.0056f;
+			// Rain: ~1.1km visibility - the air visibly thickens but the
+			// street still reads clearly.
+			state.fogDensity = 0.0035f;
+			state.fogHeightDensity = 0.0045f;
 			state.fogSkyTintInfluence = 0.04f;
 			state.windSpeed = 13.0f;
 			break;
@@ -149,8 +165,10 @@ namespace HexEngine::Weather
 			state.sunsetWarmStrength = 0.02f;
 			state.sunsetCoolStrength = 0.10f;
 			state.sunsetGlowStrength = 0.02f;
-			state.fogDensity = 0.0068f;
-			state.fogHeightDensity = 0.0072f;
+			// Heavy rain: ~450m visibility - distant blocks dissolve into
+			// the downpour.
+			state.fogDensity = 0.0085f;
+			state.fogHeightDensity = 0.0060f;
 			state.fogSkyTintInfluence = 0.02f;
 			state.windSpeed = 18.0f;
 			break;
@@ -182,8 +200,10 @@ namespace HexEngine::Weather
 			state.sunsetWarmStrength = 0.0f;
 			state.sunsetCoolStrength = 0.06f;
 			state.sunsetGlowStrength = 0.0f;
-			state.fogDensity = 0.0085f;
-			state.fogHeightDensity = 0.0090f;
+			// Storm: ~260m visibility - the world closes in; lightning and
+			// local lights carve visible shafts through the murk.
+			state.fogDensity = 0.015f;
+			state.fogHeightDensity = 0.0080f;
 			state.fogSkyTintInfluence = 0.0f;
 			state.windSpeed = 21.0f;
 			break;
@@ -194,6 +214,9 @@ namespace HexEngine::Weather
 			state.lightningIntervalMin = 1.8f;
 			state.lightningIntervalMax = 4.0f;
 			state.lightningDuration = 0.45f;
+			// Slightly denser than the base storm (~220m visibility) so the
+			// two presets read differently even between lightning strikes.
+			state.fogDensity = 0.018f;
 			break;
 		case WeatherPresetId::Snow:
 			state.zenithExponent = 2.0f;
@@ -220,8 +243,9 @@ namespace HexEngine::Weather
 			state.cloudAmbientStrength = 0.12f;
 			state.cloudViewAbsorption = 0.78f;
 			state.cloudShadowStrength = 0.82f;
-			state.fogDensity = 0.0048f;
-			state.fogHeightDensity = 0.0052f;
+			// Snow: ~650m visibility - softly muffled air, still navigable.
+			state.fogDensity = 0.006f;
+			state.fogHeightDensity = 0.0055f;
 			state.fogSkyTintInfluence = 0.04f;
 			state.windSpeed = 8.0f;
 			state.auroraIntensity = 0.0f;
@@ -252,8 +276,11 @@ namespace HexEngine::Weather
 			state.cloudAmbientStrength = 0.06f;
 			state.cloudViewAbsorption = 0.95f;
 			state.cloudShadowStrength = 0.95f;
-			state.fogDensity = 0.0080f;
-			state.fogHeightDensity = 0.0086f;
+			// Blizzard: ~85m visibility - genuine whiteout. The froxel medium
+			// saturates toward the cool-grey ambient within a city block;
+			// the analytic continuation closes off everything beyond.
+			state.fogDensity = 0.046f;
+			state.fogHeightDensity = 0.010f;
 			state.fogSkyTintInfluence = 0.02f;
 			state.windSpeed = 24.0f;
 			state.auroraIntensity = 0.0f;
@@ -266,7 +293,9 @@ namespace HexEngine::Weather
 			state.atmosphereDensity = 0.14f;
 			state.mieStrength = 1.45f;
 			state.sunHazeStrength = 1.35f;
-			state.fogDensity = 0.0018f;
+			// Hot: light heat haze (~3km visibility), shimmering rather
+			// than thick.
+			state.fogDensity = 0.0012f;
 			state.windSpeed = 5.0f;
 			break;
 		case WeatherPresetId::Sandstorm:
@@ -279,7 +308,11 @@ namespace HexEngine::Weather
 			state.atmosphereDensity = 0.19f;
 			state.mieStrength = 1.75f;
 			state.sunHazeStrength = 1.6f;
-			state.fogDensity = 0.0060f;
+			// Sandstorm: ~65m visibility, the densest preset. The froxel
+			// medium's ambient inscatter picks up the orange ambientLight
+			// below, so the whole air mass glows dusty orange.
+			state.fogDensity = 0.060f;
+			state.fogHeightDensity = 0.008f;
 			state.fogSkyTintInfluence = 0.12f;
 			state.fogColour = math::Color(0.72f, 0.58f, 0.39f, 1.0f);
 			state.ambientLight = math::Vector4(0.42f, 0.34f, 0.24f, 1.0f);

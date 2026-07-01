@@ -1,6 +1,7 @@
 
 #include "IndexBufferD3D12.hpp"
 #include "GraphicsDeviceD3D12.hpp"
+#include <HexEngine.Core/HexEngine.hpp>
 
 #include <cstring>
 
@@ -43,7 +44,21 @@ void IndexBufferD3D12::Destroy()
 void IndexBufferD3D12::SetIndexData(uint8_t* data, uint32_t size, uint32_t offset /*= 0*/)
 {
 	if (data == nullptr || size == 0 || _byteSize == 0 || _device == nullptr) return;
-	if (offset + size > _byteSize) return;
+	if (offset + size > _byteSize)
+	{
+		// B5 visual-parity debug: a dropped index upload leaves stale indices
+		// referencing vertices that have since moved -> scrambled triangles and
+		// reversed-looking winding on SOME meshes. D3D11 never drops (persistent
+		// MAP_WRITE_DISCARD), so this is a backend divergence worth catching.
+		static int s_drop = 0;
+		if (s_drop < 16)
+		{
+			++s_drop;
+			LOG_WARN("D3D12 IB SetIndexData DROPPED upload: offset=%u size=%u > byteSize=%u (stride=%u) - mesh keeps stale indices",
+				offset, size, _byteSize, _stride);
+		}
+		return;
+	}
 
 	const uint64_t completed = _device->GetCompletedFenceValue();
 

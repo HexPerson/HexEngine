@@ -944,7 +944,17 @@ Texture2D* GraphicsDeviceD3D11::CreateTexture2D_Internal(
 	desc.SampleDesc.Quality = sampleQuality;
 	desc.Usage = usage;
 	desc.CPUAccessFlags = access;//(usage == D3D11_USAGE_STAGING ? (D3D11_CPU_ACCESS_READ | D3D11_CPU_ACCESS_WRITE) : 0);
-	desc.MiscFlags = miscFlags;// D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;// (usage == D3D11_USAGE_STAGING ? (D3D11_RESOURCE_MISC_SHARED_NTHANDLE | D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX) : 0);
+	desc.MiscFlags = miscFlags;
+	// D3D11 requires the TEXTURECUBE misc flag whenever the SRV is going
+	// to be created as TEXTURECUBE / TEXTURECUBEARRAY. Auto-add it based
+	// on the SRV dimension since the abstract layer doesn't surface this
+	// flag (caller would have to know the D3D11 quirk). D3D12 derives
+	// cubemap-ness purely from the SRV desc, so this is D3D11-specific.
+	if (srvDimension == D3D11_SRV_DIMENSION_TEXTURECUBE ||
+	    srvDimension == D3D11_SRV_DIMENSION_TEXTURECUBEARRAY)
+	{
+		desc.MiscFlags |= D3D11_RESOURCE_MISC_TEXTURECUBE;
+	}
 
 	ID3D11Texture2D* d3dTexture;
 	CHECK_HR(_device->CreateTexture2D(&desc, initialData, &d3dTexture));
@@ -978,26 +988,60 @@ Texture2D* GraphicsDeviceD3D11::CreateTexture2D_Internal(
 
 	if (bindFlags & D3D11_BIND_SHADER_RESOURCE)
 	{
-		for (auto i = 0; i < arraySize; ++i)
+		auto srvFormat = format;
+		if (srvFormat == DXGI_FORMAT_R32_TYPELESS)
+			srvFormat = DXGI_FORMAT_R32_FLOAT;
+		else if (srvFormat == DXGI_FORMAT_R16_TYPELESS)
+			srvFormat = DXGI_FORMAT_R16_FLOAT;
+		else if (srvFormat == DXGI_FORMAT_R24G8_TYPELESS)
+			srvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+		else if (srvFormat == DXGI_FORMAT_R32G8X24_TYPELESS)
+			srvFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+
+		// Create a SINGLE SRV that views the entire texture (all slices,
+		// all mips). The previous loop created per-slice SRVs but
+		// overwrote `_shaderResourceView` each iteration, so for any
+		// arraySize > 1 only the last slice was reachable - broken for
+		// Texture2DArray and TextureCubeArray. Array textures need one
+		// SRV viewing the whole array so the shader can index into it.
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = srvFormat;
+		srvDesc.ViewDimension = (D3D11_SRV_DIMENSION)srvDimension;
+		switch (srvDimension)
 		{
-			auto srvFormat = format;
-
-			if (srvFormat == DXGI_FORMAT_R32_TYPELESS)
-				srvFormat = DXGI_FORMAT_R32_FLOAT;
-			else if (srvFormat == DXGI_FORMAT_R16_TYPELESS)
-				srvFormat = DXGI_FORMAT_R16_FLOAT;
-			else if (srvFormat == DXGI_FORMAT_R24G8_TYPELESS)
-				srvFormat = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-			else if (srvFormat == DXGI_FORMAT_R32G8X24_TYPELESS)
-				srvFormat = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
-
-			CD3D11_SHADER_RESOURCE_VIEW_DESC rtvDesc((D3D11_SRV_DIMENSION)srvDimension, srvFormat, 0, 1, i, 1);
-
-			ID3D11ShaderResourceView* shaderResourceView;
-			CHECK_HR(_device->CreateShaderResourceView(texture->_texture, &rtvDesc, &shaderResourceView));
-
-			texture->_shaderResourceView = shaderResourceView;
+		case D3D11_SRV_DIMENSION_TEXTURE2D:
+			srvDesc.Texture2D.MostDetailedMip = 0;
+			srvDesc.Texture2D.MipLevels = static_cast<UINT>(desc.MipLevels);
+			break;
+		case D3D11_SRV_DIMENSION_TEXTURE2DMS:
+			// No fields needed for MS - dimension alone is enough.
+			break;
+		case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
+			srvDesc.Texture2DArray.MostDetailedMip = 0;
+			srvDesc.Texture2DArray.MipLevels = static_cast<UINT>(desc.MipLevels);
+			srvDesc.Texture2DArray.FirstArraySlice = 0;
+			srvDesc.Texture2DArray.ArraySize = static_cast<UINT>(arraySize);
+			break;
+		case D3D11_SRV_DIMENSION_TEXTURECUBE:
+			srvDesc.TextureCube.MostDetailedMip = 0;
+			srvDesc.TextureCube.MipLevels = static_cast<UINT>(desc.MipLevels);
+			break;
+		case D3D11_SRV_DIMENSION_TEXTURECUBEARRAY:
+			srvDesc.TextureCubeArray.MostDetailedMip = 0;
+			srvDesc.TextureCubeArray.MipLevels = static_cast<UINT>(desc.MipLevels);
+			srvDesc.TextureCubeArray.First2DArrayFace = 0;
+			// arraySize for a cubemap array is total faces (6 * cubes);
+			// NumCubes is the cube count.
+			srvDesc.TextureCubeArray.NumCubes = static_cast<UINT>(arraySize / 6);
+			break;
+		default:
+			// Let runtime infer for unknown dimensions.
+			break;
 		}
+
+		ID3D11ShaderResourceView* shaderResourceView = nullptr;
+		CHECK_HR(_device->CreateShaderResourceView(texture->_texture, &srvDesc, &shaderResourceView));
+		texture->_shaderResourceView = shaderResourceView;
 	}
 
 	if (bindFlags & D3D11_BIND_DEPTH_STENCIL)

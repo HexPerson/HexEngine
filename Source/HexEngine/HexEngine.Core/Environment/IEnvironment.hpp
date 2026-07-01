@@ -164,6 +164,19 @@ namespace HexEngine
 		// than the raw voxel-trace alpha so the per-voxel grid pattern that
 		// killed earlier attempts at this feature is smoothed away.
 		class DiffuseGIAOProvider* _giAOProvider = nullptr;
+		// Hillaire 2020 atmosphere LUT subsystem. Owns the precomputed sky
+		// LUTs (transmittance / multi-scattering / sky-view) and the
+		// aerial-perspective + light-scattering froxel volumes. Phase A is
+		// a scaffold; Phase B fills in the sky LUTs, C adds the aerial-
+		// perspective volume, D adds the light-scattering grid. Allocated
+		// in Game3DEnvironment::Create once the graphics device is up.
+		class AtmosphereLUTs* _atmosphereLUTs = nullptr;
+		// Phase D volumetric scattering subsystem. Owns the camera-frustum-
+		// aligned scatter + integration froxel volumes used for proper
+		// depth-correct volumetric lighting. Sun-only in D-1; local lights
+		// in D-3. Replaces the legacy per-pixel VolumetricLighting.shader
+		// march. Allocated alongside _atmosphereLUTs.
+		class VolumetricScattering* _volumetricScattering = nullptr;
 		class ICompressionProvider* _compressionProvider = nullptr;
 		
 		class AssetPackageManager* _assetPackageManager = nullptr;
@@ -175,6 +188,11 @@ namespace HexEngine
 		// should null-check and treat it as a "graceful disable" rather than
 		// an error.
 		class ISteamworksProvider* _steamworksProvider = nullptr;
+		// Optional game-networking transport (GameNetworkingSockets plugin). Null
+		// when the plugin/its vcpkg deps aren't present - callers null-check and
+		// fall back to single-player. The Scene's NetworkReplicationSystem drives
+		// it; see Network/INetworkSystem.hpp.
+		class INetworkSystem* _networkSystem = nullptr;
 		class IDenoiserProvider* _denoiserProvider = nullptr;
 		class INavMeshProvider* _navMeshProvider = nullptr;
 		MeshLoader* _meshLoader = nullptr;
@@ -182,7 +200,16 @@ namespace HexEngine
 		class ParticleEffectLoader* _particleEffectLoader = nullptr;
 		class ParticleWorldSystem* _particleWorldSystem = nullptr;
 
+		// True while the game/simulation is actually running - set by the
+		// standalone launcher after OnCreateGame, and by the editor's
+		// GameIntegrator in play mode (cleared on stop). Gameplay-only systems
+		// (e.g. InteractionComponent look-at highlighting) gate on this so they
+		// stay inert while the editor's free-look camera is in use.
+		bool IsGameRunning() const { return _isGameRunning; }
+		void SetGameRunning(bool running) { _isGameRunning = running; }
+
 	protected:
+		bool _isGameRunning = false;
 		class FileSystem* _fileSystem = nullptr;
 		class UIManager* _uiManager = nullptr;
 		class ResourceSystem* _resourceSystem = nullptr;

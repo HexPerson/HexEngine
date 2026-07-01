@@ -7,6 +7,7 @@
 #include "../Entity/Component/DirectionalLight.hpp"
 #include "IEntityListener.hpp"
 #include "ISceneCustomRenderer.hpp"
+#include "INavMeshProvider.hpp"
 #include "../Graphics/IGraphicsDevice.hpp"
 #include "../GUI/DebugGUI.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
@@ -153,6 +154,16 @@ namespace HexEngine
 
 		void SetSkySphere(Entity* skySphere);
 
+		// Navmesh persisted with the scene (baked in editor, saved as a sidecar).
+		uint32_t GetNavMeshId() const { return _navMeshId; }     // NavMeshId
+		bool HasNavMesh() const { return _hasNavMesh; }
+		void SetNavMeshId(uint32_t id) { _navMeshId = id; _hasNavMesh = true; }
+
+		// Host-authoritative network replication for this scene. Lazily created on
+		// first access; its Pump()/SendUpdates() no-op when no networking plugin is
+		// loaded (g_pEnv->_networkSystem == null). See NetworkReplicationSystem.
+		class NetworkReplicationSystem* GetNetworkReplicationSystem();
+
 		void CalculateBounds(math::Vector3& min, math::Vector3& max);
 		bool GatherStaticMeshesInBounds(const dx::BoundingBox& bounds, std::vector<StaticMeshComponent*>& outComponents, bool includeDynamic = true);
 		uint64_t GetGiGeometryRevision() const;
@@ -164,6 +175,14 @@ namespace HexEngine
 		void NotifyEntityTransformChanged(Entity* entity);
 		void CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
 		void CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
+
+		// Gather the world-space footprints of all NavMeshBlockingVolume components,
+		// for the navmesh bake to carve roads / restore crossings.
+		void GatherNavMeshBlockingVolumes(std::vector<NavMeshBlockingBox>& out);
+
+		// Gather the world-space off-mesh links from all NavMeshLinkComponent
+		// components, fed to Detour at bake time as off-mesh connections.
+		void GatherNavMeshLinks(std::vector<NavMeshLink>& out);
 
 		const EntityMap& GetEntities() const;
 
@@ -379,6 +398,10 @@ namespace HexEngine
 
 		Camera* _mainCamera = nullptr;
 		std::vector<Camera*> _cameras;
+
+		uint32_t _navMeshId = 0;        // NavMeshId of this scene's navmesh (when _hasNavMesh)
+		bool _hasNavMesh = false;
+		class NetworkReplicationSystem* _networkReplicationSystem = nullptr; // lazily created, freed in Destroy()
 
 		SceneUpdateFlags _updateFlags = SceneUpdateNone;
 

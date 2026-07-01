@@ -1,6 +1,5 @@
 "Requirements"
 {
-	GBuffer
 }
 "InputLayout"
 {
@@ -43,15 +42,100 @@
 "PixelShader"
 {
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
+	// This light's 6 cube-face depth maps at t5..t10, bound per-light by
+	// RenderPointLights in ENGINE face order (PointLight.cpp gLightDirs):
+	// [Forward(-Z), Backward(+Z), Up(+Y), Down(-Y), Left(-X), Right(+X)] -
+	// the same order as g_lightViewProjectionMatrix[0..5].
+	SHADOWMAPS_RESOURCE(5);
 
 	Texture2D g_beautyTex : register(t13);
 
-	// Material-features RT. Point/spot lights only use t0-4 for the gbuffer, so
-	// t5 is the first free slot. Standard PBR pixels see (0,0,0,0) and early-out.
-	GBUFFER_FEATURES_RESOURCE(5)
+	// Material-features RT. Moved from t5 to t11 when the shadow maps took
+	// t5..t10 - matches SpotLight.shader's slot layout so both punctual
+	// light shaders share conventions.
+	GBUFFER_FEATURES_RESOURCE(11)
 
 	SamplerState g_textureSampler : register(s0);
+	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
+
+	// Per-pixel point-light shadow term. Picks the cube face from the dominant
+	// axis of the light->pixel direction (engine face order above), projects
+	// the pixel through that face's view-projection matrix, and does a 4-tap
+	// PCF compare against the face's depth map. Returns 1 = lit, 0 = occluded.
+	//
+	// SM5.0 requires literal indices into resource arrays, so the actual taps
+	// dispatch through a switch with one case per face.
+	float CalculatePointShadowSample(float3 worldPos, float3 worldNormal, float3 lightPos)
+	{
+		// Non-shadow-casting lights bind null at t5..t10; SampleCmpLevelZero
+		// against a null SRV reads 0 = fully occluded, so gate on the flag
+		// (same rationale as SpotLight.shader).
+		if (g_shadowConfig.castsShadowsFlag == 0)
+			return 1.0f;
+
+		const float3 toPixel = worldPos - lightPos;
+		const float ax = abs(toPixel.x);
+		const float ay = abs(toPixel.y);
+		const float az = abs(toPixel.z);
+
+		// Engine face order follows PointLight.cpp's gLightDirs array:
+		// [Forward, Backward, Up, Down, Left, Right]. SimpleMath is RIGHT-
+		// handed, so Forward = (0,0,-1): the order in world axes is
+		// [-Z, +Z, +Y, -Y, -X, +X]. (An earlier comment elsewhere claimed
+		// Forward = +Z, which silently swapped the Z faces - don't trust
+		// direction NAMES here, only the vectors.)
+		int face;
+		if (az >= ax && az >= ay)
+			face = toPixel.z > 0.0f ? 1 : 0;
+		else if (ay >= ax)
+			face = toPixel.y > 0.0f ? 2 : 3;
+		else
+			face = toPixel.x > 0.0f ? 5 : 4;
+
+		float4 lightClip = mul(float4(worldPos, 1.0f), g_lightViewProjectionMatrix[face]);
+		if (lightClip.w <= 0.0f)
+			return 1.0f;
+
+		float3 lightNdc = lightClip.xyz / lightClip.w;
+		if (lightNdc.z <= 0.0f || lightNdc.z >= 1.0f)
+			return 1.0f;
+
+		float2 uv = float2(lightNdc.x * 0.5f + 0.5f, -lightNdc.y * 0.5f + 0.5f);
+		if (any(uv < 0.0f) || any(uv > 1.0f))
+			return 1.0f;
+
+		// Slope-scaled bias, slightly larger than the spot path's: point
+		// lights typically sit very close to the surfaces they light (street
+		// lamps, interior fixtures), which concentrates the depth range near
+		// the far end of the [0,1] NDC curve where precision is worst.
+		float NdotL = saturate(dot(worldNormal, normalize(-toPixel)));
+		float slopeBias = 0.0015f * (1.0f - NdotL) + 0.0008f;
+		float compareZ = lightNdc.z - slopeBias;
+
+		float texel = 1.0f / max(g_shadowConfig.shadowMapSize, 1.0f);
+
+		// 4 corner taps around the projected UV; literal face index per case.
+		#define POINT_SHADOW_TAPS(IDX)                                                                  \
+			vis += SHADOWMAPS[IDX].SampleCmpLevelZero(g_cmpSampler, uv + float2( texel,  texel), compareZ).r; \
+			vis += SHADOWMAPS[IDX].SampleCmpLevelZero(g_cmpSampler, uv + float2(-texel,  texel), compareZ).r; \
+			vis += SHADOWMAPS[IDX].SampleCmpLevelZero(g_cmpSampler, uv + float2( texel, -texel), compareZ).r; \
+			vis += SHADOWMAPS[IDX].SampleCmpLevelZero(g_cmpSampler, uv + float2(-texel, -texel), compareZ).r;
+
+		float vis = 0.0f;
+		switch (face)
+		{
+			case 0: { POINT_SHADOW_TAPS(0) } break;
+			case 1: { POINT_SHADOW_TAPS(1) } break;
+			case 2: { POINT_SHADOW_TAPS(2) } break;
+			case 3: { POINT_SHADOW_TAPS(3) } break;
+			case 4: { POINT_SHADOW_TAPS(4) } break;
+			case 5: { POINT_SHADOW_TAPS(5) } break;
+		}
+		#undef POINT_SHADOW_TAPS
+
+		return saturate(vis * 0.25f);
+	}
 
 	float ComputeScattering(float lightDotView)
 	{
@@ -237,6 +321,12 @@
 		distanceFalloff *= distanceFalloff;
 		float attenuation = distanceFalloff / max(d * d, minDistSqr);
 
+		// Per-pixel shadow term. Same depth maps the volumetric froxel pass
+		// samples for this light - so a surface pixel behind a wall inside
+		// the light's radius goes dark instead of being lit through the wall,
+		// matching the shadowed fog volume around it.
+		float depthValue = CalculatePointShadowSample(pixelPosWS.xyz, normalWS, lightPos);
+
 		float4 pbr = CalculatePBRPointLighting(
 			GBUFFER_SPECULAR,
 			g_pointSampler,
@@ -246,7 +336,7 @@
 			lightToPixelVec,
 			input.colour.rgb,
 			pixelColour.rgb,
-			1.0f,
+			depthValue,
 			attenuation
 		);
 
@@ -268,7 +358,7 @@
 				lightToPixelVec,
 				input.colour.rgb,
 				perceptualRoughnessForFeatures,
-				1.0f,
+				depthValue,
 				attenuation);
 		}
 

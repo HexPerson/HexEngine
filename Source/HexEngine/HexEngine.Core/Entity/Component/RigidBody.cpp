@@ -389,8 +389,17 @@ namespace HexEngine
 	void RigidBody::ForceUpdatePose()
 	{
 		auto rb = GetIRigidBody();
-		
+
 		if (rb == nullptr)
+			return;
+
+		// A character controller owns its own position (Move() + the physics
+		// read-back). Letting transform-change messages force-pose it fights the
+		// controller and, because each setFootPosition runs overlap recovery
+		// against world geometry, tanks the framerate when fired per-frame by
+		// mouse-look rotation. Explicit spawn/respawn teleports call
+		// UpdatePosePosition directly, bypassing this path.
+		if (rb->IsCharacterController())
 			return;
 
 		if (rb->GetBodyType() != IRigidBody::BodyType::Static)

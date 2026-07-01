@@ -2,6 +2,7 @@
 
 #include "../HexEngine.Core/HexEngine.hpp"
 #include "../HexEngine.Core/FileSystem/AssetPackage.hpp"
+#include "../HexEngine.Core/Entity/Component/PlayerStartComponent.hpp"
 
 //HVar* HexEngine::g_hvars = nullptr;
 //HCommand* HexEngine::g_commands = nullptr;
@@ -142,6 +143,31 @@ int WinMain(
 		HexEngine::g_pEnv->AddGameExtension(pGameExtension);
 		pGameExtension->OnRegisterClasses();
 		pGameExtension->OnLoadGameWorld();
+
+		// Spawn the player at the scene's Player Start (if any) before
+		// OnCreateGame, mirroring the editor's GameIntegrator::RunGame. We move
+		// the main camera's entity to the marker's transform; a game that
+		// attaches a camera controller to the main camera in OnCreateGame then
+		// begins play there, and can still override it.
+		if (auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get(); scene != nullptr)
+		{
+			if (auto* cam = scene->GetMainCamera(); cam != nullptr && cam->GetEntity() != nullptr)
+			{
+				std::vector<HexEngine::PlayerStartComponent*> starts;
+				if (scene->GetComponents<HexEngine::PlayerStartComponent>(starts) && !starts.empty())
+				{
+					HexEngine::PlayerStartComponent* chosen = starts.front();
+					for (auto* s : starts) { if (s != nullptr && s->IsPrimary()) { chosen = s; break; } }
+					if (chosen != nullptr && chosen->GetEntity() != nullptr)
+					{
+						cam->GetEntity()->SetPosition(chosen->GetEntity()->GetWorldTM().Translation());
+						cam->GetEntity()->SetRotation(chosen->GetEntity()->GetRotation());
+					}
+				}
+			}
+		}
+
+		HexEngine::g_pEnv->SetGameRunning(true);
 		pGameExtension->OnCreateGame();
 	}
 
@@ -158,6 +184,7 @@ int WinMain(
 	}
 
 	pGameExtension->OnStopGame();
+	HexEngine::g_pEnv->SetGameRunning(false);
 
 	HexEngine::Window::Destroy(mainWindow);
 

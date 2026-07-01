@@ -747,7 +747,7 @@ bool CityRoutineSystemComponent::BeginWalkTo(RoutineAgentComponent* agent, const
 		return false;
 
 	nav->ClearPath();
-	nav->FindPath(_navMeshId, from, to, 5.0f);
+	nav->FindPath(scene->GetNavMeshId(), from, to, 5.0f);   // scene's navmesh (loaded from sidecar)
 	if (!nav->HasPath())
 	{
 		// Some nav providers may return an empty path when already very close.

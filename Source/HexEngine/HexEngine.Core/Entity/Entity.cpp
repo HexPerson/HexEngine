@@ -86,6 +86,12 @@ namespace HexEngine
 
 	void Entity::DeleteMe(bool broadcast)
 	{
+		// Idempotent: re-requesting removal must not re-broadcast or re-add the
+		// reaper UpdateComponent (DeleteMe can be reached more than once for the same
+		// entity, e.g. direct call + Scene::DestroyEntity's cascade).
+		if (HasFlag(EntityFlags::IsPendingRemoval))
+			return;
+
 		SetFlag(EntityFlags::IsPendingRemoval);
 
 		if (broadcast)
@@ -96,29 +102,15 @@ namespace HexEngine
 			BroadcastMessage(&message);
 		}
 
-		// During destruction we can end up with stale parent pointers in complex
-		// teardown orders. Detach children directly instead of calling SetParent,
-		// which dereferences the previous parent to update its child list.
-		while (!_children.empty())
-		{
-			auto* child = _children.back();
-			_children.pop_back();
+		// Children are intentionally left attached. Scene::DestroyEntity walks our
+		// still-populated _children and destroys the whole subtree when we are reaped,
+		// and Entity::Destroy() detaches each entity from its parent at the moment it
+		// is actually deleted - so the subtree is torn down (not orphaned and leaked)
+		// without ever leaving a dangling parent/child pointer. Descendants already
+		// report IsPendingDeletion() == true via the parent chain in the meantime.
 
-			child->SetFlag(EntityFlags::IsPendingRemoval);
-			if (child->_parent == this)
-			{
-				child->_parent = nullptr;
-			}
-
-			child->_hasCachedWorldTM = false;
-			child->_hasCachedWorldAABB = false;
-			child->_hasCachedWorldBoundingSphere = false;
-			child->_hasCachedWorldOBB = false;
-			child->_hasCachedWorldTMTranspose = false;
-			child->_hasCachedWorldTMInvert = false;
-		}
-
-		// if this entity doesn't have an UpdateComponent, give it one so it can be deleted
+		// if this entity doesn't have an UpdateComponent, give it one so the scene's
+		// update loop picks it up and reaps it (which then cascades to the subtree).
 		if (HasA<UpdateComponent>() == false)
 		{
 			AddComponent<UpdateComponent>();
@@ -253,6 +245,18 @@ namespace HexEngine
 
 	void Entity::Destroy()
 	{
+		// Detach from our parent first, so a parent that is itself mid-teardown can
+		// never hold a dangling pointer to us in its _children list. Without this,
+		// Scene::DestroyEntity on an already-IsPendingRemoval entity skips DeleteMe()
+		// (which is what normally clears _children), and the parent's destructor then
+		// walks a stale _children entry and double-destroys a freed child.
+		if (_parent != nullptr)
+		{
+			auto& siblings = _parent->_children;
+			siblings.erase(std::remove(siblings.begin(), siblings.end(), this), siblings.end());
+			_parent = nullptr;
+		}
+
 		// if this entity has a rigidbody component, we have to sycnhronize with the physics thread otherwise we will destroy components in use while the physics thread runs
 		/*if (HasA<RigidBody>())
 		{
@@ -308,7 +312,7 @@ namespace HexEngine
 
 		ComponentSignature previousSignature = _componentsSignature;
 
-		_componentsSignature = previousSignature & ~(1 << componentId);
+		_componentsSignature = previousSignature & ~((ComponentSignature)1 << componentId);
 
 		auto* componentToDestroy = it->component;
 		_components.erase(it);
@@ -331,7 +335,7 @@ namespace HexEngine
 
 		ComponentSignature previousSignature = _componentsSignature;
 
-		_componentsSignature = previousSignature & ~(1 << id);		
+		_componentsSignature = previousSignature & ~((ComponentSignature)1 << id);
 
 		for (auto it = _components.begin(); it != _components.end(); it++)
 		{
@@ -375,7 +379,7 @@ namespace HexEngine
 
 		ComponentId newCompId = component->GetComponentId();
 
-		_componentsSignature |= (1 << newCompId);
+		_componentsSignature |= ((ComponentSignature)1 << newCompId);
 
 		// strip off all the other components signatures first otherwise we will get overlap
 		/*for (auto& comp : _components)
@@ -387,7 +391,7 @@ namespace HexEngine
 		// Does this component inherit from UpdateComponent? if so it should have its signature adjusted so it can be updated
 		if (component->CastAs<UpdateComponent>() != nullptr)
 		{
-			_componentsSignature |= (1 << UpdateComponent::_GetComponentId());
+			_componentsSignature |= ((ComponentSignature)1 << UpdateComponent::_GetComponentId());
 		}
 
 		_scene->OnEntityAddComponent(this, previousSignature, component);
@@ -423,7 +427,7 @@ namespace HexEngine
 
 		for (auto&& component : _components)
 		{
-			if ((signature & (1 << component.id)) != 0)
+			if ((signature & ((ComponentSignature)1 << component.id)) != 0)
 				result.push_back(component.component);
 		}
 
@@ -1004,6 +1008,15 @@ namespace HexEngine
 			{
 				LOG_DEBUG("Removing child '%s' from parent '%s'", destroyMessage->_entity->GetName().c_str(), GetName().c_str());
 
+				// Detach both directions together. This message fires when the child is
+				// *marked* for removal (DeleteMe), not when it is finally deleted, so if
+				// we only drop it from our _children the child keeps a _parent pointer to
+				// us that dangles once we're destroyed before it is. Clearing its back-ref
+				// here keeps the links consistent; the child is reaped on its own (it has
+				// IsPendingRemoval + an UpdateComponent).
+				if ((*it)->_parent == this)
+					(*it)->_parent = nullptr;
+
 				_children.erase(it);
 			}
 			break;
@@ -1273,7 +1286,7 @@ namespace HexEngine
 				return;
 			}
 
-			if (mask != 0 && ((1 << component->GetComponentId()) & mask) != mask)
+			if (mask != 0 && (((ComponentSignature)1 << component->GetComponentId()) & mask) != mask)
 				continue;
 
 			component->Deserialize(comp.value(), file, mask);

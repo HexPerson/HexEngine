@@ -16,6 +16,10 @@ public:
 	const std::string& GetEntryWaypointEntityName() const { return _entryWaypointEntityName; }
 	const std::string& GetParkingWaypointEntityName() const { return _parkingWaypointEntityName; }
 
+	void SetHouseholdCapacity(int32_t v) { _householdCapacity = v; }
+	void SetEntryWaypointEntityName(const std::string& v) { _entryWaypointEntityName = v; }
+	void SetParkingWaypointEntityName(const std::string& v) { _parkingWaypointEntityName = v; }
+
 private:
 	int32_t _householdCapacity = 4;
 	std::string _entryWaypointEntityName;

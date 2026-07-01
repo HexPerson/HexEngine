@@ -206,6 +206,20 @@ namespace HexEngine
 		effect->_instance->Stop(true);
 	}
 
+	void AudioManager::RegisterPlaybackInstance(const std::shared_ptr<SoundEffect>& effect)
+	{
+		if (!effect) return;
+		// Dedup against existing weak refs - the same shared_ptr being
+		// registered twice would just get Apply3D'd twice per frame for
+		// no benefit. Cheap linear scan; the vector is short.
+		for (const auto& existing : _createdSounds)
+		{
+			if (existing.lock() == effect)
+				return;
+		}
+		_createdSounds.push_back(effect);
+	}
+
 	void AudioManager::SetReverb(dx::AUDIO_ENGINE_REVERB reverb)
 	{
 		_engine->SetReverb(reverb);

@@ -44,4 +44,9 @@ public:
 	HexEngine::StructuredBufferFlags         _flags = HexEngine::StructuredBufferFlags::None;
 	bool                                     _isUploadHeap = false;
 	D3D12_RESOURCE_STATES                    _currentState = D3D12_RESOURCE_STATE_COMMON;
+	// Separate tracked state for the 4-byte AppendConsume counter resource.
+	// It transitions independently of the main buffer (e.g. UAV counter
+	// during compute -> COPY_SOURCE for CopyStructureCount), so it needs its
+	// own state to barrier correctly.
+	D3D12_RESOURCE_STATES                    _counterState = D3D12_RESOURCE_STATE_COMMON;
 };

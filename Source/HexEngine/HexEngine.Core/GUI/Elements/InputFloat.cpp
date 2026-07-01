@@ -69,6 +69,8 @@ namespace HexEngine
 					{
 						_onDrag(*_value, _min, _max);
 					}
+
+					_canvas.Redraw();
 				}
 
 				_startDrag = mouseX;

@@ -260,11 +260,23 @@ namespace HexEngine
 
 	void AssetSearch::RefreshResults()
 	{
-		OnSearchTextChanged(_edit, _edit != nullptr ? _edit->GetValue() : L"");
+		// Explicit refresh (e.g. clicking into the field) - run now, no
+		// debounce, and cancel any pending keystroke-scheduled query.
+		_searchPending = false;
+		PerformSearch(_edit != nullptr ? _edit->GetValue() : L"");
 	}
 
 	void AssetSearch::PostRenderChildren(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
+		// Per-frame debounce tick: fire the pending search once typing has
+		// paused for kSearchDebounceMs. This method is called every frame
+		// (before the _hasSelection early-out below), so it's our update hook.
+		if (_searchPending && std::chrono::steady_clock::now() >= _searchDeadline)
+		{
+			_searchPending = false;
+			PerformSearch(_pendingFilter);
+		}
+
 		if (_edit == nullptr)
 			return;
 
@@ -378,7 +390,18 @@ namespace HexEngine
 	void AssetSearch::OnSearchTextChanged(LineEdit* edit, const std::wstring& value)
 	{
 		(void)edit;
+		// Don't run the query now - stash it and let the per-frame tick fire it
+		// after a short quiet period (PostRenderChildren). This coalesces a
+		// burst of keystrokes into a single filesystem scan so typing stays
+		// responsive even when the asset library is large.
+		_pendingFilter = value;
+		_searchPending = true;
+		_searchDeadline = std::chrono::steady_clock::now()
+			+ std::chrono::milliseconds(kSearchDebounceMs);
+	}
 
+	void AssetSearch::PerformSearch(const std::wstring& value)
+	{
 		_results.clear();
 		if (_queryFn)
 		{

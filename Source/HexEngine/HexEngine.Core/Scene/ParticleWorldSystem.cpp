@@ -11,6 +11,7 @@
 #include "../Environment/TimeManager.hpp"
 #include "../Graphics/IGraphicsDevice.hpp"
 #include "../Graphics/Material.hpp"
+#include "../Graphics/VolumetricScattering.hpp"
 #include "../Scene/Mesh.hpp"
 #include "../Scene/MeshInstance.hpp"
 #include "../Input/HVar.hpp"
@@ -21,6 +22,20 @@ namespace HexEngine
 	HVar r_particleEnable("r_particleEnable", "Enable GPU particle simulation/rendering", true, false, true);
 	HVar r_particleMaxParticles("r_particleMaxParticles", "Global max number of GPU particles", 262144, 1024, 1048576);
 	HVar r_particleMaxEmitters("r_particleMaxEmitters", "Global max number of active GPU emitters", 1024, 1, 4096);
+	// Diagnostic: logs every frame-emitter's pool allocation + spawn count
+	// once per ~60 frames. Turn on when an effect looks starved (e.g. "7
+	// snowflakes in a blizzard") to see whether the emitter actually got
+	// the particle budget it asked for and how many spawns fired.
+	HVar r_particleDebugLog("r_particleDebugLog", "Log per-emitter pool/spawn stats once per second", false, false, true);
+	// Scale on the froxel-derived particle light probe. The probe is the
+	// fog's MEAN inscattered radiance (integration inscatter / opacity),
+	// which is already in final-composite colour units - so a scale near
+	// 1.0 makes a flake match the brightness of the fog it sits in. >1
+	// pushes flakes brighter than their surrounding haze for extra sparkle
+	// in lamp cones. (Was 350 when this probed the raw scatter volume,
+	// whose radiance carries a tiny ~0.025 Mie coefficient - that volume
+	// is no longer used for the probe; see ParticleBillboardLit.shader.)
+	HVar r_particleFroxelLightScale("r_particleFroxelLightScale", "Brightness scale for froxel-grid particle lighting", 1.5f, 0.0f, 50.0f);
 	HVar r_particleDeltaClamp("r_particleDeltaClamp", "Clamp particle simulation delta time", 0.033f, 0.001f, 0.2f);
 	HVar r_particleDebugStats("r_particleDebugStats", "Log periodic GPU particle stats", false, false, true);
 	HVar r_particleDepthJitterBias("r_particleDepthJitterBias", "View-depth jitter bias for particle self-overlap reduction", 0.01f, 0.0f, 0.05f);
@@ -99,10 +114,13 @@ namespace HexEngine
 		}
 		_defaultSpriteMaterial = Material::Create("EngineData.Materials/Billboard.hmat");
 		_activeSpriteMaterial = _defaultSpriteMaterial;
-		_activeSpriteTexture.reset();
 		_activeBlendState = BlendState::Transparency;
 		_activeSpriteMaterialPath.clear();
-		_activeSpriteTexturePath.clear();
+		for (uint32_t t = 0u; t < kMaxParticleTextures; ++t)
+		{
+			_activeSpriteTextures[t].reset();
+			_activeSpriteTexturePaths[t].clear();
+		}
 	}
 
 	void ParticleWorldSystem::Destroy()
@@ -133,10 +151,13 @@ namespace HexEngine
 		SAFE_DELETE(_lightConstants);
 		_litSpriteShader.reset();
 		_activeSpriteMaterial.reset();
-		_activeSpriteTexture.reset();
 		_activeBlendState = BlendState::Transparency;
 		_activeSpriteMaterialPath.clear();
-		_activeSpriteTexturePath.clear();
+		for (uint32_t t = 0u; t < kMaxParticleTextures; ++t)
+		{
+			_activeSpriteTextures[t].reset();
+			_activeSpriteTexturePaths[t].clear();
+		}
 		_maxParticles = 0;
 		_maxEmitters = 0;
 		_activeParticleCapacity = 0;
@@ -230,7 +251,11 @@ namespace HexEngine
 		_frameEmitters.clear();
 		_frameEmitterGpu.clear();
 		fs::path requestedMaterialPath;
-		fs::path requestedTexturePath;
+		// Unique particle textures requested by this frame's emitters, capped
+		// at kMaxParticleTextures. Each emitter gets an index into this list
+		// (packed into its GPU flags); emitters beyond the cap fall back to
+		// slot 0 rather than dropping.
+		std::vector<fs::path> frameTexturePaths;
 		BlendState requestedBlendState = BlendState::Transparency;
 		bool hasRequestedRenderResource = false;
 
@@ -296,10 +321,32 @@ namespace HexEngine
 
 				if (!hasRequestedRenderResource)
 				{
+					// Material + blend still come from the first emitter (one
+					// shared render pass), but textures are per-emitter now.
 					requestedMaterialPath = emitter.materialPath;
-					requestedTexturePath = emitter.texturePath;
 					requestedBlendState = ToBlendState(emitter.blendMode);
 					hasRequestedRenderResource = true;
+				}
+
+				// Resolve this emitter's texture slot. Up to
+				// kMaxParticleTextures unique textures per frame; the index
+				// rides in flags bits 28..29 and the sim shader stamps it
+				// into each instance so the pixel shader can select the
+				// right map. Overflow (5th+ unique texture) falls back to
+				// slot 0 - same behaviour every emitter used to get.
+				uint32_t emitterTextureIndex = 0;
+				if (!emitter.texturePath.empty())
+				{
+					auto texIt = std::find(frameTexturePaths.begin(), frameTexturePaths.end(), emitter.texturePath);
+					if (texIt != frameTexturePaths.end())
+					{
+						emitterTextureIndex = (uint32_t)std::distance(frameTexturePaths.begin(), texIt);
+					}
+					else if (frameTexturePaths.size() < (size_t)kMaxParticleTextures)
+					{
+						emitterTextureIndex = (uint32_t)frameTexturePaths.size();
+						frameTexturePaths.push_back(emitter.texturePath);
+					}
 				}
 
 				const uint32_t remainingParticleBudget = (particleOffset < maxParticlesBudget) ? (maxParticlesBudget - particleOffset) : 0u;
@@ -348,6 +395,20 @@ namespace HexEngine
 				}
 
 				build.spawnThisFrame = std::min(spawnCount, emitterMaxParticles);
+
+				// Ground-truth allocation log (r_particleDebugLog). Throttled
+				// so it's readable; prints requested vs granted pool size and
+				// this frame's spawn count - the fastest way to tell apart
+				// "budget starved", "never spawned" and "spawned but invisible".
+				if (r_particleDebugLog._val.b && g_pEnv->_timeManager != nullptr &&
+					(g_pEnv->_timeManager->_frameCount % 60u) == 0u)
+				{
+					LOG_WARN("ParticleDbg '%s/%s': requested=%u granted=%u spawnNow=%u rate=%.0f reset=%d demand=%llu",
+						effect->name.c_str(), emitter.name.c_str(),
+						requestedEmitterParticles, emitterMaxParticles, build.spawnThisFrame,
+						emitter.emission.rate, runtimeState.needsReset ? 1 : 0,
+						(unsigned long long)candidateParticleDemand);
+				}
 
 				EmitterGpu gpu = {};
 				gpu.emitterPosition = math::Vector4(build.emitterPosition.x, build.emitterPosition.y, build.emitterPosition.z, 1.0f);
@@ -401,6 +462,10 @@ namespace HexEngine
 					gpu.flags |= ParticleFlags_ReceiveLighting;
 				if (emitter.useThreePointAlphaCurve)
 					gpu.flags |= ParticleFlags_AlphaCurve3;
+				// Texture slot index in bits 28..29 (kMaxParticleTextures=4).
+				// The sim shader stamps this into each rendered instance so
+				// the billboard pixel shader samples the right texture.
+				gpu.flags |= (emitterTextureIndex & 3u) << 28u;
 
 				_frameEmitters.push_back(build);
 				_frameEmitterGpu.push_back(gpu);
@@ -440,19 +505,21 @@ namespace HexEngine
 				}
 			}
 
-			if (requestedTexturePath != _activeSpriteTexturePath)
+			// Load/refresh the frame's particle texture set. Slots track the
+			// unique paths gathered during the emitter walk; unchanged slots
+			// keep their loaded texture (no per-frame reload churn).
+			for (uint32_t t = 0u; t < kMaxParticleTextures; ++t)
 			{
-				_activeSpriteTexturePath = requestedTexturePath;
-				if (_activeSpriteTexturePath.empty())
+				const fs::path want = (t < frameTexturePaths.size()) ? frameTexturePaths[t] : fs::path();
+				if (want != _activeSpriteTexturePaths[t])
 				{
-					_activeSpriteTexture.reset();
-				}
-				else
-				{
-					_activeSpriteTexture = ITexture2D::Create(_activeSpriteTexturePath);
+					_activeSpriteTexturePaths[t] = want;
+					if (want.empty())
+						_activeSpriteTextures[t].reset();
+					else
+						_activeSpriteTextures[t] = ITexture2D::Create(want);
 				}
 			}
-
 		}
 
 		_activeParticleCapacity = particleOffset;
@@ -703,10 +770,36 @@ namespace HexEngine
 		graphics->SetVertexShader(shader->GetShaderStage(ShaderStage::VertexShader));
 		graphics->SetInputLayout(shader->GetInputLayout());
 
+		// Froxel-fog self-attenuation (Phase D-4 for particles). Particles
+		// render AFTER the volumetric apply pass, so the fullscreen apply no
+		// longer touches them - instead the particle shader samples the
+		// integration volume at each particle's OWN depth and multiplies by
+		// that transmittance. When particles rendered before the apply, every
+		// particle inherited the fog transmittance of the OPAQUE surface
+		// behind it: a snowflake 5m from the camera in front of a building
+		// 60m away was attenuated by exp(-sigma*60m) - in blizzard-density
+		// fog that erased ~97% of the flakes on screen.
+		ITexture3D* fogVolume = (g_pEnv->_volumetricScattering != nullptr)
+			? g_pEnv->_volumetricScattering->GetIntegrationVolume()
+			: nullptr;
+
+		// The integration volume (bound for fog above) ALSO serves as the
+		// particle light probe: its accumulated inscatter / opacity is the
+		// fog's mean radiance, which already folds in the shadow-tested sun,
+		// shadow-tested point/spot lights, emissive glow and ambient. One
+		// tap, derived in the shader - no separate scatter-volume binding.
+		// (Probing the raw scatter volume directly made static particles
+		// PULSE because that volume is re-jittered every frame.)
 		if (_lightConstants != nullptr && scene != nullptr)
 		{
 			ParticleLightConstants lightData = {};
 			BuildLightConstants(scene, lightData);
+			lightData.countsAndParams.w = (fogVolume != nullptr) ? 1.0f : 0.0f;
+			// transparencyAssist.w = froxel light-probe scale (0 = probe
+			// unavailable, shader falls back to the manual light loops).
+			lightData.transparencyAssist.w = (fogVolume != nullptr)
+				? std::max(0.0f, r_particleFroxelLightScale._val.f32)
+				: 0.0f;
 			_lightConstants->Write(&lightData, sizeof(lightData));
 			graphics->SetConstantBufferPS(7, _lightConstants);
 		}
@@ -724,11 +817,25 @@ namespace HexEngine
 			material->GetTexture(MaterialTexture::Opacity).get(),
 			material->GetTexture(MaterialTexture::AmbientOcclusion).get(),
 		};
-		if (_activeSpriteTexture != nullptr)
+		// Per-emitter particle textures occupy slots 0..3 (repurposing the
+		// normal/roughness/metallic positions, which the particle billboard
+		// shader never samples). The pixel shader selects by the per-instance
+		// texture index the sim shader stamped from emitter flags.
+		for (uint32_t t = 0u; t < kMaxParticleTextures; ++t)
 		{
-			textures[0] = _activeSpriteTexture.get();
+			if (_activeSpriteTextures[t] != nullptr)
+				textures[t] = _activeSpriteTextures[t].get();
 		}
 		graphics->SetTexture2DArray(slotIdx, textures);
+
+		// Integration volume at t8 - serves BOTH per-particle fog
+		// transmittance (.a) and the light probe (.rgb/(1-.a)); the shader
+		// derives both from one sample. No scatter-volume binding needed.
+		if (fogVolume != nullptr)
+		{
+			graphics->SetBoundResourceIndex(8);
+			graphics->SetTexture3D(fogVolume);
+		}
 
 		_spriteMesh->SetBuffers(false);
 

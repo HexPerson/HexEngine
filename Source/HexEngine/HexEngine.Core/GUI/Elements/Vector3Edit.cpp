@@ -18,7 +18,7 @@ namespace HexEngine
 		{
 			_lineEdits[i] = new InputFloat(this, Point(xpos, 0), Point(Vector3EditBoxWidth, size.y), L"", &((float*)&vector->x)[i], -9999.0f, 9999.0f, 0.1f);
 
-			_lineEdits[i]->SetValue(std::format(L"{:.2f}", ((float*)&vector->x)[i]));	
+			_lineEdits[i]->SetValue(std::format(L"{:.3f}", ((float*)&vector->x)[i]));	
 			_lineEdits[i]->SetOnDrag(std::bind(&Vector3Edit::OnSetAxisValueFloat, this, i, std::placeholders::_1));
 			_lineEdits[i]->SetOnInputFn(std::bind(&Vector3Edit::OnSetAxisValue, this, i, std::placeholders::_1, std::placeholders::_2));
 
@@ -86,7 +86,7 @@ namespace HexEngine
 			// Update the line edits if the vector changed
 			if (((float*)&_vector->x)[i] != ((float*)&_lastVectorVal.x)[i])
 			{
-				_lineEdits[i]->SetValue(std::format(L"{:.2f}", ((float*)&_vector->x)[i]));
+				_lineEdits[i]->SetValue(std::format(L"{:.3f}", ((float*)&_vector->x)[i]));
 			}
 
 			auto editPos = _lineEdits[i]->GetAbsolutePosition();

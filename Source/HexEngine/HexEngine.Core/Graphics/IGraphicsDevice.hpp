@@ -146,6 +146,18 @@ namespace HexEngine
 			if (srv == D3D11_SRV_DIMENSION_TEXTURE3D)      return ResourceDimension::Texture3D;
 			if (srv == D3D11_SRV_DIMENSION_TEXTURE2DARRAY) return ResourceDimension::Texture2DArray;
 			if (srv == D3D11_SRV_DIMENSION_TEXTURECUBE)    return ResourceDimension::TextureCube;
+			// Cube ARRAY was missing from this chain, so any caller asking for a
+			// TextureCubeArray SRV (e.g. VolumetricScattering's point-shadow cube
+			// array) silently fell through to the Texture2D default below. The
+			// texture itself got created with all its slices (CPU copies into it
+			// worked, CPU readbacks of it looked perfect), but the SRV came out
+			// as a plain Texture2D view - and D3D11 returns 0 for every sample
+			// when a Texture2D SRV is bound where the shader declares
+			// TextureCubeArray. Symptom: point-light volumetric shadows read
+			// depth 0 (= occluder at the near plane) in every direction,
+			// collapsing the lit fog volume to a small CUBE around the light
+			// (cube because the comparison metric is max(|x|,|y|,|z|)).
+			if (srv == D3D11_SRV_DIMENSION_TEXTURECUBEARRAY) return ResourceDimension::TextureCubeArray;
 			if (srv == D3D11_SRV_DIMENSION_BUFFER)         return ResourceDimension::Buffer;
 			if (rtv == D3D11_RTV_DIMENSION_TEXTURE2D)      return ResourceDimension::Texture2D;
 			if (rtv == D3D11_RTV_DIMENSION_TEXTURE2DMS)    return ResourceDimension::Texture2DMS;

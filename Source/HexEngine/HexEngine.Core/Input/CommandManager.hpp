@@ -33,6 +33,7 @@ namespace HexEngine
 		static void UnlockCommands();
 
 		void CreateBind(int32_t key, const std::string& command, void* param=nullptr);
+		void RemoveBind(int32_t key);
 		void ProcessKeyInput(int32_t key, bool pressed);
 
 		Console* GetConsole();

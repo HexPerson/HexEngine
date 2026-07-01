@@ -18,6 +18,14 @@ public:
 
 	virtual bool IsOnGround() const override;
 
+	// Teleport the capsule when the transform is repositioned (editor drag,
+	// PlayerStart spawn). The base class moves the underlying actor, which leaves
+	// the PxController capsule behind.
+	virtual void UpdatePosePosition(const math::Vector3& position) override;
+	virtual void UpdatePoseRotation(const math::Quaternion& rotation) override;
+
+	virtual bool IsCharacterController() const override { return true; }
+
 private:
 	physx::PxController* _controller;
 };

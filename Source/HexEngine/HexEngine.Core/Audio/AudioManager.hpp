@@ -34,6 +34,14 @@ namespace HexEngine
 
 		void Stop(const std::shared_ptr<SoundEffect>& effect);
 
+		// Register a SoundEffect for per-frame 3D updates. Resource-loaded
+		// SoundEffects are auto-registered when first loaded from disk,
+		// but clones created via SoundEffect::CreatePlaybackClone() need
+		// to opt in here - otherwise the per-frame Apply3D() loop skips
+		// them and any moving emitter stays stuck at its initial Loop()
+		// or Play() position.
+		void RegisterPlaybackInstance(const std::shared_ptr<SoundEffect>& effect);
+
 		void SetReverb(dx::AUDIO_ENGINE_REVERB reverb);
 
 	private:

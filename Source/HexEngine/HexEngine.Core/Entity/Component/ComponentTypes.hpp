@@ -25,6 +25,10 @@ virtual const char* GetComponentName() override {\
 }
 
 	using ComponentId = uint32_t;
-	const ComponentId MAX_COMPONENTS = 32;
-	using ComponentSignature = uint32_t;
+	// 64 component types (up from 32). Game/plugin DLLs share this global registry
+	// and we keep adding components, so the signature is a 64-bit mask. IMPORTANT:
+	// every `signature bit` must be built as ((ComponentSignature)1 << compId) -
+	// a bare `1 << compId` is a signed int and sign-extends past bit 31.
+	const ComponentId MAX_COMPONENTS = 64;
+	using ComponentSignature = uint64_t;
 }

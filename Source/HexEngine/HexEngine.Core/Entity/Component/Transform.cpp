@@ -196,6 +196,16 @@ namespace HexEngine
 		_enableInterpolation = enable;
 	}
 
+	void Transform::SnapInterpolation()
+	{
+		// previous == current means UpdateInterpolatedPosition's Lerp(prev, current, t)
+		// yields current for any t, so the snap survives subsequent interpolation ticks.
+		_previous = _current;
+		_interpolated = _current;
+		_cached = _current;
+		GetEntity()->ClearTransformCache();
+	}
+
 	const math::Vector3& Transform::GetPosition(TransformState state)  const
 	{
 		switch (state)
@@ -688,7 +698,7 @@ namespace HexEngine
 		const math::Vector3 origin = GetEntity()->GetWorldTM().Translation();
 		const math::Vector3 cameraPosition = camera->GetEntity()->GetPosition();
 		const float distanceToCamera = std::max((origin - cameraPosition).Length(), 1.0f);
-		const float axisLength = std::clamp(distanceToCamera * 0.12f, 10.0f, 150.0f);
+		const float axisLength = std::clamp(distanceToCamera * 0.12f, 2.0f, 150.0f);
 
 		const std::array<math::Vector3, 3> axisDirections = {
 			math::Vector3::Right,

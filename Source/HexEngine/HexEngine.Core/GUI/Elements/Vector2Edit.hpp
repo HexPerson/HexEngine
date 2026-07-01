@@ -27,7 +27,7 @@ namespace HexEngine
 		math::Vector2* _vector;
 		math::Vector2 _lastVectorVal;
 		std::wstring _axisLabels[2];
-		InputFloat* _lineEdits[3] = { nullptr };
+		InputFloat* _lineEdits[2] = { nullptr };
 		std::function<void(const math::Vector2&)> _callback;
 	};
 }

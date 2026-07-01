@@ -48,6 +48,7 @@ public:
 
 		void ShowSettingsDialog();
 		void ShowNavMeshDialog();
+		void ShowMultiplayerDialog();
 
 		EntityList* GetEntityTreeList() const { return _entityList; }
 		Inspector* GetInspector() const { return _rightDock; }
@@ -118,6 +119,7 @@ public:
 		void OnExportAction();
 		void OnAddBillboard();
 		void OnAddDecal();
+		void OnAddPlayerStart();
 		void OnGenerateHLOD();
 		void OnProjectManagerCompleted(const fs::path& projectFolder, const std::string& projectName, bool didLoadExisting, const std::wstring& namespaceName, HexEngine::LoadingDialog* loadingDlg);
 		void OnAddPrimitive(PrimitiveType type);

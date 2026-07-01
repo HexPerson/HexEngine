@@ -28,6 +28,13 @@ namespace HexEngine
 		void SetPitch(float pitch);
 		void SetRadius(float radius);
 		float GetRadius() const;
+		// Update the 3D emitter position WITHOUT restarting playback.
+		// AudioManager::Update() re-applies the 3D parameters from the
+		// emitter each frame, so just writing the new position here is
+		// enough to move a playing/looping sound (e.g. attaching it to
+		// a moving traffic vehicle). Calling Play()/Loop() again to
+		// "move" a sound would restart it from the beginning.
+		void SetPosition(const math::Vector3& position);
 
 		float GetDuration();
 

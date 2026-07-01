@@ -20,6 +20,12 @@ public:
 
 	bool IsHourInAnyShift(float hour) const;
 
+	void SetRoleTagsCsv(const std::string& v) { _roleTagsCsv = v; RebuildRoleTags(); }
+	void SetShiftWindowsCsv(const std::string& v) { _shiftWindowsCsv = v; RebuildShiftsFromCsv(); }
+	void SetWorkerCapacity(int32_t v) { _workerCapacity = v; }
+	void SetEntryWaypointEntityName(const std::string& v) { _entryWaypointEntityName = v; }
+	void SetParkingWaypointEntityName(const std::string& v) { _parkingWaypointEntityName = v; }
+
 private:
 	void RebuildRoleTags();
 	void RebuildShiftsFromCsv();

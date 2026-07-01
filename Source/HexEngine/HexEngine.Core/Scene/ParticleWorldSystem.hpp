@@ -99,7 +99,7 @@ namespace HexEngine
 
 		struct ParticleLightConstants
 		{
-			math::Vector4 countsAndParams = math::Vector4::Zero; // x=pointCount y=spotCount z=softFadeScale
+			math::Vector4 countsAndParams = math::Vector4::Zero; // x=pointCount y=spotCount z=softFadeScale w=froxelFogEnabled
 			math::Vector4 transparencyAssist = math::Vector4::Zero; // x=enabled y=depthBias z=ditherStrength
 			math::Vector4 pointPosRadius[MaxParticlePointLights];
 			math::Vector4 pointColorStrength[MaxParticlePointLights];
@@ -158,10 +158,21 @@ namespace HexEngine
 		std::shared_ptr<Mesh> _spriteMesh;
 		std::shared_ptr<Material> _defaultSpriteMaterial;
 		std::shared_ptr<Material> _activeSpriteMaterial;
-		std::shared_ptr<ITexture2D> _activeSpriteTexture;
 		BlendState _activeBlendState = BlendState::Transparency;
 		fs::path _activeSpriteMaterialPath;
-		fs::path _activeSpriteTexturePath;
+
+		// Per-frame particle texture set. All GPU particles render in one
+		// pass, but each emitter can use one of up to kMaxParticleTextures
+		// distinct textures: the frame build collects unique texturePaths,
+		// assigns each emitter an index (packed into emitter flags bits
+		// 28..29, written per-instance by the sim shader, selected in
+		// ParticleBillboardLit's pixel shader). Before this, the FIRST
+		// emitter's texture was silently used for every particle in the
+		// scene - weather mist asked for a smoke puff and rendered as a
+		// giant raindrop.
+		static constexpr uint32_t kMaxParticleTextures = 4;
+		std::shared_ptr<ITexture2D> _activeSpriteTextures[kMaxParticleTextures];
+		fs::path _activeSpriteTexturePaths[kMaxParticleTextures];
 
 		float _frameTime = 0.0f;
 		uint64_t _frameIndex = 0;

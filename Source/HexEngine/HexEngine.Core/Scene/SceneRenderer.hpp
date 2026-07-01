@@ -71,6 +71,10 @@ namespace HexEngine
 		void RenderVolumetricLighting();
 		void RenderVolumetricClouds();
 		void RenderSSR();
+		// Interaction look-at outline: jump-flood SDF glow around the focused
+		// interactable's static mesh, composited additively into beauty. No-op
+		// when nothing is focused (in-game look-at only).
+		void RenderOutlineGlow();
 
 		void CreateShaders();
 		void CreateRenderTargets(int32_t width, int32_t height);
@@ -86,6 +90,19 @@ namespace HexEngine
 		// fog/clouds) so the SSS scatter happens in linear HDR space and fog/cloud
 		// volumetrics aren't blurred through skin.
 		void RenderSubsurfaceScattering();
+		// Aerial perspective apply. Reads AtmosphereLUTs' 32^3 froxel volume,
+		// hazes distant geometry's beauty toward atmospheric scattering colour
+		// so the silhouette of distant terrain/buildings smoothly fades into
+		// the LUT sky behind it instead of contrasting sharply. Runs after
+		// SSS and before transparency / fog so transparents still get clean
+		// per-pixel colour and the existing artistic fog stack composes on top.
+		void RenderAerialPerspective();
+		// Phase D apply. Samples the volumetric integration volume at
+		// (uv, depth), composites beauty * transmittance + inscatter.
+		// Replaces the legacy per-pixel RenderVolumetricLighting when
+		// VolumetricScattering is available; otherwise the old march
+		// runs as before for backward compatibility.
+		void RenderVolumetricScattering();
 		// Bokeh depth-of-field. Single-pass 32-tap Vogel disk gather sized by
 		// per-pixel circle-of-confusion. Runs after tonemap so the bokeh discs
 		// reflect post-tonemap colour - matters because pre-tonemap HDR
@@ -140,6 +157,15 @@ namespace HexEngine
 		Light* _currentShadowCasterForComposition = nullptr;
 		ShadowMap* _currentShadowMapForComposition = nullptr;
 
+		// Cached by SetupPerFrameBuffer's sunset/night modulation block each
+		// frame, consumed by the froxel volumetric update (which runs later,
+		// post-gbuffer). Keeps the froxel medium's extinction + ambient
+		// inscatter EXACTLY in sync with the night-dimmed cbuffer values the
+		// apply shader's beyond-range fog continuation reads - a mismatch
+		// draws a density/colour ring at the volume's 128m far plane.
+		float _volumetricFogNightDim = 1.0f;
+		math::Vector3 _volumetricAmbientNight = math::Vector3(0.1f, 0.1f, 0.1f);
+
 		GBuffer _gbuffer;
 		GBuffer _gbufferTransparency;
 
@@ -181,6 +207,17 @@ namespace HexEngine
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _waterBlitEffect;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
+
+		// Interaction outline glow (jump-flood SDF). _outlineJfaA/B ping-pong the
+		// nearest-seed coordinate field (RG32F, pixel coords); _outlineGlowRT
+		// holds the composited glow ring that's additively blended into beauty.
+		ITexture2D* _outlineJfaA = nullptr;
+		ITexture2D* _outlineJfaB = nullptr;
+		ITexture2D* _outlineGlowRT = nullptr;
+		IConstantBuffer* _outlineParamsBuffer = nullptr;
+		std::shared_ptr<IShader> _outlineSeedShader;
+		std::shared_ptr<IShader> _outlineJfaShader;
+		std::shared_ptr<IShader> _outlineCompositeShader;
 		// Screen-space subsurface scattering (Jorge Jimenez separable). Run twice
 		// per frame as a two-pass post (horizontal then vertical), gated by the
 		// features gbuffer's material-model channel.
@@ -193,6 +230,17 @@ namespace HexEngine
 		// format and never overlap in the post chain).
 		std::shared_ptr<IShader> _bokehDoFShader;
 		IConstantBuffer* _bokehDoFParamsBuffer = nullptr;
+		// Aerial perspective apply. Reads beauty + gbuffer normal/diff, samples
+		// AtmosphereLUTs' 32^3 froxel volume, composites distance haze into
+		// the beauty RT via a scratch RT swap (reuses _subsurfaceIntermediateRT
+		// like Bokeh DoF does, since AP runs after SSS in the post chain).
+		std::shared_ptr<IShader> _aerialPerspectiveApplyShader;
+		// Phase D volumetric scattering apply. Samples the integration
+		// volume produced by VolumetricScattering at (uv, depth) and
+		// composites the scatter+transmittance into beauty. Replaces the
+		// legacy per-pixel RenderVolumetricLighting when the new system
+		// is available; otherwise the old path still runs.
+		std::shared_ptr<IShader> _volumetricScatterApplyShader;
 
 		// Decal pass. The position RT is bound for write during GBuffer fill, so we
 		// snapshot it into _decalPositionCopy each frame before the decal pass and

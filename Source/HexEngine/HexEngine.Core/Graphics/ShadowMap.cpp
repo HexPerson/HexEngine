@@ -65,7 +65,18 @@ namespace HexEngine
     {
         g_pEnv->_graphicsDevice->SetViewports({ _viewport });
 
-        _depthMapRT->ClearRenderTargetView(math::Color(0, 0, 0, 1));
+        // Clear the depth-mirror colour RT to 1.0 (= far plane) so pixels not
+        // touched by any geometry read back as "no occluder" rather than
+        // "occluder at the near plane". ShadowMapGeometry's PS writes the
+        // rasterized NDC.z into this RT (so the volumetric's point-shadow
+        // cubemap-array path has a plain R32_FLOAT source to copy from), and
+        // the linear-depth inversion in SamplePointShadow treats 0 as "occluder
+        // 1 metre from the light" - exactly wrong for the empty-sky directions
+        // a typical point light sees. Clearing to 1.0 (in R; the others don't
+        // matter, the RT is R32_FLOAT) matches the DSV depth-clear convention
+        // and gives the cubemap a clean "far plane" baseline everywhere the
+        // geometry pass didn't write.
+        _depthMapRT->ClearRenderTargetView(math::Color(1, 1, 1, 1));
         g_pEnv->_graphicsDevice->SetRenderTargets(1, { _depthMapRT }, _depthMap);
 
         _depthMap->ClearDepth(D3D11_CLEAR_DEPTH);

@@ -247,7 +247,17 @@ namespace HexEngine::Weather
 		{
 			// Do not key runtime precipitation off continuously lerped values, otherwise
 			// transitions rebuild and reset the particle effect almost every frame.
-			return std::to_string(static_cast<int32_t>(state.precipitationType));
+			// Intensity and area are QUANTISED into coarse buckets instead of excluded:
+			// the emission rate is baked into the effect at build time (the old design
+			// kept rate fixed and topped it up with per-frame Trigger() calls, which
+			// was frame-rate coupled and caused the spawn burst on preset changes), so
+			// the effect must rebuild as intensity ramps - but only a handful of times
+			// per transition, and every rebuild prewarms so there's no visible reset.
+			const int32_t intensityBucket = static_cast<int32_t>(state.precipitationIntensity * 4.0f + 0.5f);
+			const int32_t radiusBucket = static_cast<int32_t>(state.precipitationAreaRadius / 8.0f + 0.5f);
+			return std::to_string(static_cast<int32_t>(state.precipitationType)) + ":" +
+			       std::to_string(intensityBucket) + ":" +
+			       std::to_string(radiusBucket);
 		}
 	}
 
@@ -856,17 +866,17 @@ namespace HexEngine::Weather
 		}
 
 		const WeatherState& effectState = targetActive ? targetState : currentState;
-		const WeatherState& visibleState = currentActive ? currentState : targetState;
 
 		const math::Vector3 anchorPosition =
 			(camera != nullptr && camera->GetEntity() != nullptr) ? camera->GetEntity()->GetPosition() : GetEntity()->GetPosition();
-		size_t helperCount = 1;
-		if (effectState.precipitationIntensity >= 0.95f)
-			helperCount = 7;
-		else if (effectState.precipitationIntensity >= 0.8f)
-			helperCount = 5;
 
-		const std::string signature = BuildPrecipitationSignature(effectState) + ":" + std::to_string(helperCount);
+		// Single emitter entity, box centred around the camera. The previous
+		// design spawned up to SEVEN overlapping full-size emitters once
+		// intensity crossed 0.8/0.95 - which rebuilt + reset the whole effect
+		// mid-transition (one cause of the "initial flurry") and made density
+		// lumpy where the boxes overlapped. One emitter with the rate baked
+		// for the bucketed intensity covers the same volume predictably.
+		const std::string signature = BuildPrecipitationSignature(effectState);
 		const bool effectChanged = (_precipitationEffect == nullptr || _precipitationEffectSignature != signature);
 		if (effectChanged)
 		{
@@ -874,65 +884,40 @@ namespace HexEngine::Weather
 			_precipitationEffectSignature = signature;
 		}
 
-		const float offsetRadius = std::max(6.0f, effectState.precipitationAreaRadius * 0.35f);
-		for (size_t i = 0; i < helperCount; ++i)
+		Entity* helper = EnsurePrecipitationEntity(scene, 0);
+		if (helper != nullptr)
 		{
-			Entity* helper = EnsurePrecipitationEntity(scene, i);
-			if (helper == nullptr)
-				continue;
-
-			math::Vector3 offset = math::Vector3::Zero;
-			if (i == 1) offset = math::Vector3(offsetRadius, 0.0f, 0.0f);
-			else if (i == 2) offset = math::Vector3(-offsetRadius, 0.0f, 0.0f);
-			else if (i == 3) offset = math::Vector3(0.0f, 0.0f, offsetRadius);
-			else if (i == 4) offset = math::Vector3(0.0f, 0.0f, -offsetRadius);
-			else if (i == 5) offset = math::Vector3(offsetRadius * 0.72f, 0.0f, offsetRadius * 0.72f);
-			else if (i == 6) offset = math::Vector3(-offsetRadius * 0.72f, 0.0f, -offsetRadius * 0.72f);
-
-			helper->ForcePosition(anchorPosition + offset + math::Vector3(0.0f, effectState.precipitationHeight, 0.0f));
+			// Anchor the spawn volume so it surrounds the camera vertically
+			// rather than hovering overhead: the helper sits at 35% of the
+			// precipitation height above the eye and the emitter boxes use
+			// ~65% of the height as their Y half-extent, so the volume spans
+			// from BELOW eye level up to the authored ceiling. The previous
+			// code parked the helper a full precipitationHeight (~20m) up,
+			// which (combined with the small-Y secondary emitters) is what
+			// produced the visible dense particle band floating above the
+			// camera with a sparse zone at eye level.
+			helper->ForcePosition(anchorPosition + math::Vector3(0.0f, effectState.precipitationHeight * 0.35f, 0.0f));
 			auto* particleComponent = helper->GetComponent<ParticleSystemComponent>();
-			if (particleComponent == nullptr)
-				continue;
-
-			if (effectChanged)
+			if (particleComponent != nullptr)
 			{
-				particleComponent->SetEffect(_precipitationEffect);
-				particleComponent->Reset();
-			}
-
-			if (frameTime > 0.0f)
-			{
-				float sustainedSpawnRate = 0.0f;
-				switch (effectState.precipitationType)
+				if (effectChanged)
 				{
-				case WeatherPrecipitationType::Rain:
-					sustainedSpawnRate = 26000.0f;
-					break;
-				case WeatherPrecipitationType::Snow:
-					sustainedSpawnRate = 18000.0f;
-					break;
-				case WeatherPrecipitationType::Sand:
-					sustainedSpawnRate = 7000.0f;
-					break;
-				case WeatherPrecipitationType::None:
-				default:
-					break;
+					// Prewarm (baked into the emitter descs) refills the
+					// whole fall column during SetEffect, so rebuilds on
+					// intensity-bucket changes don't visibly reset. No
+					// external Trigger() top-up either - the old per-frame
+					// Trigger spam was frame-rate coupled and burst-spawned
+					// on preset switches ("flurry that settles after a few
+					// seconds"); emission.rate now carries the full load.
+					particleComponent->SetEffect(_precipitationEffect);
+					particleComponent->Reset();
 				}
-
-				if (sustainedSpawnRate > 0.0f)
-				{
-					const float sustainedIntensity = std::max(visibleState.precipitationIntensity, effectState.precipitationIntensity * 0.35f);
-					const uint32_t extraTriggerCount = static_cast<uint32_t>(std::max(0.0f, (sustainedSpawnRate * sustainedIntensity * frameTime) / (float)helperCount));
-					if (extraTriggerCount > 0)
-						particleComponent->Trigger(extraTriggerCount);
-				}
+				particleComponent->Play();
 			}
-			particleComponent->Play();
 		}
 
-		for (size_t i = helperCount; i < _precipitationEntities.size(); ++i)
+		for (size_t i = 1; i < _precipitationEntities.size(); ++i)
 			CleanupHelperEntity(_precipitationEntities[i]);
-
 	}
 
 	void WeatherControllerComponent::UpdateLightning(Scene* scene, Camera* camera, const WeatherState& currentState, const WeatherState& targetState, float frameTime)
@@ -1335,8 +1320,20 @@ namespace HexEngine::Weather
 		effect->name = "RuntimeWeatherEffect";
 		effect->emitters.clear();
 
+		// Intensity is bucketed by BuildPrecipitationSignature, so the rates
+		// baked here stay valid until the next bucket boundary.
 		const float intensity = std::max(0.05f, state.precipitationIntensity);
 		const math::Vector3 planarWind = math::Vector3(-state.windDirection.x, 0.0f, -state.windDirection.z) * state.windSpeed;
+
+		// Spawn volume: a box CENTRED on the camera (the controller parks the
+		// helper at eye + height*0.35 and the Y half-extent is height*0.65,
+		// so the volume runs from below eye level to the authored ceiling).
+		// XZ is intentionally smaller than the authored area radius: a 1-2cm
+		// particle is sub-pixel beyond ~25m anyway, so spending budget there
+		// thins the close-range look for zero visual return. Distant weather
+		// reads through the fog medium, not through particles.
+		const float xzRadius = std::min(state.precipitationAreaRadius * 0.6f, 26.0f);
+		const float yHalf = std::max(10.0f, state.precipitationHeight * 0.65f);
 
 		auto pushEmitter = [&effect](ParticleEmitterDesc emitter)
 		{
@@ -1346,30 +1343,38 @@ namespace HexEngine::Weather
 		ParticleEmitterDesc primary;
 		primary.name = "WeatherPrimary";
 		primary.simulateInLocalSpace = false;
+		// Receive lighting: with the froxel scatter volume bound, lit
+		// particles sample it as a 3D light probe (shadow-tested sun +
+		// shadow-tested local lights + emissive glow + ambient in a single
+		// tap - see ParticleBillboardLit.shader). Weather was previously
+		// UNLIT, which made every flake/drop render at its authored colour
+		// regardless of the light environment: full-brightness white snow
+		// at midnight, invisible streetlamp interaction.
 		primary.overrideReceiveLightingEnabled = true;
-		primary.overrideReceiveLighting = false;
+		primary.overrideReceiveLighting = true;
 		primary.blendMode = ParticleBlendMode::AlphaBlended;
 		primary.renderMode = ParticleRenderMode::Billboard;
-		primary.facingMode = ParticleFacingMode::VelocityAligned;
-		primary.maxParticles = std::max(2400u, static_cast<uint32_t>(50000.0f * intensity));
-		primary.emission.rate = std::max(120.0f, intensity * 35000.0f);
+		primary.facingMode = ParticleFacingMode::CameraFacing;
 		primary.shape.type = ParticleShapeType::Box;
-		primary.shape.boxExtents = math::Vector3(
-			state.precipitationAreaRadius,
-			std::max(12.0f, state.precipitationHeight * 0.85f),
-			state.precipitationAreaRadius);
-		primary.gravity = math::Vector3::Zero;
-		primary.constantForce = planarWind * 0.45f;
-		primary.noiseAmplitude = 0.15f * intensity;
-		primary.noiseFrequency = 0.8f;
+		primary.shape.boxExtents = math::Vector3(xzRadius, yHalf, xzRadius);
 		primary.softParticles = true;
-		primary.prewarm = false;
-		primary.emission.prewarmTime = 0.08f;
-		primary.lifetimeRange = math::Vector2(0.8f, 1.4f);
-		primary.alphaOverLifetime = math::Vector2(1.0f, 0.25f);
+		// Prewarm fills the entire fall column at effect (re)build. Without
+		// it every preset change spawned one synchronised generation that
+		// fell, died together (visible gap), then slowly decohered - the
+		// "initial flurry that settles" artefact.
+		primary.prewarm = true;
+		primary.sizeOverLifetime = math::Vector2(1.0f, 1.0f);
+		// Fade IN then OUT over life via the three-point alpha curve (0 -> 1 ->
+		// 0) so particles don't POP into existence at spawn or vanish at death
+		// - worst on the big soft mist puffs, which the user singled out. Each
+		// emitter below keeps a CONSTANT colour alpha (start.w == end.w = its
+		// peak) and lets this curve own the entire fade shape. The midpoint is
+		// where the peak sits in normalised life: 0.25 = quick fade-in, long
+		// fade-out (natural for falling precip that's already moving when it
+		// enters view). Inherited by every weather emitter via the copies.
 		primary.useThreePointAlphaCurve = true;
-		primary.alphaOverLifetimeCurve = math::Vector3(0.1f, 1.0f, 0.1f);
-		primary.sizeOverLifetime = math::Vector2(1.0f, 0.85f);
+		primary.alphaOverLifetimeCurve = math::Vector3(0.0f, 1.0f, 0.0f);
+		primary.alphaOverLifetimeCurveMidpoint = 0.25f;
 		primary.materialPath = "EngineData.Materials/Billboard.hmat";
 		primary.texturePath = "EngineData.Textures/white.png";
 
@@ -1377,98 +1382,203 @@ namespace HexEngine::Weather
 		{
 		case WeatherPrecipitationType::Rain:
 		{
-			primary.facingMode = ParticleFacingMode::CameraFacing;
-			primary.maxParticles = std::max(12000u, static_cast<uint32_t>(52000.0f * intensity));
-			primary.emission.rate = std::max(900.0f, intensity * 28000.0f);
-			primary.speedRange = math::Vector2(0.0f, 0.45f);
-			primary.sizeRange = math::Vector2(0.040f, 0.065f);
-			primary.startColor = math::Vector4(0.78f, 0.86f, 0.96f, 0.72f);
-			primary.endColor = math::Vector4(0.78f, 0.86f, 0.96f, 0.0f);
-			primary.gravity = math::Vector3(0.0f, -150.0f, 0.0f);
-			primary.constantForce = math::Vector3(planarWind.x * 1.35f, 0.0f, planarWind.z * 1.35f);
-			primary.lifetimeRange = math::Vector2(1.8f, 2.7f);
-			primary.alphaOverLifetime = math::Vector2(1.0f, 0.45f);
-			primary.sizeOverLifetime = math::Vector2(1.0f, 0.75f);
+			// Rain falls at TERMINAL VELOCITY (~11 m/s), not under runaway
+			// gravity. The old gravity of -150 accelerated drops past
+			// 150 m/s, which made density proportional to 1/speed: fresh
+			// slow drops bunched up in the spawn box ("dense layer above")
+			// while the drops at eye level streaked past sparsely. With
+			// gravity balanced against linear drag (v_t = g/drag = 22/2.0 =
+			// 11 m/s, reached in ~0.5s), the fall column has uniform density
+			// top to bottom. Rendered as velocity-stretched streaks ~2cm
+			// wide instead of 4-6cm camera-facing blobs.
+			primary.renderMode = ParticleRenderMode::StretchedBillboard;
+			primary.facingMode = ParticleFacingMode::VelocityAligned;
+			primary.gravity = math::Vector3(0.0f, -22.0f, 0.0f);
+			primary.drag = 2.0f;
+			primary.speedRange = math::Vector2(0.0f, 0.3f);
+			primary.sizeRange = math::Vector2(0.014f, 0.024f);
+			primary.lifetimeRange = math::Vector2(2.6f, 3.2f);
+			// Lateral wind at terminal slant = force/drag: 0.6x wind over
+			// drag 2.0 gives ~4-6 m/s sideways drift in storm winds.
+			primary.constantForce = math::Vector3(planarWind.x * 0.6f, 0.0f, planarWind.z * 0.6f);
+			primary.noiseAmplitude = 0.06f;
+			// Constant alpha across life; the inherited three-point curve does
+			// the fade in/out (see base primary).
+			primary.startColor = math::Vector4(0.78f, 0.86f, 0.96f, 0.55f);
+			primary.endColor = math::Vector4(0.78f, 0.86f, 0.96f, 0.55f);
+			primary.alphaOverLifetime = math::Vector2(1.0f, 0.85f);
+			// Steady-state count = rate * lifetime; cap with headroom.
+			primary.emission.rate = std::max(600.0f, intensity * 11000.0f);
+			primary.emission.prewarmTime = 3.2f;
+			primary.maxParticles = static_cast<uint32_t>(primary.emission.rate * 3.4f) + 1024u;
 			primary.texturePath = "EngineData.Textures/Particles/WeatherRainDrop.png";
 			pushEmitter(primary);
 
+			// Mist is drifting VAPOUR - it must read as CONTINUOUS churning
+			// haze, never as individual sprites. The previous tuning (0.6-1.3m
+			// puffs drifting on the wind vector) failed that test: the puffs
+			// were small enough to pick out individually and they all marched
+			// along the same near-linear wind direction, so the eye tracked a
+			// moving grid of dots sweeping across the scene - the "disco ball"
+			// read. Three things fix it together:
+			//   - BIG puffs (2-4.5m) so 3-4 always overlap at any screen point
+			//     and no single one is resolvable
+			//   - LOW per-puff alpha (0.035) so the overlap integrates into
+			//     smooth haze instead of stacking into hot blobs
+			//   - STRONG coherent-gust swirl + low net wind so they churn and
+			//     tumble in place rather than streaming in formation
 			ParticleEmitterDesc mist = primary;
 			mist.name = "RainMist";
+			mist.renderMode = ParticleRenderMode::Billboard;
 			mist.facingMode = ParticleFacingMode::CameraFacing;
-			mist.maxParticles = std::max(3600u, static_cast<uint32_t>(12000.0f * intensity));
-			mist.emission.rate = std::max(260.0f, intensity * 3600.0f);
-			mist.shape.boxExtents = math::Vector3(state.precipitationAreaRadius * 0.8f, 4.0f, state.precipitationAreaRadius * 0.8f);
-			mist.speedRange = math::Vector2(1.0f, 4.0f);
-			mist.sizeRange = math::Vector2(0.10f, 0.22f);
-			mist.lifetimeRange = math::Vector2(1.0f, 1.8f);
-			mist.startColor = math::Vector4(0.72f, 0.80f, 0.88f, 0.18f);
-			mist.endColor = math::Vector4(0.72f, 0.80f, 0.88f, 0.0f);
-			mist.gravity = math::Vector3(0.0f, -10.0f, 0.0f);
-			mist.constantForce = math::Vector3(planarWind.x * 0.9f, 0.0f, planarWind.z * 0.9f);
-			mist.noiseAmplitude = 0.25f;
-			mist.texturePath = "EngineData.Textures/Particles/WeatherRainDrop.png";
+			mist.emission.rate = std::max(90.0f, intensity * 650.0f);
+			mist.emission.prewarmTime = 5.5f;
+			mist.maxParticles = static_cast<uint32_t>(mist.emission.rate * 6.0f) + 256u;
+			mist.shape.boxExtents = math::Vector3(xzRadius * 0.85f, yHalf, xzRadius * 0.85f);
+			mist.speedRange = math::Vector2(0.1f, 0.5f);
+			mist.sizeRange = math::Vector2(2.0f, 4.5f);
+			mist.lifetimeRange = math::Vector2(4.5f, 6.0f);
+			// Constant alpha + a GENTLER, more symmetric fade than the falling
+			// layers: mist hangs and churns, so a slow breathe in AND out
+			// (midpoint 0.4) reads far better than a pop. This is the layer the
+			// user singled out as jarring.
+			mist.startColor = math::Vector4(0.72f, 0.80f, 0.88f, 0.035f);
+			mist.endColor = math::Vector4(0.72f, 0.80f, 0.88f, 0.035f);
+			mist.alphaOverLifetimeCurveMidpoint = 0.4f;
+			mist.gravity = math::Vector3(0.0f, -0.4f, 0.0f);
+			mist.drag = 4.0f;
+			// Net wind kept LOW (0.35x) so the haze hangs and churns rather
+			// than streaming past; the swirl comes from the coherent gust
+			// field instead. Amplitude 5.0 is an accel fighting drag 4.0 =
+			// ~1.25 m/s of shared eddy motion, with big lazy cells (freq
+			// 0.18 -> ~10-25m) so neighbouring puffs move together as a
+			// churning mass, not as independent flecks.
+			mist.constantForce = math::Vector3(planarWind.x * 0.35f, 0.0f, planarWind.z * 0.35f);
+			mist.noiseAmplitude = 5.0f;
+			mist.noiseFrequency = 0.18f;
+			mist.rotationSpeedRange = math::Vector2(0.0f, 0.0f);
+			mist.texturePath = "EngineData.Textures/Particles/WeatherSoftPuff.png";
 			pushEmitter(mist);
 			break;
 		}
 		case WeatherPrecipitationType::Snow:
 		{
-			primary.facingMode = ParticleFacingMode::CameraFacing;
-			primary.maxParticles = std::max(10000u, static_cast<uint32_t>(30000.0f * intensity));
-			primary.emission.rate = std::max(420.0f, intensity * 12500.0f);
+			// Snow drifts at ~1.6 m/s terminal (g/drag = 9.81/6.0); WIND does
+			// the blizzard work - at the blizzard preset's 24 m/s wind the
+			// lateral terminal speed is ~12 m/s, near-horizontal driving snow.
+			//
+			// Velocity-aligned + motion-stretched: at blizzard speeds each
+			// flake draws as a ~15cm streak (the universal visual shorthand
+			// for driving snow), while calm-snowfall speeds (~2 m/s total)
+			// stretch barely past the quad size and stay flake-like. One
+			// mode covers both ends of the preset range.
+			primary.renderMode = ParticleRenderMode::StretchedBillboard;
+			primary.facingMode = ParticleFacingMode::VelocityAligned;
+			primary.gravity = math::Vector3(0.0f, -9.81f, 0.0f);
+			primary.drag = 6.0f;
 			primary.speedRange = math::Vector2(0.0f, 0.25f);
-			primary.sizeRange = math::Vector2(0.052f, 0.092f);
-			primary.lifetimeRange = math::Vector2(5.8f, 8.8f);
-			primary.startColor = math::Vector4(0.96f, 0.98f, 1.0f, 0.94f);
-			primary.endColor = math::Vector4(0.96f, 0.98f, 1.0f, 0.0f);
-			primary.gravity = math::Vector3(0.0f, -7.0f, 0.0f);
-			primary.constantForce = math::Vector3(planarWind.x * 0.65f, 0.0f, planarWind.z * 0.65f);
-			primary.alphaOverLifetime = math::Vector2(1.0f, 0.55f);
-			primary.noiseAmplitude = 0.35f;
-			primary.texturePath = "EngineData.Textures/Particles/WeatherSnowflake.png";
+			// Soft white SPECKS, not snowflake glyphs: the dendrite sprite
+			// reads as cartoon clip-art whenever a flake passes near the
+			// camera (giant ❄ icons filling the screen). Real snow beyond
+			// arm's length is a soft dot - the smoke puff at small sizes
+			// gives exactly that, and the velocity stretch turns it into a
+			// clean streak under blizzard wind.
+			primary.sizeRange = math::Vector2(0.025f, 0.045f);
+			primary.lifetimeRange = math::Vector2(8.0f, 11.0f);
+			primary.constantForce = math::Vector3(planarWind.x * 3.0f, 0.0f, planarWind.z * 3.0f);
+			// Coherent gust field (see ParticleSimulate.shader): amplitude
+			// is an acceleration fighting drag 6, so 7.0 gives ~1.2 m/s of
+			// SHARED swirl on top of the mean wind - flakes veer and eddy
+			// together in travelling gust cells instead of streaming in
+			// dead-straight lines. Frequency 0.35 = cells roughly 5-15m.
+			primary.noiseAmplitude = 7.0f;
+			primary.noiseFrequency = 0.35f;
+			// Smoke sprite carries its own alpha falloff, so drive start
+			// alpha to full - the texture does the softening.
+			// Constant alpha; inherited three-point curve fades in/out.
+			primary.startColor = math::Vector4(0.96f, 0.98f, 1.0f, 0.9f);
+			primary.endColor = math::Vector4(0.96f, 0.98f, 1.0f, 0.9f);
+			primary.alphaOverLifetime = math::Vector2(1.0f, 0.6f);
+			// Concentrate the spawn volume: flakes past ~18m are 1-3px and
+			// effectively invisible, so budget spent there only THINS the
+			// close-range look. A tighter box at double the rate is what
+			// makes a blizzard read as a wall of snow (~3 flakes/m3) rather
+			// than scattered dots (~0.5/m3 over the full radius).
+			const float snowXz = std::min(xzRadius, 18.0f);
+			primary.shape.boxExtents = math::Vector3(snowXz, yHalf, snowXz);
+			primary.emission.rate = std::max(400.0f, intensity * 7200.0f);
+			primary.emission.prewarmTime = 9.0f;
+			primary.maxParticles = static_cast<uint32_t>(primary.emission.rate * 11.5f) + 1024u;
+			primary.texturePath = "EngineData.Textures/Particles/WeatherSoftPuff.png";
 			pushEmitter(primary);
 
+			// Soft out-of-focus foreground flakes - bigger, dimmer, camera-
+			// facing (these sell the "snow right in your face" layer).
 			ParticleEmitterDesc drift = primary;
 			drift.name = "SnowDrift";
-			drift.maxParticles = std::max(5200u, static_cast<uint32_t>(16000.0f * intensity));
-			drift.emission.rate = std::max(180.0f, intensity * 4600.0f);
-			drift.shape.boxExtents = math::Vector3(state.precipitationAreaRadius * 0.9f, 8.0f, state.precipitationAreaRadius * 0.9f);
-			drift.speedRange = math::Vector2(0.2f, 0.9f);
-			drift.sizeRange = math::Vector2(0.05f, 0.11f);
-			drift.lifetimeRange = math::Vector2(6.2f, 9.2f);
-			drift.startColor = math::Vector4(0.90f, 0.94f, 1.0f, 0.28f);
-			drift.endColor = math::Vector4(0.90f, 0.94f, 1.0f, 0.0f);
-			drift.constantForce = math::Vector3(planarWind.x * 0.95f, 0.0f, planarWind.z * 0.95f);
-			drift.noiseAmplitude = 0.55f;
-			drift.texturePath = "EngineData.Textures/Particles/WeatherSnowflake.png";
+			drift.renderMode = ParticleRenderMode::Billboard;
+			drift.facingMode = ParticleFacingMode::CameraFacing;
+			drift.emission.rate = std::max(150.0f, intensity * 1100.0f);
+			drift.emission.prewarmTime = 9.0f;
+			drift.maxParticles = static_cast<uint32_t>(drift.emission.rate * 11.5f) + 256u;
+			drift.shape.boxExtents = math::Vector3(snowXz * 0.6f, yHalf, snowXz * 0.6f);
+			drift.sizeRange = math::Vector2(0.06f, 0.10f);
+			// Constant alpha; gentler fade like the mist (slow soft layer).
+			drift.startColor = math::Vector4(0.90f, 0.94f, 1.0f, 0.30f);
+			drift.endColor = math::Vector4(0.90f, 0.94f, 1.0f, 0.30f);
+			drift.alphaOverLifetimeCurveMidpoint = 0.4f;
+			drift.drag = 5.0f;
+			// Foreground flakes get a stronger swirl - the close layer is
+			// where chaotic motion is most visible.
+			drift.noiseAmplitude = 9.0f;
+			drift.noiseFrequency = 0.5f;
+			drift.texturePath = "EngineData.Textures/Particles/WeatherSoftPuff.png";
 			pushEmitter(drift);
 			break;
 		}
 		case WeatherPrecipitationType::Sand:
 		{
-			primary.facingMode = ParticleFacingMode::CameraFacing;
-			primary.maxParticles = std::max(384u, static_cast<uint32_t>(2600.0f * intensity));
-			primary.emission.rate = std::max(18.0f, intensity * 760.0f);
-			primary.speedRange = math::Vector2(1.2f, 4.5f);
-			primary.sizeRange = math::Vector2(0.45f, 1.0f);
-			primary.lifetimeRange = math::Vector2(1.2f, 2.4f);
-			primary.startColor = math::Vector4(0.82f, 0.66f, 0.44f, 0.46f);
-			primary.endColor = math::Vector4(0.82f, 0.66f, 0.44f, 0.0f);
-			primary.gravity = math::Vector3(0.0f, -2.5f, 0.0f);
-			primary.constantForce = math::Vector3(planarWind.x * 1.25f, 0.0f, planarWind.z * 1.25f);
-			primary.noiseAmplitude = 1.0f;
+			// Sand is wind-borne, not falling: weak gravity, low drag and a
+			// strong lateral force give ~12 m/s horizontal streaming at the
+			// preset's 29 m/s wind (force/drag = 29*0.5/1.2). Grain quads
+			// roughly halved from before - the thick-air feel comes from the
+			// orange fog medium; particles just add motion.
+			primary.gravity = math::Vector3(0.0f, -1.5f, 0.0f);
+			primary.drag = 1.2f;
+			primary.speedRange = math::Vector2(1.0f, 3.5f);
+			primary.sizeRange = math::Vector2(0.22f, 0.50f);
+			primary.lifetimeRange = math::Vector2(2.0f, 3.5f);
+			primary.constantForce = math::Vector3(planarWind.x * 0.5f, 0.0f, planarWind.z * 0.5f);
+			primary.noiseAmplitude = 0.9f;
+			// Constant alpha; inherited three-point curve fades in/out.
+			primary.startColor = math::Vector4(0.82f, 0.66f, 0.44f, 0.40f);
+			primary.endColor = math::Vector4(0.82f, 0.66f, 0.44f, 0.40f);
+			primary.emission.rate = std::max(120.0f, intensity * 1300.0f);
+			primary.emission.prewarmTime = 3.5f;
+			primary.maxParticles = static_cast<uint32_t>(primary.emission.rate * 3.8f) + 256u;
+			// Dust clumps, not untextured quads - the base desc's white.png
+			// renders as hard-edged squares. Smoke puffs tinted by the
+			// start/end colour read as wind-borne dust.
+			primary.texturePath = "EngineData.Textures/Particles/WeatherSoftPuff.png";
+			primary.rotationSpeedRange = math::Vector2(-25.0f, 25.0f);
 			pushEmitter(primary);
 
 			ParticleEmitterDesc haze = primary;
 			haze.name = "SandHaze";
-			haze.maxParticles = std::max(256u, static_cast<uint32_t>(900.0f * intensity));
-			haze.emission.rate = std::max(8.0f, intensity * 120.0f);
-			haze.shape.boxExtents = math::Vector3(state.precipitationAreaRadius * 0.75f, 3.0f, state.precipitationAreaRadius * 0.75f);
+			haze.emission.rate = std::max(20.0f, intensity * 180.0f);
+			haze.emission.prewarmTime = 3.0f;
+			haze.maxParticles = static_cast<uint32_t>(haze.emission.rate * 3.2f) + 128u;
+			haze.shape.boxExtents = math::Vector3(xzRadius * 0.75f, yHalf * 0.6f, xzRadius * 0.75f);
 			haze.speedRange = math::Vector2(0.5f, 1.8f);
-			haze.sizeRange = math::Vector2(0.8f, 1.6f);
-			haze.lifetimeRange = math::Vector2(1.4f, 3.0f);
-			haze.startColor = math::Vector4(0.74f, 0.57f, 0.35f, 0.26f);
-			haze.endColor = math::Vector4(0.74f, 0.57f, 0.35f, 0.0f);
+			haze.sizeRange = math::Vector2(0.7f, 1.4f);
+			haze.lifetimeRange = math::Vector2(1.8f, 3.0f);
+			// Constant alpha; gentler fade like the mist (slow soft layer).
+			haze.startColor = math::Vector4(0.74f, 0.57f, 0.35f, 0.20f);
+			haze.endColor = math::Vector4(0.74f, 0.57f, 0.35f, 0.20f);
+			haze.alphaOverLifetimeCurveMidpoint = 0.4f;
 			haze.noiseAmplitude = 0.65f;
+			haze.texturePath = "EngineData.Textures/Particles/WeatherSoftPuff.png";
+			haze.rotationSpeedRange = math::Vector2(-10.0f, 10.0f);
 			pushEmitter(haze);
 			break;
 		}

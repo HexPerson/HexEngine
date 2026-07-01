@@ -436,11 +436,15 @@ namespace HexEngine
 
 	void Mesh::AddVertex(const MeshVertex& vertex)
 	{
-		_vertices.push_back(vertex);
+		MeshVertex vertexFixed;
+		vertexFixed = vertex;
+		vertexFixed._position.w = 1.0f;
+
+		_vertices.push_back(vertexFixed);
 
 		SimpleMeshVertex smv;
-		smv._position = vertex._position;
-		smv._texcoord = vertex._texcoord;
+		smv._position = vertexFixed._position;
+		smv._texcoord = vertexFixed._texcoord;
 
 		_simpleVertices.push_back(smv);
 	}
@@ -452,15 +456,9 @@ namespace HexEngine
 
 	void Mesh::AddVertices(const std::vector<MeshVertex>& vertices)
 	{
-		_vertices.insert(_vertices.end(), vertices.begin(), vertices.end());
-
 		for (auto& vertex : vertices)
 		{
-			SimpleMeshVertex smv;
-			smv._position = vertex._position;
-			smv._texcoord = vertex._texcoord;
-
-			_simpleVertices.push_back(smv);
+			AddVertex(vertex);
 		}
 	}
 

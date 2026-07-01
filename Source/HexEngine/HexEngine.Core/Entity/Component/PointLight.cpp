@@ -23,7 +23,14 @@ namespace HexEngine
 
 	PointLight::PointLight(Entity* entity, PointLight* clone) : Light(entity, clone)
 	{
-	
+		// The base clone ctor copied _doesCastShadows but NOT the per-side shadow
+		// cube maps - those are allocated lazily inside SetDoesCastShadows, which
+		// the clone path never runs. Without this, a cloned / prefab-spawned
+		// shadow-casting point light has the flag ticked yet _shadowMaps are null,
+		// so it renders no shadows until the user re-toggles the checkbox. Re-run
+		// the setter (virtual dispatch reaches PointLight's override here since the
+		// base is already constructed) to allocate the maps to match the flag.
+		SetDoesCastShadows(_doesCastShadows);
 	}
 
 	void PointLight::Destroy()
@@ -81,20 +88,27 @@ namespace HexEngine
 
 	void PointLight::ConstructMatrices(Camera* camera, float zMin, float zMax, int32_t cascadeIdx)
 	{
-		auto transform = GetEntity()->GetComponent<Transform>();
+		// WORLD space, not local. transform->GetPosition() returns the
+		// entity's PARENT-space position - wrong for any light parented
+		// under another entity. See SpotLight::ConstructMatrices for the
+		// full explanation; same bug, same fix.
+		const math::Vector3 worldPos = GetEntity()->GetWorldTM().Translation();
 
 		math::Vector3 cross = math::Vector3::Up;
-
 		if (cascadeIdx == 2 || cascadeIdx == 3)
 			cross = math::Vector3::Forward;
 
-		_viewMatrix[cascadeIdx] = math::Matrix::CreateLookAt(transform->GetPosition(), transform->GetPosition() + gLightDirs[cascadeIdx] * GetRadius(), cross);
-
+		_viewMatrix[cascadeIdx] = math::Matrix::CreateLookAt(worldPos, worldPos + gLightDirs[cascadeIdx] * GetRadius(), cross);
 		_projectionMatrix[cascadeIdx] = math::Matrix::CreatePerspectiveFieldOfView(ToRadian(90.0f), 1.0f, 1.0f, GetRadius());
 
 		dx::BoundingFrustum::CreateFromMatrix(_lightBoundingFrustum[cascadeIdx], _projectionMatrix[cascadeIdx], true);
-
 		_lightBoundingFrustum[cascadeIdx].Transform(_lightBoundingFrustum[cascadeIdx], _viewMatrix[cascadeIdx].Invert());
+
+		// Bounding sphere used by the shadow-render PVS to cull geometry
+		// for THIS face's depth pass. Without this the array stayed
+		// default-initialised (centre=0, radius=1) and the PVS rejected
+		// everything in the scene -> shadow map rendered empty.
+		_lightBoundingSphere[cascadeIdx] = dx::BoundingSphere(worldPos, GetRadius());
 	}
 
 	const math::Matrix& PointLight::GetViewMatrix(PointLight::ShadowSides side) const

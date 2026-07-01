@@ -14,11 +14,24 @@ namespace HexEngine
 	};
 
 	class Scene;
+	class Entity;
+	class SceneSaveFile;
 
 	class HEX_API SceneSaveFile : public JsonFile
 	{
 	public:
 		using SceneSaveProgressCallback = std::function<void(const std::wstring& entityName, int32_t loaded, int32_t total)>;
+
+		// Optional per-entity load hook. When set, LoadFromJson calls this instead
+		// of Entity::LoadFromFile for each entity, so a caller can reconstruct into
+		// EXISTING entities (e.g. editor play/stop restore) rather than always
+		// creating fresh ones. Returns the entity the saved data should be
+		// deserialized into - an existing entity, a newly created one, or nullptr
+		// to skip. The downstream Deserialize passes are idempotent per component
+		// (they reuse a component if the entity already has it), so returning an
+		// existing entity restores it in place without duplicating components.
+		using LoadEntityOverrideFn = std::function<Entity*(json& entityData, const std::string& name, Scene* scene, SceneSaveFile* file)>;
+		void SetLoadOverride(LoadEntityOverrideFn fn) { _loadOverride = std::move(fn); }
 
 		SceneSaveFile(const fs::path& absolutePath, std::ios_base::openmode openMode, std::shared_ptr<Scene> scene, SceneFileFlags flags = SceneFileFlags::None);
 
@@ -56,5 +69,6 @@ namespace HexEngine
 		std::shared_ptr<Scene> _scene;
 		SceneFileFlags _flags;
 		std::vector<Entity*> _loadedEntities;
+		LoadEntityOverrideFn _loadOverride;
 	};
 }

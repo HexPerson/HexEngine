@@ -12,6 +12,7 @@
 	SkySphereCommon
 	Atmosphere
 	AtmospherePhysical
+	AtmosphereCommon
 	Utils
 }
 "VertexShader"
@@ -65,6 +66,65 @@
 {
 	SamplerState g_pointSampler : register(s2);
 
+	// Hillaire 2020 atmosphere LUTs (Phase B). When USE_SKY_VIEW_LUT is
+	// true (default), the integrate-atmosphere call further down becomes
+	// a single sky-view LUT tap and the per-pixel sun ray attenuation is
+	// driven by the transmittance LUT instead of ComputePhysicalSunTransmittance.
+	// SceneRenderer binds these textures at t0/t1 before each Layer::Sky
+	// draw; PS sampler slot 4 is already a linear sampler by engine
+	// convention (see GraphicsDeviceD3D11::BeginFrame).
+	Texture2D    g_atmSkyViewLUT       : register(t0);
+	Texture2D    g_atmTransmittanceLUT : register(t1);
+	SamplerState g_atmLutSampler       : register(s4);
+
+	// Post-LUT overcast tint. SceneRenderer derives these from the weather
+	// surface params (precipitationIntensity, wetness) and binds the
+	// cbuffer at PS b6 before the sky entity draws. The Hillaire model
+	// itself can only produce clear-sky / sunset gradients; this tint
+	// fakes overcast / storm / rain weather by lerping the LUT result
+	// toward a cloud-cover colour. Amount 0 = pure Hillaire, 1 = pure tint.
+	cbuffer SkyRenderParams : register(b6)
+	{
+		float4 g_skyOvercastColour;   // .rgb = tint, .a unused
+		float  g_skyOvercastAmount;
+		float3 g_skyRenderPad;
+	};
+
+	// Flip to false to bypass the LUT path and fall back to the analytic
+	// IntegrateAtmospherePhysical / ComputePhysicalSunColour calls below.
+	// Useful for A/B comparison when iterating on LUT parameterisation.
+	// Static const so the shader compiler eliminates the dead branch.
+	static const bool USE_SKY_VIEW_LUT = true;
+
+	float3 SampleSkyFromLUT(float3 viewDir, float3 sunDir)
+	{
+		const float2 uv = SkyViewLutParamsToUv(viewDir, sunDir);
+		return g_atmSkyViewLUT.SampleLevel(g_atmLutSampler, uv, 0).rgb;
+	}
+
+	// LUT-driven sun colour. Replaces ComputePhysicalSunColour for the
+	// sun disk / aureole / halo terms: take the same warm radiance shape
+	// the analytic version produces but route the transmittance through
+	// the LUT instead of the per-pixel analytic march. Result is
+	// physically consistent with the rest of the LUT-driven sky.
+	float3 SampleSunColourFromLUT(float3 sunDir, float cameraHeightMM)
+	{
+		const float sunCosZenith = sunDir.y; // y-up world
+		const float2 uv = TransmittanceLutParamsToUv(cameraHeightMM, sunCosZenith);
+		const float3 sunTransmittance = g_atmTransmittanceLUT.SampleLevel(g_atmLutSampler, uv, 0).rgb;
+
+		// Match the warm-cast falloff of ComputePhysicalSunColour so the
+		// existing sunset shaping passes still respond the way they were
+		// authored. Same constants the analytic helper uses.
+		const float sunEnergy = lerp(18.0f, 30.0f, saturate(sunDir.y * 0.5f + 0.5f)) * max(g_globalLight[0], 0.35f);
+		const float sunsetAmount = saturate((0.22f - sunDir.y) / 0.32f);
+		const float3 solarRadiance = lerp(float3(1.0f, 0.985f, 0.965f), float3(1.0f, 0.58f, 0.20f), sunsetAmount * 0.92f);
+		float3 t = sunTransmittance;
+		t.g = lerp(t.g, t.g * 0.48f, sunsetAmount);
+		t.b = lerp(t.b, t.b * 0.10f, sunsetAmount);
+		return solarRadiance * t * sunEnergy;
+	}
+
 	float hash12(float2 p)
 	{
 		float3 p3 = frac(float3(p.xyx) * 0.1031f);
@@ -111,16 +171,30 @@
 		float3 viewDir = normalize(input.positionWS.xyz - g_eyePos.xyz);
 		float3 sunDir = normalize(-g_lightDirection.xyz);
 		bool fullSkyPass = (g_shadowConfig.passIndex != 0);
-		int steps = fullSkyPass ? 32 : 20;
-		PhysicalAtmosphereSample skySample = IntegrateAtmospherePhysical(
-			g_eyePos.xyz,
-			viewDir,
-			g_frustumDepths[3],
-			sunDir,
-			steps,
-			fullSkyPass && sunVisible);
 
-		float3 atmosphereColour = skySample.inscatter;
+		// Phase B: prefer the SkyView LUT tap over the per-pixel atmosphere
+		// march. Falls back to the analytic integrator when USE_SKY_VIEW_LUT
+		// is flipped off (A/B comparison hook). Camera altitude is lifted
+		// into atmosphere-Mm space via the AtmosphereCommon helper so the
+		// transmittance sample agrees with the LUT's parameterisation.
+		float3 atmosphereColour;
+		const float cameraHeightMM = WorldYToAtmosphereAltitudeMM(g_eyePos.y);
+		if (USE_SKY_VIEW_LUT)
+		{
+			atmosphereColour = SampleSkyFromLUT(viewDir, sunDir);
+		}
+		else
+		{
+			int steps = fullSkyPass ? 32 : 20;
+			PhysicalAtmosphereSample skySample = IntegrateAtmospherePhysical(
+				g_eyePos.xyz,
+				viewDir,
+				g_frustumDepths[3],
+				sunDir,
+				steps,
+				fullSkyPass && sunVisible);
+			atmosphereColour = skySample.inscatter;
+		}
 		float sunsetAmount = saturate((0.22f - sunDir.y) / 0.32f);
 		float dayAmount = 1.0f - sunsetAmount;
 		float sunsetWarmStrength = max(0.0f, g_atmosphere.sunsetWarmStrength);
@@ -162,14 +236,36 @@
 		atmosphereColour = lerp(atmosphereColour, sunsetPurpleTarget, sunsetHorizon * antiSunFacing * (0.22f * sunsetCoolStrength));
 		atmosphereColour = lerp(atmosphereColour, sunsetVioletTarget, sunsetZenith * antiSunFacing * (0.16f * sunsetCoolStrength));
 
+		// Weather-driven overcast/storm tint. Hillaire's clear-sky model
+		// can't produce flat grey or stormy white skies (those need cloud
+		// cover). SceneRenderer derives g_skyOvercastColour/Amount from
+		// WeatherSurfaceParams.precipitationIntensity + .wetness; the
+		// shader lerps the LUT-driven sky toward the cloud-bottom colour.
+		// Amount 0 = pure Hillaire (clear day). Amount near 1 = pure
+		// overcast/storm grey, dimmed by sun height so night storms read
+		// dark and noon storms read dramatic-bright-white.
+		const float overcastAmount = saturate(g_skyOvercastAmount);
+		atmosphereColour = lerp(atmosphereColour, g_skyOvercastColour.rgb, overcastAmount);
+
 		if (fullSkyPass && sunVisible)
 		{
 			float mu = dot(viewDir, sunDir);
-			float3 sunColour = ComputePhysicalSunColour(g_eyePos.xyz, sunDir);
+			float3 sunColour = USE_SKY_VIEW_LUT
+				? SampleSunColourFromLUT(sunDir, cameraHeightMM)
+				: ComputePhysicalSunColour(g_eyePos.xyz, sunDir);
 
 			float sunDisk = smoothstep(0.99984f, 0.999975f, mu);
 			float sunAureole = pow(saturate((mu - 0.99835f) / (0.99984f - 0.99835f)), lerp(4.2f, 2.8f, sunsetAmount));
 			float sunHalo = pow(saturate((mu - 0.9960f) / (0.99835f - 0.9960f)), lerp(7.5f, 4.8f, sunsetAmount));
+
+			// Damp the sun disk and aureole/halo when overcast - the sun
+			// is occluded by cloud cover in storms/rain so it shouldn't
+			// punch through full strength. Squared to keep light overcast
+			// still showing some sun glow.
+			const float sunVisibility = saturate(1.0f - overcastAmount * overcastAmount);
+			sunDisk   *= sunVisibility;
+			sunAureole *= sunVisibility;
+			sunHalo   *= sunVisibility;
 
 			float3 diskColour = sunColour;
 			float3 aureoleColour = lerp(sunColour, atmosphereColour, 0.36f);

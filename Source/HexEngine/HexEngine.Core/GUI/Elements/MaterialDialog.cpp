@@ -97,6 +97,70 @@ namespace HexEngine
 			L"Rain Drip Intensity",
 			&material->_properties.rainDripIntensity, 0.0f, 1.0f, 0.01f, 2);
 
+		// Footstep sound for this surface. The surface-aware footstep system
+		// (FirstPersonCameraController) raycasts down each step, reads the hit
+		// material's footstep sound and plays it; empty = the controller's
+		// default sound. Stored as a resource path, saved with the material.
+		auto* footstepSearch = new AssetSearch(
+			_layout,
+			_layout->GetNextPos(),
+			Point(size.x - 40, 100),
+			L"Footstep Sound",
+			{ ResourceType::Audio },
+			[this](AssetSearch* search, const AssetSearchResult& result)
+			{
+				(void)search;
+				const fs::path& chosen = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+				_material->SetFootstepSoundPath(chosen.string());
+			});
+		if (!_material->GetFootstepSoundPath().empty())
+		{
+			const std::string& fsp = _material->GetFootstepSoundPath();
+			footstepSearch->SetValue(std::wstring(fsp.begin(), fsp.end()));
+		}
+
+		// Per-region footstep surfaces (atlas / splatmap materials). The surface-ID
+		// map is a texture aligned to the albedo UVs whose RED channel selects a
+		// surface id; each id below maps to its own footstep sound. The footstep
+		// system samples the map at the hit UV and plays the matching sound, falling
+		// back to the single "Footstep Sound" above when an id is unmapped.
+		auto* surfaceMapSearch = new AssetSearch(
+			_layout,
+			_layout->GetNextPos(),
+			Point(size.x - 40, 100),
+			L"Footstep Surface Map (red = id)",
+			{ ResourceType::Image },
+			[this](AssetSearch* search, const AssetSearchResult& result)
+			{
+				(void)search;
+				const fs::path& chosen = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+				_material->SetFootstepSurfaceMapPath(chosen.string());
+			});
+		if (!_material->GetFootstepSurfaceMapPath().empty())
+		{
+			const std::string& smp = _material->GetFootstepSurfaceMapPath();
+			surfaceMapSearch->SetValue(std::wstring(smp.begin(), smp.end()));
+		}
+
+		const int kFootstepSurfaceSlots = 8;
+		for (int id = 0; id < kFootstepSurfaceSlots; ++id)
+		{
+			auto* slot = new AssetSearch(
+				_layout,
+				_layout->GetNextPos(),
+				Point(size.x - 40, 100),
+				L"Surface " + std::to_wstring(id) + L" Sound",
+				{ ResourceType::Audio },
+				[this, id](AssetSearch* search, const AssetSearchResult& result)
+				{
+					(void)search;
+					const fs::path& chosen = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+					_material->SetFootstepSurfaceSound(id, chosen.string());
+				});
+			if (const std::string& s = _material->GetFootstepSurfaceSound(id); !s.empty())
+				slot->SetValue(std::wstring(s.begin(), s.end()));
+		}
+
 		auto save = new Button(_layout, _layout->GetNextPos(), Point(80, 20), L"Save", std::bind(&MaterialDialog::Save, this));
 
 		

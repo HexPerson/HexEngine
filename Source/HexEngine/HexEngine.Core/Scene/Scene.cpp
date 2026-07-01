@@ -2,6 +2,8 @@
 
 #include "Scene.hpp"
 #include "../HexEngine.hpp"
+#include "NetworkReplicationSystem.hpp"
+#include <fstream>
 
 #include "../Entity/Component/Transform.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
@@ -9,6 +11,8 @@
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/FirstPersonCameraController.hpp"
 #include "../Entity/Component/InstancedStaticMeshComponent.hpp"
+#include "../Entity/Component/NavMeshBlockingVolume.hpp"
+#include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "PVS.hpp"
 
 namespace HexEngine
@@ -684,9 +688,22 @@ namespace HexEngine
 		HEX_VALIDATE_SCENE_INVARIANTS();
 	}
 
+	NetworkReplicationSystem* Scene::GetNetworkReplicationSystem()
+	{
+		if (_networkReplicationSystem == nullptr)
+			_networkReplicationSystem = new NetworkReplicationSystem(this);
+		return _networkReplicationSystem;
+	}
+
 	void Scene::Destroy()
 	{
 		std::unique_lock lock(_lock);
+
+		if (_networkReplicationSystem != nullptr)
+		{
+			delete _networkReplicationSystem;
+			_networkReplicationSystem = nullptr;
+		}
 
 		HandlePendingRemovals();
 		const std::vector<EntityId> liveCopy = _liveEntities;
@@ -795,6 +812,11 @@ namespace HexEngine
 		Entity* clone = CreateEntity(name /*+ " (Clone)"*/, position, rotation, scale);
 
 		clone->SetLayer(entity->GetLayer());
+		// Carry the source's authored entity flags (DoNotBlockNavMesh, DoNotRender,
+		// DoNotSave, ...) onto the clone - CloneEntity previously copied only the layer,
+		// so these were lost on prefab spawn / duplicate. Strip the editor-only
+		// selection flag so clones aren't born selected (matches Entity::Deserialize).
+		clone->SetFlag(entity->GetFlags() & ~EntityFlags::SelectedInEditor);
 		if (entity->IsPrefabInstance())
 		{
 			clone->SetPrefabSource(entity->GetPrefabSourcePath(), entity->GetPrefabRootEntityName(), entity->IsPrefabInstanceRoot());
@@ -2363,10 +2385,10 @@ namespace HexEngine
 		AddEntity(camera);
 	}*/
 
-	/*Camera* Scene::GetCameraAtIndex(uint32_t index)
+	Camera* Scene::GetCameraAtIndex(uint32_t index)
 	{
 		return _cameras.at(index);
-	}*/
+	}
 
 	Camera* Scene::GetMainCamera()
 	{
@@ -2571,6 +2593,24 @@ namespace HexEngine
 	void Scene::Save(json& data, JsonFile* file)
 	{
 		file->Serialize<OceanSettings>(data, "_oceanSettings", _oceanSettings);
+
+		// Persist the navmesh as a binary sidecar (<scene>.navmesh) next to the .hscene,
+		// so it loads with the scene instead of being re-baked at runtime.
+		if (_hasNavMesh && g_pEnv != nullptr && g_pEnv->_navMeshProvider != nullptr)
+		{
+			std::vector<uint8_t> bytes;
+			if (g_pEnv->_navMeshProvider->GetNavMeshBytes(_navMeshId, bytes) && !bytes.empty())
+			{
+				fs::path sidecar = file->GetAbsolutePath();
+				sidecar.replace_extension(L".navmesh");
+				std::ofstream out(sidecar, std::ios::binary | std::ios::trunc);
+				if (out.is_open())
+				{
+					out.write(reinterpret_cast<const char*>(bytes.data()), (std::streamsize)bytes.size());
+					data["_hasNavMesh"] = true;
+				}
+			}
+		}
 	}
 
 	void Scene::Load(json& data, JsonFile* file)
@@ -2578,6 +2618,28 @@ namespace HexEngine
 		if (data.find("_oceanSettings") != data.end())
 		{
 			file->Deserialize<OceanSettings>(data, "_oceanSettings", _oceanSettings);
+		}
+
+		// Load the navmesh sidecar (if the scene was saved with one).
+		if (data.find("_hasNavMesh") != data.end() && data["_hasNavMesh"].get<bool>() &&
+			g_pEnv != nullptr && g_pEnv->_navMeshProvider != nullptr)
+		{
+			fs::path sidecar = file->GetAbsolutePath();
+			sidecar.replace_extension(L".navmesh");
+			std::ifstream in(sidecar, std::ios::binary | std::ios::ate);
+			if (in.is_open())
+			{
+				const std::streamsize sz = in.tellg();
+				if (sz > 0)
+				{
+					in.seekg(0);
+					std::vector<uint8_t> bytes((size_t)sz);
+					in.read(reinterpret_cast<char*>(bytes.data()), sz);
+					NavMeshId id = 0;
+					if (g_pEnv->_navMeshProvider->LoadNavMeshFromBytes(this, bytes, &id))
+						SetNavMeshId(id);
+				}
+			}
 		}
 	}
 
@@ -2723,6 +2785,12 @@ namespace HexEngine
 				if (entity->HasFlag(excludeFlags))
 					continue;
 
+				// Water-material meshes (ocean tiles from the "Add ocean" tool) are a
+				// rendered surface, not walkable ground — keep them out of navmesh
+				// bakes regardless of whether the entity carries DoNotBlockNavMesh.
+				if (auto material = smc->GetMaterial(); material && material->_properties.isWater)
+					continue;
+
 				auto verts = mesh->GetVertices();
 				auto inds = mesh->GetIndices();
 
@@ -2735,6 +2803,54 @@ namespace HexEngine
 
 				indices.insert(indices.end(), inds.begin(), inds.end());
 			}
+		}
+	}
+
+	void Scene::GatherNavMeshBlockingVolumes(std::vector<NavMeshBlockingBox>& out)
+	{
+		std::unique_lock lock(_lock);
+
+		const auto* pool = TryGetComponentPool(NavMeshBlockingVolume::_GetComponentId());
+		if (pool == nullptr)
+			return;
+
+		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
+		{
+			auto* volume = static_cast<NavMeshBlockingVolume*>(pool->components[denseIndex]);
+			if (volume == nullptr)
+				continue;
+
+			Entity* entity = TryGetEntity(pool->owners[denseIndex]);
+			if (entity == nullptr)
+				continue;
+
+			NavMeshBlockingBox box;
+			volume->GetWorldFootprint(box);
+			out.push_back(box);
+		}
+	}
+
+	void Scene::GatherNavMeshLinks(std::vector<NavMeshLink>& out)
+	{
+		std::unique_lock lock(_lock);
+
+		const auto* pool = TryGetComponentPool(NavMeshLinkComponent::_GetComponentId());
+		if (pool == nullptr)
+			return;
+
+		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
+		{
+			auto* link = static_cast<NavMeshLinkComponent*>(pool->components[denseIndex]);
+			if (link == nullptr)
+				continue;
+
+			Entity* entity = TryGetEntity(pool->owners[denseIndex]);
+			if (entity == nullptr)
+				continue;
+
+			NavMeshLink worldLink;
+			link->GetWorldLink(worldLink);
+			out.push_back(worldLink);
 		}
 	}
 
@@ -2765,6 +2881,12 @@ namespace HexEngine
 					continue;
 
 				if (entity->HasFlag(excludeFlags))
+					continue;
+
+				// Water-material meshes (ocean tiles from the "Add ocean" tool) are a
+				// rendered surface, not walkable ground — keep them out of navmesh
+				// bakes regardless of whether the entity carries DoNotBlockNavMesh.
+				if (auto material = smc->GetMaterial(); material && material->_properties.isWater)
 					continue;
 
 				auto verts = mesh->GetVertices();

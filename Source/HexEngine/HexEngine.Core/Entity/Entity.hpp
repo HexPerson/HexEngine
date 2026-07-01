@@ -112,7 +112,7 @@ namespace HexEngine
 		template <typename T>
 		bool HasA()
 		{
-			return (GetComponentSignature() & (1 << T::_GetComponentId())) != 0;
+			return (GetComponentSignature() & ((ComponentSignature)1 << T::_GetComponentId())) != 0;
 		}
 
 		// Components
@@ -129,6 +129,22 @@ namespace HexEngine
 		T* GetComponent()
 		{
 			return reinterpret_cast<T*>(GetComponentByID(T::_GetComponentId()));
+		}
+
+		// Inheritance-aware lookup: returns the first component that *is-a* T
+		// (matched via dynamic_cast), unlike GetComponent<T>() which matches the
+		// exact registered component id. Use for base-class queries that should
+		// also find subclasses - e.g. GetComponentDerived<InteractionComponent>()
+		// also finds a DoorComponent.
+		template <typename T>
+		T* GetComponentDerived()
+		{
+			for (auto&& component : _components)
+			{
+				if (T* casted = dynamic_cast<T*>(component.component))
+					return casted;
+			}
+			return nullptr;
 		}
 
 		template <typename T>

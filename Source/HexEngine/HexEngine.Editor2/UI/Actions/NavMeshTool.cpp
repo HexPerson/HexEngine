@@ -19,19 +19,20 @@ namespace HexEditor
 	{
 		HexEngine::INavMeshProvider::NavMeshCreationParams params = {};
 
-		params.cs = 16.0f;
-		params.ch = 8.0f;
+		params.cs = 0.3f;
+		params.ch = 0.3f;
 		params.walkableSlopeAngle = 45.0f;
-		params.walkableClimb = 6;
-		params.walkableHeight = 12;
-		params.walkableRadius = 2;
+		params.walkableClimb = 2;
+		params.walkableHeight = 7;
+		params.walkableRadius = 1;
 		params.minRegionArea = 8;
 		params.mergeRegionArea = 20;
-		params.maxEdgeLen = 12;
+		params.maxEdgeLen = 24;
 		params.maxSimplificationError = 1.3f;
 		params.maxVertsPerPoly = 6;
-		params.detailSampleDist = 6.0f;
+		params.detailSampleDist = 3.0f;
 		params.detailSampleMaxError = 1.0f;
+		params.heightBias = params.ch * 0.5f; // sink the navmesh ~half a cell to cancel ch quantization (stops hovering agents)
 		params.borderSize = params.walkableRadius + 3;
 		params.width = 0;
 		params.height = 0;
@@ -73,11 +74,21 @@ namespace HexEditor
 		new HexEngine::DragInt(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(controlWidth, 18), L"Max Verts Per Poly", &dialog->_params.maxVertsPerPoly, 3, 12, 1);
 		new HexEngine::DragFloat(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(controlWidth, 18), L"Detail Sample Dist", &dialog->_params.detailSampleDist, 0.0f, 64.0f, 0.1f, 2);
 		new HexEngine::DragFloat(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(controlWidth, 18), L"Detail Sample Max Error", &dialog->_params.detailSampleMaxError, 0.0f, 32.0f, 0.1f, 2);
+		new HexEngine::DragFloat(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(controlWidth, 18), L"Height Bias (sink navmesh)", &dialog->_params.heightBias, 0.0f, 2.0f, 0.01f, 3);
 
 		new HexEngine::Button(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(210, 25), L"Build Scene NavMesh", std::bind(&NavMeshTool::BuildSceneNavMesh, dialog));
 		new HexEngine::Button(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(210, 25), L"Rebuild Scene NavMesh", std::bind(&NavMeshTool::RebuildSceneNavMesh, dialog));
 		new HexEngine::Button(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(210, 25), L"Build Chunk NavMeshes", std::bind(&NavMeshTool::BuildChunkNavMeshes, dialog));
 		new HexEngine::Button(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(210, 25), L"Rebuild Chunk NavMeshes", std::bind(&NavMeshTool::RebuildChunkNavMeshes, dialog));
+
+		// Toggle the navmesh debug overlay (also available on the console as
+		// `r_drawNavMesh`). Look the cvar up via the command manager and bind the
+		// checkbox straight to its bool so the two stay in sync.
+		if (auto* navMeshDebugVar = HexEngine::g_pEnv->_commandManager->FindHVar("r_drawNavMesh"); navMeshDebugVar != nullptr)
+		{
+			new HexEngine::Checkbox(dialog->_settings, dialog->_settings->GetNextPos(), HexEngine::Point(controlWidth, 18),
+				L"Show NavMesh Overlay", &navMeshDebugVar->_val.b);
+		}
 
 		dialog->BringToFront();
 		return dialog;
@@ -112,6 +123,7 @@ namespace HexEditor
 
 		_sceneNavMeshId = navMeshId;
 		_hasSceneNavMesh = true;
+		scene->SetNavMeshId(navMeshId);   // so saving the scene writes the navmesh sidecar
 		LOG_INFO("Scene navmesh created successfully. NavMeshId=%u", navMeshId);
 		return true;
 	}

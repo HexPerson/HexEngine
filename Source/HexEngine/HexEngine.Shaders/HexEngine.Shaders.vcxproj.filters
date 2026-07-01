@@ -87,6 +87,15 @@
     <HexEngineShader Include="DiffuseGIResolve.shader" />
     <HexEngineShader Include="DiffuseGIVoxelize.shader" />
     <HexEngineShader Include="DiffuseGIAOBlur.shader" />
+    <HexEngineShader Include="AtmosphereCommon.shader" />
+    <HexEngineShader Include="AtmosphereTransmittanceLUT.shader" />
+    <HexEngineShader Include="AtmosphereMultiScatteringLUT.shader" />
+    <HexEngineShader Include="AtmosphereSkyViewLUT.shader" />
+    <HexEngineShader Include="AtmosphereAerialPerspectiveLUT.shader" />
+    <HexEngineShader Include="AtmosphereAerialPerspectiveApply.shader" />
+    <HexEngineShader Include="VolumetricScatterDensity.shader" />
+    <HexEngineShader Include="VolumetricScatterIntegrate.shader" />
+    <HexEngineShader Include="VolumetricScatterApply.shader" />
     <HexEngineShader Include="DefaultPixel.shader" />
     <HexEngineShader Include="WaterBlit.shader" />
     <HexEngineShader Include="DiffuseGIShiftVoxel.shader" />
