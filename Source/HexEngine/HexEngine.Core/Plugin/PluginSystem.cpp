@@ -166,7 +166,14 @@ namespace HexEngine
 			LOG_WARN("Plugin '%s' is not listed in the plugin manifest (allowed in developer mode).", moduleFile.c_str());
 
 		// --- Load (RAII-owned so every early return frees the module) --------
-		ScopedModule module(LoadLibraryW(path.c_str()));
+		// LoadLibraryEx with an explicit, per-call secure search set rather than
+		// relying on process-wide DLL-directory state: the plugin's OWN folder
+		// (LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR - so a dependency DLL sitting next to
+		// the plugin resolves) plus the default dirs (application dir + System32 +
+		// the AddDllDirectory'd binary dirs). `path` is always absolute here,
+		// which the LOAD_LIBRARY_SEARCH_* flags require.
+		ScopedModule module(LoadLibraryExW(path.c_str(), nullptr,
+			LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR));
 		if (!module)
 		{
 			LOG_CRIT("Failed to load plugin '%S', error code: %lu", path.filename().c_str(), GetLastError());

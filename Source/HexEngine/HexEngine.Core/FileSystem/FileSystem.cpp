@@ -42,7 +42,24 @@ namespace HexEngine
 		if (!fs::exists(_dataDirectory))
 			fs::create_directory(_dataDirectory);
 
-		SetDllDirectoryW(_binaryDirectory.wstring().c_str());
+		// Modern, additive DLL search policy - replaces the blunt process-wide
+		// SetDllDirectoryW, which owned a single legacy "DllDirectory" slot (so a
+		// later caller silently overrode ours) and dropped the current directory
+		// unpredictably. We opt the process into the secure search set ONCE
+		// (application dir + System32 + explicitly-registered user dirs; this
+		// also mitigates CWD/%PATH% DLL-planting) and then register the binary
+		// directory ADDITIVELY. AddDllDirectory entries stack and are honoured by
+		// every LoadLibrary(Ex) in the process, so multiple mounted file systems
+		// each contribute their Bin dir without stomping one another.
+		static const bool s_secureDllPolicy = []()
+		{
+			SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+			return true;
+		}();
+		(void)s_secureDllPolicy;
+
+		if (!_binaryDirectory.empty())
+			AddDllDirectory(_binaryDirectory.wstring().c_str());
 	}
 
 	const fs::path& FileSystem::GetBaseDirectory() const
