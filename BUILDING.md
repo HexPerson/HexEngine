@@ -58,7 +58,7 @@ Use CMake for orchestration and migration visibility:
        - `freetype`
        - `directxtex`
        - `brotli`
-       - `rapidjson`
+       - `nlohmann-json` (this is nlohmann/json, **not** Tencent RapidJSON; it is still cloned under the legacy `ThirdParty/rapidjson` path for `.vcxproj` include-path compatibility, and bootstrap stages the full `Include/nlohmann/` tree)
        - `retpack2d`
        - `physx`
        - `shaderconductor`
@@ -197,7 +197,7 @@ This keeps migration incremental while enabling reproducible, reviewable depende
   - source: [physx_probe.cpp](/C:/HexEngine/cmake/examples/physx_probe.cpp)
   - purpose: validate PhysX include/link consumption through `Hex::physx_vendor`, directly from `ThirdParty/physx/.../bin/win.x86_64.vc143.md`.
 - Existing default behavior remains unchanged (`--header-layout legacy`).
-- `HexEngine.Core` now includes `ThirdParty/rapidjson/include` and `ThirdParty/retpack2d` directly in project include paths, reducing dependence on copied `Include/` headers for these dependencies.
+- `HexEngine.Core` now includes `ThirdParty/rapidjson/include` and `ThirdParty/retpack2d` directly in project include paths, reducing dependence on copied `Include/` headers for these dependencies. (`ThirdParty/rapidjson` here is the legacy clone location of `nlohmann-json`/nlohmann/json — see the dependency note above — not Tencent RapidJSON.)
 
 ## Dependency Backend Scaffold
 

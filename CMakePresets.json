@@ -133,6 +133,16 @@
         "HEXENGINE_ENABLE_SHADERCONDUCTOR_PROBE": "ON",
         "HEXENGINE_ENABLE_STREAMLINE_PROBE": "ON"
       }
+    },
+    {
+      "name": "vs2022-x64-debug-tests",
+      "displayName": "VS2022 x64 Debug + Unit Tests",
+      "description": "Debug preset with the dependency-light HexEngine.Tests unit-test target enabled.",
+      "inherits": "vs2022-x64-debug",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "cacheVariables": {
+        "HEXENGINE_ENABLE_TESTS": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -344,6 +354,26 @@
       "targets": [
         "hex-shadercompiler-build-debug-vendor"
       ]
+    },
+    {
+      "name": "tests-debug",
+      "displayName": "Build HexEngine.Tests (Debug)",
+      "configurePreset": "vs2022-x64-debug-tests",
+      "configuration": "Debug",
+      "targets": [
+        "HexEngine.Tests"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "tests-debug",
+      "displayName": "Run HexEngine.Tests (Debug)",
+      "configurePreset": "vs2022-x64-debug-tests",
+      "configuration": "Debug",
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

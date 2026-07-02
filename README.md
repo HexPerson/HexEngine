@@ -69,7 +69,9 @@ Canonical path (recommended):
 3. `cmake --build --preset sln-build-debug-modern`
 
 Current required dependency set bootstrapped by the modern path:
-`directxtk`, `freetype`, `directxtex`, `brotli`, `rapidjson`, `retpack2d`, `physx`, `shaderconductor`, `streamline`.
+`directxtk`, `freetype`, `directxtex`, `brotli`, `nlohmann-json`, `retpack2d`, `physx`, `shaderconductor`, `streamline`.
+
+> **Note on `nlohmann-json`:** this dependency is [nlohmann/json](https://github.com/nlohmann/json), *not* Tencent RapidJSON. For backwards compatibility with existing `.vcxproj` include paths it is still cloned under `ThirdParty/rapidjson`, and bootstrap stages the full `Include/nlohmann/` header tree (`json.hpp` pulls in `adl_serializer.hpp`, `json_fwd.hpp`, etc.).
 
 vcpkg (manifest mode, recommended for CMake-managed dependencies):
 1. Install vcpkg and set `VCPKG_ROOT`.

@@ -288,3 +288,40 @@ endif()
 message(STATUS "HexEngine canonical orchestration entrypoint enabled.")
 message(STATUS "Engine/editor/game compilation is still legacy MSBuild (.sln/.vcxproj) for this migration phase.")
 hexengine_print_dependency_backend_summary()
+
+# ---------------------------------------------------------------------------
+# Unit tests (opt-in, dependency-light).
+#
+# Compiles the pure Core helpers under test DIRECTLY - no engine/editor/plugin
+# startup, no rendering, no engine link - so it runs cleanly in CI. The parent
+# project is LANGUAGES NONE (orchestration only), so we enable C++ locally only
+# when tests are requested.
+#
+# nlohmann/json is resolved ONLY from the STAGED Include/ tree (bootstrap stages
+# Include/nlohmann). There is deliberately no vcpkg fallback on the include
+# path: if the full nlohmann tree was not staged, the test build fails - which
+# is exactly the regression we want CI to catch.
+# ---------------------------------------------------------------------------
+option(HEXENGINE_ENABLE_TESTS "Build the HexEngine.Tests unit-test executable." OFF)
+
+if(HEXENGINE_ENABLE_TESTS)
+    enable_language(CXX)
+    enable_testing()
+
+    add_executable(HexEngine.Tests
+        "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.Tests/TestMain.cpp"
+        "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.Core/Plugin/PluginManifest.cpp"
+        "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.Core/FileSystem/PackageManifest.cpp"
+        "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.Core/Utility/Sha256.cpp"
+    )
+    target_compile_features(HexEngine.Tests PRIVATE cxx_std_20)
+    target_include_directories(HexEngine.Tests PRIVATE "${HEXENGINE_REPO_ROOT}/Include")
+    if(MSVC)
+        # Sha256.cpp already #pragma-links bcrypt; keep an explicit link for robustness.
+        target_link_libraries(HexEngine.Tests PRIVATE bcrypt)
+    endif()
+
+    add_test(NAME HexEngine.Tests COMMAND HexEngine.Tests)
+
+    message(STATUS "HexEngine.Tests unit-test target enabled (HEXENGINE_ENABLE_TESTS=ON).")
+endif()
