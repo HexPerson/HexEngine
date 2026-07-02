@@ -30,11 +30,11 @@ HexEngine bundles / links the third-party components listed below. Each is distr
 | freetype | vendored | FTL | [link](https://freetype.org/) | `ThirdParty/freetype/LICENSE.TXT` |
 | hbaoplus | vendored | LicenseRef-NVIDIA-HBAOPlus | [link](https://developer.nvidia.com/gameworks-visualfx-overview) | `ThirdParty/hbaoplus/LICENSE.txt` |
 | ispc | 1.26.0 | BSD-3-Clause | [link](https://ispc.github.io/) | `ThirdParty/ispc-v1.26.0-windows/LICENSE.txt` |
+| nlohmann-json | vendored | MIT | [link](https://github.com/nlohmann/json) | `ThirdParty/rapidjson/LICENSE.MIT` |
 | nrd | vendored | LicenseRef-NVIDIA-NRD | [link](https://github.com/NVIDIAGameWorks/RayTracingDenoiser) | `ThirdParty/nrd/LICENSE.txt` |
 | oidn | vendored | Apache-2.0 | [link](https://github.com/OpenImageDenoise/oidn) | `ThirdParty/oidn/LICENSE.txt` |
 | oneapi-tbb | 2022.0.0 | Apache-2.0 | [link](https://github.com/uxlfoundation/oneTBB) | `ThirdParty/oneapi-tbb-2022.0.0/LICENSE.txt` |
 | physx | vendored | BSD-3-Clause | [link](https://github.com/NVIDIA-Omniverse/PhysX) | `ThirdParty/physx/LICENSE.md` |
-| rapidjson | vendored | MIT | [link](https://rapidjson.org/) | `ThirdParty/rapidjson/LICENSE.MIT` |
 | rapidxml | vendored | BSL-1.0 OR MIT | [link](https://rapidxml.sourceforge.net/) | `ThirdParty/rapidxml/license.txt` |
 | recastnavigation | vendored | Zlib | [link](https://github.com/recastnavigation/recastnavigation) | `ThirdParty/recastnavigation/License.txt` |
 | retpack2d | vendored | MIT | [link](https://github.com/BinnyCode/retpack2d) | `ThirdParty/retpack2d/LICENSE` |

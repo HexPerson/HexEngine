@@ -179,13 +179,14 @@
       ]
     },
     {
-      "name": "rapidjson",
+      "name": "nlohmann-json",
       "path": "ThirdParty/rapidjson",
       "git_url": "https://github.com/nlohmann/json.git",
       "ref": "663058e7d18241338aec42846d4f77995275ccf6",
       "required": true,
       "build_system": "header-only",
-      "notes": "Legacy setup clones nlohmann/json under rapidjson path and copies nlohmann headers.",
+      "notes": "This is nlohmann/json (NOT Tencent RapidJSON). It is intentionally cloned under the legacy 'ThirdParty/rapidjson' path (see compat_path_alias) so existing .vcxproj include dirs keep resolving; renaming the on-disk path would touch many projects. Bootstrap stages the FULL include/nlohmann/ tree into Include/nlohmann/ - json.hpp pulls in adl_serializer.hpp, detail/*, etc., so a partial (json.hpp-only) copy breaks the build.",
+      "compat_path_alias": "ThirdParty/rapidjson",
       "legacy_stage_paths": [
         "Include/nlohmann"
       ]

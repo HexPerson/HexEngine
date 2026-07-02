@@ -294,6 +294,38 @@
     },
     {
       "type": "library",
+      "name": "nlohmann-json",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/nlohmann/json"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/rapidjson/LICENSE.MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        },
+        {
+          "name": "hexengine:notes",
+          "value": "nlohmann/json (NOT Tencent RapidJSON); vendored under the legacy ThirdParty/rapidjson path for compat."
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "nrd",
       "version": "vendored",
       "licenses": [
@@ -396,34 +428,6 @@
         {
           "type": "license",
           "url": "ThirdParty/physx/LICENSE.md"
-        }
-      ],
-      "properties": [
-        {
-          "name": "hexengine:source",
-          "value": "thirdparty"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "name": "rapidjson",
-      "version": "vendored",
-      "licenses": [
-        {
-          "license": {
-            "id": "MIT"
-          }
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "website",
-          "url": "https://rapidjson.org/"
-        },
-        {
-          "type": "license",
-          "url": "ThirdParty/rapidjson/LICENSE.MIT"
         }
       ],
       "properties": [

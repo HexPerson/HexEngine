@@ -400,6 +400,51 @@ def ensure_only(ctx: RuntimeContext, dep: dict, _: str) -> None:
     ensure_repo(dep, ctx.frozen, ctx.update)
 
 
+def stage_nlohmann_json(ctx: RuntimeContext, dep: dict, _: str) -> None:
+    """Clone nlohmann/json and stage its FULL multi-file include tree.
+
+    The dependency is nlohmann/json (cloned under the legacy ThirdParty/rapidjson
+    path). Its public header <nlohmann/json.hpp> #includes siblings
+    (adl_serializer.hpp, json_fwd.hpp, detail/*, ...), so every consumer needs
+    the whole include/nlohmann/ folder on an include path - not just json.hpp.
+
+    Core resolves it via ThirdParty/rapidjson/include (the clone), but the
+    plugins (FreeType, etc.) only have the shared Include/ staging dir on their
+    include path. The previous bootstrap never populated Include/nlohmann, which
+    is exactly what broke CI:
+        json.hpp(34): fatal error C1083: Cannot open include file:
+        'nlohmann/adl_serializer.hpp'
+    So here we copy the entire tree into Include/nlohmann and then validate it.
+    """
+    repo = ensure_repo(dep, ctx.frozen, ctx.update)
+
+    src = repo / "include" / "nlohmann"
+    _require_nlohmann_tree(src, context=f"cloned source ({repo})")
+
+    dst = ctx.repo_root / "Include" / "nlohmann"
+    mkdir(dst.parent)
+    shutil.copytree(src, dst, dirs_exist_ok=True)
+
+    _require_nlohmann_tree(dst, context="staged Include/nlohmann")
+    print(f"Staged full nlohmann/json include tree -> {dst}")
+
+
+def _require_nlohmann_tree(folder: Path, context: str) -> None:
+    """Fail early + clearly if a required nlohmann header is missing."""
+    if not folder.is_dir():
+        raise RuntimeError(
+            f"nlohmann/json validation failed: {context} folder does not exist: {folder}"
+        )
+    required = ("json.hpp", "adl_serializer.hpp", "json_fwd.hpp")
+    missing = [name for name in required if not (folder / name).is_file()]
+    if missing:
+        raise RuntimeError(
+            f"nlohmann/json validation failed: {context} is incomplete - missing "
+            f"{', '.join(missing)} under {folder}. This is the classic 'only json.hpp "
+            f"was copied' layout bug; the whole include/nlohmann/ folder must be present."
+        )
+
+
 def required_dep_names(manifest: dict) -> list[str]:
     names = []
     for dep in manifest.get("dependencies", []):
@@ -423,7 +468,7 @@ def create_handlers() -> dict[str, Callable[[RuntimeContext, dict, str], None]]:
         "physx": build_physx,
         "shaderconductor": build_shaderconductor,
         "streamline": lambda ctx, dep, cfg: ensure_streamline(ctx, dep),
-        "rapidjson": ensure_only,
+        "nlohmann-json": stage_nlohmann_json,
         "retpack2d": ensure_only,
         "cxxopts": ensure_only,
         "fastnoiselite": ensure_only,
@@ -448,7 +493,7 @@ def bootstrap_dependencies(ctx: RuntimeContext, dep_names: list[str], configs: l
     for name in dep_names:
         dep = dep_map[name]
         handler = handlers[name]
-        if name in ("streamline", "rapidjson", "retpack2d", "cxxopts", "fastnoiselite", "rapidxml"):
+        if name in ("streamline", "nlohmann-json", "retpack2d", "cxxopts", "fastnoiselite", "rapidxml"):
             print(f"Bootstrapping {name} (no per-config build)")
             handler(ctx, dep, "Debug")
             continue
