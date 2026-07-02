@@ -57,6 +57,18 @@ namespace HexEngine
 		bool							DoesResourceExistAsAsset(const fs::path& path);
 		FileSystem*						FindAssetFileSystemForAsset(const fs::path& path);
 
+		// Read-only snapshot of currently-loaded resources for diagnostics / the
+		// editor bridge. Thread-safe (takes the resource lock); dead weak refs are
+		// skipped and the result is capped. No pointers/handles are exposed.
+		struct LoadedResourceInfo
+		{
+			ResourceId  id = 0;
+			std::wstring fsPath;
+			std::string  absPath;
+			long         useCount = 0;
+		};
+		std::vector<LoadedResourceInfo> EnumerateLoadedResources(size_t max = 1000) const;
+
 	private:
 		void JobLoader();
 

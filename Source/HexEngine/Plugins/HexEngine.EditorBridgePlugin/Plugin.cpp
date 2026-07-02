@@ -24,6 +24,9 @@
 #include "../../HexEngine.Core/Scene/Scene.hpp"
 #include "../../HexEngine.Core/Entity/Entity.hpp"
 #include "../../HexEngine.Core/Entity/Component/BaseComponent.hpp"
+#include "../../HexEngine.Core/FileSystem/ResourceSystem.hpp"
+
+#include <deque>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -84,6 +87,18 @@ namespace HexEngine
 		{
 			return json{ {"index", id.index}, {"generation", id.generation} };
 		}
+
+		const char* LogLevelName(LogLevel l)
+		{
+			switch (l)
+			{
+			case LogLevel::Debug: return "debug";
+			case LogLevel::Info:  return "info";
+			case LogLevel::Warn:  return "warn";
+			case LogLevel::Crit:  return "crit";
+			default:              return "info";
+			}
+		}
 	}
 
 	// Marshals tasks from the pipe thread onto the editor main thread. The pipe
@@ -134,10 +149,20 @@ namespace HexEngine
 		std::queue<std::shared_ptr<Task>> _queue;
 	};
 
-	class EditorBridgePlugin : public IPlugin, public IEditorToolPlugin
+	class EditorBridgePlugin : public IPlugin, public IEditorToolPlugin, public ILogFileListener
 	{
 	public:
 		~EditorBridgePlugin() { StopBridge(); }
+
+		// --- ILogFileListener: capture recent log lines into a bounded ring
+		//     buffer (thread-safe; read directly by get_recent_engine_logs). ---
+		void OnLogMessage(const LogMessage& message) override
+		{
+			std::lock_guard<std::mutex> lk(_logMutex);
+			_logRing.push_back(std::string("[") + LogLevelName(message.level) + "] " + message.text);
+			while (_logRing.size() > kMaxLogRing)
+				_logRing.pop_front();
+		}
 
 		// --- IPlugin ---
 		void Destroy() override { StopBridge(); }
@@ -191,6 +216,8 @@ namespace HexEngine
 				return;
 			}
 			WriteSessionFile(pid, pipeName);
+			if (g_pEnv)
+				g_pEnv->GetLogFile().AddListener(this);
 			_started = true;
 			LOG_INFO("EditorBridge: listening on '%s' (opt-in enabled). Read-only inspection bridge active.", pipeName.c_str());
 		}
@@ -198,6 +225,8 @@ namespace HexEngine
 		void StopBridge()
 		{
 			if (!_started) return;
+			if (g_pEnv)
+				g_pEnv->GetLogFile().RemoveListener(this);
 			_server.Stop();
 			RemoveSessionFile();
 			_started = false;
@@ -427,11 +456,33 @@ namespace HexEngine
 			if (m == "inspect_component")
 				return MakeError(id, ErrorCode::NotImplemented, "safe per-field component serialization needs reflection wiring (TODO)");
 			if (m == "list_loaded_resources")
-				return MakeError(id, ErrorCode::NotImplemented, "ResourceSystem does not expose a safe enumeration API yet (TODO)");
+			{
+				// ResourceSystem::EnumerateLoadedResources is internally locked and
+				// exposes no pointers, so it's safe to call from the pipe thread
+				// (no main-thread marshal, no idle-timeout).
+				size_t max = (size_t)req.params.value("limit", 500);
+				if (max > 2000) max = 2000;
+				json arr = json::array();
+				for (const auto& r : g_pEnv->GetResourceSystem().EnumerateLoadedResources(max))
+					arr.push_back(json{ {"id", r.id}, {"fsPath", WideToUtf8(r.fsPath)}, {"absPath", r.absPath}, {"refCount", r.useCount} });
+				return MakeResult(id, json{ {"count", arr.size()}, {"resources", arr} });
+			}
 			if (m == "find_missing_references")
 				return MakeError(id, ErrorCode::NotImplemented, "reference validation is a follow-up (TODO)");
 			if (m == "get_recent_engine_logs")
-				return MakeError(id, ErrorCode::NotImplemented, "in-memory log ring buffer is not exposed yet (TODO)");
+			{
+				// Served from the thread-safe log ring buffer (fed by OnLogMessage).
+				size_t max = (size_t)req.params.value("max", 200);
+				if (max > 1000) max = 1000;
+				json logs = json::array();
+				{
+					std::lock_guard<std::mutex> lk(_logMutex);
+					const size_t start = _logRing.size() > max ? _logRing.size() - max : 0;
+					for (size_t i = start; i < _logRing.size(); ++i)
+						logs.push_back(_logRing[i]);
+				}
+				return MakeResult(id, json{ {"count", logs.size()}, {"logs", logs} });
+			}
 
 			return MakeError(id, ErrorCode::UnknownMethod, "No bridge method named " + m);
 		}
@@ -441,6 +492,10 @@ namespace HexEngine
 		MainThreadQueue _mainThread;
 		fs::path        _sessionFile;
 		bool            _started = false;
+
+		static constexpr size_t kMaxLogRing = 500;
+		std::mutex              _logMutex;
+		std::deque<std::string> _logRing;
 	};
 
 	static EditorBridgePlugin* g_pEditorBridgePlugin = nullptr;

@@ -468,4 +468,28 @@ namespace HexEngine
 
 		return nullptr;
 	}
+
+	std::vector<ResourceSystem::LoadedResourceInfo> ResourceSystem::EnumerateLoadedResources(size_t max) const
+	{
+		std::unique_lock lock(_lock);
+
+		std::vector<LoadedResourceInfo> out;
+		out.reserve((std::min<size_t>)(max, _idToResourceMap.size()));
+		for (const auto& [id, weak] : _idToResourceMap)
+		{
+			if (out.size() >= max)
+				break;
+			auto res = weak.lock();
+			if (!res)
+				continue; // dead weak ref; skip (map is pruned lazily elsewhere)
+
+			LoadedResourceInfo info;
+			info.id       = id;
+			info.fsPath   = res->GetFileSystemPath().wstring();
+			info.absPath  = res->GetAbsolutePath().string();
+			info.useCount = res.use_count() - 1; // discount our temporary lock
+			out.push_back(std::move(info));
+		}
+		return out;
+	}
 }
