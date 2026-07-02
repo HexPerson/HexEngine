@@ -313,12 +313,16 @@ if(HEXENGINE_ENABLE_TESTS)
         "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.Core/Plugin/PluginManifest.cpp"
         "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.Core/FileSystem/PackageManifest.cpp"
         "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.Core/Utility/Sha256.cpp"
+        # MCP server static-tool + bridge-client logic (dependency-light, unit-tested here).
+        "${HEXENGINE_REPO_ROOT}/Source/HexEngine/Tools/HexEngine.McpServer/StaticTools.cpp"
+        "${HEXENGINE_REPO_ROOT}/Source/HexEngine/Tools/HexEngine.McpServer/BridgeClient.cpp"
     )
     target_compile_features(HexEngine.Tests PRIVATE cxx_std_20)
     target_include_directories(HexEngine.Tests PRIVATE "${HEXENGINE_REPO_ROOT}/Include")
     if(MSVC)
         # Sha256.cpp already #pragma-links bcrypt; keep an explicit link for robustness.
         target_link_libraries(HexEngine.Tests PRIVATE bcrypt)
+        target_compile_definitions(HexEngine.Tests PRIVATE _CRT_SECURE_NO_WARNINGS)
     endif()
 
     add_test(NAME HexEngine.Tests COMMAND HexEngine.Tests)

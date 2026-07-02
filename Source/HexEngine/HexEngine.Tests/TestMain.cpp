@@ -9,6 +9,9 @@
 
 #include <thread>
 #include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <cstdlib>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -20,6 +23,9 @@
 #include "../HexEngine.Core/Utility/BlockingQueue.hpp"
 #include "../HexEngine.Core/FileSystem/PackageVerification.hpp"
 #include "../HexEngine.Core/FileSystem/PackageManifest.hpp"
+#include "../Plugins/HexEngine.EditorBridgePlugin/EditorBridgeProtocol.hpp"
+#include "../Tools/HexEngine.McpServer/StaticTools.hpp"
+#include "../Tools/HexEngine.McpServer/BridgeClient.hpp"
 
 using namespace HexEngine;
 
@@ -513,6 +519,81 @@ static void TestPackageManifestRoundtrip()
 	CHECK(!ParsePackageManifest(R"({"version":1,"package":{"sha256":"tooshort"}})", bad, e2)); // sha not 64 chars
 }
 
+// --- Editor bridge protocol ------------------------------------------------
+
+static void TestBridgeProtocol()
+{
+	using namespace HexEngine::EditorBridge;
+	Request r; std::string err;
+
+	// Valid request (with + without params).
+	CHECK(ParseRequestText(R"({"id":1,"method":"get_editor_status","params":{}})", r, err) && r.id == 1 && r.method == "get_editor_status");
+	CHECK(ParseRequestText(R"({"id":2,"method":"list_entities"})", r, err) && r.params.is_object());
+
+	// Rejections: invalid JSON, missing method, missing id, non-integer id, bad params.
+	CHECK(!ParseRequestText("{ not json", r, err));
+	CHECK(!ParseRequestText(R"({"id":3})", r, err));
+	CHECK(!ParseRequestText(R"({"method":"x"})", r, err));
+	CHECK(!ParseRequestText(R"({"id":"x","method":"y"})", r, err));
+	CHECK(!ParseRequestText(R"({"id":4,"method":""})", r, err));
+	CHECK(!ParseRequestText(R"({"id":5,"method":"y","params":[]})", r, err));
+
+	// Response envelope shapes.
+	auto ok = MakeResult(7, EditorBridge::json{ {"a", 1} });
+	CHECK(ok["ok"] == true && ok["id"] == 7 && ok["result"]["a"] == 1);
+	auto e = MakeError(8, ErrorCode::UnknownMethod, "no");
+	CHECK(e["ok"] == false && e["error"]["code"] == "UnknownMethod");
+
+	// Unknown method rejects (via a minimal dispatcher over the parsed request).
+	auto dispatch = [](const std::string& line) -> EditorBridge::json {
+		Request rq; std::string er;
+		if (!ParseRequestText(line, rq, er)) return MakeError(0, ErrorCode::InvalidRequest, er);
+		if (rq.method == "known") return MakeResult(rq.id, EditorBridge::json::object());
+		return MakeError(rq.id, ErrorCode::UnknownMethod, "no bridge method named " + rq.method);
+	};
+	CHECK(dispatch(R"({"id":1,"method":"known"})")["ok"] == true);
+	CHECK(dispatch(R"({"id":1,"method":"nope"})")["error"]["code"] == "UnknownMethod");
+}
+
+// --- MCP static tools + discovery ------------------------------------------
+
+static void TestMcpStaticTools()
+{
+	namespace fs = std::filesystem;
+	std::error_code ec;
+
+	// ValidateNlohmannStaging: empty tree -> not staged; full tree -> staged.
+	fs::path inc = fs::temp_directory_path() / "hexmcp_test_inc";
+	fs::remove_all(inc, ec);
+	fs::create_directories(inc / "nlohmann", ec);
+	auto v0 = HexEngine::Mcp::ValidateNlohmannStaging(inc.string());
+	CHECK(v0["staged"] == false && v0["missing"].size() == 3);
+	for (const char* h : { "json.hpp", "adl_serializer.hpp", "json_fwd.hpp" })
+		{ std::ofstream f(inc / "nlohmann" / h); f << "x"; }
+	auto v1 = HexEngine::Mcp::ValidateNlohmannStaging(inc.string());
+	CHECK(v1["staged"] == true && v1["missing"].empty());
+	fs::remove_all(inc, ec);
+
+	// ParseMsbuildLog: two errors (error C + fatal error LNK) + one warning.
+	const std::string log =
+		"foo.cpp(1,1): error C1083: cannot open\n"
+		"bar.cpp(2): warning C4267: conversion\n"
+		"just an ordinary line\n"
+		"qux.obj : fatal error LNK1120: unresolved\n";
+	auto p = HexEngine::Mcp::ParseMsbuildLog(log);
+	CHECK(p["errorCount"] == 2 && p["warningCount"] == 1 && p["ok"] == false);
+
+	// DiscoverSessions with an empty session dir -> no sessions (the precondition
+	// that makes live MCP tools return EditorNotConnected).
+	fs::path sdir = fs::temp_directory_path() / "hexmcp_empty_sessions_test";
+	fs::remove_all(sdir, ec);
+	fs::create_directories(sdir, ec);
+	_putenv_s("HEXENGINE_BRIDGE_SESSION_DIR", sdir.string().c_str());
+	CHECK(HexEngine::Mcp::DiscoverSessions().empty());
+	_putenv_s("HEXENGINE_BRIDGE_SESSION_DIR", "");
+	fs::remove_all(sdir, ec);
+}
+
 int main()
 {
 	std::printf("HexEngine.Tests\n");
@@ -529,6 +610,8 @@ int main()
 	TestDirectoryWatchStopJoin();
 	TestPackageBlobBounds();
 	TestPackageManifestRoundtrip();
+	TestBridgeProtocol();
+	TestMcpStaticTools();
 	std::printf("\n%d/%d checks passed.\n", g_total - g_fail, g_total);
 	std::printf(g_fail == 0 ? "RESULT: OK\n" : "RESULT: FAILED\n");
 	return g_fail == 0 ? 0 : 1;

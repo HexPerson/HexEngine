@@ -90,6 +90,14 @@ Convenience wrapper:
 For full migration-aware orchestration details, see [BUILDING.md](BUILDING.md).
 Dependency updates are explicit (`python tools/deps/bootstrap.py --update bootstrap-minimal --configs Debug,Release`), not automatic.
 
+## AI / MCP integration
+
+HexEngine can be inspected by AI clients over the Model Context Protocol via a
+standalone `HexEngine.McpServer.exe` backed by an editor-only, read-only live
+bridge plugin. The MCP protocol is never compiled into the engine or shipped
+game. See [docs/MCP.md](docs/MCP.md) for the architecture, tools, security model,
+and how to run it.
+
 # Why HexEngine?
 HexEngine is built for developers who want:
 
