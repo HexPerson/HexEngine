@@ -26,11 +26,36 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Restore built dependency libraries (Debug)
+        id: deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          # Cache ONLY the dependency build outputs (staged libs + runtime DLLs).
+          # The save step below runs BEFORE the solution build, so the per-commit
+          # engine libs are never captured. Keyed on the dependency manifest; no
+          # restore-keys, so a manifest ref change can't restore a stale prebuilt
+          # lib that the idempotent bootstrap would then wrongly skip rebuilding.
+          path: |
+            Libs
+            Bin
+          key: hexdeps-${{ runner.os }}-debug-${{ hashFiles('build/dependencies.lock.json') }}
+
       - name: Configure (Debug)
         run: cmake --preset vs2022-x64-debug
 
       - name: Minimal Bootstrap (Debug)
         run: cmake --build --preset minimal-bootstrap-debug
+
+      - name: Save built dependency libraries (Debug)
+        # Save after bootstrap but before the solution build, so the cache holds
+        # dependency artifacts only. Skipped on a hit (cache keys are immutable).
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Libs
+            Bin
+          key: hexdeps-${{ runner.os }}-debug-${{ hashFiles('build/dependencies.lock.json') }}
 
       - name: Build Solution Modern (Debug)
         run: cmake --build --preset sln-build-debug-modern
@@ -50,11 +75,29 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Restore built dependency libraries (Release)
+        id: deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            Libs
+            Bin
+          key: hexdeps-${{ runner.os }}-release-${{ hashFiles('build/dependencies.lock.json') }}
+
       - name: Configure (Release)
         run: cmake --preset vs2022-x64-release
 
       - name: Minimal Bootstrap (Release)
         run: cmake --build --preset minimal-bootstrap-release
+
+      - name: Save built dependency libraries (Release)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            Libs
+            Bin
+          key: hexdeps-${{ runner.os }}-release-${{ hashFiles('build/dependencies.lock.json') }}
 
       - name: Build Solution Modern (Release)
         run: cmake --build --preset sln-build-release-modern
