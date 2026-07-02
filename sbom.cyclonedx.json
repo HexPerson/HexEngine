@@ -1,0 +1,839 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "application",
+      "name": "HexEngine",
+      "version": "0.1.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "angelscript",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "Zlib"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://www.angelcode.com/angelscript/"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/angelscript/sdk/docs/doxygen/source/doc_license.h"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "assimp",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:github/assimp/assimp",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/assimp/assimp"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/assimp/LICENSE"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "brotli",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/google/brotli"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/brotli/LICENSE"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "cxxopts",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/jarro2783/cxxopts"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/cxxopts/LICENSE"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "directxtex",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/microsoft/DirectXTex"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/directxtex/LICENSE"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "directxtk",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/microsoft/DirectXTK"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/directxtk/LICENSE"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "fastnoiselite",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/Auburn/FastNoiseLite"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/fastnoiselite/LICENSE"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "freetype",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "FTL"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://freetype.org/"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/freetype/LICENSE.TXT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "hbaoplus",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "name": "NVIDIA HBAO+ SDK License"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://developer.nvidia.com/gameworks-visualfx-overview"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/hbaoplus/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "ispc",
+      "version": "1.26.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:github/ispc/ispc@v1.26.0",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://ispc.github.io/"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/ispc-v1.26.0-windows/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "nrd",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "name": "NVIDIA Real-Time Denoisers SDK License"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/NVIDIAGameWorks/RayTracingDenoiser"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/nrd/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "oidn",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/OpenImageDenoise/oidn"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/oidn/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "oneapi-tbb",
+      "version": "2022.0.0",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "purl": "pkg:github/uxlfoundation/oneTBB@v2022.0.0",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/uxlfoundation/oneTBB"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/oneapi-tbb-2022.0.0/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "physx",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/NVIDIA-Omniverse/PhysX"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/physx/LICENSE.md"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "rapidjson",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://rapidjson.org/"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/rapidjson/LICENSE.MIT"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "rapidxml",
+      "version": "vendored",
+      "licenses": [
+        {
+          "expression": "BSL-1.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://rapidxml.sourceforge.net/"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/rapidxml/license.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "recastnavigation",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "Zlib"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/recastnavigation/recastnavigation"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/recastnavigation/License.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "retpack2d",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/BinnyCode/retpack2d"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/retpack2d/LICENSE"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "SDL",
+      "version": "3.2.4",
+      "licenses": [
+        {
+          "license": {
+            "id": "Zlib"
+          }
+        }
+      ],
+      "purl": "pkg:github/libsdl-org/SDL@release-3.2.4",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://www.libsdl.org/"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/SDL-release-3.2.4/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "shaderconductor",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/microsoft/ShaderConductor"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/shaderconductor/LICENSE"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "Streamline",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "name": "NVIDIA Streamline SDK License"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/NVIDIAGameWorks/Streamline"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/Streamline/license.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "application",
+      "name": "vcpkg",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/microsoft/vcpkg"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/vcpkg/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        },
+        {
+          "name": "hexengine:notes",
+          "value": "Build-time package manager, not linked into shipped binaries."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "VXGI",
+      "version": "vendored",
+      "licenses": [
+        {
+          "license": {
+            "name": "NVIDIA VXGI SDK License"
+          }
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://developer.nvidia.com/vxgi"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        },
+        {
+          "name": "hexengine:notes",
+          "value": "No top-level license file vendored; governed by the NVIDIA GameWorks SDK EULA."
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "brotli",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/brotli",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/google/brotli"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "cxxopts",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/cxxopts",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/jarro2783/cxxopts"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "directxtex",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/directxtex",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/microsoft/DirectXTex"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "directxtk",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/directxtk",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/microsoft/DirectXTK"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "freetype",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "FTL"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/freetype",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://freetype.org/"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "gamenetworkingsockets",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "BSD-3-Clause"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/gamenetworkingsockets",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/ValveSoftware/GameNetworkingSockets"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "nlohmann-json",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/nlohmann-json",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/nlohmann/json"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    }
+  ]
+}

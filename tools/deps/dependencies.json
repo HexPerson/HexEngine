@@ -1,0 +1,45 @@
+{
+  "_comment": "Authoritative dependency inventory for HexEngine. SPDX ids are hand-curated (they can't be reliably auto-detected from license text); tools/deps/generate_sbom.py cross-checks this against vcpkg.json + the ThirdParty/ tree, verifies each recorded license file exists, and emits sbom.cyclonedx.json + THIRD_PARTY_NOTICES.md. Keep this file in sync when adding/removing a dependency - CI fails if it drifts.",
+  "project": {
+    "name": "HexEngine",
+    "version": "0.1.0",
+    "vcpkg_baseline": "c3867e714dd3a51c272826eea77267876517ed99"
+  },
+  "ignore_thirdparty_dirs": {
+    "oidn_old": "Superseded by the 'oidn' directory; kept temporarily, not linked."
+  },
+  "vcpkg": [
+    { "name": "brotli",                "spdx": "MIT",          "homepage": "https://github.com/google/brotli",              "purl": "pkg:vcpkg/brotli" },
+    { "name": "cxxopts",               "spdx": "MIT",          "homepage": "https://github.com/jarro2783/cxxopts",          "purl": "pkg:vcpkg/cxxopts" },
+    { "name": "directxtk",             "spdx": "MIT",          "homepage": "https://github.com/microsoft/DirectXTK",        "purl": "pkg:vcpkg/directxtk" },
+    { "name": "directxtex",            "spdx": "MIT",          "homepage": "https://github.com/microsoft/DirectXTex",       "purl": "pkg:vcpkg/directxtex" },
+    { "name": "freetype",              "spdx": "FTL",          "homepage": "https://freetype.org/",                         "purl": "pkg:vcpkg/freetype" },
+    { "name": "gamenetworkingsockets", "spdx": "BSD-3-Clause", "homepage": "https://github.com/ValveSoftware/GameNetworkingSockets", "purl": "pkg:vcpkg/gamenetworkingsockets" },
+    { "name": "nlohmann-json",         "spdx": "MIT",          "homepage": "https://github.com/nlohmann/json",              "purl": "pkg:vcpkg/nlohmann-json" }
+  ],
+  "thirdparty": [
+    { "name": "SDL",              "dir": "SDL-release-3.2.4",    "version": "3.2.4",    "spdx": "Zlib",         "license_file": "ThirdParty/SDL-release-3.2.4/LICENSE.txt", "homepage": "https://www.libsdl.org/",                               "purl": "pkg:github/libsdl-org/SDL@release-3.2.4" },
+    { "name": "Streamline",       "dir": "Streamline",          "version": "vendored", "spdx": "LicenseRef-NVIDIA-Streamline", "license_name": "NVIDIA Streamline SDK License", "license_file": "ThirdParty/Streamline/license.txt", "homepage": "https://github.com/NVIDIAGameWorks/Streamline" },
+    { "name": "VXGI",             "dir": "VXGI",                "version": "vendored", "spdx": "LicenseRef-NVIDIA-VXGI",       "license_name": "NVIDIA VXGI SDK License",       "license_file": null,                                 "homepage": "https://developer.nvidia.com/vxgi", "notes": "No top-level license file vendored; governed by the NVIDIA GameWorks SDK EULA." },
+    { "name": "angelscript",      "dir": "angelscript",         "version": "vendored", "spdx": "Zlib",         "license_file": "ThirdParty/angelscript/sdk/docs/doxygen/source/doc_license.h", "homepage": "https://www.angelcode.com/angelscript/" },
+    { "name": "assimp",           "dir": "assimp",              "version": "vendored", "spdx": "BSD-3-Clause", "license_file": "ThirdParty/assimp/LICENSE",           "homepage": "https://github.com/assimp/assimp",                      "purl": "pkg:github/assimp/assimp" },
+    { "name": "brotli",           "dir": "brotli",              "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/brotli/LICENSE",           "homepage": "https://github.com/google/brotli" },
+    { "name": "cxxopts",          "dir": "cxxopts",             "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/cxxopts/LICENSE",          "homepage": "https://github.com/jarro2783/cxxopts" },
+    { "name": "directxtex",       "dir": "directxtex",          "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/directxtex/LICENSE",       "homepage": "https://github.com/microsoft/DirectXTex" },
+    { "name": "directxtk",        "dir": "directxtk",           "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/directxtk/LICENSE",        "homepage": "https://github.com/microsoft/DirectXTK" },
+    { "name": "fastnoiselite",    "dir": "fastnoiselite",       "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/fastnoiselite/LICENSE",    "homepage": "https://github.com/Auburn/FastNoiseLite" },
+    { "name": "freetype",         "dir": "freetype",            "version": "vendored", "spdx": "FTL",          "license_file": "ThirdParty/freetype/LICENSE.TXT",     "homepage": "https://freetype.org/" },
+    { "name": "hbaoplus",         "dir": "hbaoplus",            "version": "vendored", "spdx": "LicenseRef-NVIDIA-HBAOPlus", "license_name": "NVIDIA HBAO+ SDK License", "license_file": "ThirdParty/hbaoplus/LICENSE.txt", "homepage": "https://developer.nvidia.com/gameworks-visualfx-overview" },
+    { "name": "ispc",             "dir": "ispc-v1.26.0-windows", "version": "1.26.0",  "spdx": "BSD-3-Clause", "license_file": "ThirdParty/ispc-v1.26.0-windows/LICENSE.txt", "homepage": "https://ispc.github.io/",                       "purl": "pkg:github/ispc/ispc@v1.26.0" },
+    { "name": "nrd",              "dir": "nrd",                 "version": "vendored", "spdx": "LicenseRef-NVIDIA-NRD",        "license_name": "NVIDIA Real-Time Denoisers SDK License", "license_file": "ThirdParty/nrd/LICENSE.txt", "homepage": "https://github.com/NVIDIAGameWorks/RayTracingDenoiser" },
+    { "name": "oidn",             "dir": "oidn",                "version": "vendored", "spdx": "Apache-2.0",   "license_file": "ThirdParty/oidn/LICENSE.txt",         "homepage": "https://github.com/OpenImageDenoise/oidn" },
+    { "name": "oneapi-tbb",       "dir": "oneapi-tbb-2022.0.0", "version": "2022.0.0", "spdx": "Apache-2.0",   "license_file": "ThirdParty/oneapi-tbb-2022.0.0/LICENSE.txt", "homepage": "https://github.com/uxlfoundation/oneTBB",       "purl": "pkg:github/uxlfoundation/oneTBB@v2022.0.0" },
+    { "name": "physx",            "dir": "physx",               "version": "vendored", "spdx": "BSD-3-Clause", "license_file": "ThirdParty/physx/LICENSE.md",         "homepage": "https://github.com/NVIDIA-Omniverse/PhysX" },
+    { "name": "rapidjson",        "dir": "rapidjson",           "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/rapidjson/LICENSE.MIT",    "homepage": "https://rapidjson.org/" },
+    { "name": "rapidxml",         "dir": "rapidxml",            "version": "vendored", "spdx": "BSL-1.0 OR MIT", "license_file": "ThirdParty/rapidxml/license.txt",   "homepage": "https://rapidxml.sourceforge.net/" },
+    { "name": "recastnavigation", "dir": "recastnavigation",    "version": "vendored", "spdx": "Zlib",         "license_file": "ThirdParty/recastnavigation/License.txt", "homepage": "https://github.com/recastnavigation/recastnavigation" },
+    { "name": "retpack2d",        "dir": "retpack2d",           "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/retpack2d/LICENSE",        "homepage": "https://github.com/BinnyCode/retpack2d" },
+    { "name": "shaderconductor",  "dir": "shaderconductor",     "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/shaderconductor/LICENSE",  "homepage": "https://github.com/microsoft/ShaderConductor" },
+    { "name": "vcpkg",            "dir": "vcpkg",               "version": "vendored", "spdx": "MIT",          "license_file": "ThirdParty/vcpkg/LICENSE.txt",        "homepage": "https://github.com/microsoft/vcpkg", "notes": "Build-time package manager, not linked into shipped binaries." }
+  ]
+}

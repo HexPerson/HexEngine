@@ -1,0 +1,9 @@
+# Keep the generated dependency artifacts (and the tooling that produces them)
+# LF-normalized. The Dependency Report CI job regenerates these on Linux and
+# diffs them against the committed copies; a CRLF/LF mismatch would make that
+# drift check spuriously fail. Scoped to just these paths so the rest of the
+# repo's line-ending handling is unchanged.
+/sbom.cyclonedx.json           text eol=lf
+/THIRD_PARTY_NOTICES.md        text eol=lf
+/tools/deps/dependencies.json  text eol=lf
+/tools/deps/generate_sbom.py   text eol=lf

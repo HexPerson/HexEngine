@@ -1,0 +1,78 @@
+name: Dependency Report
+
+# Software bill of materials + license + vulnerability reporting for HexEngine's
+# dependencies (finding #8).
+#
+#  * sbom-verify (BLOCKING): regenerates the SBOM + third-party notices from the
+#    curated inventory and fails if (a) the inventory has drifted from the real
+#    dependency sources - a lib in vcpkg.json / ThirdParty/ that isn't inventoried
+#    (or vice versa), or (b) the committed sbom.cyclonedx.json / THIRD_PARTY_
+#    NOTICES.md are stale. The SBOM is uploaded as a build artifact.
+#  * osv-scan (ADVISORY): scans the SBOM against the OSV vulnerability database
+#    and reports known CVEs in the log. continue-on-error so a transitive CVE
+#    outside our control surfaces without blocking merges.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    - cron: '17 5 * * 1'   # Mondays 05:17 UTC - catch newly published advisories
+
+jobs:
+  sbom-verify:
+    name: Generate & verify SBOM
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Regenerate SBOM + notices
+        # Exits non-zero on structural drift (dependency missing from / extra in
+        # the inventory relative to vcpkg.json + ThirdParty/).
+        run: python tools/deps/generate_sbom.py
+
+      - name: Fail if committed SBOM / notices are stale
+        run: |
+          if ! git diff --exit-code -- sbom.cyclonedx.json THIRD_PARTY_NOTICES.md; then
+            echo "::error::sbom.cyclonedx.json / THIRD_PARTY_NOTICES.md are out of date."
+            echo "Run 'python tools/deps/generate_sbom.py' and commit the result."
+            exit 1
+          fi
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hexengine-sbom
+          path: sbom.cyclonedx.json
+
+  osv-scan:
+    name: OSV vulnerability scan (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
+      - name: Install & run OSV-Scanner against the SBOM
+        continue-on-error: true
+        run: |
+          set -x
+          # Module path + subcommand differ across osv-scanner v1/v2; try both.
+          go install github.com/google/osv-scanner/v2/cmd/osv-scanner@latest \
+            || go install github.com/google/osv-scanner/cmd/osv-scanner@latest
+          export PATH="$PATH:$(go env GOPATH)/bin"
+          osv-scanner scan --sbom=sbom.cyclonedx.json \
+            || osv-scanner --sbom=sbom.cyclonedx.json
