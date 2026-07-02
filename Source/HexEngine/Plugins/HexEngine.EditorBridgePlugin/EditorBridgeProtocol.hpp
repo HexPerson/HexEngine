@@ -44,6 +44,19 @@ namespace EditorBridge
 		inline constexpr const char* NotAvailable   = "NotAvailable";   // e.g. no scene open
 		inline constexpr const char* Internal       = "Internal";
 		inline constexpr const char* ResponseTooLarge = "ResponseTooLarge";
+		inline constexpr const char* Unauthorized   = "Unauthorized";  // missing/wrong session token
+	}
+
+	// Constant-time-ish string compare for the session token (avoids trivially
+	// leaking length/prefix via early-out). Local IPC, so this is belt-and-braces.
+	inline bool TokensMatch(const std::string& a, const std::string& b)
+	{
+		if (a.empty() || a.size() != b.size())
+			return false;
+		unsigned char diff = 0;
+		for (size_t i = 0; i < a.size(); ++i)
+			diff |= (unsigned char)(a[i] ^ b[i]);
+		return diff == 0;
 	}
 
 	// A parsed, validated request.
@@ -51,6 +64,7 @@ namespace EditorBridge
 	{
 		int64_t     id = 0;
 		std::string method;
+		std::string token;   // per-session auth token (optional in the wire form)
 		json        params = json::object();
 	};
 
@@ -80,6 +94,15 @@ namespace EditorBridge
 		{
 			error = "'method' must be non-empty";
 			return false;
+		}
+		if (j.contains("token"))
+		{
+			if (!j["token"].is_string())
+			{
+				error = "'token' must be a string when present";
+				return false;
+			}
+			out.token = j["token"].get<std::string>();
 		}
 		if (j.contains("params"))
 		{
@@ -148,6 +171,9 @@ namespace EditorBridge
 		std::string projectName;   // best-effort; may be empty
 		uint64_t    startedAtUnix = 0;
 		int         protocolVersion = kProtocolVersion;
+		std::string token;         // per-session secret; only a process that can read
+		                           // this file (same user) learns it, and every
+		                           // request must echo it back.
 	};
 
 	inline std::string PipeNameForPid(uint32_t pid)
@@ -168,6 +194,7 @@ namespace EditorBridge
 			{"project", s.projectName},
 			{"startedAtUnix", s.startedAtUnix},
 			{"protocolVersion", s.protocolVersion},
+			{"token", s.token},
 		};
 	}
 
@@ -180,6 +207,7 @@ namespace EditorBridge
 		out.projectName     = j.value("project", std::string());
 		out.startedAtUnix   = j.value("startedAtUnix", (uint64_t)0);
 		out.protocolVersion = j.value("protocolVersion", 0);
+		out.token           = j.value("token", std::string());
 		return out.pid != 0 && !out.pipeName.empty();
 	}
 }

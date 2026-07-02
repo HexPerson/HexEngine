@@ -41,6 +41,7 @@
 #include <future>
 #include <mutex>
 #include <queue>
+#include <random>
 
 namespace fs = std::filesystem;
 
@@ -122,6 +123,31 @@ namespace HexEngine
 			case LogLevel::Crit:  return "crit";
 			default:              return "info";
 			}
+		}
+
+		// 32 hex chars of per-session secret. Only a process that can read the
+		// session file (same OS user) learns it; every request must echo it.
+		std::string GenerateToken()
+		{
+			std::random_device rd;
+			static const char* hex = "0123456789abcdef";
+			std::string t;
+			t.reserve(32);
+			for (int i = 0; i < 16; ++i)
+			{
+				const unsigned v = rd();
+				t.push_back(hex[(v >> 4) & 0xF]);
+				t.push_back(hex[v & 0xF]);
+			}
+			return t;
+		}
+
+		bool ProcessAlive(uint32_t pid)
+		{
+			HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+			if (!h) return false;
+			CloseHandle(h);
+			return true;
 		}
 	}
 
@@ -242,6 +268,9 @@ namespace HexEngine
 			const uint32_t pid = (uint32_t)GetCurrentProcessId();
 			const std::string pipeName = PipeNameForPid(pid);
 
+			_token = GenerateToken();
+			CleanStaleSessions(pid); // remove session files whose editor process has exited
+
 			auto handler = [this](const std::string& line) -> std::string { return DispatchLine(line); };
 			if (!_server.Start(pipeName, handler))
 			{
@@ -272,6 +301,7 @@ namespace HexEngine
 			s.pid = pid;
 			s.pipeName = pipeName;
 			s.startedAtUnix = (uint64_t)std::time(nullptr);
+			s.token = _token;
 			if (auto scene = PrimaryUserScene())
 				s.projectName = WideToUtf8(scene->GetName());
 
@@ -291,6 +321,31 @@ namespace HexEngine
 			_sessionFile.clear();
 		}
 
+		// Remove session files left behind by editor processes that have exited
+		// (crash / kill), so discovery never points a client at a dead pipe.
+		void CleanStaleSessions(uint32_t selfPid)
+		{
+			std::error_code ec;
+			for (fs::directory_iterator it(SessionDirPath(), ec), end; !ec && it != end; it.increment(ec))
+			{
+				if (!it->is_regular_file(ec)) continue;
+				const fs::path p = it->path();
+				if (p.extension() != ".json" || p.filename().string().rfind("session-", 0) != 0) continue;
+
+				std::ifstream in(p, std::ios::binary);
+				if (!in.is_open()) continue;
+				std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				in.close();
+
+				uint32_t pid = 0;
+				try { pid = json::parse(text).value("pid", 0u); } catch (...) { fs::remove(p, ec); continue; }
+				if (pid == 0) { fs::remove(p, ec); continue; }
+				if (pid == selfPid) continue;
+				if (!ProcessAlive(pid))
+					fs::remove(p, ec);
+			}
+		}
+
 		// Pipe thread: parse -> dispatch -> serialise (capped).
 		std::string DispatchLine(const std::string& line)
 		{
@@ -298,6 +353,11 @@ namespace HexEngine
 			std::string err;
 			if (!ParseRequestText(line, req, err))
 				return MakeError(0, ErrorCode::InvalidRequest, err).dump();
+
+			// Per-session auth: only a caller that read our session file (same OS
+			// user) knows the token. Reject everything else - fail closed.
+			if (!TokensMatch(req.token, _token))
+				return MakeError(req.id, ErrorCode::Unauthorized, "missing or invalid session token").dump();
 
 			json response = Dispatch(req);
 			return SerializeResponseCapped(response, req.id);
@@ -524,6 +584,7 @@ namespace HexEngine
 		BridgeServer    _server;
 		MainThreadQueue _mainThread;
 		fs::path        _sessionFile;
+		std::string     _token;
 		bool            _started = false;
 
 		static constexpr size_t kMaxLogRing = 500;

@@ -553,6 +553,31 @@ static void TestBridgeProtocol()
 	};
 	CHECK(dispatch(R"({"id":1,"method":"known"})")["ok"] == true);
 	CHECK(dispatch(R"({"id":1,"method":"nope"})")["error"]["code"] == "UnknownMethod");
+
+	// --- Phase 3: per-session auth token ---
+	CHECK(ParseRequestText(R"({"id":1,"method":"m","token":"abc"})", r, err) && r.token == "abc");
+	CHECK(!ParseRequestText(R"({"id":1,"method":"m","token":123})", r, err)); // token must be a string
+	CHECK(TokensMatch("deadbeef", "deadbeef"));
+	CHECK(!TokensMatch("deadbeef", "deadbee0"));
+	CHECK(!TokensMatch("", ""));           // empty never matches
+	CHECK(!TokensMatch("abc", "abcd"));    // length mismatch
+
+	// Session round-trip preserves the token.
+	SessionInfo si; si.pid = 42; si.pipeName = "\\\\.\\pipe\\x"; si.token = "sekret"; si.startedAtUnix = 7;
+	SessionInfo si2;
+	CHECK(SessionFromJson(SessionToJson(si), si2) && si2.token == "sekret" && si2.pid == 42);
+
+	// An auth-gated dispatcher rejects a missing/wrong token, accepts the right one.
+	const std::string serverToken = "sekret";
+	auto authed = [&](const std::string& line) -> EditorBridge::json {
+		Request rq; std::string er;
+		if (!ParseRequestText(line, rq, er)) return MakeError(0, ErrorCode::InvalidRequest, er);
+		if (!TokensMatch(rq.token, serverToken)) return MakeError(rq.id, ErrorCode::Unauthorized, "no");
+		return MakeResult(rq.id, EditorBridge::json::object());
+	};
+	CHECK(authed(R"({"id":1,"method":"m"})")["error"]["code"] == "Unauthorized");                 // missing
+	CHECK(authed(R"({"id":1,"method":"m","token":"wrong"})")["error"]["code"] == "Unauthorized");  // wrong
+	CHECK(authed(R"({"id":1,"method":"m","token":"sekret"})")["ok"] == true);                      // right
 }
 
 // --- MCP static tools + discovery ------------------------------------------

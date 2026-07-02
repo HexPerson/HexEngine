@@ -34,6 +34,14 @@ namespace Mcp
 			explicit operator bool() const { return h != INVALID_HANDLE_VALUE && h != nullptr; }
 		};
 
+		bool ProcessAlive(uint32_t pid)
+		{
+			HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
+			if (!h) return false;
+			CloseHandle(h);
+			return true;
+		}
+
 		// Overlapped write of the whole buffer, bounded by timeoutMs.
 		bool WriteAll(HANDLE pipe, const std::string& data, unsigned int timeoutMs, std::string& err)
 		{
@@ -119,8 +127,11 @@ namespace Mcp
 			try { j = json::parse(text); } catch (...) { continue; }
 
 			SessionInfo s;
-			if (HexEngine::EditorBridge::SessionFromJson(j, s))
-				sessions.push_back(s);
+			if (!HexEngine::EditorBridge::SessionFromJson(j, s))
+				continue;
+			if (!ProcessAlive(s.pid))
+				continue; // stale session file (editor exited); skip
+			sessions.push_back(s);
 		}
 
 		std::sort(sessions.begin(), sessions.end(),
@@ -154,7 +165,12 @@ namespace Mcp
 			WaitNamedPipeW(pipe.c_str(), waitMs);
 		}
 
-		std::string line = request.dump();
+		// Authenticate with the session token learned from the (readable) session
+		// file, so the bridge accepts the request.
+		json authed = request;
+		if (!session.token.empty())
+			authed["token"] = session.token;
+		std::string line = authed.dump();
 		line.push_back('\n');
 		if (!WriteAll(handle.h, line, timeoutMs, error))
 			return false;

@@ -160,6 +160,14 @@ ctest --preset tests-debug
 ## Security model
 
 - **Local only.** Named pipe only — no network sockets, no external ports.
+- **Per-session auth token.** On start the bridge generates a random token, stores
+  it in its session file, and requires every request to echo it (constant-time
+  compared, `Unauthorized` otherwise). Only a process that can read that file (the
+  same OS user) learns the token — a different local user cannot call the bridge.
+  Stale session files (editor exited/crashed) are pruned on start and skipped by
+  the client's discovery. The plugin must never appear in a **production plugin
+  allowlist**; it is already gated to editor + opt-in and cannot run in a shipped
+  game.
 - **Read-only (Phase 1).** No scene/component/asset mutation, no asset
   import/reimport, no file writes (except the bridge session file), no file
   deletes, no shell/process execution.
