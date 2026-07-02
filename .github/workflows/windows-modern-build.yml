@@ -11,6 +11,9 @@ on:
 jobs:
   debug-modern:
     runs-on: windows-2022
+    # Backstop against a hung dependency build (was silently running toward the
+    # 6h default). A healthy run is well under this.
+    timeout-minutes: 300
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,6 +37,7 @@ jobs:
 
   release-modern:
     runs-on: windows-2022
+    timeout-minutes: 300
     steps:
       - name: Checkout
         uses: actions/checkout@v4

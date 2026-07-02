@@ -135,6 +135,23 @@ def run_git(args: list[str]) -> None:
     )
 
 
+def staged_lib_present(ctx: "RuntimeContext", config: str, *patterns: str) -> bool:
+    """True if every glob pattern matches at least one file in Libs/x64/<config>.
+
+    Used to make the (very expensive) dependency BUILD handlers idempotent: the
+    modern CI runs the bootstrap once as its own step and then again as a build
+    dependency of the solution target, so without this every heavy library -
+    including ShaderConductor, which compiles the DirectX Shader Compiler from
+    source - was rebuilt twice per job, in both Debug and Release. When the
+    staged .lib is already present we skip the rebuild (the repo is still cloned
+    so its headers remain available to the solution build).
+    """
+    libs = ctx.libs_dir(config)
+    if not libs.exists():
+        return False
+    return all(any(libs.glob(pattern)) for pattern in patterns)
+
+
 def detect_msbuild_path() -> Path:
     msbuild = shutil.which("msbuild")
     if msbuild:
@@ -223,6 +240,9 @@ def lock_current_refs(manifest: dict) -> None:
 
 def build_directxtk(ctx: RuntimeContext, dep: dict, config: str) -> None:
     repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    if staged_lib_present(ctx, config, "DirectXTK.lib"):
+        print(f"[skip-build] directxtk {config}: DirectXTK.lib already staged")
+        return
     win10_vcxproj = repo / "DirectXTK_Desktop_2022_Win10.vcxproj"
     if win10_vcxproj.exists():
         run(
@@ -249,6 +269,10 @@ def build_directxtk(ctx: RuntimeContext, dep: dict, config: str) -> None:
 
 def build_freetype(ctx: RuntimeContext, dep: dict, config: str) -> None:
     repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    lib_name = "freetyped.lib" if config == "Debug" else "freetype.lib"
+    if staged_lib_present(ctx, config, lib_name):
+        print(f"[skip-build] freetype {config}: {lib_name} already staged")
+        return
     build_dir = repo / "build"
     mkdir(build_dir)
     run(["cmake", "-S", "..", "-G", ctx.generator, "-A", ctx.arch], cwd=build_dir)
@@ -259,6 +283,9 @@ def build_freetype(ctx: RuntimeContext, dep: dict, config: str) -> None:
 
 def build_directxtex(ctx: RuntimeContext, dep: dict, config: str) -> None:
     repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    if staged_lib_present(ctx, config, "DirectXTex.lib"):
+        print(f"[skip-build] directxtex {config}: DirectXTex.lib already staged")
+        return
     build_dir = repo / "build"
     mkdir(build_dir)
     run(["cmake", "-S", "..", "-G", ctx.generator, "-A", ctx.arch], cwd=build_dir)
@@ -268,6 +295,9 @@ def build_directxtex(ctx: RuntimeContext, dep: dict, config: str) -> None:
 
 def build_brotli(ctx: RuntimeContext, dep: dict, config: str) -> None:
     repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    if staged_lib_present(ctx, config, "brotli*.lib"):
+        print(f"[skip-build] brotli {config}: brotli*.lib already staged")
+        return
     out_dir = repo / "out"
     mkdir(out_dir)
     run(
@@ -292,6 +322,11 @@ def build_brotli(ctx: RuntimeContext, dep: dict, config: str) -> None:
 
 def build_physx(ctx: RuntimeContext, dep: dict, config: str) -> None:
     repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    # PhysX emits a whole family of libs; PhysXFoundation_64.lib is always part
+    # of a complete build, so treat its presence as "already built".
+    if staged_lib_present(ctx, config, "PhysX*.lib", "PhysXFoundation*.lib"):
+        print(f"[skip-build] physx {config}: PhysX libraries already staged")
+        return
     candidates = (repo / "physx", repo)
     root = None
     for candidate in candidates:
@@ -329,6 +364,11 @@ def build_physx(ctx: RuntimeContext, dep: dict, config: str) -> None:
 
 def build_shaderconductor(ctx: RuntimeContext, dep: dict, config: str) -> None:
     repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    # By far the most expensive dependency: a source build of the DirectX Shader
+    # Compiler (LLVM fork). If the staged lib is already present, never re-run it.
+    if staged_lib_present(ctx, config, "ShaderConductor.lib"):
+        print(f"[skip-build] shaderconductor {config}: ShaderConductor.lib already staged")
+        return
     prebuilt_candidates = [
         repo / "Build" / "lib" / config / "ShaderConductor.lib",
         repo / "build" / "lib" / config / "ShaderConductor.lib",
