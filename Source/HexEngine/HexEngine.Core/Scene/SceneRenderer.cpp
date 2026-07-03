@@ -405,16 +405,38 @@ namespace HexEngine
 			return true;
 		}
 
-		static ITexture3D* CreateCloudNoiseVolume(int32_t resolution, int32_t seed, float frequency, int32_t octaves, float gain, float lacunarity)
+		// Builds a cloud noise volume. Plain fractal simplex (the previous approach)
+		// only yields smooth fog blobs; real cumulus structure comes from
+		// Perlin-Worley - low-frequency Perlin FBM remapped by inverted-Worley
+		// (cellular) FBM, which carves the billowy cauliflower lumps (Guerrilla
+		// "Nubis" / Schneider). `billowShape` picks the base-shape build; otherwise
+		// an inverted-Worley FBM is emitted for high-frequency edge erosion. Single
+		// R32 channel - the cloud shader samples .r as before.
+		static ITexture3D* CreateCloudNoiseVolume(int32_t resolution, int32_t seed, float frequency, int32_t octaves, float gain, float lacunarity, bool billowShape)
 		{
-			FastNoiseLite noise;
-			noise.SetSeed(seed);
-			noise.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
-			noise.SetFrequency(frequency);
-			noise.SetFractalType(FastNoiseLite::FractalType_FBm);
-			noise.SetFractalOctaves(octaves);
-			noise.SetFractalGain(gain);
-			noise.SetFractalLacunarity(lacunarity);
+			// Low-frequency Perlin/Simplex FBM base (large-scale coverage).
+			FastNoiseLite perlin;
+			perlin.SetSeed(seed);
+			perlin.SetNoiseType(FastNoiseLite::NoiseType_OpenSimplex2S);
+			perlin.SetFrequency(frequency);
+			perlin.SetFractalType(FastNoiseLite::FractalType_FBm);
+			perlin.SetFractalOctaves(octaves);
+			perlin.SetFractalGain(gain);
+			perlin.SetFractalLacunarity(lacunarity);
+
+			// Worley/cellular FBM. Inverting the F1 distance makes cell centres
+			// bright, which is what forms billows in the shape and wisps in detail.
+			FastNoiseLite worley;
+			worley.SetSeed(seed + 501);
+			worley.SetNoiseType(FastNoiseLite::NoiseType_Cellular);
+			worley.SetCellularDistanceFunction(FastNoiseLite::CellularDistanceFunction_Euclidean);
+			worley.SetCellularReturnType(FastNoiseLite::CellularReturnType_Distance);
+			worley.SetCellularJitter(1.0f);
+			worley.SetFractalType(FastNoiseLite::FractalType_FBm);
+			worley.SetFractalOctaves(std::max(2, octaves - 1));
+			worley.SetFractalGain(0.5f);
+			worley.SetFractalLacunarity(2.0f);
+			worley.SetFrequency(frequency * (billowShape ? 1.7f : 2.3f));
 
 			std::vector<float> noiseData(static_cast<size_t>(resolution) * static_cast<size_t>(resolution) * static_cast<size_t>(resolution), 0.0f);
 
@@ -424,10 +446,31 @@ namespace HexEngine
 				{
 					for (int32_t x = 0; x < resolution; ++x)
 					{
-						const float n = noise.GetNoise(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
-						const float normalized = std::clamp(n * 0.5f + 0.5f, 0.0f, 1.0f);
+						const float fx = static_cast<float>(x);
+						const float fy = static_cast<float>(y);
+						const float fz = static_cast<float>(z);
+
+						// Inverted Worley FBM: 1 = billow core, 0 = cellular edge.
+						const float worleyBillow = std::clamp(1.0f - (worley.GetNoise(fx, fy, fz) * 0.5f + 0.5f), 0.0f, 1.0f);
+
+						float value;
+						if (billowShape)
+						{
+							const float p = std::clamp(perlin.GetNoise(fx, fy, fz) * 0.5f + 0.5f, 0.0f, 1.0f);
+							// Perlin-Worley remap (Schneider): dilate the Perlin base by
+							// the inverted Worley so puffs merge in the cores and erode
+							// to individual billows at the edges.
+							const float low = worleyBillow - 1.0f;
+							value = std::clamp((p - low) / std::max(1e-3f, 1.0f - low), 0.0f, 1.0f);
+						}
+						else
+						{
+							// Detail volume: pure inverted-Worley FBM for edge erosion.
+							value = worleyBillow;
+						}
+
 						const int32_t idx = (z * resolution * resolution) + (y * resolution) + x;
-						noiseData[idx] = normalized;
+						noiseData[idx] = value;
 					}
 				}
 			}
@@ -528,8 +571,8 @@ namespace HexEngine
 			SAFE_DELETE(_cloudShapeNoise);
 			SAFE_DELETE(_cloudDetailNoise);
 
-			_cloudShapeNoise = CreateCloudNoiseVolume(shapeResolution, randomSeed, 0.025f, 5, 0.52f, 2.0f);
-			_cloudDetailNoise = CreateCloudNoiseVolume(detailResolution, randomSeed + 137, 0.09f, 4, 0.45f, 2.1f);
+			_cloudShapeNoise = CreateCloudNoiseVolume(shapeResolution, randomSeed, 0.025f, 5, 0.52f, 2.0f, /*billowShape*/ true);
+			_cloudDetailNoise = CreateCloudNoiseVolume(detailResolution, randomSeed + 137, 0.09f, 4, 0.45f, 2.1f, /*billowShape*/ false);
 		}
 
 		_gpuVisibilityCulling.Create();
