@@ -2,6 +2,7 @@
 #pragma once
 
 #include <HexEngine.Core\HexEngine.hpp>
+#include <HexEngine.Core\Environment\IEditorContext.hpp>
 #include "Elements\EntityList.hpp"
 #include "Actions\Inspector.hpp"
 #include "Actions\Explorer.hpp"
@@ -19,7 +20,7 @@ namespace HexEditor
 
 namespace HexEditor
 {
-	class EditorUI : public HexEngine::UIManager, public HexEngine::IEntityListener, public HexEngine::MessageListener
+	class EditorUI : public HexEngine::UIManager, public HexEngine::IEntityListener, public HexEngine::MessageListener, public HexEngine::IEditorContext
 	{
 public:
 		enum PrimitiveType
@@ -55,6 +56,13 @@ public:
 		SceneView* GetSceneView() const { return _sceneView; }
 		void BroadcastEditorToolMessage(HexEngine::Message& message);
 		void TickEditorToolPlugins();
+
+		// --- HexEngine::IEditorContext (editor state for Core plugins, e.g. the
+		//     read-only MCP editor bridge). Called on the main thread. ---
+		virtual HexEngine::Entity* GetSelectedEntity() override;
+		virtual std::string GetProjectName() override;
+		virtual std::string GetProjectFolderPath() override;
+		virtual std::string GetProjectFilePath() override;
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 

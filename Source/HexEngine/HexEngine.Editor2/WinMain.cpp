@@ -105,6 +105,10 @@ int WinMain(
 	uiManager->Create(mainWindow->GetClientWidth(), mainWindow->GetClientHeight());
 	HexEngine::g_pEnv->SetUIManager(uiManager);
 
+	// Expose editor-only state (selection / open project) to Core plugins such as
+	// the read-only MCP editor bridge. EditorUI implements IEditorContext.
+	HexEngine::g_pEnv->_editorContext = uiManager;
+
 	//g_pEnv->_inputSystem->SetMouseMode(dx::Mouse::Mode::MODE_ABSOLUTE);
 
 	while (HexEngine::g_pEnv->IsRunning())
@@ -122,6 +126,7 @@ int WinMain(
 
 	// Finally, destroy the environment
 	//
+	HexEngine::g_pEnv->_editorContext = nullptr; // stop exposing editor state before teardown
 	HexEngine::DestroyEnvironment();
 
 	// this will show as a leak, but its not

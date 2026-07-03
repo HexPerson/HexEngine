@@ -20,6 +20,7 @@
 
 #include "../../HexEngine.Core/Plugin/IPlugin.hpp"
 #include "../../HexEngine.Core/Environment/IEnvironment.hpp"
+#include "../../HexEngine.Core/Environment/IEditorContext.hpp"
 #include "../../HexEngine.Core/Environment/LogFile.hpp"
 #include "../../HexEngine.Core/Scene/SceneManager.hpp"
 #include "../../HexEngine.Core/Scene/Scene.hpp"
@@ -111,6 +112,26 @@ namespace HexEngine
 				if (!isUtility(*it))
 					return *it;
 			return nullptr;
+		}
+
+		// Full single-entity detail (id, name, parent, children, component types).
+		// Shared by inspect_entity and get_selected_entity. Call on the main thread.
+		json EntityDetailJson(Entity* e)
+		{
+			json comps = json::array();
+			for (BaseComponent* c : e->GetAllComponents())
+				if (c && c->GetComponentName()) comps.push_back(c->GetComponentName());
+			json children = json::array();
+			for (Entity* ch : e->GetChildren())
+				if (ch) children.push_back(json{ {"id", EntityIdToJson(ch->GetId())}, {"name", ch->GetName()} });
+			Entity* parent = e->GetParent();
+			return json{
+				{"id", EntityIdToJson(e->GetId())},
+				{"name", e->GetName()},
+				{"parent", parent ? json{ {"id", EntityIdToJson(parent->GetId())}, {"name", parent->GetName()} } : json(nullptr)},
+				{"children", children},
+				{"components", comps},
+			};
 		}
 
 		const char* LogLevelName(LogLevel l)
@@ -387,11 +408,14 @@ namespace HexEngine
 					std::string sceneName;
 					if (auto scene = PrimaryUserScene())
 						sceneName = WideToUtf8(scene->GetName());
+					IEditorContext* ctx = g_pEnv ? g_pEnv->_editorContext : nullptr;
+					const bool playing = g_pEnv && g_pEnv->IsGameRunning();
+					std::string projectName = ctx ? ctx->GetProjectName() : std::string();
 					return MakeResult(id, json{
 						{"editorRunning", true},
 						{"sceneName", sceneName},
-						{"mode", "edit"},          // TODO: authoritative edit/play mode needs an editor API
-						{"projectName", nullptr},  // TODO: project metadata not exposed to plugins yet
+						{"mode", playing ? "play" : "edit"},
+						{"projectName", projectName.empty() ? json(nullptr) : json(projectName)},
 						{"protocolVersion", kProtocolVersion},
 					});
 				});
@@ -467,20 +491,7 @@ namespace HexEngine
 					if (!e)
 						return MakeError(id, ErrorCode::NotAvailable, "no matching entity found");
 
-					json comps = json::array();
-					for (BaseComponent* c : e->GetAllComponents())
-						if (c && c->GetComponentName()) comps.push_back(c->GetComponentName());
-					json children = json::array();
-					for (Entity* ch : e->GetChildren())
-						if (ch) children.push_back(json{ {"id", EntityIdToJson(ch->GetId())}, {"name", ch->GetName()} });
-					Entity* parent = e->GetParent();
-					return MakeResult(id, json{
-						{"id", EntityIdToJson(e->GetId())},
-						{"name", e->GetName()},
-						{"parent", parent ? json{ {"id", EntityIdToJson(parent->GetId())}, {"name", parent->GetName()} } : json(nullptr)},
-						{"children", children},
-						{"components", comps},
-					});
+					return MakeResult(id, EntityDetailJson(e));
 				});
 			}
 
@@ -540,12 +551,37 @@ namespace HexEngine
 				});
 			}
 
-			// --- Not yet implementable safely: editor-only APIs not exposed to a
-			//     tool plugin. Return NotImplemented (no faked data). ---
 			if (m == "get_open_project")
-				return MakeError(id, ErrorCode::NotImplemented, "project metadata is not exposed to editor tool plugins yet (TODO: editor context interface)");
+			{
+				return onMain([id]() -> json {
+					IEditorContext* ctx = g_pEnv ? g_pEnv->_editorContext : nullptr;
+					if (!ctx)
+						return MakeError(id, ErrorCode::NotAvailable, "editor context not available (bridge is not running inside the editor)");
+					const std::string folder = ctx->GetProjectFolderPath();
+					if (folder.empty())
+						return MakeResult(id, json{ {"projectOpen", false} });
+					return MakeResult(id, json{
+						{"projectOpen", true},
+						{"name", ctx->GetProjectName()},
+						{"folderPath", folder},
+						{"filePath", ctx->GetProjectFilePath()},
+					});
+				});
+			}
 			if (m == "get_selected_entity")
-				return MakeError(id, ErrorCode::NotImplemented, "editor selection is not exposed to tool plugins yet (TODO: editor selection interface)");
+			{
+				return onMain([id]() -> json {
+					IEditorContext* ctx = g_pEnv ? g_pEnv->_editorContext : nullptr;
+					if (!ctx)
+						return MakeError(id, ErrorCode::NotAvailable, "editor context not available (bridge is not running inside the editor)");
+					Entity* e = ctx->GetSelectedEntity();
+					if (!e)
+						return MakeResult(id, json{ {"hasSelection", false}, {"entity", nullptr} });
+					return MakeResult(id, json{ {"hasSelection", true}, {"entity", EntityDetailJson(e)} });
+				});
+			}
+
+			// --- Not yet implementable safely: return NotImplemented (no faked data). ---
 			if (m == "inspect_component")
 				return MakeError(id, ErrorCode::NotImplemented, "safe per-field component serialization needs reflection wiring (TODO)");
 			if (m == "list_loaded_resources")

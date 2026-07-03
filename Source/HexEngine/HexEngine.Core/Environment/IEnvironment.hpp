@@ -200,6 +200,11 @@ namespace HexEngine
 		class ParticleEffectLoader* _particleEffectLoader = nullptr;
 		class ParticleWorldSystem* _particleWorldSystem = nullptr;
 
+		// Editor-only context (selection / open project) surfaced to Core plugins
+		// such as the read-only MCP editor bridge. Set by the editor on startup,
+		// null in shipped game / headless builds. See IEditorContext.hpp.
+		class IEditorContext* _editorContext = nullptr;
+
 		// True while the game/simulation is actually running - set by the
 		// standalone launcher after OnCreateGame, and by the editor's
 		// GameIntegrator in play mode (cleared on stop). Gameplay-only systems

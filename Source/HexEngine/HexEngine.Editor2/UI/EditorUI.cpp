@@ -510,6 +510,28 @@ namespace HexEditor
 		}
 	}
 
+	HexEngine::Entity* EditorUI::GetSelectedEntity()
+	{
+		return (_rightDock != nullptr) ? _rightDock->GetInspectingEntity() : nullptr;
+	}
+
+	std::string EditorUI::GetProjectName()
+	{
+		if (!_projectFilePath.empty()) return _projectFilePath.stem().string();
+		if (!_projectFolderPath.empty()) return _projectFolderPath.filename().string();
+		return std::string();
+	}
+
+	std::string EditorUI::GetProjectFolderPath()
+	{
+		return _projectFolderPath.empty() ? std::string() : _projectFolderPath.string();
+	}
+
+	std::string EditorUI::GetProjectFilePath()
+	{
+		return _projectFilePath.empty() ? std::string() : _projectFilePath.string();
+	}
+
 	void EditorUI::BroadcastEditorToolMessage(HexEngine::Message& message)
 	{
 		if (HexEngine::g_pEnv == nullptr || HexEngine::g_pEnv->_pluginSystem == nullptr)

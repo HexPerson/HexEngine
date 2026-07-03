@@ -97,14 +97,14 @@ launch this command as an stdio MCP server. Example client config:
 
 | Tool → bridge method | Status |
 | --- | --- |
-| `hex_get_editor_status` | Implemented (running / scene / mode). |
+| `hex_get_editor_status` | Implemented (running / scene / authoritative edit-vs-play mode / project name). |
 | `hex_get_open_scene` | Implemented (scene name + entity count). |
 | `hex_list_entities` | Implemented (id/name/components, paginated). |
 | `hex_inspect_entity` | Implemented (by `name` or `index`). |
 | `hex_list_components` | Implemented (component types in the scene). |
 | `hex_validate_current_scene` | Implemented (minimal Phase-1 diagnostics). |
-| `hex_get_open_project` | `NotImplemented` (project metadata not exposed to plugins yet). |
-| `hex_get_selected_entity` | `NotImplemented` (editor selection not exposed yet). |
+| `hex_get_open_project` | Implemented (open-project name + folder / `.hexproj` paths, via `IEditorContext`). |
+| `hex_get_selected_entity` | Implemented (currently inspected entity + detail, via `IEditorContext`). |
 | `hex_inspect_component` | `NotImplemented` (safe per-field serialization needs reflection). |
 | `hex_list_loaded_resources` | `NotImplemented` (no safe ResourceSystem enumeration yet). |
 | `hex_find_missing_references` | `NotImplemented` (follow-up). |

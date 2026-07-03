@@ -463,6 +463,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Environment\ClassRegistry.hpp" />
     <ClInclude Include="Environment\ArchitectEnvironment.hpp" />
     <ClInclude Include="Environment\Game3DEnvironment.hpp" />
+    <ClInclude Include="Environment\IEditorContext.hpp" />
     <ClInclude Include="Environment\IEnvironment.hpp" />
     <ClInclude Include="Environment\IGameExtension.hpp" />
     <ClInclude Include="Environment\Profiler.hpp" />
