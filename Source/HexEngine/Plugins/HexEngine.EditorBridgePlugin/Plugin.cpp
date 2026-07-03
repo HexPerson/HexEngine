@@ -27,6 +27,7 @@
 #include "../../HexEngine.Core/Entity/Entity.hpp"
 #include "../../HexEngine.Core/Entity/Component/BaseComponent.hpp"
 #include "../../HexEngine.Core/FileSystem/ResourceSystem.hpp"
+#include "../../HexEngine.Core/FileSystem/JsonFile.hpp"
 
 #include <deque>
 
@@ -133,6 +134,41 @@ namespace HexEngine
 				{"components", comps},
 			};
 		}
+
+		// A JsonFile with every disk operation neutered. BaseComponent::Serialize's
+		// SERIALIZE_VALUE macro is `file->Serialize(data, "key", val)`, which only
+		// mutates the json container - but it dereferences `file`, so a null file
+		// crashes. Handing components this object makes Serialize work for read-only
+		// field inspection while GUARANTEEING no component can touch the disk, even
+		// if it calls Write/Open/WriteString directly (all redirect to memory).
+		// Mirrors the existing MemoryFile pattern: the inherited fstream is never
+		// opened. Never call Deserialize through this - inspection is read-only.
+		class MemoryJsonFile : public JsonFile
+		{
+		public:
+			MemoryJsonFile() :
+				JsonFile(fs::path(L"<editor-bridge-memory>"), std::ios::out | std::ios::binary, DiskFileOptions::None)
+			{}
+
+			bool     Open() override { _open = true; return true; }
+			void     Close() override { _open = false; }
+			bool     DoesExist() override { return false; }
+			bool     Delete() override { return false; }
+			bool     IsOpen() const override { return _open; }
+			uint32_t GetSize() override { return (uint32_t)_buffer.size(); }
+			uint32_t Read(void*, uint32_t) override { return 0; }
+			void     Flush() override {}
+			uint32_t Write(void* data, uint32_t size) override
+			{
+				if (data != nullptr && size > 0)
+					_buffer.insert(_buffer.end(), (const uint8_t*)data, (const uint8_t*)data + size);
+				return size;
+			}
+
+		private:
+			std::vector<uint8_t> _buffer;
+			bool _open = true;
+		};
 
 		const char* LogLevelName(LogLevel l)
 		{
@@ -581,9 +617,61 @@ namespace HexEngine
 				});
 			}
 
-			// --- Not yet implementable safely: return NotImplemented (no faked data). ---
 			if (m == "inspect_component")
-				return MakeError(id, ErrorCode::NotImplemented, "safe per-field component serialization needs reflection wiring (TODO)");
+			{
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					if (!params.contains("component") || !params["component"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "inspect_component requires a 'component' (type name string) plus a 'name' (string) or 'index' (integer) to identify the entity");
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+
+					Entity* e = nullptr;
+					if (params.contains("name") && params["name"].is_string())
+						e = scene->GetEntityByName(params["name"].get<std::string>());
+					else if (params.contains("index") && params["index"].is_number_integer())
+					{
+						const uint32_t idx = params["index"].get<uint32_t>();
+						std::vector<EntityId> ids;
+						scene->GetLiveEntityIds(ids);
+						for (const EntityId& eid : ids)
+							if (eid.index == idx) { e = scene->TryGetEntity(eid); break; }
+					}
+					else
+						return MakeError(id, ErrorCode::InvalidParams, "inspect_component requires a 'name' (string) or 'index' (integer) to identify the entity");
+
+					if (!e)
+						return MakeError(id, ErrorCode::NotAvailable, "no matching entity found");
+
+					const std::string compName = params["component"].get<std::string>();
+					BaseComponent* target = nullptr;
+					for (BaseComponent* c : e->GetAllComponents())
+						if (c && c->GetComponentName() && compName == c->GetComponentName()) { target = c; break; }
+					if (!target)
+						return MakeError(id, ErrorCode::NotAvailable, "entity '" + e->GetName() + "' has no component named '" + compName + "'");
+
+					// Drive the component's own Serialize() through a disk-neutered
+					// JsonFile so its fields land in `fields` with zero disk I/O.
+					json fields = json::object();
+					try
+					{
+						MemoryJsonFile mem;
+						target->Serialize(fields, &mem);
+					}
+					catch (const std::exception& ex)
+					{
+						return MakeError(id, ErrorCode::Internal, std::string("component serialization threw: ") + ex.what());
+					}
+
+					return MakeResult(id, json{
+						{"entity", json{ {"id", EntityIdToJson(e->GetId())}, {"name", e->GetName()} }},
+						{"component", compName},
+						{"fields", fields},
+						{"note", "Fields are the component's own Serialize() output; components with an empty/no-op Serialize return {}."},
+					});
+				});
+			}
 			if (m == "list_loaded_resources")
 			{
 				// ResourceSystem::EnumerateLoadedResources is internally locked and

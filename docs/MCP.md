@@ -105,7 +105,7 @@ launch this command as an stdio MCP server. Example client config:
 | `hex_validate_current_scene` | Implemented (minimal Phase-1 diagnostics). |
 | `hex_get_open_project` | Implemented (open-project name + folder / `.hexproj` paths, via `IEditorContext`). |
 | `hex_get_selected_entity` | Implemented (currently inspected entity + detail, via `IEditorContext`). |
-| `hex_inspect_component` | `NotImplemented` (safe per-field serialization needs reflection). |
+| `hex_inspect_component` | Implemented (component fields via the component's own `Serialize` into a disk-neutered `JsonFile`; `{}` for no-op serializers). |
 | `hex_list_loaded_resources` | `NotImplemented` (no safe ResourceSystem enumeration yet). |
 | `hex_find_missing_references` | `NotImplemented` (follow-up). |
 | `hex_get_recent_engine_logs` | `NotImplemented` (log ring buffer not exposed yet). |
