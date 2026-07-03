@@ -173,6 +173,9 @@ namespace HexEngine
 		void NotifyGiLightStateChanged();
 		void NotifyStaticMeshChanged(StaticMeshComponent* component, bool geometryChanged, bool materialChanged);
 		void NotifyEntityTransformChanged(Entity* entity);
+		// Per-frame settle sweep for the GI motion debounce (called from Update while
+		// holding _lock): re-bakes meshes that have stopped moving for a few frames.
+		void UpdateGiMotionDebounce();
 		void CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
 		void CalculateSceneStats_UInt32(std::vector<math::Vector3>& vertices, std::vector<uint32_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags = EntityFlags::None);
 
@@ -428,6 +431,11 @@ namespace HexEngine
 		uint64_t _giMaterialRevision = 1ull;
 		uint64_t _giLightRevision = 1ull;
 		bool _giSpatialCacheDirty = true;
+		// GI motion debounce: meshes currently moving (component -> last-motion
+		// frame). While present they're excluded from the voxel triangle list so
+		// per-frame motion doesn't force a full rebuild; on settle they're re-baked.
+		uint64_t _giFrameNumber = 0ull;
+		std::unordered_map<StaticMeshComponent*, uint64_t> _giMovingMeshes;
 		std::vector<GiSpatialEntry> _giSpatialEntries;
 		std::unordered_map<GiSpatialCellKey, std::vector<uint32_t>, GiSpatialCellKeyHash> _giSpatialCells;
 		std::vector<uint32_t> _giSpatialOverflowEntries;

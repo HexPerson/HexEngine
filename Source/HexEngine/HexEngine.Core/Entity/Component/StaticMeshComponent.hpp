@@ -111,6 +111,15 @@ namespace HexEngine
 		// every instance of that material) this is granular to the one entity.
 		void SetExcludeFromGI(bool value);
 		bool GetExcludeFromGI() const;
+
+		// Runtime-only GI motion debounce (managed by Scene, never serialized): set
+		// true while this mesh is actively moving so it's dropped from the voxel
+		// triangle list and stops thrashing a full GI rebuild every frame. Cleared
+		// (and the mesh re-baked once) when it settles. See Scene::NotifyEntity-
+		// TransformChanged / Scene::UpdateGiMotionDebounce.
+		bool IsGiMotionExcluded() const { return _giMotionExcluded; }
+		void SetGiMotionExcluded(bool value) { _giMotionExcluded = value; }
+
 		const math::Vector3& GetOffsetPosition() const;
 		void SetOffsetPosition(const math::Vector3& offsetPosition);
 		const MeshInstanceData& GetCachedInstanceData(Material* material);
@@ -133,6 +142,7 @@ namespace HexEngine
 		mutable std::recursive_mutex _lock;
 		bool _includeInGIWhenHidden = false;
 		bool _excludeFromGI = false;
+		bool _giMotionExcluded = false; // runtime-only; managed by Scene GI motion debounce
 
 		math::Vector2 _uvScale;
 		math::Vector3 _offsetPosition;

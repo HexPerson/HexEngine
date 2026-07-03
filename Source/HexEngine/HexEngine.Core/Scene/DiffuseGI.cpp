@@ -1692,7 +1692,7 @@ namespace HexEngine
 		// which is shared across every mesh using that material.
 		meshesInBounds.erase(
 			std::remove_if(meshesInBounds.begin(), meshesInBounds.end(),
-				[](StaticMeshComponent* smc) { return smc != nullptr && smc->GetExcludeFromGI(); }),
+				[](StaticMeshComponent* smc) { return smc != nullptr && (smc->GetExcludeFromGI() || smc->IsGiMotionExcluded()); }),
 			meshesInBounds.end());
 
 		std::vector<StaticMeshComponent*> prioritized;
@@ -2810,7 +2810,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		// which is shared across every mesh using that material.
 		meshesInBounds.erase(
 			std::remove_if(meshesInBounds.begin(), meshesInBounds.end(),
-				[](StaticMeshComponent* smc) { return smc != nullptr && smc->GetExcludeFromGI(); }),
+				[](StaticMeshComponent* smc) { return smc != nullptr && (smc->GetExcludeFromGI() || smc->IsGiMotionExcluded()); }),
 			meshesInBounds.end());
 		outMeshes.reserve(meshesInBounds.size());
 		outMaterials.reserve(meshesInBounds.size());

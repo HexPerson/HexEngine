@@ -287,18 +287,25 @@ namespace HexEngine
 		if (entity == nullptr)
 			return;
 
+		// GI motion debounce. A GI mesh that moves every frame (animated
+		// characters, physics props) would otherwise invalidate the voxel triangle
+		// cache every frame and force a full, expensive BuildGpuVoxelTriangleList
+		// rebuild - the opposite of what a static voxel clipmap wants. Instead: on
+		// the static->moving transition, drop the mesh from the voxel world once
+		// (single revision bump) and mark it motion-excluded; while it keeps moving
+		// we only refresh its last-motion frame (no per-frame bumps).
+		// UpdateGiMotionDebounce re-bakes it once it settles. Meshes explicitly
+		// flagged ExcludeFromGI never enter here.
 		if (auto* staticMesh = entity->GetComponent<StaticMeshComponent>();
 			staticMesh != nullptr && staticMesh->GetMesh() != nullptr && !staticMesh->GetExcludeFromGI())
 		{
-			// A mesh flagged out of GI isn't part of the voxel world, so moving
-			// it must NOT bump the geometry revision - otherwise constantly-
-			// moving excluded geometry (traffic, characters) invalidates the GI
-			// triangle cache every frame and forces a full, expensive
-			// BuildGpuVoxelTriangleList rebuild despite contributing nothing.
-			++_giGeometryRevision;
-			_giSpatialCacheDirty = true;
-
-			LOG_DEBUG("Entity '%s' caused GI rebuild", entity->GetName().c_str());
+			if (!staticMesh->IsGiMotionExcluded())
+			{
+				staticMesh->SetGiMotionExcluded(true);
+				++_giGeometryRevision;
+				_giSpatialCacheDirty = true;
+			}
+			_giMovingMeshes[staticMesh] = _giFrameNumber;
 		}
 
 		if (entity->GetComponent<PointLight>() != nullptr ||
@@ -306,6 +313,33 @@ namespace HexEngine
 			entity->GetComponent<DirectionalLight>() != nullptr)
 		{
 			++_giLightRevision;
+		}
+	}
+
+	void Scene::UpdateGiMotionDebounce()
+	{
+		// Caller (Scene::Update) holds _lock. Advance the scene frame counter and
+		// re-bake any mesh that has stopped moving for kSettleFrames - a single
+		// revision bump apiece, versus a full GI rebuild every frame while moving.
+		++_giFrameNumber;
+		if (_giMovingMeshes.empty())
+			return;
+
+		constexpr uint64_t kSettleFrames = 6ull;
+		for (auto it = _giMovingMeshes.begin(); it != _giMovingMeshes.end();)
+		{
+			if (_giFrameNumber - it->second >= kSettleFrames)
+			{
+				if (StaticMeshComponent* smc = it->first; smc != nullptr)
+					smc->SetGiMotionExcluded(false);
+				++_giGeometryRevision; // re-bake the mesh at its settled pose (one rebuild)
+				_giSpatialCacheDirty = true;
+				it = _giMovingMeshes.erase(it);
+			}
+			else
+			{
+				++it;
+			}
 		}
 	}
 
@@ -1314,6 +1348,9 @@ namespace HexEngine
 
 		if (component->GetComponentId() == StaticMeshComponent::_GetComponentId())
 		{
+			// Drop from the GI motion-debounce set so the sweep never touches a
+			// destroyed component (pointers here are erased before the mesh dies).
+			_giMovingMeshes.erase(component->CastAs<StaticMeshComponent>());
 			++_giGeometryRevision;
 			++_giMaterialRevision;
 			_giSpatialCacheDirty = true;
@@ -1434,6 +1471,9 @@ namespace HexEngine
 
 		HandlePendingRemovals();
 		HandlePendingAdditions();
+
+		// Re-bake GI meshes that have stopped moving (see NotifyEntityTransformChanged).
+		UpdateGiMotionDebounce();
 
 		_insideEntityIteration = true;
 		
