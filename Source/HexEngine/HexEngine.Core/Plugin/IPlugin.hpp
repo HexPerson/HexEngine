@@ -29,6 +29,12 @@ namespace HexEngine
 	public:
 		virtual void OnCreateUI(MenuBar* menuBar) = 0;
 		virtual void OnAssetExplorerCreateNew(ContextMenu* menu, ContextRoot* rootMenu, const fs::path& baseDir, FileSystem* fileSystem, std::function<void()> onAssetsCreated) = 0;
+
+		// Called once per editor frame on the main thread. Default no-op; plugins
+		// that need a reliable per-frame main-thread pump (e.g. draining a work
+		// queue marshalled from a background thread) override this. Appended at the
+		// end of the vtable so existing plugins only need a recompile, no code change.
+		virtual void OnEditorFrameTick() {}
 	};
 
 	class IPlugin

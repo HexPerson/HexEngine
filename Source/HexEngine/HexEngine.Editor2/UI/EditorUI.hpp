@@ -54,6 +54,7 @@ public:
 		Inspector* GetInspector() const { return _rightDock; }
 		SceneView* GetSceneView() const { return _sceneView; }
 		void BroadcastEditorToolMessage(HexEngine::Message& message);
+		void TickEditorToolPlugins();
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 

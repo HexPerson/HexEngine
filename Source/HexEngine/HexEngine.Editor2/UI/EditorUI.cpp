@@ -492,6 +492,24 @@ namespace HexEditor
 		}
 	}
 
+	void EditorUI::TickEditorToolPlugins()
+	{
+		if (HexEngine::g_pEnv == nullptr || HexEngine::g_pEnv->_pluginSystem == nullptr)
+			return;
+
+		const auto& plugins = HexEngine::g_pEnv->_pluginSystem->GetAllPlugins();
+		for (const auto& plugin : plugins)
+		{
+			if (plugin.iface == nullptr)
+				continue;
+
+			if (auto* editorTool = plugin.iface->GetEditorToolPlugin(); editorTool != nullptr)
+			{
+				editorTool->OnEditorFrameTick();
+			}
+		}
+	}
+
 	void EditorUI::BroadcastEditorToolMessage(HexEngine::Message& message)
 	{
 		if (HexEngine::g_pEnv == nullptr || HexEngine::g_pEnv->_pluginSystem == nullptr)
@@ -1203,6 +1221,11 @@ namespace HexEditor
 				gadget->Update();
 			}
 		}
+
+		// Give editor tool plugins a reliable per-frame main-thread pump (the editor
+		// bridge drains its marshalled inspection queue here, so ECS reads no longer
+		// depend on incidental mouse-over-viewport tool messages).
+		TickEditorToolPlugins();
 	}
 
 	void EditorUI::Render()

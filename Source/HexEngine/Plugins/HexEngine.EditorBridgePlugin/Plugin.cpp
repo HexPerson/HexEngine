@@ -9,8 +9,9 @@
 // default, never active in a shipped game.
 //
 // Read-only, Phase 1. No mutation, no writes (except the discovery session file),
-// no shell. ECS/scene reads are marshalled to the editor main thread (drained in
-// OnMessage); if the editor is idle the request times out cleanly rather than
+// no shell. ECS/scene reads are marshalled to the editor main thread (drained
+// every frame via OnEditorFrameTick, and also opportunistically in OnMessage); if
+// the editor isn't running the pump the request times out cleanly rather than
 // touching engine state from the pipe thread.
 // -----------------------------------------------------------------------------
 
@@ -86,6 +87,29 @@ namespace HexEngine
 		json EntityIdToJson(const EntityId& id)
 		{
 			return json{ {"index", id.index}, {"generation", id.generation} };
+		}
+
+		// The editor keeps utility scenes (e.g. the IconService's icon-preview
+		// scene) registered - and sometimes even current - in the background
+		// alongside the scene the user is actually editing. Always report the real
+		// user scene, never a utility/background one. Mirrors how the editor's
+		// PrefabController picks a non-utility scene to restore.
+		std::shared_ptr<Scene> PrimaryUserScene()
+		{
+			if (!g_pEnv) return nullptr;
+			auto& sm = g_pEnv->GetSceneManager();
+			auto isUtility = [](const std::shared_ptr<Scene>& s) {
+				return s && HEX_HASFLAG(s->GetFlags(), SceneFlags::Utility);
+			};
+			if (auto cur = sm.GetCurrentScene(); cur && !isUtility(cur))
+				return cur;
+			// Current is a utility/background scene (or null): fall back to the
+			// most-recently-registered non-utility scene.
+			const auto& all = sm.GetAllScenes();
+			for (auto it = all.rbegin(); it != all.rend(); ++it)
+				if (!isUtility(*it))
+					return *it;
+			return nullptr;
 		}
 
 		const char* LogLevelName(LogLevel l)
@@ -203,6 +227,15 @@ namespace HexEngine
 			_mainThread.Drain();
 		}
 
+		void OnEditorFrameTick() override
+		{
+			// Reliable per-frame main-thread pump: drain queued ECS inspection tasks
+			// every editor frame, so marshalled reads no longer depend on incidental
+			// editor tool messages (mouse-over-viewport). This is what makes
+			// get_editor_status / get_open_scene / list_entities respond when idle.
+			_mainThread.Drain();
+		}
+
 	private:
 		void StartBridge()
 		{
@@ -239,7 +272,7 @@ namespace HexEngine
 			s.pid = pid;
 			s.pipeName = pipeName;
 			s.startedAtUnix = (uint64_t)std::time(nullptr);
-			if (auto scene = g_pEnv ? g_pEnv->GetSceneManager().GetCurrentScene() : nullptr)
+			if (auto scene = PrimaryUserScene())
 				s.projectName = WideToUtf8(scene->GetName());
 
 			std::error_code ec;
@@ -292,7 +325,7 @@ namespace HexEngine
 			{
 				return onMain([id] {
 					std::string sceneName;
-					if (auto scene = g_pEnv->GetSceneManager().GetCurrentScene())
+					if (auto scene = PrimaryUserScene())
 						sceneName = WideToUtf8(scene->GetName());
 					return MakeResult(id, json{
 						{"editorRunning", true},
@@ -307,7 +340,7 @@ namespace HexEngine
 			if (m == "get_open_scene")
 			{
 				return onMain([id] {
-					auto scene = g_pEnv->GetSceneManager().GetCurrentScene();
+					auto scene = PrimaryUserScene();
 					if (!scene)
 						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
 					std::vector<EntityId> ids;
@@ -326,7 +359,7 @@ namespace HexEngine
 				if (limit > 1000) limit = 1000;
 				const std::string filter = req.params.value("filter", std::string());
 				return onMain([id, offset, limit, filter] {
-					auto scene = g_pEnv->GetSceneManager().GetCurrentScene();
+					auto scene = PrimaryUserScene();
 					if (!scene)
 						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
 					std::vector<EntityId> ids;
@@ -354,7 +387,7 @@ namespace HexEngine
 			{
 				const json params = req.params;
 				return onMain([id, params] {
-					auto scene = g_pEnv->GetSceneManager().GetCurrentScene();
+					auto scene = PrimaryUserScene();
 					if (!scene)
 						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
 					Entity* e = nullptr;
@@ -394,7 +427,7 @@ namespace HexEngine
 			if (m == "list_components")
 			{
 				return onMain([id] {
-					auto scene = g_pEnv->GetSceneManager().GetCurrentScene();
+					auto scene = PrimaryUserScene();
 					if (!scene)
 						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
 					std::vector<EntityId> ids;
@@ -420,7 +453,7 @@ namespace HexEngine
 			if (m == "validate_current_scene")
 			{
 				return onMain([id] {
-					auto scene = g_pEnv->GetSceneManager().GetCurrentScene();
+					auto scene = PrimaryUserScene();
 					if (!scene)
 						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
 					std::vector<EntityId> ids;
