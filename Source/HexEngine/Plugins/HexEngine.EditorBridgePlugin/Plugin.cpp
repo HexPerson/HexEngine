@@ -28,6 +28,9 @@
 #include "../../HexEngine.Core/Entity/Component/BaseComponent.hpp"
 #include "../../HexEngine.Core/FileSystem/ResourceSystem.hpp"
 #include "../../HexEngine.Core/FileSystem/JsonFile.hpp"
+#include "../../HexEngine.Core/Input/CommandManager.hpp"
+#include "../../HexEngine.Core/Entity/Component/Camera.hpp"
+#include "../../HexEngine.Core/Graphics/ITexture2D.hpp"
 
 #include <deque>
 
@@ -75,6 +78,20 @@ namespace HexEngine
 				std::wstring w = cmd;
 				if (w.find(L"--enable-editor-bridge") != std::wstring::npos)
 					return true;
+			}
+			return false;
+		}
+
+		// Separate, stricter opt-in for the WRITE surface (console exec + frame
+		// capture). The bridge is read-only by default; these mutate editor state
+		// and touch disk, so they require HEXENGINE_EDITOR_BRIDGE_WRITE=1 on top of
+		// the normal opt-in. Intended for interactive dev tuning sessions only.
+		bool BridgeWriteEnabled()
+		{
+			if (const char* e = std::getenv("HEXENGINE_EDITOR_BRIDGE_WRITE"))
+			{
+				std::string v = e;
+				return (v == "1" || v == "true" || v == "TRUE" || v == "on");
 			}
 			return false;
 		}
@@ -699,6 +716,45 @@ namespace HexEngine
 						logs.push_back(_logRing[i]);
 				}
 				return MakeResult(id, json{ {"count", logs.size()}, {"logs", logs} });
+			}
+
+			// --- WRITE surface (dev-tuning only; gated behind BridgeWriteEnabled) ---
+			if (m == "exec_console")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "console execution requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				if (!req.params.contains("command") || !req.params["command"].is_string())
+					return MakeError(id, ErrorCode::InvalidParams, "exec_console requires a 'command' string");
+				const std::string cmd = req.params["command"].get<std::string>();
+				return onMain([id, cmd]() -> json {
+					if (!g_pEnv || !g_pEnv->_commandManager)
+						return MakeError(id, ErrorCode::NotAvailable, "command manager not available");
+					g_pEnv->_commandManager->ProcessCommandInput(cmd);
+					return MakeResult(id, json{ {"executed", cmd} });
+				});
+			}
+			if (m == "capture_frame")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "frame capture requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const std::string path = req.params.value("path", std::string());
+				if (path.empty())
+					return MakeError(id, ErrorCode::InvalidParams, "capture_frame requires an absolute 'path' output file");
+				return onMain([id, path]() -> json {
+					// Capture the main scene camera's render target - a resolved,
+					// non-MSAA texture SaveToFile can grab (the swapchain back buffer
+					// is MSAA and fails DirectX::CaptureTexture with E_INVALIDARG).
+					Camera* cam = nullptr;
+					if (g_pEnv)
+						if (auto scene = g_pEnv->GetSceneManager().GetCurrentScene())
+							cam = scene->GetMainCamera();
+					ITexture2D* tex = cam ? cam->GetRenderTarget() : nullptr;
+					if (!tex)
+						return MakeError(id, ErrorCode::NotAvailable, "no main-camera render target");
+					try { tex->SaveToFile(fs::path(path)); }
+					catch (const std::exception& e) { return MakeError(id, ErrorCode::Internal, std::string("SaveToFile threw: ") + e.what()); }
+					return MakeResult(id, json{ {"path", path} });
+				});
 			}
 
 			return MakeError(id, ErrorCode::UnknownMethod, "No bridge method named " + m);
