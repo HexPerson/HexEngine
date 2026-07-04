@@ -91,8 +91,23 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\Bin\x64\Debug\Plugins" | Out-Null
 
+      # Build the curated modern subset by invoking msbuild DIRECTLY on the
+      # solution filter. We deliberately do NOT use
+      # `cmake --build --preset sln-build-debug-modern` here: that runs msbuild
+      # nested inside msbuild (a CMake custom-target CustomBuild step), and the
+      # nested inner msbuild returns a spurious exit code -1 at process teardown
+      # even though the build fully succeeds (0 errors) - which fails the job
+      # (MSB8066). A direct msbuild on the .slnf returns 0. The dependency
+      # bootstrap already ran in the "Minimal Bootstrap (Debug)" step above.
       - name: Build Solution Modern (Debug)
-        run: cmake --build --preset sln-build-debug-modern
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) { Write-Error "MSBuild.exe not found via vswhere"; exit 1 }
+          Write-Host "Using MSBuild: $msbuild"
+          & $msbuild "$env:GITHUB_WORKSPACE\Source\HexEngine\HexEngine-modern.slnf" /p:Configuration=Debug /p:Platform=x64 /m
+          if ($LASTEXITCODE -ne 0) { Write-Error "Modern build failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
 
       # Dependency-light unit tests (BinaryReader / PackageVerification /
       # PluginManifest / BlockingQueue). Runs after the Debug bootstrap has
@@ -177,5 +192,14 @@ jobs:
         shell: pwsh
         run: New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\Bin\x64\Release\Plugins" | Out-Null
 
+      # See the Debug job: invoke msbuild directly on the .slnf to avoid the
+      # nested-msbuild spurious -1 exit from the CMake custom target.
       - name: Build Solution Modern (Release)
-        run: cmake --build --preset sln-build-release-modern
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) { Write-Error "MSBuild.exe not found via vswhere"; exit 1 }
+          Write-Host "Using MSBuild: $msbuild"
+          & $msbuild "$env:GITHUB_WORKSPACE\Source\HexEngine\HexEngine-modern.slnf" /p:Configuration=Release /p:Platform=x64 /m
+          if ($LASTEXITCODE -ne 0) { Write-Error "Modern build failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
