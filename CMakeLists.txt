@@ -19,6 +19,14 @@ set(HEXENGINE_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(HEXENGINE_DEPENDENCY_MANIFEST "${HEXENGINE_REPO_ROOT}/build/dependencies.lock.json")
 set(HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT "${HEXENGINE_REPO_ROOT}/tools/deps/bootstrap.py")
 set(HEXENGINE_SOLUTION_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.sln")
+# Curated solution filter for the "modern" lanes: the SAME solution, minus the
+# plugins whose SDKs the minimal/non-legacy bootstrap does not provision
+# (Assimp, NRD, OIDN, HBAO+) and the projects gated on heavy source-built
+# toolchains that the modern bootstrap intentionally omits (ShaderCompiler +
+# Shaders -> LLVM-fork DXC submodule; PhysXPlugin -> PhysX SDK source build).
+# Building through this .slnf keeps the modern lanes a fast, green compile gate
+# for Core/Editor/renderer + non-legacy plugins. See HexEngine-modern.slnf.
+set(HEXENGINE_SOLUTION_FILTER_MODERN_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine-modern.slnf")
 set(HEXENGINE_SHADERCOMPILER_PROJECT_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.ShaderCompiler/HexEngine.ShaderCompiler.vcxproj")
 set(HEXENGINE_STREAMLINE_LIB_PATH "${HEXENGINE_REPO_ROOT}/ThirdParty/Streamline/lib/x64/sl.interposer.lib")
 file(TO_NATIVE_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/" HEXENGINE_SOLUTION_DIR_NATIVE)
@@ -266,16 +274,16 @@ if(HEXENGINE_MSBUILD_COMMAND)
     )
 
     add_custom_target(hex-sln-build-debug-modern
-        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Debug /p:Platform=x64 /m
+        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_FILTER_MODERN_PATH}" /p:Configuration=Debug /p:Platform=x64 /m
         WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
-        COMMENT "Build HexEngine.sln Debug|x64 with minimal non-legacy bootstrap"
+        COMMENT "Build curated modern subset Debug|x64 (HexEngine-modern.slnf) with minimal non-legacy bootstrap"
         VERBATIM
     )
 
     add_custom_target(hex-sln-build-release-modern
-        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_PATH}" /p:Configuration=Release /p:Platform=x64 /m
+        COMMAND "${HEXENGINE_MSBUILD_COMMAND}" "${HEXENGINE_SOLUTION_FILTER_MODERN_PATH}" /p:Configuration=Release /p:Platform=x64 /m
         WORKING_DIRECTORY "${HEXENGINE_REPO_ROOT}"
-        COMMENT "Build HexEngine.sln Release|x64 with minimal non-legacy bootstrap"
+        COMMENT "Build curated modern subset Release|x64 (HexEngine-modern.slnf) with minimal non-legacy bootstrap"
         VERBATIM
     )
 

@@ -83,6 +83,14 @@ jobs:
           path: vcpkg_installed
           key: vcpkg-${{ runner.os }}-x64-windows-${{ hashFiles('vcpkg.json') }}
 
+      # Plugin PostBuildEvents copy their DLLs into Bin/x64/Debug/Plugins with a
+      # plain `copy`, which fails if the directory doesn't exist yet. The
+      # dependency bootstrap only creates Bin/x64/Debug/Bin (vendor DLLs), so
+      # pre-create the Plugins folder here. Harmless no-op if it already exists.
+      - name: Prepare plugin output directory (Debug)
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\Bin\x64\Debug\Plugins" | Out-Null
+
       - name: Build Solution Modern (Debug)
         run: cmake --build --preset sln-build-debug-modern
 
@@ -162,6 +170,12 @@ jobs:
         with:
           path: vcpkg_installed
           key: vcpkg-${{ runner.os }}-x64-windows-${{ hashFiles('vcpkg.json') }}
+
+      # See the Debug job: pre-create the Plugins copy target so plugin
+      # PostBuildEvents don't fail on a missing directory.
+      - name: Prepare plugin output directory (Release)
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\Bin\x64\Release\Plugins" | Out-Null
 
       - name: Build Solution Modern (Release)
         run: cmake --build --preset sln-build-release-modern

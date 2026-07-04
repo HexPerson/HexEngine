@@ -1,0 +1,26 @@
+{
+  "solution": {
+    "path": "HexEngine.sln",
+    "projects": [
+      "HexEngine.Core\\HexEngine.Core.vcxproj",
+      "HexEngine.Editor2\\HexEngine.Editor2.vcxproj",
+      "HexEngine.AssetPacker\\HexEngine.AssetPacker.vcxproj",
+      "HexEngine.SampleGame\\HexEngine.SampleGame.vcxproj",
+      "HexEngine.Launcher\\HexEngine.Launcher.vcxproj",
+      "Tools\\HexEngine.McpServer\\HexEngine.McpServer.vcxproj",
+      "Plugins\\HexEngine.D3D11Plugin\\HexEngine.D3D11Plugin.vcxproj",
+      "Plugins\\HexEngine.D3D12Plugin\\HexEngine.D3D12Plugin.vcxproj",
+      "Plugins\\HexEngine.BrotliPlugin\\HexEngine.BrotliPlugin.vcxproj",
+      "Plugins\\HexEngine.FreeTypePlugin\\HexEngine.FreeTypePlugin.vcxproj",
+      "Plugins\\HexEngine.SamplePlugin\\HexEngine.SamplePlugin.vcxproj",
+      "Plugins\\HexEngine.EditorBridgePlugin\\HexEngine.EditorBridgePlugin.vcxproj",
+      "Plugins\\HexEngine.SteamworksPlugin\\HexEngine.SteamworksPlugin.vcxproj",
+      "Plugins\\HexEngine.GameNetworkingSocketsPlugin\\HexEngine.GameNetworkingSocketsPlugin.vcxproj",
+      "Plugins\\HexEngine.RecastNavigationPlugin\\HexEngine.RecastNavigationPlugin.vcxproj",
+      "Plugins\\HexEngine.StreamlinePlugin\\HexEngine.StreamlinePlugin.vcxproj",
+      "Plugins\\HexEngine.CitySimulationPlugin\\HexEngine.CitySimulationPlugin.vcxproj",
+      "Plugins\\HexEngine.VolumetricTerrainPlugin\\HexEngine.VolumetricTerrainPlugin.vcxproj",
+      "Plugins\\HexEngine.WeatherPlugin\\HexEngine.WeatherPlugin.vcxproj"
+    ]
+  }
+}
