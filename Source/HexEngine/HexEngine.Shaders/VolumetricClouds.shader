@@ -90,6 +90,15 @@
 		return (1.0f - g * g) / (4.0f * PI * pow(denom, 1.5f));
 	}
 
+	float DualLobeHG(float cosTheta, float anisotropy)
+	{
+		// A strong forward lobe (silver lining) blended with a gentle back-scatter
+		// lobe (soft ambient rim) - real clouds exhibit both at once.
+		const float forward = HenyeyGreenstein(cosTheta, anisotropy);
+		const float backward = HenyeyGreenstein(cosTheta, -0.25f);
+		return lerp(forward, backward, 0.35f);
+	}
+
 	float3 GetWorldRay(float2 uv)
 	{
 		float4 clipPos = float4(uv * 2.0f - 1.0f, 1.0f, 1.0f);
@@ -216,9 +225,9 @@
 		const float lightningFlash = saturate(g_weatherSurface.lightningFlash);
 		const float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
 		const float3 lightningColour = float3(0.64f, 0.78f, 1.0f) * lightningFlash;
-		const float hgPhase = HenyeyGreenstein(dot(rayDir, sunDir), g_cloudParams1.z);
+		const float cosSun = dot(rayDir, sunDir);
 		const float isotropicPhase = 1.0f / (4.0f * PI);
-		const float phase = lerp(isotropicPhase, hgPhase, 0.75f) * g_cloudParams3.w;
+		const float phase = lerp(isotropicPhase, DualLobeHG(cosSun, g_cloudParams1.z), 0.85f) * g_cloudParams3.w;
 		const float3 ambientSky = lerp(cloudHorizonProbe.inscatter, cloudZenithProbe.inscatter, 0.30f) * g_cloudParams3.y;
 		const float skyLuma = dot(ambientSky, float3(0.299f, 0.587f, 0.114f));
 		const float3 ambientNeutral = skyLuma.xxx;
@@ -254,7 +263,13 @@
 				const float densityTowardLightning = SampleCloudDensity(samplePos + lightningDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
 				const float lightningDerivative = saturate((density - densityTowardLightning) * 2.0f + 0.10f);
 				const float silverLining = pow(saturate(shadowAmount), max(0.5f, g_cloudParams4.y)) * g_cloudParams4.x;
-				const float multiScatter = 1.0f + shadowAmount * g_cloudParams4.z;
+				// Energy-conserving multiple scattering: on top of the single-scatter
+				// (octave 0 = 1.0), add dimmer, deeper-penetrating higher orders whose
+				// extinction is progressively attenuated (lightTrans^0.5, ^0.25) so
+				// dense cores glow with soft internal bounce instead of going flat.
+				// Scaled by the weather-driven multi-scatter strength.
+				const float msStrength = saturate(g_cloudParams4.z);
+				const float multiScatter = 1.0f + msStrength * (0.60f * pow(lightTrans, 0.5f) + 0.35f * pow(lightTrans, 0.25f));
 				const float height01 = saturate((samplePos.y - boundsMin.y) / max(1.0f, boundsMax.y - boundsMin.y));
 				const float3 heightTint = lerp(bottomTint, topTint, smoothstep(0.08f, 0.92f, height01));
 				const float3 stylizedTint = lerp(1.0f.xxx, heightTint, g_cloudParams4.w);
