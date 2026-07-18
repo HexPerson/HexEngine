@@ -258,7 +258,39 @@ public:
 	uint64_t GetCompletedFenceValue() const { return _fence ? _fence->GetCompletedValue() : 0ULL; }
 	uint64_t GetPendingFenceValue()   const { return _nextFenceValue; }
 
+	/**
+	 * @brief Queues a readback+PNG-encode of `tex` for the next frame boundary.
+	 *
+	 * Texture2DD3D12::SaveToFile forwards here (the editor bridge's
+	 * capture_frame lands there mid-frame, on the main thread). Capturing
+	 * immediately would race the OPEN command list: `_currentState` includes
+	 * transitions that are recorded but not yet submitted, so DirectXTex's
+	 * own submit would see a different GPU-side state. Instead the request is
+	 * executed at the top of the next BeginFrame - after the drain / previous
+	 * EndFrame submit, when recorded state == submitted state and the content
+	 * is a complete frame. The ComPtr keeps the resource alive if the wrapper
+	 * is destroyed in between; CancelTextureCapture drops the wrapper pointer
+	 * so the execute pass falls back to the state captured at request time.
+	 */
+	void RequestTextureCapture(Texture2DD3D12* tex, const fs::path& path);
+	void CancelTextureCapture(Texture2DD3D12* tex);
+
+	/** @brief Resets the per-frame draw ordinal used by the live-bisect cvars
+	 *  (r_d3d12DrawDump / r_d3d12SkipDrawBegin / r_d3d12SkipDrawEnd). Called at
+	 *  BeginFrame. Implemented in GraphicsDeviceD3D12_Draws.cpp. */
+	void ResetDrawOrdinal();
+
 private:
+	struct PendingCapture
+	{
+		Texture2DD3D12*                         texture = nullptr; ///< nulled if wrapper destroyed
+		Microsoft::WRL::ComPtr<ID3D12Resource>  resource;          ///< lifetime anchor
+		D3D12_RESOURCE_STATES                   stateAtRequest = D3D12_RESOURCE_STATE_COMMON;
+		fs::path                                path;
+	};
+	std::vector<PendingCapture> _pendingCaptures;
+	void ExecutePendingCaptures();
+
 	bool CreateDeviceAndQueue();
 	void WaitForGpu();
 	void FlushPendingUploads();

@@ -57,4 +57,11 @@ public:
 	uint32_t                                 _stride = 0;
 	uint32_t                                 _byteSize = 0;
 	GraphicsDeviceD3D12*                     _device = nullptr;
+	// B5 visual-parity diagnostics: extent of the LAST SetVertexData write into
+	// the CURRENTLY-VIEWED entry ([offset, offset+size)). A draw that fetches
+	// beyond this on a rotated (fresh, zero-filled) entry reads zeroed
+	// vertices/instance rows - the "fans to screen centre" candidate. Creation
+	// with initialData counts as a full write; creation without data leaves 0.
+	uint32_t                                 _lastWriteBegin = 0;
+	uint32_t                                 _lastWriteEnd   = 0;
 };

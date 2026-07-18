@@ -5,6 +5,7 @@
 #include "TextureImporterD3D12.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
 #include <HexEngine.Core/Graphics/Window.hpp>
+#include <DirectXTex\DirectXTex\DirectXTex.h>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -199,6 +200,21 @@ bool GraphicsDeviceD3D12::CreateDeviceAndQueue()
 			debug->EnableDebugLayer();
 			dxgiFlags |= DXGI_CREATE_FACTORY_DEBUG;
 			LOG_INFO("D3D12: debug layer enabled");
+
+			// GPU-Based Validation: patches shaders to validate descriptor +
+			// root-binding access AT EXECUTION TIME (catches stale/null
+			// descriptors and OOB reads the CPU layer can't see). Massive
+			// slowdown, so opt-in via env var for debugging sessions only.
+			char gbv[8] = {};
+			if (GetEnvironmentVariableA("HEXENGINE_D3D12_GBV", gbv, sizeof(gbv)) > 0 && gbv[0] == '1')
+			{
+				ComPtr<ID3D12Debug1> debug1;
+				if (SUCCEEDED(debug.As(&debug1)))
+				{
+					debug1->SetEnableGPUBasedValidation(TRUE);
+					LOG_INFO("D3D12: GPU-based validation ENABLED (expect heavy slowdown)");
+				}
+			}
 		}
 
 		// DRED (Device Removed Extended Data) - on a TDR / DEVICE_HUNG, lets
@@ -385,6 +401,79 @@ void GraphicsDeviceD3D12::DeferredRelease(Microsoft::WRL::ComPtr<ID3D12Resource>
 	// virtual addresses that stay valid until that signal completes; entries
 	// drain in FlushPendingUploads at the next BeginFrame after the wait.
 	_pendingDeletions.push_back({ std::move(resource), _nextFenceValue });
+}
+
+void GraphicsDeviceD3D12::RequestTextureCapture(Texture2DD3D12* tex, const fs::path& path)
+{
+	if (tex == nullptr || tex->_resource == nullptr || path.empty()) return;
+	if (tex->_sampleCount > 1)
+	{
+		LOG_WARN("D3D12 capture: '%ls' skipped - MSAA source not supported (resolve first)", path.c_str());
+		return;
+	}
+	_pendingCaptures.push_back({ tex, tex->_resource, tex->_currentState, path });
+}
+
+void GraphicsDeviceD3D12::CancelTextureCapture(Texture2DD3D12* tex)
+{
+	for (auto& pc : _pendingCaptures)
+	{
+		if (pc.texture == tex) pc.texture = nullptr; // keep ComPtr + request-time state
+	}
+}
+
+void GraphicsDeviceD3D12::ExecutePendingCaptures()
+{
+	if (_pendingCaptures.empty()) return;
+	// Swap out first: DirectXTex's CaptureTexture submits + fence-waits on our
+	// queue, and a SaveToFile called from some hook during that wait must not
+	// mutate the vector we're iterating.
+	std::vector<PendingCapture> captures;
+	captures.swap(_pendingCaptures);
+
+	for (auto& pc : captures)
+	{
+		// If the wrapper is still alive its tracked state is authoritative
+		// (transitions may have been recorded+submitted since the request);
+		// a destroyed wrapper falls back to the state seen at request time.
+		const D3D12_RESOURCE_STATES state = pc.texture ? pc.texture->_currentState : pc.stateAtRequest;
+
+		DirectX::ScratchImage image;
+		HRESULT hr = DirectX::CaptureTexture(_directQueue.Get(), pc.resource.Get(), false, image, state, state);
+		if (FAILED(hr))
+		{
+			LOG_WARN("D3D12 capture: CaptureTexture('%ls') failed (0x%08X)", pc.path.c_str(), (unsigned)hr);
+			continue;
+		}
+
+		const DirectX::Image* img = image.GetImage(0, 0, 0);
+		if (img == nullptr) continue;
+
+		// PNG via WIC can't encode float/typeless sources; convert to 8bpc
+		// RGBA first. Covers the HDR beauty target (R16G16B16A16_FLOAT) and
+		// R11G11B10 intermediates.
+		DirectX::ScratchImage converted;
+		const DXGI_FORMAT f = img->format;
+		const bool needsConvert =
+			f == DXGI_FORMAT_R16G16B16A16_FLOAT || f == DXGI_FORMAT_R32G32B32A32_FLOAT ||
+			f == DXGI_FORMAT_R11G11B10_FLOAT    || f == DXGI_FORMAT_R32G32B32_FLOAT ||
+			DirectX::IsTypeless(f);
+		if (needsConvert)
+		{
+			hr = DirectX::Convert(*img, DXGI_FORMAT_R8G8B8A8_UNORM, DirectX::TEX_FILTER_DEFAULT, DirectX::TEX_THRESHOLD_DEFAULT, converted);
+			if (SUCCEEDED(hr)) img = converted.GetImage(0, 0, 0);
+		}
+
+		hr = DirectX::SaveToWICFile(*img, DirectX::WIC_FLAGS_NONE, DirectX::GetWICCodec(DirectX::WIC_CODEC_PNG), pc.path.c_str());
+		if (FAILED(hr))
+		{
+			LOG_WARN("D3D12 capture: SaveToWICFile('%ls') failed (0x%08X)", pc.path.c_str(), (unsigned)hr);
+		}
+		else
+		{
+			LOG_INFO("D3D12 capture: wrote '%ls' (%dx%d)", pc.path.c_str(), (int)img->width, (int)img->height);
+		}
+	}
 }
 
 bool GraphicsDeviceD3D12::CheckAndReportDeviceRemoval()
@@ -786,6 +875,12 @@ void GraphicsDeviceD3D12::BeginFrame(HexEngine::Window* window, HexEngine::IText
 		}
 	}
 
+	// Deferred SaveToFile captures: run at the frame boundary, where every
+	// recorded transition has been submitted (drain above / EndFrame before),
+	// so each texture's tracked state matches its GPU-side state and the
+	// content is a complete frame. See RequestTextureCapture in the header.
+	ExecutePendingCaptures();
+
 	if (_fence->GetCompletedValue() < frame.fenceValue)
 	{
 		if (SUCCEEDED(_fence->SetEventOnCompletion(frame.fenceValue, _fenceEvent)))
@@ -809,6 +904,7 @@ void GraphicsDeviceD3D12::BeginFrame(HexEngine::Window* window, HexEngine::IText
 	// the new frame.
 	_shaderVisibleHeap.BeginFrame(frameIdx);
 	ResetPendingForBeginFrame();
+	ResetDrawOrdinal();
 
 	Texture2DD3D12& bb = ctx.backbuffers[frameIdx];
 	TransitionResource(&bb, D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1327,7 +1423,10 @@ HexEngine::IVertexBuffer* GraphicsDeviceD3D12::CreateVertexBuffer(const HexEngin
 	D3D12_RANGE noRead = { 0, 0 };
 	entry.resource->Map(0, &noRead, &entry.mapped);
 	if (initialData != nullptr && entry.mapped != nullptr)
+	{
 		memcpy(entry.mapped, initialData, d.byteWidth);
+		vb->_lastWriteEnd = d.byteWidth;
+	}
 	vb->_activeResource      = entry.resource.Get();
 	vb->_view.BufferLocation = entry.resource->GetGPUVirtualAddress();
 	vb->_uploads.push_back(std::move(entry));

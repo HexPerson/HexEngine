@@ -30,6 +30,23 @@ namespace
 	}
 }
 
+namespace
+{
+	// B5 debug: HEXENGINE_D3D12_NO_REUSE=1 disables upload-entry reuse so every
+	// write lands in a virgin allocation. Memory grows without bound - debug
+	// only. If corruption survives this, entry reuse is exonerated.
+	bool NoReuseMode()
+	{
+		static int s_mode = -1;
+		if (s_mode < 0)
+		{
+			char v[8] = {};
+			s_mode = (GetEnvironmentVariableA("HEXENGINE_D3D12_NO_REUSE", v, sizeof(v)) > 0 && v[0] == '1') ? 1 : 0;
+		}
+		return s_mode == 1;
+	}
+}
+
 void VertexBufferD3D12::Destroy()
 {
 	for (auto& u : _uploads)
@@ -69,6 +86,7 @@ void VertexBufferD3D12::SetVertexData(uint8_t* data, uint32_t size, uint32_t off
 
 	// Find an upload entry whose last-use fence has completed.
 	UploadEntry* avail = nullptr;
+	if (!NoReuseMode())
 	for (auto& u : _uploads)
 	{
 		if (u.fence <= completed) { avail = &u; break; }
@@ -99,6 +117,9 @@ void VertexBufferD3D12::SetVertexData(uint8_t* data, uint32_t size, uint32_t off
 	// Stamp with EndFrame's about-to-be-signaled value: any draw queued
 	// before that signal needs this entry's data to stay intact.
 	avail->fence = _device->GetPendingFenceValue();
+
+	_lastWriteBegin = offset;
+	_lastWriteEnd   = offset + size;
 
 	_activeResource          = avail->resource.Get();
 	_view.BufferLocation     = avail->resource->GetGPUVirtualAddress();

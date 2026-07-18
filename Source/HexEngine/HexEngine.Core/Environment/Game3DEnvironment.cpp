@@ -168,6 +168,25 @@ namespace HexEngine
 			}
 		}
 
+		// Renderer backend override for launch-time selection. r_renderer must be
+		// set BEFORE the plugin system loads (each renderer plugin self-rejects in
+		// CreateInterface based on it), and nothing external can set a cvar that
+		// early - there is no command line or config pass yet. An env var is the
+		// minimal hook: lets a dev shell / test harness force D3D12 without a
+		// debugger. Values match the cvar: 1 = D3D11, 2 = D3D12.
+		{
+			char rendererEnv[8] = {};
+			if (GetEnvironmentVariableA("HEXENGINE_RENDERER", rendererEnv, sizeof(rendererEnv)) > 0)
+			{
+				const int32_t requested = atoi(rendererEnv);
+				if (requested >= 0 && requested <= 2 && requested != r_renderer._val.i32)
+				{
+					LOG_INFO("HEXENGINE_RENDERER=%d overriding r_renderer (was %d)", requested, r_renderer._val.i32);
+					r_renderer._val.i32 = requested;
+				}
+			}
+		}
+
 		env->_pluginSystem = new PluginSystem;
 		if (auto numPluginsLoaded = env->_pluginSystem->LoadAllPlugins(); numPluginsLoaded > 0)
 		{

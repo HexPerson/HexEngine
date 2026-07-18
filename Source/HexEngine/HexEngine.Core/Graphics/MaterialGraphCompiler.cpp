@@ -1041,6 +1041,31 @@ namespace HexEngine
 				combined += '\0';
 			}
 
+			// Compiler-identity salt. The cached .hcs embeds bytecode whose
+			// SEMANTICS depend on the ShaderCompiler build itself (FXC/DXC flag
+			// choices: matrix packing majority, -HV version, optimisation
+			// settings). A pure content hash cannot see a compiler change, which
+			// left pre-DXC-flag-alignment DXIL blobs alive in project caches:
+			// their matrices decoded with the wrong majority under D3D12, fanning
+			// whole meshes through the screen centre while D3D11 (DXBC blob in
+			// the same file) rendered fine. Folding the compiler executable's
+			// size + mtime into the includes hash auto-invalidates every cached
+			// graph shader whenever the compiler is rebuilt. Both the bake path
+			// and IsCachedGraphShaderStale call this function, so key generation
+			// and staleness detection stay consistent by construction.
+			{
+				const fs::path compilerExe = g_pEnv->GetFileSystem().GetBaseDirectory() / "HexEngine.ShaderCompiler.exe";
+				combined += '\0';
+				std::error_code cec;
+				const auto exeSize = fs::file_size(compilerExe, cec);
+				if (!cec)
+					combined += std::format("compiler:{}:", exeSize);
+				std::error_code mec;
+				const auto exeTime = fs::last_write_time(compilerExe, mec);
+				if (!mec)
+					combined += std::format("{}", exeTime.time_since_epoch().count());
+			}
+
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);
 		}

@@ -13,6 +13,9 @@ void Texture2DD3D12::Destroy()
 	if (HexEngine::g_pEnv && HexEngine::g_pEnv->_graphicsDevice)
 	{
 		auto* device = static_cast<GraphicsDeviceD3D12*>(HexEngine::g_pEnv->_graphicsDevice);
+		// A capture may be queued against this wrapper; drop the back-pointer so
+		// the execute pass doesn't read a freed wrapper for its state.
+		device->CancelTextureCapture(this);
 		if (_rtvIndex != UINT32_MAX) { device->RtvHeap().Free(_rtvIndex);       _rtvIndex = UINT32_MAX; }
 		if (_dsvIndex != UINT32_MAX) { device->DsvHeap().Free(_dsvIndex);       _dsvIndex = UINT32_MAX; }
 		if (_srvIndex != UINT32_MAX) { device->CbvSrvUavHeap().Free(_srvIndex); _srvIndex = UINT32_MAX; }
@@ -34,6 +37,13 @@ void Texture2DD3D12::Destroy()
 		_resource.Reset();
 	else
 		_resource = nullptr; // swap chain owns it; just drop our COM ref
+}
+
+void Texture2DD3D12::SaveToFile(const fs::path& path)
+{
+	auto* device = static_cast<GraphicsDeviceD3D12*>(HexEngine::g_pEnv->_graphicsDevice);
+	if (device == nullptr || _resource == nullptr) return;
+	device->RequestTextureCapture(this, path);
 }
 
 void Texture2DD3D12::SetPixels(uint8_t* data, uint32_t size)

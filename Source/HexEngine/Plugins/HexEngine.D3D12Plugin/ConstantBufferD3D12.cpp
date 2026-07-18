@@ -28,6 +28,23 @@ namespace
 	}
 }
 
+namespace
+{
+	// B5 debug: HEXENGINE_D3D12_NO_REUSE=1 disables upload-entry reuse so every
+	// write lands in a virgin allocation. Memory grows without bound - debug
+	// only. If corruption survives this, entry reuse is exonerated.
+	bool NoReuseMode()
+	{
+		static int s_mode = -1;
+		if (s_mode < 0)
+		{
+			char v[8] = {};
+			s_mode = (GetEnvironmentVariableA("HEXENGINE_D3D12_NO_REUSE", v, sizeof(v)) > 0 && v[0] == '1') ? 1 : 0;
+		}
+		return s_mode == 1;
+	}
+}
+
 void ConstantBufferD3D12::Destroy()
 {
 	for (auto& u : _uploads)
@@ -49,6 +66,7 @@ bool ConstantBufferD3D12::Write(void* data, uint32_t size)
 	const uint64_t completed = _device->GetCompletedFenceValue();
 
 	UploadEntry* avail = nullptr;
+	if (!NoReuseMode())
 	for (auto& u : _uploads)
 	{
 		if (u.fence <= completed) { avail = &u; break; }

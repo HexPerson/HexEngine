@@ -36,8 +36,9 @@ public:
 	// device's open command list.
 	virtual void SetPixels(uint8_t* data, uint32_t size) override;
 
-	// B5 territory; B3 only needs the bare metal so init can succeed.
-	virtual void SaveToFile(const fs::path&)                                                override {}
+	// Deferred readback: forwards to GraphicsDeviceD3D12::RequestTextureCapture,
+	// which executes at the next frame boundary (see that method's doc).
+	virtual void SaveToFile(const fs::path& path)                                           override;
 	virtual void ClearDepth(uint32_t)                                                       override;
 	virtual void CopyTo(ITexture2D*)                                                        override;
 	virtual void CopyTo(ITexture2D*, const RECT&, const RECT&)                              override {}

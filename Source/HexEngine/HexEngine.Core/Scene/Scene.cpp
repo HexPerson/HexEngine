@@ -1805,6 +1805,12 @@ namespace HexEngine
 		}
 	}
 
+	// B5 D3D12 visual-parity debug: `r_dumpMeshDraws N` logs the next N
+	// instanced scene draws with mesh + material identity. Pairs with the
+	// D3D12 plugin's r_d3d12DrawDump (match on indices/instances) to name the
+	// meshes behind corrupt draw ordinals. Self-clears when the count runs out.
+	HVar r_dumpMeshDraws("r_dumpMeshDraws", "Log mesh/material identity for the next N instanced draws (0 = off)", 0, 0, 100000);
+
 	template <typename T>
 	void RenderInstance(T* instance, uint32_t numInstances, Material* material, bool& rendered)
 	{
@@ -1815,6 +1821,14 @@ namespace HexEngine
 			if (numInstances > 0)
 			{
 				const uint32_t indexCount = instance->GetMesh()->GetNumIndices();
+				if (r_dumpMeshDraws._val.i32 > 0)
+				{
+					--r_dumpMeshDraws._val.i32;
+					LOG_INFO("MeshDraw: indices=%u instances=%u mesh='%s' material='%s'",
+						indexCount, numInstances,
+						instance->GetMesh()->GetName().c_str(),
+						material ? material->GetName().c_str() : "(null)");
+				}
 				// Indirect-draw path is hard-coded to D3D11 (ID3D11Buffer,
 				// D3D11_DRAW_INDEXED_INSTANCED_INDIRECT_ARGS, UpdateSubresource).
 				// Under D3D12 the reinterpret_cast of GetNativeDevice() to

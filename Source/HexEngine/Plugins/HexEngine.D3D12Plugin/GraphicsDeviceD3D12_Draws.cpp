@@ -8,6 +8,121 @@
 #include "FormatsD3D12.hpp"
 #include "StructuredBufferD3D12.hpp"
 #include <HexEngine.Core/HexEngine.hpp>
+#include <HexEngine.Core/Input/HVar.hpp>
+
+// ---------------------------------------------------------------------------
+// B5 visual-parity live-bisect tooling (console-driven, editor-bridge friendly).
+//
+// r_d3d12DrawDump 1        -> logs every graphics draw of the NEXT frame with
+//                             its ordinal + identifying parameters, then
+//                             auto-resets to 0.
+// r_d3d12SkipDrawBegin N /
+// r_d3d12SkipDrawEnd M     -> draws with ordinal in [N, M] are dropped before
+//                             submission. Set both to -1 to disable. Binary-
+//                             searching this range against a frame capture
+//                             pins the exact draw producing corrupt geometry
+//                             without rebuilding or restarting the editor.
+// ---------------------------------------------------------------------------
+namespace
+{
+	HexEngine::HVar r_d3d12DrawDump("r_d3d12DrawDump", "Dump every D3D12 draw of the next frame to the log (one-shot)", false, false, true);
+	HexEngine::HVar r_d3d12SkipDrawBegin("r_d3d12SkipDrawBegin", "First draw ordinal to skip this frame (-1 = none)", -1, -1, 1000000);
+	HexEngine::HVar r_d3d12SkipDrawEnd("r_d3d12SkipDrawEnd", "Last draw ordinal to skip this frame (-1 = none)", -1, -1, 1000000);
+
+	int32_t g_drawOrdinal = 0; ///< reset each BeginFrame via ResetDrawOrdinal()
+
+	// Peeks the first 4 floats of a CB's ACTIVE upload entry (CPU-mapped, so
+	// this reads exactly what the GPU will read for draws snapshotting the
+	// current CBV). Returns false if the active entry can't be found.
+	bool PeekCbActive(ConstantBufferD3D12* cb, float out[4], void** outRes)
+	{
+		if (cb == nullptr || cb->_activeResource == nullptr) return false;
+		*outRes = cb->_activeResource;
+		for (auto& u : cb->_uploads)
+		{
+			if (u.resource.Get() == cb->_activeResource && u.mapped != nullptr)
+			{
+				memcpy(out, u.mapped, sizeof(float) * 4);
+				return true;
+			}
+		}
+		return false;
+	}
+
+	// Returns true when this draw should be SKIPPED. Also handles dump logging.
+	bool BisectDraw(uint32_t numIndices, uint32_t instanceCount,
+		VertexBufferD3D12* vb0, VertexBufferD3D12* vb1, HexEngine::IIndexBuffer* ib,
+		InputLayoutD3D12* layout, const char* kind,
+		ShaderStageD3D12* vs = nullptr, ShaderStageD3D12* ps = nullptr,
+		ConstantBufferD3D12* cbFrame = nullptr, ConstantBufferD3D12* cbObject = nullptr,
+		ShaderStageD3D12* gs = nullptr)
+	{
+		const int32_t ordinal = g_drawOrdinal++;
+		if (r_d3d12DrawDump._val.b)
+		{
+			float f[4] = {}; void* fres = nullptr; const bool fOk = PeekCbActive(cbFrame, f, &fres);
+			float o[4] = {}; void* ores = nullptr; const bool oOk = PeekCbActive(cbObject, o, &ores);
+			// Peek slot-0 vertex data: vertex 0's first 4 floats (pos.xyzw for
+			// the fat MeshVertex layout - w MUST be 1) and vertex 10's, to catch
+			// zeroed / partially-uploaded mesh buffers.
+			float v0[4] = {}, v10[4] = {};
+			if (vb0 != nullptr && vb0->_activeResource != nullptr)
+			{
+				for (auto& u : vb0->_uploads)
+				{
+					if (u.resource.Get() == vb0->_activeResource && u.mapped != nullptr)
+					{
+						memcpy(v0, u.mapped, sizeof(float) * 4);
+						if (vb0->_byteSize >= vb0->_stride * 10 + 16)
+							memcpy(v10, static_cast<const uint8_t*>(u.mapped) + vb0->_stride * 10, sizeof(float) * 4);
+						break;
+					}
+				}
+			}
+			// Peek the instance VB's last-written row: worldMatrix rows 0 and 3
+			// (transposed matrices carry translation in m[3],m[7],m[11]).
+			float i0[4] = {}, i3[4] = {};
+			if (vb1 != nullptr && vb1->_lastWriteEnd > vb1->_lastWriteBegin)
+			{
+				for (auto& u : vb1->_uploads)
+				{
+					if (u.resource.Get() == vb1->_activeResource && u.mapped != nullptr)
+					{
+						const uint8_t* row = static_cast<const uint8_t*>(u.mapped) + vb1->_lastWriteBegin;
+						memcpy(i0, row, sizeof(float) * 4);
+						if (vb1->_lastWriteEnd - vb1->_lastWriteBegin >= 64)
+							memcpy(i3, row + 48, sizeof(float) * 4);
+						break;
+					}
+				}
+			}
+			LOG_INFO("D3D12 draw[%d] %s: indices=%u instances=%u vb1w=%u ib=%p vs=%p GS=%p cbF=%p[%g %g %g %g]%s cbO=%p[%g %g %g %g]%s v0=[%g %g %g %g] v10=[%g %g %g %g] inst0=[%g %g %g %g]",
+				ordinal, kind, numIndices, instanceCount,
+				vb1 ? vb1->_lastWriteEnd : 0,
+				(void*)ib,
+				vs ? (void*)vs->_bytecode.data() : nullptr,
+				gs ? (void*)gs->_bytecode.data() : nullptr,
+				fres, f[0], f[1], f[2], f[3], fOk ? "" : "(?)",
+				ores, o[0], o[1], o[2], o[3], oOk ? "" : "(?)",
+				v0[0], v0[1], v0[2], v0[3], v10[0], v10[1], v10[2], v10[3],
+				i0[0], i0[1], i0[2], i0[3]);
+		}
+		const int32_t b = r_d3d12SkipDrawBegin._val.i32;
+		const int32_t e = r_d3d12SkipDrawEnd._val.i32;
+		return b >= 0 && e >= 0 && ordinal >= b && ordinal <= e;
+	}
+}
+
+void GraphicsDeviceD3D12::ResetDrawOrdinal()
+{
+	g_drawOrdinal = 0;
+	// One-shot dump: BeginFrame after a dumped frame clears the flag so the
+	// log gets exactly one frame's worth of draws per `r_d3d12DrawDump 1`.
+	static bool s_dumpedLastFrame = false;
+	if (s_dumpedLastFrame && r_d3d12DrawDump._val.b)
+		r_d3d12DrawDump._val.b = false;
+	s_dumpedLastFrame = r_d3d12DrawDump._val.b;
+}
 
 namespace
 {
@@ -368,6 +483,16 @@ void GraphicsDeviceD3D12::DrawIndexed(uint32_t numIndices)
 		SetConstantBufferVS(1, cb);
 		SetConstantBufferPS(1, cb);
 	}
+	if (BisectDraw(numIndices, 1,
+		static_cast<VertexBufferD3D12*>(_pending.vbs[0]), static_cast<VertexBufferD3D12*>(_pending.vbs[1]),
+		_pending.ib, _pending.inputLayout, "indexed", _pending.vs, _pending.ps,
+		static_cast<ConstantBufferD3D12*>(_engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerFrameBuffer]),
+		static_cast<ConstantBufferD3D12*>(_engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer]),
+		_pending.gs))
+	{
+		UnbindAllPixelShaderResources();
+		return;
+	}
 	if (!FlushGraphics()) { UnbindAllPixelShaderResources(); return; }
 	// Record into the draw trace ring just before submission so a GPU hang
 	// preserves the identity of the failing draw.
@@ -397,6 +522,37 @@ void GraphicsDeviceD3D12::DrawIndexedInstanced(uint32_t numIndices, uint32_t ins
 	{
 		SetConstantBufferVS(1, cb);
 		SetConstantBufferPS(1, cb);
+	}
+	// B5 visual-parity probe: an instanced draw fetching PER-INSTANCE rows
+	// beyond what the last SetVertexData wrote into slot 1's CURRENT upload
+	// entry reads zero-filled memory (fresh committed resources are zeroed).
+	// Zero instance matrices transform every vertex to clip (0,0,0,0) - the
+	// "triangle fans to screen centre" corruption. Log the mismatch with
+	// enough identity to find the engine-side writer.
+	if (auto* ivb = static_cast<VertexBufferD3D12*>(_pending.vbs[1]))
+	{
+		const uint64_t fetchEnd = (uint64_t)instanceCount * ivb->_stride;
+		if (fetchEnd > ivb->_lastWriteEnd || ivb->_lastWriteBegin != 0)
+		{
+			static int s_reports = 0;
+			if (s_reports < 24)
+			{
+				++s_reports;
+				LOG_WARN("D3D12 instanced draw OVERFETCH: instances=%u stride=%u fetchEnd=%llu but lastWrite=[%u,%u) byteSize=%u entries=%zu",
+					instanceCount, ivb->_stride, fetchEnd,
+					ivb->_lastWriteBegin, ivb->_lastWriteEnd, ivb->_byteSize, ivb->_uploads.size());
+			}
+		}
+	}
+	if (BisectDraw(numIndices, instanceCount,
+		static_cast<VertexBufferD3D12*>(_pending.vbs[0]), static_cast<VertexBufferD3D12*>(_pending.vbs[1]),
+		_pending.ib, _pending.inputLayout, "instanced", _pending.vs, _pending.ps,
+		static_cast<ConstantBufferD3D12*>(_engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerFrameBuffer]),
+		static_cast<ConstantBufferD3D12*>(_engineConstantBuffers[(uint32_t)HexEngine::EngineConstantBuffer::PerObjectBuffer]),
+		_pending.gs))
+	{
+		UnbindAllPixelShaderResources();
+		return;
 	}
 	if (!FlushGraphics()) { UnbindAllPixelShaderResources(); return; }
 	_cmdList->DrawIndexedInstanced(numIndices, instanceCount, 0, 0, 0);
