@@ -12,6 +12,26 @@ namespace HexEngine::VolumetricTerrain
 {
 	namespace
 	{
+		HexEngine::HVar r_terrainForceD3D12(
+			"r_terrainForceD3D12",
+			"Enable volumetric terrain under D3D12 despite the historical GPU-hang guard",
+			false, false, true);
+
+		// Env-var twin of the cvar: cvars can't be set before the scene loads
+		// on a fresh boot (no console yet, no persistence), and terrain only
+		// consults the guard during scene-load Initialize. HEXENGINE_TERRAIN_FORCE=1
+		// makes a restart-based test deterministic.
+		bool TerrainForcedByEnv()
+		{
+			static int s_v = -1;
+			if (s_v < 0)
+			{
+				char v[8] = {};
+				s_v = (GetEnvironmentVariableA("HEXENGINE_TERRAIN_FORCE", v, sizeof(v)) > 0 && v[0] == '1') ? 1 : 0;
+			}
+			return s_v == 1;
+		}
+
 		// Bumped to 2 when cookedCollisionBlob was added at the tail of the
 		// payload. v1 payloads still load (the blob is left empty), v2
 		// payloads gain a "cooked PhysX bytes" tail.
@@ -353,7 +373,14 @@ namespace HexEngine::VolumetricTerrain
 		// right after BuildChunks). Skip the whole subsystem under non-D3D11
 		// until a per-backend port lands - the entity stays in the scene but
 		// produces no chunks or meshes.
-		if (g_pEnv->_graphicsDevice != nullptr &&
+		//
+		// r_terrainForceD3D12 (file scope, registers at plugin load) bypasses
+		// the guard: the original hang is strongly suspected to have been the
+		// stale-DXIL matrix-packing corruption (fixed via the shader-cache
+		// compiler salt + rebake, 2026-07-19) rather than a genuine backend
+		// gap. Opt-in until D3D12 terrain has soak time.
+		if (!r_terrainForceD3D12._val.b && !TerrainForcedByEnv() &&
+			g_pEnv->_graphicsDevice != nullptr &&
 			g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
 		{
 			static bool warned = false;
