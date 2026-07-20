@@ -147,12 +147,15 @@ namespace HexEngine
 			for (Entity* ch : e->GetChildren())
 				if (ch) children.push_back(json{ {"id", EntityIdToJson(ch->GetId())}, {"name", ch->GetName()} });
 			Entity* parent = e->GetParent();
+			const dx::BoundingBox& aabb = e->GetAABB();
 			return json{
 				{"id", EntityIdToJson(e->GetId())},
 				{"name", e->GetName()},
 				{"parent", parent ? json{ {"id", EntityIdToJson(parent->GetId())}, {"name", parent->GetName()} } : json(nullptr)},
 				{"children", children},
 				{"components", comps},
+				{"aabbCenter", json::array({ aabb.Center.x, aabb.Center.y, aabb.Center.z })},
+				{"aabbExtents", json::array({ aabb.Extents.x, aabb.Extents.y, aabb.Extents.z })},
 			};
 		}
 
@@ -847,6 +850,50 @@ namespace HexEngine
 							return MakeError(id, ErrorCode::NotAvailable, "parent entity '" + params["parent"].get<std::string>() + "' not found (entity was created without a parent)");
 					}
 					return MakeResult(id, json{ {"id", EntityIdToJson(e->GetId())}, {"name", e->GetName()} });
+				});
+			}
+			if (m == "clone_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "entity cloning requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string() ||
+						!params.contains("newName") || !params["newName"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "clone_entity requires 'name' (source) and 'newName'");
+					Entity* src = scene->GetEntityByName(params["name"].get<std::string>());
+					if (src == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + params["name"].get<std::string>() + "'");
+
+					// Note: kit meshes are usually baked in world space with the
+					// entity at the origin, so 'position' acts as a world-space
+					// OFFSET from wherever the source geometry sits.
+					math::Vector3 pos(0.0f, 0.0f, 0.0f);
+					if (params.contains("position") && params["position"].is_array() && params["position"].size() == 3)
+						pos = math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>());
+					math::Quaternion rot(0.0f, 0.0f, 0.0f, 1.0f);
+					if (params.contains("eulerDegrees") && params["eulerDegrees"].is_array() && params["eulerDegrees"].size() == 3)
+					{
+						const float toRad = 3.14159265358979f / 180.0f;
+						rot = math::Quaternion::CreateFromYawPitchRoll(
+							params["eulerDegrees"][1].get<float>() * toRad,
+							params["eulerDegrees"][0].get<float>() * toRad,
+							params["eulerDegrees"][2].get<float>() * toRad);
+					}
+					math::Vector3 scale(1.0f, 1.0f, 1.0f);
+					if (params.contains("scale") && params["scale"].is_array() && params["scale"].size() == 3)
+						scale = math::Vector3(params["scale"][0].get<float>(), params["scale"][1].get<float>(), params["scale"][2].get<float>());
+
+					Entity* clone = scene->CloneEntity(src, params["newName"].get<std::string>(), pos, rot, scale, true);
+					if (clone == nullptr)
+						return MakeError(id, ErrorCode::Internal, "Scene::CloneEntity returned null");
+					if (!params.value("persistent", false))
+						clone->SetFlag(EntityFlags::DoNotSave);
+					scene->ForceRebuildPVS();
+					return MakeResult(id, json{ {"source", src->GetName()}, {"clone", clone->GetName()}, {"id", EntityIdToJson(clone->GetId())} });
 				});
 			}
 			if (m == "set_entity_transform")
