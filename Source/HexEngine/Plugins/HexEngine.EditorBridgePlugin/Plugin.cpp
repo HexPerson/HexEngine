@@ -849,6 +849,106 @@ namespace HexEngine
 					return MakeResult(id, json{ {"id", EntityIdToJson(e->GetId())}, {"name", e->GetName()} });
 				});
 			}
+			if (m == "set_entity_transform")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "transform writes require the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "set_entity_transform requires a 'name' string");
+					Entity* e = scene->GetEntityByName(params["name"].get<std::string>());
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + params["name"].get<std::string>() + "'");
+
+					json applied = json::object();
+					if (params.contains("position") && params["position"].is_array() && params["position"].size() == 3)
+					{
+						e->SetPosition(math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>()));
+						applied["position"] = params["position"];
+					}
+					if (params.contains("rotation") && params["rotation"].is_array() && params["rotation"].size() == 4)
+					{
+						e->SetRotation(math::Quaternion(params["rotation"][0].get<float>(), params["rotation"][1].get<float>(), params["rotation"][2].get<float>(), params["rotation"][3].get<float>()));
+						applied["rotation"] = params["rotation"];
+					}
+					else if (params.contains("eulerDegrees") && params["eulerDegrees"].is_array() && params["eulerDegrees"].size() == 3)
+					{
+						const float toRad = 3.14159265358979f / 180.0f;
+						const float pitch = params["eulerDegrees"][0].get<float>() * toRad;
+						const float yaw   = params["eulerDegrees"][1].get<float>() * toRad;
+						const float roll  = params["eulerDegrees"][2].get<float>() * toRad;
+						e->SetRotation(math::Quaternion::CreateFromYawPitchRoll(yaw, pitch, roll));
+						applied["eulerDegrees"] = params["eulerDegrees"];
+					}
+					if (params.contains("scale") && params["scale"].is_array() && params["scale"].size() == 3)
+					{
+						e->SetScale(math::Vector3(params["scale"][0].get<float>(), params["scale"][1].get<float>(), params["scale"][2].get<float>()));
+						applied["scale"] = params["scale"];
+					}
+					if (applied.empty())
+						return MakeError(id, ErrorCode::InvalidParams, "provide at least one of: position [x,y,z], rotation [x,y,z,w], eulerDegrees [pitch,yaw,roll], scale [x,y,z]");
+					scene->ForceRebuildPVS();
+					return MakeResult(id, json{ {"entity", e->GetName()}, {"applied", applied} });
+				});
+			}
+			if (m == "set_component_field")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "component writes require the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string() ||
+						!params.contains("component") || !params["component"].is_string() ||
+						!params.contains("fields") || !params["fields"].is_object())
+						return MakeError(id, ErrorCode::InvalidParams, "set_component_field requires 'name' (entity), 'component' (type name) and 'fields' (object of field:value)");
+					Entity* e = scene->GetEntityByName(params["name"].get<std::string>());
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + params["name"].get<std::string>() + "'");
+					const std::string compName = params["component"].get<std::string>();
+					BaseComponent* target = nullptr;
+					for (BaseComponent* c : e->GetAllComponents())
+						if (c && c->GetComponentName() && compName == c->GetComponentName()) { target = c; break; }
+					if (target == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "entity has no component named '" + compName + "'");
+
+					// Read-modify-write: components' Deserialize expects the full
+					// field set (missing keys can reset to defaults), so capture
+					// the current state via Serialize, overlay the requested
+					// fields, and feed the merged object back. Unknown keys in
+					// the patch are rejected so typos don't silently no-op.
+					try
+					{
+						MemoryJsonFile mem;
+						json current = json::object();
+						target->Serialize(current, &mem);
+						for (auto& [key, value] : params["fields"].items())
+						{
+							if (!current.contains(key))
+								return MakeError(id, ErrorCode::InvalidParams, "component '" + compName + "' has no serialised field '" + key + "' (see inspect_component)");
+							current[key] = value;
+						}
+						target->Deserialize(current, &mem, 0);
+						json after = json::object();
+						target->Serialize(after, &mem);
+						return MakeResult(id, json{
+							{"entity", e->GetName()},
+							{"component", compName},
+							{"fields", after},
+						});
+					}
+					catch (const std::exception& ex)
+					{
+						return MakeError(id, ErrorCode::Internal, std::string("component serialize/deserialize threw: ") + ex.what());
+					}
+				});
+			}
 			if (m == "delete_entity")
 			{
 				if (!BridgeWriteEnabled())
@@ -865,6 +965,7 @@ namespace HexEngine
 					if (e == nullptr)
 						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + name + "'");
 					scene->DestroyEntity(e);
+					scene->ForceRebuildPVS();
 					return MakeResult(id, json{ {"deleted", name}, {"note", "removal may defer one tick if scene iteration is in progress"} });
 				});
 			}
@@ -1068,6 +1169,12 @@ namespace HexEngine
 						return MakeError(id, ErrorCode::Internal, "failed to add StaticMeshComponent");
 					meshComponent->SetMesh(mesh);
 					meshComponent->SetMaterial(material);
+
+					// Runtime-created entities are invisible until the camera's
+					// potentially-visible-set is rebuilt (same reason the
+					// volumetric terrain queues a PVS refresh after chunk
+					// builds) - force it so the mesh shows up immediately.
+					scene->ForceRebuildPVS();
 
 					return MakeResult(id, json{
 						{"id", EntityIdToJson(e->GetId())},
