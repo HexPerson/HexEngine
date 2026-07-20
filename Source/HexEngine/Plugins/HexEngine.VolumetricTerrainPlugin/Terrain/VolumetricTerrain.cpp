@@ -640,23 +640,20 @@ namespace HexEngine::VolumetricTerrain
 			return;
 		}
 
-		// GPU surface build path uses raw compute dispatches with bare
-		// reinterpret_cast<ID3D11*> on GetNativeDevice / GetNativeDeviceContext.
-		// Under D3D12 those casts land on the wrong vtable AND the dispatches
-		// happen on a worker thread during scene Deserialize - both broken
-		// in distinct ways. Force the CPU fallback path until a per-backend
-		// port of the SDF marching-cubes compute pass lands in B5.
+		// The GPU surface build issues extract dispatches through the neutral
+		// device API, but this function runs on the scene-load worker thread
+		// and the D3D12 command list is single-threaded (D3D11 survives via
+		// the device's internal lock). Defer the build to the first
+		// RenderCustom tick, which the scene calls on the main thread. Chunk
+		// visual meshes are left visible until the deferred build succeeds so
+		// there's no terrain hole during load.
 		if (g_pEnv->_graphicsDevice != nullptr &&
 			g_pEnv->_graphicsDevice->GetBackend() != HexEngine::GraphicsBackend::D3D11)
 		{
 			_gpuVisualsEnabled = false;
-			RebuildAll(rebuildCollisionFallback);
-			static bool warned = false;
-			if (!warned)
-			{
-				LOG_WARN("VolumetricTerrain: GPU surface path disabled under non-D3D11 backend; falling back to CPU marching cubes. Per-backend port pending in B5.");
-				warned = true;
-			}
+			_gpuSurfaceBuildDeferred = true;
+			_owner->GetScene()->RegisterCustomRenderer(this);
+			LOG_INFO("VolumetricTerrain::BuildGpuVisualsOrFallback: non-D3D11 backend - GPU surface build deferred to the first render tick (main thread).");
 			return;
 		}
 
@@ -1670,7 +1667,78 @@ namespace HexEngine::VolumetricTerrain
 	void VolumetricTerrain::RenderCustom(Scene* scene, Camera* camera, MeshRenderFlags renderFlags)
 	{
 		(void)scene;
-		if (!_gpuVisualsEnabled || (renderFlags & MeshRenderFlags::MeshRenderNormal) == 0 || (renderFlags & MeshRenderFlags::MeshRenderTransparency) != 0 || (renderFlags & MeshRenderFlags::MeshRenderShadowMap) != 0)
+		const bool isNormalPass =
+			(renderFlags & MeshRenderFlags::MeshRenderNormal) != 0 &&
+			(renderFlags & MeshRenderFlags::MeshRenderTransparency) == 0 &&
+			(renderFlags & MeshRenderFlags::MeshRenderShadowMap) == 0;
+
+		// Deferred GPU-surface build for non-D3D11 backends (see
+		// BuildGpuVisualsOrFallback): we're now on the main thread with the
+		// device's command list open, so the extract dispatches are safe.
+		// One-shot: runs for every chunk/LOD, then flips to normal rendering.
+		if (_gpuSurfaceBuildDeferred && isNormalPass)
+		{
+			_gpuSurfaceBuildDeferred = false;
+
+			using clk = std::chrono::high_resolution_clock;
+			const auto buildStart = clk::now();
+
+			bool canUseGpuVisuals = !_chunks.empty();
+			for (auto& [coord, chunk] : _chunks)
+			{
+				(void)coord;
+				if (chunk == nullptr || !chunk->EnsureGpuSurfacePipeline())
+				{
+					canUseGpuVisuals = false;
+					break;
+				}
+
+				// Density/material volumes were uploaded on the loader thread;
+				// re-upload here so the data is guaranteed to have gone through
+				// the main-thread command list before the extract samples it.
+				chunk->UploadGeneratedToGpu();
+
+				for (uint32_t lodIndex = 0; lodIndex < VolumetricTerrainChunk::kGpuSurfaceLodCount; ++lodIndex)
+				{
+					if (!chunk->BuildGpuSurface(lodIndex))
+					{
+						canUseGpuVisuals = false;
+						break;
+					}
+				}
+				if (!canUseGpuVisuals)
+				{
+					break;
+				}
+			}
+
+			_gpuVisualsEnabled = canUseGpuVisuals;
+			for (auto& [coord, chunk] : _chunks)
+			{
+				(void)coord;
+				if (chunk != nullptr)
+				{
+					chunk->SetVisualMeshHidden(_gpuVisualsEnabled);
+				}
+			}
+
+			if (_gpuVisualsEnabled)
+			{
+				_pendingCollisionRefresh = true;
+				_collisionRefreshStarted = false;
+				_collisionDebounce = 0.0f;
+				_collisionStepAccumulator = 0.0f;
+				LOG_INFO("VolumetricTerrain: deferred GPU surface build complete in %.1fms (collision queued for lazy refresh)",
+					std::chrono::duration<double, std::milli>(clk::now() - buildStart).count());
+			}
+			else
+			{
+				LOG_WARN("VolumetricTerrain: deferred GPU surface build FAILED - falling back to CPU marching cubes meshes.");
+				RebuildAll(true);
+			}
+		}
+
+		if (!_gpuVisualsEnabled || !isNormalPass)
 		{
 			return;
 		}
