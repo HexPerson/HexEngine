@@ -237,11 +237,47 @@ void GraphicsDeviceD3D12::SetComputeRwTexture3D(uint32_t slot, HexEngine::ITextu
 	_bindings.uavs[slot] = t ? t->_uav : D3D12_CPU_DESCRIPTOR_HANDLE{};
 	if (t && slot + 1 > _bindings.uavHighWater) _bindings.uavHighWater = slot + 1;
 }
-void GraphicsDeviceD3D12::SetComputeRwStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buf, uint32_t)
+void GraphicsDeviceD3D12::SetComputeRwStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buf, uint32_t initialCount)
 {
 	if (slot >= RootSignatureD3D12::kUavCount) return;
 	auto* b = static_cast<StructuredBufferD3D12*>(buf);
 	if (b != nullptr) TransitionResource(b, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+	// D3D11 semantics: a non-sentinel initialCount resets the append/consume
+	// hidden counter at bind time (CSSetUnorderedAccessViews pUAVInitialCounts).
+	// D3D12 keeps the counter in its own 4-byte resource, so write the value
+	// with WriteBufferImmediate. Without this, every re-extract appends on top
+	// of the previous count and the indirect draw feeds off garbage.
+	if (b != nullptr && b->_counterResource != nullptr && initialCount != 0xFFFFFFFFu && _cmdList != nullptr)
+	{
+		Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList2> cl2;
+		if (SUCCEEDED(_cmdList->QueryInterface(IID_PPV_ARGS(&cl2))))
+		{
+			auto counterBarrier = [&](D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
+			{
+				if (before == after) return;
+				D3D12_RESOURCE_BARRIER bar = {};
+				bar.Type                   = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+				bar.Transition.pResource   = b->_counterResource.Get();
+				bar.Transition.StateBefore = before;
+				bar.Transition.StateAfter  = after;
+				bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+				_cmdList->ResourceBarrier(1, &bar);
+			};
+			// WriteBufferImmediate behaves as a copy: a COMMON counter
+			// implicitly promotes to COPY_DEST at first use, so only
+			// non-COMMON states need the explicit move. Either way the
+			// counter sits in COPY_DEST after the write.
+			if (b->_counterState != D3D12_RESOURCE_STATE_COMMON &&
+				b->_counterState != D3D12_RESOURCE_STATE_COPY_DEST)
+				counterBarrier(b->_counterState, D3D12_RESOURCE_STATE_COPY_DEST);
+			D3D12_WRITEBUFFERIMMEDIATE_PARAMETER p = { b->_counterResource->GetGPUVirtualAddress(), initialCount };
+			cl2->WriteBufferImmediate(1, &p, nullptr);
+			counterBarrier(D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+			b->_counterState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+		}
+	}
+
 	_bindings.uavs[slot] = b ? b->_uav : D3D12_CPU_DESCRIPTOR_HANDLE{};
 	if (b && slot + 1 > _bindings.uavHighWater) _bindings.uavHighWater = slot + 1;
 }
@@ -680,26 +716,37 @@ void GraphicsDeviceD3D12::CopyStructureCount(
 		_cmdList->ResourceBarrier(1, &b);
 	};
 
-	// State assumptions, valid for the real usage pattern (a compute pass
-	// appends into `src` this frame, then CopyStructureCount feeds an indirect
-	// draw): both the counter and the main buffer were just written via their
-	// UAVs, so both are in UNORDERED_ACCESS at this point in the command list.
-	// We transition each to its copy role, copy the 4-byte counter, then put
-	// them back. The counter returns to UNORDERED_ACCESS (next append); the
-	// destination args buffer also returns to UNORDERED_ACCESS and we keep
-	// _currentState truthful so the following ExecuteIndirect's
-	// UNORDERED_ACCESS->INDIRECT_ARGUMENT transition has the correct
-	// StateBefore.
-	barrier(src->_counterResource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-	barrier(dst->_resource.Get(),        dst->_currentState,                    D3D12_RESOURCE_STATE_COPY_DEST);
+	// A GPU copy cannot target an upload-heap buffer (it is pinned in
+	// GENERIC_READ); the caller must create the args buffer default-heap.
+	if (dst->_isUploadHeap)
+	{
+		LOG_WARN("D3D12 CopyStructureCount: destination buffer is upload-heap (CpuAccess::Write) - GPU copy skipped. Create the args buffer with default usage.");
+		return;
+	}
+
+	// The counter was just written via its UAV (auto-promoted from COMMON on
+	// first access if never explicitly transitioned), so UNORDERED_ACCESS is
+	// its effective state unless we've tracked something else.
+	const D3D12_RESOURCE_STATES counterBefore =
+		(src->_counterState != D3D12_RESOURCE_STATE_COMMON) ? src->_counterState : D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+	barrier(src->_counterResource.Get(), counterBefore,     D3D12_RESOURCE_STATE_COPY_SOURCE);
+	barrier(dst->_resource.Get(),        dst->_currentState, D3D12_RESOURCE_STATE_COPY_DEST);
 
 	_cmdList->CopyBufferRegion(dst->_resource.Get(), destinationByteOffset,
 		src->_counterResource.Get(), 0, sizeof(uint32_t));
 
 	barrier(src->_counterResource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	src->_counterState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-	barrier(dst->_resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-	dst->_currentState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
+	// Leave dst in COPY_DEST with truthful tracking. An indirect-args buffer
+	// is created WITHOUT D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, so
+	// transitioning it to UNORDERED_ACCESS is illegal (debug-layer error #524
+	// RESOURCE_BARRIER_MISMATCHING_MISC_FLAGS - this crashed the volumetric
+	// terrain extract). The next consumer (ExecuteIndirect via
+	// TransitionResource) moves it from the tracked state to
+	// INDIRECT_ARGUMENT, which is valid from COPY_DEST.
+	dst->_currentState = D3D12_RESOURCE_STATE_COPY_DEST;
 }
 
 // ---- viewport / scissor ---------------------------------------------------
