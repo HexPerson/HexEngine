@@ -119,6 +119,9 @@ namespace
 			{ "get_recent_engine_logs",  "Return recent engine logs (capped). Params: max (optional).", true },
 			{ "list_projects",           "List the editor's recent projects (path/name/exists) - the entries the project browser shows.", false },
 			{ "open_project",            "Open a project from the project browser (write opt-in required). Params: path (project .json path) or name (stem from list_projects). Load is async; poll get_editor_status.", true },
+			{ "create_entity",           "Create an empty entity in the current scene (write opt-in required). Params: name (required), position [x,y,z], parent (entity name).", true },
+			{ "delete_entity",           "Delete an entity by name from the current scene (write opt-in required). Params: name.", true },
+			{ "create_mesh_entity",      "Create an entity with a procedural mesh (write opt-in required). Params: name, vertices [[x,y,z],...], indices (flat triangle list), normals (optional, computed if absent), uvs (optional), position, parent, persistent (bool), material {path | diffuseColour [r,g,b,a], emissiveColour, metallic, roughness, smoothness, affectsGI}.", true },
 		};
 		for (auto& l : live)
 		{

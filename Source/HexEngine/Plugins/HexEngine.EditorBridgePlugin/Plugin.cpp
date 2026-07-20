@@ -1,4 +1,4 @@
-
+﻿
 // -----------------------------------------------------------------------------
 // HexEngine.EditorBridgePlugin - editor-only live inspection bridge.
 //
@@ -31,7 +31,10 @@
 #include "../../HexEngine.Core/FileSystem/JsonFile.hpp"
 #include "../../HexEngine.Core/Input/CommandManager.hpp"
 #include "../../HexEngine.Core/Entity/Component/Camera.hpp"
+#include "../../HexEngine.Core/Entity/Component/StaticMeshComponent.hpp"
 #include "../../HexEngine.Core/Graphics/ITexture2D.hpp"
+#include "../../HexEngine.Core/Graphics/Material.hpp"
+#include "../../HexEngine.Core/Scene/Mesh.hpp"
 
 #include <deque>
 
@@ -816,6 +819,266 @@ namespace HexEngine
 					// The load continues on a worker thread with a loading
 					// dialog; poll get_editor_status until sceneName is set.
 					return MakeResult(id, json{ {"opening", true}, {"path", path} });
+				});
+			}
+			if (m == "create_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "entity creation requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "create_entity requires a 'name' string");
+					const std::string name = params["name"].get<std::string>();
+					math::Vector3 pos = math::Vector3(0.0f, 0.0f, 0.0f);
+					if (params.contains("position") && params["position"].is_array() && params["position"].size() == 3)
+						pos = math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>());
+					Entity* e = scene->CreateEntity(name, pos, math::Quaternion(0.0f, 0.0f, 0.0f, 1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::Internal, "Scene::CreateEntity returned null");
+					if (params.contains("parent") && params["parent"].is_string())
+					{
+						if (Entity* parent = scene->GetEntityByName(params["parent"].get<std::string>()))
+							e->SetParent(parent);
+						else
+							return MakeError(id, ErrorCode::NotAvailable, "parent entity '" + params["parent"].get<std::string>() + "' not found (entity was created without a parent)");
+					}
+					return MakeResult(id, json{ {"id", EntityIdToJson(e->GetId())}, {"name", e->GetName()} });
+				});
+			}
+			if (m == "delete_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "entity deletion requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "delete_entity requires a 'name' string");
+					const std::string name = params["name"].get<std::string>();
+					Entity* e = scene->GetEntityByName(name);
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + name + "'");
+					scene->DestroyEntity(e);
+					return MakeResult(id, json{ {"deleted", name}, {"note", "removal may defer one tick if scene iteration is in progress"} });
+				});
+			}
+			if (m == "create_mesh_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "mesh creation requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "create_mesh_entity requires a 'name' string");
+					const std::string name = params["name"].get<std::string>();
+
+					// --- geometry parsing (nested [[x,y,z],..] or flat [x,y,z,..]) ---
+					auto parseVec3s = [](const json& arr, std::vector<math::Vector3>& out) -> bool
+					{
+						if (!arr.is_array()) return false;
+						if (!arr.empty() && arr[0].is_array())
+						{
+							out.reserve(arr.size());
+							for (const auto& v : arr)
+							{
+								if (!v.is_array() || v.size() != 3) return false;
+								out.emplace_back(v[0].get<float>(), v[1].get<float>(), v[2].get<float>());
+							}
+							return true;
+						}
+						if (arr.size() % 3 != 0) return false;
+						out.reserve(arr.size() / 3);
+						for (size_t i = 0; i + 2 < arr.size(); i += 3)
+							out.emplace_back(arr[i].get<float>(), arr[i + 1].get<float>(), arr[i + 2].get<float>());
+						return true;
+					};
+
+					std::vector<math::Vector3> positions;
+					if (!params.contains("vertices") || !parseVec3s(params["vertices"], positions) || positions.empty())
+						return MakeError(id, ErrorCode::InvalidParams, "create_mesh_entity requires 'vertices' as [[x,y,z],...] or a flat [x,y,z,...] array");
+					if (positions.size() > 262144)
+						return MakeError(id, ErrorCode::InvalidParams, "too many vertices (max 262144)");
+
+					std::vector<MeshIndexFormat> indices;
+					if (!params.contains("indices") || !params["indices"].is_array() || params["indices"].empty() || params["indices"].size() % 3 != 0)
+						return MakeError(id, ErrorCode::InvalidParams, "create_mesh_entity requires 'indices' as a flat triangle-list array (multiple of 3)");
+					if (params["indices"].size() > 1048576)
+						return MakeError(id, ErrorCode::InvalidParams, "too many indices (max 1048576)");
+					indices.reserve(params["indices"].size());
+					for (const auto& iv : params["indices"])
+					{
+						const uint64_t v = iv.get<uint64_t>();
+						if (v >= positions.size())
+							return MakeError(id, ErrorCode::InvalidParams, "index " + std::to_string(v) + " out of range (vertex count " + std::to_string(positions.size()) + ")");
+						indices.push_back((MeshIndexFormat)v);
+					}
+
+					std::vector<math::Vector3> normals;
+					if (params.contains("normals"))
+					{
+						if (!parseVec3s(params["normals"], normals) || normals.size() != positions.size())
+							return MakeError(id, ErrorCode::InvalidParams, "'normals' must match the vertex count");
+					}
+					else
+					{
+						// Area-weighted face-normal accumulation - the cross
+						// product magnitude is twice the triangle area, so
+						// summing unnormalised face normals weights by area.
+						normals.assign(positions.size(), math::Vector3(0.0f, 0.0f, 0.0f));
+						for (size_t i = 0; i + 2 < indices.size(); i += 3)
+						{
+							const math::Vector3& a = positions[indices[i]];
+							const math::Vector3& b = positions[indices[i + 1]];
+							const math::Vector3& c = positions[indices[i + 2]];
+							const math::Vector3 fn = (b - a).Cross(c - a);
+							normals[indices[i]]     += fn;
+							normals[indices[i + 1]] += fn;
+							normals[indices[i + 2]] += fn;
+						}
+						for (auto& n : normals)
+						{
+							const float len = n.Length();
+							n = (len > 0.00001f) ? (n / len) : math::Vector3(0.0f, 1.0f, 0.0f);
+						}
+					}
+
+					std::vector<math::Vector2> uvs;
+					if (params.contains("uvs"))
+					{
+						const json& arr = params["uvs"];
+						if (!arr.is_array())
+							return MakeError(id, ErrorCode::InvalidParams, "'uvs' must be [[u,v],...] or flat [u,v,...]");
+						if (!arr.empty() && arr[0].is_array())
+						{
+							for (const auto& v : arr)
+							{
+								if (!v.is_array() || v.size() != 2)
+									return MakeError(id, ErrorCode::InvalidParams, "'uvs' entries must be [u,v]");
+								uvs.emplace_back(v[0].get<float>(), v[1].get<float>());
+							}
+						}
+						else
+						{
+							if (arr.size() % 2 != 0)
+								return MakeError(id, ErrorCode::InvalidParams, "flat 'uvs' must have an even element count");
+							for (size_t i = 0; i + 1 < arr.size(); i += 2)
+								uvs.emplace_back(arr[i].get<float>(), arr[i + 1].get<float>());
+						}
+						if (uvs.size() != positions.size())
+							return MakeError(id, ErrorCode::InvalidParams, "'uvs' must match the vertex count");
+					}
+
+					// --- assemble MeshVertex array (tangent = any axis orthogonal
+					// to the normal; Default.shader only needs it non-degenerate
+					// when no normal map is bound) ---
+					std::vector<MeshVertex> verts(positions.size());
+					math::Vector3 mn = positions[0];
+					math::Vector3 mx = positions[0];
+					for (size_t i = 0; i < positions.size(); ++i)
+					{
+						const math::Vector3& n = normals[i];
+						math::Vector3 axis = (fabsf(n.y) < 0.99f) ? math::Vector3(0.0f, 1.0f, 0.0f) : math::Vector3(1.0f, 0.0f, 0.0f);
+						math::Vector3 tangent = axis.Cross(n);
+						const float tl = tangent.Length();
+						tangent = (tl > 0.00001f) ? (tangent / tl) : math::Vector3(1.0f, 0.0f, 0.0f);
+						verts[i] = MeshVertex::Create(positions[i], n, tangent,
+							uvs.empty() ? 0.0f : uvs[i].x, uvs.empty() ? 0.0f : uvs[i].y);
+						verts[i]._bitangent = n.Cross(tangent);
+						mn = math::Vector3::Min(mn, positions[i]);
+						mx = math::Vector3::Max(mx, positions[i]);
+					}
+
+					// --- material: existing .hmat, or a Default.hmat copy;
+					// property overrides always apply to a private copy so a
+					// cached shared material is never mutated ---
+					std::shared_ptr<Material> material = std::make_shared<Material>();
+					material->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
+					const json matParams = params.value("material", json::object());
+					std::shared_ptr<Material> base;
+					if (matParams.contains("path") && matParams["path"].is_string())
+					{
+						base = Material::Create(matParams["path"].get<std::string>());
+						if (base == nullptr)
+							return MakeError(id, ErrorCode::NotAvailable, "material '" + matParams["path"].get<std::string>() + "' could not be loaded");
+					}
+					else
+					{
+						base = Material::Create("EngineData.Materials/Default.hmat");
+					}
+					if (base != nullptr)
+						material->CopyFrom(base);
+					auto readColour = [&](const char* key, math::Vector4& out)
+					{
+						if (matParams.contains(key) && matParams[key].is_array() && matParams[key].size() >= 3)
+						{
+							out = math::Vector4(
+								matParams[key][0].get<float>(), matParams[key][1].get<float>(), matParams[key][2].get<float>(),
+								matParams[key].size() >= 4 ? matParams[key][3].get<float>() : 1.0f);
+						}
+					};
+					readColour("diffuseColour", material->_properties.diffuseColour);
+					readColour("emissiveColour", material->_properties.emissiveColour);
+					if (matParams.contains("metallic"))   material->_properties.metallicFactor  = matParams["metallic"].get<float>();
+					if (matParams.contains("roughness"))  material->_properties.roughnessFactor = matParams["roughness"].get<float>();
+					if (matParams.contains("smoothness")) material->_properties.smoothness      = matParams["smoothness"].get<float>();
+					if (matParams.contains("affectsGI"))  material->SetAffectsGI(matParams["affectsGI"].get<bool>());
+
+					// --- mesh + entity ---
+					auto mesh = std::make_shared<Mesh>(nullptr, name);
+					if (!mesh->CreateDynamicBuffers((uint32_t)verts.size(), (uint32_t)indices.size()) ||
+						!mesh->UpdateDynamicGeometry(verts, indices))
+						return MakeError(id, ErrorCode::Internal, "mesh buffer creation/upload failed");
+
+					dx::BoundingBox aabb;
+					dx::BoundingBox::CreateFromPoints(aabb,
+						DirectX::XMVectorSet(mn.x, mn.y, mn.z, 1.0f),
+						DirectX::XMVectorSet(mx.x, mx.y, mx.z, 1.0f));
+					dx::BoundingOrientedBox obb;
+					dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
+					mesh->SetAABB(aabb);
+					mesh->SetOBB(obb);
+
+					math::Vector3 pos = math::Vector3(0.0f, 0.0f, 0.0f);
+					if (params.contains("position") && params["position"].is_array() && params["position"].size() == 3)
+						pos = math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>());
+
+					Entity* e = scene->CreateEntity(name, pos, math::Quaternion(0.0f, 0.0f, 0.0f, 1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::Internal, "Scene::CreateEntity returned null");
+					// The mesh has no backing asset file, so a scene save would
+					// serialise an empty mesh reference. Default the entity to
+					// DoNotSave; pass persistent=true to opt into saving anyway.
+					if (!params.value("persistent", false))
+						e->SetFlag(EntityFlags::DoNotSave);
+					if (params.contains("parent") && params["parent"].is_string())
+						if (Entity* parent = scene->GetEntityByName(params["parent"].get<std::string>()))
+							e->SetParent(parent);
+
+					auto* meshComponent = e->AddComponent<StaticMeshComponent>();
+					if (meshComponent == nullptr)
+						return MakeError(id, ErrorCode::Internal, "failed to add StaticMeshComponent");
+					meshComponent->SetMesh(mesh);
+					meshComponent->SetMaterial(material);
+
+					return MakeResult(id, json{
+						{"id", EntityIdToJson(e->GetId())},
+						{"name", e->GetName()},
+						{"vertexCount", verts.size()},
+						{"indexCount", indices.size()},
+						{"triangleCount", indices.size() / 3},
+						{"aabbMin", json::array({ mn.x, mn.y, mn.z })},
+						{"aabbMax", json::array({ mx.x, mx.y, mx.z })},
+						{"note", "mesh is in-memory only (no .hmesh asset); entity defaults to DoNotSave unless persistent=true"},
+					});
 				});
 			}
 			if (m == "capture_frame")
