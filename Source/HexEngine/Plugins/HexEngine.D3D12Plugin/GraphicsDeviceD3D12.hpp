@@ -275,6 +275,22 @@ public:
 	void RequestTextureCapture(Texture2DD3D12* tex, const fs::path& path);
 	void CancelTextureCapture(Texture2DD3D12* tex);
 
+	/**
+	 * @brief Dev instrumentation: CopyStructureCount mirrors each copied
+	 * append-counter into a 4-byte readback buffer; this poll (called from
+	 * BeginFrame) logs the values once the GPU has passed them - to a
+	 * crash-surviving flushed file, because a runaway counter usually TDRs
+	 * the device before the engine log flushes. Diagnoses garbage
+	 * indirect-draw instance counts (e.g. the volumetric-terrain extract).
+	 */
+	void PollCounterDebugReadbacks();
+	struct CounterDebugReadback
+	{
+		Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+		uint64_t fence = 0;
+	};
+	std::vector<CounterDebugReadback> _counterDebugReadbacks;
+
 	/** @brief Resets the per-frame draw ordinal used by the live-bisect cvars
 	 *  (r_d3d12DrawDump / r_d3d12SkipDrawBegin / r_d3d12SkipDrawEnd). Called at
 	 *  BeginFrame. Implemented in GraphicsDeviceD3D12_Draws.cpp. */

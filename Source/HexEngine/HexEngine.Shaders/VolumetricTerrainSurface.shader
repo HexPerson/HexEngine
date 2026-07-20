@@ -28,7 +28,12 @@
 		float4 n2;
 	};
 
-	StructuredBuffer<TerrainTriangleGpu> g_surfaceTriangles : register(t0);
+	// t30, not t0: the pixel stage samples its material-weight volume at t0,
+	// and the D3D12 backend binds one SRV descriptor table shared across all
+	// stages (SHADER_VISIBILITY_ALL) - a VS t0 would occupy the same table
+	// slot and the PS would sample the triangle buffer as its Texture3D.
+	// D3D11 has per-stage register namespaces so any slot works there.
+	StructuredBuffer<TerrainTriangleGpu> g_surfaceTriangles : register(t30);
 
 	struct VSOut
 	{

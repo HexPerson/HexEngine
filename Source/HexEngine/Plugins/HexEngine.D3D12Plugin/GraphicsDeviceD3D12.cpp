@@ -527,24 +527,28 @@ void GraphicsDeviceD3D12::DumpDredNow(const char* triggerSource)
 	writeLine("D3D12 DRED: dump triggered by %s (GetDeviceRemovedReason HR=0x%X). Querying DRED breadcrumbs + page fault info...",
 		triggerSource ? triggerSource : "?", (uint32_t)removed);
 
+	// Everything below goes through writeLine (raw FILE* + fflush), NOT
+	// LOG_WARN: the process usually dies right after this callback and the
+	// engine log buffer never flushes, which is how a previous hang left a
+	// dump with the draw trace but no breadcrumbs.
 	using Microsoft::WRL::ComPtr;
 	ComPtr<ID3D12DeviceRemovedExtendedData> dred;
 	HRESULT qiHr = _device->QueryInterface(IID_PPV_ARGS(&dred));
 	if (FAILED(qiHr))
 	{
-		LOG_WARN("D3D12 DRED: QueryInterface(ID3D12DeviceRemovedExtendedData) failed (0x%X) - DRED unavailable on this Windows / driver, no breadcrumbs.", (uint32_t)qiHr);
-		return;
+		writeLine("D3D12 DRED: QueryInterface(ID3D12DeviceRemovedExtendedData) failed (0x%X) - DRED unavailable on this Windows / driver, no breadcrumbs.", (uint32_t)qiHr);
 	}
-
+	else
+	{
 	D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT bcOut = {};
 	HRESULT bcHr = dred->GetAutoBreadcrumbsOutput(&bcOut);
 	if (FAILED(bcHr))
 	{
-		LOG_WARN("D3D12 DRED: GetAutoBreadcrumbsOutput failed (0x%X)", (uint32_t)bcHr);
+		writeLine("D3D12 DRED: GetAutoBreadcrumbsOutput failed (0x%X)", (uint32_t)bcHr);
 	}
 	else if (bcOut.pHeadAutoBreadcrumbNode == nullptr)
 	{
-		LOG_WARN("D3D12 DRED: No breadcrumb nodes - either no work was submitted before removal, or breadcrumb enablement didn't take effect.");
+		writeLine("D3D12 DRED: No breadcrumb nodes - either no work was submitted before removal, or breadcrumb enablement didn't take effect.");
 	}
 	else
 	{
@@ -554,7 +558,7 @@ void GraphicsDeviceD3D12::DumpDredNow(const char* triggerSource)
 		{
 			const UINT lastOp = node->pLastBreadcrumbValue ? *node->pLastBreadcrumbValue : 0;
 			const UINT total  = node->BreadcrumbCount;
-			LOG_WARN("D3D12 DRED breadcrumb #%u: queue='%S' cmdlist='%S' last_completed=%u/%u",
+			writeLine("D3D12 DRED breadcrumb #%u: queue='%S' cmdlist='%S' last_completed=%u/%u",
 				nodeIdx,
 				node->pCommandQueueDebugNameW ? node->pCommandQueueDebugNameW : L"<unnamed>",
 				node->pCommandListDebugNameW  ? node->pCommandListDebugNameW  : L"<unnamed>",
@@ -563,7 +567,7 @@ void GraphicsDeviceD3D12::DumpDredNow(const char* triggerSource)
 			const UINT lastShow  = std::min<UINT>(lastOp + 4, total);
 			for (UINT i = firstShow; i < lastShow; ++i)
 			{
-				LOG_WARN("D3D12 DRED   op[%u]=%u (D3D12_AUTO_BREADCRUMB_OP)%s", i, (uint32_t)node->pCommandHistory[i], i == lastOp ? "  <-- LAST COMPLETED" : "");
+				writeLine("D3D12 DRED   op[%u]=%u (D3D12_AUTO_BREADCRUMB_OP)%s", i, (uint32_t)node->pCommandHistory[i], i == lastOp ? "  <-- LAST COMPLETED" : "");
 			}
 			node = node->pNext;
 			++nodeIdx;
@@ -574,26 +578,27 @@ void GraphicsDeviceD3D12::DumpDredNow(const char* triggerSource)
 	HRESULT pfHr = dred->GetPageFaultAllocationOutput(&pfOut);
 	if (FAILED(pfHr))
 	{
-		LOG_WARN("D3D12 DRED: GetPageFaultAllocationOutput failed (0x%X)", (uint32_t)pfHr);
+		writeLine("D3D12 DRED: GetPageFaultAllocationOutput failed (0x%X)", (uint32_t)pfHr);
 	}
 	else if (pfOut.PageFaultVA == 0)
 	{
-		LOG_WARN("D3D12 DRED: No page fault recorded (hang was probably a shader timeout, not a memory access fault)");
+		writeLine("D3D12 DRED: No page fault recorded (hang was probably a shader timeout, not a memory access fault)");
 	}
 	else
 	{
-		LOG_WARN("D3D12 DRED page fault: VA = 0x%llX", (unsigned long long)pfOut.PageFaultVA);
-		auto dumpAllocList = [](const char* tag, const D3D12_DRED_ALLOCATION_NODE* head)
+		writeLine("D3D12 DRED page fault: VA = 0x%llX", (unsigned long long)pfOut.PageFaultVA);
+		auto dumpAllocList = [&](const char* tag, const D3D12_DRED_ALLOCATION_NODE* head)
 		{
 			uint32_t i = 0;
 			for (auto* n = head; n != nullptr && i < 16; n = n->pNext, ++i)
 			{
-				LOG_WARN("D3D12 DRED   %s[%u]: type=%u name='%S'",
+				writeLine("D3D12 DRED   %s[%u]: type=%u name='%S'",
 					tag, i, (uint32_t)n->AllocationType, n->ObjectNameW ? n->ObjectNameW : L"<unnamed>");
 			}
 		};
 		dumpAllocList("existing", pfOut.pHeadExistingAllocationNode);
 		dumpAllocList("recently freed", pfOut.pHeadRecentFreedAllocationNode);
+	}
 	}
 
 	// Dump the engine-side draw trace ring. DRED breadcrumbs only record
@@ -610,6 +615,31 @@ void GraphicsDeviceD3D12::DumpDredNow(const char* triggerSource)
 		writeLine("D3D12 DRED draw[%llu]: vsBytecode=%p psBytecode=%p indices=%u inst=%u rts=%u ds=%u",
 			(unsigned long long)s.drawIndex, s.vsBytecode, s.psBytecode,
 			s.indexCount, s.instanceCount, s.rtCount, s.dsBound);
+	}
+}
+
+void GraphicsDeviceD3D12::PollCounterDebugReadbacks()
+{
+	if (_counterDebugReadbacks.empty()) return;
+	const uint64_t completed = GetCompletedFenceValue();
+	for (auto it = _counterDebugReadbacks.begin(); it != _counterDebugReadbacks.end();)
+	{
+		if (it->fence > completed) { ++it; continue; }
+		uint32_t value = 0xDEADBEEFu;
+		void* mapped = nullptr;
+		D3D12_RANGE readAll = { 0, sizeof(uint32_t) };
+		if (it->buffer && SUCCEEDED(it->buffer->Map(0, &readAll, &mapped)) && mapped)
+		{
+			value = *static_cast<uint32_t*>(mapped);
+			D3D12_RANGE noWrite = { 0, 0 };
+			it->buffer->Unmap(0, &noWrite);
+		}
+		// Flushed file, not the engine log: a runaway counter TDRs the device
+		// shortly after and the buffered log would be lost.
+		FILE* fp = nullptr;
+		fopen_s(&fp, "counter_debug.txt", "a");
+		if (fp) { fprintf(fp, "CopyStructureCount counter=%u\n", value); fflush(fp); fclose(fp); }
+		it = _counterDebugReadbacks.erase(it);
 	}
 }
 
@@ -899,6 +929,8 @@ void GraphicsDeviceD3D12::BeginFrame(HexEngine::Window* window, HexEngine::IText
 	// uploads go onto the per-frame allocator (not _uploadAlloc), so they
 	// run as part of the frame's normal submit.
 	DrainCrossThreadUploads();
+
+	PollCounterDebugReadbacks();
 
 	// Reset shader-visible heap bump pointer + pending-state bookkeeping for
 	// the new frame.

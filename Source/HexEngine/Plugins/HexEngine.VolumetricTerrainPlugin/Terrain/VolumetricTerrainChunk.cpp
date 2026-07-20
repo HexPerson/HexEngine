@@ -1797,6 +1797,20 @@ bool VolumetricTerrainChunk::ApplyBrushGpu(const math::Vector3& center, const Br
 
 void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 {
+	// TEMP DIAGNOSTIC: HEXENGINE_TERRAIN_NODRAW=1 skips the indirect draw but
+	// keeps the extract, so the append-counter readback instrumentation can
+	// complete a frame instead of TDR'ing on the first terrain draw.
+	static int s_noDraw = -1;
+	if (s_noDraw < 0)
+	{
+		char v[8] = {};
+		s_noDraw = (GetEnvironmentVariableA("HEXENGINE_TERRAIN_NODRAW", v, sizeof(v)) > 0 && v[0] == '1') ? 1 : 0;
+	}
+	if (s_noDraw == 1)
+	{
+		return;
+	}
+
 	if (lodIndex >= kGpuSurfaceLodCount ||
 		!_generated ||
 		!EnsureGpuSurfacePipeline() ||
@@ -1855,7 +1869,10 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 	graphics->SetTexture2D(22, g_gpuTerrainLayerMetallic[1].get());
 	graphics->SetTexture2D(23, g_gpuTerrainLayerMetallic[2].get());
 	graphics->SetTexture2D(24, g_gpuTerrainLayerMetallic[3].get());
-	graphics->SetVertexStructuredBuffer(0, _gpuSurfaceTriangles[lodIndex]);
+	// Slot 30 matches the shader's register(t30) - kept clear of the PS's
+	// t0..t24 material bindings because the D3D12 backend shares one SRV
+	// table across stages.
+	graphics->SetVertexStructuredBuffer(30, _gpuSurfaceTriangles[lodIndex]);
 	graphics->SetBlendState(BlendState::Opaque);
 	graphics->SetDepthBufferState(DepthBufferState::DepthDefault);
 	graphics->SetCullingMode(CullingMode::BackFace);
@@ -1888,7 +1905,7 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 
 	graphics->DrawInstancedIndirect(_gpuSurfaceDrawArgs[lodIndex]);
 	graphics->UnbindAllPixelShaderResources();
-	graphics->ClearVertexStructuredBuffer(0);
+	graphics->ClearVertexStructuredBuffer(30);
 	graphics->SetConstantBufferVS(6, nullptr);
 	graphics->SetConstantBufferPS(6, nullptr);
 	graphics->SetVertexShader(nullptr);

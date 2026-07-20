@@ -736,6 +736,37 @@ void GraphicsDeviceD3D12::CopyStructureCount(
 	_cmdList->CopyBufferRegion(dst->_resource.Get(), destinationByteOffset,
 		src->_counterResource.Get(), 0, sizeof(uint32_t));
 
+	// Dev instrumentation (HEXENGINE_D3D12_COUNTER_DEBUG=1): mirror the
+	// counter into a readback buffer while it's still in COPY_SOURCE;
+	// PollCounterDebugReadbacks logs it to counter_debug.txt.
+	static int s_counterDebug = -1;
+	if (s_counterDebug < 0)
+	{
+		char v[8] = {};
+		s_counterDebug = (GetEnvironmentVariableA("HEXENGINE_D3D12_COUNTER_DEBUG", v, sizeof(v)) > 0 && v[0] == '1') ? 1 : 0;
+	}
+	if (s_counterDebug == 1)
+	{
+		D3D12_HEAP_PROPERTIES rbHeap = {};
+		rbHeap.Type                 = D3D12_HEAP_TYPE_READBACK;
+		D3D12_RESOURCE_DESC rbDesc  = {};
+		rbDesc.Dimension            = D3D12_RESOURCE_DIMENSION_BUFFER;
+		rbDesc.Width                = sizeof(uint32_t);
+		rbDesc.Height               = 1;
+		rbDesc.DepthOrArraySize     = 1;
+		rbDesc.MipLevels            = 1;
+		rbDesc.Format               = DXGI_FORMAT_UNKNOWN;
+		rbDesc.SampleDesc.Count     = 1;
+		rbDesc.Layout               = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+		CounterDebugReadback rb;
+		if (SUCCEEDED(_device->CreateCommittedResource(&rbHeap, D3D12_HEAP_FLAG_NONE, &rbDesc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&rb.buffer))))
+		{
+			_cmdList->CopyBufferRegion(rb.buffer.Get(), 0, src->_counterResource.Get(), 0, sizeof(uint32_t));
+			rb.fence = GetPendingFenceValue();
+			_counterDebugReadbacks.push_back(std::move(rb));
+		}
+	}
+
 	barrier(src->_counterResource.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 	src->_counterState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
