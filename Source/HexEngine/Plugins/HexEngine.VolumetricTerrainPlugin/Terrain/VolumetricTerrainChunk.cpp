@@ -1,4 +1,4 @@
-#include "VolumetricTerrainChunk.hpp"
+﻿#include "VolumetricTerrainChunk.hpp"
 #include <cstring>
 #include <HexEngine.Core/Graphics/ITexture2D.hpp>
 #include <HexEngine.Core/Graphics/RenderStructs.hpp>
@@ -1869,10 +1869,7 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 	graphics->SetTexture2D(22, g_gpuTerrainLayerMetallic[1].get());
 	graphics->SetTexture2D(23, g_gpuTerrainLayerMetallic[2].get());
 	graphics->SetTexture2D(24, g_gpuTerrainLayerMetallic[3].get());
-	// Slot 30 matches the shader's register(t30) - kept clear of the PS's
-	// t0..t24 material bindings because the D3D12 backend shares one SRV
-	// table across stages.
-	graphics->SetVertexStructuredBuffer(30, _gpuSurfaceTriangles[lodIndex]);
+	graphics->SetVertexStructuredBuffer(0, _gpuSurfaceTriangles[lodIndex]);
 	graphics->SetBlendState(BlendState::Opaque);
 	graphics->SetDepthBufferState(DepthBufferState::DepthDefault);
 	graphics->SetCullingMode(CullingMode::BackFace);
@@ -1905,7 +1902,7 @@ void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 
 	graphics->DrawInstancedIndirect(_gpuSurfaceDrawArgs[lodIndex]);
 	graphics->UnbindAllPixelShaderResources();
-	graphics->ClearVertexStructuredBuffer(30);
+	graphics->ClearVertexStructuredBuffer(0);
 	graphics->SetConstantBufferVS(6, nullptr);
 	graphics->SetConstantBufferPS(6, nullptr);
 	graphics->SetVertexShader(nullptr);
