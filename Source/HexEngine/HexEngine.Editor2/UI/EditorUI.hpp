@@ -63,6 +63,7 @@ public:
 		virtual std::string GetProjectName() override;
 		virtual std::string GetProjectFolderPath() override;
 		virtual std::string GetProjectFilePath() override;
+		virtual bool OpenProject(const std::string& projectFilePath, std::string& error) override;
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 

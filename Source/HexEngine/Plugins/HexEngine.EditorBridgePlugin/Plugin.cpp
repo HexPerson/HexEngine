@@ -27,6 +27,7 @@
 #include "../../HexEngine.Core/Entity/Entity.hpp"
 #include "../../HexEngine.Core/Entity/Component/BaseComponent.hpp"
 #include "../../HexEngine.Core/FileSystem/ResourceSystem.hpp"
+#include "../../HexEngine.Core/FileSystem/FileSystem.hpp"
 #include "../../HexEngine.Core/FileSystem/JsonFile.hpp"
 #include "../../HexEngine.Core/Input/CommandManager.hpp"
 #include "../../HexEngine.Core/Entity/Component/Camera.hpp"
@@ -717,6 +718,40 @@ namespace HexEngine
 				}
 				return MakeResult(id, json{ {"count", logs.size()}, {"logs", logs} });
 			}
+			if (m == "list_projects")
+			{
+				// The editor's recent-projects list (what the project browser
+				// shows). Entries are absolute paths to project .json files -
+				// feed one to open_project. Plain file read; no main-thread hop.
+				if (!g_pEnv)
+					return MakeError(id, ErrorCode::NotAvailable, "environment not available");
+				const fs::path listPath = g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json");
+				std::ifstream in(listPath, std::ios::binary);
+				if (!in.is_open())
+					return MakeResult(id, json{ {"count", 0}, {"projects", json::array()},
+						{"note", "no Projects.json found (" + listPath.string() + ")"} });
+				std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				in.close();
+				json projects = json::array();
+				try
+				{
+					for (const auto& entry : json::parse(text).value("projects", json::array()))
+					{
+						if (!entry.is_string()) continue;
+						const std::string p = entry.get<std::string>();
+						projects.push_back(json{
+							{"path", p},
+							{"name", fs::path(p).stem().string()},
+							{"exists", fs::exists(fs::path(p))},
+						});
+					}
+				}
+				catch (const std::exception& ex)
+				{
+					return MakeError(id, ErrorCode::Internal, std::string("Projects.json parse failed: ") + ex.what());
+				}
+				return MakeResult(id, json{ {"count", projects.size()}, {"projects", projects} });
+			}
 
 			// --- WRITE surface (dev-tuning only; gated behind BridgeWriteEnabled) ---
 			if (m == "exec_console")
@@ -731,6 +766,56 @@ namespace HexEngine
 						return MakeError(id, ErrorCode::NotAvailable, "command manager not available");
 					g_pEnv->_commandManager->ProcessCommandInput(cmd);
 					return MakeResult(id, json{ {"executed", cmd} });
+				});
+			}
+			if (m == "open_project")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "opening projects requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				std::string path = req.params.value("path", std::string());
+				const std::string name = req.params.value("name", std::string());
+				if (path.empty() && name.empty())
+					return MakeError(id, ErrorCode::InvalidParams, "open_project requires a 'path' (project .json path) or a 'name' (stem from list_projects)");
+
+				// Resolve a bare name against the recent-projects list so callers
+				// can say {"name":"TT"} without knowing where the project lives.
+				if (path.empty())
+				{
+					const fs::path listPath = g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json");
+					std::ifstream in(listPath, std::ios::binary);
+					if (in.is_open())
+					{
+						std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+						in.close();
+						try
+						{
+							for (const auto& entry : json::parse(text).value("projects", json::array()))
+							{
+								if (!entry.is_string()) continue;
+								const std::string candidate = entry.get<std::string>();
+								if (_stricmp(fs::path(candidate).stem().string().c_str(), name.c_str()) == 0)
+								{
+									path = candidate;
+									break;
+								}
+							}
+						}
+						catch (...) {}
+					}
+					if (path.empty())
+						return MakeError(id, ErrorCode::NotAvailable, "no recent project named '" + name + "' (see list_projects)");
+				}
+
+				return onMain([id, path]() -> json {
+					IEditorContext* ctx = g_pEnv ? g_pEnv->_editorContext : nullptr;
+					if (!ctx)
+						return MakeError(id, ErrorCode::NotAvailable, "editor context not available (bridge is not running inside the editor)");
+					std::string err;
+					if (!ctx->OpenProject(path, err))
+						return MakeError(id, ErrorCode::NotAvailable, err);
+					// The load continues on a worker thread with a loading
+					// dialog; poll get_editor_status until sceneName is set.
+					return MakeResult(id, json{ {"opening", true}, {"path", path} });
 				});
 			}
 			if (m == "capture_frame")

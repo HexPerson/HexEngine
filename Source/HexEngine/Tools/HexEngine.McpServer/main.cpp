@@ -117,6 +117,8 @@ namespace
 			{ "find_missing_references", "Find missing material/mesh/texture/script/prefab references if detectable.", false },
 			{ "validate_current_scene",  "Run read-only validation of the current scene; returns structured diagnostics.", false },
 			{ "get_recent_engine_logs",  "Return recent engine logs (capped). Params: max (optional).", true },
+			{ "list_projects",           "List the editor's recent projects (path/name/exists) - the entries the project browser shows.", false },
+			{ "open_project",            "Open a project from the project browser (write opt-in required). Params: path (project .json path) or name (stem from list_projects). Load is async; poll get_editor_status.", true },
 		};
 		for (auto& l : live)
 		{

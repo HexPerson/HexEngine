@@ -532,6 +532,46 @@ namespace HexEditor
 		return _projectFilePath.empty() ? std::string() : _projectFilePath.string();
 	}
 
+	bool EditorUI::OpenProject(const std::string& projectFilePath, std::string& error)
+	{
+		if (!_projectFolderPath.empty())
+		{
+			error = "a project is already open; switching projects requires an editor restart";
+			return false;
+		}
+
+		fs::path p(projectFilePath);
+		if (!fs::exists(p))
+		{
+			error = "project file does not exist: " + projectFilePath;
+			return false;
+		}
+
+		// Same flow as ProjectManager::OnClickExistingProject: dismiss the
+		// browser dialog, show a loading dialog, and run the load on a worker
+		// thread (the completion handler expects to be off the main thread so
+		// the loading dialog can repaint).
+		if (_projectManager != nullptr)
+		{
+			_projectManager->DeleteMe();
+			_projectManager = nullptr;
+		}
+
+		HexEngine::LoadingDialog* loadingDlg = new HexEngine::LoadingDialog(
+			_rootElement,
+			HexEngine::Point((int32_t)GetWidth() / 2 - 220, (int32_t)GetHeight() / 2 - 60),
+			HexEngine::Point(440, 120), L"Loading");
+
+		std::thread thread([this](const fs::path path, HexEngine::LoadingDialog* dlg)
+			{
+				OnProjectManagerCompleted(path.parent_path(), path.filename().string(), true, L"", dlg);
+			},
+			p, loadingDlg);
+		thread.detach();
+
+		return true;
+	}
+
 	void EditorUI::BroadcastEditorToolMessage(HexEngine::Message& message)
 	{
 		if (HexEngine::g_pEnv == nullptr || HexEngine::g_pEnv->_pluginSystem == nullptr)
