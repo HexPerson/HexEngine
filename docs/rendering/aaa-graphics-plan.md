@@ -130,7 +130,7 @@ Individually small, collectively responsible for the "not quite right" look:
 This plan is largely self-funding — the new features are paid for by waste already present,
 not by a bigger frame budget.
 
-**Shadow maps: ~2.1 GB → ~270 MB.** *(Done in P0-B, @a1f7ce4.)* `ShadowMap::Create`
+**Shadow maps: ~2.1 GB → ~270 MB.** *(Done — see the P0-B commit.)* `ShadowMap::Create`
 unconditionally allocated *both* an `R32_TYPELESS` depth map **and** a paired `R32_FLOAT`
 colour render target (`ShadowMap.cpp:33-59`). At the hardcoded 8192²
 (`DirectionalLight.cpp:13`) that is ~268 MB each, ~536 MB per cascade, **~2.1 GB for the sun
@@ -200,10 +200,15 @@ shadow map would remove one of the two.
 
 Cheap, low-risk, and improves the *existing* renderer before any new feature lands.
 
-- Restore `1/π` on the diffuse lobe; re-balance light intensities and exposure defaults so
-  existing content doesn't get darker. Behind `r_pbrEnergyFix`.
-- Add multi-scatter GGX energy compensation and a DFG LUT (the LUT is also Phase 1's
-  split-sum input, so build it here).
+- Restore `1/π` on the diffuse lobe, behind `r_pbrEnergyFix` (default off). *Done.* In
+  practice auto-exposure absorbs most of the brightness change, so the visible result is
+  not "darker" but markedly better contrast and colour saturation, with real specular/
+  diffuse separation. Scenes running a fixed exposure would still need retuning.
+- Multi-scatter GGX energy compensation and the DFG LUT: **moved to Phase 1.** The analytic
+  `EnvBRDFApprox` helper is in place, but the real split-sum DFG LUT is consumed by IBL, and
+  applying compensation means touching the five duplicated copies of the light-assembly
+  expression — better done once, alongside the IBL work that needs the same term, than
+  twice.
 - Fix `ApplyNormalMap` to normalize; unify `flipY` across static/animated/graph paths.
 - Add `g_boneTransformsPrev` and a previous-bone-matrix upload; emit real skinned motion
   vectors. Removes character ghosting under TAA/DLSS.
@@ -237,6 +242,9 @@ saved, no visual regression at a fixed camera pose.
 
 The single largest visual delta. Fixes D1.
 
+- Precomputed split-sum **DFG LUT**, replacing the analytic `EnvBRDFApprox` stand-in added
+  in P0-C, plus multi-scatter GGX energy compensation applied to the specular lobe (carried
+  over from Phase 0 — it needs this LUT and touches the same five light-assembly sites).
 - `ReflectionProbeComponent`: cubemap capture (baked, with optional time-sliced realtime
   refresh), GGX-importance-sampled prefiltered specular mip chain, SH-9 irradiance.
 - Probe blending: per-pixel selection from a small clustered probe list with box/sphere

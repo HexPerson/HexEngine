@@ -115,7 +115,18 @@ namespace HexEngine
 	HVar r_cloudLightSteps("r_cloudLightSteps", "Base light ray-march step count", 12.0f, 2.0f, 64.0f);
 	HVar r_cloudStepScale("r_cloudStepScale", "Global cloud march step scale", 1.0f, 0.25f, 8.0f);
 	HVar r_cloudMaxDistance("r_cloudMaxDistance", "Maximum cloud trace distance from camera", 20000.0f, 100.0f, 100000.0f);
-	HVar r_gamma("r_gamma", "The amount of gamma correction to apply", 2.2f, 0.1f, 5.0f);
+	// NOTE: r_gamma is vestigial - it was uploaded to the per-frame cbuffer every frame and
+	// read by no shader (the SDR tonemap hardcodes 1/2.2). Kept declared so scenes that
+	// serialised it still load; its cbuffer slot now carries r_pbrEnergyFix.
+	HVar r_gamma("r_gamma", "Unused. Gamma is fixed at 2.2 in the tonemap shaders", 2.2f, 0.1f, 5.0f);
+
+	// The reference glTF diffuse term is albedo/PI, but the divide is commented out in
+	// PBRutils.shader, leaving diffuse response ~3.14x hot relative to the specular lobe on
+	// every lit surface in the engine. Correcting it is a large, deliberate change in
+	// appearance: everything gets substantially darker and existing light intensities and
+	// exposure need rebalancing to match. Default OFF so nothing changes until that
+	// rebalance happens; turn on to see (and then retune toward) correct energy.
+	HVar r_pbrEnergyFix("r_pbrEnergyFix", "Apply the physically-correct diffuse 1/PI term (needs light/exposure rebalance)", false, false, true);
 	HVar r_shadowCascades("r_shadowCascades", "The number of cascades to calculate with shadow mapping", 4, 1, 4);
 	HVar r_shadowCascadeRange("r_shadowCascadeRange", "The depth of one shadow cascade, except the last (which will occupy all remaining space", 100.0f, 1.0f, 10000.0f);
 	HVar r_penumbraFilterMaxSize("r_penumbraFilterMaxSize", "The maximum filter size for penumbra calculation", 0.002f, 0.0f, 10.0f);
@@ -2170,7 +2181,7 @@ namespace HexEngine
 
 			bufferData._time = g_pEnv->_timeManager->GetTime();
 			bufferData._frame = (uint32_t)g_pEnv->_timeManager->_frameCount;
-			bufferData._gamma = r_gamma._val.f32;			
+			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 
 			// ocean
 			bufferData._oceanConfig = _currentScene->GetOcean();

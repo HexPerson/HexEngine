@@ -269,7 +269,11 @@ namespace HexEngine
 		int _screenWidth;
 		int _screenHeight;
 		float _time;
-		float _gamma;
+		// 1 = apply the physically-correct PBR energy terms (currently the diffuse 1/PI),
+		// 0 = legacy behaviour. Driven by r_pbrEnergyFix. Occupies the slot that used to
+		// hold _gamma, which was uploaded every frame from r_gamma and read by no shader -
+		// the SDR tonemap hardcodes 1/2.2 - so the layout is unchanged.
+		float _pbrEnergyFix;
 
 		Atmosphere _atmosphere;
 		BloomParams _bloom;

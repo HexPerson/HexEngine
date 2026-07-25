@@ -198,7 +198,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		uint g_screenWidth;
 		uint g_screenHeight;
 		float g_time;
-		float g_gamma;
+		// 1 = physically-correct PBR energy terms, 0 = legacy. See r_pbrEnergyFix.
+		// Reuses the old (entirely unread) g_gamma slot.
+		float g_pbrEnergyFix;
 
 		//float zenithExponent;
 		//float anisotropicIntensity;
