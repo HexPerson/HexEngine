@@ -896,6 +896,34 @@ namespace HexEngine
 					return MakeResult(id, json{ {"source", src->GetName()}, {"clone", clone->GetName()}, {"id", EntityIdToJson(clone->GetId())} });
 				});
 			}
+			if (m == "select_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "entity selection requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					IEditorContext* ctx = g_pEnv ? g_pEnv->_editorContext : nullptr;
+					if (!ctx)
+						return MakeError(id, ErrorCode::NotAvailable, "editor context not available (bridge is not running inside the editor)");
+					if (params.value("clear", false))
+					{
+						if (!ctx->SetSelectedEntity(nullptr))
+							return MakeError(id, ErrorCode::Internal, "editor refused the selection change");
+						return MakeResult(id, json{ {"selected", nullptr} });
+					}
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "select_entity requires a 'name' string (or 'clear': true)");
+					Entity* e = scene->GetEntityByName(params["name"].get<std::string>());
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + params["name"].get<std::string>() + "'");
+					if (!ctx->SetSelectedEntity(e))
+						return MakeError(id, ErrorCode::Internal, "editor refused the selection change");
+					return MakeResult(id, json{ {"selected", e->GetName()}, {"id", EntityIdToJson(e->GetId())} });
+				});
+			}
 			if (m == "set_entity_transform")
 			{
 				if (!BridgeWriteEnabled())

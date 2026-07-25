@@ -1738,6 +1738,31 @@ namespace HexEditor
 		HandleComponentPropertyEdit(entity, beforeComponents, afterComponents);
 	}
 
+	void PrefabController::HandleTransformRotationEdit(HexEngine::Entity* entity, const math::Quaternion& before, const math::Quaternion& after)
+	{
+		if (entity == nullptr || before == after)
+			return;
+
+		const bool isPrefabInstance = entity->IsPrefabInstance();
+		const bool isVariantStageEntity = IsVariantStageEntity(entity);
+		if (!isPrefabInstance && !isVariantStageEntity)
+			return;
+
+		json afterComponents = json::array();
+		if (!CaptureEntityComponentsSnapshot(entity, afterComponents))
+			return;
+
+		json beforeComponents = afterComponents;
+		auto* beforeTransform = FindMutableComponentEntryByName(beforeComponents, "Transform");
+		auto* afterTransform = FindMutableComponentEntryByName(afterComponents, "Transform");
+		if (beforeTransform == nullptr || afterTransform == nullptr)
+			return;
+
+		(*beforeTransform)["_rotation"] = SerializeComponentFieldValue("_rotation", before);
+		(*afterTransform)["_rotation"] = SerializeComponentFieldValue("_rotation", after);
+		HandleComponentPropertyEdit(entity, beforeComponents, afterComponents);
+	}
+
 	void PrefabController::HandleTransformScaleEdit(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)
 	{
 		if (entity == nullptr || before == after)

@@ -514,6 +514,12 @@ namespace HexEngine
 		ClearTransformCache();
 	}
 
+	void Entity::ForceScale(const math::Vector3& scale)
+	{
+		_cachedTransform->SetScale(scale);
+		ClearTransformCache();
+	}
+
 	void Entity::SetPosition(const math::Vector3& position)
 	{
 		_cachedTransform->SetPosition(position);

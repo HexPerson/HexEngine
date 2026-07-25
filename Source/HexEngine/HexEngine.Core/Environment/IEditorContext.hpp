@@ -23,6 +23,14 @@ namespace HexEngine
 		// only for the duration of the call.
 		virtual Entity* GetSelectedEntity() = 0;
 
+		// Select (inspect) an entity in the editor UI, or clear the selection with
+		// nullptr. Defaulted so non-editor hosts don't need to care.
+		virtual bool SetSelectedEntity(Entity* entity)
+		{
+			(void)entity;
+			return false;
+		}
+
 		// Open-project metadata. All return empty strings when no project is open.
 		virtual std::string GetProjectName() = 0;       // display name (no extension)
 		virtual std::string GetProjectFolderPath() = 0; // absolute project root dir
