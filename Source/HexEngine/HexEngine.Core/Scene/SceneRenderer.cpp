@@ -161,6 +161,20 @@ namespace HexEngine
 	// shipped with; the textbook value is ~1.25 but that ghosts noticeably here.
 	HVar r_taaVarianceGamma("r_taaVarianceGamma", "TAA variance clip width in sigma (lower = tighter, less ghosting, less detail)", 0.5f, 0.1f, 3.0f);
 
+	// Environment fallback for specular rays that find no screen-space hit and no voxel
+	// coverage. Those rays used to return black, which is why a wet road reflected the sky
+	// as black rather than a sky gradient. 0 restores that behaviour.
+	HVar r_ssrSkyFallbackStrength("r_ssrSkyFallbackStrength", "Strength of the sky-LUT fallback for SSR rays that hit nothing", 1.0f, 0.0f, 4.0f);
+
+	// Screen-space sky hits: a reflection ray that passes over sky (e.g. a glossy floor
+	// reflecting sky through a window) should return that sky. An earlier version of this
+	// returned sky the moment a screen sample landed on it, which streaked badly because a
+	// floor ray sees the window in screen space long before it reaches it in 3D. Requiring a
+	// minimum travelled distance - and letting real geometry hits still win - fixes that.
+	// Raise if streaks reappear; 0 disables sky hits.
+	HVar r_ssrSkyHitMinDistance("r_ssrSkyHitMinDistance", "Min world distance before an SSR ray may accept a sky pixel as a hit (0 = disable)", 2.0f, 0.0f, 64.0f);
+	HVar r_ssrSkyHitStrength("r_ssrSkyHitStrength", "Scale applied to screen-space sky hits in SSR", 1.0f, 0.0f, 4.0f);
+
 	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
 	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
 	// y-down) and matches what Streamline and NRD do with the same buffer, but it ghosts
@@ -2193,6 +2207,12 @@ namespace HexEngine
 			bufferData._time = g_pEnv->_timeManager->GetTime();
 			bufferData._frame = (uint32_t)g_pEnv->_timeManager->_frameCount;
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
+
+			bufferData._reflectionParams = math::Vector4(
+				r_ssrSkyFallbackStrength._val.f32,
+				r_ssrSkyHitMinDistance._val.f32,
+				r_ssrSkyHitStrength._val.f32,
+				0.0f);
 
 			bufferData._taaParams = math::Vector4(
 				r_taaVarianceGamma._val.f32,
@@ -4648,6 +4668,15 @@ namespace HexEngine
 			{
 				_diffuseGi.BindVoxelsForReflection();
 			}
+
+			// Sky-view LUT at t21 = the environment fallback for specular rays that find
+			// nothing. Bound with an EXPLICIT slot rather than the auto-slot counter,
+			// because the GI bind above is conditional: on the auto path this would land at
+			// t9 whenever GI is off and get read as voxel radiance. The explicit setter also
+			// leaves the counter at slot+1, and nothing binds after it in this pass.
+			// A null bind reads as black, which degrades to the old no-fallback behaviour.
+			g_pEnv->_graphicsDevice->SetTexture2D(21,
+				g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyViewLUT() : nullptr);
 
 			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader.get());
 

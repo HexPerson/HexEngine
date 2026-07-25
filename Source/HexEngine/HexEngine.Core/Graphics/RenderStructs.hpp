@@ -322,6 +322,12 @@ namespace HexEngine
 		//       history land on the right pixel and therefore be ACCEPTED far more often,
 		//       which changes how much the clip gamma above is doing.
 		math::Vector4 _taaParams;
+
+		// Reflection / IBL parameters, appended at the end per the note above.
+		//   x = SSR sky-fallback strength (r_ssrSkyFallbackStrength). 0 restores the old
+		//       behaviour where a specular ray finding nothing returned black.
+		//   yzw reserved for the rest of Phase 1 (probe counts, IBL intensity).
+		math::Vector4 _reflectionParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

@@ -232,7 +232,17 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// TAA tuning: x = variance-clip gamma, y = velocity Y sign for history
 		// reprojection, zw spare. See RenderStructs.hpp::_taaParams.
 		float4 g_taaParams;
+		// x = SSR sky-fallback strength, yzw reserved. See RenderStructs.hpp.
+		float4 g_reflectionParams;
 	};
+
+	// Readable aliases for the packed slot above.
+	#define g_ssrSkyFallbackStrength (g_reflectionParams.x)
+	// Minimum world distance a ray must travel before a sky pixel counts as a hit. Guards
+	// the "floor grabs the window right next to it" streaking that killed the original
+	// sky-hit path. 0 disables sky hits entirely.
+	#define g_ssrSkyHitMinDistance   (g_reflectionParams.y)
+	#define g_ssrSkyHitStrength      (g_reflectionParams.z)
 
 	struct MaterialProps
 	{
