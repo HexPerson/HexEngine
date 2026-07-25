@@ -2875,9 +2875,22 @@ namespace HexEngine
 			if(_currentScene->DidAnyDrawnItemReflect())
 				RenderSSR();
 
-			if (r_taa._val.b)
+			// DLSS is itself a temporal resolver and consumes the jittered, un-resolved
+			// frame. Running our TAA as well meant two accumulators fighting over the same
+			// history, which costs sharpness for nothing.
+			const bool dlssActive =
+				_currentCamera->IsDLSSEnabled() &&
+				g_pEnv->_streamlineProvider != nullptr &&
+				g_pEnv->_streamlineProvider->IsEnabled();
+
+			if (r_taa._val.b && !dlssActive)
 			{
 				_taa.Resolve(_beautyRT, _beautyRT, _gbuffer.GetVelocity(), _gbuffer.GetNormal(), g_pEnv->GetUIManager().GetRenderer());
+				_temporalAaAppliedThisFrame = true;
+			}
+			else
+			{
+				_temporalAaAppliedThisFrame = dlssActive;
 			}
 
 			// Interaction look-at outline glow. Runs before bloom so the SDF ring
@@ -3077,7 +3090,12 @@ namespace HexEngine
 				GFX_PERF_END();
 			}			
 
-			if (r_fxaa._val.i32 && canPostProcess)
+			// Skip FXAA when a temporal resolver already ran this frame. TAA defaults on, so
+			// the two were stacking every frame: FXAA then blurs edges TAA had already
+			// resolved, and it does so pre-tonemap on unbounded linear HDR where its fixed
+			// relative thresholds behave inconsistently across the exposure range. Turning
+			// r_taa off still gives you FXAA as the fallback AA.
+			if (r_fxaa._val.i32 && canPostProcess && !_temporalAaAppliedThisFrame)
 			{
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"FXAA");
 				{

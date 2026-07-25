@@ -40,9 +40,19 @@
 			boneTransform += mul(input.boneWeights[2], g_boneTransforms[(int)input.boneIds[2]]);
 			boneTransform += mul(input.boneWeights[3], g_boneTransforms[(int)input.boneIds[3]]);
 
+			// Skin the previous-frame position with the PREVIOUS frame's pose. Reusing
+			// boneTransform here meant the only motion a skinned mesh could report was its
+			// rigid object transform plus camera movement - the deformation itself produced
+			// zero velocity, so animated characters ghosted badly under TAA and DLSS.
+			matrix	boneTransformPrev = mul(input.boneWeights[0], g_boneTransformsPrev[(int)input.boneIds[0]]);
+
+			boneTransformPrev += mul(input.boneWeights[1], g_boneTransformsPrev[(int)input.boneIds[1]]);
+			boneTransformPrev += mul(input.boneWeights[2], g_boneTransformsPrev[(int)input.boneIds[2]]);
+			boneTransformPrev += mul(input.boneWeights[3], g_boneTransformsPrev[(int)input.boneIds[3]]);
+
 			worldMatrix = mul(boneTransform, instance.world);
 			normalMatrix = mul(boneTransform, instance.worldInverseTranspose);
-			worldPrev = mul(boneTransform, instance.worldPrev);
+			worldPrev = mul(boneTransformPrev, instance.worldPrev);
 		}
 		else
 		{

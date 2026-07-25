@@ -272,6 +272,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	cbuffer PerAnimationBuffer : register(b3)
 	{
 		matrix g_boneTransforms[MAX_BONES];
+		// Previous frame's pose, for skinned motion vectors. Equal to g_boneTransforms on
+		// the first frame a mesh is drawn and whenever the animation didn't advance, which
+		// correctly yields zero deformation velocity.
+		matrix g_boneTransformsPrev[MAX_BONES];
 	}
 
 	struct ShadowSettings

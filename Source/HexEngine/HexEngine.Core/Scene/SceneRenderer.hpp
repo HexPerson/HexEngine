@@ -279,6 +279,10 @@ namespace HexEngine
 
 		TAA _taa;
 
+		// Set when TAA or DLSS resolved this frame, so the overlay chain can skip FXAA
+		// rather than stacking a second, spatial AA pass on top of a temporal one.
+		bool _temporalAaAppliedThisFrame = false;
+
 		// Cut detection for TAA history invalidation - see RenderScene. Raw observer
 		// pointers, only ever compared for identity, never dereferenced.
 		Camera* _taaHistoryCamera = nullptr;

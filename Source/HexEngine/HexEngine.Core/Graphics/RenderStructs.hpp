@@ -434,6 +434,10 @@ namespace HexEngine
 	struct PerAnimationBuffer
 	{
 		math::Matrix _boneTransforms[70];
+		// Previous frame's pose. Needed so skinned meshes emit real motion vectors: the
+		// animated vertex shader used to reproject with the CURRENT pose, so deformation
+		// contributed nothing and animated characters ghosted under TAA/DLSS.
+		math::Matrix _boneTransformsPrev[70];
 	};
 
 	/** @brief Engine-managed constant buffer binding slots. */
