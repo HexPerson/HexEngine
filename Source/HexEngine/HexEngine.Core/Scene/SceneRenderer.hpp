@@ -278,6 +278,12 @@ namespace HexEngine
 		std::shared_ptr<Material> _spotLightMaterial;
 
 		TAA _taa;
+
+		// Cut detection for TAA history invalidation - see RenderScene. Raw observer
+		// pointers, only ever compared for identity, never dereferenced.
+		Camera* _taaHistoryCamera = nullptr;
+		Scene* _taaHistoryScene = nullptr;
+		math::Vector3 _taaHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
 		DiffuseGI _diffuseGi;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 

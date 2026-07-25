@@ -109,7 +109,8 @@
 
 	static const uint3 LUT_DIMS = uint3(32u, 32u, 32u);
 	static const uint  MARCH_STEPS_PER_FROXEL = 12u;
-	static const float MAX_DIST_M = 32000.0f;
+	// Shared with the apply pass via AtmosphereCommon - see ATM_AP_MAX_DIST_M there.
+	static const float MAX_DIST_M = ATM_AP_MAX_DIST_M;
 
 	[numthreads(8, 8, 8)]
 	void ShaderMain(uint3 dtid : SV_DispatchThreadID)

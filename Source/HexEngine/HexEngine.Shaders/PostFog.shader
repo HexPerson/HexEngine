@@ -212,6 +212,10 @@
 		float3 foggedAlbedo = pixelColour.rgb * surfaceAttenuation;
 		foggedAlbedo = lerp(foggedAlbedo, fogColour, fogFactor);
 
-		return float4(saturate(foggedAlbedo), 1.0f);
+		// No saturate() here. This pass writes into the linear-HDR beauty RT well before
+		// bloom, auto-exposure and tonemapping, so clamping to 1.0 silently threw away all
+		// highlight headroom on every fogged pixel - which is most of the frame. Guard only
+		// against negatives/NaN, which the fog maths can produce at grazing angles.
+		return float4(max(foggedAlbedo, 0.0f.xxx), 1.0f);
 	}
 }

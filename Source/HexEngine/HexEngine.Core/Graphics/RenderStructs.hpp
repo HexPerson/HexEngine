@@ -131,7 +131,13 @@ namespace HexEngine
 		// SampleCmpLevelZero and read 0 = "fully occluded", turning every fragment inside
 		// the cone/sphere black.
 		int	  castsShadowsFlag;
-		int	  pad1;
+		// Number of shadow cascades actually allocated and bound for this caster. The
+		// shader's cascade loop and cascade-blend both need this: MAX_SHADOW_CASCADES is 6
+		// but r_shadowCascades defaults to 4, and blending off the end of the real set reads
+		// an unbound depthMaps[] slot (which samples as 0 = fully occluded) and produced a
+		// dark band at the far edge of the last cascade. Occupies the old pad1 slot, so the
+		// cbuffer layout is unchanged.
+		int	  cascadeCount;
 		int	  pad2;
 
 		// Screen-space contact shadow settings, packed as a vec4 for cbuffer alignment.

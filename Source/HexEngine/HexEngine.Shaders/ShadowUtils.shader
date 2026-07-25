@@ -160,8 +160,15 @@
 		//float2 largestTexCoord = GetProjectedTexCoord(largestLightView);
 		//float largestDepth = SampleDepth(cmpSampler, pointSampler, depthMaps[3], (largestLightView.z / largestLightView.w), largestTexCoord, input.positionSS, input.samples);
 
+		// Live cascade count, not the array capacity. Falls back to 4 if a caller left it
+		// unset, which is the count the cascade selection above hardcodes via
+		// g_frustumDepths[0..3].
+		const int liveCascades = (g_shadowConfig.cascadeCount > 0)
+			? min(g_shadowConfig.cascadeCount, MAX_SHADOW_CASCADES)
+			: 4;
+
 		//[loop]
-		for (int i = 0; i < MAX_SHADOW_CASCADES; i++)
+		for (int i = 0; i < liveCascades; i++)
 		{
 			if (i >= index)
 			{
@@ -195,7 +202,11 @@
 							cascadeBlendRange *= 0.35f;
 						}
 
-						if (shadowDelta < cascadeBlendRange && i < MAX_SHADOW_CASCADES - 1)
+						// Bound by the LIVE cascade count. Using MAX_SHADOW_CASCADES - 1 here
+						// meant the last real cascade (i == 3 with the default 4) blended
+						// against depthMaps[4], which is never bound - it samples as 0, i.e.
+						// fully occluded, darkening a band at the far edge of the shadow range.
+						if (shadowDelta < cascadeBlendRange && i < liveCascades - 1)
 						{
 							float4 nextLightViewPosition = CalculateLightViewPosition(i + 1, input.positionWS);
 

@@ -43,7 +43,8 @@
 	SamplerState g_pointSampler          : register(s2);
 	SamplerState g_linearSampler         : register(s4);
 
-	static const float MAX_DIST_M       = 100000.0f;
+	// Shared with the LUT generator via AtmosphereCommon - see ATM_AP_MAX_DIST_M there.
+	static const float MAX_DIST_M       = ATM_AP_MAX_DIST_M;
 	// Distance at which we force the AP composite to fully match the sky
 	// LUT colour in the view direction. Beyond this the geometry pixel
 	// should be visually indistinguishable from the sky behind it.

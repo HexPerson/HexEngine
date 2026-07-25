@@ -102,7 +102,12 @@
 		const float weatherShift = (weather - 0.5f) * 0.35f;
 		const float coverageThreshold = saturate(1.0f - coverage + weatherShift);
 		float cloud = saturate((shape - coverageThreshold) / max(0.001f, coverage));
-		const float erosionByHeight = lerp(1.22f, 0.78f, smoothstep(0.18f, 0.90f, height));
+		// MUST stay identical to SampleCloudDensity in VolumetricClouds.shader - this is a
+		// hand-duplicated copy (the two differ only in texture/sampler names), and it had
+		// been left on the old inverted erosion curve after the visible-cloud version was
+		// fixed. The result was world cloud shadows computed from a different density field
+		// than the clouds actually being drawn: shadows appeared where there was no cloud.
+		const float erosionByHeight = lerp(0.55f, 1.45f, smoothstep(0.25f, 0.95f, height));
 		cloud = saturate(cloud - (1.0f - detail) * g_cloudParams0.z * erosionByHeight);
 		const float billow = saturate(1.0f + (detail - 0.5f) * 0.28f + (weather - 0.5f) * 0.36f);
 		const float densityShape = lerp(cloud * cloud, cloud, 0.55f);

@@ -75,9 +75,15 @@
 			: value;
 	}
 
+	// Pivot on linear mid-grey, because this pass runs on linear HDR values. It used to
+	// pivot on ACEScc_MIDGRAY (0.4136), which is 0.18 *encoded in ACEScc* - wrong space,
+	// so contrast pushed toward the wrong midpoint. A no-op at the default contrast of
+	// 1.0. Proper log-space grading is Phase 4.
+	static const float LINEAR_MIDGRAY = 0.18f;
+
 	float3 ColorGradingContrast(float3 color)
 	{
-		return (color - ACEScc_MIDGRAY) * g_colourGrading.contrast + ACEScc_MIDGRAY;
+		return (color - LINEAR_MIDGRAY) * g_colourGrading.contrast + LINEAR_MIDGRAY;
 	}
 
 	float3 ColorGradePostExposure(float3 color)
@@ -86,7 +92,10 @@
 	}
 
 	float3 ColorGradeColorFilter(float3 color) {
-		return color * g_fColourFilter;
+		// Use the uploaded cbuffer value, not the file-static below. This read the static
+		// copy, which made the r_colourFilter cvar completely inert - it was being uploaded
+		// every frame and then ignored.
+		return color * g_colourGrading.colourFilter;
 	}
 
 	float3 ColorGradingHueShift(float3 color) {

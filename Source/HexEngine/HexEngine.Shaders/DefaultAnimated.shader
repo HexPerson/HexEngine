@@ -306,8 +306,10 @@
 			//// Calculate the normal from the data in the bump map.
 			//float3 bumpNormal = (bumpMap.x * normalize(input.tangent)) + (bumpMap.y * normalize(input.binormal)) + (/*bumpMap.z **/ worldNormal);
 
-			// Normalize the resulting bump normal.
-			worldNormal = normalize(ApplyNormalMap(worldNormal, input.tangent, input.binormal, g_normalMap, g_textureSampler, input.texcoord));
+			// flipY must match DefaultPixel.shader: the static and skinned paths sample the
+			// same normal maps, and omitting it here rendered every map green-inverted on
+			// skinned meshes only.
+			worldNormal = ApplyNormalMap(worldNormal, input.tangent, input.binormal, g_normalMap, g_textureSampler, input.texcoord, true);
 		}
 
 		// Emission mapping

@@ -4,6 +4,13 @@
 }
 "Global"
 {
+	// Far plane of the aerial-perspective froxel volume, in metres. The volume's W axis
+	// is LINEAR over [0, ATM_AP_MAX_DIST_M], so the generator and the apply pass must
+	// agree on this value exactly or every pixel samples the wrong slice. They each
+	// used to declare their own copy and had drifted apart (32 km vs 100 km), which made
+	// the whole atmosphere read ~3x under-hazed. Single definition, both includers.
+	static const float ATM_AP_MAX_DIST_M = 32000.0f;
+
 	// Hillaire 2020 ("A Scalable and Production Ready Sky and Atmosphere
 	// Rendering Technique") style spherical-earth atmosphere model.
 	//

@@ -294,7 +294,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// non-shadow-casting light. Populated by SetupPerShadowCasterBuffer from
 		// Light::GetDoesCastShadows().
 		int	  castsShadowsFlag;
-		int	  pad1;
+		// Cascades actually allocated/bound for this caster (see RenderStructs.hpp).
+		// MAX_SHADOW_CASCADES is the array capacity, not the live count.
+		int	  cascadeCount;
 		int	  pad2;
 
 		// Screen-space contact shadow settings:

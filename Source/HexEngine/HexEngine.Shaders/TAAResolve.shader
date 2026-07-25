@@ -60,7 +60,12 @@
 		// the genuinely-stale-history case (it clamps the reprojected history to the current
 		// frame's local color range), so we don't need a separate motion-based reject term.
 
-		float2 prevousPixelPos = input.texcoord + velocity;
+		// CalcVelocity emits a CLIP-space delta (+y up); texcoord is a UV (+y down), so y
+		// must be negated before reprojecting. Without this the vertical component of the
+		// reprojection ran backwards, pulling history from the wrong side of every
+		// horizontal edge during vertical camera motion. Streamline (mvecScale = {1,-1})
+		// and NRD (motionVectorScale[1] = -1) already apply the same negation.
+		float2 prevousPixelPos = input.texcoord + float2(velocity.x, -velocity.y);
 
 		float3 history = historyTexture.Sample(LinearSampler, prevousPixelPos);
 
@@ -120,7 +125,10 @@
 		const float3 variance = max(m2 * invN - mean * mean, 0.0f.xxx);
 		const float3 sigma = sqrt(variance);
 
-		const float gamma = 0.5f;
+		// 1.25 per the note above. This sat at 0.5 while the vertical reprojection was
+		// inverted, where an over-tight clip was masking the resulting mis-reprojection by
+		// rejecting most of the history; with the y sign fixed, 0.5 only costs detail.
+		const float gamma = 1.25f;
 		const float3 clipMin = mean - sigma * gamma;
 		const float3 clipMax = mean + sigma * gamma;
 		history = clamp(history, clipMin, clipMax);

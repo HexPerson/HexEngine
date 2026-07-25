@@ -610,6 +610,10 @@ namespace HexEngine
 
 		CreateRenderTargets(width, height);
 		_gpuVisibilityCulling.Resize((uint32_t)width, (uint32_t)height);
+
+		// The history texture was just destroyed and recreated at the new size, so whatever
+		// it now contains is uninitialised. Blend from the current frame for one frame.
+		_taa.ResetHistory();
 	}
 
 	void SceneRenderer::Destroy()
@@ -1261,6 +1265,27 @@ namespace HexEngine
 		_currentShadowMapForComposition = nullptr;
 		_gpuVisibilityCulling.BeginFrame(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u, _currentCamera);
 
+		// Discard TAA history across a cut. Reprojection cannot recover from a camera
+		// switch or a teleport - the motion vectors describe a continuous frame-to-frame
+		// delta that simply didn't happen - so the stale history smears across the new view
+		// for however long the 0.9 feedback takes to wash out. TAA::ResetHistory() existed
+		// but had no callers.
+		{
+			const math::Vector3 cameraPos = _cameraEntity->GetPosition();
+			const bool cameraChanged = (_taaHistoryCamera != _currentCamera);
+			const bool cameraScene = (_taaHistoryScene != _currentScene);
+			// 5 m in a single frame is a teleport, not travel (300 m/s at 60fps).
+			const bool cameraTeleported = !cameraChanged && !cameraScene &&
+				(cameraPos - _taaHistoryCameraPos).LengthSquared() > (5.0f * 5.0f);
+
+			if (cameraChanged || cameraScene || cameraTeleported)
+				_taa.ResetHistory();
+
+			_taaHistoryCamera = _currentCamera;
+			_taaHistoryScene = _currentScene;
+			_taaHistoryCameraPos = cameraPos;
+		}
+
 		assert(_cameraEntity && "Camera entity cannot be null");
 
 		
@@ -1840,19 +1865,30 @@ namespace HexEngine
 			//	break;
 		}
 
-		// now that we know which lights are potentially affecting the scene, we should sort them according to priority
-		//
-		std::sort(pvs.begin(), pvs.end(), [this](Light* left, Light* right) {
-
-			auto leftDist = (left->GetEntity()->GetPosition() - _currentCamera->GetEntity()->GetPosition()).Length();
-			auto rightDist = (right->GetEntity()->GetPosition() - _currentCamera->GetEntity()->GetPosition()).Length();
-
-			return leftDist > rightDist;
+		// Directional lights are global - their entity position is arbitrary, so ranking
+		// them by distance-to-camera is meaningless. They must never lose a shadow-map slot
+		// to a local light, so hoist them to the front before the distance sort. (This used
+		// to sort ALL casters, sun included, by distance DESCENDING and then keep the first
+		// MaxShadowCasters - i.e. it deliberately kept the FURTHEST casters, and could drop
+		// the sun entirely depending on where the sun entity happened to sit.)
+		const auto firstLocal = std::stable_partition(pvs.begin(), pvs.end(), [](Light* light) {
+			return dynamic_cast<DirectionalLight*>(light) != nullptr;
 			});
 
-		// Finally, tack on the shadow casters to the sun light
-		//
-		_shadowCasters.insert(_shadowCasters.end(), pvs.begin(), pvs.begin() + (pvs.size() < MaxShadowCasters ? pvs.size() : MaxShadowCasters));
+		// Local lights: nearest first, since near lights dominate what the viewer sees.
+		const math::Vector3 cameraPos = _currentCamera->GetEntity()->GetPosition();
+		std::sort(firstLocal, pvs.end(), [&cameraPos](Light* left, Light* right) {
+
+			auto leftDist = (left->GetEntity()->GetPosition() - cameraPos).LengthSquared();
+			auto rightDist = (right->GetEntity()->GetPosition() - cameraPos).LengthSquared();
+
+			return leftDist < rightDist;
+			});
+
+		// MaxShadowCasters bounds the number of shadow maps rendered this frame, across all
+		// light types.
+		const size_t casterCount = (pvs.size() < MaxShadowCasters) ? pvs.size() : MaxShadowCasters;
+		_shadowCasters.insert(_shadowCasters.end(), pvs.begin(), pvs.begin() + casterCount);
 	}
 
 	
@@ -2231,6 +2267,16 @@ namespace HexEngine
 				bufferData._shadowConfig.biasMultiplier = r_shadowBiasMultiplier._val.f32;
 				bufferData._shadowConfig.samples = (float)numSamples;
 				bufferData._shadowConfig.cascadeBlendRange = r_shadowCascadeBlendRange._val.f32;
+
+				// How many cascades are actually rendered and bound. RenderShadowMaps drives
+				// the sun's cascade loop from r_shadowCascades, so a directional light can
+				// have fewer live cascades than the 4 it allocates; point lights use all 6
+				// faces and spots a single map. The shader must not iterate or blend past
+				// this, or it samples an unbound depth map as "fully occluded".
+				bufferData._shadowConfig.cascadeCount =
+					(dynamic_cast<DirectionalLight*>(shadowCaster) != nullptr)
+					? std::min(maxShadowCascades, r_shadowCascades._val.i32)
+					: maxShadowCascades;
 
 				bufferData._shadowCasterLightDir = shadowCaster->GetEntity()->GetWorldTM().Forward();
 				bufferData._lightRadius = shadowCaster->GetRadius();
