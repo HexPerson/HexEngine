@@ -130,13 +130,25 @@ Individually small, collectively responsible for the "not quite right" look:
 This plan is largely self-funding — the new features are paid for by waste already present,
 not by a bigger frame budget.
 
-**Shadow maps: ~2.1 GB → ~270 MB.** `ShadowMap::Create` unconditionally allocates *both* an
-`R32_TYPELESS` depth map **and** a paired `R32_FLOAT` colour render target
-(`ShadowMap.cpp:33-59`). The colour target appears vestigial — the only thing that ever
-referenced it is a commented-out `//_taa.Create(_depthMapRT)`. At the hardcoded 8192²
+**Shadow maps: ~2.1 GB → ~270 MB.** *(Done in P0-B, @a1f7ce4.)* `ShadowMap::Create`
+unconditionally allocated *both* an `R32_TYPELESS` depth map **and** a paired `R32_FLOAT`
+colour render target (`ShadowMap.cpp:33-59`). At the hardcoded 8192²
 (`DirectionalLight.cpp:13`) that is ~268 MB each, ~536 MB per cascade, **~2.1 GB for the sun
-alone**, roughly half of it likely never written. Dropping the redundant target and moving
-to 2048²–4096² with proper logarithmic splits recovers well over 1.8 GB.
+alone**.
+
+Correction to an earlier reading of this: the colour target is **not** vestigial. Point
+lights genuinely need it — the volumetric scattering path copies their six faces into a
+`TextureCubeArray` and needs a plain non-typeless source (`SceneRenderer.cpp:1701-1710`).
+What *was* dead is its use on directional cascades and spot maps, which are only ever
+sampled through the depth SRV. It is now opt-in per shadow map (point lights only), and the
+cascade resolution is `r_shadowMapResolution` (default 4096). Combined: 2147 MB → 268 MB,
+**~1.88 GB reclaimed**, with shadow quality visually unchanged.
+
+Related fix in the same area: `r_shadowFilterMaxSize`/`r_penumbraFilterMaxSize` are in
+texels and PCSS multiplies them by `texelSize`, so holding a constant world-space penumbra
+means scaling them *proportionally* to resolution. The code did `8192 / size` — inverted —
+and then doubled it again above 1.0, so it was only ever correct at exactly 8192. Any
+attempt to lower the resolution before this would have produced an 8× wider penumbra.
 
 **GBuffer: 72 → ~24 bytes/pixel.** Three of six targets are full `R32G32B32A32_FLOAT`
 (`GBuffer.cpp:50,65,83`): material, normal+depth, and world position. World position is

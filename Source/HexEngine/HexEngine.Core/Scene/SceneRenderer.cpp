@@ -2256,10 +2256,18 @@ namespace HexEngine
 				}
 
 				auto shadowMapSize = shadowCaster->GetShadowMap() ? shadowCaster->GetShadowMap()->GetViewport().width : 0.0f;
-				float shadowVarsMultiplier = (8192.0f / shadowMapSize);
 
-				if (shadowVarsMultiplier > 1.0f)
-					shadowVarsMultiplier *= 2.0f;
+				// r_shadowFilterMaxSize / r_penumbraFilterMaxSize are expressed in TEXELS,
+				// and PCSS multiplies them by texelSize (= 1/shadowMapSize) to get a UV
+				// radius - so holding the world-space penumbra constant means scaling the
+				// texel count PROPORTIONALLY to resolution. This was (8192 / size), i.e.
+				// inverted, and then doubled again above 1.0: at 4096 that produced an 8x
+				// larger penumbra instead of the same one. It only ever came out correct at
+				// exactly 8192, where it evaluates to 1.0.
+				const float kFilterReferenceResolution = 8192.0f;
+				float shadowVarsMultiplier = (shadowMapSize > 0.0f)
+					? (shadowMapSize / kFilterReferenceResolution)
+					: 1.0f;
 
 				// shadow
 				bufferData._shadowConfig.penumbraFilterMaxSize = r_penumbraFilterMaxSize._val.f32 * shadowVarsMultiplier;

@@ -10,7 +10,13 @@ namespace HexEngine
 {
 	extern HVar r_shadowCascades;
 
-	const int32_t DirectionalLightShadowMapResolution = 8192;
+	// Per-cascade sun shadow map resolution. Default 8192 preserves the historical
+	// hardcoded value; 2048-4096 is the usual production range and each halving quarters
+	// the VRAM (4 cascades at 8192 square is ~1.07 GB of depth alone). Read once when the
+	// maps are allocated - changing it needs shadows toggled off/on to take effect, and the
+	// value actually used is cached in _allocatedShadowMapResolution because the cascade
+	// texel-snapping maths must match the texture that exists, not the current cvar.
+	HVar r_shadowMapResolution("r_shadowMapResolution", "Per-cascade directional shadow map resolution (needs shadows re-toggled to apply)", 4096, 512, 8192);
 
 	extern HVar r_shadowNearClip;
 
@@ -67,7 +73,15 @@ namespace HexEngine
 			{
 				if (_shadowMaps[i] == nullptr)
 				{
-					_shadowMaps[i] = new ShadowMap(DirectionalLightShadowMapResolution, DirectionalLightShadowMapResolution);
+					// Cache the resolution actually allocated - ConstructMatrices' texel
+					// snapping divides by it and must not drift from the real texture size.
+					_allocatedShadowMapResolution = std::clamp(r_shadowMapResolution._val.i32, 512, 8192);
+
+					// No colour target: the sun is only ever sampled through the depth SRV.
+					_shadowMaps[i] = new ShadowMap(
+						(uint32_t)_allocatedShadowMapResolution,
+						(uint32_t)_allocatedShadowMapResolution,
+						false);
 
 					_shadowMaps[i]->Create();
 				}
@@ -169,7 +183,7 @@ namespace HexEngine
 		auto sunDistance = camera->GetFarZ();// _lightBoundingSphere[cascadeIdx].Radius;
 
 		float diagonalLength = _lightBoundingSphere[cascadeIdx].Radius * 2.0f;
-		float worldUnitsPerTexel = diagonalLength / (float)DirectionalLightShadowMapResolution;
+		float worldUnitsPerTexel = diagonalLength / (float)_allocatedShadowMapResolution;
 
 
 

@@ -56,5 +56,10 @@ namespace HexEngine
 		math::Matrix _projectionMatrixPrev[6];
 		dx::BoundingSphere _lightBoundingSphere[6];
 		dx::BoundingFrustum _lightBoundingFrustums[6];
+
+		// Resolution the cascade maps were actually created at (from r_shadowMapResolution
+		// at allocation time). ConstructMatrices' texel snapping divides by this, so it must
+		// track the live textures rather than the current cvar value.
+		int32_t _allocatedShadowMapResolution = 8192;
 	};
 }

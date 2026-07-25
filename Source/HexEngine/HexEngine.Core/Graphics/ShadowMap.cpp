@@ -5,7 +5,8 @@
 
 namespace HexEngine
 {
-	ShadowMap::ShadowMap(uint32_t width, uint32_t height)
+	ShadowMap::ShadowMap(uint32_t width, uint32_t height, bool needsColourTarget) :
+		_needsColourTarget(needsColourTarget)
 	{
 		_viewport.x = 0.0f;
 		_viewport.y = 0.0f;
@@ -14,7 +15,7 @@ namespace HexEngine
 		_viewport.minDepth = 0.0f;
 		_viewport.maxDepth = 1.0f;
 
-       
+
 	}
 
     ShadowMap::~ShadowMap()
@@ -44,19 +45,22 @@ namespace HexEngine
             D3D11_SRV_DIMENSION_TEXTURE2D,
             D3D11_DSV_DIMENSION_TEXTURE2D);
 
-        _depthMapRT = (ITexture2D*)g_pEnv->_graphicsDevice->CreateTexture2D(
-            (int32_t)_viewport.width,
-            (int32_t)_viewport.height,
-            DXGI_FORMAT_R32_FLOAT,
-            1,
-            D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
-            0, 1, 0,
-            nullptr,
-            (D3D11_CPU_ACCESS_FLAG)0,
-            D3D11_RTV_DIMENSION_TEXTURE2D,
-            D3D11_UAV_DIMENSION_UNKNOWN,
-            D3D11_SRV_DIMENSION_TEXTURE2D,
-            D3D11_DSV_DIMENSION_UNKNOWN);
+        if (_needsColourTarget)
+        {
+            _depthMapRT = (ITexture2D*)g_pEnv->_graphicsDevice->CreateTexture2D(
+                (int32_t)_viewport.width,
+                (int32_t)_viewport.height,
+                DXGI_FORMAT_R32_FLOAT,
+                1,
+                D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+                0, 1, 0,
+                nullptr,
+                (D3D11_CPU_ACCESS_FLAG)0,
+                D3D11_RTV_DIMENSION_TEXTURE2D,
+                D3D11_UAV_DIMENSION_UNKNOWN,
+                D3D11_SRV_DIMENSION_TEXTURE2D,
+                D3D11_DSV_DIMENSION_UNKNOWN);
+        }
 
         //_taa.Create(_depthMapRT);
 	}
@@ -76,8 +80,17 @@ namespace HexEngine
         // matter, the RT is R32_FLOAT) matches the DSV depth-clear convention
         // and gives the cubemap a clean "far plane" baseline everywhere the
         // geometry pass didn't write.
-        _depthMapRT->ClearRenderTargetView(math::Color(1, 1, 1, 1));
-        g_pEnv->_graphicsDevice->SetRenderTargets(1, { _depthMapRT }, _depthMap);
+        if (_depthMapRT != nullptr)
+        {
+            _depthMapRT->ClearRenderTargetView(math::Color(1, 1, 1, 1));
+            g_pEnv->_graphicsDevice->SetRenderTargets(1, { _depthMapRT }, _depthMap);
+        }
+        else
+        {
+            // Depth-only pass. The geometry pixel shader still runs (it needs to clip() on
+            // alpha) but its SV_Target0 write is discarded with no RTV bound.
+            g_pEnv->_graphicsDevice->SetRenderTargets(0, {}, _depthMap);
+        }
 
         _depthMap->ClearDepth(D3D11_CLEAR_DEPTH);
     }
@@ -94,7 +107,13 @@ namespace HexEngine
 
     void ShadowMap::RenderDebugTargets(int32_t x, int32_t y, int32_t size, GuiRenderer* renderer)
     {
-        renderer->FillTexturedQuad(_depthMapRT, x, y, size, size, math::Color(0xFFFFFFFF));
+        // Prefer the colour mirror when present (it reads as plain R32_FLOAT); otherwise
+        // visualise the depth SRV directly.
+        ITexture2D* source = (_depthMapRT != nullptr) ? _depthMapRT : _depthMap;
+        if (source == nullptr)
+            return;
+
+        renderer->FillTexturedQuad(source, x, y, size, size, math::Color(0xFFFFFFFF));
     }
 
     const math::Viewport& ShadowMap::GetViewport() const
