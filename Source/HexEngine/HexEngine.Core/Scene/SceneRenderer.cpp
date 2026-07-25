@@ -156,6 +156,17 @@ namespace HexEngine
 	HVar r_frustumSphereBoundsMultiplier("r_frustumSphereBoundsMultiplier", "The multiplier applied to the frustum bounds in order to calculate culling", 1.15f, 1.0f, 4.0f);
 	HVar r_shadowMinimumLodThreshold("r_shadowMinimumLodLevel", "The lowest LOD level allowed for shadow maps. A high number will improve performance at the expensve of shadow fidelity", 0, 0, 3);
 	HVar r_taa("r_taa", "Enable or disable temporal anti-aliasing", true, false, true);
+
+	// TAA neighbourhood variance-clip width, in standard deviations. 0.5 is what the shader
+	// shipped with; the textbook value is ~1.25 but that ghosts noticeably here.
+	HVar r_taaVarianceGamma("r_taaVarianceGamma", "TAA variance clip width in sigma (lower = tighter, less ghosting, less detail)", 0.5f, 0.1f, 3.0f);
+
+	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
+	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
+	// y-down) and matches what Streamline and NRD do with the same buffer, but it ghosts
+	// vertically in practice unless r_taaVarianceGamma is retuned with it. Defaults to the
+	// engine's long-standing +1.
+	HVar r_taaVelocityYSign("r_taaVelocityYSign", "Y sign for TAA history reprojection: 1 = legacy, -1 = clip-space-correct", 1.0f, -1.0f, 1.0f);
 	HVar r_shadowNearClip("r_shadowNearClip", "How much clipping offset to apply to directional lights, larger scenes typically require a higher value", 150.0f, -1000.0f, 1000.0f);
 	HVar r_colourFilter("r_colourFilter", "The filter colour to use for colour grading", math::Vector3(1.00f, 0.98f, 0.97f), math::Vector3(0.0f), math::Vector3(1.0f));
 	HVar r_shadowSamples("r_shadowSamples", "How many samples to use in shadow map filtering", 32, 2, 128);
@@ -2182,6 +2193,14 @@ namespace HexEngine
 			bufferData._time = g_pEnv->_timeManager->GetTime();
 			bufferData._frame = (uint32_t)g_pEnv->_timeManager->_frameCount;
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
+
+			bufferData._taaParams = math::Vector4(
+				r_taaVarianceGamma._val.f32,
+				// Snap to exactly +/-1 so an intermediate cvar value can't scale the
+				// reprojection distance as well as its direction.
+				(r_taaVelocityYSign._val.f32 < 0.0f) ? -1.0f : 1.0f,
+				0.0f,
+				0.0f);
 
 			// ocean
 			bufferData._oceanConfig = _currentScene->GetOcean();

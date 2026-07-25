@@ -311,6 +311,17 @@ namespace HexEngine
 		// every material shader path (DefaultPixel + DefaultAnimated + graph-
 		// compiled materials) without per-shader cbuffer rewiring.
 		float _rainDripDebug;
+
+		// TAA tuning, appended at the end per the note above.
+		//   x = neighbourhood variance-clip gamma (mean +/- x*sigma). Lower is tighter and
+		//       rejects more history: safer against ghosting, costs some detail.
+		//   y = sign applied to the velocity buffer's Y when reprojecting history.
+		//       CalcVelocity emits a clip-space delta (+y up) while texcoords are y-down, so
+		//       -1 is the mathematically correct value; +1 is the engine's long-standing
+		//       behaviour. Exposed because the two interact - correcting the sign makes
+		//       history land on the right pixel and therefore be ACCEPTED far more often,
+		//       which changes how much the clip gamma above is doing.
+		math::Vector4 _taaParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

@@ -229,6 +229,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// > 0.5 = paint cell grid (cellFrac.x in R, cellFrac.y in G) instead of
 		// running the normal-perturbation path. Driven from r_rainDripDebug.
 		float g_rainDripDebug;
+		// TAA tuning: x = variance-clip gamma, y = velocity Y sign for history
+		// reprojection, zw spare. See RenderStructs.hpp::_taaParams.
+		float4 g_taaParams;
 	};
 
 	struct MaterialProps
