@@ -401,8 +401,24 @@
 			    totalDistance >= g_ssrSkyHitMinDistance &&
 			    g_ssrSkyHitMinDistance > 0.0f)
 			{
+				// Take the sky radiance from the atmosphere LUT in the RAY'S DIRECTION, not
+				// from the beauty buffer at fragTex. Sky is at infinity, so its radiance is a
+				// function of direction alone - and fragTex is exactly the wrong thing to index
+				// by, because a sky pixel has no depth for the march to validate against. Any
+				// ray whose screen path happens to cross sky is accepted at whatever position
+				// it had reached, neighbouring pixels land on slightly different positions, and
+				// the accepted colour smears along the ray direction. That is the streaking
+				// e847e27 was fighting when it deleted this branch outright, and the distance
+				// guard alone doesn't fix it - the guard only delays acceptance, it can't make
+				// an arbitrary screen position geometrically correct.
+				//
+				// A direction-only lookup cannot streak by construction: neighbouring pixels
+				// have near-identical reflected directions, so they get near-identical colour
+				// regardless of where their screen paths wandered. It also matches the
+				// no-hit fallback below, so a ray that reaches sky through a window and a ray
+				// that escapes the screen entirely now agree on the sky's colour.
 				result.didHit = true;
-				result.colour = g_beautyTexture.SampleLevel(g_textureSampler, fragTex, 0).rgb * g_ssrSkyHitStrength;
+				result.colour = SampleSkyRadiance(rayDir) * g_ssrSkyHitStrength;
 				result.hitDistance = max(totalDistance, 1.0f);
 				return result;
 			}
