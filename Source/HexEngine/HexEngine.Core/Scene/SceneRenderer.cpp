@@ -204,7 +204,9 @@ namespace HexEngine
 	// EnvMapCommon.shader). Inert until the deferred IBL resolve consumes it,
 	// so defaulting on only costs the small prefilter draw.
 	HVar r_iblSkyEnv("r_iblSkyEnv", "Generate the prefiltered sky environment atlas each frame", true, false, true);
-	HVar r_iblSkyEnvDebug("r_iblSkyEnvDebug", "Overlay the sky environment atlas (roughness rows top to bottom)", false, false, true);
+	// 1 = sky atlas, 2 = the frame's active reflection probe atlas. Int, not bool:
+	// a bool HVar clamps every value to 0/1, so mode 2 would silently become 1.
+	HVar r_iblSkyEnvDebug("r_iblSkyEnvDebug", "Overlay an env atlas: 1=sky, 2=active probe", (int32_t)0, (int32_t)0, (int32_t)2);
 
 	// Atlas geometry. Must match ENVMAP_FACE_SIZE / ENVMAP_ROUGHNESS_ROWS in
 	// EnvMapCommon.shader - the shader derives everything from uv, so the only
@@ -3201,12 +3203,46 @@ namespace HexEngine
 #endif
 				{
 
-					GFX_PERF_BEGIN(0xFFFFFFFF, L"RenderOverlays");
+					// Environment captures take a tonemapped SCALING blit of beauty
+					// into their own (smaller) render target instead of the overlay
+					// chain. RenderOverlays ping-pongs with `renderTarget->CopyTo(beauty)`
+					// between the camera RT and the shared full-res beauty buffer,
+					// and CopyResource requires identical dimensions - a 256px
+					// capture RT against 3840x2071 buffers is an immediate D3D11
+					// RESOURCE_MANIPULATION error. A fullscreen quad rescales, so
+					// the capture gets the finished frame at its own resolution.
+					// Post effects that only exist inside the overlay chain
+					// (vignette, colour grading, DoF) are intentionally absent from
+					// probe captures - reflections shouldn't carry lens effects.
+					if (_currentCamera->IsEnvironmentCapture())
 					{
-						g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
-						RenderOverlays(flags, _beautyRT, _currentCamera->GetRenderTarget());
+						// Region copy, not a fullscreen blit. A capture camera has a
+						// small viewport but renders into the SHARED full-resolution
+						// beauty buffer, so it only fills the top-left corner of it -
+						// a fullscreen quad would sample the whole buffer and hand the
+						// probe mostly stale main-camera content (first attempt did
+						// exactly that: every roughness row of the probe atlas came
+						// out a uniform cream, structureless even in the mirror row).
+						//
+						// Copying the rendered rect keeps source and destination the
+						// same size, which is what CopyResource requires, and takes
+						// the LINEAR HDR beauty before tonemapping - better probe
+						// radiance than a tonemapped LDR frame would be.
+						GFX_PERF_BEGIN(0xFFFFFFFF, L"EnvCapture Copy");
+						const auto& capVp = _currentCamera->GetViewport();
+						RECT region{ 0, 0, (LONG)capVp.width, (LONG)capVp.height };
+						_beautyRT->CopyTo(_currentCamera->GetRenderTarget(), region, region);
+						GFX_PERF_END();
 					}
-					GFX_PERF_END();
+					else
+					{
+						GFX_PERF_BEGIN(0xFFFFFFFF, L"RenderOverlays");
+						{
+							g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
+							RenderOverlays(flags, _beautyRT, _currentCamera->GetRenderTarget());
+						}
+						GFX_PERF_END();
+					}
 				}				
 			}
 			else
@@ -3336,10 +3372,16 @@ namespace HexEngine
 			// (mirror at the top, rough at the bottom) can be inspected without
 			// filtering. Deliberately outside r_debugScene: it's the one image
 			// needed to verify the IBL prefilter.
-			if (r_iblSkyEnvDebug._val.b && _iblSkyEnvMap != nullptr && canPostProcess)
+			ITexture2D* debugAtlas = nullptr;
+			if (r_iblSkyEnvDebug._val.i32 == 1)
+				debugAtlas = _iblSkyEnvMap;
+			else if (r_iblSkyEnvDebug._val.i32 == 2 && _activeProbe != nullptr)
+				debugAtlas = _activeProbe->GetEnvAtlas();
+
+			if (debugAtlas != nullptr && canPostProcess)
 			{
 				guiRenderer->FillTexturedQuad(
-					_iblSkyEnvMap, 10, 10,
+					debugAtlas, 10, 10,
 					kIblEnvMapFaceSize, kIblEnvMapFaceSize * kIblEnvMapRows,
 					math::Color(1, 1, 1, 1));
 
@@ -4909,6 +4951,8 @@ namespace HexEngine
 		guiRenderer->EndFrame();
 
 		dirty->MarkAtlasPrefiltered();
+		LOG_INFO("ReflectionProbe: prefiltered atlas for '%s' - probe is now selectable",
+			dirty->GetEntity()->GetName().c_str());
 
 		// Restore beauty target + camera viewport (same discipline as
 		// RenderSkyEnvMap - a stale 128-wide viewport corrupts the next pass).
