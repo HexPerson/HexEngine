@@ -175,6 +175,14 @@ namespace HexEngine
 	HVar r_ssrSkyHitMinDistance("r_ssrSkyHitMinDistance", "Min world distance before an SSR ray may accept a sky pixel as a hit (0 = disable)", 2.0f, 0.0f, 64.0f);
 	HVar r_ssrSkyHitStrength("r_ssrSkyHitStrength", "Scale applied to screen-space sky hits in SSR", 1.0f, 0.0f, 4.0f);
 
+	// Sky image-based lighting. The engine had no IBL at all - ambient was a flat
+	// diffuse-only constant - so no surface had any environment response. Specular defaults
+	// ON because that is the term that restores missing reflections; diffuse defaults OFF
+	// because the sky term is unoccluded, so indoors it floods a room. Reflection probes
+	// (P1-D) add the occlusion/locality this lacks.
+	HVar r_iblSkySpecular("r_iblSkySpecular", "Sky specular IBL strength (split-sum environment specular)", 1.0f, 0.0f, 4.0f);
+	HVar r_iblSkyDiffuse("r_iblSkyDiffuse", "Sky diffuse IBL strength (unoccluded - floods interiors, prefer probes)", 0.0f, 0.0f, 4.0f);
+
 	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
 	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
 	// y-down) and matches what Streamline and NRD do with the same buffer, but it ghosts
@@ -2214,6 +2222,9 @@ namespace HexEngine
 				r_ssrSkyHitStrength._val.f32,
 				0.0f);
 
+			bufferData._iblParams = math::Vector4(
+				r_iblSkySpecular._val.f32, r_iblSkyDiffuse._val.f32, 0.0f, 0.0f);
+
 			bufferData._taaParams = math::Vector4(
 				r_taaVarianceGamma._val.f32,
 				// Snap to exactly +/-1 so an intermediate cvar value can't scale the
@@ -3367,6 +3378,12 @@ namespace HexEngine
 				// model lobes (clearcoat / anisotropy / sheen) read this; Standard
 				// PBR pixels see (0,0,0,0) (cleared each frame) and early-out.
 				g_pEnv->_graphicsDevice->SetTexture2D(14, _gbuffer.GetFeatures());
+
+				// t15 = sky-view LUT for image-based lighting. Explicit slot, like the
+				// features RT above, because the cloud-noise binds before this are
+				// conditional and the auto-slot counter would land this somewhere else.
+				g_pEnv->_graphicsDevice->SetTexture2D(15,
+					g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyViewLUT() : nullptr);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 

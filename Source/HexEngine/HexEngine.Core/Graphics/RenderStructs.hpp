@@ -328,6 +328,12 @@ namespace HexEngine
 		//       behaviour where a specular ray finding nothing returned black.
 		//   yzw reserved for the rest of Phase 1 (probe counts, IBL intensity).
 		math::Vector4 _reflectionParams;
+
+		// Image-based lighting, appended at the end per the note above.
+		//   x = sky specular IBL strength (r_iblSkySpecular)
+		//   y = sky diffuse IBL strength  (r_iblSkyDiffuse)
+		//   zw reserved for reflection probes.
+		math::Vector4 _iblParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

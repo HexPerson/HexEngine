@@ -13,6 +13,8 @@
 	LightingUtils
 	Atmosphere
 	AtmospherePhysical
+	// SkyViewLutParamsToUv, for the sky IBL environment lookup.
+	AtmosphereCommon
 	PBRutils
 }
 "VertexShader"
@@ -35,6 +37,10 @@
 	SHADOWMAPS_RESOURCE(6);
 	Texture3D g_cloudShapeNoise : register(t12);
 	Texture3D g_cloudDetailNoise : register(t13);
+	// t14 = features RT (bound explicitly by RenderDirectionalLights).
+	// Sky-view LUT for image-based lighting, bound explicitly at t15. A null bind reads as
+	// black, which degrades to the old no-IBL behaviour rather than breaking the pass.
+	Texture2D g_iblSkyViewLUT : register(t15);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -113,6 +119,17 @@
 		const float densityShape = lerp(cloud * cloud, cloud, 0.55f);
 
 		return min(densityShape * heightMask * verticalCore * billow * g_cloudParams0.x, 2.0f);
+	}
+
+	// Environment radiance along a direction, from the same sky-view LUT the sky sphere and
+	// aerial perspective use - so an IBL reflection and the sky seen directly agree.
+	float3 SampleSkyRadianceDirection(float3 dir)
+	{
+		const float3 sunDir = normalize(-g_lightDirection.xyz);
+		const float2 uv = SkyViewLutParamsToUv(normalize(dir), sunDir);
+		// g_textureSampler is this shader's linear sampler (s0); Deferred has no
+		// g_linearSampler.
+		return g_iblSkyViewLUT.SampleLevel(g_textureSampler, uv, 0).rgb;
 	}
 
 	float CalculateCloudShadow(float3 worldPos, float3 sunDir)
@@ -304,6 +321,60 @@
 		// gbuffer for the perceptual roughness used by the aniso/sheen lobes; the
 		// cost is one extra sample on the same texture the PBR path already
 		// resolved, so it stays in cache.
+		// ---- Sky image-based lighting -------------------------------------------------
+		// The engine had no IBL at all: ambient was a flat albedo * ambientLight constant,
+		// diffuse-only, so nothing gave a surface an environment response. A wall facing a
+		// window stayed dark, and SSR then faithfully reflected that dark wall - which is
+		// why glossy floors indoors look black even though SSR is working correctly.
+		//
+		// This is the split-sum approximation with the sky-view LUT standing in for the
+		// environment: specular takes the LUT along the reflection vector weighted by the
+		// env-BRDF (EnvBRDFApprox for now; P1-B replaces it with a real DFG LUT), diffuse
+		// takes the LUT along the normal as an irradiance proxy. Reflection probes (P1-D)
+		// slot in here by replacing the LUT lookup with a local cubemap where one covers the
+		// pixel, falling back to this sky term outside probe influence.
+		//
+		// Caveat this does NOT solve: there is no occlusion on the environment term, so
+		// indoors it lights as though the sky were fully visible. AO damps it, but the real
+		// answer is probes. Hence the separate diffuse strength, defaulting to 0 - diffuse
+		// sky indoors floods a room, whereas the specular term is the part that actually
+		// restores the missing reflections.
+		{
+			const float4 matSample = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
+			const float metallic = matSample.r;
+			const float perceptualRoughness = clamp(matSample.g, MinRoughness, 1.0f);
+
+			const float3 N = normalize(pixelNormal.xyz);
+			const float3 V = normalize(g_eyePos.xyz - pixelPosWS.xyz);
+			const float NdotV = saturate(dot(N, V));
+			const float3 R = reflect(-V, N);
+
+			const float3 diffuseColour  = pixelColour.rgb * (1.0f - f0) * (1.0f - metallic);
+			const float3 specularColour = lerp(f0, pixelColour.rgb, metallic);
+
+			// Rough surfaces see a wider lobe; the sky LUT has no mips so bias the lookup
+			// toward the normal as roughness rises rather than pretending it is a mirror.
+			const float3 specDir = normalize(lerp(R, N, perceptualRoughness * perceptualRoughness * 0.5f));
+
+			const float2 dfg = EnvBRDFApprox(NdotV, perceptualRoughness);
+
+			const float3 skySpec = SampleSkyRadianceDirection(specDir);
+			const float3 skyDiff = SampleSkyRadianceDirection(N);
+
+			// Horizon fade: the sky LUT carries no ground radiance, so a downward-facing
+			// direction would otherwise light undersides with horizon sky.
+			const float specHorizon = saturate(specDir.y * 3.0f + 0.35f);
+			const float diffHorizon = saturate(N.y * 0.5f + 0.5f);
+
+			const float3 iblSpecular =
+				skySpec * (specularColour * dfg.x + dfg.y) * specHorizon * g_iblSkySpecular;
+			const float3 iblDiffuse =
+				skyDiff * diffuseColour * diffHorizon * g_iblSkyDiffuse;
+
+			pbr.rgb += iblSpecular + iblDiffuse;
+		}
+		// -------------------------------------------------------------------------------
+
 		const float4 features = GBUFFER_FEATURES.Sample(g_pointSampler, screenPos);
 		const uint modelId = DecodeMaterialModelId(features.r);
 		if (modelId != MATERIAL_MODEL_STANDARD)

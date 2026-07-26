@@ -234,6 +234,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float4 g_taaParams;
 		// x = SSR sky-fallback strength, yzw reserved. See RenderStructs.hpp.
 		float4 g_reflectionParams;
+		// Image-based lighting: x = sky specular strength, y = sky diffuse strength,
+		// zw reserved for reflection probes. See RenderStructs.hpp::_iblParams.
+		float4 g_iblParams;
 	};
 
 	// Readable aliases for the packed slot above.
@@ -243,6 +246,8 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// sky-hit path. 0 disables sky hits entirely.
 	#define g_ssrSkyHitMinDistance   (g_reflectionParams.y)
 	#define g_ssrSkyHitStrength      (g_reflectionParams.z)
+	#define g_iblSkySpecular         (g_iblParams.x)
+	#define g_iblSkyDiffuse          (g_iblParams.y)
 
 	struct MaterialProps
 	{
