@@ -397,30 +397,35 @@
 				return result;
 			}
 
+			// Reaching a sky pixel means nothing in screen space blocks this ray - it is an
+			// ESCAPE, not a hit. Don't resolve the colour here; break and let the post-loop
+			// fallback handle it exactly like an off-screen exit.
+			//
+			// Two earlier attempts got this wrong by returning from here:
+			//
+			//  1. Sampling g_beautyTexture at fragTex. A sky pixel carries no depth, so the
+			//     march has nothing to validate that screen position against - any ray whose
+			//     path crosses sky is accepted wherever it happened to be, and the colour
+			//     smears along the ray direction. That is the streaking e847e27 deleted this
+			//     branch to fix; the distance guard only delays acceptance, it can't make an
+			//     arbitrary screen position geometrically correct.
+			//
+			//  2. Sampling the sky LUT by direction. Direction-only fixed the smearing, but
+			//     returning here still bypasses escapeTransmittance and horizonFade, so this
+			//     was the ONLY path handing back full-strength unoccluded sky. A pixel that
+			//     crossed sky got vivid blue while its neighbour - geometry hit, or the escape
+			//     path's occlusion-weighted sky - got something far darker. That hard binary
+			//     split follows the screen-space ray path, which is the vertical banding, and
+			//     it's why the accepted pixels read as unnaturally blue.
+			//
+			// Breaking instead routes every non-geometry ray through one shared estimator, so
+			// neighbouring pixels can't disagree discontinuously.
 			if (isSkyPixel &&
 			    totalDistance >= g_ssrSkyHitMinDistance &&
 			    g_ssrSkyHitMinDistance > 0.0f)
 			{
-				// Take the sky radiance from the atmosphere LUT in the RAY'S DIRECTION, not
-				// from the beauty buffer at fragTex. Sky is at infinity, so its radiance is a
-				// function of direction alone - and fragTex is exactly the wrong thing to index
-				// by, because a sky pixel has no depth for the march to validate against. Any
-				// ray whose screen path happens to cross sky is accepted at whatever position
-				// it had reached, neighbouring pixels land on slightly different positions, and
-				// the accepted colour smears along the ray direction. That is the streaking
-				// e847e27 was fighting when it deleted this branch outright, and the distance
-				// guard alone doesn't fix it - the guard only delays acceptance, it can't make
-				// an arbitrary screen position geometrically correct.
-				//
-				// A direction-only lookup cannot streak by construction: neighbouring pixels
-				// have near-identical reflected directions, so they get near-identical colour
-				// regardless of where their screen paths wandered. It also matches the
-				// no-hit fallback below, so a ray that reaches sky through a window and a ray
-				// that escapes the screen entirely now agree on the sky's colour.
-				result.didHit = true;
-				result.colour = SampleSkyRadiance(rayDir) * g_ssrSkyHitStrength;
-				result.hitDistance = max(totalDistance, 1.0f);
-				return result;
+				exitedScreen = true;
+				break;
 			}
 
 			// Ray has passed behind the surface within the thickness window - candidate hit.
