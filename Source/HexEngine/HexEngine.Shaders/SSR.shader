@@ -280,11 +280,6 @@
 		float3 fragPos = origin;
 		float totalDistance = 0.0f;
 
-		// First sky pixel the ray passed over, used only if nothing solid was hit.
-		bool sawSky = false;
-		float2 skyTex = 0.0f.xx;
-		float skyDistance = 0.0f;
-
 		// Previous-step state for binary refinement.
 		float3 prevFragPos = origin;
 		float prevTotalDistance = 0.0f;
@@ -373,13 +368,26 @@
 			// Only if the ray finishes having hit nothing solid does the recorded sky get
 			// used, and only past a minimum distance so a floor pixel can't grab the window
 			// sitting right next to it in screen space.
-			if (!sawSky &&
-			    actualDepth >= (g_frustumDepths[3] - 0.5f) &&
-			    totalDistance >= g_ssrSkyHitMinDistance)
+			// Sky must be able to WIN over geometry, which means returning here rather than
+			// recording and marching on. That was the bug in the first attempt at this: with
+			// the sky handled after the loop, any real depth hit returns first, so in an
+			// interior every floor ray reaches the wall and the sky branch was unreachable -
+			// it never executed once (verified by painting it magenta).
+			//
+			// The original implementation (removed in e847e27) did return here, and it worked;
+			// its actual defect was having NO distance guard, so a floor pixel grabbed the
+			// window sitting beside it in screen space on the very first step, which is the
+			// blue streaking that commit was fixing. Keeping the early return but requiring
+			// the ray to have genuinely travelled g_ssrSkyHitMinDistance first gives the
+			// original's behaviour without the streaks.
+			if (actualDepth >= (g_frustumDepths[3] - 0.5f) &&
+			    totalDistance >= g_ssrSkyHitMinDistance &&
+			    g_ssrSkyHitMinDistance > 0.0f)
 			{
-				sawSky = true;
-				skyTex = fragTex;
-				skyDistance = totalDistance;
+				result.didHit = true;
+				result.colour = g_beautyTexture.SampleLevel(g_textureSampler, fragTex, 0).rgb * g_ssrSkyHitStrength;
+				result.hitDistance = max(totalDistance, 1.0f);
+				return result;
 			}
 
 			// Ray has passed behind the surface within the thickness window - candidate hit.
@@ -466,19 +474,6 @@
 		// genuinely "outside what we can see", so the last in-screen tex is meaningless and
 		// would produce the stripe artifact along surfaces whose reflections all exit the same
 		// screen edge.
-		// Nothing solid was hit, but the ray did pass over sky - so the reflected direction
-		// genuinely sees sky, and beauty at that pixel is the sky as actually rendered
-		// (including any window glass tint over it, which is exactly what a floor reflecting
-		// a window should show). Treated as a real hit rather than a fallback so the diffuse
-		// path's didFallback rejection doesn't discard it.
-		if (sawSky)
-		{
-			result.didHit = true;
-			result.colour = g_beautyTexture.SampleLevel(g_textureSampler, skyTex, 0).rgb * g_ssrSkyHitStrength;
-			result.hitDistance = max(skyDistance, 1.0f);
-			return result;
-		}
-
 		if (!exitedScreen && lastInScreenTex.x >= 0.0f)
 		{
 			result.didHit = true;
