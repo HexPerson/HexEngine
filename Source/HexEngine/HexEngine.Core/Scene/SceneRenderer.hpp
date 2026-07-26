@@ -75,6 +75,11 @@ namespace HexEngine
 		// roughness atlas (_iblSkyEnvMap) consumed by the deferred IBL term.
 		// See EnvMapCommon.shader for the atlas layout rationale.
 		void RenderSkyEnvMap();
+		// IBL step 2: convert + prefilter any reflection probe whose six capture
+		// faces just completed into its own octahedral atlas (ProbeEnvMap.shader).
+		// Runs at most one probe's prefilter per call - it is a bake, not a
+		// per-frame cost.
+		void RenderProbeEnvMaps();
 		// Interaction look-at outline: jump-flood SDF glow around the focused
 		// interactable's static mesh, composited additively into beauty. No-op
 		// when nothing is focused (in-game look-at only).
@@ -217,6 +222,10 @@ namespace HexEngine
 		// LUT by RenderSkyEnvMap(). Fixed size - not part of the resize path.
 		ITexture2D* _iblSkyEnvMap = nullptr;
 		std::shared_ptr<IShader> _iblSkyEnvShader;
+		std::shared_ptr<IShader> _probeEnvShader;
+		// This frame's selected reflection probe (set in SetupPerFrameBuffer,
+		// consumed by the deferred t16 bind). Raw pointer valid for the frame only.
+		class ReflectionProbeComponent* _activeProbe = nullptr;
 
 		// Interaction outline glow (jump-flood SDF). _outlineJfaA/B ping-pong the
 		// nearest-seed coordinate field (RG32F, pixel coords); _outlineGlowRT

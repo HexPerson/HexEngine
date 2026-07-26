@@ -332,8 +332,18 @@ namespace HexEngine
 		// Image-based lighting, appended at the end per the note above.
 		//   x = sky specular IBL strength (r_iblSkySpecular)
 		//   y = sky diffuse IBL strength  (r_iblSkyDiffuse)
-		//   zw reserved for reflection probes.
+		//   z = reflection probe strength (r_iblProbeStrength)
+		//   w reserved.
 		math::Vector4 _iblParams;
+
+		// Active reflection probe (nearest captured probe to the camera; one per
+		// frame in v1). Appended at the end per the note above.
+		//   _probeCenter:  xyz = world-space box centre, w = 1 when a probe atlas
+		//                  is bound at t16 this frame, else 0.
+		//   _probeExtents: xyz = box half-extents (metres), w = 1 when box
+		//                  projection is enabled for this probe.
+		math::Vector4 _probeCenter;
+		math::Vector4 _probeExtents;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

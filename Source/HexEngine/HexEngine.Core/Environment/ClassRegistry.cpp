@@ -3,6 +3,7 @@
 #include "ClassRegistry.hpp"
 
 #include "../Entity/Component/PointLight.hpp"
+#include "../Entity/Component/ReflectionProbeComponent.hpp"
 #include "../Entity/Component/RTSCameraController.hpp"
 #include "../Entity/Component/SphereCollider.hpp"
 #include "../Entity/Component/TimedLifetimeComponent.hpp"
@@ -77,6 +78,7 @@ namespace HexEngine
 		REG_CLASS(DoorComponent);
 		REG_CLASS(NavMeshBlockingVolume);
 		REG_CLASS(NavMeshLinkComponent);
+		REG_CLASS(ReflectionProbeComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

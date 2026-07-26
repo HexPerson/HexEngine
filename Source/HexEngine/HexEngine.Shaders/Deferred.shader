@@ -45,6 +45,9 @@
 	// EnvMapCommon). A null bind reads as black, which degrades to the old no-IBL
 	// behaviour rather than breaking the pass.
 	Texture2D g_iblSkyEnvAtlas : register(t15);
+	// The frame's selected reflection probe atlas (same octahedral layout).
+	// Only read when g_probeCenter.w > 0.5; a null bind reads black.
+	Texture2D g_iblProbeAtlas : register(t16);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -370,10 +373,55 @@
 			const float specHorizon = saturate(R.y * 3.0f + 0.35f);
 			const float diffHorizon = saturate(N.y * 0.5f + 0.5f);
 
-			const float3 iblSpecular =
-				skySpec * (specularColour * dfg.x + dfg.y) * specHorizon * g_iblSkySpecular;
-			const float3 iblDiffuse =
-				skyDiff * diffuseColour * diffHorizon * g_iblSkyDiffuse;
+			// Environment radiance before the BRDF weighting: sky terms carry
+			// their strengths and horizon fades here so the probe can replace
+			// them wholesale inside its box.
+			float3 envSpecRadiance = skySpec * specHorizon * g_iblSkySpecular;
+			float3 envDiffRadiance = skyDiff * diffHorizon * g_iblSkyDiffuse;
+
+			// ---- Reflection probe override --------------------------------------
+			// A captured probe is local radiance with occlusion baked in - inside
+			// its box it REPLACES the sky terms (which are unoccluded and
+			// therefore wrong indoors) rather than adding to them. Fades back to
+			// the sky terms over the outer 15% of the box so walking out of a
+			// probe's volume doesn't pop.
+			if (g_probeCenter.w > 0.5f)
+			{
+				const float3 localPos = pixelPosWS.xyz - g_probeCenter.xyz;
+				const float3 ext = max(g_probeExtents.xyz, 0.001f.xxx);
+				const float3 a = abs(localPos) / ext;
+				const float boxDist = max(a.x, max(a.y, a.z)); // <1 inside
+				if (boxDist < 1.0f)
+				{
+					float3 specDir = R;
+					if (g_probeExtents.w > 0.5f)
+					{
+						// Box projection (Lagarde): intersect the reflection ray
+						// with the probe's box and look up the direction from the
+						// probe centre to that intersection, so flat floors reflect
+						// the actual walls instead of infinitely-distant radiance.
+						const float3 safeR = sign(R) * max(abs(R), 1e-4f.xxx);
+						const float3 planeA = ( ext - localPos) / safeR;
+						const float3 planeB = (-ext - localPos) / safeR;
+						const float3 furthest = max(planeA, planeB);
+						const float hitDist = min(furthest.x, min(furthest.y, furthest.z));
+						specDir = normalize(localPos + R * max(hitDist, 0.0f));
+					}
+
+					const float3 probeSpec =
+						SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, specDir, perceptualRoughness);
+					const float3 probeDiff =
+						SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, N, 1.0f);
+
+					const float fade = saturate((1.0f - boxDist) / 0.15f);
+					envSpecRadiance = lerp(envSpecRadiance, probeSpec * g_iblParams.z, fade);
+					envDiffRadiance = lerp(envDiffRadiance, probeDiff * g_iblParams.z, fade);
+				}
+			}
+			// ----------------------------------------------------------------------
+
+			const float3 iblSpecular = envSpecRadiance * (specularColour * dfg.x + dfg.y);
+			const float3 iblDiffuse = envDiffRadiance * diffuseColour;
 
 			pbr.rgb += iblSpecular + iblDiffuse;
 		}

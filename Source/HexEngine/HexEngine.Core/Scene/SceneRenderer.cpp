@@ -4,6 +4,7 @@
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/DecalComponent.hpp"
+#include "../Entity/Component/ReflectionProbeComponent.hpp"
 #include "../Entity/Component/InteractionComponent.hpp"
 #include "../Graphics/IVertexBuffer.hpp"
 #include "../Graphics/IIndexBuffer.hpp"
@@ -225,6 +226,11 @@ namespace HexEngine
 	// SSR. Enable per-scene outdoors, or wait for probes to gate it indoors.
 	HVar r_iblSkySpecular("r_iblSkySpecular", "Sky specular IBL strength (split-sum environment specular)", 0.0f, 0.0f, 4.0f);
 	HVar r_iblSkyDiffuse("r_iblSkyDiffuse", "Sky diffuse IBL strength (unoccluded - floods interiors, prefer probes)", 0.0f, 0.0f, 4.0f);
+	// Probes are captured radiance with real occlusion baked in, so unlike the sky
+	// terms above they are safe to default ON: a scene with no probes is unaffected
+	// (g_probeCenter.w stays 0), and a scene with probes gets correct local
+	// reflections inside each probe's box.
+	HVar r_iblProbeStrength("r_iblProbeStrength", "Reflection probe IBL strength (box-projected local environment)", 1.0f, 0.0f, 4.0f);
 
 	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
 	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
@@ -776,6 +782,7 @@ namespace HexEngine
 		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
 		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
+		_probeEnvShader				= IShader::Create("EngineData.Shaders/ProbeEnvMap.hcs");
 		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
 		_hdrOutputShader			= IShader::Create("EngineData.Shaders/TonemapHDR.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
@@ -2274,7 +2281,54 @@ namespace HexEngine
 				(float)r_ssrDebugSkyHits._val.i32);
 
 			bufferData._iblParams = math::Vector4(
-				r_iblSkySpecular._val.f32, r_iblSkyDiffuse._val.f32, 0.0f, 0.0f);
+				r_iblSkySpecular._val.f32, r_iblSkyDiffuse._val.f32,
+				r_iblProbeStrength._val.f32, 0.0f);
+
+			// Select this frame's reflection probe: the nearest atlas-ready probe
+			// whose box contains the camera, falling back to the nearest ready
+			// probe overall. One probe per frame in v1 - rooms don't overlap
+			// often, and per-pixel probe arrays are a later step. The chosen
+			// probe's atlas is bound at t16 by the deferred pass.
+			_activeProbe = nullptr;
+			bufferData._probeCenter = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			bufferData._probeExtents = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			if (_currentScene != nullptr && _cameraEntity != nullptr)
+			{
+				std::vector<ReflectionProbeComponent*> probes;
+				if (_currentScene->GetComponents<ReflectionProbeComponent>(probes))
+				{
+					const math::Vector3 camPos = _cameraEntity->GetWorldTM().Translation();
+					float bestDistSq = FLT_MAX;
+					bool bestInside = false;
+					for (auto* probe : probes)
+					{
+						if (probe == nullptr || !probe->IsAtlasReady())
+							continue;
+						const math::Vector3 centre = probe->GetWorldCentre();
+						const math::Vector3 ext = probe->GetExtents();
+						const math::Vector3 d = camPos - centre;
+						const bool inside =
+							fabsf(d.x) <= ext.x && fabsf(d.y) <= ext.y && fabsf(d.z) <= ext.z;
+						const float distSq = d.LengthSquared();
+						// Inside-probes always beat outside-probes; ties by distance.
+						if ((inside && !bestInside) ||
+							(inside == bestInside && distSq < bestDistSq))
+						{
+							bestInside = inside;
+							bestDistSq = distSq;
+							_activeProbe = probe;
+						}
+					}
+					if (_activeProbe != nullptr)
+					{
+						const math::Vector3 c = _activeProbe->GetWorldCentre();
+						const math::Vector3 e = _activeProbe->GetExtents();
+						bufferData._probeCenter = math::Vector4(c.x, c.y, c.z, 1.0f);
+						bufferData._probeExtents = math::Vector4(
+							e.x, e.y, e.z, _activeProbe->GetBoxProjection() ? 1.0f : 0.0f);
+					}
+				}
+			}
 
 			bufferData._taaParams = math::Vector4(
 				r_taaVarianceGamma._val.f32,
@@ -2988,6 +3042,9 @@ namespace HexEngine
 			// reflects.
 			RenderSkyEnvMap();
 
+			// Prefilter any reflection probe whose 6-face capture just finished.
+			RenderProbeEnvMaps();
+
 			// don't bother doing this if we don't need to, its expensive!
 			if(_currentScene->DidAnyDrawnItemReflect())
 				RenderSSR();
@@ -3454,6 +3511,12 @@ namespace HexEngine
 				// auto-slot counter would land this somewhere else. Null reads as
 				// black = no IBL, never a crash.
 				g_pEnv->_graphicsDevice->SetTexture2D(15, _iblSkyEnvMap);
+
+				// t16 = the frame's selected reflection probe atlas (see
+				// SetupPerFrameBuffer's selection). Null when no captured probe
+				// exists - g_probeCenter.w is 0 then, so the shader never reads it.
+				g_pEnv->_graphicsDevice->SetTexture2D(16,
+					_activeProbe != nullptr ? _activeProbe->GetEnvAtlas() : nullptr);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
@@ -4757,6 +4820,72 @@ namespace HexEngine
 		// Restore the beauty target and camera viewport before returning -
 		// leaving a 128-wide viewport bound corrupts whatever pass runs next
 		// (same class of bug as the SRV auto-slot counter trap).
+		graphics->SetRenderTarget(_beautyRT);
+		graphics->SetViewport(*_currentCamera->GetViewport().Get11());
+		GFX_PERF_END();
+	}
+
+	void SceneRenderer::RenderProbeEnvMaps()
+	{
+		PROFILE();
+
+		if (_probeEnvShader == nullptr || _currentScene == nullptr)
+			return;
+
+		std::vector<ReflectionProbeComponent*> probes;
+		if (!_currentScene->GetComponents<ReflectionProbeComponent>(probes))
+			return;
+
+		// One prefilter per frame: it's a bake step triggered by a capture
+		// completing, and spreading multiple probes across frames keeps a
+		// scene-load recapture burst from hitching.
+		ReflectionProbeComponent* dirty = nullptr;
+		for (auto* probe : probes)
+		{
+			if (probe != nullptr && probe->IsAtlasDirty())
+			{
+				dirty = probe;
+				break;
+			}
+		}
+		if (dirty == nullptr)
+			return;
+
+		ITexture2D* atlas = dirty->EnsureEnvAtlas();
+		if (atlas == nullptr)
+			return;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"ProbeEnvMap");
+		guiRenderer->StartFrame();
+
+		// Explicit face binds at t0..t5 (ProbeEnvMap.shader's register layout).
+		for (int32_t i = 0; i < 6; ++i)
+			graphics->SetTexture2D(i, dirty->GetFace(i));
+
+		graphics->SetRenderTarget(atlas);
+
+		D3D11_VIEWPORT vp;
+		vp.TopLeftX = 0.0f;
+		vp.TopLeftY = 0.0f;
+		vp.Width = (float)kIblEnvMapFaceSize;
+		vp.Height = (float)(kIblEnvMapFaceSize * kIblEnvMapRows);
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		graphics->SetViewport(vp);
+
+		guiRenderer->FullScreenTexturedQuad(dirty->GetFace(0), _probeEnvShader.get());
+
+		guiRenderer->EndFrame();
+
+		dirty->MarkAtlasPrefiltered();
+
+		// Restore beauty target + camera viewport (same discipline as
+		// RenderSkyEnvMap - a stale 128-wide viewport corrupts the next pass).
 		graphics->SetRenderTarget(_beautyRT);
 		graphics->SetViewport(*_currentCamera->GetViewport().Get11());
 		GFX_PERF_END();

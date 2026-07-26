@@ -852,6 +852,40 @@ namespace HexEngine
 					return MakeResult(id, json{ {"id", EntityIdToJson(e->GetId())}, {"name", e->GetName()} });
 				});
 			}
+			if (m == "add_component")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "add_component requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "add_component requires a 'name' string (entity name)");
+					if (!params.contains("component") || !params["component"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "add_component requires a 'component' string (registered class name)");
+
+					Entity* entity = scene->GetEntityByName(params["name"].get<std::string>());
+					if (entity == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "entity '" + params["name"].get<std::string>() + "' not found");
+
+					const std::string componentName = params["component"].get<std::string>();
+					auto* cls = g_pEnv->_classRegistry->Find(componentName);
+					if (cls == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "component class '" + componentName + "' is not registered");
+
+					// Same sequence the prefab loader uses for by-name construction.
+					auto* component = cls->newInstanceFn(entity);
+					if (component == nullptr)
+						return MakeError(id, ErrorCode::Internal, "failed to instantiate component '" + componentName + "'");
+					entity->AddComponent(component);
+
+					return MakeResult(id, json{
+						{"entity", entity->GetName()},
+						{"component", componentName} });
+				});
+			}
 			if (m == "clone_entity")
 			{
 				if (!BridgeWriteEnabled())

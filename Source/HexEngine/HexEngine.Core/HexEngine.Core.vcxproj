@@ -449,6 +449,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp" />
     <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp" />
     <ClInclude Include="Entity\Component\DecalComponent.hpp" />
+    <ClInclude Include="Entity\Component\ReflectionProbeComponent.hpp" />
     <ClInclude Include="Entity\Component\NavMeshBlockingVolume.hpp" />
     <ClInclude Include="Entity\Component\NavMeshLinkComponent.hpp" />
     <ClInclude Include="Entity\Component\PlayerStartComponent.hpp" />
@@ -656,6 +657,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp" />
     <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp" />
     <ClCompile Include="Entity\Component\DecalComponent.cpp" />
+    <ClCompile Include="Entity\Component\ReflectionProbeComponent.cpp" />
     <ClCompile Include="Entity\Component\NavMeshBlockingVolume.cpp" />
     <ClCompile Include="Entity\Component\NavMeshLinkComponent.cpp" />
     <ClCompile Include="Entity\Component\PlayerStartComponent.cpp" />
