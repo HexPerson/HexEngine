@@ -249,6 +249,7 @@
 	{
 		bool didHit;       // true if a real screen-space hit was found
 		bool didFallback;  // true when we fell back to the last in-screen tex (not a true hit)
+		bool sawSky;       // true only if the march actually terminated ON a sky pixel
 		float3 colour;     // radiance to write
 		float hitDistance; // world-space distance from rayStart to the hit
 	};
@@ -264,6 +265,7 @@
 		HitResult result;
 		result.didHit = false;
 		result.didFallback = false;
+		result.sawSky = false;
 		result.colour = 0.0f.xxx;
 		result.hitDistance = 0.0f;
 
@@ -338,6 +340,7 @@
 			if (any(fragTex < 0.0f) || any(fragTex > 1.0f))
 			{
 				exitedScreen = true;
+				result.sawSky = true;
 				break;
 			}
 
@@ -424,6 +427,11 @@
 			    totalDistance >= g_ssrSkyHitMinDistance &&
 			    g_ssrSkyHitMinDistance > 0.0f)
 			{
+				//result.didHit = true;
+				//result.hitDistance = max(totalDistance, 1.0f);
+				//result.colour = g_beautyTexture.SampleLevel(g_textureSampler, fragTex, 0).rgb;
+				//return result;
+
 				exitedScreen = true;
 				break;
 			}
@@ -667,8 +675,28 @@
 		// sampling it for a downward ray hands back horizon sky and lights the undersides of
 		// things from below.
 		const float horizonFade = saturate(rayDir.y * 4.0f);
+
+		// escapeTransmittance alone cannot be trusted to mean "open to the sky". The cone trace
+		// terminates on `if (!sampled) break` when it leaves the clipmaps, which exits with
+		// transmittance still at its starting 1.0 - so "I ran out of voxel coverage" and "nothing
+		// occludes this direction" are indistinguishable. It also only reaches ~9.5m with a 0.5m
+		// finest voxel (12 geometric steps), far short of the far wall of a large interior.
+		//
+		// Indoors that read the worst possible way: a wall pixel's reflected ray is roughly
+		// horizontal, the glass curtain wall it points at isn't in the opaque gbuffer so the
+		// screen march finds no hit, the cone trace runs out of coverage and reports "open", and
+		// the pixel is handed full exterior sky. rayDir.y is near-constant across a vertical
+		// wall, so the LUT gets sampled at a near-constant elevation and paints a horizontal
+		// horizon-coloured band straight through the wall.
+		//
+		// Only the screen march can actually prove openness, by terminating ON a sky pixel. Gate
+		// full-strength sky on that proof and fall back to the (unreliable, optimistic) cone
+		// transmittance otherwise, heavily damped. Outdoors this costs nothing: a road pixel
+		// reflecting upward with sky in frame does land on a sky pixel, so it still gets its
+		// full sky gradient rather than the black it used to get.
+		const float skyConfidence = hit.sawSky ? 1.0f : (escapeTransmittance * 0.15f);
 		const float3 skyRadiance =
-			SampleSkyRadiance(rayDir) * escapeTransmittance * horizonFade * g_ssrSkyFallbackStrength;
+			SampleSkyRadiance(rayDir) * skyConfidence * horizonFade * g_ssrSkyFallbackStrength;
 
 		didReflect = true;
 		hitDistance = max(traceDistance, 8.0f);
@@ -771,7 +799,7 @@
 		// NOT double-count voxel GI even though DiffuseGI runs immediately before SSR.
 		// More rays per pixel would converge faster but NRD's spatial+temporal denoising on
 		// the diffuse channel already integrates across pixels and frames, so 1 is enough.
-		const uint DiffuseRays = 1u;
+		const uint DiffuseRays = 0u;
 		const uint SpecularRays = 1u;
 
 		// Gate diffuse SSR on Fresnel-derived diffuse weight luminance. Skip pure metals and
@@ -834,7 +862,7 @@
 					true,
 					instanceID);
 
-				//if(didReflect)
+				if(didReflect)
 				{
 					specularAccum += reflected.rgb;
 					specularHitDistAccum += hitDistance;
