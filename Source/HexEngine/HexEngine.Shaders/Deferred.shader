@@ -15,6 +15,8 @@
 	AtmospherePhysical
 	// SkyViewLutParamsToUv, for the sky IBL environment lookup.
 	AtmosphereCommon
+	// Octahedral environment atlas helpers (SampleEnvAtlas), for sky IBL.
+	EnvMapCommon
 	PBRutils
 }
 "VertexShader"
@@ -38,9 +40,11 @@
 	Texture3D g_cloudShapeNoise : register(t12);
 	Texture3D g_cloudDetailNoise : register(t13);
 	// t14 = features RT (bound explicitly by RenderDirectionalLights).
-	// Sky-view LUT for image-based lighting, bound explicitly at t15. A null bind reads as
-	// black, which degrades to the old no-IBL behaviour rather than breaking the pass.
-	Texture2D g_iblSkyViewLUT : register(t15);
+	// Prefiltered sky environment atlas for image-based lighting, bound explicitly at
+	// t15 (SkyEnvMap.shader's output: octahedral rows, one per roughness level - see
+	// EnvMapCommon). A null bind reads as black, which degrades to the old no-IBL
+	// behaviour rather than breaking the pass.
+	Texture2D g_iblSkyEnvAtlas : register(t15);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -121,15 +125,15 @@
 		return min(densityShape * heightMask * verticalCore * billow * g_cloudParams0.x, 2.0f);
 	}
 
-	// Environment radiance along a direction, from the same sky-view LUT the sky sphere and
-	// aerial perspective use - so an IBL reflection and the sky seen directly agree.
-	float3 SampleSkyRadianceDirection(float3 dir)
+	// Prefiltered environment lookup: direction + perceptual roughness against the
+	// octahedral atlas (built from the same sky-view LUT the sky sphere renders from,
+	// so an IBL reflection and the sky seen directly agree). Roughness selects between
+	// the atlas's prefiltered rows, so a rough floor gets a genuinely blurred sky
+	// rather than a sharp one dimmed. g_textureSampler is this shader's linear
+	// sampler (s0); Deferred has no g_linearSampler.
+	float3 SampleSkyEnv(float3 dir, float roughness)
 	{
-		const float3 sunDir = normalize(-g_lightDirection.xyz);
-		const float2 uv = SkyViewLutParamsToUv(normalize(dir), sunDir);
-		// g_textureSampler is this shader's linear sampler (s0); Deferred has no
-		// g_linearSampler.
-		return g_iblSkyViewLUT.SampleLevel(g_textureSampler, uv, 0).rgb;
+		return SampleEnvAtlas(g_iblSkyEnvAtlas, g_textureSampler, dir, roughness);
 	}
 
 	float CalculateCloudShadow(float3 worldPos, float3 sunDir)
@@ -352,18 +356,18 @@
 			const float3 diffuseColour  = pixelColour.rgb * (1.0f - f0) * (1.0f - metallic);
 			const float3 specularColour = lerp(f0, pixelColour.rgb, metallic);
 
-			// Rough surfaces see a wider lobe; the sky LUT has no mips so bias the lookup
-			// toward the normal as roughness rises rather than pretending it is a mirror.
-			const float3 specDir = normalize(lerp(R, N, perceptualRoughness * perceptualRoughness * 0.5f));
-
 			const float2 dfg = EnvBRDFApprox(NdotV, perceptualRoughness);
 
-			const float3 skySpec = SampleSkyRadianceDirection(specDir);
-			const float3 skyDiff = SampleSkyRadianceDirection(N);
+			// The atlas is prefiltered per roughness row, so the lookup uses the true
+			// mirror direction - no normal-bias hack needed. Diffuse takes the roughest
+			// row along the normal as an irradiance proxy (a GGX(1.0) prefilter is not a
+			// cosine integral, but it is close enough until P1-C's SH irradiance).
+			const float3 skySpec = SampleSkyEnv(R, perceptualRoughness);
+			const float3 skyDiff = SampleSkyEnv(N, 1.0f);
 
 			// Horizon fade: the sky LUT carries no ground radiance, so a downward-facing
 			// direction would otherwise light undersides with horizon sky.
-			const float specHorizon = saturate(specDir.y * 3.0f + 0.35f);
+			const float specHorizon = saturate(R.y * 3.0f + 0.35f);
 			const float diffHorizon = saturate(N.y * 0.5f + 0.5f);
 
 			const float3 iblSpecular =

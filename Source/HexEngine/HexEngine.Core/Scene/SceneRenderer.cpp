@@ -216,7 +216,14 @@ namespace HexEngine
 	// ON because that is the term that restores missing reflections; diffuse defaults OFF
 	// because the sky term is unoccluded, so indoors it floods a room. Reflection probes
 	// (P1-D) add the occlusion/locality this lacks.
-	HVar r_iblSkySpecular("r_iblSkySpecular", "Sky specular IBL strength (split-sum environment specular)", 1.0f, 0.0f, 4.0f);
+	// DEFAULT 0 until reflection probes provide occlusion. This term is unoccluded sky:
+	// with it on, an interior wall's reflection vector sweeps through zero elevation as
+	// the view position moves, which paints the sky's horizon line straight across the
+	// wall, and upward-facing interior floors take a blue sky tint under a solid roof.
+	// That was shipped at 1.0 (unverified) and is exactly the "horizon through walls" +
+	// "weird blue reflections inside" report - it survived r_ssr 0 because it never was
+	// SSR. Enable per-scene outdoors, or wait for probes to gate it indoors.
+	HVar r_iblSkySpecular("r_iblSkySpecular", "Sky specular IBL strength (split-sum environment specular)", 0.0f, 0.0f, 4.0f);
 	HVar r_iblSkyDiffuse("r_iblSkyDiffuse", "Sky diffuse IBL strength (unoccluded - floods interiors, prefer probes)", 0.0f, 0.0f, 4.0f);
 
 	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
@@ -3440,11 +3447,13 @@ namespace HexEngine
 				// PBR pixels see (0,0,0,0) (cleared each frame) and early-out.
 				g_pEnv->_graphicsDevice->SetTexture2D(14, _gbuffer.GetFeatures());
 
-				// t15 = sky-view LUT for image-based lighting. Explicit slot, like the
-				// features RT above, because the cloud-noise binds before this are
-				// conditional and the auto-slot counter would land this somewhere else.
-				g_pEnv->_graphicsDevice->SetTexture2D(15,
-					g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyViewLUT() : nullptr);
+				// t15 = prefiltered sky environment atlas for image-based lighting
+				// (RenderSkyEnvMap's output - octahedral roughness rows, see
+				// EnvMapCommon.shader). Explicit slot, like the features RT above,
+				// because the cloud-noise binds before this are conditional and the
+				// auto-slot counter would land this somewhere else. Null reads as
+				// black = no IBL, never a crash.
+				g_pEnv->_graphicsDevice->SetTexture2D(15, _iblSkyEnvMap);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
