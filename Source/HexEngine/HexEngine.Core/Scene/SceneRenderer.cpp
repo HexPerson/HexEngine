@@ -1328,6 +1328,14 @@ namespace HexEngine
 		if (!camera)
 			return;
 
+		// Probe capture tracing: is the rig camera actually reaching the renderer?
+		if (camera->IsEnvironmentCapture())
+		{
+			const auto& cvp = camera->GetViewport();
+			LOG_INFO("RenderScene: ENV CAPTURE camera, viewport %.0fx%.0f, rt=%p",
+				cvp.width, cvp.height, (void*)camera->GetRenderTarget());
+		}
+
 		if (!_sphereEntity)
 		{
 			_sphereEntity = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("LightSphere");
