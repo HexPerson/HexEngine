@@ -199,6 +199,18 @@ namespace HexEngine
 	//   3 = cbuffer test  : flood the specular output unconditionally
 	HVar r_ssrDebugSkyHits("r_ssrDebugSkyHits", "Debug SSR: 1=sky markers, 2=path classify, 3=cbuffer flood test", (int32_t)0, (int32_t)0, (int32_t)3);
 
+	// IBL: prefiltered sky environment atlas (see RenderSkyEnvMap /
+	// EnvMapCommon.shader). Inert until the deferred IBL resolve consumes it,
+	// so defaulting on only costs the small prefilter draw.
+	HVar r_iblSkyEnv("r_iblSkyEnv", "Generate the prefiltered sky environment atlas each frame", true, false, true);
+	HVar r_iblSkyEnvDebug("r_iblSkyEnvDebug", "Overlay the sky environment atlas (roughness rows top to bottom)", false, false, true);
+
+	// Atlas geometry. Must match ENVMAP_FACE_SIZE / ENVMAP_ROUGHNESS_ROWS in
+	// EnvMapCommon.shader - the shader derives everything from uv, so the only
+	// contract is the overall texture aspect (width : height = 1 : rows).
+	static constexpr int32_t kIblEnvMapFaceSize = 128;
+	static constexpr int32_t kIblEnvMapRows = 5;
+
 	// Sky image-based lighting. The engine had no IBL at all - ambient was a flat
 	// diffuse-only constant - so no surface had any environment response. Specular defaults
 	// ON because that is the term that restores missing reflections; diffuse defaults OFF
@@ -727,6 +739,7 @@ namespace HexEngine
 		SAFE_DELETE(_outlineJfaB);
 		SAFE_DELETE(_outlineGlowRT);
 		SAFE_DELETE(_outlineParamsBuffer);
+		SAFE_DELETE(_iblSkyEnvMap);
 		SAFE_DELETE(_autoPuddlesQuadIB);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
@@ -755,6 +768,7 @@ namespace HexEngine
 		_chromaticAberrationShader	= IShader::Create("EngineData.Shaders/ChromaticAbberation.hcs");
 		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
+		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
 		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
 		_hdrOutputShader			= IShader::Create("EngineData.Shaders/TonemapHDR.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
@@ -2962,6 +2976,11 @@ namespace HexEngine
 			// peeling); acceptable v1 limit.
 			RenderAerialPerspective();
 
+			// Prefiltered sky environment atlas. Runs regardless of SSR: the
+			// deferred IBL term consumes it even when nothing screen-space
+			// reflects.
+			RenderSkyEnvMap();
+
 			// don't bother doing this if we don't need to, its expensive!
 			if(_currentScene->DidAnyDrawnItemReflect())
 				RenderSSR();
@@ -3221,6 +3240,18 @@ namespace HexEngine
 				guiRenderer->FillTexturedQuad(_ssrHitInfo, DebugImageSize * 8 + 40, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
 
 				guiRenderer->FillTexturedQuad(_ssrResolved, DebugImageSize * 9 + 50, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+			}
+
+			// Sky environment atlas overlay - native 1:1 so the roughness rows
+			// (mirror at the top, rough at the bottom) can be inspected without
+			// filtering. Deliberately outside r_debugScene: it's the one image
+			// needed to verify the IBL prefilter.
+			if (r_iblSkyEnvDebug._val.b && _iblSkyEnvMap != nullptr && canPostProcess)
+			{
+				guiRenderer->FillTexturedQuad(
+					_iblSkyEnvMap, 10, 10,
+					kIblEnvMapFaceSize, kIblEnvMapFaceSize * kIblEnvMapRows,
+					math::Color(1, 1, 1, 1));
 
 				//guiRenderer->FillTexturedQuad(_dlssTarget, 150 * 7 + 20, 10, 150, 150, math::Color(1, 1, 1, 1));
 
@@ -4652,6 +4683,74 @@ namespace HexEngine
 
 		// 4. Additively blend the glow ring into the beauty buffer (before bloom).
 		_outlineGlowRT->BlendTo_Additive(_beautyRT);
+	}
+
+	void SceneRenderer::RenderSkyEnvMap()
+	{
+		PROFILE();
+
+		if (!r_iblSkyEnv._val.b)
+			return;
+		if (_iblSkyEnvShader == nullptr)
+			return;
+		if (g_pEnv->_atmosphereLUTs == nullptr || g_pEnv->_atmosphereLUTs->GetSkyViewLUT() == nullptr)
+			return;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+
+		// Fixed-size atlas, created lazily and deliberately not part of the
+		// resize path.
+		if (_iblSkyEnvMap == nullptr)
+		{
+			_iblSkyEnvMap = graphics->CreateTexture2D(
+				kIblEnvMapFaceSize,
+				kIblEnvMapFaceSize * kIblEnvMapRows,
+				DXGI_FORMAT_R16G16B16A16_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+				1);
+			if (_iblSkyEnvMap == nullptr)
+			{
+				LOG_WARN("SceneRenderer::RenderSkyEnvMap failed to create the sky environment atlas");
+				return;
+			}
+			_iblSkyEnvMap->SetDebugName("_iblSkyEnvMap");
+		}
+
+		// Regenerated every frame by design: the day/night cycle moves the sun
+		// continuously and the weather system retints the sky-view LUT, so a
+		// sun-direction cache would be invalid most frames anyway and buys a
+		// set of invalidation bugs. The draw is 128x640 texels sampling a
+		// 192x108 LUT - far below the cost of a single shadow cascade.
+		auto guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"SkyEnvMap");
+		guiRenderer->StartFrame();
+
+		graphics->SetRenderTarget(_iblSkyEnvMap);
+
+		D3D11_VIEWPORT vp;
+		vp.TopLeftX = 0.0f;
+		vp.TopLeftY = 0.0f;
+		vp.Width = (float)kIblEnvMapFaceSize;
+		vp.Height = (float)(kIblEnvMapFaceSize * kIblEnvMapRows);
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		graphics->SetViewport(vp);
+
+		// The sky-view LUT rides in as the quad's source texture (t0).
+		guiRenderer->FullScreenTexturedQuad(g_pEnv->_atmosphereLUTs->GetSkyViewLUT(), _iblSkyEnvShader.get());
+
+		guiRenderer->EndFrame();
+
+		// Restore the beauty target and camera viewport before returning -
+		// leaving a 128-wide viewport bound corrupts whatever pass runs next
+		// (same class of bug as the SRV auto-slot counter trap).
+		graphics->SetRenderTarget(_beautyRT);
+		graphics->SetViewport(*_currentCamera->GetViewport().Get11());
+		GFX_PERF_END();
 	}
 
 	void SceneRenderer::RenderSSR()
