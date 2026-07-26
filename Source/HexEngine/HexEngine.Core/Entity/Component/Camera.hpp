@@ -58,6 +58,21 @@ namespace HexEngine
 		void SetRendersToTarget(bool enable) { _rendersToTarget = enable; }
 		bool RendersToTarget() const { return _rendersToTarget; }
 
+		// Marks this camera as an offline environment capture (reflection probe
+		// face). The renderer skips the temporally-accumulating passes for these:
+		//
+		//  - SSR/NRD: the denoiser's buffers are sized for the MAIN camera, but a
+		//    capture camera has its own (much smaller) viewport. Jitter is handed
+		//    to NRD in NDC and converted back to pixels using the denoiser's
+		//    width, so a 256px capture against 3840px buffers scales a +/-0.5px
+		//    jitter to +/-7.5 and trips NRD's assert. Capture faces have no
+		//    history to denoise against anyway.
+		//  - TAA jitter/resolve: a capture is a one-shot render with no history;
+		//    jitter would just offset it by a sub-pixel and the resolve would
+		//    blend against another camera's history.
+		void SetEnvironmentCapture(bool enable) { _environmentCapture = enable; }
+		bool IsEnvironmentCapture() const { return _environmentCapture; }
+
 		// Per-camera scene-flag mask, AND-ed with the scene's flags at render time.
 		// Defaults to all bits (no masking). Lets a secondary view (e.g. the map)
 		// skip passes like PostProcessingEnabled it doesn't need.
@@ -137,6 +152,7 @@ namespace HexEngine
 		ITexture2D* _renderTarget = nullptr;
 		//ITexture2D* _fullScreenRenderTarget = nullptr;
 		bool _rendersToTarget = false;
+		bool _environmentCapture = false;
 		int32_t _sceneFlagMask = -1;   // all bits set = no masking; stored as int (SceneFlags is fwd-declared)
 		CameraProjectionMode _projectionMode = CameraProjectionMode::PerspectiveProjection;
 		math::Matrix _projectionMatrix;

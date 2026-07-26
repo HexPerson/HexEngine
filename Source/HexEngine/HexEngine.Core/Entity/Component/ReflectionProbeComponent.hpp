@@ -96,6 +96,9 @@ namespace HexEngine
 		// currently oriented for (rendered by the secondary-camera pass this
 		// frame, copied out next Update). -1 = idle.
 		bool _captureRequested = true; // capture automatically on first update after load
+		// Frames to let the freshly-created rig camera update itself (frustum +
+		// PVS) before the renderer draws it. See Update().
+		int32_t _warmupFrames = 0;
 		int32_t _pendingFace = -1;
 		bool _facesComplete = false;
 		bool _atlasDirty = false;

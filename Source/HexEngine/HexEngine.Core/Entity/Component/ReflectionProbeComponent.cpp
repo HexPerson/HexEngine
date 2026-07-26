@@ -99,6 +99,12 @@ namespace HexEngine
 		// 90-degree square faces, near matched to the main camera's default.
 		_rigCamera->SetPespectiveParameters(ToRadian(90.0f), 1.0f, 0.1f, 1000.0f);
 		_rigCamera->SetViewport(math::Viewport(0.0f, 0.0f, (float)kProbeFaceSize, (float)kProbeFaceSize, 0.0f, 1.0f));
+		// Marks this as an offline capture: the renderer skips SSR/NRD and TAA
+		// for it, and won't sample reflection probes into the capture. Without
+		// this the NRD denoiser asserts - its buffers are main-camera sized while
+		// this camera is 256px, and the jitter conversion between the two scales
+		// a half-pixel jitter to 7.5 pixels.
+		_rigCamera->SetEnvironmentCapture(true);
 		// Post-processing stays ON for capture faces even though that bakes the
 		// tonemapped LDR frame into the probe: the camera render target is only
 		// ever written by the post chain's output stage (every RT write in
@@ -191,6 +197,26 @@ namespace HexEngine
 			return;
 		}
 
+		// Rig warm-up. The rig entity and its camera are created from inside the
+		// component update phase, so the camera's own Update - which builds its
+		// frustum and PVS - has not run yet. Rendering a camera whose PVS was
+		// never built is what the engine's other offscreen-capture path
+		// (IconService) avoids by explicitly seeding the PVS before calling
+		// RenderScene. Rather than reach into the PVS here, give the rig one
+		// full frame to update itself before asking the renderer to draw it.
+		if (_warmupFrames > 0)
+		{
+			--_warmupFrames;
+			if (_warmupFrames == 0)
+			{
+				LOG_INFO("ReflectionProbe '%s': rig warm, starting face 0",
+					GetEntity()->GetName().c_str());
+				_pendingFace = 0;
+				OrientRigForFace(0);
+			}
+			return;
+		}
+
 		if (_captureRequested)
 		{
 			LOG_INFO("ReflectionProbe '%s': starting 6-face capture", GetEntity()->GetName().c_str());
@@ -202,8 +228,10 @@ namespace HexEngine
 				_captureRequested = true;
 				return;
 			}
-			_pendingFace = 0;
-			OrientRigForFace(0);
+			// Aim the rig but leave RendersToTarget off until it has updated once.
+			_rigEntity->SetPosition(GetWorldCentre());
+			_rigCamera->SetLookDirection(kFaceDirs[0], kFaceUps[0]);
+			_warmupFrames = 2;
 		}
 	}
 

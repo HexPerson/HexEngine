@@ -2292,7 +2292,13 @@ namespace HexEngine
 			_activeProbe = nullptr;
 			bufferData._probeCenter = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 			bufferData._probeExtents = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
-			if (_currentScene != nullptr && _cameraEntity != nullptr)
+			// Never sample probes while capturing one: the capture camera sits
+			// inside its own probe's box, so it would bake the previous capture's
+			// reflections into the new one and compound them on every recapture.
+			// Probe faces see sky IBL only.
+			const bool capturingEnvironment =
+				_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture();
+			if (!capturingEnvironment && _currentScene != nullptr && _cameraEntity != nullptr)
 			{
 				std::vector<ReflectionProbeComponent*> probes;
 				if (_currentScene->GetComponents<ReflectionProbeComponent>(probes))
@@ -2341,7 +2347,15 @@ namespace HexEngine
 			// ocean
 			bufferData._oceanConfig = _currentScene->GetOcean();
 
-			bufferData._jitterOffsets = _taa.GetJitterOffset(viewport.width, viewport.height);
+			// No TAA jitter for environment captures: a probe face is rendered
+			// once with no history to accumulate into, so jitter would only
+			// offset the capture by a sub-pixel - and a non-zero jitter from a
+			// small capture viewport is what pushes NRD's cameraJitter out of
+			// range (see RenderSSR's early-out).
+			bufferData._jitterOffsets =
+				(_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture())
+					? math::Vector2(0.0f, 0.0f)
+					: _taa.GetJitterOffset(viewport.width, viewport.height);
 			_denoiseFD.jitter = bufferData._jitterOffsets;
 
 			bufferData._chromaticAbberationAmmount = r_chromaticAbberation._val.f32;
@@ -3037,13 +3051,20 @@ namespace HexEngine
 			// peeling); acceptable v1 limit.
 			RenderAerialPerspective();
 
-			// Prefiltered sky environment atlas. Runs regardless of SSR: the
-			// deferred IBL term consumes it even when nothing screen-space
-			// reflects.
-			RenderSkyEnvMap();
+			// IBL atlases are per-scene, not per-camera: generating them again
+			// for each of a probe's six capture faces is pure waste, and running
+			// the probe prefilter while a capture is in flight risks binding a
+			// probe atlas as a render target mid-capture.
+			if (_currentCamera == nullptr || !_currentCamera->IsEnvironmentCapture())
+			{
+				// Prefiltered sky environment atlas. Runs regardless of SSR: the
+				// deferred IBL term consumes it even when nothing screen-space
+				// reflects.
+				RenderSkyEnvMap();
 
-			// Prefilter any reflection probe whose 6-face capture just finished.
-			RenderProbeEnvMaps();
+				// Prefilter any reflection probe whose 6-face capture just finished.
+				RenderProbeEnvMaps();
+			}
 
 			// don't bother doing this if we don't need to, its expensive!
 			if(_currentScene->DidAnyDrawnItemReflect())
@@ -3057,7 +3078,12 @@ namespace HexEngine
 				g_pEnv->_streamlineProvider != nullptr &&
 				g_pEnv->_streamlineProvider->IsEnabled();
 
-			if (r_taa._val.b && !dlssActive)
+			// Environment captures skip TAA for the same reason they skip SSR:
+			// one-shot render, no history of their own, and resolving would
+			// blend the capture against the MAIN camera's history buffer.
+			const bool isEnvCapture = _currentCamera != nullptr && _currentCamera->IsEnvironmentCapture();
+
+			if (r_taa._val.b && !dlssActive && !isEnvCapture)
 			{
 				_taa.Resolve(_beautyRT, _beautyRT, _gbuffer.GetVelocity(), _gbuffer.GetNormal(), g_pEnv->GetUIManager().GetRenderer());
 				_temporalAaAppliedThisFrame = true;
@@ -4896,6 +4922,28 @@ namespace HexEngine
 		PROFILE();
 
 		if (!r_ssr._val.b)
+			return;
+
+		// Environment-capture cameras (reflection probe faces) never run SSR. The
+		// NRD denoiser's buffers are sized for the main camera, but this camera
+		// renders at its own much smaller resolution, and jitter reaches NRD in
+		// NDC and is converted back to pixels with the DENOISER's width - so a
+		// 256px capture against 3840px buffers turns a +/-0.5px jitter into
+		// +/-7.5 and trips NRD's internal range assert. A one-shot capture face
+		// also has no temporal history for a denoiser to work with.
+		if (_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture())
+			return;
+
+		// Main camera only. SSR + NRD are temporal systems keyed to a single
+		// camera's history and viewport: running them for a secondary camera
+		// (reflection-probe capture rig, the in-game map view) hands NRD jitter
+		// computed for that camera's viewport against buffers sized for the main
+		// one - which trips NRD's 'cameraJitter must be in [-0.5, 0.5]' assert
+		// (crash call stack: RenderSSR -> FilterFrame -> SetCommonSettings) -
+		// and would corrupt the main camera's reflection history even where it
+		// didn't crash. Secondary views get their reflections from the IBL
+		// terms instead.
+		if (_currentScene != nullptr && _currentCamera != _currentScene->GetMainCamera())
 			return;
 
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Begin");
