@@ -9,10 +9,9 @@
 "PixelShaderIncludes"
 {
 	UICommon
-	ShadowUtils
-	LightingUtils
-	Atmosphere
-	AtmosphereCommon
+		ShadowUtils
+		LightingUtils
+		Atmosphere
 }
 "VertexShader"
 {
@@ -49,12 +48,6 @@
 	Texture3D g_voxelRadianceTex3 : register(t18);
 	Texture3D g_voxelOpacityTex3  : register(t19);
 	Texture3D g_voxelAlbedoTex3   : register(t20);
-
-	// Hillaire sky-view LUT, bound by SceneRenderer::RenderSSR. This is the environment
-	// fallback for specular rays that find nothing: without it, any reflection ray leaving
-	// the screen or the voxel clipmaps returned black, so a wet road reflected the sky as
-	// black. Null-binds read as 0, which degrades to the previous behaviour.
-	Texture2D g_atmSkyViewLUT     : register(t21);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -181,21 +174,7 @@
 	// Tiny cone trace along rayDir using the voxel clipmaps for a fallback "indirect bounce"
 	// in directions where SSR didn't find a screen-space hit. Steps until the voxel field becomes
 	// opaque or we leave all clipmaps.
-	// Environment radiance for a ray direction that found no geometry. Same LUT and
-	// parameterisation the sky sphere and aerial-perspective apply use, so a reflected ray
-	// and the sky it would have seen directly agree.
-	float3 SampleSkyRadiance(float3 rayDir)
-	{
-		const float3 sunDir = normalize(-g_lightDirection.xyz);
-		const float2 uv = SkyViewLutParamsToUv(normalize(rayDir), sunDir);
-		return g_atmSkyViewLUT.SampleLevel(g_linearSampler, uv, 0).rgb;
-	}
-
-	// outEscapeTransmittance reports how much of the cone was never occluded by voxel
-	// content - i.e. the fraction that escaped to open sky. The caller multiplies the
-	// environment term by it, so voxel radiance and sky radiance sum to one ray's worth of
-	// energy instead of double-counting.
-	float3 ConeTraceVoxelGI(float3 originWs, float3 rayDir, out float traceDistance, out float outEscapeTransmittance)
+	float3 ConeTraceVoxelGI(float3 originWs, float3 rayDir, out float traceDistance)
 	{
 		traceDistance = 0.0f;
 
@@ -241,7 +220,6 @@
 				break;
 		}
 
-		outEscapeTransmittance = saturate(transmittance);
 		return accumRadiance * max(g_giParams0.x, 0.0f);
 	}
 
@@ -249,7 +227,6 @@
 	{
 		bool didHit;       // true if a real screen-space hit was found
 		bool didFallback;  // true when we fell back to the last in-screen tex (not a true hit)
-		bool sawSky;       // true only if the march actually terminated ON a sky pixel
 		float3 colour;     // radiance to write
 		float hitDistance; // world-space distance from rayStart to the hit
 	};
@@ -265,7 +242,6 @@
 		HitResult result;
 		result.didHit = false;
 		result.didFallback = false;
-		result.sawSky = false;
 		result.colour = 0.0f.xxx;
 		result.hitDistance = 0.0f;
 
@@ -340,7 +316,6 @@
 			if (any(fragTex < 0.0f) || any(fragTex > 1.0f))
 			{
 				exitedScreen = true;
-				result.sawSky = true;
 				break;
 			}
 
@@ -358,83 +333,13 @@
 			lastInScreenTex = fragTex;
 			lastInScreenDistance = totalDistance;
 
-			// Sky pixels. The depth test below can never accept one (sky writes the
-			// frustum-far value into normal.w, so depthDelta stays negative), which is why a
-			// glossy floor reflected sky-through-a-window as black.
-			//
-			// Sky must be able to WIN over geometry, which means returning here rather than
-			// recording and marching on. That was the bug in the first attempt at this: with
-			// the sky handled after the loop, any real depth hit returns first, so in an
-			// interior every floor ray reaches the wall and the sky branch was unreachable -
-			// it never executed once (verified by painting it magenta).
-			//
-			// The original implementation (removed in e847e27) did return here, and it worked;
-			// its actual defect was having NO distance guard, so a floor pixel grabbed the
-			// window sitting beside it in screen space on the very first step, which is the
-			// blue streaking that commit was fixing. Keeping the early return but requiring
-			// the ray to have genuinely travelled g_ssrSkyHitMinDistance first gives the
-			// original's behaviour without the streaks.
-			// SkySphere writes TWO independent sky markers: norm.w = g_frustumDepths[3] and
-			// diff.a = -1 (also pos.a = -1). Test both, because the depth marker compares
-			// against a per-frame cbuffer value and is only reliable if the sky pass and this
-			// pass observed the same one; the diffuse marker is an absolute constant.
-			const bool isSkyByDepth = (actualDepth >= (g_frustumDepths[3] - 0.5f));
-			const bool isSkyByAlpha = (GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, fragTex, 0).w < -0.5f);
-			const bool isSkyPixel = isSkyByDepth || isSkyByAlpha;
-
-			// Diagnostic (r_ssrDebugSkyHits):
-			//   MAGENTA = sky hit accepted
-			//   GREEN   = sky pixel seen but rejected by the distance guard
-			//   BLUE    = sky by the diffuse (-1) marker only, i.e. the depth marker missed it
-			// Nothing at all means the ray never samples a sky pixel by either marker.
-			if (g_ssrDebugSkyHits > 0.5f && isSkyPixel)
-			{
-				result.didHit = true;
-				result.hitDistance = max(totalDistance, 1.0f);
-				if (!isSkyByDepth)
-					result.colour = float3(0.0f, 0.0f, 20.0f);
-				else if (totalDistance >= g_ssrSkyHitMinDistance && g_ssrSkyHitMinDistance > 0.0f)
-					result.colour = float3(20.0f, 0.0f, 20.0f);
-				else
-					result.colour = float3(0.0f, 20.0f, 0.0f);
-				return result;
-			}
-
-			// Reaching a sky pixel means nothing in screen space blocks this ray - it is an
-			// ESCAPE, not a hit. Don't resolve the colour here; break and let the post-loop
-			// fallback handle it exactly like an off-screen exit.
-			//
-			// Two earlier attempts got this wrong by returning from here:
-			//
-			//  1. Sampling g_beautyTexture at fragTex. A sky pixel carries no depth, so the
-			//     march has nothing to validate that screen position against - any ray whose
-			//     path crosses sky is accepted wherever it happened to be, and the colour
-			//     smears along the ray direction. That is the streaking e847e27 deleted this
-			//     branch to fix; the distance guard only delays acceptance, it can't make an
-			//     arbitrary screen position geometrically correct.
-			//
-			//  2. Sampling the sky LUT by direction. Direction-only fixed the smearing, but
-			//     returning here still bypasses escapeTransmittance and horizonFade, so this
-			//     was the ONLY path handing back full-strength unoccluded sky. A pixel that
-			//     crossed sky got vivid blue while its neighbour - geometry hit, or the escape
-			//     path's occlusion-weighted sky - got something far darker. That hard binary
-			//     split follows the screen-space ray path, which is the vertical banding, and
-			//     it's why the accepted pixels read as unnaturally blue.
-			//
-			// Breaking instead routes every non-geometry ray through one shared estimator, so
-			// neighbouring pixels can't disagree discontinuously.
-			if (isSkyPixel &&
-			    totalDistance >= g_ssrSkyHitMinDistance &&
-			    g_ssrSkyHitMinDistance > 0.0f)
-			{
-				//result.didHit = true;
-				//result.hitDistance = max(totalDistance, 1.0f);
-				//result.colour = g_beautyTexture.SampleLevel(g_textureSampler, fragTex, 0).rgb;
-				//return result;
-
-				exitedScreen = true;
-				break;
-			}
+			// Note: we deliberately do NOT special-case sky pixels here. Sky's actualDepth is
+			// the frustum-far value (very large), so the depth check below naturally rejects
+			// "hits" on sky pixels - the ray's depth never gets close enough. This matches
+			// water.shader. The previous didHitSky early-return was the cause of the bright
+			// blue streaks: vertical rays from the floor immediately saw sky-through-window
+			// pixels and returned sky colour, before the ray had any chance to actually reach
+			// the wall geometry in 3D.
 
 			// Ray has passed behind the surface within the thickness window - candidate hit.
 			const float depthDelta = fragDepth - actualDepth;
@@ -507,8 +412,7 @@
 				const float3 hitColour = g_beautyTexture.SampleLevel(g_textureSampler, refinedTex, 0).rgb;
 
 				result.didHit = true;
-				// Path classification (r_ssrDebugSkyHits 2): RED = real screen-space depth hit.
-				result.colour = (g_ssrDebugSkyHits >= 1.5f) ? float3(20.0f, 0.0f, 0.0f) : hitColour;
+				result.colour = hitColour;
 				result.hitDistance = max(length(hitPosWS.xyz - rayStart), refinedDistance);
 				return result;
 			}
@@ -525,10 +429,7 @@
 		{
 			result.didHit = true;
 			result.didFallback = true;
-			// Path classification: YELLOW = loop-exhaustion last-in-screen fallback.
-			result.colour = (g_ssrDebugSkyHits >= 1.5f)
-				? float3(20.0f, 20.0f, 0.0f)
-				: g_beautyTexture.SampleLevel(g_textureSampler, lastInScreenTex, 0).rgb;
+			result.colour = g_beautyTexture.SampleLevel(g_textureSampler, lastInScreenTex, 0).rgb;
 			result.hitDistance = max(lastInScreenDistance, 1.0f);
 		}
 
@@ -594,12 +495,7 @@
 				// already added to beauty. Subtract so we only contribute the screen-space
 				// delta. Clamp non-negative.
 				float voxelTraceDist;
-				// Diffuse deliberately takes NO sky fallback: DiffuseGI already owns the
-				// low-frequency hemisphere for this pixel, so adding sky here would
-				// double-count it. The sky's contribution to diffuse indirect belongs in the
-				// GI/ambient term instead (SH sky irradiance, P1-C).
-				float voxelBaselineEscape;
-				const float3 voxelBaseline = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, diffuseDir, voxelTraceDist, voxelBaselineEscape);
+				const float3 voxelBaseline = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, diffuseDir, voxelTraceDist);
 				const float3 delta = max(0.0f.xxx, hit.colour  - voxelBaseline);
 
 				hitDistance = max(hit.hitDistance, 1.0f);
@@ -662,59 +558,16 @@
 		// The cone trace is a genuine directional radiance estimate from the same ray direction,
 		// which is the right answer for "no screen-space hit found".
 		float traceDistance = 0.0f;
-		float escapeTransmittance = 1.0f;
-		const float3 giRadiance = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, rayDir, traceDistance, escapeTransmittance);
-
-		// Whatever fraction of the cone escaped unoccluded sees open sky. Before this, that
-		// fraction contributed nothing, so every reflection ray that left the screen or ran
-		// out of voxel coverage returned black - the reason a wet road reflected black sky
-		// rather than a sky gradient. Weighting by the escape transmittance keeps voxel and
-		// sky radiance summing to a single ray's worth of energy.
-		//
-		// Rays pointing below the horizon are excluded: the sky LUT has no ground term, so
-		// sampling it for a downward ray hands back horizon sky and lights the undersides of
-		// things from below.
-		const float horizonFade = saturate(rayDir.y * 4.0f);
-
-		// escapeTransmittance alone cannot be trusted to mean "open to the sky". The cone trace
-		// terminates on `if (!sampled) break` when it leaves the clipmaps, which exits with
-		// transmittance still at its starting 1.0 - so "I ran out of voxel coverage" and "nothing
-		// occludes this direction" are indistinguishable. It also only reaches ~9.5m with a 0.5m
-		// finest voxel (12 geometric steps), far short of the far wall of a large interior.
-		//
-		// Indoors that read the worst possible way: a wall pixel's reflected ray is roughly
-		// horizontal, the glass curtain wall it points at isn't in the opaque gbuffer so the
-		// screen march finds no hit, the cone trace runs out of coverage and reports "open", and
-		// the pixel is handed full exterior sky. rayDir.y is near-constant across a vertical
-		// wall, so the LUT gets sampled at a near-constant elevation and paints a horizontal
-		// horizon-coloured band straight through the wall.
-		//
-		// Only the screen march can actually prove openness, by terminating ON a sky pixel. Gate
-		// full-strength sky on that proof and fall back to the (unreliable, optimistic) cone
-		// transmittance otherwise, heavily damped. Outdoors this costs nothing: a road pixel
-		// reflecting upward with sky in frame does land on a sky pixel, so it still gets its
-		// full sky gradient rather than the black it used to get.
-		// No proof of sky => no sky. A previous attempt damped the unproven case to 15% of the
-		// cone transmittance instead of zeroing it, on the theory that some sky was better than
-		// none for outdoor rays. 15% of a bright horizon is still a clearly visible band, so the
-		// artifact survived; "unproven" has to mean zero.
-		const float skyConfidence = hit.sawSky ? 1.0f : 0.0f;
-		const float3 skyRadiance =
-			SampleSkyRadiance(rayDir) * skyConfidence * horizonFade * g_ssrSkyFallbackStrength;
+		const float3 giRadiance = ConeTraceVoxelGI(worldPos + worldNormal * 0.25f, rayDir, traceDistance);
 
 		didReflect = true;
 		hitDistance = max(traceDistance, 8.0f);
-		// Path classification (r_ssrDebugSkyHits 2): CYAN = ray hit nothing on screen and fell
-		// through to the voxel cone trace / sky-LUT fallback.
-		if (g_ssrDebugSkyHits >= 1.5f)
-			return float4(0.0f, 20.0f, 20.0f, 1.0f);
-		return float4(giRadiance + skyRadiance, 1.0f);
+		return float4(giRadiance, 1.0f);
 	}
 
 	SSROut ShaderMain(UIPixelInput input)
 	{
 		SSROut ssr = (SSROut)0;
-
 
 		const float2 screenPosCanonical = float2(input.position.x / (float)g_screenWidth, input.position.y / (float)g_screenHeight);
 
@@ -803,7 +656,7 @@
 		// NOT double-count voxel GI even though DiffuseGI runs immediately before SSR.
 		// More rays per pixel would converge faster but NRD's spatial+temporal denoising on
 		// the diffuse channel already integrates across pixels and frames, so 1 is enough.
-		const uint DiffuseRays = 0u;
+		const uint DiffuseRays = 1u;
 		const uint SpecularRays = 1u;
 
 		// Gate diffuse SSR on Fresnel-derived diffuse weight luminance. Skip pure metals and
@@ -866,7 +719,7 @@
 					true,
 					instanceID);
 
-				if(didReflect)
+				//if(didReflect)
 				{
 					specularAccum += reflected.rgb;
 					specularHitDistAccum += hitDistance;
