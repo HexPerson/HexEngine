@@ -359,15 +359,6 @@
 			// frustum-far value into normal.w, so depthDelta stays negative), which is why a
 			// glossy floor reflected sky-through-a-window as black.
 			//
-			// The old didHitSky EARLY-RETURN was removed because it caused bright blue
-			// streaks: a vertical ray from the floor projects onto screen pixels that include
-			// the window within a step or two, while in 3D the ray is still centimetres off
-			// the floor, so it returned sky before it could reach the wall. The fix is not to
-			// re-add an early return - it is to RECORD the sighting and keep marching. Real
-			// geometry still wins, because a genuine depth hit returns immediately below.
-			// Only if the ray finishes having hit nothing solid does the recorded sky get
-			// used, and only past a minimum distance so a floor pixel can't grab the window
-			// sitting right next to it in screen space.
 			// Sky must be able to WIN over geometry, which means returning here rather than
 			// recording and marching on. That was the bug in the first attempt at this: with
 			// the sky handled after the loop, any real depth hit returns first, so in an
@@ -380,7 +371,33 @@
 			// blue streaking that commit was fixing. Keeping the early return but requiring
 			// the ray to have genuinely travelled g_ssrSkyHitMinDistance first gives the
 			// original's behaviour without the streaks.
-			if (actualDepth >= (g_frustumDepths[3] - 0.5f) &&
+			// SkySphere writes TWO independent sky markers: norm.w = g_frustumDepths[3] and
+			// diff.a = -1 (also pos.a = -1). Test both, because the depth marker compares
+			// against a per-frame cbuffer value and is only reliable if the sky pass and this
+			// pass observed the same one; the diffuse marker is an absolute constant.
+			const bool isSkyByDepth = (actualDepth >= (g_frustumDepths[3] - 0.5f));
+			const bool isSkyByAlpha = (GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, fragTex, 0).w < -0.5f);
+			const bool isSkyPixel = isSkyByDepth || isSkyByAlpha;
+
+			// Diagnostic (r_ssrDebugSkyHits):
+			//   MAGENTA = sky hit accepted
+			//   GREEN   = sky pixel seen but rejected by the distance guard
+			//   BLUE    = sky by the diffuse (-1) marker only, i.e. the depth marker missed it
+			// Nothing at all means the ray never samples a sky pixel by either marker.
+			if (g_ssrDebugSkyHits > 0.5f && isSkyPixel)
+			{
+				result.didHit = true;
+				result.hitDistance = max(totalDistance, 1.0f);
+				if (!isSkyByDepth)
+					result.colour = float3(0.0f, 0.0f, 20.0f);
+				else if (totalDistance >= g_ssrSkyHitMinDistance && g_ssrSkyHitMinDistance > 0.0f)
+					result.colour = float3(20.0f, 0.0f, 20.0f);
+				else
+					result.colour = float3(0.0f, 20.0f, 0.0f);
+				return result;
+			}
+
+			if (isSkyPixel &&
 			    totalDistance >= g_ssrSkyHitMinDistance &&
 			    g_ssrSkyHitMinDistance > 0.0f)
 			{
@@ -461,7 +478,8 @@
 				const float3 hitColour = g_beautyTexture.SampleLevel(g_textureSampler, refinedTex, 0).rgb;
 
 				result.didHit = true;
-				result.colour = hitColour;
+				// Path classification (r_ssrDebugSkyHits 2): RED = real screen-space depth hit.
+				result.colour = (g_ssrDebugSkyHits >= 1.5f) ? float3(20.0f, 0.0f, 0.0f) : hitColour;
 				result.hitDistance = max(length(hitPosWS.xyz - rayStart), refinedDistance);
 				return result;
 			}
@@ -478,7 +496,10 @@
 		{
 			result.didHit = true;
 			result.didFallback = true;
-			result.colour = g_beautyTexture.SampleLevel(g_textureSampler, lastInScreenTex, 0).rgb;
+			// Path classification: YELLOW = loop-exhaustion last-in-screen fallback.
+			result.colour = (g_ssrDebugSkyHits >= 1.5f)
+				? float3(20.0f, 20.0f, 0.0f)
+				: g_beautyTexture.SampleLevel(g_textureSampler, lastInScreenTex, 0).rgb;
 			result.hitDistance = max(lastInScreenDistance, 1.0f);
 		}
 
@@ -630,12 +651,17 @@
 
 		didReflect = true;
 		hitDistance = max(traceDistance, 8.0f);
+		// Path classification (r_ssrDebugSkyHits 2): CYAN = ray hit nothing on screen and fell
+		// through to the voxel cone trace / sky-LUT fallback.
+		if (g_ssrDebugSkyHits >= 1.5f)
+			return float4(0.0f, 20.0f, 20.0f, 1.0f);
 		return float4(giRadiance + skyRadiance, 1.0f);
 	}
 
 	SSROut ShaderMain(UIPixelInput input)
 	{
 		SSROut ssr = (SSROut)0;
+
 
 		const float2 screenPosCanonical = float2(input.position.x / (float)g_screenWidth, input.position.y / (float)g_screenHeight);
 

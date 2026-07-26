@@ -246,6 +246,8 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// sky-hit path. 0 disables sky hits entirely.
 	#define g_ssrSkyHitMinDistance   (g_reflectionParams.y)
 	#define g_ssrSkyHitStrength      (g_reflectionParams.z)
+	// Diagnostic: paint SSR sky hits magenta (accepted) / green (distance-rejected).
+	#define g_ssrDebugSkyHits        (g_reflectionParams.w)
 	#define g_iblSkySpecular         (g_iblParams.x)
 	#define g_iblSkyDiffuse          (g_iblParams.y)
 

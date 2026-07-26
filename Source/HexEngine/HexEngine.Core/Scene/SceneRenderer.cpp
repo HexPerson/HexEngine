@@ -175,6 +175,18 @@ namespace HexEngine
 	HVar r_ssrSkyHitMinDistance("r_ssrSkyHitMinDistance", "Min world distance before an SSR ray may accept a sky pixel as a hit (0 = disable)", 2.0f, 0.0f, 64.0f);
 	HVar r_ssrSkyHitStrength("r_ssrSkyHitStrength", "Scale applied to screen-space sky hits in SSR", 1.0f, 0.0f, 4.0f);
 
+	// Diagnostic for "why is my glossy floor not reflecting the sky". Paints SSR sky hits
+	// MAGENTA where accepted and GREEN where a sky pixel was seen but rejected by
+	// r_ssrSkyHitMinDistance. No colour at all means the sky test never matched, which points
+	// at the gbuffer behind the window carrying real geometry depth rather than the sky's
+	// frustum-far marker.
+	// MUST be an int HVar, not a bool: a bool clamps every value to 0/1, so modes 2 and 3
+	// silently became mode 1 and their branches never ran.
+	//   1 = sky markers   : magenta accepted / green distance-rejected / blue alpha-marker-only
+	//   2 = path classify : red depth-hit / yellow last-in-screen fallback / cyan miss
+	//   3 = cbuffer test  : flood the specular output unconditionally
+	HVar r_ssrDebugSkyHits("r_ssrDebugSkyHits", "Debug SSR: 1=sky markers, 2=path classify, 3=cbuffer flood test", (int32_t)0, (int32_t)0, (int32_t)3);
+
 	// Sky image-based lighting. The engine had no IBL at all - ambient was a flat
 	// diffuse-only constant - so no surface had any environment response. Specular defaults
 	// ON because that is the term that restores missing reflections; diffuse defaults OFF
@@ -1957,6 +1969,12 @@ namespace HexEngine
 		{
 			PerFrameConstantBuffer bufferData = {};
 
+			// TEMPORARY: hard numbers for the cbuffer layout. Hand-computing the HLSL side
+			// gives total 1360 with _reflectionParams at 1328; if C++ disagrees, that is the
+			// divergence making the appended tail unreadable from the shader.
+			// Layout verified 2026-07-26: sizeof 1360, _taaParams@1312, _reflectionParams@1328,
+			// _iblParams@1344 - which matches HLSL's packing of the same declaration exactly,
+			// so appending float4s at the end of this struct is sound.
 			// Camera data
 			bufferData._viewMatrix = viewMatrix.Transpose();
 			bufferData._projectionMatrix = projectionMatrix.Transpose();
@@ -2220,7 +2238,7 @@ namespace HexEngine
 				r_ssrSkyFallbackStrength._val.f32,
 				r_ssrSkyHitMinDistance._val.f32,
 				r_ssrSkyHitStrength._val.f32,
-				0.0f);
+				(float)r_ssrDebugSkyHits._val.i32);
 
 			bufferData._iblParams = math::Vector4(
 				r_iblSkySpecular._val.f32, r_iblSkyDiffuse._val.f32, 0.0f, 0.0f);
