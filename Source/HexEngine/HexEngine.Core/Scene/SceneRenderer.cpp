@@ -204,9 +204,11 @@ namespace HexEngine
 	// EnvMapCommon.shader). Inert until the deferred IBL resolve consumes it,
 	// so defaulting on only costs the small prefilter draw.
 	HVar r_iblSkyEnv("r_iblSkyEnv", "Generate the prefiltered sky environment atlas each frame", true, false, true);
-	// 1 = sky atlas, 2 = the frame's active reflection probe atlas. Int, not bool:
-	// a bool HVar clamps every value to 0/1, so mode 2 would silently become 1.
-	HVar r_iblSkyEnvDebug("r_iblSkyEnvDebug", "Overlay an env atlas: 1=sky, 2=active probe", (int32_t)0, (int32_t)0, (int32_t)2);
+	// 1 = sky atlas, 2 = active probe atlas, 3 = the active probe's RAW capture
+	// face 0 (before prefiltering - answers "is the rig even framing the room?").
+	// Int, not bool: a bool HVar clamps every value to 0/1, so modes 2 and 3
+	// would silently become 1.
+	HVar r_iblSkyEnvDebug("r_iblSkyEnvDebug", "Overlay an env atlas: 1=sky, 2=active probe, 3=probe raw face 0", (int32_t)0, (int32_t)0, (int32_t)3);
 
 	// Atlas geometry. Must match ENVMAP_FACE_SIZE / ENVMAP_ROUGHNESS_ROWS in
 	// EnvMapCommon.shader - the shader derives everything from uv, so the only
@@ -3373,16 +3375,26 @@ namespace HexEngine
 			// filtering. Deliberately outside r_debugScene: it's the one image
 			// needed to verify the IBL prefilter.
 			ITexture2D* debugAtlas = nullptr;
+			bool debugIsFace = false;
 			if (r_iblSkyEnvDebug._val.i32 == 1)
 				debugAtlas = _iblSkyEnvMap;
 			else if (r_iblSkyEnvDebug._val.i32 == 2 && _activeProbe != nullptr)
 				debugAtlas = _activeProbe->GetEnvAtlas();
+			else if (r_iblSkyEnvDebug._val.i32 == 3 && _activeProbe != nullptr)
+			{
+				// Raw +X capture face, unprefiltered. If this doesn't look like the
+				// room the probe sits in, the problem is the capture (rig framing /
+				// position), not the prefilter.
+				debugAtlas = _activeProbe->GetFace(0);
+				debugIsFace = true;
+			}
 
 			if (debugAtlas != nullptr && canPostProcess)
 			{
 				guiRenderer->FillTexturedQuad(
 					debugAtlas, 10, 10,
-					kIblEnvMapFaceSize, kIblEnvMapFaceSize * kIblEnvMapRows,
+					debugIsFace ? 512 : kIblEnvMapFaceSize,
+					debugIsFace ? 512 : kIblEnvMapFaceSize * kIblEnvMapRows,
 					math::Color(1, 1, 1, 1));
 
 				//guiRenderer->FillTexturedQuad(_dlssTarget, 150 * 7 + 20, 10, 150, 150, math::Color(1, 1, 1, 1));
