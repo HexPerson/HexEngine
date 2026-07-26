@@ -694,7 +694,11 @@
 		// transmittance otherwise, heavily damped. Outdoors this costs nothing: a road pixel
 		// reflecting upward with sky in frame does land on a sky pixel, so it still gets its
 		// full sky gradient rather than the black it used to get.
-		const float skyConfidence = hit.sawSky ? 1.0f : (escapeTransmittance * 0.15f);
+		// No proof of sky => no sky. A previous attempt damped the unproven case to 15% of the
+		// cone transmittance instead of zeroing it, on the theory that some sky was better than
+		// none for outdoor rays. 15% of a bright horizon is still a clearly visible band, so the
+		// artifact survived; "unproven" has to mean zero.
+		const float skyConfidence = hit.sawSky ? 1.0f : 0.0f;
 		const float3 skyRadiance =
 			SampleSkyRadiance(rayDir) * skyConfidence * horizonFade * g_ssrSkyFallbackStrength;
 

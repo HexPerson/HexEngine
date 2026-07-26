@@ -164,7 +164,16 @@ namespace HexEngine
 	// Environment fallback for specular rays that find no screen-space hit and no voxel
 	// coverage. Those rays used to return black, which is why a wet road reflected the sky
 	// as black rather than a sky gradient. 0 restores that behaviour.
-	HVar r_ssrSkyFallbackStrength("r_ssrSkyFallbackStrength", "Strength of the sky-LUT fallback for SSR rays that hit nothing", 1.0f, 0.0f, 4.0f);
+	// DISABLED BY DEFAULT (was 1.0). Every screen-space test for "this ray reached the sky" is
+	// unsound indoors: the opaque gbuffer behind transparent glass holds the skysphere, so a wall
+	// pixel's horizontal reflected ray crosses a window in screen space, "sees sky", and gets
+	// handed horizon radiance - painting the horizon straight through the wall. Marching further,
+	// distance-gating, direction-sampling the LUT instead of the beauty buffer, and gating on
+	// "the march ended on a sky pixel" were all tried; each moved the artifact rather than
+	// removing it, because they all rest on the same false premise. Needs real occlusion data
+	// (reflection probes, or a cone trace with coverage that actually reaches the far wall) - not
+	// another screen-space heuristic. Left in place, off, for that work.
+	HVar r_ssrSkyFallbackStrength("r_ssrSkyFallbackStrength", "Strength of the sky-LUT fallback for SSR rays that hit nothing", 0.0f, 0.0f, 4.0f);
 
 	// Screen-space sky hits: a reflection ray that passes over sky (e.g. a glossy floor
 	// reflecting sky through a window) should return that sky. An earlier version of this
@@ -172,7 +181,10 @@ namespace HexEngine
 	// floor ray sees the window in screen space long before it reaches it in 3D. Requiring a
 	// minimum travelled distance - and letting real geometry hits still win - fixes that.
 	// Raise if streaks reappear; 0 disables sky hits.
-	HVar r_ssrSkyHitMinDistance("r_ssrSkyHitMinDistance", "Min world distance before an SSR ray may accept a sky pixel as a hit (0 = disable)", 2.0f, 0.0f, 64.0f);
+	// DISABLED BY DEFAULT (was 2.0) - see r_ssrSkyFallbackStrength above for why the whole
+	// screen-space sky-detection approach is unsound. 0 disables the sky-pixel branch entirely,
+	// which is main's behaviour.
+	HVar r_ssrSkyHitMinDistance("r_ssrSkyHitMinDistance", "Min world distance before an SSR ray may accept a sky pixel as a hit (0 = disable)", 0.0f, 0.0f, 64.0f);
 	HVar r_ssrSkyHitStrength("r_ssrSkyHitStrength", "Scale applied to screen-space sky hits in SSR", 1.0f, 0.0f, 4.0f);
 
 	// Diagnostic for "why is my glossy floor not reflecting the sky". Paints SSR sky hits
