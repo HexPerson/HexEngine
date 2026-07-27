@@ -292,6 +292,17 @@ namespace HexEngine
 	// stacked behaviour byte for byte, which is what makes the A/B measurable.
 	HVar r_iblComposeSSR("r_iblComposeSSR", "Compose environment specular with SSR in the resolve instead of stacking the two", true, false, true);
 
+	// Declared in ReflectionProbeComponent.cpp - the probe dumps the rig camera's
+	// render target and each downsampled face; this file dumps the beauty/gbuffer
+	// they came from, so one run covers the whole chain.
+	extern HVar r_iblProbeDumpCapture;
+
+	// Re-bake every probe in the scene. A probe only requests a capture on
+	// deserialize, so without this the sole way to retry one is to reload the
+	// project - which is a minute per iteration when you're bisecting a capture
+	// bug. Self-clearing: set it, the next frame requests the captures.
+	HVar r_iblProbeRecapture("r_iblProbeRecapture", "Request a fresh 6-face capture for every reflection probe in the scene", false, false, true);
+
 	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
 	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
 	// y-down) and matches what Streamline and NRD do with the same buffer, but it ghosts
@@ -1392,8 +1403,16 @@ namespace HexEngine
 		if (camera->IsEnvironmentCapture())
 		{
 			const auto& cvp = camera->GetViewport();
-			LOG_INFO("RenderScene: ENV CAPTURE camera, viewport %.0fx%.0f, rt=%p",
-				cvp.width, cvp.height, (void*)camera->GetRenderTarget());
+			// Where the rig actually IS and is LOOKING, not just that it ran. A
+			// capture that renders a flat wash is either framing nothing or
+			// framing it from the wrong place, and those need different fixes.
+			const math::Vector3 entPos = camera->GetEntity() != nullptr
+				? camera->GetEntity()->GetWorldTM().Translation() : math::Vector3::Zero;
+			const math::Vector3 look = camera->GetLookDir();
+			LOG_INFO("RenderScene: ENV CAPTURE camera, viewport %.0fx%.0f, rt=%p, eye=(%.2f, %.2f, %.2f), look=(%.2f, %.2f, %.2f), near=%.2f far=%.2f",
+				cvp.width, cvp.height, (void*)camera->GetRenderTarget(),
+				entPos.x, entPos.y, entPos.z, look.x, look.y, look.z,
+				camera->GetNearZ(), camera->GetFarZ());
 		}
 
 		if (!_sphereEntity)
@@ -3346,8 +3365,47 @@ namespace HexEngine
 						// radiance than a tonemapped LDR frame would be.
 						GFX_PERF_BEGIN(0xFFFFFFFF, L"EnvCapture Copy");
 						const auto& capVp = _currentCamera->GetViewport();
-						RECT region{ 0, 0, (LONG)capVp.width, (LONG)capVp.height };
-						_beautyRT->CopyTo(_currentCamera->GetRenderTarget(), region, region);
+						// The capture rasterizes at the FULL buffer size (it has to -
+						// the fullscreen passes key their gbuffer UVs off the
+						// viewport size), but a probe face is the centred SQUARE of
+						// that view: with a 90-degree vertical FOV, the central
+						// height x height crop is exactly the 90x90 face the
+						// prefilter reconstructs. Take that square out of the middle
+						// and land it at the origin of the camera's square target.
+						const LONG capW = (LONG)capVp.width;
+						const LONG capH = (LONG)capVp.height;
+						const LONG side = std::min(capW, capH);
+						const LONG originX = (capW - side) / 2;
+						const LONG originY = (capH - side) / 2;
+
+						RECT region{ originX, originY, originX + side, originY + side };
+						RECT destRegion{ 0, 0, side, side };
+
+						// Capture-chain dump, source side. The probe's own dump
+						// shows what the rig camera's target ended up with; this
+						// shows what beauty and the gbuffer held at the moment we
+						// copied, which separates "the capture never rendered the
+						// room" from "the copy took the wrong pixels".
+						if (r_iblProbeDumpCapture._val.b)
+						{
+							static int32_t sDumpIdx = 0;
+							const std::string tag = std::to_string(sDumpIdx++);
+							LOG_INFO("probe dump %s: beauty %dx%d, gbufDiffuse %dx%d, capture viewport %.0fx%.0f",
+								tag.c_str(),
+								(int32_t)_beautyRT->GetWidth(), (int32_t)_beautyRT->GetHeight(),
+								_gbuffer.GetDiffuse() != nullptr ? (int32_t)_gbuffer.GetDiffuse()->GetWidth() : -1,
+								_gbuffer.GetDiffuse() != nullptr ? (int32_t)_gbuffer.GetDiffuse()->GetHeight() : -1,
+								capVp.width, capVp.height);
+							try { _beautyRT->SaveToFile(fs::path("probe_dump_beauty_" + tag + ".png")); }
+							catch (const std::exception& e) { LOG_WARN("probe dump: beauty %s failed: %s", tag.c_str(), e.what()); }
+							if (_gbuffer.GetDiffuse() != nullptr)
+							{
+								try { _gbuffer.GetDiffuse()->SaveToFile(fs::path("probe_dump_gbuf_" + tag + ".png")); }
+								catch (const std::exception& e) { LOG_WARN("probe dump: gbuf %s failed: %s", tag.c_str(), e.what()); }
+							}
+						}
+
+						_beautyRT->CopyTo(_currentCamera->GetRenderTarget(), region, destRegion);
 						GFX_PERF_END();
 					}
 					else
@@ -5123,6 +5181,19 @@ namespace HexEngine
 		std::vector<ReflectionProbeComponent*> probes;
 		if (!_currentScene->GetComponents<ReflectionProbeComponent>(probes))
 			return;
+
+		// Manual re-bake trigger. Self-clearing so it reads as a verb rather than
+		// a mode - setting it once queues one capture per probe.
+		if (r_iblProbeRecapture._val.b)
+		{
+			r_iblProbeRecapture._val.b = false;
+			for (auto* probe : probes)
+			{
+				if (probe != nullptr)
+					probe->RequestCapture();
+			}
+			LOG_INFO("r_iblProbeRecapture: queued a fresh capture for %d probe(s)", (int32_t)probes.size());
+		}
 
 		// One prefilter per frame: it's a bake step triggered by a capture
 		// completing, and spreading multiple probes across frames keeps a

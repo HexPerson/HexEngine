@@ -49,6 +49,15 @@ namespace HexEngine
 
 	const ReflectionProbeComponent* ReflectionProbeComponent::s_captureInFlight = nullptr;
 
+	// Capture-chain dump. A probe that reports six banked faces and a completed
+	// prefilter but hands the shader an all-black atlas can be failing at any of
+	// four points - the rig's scene render, the post chain's copy into the rig
+	// camera's target, the downsample into the face, or the prefilter. Set this
+	// to 1 and the next capture writes the rig render target and each downsampled
+	// face to <cwd>/probe_dump_*.png, which tells you which of the four it is
+	// instead of leaving you to infer it from the final image.
+	HVar r_iblProbeDumpCapture("r_iblProbeDumpCapture", "Dump each probe capture face + its source render target to disk", false, false, true);
+
 	ReflectionProbeComponent::ReflectionProbeComponent(Entity* entity) :
 		UpdateComponent(entity)
 	{
@@ -132,8 +141,17 @@ namespace HexEngine
 		_rigEntity->SetFlag(EntityFlags::DoNotSave);
 
 		_rigCamera = _rigEntity->AddComponent<Camera>();
-		// 90-degree square faces, near matched to the main camera's default.
-		_rigCamera->SetPespectiveParameters(ToRadian(90.0f), 1.0f, 0.1f, 1000.0f);
+		// 90-degree faces, near matched to the main camera's default. The aspect
+		// and viewport are set together further down.
+		//
+		// DEGREES, not radians: ConstructProjectionMatrix applies ToRadian(_fov)
+		// itself (IconService and the camera default both pass degrees). Passing
+		// ToRadian(90) here converted twice - 90 degrees became 1.5708, which
+		// became 1.57 DEGREES - so each face was a near-telephoto crop of a wall
+		// patch a fraction of a metre across instead of a 90-degree view of the
+		// room. Six of those prefilter to a flat, structureless atlas, which is
+		// what made an indoor probe kill the environment term instead of
+		// supplying it.
 		// Capture at the LARGEST SQUARE that fits the shared render buffers, not at
 		// the small face resolution.
 		//
@@ -151,10 +169,28 @@ namespace HexEngine
 		// a bake, not a per-frame cost, and correctness beats cheapness here. The
 		// faces are downsampled to kProbeFaceSize on the way out (see Update) so
 		// only ~3 MB of probe textures are retained rather than ~200 MB.
+		// Rasterize at the FULL buffer size, not at a square sub-rect of it.
+		//
+		// The fullscreen passes take their gbuffer UVs from the viewport size
+		// (g_screenWidth/g_screenHeight) and sample the shared gbuffer over 0..1,
+		// so those two only agree when the viewport IS the buffer. A square
+		// viewport on a 16:9 buffer made every lighting pass read the whole
+		// gbuffer squashed into the capture's width - the capture's own pixels
+		// mixed with whatever the main camera left in the rest of it, which is
+		// why captures came out as vertical bands of smeared room.
+		//
+		// So render full-size with the buffer's aspect and bank the CENTRED
+		// square, which with a 90-degree vertical FOV is exactly the 90x90 face
+		// the prefilter expects. The render target stays square because that
+		// square is all we keep - see the copy in
+		// SceneRenderer::RenderPostProcessing's environment-capture branch.
 		uint32_t bbW = 0, bbH = 0;
 		g_pEnv->_graphicsDevice->GetBackBufferDimensions(bbW, bbH);
 		const float square = (float)std::min(bbW, bbH);
-		_rigCamera->SetViewport(math::Viewport(0.0f, 0.0f, square, square, 0.0f, 1.0f));
+		_rigCamera->SetPespectiveParameters(90.0f, (float)bbW / (float)bbH, 0.1f, 1000.0f);
+		_rigCamera->SetViewportWithTargetSize(
+			math::Viewport(0.0f, 0.0f, (float)bbW, (float)bbH, 0.0f, 1.0f),
+			(int32_t)square, (int32_t)square);
 		// Marks this as an offline capture: the renderer skips SSR/NRD and TAA
 		// for it, and won't sample reflection probes into the capture. Without
 		// this the NRD denoiser asserts - its buffers are main-camera sized while
@@ -304,7 +340,49 @@ namespace HexEngine
 			if (_faces[_pendingFace] != nullptr)
 			{
 				_faces[_pendingFace]->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+
+				// The viewport has to be the FACE's size before the downsample.
+				//
+				// BlendTo_Additive binds the destination and draws a quad that
+				// spans NDC, but it never touches the viewport - so the draw uses
+				// whatever was left bound, which during a game-update tick is the
+				// main camera's full-size viewport. A full-NDC quad rasterized
+				// with a 3840x2071 viewport into a 256x256 target keeps only the
+				// part that lands inside the target, so the face received the top
+				// 256/3840 x 256/2071 - about 6.7% x 12.4% - of the capture,
+				// stretched, instead of the whole thing downsampled. That is the
+				// "flat wash that varies only slightly per direction" this file's
+				// EnsureRig comment describes; those two percentages are literally
+				// the ratios quoted there. Enlarging the capture viewport made the
+				// crop bigger without making it a downsample, so the faces stayed
+				// unusable and the prefiltered atlas stayed ~0.003 - dark enough
+				// that an indoor probe contributed nothing at all.
+				D3D11_VIEWPORT faceViewport;
+				faceViewport.TopLeftX = 0.0f;
+				faceViewport.TopLeftY = 0.0f;
+				faceViewport.Width = (float)kProbeFaceSize;
+				faceViewport.Height = (float)kProbeFaceSize;
+				faceViewport.MinDepth = 0.0f;
+				faceViewport.MaxDepth = 1.0f;
+				g_pEnv->_graphicsDevice->SetViewport(faceViewport);
+
 				rt->BlendTo_Additive(_faces[_pendingFace]);
+			}
+
+			// Capture-chain dump: the rig's render target (what the scene render
+			// + post chain produced) next to the downsampled face. If the RT has
+			// the room in it and the face doesn't, the downsample is at fault; if
+			// neither has it, the capture render is.
+			if (r_iblProbeDumpCapture._val.b)
+			{
+				const std::string tag = std::to_string(_pendingFace);
+				try { rt->SaveToFile(fs::path("probe_dump_rt_" + tag + ".png")); }
+				catch (const std::exception& e) { LOG_WARN("probe dump: rt face %s failed: %s", tag.c_str(), e.what()); }
+				if (_faces[_pendingFace] != nullptr)
+				{
+					try { _faces[_pendingFace]->SaveToFile(fs::path("probe_dump_face_" + tag + ".png")); }
+					catch (const std::exception& e) { LOG_WARN("probe dump: face %s failed: %s", tag.c_str(), e.what()); }
+				}
 			}
 
 			if (_pendingFace == 5)

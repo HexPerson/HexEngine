@@ -113,6 +113,16 @@ namespace HexEngine
 		const dx::BoundingSphere& GetFrustumSphere() const;
 		const math::Viewport& GetViewport() const;
 		void SetViewport(const math::Viewport& vp);
+		// Render at `vp` but size the render target independently.
+		//
+		// The deferred fullscreen passes derive their gbuffer UVs from the
+		// VIEWPORT size (g_screenWidth/g_screenHeight) while sampling the
+		// full-size gbuffer over 0..1, so a camera whose viewport is smaller than
+		// the shared buffers samples the wrong region entirely. An offscreen
+		// capture therefore has to rasterize at the full buffer size even when it
+		// only wants a square sub-rect of the result - which is what this lets it
+		// say. See ReflectionProbeComponent::EnsureRig.
+		void SetViewportWithTargetSize(const math::Viewport& vp, int32_t targetWidth, int32_t targetHeight);
 		bool HasMovedThisFrame();
 		void ResetHasMovedThisFrame();
 

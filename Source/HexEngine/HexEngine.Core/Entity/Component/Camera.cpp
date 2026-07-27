@@ -183,6 +183,13 @@ namespace HexEngine
 		CreateRenderTarget((int32_t)vp.width, (int32_t)vp.height);
 	}
 
+	void Camera::SetViewportWithTargetSize(const math::Viewport& vp, int32_t targetWidth, int32_t targetHeight)
+	{
+		_viewport = vp;
+
+		CreateRenderTarget(targetWidth, targetHeight);
+	}
+
 	void Camera::Update(float frameTime)
 	{
 		if (_dlssValueChanged)
@@ -298,11 +305,74 @@ namespace HexEngine
 
 		transform->SetRotation(rot);
 
-		auto euler = rot.ToEuler();
+		// Setting the transform's rotation is not enough on its own: UpdateRotation
+		// runs every frame, rebuilds the rotation from _cameraAngles via
+		// CreateFromYawPitchRoll, and derives _lookDir from that - so it overwrites
+		// whatever was set here unless _cameraAngles agrees. Feed the angles back.
+		//
+		// This used to read the angles back with Quaternion::ToEuler, which was
+		// wrong three times over: it passed euler.x to SetYaw and euler.y to
+		// SetPitch (ToEuler returns x = pitch, y = yaw), it passed RADIANS into
+		// angles that UpdateRotation feeds through ToRadian as degrees, and even
+		// with both of those corrected ToEuler still disagrees with
+		// CreateFromYawPitchRoll at the poles - measured, it hands back a pitch of
+		// 45 degrees for a straight-up look, and a spurious roll of -180 for +Z.
+		//
+		// The symptom was that a reflection probe, which asks for the six axis
+		// directions one per capture face, got (0, 0, -1) with a couple of degrees
+		// of jitter for ALL SIX faces. Every probe captured the same wall six
+		// times and prefiltered to a near-uniform atlas; because a probe REPLACES
+		// the sky term inside its box, that atlas then zeroed environment lighting
+		// for everything indoors.
+		//
+		// So invert UpdateRotation's own formula instead of trusting ToEuler.
+		// UpdateRotation builds CreateFromYawPitchRoll(yaw, pitch, roll) and takes
+		// _lookDir = Forward * R, with Forward = (0, 0, -1), which expands to
+		//
+		//     lookDir = (-cos(pitch) sin(yaw), sin(pitch), -cos(pitch) cos(yaw))
+		//
+		// and that inverts exactly.
+		const math::Vector3 f = [&]
+		{
+			math::Vector3 v = forward;
+			v.Normalize();
+			return v;
+		}();
 
-		SetYaw(euler.x);
-		SetPitch(euler.y);
-		SetRoll(euler.z);
+		const float pitchRad = asinf(std::clamp(f.y, -1.0f, 1.0f));
+		const float cosPitch = sqrtf(std::max(0.0f, 1.0f - f.y * f.y));
+
+		float yawRad = 0.0f;
+		float rollRad = 0.0f;
+
+		if (cosPitch > 1e-4f)
+		{
+			yawRad = atan2f(-f.x, -f.z);
+
+			// Roll is whatever twist about the view axis takes the zero-roll up
+			// vector onto the requested one.
+			const float sp = f.y;
+			math::Vector3 zeroRollUp(sp * sinf(yawRad), cosPitch, sp * cosf(yawRad));
+			zeroRollUp.Normalize();
+
+			math::Vector3 wantUp = up;
+			wantUp.Normalize();
+
+			rollRad = atan2f(zeroRollUp.Cross(wantUp).Dot(f), zeroRollUp.Dot(wantUp));
+		}
+		else
+		{
+			// Looking straight up or down: pitch is +/-90, yaw and roll are the
+			// same degree of freedom, so spend it all on yaw and pick the one that
+			// lands the camera's up on the requested up. At pitch +90 the world-space
+			// up is (sin yaw, 0, cos yaw); at -90 it is (-sin yaw, 0, -cos yaw).
+			yawRad = (f.y > 0.0f) ? atan2f(up.x, up.z) : atan2f(-up.x, -up.z);
+			rollRad = 0.0f;
+		}
+
+		SetYaw(ToDegree(yawRad));
+		SetPitch(ToDegree(pitchRad));
+		SetRoll(ToDegree(rollRad));
 
 		//transform->SetRotation(math::Quaternion::CreateFromRotationMatrix(basis));
 	}
@@ -393,7 +463,32 @@ namespace HexEngine
 	{
 		auto transform = GetEntity()->GetComponent<Transform>();
 
-		math::Vector3 up = _rotationMatrix.Up();		
+		// Up comes from the camera's actual rotation, not from _rotationMatrix.
+		//
+		// _rotationMatrix is declared and never assigned (its one assignment in
+		// UpdateRotation is commented out), so it is the identity and this always
+		// handed CreateLookAt a world up of (0, 1, 0). For any normal gameplay
+		// camera that is harmless - it never looks straight up or down. For a
+		// reflection probe's +Y / -Y capture faces it is fatal: the look direction
+		// is then PARALLEL to up, CreateLookAt's cross product degenerates, and
+		// the face renders garbage.
+		//
+		// Deriving up from the rotation keeps the old behaviour exactly for a
+		// level camera (an unrotated camera's up IS (0, 1, 0)) while staying valid
+		// at the poles. The final guard covers a roll of exactly +/-90 degrees,
+		// where the derived up is parallel to the look direction instead.
+		math::Vector3 up = math::Vector3::Transform(
+			math::Vector3::Up, transform->GetRotation());
+		up.Normalize();
+
+		if (fabsf(up.Dot(_lookDir)) > 0.999f)
+		{
+			const math::Vector3 fallback = (fabsf(_lookDir.y) > 0.999f)
+				? math::Vector3(0.0f, 0.0f, 1.0f)
+				: math::Vector3::Up;
+			up = fallback - _lookDir * fallback.Dot(_lookDir);
+			up.Normalize();
+		}
 
 		_viewMatrix = math::Matrix::CreateLookAt(transform->GetPosition() + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
 		_viewMatrixBehind = math::Matrix::CreateLookAt(transform->GetPosition() - (_lookDir * gViewMatrixBehindDistance) + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
