@@ -239,7 +239,13 @@ namespace HexEngine
 	// That was shipped at 1.0 (unverified) and is exactly the "horizon through walls" +
 	// "weird blue reflections inside" report - it survived r_ssr 0 because it never was
 	// SSR. Enable per-scene outdoors, or wait for probes to gate it indoors.
-	HVar r_iblSkySpecular("r_iblSkySpecular", "Sky specular IBL strength (split-sum environment specular)", 0.0f, 0.0f, 4.0f);
+	// NOW DEFAULTS ON. This was disabled when it sampled the RAW sky-view LUT,
+	// whose sharp horizon line got painted across interior walls. It now samples
+	// the prefiltered atlas (verified: soft, roughness-correct, no horizon band),
+	// and probes replace it entirely inside their volumes. Leaving it off meant an
+	// outward-facing window pane whose SSR ray left the screen reflected literal
+	// black - the "black window panes" report.
+	HVar r_iblSkySpecular("r_iblSkySpecular", "Sky specular IBL strength (split-sum environment specular)", 1.0f, 0.0f, 4.0f);
 	HVar r_iblSkyDiffuse("r_iblSkyDiffuse", "Sky diffuse IBL strength (unoccluded - floods interiors, prefer probes)", 0.0f, 0.0f, 4.0f);
 	// Probes are captured radiance with real occlusion baked in, so unlike the sky
 	// terms above they are safe to default ON: a scene with no probes is unaffected
@@ -254,7 +260,11 @@ namespace HexEngine
 	// contrast gone. Specular is the term that actually restores reflections.
 	// A real fix needs a cosine-convolved irradiance probe (P1-C's SH), not a GGX
 	// roughness-1 row standing in for one.
-	HVar r_iblProbeDiffuse("r_iblProbeDiffuse", "Reflection probe diffuse strength (flat until P1-C's SH irradiance)", 0.0f, 0.0f, 4.0f);
+	// NOW DEFAULTS ON. Probe diffuse used the atlas's roughest row - a flat room
+	// average that washed interiors out - so it had to be off. It now uses the
+	// probe's own SH irradiance, integrated from what the probe actually sees, so
+	// it carries its own occlusion and is the correct indoor diffuse term.
+	HVar r_iblProbeDiffuse("r_iblProbeDiffuse", "Reflection probe diffuse strength (per-probe SH irradiance)", 1.0f, 0.0f, 4.0f);
 
 	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
 	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
@@ -3664,6 +3674,11 @@ namespace HexEngine
 					_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
 				// t18 = sky SH irradiance coefficients (P1-C).
 				g_pEnv->_graphicsDevice->SetTexture2D(18, _iblSkySH);
+				// t19/t20 = per-probe SH irradiance for the two selected probes.
+				g_pEnv->_graphicsDevice->SetTexture2D(19,
+					_activeProbe != nullptr ? _activeProbe->GetShTex() : nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(20,
+					_activeProbe2 != nullptr ? _activeProbe2->GetShTex() : nullptr);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
@@ -5069,8 +5084,31 @@ namespace HexEngine
 
 		guiRenderer->EndFrame();
 
+		// Project this probe's atlas into its own SH irradiance (P1-C, locally).
+		// Sky SH is unoccluded and floods interiors; a probe's SH is integrated
+		// from what the probe actually sees, so an indoor probe already knows the
+		// roof is solid. This is what makes diffuse IBL usable inside a building.
+		if (_envSHShader != nullptr)
+		{
+			if (ITexture2D* probeSH = dirty->EnsureShTex(); probeSH != nullptr)
+			{
+				graphics->SetRenderTarget(probeSH);
+
+				D3D11_VIEWPORT shvp;
+				shvp.TopLeftX = 0.0f;
+				shvp.TopLeftY = 0.0f;
+				shvp.Width = 1.0f;
+				shvp.Height = (float)kIblEnvShCoeffs;
+				shvp.MinDepth = 0.0f;
+				shvp.MaxDepth = 1.0f;
+				graphics->SetViewport(shvp);
+
+				guiRenderer->FullScreenTexturedQuad(atlas, _envSHShader.get());
+			}
+		}
+
 		dirty->MarkAtlasPrefiltered();
-		LOG_INFO("ReflectionProbe: prefiltered atlas for '%s' - probe is now selectable",
+		LOG_INFO("ReflectionProbe: prefiltered atlas + SH for '%s' - probe is now selectable",
 			dirty->GetEntity()->GetName().c_str());
 
 		// Restore beauty target + camera viewport (same discipline as

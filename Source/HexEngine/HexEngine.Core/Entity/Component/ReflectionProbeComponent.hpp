@@ -74,6 +74,13 @@ namespace HexEngine
 		ITexture2D* EnsureEnvAtlas();
 		void MarkAtlasPrefiltered() { _atlasDirty = false; _atlasReady = true; }
 
+		// Per-probe SH irradiance (P1-C applied locally). This is the whole point
+		// of probe diffuse: irradiance integrated from what the probe actually
+		// SEES, so an interior probe's SH already knows the roof is solid. Sky SH
+		// is unoccluded and floods interiors; this doesn't.
+		ITexture2D* GetShTex() const { return _shTex; }
+		ITexture2D* EnsureShTex();
+
 		const math::Vector3& GetExtents() const { return _extents; }
 		void SetExtents(const math::Vector3& e) { _extents = e; }
 
@@ -124,5 +131,6 @@ namespace HexEngine
 
 		ITexture2D* _faces[6] = { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
 		ITexture2D* _envAtlas = nullptr;
+		ITexture2D* _shTex = nullptr;
 	};
 }

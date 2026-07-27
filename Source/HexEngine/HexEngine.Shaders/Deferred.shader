@@ -55,6 +55,11 @@
 	// the real cosine-convolved diffuse term; the atlas's roughest row was only
 	// ever a stand-in for it.
 	Texture2D g_iblSkySHTex : register(t18);
+	// Per-probe SH irradiance for the two selected probes. Unlike the sky SH these
+	// are integrated from what each probe actually sees, so they already encode
+	// their own occlusion - an indoor probe's irradiance knows the roof is solid.
+	Texture2D g_iblProbeSH  : register(t19);
+	Texture2D g_iblProbeSH2 : register(t20);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -451,17 +456,23 @@
 					float3 probeSpec = 0.0f.xxx;
 					float3 probeDiff = 0.0f.xxx;
 
+					// Diffuse comes from each probe's own SH irradiance, not from the
+					// atlas's roughest row. That's the term that carries the probe's
+					// occlusion: sky SH says "the whole hemisphere is bright sky", a
+					// probe's SH says "mostly walls and ceiling, sky only through the
+					// windows". Using sky SH indoors is what floods a room blue, and
+					// it's why there was a visible seam at the probe boundary.
 					if (w1 > 0.0f)
 					{
 						const float3 d1 = ProbeSpecularDir(R, pixelPosWS.xyz, g_probeCenter, g_probeExtents);
 						probeSpec += n1 * SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, d1, perceptualRoughness);
-						probeDiff += n1 * SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, N, 1.0f);
+						probeDiff += n1 * ShIrradiance(g_iblProbeSH, g_textureSampler, N);
 					}
 					if (w2 > 0.0f)
 					{
 						const float3 d2 = ProbeSpecularDir(R, pixelPosWS.xyz, g_probeCenter2, g_probeExtents2);
 						probeSpec += n2 * SampleEnvAtlas(g_iblProbeAtlas2, g_textureSampler, d2, perceptualRoughness);
-						probeDiff += n2 * SampleEnvAtlas(g_iblProbeAtlas2, g_textureSampler, N, 1.0f);
+						probeDiff += n2 * ShIrradiance(g_iblProbeSH2, g_textureSampler, N);
 					}
 
 					// Specular and diffuse take SEPARATE strengths. Driving both from

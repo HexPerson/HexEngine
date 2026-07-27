@@ -99,6 +99,7 @@ namespace HexEngine
 		for (auto*& face : _faces)
 			SAFE_DELETE(face);
 		SAFE_DELETE(_envAtlas);
+		SAFE_DELETE(_shTex);
 	}
 
 	math::Vector3 ReflectionProbeComponent::GetWorldCentre() const
@@ -241,6 +242,24 @@ namespace HexEngine
 				_envAtlas->SetDebugName("ReflectionProbeEnvAtlas");
 		}
 		return _envAtlas;
+	}
+
+	ITexture2D* ReflectionProbeComponent::EnsureShTex()
+	{
+		if (_shTex == nullptr)
+		{
+			// 1 x 9 L2 SH coefficients - must match ENVMAP_SH_COEFFS in
+			// EnvMapCommon.shader and SceneRenderer's kIblEnvShCoeffs.
+			_shTex = g_pEnv->_graphicsDevice->CreateTexture2D(
+				1, 9,
+				DXGI_FORMAT_R16G16B16A16_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+				1);
+			if (_shTex != nullptr)
+				_shTex->SetDebugName("ReflectionProbeSH");
+		}
+		return _shTex;
 	}
 
 	void ReflectionProbeComponent::Update(float frameTime)
