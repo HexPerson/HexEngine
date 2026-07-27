@@ -76,29 +76,23 @@
 	SamplerState g_textureSampler : register(s0);
 	SamplerState g_pointSampler   : register(s2);
 
-	// Confidence arrives from a single stochastic ray per pixel, so it is close to
-	// binary and speckles on rough surfaces where the GGX cone jitters. The
-	// radiance it gates has been through NRD's spatial filter, so an unfiltered
-	// mask would fight it at every hit/miss boundary. A 3x3 box is the cheapest
-	// thing that turns 0-or-1 into ten levels and roughly tracks the denoiser's
-	// own footprint; it is not an attempt to match NRD exactly.
+	// "Did SSR trace this pixel at all", NOT "did the ray hit something".
+	//
+	// SSR now returns the environment along its own ray direction when the march
+	// finds nothing (see SSR.shader), so a traced pixel already carries a
+	// complete reflection whether it hit or missed. What is left for this pass is
+	// the pixels SSR skipped entirely - matte surfaces, sky - and that boundary
+	// follows whole surfaces rather than cutting through one.
+	//
+	// Deliberately a single tap. This used to be a 3x3 box, back when the value
+	// was a per-ray hit mask that speckled and had to be softened. Blurring a
+	// per-surface flag would instead bleed it across geometry edges, and since
+	// the traced side already has its environment from SSR, any value below 1
+	// there makes this pass add a SECOND copy - a bright fringe, the mirror image
+	// of the dark rim this change removes.
 	float SampleConfidence(float2 screenPos)
 	{
-		const float2 texel = float2(1.0f / (float)g_screenWidth, 1.0f / (float)g_screenHeight);
-
-		float total = 0.0f;
-		[unroll]
-		for (int y = -1; y <= 1; ++y)
-		{
-			[unroll]
-			for (int x = -1; x <= 1; ++x)
-			{
-				const float2 uv = screenPos + float2((float)x, (float)y) * texel;
-				total += g_ssrSpecHitInfo.SampleLevel(g_pointSampler, uv, 0).r;
-			}
-		}
-
-		return saturate(total * (1.0f / 9.0f));
+		return saturate(g_ssrSpecHitInfo.SampleLevel(g_pointSampler, screenPos, 0).r);
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target

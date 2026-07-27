@@ -250,6 +250,13 @@ namespace HexEngine
 		// Second-nearest probe, bound at t17 so the shader can cross-fade.
 		class ReflectionProbeComponent* _activeProbe2 = nullptr;
 
+		// Weather overcast tint, cached from the sky-render setup so the
+		// prefiltered environment atlas can apply the SAME lerp the sky sphere
+		// does. Without it a reflection shows Hillaire's clear blue under a grey
+		// storm sky - the LUT the atlas prefilters never sees this tint.
+		math::Vector3 _skyOvercastColour = math::Vector3(1.0f, 1.0f, 1.0f);
+		float         _skyOvercastAmount = 0.0f;
+
 		// Interaction outline glow (jump-flood SDF). _outlineJfaA/B ping-pong the
 		// nearest-seed coordinate field (RG32F, pixel coords); _outlineGlowRT
 		// holds the composited glow ring that's additively blended into beauty.

@@ -53,7 +53,23 @@
 	{
 		const float3 sunDir = normalize(-g_lightDirection.xyz);
 		const float2 uv = SkyViewLutParamsToUv(normalize(dir), sunDir);
-		return g_skyViewLut.SampleLevel(g_linearSampler, uv, 0).rgb;
+		float3 sky = g_skyViewLut.SampleLevel(g_linearSampler, uv, 0).rgb;
+
+		// Weather overcast tint - the same lerp SkySphere.shader applies on top
+		// of the LUT.
+		//
+		// The header above says "the overcast/weather tint changes the LUT". It
+		// does not: Hillaire's model is a CLEAR-SKY model and cannot produce a
+		// flat grey overcast, so the tint is applied by the sky sphere after
+		// sampling. Prefiltering the raw LUT therefore built an environment that
+		// disagreed with the sky the player could see - a wet road mirroring
+		// clear blue under a grey-brown storm.
+		//
+		// Applied per SAMPLE rather than to the final result so the mirror row
+		// and every GGX-integrated row get it identically.
+		sky = lerp(sky, g_skyOvercast.rgb, saturate(g_skyOvercast.w));
+
+		return sky;
 	}
 
 	float2 Hammersley(uint i, uint count)

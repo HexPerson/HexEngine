@@ -1652,10 +1652,21 @@ namespace HexEngine
 				const math::Vector3 overcastColour = cloudColour * (sunDimming * lightMult);
 
 				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(overcastColour, overcastAmount);
+
+				// The prefiltered sky ENVIRONMENT atlas has to receive the same
+				// tint, or reflections disagree with the sky above them. Hillaire
+				// is a clear-sky model and physically cannot produce overcast, so
+				// this lerp IS how rain gets its grey - and the atlas prefilters
+				// the raw sky-view LUT, which never sees it. The result was a wet
+				// road mirroring clear blue under a grey-brown storm.
+				_skyOvercastColour = overcastColour;
+				_skyOvercastAmount = overcastAmount;
 			}
 			else
 			{
 				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(math::Vector3(1.0f, 1.0f, 1.0f), 0.0f);
+				_skyOvercastColour = math::Vector3(1.0f, 1.0f, 1.0f);
+				_skyOvercastAmount = 0.0f;
 			}
 		}
 
@@ -2419,6 +2430,10 @@ namespace HexEngine
 				r_ssrEnergyConserve._val.b ? 1.0f : 0.0f,
 				r_wetnessDarkening._val.f32,
 				0.0f);
+
+			bufferData._skyOvercast = math::Vector4(
+				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,
+				_skyOvercastAmount);
 
 			// Select this frame's reflection probe: the nearest atlas-ready probe
 			// whose box contains the camera, falling back to the nearest ready
@@ -5429,6 +5444,19 @@ namespace HexEngine
 			// A null bind reads as black, which degrades to the old no-fallback behaviour.
 			g_pEnv->_graphicsDevice->SetTexture2D(21,
 				g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyViewLUT() : nullptr);
+
+			// t22..t24 = the environment atlases, so a specular ray that finds
+			// nothing can return the environment along its own direction instead
+			// of leaving a hole for the resolve to patch. Patching it afterwards
+			// meant gating a DENOISED radiance on an UNFILTERED confidence mask,
+			// and the two disagreed at every hit/miss boundary - see the miss
+			// path in SSR.shader. Null binds read as black, degrading to the old
+			// "miss contributes nothing".
+			g_pEnv->_graphicsDevice->SetTexture2D(22, _iblSkyEnvMap);
+			g_pEnv->_graphicsDevice->SetTexture2D(23,
+				_activeProbe != nullptr ? _activeProbe->GetEnvAtlas() : nullptr);
+			g_pEnv->_graphicsDevice->SetTexture2D(24,
+				_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
 
 			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader.get());
 

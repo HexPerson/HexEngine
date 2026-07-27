@@ -12,6 +12,10 @@
 		ShadowUtils
 		LightingUtils
 		Atmosphere
+		// SampleEnvAtlas / ProbeWeight / ProbeSpecularDir, so a specular ray that
+		// finds nothing can return the environment itself rather than leaving a
+		// hole for the resolve to patch.
+		EnvMapCommon
 }
 "VertexShader"
 {
@@ -48,6 +52,13 @@
 	Texture3D g_voxelRadianceTex3 : register(t18);
 	Texture3D g_voxelOpacityTex3  : register(t19);
 	Texture3D g_voxelAlbedoTex3   : register(t20);
+
+	// Environment atlases for the specular miss path. t21 is the sky-view LUT
+	// (bound explicitly by RenderSSR), so these start at t22. Null binds read as
+	// black, which degrades to the old "miss contributes nothing" behaviour.
+	Texture2D g_ssrSkyEnvAtlas : register(t22);
+	Texture2D g_ssrProbeAtlas  : register(t23);
+	Texture2D g_ssrProbeAtlas2 : register(t24);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -538,29 +549,70 @@
 			return float4(hit.colour, 1.0f);
 		}
 
-		// Composition path: hand the miss to the resolve, which has the environment
-		// term and will fill it in as lerp(environment, screen, confidence).
+		// Composition path: a ray that finds nothing returns the ENVIRONMENT along
+		// its own direction, right here, rather than leaving a hole for the
+		// resolve to patch afterwards.
 		//
 		// This is the case that rendered window panes black in the floor's
-		// reflection. Transparent glass never writes the opaque gbuffer, so a floor
-		// ray aimed at a pane marches straight through and finds nothing; the voxel
-		// cone trace below is then the only fallback, and it returns black whenever
-		// GI is off (which is also when its clipmaps are deliberately left unbound,
-		// see RenderSSR). Returning zero with didReflect=false makes the miss
-		// explicit so the resolve can supply the environment instead of guessing.
+		// reflection: transparent glass never writes the opaque gbuffer, so a
+		// floor ray aimed at a pane marches straight through and finds nothing,
+		// and the voxel cone trace below returns black whenever GI is off (which
+		// is also when its clipmaps are deliberately left unbound - see
+		// RenderSSR). Environment is a far better estimate of "what is off-screen
+		// in this direction" than a cone trace of a possibly-empty clipmap.
 		//
-		// Environment is a strictly better estimate of "what is off-screen in this
-		// direction" than a cone trace of a possibly-empty clipmap, so the GI
-		// fallback stays only on the legacy path. Note this is NOT the same as
-		// emitting environment here: doing that while the deferred pass still added
-		// its own would trade black panes for double-bright ones.
+		// Emitting it HERE rather than in the resolve is what kills the
+		// silhouettes. The resolve version gated environment on a confidence mask
+		// that was computed fresh each frame from one stochastic ray, while the
+		// radiance it gated had been through NRD's spatial AND temporal filter.
+		// The two disagreed at every hit/miss boundary - NRD spreads a hit's
+		// radiance outward, and during camera motion disoccluded pixels have
+		// almost no history - so the mask still said "hit" where the radiance had
+		// gone dark, suppressing the environment and leaving a hard dark rim that
+		// faded as history rebuilt. Measured: with r_ssrDenoise 0 the rims
+		// largely vanish, which is the signature of exactly that mismatch.
+		//
+		// Feeding the environment in per-ray means the signal NRD receives is
+		// already complete, so there is no unfiltered weight left to disagree
+		// with it, and the hit/miss transition gets denoised like everything
+		// else. Note this is only safe because the deferred pass no longer adds
+		// environment when composing - doing this while it did would trade black
+		// panes for double-bright ones.
 		if (g_iblComposeInResolve > 0.5f)
 		{
-			didReflect = false;
-			// Keep the miss hit distance the fallback path used, so NRD's
-			// reprojection sees the same magnitude it always has here.
+			// Report a hit so the resolve adds nothing further for this pixel.
+			// Pixels SSR never traced at all (matte, sky) keep confidence 0 and
+			// are still filled by the resolve - that boundary follows whole
+			// surfaces rather than cutting through one, so it has no edge to
+			// shimmer.
+			didReflect = true;
 			hitDistance = 8.0f;
-			return float4(0.0f.xxx, 0.0f);
+
+			const float envRoughness = saturate(1.0f - smoothness);
+
+			float3 env = SampleEnvAtlas(g_ssrSkyEnvAtlas, g_textureSampler, rayDir, envRoughness)
+				* saturate(rayDir.y * 3.0f + 0.35f) * g_iblSkySpecular;
+
+			// Probes replace the sky inside their box, matching
+			// EnvMapCommon::EvaluateEnvSpecular so the two estimates agree.
+			const float w1 = ProbeWeight(worldPos, g_probeCenter,  g_probeExtents);
+			const float w2 = ProbeWeight(worldPos, g_probeCenter2, g_probeExtents2);
+			const float wSum = w1 + w2;
+			if (wSum > 0.0f)
+			{
+				const float coverage = saturate(wSum);
+				float3 probeEnv = 0.0f.xxx;
+				if (w1 > 0.0f)
+					probeEnv += (w1 / wSum) * SampleEnvAtlas(g_ssrProbeAtlas, g_textureSampler,
+						ProbeSpecularDir(rayDir, worldPos, g_probeCenter, g_probeExtents), envRoughness);
+				if (w2 > 0.0f)
+					probeEnv += (w2 / wSum) * SampleEnvAtlas(g_ssrProbeAtlas2, g_textureSampler,
+						ProbeSpecularDir(rayDir, worldPos, g_probeCenter2, g_probeExtents2), envRoughness);
+
+				env = lerp(env, probeEnv * g_iblParams.z, coverage);
+			}
+
+			return float4(env, 1.0f);
 		}
 
 		// Miss path - cone-trace the voxel GI clipmaps in the ray direction for an indirect-

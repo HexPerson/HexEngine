@@ -378,8 +378,20 @@ namespace HexEngine
 		// whether RenderSSR runs at all - a probe capture face, a secondary
 		// camera, r_ssr 0 or a scene with nothing reflective all keep the term in
 		// the deferred pass, because no resolve will run to supply it.
-		//   yzw reserved.
+		//   y = 1 when the SSR resolve takes the reflected fraction off the base
+		//       layer (energy conservation).
+		//   z = fraction of albedo removed at full rain wetness.
+		//   w reserved.
 		math::Vector4 _iblComposeParams;
+
+		// Weather overcast tint, appended at the end per the note above.
+		//   xyz = the colour the sky is lerped toward, w = how far.
+		//
+		// The sky sphere already applies this (Hillaire is a clear-sky model and
+		// cannot produce overcast, so this lerp IS how rain gets its grey). The
+		// prefiltered environment atlas needs the identical tint or reflections
+		// disagree with the sky above them.
+		math::Vector4 _skyOvercast;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

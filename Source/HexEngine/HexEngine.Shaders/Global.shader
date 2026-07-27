@@ -250,6 +250,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// deferred pass must NOT add it (the two would otherwise stack instead of
 		// composing). See RenderStructs.hpp::_iblComposeParams. yzw reserved.
 		float4 g_iblComposeParams;
+		// Weather overcast tint: xyz = target colour, w = amount. The sky sphere
+		// applies this on top of the Hillaire LUT; the environment atlas must
+		// apply the same one or reflections keep a clear-blue sky under a storm.
+		float4 g_skyOvercast;
 	};
 
 	// Readable aliases for the packed slot above.
