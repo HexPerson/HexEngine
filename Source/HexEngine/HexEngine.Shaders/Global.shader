@@ -249,6 +249,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	};
 
 	// Readable aliases for the packed slot above.
+	// P1-B toggles. These lanes were g_ssrSkyFallbackStrength / g_ssrSkyHitMinDistance,
+	// both dead since SSR.shader reverted to main and stopped reading them.
+	#define g_useDfgLut              (g_reflectionParams.x)
+	#define g_useMultiScatter        (g_reflectionParams.y)
 	#define g_ssrSkyFallbackStrength (g_reflectionParams.x)
 	// Minimum world distance a ray must travel before a sky pixel counts as a hit. Guards
 	// the "floor grabs the window right next to it" streaking that killed the original

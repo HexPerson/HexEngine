@@ -175,6 +175,9 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="EnvMapSH.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="DFGLut.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="AtmosphereTransmittanceLUT.shader">
       <FileType>Document</FileType>
     </HexEngineShader>

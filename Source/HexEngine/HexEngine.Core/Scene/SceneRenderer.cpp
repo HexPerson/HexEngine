@@ -226,6 +226,16 @@ namespace HexEngine
 	// L2 spherical harmonics: 9 coefficients, one per row of a 1x9 texture.
 	// Must match ENVMAP_SH_COEFFS in EnvMapCommon.shader.
 	static constexpr int32_t kIblEnvShCoeffs = 9;
+	// DFG table resolution. 128x128 is the usual choice: the function is smooth
+	// in both axes, so more resolution buys nothing measurable.
+	static constexpr int32_t kDfgLutSize = 128;
+
+	// P1-B. Real DFG lookup in place of EnvBRDFApprox's analytic fit, plus
+	// multi-scatter energy compensation. Single-scatter GGX drops the light that
+	// would have bounced a second time off the microfacets, so rough metals come
+	// out too dark; the compensation adds that energy back.
+	HVar r_iblDfgLut("r_iblDfgLut", "Use the precomputed DFG LUT instead of the analytic EnvBRDF fit", true, false, true);
+	HVar r_iblMultiScatter("r_iblMultiScatter", "Multi-scatter energy compensation for environment specular", true, false, true);
 
 	// Sky image-based lighting. The engine had no IBL at all - ambient was a flat
 	// diffuse-only constant - so no surface had any environment response. Specular defaults
@@ -788,6 +798,7 @@ namespace HexEngine
 		SAFE_DELETE(_outlineParamsBuffer);
 		SAFE_DELETE(_iblSkyEnvMap);
 		SAFE_DELETE(_iblSkySH);
+		SAFE_DELETE(_dfgLut);
 		SAFE_DELETE(_autoPuddlesQuadIB);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
@@ -819,6 +830,7 @@ namespace HexEngine
 		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
 		_probeEnvShader				= IShader::Create("EngineData.Shaders/ProbeEnvMap.hcs");
 		_envSHShader				= IShader::Create("EngineData.Shaders/EnvMapSH.hcs");
+		_dfgLutShader				= IShader::Create("EngineData.Shaders/DFGLut.hcs");
 		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
 		_hdrOutputShader			= IShader::Create("EngineData.Shaders/TonemapHDR.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
@@ -2328,6 +2340,11 @@ namespace HexEngine
 				r_iblSkySpecular._val.f32, r_iblSkyDiffuse._val.f32,
 				r_iblProbeStrength._val.f32, r_iblProbeDiffuse._val.f32);
 
+			// P1-B toggles ride in the reflection params' spare lanes (x and y are
+			// dead since SSR.shader reverted to main and no longer reads them).
+			bufferData._reflectionParams.x = r_iblDfgLut._val.b ? 1.0f : 0.0f;
+			bufferData._reflectionParams.y = r_iblMultiScatter._val.b ? 1.0f : 0.0f;
+
 			// Select this frame's reflection probe: the nearest atlas-ready probe
 			// whose box contains the camera, falling back to the nearest ready
 			// probe overall. One probe per frame in v1 - rooms don't overlap
@@ -3679,6 +3696,9 @@ namespace HexEngine
 					_activeProbe != nullptr ? _activeProbe->GetShTex() : nullptr);
 				g_pEnv->_graphicsDevice->SetTexture2D(20,
 					_activeProbe2 != nullptr ? _activeProbe2->GetShTex() : nullptr);
+				// t21 = DFG table (P1-B). Null until the first frame generates it,
+				// which the shader detects and falls back to the analytic fit for.
+				g_pEnv->_graphicsDevice->SetTexture2D(21, _dfgLut);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
@@ -4967,6 +4987,46 @@ namespace HexEngine
 
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"SkyEnvMap");
 		guiRenderer->StartFrame();
+
+		// P1-B: generate the DFG table once. It depends only on NdotV and
+		// roughness - no scene, no lighting, no time of day - so regenerating it
+		// per frame would be pure waste.
+		if (!_dfgLutGenerated && _dfgLutShader != nullptr)
+		{
+			if (_dfgLut == nullptr)
+			{
+				_dfgLut = graphics->CreateTexture2D(
+					kDfgLutSize, kDfgLutSize,
+					DXGI_FORMAT_R16G16B16A16_FLOAT,
+					1,
+					D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+					1);
+				if (_dfgLut != nullptr)
+					_dfgLut->SetDebugName("_dfgLut");
+			}
+
+			if (_dfgLut != nullptr)
+			{
+				graphics->SetRenderTarget(_dfgLut);
+
+				D3D11_VIEWPORT dvp;
+				dvp.TopLeftX = 0.0f;
+				dvp.TopLeftY = 0.0f;
+				dvp.Width = (float)kDfgLutSize;
+				dvp.Height = (float)kDfgLutSize;
+				dvp.MinDepth = 0.0f;
+				dvp.MaxDepth = 1.0f;
+				graphics->SetViewport(dvp);
+
+				// The source texture is unused by the shader (it integrates
+				// analytically); pass the atlas purely to satisfy the quad helper.
+				guiRenderer->FullScreenTexturedQuad(_iblSkyEnvMap, _dfgLutShader.get());
+
+				_dfgLutGenerated = true;
+				LOG_INFO("Generated %dx%d DFG LUT (split-sum BRDF + single-scatter energy)",
+					kDfgLutSize, kDfgLutSize);
+			}
+		}
 
 		graphics->SetRenderTarget(_iblSkyEnvMap);
 

@@ -60,6 +60,8 @@
 	// their own occlusion - an indoor probe's irradiance knows the roof is solid.
 	Texture2D g_iblProbeSH  : register(t19);
 	Texture2D g_iblProbeSH2 : register(t20);
+	// P1-B: split-sum DFG table. rg = F0 scale/bias, b = single-scatter energy.
+	Texture2D g_dfgLut      : register(t21);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -403,7 +405,27 @@
 			const float3 diffuseColour  = pixelColour.rgb * (1.0f - f0) * (1.0f - metallic);
 			const float3 specularColour = lerp(f0, pixelColour.rgb, metallic);
 
-			const float2 dfg = EnvBRDFApprox(NdotV, perceptualRoughness);
+			// P1-B: real DFG lookup, with the analytic fit as the fallback for the
+			// first frame (before the table is generated) and when disabled.
+			const float3 dfgSample = g_dfgLut.SampleLevel(g_textureSampler, float2(NdotV, perceptualRoughness), 0).rgb;
+			const bool useLut = (g_useDfgLut > 0.5f) && (dfgSample.b > 1e-4f);
+			const float2 dfg = useLut ? dfgSample.rg : EnvBRDFApprox(NdotV, perceptualRoughness);
+
+			// Multi-scatter energy compensation (Fdez-Aguera 2019).
+			//
+			// Single-scatter GGX models ONE bounce off the microfacet surface, so
+			// the light that would have bounced again is simply lost. The loss
+			// grows with roughness and makes rough metals render noticeably too
+			// dark. Ess (the DFG table's .b channel) is the energy a white-Fresnel
+			// surface actually returns, so 1-Ess is what went missing; scaling by
+			// F0 * (1-Ess)/Ess adds back the portion that would have survived
+			// further bounces at this surface's reflectance.
+			float3 energyCompensation = 1.0f.xxx;
+			if (useLut && g_useMultiScatter > 0.5f)
+			{
+				const float Ess = max(dfgSample.b, 1e-3f);
+				energyCompensation = 1.0f.xxx + specularColour * (1.0f / Ess - 1.0f);
+			}
 
 			// The atlas is prefiltered per roughness row, so the lookup uses the true
 			// mirror direction - no normal-bias hack needed. Diffuse takes the roughest
@@ -488,7 +510,8 @@
 			}
 			// ----------------------------------------------------------------------
 
-			const float3 iblSpecular = envSpecRadiance * (specularColour * dfg.x + dfg.y);
+			const float3 iblSpecular =
+				envSpecRadiance * (specularColour * dfg.x + dfg.y) * energyCompensation;
 			const float3 iblDiffuse = envDiffRadiance * diffuseColour;
 
 			pbr.rgb += iblSpecular + iblDiffuse;

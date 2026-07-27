@@ -227,6 +227,12 @@ namespace HexEngine
 		std::shared_ptr<IShader> _iblSkyEnvShader;
 		std::shared_ptr<IShader> _probeEnvShader;
 		std::shared_ptr<IShader> _envSHShader;
+		// P1-B: split-sum DFG table (RG = F0 scale/bias, B = single-scatter
+		// energy for multi-scatter compensation). View-independent, so it is
+		// generated once and never regenerated.
+		ITexture2D* _dfgLut = nullptr;
+		std::shared_ptr<IShader> _dfgLutShader;
+		bool _dfgLutGenerated = false;
 		// This frame's selected reflection probe (set in SetupPerFrameBuffer,
 		// consumed by the deferred t16 bind). Raw pointer valid for the frame only.
 		class ReflectionProbeComponent* _activeProbe = nullptr;
