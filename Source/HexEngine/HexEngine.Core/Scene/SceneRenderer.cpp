@@ -186,7 +186,11 @@ namespace HexEngine
 	// screen-space sky-detection approach is unsound. 0 disables the sky-pixel branch entirely,
 	// which is main's behaviour.
 	HVar r_ssrSkyHitMinDistance("r_ssrSkyHitMinDistance", "Min world distance before an SSR ray may accept a sky pixel as a hit (0 = disable)", 0.0f, 0.0f, 64.0f);
-	HVar r_ssrSkyHitStrength("r_ssrSkyHitStrength", "Scale applied to screen-space sky hits in SSR", 1.0f, 0.0f, 4.0f);
+	// Forward transparency environment reflection. Defaults ON: glass that finds
+	// no screen-space hit used to reflect literal black, which is why window panes
+	// read as dark holes. Unlike the sky terms for OPAQUE surfaces, this is not an
+	// occlusion hazard - a window reflecting the sky is what a window does.
+	HVar r_glassEnvReflection("r_glassEnvReflection", "Environment reflection strength for transparent surfaces when SSR misses", 1.0f, 0.0f, 4.0f);
 
 	// Diagnostic for "why is my glossy floor not reflecting the sky". Paints SSR sky hits
 	// MAGENTA where accepted and GREEN where a sky pixel was seen but rejected by
@@ -2307,7 +2311,7 @@ namespace HexEngine
 			bufferData._reflectionParams = math::Vector4(
 				r_ssrSkyFallbackStrength._val.f32,
 				r_ssrSkyHitMinDistance._val.f32,
-				r_ssrSkyHitStrength._val.f32,
+				r_glassEnvReflection._val.f32,
 				(float)r_ssrDebugSkyHits._val.i32);
 
 			bufferData._iblParams = math::Vector4(
@@ -4123,6 +4127,10 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetTexture2D(12, _gbuffer.GetNormal());
 		if (_gbuffer.GetPosition() != nullptr)
 			g_pEnv->_graphicsDevice->SetTexture2D(13, _gbuffer.GetPosition());
+		// t14 = prefiltered sky environment atlas. The transparency path reflects
+		// this wherever its screen-space march misses; a null bind reads black,
+		// which is the old (broken) behaviour rather than a crash.
+		g_pEnv->_graphicsDevice->SetTexture2D(14, _iblSkyEnvMap);
 
 		// CRITICAL: SetTexture2D(slot, ...) advances the device's "next implicit slot" counter.
 		// Scene::RenderEntities reads that counter to decide where to bind each mesh's
@@ -4144,6 +4152,7 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetTexture2D(10, nullptr);
 		g_pEnv->_graphicsDevice->SetTexture2D(12, nullptr);
 		g_pEnv->_graphicsDevice->SetTexture2D(13, nullptr);
+		g_pEnv->_graphicsDevice->SetTexture2D(14, nullptr);
 		g_pEnv->_graphicsDevice->SetBoundResourceIndex(postMaterialIndex);
 
 		// NOTE: GPU particles no longer render here. They moved AFTER the

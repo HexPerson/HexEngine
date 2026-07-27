@@ -254,7 +254,11 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// the "floor grabs the window right next to it" streaking that killed the original
 	// sky-hit path. 0 disables sky hits entirely.
 	#define g_ssrSkyHitMinDistance   (g_reflectionParams.y)
-	#define g_ssrSkyHitStrength      (g_reflectionParams.z)
+	// Was g_ssrSkyHitStrength, which died with the in-march sky detection when
+	// SSR.shader was reverted to main. Reused for the forward transparency path's
+	// environment reflection strength - the fallback that stops glass reflecting
+	// black when its screen-space march misses.
+	#define g_glassEnvStrength       (g_reflectionParams.z)
 	// Diagnostic: paint SSR sky hits magenta (accepted) / green (distance-rejected).
 	#define g_ssrDebugSkyHits        (g_reflectionParams.w)
 	#define g_iblSkySpecular         (g_iblParams.x)

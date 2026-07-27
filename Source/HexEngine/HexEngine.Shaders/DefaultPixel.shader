@@ -2,6 +2,8 @@
 {
 	MeshCommon
 	Utils
+	// SampleEnvAtlas, for the transparency path's environment reflection fallback.
+	EnvMapCommon
 }
 "Global"
 {
@@ -20,6 +22,10 @@
 	Texture2D g_sceneDepthTex    : register(t11); // opaque depth buffer (linear-encoded raw depth)
 	Texture2D g_sceneNormalTex   : register(t12); // opaque world normal (xyz) + viewspace depth (w)
 	Texture2D g_scenePositionTex : register(t13); // opaque world position (xyz)
+	// Prefiltered sky environment atlas (IBL). The transparency reflection falls
+	// back to this wherever the screen-space march finds nothing - without it,
+	// glass reflects black, which is why window panes read as dark holes.
+	Texture2D g_iblSkyEnvFwd     : register(t14);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -396,12 +402,41 @@
 			float reflectionWeight = 0.0f;
 			float3 ssrColour = float3(0.0f, 0.0f, 0.0f);
 			float ssrConfidence = 0.0f;
+			const float glossiness = saturate(1.0f - roughness);
+
 			if (TraceTransparentSSR(input.positionWS.xyz, R, roughness, ssrColour, ssrConfidence))
 			{
 				// Gloss-only SSR (no blur), so fade out as roughness rises.
-				const float glossiness = saturate(1.0f - roughness);
 				reflectionWeight = ssrConfidence * glossiness;
 				reflection = ssrColour;
+			}
+
+			// Environment fallback wherever the screen-space march found nothing.
+			//
+			// Without this, `reflection` stays BLACK on a miss - and for a window
+			// the reflected ray usually leaves the screen on the first step, so it
+			// misses almost always. The Fresnel term then multiplies black, and the
+			// pane renders as a dark hole instead of glass. That is the "black
+			// window panes" artifact; it was never the SSR march being wrong, just
+			// nothing behind it.
+			//
+			// The prefiltered sky atlas is the same environment the deferred IBL
+			// uses, so glass and opaque surfaces agree about what the sky looks
+			// like. Weighted by (1 - ssrWeight) so a real screen-space hit always
+			// wins - screen data is more accurate than a distant-environment
+			// approximation when it exists.
+			{
+				const float3 envColour = SampleEnvAtlas(g_iblSkyEnvFwd, g_textureSampler, R, roughness);
+				// Downward rays would otherwise pick up horizon sky and light the
+				// undersides of glass; the atlas carries no ground radiance.
+				const float envHorizon = saturate(R.y * 3.0f + 0.35f);
+				const float envWeight = (1.0f - reflectionWeight) * glossiness * envHorizon * g_glassEnvStrength;
+
+				reflection = reflection * reflectionWeight + envColour * envWeight;
+				reflectionWeight = saturate(reflectionWeight + envWeight);
+				// `reflection` is now premultiplied by its weight, so undo that -
+				// the composition below multiplies by reflectionWeight again.
+				reflection = reflectionWeight > 1e-4f ? reflection / reflectionWeight : 0.0f.xxx;
 			}
 
 			// Sum: analytical sun (incl. ambient) + forward direct + Fresnel-weighted reflection.
