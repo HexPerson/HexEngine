@@ -235,7 +235,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// x = SSR sky-fallback strength, yzw reserved. See RenderStructs.hpp.
 		float4 g_reflectionParams;
 		// Image-based lighting: x = sky specular strength, y = sky diffuse strength,
-		// z = reflection probe strength, w reserved. See RenderStructs.hpp::_iblParams.
+		// z = probe specular strength, w = probe diffuse strength (separate: the
+		// probe's diffuse row is a flat room average and floods interiors, so it
+		// defaults off). See RenderStructs.hpp::_iblParams.
 		float4 g_iblParams;
 		// Active reflection probe. center.w = 1 when a probe atlas is bound at t16;
 		// extents.w = 1 when box projection is enabled. See RenderStructs.hpp.

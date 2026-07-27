@@ -235,6 +235,15 @@ namespace HexEngine
 	// (g_probeCenter.w stays 0), and a scene with probes gets correct local
 	// reflections inside each probe's box.
 	HVar r_iblProbeStrength("r_iblProbeStrength", "Reflection probe IBL strength (box-projected local environment)", 1.0f, 0.0f, 4.0f);
+	// Probe DIFFUSE, separate from probe specular and defaulting to 0 for the same
+	// reason r_iblSkyDiffuse does. The diffuse lookup is the atlas's roughest row -
+	// a near-uniform average of the captured room - so applying it as an irradiance
+	// term floods the whole interior with flat colour instead of lighting it. That
+	// is what "probe on" looked like at first: the room washed uniform cream, all
+	// contrast gone. Specular is the term that actually restores reflections.
+	// A real fix needs a cosine-convolved irradiance probe (P1-C's SH), not a GGX
+	// roughness-1 row standing in for one.
+	HVar r_iblProbeDiffuse("r_iblProbeDiffuse", "Reflection probe diffuse strength (flat until P1-C's SH irradiance)", 0.0f, 0.0f, 4.0f);
 
 	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
 	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
@@ -2294,7 +2303,7 @@ namespace HexEngine
 
 			bufferData._iblParams = math::Vector4(
 				r_iblSkySpecular._val.f32, r_iblSkyDiffuse._val.f32,
-				r_iblProbeStrength._val.f32, 0.0f);
+				r_iblProbeStrength._val.f32, r_iblProbeDiffuse._val.f32);
 
 			// Select this frame's reflection probe: the nearest atlas-ready probe
 			// whose box contains the camera, falling back to the nearest ready

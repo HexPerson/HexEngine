@@ -413,9 +413,16 @@
 					const float3 probeDiff =
 						SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, N, 1.0f);
 
+					// Specular and diffuse take SEPARATE strengths. Driving both from
+					// the probe strength reinstated a full-intensity diffuse IBL even
+					// though the sky diffuse term is deliberately off - and since the
+					// diffuse lookup is the atlas's roughest row (a near-uniform
+					// average of the captured room), it washed the whole interior flat
+					// cream and erased every bit of contrast. Probe diffuse now
+					// defaults to 0 until P1-C provides real cosine irradiance.
 					const float fade = saturate((1.0f - boxDist) / 0.15f);
 					envSpecRadiance = lerp(envSpecRadiance, probeSpec * g_iblParams.z, fade);
-					envDiffRadiance = lerp(envDiffRadiance, probeDiff * g_iblParams.z, fade);
+					envDiffRadiance = lerp(envDiffRadiance, probeDiff * g_iblParams.w, fade);
 				}
 			}
 			// ----------------------------------------------------------------------
