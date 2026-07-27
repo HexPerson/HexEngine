@@ -25,6 +25,15 @@ namespace HexEngine
 		// darken the existing beauty by that factor. dst = src * dst (BlendOp
 		// = ADD, SrcBlend = ZERO, DestBlend = SRC_COLOR).
 		Multiplicative,
+		// PremultipliedAlpha: target = src + target * (1 - src.a). The source
+		// colour is already premultiplied, so alpha carries only how much of the
+		// destination to REPLACE. Used by the SSR resolve to conserve energy: a
+		// surface that reflects a fraction F of the light arriving at it must
+		// lose that fraction from what it was already emitting, so the pass
+		// writes the reflection in rgb and F in alpha and gets
+		// (1 - F) * base + reflection in one draw. Alpha is preserved on the
+		// destination like the other *PreserveAlpha states.
+		PremultipliedAlpha,
 		Count
 	};
 

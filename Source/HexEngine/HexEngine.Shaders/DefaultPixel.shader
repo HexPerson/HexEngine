@@ -311,6 +311,15 @@
 		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
 		if (rainStrength > 0.001f)
 		{
+			// A wet surface is DARKER as well as smoother. The water film lets
+			// light refract into the surface where total internal reflection
+			// traps it, instead of scattering straight back out. Without this the
+			// rain response only perturbed the normal and dropped roughness, so a
+			// wet floor kept its full dry diffuse and gained a mirror reflection
+			// on top - which is most of why wet surfaces read as washed out and
+			// too bright.
+			albedo.rgb *= lerp(1.0f, 1.0f - g_wetnessDarkening, saturate(rainStrength));
+
 			// Surface up-facing-ness selects between "drops bead in place" (horizontal)
 			// and "drops streak downward" (vertical). 0.5 splits a 60deg cone of
 			// flat-ish surfaces from the rest.

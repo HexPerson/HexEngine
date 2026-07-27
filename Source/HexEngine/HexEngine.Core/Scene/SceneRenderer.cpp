@@ -292,6 +292,36 @@ namespace HexEngine
 	// stacked behaviour byte for byte, which is what makes the A/B measurable.
 	HVar r_iblComposeSSR("r_iblComposeSSR", "Compose environment specular with SSR in the resolve instead of stacking the two", true, false, true);
 
+	// Energy split at the SSR composite.
+	//
+	// The reflection is light the surface sends to the eye INSTEAD of the light
+	// it already emitted, not on top of it. The resolve blended additively onto a
+	// beauty buffer holding the full diffuse, so the result was
+	// diffuse + F*reflection where it should be (1-F)*diffuse + F*reflection -
+	// nothing anywhere scaled the base down. Measured on a wet floor: +19% near
+	// the camera rising to +30% toward the horizon, tending to 2x at grazing,
+	// because the error tracks Fresnel and so peaks exactly where the reflection
+	// is most visible.
+	//
+	// This is a deliberate global change to how every reflective surface reads;
+	// the cvar is here so it can be A/B'd against the old look.
+	HVar r_ssrEnergyConserve("r_ssrEnergyConserve", "Take the reflected fraction off the base layer at the SSR composite (energy conservation)", true, false, true);
+
+	// How much diffuse albedo a surface loses when fully wet.
+	//
+	// The rain response perturbed normals and dropped roughness but never
+	// touched albedo, so a wet surface kept its full dry diffuse AND gained a
+	// mirror on top - which reads as a washed-out, too-bright wet floor. Real
+	// wet surfaces darken substantially: the water film lets light refract in
+	// and get trapped by total internal reflection instead of scattering back
+	// out. 0.35 (albedo x 0.65 at full wetness) is a conventional approximation;
+	// 0 restores the previous behaviour.
+	//
+	// Note the separate auto-puddle system already had its own darkening
+	// (r_autoPuddlesDarken); this covers the per-material rain path, which did
+	// not.
+	HVar r_wetnessDarkening("r_wetnessDarkening", "Fraction of albedo removed at full rain wetness (0 = none)", 0.35f, 0.0f, 1.0f);
+
 	// Declared in ReflectionProbeComponent.cpp - the probe dumps the rig camera's
 	// render target and each downsampled face; this file dumps the beauty/gbuffer
 	// they came from, so one run covers the whole chain.
@@ -2385,7 +2415,10 @@ namespace HexEngine
 			// whether a specular miss returns nothing (so SSRResolve can fill it
 			// with environment) or falls back to the voxel-GI cone trace.
 			bufferData._iblComposeParams = math::Vector4(
-				ShouldComposeEnvSpecularInResolve() ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+				ShouldComposeEnvSpecularInResolve() ? 1.0f : 0.0f,
+				r_ssrEnergyConserve._val.b ? 1.0f : 0.0f,
+				r_wetnessDarkening._val.f32,
+				0.0f);
 
 			// Select this frame's reflection probe: the nearest atlas-ready probe
 			// whose box contains the camera, falling back to the nearest ready
@@ -5488,7 +5521,14 @@ namespace HexEngine
 				_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
 			g_pEnv->_graphicsDevice->SetTexture2D(21, _dfgLut);
 
-			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+			// PremultipliedAlpha (src + dst * (1 - src.a)), not Additive: the
+			// resolve writes the reflection in rgb and the surface's specular
+			// reflectance in alpha, so the same draw adds the reflection AND takes
+			// that fraction back off the base layer. The shader returns alpha 0 on
+			// every path that shouldn't attenuate (sky, legacy stacking,
+			// r_ssrEnergyConserve off), where this degrades exactly to the
+			// additive blend it replaced.
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::PremultipliedAlpha);
 			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrResolve.get());
 			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 

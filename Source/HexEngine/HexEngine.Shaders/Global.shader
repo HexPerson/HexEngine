@@ -275,6 +275,13 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// reflection; the deferred pass leaves the term alone and SSR's specular miss
 	// path returns nothing so the resolve can fill it with environment.
 	#define g_iblComposeInResolve    (g_iblComposeParams.x)
+	// 1 = the SSR resolve takes the reflected fraction back off the base layer
+	// instead of adding the reflection on top of an undiminished surface.
+	#define g_ssrEnergyConserve      (g_iblComposeParams.y)
+	// Fraction of diffuse albedo a surface loses at full rain wetness. Water
+	// traps light that a dry surface would have scattered back out, so a wet
+	// surface is darker as well as smoother. See r_wetnessDarkening.
+	#define g_wetnessDarkening       (g_iblComposeParams.z)
 
 	struct MaterialProps
 	{

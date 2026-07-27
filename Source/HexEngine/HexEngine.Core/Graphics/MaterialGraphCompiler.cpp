@@ -756,6 +756,13 @@ namespace HexEngine
 			ss << "\t\tconst float __rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;\n";
 			ss << "\t\tif (__rainStrength > 0.001f)\n";
 			ss << "\t\t{\n";
+			// A wet surface is darker as well as smoother - water traps light a dry
+			// surface would have scattered back out. Must be emitted here as well as
+			// in DefaultPixel: graph-authored materials compile to their own shader
+			// and never run DefaultPixel's copy, and most environment art in this
+			// project is graph-authored. Editing only DefaultPixel left the hall
+			// floor completely unaffected even at full strength.
+			ss << "\t\t\tbaseColor.rgb *= lerp(1.0f, 1.0f - g_wetnessDarkening, saturate(__rainStrength));\n";
 			ss << "\t\t\tconst float __isHorizontal = step(0.5f, worldNormal.y);\n";
 			ss << "\t\t\tconst float4 __rainResult = ApplyRainDroplets(worldNormal, input.positionWS.xyz, input.tangent, input.binormal, __rainStrength, g_time, __isHorizontal);\n";
 			ss << "\t\t\tworldNormal = __rainResult.xyz;\n";
@@ -1065,6 +1072,16 @@ namespace HexEngine
 				if (!mec)
 					combined += std::format("{}", exeTime.time_since_epoch().count());
 			}
+
+			// Codegen-identity salt. The salt above catches a rebuilt SHADER
+			// COMPILER and edited INCLUDES, but the HLSL this file emits is a
+			// third input the hash could not see: changing the generated code
+			// (adding a term to the rain block, say) left every cached graph
+			// shader valid-looking and the change silently absent. Bump this
+			// whenever the emitted HLSL changes semantically.
+			//   1 - baseline
+			//   2 - wet surfaces darken baseColor by g_wetnessDarkening
+			combined += "\0codegen:2";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);

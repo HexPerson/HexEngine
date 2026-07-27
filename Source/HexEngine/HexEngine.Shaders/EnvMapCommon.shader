@@ -229,7 +229,14 @@
 		float2 dfgToggles,     // x = use the DFG LUT, y = use multi-scatter compensation
 		float4 probeC,  float4 probeE,
 		float4 probeC2, float4 probeE2,
-		out float3 envRadianceOut)
+		out float3 envRadianceOut,
+		// Directional-hemispherical reflectance of the specular lobe: the
+		// fraction of arriving light this surface sends into the reflection
+		// rather than into its diffuse. The SSR resolve uses it to take that
+		// fraction back OFF the base layer, so a mirror floor stops emitting a
+		// full diffuse AND a full reflection. Split-sum, not raw Schlick, so
+		// rough surfaces aren't over-darkened.
+		out float3 specularReflectanceOut)
 	{
 		// Local copies of PBRutils' dielectric F0 and roughness floor. Duplicated
 		// rather than included because PBRutils pulls the whole lighting header and
@@ -309,7 +316,10 @@
 			envSpecRadiance = lerp(envSpecRadiance, probeSpec * iblParams.z, coverage);
 		}
 
+		const float3 specularReflectance = (specularColour * dfg.x + dfg.y) * energyCompensation;
+
 		envRadianceOut = envSpecRadiance;
-		return envSpecRadiance * (specularColour * dfg.x + dfg.y) * energyCompensation;
+		specularReflectanceOut = saturate(specularReflectance);
+		return envSpecRadiance * specularReflectance;
 	}
 }

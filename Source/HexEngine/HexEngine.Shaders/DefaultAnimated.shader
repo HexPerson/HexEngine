@@ -398,6 +398,9 @@
 		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
 		if (rainStrength > 0.001f)
 		{
+			// Wet surfaces darken - see the matching comment in DefaultPixel.
+			albedo.rgb *= lerp(1.0f, 1.0f - g_wetnessDarkening, saturate(rainStrength));
+
 			const float isHorizontal = step(0.5f, worldNormal.y);
 			const float4 rainResult = ApplyRainDroplets(
 				worldNormal,

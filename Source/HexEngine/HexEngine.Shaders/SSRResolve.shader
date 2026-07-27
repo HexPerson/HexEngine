@@ -111,10 +111,15 @@
 			g_ssrSourceA.SampleLevel(g_textureSampler, screenPos, 0).rgb +
 			g_ssrSourceB.SampleLevel(g_textureSampler, screenPos, 0).rgb;
 
+		// Alpha is the fraction of the DESTINATION to replace (the pass draws with
+		// PremultipliedAlpha: src + dst * (1 - src.a)). Every early-out below
+		// therefore has to return alpha 0, which degrades exactly to the additive
+		// blit this pass used to be. Returning 1 would wipe beauty.
+
 		// Legacy stacking behaviour, kept for A/B: the deferred pass still owns the
 		// environment term, so this pass is the plain additive blit it always was.
 		if (g_iblComposeInResolve < 0.5f)
-			return float4(ssr, 1.0f);
+			return float4(ssr, 0.0f);
 
 		const float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
 		const float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
@@ -130,7 +135,7 @@
 		// SSR keys on (so a pixel SSR declined to trace can't be handed a full
 		// environment term here instead).
 		if (pixelPosWS.a > 0.0f || pixelNormal.w == g_frustumDepths[3])
-			return float4(ssr, 1.0f);
+			return float4(ssr, 0.0f);
 
 		const float4 pixelColour = GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos);
 		const float4 matSample   = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
@@ -141,6 +146,7 @@
 		const float3 V = normalize(g_eyePos.xyz - pixelPosWS.xyz);
 
 		float3 envRadiance;
+		float3 specularReflectance;
 		const float3 envSpecular = EvaluateEnvSpecular(
 			g_iblSkyEnvAtlas, g_iblProbeAtlas, g_iblProbeAtlas2, g_dfgLut,
 			g_textureSampler,
@@ -149,10 +155,56 @@
 			g_iblParams,
 			float2(g_useDfgLut, g_useMultiScatter),
 			g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
-			envRadiance);
+			envRadiance,
+			specularReflectance);
 
 		const float confidence = SampleConfidence(screenPos);
 
-		return float4(ssr + envSpecular * (1.0f - confidence), 1.0f);
+		// Energy split. The reflection is light the surface sends toward the eye
+		// INSTEAD of the light it already emitted, not on top of it - so the base
+		// layer has to lose the reflected fraction.
+		//
+		// Beauty arrives holding the surface's full diffuse and direct lighting,
+		// and this pass used to be a plain additive blend, giving
+		//     diffuse + F * reflection
+		// where energy conservation wants
+		//     (1 - F) * diffuse + F * reflection.
+		// Nothing anywhere scaled the base down; the only (1-F)-shaped term in
+		// the deferred pass is a constant (1 - f0). The error tracks Fresnel, so
+		// it is largest exactly where the reflection is most visible - measured
+		// on a wet floor at +19% near the camera rising to +30% toward the
+		// horizon, and tending to 2x at true grazing.
+		//
+		// The alpha channel carries that fraction and the pass draws with
+		// PremultipliedAlpha (src + dst * (1 - src.a)), so one draw does both.
+		// Note this deliberately attenuates ALL of beauty, including the direct
+		// specular highlight: that highlight and the environment reflection are
+		// the same lobe, so leaving it at full strength while adding a mirror
+		// reflection would double-count the same energy again.
+		// The attenuation has to match what was actually ADDED, and the two
+		// sources are weighted differently:
+		//
+		//   screen reflection - SSR.shader premodulates by raw Schlick Fresnel,
+		//                       which goes to 1 at grazing incidence
+		//   environment       - weighted by the split-sum reflectance, which for
+		//                       a rough surface stays low
+		//
+		// Attenuating everything by the split-sum term looked right on paper and
+		// measured as a flat 3.3% reduction at every depth - no grazing rise at
+		// all, because this floor's roughness is 0.625 and the split-sum value
+		// barely moves with angle. Meanwhile the screen reflection was still
+		// going in at nearly full Fresnel. So blend the two weights by the same
+		// confidence that decides which reflection the pixel actually got.
+		const float3 F0 = lerp(0.04f.xxx, saturate(pixelColour.rgb), metallic);
+		const float NdotV = saturate(dot(N, V));
+		const float3 schlick = F0 + (1.0f.xxx - F0) * pow(1.0f - NdotV, 5.0f);
+
+		const float3 appliedReflectance = lerp(specularReflectance, schlick, confidence);
+
+		const float reflectance = g_ssrEnergyConserve > 0.5f
+			? saturate(dot(appliedReflectance, float3(0.2126f, 0.7152f, 0.0722f)))
+			: 0.0f;
+
+		return float4(ssr + envSpecular * (1.0f - confidence), reflectance);
 	}
 }

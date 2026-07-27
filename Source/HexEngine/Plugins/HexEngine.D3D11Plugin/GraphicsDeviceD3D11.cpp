@@ -659,6 +659,18 @@ bool GraphicsDeviceD3D11::CreateInternal()
 	additivePreserveAlphaDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	_device->CreateBlendState(&additivePreserveAlphaDesc, &_additivePreserveAlphaBlendState);
 
+	// src + dst * (1 - src.a). See BlendState::PremultipliedAlpha.
+	CD3D11_BLEND_DESC premultipliedAlphaDesc(def);
+	premultipliedAlphaDesc.RenderTarget[0].BlendEnable = true;
+	premultipliedAlphaDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+	premultipliedAlphaDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+	premultipliedAlphaDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+	// Keep destination alpha intact - alpha here is a blend weight, not coverage.
+	premultipliedAlphaDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+	premultipliedAlphaDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+	premultipliedAlphaDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	_device->CreateBlendState(&premultipliedAlphaDesc, &_premultipliedAlphaBlendState);
+
 	CD3D11_BLEND_DESC transparencyPreserveAlphaDesc(def);
 	transparencyPreserveAlphaDesc.RenderTarget[0].BlendEnable = true;
 	transparencyPreserveAlphaDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
@@ -2734,6 +2746,10 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 
 	case HexEngine::BlendState::Multiplicative:
 		_deviceContext->OMSetBlendState(_multiplicativeBlendState, blend, 0xFFFFFFFF);
+		break;
+
+	case HexEngine::BlendState::PremultipliedAlpha:
+		_deviceContext->OMSetBlendState(_premultipliedAlphaBlendState != nullptr ? _premultipliedAlphaBlendState : _states->AlphaBlend(), blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Transparency:

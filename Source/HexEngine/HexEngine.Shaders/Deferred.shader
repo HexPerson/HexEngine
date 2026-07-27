@@ -430,6 +430,7 @@
 			if (g_iblComposeInResolve < 0.5f)
 			{
 				float3 envSpecRadianceUnused;
+				float3 specularReflectanceUnused;
 				pbr.rgb += EvaluateEnvSpecular(
 					g_iblSkyEnvAtlas, g_iblProbeAtlas, g_iblProbeAtlas2, g_dfgLut,
 					g_textureSampler,
@@ -438,7 +439,8 @@
 					g_iblParams,
 					float2(g_useDfgLut, g_useMultiScatter),
 					g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
-					envSpecRadianceUnused);
+					envSpecRadianceUnused,
+					specularReflectanceUnused);
 			}
 		}
 		// -------------------------------------------------------------------------------
