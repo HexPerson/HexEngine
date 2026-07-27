@@ -51,6 +51,10 @@
 	// Second-nearest probe, cross-faded with the first so moving between probe
 	// volumes doesn't snap the environment.
 	Texture2D g_iblProbeAtlas2 : register(t17);
+	// P1-C: 1x9 SH irradiance coefficients projected from the sky atlas. This is
+	// the real cosine-convolved diffuse term; the atlas's roughest row was only
+	// ever a stand-in for it.
+	Texture2D g_iblSkySHTex : register(t18);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -401,12 +405,20 @@
 			// row along the normal as an irradiance proxy (a GGX(1.0) prefilter is not a
 			// cosine integral, but it is close enough until P1-C's SH irradiance).
 			const float3 skySpec = SampleSkyEnv(R, perceptualRoughness);
-			const float3 skyDiff = SampleSkyEnv(N, 1.0f);
+
+			// Diffuse comes from SH irradiance (P1-C), not from the atlas's roughest
+			// row. A GGX roughness-1 prefilter is a wide specular lobe, not a cosine
+			// convolution - using it as diffuse gave a flat wash with no directional
+			// falloff. Order-2 SH reconstructs Lambertian irradiance to ~1% and costs
+			// 9 taps of a 1x9 texture.
+			const float3 skyDiff = ShIrradiance(g_iblSkySHTex, g_textureSampler, N);
 
 			// Horizon fade: the sky LUT carries no ground radiance, so a downward-facing
-			// direction would otherwise light undersides with horizon sky.
+			// direction would otherwise light undersides with horizon sky. The SH term
+			// already encodes the sky's own directional distribution, so it needs a far
+			// gentler fade than the specular lookup does.
 			const float specHorizon = saturate(R.y * 3.0f + 0.35f);
-			const float diffHorizon = saturate(N.y * 0.5f + 0.5f);
+			const float diffHorizon = saturate(N.y * 0.35f + 0.65f);
 
 			// Environment radiance before the BRDF weighting: sky terms carry
 			// their strengths and horizon fades here so the probe can replace

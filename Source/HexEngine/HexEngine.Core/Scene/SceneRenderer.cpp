@@ -219,6 +219,9 @@ namespace HexEngine
 	// contract is the overall texture aspect (width : height = 1 : rows).
 	static constexpr int32_t kIblEnvMapFaceSize = 128;
 	static constexpr int32_t kIblEnvMapRows = 5;
+	// L2 spherical harmonics: 9 coefficients, one per row of a 1x9 texture.
+	// Must match ENVMAP_SH_COEFFS in EnvMapCommon.shader.
+	static constexpr int32_t kIblEnvShCoeffs = 9;
 
 	// Sky image-based lighting. The engine had no IBL at all - ambient was a flat
 	// diffuse-only constant - so no surface had any environment response. Specular defaults
@@ -770,6 +773,7 @@ namespace HexEngine
 		SAFE_DELETE(_outlineGlowRT);
 		SAFE_DELETE(_outlineParamsBuffer);
 		SAFE_DELETE(_iblSkyEnvMap);
+		SAFE_DELETE(_iblSkySH);
 		SAFE_DELETE(_autoPuddlesQuadIB);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
@@ -800,6 +804,7 @@ namespace HexEngine
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
 		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
 		_probeEnvShader				= IShader::Create("EngineData.Shaders/ProbeEnvMap.hcs");
+		_envSHShader				= IShader::Create("EngineData.Shaders/EnvMapSH.hcs");
 		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
 		_hdrOutputShader			= IShader::Create("EngineData.Shaders/TonemapHDR.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
@@ -3653,6 +3658,8 @@ namespace HexEngine
 				// t17 = second-nearest probe, for the cross-fade.
 				g_pEnv->_graphicsDevice->SetTexture2D(17,
 					_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
+				// t18 = sky SH irradiance coefficients (P1-C).
+				g_pEnv->_graphicsDevice->SetTexture2D(18, _iblSkySH);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
@@ -4950,6 +4957,41 @@ namespace HexEngine
 
 		// The sky-view LUT rides in as the quad's source texture (t0).
 		guiRenderer->FullScreenTexturedQuad(g_pEnv->_atmosphereLUTs->GetSkyViewLUT(), _iblSkyEnvShader.get());
+
+		// P1-C: project the atlas we just built into SH irradiance coefficients.
+		// Nine texels, each integrating the atlas's mirror row against one basis
+		// function - the cosine-convolved diffuse term the flat ambient constant
+		// has been standing in for.
+		if (_envSHShader != nullptr)
+		{
+			if (_iblSkySH == nullptr)
+			{
+				_iblSkySH = graphics->CreateTexture2D(
+					1, kIblEnvShCoeffs,
+					DXGI_FORMAT_R16G16B16A16_FLOAT,
+					1,
+					D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+					1);
+				if (_iblSkySH != nullptr)
+					_iblSkySH->SetDebugName("_iblSkySH");
+			}
+
+			if (_iblSkySH != nullptr)
+			{
+				graphics->SetRenderTarget(_iblSkySH);
+
+				D3D11_VIEWPORT shvp;
+				shvp.TopLeftX = 0.0f;
+				shvp.TopLeftY = 0.0f;
+				shvp.Width = 1.0f;
+				shvp.Height = (float)kIblEnvShCoeffs;
+				shvp.MinDepth = 0.0f;
+				shvp.MaxDepth = 1.0f;
+				graphics->SetViewport(shvp);
+
+				guiRenderer->FullScreenTexturedQuad(_iblSkyEnvMap, _envSHShader.get());
+			}
+		}
 
 		guiRenderer->EndFrame();
 

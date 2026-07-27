@@ -221,8 +221,12 @@ namespace HexEngine
 		// (128 x 128*rows, RGBA16F) regenerated each frame from the sky-view
 		// LUT by RenderSkyEnvMap(). Fixed size - not part of the resize path.
 		ITexture2D* _iblSkyEnvMap = nullptr;
+		// P1-C: 1x9 RGBA16F of SH irradiance coefficients projected from the sky
+		// atlas. Replaces the flat ambient constant for diffuse environment light.
+		ITexture2D* _iblSkySH = nullptr;
 		std::shared_ptr<IShader> _iblSkyEnvShader;
 		std::shared_ptr<IShader> _probeEnvShader;
+		std::shared_ptr<IShader> _envSHShader;
 		// This frame's selected reflection probe (set in SetupPerFrameBuffer,
 		// consumed by the deferred t16 bind). Raw pointer valid for the frame only.
 		class ReflectionProbeComponent* _activeProbe = nullptr;
