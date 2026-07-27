@@ -4,6 +4,7 @@
 #include "Camera.hpp"
 #include "../Entity.hpp"
 #include "../../Scene/Scene.hpp"
+#include "../../Scene/PVS.hpp"
 #include "../../HexEngine.hpp"
 #include "../../Graphics/IGraphicsDevice.hpp"
 #include "../../Graphics/ITexture2D.hpp"
@@ -88,6 +89,12 @@ namespace HexEngine
 		if (scene == nullptr)
 			return;
 
+		const math::Vector3 centre = GetWorldCentre();
+		const math::Vector3 localPos = GetEntity()->GetPosition();
+		LOG_INFO("ReflectionProbe '%s': worldCentre=(%.2f, %.2f, %.2f) localPos=(%.2f, %.2f, %.2f)",
+			GetEntity()->GetName().c_str(), centre.x, centre.y, centre.z,
+			localPos.x, localPos.y, localPos.z);
+
 		_rigEntity = scene->CreateEntity("ReflectionProbeRig", GetWorldCentre());
 		if (_rigEntity == nullptr)
 			return;
@@ -98,13 +105,66 @@ namespace HexEngine
 		_rigCamera = _rigEntity->AddComponent<Camera>();
 		// 90-degree square faces, near matched to the main camera's default.
 		_rigCamera->SetPespectiveParameters(ToRadian(90.0f), 1.0f, 0.1f, 1000.0f);
-		_rigCamera->SetViewport(math::Viewport(0.0f, 0.0f, (float)kProbeFaceSize, (float)kProbeFaceSize, 0.0f, 1.0f));
+		// Capture at the LARGEST SQUARE that fits the shared render buffers, not at
+		// the small face resolution.
+		//
+		// The renderer's fullscreen passes (lighting, composition) draw a quad
+		// sampling UV 0..1 of the full-size gbuffer regardless of the current
+		// viewport. Rendering the capture into a small corner therefore squashes
+		// the ENTIRE gbuffer into that corner: the capture's own geometry occupies
+		// ~0.067 x 0.124 of the sampled range and everything else is cleared, so
+		// the face comes out a flat wash that varies only slightly per direction.
+		// That is exactly what every capture looked like until this was found -
+		// and raising the viewport to full size immediately produced real room
+		// structure in the face.
+		//
+		// Cost: six full-resolution scene renders per capture, one per frame. It's
+		// a bake, not a per-frame cost, and correctness beats cheapness here. The
+		// faces are downsampled to kProbeFaceSize on the way out (see Update) so
+		// only ~3 MB of probe textures are retained rather than ~200 MB.
+		uint32_t bbW = 0, bbH = 0;
+		g_pEnv->_graphicsDevice->GetBackBufferDimensions(bbW, bbH);
+		const float square = (float)std::min(bbW, bbH);
+		_rigCamera->SetViewport(math::Viewport(0.0f, 0.0f, square, square, 0.0f, 1.0f));
 		// Marks this as an offline capture: the renderer skips SSR/NRD and TAA
 		// for it, and won't sample reflection probes into the capture. Without
 		// this the NRD denoiser asserts - its buffers are main-camera sized while
 		// this camera is 256px, and the jitter conversion between the two scales
 		// a half-pixel jitter to 7.5 pixels.
 		_rigCamera->SetEnvironmentCapture(true);
+
+		// Seed the rig camera's PVS with everything already in the scene.
+		//
+		// Scene::FlushPVS pushes an entity into every camera's PVS at the moment
+		// that ENTITY is added. A camera created later - like this rig, in a
+		// fully-loaded scene - therefore starts with an empty PVS and only ever
+		// receives entities added after it. It renders nothing: the gbuffer stays
+		// empty and lighting resolves to flat ambient, which is exactly what the
+		// captured faces looked like (a different flat tone per direction, no
+		// geometry at all, in a room with floor-to-ceiling windows).
+		//
+		// PVS::ForceRebuild is not enough - it only sets a rebuild flag and
+		// re-evaluates the entities the PVS already knows about, which for a fresh
+		// camera is none. The engine's other offscreen-capture path (IconService)
+		// hits the same wall and solves it by seeding the PVS explicitly.
+		if (auto* pvs = _rigCamera->GetPVS(); pvs != nullptr)
+		{
+			int32_t seeded = 0;
+			for (const auto& [signature, entities] : scene->GetEntities())
+			{
+				for (auto* e : entities)
+				{
+					if (e != nullptr && e != _rigEntity)
+					{
+						pvs->AddEntity(e);
+						++seeded;
+					}
+				}
+			}
+			pvs->ForceRebuild();
+			LOG_INFO("ReflectionProbe '%s': seeded rig PVS with %d entities",
+				GetEntity()->GetName().c_str(), seeded);
+		}
 		// Post-processing stays ON for capture faces even though that bakes the
 		// tonemapped LDR frame into the probe: the camera render target is only
 		// ever written by the post chain's output stage (every RT write in
@@ -173,10 +233,28 @@ namespace HexEngine
 				return;
 			}
 
+			// Downsample the full-resolution capture into a small face texture. A
+			// straight CopyTo can't do this (CopyResource needs matching sizes);
+			// BlendTo_Additive draws a fullscreen quad into the destination, which
+			// rescales - the same pattern IconService uses to shrink a rendered
+			// frame into an icon.
 			if (_faces[_pendingFace] == nullptr)
-				_faces[_pendingFace] = g_pEnv->_graphicsDevice->CreateTexture(rt);
+			{
+				_faces[_pendingFace] = g_pEnv->_graphicsDevice->CreateTexture2D(
+					kProbeFaceSize,
+					kProbeFaceSize,
+					DXGI_FORMAT_R16G16B16A16_FLOAT,
+					1,
+					D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+					1);
+				if (_faces[_pendingFace] != nullptr)
+					_faces[_pendingFace]->SetDebugName("ReflectionProbeFace");
+			}
 			if (_faces[_pendingFace] != nullptr)
-				rt->CopyTo(_faces[_pendingFace]);
+			{
+				_faces[_pendingFace]->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+				rt->BlendTo_Additive(_faces[_pendingFace]);
+			}
 
 			if (_pendingFace == 5)
 			{

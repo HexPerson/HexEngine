@@ -208,7 +208,11 @@ namespace HexEngine
 	// face 0 (before prefiltering - answers "is the rig even framing the room?").
 	// Int, not bool: a bool HVar clamps every value to 0/1, so modes 2 and 3
 	// would silently become 1.
-	HVar r_iblSkyEnvDebug("r_iblSkyEnvDebug", "Overlay an env atlas: 1=sky, 2=active probe, 3=probe raw face 0", (int32_t)0, (int32_t)0, (int32_t)3);
+	// 1 = sky atlas, 2 = active probe atlas, 3..8 = the active probe's RAW capture
+	// faces 0..5 (+X,-X,+Y,-Y,+Z,-Z) before prefiltering. Face 2 (+Y, straight up)
+	// is the useful one for "is the rig inside the building?" - a ceiling and a sky
+	// are impossible to confuse, whereas a wall and the ground both read as flat.
+	HVar r_iblSkyEnvDebug("r_iblSkyEnvDebug", "Env atlas overlay: 1=sky, 2=probe atlas, 3..8=probe raw face 0..5", (int32_t)0, (int32_t)0, (int32_t)8);
 
 	// Atlas geometry. Must match ENVMAP_FACE_SIZE / ENVMAP_ROUGHNESS_ROWS in
 	// EnvMapCommon.shader - the shader derives everything from uv, so the only
@@ -3397,12 +3401,13 @@ namespace HexEngine
 				debugAtlas = _iblSkyEnvMap;
 			else if (r_iblSkyEnvDebug._val.i32 == 2 && _activeProbe != nullptr)
 				debugAtlas = _activeProbe->GetEnvAtlas();
-			else if (r_iblSkyEnvDebug._val.i32 == 3 && _activeProbe != nullptr)
+			else if (r_iblSkyEnvDebug._val.i32 >= 3 && _activeProbe != nullptr)
 			{
-				// Raw +X capture face, unprefiltered. If this doesn't look like the
-				// room the probe sits in, the problem is the capture (rig framing /
+				// Raw capture face, unprefiltered. If this doesn't look like the room
+				// the probe sits in, the problem is the capture (rig framing /
 				// position), not the prefilter.
-				debugAtlas = _activeProbe->GetFace(0);
+				debugAtlas = _activeProbe->GetFace(
+					std::clamp(r_iblSkyEnvDebug._val.i32 - 3, 0, 5));
 				debugIsFace = true;
 			}
 
