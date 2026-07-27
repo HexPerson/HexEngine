@@ -71,6 +71,17 @@ namespace HexEngine
 		void RenderVolumetricLighting();
 		void RenderVolumetricClouds();
 		void RenderSSR();
+		// True when RenderSSR will actually run for the current scene/camera, which
+		// is also the condition for handing environment specular to the SSR resolve
+		// instead of the deferred pass. The two MUST be driven by the same
+		// predicate: if the deferred pass drops the term for a frame where no
+		// resolve runs, every glossy surface loses its environment response, and if
+		// it keeps the term for a frame where the resolve does run, the two stack
+		// again - which is the bug this whole path exists to fix.
+		bool WillRenderSSR() const;
+		// The above, additionally gated on r_iblComposeSSR. Uploaded to the shaders
+		// as _iblComposeParams.x.
+		bool ShouldComposeEnvSpecularInResolve() const;
 		// IBL step 1: prefilter the Hillaire sky-view LUT into the octahedral
 		// roughness atlas (_iblSkyEnvMap) consumed by the deferred IBL term.
 		// See EnvMapCommon.shader for the atlas layout rationale.

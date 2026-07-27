@@ -142,48 +142,11 @@
 		return min(densityShape * heightMask * verticalCore * billow * g_cloudParams0.x, 2.0f);
 	}
 
-	// Prefiltered environment lookup: direction + perceptual roughness against the
-	// octahedral atlas (built from the same sky-view LUT the sky sphere renders from,
-	// so an IBL reflection and the sky seen directly agree). Roughness selects between
-	// the atlas's prefiltered rows, so a rough floor gets a genuinely blurred sky
-	// rather than a sharp one dimmed. g_textureSampler is this shader's linear
-	// sampler (s0); Deferred has no g_linearSampler.
-	float3 SampleSkyEnv(float3 dir, float roughness)
-	{
-		return SampleEnvAtlas(g_iblSkyEnvAtlas, g_textureSampler, dir, roughness);
-	}
+	// SampleSkyEnv's one caller moved into EnvMapCommon::EvaluateEnvSpecular, which
+	// takes the atlas as a parameter so the SSR resolve can call it too.
 
-	// Weight for a probe at this world position: 1 well inside its box, falling to
-	// 0 at the boundary over the outer 25%. Used both to fade a probe out at its
-	// own edge and to cross-fade against the second-nearest probe, so a pixel in
-	// the overlap of two volumes gets a weighted mix rather than whichever one
-	// happened to win the sort.
-	float ProbeWeight(float3 worldPos, float4 centre, float4 extents)
-	{
-		if (centre.w < 0.5f)
-			return 0.0f;
-		const float3 a = abs(worldPos - centre.xyz) / max(extents.xyz, 0.001f.xxx);
-		const float boxDist = max(a.x, max(a.y, a.z)); // <1 inside
-		return saturate((1.0f - boxDist) / 0.25f);
-	}
-
-	// Box-projected direction for a probe (Lagarde): intersect the reflection ray
-	// with the probe's box and look from the probe centre toward that hit, so flat
-	// floors reflect the actual walls instead of infinitely-distant radiance.
-	float3 ProbeSpecularDir(float3 R, float3 worldPos, float4 centre, float4 extents)
-	{
-		if (extents.w < 0.5f)
-			return R;
-
-		const float3 localPos = worldPos - centre.xyz;
-		const float3 ext = max(extents.xyz, 0.001f.xxx);
-		const float3 safeR = sign(R) * max(abs(R), 1e-4f.xxx);
-		const float3 planeA = ( ext - localPos) / safeR;
-		const float3 planeB = (-ext - localPos) / safeR;
-		const float3 furthest = max(planeA, planeB);
-		const float hitDist = min(furthest.x, min(furthest.y, furthest.z));
-		return normalize(localPos + R * max(hitDist, 0.0f));
-	}
+	// ProbeWeight / ProbeSpecularDir moved to EnvMapCommon.shader, alongside the
+	// EvaluateEnvSpecular that both this pass and the SSR resolve now call.
 
 	float CalculateCloudShadow(float3 worldPos, float3 sunDir)
 	{
@@ -399,66 +362,35 @@
 
 			const float3 N = normalize(pixelNormal.xyz);
 			const float3 V = normalize(g_eyePos.xyz - pixelPosWS.xyz);
-			const float NdotV = saturate(dot(N, V));
-			const float3 R = reflect(-V, N);
 
-			const float3 diffuseColour  = pixelColour.rgb * (1.0f - f0) * (1.0f - metallic);
-			const float3 specularColour = lerp(f0, pixelColour.rgb, metallic);
+			const float3 diffuseColour = pixelColour.rgb * (1.0f - f0) * (1.0f - metallic);
 
-			// P1-B: real DFG lookup, with the analytic fit as the fallback for the
-			// first frame (before the table is generated) and when disabled.
-			const float3 dfgSample = g_dfgLut.SampleLevel(g_textureSampler, float2(NdotV, perceptualRoughness), 0).rgb;
-			const bool useLut = (g_useDfgLut > 0.5f) && (dfgSample.b > 1e-4f);
-			const float2 dfg = useLut ? dfgSample.rg : EnvBRDFApprox(NdotV, perceptualRoughness);
-
-			// Multi-scatter energy compensation (Fdez-Aguera 2019).
-			//
-			// Single-scatter GGX models ONE bounce off the microfacet surface, so
-			// the light that would have bounced again is simply lost. The loss
-			// grows with roughness and makes rough metals render noticeably too
-			// dark. Ess (the DFG table's .b channel) is the energy a white-Fresnel
-			// surface actually returns, so 1-Ess is what went missing; scaling by
-			// F0 * (1-Ess)/Ess adds back the portion that would have survived
-			// further bounces at this surface's reflectance.
-			float3 energyCompensation = 1.0f.xxx;
-			if (useLut && g_useMultiScatter > 0.5f)
-			{
-				const float Ess = max(dfgSample.b, 1e-3f);
-				energyCompensation = 1.0f.xxx + specularColour * (1.0f / Ess - 1.0f);
-			}
-
-			// The atlas is prefiltered per roughness row, so the lookup uses the true
-			// mirror direction - no normal-bias hack needed. Diffuse takes the roughest
-			// row along the normal as an irradiance proxy (a GGX(1.0) prefilter is not a
-			// cosine integral, but it is close enough until P1-C's SH irradiance).
-			const float3 skySpec = SampleSkyEnv(R, perceptualRoughness);
-
+			// ---- Diffuse ---------------------------------------------------------
 			// Diffuse comes from SH irradiance (P1-C), not from the atlas's roughest
 			// row. A GGX roughness-1 prefilter is a wide specular lobe, not a cosine
 			// convolution - using it as diffuse gave a flat wash with no directional
 			// falloff. Order-2 SH reconstructs Lambertian irradiance to ~1% and costs
 			// 9 taps of a 1x9 texture.
+			//
+			// Diffuse stays in this pass unconditionally. SSR's diffuse channel is a
+			// screen-space DELTA over the voxel-GI baseline, not a competing estimate
+			// of environment irradiance, so there is nothing for the resolve to
+			// compose it against - only the specular term has two rival estimators.
 			const float3 skyDiff = ShIrradiance(g_iblSkySHTex, g_textureSampler, N);
 
 			// Horizon fade: the sky LUT carries no ground radiance, so a downward-facing
 			// direction would otherwise light undersides with horizon sky. The SH term
 			// already encodes the sky's own directional distribution, so it needs a far
 			// gentler fade than the specular lookup does.
-			const float specHorizon = saturate(R.y * 3.0f + 0.35f);
 			const float diffHorizon = saturate(N.y * 0.35f + 0.65f);
 
-			// Environment radiance before the BRDF weighting: sky terms carry
-			// their strengths and horizon fades here so the probe can replace
-			// them wholesale inside its box.
-			float3 envSpecRadiance = skySpec * specHorizon * g_iblSkySpecular;
 			float3 envDiffRadiance = skyDiff * diffHorizon * g_iblSkyDiffuse;
 
-			// ---- Reflection probe override --------------------------------------
-			// A captured probe is local radiance with occlusion baked in - inside
-			// its box it REPLACES the sky terms (which are unoccluded and
-			// therefore wrong indoors) rather than adding to them. Fades back to
-			// the sky terms over the outer 15% of the box so walking out of a
-			// probe's volume doesn't pop.
+			// A probe's SH is integrated from what that probe actually sees, so it
+			// already encodes its own occlusion - an indoor probe's irradiance knows
+			// the roof is solid. Sky SH indoors is what floods a room blue. Specular
+			// and diffuse take SEPARATE strengths (g_iblParams.z / .w): driving both
+			// from the probe strength washed interiors flat cream.
 			{
 				const float w1 = ProbeWeight(pixelPosWS.xyz, g_probeCenter,  g_probeExtents);
 				const float w2 = ProbeWeight(pixelPosWS.xyz, g_probeCenter2, g_probeExtents2);
@@ -466,55 +398,48 @@
 
 				if (wSum > 0.0f)
 				{
-					// Normalise so overlapping volumes hand back one probe's worth of
-					// energy, then fade the whole probe term against the sky term by
-					// the UNnormalised coverage - a pixel only partly covered by any
-					// probe should still see some sky rather than a full-strength
-					// probe stretched to fill.
 					const float n1 = w1 / wSum;
 					const float n2 = w2 / wSum;
 					const float coverage = saturate(wSum);
 
-					float3 probeSpec = 0.0f.xxx;
 					float3 probeDiff = 0.0f.xxx;
-
-					// Diffuse comes from each probe's own SH irradiance, not from the
-					// atlas's roughest row. That's the term that carries the probe's
-					// occlusion: sky SH says "the whole hemisphere is bright sky", a
-					// probe's SH says "mostly walls and ceiling, sky only through the
-					// windows". Using sky SH indoors is what floods a room blue, and
-					// it's why there was a visible seam at the probe boundary.
 					if (w1 > 0.0f)
-					{
-						const float3 d1 = ProbeSpecularDir(R, pixelPosWS.xyz, g_probeCenter, g_probeExtents);
-						probeSpec += n1 * SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, d1, perceptualRoughness);
 						probeDiff += n1 * ShIrradiance(g_iblProbeSH, g_textureSampler, N);
-					}
 					if (w2 > 0.0f)
-					{
-						const float3 d2 = ProbeSpecularDir(R, pixelPosWS.xyz, g_probeCenter2, g_probeExtents2);
-						probeSpec += n2 * SampleEnvAtlas(g_iblProbeAtlas2, g_textureSampler, d2, perceptualRoughness);
 						probeDiff += n2 * ShIrradiance(g_iblProbeSH2, g_textureSampler, N);
-					}
 
-					// Specular and diffuse take SEPARATE strengths. Driving both from
-					// the probe strength reinstated a full-intensity diffuse IBL even
-					// though the sky diffuse term is deliberately off - and since the
-					// diffuse lookup is the atlas's roughest row (a near-uniform
-					// average of the captured room), it washed the whole interior flat
-					// cream and erased every bit of contrast. Probe diffuse now
-					// defaults to 0 until P1-C provides real cosine irradiance.
-					envSpecRadiance = lerp(envSpecRadiance, probeSpec * g_iblParams.z, coverage);
 					envDiffRadiance = lerp(envDiffRadiance, probeDiff * g_iblParams.w, coverage);
 				}
 			}
-			// ----------------------------------------------------------------------
 
-			const float3 iblSpecular =
-				envSpecRadiance * (specularColour * dfg.x + dfg.y) * energyCompensation;
-			const float3 iblDiffuse = envDiffRadiance * diffuseColour;
+			pbr.rgb += envDiffRadiance * diffuseColour;
 
-			pbr.rgb += iblSpecular + iblDiffuse;
+			// ---- Specular --------------------------------------------------------
+			// Owned by the SSR resolve when it is running (g_iblComposeInResolve).
+			// Adding it here as well is what made the two systems STACK: this pass
+			// runs first, the resolve blends additively onto beauty, so a pixel
+			// whose ray hit got environment + screen reflection double-counted while
+			// a pixel whose ray missed got environment here and nothing there. The
+			// resolve is the only place both estimates exist at once, which is the
+			// only place lerp(environment, screen, confidence) can be written.
+			//
+			// The flag is 0 - and this pass keeps the term - whenever no resolve
+			// will run: probe capture faces, secondary cameras, r_ssr 0, a scene
+			// with nothing reflective, or r_iblComposeSSR 0. See
+			// SceneRenderer::ShouldComposeEnvSpecularInResolve.
+			if (g_iblComposeInResolve < 0.5f)
+			{
+				float3 envSpecRadianceUnused;
+				pbr.rgb += EvaluateEnvSpecular(
+					g_iblSkyEnvAtlas, g_iblProbeAtlas, g_iblProbeAtlas2, g_dfgLut,
+					g_textureSampler,
+					N, V, pixelPosWS.xyz,
+					pixelColour.rgb, metallic, perceptualRoughness,
+					g_iblParams,
+					float2(g_useDfgLut, g_useMultiScatter),
+					g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
+					envSpecRadianceUnused);
+			}
 		}
 		// -------------------------------------------------------------------------------
 

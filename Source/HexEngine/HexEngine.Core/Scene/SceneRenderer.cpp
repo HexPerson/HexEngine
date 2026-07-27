@@ -276,6 +276,22 @@ namespace HexEngine
 	// it carries its own occlusion and is the correct indoor diffuse term.
 	HVar r_iblProbeDiffuse("r_iblProbeDiffuse", "Reflection probe diffuse strength (per-probe SH irradiance)", 1.0f, 0.0f, 4.0f);
 
+	// Compose environment specular against SSR in the resolve, instead of adding it
+	// in the deferred pass and letting the SSR blit stack on top.
+	//
+	// Stacking was never a composition: RenderLights runs first and adds the
+	// environment term, then RenderSSR blends its reflection additively onto
+	// beauty. Where a ray hit, the pixel got both and was double-bright. Where it
+	// missed it got environment but no screen data - and the specular miss path
+	// returned the voxel-GI cone trace, which is black whenever GI is off, so a
+	// floor ray aimed at a window pane (transparent glass never writes the opaque
+	// gbuffer, so the ray finds nothing) left the pane black in the reflection.
+	//
+	// With this on, the deferred pass drops the specular term entirely and the
+	// resolve writes lerp(environment, screen, confidence). Off restores the old
+	// stacked behaviour byte for byte, which is what makes the A/B measurable.
+	HVar r_iblComposeSSR("r_iblComposeSSR", "Compose environment specular with SSR in the resolve instead of stacking the two", true, false, true);
+
 	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
 	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
 	// y-down) and matches what Streamline and NRD do with the same buffer, but it ghosts
@@ -2345,6 +2361,13 @@ namespace HexEngine
 			bufferData._reflectionParams.x = r_iblDfgLut._val.b ? 1.0f : 0.0f;
 			bufferData._reflectionParams.y = r_iblMultiScatter._val.b ? 1.0f : 0.0f;
 
+			// Who owns environment specular this frame. Deferred.shader reads this
+			// to decide whether to add the term; SSR.shader reads it to decide
+			// whether a specular miss returns nothing (so SSRResolve can fill it
+			// with environment) or falls back to the voxel-GI cone trace.
+			bufferData._iblComposeParams = math::Vector4(
+				ShouldComposeEnvSpecularInResolve() ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+
 			// Select this frame's reflection probe: the nearest atlas-ready probe
 			// whose box contains the camera, falling back to the nearest ready
 			// probe overall. One probe per frame in v1 - rooms don't overlap
@@ -3159,7 +3182,10 @@ namespace HexEngine
 			}
 
 			// don't bother doing this if we don't need to, its expensive!
-			if(_currentScene->DidAnyDrawnItemReflect())
+			// WillRenderSSR() carries the DidAnyDrawnItemReflect check along with
+			// the camera/cvar ones, and is the same predicate the deferred pass
+			// consults when deciding whether to keep its environment specular.
+			if (WillRenderSSR())
 				RenderSSR();
 
 			// DLSS is itself a temporal resolver and consumes the jittered, un-resolved
@@ -5178,6 +5204,35 @@ namespace HexEngine
 		GFX_PERF_END();
 	}
 
+	bool SceneRenderer::WillRenderSSR() const
+	{
+		if (!r_ssr._val.b)
+			return false;
+
+		// Environment-capture cameras (reflection probe faces) never run SSR - see
+		// the NRD jitter/buffer-size note in RenderSSR.
+		if (_currentCamera == nullptr || _currentCamera->IsEnvironmentCapture())
+			return false;
+
+		// Main camera only. SSR + NRD are temporal systems keyed to one camera's
+		// history and viewport.
+		if (_currentScene == nullptr || _currentCamera != _currentScene->GetMainCamera())
+			return false;
+
+		// RenderPostProcessing skips the whole pass when nothing drawn this frame
+		// was reflective. Mirrored here so the deferred pass doesn't drop its
+		// environment specular for a frame whose resolve never runs.
+		if (!_currentScene->DidAnyDrawnItemReflect())
+			return false;
+
+		return g_pEnv->GetUIManager().GetRenderer() != nullptr;
+	}
+
+	bool SceneRenderer::ShouldComposeEnvSpecularInResolve() const
+	{
+		return r_iblComposeSSR._val.b && WillRenderSSR();
+	}
+
 	void SceneRenderer::RenderSSR()
 	{
 		PROFILE();
@@ -5280,10 +5335,20 @@ namespace HexEngine
             _denoiseFD.camera = _currentCamera;
             _denoiseFD.jitter = _taa.GetJitterOffset(bbvp.width, bbvp.height);
 
+			// The SSR signal handed to the resolve. Two sources so both the denoised
+			// and the raw path go through ONE draw: the resolve adds the
+			// environment term, and running it twice would add it twice.
+			//   denoised     - A = NRD's resolved diffuse+specular, B = nothing
+			//   not denoised - A = raw SSR diffuse, B = raw SSR specular
+			// A null bind reads as black, so the unused source contributes nothing.
+			ITexture2D* ssrSourceA = nullptr;
+			ITexture2D* ssrSourceB = nullptr;
+
 			if (r_ssrDenoise._val.b && g_pEnv->_denoiserProvider != nullptr)
 			{
 				// NRD-denoised path: pack diffuse + specular SSR signals + their hit distances,
-				// run NRD's RELAX_DIFFUSE_SPECULAR, then composite the resolved signal additively.
+				// run NRD's RELAX_DIFFUSE_SPECULAR, then hand the resolved signal to the
+				// composition below.
 				// FilterFrame compares the input texture size against NRD's last-bound size and
 				// rebuilds the pool internally when they differ - that's the DLSS-toggle safety
 				// net in case SceneRenderer::Resize's explicit CreateBuffers call is missed.
@@ -5292,45 +5357,10 @@ namespace HexEngine
 
 				_ssrResolved->CopyTo(_ssrHistory);
 
-				// NRD overwrites our per-frame constant buffer state; re-upload it.
-				auto sunLight = _currentScene->GetSunLight();
-
-				SetupPerFrameBuffer(
-					_currentCamera->GetViewMatrix(),
-					_currentCamera->GetProjectionMatrix(),
-					_currentCamera->GetViewMatrixPrev(),
-					_currentCamera->GetProjectionMatrixPrev(),
-					r_shadowCascades._val.i32,
-					sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
-					_currentCamera->GetViewport(),
-					6,
-					sunLight ? sunLight->GetLightMultiplier() : 1.0f
-				);
-
-				guiRenderer->StartFrame();
-				g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
-				g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
-				GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve");
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
-				guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+				ssrSourceA = _ssrResolved;
 			}
 			else
 			{
-				auto sunLight = _currentScene->GetSunLight();
-
-				SetupPerFrameBuffer(
-					_currentCamera->GetViewMatrix(),
-					_currentCamera->GetProjectionMatrix(),
-					_currentCamera->GetViewMatrixPrev(),
-					_currentCamera->GetProjectionMatrixPrev(),
-					r_shadowCascades._val.i32,
-					sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
-					_currentCamera->GetViewport(),
-					6,
-					sunLight ? sunLight->GetLightMultiplier() : 1.0f
-				);
-
 				// NRD-bypass path: composite the raw SSR diffuse + specular textures directly
 				// onto beauty. Use this to verify whether artifacts originate from the SSR shader
 				// or from NRD's denoising. If artifacts disappear here, the shader output is OK
@@ -5340,15 +5370,56 @@ namespace HexEngine
 				// the visible reflections on wet surfaces; without it, r_ssrDenoise=0 looked like
 				// "reflections vanished entirely" and made the diagnostic useless. Composite both
 				// diffuse and specular so the toggle isolates NRD vs the raw shader honestly.
-				guiRenderer->StartFrame();
-				g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
-				g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
-				GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve (no denoise)");
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
-				guiRenderer->FullScreenTexturedQuad(_ssrDiffuseTexture, _ssrResolve.get());
-				guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+				ssrSourceA = _ssrDiffuseTexture;
+				ssrSourceB = _ssrTexture;
 			}
+
+			// NRD overwrites our per-frame constant buffer state; re-upload it. The
+			// resolve reads the IBL params and probe placement out of it, so this
+			// is not optional on the denoised path.
+			{
+				auto sunLight = _currentScene->GetSunLight();
+
+				SetupPerFrameBuffer(
+					_currentCamera->GetViewMatrix(),
+					_currentCamera->GetProjectionMatrix(),
+					_currentCamera->GetViewMatrixPrev(),
+					_currentCamera->GetProjectionMatrixPrev(),
+					r_shadowCascades._val.i32,
+					sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
+					_currentCamera->GetViewport(),
+					6,
+					sunLight ? sunLight->GetLightMultiplier() : 1.0f
+				);
+			}
+
+			guiRenderer->StartFrame();
+			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Resolve + Env Compose");
+
+			// Everything the resolve reads is bound EXPLICITLY, and the quad is
+			// drawn with a null texture so nothing lands on the auto-slot counter
+			// after these. The IBL atlases keep the same registers the deferred
+			// pass uses (t15/t16/t17/t21) because both passes call the same
+			// EvaluateEnvSpecular and must not drift.
+			g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+			_gbuffer.BindAsShaderResource();                                  // t0..t4
+			g_pEnv->_graphicsDevice->SetTexture2D(5, ssrSourceA);
+			g_pEnv->_graphicsDevice->SetTexture2D(6, ssrSourceB);
+			// Raw, un-denoised specular hit info: .r is the screen-space
+			// confidence the composition blends against.
+			g_pEnv->_graphicsDevice->SetTexture2D(7, _ssrHitInfo);
+			g_pEnv->_graphicsDevice->SetTexture2D(15, _iblSkyEnvMap);
+			g_pEnv->_graphicsDevice->SetTexture2D(16,
+				_activeProbe != nullptr ? _activeProbe->GetEnvAtlas() : nullptr);
+			g_pEnv->_graphicsDevice->SetTexture2D(17,
+				_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
+			g_pEnv->_graphicsDevice->SetTexture2D(21, _dfgLut);
+
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrResolve.get());
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 
 			//guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
 			//_ssrResolved->CopyTo(_beautyRT);

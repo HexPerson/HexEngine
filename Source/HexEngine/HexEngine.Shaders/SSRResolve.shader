@@ -9,6 +9,9 @@
 "PixelShaderIncludes"
 {
 	UICommon
+	// Octahedral environment atlas + the shared EvaluateEnvSpecular that the
+	// deferred lighting pass calls with the same arguments.
+	EnvMapCommon
 }
 "VertexShader"
 {
@@ -18,6 +21,7 @@
 
 		output.position = input.position;
 		output.texcoord = input.texcoord;
+		output.positionSS = output.position;
 		output.colour = input.colour;
 
 		return output;
@@ -25,135 +29,130 @@
 }
 "PixelShader"
 {
-	//Texture2D historyTexture : register(t0);
-	//Texture2D velocityTexture : register(t1);
-	//Texture2D hitInfo : register(t2);
-	Texture2D shaderTexture : register(t0);
-	
+	// SSR composition pass.
+	//
+	// Screen-space reflection and image-based lighting are two estimates of the
+	// SAME quantity - the radiance arriving along the reflection vector. They have
+	// to be COMPOSED, and this is the only pass where both exist at once.
+	//
+	// Before this, the deferred pass added environment specular and then this
+	// resolve blended the screen-space reflection additively on top. That stacked
+	// them: where a ray hit, the pixel got environment + screen and was
+	// double-bright; where a ray missed - a floor ray aimed at a window pane finds
+	// nothing, because transparent glass never writes the opaque gbuffer - the
+	// SSR term was black and the pane rendered black in the floor's reflection.
+	//
+	// Now the deferred pass leaves specular alone (g_iblComposeInResolve) and this
+	// pass writes lerp(environment, screen, confidence). Screen data wins where it
+	// exists; the environment fills every miss. Expressed additively, since the
+	// draw blends onto beauty:
+	//
+	//     beauty += ssr + environment * (1 - confidence)
+	//
+	// which is the lerp, because SSR's specular output is already ~zero wherever
+	// its confidence is zero (the miss path returns nothing so this pass can fill
+	// it - see SSR.shader).
+	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 
-	SamplerState PointSampler : register(s3);
-	SamplerState LinearSampler : register(s4);
+	// The SSR signal to composite. Two sources so both paths through
+	// SceneRenderer::RenderSSR are one draw:
+	//   denoised     - A = NRD's resolved diffuse+specular, B = null (black)
+	//   not denoised - A = raw SSR diffuse, B = raw SSR specular
+	// A null bind reads as black, so the unused source contributes nothing.
+	Texture2D g_ssrSourceA : register(t5);
+	Texture2D g_ssrSourceB : register(t6);
 
-#define val0 (1.0)
-#define val1 (0.125)
-#define effect_width (0.15)
+	// Specular hit info straight from the SSR pass (NOT denoised): .r is the
+	// fraction of this pixel's specular rays that found real screen-space data.
+	Texture2D g_ssrSpecHitInfo : register(t7);
 
-	float4 ShaderMain(UIPixelInput input) : SV_Target
+	// Same slots the deferred pass binds these at, deliberately - the two passes
+	// call EvaluateEnvSpecular with the same textures and must not drift.
+	Texture2D g_iblSkyEnvAtlas : register(t15);
+	Texture2D g_iblProbeAtlas  : register(t16);
+	Texture2D g_iblProbeAtlas2 : register(t17);
+	Texture2D g_dfgLut         : register(t21);
+
+	SamplerState g_textureSampler : register(s0);
+	SamplerState g_pointSampler   : register(s2);
+
+	// Confidence arrives from a single stochastic ray per pixel, so it is close to
+	// binary and speckles on rough surfaces where the GGX cone jitters. The
+	// radiance it gates has been through NRD's spatial filter, so an unfiltered
+	// mask would fight it at every hit/miss boundary. A 3x3 box is the cheapest
+	// thing that turns 0-or-1 into ten levels and roughly tracks the denoiser's
+	// own footprint; it is not an attempt to match NRD exactly.
+	float SampleConfidence(float2 screenPos)
 	{
-		float2 screenPos = float2(input.position.x / (float)g_screenWidth , input.position.y / (float)g_screenHeight ); //input.texcoord
+		const float2 texel = float2(1.0f / (float)g_screenWidth, 1.0f / (float)g_screenHeight);
 
-		float4 pixels = shaderTexture.Sample(LinearSampler, input.texcoord);
-		//return pixels;
-		return float4(pixels.rgb, 1.0f);
-
-#if 0
-		float3 colour = pixels.rgb;
-		float2 velocity = velocityTexture.Sample(PointSampler, input.texcoord).xy;
-
-		//velocity /= float2(g_screenWidth, g_screenHeight);
-		//velocity.xy = (velocity.xy + 1) / 2.0f;
-
-		//if(pixels.a == 0.0f)
-		//	return float4(pixels.rgb, 1.0f);
-		
-		float4 hits = hitInfo.Sample(PointSampler, input.texcoord);
-
-		if(hits.w == -1.0f)
-			return float4(colour, 1);
-
-		// we did not hit :(
-		//if(hits.w == 0.0f)
+		float total = 0.0f;
+		[unroll]
+		for (int y = -1; y <= 1; ++y)
 		{
-			float3 adjacentAccumulated = 0;
-			float numHits = 0;
-
-			if(hits.w > 0)
+			[unroll]
+			for (int x = -1; x <= 1; ++x)
 			{
-				adjacentAccumulated = pixels.rgb;
-				numHits = numHits + 1;
-			}
-
-			float hits = 0;
-
-			/*
-
-			x 0 x
-			0 x 0
-			x 0 x
-			*/
-
-			const int2 offsets[] = {
-				//{-1, -1},
-				//{ 1, -1},
-				//{ 1,  1},
-				//{-1,  1},
-
-				{-1,  0},
-				{ 0, -1},
-				{ 1,  0},
-				{ 0,  1},
-			};
-
-			int2 screenCords = int2(screenPos.x * g_screenWidth, screenPos.y * g_screenHeight);
-
-			
-
-			const float searchSize = 1.0f;
-
-			[loop]
-			for (int i = 0; i < 4; ++i)
-			{
-				float2 tsOffset = float2((float)offsets[i][0] / g_screenWidth, (float)offsets[i][1] / g_screenHeight);
-
-				tsOffset *= searchSize;
-
-				//tsOffset -= velocity;
-
-
-				float4 adjacentHit = hitInfo.Sample(PointSampler, input.texcoord + tsOffset);//hitInfo.Load(int3(screenCords + offsets[i], 0));
-				
-				// did we find an adjacent hit?
-				if(adjacentHit.w == 1.0f)
-				{
-					adjacentAccumulated += adjacentHit.rgb;//shaderTexture.Load(int3(screenCords + offsets[i], 0)).rgb;
-					//adjacentAccumulated += shaderTexture.Sample(LinearSampler, screenPos + tsOffset).rgb;
-					numHits = numHits + 1;
-					//break;
-				}
-				else
-				{
-					//adjacentAccumulated += shaderTexture.Sample(LinearSampler, input.texcoord + tsOffset).rgb;//colour.rgb;//shaderTexture.Load(int3(screenCords + offsets[i], 0)).rgb;
-					//numHits = numHits + 1;
-				}
-			}
-
-			if(numHits > 0)
-			{
-				adjacentAccumulated = adjacentAccumulated / numHits;
-				colour = adjacentAccumulated;
+				const float2 uv = screenPos + float2((float)x, (float)y) * texel;
+				total += g_ssrSpecHitInfo.SampleLevel(g_pointSampler, uv, 0).r;
 			}
 		}
 
-		return float4(colour, 1);
-		float2 prevousPixelPos = input.texcoord - velocity;
+		return saturate(total * (1.0f / 9.0f));
+	}
 
-		float3 history = historyTexture.Sample(LinearSampler, prevousPixelPos).rgb;
+	float4 ShaderMain(UIPixelInput input) : SV_Target
+	{
+		const float2 screenPos = float2(
+			input.position.x / (float)g_screenWidth,
+			input.position.y / (float)g_screenHeight);
 
-		float3 NearColor0 = shaderTexture.Sample(PointSampler, input.texcoord, int2(1, 0)).xyz;
-		float3 NearColor1 = shaderTexture.Sample(PointSampler, input.texcoord, int2(0, 1)).xyz;
-		float3 NearColor2 = shaderTexture.Sample(PointSampler, input.texcoord, int2(-1, 0)).xyz;
-		float3 NearColor3 = shaderTexture.Sample(PointSampler, input.texcoord, int2(0, -1)).xyz;
+		const float3 ssr =
+			g_ssrSourceA.SampleLevel(g_textureSampler, screenPos, 0).rgb +
+			g_ssrSourceB.SampleLevel(g_textureSampler, screenPos, 0).rgb;
 
-		float3 BoxMin = min(colour, min(NearColor0, min(NearColor1, min(NearColor2, NearColor3))));
-		float3 BoxMax = max(colour, max(NearColor0, max(NearColor1, max(NearColor2, NearColor3))));
+		// Legacy stacking behaviour, kept for A/B: the deferred pass still owns the
+		// environment term, so this pass is the plain additive blit it always was.
+		if (g_iblComposeInResolve < 0.5f)
+			return float4(ssr, 1.0f);
 
-		//history = clamp(history, BoxMin, BoxMax);
+		const float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
+		const float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
 
-		float modulationFactor = 0.8f;//0.15f;
+		// Sky. Without this the resolve would paint environment specular over the
+		// sky itself - the pixels most likely to have zero SSR confidence and so
+		// the ones the composition would push hardest toward environment.
+		//
+		// Both tests, because the engine has two spellings of "this pixel is sky"
+		// and they are not redundant: pixelPosWS.a is what the deferred pass keys
+		// on (so the pixel set that gets an environment term stays identical
+		// whichever pass owns it), and normal.w at the frustum far plane is what
+		// SSR keys on (so a pixel SSR declined to trace can't be handed a full
+		// environment term here instead).
+		if (pixelPosWS.a > 0.0f || pixelNormal.w == g_frustumDepths[3])
+			return float4(ssr, 1.0f);
 
-		float3 resolvedColour = lerp(colour, history, modulationFactor);
+		const float4 pixelColour = GBUFFER_DIFFUSE.Sample(g_pointSampler, screenPos);
+		const float4 matSample   = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
 
-		return float4(resolvedColour, 1.0f);
-#endif
+		const float metallic = matSample.r;
+
+		const float3 N = normalize(pixelNormal.xyz);
+		const float3 V = normalize(g_eyePos.xyz - pixelPosWS.xyz);
+
+		float3 envRadiance;
+		const float3 envSpecular = EvaluateEnvSpecular(
+			g_iblSkyEnvAtlas, g_iblProbeAtlas, g_iblProbeAtlas2, g_dfgLut,
+			g_textureSampler,
+			N, V, pixelPosWS.xyz,
+			pixelColour.rgb, metallic, matSample.g,
+			g_iblParams,
+			float2(g_useDfgLut, g_useMultiScatter),
+			g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
+			envRadiance);
+
+		const float confidence = SampleConfidence(screenPos);
+
+		return float4(ssr + envSpecular * (1.0f - confidence), 1.0f);
 	}
 }

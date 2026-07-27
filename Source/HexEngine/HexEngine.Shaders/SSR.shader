@@ -538,6 +538,31 @@
 			return float4(hit.colour, 1.0f);
 		}
 
+		// Composition path: hand the miss to the resolve, which has the environment
+		// term and will fill it in as lerp(environment, screen, confidence).
+		//
+		// This is the case that rendered window panes black in the floor's
+		// reflection. Transparent glass never writes the opaque gbuffer, so a floor
+		// ray aimed at a pane marches straight through and finds nothing; the voxel
+		// cone trace below is then the only fallback, and it returns black whenever
+		// GI is off (which is also when its clipmaps are deliberately left unbound,
+		// see RenderSSR). Returning zero with didReflect=false makes the miss
+		// explicit so the resolve can supply the environment instead of guessing.
+		//
+		// Environment is a strictly better estimate of "what is off-screen in this
+		// direction" than a cone trace of a possibly-empty clipmap, so the GI
+		// fallback stays only on the legacy path. Note this is NOT the same as
+		// emitting environment here: doing that while the deferred pass still added
+		// its own would trade black panes for double-bright ones.
+		if (g_iblComposeInResolve > 0.5f)
+		{
+			didReflect = false;
+			// Keep the miss hit distance the fallback path used, so NRD's
+			// reprojection sees the same magnitude it always has here.
+			hitDistance = 8.0f;
+			return float4(0.0f.xxx, 0.0f);
+		}
+
 		// Miss path - cone-trace the voxel GI clipmaps in the ray direction for an indirect-
 		// bounce fallback.
 		//
@@ -649,6 +674,11 @@
 		float specularHitDistAccum = 0.0f;
 		float diffuseSamples = 0.0f;
 		float specularSamples = 0.0f;
+		// Fraction of this pixel's specular rays that found real screen-space data.
+		// The resolve blends the environment in by (1 - this), so a pixel whose ray
+		// left the screen or passed through glass gets the environment rather than
+		// the black that a failed march used to leave behind.
+		float specularConfidenceAccum = 0.0f;
 
 		// Diffuse SSR: one stochastic hemisphere ray per pixel per frame. The diffuse path in
 		// GetReflection contributes only the screen-space DELTA over DiffuseGI's voxel-cone
@@ -724,6 +754,7 @@
 					specularAccum += reflected.rgb;
 					specularHitDistAccum += hitDistance;
 					specularSamples += 1.0f;
+					specularConfidenceAccum += didReflect ? 1.0f : 0.0f;
 				}
 			}
 		}
@@ -742,7 +773,12 @@
 		//ssr.diff = float4(pixelNormal.rgb, 1.0f);
 		ssr.diffHitInfo = float4(0.0f, 0.0f, 0.0f, averageDiffuseHitDistance);
 		ssr.spec = float4(specularRadiance * specularWeight, specularSamples > 0.0f ? 1.0f : 0.0f);
-		ssr.specHitInfo = float4(0.0f, 0.0f, 0.0f, averageSpecularHitDistance);
+		// .r carries the screen-space confidence for SSRResolve's environment
+		// composition; NRD reads only .w of this target (see NRDInterface's
+		// preprocess, which packs specularHitDistance.w), so .rgb are free.
+		const float specularConfidence =
+			specularSamples > 0.0f ? (specularConfidenceAccum / specularSamples) : 0.0f;
+		ssr.specHitInfo = float4(specularConfidence, 0.0f, 0.0f, averageSpecularHitDistance);
 
 		return ssr;
 	}

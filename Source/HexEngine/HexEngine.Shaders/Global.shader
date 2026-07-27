@@ -246,6 +246,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// Second-nearest probe (atlas at t17), for cross-fading between volumes.
 		float4 g_probeCenter2;
 		float4 g_probeExtents2;
+		// x = 1 when the SSR resolve owns the environment specular term, so the
+		// deferred pass must NOT add it (the two would otherwise stack instead of
+		// composing). See RenderStructs.hpp::_iblComposeParams. yzw reserved.
+		float4 g_iblComposeParams;
 	};
 
 	// Readable aliases for the packed slot above.
@@ -267,6 +271,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	#define g_ssrDebugSkyHits        (g_reflectionParams.w)
 	#define g_iblSkySpecular         (g_iblParams.x)
 	#define g_iblSkyDiffuse          (g_iblParams.y)
+	// 1 = the SSR resolve composes environment specular against the screen-space
+	// reflection; the deferred pass leaves the term alone and SSR's specular miss
+	// path returns nothing so the resolve can fill it with environment.
+	#define g_iblComposeInResolve    (g_iblComposeParams.x)
 
 	struct MaterialProps
 	{

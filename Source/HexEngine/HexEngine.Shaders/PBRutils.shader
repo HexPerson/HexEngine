@@ -36,18 +36,10 @@
 		return diffuseColor * lerp(1.0f, 1.0f / PI, g_pbrEnergyFix);
 	}
 
-	// Karis' analytic environment-BRDF fit (SIGGRAPH 2014 mobile approximation). Returns the
-	// (scale, bias) pair that a split-sum DFG lookup would give. Phase 1's IBL work replaces
-	// this with a real precomputed DFG LUT; it lives here now because multi-scatter energy
-	// compensation and image-based specular both need the same term.
-	float2 EnvBRDFApprox(float NdotV, float perceptualRoughness)
-	{
-		const float4 c0 = float4(-1.0f, -0.0275f, -0.572f, 0.022f);
-		const float4 c1 = float4(1.0f, 0.0425f, 1.04f, -0.04f);
-		const float4 r = perceptualRoughness * c0 + c1;
-		const float a004 = min(r.x * r.x, exp2(-9.28f * NdotV)) * r.x + r.y;
-		return float2(-1.04f, 1.04f) * a004 + r.zw;
-	}
+	// EnvBRDFApprox moved to EnvMapCommon.shader. The SSR resolve now evaluates the
+	// same environment-specular term as the deferred pass and needs the fit without
+	// pulling in this whole lighting header; keeping a second copy here would be a
+	// duplicate definition in every shader that includes both.
 
 	float3 specularReflection(float3 reflectance0, float3 reflectance90, float VdotH)
 	{

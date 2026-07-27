@@ -351,6 +351,26 @@ namespace HexEngine
 		// as the primary; center.w = 1 when a second atlas is bound at t17.
 		math::Vector4 _probeCenter2;
 		math::Vector4 _probeExtents2;
+
+		// Environment-specular ownership, appended at the end per the note above.
+		//   x = 1 when the SSR resolve owns the environment specular term, 0 when
+		//       the deferred lighting pass does.
+		//
+		// The two systems have to be COMPOSED, not stacked. Deferred runs before
+		// SSR and the SSR resolve blends additively onto beauty, so with both
+		// enabled a pixel whose ray hit got environment + screen reflection
+		// double-counted, while a pixel whose ray missed (a floor ray aimed at a
+		// window pane finds nothing - transparent glass never writes the opaque
+		// gbuffer) got neither and rendered black. Handing the whole term to the
+		// resolve puts both estimates in the same shader at the same time, where
+		// lerp(environment, screen, confidence) is expressible.
+		//
+		// Set per frame from r_iblComposeSSR AND the exact predicate that decides
+		// whether RenderSSR runs at all - a probe capture face, a secondary
+		// camera, r_ssr 0 or a scene with nothing reflective all keep the term in
+		// the deferred pass, because no resolve will run to supply it.
+		//   yzw reserved.
+		math::Vector4 _iblComposeParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */
