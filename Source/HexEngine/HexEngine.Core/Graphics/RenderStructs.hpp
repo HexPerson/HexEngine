@@ -344,6 +344,13 @@ namespace HexEngine
 		//                  projection is enabled for this probe.
 		math::Vector4 _probeCenter;
 		math::Vector4 _probeExtents;
+
+		// Second-nearest probe, for cross-fading between adjacent probe volumes.
+		// Without this a pixel snaps from one probe to the next the instant the
+		// selection changes, which pops when walking between rooms. Same packing
+		// as the primary; center.w = 1 when a second atlas is bound at t17.
+		math::Vector4 _probeCenter2;
+		math::Vector4 _probeExtents2;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

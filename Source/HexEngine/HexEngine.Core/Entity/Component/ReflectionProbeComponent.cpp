@@ -47,9 +47,33 @@ namespace HexEngine
 	static constexpr int32_t kProbeAtlasWidth = 128;
 	static constexpr int32_t kProbeAtlasRows = 5;
 
+	const ReflectionProbeComponent* ReflectionProbeComponent::s_captureInFlight = nullptr;
+
 	ReflectionProbeComponent::ReflectionProbeComponent(Entity* entity) :
 		UpdateComponent(entity)
 	{
+	}
+
+	void ReflectionProbeComponent::OnDebugRender()
+	{
+		if (g_pEnv == nullptr || g_pEnv->_debugRenderer == nullptr)
+			return;
+
+		const math::Vector3 c = GetWorldCentre();
+		const math::Vector3 e = _extents;
+
+		dx::BoundingBox box;
+		box.Center = dx::XMFLOAT3(c.x, c.y, c.z);
+		box.Extents = dx::XMFLOAT3(e.x, e.y, e.z);
+
+		// Amber while capturing, green once the atlas is live, dim red if the probe
+		// has no capture at all (nothing will be contributed inside this box).
+		const math::Color colour =
+			(_pendingFace >= 0 || _warmupFrames > 0) ? math::Color(1.0f, 0.65f, 0.0f, 0.8f) :
+			_atlasReady                              ? math::Color(0.2f, 1.0f, 0.3f, 0.6f) :
+			                                           math::Color(0.8f, 0.2f, 0.2f, 0.5f);
+
+		g_pEnv->_debugRenderer->DrawAABB(box, colour);
 	}
 
 	ReflectionProbeComponent::ReflectionProbeComponent(Entity* entity, ReflectionProbeComponent* copy) :
@@ -66,6 +90,10 @@ namespace HexEngine
 
 	ReflectionProbeComponent::~ReflectionProbeComponent()
 	{
+		// Never leave the scene-wide bake slot held by a destroyed probe.
+		if (s_captureInFlight == this)
+			s_captureInFlight = nullptr;
+
 		DestroyRig();
 
 		for (auto*& face : _faces)
@@ -227,9 +255,13 @@ namespace HexEngine
 			ITexture2D* rt = _rigCamera != nullptr ? _rigCamera->GetRenderTarget() : nullptr;
 			if (rt == nullptr)
 			{
-				// Camera lost its target (device reset?) - abort and retry.
+				// Camera lost its target (device reset?) - abort and retry. Release
+				// the bake slot too, or one failed capture would block every other
+				// probe in the scene forever.
 				_pendingFace = -1;
 				_captureRequested = true;
+				if (s_captureInFlight == this)
+					s_captureInFlight = nullptr;
 				return;
 			}
 
@@ -266,6 +298,9 @@ namespace HexEngine
 				if (_rigCamera != nullptr)
 					_rigCamera->SetRendersToTarget(false);
 				DestroyRig();
+				// Release the scene-wide bake slot so the next probe can start.
+				if (s_captureInFlight == this)
+					s_captureInFlight = nullptr;
 			}
 			else
 			{
@@ -297,8 +332,15 @@ namespace HexEngine
 
 		if (_captureRequested)
 		{
+			// Bake throttle: one probe at a time, scene-wide. Six full-resolution
+			// renders each means an unthrottled load-time recapture of N probes
+			// would stack N of them into the same frames. Wait our turn instead.
+			if (s_captureInFlight != nullptr && s_captureInFlight != this)
+				return;
+
 			LOG_INFO("ReflectionProbe '%s': starting 6-face capture", GetEntity()->GetName().c_str());
 			_captureRequested = false;
+			s_captureInFlight = this;
 			EnsureRig();
 			if (_rigEntity == nullptr || _rigCamera == nullptr)
 			{

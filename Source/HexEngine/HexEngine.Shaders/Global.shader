@@ -243,6 +243,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// extents.w = 1 when box projection is enabled. See RenderStructs.hpp.
 		float4 g_probeCenter;
 		float4 g_probeExtents;
+		// Second-nearest probe (atlas at t17), for cross-fading between volumes.
+		float4 g_probeCenter2;
+		float4 g_probeExtents2;
 	};
 
 	// Readable aliases for the packed slot above.

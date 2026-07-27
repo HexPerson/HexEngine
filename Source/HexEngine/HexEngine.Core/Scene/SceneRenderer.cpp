@@ -2315,8 +2315,11 @@ namespace HexEngine
 			// often, and per-pixel probe arrays are a later step. The chosen
 			// probe's atlas is bound at t16 by the deferred pass.
 			_activeProbe = nullptr;
+			_activeProbe2 = nullptr;
 			bufferData._probeCenter = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 			bufferData._probeExtents = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			bufferData._probeCenter2 = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			bufferData._probeExtents2 = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
 			// Never sample probes while capturing one: the capture camera sits
 			// inside its own probe's box, so it would bake the previous capture's
 			// reflections into the new one and compound them on every recapture.
@@ -2331,6 +2334,13 @@ namespace HexEngine
 					const math::Vector3 camPos = _cameraEntity->GetWorldTM().Translation();
 					float bestDistSq = FLT_MAX;
 					bool bestInside = false;
+					// Keep the TWO best probes so the shader can cross-fade between
+					// them. With only one, a pixel snaps to a different environment
+					// the instant the selection flips, which pops when walking
+					// between rooms.
+					float secondDistSq = FLT_MAX;
+					bool secondInside = false;
+
 					for (auto* probe : probes)
 					{
 						if (probe == nullptr || !probe->IsAtlasReady())
@@ -2342,12 +2352,25 @@ namespace HexEngine
 							fabsf(d.x) <= ext.x && fabsf(d.y) <= ext.y && fabsf(d.z) <= ext.z;
 						const float distSq = d.LengthSquared();
 						// Inside-probes always beat outside-probes; ties by distance.
-						if ((inside && !bestInside) ||
-							(inside == bestInside && distSq < bestDistSq))
+						const bool beatsBest =
+							(inside && !bestInside) || (inside == bestInside && distSq < bestDistSq);
+						if (beatsBest)
 						{
+							// Demote the old winner to second place.
+							secondInside = bestInside;
+							secondDistSq = bestDistSq;
+							_activeProbe2 = _activeProbe;
+
 							bestInside = inside;
 							bestDistSq = distSq;
 							_activeProbe = probe;
+						}
+						else if ((inside && !secondInside) ||
+								 (inside == secondInside && distSq < secondDistSq))
+						{
+							secondInside = inside;
+							secondDistSq = distSq;
+							_activeProbe2 = probe;
 						}
 					}
 					if (_activeProbe != nullptr)
@@ -2357,6 +2380,14 @@ namespace HexEngine
 						bufferData._probeCenter = math::Vector4(c.x, c.y, c.z, 1.0f);
 						bufferData._probeExtents = math::Vector4(
 							e.x, e.y, e.z, _activeProbe->GetBoxProjection() ? 1.0f : 0.0f);
+					}
+					if (_activeProbe2 != nullptr)
+					{
+						const math::Vector3 c = _activeProbe2->GetWorldCentre();
+						const math::Vector3 e = _activeProbe2->GetExtents();
+						bufferData._probeCenter2 = math::Vector4(c.x, c.y, c.z, 1.0f);
+						bufferData._probeExtents2 = math::Vector4(
+							e.x, e.y, e.z, _activeProbe2->GetBoxProjection() ? 1.0f : 0.0f);
 					}
 				}
 			}
@@ -3619,6 +3650,9 @@ namespace HexEngine
 				// exists - g_probeCenter.w is 0 then, so the shader never reads it.
 				g_pEnv->_graphicsDevice->SetTexture2D(16,
 					_activeProbe != nullptr ? _activeProbe->GetEnvAtlas() : nullptr);
+				// t17 = second-nearest probe, for the cross-fade.
+				g_pEnv->_graphicsDevice->SetTexture2D(17,
+					_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 

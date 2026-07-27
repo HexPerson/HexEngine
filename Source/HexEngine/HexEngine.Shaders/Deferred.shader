@@ -48,6 +48,9 @@
 	// The frame's selected reflection probe atlas (same octahedral layout).
 	// Only read when g_probeCenter.w > 0.5; a null bind reads black.
 	Texture2D g_iblProbeAtlas : register(t16);
+	// Second-nearest probe, cross-faded with the first so moving between probe
+	// volumes doesn't snap the environment.
+	Texture2D g_iblProbeAtlas2 : register(t17);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -137,6 +140,38 @@
 	float3 SampleSkyEnv(float3 dir, float roughness)
 	{
 		return SampleEnvAtlas(g_iblSkyEnvAtlas, g_textureSampler, dir, roughness);
+	}
+
+	// Weight for a probe at this world position: 1 well inside its box, falling to
+	// 0 at the boundary over the outer 25%. Used both to fade a probe out at its
+	// own edge and to cross-fade against the second-nearest probe, so a pixel in
+	// the overlap of two volumes gets a weighted mix rather than whichever one
+	// happened to win the sort.
+	float ProbeWeight(float3 worldPos, float4 centre, float4 extents)
+	{
+		if (centre.w < 0.5f)
+			return 0.0f;
+		const float3 a = abs(worldPos - centre.xyz) / max(extents.xyz, 0.001f.xxx);
+		const float boxDist = max(a.x, max(a.y, a.z)); // <1 inside
+		return saturate((1.0f - boxDist) / 0.25f);
+	}
+
+	// Box-projected direction for a probe (Lagarde): intersect the reflection ray
+	// with the probe's box and look from the probe centre toward that hit, so flat
+	// floors reflect the actual walls instead of infinitely-distant radiance.
+	float3 ProbeSpecularDir(float3 R, float3 worldPos, float4 centre, float4 extents)
+	{
+		if (extents.w < 0.5f)
+			return R;
+
+		const float3 localPos = worldPos - centre.xyz;
+		const float3 ext = max(extents.xyz, 0.001f.xxx);
+		const float3 safeR = sign(R) * max(abs(R), 1e-4f.xxx);
+		const float3 planeA = ( ext - localPos) / safeR;
+		const float3 planeB = (-ext - localPos) / safeR;
+		const float3 furthest = max(planeA, planeB);
+		const float hitDist = min(furthest.x, min(furthest.y, furthest.z));
+		return normalize(localPos + R * max(hitDist, 0.0f));
 	}
 
 	float CalculateCloudShadow(float3 worldPos, float3 sunDir)
@@ -385,33 +420,37 @@
 			// therefore wrong indoors) rather than adding to them. Fades back to
 			// the sky terms over the outer 15% of the box so walking out of a
 			// probe's volume doesn't pop.
-			if (g_probeCenter.w > 0.5f)
 			{
-				const float3 localPos = pixelPosWS.xyz - g_probeCenter.xyz;
-				const float3 ext = max(g_probeExtents.xyz, 0.001f.xxx);
-				const float3 a = abs(localPos) / ext;
-				const float boxDist = max(a.x, max(a.y, a.z)); // <1 inside
-				if (boxDist < 1.0f)
-				{
-					float3 specDir = R;
-					if (g_probeExtents.w > 0.5f)
-					{
-						// Box projection (Lagarde): intersect the reflection ray
-						// with the probe's box and look up the direction from the
-						// probe centre to that intersection, so flat floors reflect
-						// the actual walls instead of infinitely-distant radiance.
-						const float3 safeR = sign(R) * max(abs(R), 1e-4f.xxx);
-						const float3 planeA = ( ext - localPos) / safeR;
-						const float3 planeB = (-ext - localPos) / safeR;
-						const float3 furthest = max(planeA, planeB);
-						const float hitDist = min(furthest.x, min(furthest.y, furthest.z));
-						specDir = normalize(localPos + R * max(hitDist, 0.0f));
-					}
+				const float w1 = ProbeWeight(pixelPosWS.xyz, g_probeCenter,  g_probeExtents);
+				const float w2 = ProbeWeight(pixelPosWS.xyz, g_probeCenter2, g_probeExtents2);
+				const float wSum = w1 + w2;
 
-					const float3 probeSpec =
-						SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, specDir, perceptualRoughness);
-					const float3 probeDiff =
-						SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, N, 1.0f);
+				if (wSum > 0.0f)
+				{
+					// Normalise so overlapping volumes hand back one probe's worth of
+					// energy, then fade the whole probe term against the sky term by
+					// the UNnormalised coverage - a pixel only partly covered by any
+					// probe should still see some sky rather than a full-strength
+					// probe stretched to fill.
+					const float n1 = w1 / wSum;
+					const float n2 = w2 / wSum;
+					const float coverage = saturate(wSum);
+
+					float3 probeSpec = 0.0f.xxx;
+					float3 probeDiff = 0.0f.xxx;
+
+					if (w1 > 0.0f)
+					{
+						const float3 d1 = ProbeSpecularDir(R, pixelPosWS.xyz, g_probeCenter, g_probeExtents);
+						probeSpec += n1 * SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, d1, perceptualRoughness);
+						probeDiff += n1 * SampleEnvAtlas(g_iblProbeAtlas, g_textureSampler, N, 1.0f);
+					}
+					if (w2 > 0.0f)
+					{
+						const float3 d2 = ProbeSpecularDir(R, pixelPosWS.xyz, g_probeCenter2, g_probeExtents2);
+						probeSpec += n2 * SampleEnvAtlas(g_iblProbeAtlas2, g_textureSampler, d2, perceptualRoughness);
+						probeDiff += n2 * SampleEnvAtlas(g_iblProbeAtlas2, g_textureSampler, N, 1.0f);
+					}
 
 					// Specular and diffuse take SEPARATE strengths. Driving both from
 					// the probe strength reinstated a full-intensity diffuse IBL even
@@ -420,9 +459,8 @@
 					// average of the captured room), it washed the whole interior flat
 					// cream and erased every bit of contrast. Probe diffuse now
 					// defaults to 0 until P1-C provides real cosine irradiance.
-					const float fade = saturate((1.0f - boxDist) / 0.15f);
-					envSpecRadiance = lerp(envSpecRadiance, probeSpec * g_iblParams.z, fade);
-					envDiffRadiance = lerp(envDiffRadiance, probeDiff * g_iblParams.w, fade);
+					envSpecRadiance = lerp(envSpecRadiance, probeSpec * g_iblParams.z, coverage);
+					envDiffRadiance = lerp(envDiffRadiance, probeDiff * g_iblParams.w, coverage);
 				}
 			}
 			// ----------------------------------------------------------------------

@@ -226,6 +226,8 @@ namespace HexEngine
 		// This frame's selected reflection probe (set in SetupPerFrameBuffer,
 		// consumed by the deferred t16 bind). Raw pointer valid for the frame only.
 		class ReflectionProbeComponent* _activeProbe = nullptr;
+		// Second-nearest probe, bound at t17 so the shader can cross-fade.
+		class ReflectionProbeComponent* _activeProbe2 = nullptr;
 
 		// Interaction outline glow (jump-flood SDF). _outlineJfaA/B ping-pong the
 		// nearest-seed coordinate field (RG32F, pixel coords); _outlineGlowRT

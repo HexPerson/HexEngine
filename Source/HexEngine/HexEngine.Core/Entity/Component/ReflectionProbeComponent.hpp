@@ -43,6 +43,12 @@ namespace HexEngine
 
 		virtual void Update(float frameTime) override;
 
+		// Draws the probe's influence box so its extents can be authored by eye
+		// rather than by typing numbers. Green when the probe holds a captured
+		// atlas, amber while it is still capturing - the box containing the right
+		// space is the single thing probe correctness depends on most.
+		virtual void OnDebugRender() override;
+
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(class ComponentWidget* widget) override;
@@ -83,7 +89,16 @@ namespace HexEngine
 		static const math::Vector3 kFaceDirs[6];
 		static const math::Vector3 kFaceUps[6];
 
+		// Global bake throttle: only one probe in the whole scene may hold the
+		// capture rig at a time. Six full-resolution renders per probe means an
+		// unthrottled scene-load recapture of N probes would stack N of those
+		// into the same frames. Serialising them keeps the cost to one probe's
+		// worth at any moment, at the price of a longer total bake.
+		static bool IsAnyProbeCapturing() { return s_captureInFlight != nullptr; }
+
 	private:
+		static const ReflectionProbeComponent* s_captureInFlight;
+
 		void EnsureRig();
 		void OrientRigForFace(int32_t face);
 		void DestroyRig();

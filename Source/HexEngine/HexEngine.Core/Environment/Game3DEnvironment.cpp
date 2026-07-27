@@ -93,7 +93,7 @@ namespace HexEngine
 
 		env->_assetPackageManager = new AssetPackageManager;
 
-#if 1//ndef _DEBUG
+#ifndef _DEBUG
 		if (fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
 		{
 			FileSystem tempFs(L"EngineDataBootStrap");
