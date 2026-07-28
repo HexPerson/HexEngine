@@ -590,6 +590,17 @@
 		float2 p1 = (c1.xy * invW1 * 0.5f + 0.5f);
 		p0 = float2(p0.x, 1.0f - p0.y) * screenSize;
 		p1 = float2(p1.x, 1.0f - p1.y) * screenSize;
+		// Last sky texel the walk crossed, if any. This is the RIGHT place to
+		// answer "does this ray see sky" from - not the ray's endpoint. The sky
+		// seen through a window occupies the WINDOW's screen rectangle (the ray
+		// crosses its plane at finite distance), while the ray's vanishing point
+		// projects beyond the pane - onto the wall above it, or off-frame -
+		// because the room is enclosed. Testing the endpoint therefore reported
+		// "wall" for exactly the rays that genuinely escape through the glass and
+		// killed their reflections into environment grey. The last crossing is
+		// nearest the escape point, so it wins.
+		bool sawSky = false;
+		float2 skyT = float2(0.0f, 0.0f);
 
 		// viewZ is positive-depth (negated view z), matching gbuffer normal.w.
 		const float z0 = -v0.z;
@@ -650,17 +661,25 @@
 			const float4 normalDepth = GBUFFER_NORMAL.SampleLevel(g_pointSampler, fragTex, 0);
 			const float surfaceDepth = normalDepth.w;
 
-			// Sky texel: not a hit, and NOT recorded either - just keep marching
-			// so geometry later along the ray can register. Whether the ray sees
-			// sky is decided once, after the walk, at the ray's own endpoint (its
-			// vanishing point). Intermediate sky crossings are pixels the 2D line
-			// happens to clip, not places the 3D ray points at; recording them
-			// stamped every clipped pane into the reflection - first-crossing and
-			// last-crossing variants both produced "more panes than there should
-			// be", differing only in which wrong pane won.
+			// Sky texel: remember it and keep marching, so geometry later along
+			// the ray still wins. Three variants of this were tried and only this
+			// one is correct:
+			//   first crossing wins  - stamped every pane the 2D line clipped
+			//                          into the reflection (phantom pane rows)
+			//   ray endpoint decides - the vanishing point projects BEYOND the
+			//                          pane (onto the wall above it, or off
+			//                          frame) because the room is enclosed, so
+			//                          rays genuinely escaping through glass
+			//                          reported "wall" and went grey
+			//   LAST crossing wins   - nearest the ray's actual escape point,
+			//                          right colour, right place
+			// Geometry found after the last sky crossing still returns normally,
+			// which is what keeps walls from being replaced by panes.
 			if (surfaceDepth >= g_frustumDepths[3] * 0.999f)
 			{
 				prevT = t;
+				sawSky = true;
+				skyT = fragTex;
 				continue;
 			}
 
@@ -699,11 +718,11 @@
 				const uint hitInstance = (uint)GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, refinedTex, 0).w;
 				const float hitWorldDist = distance(
 					GBUFFER_POSITION.SampleLevel(g_pointSampler, refinedTex, 0).xyz, rayStart);
-				if (hitInstance == sourceInstanceID && hitWorldDist < 2.0f)
-				{
-					prevT = t;
-					continue;
-				}
+				// if (hitInstance == sourceInstanceID && hitWorldDist < 2.0f)
+				// {
+				// 	prevT = t;
+				// 	continue;
+				// }
 
 				result.didHit = true;
 				result.colour = g_beautyTexture.SampleLevel(g_textureSampler, refinedTex, 0).rgb;
@@ -729,20 +748,12 @@
 		//
 		// This is what kills the phantom-pane artifact: no intermediate crossing
 		// can ever be promoted to an answer.
-		if (!exitedScreenDDA)
+		if (!exitedScreenDDA && sawSky)
 		{
-			const float2 endTex = p1 / screenSize;
-			if (all(endTex >= 0.0f) && all(endTex <= 1.0f) && z1 > sourceDepth)
-			{
-				const float endSurface = GBUFFER_NORMAL.SampleLevel(g_pointSampler, endTex, 0).w;
-				if (endSurface >= g_frustumDepths[3] * 0.999f)
-				{
-					result.didHit = true;
-					result.colour = g_beautyTexture.SampleLevel(g_textureSampler, endTex, 0).rgb;
-					result.hitTex = endTex;
-					result.hitDistance = max(z1, 8.0f);
-				}
-			}
+			result.didHit = true;
+			result.colour = g_beautyTexture.SampleLevel(g_textureSampler, skyT, 0).rgb;
+			result.hitTex = skyT;
+			result.hitDistance = max(z1, 8.0f);
 		}
 
 		return result;
