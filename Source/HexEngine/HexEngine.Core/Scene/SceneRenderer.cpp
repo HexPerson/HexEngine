@@ -338,6 +338,13 @@ namespace HexEngine
 	// geometry, which the binary refinement then has to recover.
 	HVar r_ssrMaxStepLength("r_ssrMaxStepLength", "Longest single SSR march step in world units (controls how far reflections reach)", 10.0f, 0.5f, 32.0f);
 
+	// Self-clearing: writes the beauty buffer as SSR sees it, which is BEFORE
+	// transparent geometry is drawn. A reflection that is dark because the ray
+	// hit something dark and one that is dark because the thing it hit had not
+	// been drawn yet look identical in the final frame and completely different
+	// here.
+	HVar r_ssrDumpBeauty("r_ssrDumpBeauty", "Dump the beauty buffer as the SSR pass sees it to ssr_beauty.png", false, false, true);
+
 	// Declared in ReflectionProbeComponent.cpp - the probe dumps the rig camera's
 	// render target and each downsampled face; this file dumps the beauty/gbuffer
 	// they came from, so one run covers the whole chain.
@@ -5421,6 +5428,23 @@ namespace HexEngine
 		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
+
+			// One-shot dump of exactly what SSR is about to sample.
+			//
+			// A reflection can be dark for two completely different reasons: the
+			// ray landed somewhere dark, or the ray landed on something that IS
+			// bright in the final frame but was not yet drawn when SSR read the
+			// buffer. Transparent geometry is drawn after this pass, so anything
+			// seen through glass falls in the second category. Comparing this
+			// dump against the presented frame separates them; nothing else in
+			// the pipeline can.
+			if (r_ssrDumpBeauty._val.b)
+			{
+				r_ssrDumpBeauty._val.b = false;
+				try { _beautyRT->SaveToFile(fs::path("ssr_beauty.png")); }
+				catch (const std::exception& e) { LOG_WARN("ssr beauty dump failed: %s", e.what()); }
+				LOG_INFO("r_ssrDumpBeauty: wrote ssr_beauty.png - beauty as SSR sees it");
+			}
 
 			// Ensure the auto-slot SRV counter starts at zero so the bindings below land at
 			// the registers the SSR shader declares (gbuffer=t0..t4, then t5..t8, then GI).

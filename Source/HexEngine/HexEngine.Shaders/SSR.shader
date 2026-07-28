@@ -240,6 +240,7 @@
 		bool didFallback;  // true when we fell back to the last in-screen tex (not a true hit)
 		float3 colour;     // radiance to write
 		float hitDistance; // world-space distance from rayStart to the hit
+		float2 hitTex;     // screen UV the result was read from (debug)
 	};
 
 	HitResult RaymarchReflection(
@@ -259,6 +260,7 @@
 		result.didFallback = false;
 		result.colour = 0.0f.xxx;
 		result.hitDistance = 0.0f;
+		result.hitTex = float2(0.0f, 0.0f);
 
 		// Push the start point off the source surface to avoid immediate self-intersection.
 		// Use both a normal bias and a small along-ray bias so the first sample is unambiguously
@@ -461,6 +463,7 @@
 				result.didHit = true;
 				result.colour = hitColour;
 				result.hitDistance = max(length(hitPosWS.xyz - rayStart), refinedDistance);
+				result.hitTex = refinedTex;
 				return result;
 			}
 		}
@@ -483,6 +486,7 @@
 			result.didHit = true;
 			result.didFallback = true;
 			result.colour = g_beautyTexture.SampleLevel(g_textureSampler, lastInScreenTex, 0).rgb;
+			result.hitTex = lastInScreenTex;
 			result.hitDistance = max(lastInScreenDistance, 1.0f);
 		}
 
@@ -511,9 +515,14 @@
 		//   0 = real screen-space hit
 		//   1 = environment fill (the march found nothing)
 		//   2 = in-screen loop exhaustion / voxel-GI fallback
-		out float pathId)
+		out float pathId,
+		// Screen-space position the ray actually resolved to, for
+		// r_ssrDebugSkyHits 3. "It hit something" and "it hit the thing you
+		// think it did" are different claims.
+		out float2 hitUv)
 	{
 		pathId = 0.0f;
+		hitUv = float2(0.0f, 0.0f);
 		didReflect = false;
 		hitDistance = 0.0f;
 
@@ -601,6 +610,7 @@
 			// True screen-space hit (sky or geometry) - report exact world-space distance.
 			didReflect = true;
 			hitDistance = max(hit.hitDistance, 0.0f);
+			hitUv = hit.hitTex;
 			return float4(hit.colour, 1.0f);
 		}
 
@@ -630,6 +640,7 @@
 		{
 			didReflect = true;
 			hitDistance = max(hit.hitDistance, 1.0f);
+			hitUv = hit.hitTex;
 			pathId = 3.0f;
 			return float4(hit.colour, 1.0f);
 		}
@@ -820,6 +831,7 @@
 		// answered with "the ray missed and the environment it fell back to is
 		// this dark" instead of a guess.
 		float specPathId = 0.0f;
+		float2 specHitUv = float2(0.0f, 0.0f);
 		float3 specDebugRadiance = 0.0f.xxx;
 		// Fraction of this pixel's specular rays that found real screen-space data.
 		// The resolve blends the environment in by (1 - this), so a pixel whose ray
@@ -853,6 +865,7 @@
 				bool didReflect = false;
 				float hitDistance = 0.0f;
 				float diffusePathIdUnused = 0.0f;
+				float2 diffuseHitUvUnused = float2(0.0f, 0.0f);
 				float4 reflected = GetReflection(
 					eyeVector,
 					pixelPosWS.xyz,
@@ -865,7 +878,8 @@
 					perceptualRoughness,
 					false,
 					instanceID,
-					diffusePathIdUnused);
+					diffusePathIdUnused,
+					diffuseHitUvUnused);
 
 					//if(didReflect)
 					{
@@ -899,7 +913,8 @@
 					perceptualRoughness,
 					true,
 					instanceID,
-					specPathId);
+					specPathId,
+					specHitUv);
 
 				//if(didReflect)
 				{
@@ -950,9 +965,25 @@
 					: (specPathId < 2.5f) ? float3(0, 0, 1) : float3(1, 1, 0);
 				ssr.spec = float4(classify, 1.0f);
 			}
-			else
+			else if (g_ssrDebugSkyHits < 2.5f)
 			{
 				ssr.spec = float4(specDebugRadiance * 50.0f, 1.0f);
+			}
+			else
+			{
+				// Mode 3: WHERE the ray landed, as screen UV. Red = horizontal,
+				// green = vertical. A reflection can be a genuine hit and still
+				// be reading the wrong part of the screen.
+				//
+				// CAVEAT, and it matters: every mode here is written into
+				// ssr.spec, which then goes through the resolve's composite AND
+				// the tonemapper before it reaches a screenshot. Mode 1 survives
+				// that because it only needs which of four colours is largest,
+				// but modes 2 and 3 are QUANTITIES - read them back off a
+				// captured frame and you get tonemapped values, not the numbers
+				// this shader wrote. Reading exact UVs needs a debug path that
+				// writes the final image directly, bypassing the tonemap.
+				ssr.spec = float4(specHitUv.x, specHitUv.y, 0.0f, 1.0f);
 			}
 			ssr.diff = 0.0f.xxxx;
 		}
