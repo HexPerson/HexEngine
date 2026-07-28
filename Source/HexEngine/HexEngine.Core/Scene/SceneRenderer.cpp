@@ -345,6 +345,19 @@ namespace HexEngine
 	// here.
 	HVar r_ssrDumpBeauty("r_ssrDumpBeauty", "Dump the beauty buffer as the SSR pass sees it to ssr_beauty.png", false, false, true);
 
+	// The water.shader last-in-screen fallback, on the specular path.
+	//
+	// It is worth being explicit about what this is: when the march gives up, it
+	// returns the beauty at wherever the ray HAPPENED TO BE, which is not the
+	// mirror image position. It makes a dark reflection bright, but the bright
+	// thing it draws is in the wrong PLACE. Water gets away with it because a
+	// large flat water plane mostly reflects distant sky, where a positional
+	// error is invisible; an interior floor reflecting nearby windows shows it
+	// immediately as reflections that do not line up with what they reflect.
+	//
+	// Exposed so the trade can be measured rather than argued about.
+	HVar r_ssrInScreenFallback("r_ssrInScreenFallback", "Use water's last-in-screen sample when the specular march gives up (bright but positionally wrong)", true, false, true);
+
 	// Declared in ReflectionProbeComponent.cpp - the probe dumps the rig camera's
 	// render target and each downsampled face; this file dumps the beauty/gbuffer
 	// they came from, so one run covers the whole chain.
@@ -2453,6 +2466,9 @@ namespace HexEngine
 				r_ssrEnergyConserve._val.b ? 1.0f : 0.0f,
 				r_wetnessDarkening._val.f32,
 				r_ssrMaxStepLength._val.f32);
+
+			bufferData._ssrParams = math::Vector4(
+				r_ssrInScreenFallback._val.b ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,

@@ -254,6 +254,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// applies this on top of the Hillaire LUT; the environment atlas must
 		// apply the same one or reflections keep a clear-blue sky under a storm.
 		float4 g_skyOvercast;
+		// x = 1 to use water's last-in-screen sample when the specular march
+		// gives up. See RenderStructs.hpp::_ssrParams. yzw reserved.
+		float4 g_ssrParams;
 	};
 
 	// Readable aliases for the packed slot above.
@@ -289,6 +292,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// Longest single SSR march step, in world units. Sets how far a reflection
 	// ray can reach - see the reach formula in SSR.shader.
 	#define g_ssrMaxStepLength       (g_iblComposeParams.w)
+	// 1 = fall back to the last in-screen sample when the specular march gives
+	// up. Bright, but positionally wrong - it draws what the ray last saw, not
+	// the mirror image.
+	#define g_ssrInScreenFallback    (g_ssrParams.x)
 
 	struct MaterialProps
 	{

@@ -392,6 +392,14 @@ namespace HexEngine
 		// prefiltered environment atlas needs the identical tint or reflections
 		// disagree with the sky above them.
 		math::Vector4 _skyOvercast;
+
+		// SSR behaviour toggles, appended at the end per the note above.
+		//   x = 1 to use water's last-in-screen sample when the specular march
+		//       gives up. It makes a dark reflection bright, but the bright
+		//       thing it draws sits where the RAY gave up rather than where the
+		//       mirror image is - so reflections stop lining up with what they
+		//       reflect. yzw reserved.
+		math::Vector4 _ssrParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

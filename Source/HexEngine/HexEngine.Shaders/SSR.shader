@@ -636,7 +636,7 @@
 		// bright, visible, on-screen window the whole time. Falling back to a
 		// room-average probe threw that away and returned something much darker,
 		// which is what read as black panes.
-		if (hit.didHit && hit.didFallback)
+		if (hit.didHit && hit.didFallback && g_ssrInScreenFallback > 0.5f)
 		{
 			didReflect = true;
 			hitDistance = max(hit.hitDistance, 1.0f);
