@@ -456,9 +456,22 @@
 		out float hitDistance,
 		inout uint rngState,
 		float smoothness,
+		// Perceptual roughness from the gbuffer's own channel, for the
+		// environment lookup. NOT 1 - smoothness: this engine stores roughness
+		// (.g) and smoothness (.b) as INDEPENDENT values - the hall floor is
+		// authored smoothness 0.0 with roughnessFactor 0.625 - so deriving one
+		// from the other picked the sharpest atlas row for a rough surface and
+		// turned the fallback into hard bright blobs.
+		float perceptualRoughness,
 		bool wantSpecular,
-		uint instanceID)
+		uint instanceID,
+		// Which path produced the result, for r_ssrDebugSkyHits:
+		//   0 = real screen-space hit
+		//   1 = environment fill (the march found nothing)
+		//   2 = in-screen loop exhaustion / voxel-GI fallback
+		out float pathId)
 	{
+		pathId = 0.0f;
 		didReflect = false;
 		hitDistance = 0.0f;
 
@@ -587,8 +600,9 @@
 			// shimmer.
 			didReflect = true;
 			hitDistance = 8.0f;
+			pathId = 1.0f;
 
-			const float envRoughness = saturate(1.0f - smoothness);
+			const float envRoughness = saturate(perceptualRoughness);
 
 			float3 env = SampleEnvAtlas(g_ssrSkyEnvAtlas, g_textureSampler, rayDir, envRoughness)
 				* saturate(rayDir.y * 3.0f + 0.35f) * g_iblSkySpecular;
@@ -639,6 +653,7 @@
 
 		didReflect = true;
 		hitDistance = max(traceDistance, 8.0f);
+		pathId = 2.0f;
 		return float4(giRadiance, 1.0f);
 	}
 
@@ -672,6 +687,8 @@
 		const float4 pixelPosWS  = GBUFFER_POSITION.Sample(g_textureSampler, screenPos);
 
 		const float smoothness = pixelSpecular.b;
+		// Roughness is its OWN gbuffer channel here, independent of smoothness.
+		const float perceptualRoughness = clamp(pixelSpecular.g, 0.04f, 1.0f);
 		const float metalness = pixelSpecular.r;
 		const float3 diffuseSurfaceColour = saturate(pixelDiffuse.rgb);
 
@@ -726,6 +743,12 @@
 		float specularHitDistAccum = 0.0f;
 		float diffuseSamples = 0.0f;
 		float specularSamples = 0.0f;
+		// Diagnostics for r_ssrDebugSkyHits. Which path the specular ray took and
+		// what radiance it produced, so "the reflection is black here" can be
+		// answered with "the ray missed and the environment it fell back to is
+		// this dark" instead of a guess.
+		float specPathId = 0.0f;
+		float3 specDebugRadiance = 0.0f.xxx;
 		// Fraction of this pixel's specular rays that found real screen-space data.
 		// The resolve blends the environment in by (1 - this), so a pixel whose ray
 		// left the screen or passed through glass gets the environment rather than
@@ -757,6 +780,7 @@
 			{
 				bool didReflect = false;
 				float hitDistance = 0.0f;
+				float diffusePathIdUnused = 0.0f;
 				float4 reflected = GetReflection(
 					eyeVector,
 					pixelPosWS.xyz,
@@ -766,8 +790,10 @@
 					hitDistance,
 					rng,
 					smoothness,
+					perceptualRoughness,
 					false,
-					instanceID);
+					instanceID,
+					diffusePathIdUnused);
 
 					//if(didReflect)
 					{
@@ -798,8 +824,10 @@
 					hitDistance,
 					rng,
 					smoothness,
+					perceptualRoughness,
 					true,
-					instanceID);
+					instanceID,
+					specPathId);
 
 				//if(didReflect)
 				{
@@ -807,6 +835,7 @@
 					specularHitDistAccum += hitDistance;
 					specularSamples += 1.0f;
 					specularConfidenceAccum += didReflect ? 1.0f : 0.0f;
+					specDebugRadiance = reflected.rgb;
 				}
 			}
 		}
@@ -831,6 +860,28 @@
 		const float specularConfidence =
 			specularSamples > 0.0f ? (specularConfidenceAccum / specularSamples) : 0.0f;
 		ssr.specHitInfo = float4(specularConfidence, 0.0f, 0.0f, averageSpecularHitDistance);
+
+		// r_ssrDebugSkyHits, written last so it overrides the real output.
+		//   1 = path classify: RED real screen hit / GREEN environment fill /
+		//       BLUE voxel-GI fallback. Answers "did this pixel miss?".
+		//   2 = the specular radiance the ray produced, x50. Answers "and how
+		//       bright was what it fell back to?" - a black result under mode 2
+		//       with green under mode 1 means the environment itself is dark,
+		//       not that the fallback failed to run.
+		if (g_ssrDebugSkyHits > 0.5f)
+		{
+			if (g_ssrDebugSkyHits < 1.5f)
+			{
+				const float3 classify = (specPathId < 0.5f) ? float3(1, 0, 0)
+					: (specPathId < 1.5f) ? float3(0, 1, 0) : float3(0, 0, 1);
+				ssr.spec = float4(classify, 1.0f);
+			}
+			else
+			{
+				ssr.spec = float4(specDebugRadiance * 50.0f, 1.0f);
+			}
+			ssr.diff = 0.0f.xxxx;
+		}
 
 		return ssr;
 	}
