@@ -623,8 +623,7 @@
 		const float ditherPhase = lerp(0.0f, jitter, rayRoughness);
 
 		float prevT = 0.0f;
-		bool haveSkyHit = false;
-		HitResult skyHit = result;
+		bool exitedScreenDDA = false;
 
 		[loop]
 		for (int i = 0; i < sampleBudget; ++i)
@@ -638,7 +637,10 @@
 			const float2 fragTex = pixel / screenSize;
 
 			if (any(fragTex < 0.0f) || any(fragTex > 1.0f))
+			{
+				exitedScreenDDA = true;
 				break;
+			}
 
 			// Perspective-correct depth at this pixel: 1/z interpolates
 			// linearly along the screen-space line.
@@ -648,18 +650,16 @@
 			const float4 normalDepth = GBUFFER_NORMAL.SampleLevel(g_pointSampler, fragTex, 0);
 			const float surfaceDepth = normalDepth.w;
 
-			// Sky texel while the ray is beyond the source surface: provisional
-			// hit, keep marching - geometry found later wins.
+			// Sky texel: not a hit, and NOT recorded either - just keep marching
+			// so geometry later along the ray can register. Whether the ray sees
+			// sky is decided once, after the walk, at the ray's own endpoint (its
+			// vanishing point). Intermediate sky crossings are pixels the 2D line
+			// happens to clip, not places the 3D ray points at; recording them
+			// stamped every clipped pane into the reflection - first-crossing and
+			// last-crossing variants both produced "more panes than there should
+			// be", differing only in which wrong pane won.
 			if (surfaceDepth >= g_frustumDepths[3] * 0.999f)
 			{
-				if (!haveSkyHit && rayDepth > sourceDepth)
-				{
-					haveSkyHit = true;
-					skyHit.didHit = true;
-					skyHit.colour = g_beautyTexture.SampleLevel(g_textureSampler, fragTex, 0).rgb;
-					skyHit.hitTex = fragTex;
-					skyHit.hitDistance = max(rayDepth, 8.0f);
-				}
 				prevT = t;
 				continue;
 			}
@@ -715,10 +715,35 @@
 			prevT = t;
 		}
 
-		// No geometry hit anywhere along the ray: the provisional sky hit, if
-		// any, is the answer - the ray genuinely sees sky along that direction.
-		if (haveSkyHit)
-			return skyHit;
+		// No geometry hit anywhere along the ray. The ray sees sky if and only
+		// if ITS OWN ENDPOINT - the vanishing point of the 3D direction, where
+		// the ray "is" at 300 units - lands on a sky texel:
+		//
+		//   endpoint on a pane's sky        -> that sky, correct hue and place
+		//   endpoint on wall/frame geometry -> the march missed real geometry
+		//                                      (stride skip); environment, whose
+		//                                      grey is honest, not a stolen pane
+		//   endpoint off screen             -> ray leaves the frame (steep
+		//                                      near-camera rays aimed at the
+		//                                      off-screen ceiling); environment
+		//
+		// This is what kills the phantom-pane artifact: no intermediate crossing
+		// can ever be promoted to an answer.
+		if (!exitedScreenDDA)
+		{
+			const float2 endTex = p1 / screenSize;
+			if (all(endTex >= 0.0f) && all(endTex <= 1.0f) && z1 > sourceDepth)
+			{
+				const float endSurface = GBUFFER_NORMAL.SampleLevel(g_pointSampler, endTex, 0).w;
+				if (endSurface >= g_frustumDepths[3] * 0.999f)
+				{
+					result.didHit = true;
+					result.colour = g_beautyTexture.SampleLevel(g_textureSampler, endTex, 0).rgb;
+					result.hitTex = endTex;
+					result.hitDistance = max(z1, 8.0f);
+				}
+			}
+		}
 
 		return result;
 	}
