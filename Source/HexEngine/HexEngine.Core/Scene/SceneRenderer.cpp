@@ -356,6 +356,22 @@ namespace HexEngine
 	// immediately as reflections that do not line up with what they reflect.
 	//
 	// Exposed so the trade can be measured rather than argued about.
+	// Which ray marcher SSR uses.
+	//
+	//   0 - legacy: steps in WORLD space and projects each step to screen. The
+	//       screen footprint of a step is then unpredictable - near the camera
+	//       one step spans many pixels and hits get skipped, far away many steps
+	//       land in the same pixel and do nothing. The acceptance thickness has
+	//       to absorb that error, which couples two knobs that should be
+	//       independent and is why tuning either one trades one artifact for
+	//       another.
+	//   1 - screen-space DDA (McGuire & Mara 2014): project the ray's endpoints
+	//       once, walk the 2D line in pixel steps, interpolate 1/w linearly so
+	//       depth stays perspective-correct. Every pixel on the ray is visited
+	//       exactly once, so thickness only has to model real geometric
+	//       thickness rather than marching error.
+	HVar r_ssrMarchMode("r_ssrMarchMode", "SSR ray march: 0 = legacy world-space stepping, 1 = screen-space DDA", (int32_t)1, (int32_t)0, (int32_t)1);
+
 	HVar r_ssrInScreenFallback("r_ssrInScreenFallback", "Use water's last-in-screen sample when the specular march gives up (bright but positionally wrong)", true, false, true);
 
 	// Declared in ReflectionProbeComponent.cpp - the probe dumps the rig camera's
@@ -2468,7 +2484,9 @@ namespace HexEngine
 				r_ssrMaxStepLength._val.f32);
 
 			bufferData._ssrParams = math::Vector4(
-				r_ssrInScreenFallback._val.b ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+				r_ssrInScreenFallback._val.b ? 1.0f : 0.0f,
+				(float)r_ssrMarchMode._val.i32,
+				0.0f, 0.0f);
 
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,

@@ -306,6 +306,7 @@
 		float lastInScreenDistance = 0.0f;
 		float lastInScreenDepth = 0.0f;
 		bool exitedScreen = false;
+		bool hitSkyOnce = false;
 
 		[loop]
 		for (int i = 0; i < stepCount; ++i)
@@ -375,12 +376,15 @@
 			// we want anyway - the GBuffer is screen-resolution and we never
 			// want a mipped read.
 			const float4 normalDepth = GBUFFER_NORMAL.SampleLevel(g_pointSampler, fragTex, 0);
-			const float actualDepth = normalDepth.w;
+			const float actualDepth = normalDepth.w;			
 
-			// Remember this in-screen sample for the loop-exhaustion fallback only.
-			lastInScreenTex = fragTex;
-			lastInScreenDistance = totalDistance;
-			lastInScreenDepth = actualDepth;
+			
+
+			// if(actualDepth == g_frustumDepths[3])
+			// {
+			// 	exitedScreen = false;
+			// 	break;
+			// }
 
 			// Note: we deliberately do NOT special-case sky pixels here. Sky's actualDepth is
 			// the frustum-far value (very large), so the depth check below naturally rejects
@@ -390,9 +394,14 @@
 			// pixels and returned sky colour, before the ray had any chance to actually reach
 			// the wall geometry in 3D.
 
+			const bool didHitSky = (actualDepth == g_frustumDepths[3]) && (fragDepth > sourceDepth) && !hitSkyOnce;
+
+			if(didHitSky)
+				hitSkyOnce = true;
+
 			// Ray has passed behind the surface within the thickness window - candidate hit.
 			const float depthDelta = fragDepth - actualDepth;
-			if (depthDelta > 0.0f && depthDelta < thickness)
+			if ((depthDelta > 0.0f && (depthDelta < thickness)) || didHitSky)
 			{
 				// Binary-search refine between previous (in-front) and current (behind) samples.
 				float3 a = prevFragPos;
@@ -445,7 +454,7 @@
 				// Reject self-hits at the very source surface; the next iteration will progress
 				// further along the ray.
 				const uint hitInstance = (uint)GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, refinedTex, 0).w;
-				if (hitInstance == sourceInstanceID && refinedDistance < 4.0f)
+				if (hitInstance == sourceInstanceID && refinedDistance < 0.2f)
 					continue;
 
 				const float4 hitPosWS = GBUFFER_POSITION.SampleLevel(g_pointSampler, refinedTex, 0);
@@ -464,8 +473,17 @@
 				result.colour = hitColour;
 				result.hitDistance = max(length(hitPosWS.xyz - rayStart), refinedDistance);
 				result.hitTex = refinedTex;
+
+				if(didHitSky)
+					continue;
+
 				return result;
 			}
+
+			// Remember this in-screen sample for the loop-exhaustion fallback only.
+			lastInScreenTex = fragTex;
+			lastInScreenDistance = totalDistance;
+			lastInScreenDepth = actualDepth;
 		}
 
 		// No real screen-space hit. Only use the water.shader last-in-screen-tex fallback when
@@ -481,7 +499,7 @@
 		// are reflecting from. That is what makes the sample meaningful rather
 		// than arbitrary - the ray is still travelling toward something real that
 		// the camera can see, instead of having wandered across nearer geometry.
-		if (!exitedScreen && lastInScreenTex.x >= 0.0f && lastInScreenDepth > sourceDepth)
+		if (!exitedScreen && lastInScreenTex.x >= 0.0f && lastInScreenDepth > sourceDepth && false)
 		{
 			result.didHit = true;
 			result.didFallback = true;
@@ -489,6 +507,218 @@
 			result.hitTex = lastInScreenTex;
 			result.hitDistance = max(lastInScreenDistance, 1.0f);
 		}
+
+		return result;
+	}
+
+	// Screen-space DDA ray march (McGuire & Mara, "Efficient GPU Screen-Space
+	// Ray Tracing", JCGT 2014). r_ssrMarchMode 1.
+	//
+	// The legacy marcher above steps in WORLD space and projects every step to
+	// screen, so a step's screen footprint is unpredictable: near the camera one
+	// step spans many pixels (hits get skipped - surfaces thinner than the gap
+	// are invisible), far away many steps land in the same pixel (wasted work).
+	// The acceptance thickness then has to absorb that error, coupling two knobs
+	// that should be independent; today's history of trading smears for glow by
+	// tuning either one is that coupling at work.
+	//
+	// Here the ray is clipped and projected ONCE, then the 2D line is walked in
+	// fixed pixel-space increments. Attributes that are linear in screen space -
+	// 1/viewZ among them - are interpolated directly, so depth along the ray is
+	// perspective-correct at every pixel with no per-step matrix work. Every
+	// pixel the ray crosses is visited once. Thickness now models only real
+	// geometric thickness.
+	//
+	// Sky handling preserved from the hand fix that proved it out: a sky texel
+	// in front of the ray depth is recorded as a PROVISIONAL hit and the march
+	// continues, so real geometry found later along the ray wins. That is what
+	// makes a floor ray aimed through a window return the sky seen through it,
+	// without resurrecting the historical "first sky texel wins" streaking.
+	HitResult RaymarchReflectionDDA(
+		float3 rayStart,
+		float3 rayDir,
+		float3 sourceNormal,
+		uint sourceInstanceID,
+		float jitter,
+		float rayRoughness,
+		float sourceDepth)
+	{
+		HitResult result;
+		result.didHit = false;
+		result.didFallback = false;
+		result.colour = 0.0f.xxx;
+		result.hitDistance = 0.0f;
+		result.hitTex = float2(0.0f, 0.0f);
+
+		// Same self-intersection bias as the legacy marcher.
+		const float3 origin = rayStart + sourceNormal * 0.25f + rayDir * 0.10f;
+
+		// Total world-space length to consider. Generous: unlike the legacy
+		// marcher, unreachable far ends cost nothing here because the walk is
+		// bounded in PIXELS, not world units - a long ray that crosses few
+		// pixels is cheap by construction.
+		const float maxRayDistance = 300.0f;
+
+		// Clip the ray to the near plane in VIEW space before projecting - a
+		// segment crossing z=0 projects to garbage.
+		float4 v0 = mul(float4(origin, 1.0f), g_viewMatrix);
+		float4 v1 = mul(float4(origin + rayDir * maxRayDistance, 1.0f), g_viewMatrix);
+		// This engine's view space looks down -Z (fragDepth = -fragView.z in the
+		// legacy marcher). Clamp the far end to just inside the near plane.
+		const float nearZ = -0.11f;
+		if (v1.z > nearZ)
+		{
+			const float t = (nearZ - v0.z) / (v1.z - v0.z);
+			v1 = lerp(v0, v1, saturate(t));
+		}
+		if (v0.z > nearZ)
+			return result; // start behind the near plane - nothing to march
+
+		float4 c0 = mul(v0, g_projectionMatrix);
+		float4 c1 = mul(v1, g_projectionMatrix);
+		c0.xy += g_jitterOffsets * c0.w;
+		c1.xy += g_jitterOffsets * c1.w;
+
+		// Screen-space endpoints in PIXELS, plus the attributes that interpolate
+		// linearly in screen space: 1/w-scaled position is not needed, only
+		// 1/viewZ for the depth test and the world-space distance parameter for
+		// the hit report.
+		const float2 screenSize = float2((float)g_screenWidth, (float)g_screenHeight);
+		const float invW0 = 1.0f / c0.w;
+		const float invW1 = 1.0f / c1.w;
+		float2 p0 = (c0.xy * invW0 * 0.5f + 0.5f);
+		float2 p1 = (c1.xy * invW1 * 0.5f + 0.5f);
+		p0 = float2(p0.x, 1.0f - p0.y) * screenSize;
+		p1 = float2(p1.x, 1.0f - p1.y) * screenSize;
+
+		// viewZ is positive-depth (negated view z), matching gbuffer normal.w.
+		const float z0 = -v0.z;
+		const float z1 = -v1.z;
+		const float invZ0 = 1.0f / z0;
+		const float invZ1 = 1.0f / z1;
+
+		// Degenerate projection (ray nearly along the view axis): the whole
+		// march lands in a handful of pixels. Nudge the end one pixel so the
+		// DDA still advances; the depth interpolation stays correct.
+		if (distance(p0, p1) < 1.0f)
+			p1 += float2(1.0f, 1.0f);
+
+		const float2 delta = p1 - p0;
+		const float pixelLength = length(delta);
+		const float2 stepDir = delta / pixelLength;
+
+		// Pixel stride. 1 visits literally every pixel; that is exact but at
+		// 4K a long ray is thousands of taps. Stride s visits every s-th pixel,
+		// bounding the worst-case skip at s pixels - a known, uniform, SCREEN
+		// SPACE quantity, unlike the legacy marcher's world-space skips. The
+		// stride grows with distance along the ray (reflections far from the
+		// reflector get progressively coarser, which roughness masks anyway)
+		// and the loop is capped at a fixed sample budget.
+		const int sampleBudget = 96;
+		const float baseStride = max(1.0f, pixelLength / (float)sampleBudget);
+
+		// Sub-pixel jitter decorrelates adjacent rays' sample phase. Scaled by
+		// roughness exactly like the legacy marcher: mirror surfaces need
+		// deterministic sampling or adjacent pixels speckle.
+		const float ditherPhase = lerp(0.0f, jitter, rayRoughness);
+
+		float prevT = 0.0f;
+		bool haveSkyHit = false;
+		HitResult skyHit = result;
+
+		[loop]
+		for (int i = 0; i < sampleBudget; ++i)
+		{
+			// Parameter along the 2D line in [0,1]. Quadratic ramp like the
+			// legacy marcher: dense near the reflector where detail lives,
+			// coarser far away.
+			const float f = ((float)i + 0.5f + ditherPhase) / (float)sampleBudget;
+			const float t = f * f;
+			const float2 pixel = p0 + stepDir * (t * pixelLength);
+			const float2 fragTex = pixel / screenSize;
+
+			if (any(fragTex < 0.0f) || any(fragTex > 1.0f))
+				break;
+
+			// Perspective-correct depth at this pixel: 1/z interpolates
+			// linearly along the screen-space line.
+			const float invZ = lerp(invZ0, invZ1, t);
+			const float rayDepth = 1.0f / invZ;
+
+			const float4 normalDepth = GBUFFER_NORMAL.SampleLevel(g_pointSampler, fragTex, 0);
+			const float surfaceDepth = normalDepth.w;
+
+			// Sky texel while the ray is beyond the source surface: provisional
+			// hit, keep marching - geometry found later wins.
+			if (surfaceDepth >= g_frustumDepths[3] * 0.999f)
+			{
+				if (!haveSkyHit && rayDepth > sourceDepth)
+				{
+					haveSkyHit = true;
+					skyHit.didHit = true;
+					skyHit.colour = g_beautyTexture.SampleLevel(g_textureSampler, fragTex, 0).rgb;
+					skyHit.hitTex = fragTex;
+					skyHit.hitDistance = max(rayDepth, 8.0f);
+				}
+				prevT = t;
+				continue;
+			}
+
+			const float depthDelta = rayDepth - surfaceDepth;
+
+			// Thickness models GEOMETRY now, not marching error: how thick we
+			// assume the surface behind a depth sample to be. Grows mildly with
+			// depth so distant thin geometry (window frames) still registers
+			// against depth-buffer precision.
+			const float thickness = 0.5f + surfaceDepth * 0.02f;
+
+			if (depthDelta > 0.0f && depthDelta < thickness)
+			{
+				// Refine between the previous and current parameter. The DDA
+				// analogue of the legacy binary search: bisect t, not world
+				// position.
+				float ta = prevT;
+				float tb = t;
+				float2 refinedTex = fragTex;
+
+				[loop]
+				for (int j = 0; j < 5; ++j)
+				{
+					const float tm = (ta + tb) * 0.5f;
+					const float2 mPix = p0 + stepDir * (tm * pixelLength);
+					const float2 mTex = mPix / screenSize;
+					const float mDepth = 1.0f / lerp(invZ0, invZ1, tm);
+					const float mSurface = GBUFFER_NORMAL.SampleLevel(g_pointSampler, mTex, 0).w;
+					if (mDepth > mSurface) { tb = tm; refinedTex = mTex; }
+					else                   { ta = tm; }
+				}
+
+				// Self-hit rejection, sky-exempt per the hand fix: sky can
+				// never be a self-hit, and the blanket version of this guard
+				// was blocking legitimate hits.
+				const uint hitInstance = (uint)GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, refinedTex, 0).w;
+				const float hitWorldDist = distance(
+					GBUFFER_POSITION.SampleLevel(g_pointSampler, refinedTex, 0).xyz, rayStart);
+				if (hitInstance == sourceInstanceID && hitWorldDist < 2.0f)
+				{
+					prevT = t;
+					continue;
+				}
+
+				result.didHit = true;
+				result.colour = g_beautyTexture.SampleLevel(g_textureSampler, refinedTex, 0).rgb;
+				result.hitTex = refinedTex;
+				result.hitDistance = max(hitWorldDist, 0.5f);
+				return result;
+			}
+
+			prevT = t;
+		}
+
+		// No geometry hit anywhere along the ray: the provisional sky hit, if
+		// any, is the answer - the ray genuinely sees sky along that direction.
+		if (haveSkyHit)
+			return skyHit;
 
 		return result;
 	}
@@ -555,7 +785,13 @@
 
 			// rayRoughness=1.0 -> wide first-step jitter, which is what we want for a diffuse
 			// stochastic sample (decorrelates adjacent pixels so NRD can integrate spatially).
-			const HitResult hit = RaymarchReflection(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f, currentDepth);
+			// if/else, not a ternary: FXC's DXBC path rejects ?: between two
+			// struct-valued calls (X3020) even when the types match.
+			HitResult hit;
+			if (g_ssrMarchMode > 0.5f)
+				hit = RaymarchReflectionDDA(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f, currentDepth);
+			else
+				hit = RaymarchReflection(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f, currentDepth);
 
 			
 
@@ -603,7 +839,11 @@
 
 		const float jitter = RandomValue(rngState);
 
-		const HitResult hit = RaymarchReflection(worldPos, rayDir, worldNormal, instanceID, jitter, rayRoughness, currentDepth);
+		HitResult hit;
+		if (g_ssrMarchMode > 0.5f)
+			hit = RaymarchReflectionDDA(worldPos, rayDir, worldNormal, instanceID, jitter, rayRoughness, currentDepth);
+		else
+			hit = RaymarchReflection(worldPos, rayDir, worldNormal, instanceID, jitter, rayRoughness, currentDepth);
 
 		if (hit.didHit && !hit.didFallback)
 		{

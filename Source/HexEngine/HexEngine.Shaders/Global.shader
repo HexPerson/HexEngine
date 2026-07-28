@@ -296,6 +296,8 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// up. Bright, but positionally wrong - it draws what the ray last saw, not
 	// the mirror image.
 	#define g_ssrInScreenFallback    (g_ssrParams.x)
+	// 0 = legacy world-space stepping, 1 = screen-space DDA.
+	#define g_ssrMarchMode           (g_ssrParams.y)
 
 	struct MaterialProps
 	{
