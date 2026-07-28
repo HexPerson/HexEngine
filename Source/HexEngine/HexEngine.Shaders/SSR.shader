@@ -248,7 +248,11 @@
 		float3 sourceNormal,
 		uint sourceInstanceID,
 		float jitter,
-		float rayRoughness)
+		float rayRoughness,
+		// Depth of the surface the ray starts from, for the loop-exhaustion
+		// fallback's "is what I am looking at farther than me" test - water's
+		// `actualDepth > currentDepth`.
+		float sourceDepth)
 	{
 		HitResult result;
 		result.didHit = false;
@@ -281,6 +285,7 @@
 		// would end up reflecting the back wall and produce the long stripe artifact.
 		float2 lastInScreenTex = float2(-1.0f, -1.0f);
 		float lastInScreenDistance = 0.0f;
+		float lastInScreenDepth = 0.0f;
 		bool exitedScreen = false;
 
 		[loop]
@@ -343,6 +348,7 @@
 			// Remember this in-screen sample for the loop-exhaustion fallback only.
 			lastInScreenTex = fragTex;
 			lastInScreenDistance = totalDistance;
+			lastInScreenDepth = actualDepth;
 
 			// Note: we deliberately do NOT special-case sky pixels here. Sky's actualDepth is
 			// the frustum-far value (very large), so the depth check below naturally rejects
@@ -436,7 +442,13 @@
 		// genuinely "outside what we can see", so the last in-screen tex is meaningless and
 		// would produce the stripe artifact along surfaces whose reflections all exit the same
 		// screen edge.
-		if (!exitedScreen && lastInScreenTex.x >= 0.0f)
+		// The `lastInScreenDepth > sourceDepth` guard is water.shader's
+		// `actualDepth > currentDepth`: only trust the last in-screen sample when
+		// the surface it landed on is FARTHER from the eye than the surface we
+		// are reflecting from. That is what makes the sample meaningful rather
+		// than arbitrary - the ray is still travelling toward something real that
+		// the camera can see, instead of having wandered across nearer geometry.
+		if (!exitedScreen && lastInScreenTex.x >= 0.0f && lastInScreenDepth > sourceDepth)
 		{
 			result.didHit = true;
 			result.didFallback = true;
@@ -504,7 +516,7 @@
 
 			// rayRoughness=1.0 -> wide first-step jitter, which is what we want for a diffuse
 			// stochastic sample (decorrelates adjacent pixels so NRD can integrate spatially).
-			const HitResult hit = RaymarchReflection(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f);
+			const HitResult hit = RaymarchReflection(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f, currentDepth);
 
 			
 
@@ -552,13 +564,42 @@
 
 		const float jitter = RandomValue(rngState);
 
-		const HitResult hit = RaymarchReflection(worldPos, rayDir, worldNormal, instanceID, jitter, rayRoughness);
+		const HitResult hit = RaymarchReflection(worldPos, rayDir, worldNormal, instanceID, jitter, rayRoughness, currentDepth);
 
 		if (hit.didHit && !hit.didFallback)
 		{
 			// True screen-space hit (sky or geometry) - report exact world-space distance.
 			didReflect = true;
 			hitDistance = max(hit.hitDistance, 0.0f);
+			return float4(hit.colour, 1.0f);
+		}
+
+		// Loop exhausted while still on screen, looking at something FARTHER than
+		// the reflecting surface: take the beauty there, exactly as water.shader
+		// does. This is how water gets a correct sky reflection, and dropping it
+		// is why the reflections it used to get right regressed.
+		//
+		// It was removed for specular over a "long stripe artifact" - a road pixel
+		// reflecting upward marches through empty air, stays on screen the whole
+		// way, and lands on an arbitrary sample. The real defect there was that
+		// ANY last-in-screen sample was accepted; water guards it with
+		// `actualDepth > currentDepth`, now mirrored in RaymarchReflection. A ray
+		// that wandered across nearer geometry fails that test and falls through
+		// to the environment, while a ray still travelling toward something the
+		// camera can genuinely see is trusted.
+		//
+		// This is what fixes the reflected window panes, and it needs no
+		// environment at all: the outdoors behind the glass is ALREADY in the
+		// beauty buffer at those pixels. Transparent glass writes no opaque
+		// gbuffer, so the surface behind it is far away and the march can never
+		// satisfy the strict hit test - but the ray is pointing straight at a
+		// bright, visible, on-screen window the whole time. Falling back to a
+		// room-average probe threw that away and returned something much darker,
+		// which is what read as black panes.
+		if (hit.didHit && hit.didFallback)
+		{
+			didReflect = true;
+			hitDistance = max(hit.hitDistance, 1.0f);
 			return float4(hit.colour, 1.0f);
 		}
 
