@@ -268,7 +268,24 @@
 		const int stepCount = 28;
 		const int refinementStepCount = 6;
 		const float minStepLen = 0.3f;
-		const float maxStepLen = 3.0f;
+		// How far the march can reach, in world units, is what decides which
+		// reflections exist at all:
+		//
+		//     reach ~= stepCount * (minStepLen + (maxStepLen - minStepLen) / 3)
+		//
+		// because the step length ramps quadratically. At the old maxStepLen of
+		// 3.0 that is ~34 units, against water.shader's ~96 (24 steps, 2..8).
+		// The Whereabouts hall's probe box alone is ~56 x 36 x 49 units, so a
+		// floor pixel reflecting anything high on the far wall simply ran out of
+		// budget partway and returned the wall it happened to be crossing. That
+		// is why the LOWER window row reflected correctly - short rays - while
+		// the upper row did not, and why the run-out point banded across the
+		// floor as visible artifacts.
+		//
+		// Larger steps trade near-field precision for reach, but the 6-step
+		// binary refinement below re-localises any hit once it is bracketed, and
+		// the thickness test already widens with distance travelled.
+		const float maxStepLen = max(minStepLen, g_ssrMaxStepLength);
 
 		float3 fragPos = origin;
 		float totalDistance = 0.0f;
@@ -294,9 +311,22 @@
 			const float marchFraction = saturate((float)i / (float)(stepCount - 1));
 			const float stepLen = lerp(minStepLen, maxStepLen, marchFraction * marchFraction);
 
-			// Thickness grows with distance from the camera so distant pixels still register;
-			// keep it tight near the source to avoid false self-hits.
-			const float thickness = lerp(0.6f, 2.0f, marchFraction);
+			// Acceptance thickness, and it must be at least THIS STEP'S LENGTH.
+			//
+			// The depth uncertainty a march introduces is exactly how far it
+			// jumped: a surface lying between two samples is invisible to a test
+			// tighter than the gap. This was lerp(0.6, 2.0, marchFraction) - tied
+			// to the step INDEX and capped at 2.0 - while a late step is several
+			// units long, so rays sailed past real geometry and fell through to
+			// the best-effort last-in-screen fallback instead of registering a
+			// hit. The path-classify view showed the hall floor almost entirely
+			// on that fallback rather than on real hits, which is what made the
+			// reflections smeary and banded: a fallback sample is wherever the
+			// ray happened to be, not what it was aimed at.
+			//
+			// The 6-step binary refinement below re-localises the surface once
+			// bracketed, so a generous bracket costs precision nothing.
+			const float thickness = max(lerp(0.6f, 2.0f, marchFraction), stepLen);
 
 			prevFragPos = fragPos;
 			prevTotalDistance = totalDistance;
@@ -600,6 +630,7 @@
 		{
 			didReflect = true;
 			hitDistance = max(hit.hitDistance, 1.0f);
+			pathId = 3.0f;
 			return float4(hit.colour, 1.0f);
 		}
 
@@ -904,7 +935,8 @@
 
 		// r_ssrDebugSkyHits, written last so it overrides the real output.
 		//   1 = path classify: RED real screen hit / GREEN environment fill /
-		//       BLUE voxel-GI fallback. Answers "did this pixel miss?".
+		//       BLUE voxel-GI fallback / YELLOW water-style in-screen fallback.
+		//       Answers "did this pixel miss, and how did it recover?".
 		//   2 = the specular radiance the ray produced, x50. Answers "and how
 		//       bright was what it fell back to?" - a black result under mode 2
 		//       with green under mode 1 means the environment itself is dark,
@@ -914,7 +946,8 @@
 			if (g_ssrDebugSkyHits < 1.5f)
 			{
 				const float3 classify = (specPathId < 0.5f) ? float3(1, 0, 0)
-					: (specPathId < 1.5f) ? float3(0, 1, 0) : float3(0, 0, 1);
+					: (specPathId < 1.5f) ? float3(0, 1, 0)
+					: (specPathId < 2.5f) ? float3(0, 0, 1) : float3(1, 1, 0);
 				ssr.spec = float4(classify, 1.0f);
 			}
 			else

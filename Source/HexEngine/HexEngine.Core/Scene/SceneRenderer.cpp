@@ -322,6 +322,22 @@ namespace HexEngine
 	// not.
 	HVar r_wetnessDarkening("r_wetnessDarkening", "Fraction of albedo removed at full rain wetness (0 = none)", 0.35f, 0.0f, 1.0f);
 
+	// Longest single SSR march step. This is the reach control:
+	//
+	//     reach ~= 28 * (0.3 + (maxStep - 0.3) / 3)   world units
+	//
+	// At the old hardcoded 3.0 that is ~34 units, against water.shader's ~96.
+	// The Whereabouts hall is far bigger than 34 units across, so rays aimed
+	// high on the far wall ran out partway and returned whatever they were
+	// crossing - the lower window row reflected, the upper row did not, and the
+	// run-out point banded visibly across the floor. 10.0 puts the reach at ~99,
+	// matching the value water has always used successfully.
+	//
+	// Raise for larger spaces, lower to buy back performance; the cost is linear
+	// in neither steps nor length but in how far each step can skip past thin
+	// geometry, which the binary refinement then has to recover.
+	HVar r_ssrMaxStepLength("r_ssrMaxStepLength", "Longest single SSR march step in world units (controls how far reflections reach)", 10.0f, 0.5f, 32.0f);
+
 	// Declared in ReflectionProbeComponent.cpp - the probe dumps the rig camera's
 	// render target and each downsampled face; this file dumps the beauty/gbuffer
 	// they came from, so one run covers the whole chain.
@@ -2429,7 +2445,7 @@ namespace HexEngine
 				ShouldComposeEnvSpecularInResolve() ? 1.0f : 0.0f,
 				r_ssrEnergyConserve._val.b ? 1.0f : 0.0f,
 				r_wetnessDarkening._val.f32,
-				0.0f);
+				r_ssrMaxStepLength._val.f32);
 
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,

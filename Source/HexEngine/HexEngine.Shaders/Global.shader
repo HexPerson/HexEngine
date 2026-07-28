@@ -286,6 +286,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// traps light that a dry surface would have scattered back out, so a wet
 	// surface is darker as well as smoother. See r_wetnessDarkening.
 	#define g_wetnessDarkening       (g_iblComposeParams.z)
+	// Longest single SSR march step, in world units. Sets how far a reflection
+	// ray can reach - see the reach formula in SSR.shader.
+	#define g_ssrMaxStepLength       (g_iblComposeParams.w)
 
 	struct MaterialProps
 	{
