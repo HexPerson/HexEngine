@@ -718,11 +718,12 @@
 				const uint hitInstance = (uint)GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, refinedTex, 0).w;
 				const float hitWorldDist = distance(
 					GBUFFER_POSITION.SampleLevel(g_pointSampler, refinedTex, 0).xyz, rayStart);
-				// if (hitInstance == sourceInstanceID && hitWorldDist < 2.0f)
-				// {
-				// 	prevT = t;
-				// 	continue;
-				// }
+					
+				if (hitInstance == sourceInstanceID && hitWorldDist < 0.2f)
+				{
+					prevT = t;
+					continue;
+				}
 
 				result.didHit = true;
 				result.colour = g_beautyTexture.SampleLevel(g_textureSampler, refinedTex, 0).rgb;
@@ -961,7 +962,35 @@
 			hitDistance = 8.0f;
 			pathId = 1.0f;
 
-			const float envRoughness = saturate(perceptualRoughness);
+			// The RAY'S residual roughness, not the surface's - and the distinction
+			// is what reconciles two failures that looked contradictory:
+			//
+			// This is a STOCHASTIC per-ray fill. rayDir already carries the GGX
+			// cone perturbation, and NRD integrates the spread across pixels and
+			// frames - the same way a real screen-space hit samples SHARP beauty
+			// along the perturbed ray. Sampling a prefiltered row here blurs a
+			// second time, and measured in linear units that is fatal for exactly
+			// the case this fill exists for: the probe's mirror row carries
+			// windows at 246/255 (vs sky 255 - units are correct), but the GGX
+			// prefilter smears them into the dark room average by row 2 (max 77).
+			// Surface-roughness rows made off-screen window reflections ~30% of
+			// their true brightness.
+			//
+			// The analytic environment path (EvaluateEnvSpecular in the deferred
+			// pass / resolve) keeps using the surface roughness row - it is a
+			// single split-sum evaluation with no stochastic cone, so the
+			// prefilter IS its lobe integral. Only the per-ray fill wants the
+			// ray's own residual sharpness, which is the square the cone already
+			// applied to the perturbation.
+			// ...with a FLOOR of 0.25 (one prefilter row). Pure mirror-row
+			// sampling speckled: rain droplets perturb per-pixel normals, those
+			// scattered rays sample a 128px atlas whose mirror row is near-binary
+			// (window 246 / room ~20), and that contrast becomes per-pixel noise
+			// NRD never settles. One row of blur bounds the contrast (window max
+			// 117) while staying ~2x brighter than the surface-roughness rows
+			// that crushed windows to 77. Verified by A/B: the speckle follows
+			// this term, not the weather.
+			const float envRoughness = clamp(rayRoughness * rayRoughness, 0.25f, 1.0f);
 
 			float3 env = SampleEnvAtlas(g_ssrSkyEnvAtlas, g_textureSampler, rayDir, envRoughness)
 				* saturate(rayDir.y * 3.0f + 0.35f) * g_iblSkySpecular;

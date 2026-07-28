@@ -343,6 +343,14 @@ namespace HexEngine
 	// hit something dark and one that is dark because the thing it hit had not
 	// been drawn yet look identical in the final frame and completely different
 	// here.
+	// Self-clearing: writes the sky env atlas, the active probe's atlas, and the
+	// probe's raw face 0 straight to PNG via SaveToFile. Unlike the on-screen
+	// overlay (r_iblSkyEnvDebug) these files bypass the tonemapper, so texel
+	// values compare in LINEAR units - which is the only way to answer "is the
+	// probe dimmer than the sky because of a units bug or because the room is
+	// genuinely dimmer".
+	HVar r_iblDumpAtlases("r_iblDumpAtlases", "Dump sky/probe env atlases to ibl_*.png in linear units", false, false, true);
+
 	HVar r_ssrDumpBeauty("r_ssrDumpBeauty", "Dump the beauty buffer as the SSR pass sees it to ssr_beauty.png", false, false, true);
 
 	// The water.shader last-in-screen fallback, on the specular path.
@@ -3303,6 +3311,29 @@ namespace HexEngine
 
 				// Prefilter any reflection probe whose 6-face capture just finished.
 				RenderProbeEnvMaps();
+
+				// Linear-unit atlas dump - see the HVar comment. Placed after both
+				// prefilters so the files reflect this frame's content.
+				if (r_iblDumpAtlases._val.b)
+				{
+					r_iblDumpAtlases._val.b = false;
+					if (_iblSkyEnvMap != nullptr)
+					{
+						try { _iblSkyEnvMap->SaveToFile(fs::path("ibl_sky_atlas.png")); }
+						catch (const std::exception& e) { LOG_WARN("ibl dump: sky atlas failed: %s", e.what()); }
+					}
+					if (_activeProbe != nullptr && _activeProbe->GetEnvAtlas() != nullptr)
+					{
+						try { _activeProbe->GetEnvAtlas()->SaveToFile(fs::path("ibl_probe_atlas.png")); }
+						catch (const std::exception& e) { LOG_WARN("ibl dump: probe atlas failed: %s", e.what()); }
+					}
+					if (_activeProbe != nullptr && _activeProbe->GetFace(0) != nullptr)
+					{
+						try { _activeProbe->GetFace(0)->SaveToFile(fs::path("ibl_probe_face0.png")); }
+						catch (const std::exception& e) { LOG_WARN("ibl dump: probe face failed: %s", e.what()); }
+					}
+					LOG_INFO("r_iblDumpAtlases: wrote ibl_sky_atlas.png / ibl_probe_atlas.png / ibl_probe_face0.png");
+				}
 			}
 
 			// don't bother doing this if we don't need to, its expensive!
