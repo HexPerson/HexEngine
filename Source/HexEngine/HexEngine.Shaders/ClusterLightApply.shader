@@ -94,7 +94,7 @@
 		// Flood test (r_clusterApplyDebug): unconditional magenta proves the
 		// draw itself - render target, blend, viewport, shader bind - before
 		// any cluster or light logic gets a chance to zero the output.
-		if (g_clusterScreenParams.w > 0.5f)
+		if (g_clusterScreenParams.w > 0.5f && g_clusterScreenParams.w < 1.5f)
 			return float4(10.0f, 0.0f, 10.0f, 0.0f);
 
 		const float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
@@ -114,6 +114,12 @@
 
 		const uint count = min(g_clCounts[clusterIdx], kMaxLightsPerCluster);
 
+		// Mode 2: light count per pixel. Black = 0 (list empty HERE - cull or
+		// lookup fault), green ramp = populated (fault is later in the loop).
+		if (g_clusterScreenParams.w > 1.5f && g_clusterScreenParams.w < 2.5f)
+			return float4(0.0f, (float)count * 0.5f, count == 0 ? 0.05f : 0.0f, 0.0f);
+
+
 		float3 accum = 0.0f.xxx;
 
 		[loop]
@@ -121,16 +127,33 @@
 		{
 			const GpuLight light = g_clLights[g_clLists[clusterIdx * kMaxLightsPerCluster + i]];
 
+			// Mode 3: first light raw - blue if the shadowed flag would skip it
+			// (pointing at CollectShadowCasters marking everything), red-ramped
+			// by attenuation otherwise (pointing at range/falloff).
+			if (g_clusterScreenParams.w > 2.5f)
+			{
+				if (light.params.z > 0.5f)
+					return float4(0.0f, 0.0f, 5.0f, 0.0f);
+				const float dd = length(pixelPosWS.xyz - light.posRadius.xyz);
+				return float4(dd < light.posRadius.w ? 5.0f : 0.0f, 0.2f, 0.0f, 0.0f);
+			}
+
 			// Shadowed lights are the per-light path's job.
 			if (light.params.z > 0.5f)
 				continue;
 
-			float3 lightToPixelVec = pixelPosWS.xyz - light.posRadius.xyz;
-			const float d = length(lightToPixelVec);
+			// PIXEL -> LIGHT. The old shaders name this exact vector
+			// "lightToPixelVec" while constructing lightPos - pixelPos; the name
+			// is a lie and trusting it inverted NdotL here, which made every
+			// clustered light shade to a clamped near-zero - present in the
+			// debug views, invisible in the frame. CalculatePBRPointLighting
+			// documents its LightDirection as surface-to-light; this is that.
+			float3 pixelToLight = light.posRadius.xyz - pixelPosWS.xyz;
+			const float d = length(pixelToLight);
 			const float lightRange = light.posRadius.w;
 			if (d >= lightRange || d <= 0.0f)
 				continue;
-			lightToPixelVec /= d;
+			pixelToLight /= d;
 
 			const float minDistSqr = 0.01f * 0.01f;
 			float distanceFalloff = saturate(1.0f - pow(d / lightRange, 4.0f));
@@ -140,7 +163,9 @@
 			// Spot cone, same smoothstep as SpotLight.shader.
 			if (light.params.y > 0.5f)
 			{
-				const float coneDot = dot(lightToPixelVec, light.dirCone.xyz);
+				// Inside the cone when the light->pixel direction aligns with
+				// the spot forward: that is minus the pixel->light vector.
+				const float coneDot = dot(-pixelToLight, light.dirCone.xyz);
 				attenuation *= smoothstep(
 					light.dirCone.w,
 					max(light.params.x, light.dirCone.w + 1e-4f),
@@ -156,7 +181,7 @@
 				screenPos,
 				normalWS,
 				pixelPosWS.xyz,
-				lightToPixelVec,
+				pixelToLight,
 				light.colorStrength.rgb * light.colorStrength.w,
 				pixelColour.rgb,
 				1.0f, // unshadowed by definition on this path

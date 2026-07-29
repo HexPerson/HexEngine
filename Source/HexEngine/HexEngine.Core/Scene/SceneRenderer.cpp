@@ -397,7 +397,10 @@ namespace HexEngine
 	// the cluster lists in one draw; shadowed lights keep the per-light path.
 	// Needs r_clusterLights for the lists to exist.
 	HVar r_clusterApply("r_clusterApply", "Shade unshadowed local lights from the cluster lists in one fullscreen pass", false, false, true);
-	HVar r_clusterApplyDebug("r_clusterApplyDebug", "Flood the clustered apply output magenta (draw-path test)", false, false, true);
+	// INT, not bool - bool HVars clamp to 0/1 and the staged modes vanish.
+	// 1 = magenta flood (draw path), 2 = per-pixel cluster light count,
+	// 3 = shaded result of the first light in the list, skips ignored.
+	HVar r_clusterApplyDebug("r_clusterApplyDebug", "Clustered apply debug: 1=flood 2=count 3=first light", (int32_t)0, (int32_t)0, (int32_t)3);
 
 	HVar r_ssrTemporalJitter("r_ssrTemporalJitter", "Rotate SSR cone samples per frame so NRD's temporal accumulation integrates the lobe", true, false, true);
 

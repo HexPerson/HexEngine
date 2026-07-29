@@ -236,7 +236,7 @@ namespace HexEngine
 		const float tanHalfFovY = tanf(ToRadian(camera->GetFov()) * 0.5f);
 		HVar* applyDebug = g_pEnv->_commandManager->FindHVar("r_clusterApplyDebug");
 		constants.screenParams = math::Vector4(tanHalfFovY * aspect, tanHalfFovY, (float)lights.size(),
-			(applyDebug != nullptr && applyDebug->_val.b) ? 1.0f : 0.0f);
+			(applyDebug != nullptr) ? (float)applyDebug->_val.i32 : 0.0f);
 
 		if (SUCCEEDED(context->Map(_constantsBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		{
