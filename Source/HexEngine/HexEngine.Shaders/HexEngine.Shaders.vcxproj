@@ -206,6 +206,8 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="AutoExposureLuminance.shader" />
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="BuildDepthPyramid.shader" />
+    <HexEngineShader Include="ClusterLightCull.shader" />
+    <HexEngineShader Include="ClusterLightDebug.shader" />
     <HexEngineShader Include="ParticleSimulate.shader" />
     <HexEngineShader Include="ParticleBillboardLit.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />

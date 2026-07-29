@@ -388,6 +388,12 @@ namespace HexEngine
 	// unchanging sample). A temporal accumulator can only integrate a signal
 	// that varies. Off, plus r_ssrDenoise off, restores the fully frame-stable
 	// diagnostic behaviour.
+	// Phase 2: clustered light culling. Off by default until the deferred pass
+	// consumes the lists; with it on, the cull runs and the heatmap
+	// (r_clusterDebug) verifies the binning against the world.
+	HVar r_clusterLights("r_clusterLights", "Build clustered light lists (Phase 2; no consumer yet)", false, false, true);
+	HVar r_clusterDebug("r_clusterDebug", "Overlay the cluster occupancy heatmap (needs r_clusterLights)", false, false, true);
+
 	HVar r_ssrTemporalJitter("r_ssrTemporalJitter", "Rotate SSR cone samples per frame so NRD's temporal accumulation integrates the lobe", true, false, true);
 
 	HVar r_ssrInScreenFallback("r_ssrInScreenFallback", "Use water's last-in-screen sample when the specular march gives up (bright but positionally wrong)", true, false, true);
@@ -885,6 +891,7 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_diffuseGi.Destroy();
+		_clusteredLights.Destroy();
 		_gbuffer.Destroy();
 
 		//SAFE_DELETE(_clouds);
@@ -954,6 +961,8 @@ namespace HexEngine
 		_chromaticAberrationShader	= IShader::Create("EngineData.Shaders/ChromaticAbberation.hcs");
 		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
+
+		_clusteredLights.Create();
 		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
 		_probeEnvShader				= IShader::Create("EngineData.Shaders/ProbeEnvMap.hcs");
 		_envSHShader				= IShader::Create("EngineData.Shaders/EnvMapSH.hcs");
@@ -3742,6 +3751,16 @@ namespace HexEngine
 
 	void SceneRenderer::RenderLights()
 	{
+		// Clustered light list build. Runs before any lighting so a consumer -
+		// this pass, the froxel volume, forward transparents - can read the
+		// lists; today the heatmap is the only reader. Main camera only: the
+		// grid is sized to one view and probe-capture faces don't need it.
+		if (r_clusterLights._val.b &&
+			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
+		{
+			_clusteredLights.UpdateAndCull(_currentScene, _currentCamera);
+		}
+
 		if (r_debugBypassLighting._val.b)
 		{
 			if (_gbuffer.GetDiffuse() != nullptr && _beautyRT != nullptr)

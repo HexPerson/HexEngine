@@ -8,6 +8,7 @@
 #include "../Graphics/Bloom.hpp"
 #include "../Graphics/AutoExposure.hpp"
 #include "DiffuseGI.hpp"
+#include "../Graphics/ClusteredLighting.hpp"
 #include "GpuVisibilityCulling.hpp"
 #include "../Graphics/TAA.hpp"
 #include "../Graphics/IDenoiserProvider.hpp"
@@ -338,6 +339,8 @@ namespace HexEngine
 		Scene* _taaHistoryScene = nullptr;
 		math::Vector3 _taaHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
 		DiffuseGI _diffuseGi;
+		// Phase 2: clustered light culling (list build + heatmap; no consumer yet).
+		ClusteredLighting _clusteredLights;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 
 		ITexture2D* _ssrHistory = nullptr;		
