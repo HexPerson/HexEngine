@@ -552,7 +552,27 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 	device.swapchainDesc.BufferDesc.Width = width;
 	device.swapchainDesc.BufferDesc.Height = height;
 
-	CHECK_HR(device.swapchain->ResizeBuffers(device.swapchainDesc.BufferCount, width, height, device.swapchainDesc.BufferDesc.Format, device.swapchainDesc.Flags));
+	const HRESULT resizeHr = device.swapchain->ResizeBuffers(device.swapchainDesc.BufferCount, width, height, device.swapchainDesc.BufferDesc.Format, device.swapchainDesc.Flags);
+	if (FAILED(resizeHr))
+	{
+		// DXGI_ERROR_INVALID_CALL here means something STILL holds a backbuffer
+		// reference despite the ClearState/Flush/wrapper-release above - i.e. a
+		// holder outside the context's bound state: a second wrapper, a plugin
+		// caching a native pointer, an in-flight capture. The debug layer can
+		// name it: dump every live object with its refcount to the debugger
+		// output before dying, so the crash carries its own diagnosis instead of
+		// just an HRESULT. (D3D11_CREATE_DEVICE_DEBUG is set in _DEBUG builds;
+		// on release the QI simply fails and this is a no-op.)
+		LOG_CRIT("ResizeBuffers(%ux%u) failed with 0x%08X - dumping live D3D objects (see debugger output; look for ID3D11Texture2D with Refcount > 0 outside the device's internal objects)",
+			width, height, (uint32_t)resizeHr);
+		ID3D11Debug* d3dDebug = nullptr;
+		if (_device != nullptr && SUCCEEDED(_device->QueryInterface(__uuidof(ID3D11Debug), reinterpret_cast<void**>(&d3dDebug))))
+		{
+			d3dDebug->ReportLiveDeviceObjects(D3D11_RLDO_DETAIL | D3D11_RLDO_IGNORE_INTERNAL);
+			d3dDebug->Release();
+		}
+	}
+	CHECK_HR(resizeHr);
 	ConfigureSwapChainColorSpace(device.swapchain, device.hdrOutputActive);
 
 	ID3D11Texture2D* pBackBuffer = nullptr;
