@@ -570,6 +570,31 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 		{
 			d3dDebug->ReportLiveDeviceObjects(D3D11_RLDO_DETAIL | D3D11_RLDO_IGNORE_INTERNAL);
 			d3dDebug->Release();
+
+			// ReportLiveDeviceObjects writes to the DEBUGGER output, which is
+			// lost on any launch outside one - exactly how the crash was hit in
+			// the field. The same report also lands in the device's info queue,
+			// so drain it into the engine log: the culprit gets named in
+			// LogFile_*.txt on every run. (First occurrence showed the failure
+			// surfacing through Streamline's swapchain proxy, whose backbuffer
+			// references ClearState cannot release - this dump is what will say
+			// which object.)
+			ID3D11InfoQueue* infoQueue = nullptr;
+			if (SUCCEEDED(_device->QueryInterface(__uuidof(ID3D11InfoQueue), reinterpret_cast<void**>(&infoQueue))))
+			{
+				const UINT64 messageCount = infoQueue->GetNumStoredMessages();
+				for (UINT64 i = 0; i < messageCount; ++i)
+				{
+					SIZE_T length = 0;
+					if (FAILED(infoQueue->GetMessage(i, nullptr, &length)) || length == 0)
+						continue;
+					std::vector<uint8_t> storage(length);
+					D3D11_MESSAGE* message = reinterpret_cast<D3D11_MESSAGE*>(storage.data());
+					if (SUCCEEDED(infoQueue->GetMessage(i, message, &length)))
+						LOG_CRIT("D3D11 live object: %.*s", (int)message->DescriptionByteLength, message->pDescription);
+				}
+				infoQueue->Release();
+			}
 		}
 	}
 	CHECK_HR(resizeHr);
