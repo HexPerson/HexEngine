@@ -56,6 +56,12 @@ namespace HexEngine
 		// gbuffer normal RT (its .w carries view depth).
 		void RenderDebug(ITexture2D* gbufferNormalDepth);
 
+		// Raw SRVs for compute consumers (the froxel volume). Valid after
+		// Create(); null until then, which consumers treat as "off".
+		ID3D11ShaderResourceView* GetLightsSrv() const { return _lightsSrv; }
+		ID3D11ShaderResourceView* GetCountsSrv() const { return _countsSrv; }
+		ID3D11ShaderResourceView* GetListsSrv() const { return _listsSrv; }
+
 		ITexture2D* GetDebugTexture() const { return _debugTexture; }
 		uint32_t GetLastLightCount() const { return _lastLightCount; }
 

@@ -400,7 +400,10 @@ namespace HexEngine
 	// INT, not bool - bool HVars clamp to 0/1 and the staged modes vanish.
 	// 1 = magenta flood (draw path), 2 = per-pixel cluster light count,
 	// 3 = shaded result of the first light in the list, skips ignored.
-	HVar r_clusterApplyDebug("r_clusterApplyDebug", "Clustered apply debug: 1=flood 2=count 3=first light", (int32_t)0, (int32_t)0, (int32_t)3);
+	// Slice 3: the froxel volumetric CS reads the cluster lists so fog glow
+	// stops being capped at the closest-16 while surface lighting is not.
+	HVar r_clusterFog("r_clusterFog", "Froxel volumetrics consume the cluster lists for unshadowed lights", false, false, true);
+		HVar r_clusterApplyDebug("r_clusterApplyDebug", "Clustered apply debug: 1=flood 2=count 3=first light", (int32_t)0, (int32_t)0, (int32_t)3);
 
 	HVar r_ssrTemporalJitter("r_ssrTemporalJitter", "Rotate SSR cone samples per frame so NRD's temporal accumulation integrates the lobe", true, false, true);
 
@@ -2046,6 +2049,11 @@ namespace HexEngine
 			// also produced an empty shadow map.)
 			const float spotShadowBias = 0.0005f;
 
+			g_pEnv->_volumetricScattering->SetClusteredLights(
+				_clusteredLights.GetLightsSrv(),
+				_clusteredLights.GetCountsSrv(),
+				_clusteredLights.GetListsSrv(),
+				r_clusterFog._val.b && r_clusterLights._val.b);
 			g_pEnv->_volumetricScattering->Update(
 				vsSunDir, sunColV, vsSunIntensity, phaseG, strength,
 				baseExt, heightDensity, heightPivot, heightFalloff,

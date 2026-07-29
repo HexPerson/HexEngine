@@ -119,6 +119,18 @@ namespace HexEngine
 		 *                     volume, and samples there. Camera motion no
 		 *                     longer drags the EMA into the wrong cell.
 		 */
+		// Phase 2 slice 3: hand over the cluster list SRVs for the scatter
+		// CS (raw pointers - this class is already raw D3D11 by convention).
+		// Passing nulls or active=false restores the pure forward-array path.
+		void SetClusteredLights(struct ID3D11ShaderResourceView* lightsSrv,
+		                        struct ID3D11ShaderResourceView* countsSrv,
+		                        struct ID3D11ShaderResourceView* listsSrv,
+		                        bool active)
+		{
+			_clLightsSrv = lightsSrv; _clCountsSrv = countsSrv;
+			_clListsSrv = listsSrv; _clActive = active;
+		}
+
 		void Update(const math::Vector3& sunDirection,
 		            const math::Vector3& sunColour,
 		            float sunIntensity,
@@ -195,6 +207,13 @@ namespace HexEngine
 		IConstantBuffer* _integrateParamsCBuffer = nullptr;
 
 		ITexture3D* _scatterVolume     = nullptr; // RGBA16F
+
+		// Cluster list SRVs handed over per frame by SceneRenderer (raw, not
+		// owned). Null or inactive = pure forward-array path.
+		struct ID3D11ShaderResourceView* _clLightsSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clCountsSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clListsSrv = nullptr;
+		bool _clActive = false;
 		// Ping-pong integration volumes for temporal accumulation. Each
 		// frame the integrate compute reads the PREVIOUS frame from
 		// [writeIdx ^ 1] (as history input) and writes the EMA-blended

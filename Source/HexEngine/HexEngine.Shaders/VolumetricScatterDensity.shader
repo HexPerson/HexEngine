@@ -65,6 +65,21 @@
 	// diffuse.rgb carries its tint.
 	Texture2D    g_gbufferDiffuse    : register(t10);
 	Texture2D    g_gbufferPosition   : register(t11);
+
+	// Clustered light lists (Phase 2 slice 3). Same buffers the deferred
+	// apply consumes; froxel -> cluster is exact integer division because the
+	// cluster depth slicing equals this volume's own exponential mapping.
+	// Null binds read zero counts, so clustering off degrades to no-op.
+	struct ClGpuLight
+	{
+		float4 posRadius;      // xyz world, w radius
+		float4 colorStrength;  // rgb colour, w strength
+		float4 dirCone;        // spot: xyz dir, w cos(outer)
+		float4 params;         // x cos(inner), y type, z shadowed
+	};
+	StructuredBuffer<ClGpuLight> g_clLights : register(t12);
+	StructuredBuffer<uint>       g_clCounts : register(t13);
+	StructuredBuffer<uint>       g_clLists  : register(t14);
 	SamplerState g_shadowPointSampler : register(s2);
 	// Linear-clamp sampler for the transmittance LUT - the LUT is a
 	// continuous function so point sampling shows banding.
@@ -275,6 +290,40 @@
 	// sample when this forward point has a shadow slot assigned (only the
 	// closest-N shadow-casting points fit; rest fall through unshadowed
 	// and shine through walls - same v1 limitation as too-many spots).
+	// Clustered variant: same falloff/phase model as the forward evals, no
+	// shadow sampling - shadowed lights stay on the forward path and are
+	// flagged in params.z. g_emissiveParams.z carries "clustered fog active".
+	float3 EvalClusteredLightScatter(ClGpuLight light, float3 worldPos, float3 rayDir, float phaseG)
+	{
+		const float strength = light.colorStrength.w;
+		if (strength <= 0.0f)
+			return float3(0.0f, 0.0f, 0.0f);
+
+		const float3 toLight = light.posRadius.xyz - worldPos;
+		const float distSq = dot(toLight, toLight);
+		const float radius = light.posRadius.w;
+		if (distSq >= radius * radius)
+			return float3(0.0f, 0.0f, 0.0f);
+
+		const float invDist = rsqrt(max(distSq, 1e-6f));
+		const float3 lightDir = toLight * invDist;
+		float falloff = LocalLightFalloff(distSq, radius);
+
+		// Spot cone, matching the forward spot eval's smoothstep.
+		if (light.params.y > 0.5f)
+		{
+			const float coneDot = dot(-lightDir, light.dirCone.xyz);
+			falloff *= smoothstep(
+				light.dirCone.w,
+				max(light.params.x, light.dirCone.w + 1e-4f),
+				coneDot);
+		}
+
+		const float mu = dot(rayDir, lightDir);
+		const float phase = MiePhaseHG(mu, phaseG);
+		return light.colorStrength.rgb * (strength * falloff * phase);
+	}
+
 	float3 EvalPointLightScatter(uint i, float3 worldPos, float3 rayDir, float phaseG)
 	{
 		const float4 posR = g_fwdPointPosRadius[i];
@@ -597,10 +646,44 @@
 		float3 localScatter = float3(0.0f, 0.0f, 0.0f);
 		const uint fwdPointCount = (uint)g_fwdCountsAndParams.x;
 		const uint fwdSpotCount  = (uint)g_fwdCountsAndParams.y;
+		// With clustered fog active the forward arrays serve ONLY their
+		// shadow-slotted entries - unshadowed lights come from the cluster
+		// lists below, and the closest-16 unshadowed appear in BOTH sources,
+		// so shading them here too would double-count exactly those sixteen.
+		// (Accepted delta, recorded in the plan: shadowed lights that missed
+		// a shadow slot used to scatter through walls unshadowed; they now
+		// contribute no fog rather than wrong fog.)
+		const bool clusteredFog = g_emissiveParams.z > 0.5f;
 		[loop] for (uint pi = 0u; pi < fwdPointCount; ++pi)
+		{
+			if (clusteredFog && (int)g_pointShadowSlotPerForward[pi].x < 0)
+				continue;
 			localScatter += EvalPointLightScatter(pi, worldPos, rayDir, phaseG);
+		}
 		[loop] for (uint si = 0u; si < fwdSpotCount; ++si)
+		{
+			if (clusteredFog && (int)g_spotShadowSlotPerForward[si].x < 0)
+				continue;
 			localScatter += EvalSpotLightScatter(si, worldPos, rayDir, phaseG);
+		}
+
+		if (clusteredFog)
+		{
+			// Froxel (128x72x64) -> cluster (16x9x32): exact integer division,
+			// valid because both use the same exponential depth mapping.
+			const uint ccx = min(dtid.x / 8u, 15u);
+			const uint ccy = min(dtid.y / 8u, 8u);
+			const uint ccz = min(dtid.z / 2u, 31u);
+			const uint clusterIdx = (ccz * 9u + ccy) * 16u + ccx;
+			const uint cCount = min(g_clCounts[clusterIdx], 64u);
+			[loop] for (uint ci = 0u; ci < cCount; ++ci)
+			{
+				const ClGpuLight cl = g_clLights[g_clLists[clusterIdx * 64u + ci]];
+				if (cl.params.z > 0.5f)
+					continue; // shadowed: forward path's job
+				localScatter += EvalClusteredLightScatter(cl, worldPos, rayDir, phaseG);
+			}
+		}
 
 		// Screen-space EMISSIVE injection: surfaces with emissive materials
 		// (neon, lit windows, screens) glow into the fog around them. The

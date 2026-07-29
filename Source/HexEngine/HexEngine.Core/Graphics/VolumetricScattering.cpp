@@ -482,9 +482,13 @@ namespace HexEngine
 		// Emissive injection only runs when both gbuffer SRVs are available -
 		// force strength to 0 otherwise so the shader's gate skips the taps.
 		const bool emissiveValid = gbufferDiffuse != nullptr && gbufferPosition != nullptr;
+		// .z carries "clustered fog active" - a spare lane reused rather than
+		// a cbuffer layout change (see the append-only note in RenderStructs).
+		const bool clusteredFog = _clActive && _clLightsSrv != nullptr &&
+			_clCountsSrv != nullptr && _clListsSrv != nullptr;
 		scatterCB.emissiveParams = math::Vector4(
 			emissiveValid ? std::max(0.0f, emissiveStrength) : 0.0f,
-			std::max(0.01f, emissiveRangeMetres), 0.0f, 0.0f);
+			std::max(0.01f, emissiveRangeMetres), clusteredFog ? 1.0f : 0.0f, 0.0f);
 		// Premultiply ambient colour by strength so the shader's per-froxel
 		// cost is a single mad against the extinction.
 		const float ambS = std::max(0.0f, fogAmbientStrength);
@@ -735,7 +739,22 @@ namespace HexEngine
 				UINT init = 0;
 				context->CSSetUnorderedAccessViews(0, 1, &_scatterUav, &init);
 				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(stage->GetNativePtr()), nullptr, 0);
+				// Cluster list SRVs at t12..t14 for the scatter CS. Bound only
+				// while active; nulled right after the dispatch so nothing
+				// downstream inherits them.
+				if (clusteredFog)
+				{
+					ID3D11ShaderResourceView* clSrvs[3] = { _clLightsSrv, _clCountsSrv, _clListsSrv };
+					context->CSSetShaderResources(12, 3, clSrvs);
+				}
+
 				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
+
+				if (clusteredFog)
+				{
+					ID3D11ShaderResourceView* clNulls[3] = { nullptr, nullptr, nullptr };
+					context->CSSetShaderResources(12, 3, clNulls);
+				}
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 				// +2 for the gbuffer diffuse/position emissive sources at t10/t11.
