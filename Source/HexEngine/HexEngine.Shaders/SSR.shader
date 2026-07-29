@@ -1123,6 +1123,26 @@
 		const float3 noise = g_noiseTexture.Sample(g_pointSampler, noiseSamplePos).rgb;
 
 		uint baseRngState = pixelIndex + 719393u + (uint)(noise.r * 3654.0f) + (uint)(noise.g * 1232.0f) + (uint)(noise.b * 1540.0f);
+
+		// Per-frame sample rotation, gated on the denoiser being active.
+		//
+		// The frame-STABLE seed above was a mistake whenever NRD is running, and
+		// a subtle one: it produced reflections that look beautiful right after
+		// camera movement and then DEGRADE to static speckle over a few seconds.
+		// RELAX starts with rejected history and covers with a wide spatial
+		// filter (the good frames), then narrows spatial support as history
+		// accumulates and leans on the temporal mean instead - but the temporal
+		// mean of a constant is that constant, so the output converges TO the
+		// per-pixel single-sample noise rather than to the lobe integral. A
+		// temporal accumulator can only integrate a signal that varies; feeding
+		// it the same cone sample every frame defeats the entire mechanism.
+		//
+		// Rotation stays off when the denoiser is off (g_ssrTemporalJitter
+		// carries r_ssrDenoise && r_ssrTemporalJitter): the raw diagnostic path
+		// has no temporal integrator, so there frame-stable really is the less
+		// shimmery choice.
+		if (g_ssrTemporalJitter > 0.5f)
+			baseRngState = Hash32(baseRngState ^ (g_frame * 0x9E3779B9u));
 		const float depth = pixelNormal.w;
 
 		float3 diffuseAccum = 0.0f.xxx;

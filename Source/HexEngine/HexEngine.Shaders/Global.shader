@@ -296,6 +296,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// up. Bright, but positionally wrong - it draws what the ray last saw, not
 	// the mirror image.
 	#define g_ssrInScreenFallback    (g_ssrParams.x)
+	// 1 = rotate the SSR cone sample per frame so NRD's temporal accumulation
+	// integrates the lobe. Carries r_ssrDenoise && r_ssrTemporalJitter.
+	#define g_ssrTemporalJitter      (g_ssrParams.y)
 	// 0 = legacy world-space stepping, 1 = screen-space DDA.
 	#define g_ssrMarchMode           (g_ssrParams.y)
 

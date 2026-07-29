@@ -380,6 +380,16 @@ namespace HexEngine
 	//       thickness rather than marching error.
 	HVar r_ssrMarchMode("r_ssrMarchMode", "SSR ray march: 0 = legacy world-space stepping, 1 = screen-space DDA", (int32_t)1, (int32_t)0, (int32_t)1);
 
+	// Rotate the SSR cone sample per frame WHEN THE DENOISER IS ON. The
+	// frame-stable seed converged NRD to the per-pixel noise instead of the lobe:
+	// reflections looked clean right after camera movement (history rejected ->
+	// wide spatial filter) and degraded to static speckle over the next seconds
+	// (history accumulated -> spatial support narrowed -> output = the one
+	// unchanging sample). A temporal accumulator can only integrate a signal
+	// that varies. Off, plus r_ssrDenoise off, restores the fully frame-stable
+	// diagnostic behaviour.
+	HVar r_ssrTemporalJitter("r_ssrTemporalJitter", "Rotate SSR cone samples per frame so NRD's temporal accumulation integrates the lobe", true, false, true);
+
 	HVar r_ssrInScreenFallback("r_ssrInScreenFallback", "Use water's last-in-screen sample when the specular march gives up (bright but positionally wrong)", true, false, true);
 
 	// Declared in ReflectionProbeComponent.cpp - the probe dumps the rig camera's
