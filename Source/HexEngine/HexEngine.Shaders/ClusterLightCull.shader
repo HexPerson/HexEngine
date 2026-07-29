@@ -21,7 +21,13 @@
 	static const uint  kClustersY = 9;
 	static const uint  kClustersZ = 32;
 	static const uint  kMaxLightsPerCluster = 64;
-	static const float kNearPlaneM = 0.25f;
+	// 0.1 to MATCH THE FROXEL VOLUME EXACTLY (VolumetricScatterDensity's
+	// NEAR_PLANE_M). Same exponential formula with a different near plane is a
+	// different slicing - the original 0.25 here only rhymed with the froxel
+	// mapping, it did not equal it. With 0.1, froxel (128x72x64) to cluster
+	// (16x9x32) is exact integer division: fx/8, fy/8, fz/2 - which is what
+	// lets fog and surface lighting share cluster assignment with no seam.
+	static const float kNearPlaneM = 0.1f;
 	static const float kFarDepthM  = 128.0f;
 
 	struct GpuLight
