@@ -4,6 +4,9 @@
 #include "FormatsD3D11.hpp"
 #include "Texture3D.hpp"
 #include "Shader.hpp"
+// After the project headers: dxgidebug.h pulls in windows.h, and placed first
+// its min/max macros break std::max below.
+#include <dxgidebug.h>
 #include <HexEngine.Core/HexEngine.hpp>
 #include <HexEngine.Core/Entity/Component/Transform.hpp>
 #include <HexEngine.Core/Entity/Component/DirectionalLight.hpp>
@@ -603,6 +606,45 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 			// surfacing through Streamline's swapchain proxy, whose backbuffer
 			// references ClearState cannot release - this dump is what will say
 			// which object.)
+			// Process-wide DXGI debug interface, independent of how the device
+			// was created. This matters because with Streamline's interposer in
+			// the chain the NATIVE device appears to lack the debug layer (SL's
+			// own log suggests enabling it even in _DEBUG builds), so the
+			// device-level queue below stays empty - measured: a field crash
+			// with the drain in place produced zero stored messages. dxgidebug
+			// sees live DXGI/D3D objects regardless.
+			typedef HRESULT (WINAPI* PFN_GetDebugInterface)(REFIID, void**);
+			static const GUID kDxgiDebugAll =
+				{ 0xe48ae283, 0xda80, 0x490b, { 0x87, 0xe6, 0x43, 0xe9, 0xa9, 0xcf, 0xda, 0x08 } };
+			if (HMODULE dxgidebug = LoadLibraryA("dxgidebug.dll"))
+			{
+				auto getDebug = reinterpret_cast<PFN_GetDebugInterface>(
+					GetProcAddress(dxgidebug, "DXGIGetDebugInterface"));
+				IDXGIDebug* dxgiDbg = nullptr;
+				if (getDebug != nullptr && SUCCEEDED(getDebug(__uuidof(IDXGIDebug), reinterpret_cast<void**>(&dxgiDbg))))
+				{
+					dxgiDbg->ReportLiveObjects(kDxgiDebugAll, DXGI_DEBUG_RLO_ALL);
+					dxgiDbg->Release();
+				}
+				IDXGIInfoQueue* dxgiQueue = nullptr;
+				if (getDebug != nullptr && SUCCEEDED(getDebug(__uuidof(IDXGIInfoQueue), reinterpret_cast<void**>(&dxgiQueue))))
+				{
+					const UINT64 n = dxgiQueue->GetNumStoredMessages(kDxgiDebugAll);
+					LOG_CRIT("DXGI debug: %llu stored messages follow", (unsigned long long)n);
+					for (UINT64 i = 0; i < n; ++i)
+					{
+						SIZE_T length = 0;
+						if (FAILED(dxgiQueue->GetMessage(kDxgiDebugAll, i, nullptr, &length)) || length == 0)
+							continue;
+						std::vector<uint8_t> storage(length);
+						DXGI_INFO_QUEUE_MESSAGE* message = reinterpret_cast<DXGI_INFO_QUEUE_MESSAGE*>(storage.data());
+						if (SUCCEEDED(dxgiQueue->GetMessage(kDxgiDebugAll, i, message, &length)))
+							LOG_CRIT("DXGI live: %.*s", (int)message->DescriptionByteLength, message->pDescription);
+					}
+					dxgiQueue->Release();
+				}
+			}
+
 			ID3D11InfoQueue* infoQueue = nullptr;
 			if (SUCCEEDED(_device->QueryInterface(__uuidof(ID3D11InfoQueue), reinterpret_cast<void**>(&infoQueue))))
 			{

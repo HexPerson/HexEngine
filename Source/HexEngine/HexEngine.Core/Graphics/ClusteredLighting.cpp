@@ -7,6 +7,7 @@
 #include "../Entity/Component/Camera.hpp"
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/SpotLight.hpp"
+#include "../Entity/Component/Light.hpp"
 
 #include <d3d11.h>
 
@@ -96,7 +97,7 @@ namespace HexEngine
 
 		if (!makeUavBuffer(kClusterCount, &_countsBuffer, &_countsUav, &_countsSrv))
 			return false;
-		if (!makeUavBuffer(kClusterCount * kMaxLightsPerCluster, &_listsBuffer, &_listsUav, nullptr))
+		if (!makeUavBuffer(kClusterCount * kMaxLightsPerCluster, &_listsBuffer, &_listsUav, &_listsSrv))
 			return false;
 
 		// Constants (b5, matching the compute shaders).
@@ -137,6 +138,7 @@ namespace HexEngine
 		SafeRelease(_debugUav);
 		SAFE_DELETE(_debugTexture);
 		SafeRelease(_constantsBuffer);
+		SafeRelease(_listsSrv);
 		SafeRelease(_listsUav);
 		SafeRelease(_listsBuffer);
 		SafeRelease(_countsSrv);
@@ -148,7 +150,7 @@ namespace HexEngine
 		_debugShader.reset();
 	}
 
-	void ClusteredLighting::UpdateAndCull(Scene* scene, Camera* camera)
+	void ClusteredLighting::UpdateAndCull(Scene* scene, Camera* camera, const std::vector<Light*>& shadowCasters)
 	{
 		if (scene == nullptr || camera == nullptr || _cullShader == nullptr || _lightsBuffer == nullptr)
 			return;
@@ -179,7 +181,9 @@ namespace HexEngine
 				const auto pos = l->GetEntity()->GetWorldTM().Translation();
 				gl.posRadius = math::Vector4(pos.x, pos.y, pos.z, std::max(0.05f, l->GetRadius()));
 				gl.colorStrength = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
-				gl.params = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+				const bool shadowed = std::find(shadowCasters.begin(), shadowCasters.end(),
+					static_cast<Light*>(l)) != shadowCasters.end();
+				gl.params = math::Vector4(0.0f, 0.0f, shadowed ? 1.0f : 0.0f, 0.0f);
 				lights.push_back(gl);
 			}
 		}
@@ -205,7 +209,9 @@ namespace HexEngine
 				gl.posRadius = math::Vector4(pos.x, pos.y, pos.z, std::max(0.05f, l->GetRadius()));
 				gl.colorStrength = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
 				gl.dirCone = math::Vector4(fwd.x, fwd.y, fwd.z, cosf(ToRadian(l->GetOuterConeAngle() * 0.5f)));
-				gl.params = math::Vector4(cosf(ToRadian(l->GetInnerConeAngle() * 0.5f)), 1.0f, 0.0f, 0.0f);
+				const bool shadowed = std::find(shadowCasters.begin(), shadowCasters.end(),
+					static_cast<Light*>(l)) != shadowCasters.end();
+				gl.params = math::Vector4(cosf(ToRadian(l->GetInnerConeAngle() * 0.5f)), 1.0f, shadowed ? 1.0f : 0.0f, 0.0f);
 				lights.push_back(gl);
 			}
 		}
@@ -228,7 +234,9 @@ namespace HexEngine
 		const auto& vp = camera->GetViewport();
 		const float aspect = vp.height > 0.0f ? vp.width / vp.height : 1.0f;
 		const float tanHalfFovY = tanf(ToRadian(camera->GetFov()) * 0.5f);
-		constants.screenParams = math::Vector4(tanHalfFovY * aspect, tanHalfFovY, (float)lights.size(), 0.0f);
+		HVar* applyDebug = g_pEnv->_commandManager->FindHVar("r_clusterApplyDebug");
+		constants.screenParams = math::Vector4(tanHalfFovY * aspect, tanHalfFovY, (float)lights.size(),
+			(applyDebug != nullptr && applyDebug->_val.b) ? 1.0f : 0.0f);
 
 		if (SUCCEEDED(context->Map(_constantsBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 		{
@@ -255,6 +263,27 @@ namespace HexEngine
 		ID3D11ShaderResourceView* nullSrv = nullptr;
 		context->CSSetShaderResources(0, 1, &nullSrv);
 		context->CSSetShader(nullptr, nullptr, 0);
+	}
+
+	void ClusteredLighting::BindApply()
+	{
+		ID3D11DeviceContext* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (context == nullptr)
+			return;
+		ID3D11ShaderResourceView* srvs[3] = { _lightsSrv, _countsSrv, _listsSrv };
+		context->PSSetShaderResources(21, 3, srvs);
+		context->PSSetConstantBuffers(5, 1, &_constantsBuffer);
+	}
+
+	void ClusteredLighting::UnbindApply()
+	{
+		ID3D11DeviceContext* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (context == nullptr)
+			return;
+		ID3D11ShaderResourceView* nullSrvs[3] = { nullptr, nullptr, nullptr };
+		context->PSSetShaderResources(21, 3, nullSrvs);
+		ID3D11Buffer* nullCb = nullptr;
+		context->PSSetConstantBuffers(5, 1, &nullCb);
 	}
 
 	void ClusteredLighting::RenderDebug(ITexture2D* gbufferNormalDepth)

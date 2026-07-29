@@ -393,6 +393,11 @@ namespace HexEngine
 	// (r_clusterDebug) verifies the binning against the world.
 	HVar r_clusterLights("r_clusterLights", "Build clustered light lists (Phase 2; no consumer yet)", false, false, true);
 	HVar r_clusterDebug("r_clusterDebug", "Overlay the cluster occupancy heatmap (needs r_clusterLights)", false, false, true);
+	// Slice 2: the fullscreen apply. Unshadowed point/spot lights shade from
+	// the cluster lists in one draw; shadowed lights keep the per-light path.
+	// Needs r_clusterLights for the lists to exist.
+	HVar r_clusterApply("r_clusterApply", "Shade unshadowed local lights from the cluster lists in one fullscreen pass", false, false, true);
+	HVar r_clusterApplyDebug("r_clusterApplyDebug", "Flood the clustered apply output magenta (draw-path test)", false, false, true);
 
 	HVar r_ssrTemporalJitter("r_ssrTemporalJitter", "Rotate SSR cone samples per frame so NRD's temporal accumulation integrates the lobe", true, false, true);
 
@@ -963,6 +968,7 @@ namespace HexEngine
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
 
 		_clusteredLights.Create();
+		_clusterApplyShader = IShader::Create("EngineData.Shaders/ClusterLightApply.hcs");
 		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
 		_probeEnvShader				= IShader::Create("EngineData.Shaders/ProbeEnvMap.hcs");
 		_envSHShader				= IShader::Create("EngineData.Shaders/EnvMapSH.hcs");
@@ -3769,7 +3775,7 @@ namespace HexEngine
 		if (r_clusterLights._val.b &&
 			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
 		{
-			_clusteredLights.UpdateAndCull(_currentScene, _currentCamera);
+			_clusteredLights.UpdateAndCull(_currentScene, _currentCamera, _shadowCasters);
 		}
 
 		if (r_debugBypassLighting._val.b)
@@ -3822,6 +3828,33 @@ namespace HexEngine
 			// Keep a sane base when a scene has no directional light; local lights will add on top.
 			_beautyRT->CopyTo(_lightAccumulationBuffer);
 		}
+		// Clustered apply: every unshadowed local light in one fullscreen draw,
+		// additively into the accumulation buffer the per-light passes also
+		// target. Runs before them so the frame composes identically whichever
+		// path a light takes.
+		if (r_clusterApply._val.b && r_clusterLights._val.b && _clusterApplyShader != nullptr &&
+			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
+		{
+			if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
+			{
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Clustered Light Apply");
+				guiRenderer->StartFrame();
+				g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
+				g_pEnv->_graphicsDevice->SetViewport(*_currentCamera->GetViewport().Get11());
+				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+
+				g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+				_gbuffer.BindAsShaderResource();      // t0..t4 via the auto counter
+				_clusteredLights.BindApply();         // t21..t23 + b5, raw
+
+				guiRenderer->FullScreenTexturedQuad(nullptr, _clusterApplyShader.get());
+
+				_clusteredLights.UnbindApply();
+				guiRenderer->EndFrame();
+				GFX_PERF_END();
+			}
+		}
+
 		if (!r_profileDisablePointLights._val.b)
 			RenderPointLights();
 		if (!r_profileDisableSpotLights._val.b)
@@ -4034,6 +4067,12 @@ namespace HexEngine
 		{
 			for (auto* light : lights)
 			{
+				// Clustered apply owns unshadowed lights when active.
+				if (r_clusterApply._val.b && r_clusterLights._val.b &&
+					std::find(_shadowCasters.begin(), _shadowCasters.end(),
+						static_cast<Light*>(light)) == _shadowCasters.end())
+					continue;
+
 				const auto& diffuse = light->GetDiffuseColour();
 				if (diffuse.w <= 0.0f)
 					continue;
@@ -4140,6 +4179,13 @@ namespace HexEngine
 		for (auto& comp : spotLights)
 		{
 			SpotLight* light = (SpotLight*)comp;
+
+			// Clustered apply owns unshadowed lights when active.
+			if (r_clusterApply._val.b && r_clusterLights._val.b &&
+				std::find(_shadowCasters.begin(), _shadowCasters.end(),
+					static_cast<Light*>(light)) == _shadowCasters.end())
+				continue;
+
 
 			auto lightEnt = light->GetEntity();
 			const auto& lightPos = lightEnt->GetWorldTM().Translation();

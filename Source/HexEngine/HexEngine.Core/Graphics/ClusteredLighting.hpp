@@ -41,7 +41,16 @@ namespace HexEngine
 		void Destroy();
 
 		// Gather lights, upload, dispatch the cull. Main camera only.
-		void UpdateAndCull(Scene* scene, Camera* camera);
+		// shadowCasters marks lights that keep the per-light shadowed path;
+		// they stay IN the lists (future consumers want them) but carry a flag
+		// the apply pass skips on.
+		void UpdateAndCull(Scene* scene, Camera* camera, const std::vector<class Light*>& shadowCasters);
+
+		// Bind/unbind the lists + constants for the fullscreen apply pass
+		// (raw PS slots t21..t23 and b5 - the engine API has no PS
+		// structured-buffer bind).
+		void BindApply();
+		void UnbindApply();
 
 		// Render the occupancy heatmap into the debug texture. Needs the
 		// gbuffer normal RT (its .w carries view depth).
@@ -75,6 +84,7 @@ namespace HexEngine
 		ID3D11ShaderResourceView* _countsSrv = nullptr;
 		ID3D11Buffer* _listsBuffer = nullptr;
 		ID3D11UnorderedAccessView* _listsUav = nullptr;
+		ID3D11ShaderResourceView* _listsSrv = nullptr;
 		ID3D11Buffer* _constantsBuffer = nullptr;
 
 		ITexture2D* _debugTexture = nullptr;

@@ -341,6 +341,7 @@ namespace HexEngine
 		DiffuseGI _diffuseGi;
 		// Phase 2: clustered light culling (list build + heatmap; no consumer yet).
 		ClusteredLighting _clusteredLights;
+		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 
 		ITexture2D* _ssrHistory = nullptr;		
