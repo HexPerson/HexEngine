@@ -135,6 +135,18 @@
 		float4 g_fwdSpotInnerCone[16];         // .x = cos(innerHalfAngle)
 	};
 
+	// Clustered light lists (Phase 2 slice 4) - see DefaultPixel for the doc.
+	struct ClFwdLight
+	{
+		float4 posRadius;
+		float4 colorStrength;
+		float4 dirCone;
+		float4 params;
+	};
+	StructuredBuffer<ClFwdLight> g_clfLights : register(t27);
+	StructuredBuffer<uint>       g_clfCounts : register(t28);
+	StructuredBuffer<uint>       g_clfLists  : register(t29);
+
 	// Direct-only PBR (no ambient). See DefaultPixel.shader for full notes; same body.
 	float3 PBRDirectLight(float3 worldPos, float3 worldNormal, float3 baseColour,
 		float metalness, float perceptualRoughness, float3 L, float3 lightColour, float attenuation)
@@ -170,6 +182,55 @@
 		float metalness, float roughness)
 	{
 		float3 accum = float3(0.0f, 0.0f, 0.0f);
+
+		// Clustered path - see DefaultPixel's copy for the full doc. Uncapped
+		// local lights from the shared lists; the 16+16 arrays go unread.
+		if (g_clusterForwardActive > 0.5f)
+		{
+			float4 clip = mul(float4(worldPos, 1.0f), g_viewProjectionMatrix);
+			if (clip.w > 0.0f)
+			{
+				const float2 ndc = clip.xy / clip.w;
+				const float2 cuv = float2(ndc.x * 0.5f + 0.5f, 1.0f - (ndc.y * 0.5f + 0.5f));
+				const float4 viewPos = mul(float4(worldPos, 1.0f), g_viewMatrix);
+				const float viewDepth = -viewPos.z;
+				const uint ccx = min((uint)(saturate(cuv.x) * 16.0f), 15u);
+				const uint ccy = min((uint)(saturate(cuv.y) * 9.0f), 8u);
+				const float cw = log(max(viewDepth, 0.1f) / 0.1f) / log(128.0f / 0.1f);
+				const uint ccz = min((uint)(saturate(cw) * 32.0f), 31u);
+				const uint clusterIdx = (ccz * 9u + ccy) * 16u + ccx;
+				const uint cCount = min(g_clfCounts[clusterIdx], 64u);
+				[loop]
+				for (uint ci = 0u; ci < cCount; ++ci)
+				{
+					const ClFwdLight cl = g_clfLights[g_clfLists[clusterIdx * 64u + ci]];
+					const float3 clToLight = cl.posRadius.xyz - worldPos;
+					const float clDistSq = dot(clToLight, clToLight);
+					const float clRadius = max(0.05f, cl.posRadius.w);
+					if (clDistSq >= clRadius * clRadius)
+						continue;
+					const float clDist = sqrt(max(1e-6f, clDistSq));
+					const float3 clL = clToLight / clDist;
+					float coneAtten = 1.0f;
+					if (cl.params.y > 0.5f)
+					{
+						const float cosOuter = cl.dirCone.w;
+						const float cosInner = max(cl.params.x, cosOuter + 1e-4f);
+						coneAtten = smoothstep(cosOuter, cosInner, dot(-clL, normalize(cl.dirCone.xyz)));
+						if (coneAtten <= 0.0f)
+							continue;
+					}
+					const float clMinDistSqr = 0.01f * 0.01f;
+					float clFalloff = saturate(1.0f - pow(clDist / clRadius, 4.0f));
+					clFalloff *= clFalloff;
+					const float clAtten = (clFalloff / max(clDistSq, clMinDistSqr)) * coneAtten;
+					accum += PBRDirectLight(worldPos, worldNormal, baseColour, metalness, roughness,
+						clL, cl.colorStrength.rgb * cl.colorStrength.w, clAtten);
+				}
+			}
+			return accum;
+		}
+
 		const uint pointCount = min((uint)g_fwdCountsAndParams.x, 16u);
 		[loop]
 		for (uint pi = 0u; pi < pointCount; ++pi)

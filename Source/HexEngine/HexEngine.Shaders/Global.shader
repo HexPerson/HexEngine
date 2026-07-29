@@ -299,8 +299,16 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	// 1 = rotate the SSR cone sample per frame so NRD's temporal accumulation
 	// integrates the lobe. Carries r_ssrDenoise && r_ssrTemporalJitter.
 	#define g_ssrTemporalJitter      (g_ssrParams.y)
+	// 1 = forward-lit surfaces read local lights from the cluster lists
+	// (uncapped) instead of the closest-16 forward arrays. Main camera only -
+	// the cluster grid is built for one view.
+	#define g_clusterForwardActive   (g_ssrParams.z)
 	// 0 = legacy world-space stepping, 1 = screen-space DDA.
-	#define g_ssrMarchMode           (g_ssrParams.y)
+	// .w, NOT .y: marchMode originally landed on .y, silently colliding with
+	// g_ssrTemporalJitter - which made the jitter toggle dead (always-on
+	// whenever the DDA marcher was active). That collision is also why the
+	// fade-to-noise fix appeared to work "with the toggle off".
+	#define g_ssrMarchMode           (g_ssrParams.w)
 
 	struct MaterialProps
 	{

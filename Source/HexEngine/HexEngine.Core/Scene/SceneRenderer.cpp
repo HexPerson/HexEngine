@@ -402,7 +402,10 @@ namespace HexEngine
 	// 3 = shaded result of the first light in the list, skips ignored.
 	// Slice 3: the froxel volumetric CS reads the cluster lists so fog glow
 	// stops being capped at the closest-16 while surface lighting is not.
-	HVar r_clusterFog("r_clusterFog", "Froxel volumetrics consume the cluster lists for unshadowed lights", false, false, true);
+	// Slice 4: glass / alpha-blend surfaces read uncapped local lights from
+	// the cluster lists instead of the closest-16 forward arrays.
+	HVar r_clusterForward("r_clusterForward", "Forward-lit surfaces consume the cluster lists (uncapped local lights)", false, false, true);
+		HVar r_clusterFog("r_clusterFog", "Froxel volumetrics consume the cluster lists for unshadowed lights", false, false, true);
 		HVar r_clusterApplyDebug("r_clusterApplyDebug", "Clustered apply debug: 1=flood 2=count 3=first light", (int32_t)0, (int32_t)0, (int32_t)3);
 
 	HVar r_ssrTemporalJitter("r_ssrTemporalJitter", "Rotate SSR cone samples per frame so NRD's temporal accumulation integrates the lobe", true, false, true);
@@ -2527,10 +2530,18 @@ namespace HexEngine
 				r_wetnessDarkening._val.f32,
 				r_ssrMaxStepLength._val.f32);
 
+			// Lane map (see Global.shader defines): x = in-screen fallback,
+			// y = temporal jitter (gated on the denoiser - a dead toggle until
+			// the marchMode lane collision was found), z = forward clustering
+			// (main camera only - the grid is built for one view), w = marcher.
+			const bool clusterForwardActive =
+				r_clusterForward._val.b && r_clusterLights._val.b &&
+				_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera();
 			bufferData._ssrParams = math::Vector4(
 				r_ssrInScreenFallback._val.b ? 1.0f : 0.0f,
-				(float)r_ssrMarchMode._val.i32,
-				0.0f, 0.0f);
+				(r_ssrTemporalJitter._val.b && r_ssrDenoise._val.b) ? 1.0f : 0.0f,
+				clusterForwardActive ? 1.0f : 0.0f,
+				(float)r_ssrMarchMode._val.i32);
 
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,
@@ -4446,6 +4457,25 @@ namespace HexEngine
 
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin Transparent");
 
+		// Cluster list SRVs for the forward material shaders (t27..t29, raw -
+		// no engine API for PS structured buffers). Bound for the whole
+		// transparent pass and nulled at the end; the shaders gate on
+		// g_clusterForwardActive so a null bind is also safe.
+		const bool clusterForwardBind =
+			r_clusterForward._val.b && r_clusterLights._val.b &&
+			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera();
+		if (clusterForwardBind)
+		{
+			if (auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+			{
+				ID3D11ShaderResourceView* clSrvs[3] = {
+					_clusteredLights.GetLightsSrv(),
+					_clusteredLights.GetCountsSrv(),
+					_clusteredLights.GetListsSrv() };
+				ctx->PSSetShaderResources(27, 3, clSrvs);
+			}
+		}
+
 		// Transparent shaders (notably water, but also any alpha-blended mesh) sample the
 		// beauty texture for reflection / refraction. Render transparency into a separate RT
 		// to avoid SRV/RTV hazards on _beautyRT, then copy back at the end.
@@ -4521,6 +4551,15 @@ namespace HexEngine
 		if (_waterRT)
 		{
 			_waterRT->CopyTo(_beautyRT);
+		}
+
+		if (clusterForwardBind)
+		{
+			if (auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+			{
+				ID3D11ShaderResourceView* clNulls[3] = { nullptr, nullptr, nullptr };
+				ctx->PSSetShaderResources(27, 3, clNulls);
+			}
 		}
 
 		GFX_PERF_END();
