@@ -552,6 +552,30 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 	device.swapchainDesc.BufferDesc.Width = width;
 	device.swapchainDesc.BufferDesc.Height = height;
 
+	// Resize with the swapchain's LIVE desc, not the cached creation request.
+	//
+	// The cache (memcpy'd from `sd` at creation) records what the engine ASKED
+	// for. With Streamline loaded, the swapchain the engine talks to is SL's
+	// interposer proxy, and SL is free to create the real swapchain with an
+	// upgraded desc - flip-model swap effect, different buffer count, extra
+	// flags for DLSS frame generation. ResizeBuffers validates Flags/BufferCount
+	// against what the swapchain was ACTUALLY created with, and a mismatch is an
+	// immediate DXGI_ERROR_INVALID_CALL before reference counting even enters
+	// into it - which is how the Launcher/Studio app crashed deterministically
+	// ~5s into startup (its first window resize) with Streamline's proxy in the
+	// failure trace, while the editor - which never resizes - ran fine all day.
+	// GetDesc through the proxy returns the truth; use it and keep the cache
+	// honest for the RTV/SRV dimension checks below.
+	DXGI_SWAP_CHAIN_DESC liveDesc = {};
+	if (SUCCEEDED(device.swapchain->GetDesc(&liveDesc)))
+	{
+		device.swapchainDesc.BufferCount = liveDesc.BufferCount;
+		device.swapchainDesc.BufferDesc.Format = liveDesc.BufferDesc.Format;
+		device.swapchainDesc.Flags = liveDesc.Flags;
+		device.swapchainDesc.SwapEffect = liveDesc.SwapEffect;
+		device.swapchainDesc.SampleDesc = liveDesc.SampleDesc;
+	}
+
 	const HRESULT resizeHr = device.swapchain->ResizeBuffers(device.swapchainDesc.BufferCount, width, height, device.swapchainDesc.BufferDesc.Format, device.swapchainDesc.Flags);
 	if (FAILED(resizeHr))
 	{
