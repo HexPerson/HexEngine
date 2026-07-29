@@ -528,6 +528,26 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 	_bbufferWidth = width;
 	_bbufferHeight = height;
 
+	// Same-size resize: skip entirely. A ResizeBuffers to the swapchain's
+	// current dimensions is semantically a no-op but still requires ZERO
+	// outstanding backbuffer references - and during startup Streamline's
+	// interposer still holds its init-time refs, so the app's initial
+	// WM_SIZE (fired at the size the swapchain was created at) raced SL's
+	// first release and died with DXGI_ERROR_INVALID_CALL. Intermittently:
+	// under a debugger startup is slow enough that the first Present wins
+	// the race, which is why the crash only reproduced on cold launches.
+	{
+		DXGI_SWAP_CHAIN_DESC currentDesc = {};
+		if (device.backbuffer != nullptr &&
+			SUCCEEDED(device.swapchain->GetDesc(&currentDesc)) &&
+			currentDesc.BufferDesc.Width == (UINT)width &&
+			currentDesc.BufferDesc.Height == (UINT)height)
+		{
+			LOG_DEBUG("Resize to %dx%d skipped - swapchain already that size", width, height);
+			return;
+		}
+	}
+
 	// IDXGISwapChain::ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
 	// (0x887A0001) if anything still holds an outstanding reference to the
 	// existing backbuffer - including the device context's bound RTV/SRV/
