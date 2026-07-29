@@ -3717,6 +3717,17 @@ namespace HexEngine
 				debugIsFace = true;
 			}
 
+			// Cluster occupancy heatmap (Phase 2). Drawn from the same debug
+			// overlay block as the env atlases; RenderDebug dispatches the
+			// heatmap compute against this frame's cull results first.
+			if (r_clusterDebug._val.b && r_clusterLights._val.b && canPostProcess &&
+				_clusteredLights.GetDebugTexture() != nullptr)
+			{
+				_clusteredLights.RenderDebug(_gbuffer.GetNormal());
+				guiRenderer->FillTexturedQuad(_clusteredLights.GetDebugTexture(),
+					10, 170, 960, 540, math::Color(1, 1, 1, 1));
+			}
+
 			if (debugAtlas != nullptr && canPostProcess)
 			{
 				guiRenderer->FillTexturedQuad(
