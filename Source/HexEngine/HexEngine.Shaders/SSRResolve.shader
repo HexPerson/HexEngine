@@ -90,12 +90,87 @@
 	// the traced side already has its environment from SSR, any value below 1
 	// there makes this pass add a SECOND copy - a bright fringe, the mirror image
 	// of the dark rim this change removes.
-	float SampleConfidence(float2 screenPos)
+	// Radiance + confidence fetch, resolution-aware.
+	//
+	// Full-res chain: plain bilinear, identical to the original behaviour
+	// (confidence deliberately single-tap - it is a per-surface flag, and
+	// blurring it across geometry edges makes the environment term double up
+	// as a bright fringe on the traced side).
+	//
+	// Half-res chain (r_ssrHalfRes): DEPTH-AWARE 4-tap upsample. Plain
+	// bilinear on a half-res source bleeds reflections across depth
+	// discontinuities - a background reflection smears onto the foreground
+	// silhouette one full-res pixel deep. Static, that reads as a soft edge;
+	// panning, the bleed sweeps along every edge and the reflection appears
+	// to swim against the geometry. Each of the 4 nearest half-res texels is
+	// weighted bilinear x depth-similarity, where the texel's depth comes
+	// from its REPRESENTATIVE full-res gbuffer texel (the same top-left pick
+	// SSR.shader's UV snap and SSRGuideDownsample's Load use, so all three
+	// stages agree about which surface a half-res texel describes).
+	float3 SampleSsrUpsampled(float2 screenPos, float pixelDepth, out float confidence)
 	{
-		// Linear, not point: with r_ssrHalfRes the hit-info texture is half
-		// the resolve resolution, and point-sampling it would quantise the
-		// confidence mask into visible 2x2 blocks at hit/miss boundaries.
-		return saturate(g_ssrSpecHitInfo.SampleLevel(g_textureSampler, screenPos, 0).r);
+		uint srcW, srcH;
+		g_ssrSourceA.GetDimensions(srcW, srcH);
+
+		if (srcW >= (uint)g_screenWidth)
+		{
+			confidence = saturate(g_ssrSpecHitInfo.SampleLevel(g_textureSampler, screenPos, 0).r);
+			return g_ssrSourceA.SampleLevel(g_textureSampler, screenPos, 0).rgb +
+			       g_ssrSourceB.SampleLevel(g_textureSampler, screenPos, 0).rgb;
+		}
+
+		const float2 srcSize = float2((float)srcW, (float)srcH);
+		const float2 fullSize = float2((float)g_screenWidth, (float)g_screenHeight);
+		const float2 pos = screenPos * srcSize - 0.5f;
+		const float2 base = floor(pos);
+		const float2 f = pos - base;
+
+		float3 sum = 0.0f.xxx;
+		float confSum = 0.0f;
+		float wSum = 0.0f;
+		float3 fallback = 0.0f.xxx;
+		float fallbackConf = 0.0f;
+
+		[unroll]
+		for (int i = 0; i < 4; ++i)
+		{
+			const float2 off = float2((float)(i & 1), (float)(i >> 1));
+			const float2 texel = clamp(base + off, 0.0f.xx, srcSize - 1.0f);
+			const float2 uv = (texel + 0.5f) / srcSize;
+
+			const float2 repUv = (texel * 2.0f + 0.5f) / fullSize;
+			const float texelDepth = GBUFFER_NORMAL.SampleLevel(g_pointSampler, repUv, 0).w;
+
+			const float bilin =
+				(off.x > 0.5f ? f.x : 1.0f - f.x) *
+				(off.y > 0.5f ? f.y : 1.0f - f.y);
+			// Relative tolerance (10% of pixel depth, floored at 5cm) so the
+			// rejection stays meaningful from close-ups to the horizon.
+			const float depthW = exp(-abs(texelDepth - pixelDepth) / max(pixelDepth * 0.1f, 0.05f));
+			const float w = bilin * depthW;
+
+			const float3 rad =
+				g_ssrSourceA.SampleLevel(g_pointSampler, uv, 0).rgb +
+				g_ssrSourceB.SampleLevel(g_pointSampler, uv, 0).rgb;
+			const float conf = saturate(g_ssrSpecHitInfo.SampleLevel(g_pointSampler, uv, 0).r);
+
+			sum += rad * w;
+			confSum += conf * w;
+			wSum += w;
+			fallback += rad * bilin;
+			fallbackConf += conf * bilin;
+		}
+
+		if (wSum > 1e-4f)
+		{
+			confidence = saturate(confSum / wSum);
+			return sum / wSum;
+		}
+
+		// Every neighbour rejected (a fully disoccluded sliver thinner than a
+		// half-res texel): plain bilinear beats returning black.
+		confidence = saturate(fallbackConf);
+		return fallback;
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
@@ -104,9 +179,12 @@
 			input.position.x / (float)g_screenWidth,
 			input.position.y / (float)g_screenHeight);
 
-		const float3 ssr =
-			g_ssrSourceA.SampleLevel(g_textureSampler, screenPos, 0).rgb +
-			g_ssrSourceB.SampleLevel(g_textureSampler, screenPos, 0).rgb;
+		// Gbuffer reads first - the upsample needs this pixel's depth.
+		const float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
+		const float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
+
+		float confidence;
+		const float3 ssr = SampleSsrUpsampled(screenPos, pixelNormal.w, confidence);
 
 		// Alpha is the fraction of the DESTINATION to replace (the pass draws with
 		// PremultipliedAlpha: src + dst * (1 - src.a)). Every early-out below
@@ -117,9 +195,6 @@
 		// environment term, so this pass is the plain additive blit it always was.
 		if (g_iblComposeInResolve < 0.5f)
 			return float4(ssr, 0.0f);
-
-		const float4 pixelPosWS = GBUFFER_POSITION.Sample(g_pointSampler, screenPos);
-		const float4 pixelNormal = GBUFFER_NORMAL.Sample(g_pointSampler, screenPos);
 
 		// Sky. Without this the resolve would paint environment specular over the
 		// sky itself - the pixels most likely to have zero SSR confidence and so
@@ -155,7 +230,8 @@
 			envRadiance,
 			specularReflectance);
 
-		const float confidence = SampleConfidence(screenPos);
+		// confidence was produced by SampleSsrUpsampled above, sharing the
+		// depth-aware weights with the radiance so the two stay consistent.
 
 		// Energy split. The reflection is light the surface sends toward the eye
 		// INSTEAD of the light it already emitted, not on top of it - so the base
