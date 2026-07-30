@@ -41,6 +41,8 @@
 	// t15..t20 - the one free six-slot run in this shader's layout. Unbound
 	// maps read as fully shadowed, which is why the shader gates on
 	// g_taaParams.z rather than sampling unconditionally.
+	// (A/B-measured 2026-07-30: this block + the PCSS include cost nothing
+	// measurable when the gate is off - the fps<20 hunt ruled it out.)
 	SHADOWMAPS_RESOURCE(15)
 
 	// Up to 16 point + 16 spot lights gathered in SceneRenderer::SetupForwardLights().
