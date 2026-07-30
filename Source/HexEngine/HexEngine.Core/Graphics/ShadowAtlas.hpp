@@ -61,6 +61,12 @@ namespace HexEngine
 			uint64_t lastUsedFrame = 0;    // LRU age
 			uint64_t contentHash = 0;      // what the tile currently holds (0 = never rendered)
 			bool renderedThisFrame = false;
+			// View-proj CAPTURED WHEN THE TILE WAS RENDERED - never the
+			// light's current matrices. A moved light whose re-render missed
+			// the budget keeps depth rendered with the OLD matrices; sampling
+			// must use those or every cached tile mis-projects.
+			math::Matrix viewProj;
+			bool hasContent = false;
 		};
 
 		// One entry per face the CURRENT frame's lists reference; consumed by
@@ -94,6 +100,18 @@ namespace HexEngine
 
 		/** Viewport (x, y, w, h) of a tile in atlas texels. */
 		void GetTileViewport(int32_t tileIndex, int32_t& x, int32_t& y, int32_t& w, int32_t& h) const;
+
+		/** Record the matrices a tile's content was rendered with. */
+		void SetTileViewProj(int32_t tileIndex, const math::Matrix& viewProj);
+
+		/**
+		 * Tile currently holding VALID content for a face, or -1. Used by the
+		 * cluster gather to decide whether a shadowed light can shade on the
+		 * clustered path this frame.
+		 */
+		int32_t FindContentTile(const Light* light, uint8_t face) const;
+
+		const Tile& GetTile(int32_t tileIndex) const { return _tiles[tileIndex]; }
 
 		ID3D11DepthStencilView* GetTileDsv(int32_t tileIndex) const;
 		ID3D11ShaderResourceView* GetAtlasSrv() const { return _atlasSrv; }

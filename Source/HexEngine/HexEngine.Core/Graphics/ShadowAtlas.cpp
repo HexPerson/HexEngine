@@ -83,6 +83,25 @@ namespace HexEngine
 		return _tileDsvs[0];
 	}
 
+	void ShadowAtlas::SetTileViewProj(int32_t tileIndex, const math::Matrix& viewProj)
+	{
+		if (tileIndex < 0 || tileIndex >= kTileCount)
+			return;
+		_tiles[tileIndex].viewProj = viewProj;
+		_tiles[tileIndex].hasContent = true;
+	}
+
+	int32_t ShadowAtlas::FindContentTile(const Light* light, uint8_t face) const
+	{
+		const FaceKey key{ light, face };
+		for (int32_t i = 0; i < kTileCount; ++i)
+		{
+			if (_tiles[i].owner == key && _tiles[i].hasContent)
+				return i;
+		}
+		return -1;
+	}
+
 	uint64_t ShadowAtlas::ComputeFaceContentHash(const Light* light, uint8_t face) const
 	{
 		// v1 invalidation: the light's own state. A light that has not moved or
@@ -187,7 +206,8 @@ namespace HexEngine
 
 			_tiles[best].owner = want->key;
 			_tiles[best].lastUsedFrame = _frame;
-			_tiles[best].contentHash = 0; // stolen tile holds someone else's depth
+			_tiles[best].contentHash = 0;     // stolen tile holds someone else's depth
+			_tiles[best].hasContent = false;  // consumers must not sample it yet
 			_assignments.push_back({ want->key, best, false });
 		}
 

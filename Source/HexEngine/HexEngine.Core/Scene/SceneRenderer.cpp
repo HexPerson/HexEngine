@@ -3025,6 +3025,13 @@ namespace HexEngine
 		// passes for its non-cascade lights.
 		light->ConstructMatrices(_currentCamera, 0.0f, 1.0f, face);
 
+		// Capture what this tile's depth is about to be rendered with - the
+		// consumers sample with the CAPTURED matrices, never the light's
+		// current ones (a later move that misses the re-render budget must
+		// not re-project cached depth).
+		_shadowAtlas.SetTileViewProj(assignment.tileIndex,
+			light->GetViewMatrix(face) * light->GetProjectionMatrix(face));
+
 		PVSParams params;
 		params.lodPartition = r_lodPartition._val.f32;
 		params.shapeType = PVSParams::ShapeType::Sphere;
@@ -3920,7 +3927,8 @@ namespace HexEngine
 		if (r_clusterLights._val.b &&
 			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
 		{
-			_clusteredLights.UpdateAndCull(_currentScene, _currentCamera, _shadowCasters);
+			_clusteredLights.UpdateAndCull(_currentScene, _currentCamera, _shadowCasters,
+				r_shadowAtlas._val.b ? &_shadowAtlas : nullptr);
 		}
 
 		if (r_debugBypassLighting._val.b)
@@ -3992,9 +4000,24 @@ namespace HexEngine
 				_gbuffer.BindAsShaderResource();      // t0..t4 via the auto counter
 				_clusteredLights.BindApply();         // t21..t23 + b5, raw
 
+				// Slice 7: atlas depth + per-tile matrices at t24/t25, raw.
+				// Null when the atlas is off - the shader gates on params.w.
+				if (auto* rawCtx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+				{
+					ID3D11ShaderResourceView* atlasSrvs[2] = {
+						r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
+						r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr };
+					rawCtx->PSSetShaderResources(24, 2, atlasSrvs);
+				}
+
 				guiRenderer->FullScreenTexturedQuad(nullptr, _clusterApplyShader.get());
 
 				_clusteredLights.UnbindApply();
+				if (auto* rawCtx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+				{
+					ID3D11ShaderResourceView* atlasNulls[2] = { nullptr, nullptr };
+					rawCtx->PSSetShaderResources(24, 2, atlasNulls);
+				}
 				guiRenderer->EndFrame();
 				GFX_PERF_END();
 			}
@@ -4325,11 +4348,20 @@ namespace HexEngine
 		{
 			SpotLight* light = (SpotLight*)comp;
 
-			// Clustered apply owns unshadowed lights when active.
-			if (r_clusterApply._val.b && r_clusterLights._val.b &&
-				std::find(_shadowCasters.begin(), _shadowCasters.end(),
-					static_cast<Light*>(light)) == _shadowCasters.end())
-				continue;
+			// Clustered apply owns unshadowed lights when active - and, with
+			// the atlas on, shadowed spots whose tile holds valid content
+			// (those shade in the apply with an atlas term; drawing them here
+			// too would double-light).
+			if (r_clusterApply._val.b && r_clusterLights._val.b)
+			{
+				const bool isShadowCaster = std::find(_shadowCasters.begin(), _shadowCasters.end(),
+					static_cast<Light*>(light)) != _shadowCasters.end();
+				if (!isShadowCaster)
+					continue;
+				if (r_shadowAtlas._val.b &&
+					_shadowAtlas.FindContentTile(static_cast<Light*>(light), 0) >= 0)
+					continue;
+			}
 
 
 			auto lightEnt = light->GetEntity();

@@ -62,6 +62,16 @@
 	StructuredBuffer<uint>     g_clCounts : register(t22);
 	StructuredBuffer<uint>     g_clLists  : register(t23);
 
+	// Slice 7: the shared local-light shadow atlas + per-tile view-proj
+	// matrices (CAPTURED at tile render time - a cached tile samples with
+	// the matrices its depth was drawn with, not the light's current ones).
+	// Null when r_shadowAtlas is off; the params.w gate never reads them.
+	Texture2D                 g_shadowAtlas : register(t24);
+	StructuredBuffer<matrix>  g_atlasTileVP : register(t25);
+
+	static const float kAtlasTilesPerRow = 4.0f;
+	static const float kAtlasTileUvSize = 1.0f / kAtlasTilesPerRow;
+
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
@@ -144,9 +154,49 @@
 				return float4(dd < light.posRadius.w ? 5.0f : 0.0f, 0.2f, 0.0f, 0.0f);
 			}
 
-			// Shadowed lights are the per-light path's job.
+			// Shadowed lights: spots with an atlas tile (params.w >= 0) shade
+			// HERE with an atlas shadow term; everything else shadowed stays
+			// on the per-light path exactly as before.
+			float shadowTerm = 1.0f;
 			if (light.params.z > 0.5f)
-				continue;
+			{
+				const int tileIndex = (int)light.params.w;
+				if (tileIndex < 0 || light.params.y < 0.5f)
+					continue; // per-light path's job
+
+				// Project into the tile's light space (captured matrices).
+				const float4 lightClip = mul(float4(pixelPosWS.xyz, 1.0f), g_atlasTileVP[tileIndex]);
+				if (lightClip.w <= 0.0f)
+					continue;
+				float2 shadowUv = float2(
+					lightClip.x / lightClip.w * 0.5f + 0.5f,
+					-lightClip.y / lightClip.w * 0.5f + 0.5f);
+				const float lightDepth = lightClip.z / lightClip.w;
+
+				if (saturate(shadowUv.x) != shadowUv.x || saturate(shadowUv.y) != shadowUv.y ||
+					lightDepth >= 1.0f)
+				{
+					shadowTerm = 1.0f; // outside the map = unshadowed
+				}
+				else
+				{
+					// Tile-local UV, clamped half a texel inside the tile so
+					// bilinear comparison taps never bleed into a neighbour.
+					const float tileX = (float)(tileIndex % (int)kAtlasTilesPerRow);
+					const float tileY = (float)(tileIndex / (int)kAtlasTilesPerRow);
+					const float halfTexel = 0.5f / 4096.0f;
+					shadowUv = clamp(shadowUv, halfTexel / kAtlasTileUvSize, 1.0f - halfTexel / kAtlasTileUvSize);
+					const float2 atlasUv = (float2(tileX, tileY) + shadowUv) * kAtlasTileUvSize;
+
+					// Same bias the per-light spot path settled on (0.0005 -
+					// see the spotShadowBias note in SceneRenderer).
+					shadowTerm = g_shadowAtlas.SampleCmpLevelZero(
+						g_cmpSampler, atlasUv, lightDepth - 0.0005f);
+				}
+
+				if (shadowTerm <= 0.001f)
+					continue;
+			}
 
 			// PIXEL -> LIGHT. The old shaders name this exact vector
 			// "lightToPixelVec" while constructing lightPos - pixelPos; the name
@@ -190,7 +240,7 @@
 				pixelToLight,
 				light.colorStrength.rgb * light.colorStrength.w,
 				pixelColour.rgb,
-				1.0f, // unshadowed by definition on this path
+				shadowTerm, // 1 for unshadowed; atlas term for tiled spots
 				attenuation);
 
 			accum += pbr.rgb;

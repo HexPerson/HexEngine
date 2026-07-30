@@ -44,7 +44,14 @@ namespace HexEngine
 		// shadowCasters marks lights that keep the per-light shadowed path;
 		// they stay IN the lists (future consumers want them) but carry a flag
 		// the apply pass skips on.
-		void UpdateAndCull(Scene* scene, Camera* camera, const std::vector<class Light*>& shadowCasters);
+		//
+		// Slice 7: when a ShadowAtlas is supplied, a shadowed SPOT whose face
+		// has valid atlas content packs its tile index into params.w and the
+		// apply shades it from the atlas instead of skipping it. Shadowed
+		// point lights stay on the per-light path in v1 (six-face cube
+		// sampling is a follow-up; the neon-street acceptance scene is spots).
+		void UpdateAndCull(Scene* scene, Camera* camera, const std::vector<class Light*>& shadowCasters,
+			const class ShadowAtlas* atlas = nullptr);
 
 		// Bind/unbind the lists + constants for the fullscreen apply pass
 		// (raw PS slots t21..t23 and b5 - the engine API has no PS
@@ -61,6 +68,9 @@ namespace HexEngine
 		ID3D11ShaderResourceView* GetLightsSrv() const { return _lightsSrv; }
 		ID3D11ShaderResourceView* GetCountsSrv() const { return _countsSrv; }
 		ID3D11ShaderResourceView* GetListsSrv() const { return _listsSrv; }
+		// Per-atlas-tile view-proj matrices (row per tile), uploaded when
+		// UpdateAndCull ran with an atlas. Null-safe for consumers.
+		ID3D11ShaderResourceView* GetTileVpSrv() const { return _tileVpSrv; }
 
 		ITexture2D* GetDebugTexture() const { return _debugTexture; }
 		uint32_t GetLastLightCount() const { return _lastLightCount; }
@@ -92,6 +102,8 @@ namespace HexEngine
 		ID3D11UnorderedAccessView* _listsUav = nullptr;
 		ID3D11ShaderResourceView* _listsSrv = nullptr;
 		ID3D11Buffer* _constantsBuffer = nullptr;
+		ID3D11Buffer* _tileVpBuffer = nullptr;
+		ID3D11ShaderResourceView* _tileVpSrv = nullptr;
 
 		ITexture2D* _debugTexture = nullptr;
 		ID3D11UnorderedAccessView* _debugUav = nullptr;

@@ -8,6 +8,7 @@
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/Light.hpp"
+#include "ShadowAtlas.hpp"
 
 #include <d3d11.h>
 
@@ -100,6 +101,28 @@ namespace HexEngine
 		if (!makeUavBuffer(kClusterCount * kMaxLightsPerCluster, &_listsBuffer, &_listsUav, &_listsSrv))
 			return false;
 
+		// Per-atlas-tile view-proj matrices (slice 7). CPU-written when
+		// UpdateAndCull runs with an atlas; sized to the atlas tile count.
+		{
+			constexpr uint32_t kTileVpElements = 16; // ShadowAtlas::kTileCount
+			D3D11_BUFFER_DESC desc = {};
+			desc.ByteWidth = sizeof(math::Matrix) * kTileVpElements;
+			desc.Usage = D3D11_USAGE_DYNAMIC;
+			desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+			desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+			desc.StructureByteStride = sizeof(math::Matrix);
+			if (FAILED(device->CreateBuffer(&desc, nullptr, &_tileVpBuffer)))
+				return false;
+
+			D3D11_SHADER_RESOURCE_VIEW_DESC srv = {};
+			srv.Format = DXGI_FORMAT_UNKNOWN;
+			srv.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+			srv.Buffer.NumElements = kTileVpElements;
+			if (FAILED(device->CreateShaderResourceView(_tileVpBuffer, &srv, &_tileVpSrv)))
+				return false;
+		}
+
 		// Constants (b5, matching the compute shaders).
 		{
 			D3D11_BUFFER_DESC desc = {};
@@ -138,6 +161,8 @@ namespace HexEngine
 		SafeRelease(_debugUav);
 		SAFE_DELETE(_debugTexture);
 		SafeRelease(_constantsBuffer);
+		SafeRelease(_tileVpSrv);
+		SafeRelease(_tileVpBuffer);
 		SafeRelease(_listsSrv);
 		SafeRelease(_listsUav);
 		SafeRelease(_listsBuffer);
@@ -150,7 +175,8 @@ namespace HexEngine
 		_debugShader.reset();
 	}
 
-	void ClusteredLighting::UpdateAndCull(Scene* scene, Camera* camera, const std::vector<Light*>& shadowCasters)
+	void ClusteredLighting::UpdateAndCull(Scene* scene, Camera* camera, const std::vector<Light*>& shadowCasters,
+		const ShadowAtlas* atlas)
 	{
 		if (scene == nullptr || camera == nullptr || _cullShader == nullptr || _lightsBuffer == nullptr)
 			return;
@@ -211,7 +237,14 @@ namespace HexEngine
 				gl.dirCone = math::Vector4(fwd.x, fwd.y, fwd.z, cosf(ToRadian(l->GetOuterConeAngle() * 0.5f)));
 				const bool shadowed = std::find(shadowCasters.begin(), shadowCasters.end(),
 					static_cast<Light*>(l)) != shadowCasters.end();
-				gl.params = math::Vector4(cosf(ToRadian(l->GetInnerConeAngle() * 0.5f)), 1.0f, shadowed ? 1.0f : 0.0f, 0.0f);
+				// Slice 7: params.w = atlas tile holding this spot's shadow map,
+				// or -1. A shadowed spot WITH a tile shades on the clustered
+				// path (the apply samples the atlas); without one it keeps the
+				// per-light path via the params.z skip, exactly as before.
+				float atlasTile = -1.0f;
+				if (shadowed && atlas != nullptr)
+					atlasTile = (float)atlas->FindContentTile(static_cast<Light*>(l), 0);
+				gl.params = math::Vector4(cosf(ToRadian(l->GetInnerConeAngle() * 0.5f)), 1.0f, shadowed ? 1.0f : 0.0f, atlasTile);
 				lights.push_back(gl);
 			}
 		}
@@ -225,6 +258,17 @@ namespace HexEngine
 			if (!lights.empty())
 				memcpy(mapped.pData, lights.data(), sizeof(GpuLight) * lights.size());
 			context->Unmap(_lightsBuffer, 0);
+		}
+
+		// Tile view-proj matrices for the atlas sampling path. TRANSPOSED
+		// like every engine cbuffer/structured matrix (shaders mul(vec, m)).
+		if (atlas != nullptr && _tileVpBuffer != nullptr &&
+			SUCCEEDED(context->Map(_tileVpBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+		{
+			auto* dst = reinterpret_cast<math::Matrix*>(mapped.pData);
+			for (int32_t i = 0; i < ShadowAtlas::kTileCount && i < 16; ++i)
+				dst[i] = atlas->GetTile(i).viewProj.Transpose();
+			context->Unmap(_tileVpBuffer, 0);
 		}
 
 		ClusterConstants constants = {};
