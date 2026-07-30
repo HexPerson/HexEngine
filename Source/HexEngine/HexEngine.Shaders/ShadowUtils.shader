@@ -115,6 +115,50 @@
 		return projectTexCoord;
 	}
 
+	// Cheap 4-tap PCF sun shadow. Same cascade selection as CalculateShadows
+	// but a fixed four comparison taps instead of the full PCSS at
+	// g_shadowConfig.samples - for surfaces that need "is this in shadow"
+	// without contact hardening. Motivating case: the transparency phase's
+	// glass, where full PCSS cost ~4 ms on window-heavy views (measured
+	// 2026-07-30). No cascade blending - a subtle seam on glass is
+	// invisible behind the reflection layer.
+	float CalculateShadowsCheapPCF(float3 positionWS, SamplerComparisonState cmpSampler, Texture2D depthMaps[MAX_SHADOW_CASCADES], float bias)
+	{
+		const float cameraDistance = distance(g_eyePos.xyz, positionWS);
+		int index = 3;
+		if (cameraDistance <= g_frustumDepths[0])      index = 0;
+		else if (cameraDistance <= g_frustumDepths[1]) index = 1;
+		else if (cameraDistance <= g_frustumDepths[2]) index = 2;
+
+		const float4 lightViewPosition = CalculateLightViewPosition(index, float4(positionWS, 1.0f));
+		const float2 uv = GetProjectedTexCoord(lightViewPosition);
+		if (saturate(uv.x) != uv.x || saturate(uv.y) != uv.y)
+			return 1.0f;
+
+		const float lightDepth = (lightViewPosition.z / lightViewPosition.w) - bias;
+		if (lightDepth >= 1.0f)
+			return 1.0f;
+
+		const float texel = 1.0f / max(g_shadowConfig.shadowMapSize, 1.0f);
+		float sum = 0.0f;
+
+		// depthMaps[] wants a literal index in SM5 - same unrolled-loop trick
+		// CalculateShadows uses.
+		[unroll]
+		for (int i = 0; i < 4; ++i)
+		{
+			if (i == index)
+			{
+				sum += depthMaps[i].SampleCmpLevelZero(cmpSampler, uv + float2(-0.5f, -0.5f) * texel, lightDepth);
+				sum += depthMaps[i].SampleCmpLevelZero(cmpSampler, uv + float2( 0.5f, -0.5f) * texel, lightDepth);
+				sum += depthMaps[i].SampleCmpLevelZero(cmpSampler, uv + float2(-0.5f,  0.5f) * texel, lightDepth);
+				sum += depthMaps[i].SampleCmpLevelZero(cmpSampler, uv + float2( 0.5f,  0.5f) * texel, lightDepth);
+			}
+		}
+
+		return sum * 0.25f;
+	}
+
 	float CalculateShadows(ShadowInput input, SamplerComparisonState cmpSampler, SamplerState pointSampler, Texture2D depthMaps[MAX_SHADOW_CASCADES], float bias)
 	{
 		int index = 0;

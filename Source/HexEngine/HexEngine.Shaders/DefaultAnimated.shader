@@ -526,17 +526,14 @@
 			// ShadowInput/bias formulation as the deferred pass; gated because
 			// the cascades + b2 caster constants are only valid when
 			// SceneRenderer bound them for this pass.
+			// Cheap PCF, not full PCSS - see DefaultPixel; ~4 ms measured on
+			// window-heavy views with the full path.
 			float sunShadow = 1.0f;
 			if (g_taaParams.z > 0.5f)
 			{
-				ShadowInput shadowIn;
-				shadowIn.pixelDepth = pixelDepth;
-				shadowIn.positionWS = float4(input.positionWS.xyz, 1.0f);
-				shadowIn.positionSS = input.position.xy;
-				shadowIn.samples = g_shadowConfig.samples;
 				const float ndl = dot(worldNormal, normalize(g_shadowCasterLightDir.xyz));
 				const float shadowBias = g_shadowConfig.biasMultiplier * (1.0f - ndl);
-				sunShadow = CalculateShadows(shadowIn, g_cmpSampler, g_pointSamplerFwd, SHADOWMAPS, shadowBias);
+				sunShadow = CalculateShadowsCheapPCF(input.positionWS.xyz, g_cmpSampler, SHADOWMAPS, shadowBias);
 			}
 
 			const float4 sunLit = CalculatePBRSurface(

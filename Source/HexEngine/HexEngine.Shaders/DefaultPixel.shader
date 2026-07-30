@@ -472,17 +472,15 @@
 			// and the wall behind it agree about where the shadow falls.
 			// Gated: the cascades + b2 caster constants are only valid when
 			// SceneRenderer bound them for this pass.
+			// Cheap PCF, not full PCSS: glass needs "am I in shadow", not
+			// contact hardening, and PCSS at g_shadowConfig.samples cost
+			// ~4 ms on window-heavy views (measured 2026-07-30).
 			float sunShadow = 1.0f;
 			if (g_taaParams.z > 0.5f)
 			{
-				ShadowInput shadowIn;
-				shadowIn.pixelDepth = pixelDepth;
-				shadowIn.positionWS = float4(input.positionWS.xyz, 1.0f);
-				shadowIn.positionSS = input.position.xy;
-				shadowIn.samples = g_shadowConfig.samples;
 				const float ndl = dot(worldNormal, normalize(g_shadowCasterLightDir.xyz));
 				const float shadowBias = g_shadowConfig.biasMultiplier * (1.0f - ndl);
-				sunShadow = CalculateShadows(shadowIn, g_cmpSampler, g_pointSamplerFwd, SHADOWMAPS, shadowBias);
+				sunShadow = CalculateShadowsCheapPCF(input.positionWS.xyz, g_cmpSampler, SHADOWMAPS, shadowBias);
 			}
 
 			// Sun (analytical). CalculatePBRSurface already includes a single ambient term and
