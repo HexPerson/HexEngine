@@ -830,17 +830,17 @@ namespace HexEngine
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
 	// SSR + NRD were ~14 ms of a ~30 ms frame at 4K (user-measured on the
-	// street view, 2026-07-30) - the single largest pass. Half resolution
-	// quarters both the ray count and NRD's pixel count and recovers ~20 fps
-	// (31 -> 51 measured). Default OFF for now: reflections visibly warp
-	// under camera panning at half res. Fixed so far (all real, none
-	// sufficient): unstable boundary rounding in the guide decimation and
-	// the SSR gbuffer reads, and RELAX's pixel-unit prepass radii running
-	// double-width. Remaining leads: the resolve upsample is plain bilinear
-	// (the designed depth-aware/bilateral upsample is NOT built yet - radiance
-	// bleeds across depth edges and sweeps with the camera), and a RenderDoc
-	// pass over NRD's half-res reprojection inputs.
-	HVar r_ssrHalfRes("r_ssrHalfRes", "March + denoise SSR at half resolution (resolve upsamples)", false, false, true);
+	// street view, 2026-07-30) - the single largest pass. The MARCH runs at
+	// half resolution (4x fewer rays); the DENOISER stays at full resolution
+	// behind a depth-aware upsample of the march outputs (SSRUpsample.shader).
+	// NRD at half res made reflections swim under camera panning - four
+	// fixes (deterministic guide decimation, boundary-snapped gbuffer reads,
+	// resolution-scaled RELAX radii, depth-aware resolve upsample) improved
+	// half-res correctness but only moving the denoiser back to full res
+	// resolved it (bisect: raw half-res SSR never swam). Measured: 31 fps
+	// full chain -> 51 all-half (swimming) -> 43 half-march/full-denoise,
+	// motion quality indistinguishable from full res. USER-VERIFIED.
+	HVar r_ssrHalfRes("r_ssrHalfRes", "March SSR at half resolution (denoise + resolve stay full res)", true, false, true);
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
 	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
@@ -1017,7 +1017,7 @@ namespace HexEngine
 		_chromaticAberrationShader	= IShader::Create("EngineData.Shaders/ChromaticAbberation.hcs");
 		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
-		_ssrGuideDownsampleShader	= IShader::Create("EngineData.Shaders/SSRGuideDownsample.hcs");
+		_ssrUpsampleShader			= IShader::Create("EngineData.Shaders/SSRUpsample.hcs");
 
 		_clusteredLights.Create();
 		_clusterApplyShader = IShader::Create("EngineData.Shaders/ClusterLightApply.hcs");
@@ -5608,18 +5608,19 @@ namespace HexEngine
 		SAFE_DELETE(_ssrHitInfo);
 		SAFE_DELETE(_ssrHistory);
 		SAFE_DELETE(_ssrResolved);
-		SAFE_DELETE(_ssrGuideNormal);
-		SAFE_DELETE(_ssrGuideMaterial);
-		SAFE_DELETE(_ssrGuideVelocity);
+		SAFE_DELETE(_ssrUpDiffuse);
+		SAFE_DELETE(_ssrUpDiffuseHit);
+		SAFE_DELETE(_ssrUpSpecular);
+		SAFE_DELETE(_ssrUpSpecularHit);
 
 		_ssrBaseWidth = width;
 		_ssrBaseHeight = height;
 		_ssrHalfResActive = r_ssrHalfRes._val.b;
 
-		const int32_t w = _ssrHalfResActive ? std::max(1, width / 2) : width;
-		const int32_t h = _ssrHalfResActive ? std::max(1, height / 2) : height;
+		const int32_t halfW = std::max(1, width / 2);
+		const int32_t halfH = std::max(1, height / 2);
 
-		auto makeSsrRT = [&](const char* name) -> ITexture2D*
+		auto makeSsrRT = [&](int32_t w, int32_t h, const char* name) -> ITexture2D*
 		{
 			ITexture2D* tex = g_pEnv->_graphicsDevice->CreateTexture2D(
 				w,
@@ -5637,44 +5638,26 @@ namespace HexEngine
 			return tex;
 		};
 
-		_ssrDiffuseTexture = makeSsrRT("_ssrDiffuseTexture");
-		_ssrDiffuseHitInfo = makeSsrRT("_ssrDiffuseHitInfo");
-		_ssrTexture        = makeSsrRT("_ssrSpecularTexture");
-		_ssrHitInfo        = makeSsrRT("_ssrSpecularHitInfo");
+		// March MRTs: half res when r_ssrHalfRes, full otherwise.
+		const int32_t mw = _ssrHalfResActive ? halfW : width;
+		const int32_t mh = _ssrHalfResActive ? halfH : height;
+		_ssrDiffuseTexture = makeSsrRT(mw, mh, "_ssrDiffuseTexture");
+		_ssrDiffuseHitInfo = makeSsrRT(mw, mh, "_ssrDiffuseHitInfo");
+		_ssrTexture        = makeSsrRT(mw, mh, "_ssrSpecularTexture");
+		_ssrHitInfo        = makeSsrRT(mw, mh, "_ssrSpecularHitInfo");
 
-		_ssrHistory = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
-		_ssrResolved = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
-		_ssrHistory->SetDebugName("_ssrHistory");
-		_ssrResolved->SetDebugName("_ssrResolved");
+		// NRD input/output/history are ALWAYS full res - the denoiser's
+		// half-res temporal accumulation is what made reflections swim, so
+		// half-res mode bridges through the upsampled set below instead.
+		_ssrHistory = makeSsrRT(width, height, "_ssrHistory");
+		_ssrResolved = makeSsrRT(width, height, "_ssrResolved");
 
-		// NRD guide textures - only needed at half res (at full res the gbuffer
-		// itself is handed to NRD, as before). Formats mirror their sources so
-		// the decimation pass is a plain copy per texel.
-		if (_ssrHalfResActive && _gbuffer.GetNormal() != nullptr)
+		if (_ssrHalfResActive)
 		{
-			auto makeGuide = [&](ITexture2D* src, const char* name) -> ITexture2D*
-			{
-				if (src == nullptr)
-					return nullptr;
-				ITexture2D* tex = g_pEnv->_graphicsDevice->CreateTexture2D(
-					w,
-					h,
-					(DXGI_FORMAT)src->GetFormat(),
-					1,
-					D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-					0, 1, 0,
-					nullptr,
-					(D3D11_CPU_ACCESS_FLAG)0,
-					D3D11_RTV_DIMENSION_TEXTURE2D,
-					D3D11_UAV_DIMENSION_UNKNOWN,
-					D3D11_SRV_DIMENSION_TEXTURE2D);
-				tex->SetDebugName(name);
-				return tex;
-			};
-
-			_ssrGuideNormal   = makeGuide(_gbuffer.GetNormal(),   "_ssrGuideNormal");
-			_ssrGuideMaterial = makeGuide(_gbuffer.GetSpecular(), "_ssrGuideMaterial");
-			_ssrGuideVelocity = makeGuide(_gbuffer.GetVelocity(), "_ssrGuideVelocity");
+			_ssrUpDiffuse     = makeSsrRT(width, height, "_ssrUpDiffuse");
+			_ssrUpDiffuseHit  = makeSsrRT(width, height, "_ssrUpDiffuseHit");
+			_ssrUpSpecular    = makeSsrRT(width, height, "_ssrUpSpecular");
+			_ssrUpSpecularHit = makeSsrRT(width, height, "_ssrUpSpecularHit");
 		}
 	}
 
@@ -5815,31 +5798,34 @@ namespace HexEngine
 
 			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader.get());
 
-			// Half-res: decimate the NRD guide textures to match the radiance
-			// resolution (NRD requires all inputs at one size). Point-sampled
-			// nearest texel per output pixel - the standard guide decimation.
-			const bool ssrHalfRes = _ssrHalfResActive &&
-				_ssrGuideNormal != nullptr && _ssrGuideMaterial != nullptr && _ssrGuideVelocity != nullptr;
-			if (ssrHalfRes && r_ssrDenoise._val.b && _ssrGuideDownsampleShader != nullptr)
-			{
-				g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
-				g_pEnv->_graphicsDevice->SetRenderTargets({ _ssrGuideNormal, _ssrGuideMaterial, _ssrGuideVelocity });
-				g_pEnv->_graphicsDevice->SetTexture2D(0, _gbuffer.GetNormal());
-				g_pEnv->_graphicsDevice->SetTexture2D(1, _gbuffer.GetSpecular());
-				g_pEnv->_graphicsDevice->SetTexture2D(2, _gbuffer.GetVelocity());
-				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
-				guiRenderer->FullScreenTexturedQuad(nullptr, _ssrGuideDownsampleShader.get());
-				g_pEnv->_graphicsDevice->SetTexture2D(0, nullptr);
-				g_pEnv->_graphicsDevice->SetTexture2D(1, nullptr);
-				g_pEnv->_graphicsDevice->SetTexture2D(2, nullptr);
-				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
-			}
-
-			// The march (and guide pass) ran at the SSR resolution; everything
-			// from NRD's output onward composites at the full viewport.
+			// The march ran at the SSR resolution; everything from here on runs
+			// at the full viewport.
 			vp.Width = bbvp.width;
 			vp.Height = bbvp.height;
 			g_pEnv->_graphicsDevice->SetViewport(vp);
+
+			// Half-res bridge: depth-aware upsample of the four march outputs
+			// to full res BEFORE the denoiser. NRD's half-res temporal
+			// accumulation made reflections swim under camera motion (bisect:
+			// raw half-res SSR does not swim), so the denoiser always runs at
+			// full resolution against the full-res gbuffer guides.
+			const bool ssrHalfRes = _ssrHalfResActive &&
+				_ssrUpDiffuse != nullptr && _ssrUpSpecular != nullptr;
+			if (ssrHalfRes && r_ssrDenoise._val.b && _ssrUpsampleShader != nullptr)
+			{
+				g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+				g_pEnv->_graphicsDevice->SetRenderTargets({ _ssrUpDiffuse, _ssrUpDiffuseHit, _ssrUpSpecular, _ssrUpSpecularHit });
+				g_pEnv->_graphicsDevice->SetTexture2D(0, _ssrDiffuseTexture);
+				g_pEnv->_graphicsDevice->SetTexture2D(1, _ssrDiffuseHitInfo);
+				g_pEnv->_graphicsDevice->SetTexture2D(2, _ssrTexture);
+				g_pEnv->_graphicsDevice->SetTexture2D(3, _ssrHitInfo);
+				g_pEnv->_graphicsDevice->SetTexture2D(4, _gbuffer.GetNormal());
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+				guiRenderer->FullScreenTexturedQuad(nullptr, _ssrUpsampleShader.get());
+				for (int32_t i = 0; i < 5; ++i)
+					g_pEnv->_graphicsDevice->SetTexture2D(i, nullptr);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+			}
 
             _ssrResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
@@ -5863,13 +5849,17 @@ namespace HexEngine
 				// FilterFrame compares the input texture size against NRD's last-bound size and
 				// rebuilds the pool internally when they differ - that's the DLSS-toggle safety
 				// net in case SceneRenderer::Resize's explicit CreateBuffers call is missed.
-				// Half-res hands NRD the decimated guides; full res the gbuffer
-				// directly, exactly as before.
+				// NRD always denoises at full resolution with the full-res
+				// gbuffer guides; half-res mode feeds it the upsampled bridge
+				// set instead of the raw half-res march outputs.
 				g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD,
-					_ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo,
-					ssrHalfRes ? _ssrGuideNormal   : _gbuffer.GetNormal(),
-					ssrHalfRes ? _ssrGuideMaterial : _gbuffer.GetSpecular(),
-					ssrHalfRes ? _ssrGuideVelocity : _gbuffer.GetVelocity());
+					ssrHalfRes ? _ssrUpDiffuse     : _ssrDiffuseTexture,
+					ssrHalfRes ? _ssrUpDiffuseHit  : _ssrDiffuseHitInfo,
+					ssrHalfRes ? _ssrUpSpecular    : _ssrTexture,
+					ssrHalfRes ? _ssrUpSpecularHit : _ssrHitInfo,
+					_gbuffer.GetNormal(),
+					_gbuffer.GetSpecular(),
+					_gbuffer.GetVelocity());
 				g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _ssrResolved);
 
 				_ssrResolved->CopyTo(_ssrHistory);

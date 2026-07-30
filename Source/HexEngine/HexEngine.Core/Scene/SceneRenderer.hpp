@@ -352,14 +352,18 @@ namespace HexEngine
 		ITexture2D* _ssrHistory = nullptr;
 		ITexture2D* _ssrResolved = nullptr;
 
-		// Half-res SSR (r_ssrHalfRes): the march + NRD run at half resolution
-		// and the resolve upsamples. NRD needs its guide textures at the same
-		// resolution as the radiance, so the gbuffer normal/material/velocity
-		// get decimated into these before FilterFrame.
-		ITexture2D* _ssrGuideNormal = nullptr;
-		ITexture2D* _ssrGuideMaterial = nullptr;
-		ITexture2D* _ssrGuideVelocity = nullptr;
-		std::shared_ptr<IShader> _ssrGuideDownsampleShader;
+		// Half-res SSR (r_ssrHalfRes): the MARCH runs at half resolution (4x
+		// fewer rays - the perf win), but NRD denoises at FULL resolution.
+		// Running NRD at half res made reflections swim under camera motion
+		// (bisect: r_ssrDenoise 0 at half res killed the swim), and its
+		// full-res configuration is known-good - so the four march outputs
+		// get a depth-aware upsample (SSRUpsample.shader) before FilterFrame
+		// and NRD sees exactly what it always saw.
+		ITexture2D* _ssrUpDiffuse = nullptr;
+		ITexture2D* _ssrUpDiffuseHit = nullptr;
+		ITexture2D* _ssrUpSpecular = nullptr;
+		ITexture2D* _ssrUpSpecularHit = nullptr;
+		std::shared_ptr<IShader> _ssrUpsampleShader;
 		bool _ssrHalfResActive = false;
 		int32_t _ssrBaseWidth = 0;
 		int32_t _ssrBaseHeight = 0;

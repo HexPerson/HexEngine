@@ -233,6 +233,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="ShadowMapGeometryAnimated.shader" />
     <HexEngineShader Include="SSRResolve.shader" />
     <HexEngineShader Include="SSRGuideDownsample.shader" />
+    <HexEngineShader Include="SSRUpsample.shader" />
     <HexEngineShader Include="UIBasic.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
