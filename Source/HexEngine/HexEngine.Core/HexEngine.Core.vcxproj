@@ -340,6 +340,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\IStreamlineProvider.hpp" />
     <ClInclude Include="Graphics\IStructuredBuffer.hpp" />
     <ClInclude Include="Graphics\ClusteredLighting.hpp" />
+    <ClInclude Include="Graphics\ShadowAtlas.hpp" />
     <ClInclude Include="Graphics\MeshLoader.hpp" />
     <ClInclude Include="Graphics\TextureLoader.hpp" />
     <ClInclude Include="GUI\Elements\Canvas.hpp" />
@@ -572,6 +573,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="FileSystem\ProjectFile.cpp" />
     <ClCompile Include="Graphics\IFontResource.cpp" />
     <ClCompile Include="Graphics\ClusteredLighting.cpp" />
+    <ClCompile Include="Graphics\ShadowAtlas.cpp" />
     <ClCompile Include="Graphics\MeshLoader.cpp" />
     <ClCompile Include="Graphics\TextureLoader.cpp" />
     <ClCompile Include="GUI\Elements\Canvas.cpp" />
