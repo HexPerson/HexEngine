@@ -330,6 +330,9 @@ namespace HexEngine
 		//       behaviour. Exposed because the two interact - correcting the sign makes
 		//       history land on the right pixel and therefore be ACCEPTED far more often,
 		//       which changes how much the clip gamma above is doing.
+		//   z = transparent sun shadows active (r_transparentShadows): 1 only when
+		//       RenderTransparent binds the sun cascades at t15..t20 this frame.
+		//       Rides this vector because zw were spare - nothing TAA about it.
 		math::Vector4 _taaParams;
 
 		// Reflection / IBL parameters, appended at the end per the note above.

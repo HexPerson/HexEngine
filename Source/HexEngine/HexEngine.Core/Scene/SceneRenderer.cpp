@@ -405,6 +405,36 @@ namespace HexEngine
 	// Slice 4: glass / alpha-blend surfaces read uncapped local lights from
 	// the cluster lists instead of the closest-16 forward arrays.
 	HVar r_clusterForward("r_clusterForward", "Forward-lit surfaces consume the cluster lists (uncapped local lights)", false, false, true);
+	// Slice 5: the transparency phase samples the sun cascades instead of the
+	// hardcoded depthValue=1 - glass in a shadowed interior stops sun-lighting
+	// as if it stood outdoors.
+	HVar r_transparentShadows("r_transparentShadows", "Transparent surfaces receive sun cascade shadows", false, false, true);
+
+	// Slice 5: the sun whose cascades RenderTransparent binds at t15..t20. One
+	// function shared by the g_taaParams.z packing and the bind block so the
+	// flag and the binds can never disagree - a set flag with nothing bound
+	// reads all-zero cascade maps as "fully shadowed" and would black out the
+	// sun on every transparent surface. Caller enforces the main-camera check
+	// (the cascades are fit to the main view, same reasoning as
+	// clusterForwardActive).
+	static DirectionalLight* FindTransparentShadowSun(Scene* scene)
+	{
+		if (!r_transparentShadows._val.b || scene == nullptr)
+			return nullptr;
+
+		std::vector<DirectionalLight*> suns;
+		if (scene->GetComponents<DirectionalLight>(suns) == false)
+			return nullptr;
+
+		for (auto* sun : suns)
+		{
+			if (sun->GetShadowMap(0) != nullptr)
+				return sun;
+		}
+
+		return nullptr;
+	}
+
 		HVar r_clusterFog("r_clusterFog", "Froxel volumetrics consume the cluster lists for unshadowed lights", false, false, true);
 		HVar r_clusterApplyDebug("r_clusterApplyDebug", "Clustered apply debug: 1=flood 2=count 3=first light", (int32_t)0, (int32_t)0, (int32_t)3);
 
@@ -2630,12 +2660,18 @@ namespace HexEngine
 				}
 			}
 
+			// z: transparent sun shadows (slice 5) - set only when RenderTransparent
+			// will actually bind the cascades this frame (same sun lookup, main
+			// camera only), because the shader gate trusts this flag completely.
+			const bool transparentShadowsActive =
+				_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera() &&
+				FindTransparentShadowSun(_currentScene) != nullptr;
 			bufferData._taaParams = math::Vector4(
 				r_taaVarianceGamma._val.f32,
 				// Snap to exactly +/-1 so an intermediate cvar value can't scale the
 				// reprojection distance as well as its direction.
 				(r_taaVelocityYSign._val.f32 < 0.0f) ? -1.0f : 1.0f,
-				0.0f,
+				transparentShadowsActive ? 1.0f : 0.0f,
 				0.0f);
 
 			// ocean
@@ -4514,6 +4550,29 @@ namespace HexEngine
 		// which is the old (broken) behaviour rather than a crash.
 		g_pEnv->_graphicsDevice->SetTexture2D(14, _iblSkyEnvMap);
 
+		// t15..t20 = sun shadow cascades (slice 5), plus the b2 caster constants
+		// re-uploaded for the sun: the deferred per-light passes left b2 holding
+		// the LAST point/spot light's data, so without this re-setup the shader
+		// would project sun cascades through a spot light's matrices. The
+		// shaders gate on g_taaParams.z, which SetupPerFrameBuffer set from the
+		// same FindTransparentShadowSun + main-camera condition.
+		DirectionalLight* transparentSun =
+			(_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
+				? FindTransparentShadowSun(_currentScene)
+				: nullptr;
+		if (transparentSun != nullptr)
+		{
+			for (int32_t i = 0; i < 6; ++i)
+			{
+				auto shadowMap = i < transparentSun->GetMaxSupportedShadowCascades()
+					? transparentSun->GetShadowMap(i)
+					: nullptr;
+				g_pEnv->_graphicsDevice->SetTexture2D(15 + i,
+					shadowMap != nullptr ? shadowMap->GetDepthMap() : nullptr);
+			}
+			SetupPerShadowCasterBuffer(transparentSun, false, 0, 0, r_shadowSamples._val.i32, 0.0f);
+		}
+
 		// CRITICAL: SetTexture2D(slot, ...) advances the device's "next implicit slot" counter.
 		// Scene::RenderEntities reads that counter to decide where to bind each mesh's
 		// material textures (albedo/normal/etc at t0..t7). If we leave the counter at 14,
@@ -4535,6 +4594,13 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetTexture2D(12, nullptr);
 		g_pEnv->_graphicsDevice->SetTexture2D(13, nullptr);
 		g_pEnv->_graphicsDevice->SetTexture2D(14, nullptr);
+		if (transparentSun != nullptr)
+		{
+			// The cascade depth maps become DSVs again next frame; a stale SRV
+			// bind here is a guaranteed debug-layer hazard warning.
+			for (int32_t i = 0; i < 6; ++i)
+				g_pEnv->_graphicsDevice->SetTexture2D(15 + i, nullptr);
+		}
 		g_pEnv->_graphicsDevice->SetBoundResourceIndex(postMaterialIndex);
 
 		// NOTE: GPU particles no longer render here. They moved AFTER the

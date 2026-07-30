@@ -122,6 +122,14 @@
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
+	// Engine-global point sampler (same s2 every deferred pass uses);
+	// CalculateShadows wants it alongside the comparison sampler.
+	SamplerState g_pointSamplerFwd : register(s2);
+
+	// Sun shadow cascades for the transparency phase, bound by
+	// SceneRenderer::RenderTransparent when r_transparentShadows is on.
+	// Same t15..t20 run as DefaultPixel so one C++ bind serves both shaders.
+	SHADOWMAPS_RESOURCE(15)
 
 	cbuffer ForwardLightsBuffer : register(b7)
 	{
@@ -513,6 +521,24 @@
 
 		if (g_material.isInTransparencyPhase != 0)
 		{
+			// Sun cascade shadows (Phase 2 slice 5) - was a hardcoded 1.0f, so
+			// transparent surfaces never received sun shadows. Same
+			// ShadowInput/bias formulation as the deferred pass; gated because
+			// the cascades + b2 caster constants are only valid when
+			// SceneRenderer bound them for this pass.
+			float sunShadow = 1.0f;
+			if (g_taaParams.z > 0.5f)
+			{
+				ShadowInput shadowIn;
+				shadowIn.pixelDepth = pixelDepth;
+				shadowIn.positionWS = float4(input.positionWS.xyz, 1.0f);
+				shadowIn.positionSS = input.position.xy;
+				shadowIn.samples = g_shadowConfig.samples;
+				const float ndl = dot(worldNormal, normalize(g_shadowCasterLightDir.xyz));
+				const float shadowBias = g_shadowConfig.biasMultiplier * (1.0f - ndl);
+				sunShadow = CalculateShadows(shadowIn, g_cmpSampler, g_pointSamplerFwd, SHADOWMAPS, shadowBias);
+			}
+
 			const float4 sunLit = CalculatePBRSurface(
 				metalness,
 				roughness,
@@ -521,7 +547,7 @@
 				-normalize(g_lightDirection.xyz),
 				getSunColour(),
 				albedo.rgb,
-				1.0f,
+				sunShadow,
 				g_globalLight[0]);
 
 			const float3 forwardDirect = AccumulateForwardLights_PBR(input.positionWS.xyz,

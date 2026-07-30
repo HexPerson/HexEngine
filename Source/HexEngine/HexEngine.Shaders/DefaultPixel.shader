@@ -4,6 +4,9 @@
 	Utils
 	// SampleEnvAtlas, for the transparency path's environment reflection fallback.
 	EnvMapCommon
+	// CalculateShadows + ShadowInput + the b2 caster constants, for sun
+	// cascade shadows on the transparency phase (Phase 2 slice 5).
+	ShadowUtils
 }
 "Global"
 {
@@ -29,6 +32,16 @@
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
+	// Engine-global point sampler (same s2 every deferred pass uses);
+	// CalculateShadows wants it alongside the comparison sampler.
+	SamplerState g_pointSamplerFwd : register(s2);
+
+	// Sun shadow cascades for the transparency phase, bound by
+	// SceneRenderer::RenderTransparent when r_transparentShadows is on.
+	// t15..t20 - the one free six-slot run in this shader's layout. Unbound
+	// maps read as fully shadowed, which is why the shader gates on
+	// g_taaParams.z rather than sampling unconditionally.
+	SHADOWMAPS_RESOURCE(15)
 
 	// Up to 16 point + 16 spot lights gathered in SceneRenderer::SetupForwardLights().
 	// Slot b7 is shared with the particle path which uses the same packing.
@@ -450,6 +463,26 @@
 
 		if (g_material.isInTransparencyPhase != 0)
 		{
+			// Sun cascade shadows (Phase 2 slice 5). This argument was a
+			// hardcoded 1.0f - transparent surfaces received NO shadows at
+			// all, glass in a shadowed interior lit as if outdoors. Same
+			// ShadowInput/bias formulation as the deferred pass, so the glass
+			// and the wall behind it agree about where the shadow falls.
+			// Gated: the cascades + b2 caster constants are only valid when
+			// SceneRenderer bound them for this pass.
+			float sunShadow = 1.0f;
+			if (g_taaParams.z > 0.5f)
+			{
+				ShadowInput shadowIn;
+				shadowIn.pixelDepth = pixelDepth;
+				shadowIn.positionWS = float4(input.positionWS.xyz, 1.0f);
+				shadowIn.positionSS = input.position.xy;
+				shadowIn.samples = g_shadowConfig.samples;
+				const float ndl = dot(worldNormal, normalize(g_shadowCasterLightDir.xyz));
+				const float shadowBias = g_shadowConfig.biasMultiplier * (1.0f - ndl);
+				sunShadow = CalculateShadows(shadowIn, g_cmpSampler, g_pointSamplerFwd, SHADOWMAPS, shadowBias);
+			}
+
 			// Sun (analytical). CalculatePBRSurface already includes a single ambient term and
 			// lightning flash contribution — don't add ambient again below.
 			const float4 sunLit = CalculatePBRSurface(
@@ -460,7 +493,7 @@
 				-normalize(g_lightDirection.xyz),
 				getSunColour(),
 				albedo.rgb,
-				1.0f,
+				sunShadow,
 				g_globalLight[0]);
 
 			// Direct-only contributions for forward point + spot lights so ambient isn't
