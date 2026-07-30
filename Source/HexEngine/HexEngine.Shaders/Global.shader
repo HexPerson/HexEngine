@@ -232,7 +232,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// TAA tuning: x = variance-clip gamma, y = velocity Y sign for history
 		// reprojection, z = transparent sun shadows active (r_transparentShadows,
 		// set only while RenderTransparent has the sun cascades bound at t15-20),
-		// w spare. See RenderStructs.hpp::_taaParams.
+		// w = froxel volume owns per-light fog (r_clusterFog && r_clusterLights -
+		// the per-light inline volumetric march in PointLight/SpotLight returns 0
+		// so the same light's glow isn't integrated twice).
+		// See RenderStructs.hpp::_taaParams.
 		float4 g_taaParams;
 		// x = SSR sky-fallback strength, yzw reserved. See RenderStructs.hpp.
 		float4 g_reflectionParams;

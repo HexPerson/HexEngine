@@ -333,6 +333,9 @@ namespace HexEngine
 		//   z = transparent sun shadows active (r_transparentShadows): 1 only when
 		//       RenderTransparent binds the sun cascades at t15..t20 this frame.
 		//       Rides this vector because zw were spare - nothing TAA about it.
+		//   w = froxel volume owns per-light fog (r_clusterFog && r_clusterLights):
+		//       PointLight/SpotLight skip their inline volumetric march because the
+		//       scatter CS already integrates the same lights.
 		math::Vector4 _taaParams;
 
 		// Reflection / IBL parameters, appended at the end per the note above.

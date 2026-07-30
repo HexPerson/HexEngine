@@ -12,10 +12,14 @@
 	// cluster assignment between surface lighting and fog - see the plan's
 	// Phase 2 notes. Lights beyond the far plane clamp into the last slice.
 	//
-	// Output is a fixed-cap index list per cluster plus a count. Spots are
-	// culled as bounding spheres for now - conservative (never drops a lit
-	// pixel), loose (a narrow cone pays for its whole sphere); the cone
-	// refinement belongs to the pass that consumes angles, not this slice.
+	// Output is a fixed-cap index list per cluster plus a count. Spots pass
+	// the bounding-sphere test first, then a cone-vs-sphere refinement
+	// against the cluster AABB's bounding sphere (slice 6): still
+	// conservative - the bounding sphere over-covers the AABB and the spot's
+	// smoothstep is exactly zero outside cos(outer) - but a narrow cone
+	// stops paying for its whole sphere. Every consumer (deferred apply,
+	// froxel fog, forward transparents) applies the same cone falloff, so a
+	// cone-culled cluster only ever loses zero-contribution entries.
 
 	static const uint  kClustersX = 16;
 	static const uint  kClustersY = 9;
@@ -35,7 +39,7 @@
 		float4 posRadius;      // xyz world, w radius
 		float4 colorStrength;  // rgb colour, w strength
 		float4 dirCone;        // spot: xyz dir, w cos(outer). point: unused
-		float4 params;         // x cos(inner), y type (0 point, 1 spot), zw unused
+		float4 params;         // x cos(inner), y type (0 point, 1 spot), z shadowed, w unused
 	};
 
 	StructuredBuffer<GpuLight>  g_lights        : register(t0);
@@ -112,11 +116,42 @@
 			// Sphere vs AABB: distance from centre to closest AABB point.
 			const float3 closest = clamp(viewPos.xyz, aabbMin, aabbMax);
 			const float3 d = viewPos.xyz - closest;
-			if (dot(d, d) <= light.posRadius.w * light.posRadius.w)
+			if (dot(d, d) > light.posRadius.w * light.posRadius.w)
+				continue;
+
+			// Spot refinement: cone vs the cluster AABB's bounding sphere
+			// (Lengyel's test). The bounding sphere over-covers the AABB, so
+			// this can only keep extra clusters, never drop a lit one.
+			if (light.params.y > 0.5f)
 			{
-				g_clusterLists[clusterIdx * kMaxLightsPerCluster + count] = i;
-				++count;
+				// Direction into the same flipped view space as the position:
+				// rotate (w=0), then mirror z. Both flipped together keeps the
+				// geometry consistent.
+				float3 axis = mul(float4(light.dirCone.xyz, 0.0f), g_clusterView).xyz;
+				axis.z = -axis.z;
+				axis = normalize(axis);
+
+				const float3 sphereC = (aabbMin + aabbMax) * 0.5f;
+				const float  sphereR = length(aabbMax - sphereC);
+
+				const float cosOuter = light.dirCone.w;
+				const float sinOuter = sqrt(saturate(1.0f - cosOuter * cosOuter));
+
+				const float3 v = sphereC - viewPos.xyz;
+				const float  along = dot(v, axis);
+				// Signed distance from the sphere centre to the nearest point
+				// on the cone's surface (negative inside the cone).
+				const float distToCone =
+					cosOuter * sqrt(max(dot(v, v) - along * along, 0.0f)) - along * sinOuter;
+
+				if (distToCone > sphereR ||                       // beside the cone
+				    along < -sphereR ||                           // behind the apex
+				    along > light.posRadius.w + sphereR)          // past the range cap
+					continue;
 			}
+
+			g_clusterLists[clusterIdx * kMaxLightsPerCluster + count] = i;
+			++count;
 		}
 
 		g_clusterCounts[clusterIdx] = count;

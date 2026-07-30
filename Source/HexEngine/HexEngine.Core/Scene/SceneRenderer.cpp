@@ -2672,7 +2672,10 @@ namespace HexEngine
 				// reprojection distance as well as its direction.
 				(r_taaVelocityYSign._val.f32 < 0.0f) ? -1.0f : 1.0f,
 				transparentShadowsActive ? 1.0f : 0.0f,
-				0.0f);
+				// w: EXACTLY the condition SetClusteredLights hands the froxel CS -
+				// if these ever diverge, per-light fog either double-counts or
+				// vanishes.
+				(r_clusterFog._val.b && r_clusterLights._val.b) ? 1.0f : 0.0f);
 
 			// ocean
 			bufferData._oceanConfig = _currentScene->GetOcean();

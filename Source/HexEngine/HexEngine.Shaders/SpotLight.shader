@@ -155,6 +155,11 @@
 
 	float CalculateVolumetricScattering(float3 raySurfacePos, float3 lightPos, float3 lightDir, float radius, float lightStrength, float sceneDepth)
 	{
+		// Retired when the froxel volume owns per-light fog (slice 6) - see
+		// PointLight.shader; marching here too would double-count the glow.
+		if (g_taaParams.w > 0.5f)
+			return 0.0f;
+
 		// Per-light distance gate. See PointLight.shader for full rationale -
 		// the ray-march loop is the dominant per-pixel cost on scenes with many
 		// volumetric lights and most viewers won't notice the missing fog cone
