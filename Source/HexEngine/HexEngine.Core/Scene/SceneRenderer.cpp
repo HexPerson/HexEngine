@@ -960,6 +960,7 @@ namespace HexEngine
 		_diffuseGi.Destroy();
 		_clusteredLights.Destroy();
 		_shadowAtlas.Destroy();
+		SAFE_DELETE(_shadowAtlasDebugTex);
 		_gbuffer.Destroy();
 
 		//SAFE_DELETE(_clouds);
@@ -3889,6 +3890,46 @@ namespace HexEngine
 				_clusteredLights.RenderDebug(_gbuffer.GetNormal());
 				guiRenderer->FillTexturedQuad(_clusteredLights.GetDebugTexture(),
 					10, 170, 960, 540, math::Color(1, 1, 1, 1));
+			}
+
+			// Shadow-atlas overlay (slice 7): the raw depth atlas, scaled down.
+			// Occupied tiles show their depth silhouettes; free tiles stay
+			// flat. The copy target is lazy - 64 MB nobody pays for until the
+			// cvar flips - and CopyResource is legal because R32_TYPELESS and
+			// R32_FLOAT are copy-compatible at identical dimensions.
+			if (r_shadowAtlasDebug._val.b && r_shadowAtlas._val.b && canPostProcess &&
+				_shadowAtlas.GetAtlasSrv() != nullptr)
+			{
+				if (_shadowAtlasDebugTex == nullptr)
+				{
+					_shadowAtlasDebugTex = g_pEnv->_graphicsDevice->CreateTexture2D(
+						ShadowAtlas::kAtlasSize, ShadowAtlas::kAtlasSize,
+						DXGI_FORMAT_R32_FLOAT, 1,
+						D3D11_BIND_SHADER_RESOURCE,
+						0, 1, 0, nullptr, (D3D11_CPU_ACCESS_FLAG)0,
+						D3D11_RTV_DIMENSION_UNKNOWN,
+						D3D11_UAV_DIMENSION_UNKNOWN,
+						D3D11_SRV_DIMENSION_TEXTURE2D);
+					if (_shadowAtlasDebugTex != nullptr)
+						_shadowAtlasDebugTex->SetDebugName("_shadowAtlasDebugTex");
+				}
+				if (_shadowAtlasDebugTex != nullptr)
+				{
+					if (auto* rawCtx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+					{
+						ID3D11Resource* atlasRes = nullptr;
+						_shadowAtlas.GetAtlasSrv()->GetResource(&atlasRes);
+						if (atlasRes != nullptr)
+						{
+							rawCtx->CopyResource(
+								reinterpret_cast<ID3D11Resource*>(_shadowAtlasDebugTex->GetNativePtr()),
+								atlasRes);
+							atlasRes->Release();
+						}
+					}
+					guiRenderer->FillTexturedQuad(_shadowAtlasDebugTex,
+						10, 170, 540, 540, math::Color(1, 1, 1, 1));
+				}
 			}
 
 			if (debugAtlas != nullptr && canPostProcess)

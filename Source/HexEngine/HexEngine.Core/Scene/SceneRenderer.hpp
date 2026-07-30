@@ -355,6 +355,8 @@ namespace HexEngine
 		// keeps its dedicated cascade chain; point/spot faces allocate tiles
 		// here when r_shadowAtlas is on.
 		ShadowAtlas _shadowAtlas;
+		// Lazy r_shadowAtlasDebug overlay copy (raw atlas -> drawable SRV).
+		ITexture2D* _shadowAtlasDebugTex = nullptr;
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 
