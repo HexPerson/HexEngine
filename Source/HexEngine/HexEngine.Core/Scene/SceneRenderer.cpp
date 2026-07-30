@@ -2229,8 +2229,13 @@ namespace HexEngine
 			});
 
 		// MaxShadowCasters bounds the number of shadow maps rendered this frame, across all
-		// light types.
-		const size_t casterCount = (pvs.size() < MaxShadowCasters) ? pvs.size() : MaxShadowCasters;
+		// light types. With the atlas on, capacity is the atlas tile count
+		// instead - the per-frame render budget lives in AssignTiles, not
+		// here, so listing more casters costs nothing until they win tiles.
+		const size_t cap = r_shadowAtlas._val.b
+			? (size_t)ShadowAtlas::kTileCount
+			: (size_t)MaxShadowCasters;
+		const size_t casterCount = (pvs.size() < cap) ? pvs.size() : cap;
 		_shadowCasters.insert(_shadowCasters.end(), pvs.begin(), pvs.begin() + casterCount);
 	}
 
