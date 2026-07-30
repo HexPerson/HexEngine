@@ -146,7 +146,19 @@ bool GraphicsDeviceD3D11::Create()
 	UINT createDeviceFlags = 0;
 
 #ifdef _DEBUG
-	createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+	// OPT-IN, not automatic. For months this flag was a silent no-op because
+	// the machine lacked the Windows "Graphics Tools" optional feature - the
+	// day that feature was installed (for a DXGI diagnosis), every Debug
+	// session silently became a fully-validated run: <20 fps across every
+	// scene with CPU and GPU both near idle (per-call validation overhead is
+	// wait-shaped, it doesn't peg anything), plus break-on-severity turning
+	// routine validation warnings into unattended process kills. Set
+	// HEXENGINE_D3D_DEBUG=1 to arm the layer when actually chasing a D3D bug.
+	{
+		char dbgEnv[8] = {};
+		if (GetEnvironmentVariableA("HEXENGINE_D3D_DEBUG", dbgEnv, sizeof(dbgEnv)) > 0 && dbgEnv[0] == '1')
+			createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+	}
 #endif
 	D3D_FEATURE_LEVEL featureLevels[] =
 	{
@@ -208,9 +220,15 @@ bool GraphicsDeviceD3D11::Create()
 		ID3D11InfoQueue* d3dInfoQueue = nullptr;
 		if (SUCCEEDED(d3dDebug->QueryInterface(__uuidof(ID3D11InfoQueue), (void**)&d3dInfoQueue)))
 		{
+			// CORRUPTION only. Break-on-WARNING killed the process on routine
+			// validation chatter (e.g. SSR's intentionally-unbound voxel SRVs
+			// when GI is off) the moment the debug layer became real - outside
+			// a debugger, the break is an unhandled RaiseException and the app
+			// just dies (crash dumps 30/07: 00:22, 11:18, 11:44). Errors and
+			// warnings still land in the info queue for the failure-path drain.
 			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, true);
-			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, true);
-			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_WARNING, true);
+			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, false);
+			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_WARNING, false);
 
 
 			D3D11_MESSAGE_ID hide[] =
