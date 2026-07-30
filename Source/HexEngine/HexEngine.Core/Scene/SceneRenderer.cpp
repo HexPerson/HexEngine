@@ -831,10 +831,16 @@ namespace HexEngine
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
 	// SSR + NRD were ~14 ms of a ~30 ms frame at 4K (user-measured on the
 	// street view, 2026-07-30) - the single largest pass. Half resolution
-	// quarters both the ray count and NRD's pixel count; NRD is built for
-	// noisy reduced-rate input and the resolve already samples bilinearly,
-	// so rough-surface reflections lose nothing visible. Default ON.
-	HVar r_ssrHalfRes("r_ssrHalfRes", "March + denoise SSR at half resolution (resolve upsamples)", true, false, true);
+	// quarters both the ray count and NRD's pixel count and recovers ~20 fps
+	// (31 -> 51 measured). Default OFF for now: reflections visibly warp
+	// under camera panning at half res. Fixed so far (all real, none
+	// sufficient): unstable boundary rounding in the guide decimation and
+	// the SSR gbuffer reads, and RELAX's pixel-unit prepass radii running
+	// double-width. Remaining leads: the resolve upsample is plain bilinear
+	// (the designed depth-aware/bilateral upsample is NOT built yet - radiance
+	// bleeds across depth edges and sweeps with the camera), and a RenderDoc
+	// pass over NRD's half-res reprojection inputs.
+	HVar r_ssrHalfRes("r_ssrHalfRes", "March + denoise SSR at half resolution (resolve upsamples)", false, false, true);
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
 	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);

@@ -1070,8 +1070,19 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 		relaxSettings.diffuseMaxFastAccumulatedFrameNum = diffFastFrames;
 		relaxSettings.specularMaxFastAccumulatedFrameNum = specFastFrames;
 		relaxSettings.historyFixFrameNum = historyFixFrames;
-		relaxSettings.diffusePrepassBlurRadius = diffPrepassBlur;
-		relaxSettings.specularPrepassBlurRadius = specPrepassBlur;
+		// The prepass blur radii are in PIXELS and every preset above was tuned
+		// at full render resolution. When the denoiser runs at reduced
+		// resolution (r_ssrHalfRes), the same pixel radius covers twice the
+		// screen area - the widened specular pre-blur mixes neighbouring
+		// surfaces' reflections before accumulation, which shows up as the
+		// reflection warping/swimming while the camera pans. Scale by the
+		// actual-to-full resolution ratio so the blur keeps the physical
+		// footprint it was tuned for.
+		float pixelRadiusScale = 1.0f;
+		if (fd.camera != nullptr && fd.camera->GetViewport().width > 0.0f)
+			pixelRadiusScale = std::min(1.0f, static_cast<float>(_width) / fd.camera->GetViewport().width);
+		relaxSettings.diffusePrepassBlurRadius = diffPrepassBlur * pixelRadiusScale;
+		relaxSettings.specularPrepassBlurRadius = specPrepassBlur * pixelRadiusScale;
 		relaxSettings.diffusePhiLuminance = diffPhiLuminance;
 		relaxSettings.specularPhiLuminance = specPhiLuminance;
 		relaxSettings.lobeAngleFraction = lobeAngleFraction;

@@ -1066,7 +1066,21 @@
 		// avoids by not applying TAA jitter to its own geometry.
 		// jitterUv: X follows clip directly, Y flips because clip-Y-up -> screen-UV-Y-down.
 		const float2 jitterUv = float2(g_jitterOffsets.x * 0.5f, -g_jitterOffsets.y * 0.5f);
-		const float2 screenPos = screenPosCanonical;// + jitterUv;
+		// (Tried enabling the + jitterUv compensation for the half-res panning
+		// warp, 2026-07-30 - no effect on the symptom, reverted to keep the
+		// settled behaviour untouched.)
+		//
+		// Snap the sampling UV to the centre of the top-left gbuffer texel of
+		// this output pixel's footprint. At FULL res this is an exact no-op
+		// (texcoord already sits on texel centres). At HALF res the raw
+		// texcoord lands exactly on the boundary between two gbuffer texels:
+		// point samples become rounding-unstable and linear samples become
+		// 50/50 blends of two surfaces - ray origins built from a surface
+		// that does not exist, alternating frame to frame. The snap picks the
+		// SAME texel as SSRGuideDownsample's Load, so the ray data and NRD's
+		// guides always describe the same surface.
+		const float2 gbufSize = float2((float)g_screenWidth, (float)g_screenHeight);
+		const float2 screenPos = (floor(screenPosCanonical * gbufSize - 0.5f) + 0.5f) / gbufSize;
 
 		// Material and instance data must stay point-sampled - pixelDiffuse.w encodes the
 		// instance ID as a float (nonsensical to interpolate) and pixelSpecular packs per-pixel

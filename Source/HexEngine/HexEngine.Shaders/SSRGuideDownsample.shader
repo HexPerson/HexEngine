@@ -40,8 +40,6 @@
 	Texture2D g_srcMaterial : register(t1);
 	Texture2D g_srcVelocity : register(t2);
 
-	SamplerState g_pointSampler : register(s2);
-
 	struct GuideOut
 	{
 		float4 normal   : SV_Target0;
@@ -51,10 +49,18 @@
 
 	GuideOut ShaderMain(UIPixelInput input)
 	{
+		// Explicit Load of the top-left texel of each 2x2 quad, NOT a point
+		// sample: at exactly half resolution, every output texcoord lands on
+		// the BOUNDARY between two source texels, and point-sampler rounding
+		// at exact boundaries is not guaranteed stable. A guide normal/depth
+		// that alternates between neighbouring texels frame to frame makes
+		// NRD's reprojection consistency tests disagree with themselves under
+		// camera motion - reflections visibly warp while panning.
+		const int3 src = int3(int2(input.position.xy) * 2, 0);
 		GuideOut o;
-		o.normal   = g_srcNormal.SampleLevel(g_pointSampler, input.texcoord, 0);
-		o.material = g_srcMaterial.SampleLevel(g_pointSampler, input.texcoord, 0);
-		o.velocity = g_srcVelocity.SampleLevel(g_pointSampler, input.texcoord, 0);
+		o.normal   = g_srcNormal.Load(src);
+		o.material = g_srcMaterial.Load(src);
+		o.velocity = g_srcVelocity.Load(src);
 		return o;
 	}
 }
