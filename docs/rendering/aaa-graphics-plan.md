@@ -276,6 +276,31 @@ Fixes D2, enables the neon-street look.
   system already does this correctly and better.
 - Shadow atlas with LRU caching and static-light caching, so dozens of shadowed local
   lights are affordable instead of four.
+
+  **Design (pinned to code, 2026-07-30).** Today: every shadow-casting point light
+  permanently owns 6×1024² maps *plus a colour mirror each* (~48 MB/light,
+  `PointLight.cpp:69`), spots own 1×1024² (`SpotLight.cpp:34`), `MaxShadowCasters = 4`
+  (`SceneRenderer.cpp:25`) bounds the per-frame set, and every collected caster re-renders
+  all its faces every frame (`RenderShadowMaps` loop, `SceneRenderer.cpp:1607`) with no
+  caching of any kind. The atlas replaces all of it:
+  1. One shared `R32_TYPELESS` depth atlas (4096² v1 = 64 MB,= 16 tiles at 1024² with
+     quarter-tile demotion to 512² for distant lights) owned by a new
+     `Graphics/ShadowAtlas` module, raw D3D11 like `ClusteredLighting`.
+  2. Tile allocation by priority = screen coverage (solid-angle approximation from
+     radius/distance), LRU eviction, sticky for stable lights. Per-frame re-render budget
+     (`r_shadowAtlasBudget`, default 4 faces/frame) — a static light whose PVS hash hasn't
+     changed keeps last frame's tile for free, which is the entire win: today's cost is
+     4 casters × up to 6 faces × full scene draw *every frame*.
+  3. `GpuLight.params.w` (currently unused) carries the first tile index; a small
+     `tileData` structured buffer carries per-face viewport rects + view-proj matrices.
+     `ClusterLightApply` gains a shadow term sampled from the atlas — the clustered path
+     then shades SHADOWED lights too, `r_maxPointLights/r_maxSpotLights` per-light draws
+     become debug-only, and the shadowed-flag skip in the apply drops away.
+  4. Point lights: 6 atlas tiles (existing per-face path); spots: 1. The cube-array copy
+     for volumetrics (`pointShadowFaceMaps`) reads from atlas tiles instead of dedicated
+     RTs — same copy, different source.
+  5. Kill criterion for the old path: heatmap parity + a 20-shadowed-light scene rendering
+     within budget where today's renderer hard-caps at 4.
 - Per-light frustum and screen-area culling.
 - Physical light units (lumens/candela) with exposure coupling, so authored intensities
   stop being arbitrary.
