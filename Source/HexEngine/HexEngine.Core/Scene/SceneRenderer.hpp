@@ -9,6 +9,7 @@
 #include "../Graphics/AutoExposure.hpp"
 #include "DiffuseGI.hpp"
 #include "../Graphics/ClusteredLighting.hpp"
+#include "../Graphics/ShadowAtlas.hpp"
 #include "GpuVisibilityCulling.hpp"
 #include "../Graphics/TAA.hpp"
 #include "../Graphics/IDenoiserProvider.hpp"
@@ -62,6 +63,10 @@ namespace HexEngine
 			bool forceCascade = false);
 		void SetupPerShadowCasterBuffer(Light* shadowCaster, bool forceCascade, int32_t passIdx, int32_t lightIndex, int32_t numSamples, float coneSize);
 		void RenderShadowMaps(Light* shadowCaster);
+		// Slice 7: render one local-light shadow face into its atlas tile
+		// (viewport-carved; the tile is cleared with a ClearView rect so
+		// cached neighbours survive).
+		void RenderShadowFaceToAtlas(const ShadowAtlas::FaceAssignment& assignment);
 
 		void RenderOpaque();
 		//void RenderWater();
@@ -346,6 +351,10 @@ namespace HexEngine
 		DiffuseGI _diffuseGi;
 		// Phase 2: clustered light culling (list build + heatmap; no consumer yet).
 		ClusteredLighting _clusteredLights;
+		// Phase 2 slice 7: shared depth atlas for local-light shadows. The sun
+		// keeps its dedicated cascade chain; point/spot faces allocate tiles
+		// here when r_shadowAtlas is on.
+		ShadowAtlas _shadowAtlas;
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 

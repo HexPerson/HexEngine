@@ -14,6 +14,10 @@
 #include "../Graphics/VolumetricScattering.hpp"
 #include "../Graphics/ShadowMap.hpp"
 #include "../Math/FloatMath.hpp"
+// After project headers (see the dxgidebug include-order note in the D3D11
+// plugin): d3d11_1 for ID3D11DeviceContext1::ClearView - the only way to
+// clear a single atlas tile without wiping the cached neighbours.
+#include <d3d11_1.h>
 #include <fastnoiselite/Cpp/FastNoiseLite.h>
 #include <cstdint>
 #include <unordered_set>
@@ -409,6 +413,13 @@ namespace HexEngine
 	// hardcoded depthValue=1 - glass in a shadowed interior stops sun-lighting
 	// as if it stood outdoors.
 	HVar r_transparentShadows("r_transparentShadows", "Transparent surfaces receive sun cascade shadows", true, false, true);
+	// Slice 7: local-light shadow faces render into one shared atlas with
+	// LRU-cached tiles instead of per-light dedicated maps. A face whose
+	// content hash is unchanged keeps last frame's depth for free, so the
+	// budget bounds RE-RENDERS, not shadowed-light count.
+	HVar r_shadowAtlas("r_shadowAtlas", "Local-light shadows via the shared LRU atlas (sun keeps its cascades)", false, false, true);
+	HVar r_shadowAtlasBudget("r_shadowAtlasBudget", "Max atlas shadow faces re-rendered per frame", (int32_t)4, (int32_t)0, (int32_t)16);
+	HVar r_shadowAtlasDebug("r_shadowAtlasDebug", "Draw the shadow atlas as an overlay", false, false, true);
 
 	// Slice 5: the sun whose cascades RenderTransparent binds at t15..t20. One
 	// function shared by the g_taaParams.z packing and the bind block so the
@@ -948,6 +959,7 @@ namespace HexEngine
 
 		_diffuseGi.Destroy();
 		_clusteredLights.Destroy();
+		_shadowAtlas.Destroy();
 		_gbuffer.Destroy();
 
 		//SAFE_DELETE(_clouds);
@@ -1020,6 +1032,8 @@ namespace HexEngine
 		_ssrUpsampleShader			= IShader::Create("EngineData.Shaders/SSRUpsample.hcs");
 
 		_clusteredLights.Create();
+		if (!_shadowAtlas.Create())
+			LOG_CRIT("ShadowAtlas::Create failed - r_shadowAtlas will render no local shadows");
 		_clusterApplyShader = IShader::Create("EngineData.Shaders/ClusterLightApply.hcs");
 		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
 		_probeEnvShader				= IShader::Create("EngineData.Shaders/ProbeEnvMap.hcs");
@@ -1604,9 +1618,32 @@ namespace HexEngine
 		//
 		_gbuffer.Clear();		
 
-		for (auto& caster : _shadowCasters)
+		// Slice 7 split: the sun always renders its cascade chain; local
+		// lights either take the legacy dedicated-map path (r_shadowAtlas off,
+		// exactly as before) or allocate tiles in the shared atlas, where a
+		// face whose content hash is unchanged re-uses last frame's depth and
+		// costs nothing.
 		{
-			RenderShadowMaps(caster);
+			std::vector<Light*> localCasters;
+			for (auto& caster : _shadowCasters)
+			{
+				const bool isLocal = caster->CastAs<DirectionalLight>() == nullptr;
+				if (isLocal && r_shadowAtlas._val.b)
+					localCasters.push_back(caster);
+				else
+					RenderShadowMaps(caster);
+			}
+
+			if (!localCasters.empty())
+			{
+				const auto& assignments = _shadowAtlas.AssignTiles(
+					localCasters, _currentCamera, r_shadowAtlasBudget._val.i32);
+				for (const auto& a : assignments)
+				{
+					if (a.needsRender)
+						RenderShadowFaceToAtlas(a);
+				}
+			}
 		}
 
 		// set up the viewport
@@ -2920,6 +2957,104 @@ namespace HexEngine
 
 		/*if(r_debugScene._val.i32 == 1)
 			_currentScene->RenderDebug(params);*/
+	}
+
+	void SceneRenderer::RenderShadowFaceToAtlas(const ShadowAtlas::FaceAssignment& assignment)
+	{
+		PROFILE();
+
+		Light* light = const_cast<Light*>(assignment.key.light);
+		auto* dsv = _shadowAtlas.GetTileDsv(assignment.tileIndex);
+		auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (light == nullptr || dsv == nullptr || ctx == nullptr)
+			return;
+
+		int32_t tx = 0, ty = 0, tw = 0, th = 0;
+		_shadowAtlas.GetTileViewport(assignment.tileIndex, tx, ty, tw, th);
+
+		// Clear ONLY this tile. A whole-DSV clear would wipe every cached
+		// neighbour, which is the entire point of the atlas - so the clear
+		// goes through ID3D11DeviceContext1::ClearView with a rect (legal on
+		// a depth-only DSV). If the interface is somehow missing, skip the
+		// clear rather than nuke the atlas: the far-plane depth from the
+		// previous owner only risks over-shadowing at the tile edge for one
+		// frame.
+		{
+			ID3D11DeviceContext1* ctx1 = nullptr;
+			if (SUCCEEDED(ctx->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&ctx1)) && ctx1 != nullptr)
+			{
+				const FLOAT depthOne[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+				D3D11_RECT rect = {};
+				rect.left = tx;
+				rect.top = ty;
+				rect.right = tx + tw;
+				rect.bottom = ty + th;
+				ctx1->ClearView(dsv, depthOne, &rect, 1);
+				ctx1->Release();
+			}
+			else
+			{
+				static bool sWarned = false;
+				if (!sWarned)
+				{
+					sWarned = true;
+					LOG_WARN("ShadowAtlas: ID3D11DeviceContext1 unavailable - tile clears skipped");
+				}
+			}
+		}
+
+		// Depth-only bind, tile carved by viewport + scissor. Raw, like the
+		// cluster SRV binds - the engine wrapper has no sub-rect DSV concept.
+		ctx->OMSetRenderTargets(0, nullptr, dsv);
+		D3D11_VIEWPORT vp = {};
+		vp.TopLeftX = (FLOAT)tx;
+		vp.TopLeftY = (FLOAT)ty;
+		vp.Width = (FLOAT)tw;
+		vp.Height = (FLOAT)th;
+		vp.MaxDepth = 1.0f;
+		ctx->RSSetViewports(1, &vp);
+		D3D11_RECT sc = { tx, ty, tx + tw, ty + th };
+		ctx->RSSetScissorRects(1, &sc);
+
+		const int32_t face = (int32_t)assignment.key.face;
+		const bool isPoint = light->CastAs<PointLight>() != nullptr;
+
+		// Local lights have no camera-fit cascades: the face matrices are
+		// fully determined by the light itself (cube face orientation for
+		// points, the cone for spots). 0..1 mirrors what the legacy path
+		// passes for its non-cascade lights.
+		light->ConstructMatrices(_currentCamera, 0.0f, 1.0f, face);
+
+		PVSParams params;
+		params.lodPartition = r_lodPartition._val.f32;
+		params.shapeType = PVSParams::ShapeType::Sphere;
+		params.shape.sphere = light->GetLightBoundingSphere(face);
+		params.isShadow = true;
+		params.camera = _currentCamera;
+		light->GetPVS(face)->CalculateVisibility(_currentScene, params);
+
+		math::Viewport shadowVp;
+		shadowVp.width = (float)tw;
+		shadowVp.height = (float)th;
+
+		SetupPerFrameBuffer(
+			light->GetViewMatrix(face),
+			light->GetProjectionMatrix(face),
+			light->GetViewMatrixPrev(face),
+			light->GetProjectionMatrixPrev(face),
+			light->GetMaxSupportedShadowCascades(),
+			light->GetEntity()->GetComponent<Transform>()->GetForward(),
+			shadowVp,
+			face,
+			1.0f,
+			isPoint);
+
+		_currentScene->RenderEntities(
+			light->GetPVS(face),
+			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry),
+			MeshRenderFlags::MeshRenderShadowMap);
+
+		g_pEnv->_graphicsDevice->ClearScissorRect();
 	}
 
 	void SceneRenderer::RenderShadowMaps(Light* shadowCaster)
