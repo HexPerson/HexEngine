@@ -1049,7 +1049,12 @@
 	{
 		SSROut ssr = (SSROut)0;
 
-		const float2 screenPosCanonical = float2(input.position.x / (float)g_screenWidth, input.position.y / (float)g_screenHeight);
+		// UV from the fullscreen quad's texcoord, NOT SV_Position over
+		// g_screenWidth: with r_ssrHalfRes the pass renders into a half-size
+		// viewport while g_screenWidth stays the full render width, and the
+		// SV_Position form would squeeze every ray into the top-left quadrant.
+		// The texcoord always spans 0..1 over whatever viewport is bound.
+		const float2 screenPosCanonical = input.texcoord;
 
 		// Compensate the source gbuffer reads for TAA jitter. The gbuffer was rasterised with
 		// `clip.xy += g_jitterOffsets * w` in the vertex shader, so the canonical world point

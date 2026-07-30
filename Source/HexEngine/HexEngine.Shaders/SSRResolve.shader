@@ -92,7 +92,10 @@
 	// of the dark rim this change removes.
 	float SampleConfidence(float2 screenPos)
 	{
-		return saturate(g_ssrSpecHitInfo.SampleLevel(g_pointSampler, screenPos, 0).r);
+		// Linear, not point: with r_ssrHalfRes the hit-info texture is half
+		// the resolve resolution, and point-sampling it would quantise the
+		// confidence mask into visible 2x2 blocks at hit/miss boundaries.
+		return saturate(g_ssrSpecHitInfo.SampleLevel(g_textureSampler, screenPos, 0).r);
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target

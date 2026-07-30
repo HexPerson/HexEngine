@@ -99,6 +99,11 @@ namespace HexEngine
 
 		void CreateShaders();
 		void CreateRenderTargets(int32_t width, int32_t height);
+		// SSR chain targets (march MRTs, history, NRD output, half-res guides).
+		// width/height are the FULL viewport; r_ssrHalfRes decides the actual
+		// size. Idempotent - deletes and recreates, so RenderSSR can call it
+		// when the cvar flips at runtime.
+		void CreateSsrTargets(int32_t width, int32_t height);
 		void RenderLights();
 		void RenderPointLights();
 		void RenderSpotLights();
@@ -344,8 +349,20 @@ namespace HexEngine
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 
-		ITexture2D* _ssrHistory = nullptr;		
+		ITexture2D* _ssrHistory = nullptr;
 		ITexture2D* _ssrResolved = nullptr;
+
+		// Half-res SSR (r_ssrHalfRes): the march + NRD run at half resolution
+		// and the resolve upsamples. NRD needs its guide textures at the same
+		// resolution as the radiance, so the gbuffer normal/material/velocity
+		// get decimated into these before FilterFrame.
+		ITexture2D* _ssrGuideNormal = nullptr;
+		ITexture2D* _ssrGuideMaterial = nullptr;
+		ITexture2D* _ssrGuideVelocity = nullptr;
+		std::shared_ptr<IShader> _ssrGuideDownsampleShader;
+		bool _ssrHalfResActive = false;
+		int32_t _ssrBaseWidth = 0;
+		int32_t _ssrBaseHeight = 0;
 
 		DenoiserFrameData _denoiseFD;
 	};

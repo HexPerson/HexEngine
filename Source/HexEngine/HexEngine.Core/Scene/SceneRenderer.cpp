@@ -408,7 +408,7 @@ namespace HexEngine
 	// Slice 5: the transparency phase samples the sun cascades instead of the
 	// hardcoded depthValue=1 - glass in a shadowed interior stops sun-lighting
 	// as if it stood outdoors.
-	HVar r_transparentShadows("r_transparentShadows", "Transparent surfaces receive sun cascade shadows", false, false, true);
+	HVar r_transparentShadows("r_transparentShadows", "Transparent surfaces receive sun cascade shadows", true, false, true);
 
 	// Slice 5: the sun whose cascades RenderTransparent binds at t15..t20. One
 	// function shared by the g_taaParams.z packing and the bind block so the
@@ -829,6 +829,12 @@ namespace HexEngine
 	HVar r_tonemapOperator("r_tonemapOperator", "Tonemap operator: 0=Reinhard 1=ReinhardExt 2=ACES 3=Uncharted2 4=Lottes 5=Linear", 2, 0, 5);
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
+	// SSR + NRD were ~14 ms of a ~30 ms frame at 4K (user-measured on the
+	// street view, 2026-07-30) - the single largest pass. Half resolution
+	// quarters both the ray count and NRD's pixel count; NRD is built for
+	// noisy reduced-rate input and the resolve already samples bilinearly,
+	// so rough-surface reflections lose nothing visible. Default ON.
+	HVar r_ssrHalfRes("r_ssrHalfRes", "March + denoise SSR at half resolution (resolve upsamples)", true, false, true);
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
 	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
@@ -1005,6 +1011,7 @@ namespace HexEngine
 		_chromaticAberrationShader	= IShader::Create("EngineData.Shaders/ChromaticAbberation.hcs");
 		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
+		_ssrGuideDownsampleShader	= IShader::Create("EngineData.Shaders/SSRGuideDownsample.hcs");
 
 		_clusteredLights.Create();
 		_clusterApplyShader = IShader::Create("EngineData.Shaders/ClusterLightApply.hcs");
@@ -1265,71 +1272,7 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
-		_ssrDiffuseTexture = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,
-			height,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_ssrDiffuseTexture->SetDebugName("_ssrDiffuseTexture");
-
-		_ssrDiffuseHitInfo = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,
-			height,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_ssrDiffuseHitInfo->SetDebugName("_ssrDiffuseHitInfo");
-
-		_ssrTexture = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,// / 2,
-			height,// / 2,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_ssrTexture->SetDebugName("_ssrSpecularTexture");
-
-		_ssrHitInfo = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,// / 2,
-			height,// / 2,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_ssrHitInfo->SetDebugName("_ssrSpecularHitInfo");
-
-		_ssrHistory = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
-		_ssrResolved = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
-
-		_ssrHistory->SetDebugName("_ssrHistory");
-		_ssrResolved->SetDebugName("_ssrResolved");
+		CreateSsrTargets(width, height);
 
 		// Position-copy RT for the decal pass. Same R32G32B32A32_FLOAT format as
 		// GBuffer position so a straight CopyTo works. MSAA disabled - decals
@@ -5645,6 +5588,90 @@ namespace HexEngine
 		return r_iblComposeSSR._val.b && WillRenderSSR();
 	}
 
+	void SceneRenderer::CreateSsrTargets(int32_t width, int32_t height)
+	{
+		// Same format/MSAA derivation as CreateRenderTargets - these were
+		// function-locals there, re-derived here so this can also run from
+		// RenderSSR when r_ssrHalfRes flips at runtime.
+		const auto MsaaLevel = g_pEnv->_graphicsDevice->GetCurrentMSAALevel();
+		const DXGI_FORMAT BEAUTY_FORMAT = HexEngine::detail::ShimToDxgiFormat(g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat());
+
+		SAFE_DELETE(_ssrDiffuseTexture);
+		SAFE_DELETE(_ssrDiffuseHitInfo);
+		SAFE_DELETE(_ssrTexture);
+		SAFE_DELETE(_ssrHitInfo);
+		SAFE_DELETE(_ssrHistory);
+		SAFE_DELETE(_ssrResolved);
+		SAFE_DELETE(_ssrGuideNormal);
+		SAFE_DELETE(_ssrGuideMaterial);
+		SAFE_DELETE(_ssrGuideVelocity);
+
+		_ssrBaseWidth = width;
+		_ssrBaseHeight = height;
+		_ssrHalfResActive = r_ssrHalfRes._val.b;
+
+		const int32_t w = _ssrHalfResActive ? std::max(1, width / 2) : width;
+		const int32_t h = _ssrHalfResActive ? std::max(1, height / 2) : height;
+
+		auto makeSsrRT = [&](const char* name) -> ITexture2D*
+		{
+			ITexture2D* tex = g_pEnv->_graphicsDevice->CreateTexture2D(
+				w,
+				h,
+				BEAUTY_FORMAT,
+				1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				0, MsaaLevel, 0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
+			tex->SetDebugName(name);
+			return tex;
+		};
+
+		_ssrDiffuseTexture = makeSsrRT("_ssrDiffuseTexture");
+		_ssrDiffuseHitInfo = makeSsrRT("_ssrDiffuseHitInfo");
+		_ssrTexture        = makeSsrRT("_ssrSpecularTexture");
+		_ssrHitInfo        = makeSsrRT("_ssrSpecularHitInfo");
+
+		_ssrHistory = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
+		_ssrResolved = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
+		_ssrHistory->SetDebugName("_ssrHistory");
+		_ssrResolved->SetDebugName("_ssrResolved");
+
+		// NRD guide textures - only needed at half res (at full res the gbuffer
+		// itself is handed to NRD, as before). Formats mirror their sources so
+		// the decimation pass is a plain copy per texel.
+		if (_ssrHalfResActive && _gbuffer.GetNormal() != nullptr)
+		{
+			auto makeGuide = [&](ITexture2D* src, const char* name) -> ITexture2D*
+			{
+				if (src == nullptr)
+					return nullptr;
+				ITexture2D* tex = g_pEnv->_graphicsDevice->CreateTexture2D(
+					w,
+					h,
+					(DXGI_FORMAT)src->GetFormat(),
+					1,
+					D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+					0, 1, 0,
+					nullptr,
+					(D3D11_CPU_ACCESS_FLAG)0,
+					D3D11_RTV_DIMENSION_TEXTURE2D,
+					D3D11_UAV_DIMENSION_UNKNOWN,
+					D3D11_SRV_DIMENSION_TEXTURE2D);
+				tex->SetDebugName(name);
+				return tex;
+			};
+
+			_ssrGuideNormal   = makeGuide(_gbuffer.GetNormal(),   "_ssrGuideNormal");
+			_ssrGuideMaterial = makeGuide(_gbuffer.GetSpecular(), "_ssrGuideMaterial");
+			_ssrGuideVelocity = makeGuide(_gbuffer.GetVelocity(), "_ssrGuideVelocity");
+		}
+	}
+
 	void SceneRenderer::RenderSSR()
 	{
 		PROFILE();
@@ -5676,21 +5703,33 @@ namespace HexEngine
 
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Begin");
 
+		const auto& bbvp = _currentCamera->GetViewport();
+
+		// Recreate the SSR chain when r_ssrHalfRes flips at runtime (or the
+		// viewport changed under us - Resize handles the normal path, this is
+		// the cvar toggle).
+		if (_ssrHalfResActive != r_ssrHalfRes._val.b ||
+			_ssrBaseWidth != (int32_t)bbvp.width || _ssrBaseHeight != (int32_t)bbvp.height)
+		{
+			CreateSsrTargets((int32_t)bbvp.width, (int32_t)bbvp.height);
+		}
+
 		_ssrDiffuseTexture->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		_ssrDiffuseHitInfo->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		_ssrTexture->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		_ssrHitInfo->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
 		g_pEnv->_graphicsDevice->SetRenderTargets({ _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo });
-		
-		const auto& bbvp = _currentCamera->GetViewport();
-		// set the shadow viewport
-		//
+
+		// March at the SSR target resolution (half the viewport when
+		// r_ssrHalfRes). The shader derives its UVs from the fullscreen quad's
+		// texcoord, so the smaller viewport just means fewer rays - each ray
+		// still marches the full-res gbuffer.
 		D3D11_VIEWPORT vp;
 		vp.TopLeftX = 0;
 		vp.TopLeftY = 0;
-		vp.Width = bbvp.width;// / 2;
-		vp.Height = bbvp.height;// / 2;
+		vp.Width = (float)_ssrTexture->GetWidth();
+		vp.Height = (float)_ssrTexture->GetHeight();
 		vp.MinDepth = 0.0f;
 		vp.MaxDepth = 1.0f;
 		g_pEnv->_graphicsDevice->SetViewport(vp);
@@ -5770,7 +5809,31 @@ namespace HexEngine
 
 			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader.get());
 
-			
+			// Half-res: decimate the NRD guide textures to match the radiance
+			// resolution (NRD requires all inputs at one size). Point-sampled
+			// nearest texel per output pixel - the standard guide decimation.
+			const bool ssrHalfRes = _ssrHalfResActive &&
+				_ssrGuideNormal != nullptr && _ssrGuideMaterial != nullptr && _ssrGuideVelocity != nullptr;
+			if (ssrHalfRes && r_ssrDenoise._val.b && _ssrGuideDownsampleShader != nullptr)
+			{
+				g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+				g_pEnv->_graphicsDevice->SetRenderTargets({ _ssrGuideNormal, _ssrGuideMaterial, _ssrGuideVelocity });
+				g_pEnv->_graphicsDevice->SetTexture2D(0, _gbuffer.GetNormal());
+				g_pEnv->_graphicsDevice->SetTexture2D(1, _gbuffer.GetSpecular());
+				g_pEnv->_graphicsDevice->SetTexture2D(2, _gbuffer.GetVelocity());
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+				guiRenderer->FullScreenTexturedQuad(nullptr, _ssrGuideDownsampleShader.get());
+				g_pEnv->_graphicsDevice->SetTexture2D(0, nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(1, nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(2, nullptr);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+			}
+
+			// The march (and guide pass) ran at the SSR resolution; everything
+			// from NRD's output onward composites at the full viewport.
+			vp.Width = bbvp.width;
+			vp.Height = bbvp.height;
+			g_pEnv->_graphicsDevice->SetViewport(vp);
 
             _ssrResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
@@ -5794,7 +5857,13 @@ namespace HexEngine
 				// FilterFrame compares the input texture size against NRD's last-bound size and
 				// rebuilds the pool internally when they differ - that's the DLSS-toggle safety
 				// net in case SceneRenderer::Resize's explicit CreateBuffers call is missed.
-				g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
+				// Half-res hands NRD the decimated guides; full res the gbuffer
+				// directly, exactly as before.
+				g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD,
+					_ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo,
+					ssrHalfRes ? _ssrGuideNormal   : _gbuffer.GetNormal(),
+					ssrHalfRes ? _ssrGuideMaterial : _gbuffer.GetSpecular(),
+					ssrHalfRes ? _ssrGuideVelocity : _gbuffer.GetVelocity());
 				g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _ssrResolved);
 
 				_ssrResolved->CopyTo(_ssrHistory);
