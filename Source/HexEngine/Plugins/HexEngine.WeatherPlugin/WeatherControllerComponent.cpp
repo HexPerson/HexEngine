@@ -1094,15 +1094,23 @@ namespace HexEngine::Weather
 		float targetOutdoorExposure = 1.0f;
 		if (scene != nullptr && camera != nullptr && camera->GetEntity() != nullptr)
 		{
-			const math::Vector3 listenerPosition = camera->GetEntity()->GetPosition();
-			RayHit skyHit;
-			const bool blocked = PhysUtils::RayCast(
-				listenerPosition,
-				listenerPosition + math::Vector3::Up * std::max(50.0f, _skyProbeDistance),
-				LAYERMASK(Layer::StaticGeometry),
-				&skyHit,
-				{ camera->GetEntity() });
-			targetOutdoorExposure = blocked ? 0.0f : 1.0f;
+			// Rate-limited: see _skyProbeCooldown in the header. The cached
+			// result carries between probes; _outdoorExposure's own blend
+			// below hides the 250ms quantisation entirely.
+			_skyProbeCooldown -= frameTime;
+			if (_skyProbeCooldown <= 0.0f)
+			{
+				_skyProbeCooldown = 0.25f;
+				const math::Vector3 listenerPosition = camera->GetEntity()->GetPosition();
+				RayHit skyHit;
+				_skyProbeLastBlocked = PhysUtils::RayCast(
+					listenerPosition,
+					listenerPosition + math::Vector3::Up * std::max(50.0f, _skyProbeDistance),
+					LAYERMASK(Layer::StaticGeometry),
+					&skyHit,
+					{ camera->GetEntity() });
+			}
+			targetOutdoorExposure = _skyProbeLastBlocked ? 0.0f : 1.0f;
 		}
 		const float exposureBlend = std::clamp(frameTime * 2.0f, 0.0f, 1.0f);
 		_outdoorExposure = std::clamp(_outdoorExposure + (targetOutdoorExposure - _outdoorExposure) * exposureBlend, 0.0f, 1.0f);

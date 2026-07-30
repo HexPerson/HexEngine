@@ -116,6 +116,14 @@ namespace HexEngine::Weather
 		float _indoorThunderPitchOffset = -0.04f;
 		float _skyProbeDistance = 1200.0f;
 		float _outdoorExposure = 1.0f;
+		// Sky-probe raycast cadence. PhysUtils::RayCast is a brute-force scan
+		// of every StaticMeshComponent in the scene (no spatial structure), so
+		// the per-frame probe was the single largest main-thread cost in the
+		// city scene - caught by stack sampling at 4/4 samples, 2026-07-30.
+		// The probe only feeds _outdoorExposure, which is already smoothed
+		// over ~0.5s, so 4 Hz is imperceptible for the audio crossfade.
+		float _skyProbeCooldown = 0.0f;      // seconds until the next probe (not serialised)
+		bool  _skyProbeLastBlocked = false;  // cached result between probes
 
 		// --- Random preset cycling ---
 		// When enabled, the controller automatically swaps presets every
