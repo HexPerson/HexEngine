@@ -214,6 +214,10 @@ namespace HexEngine
 		IConstantBuffer* _integrateParamsCBuffer = nullptr;
 
 		ITexture3D* _scatterVolume     = nullptr; // RGBA16F
+		// Destination of the spatial filter pass; the integrate pass reads
+		// this instead of _scatterVolume when r_volumetricSpatialFilter is
+		// on (a CS can't read and write the same volume in one dispatch).
+		ITexture3D* _scatterFilteredVolume = nullptr; // RGBA16F
 
 		// Cluster list SRVs handed over per frame by SceneRenderer (raw, not
 		// owned). Null or inactive = pure forward-array path.
@@ -238,6 +242,7 @@ namespace HexEngine
 		uint32_t _jitterFrame = 0u;
 
 		ID3D11UnorderedAccessView* _scatterUav     = nullptr;
+		ID3D11UnorderedAccessView* _scatterFilteredUav = nullptr;
 		// Point-clamp sampler bound at s2 during the scatter dispatch for
 		// shadow map lookups. The engine's global samplers don't auto-bind
 		// to the CS stage so we own a private one (same pattern as
@@ -264,6 +269,11 @@ namespace HexEngine
 
 		std::shared_ptr<IShader> _scatterShader;
 		std::shared_ptr<IShader> _integrateShader;
+		// Spatial filter between density and integrate (see
+		// VolumetricScatterFilter.shader): shares the jittered estimate
+		// across a 3x3x3 tent so per-froxel variance (fizz + per-cell
+		// blockiness) drops before the temporal EMA sees it.
+		std::shared_ptr<IShader> _scatterFilterShader;
 
 		// Previous-frame view-projection matrix for history reprojection.
 		// Each Update writes its currentViewProj here AFTER the dispatch

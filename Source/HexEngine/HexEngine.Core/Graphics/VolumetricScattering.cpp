@@ -19,6 +19,13 @@ namespace HexEngine
 	// unless the blend gets snappier under motion.
 	HVar r_volumetricTemporalAlpha("r_volumetricTemporalAlpha", "Volumetric temporal blend weight when static (lower = smoother, slower)", 0.08f, 0.01f, 1.0f);
 	HVar r_volumetricTemporalMotionAlpha("r_volumetricTemporalMotionAlpha", "Volumetric temporal blend weight under camera motion (higher = less ghosting)", 0.5f, 0.0f, 1.0f);
+	// 3x3x3 tent filter over the scatter volume before integration. The
+	// jittered density samples leave amplitude-proportional variance that
+	// the temporal EMA alone can't hide (fizz on neon glow, per-cell
+	// convergence differences reading as blockiness); sharing the estimate
+	// across neighbours divides the variance ~8x for half a froxel of
+	// spatial sharpness the volume never had. Off = the pre-filter look.
+	HVar r_volumetricSpatialFilter("r_volumetricSpatialFilter", "Spatially filter the froxel scatter volume before integration (reduces fizz/blockiness)", true, false, true);
 
 	namespace
 	{
@@ -160,6 +167,7 @@ namespace HexEngine
 		ReleaseResources();
 		_scatterShader.reset();
 		_integrateShader.reset();
+		_scatterFilterShader.reset();
 		SAFE_DELETE(_scatterParamsCBuffer);
 		SAFE_DELETE(_integrateParamsCBuffer);
 	}
@@ -167,6 +175,7 @@ namespace HexEngine
 	void VolumetricScattering::ReleaseResources()
 	{
 		if (_scatterUav)         { _scatterUav->Release();         _scatterUav         = nullptr; }
+		if (_scatterFilteredUav) { _scatterFilteredUav->Release(); _scatterFilteredUav = nullptr; }
 		for (uint32_t i = 0u; i < 2u; ++i)
 		{
 			if (_integrationUavs[i]) { _integrationUavs[i]->Release(); _integrationUavs[i] = nullptr; }
@@ -176,6 +185,7 @@ namespace HexEngine
 		if (_linearClampSampler) { _linearClampSampler->Release(); _linearClampSampler = nullptr; }
 		if (_readbackStaging)    { _readbackStaging->Release();    _readbackStaging    = nullptr; }
 		SAFE_DELETE(_scatterVolume);
+		SAFE_DELETE(_scatterFilteredVolume);
 		SAFE_DELETE(_pointShadowCubeArray);
 		_writeIdx = 0u;
 		_hasPrevViewProj = false;
@@ -228,20 +238,35 @@ namespace HexEngine
 				D3D11_DSV_DIMENSION_UNKNOWN);
 		}
 
-		if (!_scatterVolume || !_integrationVolumes[0] || !_integrationVolumes[1])
+		// Spatial-filter destination - same shape as the scatter volume.
+		_scatterFilteredVolume = graphics->CreateTexture3D(
+			(int32_t)kVolumeWidth, (int32_t)kVolumeHeight, (int32_t)kVolumeDepth,
+			DXGI_FORMAT_R16G16B16A16_FLOAT,
+			1,
+			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+			1, 1, 0,
+			nullptr,
+			D3D11_RTV_DIMENSION_UNKNOWN,
+			D3D11_UAV_DIMENSION_TEXTURE3D,
+			D3D11_SRV_DIMENSION_TEXTURE3D,
+			D3D11_DSV_DIMENSION_UNKNOWN);
+
+		if (!_scatterVolume || !_scatterFilteredVolume || !_integrationVolumes[0] || !_integrationVolumes[1])
 		{
 			LOG_WARN("VolumetricScattering::EnsureResources failed to allocate volumes");
 			ReleaseResources();
 			return false;
 		}
 		_scatterVolume->SetDebugName("VolumetricScatterVolume");
+		_scatterFilteredVolume->SetDebugName("VolumetricScatterFilteredVolume");
 		_integrationVolumes[0]->SetDebugName("VolumetricIntegrationVolumeA");
 		_integrationVolumes[1]->SetDebugName("VolumetricIntegrationVolumeB");
 
 		_scatterUav         = CreateVolumeUav(device, _scatterVolume);
+		_scatterFilteredUav = CreateVolumeUav(device, _scatterFilteredVolume);
 		_integrationUavs[0] = CreateVolumeUav(device, _integrationVolumes[0]);
 		_integrationUavs[1] = CreateVolumeUav(device, _integrationVolumes[1]);
-		if (!_scatterUav || !_integrationUavs[0] || !_integrationUavs[1])
+		if (!_scatterUav || !_scatterFilteredUav || !_integrationUavs[0] || !_integrationUavs[1])
 		{
 			LOG_WARN("VolumetricScattering::EnsureResources failed to create UAVs");
 			ReleaseResources();
@@ -319,11 +344,18 @@ namespace HexEngine
 
 		_scatterShader   = IShader::Create("EngineData.Shaders/VolumetricScatterDensity.hcs");
 		_integrateShader = IShader::Create("EngineData.Shaders/VolumetricScatterIntegrate.hcs");
+		_scatterFilterShader = IShader::Create("EngineData.Shaders/VolumetricScatterFilter.hcs");
 		if (!_scatterShader || !_integrateShader)
 		{
 			LOG_WARN("VolumetricScattering::EnsureResources missing compute shaders");
 			ReleaseResources();
 			return false;
+		}
+		// The filter shader is optional - a missing .hcs (stale package)
+		// degrades to the unfiltered path instead of disabling fog.
+		if (!_scatterFilterShader)
+		{
+			LOG_WARN("VolumetricScattering: VolumetricScatterFilter.hcs missing - spatial filter disabled");
 		}
 
 		_resourcesReady = true;
@@ -778,6 +810,31 @@ namespace HexEngine
 			}
 		}
 
+		// SPATIAL FILTER PASS - 3x3x3 tent over the scatter volume before
+		// integration (see VolumetricScatterFilter.shader for why). The
+		// integrate pass then reads the filtered copy; with the filter off
+		// (or its shader missing) it reads the raw volume - bitwise the
+		// pre-filter behaviour.
+		bool filtered = false;
+		if (r_volumetricSpatialFilter._val.b && _scatterFilterShader && _scatterFilteredUav)
+		{
+			if (auto* stage = _scatterFilterShader->GetShaderStage(ShaderStage::ComputeShader))
+			{
+				auto* rawSrv = reinterpret_cast<ID3D11ShaderResourceView*>(_scatterVolume->GetNativeShaderView());
+				context->CSSetShaderResources(0, 1, &rawSrv);
+				UINT init = 0;
+				context->CSSetUnorderedAccessViews(0, 1, &_scatterFilteredUav, &init);
+				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(stage->GetNativePtr()), nullptr, 0);
+				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
+				ID3D11UnorderedAccessView* nullUav = nullptr;
+				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+				ID3D11ShaderResourceView* nullSrv = nullptr;
+				context->CSSetShaderResources(0, 1, &nullSrv);
+				context->CSSetShader(nullptr, nullptr, 0);
+				filtered = true;
+			}
+		}
+
 		// INTEGRATION PASS - 8x8x1 groups, each thread loops kVolumeDepth W slices.
 		// Ping-pong: _writeIdx holds the index of the LAST written volume
 		// (so the apply pass reads from it as the just-finished output).
@@ -792,7 +849,8 @@ namespace HexEngine
 			{
 				ID3D11Buffer* cb = reinterpret_cast<ID3D11Buffer*>(_integrateParamsCBuffer->GetNativePtr());
 				context->CSSetConstantBuffers(5, 1, &cb);
-				auto* scatterSrv = reinterpret_cast<ID3D11ShaderResourceView*>(_scatterVolume->GetNativeShaderView());
+				auto* scatterSrv = reinterpret_cast<ID3D11ShaderResourceView*>(
+					(filtered ? _scatterFilteredVolume : _scatterVolume)->GetNativeShaderView());
 				ID3D11ShaderResourceView* historySrv =
 					reinterpret_cast<ID3D11ShaderResourceView*>(_integrationVolumes[historyNow]->GetNativeShaderView());
 				ID3D11ShaderResourceView* srvs[2] = { scatterSrv, historySrv };
