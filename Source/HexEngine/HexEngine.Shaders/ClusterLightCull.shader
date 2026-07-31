@@ -100,6 +100,18 @@
 		aabbMin.z = zNear;
 		aabbMax.z = zFar;
 
+		// The LAST slice owns everything beyond the 128 m grid: pixel depths
+		// clamp into it (DepthToSlice), so lights must too, or a lamp whose
+		// sphere doesn't reach 128 m of the camera silently vanishes - seen
+		// as lights popping with camera distance and a pitch/yaw depth
+		// cut-off. The cone refinement's bounding sphere stays FINITE (from
+		// zFar) - and the refinement is skipped for far-slice entries, since
+		// a distant spot fails its apex-distance test against near geometry
+		// while legitimately lighting distant pixels binned into this slice.
+		const bool farSlice = (cz == kClustersZ - 1u);
+		if (farSlice)
+			aabbMax.z = 1e30f;
+
 		uint count = 0;
 		const uint lightCount = (uint)g_clusterScreenParams.z;
 
@@ -122,7 +134,8 @@
 			// Spot refinement: cone vs the cluster AABB's bounding sphere
 			// (Lengyel's test). The bounding sphere over-covers the AABB, so
 			// this can only keep extra clusters, never drop a lit one.
-			if (light.params.y > 0.5f)
+			// Skipped for the unbounded far slice (see above).
+			if (!farSlice && light.params.y > 0.5f)
 			{
 				// Direction into the same flipped view space as the position:
 				// rotate (w=0), then mirror z. Both flipped together keeps the
