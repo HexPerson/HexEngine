@@ -175,9 +175,16 @@ namespace HexEngine
 		_debugShader.reset();
 	}
 
+	// Units slice part 3 (SceneRenderer.cpp declares it): lumens -> candela
+	// at gather time. The shading path's existing 1/d^2 attenuation makes
+	// candela the correct gathered quantity.
+	extern HVar r_physicalLightUnits;
+
 	void ClusteredLighting::UpdateAndCull(Scene* scene, Camera* camera, const std::vector<Light*>& shadowCasters,
 		const ShadowAtlas* atlas)
 	{
+		const bool physicalUnits = r_physicalLightUnits._val.b;
+		constexpr float kPi = 3.14159265358979f;
 		if (scene == nullptr || camera == nullptr || _cullShader == nullptr || _lightsBuffer == nullptr)
 			return;
 
@@ -197,9 +204,11 @@ namespace HexEngine
 				if (l == nullptr || l->GetEntity() == nullptr || l->GetEntity()->IsPendingDeletion())
 					continue;
 				const auto diffuse = l->GetDiffuseColour();
-				const float strength = std::max(0.0f, l->GetLightStrength() * l->GetLightMultiplier());
+				float strength = std::max(0.0f, l->GetLightStrength() * l->GetLightMultiplier());
 				if (diffuse.w <= 0.0f || strength <= 0.0f)
 					continue;
+				if (physicalUnits)
+					strength /= 4.0f * kPi; // lumens -> candela, isotropic point
 				if (lights.size() >= kMaxLights)
 					break;
 
@@ -222,9 +231,16 @@ namespace HexEngine
 				if (l == nullptr || l->GetEntity() == nullptr || l->GetEntity()->IsPendingDeletion())
 					continue;
 				const auto diffuse = l->GetDiffuseColour();
-				const float strength = std::max(0.0f, l->GetLightStrength() * l->GetLightMultiplier());
+				float strength = std::max(0.0f, l->GetLightStrength() * l->GetLightMultiplier());
 				if (diffuse.w <= 0.0f || strength <= 0.0f)
 					continue;
+				if (physicalUnits)
+				{
+					// Frostbite cone-coupled: narrowing the cone concentrates
+					// the same lumens into a brighter pool.
+					const float cosOuter = cosf(ToRadian(l->GetOuterConeAngle() * 0.5f));
+					strength /= std::max(2.0f * kPi * (1.0f - cosOuter), 1e-4f);
+				}
 				if (lights.size() >= kMaxLights)
 					break;
 

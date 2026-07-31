@@ -418,6 +418,11 @@ namespace HexEngine
 	// content hash is unchanged keeps last frame's depth for free, so the
 	// budget bounds RE-RENDERS, not shadowed-light count.
 	HVar r_shadowAtlas("r_shadowAtlas", "Local-light shadows via the shared LRU atlas (sun keeps its cascades)", true, false, true);
+	// Units slice part 3: when on, authored light strengths are LUMENS
+	// (spot cd = lm/(2pi(1-cos outerHalf)), point cd = lm/4pi), the sun is
+	// LUX, emissive is NITS. Off = legacy arbitrary units. Flips together
+	// with r_exposureMode and the calibration factor in part 4.
+	HVar r_physicalLightUnits("r_physicalLightUnits", "Interpret light strengths as physical units (lumens/lux/nits)", false, false, true);
 	HVar r_shadowAtlasBudget("r_shadowAtlasBudget", "Max atlas shadow faces re-rendered per frame", (int32_t)4, (int32_t)0, (int32_t)16);
 	HVar r_shadowAtlasDebug("r_shadowAtlasDebug", "Draw the shadow atlas as an overlay", false, false, true);
 
