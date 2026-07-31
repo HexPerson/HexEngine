@@ -2271,6 +2271,9 @@ namespace HexEngine
 			// Layout verified 2026-07-26: sizeof 1360, _taaParams@1312, _reflectionParams@1328,
 			// _iblParams@1344 - which matches HLSL's packing of the same declaration exactly,
 			// so appending float4s at the end of this struct is sound.
+			// (Appended since that audit: _iblComposeParams, _skyOvercast, _ssrParams,
+			// _exposureParams - the 1360 figure above is historical, the invariant that
+			// C++ and HLSL append in LOCKSTEP is what matters.)
 			// Camera data
 			bufferData._viewMatrix = viewMatrix.Transpose();
 			bufferData._projectionMatrix = projectionMatrix.Transpose();
@@ -2567,6 +2570,11 @@ namespace HexEngine
 				(r_ssrTemporalJitter._val.b && r_ssrDenoise._val.b) ? 1.0f : 0.0f,
 				clusterForwardActive ? 1.0f : 0.0f,
 				(float)r_ssrMarchMode._val.i32);
+
+			// Physical units: pre-exposure stays 1.0 until the lumen/lux
+			// conversions + calibration land (part 4 of the slice) - the
+			// lane and its consumers are wired now so the flip is one value.
+			bufferData._exposureParams = math::Vector4(1.0f, 1.0f, 0.0f, 0.0f);
 
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,

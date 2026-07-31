@@ -406,6 +406,18 @@ namespace HexEngine
 		//       mirror image is - so reflections stop lining up with what they
 		//       reflect. yzw reserved.
 		math::Vector4 _ssrParams;
+
+		// Physical light units (Phase 2 final slice, appended per the
+		// append-only note above).
+		//   x = pre-exposure: multiplied into lighting outputs so FP16
+		//       buffers hold physical ranges (100k-lux daylight). 1.0 until
+		//       the lumen/lux conversions land - the whole system flips
+		//       together with the calibration factor.
+		//   y = 1 / pre-exposure, for consumers that need to undo it.
+		//   z = legacy _strength -> lumens calibration factor (informational
+		//       for debug shaders; the conversion itself happens CPU-side).
+		//   w = reserved.
+		math::Vector4 _exposureParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

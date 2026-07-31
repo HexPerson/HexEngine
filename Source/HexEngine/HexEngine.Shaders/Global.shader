@@ -262,7 +262,14 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// x = 1 to use water's last-in-screen sample when the specular march
 		// gives up. See RenderStructs.hpp::_ssrParams. yzw reserved.
 		float4 g_ssrParams;
+		// Physical light units: x = pre-exposure, y = 1/pre-exposure,
+		// z = legacy->lumens calibration factor (informational), w reserved.
+		// See RenderStructs.hpp::_exposureParams.
+		float4 g_exposureParams;
 	};
+
+	#define g_preExposure    (g_exposureParams.x)
+	#define g_invPreExposure (g_exposureParams.y)
 
 	// Readable aliases for the packed slot above.
 	// P1-B toggles. These lanes were g_ssrSkyFallbackStrength / g_ssrSkyHitMinDistance,
