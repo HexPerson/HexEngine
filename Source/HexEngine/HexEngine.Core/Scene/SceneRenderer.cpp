@@ -1639,7 +1639,7 @@ namespace HexEngine
 			{
 				const auto& assignments = _shadowAtlas.AssignTiles(
 					localCasters, _currentCamera, r_shadowAtlasBudget._val.i32,
-					_currentScene->GetGiGeometryRevision());
+					_currentScene->GetShadowGeometryRevision());
 				for (const auto& a : assignments)
 				{
 					if (a.needsRender)
@@ -3048,6 +3048,12 @@ namespace HexEngine
 		params.isShadow = true;
 		params.camera = _currentCamera;
 		light->GetPVS(face)->CalculateVisibility(_currentScene, params);
+		// Local lights don't get the per-entity-move instance-cache refresh
+		// the camera and sun enjoy (Entity::ClearTransformCache), so a moved
+		// prop would re-render with its OLD shadowInstanceData. Refresh the
+		// whole face PVS - it only covers this light's radius, and this runs
+		// solely for budgeted dirty faces.
+		light->GetPVS(face)->RefreshAllInstanceCaches();
 
 		math::Viewport shadowVp;
 		shadowVp.width = (float)tw;

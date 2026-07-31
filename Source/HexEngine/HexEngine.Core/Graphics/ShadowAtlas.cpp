@@ -148,6 +148,18 @@ namespace HexEngine
 		for (auto& t : _tiles)
 			t.renderedThisFrame = false;
 
+		// Diagnostic for the invalidation chain (rate-limited by change): if
+		// dragging an object produces NO revision lines in the log, the
+		// entity-move path never reaches Scene::NotifyEntityTransformChanged
+		// and the fault is upstream of the atlas; if lines appear but shadows
+		// stay stale, the fault is in the hash/budget logic here.
+		static uint64_t sLastLoggedRevision = ~0ull;
+		if (sceneGeometryRevision != sLastLoggedRevision)
+		{
+			LOG_DEBUG("ShadowAtlas: shadow geometry revision -> %llu", (unsigned long long)sceneGeometryRevision);
+			sLastLoggedRevision = sceneGeometryRevision;
+		}
+
 		if (_atlas == nullptr || camera == nullptr || camera->GetEntity() == nullptr)
 			return _assignments;
 

@@ -272,6 +272,7 @@ namespace HexEngine
 		if (geometryChanged)
 		{
 			++_giGeometryRevision;
+			++_shadowGeometryRevision;
 			_giSpatialCacheDirty = true;
 		}
 
@@ -286,6 +287,20 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 		if (entity == nullptr)
 			return;
+
+		// Shadow revision: UNCONDITIONAL for anything with a mesh, unlike the
+		// GI revision below which inherits GI's exclusions and debounce. The
+		// shadow atlas first keyed off the GI revision and objects flagged
+		// ExcludeFromGI (small props) silently stopped invalidating shadow
+		// tiles - a dragged trash can kept its stale shadow (user-found).
+		// Per-frame bumps while dragging are fine: the atlas render budget
+		// bounds the refresh cost, and a live shadow during the drag is what
+		// you want anyway.
+		if (auto* anyMesh = entity->GetComponent<StaticMeshComponent>();
+			anyMesh != nullptr && anyMesh->GetMesh() != nullptr)
+		{
+			++_shadowGeometryRevision;
+		}
 
 		// GI motion debounce. A GI mesh that moves every frame (animated
 		// characters, physics props) would otherwise invalidate the voxel triangle

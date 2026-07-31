@@ -167,6 +167,10 @@ namespace HexEngine
 		void CalculateBounds(math::Vector3& min, math::Vector3& max);
 		bool GatherStaticMeshesInBounds(const dx::BoundingBox& bounds, std::vector<StaticMeshComponent*>& outComponents, bool includeDynamic = true);
 		uint64_t GetGiGeometryRevision() const;
+		// Bumped on ANY meshed entity's transform change and on geometry
+		// add/change - no GI exclusions, no debounce. The shadow atlas keys
+		// its cache invalidation off this, never off the GI revision.
+		uint64_t GetShadowGeometryRevision() const { return _shadowGeometryRevision; }
 		uint64_t GetGiMaterialRevision() const;
 		uint64_t GetGiLightRevision() const;
 		void NotifyGiMaterialStateChanged();
@@ -428,6 +432,7 @@ namespace HexEngine
 		bool _didAnyDrawnItemReflect = false;
 		bool _wasPvsReset = true;
 		uint64_t _giGeometryRevision = 1ull;
+		uint64_t _shadowGeometryRevision = 1ull;
 		uint64_t _giMaterialRevision = 1ull;
 		uint64_t _giLightRevision = 1ull;
 		bool _giSpatialCacheDirty = true;

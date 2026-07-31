@@ -635,6 +635,30 @@ namespace HexEngine
 		FlushEntity(entity, true);
 	}
 
+	void PVS::RefreshAllInstanceCaches()
+	{
+		if (_updatesDisabled)
+			return;
+
+		std::unique_lock lock(_lock, std::try_to_lock);
+		if (!lock.owns_lock())
+			return;
+
+		for (auto& renderables : _renderableSnapshot)
+		{
+			for (auto& snapshot : renderables.second)
+			{
+				if (snapshot.entity == nullptr)
+					continue;
+				if (auto smc = snapshot.entity->GetComponent<StaticMeshComponent>())
+				{
+					snapshot.instanceData = smc->GetCachedInstanceData(renderables.first.get());
+					snapshot.shadowInstanceData = smc->GetCachedShadowInstanceData();
+				}
+			}
+		}
+	}
+
 	void PVS::UpdateEntityInstanceCache(Entity* entity)
 	{
 		if (_updatesDisabled)

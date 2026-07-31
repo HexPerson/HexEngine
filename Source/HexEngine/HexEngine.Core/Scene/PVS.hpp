@@ -111,6 +111,13 @@ namespace HexEngine
 		void DisableUpdates(bool disable) { _updatesDisabled = disable; }
 
 		void UpdateEntityInstanceCache(Entity* entity);
+		// Re-pull instance data for EVERY snapshot entry. For PVS holders that
+		// don't get the per-move UpdateEntityInstanceCache treatment (local
+		// shadow lights - only the camera and sun do), call this before a
+		// cached-shadow re-render or moved entities draw with stale
+		// shadowInstanceData (slice 7, user-found: a dragged prop kept its
+		// old shadow through an atlas tile refresh).
+		void RefreshAllInstanceCaches();
 
 	private:
 		MeshInstanceMap _pvs;
