@@ -268,6 +268,25 @@ reflection is reproducible.
 
 Fixes D2, enables the neon-street look.
 
+> **STATUS: COMPLETE, accepted 2026-07-31.** Every item below landed on
+> `feat/aaa-graphics` and defaults on: clustered cull + single-pass deferred
+> apply, froxel/forward/transparent sharing (transparents also gained sun
+> cascade shadows), per-light march retired, 8192² 16-tile LRU shadow atlas
+> with content-hash caching (`r_shadowAtlas*`), infinite-z far slice +
+> beyond-far perspective projection in the cull (no distance/angle popping),
+> physical light units (Frostbite: lm/lux/nits, `r_physicalLightUnits`)
+> calibrated to legacy content via `r_legacyLightScale` (=15000, day street
+> EV100 ≈ 15.1), and EV100 exposure (`r_exposureMode 1`) with an EV→EC
+> auto-compensation curve so bimodal night scenes don't blow out. Acceptance
+> run passed: 200+ clustered street lights at night, 16 atlas-shadowed, with
+> moving traffic, at playable fps. Deviations from the sketch below: atlas
+> tiles are 2048² in an 8192² atlas (filtering could not manufacture
+> resolution at 1024²); shadowed POINT lights still take the legacy path
+> (spots-only atlas v1); tile demotion and per-light-volume dirty tracking
+> are queued refinements; pre-exposure is a static 1/scale until sky/GI/
+> probes go physical; inspector strengths await a one-time content
+> migration to become honest lumens.
+
 - Clustered light culling in compute. Reuse the froxel grid layout the volumetric system
   already establishes so fog and surface lighting share cluster assignment.
 - Convert deferred local lighting from per-light volume draws to a single full-screen or
