@@ -83,19 +83,26 @@ namespace HexEngine
 		// break EV each metered stop is partially compensated back down, so
 		// dim scenes render dim - which is also what makes night READ as
 		// night. Slope 0 restores the plain saturation mapping; slope 1
-		// freezes brightness below the break entirely.
+		// freezes brightness below the break; slopes ABOVE 1 make dim scenes
+		// darker than they meter - needed here because legacy night content
+		// is authored ~2 stops brighter than physical night (meters EV ~11
+		// vs a real night street's ~5), so a 1:1 hold can never reach a
+		// night look. No feedback risk at any slope: the meter reads the
+		// pre-exposure HDR buffer, so metered EV is exposure-independent.
+		// Keep the break BELOW the day EV (~15) or day darkens too - the
+		// user found break 20 pulling day down by the full cap.
 		HVar r_autoExposureEvCompBreak(
 			"r_autoExposureEvCompBreak",
 			"EV100 below which the auto EC curve starts darkening (day street ~15, night street ~11)",
 			13.0f, -10.0f, 30.0f);
 		HVar r_autoExposureEvCompSlope(
 			"r_autoExposureEvCompSlope",
-			"EV of darkening applied per metered EV below the break (0 = off, 1 = brightness frozen below break)",
-			0.75f, 0.0f, 1.0f);
+			"EV of darkening applied per metered EV below the break (0 = off, 1 = hold, >1 = dimmer than metered)",
+			2.0f, 0.0f, 3.0f);
 		HVar r_autoExposureEvCompMax(
 			"r_autoExposureEvCompMax",
 			"Cap on the auto EC curve's total darkening, in EV",
-			3.0f, 0.0f, 8.0f);
+			6.0f, 0.0f, 8.0f);
 		// EV clamps replace the multiplier clamps in EV100 mode. Sunny-16
 		// daylight sits near EV100 15; interiors ~5-8; moonlight ~ -2.
 		HVar r_autoExposureMinEV100(
