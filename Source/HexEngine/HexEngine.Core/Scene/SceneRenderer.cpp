@@ -395,12 +395,12 @@ namespace HexEngine
 	// Phase 2: clustered light culling. Off by default until the deferred pass
 	// consumes the lists; with it on, the cull runs and the heatmap
 	// (r_clusterDebug) verifies the binning against the world.
-	HVar r_clusterLights("r_clusterLights", "Build clustered light lists (Phase 2; no consumer yet)", false, false, true);
+	HVar r_clusterLights("r_clusterLights", "Build clustered light lists (Phase 2)", true, false, true);
 	HVar r_clusterDebug("r_clusterDebug", "Overlay the cluster occupancy heatmap (needs r_clusterLights)", false, false, true);
 	// Slice 2: the fullscreen apply. Unshadowed point/spot lights shade from
 	// the cluster lists in one draw; shadowed lights keep the per-light path.
 	// Needs r_clusterLights for the lists to exist.
-	HVar r_clusterApply("r_clusterApply", "Shade unshadowed local lights from the cluster lists in one fullscreen pass", false, false, true);
+	HVar r_clusterApply("r_clusterApply", "Shade unshadowed local lights from the cluster lists in one fullscreen pass", true, false, true);
 	// INT, not bool - bool HVars clamp to 0/1 and the staged modes vanish.
 	// 1 = magenta flood (draw path), 2 = per-pixel cluster light count,
 	// 3 = shaded result of the first light in the list, skips ignored.
@@ -408,7 +408,7 @@ namespace HexEngine
 	// stops being capped at the closest-16 while surface lighting is not.
 	// Slice 4: glass / alpha-blend surfaces read uncapped local lights from
 	// the cluster lists instead of the closest-16 forward arrays.
-	HVar r_clusterForward("r_clusterForward", "Forward-lit surfaces consume the cluster lists (uncapped local lights)", false, false, true);
+	HVar r_clusterForward("r_clusterForward", "Forward-lit surfaces consume the cluster lists (uncapped local lights)", true, false, true);
 	// Slice 5: the transparency phase samples the sun cascades instead of the
 	// hardcoded depthValue=1 - glass in a shadowed interior stops sun-lighting
 	// as if it stood outdoors.
@@ -417,7 +417,7 @@ namespace HexEngine
 	// LRU-cached tiles instead of per-light dedicated maps. A face whose
 	// content hash is unchanged keeps last frame's depth for free, so the
 	// budget bounds RE-RENDERS, not shadowed-light count.
-	HVar r_shadowAtlas("r_shadowAtlas", "Local-light shadows via the shared LRU atlas (sun keeps its cascades)", false, false, true);
+	HVar r_shadowAtlas("r_shadowAtlas", "Local-light shadows via the shared LRU atlas (sun keeps its cascades)", true, false, true);
 	HVar r_shadowAtlasBudget("r_shadowAtlasBudget", "Max atlas shadow faces re-rendered per frame", (int32_t)4, (int32_t)0, (int32_t)16);
 	HVar r_shadowAtlasDebug("r_shadowAtlasDebug", "Draw the shadow atlas as an overlay", false, false, true);
 
@@ -446,7 +446,7 @@ namespace HexEngine
 		return nullptr;
 	}
 
-		HVar r_clusterFog("r_clusterFog", "Froxel volumetrics consume the cluster lists for unshadowed lights", false, false, true);
+		HVar r_clusterFog("r_clusterFog", "Froxel volumetrics consume the cluster lists for unshadowed lights", true, false, true);
 		HVar r_clusterApplyDebug("r_clusterApplyDebug", "Clustered apply debug: 1=flood 2=count 3=first light", (int32_t)0, (int32_t)0, (int32_t)3);
 
 	HVar r_ssrTemporalJitter("r_ssrTemporalJitter", "Rotate SSR cone samples per frame so NRD's temporal accumulation integrates the lobe", true, false, true);
