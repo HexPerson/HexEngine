@@ -206,7 +206,20 @@
 			if (atlasShadowed)
 			{
 				const int tileIndex = (int)light.params.w;
-				const float4 lightClip = mul(float4(pixelPosWS.xyz, 1.0f), g_atlasTileVP[tileIndex]);
+
+				// Normal-offset sampling: push the RECEIVER ~1.5 shadow
+				// texels along its normal before projecting. This is the
+				// acne fix - moving the sample off the surface beats any
+				// depth tolerance (user-reported static aliasing with the
+				// slope bias alone), and at ~1-texel scale it cannot
+				// re-detach contact the way the old flat bias did. Texel
+				// world size from the spot's cone: 2 tan(outer) d / tileSize.
+				const float cosOuterB = max(light.dirCone.w, 0.1f);
+				const float tanOuter = sqrt(saturate(1.0f - cosOuterB * cosOuterB)) / cosOuterB;
+				const float texelWorld = 2.0f * tanOuter * d / 1024.0f;
+				const float3 samplePos = pixelPosWS.xyz + normalWS * (texelWorld * 1.5f);
+
+				const float4 lightClip = mul(float4(samplePos, 1.0f), g_atlasTileVP[tileIndex]);
 				if (lightClip.w > 0.0f)
 				{
 					float2 shadowUv = float2(
@@ -219,18 +232,28 @@
 					{
 						const float ndl = saturate(dot(normalWS, pixelToLight));
 						const float slope = sqrt(saturate(1.0f - ndl * ndl)) / max(ndl, 0.1f);
-						const float bias = 0.00005f + 0.0002f * slope;
+						const float bias = 0.00005f + 0.0001f * slope;
 
-						// Tile-local UV, clamped half a texel inside the tile
-						// so bilinear comparison taps never bleed.
+						// Tile-local UV, clamped 1.5 texels inside the tile so
+						// the PCF footprint below never bleeds into a
+						// neighbouring tile.
 						const float tileX = (float)(tileIndex % (int)kAtlasTilesPerRow);
 						const float tileY = (float)(tileIndex / (int)kAtlasTilesPerRow);
-						const float halfTexel = 0.5f / 4096.0f;
-						shadowUv = clamp(shadowUv, halfTexel / kAtlasTileUvSize, 1.0f - halfTexel / kAtlasTileUvSize);
+						const float atlasTexel = 1.0f / 4096.0f;
+						const float clampMargin = 1.5f * atlasTexel / kAtlasTileUvSize;
+						shadowUv = clamp(shadowUv, clampMargin, 1.0f - clampMargin);
 						const float2 atlasUv = (float2(tileX, tileY) + shadowUv) * kAtlasTileUvSize;
 
-						shadowTerm = g_shadowAtlas.SampleCmpLevelZero(
-							g_cmpSampler, atlasUv, lightDepth - bias);
+						// 4-tap PCF: softens the shadow edge and averages any
+						// residual per-texel misclassification instead of
+						// showing it as hard stair-stepping.
+						const float cmpDepth = lightDepth - bias;
+						float sum = 0.0f;
+						sum += g_shadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2(-0.5f, -0.5f) * atlasTexel, cmpDepth);
+						sum += g_shadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2( 0.5f, -0.5f) * atlasTexel, cmpDepth);
+						sum += g_shadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2(-0.5f,  0.5f) * atlasTexel, cmpDepth);
+						sum += g_shadowAtlas.SampleCmpLevelZero(g_cmpSampler, atlasUv + float2( 0.5f,  0.5f) * atlasTexel, cmpDepth);
+						shadowTerm = sum * 0.25f;
 					}
 				}
 
