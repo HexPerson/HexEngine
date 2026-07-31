@@ -420,9 +420,10 @@ namespace HexEngine
 	HVar r_shadowAtlas("r_shadowAtlas", "Local-light shadows via the shared LRU atlas (sun keeps its cascades)", true, false, true);
 	// Units slice part 3: when on, authored light strengths are LUMENS
 	// (spot cd = lm/(2pi(1-cos outerHalf)), point cd = lm/4pi), the sun is
-	// LUX, emissive is NITS. Off = legacy arbitrary units. Flips together
-	// with r_exposureMode and the calibration factor in part 4.
-	HVar r_physicalLightUnits("r_physicalLightUnits", "Interpret light strengths as physical units (lumens/lux/nits)", false, false, true);
+	// LUX, emissive is NITS. Off = legacy arbitrary units. DEFAULT ON since
+	// part 4 landed (calibration + EV comp curve, user-verified day+night
+	// 2026-07-31) together with r_exposureMode.
+	HVar r_physicalLightUnits("r_physicalLightUnits", "Interpret light strengths as physical units (lumens/lux/nits)", true, false, true);
 	// Units slice part 4: the calibration bridge between legacy content and
 	// physical units, measured live 2026-07-31 (day street meanLuma 0.298 ->
 	// 4500 cd/m^2 sunny-street => factor ~15000). It declares BOTH:

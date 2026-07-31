@@ -62,14 +62,14 @@ namespace HexEngine
 		// EV100: the metered geometric-mean luminance is interpreted as
 		// cd/m^2, converted to EV100, and exposure comes from the standard
 		// saturation-based mapping exposure = 1 / (1.2 * 2^(EV100 - EC)).
-		// Default LEGACY until the lumen/lux light conversions land - EV100
-		// against non-physical lighting values would just be a different
-		// arbitrary curve. The whole system flips together with the
-		// calibration factor so the scene looks unchanged that day.
+		// DEFAULT EV100 since part 4 landed (r_legacyLightScale calibration
+		// + the EV comp curve below; user-verified day+night 2026-07-31),
+		// together with r_physicalLightUnits. Legacy remains the fallback
+		// for A/B and for scenes whose authoring fights the physical meter.
 		HVar r_exposureMode(
 			"r_exposureMode",
 			"Exposure steering: 0 = legacy target-luma multiplier, 1 = physical EV100",
-			(int32_t)0, (int32_t)0, (int32_t)1);
+			(int32_t)1, (int32_t)0, (int32_t)1);
 		HVar r_exposureCompensation(
 			"r_exposureCompensation",
 			"Exposure compensation in EV stops (positive = brighter), EV100 mode only",
