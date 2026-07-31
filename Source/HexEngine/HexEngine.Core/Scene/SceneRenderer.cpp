@@ -4352,13 +4352,20 @@ namespace HexEngine
 				_sphereEntity->SetPosition(lightPos);
 				_sphereEntity->SetScale(math::Vector3(lightRad));
 
+				// Units slice 3c: lumens -> candela on the per-light path,
+				// matching the clustered gather exactly (a shadowed light
+				// moving between paths must not change brightness).
+				float pointPassStrength = light->GetLightStrength();
+				if (r_physicalLightUnits._val.b)
+					pointPassStrength /= 4.0f * 3.14159265f;
+
 				instance->Render(
 					_sphereEntity->GetWorldTM(),
 					_sphereEntity->GetWorldTMTranspose(),
 					_sphereEntity->GetWorldTMPrevTranspose(),
 					_sphereEntity->GetWorldTMInvert(),
 					diffuse,
-					math::Vector2(lightRad, light->GetLightStrength()));
+					math::Vector2(lightRad, pointPassStrength));
 
 				instance->Finish();
 
@@ -4530,13 +4537,22 @@ namespace HexEngine
 					_sphereEntity->SetPosition(lightPos);
 					_sphereEntity->SetScale(math::Vector3(lightRad));
 
+					// Units slice 3c: cone-coupled lumens -> candela, matching
+					// the clustered gather.
+					float spotPassStrength = light->GetLightStrength();
+					if (r_physicalLightUnits._val.b)
+					{
+						const float cosOuterPass = std::cos(ToRadian(light->GetOuterConeAngle() * 0.5f));
+						spotPassStrength /= std::max(2.0f * 3.14159265f * (1.0f - cosOuterPass), 1e-4f);
+					}
+
 					instance->Render(
 						_sphereEntity->GetWorldTM(),
 						_sphereEntity->GetWorldTMTranspose(),
 						_sphereEntity->GetWorldTMPrevTranspose(),
 						_sphereEntity->GetWorldTMInvert(),
 						diffuse,
-						math::Vector2(lightRad, light->GetLightStrength()));
+						math::Vector2(lightRad, spotPassStrength));
 
 					instance->Finish();
 
@@ -4623,7 +4639,10 @@ namespace HexEngine
 				const auto diffuse = light->GetDiffuseColour();
 				const auto pos = light->GetEntity()->GetWorldTM().Translation();
 				const float radius = std::max(0.05f, light->GetRadius());
-				const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+				float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+				// Units slice 3b: lumens -> candela, matching the clustered gather.
+				if (r_physicalLightUnits._val.b)
+					strength /= 4.0f * 3.14159265f;
 
 				data.pointPosRadius[pointCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
 				data.pointColorStrength[pointCount] = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
@@ -4656,11 +4675,14 @@ namespace HexEngine
 				const auto pos = lightEnt->GetWorldTM().Translation();
 				const auto fwd = lightEnt->GetWorldTM().Forward();
 				const float radius = std::max(0.05f, light->GetRadius());
-				const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+				float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
 				const float outerAngle = std::max(0.1f, light->GetOuterConeAngle());
 				const float innerAngle = std::clamp(light->GetInnerConeAngle(), 0.0f, outerAngle);
 				const float cosOuter = std::cos(ToRadian(outerAngle * 0.5f));
 				const float cosInner = std::cos(ToRadian(innerAngle * 0.5f));
+				// Units slice 3b: lumens -> candela, cone-coupled like the clustered gather.
+				if (r_physicalLightUnits._val.b)
+					strength /= std::max(2.0f * 3.14159265f * (1.0f - cosOuter), 1e-4f);
 
 				data.spotPosRadius[spotCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
 				data.spotDirCone[spotCount] = math::Vector4(fwd.x, fwd.y, fwd.z, cosOuter);
