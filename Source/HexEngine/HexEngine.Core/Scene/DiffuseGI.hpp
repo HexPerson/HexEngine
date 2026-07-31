@@ -153,6 +153,24 @@ namespace HexEngine
 			std::vector<uint8_t> pixels;
 		};
 
+		// Memoised per-mesh RAW texcoord bounds (pre-uvScale - they scale
+		// linearly with a component's UV scale, so one entry serves every
+		// component sharing the mesh). Mesh has no version counter, so
+		// validity rides the vertex allocation identity plus a sparse
+		// texcoord sentinel hash: an in-place rebuild that keeps the same
+		// allocation and count still misses via the sentinel.
+		struct MeshUvRectCacheEntry
+		{
+			const void* vertexData = nullptr;
+			size_t vertexCount = 0u;
+			uint64_t texcoordSentinelHash = 0ull;
+			float minU = 0.0f;
+			float minV = 0.0f;
+			float maxU = 0.0f;
+			float maxV = 0.0f;
+			bool valid = false; // false = mesh had no finite texcoords
+		};
+
 		struct MeshEmissiveCacheEntry
 		{
 			const Material* material = nullptr;
@@ -296,6 +314,11 @@ namespace HexEngine
 		void AddDirtyRegion(uint32_t levelIndex, const dx::BoundingBox& bounds);
 		bool IsMeshStateDirty(StaticMeshComponent* smc, const math::Vector3& worldPos);
 		math::Vector3 GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent);
+		// Returns (uMin, vMin, uMax, vMax) of the component's scaled UVs,
+		// (0,0,1,1) for wrapped/tiled or degenerate UVs. Memoised via
+		// _meshUvRectCache - the raw bounds scan is O(vertices) once per
+		// mesh, O(1) per call after.
+		math::Vector4 ResolveMeshUvRect(const StaticMeshComponent* meshComponent);
 		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiLightBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialBuffer(uint32_t elementCapacity);
@@ -377,6 +400,7 @@ namespace HexEngine
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleAlbedoCache;
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleEmissiveCache;
 		std::unordered_map<StaticMeshComponent*, MeshEmissiveCacheEntry> _meshEmissiveCache;
+		std::unordered_map<const void*, MeshUvRectCacheEntry> _meshUvRectCache; // key: Mesh*
 		std::vector<GpuVoxelTriangle> _voxelTriangleUpload;
 		std::vector<GiMeshInstanceProxy> _giMeshProxies;
 		std::vector<GiMaterialProxy> _giMaterialProxies;

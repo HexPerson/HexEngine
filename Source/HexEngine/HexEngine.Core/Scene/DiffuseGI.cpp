@@ -118,58 +118,24 @@ namespace
 		float vMax = 1.0f;
 	};
 
-	static MaterialUvRect ResolveMaterialUvRect(const HexEngine::StaticMeshComponent* meshComponent)
+	// Sparse FNV hash over ~8 evenly spaced vertices' texcoords. Part of the
+	// _meshUvRectCache validity key: catches in-place UV rewrites that keep
+	// the same vector allocation and count (Mesh has no version counter to
+	// lean on). Position-only mutations don't matter - the rect is UV-only.
+	static uint64_t TexcoordSentinelHash(const std::vector<HexEngine::MeshVertex>& vertices)
 	{
-		MaterialUvRect rect = {};
-		if (meshComponent == nullptr)
-			return rect;
-
-		const auto mesh = meshComponent->GetMesh();
-		if (!mesh)
-			return rect;
-
-		const auto& vertices = mesh->GetVertices();
-		if (vertices.empty())
-			return rect;
-
-		const math::Vector2 uvScale = meshComponent->GetUVScale();
-		float minU = std::numeric_limits<float>::infinity();
-		float minV = std::numeric_limits<float>::infinity();
-		float maxU = -std::numeric_limits<float>::infinity();
-		float maxV = -std::numeric_limits<float>::infinity();
-
-		for (const auto& vertex : vertices)
+		const size_t count = vertices.size();
+		const size_t step = std::max<size_t>(1u, count / 8u);
+		uint64_t hash = 1469598103934665603ull;
+		for (size_t i = 0; i < count; i += step)
 		{
-			const float u = vertex._texcoord.x * uvScale.x;
-			const float v = vertex._texcoord.y * uvScale.y;
-			if (!std::isfinite(u) || !std::isfinite(v))
-				continue;
-			minU = std::min(minU, u);
-			minV = std::min(minV, v);
-			maxU = std::max(maxU, u);
-			maxV = std::max(maxV, v);
+			uint32_t bits[2] = {};
+			static_assert(sizeof(bits) <= sizeof(vertices[i]._texcoord), "texcoord smaller than sampled bits");
+			std::memcpy(bits, &vertices[i]._texcoord, sizeof(bits));
+			hash = (hash ^ bits[0]) * 1099511628211ull;
+			hash = (hash ^ bits[1]) * 1099511628211ull;
 		}
-
-		if (!std::isfinite(minU) || !std::isfinite(minV) || !std::isfinite(maxU) || !std::isfinite(maxV))
-			return rect;
-
-		const bool usesOutOfRangeUv = (minU < 0.0f) || (minV < 0.0f) || (maxU > 1.0f) || (maxV > 1.0f);
-		if (usesOutOfRangeUv)
-		{
-			// Wrapped/tiled UVs imply the whole texture can contribute.
-			return rect;
-		}
-
-		rect.uMin = std::clamp(minU, 0.0f, 1.0f);
-		rect.vMin = std::clamp(minV, 0.0f, 1.0f);
-		rect.uMax = std::clamp(maxU, 0.0f, 1.0f);
-		rect.vMax = std::clamp(maxV, 0.0f, 1.0f);
-		if (rect.uMax < rect.uMin)
-			std::swap(rect.uMax, rect.uMin);
-		if (rect.vMax < rect.vMin)
-			std::swap(rect.vMax, rect.vMin);
-
-		return rect;
+		return hash;
 	}
 
 	static uint16_t QuantizeUvToU16(float uv)
@@ -507,6 +473,7 @@ namespace HexEngine
 		_materialTriangleAlbedoCache.clear();
 		_materialTriangleEmissiveCache.clear();
 		_meshEmissiveCache.clear();
+		_meshUvRectCache.clear();
 		_giMeshProxies.clear();
 		_giMaterialProxies.clear();
 		_giLightProxies.clear();
@@ -675,6 +642,7 @@ namespace HexEngine
 		_materialAlbedoCache.clear();
 		_materialTriangleAlbedoCache.clear();
 		_materialTriangleEmissiveCache.clear();
+		_meshUvRectCache.clear();
 		_giMeshProxies.clear();
 		_giMaterialProxies.clear();
 		_giLightProxies.clear();
@@ -1308,12 +1276,103 @@ namespace HexEngine
 		return dirty;
 	}
 
+	math::Vector4 DiffuseGI::ResolveMeshUvRect(const StaticMeshComponent* meshComponent)
+	{
+		const math::Vector4 fullRect(0.0f, 0.0f, 1.0f, 1.0f);
+		if (meshComponent == nullptr)
+			return fullRect;
+
+		const auto mesh = meshComponent->GetMesh();
+		if (!mesh)
+			return fullRect;
+
+		const auto& vertices = mesh->GetVertices();
+		if (vertices.empty())
+			return fullRect;
+
+		// Memoised RAW bounds (pre-uvScale). This scan used to run for every
+		// call - every mesh, every voxelization update - and stack-sampled as
+		// the top remaining Debug frame cost after the 2026-07-30 audit.
+		const uint64_t sentinel = TexcoordSentinelHash(vertices);
+		MeshUvRectCacheEntry* entry = nullptr;
+		if (auto it = _meshUvRectCache.find(mesh.get()); it != _meshUvRectCache.end() &&
+			it->second.vertexData == static_cast<const void*>(vertices.data()) &&
+			it->second.vertexCount == vertices.size() &&
+			it->second.texcoordSentinelHash == sentinel)
+		{
+			entry = &it->second;
+		}
+		else
+		{
+			MeshUvRectCacheEntry fresh = {};
+			fresh.vertexData = vertices.data();
+			fresh.vertexCount = vertices.size();
+			fresh.texcoordSentinelHash = sentinel;
+
+			float minU = std::numeric_limits<float>::infinity();
+			float minV = std::numeric_limits<float>::infinity();
+			float maxU = -std::numeric_limits<float>::infinity();
+			float maxV = -std::numeric_limits<float>::infinity();
+			for (const auto& vertex : vertices)
+			{
+				const float u = vertex._texcoord.x;
+				const float v = vertex._texcoord.y;
+				if (!std::isfinite(u) || !std::isfinite(v))
+					continue;
+				minU = std::min(minU, u);
+				minV = std::min(minV, v);
+				maxU = std::max(maxU, u);
+				maxV = std::max(maxV, v);
+			}
+			fresh.valid = std::isfinite(minU) && std::isfinite(minV) &&
+				std::isfinite(maxU) && std::isfinite(maxV);
+			if (fresh.valid)
+			{
+				fresh.minU = minU;
+				fresh.minV = minV;
+				fresh.maxU = maxU;
+				fresh.maxV = maxV;
+			}
+			entry = &(_meshUvRectCache[mesh.get()] = fresh);
+		}
+
+		if (!entry->valid)
+			return fullRect;
+
+		// Apply the component's UV scale to the cached raw bounds. A negative
+		// scale flips the interval, hence the re-order before the range test.
+		const math::Vector2 uvScale = meshComponent->GetUVScale();
+		float u0 = entry->minU * uvScale.x;
+		float u1 = entry->maxU * uvScale.x;
+		float v0 = entry->minV * uvScale.y;
+		float v1 = entry->maxV * uvScale.y;
+		if (u1 < u0)
+			std::swap(u0, u1);
+		if (v1 < v0)
+			std::swap(v0, v1);
+		if (!std::isfinite(u0) || !std::isfinite(u1) || !std::isfinite(v0) || !std::isfinite(v1))
+			return fullRect;
+
+		if ((u0 < 0.0f) || (v0 < 0.0f) || (u1 > 1.0f) || (v1 > 1.0f))
+		{
+			// Wrapped/tiled UVs imply the whole texture can contribute.
+			return fullRect;
+		}
+
+		return math::Vector4(
+			std::clamp(u0, 0.0f, 1.0f),
+			std::clamp(v0, 0.0f, 1.0f),
+			std::clamp(u1, 0.0f, 1.0f),
+			std::clamp(v1, 0.0f, 1.0f));
+	}
+
 	math::Vector3 DiffuseGI::GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent)
 	{
 		if (material == nullptr)
 			return math::Vector3(1.0f, 1.0f, 1.0f);
 
-		const MaterialUvRect uvRect = ResolveMaterialUvRect(meshComponent);
+		const math::Vector4 uvRectV = ResolveMeshUvRect(meshComponent);
+		MaterialUvRect uvRect = { uvRectV.x, uvRectV.y, uvRectV.z, uvRectV.w };
 		MaterialAlbedoCacheKey cacheKey = {};
 		cacheKey.material = material;
 		cacheKey.uMin = QuantizeUvToU16(uvRect.uMin);
@@ -3434,7 +3493,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 			const uint64_t transformVersion = smc->GetEntity() ? smc->GetEntity()->GetTransformVersion() : 0ull;
 			const math::Vector2 uvScale = smc->GetUVScale();
-			const MaterialUvRect uvRect = ResolveMaterialUvRect(smc);
+			const math::Vector4 uvRectV = ResolveMeshUvRect(smc);
+			const MaterialUvRect uvRect = { uvRectV.x, uvRectV.y, uvRectV.z, uvRectV.w };
 			if (auto it = _meshEmissiveCache.find(smc); it != _meshEmissiveCache.end())
 			{
 				if (it->second.material == material &&
