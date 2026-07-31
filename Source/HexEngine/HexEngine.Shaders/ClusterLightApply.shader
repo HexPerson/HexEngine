@@ -69,8 +69,10 @@
 	Texture2D                 g_shadowAtlas : register(t24);
 	StructuredBuffer<matrix>  g_atlasTileVP : register(t25);
 
+	// Keep in sync with ShadowAtlas.hpp (8192 atlas, 2048 tiles, 4x4 grid).
 	static const float kAtlasTilesPerRow = 4.0f;
 	static const float kAtlasTileUvSize = 1.0f / kAtlasTilesPerRow;
+	static const float kAtlasTexel = 1.0f / 8192.0f;
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -216,7 +218,7 @@
 				// world size from the spot's cone: 2 tan(outer) d / tileSize.
 				const float cosOuterB = max(light.dirCone.w, 0.1f);
 				const float tanOuter = sqrt(saturate(1.0f - cosOuterB * cosOuterB)) / cosOuterB;
-				const float texelWorld = 2.0f * tanOuter * d / 1024.0f;
+				const float texelWorld = 2.0f * tanOuter * d / 2048.0f;
 				const float3 samplePos = pixelPosWS.xyz + normalWS * (texelWorld * 1.5f);
 
 				const float4 lightClip = mul(float4(samplePos, 1.0f), g_atlasTileVP[tileIndex]);
@@ -239,7 +241,7 @@
 						// neighbouring tile.
 						const float tileX = (float)(tileIndex % (int)kAtlasTilesPerRow);
 						const float tileY = (float)(tileIndex / (int)kAtlasTilesPerRow);
-						const float atlasTexel = 1.0f / 4096.0f;
+						const float atlasTexel = kAtlasTexel;
 						const float clampMargin = 1.5f * atlasTexel / kAtlasTileUvSize;
 						shadowUv = clamp(shadowUv, clampMargin, 1.0f - clampMargin);
 						const float2 atlasUv = (float2(tileX, tileY) + shadowUv) * kAtlasTileUvSize;

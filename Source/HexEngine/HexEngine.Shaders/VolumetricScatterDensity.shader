@@ -705,11 +705,12 @@
 						const float lightDepth = lc.z / lc.w;
 						if (saturate(suv.x) == suv.x && saturate(suv.y) == suv.y && lightDepth < 1.0f)
 						{
-							// Tile-local -> atlas UV (4x4 grid), clamped half
+							// Tile-local -> atlas UV (4x4 grid, 2048 tiles -
+							// keep in sync with ShadowAtlas.hpp), clamped half
 							// a texel inside the tile against bleed.
 							const float tileX = (float)(tile % 4);
 							const float tileY = (float)(tile / 4);
-							suv = clamp(suv, 0.5f / 1024.0f, 1.0f - 0.5f / 1024.0f);
+							suv = clamp(suv, 0.5f / 2048.0f, 1.0f - 0.5f / 2048.0f);
 							const float2 atlasUv = (float2(tileX, tileY) + suv) * 0.25f;
 							const float mapDepth = g_clShadowAtlas.SampleLevel(g_shadowPointSampler, atlasUv, 0).r;
 							shadowTerm = (lightDepth - 0.0005f) <= mapDepth ? 1.0f : 0.0f;

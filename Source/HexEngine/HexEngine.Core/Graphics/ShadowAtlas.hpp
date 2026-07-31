@@ -34,8 +34,14 @@ namespace HexEngine
 	class ShadowAtlas
 	{
 	public:
-		static constexpr int32_t kAtlasSize = 4096;
-		static constexpr int32_t kTileSize = 1024;
+		// 8192 with 2048 tiles (256 MB): the first 4096/1024 cut produced
+		// visibly stair-stepped edges on thin casters (lamp poles) even
+		// through PCF - filtering cannot manufacture resolution. Same 16-tile
+		// capacity, 4x the texels per light. Keep the shader-side constants
+		// in ClusterLightApply.shader and VolumetricScatterDensity.shader in
+		// sync with these.
+		static constexpr int32_t kAtlasSize = 8192;
+		static constexpr int32_t kTileSize = 2048;
 		static constexpr int32_t kTilesPerRow = kAtlasSize / kTileSize;
 		static constexpr int32_t kTileCount = kTilesPerRow * kTilesPerRow;
 
