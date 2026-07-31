@@ -90,6 +90,17 @@ namespace HexEngine
 		// don't dominate the mean. -10..+10 in natural-log space covers 4e-5 .. 22000 nits.
 		constexpr float kMinLogLuma = -10.0f;
 		constexpr float kLogLumaRange = 20.0f;
+	}
+
+	// Units slice part 4 (defined in SceneRenderer.cpp): rendered units =
+	// physical cd/m^2 / r_legacyLightScale, so the meter multiplies the
+	// metered luma back up before interpreting it as absolute EV100. Outside
+	// the anonymous namespace - an extern inside it would take internal
+	// linkage and never find SceneRenderer's definition.
+	extern HVar r_legacyLightScale;
+
+	namespace
+	{
 
 		struct AutoExposureConstants
 		{
@@ -314,24 +325,32 @@ namespace HexEngine
 				float target;
 				float minMul;
 				float maxMul;
+				float debugEv100 = 0.0f; // true (calibrated) EV100, EV mode only
 				if (r_exposureMode._val.i32 == 1)
 				{
-					// EV100 (Frostbite): meanLuma is scene luminance in cd/m^2
-					// once the lights are physical. EV100 = log2(L * 100/12.5);
-					// the saturation-based mapping puts middle grey where the
-					// meter says it belongs, exposure = 1/(1.2 * 2^EV). No
-					// day/night target juggling: moonlight simply meters low
-					// and the Min clamp decides how far the eye may adapt.
-					const float ev100 = std::log2(std::max(meanLuma, 1e-6f) * (100.0f / 12.5f));
-					const float evClamped = std::clamp(ev100,
-						r_autoExposureMinEV100._val.f32,
-						std::max(r_autoExposureMaxEV100._val.f32, r_autoExposureMinEV100._val.f32 + 1e-3f));
+					// EV100 (Frostbite): the metered luma is in RENDERED units,
+					// which sit a factor of r_legacyLightScale below absolute
+					// cd/m^2 (the static pre-exposure - see the cvar comment in
+					// SceneRenderer.cpp). Multiply back up so EV100 is true:
+					// the calibrated day street meters ~4500 cd/m^2 = EV100
+					// ~15.1 (sunny 16), night ~177 = EV100 ~10.5. The scale
+					// then rides the multiplier too (exposure is physical, the
+					// buffer it multiplies is rendered), so it cancels in the
+					// final image - its real effect is that the EV clamps and
+					// r_exposureCompensation now operate in honest stops.
+					const float unitScale = std::max(r_legacyLightScale._val.f32, 1.0f);
+					const float lumaCd = std::max(meanLuma * unitScale, 1e-6f);
+					const float ev100 = std::log2(lumaCd * (100.0f / 12.5f));
+					debugEv100 = ev100;
+					const float evMin = r_autoExposureMinEV100._val.f32;
+					const float evMax = std::max(r_autoExposureMaxEV100._val.f32, evMin + 1e-3f);
+					const float evClamped = std::clamp(ev100, evMin, evMax);
 					const float evFinal = evClamped - r_exposureCompensation._val.f32;
-					target = 1.0f / (1.2f * std::exp2(evFinal));
+					target = unitScale / (1.2f * std::exp2(evFinal));
 					// The smoothing clamp must span the whole reachable range
 					// in this mode - derive it from the EV clamps.
-					maxMul = 1.0f / (1.2f * std::exp2(r_autoExposureMinEV100._val.f32 - r_exposureCompensation._val.f32));
-					minMul = 1.0f / (1.2f * std::exp2(std::max(r_autoExposureMaxEV100._val.f32, r_autoExposureMinEV100._val.f32 + 1e-3f) - r_exposureCompensation._val.f32));
+					maxMul = unitScale / (1.2f * std::exp2(evMin - r_exposureCompensation._val.f32));
+					minMul = unitScale / (1.2f * std::exp2(evMax - r_exposureCompensation._val.f32));
 				}
 				else
 				{
@@ -361,8 +380,8 @@ namespace HexEngine
 					if (_debugAccum >= 1.0f)
 					{
 						_debugAccum = 0.0f;
-						LOG_INFO("AutoExposure: encoded=%u samples=%u meanLuma=%.4f target=%.3f smoothed=%.3f nightW=%.2f",
-							encoded, _lastDispatchSampleCount, meanLuma, target, _smoothedExposure, nightWeight);
+						LOG_INFO("AutoExposure: encoded=%u samples=%u meanLuma=%.4f ev100=%.2f target=%.3f smoothed=%.3f nightW=%.2f",
+							encoded, _lastDispatchSampleCount, meanLuma, debugEv100, target, _smoothedExposure, nightWeight);
 					}
 				}
 			}

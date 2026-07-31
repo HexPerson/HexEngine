@@ -423,6 +423,24 @@ namespace HexEngine
 	// LUX, emissive is NITS. Off = legacy arbitrary units. Flips together
 	// with r_exposureMode and the calibration factor in part 4.
 	HVar r_physicalLightUnits("r_physicalLightUnits", "Interpret light strengths as physical units (lumens/lux/nits)", false, false, true);
+	// Units slice part 4: the calibration bridge between legacy content and
+	// physical units, measured live 2026-07-31 (day street meanLuma 0.298 ->
+	// 4500 cd/m^2 sunny-street => factor ~15000). It declares BOTH:
+	//   - legacy _strength * scale = the value's meaning in physical units
+	//     (a lamp authored at 3 is ~45k lm - plausible street sodium), and
+	//   - preExposure = 1/scale: rendered units = physical cd/m^2 * preExposure,
+	//     which keeps FP16 buffers at today's proven magnitudes.
+	// Because both factors ride every light, they cancel in the packed
+	// strengths - so the conversion sites keep their part-3 form and the scale
+	// only surfaces where units must be ABSOLUTE: the EV100 meter (AutoExposure
+	// multiplies metered luma by scale) and g_exposureParams. Pre-exposure
+	// stays STATIC (not previous-frame exposure a la Frostbite) until sky/GI/
+	// probes are physical too - scaling only the analytic lights by a moving
+	// exposure would make sky brightness swim against surfaces during
+	// adaptation. End state: a one-time content migration bakes the factor
+	// into saved _strength values, this returns to 1, and inspector lumens
+	// become honest.
+	HVar r_legacyLightScale("r_legacyLightScale", "Calibration factor: legacy light strength -> physical units (and 1/x = pre-exposure)", 15000.0f, 1.0f, 200000.0f);
 	HVar r_shadowAtlasBudget("r_shadowAtlasBudget", "Max atlas shadow faces re-rendered per frame", (int32_t)4, (int32_t)0, (int32_t)16);
 	HVar r_shadowAtlasDebug("r_shadowAtlasDebug", "Draw the shadow atlas as an overlay", false, false, true);
 
@@ -2576,10 +2594,18 @@ namespace HexEngine
 				clusterForwardActive ? 1.0f : 0.0f,
 				(float)r_ssrMarchMode._val.i32);
 
-			// Physical units: pre-exposure stays 1.0 until the lumen/lux
-			// conversions + calibration land (part 4 of the slice) - the
-			// lane and its consumers are wired now so the flip is one value.
-			bufferData._exposureParams = math::Vector4(1.0f, 1.0f, 0.0f, 0.0f);
+			// Physical units part 4: the declared convention is
+			//   rendered units = physical cd/m^2 * g_preExposure
+			// with the static pre-exposure 1/r_legacyLightScale (see the cvar
+			// comment for why static, and why no shader multiplies by it yet -
+			// the scale and pre-exposure cancel inside every packed light, so
+			// rendered magnitudes are unchanged). Shaders that need ABSOLUTE
+			// luminance (future physical sky, lens effects) multiply by
+			// g_invPreExposure.
+			{
+				const float unitScale = std::max(r_legacyLightScale._val.f32, 1.0f);
+				bufferData._exposureParams = math::Vector4(1.0f / unitScale, unitScale, unitScale, 0.0f);
+			}
 
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,

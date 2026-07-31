@@ -178,6 +178,13 @@ namespace HexEngine
 	// Units slice part 3 (SceneRenderer.cpp declares it): lumens -> candela
 	// at gather time. The shading path's existing 1/d^2 attenuation makes
 	// candela the correct gathered quantity.
+	// Part 4 note: r_legacyLightScale (legacy strength -> lumens) and the
+	// static pre-exposure (1/scale, physical -> rendered units) BOTH apply
+	// here conceptually and cancel exactly, so the code below stays in its
+	// part-3 form. If either factor ever stops being the other's inverse
+	// (content migration, dynamic pre-exposure), both must appear explicitly
+	// in every packed strength - here, SetupForwardLights, and the per-light
+	// passes.
 	extern HVar r_physicalLightUnits;
 
 	void ClusteredLighting::UpdateAndCull(Scene* scene, Camera* camera, const std::vector<Light*>& shadowCasters,
