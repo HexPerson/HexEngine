@@ -155,48 +155,12 @@
 			}
 
 			// Shadowed lights: spots with an atlas tile (params.w >= 0) shade
-			// HERE with an atlas shadow term; everything else shadowed stays
-			// on the per-light path exactly as before.
-			float shadowTerm = 1.0f;
-			if (light.params.z > 0.5f)
-			{
-				const int tileIndex = (int)light.params.w;
-				if (tileIndex < 0 || light.params.y < 0.5f)
-					continue; // per-light path's job
-
-				// Project into the tile's light space (captured matrices).
-				const float4 lightClip = mul(float4(pixelPosWS.xyz, 1.0f), g_atlasTileVP[tileIndex]);
-				if (lightClip.w <= 0.0f)
-					continue;
-				float2 shadowUv = float2(
-					lightClip.x / lightClip.w * 0.5f + 0.5f,
-					-lightClip.y / lightClip.w * 0.5f + 0.5f);
-				const float lightDepth = lightClip.z / lightClip.w;
-
-				if (saturate(shadowUv.x) != shadowUv.x || saturate(shadowUv.y) != shadowUv.y ||
-					lightDepth >= 1.0f)
-				{
-					shadowTerm = 1.0f; // outside the map = unshadowed
-				}
-				else
-				{
-					// Tile-local UV, clamped half a texel inside the tile so
-					// bilinear comparison taps never bleed into a neighbour.
-					const float tileX = (float)(tileIndex % (int)kAtlasTilesPerRow);
-					const float tileY = (float)(tileIndex / (int)kAtlasTilesPerRow);
-					const float halfTexel = 0.5f / 4096.0f;
-					shadowUv = clamp(shadowUv, halfTexel / kAtlasTileUvSize, 1.0f - halfTexel / kAtlasTileUvSize);
-					const float2 atlasUv = (float2(tileX, tileY) + shadowUv) * kAtlasTileUvSize;
-
-					// Same bias the per-light spot path settled on (0.0005 -
-					// see the spotShadowBias note in SceneRenderer).
-					shadowTerm = g_shadowAtlas.SampleCmpLevelZero(
-						g_cmpSampler, atlasUv, lightDepth - 0.0005f);
-				}
-
-				if (shadowTerm <= 0.001f)
-					continue;
-			}
+			// HERE with an atlas shadow term (computed below, once the light
+			// vector exists for slope-scaling); everything else shadowed
+			// stays on the per-light path exactly as before.
+			const bool atlasShadowed = light.params.z > 0.5f;
+			if (atlasShadowed && ((int)light.params.w < 0 || light.params.y < 0.5f))
+				continue; // per-light path's job
 
 			// PIXEL -> LIGHT. The old shaders name this exact vector
 			// "lightToPixelVec" while constructing lightPos - pixelPos; the name
@@ -230,6 +194,49 @@
 
 			if (attenuation <= 0.0f)
 				continue;
+
+			// Atlas shadow term, now that pixelToLight exists. Slope-scaled
+			// bias, NOT the flat 0.0005 this path first shipped with: clip
+			// depth is non-linear, so a constant that silences acne costs
+			// ~25 cm of world offset at typical lamp-to-floor distances and
+			// detaches every contact shadow (user-reported peter-panning at
+			// the lamp base). A tiny constant holds where the surface faces
+			// the light; the tan-shaped term only grows at grazing angles.
+			float shadowTerm = 1.0f;
+			if (atlasShadowed)
+			{
+				const int tileIndex = (int)light.params.w;
+				const float4 lightClip = mul(float4(pixelPosWS.xyz, 1.0f), g_atlasTileVP[tileIndex]);
+				if (lightClip.w > 0.0f)
+				{
+					float2 shadowUv = float2(
+						lightClip.x / lightClip.w * 0.5f + 0.5f,
+						-lightClip.y / lightClip.w * 0.5f + 0.5f);
+					const float lightDepth = lightClip.z / lightClip.w;
+
+					if (saturate(shadowUv.x) == shadowUv.x && saturate(shadowUv.y) == shadowUv.y &&
+						lightDepth < 1.0f)
+					{
+						const float ndl = saturate(dot(normalWS, pixelToLight));
+						const float slope = sqrt(saturate(1.0f - ndl * ndl)) / max(ndl, 0.1f);
+						const float bias = 0.00005f + 0.0002f * slope;
+
+						// Tile-local UV, clamped half a texel inside the tile
+						// so bilinear comparison taps never bleed.
+						const float tileX = (float)(tileIndex % (int)kAtlasTilesPerRow);
+						const float tileY = (float)(tileIndex / (int)kAtlasTilesPerRow);
+						const float halfTexel = 0.5f / 4096.0f;
+						shadowUv = clamp(shadowUv, halfTexel / kAtlasTileUvSize, 1.0f - halfTexel / kAtlasTileUvSize);
+						const float2 atlasUv = (float2(tileX, tileY) + shadowUv) * kAtlasTileUvSize;
+
+						shadowTerm = g_shadowAtlas.SampleCmpLevelZero(
+							g_cmpSampler, atlasUv, lightDepth - bias);
+					}
+				}
+
+				if (shadowTerm <= 0.001f)
+					continue;
+			}
 
 			const float4 pbr = CalculatePBRPointLighting(
 				GBUFFER_SPECULAR,
