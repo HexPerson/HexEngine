@@ -739,21 +739,24 @@ namespace HexEngine
 				UINT init = 0;
 				context->CSSetUnorderedAccessViews(0, 1, &_scatterUav, &init);
 				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(stage->GetNativePtr()), nullptr, 0);
-				// Cluster list SRVs at t12..t14 for the scatter CS. Bound only
-				// while active; nulled right after the dispatch so nothing
-				// downstream inherits them.
+				// Cluster list SRVs at t12..t14 for the scatter CS, plus the
+				// shadow atlas + per-tile matrices at t15/t16 (slice 7 - null
+				// when the atlas is off; the shader's params.w gate never
+				// samples them then). Bound only while active; nulled right
+				// after the dispatch so nothing downstream inherits them.
 				if (clusteredFog)
 				{
-					ID3D11ShaderResourceView* clSrvs[3] = { _clLightsSrv, _clCountsSrv, _clListsSrv };
-					context->CSSetShaderResources(12, 3, clSrvs);
+					ID3D11ShaderResourceView* clSrvs[5] = { _clLightsSrv, _clCountsSrv, _clListsSrv,
+						_clAtlasSrv, _clAtlasTileVpSrv };
+					context->CSSetShaderResources(12, 5, clSrvs);
 				}
 
 				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
 
 				if (clusteredFog)
 				{
-					ID3D11ShaderResourceView* clNulls[3] = { nullptr, nullptr, nullptr };
-					context->CSSetShaderResources(12, 3, clNulls);
+					ID3D11ShaderResourceView* clNulls[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+					context->CSSetShaderResources(12, 5, clNulls);
 				}
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);

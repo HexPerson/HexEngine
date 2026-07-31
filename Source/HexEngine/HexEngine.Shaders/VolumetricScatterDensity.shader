@@ -80,6 +80,12 @@
 	StructuredBuffer<ClGpuLight> g_clLights : register(t12);
 	StructuredBuffer<uint>       g_clCounts : register(t13);
 	StructuredBuffer<uint>       g_clLists  : register(t14);
+	// Slice 7: shadow atlas + captured per-tile view-proj matrices, so
+	// atlas-tiled spots can shadow their fog here (they no longer pass
+	// through the legacy shadow-slotted forward path). Manual step-compare -
+	// this CS has no comparison sampler and fog needs no PCF.
+	Texture2D                g_clShadowAtlas : register(t15);
+	StructuredBuffer<matrix> g_clAtlasTileVP : register(t16);
 	SamplerState g_shadowPointSampler : register(s2);
 	// Linear-clamp sampler for the transmittance LUT - the LUT is a
 	// continuous function so point sampling shows banding.
@@ -679,9 +685,38 @@
 			[loop] for (uint ci = 0u; ci < cCount; ++ci)
 			{
 				const ClGpuLight cl = g_clLights[g_clLists[clusterIdx * 64u + ci]];
+				float shadowTerm = 1.0f;
 				if (cl.params.z > 0.5f)
-					continue; // shadowed: forward path's job
-				localScatter += EvalClusteredLightScatter(cl, worldPos, rayDir, phaseG);
+				{
+					// Slice 7: an atlas-tiled spot shadows its fog HERE (it
+					// no longer flows through the legacy shadow-slotted
+					// forward path). Everything else shadowed still belongs
+					// to the forward path.
+					const int tile = (int)cl.params.w;
+					if (tile < 0 || cl.params.y < 0.5f)
+						continue;
+
+					const float4 lc = mul(float4(worldPos, 1.0f), g_clAtlasTileVP[tile]);
+					if (lc.w > 0.0f)
+					{
+						float2 suv = float2(
+							lc.x / lc.w * 0.5f + 0.5f,
+							-lc.y / lc.w * 0.5f + 0.5f);
+						const float lightDepth = lc.z / lc.w;
+						if (saturate(suv.x) == suv.x && saturate(suv.y) == suv.y && lightDepth < 1.0f)
+						{
+							// Tile-local -> atlas UV (4x4 grid), clamped half
+							// a texel inside the tile against bleed.
+							const float tileX = (float)(tile % 4);
+							const float tileY = (float)(tile / 4);
+							suv = clamp(suv, 0.5f / 1024.0f, 1.0f - 0.5f / 1024.0f);
+							const float2 atlasUv = (float2(tileX, tileY) + suv) * 0.25f;
+							const float mapDepth = g_clShadowAtlas.SampleLevel(g_shadowPointSampler, atlasUv, 0).r;
+							shadowTerm = (lightDepth - 0.0005f) <= mapDepth ? 1.0f : 0.0f;
+						}
+					}
+				}
+				localScatter += EvalClusteredLightScatter(cl, worldPos, rayDir, phaseG) * shadowTerm;
 			}
 		}
 

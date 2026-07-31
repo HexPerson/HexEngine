@@ -122,13 +122,20 @@ namespace HexEngine
 		// Phase 2 slice 3: hand over the cluster list SRVs for the scatter
 		// CS (raw pointers - this class is already raw D3D11 by convention).
 		// Passing nulls or active=false restores the pure forward-array path.
+		// Slice 7: the shadow atlas + per-tile matrices ride along so the
+		// froxel CS can shadow atlas-tiled spots in the cluster loop (they no
+		// longer pass through the legacy shadow-slotted forward path). Null
+		// when the atlas is off - the shader's params.w gate never samples.
 		void SetClusteredLights(struct ID3D11ShaderResourceView* lightsSrv,
 		                        struct ID3D11ShaderResourceView* countsSrv,
 		                        struct ID3D11ShaderResourceView* listsSrv,
-		                        bool active)
+		                        bool active,
+		                        struct ID3D11ShaderResourceView* shadowAtlasSrv = nullptr,
+		                        struct ID3D11ShaderResourceView* atlasTileVpSrv = nullptr)
 		{
 			_clLightsSrv = lightsSrv; _clCountsSrv = countsSrv;
 			_clListsSrv = listsSrv; _clActive = active;
+			_clAtlasSrv = shadowAtlasSrv; _clAtlasTileVpSrv = atlasTileVpSrv;
 		}
 
 		void Update(const math::Vector3& sunDirection,
@@ -213,6 +220,8 @@ namespace HexEngine
 		struct ID3D11ShaderResourceView* _clLightsSrv = nullptr;
 		struct ID3D11ShaderResourceView* _clCountsSrv = nullptr;
 		struct ID3D11ShaderResourceView* _clListsSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clAtlasSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clAtlasTileVpSrv = nullptr;
 		bool _clActive = false;
 		// Ping-pong integration volumes for temporal accumulation. Each
 		// frame the integrate compute reads the PREVIOUS frame from

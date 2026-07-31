@@ -2073,7 +2073,9 @@ namespace HexEngine
 				_clusteredLights.GetLightsSrv(),
 				_clusteredLights.GetCountsSrv(),
 				_clusteredLights.GetListsSrv(),
-				r_clusterFog._val.b && r_clusterLights._val.b);
+				r_clusterFog._val.b && r_clusterLights._val.b,
+				r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
+				r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr);
 			g_pEnv->_volumetricScattering->Update(
 				vsSunDir, sunColV, vsSunIntensity, phaseG, strength,
 				baseExt, heightDensity, heightPivot, heightFalloff,
