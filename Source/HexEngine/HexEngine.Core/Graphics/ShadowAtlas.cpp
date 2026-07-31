@@ -102,7 +102,7 @@ namespace HexEngine
 		return -1;
 	}
 
-	uint64_t ShadowAtlas::ComputeFaceContentHash(const Light* light, uint8_t face) const
+	uint64_t ShadowAtlas::ComputeFaceContentHash(const Light* light, uint8_t face, uint64_t sceneGeometryRevision) const
 	{
 		// v1 invalidation: the light's own state. A light that has not moved or
 		// changed keeps its cached tile. Deliberately NOT yet covered: dynamic
@@ -127,13 +127,21 @@ namespace HexEngine
 		const float radius = const_cast<Light*>(light)->GetRadius();
 		mix((uint64_t)*reinterpret_cast<const uint32_t*>(&radius));
 		mix(face);
+		// Scene geometry epoch (user-found gap: an object placed into a
+		// lamp's frustum cast nothing - the cached tile never knew). Any
+		// mesh/transform mutation bumps the GI geometry revision, which
+		// dirties every cached face; the render budget then rolls the
+		// refresh over a few frames in priority order. Coarse by design -
+		// per-light-volume intersection dirtying is the recorded follow-up.
+		mix(sceneGeometryRevision);
 		return h;
 	}
 
 	const std::vector<ShadowAtlas::FaceAssignment>& ShadowAtlas::AssignTiles(
 		const std::vector<Light*>& casters,
 		const Camera* camera,
-		int32_t renderBudget)
+		int32_t renderBudget,
+		uint64_t sceneGeometryRevision)
 	{
 		++_frame;
 		_assignments.clear();
@@ -216,7 +224,7 @@ namespace HexEngine
 		for (auto& a : _assignments)
 		{
 			Tile& tile = _tiles[a.tileIndex];
-			const uint64_t hash = ComputeFaceContentHash(a.key.light, a.key.face);
+			const uint64_t hash = ComputeFaceContentHash(a.key.light, a.key.face, sceneGeometryRevision);
 			if (tile.contentHash != hash && budget > 0)
 			{
 				a.needsRender = true;

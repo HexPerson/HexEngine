@@ -1638,7 +1638,8 @@ namespace HexEngine
 			if (!localCasters.empty())
 			{
 				const auto& assignments = _shadowAtlas.AssignTiles(
-					localCasters, _currentCamera, r_shadowAtlasBudget._val.i32);
+					localCasters, _currentCamera, r_shadowAtlasBudget._val.i32,
+					_currentScene->GetGiGeometryRevision());
 				for (const auto& a : assignments)
 				{
 					if (a.needsRender)

@@ -102,7 +102,8 @@ namespace HexEngine
 		const std::vector<FaceAssignment>& AssignTiles(
 			const std::vector<Light*>& casters,
 			const Camera* camera,
-			int32_t renderBudget);
+			int32_t renderBudget,
+			uint64_t sceneGeometryRevision);
 
 		/** Viewport (x, y, w, h) of a tile in atlas texels. */
 		void GetTileViewport(int32_t tileIndex, int32_t& x, int32_t& y, int32_t& w, int32_t& h) const;
@@ -125,7 +126,7 @@ namespace HexEngine
 		uint64_t GetFrameIndex() const { return _frame; }
 
 	private:
-		uint64_t ComputeFaceContentHash(const Light* light, uint8_t face) const;
+		uint64_t ComputeFaceContentHash(const Light* light, uint8_t face, uint64_t sceneGeometryRevision) const;
 
 		ID3D11Texture2D* _atlas = nullptr;
 		ID3D11ShaderResourceView* _atlasSrv = nullptr;
