@@ -57,6 +57,34 @@ namespace HexEngine
 			"Maximum exposure multiplier the auto exposure can reach at night (caps brightening of dark scenes)",
 			1.20f, 0.1f, 8.0f);
 
+		// Physical light units (Phase 2 final slice, Frostbite convention).
+		// Mode 0 = the legacy target-luma multiplier steering above. Mode 1 =
+		// EV100: the metered geometric-mean luminance is interpreted as
+		// cd/m^2, converted to EV100, and exposure comes from the standard
+		// saturation-based mapping exposure = 1 / (1.2 * 2^(EV100 - EC)).
+		// Default LEGACY until the lumen/lux light conversions land - EV100
+		// against non-physical lighting values would just be a different
+		// arbitrary curve. The whole system flips together with the
+		// calibration factor so the scene looks unchanged that day.
+		HVar r_exposureMode(
+			"r_exposureMode",
+			"Exposure steering: 0 = legacy target-luma multiplier, 1 = physical EV100",
+			(int32_t)0, (int32_t)0, (int32_t)1);
+		HVar r_exposureCompensation(
+			"r_exposureCompensation",
+			"Exposure compensation in EV stops (positive = brighter), EV100 mode only",
+			0.0f, -8.0f, 8.0f);
+		// EV clamps replace the multiplier clamps in EV100 mode. Sunny-16
+		// daylight sits near EV100 15; interiors ~5-8; moonlight ~ -2.
+		HVar r_autoExposureMinEV100(
+			"r_autoExposureMinEV100",
+			"Lowest EV100 the meter may adapt to (darkest scene it will brighten for)",
+			-4.0f, -10.0f, 20.0f);
+		HVar r_autoExposureMaxEV100(
+			"r_autoExposureMaxEV100",
+			"Highest EV100 the meter may adapt to (brightest scene it will darken for)",
+			17.0f, -10.0f, 30.0f);
+
 		// Log-luma window we accept in the histogram. Pixels with luminance below exp(min) or
 		// above exp(min+range) get clamped to the endpoints, so very dark/bright outliers
 		// don't dominate the mean. -10..+10 in natural-log space covers 4e-5 .. 22000 nits.
@@ -282,14 +310,40 @@ namespace HexEngine
 				// multiplier is preserved so the meter can still pull down on a bright moon
 				// disc or window light pocket.
 				const float nightWeight = std::clamp((0.06f - sunElevation) / 0.20f, 0.0f, 1.0f);
-				const float targetLumaDay   = r_autoExposureTargetLuma._val.f32;
-				const float targetLumaNight = r_autoExposureNightTargetLuma._val.f32;
-				const float targetLuma = targetLumaDay + (targetLumaNight - targetLumaDay) * nightWeight;
-				const float minMul = r_autoExposureMin._val.f32;
-				const float maxMulDay   = std::max(r_autoExposureMax._val.f32, minMul + 1e-3f);
-				const float maxMulNight = std::max(r_autoExposureNightMax._val.f32, minMul + 1e-3f);
-				const float maxMul = maxMulDay + (maxMulNight - maxMulDay) * nightWeight;
-				float target = targetLuma / std::max(meanLuma, 1e-6f);
+
+				float target;
+				float minMul;
+				float maxMul;
+				if (r_exposureMode._val.i32 == 1)
+				{
+					// EV100 (Frostbite): meanLuma is scene luminance in cd/m^2
+					// once the lights are physical. EV100 = log2(L * 100/12.5);
+					// the saturation-based mapping puts middle grey where the
+					// meter says it belongs, exposure = 1/(1.2 * 2^EV). No
+					// day/night target juggling: moonlight simply meters low
+					// and the Min clamp decides how far the eye may adapt.
+					const float ev100 = std::log2(std::max(meanLuma, 1e-6f) * (100.0f / 12.5f));
+					const float evClamped = std::clamp(ev100,
+						r_autoExposureMinEV100._val.f32,
+						std::max(r_autoExposureMaxEV100._val.f32, r_autoExposureMinEV100._val.f32 + 1e-3f));
+					const float evFinal = evClamped - r_exposureCompensation._val.f32;
+					target = 1.0f / (1.2f * std::exp2(evFinal));
+					// The smoothing clamp must span the whole reachable range
+					// in this mode - derive it from the EV clamps.
+					maxMul = 1.0f / (1.2f * std::exp2(r_autoExposureMinEV100._val.f32 - r_exposureCompensation._val.f32));
+					minMul = 1.0f / (1.2f * std::exp2(std::max(r_autoExposureMaxEV100._val.f32, r_autoExposureMinEV100._val.f32 + 1e-3f) - r_exposureCompensation._val.f32));
+				}
+				else
+				{
+					const float targetLumaDay   = r_autoExposureTargetLuma._val.f32;
+					const float targetLumaNight = r_autoExposureNightTargetLuma._val.f32;
+					const float targetLuma = targetLumaDay + (targetLumaNight - targetLumaDay) * nightWeight;
+					minMul = r_autoExposureMin._val.f32;
+					const float maxMulDay   = std::max(r_autoExposureMax._val.f32, minMul + 1e-3f);
+					const float maxMulNight = std::max(r_autoExposureNightMax._val.f32, minMul + 1e-3f);
+					maxMul = maxMulDay + (maxMulNight - maxMulDay) * nightWeight;
+					target = targetLuma / std::max(meanLuma, 1e-6f);
+				}
 				target = std::clamp(target, minMul, maxMul);
 
 				// Exponential approach: alpha = 1 - exp(-speed * dt). This is frame-rate
