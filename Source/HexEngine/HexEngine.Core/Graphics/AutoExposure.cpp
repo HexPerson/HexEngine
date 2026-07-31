@@ -74,6 +74,28 @@ namespace HexEngine
 			"r_exposureCompensation",
 			"Exposure compensation in EV stops (positive = brighter), EV100 mode only",
 			0.0f, -8.0f, 8.0f);
+		// EV -> auto-compensation curve (Frostbite's artist EC curve, reduced
+		// to a linear ramp). Root cause it exists for: the meter is a
+		// LOG-average, and a night street is bimodal - the black sky drags
+		// the log-mean far below the lit street, so exposing the mean to
+		// middle grey blows the lit half to white (user-verified 2026-07-31,
+		// ev100 10.88 night blowout while day 15.1 looked right). Below the
+		// break EV each metered stop is partially compensated back down, so
+		// dim scenes render dim - which is also what makes night READ as
+		// night. Slope 0 restores the plain saturation mapping; slope 1
+		// freezes brightness below the break entirely.
+		HVar r_autoExposureEvCompBreak(
+			"r_autoExposureEvCompBreak",
+			"EV100 below which the auto EC curve starts darkening (day street ~15, night street ~11)",
+			13.0f, -10.0f, 30.0f);
+		HVar r_autoExposureEvCompSlope(
+			"r_autoExposureEvCompSlope",
+			"EV of darkening applied per metered EV below the break (0 = off, 1 = brightness frozen below break)",
+			0.75f, 0.0f, 1.0f);
+		HVar r_autoExposureEvCompMax(
+			"r_autoExposureEvCompMax",
+			"Cap on the auto EC curve's total darkening, in EV",
+			3.0f, 0.0f, 8.0f);
 		// EV clamps replace the multiplier clamps in EV100 mode. Sunny-16
 		// daylight sits near EV100 15; interiors ~5-8; moonlight ~ -2.
 		HVar r_autoExposureMinEV100(
@@ -325,7 +347,8 @@ namespace HexEngine
 				float target;
 				float minMul;
 				float maxMul;
-				float debugEv100 = 0.0f; // true (calibrated) EV100, EV mode only
+				float debugEv100 = 0.0f;    // true (calibrated) EV100, EV mode only
+				float debugAutoComp = 0.0f; // auto EC curve contribution, EV mode only
 				if (r_exposureMode._val.i32 == 1)
 				{
 					// EV100 (Frostbite): the metered luma is in RENDERED units,
@@ -345,7 +368,13 @@ namespace HexEngine
 					const float evMin = r_autoExposureMinEV100._val.f32;
 					const float evMax = std::max(r_autoExposureMaxEV100._val.f32, evMin + 1e-3f);
 					const float evClamped = std::clamp(ev100, evMin, evMax);
-					const float evFinal = evClamped - r_exposureCompensation._val.f32;
+					// Auto EC curve (see the cvar comments): negative below the
+					// break, on top of the user's manual compensation.
+					const float evDeficit = std::max(r_autoExposureEvCompBreak._val.f32 - evClamped, 0.0f);
+					const float autoComp = -std::min(evDeficit * r_autoExposureEvCompSlope._val.f32,
+						r_autoExposureEvCompMax._val.f32);
+					const float evFinal = evClamped - (r_exposureCompensation._val.f32 + autoComp);
+					debugAutoComp = autoComp;
 					target = unitScale / (1.2f * std::exp2(evFinal));
 					// The smoothing clamp must span the whole reachable range
 					// in this mode - derive it from the EV clamps.
@@ -380,8 +409,8 @@ namespace HexEngine
 					if (_debugAccum >= 1.0f)
 					{
 						_debugAccum = 0.0f;
-						LOG_INFO("AutoExposure: encoded=%u samples=%u meanLuma=%.4f ev100=%.2f target=%.3f smoothed=%.3f nightW=%.2f",
-							encoded, _lastDispatchSampleCount, meanLuma, debugEv100, target, _smoothedExposure, nightWeight);
+						LOG_INFO("AutoExposure: encoded=%u samples=%u meanLuma=%.4f ev100=%.2f autoEC=%.2f target=%.3f smoothed=%.3f nightW=%.2f",
+							encoded, _lastDispatchSampleCount, meanLuma, debugEv100, debugAutoComp, target, _smoothedExposure, nightWeight);
 					}
 				}
 			}
