@@ -102,15 +102,14 @@
 
 		// The LAST slice owns everything beyond the 128 m grid: pixel depths
 		// clamp into it (DepthToSlice), so lights must too, or a lamp whose
-		// sphere doesn't reach 128 m of the camera silently vanishes - seen
-		// as lights popping with camera distance and a pitch/yaw depth
-		// cut-off. The cone refinement's bounding sphere stays FINITE (from
-		// zFar) - and the refinement is skipped for far-slice entries, since
-		// a distant spot fails its apex-distance test against near geometry
-		// while legitimately lighting distant pixels binned into this slice.
+		// sphere doesn't reach 128 m of the camera silently vanishes (lights
+		// popped with camera distance and pitch/yaw). Beyond-far lights are
+		// handled by PROJECTING them onto the zFar plane along the eye ray
+		// (position and radius scale by zFar/z) - cluster columns are radial
+		// wedges that widen with depth, so testing a distant light against
+		// the finite 128 m box directly clips its coverage at column
+		// boundaries (user-seen as half a light pool missing at an angle).
 		const bool farSlice = (cz == kClustersZ - 1u);
-		if (farSlice)
-			aabbMax.z = 1e30f;
 
 		uint count = 0;
 		const uint lightCount = (uint)g_clusterScreenParams.z;
@@ -125,17 +124,35 @@
 			float4 viewPos = mul(float4(light.posRadius.xyz, 1.0f), g_clusterView);
 			viewPos.z = -viewPos.z;
 
+			// Beyond-far lights: perspective-project the sphere onto the
+			// zFar plane for the far slice; earlier slices reject them via
+			// the plain test below (projected z sits at zFar).
+			float3 testPos = viewPos.xyz;
+			float testRadius = light.posRadius.w;
+			bool projectedFar = false;
+			if (farSlice && viewPos.z > kFarDepthM)
+			{
+				const float s = kFarDepthM / viewPos.z;
+				testPos.xy *= s;
+				testPos.z = kFarDepthM;
+				testRadius *= s;
+				projectedFar = true;
+			}
+
 			// Sphere vs AABB: distance from centre to closest AABB point.
-			const float3 closest = clamp(viewPos.xyz, aabbMin, aabbMax);
-			const float3 d = viewPos.xyz - closest;
-			if (dot(d, d) > light.posRadius.w * light.posRadius.w)
+			const float3 closest = clamp(testPos, aabbMin, aabbMax);
+			const float3 d = testPos - closest;
+			if (dot(d, d) > testRadius * testRadius)
 				continue;
 
 			// Spot refinement: cone vs the cluster AABB's bounding sphere
 			// (Lengyel's test). The bounding sphere over-covers the AABB, so
 			// this can only keep extra clusters, never drop a lit one.
-			// Skipped for the unbounded far slice (see above).
-			if (!farSlice && light.params.y > 0.5f)
+			// Skipped for projected beyond-far entries - the test would run
+			// against the light's TRUE geometry while acceptance used the
+			// projected sphere, and the apply's own cone falloff keeps
+			// correctness there.
+			if (!projectedFar && light.params.y > 0.5f)
 			{
 				// Direction into the same flipped view space as the position:
 				// rotate (w=0), then mirror z. Both flipped together keeps the
