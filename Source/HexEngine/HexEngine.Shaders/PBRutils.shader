@@ -636,18 +636,46 @@
 	// Returns: float4(modifiedAlbedo, modifiedRoughness) - drop into the
 	// existing gbuffer write.
 	// =====================================================================
+	// Shelter/rain occlusion top-down depth map (see the doc block further
+	// down at SampleRainShelter). Declared here because the snow function
+	// below also reads it - neighbourhood depth deltas reveal walls for
+	// drift banks.
+	Texture2D<float> g_rainOcclusionMap : register(t26);
+
+	// Snow micro-relief height at a world XZ position, in metres. Two
+	// octaves: 45 cm drift undulation + 13 cm surface clumping. Shared by
+	// the value and the finite-difference gradient below.
+	float SnowHeightField(float2 xz)
+	{
+		const float h1 = ValueNoise3(float3(xz.x, 0.0f, xz.y) / 0.45f);
+		const float h2 = ValueNoise3(float3(xz.x, 3.7f, xz.y) / 0.13f);
+		return h1 * 0.7f + h2 * 0.3f;
+	}
+
 	// snowMelt (slice 4): erodes the mask and turns powder into slush.
 	// Melting snow retreats from the noise-thin areas first (the same
 	// bias direction low coverage uses), and what remains reads wet -
 	// roughness drops toward slush instead of powder's 0.85. The melt ->
 	// ground-wetness coupling happens at the call sites, not here.
+	//
+	// Slice 5 (volumetric-look snow): the flat texture-overlay read is
+	// gone - snow now carries a HEIGHT FIELD. Its finite-difference
+	// gradient perturbs the surface normal (micro-relief drifts and
+	// clumps), tall geometry nearby raises it into DRIFT BANKS (the
+	// shelter map at t26 is a top-down depth map, so neighbouring texels
+	// that are much nearer the sky than this surface mean "a wall stands
+	// half a metre away" - snow piles against building bases for free),
+	// and melt scales the height toward zero so slush flattens
+	// GEOMETRICALLY before the threshold retreat removes it. worldNormal
+	// is inout for the relief; samp samples the shelter map.
 	float4 ApplySnowAccumulation(
 		float3 baseAlbedo,
 		float baseRoughness,
-		float3 worldNormalWS,
+		inout float3 worldNormalWS,
 		float3 worldPos,
 		float snowCoverage,
-		float snowMelt)
+		float snowMelt,
+		SamplerState samp)
 	{
 		if (snowCoverage <= 0.001f)
 			return float4(baseAlbedo, baseRoughness);
@@ -681,12 +709,65 @@
 		// catch snow, giving the "dusting -> blanket" progression. The flat
 		// melt scale on top thins what survives the threshold; full melt
 		// leaves ~30% of the drift cores as wet slush remnants.
-		const float snowMask = saturate(slopeMask * (0.2f + patchNoise * 1.4f) * snowCoverage)
+		float snowMask = saturate(slopeMask * (0.2f + patchNoise * 1.4f) * snowCoverage)
 			* (1.0f - melt * 0.7f);
+
+		// Drift banks: sample the top-down depth map ~55 cm to each side.
+		// A neighbour whose recorded depth is >=1.5 m nearer the sky than
+		// this surface is a wall/prop face - snow drifts pile against it.
+		// Melt kills drifts fastest (banks are where slush pools).
+		float driftBank = 0.0f;
+		if (g_rainOcclusionParams.x > 0.5f)
+		{
+			const float4 clip = mul(float4(worldPos, 1.0f), g_rainOcclusionVP);
+			const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+			if (all(uv >= 0.0f) && all(uv <= 1.0f) && clip.z > 0.0f && clip.z < 1.0f)
+			{
+				// 0.55 m in UV: footprint is 2*extent metres across.
+				const float2 stepUv = g_rainOcclusionParams.z * 6.0f;
+				const float kWallDelta = 1.5f / 160.0f; // metres over depth range
+				[unroll]
+				for (int i = 0; i < 4; ++i)
+				{
+					const float2 o = float2((i & 1) ? stepUv.x : -stepUv.x,
+					                        (i & 2) ? stepUv.y : -stepUv.y);
+					const float neighbourDepth = g_rainOcclusionMap.SampleLevel(samp, uv + o, 0);
+					driftBank += (clip.z - neighbourDepth > kWallDelta) ? 0.25f : 0.0f;
+				}
+				driftBank *= (1.0f - melt);
+			}
+		}
+		snowMask = saturate(snowMask + driftBank * 0.5f * slopeMask * snowCoverage);
+
+		// Micro-relief: finite-difference gradient of the height field bends
+		// the normal so drifts and clumps actually SHADE - the difference
+		// between a white decal and a snow surface. Height amplitude scales
+		// with the mask (thin dustings are flat) and collapses with melt
+		// (slush flattens geometrically before it retreats). Drift banks
+		// steepen the relief where they pile.
+		if (snowMask > 0.02f)
+		{
+			const float kSampleDist = 0.09f; // metres between height taps
+			const float hC = SnowHeightField(worldPos.xz);
+			const float hX = SnowHeightField(worldPos.xz + float2(kSampleDist, 0.0f));
+			const float hZ = SnowHeightField(worldPos.xz + float2(0.0f, kSampleDist));
+			const float amplitude = 0.05f * snowMask * (1.0f - melt) * (1.0f + driftBank * 1.5f);
+			const float3 reliefNormal = normalize(float3(
+				-(hX - hC) / kSampleDist * amplitude,
+				1.0f,
+				-(hZ - hC) / kSampleDist * amplitude));
+			// Blend in world space: snow relief overrides the underlying
+			// surface detail as the blanket thickens.
+			worldNormalWS = normalize(lerp(worldNormalWS, reliefNormal, snowMask * 0.85f));
+		}
 
 		// Snow colour: very slightly blue-tinted white (real snow scatters short
 		// wavelengths more, plus diffuse sky tint). Pure-white reads as paint.
-		const float3 snowColour = float3(0.92f, 0.94f, 0.98f);
+		// The height field also shades the albedo slightly - crevices between
+		// clumps read a touch darker, which sells the volume even where the
+		// lighting is flat.
+		const float crevice = SnowHeightField(worldPos.xz);
+		const float3 snowColour = float3(0.92f, 0.94f, 0.98f) * (0.88f + 0.12f * crevice);
 		const float3 newAlbedo = lerp(baseAlbedo, snowColour, snowMask);
 
 		// Snow is highly diffuse (lots of micro-scattering between snowflakes)
@@ -753,9 +834,9 @@
 	// footprint are treated as exposed - the map follows the camera, so
 	// distant surfaces degrade to the pre-shelter behaviour instead of
 	// popping dry. 2x2 taps soften the shelter edge by one texel.
+	// (The t26 texture itself is declared above ApplySnowAccumulation,
+	// which also reads it for drift-bank detection.)
 	// =====================================================================
-	Texture2D<float> g_rainOcclusionMap : register(t26);
-
 	float SampleRainShelter(float3 worldPos, SamplerState samp)
 	{
 		if (g_rainOcclusionParams.x < 0.5f)

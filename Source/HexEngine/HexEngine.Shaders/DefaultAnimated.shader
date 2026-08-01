@@ -515,7 +515,7 @@
 		{
 			const float4 snowResult = ApplySnowAccumulation(
 				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
-				shelteredSnow, g_weatherSurface.snowMelt);
+				shelteredSnow, g_weatherSurface.snowMelt, g_textureSampler);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}

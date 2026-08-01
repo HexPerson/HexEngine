@@ -458,9 +458,10 @@
 		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
 		if (shelteredSnow > 0.001f)
 		{
+			// worldNormal is inout since slice 5 - snow relief + drift banks.
 			const float4 snowResult = ApplySnowAccumulation(
 				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
-				shelteredSnow, g_weatherSurface.snowMelt);
+				shelteredSnow, g_weatherSurface.snowMelt, g_textureSampler);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}

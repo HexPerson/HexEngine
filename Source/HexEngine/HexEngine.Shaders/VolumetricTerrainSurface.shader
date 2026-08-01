@@ -314,7 +314,7 @@
 		const float __shelteredSnow = g_weatherSurface.snowCoverage * __shelter;
 		if (__shelteredSnow > 0.001f)
 		{
-			const float4 __snowResult = ApplySnowAccumulation(baseColor, roughness, N, input.worldPos, __shelteredSnow, g_weatherSurface.snowMelt);
+			const float4 __snowResult = ApplySnowAccumulation(baseColor, roughness, N, input.worldPos, __shelteredSnow, g_weatherSurface.snowMelt, g_textureSampler);
 			baseColor = __snowResult.rgb;
 			roughness = __snowResult.w;
 		}
