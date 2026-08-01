@@ -747,22 +747,28 @@ namespace HexEngine
 			else
 				ss << "\t\tfloat metallic = saturate(g_material.metallicFactor);\n";
 
+			// Universal wet response - mirrors DefaultPixel (see the comment
+			// there). Must be emitted here as well: graph-authored materials
+			// compile to their own shader and never run DefaultPixel's copy,
+			// and most environment art in this project is graph-authored -
+			// editing only DefaultPixel once left the hall floor completely
+			// unaffected even at full strength.
+			ss << "\t\tfloat __wetFilm = 0.0f;\n";
+			ss << "\t\tif (g_weatherSurface.wetness > 0.001f)\n";
+			ss << "\t\t{\n";
+			ss << "\t\t\t__wetFilm = ApplyWetSurface(baseColor.rgb, roughness, metallic, g_weatherSurface.wetness, g_wetnessDarkening);\n";
+			ss << "\t\t}\n";
+
 			// Rain droplets - mirror what DefaultPixel.shader does so graph-authored
 			// materials get the same wet-with-droplets look when they opt in via the
 			// MaterialDialog's Rain Drip Intensity slider. ApplyRainDroplets comes
 			// from PBRutils (already in our PixelShaderIncludes above). World-space
 			// noise stays anchored as the camera moves; isHorizontal switches between
 			// "drops bead" (floor / road) and "drops streak" (vertical surfaces).
+			// (Darkening moved to the universal block above.)
 			ss << "\t\tconst float __rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;\n";
 			ss << "\t\tif (__rainStrength > 0.001f)\n";
 			ss << "\t\t{\n";
-			// A wet surface is darker as well as smoother - water traps light a dry
-			// surface would have scattered back out. Must be emitted here as well as
-			// in DefaultPixel: graph-authored materials compile to their own shader
-			// and never run DefaultPixel's copy, and most environment art in this
-			// project is graph-authored. Editing only DefaultPixel left the hall
-			// floor completely unaffected even at full strength.
-			ss << "\t\t\tbaseColor.rgb *= lerp(1.0f, 1.0f - g_wetnessDarkening, saturate(__rainStrength));\n";
 			ss << "\t\t\tconst float __isHorizontal = step(0.5f, worldNormal.y);\n";
 			ss << "\t\t\tconst float4 __rainResult = ApplyRainDroplets(worldNormal, input.positionWS.xyz, input.tangent, input.binormal, __rainStrength, g_time, __isHorizontal);\n";
 			ss << "\t\t\tworldNormal = __rainResult.xyz;\n";
@@ -818,7 +824,8 @@ namespace HexEngine
 				ss << std::format("\t\tfloat smoothness = saturate({});\n", ToScalar(ctx, *smoothnessExpr));
 			else
 				ss << "\t\tfloat smoothness = g_material.smoothness;\n";
-			ss << "\t\toutput.mat = float4(metallic, roughness, smoothness, 1.0f);\n";
+			// Wet film opens the SSR gate - matches DefaultPixel's mat write.
+			ss << "\t\toutput.mat = float4(metallic, roughness, max(smoothness, __wetFilm * 0.9f), 1.0f);\n";
 			ss << "\t\toutput.norm = float4(worldNormal.xyz, pixelDepth);\n";
 			ss << "\t\toutput.pos = float4(input.positionWS.xyz, length(emission));\n";
 			ss << "\t\toutput.velocity = velocity;\n";

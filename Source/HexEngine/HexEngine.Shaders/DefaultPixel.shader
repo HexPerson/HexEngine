@@ -385,6 +385,20 @@
 			}
 		}
 
+		// Universal wet response (Phase 3): EVERY opaque surface darkens and
+		// gains the water-film gloss with weather wetness, exactly as snow
+		// applies universally - rain wets the whole world, not just materials
+		// that opted into drips. Porosity-from-roughness heuristic and the
+		// darkening rationale live in PBRutils::ApplyWetSurface. The drip
+		// block below stays per-material (rainDripIntensity) and no longer
+		// darkens - that would double-apply.
+		float wetFilm = 0.0f;
+		if (g_weatherSurface.wetness > 0.001f)
+		{
+			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
+				g_weatherSurface.wetness, g_wetnessDarkening);
+		}
+
 		// Rain droplets: when the material opts in (rainDripIntensity > 0) and
 		// it's actually raining (g_weatherSurface.wetness > 0), perturb the
 		// normal + drop roughness via procedural droplet noise so the surface
@@ -395,15 +409,6 @@
 		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
 		if (rainStrength > 0.001f)
 		{
-			// A wet surface is DARKER as well as smoother. The water film lets
-			// light refract into the surface where total internal reflection
-			// traps it, instead of scattering straight back out. Without this the
-			// rain response only perturbed the normal and dropped roughness, so a
-			// wet floor kept its full dry diffuse and gained a mirror reflection
-			// on top - which is most of why wet surfaces read as washed out and
-			// too bright.
-			albedo.rgb *= lerp(1.0f, 1.0f - g_wetnessDarkening, saturate(rainStrength));
-
 			// Surface up-facing-ness selects between "drops bead in place" (horizontal)
 			// and "drops streak downward" (vertical). 0.5 splits a 60deg cone of
 			// flat-ish surfaces from the rest.
@@ -583,7 +588,9 @@
 		// material output is: metallic, roughness, smoothness, reserved (0)
 		// (specularProbability used to live in .a but nothing read it; channel is
 		// kept zero so future repurposing of .a starts from a clean clear value).
-		output.mat = float4(metalness, roughness, g_material.smoothness, 1.0f);
+		// Smoothness (the SSR gate) opens with the wet film - a rain-soaked
+		// surface reflects even when its dry material never would.
+		output.mat = float4(metalness, roughness, max(g_material.smoothness, wetFilm * 0.9f), 1.0f);
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 

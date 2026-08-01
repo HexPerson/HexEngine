@@ -277,6 +277,19 @@
 		// Force smoothness to 0 so SSR is disabled for dry terrain pixels.
 		float smoothness = 0.0f;
 
+		// Universal wet response (the "weather/wetness layer" the comment
+		// above defers to). Terrain darkens and glosses with rain like every
+		// other opaque surface - see PBRutils::ApplyWetSurface. Wetness also
+		// opens the SSR gate proportionally (w^2, matching the film curve):
+		// dry terrain keeps smoothness 0 and never reflects, a rain-soaked
+		// field mirrors sky/buildings the way a wet street does.
+		if (g_weatherSurface.wetness > 0.001f)
+		{
+			const float __wetFilm = ApplyWetSurface(baseColor, roughness, metallic,
+				g_weatherSurface.wetness, g_wetnessDarkening);
+			smoothness = __wetFilm * 0.9f;
+		}
+
 		// Snow accumulation. Same global driver from g_weatherSurface.snowCoverage
 		// that DefaultPixel / DefaultAnimated / graph-compiled PSs use - just
 		// called explicitly here so terrain (which has its own surface shader,
@@ -296,7 +309,10 @@
 		// .a was the per-layer specularProbability blend - removed along with the
 		// MaterialProperties::specularProbability field, since nothing in the
 		// renderer actually sampled mat.a. Writes 0 to keep the channel clean.
-		output.mat = float4(metallic, roughness, 0.0f, 0.0f);
+		// .b = smoothness, the SSR gate - 0 when dry (the local above), rain
+		// opens it. The literal 0 this used to write made the smoothness
+		// local dead code.
+		output.mat = float4(metallic, roughness, smoothness, 0.0f);
 		output.norm = float4(N, pixelDepth);
 		output.pos = float4(input.worldPos, 0.0f);
 		// Per-pixel screen-space motion from the camera moving relative to this static surface.

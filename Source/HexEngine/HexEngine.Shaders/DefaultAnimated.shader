@@ -460,6 +460,16 @@
 			}
 		}
 
+		// Universal wet response - mirrors DefaultPixel exactly (see the
+		// comment there). Skinned surfaces get wet like everything else;
+		// only the drip perturbation below stays per-material.
+		float wetFilm = 0.0f;
+		if (g_weatherSurface.wetness > 0.001f)
+		{
+			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
+				g_weatherSurface.wetness, g_wetnessDarkening);
+		}
+
 		// Rain droplets - same procedural perturbation DefaultPixel uses. See
 		// ApplyRainDroplets in PBRutils.shader for the full doc. Animated meshes
 		// hit this less often (skinned characters in rain), but if the user opts
@@ -467,9 +477,6 @@
 		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
 		if (rainStrength > 0.001f)
 		{
-			// Wet surfaces darken - see the matching comment in DefaultPixel.
-			albedo.rgb *= lerp(1.0f, 1.0f - g_wetnessDarkening, saturate(rainStrength));
-
 			const float isHorizontal = step(0.5f, worldNormal.y);
 			const float4 rainResult = ApplyRainDroplets(
 				worldNormal,
@@ -592,7 +599,8 @@
 		// Previously this shader wrote 0 here (with a misleading "see
 		// DefaultPixel for rationale" comment - DefaultPixel actually writes
 		// 1), which meant animated meshes were being classified as sky.
-		output.mat = float4(metalness, roughness, g_material.smoothness, 1.0f);
+		// Smoothness (the SSR gate) opens with the wet film - matches DefaultPixel.
+		output.mat = float4(metalness, roughness, max(g_material.smoothness, wetFilm * 0.9f), 1.0f);
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 

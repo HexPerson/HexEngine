@@ -680,6 +680,51 @@
 		return float4(newAlbedo, newRoughness);
 	}
 
+	// =====================================================================
+	// Universal wet-surface response (Phase 3 slice 1). Unlike the drip
+	// system below - which is per-material opt-in via rainDripIntensity -
+	// this applies to EVERY opaque surface, the same way snow does: rain
+	// wets the whole world, materials only differ in HOW they respond.
+	//
+	// With no per-material porosity authored anywhere, porosity is
+	// estimated from base roughness: rough dielectrics (concrete, brick,
+	// fabric) soak water into their micro-structure, darkening strongly
+	// while the film's gloss is damped; smooth sealed surfaces (painted
+	// metal, glass, polished stone) barely darken but gain the water film
+	// gloss almost fully. Metals don't absorb water, so darkening fades
+	// with metalness. The film response uses wetness^2 - light drizzle
+	// barely films, saturation comes on toward storm wetness (matches the
+	// Frostbite wetness curve's shape).
+	//
+	//   albedo    - inout, darkened in place
+	//   roughness - inout, driven toward the water film's ~0.12
+	//   metalness - metal mask (kills darkening)
+	//   wetness   - g_weatherSurface.wetness (0..1)
+	//   darkenStrength - g_wetnessDarkening cvar lane (passed in so this
+	//                    include doesn't depend on Global.shader defines)
+	//
+	// Returns the water-film strength (0 dry .. ~1 storm on sealed
+	// surfaces). Callers feed it into the gbuffer smoothness channel
+	// (mat.b, the SSR gate) - roughness alone doesn't open SSR, and a wet
+	// street that never screen-space-reflects misses the entire point.
+	// =====================================================================
+	float ApplyWetSurface(
+		inout float3 albedo,
+		inout float roughness,
+		float metalness,
+		float wetness,
+		float darkenStrength)
+	{
+		const float w = saturate(wetness);
+		const float porosity = saturate((roughness - 0.25f) / 0.5f);
+		const float darken = darkenStrength * lerp(0.4f, 1.0f, porosity) * (1.0f - metalness);
+		albedo *= lerp(1.0f, 1.0f - darken, w);
+
+		const float film = w * w * lerp(1.0f, 0.55f, porosity);
+		roughness = lerp(roughness, 0.12f, film);
+		return film;
+	}
+
 	float4 ApplyRainDroplets(
 		float3 baseNormalWS,
 		float3 worldPos,
