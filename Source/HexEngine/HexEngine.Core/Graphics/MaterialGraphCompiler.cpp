@@ -1094,7 +1094,14 @@ namespace HexEngine
 			// whenever the emitted HLSL changes semantically.
 			//   1 - baseline
 			//   2 - wet surfaces darken baseColor by g_wetnessDarkening
-			combined += "\0codegen:2";
+			//   3 - Phase 3 slices 1-3: universal wet response, shelter
+			//       occlusion (wetness/drips/snow), rain ripples. Bumped
+			//       retroactively - the three emitted-block changes shipped
+			//       without touching this, leaving any cache whose includes
+			//       hash happened to survive serving pre-shelter shaders
+			//       (prime suspect for "snow not occluded" on graph-authored
+			//       surfaces).
+			combined += "\0codegen:3";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);
