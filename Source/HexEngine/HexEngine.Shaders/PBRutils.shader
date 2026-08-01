@@ -665,15 +665,24 @@
 		const float kNoiseScale = 0.45f; // 45 cm per noise cycle - snow drift scale
 		const float n1 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / kNoiseScale);
 		const float n2 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / (kNoiseScale * 0.4f));
-		const float patchNoise = saturate((n1 * 0.65f + n2 * 0.35f) - (1.0f - snowCoverage) * 0.45f);
+		// Melt erodes the noise THRESHOLD rather than scaling the mask: thin
+		// snow (noise-low areas) vanishes first, drift cores survive longest
+		// - spatially progressive retreat, which is both how real melt looks
+		// and a far more legible slider response than the uniform fade this
+		// used to be (any melt read as "on", the magnitude was invisible).
+		const float melt = saturate(snowMelt);
+		const float patchNoise = saturate((n1 * 0.65f + n2 * 0.35f)
+			- (1.0f - snowCoverage) * 0.45f
+			- melt * 0.55f);
 
 		// Snow mask: combine slope + patch noise + global coverage.
 		// At snowCoverage = 1, almost everything in the slope-permissive band
 		// is white. At snowCoverage ~ 0.3 only the densest patch-noise areas
-		// catch snow, giving the "dusting -> blanket" progression.
-		const float melt = saturate(snowMelt);
+		// catch snow, giving the "dusting -> blanket" progression. The flat
+		// melt scale on top thins what survives the threshold; full melt
+		// leaves ~30% of the drift cores as wet slush remnants.
 		const float snowMask = saturate(slopeMask * (0.2f + patchNoise * 1.4f) * snowCoverage)
-			* (1.0f - melt * 0.75f);
+			* (1.0f - melt * 0.7f);
 
 		// Snow colour: very slightly blue-tinted white (real snow scatters short
 		// wavelengths more, plus diffuse sky tint). Pure-white reads as paint.
