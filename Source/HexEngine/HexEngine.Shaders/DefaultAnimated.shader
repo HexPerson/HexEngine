@@ -463,9 +463,11 @@
 		// Universal wet response - mirrors DefaultPixel exactly (see the
 		// comment there). Skinned surfaces get wet like everything else;
 		// only the drip perturbation below stays per-material.
-		// Shelter occlusion - matches DefaultPixel.
+		// Shelter occlusion + melt-fed wetness - matches DefaultPixel.
 		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
-		const float shelteredWetness = g_weatherSurface.wetness * shelter;
+		const float shelteredWetness = saturate(
+			(g_weatherSurface.wetness
+				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
 
 		float wetFilm = 0.0f;
 		if (shelteredWetness > 0.001f)
@@ -498,12 +500,22 @@
 
 		// Snow accumulation. Same global-no-opt-in semantics as DefaultPixel -
 		// any upward-facing animated surface catches snow. See PBRutils.
+		// Dust then snow - matches DefaultPixel.
+		const float dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * shelter);
+		if (dustAmount > 0.001f)
+		{
+			const float4 dustResult = ApplyDustAccumulation(
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, dustAmount);
+			albedo.rgb = dustResult.rgb;
+			roughness  = dustResult.w;
+		}
+
 		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
 		if (shelteredSnow > 0.001f)
 		{
 			const float4 snowResult = ApplySnowAccumulation(
 				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
-				shelteredSnow);
+				shelteredSnow, g_weatherSurface.snowMelt);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}

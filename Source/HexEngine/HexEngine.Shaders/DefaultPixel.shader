@@ -394,8 +394,12 @@
 		// darkens - that would double-apply.
 		// Shelter occlusion (slice 2): surfaces under static cover receive
 		// no rain or snow. 1 = exposed; scales every weather term below.
+		// Melting snow (slice 4) feeds ground wetness - slush darkens and
+		// glosses the surface it sits on.
 		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
-		const float shelteredWetness = g_weatherSurface.wetness * shelter;
+		const float shelteredWetness = saturate(
+			(g_weatherSurface.wetness
+				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
 
 		float wetFilm = 0.0f;
 		if (shelteredWetness > 0.001f)
@@ -440,12 +444,23 @@
 		// accumulates, snow then dominates the visual). No per-material opt-in -
 		// any upward-facing surface naturally catches snow when the weather
 		// system reports snowCoverage > 0. See ApplySnowAccumulation in PBRutils.
+		// Dust before snow: snow lays on top of dust, not under it. Dust is
+		// wind-borne so shelter only halves it (see ApplyDustAccumulation).
+		const float dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * shelter);
+		if (dustAmount > 0.001f)
+		{
+			const float4 dustResult = ApplyDustAccumulation(
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, dustAmount);
+			albedo.rgb = dustResult.rgb;
+			roughness  = dustResult.w;
+		}
+
 		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
 		if (shelteredSnow > 0.001f)
 		{
 			const float4 snowResult = ApplySnowAccumulation(
 				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
-				shelteredSnow);
+				shelteredSnow, g_weatherSurface.snowMelt);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}

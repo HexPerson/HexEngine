@@ -563,7 +563,11 @@ namespace HexEngine
 	// surface normal + weather puddleAmount. Off by default to preserve existing
 	// scene look; ticking the HVar (or future Settings UI toggle) starts painting
 	// puddles wherever the surface is flat enough and the noise mask matches.
-	HVar r_autoPuddles("r_autoPuddles", "Enable procedural puddles driven by weather + surface normal + noise", false, false, true);
+	// Default ON since Phase 3 slice 4: the puddle mask now composes with
+	// universal wetness, shelter occlusion, and rain ripples - the full
+	// wet-street stack - and costs nothing in dry weather (the shader
+	// early-outs on puddleAmount 0).
+	HVar r_autoPuddles("r_autoPuddles", "Enable procedural puddles driven by weather + surface normal + noise", true, false, true);
 	// Larger scale = bigger, sparser puddles. 5 m gives kerb-scale puddles; 15 m
 	// gives big floods. Picks the world-space size of each noise cell.
 	HVar r_autoPuddlesScale("r_autoPuddlesScale", "World-space noise scale for procedural puddles (metres per cell)", 5.0f, 0.5f, 50.0f);

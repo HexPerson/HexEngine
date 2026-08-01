@@ -756,7 +756,7 @@ namespace HexEngine
 			// Shelter occlusion - matches DefaultPixel: covered surfaces get
 			// no rain or snow.
 			ss << "\t\tconst float __shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);\n";
-			ss << "\t\tconst float __shelteredWetness = g_weatherSurface.wetness * __shelter;\n";
+			ss << "\t\tconst float __shelteredWetness = saturate((g_weatherSurface.wetness + g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __shelter);\n";
 			ss << "\t\tfloat __wetFilm = 0.0f;\n";
 			ss << "\t\tif (__shelteredWetness > 0.001f)\n";
 			ss << "\t\t{\n";
@@ -784,10 +784,17 @@ namespace HexEngine
 			// applied to baseColor + roughness for any upward-facing surface. No
 			// per-material slider; the snow shader's own slope mask handles
 			// which surfaces visually catch the snow.
+			ss << "\t\tconst float __dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * __shelter);\n";
+			ss << "\t\tif (__dustAmount > 0.001f)\n";
+			ss << "\t\t{\n";
+			ss << "\t\t\tconst float4 __dustResult = ApplyDustAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, __dustAmount);\n";
+			ss << "\t\t\tbaseColor.rgb = __dustResult.rgb;\n";
+			ss << "\t\t\troughness     = __dustResult.w;\n";
+			ss << "\t\t}\n";
 			ss << "\t\tconst float __shelteredSnow = g_weatherSurface.snowCoverage * __shelter;\n";
 			ss << "\t\tif (__shelteredSnow > 0.001f)\n";
 			ss << "\t\t{\n";
-			ss << "\t\t\tconst float4 __snowResult = ApplySnowAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, __shelteredSnow);\n";
+			ss << "\t\t\tconst float4 __snowResult = ApplySnowAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, __shelteredSnow, g_weatherSurface.snowMelt);\n";
 			ss << "\t\t\tbaseColor.rgb = __snowResult.rgb;\n";
 			ss << "\t\t\troughness     = __snowResult.w;\n";
 			ss << "\t\t}\n";
@@ -1101,7 +1108,9 @@ namespace HexEngine
 			//       hash happened to survive serving pre-shelter shaders
 			//       (prime suspect for "snow not occluded" on graph-authored
 			//       surfaces).
-			combined += "\0codegen:3";
+			//   4 - slice 4: melt-fed wetness, dust accumulation, snow melt
+			//       argument.
+			combined += "\0codegen:4";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);

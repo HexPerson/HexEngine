@@ -636,12 +636,18 @@
 	// Returns: float4(modifiedAlbedo, modifiedRoughness) - drop into the
 	// existing gbuffer write.
 	// =====================================================================
+	// snowMelt (slice 4): erodes the mask and turns powder into slush.
+	// Melting snow retreats from the noise-thin areas first (the same
+	// bias direction low coverage uses), and what remains reads wet -
+	// roughness drops toward slush instead of powder's 0.85. The melt ->
+	// ground-wetness coupling happens at the call sites, not here.
 	float4 ApplySnowAccumulation(
 		float3 baseAlbedo,
 		float baseRoughness,
 		float3 worldNormalWS,
 		float3 worldPos,
-		float snowCoverage)
+		float snowCoverage,
+		float snowMelt)
 	{
 		if (snowCoverage <= 0.001f)
 			return float4(baseAlbedo, baseRoughness);
@@ -665,7 +671,9 @@
 		// At snowCoverage = 1, almost everything in the slope-permissive band
 		// is white. At snowCoverage ~ 0.3 only the densest patch-noise areas
 		// catch snow, giving the "dusting -> blanket" progression.
-		const float snowMask = saturate(slopeMask * (0.2f + patchNoise * 1.4f) * snowCoverage);
+		const float melt = saturate(snowMelt);
+		const float snowMask = saturate(slopeMask * (0.2f + patchNoise * 1.4f) * snowCoverage)
+			* (1.0f - melt * 0.75f);
 
 		// Snow colour: very slightly blue-tinted white (real snow scatters short
 		// wavelengths more, plus diffuse sky tint). Pure-white reads as paint.
@@ -674,8 +682,47 @@
 
 		// Snow is highly diffuse (lots of micro-scattering between snowflakes)
 		// so roughness goes UP, not down. 0.85 is the typical snow roughness
-		// in PBR refs.
-		const float newRoughness = lerp(baseRoughness, 0.85f, snowMask);
+		// in PBR refs; melting slush is water-bound and markedly shinier.
+		const float snowRough = lerp(0.85f, 0.35f, melt);
+		const float newRoughness = lerp(baseRoughness, snowRough, snowMask);
+
+		return float4(newAlbedo, newRoughness);
+	}
+
+	// =====================================================================
+	// Dust/sand accumulation (slice 4) - the first consumer of the
+	// previously dead dirtAmount field (the sandstorm preset authors 0.7).
+	// Same universal shape as snow: up-facing slope mask x world-XZ patch
+	// noise x amount, tinting toward a dry sand colour and roughening.
+	// Coarser noise than snow (dust drifts in broader sheets), a weaker
+	// slope requirement (dust clings to shallower slopes than snow lays
+	// on), and only PARTIAL shelter response - wind carries dust under
+	// cover, so shelter attenuates it by half instead of zeroing it.
+	// =====================================================================
+	float4 ApplyDustAccumulation(
+		float3 baseAlbedo,
+		float baseRoughness,
+		float3 worldNormalWS,
+		float3 worldPos,
+		float dirtAmount)
+	{
+		if (dirtAmount <= 0.001f)
+			return float4(baseAlbedo, baseRoughness);
+
+		const float slopeMask = smoothstep(0.15f, 0.75f, worldNormalWS.y);
+		if (slopeMask <= 0.0f)
+			return float4(baseAlbedo, baseRoughness);
+
+		const float kNoiseScale = 1.1f; // broad drift sheets
+		const float n1 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / kNoiseScale);
+		const float n2 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / (kNoiseScale * 0.31f));
+		const float patchNoise = saturate((n1 * 0.7f + n2 * 0.3f) - (1.0f - dirtAmount) * 0.35f);
+
+		const float dustMask = saturate(slopeMask * (0.15f + patchNoise * 1.2f) * dirtAmount) * 0.85f;
+
+		const float3 dustColour = float3(0.52f, 0.42f, 0.30f);
+		const float3 newAlbedo = lerp(baseAlbedo, dustColour, dustMask);
+		const float newRoughness = lerp(baseRoughness, 0.92f, dustMask);
 
 		return float4(newAlbedo, newRoughness);
 	}

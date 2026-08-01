@@ -283,9 +283,11 @@
 		// opens the SSR gate proportionally (w^2, matching the film curve):
 		// dry terrain keeps smoothness 0 and never reflects, a rain-soaked
 		// field mirrors sky/buildings the way a wet street does.
-		// Shelter occlusion - matches DefaultPixel: covered ground stays dry.
+		// Shelter occlusion + melt-fed wetness - matches DefaultPixel.
 		const float __shelter = SampleRainShelter(input.worldPos, g_textureSampler);
-		const float __shelteredWetness = g_weatherSurface.wetness * __shelter;
+		const float __shelteredWetness = saturate(
+			(g_weatherSurface.wetness
+				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __shelter);
 		if (__shelteredWetness > 0.001f)
 		{
 			const float __wetFilm = ApplyWetSurface(baseColor, roughness, metallic,
@@ -300,10 +302,19 @@
 		// called explicitly here so terrain (which has its own surface shader,
 		// not Default) also catches snow. See ApplySnowAccumulation in
 		// PBRutils.shader for the full doc.
+		// Dust then snow - matches DefaultPixel.
+		const float __dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * __shelter);
+		if (__dustAmount > 0.001f)
+		{
+			const float4 __dustResult = ApplyDustAccumulation(baseColor, roughness, N, input.worldPos, __dustAmount);
+			baseColor = __dustResult.rgb;
+			roughness = __dustResult.w;
+		}
+
 		const float __shelteredSnow = g_weatherSurface.snowCoverage * __shelter;
 		if (__shelteredSnow > 0.001f)
 		{
-			const float4 __snowResult = ApplySnowAccumulation(baseColor, roughness, N, input.worldPos, __shelteredSnow);
+			const float4 __snowResult = ApplySnowAccumulation(baseColor, roughness, N, input.worldPos, __shelteredSnow, g_weatherSurface.snowMelt);
 			baseColor = __snowResult.rgb;
 			roughness = __snowResult.w;
 		}
