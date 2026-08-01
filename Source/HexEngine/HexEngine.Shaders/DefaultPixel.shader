@@ -402,6 +402,9 @@
 		{
 			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
 				shelteredWetness, g_wetnessDarkening);
+			// Rain-impact ripples while precipitation is falling (slice 3).
+			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time,
+				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
 		}
 
 		// Rain droplets: when the material opts in (rainDripIntensity > 0) and

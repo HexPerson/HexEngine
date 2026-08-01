@@ -761,6 +761,7 @@ namespace HexEngine
 			ss << "\t\tif (__shelteredWetness > 0.001f)\n";
 			ss << "\t\t{\n";
 			ss << "\t\t\t__wetFilm = ApplyWetSurface(baseColor.rgb, roughness, metallic, __shelteredWetness, g_wetnessDarkening);\n";
+			ss << "\t\t\tworldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time, __shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));\n";
 			ss << "\t\t}\n";
 
 			// Rain droplets - mirror what DefaultPixel.shader does so graph-authored

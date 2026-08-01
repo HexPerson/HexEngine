@@ -472,6 +472,8 @@
 		{
 			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
 				shelteredWetness, g_wetnessDarkening);
+			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time,
+				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
 		}
 
 		// Rain droplets - same procedural perturbation DefaultPixel uses. See

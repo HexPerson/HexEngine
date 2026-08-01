@@ -291,6 +291,8 @@
 			const float __wetFilm = ApplyWetSurface(baseColor, roughness, metallic,
 				__shelteredWetness, g_wetnessDarkening);
 			smoothness = __wetFilm * 0.9f;
+			N = ApplyRainRipples(N, input.worldPos, g_time,
+				__shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
 		}
 
 		// Snow accumulation. Same global driver from g_weatherSurface.snowCoverage

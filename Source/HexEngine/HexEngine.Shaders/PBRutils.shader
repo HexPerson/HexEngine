@@ -727,6 +727,61 @@
 	}
 
 	// =====================================================================
+	// Rain-impact ripples (Phase 3 slice 3). Expanding rings on wet
+	// up-facing surfaces while precipitation is actually falling - the
+	// missing life in the wet-street look (the drip system's Layer A beads
+	// pulse in place; real rain reads as rings spreading from impacts).
+	//
+	// Two staggered layers of world-space cells; each cell runs a looping
+	// ring whose radius grows over its cycle while the amplitude dies out.
+	// A per-cell hash offsets the cycle phase so neighbouring cells never
+	// pulse in sync. The normal is bent radially by the ring's slope. All
+	// world-anchored, so ripples stay put under camera motion.
+	//
+	// intensity: shelteredWetness * precipitationIntensity - ripples need
+	// BOTH a water film to ride on and active rainfall (a wet street after
+	// the rain stops must not keep rippling). Cheap early-out when ~0.
+	// =====================================================================
+	float3 ApplyRainRipples(float3 normalWS, float3 worldPos, float time, float intensity)
+	{
+		const float up = saturate(normalWS.y);
+		const float strength = saturate(intensity) * up * up;
+		if (strength <= 0.001f)
+			return normalWS;
+
+		float2 grad = float2(0.0f, 0.0f);
+		[unroll]
+		for (int layer = 0; layer < 2; ++layer)
+		{
+			// 35 cm / 23 cm cells, second layer offset so cell walls never line up.
+			const float cellSize = (layer == 0) ? 0.35f : 0.23f;
+			const float2 layerOffset = (layer == 0) ? float2(0.0f, 0.0f) : float2(0.17f, 0.11f);
+			const float2 p = worldPos.xz / cellSize + layerOffset;
+			const float2 cell = floor(p);
+			const float2 local = (p - cell - 0.5f) * cellSize; // metres from cell centre
+
+			const float phase = Hash21_Rain(cell + (layer == 0 ? 3.7f : 9.1f));
+			// ~1.4 cycles/sec, per-cell phase offset. t = 0 impact, t = 1 faded.
+			const float t = frac(time * 1.4f + phase);
+
+			const float ringRadius = t * (cellSize * 0.55f);
+			const float d = length(local);
+			const float band = d - ringRadius;
+			// Ring profile: a single sine arch localised to the band, its
+			// height dying with age. The gradient of the height field w.r.t.
+			// XZ is radial - that is what bends the normal.
+			const float kBandWidth = 0.045f; // metres
+			const float envelope = exp(-(band * band) / (kBandWidth * kBandWidth));
+			const float age = (1.0f - t) * (1.0f - t);
+			const float slope = envelope * age * (-2.0f * band / (kBandWidth * kBandWidth));
+			grad += (d > 1e-4f ? local / d : float2(0.0f, 0.0f)) * slope * 0.0035f;
+		}
+
+		normalWS.xz += grad * strength;
+		return normalize(normalWS);
+	}
+
+	// =====================================================================
 	// Universal wet-surface response (Phase 3 slice 1). Unlike the drip
 	// system below - which is per-material opt-in via rainDripIntensity -
 	// this applies to EVERY opaque surface, the same way snow does: rain
