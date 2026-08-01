@@ -751,7 +751,10 @@
 			const float hC = SnowHeightField(worldPos.xz);
 			const float hX = SnowHeightField(worldPos.xz + float2(kSampleDist, 0.0f));
 			const float hZ = SnowHeightField(worldPos.xz + float2(0.0f, kSampleDist));
-			const float amplitude = 0.05f * snowMask * (1.0f - melt) * (1.0f + driftBank * 1.5f);
+			// 0.18 gives ~25-35 degree clump slopes - the original 0.05
+			// topped out near 8 degrees, which flat overcast lighting
+			// swallowed entirely (user: "I don't see any difference").
+			const float amplitude = 0.18f * snowMask * (1.0f - melt) * (1.0f + driftBank * 1.5f);
 			const float3 reliefNormal = normalize(float3(
 				-(hX - hC) / kSampleDist * amplitude,
 				1.0f,
@@ -767,7 +770,7 @@
 		// clumps read a touch darker, which sells the volume even where the
 		// lighting is flat.
 		const float crevice = SnowHeightField(worldPos.xz);
-		const float3 snowColour = float3(0.92f, 0.94f, 0.98f) * (0.88f + 0.12f * crevice);
+		const float3 snowColour = float3(0.92f, 0.94f, 0.98f) * (0.78f + 0.22f * crevice);
 		const float3 newAlbedo = lerp(baseAlbedo, snowColour, snowMask);
 
 		// Snow is highly diffuse (lots of micro-scattering between snowflakes)
