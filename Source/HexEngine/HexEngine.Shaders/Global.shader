@@ -266,6 +266,11 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// z = legacy->lumens calibration factor (informational), w reserved.
 		// See RenderStructs.hpp::_exposureParams.
 		float4 g_exposureParams;
+		// Shelter/rain occlusion: world -> clip of the top-down ortho depth
+		// map around the camera. x = valid, y = depth bias, z = 1/resolution.
+		// See RenderStructs.hpp::_rainOcclusionVP/_rainOcclusionParams.
+		float4x4 g_rainOcclusionVP;
+		float4 g_rainOcclusionParams;
 	};
 
 	#define g_preExposure    (g_exposureParams.x)

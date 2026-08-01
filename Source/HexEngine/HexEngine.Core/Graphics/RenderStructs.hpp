@@ -418,6 +418,19 @@ namespace HexEngine
 		//       for debug shaders; the conversion itself happens CPU-side).
 		//   w = reserved.
 		math::Vector4 _exposureParams;
+
+		// Shelter/rain occlusion (Phase 3 slice 2, appended per the
+		// append-only note above). World -> clip of the top-down ortho
+		// depth map rendered around the camera; surfaces with static
+		// geometry above them mask out wetness/snow/puddles.
+		math::Matrix _rainOcclusionVP;
+		//   x = 1 when the map holds valid content this frame (0 = dry
+		//       weather or map unavailable; shaders treat everything as
+		//       exposed).
+		//   y = depth bias in map-depth units (world metres / depth range).
+		//   z = 1 / map resolution (texel size in UV, for edge softening).
+		//   w = reserved.
+		math::Vector4 _rainOcclusionParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

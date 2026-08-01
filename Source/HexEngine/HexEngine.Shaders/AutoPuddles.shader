@@ -54,8 +54,23 @@
 	// untouched.
 	Texture2D g_positionTex : register(t0); // GBuffer position copy
 	Texture2D g_normalTex   : register(t1); // GBuffer normal (RT - safe to read here since the auto-puddle pass doesn't write to it)
+	// Shelter/rain occlusion map (Phase 3 slice 2) - single-tap local copy
+	// of PBRutils::SampleRainShelter (this pass includes only Global).
+	Texture2D<float> g_rainShelterTex : register(t2);
 
 	SamplerState g_pointSampler : register(s2);
+
+	float PuddleShelter(float3 worldPos)
+	{
+		if (g_rainOcclusionParams.x < 0.5f)
+			return 1.0f;
+		const float4 clip = mul(float4(worldPos, 1.0f), g_rainOcclusionVP);
+		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+		if (any(uv < 0.0f) || any(uv > 1.0f) || clip.z < 0.0f || clip.z > 1.0f)
+			return 1.0f;
+		const float mapDepth = g_rainShelterTex.SampleLevel(g_pointSampler, uv, 0);
+		return (clip.z <= mapDepth + g_rainOcclusionParams.y) ? 1.0f : 0.0f;
+	}
 
 	cbuffer AutoPuddleConstants : register(b4)
 	{
@@ -198,7 +213,10 @@
 			return o;
 		}
 
-		const float alpha = saturate(mask * flatness * rainMul * g_autoPuddleParams.w);
+		// Sheltered ground collects no puddles (indoor floors especially -
+		// before this every flat interior floor puddled in the rain).
+		const float shelter = PuddleShelter(surfacePos.xyz);
+		const float alpha = saturate(mask * flatness * rainMul * g_autoPuddleParams.w * shelter);
 		if (alpha <= 0.001f)
 		{
 			o.diff = float4(0, 0, 0, 0);

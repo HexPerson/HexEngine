@@ -444,6 +444,14 @@ namespace HexEngine
 	HVar r_legacyLightScale("r_legacyLightScale", "Calibration factor: legacy light strength -> physical units (and 1/x = pre-exposure)", 15000.0f, 1.0f, 200000.0f);
 	HVar r_shadowAtlasBudget("r_shadowAtlasBudget", "Max atlas shadow faces re-rendered per frame", (int32_t)4, (int32_t)0, (int32_t)16);
 	HVar r_shadowAtlasDebug("r_shadowAtlasDebug", "Draw the shadow atlas as an overlay", false, false, true);
+	// Phase 3 slice 2: shelter/rain occlusion. A top-down ortho depth map
+	// (static geometry only) around the camera; wet response, snow and
+	// puddles are masked where cover sits above a surface. Cached: only
+	// re-rendered on recentre (camera moved a quarter extent) or the
+	// refresh timer, and skipped entirely in dry weather.
+	HVar r_rainOcclusion("r_rainOcclusion", "Shelter occlusion: surfaces under static cover stay dry in rain/snow", true, false, true);
+	HVar r_rainOcclusionExtent("r_rainOcclusionExtent", "Half-extent in metres of the rain occlusion map around the camera", 96.0f, 16.0f, 512.0f);
+	HVar r_rainOcclusionRefresh("r_rainOcclusionRefresh", "Seconds between rain occlusion map refreshes (recentre also refreshes)", 2.0f, 0.1f, 30.0f);
 
 	// Slice 5: the sun whose cascades RenderTransparent binds at t15..t20. One
 	// function shared by the g_taaParams.z packing and the bind block so the
@@ -985,6 +993,14 @@ namespace HexEngine
 		_clusteredLights.Destroy();
 		_shadowAtlas.Destroy();
 		SAFE_DELETE(_shadowAtlasDebugTex);
+		if (_rainOcclusionMap != nullptr)
+		{
+			_rainOcclusionMap->Destroy();
+			delete _rainOcclusionMap;
+			_rainOcclusionMap = nullptr;
+		}
+		_rainOcclusionPVS.reset();
+		_rainOcclusionValid = false;
 		_gbuffer.Destroy();
 
 		//SAFE_DELETE(_clouds);
@@ -1671,6 +1687,11 @@ namespace HexEngine
 				}
 			}
 		}
+
+		// Shelter/rain occlusion map (Phase 3 slice 2) - rides with the
+		// shadow renders so the main-view SetupPerFrameBuffer below sees
+		// this frame's validity + matrices.
+		UpdateRainOcclusionMap();
 
 		// set up the viewport
 		auto bbvp = _currentCamera->GetViewport();
@@ -2608,6 +2629,18 @@ namespace HexEngine
 				bufferData._exposureParams = math::Vector4(1.0f / unitScale, unitScale, unitScale, 0.0f);
 			}
 
+			// Shelter/rain occlusion (slice 2). Numbers mirror
+			// UpdateRainOcclusionMap's constants: 2048 map, 160 m depth
+			// range; bias = 0.5 m expressed in depth units.
+			bufferData._rainOcclusionVP = (_rainOcclusionValid
+				? (_rainOcclusionView * _rainOcclusionProj)
+				: math::Matrix::Identity).Transpose();
+			bufferData._rainOcclusionParams = math::Vector4(
+				_rainOcclusionValid ? 1.0f : 0.0f,
+				0.5f / 160.0f,
+				1.0f / 2048.0f,
+				0.0f);
+
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,
 				_skyOvercastAmount);
@@ -2971,6 +3004,15 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
 		}
 
+		// Shelter/rain occlusion map at t26 for the opaque material shaders
+		// (SampleRainShelter in PBRutils). Explicit slot, then reset the
+		// implicit-slot counter so material auto-binds still start at 0 -
+		// same pattern as the atmosphere block above.
+		g_pEnv->_graphicsDevice->SetTexture2D(26,
+			(_rainOcclusionValid && _rainOcclusionMap != nullptr)
+				? _rainOcclusionMap->GetDepthMap() : nullptr);
+		g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::FrontFace);
 
 		_currentScene->RenderEntities(
@@ -3117,6 +3159,96 @@ namespace HexEngine
 			MeshRenderFlags::MeshRenderShadowMap);
 
 		g_pEnv->_graphicsDevice->ClearScissorRect();
+	}
+
+	void SceneRenderer::UpdateRainOcclusionMap()
+	{
+		// Size + depth range are compile-time; the cbuffer pack in
+		// SetupPerFrameBuffer repeats the two numbers - keep in sync.
+		constexpr uint32_t kRainMapSize = 2048u;
+		constexpr float kUpRange = 80.0f;   // metres above the map centre
+		constexpr float kDownRange = 80.0f; // metres below
+
+		const auto& wsp = _currentScene->GetWeatherSurfaceParams();
+		const bool needed = r_rainOcclusion._val.b && _cameraEntity != nullptr &&
+			(wsp.wetness > 0.001f || wsp.snowCoverage > 0.001f || wsp.puddleAmount > 0.001f);
+		if (!needed)
+		{
+			// Dry weather: the map keeps its texels but shaders treat the
+			// world as exposed, and no render cost is paid.
+			_rainOcclusionValid = false;
+			return;
+		}
+
+		if (_rainOcclusionMap == nullptr)
+		{
+			_rainOcclusionMap = new ShadowMap(kRainMapSize, kRainMapSize);
+			_rainOcclusionMap->Create();
+		}
+		if (_rainOcclusionPVS == nullptr)
+			_rainOcclusionPVS = std::make_unique<PVS>();
+
+		const math::Vector3 camPos = _cameraEntity->GetPosition();
+		const float extent = r_rainOcclusionExtent._val.f32;
+		// Texel-snap the centre so cached depth doesn't crawl under camera
+		// drift - same trick the sun cascades use.
+		const float texelWorld = (2.0f * extent) / (float)kRainMapSize;
+		const math::Vector3 centre(
+			std::floor(camPos.x / texelWorld) * texelWorld,
+			camPos.y,
+			std::floor(camPos.z / texelWorld) * texelWorld);
+
+		const double now = g_pEnv->_timeManager->GetTime();
+		const float dx = centre.x - _rainOcclusionCentre.x;
+		const float dz = centre.z - _rainOcclusionCentre.z;
+		const float dy = std::fabs(centre.y - _rainOcclusionCentre.y);
+		const float recentreDist = extent * 0.25f;
+		const bool recentre = (dx * dx + dz * dz) > recentreDist * recentreDist
+			|| dy > kUpRange * 0.5f;
+		if (_rainOcclusionValid && !recentre && now < _rainOcclusionNextRefresh)
+			return;
+
+		// The map may still be bound as a PS SRV (t26) from last frame's
+		// opaque pass - release it before rebinding as the depth target or
+		// D3D11's hazard resolution nulls the DSV bind.
+		g_pEnv->_graphicsDevice->SetTexture2D(26, nullptr);
+
+		_rainOcclusionView = math::Matrix::CreateLookAt(
+			centre + math::Vector3(0.0f, kUpRange, 0.0f), centre, math::Vector3(0.0f, 0.0f, 1.0f));
+		_rainOcclusionProj = math::Matrix::CreateOrthographicOffCenter(
+			-extent, extent, -extent, extent, 0.1f, kUpRange + kDownRange);
+
+		PVSParams params;
+		params.lodPartition = r_lodPartition._val.f32;
+		params.shapeType = PVSParams::ShapeType::Sphere;
+		params.shape.sphere = dx::BoundingSphere(
+			dx::XMFLOAT3(centre.x, centre.y, centre.z),
+			std::sqrt(2.0f * extent * extent + kUpRange * kUpRange));
+		params.isShadow = true;
+		params.camera = _currentCamera;
+		_rainOcclusionPVS->CalculateVisibility(_currentScene, params);
+		_rainOcclusionPVS->RefreshAllInstanceCaches();
+
+		_rainOcclusionMap->SetRenderTarget();
+
+		math::Viewport rainVp;
+		rainVp.width = (float)kRainMapSize;
+		rainVp.height = (float)kRainMapSize;
+		SetupPerFrameBuffer(
+			_rainOcclusionView, _rainOcclusionProj,
+			_rainOcclusionView, _rainOcclusionProj,
+			1, math::Vector3(0.0f, -1.0f, 0.0f), rainVp, 0, 1.0f, false);
+
+		// Static geometry only: dynamic props sheltering the ground would
+		// flicker wet/dry as they moved AND dirty the cache every frame.
+		_currentScene->RenderEntities(
+			_rainOcclusionPVS.get(),
+			LAYERMASK(Layer::StaticGeometry),
+			MeshRenderFlags::MeshRenderShadowMap);
+
+		_rainOcclusionCentre = centre;
+		_rainOcclusionNextRefresh = now + (double)r_rainOcclusionRefresh._val.f32;
+		_rainOcclusionValid = true;
 	}
 
 	void SceneRenderer::RenderShadowMaps(Light* shadowCaster)
@@ -5229,6 +5361,11 @@ namespace HexEngine
 			// during the decal/auto-puddle pass so reading is legal). The auto-
 			// puddle PS samples it for the per-pixel flatness test.
 			graphics->SetTexture2D(1, _gbuffer.GetNormal());
+			// Shelter occlusion map at t2 - sheltered floors collect no
+			// puddles (see PuddleShelter in AutoPuddles.shader).
+			graphics->SetTexture2D(2,
+				(_rainOcclusionValid && _rainOcclusionMap != nullptr)
+					? _rainOcclusionMap->GetDepthMap() : nullptr);
 
 			// Pack the HVar-driven config into the auto-puddle cbuffer.
 			struct AutoPuddleGpuConstants

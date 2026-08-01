@@ -357,6 +357,19 @@ namespace HexEngine
 		ShadowAtlas _shadowAtlas;
 		// Lazy r_shadowAtlasDebug overlay copy (raw atlas -> drawable SRV).
 		ITexture2D* _shadowAtlasDebugTex = nullptr;
+
+		// Phase 3 slice 2: shelter/rain occlusion. A top-down ortho depth
+		// map around the camera (static geometry only), cached and
+		// re-rendered on recentre or a slow timer; material shaders mask
+		// wetness/snow/puddles where static cover sits above a surface.
+		class ShadowMap* _rainOcclusionMap = nullptr;
+		std::unique_ptr<PVS> _rainOcclusionPVS;
+		math::Matrix _rainOcclusionView = math::Matrix::Identity;
+		math::Matrix _rainOcclusionProj = math::Matrix::Identity;
+		math::Vector3 _rainOcclusionCentre = math::Vector3::Zero;
+		double _rainOcclusionNextRefresh = 0.0;
+		bool _rainOcclusionValid = false;
+		void UpdateRainOcclusionMap();
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 

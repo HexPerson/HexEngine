@@ -392,11 +392,16 @@
 		// darkening rationale live in PBRutils::ApplyWetSurface. The drip
 		// block below stays per-material (rainDripIntensity) and no longer
 		// darkens - that would double-apply.
+		// Shelter occlusion (slice 2): surfaces under static cover receive
+		// no rain or snow. 1 = exposed; scales every weather term below.
+		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
+		const float shelteredWetness = g_weatherSurface.wetness * shelter;
+
 		float wetFilm = 0.0f;
-		if (g_weatherSurface.wetness > 0.001f)
+		if (shelteredWetness > 0.001f)
 		{
 			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
-				g_weatherSurface.wetness, g_wetnessDarkening);
+				shelteredWetness, g_wetnessDarkening);
 		}
 
 		// Rain droplets: when the material opts in (rainDripIntensity > 0) and
@@ -406,7 +411,7 @@
 		// normal-map sampling above used. World-space noise so drops stay
 		// anchored as the camera moves - fine for static geometry, would slide
 		// on rotating meshes (acceptable v1 limit).
-		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
+		const float rainStrength = g_material.rainDripIntensity * shelteredWetness;
 		if (rainStrength > 0.001f)
 		{
 			// Surface up-facing-ness selects between "drops bead in place" (horizontal)
@@ -432,11 +437,12 @@
 		// accumulates, snow then dominates the visual). No per-material opt-in -
 		// any upward-facing surface naturally catches snow when the weather
 		// system reports snowCoverage > 0. See ApplySnowAccumulation in PBRutils.
-		if (g_weatherSurface.snowCoverage > 0.001f)
+		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
+		if (shelteredSnow > 0.001f)
 		{
 			const float4 snowResult = ApplySnowAccumulation(
 				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
-				g_weatherSurface.snowCoverage);
+				shelteredSnow);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}

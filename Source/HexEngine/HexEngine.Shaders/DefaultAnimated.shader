@@ -463,18 +463,22 @@
 		// Universal wet response - mirrors DefaultPixel exactly (see the
 		// comment there). Skinned surfaces get wet like everything else;
 		// only the drip perturbation below stays per-material.
+		// Shelter occlusion - matches DefaultPixel.
+		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
+		const float shelteredWetness = g_weatherSurface.wetness * shelter;
+
 		float wetFilm = 0.0f;
-		if (g_weatherSurface.wetness > 0.001f)
+		if (shelteredWetness > 0.001f)
 		{
 			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
-				g_weatherSurface.wetness, g_wetnessDarkening);
+				shelteredWetness, g_wetnessDarkening);
 		}
 
 		// Rain droplets - same procedural perturbation DefaultPixel uses. See
 		// ApplyRainDroplets in PBRutils.shader for the full doc. Animated meshes
 		// hit this less often (skinned characters in rain), but if the user opts
 		// in via the material slider they get the same wet-surface look.
-		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
+		const float rainStrength = g_material.rainDripIntensity * shelteredWetness;
 		if (rainStrength > 0.001f)
 		{
 			const float isHorizontal = step(0.5f, worldNormal.y);
@@ -492,11 +496,12 @@
 
 		// Snow accumulation. Same global-no-opt-in semantics as DefaultPixel -
 		// any upward-facing animated surface catches snow. See PBRutils.
-		if (g_weatherSurface.snowCoverage > 0.001f)
+		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
+		if (shelteredSnow > 0.001f)
 		{
 			const float4 snowResult = ApplySnowAccumulation(
 				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
-				g_weatherSurface.snowCoverage);
+				shelteredSnow);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}

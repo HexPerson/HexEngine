@@ -753,10 +753,14 @@ namespace HexEngine
 			// and most environment art in this project is graph-authored -
 			// editing only DefaultPixel once left the hall floor completely
 			// unaffected even at full strength.
+			// Shelter occlusion - matches DefaultPixel: covered surfaces get
+			// no rain or snow.
+			ss << "\t\tconst float __shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);\n";
+			ss << "\t\tconst float __shelteredWetness = g_weatherSurface.wetness * __shelter;\n";
 			ss << "\t\tfloat __wetFilm = 0.0f;\n";
-			ss << "\t\tif (g_weatherSurface.wetness > 0.001f)\n";
+			ss << "\t\tif (__shelteredWetness > 0.001f)\n";
 			ss << "\t\t{\n";
-			ss << "\t\t\t__wetFilm = ApplyWetSurface(baseColor.rgb, roughness, metallic, g_weatherSurface.wetness, g_wetnessDarkening);\n";
+			ss << "\t\t\t__wetFilm = ApplyWetSurface(baseColor.rgb, roughness, metallic, __shelteredWetness, g_wetnessDarkening);\n";
 			ss << "\t\t}\n";
 
 			// Rain droplets - mirror what DefaultPixel.shader does so graph-authored
@@ -766,7 +770,7 @@ namespace HexEngine
 			// noise stays anchored as the camera moves; isHorizontal switches between
 			// "drops bead" (floor / road) and "drops streak" (vertical surfaces).
 			// (Darkening moved to the universal block above.)
-			ss << "\t\tconst float __rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;\n";
+			ss << "\t\tconst float __rainStrength = g_material.rainDripIntensity * __shelteredWetness;\n";
 			ss << "\t\tif (__rainStrength > 0.001f)\n";
 			ss << "\t\t{\n";
 			ss << "\t\t\tconst float __isHorizontal = step(0.5f, worldNormal.y);\n";
@@ -779,9 +783,10 @@ namespace HexEngine
 			// applied to baseColor + roughness for any upward-facing surface. No
 			// per-material slider; the snow shader's own slope mask handles
 			// which surfaces visually catch the snow.
-			ss << "\t\tif (g_weatherSurface.snowCoverage > 0.001f)\n";
+			ss << "\t\tconst float __shelteredSnow = g_weatherSurface.snowCoverage * __shelter;\n";
+			ss << "\t\tif (__shelteredSnow > 0.001f)\n";
 			ss << "\t\t{\n";
-			ss << "\t\t\tconst float4 __snowResult = ApplySnowAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, g_weatherSurface.snowCoverage);\n";
+			ss << "\t\t\tconst float4 __snowResult = ApplySnowAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, __shelteredSnow);\n";
 			ss << "\t\t\tbaseColor.rgb = __snowResult.rgb;\n";
 			ss << "\t\t\troughness     = __snowResult.w;\n";
 			ss << "\t\t}\n";

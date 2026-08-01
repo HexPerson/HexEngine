@@ -681,6 +681,52 @@
 	}
 
 	// =====================================================================
+	// Shelter/rain occlusion (Phase 3 slice 2). Top-down ortho depth map
+	// rendered around the camera by SceneRenderer (static geometry only,
+	// cached and refreshed on recentre / a slow timer). Bound at t26
+	// during the opaque pass - t21..t24 are taken by the terrain layer
+	// textures and t27..t29 by the forward cluster lists, t26 is free in
+	// every shader that includes this file. The declaration only claims
+	// the register in shaders that actually call SampleRainShelter (fxc
+	// strips unused bindings). g_rainOcclusionVP/Params live in the Global cbuffer,
+	// which every consumer of this include already lists first (the
+	// lightning code above depends on the same ordering).
+	//
+	// Returns exposure to the sky: 1 = rain/snow reaches this surface,
+	// 0 = covered by static geometry above it. Pixels outside the map's
+	// footprint are treated as exposed - the map follows the camera, so
+	// distant surfaces degrade to the pre-shelter behaviour instead of
+	// popping dry. 2x2 taps soften the shelter edge by one texel.
+	// =====================================================================
+	Texture2D<float> g_rainOcclusionMap : register(t26);
+
+	float SampleRainShelter(float3 worldPos, SamplerState samp)
+	{
+		if (g_rainOcclusionParams.x < 0.5f)
+			return 1.0f;
+
+		const float4 clip = mul(float4(worldPos, 1.0f), g_rainOcclusionVP);
+		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+		if (any(uv < 0.0f) || any(uv > 1.0f) || clip.z < 0.0f || clip.z > 1.0f)
+			return 1.0f;
+
+		const float bias = g_rainOcclusionParams.y;
+		const float texel = g_rainOcclusionParams.z;
+		float exposed = 0.0f;
+		[unroll]
+		for (int i = 0; i < 4; ++i)
+		{
+			const float2 o = float2((i & 1) ? texel : -texel, (i & 2) ? texel : -texel) * 0.5f;
+			const float mapDepth = g_rainOcclusionMap.SampleLevel(samp, uv + o, 0);
+			// The map stores the depth of the highest surface. If that is
+			// meaningfully NEARER the sky than this pixel, something is
+			// overhead: sheltered.
+			exposed += (clip.z <= mapDepth + bias) ? 0.25f : 0.0f;
+		}
+		return exposed;
+	}
+
+	// =====================================================================
 	// Universal wet-surface response (Phase 3 slice 1). Unlike the drip
 	// system below - which is per-material opt-in via rainDripIntensity -
 	// this applies to EVERY opaque surface, the same way snow does: rain
