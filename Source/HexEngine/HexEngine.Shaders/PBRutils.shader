@@ -652,6 +652,60 @@
 		return h1 * 0.7f + h2 * 0.3f;
 	}
 
+	// Parallax occlusion march of the snow height field (slice 5b). Normal
+	// perturbation alone can't sell snow depth - the surface stays visually
+	// FLAT because the eye sees no self-occlusion and a flat silhouette.
+	// POM fixes the self-occlusion half: raymarch the view ray THROUGH the
+	// height field and shade at the raised hit point instead of the flat
+	// ground point, so near drifts visibly cover the troughs behind them
+	// and the snow reads as a raised, lumpy layer.
+	//
+	// Snow lays on up-facing ground, so the usual per-pixel tangent frame
+	// collapses to world XZ and the march is analytic (no height texture):
+	// the ray moves -viewDir.xz/viewDir.y metres horizontally per metre it
+	// descends. Returns the world-XZ offset to shade at and a trough-AO
+	// term (deep hits between drifts read darker).
+	float2 SnowParallax(float3 worldPos, float3 viewDirWS, float layerHeightM, out float troughAO)
+	{
+		troughAO = 1.0f;
+		if (layerHeightM < 0.002f)
+			return float2(0.0f, 0.0f);
+
+		// Clamp grazing angles so the horizontal sweep can't explode.
+		const float vy = max(viewDirWS.y, 0.25f);
+		const float2 xzPerHeight = -viewDirWS.xz / vy;
+
+		const int STEPS = 12;
+		const float stepH = layerHeightM / STEPS;
+		const float2 stepXZ = xzPerHeight * stepH;
+
+		float rayH = layerHeightM;      // top of the snow layer
+		float2 curXZ = float2(0.0f, 0.0f);
+		float prevRayH = rayH;
+		float2 prevXZ = curXZ;
+		float prevField = layerHeightM;
+
+		[loop]
+		for (int i = 0; i < STEPS; ++i)
+		{
+			const float field = SnowHeightField(worldPos.xz + curXZ) * layerHeightM;
+			if (rayH <= field)
+			{
+				// Interpolate the crossing between the last-above and
+				// this-below sample for a smooth hit.
+				const float after  = field - rayH;
+				const float before = prevRayH - prevField;
+				const float t = before / max(before + after, 1e-4f);
+				troughAO = saturate(0.45f + 0.55f * (field / layerHeightM));
+				return lerp(prevXZ, curXZ, t);
+			}
+			prevRayH = rayH; prevXZ = curXZ; prevField = field;
+			rayH -= stepH;
+			curXZ += stepXZ;
+		}
+		return curXZ;
+	}
+
 	// snowMelt (slice 4): erodes the mask and turns powder into slush.
 	// Melting snow retreats from the noise-thin areas first (the same
 	// bias direction low coverage uses), and what remains reads wet -
@@ -687,18 +741,33 @@
 		if (slopeMask <= 0.0f)
 			return float4(baseAlbedo, baseRoughness);
 
+		const float melt = saturate(snowMelt);
+
+		// Parallax occlusion (slice 5b): estimate the snow thickness here to
+		// set the POM layer height, march the view ray through the height
+		// field, and shade the whole snow layer at the RAISED hit point
+		// `sxz` instead of the flat ground point. This is what actually
+		// sells depth - near drifts occlude the troughs behind them.
+		const float baseField = SnowHeightField(worldPos.xz);
+		const float baseThickness = saturate(slopeMask * (0.2f + baseField * 1.4f) * snowCoverage)
+			* (1.0f - melt);
+		const float kSnowMaxHeight = 0.15f; // metres of drift at full thickness
+		const float3 viewDirWS = normalize(g_eyePos.xyz - worldPos);
+		float troughAO = 1.0f;
+		const float2 pomXZ = SnowParallax(worldPos, viewDirWS, kSnowMaxHeight * baseThickness, troughAO);
+		const float2 sxz = worldPos.xz + pomXZ;
+
 		// Procedural noise so snow patches read as "actual snow with texture",
-		// not a flat white paint. Two-octave value noise at world-space XZ so
-		// the pattern stays anchored as the camera moves.
+		// not a flat white paint. Two-octave value noise sampled at the
+		// PARALLAXED position so the pattern rises with the layer.
 		const float kNoiseScale = 0.45f; // 45 cm per noise cycle - snow drift scale
-		const float n1 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / kNoiseScale);
-		const float n2 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / (kNoiseScale * 0.4f));
+		const float n1 = ValueNoise3(float3(sxz.x, 0.0f, sxz.y) / kNoiseScale);
+		const float n2 = ValueNoise3(float3(sxz.x, 0.0f, sxz.y) / (kNoiseScale * 0.4f));
 		// Melt erodes the noise THRESHOLD rather than scaling the mask: thin
 		// snow (noise-low areas) vanishes first, drift cores survive longest
 		// - spatially progressive retreat, which is both how real melt looks
 		// and a far more legible slider response than the uniform fade this
 		// used to be (any melt read as "on", the magnitude was invisible).
-		const float melt = saturate(snowMelt);
 		const float patchNoise = saturate((n1 * 0.65f + n2 * 0.35f)
 			- (1.0f - snowCoverage) * 0.45f
 			- melt * 0.55f);
@@ -748,9 +817,9 @@
 		if (snowMask > 0.02f)
 		{
 			const float kSampleDist = 0.09f; // metres between height taps
-			const float hC = SnowHeightField(worldPos.xz);
-			const float hX = SnowHeightField(worldPos.xz + float2(kSampleDist, 0.0f));
-			const float hZ = SnowHeightField(worldPos.xz + float2(0.0f, kSampleDist));
+			const float hC = SnowHeightField(sxz);
+			const float hX = SnowHeightField(sxz + float2(kSampleDist, 0.0f));
+			const float hZ = SnowHeightField(sxz + float2(0.0f, kSampleDist));
 			// 0.18 gives ~25-35 degree clump slopes - the original 0.05
 			// topped out near 8 degrees, which flat overcast lighting
 			// swallowed entirely (user: "I don't see any difference").
@@ -769,8 +838,11 @@
 		// The height field also shades the albedo slightly - crevices between
 		// clumps read a touch darker, which sells the volume even where the
 		// lighting is flat.
-		const float crevice = SnowHeightField(worldPos.xz);
-		const float3 snowColour = float3(0.92f, 0.94f, 0.98f) * (0.78f + 0.22f * crevice);
+		// Crevice + parallax-trough AO both darken the gaps between drifts;
+		// the trough term is the POM self-occlusion, which is most of what
+		// reads as depth on the flat ground plane.
+		const float crevice = SnowHeightField(sxz);
+		const float3 snowColour = float3(0.92f, 0.94f, 0.98f) * (0.78f + 0.22f * crevice) * troughAO;
 		const float3 newAlbedo = lerp(baseAlbedo, snowColour, snowMask);
 
 		// Snow is highly diffuse (lots of micro-scattering between snowflakes)
