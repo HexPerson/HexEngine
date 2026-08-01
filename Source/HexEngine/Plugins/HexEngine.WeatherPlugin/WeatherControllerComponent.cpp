@@ -641,6 +641,10 @@ namespace HexEngine::Weather
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Wetness", &_globalState.surface.wetness, 0.0f, 1.0f, 0.01f, 3);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Puddles", &_globalState.surface.puddleAmount, 0.0f, 1.0f, 0.01f, 3);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Snow Coverage", &_globalState.surface.snowCoverage, 0.0f, 1.0f, 0.01f, 3);
+		// Phase 3 slice 4 gave these fields their shader consumers; without
+		// sliders they were only reachable through preset constants.
+		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Snow Melt", &_globalState.surface.snowMelt, 0.0f, 1.0f, 0.01f, 3);
+		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Dust Amount", &_globalState.surface.dirtAmount, 0.0f, 1.0f, 0.01f, 3);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Wind Speed", &_globalState.windSpeed, 0.0f, 200.0f, 0.1f, 2);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Lightning Intensity", &_globalState.lightningIntensity, 0.0f, 10.0f, 0.05f, 2);
 		new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Enable Lightning", &_globalState.enableLightning);
