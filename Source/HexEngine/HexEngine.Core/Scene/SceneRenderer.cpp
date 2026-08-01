@@ -452,6 +452,7 @@ namespace HexEngine
 	HVar r_rainOcclusion("r_rainOcclusion", "Shelter occlusion: surfaces under static cover stay dry in rain/snow", true, false, true);
 	HVar r_rainOcclusionExtent("r_rainOcclusionExtent", "Half-extent in metres of the rain occlusion map around the camera", 96.0f, 16.0f, 512.0f);
 	HVar r_rainOcclusionRefresh("r_rainOcclusionRefresh", "Seconds between rain occlusion map refreshes (recentre also refreshes)", 2.0f, 0.1f, 30.0f);
+	HVar r_weatherSurfaceDebug("r_weatherSurfaceDebug", "Log the uploaded weather surface params once a second", false, false, true);
 
 	// Slice 5: the sun whose cascades RenderTransparent binds at t15..t20. One
 	// function shared by the g_taaParams.z packing and the bind block so the
@@ -2395,6 +2396,21 @@ namespace HexEngine
 			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 5));
 			bufferData._rainDripDebug = r_rainDripDebug._val.b ? 1.0f : 0.0f;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
+			// Diagnostic for the surface-matrix fields: logs what the GPU
+			// actually receives ~once a second, so "slider does nothing"
+			// reports can be split into CPU-chain vs shader problems.
+			if (r_weatherSurfaceDebug._val.b)
+			{
+				static uint64_t sLastLogFrame = 0ull;
+				const uint64_t frame = g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0ull;
+				if (frame - sLastLogFrame >= 60ull)
+				{
+					sLastLogFrame = frame;
+					const auto& ws = bufferData._weatherSurface;
+					LOG_INFO("WeatherSurface upload: wet=%.3f puddle=%.3f snow=%.3f melt=%.3f dirt=%.3f precip=%.3f",
+						ws.wetness, ws.puddleAmount, ws.snowCoverage, ws.snowMelt, ws.dirtAmount, ws.precipitationIntensity);
+				}
+			}
 
 			// Shadowmap data
 			
