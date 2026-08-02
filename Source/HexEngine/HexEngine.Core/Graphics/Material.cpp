@@ -141,6 +141,7 @@ namespace HexEngine
 		_objectFlags = material._objectFlags;
 		_affectsGI = material._affectsGI;
 		_emissiveAffectsGI = material._emissiveAffectsGI;
+		_receivesSnow = material._receivesSnow;
 		_footstepSoundPath = material._footstepSoundPath;
 		_footstepSurfaceMapPath = material._footstepSurfaceMapPath;
 		_footstepSurfaceSounds = material._footstepSurfaceSounds;

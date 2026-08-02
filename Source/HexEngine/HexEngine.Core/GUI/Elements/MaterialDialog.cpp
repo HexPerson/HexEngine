@@ -50,6 +50,8 @@ namespace HexEngine
 		_affectsGiToggle = new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Affects GI", &_affectsGI);
 		_emissiveAffectsGI = _material->GetEmissiveAffectsGI();
 		_emissiveGiToggle = new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Emissive Affects GI", &_emissiveAffectsGI);
+		_receivesSnow = _material->GetReceivesSnow();
+		new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Receives Snow", &_receivesSnow);
 
 		auto format = new DropDown(_layout, _layout->GetNextPos(), Point(200, 18), L"Format");
 		format->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&Material::SetFormat, material.get(), MaterialFormat::None)));
@@ -169,6 +171,7 @@ namespace HexEngine
 	bool MaterialDialog::Save()
 	{
 		_material->SetAffectsGI(_affectsGI);
+		_material->SetReceivesSnow(_receivesSnow);
 		_material->SetEmissiveAffectsGI(_emissiveAffectsGI);
 		if (auto scene = g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr ? g_pEnv->_sceneManager->GetCurrentScene() : nullptr; scene != nullptr)
 		{

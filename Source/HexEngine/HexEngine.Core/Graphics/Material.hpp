@@ -51,7 +51,8 @@ namespace HexEngine
 				_depthState == other._depthState &&
 				_cullMode == other._cullMode &&
 				_affectsGI == other._affectsGI &&
-				_emissiveAffectsGI == other._emissiveAffectsGI
+				_emissiveAffectsGI == other._emissiveAffectsGI &&
+				_receivesSnow == other._receivesSnow
 				);
 		}
 
@@ -119,6 +120,12 @@ namespace HexEngine
 		bool GetEmissiveAffectsGI() const;
 		void SetAffectsGI(bool value);
 		bool GetAffectsGI() const;
+		// Snow shell (Phase 3): when set, a snow accumulation layer is drawn
+		// on top of this (rigid) surface in the opaque pass - see the shell
+		// re-draw in Scene::RenderInstance. Opt-in per material so only
+		// up-facing ground surfaces pay the tessellation cost.
+		void SetReceivesSnow(bool value) { _receivesSnow = value; }
+		bool GetReceivesSnow() const { return _receivesSnow; }
 
 		void				SetBlendState(BlendState state);
 		void				SetCullMode(CullingMode mode);
@@ -177,6 +184,7 @@ namespace HexEngine
 		std::map<std::string, std::string> _soundTags;
 		bool _affectsGI = true;
 		bool _emissiveAffectsGI = false;
+		bool _receivesSnow = false;
 
 		std::recursive_mutex _lock;
 		uint32_t _objectFlags = 0;

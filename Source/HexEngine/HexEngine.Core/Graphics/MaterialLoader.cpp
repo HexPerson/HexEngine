@@ -206,6 +206,10 @@ namespace HexEngine
 			file->Deserialize(properties, "affectsGI", affectsGI);
 			material->SetAffectsGI(affectsGI);
 
+			bool receivesSnow = false;
+			file->Deserialize(properties, "receivesSnow", receivesSnow);
+			material->SetReceivesSnow(receivesSnow);
+
 			bool emissiveAffectsGI = false;
 			file->Deserialize(properties, "emissiveAffectsGI", emissiveAffectsGI);
 			material->SetEmissiveAffectsGI(emissiveAffectsGI);
@@ -605,6 +609,7 @@ namespace HexEngine
 			file.Serialize(properties, "modelParams", material->_properties.modelParams);
 			file.Serialize(properties, "rainDripIntensity", material->_properties.rainDripIntensity);
 			file.Serialize(properties, "affectsGI", material->GetAffectsGI());
+			file.Serialize(properties, "receivesSnow", material->GetReceivesSnow());
 			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());
 			file.Serialize(properties, "footstepSoundPath", material->GetFootstepSoundPath());
 			file.Serialize(properties, "footstepSurfaceMap", material->GetFootstepSurfaceMapPath());

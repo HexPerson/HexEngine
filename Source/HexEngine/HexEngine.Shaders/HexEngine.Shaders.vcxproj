@@ -207,6 +207,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     </HexEngineShader>
     <HexEngineShader Include="AtmospherePhysical.shader" />
     <HexEngineShader Include="DefaultSnowTess.shader" />
+    <HexEngineShader Include="SnowShell.shader" />
     <HexEngineShader Include="AutoExposureLuminance.shader" />
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="BuildDepthPyramid.shader" />

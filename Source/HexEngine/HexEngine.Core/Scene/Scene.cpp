@@ -1851,8 +1851,24 @@ namespace HexEngine
 	// meshes behind corrupt draw ordinals. Self-clears when the count runs out.
 	HVar r_dumpMeshDraws("r_dumpMeshDraws", "Log mesh/material identity for the next N instanced draws (0 = off)", 0, 0, 100000);
 
+	// Lazy-loaded snow shell shader (Phase 3 tess slice 4). Null until first
+	// use / if the .hcs is missing, in which case the shell silently no-ops.
+	IShader* GetSnowShellShader()
+	{
+		static std::shared_ptr<IShader> s_shell;
+		static bool s_tried = false;
+		if (!s_tried)
+		{
+			s_tried = true;
+			s_shell = IShader::Create("EngineData.Shaders/SnowShell.hcs");
+			if (!s_shell)
+				LOG_WARN("SnowShell.hcs failed to load - snow shell disabled");
+		}
+		return s_shell.get();
+	}
+
 	template <typename T>
-	void RenderInstance(T* instance, uint32_t numInstances, Material* material, bool& rendered)
+	void RenderInstance(T* instance, uint32_t numInstances, Material* material, bool& rendered, bool allowShell = false)
 	{
 		if (instance)
 		{
@@ -1922,6 +1938,40 @@ namespace HexEngine
 				else
 				{
 					g_pEnv->_graphicsDevice->DrawIndexedInstanced(indexCount, static_cast<uint32_t>(numInstances));
+				}
+
+				// Snow shell (Phase 3 tess slice 4): a SECOND draw of the same
+				// instances, extruded up and clipped, layered on top of the
+				// rigid surface just drawn - so snow reads as accumulation ON
+				// the concrete, not the concrete deforming. Opt-in per material
+				// (_receivesSnow, ticked on ground materials), never in the
+				// shadow pass (allowShell false there), D3D11 only. The base
+				// draw already bound this mesh's per-object buffer, textures,
+				// depth/blend/cull and the compatible input layout - the shell
+				// reuses all of it and only swaps in its own stages + patch
+				// topology + the per-frame cbuffer the HS/DS read.
+				if (allowShell && material && material->GetReceivesSnow() &&
+					g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11)
+				{
+					IShader* shell = GetSnowShellShader();
+					IShaderStage* hs = shell ? shell->GetShaderStage(ShaderStage::HullShader) : nullptr;
+					IShaderStage* ds = shell ? shell->GetShaderStage(ShaderStage::DomainShader) : nullptr;
+					if (shell && hs && ds)
+					{
+						auto* gd = g_pEnv->_graphicsDevice;
+						gd->SetVertexShader(shell->GetShaderStage(ShaderStage::VertexShader));
+						gd->SetPixelShader(shell->GetShaderStage(ShaderStage::PixelShader));
+						gd->SetHullShader(hs);
+						gd->SetDomainShader(ds);
+						auto* perFrame = gd->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer);
+						gd->SetConstantBufferHS(0, perFrame);
+						gd->SetConstantBufferDS(0, perFrame);
+						gd->SetTopology(HexEngine::PrimitiveTopology::ControlPointPatchList3);
+						gd->DrawIndexedInstanced(indexCount, static_cast<uint32_t>(numInstances));
+						gd->SetHullShader(nullptr);
+						gd->SetDomainShader(nullptr);
+						gd->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+					}
 				}
 
 				if (material)
@@ -2245,7 +2295,7 @@ namespace HexEngine
 						if (isShadowMap)
 							RenderInstance((SimpleMeshInstance*)lastInstance, drawnInstances, material.get(), rendered);
 						else
-							RenderInstance(lastInstance, drawnInstances, material.get(), rendered);
+							RenderInstance(lastInstance, drawnInstances, material.get(), rendered, /*allowShell*/ true);
 
 						drawnInstances = 0;
 
@@ -2355,7 +2405,7 @@ namespace HexEngine
 					if (isShadowMap)
 						RenderInstance((SimpleMeshInstance*)currentInstance, drawnInstances, material.get(), rendered);
 					else
-						RenderInstance(currentInstance, drawnInstances, material.get(), rendered);
+						RenderInstance(currentInstance, drawnInstances, material.get(), rendered, /*allowShell*/ true);
 				}
 			}
 		}

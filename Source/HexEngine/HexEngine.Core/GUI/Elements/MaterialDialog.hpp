@@ -34,6 +34,7 @@ namespace HexEngine
 		Checkbox* _emissiveGiToggle = nullptr;
 		bool _affectsGI = true;
 		bool _emissiveAffectsGI = true;
+		bool _receivesSnow = false;
 		std::shared_ptr<Material> _material;
 	};
 }
