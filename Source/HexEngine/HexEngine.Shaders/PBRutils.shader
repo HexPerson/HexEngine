@@ -924,16 +924,23 @@
 
 		const float bias = g_rainOcclusionParams.y;
 		const float texel = g_rainOcclusionParams.z;
+		// Soft depth compare (was a binary <= per tap, which quantised the
+		// result to {0,.25,.5,.75,1} and stepped the wetness darkening by
+		// 25% at every shelter boundary - the "hard pop as it darkens" the
+		// user saw near buildings). smoothstep over a ~3 m depth band makes
+		// each tap continuous, so the whole shelter term - and the darkening
+		// it multiplies - fades smoothly across the cover edge.
+		const float kSoftBand = 3.0f / 160.0f; // ~3 m over the 160 m depth range
 		float exposed = 0.0f;
 		[unroll]
 		for (int i = 0; i < 4; ++i)
 		{
 			const float2 o = float2((i & 1) ? texel : -texel, (i & 2) ? texel : -texel) * 0.5f;
 			const float mapDepth = g_rainOcclusionMap.SampleLevel(samp, uv + o, 0);
-			// The map stores the depth of the highest surface. If that is
-			// meaningfully NEARER the sky than this pixel, something is
-			// overhead: sheltered.
-			exposed += (clip.z <= mapDepth + bias) ? 0.25f : 0.0f;
+			// The map stores the depth of the highest surface. A surface far
+			// BELOW it (clip.z - mapDepth large) has something overhead ->
+			// sheltered; at/above it -> exposed. Soft ramp between.
+			exposed += 0.25f * (1.0f - smoothstep(bias, bias + kSoftBand, clip.z - mapDepth));
 		}
 		return exposed;
 	}
