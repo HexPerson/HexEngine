@@ -228,6 +228,8 @@ namespace HexEngine
 			_vertexShader = nullptr;
 			_pixelShader = nullptr;
 			_geometryShader = nullptr;
+			_hullShader = nullptr;
+			_domainShader = nullptr;
 			_vsConstant = nullptr;
 			_psConstant = nullptr;
 			_gsConstant = nullptr;
@@ -241,6 +243,8 @@ namespace HexEngine
 		IShaderStage* _vertexShader = nullptr;
 		IShaderStage* _pixelShader = nullptr;
 		IShaderStage* _geometryShader = nullptr;
+		IShaderStage* _hullShader = nullptr;
+		IShaderStage* _domainShader = nullptr;
 		IConstantBuffer* _vsConstant = nullptr;
 		IConstantBuffer* _psConstant = nullptr;
 		IConstantBuffer* _gsConstant = nullptr;

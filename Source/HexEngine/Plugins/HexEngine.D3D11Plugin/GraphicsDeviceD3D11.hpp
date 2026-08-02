@@ -90,6 +90,11 @@ public:
 
 	virtual ShaderStageImpl<ID3D11GeometryShader>* CreateGeometryShader(std::vector<uint8_t>& shaderCode) override;
 
+	// Tessellation stages (Phase 3 snow displacement). ShaderStageImpl is
+	// generic over the native type, so these mirror the VS/PS/GS creators.
+	virtual ShaderStageImpl<ID3D11HullShader>*   CreateHullShader(std::vector<uint8_t>& shaderCode) override;
+	virtual ShaderStageImpl<ID3D11DomainShader>* CreateDomainShader(std::vector<uint8_t>& shaderCode) override;
+
 	virtual ShaderStageImpl<ID3D11ComputeShader>* CreateComputeShader(std::vector<uint8_t>& shaderCode) override;
 	virtual ShaderStageImpl<ID3D11ComputeShader>* CreateComputeShaderFromSource(const std::string& shaderSource, const std::string& entryPoint = "MainCS") override;
 
@@ -116,6 +121,8 @@ public:
 
 	virtual void SetPixelShader(HexEngine::IShaderStage* shader) override;
 	virtual void SetGeometryShader(HexEngine::IShaderStage* shader) override;
+	virtual void SetHullShader(HexEngine::IShaderStage* shader) override;
+	virtual void SetDomainShader(HexEngine::IShaderStage* shader) override;
 	virtual void SetComputeShader(HexEngine::IShaderStage* shader) override;
 
 	virtual void SetInputLayout(HexEngine::IInputLayout* layout) override;
@@ -124,6 +131,8 @@ public:
 
 	virtual void SetConstantBufferPS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 	virtual void SetConstantBufferGS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
+	virtual void SetConstantBufferHS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
+	virtual void SetConstantBufferDS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 	virtual void SetConstantBufferCS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 
 	virtual void SetTexture2D(uint32_t slot, HexEngine::ITexture2D* texture) override;

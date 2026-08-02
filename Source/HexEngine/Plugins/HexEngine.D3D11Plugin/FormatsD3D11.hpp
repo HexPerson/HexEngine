@@ -259,6 +259,7 @@ namespace HexEngine
 		case PrimitiveTopology::LineStrip:      return D3D_PRIMITIVE_TOPOLOGY_LINESTRIP;
 		case PrimitiveTopology::TriangleList:   return D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 		case PrimitiveTopology::TriangleStrip:  return D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
+		case PrimitiveTopology::ControlPointPatchList3: return D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
 		default:                                return D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
 		}
 	}

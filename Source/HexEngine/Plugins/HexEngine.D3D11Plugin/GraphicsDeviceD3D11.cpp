@@ -1615,6 +1615,32 @@ ShaderStageImpl<ID3D11PixelShader>* GraphicsDeviceD3D11::CreatePixelShader(std::
 	return shader;
 }
 
+ShaderStageImpl<ID3D11HullShader>* GraphicsDeviceD3D11::CreateHullShader(std::vector<uint8_t>& shaderCode)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	ID3D11HullShader* d3dShader = nullptr;
+	CHECK_HR(_device->CreateHullShader(shaderCode.data(), shaderCode.size(), nullptr, &d3dShader));
+
+	auto* shader = new ShaderStageImpl<ID3D11HullShader>;
+	shader->_shader = d3dShader;
+	shader->_shaderCode = shaderCode;
+	return shader;
+}
+
+ShaderStageImpl<ID3D11DomainShader>* GraphicsDeviceD3D11::CreateDomainShader(std::vector<uint8_t>& shaderCode)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	ID3D11DomainShader* d3dShader = nullptr;
+	CHECK_HR(_device->CreateDomainShader(shaderCode.data(), shaderCode.size(), nullptr, &d3dShader));
+
+	auto* shader = new ShaderStageImpl<ID3D11DomainShader>;
+	shader->_shader = d3dShader;
+	shader->_shaderCode = shaderCode;
+	return shader;
+}
+
 ShaderStageImpl<ID3D11ComputeShader>* GraphicsDeviceD3D11::CreateComputeShader(std::vector<uint8_t>& shaderCode)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
@@ -1945,6 +1971,28 @@ void GraphicsDeviceD3D11::SetGeometryShader(HexEngine::IShaderStage* shader)
 	}
 }
 
+void GraphicsDeviceD3D11::SetHullShader(HexEngine::IShaderStage* shader)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (shader != _prevRenderState._hullShader)
+	{
+		_deviceContext->HSSetShader(shader ? reinterpret_cast<ID3D11HullShader*>(shader->GetNativePtr()) : nullptr, nullptr, 0);
+		_prevRenderState._hullShader = shader;
+	}
+}
+
+void GraphicsDeviceD3D11::SetDomainShader(HexEngine::IShaderStage* shader)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (shader != _prevRenderState._domainShader)
+	{
+		_deviceContext->DSSetShader(shader ? reinterpret_cast<ID3D11DomainShader*>(shader->GetNativePtr()) : nullptr, nullptr, 0);
+		_prevRenderState._domainShader = shader;
+	}
+}
+
 void GraphicsDeviceD3D11::SetComputeShader(HexEngine::IShaderStage* shader)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
@@ -1995,6 +2043,20 @@ void GraphicsDeviceD3D11::SetConstantBufferGS(uint32_t slot, HexEngine::IConstan
 		_deviceContext->GSSetConstantBuffers(slot, 1, bufferArray);
 		_prevRenderState._gsConstant = buffer;
 	}
+}
+
+void GraphicsDeviceD3D11::SetConstantBufferHS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11Buffer* bufferArray[] = { buffer ? reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) : nullptr };
+	_deviceContext->HSSetConstantBuffers(slot, 1, bufferArray);
+}
+
+void GraphicsDeviceD3D11::SetConstantBufferDS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11Buffer* bufferArray[] = { buffer ? reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) : nullptr };
+	_deviceContext->DSSetConstantBuffers(slot, 1, bufferArray);
 }
 
 void GraphicsDeviceD3D11::SetConstantBufferCS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
