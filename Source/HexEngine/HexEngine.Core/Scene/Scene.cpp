@@ -1816,6 +1816,31 @@ namespace HexEngine
 			graphicsDevice->SetTexture2DArray(slotIdx, textures);
 
 			mesh->SetBuffers(isShadowMap);
+
+			// Tessellation opt-in (Phase 3 snow displacement). This batched
+			// snapshot path - not StaticMeshComponent::RenderMesh - is what
+			// actually draws environment meshes, so the same HS/DS + patch
+			// topology switch has to live here too: a tessellation VS emits
+			// control points (no SV_Position), so without the hull/domain
+			// stages bound the mesh rasterises nothing (the "road vanished"
+			// symptom). Mirrors RenderMesh exactly; redundancy-cached clears
+			// keep non-tessellated draws free.
+			IShaderStage* hullStage   = isShadowMap ? nullptr : shader->GetShaderStage(ShaderStage::HullShader);
+			IShaderStage* domainStage = isShadowMap ? nullptr : shader->GetShaderStage(ShaderStage::DomainShader);
+			if (hullStage != nullptr && domainStage != nullptr)
+			{
+				graphicsDevice->SetHullShader(hullStage);
+				graphicsDevice->SetDomainShader(domainStage);
+				auto* perFrame = graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer);
+				graphicsDevice->SetConstantBufferHS(0, perFrame);
+				graphicsDevice->SetConstantBufferDS(0, perFrame);
+				graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::ControlPointPatchList3);
+			}
+			else
+			{
+				graphicsDevice->SetHullShader(nullptr);
+				graphicsDevice->SetDomainShader(nullptr);
+			}
 			return true;
 		}
 	}
