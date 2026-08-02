@@ -85,7 +85,9 @@
 
 	[domain("tri")]
 	[partitioning("fractional_odd")]
-	[outputtopology("triangle_cw")]
+	// Engine meshes are CCW-front (flipping from the initial cw guess, which
+	// backface-culled the whole tessellated surface -> nothing rendered).
+	[outputtopology("triangle_ccw")]
 	[outputcontrolpoints(3)]
 	[patchconstantfunc("ConstantHS")]
 	SnowCP ShaderMain(InputPatch<SnowCP, 3> ip, uint i : SV_OutputControlPointID, uint pid : SV_PrimitiveID)
