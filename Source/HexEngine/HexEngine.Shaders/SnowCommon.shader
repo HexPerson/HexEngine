@@ -75,15 +75,24 @@
 		return h1 * 0.7f + h2 * 0.3f;
 	}
 
-	// Vertical snow displacement (metres) at a world position + geometric
-	// normal. Same slope/coverage/melt gating the pixel shader's snow mask
-	// uses, so the raised geometry and the shaded snow agree on where snow
-	// is. Steep faces (normal.y low) and zero coverage produce no lift.
-	float SnowDisplacement(float3 worldPos, float3 normalWS, float snowCoverage, float snowMelt)
+	// Vertical snow displacement (metres) at a world position. WATERTIGHT
+	// BY CONSTRUCTION: a pure function of world XZ + global uniforms, so any
+	// two vertices at the same world position - a shared edge between two
+	// tessellated patches, two triangles meeting at a crease, or the seam
+	// between two separate ground meshes - always displace by the SAME
+	// amount and stay welded. An earlier version gated by the interpolated
+	// vertex normal (a slope mask); at hard edges the two sides interpolate
+	// DIFFERENT normals for the shared edge, displaced it by different
+	// amounts, and tore the mesh open (the black cracks the user saw).
+	//
+	// The slope gating that keeps snow off steep faces now lives ONLY in the
+	// pixel shader's shading mask - it does not need to be watertight, and
+	// this shader is authored onto near-flat GROUND materials anyway (walls
+	// keep the standard non-tessellated shader).
+	float SnowDisplacement(float3 worldPos, float snowCoverage, float snowMelt)
 	{
-		const float slope = smoothstep(0.35f, 0.85f, normalWS.y);
 		const float h = SnowHeight_Field(worldPos.xz);
-		const float thickness = saturate(slope * (0.2f + h * 1.4f) * snowCoverage)
+		const float thickness = saturate((0.2f + h * 1.4f) * snowCoverage)
 			* (1.0f - saturate(snowMelt));
 		return thickness * SNOW_MAX_HEIGHT;
 	}

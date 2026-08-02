@@ -120,7 +120,7 @@
 		// Lift along world up. Displacement is static (view/time independent)
 		// so the previous-frame position gets the SAME lift - camera-motion
 		// velocity stays correct, TAA doesn't smear the snow.
-		const float disp = SnowDisplacement(worldPos, normal, g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
+		const float disp = SnowDisplacement(worldPos, g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
