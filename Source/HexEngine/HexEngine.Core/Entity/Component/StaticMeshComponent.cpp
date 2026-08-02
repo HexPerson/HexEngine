@@ -155,6 +155,29 @@ namespace HexEngine
 		slotIdx += MaterialTexture::Count;
 
 		mesh->SetBuffers(isShadowMap);
+
+		// Tessellation opt-in (Phase 3 snow displacement). A material whose
+		// shader carries BOTH a hull and a domain stage draws as a
+		// 3-control-point patch list with those stages bound - SetBuffers
+		// above just set TriangleList, so the override lands here, after it
+		// and before the caller's DrawIndexed. Never in the shadow pass (the
+		// shadow shader has no tessellation stages and cheap depth doesn't
+		// need displaced silhouettes). Every non-tessellated draw clears the
+		// stages so a prior patch draw can't leak HS/DS state into it; the
+		// device's redundancy cache makes the repeated null-set free.
+		IShaderStage* hullStage   = isShadowMap ? nullptr : shader->GetShaderStage(ShaderStage::HullShader);
+		IShaderStage* domainStage = isShadowMap ? nullptr : shader->GetShaderStage(ShaderStage::DomainShader);
+		if (hullStage != nullptr && domainStage != nullptr)
+		{
+			graphicsDevice->SetHullShader(hullStage);
+			graphicsDevice->SetDomainShader(domainStage);
+			graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::ControlPointPatchList3);
+		}
+		else
+		{
+			graphicsDevice->SetHullShader(nullptr);
+			graphicsDevice->SetDomainShader(nullptr);
+		}
 		return true;
 	}
 
