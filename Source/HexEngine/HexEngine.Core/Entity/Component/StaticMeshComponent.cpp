@@ -171,6 +171,14 @@ namespace HexEngine
 		{
 			graphicsDevice->SetHullShader(hullStage);
 			graphicsDevice->SetDomainShader(domainStage);
+			// The hull constant function and the domain shader both read the
+			// per-frame buffer (viewProj + prev, jitter, eye pos, weather
+			// surface) at b0 - route it to those stages (VS/PS setters don't
+			// reach them). No per-object bind needed: the VS already baked the
+			// world transform into the control points.
+			auto* perFrame = graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer);
+			graphicsDevice->SetConstantBufferHS(0, perFrame);
+			graphicsDevice->SetConstantBufferDS(0, perFrame);
 			graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::ControlPointPatchList3);
 		}
 		else
