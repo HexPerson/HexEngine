@@ -1035,12 +1035,23 @@
 		float wetness,
 		float darkenStrength)
 	{
-		const float w = saturate(wetness);
+		// Smoothstep toe on the whole response. The darkening used to ramp
+		// LINEARLY while the compensating gloss (film) ramps quadratically,
+		// so mid-wetness there was a window where the surface had darkened
+		// and lost its diffuse roughness but had not yet gained visible
+		// sheen - at night, with no bright specular to fill in, that window
+		// read as a black "pop". Driving darkening off the same eased curve
+		// as the film keeps the two coupled: the surface never darkens
+		// faster than it glosses, so it transitions into "wet" instead of
+		// through "black".
+		const float w = smoothstep(0.0f, 1.0f, saturate(wetness));
 		const float porosity = saturate((roughness - 0.25f) / 0.5f);
 		const float darken = darkenStrength * lerp(0.4f, 1.0f, porosity) * (1.0f - metalness);
-		albedo *= lerp(1.0f, 1.0f - darken, w);
-
 		const float film = w * w * lerp(1.0f, 0.55f, porosity);
+		// Darkening tracks the film curve (w^2), not w, so it can't outrun
+		// the gloss that is meant to justify it.
+		albedo *= lerp(1.0f, 1.0f - darken, w * w);
+
 		roughness = lerp(roughness, 0.12f, film);
 		return film;
 	}
