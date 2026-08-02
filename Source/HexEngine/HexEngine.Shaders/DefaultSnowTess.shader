@@ -85,9 +85,12 @@
 
 	[domain("tri")]
 	[partitioning("fractional_odd")]
-	// Engine meshes are CCW-front (flipping from the initial cw guess, which
-	// backface-culled the whole tessellated surface -> nothing rendered).
-	[outputtopology("triangle_ccw")]
+	// Back to cw: the earlier ccw flip was made on a FALSE signal - the mesh
+	// wasn't rendering because the batched draw path never bound HS/DS (a
+	// tessellation VS emits no SV_Position), not because of winding. With
+	// that fixed and rendering working, ccw was visibly inside-out, so cw is
+	// the correct front-face winding for the tessellated output.
+	[outputtopology("triangle_cw")]
 	[outputcontrolpoints(3)]
 	[patchconstantfunc("ConstantHS")]
 	SnowCP ShaderMain(InputPatch<SnowCP, 3> ip, uint i : SV_OutputControlPointID, uint pid : SV_PrimitiveID)
