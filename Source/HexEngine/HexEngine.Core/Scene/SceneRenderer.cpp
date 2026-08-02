@@ -3041,6 +3041,18 @@ namespace HexEngine
 			MeshRenderFlags::MeshRenderNormal);
 		_currentScene->RenderCustom(_currentScene, _currentCamera, MeshRenderFlags::MeshRenderNormal);
 
+		// Tessellation state MUST NOT leak past the opaque pass. A hull/domain
+		// pair left bound while any later pass (decals, deferred lighting,
+		// transparents, post) issues a TRIANGLE-topology draw is an invalid
+		// D3D11 pipeline (HS/DS require patch topology), which corrupts
+		// intermittently depending on whether a tessellated mesh happened to
+		// be the last opaque draw - exactly the "wrong winding + flashing at
+		// certain angles" the snow road showed. Clear the stages and restore
+		// triangle topology once, here, at the pass boundary.
+		g_pEnv->_graphicsDevice->SetHullShader(nullptr);
+		g_pEnv->_graphicsDevice->SetDomainShader(nullptr);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
 
 		//g_pEnv->_graphicsDevice->EnableDepthBuffer(false);
