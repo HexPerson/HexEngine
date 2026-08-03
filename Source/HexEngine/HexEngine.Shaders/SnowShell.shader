@@ -224,12 +224,13 @@
 		const float presence  = shelterDS * slopeGate
 			* saturate(g_weatherSurface.snowCoverage) * (1.0f - saturate(g_weatherSurface.snowMelt));
 		const float taper = smoothstep(0.05f, 0.85f, presence);
-		// Taper the snow VOLUME to nothing at the edges, but KEEP the 2 cm base
-		// clearance untapered - otherwise the shell sinks into the rigid
-		// concrete draw at the margins and z-fights it into a dark band. The
-		// residual 2 cm lip is sub-pixel and the pixel-shader fringe clips it,
-		// so there's no visible cliff.
-		const float disp = 0.02f + (snowAmt * 0.10f + drift * 0.42f) * taper;
+		// Taper the WHOLE lift (thin base included) to ~0 at the edges so the
+		// shell feathers all the way down to meet the ground. The pixel shader
+		// is handed this exact thickness and clips the fringe where it's only a
+		// few mm tall - so the snow is cut while it's flush with the ground (no
+		// vertical lip / seam) and, because it's clipped before it reaches the
+		// concrete plane, can't z-fight the rigid base draw either.
+		const float disp = (0.008f + snowAmt * 0.10f + drift * 0.42f) * taper;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
@@ -255,8 +256,12 @@
 		o.normal   = normal;
 		o.tangent  = float3(1.0f, 0.0f, 0.0f);
 		o.binormal = float3(0.0f, 0.0f, 1.0f);
-		// .w carries the geometric up-ness for the pixel shader's wall clip.
-		o.viewDirection = float4(normalize(g_eyePos.xyz - worldPos), geoUp);
+		// .w carries the tapered snow THICKNESS (metres). The pixel shader
+		// clips the fringe on it, so the cut lands exactly where the layer is
+		// thin - a seamless feathered edge. Wall exclusion rides along for
+		// free: the slope gate zeroes presence -> taper -> thickness on
+		// vertical faces, so they clip out with no separate test.
+		o.viewDirection = float4(normalize(g_eyePos.xyz - worldPos), disp);
 		o.colour = colour;
 		o.instanceID = patch[0].instanceID;
 		o.cullDistance = 1.0f;
@@ -279,34 +284,18 @@
 
 	GBufferOut ShaderMain(MeshPixelInput input)
 	{
-		// Feather the shell to where snow accumulates: the height field +
-		// slope + coverage give a natural broken edge; clipping below a
-		// threshold thins the layer to nothing so the rigid concrete shows
-		// through at the margins. This is what reads as "snow ON the
-		// surface" rather than a solid slab.
-		// Shelter: no snow under static cover (awnings, bridges, indoors).
-		// SampleRainShelter reads the top-down occlusion map at t26; under
-		// cover thickness -> 0 -> clipped -> bare concrete shows through.
-		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
-		// Wall exclusion uses the GEOMETRIC surface up-ness (DS stashed it in
-		// viewDirection.w) - input.normal.y is now always 1 (forced world-up
-		// for shading), so it can't tell a wall from the ground.
-		const float slope = smoothstep(0.35f, 0.85f, input.viewDirection.w);
-		// Smooth, LOW-frequency snow-coverage field: 1 = full snow, 0 = none.
-		// Only shelter * slope * coverage * (1-melt) - deliberately no high-
-		// frequency term, so a full-coverage sheet stays at 1 everywhere and
-		// can't develop interior holes.
-		const float coverS = saturate(slope * g_weatherSurface.snowCoverage * shelter)
-			* (1.0f - saturate(g_weatherSurface.snowMelt));
-		// Break the EDGE, not the sheet. The height field wiggles the cut
-		// THRESHOLD instead of multiplying coverage: the boundary meanders into
-		// a natural fringe, but because the interior coverS is a flat 1 it never
-		// crosses the (<=0.8) cut line, so no detached dark pinholes speckle the
-		// field (the concrete-through-snow specks the user saw). Snow survives
-		// where the smooth coverage beats a noise-perturbed ~0.5 line.
+		// The domain shader already tapered the snow thickness (metres) to ~0
+		// at every edge - shelter (occlusion map), coverage, melt and wall
+		// slope all funnel through it - and handed it over in viewDirection.w.
+		// Clip the fringe where the layer thins below a height-field-perturbed
+		// ~1 cm line: the boundary meanders into a natural broken edge AND lands
+		// exactly where the snow is only millimetres tall, so it feathers into
+		// the ground with no vertical seam and can't z-fight the concrete.
+		// Because the interior thickness is centimetres it never crosses the
+		// cut line, so no holes speckle the sheet.
+		const float thick = input.viewDirection.w;
 		const float h = SnowHeightField(input.positionWS.xz);   // 0..1
-		const float edge = 0.5f - (h - 0.5f) * 0.6f;            // 0.2..0.8 cut line
-		clip(coverS - edge);
+		clip(thick - (0.010f + (0.5f - h) * 0.010f));           // ~0..2 cm wavy cut
 
 		return DefaultPixelShader(input);
 	}
