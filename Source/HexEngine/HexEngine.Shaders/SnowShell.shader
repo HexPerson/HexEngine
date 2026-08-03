@@ -93,6 +93,45 @@
 }
 "DomainShader"
 {
+	// Rain/shelter occlusion map at DOMAIN-stage t0 (bound per frame by
+	// SceneRenderer). Top-down depth of the highest surface - used here to
+	// find nearby walls/props so snow banks UP against them (drift banks).
+	Texture2D<float> g_dsOcclusionMap : register(t0);
+
+	// How much a wall stands over this ground point, 0..1, from the occlusion
+	// map neighbourhood. Load() texel fetches (no sampler needed on the DS).
+	float SnowDriftBank(float3 worldPos)
+	{
+		if (g_rainOcclusionParams.x < 0.5f)
+			return 0.0f;
+		const float4 clip = mul(float4(worldPos, 1.0f), g_rainOcclusionVP);
+		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+		if (any(uv < 0.0f) || any(uv > 1.0f) || clip.z < 0.0f || clip.z > 1.0f)
+			return 0.0f;
+
+		uint mw, mh;
+		g_dsOcclusionMap.GetDimensions(mw, mh);
+		const int2 tc = int2(uv * float2(mw, mh));
+		const float here = clip.z;
+		const float kWallDelta = 0.8f / 160.0f; // a neighbour >=0.8m taller = wall
+
+		// 8 directions, two rings (~0.5m and ~1.1m out at 192m/2048). Closer
+		// ring counts double so the bank ramps UP toward the wall.
+		const float2 dirs[8] = {
+			float2(1,0), float2(-1,0), float2(0,1), float2(0,-1),
+			float2(0.7f,0.7f), float2(-0.7f,0.7f), float2(0.7f,-0.7f), float2(-0.7f,-0.7f) };
+		float bank = 0.0f;
+		[unroll]
+		for (int i = 0; i < 8; ++i)
+		{
+			const int2 tNear = clamp(tc + int2(dirs[i] * 5.0f),  int2(0,0), int2(mw - 1, mh - 1));
+			const int2 tFar  = clamp(tc + int2(dirs[i] * 11.0f), int2(0,0), int2(mw - 1, mh - 1));
+			bank += (here - g_dsOcclusionMap.Load(int3(tNear, 0)) > kWallDelta) ? 2.0f : 0.0f;
+			bank += (here - g_dsOcclusionMap.Load(int3(tFar,  0)) > kWallDelta) ? 1.0f : 0.0f;
+		}
+		return saturate(bank / 12.0f);
+	}
+
 	// Extrude the shell UP off the concrete by the snow height. The concrete
 	// underneath is untouched (drawn in its own rigid pass); this raised
 	// copy is what carries the snow volume + silhouette.
@@ -118,7 +157,11 @@
 		const float hSmooth = SnowHeight_Noise3(float3(worldPos.x, 0.0f, worldPos.z) / 0.9f);
 		const float snowAmt = saturate((0.3f + hSmooth * 0.7f) * g_weatherSurface.snowCoverage)
 			* (1.0f - saturate(g_weatherSurface.snowMelt));
-		const float disp = 0.02f + snowAmt * 0.10f;
+		// Drift banks: snow piles UP against nearby walls/objects. Detected
+		// from the occlusion map; scaled by snow amount so it fades with
+		// coverage/melt. Up to ~22cm of extra lift right against a wall.
+		const float drift = SnowDriftBank(worldPos) * snowAmt;
+		const float disp = 0.02f + snowAmt * 0.10f + drift * 0.22f;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 

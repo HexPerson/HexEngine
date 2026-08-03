@@ -141,6 +141,7 @@ public:
 
 	virtual void SetTexture3D(HexEngine::ITexture3D* texture) override;
 	virtual void SetGeometryTexture3D(uint32_t slot, HexEngine::ITexture3D* texture) override;
+	virtual void SetDomainTexture2D(uint32_t slot, HexEngine::ITexture2D* texture) override;
 	virtual void SetVertexStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer) override;
 	virtual void SetGeometryStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer) override;
 	virtual void SetComputeTexture3D(uint32_t slot, HexEngine::ITexture3D* texture) override;

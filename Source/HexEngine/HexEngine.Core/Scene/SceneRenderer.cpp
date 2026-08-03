@@ -3034,6 +3034,13 @@ namespace HexEngine
 			(_rainOcclusionValid && _rainOcclusionMap != nullptr)
 				? _rainOcclusionMap->GetDepthMap() : nullptr);
 
+		// Same occlusion map to the DOMAIN stage at DS-t0 for the snow shell's
+		// drift banks (geometry piling against walls). Domain-stage texture
+		// binding, separate from the PS bind above.
+		g_pEnv->_graphicsDevice->SetDomainTexture2D(0,
+			(_rainOcclusionValid && _rainOcclusionMap != nullptr)
+				? _rainOcclusionMap->GetDepthMap() : nullptr);
+
 		// Snow-shell material textures at t22/t23 (albedo/normal) for the snow
 		// shell pixel shader. Lazy-loaded once; if missing, the shell keeps
 		// its procedural white (the .w flag in SetupPerFrameBuffer gates it).

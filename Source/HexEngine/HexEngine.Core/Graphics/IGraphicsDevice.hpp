@@ -417,6 +417,9 @@ namespace HexEngine
 
 		virtual void SetTexture3D(ITexture3D* texture) = 0;
 		virtual void SetGeometryTexture3D(uint32_t slot, ITexture3D* texture) = 0;
+		// Domain-stage texture (tessellation, D3D11 snow drift banks). Non-pure
+		// no-op default so backends without a tessellation path are untouched.
+		virtual void SetDomainTexture2D(uint32_t slot, ITexture2D* texture) {}
 		virtual void SetVertexStructuredBuffer(uint32_t slot, IStructuredBuffer* buffer) = 0;
 		virtual void SetGeometryStructuredBuffer(uint32_t slot, IStructuredBuffer* buffer) = 0;
 		virtual void SetComputeTexture3D(uint32_t slot, ITexture3D* texture) = 0;

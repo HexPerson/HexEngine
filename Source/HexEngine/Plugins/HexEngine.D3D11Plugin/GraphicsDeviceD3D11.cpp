@@ -2198,6 +2198,14 @@ void GraphicsDeviceD3D11::SetGeometryTexture3D(uint32_t slot, HexEngine::ITextur
 	_deviceContext->GSSetShaderResources(slot, 1, &srv);
 }
 
+void GraphicsDeviceD3D11::SetDomainTexture2D(uint32_t slot, HexEngine::ITexture2D* texture)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* tex = reinterpret_cast<Texture2D*>(texture);
+	ID3D11ShaderResourceView* srv = tex ? tex->_shaderResourceView : nullptr;
+	_deviceContext->DSSetShaderResources(slot, 1, &srv);
+}
+
 void GraphicsDeviceD3D11::SetVertexStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
