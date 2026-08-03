@@ -63,7 +63,11 @@
 	float SnowTessFactor(float3 worldMid)
 	{
 		const float d = distance(worldMid, g_eyePos.xyz);
-		const float lod = lerp(16.0f, 1.0f, saturate((d - 4.0f) / 40.0f));
+		// Min factor 2 (not 1) and a longer 55 m reach keep mid-distance
+		// triangles small enough that the edge taper spans several of them -
+		// otherwise the ramp collapses into one tilted facet per triangle and
+		// the snow edge reads as a triangular staircase.
+		const float lod = lerp(16.0f, 2.0f, saturate((d - 4.0f) / 55.0f));
 		const float covGate = step(0.01f, g_weatherSurface.snowCoverage);
 		return max(1.0f, lod * covGate);
 	}
@@ -156,16 +160,20 @@
 		const float2 dirs[8] = {
 			float2(1,0), float2(-1,0), float2(0,1), float2(0,-1),
 			float2(0.7f,0.7f), float2(-0.7f,0.7f), float2(0.7f,-0.7f), float2(-0.7f,-0.7f) };
+		// Centre + two rings (~0.6 m and ~1.2 m at 2048/192 m) give a ~1.2 m
+		// wide shelter gradient, so the geometric ramp is long enough to cross
+		// several tessellated triangles and read as a slope, not a staircase.
 		const int2 tHere = clamp(int2(tc), int2(0,0), int2(mw - 1, mh - 1));
 		float exposed = 1.0f - smoothstep(bias, bias + band, clip.z - g_dsOcclusionMap.Load(int3(tHere, 0)));
 		[unroll]
 		for (int i = 0; i < 8; ++i)
 		{
-			const int2 t = clamp(int2(tc + dirs[i] * 4.0f), int2(0,0), int2(mw - 1, mh - 1));
-			const float md = g_dsOcclusionMap.Load(int3(t, 0));
-			exposed += 1.0f - smoothstep(bias, bias + band, clip.z - md);
+			const int2 t0 = clamp(int2(tc + dirs[i] *  6.0f), int2(0,0), int2(mw - 1, mh - 1));
+			const int2 t1 = clamp(int2(tc + dirs[i] * 13.0f), int2(0,0), int2(mw - 1, mh - 1));
+			exposed += 1.0f - smoothstep(bias, bias + band, clip.z - g_dsOcclusionMap.Load(int3(t0, 0)));
+			exposed += 1.0f - smoothstep(bias, bias + band, clip.z - g_dsOcclusionMap.Load(int3(t1, 0)));
 		}
-		return exposed * (1.0f / 9.0f);
+		return exposed * (1.0f / 17.0f);
 	}
 
 	// Extrude the shell UP off the concrete by the snow height. The concrete
@@ -215,7 +223,7 @@
 		const float slopeGate = smoothstep(0.35f, 0.85f, geoUp);
 		const float presence  = shelterDS * slopeGate
 			* saturate(g_weatherSurface.snowCoverage) * (1.0f - saturate(g_weatherSurface.snowMelt));
-		const float taper = smoothstep(0.03f, 0.55f, presence);
+		const float taper = smoothstep(0.05f, 0.85f, presence);
 		const float disp = (0.02f + snowAmt * 0.10f + drift * 0.42f) * taper;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
