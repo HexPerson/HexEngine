@@ -2019,6 +2019,12 @@ namespace HexEngine
 	{
 		PROFILE();
 
+		// Perf gate for the snow shell: it issues a SECOND draw per _receivesSnow
+		// material, so skip it entirely when there's no snow in the weather.
+		// (With snow off the shell already clipped every pixel, but it still
+		// paid the tessellated draw - this elides it.)
+		const bool snowActive = GetWeatherSurfaceParams().snowCoverage > 0.001f;
+
 		auto& snapshot = pvs->GetRenderableSnapshot();
 		uint32_t totalCandidates = 0;
 		uint32_t skippedNullMeshOrInstance = 0;
@@ -2328,7 +2334,7 @@ namespace HexEngine
 						if (isShadowMap)
 							RenderInstance((SimpleMeshInstance*)lastInstance, drawnInstances, material.get(), rendered);
 						else
-							RenderInstance(lastInstance, drawnInstances, material.get(), rendered, /*allowShell*/ true);
+							RenderInstance(lastInstance, drawnInstances, material.get(), rendered, /*allowShell*/ snowActive);
 
 						drawnInstances = 0;
 
@@ -2438,7 +2444,7 @@ namespace HexEngine
 					if (isShadowMap)
 						RenderInstance((SimpleMeshInstance*)currentInstance, drawnInstances, material.get(), rendered);
 					else
-						RenderInstance(currentInstance, drawnInstances, material.get(), rendered, /*allowShell*/ true);
+						RenderInstance(currentInstance, drawnInstances, material.get(), rendered, /*allowShell*/ snowActive);
 				}
 			}
 		}

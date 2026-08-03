@@ -1076,7 +1076,19 @@
 		// the gloss that is meant to justify it.
 		albedo *= lerp(1.0f, 1.0f - darken, w * w);
 
-		roughness = lerp(roughness, 0.12f, film);
+		// Wet FILM smoothing. A thin water film CONFORMS to the substrate's
+		// micro-roughness - it is not a mirror; only standing water (the puddle
+		// path, roughness ~0.04) is. Driving the universal wet response all the
+		// way to a near-mirror 0.12 was the night "black pop": a surface whose
+		// albedo has just been darkened, smoothed to a pinpoint specular lobe,
+		// has nothing broad left to integrate the dim sky / distant lights, so
+		// it reflected a black night sky point-sharp and read as a black blotch.
+		// Floor it at semi-gloss instead - porous substrates soak water up and
+		// stay rougher, sealed ones film glossier - and only ever SMOOTH, never
+		// roughen, so the wet sheen keeps a broad lobe that catches what light
+		// there is. Puddles remain the sharp-mirror path, untouched.
+		const float wetFloor = lerp(0.18f, 0.30f, porosity);
+		roughness = lerp(roughness, min(roughness, wetFloor), film);
 		return film;
 	}
 
