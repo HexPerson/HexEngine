@@ -33,6 +33,7 @@ namespace HexEngine
 	HVar phys_debug("phys_debug", "Enable the physics debugger (very slow)", false, false, true);
 	HVar r_debugRenderSkips("r_debugRenderSkips", "Log per-pass render skip counters for scene entity rendering", false, false, true);
 	HVar r_gpuCullUseIndirectDraw("r_gpuCullUseIndirectDraw", "Use indexed-instanced indirect draw submission for scene mesh batches", false, false, true);
+	HVar r_snowShellDebug("r_snowShellDebug", "Log why the snow shell draw does/doesn't fire, once/sec per material", false, false, true);
 
 	namespace
 	{
@@ -1950,6 +1951,31 @@ namespace HexEngine
 				// depth/blend/cull and the compatible input layout - the shell
 				// reuses all of it and only swaps in its own stages + patch
 				// topology + the per-frame cbuffer the HS/DS read.
+				if (r_snowShellDebug._val.b)
+				{
+					const uint64_t frame = g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0;
+					// (a) Shell-shader availability, material-independent.
+					static uint64_t sLastAny = 0;
+					if (frame - sLastAny >= 60)
+					{
+						sLastAny = frame;
+						IShader* dbgShell = GetSnowShellShader();
+						LOG_INFO("SnowShell: shellLoaded=%d hs=%d ds=%d backendD3D11=%d",
+							dbgShell ? 1 : 0,
+							(dbgShell && dbgShell->GetShaderStage(ShaderStage::HullShader)) ? 1 : 0,
+							(dbgShell && dbgShell->GetShaderStage(ShaderStage::DomainShader)) ? 1 : 0,
+							g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11 ? 1 : 0);
+					}
+					// (b) Any receivesSnow material actually reaching the draw.
+					static uint64_t sLastSnow = 0;
+					if (material && material->GetReceivesSnow() && frame - sLastSnow >= 60)
+					{
+						sLastSnow = frame;
+						LOG_INFO("SnowShell: receivesSnow mat='%s' allowShell=%d instances=%u REACHED draw",
+							material->GetName().c_str(), allowShell ? 1 : 0, numInstances);
+					}
+				}
+
 				if (allowShell && material && material->GetReceivesSnow() &&
 					g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11)
 				{
