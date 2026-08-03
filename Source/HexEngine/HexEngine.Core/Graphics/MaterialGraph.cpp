@@ -487,6 +487,7 @@ namespace HexEngine
 			p.rainDripIntensity = material._properties.rainDripIntensity;
 			p.affectsGI         = material.GetAffectsGI() ? 1 : 0;
 			p.emissiveAffectsGI = material.GetEmissiveAffectsGI() ? 1 : 0;
+			p.receivesSnow      = material.GetReceivesSnow() ? 1 : 0;
 			p.depthState        = material.GetDepthState();
 			p.blendState        = material.GetBlendState();
 			p.cullMode          = material.GetCullMode();
@@ -655,6 +656,7 @@ namespace HexEngine
 					{ "modelParams", { p.modelParams.x, p.modelParams.y, p.modelParams.z, p.modelParams.w } },
 					{ "rainDripIntensity", p.rainDripIntensity },
 					{ "affectsGI", p.affectsGI },
+				{ "receivesSnow", p.receivesSnow },
 					{ "emissiveAffectsGI", p.emissiveAffectsGI },
 					{ "depthState", static_cast<int>(p.depthState) },
 					{ "blendState", static_cast<int>(p.blendState) },
@@ -773,6 +775,7 @@ namespace HexEngine
 						p.materialModel      = poIt->value("materialModel", 0);
 						p.rainDripIntensity  = poIt->value("rainDripIntensity", 0.0f);
 						p.affectsGI          = poIt->value("affectsGI", 1);
+					p.receivesSnow       = poIt->value("receivesSnow", 0);
 						p.emissiveAffectsGI  = poIt->value("emissiveAffectsGI", 0);
 						p.depthState         = static_cast<DepthBufferState>(poIt->value("depthState",     static_cast<int>(DepthBufferState::DepthDefault)));
 						p.blendState         = static_cast<BlendState>(       poIt->value("blendState",     static_cast<int>(BlendState::Opaque)));

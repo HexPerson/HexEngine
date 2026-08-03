@@ -88,6 +88,7 @@ namespace HexEngine
 		float rainDripIntensity = 0.0f;
 		int affectsGI = 1;
 		int emissiveAffectsGI = 0;
+		int receivesSnow = 0;
 
 		// Render state - read once by the graph compiler and written into the
 		// Material before its standard shader is compiled, so artists can drive

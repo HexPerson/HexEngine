@@ -847,6 +847,16 @@ namespace HexEngine
 			}
 		});
 
+		_pbrReceivesSnowToggle = new Checkbox(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Receives Snow", &_pbrReceivesSnow);
+		_pbrReceivesSnowToggle->SetOnCheckFn([this](Checkbox*, bool v)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				n->pbrOutputProperties.receivesSnow = v ? 1 : 0; MarkDirty();
+			}
+		});
+
 		_pbrRainDripDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
 			L"Rain Drip Intensity", &_pbrRainDripIntensity, 0.0f, 1.0f, 0.01f, 2);
 		_pbrRainDripDrag->SetOnDrag([this](float v, float, float)
@@ -1267,6 +1277,7 @@ namespace HexEngine
 			_pbrHasTransparency    = (p.hasTransparency    != 0);
 			_pbrAffectsGI          = (p.affectsGI          != 0);
 			_pbrEmissiveAffectsGI  = (p.emissiveAffectsGI  != 0);
+			_pbrReceivesSnow       = (p.receivesSnow       != 0);
 			_pbrRainDripIntensity  = p.rainDripIntensity;
 			_pbrCullDistance       = p.cullDistance;
 			_pbrModelParams[0]     = p.modelParams.x;

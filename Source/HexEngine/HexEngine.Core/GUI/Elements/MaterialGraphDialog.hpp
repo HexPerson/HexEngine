@@ -55,12 +55,14 @@ namespace HexEngine
 		// stale node.
 		bool        _pbrAffectsGI = true;
 		bool        _pbrEmissiveAffectsGI = false;
+		bool        _pbrReceivesSnow = false;
 		bool        _pbrHasTransparency = false;
 		float       _pbrRainDripIntensity = 0.0f;
 		float       _pbrCullDistance = 0.0f;
 		float       _pbrModelParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 		Checkbox*   _pbrAffectsGiToggle = nullptr;
 		Checkbox*   _pbrEmissiveGiToggle = nullptr;
+		Checkbox*   _pbrReceivesSnowToggle = nullptr;
 		Checkbox*   _pbrTransparencyToggle = nullptr;
 		DragFloat*  _pbrRainDripDrag = nullptr;
 		DragFloat*  _pbrCullDistanceDrag = nullptr;
