@@ -336,6 +336,14 @@
 		//float4 specular = float4(0.0f, 0.0f, 0.0f, 0.0f);
 		float4 albedo = g_albedoMap.Sample(g_textureSampler, input.texcoord) * input.colour;
 
+#ifdef SNOW_SHELL_NO_CLIP
+		// The snow shell is a pure snow LAYER - it must not inherit the
+		// substrate's albedo (the road graph material has none, so this reads
+		// black). Force a snow-white base; ApplySnowAccumulation below adds
+		// the tint + relief on top.
+		albedo = float4(0.90f, 0.92f, 0.96f, 1.0f);
+#endif
+
 		// The snow shell (SnowShell.shader) reuses this pixel shader for
 		// identical snow shading but is drawn over materials whose albedo has
 		// no/zero alpha - this clip would then discard every shell pixel. The
@@ -410,6 +418,10 @@
 				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
 
 		float wetFilm = 0.0f;
+#ifndef SNOW_SHELL_NO_CLIP
+		// Skipped on the snow shell: snow is not wet asphalt, so the wet
+		// darkening/gloss (which reads near-black at night) must not apply to
+		// the snow layer.
 		if (shelteredWetness > 0.001f)
 		{
 			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
@@ -418,6 +430,7 @@
 			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time,
 				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
 		}
+#endif
 
 		// Rain droplets: when the material opts in (rainDripIntensity > 0) and
 		// it's actually raining (g_weatherSurface.wetness > 0), perturb the
