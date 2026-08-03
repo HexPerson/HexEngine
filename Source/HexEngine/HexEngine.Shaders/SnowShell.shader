@@ -109,10 +109,16 @@
 		float2 uv        = patch[0].texcoord * bary.x + patch[1].texcoord * bary.y + patch[2].texcoord * bary.z;
 		float4 colour    = patch[0].colour   * bary.x + patch[1].colour   * bary.y + patch[2].colour   * bary.z;
 
-		// Extrude up: thin base (clears the concrete, no z-fight) + the snow
-		// height field for volume. Static -> prev gets the same lift (TAA).
-		const float dC = SnowDisplacement(worldPos, g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
-		const float disp = 0.02f + dC;
+		// Extrude up: thin base (clears the concrete, no z-fight) + a SMOOTH,
+		// large-scale height for gentle volume. Only a single ~90cm octave -
+		// the full SnowHeightField has 13cm detail that the coarse far-LOD
+		// tessellation (triangles metres wide) can't represent, so it aliased
+		// into big tilted facets = the radiating fans. Fine snow texture lives
+		// in the per-pixel relief normal instead. Static -> prev same lift (TAA).
+		const float hSmooth = SnowHeight_Noise3(float3(worldPos.x, 0.0f, worldPos.z) / 0.9f);
+		const float snowAmt = saturate((0.3f + hSmooth * 0.7f) * g_weatherSurface.snowCoverage)
+			* (1.0f - saturate(g_weatherSurface.snowMelt));
+		const float disp = 0.02f + snowAmt * 0.10f;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
