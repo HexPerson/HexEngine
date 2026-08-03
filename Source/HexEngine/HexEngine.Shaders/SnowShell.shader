@@ -224,7 +224,12 @@
 		const float presence  = shelterDS * slopeGate
 			* saturate(g_weatherSurface.snowCoverage) * (1.0f - saturate(g_weatherSurface.snowMelt));
 		const float taper = smoothstep(0.05f, 0.85f, presence);
-		const float disp = (0.02f + snowAmt * 0.10f + drift * 0.42f) * taper;
+		// Taper the snow VOLUME to nothing at the edges, but KEEP the 2 cm base
+		// clearance untapered - otherwise the shell sinks into the rigid
+		// concrete draw at the margins and z-fights it into a dark band. The
+		// residual 2 cm lip is sub-pixel and the pixel-shader fringe clips it,
+		// so there's no visible cliff.
+		const float disp = 0.02f + (snowAmt * 0.10f + drift * 0.42f) * taper;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
