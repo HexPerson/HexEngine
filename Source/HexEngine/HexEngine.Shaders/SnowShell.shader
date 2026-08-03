@@ -140,7 +140,7 @@
 		// Snow textures tile in WORLD space (the road UVs are asphalt-scaled),
 		// with a world-aligned tangent basis so the snow normal map applies
 		// cleanly (not via the mesh's faceted tangents). ~0.35 = ~3m tile.
-		o.texcoord = worldPos.xz * 0.35f;
+		o.texcoord = worldPos.xz * 0.15f;
 		o.normal   = normal;
 		o.tangent  = float3(1.0f, 0.0f, 0.0f);
 		o.binormal = float3(0.0f, 0.0f, 1.0f);
@@ -172,9 +172,13 @@
 		// threshold thins the layer to nothing so the rigid concrete shows
 		// through at the margins. This is what reads as "snow ON the
 		// surface" rather than a solid slab.
+		// Shelter: no snow under static cover (awnings, bridges, indoors).
+		// SampleRainShelter reads the top-down occlusion map at t26; under
+		// cover thickness -> 0 -> clipped -> bare concrete shows through.
+		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
 		const float slope = smoothstep(0.35f, 0.85f, input.normal.y);
 		const float h = SnowHeightField(input.positionWS.xz);
-		const float thickness = saturate(slope * (0.2f + h * 1.4f) * g_weatherSurface.snowCoverage)
+		const float thickness = saturate(slope * (0.2f + h * 1.4f) * g_weatherSurface.snowCoverage * shelter)
 			* (1.0f - saturate(g_weatherSurface.snowMelt));
 		clip(thickness - 0.06f);
 

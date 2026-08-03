@@ -361,8 +361,8 @@
 		// mesh-normal dependence, so the tint lives here).
 		if (g_rainOcclusionParams.w > 0.5f)
 		{
-			// Real snow albedo from the snow material, world-tiled (the DS set
-			// input.texcoord = worldPos.xz * scale).
+			// Real snow albedo, world-tiled (the DS sets input.texcoord =
+			// worldPos.xz * scale - tune that scale for tiling).
 			albedo = float4(g_snowShellAlbedo.Sample(g_textureSampler, input.texcoord).rgb, 1.0f);
 		}
 		else
@@ -513,10 +513,10 @@
 #ifdef SNOW_SHELL_NO_CLIP
 		if (g_rainOcclusionParams.w > 0.5f)
 		{
-			// Real snow normal map, applied through the DS's WORLD-aligned
-			// tangent basis (input.tangent = +X, binormal = +Z, worldNormal =
-			// up) so it never touches the mesh's faceted tangents. Normal-ogl
-			// convention -> flip green for D3D.
+			// Real snow normal map through the DS's WORLD-aligned tangent
+			// basis (input.tangent = +X, binormal = +Z, worldNormal = up) so
+			// it never touches the mesh's faceted tangents. Same world UV as
+			// the albedo. Normal-ogl -> flip green for D3D.
 			float3 nTS = g_snowShellNormal.Sample(g_textureSampler, input.texcoord).xyz * 2.0f - 1.0f;
 			nTS.y = -nTS.y;
 			worldNormal = normalize(nTS.x * input.tangent + nTS.y * input.binormal + nTS.z * worldNormal);
