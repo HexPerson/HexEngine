@@ -1987,6 +1987,13 @@ namespace HexEngine
 						auto* gd = g_pEnv->_graphicsDevice;
 						gd->SetVertexShader(shell->GetShaderStage(ShaderStage::VertexShader));
 						gd->SetPixelShader(shell->GetShaderStage(ShaderStage::PixelShader));
+						// Bind the SHELL vertex shader's own input layout. The base
+						// draw set the concrete material's layout, which for a graph
+						// material need not match the shell VS input signature - a
+						// mismatch feeds the IA wrong vertex data and the domain
+						// shader gets garbage positions (nothing rasterises). This
+						// was the "shell draws but shows nothing" cause.
+						gd->SetInputLayout(shell->GetInputLayout());
 						gd->SetHullShader(hs);
 						gd->SetDomainShader(ds);
 						auto* perFrame = gd->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer);

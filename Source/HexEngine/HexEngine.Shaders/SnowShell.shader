@@ -112,7 +112,9 @@
 		// Extrude up by at least a thin base so the shell always sits ABOVE
 		// the concrete (avoids z-fighting with the rigid surface), plus the
 		// height field. Static -> prev gets the same lift for correct TAA.
-		const float disp = 0.01f + SnowDisplacement(worldPos, g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
+		// Base lift keeps the shell clear of the concrete (no z-fight) + the
+		// height field for the snow volume. Static -> prev gets the same lift.
+		const float disp = 0.02f + SnowDisplacement(worldPos, g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
@@ -142,23 +144,26 @@
 }
 "PixelShader"
 {
+	// Reuse DefaultPixel for identical snow shading/lighting as the flat
+	// ground - but suppress its albedo-alpha clip (which discards every
+	// shell pixel over an alpha-less graph material). The shell keeps its
+	// OWN thickness clip below.
+	#define SNOW_SHELL_NO_CLIP
 	#include "DefaultPixel.shader"
 
 	GBufferOut ShaderMain(MeshPixelInput input)
 	{
-		// Clip the shell to where snow actually accumulates: the height
-		// field + slope + coverage give a natural broken edge, and clipping
-		// below a threshold feathers the layer to nothing so the rigid
-		// concrete underneath shows through at the margins. This is what
-		// makes it read as "snow ON the surface", not a solid slab.
+		// Feather the shell to where snow accumulates: the height field +
+		// slope + coverage give a natural broken edge; clipping below a
+		// threshold thins the layer to nothing so the rigid concrete shows
+		// through at the margins. This is what reads as "snow ON the
+		// surface" rather than a solid slab.
 		const float slope = smoothstep(0.35f, 0.85f, input.normal.y);
 		const float h = SnowHeightField(input.positionWS.xz);
 		const float thickness = saturate(slope * (0.2f + h * 1.4f) * g_weatherSurface.snowCoverage)
 			* (1.0f - saturate(g_weatherSurface.snowMelt));
 		clip(thickness - 0.06f);
 
-		// DefaultPixel already whitens + reliefs + POMs the surface toward
-		// snow wherever coverage is up, so the visible shell reads as snow.
 		return DefaultPixelShader(input);
 	}
 }

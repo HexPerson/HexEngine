@@ -336,8 +336,16 @@
 		//float4 specular = float4(0.0f, 0.0f, 0.0f, 0.0f);
 		float4 albedo = g_albedoMap.Sample(g_textureSampler, input.texcoord) * input.colour;
 
+		// The snow shell (SnowShell.shader) reuses this pixel shader for
+		// identical snow shading but is drawn over materials whose albedo has
+		// no/zero alpha - this clip would then discard every shell pixel. The
+		// shell #defines SNOW_SHELL_NO_CLIP before including this file so it
+		// keeps its own thickness clip instead; every other consumer clips as
+		// before.
+#ifndef SNOW_SHELL_NO_CLIP
 		if(albedo.a == 0.0f && g_material.isInTransparencyPhase == 0)
 			clip(-1);
+#endif
 
 		float metalness = g_material.metallicFactor;
 		float roughness = g_material.roughnessFactor;
