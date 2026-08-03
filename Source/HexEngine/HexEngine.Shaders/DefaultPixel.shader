@@ -494,6 +494,19 @@
 		// source. If the fans vanish here it's the snow SHADING; if they
 		// persist it's the displaced geometry.
 #ifdef SNOW_SHELL_NO_CLIP
+		// Snow relief, PER-PIXEL (the domain shader's per-vertex version
+		// aliased the coarse tessellation into dark fans). Finite-difference
+		// the height field at the pixel's world XZ and bend the clean up
+		// normal - smooth at any tessellation density / distance.
+		{
+			const float e = 0.07f;
+			const float hC = SnowHeightField(input.positionWS.xz);
+			const float hX = SnowHeightField(input.positionWS.xz + float2(e, 0.0f));
+			const float hZ = SnowHeightField(input.positionWS.xz + float2(0.0f, e));
+			const float amp = 0.05f;
+			const float3 reliefN = normalize(float3(-(hX - hC) / e * amp, 1.0f, -(hZ - hC) / e * amp));
+			worldNormal = normalize(lerp(worldNormal, reliefN, 0.6f));
+		}
 		roughness = 0.85f;
 #else
 		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;

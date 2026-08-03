@@ -116,16 +116,12 @@
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
-		// Shading normal built PURELY from world-up + the height-field
-		// gradient - never the road mesh's faceted normals/tangents (which,
-		// via its normal map, lit every tessellated triangle differently).
-		// The snow surface is defined entirely by its own height field.
-		// Blended toward up so coarse far-LOD facets stay gentle.
-		const float kGrad = 0.35f;
-		const float dPX = SnowDisplacement(worldPos + float3(kGrad, 0.0f, 0.0f), g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
-		const float dPZ = SnowDisplacement(worldPos + float3(0.0f, 0.0f, kGrad), g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
-		const float3 gradNormal = normalize(float3(-(dPX - dC) / kGrad, 1.0f, -(dPZ - dC) / kGrad));
-		normal = normalize(lerp(float3(0.0f, 1.0f, 0.0f), gradNormal, 0.5f));
+		// Clean world-up shading normal - NOT the mesh normals, and NOT a
+		// per-VERTEX height-field gradient (that aliased the coarse far-LOD
+		// tessellation into radiating dark fans). The snow's surface relief
+		// is added PER-PIXEL in the pixel shader instead, where it's smooth
+		// regardless of tessellation density.
+		normal = float3(0.0f, 1.0f, 0.0f);
 
 		o.positionWS = float4(worldPos, 1.0f);
 		o.position   = mul(float4(worldPos, 1.0f), g_viewProjectionMatrix);
