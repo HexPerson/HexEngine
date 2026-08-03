@@ -487,12 +487,11 @@
 			roughness  = dustResult.w;
 		}
 
-		// TEMP DIAGNOSTIC: the snow shell skips ApplySnowAccumulation (its
-		// POM + relief + crevice is the suspect for the radiating dark fans).
-		// The shell already has white albedo forced above; give it a plain
-		// snow roughness so it still reads as snow while we confirm the
-		// source. If the fans vanish here it's the snow SHADING; if they
-		// persist it's the displaced geometry.
+		// The snow shell does NOT use ApplySnowAccumulation: that path's POM
+		// + per-vertex-friendly relief + mesh-normal use fought the shell (it
+		// already carries real tessellated geometry and forces its own white
+		// albedo). Instead the shell gets its own lightweight PER-PIXEL relief
+		// normal from the height field + snow roughness, below.
 #ifdef SNOW_SHELL_NO_CLIP
 		// Snow relief, PER-PIXEL (the domain shader's per-vertex version
 		// aliased the coarse tessellation into dark fans). Finite-difference
