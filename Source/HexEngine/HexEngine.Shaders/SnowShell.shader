@@ -113,7 +113,7 @@
 		g_dsOcclusionMap.GetDimensions(mw, mh);
 		const int2 tc = int2(uv * float2(mw, mh));
 		const float here = clip.z;
-		const float kWallDelta = 0.8f / 160.0f; // a neighbour >=0.8m taller = wall
+		const float kWallDelta = 0.4f / 160.0f; // a neighbour >=0.8m taller = wall
 
 		// 8 directions, two rings (~0.5m and ~1.1m out at 192m/2048). Closer
 		// ring counts double so the bank ramps UP toward the wall.
@@ -143,6 +143,12 @@
 		float3 worldPos  = patch[0].worldPos  * bary.x + patch[1].worldPos  * bary.y + patch[2].worldPos  * bary.z;
 		float3 worldPrev = patch[0].worldPrev * bary.x + patch[1].worldPrev * bary.y + patch[2].worldPrev * bary.z;
 		float3 normal    = normalize(patch[0].normal   * bary.x + patch[1].normal   * bary.y + patch[2].normal   * bary.z);
+		// Geometric up-ness of the UNDERLYING surface (mesh normal), captured
+		// before we overwrite the shading normal with world-up. The pixel
+		// shader clips on this so snow only lands on up-facing faces - vertical
+		// walls of a shared mesh get none - while shading still uses the clean
+		// up + per-pixel relief (no faceting).
+		const float geoUp = normal.y;
 		float3 tangent   = normalize(patch[0].tangent  * bary.x + patch[1].tangent  * bary.y + patch[2].tangent  * bary.z);
 		float3 binormal  = normalize(patch[0].binormal * bary.x + patch[1].binormal * bary.y + patch[2].binormal * bary.z);
 		float2 uv        = patch[0].texcoord * bary.x + patch[1].texcoord * bary.y + patch[2].texcoord * bary.z;
@@ -161,7 +167,7 @@
 		// from the occlusion map; scaled by snow amount so it fades with
 		// coverage/melt. Up to ~22cm of extra lift right against a wall.
 		const float drift = SnowDriftBank(worldPos) * snowAmt;
-		const float disp = 0.02f + snowAmt * 0.10f + drift * 0.22f;
+		const float disp = 0.02f + snowAmt * 0.10f + drift * 0.42f;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
@@ -187,7 +193,8 @@
 		o.normal   = normal;
 		o.tangent  = float3(1.0f, 0.0f, 0.0f);
 		o.binormal = float3(0.0f, 0.0f, 1.0f);
-		o.viewDirection = float4(normalize(g_eyePos.xyz - worldPos), 0.0f);
+		// .w carries the geometric up-ness for the pixel shader's wall clip.
+		o.viewDirection = float4(normalize(g_eyePos.xyz - worldPos), geoUp);
 		o.colour = colour;
 		o.instanceID = patch[0].instanceID;
 		o.cullDistance = 1.0f;
@@ -219,7 +226,10 @@
 		// SampleRainShelter reads the top-down occlusion map at t26; under
 		// cover thickness -> 0 -> clipped -> bare concrete shows through.
 		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
-		const float slope = smoothstep(0.35f, 0.85f, input.normal.y);
+		// Wall exclusion uses the GEOMETRIC surface up-ness (DS stashed it in
+		// viewDirection.w) - input.normal.y is now always 1 (forced world-up
+		// for shading), so it can't tell a wall from the ground.
+		const float slope = smoothstep(0.35f, 0.85f, input.viewDirection.w);
 		const float h = SnowHeightField(input.positionWS.xz);
 		const float thickness = saturate(slope * (0.2f + h * 1.4f) * g_weatherSurface.snowCoverage * shelter)
 			* (1.0f - saturate(g_weatherSurface.snowMelt));
