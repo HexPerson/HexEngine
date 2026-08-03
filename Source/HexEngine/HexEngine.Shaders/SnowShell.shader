@@ -109,26 +109,23 @@
 		float2 uv        = patch[0].texcoord * bary.x + patch[1].texcoord * bary.y + patch[2].texcoord * bary.z;
 		float4 colour    = patch[0].colour   * bary.x + patch[1].colour   * bary.y + patch[2].colour   * bary.z;
 
-		// Extrude up: thin base (keeps the shell clear of the concrete, no
-		// z-fight) + the height field for the snow volume. Static -> prev
-		// gets the same lift for correct TAA velocity.
+		// Extrude up: thin base (clears the concrete, no z-fight) + the snow
+		// height field for volume. Static -> prev gets the same lift (TAA).
 		const float dC = SnowDisplacement(worldPos, g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
 		const float disp = 0.02f + dC;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
-		// Recompute the shading normal from the displacement gradient so
-		// lighting matches the RAISED geometry. Passing the flat interpolated
-		// normal (as before) left every tessellated triangle lit as if flat,
-		// so the displaced facets caught local lights inconsistently - the
-		// "only half the triangles are lit correctly" faceting. Analytic
-		// central-ish difference of the height field, blended over the base
-		// normal; the pixel shader still adds fine relief on top.
-		const float kGrad = 0.25f; // metres between height taps
+		// Shading normal built PURELY from world-up + the height-field
+		// gradient - never the road mesh's faceted normals/tangents (which,
+		// via its normal map, lit every tessellated triangle differently).
+		// The snow surface is defined entirely by its own height field.
+		// Blended toward up so coarse far-LOD facets stay gentle.
+		const float kGrad = 0.35f;
 		const float dPX = SnowDisplacement(worldPos + float3(kGrad, 0.0f, 0.0f), g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
 		const float dPZ = SnowDisplacement(worldPos + float3(0.0f, 0.0f, kGrad), g_weatherSurface.snowCoverage, g_weatherSurface.snowMelt);
-		const float3 dispNormal = normalize(float3(-(dPX - dC) / kGrad, 1.0f, -(dPZ - dC) / kGrad));
-		normal = normalize(lerp(normal, dispNormal, 0.7f));
+		const float3 gradNormal = normalize(float3(-(dPX - dC) / kGrad, 1.0f, -(dPZ - dC) / kGrad));
+		normal = normalize(lerp(float3(0.0f, 1.0f, 0.0f), gradNormal, 0.5f));
 
 		o.positionWS = float4(worldPos, 1.0f);
 		o.position   = mul(float4(worldPos, 1.0f), g_viewProjectionMatrix);

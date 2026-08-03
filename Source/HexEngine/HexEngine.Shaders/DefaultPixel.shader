@@ -325,11 +325,19 @@
 			input.texcoord += ParallaxOffset(heightMap, 0.018, viewDirTangent);
 		}
 
+		// Skipped on the snow shell: the substrate's normal map + the mesh's
+		// FACETED per-face tangents/binormals rebuild a per-triangle world
+		// normal, which lit each tessellated facet differently even on a flat
+		// sheet with a forced up normal (the user-diagnosed faceting). Snow is
+		// its own surface - it keeps the clean world-up normal the domain
+		// shader set, plus its own relief.
+#ifndef SNOW_SHELL_NO_CLIP
 		if (g_objectFlags & OBJECT_FLAGS_HAS_BUMP && isInDetailRange)
 		{
 			// Normalize the resulting bump normal.
 			worldNormal = (ApplyNormalMap(worldNormal, input.tangent, input.binormal, g_normalMap, g_textureSampler, input.texcoord, true));
 		}
+#endif
 
 		
 
@@ -339,9 +347,12 @@
 #ifdef SNOW_SHELL_NO_CLIP
 		// The snow shell is a pure snow LAYER - it must not inherit the
 		// substrate's albedo (the road graph material has none, so this reads
-		// black). Force a snow-white base; ApplySnowAccumulation below adds
-		// the tint + relief on top.
-		albedo = float4(0.90f, 0.92f, 0.96f, 1.0f);
+		// black). Force a snow-white base with a subtle height-field crevice
+		// tint so it isn't a dead flat white (ApplySnowAccumulation is skipped
+		// on the shell - see the guard further down - to avoid its POM +
+		// mesh-normal dependence, so the tint lives here).
+		albedo = float4(float3(0.90f, 0.92f, 0.96f)
+			* (0.82f + 0.18f * SnowHeightField(input.positionWS.xz)), 1.0f);
 #endif
 
 		// The snow shell (SnowShell.shader) reuses this pixel shader for
@@ -476,6 +487,15 @@
 			roughness  = dustResult.w;
 		}
 
+		// TEMP DIAGNOSTIC: the snow shell skips ApplySnowAccumulation (its
+		// POM + relief + crevice is the suspect for the radiating dark fans).
+		// The shell already has white albedo forced above; give it a plain
+		// snow roughness so it still reads as snow while we confirm the
+		// source. If the fans vanish here it's the snow SHADING; if they
+		// persist it's the displaced geometry.
+#ifdef SNOW_SHELL_NO_CLIP
+		roughness = 0.85f;
+#else
 		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
 		if (shelteredSnow > 0.001f)
 		{
@@ -486,6 +506,7 @@
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}
+#endif
 
 		float3 finalRGB = albedo.rgb;
 
