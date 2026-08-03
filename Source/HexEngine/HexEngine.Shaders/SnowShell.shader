@@ -67,7 +67,7 @@
 		// triangles small enough that the edge taper spans several of them -
 		// otherwise the ramp collapses into one tilted facet per triangle and
 		// the snow edge reads as a triangular staircase.
-		const float lod = lerp(16.0f, 2.0f, saturate((d - 4.0f) / 55.0f));
+		const float lod = lerp(16.0f, 5.0f, saturate((d - 4.0f) / 25.0f));
 		const float covGate = step(0.01f, g_weatherSurface.snowCoverage);
 		return max(1.0f, lod * covGate);
 	}
@@ -287,10 +287,21 @@
 		// viewDirection.w) - input.normal.y is now always 1 (forced world-up
 		// for shading), so it can't tell a wall from the ground.
 		const float slope = smoothstep(0.35f, 0.85f, input.viewDirection.w);
-		const float h = SnowHeightField(input.positionWS.xz);
-		const float thickness = saturate(slope * (0.2f + h * 1.4f) * g_weatherSurface.snowCoverage * shelter)
+		// Smooth, LOW-frequency snow-coverage field: 1 = full snow, 0 = none.
+		// Only shelter * slope * coverage * (1-melt) - deliberately no high-
+		// frequency term, so a full-coverage sheet stays at 1 everywhere and
+		// can't develop interior holes.
+		const float coverS = saturate(slope * g_weatherSurface.snowCoverage * shelter)
 			* (1.0f - saturate(g_weatherSurface.snowMelt));
-		clip(thickness - 0.06f);
+		// Break the EDGE, not the sheet. The height field wiggles the cut
+		// THRESHOLD instead of multiplying coverage: the boundary meanders into
+		// a natural fringe, but because the interior coverS is a flat 1 it never
+		// crosses the (<=0.8) cut line, so no detached dark pinholes speckle the
+		// field (the concrete-through-snow specks the user saw). Snow survives
+		// where the smooth coverage beats a noise-perturbed ~0.5 line.
+		const float h = SnowHeightField(input.positionWS.xz);   // 0..1
+		const float edge = 0.5f - (h - 0.5f) * 0.6f;            // 0.2..0.8 cut line
+		clip(coverS - edge);
 
 		return DefaultPixelShader(input);
 	}
