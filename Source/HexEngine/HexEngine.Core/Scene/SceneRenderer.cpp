@@ -2659,7 +2659,9 @@ namespace HexEngine
 				_rainOcclusionValid ? 1.0f : 0.0f,
 				0.5f / 160.0f,
 				1.0f / 2048.0f,
-				0.0f);
+				// .w = snow-shell textures bound (t22/t23) - the shell PS reads
+				// this to pick real snow textures vs its procedural fallback.
+				_snowShellReady ? 1.0f : 0.0f);
 
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,
@@ -3031,6 +3033,25 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetTexture2D(26,
 			(_rainOcclusionValid && _rainOcclusionMap != nullptr)
 				? _rainOcclusionMap->GetDepthMap() : nullptr);
+
+		// Snow-shell material textures at t22/t23 (albedo/normal) for the snow
+		// shell pixel shader. Lazy-loaded once; if missing, the shell keeps
+		// its procedural white (the .w flag in SetupPerFrameBuffer gates it).
+		if (!_snowShellTried)
+		{
+			_snowShellTried = true;
+			_snowShellMaterial = Material::Create("EngineData.Materials/M_SnowShell.hmat");
+			_snowShellReady = _snowShellMaterial != nullptr &&
+				_snowShellMaterial->GetTexture(MaterialTexture::Albedo) != nullptr &&
+				_snowShellMaterial->GetTexture(MaterialTexture::Normal) != nullptr;
+			if (!_snowShellReady)
+				LOG_WARN("Snow shell material/textures not found - shell uses procedural white");
+		}
+		if (_snowShellReady)
+		{
+			g_pEnv->_graphicsDevice->SetTexture2D(22, _snowShellMaterial->GetTexture(MaterialTexture::Albedo).get());
+			g_pEnv->_graphicsDevice->SetTexture2D(23, _snowShellMaterial->GetTexture(MaterialTexture::Normal).get());
+		}
 		g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
 
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::FrontFace);

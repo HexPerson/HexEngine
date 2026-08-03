@@ -12,6 +12,14 @@
 {
 	Texture2D g_albedoMap : register(t0);
 	Texture2D g_normalMap : register(t1);
+#ifdef SNOW_SHELL_NO_CLIP
+	// Snow-shell material textures (M_SnowShell.hmat), bound once per frame
+	// by SceneRenderer at t22/t23. Only declared for the shell so no other
+	// DefaultPixel consumer reserves the slots. g_rainOcclusionParams.w == 1
+	// signals they're bound (else the shell falls back to procedural white).
+	Texture2D g_snowShellAlbedo : register(t22);
+	Texture2D g_snowShellNormal : register(t23);
+#endif
 	Texture2D g_roughnessMap : register(t2);
 	Texture2D g_metallicMap : register(t3);
 	Texture2D g_heightMap : register(t4);
@@ -351,8 +359,18 @@
 		// tint so it isn't a dead flat white (ApplySnowAccumulation is skipped
 		// on the shell - see the guard further down - to avoid its POM +
 		// mesh-normal dependence, so the tint lives here).
-		albedo = float4(float3(0.90f, 0.92f, 0.96f)
-			* (0.82f + 0.18f * SnowHeightField(input.positionWS.xz)), 1.0f);
+		if (g_rainOcclusionParams.w > 0.5f)
+		{
+			// Real snow albedo from the snow material, world-tiled (the DS set
+			// input.texcoord = worldPos.xz * scale).
+			albedo = float4(g_snowShellAlbedo.Sample(g_textureSampler, input.texcoord).rgb, 1.0f);
+		}
+		else
+		{
+			// Fallback (no snow material): snow-white + subtle crevice tint.
+			albedo = float4(float3(0.90f, 0.92f, 0.96f)
+				* (0.82f + 0.18f * SnowHeightField(input.positionWS.xz)), 1.0f);
+		}
 #endif
 
 		// The snow shell (SnowShell.shader) reuses this pixel shader for
@@ -493,11 +511,20 @@
 		// albedo). Instead the shell gets its own lightweight PER-PIXEL relief
 		// normal from the height field + snow roughness, below.
 #ifdef SNOW_SHELL_NO_CLIP
-		// Snow relief, PER-PIXEL (the domain shader's per-vertex version
-		// aliased the coarse tessellation into dark fans). Finite-difference
-		// the height field at the pixel's world XZ and bend the clean up
-		// normal - smooth at any tessellation density / distance.
+		if (g_rainOcclusionParams.w > 0.5f)
 		{
+			// Real snow normal map, applied through the DS's WORLD-aligned
+			// tangent basis (input.tangent = +X, binormal = +Z, worldNormal =
+			// up) so it never touches the mesh's faceted tangents. Normal-ogl
+			// convention -> flip green for D3D.
+			float3 nTS = g_snowShellNormal.Sample(g_textureSampler, input.texcoord).xyz * 2.0f - 1.0f;
+			nTS.y = -nTS.y;
+			worldNormal = normalize(nTS.x * input.tangent + nTS.y * input.binormal + nTS.z * worldNormal);
+		}
+		else
+		{
+			// Fallback relief, PER-PIXEL (the domain shader's per-vertex
+			// version aliased coarse tessellation into dark fans).
 			const float e = 0.07f;
 			const float hC = SnowHeightField(input.positionWS.xz);
 			const float hX = SnowHeightField(input.positionWS.xz + float2(e, 0.0f));

@@ -137,10 +137,13 @@
 		o.currentPositionUnjittered  = o.position;
 		o.position.xy += g_jitterOffsets * o.position.w;
 
-		o.texcoord = uv;
+		// Snow textures tile in WORLD space (the road UVs are asphalt-scaled),
+		// with a world-aligned tangent basis so the snow normal map applies
+		// cleanly (not via the mesh's faceted tangents). ~0.35 = ~3m tile.
+		o.texcoord = worldPos.xz * 0.35f;
 		o.normal   = normal;
-		o.tangent  = tangent;
-		o.binormal = binormal;
+		o.tangent  = float3(1.0f, 0.0f, 0.0f);
+		o.binormal = float3(0.0f, 0.0f, 1.0f);
 		o.viewDirection = float4(normalize(g_eyePos.xyz - worldPos), 0.0f);
 		o.colour = colour;
 		o.instanceID = patch[0].instanceID;

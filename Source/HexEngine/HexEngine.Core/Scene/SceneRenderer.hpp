@@ -362,6 +362,13 @@ namespace HexEngine
 		// map around the camera (static geometry only), cached and
 		// re-rendered on recentre or a slow timer; material shaders mask
 		// wetness/snow/puddles where static cover sits above a surface.
+		// Snow-shell material (M_SnowShell.hmat): its albedo/normal are bound
+		// at t22/t23 for the shell pixel shader. Lazy-loaded; _snowShellReady
+		// gates the textured path (else the shell falls back to procedural).
+		std::shared_ptr<Material> _snowShellMaterial;
+		bool _snowShellReady = false;
+		bool _snowShellTried = false;
+
 		class ShadowMap* _rainOcclusionMap = nullptr;
 		std::unique_ptr<PVS> _rainOcclusionPVS;
 		math::Matrix _rainOcclusionView = math::Matrix::Identity;
