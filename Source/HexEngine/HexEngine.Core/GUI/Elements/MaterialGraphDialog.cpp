@@ -855,6 +855,15 @@ namespace HexEngine
 			{
 				n->pbrOutputProperties.receivesSnow = v ? 1 : 0; MarkDirty();
 			}
+			// Apply straight to the Material too - receivesSnow only reaches
+			// _receivesSnow via CompileToMaterial otherwise, which is SKIPPED
+			// for cached graph shaders, so the node said true while the
+			// material (and the .hmat, and the runtime shell gate) stayed
+			// false. Direct apply keeps all three in sync regardless of
+			// whether a recompile runs. (The node value still drives a fresh
+			// compile / new material seeded from this graph.)
+			if (_material)
+				_material->SetReceivesSnow(v);
 		});
 
 		_pbrRainDripDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
