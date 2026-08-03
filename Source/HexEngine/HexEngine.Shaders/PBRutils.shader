@@ -671,9 +671,16 @@
 		if (layerHeightM < 0.002f)
 			return float2(0.0f, 0.0f);
 
-		// Clamp grazing angles so the horizontal sweep can't explode.
+		// Clamp grazing angles so the horizontal sweep can't explode, AND
+		// fade the whole march out as the view goes grazing: at a shallow
+		// angle down a street the horizontal sample shift is huge and smears
+		// the trough-AO / crevice into dark radiating streaks (the "triangle
+		// weirdness" the user saw). Below ~7deg the offset is zero (flat
+		// sampling); the tessellated shell's real geometry carries the
+		// silhouette there anyway, so no depth cue is lost.
 		const float vy = max(viewDirWS.y, 0.25f);
-		const float2 xzPerHeight = -viewDirWS.xz / vy;
+		const float grazingFade = smoothstep(0.12f, 0.45f, viewDirWS.y);
+		const float2 xzPerHeight = (-viewDirWS.xz / vy) * grazingFade;
 
 		const int STEPS = 12;
 		const float stepH = layerHeightM / STEPS;
