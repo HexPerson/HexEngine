@@ -113,7 +113,7 @@
 		g_dsOcclusionMap.GetDimensions(mw, mh);
 		const int2 tc = int2(uv * float2(mw, mh));
 		const float here = clip.z;
-		const float kWallDelta = 0.4f / 160.0f; // a neighbour >=0.8m taller = wall
+		const float kWallDelta = 0.6f / 160.0f; // a neighbour >=0.8m taller = wall
 
 		// 8 directions, two rings (~0.5m and ~1.1m out at 192m/2048). Closer
 		// ring counts double so the bank ramps UP toward the wall.
@@ -130,6 +130,42 @@
 			bank += (here - g_dsOcclusionMap.Load(int3(tFar,  0)) > kWallDelta) ? 1.0f : 0.0f;
 		}
 		return saturate(bank / 12.0f);
+	}
+
+	// Shelter (1 = exposed to sky, 0 = covered) at the DOMAIN stage, from the
+	// same top-down occlusion map. Lets the shell's GEOMETRY taper to ground
+	// height under cover, instead of the pixel shader clipping a full-height
+	// slab and leaving a vertical snow cliff at every occluder/awning edge.
+	// Load taps + the same soft depth band as the pixel-side SampleRainShelter;
+	// these per-vertex values interpolate across the tessellated triangles into
+	// a smooth ramp.
+	float SnowShelterDS(float3 worldPos)
+	{
+		if (g_rainOcclusionParams.x < 0.5f)
+			return 1.0f;
+		const float4 clip = mul(float4(worldPos, 1.0f), g_rainOcclusionVP);
+		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+		if (any(uv < 0.0f) || any(uv > 1.0f) || clip.z < 0.0f || clip.z > 1.0f)
+			return 1.0f;
+
+		uint mw, mh;
+		g_dsOcclusionMap.GetDimensions(mw, mh);
+		const float2 tc = uv * float2(mw, mh);
+		const float bias = g_rainOcclusionParams.y;
+		const float band = 3.0f / 160.0f; // match SampleRainShelter's soft depth band
+		const float2 dirs[8] = {
+			float2(1,0), float2(-1,0), float2(0,1), float2(0,-1),
+			float2(0.7f,0.7f), float2(-0.7f,0.7f), float2(0.7f,-0.7f), float2(-0.7f,-0.7f) };
+		const int2 tHere = clamp(int2(tc), int2(0,0), int2(mw - 1, mh - 1));
+		float exposed = 1.0f - smoothstep(bias, bias + band, clip.z - g_dsOcclusionMap.Load(int3(tHere, 0)));
+		[unroll]
+		for (int i = 0; i < 8; ++i)
+		{
+			const int2 t = clamp(int2(tc + dirs[i] * 4.0f), int2(0,0), int2(mw - 1, mh - 1));
+			const float md = g_dsOcclusionMap.Load(int3(t, 0));
+			exposed += 1.0f - smoothstep(bias, bias + band, clip.z - md);
+		}
+		return exposed * (1.0f / 9.0f);
 	}
 
 	// Extrude the shell UP off the concrete by the snow height. The concrete
@@ -167,7 +203,20 @@
 		// from the occlusion map; scaled by snow amount so it fades with
 		// coverage/melt. Up to ~22cm of extra lift right against a wall.
 		const float drift = SnowDriftBank(worldPos) * snowAmt;
-		const float disp = 0.02f + snowAmt * 0.10f + drift * 0.42f;
+		// Height taper: ramp the extrusion DOWN to ground at the shell's edges
+		// so it lerps into the bare surface instead of clipping a full-height
+		// slab (the hard snow cliff the user saw at occlusion-map edges). Uses
+		// the SAME low-frequency gates the pixel shader clips on - shelter
+		// (occlusion map), up-slope, coverage/melt - so the geometry height and
+		// the clip line move together and the shell tapers exactly where it's
+		// about to be cut. The per-pixel height-field breakup still clips fine
+		// detail in the pixel shader; this only kills the big geometric cliffs.
+		const float shelterDS = SnowShelterDS(worldPos);
+		const float slopeGate = smoothstep(0.35f, 0.85f, geoUp);
+		const float presence  = shelterDS * slopeGate
+			* saturate(g_weatherSurface.snowCoverage) * (1.0f - saturate(g_weatherSurface.snowMelt));
+		const float taper = smoothstep(0.03f, 0.55f, presence);
+		const float disp = (0.02f + snowAmt * 0.10f + drift * 0.42f) * taper;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
