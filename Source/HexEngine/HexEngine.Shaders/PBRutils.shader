@@ -938,18 +938,35 @@
 		// each tap continuous, so the whole shelter term - and the darkening
 		// it multiplies - fades smoothly across the cover edge.
 		const float kSoftBand = 3.0f / 160.0f; // ~3 m over the 160 m depth range
+
+		// SPATIAL penumbra. The old 4-tap ±0.5-texel box only feathered the
+		// shelter FOOTPRINT edge by ~1 texel (~9 cm at 2048/192 m), so the
+		// boundary of an awning/overhang read as a hard line - very obvious
+		// now snow clips to it. A 12-tap Poisson disk at ~4-texel radius
+		// (~38 cm) is a shadow-style PCF: we compare depth PER TAP and then
+		// average the RESULTS (never the depths - averaging a depth map would
+		// invent phantom shelter between an overhang and the ground far below
+		// it). Each tap already bilinear-filters, so the disk fills smoothly.
+		const float2 kPoisson12[12] = {
+			float2(-0.326f, -0.406f), float2(-0.840f, -0.074f),
+			float2(-0.696f,  0.457f), float2(-0.203f,  0.621f),
+			float2( 0.962f, -0.195f), float2( 0.473f, -0.480f),
+			float2( 0.519f,  0.767f), float2( 0.185f, -0.893f),
+			float2( 0.507f,  0.064f), float2( 0.896f,  0.412f),
+			float2(-0.322f, -0.933f), float2(-0.792f, -0.598f) };
+		const float kRadiusTexels = 4.0f; // ~38 cm penumbra
 		float exposed = 0.0f;
 		[unroll]
-		for (int i = 0; i < 4; ++i)
+		for (int i = 0; i < 12; ++i)
 		{
-			const float2 o = float2((i & 1) ? texel : -texel, (i & 2) ? texel : -texel) * 0.5f;
+			const float2 o = kPoisson12[i] * (texel * kRadiusTexels);
 			const float mapDepth = g_rainOcclusionMap.SampleLevel(samp, uv + o, 0);
 			// The map stores the depth of the highest surface. A surface far
 			// BELOW it (clip.z - mapDepth large) has something overhead ->
 			// sheltered; at/above it -> exposed. Soft ramp between.
-			exposed += 0.25f * (1.0f - smoothstep(bias, bias + kSoftBand, clip.z - mapDepth));
+			exposed += (1.0f - smoothstep(bias, bias + kSoftBand, clip.z - mapDepth));
 		}
-		return exposed;
+		return exposed * (1.0f / 12.0f);
 	}
 
 	// =====================================================================
