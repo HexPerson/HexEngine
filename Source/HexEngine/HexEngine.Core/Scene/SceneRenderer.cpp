@@ -454,6 +454,17 @@ namespace HexEngine
 	HVar r_rainOcclusionRefresh("r_rainOcclusionRefresh", "Seconds between rain occlusion map refreshes (recentre also refreshes)", 2.0f, 0.1f, 30.0f);
 	HVar r_weatherSurfaceDebug("r_weatherSurfaceDebug", "Log the uploaded weather surface params once a second", false, false, true);
 
+	// Snow footprints (Phase 3, Part B). A small top-down map, camera-following
+	// and texel-snapped like the occlusion map but a COLOUR R8 target that is
+	// cleared and fully re-stamped each frame from a world-anchored ring buffer
+	// (so recentre is free - no persistence/reprojection). Deliberately tighter
+	// than the occlusion map: prints need crispness, not reach.
+	constexpr uint32_t kSnowFootprintMapSize = 1024u;
+	constexpr float    kSnowFootprintExtent  = 16.0f; // half-extent m (~3.1 cm texels)
+	HVar r_snowFootprintStrength("r_snowFootprintStrength", "Metres of snow a full-depth footprint removes", 0.06f, 0.0f, 0.3f);
+	HVar r_snowFootprintDebugView("r_snowFootprintDebugView", "Blit the snow footprint deformation map to screen", false, false, true);
+	HVar r_snowFootprintDebugEmit("r_snowFootprintDebugEmit", "Emit a debug footprint at the camera each second", false, false, true);
+
 	// Slice 5: the sun whose cascades RenderTransparent binds at t15..t20. One
 	// function shared by the g_taaParams.z packing and the bind block so the
 	// flag and the binds can never disagree - a set flag with nothing bound
@@ -2662,6 +2673,18 @@ namespace HexEngine
 				// .w = snow-shell textures bound (t22/t23) - the shell PS reads
 				// this to pick real snow textures vs its procedural fallback.
 				_snowShellReady ? 1.0f : 0.0f);
+
+			// Snow footprints. Populated for real in UpdateSnowFootprintMap;
+			// valid=0 here means "no deformation" so the shell is unaffected
+			// until the map is built.
+			bufferData._snowFootprintVP = (_snowFootprintValid
+				? (_snowFootprintView * _snowFootprintProj)
+				: math::Matrix::Identity).Transpose();
+			bufferData._snowFootprintParams = math::Vector4(
+				_snowFootprintValid ? 1.0f : 0.0f,
+				1.0f / (float)kSnowFootprintMapSize,
+				kSnowFootprintExtent,
+				r_snowFootprintStrength._val.f32);
 
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,

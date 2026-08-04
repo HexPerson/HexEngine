@@ -271,6 +271,11 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// See RenderStructs.hpp::_rainOcclusionVP/_rainOcclusionParams.
 		float4x4 g_rainOcclusionVP;
 		float4 g_rainOcclusionParams;
+		// Snow footprints: world -> clip of the top-down foot-stamp map around
+		// the camera. x = valid, y = 1/resolution, z = half-extent (m),
+		// w = global print strength. See RenderStructs.hpp::_snowFootprint*.
+		float4x4 g_snowFootprintVP;
+		float4 g_snowFootprintParams;
 	};
 
 	#define g_preExposure    (g_exposureParams.x)

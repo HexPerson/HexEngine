@@ -435,6 +435,18 @@ namespace HexEngine
 		//   z = 1 / map resolution (texel size in UV, for edge softening).
 		//   w = reserved.
 		math::Vector4 _rainOcclusionParams;
+
+		// Snow footprints (Phase 3, appended per the append-only note above).
+		// World -> clip of a small top-down ortho map rendered around the
+		// camera into which walking entities stamp foot-shaped depressions;
+		// the snow shell's domain shader reads it to compress the snow.
+		math::Matrix _snowFootprintVP;
+		//   x = 1 when the map holds valid content this frame (0 = no snow /
+		//       map unavailable; shell treats the surface as undisturbed).
+		//   y = 1 / map resolution (texel size in UV).
+		//   z = map half-extent in world metres.
+		//   w = global print strength (metres of snow removed at full depth).
+		math::Vector4 _snowFootprintParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

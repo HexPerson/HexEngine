@@ -20,6 +20,7 @@ namespace HexEngine
 	class ITexture3D;
 	class IConstantBuffer;
 	class IVertexBuffer;
+		class IStructuredBuffer;
 	class IIndexBuffer;
 
 	class SceneRenderer
@@ -377,6 +378,19 @@ namespace HexEngine
 		double _rainOcclusionNextRefresh = 0.0;
 		bool _rainOcclusionValid = false;
 		void UpdateRainOcclusionMap();
+
+		// Snow footprints (Phase 3 Part B). Camera-following R8 deformation map
+		// re-stamped each frame from the scene's footprint ring buffer.
+		ITexture2D* _snowFootprintMap = nullptr;
+		IStructuredBuffer* _snowFootprintBuffer = nullptr; // per-frame footprint instances
+		IVertexBuffer* _snowQuadVB = nullptr;              // static unit quad
+		IIndexBuffer* _snowQuadIB = nullptr;
+		std::shared_ptr<IShader> _snowFootstampShader;
+		math::Matrix _snowFootprintView = math::Matrix::Identity;
+		math::Matrix _snowFootprintProj = math::Matrix::Identity;
+		math::Vector3 _snowFootprintCentre = math::Vector3::Zero;
+		bool _snowFootprintValid = false;
+		void UpdateSnowFootprintMap();
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 
