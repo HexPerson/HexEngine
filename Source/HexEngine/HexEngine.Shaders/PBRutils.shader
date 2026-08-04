@@ -871,10 +871,20 @@
 	// on), and only PARTIAL shelter response - wind carries dust under
 	// cover, so shelter attenuates it by half instead of zeroing it.
 	// =====================================================================
+	// Dust micro-relief height at a world XZ: broad drift sheets (1.1 m) plus a
+	// finer grain octave. Shared by the mask and the finite-difference relief.
+	float DustHeightField(float2 xz)
+	{
+		const float kNoiseScale = 1.1f;
+		const float h1 = ValueNoise3(float3(xz.x, 0.0f, xz.y) / kNoiseScale);
+		const float h2 = ValueNoise3(float3(xz.x, 0.0f, xz.y) / (kNoiseScale * 0.31f));
+		return h1 * 0.7f + h2 * 0.3f;
+	}
+
 	float4 ApplyDustAccumulation(
 		float3 baseAlbedo,
 		float baseRoughness,
-		float3 worldNormalWS,
+		inout float3 worldNormalWS,
 		float3 worldPos,
 		float dirtAmount)
 	{
@@ -885,14 +895,31 @@
 		if (slopeMask <= 0.0f)
 			return float4(baseAlbedo, baseRoughness);
 
-		const float kNoiseScale = 1.1f; // broad drift sheets
-		const float n1 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / kNoiseScale);
-		const float n2 = ValueNoise3(float3(worldPos.x, 0.0f, worldPos.z) / (kNoiseScale * 0.31f));
-		const float patchNoise = saturate((n1 * 0.7f + n2 * 0.3f) - (1.0f - dirtAmount) * 0.35f);
-
+		const float height = DustHeightField(worldPos.xz);
+		const float patchNoise = saturate(height - (1.0f - dirtAmount) * 0.35f);
 		const float dustMask = saturate(slopeMask * (0.15f + patchNoise * 1.2f) * dirtAmount) * 0.85f;
 
-		const float3 dustColour = float3(0.52f, 0.42f, 0.30f);
+		// Micro-relief (the height treatment snow got): bend the normal by the
+		// dust-height gradient so drift sheets read as a granular, wind-rippled
+		// surface instead of flat paint. Amplitude scales with the mask so thin
+		// films stay flat. Coarser tap spacing than snow (dust drifts broader).
+		if (dustMask > 0.02f)
+		{
+			const float e = 0.12f; // metres between height taps
+			const float hC = height;
+			const float hX = DustHeightField(worldPos.xz + float2(e, 0.0f));
+			const float hZ = DustHeightField(worldPos.xz + float2(0.0f, e));
+			const float amplitude = 0.14f * dustMask;
+			const float3 reliefN = normalize(float3(
+				-(hX - hC) / e * amplitude,
+				1.0f,
+				-(hZ - hC) / e * amplitude));
+			worldNormalWS = normalize(lerp(worldNormalWS, reliefN, dustMask * 0.8f));
+		}
+
+		// Crevice tint: gaps between grains read a touch darker, selling the
+		// relief even under flat lighting.
+		const float3 dustColour = float3(0.52f, 0.42f, 0.30f) * (0.80f + 0.20f * height);
 		const float3 newAlbedo = lerp(baseAlbedo, dustColour, dustMask);
 		const float newRoughness = lerp(baseRoughness, 0.92f, dustMask);
 
