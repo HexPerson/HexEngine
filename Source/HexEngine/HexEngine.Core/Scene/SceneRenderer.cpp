@@ -3069,10 +3069,10 @@ namespace HexEngine
 			(_rainOcclusionValid && _rainOcclusionMap != nullptr)
 				? _rainOcclusionMap->GetDepthMap() : nullptr);
 
-		// Snow footprint deformation map to DS-t1 (occlusion owns DS-t0). The
-		// shell's domain shader reads this to compress the snow where feet
-		// stepped. Nulled at the pass boundary below.
-		g_pEnv->_graphicsDevice->SetDomainTexture2D(1,
+		// Snow footprint deformation map to PS-t27 for the shell pixel shader
+		// (per-pixel foot depressions - the geometric/domain approach aliased
+		// into streaks). Nulled at the pass boundary below.
+		g_pEnv->_graphicsDevice->SetTexture2D(30,
 			(_snowFootprintValid && _snowFootprintMap != nullptr)
 				? _snowFootprintMap : nullptr);
 
@@ -3115,10 +3115,11 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetHullShader(nullptr);
 		g_pEnv->_graphicsDevice->SetDomainShader(nullptr);
 		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
-		// Release the domain-stage maps so the footprint RT isn't left bound as
-		// an SRV when it's re-rendered as a target next frame.
+		// Release the domain occlusion map and the footprint map (PS-t27) so the
+		// footprint RT isn't left bound as an SRV when it's re-rendered as a
+		// target next frame.
 		g_pEnv->_graphicsDevice->SetDomainTexture2D(0, nullptr);
-		g_pEnv->_graphicsDevice->SetDomainTexture2D(1, nullptr);
+		g_pEnv->_graphicsDevice->SetTexture2D(30, nullptr);
 
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
 

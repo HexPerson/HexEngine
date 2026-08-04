@@ -19,6 +19,22 @@
 	// signals they're bound (else the shell falls back to procedural white).
 	Texture2D g_snowShellAlbedo : register(t22);
 	Texture2D g_snowShellNormal : register(t23);
+	// Snow footprint deformation map (Phase 3 Part B), bound at t30 by
+	// SceneRenderer (t27-29 are the forward cluster lists). R8 top-down field of
+	// foot depressions. Consumed PER-PIXEL here (albedo darken + normal dent):
+	// the geometric/domain approach aliased the coarse tessellation into
+	// streaks, so the crisp foot shape lives as a shading detail, not geometry.
+	Texture2D<float> g_snowFootprintMap : register(t30);
+	float SnowShellFootprint(float3 worldPos, SamplerState samp)
+	{
+		if (g_snowFootprintParams.x < 0.5f)
+			return 0.0f;
+		const float4 clip = mul(float4(worldPos, 1.0f), g_snowFootprintVP);
+		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+		if (any(uv < 0.0f) || any(uv > 1.0f))
+			return 0.0f;
+		return g_snowFootprintMap.SampleLevel(samp, uv, 0);
+	}
 #endif
 	Texture2D g_roughnessMap : register(t2);
 	Texture2D g_metallicMap : register(t3);
@@ -371,6 +387,11 @@
 			albedo = float4(float3(0.90f, 0.92f, 0.96f)
 				* (0.82f + 0.18f * SnowHeightField(input.positionWS.xz)), 1.0f);
 		}
+		// Footprints: compacted / self-shadowed snow inside a print reads darker.
+		{
+			const float fp = SnowShellFootprint(input.positionWS.xyz, g_textureSampler);
+			albedo.rgb *= 1.0f - fp * saturate(g_snowFootprintParams.w) * 0.55f;
+		}
 #endif
 
 		// The snow shell (SnowShell.shader) reuses this pixel shader for
@@ -534,6 +555,22 @@
 			worldNormal = normalize(lerp(worldNormal, reliefN, 0.6f));
 		}
 		roughness = 0.85f;
+		// Footprint dent (PER-PIXEL, full-res): tilt the normal by the gradient
+		// of the footprint depth so a print reads as a pressed hollow with lit
+		// rims - the fine shape the coarse tessellation could not carry. The
+		// horizontal gradient is added to the normal so the snow relief survives.
+		{
+			const float fC = SnowShellFootprint(input.positionWS.xyz, g_textureSampler);
+			if (fC > 0.001f)
+			{
+				const float e = 0.04f;
+				const float fX = SnowShellFootprint(input.positionWS.xyz + float3(e, 0.0f, 0.0f), g_textureSampler);
+				const float fZ = SnowShellFootprint(input.positionWS.xyz + float3(0.0f, 0.0f, e), g_textureSampler);
+				const float amp = 3.0f * saturate(g_snowFootprintParams.w);
+				worldNormal = normalize(worldNormal
+					+ float3((fX - fC) / e * amp, 0.0f, (fZ - fC) / e * amp) * saturate(fC));
+			}
+		}
 #else
 		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
 		if (shelteredSnow > 0.001f)

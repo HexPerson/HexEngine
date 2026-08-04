@@ -102,28 +102,6 @@
 	// find nearby walls/props so snow banks UP against them (drift banks).
 	Texture2D<float> g_dsOcclusionMap : register(t0);
 
-	// Snow footprint deformation map at DOMAIN-stage t1 (Phase 3 Part B). R8
-	// top-down field where walking entities stamped foot-shaped depressions;
-	// used below to compress the snow where feet stepped.
-	Texture2D<float> g_dsFootprintMap : register(t1);
-
-	// Footprint compression at this ground point, 0..1 (0 = undisturbed snow,
-	// 1 = full-depth print). Projects the world position with the footprint
-	// ortho and texel-fetches the map.
-	float SnowFootprintDepth(float3 worldPos)
-	{
-		if (g_snowFootprintParams.x < 0.5f)
-			return 0.0f;
-		const float4 clip = mul(float4(worldPos, 1.0f), g_snowFootprintVP);
-		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
-		if (any(uv < 0.0f) || any(uv > 1.0f) || clip.z < 0.0f || clip.z > 1.0f)
-			return 0.0f;
-		uint mw, mh;
-		g_dsFootprintMap.GetDimensions(mw, mh);
-		const int2 tc = clamp(int2(uv * float2(mw, mh)), int2(0, 0), int2(mw - 1, mh - 1));
-		return g_dsFootprintMap.Load(int3(tc, 0));
-	}
-
 	// How much a wall stands over this ground point, 0..1, from the occlusion
 	// map neighbourhood. Load() texel fetches (no sampler needed on the DS).
 	float SnowDriftBank(float3 worldPos)
@@ -252,16 +230,11 @@
 		// few mm tall - so the snow is cut while it's flush with the ground (no
 		// vertical lip / seam) and, because it's clipped before it reaches the
 		// concrete plane, can't z-fight the rigid base draw either.
-		// Footprints (Phase 3 Part B): feet compress the snow. MULTIPLICATIVE -
-		// a full print removes a FRACTION (g_snowFootprintParams.w) of the LOCAL
-		// snow depth - so a deep print in deep snow reads as a deep depression
-		// while a print at the feathering edge still tapers to nothing (it can't
-		// raise the edge and break the seamless margin). Compressed snow stays
-		// above the pixel-shader clip line, so the print shows packed snow, not
-		// bare concrete, except where the snow was already paper-thin.
-		const float footprint = SnowFootprintDepth(worldPos);
-		const float compress = 1.0f - footprint * saturate(g_snowFootprintParams.w);
-		const float disp = (0.008f + snowAmt * 0.10f + drift * 0.42f) * taper * compress;
+		// Footprints are NOT applied here: a print (~25 cm) is smaller than a
+		// tessellation triangle at any distance, so per-vertex compression
+		// aliased into streaks. The foot shape is a PER-PIXEL shading detail in
+		// DefaultPixel (albedo darken + normal dent) instead.
+		const float disp = (0.008f + snowAmt * 0.10f + drift * 0.42f) * taper;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 
