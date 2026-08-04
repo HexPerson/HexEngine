@@ -461,7 +461,7 @@ namespace HexEngine
 	// than the occlusion map: prints need crispness, not reach.
 	constexpr uint32_t kSnowFootprintMapSize = 1024u;
 	constexpr float    kSnowFootprintExtent  = 16.0f; // half-extent m (~3.1 cm texels)
-	HVar r_snowFootprintStrength("r_snowFootprintStrength", "Metres of snow a full-depth footprint removes", 0.06f, 0.0f, 0.3f);
+	HVar r_snowFootprintStrength("r_snowFootprintStrength", "Fraction of the local snow depth a full-depth footprint removes", 0.7f, 0.0f, 1.0f);
 	HVar r_snowFootprintDebugView("r_snowFootprintDebugView", "Blit the snow footprint deformation map to screen", false, false, true);
 	HVar r_snowFootprintDebugEmit("r_snowFootprintDebugEmit", "Emit a debug footprint at the camera each second", false, false, true);
 
@@ -3069,6 +3069,13 @@ namespace HexEngine
 			(_rainOcclusionValid && _rainOcclusionMap != nullptr)
 				? _rainOcclusionMap->GetDepthMap() : nullptr);
 
+		// Snow footprint deformation map to DS-t1 (occlusion owns DS-t0). The
+		// shell's domain shader reads this to compress the snow where feet
+		// stepped. Nulled at the pass boundary below.
+		g_pEnv->_graphicsDevice->SetDomainTexture2D(1,
+			(_snowFootprintValid && _snowFootprintMap != nullptr)
+				? _snowFootprintMap : nullptr);
+
 		// Snow-shell material textures at t22/t23 (albedo/normal) for the snow
 		// shell pixel shader. Lazy-loaded once; if missing, the shell keeps
 		// its procedural white (the .w flag in SetupPerFrameBuffer gates it).
@@ -3108,6 +3115,10 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetHullShader(nullptr);
 		g_pEnv->_graphicsDevice->SetDomainShader(nullptr);
 		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+		// Release the domain-stage maps so the footprint RT isn't left bound as
+		// an SRV when it's re-rendered as a target next frame.
+		g_pEnv->_graphicsDevice->SetDomainTexture2D(0, nullptr);
+		g_pEnv->_graphicsDevice->SetDomainTexture2D(1, nullptr);
 
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
 
