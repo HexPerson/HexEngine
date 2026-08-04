@@ -917,6 +917,12 @@ namespace HexEngine
 	HVar r_wetnessAccumulation("r_wetnessAccumulation", "Lag surface wetness/puddles toward the weather target (wet fast, dry slow)", true, false, true);
 	HVar r_wetnessRiseRate("r_wetnessRiseRate", "How fast surfaces wet up under rain (fraction/sec)", 0.5f, 0.01f, 5.0f);
 	HVar r_wetnessFallRate("r_wetnessFallRate", "How fast surfaces dry after rain (fraction/sec)", 0.06f, 0.005f, 5.0f);
+	// Puddles fill fast (present during rain) and dry only slightly slower than
+	// the wet sheen - so they emerge gently as the sheen fades, instead of
+	// either popping in 17 s after the floor dried (too slow) or never being
+	// seen because they faded with the sheen (too fast).
+	HVar r_puddleFillRate("r_puddleFillRate", "How fast puddles pool under rain (fraction/sec)", 0.4f, 0.005f, 5.0f);
+	HVar r_puddleDryRate("r_puddleDryRate", "How fast puddles dry after rain (fraction/sec)", 0.045f, 0.002f, 5.0f);
 	HVar r_profileDisableDirectionalLights("r_profileDisableDirectionalLights", "Disable directional light rendering for profiling", false, false, true);
 	HVar r_profileDisablePointLights("r_profileDisablePointLights", "Disable point light rendering for profiling", false, false, true);
 	HVar r_profileDisableSpotLights("r_profileDisableSpotLights", "Disable spot light rendering for profiling", false, false, true);
@@ -2428,14 +2434,15 @@ namespace HexEngine
 			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 5));
 			bufferData._rainDripDebug = r_rainDripDebug._val.b ? 1.0f : 0.0f;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
-			// Substitute the lagged wetness state (accumulation/drying). Puddles
-			// are deliberately NOT lagged separately: with a slower puddle decay
-			// than the wet sheen, drying left a window where the sheen was gone
-			// but puddles lingered and got "revealed", which read as puddles
-			// popping in after the floor dried. Letting puddleAmount track the
-			// weather makes them fade WITH the transition.
+			// Substitute the lagged wetness + puddle state. Puddles fill fast
+			// (present during rain) and dry only slightly slower than the sheen,
+			// so they emerge gently as it fades rather than popping in long after
+			// the floor dried (the old 17 s gap) or never being seen at all.
 			if (r_wetnessAccumulation._val.b && _wetnessInit)
+			{
 				bufferData._weatherSurface.wetness = _wetnessState;
+				bufferData._weatherSurface.puddleAmount = _puddleState;
+			}
 			// Diagnostic for the surface-matrix fields: logs what the GPU
 			// actually receives ~once a second, so "slider does nothing"
 			// reports can be split into CPU-chain vs shader problems.
@@ -3557,9 +3564,10 @@ namespace HexEngine
 		const auto& wsp = _currentScene->GetWeatherSurfaceParams();
 		if (!r_wetnessAccumulation._val.b || !_wetnessInit)
 		{
-			// Snap to the authored value (also the first-frame init path) so
+			// Snap to the authored values (also the first-frame init path) so
 			// toggling the feature never pops.
 			_wetnessState = wsp.wetness;
+			_puddleState = wsp.puddleAmount;
 			_wetnessInit = true;
 			return;
 		}
@@ -3572,6 +3580,7 @@ namespace HexEngine
 			return state + std::clamp(target - state, -step, step);
 		};
 		_wetnessState = lag(_wetnessState, wsp.wetness, r_wetnessRiseRate._val.f32, r_wetnessFallRate._val.f32);
+		_puddleState  = lag(_puddleState,  wsp.puddleAmount, r_puddleFillRate._val.f32, r_puddleDryRate._val.f32);
 	}
 
 	void SceneRenderer::RenderShadowMaps(Light* shadowCaster)

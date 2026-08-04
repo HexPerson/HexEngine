@@ -75,12 +75,12 @@
 		// detail - exactly like real water on glass.
 		float2 refr = float2(0.0f, 0.0f);
 		[unroll]
-		for (int i = 0; i < 12; ++i)
+		for (int i = 0; i < 16; ++i)
 		{
 			const float2 h  = Hash22(float2((float)i * 1.73f, 3.31f));
 			const float2 h2 = Hash22(float2((float)i * 2.91f, 8.13f));
 			const float baseX = h.x;
-			const float R     = 0.011f + h.y * 0.013f;
+			const float R     = 0.005f + h.y * 0.007f;
 			const float speed = 0.05f + h2.x * 0.11f;
 			const float freq  = 5.0f + h2.y * 7.0f;
 			const float amp   = 0.008f + h.y * 0.018f;

@@ -639,11 +639,17 @@
 		[loop]
 		for (int i = 0; i < sampleBudget; ++i)
 		{
-			// Parameter along the 2D line in [0,1]. Quadratic ramp like the
-			// legacy marcher: dense near the reflector where detail lives,
-			// coarser far away.
+			// Parameter along the 2D line in [0,1]. A pure quadratic ramp
+			// (t = f*f) front-loaded almost every sample onto the near floor -
+			// which reflects low-detail nearby ground - and STARVED the far part
+			// of the ray where the reflected buildings live, so distant
+			// reflections broke into stripes (sparse far taps aliasing the
+			// reflected geometry). Bias mostly toward UNIFORM screen-space
+			// spacing (65% linear + 35% quadratic): a little extra near density
+			// for contact reflections, but the far reflection now gets a fair
+			// share of taps, so it reads as a coherent (if softer) mirror.
 			const float f = ((float)i + 0.5f + ditherPhase) / (float)sampleBudget;
-			const float t = f * f;
+			const float t = lerp(f, f * f, 0.35f);
 			const float2 pixel = p0 + stepDir * (t * pixelLength);
 			const float2 fragTex = pixel / screenSize;
 
