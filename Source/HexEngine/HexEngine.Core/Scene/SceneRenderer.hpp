@@ -230,6 +230,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> _ssrShader;
 		std::shared_ptr<IShader> _vignetteShader;
 		std::shared_ptr<IShader> _chromaticAberrationShader;
+		std::shared_ptr<IShader> _lensDripsShader;
 		std::shared_ptr<IShader> _colourGradingShader;
 		std::shared_ptr<IShader> _tonemapShader;
 		std::shared_ptr<IShader> _hdrOutputShader;

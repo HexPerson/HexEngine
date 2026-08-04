@@ -903,6 +903,7 @@ namespace HexEngine
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
 	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
+	HVar r_lensDrips("r_lensDrips", "Screen-space rain droplets on the camera lens while precipitation falls", true, false, true);
 	HVar r_profileDisableDirectionalLights("r_profileDisableDirectionalLights", "Disable directional light rendering for profiling", false, false, true);
 	HVar r_profileDisablePointLights("r_profileDisablePointLights", "Disable point light rendering for profiling", false, false, true);
 	HVar r_profileDisableSpotLights("r_profileDisableSpotLights", "Disable spot light rendering for profiling", false, false, true);
@@ -1088,6 +1089,7 @@ namespace HexEngine
 		_ssrShader					= IShader::Create("EngineData.Shaders/SSR.hcs");
 		_vignetteShader				= IShader::Create("EngineData.Shaders/Vignette.hcs");
 		_chromaticAberrationShader	= IShader::Create("EngineData.Shaders/ChromaticAbberation.hcs");
+		_lensDripsShader			= IShader::Create("EngineData.Shaders/LensDrips.hcs");
 		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
 		_ssrUpsampleShader			= IShader::Create("EngineData.Shaders/SSRUpsample.hcs");
@@ -4228,6 +4230,20 @@ namespace HexEngine
 				renderTarget->CopyTo(beauty);
 			}
 			GFX_PERF_END();
+
+			// Lens drips: screen-space rain beads while precipitation falls.
+			// Gated in C++ on the storm being active so a dry scene pays nothing;
+			// the shader scales the effect by precipitationIntensity as well.
+			if (r_lensDrips._val.b && _lensDripsShader && _currentScene != nullptr &&
+				_currentScene->GetWeatherSurfaceParams().precipitationIntensity > 0.001f)
+			{
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Lens drips");
+				{
+					guiRenderer->FullScreenTexturedQuad(beauty, _lensDripsShader.get());
+					renderTarget->CopyTo(beauty);
+				}
+				GFX_PERF_END();
+			}
 
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Vignette");
 			{

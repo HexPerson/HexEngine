@@ -353,6 +353,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="Vignette.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="LensDrips.shader" />
     <HexEngineShader Include="VolumetricClouds.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
