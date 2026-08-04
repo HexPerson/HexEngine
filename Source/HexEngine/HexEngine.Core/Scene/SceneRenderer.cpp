@@ -1059,6 +1059,10 @@ namespace HexEngine
 		SAFE_DELETE(_iblSkySH);
 		SAFE_DELETE(_dfgLut);
 		SAFE_DELETE(_autoPuddlesQuadIB);
+		SAFE_DELETE(_snowFootprintMap);
+		SAFE_DELETE(_snowFootprintBuffer);
+		SAFE_DELETE(_snowQuadVB);
+		SAFE_DELETE(_snowQuadIB);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
 
@@ -1708,6 +1712,7 @@ namespace HexEngine
 		// shadow renders so the main-view SetupPerFrameBuffer below sees
 		// this frame's validity + matrices.
 		UpdateRainOcclusionMap();
+		UpdateSnowFootprintMap();
 
 		// set up the viewport
 		auto bbvp = _currentCamera->GetViewport();
@@ -3334,6 +3339,152 @@ namespace HexEngine
 		_rainOcclusionValid = true;
 	}
 
+	// Snow footprints (Phase 3 Part B). Unlike the occlusion map this is a
+	// COLOUR R8 target that is cleared and fully re-stamped every frame from the
+	// scene's world-anchored footprint ring buffer - so the camera-following
+	// map recentres for free (no persistence / reprojection). Each live print
+	// draws as an oriented instanced quad whose PS paints a foot-shaped
+	// depression; the snow shell's domain shader later reads this to compress
+	// the snow. Called right after UpdateRainOcclusionMap, before the main pass.
+	void SceneRenderer::UpdateSnowFootprintMap()
+	{
+		auto* gd = g_pEnv->_graphicsDevice;
+		const auto& wsp = _currentScene->GetWeatherSurfaceParams();
+		if (wsp.snowCoverage <= 0.001f || _cameraEntity == nullptr)
+		{
+			_snowFootprintValid = false;
+			return;
+		}
+
+		const double nowD = g_pEnv->_timeManager->GetTime();
+		const float now = (float)nowD;
+
+		// Debug emitter: drop an alternating L/R print at the camera ~2/s so the
+		// map can be exercised before the authoring component exists.
+		if (r_snowFootprintDebugEmit._val.b)
+		{
+			static double sNextEmit = 0.0;
+			static float sSide = 0.0f;
+			if (nowD >= sNextEmit)
+			{
+				sNextEmit = nowD + 0.5;
+				const math::Vector3 cp = _cameraEntity->GetPosition();
+				const math::Vector2 dir(0.0f, 1.0f);
+				const math::Vector2 lat(dir.y, -dir.x);
+				const float w = (sSide > 0.5f) ? 0.09f : -0.09f;
+				const math::Vector2 pos(cp.x + lat.x * w, cp.z + lat.y * w);
+				_currentScene->GetSnowFootprints().Emit(pos, dir, sSide, 0.13f, 0.06f, 20.0f, now);
+				sSide = (sSide > 0.5f) ? 0.0f : 1.0f;
+			}
+		}
+
+		// Gather the live prints. No prints -> nothing to deform this frame.
+		static std::vector<SnowFootprintGpu> s_active;
+		_currentScene->GetSnowFootprints().CollectActive(s_active, now);
+		if (s_active.empty())
+		{
+			_snowFootprintValid = false;
+			return;
+		}
+		const uint32_t activeCount = std::min((uint32_t)s_active.size(), SnowFootprintSystem::kCapacity);
+
+		// Lazy resources.
+		if (_snowFootprintMap == nullptr)
+		{
+			_snowFootprintMap = gd->CreateTexture2D(
+				(int32_t)kSnowFootprintMapSize, (int32_t)kSnowFootprintMapSize,
+				DXGI_FORMAT_R8_UNORM, 1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				1, 1, 0, nullptr, (D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_TEXTURE2D, D3D11_UAV_DIMENSION_UNKNOWN, D3D11_SRV_DIMENSION_TEXTURE2D);
+		}
+		if (_snowQuadVB == nullptr)
+		{
+			const math::Vector3 quadVerts[4] = {
+				{ -0.5f, -0.5f, 0.0f }, {  0.5f, -0.5f, 0.0f },
+				{  0.5f,  0.5f, 0.0f }, { -0.5f,  0.5f, 0.0f } };
+			_snowQuadVB = gd->CreateVertexBuffer(
+				(int32_t)sizeof(quadVerts), (uint32_t)sizeof(math::Vector3),
+				D3D11_USAGE_IMMUTABLE, 0, (void*)quadVerts);
+		}
+		if (_snowQuadIB == nullptr)
+		{
+			const uint32_t quadIndices[6] = { 0, 2, 1,  0, 3, 2 };
+			_snowQuadIB = gd->CreateIndexBuffer(
+				(int32_t)sizeof(quadIndices), (uint32_t)sizeof(uint32_t),
+				D3D11_USAGE_IMMUTABLE, 0, (void*)quadIndices);
+		}
+		if (_snowFootprintBuffer == nullptr)
+		{
+			_snowFootprintBuffer = gd->CreateStructuredBuffer(
+				(uint32_t)sizeof(SnowFootprintGpu), SnowFootprintSystem::kCapacity,
+				StructuredBufferFlags::ShaderResource, ResourceUsage::Dynamic, CpuAccess::Write);
+		}
+		if (!_snowFootstampShader)
+		{
+			_snowFootstampShader = IShader::Create("EngineData.Shaders/SnowFootstamp.hcs");
+			if (!_snowFootstampShader)
+			{
+				_snowFootprintValid = false;
+				return;
+			}
+		}
+
+		_snowFootprintBuffer->SetData(s_active.data(), activeCount * (uint32_t)sizeof(SnowFootprintGpu));
+
+		// Texel-snapped camera-following centre (same trick as the occlusion map
+		// / sun cascades) so the stamped prints don't crawl under camera drift.
+		const math::Vector3 camPos = _cameraEntity->GetPosition();
+		const float extent = kSnowFootprintExtent;
+		const float texelWorld = (2.0f * extent) / (float)kSnowFootprintMapSize;
+		const math::Vector3 centre(
+			std::floor(camPos.x / texelWorld) * texelWorld,
+			camPos.y,
+			std::floor(camPos.z / texelWorld) * texelWorld);
+		_snowFootprintCentre = centre;
+
+		constexpr float kUp = 80.0f, kDown = 80.0f;
+		_snowFootprintView = math::Matrix::CreateLookAt(
+			centre + math::Vector3(0.0f, kUp, 0.0f), centre, math::Vector3(0.0f, 0.0f, 1.0f));
+		_snowFootprintProj = math::Matrix::CreateOrthographicOffCenter(
+			-extent, extent, -extent, extent, 0.1f, kUp + kDown);
+
+		// Bind the R8 map as the target and stamp. Viewport is restored to the
+		// backbuffer by the SetViewports call right after this function returns
+		// (mirrors the occlusion map, which also leaves it to the caller).
+		D3D11_VIEWPORT vp;
+		vp.TopLeftX = 0; vp.TopLeftY = 0;
+		vp.Width = (float)kSnowFootprintMapSize; vp.Height = (float)kSnowFootprintMapSize;
+		vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
+		gd->SetViewports({ vp });
+		gd->SetRenderTarget(_snowFootprintMap);
+		_snowFootprintMap->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+
+		math::Viewport fpVp;
+		fpVp.width = (float)kSnowFootprintMapSize;
+		fpVp.height = (float)kSnowFootprintMapSize;
+		SetupPerFrameBuffer(
+			_snowFootprintView, _snowFootprintProj,
+			_snowFootprintView, _snowFootprintProj,
+			1, math::Vector3(0.0f, -1.0f, 0.0f), fpVp, 0, 1.0f, false);
+
+		// No depth target is bound (single-arg SetRenderTarget), so there is no
+		// depth test/write to disable - the stamp just paints the R8 map.
+		gd->SetBlendState(BlendState::Additive);
+		gd->SetVertexShader(_snowFootstampShader->GetShaderStage(ShaderStage::VertexShader));
+		gd->SetPixelShader(_snowFootstampShader->GetShaderStage(ShaderStage::PixelShader));
+		gd->SetInputLayout(_snowFootstampShader->GetInputLayout());
+		gd->SetTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		gd->SetVertexBuffer(0, _snowQuadVB);
+		gd->SetIndexBuffer(_snowQuadIB);
+		gd->SetVertexStructuredBuffer(0, _snowFootprintBuffer);
+		gd->DrawIndexedInstanced(6, activeCount);
+		gd->ClearVertexStructuredBuffer(0);
+
+		gd->SetBlendState(BlendState::Opaque);
+		_snowFootprintValid = true;
+	}
+
 	void SceneRenderer::RenderShadowMaps(Light* shadowCaster)
 	{
 		PROFILE();
@@ -4154,6 +4305,16 @@ namespace HexEngine
 				_clusteredLights.RenderDebug(_gbuffer.GetNormal());
 				guiRenderer->FillTexturedQuad(_clusteredLights.GetDebugTexture(),
 					10, 170, 960, 540, math::Color(1, 1, 1, 1));
+			}
+
+			// Snow footprint deformation map overlay (Phase 3 Part B). R8, so it
+			// shows as a red foot-shaped depression field; verifies the stamp
+			// pass independently of the shell consuming it.
+			if (r_snowFootprintDebugView._val.b && canPostProcess &&
+				_snowFootprintValid && _snowFootprintMap != nullptr)
+			{
+				guiRenderer->FillTexturedQuad(_snowFootprintMap,
+					10, 170, 512, 512, math::Color(1, 1, 1, 1));
 			}
 
 			// Shadow-atlas overlay (slice 7): the raw depth atlas, scaled down.
