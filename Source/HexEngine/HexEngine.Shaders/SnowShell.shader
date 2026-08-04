@@ -205,8 +205,13 @@
 		// into big tilted facets = the radiating fans. Fine snow texture lives
 		// in the per-pixel relief normal instead. Static -> prev same lift (TAA).
 		const float hSmooth = SnowHeight_Noise3(float3(worldPos.x, 0.0f, worldPos.z) / 0.9f);
-		const float snowAmt = saturate((0.3f + hSmooth * 0.7f) * g_weatherSurface.snowCoverage)
-			* (1.0f - saturate(g_weatherSurface.snowMelt));
+		// Accumulation coverage: snow (thinned by melt) OR wind-blown sand,
+		// whichever weather dominates. The shell geometry is identical for both -
+		// only the pixel shader swaps the texture set (snow vs sand).
+		const float effSnow = saturate(g_weatherSurface.snowCoverage) * (1.0f - saturate(g_weatherSurface.snowMelt));
+		const float effDust = saturate(g_weatherSurface.dirtAmount);
+		const float coverage = max(effSnow, effDust);
+		const float snowAmt = saturate((0.3f + hSmooth * 0.7f) * coverage);
 		// Drift banks: snow piles UP against nearby walls/objects. Detected
 		// from the occlusion map; scaled by snow amount so it fades with
 		// coverage/melt. Up to ~22cm of extra lift right against a wall.
@@ -221,8 +226,7 @@
 		// detail in the pixel shader; this only kills the big geometric cliffs.
 		const float shelterDS = SnowShelterDS(worldPos);
 		const float slopeGate = smoothstep(0.35f, 0.85f, geoUp);
-		const float presence  = shelterDS * slopeGate
-			* saturate(g_weatherSurface.snowCoverage) * (1.0f - saturate(g_weatherSurface.snowMelt));
+		const float presence  = shelterDS * slopeGate * coverage;
 		const float taper = smoothstep(0.05f, 0.85f, presence);
 		// Taper the WHOLE lift (thin base included) to ~0 at the edges so the
 		// shell feathers all the way down to meet the ground. The pixel shader

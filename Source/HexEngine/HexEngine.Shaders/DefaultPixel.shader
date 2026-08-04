@@ -375,7 +375,15 @@
 		// tint so it isn't a dead flat white (ApplySnowAccumulation is skipped
 		// on the shell - see the guard further down - to avoid its POM +
 		// mesh-normal dependence, so the tint lives here).
-		if (g_rainOcclusionParams.w > 0.5f)
+		// The accumulation shell renders EITHER snow or wind-blown sand - the
+		// geometry is identical, only the texture set swaps here on the dominant
+		// weather (sand during a sandstorm, snow otherwise).
+		if (g_weatherSurface.dirtAmount > g_weatherSurface.snowCoverage && g_dustParams.x > 0.5f)
+		{
+			// Real sand albedo, world-tiled at the dust tiling scale.
+			albedo = float4(g_sandAlbedo.Sample(g_textureSampler, input.positionWS.xz * g_dustParams.y).rgb, 1.0f);
+		}
+		else if (g_rainOcclusionParams.w > 0.5f)
 		{
 			// Real snow albedo, world-tiled (the DS sets input.texcoord =
 			// worldPos.xz * scale - tune that scale for tiling).
@@ -517,6 +525,9 @@
 		// system reports snowCoverage > 0. See ApplySnowAccumulation in PBRutils.
 		// Dust before snow: snow lays on top of dust, not under it. Dust is
 		// wind-borne so shelter only halves it (see ApplyDustAccumulation).
+		// Flat dust overlay - skipped on the accumulation shell, which renders
+		// sand as real geometry with its own texture set below.
+#ifndef SNOW_SHELL_NO_CLIP
 		const float dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * shelter);
 		if (dustAmount > 0.001f)
 		{
@@ -525,6 +536,7 @@
 			albedo.rgb = dustResult.rgb;
 			roughness  = dustResult.w;
 		}
+#endif
 
 		// The snow shell does NOT use ApplySnowAccumulation: that path's POM
 		// + per-vertex-friendly relief + mesh-normal use fought the shell (it
@@ -532,7 +544,16 @@
 		// albedo). Instead the shell gets its own lightweight PER-PIXEL relief
 		// normal from the height field + snow roughness, below.
 #ifdef SNOW_SHELL_NO_CLIP
-		if (g_rainOcclusionParams.w > 0.5f)
+		const bool shellUseSand = g_weatherSurface.dirtAmount > g_weatherSurface.snowCoverage && g_dustParams.x > 0.5f;
+		if (shellUseSand)
+		{
+			// Real sand normal map, world-tiled at the dust scale, through the
+			// DS's world-aligned tangent basis. Normal-ogl -> flip green.
+			float3 nTS = g_sandNormal.Sample(g_textureSampler, input.positionWS.xz * g_dustParams.y).xyz * 2.0f - 1.0f;
+			nTS.y = -nTS.y;
+			worldNormal = normalize(nTS.x * input.tangent + nTS.y * input.binormal + nTS.z * worldNormal);
+		}
+		else if (g_rainOcclusionParams.w > 0.5f)
 		{
 			// Real snow normal map through the DS's WORLD-aligned tangent
 			// basis (input.tangent = +X, binormal = +Z, worldNormal = up) so
@@ -554,7 +575,7 @@
 			const float3 reliefN = normalize(float3(-(hX - hC) / e * amp, 1.0f, -(hZ - hC) / e * amp));
 			worldNormal = normalize(lerp(worldNormal, reliefN, 0.6f));
 		}
-		roughness = 0.85f;
+		roughness = shellUseSand ? 0.92f : 0.85f;
 		// Footprint dent (PER-PIXEL, full-res): tilt the normal by the gradient
 		// of the footprint depth so a print reads as a pressed hollow with lit
 		// rims - the fine shape the coarse tessellation could not carry. The

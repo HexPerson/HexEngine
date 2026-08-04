@@ -2024,11 +2024,12 @@ namespace HexEngine
 	{
 		PROFILE();
 
-		// Perf gate for the snow shell: it issues a SECOND draw per _receivesSnow
-		// material, so skip it entirely when there's no snow in the weather.
-		// (With snow off the shell already clipped every pixel, but it still
-		// paid the tessellated draw - this elides it.)
-		const bool snowActive = GetWeatherSurfaceParams().snowCoverage > 0.001f;
+		// Perf gate for the accumulation shell: it issues a SECOND tessellated
+		// draw per _receivesSnow material. The shell now renders EITHER snow or
+		// wind-blown sand (whichever weather dominates), so it's needed when
+		// either snow OR dust is active; otherwise it's skipped entirely.
+		const WeatherSurfaceParams& _shellWx = GetWeatherSurfaceParams();
+		const bool snowActive = _shellWx.snowCoverage > 0.001f || _shellWx.dirtAmount > 0.001f;
 
 		auto& snapshot = pvs->GetRenderableSnapshot();
 		uint32_t totalCandidates = 0;
