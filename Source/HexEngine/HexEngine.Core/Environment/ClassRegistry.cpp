@@ -22,6 +22,7 @@
 #include "../Entity/Component/DayNightCycleComponent.hpp"
 #include "../Entity/Component/ParticleSystemComponent.hpp"
 #include "../Entity/Component/DecalComponent.hpp"
+#include "../Entity/Component/SnowFootprintsComponent.hpp"
 #include "../Entity/Component/PlayerStartComponent.hpp"
 #include "../Entity/Component/DoorComponent.hpp"
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
@@ -74,6 +75,7 @@ namespace HexEngine
 		REG_CLASS(DayNightCycleComponent);
 		REG_CLASS(ParticleSystemComponent);
 		REG_CLASS(DecalComponent);
+		REG_CLASS(SnowFootprintsComponent);
 		REG_CLASS(PlayerStartComponent);
 		REG_CLASS(DoorComponent);
 		REG_CLASS(NavMeshBlockingVolume);
