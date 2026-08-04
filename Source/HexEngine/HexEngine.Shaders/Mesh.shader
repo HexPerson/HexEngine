@@ -191,6 +191,18 @@
 
 		albedo = shaderTexture.Sample(TextureSampler, input.texcoord) * input.colour;// g_material.diffuseColour;
 
+		// Forward/transparent weather response (Phase 3). Lightweight vs the
+		// deferred path - the forward pass has no shelter map or relief bound -
+		// but it keeps forward/transparent surfaces from staying dry in a storm:
+		// wet darkens the albedo (and sharpens/strengthens the specular below),
+		// snow whitens up-facing surfaces (and dulls the specular). Driven
+		// straight from g_weatherSurface; melt thins the snow.
+		const float _wetForward = saturate(g_weatherSurface.wetness);
+		const float _snowForward = saturate(smoothstep(0.35f, 0.85f, normalize(input.normal).y)
+			* g_weatherSurface.snowCoverage) * (1.0f - saturate(g_weatherSurface.snowMelt) * 0.7f);
+		albedo.rgb *= lerp(1.0f, 1.0f - g_wetnessDarkening, _wetForward * _wetForward);
+		albedo.rgb = lerp(albedo.rgb, float3(0.92f, 0.94f, 0.98f), _snowForward);
+
 		// Set the default output color to the ambient light value for all pixels.
 		color = albedo * g_atmosphere.ambientLight;
 		{
@@ -363,8 +375,14 @@
 			if (shinyPower < 10.0f)
 				shinyPower = 10.0f;
 
+			// Weather: a wet film gives a tighter, stronger highlight (gloss);
+			// snow is diffuse so it dulls the highlight.
+			shinyPower *= 1.0f + _wetForward * 3.0f;
+			const float weatherSpecStrength = g_material.shininessStrength
+				* (1.0f + _wetForward * 1.5f) * (1.0f - _snowForward * 0.8f);
+
 			// Determine the amount of specular light based on the reflection vector, viewing direction, and specular power.
-			specular = pow(saturate(dot(reflection, eyeVector)), shinyPower) * g_material.shininessStrength;
+			specular = pow(saturate(dot(reflection, eyeVector)), shinyPower) * weatherSpecStrength;
 
 			if ((g_objectFlags & OBJECT_FLAGS_HAS_SPECULAR) != 0)
 			{
