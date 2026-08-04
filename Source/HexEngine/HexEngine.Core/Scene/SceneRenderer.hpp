@@ -392,6 +392,13 @@ namespace HexEngine
 		math::Vector3 _snowFootprintCentre = math::Vector3::Zero;
 		bool _snowFootprintValid = false;
 		void UpdateSnowFootprintMap();
+
+		// Wetness accumulation/drying state (Phase 3). Lags toward the authored
+		// weather target; updated once per frame in UpdateWetnessAccumulation.
+		float _wetnessState = 0.0f;
+		float _puddleState = 0.0f;
+		bool _wetnessInit = false;
+		void UpdateWetnessAccumulation();
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 

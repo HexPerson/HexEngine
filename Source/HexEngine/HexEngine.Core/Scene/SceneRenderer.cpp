@@ -904,6 +904,17 @@ namespace HexEngine
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
 	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
 	HVar r_lensDrips("r_lensDrips", "Screen-space rain droplets on the camera lens while precipitation falls", true, false, true);
+
+	// Wetness accumulation/drying: the authored wetness/puddle amounts are the
+	// TARGET; the displayed values lag toward them so surfaces wet up quickly
+	// when rain starts and dry slowly after it stops (and puddles fill/dry
+	// slower still). Respects authored values - a static "wet streets" preset
+	// still reaches full wetness, only weather TRANSITIONS show the lag.
+	HVar r_wetnessAccumulation("r_wetnessAccumulation", "Lag surface wetness/puddles toward the weather target (wet fast, dry slow)", true, false, true);
+	HVar r_wetnessRiseRate("r_wetnessRiseRate", "How fast surfaces wet up under rain (fraction/sec)", 0.5f, 0.01f, 5.0f);
+	HVar r_wetnessFallRate("r_wetnessFallRate", "How fast surfaces dry after rain (fraction/sec)", 0.06f, 0.005f, 5.0f);
+	HVar r_puddleFillRate("r_puddleFillRate", "How fast puddles pool under rain (fraction/sec)", 0.15f, 0.005f, 5.0f);
+	HVar r_puddleDryRate("r_puddleDryRate", "How fast puddles dry after rain (fraction/sec)", 0.03f, 0.002f, 5.0f);
 	HVar r_profileDisableDirectionalLights("r_profileDisableDirectionalLights", "Disable directional light rendering for profiling", false, false, true);
 	HVar r_profileDisablePointLights("r_profileDisablePointLights", "Disable point light rendering for profiling", false, false, true);
 	HVar r_profileDisableSpotLights("r_profileDisableSpotLights", "Disable spot light rendering for profiling", false, false, true);
@@ -1713,6 +1724,7 @@ namespace HexEngine
 		// Shelter/rain occlusion map (Phase 3 slice 2) - rides with the
 		// shadow renders so the main-view SetupPerFrameBuffer below sees
 		// this frame's validity + matrices.
+		UpdateWetnessAccumulation();
 		UpdateRainOcclusionMap();
 		UpdateSnowFootprintMap();
 
@@ -2414,6 +2426,12 @@ namespace HexEngine
 			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 5));
 			bufferData._rainDripDebug = r_rainDripDebug._val.b ? 1.0f : 0.0f;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
+			// Substitute the lagged wetness/puddle state (accumulation/drying).
+			if (r_wetnessAccumulation._val.b && _wetnessInit)
+			{
+				bufferData._weatherSurface.wetness = _wetnessState;
+				bufferData._weatherSurface.puddleAmount = _puddleState;
+			}
 			// Diagnostic for the surface-matrix fields: logs what the GPU
 			// actually receives ~once a second, so "slider does nothing"
 			// reports can be split into CPU-chain vs shader problems.
@@ -3497,6 +3515,37 @@ namespace HexEngine
 
 		gd->SetBlendState(BlendState::Opaque);
 		_snowFootprintValid = true;
+	}
+
+	// Wetness accumulation/drying (Phase 3). Runs ONCE per frame (not in
+	// SetupPerFrameBuffer, which is called several times a frame). The authored
+	// wetness/puddleAmount are the TARGET; the state lags toward them with
+	// asymmetric rates so surfaces wet quickly and dry slowly. SetupPerFrameBuffer
+	// then substitutes the lagged state for the authored values when enabled.
+	void SceneRenderer::UpdateWetnessAccumulation()
+	{
+		if (_currentScene == nullptr)
+			return;
+		const auto& wsp = _currentScene->GetWeatherSurfaceParams();
+		if (!r_wetnessAccumulation._val.b || !_wetnessInit)
+		{
+			// Snap to the authored values (also the first-frame init path) so
+			// toggling the feature never pops.
+			_wetnessState = wsp.wetness;
+			_puddleState = wsp.puddleAmount;
+			_wetnessInit = true;
+			return;
+		}
+		// Clamp dt so a hitch / breakpoint can't jump the state.
+		const float dt = std::min(0.1f, std::max(0.0f, g_pEnv->_timeManager->GetFrameTime()));
+		auto lag = [dt](float state, float target, float rise, float fall)
+		{
+			const float rate = (target > state) ? rise : fall;
+			const float step = rate * dt;
+			return state + std::clamp(target - state, -step, step);
+		};
+		_wetnessState = lag(_wetnessState, wsp.wetness, r_wetnessRiseRate._val.f32, r_wetnessFallRate._val.f32);
+		_puddleState  = lag(_puddleState,  wsp.puddleAmount, r_puddleFillRate._val.f32, r_puddleDryRate._val.f32);
 	}
 
 	void SceneRenderer::RenderShadowMaps(Light* shadowCaster)
