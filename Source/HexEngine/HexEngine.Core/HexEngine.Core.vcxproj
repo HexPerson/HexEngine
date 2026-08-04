@@ -533,6 +533,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Scene\Octree.hpp" />
     <ClInclude Include="Scene\RenderState.hpp" />
     <ClInclude Include="Scene\Scene.hpp" />
+    <ClInclude Include="Scene\SnowFootprintSystem.hpp" />
     <ClInclude Include="Scene\Mesh.hpp" />
     <ClInclude Include="Scene\SceneManager.hpp" />
     <ClInclude Include="Scene\SceneRenderer.hpp" />
@@ -718,6 +719,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     </ClCompile>
     <ClCompile Include="Scene\SceneManager.cpp" />
     <ClCompile Include="Scene\SceneRenderer.cpp" />
+    <ClCompile Include="Scene\SnowFootprintSystem.cpp" />
     <ClCompile Include="Terrain\HeightMapGenerator.cpp" />
     <ClCompile Include="Terrain\TerrainGenerator.cpp" />
     <ClCompile Include="Utility\MemoryManager.cpp" />

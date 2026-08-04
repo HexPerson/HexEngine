@@ -13,6 +13,7 @@
 #include "../Entity/Component/StaticMeshComponent.hpp"
 #include "../Entity/Component/UpdateComponent.hpp"
 #include "../Terrain/HeightMapGenerator.hpp"
+#include "SnowFootprintSystem.hpp"
 #include <limits>
 #include <type_traits>
 
@@ -251,6 +252,9 @@ namespace HexEngine
 		const math::Color& GetFogColour() const;
 		const math::Vector4& GetAmbientColour() const;
 		const WeatherSurfaceParams& GetWeatherSurfaceParams() const;
+		// Snow footprint ring buffer (Phase 3 Part B). Walking entities Emit()
+		// into it; the renderer stamps the live prints into the deformation map.
+		SnowFootprintSystem& GetSnowFootprints();
 
 		//void RenderSkySphere();
 
@@ -423,6 +427,7 @@ namespace HexEngine
 
 		OceanSettings _oceanSettings;
 		WeatherSurfaceParams _weatherSurfaceParams;
+		SnowFootprintSystem _snowFootprints;
 
 		std::recursive_mutex _lock;
 

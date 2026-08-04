@@ -1611,6 +1611,11 @@ namespace HexEngine
 		return _weatherSurfaceParams;
 	}
 
+	SnowFootprintSystem& Scene::GetSnowFootprints()
+	{
+		return _snowFootprints;
+	}
+
 	void Scene::Lock()
 	{
 		_lock.lock();
