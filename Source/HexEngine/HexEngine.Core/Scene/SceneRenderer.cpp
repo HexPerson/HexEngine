@@ -465,6 +465,10 @@ namespace HexEngine
 	HVar r_snowFootprintDebugView("r_snowFootprintDebugView", "Blit the snow footprint deformation map to screen", false, false, true);
 	HVar r_snowFootprintDebugEmit("r_snowFootprintDebugEmit", "Emit a debug footprint at the camera each second", false, false, true);
 
+	// Dust/sand accumulation textures (M_SandDust.hmat) - real sand albedo +
+	// normal sampled by ApplyDustAccumulation, world-tiled at this scale.
+	HVar r_dustTiling("r_dustTiling", "World tiling scale for the sand/dust texture (cycles per metre)", 0.35f, 0.02f, 4.0f);
+
 	// Slice 5: the sun whose cascades RenderTransparent binds at t15..t20. One
 	// function shared by the g_taaParams.z packing and the bind block so the
 	// flag and the binds can never disagree - a set flag with nothing bound
@@ -2711,6 +2715,11 @@ namespace HexEngine
 				kSnowFootprintExtent,
 				r_snowFootprintStrength._val.f32);
 
+			// Dust/sand textures: x = bound flag, y = world tiling scale.
+			bufferData._dustParams = math::Vector4(
+				_sandDustReady ? 1.0f : 0.0f,
+				r_dustTiling._val.f32, 0.0f, 0.0f);
+
 			bufferData._skyOvercast = math::Vector4(
 				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,
 				_skyOvercastAmount);
@@ -3113,6 +3122,25 @@ namespace HexEngine
 		{
 			g_pEnv->_graphicsDevice->SetTexture2D(22, _snowShellMaterial->GetTexture(MaterialTexture::Albedo).get());
 			g_pEnv->_graphicsDevice->SetTexture2D(23, _snowShellMaterial->GetTexture(MaterialTexture::Normal).get());
+		}
+
+		// Dust/sand accumulation textures at t25/t31 (albedo/normal) for
+		// ApplyDustAccumulation. Lazy-loaded once; if missing, dust falls back to
+		// the procedural sand colour (g_dustParams.x gates it).
+		if (!_sandDustTried)
+		{
+			_sandDustTried = true;
+			_sandDustMaterial = Material::Create("EngineData.Materials/M_SandDust.hmat");
+			_sandDustReady = _sandDustMaterial != nullptr &&
+				_sandDustMaterial->GetTexture(MaterialTexture::Albedo) != nullptr &&
+				_sandDustMaterial->GetTexture(MaterialTexture::Normal) != nullptr;
+			if (!_sandDustReady)
+				LOG_WARN("Sand/dust material/textures not found - dust uses procedural colour");
+		}
+		if (_sandDustReady)
+		{
+			g_pEnv->_graphicsDevice->SetTexture2D(25, _sandDustMaterial->GetTexture(MaterialTexture::Albedo).get());
+			g_pEnv->_graphicsDevice->SetTexture2D(31, _sandDustMaterial->GetTexture(MaterialTexture::Normal).get());
 		}
 		g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
 

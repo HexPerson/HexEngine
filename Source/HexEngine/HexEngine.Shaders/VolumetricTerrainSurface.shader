@@ -306,7 +306,7 @@
 		const float __dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * __shelter);
 		if (__dustAmount > 0.001f)
 		{
-			const float4 __dustResult = ApplyDustAccumulation(baseColor, roughness, N, input.worldPos, __dustAmount);
+			const float4 __dustResult = ApplyDustAccumulation(baseColor, roughness, N, input.worldPos, __dustAmount, g_textureSampler);
 			baseColor = __dustResult.rgb;
 			roughness = __dustResult.w;
 		}

@@ -521,7 +521,7 @@
 		if (dustAmount > 0.001f)
 		{
 			const float4 dustResult = ApplyDustAccumulation(
-				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, dustAmount);
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, dustAmount, g_textureSampler);
 			albedo.rgb = dustResult.rgb;
 			roughness  = dustResult.w;
 		}

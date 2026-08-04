@@ -881,12 +881,21 @@
 		return h1 * 0.7f + h2 * 0.3f;
 	}
 
+	// Real sand albedo + normal (M_SandDust.hmat), bound by SceneRenderer at
+	// t25/t31 during the opaque pass. Free in every shader that calls
+	// ApplyDustAccumulation (t21-24 = terrain layers, t26 = shelter, t27-29 =
+	// cluster lists, t30 = footprints); fxc strips the binding where unused.
+	// g_dustParams.x flags them bound, .y is the world tiling scale.
+	Texture2D g_sandAlbedo : register(t25);
+	Texture2D g_sandNormal : register(t31);
+
 	float4 ApplyDustAccumulation(
 		float3 baseAlbedo,
 		float baseRoughness,
 		inout float3 worldNormalWS,
 		float3 worldPos,
-		float dirtAmount)
+		float dirtAmount,
+		SamplerState samp)
 	{
 		if (dirtAmount <= 0.001f)
 			return float4(baseAlbedo, baseRoughness);
@@ -899,27 +908,36 @@
 		const float patchNoise = saturate(height - (1.0f - dirtAmount) * 0.35f);
 		const float dustMask = saturate(slopeMask * (0.15f + patchNoise * 1.2f) * dirtAmount) * 0.85f;
 
-		// Micro-relief (the height treatment snow got): bend the normal by the
-		// dust-height gradient so drift sheets read as a granular, wind-rippled
-		// surface instead of flat paint. Amplitude scales with the mask so thin
-		// films stay flat. Coarser tap spacing than snow (dust drifts broader).
-		if (dustMask > 0.02f)
+		float3 dustColour;
+		float3 dustNormal;
+		if (g_dustParams.x > 0.5f)
 		{
-			const float e = 0.12f; // metres between height taps
-			const float hC = height;
+			// Real sand texture, tiled in WORLD XZ so the sheet is stable under
+			// the camera. The normal map goes through a WORLD-aligned tangent
+			// basis (+X / +Z / up) so it never touches the substrate's faceted
+			// tangents (the snow-shell lesson). ogl green -> flip for D3D.
+			const float2 uv = worldPos.xz * g_dustParams.y;
+			dustColour = g_sandAlbedo.Sample(samp, uv).rgb;
+			float3 nTS = g_sandNormal.Sample(samp, uv).xyz * 2.0f - 1.0f;
+			nTS.y = -nTS.y;
+			dustNormal = normalize(nTS.x * float3(1, 0, 0) + nTS.y * float3(0, 0, 1) + nTS.z * float3(0, 1, 0));
+		}
+		else
+		{
+			// Fallback: procedural sand colour + finite-difference relief normal
+			// (the height treatment snow got) so dust still reads as a granular
+			// surface, not flat paint.
+			dustColour = float3(0.52f, 0.42f, 0.30f) * (0.80f + 0.20f * height);
+			const float e = 0.12f;
 			const float hX = DustHeightField(worldPos.xz + float2(e, 0.0f));
 			const float hZ = DustHeightField(worldPos.xz + float2(0.0f, e));
-			const float amplitude = 0.14f * dustMask;
-			const float3 reliefN = normalize(float3(
-				-(hX - hC) / e * amplitude,
-				1.0f,
-				-(hZ - hC) / e * amplitude));
-			worldNormalWS = normalize(lerp(worldNormalWS, reliefN, dustMask * 0.8f));
+			const float amp = 0.14f * dustMask;
+			dustNormal = normalize(float3(-(hX - height) / e * amp, 1.0f, -(hZ - height) / e * amp));
 		}
 
-		// Crevice tint: gaps between grains read a touch darker, selling the
-		// relief even under flat lighting.
-		const float3 dustColour = float3(0.52f, 0.42f, 0.30f) * (0.80f + 0.20f * height);
+		if (dustMask > 0.02f)
+			worldNormalWS = normalize(lerp(worldNormalWS, dustNormal, dustMask * 0.8f));
+
 		const float3 newAlbedo = lerp(baseAlbedo, dustColour, dustMask);
 		const float newRoughness = lerp(baseRoughness, 0.92f, dustMask);
 

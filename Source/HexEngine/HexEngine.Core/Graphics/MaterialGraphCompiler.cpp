@@ -787,7 +787,7 @@ namespace HexEngine
 			ss << "\t\tconst float __dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * __shelter);\n";
 			ss << "\t\tif (__dustAmount > 0.001f)\n";
 			ss << "\t\t{\n";
-			ss << "\t\t\tconst float4 __dustResult = ApplyDustAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, __dustAmount);\n";
+			ss << "\t\t\tconst float4 __dustResult = ApplyDustAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, __dustAmount, g_textureSampler);\n";
 			ss << "\t\t\tbaseColor.rgb = __dustResult.rgb;\n";
 			ss << "\t\t\troughness     = __dustResult.w;\n";
 			ss << "\t\t}\n";
@@ -1112,7 +1112,7 @@ namespace HexEngine
 			//       argument.
 			//   5 - slice 5: snow relief - ApplySnowAccumulation signature
 			//       gains inout normal + sampler.
-			combined += "\0codegen:5";
+			combined += "\0codegen:6";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);

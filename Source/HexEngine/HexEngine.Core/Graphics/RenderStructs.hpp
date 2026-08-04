@@ -447,6 +447,10 @@ namespace HexEngine
 		//   z = map half-extent in world metres.
 		//   w = global print strength (metres of snow removed at full depth).
 		math::Vector4 _snowFootprintParams;
+
+		// Dust/sand accumulation (Phase 3). x = sand textures bound (t25 albedo
+		// / t31 normal), y = world tiling scale, zw reserved.
+		math::Vector4 _dustParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

@@ -276,6 +276,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// w = global print strength. See RenderStructs.hpp::_snowFootprint*.
 		float4x4 g_snowFootprintVP;
 		float4 g_snowFootprintParams;
+		// Dust/sand accumulation textures: x = sand textures bound (t25/t31),
+		// y = world tiling scale, zw reserved. See RenderStructs.hpp::_dustParams.
+		float4 g_dustParams;
 	};
 
 	#define g_preExposure    (g_exposureParams.x)

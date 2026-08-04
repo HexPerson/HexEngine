@@ -371,6 +371,11 @@ namespace HexEngine
 		bool _snowShellReady = false;
 		bool _snowShellTried = false;
 
+		// Dust/sand accumulation textures (M_SandDust.hmat), bound at t25/t31.
+		std::shared_ptr<Material> _sandDustMaterial;
+		bool _sandDustReady = false;
+		bool _sandDustTried = false;
+
 		class ShadowMap* _rainOcclusionMap = nullptr;
 		std::unique_ptr<PVS> _rainOcclusionPVS;
 		math::Matrix _rainOcclusionView = math::Matrix::Identity;
