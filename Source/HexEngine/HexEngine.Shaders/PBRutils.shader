@@ -906,7 +906,32 @@
 
 		const float height = DustHeightField(worldPos.xz);
 		const float patchNoise = saturate(height - (1.0f - dirtAmount) * 0.35f);
-		const float dustMask = saturate(slopeMask * (0.15f + patchNoise * 1.2f) * dirtAmount) * 0.85f;
+		float dustMask = saturate(slopeMask * (0.15f + patchNoise * 1.2f) * dirtAmount) * 0.85f;
+
+		// Drift: wind-blown sand banks up against nearby walls/objects, from the
+		// top-down occlusion map neighbourhood - the same trick snow drift banks
+		// use. A neighbour standing >=1.5 m over this point is a wall face, so
+		// dust piles there (more coverage + deeper tint/relief).
+		if (g_rainOcclusionParams.x > 0.5f)
+		{
+			const float4 oclip = mul(float4(worldPos, 1.0f), g_rainOcclusionVP);
+			const float2 ouv = oclip.xy * float2(0.5f, -0.5f) + 0.5f;
+			if (all(ouv >= 0.0f) && all(ouv <= 1.0f) && oclip.z > 0.0f && oclip.z < 1.0f)
+			{
+				const float2 stepUv = g_rainOcclusionParams.z * 6.0f;
+				const float kWall = 1.5f / 160.0f;
+				float drift = 0.0f;
+				[unroll]
+				for (int i = 0; i < 4; ++i)
+				{
+					const float2 o = float2((i & 1) ? stepUv.x : -stepUv.x,
+					                        (i & 2) ? stepUv.y : -stepUv.y);
+					const float nd = g_rainOcclusionMap.SampleLevel(samp, ouv + o, 0);
+					drift += (oclip.z - nd > kWall) ? 0.25f : 0.0f;
+				}
+				dustMask = saturate(dustMask + drift * 0.5f * slopeMask * dirtAmount);
+			}
+		}
 
 		float3 dustColour;
 		float3 dustNormal;

@@ -45,66 +45,12 @@
 		return float2(n, Hash21(p + n));
 	}
 
-	// Sparse STATIC beads: only a fraction of cells hold a bead (spawn gate),
-	// pulsing in/out on a long lifetime. Aspect-corrected `st`. Returns
-	// xy = refraction offset, z = mask, w = rim/spec highlight.
-	float4 StaticBeads(float2 st, float scale, float t, float seed)
+	// Horizontal offset of a runner's meandering path at a given vertical
+	// position y. The head AND the whole trail use this, so the trail follows
+	// the drip's actual history (not a straight vertical line).
+	float PathX(float baseX, float y, float freq, float amp, float phase)
 	{
-		const float2 gv = st * scale;
-		const float2 id = floor(gv);
-		const float2 f  = frac(gv) - 0.5f;
-		const float2 rnd = Hash22(id + seed);
-		// Spawn gate: ~28% of cells actually carry a bead - keeps it sparse.
-		if (rnd.x > 0.28f)
-			return float4(0, 0, 0, 0);
-
-		const float2 centre = (Hash22(id + seed + 9.1f) - 0.5f) * 0.6f;
-		const float life = frac(t * (0.04f + rnd.y * 0.06f) + rnd.y);
-		const float grow = smoothstep(0.0f, 0.12f, life) * (1.0f - smoothstep(0.6f, 1.0f, life));
-		const float radius = (0.13f + rnd.y * 0.13f) * grow;
-		const float2 d = f - centre;
-		const float dist = length(d);
-		if (radius < 1e-3f)
-			return float4(0, 0, 0, 0);
-
-		const float bead = smoothstep(radius, radius * 0.6f, dist);
-		const float2 offset = -d * bead / scale;
-		const float rim = smoothstep(radius * 0.85f, radius, dist) * bead;
-		return float4(offset, bead, rim * 0.5f);
-	}
-
-	// RUNNERS: some columns carry a droplet sliding DOWN the screen (uv.y is
-	// down), with a thin fading trail behind the head. Aspect-corrected `st`.
-	float4 Runners(float2 st, float cols, float t, float seed)
-	{
-		const float x = st.x * cols;
-		const float col = floor(x);
-		const float fx = (frac(x) - 0.5f);
-		const float2 rnd = Hash22(float2(col, seed));
-		// ~30% of columns have a runner.
-		if (rnd.x > 0.30f)
-			return float4(0, 0, 0, 0);
-
-		const float speed = 0.05f + rnd.y * 0.12f;
-		const float cyc = t * speed + rnd.y * 5.3f;
-		const float headY = frac(cyc);                          // 0..1 travels down
-		const float wob = (Hash21(float2(col, floor(cyc))) - 0.5f) * 0.5f;
-		const float px = (fx - wob) / cols;                     // back to st.x units
-		const float dy = st.y - headY;
-
-		const float headR = 0.010f + rnd.x * 0.012f;
-		const float head = smoothstep(headR, headR * 0.5f, length(float2(px, dy)));
-		// Trail above the head (above = -dy > 0): thin vertical streak, brightest
-		// mid-way, fading out along its length.
-		const float above = -dy;
-		const float trailLen = 0.12f + rnd.y * 0.10f;
-		float trail = smoothstep(headR * 0.7f, 0.0f, abs(px))
-			* saturate(above / trailLen) * (1.0f - saturate(above / trailLen)) * 4.0f;
-		trail = saturate(trail) * step(0.0f, above);
-
-		const float mask = max(head, trail * 0.6f);
-		const float2 offset = float2(px, dy) * head;            // refract at the head
-		return float4(offset, mask, head * 0.6f);
+		return baseX + sin(y * freq + phase) * amp + sin(y * freq * 2.3f + phase * 1.7f) * amp * 0.35f;
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_TARGET
@@ -115,24 +61,60 @@
 		const float rain = saturate(g_weatherSurface.precipitationIntensity)
 			* saturate(1.0f - g_weatherSurface.snowCoverage * 0.9f);
 		if (rain < 0.01f)
-			return shaderTexture.Sample(LinearSampler, uv);
+			return shaderTexture.SampleLevel(LinearSampler, uv, 0);
 
 		const float aspect = g_screenWidth / max(g_screenHeight, 1.0f);
-		const float2 st = uv * float2(aspect, 1.0f);
+		const float2 asp = float2(aspect, 1.0f);
 		const float t = g_time;
 
+		// PURE REFRACTION. Each droplet only DISTORTS the background behind it -
+		// no highlights, rims or bright trails (those read as cartoon bubbles /
+		// "sperm"). We accumulate a screen-space refraction OFFSET from every
+		// drop head + its path-following trail, then sample the background once
+		// at the displaced UV. Drops are visible only where they bend background
+		// detail - exactly like real water on glass.
 		float2 refr = float2(0.0f, 0.0f);
-		float hi = 0.0f;
+		[unroll]
+		for (int i = 0; i < 12; ++i)
+		{
+			const float2 h  = Hash22(float2((float)i * 1.73f, 3.31f));
+			const float2 h2 = Hash22(float2((float)i * 2.91f, 8.13f));
+			const float baseX = h.x;
+			const float R     = 0.011f + h.y * 0.013f;
+			const float speed = 0.05f + h2.x * 0.11f;
+			const float freq  = 5.0f + h2.y * 7.0f;
+			const float amp   = 0.008f + h.y * 0.018f;
+			const float phase = h.x * 31.0f;
+			const float cyc   = t * speed + h2.y * 17.0f;
+			const float headY = pow(frac(cyc), 1.35f);
+			const float headX = PathX(baseX, headY, freq, amp, phase);
 
-		// One sparse static layer + one runner layer - far fewer than before.
-		const float4 b = StaticBeads(st, 8.0f, t, 0.0f);
-		refr += b.xy; hi += b.w;
-		const float4 r = Runners(st, 9.0f, t, 3.0f);
-		refr += r.xy; hi += r.w;
+			// Head lens: bend the background toward the drop centre (magnify),
+			// strongest near the rim.
+			const float2 d = (uv - float2(headX, headY)) * asp;
+			const float dist = length(d);
+			if (dist < R)
+			{
+				const float k = dist / R;
+				const float2 dir = d / max(dist, 1e-5f);
+				refr += -dir * k * R * 1.1f / asp;
+			}
 
-		const float2 uvOffset = float2(refr.x / aspect, refr.y) * (0.8f * rain);
-		float3 col = shaderTexture.Sample(LinearSampler, uv + uvOffset).rgb;
-		col += hi * rain * 0.20f;
-		return float4(col, 1.0f);
+			// Trail: a subtle refraction streak that FOLLOWS the drip's wobble
+			// path (path evaluated at this pixel's y), fading behind the head.
+			const float along = headY - uv.y;
+			if (along > 0.0f && along < 0.28f)
+			{
+				const float trailX = PathX(baseX, uv.y, freq, amp, phase);
+				const float tdist = abs(uv.x - trailX) * aspect;
+				const float tw = R * lerp(0.55f, 0.12f, saturate(along / 0.28f));
+				const float fall = saturate(1.0f - along / 0.28f);
+				const float tmask = smoothstep(tw, 0.0f, tdist) * fall;
+				const float side = (uv.x < trailX) ? -1.0f : 1.0f;
+				refr += float2(side * tmask * tw * 0.5f / aspect, 0.0f);
+			}
+		}
+
+		return shaderTexture.SampleLevel(LinearSampler, uv + refr * rain, 0);
 	}
 }
