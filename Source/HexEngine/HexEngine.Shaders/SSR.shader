@@ -625,7 +625,7 @@
 		// stride grows with distance along the ray (reflections far from the
 		// reflector get progressively coarser, which roughness masks anyway)
 		// and the loop is capped at a fixed sample budget.
-		const int sampleBudget = 160;
+		const int sampleBudget = 96;
 		const float baseStride = max(1.0f, pixelLength / (float)sampleBudget);
 
 		// Sub-pixel jitter decorrelates adjacent rays' sample phase. Scaled by
@@ -639,14 +639,17 @@
 		[loop]
 		for (int i = 0; i < sampleBudget; ++i)
 		{
-			// Parameter along the 2D line in [0,1]. LINEAR = uniform screen-space
-			// spacing, the correct choice for mirrors: a quadratic ramp starved
-			// the far part of the ray (distant reflections) so they quantised into
-			// visible stair-steps once roughness wasn't there to hide them. Every
-			// pixel of the reflected image now gets an evenly-spaced tap, and the
-			// deep binary refinement below localises the exact hit sub-pixel.
+			// Parameter along the 2D line in [0,1]. QUADRATIC on purpose: dense
+			// near the reflector (sharp contact reflections) and SPARSE far away,
+			// so a ray that would reflect distant geometry tends to MISS and fall
+			// back to the bright, smooth, temporally-stable environment instead of
+			// locking onto dim, aliasing far screen pixels. The linear version
+			// sampled the far ray densely and reflected dark distant geometry,
+			// which read as darkness + long-range jitter + dark puddle rims on wet
+			// surfaces. (Far striping is the accepted trade; the real answer is a
+			// distance-based confidence falloff, tracked separately.)
 			const float f = ((float)i + 0.5f + ditherPhase) / (float)sampleBudget;
-			const float t = f;
+			const float t = f * f;
 			const float2 pixel = p0 + stepDir * (t * pixelLength);
 			const float2 fragTex = pixel / screenSize;
 
@@ -869,12 +872,24 @@
 		// reflection. Without this, the spec direction was always mirror regardless of
 		// smoothness, so "smoothness" never affected reflection sharpness - it was just an
 		// intensity scalar.
-		const float3 specularDir = normalize(reflect(eyeDir, worldNormal));
+		// Puddle / wet-floor flattening. A smooth, up-facing surface (a puddle or
+		// wet asphalt) is physically a FLAT horizontal mirror, but in the gbuffer
+		// it carries the road's bumpy normal (asphalt normal map + rain ripples).
+		// Reflecting off that scatter sends the SSR ray into dark occluded
+		// geometry and makes it alias frame-to-frame - the dark blotches, the
+		// long-range shimmer, and the dark rim around puddles the user isolated to
+		// SSR. Flatten the REFLECTION normal toward world-up for such surfaces so
+		// they mirror coherently like a real puddle. Only the SSR ray normal is
+		// touched here; the shading normal elsewhere is unchanged.
+		const float puddleness = saturate((smoothness - 0.75f) / 0.25f)
+			* saturate((worldNormal.y - 0.55f) / 0.45f);
+		const float3 reflNormal = normalize(lerp(worldNormal, float3(0.0f, 1.0f, 0.0f), puddleness));
+		const float3 specularDir = normalize(reflect(eyeDir, reflNormal));
 		const float rayRoughness = saturate(1.0f - smoothness);
 		const float3 randomOffset = RandomDirectionInDirectionOfNormal(specularDir, rngState);
 		float3 rayDir = normalize(specularDir + randomOffset * rayRoughness * rayRoughness);
 		// If perturbation pushed the ray below the surface, snap back to the mirror dir.
-		if (dot(rayDir, worldNormal) < 0.0f)
+		if (dot(rayDir, reflNormal) < 0.0f)
 			rayDir = specularDir;
 
 		const float jitter = RandomValue(rngState);
