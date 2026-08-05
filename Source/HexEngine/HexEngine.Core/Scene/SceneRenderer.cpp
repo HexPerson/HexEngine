@@ -909,19 +909,13 @@ namespace HexEngine
 	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
 	HVar r_lensDrips("r_lensDrips", "Screen-space rain droplets on the camera lens while precipitation falls", true, false, true);
 
-	// Wetness accumulation/drying: the authored wetness/puddle amounts are the
-	// TARGET; the displayed values lag toward them so surfaces wet up quickly
-	// when rain starts and dry slowly after it stops (and puddles fill/dry
-	// slower still). Respects authored values - a static "wet streets" preset
-	// still reaches full wetness, only weather TRANSITIONS show the lag.
-	HVar r_wetnessAccumulation("r_wetnessAccumulation", "Lag surface wetness/puddles toward the weather target (wet fast, dry slow)", true, false, true);
-	HVar r_wetnessRiseRate("r_wetnessRiseRate", "How fast surfaces wet up under rain (fraction/sec)", 0.5f, 0.01f, 5.0f);
+	// Wetness drying: wetting tracks the weather target directly (the weather
+	// controller already ramps wetness IN SYNC with the fog/overcast over the
+	// preset transition, so re-lagging the rise made surfaces darken before the
+	// fog compensated - a dark pop). Only the DRYING is lagged, so a shower
+	// leaves streets wet that dry slowly afterwards.
+	HVar r_wetnessAccumulation("r_wetnessAccumulation", "Keep surfaces wet after rain and dry them slowly (wetting tracks the weather)", true, false, true);
 	HVar r_wetnessFallRate("r_wetnessFallRate", "How fast surfaces dry after rain (fraction/sec)", 0.06f, 0.005f, 5.0f);
-	// Puddles fill fast (present during rain) and dry only slightly slower than
-	// the wet sheen - so they emerge gently as the sheen fades, instead of
-	// either popping in 17 s after the floor dried (too slow) or never being
-	// seen because they faded with the sheen (too fast).
-	HVar r_puddleFillRate("r_puddleFillRate", "How fast puddles pool under rain (fraction/sec)", 0.4f, 0.005f, 5.0f);
 	HVar r_puddleDryRate("r_puddleDryRate", "How fast puddles dry after rain (fraction/sec)", 0.045f, 0.002f, 5.0f);
 	HVar r_profileDisableDirectionalLights("r_profileDisableDirectionalLights", "Disable directional light rendering for profiling", false, false, true);
 	HVar r_profileDisablePointLights("r_profileDisablePointLights", "Disable point light rendering for profiling", false, false, true);
@@ -3573,14 +3567,20 @@ namespace HexEngine
 		}
 		// Clamp dt so a hitch / breakpoint can't jump the state.
 		const float dt = std::min(0.1f, std::max(0.0f, g_pEnv->_timeManager->GetFrameTime()));
-		auto lag = [dt](float state, float target, float rise, float fall)
+		// INSTANT UP, SLOW DOWN. Wetting tracks the weather target directly (the
+		// weather controller already lerps wetness IN SYNC with the fog/overcast
+		// over the preset transition) - re-lagging the rise made the surfaces
+		// darken BEFORE the fog brightened to compensate, which read as a dark
+		// pop that then recovered. Only the DRYING is lagged, so a shower still
+		// leaves streets wet that dry slowly afterwards.
+		auto dryLag = [dt](float state, float target, float fall)
 		{
-			const float rate = (target > state) ? rise : fall;
-			const float step = rate * dt;
-			return state + std::clamp(target - state, -step, step);
+			if (target >= state)
+				return target;                                  // wet up with the weather + fog
+			return std::max(target, state - fall * dt);         // dry slowly
 		};
-		_wetnessState = lag(_wetnessState, wsp.wetness, r_wetnessRiseRate._val.f32, r_wetnessFallRate._val.f32);
-		_puddleState  = lag(_puddleState,  wsp.puddleAmount, r_puddleFillRate._val.f32, r_puddleDryRate._val.f32);
+		_wetnessState = dryLag(_wetnessState, wsp.wetness, r_wetnessFallRate._val.f32);
+		_puddleState  = dryLag(_puddleState,  wsp.puddleAmount, r_puddleDryRate._val.f32);
 	}
 
 	void SceneRenderer::RenderShadowMaps(Light* shadowCaster)
