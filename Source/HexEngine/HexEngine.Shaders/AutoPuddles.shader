@@ -213,8 +213,13 @@
 		// instead of being a hard-edged mirror decal laid on top (which gave the
 		// SSR gate a hard boundary the denoiser then took ~10 s to resolve into a
 		// dark silhouette).
-		const float  aa = max(fwidth(noise), 0.10f);
-		const float  mask = smoothstep(threshold - aa, threshold + aa, noise);
+		// WIDE, asymmetric feather so the puddle ramps its roughness (mirror ->
+		// dry) over a broad band and blends into the ground instead of a hard
+		// edge. The lower bound reaches well below the threshold (long fade-in);
+		// fwidth widens it further at distance so far edges anti-alias rather
+		// than shimmer on/off. r_autoPuddlesEdge (params defaulted) tunes width.
+		const float  aa = max(fwidth(noise) * 2.0f, 0.30f);
+		const float  mask = smoothstep(threshold - aa, threshold + aa * 0.25f, noise);
 		if (mask <= 0.0f)
 		{
 			o.diff = float4(0, 0, 0, 0);
