@@ -205,7 +205,16 @@
 		const float3 noisePos = float3(surfacePos.x, 0.0f, surfacePos.z) / scale;
 		const float  noise = PuddleNoise(noisePos);
 		const float  threshold = g_autoPuddleParams.y;
-		const float  mask = saturate((noise - threshold) * 4.0f);
+		// SOFT, ANTI-ALIASED edge. Widen the noise->mask transition to at least
+		// the noise's screen-space footprint (fwidth) so distant puddle edges
+		// don't alias on/off frame-to-frame (the temporal shimmer), and keep a
+		// generous minimum band so the puddle FADES into the surrounding ground
+		// - roughness/smoothness ramp with the mask through the OM's alpha blend -
+		// instead of being a hard-edged mirror decal laid on top (which gave the
+		// SSR gate a hard boundary the denoiser then took ~10 s to resolve into a
+		// dark silhouette).
+		const float  aa = max(fwidth(noise), 0.10f);
+		const float  mask = smoothstep(threshold - aa, threshold + aa, noise);
 		if (mask <= 0.0f)
 		{
 			o.diff = float4(0, 0, 0, 0);
