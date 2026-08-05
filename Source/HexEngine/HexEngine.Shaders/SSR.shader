@@ -881,21 +881,18 @@
 		// SSR. Flatten the REFLECTION normal toward world-up for such surfaces so
 		// they mirror coherently like a real puddle. Only the SSR ray normal is
 		// touched here; the shading normal elsewhere is unchanged.
-		// The up-facing gate must reach FULL flatten well before dead-vertical-up.
-		// AutoPuddles paints glossy puddle pixels (no normal write) onto surfaces
-		// whose gbuffer normal is BUMPY - the sand/snow accumulation shell's dune
-		// relief, cambered asphalt. The old ramp (0.55..1.0) only ~33% flattened a
-		// normal.y=0.7 dune pixel, so the mirror ray stayed tilted and - at grazing
-		// view, worst down the screen edges - reflected into the dark near-horizon /
-		// adjacent dune instead of the sky. Combined with the energy-conserve
-		// composite removing the base at grazing Fresnel, that read as BLACK puddles
-		// (the r_autoPuddles-gated artifact during a sandstorm->rain transition,
-		// clearing only when the shell stops drawing as dirtAmount decays). Engage
-		// from a lower gloss and reach full flatten by normal.y~0.5 so any roughly-
-		// horizontal wet pixel mirrors world-up sky; a true wall (normal.y<0.2)
-		// still never flattens.
-		const float puddleness = saturate((smoothness - 0.6f) / 0.3f)
-			* smoothstep(0.2f, 0.5f, worldNormal.y);
+		// NOTE: do NOT widen the up-facing gate to flatten tilted pixels fully
+		// (tried: smoothstep 0.2..0.5). A fully-flattened reflection normal on a
+		// tilted pixel makes the mirror ray SKIM the ground at grazing view, and on
+		// the accumulation shell (real displaced mound geometry in the depth
+		// buffer) the skimming ray immediately hits the dark backside of the next
+		// mound - the black speckle carpeted the whole street. The real fix for
+		// "black puddles on the sand shell" is upstream: AutoPuddles no longer
+		// paints mirror gloss onto sand-covered ground at all (dirtAmount gate in
+		// AutoPuddles.shader). This flatten stays scoped to what it was validated
+		// for: near-flat bumpy roads (asphalt normal maps + rain ripples).
+		const float puddleness = saturate((smoothness - 0.75f) / 0.25f)
+			* saturate((worldNormal.y - 0.55f) / 0.45f);
 		const float3 reflNormal = normalize(lerp(worldNormal, float3(0.0f, 1.0f, 0.0f), puddleness));
 		const float3 specularDir = normalize(reflect(eyeDir, reflNormal));
 		const float rayRoughness = saturate(1.0f - smoothness);
@@ -1023,8 +1020,25 @@
 			// this term, not the weather.
 			const float envRoughness = clamp(rayRoughness * rayRoughness, 0.25f, 1.0f);
 
+			// Horizon dimming, LIFTED by fog. The plain dim term (x0.35 at the
+			// horizon) is right for clear air, but in fog it black-holes every
+			// far miss: a ray aimed at distant geometry (a mountain ~2km out)
+			// exhausts its march budget long before reaching that depth, falls
+			// to this env fill, and got a dimmed clear-sky sample - while the
+			// neighbouring sky-aimed rays hit the fogged beauty and came back
+			// bright. Result: a mountain-shaped dark hole in the reflection.
+			// Physically, dense fog converges EVERYTHING far toward the
+			// atmosphere colour (that is literally what
+			// fogFarAtmosphereMatchStrength does to beauty), and the sky atlas
+			// horizon IS that colour (weather-tinted at capture) - so as fog
+			// optical depth over the atmosphere-blend distance approaches 1,
+			// stop dimming and return the atlas sample at full strength.
+			const float envFogExt = max(g_atmosphere.fogDensity + g_atmosphere.fogHeightDensity, 0.0f);
+			const float envFogDist = max(g_atmosphere.fogAtmosphereBlendStart + g_atmosphere.fogAtmosphereBlendRange, 0.0f);
+			const float envFogAmount = 1.0f - exp(-envFogExt * envFogDist);
+			const float envHorizonDim = lerp(saturate(rayDir.y * 3.0f + 0.35f), 1.0f, envFogAmount);
 			float3 env = SampleEnvAtlas(g_ssrSkyEnvAtlas, g_textureSampler, rayDir, envRoughness)
-				* saturate(rayDir.y * 3.0f + 0.35f) * g_iblSkySpecular;
+				* envHorizonDim * g_iblSkySpecular;
 
 			// Probes replace the sky inside their box, matching
 			// EnvMapCommon::EvaluateEnvSpecular so the two estimates agree.

@@ -176,7 +176,17 @@
 		// noise eval, which keeps the pass essentially free in clear weather. The
 		// debug-force override (g_autoPuddleAppearance.y) raises the minimum so
 		// users can preview puddles without wiring up rain in their scene.
-		const float rainMul = saturate(max(g_weatherSurface.puddleAmount, g_autoPuddleAppearance.y));
+		// Sand kills puddles: while the ground carries wind-blown sand
+		// (dirtAmount > 0, i.e. the accumulation shell is drawing), rain soaks
+		// into it - no mirror film forms. Without this gate the pass painted
+		// mirror gloss onto the shell's bumpy dune relief during a sandstorm ->
+		// rain transition; SSR off those pixels scattered into dark geometry and
+		// the street carpeted in black speckle until dirtAmount decayed to zero.
+		// Puddles now fade in as the sand clears, which is also what real ground
+		// does. (Snow already reads correctly - the shell forces its own rough
+		// matte surface on top.)
+		const float sandFree = saturate(1.0f - g_weatherSurface.dirtAmount * 3.0f);
+		const float rainMul = saturate(max(g_weatherSurface.puddleAmount * sandFree, g_autoPuddleAppearance.y));
 		if (rainMul <= 0.0f)
 		{
 			o.diff = float4(0, 0, 0, 0);
