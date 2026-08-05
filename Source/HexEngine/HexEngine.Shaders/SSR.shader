@@ -625,7 +625,7 @@
 		// stride grows with distance along the ray (reflections far from the
 		// reflector get progressively coarser, which roughness masks anyway)
 		// and the loop is capped at a fixed sample budget.
-		const int sampleBudget = 96;
+		const int sampleBudget = 160;
 		const float baseStride = max(1.0f, pixelLength / (float)sampleBudget);
 
 		// Sub-pixel jitter decorrelates adjacent rays' sample phase. Scaled by
@@ -639,17 +639,14 @@
 		[loop]
 		for (int i = 0; i < sampleBudget; ++i)
 		{
-			// Parameter along the 2D line in [0,1]. A pure quadratic ramp
-			// (t = f*f) front-loaded almost every sample onto the near floor -
-			// which reflects low-detail nearby ground - and STARVED the far part
-			// of the ray where the reflected buildings live, so distant
-			// reflections broke into stripes (sparse far taps aliasing the
-			// reflected geometry). Bias mostly toward UNIFORM screen-space
-			// spacing (65% linear + 35% quadratic): a little extra near density
-			// for contact reflections, but the far reflection now gets a fair
-			// share of taps, so it reads as a coherent (if softer) mirror.
+			// Parameter along the 2D line in [0,1]. LINEAR = uniform screen-space
+			// spacing, the correct choice for mirrors: a quadratic ramp starved
+			// the far part of the ray (distant reflections) so they quantised into
+			// visible stair-steps once roughness wasn't there to hide them. Every
+			// pixel of the reflected image now gets an evenly-spaced tap, and the
+			// deep binary refinement below localises the exact hit sub-pixel.
 			const float f = ((float)i + 0.5f + ditherPhase) / (float)sampleBudget;
-			const float t = lerp(f, f * f, 0.35f);
+			const float t = f;
 			const float2 pixel = p0 + stepDir * (t * pixelLength);
 			const float2 fragTex = pixel / screenSize;
 
@@ -707,7 +704,7 @@
 				float2 refinedTex = fragTex;
 
 				[loop]
-				for (int j = 0; j < 5; ++j)
+				for (int j = 0; j < 10; ++j)
 				{
 					const float tm = (ta + tb) * 0.5f;
 					const float2 mPix = p0 + stepDir * (tm * pixelLength);

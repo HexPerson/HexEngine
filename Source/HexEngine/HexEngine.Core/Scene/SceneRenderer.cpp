@@ -4315,11 +4315,13 @@ namespace HexEngine
 			}
 			GFX_PERF_END();
 
-			// Lens drips: screen-space rain beads while precipitation falls.
-			// Gated in C++ on the storm being active so a dry scene pays nothing;
-			// the shader scales the effect by precipitationIntensity as well.
+			// Lens drips: screen-space RAIN beads. Gated in C++ so a dry scene -
+			// or a snowstorm / sandstorm (which also drive precipitationIntensity)
+			// - pays nothing; the shader also zeroes the effect for snow/sand.
+			const WeatherSurfaceParams& _lensWx = _currentScene ? _currentScene->GetWeatherSurfaceParams() : WeatherSurfaceParams();
 			if (r_lensDrips._val.b && _lensDripsShader && _currentScene != nullptr &&
-				_currentScene->GetWeatherSurfaceParams().precipitationIntensity > 0.001f)
+				_lensWx.precipitationIntensity > 0.001f &&
+				_lensWx.snowCoverage < 0.34f && _lensWx.dirtAmount < 0.34f)
 			{
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"Lens drips");
 				{

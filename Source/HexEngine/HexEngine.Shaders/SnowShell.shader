@@ -238,7 +238,12 @@
 		// tessellation triangle at any distance, so per-vertex compression
 		// aliased into streaks. The foot shape is a PER-PIXEL shading detail in
 		// DefaultPixel (albedo darken + normal dent) instead.
-		const float disp = (0.008f + snowAmt * 0.10f + drift * 0.42f) * taper;
+		// Sand dunes/drifts mound TALLER than snow (and bank harder against
+		// objects), so the sand shell extrudes ~2x when dust dominates.
+		const bool  isSand      = effDust > effSnow;
+		const float moundHeight = isSand ? 0.22f : 0.10f;
+		const float driftScale  = isSand ? 0.70f : 0.42f;
+		const float disp = (0.008f + snowAmt * moundHeight + drift * driftScale) * taper;
 		worldPos.y  += disp;
 		worldPrev.y += disp;
 

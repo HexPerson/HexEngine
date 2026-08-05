@@ -56,10 +56,12 @@
 	float4 ShaderMain(UIPixelInput input) : SV_TARGET
 	{
 		const float2 uv = input.texcoord;
-		// Rain effect: fade it out as the precipitation turns to snow (drips are
-		// water on the lens, not snowflakes).
-		const float rain = saturate(g_weatherSurface.precipitationIntensity)
-			* saturate(1.0f - g_weatherSurface.snowCoverage * 0.9f);
+		// WATER on the lens - only for RAIN precipitation. Snow and sandstorms
+		// also drive precipitationIntensity, so gate them out: no water beads
+		// when it's snowing or during a sandstorm.
+		const float rainType = saturate(1.0f - g_weatherSurface.snowCoverage * 3.0f)
+			* saturate(1.0f - g_weatherSurface.dirtAmount * 3.0f);
+		const float rain = saturate(g_weatherSurface.precipitationIntensity) * rainType;
 		if (rain < 0.01f)
 			return shaderTexture.SampleLevel(LinearSampler, uv, 0);
 
