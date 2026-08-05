@@ -695,7 +695,7 @@
 			// assume the surface behind a depth sample to be. Grows mildly with
 			// depth so distant thin geometry (window frames) still registers
 			// against depth-buffer precision.
-			const float thickness = 0.5f + surfaceDepth * 0.02f;
+			const float thickness = 0.5f + surfaceDepth * 0.5f;
 
 			if (depthDelta > 0.0f && depthDelta < thickness)
 			{
@@ -881,8 +881,21 @@
 		// SSR. Flatten the REFLECTION normal toward world-up for such surfaces so
 		// they mirror coherently like a real puddle. Only the SSR ray normal is
 		// touched here; the shading normal elsewhere is unchanged.
-		const float puddleness = saturate((smoothness - 0.75f) / 0.25f)
-			* saturate((worldNormal.y - 0.55f) / 0.45f);
+		// The up-facing gate must reach FULL flatten well before dead-vertical-up.
+		// AutoPuddles paints glossy puddle pixels (no normal write) onto surfaces
+		// whose gbuffer normal is BUMPY - the sand/snow accumulation shell's dune
+		// relief, cambered asphalt. The old ramp (0.55..1.0) only ~33% flattened a
+		// normal.y=0.7 dune pixel, so the mirror ray stayed tilted and - at grazing
+		// view, worst down the screen edges - reflected into the dark near-horizon /
+		// adjacent dune instead of the sky. Combined with the energy-conserve
+		// composite removing the base at grazing Fresnel, that read as BLACK puddles
+		// (the r_autoPuddles-gated artifact during a sandstorm->rain transition,
+		// clearing only when the shell stops drawing as dirtAmount decays). Engage
+		// from a lower gloss and reach full flatten by normal.y~0.5 so any roughly-
+		// horizontal wet pixel mirrors world-up sky; a true wall (normal.y<0.2)
+		// still never flattens.
+		const float puddleness = saturate((smoothness - 0.6f) / 0.3f)
+			* smoothstep(0.2f, 0.5f, worldNormal.y);
 		const float3 reflNormal = normalize(lerp(worldNormal, float3(0.0f, 1.0f, 0.0f), puddleness));
 		const float3 specularDir = normalize(reflect(eyeDir, reflNormal));
 		const float rayRoughness = saturate(1.0f - smoothness);
