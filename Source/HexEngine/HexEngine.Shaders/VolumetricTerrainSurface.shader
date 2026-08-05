@@ -352,7 +352,17 @@
 				const float __patch = saturate((__n1 * 0.65f + __n2 * 0.35f)
 					- (1.0f - g_weatherSurface.snowCoverage) * 0.45f
 					- __melt * 0.55f);
-				float __snowMask = saturate(__slopeMask * (0.2f + __patch * 1.4f) * g_weatherSurface.snowCoverage)
+				// Coverage matches the SHELL, which covers FULLY wherever it is
+				// drawn (albedo = solid snow-white, no patch-noise holes) and only
+				// tapers at melt/shelter/slope/edge. ApplySnowAccumulation's
+				// (0.2 + patch*1.4) term punched coverage holes even under a heavy
+				// blanket - that is exactly why terrain read as "less snow" than the
+				// meshes. Instead drive coverage from snowCoverage and let the patch
+				// noise carve only the THIN dusting at low coverage, filling in
+				// completely (fill -> 1) as the blanket deepens.
+				const float __sc = saturate(g_weatherSurface.snowCoverage);
+				const float __fill = saturate((0.25f + __patch * 1.4f) + __sc * __sc);
+				float __snowMask = saturate(__slopeMask * __sc * __fill)
 					* (1.0f - __melt * 0.7f);
 
 				// Wall drift banks (mirror ApplySnowAccumulation): snow piles where
