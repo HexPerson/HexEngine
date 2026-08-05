@@ -849,7 +849,12 @@
 		// the trough term is the POM self-occlusion, which is most of what
 		// reads as depth on the flat ground plane.
 		const float crevice = SnowHeightField(sxz);
-		const float3 snowColour = float3(0.92f, 0.94f, 0.98f) * (0.78f + 0.22f * crevice) * troughAO;
+		// Crevice + POM trough-AO darkening, but FLOORED so it can't drive the
+		// snow toward black at troughs/edges - that hard self-occlusion was the
+		// dark-edge artifact on terrain (the flat-snow path still uses POM; the
+		// tessellated shell dropped it). Keep a gentle depth cue, not a black rim.
+		const float aoSoft = lerp(0.84f, 1.0f, troughAO);
+		const float3 snowColour = float3(0.92f, 0.94f, 0.98f) * (0.84f + 0.16f * crevice) * aoSoft;
 		const float3 newAlbedo = lerp(baseAlbedo, snowColour, snowMask);
 
 		// Snow is highly diffuse (lots of micro-scattering between snowflakes)
