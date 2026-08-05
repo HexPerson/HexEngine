@@ -253,6 +253,10 @@
 			(rockDetailNormal * heightWeighted.y) +
 			(snowDetailNormal * heightWeighted.z) +
 			(dirtDetailNormal * heightWeighted.w);
+		// Macro (pre-detail) up-ness, used below to gate the wet SSR so only FLAT
+		// wet ground reflects - sloped/bumpy wet terrain reflecting off its detail
+		// normal scatters into dark geometry (the dark edges).
+		const float macroUp = N.y;
 		N = normalize(lerp(N, normalize(detailNormal), 0.55f));
 
 		float metallic =
@@ -292,7 +296,13 @@
 		{
 			const float __wetFilm = ApplyWetSurface(baseColor, roughness, metallic,
 				__shelteredWetness, g_wetnessDarkening);
-			smoothness = __wetFilm * 0.9f;
+			// Open SSR only on FLAT wet ground (a puddle-like mirror the SSR's
+			// puddle-flatten then handles cleanly). Sloped/bumpy wet terrain kept
+			// at smoothness 0 - its detail-normal reflection scatters dark (the
+			// dark edges the user saw; r_ssr 0 removed them). macroUp is the
+			// pre-detail surface up-ness.
+			const float __wetFlat = saturate((macroUp - 0.80f) / 0.20f);
+			smoothness = __wetFilm * 0.9f * __wetFlat;
 			N = ApplyRainRipples(N, input.worldPos, g_time,
 				__shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
 		}
