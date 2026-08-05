@@ -741,6 +741,41 @@
 			prevT = t;
 		}
 
+		// Endpoint on geometry BEYOND the ray's own far end: content the march
+		// never had the RANGE to reach (maxRayDistance is 300; a fog-shrouded
+		// mountain sits at ~2km). Every ray aimed at such geometry used to
+		// return a miss - its track ends ON the distant silhouette, which is
+		// neither a depth crossing (surface always farther than the ray) nor a
+		// sky texel - and the env fill then painted atlas SKY over a mountain-
+		// shaped region of the reflection (bright hole; before the fog lift, a
+		// black hole - same hole). Continuing the ray from its endpoint is a
+		// far-field DIRECTION lookup, and the endpoint pixel is where that
+		// direction lands on screen - so the beauty there (fog and aerial
+		// perspective already baked in) is the correct answer. This is the same
+		// endpoint-decides doctrine as the sky tail below, extended to far
+		// geometry. It CANNOT reintroduce the rejected near-content fallback:
+		// geometry within range that the march stride-skipped has
+		// surfaceDepth < z1 and still falls through to the environment. Checked
+		// BEFORE the sky tail - geometry along the ray beats an earlier sky
+		// crossing, matching the geometry-after-sky-wins rule.
+		if (!exitedScreenDDA)
+		{
+			const float2 endTex = p1 / screenSize;
+			if (all(endTex >= 0.0f) && all(endTex <= 1.0f))
+			{
+				const float endSurface = GBUFFER_NORMAL.SampleLevel(g_pointSampler, endTex, 0).w;
+				if (endSurface > z1 && endSurface < g_frustumDepths[3] * 0.999f)
+				{
+					result.didHit = true;
+					result.colour = g_beautyTexture.SampleLevel(g_textureSampler, endTex, 0).rgb;
+					result.hitTex = endTex;
+					result.hitDistance = max(distance(
+						GBUFFER_POSITION.SampleLevel(g_pointSampler, endTex, 0).xyz, rayStart), z1);
+					return result;
+				}
+			}
+		}
+
 		// No geometry hit anywhere along the ray. The ray sees sky if and only
 		// if ITS OWN ENDPOINT - the vanishing point of the 3D direction, where
 		// the ray "is" at 300 units - lands on a sky texel:
