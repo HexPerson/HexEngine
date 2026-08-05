@@ -914,7 +914,10 @@ namespace HexEngine
 	// preset transition, so re-lagging the rise made surfaces darken before the
 	// fog compensated - a dark pop). Only the DRYING is lagged, so a shower
 	// leaves streets wet that dry slowly afterwards.
-	HVar r_wetnessAccumulation("r_wetnessAccumulation", "Keep surfaces wet after rain and dry them slowly (wetting tracks the weather)", true, false, true);
+	HVar r_wetnessAccumulation("r_wetnessAccumulation", "Ease surfaces wet/dry toward the weather (slow rise trails the fog; slow dry keeps streets wet)", true, false, true);
+	// Slow rise so the wet response (gloss + darkening) trails the fog buildup
+	// instead of dipping luminance ahead of it (the dark pop on rain onset).
+	HVar r_wetnessRiseRate("r_wetnessRiseRate", "How fast surfaces wet up under rain (fraction/sec; low = eases in behind the fog)", 0.25f, 0.01f, 5.0f);
 	HVar r_wetnessFallRate("r_wetnessFallRate", "How fast surfaces dry after rain (fraction/sec)", 0.06f, 0.005f, 5.0f);
 	HVar r_puddleDryRate("r_puddleDryRate", "How fast puddles dry after rain (fraction/sec)", 0.045f, 0.002f, 5.0f);
 	HVar r_profileDisableDirectionalLights("r_profileDisableDirectionalLights", "Disable directional light rendering for profiling", false, false, true);
@@ -3567,20 +3570,18 @@ namespace HexEngine
 		}
 		// Clamp dt so a hitch / breakpoint can't jump the state.
 		const float dt = std::min(0.1f, std::max(0.0f, g_pEnv->_timeManager->GetFrameTime()));
-		// INSTANT UP, SLOW DOWN. Wetting tracks the weather target directly (the
-		// weather controller already lerps wetness IN SYNC with the fog/overcast
-		// over the preset transition) - re-lagging the rise made the surfaces
-		// darken BEFORE the fog brightened to compensate, which read as a dark
-		// pop that then recovered. Only the DRYING is lagged, so a shower still
-		// leaves streets wet that dry slowly afterwards.
-		auto dryLag = [dt](float state, float target, float fall)
+		// SLOW rise, slow fall. The universal wet darkening dips scene luminance
+		// (every surface darkens) before the fog builds up to compensate, so a
+		// fast onset reads as a dark pop. Easing the wetness in SLOWLY (~4 s) lets
+		// the fog get established first, so surfaces darken gently UNDER the fog
+		// instead of ahead of it. Drying stays slow so streets linger wet.
+		auto lag = [dt](float state, float target, float rise, float fall)
 		{
-			if (target >= state)
-				return target;                                  // wet up with the weather + fog
-			return std::max(target, state - fall * dt);         // dry slowly
+			const float rate = (target > state) ? rise : fall;
+			return state + std::clamp(target - state, -rate * dt, rate * dt);
 		};
-		_wetnessState = dryLag(_wetnessState, wsp.wetness, r_wetnessFallRate._val.f32);
-		_puddleState  = dryLag(_puddleState,  wsp.puddleAmount, r_puddleDryRate._val.f32);
+		_wetnessState = lag(_wetnessState, wsp.wetness, r_wetnessRiseRate._val.f32, r_wetnessFallRate._val.f32);
+		_puddleState  = lag(_puddleState,  wsp.puddleAmount, r_wetnessRiseRate._val.f32, r_puddleDryRate._val.f32);
 	}
 
 	void SceneRenderer::RenderShadowMaps(Light* shadowCaster)

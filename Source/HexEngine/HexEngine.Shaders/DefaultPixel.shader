@@ -547,11 +547,22 @@
 		const bool shellUseSand = g_weatherSurface.dirtAmount > g_weatherSurface.snowCoverage && g_dustParams.x > 0.5f;
 		if (shellUseSand)
 		{
-			// Real sand normal map, world-tiled at the dust scale, through the
-			// DS's world-aligned tangent basis. Normal-ogl -> flip green.
+			// LARGE-SCALE dune relief first: the shell forces a world-up shading
+			// normal (to avoid faceting), so the extruded mounds would otherwise
+			// read as a flat sheet - this bends the normal along the dune-height
+			// gradient so the mounds actually self-shade. Then the fine sand grain
+			// from the normal map rides on top. Normal-ogl -> flip green.
+			const float e = 0.18f;                       // metres - coarse, dune scale
+			const float hC = SnowHeightField(input.positionWS.xz);
+			const float hX = SnowHeightField(input.positionWS.xz + float2(e, 0.0f));
+			const float hZ = SnowHeightField(input.positionWS.xz + float2(0.0f, e));
+			const float amp = 0.35f;
+			const float3 dune = normalize(float3(-(hX - hC) / e * amp, 1.0f, -(hZ - hC) / e * amp));
+
 			float3 nTS = g_sandNormal.Sample(g_textureSampler, input.positionWS.xz * g_dustParams.y).xyz * 2.0f - 1.0f;
 			nTS.y = -nTS.y;
-			worldNormal = normalize(nTS.x * input.tangent + nTS.y * input.binormal + nTS.z * worldNormal);
+			const float3 grain = normalize(nTS.x * input.tangent + nTS.y * input.binormal + nTS.z * dune);
+			worldNormal = normalize(lerp(dune, grain, 0.6f));
 		}
 		else if (g_rainOcclusionParams.w > 0.5f)
 		{
