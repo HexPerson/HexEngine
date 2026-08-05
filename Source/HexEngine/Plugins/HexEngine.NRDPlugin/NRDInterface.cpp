@@ -24,9 +24,13 @@ namespace
 	HexEngine::HVar r_nrdRelaxDiffFastFrames("r_nrdRelaxDiffFastFrames", "RELAX diffuse fast-history accumulated frames", 6, 0, 63);
 	HexEngine::HVar r_nrdRelaxSpecFastFrames("r_nrdRelaxSpecFastFrames", "RELAX specular fast-history accumulated frames", 6, 0, 63);
 	// History-fix at >0 frames runs an aggressive spatial blur on the specular signal for the
-	// first N frames after a disocclusion. With our deterministic mirror SSR + the dense
-	// back-wall reflections it paints a visible doubled / curved smear on the floor. Default 0.
-	HexEngine::HVar r_nrdRelaxHistoryFixFrames("r_nrdRelaxHistoryFixFrames", "RELAX history-fix frame count", 0, 0, 3);
+	// first N frames after a disocclusion, back-filling freshly-disoccluded regions instead of
+	// letting them crawl up from black. Default 3: with the wet-weather work, puddles and wet
+	// floors disocclude constantly as the camera moves, and their reflections were taking many
+	// seconds to converge - leaving the dark puddle silhouette. 3 frames fixes that with no
+	// visible smear (the earlier 0 default was set before puddles, for the deterministic
+	// back-wall mirror case; the wider puddle roughness feather also keeps the fix clean).
+	HexEngine::HVar r_nrdRelaxHistoryFixFrames("r_nrdRelaxHistoryFixFrames", "RELAX history-fix frame count", 3, 0, 3);
 	// Diffuse prepass blur radius. SSR's diffuse signal now comes from a voxel-GI cone trace
 	// rather than a random-hemisphere ray, so the input has no stochastic noise to filter -
 	// but it does have visible voxel-cell-boundary discontinuities (the "blockiness"). A wider
