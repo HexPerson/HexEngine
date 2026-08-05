@@ -270,7 +270,18 @@
 		// confidence that decides which reflection the pixel actually got.
 		const float3 F0 = lerp(0.04f.xxx, saturate(pixelColour.rgb), metallic);
 		const float NdotV = saturate(dot(N, V));
-		const float3 schlick = F0 + (1.0f.xxx - F0) * pow(1.0f - NdotV, 5.0f);
+		// ROUGHNESS-AWARE Fresnel, matching SSR.shader's specularWeight exactly
+		// (Karis F90 = max(1-roughness, F0)). Raw Schlick here reached 1.0 at
+		// grazing for every surface, so this pass's energy conservation removed
+		// ~100% of the base lighting at distance on ANY glossy-ish wet pixel and
+		// replaced it with the (often dark, stochastic) reflection - the single
+		// mechanism behind every black-at-grazing artifact. The removed fraction
+		// must equal what SSR actually added, and SSR now premodulates by this
+		// same roughness-aware value: a mirror puddle still goes full reflection
+		// at grazing, a rough wet road caps near ~0.3 and keeps its diffuse.
+		const float resolveRoughness = clamp(matSample.g, 0.04f, 1.0f);
+		const float3 f90 = max((1.0f - resolveRoughness).xxx, F0);
+		const float3 schlick = F0 + (f90 - F0) * pow(1.0f - NdotV, 5.0f);
 
 		const float3 appliedReflectance = lerp(specularReflectance, schlick, confidence);
 

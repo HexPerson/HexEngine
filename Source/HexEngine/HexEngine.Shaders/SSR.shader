@@ -1169,7 +1169,23 @@
 		const float3 F0 = lerp(0.04f.xxx, diffuseSurfaceColour, metalness);
 		const float NdotV = saturate(dot(pixelNormal.xyz, -eyeVector));
 		const float fresnelExp = pow(1.0f - NdotV, 5.0f);
-		const float3 fresnel = F0 + (1.0f.xxx - F0) * fresnelExp;
+		// ROUGHNESS-AWARE Fresnel (Karis F90 = max(1-roughness, F0)), NOT raw
+		// Schlick. Raw Schlick is a per-microfacet term: it reaches 1.0 at
+		// grazing for EVERY surface, so every glossy-ish wet pixel at distance
+		// (grazing view) claimed 100% mirror weight - and since the resolve
+		// removes base lighting by this same weight (energy conservation), the
+		// surface's diffuse was DELETED and wholly replaced by one stochastic
+		// ray that, on a rough surface, lands on dark geometry half the time.
+		// That base-wipe was the single mechanism behind every "black at
+		// distance" artifact (black speckle carpets, dark mountain holes in wet
+		// roads, dark puddle rims). The VISIBLE grazing reflectance of a rough
+		// surface is the NDF-integrated (split-sum) value, which saturates well
+		// below 1; F90 = max(1-roughness, F0) is the standard approximation.
+		// A true mirror (roughness ~0.04) keeps full grazing reflectance; a
+		// rough wet road caps near ~0.3 and keeps its diffuse. SSRResolve
+		// mirrors this formula so the base attenuation matches what is added.
+		const float3 f90 = max((1.0f - perceptualRoughness).xxx, F0);
+		const float3 fresnel = F0 + (f90 - F0) * fresnelExp;
 		const float3 specularWeight = fresnel;
 		const float3 diffuseWeightRGB = ((1.0f.xxx - fresnel) * (1.0f -  metalness));
 		// Scalar threshold for the diffuse-ray gate, using the luminance of the weight.
