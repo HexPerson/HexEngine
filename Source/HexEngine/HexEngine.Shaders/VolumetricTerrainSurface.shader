@@ -321,12 +321,96 @@
 			roughness = __dustResult.w;
 		}
 
+		// Weather snow - terrain parity with the mesh snow SHELL. The mesh path
+		// draws a second tessellated Crusted_snow2 layer (SnowShell.shader); the
+		// terrain has no shell, so here we accumulate the terrain's OWN snow-layer
+		// textures (the real crusted-snow albedo / normal / roughness sampled far
+		// above) driven by the same weather coverage. That reads as textured,
+		// relief-shaded snow matching the meshes - NOT the flat procedural white
+		// ApplySnowAccumulation produced (whose POM self-occlusion also dark-edged
+		// on slopes, the artifact the user flagged). Masking mirrors
+		// ApplySnowAccumulation exactly (slope + patch noise + coverage + melt +
+		// wall drift banks) so terrain snow COVERAGE tracks the meshes 1:1; only
+		// the shaded surface comes from the terrain's textures instead of procedural
+		// white. Slot note: the shell's Crusted_snow2 lives at t22/t23, occupied on
+		// terrain by rock/snow metallic, so we can't sample the identical texture
+		// without a plugin-side rebind - the terrain's own snow layer is the parity
+		// source (point it at Crusted_snow2 art-side for a pixel-exact match).
 		const float __shelteredSnow = g_weatherSurface.snowCoverage * __shelter;
 		if (__shelteredSnow > 0.001f)
 		{
-			const float4 __snowResult = ApplySnowAccumulation(baseColor, roughness, N, input.worldPos, __shelteredSnow, g_weatherSurface.snowMelt, g_textureSampler);
-			baseColor = __snowResult.rgb;
-			roughness = __snowResult.w;
+			const float __melt = saturate(g_weatherSurface.snowMelt);
+			const float __slopeMask = smoothstep(0.35f, 0.85f, macroUp);
+			if (__slopeMask > 0.0f)
+			{
+				// Two-octave patch noise (same 0.45 m scale as ApplySnowAccumulation)
+				// so cover reads as drifted snow, not a uniform coat. Melt erodes the
+				// THRESHOLD - thin snow retreats first, drift cores survive longest.
+				const float __kNoise = 0.45f;
+				const float __n1 = ValueNoise3(float3(input.worldPos.x, 0.0f, input.worldPos.z) / __kNoise);
+				const float __n2 = ValueNoise3(float3(input.worldPos.x, 0.0f, input.worldPos.z) / (__kNoise * 0.4f));
+				const float __patch = saturate((__n1 * 0.65f + __n2 * 0.35f)
+					- (1.0f - g_weatherSurface.snowCoverage) * 0.45f
+					- __melt * 0.55f);
+				float __snowMask = saturate(__slopeMask * (0.2f + __patch * 1.4f) * g_weatherSurface.snowCoverage)
+					* (1.0f - __melt * 0.7f);
+
+				// Wall drift banks (mirror ApplySnowAccumulation): snow piles where
+				// the rain-occlusion map shows a near wall/prop face to the side.
+				float __drift = 0.0f;
+				if (g_rainOcclusionParams.x > 0.5f)
+				{
+					const float4 __clip = mul(float4(input.worldPos, 1.0f), g_rainOcclusionVP);
+					const float2 __uv = __clip.xy * float2(0.5f, -0.5f) + 0.5f;
+					if (all(__uv >= 0.0f) && all(__uv <= 1.0f) && __clip.z > 0.0f && __clip.z < 1.0f)
+					{
+						const float2 __stepUv = g_rainOcclusionParams.z * 6.0f;
+						const float __wallDelta = 1.5f / 160.0f;
+						[unroll]
+						for (int __i = 0; __i < 4; ++__i)
+						{
+							const float2 __o = float2((__i & 1) ? __stepUv.x : -__stepUv.x,
+							                          (__i & 2) ? __stepUv.y : -__stepUv.y);
+							const float __nd = g_rainOcclusionMap.SampleLevel(g_textureSampler, __uv + __o, 0);
+							__drift += (__clip.z - __nd > __wallDelta) ? 0.25f : 0.0f;
+						}
+						__drift *= (1.0f - __melt);
+					}
+				}
+				__snowMask = saturate(__snowMask + __drift * 0.5f * __slopeMask * g_weatherSurface.snowCoverage);
+
+				if (__snowMask > 0.001f)
+				{
+					// Surface = the terrain's real crusted-snow albedo lifted toward
+					// the shell's bright blue-white (Crusted_snow2 reads ~this) so it
+					// matches the meshes regardless of the terrain snow layer's base
+					// tint; the height-field crevice adds volume like the shell PS.
+					const float __crevice = SnowHeightField(input.worldPos.xz);
+					const float3 __snowTint = float3(0.92f, 0.94f, 0.98f) * (0.86f + 0.14f * __crevice);
+					baseColor = lerp(baseColor, snowAlbedo * __snowTint, __snowMask);
+
+					// Relief: bend toward world-up (the shell forces a world-up snow
+					// normal so drifts lie flat) plus a height-field drift gradient so
+					// clumps shade, then a touch of the snow layer's detail normal.
+					const float __kd = 0.09f;
+					const float __hC = SnowHeightField(input.worldPos.xz);
+					const float __hX = SnowHeightField(input.worldPos.xz + float2(__kd, 0.0f));
+					const float __hZ = SnowHeightField(input.worldPos.xz + float2(0.0f, __kd));
+					const float __amp = 0.18f * __snowMask * (1.0f - __melt) * (1.0f + __drift * 1.5f);
+					const float3 __relief = normalize(float3(
+						-(__hX - __hC) / __kd * __amp,
+						1.0f,
+						-(__hZ - __hC) / __kd * __amp));
+					const float3 __snowN = normalize(lerp(__relief, snowDetailNormal, 0.25f));
+					N = normalize(lerp(N, __snowN, __snowMask * 0.85f));
+
+					// Snow is matte and highly diffuse - roughness UP, and close the
+					// SSR gate under snow (dry snow doesn't mirror; melt->wet is the
+					// wet layer's job, and it already ran above).
+					roughness = lerp(roughness, max(snowRoughness, 0.85f), __snowMask);
+					smoothness = lerp(smoothness, 0.0f, __snowMask);
+				}
+			}
 		}
 
 		float4 viewPos = mul(float4(input.worldPos, 1.0f), g_viewMatrix);
