@@ -3323,7 +3323,8 @@ namespace HexEngine
 
 		const auto& wsp = _currentScene->GetWeatherSurfaceParams();
 		const bool needed = r_rainOcclusion._val.b && _cameraEntity != nullptr &&
-			(wsp.wetness > 0.001f || wsp.snowCoverage > 0.001f || wsp.puddleAmount > 0.001f);
+			(wsp.wetness > 0.001f || wsp.snowCoverage > 0.001f || wsp.puddleAmount > 0.001f ||
+			 wsp.dirtAmount > 0.001f);
 		if (!needed)
 		{
 			// Dry weather: the map keeps its texels but shaders treat the
