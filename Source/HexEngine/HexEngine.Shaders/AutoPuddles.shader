@@ -182,10 +182,15 @@
 		// mirror gloss onto the shell's bumpy dune relief during a sandstorm ->
 		// rain transition; SSR off those pixels scattered into dark geometry and
 		// the street carpeted in black speckle until dirtAmount decayed to zero.
-		// Puddles now fade in as the sand clears, which is also what real ground
-		// does. (Snow already reads correctly - the shell forces its own rough
-		// matte surface on top.)
-		const float sandFree = saturate(1.0f - g_weatherSurface.dirtAmount * 3.0f);
+		// HARD gate at the SAME epsilon the shell's draw gate uses (Scene.cpp
+		// snowActive: dirtAmount > 0.001): a soft ramp here (tried 1-dirt*3) let
+		// puddles back in below dirt 0.33 while the shell was still drawing
+		// mounds - the artifact returned for the tail of the transition.
+		// dirtAmount is a global uniform, so this gate is purely temporal; the
+		// puddle fade-in still comes from puddleAmount rising once sand is gone.
+		// (Snow already reads correctly - the shell forces its own rough matte
+		// surface on top.)
+		const float sandFree = (g_weatherSurface.dirtAmount > 0.001f) ? 0.0f : 1.0f;
 		const float rainMul = saturate(max(g_weatherSurface.puddleAmount * sandFree, g_autoPuddleAppearance.y));
 		if (rainMul <= 0.0f)
 		{
