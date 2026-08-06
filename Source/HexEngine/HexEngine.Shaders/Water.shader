@@ -118,14 +118,21 @@
 		// both sides regardless of which tile draws it.
 		float3 gridPoint = input.position.xyz + worldPos;
 
-		// Weather wind -> sea state. Amplitude floor 0.18 keeps calm water
-		// alive (small ripples); the 1.5 exponent makes the mid presets read
-		// distinct and the storm presets (24-29 m/s) heavy. Direction
-		// alignment strengthens with the wind.
+		// Weather wind -> sea state. The scale reaches well ABOVE 1: the
+		// authored 4-wave table only sums to ~15 cm of swell, so a 0..1
+		// scale kept the sea near-flat in every weather ("stays largely
+		// flat"). 0.18 floor = calm ripples; storms (24-29 m/s) reach ~4x =
+		// roughly a metre of combined swell. Per-wave steepness stays well
+		// under the Gerstner loop-over bound (max 0.098 at full scale).
+		// Wavelengths deliberately do NOT scale: k feeds the phase term, so
+		// varying it with wind would teleport the waves during weather
+		// transitions (same phase-jump class as the scroll bug below).
 		const float windSpeed = g_weatherSurface.windDirectionAndSpeed.w;
 		const float windNorm = saturate(windSpeed / 30.0f);
-		const float ampScale = 0.18f + 0.82f * pow(windNorm, 1.5f);
-		const float windAlign = 0.75f * windNorm;
+		const float ampScale = 0.18f + 3.8f * pow(windNorm, 1.5f);
+		// Direction alignment kept moderate: d feeds the phase term too, so
+		// large alignment swings slide the whole sea during transitions.
+		const float windAlign = 0.4f * windNorm;
 		float2 windDir = g_weatherSurface.windDirectionAndSpeed.xz;
 		const float windDirLen = length(windDir);
 		windDir = (windDirLen > 0.001f) ? windDir / windDirLen : float2(1.0f, 0.0f);
@@ -169,9 +176,13 @@
 		// opaque scene under TAA).
 		output.position.xy += g_jitterOffsets * output.position.w;
 
-		// Bump advection follows the WIND (direction and rate) instead of a
-		// fixed diagonal scroll.
-		input.texcoord.xy -= windDir * g_time * (0.012f + 0.035f * windNorm);
+		// Bump advection follows the WIND via the CPU-INTEGRATED scroll
+		// phase (g_timeParams2.zw = accumulated dir x rate x dt). The
+		// stateless form (dir x g_time x rate) multiplied a CHANGING rate by
+		// ABSOLUTE time, so any weather transition slewed the offset at
+		// minutes-of-time x delta-rate - the "incredibly fast scroll" during
+		// transitions. An integral only ever advances by rate x frame-dt.
+		input.texcoord.xy -= g_timeParams2.zw;
 		output.texcoord = input.texcoord * 1.4;
 
 		matrix normalMatrix = mul(instance.worldInverseTranspose, g_worldMatrix);

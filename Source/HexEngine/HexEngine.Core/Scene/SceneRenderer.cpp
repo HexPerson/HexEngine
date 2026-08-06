@@ -2651,13 +2651,36 @@ namespace HexEngine
 				const uint64_t frameCount = (uint64_t)g_pEnv->_timeManager->_frameCount;
 				if (_timePrevUploadFrame != frameCount)
 				{
+					const float frameDt = (_timePrevUploadFrame == UINT64_MAX)
+						? 0.0f : (bufferData._time - _timeCurUploaded);
+
+					// Wind-scroll phase for the water bump advection
+					// (zw lanes). INTEGRATED per frame - a stateless
+					// dir * g_time * rate slews violently whenever the rate
+					// changes (weather transitions), because a changing rate
+					// multiplies ABSOLUTE time. An integral only ever
+					// advances by rate * frame-dt. Wrapped to keep float
+					// precision (the UVs tile anyway).
+					{
+						const auto& wind = bufferData._weatherSurface.windDirectionAndSpeed;
+						float dirX = wind.x, dirZ = wind.z;
+						const float dirLen = sqrtf(dirX * dirX + dirZ * dirZ);
+						if (dirLen > 0.001f) { dirX /= dirLen; dirZ /= dirLen; }
+						else { dirX = 1.0f; dirZ = 0.0f; }
+						const float windNorm = std::clamp(wind.w / 30.0f, 0.0f, 1.0f);
+						const float rate = 0.012f + 0.035f * windNorm;
+						_windScrollAccum.x = fmodf(_windScrollAccum.x + dirX * rate * frameDt, 64.0f);
+						_windScrollAccum.y = fmodf(_windScrollAccum.y + dirZ * rate * frameDt, 64.0f);
+					}
+
 					_timePrevUploaded = (_timePrevUploadFrame == UINT64_MAX)
 						? bufferData._time : _timeCurUploaded;
 					_timeCurUploaded = bufferData._time;
 					_timePrevUploadFrame = frameCount;
 				}
 				bufferData._timeParams2 = math::Vector4(
-					_timePrevUploaded, _timeCurUploaded - _timePrevUploaded, 0.0f, 0.0f);
+					_timePrevUploaded, _timeCurUploaded - _timePrevUploaded,
+					_windScrollAccum.x, _windScrollAccum.y);
 			}
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 

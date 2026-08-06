@@ -412,6 +412,10 @@ namespace HexEngine
 		float _timePrevUploaded = 0.0f;
 		float _timeCurUploaded = 0.0f;
 		uint64_t _timePrevUploadFrame = UINT64_MAX;
+		// Integrated wind-scroll phase (g_timeParams2.zw): the water bump
+		// advection offset, accumulated dir*rate*dt per frame so weather
+		// transitions can't slew it (a changing rate x absolute time does).
+		math::Vector2 _windScrollAccum = math::Vector2::Zero;
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 
