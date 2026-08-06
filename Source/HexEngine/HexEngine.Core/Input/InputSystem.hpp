@@ -165,6 +165,17 @@ namespace HexEngine
 
 		void SetInputViewport(int32_t x, int32_t y, int32_t w, int32_t h);
 
+		// The custom input viewport (the editor's scene-view rect in window
+		// pixels), when one is active. Returns false in standalone builds,
+		// where input maps to the whole window. Play-in-editor GAME UI
+		// confinement reads this so output drawing and input remapping stay
+		// symmetric - see the OnGUI block in Game3DEnvironment.
+		bool GetInputViewport(math::Viewport& vp) const
+		{
+			vp = _vp;
+			return _hasCustomVP;
+		}
+
 		bool IsCtrlDown() const;
 
 	private:
