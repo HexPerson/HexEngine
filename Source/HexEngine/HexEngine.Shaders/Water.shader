@@ -26,6 +26,7 @@
 	Atmosphere
 	AtmospherePhysical
 	PBRutils
+	EnvMapCommon
 }
 "GlobalIncludes"
 {
@@ -148,6 +149,11 @@
 	// Opaque gbuffer position: xyz = world position.
 	Texture2D g_scenePositionTex : register(t13);
 
+	// Prefiltered sky environment atlas - the same environment the deferred
+	// IBL and glass use, so the sea and every other surface agree about what
+	// the sky looks like (a storm sky reflects as overcast, not clear blue).
+	Texture2D g_iblSkyEnvFwd : register(t14);
+
 	// Sun cascade shadow maps - bound pass-wide for transparents at t15+
 	// (SceneRenderer::RenderTransparent), same slots DefaultPixel uses.
 	SHADOWMAPS_RESOURCE(15);
@@ -156,119 +162,64 @@
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_TexSamplerPoint : register(s2);
 
-	// Legacy self-contained reflection march (predates the SSR stack - it is
-	// this shader's pattern that SSR.shader ported). Replaced by the inline
-	// transparent SSR + env fallback in slice O3; retargeted to the modern
-	// binds until then.
-	float4 GetReflection(float3 eyeDir, float3 worldPos, float3 worldNormal, float4 originalColour, float currentDepth)
+	// Inline screen-space reflection for water (O3) - the DefaultPixel
+	// transparency pattern (third copy; dedup across DefaultPixel /
+	// DefaultAnimated / here is a tracked follow-up). Replaces the legacy
+	// 24-step self-contained march this shader carried since before the SSR
+	// stack existed. Water-specific tuning: a wider thickness window (the
+	// reflecting surface is a DISPLACED wavy plane, so ray/depth
+	// disagreements up to a wave amplitude are normal, not misses).
+	bool TraceWaterSSR(float3 surfaceWorldPos, float3 reflectDirWorld,
+		out float3 reflectedColour, out float hitConfidence)
 	{
-		float3 rayStart = worldPos + worldNormal * 0.25f;
-		float3 rayDir = normalize(reflect(eyeDir, worldNormal));
+		reflectedColour = float3(0.0f, 0.0f, 0.0f);
+		hitConfidence = 0.0f;
 
-		const int stepCount = 24;
-		const int refinementStepCount = 5;
-		const float minStepLen = 2.0f;
-		const float maxStepLen = 8.0f;
-		const float baseThickness = 2.0f;
+		const int kMaxSteps = 48;
+		const float kStrideWorld = 0.12f;    // world-space step length, scaled by distance below
+		const float kThicknessWorld = 0.6f;  // wider than glass's 0.35 - see header comment
 
-		float3 fragPos = rayStart;
-		float3 previousFragPos = fragPos;
-		float totalDistanceTravelled = 0.0f;
-		float previousDistanceTravelled = 0.0f;
-		float2 texCoord = 0.0f;
-		float actualDepth = currentDepth;
+		// Step length grows with distance from camera so distant rays don't take many steps.
+		const float distFromEye = length(g_eyePos.xyz - surfaceWorldPos);
+		const float strideWorld = kStrideWorld * max(0.5f, distFromEye * 0.08f);
+
+		float3 rayPos = surfaceWorldPos + reflectDirWorld * (strideWorld * 0.5f);
 
 		[loop]
-		for (int i = 0; i < stepCount; ++i)
+		for (int step = 0; step < kMaxSteps; ++step)
 		{
-			const float marchFraction = (float)i / (float)(stepCount - 1);
-			const float stepLen = lerp(minStepLen, maxStepLen, marchFraction * marchFraction);
-			const float thickness = baseThickness + totalDistanceTravelled * 0.02f;
+			rayPos += reflectDirWorld * strideWorld;
 
-			previousFragPos = fragPos;
-			previousDistanceTravelled = totalDistanceTravelled;
-			fragPos += rayDir * stepLen;
-			totalDistanceTravelled += stepLen;
+			// Project the ray sample into clip / screen space.
+			const float4 clip = mul(float4(rayPos, 1.0f), g_viewProjectionMatrix);
+			if (clip.w <= 0.0f)
+				return false;
+			const float2 ndc = clip.xy / clip.w;
+			if (any(abs(ndc) > 1.0f))
+				return false;
 
-			float4 fragScr = float4(fragPos.xyz, 1.0f);
-			float4 fragView = mul(fragScr, g_viewMatrix);
-			float4 fragClip = mul(fragView, g_projectionMatrix);
-			fragClip.xyz /= fragClip.w;
+			const float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
 
-			float fragDepth = -fragView.z;
-			fragClip.xy = fragClip.xy * 0.5 + 0.5;
-			float2 fragTex = float2(fragClip.x, 1.0f - fragClip.y);
+			// Compare ray's view-space depth with the opaque scene at the same
+			// UV (normal.w carries view depth; -1/far = sky).
+			const float rayViewZ = -mul(float4(rayPos, 1.0f), g_viewMatrix).z;
+			const float sceneViewZ = g_sceneNormalTex.SampleLevel(g_TexSamplerPoint, uv, 0).w;
 
-			if (fragTex.x < 0.0f || fragTex.x > 1.0f || fragTex.y < 0.0f || fragTex.y > 1.0f)
-				return originalColour;
+			// Skip the sky / very far depth.
+			if (sceneViewZ <= 0.0f || sceneViewZ >= g_frustumDepths[3] * 0.999f)
+				continue;
 
-			actualDepth = g_sceneNormalTex.Sample(g_TexSamplerPoint, fragTex).w;
-			float fragHeight = g_scenePositionTex.Sample(g_TexSamplerPoint, fragTex).y;
-			bool isOnCorrectPlane = fragHeight >= rayStart.y;
-
-			if (g_eyePos.y <= 0.0f)
-				isOnCorrectPlane = fragHeight < rayStart.y;
-
-			if ((fragDepth >= actualDepth - thickness) && isOnCorrectPlane && actualDepth > currentDepth)
+			const float dz = rayViewZ - sceneViewZ;
+			if (dz > 0.0f && dz < kThicknessWorld)
 			{
-				float3 refineStart = previousFragPos;
-				float3 refineEnd = fragPos;
-				float refineStartDistance = previousDistanceTravelled;
-				float refineEndDistance = totalDistanceTravelled;
-
-				[loop]
-				for (int j = 0; j < refinementStepCount; ++j)
-				{
-					float3 candidatePos = lerp(refineStart, refineEnd, 0.5f);
-					float candidateDistance = lerp(refineStartDistance, refineEndDistance, 0.5f);
-					float candidateThickness = baseThickness + candidateDistance * 0.02f;
-
-					float4 candidateScr = float4(candidatePos.xyz, 1.0f);
-					float4 candidateView = mul(candidateScr, g_viewMatrix);
-					float4 candidateClip = mul(candidateView, g_projectionMatrix);
-					candidateClip.xyz /= candidateClip.w;
-
-					float candidateDepth = -candidateView.z;
-					candidateClip.xy = candidateClip.xy * 0.5 + 0.5;
-					float2 candidateTex = float2(candidateClip.x, 1.0f - candidateClip.y);
-
-					if (candidateTex.x < 0.0f || candidateTex.x > 1.0f || candidateTex.y < 0.0f || candidateTex.y > 1.0f)
-					{
-						refineEnd = candidatePos;
-						refineEndDistance = candidateDistance;
-						continue;
-					}
-
-					float candidateActualDepth = g_sceneNormalTex.Sample(g_TexSamplerPoint, candidateTex).w;
-					float candidateHeight = g_scenePositionTex.Sample(g_TexSamplerPoint, candidateTex).y;
-					bool candidatePlane = candidateHeight >= rayStart.y;
-					if (g_eyePos.y <= 0.0f)
-						candidatePlane = candidateHeight < rayStart.y;
-
-					if ((candidateDepth >= candidateActualDepth - candidateThickness) && candidatePlane && candidateActualDepth > currentDepth)
-					{
-						refineEnd = candidatePos;
-						refineEndDistance = candidateDistance;
-						fragTex = candidateTex;
-						actualDepth = candidateActualDepth;
-					}
-					else
-					{
-						refineStart = candidatePos;
-						refineStartDistance = candidateDistance;
-					}
-				}
-
-				return g_sceneColourTex.Sample(g_TexSamplerPoint, fragTex);
+				reflectedColour = g_sceneColourTex.SampleLevel(g_TexSamplerPoint, uv, 0).rgb;
+				// Fade out near screen edges to hide the missing-data band.
+				const float2 edgeFade = smoothstep(0.0f, 0.1f, uv) * smoothstep(0.0f, 0.1f, 1.0f - uv);
+				hitConfidence = saturate(edgeFade.x * edgeFade.y);
+				return true;
 			}
-
-			texCoord = fragTex;
 		}
-
-		if (actualDepth > currentDepth)
-			return g_sceneColourTex.Sample(g_TexSamplerPoint, texCoord);
-
-		return originalColour;
+		return false;
 	}
 
 	// Screen-space refraction: offset the scene-colour lookup along the
@@ -467,29 +418,63 @@
 		float3 waterBodyColour = lerp(transmittedColour, finalColour.rgb + (ambient.rgb * 0.35f), finalFadeFactor);
 		float4 retCol = float4(waterBodyColour, 1.0f);
 
+		// Reflections (O3): inline screen-space march for near-field content
+		// + prefiltered sky-atlas fallback everywhere the march misses (off-
+		// screen, behind camera, beyond march range, and the whole far sea -
+		// the atlas is weather-tinted, so a storm sky reflects as OVERCAST).
+		// This replaced both the legacy 24-step march and the "cheap
+		// reflection" (beauty at the pixel's own position - positionally
+		// meaningless, it reflected whatever was BEHIND the water).
 		{
 			float3 reflectionNormal = worldNormal;
 
 			if (g_eyePos.y <= 0.0f)
 				reflectionNormal *= -1.0f;
 
-			const float reflectionStrength = g_oceanConfig.reflectionStrength;
+			const float3 R = normalize(reflect(-eyeVector, reflectionNormal));
 
-			float4 cheapReflectionCol = g_sceneColourTex.Sample(g_TexSamplerPoint, screenPos);
-			cheapReflectionCol.xyz = lerp(cheapReflectionCol.xyz, fadeColour.xyz, 0.25f);
+			float3 reflection = float3(0.0f, 0.0f, 0.0f);
+			float reflectionWeight = 0.0f;
 
-			float4 reflectionCol = cheapReflectionCol;
+			// Near-field: march the opaque depth. Distance-gated - far rays
+			// take the env path directly (matches the old ssrQualityWeight
+			// ramp and keeps the horizon cheap).
 			if (ssrQualityWeight > 0.001f)
 			{
-				float4 ssrReflectionCol = GetReflection(-eyeVector, input.positionWS.xyz, reflectionNormal, retCol, pixelDepth);
-				reflectionCol = lerp(cheapReflectionCol, ssrReflectionCol, ssrQualityWeight);
+				float3 ssrColour;
+				float ssrConfidence;
+				if (TraceWaterSSR(input.positionWS.xyz, R, ssrColour, ssrConfidence))
+				{
+					reflectionWeight = ssrConfidence * ssrQualityWeight;
+					reflection = ssrColour;
+				}
 			}
 
-			// NO saturate: the beauty target is R16G16B16A16_FLOAT and every
-			// input here is linear HDR. The legacy double LDR clamp crushed
-			// sun glints and bright reflections to 1.0, which is why water
-			// always read dull next to lit geometry.
-			retCol.xyz = lerp(retCol.xyz, reflectionCol.xyz + specular.xyz, reflectionStrength * fadeFactor);
+			// Environment fallback wherever the march found nothing. Sharp
+			// atlas row - water reflection roughness is near-mirror until the
+			// wind-coupled roughness lands in O5.
+			{
+				const float kWaterEnvRoughness = 0.08f;
+				const float3 envColour = SampleEnvAtlas(g_iblSkyEnvFwd, g_TexSamplerAniso, R, kWaterEnvRoughness);
+				// Downward rays would pick up horizon sky the atlas has no
+				// ground radiance for.
+				const float envHorizon = saturate(R.y * 3.0f + 0.35f);
+				const float envWeight = (1.0f - reflectionWeight) * envHorizon;
+
+				reflection = reflection * reflectionWeight + envColour * envWeight;
+				reflectionWeight = saturate(reflectionWeight + envWeight);
+				reflection = reflectionWeight > 1e-4f ? reflection / reflectionWeight : float3(0.0f, 0.0f, 0.0f);
+			}
+
+			// Compose: reflection replaces body colour by Fresnel x shore
+			// fade x artist strength; the sun glint ADDS on top (its GGX F
+			// term already carries its own Fresnel - the legacy code scaled
+			// the glint by reflectionStrength, which is why the boost
+			// constant existed).
+			// NO saturate: linear HDR into an R16G16B16A16_FLOAT target.
+			const float reflectionStrength = g_oceanConfig.reflectionStrength;
+			retCol.xyz = lerp(retCol.xyz, reflection, reflectionStrength * fadeFactor * reflectionWeight);
+			retCol.xyz += specular.xyz;
 		}
 
 		retCol.a = 1.0f;
