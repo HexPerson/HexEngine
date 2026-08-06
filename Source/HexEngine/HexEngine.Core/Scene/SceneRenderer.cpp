@@ -2640,6 +2640,25 @@ namespace HexEngine
 
 			bufferData._time = g_pEnv->_timeManager->GetTime();
 			bufferData._frame = (uint32_t)g_pEnv->_timeManager->_frameCount;
+
+			// Previous-frame time for time-dependent vertex displacement (wind
+			// sway, Gerstner waves). Advanced ONCE per frame, keyed on the
+			// frame count - this function runs several times per frame (shadow
+			// / probe / main passes) and every run must upload the SAME pair
+			// or the passes disagree about where a vertex was last frame.
+			// First frame (sentinel): prev = current, zero displacement delta.
+			{
+				const uint64_t frameCount = (uint64_t)g_pEnv->_timeManager->_frameCount;
+				if (_timePrevUploadFrame != frameCount)
+				{
+					_timePrevUploaded = (_timePrevUploadFrame == UINT64_MAX)
+						? bufferData._time : _timeCurUploaded;
+					_timeCurUploaded = bufferData._time;
+					_timePrevUploadFrame = frameCount;
+				}
+				bufferData._timeParams2 = math::Vector4(
+					_timePrevUploaded, _timeCurUploaded - _timePrevUploaded, 0.0f, 0.0f);
+			}
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 
 			bufferData._reflectionParams = math::Vector4(

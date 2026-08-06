@@ -451,6 +451,18 @@ namespace HexEngine
 		// Dust/sand accumulation (Phase 3). x = sand textures bound (t25 albedo
 		// / t31 normal), y = world tiling scale, zw reserved.
 		math::Vector4 _dustParams;
+
+		// Previous-frame time (Phase 3 wind/water). x = the g_time value
+		// uploaded LAST frame, y = current - previous (seconds), zw reserved.
+		// Time-dependent vertex displacement (wind sway, Gerstner waves)
+		// evaluates its offset at BOTH x and g_time so the previous-frame
+		// position carries the displacement delta - without it TAA/DLSS see
+		// zero velocity for the animation and smear. Advanced once per frame
+		// in SetupPerFrameBuffer (frame-count keyed - the function runs
+		// several times per frame for shadow/probe passes and every run must
+		// upload the same pair). Aliased g_timePrev / g_deltaTime in
+		// Global.shader.
+		math::Vector4 _timeParams2;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */
@@ -513,7 +525,8 @@ namespace HexEngine
 			emissiveColour(0.0f),
 			isInTransparencyPhase(0),
 			materialModel(0),
-			modelParams(0.0f, 0.0f, 0.0f, 0.0f)
+			modelParams(0.0f, 0.0f, 0.0f, 0.0f),
+			windSwayParams(0.0f, 0.0f, 0.0f, 0.0f)
 		{
 		}
 
@@ -525,7 +538,8 @@ namespace HexEngine
 				diffuseColour == other.diffuseColour &&
 				emissiveColour == other.emissiveColour &&
 				hasTransparency == other.hasTransparency &&
-				isWater == other.isWater
+				isWater == other.isWater &&
+				windSwayParams == other.windSwayParams
 				);
 		}
 
@@ -560,6 +574,20 @@ namespace HexEngine
 		//   Sheen:      .x = strength, .yzw = sheen tint
 		// Zero default = "feature off".
 		math::Vector4 modelParams;
+
+		// Vegetation wind sway (Phase 3). Consumed by the vertex shaders
+		// (Default / graph-emitted / ShadowMapGeometry) via g_material:
+		//   x = trunk bend strength (metres of top-of-canopy deflection at
+		//       reference wind ~30 m/s)
+		//   y = leaf/branch flutter strength
+		//   z = characteristic height in metres - normalises the height^2
+		//       bend weight so a 2 m hedge and a 15 m tree both articulate
+		//       over their own extent
+		//   w = mode: 0 = off (default), 1 = tree (bend + flutter),
+		//       2 = grass (lean + shimmer only)
+		// APPENDED at the struct tail so cache-stale shaders keep valid
+		// offsets for every earlier field.
+		math::Vector4 windSwayParams;
 	};
 
 	/** @brief Per-object constants uploaded for each draw call. */

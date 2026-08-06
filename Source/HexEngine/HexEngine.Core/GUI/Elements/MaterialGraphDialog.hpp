@@ -60,6 +60,12 @@ namespace HexEngine
 		float       _pbrRainDripIntensity = 0.0f;
 		float       _pbrCullDistance = 0.0f;
 		float       _pbrModelParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		// Wind sway scratch (bend / flutter / height / mode) - see the
+		// MaterialProperties::windSwayParams lane table.
+		float       _pbrWindSwayBend = 0.0f;
+		float       _pbrWindSwayFlutter = 0.0f;
+		float       _pbrWindSwayHeight = 8.0f;
+		float       _pbrWindSwayMode = 0.0f;
 		Checkbox*   _pbrAffectsGiToggle = nullptr;
 		Checkbox*   _pbrEmissiveGiToggle = nullptr;
 		Checkbox*   _pbrReceivesSnowToggle = nullptr;
@@ -67,6 +73,10 @@ namespace HexEngine
 		DragFloat*  _pbrRainDripDrag = nullptr;
 		DragFloat*  _pbrCullDistanceDrag = nullptr;
 		DragFloat*  _pbrModelParamDrags[4] = { nullptr, nullptr, nullptr, nullptr };
+		DragFloat*  _pbrWindSwayModeDrag = nullptr;
+		DragFloat*  _pbrWindSwayBendDrag = nullptr;
+		DragFloat*  _pbrWindSwayFlutterDrag = nullptr;
+		DragFloat*  _pbrWindSwayHeightDrag = nullptr;
 		DropDown*   _pbrShadingModelDrop = nullptr;
 		DropDown*   _pbrDepthStateDrop = nullptr;
 		DropDown*   _pbrBlendStateDrop = nullptr;

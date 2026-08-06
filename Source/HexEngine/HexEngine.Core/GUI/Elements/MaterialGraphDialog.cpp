@@ -876,6 +876,37 @@ namespace HexEngine
 			}
 		});
 
+		// Wind sway (bend / flutter / height / mode). Same direct-apply rule as
+		// Receives Snow above: CompileToMaterial is skipped for cached graph
+		// shaders, so the drags write the Material's live properties too or the
+		// node would say "sway" while the uploaded cbuffer stayed zero.
+		auto applyWindSway = [this](int lane, float v)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				float* lanes = &n->pbrOutputProperties.windSwayParams.x;
+				lanes[lane] = v;
+				MarkDirty();
+			}
+			if (_material)
+			{
+				float* lanes = &_material->_properties.windSwayParams.x;
+				lanes[lane] = v;
+			}
+		};
+		_pbrWindSwayModeDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Wind Sway Mode (0/1/2)", &_pbrWindSwayMode, 0.0f, 2.0f, 1.0f, 0);
+		_pbrWindSwayModeDrag->SetOnDrag([applyWindSway](float v, float, float) { applyWindSway(3, v); });
+		_pbrWindSwayBendDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Wind Sway Bend", &_pbrWindSwayBend, 0.0f, 2.0f, 0.01f, 2);
+		_pbrWindSwayBendDrag->SetOnDrag([applyWindSway](float v, float, float) { applyWindSway(0, v); });
+		_pbrWindSwayFlutterDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Wind Sway Flutter", &_pbrWindSwayFlutter, 0.0f, 2.0f, 0.01f, 2);
+		_pbrWindSwayFlutterDrag->SetOnDrag([applyWindSway](float v, float, float) { applyWindSway(1, v); });
+		_pbrWindSwayHeightDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Wind Sway Height (m)", &_pbrWindSwayHeight, 0.1f, 40.0f, 0.1f, 1);
+		_pbrWindSwayHeightDrag->SetOnDrag([applyWindSway](float v, float, float) { applyWindSway(2, v); });
+
 		_pbrCullDistanceDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
 			L"Cull Distance", &_pbrCullDistance, 0.0f, 10000.0f, 1.0f, 1);
 		_pbrCullDistanceDrag->SetOnDrag([this](float v, float, float)
@@ -1293,10 +1324,18 @@ namespace HexEngine
 			_pbrModelParams[1]     = p.modelParams.y;
 			_pbrModelParams[2]     = p.modelParams.z;
 			_pbrModelParams[3]     = p.modelParams.w;
+			_pbrWindSwayBend    = p.windSwayParams.x;
+			_pbrWindSwayFlutter = p.windSwayParams.y;
+			_pbrWindSwayHeight  = p.windSwayParams.z;
+			_pbrWindSwayMode    = p.windSwayParams.w;
 			if (_pbrRainDripDrag)    _pbrRainDripDrag->SetValue(std::format(L"{:.3f}", _pbrRainDripIntensity));
 			if (_pbrCullDistanceDrag)_pbrCullDistanceDrag->SetValue(std::format(L"{:.1f}", _pbrCullDistance));
 			for (int32_t i = 0; i < 4; ++i)
 				if (_pbrModelParamDrags[i]) _pbrModelParamDrags[i]->SetValue(std::format(L"{:.3f}", _pbrModelParams[i]));
+			if (_pbrWindSwayModeDrag)    _pbrWindSwayModeDrag->SetValue(std::format(L"{:.0f}", _pbrWindSwayMode));
+			if (_pbrWindSwayBendDrag)    _pbrWindSwayBendDrag->SetValue(std::format(L"{:.2f}", _pbrWindSwayBend));
+			if (_pbrWindSwayFlutterDrag) _pbrWindSwayFlutterDrag->SetValue(std::format(L"{:.2f}", _pbrWindSwayFlutter));
+			if (_pbrWindSwayHeightDrag)  _pbrWindSwayHeightDrag->SetValue(std::format(L"{:.1f}", _pbrWindSwayHeight));
 		}
 		const auto setPbrEnabled = [isPbrOutputNode](Element* e) {
 			if (e == nullptr) return;
@@ -1306,6 +1345,10 @@ namespace HexEngine
 		setPbrEnabled(_pbrAffectsGiToggle);
 		setPbrEnabled(_pbrEmissiveGiToggle);
 		setPbrEnabled(_pbrRainDripDrag);
+		setPbrEnabled(_pbrWindSwayModeDrag);
+		setPbrEnabled(_pbrWindSwayBendDrag);
+		setPbrEnabled(_pbrWindSwayFlutterDrag);
+		setPbrEnabled(_pbrWindSwayHeightDrag);
 		setPbrEnabled(_pbrCullDistanceDrag);
 		for (int32_t i = 0; i < 4; ++i)
 			setPbrEnabled(_pbrModelParamDrags[i]);

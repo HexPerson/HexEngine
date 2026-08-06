@@ -202,6 +202,10 @@ namespace HexEngine
 			// glass, polished pavement, etc.) and leave it at 0 for dry-only surfaces.
 			file->Deserialize(properties, "rainDripIntensity", props.rainDripIntensity);
 
+			// Vegetation wind sway (x = bend, y = flutter, z = characteristic
+			// height m, w = mode 0/1/2). Absent from older materials -> zero = off.
+			file->Deserialize(properties, "windSwayParams", props.windSwayParams);
+
 			bool affectsGI = true;
 			file->Deserialize(properties, "affectsGI", affectsGI);
 			material->SetAffectsGI(affectsGI);
@@ -608,6 +612,8 @@ namespace HexEngine
 			file.Serialize(properties, "materialModel", material->_properties.materialModel);
 			file.Serialize(properties, "modelParams", material->_properties.modelParams);
 			file.Serialize(properties, "rainDripIntensity", material->_properties.rainDripIntensity);
+			// Vegetation wind sway (bend / flutter / char height / mode).
+			file.Serialize(properties, "windSwayParams", material->_properties.windSwayParams);
 			file.Serialize(properties, "affectsGI", material->GetAffectsGI());
 			file.Serialize(properties, "receivesSnow", material->GetReceivesSnow());
 			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());

@@ -89,6 +89,10 @@ namespace HexEngine
 		int affectsGI = 1;
 		int emissiveAffectsGI = 0;
 		int receivesSnow = 0;
+		// Vegetation wind sway (x = bend, y = flutter, z = characteristic
+		// height m, w = mode 0 off / 1 tree / 2 grass). Mirrors
+		// MaterialProperties::windSwayParams.
+		math::Vector4 windSwayParams = math::Vector4::Zero;
 
 		// Render state - read once by the graph compiler and written into the
 		// Material before its standard shader is compiled, so artists can drive

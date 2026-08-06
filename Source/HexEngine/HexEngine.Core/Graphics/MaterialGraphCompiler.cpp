@@ -1244,6 +1244,7 @@ namespace HexEngine
 				material._properties.hasTransparency = 1;
 			material.SetAffectsGI(p.affectsGI != 0);
 			material.SetReceivesSnow(p.receivesSnow != 0);
+			material._properties.windSwayParams = p.windSwayParams;
 			material.SetEmissiveAffectsGI(p.emissiveAffectsGI != 0);
 
 			// Render state.

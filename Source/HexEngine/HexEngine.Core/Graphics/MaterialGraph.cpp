@@ -488,6 +488,7 @@ namespace HexEngine
 			p.affectsGI         = material.GetAffectsGI() ? 1 : 0;
 			p.emissiveAffectsGI = material.GetEmissiveAffectsGI() ? 1 : 0;
 			p.receivesSnow      = material.GetReceivesSnow() ? 1 : 0;
+			p.windSwayParams    = material._properties.windSwayParams;
 			p.depthState        = material.GetDepthState();
 			p.blendState        = material.GetBlendState();
 			p.cullMode          = material.GetCullMode();
@@ -657,6 +658,7 @@ namespace HexEngine
 					{ "rainDripIntensity", p.rainDripIntensity },
 					{ "affectsGI", p.affectsGI },
 				{ "receivesSnow", p.receivesSnow },
+					{ "windSwayParams", { p.windSwayParams.x, p.windSwayParams.y, p.windSwayParams.z, p.windSwayParams.w } },
 					{ "emissiveAffectsGI", p.emissiveAffectsGI },
 					{ "depthState", static_cast<int>(p.depthState) },
 					{ "blendState", static_cast<int>(p.blendState) },
@@ -788,6 +790,13 @@ namespace HexEngine
 							p.modelParams.y = (*mp)[1].get<float>();
 							p.modelParams.z = (*mp)[2].get<float>();
 							p.modelParams.w = (*mp)[3].get<float>();
+						}
+						if (const auto ws = poIt->find("windSwayParams"); ws != poIt->end() && ws->is_array() && ws->size() >= 4)
+						{
+							p.windSwayParams.x = (*ws)[0].get<float>();
+							p.windSwayParams.y = (*ws)[1].get<float>();
+							p.windSwayParams.z = (*ws)[2].get<float>();
+							p.windSwayParams.w = (*ws)[3].get<float>();
 						}
 					}
 				}

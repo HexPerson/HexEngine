@@ -279,7 +279,16 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// Dust/sand accumulation textures: x = sand textures bound (t25/t31),
 		// y = world tiling scale, zw reserved. See RenderStructs.hpp::_dustParams.
 		float4 g_dustParams;
+		// Previous-frame time: x = last frame's g_time, y = dt (seconds), zw
+		// reserved. Time-dependent vertex displacement (wind sway, waves)
+		// evaluates at BOTH x and g_time so previousPositionUnjittered carries
+		// the displacement delta (correct TAA/DLSS motion vectors). See
+		// RenderStructs.hpp::_timeParams2.
+		float4 g_timeParams2;
 	};
+
+	#define g_timePrev  (g_timeParams2.x)
+	#define g_deltaTime (g_timeParams2.y)
 
 	#define g_preExposure    (g_exposureParams.x)
 	#define g_invPreExposure (g_exposureParams.y)
@@ -361,6 +370,14 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// Per-model param vec4. See RenderStructs.hpp for the per-model layout
 		// table (SSS = mask + scatter colour, clearcoat = strength + roughness, etc.)
 		float4 modelParams;
+
+		// Vegetation wind sway: x = trunk bend strength, y = flutter strength,
+		// z = characteristic height (m, normalises the height^2 weight),
+		// w = mode (0 off / 1 tree / 2 grass lean-only). Consumed by the
+		// Default / graph-emitted / ShadowMapGeometry vertex shaders via
+		// MeshCommon::WindSwayOffset. Appended at the tail - cache-stale
+		// shaders keep valid offsets for earlier fields.
+		float4 windSwayParams;
 	};
 	
 	cbuffer PerObjectBuffer : register(b1)

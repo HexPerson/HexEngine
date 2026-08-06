@@ -404,6 +404,14 @@ namespace HexEngine
 		float _puddleState = 0.0f;
 		bool _wetnessInit = false;
 		void UpdateWetnessAccumulation();
+
+		// Previous-frame time pair uploaded as g_timeParams2 (wind sway /
+		// wave motion vectors). Advanced once per frame in
+		// SetupPerFrameBuffer, keyed on the frame count; UINT64_MAX sentinel
+		// = first frame (prev snaps to current, zero delta).
+		float _timePrevUploaded = 0.0f;
+		float _timeCurUploaded = 0.0f;
+		uint64_t _timePrevUploadFrame = UINT64_MAX;
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 
