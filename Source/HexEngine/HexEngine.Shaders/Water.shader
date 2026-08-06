@@ -34,24 +34,29 @@
 }
 "VertexShader"
 {
-#define ENABLE_WAVES 1
-
+	// Wind-coupled Gerstner ocean (O5). Pure function of (position, time,
+	// wind) so it can be evaluated at BOTH g_time and g_timePrev - the
+	// displacement delta between the two IS the water's motion vector (the
+	// tiles themselves are static). Physical deep-water phase speed
+	// (c = sqrt(g/k), the legacy x4.2 fast-forward is gone) and wind
+	// coupling: amplitude scales with wind speed (floored - calm water
+	// ripples, it doesn't become a dead mirror plane) and wave directions
+	// blend toward the weather wind as it strengthens (light air keeps the
+	// authored crossed swell; a storm marches aligned with the wind).
 	float3 GerstnerWave(
-		float4 wave, float3 p, inout float3 tangent, inout float3 binormal,
-		inout float crest
+		float4 wave, float3 p, float time, float2 windDir, float windAlign, float ampScale,
+		inout float3 tangent, inout float3 binormal, inout float crest
 	) {
-		float steepness = wave.z / WaveSizeMultiplier;
+		float steepness = (wave.z / WaveSizeMultiplier) * ampScale;
 		float wavelength = wave.w / WaveSizeMultiplier;
 		float k = 2 * 3.14159f / wavelength;
 		float c = sqrt(9.8 / k);
-		float2 d = normalize(wave.xy);
-		float f = k * (dot(d, p.xz) - c * g_time * 4.2f);
+		float2 d = normalize(lerp(normalize(wave.xy), windDir, windAlign));
+		float f = k * (dot(d, p.xz) - c * time);
 
 		float a = steepness / k;
 
-		// Crest proxy for foam (O4): steepness-weighted phase height. Where
-		// several waves peak together this sum approaches the total
-		// steepness; troughs go negative. Normalised in ShaderMain.
+		// Crest proxy for foam (O4): steepness-weighted phase height.
 		crest += steepness * sin(f);
 
 		tangent += float3(
@@ -72,6 +77,34 @@
 			);
 	}
 
+	float3 EvalOcean(float3 gridPoint, float time, float2 windDir, float windAlign, float ampScale,
+		out float3 tangent, out float3 binormal, out float crest01)
+	{
+		// Flat-plane seed (the sea tiles are flat grids) - keeps the
+		// function pure so the t and t-dt evaluations are structurally
+		// identical.
+		tangent = float3(1.0f, 0.0f, 0.0f);
+		binormal = float3(0.0f, 0.0f, 1.0f);
+		float crest = 0.0f;
+
+		float3 p = gridPoint;
+		p += GerstnerWave(_WaveA, gridPoint, time, windDir, windAlign, ampScale, tangent, binormal, crest);
+		p += GerstnerWave(_WaveB, gridPoint, time, windDir, windAlign, ampScale, tangent, binormal, crest);
+		p += GerstnerWave(_WaveC, gridPoint, time, windDir, windAlign, ampScale, tangent, binormal, crest);
+		p += GerstnerWave(_WaveD, gridPoint, time, windDir, windAlign, ampScale, tangent, binormal, crest);
+
+		tangent = normalize(tangent);
+		binormal = normalize(binormal);
+
+		// Normalise the crest sum against the (wind-scaled) theoretical
+		// maximum - all four waves peaking in phase.
+		const float totalSteepness =
+			(_WaveA.z + _WaveB.z + _WaveC.z + _WaveD.z) / WaveSizeMultiplier * ampScale;
+		crest01 = saturate(crest / max(totalSteepness, 0.0001f));
+
+		return p;
+	}
+
 	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)
 	{
 		MeshPixelInput output = (MeshPixelInput)0;
@@ -85,31 +118,25 @@
 		// both sides regardless of which tile draws it.
 		float3 gridPoint = input.position.xyz + worldPos;
 
-		float3 tangent = input.tangent;
-		float3 binormal = input.binormal;
-		float3 normal = input.normal;
-		float3 p = gridPoint;
+		// Weather wind -> sea state. Amplitude floor 0.18 keeps calm water
+		// alive (small ripples); the 1.5 exponent makes the mid presets read
+		// distinct and the storm presets (24-29 m/s) heavy. Direction
+		// alignment strengthens with the wind.
+		const float windSpeed = g_weatherSurface.windDirectionAndSpeed.w;
+		const float windNorm = saturate(windSpeed / 30.0f);
+		const float ampScale = 0.18f + 0.82f * pow(windNorm, 1.5f);
+		const float windAlign = 0.75f * windNorm;
+		float2 windDir = g_weatherSurface.windDirectionAndSpeed.xz;
+		const float windDirLen = length(windDir);
+		windDir = (windDirLen > 0.001f) ? windDir / windDirLen : float2(1.0f, 0.0f);
 
-		float crest = 0.0f;
+		float3 tangent, binormal;
+		float crest01;
+		float3 p = EvalOcean(gridPoint, g_time, windDir, windAlign, ampScale, tangent, binormal, crest01);
+		float3 normal = normalize(cross(binormal, tangent));
 
-#if ENABLE_WAVES == 1
-		p += GerstnerWave(_WaveA, gridPoint, tangent, binormal, crest);
-		p += GerstnerWave(_WaveB, gridPoint, tangent, binormal, crest);
-		p += GerstnerWave(_WaveC, gridPoint, tangent, binormal, crest);
-		p += GerstnerWave(_WaveD, gridPoint, tangent, binormal, crest);
-
-		tangent = normalize(tangent);
-		binormal = normalize(binormal);
-
-		normal = normalize(cross(binormal, tangent));
-#endif
-
-		// Normalise the crest sum to [0,1] against the theoretical maximum
-		// (all four waves peaking in phase). Only the positive half matters -
-		// foam forms on crests, not in troughs.
-		const float totalSteepness =
-			(_WaveA.z + _WaveB.z + _WaveC.z + _WaveD.z) / WaveSizeMultiplier;
-		const float crest01 = saturate(crest / max(totalSteepness, 0.0001f));
+		// Storms foam harder: scale the crest factor the PS thresholds.
+		crest01 *= saturate(0.35f + ampScale);
 
 		input.position = float4(p.xyz - worldPos, 1.0f);
 
@@ -122,7 +149,29 @@
 
 		output.position = mul(output.position, g_viewProjectionMatrix);
 
-		input.texcoord.xy -= g_time * 0.03f;
+		// Motion vectors (the survey's headline defect: water NEVER wrote
+		// previousPositionUnjittered, so TAA/DLSS reprojected waves with the
+		// opaque scene's velocity and smeared them). Same wave evaluation at
+		// g_timePrev; the tiles are static so the displacement delta is the
+		// whole velocity. Current wind for both - it changes far slower than
+		// a frame.
+		{
+			float3 tPrev, bPrev;
+			float cPrev;
+			const float3 pPrev = EvalOcean(gridPoint, g_timePrev, windDir, windAlign, ampScale, tPrev, bPrev, cPrev);
+			const float4 prevWorld = mul(float4(pPrev - worldPos, 1.0f), instance.worldPrev);
+			output.previousPositionUnjittered = mul(prevWorld, g_viewProjectionMatrixPrev);
+		}
+		output.currentPositionUnjittered = output.position;
+
+		// TAA jitter, matching every other vertex path (water previously
+		// rendered unjittered - a subtle misalignment against the jittered
+		// opaque scene under TAA).
+		output.position.xy += g_jitterOffsets * output.position.w;
+
+		// Bump advection follows the WIND (direction and rate) instead of a
+		// fixed diagonal scroll.
+		input.texcoord.xy -= windDir * g_time * (0.012f + 0.035f * windNorm);
 		output.texcoord = input.texcoord * 1.4;
 
 		matrix normalMatrix = mul(instance.worldInverseTranspose, g_worldMatrix);
