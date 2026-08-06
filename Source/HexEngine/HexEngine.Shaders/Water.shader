@@ -429,10 +429,20 @@
 		float transmission = exp(-columnDepth * absorbK);
 
 		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, saturate(1.0f - transmission));
-		float fresnel = 1 - pow(saturate(dot(eyeVector, originalWorldNormal)), fresnelPow);
-		// Shore fade per metre: with the default strength 12 the waterline
-		// blends over the first ~25 cm of depth.
-		float shoreFade = 1.0f - exp(-columnDepth * g_oceanConfig.shoreFadeStrength);
+		// SCHLICK Fresnel, not the legacy 1-cos^pow: that curve sat near 0.98
+		// at ordinary viewing angles, so the exponent shifted the WHOLE sea's
+		// reflectivity (user: "fresnel factor has a lot of influence on how
+		// reflective the water is overall"). Real water reflects ~2% at
+		// normal incidence and only approaches a mirror toward grazing -
+		// which also means you can finally see INTO the water near the
+		// camera. fresnelPow now shapes the grazing rise (5 = physical;
+		// lower = reflectivity comes in earlier).
+		float fresnel = 0.02f + 0.98f * pow(1.0f - saturate(dot(eyeVector, originalWorldNormal)), max(fresnelPow, 0.5f));
+		// Shore fade: scaled so the strength slider works over METRES-scale
+		// shallows (the raw per-metre form saturated in ~25 cm and the
+		// control did nothing - the legacy far-plane form is why it used to
+		// feel useful). Default 12 -> full effect by ~8 m of column.
+		float shoreFade = 1.0f - exp(-columnDepth * g_oceanConfig.shoreFadeStrength / 30.0f);
 
 		float fadeFactor = saturate(fresnel * shoreFade);
 
@@ -444,17 +454,24 @@
 		float foam = 0.0f;
 		{
 			const float foamScale = g_oceanConfig.reflection_pad1 > 0.0f ? g_oceanConfig.reflection_pad1 : 1.0f;
-			const float3 np = float3(input.positionWS.x * 0.35f, g_time * 0.22f, input.positionWS.z * 0.35f);
-			const float n = ValueNoise3(np) * 0.65f + ValueNoise3(np * 3.1f) * 0.35f;
+			// SLOW noise churn. The first version advected at 0.22 and put a
+			// hard smoothstep threshold on the crest factor - which
+			// oscillates at wave-phase speed - so foam snapped on/off as each
+			// crest swept past the threshold and the sea strobed ("looks
+			// like lightning"). Continuous power curves + slow erosion make
+			// foam wax and wane with the swell instead of flashing.
+			const float3 np = float3(input.positionWS.x * 0.35f, g_time * 0.06f, input.positionWS.z * 0.35f);
+			const float n = ValueNoise3(np) * 0.65f + ValueNoise3(np * 3.1f + float3(0.0f, g_time * 0.03f, 0.0f)) * 0.35f;
 
-			// Crests: noise-eroded threshold so foam forms in streaks and
-			// patches, not a uniform band along every wave.
+			// Crests: continuous cubic response (no threshold to flash
+			// across), noise shaping the coverage into streaks.
 			const float crest = saturate(input.colour.x);
-			const float crestFoam = smoothstep(0.45f, 0.9f, crest * (0.55f + 0.65f * n));
+			const float crestFoam = pow(crest, 3.0f) * (0.35f + 0.65f * n);
 
-			// Shore: strongest at zero depth, gone by ~0.8 m, noise-broken.
-			const float shoreBand = saturate(1.0f - columnDepth / 0.8f);
-			const float shoreFoam = smoothstep(0.25f, 0.75f, shoreBand * (0.5f + 0.7f * n));
+			// Shore: strongest at zero depth, fading over the first ~1.5 m,
+			// continuous curve, noise-broken.
+			const float shoreBand = saturate(1.0f - columnDepth / 1.5f);
+			const float shoreFoam = shoreBand * shoreBand * (0.45f + 0.7f * n);
 
 			foam = saturate((crestFoam + shoreFoam) * foamScale);
 		}
