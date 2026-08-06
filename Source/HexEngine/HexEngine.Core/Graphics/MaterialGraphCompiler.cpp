@@ -699,11 +699,23 @@ namespace HexEngine
 			ss << "\t\tmatrix worldPrev = mul(instance.worldPrev, g_worldMatrix);\n";
 			ss << "\t\toutput.position = mul(input.position, worldMatrix);\n";
 			ss << "\t\toutput.positionWS = output.position;\n";
+			// Vegetation wind sway - keep in LOCKSTEP with Default.shader's VS
+			// (current position at g_time here, previous-frame position at
+			// g_timePrev below, so the sway delta reaches the motion vectors).
+			ss << "\t\t[branch]\n";
+			ss << "\t\tif (g_material.windSwayParams.w > 0.5f)\n\t\t{\n";
+			ss << "\t\t\toutput.position.xyz += WindSwayOffset(output.position.xyz, worldMatrix[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_time);\n";
+			ss << "\t\t\toutput.positionWS = output.position;\n";
+			ss << "\t\t}\n";
 			ss << "\t\tif(g_cullDistance > 0.0f)\n\t\t{\n";
 			ss << "\t\t\toutput.cullDistance = length(output.positionWS.xyz - g_eyePos.xyz) >= g_cullDistance ? -1.0f : 1.0f;\n";
 			ss << "\t\t}\n";
 			ss << "\t\toutput.position = mul(output.position, g_viewProjectionMatrix);\n";
 			ss << "\t\tfloat4 prevFrame_worldPos = mul(input.position, worldPrev);\n";
+			ss << "\t\t[branch]\n";
+			ss << "\t\tif (g_material.windSwayParams.w > 0.5f)\n\t\t{\n";
+			ss << "\t\t\tprevFrame_worldPos.xyz += WindSwayOffset(prevFrame_worldPos.xyz, worldPrev[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_timePrev);\n";
+			ss << "\t\t}\n";
 			ss << "\t\tfloat4 prevFrame_clipPos = mul(prevFrame_worldPos, g_viewProjectionMatrixPrev);\n";
 			ss << "\t\toutput.previousPositionUnjittered = prevFrame_clipPos;\n";
 			ss << "\t\toutput.currentPositionUnjittered = output.position;\n";
@@ -1112,7 +1124,10 @@ namespace HexEngine
 			//       argument.
 			//   5 - slice 5: snow relief - ApplySnowAccumulation signature
 			//       gains inout normal + sampler.
-			combined += "\0codegen:6";
+			//   6 - dust sampler arg (sand textures).
+			//   7 - vegetation wind sway in the emitted VS (WindSwayOffset
+			//       at g_time + g_timePrev, gated on windSwayParams.w).
+			combined += "\0codegen:7";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);
