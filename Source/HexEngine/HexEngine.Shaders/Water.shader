@@ -428,23 +428,21 @@
 		const float absorbK = g_oceanConfig.reflection_pad0 > 0.0f ? g_oceanConfig.reflection_pad0 : 0.18f;
 		float transmission = exp(-columnDepth * absorbK);
 
-		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, saturate(1.0f - transmission));
+		// CONTROL SEPARATION (user-clarified semantics):
+		//  - shoreFadeStrength: how fast DEPTH fades shallowColour->deepColour
+		//  - absorption (pad0): how fast the refracted scene stops showing
+		//    through (transmission above)
+		//  - Fresnel ALONE decides reflectance - depth plays no part in it
+		const float colourFade = 1.0f - exp(-columnDepth * g_oceanConfig.shoreFadeStrength / 30.0f);
+		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, colourFade);
+
 		// SCHLICK Fresnel, not the legacy 1-cos^pow: that curve sat near 0.98
 		// at ordinary viewing angles, so the exponent shifted the WHOLE sea's
-		// reflectivity (user: "fresnel factor has a lot of influence on how
-		// reflective the water is overall"). Real water reflects ~2% at
-		// normal incidence and only approaches a mirror toward grazing -
-		// which also means you can finally see INTO the water near the
-		// camera. fresnelPow now shapes the grazing rise (5 = physical;
-		// lower = reflectivity comes in earlier).
+		// reflectivity. Real water reflects ~2% at normal incidence and only
+		// approaches a mirror toward grazing - which also means you can see
+		// INTO the water near the camera. fresnelPow shapes the grazing rise
+		// (5 = physical; lower = reflectivity comes in earlier).
 		float fresnel = 0.02f + 0.98f * pow(1.0f - saturate(dot(eyeVector, originalWorldNormal)), max(fresnelPow, 0.5f));
-		// Shore fade: scaled so the strength slider works over METRES-scale
-		// shallows (the raw per-metre form saturated in ~25 cm and the
-		// control did nothing - the legacy far-plane form is why it used to
-		// feel useful). Default 12 -> full effect by ~8 m of column.
-		float shoreFade = 1.0f - exp(-columnDepth * g_oceanConfig.shoreFadeStrength / 30.0f);
-
-		float fadeFactor = saturate(fresnel * shoreFade);
 
 		// Procedural foam (O4): crest foam where the waves peak (VS crest
 		// interpolant) + a shore band where the column is centimetres deep.
@@ -479,15 +477,12 @@
 		float4 ambient = float4(g_atmosphere.ambientLight.rgb * fadeColour.rgb, 1.0f);
 		float4 diffuseColour = float4(fadeColour.rgb * lightIntensity, 1.0f);
 
-		float4 finalColour = diffuseColour;
-
-		float finalFadeFactor = fadeFactor;
-
-		if (g_eyePos.y <= 0.0f)
-			finalFadeFactor *= 0.35f;
-
-		float3 transmittedColour = lerp(fadeColour.rgb, worldDiffuse.rgb, transmission);
-		float3 waterBodyColour = lerp(transmittedColour, finalColour.rgb + (ambient.rgb * 0.35f), finalFadeFactor);
+		// Optically thin water shows the refracted scene; thick water shows
+		// the lit body colour. ONE blend, driven by absorption alone - the
+		// old second lerp keyed on fresnel*shoreFade coupled body colour to
+		// reflectance, which is why the controls fought each other.
+		float3 litBody = diffuseColour.rgb + ambient.rgb * 0.35f;
+		float3 waterBodyColour = lerp(litBody, worldDiffuse.rgb, transmission);
 		float4 retCol = float4(waterBodyColour, 1.0f);
 
 		// Reflections (O3): inline screen-space march for near-field content
@@ -538,16 +533,16 @@
 				reflection = reflectionWeight > 1e-4f ? reflection / reflectionWeight : float3(0.0f, 0.0f, 0.0f);
 			}
 
-			// Compose: reflection replaces body colour by Fresnel x shore
-			// fade x artist strength; the sun glint ADDS on top (its GGX F
-			// term already carries its own Fresnel - the legacy code scaled
-			// the glint by reflectionStrength, which is why the boost
-			// constant existed). Foam suppresses both - scattered white
-			// water is matte, not a mirror.
+			// Compose: reflection replaces body colour by FRESNEL x artist
+			// strength - depth/shore terms removed from reflectance (they
+			// belong to colour and see-through, not to how mirror-like the
+			// surface is). The sun glint ADDS on top (its GGX F term carries
+			// its own Fresnel). Foam suppresses both - scattered white water
+			// is matte, not a mirror.
 			// NO saturate: linear HDR into an R16G16B16A16_FLOAT target.
 			const float reflectionStrength = g_oceanConfig.reflectionStrength;
 			retCol.xyz = lerp(retCol.xyz, reflection,
-				reflectionStrength * fadeFactor * reflectionWeight * (1.0f - foam));
+				saturate(reflectionStrength * fresnel * reflectionWeight) * (1.0f - foam));
 			retCol.xyz += specular.xyz * (1.0f - foam);
 		}
 
