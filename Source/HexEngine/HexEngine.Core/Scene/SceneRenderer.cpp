@@ -5293,6 +5293,15 @@ namespace HexEngine
 		// flake on screen. Particles now fog themselves at their own depth
 		// in ParticleBillboardLit.shader instead.
 
+		// Tessellation state MUST NOT leak past the transparent pass either
+		// (same rule as the opaque-pass boundary): water is a tessellated
+		// TRANSPARENT material, so if a sea tile is the last draw of this
+		// pass, a bound HS/DS pair + patch topology would corrupt the next
+		// fullscreen quad (RenderFog). Clear once at the boundary.
+		g_pEnv->_graphicsDevice->SetHullShader(nullptr);
+		g_pEnv->_graphicsDevice->SetDomainShader(nullptr);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+
 		if (_waterRT)
 		{
 			_waterRT->CopyTo(_beautyRT);

@@ -305,6 +305,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <None Include="Mesh.shader" />
     <None Include="MeshCommon.shader" />
     <None Include="SnowCommon.shader" />
+    <None Include="WaterCommon.shader" />
     <HexEngineShader Include="PostFog.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
