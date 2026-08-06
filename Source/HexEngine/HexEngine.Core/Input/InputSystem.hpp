@@ -140,6 +140,17 @@ namespace HexEngine
 
 		void GetMousePosition(int& x, int& y);
 
+		// Mouse position in the GAME's logical UI space. Standalone: identical
+		// to GetMousePosition. Play-in-editor (scene-view rect active): the
+		// raw window-pixel position is remapped through the rect - the exact
+		// inverse of the display squeeze Game3DEnvironment applies to the
+		// game's UI - so a HUD element authored at logical (x, y) hit-tests
+		// where it is actually drawn. Game UI hit-testing must use THIS, not
+		// GetMousePosition (which stays raw for editor/gizmo consumers).
+		// Positions outside the scene view land outside [0, screenSize) and
+		// naturally fail hit tests.
+		void GetGameMousePosition(int& x, int& y);
+
 		void SetMousePosition(int x, int y, bool absolute = false);
 
 		void EnableInput(bool enable);
