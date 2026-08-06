@@ -423,6 +423,19 @@
 			worldNormal = bumpNormal;
 		}
 
+		// Rain ripples (O6): impact rings dimple the surface while
+		// precipitation falls. Gated out under snow (blizzard flakes don't
+		// ring like raindrops). No shelter sampling - the shelter map isn't
+		// bound in the transparent pass (Mesh.shader has the same
+		// constraint), and open water is rarely sheltered.
+		const float rainAmount = saturate(g_weatherSurface.precipitationIntensity)
+			* saturate(1.0f - g_weatherSurface.snowCoverage * 3.0f);
+		if (rainAmount > 0.001f)
+		{
+			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time, rainAmount);
+			refractionNormal = worldNormal;
+		}
+
 		float4 normalAndDepth = g_sceneNormalTex.Sample(g_TexSamplerPoint, screenPos);
 		float worldDepth = normalAndDepth.w;
 
