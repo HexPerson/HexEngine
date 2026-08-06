@@ -290,12 +290,21 @@
 	// fed the TBN mix and the resulting basis was biased toward +tangent
 	// +binormal - water bump normals have been mathematically wrong for
 	// years (visibly: lighting that never quite tracked the waves).
-	float3 ANM(float3 worldNormal, float3 tangent, float3 binormal, Texture2D normalTex, SamplerState samp, float2 texcoord)
+	float3 ANM(float3 worldNormal, float3 tangent, float3 binormal, Texture2D normalTex, SamplerState samp, float2 texcoord, float strength)
 	{
 		float3 bumpMap = normalTex.Sample(samp, texcoord).xyz;
 
 		// Expand the range of the normal value from (0, +1) to (-1, +1).
 		bumpMap = (bumpMap * 2.0f) - 1.0f;
+
+		// Strength scales the tangent-plane deflection only. NOTE (user-
+		// found): the years-broken unpack was accidentally ATTENUATING the
+		// map - raw [0,1] texels perturb at half amplitude around a constant
+		// bias - so fixing it unleashed the texture at full strength and the
+		// per-texel normal scatter shredded the SSR mirror image. The unpack
+		// is correct; the amplitude needed an explicit dial (and the
+		// reflection ray now uses a mostly-Gerstner normal besides).
+		bumpMap.xy *= strength;
 
 		float3 bumpNormal =
 			(bumpMap.x * tangent) +
@@ -341,7 +350,7 @@
 		// Gerstner normal; per-texel detail at the horizon just aliases).
 		if (distantNormalFade > 0.001f)
 		{
-			float3 bumpNormal = ANM(worldNormal, input.tangent, input.binormal, g_normalMap, g_TexSamplerAniso, input.texcoord);
+			float3 bumpNormal = ANM(worldNormal, input.tangent, input.binormal, g_normalMap, g_TexSamplerAniso, input.texcoord, 0.5f);
 			bumpNormal = normalize(lerp(input.normal.xyz, bumpNormal, distantNormalFade));
 
 			refractionNormal = bumpNormal;
@@ -493,7 +502,13 @@
 		// reflection" (beauty at the pixel's own position - positionally
 		// meaningless, it reflected whatever was BEHIND the water).
 		{
-			float3 reflectionNormal = worldNormal;
+			// Reflect off a mostly-GERSTNER normal: a mirror image needs a
+			// far smoother surface than shading does (per-texel bump scatter
+			// sends adjacent SSR rays to unrelated targets and shreds the
+			// reflection - the deferred SSR's puddle-flatten exists for the
+			// same reason). 0.35 bump influence matches the sun-glint's
+			// specularNormal blend.
+			float3 reflectionNormal = normalize(lerp(originalWorldNormal, worldNormal, 0.35f));
 
 			if (g_eyePos.y <= 0.0f)
 				reflectionNormal *= -1.0f;
