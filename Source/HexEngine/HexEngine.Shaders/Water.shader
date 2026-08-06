@@ -37,7 +37,8 @@
 #define ENABLE_WAVES 1
 
 	float3 GerstnerWave(
-		float4 wave, float3 p, inout float3 tangent, inout float3 binormal
+		float4 wave, float3 p, inout float3 tangent, inout float3 binormal,
+		inout float crest
 	) {
 		float steepness = wave.z / WaveSizeMultiplier;
 		float wavelength = wave.w / WaveSizeMultiplier;
@@ -47,6 +48,11 @@
 		float f = k * (dot(d, p.xz) - c * g_time * 4.2f);
 
 		float a = steepness / k;
+
+		// Crest proxy for foam (O4): steepness-weighted phase height. Where
+		// several waves peak together this sum approaches the total
+		// steepness; troughs go negative. Normalised in ShaderMain.
+		crest += steepness * sin(f);
 
 		tangent += float3(
 			-d.x * d.x * (steepness * sin(f)),
@@ -84,17 +90,26 @@
 		float3 normal = input.normal;
 		float3 p = gridPoint;
 
+		float crest = 0.0f;
+
 #if ENABLE_WAVES == 1
-		p += GerstnerWave(_WaveA, gridPoint, tangent, binormal);
-		p += GerstnerWave(_WaveB, gridPoint, tangent, binormal);
-		p += GerstnerWave(_WaveC, gridPoint, tangent, binormal);
-		p += GerstnerWave(_WaveD, gridPoint, tangent, binormal);
+		p += GerstnerWave(_WaveA, gridPoint, tangent, binormal, crest);
+		p += GerstnerWave(_WaveB, gridPoint, tangent, binormal, crest);
+		p += GerstnerWave(_WaveC, gridPoint, tangent, binormal, crest);
+		p += GerstnerWave(_WaveD, gridPoint, tangent, binormal, crest);
 
 		tangent = normalize(tangent);
 		binormal = normalize(binormal);
 
 		normal = normalize(cross(binormal, tangent));
 #endif
+
+		// Normalise the crest sum to [0,1] against the theoretical maximum
+		// (all four waves peaking in phase). Only the positive half matters -
+		// foam forms on crests, not in troughs.
+		const float totalSteepness =
+			(_WaveA.z + _WaveB.z + _WaveC.z + _WaveD.z) / WaveSizeMultiplier;
+		const float crest01 = saturate(crest / max(totalSteepness, 0.0001f));
 
 		input.position = float4(p.xyz - worldPos, 1.0f);
 
@@ -127,7 +142,10 @@
 		// Normalize the viewing direction vector.
 		output.viewDirection.xyz = normalize(output.viewDirection.xyz);
 
-		output.colour = instance.colour;
+		// The colour interpolant is repurposed (O4): .x carries the crest
+		// factor for foam. (Instance colour was only ever multiplied into a
+		// dead albedo sample - water's surface is entirely procedural.)
+		output.colour = float4(crest01, 0.0f, 0.0f, 1.0f);
 
 		return output;
 	}
@@ -225,7 +243,7 @@
 	// Screen-space refraction: offset the scene-colour lookup along the
 	// refracted direction, depth-rejected so geometry NEARER than the water
 	// surface never smears into the refraction. Rebuilt properly in O4.
-	float4 GetWorldColour(float3 eyeDir, inout float2 screenPos, float3 worldNormal, float4 originalWorldDiffuse, float3 pixelPos, float pixelDepth)
+	float4 GetWorldColour(float3 eyeDir, inout float2 screenPos, float3 worldNormal, float4 originalWorldDiffuse, float3 pixelPos, float pixelDepth, float offsetScale)
 	{
 		float eta = 0.75f;
 
@@ -234,13 +252,15 @@
 		float3 refractedNormal = refract(eyeDir, -(worldNormal), eta);
 
 		// Project the refracted DIRECTION and use it as a screen-space UV
-		// offset. Crude but stable; the real per-pixel march is O4's job.
+		// offset, SCALED by the water-column depth (offsetScale): centimetres
+		// of water over a shore stone barely displace it, a deep column bends
+		// hard. The unscaled version smeared the shoreline.
 		float4 jitterNormal = float4(refractedNormal, 0.0f);
 		jitterNormal = mul(jitterNormal, g_viewProjectionMatrix);
 
 		const float jitterAmmount = 0.018f;
 
-		jitterNormal = jitterNormal * jitterAmmount;
+		jitterNormal = jitterNormal * (jitterAmmount * offsetScale);
 
 		screenPos = screenPos + jitterNormal.xy;
 
@@ -287,8 +307,6 @@
 
 	float4 ShaderMain(MeshPixelInput input) : SV_Target
 	{
-		float4 albedo = g_albedoMap.Sample(g_TexSamplerAniso, input.texcoord) * input.colour;
-
 		float4 specular = float4(0, 0, 0, 1);
 
 		float3 eyeVector = normalize(g_eyePos.xyz - input.positionWS.xyz);
@@ -335,7 +353,12 @@
 
 		if (refractionQualityWeight > 0.001f && (worldDepth >= pixelDepth || worldDepth == -1.0f))
 		{
-			float4 refractedWorldDiffuse = GetWorldColour(-eyeVector, screenPos, refractionNormal, worldDiffuse, input.positionWS.xyz, pixelDepth);
+			// Pre-refraction column estimate just for the offset scale (the
+			// accurate metre-based column is computed below at the final UV).
+			const float preColumn = (worldDepth == -1.0f) ? 100.0f : (worldDepth - pixelDepth);
+			const float refractOffsetScale = saturate(preColumn * 0.6f);
+
+			float4 refractedWorldDiffuse = GetWorldColour(-eyeVector, screenPos, refractionNormal, worldDiffuse, input.positionWS.xyz, pixelDepth, refractOffsetScale);
 			worldDiffuse = lerp(originalWorldDiffuse, refractedWorldDiffuse, refractionQualityWeight);
 
 			// re-read depth at the refracted position so the shore/absorption
@@ -387,22 +410,54 @@
 				* (NdotL * directSpecular) * sunShadow, 1.0f);
 		}
 
-		// Water-column depth terms from the opaque scene behind the surface.
-		float waterDepth = pixelDepth;
-		float depthDifference = (worldDepth - waterDepth);
-		float relativeDepth = worldDepth == -1.0f ? 1.0f : saturate(depthDifference / g_frustumDepths[3]);
+		// Water column (O4): METRES of water along the view path, from the
+		// opaque world position behind the surface. The legacy terms
+		// normalised the view-depth difference by the FAR PLANE, so every
+		// absorption knob was scene-scale dependent and the first metre of
+		// water - where all the shore detail lives - occupied a sliver of the
+		// parameter range.
+		const float3 scenePosWS = g_scenePositionTex.Sample(g_TexSamplerPoint, screenPos).xyz;
+		const float columnDepth = (worldDepth <= 0.0f)
+			? 500.0f
+			: max(distance(scenePosWS, input.positionWS.xyz), 0.0f);
 
 		const float fresnelPow = g_oceanConfig.fresnelPow;
-		const float shoreFadeStrength = g_oceanConfig.shoreFadeStrength;
 
-		float depthMultiplier = saturate(relativeDepth * g_frustumDepths[3]);
-		float transmission = exp(-relativeDepth * max(g_oceanConfig.fadeFactor, 0.001f));
+		// Beer-Lambert absorption per METRE. reflection_pad0 overrides when
+		// the scene sets it (> 0); the 0.18/m default reads as coastal sea.
+		const float absorbK = g_oceanConfig.reflection_pad0 > 0.0f ? g_oceanConfig.reflection_pad0 : 0.18f;
+		float transmission = exp(-columnDepth * absorbK);
 
-		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, saturate(1 - exp(-relativeDepth * g_oceanConfig.fadeFactor)));
+		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, saturate(1.0f - transmission));
 		float fresnel = 1 - pow(saturate(dot(eyeVector, originalWorldNormal)), fresnelPow);
-		float shoreFade = 1.0f - exp(-relativeDepth * shoreFadeStrength);
+		// Shore fade per metre: with the default strength 12 the waterline
+		// blends over the first ~25 cm of depth.
+		float shoreFade = 1.0f - exp(-columnDepth * g_oceanConfig.shoreFadeStrength);
 
 		float fadeFactor = saturate(fresnel * shoreFade);
+
+		// Procedural foam (O4): crest foam where the waves peak (VS crest
+		// interpolant) + a shore band where the column is centimetres deep.
+		// No foam textures exist in the project - two octaves of ValueNoise3
+		// shape both, advected slowly so the pattern churns. reflection_pad1
+		// scales overall coverage (> 0 to override).
+		float foam = 0.0f;
+		{
+			const float foamScale = g_oceanConfig.reflection_pad1 > 0.0f ? g_oceanConfig.reflection_pad1 : 1.0f;
+			const float3 np = float3(input.positionWS.x * 0.35f, g_time * 0.22f, input.positionWS.z * 0.35f);
+			const float n = ValueNoise3(np) * 0.65f + ValueNoise3(np * 3.1f) * 0.35f;
+
+			// Crests: noise-eroded threshold so foam forms in streaks and
+			// patches, not a uniform band along every wave.
+			const float crest = saturate(input.colour.x);
+			const float crestFoam = smoothstep(0.45f, 0.9f, crest * (0.55f + 0.65f * n));
+
+			// Shore: strongest at zero depth, gone by ~0.8 m, noise-broken.
+			const float shoreBand = saturate(1.0f - columnDepth / 0.8f);
+			const float shoreFoam = smoothstep(0.25f, 0.75f, shoreBand * (0.5f + 0.7f * n));
+
+			foam = saturate((crestFoam + shoreFoam) * foamScale);
+		}
 
 		float4 ambient = float4(g_atmosphere.ambientLight.rgb * fadeColour.rgb, 1.0f);
 		float4 diffuseColour = float4(fadeColour.rgb * lightIntensity, 1.0f);
@@ -470,11 +525,24 @@
 			// fade x artist strength; the sun glint ADDS on top (its GGX F
 			// term already carries its own Fresnel - the legacy code scaled
 			// the glint by reflectionStrength, which is why the boost
-			// constant existed).
+			// constant existed). Foam suppresses both - scattered white
+			// water is matte, not a mirror.
 			// NO saturate: linear HDR into an R16G16B16A16_FLOAT target.
 			const float reflectionStrength = g_oceanConfig.reflectionStrength;
-			retCol.xyz = lerp(retCol.xyz, reflection, reflectionStrength * fadeFactor * reflectionWeight);
-			retCol.xyz += specular.xyz;
+			retCol.xyz = lerp(retCol.xyz, reflection,
+				reflectionStrength * fadeFactor * reflectionWeight * (1.0f - foam));
+			retCol.xyz += specular.xyz * (1.0f - foam);
+		}
+
+		// Foam sits ON the surface: matte white water lit by ambient + sun
+		// diffuse (shadowed), replacing whatever is beneath it.
+		if (foam > 0.001f)
+		{
+			const float foamNdl = saturate(dot(worldNormal, lightDir));
+			const float3 foamLit = float3(0.86f, 0.88f, 0.90f)
+				* (g_atmosphere.ambientLight.rgb
+					+ getSunColour() * g_globalLight[0] * foamNdl * sunShadow);
+			retCol.xyz = lerp(retCol.xyz, foamLit, foam);
 		}
 
 		retCol.a = 1.0f;
