@@ -148,6 +148,10 @@
 	// Opaque gbuffer position: xyz = world position.
 	Texture2D g_scenePositionTex : register(t13);
 
+	// Sun cascade shadow maps - bound pass-wide for transparents at t15+
+	// (SceneRenderer::RenderTransparent), same slots DefaultPixel uses.
+	SHADOWMAPS_RESOURCE(15);
+
 	SamplerState g_TexSamplerAniso : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_TexSamplerPoint : register(s2);
@@ -389,7 +393,20 @@
 			worldDepth = normalAndDepth.w;
 		}
 
-		float lightIntensity = dot(worldNormal, lightDir) * g_globalLight[0];
+		// Sun cascade shadows (O2): water was never shadowed - a dock's shadow
+		// stopped dead at the waterline while the sea sparkled underneath it.
+		// Same cheap-PCF + gate as DefaultPixel's transparency path (the
+		// cascades + b2 caster constants are only valid when the pass bound
+		// them; g_taaParams.z carries that).
+		float sunShadow = 1.0f;
+		if (g_taaParams.z > 0.5f)
+		{
+			const float ndl = dot(worldNormal, normalize(g_shadowCasterLightDir.xyz));
+			const float shadowBias = g_shadowConfig.biasMultiplier * (1.0f - ndl);
+			sunShadow = CalculateShadowsCheapPCF(input.positionWS.xyz, g_cmpSampler, SHADOWMAPS, shadowBias);
+		}
+
+		float lightIntensity = dot(worldNormal, lightDir) * g_globalLight[0] * sunShadow;
 
 		if (lightIntensity > 0.0f)
 		{
@@ -411,8 +428,12 @@
 			const float G = geometricOcclusion(NdotL, NdotV, alphaRoughness);
 			const float D = microfacetDistribution(NdotH, alphaRoughness);
 			const float3 directSpecular = F * G * D / max(4.0f * NdotL * NdotV, 0.001f);
-			const float sunSpecularBoost = 5.75f;
-			specular = float4(ComputePhysicalSunColour(input.positionWS.xyz, lightDir) * (NdotL * directSpecular * sunSpecularBoost), 1.0f);
+			// Sun radiance in the same units the glass path uses
+			// (getSunColour() x g_globalLight[0], Frostbite convention) instead
+			// of the ad-hoc ComputePhysicalSunColour x5.75 boost that was
+			// compensating for the old LDR clamp. Shadowed like the body term.
+			specular = float4(getSunColour() * g_globalLight[0]
+				* (NdotL * directSpecular) * sunShadow, 1.0f);
 		}
 
 		// Water-column depth terms from the opaque scene behind the surface.
