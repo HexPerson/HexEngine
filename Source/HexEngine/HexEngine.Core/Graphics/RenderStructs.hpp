@@ -463,6 +463,13 @@ namespace HexEngine
 		// upload the same pair). Aliased g_timePrev / g_deltaTime in
 		// Global.shader.
 		math::Vector4 _timeParams2;
+
+		// Ocean tunables (water overhaul O8), all live cvars:
+		// x = r_oceanWaveScale (master Gerstner amplitude multiplier)
+		// y = r_oceanFoam (crest+shore foam coverage)
+		// z = r_oceanAbsorption (Beer-Lambert per metre)
+		// w = r_oceanBumpStrength (normal-map deflection)
+		math::Vector4 _oceanConfig2;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

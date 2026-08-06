@@ -285,6 +285,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// the displacement delta (correct TAA/DLSS motion vectors). See
 		// RenderStructs.hpp::_timeParams2.
 		float4 g_timeParams2;
+		// Ocean tunables (live cvars): x = r_oceanWaveScale, y = r_oceanFoam,
+		// z = r_oceanAbsorption (per metre), w = r_oceanBumpStrength.
+		float4 g_oceanConfig2;
 	};
 
 	#define g_timePrev  (g_timeParams2.x)

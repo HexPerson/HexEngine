@@ -48,7 +48,14 @@ namespace HexEngine
 	HVar env_volumetricPointInsideMax("env_volumetricPointInsideMax", "Point-light volumetric gain when camera is near light radius edge", 0.92f, 0.0f, 2.0f);
 	HVar env_volumetricSpotInsideMin("env_volumetricSpotInsideMin", "Spot-light volumetric gain when camera is at light center", 0.52f, 0.0f, 2.0f);
 	HVar env_volumetricSpotInsideMax("env_volumetricSpotInsideMax", "Spot-light volumetric gain when camera is near light radius edge", 0.88f, 0.0f, 2.0f);
-	HVar env_waterNormalInfluence("env_waterNormalInfluence", "The strength of the normal maps when rendering water", 0.4f, 0.0f, 4.0f);
+	// Ocean tunables (water overhaul O8) - uploaded as g_oceanConfig2, all
+	// live. The per-scene OceanSettings block keeps the authored knobs
+	// (colours, fresnel, shore fade, reflection); these are the global feel
+	// dials the rework added.
+	HVar r_oceanWaveScale("r_oceanWaveScale", "Master multiplier on the wind-driven Gerstner wave amplitude", 1.0f, 0.0f, 8.0f);
+	HVar r_oceanFoam("r_oceanFoam", "Ocean foam coverage multiplier (crest + shore)", 1.0f, 0.0f, 4.0f);
+	HVar r_oceanAbsorption("r_oceanAbsorption", "Water absorption per metre (Beer-Lambert; higher = murkier)", 0.18f, 0.005f, 4.0f);
+	HVar r_oceanBumpStrength("r_oceanBumpStrength", "Water normal-map deflection strength", 0.5f, 0.0f, 2.0f);
 	HVar env_volumetricStepIncrement("env_volumetricStepIncrement", "Global scale multiplier applied to adaptive volumetric ray-march step size", 1.0f, 0.1f, 100.0f);
 
 	// Point / spot light render caps. Sort by camera distance ascending and
@@ -139,7 +146,6 @@ namespace HexEngine
 	HVar r_shadowBiasMultiplier("r_shadowBiasMultiplier", "The bias multiplier to use when calculating normal offset", 0.0002f, 0.0f, 1.0f);
 	HVar r_shadowCascadeBlendRange("r_shadowCascadeBlendRange", "The distance to use for blending shadow cascades together", 10.0f, 1.0f, 1000.0f);
 	HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
-	HVar r_waterResolution("r_waterResolution", "The resolution multiplier at which to render water, a value of 1.0f is full resolution", 1.0f, 0.1f, 1.0f);
 	HVar r_bloomLuminanceThreshold("r_bloomLuminanceThreshold", "Reference luminance where physically-based bloom starts to respond strongly", 1.0f, 0.0f, 32.0f);
 	HVar r_bloomPhysicalIntensity("r_bloomPhysicalIntensity", "Strength multiplier for physically-based bloom", 0.35f, 0.0f, 8.0f);
 	HVar r_bloomPhysicalClamp("r_bloomPhysicalClamp", "Clamp physically-based bloom prefilter output (0 disables clamp)", 0.0f, 0.0f, 128.0f);
@@ -992,7 +998,6 @@ namespace HexEngine
 		SAFE_DELETE(_volumetricLightingBuffer);
 		SAFE_DELETE(_cloudsBuffer);
 		SAFE_DELETE(_atmosphereRT);
-		SAFE_DELETE(_waterAccumulationRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_particleRT);
 		SAFE_DELETE(_ssrDiffuseTexture);
@@ -1045,7 +1050,6 @@ namespace HexEngine
 		SAFE_DELETE(_volumetricLightingBuffer);
 		SAFE_DELETE(_cloudsBuffer);
 		SAFE_DELETE(_atmosphereRT);
-		SAFE_DELETE(_waterAccumulationRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_pointLightBuffer);
 		SAFE_DELETE(_particleRT);
@@ -1083,8 +1087,6 @@ namespace HexEngine
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
 
-		//SAFE_DELETE(_waterDSV);
-
 		//SAFE_DELETE(_volumetricBlur);
 		//SAFE_DELETE(_waterBlur);
 		//SAFE_DELETE(_blueNoise);
@@ -1121,7 +1123,6 @@ namespace HexEngine
 		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
 		_hdrOutputShader			= IShader::Create("EngineData.Shaders/TonemapHDR.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
-		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
 		_fullScreenQuadShader		= IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
 		_subsurfaceShader			= IShader::Create("EngineData.Shaders/SubsurfaceScattering.hcs");
 		_bokehDoFShader				= IShader::Create("EngineData.Shaders/BokehDoF.hcs");
@@ -1255,7 +1256,6 @@ namespace HexEngine
 		}
 
 		//_volumetricBlur = new BlurEffect(_volumetricLightingBuffer, BlurType::Gaussian, 2);
-		//_waterBlur = new BlurEffect(_waterAccumulationRT, BlurType::Gaussian, 2);
 
 		_blueNoise					= ITexture2D::Create("EngineData.Textures/LDR_RGBA_0.png");
 
@@ -1418,31 +1418,6 @@ namespace HexEngine
 			/*MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS :*/ D3D11_RTV_DIMENSION_TEXTURE2D,
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			/*MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS :*/ D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_waterAccumulationRT = g_pEnv->_graphicsDevice->CreateTexture2D(
-			(int32_t)((float)width * r_waterResolution._val.f32),
-			(int32_t)((float)height * r_waterResolution._val.f32),
-			DXGI_FORMAT_R8G8B8A8_UNORM,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		/*_waterDSV = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width * r_waterResolution._val.f32,
-			height * r_waterResolution._val.f32,
-			DXGI_FORMAT_R32_TYPELESS,
-			1,
-			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_DEPTH_STENCIL,
-			0, MsaaLevel, 0,
-			D3D11_RTV_DIMENSION_UNKNOWN,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			D3D11_SRV_DIMENSION_TEXTURE2D,
-			D3D11_DSV_DIMENSION_TEXTURE2D);*/
 
 		_fogBuffer = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
@@ -2682,6 +2657,12 @@ namespace HexEngine
 					_timePrevUploaded, _timeCurUploaded - _timePrevUploaded,
 					_windScrollAccum.x, _windScrollAccum.y);
 			}
+
+			bufferData._oceanConfig2 = math::Vector4(
+				r_oceanWaveScale._val.f32,
+				r_oceanFoam._val.f32,
+				r_oceanAbsorption._val.f32,
+				r_oceanBumpStrength._val.f32);
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 
 			bufferData._reflectionParams = math::Vector4(
@@ -3743,78 +3724,6 @@ namespace HexEngine
 		//
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::FrontFace);
 	}
-#if 0
-	void SceneRenderer::RenderWater()
-	{
-		PROFILE();
-
-		/// RENDER WATER
-		SceneRenderParameters params;
-		params.passIndex = 6;
-		params.camera = _currentCamera;
-		params.isShadowPass = false;
-
-		const auto& bbvp = g_pEnv->_graphicsDevice->GetBackBufferViewport();
-
-		// set the shadow viewport
-		//
-		D3D11_VIEWPORT vp;
-		vp.TopLeftX = 0;
-		vp.TopLeftY = 0;
-		vp.Width = bbvp.Width * r_waterResolution._val.f32;
-		vp.Height = bbvp.Height * r_waterResolution._val.f32;
-		vp.MinDepth = 0.0f;
-		vp.MaxDepth = 1.0f;
-		g_pEnv->_graphicsDevice->SetViewports({ vp });
-
-		auto guiRenderer = g_pEnv->_uiManager->GetRenderer();
-		
-
-		g_pEnv->_graphicsDevice->SetRenderTarget(_waterAccumulationRT, g_pEnv->_graphicsDevice->GetDepthStencil()/*_waterDSV*/);
-		_waterAccumulationRT->ClearRenderTargetView(math::Color(0, 0, 0, 0));
-		//_waterDSV->ClearDepth(D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL);
-
-		g_pEnv->_graphicsDevice->EnableDepthBuffer(true);
-
-		//guiRenderer->StartFrame();
-
-		//guiRenderer->FullScreenTexturedQuad(_gbuffer.GetDiffuse());
-
-		if (_currentCamera->GetEntity()->GetPosition().y < 0.0f)
-			g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::FrontFace);
-		else
-			g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
-
-		
-		//_gbuffer.GetDiffuse()->CopyTo(_waterAccumulationRT);
-
-		_currentScene->RenderWater(params, false, nullptr);
-
-		//_waterAccumulationRT->CopyTo(_compositionRT);
-		//_waterAccumulationRT->CopyTo(_gbuffer.GetDiffuse());
-
-		
-
-		guiRenderer->StartFrame();
-
-		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
-		//_waterBlur->Render(guiRenderer);
-
-		g_pEnv->_graphicsDevice->SetViewports({ bbvp });
-
-		
-
-		g_pEnv->_graphicsDevice->SetRenderTarget(_compositionRT);
-		guiRenderer->FullScreenTexturedQuad(_waterAccumulationRT);
-
-		g_pEnv->_graphicsDevice->SetRenderTarget(_gbuffer.GetDiffuse());
-		guiRenderer->FullScreenTexturedQuad(_waterAccumulationRT);
-
-		guiRenderer->EndFrame();
-
-		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
-	}
-#endif
 
 	inline void matrixOrthoNormalInvert(math::Matrix& result, const math::Matrix& mat)
 	{

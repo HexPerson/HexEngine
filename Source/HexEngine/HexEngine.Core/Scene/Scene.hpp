@@ -130,7 +130,6 @@ namespace HexEngine
 
 		void OnGUI();
 
-		//void RenderWater(const SceneRenderParameters& params, bool maskPass, ITexture2D* maskTexture);
 
 		//void RenderTransparent(const SceneRenderParameters& params);
 

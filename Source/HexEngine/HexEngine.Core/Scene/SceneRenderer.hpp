@@ -70,7 +70,6 @@ namespace HexEngine
 		void RenderShadowFaceToAtlas(const ShadowAtlas::FaceAssignment& assignment);
 
 		void RenderOpaque();
-		//void RenderWater();
 		void RenderTransparent();
 		void RenderPostProcessing(SceneFlags flags);
 		void CollectShadowCasters();
@@ -205,9 +204,7 @@ namespace HexEngine
 		ITexture2D* _beautyRT = nullptr;
 		ITexture2D* _shadowMapsRT = nullptr;
 		ITexture2D* _shadowMapsAccumulator = nullptr;
-		ITexture2D* _waterAccumulationRT = nullptr;
 		ITexture2D* _particleRT = nullptr;
-		//ITexture2D* _waterDSV = nullptr;
 		ITexture2D* _fogBuffer = nullptr;
 		ITexture2D* _volumetricLightingBuffer = nullptr;
 		ITexture2D* _cloudsBuffer = nullptr;
@@ -238,7 +235,6 @@ namespace HexEngine
 		std::shared_ptr<IShader> _volumetricLighting;
 		std::shared_ptr<IShader> _volumetricClouds;
 		std::shared_ptr<IShader> _ssrResolve;
-		std::shared_ptr<IShader> _waterBlitEffect;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
 
 		// IBL: prefiltered sky environment. Octahedral roughness atlas

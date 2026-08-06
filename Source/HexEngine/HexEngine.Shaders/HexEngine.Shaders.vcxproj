@@ -369,7 +369,6 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="Water.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
-    <None Include="WaterMask.shader" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\HexEngine.ShaderCompiler\HexEngine.ShaderCompiler.vcxproj">

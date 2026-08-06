@@ -129,7 +129,9 @@
 		// transitions (same phase-jump class as the scroll bug below).
 		const float windSpeed = g_weatherSurface.windDirectionAndSpeed.w;
 		const float windNorm = saturate(windSpeed / 30.0f);
-		const float ampScale = 0.18f + 3.8f * pow(windNorm, 1.5f);
+		// r_oceanWaveScale = live master amplitude dial on top of the wind
+		// response ("somewhat undertuned" - tune it in-session).
+		const float ampScale = (0.18f + 3.8f * pow(windNorm, 1.5f)) * g_oceanConfig2.x;
 		// Direction alignment kept moderate: d feeds the phase term too, so
 		// large alignment swings slide the whole sea during transitions.
 		const float windAlign = 0.4f * windNorm;
@@ -416,7 +418,8 @@
 		// Gerstner normal; per-texel detail at the horizon just aliases).
 		if (distantNormalFade > 0.001f)
 		{
-			float3 bumpNormal = ANM(worldNormal, input.tangent, input.binormal, g_normalMap, g_TexSamplerAniso, input.texcoord, 0.5f);
+			// r_oceanBumpStrength: live normal-map deflection dial.
+			float3 bumpNormal = ANM(worldNormal, input.tangent, input.binormal, g_normalMap, g_TexSamplerAniso, input.texcoord, g_oceanConfig2.w);
 			bumpNormal = normalize(lerp(input.normal.xyz, bumpNormal, distantNormalFade));
 
 			refractionNormal = bumpNormal;
@@ -511,9 +514,9 @@
 
 		const float fresnelPow = g_oceanConfig.fresnelPow;
 
-		// Beer-Lambert absorption per METRE. reflection_pad0 overrides when
-		// the scene sets it (> 0); the 0.18/m default reads as coastal sea.
-		const float absorbK = g_oceanConfig.reflection_pad0 > 0.0f ? g_oceanConfig.reflection_pad0 : 0.18f;
+		// Beer-Lambert absorption per METRE. reflection_pad0 (per-scene)
+		// overrides when set (> 0); otherwise the live r_oceanAbsorption cvar.
+		const float absorbK = g_oceanConfig.reflection_pad0 > 0.0f ? g_oceanConfig.reflection_pad0 : max(g_oceanConfig2.z, 0.005f);
 		float transmission = exp(-columnDepth * absorbK);
 
 		// CONTROL SEPARATION (user-clarified semantics):
@@ -539,7 +542,8 @@
 		// scales overall coverage (> 0 to override).
 		float foam = 0.0f;
 		{
-			const float foamScale = g_oceanConfig.reflection_pad1 > 0.0f ? g_oceanConfig.reflection_pad1 : 1.0f;
+			// Per-scene pad overrides when set; otherwise the live r_oceanFoam cvar.
+			const float foamScale = g_oceanConfig.reflection_pad1 > 0.0f ? g_oceanConfig.reflection_pad1 : g_oceanConfig2.y;
 			// SLOW noise churn. The first version advected at 0.22 and put a
 			// hard smoothstep threshold on the crest factor - which
 			// oscillates at wave-phase speed - so foam snapped on/off as each
