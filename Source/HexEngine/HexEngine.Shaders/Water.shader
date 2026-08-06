@@ -201,6 +201,12 @@
 		const float distFromEye = length(g_eyePos.xyz - surfaceWorldPos);
 		const float strideWorld = kStrideWorld * max(0.5f, distFromEye * 0.08f);
 
+		// The acceptance window must scale WITH the stride: a fixed 0.6 m
+		// window under a ~1 m distant stride steps clean over thin geometry,
+		// so one pixel hits (dark cliff) and its neighbour misses (bright
+		// env) - the per-pixel speckle in distant reflections.
+		const float thickness = max(kThicknessWorld, strideWorld * 1.5f);
+
 		float3 rayPos = surfaceWorldPos + reflectDirWorld * (strideWorld * 0.5f);
 
 		[loop]
@@ -228,7 +234,7 @@
 				continue;
 
 			const float dz = rayViewZ - sceneViewZ;
-			if (dz > 0.0f && dz < kThicknessWorld)
+			if (dz > 0.0f && dz < thickness)
 			{
 				reflectedColour = g_sceneColourTex.SampleLevel(g_TexSamplerPoint, uv, 0).rgb;
 				// Fade out near screen edges to hide the missing-data band.
@@ -506,9 +512,10 @@
 			// far smoother surface than shading does (per-texel bump scatter
 			// sends adjacent SSR rays to unrelated targets and shreds the
 			// reflection - the deferred SSR's puddle-flatten exists for the
-			// same reason). 0.35 bump influence matches the sun-glint's
-			// specularNormal blend.
-			float3 reflectionNormal = normalize(lerp(originalWorldNormal, worldNormal, 0.35f));
+			// same reason). 0.35 bump influence near the camera, fading to
+			// PURE Gerstner with distance: far pixels cover many bump texels,
+			// so any bump residue there is per-pixel ray divergence = noise.
+			float3 reflectionNormal = normalize(lerp(originalWorldNormal, worldNormal, 0.35f * distantNormalFade));
 
 			if (g_eyePos.y <= 0.0f)
 				reflectionNormal *= -1.0f;
