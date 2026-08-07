@@ -719,7 +719,43 @@ namespace HexEngine
 		if (_material != nullptr)
 			_material->IncrementEditorOpenCount();
 
-		EnsureGraphExists();
+		// INSTANCE MODE: a graph-instance material owns no graph of its own -
+		// it references a parent graph material and stores parameter
+		// overrides. Display the PARENT's graph via a local copy (never
+		// saved) and restrict persistent edits to the override set. This must
+		// be decided BEFORE EnsureGraphExists, which would otherwise see
+		// !_hasGraph and "promote" the instance to a flattened standard graph
+		// - corrupting it.
+		if (_material != nullptr && _material->_hasGraphInstance && !_material->_hasGraph)
+		{
+			auto parent = Material::Create(_material->_graphInstance.parentMaterialPath);
+			if (parent != nullptr && parent->_hasGraph)
+			{
+				_parentMaterial = parent;
+				_instanceViewGraph = parent->_graph;
+				_instanceMode = true;
+
+				// Show the instance's current override values on the parameter
+				// nodes so the canvas reflects THIS instance, not the parent
+				// defaults.
+				for (const auto& ov : _material->_graphInstance.overrides)
+				{
+					for (auto& node : _instanceViewGraph.nodes)
+					{
+						if (node.parameterName == ov.name)
+						{
+							node.scalarValue = ov.scalarValue;
+							node.vectorValue = ov.vectorValue;
+							if (!ov.texturePath.empty())
+								node.texturePath = ov.texturePath;
+						}
+					}
+				}
+			}
+		}
+
+		if (!_instanceMode)
+			EnsureGraphExists();
 
 		const int32_t topOffset = _embeddedMode ? 8 : 36;
 		const int32_t graphTop = _embeddedMode ? 34 : 62;
@@ -732,7 +768,8 @@ namespace HexEngine
 		new Button(this, Point(size.x - 200, topOffset - 2), Point(90, 24), L"Compile", [this](Button*) { return CompileOnly(); });
 		new Button(this, Point(size.x - 104, topOffset - 2), Point(90, 24), L"Apply", [this](Button*) { return SaveAndApply(); });
 
-		_canvas = new MaterialGraphCanvasImpl(this, Point(10, graphTop), Point((size.x * 70) / 100 - 20, size.y - graphTop - 10), this, &_material->_graph);
+		_canvas = new MaterialGraphCanvasImpl(this, Point(10, graphTop), Point((size.x * 70) / 100 - 20, size.y - graphTop - 10), this,
+			_instanceMode ? &_instanceViewGraph : &_material->_graph);
 
 		_properties = new ComponentWidget(this, Point((size.x * 70) / 100 + 10, graphTop), Point(size.x - ((size.x * 70) / 100) - 20, size.y - graphTop - 10), L"Node Properties");
 
@@ -752,6 +789,10 @@ namespace HexEngine
 		_parameterName = new LineEdit(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 20), L"Parameter Name");
 		_parameterName->SetOnInputFn([this](LineEdit*, const std::wstring& value)
 		{
+			// Parameter NAMES belong to the parent graph - renaming from an
+			// instance would silently orphan every sibling instance's override.
+			if (_instanceMode)
+				return;
 			if (auto* node = GetSelectedNode(); node != nullptr)
 			{
 				node->parameterName = ws2s(value);
@@ -766,6 +807,7 @@ namespace HexEngine
 			if (auto* node = GetSelectedNode(); node != nullptr)
 			{
 				node->scalarValue = value;
+				WriteInstanceOverrideFromNode(*node);
 				MarkDirty();
 			}
 		});
@@ -789,6 +831,7 @@ namespace HexEngine
 				if (auto* node = GetSelectedNode(); node != nullptr)
 				{
 					node->vectorValue = math::Vector4(_vectorValue[0], _vectorValue[1], _vectorValue[2], _vectorValue[3]);
+					WriteInstanceOverrideFromNode(*node);
 					MarkDirty();
 				}
 			});
@@ -806,6 +849,7 @@ namespace HexEngine
 				{
 					const fs::path path = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
 					node->texturePath = path;
+					WriteInstanceOverrideFromNode(*node);
 					MarkDirty();
 				}
 			});
@@ -1115,9 +1159,15 @@ namespace HexEngine
 
 		if (!_material->_hasGraph)
 		{
+			// Graph-only authoring policy: legacy standard materials are
+			// promoted to graphs ON OPEN, seeded from their scalars + bound
+			// textures so they render identically - and SAVED immediately so
+			// the promotion sticks without requiring an explicit Apply.
+			// (Instances never reach here - the constructor routes them into
+			// instance mode before calling this.)
 			_material->_graph = MaterialGraph::CreateFromStandardMaterial(*_material);
 			_material->_hasGraph = true;
-			_isDirty = true;
+			_material->Save();
 		}
 		else if (_material->_graph.nodes.empty())
 		{
@@ -1238,10 +1288,60 @@ namespace HexEngine
 
 	MaterialGraphNode* MaterialGraphDialog::GetSelectedNode()
 	{
-		if (_material == nullptr || !_material->_hasGraph)
+		if (_material == nullptr)
+			return nullptr;
+
+		// Instance mode edits the local parent-graph copy (only parameter
+		// overrides persist - see WriteInstanceOverrideFromNode).
+		if (_instanceMode)
+			return _instanceViewGraph.FindNode(_selectedNodeId);
+
+		if (!_material->_hasGraph)
 			return nullptr;
 
 		return _material->_graph.FindNode(_selectedNodeId);
+	}
+
+	void MaterialGraphDialog::WriteInstanceOverrideFromNode(const MaterialGraphNode& node)
+	{
+		if (!_instanceMode || _material == nullptr || node.parameterName.empty())
+			return;
+
+		const bool isParameterNode =
+			node.nodeType == MaterialGraphNodeType::ScalarParameter ||
+			node.nodeType == MaterialGraphNodeType::VectorParameter ||
+			node.nodeType == MaterialGraphNodeType::TextureParameter;
+		if (!isParameterNode)
+			return;
+
+		auto& overrides = _material->_graphInstance.overrides;
+		auto it = std::find_if(overrides.begin(), overrides.end(),
+			[&node](const MaterialGraphParameterOverride& o) { return o.name == node.parameterName; });
+		if (it == overrides.end())
+		{
+			overrides.emplace_back();
+			it = std::prev(overrides.end());
+			it->name = node.parameterName;
+		}
+
+		// Same node-type -> value-type mapping as SyncParameterDefinition.
+		switch (node.nodeType)
+		{
+		case MaterialGraphNodeType::ScalarParameter:
+			it->valueType = MaterialGraphValueType::Scalar;
+			it->scalarValue = node.scalarValue;
+			break;
+		case MaterialGraphNodeType::VectorParameter:
+			it->valueType = MaterialGraphValueType::Vector4;
+			it->vectorValue = node.vectorValue;
+			break;
+		case MaterialGraphNodeType::TextureParameter:
+			it->valueType = MaterialGraphValueType::Texture2D;
+			it->texturePath = node.texturePath;
+			break;
+		default:
+			break;
+		}
 	}
 
 	void MaterialGraphDialog::OnNodeSelectionChanged(const std::string& nodeId)
@@ -1395,9 +1495,13 @@ namespace HexEngine
 				}
 			}
 		}
-		const auto setPbrEnabled = [isPbrOutputNode](Element* e) {
+		// PBR-output widgets stay disabled in instance mode: those properties
+		// belong to the parent graph (editing them here would only churn the
+		// local view copy and never persist).
+		const bool pbrEditable = isPbrOutputNode && !_instanceMode;
+		const auto setPbrEnabled = [pbrEditable](Element* e) {
 			if (e == nullptr) return;
-			if (isPbrOutputNode) e->EnableRecursive(); else e->DisableRecursive();
+			if (pbrEditable) e->EnableRecursive(); else e->DisableRecursive();
 		};
 		setPbrEnabled(_pbrTransparencyToggle);
 		setPbrEnabled(_pbrAffectsGiToggle);
@@ -1509,7 +1613,36 @@ namespace HexEngine
 
 	bool MaterialGraphDialog::CompileOnly()
 	{
-		if (_material == nullptr || !_material->_hasGraph)
+		if (_material == nullptr)
+			return false;
+
+		// Instance mode: full recompile of the PARENT graph with this
+		// instance's overrides baked in, targeting the INSTANCE material (it
+		// gets its own generated shader). This is the correct path for scalar
+		// and vector overrides too - the loader's ApplyInstanceToMaterial only
+		// hot-applies texture overrides.
+		if (_instanceMode)
+		{
+			const auto compileResult = MaterialGraphCompiler::CompileToMaterial(
+				_instanceViewGraph, *_material, &_material->_graphInstance.overrides);
+			UpdateCompileMessages(compileResult);
+			if (!compileResult.success)
+			{
+				std::wstring message = L"Compile failed: ";
+				for (size_t i = 0; i < compileResult.errors.size(); ++i)
+				{
+					if (i > 0) message += L" | ";
+					message += s2ws(compileResult.errors[i]);
+				}
+				SetStatusText(message, true);
+				FocusFirstErrorNode(compileResult);
+				return false;
+			}
+			SetStatusText(L"Instance compile succeeded.", false);
+			return true;
+		}
+
+		if (!_material->_hasGraph)
 			return false;
 
 		SyncGraphParametersFromNodes();
@@ -1544,10 +1677,20 @@ namespace HexEngine
 		if (!CompileOnly())
 			return false;
 
-		_material->_hasGraph = true;
+		// An instance must stay an instance on disk: only the override set is
+		// authored here; the graph belongs to the parent.
+		if (_instanceMode)
+		{
+			_material->_hasGraph = false;
+			_material->_hasGraphInstance = true;
+		}
+		else
+		{
+			_material->_hasGraph = true;
+		}
 		_material->Save();
 		_isDirty = false;
-		SetStatusText(L"Saved and applied.", false);
+		SetStatusText(_instanceMode ? L"Instance saved and applied." : L"Saved and applied.", false);
 		return true;
 	}
 }

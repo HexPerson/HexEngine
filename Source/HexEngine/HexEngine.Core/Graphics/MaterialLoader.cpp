@@ -534,27 +534,20 @@ namespace HexEngine
 
 		if (mat)
 		{
-			if (mat->_hasGraph)
-			{
-				MaterialGraphDialog* graphDialog = new MaterialGraphDialog(
-					g_pEnv->GetUIManager().GetRootElement(),
-					Point(cx - dlgW / 2, cy - dlgH / 2),
-					Point(dlgW, dlgH),
-					std::format(L"Editing Material Graph '{}'", paths[0].filename().wstring()),
-					mat);
-				return graphDialog;
-			}
-			else
-			{
-				MaterialDialog* dlg = new MaterialDialog(
-					g_pEnv->GetUIManager().GetRootElement(),
-					Point(cx - dlgW / 2, cy - dlgH / 2),
-					Point(dlgW, dlgH),
-					std::format(L"Editing Material '{}'", paths[0].filename().wstring()),
-					mat);
-
-				return dlg;
-			}
+			// Graph-only authoring policy: EVERY material opens in the graph
+			// editor. Legacy standard materials are auto-promoted (and saved)
+			// by the dialog's EnsureGraphExists; graph instances open in the
+			// dialog's instance mode (parent graph displayed, only parameter
+			// overrides editable). The legacy MaterialDialog is retired from
+			// the open path.
+			const wchar_t* kind = mat->_hasGraphInstance ? L"Material Instance" : L"Material Graph";
+			MaterialGraphDialog* graphDialog = new MaterialGraphDialog(
+				g_pEnv->GetUIManager().GetRootElement(),
+				Point(cx - dlgW / 2, cy - dlgH / 2),
+				Point(dlgW, dlgH),
+				std::format(L"Editing {} '{}'", kind, paths[0].filename().wstring()),
+				mat);
+			return graphDialog;
 		}
 
 		return nullptr;

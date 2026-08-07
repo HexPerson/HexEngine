@@ -75,12 +75,18 @@ namespace HexEditor
 			if (g_pUIManager == nullptr || g_pUIManager->GetSceneView() == nullptr)
 				return false;
 
+			// Graph-only authoring policy: EVERY .hmat opens here. Legacy
+			// standard materials are auto-promoted (and saved) by the graph
+			// dialog's EnsureGraphExists; graph instances open in the
+			// dialog's instance mode. The legacy MaterialDialog no longer
+			// participates.
 			auto material = HexEngine::Material::Create(materialPath);
-			if (material == nullptr || !material->_hasGraph)
+			if (material == nullptr)
 				return false;
 
 			auto* sceneView = g_pUIManager->GetSceneView();
-			auto* tab = sceneView->AddWorkspaceTab(std::format(L"Material: {}", materialPath.stem().wstring()));
+			const wchar_t* kind = material->_hasGraphInstance ? L"Instance" : L"Material";
+			auto* tab = sceneView->AddWorkspaceTab(std::format(L"{}: {}", kind, materialPath.stem().wstring()));
 			if (tab == nullptr)
 				return false;
 

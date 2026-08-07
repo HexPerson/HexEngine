@@ -36,8 +36,19 @@ namespace HexEngine
 		void SyncGraphParametersFromNodes();
 		void UpdateCompileMessages(const MaterialGraphCompileResult& compileResult);
 		void FocusFirstErrorNode(const MaterialGraphCompileResult& compileResult);
+		// Instance mode: upsert the override entry for a parameter node's
+		// edited value into _material->_graphInstance.overrides.
+		void WriteInstanceOverrideFromNode(const MaterialGraphNode& node);
 	private:
 		std::shared_ptr<Material> _material;
+		// INSTANCE MODE (graph-instance materials): the dialog displays the
+		// PARENT's graph via a local copy (_instanceViewGraph - never saved)
+		// and persists ONLY parameter overrides into the instance. Decided in
+		// the constructor BEFORE EnsureGraphExists, which would otherwise
+		// flatten the instance into a standard graph and corrupt it.
+		bool _instanceMode = false;
+		std::shared_ptr<Material> _parentMaterial;
+		MaterialGraph _instanceViewGraph;
 		Element* _canvas = nullptr;
 		ComponentWidget* _properties = nullptr;
 		LineEdit* _parameterName = nullptr;
