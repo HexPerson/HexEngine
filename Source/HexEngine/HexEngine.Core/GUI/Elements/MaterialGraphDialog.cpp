@@ -1336,6 +1336,64 @@ namespace HexEngine
 			if (_pbrWindSwayBendDrag)    _pbrWindSwayBendDrag->SetValue(std::format(L"{:.2f}", _pbrWindSwayBend));
 			if (_pbrWindSwayFlutterDrag) _pbrWindSwayFlutterDrag->SetValue(std::format(L"{:.2f}", _pbrWindSwayFlutter));
 			if (_pbrWindSwayHeightDrag)  _pbrWindSwayHeightDrag->SetValue(std::format(L"{:.1f}", _pbrWindSwayHeight));
+
+			// Dropdowns: push the node's STORED values into the displayed text.
+			// The write path (context-menu callbacks) was always wired, but the
+			// read path never was, so all five rendered blank regardless of
+			// what the node held - the "properties don't deserialize" report
+			// (the JSON round-trips fine; the panel just never showed it).
+			// Labels must match the ContextItem strings above.
+			if (_pbrShadingModelDrop)
+			{
+				static const wchar_t* kModelNames[] = {
+					L"Standard PBR", L"Subsurface (SSS)", L"Clearcoat",
+					L"Anisotropic", L"Sheen / Cloth" };
+				const int32_t m = std::clamp(p.materialModel, 0, 4);
+				_pbrShadingModelDrop->SetValue(kModelNames[m]);
+			}
+			if (_pbrDepthStateDrop)
+			{
+				switch (p.depthState)
+				{
+				case DepthBufferState::DepthNone:         _pbrDepthStateDrop->SetValue(L"None"); break;
+				case DepthBufferState::DepthRead:         _pbrDepthStateDrop->SetValue(L"Read"); break;
+				case DepthBufferState::DepthReverseZ:     _pbrDepthStateDrop->SetValue(L"Reverse-Z"); break;
+				case DepthBufferState::DepthReadReverseZ: _pbrDepthStateDrop->SetValue(L"Read Reverse-Z"); break;
+				case DepthBufferState::DepthDefault:
+				default:                                  _pbrDepthStateDrop->SetValue(L"Default"); break;
+				}
+			}
+			if (_pbrBlendStateDrop)
+			{
+				switch (p.blendState)
+				{
+				case BlendState::Additive:     _pbrBlendStateDrop->SetValue(L"Additive"); break;
+				case BlendState::Subtractive:  _pbrBlendStateDrop->SetValue(L"Subtractive"); break;
+				case BlendState::Transparency: _pbrBlendStateDrop->SetValue(L"Transparency"); break;
+				case BlendState::Opaque:
+				default:                       _pbrBlendStateDrop->SetValue(L"Opaque"); break;
+				}
+			}
+			if (_pbrCullModeDrop)
+			{
+				switch (p.cullMode)
+				{
+				case CullingMode::NoCulling:  _pbrCullModeDrop->SetValue(L"None"); break;
+				case CullingMode::FrontFace:  _pbrCullModeDrop->SetValue(L"Front Face"); break;
+				case CullingMode::BackFace:
+				default:                      _pbrCullModeDrop->SetValue(L"Back Face"); break;
+				}
+			}
+			if (_pbrFormatDrop)
+			{
+				switch (p.materialFormat)
+				{
+				case MaterialFormat::ORM:  _pbrFormatDrop->SetValue(L"ORM"); break;
+				case MaterialFormat::RMA:  _pbrFormatDrop->SetValue(L"RMA"); break;
+				case MaterialFormat::None:
+				default:                   _pbrFormatDrop->SetValue(L"None"); break;
+				}
+			}
 		}
 		const auto setPbrEnabled = [isPbrOutputNode](Element* e) {
 			if (e == nullptr) return;
