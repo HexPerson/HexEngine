@@ -38,6 +38,11 @@ namespace HexEditor
 		void CreateNewMaterial(const fs::path& baseDir);
 		void CreateNewMaterialGraph(const fs::path& baseDir);
 		void CreateNewMaterialInstance(const fs::path& baseDir);
+		// Creation body with an EXPLICIT parent graph material - the
+		// right-click-a-material context item uses this; the parameterless
+		// flow above only serves the empty-space "Create new..." menu (and
+		// falls back to the first graph material in the view).
+		void CreateNewMaterialInstanceFrom(const fs::path& parentGraphPath, const fs::path& baseDir);
 		// In-place "Convert to material graph": loads the standard .hmat at
 		// targetPath, seeds a graph that mirrors its textures + scalar properties
 		// (via MaterialGraph::CreateFromStandardMaterial), flips _hasGraph to true,

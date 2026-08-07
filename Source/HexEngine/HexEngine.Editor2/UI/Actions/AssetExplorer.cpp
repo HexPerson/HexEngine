@@ -951,13 +951,16 @@ namespace HexEditor
 
 	void AssetExplorer::CreateNewMaterialInstance(const fs::path& baseDir)
 	{
-		if (_currentlyBrowsedFS == nullptr)
-			return;
-
+		// Empty-space "Create new..." path: no explicit parent, so pick the
+		// first graph material in the current view. (The selection scan this
+		// used to lead with could never match - this item only appears in the
+		// zero-selection context menu, and right-clicking an asset selects
+		// it. The right-click-a-material flow passes its parent explicitly
+		// via CreateNewMaterialInstanceFrom instead.)
 		fs::path parentGraphPath;
 		for (const auto& asset : _assetsInView)
 		{
-			if (!asset.selected || asset.path.extension() != ".hmat")
+			if (asset.path.extension() != ".hmat")
 				continue;
 
 			auto parent = HexEngine::Material::Create(asset.path);
@@ -968,22 +971,13 @@ namespace HexEditor
 			}
 		}
 
-		if (parentGraphPath.empty())
-		{
-			// Fallback: first graph material in the view.
-			for (const auto& asset : _assetsInView)
-			{
-				if (asset.path.extension() != ".hmat")
-					continue;
+		CreateNewMaterialInstanceFrom(parentGraphPath, baseDir);
+	}
 
-				auto parent = HexEngine::Material::Create(asset.path);
-				if (parent != nullptr && parent->_hasGraph)
-				{
-					parentGraphPath = parent->GetFileSystemPath();
-					break;
-				}
-			}
-		}
+	void AssetExplorer::CreateNewMaterialInstanceFrom(const fs::path& parentGraphPath, const fs::path& baseDir)
+	{
+		if (_currentlyBrowsedFS == nullptr)
+			return;
 
 		if (parentGraphPath.empty())
 		{
@@ -1762,6 +1756,25 @@ namespace HexEditor
 								[this, targetPath](const std::wstring&)
 								{
 									ConvertStandardMaterialToGraph(targetPath);
+								}));
+						}
+
+						// "Create material instance": the right-click-a-material flow.
+						// (The old "Create new... > Material Instance" item lived only
+						// in the ZERO-selection menu, while the creation code led with
+						// a scan for a SELECTED material - a contradiction, since
+						// right-clicking an asset selects it. The parent is passed
+						// explicitly here.) Graph materials only: an instance
+						// overrides a parent graph's exposed parameters, so a
+						// standard .hmat must be converted to a graph first (the
+						// item above).
+						if (candidateMaterial != nullptr && candidateMaterial->_hasGraph)
+						{
+							const fs::path parentPath = candidateMaterial->GetFileSystemPath();
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Create material instance",
+								[this, parentPath](const std::wstring&)
+								{
+									CreateNewMaterialInstanceFrom(parentPath, _currentlyBrowsedFolder);
 								}));
 						}
 					}
