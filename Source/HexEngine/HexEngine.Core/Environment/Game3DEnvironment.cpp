@@ -742,11 +742,8 @@ namespace HexEngine
 
 						if (!_inEditorMode && !confineGameUi)
 						{
-							auto presentShader = (IShader*)nullptr;
-							if (auto backBuffer = _graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
-							{
-								presentShader = _hdrPresentShader.get();
-							}
+							auto presentShader = _graphicsDevice->IsHdrOutput()
+								? _hdrPresentShader.get() : (IShader*)nullptr;
 
 							_uiManager->GetRenderer()->FullScreenTexturedQuad(_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget(), presentShader);
 						}

@@ -139,7 +139,9 @@ namespace HexEngine
 		// reflect post-tonemap colour - matters because pre-tonemap HDR
 		// highlights would saturate the gathered buckets and lose the "ball"
 		// shape on bright sources. Gated by r_dof.
-		void RenderBokehDoF();
+		// Ping-pong leg of RenderOverlays: reads src, writes dst; returns
+		// true when the pass ran (caller swaps).
+		bool RenderBokehDoF(ITexture2D* srcTex, ITexture2D* dstTex);
 		// Deferred decal pass. Runs after the GBuffer opaque fill and before the
 		// beauty copy / lighting pass so subsequent shading sees the decal-modified
 		// surface (puddles get smooth roughness fed into lighting + reflections,

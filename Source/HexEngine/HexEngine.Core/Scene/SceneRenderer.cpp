@@ -4206,11 +4206,8 @@ namespace HexEngine
 			}
 			else
 			{
-				auto outputShader = _tonemapShader.get();
-				if (auto backBuffer = g_pEnv->_graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
-				{
-					outputShader = _hdrOutputShader.get();
-				}
+				auto outputShader = g_pEnv->_graphicsDevice->IsHdrOutput()
+					? _hdrOutputShader.get() : _tonemapShader.get();
 
 				g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
 				g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
@@ -4242,29 +4239,42 @@ namespace HexEngine
 		{
 			guiRenderer->StartFrame();
 
-			auto outputShader = _tonemapShader.get();
-			if (auto backBuffer = g_pEnv->_graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
+			auto outputShader = g_pEnv->_graphicsDevice->IsHdrOutput()
+				? _hdrOutputShader.get() : _tonemapShader.get();
+
+			// PING-PONG (Phase 4 slice 1). The chain used to draw every pass
+			// into the camera RT and then CopyResource the result back into
+			// beauty - 3-6 full-res copies per frame. The two buffers are the
+			// same size and format on both paths (beauty = _beautyRT or
+			// _dlssTarget, renderTarget = the camera RT, all
+			// GetDesiredBackBufferFormat), so alternate them instead: each
+			// enabled pass reads src, writes dst, swap. One parity copy at
+			// most before the display-output pass, which must land in the
+			// camera RT for the debug overlays + final present blit.
+			ITexture2D* src = beauty;
+			ITexture2D* dst = renderTarget;
+			const auto runPass = [&](IShader* shader)
 			{
-				outputShader = _hdrOutputShader.get();
-			}
+				g_pEnv->_graphicsDevice->SetRenderTarget(dst);
+				guiRenderer->FullScreenTexturedQuad(src, shader);
+				std::swap(src, dst);
+			};
 
 			// Bokeh DoF runs FIRST in the overlay chain so it gathers
 			// pre-tonemap linear HDR colour. The "big bright bokeh ball" look
 			// depends on this - sampling post-tonemap colour clamps bright
 			// highlights to roughly 1.0 and squashes the disc shape on the
 			// brightest sources (the most visually distinctive bokeh pixels).
-			// Internally this swaps beauty <-> _subsurfaceIntermediateRT, which
-			// SSS has already finished using by this point.
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Bokeh DoF");
 			{
-				RenderBokehDoF();
+				if (RenderBokehDoF(src, dst))
+					std::swap(src, dst);
 			}
 			GFX_PERF_END();
 
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Colour grading");
 			{
-				guiRenderer->FullScreenTexturedQuad(beauty, _colourGradingShader.get());
-				renderTarget->CopyTo(beauty);
+				runPass(_colourGradingShader.get());
 			}
 			GFX_PERF_END();
 
@@ -4278,16 +4288,14 @@ namespace HexEngine
 			{
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"Lens drips");
 				{
-					guiRenderer->FullScreenTexturedQuad(beauty, _lensDripsShader.get());
-					renderTarget->CopyTo(beauty);
+					runPass(_lensDripsShader.get());
 				}
 				GFX_PERF_END();
 			}
 
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Vignette");
 			{
-				guiRenderer->FullScreenTexturedQuad(beauty, _vignetteShader.get());
-				renderTarget->CopyTo(beauty);
+				runPass(_vignetteShader.get());
 			}
 			GFX_PERF_END();
 
@@ -4295,11 +4303,10 @@ namespace HexEngine
 			{
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"Chromatic abberration");
 				{
-					guiRenderer->FullScreenTexturedQuad(beauty, _chromaticAberrationShader.get());
-					renderTarget->CopyTo(beauty);
+					runPass(_chromaticAberrationShader.get());
 				}
 				GFX_PERF_END();
-			}			
+			}
 
 			// Skip FXAA when a temporal resolver already ran this frame. TAA defaults on, so
 			// the two were stacking every frame: FXAA then blurs edges TAA had already
@@ -4310,15 +4317,24 @@ namespace HexEngine
 			{
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"FXAA");
 				{
-					guiRenderer->FullScreenTexturedQuad(beauty, _fxaa.get());
-					renderTarget->CopyTo(beauty);
+					runPass(_fxaa.get());
 				}
 				GFX_PERF_END();
 			}
 
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Display output");
 			{
-				guiRenderer->FullScreenTexturedQuad(beauty, outputShader);
+				// Must READ the latest image and WRITE the camera RT. When the
+				// ping-pong left the latest image IN the camera RT (odd pass
+				// count), move it across once - the single copy this chain
+				// still performs, versus 3-6 before.
+				if (src == renderTarget)
+				{
+					src->CopyTo(beauty);
+					src = beauty;
+				}
+				g_pEnv->_graphicsDevice->SetRenderTarget(renderTarget);
+				guiRenderer->FullScreenTexturedQuad(src, outputShader);
 			}
 			GFX_PERF_END();
 
@@ -5762,29 +5778,27 @@ namespace HexEngine
 		graphics->SetBoundResourceIndex(0);
 	}
 
-	void SceneRenderer::RenderBokehDoF()
+	bool SceneRenderer::RenderBokehDoF(ITexture2D* srcTex, ITexture2D* dstTex)
 	{
-		if (!r_dof._val.b || _bokehDoFShader == nullptr || _beautyRT == nullptr ||
-			_subsurfaceIntermediateRT == nullptr || _bokehDoFParamsBuffer == nullptr)
-			return;
+		if (!r_dof._val.b || _bokehDoFShader == nullptr || srcTex == nullptr ||
+			dstTex == nullptr || _bokehDoFParamsBuffer == nullptr)
+			return false;
 
 		PROFILE();
 
 		auto* graphics = g_pEnv->_graphicsDevice;
 		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
 		if (guiRenderer == nullptr)
-			return;
+			return false;
 
 		auto* normalDepthTex = _gbuffer.GetNormal();
 		if (normalDepthTex == nullptr)
-			return;
+			return false;
 
-		// Reuse the SSS intermediate as a scratch RT - SSS has already finished
-		// for this frame and the format/size match exactly, so allocating a
-		// dedicated DoF scratch is wasteful. The bokeh pass reads beauty, writes
-		// scratch, then we copy scratch back into beauty so downstream effects
-		// (colour grading, vignette, etc.) see the DoF'd image.
-		auto* scratchRT = _subsurfaceIntermediateRT;
+		// Phase 4 slice 1: DoF is a leg of RenderOverlays' ping-pong chain -
+		// it reads the caller's src, writes the caller's dst, and the caller
+		// swaps on a true return. The old scratch-RT + CopyTo-back dance (and
+		// its render-target restore) is gone with it.
 
 		// Cbuffer at b6: (focusDistance, focusRange, aperture, maxCocPixels).
 		math::Vector4 params(
@@ -5799,16 +5813,12 @@ namespace HexEngine
 		// NOTE: do NOT wrap this in guiRenderer->StartFrame()/EndFrame() - this
 		// path runs from inside RenderOverlays which has already begun a frame,
 		// and a nested EndFrame would flush the outer draw list against our
-		// scratch RT (visible as a grey screen because the queued UI draws land
-		// in the wrong place and then get copied over the beauty buffer).
-		graphics->SetRenderTarget(scratchRT);
-		graphics->SetTexture2D(0, _beautyRT);
+		// render target (visible as a grey screen because the queued UI draws
+		// land in the wrong place).
+		graphics->SetRenderTarget(dstTex);
+		graphics->SetTexture2D(0, srcTex);
 		graphics->SetTexture2D(1, normalDepthTex);
 		guiRenderer->FullScreenTexturedQuad(nullptr, _bokehDoFShader.get());
-
-		// Copy back so beauty carries the DoF'd image into the rest of the post
-		// chain. Cheap on D3D11 (a single CopyResource on same-format RTs).
-		scratchRT->CopyTo(_beautyRT);
 
 		// Unbind only the DoF params cbuffer. We deliberately do NOT unbind the
 		// source SRVs here: DrawIndexed already calls UnbindAllPixelShaderResources
@@ -5821,12 +5831,7 @@ namespace HexEngine
 		// beauty for every remaining pass (the grey screen). Removing them is the fix.
 		graphics->SetConstantBufferPS(6, nullptr);
 
-		// Restore the overlay chain's render target. DrawIndexed resets SRVs but
-		// does NOT touch the render target, so our scratch RT is still bound here.
-		// RenderOverlays renders the rest of the chain (grading, vignette, tonemap)
-		// into the camera RT and propagates back to beauty via CopyTo; leaving the
-		// scratch RT bound corrupts that.
-		graphics->SetRenderTarget(_currentCamera->GetRenderTarget());
+		return true;
 	}
 
 	void SceneRenderer::RenderFog()

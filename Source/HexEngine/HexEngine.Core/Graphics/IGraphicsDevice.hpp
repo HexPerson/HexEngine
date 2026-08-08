@@ -549,6 +549,16 @@ namespace HexEngine
 			return TextureFormat::R16G16B16A16_FLOAT;
 		}
 
+		/** @brief True when the swapchain is the scRGB float format (HDR output
+		 * active). Display-output shader selection keys on this; one definition
+		 * replacing the format check that had been duplicated across
+		 * SceneRenderer and Game3DEnvironment. */
+		bool IsHdrOutput(Window* window = nullptr)
+		{
+			auto* backBuffer = GetBackBuffer(window);
+			return backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT;
+		}
+
 		// --------------------------------------------------------------------
 		// D3D11 compatibility shims.
 		//
