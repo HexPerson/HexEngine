@@ -97,6 +97,10 @@ namespace HexEngine
 	HVar r_giVoxelAlbedoInfluence("r_giVoxelAlbedoInfluence", "How strongly voxelized albedo tints GI bounce (0=energy only, 1=full albedo tint)", 1.0f, 0.0f, 1.0f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
+	// Diagnostic: log every CPU voxel-triangle rebuild with the cache-rejection
+	// reason and build duration. Turn on, reproduce a hitch (e.g. a weather
+	// transition), read the log - the failing condition names the culprit.
+	HVar r_giLogRebuilds("r_giLogRebuilds", "Log GI voxel-triangle cache rebuilds with rejection reasons + duration", false, false, true);
 	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap)", 0, 0, 4);
 	HVar r_giVoxelResolution("r_giVoxelResolution", "Per-clipmap voxel resolution", 128, 16, 256);
 	HVar r_giClipmapBaseExtent("r_giClipmapBaseExtent", "Half-extent of first GI clipmap in world units", 56.0f, 16.0f, 4096.0f);
@@ -3194,6 +3198,23 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			return static_cast<uint32_t>(out.size());
 		}
 
+		if (r_giLogRebuilds._val.b)
+		{
+			LOG_INFO("GI tri-rebuild clip%u: valid=%d fresh=%d(age %llu/%llu) moveFresh=%d budgetOk=%d geomRevOk=%d matRevOk=%d lightRevOk=%d(%s) dirty=%d shiftOnly=%d",
+				levelIndex,
+				_cachedVoxelTrianglesValid[levelIndex] ? 1 : 0,
+				cacheStillFresh ? 1 : 0,
+				(unsigned long long)cacheAge, (unsigned long long)cacheFrames,
+				movementCacheStillFresh ? 1 : 0,
+				cachedTriangleCountAcceptable ? 1 : 0,
+				(_cachedSceneGeometryRevision[levelIndex] == sceneGeometryRevision) ? 1 : 0,
+				(_cachedSceneMaterialRevision[levelIndex] == sceneMaterialRevision) ? 1 : 0,
+				(_cachedSceneLightRevision[levelIndex] == sceneLightRevision) ? 1 : 0,
+				lightStateAffectsTriangleCache ? "keyed" : "exempt",
+				level.dirty ? 1 : 0,
+				shiftOnlyDirty ? 1 : 0);
+		}
+
 		_cachedVoxelTrianglesValid[levelIndex] = false;
 		_cachedVoxelTrianglesFrame[levelIndex] = 0ull;
 		_cachedGiMaterialProxies[levelIndex].clear();
@@ -4279,6 +4300,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, emissiveProxyMaxStrengthLocal);
 		_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
 		_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
+		if (r_giLogRebuilds._val.b)
+		{
+			LOG_INFO("GI tri-rebuild clip%u DONE: %.2f ms, %u triangles",
+				levelIndex, _stats.cpuTriangleBuildMs, (uint32_t)out.size());
+		}
 		return static_cast<uint32_t>(out.size());
 	}
 

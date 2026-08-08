@@ -252,16 +252,25 @@ namespace HexEngine
 		return _giLightRevision;
 	}
 
+	// Diagnostic sibling of DiffuseGI's r_giLogRebuilds: names WHO bumped a GI
+	// revision, so a rebuild log showing geomRevOk=0/matRevOk=0 can be traced
+	// straight to its source.
+	HVar r_giLogInvalidations("r_giLogInvalidations", "Log every GI revision bump with its source", false, false, true);
+
 	void Scene::NotifyGiMaterialStateChanged()
 	{
 		std::unique_lock lock(_lock);
 		++_giMaterialRevision;
+		if (r_giLogInvalidations._val.b)
+			LOG_INFO("GI matRev bump -> %llu (NotifyGiMaterialStateChanged)", (unsigned long long)_giMaterialRevision);
 	}
 
 	void Scene::NotifyGiLightStateChanged()
 	{
 		std::unique_lock lock(_lock);
 		++_giLightRevision;
+		if (r_giLogInvalidations._val.b)
+			LOG_INFO("GI lightRev bump -> %llu (NotifyGiLightStateChanged)", (unsigned long long)_giLightRevision);
 	}
 
 	void Scene::NotifyStaticMeshChanged(StaticMeshComponent* component, bool geometryChanged, bool materialChanged)
@@ -280,6 +289,15 @@ namespace HexEngine
 		if (materialChanged)
 		{
 			++_giMaterialRevision;
+		}
+
+		if (r_giLogInvalidations._val.b && (geometryChanged || materialChanged))
+		{
+			auto* entity = component->GetEntity();
+			LOG_INFO("GI %s%sRev bump (mesh '%s')",
+				geometryChanged ? "geom" : "",
+				materialChanged ? (geometryChanged ? "+mat" : "mat") : "",
+				entity != nullptr ? entity->GetName().c_str() : "<null>");
 		}
 	}
 
@@ -320,6 +338,9 @@ namespace HexEngine
 				staticMesh->SetGiMotionExcluded(true);
 				++_giGeometryRevision;
 				_giSpatialCacheDirty = true;
+				if (r_giLogInvalidations._val.b)
+					LOG_INFO("GI geomRev bump -> %llu (motion-exclude '%s')",
+						(unsigned long long)_giGeometryRevision, entity->GetName().c_str());
 			}
 			_giMovingMeshes[staticMesh] = _giFrameNumber;
 		}
@@ -329,6 +350,9 @@ namespace HexEngine
 			entity->GetComponent<DirectionalLight>() != nullptr)
 		{
 			++_giLightRevision;
+			if (r_giLogInvalidations._val.b)
+				LOG_INFO("GI lightRev bump -> %llu (light entity moved '%s')",
+					(unsigned long long)_giLightRevision, entity->GetName().c_str());
 		}
 	}
 
@@ -350,6 +374,8 @@ namespace HexEngine
 					smc->SetGiMotionExcluded(false);
 				++_giGeometryRevision; // re-bake the mesh at its settled pose (one rebuild)
 				_giSpatialCacheDirty = true;
+				if (r_giLogInvalidations._val.b)
+					LOG_INFO("GI geomRev bump -> %llu (motion settle)", (unsigned long long)_giGeometryRevision);
 				it = _giMovingMeshes.erase(it);
 			}
 			else
