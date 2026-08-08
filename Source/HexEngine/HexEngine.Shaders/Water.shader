@@ -390,6 +390,15 @@
 			refractionNormal = worldNormal;
 		}
 
+		// Sea state for SHADING (the VS already couples wave geometry to this).
+		// A storm sea must stay legible through CONTRAST, not mirror
+		// reflection: in a blizzard the env atlas and the fog converge to the
+		// same grey, so reflected-minus-body goes to ~zero and untreated water
+		// simply vanishes into the weather (user screenshot). Wind therefore
+		// drives: darker slate body, boosted whitecaps, rougher (softer,
+		// broader) glints and blurrier env reflection.
+		const float seaState = saturate(g_weatherSurface.windDirectionAndSpeed.w / 30.0f);
+
 		float4 normalAndDepth = g_sceneNormalTex.Sample(g_TexSamplerPoint, screenPos);
 		float worldDepth = normalAndDepth.w;
 
@@ -426,7 +435,9 @@
 
 		if (lightIntensity > 0.0f)
 		{
-			const float waterPerceptualRoughnessBase = 0.08f;
+			// Glints soften and broaden as the sea roughens - a storm has no
+			// razor-sharp sun line.
+			const float waterPerceptualRoughnessBase = lerp(0.06f, 0.35f, seaState);
 			const float waterMetallic = 0.0f;
 			const float3 viewDir = normalize(g_eyePos.xyz - input.positionWS.xyz);
 			const float3 halfVector = normalize(lightDir + viewDir);
@@ -477,6 +488,10 @@
 		//  - Fresnel ALONE decides reflectance - depth plays no part in it
 		const float colourFade = 1.0f - exp(-columnDepth * g_oceanConfig.shoreFadeStrength / 30.0f);
 		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, colourFade);
+		// Storm seas read DARK SLATE - more absorption, less back-scatter.
+		// This is also what keeps the water visible in a blizzard: the body
+		// separates from the fog instead of matching it.
+		fadeColour.rgb *= (1.0f - 0.45f * seaState);
 
 		// SCHLICK Fresnel, not the legacy 1-cos^pow: that curve sat near 0.98
 		// at ordinary viewing angles, so the exponent shifted the WHOLE sea's
@@ -504,17 +519,22 @@
 			const float3 np = float3(input.positionWS.x * 0.35f, g_time * 0.06f, input.positionWS.z * 0.35f);
 			const float n = ValueNoise3(np) * 0.65f + ValueNoise3(np * 3.1f + float3(0.0f, g_time * 0.03f, 0.0f)) * 0.35f;
 
-			// Crests: continuous cubic response (no threshold to flash
-			// across), noise shaping the coverage into streaks.
+			// Crests: continuous response (no threshold to flash across),
+			// noise shaping the coverage into streaks. The exponent RELAXES
+			// with sea state - a storm sea whitecaps far below the theoretical
+			// max crest, a calm sea only foams at true peaks.
 			const float crest = saturate(input.colour.x);
-			const float crestFoam = pow(crest, 3.0f) * (0.35f + 0.65f * n);
+			const float crestFoam = pow(crest, lerp(3.0f, 1.6f, seaState)) * (0.35f + 0.65f * n);
 
 			// Shore: strongest at zero depth, fading over the first ~1.5 m,
 			// continuous curve, noise-broken.
 			const float shoreBand = saturate(1.0f - columnDepth / 1.5f);
 			const float shoreFoam = shoreBand * shoreBand * (0.45f + 0.7f * n);
 
-			foam = saturate((crestFoam + shoreFoam) * foamScale);
+			// Whitecap coverage climbs with the wind - white water on the
+			// darkened storm body is what keeps the sea legible when the sky,
+			// fog and reflection all converge to grey.
+			foam = saturate((crestFoam + shoreFoam) * foamScale * (1.0f + seaState));
 		}
 
 		float4 ambient = float4(g_atmosphere.ambientLight.rgb * fadeColour.rgb, 1.0f);
@@ -567,12 +587,14 @@
 				}
 			}
 
-			// Environment fallback wherever the march found nothing. Sharp
-			// atlas row - water reflection roughness is near-mirror until the
-			// wind-coupled roughness lands in O5.
+			// Environment fallback wherever the march found nothing. The atlas
+			// row follows the sea state: calm water mirrors a sharp bright
+			// sky; a wind-chopped surface reflects a blurred (and naturally
+			// dimmer) prefiltered row - which also takes the edge off the
+			// clear-sky brightness on rippled water.
 			{
-				const float kWaterEnvRoughness = 0.08f;
-				const float3 envColour = SampleEnvAtlas(g_iblSkyEnvFwd, g_TexSamplerAniso, R, kWaterEnvRoughness);
+				const float envRoughness = lerp(0.06f, 0.5f, seaState);
+				const float3 envColour = SampleEnvAtlas(g_iblSkyEnvFwd, g_TexSamplerAniso, R, envRoughness);
 				// Downward rays would pick up horizon sky the atlas has no
 				// ground radiance for.
 				const float envHorizon = saturate(R.y * 3.0f + 0.35f);
