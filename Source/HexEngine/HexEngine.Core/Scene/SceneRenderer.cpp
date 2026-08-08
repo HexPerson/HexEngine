@@ -5481,14 +5481,22 @@ namespace HexEngine
 		// t6 = volumetric integration 3D volume. Engine's slotless SetTexture3D
 		// uses the implicit counter (now 6) - same trick as the AP apply pass.
 		graphics->SetTexture3D(integrationVolume);
+		// t7 = the REAL depth buffer (includes water/transparent depth), so
+		// the apply fogs surfaces at the depth the viewer actually sees
+		// instead of the opaque depth behind them. Safe here: transparency has
+		// drawn and the current render target has no DSV bound.
+		graphics->SetTexture2D(7, _gbuffer.GetDepthBuffer());
 
 		guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricScatterApplyShader.get());
 		guiRenderer->EndFrame();
 
 		_subsurfaceIntermediateRT->CopyTo(_beautyRT);
 
-		// Cleanup - same hygiene pattern as AP apply.
+		// Cleanup - same hygiene pattern as AP apply. t7 (the depth buffer)
+		// MUST be released before it is rebound as a DSV next frame or the
+		// D3D11 hazard handler silently unbinds our render target.
 		graphics->SetTexture2D(5, nullptr);
+		graphics->SetTexture2D(7, nullptr);
 		graphics->SetTexture3D(nullptr);
 		graphics->SetBoundResourceIndex(0);
 	}

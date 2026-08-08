@@ -41,6 +41,12 @@
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	Texture2D    g_beauty                     : register(t5);
 	Texture3D    g_volumetricIntegrationLUT   : register(t6);
+	// The REAL depth buffer (post-transparency). Water and other depth-
+	// writing transparents write depth but no gbuffer, so keying the fog on
+	// the OPAQUE gbuffer depth (nd.w) attenuated them at the depth of
+	// whatever sat BEHIND them - a blizzard integrated fog all the way to
+	// the seabed / sky far plane and flattened the water into the weather.
+	Texture2D    g_sceneDepthTex              : register(t7);
 	SamplerState g_pointSampler               : register(s2);
 	SamplerState g_linearSampler              : register(s4);
 
@@ -102,12 +108,28 @@
 		//   Sky pixels:      additive only  = beauty + inscatter
 		// Sky pixels sample the volume's far slice (w=1) to pick up the
 		// full integrated inscatter along the camera ray.
-		const bool skyPixel = (diff.a < -0.5f) || (nd.w <= 0.0f);
+		const bool gbufferSky = (diff.a < -0.5f) || (nd.w <= 0.0f);
 
-		// View-space depth packed in normal.w. Sky pixels use the
-		// volume's far plane as their effective depth so the integration
-		// volume's full accumulated inscatter is read at w=1.
-		const float depthVS = skyPixel ? FAR_PLANE_M : nd.w;
+		// View-space depth. Start from the opaque gbuffer's nd.w, then let
+		// the REAL depth buffer override with anything NEARER: a water pixel
+		// has gbuffer depth of the seabed (or sky) behind it, but the depth
+		// buffer holds the water surface itself - fog must integrate to the
+		// surface the viewer actually sees. Reconstruction mirrors PostFog.
+		float depthVS = gbufferSky ? FAR_PLANE_M : nd.w;
+		const float depthSample = g_sceneDepthTex.Sample(g_pointSampler, uv).r;
+		if (depthSample < 0.999999f)
+		{
+			const float2 ndcXY = float2(uv.x * 2.0f - 1.0f, (1.0f - uv.y) * 2.0f - 1.0f);
+			const float4 worldPosH = mul(float4(ndcXY, depthSample, 1.0f), g_viewProjectionMatrixInverse);
+			const float3 worldPos = worldPosH.xyz / max(worldPosH.w, 1e-5f);
+			const float depthBufVS = -(mul(float4(worldPos, 1.0f), g_viewMatrix).z);
+			depthVS = gbufferSky ? depthBufVS : min(depthVS, depthBufVS);
+		}
+
+		// Sky treatment (additive-only composite) now requires the depth
+		// buffer to agree: a gbuffer-sky pixel COVERED by depth-writing water
+		// is geometry at the water's depth, not sky.
+		const bool skyPixel = gbufferSky && (depthSample >= 0.999999f);
 
 		const float w = DepthToVolumeW(depthVS);
 		const float4 vlut = SampleVolumeSmooth(g_volumetricIntegrationLUT, g_linearSampler, float3(uv, w));
