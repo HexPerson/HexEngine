@@ -382,7 +382,13 @@ namespace HexEngine
 		bool _lastTerrainProxyEnable = false;
 		float _lastTerrainProxyInjectionScale = 0.02f;
 		bool _lastGpuComputeBaseSunEnabled = false;
+		// LOCAL-light inject signature (points/spots). The SUN part is tracked
+		// separately below - it interpolates per frame during weather
+		// transitions and must never share the local set's cache-nuke path.
 		uint64_t _lastInjectLightSignature = 0ull;
+		uint64_t _lastSunInjectSignature = 0ull;
+		uint64_t _pendingSunInjectSignature = 0ull;
+		uint32_t _sunInjectSignatureStableFrames = 0u;
 		math::Vector3 _lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		bool _lastSunDirectionInitialized = false;
 		uint32_t _sunRelightFramesRemaining = 0;

@@ -328,7 +328,15 @@ namespace
 		return HashFloatBits(q);
 	}
 
-	static uint64_t ComputeInjectLightSignature(HexEngine::Scene* scene)
+	// SUN-only part of the inject signature. Kept SEPARATE from the local-light
+	// signature because the two have completely different invalidation costs
+	// and cadences: the sun's colour/intensity interpolates EVERY FRAME for
+	// multiple seconds during a weather transition, and hashing it into the
+	// same signature that nukes the voxel-triangle caches meant a full 40-70ms
+	// CPU triangle re-gather per clip per frame for the whole transition - the
+	// user-reported 5s stall on clear->storm (log signature: valid=0 dirty=1
+	// with every revision matching). See the consumer for the split policy.
+	static uint64_t ComputeSunInjectSignature(HexEngine::Scene* scene)
 	{
 		if (scene == nullptr)
 			return 0ull;
@@ -349,6 +357,16 @@ namespace
 				h = HashMix64(h, HashQuantizedFloat(d.w, 1.0f / 255.0f));
 			}
 		}
+
+		return h;
+	}
+
+	static uint64_t ComputeLocalInjectSignature(HexEngine::Scene* scene)
+	{
+		if (scene == nullptr)
+			return 0ull;
+
+		uint64_t h = 1469598103934665603ull;
 
 		std::vector<HexEngine::PointLight*> pointLights;
 		scene->GetComponents<HexEngine::PointLight>(pointLights);
@@ -443,7 +461,13 @@ namespace HexEngine
 		_lastTerrainProxyEnable = r_giTerrainProxyEnable._val.b;
 		_lastTerrainProxyInjectionScale = r_giTerrainProxyInjectionScale._val.f32;
 		_lastGpuComputeBaseSunEnabled = r_giGpuComputeBaseSun._val.b;
-		_lastInjectLightSignature = ComputeInjectLightSignature(g_pEnv ? g_pEnv->_sceneManager->GetCurrentScene().get() : nullptr);
+		{
+			auto* currentScene = g_pEnv ? g_pEnv->_sceneManager->GetCurrentScene().get() : nullptr;
+			_lastInjectLightSignature = ComputeLocalInjectSignature(currentScene);
+			_lastSunInjectSignature = ComputeSunInjectSignature(currentScene);
+			_pendingSunInjectSignature = _lastSunInjectSignature;
+			_sunInjectSignatureStableFrames = 0u;
+		}
 		_lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
@@ -729,6 +753,9 @@ namespace HexEngine
 		_lastTerrainProxyInjectionScale = 0.02f;
 		_lastGpuComputeBaseSunEnabled = false;
 		_lastInjectLightSignature = 0ull;
+		_lastSunInjectSignature = 0ull;
+		_pendingSunInjectSignature = 0ull;
+		_sunInjectSignatureStableFrames = 0u;
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
 		_lightResetFramesRemaining = 0u;
@@ -2212,8 +2239,62 @@ namespace HexEngine
 		const bool baseOnlyModeToggled = (r_giDebugDisableBaseInjection._val.b != _lastDisableBaseInjection);
 		const bool sunOnlyModeToggled = (r_giDebugDisableSunInjection._val.b != _lastDisableSunInjection);
 		const bool terrainProxyModeToggled = (r_giTerrainProxyEnable._val.b != _lastTerrainProxyEnable);
-		const uint64_t currentInjectLightSignature = ComputeInjectLightSignature(scene);
-		const bool injectLightSetChanged = (currentInjectLightSignature != _lastInjectLightSignature);
+		// SPLIT invalidation policy (the clear->storm 5s-stall fix):
+		//
+		// LOCAL-light set changes (lights added/removed/moved/recoloured) keep
+		// the full cache nuke below - they're rare, discrete events, and the
+		// CPU triangle bake carries local radiance when the GPU eval path is
+		// off.
+		//
+		// SUN colour/intensity changes are continuous (weather transitions
+		// interpolate them per frame for seconds at a time - the log showed a
+		// 1/255 quantization step nearly every frame, each one nuking every
+		// clip's triangle cache for a 40-70ms CPU re-gather per clip per
+		// frame). Policy:
+		//  - GPU base+sun path (this scene's config): NO invalidation at all.
+		//    Cached triangles carry no radiance; fresh sun constants reach the
+		//    voxels through the regular voxelize cadence (clip0 every 4-10
+		//    frames) and the direction relight handles direction jumps.
+		//  - Legacy CPU-bake path: sun radiance IS baked into the cached
+		//    triangles, so a rebuild is required - but DEBOUNCED to the
+		//    transition's END (signature stable for kSunSigSettleFrames)
+		//    instead of every quantization step. Bounce lags a transition by
+		//    half a second; direct lighting is live throughout.
+		const uint64_t currentLocalSig = ComputeLocalInjectSignature(scene);
+		const uint64_t currentSunSig = ComputeSunInjectSignature(scene);
+		bool injectLightSetChanged = (currentLocalSig != _lastInjectLightSignature);
+		const bool gpuBaseSunOwnsLighting =
+			r_giGpuVoxelize._val.b &&
+			r_giGpuMaterialEval._val.b &&
+			r_giGpuComputeBaseSun._val.b &&
+			!r_giLocalLightsOnlyDebug._val.b &&
+			!r_giDebugDisableBaseAndSunInjection._val.b &&
+			!r_giDebugDisableBaseInjection._val.b &&
+			!r_giDebugDisableSunInjection._val.b;
+		if (currentSunSig == _lastSunInjectSignature)
+		{
+			_sunInjectSignatureStableFrames = 0u;
+		}
+		else if (gpuBaseSunOwnsLighting)
+		{
+			_lastSunInjectSignature = currentSunSig;
+		}
+		else if (currentSunSig == _pendingSunInjectSignature)
+		{
+			constexpr uint32_t kSunSigSettleFrames = 30u;
+			if (++_sunInjectSignatureStableFrames >= kSunSigSettleFrames)
+			{
+				_lastSunInjectSignature = currentSunSig;
+				injectLightSetChanged = true;
+				if (r_giLogRebuilds._val.b)
+					LOG_INFO("GI sun inject signature settled -> one rebuild (legacy CPU-bake path)");
+			}
+		}
+		else
+		{
+			_pendingSunInjectSignature = currentSunSig;
+			_sunInjectSignatureStableFrames = 0u;
+		}
 		if (localLightModeToggled || baseSunModeToggled || baseOnlyModeToggled || sunOnlyModeToggled || terrainProxyModeToggled)
 		{
 			// Hard reset when local injection mode flips so no historical local-light energy remains.
@@ -2278,7 +2359,7 @@ namespace HexEngine
 			_lastTerrainProxyEnable = r_giTerrainProxyEnable._val.b;
 			_lastTerrainProxyInjectionScale = r_giTerrainProxyInjectionScale._val.f32;
 			_lastGpuComputeBaseSunEnabled = r_giGpuComputeBaseSun._val.b;
-			_lastInjectLightSignature = currentInjectLightSignature;
+			_lastInjectLightSignature = currentLocalSig;
 		}
 
 		const uint32_t expectedHalfWidth = r_giHalfRes._val.b ? _halfWidth : _width;
