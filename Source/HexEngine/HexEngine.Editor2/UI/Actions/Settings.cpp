@@ -5,29 +5,6 @@
 #include <algorithm>
 #include <shlobj.h>
 
-namespace HexEngine
-{
-	//extern HVar env_zenithExponent;
-	extern HVar env_volumetricScattering;
-	extern HVar env_volumetricStrength;
-	extern HVar env_waterNormalInfluence;
-	extern HVar env_volumetricSteps;
-	extern HVar r_volumetricQuality;
-	extern HVar r_fog;
-	extern HVar r_fogDensity;
-	extern HVar r_fogStartDistance;
-	extern HVar r_fogHeightDensity;
-	extern HVar r_fogHeightFalloff;
-	extern HVar r_fogHeightPivot;
-	extern HVar r_fogSkyTintInfluence;
-	extern HVar r_fogFarDesaturate;
-	extern HVar r_fogAtmosphereBlendStart;
-	extern HVar r_fogAtmosphereBlendRange;
-	extern HVar r_fogSunsetRange;
-	extern HVar r_fogSunsetWarmthStrength;
-	extern HVar r_fogFarAtmosphereMatchStrength;
-}
-
 namespace HexEditor
 {
 	namespace
@@ -100,12 +77,277 @@ namespace HexEditor
 			SetNamedHVarFloat("env_sunsetCoolStrength", preset.sunsetCoolStrength);
 			SetNamedHVarFloat("env_sunsetGlowStrength", preset.sunsetGlowStrength);
 		}
+
+		// ASCII widen - cvar names/descriptions are plain ASCII by convention.
+		static std::wstring Widen(const std::string& text)
+		{
+			return std::wstring(text.begin(), text.end());
+		}
+
+		// ------------------------------------------------------------------
+		// Small dimmed multi-line text element for the HVar description that
+		// sits under each control row. Word-wraps to its width at construction
+		// (the wrapped height must be known before Element's ctor runs, since
+		// ComponentWidget snapshots the child height in OnAddChild).
+		// ------------------------------------------------------------------
+		class HVarDescription : public HexEngine::Element
+		{
+		public:
+			static constexpr int32_t kFontSize = (int32_t)HexEngine::Style::FontSize::Titchy;
+			static constexpr int32_t kLineHeight = 14;
+
+			static std::vector<std::wstring> WrapLines(int32_t width, const std::wstring& text)
+			{
+				std::vector<std::wstring> lines;
+				auto* renderer = HexEngine::g_pEnv->GetUIManager().GetRenderer();
+				auto* font = renderer != nullptr ? renderer->_style.font.get() : nullptr;
+				if (font == nullptr || text.empty())
+					return lines;
+
+				std::wstring current;
+				std::wstring word;
+				const auto flushWord = [&]()
+				{
+					if (word.empty())
+						return;
+					std::wstring candidate = current.empty() ? word : current + L" " + word;
+					int32_t w = 0, h = 0;
+					font->MeasureText(kFontSize, candidate, w, h);
+					if (w > width && !current.empty())
+					{
+						lines.push_back(current);
+						current = word;
+					}
+					else
+					{
+						current = candidate;
+					}
+					word.clear();
+				};
+
+				for (wchar_t c : text)
+				{
+					if (c == L' ' || c == L'\n')
+					{
+						flushWord();
+						if (c == L'\n' && !current.empty())
+						{
+							lines.push_back(current);
+							current.clear();
+						}
+					}
+					else
+					{
+						word += c;
+					}
+				}
+				flushWord();
+				if (!current.empty())
+					lines.push_back(current);
+				return lines;
+			}
+
+			static int32_t MeasureHeight(int32_t width, const std::wstring& text)
+			{
+				const size_t lineCount = WrapLines(width, text).size();
+				return (int32_t)lineCount * kLineHeight;
+			}
+
+			HVarDescription(Element* parent, const HexEngine::Point& position, int32_t width, const std::wstring& text) :
+				Element(parent, position, HexEngine::Point(width, std::max(kLineHeight, MeasureHeight(width, text)))),
+				_lines(WrapLines(width, text))
+			{
+				// Descriptions are informational - never eat clicks meant for
+				// the controls around them.
+				EnableInput(false);
+			}
+
+			virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override
+			{
+				const auto pos = GetAbsolutePosition();
+				const math::Color& base = renderer->_style.text_regular;
+				const math::Color dim(base.x, base.y, base.z, base.w * 0.55f);
+				for (size_t i = 0; i < _lines.size(); ++i)
+				{
+					renderer->PrintText(
+						renderer->_style.font.get(),
+						(uint8_t)kFontSize,
+						pos.x, pos.y + (int32_t)i * kLineHeight,
+						dim,
+						HexEngine::FontAlign::None,
+						_lines[i]);
+				}
+			}
+
+		private:
+			std::vector<std::wstring> _lines;
+		};
+
+		// ------------------------------------------------------------------
+		// Prefix -> tab classification. Checked IN ORDER, first match wins, so
+		// specific prefixes (env_volumetric) must precede general ones (env_).
+		// Anything unmatched lands on the Misc tab.
+		// ------------------------------------------------------------------
+		struct TabDef
+		{
+			const wchar_t* label;
+		};
+
+		enum TabIndex : size_t
+		{
+			TabDisplay = 0, TabPostFx, TabReflections, TabLighting, TabShadows,
+			TabGi, TabFogVol, TabAtmosphere, TabClouds, TabWeather, TabWater,
+			TabWorld, TabPerf, TabEditor, TabMisc,
+			TabCount
+		};
+
+		static const TabDef kTabs[TabCount] =
+		{
+			{ L"Display" }, { L"Post FX" }, { L"Reflections" }, { L"Lighting" }, { L"Shadows" },
+			{ L"GI" }, { L"Fog/Vol" }, { L"Atmos" }, { L"Clouds" }, { L"Weather" }, { L"Water" },
+			{ L"World" }, { L"Perf" }, { L"Editor" }, { L"Misc" },
+		};
+
+		struct PrefixRule
+		{
+			const char* prefix;
+			size_t tab;
+		};
+
+		static const PrefixRule kRules[] =
+		{
+			// Specific rules first - these would otherwise be swallowed by a
+			// broader prefix further down.
+			{ "env_volumetric",       TabFogVol },
+			{ "env_water",            TabWater },
+			{ "r_volumetric",         TabFogVol },
+			{ "r_fog",                TabFogVol },
+			{ "r_froxel",             TabFogVol },
+
+			{ "r_cloud",              TabClouds },
+			{ "r_gi",                 TabGi },
+			{ "r_useGIAO",            TabGi },
+
+			{ "r_ssr",                TabReflections },
+			{ "r_ibl",                TabReflections },
+			{ "r_nrd",                TabReflections },
+			{ "r_reflection",         TabReflections },
+
+			{ "r_shadow",             TabShadows },
+			{ "r_penumbra",           TabShadows },
+			{ "r_contactShadow",      TabShadows },
+			{ "r_pointShadow",        TabShadows },
+			{ "r_spotShadow",         TabShadows },
+			{ "r_sunAngularDiameter", TabShadows },
+
+			{ "r_hdr",                TabDisplay },
+			{ "r_tonemap",            TabDisplay },
+			{ "r_taa",                TabDisplay },
+			{ "r_fxaa",               TabDisplay },
+			{ "r_dlss",               TabDisplay },
+			{ "r_sharpen",            TabDisplay },
+			{ "r_vsync",              TabDisplay },
+			{ "r_fullscreen",         TabDisplay },
+			{ "r_resolution",         TabDisplay },
+
+			{ "r_bloom",              TabPostFx },
+			{ "r_motionBlur",         TabPostFx },
+			{ "r_dof",                TabPostFx },
+			{ "r_bokeh",              TabPostFx },
+			{ "r_vignette",           TabPostFx },
+			{ "r_chromatic",          TabPostFx },
+			{ "r_filmGrain",          TabPostFx },
+			{ "r_grain",              TabPostFx },
+			{ "r_colourLut",          TabPostFx },
+			{ "r_colorLut",           TabPostFx },
+			{ "r_lens",               TabPostFx },
+			{ "r_cas",                TabPostFx },
+			{ "r_contrast",           TabPostFx },
+			{ "r_exposure",           TabPostFx },
+			{ "r_autoExposure",       TabPostFx },
+			{ "r_hue",                TabPostFx },
+			{ "r_saturation",         TabPostFx },
+			{ "r_whiteBalance",       TabPostFx },
+			{ "r_lift",               TabPostFx },
+			{ "r_gamma",              TabPostFx },
+			{ "r_gain",               TabPostFx },
+
+			{ "r_cluster",            TabLighting },
+			{ "r_light",              TabLighting },
+			{ "r_physicalLightUnits", TabLighting },
+			{ "r_legacyLightScale",   TabLighting },
+			{ "r_emissive",           TabLighting },
+			{ "r_sss",                TabLighting },
+			{ "r_ssao",               TabLighting },
+			{ "r_ambient",            TabLighting },
+			{ "r_forward",            TabLighting },
+			{ "r_deferred",           TabLighting },
+
+			{ "r_weather",            TabWeather },
+			{ "r_snow",               TabWeather },
+			{ "r_wet",                TabWeather },
+			{ "r_puddle",             TabWeather },
+			{ "r_autoPuddles",        TabWeather },
+			{ "r_rain",               TabWeather },
+			{ "r_drip",               TabWeather },
+			{ "r_wind",               TabWeather },
+			{ "r_dust",               TabWeather },
+			{ "r_sand",               TabWeather },
+			{ "r_shelter",            TabWeather },
+			{ "r_footprint",          TabWeather },
+
+			{ "r_ocean",              TabWater },
+			{ "r_water",              TabWater },
+
+			{ "r_terrain",            TabWorld },
+			{ "r_grass",              TabWorld },
+			{ "r_vegetation",         TabWorld },
+			{ "r_hlod",               TabWorld },
+			{ "r_lod",                TabWorld },
+			{ "r_particle",           TabWorld },
+			{ "r_decal",              TabWorld },
+			{ "r_mesh",               TabWorld },
+			{ "r_anim",               TabWorld },
+
+			{ "r_gpuCull",            TabPerf },
+			{ "r_profile",            TabPerf },
+			{ "r_hzb",                TabPerf },
+			{ "r_instance",           TabPerf },
+			{ "r_batch",              TabPerf },
+			{ "cl_",                  TabPerf },
+
+			{ "ed_",                  TabEditor },
+
+			// General atmosphere catch-alls LAST among the matchers.
+			{ "env_",                 TabAtmosphere },
+			{ "r_atmosphere",         TabAtmosphere },
+			{ "r_sky",                TabAtmosphere },
+			{ "r_sun",                TabAtmosphere },
+			{ "r_moon",               TabAtmosphere },
+			{ "r_star",               TabAtmosphere },
+		};
+
+		static size_t ClassifyHVar(const std::string& name)
+		{
+			for (const auto& rule : kRules)
+			{
+				if (name.rfind(rule.prefix, 0) == 0)
+					return rule.tab;
+			}
+			return TabMisc;
+		}
+
+		// HVars owned by bespoke controls (dropdowns with named entries) -
+		// excluded from the auto rows so they don't appear twice.
+		static bool IsExcludedFromAutoRows(const std::string& name)
+		{
+			return name == "env_atmospherePreset" || name == "r_tonemapOperator";
+		}
 	}
 
 	Settings::Settings(Element* parent, const HexEngine::Point& position, const HexEngine::Point& size) :
-		Dialog(parent, position, size, L"Scene Settings")
+		Dialog(parent, position, size, L"Engine Settings")
 	{
-		
 	}
 
 	Settings::~Settings()
@@ -119,11 +361,13 @@ namespace HexEditor
 		uint32_t width, height;
 		HexEngine::g_pEnv->GetScreenSize(width, height);
 
-		int32_t centrex = width >> 1;
-		int32_t centrey = height >> 1;
+		// As large as fits comfortably: the dialog carries every cvar in the
+		// engine now, and screen real estate is what makes that browsable.
+		const int32_t sizex = std::min<int32_t>(1280, (int32_t)width - 60);
+		const int32_t sizey = std::min<int32_t>(820, (int32_t)height - 60);
 
-		const int32_t sizex = 800;
-		const int32_t sizey = 480;
+		const int32_t centrex = (int32_t)width >> 1;
+		const int32_t centrey = (int32_t)height >> 1;
 
 		Settings* pm = new Settings(parent, HexEngine::Point(centrex - sizex / 2, centrey - sizey / 2), HexEngine::Point(sizex, sizey));
 
@@ -151,384 +395,194 @@ namespace HexEditor
 				sectionLabel);
 		};
 
-		const auto addFloatControl = [&](HexEngine::ComponentWidget* widget, const char* name, const wchar_t* label, float precision, uint32_t decimals)
+		// --------------------------------------------------------------
+		// Automatic typed row for one HVar: control labelled with the cvar
+		// name, HVar description in small dimmed text underneath. Drag
+		// stepping/precision derive from the registered [min, max] range.
+		// --------------------------------------------------------------
+		const auto addAutoRow = [&](HexEngine::ComponentWidget* widget, HexEngine::HVar* var)
 		{
-			auto* var = HexEngine::g_pEnv->_commandManager->FindHVar(name);
-			if (var == nullptr)
-				return;
+			const int32_t cw = controlWidthFor(widget);
+			const std::wstring label = Widen(var->_name);
 
-			new HexEngine::DragFloat(
-				widget,
-				widget->GetNextPos(),
-				HexEngine::Point(controlWidthFor(widget), 18),
-				label,
-				&var->_val.f32,
-				var->_min.f32,
-				var->_max.f32,
-				precision,
-				decimals);
-		};
-
-		const auto addIntControl = [&](HexEngine::ComponentWidget* widget, const char* name, const wchar_t* label, int32_t step)
-		{
-			auto* var = HexEngine::g_pEnv->_commandManager->FindHVar(name);
-			if (var == nullptr)
-				return;
-
-			new HexEngine::DragInt(
-				widget,
-				widget->GetNextPos(),
-				HexEngine::Point(controlWidthFor(widget), 18),
-				label,
-				&var->_val.i32,
-				var->_min.i32,
-				var->_max.i32,
-				step);
-		};
-
-		const auto addToggleControl = [&](HexEngine::ComponentWidget* widget, const char* name, const wchar_t* label)
-		{
-			auto* var = HexEngine::g_pEnv->_commandManager->FindHVar(name);
-			if (var == nullptr)
-				return;
-
-			new HexEngine::Checkbox(
-				widget,
-				widget->GetNextPos(),
-				HexEngine::Point(controlWidthFor(widget), 18),
-				label,
-				&var->_val.b);
-		};
-
-		const auto addVector3Control = [&](HexEngine::ComponentWidget* widget, const char* name, const wchar_t* label)
-		{
-			auto* var = HexEngine::g_pEnv->_commandManager->FindHVar(name);
-			if (var == nullptr || var->GetType() != HexEngine::HVar::Type::Vector3)
-				return;
-
-			new HexEngine::Vector3Edit(
-				widget,
-				widget->GetNextPos(),
-				HexEngine::Point(controlWidthFor(widget), 18),
-				label,
-				&var->_val.v3,
-				[var](const math::Vector3& value)
-				{
-					var->_val.v3 = value;
-					var->Clamp();
-				});
-		};
-
-		pm->_widgetBase = makeSectionTab(L"Environment", L"Environment");
-		auto* atmospherePreset = new HexEngine::DropDown(pm->_widgetBase, pm->_widgetBase->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_widgetBase), 18), L"Atmosphere Preset");
-		const auto setPresetLabel = [atmospherePreset](int32_t preset)
-		{
-			switch (preset)
+			switch (var->GetType())
 			{
-			case 1: atmospherePreset->SetValue(L"Crisp Alpine"); break;
-			case 2: atmospherePreset->SetValue(L"Warm Plains"); break;
-			case 3: atmospherePreset->SetValue(L"High Altitude Clear"); break;
-			case 4: atmospherePreset->SetValue(L"Golden Hour"); break;
-			case 0:
-			default: atmospherePreset->SetValue(L"Custom"); break;
+			case HexEngine::HVar::Type::Bool:
+			{
+				new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(cw, 18), label, &var->_val.b);
+				break;
+			}
+			case HexEngine::HVar::Type::Float32:
+			{
+				const float range = var->_max.f32 - var->_min.f32;
+				const float step = range > 0.0f ? range / 300.0f : 0.01f;
+				uint32_t decimals;
+				if      (step >= 1.0f)     decimals = 1;
+				else if (step >= 0.1f)     decimals = 2;
+				else if (step >= 0.01f)    decimals = 3;
+				else if (step >= 0.001f)   decimals = 4;
+				else if (step >= 0.0001f)  decimals = 5;
+				else                       decimals = 6;
+
+				new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(cw, 18),
+					label, &var->_val.f32, var->_min.f32, var->_max.f32, step, decimals);
+				break;
+			}
+			case HexEngine::HVar::Type::Int32:
+			{
+				new HexEngine::DragInt(widget, widget->GetNextPos(), HexEngine::Point(cw, 18),
+					label, &var->_val.i32, var->_min.i32, var->_max.i32, 1);
+				break;
+			}
+			case HexEngine::HVar::Type::UInt32:
+			{
+				// The value union aliases; ranges registered on uint cvars are
+				// small enough that int32 editing is safe.
+				new HexEngine::DragInt(widget, widget->GetNextPos(), HexEngine::Point(cw, 18),
+					label, &var->_val.i32, (int32_t)var->_min.ui32, (int32_t)var->_max.ui32, 1);
+				break;
+			}
+			case HexEngine::HVar::Type::Vector3:
+			{
+				new HexEngine::Vector3Edit(widget, widget->GetNextPos(), HexEngine::Point(cw, 18),
+					label, &var->_val.v3,
+					[var](const math::Vector3& value)
+					{
+						var->_val.v3 = value;
+						var->Clamp();
+					});
+				break;
+			}
+			default:
+				return; // unsupported type - no row
+			}
+
+			if (!var->_description.empty())
+			{
+				auto rowPos = widget->GetNextPos();
+				rowPos.x += 14; // indent under the control it describes
+				new HVarDescription(widget, rowPos, cw - 14, Widen(var->_description));
 			}
 		};
-		setPresetLabel(GetNamedHVarInt("env_atmospherePreset", 0));
-		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"Custom",
-			[setPresetLabel](const std::wstring&)
-			{
-				SetNamedHVarInt("env_atmospherePreset", 0);
-				setPresetLabel(0);
-			}));
-		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"Crisp Alpine",
-			[setPresetLabel](const std::wstring&)
-			{
-				ApplyAtmospherePreset(1);
-				setPresetLabel(1);
-			}));
-		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"Warm Plains",
-			[setPresetLabel](const std::wstring&)
-			{
-				ApplyAtmospherePreset(2);
-				setPresetLabel(2);
-			}));
-		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"High Altitude Clear",
-			[setPresetLabel](const std::wstring&)
-			{
-				ApplyAtmospherePreset(3);
-				setPresetLabel(3);
-			}));
-		atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(L"Golden Hour",
-			[setPresetLabel](const std::wstring&)
-			{
-				ApplyAtmospherePreset(4);
-				setPresetLabel(4);
-			}));
 
-		addFloatControl(pm->_widgetBase, "env_zenithExponent", L"Zenith Exponent", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_anisotropicIntensity", L"Anisotropic Intensity", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_density", L"Density", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_rayleighStrength", L"Rayleigh Strength", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_mieStrength", L"Mie Strength", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_ambientSkyStrength", L"Ambient Sky Fill", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_sunHazeStrength", L"Sun-side Haze", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_sunsetWarmStrength", L"Sunset Warmth", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_sunsetCoolStrength", L"Sunset Cool", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_sunsetGlowStrength", L"Sunset Glow", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricScattering", L"Volumetric Scattering", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricStrength", L"Volumetric Strength", 0.01f, 3);
-		addIntControl(pm->_widgetBase, "r_volumetricQuality", L"Volumetric Quality Preset", 1);
-		addFloatControl(pm->_widgetBase, "env_volumetricSteps", L"Volumetric Steps", 1.0f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricStepIncrement", L"Volumetric Step Scale", 0.1f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricPointInsideMin", L"Point Inside Gain Min", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricPointInsideMax", L"Point Inside Gain Max", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricSpotInsideMin", L"Spot Inside Gain Min", 0.01f, 3);
-		addFloatControl(pm->_widgetBase, "env_volumetricSpotInsideMax", L"Spot Inside Gain Max", 0.01f, 3);
+		// --------------------------------------------------------------
+		// Create every tab up front (fixed order), then bucket the whole HVar
+		// registry into them.
+		// --------------------------------------------------------------
+		HexEngine::ComponentWidget* tabWidgets[TabCount] = {};
+		for (size_t i = 0; i < TabCount; ++i)
+			tabWidgets[i] = makeSectionTab(kTabs[i].label, kTabs[i].label);
 
-		pm->_shadowSettings = makeSectionTab(L"Shadow", L"Shadow");
-		addFloatControl(pm->_shadowSettings, "r_penumbraFilterMaxSize", L"Penumbra Filter Max Size", 0.0001f, 6);
-		addFloatControl(pm->_shadowSettings, "r_shadowFilterMaxSize", L"Shadow Filter Max Size", 0.0001f, 6);
-		addFloatControl(pm->_shadowSettings, "r_shadowBiasMultiplier", L"Shadow Bias Multiplier", 0.0001f, 6);
-		addIntControl(pm->_shadowSettings, "r_shadowSamples", L"Shadow Samples", 1);
+		// ---- Bespoke controls first, so they sit at the top of their tabs.
 
-		pm->_colouring = makeSectionTab(L"Colouring", L"Colouring");
-		addFloatControl(pm->_colouring, "r_contrast", L"Contrast", 0.01f, 3);
-		addFloatControl(pm->_colouring, "r_exposure", L"Exposure", 0.01f, 3);
-		addFloatControl(pm->_colouring, "r_hueShift", L"Hue Shift", 0.01f, 3);
-		addFloatControl(pm->_colouring, "r_saturation", L"Saturatuin", 0.01f, 3);
-		// Auto exposure controls. r_exposure above acts as a manual offset multiplied into the
-		// auto-exposure result when r_autoExposure is on; when r_autoExposure is off, r_exposure
-		// is the only exposure factor and the auto pass is bypassed entirely.
-		addToggleControl(pm->_colouring, "r_autoExposure", L"Auto Exposure");
-		addFloatControl(pm->_colouring, "r_autoExposureTargetLuma", L"Auto Exposure Target Luma", 0.01f, 3);
-		addFloatControl(pm->_colouring, "r_autoExposureMin", L"Auto Exposure Min", 0.01f, 3);
-		addFloatControl(pm->_colouring, "r_autoExposureMax", L"Auto Exposure Max", 0.05f, 3);
-		addFloatControl(pm->_colouring, "r_autoExposureSpeed", L"Auto Exposure Adapt Speed", 0.05f, 2);
-		addIntControl(pm->_colouring, "r_autoExposureSampleStride", L"Auto Exposure Sample Stride", 1);
-		addFloatControl(pm->_colouring, "r_autoExposureNightTargetLuma", L"Auto Exposure Night Target Luma", 0.005f, 3);
-		addFloatControl(pm->_colouring, "r_autoExposureNightMax", L"Auto Exposure Night Max", 0.05f, 2);
-		addToggleControl(pm->_colouring, "r_autoExposureDebug", L"Auto Exposure Debug Log");
-
-		// HDR display + tonemap. Lives on its own tab because the controls behave
-		// very differently from the artist-facing colour-grading knobs above: paper
-		// white / peak nits only have an effect when the swap chain is in HDR mode
-		// (R16G16B16A16_FLOAT), and the tonemap operator picks the curve applied to
-		// the scene RT before either the SDR gamma path or the HDR nits remap. See
-		// SceneRenderer's r_hdrPaperWhiteNits / r_hdrPeakNits / r_tonemapOperator
-		// declarations and TonemapOperators.shader::ApplyTonemap for the mapping
-		// from operator id to curve.
-		auto* display = makeSectionTab(L"Display", L"HDR & Tonemap");
-		addToggleControl(display, "r_hdrOutput", L"HDR Output (when display supports)");
-		addFloatControl(display, "r_hdrPaperWhiteNits", L"Paper White (nits)", 1.0f, 1);
-		addFloatControl(display, "r_hdrPeakNits", L"Peak Highlight (nits)", 10.0f, 0);
-
-		// Named dropdown matching the atmosphere-preset pattern further up. The
-		// raw int HVar is what the shaders read; the dropdown is just a labelled
-		// front-end so artists pick "ACES" instead of "2". Keep the labels in sync
-		// with TonemapOperators.shader's switch statement.
-		auto* tonemapDropdown = new HexEngine::DropDown(
-			display,
-			display->GetNextPos(),
-			HexEngine::Point(controlWidthFor(display), 18),
-			L"Tonemap Operator");
-		const auto setTonemapLabel = [tonemapDropdown](int32_t op)
+		// Atmosphere preset dropdown (writes a family of env_ cvars).
 		{
-			switch (op)
+			auto* atmosWidget = tabWidgets[TabAtmosphere];
+			auto* atmospherePreset = new HexEngine::DropDown(atmosWidget, atmosWidget->GetNextPos(),
+				HexEngine::Point(controlWidthFor(atmosWidget), 18), L"Atmosphere Preset");
+			const auto setPresetLabel = [atmospherePreset](int32_t preset)
 			{
-			case 0: tonemapDropdown->SetValue(L"Reinhard"); break;
-			case 1: tonemapDropdown->SetValue(L"Reinhard Extended"); break;
-			case 2: tonemapDropdown->SetValue(L"ACES (Fitted)"); break;
-			case 3: tonemapDropdown->SetValue(L"Uncharted 2 / Hable"); break;
-			case 4: tonemapDropdown->SetValue(L"Lottes"); break;
-			case 5: tonemapDropdown->SetValue(L"Linear (debug)"); break;
-			default: tonemapDropdown->SetValue(L"ACES (Fitted)"); break;
-			}
-		};
-		setTonemapLabel(GetNamedHVarInt("r_tonemapOperator", 2));
-		const auto addTonemapItem = [&](const std::wstring& label, int32_t op)
-		{
-			tonemapDropdown->GetContextMenu()->AddItem(new HexEngine::ContextItem(label,
-				[setTonemapLabel, op](const std::wstring&)
+				switch (preset)
 				{
-					SetNamedHVarInt("r_tonemapOperator", op);
-					setTonemapLabel(op);
-				}));
-		};
-		addTonemapItem(L"Reinhard", 0);
-		addTonemapItem(L"Reinhard Extended", 1);
-		addTonemapItem(L"ACES (Fitted)", 2);
-		addTonemapItem(L"Uncharted 2 / Hable", 3);
-		addTonemapItem(L"Lottes", 4);
-		addTonemapItem(L"Linear (debug)", 5);
-
-		pm->_fog = makeSectionTab(L"Fog", L"Fog");
-		addToggleControl(pm->_fog, "r_fog", L"Fog on/off");
-		addFloatControl(pm->_fog, "r_fogDensity", L"Fog Density", 0.0001f, 5);
-		addFloatControl(pm->_fog, "r_fogStartDistance", L"Fog Start Distance", 0.5f, 2);
-		addFloatControl(pm->_fog, "r_fogHeightDensity", L"Height Density", 0.0001f, 5);
-		addFloatControl(pm->_fog, "r_fogHeightFalloff", L"Height Falloff", 0.0001f, 5);
-		addFloatControl(pm->_fog, "r_fogHeightPivot", L"Height Pivot", 0.5f, 2);
-		addFloatControl(pm->_fog, "r_fogSkyTintInfluence", L"Sky Tint Influence", 0.01f, 3);
-		addFloatControl(pm->_fog, "r_fogFarDesaturate", L"Far Desaturate", 0.01f, 3);
-		addFloatControl(pm->_fog, "r_fogAtmosphereBlendStart", L"Atmosphere Blend Start", 1.0f, 1);
-		addFloatControl(pm->_fog, "r_fogAtmosphereBlendRange", L"Atmosphere Blend Range", 1.0f, 1);
-		addFloatControl(pm->_fog, "r_fogSunsetRange", L"Sunset Range", 0.01f, 3);
-		addFloatControl(pm->_fog, "r_fogSunsetWarmthStrength", L"Sunset Warmth", 0.01f, 3);
-		addFloatControl(pm->_fog, "r_fogFarAtmosphereMatchStrength", L"Far Atmosphere Match", 0.01f, 3);
-
-		pm->_clouds = makeSectionTab(L"Clouds", L"Volumetric Clouds");
-		addToggleControl(pm->_clouds, "r_cloudEnable", L"Clouds on/off");
-		addToggleControl(pm->_clouds, "r_cloudFollowCameraXZ", L"Follow Camera X/Z");
-		addToggleControl(pm->_clouds, "r_cloudCastShadows", L"Cast Ground Shadows");
-		addFloatControl(pm->_clouds, "r_cloudShadowStrength", L"Ground Shadow Strength", 0.01f, 3);
-		addIntControl(pm->_clouds, "r_cloudShadowSteps", L"Ground Shadow Steps", 1);
-		addIntControl(pm->_clouds, "r_cloudQuality", L"Quality Preset", 1);
-		addVector3Control(pm->_clouds, "r_cloudAabbMin", L"AABB Min");
-		addVector3Control(pm->_clouds, "r_cloudAabbMax", L"AABB Max");
-		addFloatControl(pm->_clouds, "r_cloudDensity", L"Density", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudCoverage", L"Coverage", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudErosion", L"Erosion", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudShapeScale", L"Shape Scale", 0.00001f, 6);
-		addFloatControl(pm->_clouds, "r_cloudDetailScale", L"Detail Scale", 0.00001f, 6);
-		addVector3Control(pm->_clouds, "r_cloudWindDirection", L"Wind Direction");
-		addFloatControl(pm->_clouds, "r_cloudWindSpeed", L"Wind Speed", 0.1f, 2);
-		addFloatControl(pm->_clouds, "r_cloudAnimationSpeed", L"Animation Speed", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudLightAbsorption", L"Shadow Absorption", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudViewAbsorption", L"View Absorption (Opacity)", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudPowderStrength", L"Powder Strength", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudAmbientStrength", L"Ambient Strength", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudShadowFloor", L"Shadow Floor", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudAnisotropy", L"Anisotropy", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudSilverLiningStrength", L"Silver Lining Strength", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudSilverLiningExponent", L"Silver Lining Falloff", 0.05f, 3);
-		addFloatControl(pm->_clouds, "r_cloudMultiScatterStrength", L"Multi-Scatter Lift", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudHeightTintStrength", L"Height Tint Strength", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudTintWarmth", L"Tint Warmth", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudSkyTintInfluence", L"Sky Tint Influence", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudDirectionalDiffuse", L"Directional Diffuse", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudAmbientOcclusion", L"Ambient Occlusion", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudViewSteps", L"View Steps", 1.0f, 0);
-		addFloatControl(pm->_clouds, "r_cloudLightSteps", L"Light Steps", 1.0f, 0);
-		addFloatControl(pm->_clouds, "r_cloudStepScale", L"Step Scale", 0.01f, 3);
-		addFloatControl(pm->_clouds, "r_cloudMaxDistance", L"Max Distance", 1.0f, 1);
-
-		auto* gi = makeSectionTab(L"GI", L"Global Illumination");
-		addToggleControl(gi, "r_giEnable", L"Enable GI");
-		addToggleControl(gi, "r_giGpuVoxelize", L"GPU Voxelization");
-		addToggleControl(gi, "r_giUseProbes", L"Blend Probe GI");
-		addToggleControl(gi, "r_giHalfRes", L"Half Resolution Trace");
-		addIntControl(gi, "r_giQuality", L"Quality Preset", 1);
-		addIntControl(gi, "r_giMovementPreset", L"Movement Preset", 1);
-		addIntControl(gi, "r_giProbeBudget", L"Probe Budget", 1);
-		addIntControl(gi, "r_giRaysPerProbe", L"Rays Per Probe", 1);
-		addIntControl(gi, "r_giVoxelResolution", L"Voxel Resolution", 1);
-		addFloatControl(gi, "r_giClipmapBaseExtent", L"Clipmap Base Extent", 1.0f, 2);
-		addFloatControl(gi, "r_giIntensity", L"GI Intensity", 0.01f, 3);
-		addFloatControl(gi, "r_giSunInjection", L"Sun Injection", 0.01f, 3);
-		addFloatControl(gi, "r_giSunDirectionalBoost", L"Sun Directional Boost", 0.05f, 3);
-		addFloatControl(gi, "r_giSunDirectionality", L"Sun Directionality", 0.01f, 3);
-		addFloatControl(gi, "r_giDiffuseInjection", L"Diffuse Injection", 0.01f, 3);
-		addFloatControl(gi, "r_giUnlitAlbedoInjection", L"Unlit Albedo Injection", 0.01f, 3);
-		addFloatControl(gi, "r_giAlbedoBleedBoost", L"Albedo Bleed Boost", 0.05f, 3);
-		addFloatControl(gi, "r_giColourBleedStrength", L"Colour Bleed Strength", 0.05f, 3);
-		addFloatControl(gi, "r_giBounceAlbedoMinLuma", L"Bounce Min. Luma", 0.01f, 3);
-		addFloatControl(gi, "r_giBounceAlbedoRemapAmount", L"Bounce Remap Amount", 0.01f, 3);
-		addFloatControl(gi, "r_giReceiverMinLuma", L"Receiver Min Luma", 0.01f, 3);
-		addFloatControl(gi, "r_giReceiverRemapAmount", L"Receiver Remap Amount", 0.01f, 3);
-		addFloatControl(gi, "r_giEmissiveInjection", L"Emissive Injection", 0.01f, 3);
-		addFloatControl(gi, "r_giLocalLightInjection", L"Local Light Injection", 0.01f, 3);
-		addToggleControl(gi, "r_giDebugDisableLocalLightInjection", L"Debug Disable Local Light Injection");
-		addToggleControl(gi, "r_giDebugDisableBaseAndSunInjection", L"Debug Disable Base+Sun Injection");
-		addToggleControl(gi, "r_giDebugDisableBaseInjection", L"Debug Disable Base Injection");
-		addToggleControl(gi, "r_giDebugDisableSunInjection", L"Debug Disable Sun Injection");
-		addFloatControl(gi, "r_giMeshBaseInjectionNormalization", L"Mesh Base Injection Normalization", 0.01f, 3);
-		addFloatControl(gi, "r_giMeshSunInjectionNormalization", L"Mesh Sun Injection Normalization", 0.01f, 3);
-		addFloatControl(gi, "r_giMeshBaseInjectionMinScale", L"Mesh Base Injection Min Scale", 0.01f, 3);
-		addFloatControl(gi, "r_giMeshSunInjectionMinScale", L"Mesh Sun Injection Min Scale", 0.01f, 3);
-		addIntControl(gi, "r_giLocalLightMaxPerMesh", L"Local Light Max Per Mesh", 1);
-		addFloatControl(gi, "r_giLocalLightBaseSuppression", L"Local Light Base Suppression", 0.01f, 3);
-		addFloatControl(gi, "r_giLocalLightSunSuppression", L"Local Light Sun Suppression", 0.01f, 3);
-		addFloatControl(gi, "r_giLocalLightAlbedoWeight", L"Local Light Albedo Weight", 0.01f, 3);
-		addToggleControl(gi, "r_giLocalLightsOnlyDebug", L"Local Lights Only Debug");
-		addFloatControl(gi, "r_giBaseSunSmallTriangleDamp", L"Base+Sun Small Tri Damp", 0.01f, 3);
-		addFloatControl(gi, "r_giProbeGatherBoost", L"Probe Gather Boost", 0.01f, 3);
-		addFloatControl(gi, "r_giScreenBounce", L"Screen Bounce", 0.01f, 3);
-		addFloatControl(gi, "r_giVoxelDecay", L"Voxel Decay", 0.001f, 3);
-		addFloatControl(gi, "r_giVoxelNeighbourBlend", L"Voxel Neighbour Blend", 0.01f, 3);
-		addIntControl(gi, "r_giVoxelTriangleBudget", L"Voxel Triangle Budget", 1);
-		addIntControl(gi, "r_giTriangleCacheFrames", L"Triangle Cache Frames", 1);
-		addToggleControl(gi, "r_giUseTextureTint", L"Use Texture Tint (Slow)");
-		addFloatControl(gi, "r_giEnergyClamp", L"Energy Clamp", 0.05f, 3);
-		addFloatControl(gi, "r_giHysteresis", L"History Hysteresis", 0.005f, 3);
-		addFloatControl(gi, "r_giHistoryReject", L"History Reject", 0.001f, 4);
-		addFloatControl(gi, "r_giJitterScale", L"Jitter Scale", 0.01f, 3);
-		addFloatControl(gi, "r_giClipBlendWidth", L"Clip Blend Width", 0.01f, 3);
-		addFloatControl(gi, "r_giResolvePixelMotionStart", L"Resolve Motion Start", 0.05f, 3);
-		addFloatControl(gi, "r_giResolvePixelMotionStrength", L"Resolve Motion Strength", 0.01f, 3);
-		addFloatControl(gi, "r_giResolveLumaReject", L"Resolve Luma Reject", 0.01f, 3);
-		addFloatControl(gi, "r_giResolveDitherDark", L"Resolve Dither Dark", 0.0001f, 4);
-		addFloatControl(gi, "r_giResolveDitherBright", L"Resolve Dither Bright", 0.0001f, 4);
-		addFloatControl(gi, "r_giGpuEdgeSmoothThreshold", L"Edge Smoothing Threshold", 0.001f, 4);
-		addFloatControl(gi, "r_giGpuEdgeSmoothBlendStrength", L"Edge Smoothing Blend Strength", 0.001f, 4);
-		addIntControl(gi, "r_giDebugView", L"Debug View", 1);
-
-		auto* gpuCulling = makeSectionTab(L"GPU Culling", L"GPU Visibility Culling");
-		addToggleControl(gpuCulling, "r_gpuCullEnable", L"Enable GPU Culling");
-		addToggleControl(gpuCulling, "r_gpuCullFrustum", L"Enable Frustum Stage");
-		addToggleControl(gpuCulling, "r_gpuCullOcclusion", L"Enable Occlusion Stage");
-		addToggleControl(gpuCulling, "r_gpuCullOcclusionAggressive", L"Aggressive Occlusion");
-		addToggleControl(gpuCulling, "r_gpuCullUseIndirectDraw", L"Use Indirect Draw");
-		addToggleControl(gpuCulling, "r_gpuCullDepthPrepassFallback", L"Allow Depth Prepass Fallback");
-		addToggleControl(gpuCulling, "r_gpuCullFreeze", L"Freeze Culling Results");
-		addIntControl(gpuCulling, "r_gpuCullGraceFrames", L"Occlusion Grace Frames", 1);
-		addIntControl(gpuCulling, "r_gpuCullOcclusionRejectFrames", L"Occlusion Reject Frames", 1);
-		addIntControl(gpuCulling, "r_gpuCullOcclusionStableFrames", L"Occlusion Stable Frames", 1);
-		addIntControl(gpuCulling, "r_gpuCullMinCandidates", L"Min Candidates", 1);
-		addFloatControl(gpuCulling, "r_gpuCullFastCameraDistance", L"Fast Camera Distance", 0.05f, 3);
-		addFloatControl(gpuCulling, "r_gpuCullFastCameraAngleDeg", L"Fast Camera Angle (Deg)", 0.1f, 2);
-		addFloatControl(gpuCulling, "r_gpuCullNearBypassDistance", L"Near Bypass Distance", 0.05f, 3);
-		addFloatControl(gpuCulling, "r_gpuCullLargeSphereBypass", L"Large Sphere Bypass Radius", 0.1f, 3);
-		addFloatControl(gpuCulling, "r_gpuCullFrustumRadiusScale", L"Frustum Radius Scale", 0.01f, 3);
-		addFloatControl(gpuCulling, "r_gpuCullOcclusionDepthBias", L"Occlusion Depth Bias", 0.0001f, 5);
-		addToggleControl(gpuCulling, "r_gpuCullDebugBounds", L"Debug Draw Bounds");
-		addToggleControl(gpuCulling, "r_gpuCullDebugFrustumRejected", L"Debug Frustum Rejected");
-		addToggleControl(gpuCulling, "r_gpuCullDebugOcclusionRejected", L"Debug Occlusion Rejected");
-		addToggleControl(gpuCulling, "r_gpuCullStatsLog", L"Log Culling Stats");
-
-		pm->_ocean = makeSectionTab(L"Ocean", L"Ocean");
-		auto& ocean = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetOcean();
-		new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Fresnel Power", &ocean.fresnelPow, 0.1f, 10.0f, 0.1f);
-		new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Shore Fade Strength", &ocean.shoreFadeStrength, 0.1f, 50.0f, 0.1f);
-		new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Fade Factor", &ocean.fadeFactor, 0.1f, 50.0f, 0.1f);
-		new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Reflection Strength", &ocean.reflectionStrength, 0.1f, 1.0f, 0.01f);
-		new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Reflection Near Distance", &ocean.reflectionNearDistance, 1.0f, 2000.0f, 1.0f);
-		new HexEngine::DragFloat(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Reflection Far Distance", &ocean.reflectionFarDistance, 1.0f, 5000.0f, 1.0f);
-		new HexEngine::ColourPicker(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Deep Colour", (math::Color*)&ocean.deepColour.x);
-		new HexEngine::ColourPicker(pm->_ocean, pm->_ocean->GetNextPos(), HexEngine::Point(controlWidthFor(pm->_ocean), 18), L"Shallow Colour", (math::Color*)&ocean.shallowColour.x);
-
-		pm->_editor = makeSectionTab(L"Editor", L"Editor");
-		if (auto snapEnabledVar = HexEngine::g_pEnv->_commandManager->FindHVar("ed_translateSnap"); snapEnabledVar != nullptr)
-		{
-			new HexEngine::Checkbox(
-				pm->_editor,
-				pm->_editor->GetNextPos(),
-				HexEngine::Point(controlWidthFor(pm->_editor), 18),
-				L"Grid Snap (Translate Gizmo)",
-				&snapEnabledVar->_val.b);
+				case 1: atmospherePreset->SetValue(L"Crisp Alpine"); break;
+				case 2: atmospherePreset->SetValue(L"Warm Plains"); break;
+				case 3: atmospherePreset->SetValue(L"High Altitude Clear"); break;
+				case 4: atmospherePreset->SetValue(L"Golden Hour"); break;
+				case 0:
+				default: atmospherePreset->SetValue(L"Custom"); break;
+				}
+			};
+			setPresetLabel(GetNamedHVarInt("env_atmospherePreset", 0));
+			const auto addPresetItem = [&](const std::wstring& itemLabel, int32_t preset)
+			{
+				atmospherePreset->GetContextMenu()->AddItem(new HexEngine::ContextItem(itemLabel,
+					[setPresetLabel, preset](const std::wstring&)
+					{
+						if (preset == 0)
+							SetNamedHVarInt("env_atmospherePreset", 0);
+						else
+							ApplyAtmospherePreset(preset);
+						setPresetLabel(preset);
+					}));
+			};
+			addPresetItem(L"Custom", 0);
+			addPresetItem(L"Crisp Alpine", 1);
+			addPresetItem(L"Warm Plains", 2);
+			addPresetItem(L"High Altitude Clear", 3);
+			addPresetItem(L"Golden Hour", 4);
 		}
 
-		if (auto snapSizeVar = HexEngine::g_pEnv->_commandManager->FindHVar("ed_translateSnapSize"); snapSizeVar != nullptr)
+		// Tonemap operator dropdown (named entries for an int cvar). Keep the
+		// labels in sync with TonemapOperators.shader's switch statement.
 		{
-			new HexEngine::DragFloat(
-				pm->_editor,
-				pm->_editor->GetNextPos(),
-				HexEngine::Point(controlWidthFor(pm->_editor), 18),
-				L"Grid Snap Size",
-				&snapSizeVar->_val.f32,
-				snapSizeVar->_min.f32,
-				snapSizeVar->_max.f32,
-				0.1f,
-				3);
+			auto* displayWidget = tabWidgets[TabDisplay];
+			auto* tonemapDropdown = new HexEngine::DropDown(displayWidget, displayWidget->GetNextPos(),
+				HexEngine::Point(controlWidthFor(displayWidget), 18), L"Tonemap Operator");
+			const auto setTonemapLabel = [tonemapDropdown](int32_t op)
+			{
+				switch (op)
+				{
+				case 0: tonemapDropdown->SetValue(L"Reinhard"); break;
+				case 1: tonemapDropdown->SetValue(L"Reinhard Extended"); break;
+				case 2: tonemapDropdown->SetValue(L"ACES (Fitted)"); break;
+				case 3: tonemapDropdown->SetValue(L"Uncharted 2 / Hable"); break;
+				case 4: tonemapDropdown->SetValue(L"Lottes"); break;
+				case 5: tonemapDropdown->SetValue(L"Linear (debug)"); break;
+				default: tonemapDropdown->SetValue(L"ACES (Fitted)"); break;
+				}
+			};
+			setTonemapLabel(GetNamedHVarInt("r_tonemapOperator", 2));
+			const auto addTonemapItem = [&](const std::wstring& itemLabel, int32_t op)
+			{
+				tonemapDropdown->GetContextMenu()->AddItem(new HexEngine::ContextItem(itemLabel,
+					[setTonemapLabel, op](const std::wstring&)
+					{
+						SetNamedHVarInt("r_tonemapOperator", op);
+						setTonemapLabel(op);
+					}));
+			};
+			addTonemapItem(L"Reinhard", 0);
+			addTonemapItem(L"Reinhard Extended", 1);
+			addTonemapItem(L"ACES (Fitted)", 2);
+			addTonemapItem(L"Uncharted 2 / Hable", 3);
+			addTonemapItem(L"Lottes", 4);
+			addTonemapItem(L"Linear (debug)", 5);
+		}
+
+		// Ocean per-scene settings (a struct on the Scene, not HVars).
+		{
+			auto* waterWidget = tabWidgets[TabWater];
+			auto& ocean = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->GetOcean();
+			const int32_t cw = controlWidthFor(waterWidget);
+			new HexEngine::DragFloat(waterWidget, waterWidget->GetNextPos(), HexEngine::Point(cw, 18), L"Fresnel Power", &ocean.fresnelPow, 0.1f, 10.0f, 0.1f);
+			new HexEngine::DragFloat(waterWidget, waterWidget->GetNextPos(), HexEngine::Point(cw, 18), L"Shore Fade Strength", &ocean.shoreFadeStrength, 0.1f, 50.0f, 0.1f);
+			new HexEngine::DragFloat(waterWidget, waterWidget->GetNextPos(), HexEngine::Point(cw, 18), L"Fade Factor", &ocean.fadeFactor, 0.1f, 50.0f, 0.1f);
+			new HexEngine::DragFloat(waterWidget, waterWidget->GetNextPos(), HexEngine::Point(cw, 18), L"Reflection Strength", &ocean.reflectionStrength, 0.1f, 1.0f, 0.01f);
+			new HexEngine::DragFloat(waterWidget, waterWidget->GetNextPos(), HexEngine::Point(cw, 18), L"Reflection Near Distance", &ocean.reflectionNearDistance, 1.0f, 2000.0f, 1.0f);
+			new HexEngine::DragFloat(waterWidget, waterWidget->GetNextPos(), HexEngine::Point(cw, 18), L"Reflection Far Distance", &ocean.reflectionFarDistance, 1.0f, 5000.0f, 1.0f);
+			new HexEngine::ColourPicker(waterWidget, waterWidget->GetNextPos(), HexEngine::Point(cw, 18), L"Deep Colour", (math::Color*)&ocean.deepColour.x);
+			new HexEngine::ColourPicker(waterWidget, waterWidget->GetNextPos(), HexEngine::Point(cw, 18), L"Shallow Colour", (math::Color*)&ocean.shallowColour.x);
+		}
+
+		// ---- Auto rows: the entire HVar registry, bucketed and sorted.
+		{
+			std::vector<HexEngine::HVar*> buckets[TabCount];
+			for (HexEngine::HVar* var = HexEngine::g_hvars; var != nullptr; var = var->_next)
+			{
+				if (IsExcludedFromAutoRows(var->_name))
+					continue;
+				buckets[ClassifyHVar(var->_name)].push_back(var);
+			}
+
+			for (size_t tabIdx = 0; tabIdx < TabCount; ++tabIdx)
+			{
+				auto& bucket = buckets[tabIdx];
+				std::sort(bucket.begin(), bucket.end(),
+					[](const HexEngine::HVar* a, const HexEngine::HVar* b) { return a->_name < b->_name; });
+
+				for (HexEngine::HVar* var : bucket)
+					addAutoRow(tabWidgets[tabIdx], var);
+			}
 		}
 
 		pm->BringToFront();
