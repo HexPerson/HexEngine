@@ -92,6 +92,9 @@ namespace HexEngine
 		// roughness atlas (_iblSkyEnvMap) consumed by the deferred IBL term.
 		// See EnvMapCommon.shader for the atlas layout rationale.
 		void RenderSkyEnvMap();
+		// P4.5 camera/object motion blur: tile-max -> neighbour-max -> McGuire
+		// gather, between the TAA resolve and the exposure meter.
+		void RenderMotionBlur();
 		// IBL step 2: convert + prefilter any reflection probe whose six capture
 		// faces just completed into its own octahedral atlas (ProbeEnvMap.shader).
 		// Runs at most one probe's prefilter per call - it is a bake, not a
@@ -290,6 +293,14 @@ namespace HexEngine
 		// format and never overlap in the post chain).
 		std::shared_ptr<IShader> _bokehDoFShader;
 		IConstantBuffer* _bokehDoFParamsBuffer = nullptr;
+		// P4.5 motion blur (McGuire scatter-as-gather). Tile-max + neighbour-max
+		// grids at 1/20 res, then a gather pass into the SSS scratch RT.
+		ITexture2D* _mbTileMaxRT = nullptr;
+		ITexture2D* _mbNeighborMaxRT = nullptr;
+		std::shared_ptr<IShader> _mbTileMaxShader;
+		std::shared_ptr<IShader> _mbNeighborMaxShader;
+		std::shared_ptr<IShader> _mbGatherShader;
+		IConstantBuffer* _mbParamsBuffer = nullptr;
 		// Aerial perspective apply. Reads beauty + gbuffer normal/diff, samples
 		// AtmosphereLUTs' 32^3 froxel volume, composites distance haze into
 		// the beauty RT via a scratch RT swap (reuses _subsurfaceIntermediateRT

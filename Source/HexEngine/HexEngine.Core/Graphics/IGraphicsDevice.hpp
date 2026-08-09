@@ -534,6 +534,15 @@ namespace HexEngine
 		virtual void SetBlendState(BlendState state) = 0;
 		virtual BlendState GetBlendState() const = 0;
 
+		// Transparent-pass velocity MRT phase (P4.4). While active, blending
+		// states substitute independent-blend variants that keep their normal
+		// RT0 colour blend but OVERWRITE render target 4 (the gbuffer velocity
+		// RT, R32G32_FLOAT - blending velocities by coverage alpha is wrong
+		// and additive/multiplicative blends would corrupt the background
+		// velocity outright). Backends without the concept ignore it; the
+		// D3D11 plugin implements it.
+		virtual void SetVelocityMrtPhase(bool /*active*/) {}
+
 		virtual int32_t GetCurrentMSAALevel() const = 0;
 
 		virtual void SetScissorRect(const ScissorRect& rect) = 0;

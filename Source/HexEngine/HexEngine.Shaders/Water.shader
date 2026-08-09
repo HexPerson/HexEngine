@@ -333,7 +333,18 @@
 		return normalize(bumpNormal);
 	}
 
-	float4 ShaderMain(MeshPixelInput input) : SV_Target
+	// P4.4: the transparent pass binds the gbuffer velocity RT at slot 4
+	// (matching GBufferOut's SV_TARGET4, so the Default-family shaders need
+	// no change). Water was the one transparent-phase shader with a single
+	// SV_Target - its Gerstner motion computed in the DS never landed
+	// anywhere, which is why waves ghosted under TAA and can't motion-blur.
+	struct WaterOut
+	{
+		float4 colour   : SV_Target0;
+		float2 velocity : SV_TARGET4;
+	};
+
+	WaterOut ShaderMain(MeshPixelInput input)
 	{
 		float4 specular = float4(0, 0, 0, 1);
 
@@ -631,6 +642,12 @@
 
 		retCol.a = 1.0f;
 
-		return retCol;
+		WaterOut o;
+		o.colour = retCol;
+		// Same clip-space [0,1] delta convention as the gbuffer (consumers
+		// negate y) - see Utils.shader CalcVelocity.
+		o.velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered,
+			float2(g_screenWidth, g_screenHeight));
+		return o;
 	}
 }

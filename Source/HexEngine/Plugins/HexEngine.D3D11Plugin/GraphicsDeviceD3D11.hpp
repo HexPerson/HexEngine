@@ -233,6 +233,8 @@ public:
 
 	virtual HexEngine::BlendState GetBlendState() const override;
 
+	virtual void SetVelocityMrtPhase(bool active) override;
+
 	virtual int32_t GetCurrentMSAALevel() const override;
 
 	virtual void SetScissorRect(const HexEngine::ScissorRect& rect) override;
@@ -321,6 +323,16 @@ private:
 	ID3D11BlendState* _transparencyPreserveAlphaBlendState = nullptr;
 	ID3D11BlendState* _multiplicativeBlendState = nullptr;
 	ID3D11BlendState* _premultipliedAlphaBlendState = nullptr;
+	// P4.4 velocity-MRT phase: IndependentBlendEnable variants of the blending
+	// states (RT0 = the state's colour blend, RT4 = overwrite) + the flag that
+	// makes SetBlendState substitute them. See SetVelocityMrtPhase.
+	ID3D11BlendState* _velocityMrtSubtractive = nullptr;
+	ID3D11BlendState* _velocityMrtAdditive = nullptr;
+	ID3D11BlendState* _velocityMrtPremultiplied = nullptr;
+	ID3D11BlendState* _velocityMrtTransparencyPreserve = nullptr;
+	ID3D11BlendState* _velocityMrtMultiplicative = nullptr;
+	ID3D11BlendState* _velocityMrtTransparency = nullptr;
+	bool _velocityMrtPhase = false;
 	//ID3D11Texture2D* _depthStencilBuffer = nullptr;
 
 	std::unordered_map<HexEngine::Window*, DeviceData> _deviceData;

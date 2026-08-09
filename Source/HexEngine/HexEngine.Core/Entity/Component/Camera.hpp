@@ -41,6 +41,16 @@ namespace HexEngine
 
 		virtual void LateUpdate(float frameTime) override;
 
+		// Latch this render's matrices as next render's "previous" pair (the
+		// motion-vector reference). Called by SceneRenderer at the END of each
+		// RenderScene for the camera it just rendered - the game loop's
+		// LateUpdate also lands here, but the renderer call is what keeps the
+		// EDITOR viewport correct: the editor never runs Scene::LateUpdate, so
+		// before this hook the editor camera's prev matrices froze at their
+		// first value and every velocity consumer (TAA, NRD, motion blur) saw
+		// a velocity that grew with camera travel and never returned to zero.
+		void SnapshotPrevMatrices();
+
 		//virtual void Create() override;
 
 		void SetLookDirection(const math::Vector3& forward, const math::Vector3& up);

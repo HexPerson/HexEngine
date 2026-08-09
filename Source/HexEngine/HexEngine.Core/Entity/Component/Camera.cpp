@@ -227,6 +227,11 @@ namespace HexEngine
 
 	void Camera::LateUpdate(float frameTime)
 	{
+		SnapshotPrevMatrices();
+	}
+
+	void Camera::SnapshotPrevMatrices()
+	{
 		_projectionMatrixPrev = _projectionMatrix;
 		_viewMatrixPrev = _viewMatrix;
 	}

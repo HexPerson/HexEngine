@@ -373,6 +373,12 @@ void GraphicsDeviceD3D11::Destroy()
 	SAFE_RELEASE(_additivePreserveAlphaBlendState);
 	SAFE_RELEASE(_transparencyPreserveAlphaBlendState);
 	SAFE_RELEASE(_multiplicativeBlendState);
+	SAFE_RELEASE(_velocityMrtSubtractive);
+	SAFE_RELEASE(_velocityMrtAdditive);
+	SAFE_RELEASE(_velocityMrtPremultiplied);
+	SAFE_RELEASE(_velocityMrtTransparencyPreserve);
+	SAFE_RELEASE(_velocityMrtMultiplicative);
+	SAFE_RELEASE(_velocityMrtTransparency);
 	//SAFE_RELEASE(_depthStencilView);
 
 	/*for (int i = 0; i < _countof(_shadowMap); ++i)
@@ -845,6 +851,48 @@ bool GraphicsDeviceD3D11::CreateInternal()
 	multiplicativeDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
 	multiplicativeDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	_device->CreateBlendState(&multiplicativeDesc, &_multiplicativeBlendState);
+
+	// P4.4 velocity-MRT variants: identical RT0 colour blend, but with
+	// IndependentBlendEnable so every OTHER render target falls back to its
+	// CD3D11_DEFAULT per-RT desc (blend DISABLED, full write mask). During
+	// the transparent pass the gbuffer velocity RT (R32G32_FLOAT) is bound at
+	// slot 4: alpha-blending a velocity is meaningless and additive/
+	// multiplicative blends would corrupt the background velocity, so slot 4
+	// must OVERWRITE while slot 0 keeps the material's blend.
+	{
+		CD3D11_BLEND_DESC d = transparentDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtSubtractive);
+
+		d = additivePreserveAlphaDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtAdditive);
+
+		d = premultipliedAlphaDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtPremultiplied);
+
+		d = transparencyPreserveAlphaDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtTransparencyPreserve);
+
+		d = multiplicativeDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtMultiplicative);
+
+		// BlendState::Transparency normally maps to DXTK NonPremultiplied -
+		// rebuild that desc explicitly since DXTK doesn't expose it.
+		CD3D11_BLEND_DESC np(def);
+		np.RenderTarget[0].BlendEnable = true;
+		np.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+		np.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		np.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+		np.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_SRC_ALPHA;
+		np.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+		np.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		np.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&np, &_velocityMrtTransparency);
+	}
 
 	D3D11_SAMPLER_DESC sampDesc;
 	ZeroMemory(&sampDesc, sizeof(sampDesc));
@@ -2458,7 +2506,9 @@ void GraphicsDeviceD3D11::SetRenderTargets(const std::vector<HexEngine::ITexture
 
 	for (auto i = 0; i < renderTargets.size(); ++i)
 	{
-		rtv[i] = ((Texture2D*)renderTargets[i])->_renderTargetView;
+		// Null entries are legal: a sparse MRT bind (e.g. colour at 0 +
+		// velocity at 4, P4.4) leaves the middle slots unbound.
+		rtv[i] = renderTargets[i] != nullptr ? ((Texture2D*)renderTargets[i])->_renderTargetView : nullptr;
 	}
 
 	_deviceContext->OMSetRenderTargets(renderTargets.size(), rtv, depthStencil ? ((Texture2D*)depthStencil)->_depthStencilView : nullptr);
@@ -2956,28 +3006,41 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 		_deviceContext->OMSetBlendState(_states->Opaque(), blend, 0xFFFFFFFF);
 		break;
 
+	// Blending states: while the velocity-MRT phase is active, substitute the
+	// IndependentBlendEnable variant so RT4 (velocity) overwrites while RT0
+	// keeps the material's colour blend. Opaque needs no variant - it already
+	// overwrites every target.
 	case HexEngine::BlendState::Additive:
-		_deviceContext->OMSetBlendState(_additivePreserveAlphaBlendState != nullptr ? _additivePreserveAlphaBlendState : _states->Additive(), blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtAdditive != nullptr) ? _velocityMrtAdditive :
+			(_additivePreserveAlphaBlendState != nullptr ? _additivePreserveAlphaBlendState : _states->Additive()), blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Subtractive:
-		_deviceContext->OMSetBlendState(_subtractivetBlendState, blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtSubtractive != nullptr) ? _velocityMrtSubtractive : _subtractivetBlendState, blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Multiplicative:
-		_deviceContext->OMSetBlendState(_multiplicativeBlendState, blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtMultiplicative != nullptr) ? _velocityMrtMultiplicative : _multiplicativeBlendState, blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::PremultipliedAlpha:
-		_deviceContext->OMSetBlendState(_premultipliedAlphaBlendState != nullptr ? _premultipliedAlphaBlendState : _states->AlphaBlend(), blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtPremultiplied != nullptr) ? _velocityMrtPremultiplied :
+			(_premultipliedAlphaBlendState != nullptr ? _premultipliedAlphaBlendState : _states->AlphaBlend()), blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Transparency:
-		_deviceContext->OMSetBlendState(_states->NonPremultiplied(), blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtTransparency != nullptr) ? _velocityMrtTransparency : _states->NonPremultiplied(), blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::TransparencyPreserveAlpha:
-		_deviceContext->OMSetBlendState(_transparencyPreserveAlphaBlendState != nullptr ? _transparencyPreserveAlphaBlendState : _states->NonPremultiplied(), blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtTransparencyPreserve != nullptr) ? _velocityMrtTransparencyPreserve :
+			(_transparencyPreserveAlphaBlendState != nullptr ? _transparencyPreserveAlphaBlendState : _states->NonPremultiplied()), blend, 0xFFFFFFFF);
 		break;
 
 	default:
@@ -2992,6 +3055,18 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 HexEngine::BlendState GraphicsDeviceD3D11::GetBlendState() const
 {
 	return _prevRenderState._blendState;
+}
+
+void GraphicsDeviceD3D11::SetVelocityMrtPhase(bool active)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	if (_velocityMrtPhase == active)
+		return;
+	_velocityMrtPhase = active;
+	// Re-apply the current state so a blend set before the toggle picks up
+	// (or drops) its velocity-MRT variant.
+	if (_prevRenderState._blendState != HexEngine::BlendState::Invalid)
+		SetBlendState(_prevRenderState._blendState);
 }
 
 int32_t GraphicsDeviceD3D11::GetCurrentMSAALevel() const
