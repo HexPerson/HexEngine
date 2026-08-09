@@ -16,7 +16,7 @@ namespace HexEngine
 	{
 		auto position = GetAbsolutePosition();
 
-		if (_canvas.BeginDraw(renderer, w, h))
+		if (_canvas.BeginDraw(renderer, (uint32_t)_size.x, (uint32_t)_size.y))
 		{
 			int32_t labelWidth = 0, labelHeight = 0;
 			if (_label.length() > 0)
@@ -103,7 +103,7 @@ namespace HexEngine
 			_canvas.EndDraw(renderer);
 		}
 
-		_canvas.Present(renderer, position.x, position.y, w, h);
+		_canvas.Present(renderer, position.x, position.y, _size.x, _size.y);
 	}
 
 	void LineEdit::SetValue(const std::wstring& value)

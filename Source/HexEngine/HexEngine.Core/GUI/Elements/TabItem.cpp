@@ -16,7 +16,11 @@ namespace HexEngine
 		const auto& pos = GetAbsolutePosition();
 		int32_t x = 0, y = 0;
 
-		if (_canvas.BeginDraw(renderer, w, h))
+		// The tab visual only covers the label area, not the whole tab view.
+		const int32_t tabWidth = GetTabWidth();
+		const int32_t tabHeight = renderer->_style.tab_height;
+
+		if (_canvas.BeginDraw(renderer, (uint32_t)tabWidth, (uint32_t)tabHeight))
 		{
 			int32_t width, height;
 			renderer->_style.font->MeasureText((int32_t)Style::FontSize::Small, _label, width, height);
@@ -39,7 +43,7 @@ namespace HexEngine
 			_canvas.EndDraw(renderer);
 		}
 
-		_canvas.Present(renderer, pos.x, pos.y, w, h);
+		_canvas.Present(renderer, pos.x, pos.y, tabWidth, tabHeight);
 
 	}
 
