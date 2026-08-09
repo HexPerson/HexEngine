@@ -47,7 +47,7 @@
 	Texture2D g_skyViewLut : register(t0); // bound as the fullscreen quad's source texture
 	SamplerState g_linearSampler : register(s4);
 
-	static const uint kPrefilterSampleCount = 128u;
+	static const uint kPrefilterSampleCount = 256u;
 
 	float3 SampleSky(float3 dir)
 	{
@@ -126,9 +126,20 @@
 		// bright horizon band into concentric rings in the prefiltered rows
 		// (verified in the first capture of this atlas); rotating the set per
 		// texel decorrelates neighbours, so the same error shows up as fine
-		// noise that the consumer's bilinear tap averages away.
+		// noise instead.
+		//
+		// The rotation must ALSO vary per frame: a fixed seed freezes the
+		// residual Monte-carlo variance into the atlas, and because a flat
+		// receiver's reflection vectors sweep only a few atlas texels, that
+		// frozen per-texel noise gets bilinearly magnified into large smooth
+		// blotches crawling across floors (worst in shadow, where the added
+		// sky term dominates local contrast). The atlas regenerates every
+		// frame anyway, so a golden-ratio frame offset makes the error a
+		// zero-mean temporal dither that TAA integrates away.
 		const float2 pix = input.position.xy;
-		const float azimuthRotation = frac(sin(dot(pix, float2(12.9898f, 78.233f))) * 43758.5453f);
+		const float azimuthRotation = frac(
+			sin(dot(pix, float2(12.9898f, 78.233f))) * 43758.5453f
+			+ (float)(g_frame & 1023u) * 0.6180339887f);
 
 		[loop]
 		for (uint i = 0u; i < kPrefilterSampleCount; ++i)
