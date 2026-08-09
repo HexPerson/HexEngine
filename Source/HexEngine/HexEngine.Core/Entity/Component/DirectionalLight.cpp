@@ -179,6 +179,14 @@ namespace HexEngine
 
 		//_lightBoundingSphere[cascadeIdx].Radius *= 1.3f;
 
+		// Round the fitted radius UP in coarse 1/16-unit steps. The radius is
+		// recomputed from the sub-frustum corners every frame and carries fp noise;
+		// the ortho extent and worldUnitsPerTexel both derive from it, so even tiny
+		// radius wobble rescales the shadow UV grid frame-to-frame and defeats the
+		// whole-texel snap below. Quantising keeps the projection bit-stable while
+		// the camera merely rotates or strafes.
+		_lightBoundingSphere[cascadeIdx].Radius = ceilf(_lightBoundingSphere[cascadeIdx].Radius * 16.0f) / 16.0f;
+
 		auto lightPosCenter = _lightBoundingSphere[cascadeIdx].Center;
 		auto sunDistance = camera->GetFarZ();// _lightBoundingSphere[cascadeIdx].Radius;
 
@@ -227,12 +235,22 @@ namespace HexEngine
 		
 
 		{
-			// Snap cascade center in light-view space to shadow texel increments to reduce shimmering.
-			auto snapView = math::Matrix::CreateLookAt(lightPosCenter - (lookDir * sunDistance), lightPosCenter, math::Vector3::Up);
-			auto centerLS = math::Vector3::Transform(lightPosCenter, snapView);
+			// Snap the cascade centre to whole shadow-texel increments so the ortho
+			// window translates in exact texel steps as the camera moves.
+			//
+			// The basis this happens in MUST have an origin independent of the centre
+			// being snapped. The previous version built a LookAt whose TARGET was
+			// lightPosCenter itself, so the centre always transformed to (0, 0, -dist)
+			// in that view - snapping zero is a no-op, and every cascade origin still
+			// crawled sub-texel with the camera (the user-visible edge shimmer).
+			// A rotation-only basis (eye pinned at the world origin, same lookDir/Up
+			// as the real view) carries the snapped X/Y through the final view matrix
+			// unchanged, because the two matrices share the same rotation.
+			auto lightBasis = math::Matrix::CreateLookAt(math::Vector3::Zero, lookDir, math::Vector3::Up);
+			auto centerLS = math::Vector3::Transform(lightPosCenter, lightBasis);
 			centerLS.x = floor((centerLS.x / worldUnitsPerTexel) + 0.5f) * worldUnitsPerTexel;
 			centerLS.y = floor((centerLS.y / worldUnitsPerTexel) + 0.5f) * worldUnitsPerTexel;
-			lightPosCenter = math::Vector3::Transform(centerLS, snapView.Invert());
+			lightPosCenter = math::Vector3::Transform(centerLS, lightBasis.Invert());
 		}
 
 		_viewMatrix[cascadeIdx] = math::Matrix::CreateLookAt(lightPosCenter - (lookDir * sunDistance), lightPosCenter, math::Vector3::Up);
