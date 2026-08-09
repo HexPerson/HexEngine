@@ -113,6 +113,17 @@
 		const float3 N = OctDecodeDir(innerUv);
 		const float roughness = rowIdx / (rowsF - 1.0f);
 
+		// TEMPORAL ACCUMULATION: the C++ side draws this quad with src-alpha
+		// blending, so the alpha we return is the per-row EMA rate:
+		// atlas = lerp(atlas, thisFrameEstimate, alpha). Per-frame rotation of
+		// the sample set (below) makes successive estimates independent, so
+		// the rough rows integrate ~1/alpha frames' worth of samples - the
+		// in-frame Monte-carlo variance that TAA could not absorb (its
+		// neighbourhood clamp rejects high-amplitude flicker) averages out
+		// HERE, in the atlas, before any consumer sees it. The mirror row
+		// writes alpha 1 (plain overwrite) so sun/weather changes stay
+		// frame-exact where the content is cheap to compute exactly.
+
 		// Mirror row: the LUT already is the radiance in this direction.
 		if (rowIdx < 0.5f)
 			return float4(SampleSky(N), 1.0f);
@@ -157,6 +168,15 @@
 			}
 		}
 
-		return float4(accum / max(weight, 1e-4f), 1.0f);
+		// Sanitise before it enters the EMA: a single NaN/inf would otherwise
+		// persist in the accumulator forever (NaN * (1-a) + x is still NaN).
+		const float3 estimate = clamp(accum / max(weight, 1e-4f), 0.0f.xxx, 65504.0f.xxx);
+
+		// EMA rate halves per row: 1/2, 1/4, 1/8, 1/16 - the wider the lobe
+		// (and so the higher the per-frame variance), the longer the window.
+		// Row 4 integrates ~16 frames: variance drops ~5x on top of the
+		// in-frame sample count, and a weather retint still converges in
+		// about a quarter second.
+		return float4(estimate, exp2(-rowIdx));
 	}
 }

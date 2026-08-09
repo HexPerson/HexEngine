@@ -6129,6 +6129,11 @@ namespace HexEngine
 				return;
 			}
 			_iblSkyEnvMap->SetDebugName("_iblSkyEnvMap");
+
+			// The atlas is now an EMA accumulator (see the blended draw below):
+			// uninitialised contents would decay rather than be overwritten, and
+			// a NaN would persist forever. Start from known zero.
+			_iblSkyEnvMap->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		}
 
 		// Regenerated every frame by design: the day/night cycle moves the sun
@@ -6195,7 +6200,18 @@ namespace HexEngine
 		graphics->SetViewport(vp);
 
 		// The sky-view LUT rides in as the quad's source texture (t0).
+		//
+		// Src-alpha blend: the shader returns its EMA rate in alpha (1 on the
+		// mirror row = plain overwrite; halving per roughness row), so the ROP
+		// computes atlas = lerp(atlas, estimate, rate) in place. Combined with
+		// the per-frame sample-set rotation in SkyEnvMap.shader, the rough
+		// rows integrate ~1/rate frames of independent Monte-carlo estimates -
+		// the prefilter variance that showed as wispy blotches on floors is
+		// averaged inside the atlas instead of being handed to TAA (whose
+		// neighbourhood clamp rejects flicker at that amplitude).
+		graphics->SetBlendState(BlendState::Transparency);
 		guiRenderer->FullScreenTexturedQuad(g_pEnv->_atmosphereLUTs->GetSkyViewLUT(), _iblSkyEnvShader.get());
+		graphics->SetBlendState(BlendState::Opaque);
 
 		// P1-C: project the atlas we just built into SH irradiance coefficients.
 		// Nine texels, each integrating the atlas's mirror row against one basis
