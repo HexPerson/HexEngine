@@ -141,13 +141,17 @@ namespace HexEngine
 	HVar r_pbrEnergyFix("r_pbrEnergyFix", "Apply the physically-correct diffuse 1/PI term (needs light/exposure rebalance)", false, false, true);
 	HVar r_shadowCascades("r_shadowCascades", "The number of cascades to calculate with shadow mapping", 4, 1, 4);
 	HVar r_shadowCascadeRange("r_shadowCascadeRange", "The depth of one shadow cascade, except the last (which will occupy all remaining space", 100.0f, 1.0f, 10000.0f);
+	HVar r_shadowCascadeSplitLambda("r_shadowCascadeSplitLambda", "Sun cascade split blend: 0 = legacy fixed r_shadowCascadeRange blocks, otherwise lerps uniform->logarithmic splits (higher concentrates shadow resolution near the camera)", 0.9f, 0.0f, 1.0f);
 	HVar r_penumbraFilterMaxSize("r_penumbraFilterMaxSize", "The maximum filter size for penumbra calculation", 0.002f, 0.0f, 10.0f);
 	HVar r_shadowFilterMaxSize("r_shadowFilterMaxSize", "The maximum size of the shadow filter", 0.21f, 0.0f, 10.0f);
 	HVar r_shadowBiasMultiplier("r_shadowBiasMultiplier", "The bias multiplier to use when calculating normal offset", 0.0002f, 0.0f, 1.0f);
 	HVar r_shadowCascadeBlendRange("r_shadowCascadeBlendRange", "The distance to use for blending shadow cascades together", 10.0f, 1.0f, 1000.0f);
 	HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
 	HVar r_bloomLuminanceThreshold("r_bloomLuminanceThreshold", "Reference luminance where physically-based bloom starts to respond strongly", 1.0f, 0.0f, 32.0f);
-	HVar r_bloomPhysicalIntensity("r_bloomPhysicalIntensity", "Strength multiplier for physically-based bloom", 0.35f, 0.0f, 8.0f);
+	// With the normalised mip chain this reads as "fraction of light the lens
+	// scatters" - restrained AAA values live around 0.03-0.07 (old default 0.35
+	// predates the 1/N normalisation and would glow-bomb the frame).
+	HVar r_bloomPhysicalIntensity("r_bloomPhysicalIntensity", "Strength multiplier for physically-based bloom", 0.05f, 0.0f, 8.0f);
 	HVar r_bloomPhysicalClamp("r_bloomPhysicalClamp", "Clamp physically-based bloom prefilter output (0 disables clamp)", 0.0f, 0.0f, 128.0f);
 	HVar r_fxaa("r_fxaa", "Whether or not to use the FXAA anti-aliasing method", 1, 0, 1);
 	HVar r_fog("r_fog", "Enable or disable fog effect", 1, 0, 1);
@@ -1524,7 +1528,8 @@ namespace HexEngine
 		_dlssTarget->SetDebugName("_dlssTarget");
 
 		_bloomEffect = new Bloom();
-		_bloomEffect->Create(width / 4, height / 4);
+		_bloomEffect->Create(width, height); // full res - the chain sizes itself
+
 
 		_taa.Create(_beautyRT);
 		_diffuseGi.Create(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
@@ -2305,6 +2310,36 @@ namespace HexEngine
 
 	
 
+	// End depth (world units from the camera) of sun cascade `cascadeIdx` out of
+	// `numCascades`. Two schemes:
+	//  - legacy (r_shadowCascadeSplitLambda == 0): every cascade covers a fixed
+	//    r_shadowCascadeRange block (100 m default) and the last takes the rest.
+	//    Cascade 0 spreading its texels over a 100 m slice is ~6 cm per texel at
+	//    4096 - the stair-stepped interior sun shadows from the 2026-08-09 report.
+	//  - practical split (lambda > 0): per-cascade lerp between a uniform and a
+	//    logarithmic distribution of [near, far]. Log-heavy blends pull cascade 0
+	//    in to tens of metres (roughly an order of magnitude more texel density
+	//    where aliasing is visible) while the far cascades still reach farZ.
+	// The shader picks its cascade from g_frustumDepths, which SetupPerFrameBuffer
+	// fills from this same function - the two callers must stay in lockstep.
+	static float ComputeCascadeSplitEnd(int32_t cascadeIdx, int32_t numCascades, float nearZ, float farZ)
+	{
+		if (cascadeIdx >= numCascades - 1)
+			return farZ;
+
+		const float lambda = r_shadowCascadeSplitLambda._val.f32;
+		if (lambda <= 0.0f)
+			return std::min((float)(cascadeIdx + 1) * r_shadowCascadeRange._val.f32, farZ);
+
+		// Clamp the split near plane: cameras with cm-scale near planes would let
+		// the log term collapse cascade 0 to a metre or two.
+		const float n = std::max(nearZ, 1.0f);
+		const float t = (float)(cascadeIdx + 1) / (float)numCascades;
+		const float logSplit = n * std::pow(farZ / n, t);
+		const float uniformSplit = n + (farZ - n) * t;
+		return lambda * logSplit + (1.0f - lambda) * uniformSplit;
+	}
+
 	void SceneRenderer::SetupPerFrameBuffer(
 		const math::Matrix& viewMatrix,
 		const math::Matrix& projectionMatrix,
@@ -2435,28 +2470,13 @@ namespace HexEngine
 			
 			const auto maxShadowCascades = r_shadowCascades._val.i32;// shadowCaster->GetMaxSupportedShadowCascades();
 
-			float cascadeStart = 0.0f;
-
-			float mul = (_currentCamera->GetFarZ() / (float)numCascades) * (float)maxShadowCascades;;
-
 			for (int i = 0; i < 4; ++i)
 			{
-				// Calculate the shadow map cascade ranges
-				//
-				//float start = min(1.0f, (float)(i + 0) / (float)numCascades);
-				//float end = min(1.0f, (float)(i + 1) / (float)numCascades);
-
-				//float start = cascadeStart;
-				float end = (cascadeStart + r_shadowCascadeRange._val.f32) / _currentCamera->GetFarZ();
-
-				if (i >= maxShadowCascades - 1)
-					end = 1.0f;
-
-				// Calculate the frustum splits
-				//
-				((float*)&bufferData._frustumSplits.x)[i] = end * _currentCamera->GetFarZ();
-
-				cascadeStart += r_shadowCascadeRange._val.f32;
+				// Calculate the frustum splits. Entries past the live cascade count
+				// stay at farZ ([3] doubles as "camera far" for sky/fog/SSR shaders).
+				// Must match the start/end RenderShadowMaps feeds ConstructMatrices.
+				((float*)&bufferData._frustumSplits.x)[i] = ComputeCascadeSplitEnd(
+					i, maxShadowCascades, _currentCamera->GetNearZ(), _currentCamera->GetFarZ());
 			}
 
 			//bufferData._lightViewMatrix = shadowCaster->GetViewMatrix().Transpose();
@@ -2607,9 +2627,9 @@ namespace HexEngine
 			bufferData._atmosphere.volumetricSpotInsideMin = env_volumetricSpotInsideMin._val.f32;
 			bufferData._atmosphere.volumetricSpotInsideMax = env_volumetricSpotInsideMax._val.f32;
 
-			// bloom
+			// bloom (viewportScale retired with the mip chain - the chain shaders
+			// get per-hop texel sizes via their own b6 constants)
 			bufferData._bloom.luminosityThreshold = r_bloomLuminanceThreshold._val.f32;
-			bufferData._bloom.viewportScale = 4.0f;
 			bufferData._bloom.bloomIntensity = r_bloomPhysicalIntensity._val.f32;
 			bufferData._bloom.bloomClamp = r_bloomPhysicalClamp._val.f32;
 
@@ -3616,9 +3636,11 @@ namespace HexEngine
 		//
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::NoCulling);
 		{
-			float cascadeStart = 0.0f;
+			const auto numCascades = shadowCaster->GetMaxSupportedShadowCascades();
+			const float nearZ = _currentCamera->GetNearZ();
+			const float farZ = _currentCamera->GetFarZ();
 
-			for (auto i = 0; i < shadowCaster->GetMaxSupportedShadowCascades(); ++i)
+			for (auto i = 0; i < numCascades; ++i)
 			{
 				auto shadowMap = shadowCaster->GetShadowMap(i);
 
@@ -3643,13 +3665,15 @@ namespace HexEngine
 				bool shouldOverrideCascade = shadowCaster->CastAs<PointLight>() != nullptr;
 
 				
-				float start = cascadeStart / _currentCamera->GetFarZ();
-				float end = (cascadeStart + r_shadowCascadeRange._val.f32) / _currentCamera->GetFarZ();
+				// Same split maths as SetupPerFrameBuffer's g_frustumDepths upload -
+				// the shader picks a cascade by those depths and must find geometry
+				// rendered with matching matrices. Point/spot ConstructMatrices
+				// ignore the z range entirely, so sharing this path is harmless
+				// for them.
+				float start = (i == 0) ? 0.0f : ComputeCascadeSplitEnd(i - 1, numCascades, nearZ, farZ) / farZ;
+				float end = ComputeCascadeSplitEnd(i, numCascades, nearZ, farZ) / farZ;
 
-				if (i == shadowCaster->GetMaxSupportedShadowCascades() - 1)
-					end = 1.0f;
-
-				if (start == 1.0f && end == 1.0f)
+				if (start >= 1.0f && end >= 1.0f)
 				{
 					LOG_DEBUG("Cannot render shadow map cascade where start and end are both 1.0f");
 					return;
@@ -3674,9 +3698,7 @@ namespace HexEngine
 
 					shadowCaster->GetPVS(i)->CalculateVisibility(_currentScene, params);
 				}
-				
 
-				cascadeStart += r_shadowCascadeRange._val.f32;
 
 				SetupPerFrameBuffer(
 					shadowCaster->GetViewMatrix(i),
@@ -4015,23 +4037,12 @@ namespace HexEngine
 				_temporalAaAppliedThisFrame = dlssActive;
 			}
 
-			// Interaction look-at outline glow. Runs before bloom so the SDF ring
-			// picks up a soft bloom halo. No-op when nothing is focused.
-			GFX_PERF_BEGIN(0xFFFFFFFF, L"Outline glow");
-			{
-				RenderOutlineGlow();
-			}
-			GFX_PERF_END();
-
-			if (!r_profileDisableBloom._val.b)
-			{
-				_bloomEffect->Render(_currentCamera, _beautyRT, _beautyRT);
-			}
-
-			// Auto exposure: sample the post-bloom beauty for adaptive eye-adaption metering.
-			// Runs after bloom so bright bloom glare is counted by the meter (matching how
-			// the viewer perceives the scene); runs before colour grading so the resulting
-			// multiplier can be applied via r_exposure in the per-frame buffer.
+			// Auto exposure: meter the PRE-bloom, pre-glow beauty. Metering
+			// after bloom created a feedback loop (brighter frame -> more
+			// bloom -> meter reads brighter -> exposure drops -> less bloom),
+			// and the histogram band doesn't want glow contamination anyway.
+			// Still before colour grading so the resulting multiplier can be
+			// applied via r_exposure in the per-frame buffer.
 			//
 			// Passing sun elevation lets AutoExposure switch its target luma and max
 			// multiplier to night-time values as the sun descends - without this, the meter
@@ -4050,6 +4061,22 @@ namespace HexEngine
 					}
 				}
 				_autoExposure.Update(_beautyRT, dt, sunElevation);
+			}
+
+			// Interaction look-at outline glow. Runs before bloom so the SDF ring
+			// picks up a soft bloom halo. No-op when nothing is focused.
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"Outline glow");
+			{
+				RenderOutlineGlow();
+			}
+			GFX_PERF_END();
+
+			if (!r_profileDisableBloom._val.b)
+			{
+				// The SSS intermediate is idle by this point in the frame and
+				// matches _beautyRT in size/format - lend it as the composite
+				// scratch leg.
+				_bloomEffect->Render(_currentCamera, _beautyRT, _subsurfaceIntermediateRT);
 			}
 			
 			//_beautyRT->GetPixels(_denoiseFD.colour);

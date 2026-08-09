@@ -11,10 +11,11 @@ struct ID3D11Texture2D;
 
 namespace HexEngine
 {
-	// Auto exposure: dispatches a compute pass that reads the post-processed beauty buffer,
-	// reduces a strided sample of pixels to a single average log-luminance value, reads the
-	// result back to the CPU, and smoothly adapts an exposure multiplier toward a target
-	// middle-grey luminance.
+	// Auto exposure: dispatches a compute pass that reads the PRE-post-process beauty
+	// buffer, builds a 256-bin log-luminance histogram from a strided sample of pixels,
+	// reads it back to the CPU, averages the [low%, high%] percentile band of the CDF
+	// (outlier-immune metering), and smoothly adapts an exposure multiplier toward the
+	// target with split up/down rates.
 	//
 	// The output multiplier is plugged into the existing colour-grading exposure path so the
 	// existing tonemap/colour-grade shader doesn't need to change. When auto exposure is off,
@@ -52,7 +53,7 @@ namespace HexEngine
 
 		std::shared_ptr<IShader> _luminanceShader;
 
-		// Output accumulator (32-bit uint, atomic-added by the compute shader).
+		// 256-bin histogram (uint counts, atomic-added by the compute shader).
 		ID3D11Buffer* _accumBuffer = nullptr;
 		ID3D11UnorderedAccessView* _accumUav = nullptr;
 

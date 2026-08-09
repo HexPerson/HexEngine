@@ -31,10 +31,34 @@ namespace HexEngine
 			"r_autoExposureMax",
 			"Maximum exposure multiplier the auto exposure can drive to",
 			4.0f, 0.1f, 16.0f);
+		// Master adaptation scale (kept for the Settings slider); the actual
+		// rate is the split up/down pair below multiplied by this / 1.5.
 		HVar r_autoExposureSpeed(
 			"r_autoExposureSpeed",
-			"Rate at which exposure adapts toward target (1/s; lower = slower)",
+			"Master scale on exposure adaptation speed (1.5 = 1x)",
 			1.5f, 0.05f, 8.0f);
+		// Split adaptation (eye-like): darkening (scene got brighter) is fast,
+		// brightening (scene got darker) is slow.
+		HVar r_autoExposureSpeedUp(
+			"r_autoExposureSpeedUp",
+			"Adaptation rate when exposure is RISING (dark adaptation, 1/s)",
+			1.0f, 0.05f, 8.0f);
+		HVar r_autoExposureSpeedDown(
+			"r_autoExposureSpeedDown",
+			"Adaptation rate when exposure is FALLING (bright adaptation, 1/s)",
+			3.0f, 0.05f, 8.0f);
+		// Percentile band the histogram meter averages over. Discarding the
+		// bottom/top tails is the point of the histogram: a blazing sliver
+		// (sun disc, neon sign) or a black letterbox can no longer drag the
+		// metered value the way it did with the plain mean.
+		HVar r_autoExposureLowPercent(
+			"r_autoExposureLowPercent",
+			"Histogram CDF percentile below which pixels are ignored by the meter",
+			40.0f, 0.0f, 90.0f);
+		HVar r_autoExposureHighPercent(
+			"r_autoExposureHighPercent",
+			"Histogram CDF percentile above which pixels are ignored by the meter",
+			95.0f, 10.0f, 100.0f);
 		HVar r_autoExposureSampleStride(
 			"r_autoExposureSampleStride",
 			"Pixel stride between luminance samples (higher = cheaper but coarser)",
@@ -119,6 +143,7 @@ namespace HexEngine
 		// don't dominate the mean. -10..+10 in natural-log space covers 4e-5 .. 22000 nits.
 		constexpr float kMinLogLuma = -10.0f;
 		constexpr float kLogLumaRange = 20.0f;
+		constexpr uint32_t kHistogramBins = 256;
 	}
 
 	// Units slice part 4 (defined in SceneRenderer.cpp): rendered units =
@@ -151,10 +176,10 @@ namespace HexEngine
 
 	bool AutoExposure::Create()
 	{
-		_luminanceShader = IShader::Create("EngineData.Shaders/AutoExposureLuminance.hcs");
+		_luminanceShader = IShader::Create("EngineData.Shaders/AutoExposureHistogram.hcs");
 		if (!_luminanceShader)
 		{
-			LOG_WARN("AutoExposure: AutoExposureLuminance.hcs failed to load - auto exposure disabled");
+			LOG_WARN("AutoExposure: AutoExposureHistogram.hcs failed to load - auto exposure disabled");
 			return false;
 		}
 		return true;
@@ -185,14 +210,14 @@ namespace HexEngine
 		if (_accumBuffer == nullptr)
 		{
 			D3D11_BUFFER_DESC desc = {};
-			desc.ByteWidth = sizeof(uint32_t);
+			desc.ByteWidth = kHistogramBins * sizeof(uint32_t);
 			desc.Usage = D3D11_USAGE_DEFAULT;
 			desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 			desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 			desc.StructureByteStride = sizeof(uint32_t);
 			if (FAILED(device->CreateBuffer(&desc, nullptr, &_accumBuffer)))
 			{
-				LOG_WARN("AutoExposure: failed to create accumulator buffer");
+				LOG_WARN("AutoExposure: failed to create histogram buffer");
 				return false;
 			}
 
@@ -200,10 +225,10 @@ namespace HexEngine
 			uavDesc.Format = DXGI_FORMAT_UNKNOWN;
 			uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
 			uavDesc.Buffer.FirstElement = 0;
-			uavDesc.Buffer.NumElements = 1;
+			uavDesc.Buffer.NumElements = kHistogramBins;
 			if (FAILED(device->CreateUnorderedAccessView(_accumBuffer, &uavDesc, &_accumUav)))
 			{
-				LOG_WARN("AutoExposure: failed to create accumulator UAV");
+				LOG_WARN("AutoExposure: failed to create histogram UAV");
 				return false;
 			}
 		}
@@ -211,7 +236,7 @@ namespace HexEngine
 		if (_accumStaging == nullptr)
 		{
 			D3D11_BUFFER_DESC desc = {};
-			desc.ByteWidth = sizeof(uint32_t);
+			desc.ByteWidth = kHistogramBins * sizeof(uint32_t);
 			desc.Usage = D3D11_USAGE_STAGING;
 			desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
 			if (FAILED(device->CreateBuffer(&desc, nullptr, &_accumStaging)))
@@ -328,15 +353,48 @@ namespace HexEngine
 			D3D11_MAPPED_SUBRESOURCE mapped = {};
 			if (SUCCEEDED(context->Map(_accumStaging, 0, D3D11_MAP_READ, 0, &mapped)))
 			{
-				const uint32_t encoded = *reinterpret_cast<const uint32_t*>(mapped.pData);
+				uint32_t bins[kHistogramBins];
+				std::memcpy(bins, mapped.pData, sizeof(bins));
 				context->Unmap(_accumStaging, 0);
 
-				// Decode: encoded = sum(normalised_logLuma * 1024). Divide by 1024 and by
-				// the sample count to get average normalised log-luma.
-				const float sumNormalised = static_cast<float>(encoded) / 1024.0f;
-				const float meanNormalised = sumNormalised / static_cast<float>(_lastDispatchSampleCount);
-				const float meanLogLuma = kMinLogLuma + meanNormalised * kLogLumaRange;
-				const float meanLuma = std::exp(meanLogLuma);
+				// CDF percentile walk: average log-luma over the [low%, high%]
+				// band only. When a bin straddles a percentile boundary, only
+				// the in-band fraction of its pixels counts - keeps the metered
+				// value continuous as content shifts between bins.
+				uint64_t total = 0;
+				for (uint32_t b = 0; b < kHistogramBins; ++b)
+					total += bins[b];
+
+				float meanLuma = 0.18f; // neutral fallback for an empty histogram
+				if (total > 0)
+				{
+					const float lowPc = std::min(r_autoExposureLowPercent._val.f32,
+						r_autoExposureHighPercent._val.f32 - 1.0f);
+					const double lowCount = (double)total * lowPc * 0.01;
+					const double highCount = (double)total *
+						std::clamp(r_autoExposureHighPercent._val.f32, lowPc + 1.0f, 100.0f) * 0.01;
+
+					double cdf = 0.0;
+					double bandWeight = 0.0;
+					double bandLogSum = 0.0;
+					for (uint32_t b = 0; b < kHistogramBins; ++b)
+					{
+						const double binStart = cdf;
+						cdf += bins[b];
+						const double inBand = std::min(cdf, highCount) - std::max(binStart, lowCount);
+						if (inBand > 0.0)
+						{
+							// Bin b holds pixels whose normalised log-luma rounded
+							// to b/255 - use the bin centre.
+							const double logLuma = kMinLogLuma +
+								((double)b / 255.0) * kLogLumaRange;
+							bandLogSum += logLuma * inBand;
+							bandWeight += inBand;
+						}
+					}
+					if (bandWeight > 0.0)
+						meanLuma = (float)std::exp(bandLogSum / bandWeight);
+				}
 
 				// Reinhard-style: targetExposure = targetLuma / meanLuma. Clamp to user-set
 				// range so a totally dark frame doesn't blow exposure to infinity (and a totally
@@ -401,11 +459,17 @@ namespace HexEngine
 				}
 				target = std::clamp(target, minMul, maxMul);
 
-				// Exponential approach: alpha = 1 - exp(-speed * dt). This is frame-rate
-				// independent and approaches the target asymptotically.
-				const float speed = std::max(r_autoExposureSpeed._val.f32, 0.0f);
-				const float alpha = (speed > 0.0f && deltaTimeSeconds > 0.0f)
-					? (1.0f - std::exp(-speed * deltaTimeSeconds))
+				// Exponential approach: alpha = 1 - exp(-rate * dt), frame-rate
+				// independent. Split rates (eye-like): rising exposure = dark
+				// adaptation = slow; falling = bright adaptation = fast. The
+				// legacy r_autoExposureSpeed HVar (still on the Settings slider)
+				// scales both, 1.5 = neutral.
+				const float masterScale = std::max(r_autoExposureSpeed._val.f32, 0.0f) / 1.5f;
+				const float rate = masterScale * ((target > _smoothedExposure)
+					? r_autoExposureSpeedUp._val.f32
+					: r_autoExposureSpeedDown._val.f32);
+				const float alpha = (rate > 0.0f && deltaTimeSeconds > 0.0f)
+					? (1.0f - std::exp(-rate * deltaTimeSeconds))
 					: 1.0f;
 				_smoothedExposure += (target - _smoothedExposure) * alpha;
 				_smoothedExposure = std::clamp(_smoothedExposure, minMul, maxMul);
@@ -416,8 +480,8 @@ namespace HexEngine
 					if (_debugAccum >= 1.0f)
 					{
 						_debugAccum = 0.0f;
-						LOG_INFO("AutoExposure: encoded=%u samples=%u meanLuma=%.4f ev100=%.2f autoEC=%.2f target=%.3f smoothed=%.3f nightW=%.2f",
-							encoded, _lastDispatchSampleCount, meanLuma, debugEv100, debugAutoComp, target, _smoothedExposure, nightWeight);
+						LOG_INFO("AutoExposure: total=%llu bandLuma=%.4f ev100=%.2f autoEC=%.2f target=%.3f smoothed=%.3f nightW=%.2f",
+							(unsigned long long)total, meanLuma, debugEv100, debugAutoComp, target, _smoothedExposure, nightWeight);
 					}
 				}
 			}
