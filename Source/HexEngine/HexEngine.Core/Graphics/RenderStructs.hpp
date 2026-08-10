@@ -147,7 +147,9 @@ namespace HexEngine
 		// dark band at the far edge of the last cascade. Occupies the old pad1 slot, so the
 		// cbuffer layout is unchanged.
 		int	  cascadeCount;
-		int	  pad2;
+		// tan(half of r_sunAngularDiameter): the PCSS penumbra growth rate for the
+		// sun. Occupies the old pad2 slot, so the cbuffer layout is unchanged.
+		float sunTanHalfAngle;
 
 		// Screen-space contact shadow settings, packed as a vec4 for cbuffer alignment.
 		// Only the directional light populates these; other shadow casters leave them
@@ -470,6 +472,24 @@ namespace HexEngine
 		// z = r_oceanAbsorption (Beer-Lambert per metre)
 		// w = r_oceanBumpStrength (normal-map deflection)
 		math::Vector4 _oceanConfig2;
+
+		// P4.6 log-space grading. Appended at the tail (append-only rule)
+		// rather than grown into ColourGradeSettings, which sits mid-buffer.
+		// _whiteBalance: xyz = RGB channel gains computed CPU-side from
+		// r_whiteBalanceTemp/Tint (von-Kries in LMS, normalised so green = 1),
+		// w unused. Neutral = (1,1,1).
+		math::Vector4 _whiteBalance;
+		// ASC-CDL-style trio, applied c = pow(max(c * gain + lift, 0), 1/gamma)
+		// after the log-space contrast. Neutral = lift 0, gamma 1, gain 1.
+		math::Vector4 _cdlLift;
+		math::Vector4 _cdlGamma;
+		math::Vector4 _cdlGain;
+		// P4.8 vignette (replaces Vignette.shader's compiled-in #defines):
+		// x = amount (negative darkens), y = radius, z = slope, w = ratio.
+		math::Vector4 _vignetteParams;
+		// P4.7 colour LUT: x = r_colourLutStrength, y = LUT size N (0 = no
+		// LUT loaded - shader bypasses), zw reserved.
+		math::Vector4 _lutParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

@@ -87,6 +87,54 @@
 		return saturate(c);
 	}
 
+	// AgX (Troy Sobotka; minimal fit after Benjamin Wrensch). The current
+	// AAA-reference display transform: hue-preserving desaturation into
+	// white at the top end instead of ACES' notorious skew (saturated blues
+	// to purple, reds to orange). Pipeline: inset matrix (widens the working
+	// gamut so single-channel saturates late) -> log2 encode over
+	// [-12.47, 4.03] stops -> 6th-order sigmoid fit -> outset matrix.
+	// The sigmoid emits a 2.2-gamma-encoded value, so decode back to linear
+	// at the end - this library's contract is linear display-referred out
+	// (Tonemap.shader applies the display gamma itself).
+	float3 AgxMul3(float3 r0, float3 r1, float3 r2, float3 v)
+	{
+		return float3(dot(r0, v), dot(r1, v), dot(r2, v));
+	}
+
+	float3 Tonemap_AgX(float3 c)
+	{
+		// Inset/outset rows (transposed from the reference column-major mats).
+		c = AgxMul3(
+			float3(0.842479062253094f,  0.0784335999999992f, 0.0792237451477643f),
+			float3(0.0423282422610123f, 0.878468636469772f,  0.0791661274605434f),
+			float3(0.0423756549057051f, 0.0784336f,          0.879142973793104f), c);
+
+		// Log2 encode over AgX's dynamic range, then the sigmoid fit.
+		const float minEv = -12.47393f;
+		const float maxEv = 4.026069f;
+		c = saturate((log2(max(c, 1e-10f)) - minEv) / (maxEv - minEv));
+
+		const float3 x = c;
+		const float3 x2 = x * x;
+		const float3 x4 = x2 * x2;
+		c = 15.5f * x4 * x2
+		  - 40.14f * x4 * x
+		  + 31.96f * x4
+		  - 6.868f * x2 * x
+		  + 0.4298f * x2
+		  + 0.1191f * x
+		  - 0.00232f;
+
+		c = AgxMul3(
+			float3( 1.19687900512017f,   -0.0980208811401368f, -0.0990297440797205f),
+			float3(-0.0528968517574562f,  1.15190312990417f,   -0.0989611768448433f),
+			float3(-0.0529716355144438f, -0.0980434501171241f,  1.15107367264116f), c);
+
+		// The fit is display-encoded (2.2); return linear like every other
+		// operator here.
+		return pow(saturate(c), 2.2f);
+	}
+
 	// Dispatch table. HLSL compiler will dead-strip the branches that aren't
 	// selected per-pixel since the operator id is a uniform from the cbuffer.
 	float3 ApplyTonemap(float3 c, int op)
@@ -100,6 +148,7 @@
 		case 3: return Tonemap_Uncharted2(c);
 		case 4: return Tonemap_Lottes(c);
 		case 5: return Tonemap_Linear(c);
+		case 6: return Tonemap_AgX(c);
 		default: return Tonemap_AcesFitted(c);
 		}
 	}

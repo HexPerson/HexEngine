@@ -7,6 +7,7 @@
 #include "../Graphics/BlurEffect.hpp"
 #include "../Graphics/Bloom.hpp"
 #include "../Graphics/AutoExposure.hpp"
+#include "../Graphics/ColourLut.hpp"
 #include "DiffuseGI.hpp"
 #include "../Graphics/ClusteredLighting.hpp"
 #include "../Graphics/ShadowAtlas.hpp"
@@ -338,6 +339,9 @@ namespace HexEngine
 
 		Bloom* _bloomEffect = nullptr;
 		AutoExposure _autoExposure;
+		// P4.7: 3D colour LUT, hot-loaded from Data/ColourGrade.cube and
+		// bound at t1 in the display-output (tonemap) pass.
+		ColourLut _colourLut;
 
 		ITexture3D* _cloudShapeNoise = nullptr;
 		ITexture3D* _cloudDetailNoise = nullptr;

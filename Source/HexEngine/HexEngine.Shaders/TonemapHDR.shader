@@ -27,7 +27,26 @@
 "PixelShader"
 {
 	Texture2D shaderTexture : register(t0);
+	// P4.7: 3D colour LUT, same binding and authoring contract as the SDR
+	// path (display-referred, gamma-encoded input). Applied on the
+	// tonemapped [0,1] base range BEFORE the nit scaling, so one LUT grades
+	// SDR and HDR identically in the mid-range; the HDR highlight extension
+	// above paper white is deliberately left ungraded.
+	Texture3D g_colourLut : register(t1);
 	SamplerState PointSampler : register(s2);
+	SamplerState LinearSampler : register(s4);
+
+	float3 ApplyColourLut(float3 c)
+	{
+		const float n = g_lutParams.y;
+		if (n < 2.0f || g_lutParams.x <= 0.0f)
+			return c;
+		// LUTs are authored display-encoded: encode, sample, decode.
+		const float3 encoded = pow(saturate(c), 1.0f / 2.2f);
+		const float3 uvw = encoded * ((n - 1.0f) / n) + (0.5f / n);
+		const float3 graded = g_colourLut.SampleLevel(LinearSampler, uvw, 0).rgb;
+		return lerp(c, pow(graded, 2.2f), saturate(g_lutParams.x));
+	}
 
 	float3 ApplyHdrDisplayMap(float3 colour)
 	{
@@ -47,7 +66,8 @@
 		// at ~0.866 * paperWhite for fully-saturated SDR-equivalent input;
 		// other operators have similar but distinct rolloffs.
 		const int op = (int)g_tonemapOperator;
-		const float3 baseRange = ApplyTonemap(min(colour, 1.0f), op);
+		float3 baseRange = ApplyTonemap(min(colour, 1.0f), op);
+		baseRange = ApplyColourLut(baseRange);
 
 		// Highlights: extend input values above 1.0 into the headroom between
 		// paper white and display peak. log2(1+x) is gentle (1 stop of input

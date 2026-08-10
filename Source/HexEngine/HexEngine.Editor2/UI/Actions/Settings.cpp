@@ -528,6 +528,7 @@ namespace HexEditor
 				case 3: tonemapDropdown->SetValue(L"Uncharted 2 / Hable"); break;
 				case 4: tonemapDropdown->SetValue(L"Lottes"); break;
 				case 5: tonemapDropdown->SetValue(L"Linear (debug)"); break;
+				case 6: tonemapDropdown->SetValue(L"AgX"); break;
 				default: tonemapDropdown->SetValue(L"ACES (Fitted)"); break;
 				}
 			};
@@ -547,6 +548,7 @@ namespace HexEditor
 			addTonemapItem(L"Uncharted 2 / Hable", 3);
 			addTonemapItem(L"Lottes", 4);
 			addTonemapItem(L"Linear (debug)", 5);
+			addTonemapItem(L"AgX", 6);
 		}
 
 		// Ocean per-scene settings (a struct on the Scene, not HVars).

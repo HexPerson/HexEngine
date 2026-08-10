@@ -288,6 +288,18 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// Ocean tunables (live cvars): x = r_oceanWaveScale, y = r_oceanFoam,
 		// z = r_oceanAbsorption (per metre), w = r_oceanBumpStrength.
 		float4 g_oceanConfig2;
+		// P4.6 log-space grading (see RenderStructs.hpp): xyz = white-balance
+		// RGB gains (neutral 1,1,1), w unused.
+		float4 g_whiteBalance;
+		// ASC-CDL trio: c = pow(max(c * gain + lift, 0), 1/gamma).
+		float4 g_cdlLift;
+		float4 g_cdlGamma;
+		float4 g_cdlGain;
+		// P4.8 vignette: x = amount (negative darkens), y = radius, z = slope,
+		// w = ratio.
+		float4 g_vignetteParams;
+		// P4.7 colour LUT: x = strength, y = LUT size N (0 = none bound).
+		float4 g_lutParams;
 	};
 
 	#define g_timePrev  (g_timeParams2.x)
@@ -427,7 +439,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// Cascades actually allocated/bound for this caster (see RenderStructs.hpp).
 		// MAX_SHADOW_CASCADES is the array capacity, not the live count.
 		int	  cascadeCount;
-		int	  pad2;
+		// tan(half of r_sunAngularDiameter): PCSS penumbra growth rate for the sun.
+		// Occupies the old pad2 slot - cbuffer layout unchanged.
+		float sunTanHalfAngle;
 
 		// Screen-space contact shadow settings:
 		//   x = enabled (1/0), y = step count, z = max length (m), w = thickness (m)
