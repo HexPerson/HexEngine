@@ -41,15 +41,21 @@ namespace HexEngine
 
 		virtual void LateUpdate(float frameTime) override;
 
-		// Latch this render's matrices as next render's "previous" pair (the
-		// motion-vector reference). Called by SceneRenderer at the END of each
-		// RenderScene for the camera it just rendered - the game loop's
-		// LateUpdate also lands here, but the renderer call is what keeps the
-		// EDITOR viewport correct: the editor never runs Scene::LateUpdate, so
-		// before this hook the editor camera's prev matrices froze at their
-		// first value and every velocity consumer (TAA, NRD, motion blur) saw
-		// a velocity that grew with camera travel and never returned to zero.
+		// Motion-vector reference bookkeeping. Two stages because the same
+		// camera can be rendered through RenderScene MORE THAN ONCE per frame
+		// (the editor does): a single latch at end-of-render made the second
+		// render see prev == current, zeroing every world-static velocity -
+		// no motion blur while panning, while camera-locked geometry (the sky
+		// dome) showed huge phantom velocity instead.
+		//
+		// SnapshotPrevMatrices: latch this render's matrices into the PENDING
+		// slot (called at the end of every RenderScene; the game loop's
+		// LateUpdate lands here too - idempotent).
+		// PromotePrevMatrices: move pending -> prev, once per frame, called at
+		// the START of RenderScene before the per-frame cbuffer is filled -
+		// so every render within a frame sees LAST frame's matrices.
 		void SnapshotPrevMatrices();
+		void PromotePrevMatrices(uint64_t frameCount);
 
 		//virtual void Create() override;
 
@@ -182,6 +188,13 @@ namespace HexEngine
 		math::Matrix _viewMatrixBehind;
 		math::Matrix _viewMatrixPrev;
 		math::Matrix _cameraToWorld;
+		// Pending motion-vector reference (see SnapshotPrevMatrices /
+		// PromotePrevMatrices): latched at end of every render, promoted to
+		// the Prev pair once per frame at the first render's start.
+		math::Matrix _projectionMatrixPending;
+		math::Matrix _viewMatrixPending;
+		uint64_t _prevPromoteFrame = UINT64_MAX;
+		bool _hasPendingPrev = false;
 		
 		float _fov = 0.0f;
 		float _aspectRatio = 0.0f;

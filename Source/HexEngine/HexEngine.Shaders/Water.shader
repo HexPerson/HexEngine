@@ -646,8 +646,28 @@
 		o.colour = retCol;
 		// Same clip-space [0,1] delta convention as the gbuffer (consumers
 		// negate y) - see Utils.shader CalcVelocity.
-		o.velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered,
-			float2(g_screenWidth, g_screenHeight));
+		//
+		// GUARDS (found the hard way): the ocean grid extends to the horizon,
+		// where the interpolated clip positions' w approaches zero - and the
+		// PREVIOUS-frame position can even land behind the projection plane
+		// (w <= 0). CalcVelocity divides by w unchecked, so far/grazing water
+		// wrote hundreds-of-pixels garbage velocity (and NaNs) across the
+		// whole sky region once the transparent pass gained a velocity RT -
+		// TAA/motion blur then smeared the frame. Genuine wave motion is
+		// small: zero the velocity when w is degenerate and clamp hard.
+		o.velocity = 0.0f.xx;
+		if (input.currentPositionUnjittered.w > 1e-3f && input.previousPositionUnjittered.w > 1e-3f)
+		{
+			float2 vel = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered,
+				float2(g_screenWidth, g_screenHeight));
+			const float maxUvDelta = 0.03f; // ~2 tiles of blur at any resolution
+			const float len = length(vel);
+			if (len > maxUvDelta)
+				vel *= maxUvDelta / len;
+			// Belt and braces: a NaN here poisons the tile-max chain.
+			if (!isnan(vel.x) && !isnan(vel.y))
+				o.velocity = vel;
+		}
 		return o;
 	}
 }

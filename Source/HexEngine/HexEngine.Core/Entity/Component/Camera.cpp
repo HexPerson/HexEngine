@@ -232,8 +232,35 @@ namespace HexEngine
 
 	void Camera::SnapshotPrevMatrices()
 	{
-		_projectionMatrixPrev = _projectionMatrix;
-		_viewMatrixPrev = _viewMatrix;
+		_projectionMatrixPending = _projectionMatrix;
+		_viewMatrixPending = _viewMatrix;
+		_hasPendingPrev = true;
+	}
+
+	void Camera::PromotePrevMatrices(uint64_t frameCount)
+	{
+		if (frameCount == _prevPromoteFrame)
+			return;
+
+		// One-time proof-of-execution: the editor-viewport velocity bug was
+		// "prev matrices frozen at identity", and the fastest way to rule a
+		// stale binary in or out is a line in the log.
+		if (_prevPromoteFrame == UINT64_MAX)
+			LOG_INFO("Camera %p: motion-vector prev-matrix promotion active", (void*)this);
+
+		_prevPromoteFrame = frameCount;
+
+		// First-ever render: no pending matrices yet - seed prev with current
+		// so the first frame's velocity is zero instead of current-vs-identity.
+		if (!_hasPendingPrev)
+		{
+			_projectionMatrixPrev = _projectionMatrix;
+			_viewMatrixPrev = _viewMatrix;
+			return;
+		}
+
+		_projectionMatrixPrev = _projectionMatrixPending;
+		_viewMatrixPrev = _viewMatrixPending;
 	}
 
 	void Camera::ResetHasMovedThisFrame()

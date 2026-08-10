@@ -40,13 +40,20 @@
 
 		output.position = mul(output.position, g_viewProjectionMatrix);
 
-		// Calculate velocity
-		float4x4 prevFrame_modelMatrix = instance.worldPrev;
-		float4 prevFrame_worldPos = mul(input.position, prevFrame_modelMatrix);
-		float4 prevFrame_clipPos = mul(prevFrame_worldPos, g_viewProjectionMatrixPrev);
-
-		output.previousPositionUnjittered = prevFrame_clipPos;
-		output.currentPositionUnjittered = output.position;
+		// Velocity - SKY SPECIAL CASE. The sky is an infinite background: its
+		// only honest per-pixel motion is CAMERA ROTATION. Reproject the view
+		// DIRECTION through both frames' matrices with w = 0 (drops the
+		// translation rows), ignoring the dome entity's transform entirely.
+		// The old path used instance.worldPrev like a regular mesh, and any
+		// staleness in that per-instance previous world painted an enormous
+		// radial phantom-velocity disc across the whole sky - which TAA has
+		// been silently eating for ages and motion blur turned into a
+		// full-screen smear.
+		{
+			const float3 skyDir = normalize(output.positionWS.xyz - g_eyePos.xyz);
+			output.currentPositionUnjittered = mul(float4(skyDir, 0.0f), g_viewProjectionMatrix);
+			output.previousPositionUnjittered = mul(float4(skyDir, 0.0f), g_viewProjectionMatrixPrev);
+		}
 
 		// Apply TAA jitter
 		output.position.xy += g_jitterOffsets * output.position.w;
@@ -418,7 +425,14 @@
 
 		GBufferOut output;
 
-		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
+		// Direction-based reprojection interpolants (see the VS): w goes
+		// non-positive only if the camera rotated more than 90 degrees in a
+		// single frame - zero the velocity rather than divide by it.
+		float2 velocity = 0.0f.xx;
+		if (input.currentPositionUnjittered.w > 1e-4f && input.previousPositionUnjittered.w > 1e-4f)
+		{
+			velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
+		}
 		output.diff = float4(atmosphereColour, -1);
 
 		output.mat = float4(0, 0, 0, 0);
