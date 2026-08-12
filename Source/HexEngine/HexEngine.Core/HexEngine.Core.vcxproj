@@ -457,6 +457,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\NavMeshBlockingVolume.hpp" />
     <ClInclude Include="Entity\Component\NavMeshLinkComponent.hpp" />
     <ClInclude Include="Entity\Component\PlayerStartComponent.hpp" />
+    <ClInclude Include="Entity\Component\DrivableComponent.hpp" />
     <ClInclude Include="Entity\Component\ParticleSystemComponent.hpp" />
     <ClInclude Include="Entity\Component\Transform.hpp" />
     <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
@@ -670,6 +671,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\NavMeshBlockingVolume.cpp" />
     <ClCompile Include="Entity\Component\NavMeshLinkComponent.cpp" />
     <ClCompile Include="Entity\Component\PlayerStartComponent.cpp" />
+    <ClCompile Include="Entity\Component\DrivableComponent.cpp" />
     <ClCompile Include="Entity\Component\ParticleSystemComponent.cpp" />
     <ClCompile Include="Entity\Component\Transform.cpp" />
     <ClCompile Include="Entity\Component\UpdateComponent.cpp" />

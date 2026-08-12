@@ -25,6 +25,7 @@
 #include "../Entity/Component/SnowFootprintsComponent.hpp"
 #include "../Entity/Component/PlayerStartComponent.hpp"
 #include "../Entity/Component/DoorComponent.hpp"
+#include "../Entity/Component/DrivableComponent.hpp"
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "../HexEngine.hpp"
@@ -77,6 +78,7 @@ namespace HexEngine
 		REG_CLASS(DecalComponent);
 		REG_CLASS(SnowFootprintsComponent);
 		REG_CLASS(PlayerStartComponent);
+		REG_CLASS(DrivableComponent);
 		REG_CLASS(DoorComponent);
 		REG_CLASS(NavMeshBlockingVolume);
 		REG_CLASS(NavMeshLinkComponent);
