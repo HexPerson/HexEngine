@@ -494,6 +494,10 @@ namespace HexEngine
 		// (r_filmGrain), y = grain size (r_filmGrainSize), z = CAS sharpen
 		// amount (r_sharpen), w reserved.
 		math::Vector4 _grainParams;
+		// P4.12 lens flare/dirt (folded into BloomComposite): x = flare/ghost
+		// intensity, y = lens-dirt intensity, z = ghost dispersal, w = streak
+		// intensity.
+		math::Vector4 _lensParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

@@ -303,6 +303,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// P4.9/P4.10: x = film-grain intensity, y = grain size, z = CAS
 		// sharpen amount, w reserved.
 		float4 g_grainParams;
+		// P4.12: x = flare/ghost intensity, y = lens-dirt intensity,
+		// z = ghost dispersal, w = anamorphic streak intensity.
+		float4 g_lensParams;
 	};
 
 	#define g_timePrev  (g_timeParams2.x)

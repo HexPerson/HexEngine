@@ -970,6 +970,13 @@ namespace HexEngine
 	// P4.10 CAS contrast-adaptive sharpen, applied right after the TAA
 	// resolve. Off when DLSS is active (it sharpens itself).
 	HVar r_sharpen("r_sharpen", "Contrast-adaptive sharpen amount after TAA (0 = off)", 0.35f, 0.0f, 1.0f);
+	// P4.12 lens flare / dirt / streak, generated from the bloom chain in the
+	// composite. Subtle by default; dirt + anamorphic streak are opt-in (they
+	// read as stylised). All 0 = the composite skips the whole block.
+	HVar r_lensFlare("r_lensFlare", "Lens flare / ghost intensity from bright sources (0 = off)", 0.25f, 0.0f, 3.0f);
+	HVar r_lensFlareDispersal("r_lensFlareDispersal", "Ghost spacing along the screen-centre axis", 0.35f, 0.05f, 1.0f);
+	HVar r_lensDirt("r_lensDirt", "Lens-dirt intensity (procedural smudges lit by the flare)", 0.0f, 0.0f, 4.0f);
+	HVar r_lensStreak("r_lensStreak", "Anamorphic horizontal streak intensity (0 = off)", 0.0f, 0.0f, 2.0f);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
 	// P4.8: default 1.0 -> 0.35 (user scope decision: ON but SUBTLE). The
 	// shader also squares the radial falloff now, so the centre of frame is
@@ -2903,6 +2910,13 @@ namespace HexEngine
 				r_filmGrainSize._val.f32,
 				r_sharpen._val.f32,
 				0.0f);
+
+			// P4.12 lens flare / dirt / streak (read by BloomComposite).
+			bufferData._lensParams = math::Vector4(
+				r_lensFlare._val.f32,
+				r_lensDirt._val.f32,
+				r_lensFlareDispersal._val.f32,
+				r_lensStreak._val.f32);
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 
 			bufferData._reflectionParams = math::Vector4(
