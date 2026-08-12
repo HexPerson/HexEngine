@@ -18,6 +18,7 @@
 // plugin): d3d11_1 for ID3D11DeviceContext1::ClearView - the only way to
 // clear a single atlas tile without wiping the cached neighbours.
 #include <d3d11_1.h>
+#include <DirectXPackedVector.h> // XMConvertHalfToFloat (autofocus depth readback)
 #include <fastnoiselite/Cpp/FastNoiseLite.h>
 #include <cstdint>
 #include <unordered_set>
@@ -579,14 +580,18 @@ namespace HexEngine
 	// early-out skips the gather for sharp pixels too, so the cost is one
 	// texture read on the dominant in-focus region).
 	HVar r_dof("r_dof", "Enable bokeh depth-of-field post-process", false, false, true);
-	HVar r_dofFocusDistance("r_dofFocusDistance", "Depth of the in-focus plane (metres)", 8.0f, 0.1f, 1000.0f);
-	HVar r_dofFocusRange("r_dofFocusRange", "Width of the fully-sharp band around the focus plane (metres)", 4.0f, 0.0f, 50.0f);
-	// Aperture is the strongest dial here - at 1.0 a pixel at 2x focus distance
-	// already reaches ~50% CoC, and the user wants the chunkiest blur usually
-	// concentrated on the far field only. 0.4 is a subtle photo-realistic default
-	// that gives noticeable but not overwhelming bokeh; users wanting cinema
-	// shallow-DoF should bump to 1-2.
-	HVar r_dofAperture("r_dofAperture", "Blur scale - bigger aperture = stronger out-of-focus blur", 0.4f, 0.0f, 8.0f);
+	HVar r_dofFocusDistance("r_dofFocusDistance", "Manual focus plane distance (metres); ignored when autofocus is on", 8.0f, 0.1f, 1000.0f);
+	// P4.11: physical thin-lens DoF. The Circle of Confusion is derived from a
+	// real focal length + f-stop against a 36mm full-frame sensor, so the blur
+	// matches what a camera with these settings would actually produce.
+	HVar r_dofFocalLength("r_dofFocalLength", "Lens focal length in mm (physical DoF)", 50.0f, 12.0f, 300.0f);
+	HVar r_dofFStop("r_dofFStop", "Lens f-stop / aperture number (lower = shallower DoF)", 2.8f, 1.0f, 22.0f);
+	HVar r_dofAutofocus("r_dofAutofocus", "Autofocus on the centre of the screen (else use manual focus distance)", true, false, true);
+	HVar r_dofAutofocusSpeed("r_dofAutofocusSpeed", "Autofocus adaptation rate (1/s; higher = snappier rack)", 4.0f, 0.2f, 20.0f);
+	// Legacy unitless dials, retained for scenes authored before the physical
+	// model. r_dofAperture / r_dofFocusRange are no longer read by the shader.
+	HVar r_dofAperture("r_dofAperture", "[legacy] unitless blur scale - superseded by r_dofFStop", 0.4f, 0.0f, 8.0f);
+	HVar r_dofFocusRange("r_dofFocusRange", "[legacy] fully-sharp band (m) - superseded by the physical model", 4.0f, 0.0f, 50.0f);
 	// maxBlur is the pixel radius at coc=1.0 (which the hyperbolic curve never
 	// quite reaches). At 1080p, 8px gives a soft photographic bokeh; 16+ is
 	// cinematic; 32+ is dreamy/extreme. The previous 24 default combined with
@@ -1125,6 +1130,7 @@ namespace HexEngine
 		SAFE_DELETE(_subsurfaceIntermediateRT);
 		SAFE_DELETE(_subsurfaceParamsBuffer);
 		SAFE_DELETE(_bokehDoFParamsBuffer);
+		if (_autofocusStaging != nullptr) { _autofocusStaging->Release(); _autofocusStaging = nullptr; _autofocusPending = false; }
 		SAFE_DELETE(_mbTileMaxRT);
 		SAFE_DELETE(_mbNeighborMaxRT);
 		SAFE_DELETE(_mbParamsBuffer);
@@ -6119,12 +6125,85 @@ namespace HexEngine
 		// swaps on a true return. The old scratch-RT + CopyTo-back dance (and
 		// its render-target restore) is gone with it.
 
-		// Cbuffer at b6: (focusDistance, focusRange, aperture, maxCocPixels).
+		// P4.11: focus distance is either manual or the autofocus readback of
+		// the centre-of-screen gbuffer depth (one frame late, AutoExposure's
+		// deferred-map pattern). D3D11-only; other backends fall back to manual.
+		float focusDistance = r_dofFocusDistance._val.f32;
+		if (r_dofAutofocus._val.b &&
+			g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11)
+		{
+			auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+			auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+			auto* normalNative = reinterpret_cast<ID3D11Texture2D*>(normalDepthTex->GetNativePtr());
+			if (device != nullptr && ctx != nullptr && normalNative != nullptr)
+			{
+				if (_autofocusStaging == nullptr)
+				{
+					D3D11_TEXTURE2D_DESC sd = {};
+					sd.Width = 1; sd.Height = 1; sd.MipLevels = 1; sd.ArraySize = 1;
+					sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // matches the normal RT
+					sd.SampleDesc.Count = 1;
+					sd.Usage = D3D11_USAGE_STAGING;
+					sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+					device->CreateTexture2D(&sd, nullptr, &_autofocusStaging);
+				}
+
+				const float dt = (g_pEnv && g_pEnv->_timeManager)
+					? std::clamp(static_cast<float>(g_pEnv->_timeManager->_frameTime), 1e-4f, 0.1f)
+					: (1.0f / 60.0f);
+
+				if (_autofocusStaging != nullptr)
+				{
+					// Read back LAST frame's centre depth (.w of the normal RT).
+					if (_autofocusPending)
+					{
+						D3D11_MAPPED_SUBRESOURCE mapped = {};
+						if (SUCCEEDED(ctx->Map(_autofocusStaging, 0, D3D11_MAP_READ, 0, &mapped)))
+						{
+							const uint16_t* px = reinterpret_cast<const uint16_t*>(mapped.pData);
+							const float depth = DirectX::PackedVector::XMConvertHalfToFloat(px[3]);
+							ctx->Unmap(_autofocusStaging, 0);
+							if (depth > 0.05f) // skip sky / unwritten centre
+							{
+								const float speed = std::max(r_dofAutofocusSpeed._val.f32, 0.0f);
+								const float alpha = 1.0f - std::exp(-speed * dt);
+								_autofocusDistance += (depth - _autofocusDistance) * alpha;
+							}
+						}
+					}
+
+					// Queue THIS frame's centre texel for next-frame readback.
+					const auto& vp = _currentCamera->GetViewport();
+					const UINT cx = (UINT)std::max(0.0f, vp.width * 0.5f);
+					const UINT cy = (UINT)std::max(0.0f, vp.height * 0.5f);
+					D3D11_BOX box = {};
+					box.left = cx; box.right = cx + 1;
+					box.top = cy; box.bottom = cy + 1;
+					box.front = 0; box.back = 1;
+					ctx->CopySubresourceRegion(_autofocusStaging, 0, 0, 0, 0, normalNative, 0, &box);
+					_autofocusPending = true;
+				}
+			}
+			focusDistance = _autofocusDistance;
+		}
+
+		// Physical CoC coefficient (P4.11): the whole uniform part of the
+		// thin-lens CoC, so the shader only does coeff * |d - S| / d.
+		//   coeff = (f^2 / (N * (S - f))) / sensorWidth * renderWidthPx * 0.5
+		// f = focal length (m), N = f-stop, sensor = 36mm full frame, *0.5 for
+		// radius (CoC is a diameter).
+		const float fM = std::max(r_dofFocalLength._val.f32, 1.0f) * 0.001f;
+		const float N = std::max(r_dofFStop._val.f32, 0.5f);
+		const float Sf = std::max(focusDistance - fM, 1e-4f);
+		const float renderW = std::max(_currentCamera->GetViewport().width, 1.0f);
+		const float cocCoeff = (fM * fM / (N * Sf)) / 0.036f * renderW * 0.5f;
+
+		// Cbuffer at b6: (focusDistance S, CoC coefficient, maxCocPixels, unused).
 		math::Vector4 params(
-			r_dofFocusDistance._val.f32,
-			r_dofFocusRange._val.f32,
-			r_dofAperture._val.f32,
-			r_dofMaxBlur._val.f32);
+			focusDistance,
+			cocCoeff,
+			r_dofMaxBlur._val.f32,
+			0.0f);
 		math::Vector4 paramsCopy = params; // Write takes void* (non-const)
 		_bokehDoFParamsBuffer->Write(&paramsCopy, sizeof(paramsCopy));
 		graphics->SetConstantBufferPS(6, _bokehDoFParamsBuffer);

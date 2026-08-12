@@ -40,11 +40,14 @@
 	//   t0 = source colour (post-tonemap beauty)
 	//   t1 = gbuffer normal/depth (.w = view-space depth in metres)
 	//
-	// Cbuffer at b6:
-	//   .x = focus distance (m)
-	//   .y = focus range (m, fully sharp inside this band)
-	//   .z = aperture / blur scale - bigger = wider DoF blur
-	//   .w = max CoC radius in pixels (clamp so far blur doesn't explode)
+	// Cbuffer at b6 (P4.11 physical DoF):
+	//   .x = focus distance S (m) - manual, or autofocus centre-depth readback
+	//   .y = CoC coefficient - the whole uniform part of the thin-lens CoC,
+	//        precomputed CPU-side: (f^2 / (N * (S - f))) / sensorWidth * renderW * 0.5,
+	//        so a per-pixel CoC RADIUS in pixels is just coeff * |d - S| / d.
+	//        f = focal length (m), N = f-stop, sensor = 36mm full-frame.
+	//   .z = max CoC radius in pixels (clamp so far blur doesn't explode)
+	//   .w = unused
 	Texture2D g_source : register(t0);
 	Texture2D g_normalDepth : register(t1);
 	SamplerState g_linearSampler : register(s0);
@@ -70,14 +73,15 @@
 	// blur and only approaches max at 10x+ focus distance, which matches the
 	// out-of-focus falloff a real lens produces and keeps the gathered colour
 	// localized to nearby pixels rather than the entire screen.
-	float ComputeCoC(float depthMetres, float focusDistance, float focusRange, float aperture)
+	// Physical thin-lens CoC (P4.11). The uniform part is baked into `coeff`
+	// CPU-side, so this is just coeff * |d - S| / d for the radius in pixels,
+	// normalised by the max-CoC clamp and signed for near/far classification.
+	//   negative = closer than focus (foreground) | positive = farther (background)
+	float ComputeCoC(float depthMetres, float focusDistance, float coeff, float maxCocPixels)
 	{
-		const float signedDelta = depthMetres - focusDistance;
-		const float magnitude = max(abs(signedDelta) - focusRange * 0.5f, 0.0f);
-		const float divisor = max(focusDistance, 0.5f);
-		const float reach = (magnitude / divisor) * aperture;
-		const float coc = reach / (1.0f + reach);
-		return sign(signedDelta) * coc;
+		const float radiusPx = coeff * abs(depthMetres - focusDistance) / max(depthMetres, 1e-3f);
+		const float norm = saturate(radiusPx / max(maxCocPixels, 1.0f));
+		return (depthMetres < focusDistance ? -1.0f : 1.0f) * norm;
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
@@ -94,16 +98,15 @@
 			return centre;
 
 		const float focusDistance = max(g_dofParams.x, 0.1f);
-		const float focusRange = max(g_dofParams.y, 0.0f);
-		const float aperture = max(g_dofParams.z, 0.0f);
-		const float maxCocPixels = max(g_dofParams.w, 0.0f);
+		const float cocCoeff = max(g_dofParams.y, 0.0f);
+		const float maxCocPixels = max(g_dofParams.z, 0.0f);
 
-		const float centreCoC = ComputeCoC(centreDepth, focusDistance, focusRange, aperture);
+		const float centreCoC = ComputeCoC(centreDepth, focusDistance, cocCoeff, maxCocPixels);
 		const float centreCoCMagnitude = abs(centreCoC);
 
 		// Bail when sharp - we save the 32-tap cost on the dominant portion of
 		// the image (inside the depth-of-field band).
-		if (centreCoCMagnitude < 0.005f || aperture <= 0.0001f)
+		if (centreCoCMagnitude < 0.005f || cocCoeff <= 0.0f)
 			return centre;
 
 		const float pixelRadius = centreCoCMagnitude * maxCocPixels;
@@ -137,7 +140,7 @@
 			if (sampleDepth <= 0.0f)
 				continue;
 
-			const float sampleCoC = ComputeCoC(sampleDepth, focusDistance, focusRange, aperture);
+			const float sampleCoC = ComputeCoC(sampleDepth, focusDistance, cocCoeff, maxCocPixels);
 
 			// Sample weight is the sample's own CoC magnitude. This is the key
 			// rule that gives bokeh its "highlight bloom" look: bright sharp

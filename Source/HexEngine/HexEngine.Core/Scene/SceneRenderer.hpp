@@ -297,6 +297,12 @@ namespace HexEngine
 		// format and never overlap in the post chain).
 		std::shared_ptr<IShader> _bokehDoFShader;
 		IConstantBuffer* _bokehDoFParamsBuffer = nullptr;
+		// P4.11 autofocus: a 1x1 STAGING copy of the centre gbuffer-depth texel,
+		// read back one frame late to drive the focus distance (AutoExposure's
+		// deferred-readback pattern). _autofocusDistance is the smoothed result.
+		struct ID3D11Texture2D* _autofocusStaging = nullptr;
+		bool _autofocusPending = false;
+		float _autofocusDistance = 8.0f;
 		// P4.5 motion blur (McGuire scatter-as-gather). Tile-max + neighbour-max
 		// grids at 1/20 res, then a gather pass into the SSS scratch RT.
 		ITexture2D* _mbTileMaxRT = nullptr;
