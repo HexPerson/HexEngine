@@ -99,6 +99,7 @@ namespace HexEngine
 		// per-frame outputs
 		float _forwardSpeed = 0.0f;
 		bool  _grounded = false;
+		float _debugAccum = 0.0f;
 
 		std::vector<math::Vector3> _wheelsLocal;
 	};

@@ -44,6 +44,7 @@ namespace HexEngine
 		HVar v_bikeLinearDamp("v_bikeLinearDamp", "Linear velocity damping (coast drag)", 0.15f, 0.0f, 4.0f);
 		HVar v_bikeComHeight("v_bikeComHeight", "Centre-of-mass height offset from origin (negative = lower = stabler)", -0.25f, -1.5f, 1.0f);
 		HVar v_bikeSteerSmooth("v_bikeSteerSmooth", "Digital steer smoothing rate (1/s)", 8.0f, 1.0f, 30.0f);
+		HVar v_bikeDebug("v_bikeDebug", "Log DrivableComponent state (grounded/speed/input) ~1/sec while possessed", false, false, true);
 	}
 
 	// --- player input binds -> intent flags -------------------------------
@@ -87,16 +88,40 @@ namespace HexEngine
 			return;
 		std::vector<DrivableComponent*> bikes;
 		scene->GetComponents<DrivableComponent>(bikes);
-		bool first = true;
-		for (auto* b : bikes) { if (b) { b->SetPlayerControlled(first); first = false; } }
+		LOG_INFO("possessbike: current scene has %zu DrivableComponent(s)", bikes.size());
 		if (bikes.empty())
 		{
-			LOG_INFO("possessbike: no DrivableComponent found in the current scene");
+			LOG_INFO("possessbike: none found. Add a DrivableComponent to an entity that also has a RigidBody (Dynamic) + a collider, then Play and re-run possessbike.");
+			return;
 		}
-		else
+		bool first = true;
+		for (auto* b : bikes)
 		{
-			LOG_INFO("possessbike: possessed 1 of %zu drivable vehicle(s) - WASD/arrows to drive, Space = handbrake", bikes.size());
+			if (b == nullptr) continue;
+			// Diagnose the FIRST (the one we possess) so setup mistakes are obvious.
+			if (first)
+			{
+				Entity* e = b->GetEntity();
+				auto* rb = e ? e->GetComponent<RigidBody>() : nullptr;
+				IRigidBody* irb = rb ? rb->GetIRigidBody() : nullptr;
+				LOG_INFO("possessbike: target entity='%s' RigidBody=%s IRigidBody=%s%s",
+					e ? e->GetName().c_str() : "(null)",
+					rb ? "yes" : "NO (add a RigidBody component)",
+					irb ? "yes" : "NO (add a collider - the body is created lazily on first collider)",
+					irb ? "" : "");
+				if (irb != nullptr)
+				{
+					const char* bt =
+						irb->GetBodyType() == IRigidBody::BodyType::Dynamic ? "Dynamic" :
+						irb->GetBodyType() == IRigidBody::BodyType::Kinematic ? "Kinematic (must be DYNAMIC to drive)" :
+						irb->GetBodyType() == IRigidBody::BodyType::Static ? "Static (must be DYNAMIC to drive)" : "None";
+					LOG_INFO("possessbike: body type=%s mass=%.2f", bt, irb->GetMass());
+				}
+			}
+			b->SetPlayerControlled(first);
+			first = false;
 		}
+		LOG_INFO("possessbike: possessed - WASD/arrows to drive, Space = handbrake. (v_bikeDebug 1 to log grounded/speed while driving.)");
 	}
 
 	HEX_COMMAND(unpossessbike)
@@ -209,8 +234,33 @@ namespace HexEngine
 
 	void DrivableComponent::FixedUpdate(float dt)
 	{
-		if (dt <= 0.0f || !ResolveBody())
+		if (dt <= 0.0f)
 			return;
+		if (!ResolveBody())
+		{
+			// Ticking but no usable body - the #1 setup mistake. Log once so
+			// it's obvious the component runs but has nothing to push.
+			static bool loggedNoBody = false;
+			if (_playerControlled && !loggedNoBody)
+			{
+				loggedNoBody = true;
+				LOG_WARN("DrivableComponent: FixedUpdate running but no RigidBody/collider resolved on entity '%s' - add a RigidBody(Dynamic) + collider.",
+					GetEntity() ? GetEntity()->GetName().c_str() : "(null)");
+			}
+			return;
+		}
+
+		if (v_bikeDebug._val.b && _playerControlled)
+		{
+			_debugAccum += dt;
+			if (_debugAccum >= 1.0f)
+			{
+				_debugAccum = 0.0f;
+				LOG_INFO("bike: grounded=%d speed=%.2f m/s  in(thr=%.2f brk=%.2f steer=%.2f hb=%d)",
+					_grounded ? 1 : 0, _forwardSpeed,
+					_input.throttle, _input.brake, _input.steer, _input.handbrake ? 1 : 0);
+			}
+		}
 
 		// --- player input -> intent (V1 self-drive path) ---
 		if (_playerControlled)
