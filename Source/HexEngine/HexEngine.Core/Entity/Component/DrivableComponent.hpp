@@ -86,7 +86,10 @@ namespace HexEngine
 		IRigidBody* _body = nullptr;
 
 		DriveInput _input;
-		bool _playerControlled = true;   // V1: placed bikes are drivable
+		// Default OFF so placing a bike in the editor doesn't hijack the
+		// editor camera's WASD. Possess it explicitly - the `possessbike`
+		// console command (V1), or the enter/exit flow (V2).
+		bool _playerControlled = false;
 		bool _bindsActive = false;
 
 		// digital key state (player path)

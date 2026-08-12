@@ -9,9 +9,13 @@
 #include "../../Input/CommandManager.hpp"
 #include "../../Input/HCommand.hpp"
 #include "../../Input/HVar.hpp"
+#include "../../Scene/SceneManager.hpp"
+#include "../../Scene/Scene.hpp"
+#include "../../Environment/LogFile.hpp"
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace HexEngine
 {
@@ -67,6 +71,46 @@ namespace HexEngine
 	{
 		auto* c = reinterpret_cast<DrivableComponent*>(param);
 		if (c) c->SetHandbrake(pressed);
+	}
+
+	// Console: possess the first DrivableComponent in the current scene (and
+	// release any others), so a placed bike becomes drivable with WASD/arrows
+	// without hijacking the editor camera until you ask. V2's enter/exit flow
+	// supersedes this.
+	HEX_COMMAND(possessbike)
+	{
+		(void)args; (void)param; (void)pressed;
+		if (g_pEnv == nullptr || g_pEnv->_sceneManager == nullptr)
+			return;
+		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr)
+			return;
+		std::vector<DrivableComponent*> bikes;
+		scene->GetComponents<DrivableComponent>(bikes);
+		bool first = true;
+		for (auto* b : bikes) { if (b) { b->SetPlayerControlled(first); first = false; } }
+		if (bikes.empty())
+		{
+			LOG_INFO("possessbike: no DrivableComponent found in the current scene");
+		}
+		else
+		{
+			LOG_INFO("possessbike: possessed 1 of %zu drivable vehicle(s) - WASD/arrows to drive, Space = handbrake", bikes.size());
+		}
+	}
+
+	HEX_COMMAND(unpossessbike)
+	{
+		(void)args; (void)param; (void)pressed;
+		if (g_pEnv == nullptr || g_pEnv->_sceneManager == nullptr)
+			return;
+		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr)
+			return;
+		std::vector<DrivableComponent*> bikes;
+		scene->GetComponents<DrivableComponent>(bikes);
+		for (auto* b : bikes) { if (b) b->SetPlayerControlled(false); }
+		LOG_INFO("unpossessbike: released all drivable vehicles");
 	}
 
 	DrivableComponent::DrivableComponent(Entity* entity) :
