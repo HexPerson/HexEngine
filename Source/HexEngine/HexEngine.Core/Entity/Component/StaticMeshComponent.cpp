@@ -286,10 +286,38 @@ namespace HexEngine
 
 		if (_boundBone != nullptr)
 		{
+			// Latch the previous-frame offset ONCE per frame, before rebuilding
+			// this frame's. GetOffsetMatrix is called several times a frame
+			// (main + shadow + per-pass), so key the latch on the frame count:
+			// the first call of a new frame captures last frame's offset as
+			// prev; later calls this frame leave prev alone. First frame ever
+			// seeds prev = current so a freshly spawned attachment starts at
+			// zero velocity instead of current-vs-identity.
+			const uint64_t frame = (g_pEnv && g_pEnv->_timeManager)
+				? static_cast<uint64_t>(g_pEnv->_timeManager->_frameCount)
+				: 0;
+			if (!_offsetPrevValid)
+			{
+				_offsetMatrixPrev = _offsetMatrix; // will be overwritten to current below
+				_offsetPrevFrame = frame;
+			}
+			else if (frame != _offsetPrevFrame)
+			{
+				_offsetMatrixPrev = _offsetMatrix; // last frame's value, still cached
+				_offsetPrevFrame = frame;
+			}
+
 			_offsetMatrix =
 				math::Matrix::CreateFromQuaternion(_boundBone->Rotation) *
 				math::Matrix::CreateTranslation(_boundBone->Position + _offsetPosition);
 			_offsetMatrixTranspose = _offsetMatrix.Transpose();
+
+			if (!_offsetPrevValid)
+			{
+				_offsetMatrixPrev = _offsetMatrix; // seed prev = current on frame 0
+				_offsetPrevValid = true;
+			}
+			_offsetMatrixPrevTranspose = _offsetMatrixPrev.Transpose();
 		}
 		return _offsetMatrix;
 	}
@@ -300,6 +328,14 @@ namespace HexEngine
 		// _offsetMatrixTranspose in sync alongside _offsetMatrix.
 		GetOffsetMatrix();
 		return _offsetMatrixTranspose;
+	}
+
+	const math::Matrix& StaticMeshComponent::GetOffsetMatrixPrevTranspose()
+	{
+		// GetOffsetMatrix does the per-frame prev latch; delegate so the two
+		// can never drift out of step.
+		GetOffsetMatrix();
+		return _offsetMatrixPrevTranspose;
 	}
 
 	bool StaticMeshComponent::TryResolveBoundBone()

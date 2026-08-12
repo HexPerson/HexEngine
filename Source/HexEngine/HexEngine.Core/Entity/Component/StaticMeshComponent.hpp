@@ -66,6 +66,10 @@ namespace HexEngine
 		// SkeletalAnimationComponent updates every animation tick.
 		const math::Matrix& GetOffsetMatrix();
 		const math::Matrix& GetOffsetMatrixTranspose();
+		// Previous-frame bone offset (transposed, for the WORLDPREV instance
+		// stream). Latched once per frame by GetOffsetMatrix; equals the
+		// current offset on the first frame so velocity starts at zero.
+		const math::Matrix& GetOffsetMatrixPrevTranspose();
 
 		// Bone-binding by name. `_boundBoneName` is what gets serialized;
 		// `_boundBone` (a raw BoneInfo*) is a runtime cache resolved via
@@ -151,6 +155,16 @@ namespace HexEngine
 		std::string _boundBoneName;
 		math::Matrix _offsetMatrix;
 		math::Matrix _offsetMatrixTranspose;
+		// Previous-frame bone offset, latched once per frame in GetOffsetMatrix.
+		// A bone-bound attachment's motion vector needs the bone's PREVIOUS
+		// pose: without it the render path paired current = entityWorld x
+		// boneOffset(now) against prev = entityWorld(prev) with NO offset, so
+		// every attachment reported a velocity equal to the whole bone-offset
+		// distance every frame and smeared under motion blur / ghosted in TAA.
+		math::Matrix _offsetMatrixPrev;
+		math::Matrix _offsetMatrixPrevTranspose;
+		uint64_t _offsetPrevFrame = 0;
+		bool _offsetPrevValid = false;
 
 		CullingMode _shadowCullingMode = CullingMode::FrontFace;
 

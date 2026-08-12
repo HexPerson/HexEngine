@@ -2295,7 +2295,11 @@ namespace HexEngine
 					if (auto* smc = renderable->entity->GetComponent<StaticMeshComponent>(); smc != nullptr)
 					{
 						renderable->instanceData.worldMatrix              = renderable->entity->GetWorldTMTranspose() * smc->GetOffsetMatrixTranspose();
-						renderable->instanceData.worldMatrixPrev          = renderable->entity->GetWorldTMPrevTranspose();
+						// Motion vector: pair the entity's previous world with the
+						// bone's PREVIOUS offset. Using the entity prev alone (no
+						// offset) reported a full bone-offset-sized velocity every
+						// frame - attachments smeared under motion blur / ghosted.
+						renderable->instanceData.worldMatrixPrev          = renderable->entity->GetWorldTMPrevTranspose() * smc->GetOffsetMatrixPrevTranspose();
 						renderable->instanceData.worldMatrixInverseTranspose = renderable->entity->GetWorldTMInvert();
 						renderable->shadowInstanceData.worldMatrix        = renderable->instanceData.worldMatrix;
 					}
@@ -2441,7 +2445,10 @@ namespace HexEngine
 						if (auto* smc = renderable.entity->GetComponent<StaticMeshComponent>(); smc != nullptr)
 						{
 							renderable.instanceData.worldMatrix              = renderable.entity->GetWorldTMTranspose() * smc->GetOffsetMatrixTranspose();
-							renderable.instanceData.worldMatrixPrev          = renderable.entity->GetWorldTMPrevTranspose();
+							// See the PVS path above: prev world x prev bone offset,
+							// or the attachment reports a bone-offset-sized velocity
+							// every frame and smears.
+							renderable.instanceData.worldMatrixPrev          = renderable.entity->GetWorldTMPrevTranspose() * smc->GetOffsetMatrixPrevTranspose();
 							renderable.instanceData.worldMatrixInverseTranspose = renderable.entity->GetWorldTMInvert();
 							renderable.shadowInstanceData.worldMatrix        = renderable.instanceData.worldMatrix;
 						}
