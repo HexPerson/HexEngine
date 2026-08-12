@@ -142,8 +142,17 @@ namespace HexEngine
 	HVar r_shadowCascades("r_shadowCascades", "The number of cascades to calculate with shadow mapping", 4, 1, 4);
 	HVar r_shadowCascadeRange("r_shadowCascadeRange", "The depth of one shadow cascade, except the last (which will occupy all remaining space", 100.0f, 1.0f, 10000.0f);
 	HVar r_shadowCascadeSplitLambda("r_shadowCascadeSplitLambda", "Sun cascade split blend: 0 = legacy fixed r_shadowCascadeRange blocks, otherwise lerps uniform->logarithmic splits (higher concentrates shadow resolution near the camera)", 0.9f, 0.0f, 1.0f);
-	HVar r_penumbraFilterMaxSize("r_penumbraFilterMaxSize", "The maximum filter size for penumbra calculation", 0.002f, 0.0f, 10.0f);
-	HVar r_shadowFilterMaxSize("r_shadowFilterMaxSize", "The maximum size of the shadow filter", 0.21f, 0.0f, 10.0f);
+	// Both PCSS radii are expressed in TEXELS at the 8192 reference resolution
+	// (SetupPerShadowCasterBuffer scales by shadowMapSize/8192, so the world-space
+	// footprint survives resolution changes). The pre-2026-08 defaults (0.002 and
+	// 0.21) sat orders of magnitude below the shader's 2-texel search / 1-texel
+	// filter floors, which is why the controls appeared to do nothing.
+	HVar r_penumbraFilterMaxSize("r_penumbraFilterMaxSize", "PCSS blocker-search radius in texels (at 8192 reference resolution)", 32.0f, 0.0f, 128.0f);
+	HVar r_shadowFilterMaxSize("r_shadowFilterMaxSize", "PCSS maximum filter radius in texels (at 8192 reference resolution) - upper clamp on the physical penumbra", 48.0f, 0.0f, 256.0f);
+	// Master sun-shadow softness control: the penumbra now grows physically as
+	// occluderGap * tan(angle/2). The real sun subtends ~0.53 degrees; the default
+	// is a touch wider for a friendlier look at game scale.
+	HVar r_sunAngularDiameter("r_sunAngularDiameter", "Apparent sun angular diameter in degrees driving PCSS penumbra growth (physical sun is ~0.53, larger = softer)", 1.0f, 0.05f, 10.0f);
 	HVar r_shadowBiasMultiplier("r_shadowBiasMultiplier", "The bias multiplier to use when calculating normal offset", 0.0002f, 0.0f, 1.0f);
 	HVar r_shadowCascadeBlendRange("r_shadowCascadeBlendRange", "The distance to use for blending shadow cascades together", 10.0f, 1.0f, 1000.0f);
 	HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
@@ -899,7 +908,28 @@ namespace HexEngine
 	// 0=Reinhard 1=ReinhardExtended 2=ACES Fitted (default) 3=Uncharted 2 / Hable
 	// 4=Lottes 5=Linear (debug pass-through). Affects both SDR Tonemap.hcs and
 	// HDR TonemapHDR.hcs base curve.
-	HVar r_tonemapOperator("r_tonemapOperator", "Tonemap operator: 0=Reinhard 1=ReinhardExt 2=ACES 3=Uncharted2 4=Lottes 5=Linear", 2, 0, 5);
+	HVar r_tonemapOperator("r_tonemapOperator", "Tonemap operator: 0=Reinhard 1=ReinhardExt 2=ACES 3=Uncharted2 4=Lottes 5=Linear 6=AgX", 2, 0, 6);
+	// P4.6 log-space grading additions. White balance in Kelvin (6500 =
+	// neutral D65; higher = warmer image, matching the photographic slider
+	// convention) + green/magenta tint. CDL lift/gamma/gain are per-channel:
+	// gain scales, lift raises the floor, gamma bends the mids.
+	HVar r_whiteBalanceTemp("r_whiteBalanceTemp", "White balance colour temperature in Kelvin (6500 = neutral, higher = warmer image)", 6500.0f, 1500.0f, 15000.0f);
+	HVar r_whiteBalanceTint("r_whiteBalanceTint", "White balance green-magenta tint (0 = neutral, positive = magenta)", 0.0f, -1.0f, 1.0f);
+	HVar r_cdlLift("r_cdlLift", "Colour grade lift (per-channel black offset, 0 = neutral)", math::Vector3(0.0f, 0.0f, 0.0f), math::Vector3(-0.5f, -0.5f, -0.5f), math::Vector3(0.5f, 0.5f, 0.5f));
+	HVar r_cdlGamma("r_cdlGamma", "Colour grade gamma (per-channel midtone power, 1 = neutral)", math::Vector3(1.0f, 1.0f, 1.0f), math::Vector3(0.25f, 0.25f, 0.25f), math::Vector3(4.0f, 4.0f, 4.0f));
+	HVar r_cdlGain("r_cdlGain", "Colour grade gain (per-channel scale, 1 = neutral)", math::Vector3(1.0f, 1.0f, 1.0f), math::Vector3(0.0f, 0.0f, 0.0f), math::Vector3(4.0f, 4.0f, 4.0f));
+	// P4.7 colour LUT: drop a .cube file at Bin/.../Data/ColourGrade.cube and
+	// it hot-loads within ~2s (no string cvars in this engine - the path is
+	// fixed, see ColourLut.cpp). Strength lerps between ungraded and graded.
+	HVar r_colourLutStrength("r_colourLutStrength", "3D colour LUT blend strength (LUT auto-loads from Data/ColourGrade.cube)", 1.0f, 0.0f, 1.0f);
+	// P4.8 vignette: cvar-driven (was compiled into Vignette.shader). Subtle
+	// by default per the Phase 4 scope decision: -0.35 amount vs the old
+	// hardcoded -0.50.
+	HVar r_vignette("r_vignette", "Lens vignette on/off", true, false, true);
+	HVar r_vignetteAmount("r_vignetteAmount", "Vignette strength (negative darkens edges, 0 = off)", -0.35f, -2.0f, 1.0f);
+	HVar r_vignetteRadius("r_vignetteRadius", "Vignette radius (lower = reaches further into frame)", 1.0f, 0.25f, 3.0f);
+	HVar r_vignetteSlope("r_vignetteSlope", "Vignette falloff slope (higher = tighter edge)", 8.0f, 2.0f, 16.0f);
+	HVar r_vignetteRatio("r_vignetteRatio", "Vignette aspect ratio (1 = round, >1 = wider)", 1.0f, 0.15f, 6.0f);
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
 	// SSR + NRD were ~14 ms of a ~30 ms frame at 4K (user-measured on the
@@ -915,8 +945,31 @@ namespace HexEngine
 	// motion quality indistinguishable from full res. USER-VERIFIED.
 	HVar r_ssrHalfRes("r_ssrHalfRes", "March SSR at half resolution (denoise + resolve stay full res)", true, false, true);
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
+	// P4.4: transparent surfaces write motion vectors (velocity RT bound at MRT
+	// slot 4 during the transparent pass). Off restores the old behaviour where
+	// water/glass pixels carry the OPAQUE-behind velocity - useful for A/B when
+	// chasing TAA ghosting regressions.
+	HVar r_transparentVelocity("r_transparentVelocity", "Transparent pass writes motion vectors (water waves resolve correctly under TAA)", true, false, true);
+	// P4.5 motion blur (McGuire tile-max/gather). Shutter 0.5 = the 180-degree
+	// film convention: the virtual shutter is open half the frame, so blur
+	// spans half the per-frame motion. Runs after TAA at render resolution.
+	HVar r_motionBlur("r_motionBlur", "Per-pixel camera + object motion blur", true, false, true);
+	HVar r_motionBlurShutter("r_motionBlurShutter", "Shutter fraction (0.5 = 180-degree film shutter)", 0.5f, 0.0f, 1.0f);
+	HVar r_motionBlurMaxPx("r_motionBlurMaxPx", "Maximum blur radius in pixels", 32.0f, 4.0f, 128.0f);
+	HVar r_motionBlurSamples("r_motionBlurSamples", "Gather taps along the dominant velocity", (int32_t)15, (int32_t)5, (int32_t)32);
+	// P4.9 film grain + output dither. Grain subtle by default; dither is
+	// always on inside the shader (it only moves the bottom bit and kills
+	// 8-bit gradient banding).
+	HVar r_filmGrain("r_filmGrain", "Film grain intensity (0 = off)", 0.03f, 0.0f, 0.5f);
+	HVar r_filmGrainSize("r_filmGrainSize", "Film grain size (larger = coarser grain)", 1.0f, 0.5f, 4.0f);
+	// P4.10 CAS contrast-adaptive sharpen, applied right after the TAA
+	// resolve. Off when DLSS is active (it sharpens itself).
+	HVar r_sharpen("r_sharpen", "Contrast-adaptive sharpen amount after TAA (0 = off)", 0.35f, 0.0f, 1.0f);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
-	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
+	// P4.8: default 1.0 -> 0.35 (user scope decision: ON but SUBTLE). The
+	// shader also squares the radial falloff now, so the centre of frame is
+	// clean and the fringe concentrates in the corners.
+	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 0.35f, 0.0f, 10.0f);
 	HVar r_lensDrips("r_lensDrips", "Screen-space rain droplets on the camera lens while precipitation falls", true, false, true);
 
 	// Wetness drying: wetting tracks the weather target directly (the weather
@@ -1012,6 +1065,8 @@ namespace HexEngine
 		// Position-copy RT shadows the GBuffer position layout (RGBA32F).
 		// Recreated below in CreateRenderTargets at the new dimensions.
 		SAFE_DELETE(_decalPositionCopy);
+		SAFE_DELETE(_mbTileMaxRT);
+		SAFE_DELETE(_mbNeighborMaxRT);
 
 		SAFE_DELETE(_bloomEffect);
 
@@ -1070,6 +1125,9 @@ namespace HexEngine
 		SAFE_DELETE(_subsurfaceIntermediateRT);
 		SAFE_DELETE(_subsurfaceParamsBuffer);
 		SAFE_DELETE(_bokehDoFParamsBuffer);
+		SAFE_DELETE(_mbTileMaxRT);
+		SAFE_DELETE(_mbNeighborMaxRT);
+		SAFE_DELETE(_mbParamsBuffer);
 		SAFE_DELETE(_decalConstantsBuffer);
 		SAFE_DELETE(_decalPositionCopy);
 		SAFE_DELETE(_decalCubeVB);
@@ -1100,8 +1158,12 @@ namespace HexEngine
 
 	void SceneRenderer::CreateShaders()
 	{
-		_compositionShader			= IShader::Create("EngineData.Shaders/Deferred.hcs");	
+		_compositionShader			= IShader::Create("EngineData.Shaders/Deferred.hcs");
 		_fxaa						= IShader::Create("EngineData.Shaders/FXAA.hcs");
+		_mbTileMaxShader			= IShader::Create("EngineData.Shaders/MotionBlurTileMax.hcs");
+		_mbNeighborMaxShader		= IShader::Create("EngineData.Shaders/MotionBlurNeighborMax.hcs");
+		_mbGatherShader				= IShader::Create("EngineData.Shaders/MotionBlurGather.hcs");
+		_casShader					= IShader::Create("EngineData.Shaders/CAS.hcs");
 		_fogEffect					= IShader::Create("EngineData.Shaders/PostFog.hcs");
 		_volumetricLighting			= IShader::Create("EngineData.Shaders/VolumetricLighting.hcs");
 		_volumetricClouds			= IShader::Create("EngineData.Shaders/VolumetricClouds.hcs");
@@ -1530,6 +1592,32 @@ namespace HexEngine
 		_bloomEffect = new Bloom();
 		_bloomEffect->Create(width, height); // full res - the chain sizes itself
 
+		// P4.5 motion blur tile grids: one texel per 20px tile, R16G16 holding
+		// the dominant (scaled, clamped) velocity in texture-UV units.
+		{
+			const int32_t tileW = std::max(1, (width + 19) / 20);
+			const int32_t tileH = std::max(1, (height + 19) / 20);
+			const auto createTileRT = [&](const char* name) -> ITexture2D*
+			{
+				auto* rt = g_pEnv->_graphicsDevice->CreateTexture2D(
+					tileW, tileH,
+					DXGI_FORMAT_R16G16_FLOAT,
+					1,
+					D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+					0, 1, 0,
+					nullptr,
+					(D3D11_CPU_ACCESS_FLAG)0,
+					D3D11_RTV_DIMENSION_TEXTURE2D,
+					D3D11_UAV_DIMENSION_UNKNOWN,
+					D3D11_SRV_DIMENSION_TEXTURE2D);
+				if (rt != nullptr)
+					rt->SetDebugName(name);
+				return rt;
+			};
+			_mbTileMaxRT = createTileRT("_mbTileMax");
+			_mbNeighborMaxRT = createTileRT("_mbNeighborMax");
+		}
+
 
 		_taa.Create(_beautyRT);
 		_diffuseGi.Create(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
@@ -1624,6 +1712,17 @@ namespace HexEngine
 		_currentCamera = camera;
 		_cameraEntity = camera->GetEntity();
 
+		// Promote the pending motion-vector reference matrices ONCE per frame,
+		// before SetupPerFrameBuffer reads GetViewMatrixPrev: every render of
+		// this camera this frame (the editor renders a camera more than once)
+		// sees LAST frame's matrices. Paired with SnapshotPrevMatrices at the
+		// end of this function.
+		camera->PromotePrevMatrices(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u);
+
+		// P4.7: colour LUT hot-reload watch (self-gated to one stat every
+		// couple of seconds regardless of how many renders run per frame).
+		_colourLut.Poll();
+
 		_currentShadowCasterForComposition = nullptr;
 		_currentShadowMapForComposition = nullptr;
 		_gpuVisibilityCulling.BeginFrame(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u, _currentCamera);
@@ -1682,15 +1781,43 @@ namespace HexEngine
 		// exactly as before) or allocate tiles in the shared atlas, where a
 		// face whose content hash is unchanged re-uses last frame's depth and
 		// costs nothing.
+		//
+		// POINT lights are atlas-EXEMPT: no consumer reads point cube faces
+		// from the atlas. ClusterLightApply only applies the atlas term to
+		// spots (shadowed points are skipped back to the per-light path, which
+		// samples the dedicated t5..t10 maps), and the froxel fog's point
+		// shadows copy the dedicated colour mirrors into a TextureCubeArray.
+		// When slice 7 first went live, points were still pushed into the
+		// atlas: each ate 6 of the 16 tiles nobody sampled, while the
+		// dedicated maps PointLight.shader ACTUALLY samples were never
+		// rendered again - interior lamps projected stale/uninitialised depth
+		// as huge angular dark blocks. Until the apply/froxel consumers learn
+		// point tiles, point casters always render their dedicated maps here,
+		// capped nearest-first (the caster list is already sorted) so a
+		// lamp-dense scene can't multiply the shadow pass count.
 		{
 			std::vector<Light*> localCasters;
+			int32_t legacyPointCasters = 0;
 			for (auto& caster : _shadowCasters)
 			{
 				const bool isLocal = caster->CastAs<DirectionalLight>() == nullptr;
-				if (isLocal && r_shadowAtlas._val.b)
+				const bool isPoint = caster->CastAs<PointLight>() != nullptr;
+				if (isLocal && r_shadowAtlas._val.b && !isPoint)
+				{
 					localCasters.push_back(caster);
+				}
+				else if (isPoint && r_shadowAtlas._val.b)
+				{
+					if (legacyPointCasters < MaxShadowCasters)
+					{
+						RenderShadowMaps(caster);
+						++legacyPointCasters;
+					}
+				}
 				else
+				{
 					RenderShadowMaps(caster);
+				}
 			}
 
 			if (!localCasters.empty())
@@ -2213,6 +2340,16 @@ namespace HexEngine
 				stats.gpuOcclusionMs,
 				_gpuVisibilityCulling.HasUsableHistory() ? 1 : 0);
 		}
+
+		// Latch this render's camera matrices as the next render's "previous"
+		// pair. The renderer owns this (not the game loop) so the EDITOR
+		// viewport gets correct motion vectors too: the editor never runs
+		// Scene::LateUpdate, so the camera's prev matrices froze at their
+		// first value and velocity grew with camera travel without ever
+		// clearing - which surfaced as motion blur "sticking" after the
+		// camera stopped (and TAA/NRD never truly reprojecting in-editor).
+		if (_currentCamera != nullptr)
+			_currentCamera->SnapshotPrevMatrices();
 	}
 
 	void SceneRenderer::CollectShadowCasters()
@@ -2340,6 +2477,47 @@ namespace HexEngine
 		return lambda * logSplit + (1.0f - lambda) * uniformSplit;
 	}
 
+	// P4.6 white balance: Kelvin + tint -> RGB channel gains via von-Kries
+	// adaptation in CAT02 LMS. The photographic slider convention: RAISING
+	// the temperature warms the image (as if the shot was white-balanced for
+	// cooler light), positive tint pushes magenta. Gains are normalised to
+	// green so overall exposure is stable, and applied as straight RGB
+	// multipliers in ColourGrade.shader (the LMS round-trip on anything but
+	// the white point is a deliberate approximation - good to well under a
+	// JND across the +-2000K range grading actually uses).
+	static math::Vector3 ComputeWhiteBalanceGains(float kelvin, float tint)
+	{
+		if (std::abs(kelvin - 6500.0f) < 1.0f && std::abs(tint) < 1e-4f)
+			return math::Vector3(1.0f, 1.0f, 1.0f);
+
+		// Target white in CIE xy: slide x away from D65 with temperature
+		// (asymmetric - the blackbody locus is steeper on the warm side),
+		// and y with tint.
+		const float t1 = std::clamp((kelvin - 6500.0f) / 6500.0f, -1.0f, 1.0f);
+		const float t2 = std::clamp(tint, -1.0f, 1.0f);
+		const float x = 0.31271f - t1 * (t1 < 0.0f ? 0.1f : 0.05f);
+		const float yStd = 2.87f * x - 3.0f * x * x - 0.27509507f;
+		const float y = std::max(yStd - t2 * 0.05f, 0.05f);
+
+		// xyY (Y=1) -> XYZ -> CAT02 LMS for the target white and for D65.
+		const auto toLms = [](float X, float Y, float Z)
+		{
+			return math::Vector3(
+				 0.7328f * X + 0.4296f * Y - 0.1624f * Z,
+				-0.7036f * X + 1.6975f * Y + 0.0061f * Z,
+				 0.0030f * X + 0.0136f * Y + 0.9834f * Z);
+		};
+		const math::Vector3 w = toLms(x / y, 1.0f, (1.0f - x - y) / y);
+		const math::Vector3 d65 = toLms(0.95047f, 1.0f, 1.08883f);
+
+		math::Vector3 gains(
+			d65.x / std::max(w.x, 1e-4f),
+			d65.y / std::max(w.y, 1e-4f),
+			d65.z / std::max(w.z, 1e-4f));
+		gains /= std::max(gains.y, 1e-4f);
+		return gains;
+	}
+
 	void SceneRenderer::SetupPerFrameBuffer(
 		const math::Matrix& viewMatrix,
 		const math::Matrix& projectionMatrix,
@@ -2438,7 +2616,7 @@ namespace HexEngine
 
 			bufferData._hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
 			bufferData._hdrPeakNits = r_hdrPeakNits._val.f32;
-			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 5));
+			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 6));
 			bufferData._rainDripDebug = r_rainDripDebug._val.b ? 1.0f : 0.0f;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
 			// Substitute the lagged wetness + puddle state. Puddles fill fast
@@ -2683,6 +2861,42 @@ namespace HexEngine
 				r_oceanFoam._val.f32,
 				r_oceanAbsorption._val.f32,
 				r_oceanBumpStrength._val.f32);
+
+			// P4.6 grading tail: white balance gains + CDL trio.
+			{
+				const math::Vector3 wb = ComputeWhiteBalanceGains(
+					r_whiteBalanceTemp._val.f32, r_whiteBalanceTint._val.f32);
+				bufferData._whiteBalance = math::Vector4(wb.x, wb.y, wb.z, 0.0f);
+				const math::Vector3& lift = r_cdlLift._val.v3;
+				const math::Vector3& gamma = r_cdlGamma._val.v3;
+				const math::Vector3& gain = r_cdlGain._val.v3;
+				bufferData._cdlLift = math::Vector4(lift.x, lift.y, lift.z, 0.0f);
+				bufferData._cdlGamma = math::Vector4(gamma.x, gamma.y, gamma.z, 0.0f);
+				bufferData._cdlGain = math::Vector4(gain.x, gain.y, gain.z, 0.0f);
+			}
+
+			// P4.8 vignette params (shader reads them where the compiled-in
+			// #defines used to be).
+			bufferData._vignetteParams = math::Vector4(
+				r_vignetteAmount._val.f32,
+				r_vignetteRadius._val.f32,
+				r_vignetteSlope._val.f32,
+				r_vignetteRatio._val.f32);
+
+			// P4.7 colour LUT: y carries the LUT edge size; 0 = nothing
+			// loaded, shader bypasses.
+			bufferData._lutParams = math::Vector4(
+				r_colourLutStrength._val.f32,
+				(float)_colourLut.GetSize(),
+				0.0f, 0.0f);
+
+			// P4.9/P4.10 grain + sharpen (z read by CAS.shader, xy by the
+			// tonemap display shaders).
+			bufferData._grainParams = math::Vector4(
+				r_filmGrain._val.f32,
+				r_filmGrainSize._val.f32,
+				r_sharpen._val.f32,
+				0.0f);
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 
 			bufferData._reflectionParams = math::Vector4(
@@ -2982,6 +3196,10 @@ namespace HexEngine
 				bufferData._shadowConfig.biasMultiplier = r_shadowBiasMultiplier._val.f32;
 				bufferData._shadowConfig.samples = (float)numSamples;
 				bufferData._shadowConfig.cascadeBlendRange = r_shadowCascadeBlendRange._val.f32;
+				// PCSS penumbra growth rate. Uploaded for every caster; the shader only
+				// reads it on the ortho (sun) path - spot/point use the perspective
+				// heuristic instead.
+				bufferData._shadowConfig.sunTanHalfAngle = std::tan(0.5f * ToRadian(r_sunAngularDiameter._val.f32));
 
 				// How many cascades are actually rendered and bound. RenderShadowMaps drives
 				// the sun's cascade loop from r_shadowCascades, so a directional light can
@@ -4037,6 +4255,25 @@ namespace HexEngine
 				_temporalAaAppliedThisFrame = dlssActive;
 			}
 
+			// P4.10: contrast-adaptive sharpen, right after the temporal
+			// resolve and BEFORE motion blur (sharpen the crisp frame, then
+			// let the blur soften it - not the reverse). Skipped under DLSS
+			// (it has its own sharpener) and for env captures.
+			if (r_sharpen._val.f32 > 0.0f && !dlssActive && !isEnvCapture)
+			{
+				RenderCAS();
+			}
+
+			// P4.5: motion blur right after the temporal resolve, at render
+			// resolution, before the exposure meter (a blur redistributes
+			// energy but shouldn't flicker the histogram) and before glow/
+			// bloom (glows are lens effects - they don't motion blur).
+			// Env captures have no meaningful velocity - skip.
+			if (!isEnvCapture)
+			{
+				RenderMotionBlur();
+			}
+
 			// Auto exposure: meter the PRE-bloom, pre-glow beauty. Metering
 			// after bloom created a feedback loop (brighter frame -> more
 			// bloom -> meter reads brighter -> exposure drops -> less bloom),
@@ -4238,7 +4475,14 @@ namespace HexEngine
 
 				g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
 				g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
-				guiRenderer->FullScreenTexturedQuad(_beautyRT, outputShader);
+				// P4.7/P4.9: beauty t0 + colour LUT t1 + blue-noise t2 (see the
+				// overlay path).
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+				g_pEnv->_graphicsDevice->SetTexture2D(_beautyRT);
+				g_pEnv->_graphicsDevice->SetTexture3D(_colourLut.GetVolume());
+				g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
+				guiRenderer->FullScreenTexturedQuad(nullptr, outputShader);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
 			}
 
 			guiRenderer->EndFrame();
@@ -4320,11 +4564,16 @@ namespace HexEngine
 				GFX_PERF_END();
 			}
 
-			GFX_PERF_BEGIN(0xFFFFFFFF, L"Vignette");
+			// P4.8: cvar-gated (the pass used to run unconditionally with
+			// compiled-in constants).
+			if (r_vignette._val.b && r_vignetteAmount._val.f32 != 0.0f)
 			{
-				runPass(_vignetteShader.get());
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Vignette");
+				{
+					runPass(_vignetteShader.get());
+				}
+				GFX_PERF_END();
 			}
-			GFX_PERF_END();
 
 			if (r_chromaticAbberation._val.f32 > 0.0f)
 			{
@@ -4361,7 +4610,16 @@ namespace HexEngine
 					src = beauty;
 				}
 				g_pEnv->_graphicsDevice->SetRenderTarget(renderTarget);
-				guiRenderer->FullScreenTexturedQuad(src, outputShader);
+				// P4.7/P4.9: source at t0, colour LUT volume at t1, blue-noise
+				// at t2 (slotless binds, order exact - Tonemap/TonemapHDR
+				// declare them at those registers). A null LUT volume reads
+				// black but the shader bypasses on g_lutParams.y == 0.
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+				g_pEnv->_graphicsDevice->SetTexture2D(src);
+				g_pEnv->_graphicsDevice->SetTexture3D(_colourLut.GetVolume());
+				g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
+				guiRenderer->FullScreenTexturedQuad(nullptr, outputShader);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
 			}
 			GFX_PERF_END();
 
@@ -5238,14 +5496,40 @@ namespace HexEngine
 		// beauty texture for reflection / refraction. Render transparency into a separate RT
 		// to avoid SRV/RTV hazards on _beautyRT, then copy back at the end.
 		const bool haveSnapshotForReflection = (_waterRT != nullptr);
+		ITexture2D* transparentColourRT = haveSnapshotForReflection ? _waterRT : _beautyRT;
 		if (haveSnapshotForReflection)
-		{
 			_beautyRT->CopyTo(_waterRT);
-			g_pEnv->_graphicsDevice->SetRenderTarget(_waterRT, _gbuffer.GetDepthBuffer());
+
+		// P4.4: bind the gbuffer velocity RT at MRT slot 4 - the slot GBufferOut's
+		// float2 velocity : SV_TARGET4 already targets, so the Default-family and
+		// graph-emitted transparency shaders land their (previously discarded)
+		// velocity writes with no shader change, and Water.shader's new WaterOut
+		// does the same. Slots 1-3 stay null: the mat/normal/position writes are
+		// discarded exactly as they were with one RT bound. Shaders WITHOUT an
+		// SV_TARGET4 output (Billboard) leave the velocity RT unmodified at their
+		// pixels - the background velocity persists, which is the status quo.
+		// D3D11 only: the D3D12 PSO path compacts null RTVs out of the bind, which
+		// would remap SV_TARGET1 (gbuffer mat) onto the velocity RT.
+		ITexture2D* transparentVelocityRT =
+			(r_transparentVelocity._val.b &&
+			 g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11)
+				? _gbuffer.GetVelocity()
+				: nullptr;
+		if (transparentVelocityRT != nullptr)
+		{
+			// The deferred pass may have left the velocity SRV bound at t4;
+			// D3D11 would force-null the RTV bind on the hazard otherwise.
+			g_pEnv->_graphicsDevice->SetTexture2D(4, nullptr);
+			const std::vector<ITexture2D*> transparentRts =
+				{ transparentColourRT, nullptr, nullptr, nullptr, transparentVelocityRT };
+			g_pEnv->_graphicsDevice->SetRenderTargets(transparentRts, _gbuffer.GetDepthBuffer());
+			// Blending materials switch to their independent-blend variants so
+			// RT4 overwrites (velocity must never be alpha/additive-blended).
+			g_pEnv->_graphicsDevice->SetVelocityMrtPhase(true);
 		}
 		else
 		{
-			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
+			g_pEnv->_graphicsDevice->SetRenderTarget(transparentColourRT, _gbuffer.GetDepthBuffer());
 		}
 
 		// Populate b7 with the current frame's dynamic point/spot lights so transparent meshes
@@ -5344,6 +5628,14 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetHullShader(nullptr);
 		g_pEnv->_graphicsDevice->SetDomainShader(nullptr);
 		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+
+		// P4.4: end the velocity-MRT phase and drop back to a single RT so the
+		// velocity texture isn't still bound as RT4 when TAA reads it as an SRV.
+		if (transparentVelocityRT != nullptr)
+		{
+			g_pEnv->_graphicsDevice->SetVelocityMrtPhase(false);
+			g_pEnv->_graphicsDevice->SetRenderTarget(transparentColourRT, _gbuffer.GetDepthBuffer());
+		}
 
 		if (_waterRT)
 		{
@@ -6097,6 +6389,129 @@ namespace HexEngine
 
 		// 4. Additively blend the glow ring into the beauty buffer (before bloom).
 		_outlineGlowRT->BlendTo_Additive(_beautyRT);
+	}
+
+	void SceneRenderer::RenderCAS()
+	{
+		PROFILE();
+
+		if (_casShader == nullptr || _beautyRT == nullptr ||
+			_subsurfaceIntermediateRT == nullptr || _currentCamera == nullptr)
+			return;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		GuiRenderer* renderer = g_pEnv->GetUIManager().GetRenderer();
+		if (renderer == nullptr)
+			return;
+
+		const auto& bbvp = _currentCamera->GetViewport();
+		renderer->StartFrame((uint32_t)bbvp.width, (uint32_t)bbvp.height);
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"CAS sharpen");
+
+		// Sharpen beauty -> scratch, copy back (can't sample + write beauty in
+		// one draw). Sharpen amount rides in g_grainParams.z (per-frame cbuffer).
+		graphics->SetRenderTarget(_subsurfaceIntermediateRT);
+		graphics->SetViewport(*bbvp.Get11());
+		renderer->FullScreenTexturedQuad(_beautyRT, _casShader.get());
+		_subsurfaceIntermediateRT->CopyTo(_beautyRT);
+
+		GFX_PERF_END();
+		renderer->EndFrame();
+	}
+
+	void SceneRenderer::RenderMotionBlur()
+	{
+		PROFILE();
+
+		if (!r_motionBlur._val.b)
+			return;
+		if (!_mbTileMaxShader || !_mbNeighborMaxShader || !_mbGatherShader)
+			return;
+		if (_mbTileMaxRT == nullptr || _mbNeighborMaxRT == nullptr ||
+			_beautyRT == nullptr || _subsurfaceIntermediateRT == nullptr ||
+			_gbuffer.GetVelocity() == nullptr || _gbuffer.GetNormal() == nullptr ||
+			_currentCamera == nullptr)
+			return;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		GuiRenderer* renderer = g_pEnv->GetUIManager().GetRenderer();
+		if (renderer == nullptr)
+			return;
+
+		if (_mbParamsBuffer == nullptr)
+		{
+			_mbParamsBuffer = graphics->CreateConstantBuffer(sizeof(math::Vector4) * 2);
+			if (_mbParamsBuffer == nullptr)
+				return;
+		}
+
+		// Frame-rate normalisation: velocity is per-frame displacement, but the
+		// shutter is a fixed fraction of a 60Hz frame - at lower frame rates the
+		// per-frame displacement grows, so scale down to keep the blur length
+		// tied to TIME, not frame count.
+		const float dt = (g_pEnv && g_pEnv->_timeManager)
+			? std::clamp(static_cast<float>(g_pEnv->_timeManager->_frameTime), 1e-4f, 0.1f)
+			: (1.0f / 60.0f);
+		const float velocityScale =
+			r_motionBlurShutter._val.f32 * std::clamp((1.0f / 60.0f) / dt, 0.0f, 2.0f);
+		if (velocityScale <= 0.0f)
+			return;
+
+		const auto& bbvp = _currentCamera->GetViewport();
+		const float tileW = (float)std::max(1, _mbTileMaxRT->GetWidth());
+		const float tileH = (float)std::max(1, _mbTileMaxRT->GetHeight());
+
+		struct MotionBlurConstants
+		{
+			math::Vector4 params;   // x = velocity scale, y = max px, z = samples, w = tile size
+			math::Vector4 params2;  // xy = full-res dims, zw = tile-grid dims
+		} constants;
+		constants.params = math::Vector4(
+			velocityScale,
+			r_motionBlurMaxPx._val.f32,
+			(float)r_motionBlurSamples._val.i32,
+			20.0f);
+		constants.params2 = math::Vector4(bbvp.width, bbvp.height, tileW, tileH);
+
+		renderer->StartFrame((uint32_t)bbvp.width, (uint32_t)bbvp.height);
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"Motion blur");
+
+		_mbParamsBuffer->Write(&constants, sizeof(constants));
+		graphics->SetConstantBufferPS(6, _mbParamsBuffer);
+
+		// Pass 1: per-tile dominant velocity.
+		graphics->SetRenderTarget(_mbTileMaxRT);
+		graphics->SetViewport(Viewport(0.0f, 0.0f, tileW, tileH));
+		graphics->SetTexture2D(0, _gbuffer.GetVelocity());
+		renderer->FullScreenTexturedQuad(nullptr, _mbTileMaxShader.get());
+
+		// Pass 2: 3x3 neighbourhood max.
+		graphics->SetRenderTarget(_mbNeighborMaxRT);
+		graphics->SetTexture2D(0, _mbTileMaxRT);
+		renderer->FullScreenTexturedQuad(nullptr, _mbNeighborMaxShader.get());
+
+		// Pass 3: gather into the scratch leg, copy back (can't read and write
+		// beauty in one draw).
+		graphics->SetRenderTarget(_subsurfaceIntermediateRT);
+		graphics->SetViewport(*bbvp.Get11());
+		graphics->SetTexture2D(0, _beautyRT);
+		graphics->SetTexture2D(1, _gbuffer.GetVelocity());
+		graphics->SetTexture2D(2, _mbNeighborMaxRT);
+		graphics->SetTexture2D(3, _gbuffer.GetNormal());
+		renderer->FullScreenTexturedQuad(nullptr, _mbGatherShader.get());
+
+		_subsurfaceIntermediateRT->CopyTo(_beautyRT);
+
+		// Unbind so the velocity/normal SRVs don't collide with their RT binds
+		// next frame (transparent pass rebinds velocity as RT4).
+		graphics->SetTexture2D(0, nullptr);
+		graphics->SetTexture2D(1, nullptr);
+		graphics->SetTexture2D(2, nullptr);
+		graphics->SetTexture2D(3, nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
+
+		GFX_PERF_END();
+		renderer->EndFrame();
 	}
 
 	void SceneRenderer::RenderSkyEnvMap()

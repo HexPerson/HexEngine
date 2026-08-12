@@ -300,6 +300,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float4 g_vignetteParams;
 		// P4.7 colour LUT: x = strength, y = LUT size N (0 = none bound).
 		float4 g_lutParams;
+		// P4.9/P4.10: x = film-grain intensity, y = grain size, z = CAS
+		// sharpen amount, w reserved.
+		float4 g_grainParams;
 	};
 
 	#define g_timePrev  (g_timeParams2.x)

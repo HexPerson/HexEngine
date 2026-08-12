@@ -96,6 +96,9 @@ namespace HexEngine
 		// P4.5 camera/object motion blur: tile-max -> neighbour-max -> McGuire
 		// gather, between the TAA resolve and the exposure meter.
 		void RenderMotionBlur();
+		// P4.10 contrast-adaptive sharpen on the resolved beauty (in place via
+		// the SSS scratch RT), right after the TAA resolve.
+		void RenderCAS();
 		// IBL step 2: convert + prefilter any reflection probe whose six capture
 		// faces just completed into its own octahedral atlas (ProbeEnvMap.shader).
 		// Runs at most one probe's prefilter per call - it is a bake, not a
@@ -302,6 +305,9 @@ namespace HexEngine
 		std::shared_ptr<IShader> _mbNeighborMaxShader;
 		std::shared_ptr<IShader> _mbGatherShader;
 		IConstantBuffer* _mbParamsBuffer = nullptr;
+		// P4.10 CAS: single sharpen pass on the resolved beauty, via the SSS
+		// scratch RT (can't read+write beauty in one draw).
+		std::shared_ptr<IShader> _casShader;
 		// Aerial perspective apply. Reads beauty + gbuffer normal/diff, samples
 		// AtmosphereLUTs' 32^3 froxel volume, composites distance haze into
 		// the beauty RT via a scratch RT swap (reuses _subsurfaceIntermediateRT

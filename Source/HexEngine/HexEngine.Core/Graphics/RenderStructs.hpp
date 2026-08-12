@@ -490,6 +490,10 @@ namespace HexEngine
 		// P4.7 colour LUT: x = r_colourLutStrength, y = LUT size N (0 = no
 		// LUT loaded - shader bypasses), zw reserved.
 		math::Vector4 _lutParams;
+		// P4.9/P4.10 display-output finishing: x = film-grain intensity
+		// (r_filmGrain), y = grain size (r_filmGrainSize), z = CAS sharpen
+		// amount (r_sharpen), w reserved.
+		math::Vector4 _grainParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

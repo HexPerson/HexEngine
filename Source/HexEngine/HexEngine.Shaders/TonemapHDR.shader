@@ -33,8 +33,27 @@
 	// SDR and HDR identically in the mid-range; the HDR highlight extension
 	// above paper white is deliberately left ungraded.
 	Texture3D g_colourLut : register(t1);
+	// P4.9: blue-noise at t2 (see the SDR path). HDR gets film grain but NO
+	// dither - a 10/16-bit HDR swap chain doesn't band.
+	Texture2D g_blueNoise : register(t2);
 	SamplerState PointSampler : register(s2);
 	SamplerState LinearSampler : register(s4);
+
+	// Film grain on the perceptual [0,1] range; frame-scrambled blue noise,
+	// luminance-weighted toward the mid-tones. Matches the SDR grain.
+	float3 ApplyGrain(float3 c, float2 pixel)
+	{
+		const float grain = g_grainParams.x;
+		if (grain <= 0.0f)
+			return c;
+		const float size = max(g_grainParams.y, 0.25f);
+		const float2 fo = float2((g_frame * 113u) & 63u, (g_frame * 71u) & 63u);
+		const float2 guv = ((pixel / size) + fo) / 64.0f;
+		const float n = g_blueNoise.SampleLevel(PointSampler, guv, 0).r;
+		const float luma = dot(c, float3(0.299f, 0.587f, 0.114f));
+		const float response = 1.0f - abs(2.0f * luma - 1.0f);
+		return c + (n - 0.5f) * grain * response;
+	}
 
 	float3 ApplyColourLut(float3 c)
 	{
@@ -48,7 +67,7 @@
 		return lerp(c, pow(graded, 2.2f), saturate(g_lutParams.x));
 	}
 
-	float3 ApplyHdrDisplayMap(float3 colour)
+	float3 ApplyHdrDisplayMap(float3 colour, float2 pixel)
 	{
 		// Output is scRGB linear (1.0 = 80 nits per Windows definition), but
 		// what _looks_ like "white" on screen depends on the system paper-
@@ -68,6 +87,9 @@
 		const int op = (int)g_tonemapOperator;
 		float3 baseRange = ApplyTonemap(min(colour, 1.0f), op);
 		baseRange = ApplyColourLut(baseRange);
+		// Film grain on the perceptual [0,1] base range (before nit scaling),
+		// so its strength matches the SDR path; the nit multiply carries it up.
+		baseRange = ApplyGrain(baseRange, pixel);
 
 		// Highlights: extend input values above 1.0 into the headroom between
 		// paper white and display peak. log2(1+x) is gentle (1 stop of input
@@ -86,6 +108,6 @@
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		float4 colour = shaderTexture.Sample(PointSampler, input.texcoord);
-		return float4(ApplyHdrDisplayMap(colour.rgb), colour.a);
+		return float4(ApplyHdrDisplayMap(colour.rgb, input.position.xy), colour.a);
 	}
 }
