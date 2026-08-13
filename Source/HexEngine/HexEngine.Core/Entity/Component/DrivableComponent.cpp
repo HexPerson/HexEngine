@@ -42,14 +42,14 @@ namespace HexEngine
 		HVar v_bikeRideHeight("v_bikeRideHeight", "Bike suspension ride height / rest length (m)", 0.5f, 0.1f, 2.0f);
 		HVar v_bikeWheelbase("v_bikeWheelbase", "Bike front-rear wheel spacing (m)", 1.25f, 0.4f, 4.0f);
 		HVar v_bikeSuspStiffness("v_bikeSuspStiffness", "Suspension spring stiffness (accel per unit compression)", 45.0f, 1.0f, 200.0f);
-		HVar v_bikeSuspDamping("v_bikeSuspDamping", "Suspension vertical damping", 6.0f, 0.0f, 40.0f);
+		HVar v_bikeSuspDamping("v_bikeSuspDamping", "Suspension vertical damping (higher = less bob over terrain facets)", 12.0f, 0.0f, 60.0f);
 		HVar v_bikeWheelRadius("v_bikeWheelRadius", "Wheel radius used for ground casts (m)", 0.35f, 0.05f, 1.0f);
 		HVar v_bikeDriveAccel("v_bikeDriveAccel", "Forward drive acceleration (m/s^2)", 50.0f, 1.0f, 80.0f);
 		HVar v_bikeBrakeAccel("v_bikeBrakeAccel", "Braking deceleration (m/s^2)", 50.0f, 1.0f, 120.0f);
 		HVar v_bikeMaxSpeed("v_bikeMaxSpeed", "Top forward speed (m/s)", 20.0f, 1.0f, 90.0f);
 		HVar v_bikeReverseSpeed("v_bikeReverseSpeed", "Top reverse speed (m/s)", 5.0f, 0.0f, 20.0f);
 		HVar v_bikeGrip("v_bikeGrip", "Lateral grip (kills sideways velocity; lower = slidey)", 10.0f, 0.0f, 40.0f);
-		HVar v_bikeSteer("v_bikeSteer", "Steering yaw authority (torque scale)", 3.0f, 0.1f, 12.0f);
+		HVar v_bikeSteer("v_bikeSteer", "Steering yaw authority (torque scale). A capsule chassis has high yaw inertia, so this needs to be much larger than the drive/lean gains to actually turn.", 18.0f, 0.1f, 120.0f);
 		HVar v_bikeLean("v_bikeLean", "Lean-into-turn angle at speed (radians)", 0.5f, 0.0f, 1.2f);
 		HVar v_bikeUpright("v_bikeUpright", "Upright/lean correction stiffness (orientation P gain)", 55.0f, 1.0f, 200.0f);
 		HVar v_bikeDownforce("v_bikeDownforce", "Downforce at speed (m/s^2)", 6.0f, 0.0f, 40.0f);
@@ -487,7 +487,7 @@ namespace HexEngine
 					// mass (not at-point), so it can't inject a pitching torque -
 					// applying it at each wheel is what made the bike bob nose
 					// up/down even on flat ground. At rest vel.y~=0, so no force.
-					const float dampAccel = -vel.y * suspDamp * 0.25f;
+					const float dampAccel = -vel.y * suspDamp * 0.5f;
 					_body->ApplyForceToCenterOfMass(worldUp * (dampAccel * mass));
 				}
 
@@ -563,7 +563,7 @@ namespace HexEngine
 		// direction AND the lean below (the lean is built about `fwd`, which is
 		// already signed) - otherwise flipping v_bikeForwardSign turned the bike
 		// one way while it leaned the other.
-		const float steerAuthority = 0.35f + 0.65f * speedFactor;
+		const float steerAuthority = 0.5f + 1.0f * speedFactor;
 		const float steerDir = (_forwardSpeed >= -0.3f) ? 1.0f : -1.0f;
 		_body->ApplyTorque(up * (_input.steer * v_bikeSteer._val.f32 * steerAuthority * steerDir * mass * v_bikeForwardSign._val.f32));
 
