@@ -37,14 +37,30 @@ namespace HexEngine
 		_exclusive = copy->_exclusive;
 		_colliderShape = copy->_colliderShape;
 		_colliderData = copy->_colliderData;
+		// Copy the body-config flags too - a clone that dropped these ended up
+		// with default gravity/trigger state (a spawned prefab body that wasn't
+		// gravity-driven until manually re-toggled).
+		_isGravityApplied = copy->_isGravityApplied;
+		_isTrigger = copy->_isTrigger;
+		_massAdjust = copy->_massAdjust;
 
 		if (auto rb = copy->GetIRigidBody())
 		{
+			// The actor's live type is the source of truth (the member _bodyType
+			// isn't reliably set on the source; Serialize uses GetBodyType()).
+			_bodyType = rb->GetBodyType();
 			_rigidBody = g_pEnv->_physicsSystem->CloneRigidBody(
 				rb,
 				GetEntity()->GetComponent<Transform>(),
 				this,
-				rb->GetBodyType());
+				_bodyType);
+
+			if (_rigidBody != nullptr)
+			{
+				_rigidBody->SetGravityEnabled(_isGravityApplied);
+				if (_isTrigger)
+					_rigidBody->SetIsTrigger(true);
+			}
 		}
 	}
 
@@ -571,6 +587,11 @@ namespace HexEngine
 			_rigidBody->SetMass(mass);
 			_rigidBody->SetGravityEnabled(_isGravityApplied);
 		}
+
+		// Keep the component members in step with what we just applied, so a
+		// later Serialize / clone of this component reflects the real state.
+		_bodyType = type;
+		_massAdjust = mass;
 
 		if (_isTrigger)
 		{

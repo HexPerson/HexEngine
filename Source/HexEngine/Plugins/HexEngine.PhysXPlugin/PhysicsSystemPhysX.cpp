@@ -361,11 +361,24 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 			rigidBody->_collider = new ColliderPhysX(physxBody->_shape, rigidBody);
 		}
 
-		actor->userData = physxBody;
+		// userData MUST point at the NEW cloned body, not the source. The
+		// per-frame writeback (PhysicsSystemPhysX::Update) reads actor->userData
+		// to find which component/transform to drive; with the source here, a
+		// cloned/prefab-spawned dynamic body simulated (fell, took forces) but
+		// its OWN transform never updated - it looked frozen, and forward speed
+		// read ~0 because it was just falling. Toggling the body type "fixed" it
+		// only because SetBodyType's recreation path sets userData = this.
+		actor->userData = rigidBody;
 		_scene->addActor(*actor);
 
 		_scene->unlockWrite();
 		//_scene->unlockRead();
+
+		// Copy the source's mass (+ inertia) so a cloned dynamic body doesn't
+		// fall back to PhysX's default mass 1 / unit inertia (twitchy handling).
+		// After unlockWrite - SetMass/GetMass take their own scene locks.
+		if (type != HexEngine::IRigidBody::BodyType::Static)
+			rigidBody->SetMass(physicsBody->GetMass());
 
 		return rigidBody;
 	}
