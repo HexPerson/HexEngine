@@ -31,8 +31,8 @@ namespace HexEngine
 		HVar v_bikeSuspStiffness("v_bikeSuspStiffness", "Suspension spring stiffness (accel per unit compression)", 45.0f, 1.0f, 200.0f);
 		HVar v_bikeSuspDamping("v_bikeSuspDamping", "Suspension vertical damping", 6.0f, 0.0f, 40.0f);
 		HVar v_bikeWheelRadius("v_bikeWheelRadius", "Wheel radius used for ground casts (m)", 0.35f, 0.05f, 1.0f);
-		HVar v_bikeDriveAccel("v_bikeDriveAccel", "Forward drive acceleration (m/s^2)", 16.0f, 1.0f, 80.0f);
-		HVar v_bikeBrakeAccel("v_bikeBrakeAccel", "Braking deceleration (m/s^2)", 26.0f, 1.0f, 120.0f);
+		HVar v_bikeDriveAccel("v_bikeDriveAccel", "Forward drive acceleration (m/s^2)", 45.0f, 1.0f, 80.0f);
+		HVar v_bikeBrakeAccel("v_bikeBrakeAccel", "Braking deceleration (m/s^2)", 45.0f, 1.0f, 120.0f);
 		HVar v_bikeMaxSpeed("v_bikeMaxSpeed", "Top forward speed (m/s)", 20.0f, 1.0f, 90.0f);
 		HVar v_bikeReverseSpeed("v_bikeReverseSpeed", "Top reverse speed (m/s)", 5.0f, 0.0f, 20.0f);
 		HVar v_bikeGrip("v_bikeGrip", "Lateral grip (kills sideways velocity; lower = slidey)", 10.0f, 0.0f, 40.0f);
@@ -49,6 +49,13 @@ namespace HexEngine
 		// Model-dependent nose direction: +1 = SimpleMath forward (-Z), -1 = +Z.
 		// Flip this if the vehicle drives backwards relative to its mesh.
 		HVar v_bikeForwardSign("v_bikeForwardSign", "Forward axis sign (+1 or -1); flip if the vehicle drives backwards", -1.0f, -1.0f, 1.0f);
+		// The chassis collider is a raycast-suspension hover body: its ground
+		// support and traction come from the model above, not from PhysX contact
+		// friction. A high-friction chassis snags on every seam/lip and feels
+		// "stuck". Keep it slippery + non-bouncy so it slides and rides over
+		// small edges; all real grip is synthesised by v_bikeGrip.
+		HVar v_bikeFriction("v_bikeChassisFriction", "Chassis collider friction (low = slides over seams; grip is synthesised)", 0.05f, 0.0f, 1.0f);
+		HVar v_bikeRestitution("v_bikeChassisRestitution", "Chassis collider bounciness (0 = no bounce/hop)", 0.0f, 0.0f, 1.0f);
 	}
 
 	// --- player input binds -> intent flags -------------------------------
@@ -315,6 +322,24 @@ namespace HexEngine
 					GetEntity() ? GetEntity()->GetName().c_str() : "(null)");
 			}
 			return;
+		}
+
+		// Keep the chassis collider slippery + non-bouncy (see the cvar note).
+		// Only re-push when a value actually changes - each apply takes a scene
+		// write lock and recreates the PhysX material.
+		{
+			const float fr = v_bikeFriction._val.f32;
+			const float re = v_bikeRestitution._val.f32;
+			if (fr != _appliedFriction || re != _appliedRestitution)
+			{
+				IRigidBody::PhysicalProperties props;
+				props.staticFriction = fr;
+				props.dynamicFriction = fr;
+				props.restitution = re;
+				_body->SetPhysicalProperties(props);
+				_appliedFriction = fr;
+				_appliedRestitution = re;
+			}
 		}
 
 		if (v_bikeDebug._val.b && _playerControlled)

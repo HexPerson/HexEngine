@@ -103,6 +103,11 @@ namespace HexEngine
 		float _debugAccum = 0.0f;
 		bool  _ensuredDynamic = false;
 
+		// Last chassis material values pushed to the collider, so we only touch
+		// the PhysX material (a scene-write-locked recreate) when they change.
+		float _appliedFriction = -1.0f;
+		float _appliedRestitution = -1.0f;
+
 		std::vector<math::Vector3> _wheelsLocal;
 	};
 }
