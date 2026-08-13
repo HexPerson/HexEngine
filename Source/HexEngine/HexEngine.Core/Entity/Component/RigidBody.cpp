@@ -102,6 +102,7 @@ namespace HexEngine
 
 		_colliderData.sphere.radius = radius;
 		_colliderShape = IRigidBody::ColliderShape::Sphere;
+		_exclusive = true;
 
 		_rigidBody->AddSphereCollider(GetEntity()->GetComponent<Transform>(), radius);
 	}
@@ -115,6 +116,11 @@ namespace HexEngine
 		_colliderData.capsule.height = height;
 		_colliderData.capsule.axis = axis;
 		_colliderShape = IRigidBody::ColliderShape::Capsule;
+
+		// Exclusive (like Box): a per-instance shape, so cloning a prefab gives
+		// each copy its own capsule (with its own axis pose and material) rather
+		// than sharing one - the drivable chassis mutates its material live.
+		_exclusive = true;
 
 		_rigidBody->AddCapsuleCollider(GetEntity()->GetComponent<Transform>(), radius, height, axis);
 	}

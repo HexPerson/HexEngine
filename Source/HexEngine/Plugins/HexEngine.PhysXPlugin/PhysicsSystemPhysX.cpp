@@ -347,6 +347,36 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 				break;
 			}
 
+			case physx::PxGeometryType::eCAPSULE:
+			{
+				physx::PxCapsuleGeometry* capGeom = (physx::PxCapsuleGeometry*)physxBody->_geometry;
+
+				physx::PxCapsuleGeometry* geomCopy = new physx::PxCapsuleGeometry(capGeom->radius, capGeom->halfHeight);
+
+				rigidBody->_geometry = geomCopy;
+				rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
+
+				// Preserve the source capsule's axis orientation (its local pose
+				// rotation), otherwise the clone snaps back to PhysX's default
+				// X-aligned capsule and the vehicle chassis lies the wrong way.
+				if (physxBody->_shape)
+					rigidBody->_shape->setLocalPose(physxBody->_shape->getLocalPose());
+
+				break;
+			}
+
+			case physx::PxGeometryType::eSPHERE:
+			{
+				physx::PxSphereGeometry* sphGeom = (physx::PxSphereGeometry*)physxBody->_geometry;
+
+				physx::PxSphereGeometry* geomCopy = new physx::PxSphereGeometry(sphGeom->radius);
+
+				rigidBody->_geometry = geomCopy;
+				rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
+
+				break;
+			}
+
 			default:
 				LOG_CRIT("Exclusive shape copy not implemented");
 				break;
