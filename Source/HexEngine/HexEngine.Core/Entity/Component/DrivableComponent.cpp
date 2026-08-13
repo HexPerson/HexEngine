@@ -414,21 +414,37 @@ namespace HexEngine
 		const bool hover = v_bikeHover._val.b;
 		const float rideHeight = v_bikeRideHeight._val.f32;
 		const float wheelRadius = v_bikeWheelRadius._val.f32;
-		// Non-hover still needs enough reach to sense ground while the capsule
-		// rests (origin sits ~radius above it); give it a small extra margin.
-		const float maxDrop = hover ? (rideHeight + wheelRadius) : (wheelRadius + 0.35f);
 		const float stiffness = v_bikeSuspStiffness._val.f32;
 		const float suspDamp = v_bikeSuspDamping._val.f32;
 		const LayerMask groundMask =
 			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Decorative);
 		const std::vector<Entity*> ignore { GetEntity() };
 
+		// Non-hover fires the ground ray from the WHEEL LINE - the bottom of the
+		// scaled mesh AABB - not the body origin. On a tall mesh the origin sits
+		// well above the ground, so an origin-relative ray only reached the
+		// terrain with an absurd wheel radius (the "grounded needs radius 5"
+		// symptom). Hover keeps its origin-relative spring.
+		float bottomLocalY = 0.0f;
+		if (!hover)
+		{
+			const dx::BoundingBox lb = GetEntity()->GetAABB();
+			const math::Vector3 scl = GetEntity()->GetAbsoluteScale();
+			bottomLocalY = (lb.Center.y - lb.Extents.y) * scl.y;
+		}
+		const float maxDrop = hover ? (rideHeight + wheelRadius) : (wheelRadius + 0.35f);
+		// Start the non-hover ray a little above the wheel line so it straddles
+		// the surface even when the capsule is resting right on it.
+		const float probeUp = hover ? 0.0f : 0.3f;
+
 		int grounded = 0;
 		math::Vector3 groundNormalAccum(0.0f, 0.0f, 0.0f);
 		for (const math::Vector3& wl : _wheelsLocal)
 		{
-			const math::Vector3 anchor = pos + math::Vector3::Transform(wl, rot);
-			const math::Vector3 from = anchor;
+			math::Vector3 wlAdj = wl;
+			wlAdj.y += bottomLocalY;
+			const math::Vector3 anchor = pos + math::Vector3::Transform(wlAdj, rot);
+			const math::Vector3 from = anchor + worldUp * probeUp;
 			const math::Vector3 to = anchor - worldUp * maxDrop;
 
 			RayHit hit;
@@ -446,11 +462,12 @@ namespace HexEngine
 				}
 				else
 				{
-					// Physical rest: no lift. Only oppose vertical velocity to take
-					// the bounce out of landings and small seams. At rest vel.y~=0
-					// so this contributes no force - the bike does not hover.
-					const float dampAccel = -vel.y * suspDamp;
-					applyForceAtPoint(worldUp * (dampAccel * mass) * 0.5f, anchor);
+					// Physical rest: no lift. Damp vertical bounce at the CENTRE of
+					// mass (not at-point), so it can't inject a pitching torque -
+					// applying it at each wheel is what made the bike bob nose
+					// up/down even on flat ground. At rest vel.y~=0, so no force.
+					const float dampAccel = -vel.y * suspDamp * 0.25f;
+					_body->ApplyForceToCenterOfMass(worldUp * (dampAccel * mass));
 				}
 
 				++grounded;
@@ -520,9 +537,13 @@ namespace HexEngine
 		}
 
 		// Steering: speed-scaled yaw torque (can turn a little at a standstill).
+		// Multiply by the forward sign so the yaw handedness matches the driving
+		// direction AND the lean below (the lean is built about `fwd`, which is
+		// already signed) - otherwise flipping v_bikeForwardSign turned the bike
+		// one way while it leaned the other.
 		const float steerAuthority = 0.35f + 0.65f * speedFactor;
 		const float steerDir = (_forwardSpeed >= -0.3f) ? 1.0f : -1.0f;
-		_body->ApplyTorque(up * (_input.steer * v_bikeSteer._val.f32 * steerAuthority * steerDir * mass));
+		_body->ApplyTorque(up * (_input.steer * v_bikeSteer._val.f32 * steerAuthority * steerDir * mass * v_bikeForwardSign._val.f32));
 
 		// Upright + lean: proportional torque toward a target up-vector. The
 		// heavy angular damping above turns this pure-P controller into a
