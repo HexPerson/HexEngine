@@ -45,6 +45,7 @@ namespace HexEngine
 		HVar v_bikeComHeight("v_bikeComHeight", "Centre-of-mass height offset from origin (negative = lower = stabler)", -0.25f, -1.5f, 1.0f);
 		HVar v_bikeSteerSmooth("v_bikeSteerSmooth", "Digital steer smoothing rate (1/s)", 8.0f, 1.0f, 30.0f);
 		HVar v_bikeDebug("v_bikeDebug", "Log DrivableComponent state (grounded/speed/input) ~1/sec while possessed", false, false, true);
+		HVar v_bikeMass("v_bikeMass", "Vehicle mass in kg (sets mass + inertia when the body is made dynamic)", 120.0f, 5.0f, 2000.0f);
 	}
 
 	// --- player input binds -> intent flags -------------------------------
@@ -203,13 +204,33 @@ namespace HexEngine
 
 	bool DrivableComponent::ResolveBody()
 	{
-		if (_body != nullptr)
-			return true;
-		if (_bodyComp == nullptr)
-			_bodyComp = GetEntity() ? GetEntity()->GetComponent<RigidBody>() : nullptr;
-		if (_bodyComp != nullptr)
-			_body = _bodyComp->GetIRigidBody();
-		return _body != nullptr;
+		if (_body == nullptr)
+		{
+			if (_bodyComp == nullptr)
+				_bodyComp = GetEntity() ? GetEntity()->GetComponent<RigidBody>() : nullptr;
+			if (_bodyComp != nullptr)
+				_body = _bodyComp->GetIRigidBody();
+		}
+		if (_body == nullptr)
+			return false;
+
+		// A drivable vehicle is inherently a DYNAMIC body. Enforce it once
+		// (the PhysX plugin recreates the actor on the type flip but leaves
+		// PhysX's default mass=1/unit-inertia, which drives twitchily), then
+		// set a real mass - SetMass uses setMassAndUpdateInertia, so this also
+		// gives a correct inertia tensor from the collider shape. Removes the
+		// "placed a bike but its RigidBody was Static/mass 1" footgun.
+		if (!_ensuredDynamic)
+		{
+			if (_body->GetBodyType() != IRigidBody::BodyType::Dynamic)
+				_body->SetBodyType(IRigidBody::BodyType::Dynamic);
+			_body->SetMass(std::max(v_bikeMass._val.f32, 1.0f));
+			_body->SetGravityEnabled(true);
+			_ensuredDynamic = true;
+			LOG_INFO("DrivableComponent: body made Dynamic (mass %.0f kg) on '%s'",
+				v_bikeMass._val.f32, GetEntity() ? GetEntity()->GetName().c_str() : "(null)");
+		}
+		return true;
 	}
 
 	void DrivableComponent::RebuildWheels()

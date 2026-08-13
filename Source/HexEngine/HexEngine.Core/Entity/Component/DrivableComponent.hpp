@@ -100,6 +100,7 @@ namespace HexEngine
 		float _forwardSpeed = 0.0f;
 		bool  _grounded = false;
 		float _debugAccum = 0.0f;
+		bool  _ensuredDynamic = false;
 
 		std::vector<math::Vector3> _wheelsLocal;
 	};
