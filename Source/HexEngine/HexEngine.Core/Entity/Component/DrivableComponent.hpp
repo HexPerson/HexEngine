@@ -5,6 +5,7 @@
 #include "../../Math/FloatMath.hpp"
 
 #include <vector>
+#include <string>
 
 namespace HexEngine
 {
@@ -105,6 +106,16 @@ namespace HexEngine
 		// so it launches over the edge instead of freezing when the ground ray
 		// briefly finds nothing.
 		float _airTime = 0.0f;
+
+		// Diagnostics captured during the wheel loop, printed by the v_bikeDebug
+		// log so we can see why grounding behaves as it does on terrain.
+		float _dbgBottomY = 0.0f;   // wheel-line offset from origin (local, scaled)
+		float _dbgFromY = 0.0f;     // ray start Y (world)
+		float _dbgToY = 0.0f;       // ray end Y (world)
+		float _dbgHitY = 0.0f;      // hit point Y (world), or 0 if none
+		float _dbgHitDist = -1.0f;  // hit distance, or -1 if none
+		int   _dbgHits = 0;         // wheels that hit this frame
+		std::string _dbgHitEntity;  // name of the entity the first ray hit
 		float _debugAccum = 0.0f;
 		bool  _ensuredDynamic = false;
 

@@ -355,8 +355,9 @@ namespace HexEngine
 			if (_debugAccum >= 1.0f)
 			{
 				_debugAccum = 0.0f;
-				LOG_INFO("bike: grounded=%d speed=%.2f m/s  in(thr=%.2f brk=%.2f steer=%.2f hb=%d)",
-					_grounded ? 1 : 0, _forwardSpeed,
+				LOG_INFO("bike: grounded=%d(hits=%d) speed=%.2f  ray[bottomY=%.2f fromY=%.2f toY=%.2f hitY=%.2f dist=%.2f on='%s']  in(thr=%.2f brk=%.2f steer=%.2f hb=%d)",
+					_grounded ? 1 : 0, _dbgHits, _forwardSpeed,
+					_dbgBottomY, _dbgFromY, _dbgToY, _dbgHitY, _dbgHitDist, _dbgHitEntity.c_str(),
 					_input.throttle, _input.brake, _input.steer, _input.handbrake ? 1 : 0);
 			}
 		}
@@ -439,6 +440,10 @@ namespace HexEngine
 
 		int grounded = 0;
 		math::Vector3 groundNormalAccum(0.0f, 0.0f, 0.0f);
+		_dbgBottomY = bottomLocalY;
+		_dbgHitDist = -1.0f;
+		_dbgHitY = 0.0f;
+		bool capturedRay = false;
 		for (const math::Vector3& wl : _wheelsLocal)
 		{
 			math::Vector3 wlAdj = wl;
@@ -447,9 +452,17 @@ namespace HexEngine
 			const math::Vector3 from = anchor + worldUp * probeUp;
 			const math::Vector3 to = anchor - worldUp * maxDrop;
 
+			if (!capturedRay) { _dbgFromY = from.y; _dbgToY = to.y; capturedRay = true; }
+
 			RayHit hit;
 			if (PhysUtils::RayCast(from, to, groundMask, &hit, ignore))
 			{
+				if (_dbgHitDist < 0.0f)
+				{
+					_dbgHitDist = hit.distance;
+					_dbgHitY = hit.position.y;
+					_dbgHitEntity = hit.entity ? hit.entity->GetName() : "(null)";
+				}
 				if (hover)
 				{
 					const float d = std::max(hit.distance, 0.0f);
@@ -479,6 +492,7 @@ namespace HexEngine
 		// otherwise we stay "grounded" for a short window so rolling off a curb
 		// keeps drive/steer authority (the bike launches over the edge instead
 		// of dead-stopping the instant the ray clears the ground).
+		_dbgHits = grounded;
 		const bool contact = grounded > 0;
 		if (contact)
 			_airTime = 0.0f;
@@ -551,7 +565,7 @@ namespace HexEngine
 		math::Vector3 targetGroundUp = math::Vector3::Lerp(worldUp, groundNormal, 0.5f);
 		if (targetGroundUp.LengthSquared() > 1e-5f)
 			targetGroundUp.Normalize();
-		const float leanRoll = -_input.steer * v_bikeLean._val.f32 * speedFactor;
+		const float leanRoll = _input.steer * v_bikeLean._val.f32 * speedFactor;
 		const math::Quaternion leanQ = math::Quaternion::CreateFromAxisAngle(fwd, leanRoll);
 		math::Vector3 targetUp = math::Vector3::Transform(targetGroundUp, leanQ);
 		const math::Vector3 uprightAxis = up.Cross(targetUp); // ~sin(angle) * rotation axis
