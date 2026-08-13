@@ -220,7 +220,7 @@ namespace HexEngine
 		// set a real mass - SetMass uses setMassAndUpdateInertia, so this also
 		// gives a correct inertia tensor from the collider shape. Removes the
 		// "placed a bike but its RigidBody was Static/mass 1" footgun.
-		if (!_ensuredDynamic)
+		/*if (!_ensuredDynamic)
 		{
 			if (_body->GetBodyType() != IRigidBody::BodyType::Dynamic)
 				_body->SetBodyType(IRigidBody::BodyType::Dynamic);
@@ -229,7 +229,7 @@ namespace HexEngine
 			_ensuredDynamic = true;
 			LOG_INFO("DrivableComponent: body made Dynamic (mass %.0f kg) on '%s'",
 				v_bikeMass._val.f32, GetEntity() ? GetEntity()->GetName().c_str() : "(null)");
-		}
+		}*/
 		return true;
 	}
 
@@ -251,6 +251,47 @@ namespace HexEngine
 	void DrivableComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
 		DESERIALIZE_VALUE(_playerControlled);
+	}
+
+	bool DrivableComponent::CreateWidget(ComponentWidget* widget)
+	{
+		const int32_t w = widget->GetSize().x - 20;
+
+		// Mark this vehicle as the player's - possessed on play, and live in
+		// the editor via SetPlayerControlled.
+		Checkbox* pc = new Checkbox(widget, widget->GetNextPos(), Point(w, 18),
+			L"Player controlled (possess on play)", &_playerControlled);
+		pc->SetPrefabOverrideBinding(GetComponentName(), "/_playerControlled");
+		pc->SetOnCheckFn([this](Checkbox*, bool value) { SetPlayerControlled(value); });
+
+		// Possess this vehicle for a test drive, releasing any other so only
+		// one is driven at a time.
+		new Button(widget, widget->GetNextPos(), Point(w, 20), L"Possess (drive this)",
+			[this](Button*) -> bool
+			{
+				if (g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr)
+				{
+					if (auto scene = g_pEnv->_sceneManager->GetCurrentScene())
+					{
+						std::vector<DrivableComponent*> all;
+						scene->GetComponents<DrivableComponent>(all);
+						for (auto* d : all)
+							if (d != nullptr && d != this)
+								d->SetPlayerControlled(false);
+					}
+				}
+				SetPlayerControlled(true);
+				return true;
+			});
+
+		new Button(widget, widget->GetNextPos(), Point(w, 20), L"Release",
+			[this](Button*) -> bool
+			{
+				SetPlayerControlled(false);
+				return true;
+			});
+
+		return true;
 	}
 
 	void DrivableComponent::FixedUpdate(float dt)
