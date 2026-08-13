@@ -26,13 +26,20 @@ namespace HexEngine
 	// -----------------------------------------------------------------------
 	namespace
 	{
+		// Hover OFF (default): the bike rests on its physical collider (gravity +
+		// the rounded capsule + CCD), so it sits on the ground, rolls over
+		// triangle seams and rides up small ledges. The "suspension" is then only
+		// light vertical bounce damping. Hover ON: the old arcade float where a
+		// raycast spring lifts the body to ride height (visibly hovers, and the
+		// per-triangle ray samples make it bob) - kept for a hover/anti-grav feel.
+		HVar v_bikeHover("v_bikeHover", "Raycast suspension lifts the body (arcade float). Off = rest on the physical collider.", false, false, true);
 		HVar v_bikeRideHeight("v_bikeRideHeight", "Bike suspension ride height / rest length (m)", 0.5f, 0.1f, 2.0f);
 		HVar v_bikeWheelbase("v_bikeWheelbase", "Bike front-rear wheel spacing (m)", 1.25f, 0.4f, 4.0f);
 		HVar v_bikeSuspStiffness("v_bikeSuspStiffness", "Suspension spring stiffness (accel per unit compression)", 45.0f, 1.0f, 200.0f);
 		HVar v_bikeSuspDamping("v_bikeSuspDamping", "Suspension vertical damping", 6.0f, 0.0f, 40.0f);
 		HVar v_bikeWheelRadius("v_bikeWheelRadius", "Wheel radius used for ground casts (m)", 0.35f, 0.05f, 1.0f);
-		HVar v_bikeDriveAccel("v_bikeDriveAccel", "Forward drive acceleration (m/s^2)", 45.0f, 1.0f, 80.0f);
-		HVar v_bikeBrakeAccel("v_bikeBrakeAccel", "Braking deceleration (m/s^2)", 45.0f, 1.0f, 120.0f);
+		HVar v_bikeDriveAccel("v_bikeDriveAccel", "Forward drive acceleration (m/s^2)", 50.0f, 1.0f, 80.0f);
+		HVar v_bikeBrakeAccel("v_bikeBrakeAccel", "Braking deceleration (m/s^2)", 50.0f, 1.0f, 120.0f);
 		HVar v_bikeMaxSpeed("v_bikeMaxSpeed", "Top forward speed (m/s)", 20.0f, 1.0f, 90.0f);
 		HVar v_bikeReverseSpeed("v_bikeReverseSpeed", "Top reverse speed (m/s)", 5.0f, 0.0f, 20.0f);
 		HVar v_bikeGrip("v_bikeGrip", "Lateral grip (kills sideways velocity; lower = slidey)", 10.0f, 0.0f, 40.0f);
@@ -393,16 +400,23 @@ namespace HexEngine
 			_body->ApplyTorque((worldPoint - com).Cross(F));
 		};
 
-		/*_body->WakeUp();
+		_body->WakeUp();
 		_body->SetLinearVelocityDamping(v_bikeLinearDamp._val.f32);
 		_body->SetAngularVelocityDamping(v_bikeAngularDamp._val.f32);
-		_body->SetMaxLinearVelocity(v_bikeMaxSpeed._val.f32 * 1.4f);*/
+		_body->SetMaxLinearVelocity(v_bikeMaxSpeed._val.f32 * 1.4f);
 
-		// --- suspension: raycast wheels, spring+damper as force-at-point ---
+		// --- ground sensing (+ hover suspension when enabled) ---
+		// Wheel rays feed two things: the grounded flag / ground normal (always),
+		// and - in hover mode only - a spring+damper lift. With hover OFF the bike
+		// rests on its physical capsule, so the ray applies at most light vertical
+		// bounce damping (never a constant lift), which is why it no longer floats.
 		RebuildWheels();
+		const bool hover = v_bikeHover._val.b;
 		const float rideHeight = v_bikeRideHeight._val.f32;
 		const float wheelRadius = v_bikeWheelRadius._val.f32;
-		const float maxDrop = rideHeight + wheelRadius;
+		// Non-hover still needs enough reach to sense ground while the capsule
+		// rests (origin sits ~radius above it); give it a small extra margin.
+		const float maxDrop = hover ? (rideHeight + wheelRadius) : (wheelRadius + 0.35f);
 		const float stiffness = v_bikeSuspStiffness._val.f32;
 		const float suspDamp = v_bikeSuspDamping._val.f32;
 		const LayerMask groundMask =
@@ -420,13 +434,24 @@ namespace HexEngine
 			RayHit hit;
 			if (PhysUtils::RayCast(from, to, groundMask, &hit, ignore))
 			{
-				const float d = std::max(hit.distance, 0.0f);
-				const float compression = std::clamp((maxDrop - d) / maxDrop, 0.0f, 1.0f);
-				// Damp the body's vertical motion so the spring settles.
-				const float springAccel = compression * stiffness;
-				const float dampAccel = -vel.y * suspDamp;
-				const float upAccel = std::max(springAccel + dampAccel, 0.0f);
-				applyForceAtPoint(worldUp * (upAccel * mass), anchor);
+				if (hover)
+				{
+					const float d = std::max(hit.distance, 0.0f);
+					const float compression = std::clamp((maxDrop - d) / maxDrop, 0.0f, 1.0f);
+					// Damp the body's vertical motion so the spring settles.
+					const float springAccel = compression * stiffness;
+					const float dampAccel = -vel.y * suspDamp;
+					const float upAccel = std::max(springAccel + dampAccel, 0.0f);
+					applyForceAtPoint(worldUp * (upAccel * mass), anchor);
+				}
+				else
+				{
+					// Physical rest: no lift. Only oppose vertical velocity to take
+					// the bounce out of landings and small seams. At rest vel.y~=0
+					// so this contributes no force - the bike does not hover.
+					const float dampAccel = -vel.y * suspDamp;
+					applyForceAtPoint(worldUp * (dampAccel * mass) * 0.5f, anchor);
+				}
 
 				++grounded;
 				groundNormalAccum += hit.normal;
