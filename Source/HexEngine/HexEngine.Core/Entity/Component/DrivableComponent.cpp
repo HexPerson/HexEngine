@@ -46,6 +46,9 @@ namespace HexEngine
 		HVar v_bikeSteerSmooth("v_bikeSteerSmooth", "Digital steer smoothing rate (1/s)", 8.0f, 1.0f, 30.0f);
 		HVar v_bikeDebug("v_bikeDebug", "Log DrivableComponent state (grounded/speed/input) ~1/sec while possessed", false, false, true);
 		HVar v_bikeMass("v_bikeMass", "Vehicle mass in kg (sets mass + inertia when the body is made dynamic)", 120.0f, 5.0f, 2000.0f);
+		// Model-dependent nose direction: +1 = SimpleMath forward (-Z), -1 = +Z.
+		// Flip this if the vehicle drives backwards relative to its mesh.
+		HVar v_bikeForwardSign("v_bikeForwardSign", "Forward axis sign (+1 or -1); flip if the vehicle drives backwards", -1.0f, -1.0f, 1.0f);
 	}
 
 	// --- player input binds -> intent flags -------------------------------
@@ -347,7 +350,10 @@ namespace HexEngine
 		if (!std::isfinite(pos.x) || !std::isfinite(vel.x))
 			return;
 
-		const math::Vector3 fwd   = math::Vector3::Transform(math::Vector3::Forward, rot);
+		// Which local axis is the vehicle's nose is model-dependent, so the
+		// forward direction is sign-configurable (v_bikeForwardSign). Applied to
+		// the whole forward basis so drive, lean and speed stay consistent.
+		const math::Vector3 fwd   = math::Vector3::Transform(math::Vector3::Forward, rot) * v_bikeForwardSign._val.f32;
 		const math::Vector3 right = math::Vector3::Transform(math::Vector3::Right, rot);
 		const math::Vector3 up    = math::Vector3::Transform(math::Vector3::Up, rot);
 		const math::Vector3 worldUp(0.0f, 1.0f, 0.0f);

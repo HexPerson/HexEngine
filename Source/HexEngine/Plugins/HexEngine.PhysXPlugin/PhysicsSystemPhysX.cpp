@@ -132,6 +132,12 @@ bool PhysicsSystemPhysX::Create()
 	sceneDesc.cpuDispatcher = _dispatcher;
 	sceneDesc.filterShader = SampleSubmarineFilterShader;// physx::PxDefaultSimulationFilterShader;
 	sceneDesc.simulationEventCallback = this;
+	// Continuous collision detection: without it a fast-moving dynamic body
+	// (a driven vehicle) tunnels straight through thin triangle-mesh ground
+	// between substeps and falls out of the world. eENABLE_CCD turns on the
+	// scene-wide sweep; individual dynamic actors opt in via
+	// PxRigidBodyFlag::eENABLE_CCD (see RigidBodyPhysX dynamic-body creation).
+	sceneDesc.flags |= physx::PxSceneFlag::eENABLE_CCD;
 	//sceneDesc.flags |= physx::PxSceneFlag::eENABLE_PCM;
 	//sceneDesc.broadPhaseType = physx::PxBroadPhaseType::eSAP;
 	//sceneDesc.flags.set(0);// = (physx::PxSceneFlag)0;// physx::PxSceneFlag::eREQUIRE_RW_LOCK | physx::PxSceneFlag::eENABLE_GPU_DYNAMICS;

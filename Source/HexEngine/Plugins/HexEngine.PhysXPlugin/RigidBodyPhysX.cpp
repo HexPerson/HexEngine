@@ -94,6 +94,14 @@ void RigidBodyPhysX::SetBodyType(BodyType type)
 
 				dynamic->setRigidBodyFlag(physx::PxRigidBodyFlag::eKINEMATIC, type != BodyType::Dynamic);
 
+				// Opt this body into continuous collision detection so a fast
+				// mover (a driven vehicle) sweeps against thin ground instead
+				// of tunnelling through it between substeps. Only meaningful
+				// for truly dynamic (non-kinematic) actors; the scene-wide
+				// eENABLE_CCD flag is set in PhysicsSystemPhysX.
+				if (type == BodyType::Dynamic)
+					dynamic->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_CCD, true);
+
 			}
 
 			if (actor)
@@ -442,10 +450,12 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 	// materially changing normal scene geometry.
 	params.meshWeldTolerance = kTriangleMeshWeldTolerance;
 	params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eWELD_VERTICES;
-	// disable edge precompute, edges are set for each triangle, slows contact generation
-	params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
-	// lower hierarchy for internal mesh
-	//params.meshCookingHint = physx::PxMeshCookingHint::eCOOKING_PERFORMANCE;
+	// KEEP active-edge precompute ENABLED (do NOT set eDISABLE_ACTIVE_EDGES_
+	// PRECOMPUTE). Disabling it makes dynamic bodies catch on the internal
+	// edges of a triangle mesh - a vehicle or character snags on the flat
+	// seams between coplanar triangles even where there's no step. The cook is
+	// a touch slower; smooth sliding contact is worth it.
+	//params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
 	params.midphaseDesc.setToDefault(physx::PxMeshMidPhase::eBVH34);
 
 	if (!PxValidateTriangleMesh(params, meshDesc))
@@ -569,7 +579,9 @@ bool RigidBodyPhysX::BeginAddTriangleMeshColliderAsync(
 		physx::PxCookingParams params(scale);
 		params.meshWeldTolerance = kTriangleMeshWeldTolerance;
 		params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eWELD_VERTICES;
-		params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
+		// Keep active-edge precompute ENABLED - see the sync path above: the
+		// disable flag makes bodies catch on internal triangle-mesh edges.
+		//params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
 		params.midphaseDesc.setToDefault(physx::PxMeshMidPhase::eBVH34);
 
 		// PxCookTriangleMesh is documented as thread-safe (it's a pure
