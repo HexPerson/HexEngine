@@ -214,22 +214,24 @@ namespace HexEngine
 		if (_body == nullptr)
 			return false;
 
-		// A drivable vehicle is inherently a DYNAMIC body. Enforce it once
-		// (the PhysX plugin recreates the actor on the type flip but leaves
-		// PhysX's default mass=1/unit-inertia, which drives twitchily), then
-		// set a real mass - SetMass uses setMassAndUpdateInertia, so this also
-		// gives a correct inertia tensor from the collider shape. Removes the
-		// "placed a bike but its RigidBody was Static/mass 1" footgun.
-		/*if (!_ensuredDynamic)
+		// Body TYPE is the author's responsibility (a triangle-mesh collider
+		// can't be a dynamic sim shape - flipping it crashes PhysX). But MASS
+		// is a safe, common footgun: a body left at PhysX's default mass=1 has
+		// a tiny inertia tensor, so the steering/upright torques go twitchy and
+		// any bump flings it. SetMass is setMassAndUpdateInertia on the EXISTING
+		// actor (no recreation, no reattach), so it's safe on an already-dynamic
+		// convex body. Only touch it once, and only if it's still the ~1 default
+		// so we never override an intentionally-authored mass.
+		if (!_ensuredDynamic)
 		{
-			if (_body->GetBodyType() != IRigidBody::BodyType::Dynamic)
-				_body->SetBodyType(IRigidBody::BodyType::Dynamic);
-			_body->SetMass(std::max(v_bikeMass._val.f32, 1.0f));
-			_body->SetGravityEnabled(true);
 			_ensuredDynamic = true;
-			LOG_INFO("DrivableComponent: body made Dynamic (mass %.0f kg) on '%s'",
-				v_bikeMass._val.f32, GetEntity() ? GetEntity()->GetName().c_str() : "(null)");
-		}*/
+			if (_body->GetBodyType() == IRigidBody::BodyType::Dynamic && _body->GetMass() <= 1.001f)
+			{
+				_body->SetMass(std::max(v_bikeMass._val.f32, 1.0f));
+				LOG_INFO("DrivableComponent: '%s' had default mass 1 - set %.0f kg (v_bikeMass) for stable handling.",
+					GetEntity() ? GetEntity()->GetName().c_str() : "(null)", v_bikeMass._val.f32);
+			}
+		}
 		return true;
 	}
 
@@ -360,10 +362,10 @@ namespace HexEngine
 			_body->ApplyTorque((worldPoint - com).Cross(F));
 		};
 
-		_body->WakeUp();
+		/*_body->WakeUp();
 		_body->SetLinearVelocityDamping(v_bikeLinearDamp._val.f32);
 		_body->SetAngularVelocityDamping(v_bikeAngularDamp._val.f32);
-		_body->SetMaxLinearVelocity(v_bikeMaxSpeed._val.f32 * 1.4f);
+		_body->SetMaxLinearVelocity(v_bikeMaxSpeed._val.f32 * 1.4f);*/
 
 		// --- suspension: raycast wheels, spring+damper as force-at-point ---
 		RebuildWheels();
