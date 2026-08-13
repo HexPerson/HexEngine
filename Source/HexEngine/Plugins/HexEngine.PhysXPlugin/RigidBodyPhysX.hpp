@@ -38,7 +38,7 @@ public:
 
 	virtual HexEngine::ICollider* AddSphereCollider(HexEngine::Transform* transform, float radius) override;
 
-	virtual HexEngine::ICollider* AddCapsuleCollider(HexEngine::Transform* transform, float radius, float height) override;
+	virtual HexEngine::ICollider* AddCapsuleCollider(HexEngine::Transform* transform, float radius, float height, int axis = 1) override;
 
 	virtual HexEngine::ICollider* AddHeightFieldCollider(const int32_t columns, const int32_t rows, const float minHeight, const float maxHeight, float* heightValues, const math::Vector3& position, float scale = 1.0f) override;
 

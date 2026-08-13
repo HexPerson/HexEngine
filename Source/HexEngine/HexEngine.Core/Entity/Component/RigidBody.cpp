@@ -3,6 +3,8 @@
 #include "RigidBody.hpp"
 #include "../../HexEngine.hpp"
 
+#include <algorithm>
+
 namespace HexEngine
 {
 	namespace
@@ -104,16 +106,17 @@ namespace HexEngine
 		_rigidBody->AddSphereCollider(GetEntity()->GetComponent<Transform>(), radius);
 	}
 
-	void RigidBody::AddCapsuleCollider(float radius, float height)
+	void RigidBody::AddCapsuleCollider(float radius, float height, int axis)
 	{
 		if (!_rigidBody)
 			_rigidBody = g_pEnv->_physicsSystem->CreateRigidBody(GetEntity()->GetComponent<Transform>(), this, _bodyType);
 
 		_colliderData.capsule.radius = radius;
 		_colliderData.capsule.height = height;
+		_colliderData.capsule.axis = axis;
 		_colliderShape = IRigidBody::ColliderShape::Capsule;
 
-		_rigidBody->AddCapsuleCollider(GetEntity()->GetComponent<Transform>(), radius, height);
+		_rigidBody->AddCapsuleCollider(GetEntity()->GetComponent<Transform>(), radius, height, axis);
 	}
 
 #if 0
@@ -552,13 +555,13 @@ namespace HexEngine
 				break;
 
 			case IRigidBody::ColliderShape::Sphere:
-				file->Deserialize(shapeData, "sphere", _colliderData.box);
+				file->Deserialize(shapeData, "sphere", _colliderData.sphere);
 				AddSphereCollider(_colliderData.sphere.radius);
 				break;
 
 			case IRigidBody::ColliderShape::Capsule:
-				file->Deserialize(shapeData, "capsule", _colliderData.box);
-				AddCapsuleCollider(_colliderData.capsule.radius, _colliderData.capsule.height);
+				file->Deserialize(shapeData, "capsule", _colliderData.capsule);
+				AddCapsuleCollider(_colliderData.capsule.radius, _colliderData.capsule.height, _colliderData.capsule.axis);
 				break;
 
 			//case IRigidBody::ColliderShape::HeightField:
@@ -673,6 +676,8 @@ namespace HexEngine
 		colliderType->GetContextMenu()->Disable();
 		colliderType->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&RigidBody::RemoveCollider, this)));
 		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Box", std::bind(&RigidBody::AddBoxColliderFromWidget, this, colliderType)));
+		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Sphere", std::bind(&RigidBody::AddSphereColliderFromWidget, this, colliderType)));
+		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Capsule", std::bind(&RigidBody::AddCapsuleColliderFromWidget, this, colliderType)));
 		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Triangle Mesh", std::bind(&RigidBody::AddTriangleColliderFromWidget, this, colliderType)));
 
 		Checkbox* isTrigger = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Is trigger?", &_isTrigger);
@@ -743,6 +748,60 @@ namespace HexEngine
 		AddBoxCollider(GetScaledEntityAABB(GetEntity()));
 
 		widget->SetValue(L"Box");
+	}
+
+	void RigidBody::AddSphereColliderFromWidget(DropDown* widget)
+	{
+		if (_colliderShape == IRigidBody::ColliderShape::Sphere)
+			return;
+
+		RemoveCollider();
+
+		// Enclosing sphere: the largest half-extent of the scaled AABB.
+		const math::Vector3 ext = GetScaledEntityAABB(GetEntity()).Extents;
+		const float radius = std::max(ext.x, std::max(ext.y, ext.z));
+		if (radius <= 0.0f)
+			return;
+
+		AddSphereCollider(radius);
+
+		widget->SetValue(L"Sphere");
+	}
+
+	void RigidBody::AddCapsuleColliderFromWidget(DropDown* widget)
+	{
+		if (_colliderShape == IRigidBody::ColliderShape::Capsule)
+			return;
+
+		RemoveCollider();
+
+		// Fit a capsule to the scaled AABB, aligning its long axis with the
+		// entity's longest dimension: radius spans the two shorter axes, the
+		// cylindrical section fills the remainder of the longest. This gives a
+		// natural capsule for both a standing character (tall in Y) and a
+		// vehicle chassis (long in Z) without the author picking an axis.
+		const math::Vector3 ext = GetScaledEntityAABB(GetEntity()).Extents; // half-extents
+		int axis = 1;
+		if (ext.x >= ext.y && ext.x >= ext.z) axis = 0;
+		else if (ext.z >= ext.x && ext.z >= ext.y) axis = 2;
+		else axis = 1;
+
+		float halfLong;
+		float r;
+		if (axis == 0) { halfLong = ext.x; r = std::max(ext.y, ext.z); }
+		else if (axis == 2) { halfLong = ext.z; r = std::max(ext.x, ext.y); }
+		else { halfLong = ext.y; r = std::max(ext.x, ext.z); }
+
+		if (r <= 0.0f)
+			return;
+
+		// PxCapsuleGeometry(height) is the cylinder segment between the two
+		// hemispherical caps, so subtract a full radius from the long span.
+		const float height = std::max((halfLong - r) * 2.0f, 0.0f);
+
+		AddCapsuleCollider(r, height, axis);
+
+		widget->SetValue(L"Capsule");
 	}
 
 	void RigidBody::OnSetIsTriggerFromWidget(bool value)

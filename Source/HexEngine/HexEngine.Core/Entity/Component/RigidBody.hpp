@@ -30,7 +30,7 @@ namespace HexEngine
 
 		void AddSphereCollider(float radius);
 
-		void AddCapsuleCollider(float radius, float height);
+		void AddCapsuleCollider(float radius, float height, int axis = 1);
 
 		void AddTerrainCollider(Terrain* terrain);
 
@@ -116,6 +116,10 @@ namespace HexEngine
 		void AddTriangleColliderFromWidget(DropDown* widget);
 
 		void AddBoxColliderFromWidget(DropDown* widget);
+
+		void AddCapsuleColliderFromWidget(DropDown* widget);
+
+		void AddSphereColliderFromWidget(DropDown* widget);
 
 		void OnSetIsTriggerFromWidget(bool value);
 
