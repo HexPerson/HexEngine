@@ -309,7 +309,7 @@ HexEngine::ICollider* RigidBodyPhysX::AddSphereCollider(HexEngine::Transform* tr
 	return _collider;
 }
 
-HexEngine::ICollider* RigidBodyPhysX::AddCapsuleCollider(HexEngine::Transform* transform, float radius, float height, int axis)
+HexEngine::ICollider* RigidBodyPhysX::AddCapsuleCollider(HexEngine::Transform* transform, float radius, float height, int axis, math::Vector3 offset)
 {
 	g_pPhysx->GetScene()->lockWrite();
 
@@ -320,11 +320,15 @@ HexEngine::ICollider* RigidBodyPhysX::AddCapsuleCollider(HexEngine::Transform* t
 
 	// PhysX capsules run along the local +X axis. Rotate the shape's local pose
 	// so the long axis matches the requested one: 1=Y (standing), 2=Z (lying
-	// forward, e.g. a vehicle chassis), anything else = X (no rotation).
+	// forward, e.g. a vehicle chassis), anything else = X (no rotation). The
+	// offset translates the shape within the body (e.g. drop a thin capsule to
+	// the wheel line so it doesn't lift the vehicle off the ground).
+	physx::PxQuat rot(physx::PxIdentity);
 	if (axis == 1)
-		_shape->setLocalPose(physx::PxTransform(physx::PxQuat(physx::PxHalfPi, physx::PxVec3(0.0f, 0.0f, 1.0f))));
+		rot = physx::PxQuat(physx::PxHalfPi, physx::PxVec3(0.0f, 0.0f, 1.0f));
 	else if (axis == 2)
-		_shape->setLocalPose(physx::PxTransform(physx::PxQuat(physx::PxHalfPi, physx::PxVec3(0.0f, 1.0f, 0.0f))));
+		rot = physx::PxQuat(physx::PxHalfPi, physx::PxVec3(0.0f, 1.0f, 0.0f));
+	_shape->setLocalPose(physx::PxTransform(physx::PxVec3(offset.x, offset.y, offset.z), rot));
 
 	_body->attachShape(*_shape);
 

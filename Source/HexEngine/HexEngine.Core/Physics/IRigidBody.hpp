@@ -58,6 +58,11 @@ namespace HexEngine
 				// natural for a vehicle chassis). PhysX capsules are X-aligned by
 				// default; the physics layer rotates the shape's local pose.
 				int axis = 1;
+				// Local-space translation of the shape relative to the body
+				// origin. Lets a thin capsule be dropped to sit at the bottom of
+				// the mesh (e.g. a bike's wheel line) instead of being centred on
+				// the origin and lifting the whole vehicle off the ground.
+				math::Vector3 offset = math::Vector3(0.0f, 0.0f, 0.0f);
 			} capsule;
 
 			struct Terrain
@@ -91,7 +96,7 @@ namespace HexEngine
 
 		virtual ICollider* AddSphereCollider(Transform* transform, float radius) = 0;
 
-		virtual ICollider* AddCapsuleCollider(Transform* transform, float radius, float height, int axis = 1) = 0;
+		virtual ICollider* AddCapsuleCollider(Transform* transform, float radius, float height, int axis = 1, math::Vector3 offset = math::Vector3(0.0f, 0.0f, 0.0f)) = 0;
 
 		virtual ICollider* AddHeightFieldCollider(const int32_t columns, const int32_t rows, const float minHeight, const float maxHeight, float* heightValues, const math::Vector3& position, float scale=1.0f) = 0;
 

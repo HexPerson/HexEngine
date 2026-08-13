@@ -91,6 +91,7 @@ namespace HexEngine
 			Serialize(container[key], "radius", value.radius);
 			Serialize(container[key], "height", value.height);
 			Serialize(container[key], "axis", value.axis);
+			Serialize(container[key], "offset", value.offset);
 			return container;
 		}
 
@@ -245,6 +246,7 @@ namespace HexEngine
 			Deserialize(container[key], "radius", value.radius);
 			Deserialize(container[key], "height", value.height);
 			Deserialize(container[key], "axis", value.axis);
+			Deserialize(container[key], "offset", value.offset);
 			return container;
 		}
 

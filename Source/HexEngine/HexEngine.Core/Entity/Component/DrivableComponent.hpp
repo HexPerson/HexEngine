@@ -100,6 +100,11 @@ namespace HexEngine
 		// per-frame outputs
 		float _forwardSpeed = 0.0f;
 		bool  _grounded = false;
+		// Seconds since the wheels last touched ground. A short "coyote" window
+		// keeps the vehicle drivable for a moment after rolling off a lip/curb,
+		// so it launches over the edge instead of freezing when the ground ray
+		// briefly finds nothing.
+		float _airTime = 0.0f;
 		float _debugAccum = 0.0f;
 		bool  _ensuredDynamic = false;
 

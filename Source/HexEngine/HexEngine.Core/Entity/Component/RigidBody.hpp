@@ -30,7 +30,7 @@ namespace HexEngine
 
 		void AddSphereCollider(float radius);
 
-		void AddCapsuleCollider(float radius, float height, int axis = 1);
+		void AddCapsuleCollider(float radius, float height, int axis = 1, math::Vector3 offset = math::Vector3(0.0f, 0.0f, 0.0f));
 
 		void AddTerrainCollider(Terrain* terrain);
 

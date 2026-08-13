@@ -458,9 +458,19 @@ namespace HexEngine
 			}
 		}
 
-		_grounded = grounded > 0;
+		// Coyote grounding: a wheel touching this frame resets the air timer;
+		// otherwise we stay "grounded" for a short window so rolling off a curb
+		// keeps drive/steer authority (the bike launches over the edge instead
+		// of dead-stopping the instant the ray clears the ground).
+		const bool contact = grounded > 0;
+		if (contact)
+			_airTime = 0.0f;
+		else
+			_airTime += dt;
+		_grounded = contact || (_airTime < 0.2f);
+
 		math::Vector3 groundNormal = worldUp;
-		if (_grounded)
+		if (contact)
 		{
 			groundNormalAccum.Normalize();
 			if (std::isfinite(groundNormalAccum.x) && groundNormalAccum.y > 0.1f)

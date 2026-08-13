@@ -107,7 +107,7 @@ namespace HexEngine
 		_rigidBody->AddSphereCollider(GetEntity()->GetComponent<Transform>(), radius);
 	}
 
-	void RigidBody::AddCapsuleCollider(float radius, float height, int axis)
+	void RigidBody::AddCapsuleCollider(float radius, float height, int axis, math::Vector3 offset)
 	{
 		if (!_rigidBody)
 			_rigidBody = g_pEnv->_physicsSystem->CreateRigidBody(GetEntity()->GetComponent<Transform>(), this, _bodyType);
@@ -115,6 +115,7 @@ namespace HexEngine
 		_colliderData.capsule.radius = radius;
 		_colliderData.capsule.height = height;
 		_colliderData.capsule.axis = axis;
+		_colliderData.capsule.offset = offset;
 		_colliderShape = IRigidBody::ColliderShape::Capsule;
 
 		// Exclusive (like Box): a per-instance shape, so cloning a prefab gives
@@ -122,7 +123,7 @@ namespace HexEngine
 		// than sharing one - the drivable chassis mutates its material live.
 		_exclusive = true;
 
-		_rigidBody->AddCapsuleCollider(GetEntity()->GetComponent<Transform>(), radius, height, axis);
+		_rigidBody->AddCapsuleCollider(GetEntity()->GetComponent<Transform>(), radius, height, axis, offset);
 	}
 
 #if 0
@@ -567,7 +568,7 @@ namespace HexEngine
 
 			case IRigidBody::ColliderShape::Capsule:
 				file->Deserialize(shapeData, "capsule", _colliderData.capsule);
-				AddCapsuleCollider(_colliderData.capsule.radius, _colliderData.capsule.height, _colliderData.capsule.axis);
+				AddCapsuleCollider(_colliderData.capsule.radius, _colliderData.capsule.height, _colliderData.capsule.axis, _colliderData.capsule.offset);
 				break;
 
 			//case IRigidBody::ColliderShape::HeightField:
@@ -782,11 +783,15 @@ namespace HexEngine
 		RemoveCollider();
 
 		// Fit a capsule to the scaled AABB, aligning its long axis with the
-		// entity's longest dimension: radius spans the two shorter axes, the
-		// cylindrical section fills the remainder of the longest. This gives a
-		// natural capsule for both a standing character (tall in Y) and a
-		// vehicle chassis (long in Z) without the author picking an axis.
-		const math::Vector3 ext = GetScaledEntityAABB(GetEntity()).Extents; // half-extents
+		// entity's longest dimension. The radius is the SMALLER of the two
+		// cross-section half-extents (a thin capsule, not a fat tube that
+		// encloses the whole height), and when the long axis is horizontal the
+		// capsule is dropped so its underside meets the AABB bottom - i.e. it
+		// sits at the wheel line of a vehicle instead of being centred on the
+		// origin and lifting the whole thing off the ground.
+		const dx::BoundingBox aabb = GetScaledEntityAABB(GetEntity());
+		const math::Vector3 ext = aabb.Extents;               // half-extents
+		const math::Vector3 centre = aabb.Center;             // local, relative to origin
 		int axis = 1;
 		if (ext.x >= ext.y && ext.x >= ext.z) axis = 0;
 		else if (ext.z >= ext.x && ext.z >= ext.y) axis = 2;
@@ -794,18 +799,25 @@ namespace HexEngine
 
 		float halfLong;
 		float r;
-		if (axis == 0) { halfLong = ext.x; r = std::max(ext.y, ext.z); }
-		else if (axis == 2) { halfLong = ext.z; r = std::max(ext.x, ext.y); }
-		else { halfLong = ext.y; r = std::max(ext.x, ext.z); }
+		if (axis == 0) { halfLong = ext.x; r = std::min(ext.y, ext.z); }
+		else if (axis == 2) { halfLong = ext.z; r = std::min(ext.x, ext.y); }
+		else { halfLong = ext.y; r = std::min(ext.x, ext.z); }
 
-		if (r <= 0.0f)
+		r = std::max(r, 0.05f);
+		if (halfLong <= 0.0f)
 			return;
 
 		// PxCapsuleGeometry(height) is the cylinder segment between the two
 		// hemispherical caps, so subtract a full radius from the long span.
 		const float height = std::max((halfLong - r) * 2.0f, 0.0f);
 
-		AddCapsuleCollider(r, height, axis);
+		// Local offset: recentre on the AABB, and for a horizontal capsule drop
+		// it so its bottom (centre.y - r) aligns with the AABB bottom.
+		math::Vector3 offset = centre;
+		if (axis == 0 || axis == 2)
+			offset.y = centre.y - ext.y + r;
+
+		AddCapsuleCollider(r, height, axis, offset);
 
 		widget->SetValue(L"Capsule");
 	}
