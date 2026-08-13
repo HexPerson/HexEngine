@@ -33,6 +33,11 @@ namespace HexEngine
 		// raycast spring lifts the body to ride height (visibly hovers, and the
 		// per-triangle ray samples make it bob) - kept for a hover/anti-grav feel.
 		HVar v_bikeHover("v_bikeHover", "Raycast suspension lifts the body (arcade float). Off = rest on the physical collider.", false, false, true);
+		// How far below the wheel line the non-hover ground probe reaches. Must
+		// comfortably exceed how high the physical collider holds the bike above
+		// the ground, or grounded flickers (drive cuts in and out = the bike
+		// feels stuck / bobs). Generous by default; a real jump still clears it.
+		HVar v_bikeGroundReach("v_bikeGroundReach", "Non-hover ground-probe reach below the wheel line (m)", 1.5f, 0.2f, 6.0f);
 		HVar v_bikeRideHeight("v_bikeRideHeight", "Bike suspension ride height / rest length (m)", 0.5f, 0.1f, 2.0f);
 		HVar v_bikeWheelbase("v_bikeWheelbase", "Bike front-rear wheel spacing (m)", 1.25f, 0.4f, 4.0f);
 		HVar v_bikeSuspStiffness("v_bikeSuspStiffness", "Suspension spring stiffness (accel per unit compression)", 45.0f, 1.0f, 200.0f);
@@ -433,7 +438,7 @@ namespace HexEngine
 			const math::Vector3 scl = GetEntity()->GetAbsoluteScale();
 			bottomLocalY = (lb.Center.y - lb.Extents.y) * scl.y;
 		}
-		const float maxDrop = hover ? (rideHeight + wheelRadius) : (wheelRadius + 0.35f);
+		const float maxDrop = hover ? (rideHeight + wheelRadius) : v_bikeGroundReach._val.f32;
 		// Start the non-hover ray a little above the wheel line so it straddles
 		// the surface even when the capsule is resting right on it.
 		const float probeUp = hover ? 0.0f : 0.3f;
@@ -443,6 +448,7 @@ namespace HexEngine
 		_dbgBottomY = bottomLocalY;
 		_dbgHitDist = -1.0f;
 		_dbgHitY = 0.0f;
+		_dbgHitEntity = "(none)";
 		bool capturedRay = false;
 		for (const math::Vector3& wl : _wheelsLocal)
 		{

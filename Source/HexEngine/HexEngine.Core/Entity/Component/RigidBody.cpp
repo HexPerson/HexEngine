@@ -701,6 +701,23 @@ namespace HexEngine
 		mass->SetPrefabOverrideBinding(GetComponentName(), "/_mass");
 		mass->SetOnDrag(std::bind(&RigidBody::SetMass, this, std::placeholders::_1));
 
+		// Live capsule sizing: only meaningful when the collider IS a capsule.
+		// Radius, cylinder height and a vertical offset let the author drop a
+		// thin capsule onto the wheel line of a vehicle instead of accepting the
+		// AABB auto-fit. Each field rebuilds the shape on drag.
+		if (_colliderShape == IRigidBody::ColliderShape::Capsule)
+		{
+			const int cw = widget->GetSize().x - 20;
+			DragFloat* capR = new DragFloat(widget, widget->GetNextPos(), Point(cw, 18), L"Capsule radius", &_colliderData.capsule.radius, 0.02f, 20.0f, 0.02f);
+			capR->SetOnDrag([this](float, float, float) { RebuildCapsuleFromData(); });
+
+			DragFloat* capH = new DragFloat(widget, widget->GetNextPos(), Point(cw, 18), L"Capsule height", &_colliderData.capsule.height, 0.0f, 40.0f, 0.02f);
+			capH->SetOnDrag([this](float, float, float) { RebuildCapsuleFromData(); });
+
+			DragFloat* capOff = new DragFloat(widget, widget->GetNextPos(), Point(cw, 18), L"Capsule offset Y", &_colliderData.capsule.offset.y, -20.0f, 20.0f, 0.02f);
+			capOff->SetOnDrag([this](float, float, float) { RebuildCapsuleFromData(); });
+		}
+
 		//Button* addCollider = new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Add Collider", std::bind(&RigidBody::AddColliderFromWidget,
 
 		return true;
@@ -755,6 +772,29 @@ namespace HexEngine
 		AddBoxCollider(GetScaledEntityAABB(GetEntity()));
 
 		widget->SetValue(L"Box");
+	}
+
+	void RigidBody::RebuildCapsuleFromData()
+	{
+		// The drag fields have already written into _colliderData.capsule; copy
+		// it out before RemoveCollider (which resets shape state) and re-add.
+		const IRigidBody::ColliderData::Capsule cap = _colliderData.capsule;
+		const IRigidBody::BodyType type = _rigidBody ? _rigidBody->GetBodyType() : _bodyType;
+
+		RemoveCollider();
+		AddCapsuleCollider(std::max(cap.radius, 0.01f), std::max(cap.height, 0.0f), cap.axis, cap.offset);
+
+		// Re-adding a shape leaves the actor intact, but re-assert the body
+		// config so mass/gravity stay as the author set them.
+		if (_rigidBody)
+		{
+			_rigidBody->SetBodyType(type);
+			if (type == IRigidBody::BodyType::Dynamic)
+			{
+				_rigidBody->SetGravityEnabled(_isGravityApplied);
+				_rigidBody->SetMass(_massAdjust);
+			}
+		}
 	}
 
 	void RigidBody::AddSphereColliderFromWidget(DropDown* widget)

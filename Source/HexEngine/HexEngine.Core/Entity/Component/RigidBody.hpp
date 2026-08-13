@@ -121,6 +121,11 @@ namespace HexEngine
 
 		void AddSphereColliderFromWidget(DropDown* widget);
 
+		// Rebuild the capsule shape from the current _colliderData.capsule values
+		// (radius/height/axis/offset), used by the inspector drag fields so the
+		// author can size a capsule to their mesh live.
+		void RebuildCapsuleFromData();
+
 		void OnSetIsTriggerFromWidget(bool value);
 
 		void OnSetIsGravityFromWidget(bool value);
