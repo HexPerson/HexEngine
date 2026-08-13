@@ -819,6 +819,75 @@ uint32_t PhysicsSystemPhysX::RayCast(const math::Vector3& from, const math::Vect
 	return numHits;
 }
 
+namespace
+{
+	// Scene raycast prefilter that rejects a single actor (the caster's own
+	// body), so a downward ground probe doesn't just hit its own collider.
+	struct IgnoreActorQueryFilter : public physx::PxQueryFilterCallback
+	{
+		const physx::PxRigidActor* ignore = nullptr;
+
+		virtual physx::PxQueryHitType::Enum preFilter(
+			const physx::PxFilterData&, const physx::PxShape*,
+			const physx::PxRigidActor* actor, physx::PxHitFlags&) override
+		{
+			return (actor == ignore) ? physx::PxQueryHitType::eNONE : physx::PxQueryHitType::eBLOCK;
+		}
+
+		virtual physx::PxQueryHitType::Enum postFilter(
+			const physx::PxFilterData&, const physx::PxQueryHit&,
+			const physx::PxShape*, const physx::PxRigidActor*) override
+		{
+			return physx::PxQueryHitType::eBLOCK;
+		}
+	};
+}
+
+uint32_t PhysicsSystemPhysX::RayCastScene(const math::Vector3& from, const math::Vector3& unitDir, float maxDist, HexEngine::RayHit* hitInfo, HexEngine::IRigidBody* ignoreBody)
+{
+	if (_scene == nullptr || hitInfo == nullptr)
+		return 0;
+
+	const physx::PxVec3 _from(from.x, from.y, from.z);
+	physx::PxVec3 _dir(unitDir.x, unitDir.y, unitDir.z);
+	if (_dir.magnitudeSquared() > 1e-8f)
+		_dir.normalize();
+
+	physx::PxRaycastBuffer buf;
+	const physx::PxHitFlags hitFlags = physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
+
+	IgnoreActorQueryFilter filter;
+	physx::PxQueryFilterData fd;
+	fd.flags = physx::PxQueryFlag::eSTATIC | physx::PxQueryFlag::eDYNAMIC;
+	if (ignoreBody != nullptr)
+	{
+		filter.ignore = ((RigidBodyPhysX*)ignoreBody)->GetRigidActor();
+		fd.flags |= physx::PxQueryFlag::ePREFILTER;
+	}
+
+	_scene->lockRead();
+	const bool hit = _scene->raycast(_from, _dir, maxDist, buf, hitFlags, fd, ignoreBody ? &filter : nullptr);
+	_scene->unlockRead();
+
+	if (!hit || !buf.hasBlock)
+		return 0;
+
+	const physx::PxRaycastHit& b = buf.block;
+	hitInfo->start = from;
+	hitInfo->position = math::Vector3(b.position.x, b.position.y, b.position.z);
+	hitInfo->normal = math::Vector3(b.normal.x, b.normal.y, b.normal.z);
+	hitInfo->distance = b.distance;
+	hitInfo->entity = nullptr;
+	if (b.actor != nullptr && b.actor->userData != nullptr)
+	{
+		RigidBodyPhysX* rb = (RigidBodyPhysX*)b.actor->userData;
+		if (rb->GetBodyComponent() != nullptr)
+			hitInfo->entity = rb->GetBodyComponent()->GetEntity();
+	}
+
+	return 1;
+}
+
 void PhysicsSystemPhysX::onControllerHit(const physx::PxControllersHit& hit)
 {
 

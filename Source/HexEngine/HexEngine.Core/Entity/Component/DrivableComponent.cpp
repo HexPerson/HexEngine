@@ -5,6 +5,7 @@
 #include "../Entity.hpp"
 #include "../../HexEngine.hpp"
 #include "../../Physics/IRigidBody.hpp"
+#include "../../Physics/IPhysicsSystem.hpp"
 #include "../../Physics/PhysUtils.hpp"
 #include "../../Input/CommandManager.hpp"
 #include "../../Input/HCommand.hpp"
@@ -422,9 +423,6 @@ namespace HexEngine
 		const float wheelRadius = v_bikeWheelRadius._val.f32;
 		const float stiffness = v_bikeSuspStiffness._val.f32;
 		const float suspDamp = v_bikeSuspDamping._val.f32;
-		const LayerMask groundMask =
-			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Decorative);
-		const std::vector<Entity*> ignore { GetEntity() };
 
 		// Non-hover fires the ground ray from the WHEEL LINE - the bottom of the
 		// scaled mesh AABB - not the body origin. On a tall mesh the origin sits
@@ -460,8 +458,12 @@ namespace HexEngine
 
 			if (!capturedRay) { _dbgFromY = from.y; _dbgToY = to.y; capturedRay = true; }
 
+			// Use the scene-wide PhysX raycast (not PhysUtils::RayCast, which only
+			// scans StaticMeshComponent entities and so misses volumetric terrain
+			// colliders that live directly in the PhysX scene). Ignore our own body.
 			RayHit hit;
-			if (PhysUtils::RayCast(from, to, groundMask, &hit, ignore))
+			const float rayLen = probeUp + maxDrop;
+			if (g_pEnv->_physicsSystem->RayCastScene(from, -worldUp, rayLen, &hit, _body) > 0)
 			{
 				if (_dbgHitDist < 0.0f)
 				{
