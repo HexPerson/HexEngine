@@ -24,6 +24,47 @@ namespace HexEngine
 		bool  handbrake = false;
 	};
 
+	// Per-vehicle handling tuning. Previously global v_bike* cvars; now lives on
+	// the component so every vehicle instance can be tuned independently and the
+	// values serialize with the prefab/scene. Defaults are the settled arcade
+	// bike values. Edit live via the inspector fields.
+	struct DriveTuning
+	{
+		// Grounding / suspension
+		bool  hover = false;          // raycast spring lift (arcade float) vs rest on collider
+		float groundReach = 1.5f;     // non-hover ground-probe reach below wheel line (m)
+		float rideHeight = 0.5f;      // hover ride height / spring rest length (m)
+		float wheelbase = 1.25f;      // front-rear wheel spacing (m)
+		float suspStiffness = 45.0f;  // hover spring stiffness
+		float suspDamping = 12.0f;    // vertical damping (higher = less terrain bob)
+		float wheelRadius = 0.35f;    // ground-cast wheel radius (m)
+
+		// Drive
+		float driveAccel = 50.0f;     // forward accel (m/s^2)
+		float brakeAccel = 50.0f;     // braking decel (m/s^2)
+		float maxSpeed = 20.0f;       // top forward speed (m/s)
+		float reverseSpeed = 5.0f;    // top reverse speed (m/s)
+		float grip = 10.0f;           // lateral grip (kills sideways vel)
+		float downforce = 6.0f;       // downforce at speed (m/s^2)
+
+		// Steering / orientation
+		float steer = 18.0f;          // yaw authority (torque scale)
+		float lean = 0.5f;            // lean-into-turn angle at speed (rad)
+		float upright = 55.0f;        // upright/lean P gain
+		float steerSmooth = 8.0f;     // digital steer smoothing rate (1/s)
+		float forwardSign = -1.0f;    // +1 / -1: flip if it drives backwards
+
+		// Body
+		float mass = 120.0f;          // kg (seeds the body mass if left at default 1)
+		float angularDamp = 6.0f;     // angular velocity damping
+		float linearDamp = 0.15f;     // linear velocity damping (coast drag)
+		float comHeight = -0.25f;     // centre-of-mass height offset (negative = lower)
+		float chassisFriction = 0.05f;    // collider friction (low = slides over seams)
+		float chassisRestitution = 0.0f;  // collider bounciness
+
+		bool  debug = false;          // log grounded/speed/ray ~1/sec while possessed
+	};
+
 	// A physics-driven, arcade-forward drivable vehicle. The bike is the first
 	// implementation; cars slot in by declaring four wheels and different
 	// tuning. Requires a sibling RigidBody (Dynamic) with a collider.
@@ -75,6 +116,10 @@ namespace HexEngine
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(ComponentWidget* widget) override;
 
+		// Per-instance handling tuning (read every FixedUpdate; editable live).
+		DriveTuning& GetTuning() { return _tuning; }
+		const DriveTuning& GetTuning() const { return _tuning; }
+
 	private:
 		bool ResolveBody();
 		void CreateBinds();
@@ -88,6 +133,7 @@ namespace HexEngine
 		IRigidBody* _body = nullptr;
 
 		DriveInput _input;
+		DriveTuning _tuning;
 		// Default OFF so placing a bike in the editor doesn't hijack the
 		// editor camera's WASD. Possess it explicitly - the `possessbike`
 		// console command (V1), or the enter/exit flow (V2).

@@ -20,56 +20,6 @@
 
 namespace HexEngine
 {
-	// -----------------------------------------------------------------------
-	// Handling tuning as live cvars (arcade-forward). Iterating on feel is far
-	// faster through the console than through prefab fields; V3 can promote the
-	// settled values to serialized per-vehicle overrides.
-	// -----------------------------------------------------------------------
-	namespace
-	{
-		// Hover OFF (default): the bike rests on its physical collider (gravity +
-		// the rounded capsule + CCD), so it sits on the ground, rolls over
-		// triangle seams and rides up small ledges. The "suspension" is then only
-		// light vertical bounce damping. Hover ON: the old arcade float where a
-		// raycast spring lifts the body to ride height (visibly hovers, and the
-		// per-triangle ray samples make it bob) - kept for a hover/anti-grav feel.
-		HVar v_bikeHover("v_bikeHover", "Raycast suspension lifts the body (arcade float). Off = rest on the physical collider.", false, false, true);
-		// How far below the wheel line the non-hover ground probe reaches. Must
-		// comfortably exceed how high the physical collider holds the bike above
-		// the ground, or grounded flickers (drive cuts in and out = the bike
-		// feels stuck / bobs). Generous by default; a real jump still clears it.
-		HVar v_bikeGroundReach("v_bikeGroundReach", "Non-hover ground-probe reach below the wheel line (m)", 1.5f, 0.2f, 6.0f);
-		HVar v_bikeRideHeight("v_bikeRideHeight", "Bike suspension ride height / rest length (m)", 0.5f, 0.1f, 2.0f);
-		HVar v_bikeWheelbase("v_bikeWheelbase", "Bike front-rear wheel spacing (m)", 1.25f, 0.4f, 4.0f);
-		HVar v_bikeSuspStiffness("v_bikeSuspStiffness", "Suspension spring stiffness (accel per unit compression)", 45.0f, 1.0f, 200.0f);
-		HVar v_bikeSuspDamping("v_bikeSuspDamping", "Suspension vertical damping (higher = less bob over terrain facets)", 12.0f, 0.0f, 60.0f);
-		HVar v_bikeWheelRadius("v_bikeWheelRadius", "Wheel radius used for ground casts (m)", 0.35f, 0.05f, 1.0f);
-		HVar v_bikeDriveAccel("v_bikeDriveAccel", "Forward drive acceleration (m/s^2)", 50.0f, 1.0f, 80.0f);
-		HVar v_bikeBrakeAccel("v_bikeBrakeAccel", "Braking deceleration (m/s^2)", 50.0f, 1.0f, 120.0f);
-		HVar v_bikeMaxSpeed("v_bikeMaxSpeed", "Top forward speed (m/s)", 20.0f, 1.0f, 90.0f);
-		HVar v_bikeReverseSpeed("v_bikeReverseSpeed", "Top reverse speed (m/s)", 5.0f, 0.0f, 20.0f);
-		HVar v_bikeGrip("v_bikeGrip", "Lateral grip (kills sideways velocity; lower = slidey)", 10.0f, 0.0f, 40.0f);
-		HVar v_bikeSteer("v_bikeSteer", "Steering yaw authority (torque scale). A capsule chassis has high yaw inertia, so this needs to be much larger than the drive/lean gains to actually turn.", 18.0f, 0.1f, 120.0f);
-		HVar v_bikeLean("v_bikeLean", "Lean-into-turn angle at speed (radians)", 0.5f, 0.0f, 1.2f);
-		HVar v_bikeUpright("v_bikeUpright", "Upright/lean correction stiffness (orientation P gain)", 55.0f, 1.0f, 200.0f);
-		HVar v_bikeDownforce("v_bikeDownforce", "Downforce at speed (m/s^2)", 6.0f, 0.0f, 40.0f);
-		HVar v_bikeAngularDamp("v_bikeAngularDamp", "Angular velocity damping (stabilises orientation)", 6.0f, 0.0f, 30.0f);
-		HVar v_bikeLinearDamp("v_bikeLinearDamp", "Linear velocity damping (coast drag)", 0.15f, 0.0f, 4.0f);
-		HVar v_bikeComHeight("v_bikeComHeight", "Centre-of-mass height offset from origin (negative = lower = stabler)", -0.25f, -1.5f, 1.0f);
-		HVar v_bikeSteerSmooth("v_bikeSteerSmooth", "Digital steer smoothing rate (1/s)", 8.0f, 1.0f, 30.0f);
-		HVar v_bikeDebug("v_bikeDebug", "Log DrivableComponent state (grounded/speed/input) ~1/sec while possessed", false, false, true);
-		HVar v_bikeMass("v_bikeMass", "Vehicle mass in kg (sets mass + inertia when the body is made dynamic)", 120.0f, 5.0f, 2000.0f);
-		// Model-dependent nose direction: +1 = SimpleMath forward (-Z), -1 = +Z.
-		// Flip this if the vehicle drives backwards relative to its mesh.
-		HVar v_bikeForwardSign("v_bikeForwardSign", "Forward axis sign (+1 or -1); flip if the vehicle drives backwards", -1.0f, -1.0f, 1.0f);
-		// The chassis collider is a raycast-suspension hover body: its ground
-		// support and traction come from the model above, not from PhysX contact
-		// friction. A high-friction chassis snags on every seam/lip and feels
-		// "stuck". Keep it slippery + non-bouncy so it slides and rides over
-		// small edges; all real grip is synthesised by v_bikeGrip.
-		HVar v_bikeFriction("v_bikeChassisFriction", "Chassis collider friction (low = slides over seams; grip is synthesised)", 0.05f, 0.0f, 1.0f);
-		HVar v_bikeRestitution("v_bikeChassisRestitution", "Chassis collider bounciness (0 = no bounce/hop)", 0.0f, 0.0f, 1.0f);
-	}
 
 	// --- player input binds -> intent flags -------------------------------
 	HEX_COMMAND(BikeThrottle)
@@ -145,7 +95,7 @@ namespace HexEngine
 			b->SetPlayerControlled(first);
 			first = false;
 		}
-		LOG_INFO("possessbike: possessed - WASD/arrows to drive, Space = handbrake. (v_bikeDebug 1 to log grounded/speed while driving.)");
+		LOG_INFO("possessbike: possessed - WASD/arrows to drive, Space = handbrake. (tick 'Debug log' on the DrivableComponent to log grounded/speed while driving.)");
 	}
 
 	HEX_COMMAND(unpossessbike)
@@ -173,7 +123,10 @@ namespace HexEngine
 		UpdateComponent(entity)
 	{
 		if (clone != nullptr)
+		{
 			_playerControlled = clone->_playerControlled;
+			_tuning = clone->_tuning;
+		}
 		if (_playerControlled)
 			CreateBinds();
 	}
@@ -250,9 +203,9 @@ namespace HexEngine
 			_ensuredDynamic = true;
 			if (_body->GetBodyType() == IRigidBody::BodyType::Dynamic && _body->GetMass() <= 1.001f)
 			{
-				_body->SetMass(std::max(v_bikeMass._val.f32, 1.0f));
-				LOG_INFO("DrivableComponent: '%s' had default mass 1 - set %.0f kg (v_bikeMass) for stable handling.",
-					GetEntity() ? GetEntity()->GetName().c_str() : "(null)", v_bikeMass._val.f32);
+				_body->SetMass(std::max(_tuning.mass, 1.0f));
+				LOG_INFO("DrivableComponent: '%s' had default mass 1 - set %.0f kg (tuning Mass) for stable handling.",
+					GetEntity() ? GetEntity()->GetName().c_str() : "(null)", _tuning.mass);
 			}
 		}
 		return true;
@@ -262,7 +215,7 @@ namespace HexEngine
 	{
 		// Bike: two wheels along the forward (-Z) axis, front and rear. Cars
 		// extend this with left/right pairs later.
-		const float half = v_bikeWheelbase._val.f32 * 0.5f;
+		const float half = _tuning.wheelbase * 0.5f;
 		_wheelsLocal.clear();
 		_wheelsLocal.push_back(math::Vector3(0.0f, 0.0f, -half)); // front (-Z)
 		_wheelsLocal.push_back(math::Vector3(0.0f, 0.0f,  half)); // rear
@@ -271,11 +224,71 @@ namespace HexEngine
 	void DrivableComponent::Serialize(json& data, JsonFile* file)
 	{
 		SERIALIZE_VALUE(_playerControlled);
+
+		// Per-vehicle handling tuning.
+		json& t = data["tuning"];
+		file->Serialize(t, "hover", _tuning.hover);
+		file->Serialize(t, "groundReach", _tuning.groundReach);
+		file->Serialize(t, "rideHeight", _tuning.rideHeight);
+		file->Serialize(t, "wheelbase", _tuning.wheelbase);
+		file->Serialize(t, "suspStiffness", _tuning.suspStiffness);
+		file->Serialize(t, "suspDamping", _tuning.suspDamping);
+		file->Serialize(t, "wheelRadius", _tuning.wheelRadius);
+		file->Serialize(t, "driveAccel", _tuning.driveAccel);
+		file->Serialize(t, "brakeAccel", _tuning.brakeAccel);
+		file->Serialize(t, "maxSpeed", _tuning.maxSpeed);
+		file->Serialize(t, "reverseSpeed", _tuning.reverseSpeed);
+		file->Serialize(t, "grip", _tuning.grip);
+		file->Serialize(t, "downforce", _tuning.downforce);
+		file->Serialize(t, "steer", _tuning.steer);
+		file->Serialize(t, "lean", _tuning.lean);
+		file->Serialize(t, "upright", _tuning.upright);
+		file->Serialize(t, "steerSmooth", _tuning.steerSmooth);
+		file->Serialize(t, "forwardSign", _tuning.forwardSign);
+		file->Serialize(t, "mass", _tuning.mass);
+		file->Serialize(t, "angularDamp", _tuning.angularDamp);
+		file->Serialize(t, "linearDamp", _tuning.linearDamp);
+		file->Serialize(t, "comHeight", _tuning.comHeight);
+		file->Serialize(t, "chassisFriction", _tuning.chassisFriction);
+		file->Serialize(t, "chassisRestitution", _tuning.chassisRestitution);
+		file->Serialize(t, "debug", _tuning.debug);
 	}
 
 	void DrivableComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
 		DESERIALIZE_VALUE(_playerControlled);
+
+		// Per-vehicle handling tuning. Missing keys keep the struct defaults, so
+		// older scenes load fine and only overrides are read back.
+		if (data.find("tuning") != data.end())
+		{
+			json& t = data["tuning"];
+			file->Deserialize(t, "hover", _tuning.hover);
+			file->Deserialize(t, "groundReach", _tuning.groundReach);
+			file->Deserialize(t, "rideHeight", _tuning.rideHeight);
+			file->Deserialize(t, "wheelbase", _tuning.wheelbase);
+			file->Deserialize(t, "suspStiffness", _tuning.suspStiffness);
+			file->Deserialize(t, "suspDamping", _tuning.suspDamping);
+			file->Deserialize(t, "wheelRadius", _tuning.wheelRadius);
+			file->Deserialize(t, "driveAccel", _tuning.driveAccel);
+			file->Deserialize(t, "brakeAccel", _tuning.brakeAccel);
+			file->Deserialize(t, "maxSpeed", _tuning.maxSpeed);
+			file->Deserialize(t, "reverseSpeed", _tuning.reverseSpeed);
+			file->Deserialize(t, "grip", _tuning.grip);
+			file->Deserialize(t, "downforce", _tuning.downforce);
+			file->Deserialize(t, "steer", _tuning.steer);
+			file->Deserialize(t, "lean", _tuning.lean);
+			file->Deserialize(t, "upright", _tuning.upright);
+			file->Deserialize(t, "steerSmooth", _tuning.steerSmooth);
+			file->Deserialize(t, "forwardSign", _tuning.forwardSign);
+			file->Deserialize(t, "mass", _tuning.mass);
+			file->Deserialize(t, "angularDamp", _tuning.angularDamp);
+			file->Deserialize(t, "linearDamp", _tuning.linearDamp);
+			file->Deserialize(t, "comHeight", _tuning.comHeight);
+			file->Deserialize(t, "chassisFriction", _tuning.chassisFriction);
+			file->Deserialize(t, "chassisRestitution", _tuning.chassisRestitution);
+			file->Deserialize(t, "debug", _tuning.debug);
+		}
 	}
 
 	bool DrivableComponent::CreateWidget(ComponentWidget* widget)
@@ -316,6 +329,46 @@ namespace HexEngine
 				return true;
 			});
 
+		// --- per-vehicle handling tuning (was the global v_bike* cvars) --------
+		// Each field is bound straight to a _tuning member; FixedUpdate reads them
+		// live, so dragging retunes this instance in real time and the values
+		// serialise with the prefab/scene.
+		auto addF = [&](const wchar_t* label, float* v, float mn, float mx, float step)
+		{
+			new DragFloat(widget, widget->GetNextPos(), Point(w, 18), label, v, mn, mx, step);
+		};
+
+		new Checkbox(widget, widget->GetNextPos(), Point(w, 18), L"Hover (arcade float) instead of rest on collider", &_tuning.hover);
+
+		addF(L"Ground reach (m)", &_tuning.groundReach, 0.2f, 6.0f, 0.05f);
+		addF(L"Ride height (m)", &_tuning.rideHeight, 0.1f, 2.0f, 0.02f);
+		addF(L"Wheelbase (m)", &_tuning.wheelbase, 0.4f, 4.0f, 0.02f);
+		addF(L"Susp stiffness", &_tuning.suspStiffness, 1.0f, 200.0f, 1.0f);
+		addF(L"Susp damping", &_tuning.suspDamping, 0.0f, 60.0f, 0.5f);
+		addF(L"Wheel radius (m)", &_tuning.wheelRadius, 0.05f, 1.0f, 0.01f);
+
+		addF(L"Drive accel", &_tuning.driveAccel, 1.0f, 120.0f, 1.0f);
+		addF(L"Brake accel", &_tuning.brakeAccel, 1.0f, 120.0f, 1.0f);
+		addF(L"Max speed (m/s)", &_tuning.maxSpeed, 1.0f, 90.0f, 1.0f);
+		addF(L"Reverse speed (m/s)", &_tuning.reverseSpeed, 0.0f, 20.0f, 0.5f);
+		addF(L"Grip", &_tuning.grip, 0.0f, 40.0f, 0.5f);
+		addF(L"Downforce", &_tuning.downforce, 0.0f, 40.0f, 0.5f);
+
+		addF(L"Steer authority", &_tuning.steer, 0.1f, 120.0f, 1.0f);
+		addF(L"Lean (rad)", &_tuning.lean, 0.0f, 1.2f, 0.02f);
+		addF(L"Upright gain", &_tuning.upright, 1.0f, 200.0f, 1.0f);
+		addF(L"Steer smoothing", &_tuning.steerSmooth, 1.0f, 30.0f, 0.5f);
+		addF(L"Forward sign (-1 / +1)", &_tuning.forwardSign, -1.0f, 1.0f, 1.0f);
+
+		addF(L"Mass (kg)", &_tuning.mass, 5.0f, 2000.0f, 5.0f);
+		addF(L"Angular damping", &_tuning.angularDamp, 0.0f, 30.0f, 0.5f);
+		addF(L"Linear damping", &_tuning.linearDamp, 0.0f, 4.0f, 0.05f);
+		addF(L"CoM height", &_tuning.comHeight, -1.5f, 1.0f, 0.02f);
+		addF(L"Chassis friction", &_tuning.chassisFriction, 0.0f, 1.0f, 0.01f);
+		addF(L"Chassis restitution", &_tuning.chassisRestitution, 0.0f, 1.0f, 0.01f);
+
+		new Checkbox(widget, widget->GetNextPos(), Point(w, 18), L"Debug log (grounded/speed/ray)", &_tuning.debug);
+
 		return true;
 	}
 
@@ -341,8 +394,8 @@ namespace HexEngine
 		// Only re-push when a value actually changes - each apply takes a scene
 		// write lock and recreates the PhysX material.
 		{
-			const float fr = v_bikeFriction._val.f32;
-			const float re = v_bikeRestitution._val.f32;
+			const float fr = _tuning.chassisFriction;
+			const float re = _tuning.chassisRestitution;
 			if (fr != _appliedFriction || re != _appliedRestitution)
 			{
 				IRigidBody::PhysicalProperties props;
@@ -355,7 +408,7 @@ namespace HexEngine
 			}
 		}
 
-		if (v_bikeDebug._val.b && _playerControlled)
+		if (_tuning.debug && _playerControlled)
 		{
 			_debugAccum += dt;
 			if (_debugAccum >= 1.0f)
@@ -372,7 +425,7 @@ namespace HexEngine
 		if (_playerControlled)
 		{
 			const float steerTarget = (_kRight ? 1.0f : 0.0f) - (_kLeft ? 1.0f : 0.0f);
-			const float a = std::clamp(v_bikeSteerSmooth._val.f32 * dt, 0.0f, 1.0f);
+			const float a = std::clamp(_tuning.steerSmooth * dt, 0.0f, 1.0f);
 			_steerSmoothed += (steerTarget - _steerSmoothed) * a;
 			_input.throttle = _kThrottle ? 1.0f : 0.0f;
 			_input.brake = _kBrake ? 1.0f : 0.0f;
@@ -392,14 +445,14 @@ namespace HexEngine
 		// Which local axis is the vehicle's nose is model-dependent, so the
 		// forward direction is sign-configurable (v_bikeForwardSign). Applied to
 		// the whole forward basis so drive, lean and speed stay consistent.
-		const math::Vector3 fwd   = math::Vector3::Transform(math::Vector3::Forward, rot) * v_bikeForwardSign._val.f32;
+		const math::Vector3 fwd   = math::Vector3::Transform(math::Vector3::Forward, rot) * _tuning.forwardSign;
 		const math::Vector3 right = math::Vector3::Transform(math::Vector3::Right, rot);
 		const math::Vector3 up    = math::Vector3::Transform(math::Vector3::Up, rot);
 		const math::Vector3 worldUp(0.0f, 1.0f, 0.0f);
 
 		// Centre of mass estimate: origin + a downward offset for stability
 		// (no CoM accessor on the interface).
-		const math::Vector3 com = pos + math::Vector3::Transform(math::Vector3(0.0f, v_bikeComHeight._val.f32, 0.0f), rot);
+		const math::Vector3 com = pos + math::Vector3::Transform(math::Vector3(0.0f, _tuning.comHeight, 0.0f), rot);
 
 		const auto applyForceAtPoint = [&](const math::Vector3& F, const math::Vector3& worldPoint)
 		{
@@ -408,9 +461,9 @@ namespace HexEngine
 		};
 
 		_body->WakeUp();
-		_body->SetLinearVelocityDamping(v_bikeLinearDamp._val.f32);
-		_body->SetAngularVelocityDamping(v_bikeAngularDamp._val.f32);
-		_body->SetMaxLinearVelocity(v_bikeMaxSpeed._val.f32 * 1.4f);
+		_body->SetLinearVelocityDamping(_tuning.linearDamp);
+		_body->SetAngularVelocityDamping(_tuning.angularDamp);
+		_body->SetMaxLinearVelocity(_tuning.maxSpeed * 1.4f);
 
 		// --- ground sensing (+ hover suspension when enabled) ---
 		// Wheel rays feed two things: the grounded flag / ground normal (always),
@@ -418,11 +471,11 @@ namespace HexEngine
 		// rests on its physical capsule, so the ray applies at most light vertical
 		// bounce damping (never a constant lift), which is why it no longer floats.
 		RebuildWheels();
-		const bool hover = v_bikeHover._val.b;
-		const float rideHeight = v_bikeRideHeight._val.f32;
-		const float wheelRadius = v_bikeWheelRadius._val.f32;
-		const float stiffness = v_bikeSuspStiffness._val.f32;
-		const float suspDamp = v_bikeSuspDamping._val.f32;
+		const bool hover = _tuning.hover;
+		const float rideHeight = _tuning.rideHeight;
+		const float wheelRadius = _tuning.wheelRadius;
+		const float stiffness = _tuning.suspStiffness;
+		const float suspDamp = _tuning.suspDamping;
 
 		// Non-hover fires the ground ray from the WHEEL LINE - the bottom of the
 		// scaled mesh AABB - not the body origin. On a tall mesh the origin sits
@@ -436,7 +489,7 @@ namespace HexEngine
 			const math::Vector3 scl = GetEntity()->GetAbsoluteScale();
 			bottomLocalY = (lb.Center.y - lb.Extents.y) * scl.y;
 		}
-		const float maxDrop = hover ? (rideHeight + wheelRadius) : v_bikeGroundReach._val.f32;
+		const float maxDrop = hover ? (rideHeight + wheelRadius) : _tuning.groundReach;
 		// Start the non-hover ray a little above the wheel line so it straddles
 		// the surface even when the capsule is resting right on it.
 		const float probeUp = hover ? 0.0f : 0.3f;
@@ -524,7 +577,7 @@ namespace HexEngine
 			fwdGround = fwd;
 
 		_forwardSpeed = vel.Dot(fwdGround);
-		const float maxSpeed = v_bikeMaxSpeed._val.f32;
+		const float maxSpeed = _tuning.maxSpeed;
 		const float speedFactor = std::clamp(std::fabs(_forwardSpeed) / std::max(maxSpeed, 1.0f), 0.0f, 1.0f);
 
 		if (_grounded)
@@ -532,30 +585,30 @@ namespace HexEngine
 			// Drive / brake / reverse.
 			if (_input.throttle > 0.001f && _forwardSpeed < maxSpeed)
 			{
-				applyForceAtPoint(fwdGround * (_input.throttle * v_bikeDriveAccel._val.f32 * mass), com);
+				applyForceAtPoint(fwdGround * (_input.throttle * _tuning.driveAccel * mass), com);
 			}
 			if (_input.brake > 0.001f)
 			{
 				if (_forwardSpeed > 0.3f)
 				{
 					// Brake: decelerate along travel.
-					applyForceAtPoint(fwdGround * (-_input.brake * v_bikeBrakeAccel._val.f32 * mass), com);
+					applyForceAtPoint(fwdGround * (-_input.brake * _tuning.brakeAccel * mass), com);
 				}
-				else if (_forwardSpeed > -v_bikeReverseSpeed._val.f32)
+				else if (_forwardSpeed > -_tuning.reverseSpeed)
 				{
 					// Reverse (slower than forward).
-					applyForceAtPoint(fwdGround * (-_input.brake * v_bikeDriveAccel._val.f32 * 0.5f * mass), com);
+					applyForceAtPoint(fwdGround * (-_input.brake * _tuning.driveAccel * 0.5f * mass), com);
 				}
 			}
 
 			// Lateral grip - kill sideways velocity (relaxed on handbrake).
 			const float lateral = vel.Dot(right);
 			const float gripScale = _input.handbrake ? 0.35f : 1.0f;
-			applyForceAtPoint(right * (-lateral * v_bikeGrip._val.f32 * gripScale * mass), com);
+			applyForceAtPoint(right * (-lateral * _tuning.grip * gripScale * mass), com);
 
 			// Planted at speed.
-			if (v_bikeDownforce._val.f32 > 0.0f)
-				_body->ApplyForceToCenterOfMass(-groundNormal * (v_bikeDownforce._val.f32 * speedFactor * mass));
+			if (_tuning.downforce > 0.0f)
+				_body->ApplyForceToCenterOfMass(-groundNormal * (_tuning.downforce * speedFactor * mass));
 		}
 
 		// Steering: speed-scaled yaw torque (can turn a little at a standstill).
@@ -565,7 +618,7 @@ namespace HexEngine
 		// one way while it leaned the other.
 		const float steerAuthority = 0.5f + 1.0f * speedFactor;
 		const float steerDir = (_forwardSpeed >= -0.3f) ? 1.0f : -1.0f;
-		_body->ApplyTorque(up * (_input.steer * v_bikeSteer._val.f32 * steerAuthority * steerDir * mass * v_bikeForwardSign._val.f32));
+		_body->ApplyTorque(up * (_input.steer * _tuning.steer * steerAuthority * steerDir * mass * _tuning.forwardSign));
 
 		// Upright + lean: proportional torque toward a target up-vector. The
 		// heavy angular damping above turns this pure-P controller into a
@@ -573,10 +626,10 @@ namespace HexEngine
 		math::Vector3 targetGroundUp = math::Vector3::Lerp(worldUp, groundNormal, 0.5f);
 		if (targetGroundUp.LengthSquared() > 1e-5f)
 			targetGroundUp.Normalize();
-		const float leanRoll = _input.steer * v_bikeLean._val.f32 * speedFactor;
+		const float leanRoll = _input.steer * _tuning.lean * speedFactor;
 		const math::Quaternion leanQ = math::Quaternion::CreateFromAxisAngle(fwd, leanRoll);
 		math::Vector3 targetUp = math::Vector3::Transform(targetGroundUp, leanQ);
 		const math::Vector3 uprightAxis = up.Cross(targetUp); // ~sin(angle) * rotation axis
-		_body->ApplyTorque(uprightAxis * (v_bikeUpright._val.f32 * mass));
+		_body->ApplyTorque(uprightAxis * (_tuning.upright * mass));
 	}
 }
