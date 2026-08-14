@@ -123,8 +123,12 @@ namespace HexEngine
 		InteractionComponent::SetCallback(std::bind(&DrivableComponent::Possess, this));
 	}
 
-	DrivableComponent::DrivableComponent(Entity* entity, DrivableComponent* clone) : 
-		InteractionComponent(entity)
+	DrivableComponent::DrivableComponent(Entity* entity, DrivableComponent* clone) :
+		// Forward the source to the base so the InteractionComponent fields
+		// (name/prompt/range/key/...) are copied on a prefab clone; calling the
+		// plain InteractionComponent(entity) left them at defaults ("Item" /
+		// "Press E to interact") on every spawned instance.
+		InteractionComponent(entity, clone)
 	{
 		if (clone != nullptr)
 		{
@@ -266,8 +270,11 @@ namespace HexEngine
 		if (_camFps != nullptr)
 			_camFps->SetControlEnabled(false);
 
-		// Pause the player's character controller so it neither simulates nor
-		// writes its pose back over the transform we drive to the seat.
+		// Pause the player's character controller so it doesn't wander off or
+		// accumulate gravity while parked. We no longer move the player transform
+		// (the eye is placed via the camera's view offset), so there is nothing
+		// for it to fight - which is what made the resting eye depend on where the
+		// player mounted from.
 		_camPlayerBody = nullptr;
 		if (auto* rb = camEnt->GetComponent<RigidBody>())
 		{
@@ -279,7 +286,7 @@ namespace HexEngine
 		// Seed the smoothed pose at the camera's current eye/look so mounting
 		// reads as a glide from where the player is standing.
 		if (auto* tf = camEnt->GetComponent<Transform>())
-			_camEyeSmoothed = tf->GetPosition();
+			_camEyeSmoothed = tf->GetPosition() + _camMain->GetViewOffset();
 		_camLookSmoothed = _camMain->GetLookDir();
 		if (_camLookSmoothed.LengthSquared() < 1e-6f)
 			_camLookSmoothed = math::Vector3::Forward;
@@ -326,6 +333,10 @@ namespace HexEngine
 
 		if (cam != nullptr && _camPlayerEntity != nullptr && GetEntity() != nullptr)
 		{
+			// Hand the camera back: clear the seat view offset so it renders from
+			// the player transform again.
+			cam->SetViewOffset(math::Vector3(0.0f, 0.0f, 0.0f));
+
 			// Set the player down beside the vehicle so they're standing when
 			// control returns (teleport the CCT, not just the transform).
 			const math::Matrix bikeTM = GetEntity()->GetWorldTM();
@@ -401,11 +412,15 @@ namespace HexEngine
 			_camLookSmoothed = targetLook;
 		_camLookSmoothed.Normalize();
 
-		// Drive the shared main camera: move the (invisible) player to the seat
-		// and point the camera down the bike's forward. Culling/frustum track
-		// because the transform actually moves. camTf/cam were re-resolved this
-		// frame and validated alive.
-		camTf->SetPosition(_camEyeSmoothed);
+		// Place the eye at the seat purely via the camera's view OFFSET. The view
+		// matrix and the culling frustum are both built from transform pos +
+		// viewOffset (Camera::ConstructViewMatrix / BuildFrustum), so:
+		//   eye = tf->GetPosition() + (seat - tf->GetPosition()) = seat, exactly,
+		// every frame, independent of where the player is standing. Moving the
+		// player transform instead made the resting eye depend on the mount spot
+		// (the paused CCT kept writing its frozen pose back, and the two settled
+		// somewhere in between). We don't touch the transform now.
+		cam->SetViewOffset(_camEyeSmoothed - camTf->GetPosition());
 		cam->SetLookDirection(_camLookSmoothed, math::Vector3(0.0f, 1.0f, 0.0f));
 	}
 
