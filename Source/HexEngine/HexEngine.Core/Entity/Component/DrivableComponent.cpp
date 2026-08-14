@@ -2,6 +2,8 @@
 #include "DrivableComponent.hpp"
 #include "RigidBody.hpp"
 #include "Transform.hpp"
+#include "Camera.hpp"
+#include "FirstPersonCameraController.hpp"
 #include "../Entity.hpp"
 #include "../../HexEngine.hpp"
 #include "../../Physics/IRigidBody.hpp"
@@ -133,6 +135,7 @@ namespace HexEngine
 
 	DrivableComponent::~DrivableComponent()
 	{
+		DismountCamera();
 		RemoveBinds();
 	}
 
@@ -142,11 +145,15 @@ namespace HexEngine
 			return;
 		_playerControlled = possessed;
 		if (possessed)
+		{
 			CreateBinds();
+			MountCamera();
+		}
 		else
 		{
 			RemoveBinds();
 			_kThrottle = _kBrake = _kLeft = _kRight = _kHandbrake = false;
+			DismountCamera();
 		}
 	}
 
@@ -221,6 +228,132 @@ namespace HexEngine
 		_wheelsLocal.push_back(math::Vector3(0.0f, 0.0f,  half)); // rear
 	}
 
+	void DrivableComponent::MountCamera()
+	{
+		if (_cameraMounted)
+			return;
+		if (g_pEnv == nullptr || g_pEnv->_sceneManager == nullptr)
+			return;
+		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr)
+			return;
+		Camera* cam = scene->GetMainCamera();
+		if (cam == nullptr)
+			return;
+		Entity* camEnt = cam->GetEntity();
+		if (camEnt == nullptr)
+			return;
+
+		_camMain = cam;
+		_camPlayerEntity = camEnt;
+
+		// Suspend the player's walk controller so it stops moving/looking.
+		_camFps = camEnt->GetComponent<FirstPersonCameraController>();
+		if (_camFps != nullptr)
+			_camFps->SetControlEnabled(false);
+
+		// Pause the player's character controller so it neither simulates nor
+		// writes its pose back over the transform we drive to the seat.
+		_camPlayerBody = nullptr;
+		if (auto* rb = camEnt->GetComponent<RigidBody>())
+		{
+			_camPlayerBody = rb->GetIRigidBody();
+			if (_camPlayerBody != nullptr)
+				_camPlayerBody->SetIsSimulated(false);
+		}
+
+		// Seed the smoothed pose at the camera's current eye/look so mounting
+		// reads as a glide from where the player is standing.
+		if (auto* tf = camEnt->GetComponent<Transform>())
+			_camEyeSmoothed = tf->GetPosition();
+		_camLookSmoothed = _camMain->GetLookDir();
+		if (_camLookSmoothed.LengthSquared() < 1e-6f)
+			_camLookSmoothed = math::Vector3::Forward;
+		_camSmoothInit = true;
+		_cameraMounted = true;
+	}
+
+	void DrivableComponent::DismountCamera()
+	{
+		if (!_cameraMounted)
+			return;
+		_cameraMounted = false;
+
+		// Set the player down beside the vehicle so they're standing when control
+		// returns (teleport the CCT, not just the transform).
+		if (_camPlayerEntity != nullptr && GetEntity() != nullptr)
+		{
+			const math::Matrix bikeTM = GetEntity()->GetWorldTM();
+			math::Vector3 right = math::Vector3::TransformNormal(math::Vector3::Right, bikeTM);
+			right.y = 0.0f;
+			if (right.LengthSquared() > 1e-6f)
+				right.Normalize();
+			else
+				right = math::Vector3::Right;
+			const math::Vector3 dismountPos = bikeTM.Translation() + right * 1.0f + math::Vector3(0.0f, 0.5f, 0.0f);
+			if (_camPlayerBody != nullptr)
+				_camPlayerBody->UpdatePosePosition(dismountPos);
+			if (auto* tf = _camPlayerEntity->GetComponent<Transform>())
+				tf->SetPosition(dismountPos);
+		}
+
+		if (_camPlayerBody != nullptr)
+			_camPlayerBody->SetIsSimulated(true);
+		if (_camFps != nullptr)
+			_camFps->SetControlEnabled(true);
+
+		_camMain = nullptr;
+		_camPlayerEntity = nullptr;
+		_camFps = nullptr;
+		_camPlayerBody = nullptr;
+		_camSmoothInit = false;
+	}
+
+	void DrivableComponent::Update(float dt)
+	{
+		if (!_cameraMounted || _camMain == nullptr || _camPlayerEntity == nullptr)
+			return;
+		if (dt <= 0.0f)
+			dt = 1.0f / 60.0f;
+
+		Entity* bike = GetEntity();
+		if (bike == nullptr)
+			return;
+		const math::Matrix bikeTM = bike->GetWorldTM();
+
+		// Target eye = the local seat offset put through the bike transform.
+		const math::Vector3 targetEye = math::Vector3::Transform(_tuning.cameraOffset, bikeTM);
+		// Target look = the bike's forward (matching the drive direction).
+		math::Vector3 targetLook = math::Vector3::TransformNormal(math::Vector3::Forward, bikeTM) * _tuning.forwardSign;
+		if (targetLook.LengthSquared() < 1e-6f)
+			targetLook = _camLookSmoothed;
+		targetLook.Normalize();
+
+		if (!_camSmoothInit)
+		{
+			_camEyeSmoothed = targetEye;
+			_camLookSmoothed = targetLook;
+			_camSmoothInit = true;
+		}
+
+		// Frame-rate-independent exponential smoothing damps the physics bobble
+		// and shapes the mount glide.
+		const float ap = 1.0f - std::exp(-std::max(_tuning.cameraPosSmoothing, 0.0f) * dt);
+		const float al = 1.0f - std::exp(-std::max(_tuning.cameraLookSmoothing, 0.0f) * dt);
+		_camEyeSmoothed += (targetEye - _camEyeSmoothed) * ap;
+		_camLookSmoothed += (targetLook - _camLookSmoothed) * al;
+		if (_camLookSmoothed.LengthSquared() < 1e-6f)
+			_camLookSmoothed = targetLook;
+		_camLookSmoothed.Normalize();
+
+		// Drive the shared main camera: move the (invisible) player to the seat
+		// and point the camera down the bike's forward. Culling/frustum track
+		// because the transform actually moves.
+		if (auto* tf = _camPlayerEntity->GetComponent<Transform>())
+			tf->SetPosition(_camEyeSmoothed);
+		_camMain->SetLookDirection(_camLookSmoothed, math::Vector3(0.0f, 1.0f, 0.0f));
+	}
+
 	void DrivableComponent::Serialize(json& data, JsonFile* file)
 	{
 		SERIALIZE_VALUE(_playerControlled);
@@ -252,6 +385,9 @@ namespace HexEngine
 		file->Serialize(t, "chassisFriction", _tuning.chassisFriction);
 		file->Serialize(t, "chassisRestitution", _tuning.chassisRestitution);
 		file->Serialize(t, "debug", _tuning.debug);
+		file->Serialize(t, "cameraOffset", _tuning.cameraOffset);
+		file->Serialize(t, "cameraPosSmoothing", _tuning.cameraPosSmoothing);
+		file->Serialize(t, "cameraLookSmoothing", _tuning.cameraLookSmoothing);
 	}
 
 	void DrivableComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
@@ -288,6 +424,9 @@ namespace HexEngine
 			file->Deserialize(t, "chassisFriction", _tuning.chassisFriction);
 			file->Deserialize(t, "chassisRestitution", _tuning.chassisRestitution);
 			file->Deserialize(t, "debug", _tuning.debug);
+			file->Deserialize(t, "cameraOffset", _tuning.cameraOffset);
+			file->Deserialize(t, "cameraPosSmoothing", _tuning.cameraPosSmoothing);
+			file->Deserialize(t, "cameraLookSmoothing", _tuning.cameraLookSmoothing);
 		}
 	}
 
@@ -366,6 +505,12 @@ namespace HexEngine
 		addF(L"CoM height", &_tuning.comHeight, -1.5f, 1.0f, 0.02f);
 		addF(L"Chassis friction", &_tuning.chassisFriction, 0.0f, 1.0f, 0.01f);
 		addF(L"Chassis restitution", &_tuning.chassisRestitution, 0.0f, 1.0f, 0.01f);
+
+		addF(L"Camera offset X", &_tuning.cameraOffset.x, -3.0f, 3.0f, 0.02f);
+		addF(L"Camera offset Y", &_tuning.cameraOffset.y, -1.0f, 3.0f, 0.02f);
+		addF(L"Camera offset Z", &_tuning.cameraOffset.z, -3.0f, 3.0f, 0.02f);
+		addF(L"Camera pos smoothing", &_tuning.cameraPosSmoothing, 0.5f, 30.0f, 0.5f);
+		addF(L"Camera look smoothing", &_tuning.cameraLookSmoothing, 0.5f, 30.0f, 0.5f);
 
 		new Checkbox(widget, widget->GetNextPos(), Point(w, 18), L"Debug log (grounded/speed/ray)", &_tuning.debug);
 

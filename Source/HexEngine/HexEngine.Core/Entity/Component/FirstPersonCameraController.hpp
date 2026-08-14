@@ -43,6 +43,12 @@ namespace HexEngine
 		void AddInputFlag(MoveFlag flag);
 		void RemoveInputFlag(MoveFlag flag);
 
+		// Suspend player movement + mouse-look without destroying the component,
+		// so another system (e.g. DrivableComponent while the player is riding a
+		// vehicle) can take over the camera. Clears pending move flags on disable.
+		void SetControlEnabled(bool enabled);
+		bool IsControlEnabled() const { return _controlEnabled; }
+
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(class ComponentWidget* widget) override;
@@ -64,6 +70,7 @@ namespace HexEngine
 		float _gravityAcceleration = 9.81f * 2.0f;
 		float _verticalVelocity = 0.0f;
 		MoveFlag _flags = MoveNone;
+		bool _controlEnabled = true;
 		//float _pitchSensitivity = 200.0f;
 		//float _yawSensitivity = 200.0f;
 

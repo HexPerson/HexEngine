@@ -150,9 +150,21 @@ namespace HexEngine
 		PruneFinishedFootsteps();
 	}
 
+	void FirstPersonCameraController::SetControlEnabled(bool enabled)
+	{
+		_controlEnabled = enabled;
+		if (!enabled)
+			_flags = MoveNone; // drop held keys so movement doesn't resume mid-ride
+	}
+
 	void FirstPersonCameraController::FixedUpdate(float frameTime)
 	{
 		if (frameTime <= 0.0f)
+			return;
+
+		// Suspended while the player is riding a vehicle - DrivableComponent owns
+		// the camera then.
+		if (!_controlEnabled)
 			return;
 
 		auto* transform = GetEntity()->GetComponent<Transform>();
@@ -417,6 +429,9 @@ namespace HexEngine
 
 	bool FirstPersonCameraController::OnInputEvent(InputEvent event, InputData* data)
 	{
+		if (!_controlEnabled)
+			return false;
+
 		if (event == InputEvent::MouseMove && data->MouseMove.absolute == false)
 		{
 			Camera* camera = GetEntity()->GetComponent<Camera>();

@@ -11,6 +11,9 @@ namespace HexEngine
 {
 	class RigidBody;
 	class IRigidBody;
+	class Camera;
+	class Entity;
+	class FirstPersonCameraController;
 
 	// Generic drive intent. Whatever is "driving" the vehicle fills this each
 	// frame - the local player controller (V1), the enter/exit routing (V2),
@@ -63,6 +66,15 @@ namespace HexEngine
 		float chassisRestitution = 0.0f;  // collider bounciness
 
 		bool  debug = false;          // log grounded/speed/ray ~1/sec while possessed
+
+		// Mounted first-person camera. cameraOffset is the rider's eye in the
+		// vehicle's LOCAL space (up = +Y, length ~= Z); every vehicle sits the
+		// rider differently, so this is per-instance. The smoothing rates damp
+		// the physics bobble - higher = snappier/closer to the rigid pose, lower
+		// = floatier. They also shape the glide when mounting.
+		math::Vector3 cameraOffset = math::Vector3(0.0f, 1.1f, 0.15f);
+		float cameraPosSmoothing = 8.0f;   // eye position follow rate (1/s)
+		float cameraLookSmoothing = 10.0f; // look-direction follow rate (1/s)
 	};
 
 	// A physics-driven, arcade-forward drivable vehicle. The bike is the first
@@ -90,6 +102,8 @@ namespace HexEngine
 		~DrivableComponent();
 
 		virtual void FixedUpdate(float frameTime) override;
+		// Per-render-frame: drives the mounted first-person camera (smoothed).
+		virtual void Update(float frameTime) override;
 
 		// The generic seam - set by whoever is driving.
 		void SetDriveInput(const DriveInput& input) { _input = input; }
@@ -124,6 +138,12 @@ namespace HexEngine
 		bool ResolveBody();
 		void CreateBinds();
 		void RemoveBinds();
+
+		// First-person camera mount: hand the main camera to this vehicle (on
+		// possess) and give it back to the player's FirstPersonCameraController
+		// (on release). Reuses the existing main camera - no new camera created.
+		void MountCamera();
+		void DismountCamera();
 
 		// Local-space wheel anchors (bike = 2 along the wheel axis). Rebuilt
 		// from the wheelbase cvar each frame so live tuning works.
@@ -171,5 +191,15 @@ namespace HexEngine
 		float _appliedRestitution = -1.0f;
 
 		std::vector<math::Vector3> _wheelsLocal;
+
+		// --- mounted camera state ---
+		bool _cameraMounted = false;
+		Entity* _camPlayerEntity = nullptr;          // entity owning the main camera
+		Camera* _camMain = nullptr;                  // the main camera we drive
+		FirstPersonCameraController* _camFps = nullptr; // suspended while mounted
+		IRigidBody* _camPlayerBody = nullptr;        // player CCT, sim paused while mounted
+		bool _camSmoothInit = false;
+		math::Vector3 _camEyeSmoothed;               // smoothed world eye position
+		math::Vector3 _camLookSmoothed;              // smoothed world look direction
 	};
 }
