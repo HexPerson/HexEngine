@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "UpdateComponent.hpp"
+#include "InteractionComponent.hpp"
 #include "../../Math/FloatMath.hpp"
 
 #include <vector>
@@ -92,7 +92,7 @@ namespace HexEngine
 	//     is exactly the arcade feel we want.
 	//   - Steering is a speed-scaled yaw torque; lateral grip kills sideways
 	//     velocity (relaxed on handbrake for drift).
-	class HEX_API DrivableComponent : public UpdateComponent
+	class HEX_API DrivableComponent : public InteractionComponent
 	{
 	public:
 		CREATE_COMPONENT_ID(DrivableComponent);
@@ -134,6 +134,9 @@ namespace HexEngine
 		DriveTuning& GetTuning() { return _tuning; }
 		const DriveTuning& GetTuning() const { return _tuning; }
 
+		void Possess();
+		void Unpossess();
+
 	private:
 		bool ResolveBody();
 		void CreateBinds();
@@ -144,6 +147,10 @@ namespace HexEngine
 		// (on release). Reuses the existing main camera - no new camera created.
 		void MountCamera();
 		void DismountCamera();
+		// Returns the live main camera only if it's still the one we mounted and
+		// alive; otherwise null (and clears the mounted flag). Never dereferences
+		// a stale cached pointer - exiting play mode frees it mid-tick.
+		Camera* ResolveMountedCamera();
 
 		// Local-space wheel anchors (bike = 2 along the wheel axis). Rebuilt
 		// from the wheelbase cvar each frame so live tuning works.

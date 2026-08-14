@@ -114,15 +114,17 @@ namespace HexEngine
 		LOG_INFO("unpossessbike: released all drivable vehicles");
 	}
 
-	DrivableComponent::DrivableComponent(Entity* entity) :
-		UpdateComponent(entity)
+	DrivableComponent::DrivableComponent(Entity* entity) : 
+		InteractionComponent(entity)
 	{
 		if (_playerControlled)
 			CreateBinds();
+
+		InteractionComponent::SetCallback(std::bind(&DrivableComponent::Possess, this));
 	}
 
-	DrivableComponent::DrivableComponent(Entity* entity, DrivableComponent* clone) :
-		UpdateComponent(entity)
+	DrivableComponent::DrivableComponent(Entity* entity, DrivableComponent* clone) : 
+		InteractionComponent(entity)
 	{
 		if (clone != nullptr)
 		{
@@ -131,12 +133,24 @@ namespace HexEngine
 		}
 		if (_playerControlled)
 			CreateBinds();
+
+		InteractionComponent::SetCallback(std::bind(&DrivableComponent::Possess, this));
 	}
 
 	DrivableComponent::~DrivableComponent()
 	{
 		DismountCamera();
 		RemoveBinds();
+	}
+
+	void DrivableComponent::Possess()
+	{
+		SetPlayerControlled(!_playerControlled);
+	}
+
+	void DrivableComponent::Unpossess()
+	{
+		SetPlayerControlled(false);
 	}
 
 	void DrivableComponent::SetPlayerControlled(bool possessed)
@@ -273,16 +287,47 @@ namespace HexEngine
 		_cameraMounted = true;
 	}
 
+	Camera* DrivableComponent::ResolveMountedCamera()
+	{
+		if (!_cameraMounted)
+			return nullptr;
+		if (g_pEnv == nullptr || g_pEnv->_sceneManager == nullptr)
+			return nullptr;
+		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr)
+			return nullptr;
+		Camera* cur = scene->GetMainCamera();
+		// Not the camera we mounted (e.g. exited play mode -> editor camera), or
+		// gone. Only pointer COMPARISON here - never deref the cached pointer,
+		// which may already be freed. Stop mounting.
+		if (cur == nullptr || cur != _camMain)
+		{
+			_cameraMounted = false;
+			return nullptr;
+		}
+		Entity* camEnt = cur->GetEntity();
+		if (camEnt == nullptr || camEnt->IsPendingDeletion())
+		{
+			_cameraMounted = false;
+			return nullptr;
+		}
+		return cur;
+	}
+
 	void DrivableComponent::DismountCamera()
 	{
 		if (!_cameraMounted)
 			return;
+
+		// Only touch the player/camera if it's still the live main camera - during
+		// play-mode teardown those objects may already be freed.
+		Camera* cam = ResolveMountedCamera();
 		_cameraMounted = false;
 
-		// Set the player down beside the vehicle so they're standing when control
-		// returns (teleport the CCT, not just the transform).
-		if (_camPlayerEntity != nullptr && GetEntity() != nullptr)
+		if (cam != nullptr && _camPlayerEntity != nullptr && GetEntity() != nullptr)
 		{
+			// Set the player down beside the vehicle so they're standing when
+			// control returns (teleport the CCT, not just the transform).
 			const math::Matrix bikeTM = GetEntity()->GetWorldTM();
 			math::Vector3 right = math::Vector3::TransformNormal(math::Vector3::Right, bikeTM);
 			right.y = 0.0f;
@@ -295,12 +340,12 @@ namespace HexEngine
 				_camPlayerBody->UpdatePosePosition(dismountPos);
 			if (auto* tf = _camPlayerEntity->GetComponent<Transform>())
 				tf->SetPosition(dismountPos);
-		}
 
-		if (_camPlayerBody != nullptr)
-			_camPlayerBody->SetIsSimulated(true);
-		if (_camFps != nullptr)
-			_camFps->SetControlEnabled(true);
+			if (_camPlayerBody != nullptr)
+				_camPlayerBody->SetIsSimulated(true);
+			if (_camFps != nullptr)
+				_camFps->SetControlEnabled(true);
+		}
 
 		_camMain = nullptr;
 		_camPlayerEntity = nullptr;
@@ -311,14 +356,24 @@ namespace HexEngine
 
 	void DrivableComponent::Update(float dt)
 	{
-		if (!_cameraMounted || _camMain == nullptr || _camPlayerEntity == nullptr)
-			return;
-		if (dt <= 0.0f)
-			dt = 1.0f / 60.0f;
+		InteractionComponent::Update(dt);
 
+		Camera* cam = ResolveMountedCamera();
+		if (cam == nullptr)
+			return;
+		Entity* camEnt = cam->GetEntity();
+		if (camEnt == nullptr)
+			return;
+		auto* camTf = camEnt->GetComponent<Transform>();
+		if (camTf == nullptr)
+			return;
 		Entity* bike = GetEntity();
 		if (bike == nullptr)
 			return;
+
+		if (dt <= 0.0f)
+			dt = 1.0f / 60.0f;
+
 		const math::Matrix bikeTM = bike->GetWorldTM();
 
 		// Target eye = the local seat offset put through the bike transform.
@@ -348,14 +403,16 @@ namespace HexEngine
 
 		// Drive the shared main camera: move the (invisible) player to the seat
 		// and point the camera down the bike's forward. Culling/frustum track
-		// because the transform actually moves.
-		if (auto* tf = _camPlayerEntity->GetComponent<Transform>())
-			tf->SetPosition(_camEyeSmoothed);
-		_camMain->SetLookDirection(_camLookSmoothed, math::Vector3(0.0f, 1.0f, 0.0f));
+		// because the transform actually moves. camTf/cam were re-resolved this
+		// frame and validated alive.
+		camTf->SetPosition(_camEyeSmoothed);
+		cam->SetLookDirection(_camLookSmoothed, math::Vector3(0.0f, 1.0f, 0.0f));
 	}
 
 	void DrivableComponent::Serialize(json& data, JsonFile* file)
 	{
+		InteractionComponent::Serialize(data, file);
+
 		SERIALIZE_VALUE(_playerControlled);
 
 		// Per-vehicle handling tuning.
@@ -392,6 +449,8 @@ namespace HexEngine
 
 	void DrivableComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
+		InteractionComponent::Deserialize(data, file, mask);
+
 		DESERIALIZE_VALUE(_playerControlled);
 
 		// Per-vehicle handling tuning. Missing keys keep the struct defaults, so
@@ -432,6 +491,8 @@ namespace HexEngine
 
 	bool DrivableComponent::CreateWidget(ComponentWidget* widget)
 	{
+		InteractionComponent::CreateWidget(widget);
+
 		const int32_t w = widget->GetSize().x - 20;
 
 		// Mark this vehicle as the player's - possessed on play, and live in
@@ -519,8 +580,11 @@ namespace HexEngine
 
 	void DrivableComponent::FixedUpdate(float dt)
 	{
+		InteractionComponent::FixedUpdate(dt);
+
 		if (dt <= 0.0f)
 			return;
+
 		if (!ResolveBody())
 		{
 			// Ticking but no usable body - the #1 setup mistake. Log once so
