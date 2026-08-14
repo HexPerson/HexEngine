@@ -412,14 +412,25 @@ namespace HexEngine
 			_camLookSmoothed = targetLook;
 		_camLookSmoothed.Normalize();
 
-		// Place the eye at the seat purely via the camera's view OFFSET. The view
-		// matrix and the culling frustum are both built from transform pos +
-		// viewOffset (Camera::ConstructViewMatrix / BuildFrustum), so:
-		//   eye = tf->GetPosition() + (seat - tf->GetPosition()) = seat, exactly,
-		// every frame, independent of where the player is standing. Moving the
-		// player transform instead made the resting eye depend on the mount spot
-		// (the paused CCT kept writing its frozen pose back, and the two settled
-		// somewhere in between). We don't touch the transform now.
+		// Move the player to the seat by driving the CHARACTER CONTROLLER capsule
+		// there (setFootPosition via UpdatePosePosition). The physics read-back
+		// (PhysicsSystemPhysX::Update) copies the CCT foot position into the entity
+		// transform every frame, so this is the only way to make the transform
+		// actually land on the seat - and camera-following effects (froxel volume,
+		// weather particles, audio) read the TRANSFORM, so they now track the bike.
+		// The CCT is paused (SetIsSimulated false), so parking it inside the bike
+		// doesn't shove the bike. Directly SetPosition only as a fallback for a
+		// vehicle whose driver has no character controller.
+		if (_camPlayerBody != nullptr)
+			_camPlayerBody->UpdatePosePosition(_camEyeSmoothed);
+		else
+			camTf->SetPosition(_camEyeSmoothed);
+
+		// Correct the rendered eye to EXACTLY the seat regardless of the transform:
+		// eye = transformPos + viewOffset (Camera::ConstructViewMatrix, and the
+		// frustum in BuildFrustum), so this cancels the CCT foot-vs-eye height and
+		// any one-frame read-back lag, keeping the eye consistent no matter where
+		// the player mounted from.
 		cam->SetViewOffset(_camEyeSmoothed - camTf->GetPosition());
 		cam->SetLookDirection(_camLookSmoothed, math::Vector3(0.0f, 1.0f, 0.0f));
 	}
