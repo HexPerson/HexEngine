@@ -280,7 +280,13 @@ namespace HexEngine
 		{
 			_camPlayerBody = rb->GetIRigidBody();
 			if (_camPlayerBody != nullptr)
+			{
+				// Pause the CCT (so its parked capsule can't block the bike) and
+				// suppress the physics->transform read-back so we can drive the
+				// camera transform to the seat ourselves without it fighting us.
 				_camPlayerBody->SetIsSimulated(false);
+				_camPlayerBody->SetPoseWritebackEnabled(false);
+			}
 		}
 
 		// Seed the smoothed pose at the camera's current eye/look so mounting
@@ -338,7 +344,8 @@ namespace HexEngine
 			cam->SetViewOffset(math::Vector3(0.0f, 0.0f, 0.0f));
 
 			// Set the player down beside the vehicle so they're standing when
-			// control returns (teleport the CCT, not just the transform).
+			// control returns. Re-enable simulation + the pose read-back FIRST -
+			// setFootPosition is illegal while DISABLE_SIMULATION is set.
 			const math::Matrix bikeTM = GetEntity()->GetWorldTM();
 			math::Vector3 right = math::Vector3::TransformNormal(math::Vector3::Right, bikeTM);
 			right.y = 0.0f;
@@ -347,13 +354,16 @@ namespace HexEngine
 			else
 				right = math::Vector3::Right;
 			const math::Vector3 dismountPos = bikeTM.Translation() + right * 1.0f + math::Vector3(0.0f, 0.5f, 0.0f);
+
 			if (_camPlayerBody != nullptr)
+			{
+				_camPlayerBody->SetIsSimulated(true);
+				_camPlayerBody->SetPoseWritebackEnabled(true);
 				_camPlayerBody->UpdatePosePosition(dismountPos);
+			}
 			if (auto* tf = _camPlayerEntity->GetComponent<Transform>())
 				tf->SetPosition(dismountPos);
 
-			if (_camPlayerBody != nullptr)
-				_camPlayerBody->SetIsSimulated(true);
 			if (_camFps != nullptr)
 				_camFps->SetControlEnabled(true);
 		}
@@ -412,19 +422,14 @@ namespace HexEngine
 			_camLookSmoothed = targetLook;
 		_camLookSmoothed.Normalize();
 
-		// Move the player to the seat by driving the CHARACTER CONTROLLER capsule
-		// there (setFootPosition via UpdatePosePosition). The physics read-back
-		// (PhysicsSystemPhysX::Update) copies the CCT foot position into the entity
-		// transform every frame, so this is the only way to make the transform
-		// actually land on the seat - and camera-following effects (froxel volume,
-		// weather particles, audio) read the TRANSFORM, so they now track the bike.
-		// The CCT is paused (SetIsSimulated false), so parking it inside the bike
-		// doesn't shove the bike. Directly SetPosition only as a fallback for a
-		// vehicle whose driver has no character controller.
-		if (_camPlayerBody != nullptr)
-			_camPlayerBody->UpdatePosePosition(_camEyeSmoothed);
-		else
-			camTf->SetPosition(_camEyeSmoothed);
+		// Move the camera entity transform to the seat. The physics->transform
+		// read-back is suppressed for the player body while mounted (see
+		// MountCamera / SetPoseWritebackEnabled), so this SetPosition sticks -
+		// camera-following effects (froxel volume, weather particles, audio) read
+		// the TRANSFORM, so they now track the bike. We can't move the paused CCT
+		// itself (setFootPosition is illegal on a DISABLE_SIMULATION actor), which
+		// is fine: its capsule just stays parked and out of the way.
+		camTf->SetPosition(_camEyeSmoothed);
 
 		// Correct the rendered eye to EXACTLY the seat regardless of the transform:
 		// eye = transformPos + viewOffset (Camera::ConstructViewMatrix, and the

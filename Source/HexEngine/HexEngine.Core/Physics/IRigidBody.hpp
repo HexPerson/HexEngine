@@ -228,6 +228,14 @@ namespace HexEngine
 
 		virtual bool GetIsSimulated() = 0;
 
+		// When false, the physics->transform read-back skips this body, so an
+		// external owner can drive the entity transform directly without the
+		// per-frame pose write fighting it (e.g. a mounted vehicle camera parking
+		// the player CCT and moving the camera to the seat). Default no-op so
+		// alternate backends compile.
+		virtual void SetPoseWritebackEnabled(bool enabled) { (void)enabled; }
+		virtual bool IsPoseWritebackEnabled() const { return true; }
+
 		virtual void UpdatePosePosition(const math::Vector3& position) = 0;
 
 		virtual void UpdatePoseRotation(const math::Quaternion& rotation) = 0;

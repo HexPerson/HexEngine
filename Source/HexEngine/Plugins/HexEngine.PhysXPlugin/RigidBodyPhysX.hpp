@@ -122,6 +122,9 @@ public:
 
 	virtual bool GetIsSimulated() override;
 
+	virtual void SetPoseWritebackEnabled(bool enabled) override;
+	virtual bool IsPoseWritebackEnabled() const override;
+
 	virtual void UpdatePosePosition(const math::Vector3& position) override;
 
 	virtual void UpdatePoseRotation(const math::Quaternion& rotation) override;
@@ -166,4 +169,5 @@ private:
 	HexEngine::Entity* _entity = nullptr;
 	float _mass = 1.0f;
 	physx::PxMaterial* _customMaterial = nullptr;
+	bool _poseWritebackEnabled = true;
 };

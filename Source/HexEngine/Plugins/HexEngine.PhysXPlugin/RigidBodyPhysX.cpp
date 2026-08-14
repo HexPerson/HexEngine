@@ -1105,6 +1105,16 @@ void RigidBodyPhysX::SetIsSimulated(bool simulated)
 	//_shape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, !simulation
 }
 
+void RigidBodyPhysX::SetPoseWritebackEnabled(bool enabled)
+{
+	_poseWritebackEnabled = enabled;
+}
+
+bool RigidBodyPhysX::IsPoseWritebackEnabled() const
+{
+	return _poseWritebackEnabled;
+}
+
 bool RigidBodyPhysX::GetIsSimulated()
 {
 	return _body->getActorFlags().isSet(physx::PxActorFlag::eDISABLE_SIMULATION) == false;

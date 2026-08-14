@@ -481,7 +481,10 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 			{
 				auto body = (RigidBodyPhysX*)actor->userData;
 
-				if (body)
+				// Skip bodies whose owner is driving the transform itself (a
+				// mounted vehicle parks the player CCT and moves the camera to the
+				// seat) - the per-frame pose write would otherwise fight it.
+				if (body && body->IsPoseWritebackEnabled())
 				{
 
 					HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->Lock();
@@ -509,13 +512,13 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 						localRotation.Normalize();
 					}
 
-					transform->SetPosition(localPosition);
+					transform->SetPositionNoNotify(localPosition);
 
 					auto cct = dynamic_cast<CharacterController*>(body);
 
 					if (cct == nullptr)
 					{
-						transform->SetRotation(localRotation);
+						transform->SetRotationNoNotify(localRotation);
 					}
 
 					if (bodyComponent)
