@@ -6,6 +6,7 @@
 
 #include <vector>
 #include <string>
+#include <memory>
 
 namespace HexEngine
 {
@@ -14,6 +15,7 @@ namespace HexEngine
 	class Camera;
 	class Entity;
 	class FirstPersonCameraController;
+	class SoundEffect;
 
 	// Generic drive intent. Whatever is "driving" the vehicle fills this each
 	// frame - the local player controller (V1), the enter/exit routing (V2),
@@ -75,6 +77,20 @@ namespace HexEngine
 		math::Vector3 cameraOffset = math::Vector3(0.0f, 1.1f, 0.15f);
 		float cameraPosSmoothing = 8.0f;   // eye position follow rate (1/s)
 		float cameraLookSmoothing = 10.0f; // look-direction follow rate (1/s)
+
+		// --- audio (assign clips per vehicle; empty path = that layer is silent).
+		// Engine + wind loop while the vehicle is active; skid loops only while
+		// sliding. All three are 3D-positioned at the vehicle.
+		std::string engineSoundPath;      // looping engine; pitch + volume track speed
+		std::string skidSoundPath;        // looping tyre skid while sliding/handbraking
+		std::string windSoundPath;        // looping wind; volume tracks speed
+		float audioVolume = 1.0f;         // master multiplier for this vehicle
+		float enginePitchIdle = -0.10f;   // engine pitch at rest (-1..1, semi-octave)
+		float enginePitchMax = 0.55f;     // engine pitch at top speed
+		float engineVolIdle = 0.35f;      // engine volume at rest
+		float engineVolMax = 1.0f;        // engine volume at top speed
+		float windVolMax = 0.5f;          // wind volume at top speed
+		float skidVolume = 0.7f;          // tyre-skid volume when fully sliding
 	};
 
 	// A physics-driven, arcade-forward drivable vehicle. The bike is the first
@@ -147,6 +163,12 @@ namespace HexEngine
 		// (on release). Reuses the existing main camera - no new camera created.
 		void MountCamera();
 		void DismountCamera();
+
+		// Vehicle audio: engine + wind loops start/stop with possession, skid
+		// loops on demand; all modulated from speed/slip each FixedUpdate.
+		void StartVehicleAudio();
+		void StopVehicleAudio();
+		void UpdateVehicleAudio();
 		// Returns the live main camera only if it's still the one we mounted and
 		// alive; otherwise null (and clears the mounted flag). Never dereferences
 		// a stale cached pointer - exiting play mode frees it mid-tick.
@@ -208,5 +230,13 @@ namespace HexEngine
 		bool _camSmoothInit = false;
 		math::Vector3 _camEyeSmoothed;               // smoothed world eye position
 		math::Vector3 _camLookSmoothed;              // smoothed world look direction
+
+		// --- audio playback state (runtime; not serialized) ---
+		std::shared_ptr<SoundEffect> _engineMaster, _engineInst;
+		std::shared_ptr<SoundEffect> _skidMaster, _skidInst;
+		std::shared_ptr<SoundEffect> _windMaster, _windInst;
+		bool _vehicleAudioActive = false;
+		bool _skidActive = false;
+		float _lateralSlip = 0.0f;                   // |sideways speed| this frame, for skid
 	};
 }

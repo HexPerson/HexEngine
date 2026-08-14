@@ -15,6 +15,9 @@
 #include "../../Scene/SceneManager.hpp"
 #include "../../Scene/Scene.hpp"
 #include "../../Environment/LogFile.hpp"
+#include "../../Audio/AudioManager.hpp"
+#include "../../Audio/SoundEffect.hpp"
+#include "../../GUI/Elements/AssetSearch.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -143,6 +146,7 @@ namespace HexEngine
 
 	DrivableComponent::~DrivableComponent()
 	{
+		StopVehicleAudio();
 		DismountCamera();
 		RemoveBinds();
 	}
@@ -166,12 +170,14 @@ namespace HexEngine
 		{
 			CreateBinds();
 			MountCamera();
+			StartVehicleAudio();
 		}
 		else
 		{
 			RemoveBinds();
 			_kThrottle = _kBrake = _kLeft = _kRight = _kHandbrake = false;
 			DismountCamera();
+			StopVehicleAudio();
 		}
 	}
 
@@ -442,6 +448,126 @@ namespace HexEngine
 		cam->SetLookDirection(_camLookSmoothed, math::Vector3(0.0f, 1.0f, 0.0f));
 	}
 
+	void DrivableComponent::StartVehicleAudio()
+	{
+		if (_vehicleAudioActive)
+			return;
+		if (g_pEnv == nullptr || g_pEnv->_audioManager == nullptr)
+			return;
+		_vehicleAudioActive = true;
+
+		auto* am = g_pEnv->_audioManager;
+		const math::Vector3 pos = GetEntity() ? GetEntity()->GetWorldTM().Translation() : math::Vector3::Zero;
+
+		// Start a looping 3D layer from a resource path. Master is cached; a fresh
+		// playback clone is what actually loops (registered for per-frame 3D).
+		auto startLoop = [&](std::shared_ptr<SoundEffect>& master, std::shared_ptr<SoundEffect>& inst,
+			const std::string& path, float vol, float pitch)
+		{
+			inst.reset();
+			if (path.empty())
+				return;
+			if (master == nullptr)
+				master = SoundEffect::Create(path);
+			if (master == nullptr)
+				return;
+			inst = master->CreatePlaybackClone();
+			if (inst == nullptr)
+				return;
+			inst->SetRadius(60.0f);
+			inst->SetVolume(vol);
+			inst->SetPitch(pitch);
+			inst->SetPosition(pos);
+			am->Loop(inst, pos);
+			am->RegisterPlaybackInstance(inst);
+		};
+
+		const float master = std::max(_tuning.audioVolume, 0.0f);
+		startLoop(_engineMaster, _engineInst, _tuning.engineSoundPath, _tuning.engineVolIdle * master, _tuning.enginePitchIdle);
+		startLoop(_windMaster, _windInst, _tuning.windSoundPath, 0.0f, 0.0f);
+
+		// Skid clip is prepared now but only looped on demand (while sliding).
+		_skidInst.reset();
+		if (!_tuning.skidSoundPath.empty())
+		{
+			if (_skidMaster == nullptr)
+				_skidMaster = SoundEffect::Create(_tuning.skidSoundPath);
+			if (_skidMaster != nullptr)
+			{
+				_skidInst = _skidMaster->CreatePlaybackClone();
+				if (_skidInst != nullptr)
+				{
+					_skidInst->SetRadius(60.0f);
+					_skidInst->SetPosition(pos);
+					am->RegisterPlaybackInstance(_skidInst);
+				}
+			}
+		}
+		_skidActive = false;
+	}
+
+	void DrivableComponent::StopVehicleAudio()
+	{
+		if (g_pEnv != nullptr && g_pEnv->_audioManager != nullptr)
+		{
+			auto* am = g_pEnv->_audioManager;
+			if (_engineInst) am->Stop(_engineInst);
+			if (_windInst)   am->Stop(_windInst);
+			if (_skidInst)   am->Stop(_skidInst);
+		}
+		_engineInst.reset();
+		_windInst.reset();
+		_skidInst.reset();
+		_skidActive = false;
+		_vehicleAudioActive = false;
+	}
+
+	void DrivableComponent::UpdateVehicleAudio()
+	{
+		if (!_vehicleAudioActive || g_pEnv == nullptr || g_pEnv->_audioManager == nullptr)
+			return;
+
+		const math::Vector3 pos = GetEntity() ? GetEntity()->GetWorldTM().Translation() : math::Vector3::Zero;
+		const float maxSpeed = std::max(_tuning.maxSpeed, 1.0f);
+		const float speedFactor = std::clamp(std::fabs(_forwardSpeed) / maxSpeed, 0.0f, 1.0f);
+		const float master = std::max(_tuning.audioVolume, 0.0f);
+		const auto lerp = [](float a, float b, float t) { return a + (b - a) * t; };
+
+		if (_engineInst != nullptr)
+		{
+			// Throttle nudges revs up a touch before the bike actually speeds up.
+			const float rev = std::clamp(speedFactor + _input.throttle * 0.15f, 0.0f, 1.0f);
+			_engineInst->SetPitch(lerp(_tuning.enginePitchIdle, _tuning.enginePitchMax, rev));
+			_engineInst->SetVolume(lerp(_tuning.engineVolIdle, _tuning.engineVolMax, rev) * master);
+			_engineInst->SetPosition(pos);
+		}
+		if (_windInst != nullptr)
+		{
+			_windInst->SetVolume(_tuning.windVolMax * speedFactor * master);
+			_windInst->SetPosition(pos);
+		}
+
+		// Skid: slide sideways, or handbrake, at speed on the ground.
+		const bool skidding = _grounded && std::fabs(_forwardSpeed) > 1.0f &&
+			(_lateralSlip > 2.0f || (_input.handbrake && speedFactor > 0.1f));
+		if (skidding && _skidInst != nullptr)
+		{
+			if (!_skidActive)
+			{
+				g_pEnv->_audioManager->Loop(_skidInst, pos);
+				_skidActive = true;
+			}
+			const float slipAmt = std::clamp(_lateralSlip / 8.0f, 0.2f, 1.0f);
+			_skidInst->SetVolume(_tuning.skidVolume * slipAmt * master);
+			_skidInst->SetPosition(pos);
+		}
+		else if (_skidActive && _skidInst != nullptr)
+		{
+			g_pEnv->_audioManager->Stop(_skidInst);
+			_skidActive = false;
+		}
+	}
+
 	void DrivableComponent::Serialize(json& data, JsonFile* file)
 	{
 		InteractionComponent::Serialize(data, file);
@@ -478,6 +604,16 @@ namespace HexEngine
 		file->Serialize(t, "cameraOffset", _tuning.cameraOffset);
 		file->Serialize(t, "cameraPosSmoothing", _tuning.cameraPosSmoothing);
 		file->Serialize(t, "cameraLookSmoothing", _tuning.cameraLookSmoothing);
+		file->Serialize(t, "engineSoundPath", _tuning.engineSoundPath);
+		file->Serialize(t, "skidSoundPath", _tuning.skidSoundPath);
+		file->Serialize(t, "windSoundPath", _tuning.windSoundPath);
+		file->Serialize(t, "audioVolume", _tuning.audioVolume);
+		file->Serialize(t, "enginePitchIdle", _tuning.enginePitchIdle);
+		file->Serialize(t, "enginePitchMax", _tuning.enginePitchMax);
+		file->Serialize(t, "engineVolIdle", _tuning.engineVolIdle);
+		file->Serialize(t, "engineVolMax", _tuning.engineVolMax);
+		file->Serialize(t, "windVolMax", _tuning.windVolMax);
+		file->Serialize(t, "skidVolume", _tuning.skidVolume);
 	}
 
 	void DrivableComponent::Deserialize(json& data, JsonFile* file, uint32_t mask)
@@ -519,6 +655,16 @@ namespace HexEngine
 			file->Deserialize(t, "cameraOffset", _tuning.cameraOffset);
 			file->Deserialize(t, "cameraPosSmoothing", _tuning.cameraPosSmoothing);
 			file->Deserialize(t, "cameraLookSmoothing", _tuning.cameraLookSmoothing);
+			file->Deserialize(t, "engineSoundPath", _tuning.engineSoundPath);
+			file->Deserialize(t, "skidSoundPath", _tuning.skidSoundPath);
+			file->Deserialize(t, "windSoundPath", _tuning.windSoundPath);
+			file->Deserialize(t, "audioVolume", _tuning.audioVolume);
+			file->Deserialize(t, "enginePitchIdle", _tuning.enginePitchIdle);
+			file->Deserialize(t, "enginePitchMax", _tuning.enginePitchMax);
+			file->Deserialize(t, "engineVolIdle", _tuning.engineVolIdle);
+			file->Deserialize(t, "engineVolMax", _tuning.engineVolMax);
+			file->Deserialize(t, "windVolMax", _tuning.windVolMax);
+			file->Deserialize(t, "skidVolume", _tuning.skidVolume);
 		}
 	}
 
@@ -605,6 +751,35 @@ namespace HexEngine
 		addF(L"Camera offset Z", &_tuning.cameraOffset.z, -3.0f, 3.0f, 0.02f);
 		addF(L"Camera pos smoothing", &_tuning.cameraPosSmoothing, 0.5f, 30.0f, 0.5f);
 		addF(L"Camera look smoothing", &_tuning.cameraLookSmoothing, 0.5f, 30.0f, 0.5f);
+
+		// --- audio: assign clips + tune. Empty path = that layer stays silent.
+		// Changing a path reloads the master and (if currently possessed) restarts
+		// the loops so the change previews live.
+		auto addSound = [&](const wchar_t* label, std::string* path, std::shared_ptr<SoundEffect>* master)
+		{
+			auto* search = new AssetSearch(widget, widget->GetNextPos(), Point(w, 84), label, { ResourceType::Audio },
+				[this, path, master](AssetSearch*, const AssetSearchResult& result)
+				{
+					const fs::path& chosen = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
+					*path = chosen.string();
+					master->reset();
+					if (_vehicleAudioActive) { StopVehicleAudio(); StartVehicleAudio(); }
+				});
+			if (!path->empty())
+				search->SetValue(std::wstring(path->begin(), path->end()));
+		};
+
+		addSound(L"Engine sound (loop)", &_tuning.engineSoundPath, &_engineMaster);
+		addSound(L"Skid sound (loop)", &_tuning.skidSoundPath, &_skidMaster);
+		addSound(L"Wind sound (loop)", &_tuning.windSoundPath, &_windMaster);
+
+		addF(L"Audio volume", &_tuning.audioVolume, 0.0f, 2.0f, 0.02f);
+		addF(L"Engine pitch idle", &_tuning.enginePitchIdle, -1.0f, 1.0f, 0.02f);
+		addF(L"Engine pitch max", &_tuning.enginePitchMax, -1.0f, 1.0f, 0.02f);
+		addF(L"Engine vol idle", &_tuning.engineVolIdle, 0.0f, 1.0f, 0.02f);
+		addF(L"Engine vol max", &_tuning.engineVolMax, 0.0f, 1.0f, 0.02f);
+		addF(L"Wind vol max", &_tuning.windVolMax, 0.0f, 1.0f, 0.02f);
+		addF(L"Skid volume", &_tuning.skidVolume, 0.0f, 1.0f, 0.02f);
 
 		new Checkbox(widget, widget->GetNextPos(), Point(w, 18), L"Debug log (grounded/speed/ray)", &_tuning.debug);
 
@@ -845,6 +1020,7 @@ namespace HexEngine
 
 			// Lateral grip - kill sideways velocity (relaxed on handbrake).
 			const float lateral = vel.Dot(right);
+			_lateralSlip = std::fabs(lateral); // feeds the tyre-skid audio
 			const float gripScale = _input.handbrake ? 0.35f : 1.0f;
 			applyForceAtPoint(right * (-lateral * _tuning.grip * gripScale * mass), com);
 
@@ -873,5 +1049,11 @@ namespace HexEngine
 		math::Vector3 targetUp = math::Vector3::Transform(targetGroundUp, leanQ);
 		const math::Vector3 uprightAxis = up.Cross(targetUp); // ~sin(angle) * rotation axis
 		_body->ApplyTorque(uprightAxis * (_tuning.upright * mass));
+
+		if (!_grounded)
+			_lateralSlip = 0.0f; // no skid noise while airborne
+
+		// Drive the engine/wind/skid loops from this frame's speed + slip.
+		UpdateVehicleAudio();
 	}
 }
