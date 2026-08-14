@@ -584,6 +584,14 @@ namespace HexEngine
 		//if (angle >= 180.0f)
 		//	newRot.Conjugate();
 
+		// Capture the previous rotation so interpolation has a valid from->to pair.
+		// SetPositionNoNotify and SetRotation both do this; this NoNotify path did
+		// not, so with interpolation enabled the rotation slerped from a frozen
+		// stale value to the live one - a dynamic body (e.g. a driven bike) then
+		// rendered at the wrong angle and jittered. CCTs never exposed it because
+		// the physics read-back skips rotation for them.
+		_previous.rotation = _current.rotation;
+
 		_current.rotation.RotateTowards(newRot, dx::g_XMTwoPi.f[0]);
 		_current.rotation.Normalize();
 

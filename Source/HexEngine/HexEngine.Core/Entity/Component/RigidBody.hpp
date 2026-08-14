@@ -111,6 +111,13 @@ namespace HexEngine
 		void EnableForcePoseUpdates(bool enable);
 
 	private:
+		// Turn transform interpolation on for a dynamic body (off otherwise), so
+		// its mesh moves smoothly between fixed physics ticks instead of stepping.
+		// Skips character controllers (they manage their own) and kinematic/static
+		// bodies (driven by game code / immobile; interpolating them fights the
+		// direct SetPosition writes). Call whenever the body type is established.
+		void UpdateInterpolationState();
+
 		void SetBodyTypeFromWidget(IRigidBody::BodyType type, DropDown* element);
 
 		void AddTriangleColliderFromWidget(DropDown* widget);

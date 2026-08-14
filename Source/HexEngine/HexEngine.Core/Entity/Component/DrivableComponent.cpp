@@ -232,20 +232,8 @@ namespace HexEngine
 				LOG_INFO("DrivableComponent: '%s' had default mass 1 - set %.0f kg (tuning Mass) for stable handling.",
 					GetEntity() ? GetEntity()->GetName().c_str() : "(null)", _tuning.mass);
 			}
-
-			// Smooth the vehicle's rendered motion. Physics runs at a fixed tick,
-			// so a dynamic body's raw transform steps discretely and the mesh
-			// jitters between ticks. The engine already has transform interpolation
-			// (SetPositionNoNotify captures prev->current, Scene calls
-			// UpdateInterpolatedPosition each frame) - it's just off by default for
-			// dynamic bodies (only CCTs enable it). Turn it on for the vehicle so
-			// the frame reads the interpolated pose; the child part meshes inherit
-			// it, and the camera (which follows the bike transform) rides smooth too.
-			if (auto* tf = GetEntity() ? GetEntity()->GetComponent<Transform>() : nullptr)
-			{
-				tf->EnableInterpolation(true);
-				tf->SnapInterpolation();
-			}
+			// (Transform interpolation for the vehicle mesh is now enabled centrally
+			// by RigidBody for any dynamic body - see RigidBody::UpdateInterpolationState.)
 		}
 		return true;
 	}

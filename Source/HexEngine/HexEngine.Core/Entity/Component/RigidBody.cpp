@@ -63,6 +63,8 @@ namespace HexEngine
 				if (_isTrigger)
 					_rigidBody->SetIsTrigger(true);
 			}
+
+			UpdateInterpolationState();
 		}
 	}
 
@@ -611,8 +613,10 @@ namespace HexEngine
 			GetEntity()->SetLayer(Layer::Trigger);
 		}
 
+		UpdateInterpolationState();
+
 		//ForceUpdatePose();
-		
+
 	}
 
 	void RigidBody::RemoveCollider()
@@ -729,6 +733,23 @@ namespace HexEngine
 		_massAdjust = mass;
 	}
 
+	void RigidBody::UpdateInterpolationState()
+	{
+		auto* transform = GetEntity() ? GetEntity()->GetComponent<Transform>() : nullptr;
+		if (transform == nullptr || _rigidBody == nullptr)
+			return;
+
+		// Character controllers manage their own interpolation (position only, via
+		// CreateCharacterController); leave them alone.
+		if (_rigidBody->IsCharacterController())
+			return;
+
+		const bool dynamic = (_rigidBody->GetBodyType() == IRigidBody::BodyType::Dynamic);
+		transform->EnableInterpolation(dynamic);
+		if (dynamic)
+			transform->SnapInterpolation(); // don't lerp up from a stale previous
+	}
+
 	void RigidBody::SetBodyTypeFromWidget(IRigidBody::BodyType type, DropDown* element)
 	{
 		if (!_rigidBody)
@@ -741,7 +762,9 @@ namespace HexEngine
 			_rigidBody->SetGravityEnabled(_isGravityApplied);
 			_rigidBody->SetMass(_massAdjust);
 		}
-		
+
+		UpdateInterpolationState();
+
 		if (element && element->GetContextMenu())
 			element->GetContextMenu()->Disable();
 	}
