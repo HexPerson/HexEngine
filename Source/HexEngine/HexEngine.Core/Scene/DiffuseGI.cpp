@@ -5000,14 +5000,21 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		bool useCandidateIndirectDispatch = false;
 		if (hasTriangles && useGpuCandidateGen)
 		{
+			// Candidate compaction runs for its TELEMETRY counters only. The
+			// injection source must stay the real triangle buffer: the candidate
+			// buffer holds uint INDICES, but both voxelize shaders declare t0 as
+			// StructuredBuffer<VoxelTriangleData> and index it directly - neither
+			// consumes an index list. Rerouting t0 to the candidate buffer made
+			// the shader reinterpret packed indices as triangle geometry, so
+			// every triangle degenerated and the voxel field stayed BLACK - this
+			// was why the GPU material-eval path (which forces candidate gen on)
+			// produced no GI at all. The indirect-args path is parked with it:
+			// CopyStructureCount writes the raw element count into the GROUP
+			// count (a 64x overdispatch) - both need finishing together if the
+			// compaction is ever properly consumed.
 			bool candidateIndirectReady = false;
-			const uint32_t candidateCount = BuildGpuVoxelCandidateList(levelIndex, triangleCount, candidateIndirectReady);
-			if (_voxelCandidateSrv != nullptr)
-			{
-				injectionTriangleCount = candidateCount;
-				injectionTriangleSrv = _voxelCandidateSrv;
-				useCandidateIndirectDispatch = candidateIndirectReady && (_voxelCandidateDispatchArgs != nullptr);
-			}
+			BuildGpuVoxelCandidateList(levelIndex, triangleCount, candidateIndirectReady);
+			(void)candidateIndirectReady;
 		}
 		_stats.candidateTriangleCount = injectionTriangleCount;
 
