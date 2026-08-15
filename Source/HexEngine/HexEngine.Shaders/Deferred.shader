@@ -347,9 +347,10 @@
 		// overhangs) stop receiving full sky/ambient fill. The darkening is
 		// what survives exposure and makes GI visibly shape the image.
 		float giVis = 1.0f;
+		float giOcc = 0.0f;
 		if (g_giComposeParams.z > 0.5f)
 		{
-			const float giOcc = saturate(g_giAoTex.Sample(g_pointSampler, screenPos).r);
+			giOcc = saturate(g_giAoTex.Sample(g_pointSampler, screenPos).r);
 			giVis = saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
 		}
 		{
@@ -468,6 +469,11 @@
 			{
 				float3 envSpecRadianceUnused;
 				float3 specularReflectanceUnused;
+				// GI specular occlusion: the env-spec term has no occlusion of
+				// its own, so indoors every matte surface reflected full sky -
+				// the blue wash in window rooms. Same voxel AO as the diffuse
+				// occlusion above, separate strength (g_giComposeParams.w).
+				const float giSpecVis = saturate(1.0f - giOcc * saturate(g_giComposeParams.w));
 				pbr.rgb += EvaluateEnvSpecular(
 					g_iblSkyEnvAtlas, g_iblProbeAtlas, g_iblProbeAtlas2, g_dfgLut,
 					g_textureSampler,
@@ -477,7 +483,7 @@
 					float2(g_useDfgLut, g_useMultiScatter),
 					g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
 					envSpecRadianceUnused,
-					specularReflectanceUnused);
+					specularReflectanceUnused) * giSpecVis;
 			}
 		}
 		// -------------------------------------------------------------------------------

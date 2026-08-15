@@ -72,6 +72,11 @@
 	Texture2D g_iblProbeAtlas  : register(t16);
 	Texture2D g_iblProbeAtlas2 : register(t17);
 	Texture2D g_dfgLut         : register(t21);
+	// GI bilateral-blurred voxel-occlusion AO (.r = occlusion, 1 = blocked).
+	// Same register + g_giComposeParams.z gating as the deferred pass; drives
+	// the env-spec fallback occlusion so indoor pixels stop reflecting a sky
+	// they cannot see.
+	Texture2D g_giAoTex        : register(t22);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerState g_pointSampler   : register(s2);
@@ -219,7 +224,7 @@
 
 		float3 envRadiance;
 		float3 specularReflectance;
-		const float3 envSpecular = EvaluateEnvSpecular(
+		float3 envSpecular = EvaluateEnvSpecular(
 			g_iblSkyEnvAtlas, g_iblProbeAtlas, g_iblProbeAtlas2, g_dfgLut,
 			g_textureSampler,
 			N, V, pixelPosWS.xyz,
@@ -229,6 +234,22 @@
 			g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
 			envRadiance,
 			specularReflectance);
+
+		// GI specular occlusion on the ENV FALLBACK only. The env term has no
+		// occlusion of its own, so a matte indoor pixel (SSR confidence ~0)
+		// received the full sky - the blue wash across window interiors. The
+		// screen-traced part is real scene light and stays untouched.
+		// specularReflectance is scaled by the SAME factor: the alpha-driven
+		// energy subtraction must match what was actually added, or occluding
+		// the env would strip more base light than it removed reflection
+		// (the black-at-grazing class of bug all over again).
+		if (g_giComposeParams.z > 0.5f)
+		{
+			const float giOcc = saturate(g_giAoTex.Sample(g_pointSampler, screenPos).r);
+			const float giSpecVis = saturate(1.0f - giOcc * saturate(g_giComposeParams.w));
+			envSpecular *= giSpecVis;
+			specularReflectance *= giSpecVis;
+		}
 
 		// confidence was produced by SampleSsrUpsampled above, sharing the
 		// depth-aware weights with the radiance so the two stay consistent.

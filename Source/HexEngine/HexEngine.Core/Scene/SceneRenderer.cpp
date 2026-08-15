@@ -541,6 +541,14 @@ namespace HexEngine
 	// Darkening survives exposure adaptation; a flat additive lift does not.
 	HVar r_giAmbientHandoff("r_giAmbientHandoff", "Fraction of the flat ambient handed to GI when GI is enabled (0 = legacy stacked-ambient behaviour)", 0.65f, 0.0f, 1.0f);
 	HVar r_giSkyOcclusion("r_giSkyOcclusion", "GI-occlusion strength on the flat ambient + IBL sky diffuse (darkens sky-blocked areas)", 0.6f, 0.0f, 1.0f);
+	// The environment SPECULAR term has no occlusion either - indoors every
+	// matte surface reflects full sky (the blue wash in window rooms). Occlude
+	// the env-spec FALLBACK by the same GI voxel AO, in whichever pass owns it
+	// (deferred, or the SSR resolve's (1-confidence) fallback). The screen-
+	// traced SSR part is real scene light and stays untouched, and the
+	// resolve's energy-conservation subtraction is scaled to match the reduced
+	// addition so the base layer never loses more than the env term added.
+	HVar r_giSpecOcclusion("r_giSpecOcclusion", "GI-occlusion strength on the environment specular fallback (kills the indoor sky-reflection wash)", 0.6f, 0.0f, 1.0f);
 
 	// Re-bake every probe in the scene. A probe only requests a capture on
 	// deserialize, so without this the sole way to retry one is to reload the
@@ -2951,7 +2959,7 @@ namespace HexEngine
 				_giComposeActive ? r_giAmbientHandoff._val.f32 : 0.0f,
 				r_giSkyOcclusion._val.f32,
 				_giComposeActive ? 1.0f : 0.0f,
-				0.0f);
+				r_giSpecOcclusion._val.f32);
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 
 			bufferData._reflectionParams = math::Vector4(
@@ -7269,6 +7277,10 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetTexture2D(17,
 				_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
 			g_pEnv->_graphicsDevice->SetTexture2D(21, _dfgLut);
+			// t22 = GI blurred voxel AO for the env-spec fallback occlusion
+			// (same register + gating as the deferred pass; z flag guards it).
+			g_pEnv->_graphicsDevice->SetTexture2D(22,
+				_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
 
 			// PremultipliedAlpha (src + dst * (1 - src.a)), not Additive: the
 			// resolve writes the reflection in rgb and the surface's specular
