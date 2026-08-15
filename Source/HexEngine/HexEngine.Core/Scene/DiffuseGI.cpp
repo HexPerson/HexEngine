@@ -1225,6 +1225,18 @@ namespace HexEngine
 					// Preserve cache on normal scrolling shifts; hard reset only on large jumps.
 					if (largeJump)
 					{
+						// A large jump is a TELEPORT, not a scroll: snap the volume
+						// centre to the camera instead of crawling toward it. The
+						// incremental path moves at most 1-3 voxels per processed
+						// update, and each level only gets a round-robin turn - a
+						// long jump therefore took hundreds of frames to catch up
+						// and the clipmap looked permanently stuck. (Changing
+						// r_giVoxelResolution "unlocked" it because the recreate
+						// path re-initializes with a snapped centre - this is that
+						// same snap without the resource churn.) The next processed
+						// update clears + reinjects the volume at the new position.
+						level.center = snapped;
+						level.previousCenter = snapped;
 						_cachedVoxelTrianglesValid[i] = false;
 						_cachedVoxelTrianglesFrame[i] = 0ull;
 						_clipmapWarmFramesRemaining[i] = (i == 0u) ? 2u : 1u;
@@ -4414,32 +4426,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			level.albedoVolume == nullptr || level.albedoScratchVolume == nullptr)
 			return;
 
-		const uint32_t triangleCount = BuildGpuVoxelTriangleList(scene, levelIndex, _voxelTriangleUpload);
-		const bool hasTriangles = (triangleCount > 0u) && EnsureGpuVoxelTriangleBuffer(triangleCount);
-		_stats.sourceTriangleCount = triangleCount;
-		_stats.candidateTriangleCount = triangleCount;
-		uint32_t emissivePayloadTriangleCount = 0u;
-		float emissivePayloadMaxHint = 0.0f;
-		for (uint32_t i = 0u; i < triangleCount; ++i)
-		{
-			const auto& tri = _voxelTriangleUpload[i];
-			if (tri.uv2Pad.z > 0.5f)
-			{
-				++emissivePayloadTriangleCount;
-				emissivePayloadMaxHint = std::max(emissivePayloadMaxHint, std::clamp(tri.uv2Pad.w, 0.0f, 1.0f));
-			}
-		}
-		_stats.emissivePayloadTriangleCount += emissivePayloadTriangleCount;
-		_stats.emissivePayloadMaxHint = std::max(_stats.emissivePayloadMaxHint, emissivePayloadMaxHint);
-		if (!hasTriangles && level.initialized)
-		{
-			// Avoid one-frame GI collapse from transient empty triangle gathers after clipmap shifts.
-			// Keep previous radiance and retry with a warm budget on subsequent frames.
-			_clipmapWarmFramesRemaining[levelIndex] = std::max(_clipmapWarmFramesRemaining[levelIndex], (levelIndex == 0u) ? 3u : 1u);
-			level.dirty = true;
-			return;
-		}
-
 		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
 		auto* context = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()) : nullptr;
 		if (device == nullptr || context == nullptr)
@@ -4539,6 +4525,36 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			{
 				level.pendingShiftWs = math::Vector3::Zero;
 			}
+		}
+
+		// Triangle gather AFTER the shift consumption above. It used to run first,
+		// and its transient-empty early-return skipped the shift block entirely -
+		// a level whose gather came back empty could never advance its centre and
+		// the clipmap wedged in place until something forced a full re-init.
+		const uint32_t triangleCount = BuildGpuVoxelTriangleList(scene, levelIndex, _voxelTriangleUpload);
+		const bool hasTriangles = (triangleCount > 0u) && EnsureGpuVoxelTriangleBuffer(triangleCount);
+		_stats.sourceTriangleCount = triangleCount;
+		_stats.candidateTriangleCount = triangleCount;
+		uint32_t emissivePayloadTriangleCount = 0u;
+		float emissivePayloadMaxHint = 0.0f;
+		for (uint32_t i = 0u; i < triangleCount; ++i)
+		{
+			const auto& tri = _voxelTriangleUpload[i];
+			if (tri.uv2Pad.z > 0.5f)
+			{
+				++emissivePayloadTriangleCount;
+				emissivePayloadMaxHint = std::max(emissivePayloadMaxHint, std::clamp(tri.uv2Pad.w, 0.0f, 1.0f));
+			}
+		}
+		_stats.emissivePayloadTriangleCount += emissivePayloadTriangleCount;
+		_stats.emissivePayloadMaxHint = std::max(_stats.emissivePayloadMaxHint, emissivePayloadMaxHint);
+		if (!hasTriangles && level.initialized)
+		{
+			// Avoid one-frame GI collapse from transient empty triangle gathers after clipmap shifts.
+			// Keep previous radiance and retry with a warm budget on subsequent frames.
+			_clipmapWarmFramesRemaining[levelIndex] = std::max(_clipmapWarmFramesRemaining[levelIndex], (levelIndex == 0u) ? 3u : 1u);
+			level.dirty = true;
+			return;
 		}
 
 		if (hasTriangles)
