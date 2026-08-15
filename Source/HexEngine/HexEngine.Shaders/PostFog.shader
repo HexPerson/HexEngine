@@ -31,6 +31,9 @@
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	Texture2D g_atmosphereTexture : register(t5);
 	Texture2D g_depthTexture : register(t6);
+	// GI bilateral-blurred voxel-occlusion AO (.r = occlusion, 1 = blocked).
+	// Gated by g_giComposeParams.z; null-bound reads 0 = no occlusion.
+	Texture2D g_giAoTex : register(t22);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -104,6 +107,16 @@
 		heightExtinction *= lerp(1.0f, 0.82f, heightVariation);
 		float extinction = distExtinction + heightExtinction;
 		float fogFactor = saturate(1.0f - exp2(-extinction));
+
+		// GI occlusion on the analytic fog: this pass's fog colour is entirely
+		// sky/sun/ambient-derived, none of which reaches an enclosed interior's
+		// air, so the whole factor scales down where the voxel field says the
+		// pixel is covered. Outdoors giOcc ~ 0 and this is a no-op.
+		if (g_giComposeParams.z > 0.5f)
+		{
+			const float giOcc = saturate(g_giAoTex.Sample(g_pointSampler, screenPos).r);
+			fogFactor *= saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
+		}
 
 		float3 rayDir = normalize(worldPos - g_eyePos.xyz);
 		float3 sunDir = normalize(-g_lightDirection.xyz);

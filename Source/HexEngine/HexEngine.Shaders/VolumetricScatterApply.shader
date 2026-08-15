@@ -47,6 +47,9 @@
 	// whatever sat BEHIND them - a blizzard integrated fog all the way to
 	// the seabed / sky far plane and flattened the water into the weather.
 	Texture2D    g_sceneDepthTex              : register(t7);
+	// GI bilateral-blurred voxel-occlusion AO (.r = occlusion, 1 = blocked).
+	// Gated by g_giComposeParams.z; null-bound reads 0 = no occlusion.
+	Texture2D    g_giAoTex                    : register(t8);
 	SamplerState g_pointSampler               : register(s2);
 	SamplerState g_linearSampler              : register(s4);
 
@@ -188,7 +191,15 @@
 			const float extraExt = (max(g_atmosphere.fogDensity, 0.0f)
 				+ max(g_atmosphere.fogHeightDensity, 0.0f) * max(heightProfile, 0.0f)) * extraDist;
 			const float extraTrans = exp(-extraExt);
-			const float3 ambientFog = max(g_atmosphere.ambientLight.rgb, 0.0f.xxx);
+			float3 ambientFog = max(g_atmosphere.ambientLight.rgb, 0.0f.xxx);
+			// GI occlusion on the beyond-range ambient continuation, matching
+			// the froxel medium's in-range ambient gate so the 128m handoff
+			// stays seamless under the same occlusion.
+			if (g_giComposeParams.z > 0.5f)
+			{
+				const float giOcc = saturate(g_giAoTex.Sample(g_pointSampler, uv).r);
+				ambientFog *= saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
+			}
 			inscatter     += transmittance * (1.0f - extraTrans) * ambientFog;
 			transmittance *= extraTrans;
 		}

@@ -86,6 +86,10 @@
 	// this CS has no comparison sampler and fog needs no PCF.
 	Texture2D                g_clShadowAtlas : register(t15);
 	StructuredBuffer<matrix> g_clAtlasTileVP : register(t16);
+	// GI bilateral-blurred voxel-occlusion AO (.r = occlusion, 1 = blocked),
+	// main-view screen space. The froxel's uvw.xy IS the screen uv. Gated by
+	// g_giComposeParams.z; null-bound reads 0 = no occlusion.
+	Texture2D                g_giAoTex       : register(t17);
 	SamplerState g_shadowPointSampler : register(s2);
 	// Linear-clamp sampler for the transmittance LUT - the LUT is a
 	// continuous function so point sampling shows banding.
@@ -817,7 +821,20 @@
 		// shade from going pitch black (it still sees most of the sky). It is an
 		// approximation: outdoor shadow loses a little ambient haze too, but it
 		// removes the interior leak cheaply. Tunable via the 0.1 floor.
-		const float ambientSkyAccess = lerp(0.1f, 1.0f, sunVisibility);
+		float ambientSkyAccess = lerp(0.1f, 1.0f, sunVisibility);
+		// GI voxel occlusion on the fog AMBIENT only - the sun/local scatter
+		// terms above keep full strength so god-rays through windows survive.
+		// The voxel field knows what the sun-shadow proxy above cannot: an
+		// interior can be sun-shadowed yet sky-open (courtyard) or sun-lit yet
+		// enclosed (window pool in a sealed room). One screen-space sample per
+		// froxel column (uvw.xy is the screen uv) is an approximation shared
+		// with the surface compose - the indoor air column stops glowing with
+		// sky ambient it cannot see.
+		if (g_giComposeParams.z > 0.5f)
+		{
+			const float giOcc = saturate(g_giAoTex.SampleLevel(g_shadowPointSampler, uvw.xy, 0.0f).r);
+			ambientSkyAccess *= saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
+		}
 		const float3 ambientScatter = g_fogAmbient.rgb * extinction * ambientSkyAccess;
 
 		const float3 scatter = MIE_COEFF * totalScatter + LOCAL_MIE_COEFF * localScatter + ambientScatter;

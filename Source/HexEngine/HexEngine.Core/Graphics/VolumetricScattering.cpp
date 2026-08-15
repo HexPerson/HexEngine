@@ -1,5 +1,7 @@
 #include "VolumetricScattering.hpp"
 #include "../HexEngine.hpp"
+#include "../Scene/SceneRenderer.hpp"
+#include "../Scene/DiffuseGI.hpp"
 #include "IGraphicsDevice.hpp"
 #include "IConstantBuffer.hpp"
 #include "IShader.hpp"
@@ -783,12 +785,32 @@ namespace HexEngine
 					context->CSSetShaderResources(12, 5, clSrvs);
 				}
 
+				// t17 = GI blurred voxel AO: the density CS occludes the fog
+				// AMBIENT term where the voxel field says the froxel column is
+				// enclosed (g_giComposeParams.z gates the sample; null-safe).
+				{
+					ID3D11ShaderResourceView* giAoSrv = nullptr;
+					if (g_pEnv->_sceneRenderer != nullptr)
+					{
+						if (auto* gi = g_pEnv->_sceneRenderer->GetDiffuseGI(); gi != nullptr)
+						{
+							if (auto* aoTex = gi->GetBlurredAOTexture(); aoTex != nullptr)
+								giAoSrv = reinterpret_cast<ID3D11ShaderResourceView*>(aoTex->GetNativeShaderView());
+						}
+					}
+					context->CSSetShaderResources(17, 1, &giAoSrv);
+				}
+
 				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
 
 				if (clusteredFog)
 				{
 					ID3D11ShaderResourceView* clNulls[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
 					context->CSSetShaderResources(12, 5, clNulls);
+				}
+				{
+					ID3D11ShaderResourceView* nullGiAo = nullptr;
+					context->CSSetShaderResources(17, 1, &nullGiAo);
 				}
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);

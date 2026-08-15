@@ -5890,6 +5890,10 @@ namespace HexEngine
 		// instead of the opaque depth behind them. Safe here: transparency has
 		// drawn and the current render target has no DSV bound.
 		graphics->SetTexture2D(7, _gbuffer.GetDepthBuffer());
+		// t8 = GI blurred voxel AO for the beyond-range ambient occlusion
+		// (g_giComposeParams.z gates the sample; null is safe).
+		graphics->SetTexture2D(8,
+			_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
 
 		guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricScatterApplyShader.get());
 		guiRenderer->EndFrame();
@@ -5901,6 +5905,7 @@ namespace HexEngine
 		// D3D11 hazard handler silently unbinds our render target.
 		graphics->SetTexture2D(5, nullptr);
 		graphics->SetTexture2D(7, nullptr);
+		graphics->SetTexture2D(8, nullptr);
 		graphics->SetTexture3D(nullptr);
 		graphics->SetBoundResourceIndex(0);
 	}
@@ -6326,6 +6331,12 @@ namespace HexEngine
 			_gbuffer.BindAsShaderResource(_beautyRT);
 			g_pEnv->_graphicsDevice->SetTexture2D(_atmosphereRT);
 			g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetDepthBuffer());
+			// t22 = GI blurred voxel AO: PostFog scales its (entirely sky/sun/
+			// ambient-derived) fog factor down where the voxel field says the
+			// pixel is enclosed. Explicit slot, above the auto-counter range;
+			// g_giComposeParams.z gates the sample so null is safe.
+			g_pEnv->_graphicsDevice->SetTexture2D(22,
+				_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
 			guiRenderer->FullScreenTexturedQuad(nullptr, _fogEffect.get());
 
 			//_fogBuffer->CopyTo(_gbuffer.GetDiffuse());
