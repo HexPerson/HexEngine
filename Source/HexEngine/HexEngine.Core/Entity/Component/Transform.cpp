@@ -486,6 +486,19 @@ namespace HexEngine
 		_previous.position = _current.position;
 		_current.position = position;
 
+		// An explicit SetPosition is a TELEPORT, not a smooth physics step, so snap
+		// the interpolation to the new spot before anyone reads it. Otherwise
+		// GetWorldTM (which returns the interpolated pose) still reports the OLD
+		// position during the synchronous OnMessage below - and RigidBody::
+		// ForceUpdatePose would place the physics body at the stale location (e.g. a
+		// dragged-in prefab spawning at 0,0,0 and falling through the floor). The
+		// physics writeback keeps interpolating via SetPositionNoNotify (untouched).
+		if (_enableInterpolation)
+		{
+			_previous.position = _current.position;
+			_interpolated.position = _current.position;
+		}
+
 		TransformChangedMessage message;
 		message._flags = TransformChangedMessage::ChangeFlags::PositionChanged;
 		message._position = position;
@@ -547,6 +560,16 @@ namespace HexEngine
 
 		_current.rotation.RotateTowards(newRot, dx::g_XMTwoPi.f[0]);
 		_current.rotation.Normalize();
+
+		// Teleport: snap the interpolation so the just-set rotation is what a
+		// synchronous reader (ForceUpdatePose via the message below) sees, instead
+		// of a slerp up from the stale previous. Physics keeps interpolating via
+		// SetRotationNoNotify.
+		if (_enableInterpolation)
+		{
+			_previous.rotation = _current.rotation;
+			_interpolated.rotation = _current.rotation;
+		}
 
 		UpdateRotation();
 
