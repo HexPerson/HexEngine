@@ -20,6 +20,9 @@
 	StructuredBuffer<VoxelTriangleData> g_voxelTriangles : register(t0);
 	Texture3D<float4> g_prevVoxelRadiance : register(t1);
 	Texture3D<float4> g_prevVoxelAlbedo : register(t2);
+	// Live appended-candidate count (see the eval shader) - t9 sits above the
+	// shadow cascades at t3..t8. Bound only in candidate mode.
+	Buffer<uint> g_candidateLiveCount : register(t9);
 	SHADOWMAPS_RESOURCE(3);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
@@ -36,6 +39,14 @@
 		float4 g_giParams4;
 		float4 g_giParams5;
 		float4 g_giParams6;
+		float4 g_giParams7;
+		float4 g_giParams8;
+		float4 g_giParams9;
+		float4 g_giParams10;
+		float4 g_giParams11;
+		// x = live source-triangle count, y = candidate routing active (see
+		// the eval shader's comment), z/w reserved.
+		float4 g_giParams12;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -146,10 +157,16 @@
 	[numthreads(64, 1, 1)]
 	void ShaderMain(uint3 tid : SV_DispatchThreadID)
 	{
-		uint triangleCount = 0;
+		uint triangleCapacity = 0;
 		uint triangleStride = 0;
-		g_voxelTriangles.GetDimensions(triangleCount, triangleStride);
-		if (tid.x >= triangleCount)
+		g_voxelTriangles.GetDimensions(triangleCapacity, triangleStride);
+		// Exact live-count guard (see the eval shader): candidate mode reads
+		// the appended count from t9, direct mode uses this update's uploaded
+		// count - never the buffer capacity, which kept stale triangles alive.
+		uint liveTriangleCount = (uint)(g_giParams12.x + 0.5f);
+		if (g_giParams12.y > 0.5f)
+			liveTriangleCount = g_candidateLiveCount[0];
+		if (tid.x >= min(liveTriangleCount, triangleCapacity))
 			return;
 
 		const VoxelTriangleData tri = g_voxelTriangles[tid.x];

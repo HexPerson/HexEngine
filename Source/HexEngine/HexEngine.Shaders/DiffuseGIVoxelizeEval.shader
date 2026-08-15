@@ -44,6 +44,10 @@
 	StructuredBuffer<GpuGiLight> g_giLights : register(t3);
 	StructuredBuffer<GpuGiMaterial> g_giMaterials : register(t4);
 	StructuredBuffer<uint> g_giMaterialTexels : register(t5);
+	// Live appended-candidate count (1 uint), written by CopyStructureCount
+	// after the candidate cull - lets the guard below use the exact count
+	// without a CPU readback. Bound only in candidate mode (g_giParams12.y).
+	Buffer<uint> g_candidateLiveCount : register(t12);
 	SHADOWMAPS_RESOURCE(6);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
@@ -65,6 +69,11 @@
 		float4 g_giParams9;
 		float4 g_giParams10;
 		float4 g_giParams11;
+		// x = live source-triangle count this update (exact guard - the old
+		// GetDimensions guard used buffer CAPACITY, so stale triangles beyond
+		// the live count re-injected ghost geometry), y = candidate-compacted
+		// routing active, z/w reserved.
+		float4 g_giParams12;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -413,10 +422,17 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 	[numthreads(64, 1, 1)]
 	void ShaderMain(uint3 tid : SV_DispatchThreadID)
 	{
-		uint triangleCount = 0;
+		uint triangleCapacity = 0;
 		uint triangleStride = 0;
-		g_voxelTriangles.GetDimensions(triangleCount, triangleStride);
-		if (tid.x >= triangleCount)
+		g_voxelTriangles.GetDimensions(triangleCapacity, triangleStride);
+		// Exact live-count guard. Candidate mode reads the appended count from
+		// the count SRV (t0 is then the compacted candidate buffer and tid.x
+		// indexes it directly - it holds FULL triangle structs, not indices);
+		// direct mode uses this update's uploaded count from the cbuffer.
+		uint liveTriangleCount = (uint)(g_giParams12.x + 0.5f);
+		if (g_giParams12.y > 0.5f)
+			liveTriangleCount = g_candidateLiveCount[0];
+		if (tid.x >= min(liveTriangleCount, triangleCapacity))
 			return;
 
 		const VoxelTriangleData tri = g_voxelTriangles[tid.x];

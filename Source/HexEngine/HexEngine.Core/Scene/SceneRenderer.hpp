@@ -50,6 +50,11 @@ namespace HexEngine
 		// trace alpha) can grab the resolved RT without going through the
 		// scene-renderer's private members.
 		DiffuseGI* GetDiffuseGI() { return &_diffuseGi; }
+		// The frame's weather-tinted flat ambient (same value the froxel fog
+		// medium uses). DiffuseGI reads it to couple its base diffuse injection
+		// to the actual scene light level - GI then tracks day/night/weather
+		// instead of injecting a fixed constant.
+		const math::Vector3& GetWeatherAmbient() const { return _volumetricAmbientNight; }
 
 	private:
 		void SetupPerFrameBuffer(

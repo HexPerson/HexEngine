@@ -111,6 +111,7 @@ namespace HexEngine
 			math::Vector4 params9; // x=sunStrength, y=unlitAlbedoInjection, z=maxVoxelTestsPerTri, w=sunShadowMode
 			math::Vector4 params10; // x=gpuEdgeSmoothThreshold, y=gpuEdgeSmoothBlendStrength, z=bounceAlbedoMinLuma, w=bounceAlbedoRemapAmount
 			math::Vector4 params11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
+			math::Vector4 params12; // x=live source-triangle count this update, y=candidate routing active, z/w reserved
 		};
 
 		struct GpuVoxelTriangle
@@ -362,6 +363,10 @@ namespace HexEngine
 		uint32_t _activeClipmap = 0;
 		bool _created = false;
 		float _resolveStabilityBoost = 0.0f;
+		// Per-frame base-injection scale from the scene ambient level (see
+		// r_giLightCoupling). Computed in UpdateConstants, applied wherever
+		// r_giDiffuseInjection feeds injection.
+		float _lightCouplingScale = 1.0f;
 		bool _lastLocalLightsOnlyDebug = false;
 		float _lastLocalLightInjection = 1.0f;
 		bool _lastLocalLightInjectionEnable = true;
@@ -452,6 +457,9 @@ namespace HexEngine
 		ID3D11ShaderResourceView* _voxelCandidateSrv = nullptr;
 		ID3D11UnorderedAccessView* _voxelCandidateUav = nullptr;
 		ID3D11Buffer* _voxelCandidateCountBuffer = nullptr;
+		// R32_UINT SRV over the 4-byte count buffer so the injection shaders can
+		// read the live appended-candidate count directly (no CPU readback).
+		ID3D11ShaderResourceView* _voxelCandidateCountSrv = nullptr;
 		ID3D11Buffer* _voxelCandidateCountReadback = nullptr;
 		ID3D11Buffer* _voxelCandidateDispatchArgs = nullptr;
 		uint32_t _voxelCandidateCapacity = 0;

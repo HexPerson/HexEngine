@@ -12,6 +12,7 @@
 #include "../Graphics/RenderStructs.hpp"
 #include "../GUI/GuiRenderer.hpp"
 #include "Scene.hpp"
+#include "SceneRenderer.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -49,6 +50,14 @@ namespace HexEngine
 	HVar r_giSunDirectionality("r_giSunDirectionality", "Directional transport/shadowing strength for sun GI", 0.4f, 0.0f, 1.0f);
 	HVar r_giDiffuseInjection("r_giDiffuseInjection", "Diffuse albedo energy injected into GI voxels", 0.25f, 0.0f, 4.0f);
 	HVar r_giUnlitAlbedoInjection("r_giUnlitAlbedoInjection", "Baseline diffuse albedo injection independent of direct lighting", 0.0f, 0.0f, 1.0f);
+	// Light coupling: scale the BASE diffuse injection by the frame's weather
+	// ambient level. The base injection is albedo x a constant, so without this
+	// GI bounce glowed identically at noon, midnight and in a blizzard. The sun
+	// and local-light injections already track their sources; this brings the
+	// ambient-driven part in line. 1x at the reference luma, clamped so deep
+	// night keeps a small floor and bright presets don't blow out the voxels.
+	HVar r_giLightCoupling("r_giLightCoupling", "Couple base diffuse GI injection to the scene ambient level (GI tracks day/night/weather)", true, false, true);
+	HVar r_giLightCouplingRef("r_giLightCouplingRef", "Ambient luma treated as 1x base injection for the light coupling", 0.30f, 0.01f, 2.0f);
 	HVar r_giAlbedoBleedBoost("r_giAlbedoBleedBoost", "Boost for albedo-colored diffuse bounce injection", 3.0f, 0.0f, 12.0f);
 	HVar r_giColourBleedStrength("r_giColourBleedStrength", "Extra multiplier for saturated color transfer (red/green/blue bleed)", 1.0f, 0.0f, 4.0f);
 	HVar r_giBounceAlbedoMinLuma("r_giBounceAlbedoMinLuma", "Minimum luminance used for GI bounce transport albedo remap", 0.14f, 0.0f, 1.0f);
@@ -78,13 +87,13 @@ namespace HexEngine
 	HVar r_giUseTextureTint("r_giUseTextureTint", "Use albedo texture readback to tint GI injection (cached per material+UV subset)", true, false, true);
 	HVar r_giGpuVoxelize("r_giGpuVoxelize", "Use GPU voxelization for clipmap radiance updates", true, false, true);
 	HVar r_giGpuCandidateGen("r_giGpuCandidateGen", "Use GPU append-buffer candidate generation before voxel injection", false, false, true);
-	HVar r_giGpuMaterialEval("r_giGpuMaterialEval", "Use GPU-side local-light evaluation during voxel injection", false, false, true);
+	HVar r_giGpuMaterialEval("r_giGpuMaterialEval", "Use GPU-side local-light evaluation during voxel injection", true, false, true);
 	HVar r_giGpuMaterialEvalMaxLights("r_giGpuMaterialEvalMaxLights", "Maximum local GI lights uploaded/evaluated in GPU material eval mode", 24, 1, 64);
 	HVar r_giGpuMaterialProxyBlend("r_giGpuMaterialProxyBlend", "Blend amount for GPU material proxy albedo in eval path (0=triangle albedo, 1=material proxy)", 0.15f, 0.0f, 1.0f);
 	HVar r_giGpuEvalTriangleBudget("r_giGpuEvalTriangleBudget", "Triangle budget used by GPU material-eval voxelization path", 7000, 512, 300000);
-	HVar r_giGpuComputeBaseSun("r_giGpuComputeBaseSun", "Compute base diffuse/sun/emissive GI injection in GPU eval path", false, false, true);
+	HVar r_giGpuComputeBaseSun("r_giGpuComputeBaseSun", "Compute base diffuse/sun/emissive GI injection in GPU eval path", true, false, true);
 	HVar r_giGpuEvalMaxVoxelTestsPerTriangle("r_giGpuEvalMaxVoxelTestsPerTriangle", "Max voxel samples tested per triangle in GPU eval voxelization (lower is faster)", 64, 1, 256);
-	HVar r_giGpuSunShadowMode("r_giGpuSunShadowMode", "GPU GI sun-shadow mode (0=off,1=single tap,2=PCF 3x3)", 0, 0, 2);
+	HVar r_giGpuSunShadowMode("r_giGpuSunShadowMode", "GPU GI sun-shadow mode (0=off,1=single tap,2=PCF 3x3)", 1, 0, 2);
 	HVar r_giGpuSunShadowPerVoxel("r_giGpuSunShadowPerVoxel", "Evaluate GPU GI sun shadow per voxel hit (expensive); when off uses per-triangle sun visibility", false, false, true);
 	HVar r_giGpuEdgeSmoothThreshold("r_giGpuEdgeSmoothThreshold", "Coverage threshold where GPU edge smoothing starts (higher = wider smoothing band)", 0.90f, 0.0f, 1.0f);
 	HVar r_giGpuEdgeSmoothBlendStrength("r_giGpuEdgeSmoothBlendStrength", "GPU edge smoothing blend strength from neighboring voxels", 0.22f, 0.0f, 1.0f);
@@ -701,6 +710,7 @@ namespace HexEngine
 		SAFE_RELEASE(_voxelCandidateSrv);
 		SAFE_RELEASE(_voxelCandidateUav);
 		SAFE_RELEASE(_voxelCandidateBuffer);
+		SAFE_RELEASE(_voxelCandidateCountSrv);
 		SAFE_RELEASE(_voxelCandidateCountBuffer);
 		SAFE_RELEASE(_voxelCandidateCountReadback);
 		SAFE_RELEASE(_voxelCandidateDispatchArgs);
@@ -1908,7 +1918,7 @@ namespace HexEngine
 				const float albedoChroma = std::max(0.0f, albedoMax - albedoMin);
 				const float colourBleedStrength = std::max(0.0f, r_giColourBleedStrength._val.f32);
 				const float colourBleedBoost = std::clamp(1.0f + albedoChroma * colourBleedStrength * 0.8f, 1.0f, 2.0f);
-				injection += albedoTint * std::max(0.0f, r_giDiffuseInjection._val.f32) * colourBleedBoost;
+				injection += albedoTint * std::max(0.0f, r_giDiffuseInjection._val.f32) * _lightCouplingScale * colourBleedBoost;
 				if (mat->GetEmissiveAffectsGI())
 				{
 					injection += math::Vector3(emissive.x, emissive.y, emissive.z) * std::max(0.0f, emissive.w) * std::max(0.0f, r_giEmissiveInjection._val.f32);
@@ -2008,6 +2018,19 @@ namespace HexEngine
 
 	void DiffuseGI::UpdateConstants(Scene* scene)
 	{
+		// Light coupling: derive this frame's base-injection scale from the
+		// weather-tinted ambient the renderer already computed (the same value
+		// the froxel fog medium reads), so GI bounce follows the scene's actual
+		// light level across day/night/weather.
+		_lightCouplingScale = 1.0f;
+		if (r_giLightCoupling._val.b && g_pEnv->_sceneRenderer != nullptr)
+		{
+			const math::Vector3 amb = g_pEnv->_sceneRenderer->GetWeatherAmbient();
+			const float ambLuma = amb.x * 0.2126f + amb.y * 0.7152f + amb.z * 0.0722f;
+			_lightCouplingScale = std::clamp(
+				ambLuma / std::max(r_giLightCouplingRef._val.f32, 0.01f), 0.05f, 2.5f);
+		}
+
 		for (uint32_t i = 0; i < ClipmapCount; ++i)
 		{
 			const auto& level = _clipmaps[i];
@@ -2091,7 +2114,7 @@ namespace HexEngine
 			r_giGpuSunShadowPerVoxel._val.b ? 1.0f : 0.0f,
 			std::clamp(_cameraMotionBlend, 0.0f, 1.0f));
 		_constants.params8 = math::Vector4(
-			std::max(0.0f, r_giDiffuseInjection._val.f32),
+			std::max(0.0f, r_giDiffuseInjection._val.f32) * _lightCouplingScale,
 			std::max(0.0f, r_giSunInjection._val.f32),
 			std::max(0.0f, r_giSunDirectionalBoost._val.f32),
 			std::max(0.0f, r_giEmissiveInjection._val.f32));
@@ -2839,6 +2862,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		SAFE_RELEASE(_voxelCandidateSrv);
 		SAFE_RELEASE(_voxelCandidateUav);
 		SAFE_RELEASE(_voxelCandidateBuffer);
+		SAFE_RELEASE(_voxelCandidateCountSrv);
 		SAFE_RELEASE(_voxelCandidateCountBuffer);
 		SAFE_RELEASE(_voxelCandidateCountReadback);
 		SAFE_RELEASE(_voxelCandidateDispatchArgs);
@@ -2891,12 +2915,30 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		D3D11_BUFFER_DESC countDesc = {};
 		countDesc.ByteWidth = sizeof(uint32_t);
 		countDesc.Usage = D3D11_USAGE_DEFAULT;
-		countDesc.BindFlags = 0u;
+		// Shader-visible: the injection shaders read the live appended count
+		// through an R32_UINT SRV (candidate mode), so no CPU readback stalls
+		// the indirect path.
+		countDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 		countDesc.CPUAccessFlags = 0u;
 		countDesc.MiscFlags = 0u;
 		if (FAILED(device->CreateBuffer(&countDesc, nullptr, &_voxelCandidateCountBuffer)) || _voxelCandidateCountBuffer == nullptr)
 		{
 			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate count buffer.");
+			SAFE_RELEASE(_voxelCandidateUav);
+			SAFE_RELEASE(_voxelCandidateSrv);
+			SAFE_RELEASE(_voxelCandidateBuffer);
+			return false;
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC countSrvDesc = {};
+		countSrvDesc.Format = DXGI_FORMAT_R32_UINT;
+		countSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		countSrvDesc.Buffer.FirstElement = 0;
+		countSrvDesc.Buffer.NumElements = 1;
+		if (FAILED(device->CreateShaderResourceView(_voxelCandidateCountBuffer, &countSrvDesc, &_voxelCandidateCountSrv)) || _voxelCandidateCountSrv == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate count SRV.");
+			SAFE_RELEASE(_voxelCandidateCountBuffer);
 			SAFE_RELEASE(_voxelCandidateUav);
 			SAFE_RELEASE(_voxelCandidateSrv);
 			SAFE_RELEASE(_voxelCandidateBuffer);
@@ -2912,7 +2954,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		if (FAILED(device->CreateBuffer(&countReadbackDesc, nullptr, &_voxelCandidateCountReadback)) || _voxelCandidateCountReadback == nullptr)
 		{
 			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate count readback buffer.");
-			SAFE_RELEASE(_voxelCandidateCountBuffer);
+			SAFE_RELEASE(_voxelCandidateCountSrv);
+		SAFE_RELEASE(_voxelCandidateCountBuffer);
 			SAFE_RELEASE(_voxelCandidateUav);
 			SAFE_RELEASE(_voxelCandidateSrv);
 			SAFE_RELEASE(_voxelCandidateBuffer);
@@ -2929,7 +2972,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		{
 			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate dispatch args buffer.");
 			SAFE_RELEASE(_voxelCandidateCountReadback);
-			SAFE_RELEASE(_voxelCandidateCountBuffer);
+			SAFE_RELEASE(_voxelCandidateCountSrv);
+		SAFE_RELEASE(_voxelCandidateCountBuffer);
 			SAFE_RELEASE(_voxelCandidateUav);
 			SAFE_RELEASE(_voxelCandidateSrv);
 			SAFE_RELEASE(_voxelCandidateBuffer);
@@ -3186,7 +3230,15 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 		const uint32_t dispatchInit[3] = { 0u, 1u, 1u };
 		context->UpdateSubresource(_voxelCandidateDispatchArgs, 0, nullptr, dispatchInit, 0u, 0u);
+		// args[0] receives the RAW appended count as the thread-GROUP count -
+		// with [numthreads(64)] that is a 64x thread overdispatch whose surplus
+		// threads early-out on the shader's live-count guard. Deliberate: it
+		// avoids an args-fixup dispatch, and empty groups retire immediately.
 		context->CopyStructureCount(_voxelCandidateDispatchArgs, 0u, _voxelCandidateUav);
+		// Publish the live count for the injection shaders' guard (read through
+		// the R32_UINT SRV) - unconditional, unlike the CPU readback below which
+		// only telemetry/compare pays for.
+		context->CopyStructureCount(_voxelCandidateCountBuffer, 0u, _voxelCandidateUav);
 		outDispatchIndirectReady = true;
 
 		uint32_t candidateCount = sourceTriangleCount;
@@ -3195,7 +3247,6 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			(r_giTelemetry._val.b && ((_frameCounter % static_cast<uint64_t>(std::max(1, r_giTelemetryLogFrames._val.i32))) == 0ull));
 		if (readbackRequired)
 		{
-			context->CopyStructureCount(_voxelCandidateCountBuffer, 0u, _voxelCandidateUav);
 			context->CopyResource(_voxelCandidateCountReadback, _voxelCandidateCountBuffer);
 			D3D11_MAPPED_SUBRESOURCE mapped = {};
 			if (SUCCEEDED(context->Map(_voxelCandidateCountReadback, 0, D3D11_MAP_READ, 0, &mapped)))
@@ -3852,7 +3903,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			if (entity == nullptr || entity->IsPendingDeletion())
 				continue;
 
-			const float diffuseInject = std::max(0.0f, r_giDiffuseInjection._val.f32);
+			const float diffuseInject = std::max(0.0f, r_giDiffuseInjection._val.f32) * _lightCouplingScale;
 			const float sunInject = std::max(0.0f, r_giSunInjection._val.f32);
 			const float sunDirectionalBoost = std::max(0.0f, r_giSunDirectionalBoost._val.f32);
 			const float emissiveInject = std::max(0.0f, r_giEmissiveInjection._val.f32);
@@ -4407,7 +4458,10 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			return;
 
 		const bool useGpuMaterialEval = r_giGpuMaterialEval._val.b;
-		const bool useGpuCandidateGen = r_giGpuCandidateGen._val.b || useGpuMaterialEval;
+		// Candidate compaction is its own opt-in again. It used to be force-
+		// enabled by material eval, which is how the (then-broken) candidate
+		// routing silently blacked out the whole GPU eval path.
+		const bool useGpuCandidateGen = r_giGpuCandidateGen._val.b;
 		auto* voxelizeStage = useGpuMaterialEval
 			? (_voxelizeEvalShader ? _voxelizeEvalShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr)
 			: (_voxelizeShader ? _voxelizeShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr);
@@ -4991,6 +5045,13 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			(level.pendingShiftWs.LengthSquared() > 1e-8f) ? 1.0f : 0.0f;
 		_constants.params6.w = static_cast<float>(gpuLightCount);
 		_constants.params11.y = 1.0f / (1.0f + 0.20f * static_cast<float>(levelIndex));
+		// params12: exact live-count guard for every consumer of the triangle
+		// buffer this update. x = this update's uploaded count (the shaders used
+		// to guard on buffer CAPACITY, so stale triangles from earlier larger
+		// uploads kept re-injecting ghost geometry); y = candidate routing
+		// active, set below only once the candidate pass has actually produced
+		// a compacted list.
+		_constants.params12 = math::Vector4(static_cast<float>(triangleCount), 0.0f, 0.0f, 0.0f);
 		if (_constantBuffer)
 		{
 			_constantBuffer->Write(&_constants, sizeof(_constants));
@@ -5000,21 +5061,28 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		bool useCandidateIndirectDispatch = false;
 		if (hasTriangles && useGpuCandidateGen)
 		{
-			// Candidate compaction runs for its TELEMETRY counters only. The
-			// injection source must stay the real triangle buffer: the candidate
-			// buffer holds uint INDICES, but both voxelize shaders declare t0 as
-			// StructuredBuffer<VoxelTriangleData> and index it directly - neither
-			// consumes an index list. Rerouting t0 to the candidate buffer made
-			// the shader reinterpret packed indices as triangle geometry, so
-			// every triangle degenerated and the voxel field stayed BLACK - this
-			// was why the GPU material-eval path (which forces candidate gen on)
-			// produced no GI at all. The indirect-args path is parked with it:
-			// CopyStructureCount writes the raw element count into the GROUP
-			// count (a 64x overdispatch) - both need finishing together if the
-			// compaction is ever properly consumed.
+			// Candidate compaction, consumed properly now: the append pass emits
+			// FULL triangle structs culled to the active clipmap (same layout as
+			// t0, so the injection shader indexes the compacted buffer directly),
+			// the live appended count reaches the shader guard through the count
+			// buffer's R32_UINT SRV (no CPU readback), and DispatchIndirect uses
+			// the raw count as its GROUP count - a deliberate 64x thread
+			// overdispatch whose surplus threads early-out on that guard.
 			bool candidateIndirectReady = false;
 			BuildGpuVoxelCandidateList(levelIndex, triangleCount, candidateIndirectReady);
-			(void)candidateIndirectReady;
+			if (candidateIndirectReady &&
+				_voxelCandidateSrv != nullptr &&
+				_voxelCandidateCountSrv != nullptr &&
+				_voxelCandidateDispatchArgs != nullptr)
+			{
+				injectionTriangleSrv = _voxelCandidateSrv;
+				useCandidateIndirectDispatch = true;
+				_constants.params12.y = 1.0f;
+				if (_constantBuffer)
+				{
+					_constantBuffer->Write(&_constants, sizeof(_constants));
+				}
+			}
 		}
 		_stats.candidateTriangleCount = injectionTriangleCount;
 
@@ -5095,6 +5163,13 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				ID3D11ShaderResourceView* voxelizeSrvs[3] = { injectionTriangleSrv, level.radianceScratchSrv, level.albedoScratchSrv };
 				context->CSSetShaderResources(0, 3, voxelizeSrvs);
 			}
+			// Candidate mode: the injection shader guards on the live appended
+			// count, read through the count buffer's SRV (eval t12 / plain t9).
+			if (useCandidateIndirectDispatch)
+			{
+				ID3D11ShaderResourceView* countSrv[1] = { _voxelCandidateCountSrv };
+				context->CSSetShaderResources(useGpuMaterialEval ? 12u : 9u, 1, countSrv);
+			}
 			context->CSSetUnorderedAccessViews(0, 2, clearUav, nullptr);
 			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(voxelizeStage->GetNativePtr()), nullptr, 0);
 			if (useCandidateIndirectDispatch)
@@ -5105,6 +5180,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			{
 				const uint32_t groups = (injectionTriangleCount + 63u) / 64u;
 				context->Dispatch(std::max<uint32_t>(groups, 1u), 1u, 1u);
+			}
+			if (useCandidateIndirectDispatch)
+			{
+				ID3D11ShaderResourceView* nullCountSrv[1] = { nullptr };
+				context->CSSetShaderResources(useGpuMaterialEval ? 12u : 9u, 1, nullCountSrv);
 			}
 		}
 
