@@ -270,6 +270,13 @@
 					const float shiftSettle = saturate(g_giParams6.y);
 					const float temporalKeepBase = lerp(0.80f, 0.94f, warmStabilize);
 					const float temporalKeep = lerp(temporalKeepBase, 0.95f, shiftSettle * 0.45f);
+					// Snap-on-change (g_giParams12.z): the CPU detected a real
+					// lighting-state change (light set toggled/moved, sun jumped),
+					// so the accumulated history is stale by definition - blend
+					// mostly to the new injection and lift the per-update delta
+					// brake for a few updates, instead of easing in at the
+					// shimmer-safe steady-state rate.
+					const float snapBoost = saturate(g_giParams12.z);
 					const float albedoKeepBase = lerp(0.75f, 0.93f, warmStabilize);
 					const float albedoKeep = lerp(albedoKeepBase, 0.96f, shiftSettle * 0.55f);
 					const float prevAlbedoW = saturate(previousAlbedo.a) * albedoKeep;
@@ -291,7 +298,8 @@
 					// keep the accumulated history at the `temporalKeep` rate (~0.94) and let
 					// new injection blend in at the matching 6%. Stale data still fades because
 					// frames without injection just lerp toward zero at the same rate.
-					float3 radiance = previous.rgb * temporalKeep + injected * (1.0f - temporalKeep);
+					const float snapKeep = lerp(temporalKeep, 0.15f, snapBoost);
+					float3 radiance = previous.rgb * snapKeep + injected * (1.0f - snapKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
 					// Symmetric clamp - applies to BOTH increases (cap brightening) AND decreases
@@ -302,7 +310,8 @@
 					// primary cause.
 					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
 					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
-					const float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
+					float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
+					deltaLimit = lerp(deltaLimit, 8.0f.xxx, snapBoost);
 					radiance = min(radiance, previous.rgb + deltaLimit);
 					radiance = max(radiance, previous.rgb - deltaLimit);
 					radiance = max(radiance, 0.0f.xxx);

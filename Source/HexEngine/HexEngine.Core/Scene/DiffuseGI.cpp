@@ -481,6 +481,7 @@ namespace HexEngine
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
 		_lightResetFramesRemaining = 0u;
+		_injectSnapFramesRemaining = 0u;
 		_sunRelightCooldownFrames = 0u;
 		_lastObservedSceneLightRevision = 0ull;
 		_lastCameraPosition = math::Vector3::Zero;
@@ -769,6 +770,7 @@ namespace HexEngine
 		_lastSunDirectionInitialized = false;
 		_sunRelightFramesRemaining = 0;
 		_lightResetFramesRemaining = 0u;
+		_injectSnapFramesRemaining = 0u;
 		_sunRelightCooldownFrames = 0u;
 		_lastObservedSceneLightRevision = 0ull;
 		_lastCameraPosition = math::Vector3::Zero;
@@ -2298,6 +2300,13 @@ namespace HexEngine
 		const uint64_t currentLocalSig = ComputeLocalInjectSignature(scene);
 		const uint64_t currentSunSig = ComputeSunInjectSignature(scene);
 		bool injectLightSetChanged = (currentLocalSig != _lastInjectLightSignature);
+		// Snap-on-change: a changed local-light set means voxel history is stale
+		// by definition - run the next injection updates in snap mode (fast
+		// blend + lifted delta brake; params12.z in the voxelize shaders).
+		if (injectLightSetChanged)
+		{
+			_injectSnapFramesRemaining = std::max(_injectSnapFramesRemaining, 10u);
+		}
 		const bool gpuBaseSunOwnsLighting =
 			r_giGpuVoxelize._val.b &&
 			r_giGpuMaterialEval._val.b &&
@@ -2435,6 +2444,9 @@ namespace HexEngine
 		if (giLightStateChanged)
 		{
 			_lastObservedSceneLightRevision = sceneLightRevision;
+			// Snap-on-change for revision-tracked light edits (add/remove/move/
+			// retint) - same rationale as the inject-signature trigger.
+			_injectSnapFramesRemaining = std::max(_injectSnapFramesRemaining, 10u);
 		}
 
 		RebuildClipmapTransforms(cameraPosition, movementActive);
@@ -2450,6 +2462,7 @@ namespace HexEngine
 			if (_sunRelightCooldownFrames == 0u && sunDirDot < 0.9950f)
 			{
 				_sunRelightFramesRemaining = ClipmapCount;
+				_injectSnapFramesRemaining = std::max(_injectSnapFramesRemaining, 12u);
 				_sunRelightCooldownFrames = 45u;
 				for (uint32_t i = 0u; i < ClipmapCount; ++i)
 				{
@@ -2542,19 +2555,25 @@ namespace HexEngine
 				{
 					RunGpuVoxelization(scene, 1u);
 				}
-				if (!clipmapSettling && !movementActive && ((_frameCounter % 4ull) == 0ull))
+				if (!clipmapSettling && !movementActive && ((_frameCounter % 2ull) == 0ull))
 				{
-					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 4ull) % (ClipmapCount - 1u));
+					// Cadence doubled (%4 -> %2): each far clip now refreshes every
+					// 6 frames instead of 12 - halves the injection-EMA convergence
+					// time for the far field at the cost of one extra dispatch
+					// every other frame.
+					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 2ull) % (ClipmapCount - 1u));
 					if (shouldRunGpuClip(farClip))
 					{
 						RunGpuVoxelization(scene, farClip);
 					}
 				}
-				else if (movementActive && (_clipmaps[0].pendingShiftWs.LengthSquared() <= 1e-8f) && ((_frameCounter % 16ull) == 0ull))
+				else if (movementActive && (_clipmaps[0].pendingShiftWs.LengthSquared() <= 1e-8f) && ((_frameCounter % 8ull) == 0ull))
 				{
 					// Movement-stable mode still refreshes far clips occasionally to avoid
-					// starving distant emissive/sun contribution.
-					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 16ull) % (ClipmapCount - 1u));
+					// starving distant emissive/sun contribution. Cadence doubled
+					// (%16 -> %8) with the snap-on-change work: each far clip every
+					// 24 frames while moving instead of 48.
+					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 8ull) % (ClipmapCount - 1u));
 					if (shouldRunGpuClip(farClip))
 					{
 						RunGpuVoxelization(scene, farClip);
@@ -2572,6 +2591,10 @@ namespace HexEngine
 			{
 				_clipmaps[i].previousCenter = _clipmaps[i].center;
 			}
+		}
+		if (_injectSnapFramesRemaining > 0u)
+		{
+			--_injectSnapFramesRemaining;
 		}
 		if (_sunRelightFramesRemaining > 0u)
 		{
@@ -5051,7 +5074,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		// uploads kept re-injecting ghost geometry); y = candidate routing
 		// active, set below only once the candidate pass has actually produced
 		// a compacted list.
-		_constants.params12 = math::Vector4(static_cast<float>(triangleCount), 0.0f, 0.0f, 0.0f);
+		_constants.params12 = math::Vector4(
+			static_cast<float>(triangleCount),
+			0.0f,
+			((_injectSnapFramesRemaining > 0u) || (_sunRelightFramesRemaining > 0u)) ? 1.0f : 0.0f,
+			0.0f);
 		if (_constantBuffer)
 		{
 			_constantBuffer->Write(&_constants, sizeof(_constants));

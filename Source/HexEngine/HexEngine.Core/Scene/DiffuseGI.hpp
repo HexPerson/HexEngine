@@ -398,6 +398,12 @@ namespace HexEngine
 		bool _lastSunDirectionInitialized = false;
 		uint32_t _sunRelightFramesRemaining = 0;
 		uint32_t _lightResetFramesRemaining = 0u;
+		// Snap-on-change window: >0 for a few frames after a detected lighting-
+		// state change (local light set, light revision, sun jump). While active,
+		// params12.z tells the voxelize shaders to blend mostly to the NEW
+		// injection and lift the per-update delta brake - history is stale by
+		// definition, so easing in at the shimmer-safe rate just delays truth.
+		uint32_t _injectSnapFramesRemaining = 0u;
 		math::Vector3 _lastCameraPosition = math::Vector3::Zero;
 		bool _lastCameraPositionInitialized = false;
 		uint32_t _cameraMotionFramesRemaining = 0u;
