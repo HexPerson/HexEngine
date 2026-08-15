@@ -306,6 +306,12 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// P4.12: x = flare/ghost intensity, y = lens-dirt intensity,
 		// z = ghost dispersal, w = anamorphic streak intensity.
 		float4 g_lensParams;
+		// GI ambient-ownership compose: x = flat-ambient hand-off [0..1]
+		// (Deferred subtracts this fraction of albedo*ambientLight - GI's
+		// composite owns that budget), y = GI-occlusion strength on the
+		// remaining ambient + IBL sky diffuse, z = 1 when the GI blurred-AO
+		// texture is bound at t22 for this view, w reserved.
+		float4 g_giComposeParams;
 	};
 
 	#define g_timePrev  (g_timeParams2.x)

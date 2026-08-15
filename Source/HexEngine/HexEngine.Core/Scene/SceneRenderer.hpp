@@ -376,6 +376,11 @@ namespace HexEngine
 		Scene* _taaHistoryScene = nullptr;
 		math::Vector3 _taaHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
 		DiffuseGI _diffuseGi;
+		// GI ambient-ownership compose is live for the current view (main
+		// camera, GI on, blurred AO available). Set in SetupPerFrameBuffer
+		// (drives g_giComposeParams), read by RenderDirectionalLights to bind
+		// the GI AO texture at t22.
+		bool _giComposeActive = false;
 		// Phase 2: clustered light culling (list build + heatmap; no consumer yet).
 		ClusteredLighting _clusteredLights;
 		// Phase 2 slice 7: shared depth atlas for local-light shadows. The sun

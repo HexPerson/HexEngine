@@ -498,6 +498,16 @@ namespace HexEngine
 		// intensity, y = lens-dirt intensity, z = ghost dispersal, w = streak
 		// intensity.
 		math::Vector4 _lensParams;
+		// GI ambient-ownership compose (structural GI fix): x = flat-ambient
+		// hand-off [0..1] - the deferred pass drops this fraction of the legacy
+		// albedo*ambientLight fill so the GI composite owns that part of the
+		// ambient budget instead of stacking on top of it; y = GI-occlusion
+		// strength applied to the remaining flat ambient + the IBL sky diffuse
+		// (darkens where the voxel field says sky is blocked - darkening is
+		// what survives auto-exposure); z = 1 when the GI blurred-AO texture
+		// is bound at t22 for this view (main camera only - it is main-view
+		// screen space, capture faces must not sample it); w reserved.
+		math::Vector4 _giComposeParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

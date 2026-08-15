@@ -42,12 +42,12 @@ namespace HexEngine
 	HVar r_giResolveLumaReject("r_giResolveLumaReject", "Luminance-delta multiplier for GI history rejection", 1.0f, 0.0f, 8.0f);
 	HVar r_giResolveDitherDark("r_giResolveDitherDark", "Dither amplitude on dark GI resolve regions", 0.0012f, 0.0f, 0.01f);
 	HVar r_giResolveDitherBright("r_giResolveDitherBright", "Dither amplitude on bright GI resolve regions", 0.0f, 0.0f, 0.01f);
-	HVar r_giEnergyClamp("r_giEnergyClamp", "Maximum GI radiance contribution before clamp", 1.25f, 0.1f, 32.0f);
-	HVar r_giIntensity("r_giIntensity", "Final GI intensity multiplier", 0.85f, 0.0f, 8.0f);
-	HVar r_giSunInjection("r_giSunInjection", "Sunlight energy injected into the GI voxel clipmaps", 0.25f, 0.0f, 8.0f);
+	HVar r_giEnergyClamp("r_giEnergyClamp", "Maximum GI radiance contribution before clamp", 3.0f, 0.1f, 32.0f);
+	HVar r_giIntensity("r_giIntensity", "Final GI intensity multiplier", 1.5f, 0.0f, 8.0f);
+	HVar r_giSunInjection("r_giSunInjection", "Sunlight energy injected into the GI voxel clipmaps", 0.6f, 0.0f, 8.0f);
 	HVar r_giSunDirectionalBoost("r_giSunDirectionalBoost", "Directional boost applied to sun-facing GI injection", 2.0f, 0.0f, 8.0f);
-	HVar r_giSunDirectionality("r_giSunDirectionality", "Directional transport/shadowing strength for sun GI", 0.85f, 0.0f, 1.0f);
-	HVar r_giDiffuseInjection("r_giDiffuseInjection", "Diffuse albedo energy injected into GI voxels", 0.08f, 0.0f, 4.0f);
+	HVar r_giSunDirectionality("r_giSunDirectionality", "Directional transport/shadowing strength for sun GI", 0.4f, 0.0f, 1.0f);
+	HVar r_giDiffuseInjection("r_giDiffuseInjection", "Diffuse albedo energy injected into GI voxels", 0.25f, 0.0f, 4.0f);
 	HVar r_giUnlitAlbedoInjection("r_giUnlitAlbedoInjection", "Baseline diffuse albedo injection independent of direct lighting", 0.0f, 0.0f, 1.0f);
 	HVar r_giAlbedoBleedBoost("r_giAlbedoBleedBoost", "Boost for albedo-colored diffuse bounce injection", 3.0f, 0.0f, 12.0f);
 	HVar r_giColourBleedStrength("r_giColourBleedStrength", "Extra multiplier for saturated color transfer (red/green/blue bleed)", 1.0f, 0.0f, 4.0f);
@@ -74,7 +74,7 @@ namespace HexEngine
 	HVar r_giLocalLightsOnlyDebug("r_giLocalLightsOnlyDebug", "Debug mode: inject only local point/spot light bounce into GI", false, false, true);
 	HVar r_giBaseSunSmallTriangleDamp("r_giBaseSunSmallTriangleDamp", "Damp base/sun GI injection from tiny triangles to avoid local over-injection hotspots", 0.85f, 0.0f, 1.0f);
 	HVar r_giProbeGatherBoost("r_giProbeGatherBoost", "Probe raymarch energy boost before temporal filtering", 0.90f, 0.1f, 8.0f);
-	HVar r_giScreenBounce("r_giScreenBounce", "Screen-space diffuse bounce assist intensity", 0.0f, 0.0f, 2.0f);
+	HVar r_giScreenBounce("r_giScreenBounce", "Screen-space diffuse bounce assist intensity", 0.5f, 0.0f, 2.0f);
 	HVar r_giUseTextureTint("r_giUseTextureTint", "Use albedo texture readback to tint GI injection (cached per material+UV subset)", true, false, true);
 	HVar r_giGpuVoxelize("r_giGpuVoxelize", "Use GPU voxelization for clipmap radiance updates", true, false, true);
 	HVar r_giGpuCandidateGen("r_giGpuCandidateGen", "Use GPU append-buffer candidate generation before voxel injection", false, false, true);

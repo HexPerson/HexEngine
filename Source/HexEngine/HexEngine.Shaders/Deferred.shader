@@ -62,6 +62,11 @@
 	Texture2D g_iblProbeSH2 : register(t20);
 	// P1-B: split-sum DFG table. rg = F0 scale/bias, b = single-scatter energy.
 	Texture2D g_dfgLut      : register(t21);
+	// t22 = DiffuseGI's bilateral-blurred voxel-occlusion AO (previous frame -
+	// GI renders after this pass; one frame of latency, same as the GI-AO
+	// provider accepts). .r = occlusion, 1 = fully blocked. Only bound (and
+	// only sampled - g_giComposeParams.z gates) for the main camera.
+	Texture2D g_giAoTex     : register(t22);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -330,6 +335,31 @@
 			depthValue,
 			g_globalLight[0]);
 
+		// ---- GI ambient ownership (structural GI fix) -------------------------
+		// CalculatePBR just added the legacy flat ambient (albedo * ambientLight)
+		// and the IBL block below adds sky SH diffuse - historically the GI
+		// composite then stacked additively on top as a THIRD ambient fill,
+		// too small relative to the other two to read, and auto-exposure
+		// normalized away what remained. Instead: hand a fraction of the flat
+		// ambient budget to GI (subtract it here; GI's composite adds
+		// structured bounce back later in the frame), and darken what remains
+		// by the GI voxel occlusion so covered areas (interiors, underpasses,
+		// overhangs) stop receiving full sky/ambient fill. The darkening is
+		// what survives exposure and makes GI visibly shape the image.
+		float giVis = 1.0f;
+		if (g_giComposeParams.z > 0.5f)
+		{
+			const float giOcc = saturate(g_giAoTex.Sample(g_pointSampler, screenPos).r);
+			giVis = saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
+		}
+		{
+			const float3 ambientFlat = pixelColour.rgb * g_atmosphere.ambientLight.rgb;
+			const float giHandoff = saturate(g_giComposeParams.x);
+			// Remaining flat ambient should be ambientFlat * (1-handoff) * giVis;
+			// CalculatePBR added the full term, so subtract the difference.
+			pbr.rgb -= ambientFlat * (1.0f - (1.0f - giHandoff) * giVis);
+		}
+
 		// Extended shading-model lobes (clearcoat / anisotropic / sheen). The
 		// features RT carries the model id + per-model parameters - see
 		// ApplyMaterialFeatures for the param layout. Standard PBR + SSS take the
@@ -385,6 +415,13 @@
 			const float diffHorizon = saturate(N.y * 0.35f + 0.65f);
 
 			float3 envDiffRadiance = skyDiff * diffHorizon * g_iblSkyDiffuse;
+
+			// GI sky occlusion: the sky SH has no idea the roof is solid - the
+			// voxel field does. Applied BEFORE the probe lerp so probe
+			// irradiance (which already encodes its own occlusion) is not
+			// double-darkened. This is the term that finally lets interiors
+			// and underpasses go dark instead of receiving full-sky fill.
+			envDiffRadiance *= giVis;
 
 			// A probe's SH is integrated from what that probe actually sees, so it
 			// already encodes its own occlusion - an indoor probe's irradiance knows

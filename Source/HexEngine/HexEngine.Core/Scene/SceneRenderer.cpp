@@ -139,7 +139,7 @@ namespace HexEngine
 	// appearance: everything gets substantially darker and existing light intensities and
 	// exposure need rebalancing to match. Default OFF so nothing changes until that
 	// rebalance happens; turn on to see (and then retune toward) correct energy.
-	HVar r_pbrEnergyFix("r_pbrEnergyFix", "Apply the physically-correct diffuse 1/PI term (needs light/exposure rebalance)", false, false, true);
+	HVar r_pbrEnergyFix("r_pbrEnergyFix", "Apply the physically-correct diffuse 1/PI term (needs light/exposure rebalance)", true, false, true);
 	HVar r_shadowCascades("r_shadowCascades", "The number of cascades to calculate with shadow mapping", 4, 1, 4);
 	HVar r_shadowCascadeRange("r_shadowCascadeRange", "The depth of one shadow cascade, except the last (which will occupy all remaining space", 100.0f, 1.0f, 10000.0f);
 	HVar r_shadowCascadeSplitLambda("r_shadowCascadeSplitLambda", "Sun cascade split blend: 0 = legacy fixed r_shadowCascadeRange blocks, otherwise lerps uniform->logarithmic splits (higher concentrates shadow resolution near the camera)", 0.9f, 0.0f, 1.0f);
@@ -525,6 +525,22 @@ namespace HexEngine
 	// render target and each downsampled face; this file dumps the beauty/gbuffer
 	// they came from, so one run covers the whole chain.
 	extern HVar r_iblProbeDumpCapture;
+
+	// Declared in DiffuseGI.cpp.
+	extern HVar r_giEnable;
+
+	// Structural GI compose: give GI ownership of part of the ambient budget
+	// instead of stacking it as a third additive fill on top of the flat
+	// albedo*ambientLight ambient + the IBL sky diffuse (both of which already
+	// fill shadows, leaving GI's small add invisible - and auto-exposure then
+	// normalizes away what remains). Handoff: the deferred pass DROPS this
+	// fraction of the flat ambient when GI is on; GI's composite replaces it
+	// with structured bounce. SkyOcclusion: the remaining flat ambient and the
+	// sky SH diffuse are darkened by the GI voxel occlusion (bilateral-blurred
+	// AO, t22), so interiors/underpasses lose sky light they cannot see.
+	// Darkening survives exposure adaptation; a flat additive lift does not.
+	HVar r_giAmbientHandoff("r_giAmbientHandoff", "Fraction of the flat ambient handed to GI when GI is enabled (0 = legacy stacked-ambient behaviour)", 0.65f, 0.0f, 1.0f);
+	HVar r_giSkyOcclusion("r_giSkyOcclusion", "GI-occlusion strength on the flat ambient + IBL sky diffuse (darkens sky-blocked areas)", 0.6f, 0.0f, 1.0f);
 
 	// Re-bake every probe in the scene. A probe only requests a capture on
 	// deserialize, so without this the sole way to retry one is to reload the
@@ -2917,6 +2933,25 @@ namespace HexEngine
 				r_lensDirt._val.f32,
 				r_lensFlareDispersal._val.f32,
 				r_lensStreak._val.f32);
+
+			// GI ambient-ownership compose. Main camera only: the GI blurred-AO
+			// texture is main-view screen space, so a probe-capture face or
+			// secondary camera must neither sample it nor hand off ambient it
+			// will never get back (GI's composite doesn't run for captures).
+			// The blurred AO exists from the first GI frame onward; null means
+			// GI hasn't produced one yet (or is off) - both flags collapse to 0
+			// and the deferred pass behaves exactly as before this change.
+			_giComposeActive =
+				r_giEnable._val.b &&
+				_currentScene != nullptr && _currentCamera != nullptr &&
+				_currentCamera == _currentScene->GetMainCamera() &&
+				!_currentCamera->IsEnvironmentCapture() &&
+				_diffuseGi.GetBlurredAOTexture() != nullptr;
+			bufferData._giComposeParams = math::Vector4(
+				_giComposeActive ? r_giAmbientHandoff._val.f32 : 0.0f,
+				r_giSkyOcclusion._val.f32,
+				_giComposeActive ? 1.0f : 0.0f,
+				0.0f);
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 
 			bufferData._reflectionParams = math::Vector4(
@@ -5019,6 +5054,12 @@ namespace HexEngine
 				// t21 = DFG table (P1-B). Null until the first frame generates it,
 				// which the shader detects and falls back to the analytic fit for.
 				g_pEnv->_graphicsDevice->SetTexture2D(21, _dfgLut);
+				// t22 = GI bilateral-blurred voxel-occlusion AO (previous frame -
+				// GI renders after this pass). Drives the ambient hand-off + sky
+				// occlusion in the GI-compose block; g_giComposeParams.z gates
+				// the sample, so null here is safe and means "compose inactive".
+				g_pEnv->_graphicsDevice->SetTexture2D(22,
+					_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
