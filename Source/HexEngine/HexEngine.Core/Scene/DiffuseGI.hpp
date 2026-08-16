@@ -273,6 +273,7 @@ namespace HexEngine
 			float emissiveProxyMaxLuma = 0.0f;
 			float emissiveProxyMaxStrength = 0.0f;
 			float emissivePayloadMaxHint = 0.0f;
+			uint32_t updatedClipMask = 0u;
 		};
 
 		struct GpuGiLight
@@ -404,6 +405,9 @@ namespace HexEngine
 		// injection and lift the per-update delta brake - history is stale by
 		// definition, so easing in at the shimmer-safe rate just delays truth.
 		uint32_t _injectSnapFramesRemaining = 0u;
+		// Per-frame budget: only one level may run a FULL CPU triangle regather
+		// per Update (clip 0 exempt) - deferred levels stay dirty and retry.
+		bool _fullGatherConsumedThisFrame = false;
 		// FNV-1a over every injection-affecting cvar (+ quantized coupling
 		// scale). A change arms the snap window - GI settings respond in a few
 		// updates instead of easing through the steady-state EMA for seconds.

@@ -100,6 +100,7 @@ namespace HexEngine
 	HVar r_giGpuCompareMode("r_giGpuCompareMode", "CPU/GPU compare mode (0=off,1=log counters,2=verbose counters)", 0, 0, 2);
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 300, 10, 2000);
+	HVar r_giSpikeLogMs("r_giSpikeLogMs", "Log any GI update whose CPU cost exceeds this many ms (0 = off)", 12.0f, 0.0f, 1000.0f);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.94f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
@@ -2236,6 +2237,8 @@ namespace HexEngine
 		ApplyQualityPreset();
 		_stats = {};
 		_statsFrameCounter = _frameCounter;
+		_fullGatherConsumedThisFrame = false;
+		const auto updateWallStart = std::chrono::high_resolution_clock::now();
 
 		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
 		if (localLightsOnlyDebug != _lastLocalLightsOnlyDebug)
@@ -2686,6 +2689,29 @@ namespace HexEngine
 		if (_sunRelightFramesRemaining > 0u)
 		{
 			--_sunRelightFramesRemaining;
+		}
+		const float spikeThresholdMs = r_giSpikeLogMs._val.f32;
+		if (spikeThresholdMs > 0.0f)
+		{
+			const float updateWallMs = ElapsedMs(updateWallStart);
+			if (updateWallMs > spikeThresholdMs)
+			{
+				LOG_WARN(
+					"GI spike: frame=%llu wall=%.2fms build=%.2fms upload=%.2fms candidate=%.2fms dispatch=%.2fms tri=%u uploadKB=%llu clips=0x%x moving=%d settling=%d snap=%u relight=%u",
+					static_cast<unsigned long long>(_frameCounter),
+					updateWallMs,
+					_stats.cpuTriangleBuildMs,
+					_stats.cpuUploadMs,
+					_stats.candidateBuildMs,
+					_stats.gpuDispatchMs,
+					_stats.sourceTriangleCount,
+					static_cast<unsigned long long>(_stats.uploadBytes / 1024ull),
+					_stats.updatedClipMask,
+					movementActive ? 1 : 0,
+					clipmapSettling ? 1 : 0,
+					_injectSnapFramesRemaining,
+					_sunRelightFramesRemaining);
+			}
 		}
 		const bool telemetryEnabled = r_giTelemetry._val.b || (r_giGpuCompareMode._val.i32 > 0);
 		const uint64_t telemetryPeriod = static_cast<uint64_t>(std::max(1, r_giTelemetryLogFrames._val.i32));
@@ -3468,6 +3494,21 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				level.dirty ? 1 : 0,
 				shiftOnlyDirty ? 1 : 0);
 		}
+
+		// When movement stops, the motion-gated cache reuse (movementCacheStillFresh /
+		// shiftOnlyDirty both require _cameraMotionBlend > 0.05) expires for every
+		// shift-dirtied level at once, and the update scheduler runs several levels
+		// in back-to-back frames - a burst of full regathers that reads as a stutter.
+		// Budget: at most ONE full gather per frame; other levels return the
+		// transient-empty result, which keeps them dirty so they retry next frame.
+		// Clip 0 is exempt (it carries the near field and must stay responsive).
+		if (_fullGatherConsumedThisFrame && levelIndex != 0u && level.initialized)
+		{
+			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
+			_stats.sourceTriangleCount = 0u;
+			return 0u;
+		}
+		_fullGatherConsumedThisFrame = true;
 
 		_cachedVoxelTrianglesValid[levelIndex] = false;
 		_cachedVoxelTrianglesFrame[levelIndex] = 0ull;
@@ -4559,6 +4600,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 	{
 		if (!_created || !r_giGpuVoxelize._val.b || levelIndex >= ClipmapCount || scene == nullptr)
 			return;
+		_stats.updatedClipMask |= (1u << levelIndex);
 
 		const bool useGpuMaterialEval = r_giGpuMaterialEval._val.b;
 		// Candidate compaction is its own opt-in again. It used to be force-
