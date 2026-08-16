@@ -1297,7 +1297,7 @@ namespace HexEngine
 		if (auto mat = smc->GetMaterial())
 		{
 			state.emissive = mat->_properties.emissiveColour;
-			state.diffuse = mat->_properties.diffuseColour;
+			state.diffuse = mat->GetGiAlbedoTint();
 			state.emissiveAffectsGI = mat->GetEmissiveAffectsGI();
 		}
 
@@ -1440,10 +1440,11 @@ namespace HexEngine
 		if (auto it = _materialAlbedoCache.find(cacheKey); it != _materialAlbedoCache.end())
 			return it->second;
 
+		const math::Vector4 giAlbedoTint = material->GetGiAlbedoTint();
 		math::Vector3 tint(
-			std::clamp(material->_properties.diffuseColour.x, 0.0f, 1.0f),
-			std::clamp(material->_properties.diffuseColour.y, 0.0f, 1.0f),
-			std::clamp(material->_properties.diffuseColour.z, 0.0f, 1.0f));
+			std::clamp(giAlbedoTint.x, 0.0f, 1.0f),
+			std::clamp(giAlbedoTint.y, 0.0f, 1.0f),
+			std::clamp(giAlbedoTint.z, 0.0f, 1.0f));
 
 		if (r_giUseTextureTint._val.b)
 		{
@@ -3138,7 +3139,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		{
 			GiMaterialProxy proxy = {};
 			proxy.material = material;
-			proxy.diffuse = material->_properties.diffuseColour;
+			proxy.diffuse = material->GetGiAlbedoTint();
 			proxy.emissiveAffectsGI = material->GetEmissiveAffectsGI();
 			proxy.emissive = proxy.emissiveAffectsGI ? material->_properties.emissiveColour : math::Vector4::Zero;
 			proxy.index = static_cast<uint32_t>(outMaterials.size());
@@ -3596,10 +3597,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			MaterialTriangleAlbedoCacheEntry data = {};
 			if (material != nullptr)
 			{
+				const math::Vector4 giAlbedoTint = material->GetGiAlbedoTint();
 				data.diffuseTint = math::Vector3(
-					std::clamp(material->_properties.diffuseColour.x, 0.0f, 1.0f),
-					std::clamp(material->_properties.diffuseColour.y, 0.0f, 1.0f),
-					std::clamp(material->_properties.diffuseColour.z, 0.0f, 1.0f));
+					std::clamp(giAlbedoTint.x, 0.0f, 1.0f),
+					std::clamp(giAlbedoTint.y, 0.0f, 1.0f),
+					std::clamp(giAlbedoTint.z, 0.0f, 1.0f));
 
 				if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
 				{

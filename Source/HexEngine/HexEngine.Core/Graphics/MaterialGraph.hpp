@@ -184,6 +184,15 @@ namespace HexEngine
 		void EnsureDefaultOutputBindings();
 		static MaterialGraph CreateDefaultPbrGraph();
 
+		// Constant-fold the sub-graph feeding `semantic` into a flat RGBA value
+		// for CPU consumers that cannot run the compiled shader (GI material
+		// proxies). Constants and Add/Multiply/Lerp/OneMinus fold exactly;
+		// texture samples fold to identity (the sampled texture reaches those
+		// consumers separately via the material's texture bindings); geometry-
+		// dependent nodes fold to identity. Returns `fallback` when the
+		// semantic is unbound.
+		math::Vector4 EvaluateConstantColor(MaterialGraphOutputSemantic semantic, const math::Vector4& fallback) const;
+
 		// Build a PbrOutput node with the seven shading-input pins + default
 		// PbrOutputProperties. Used by CreateDefaultPbrGraph and the graph
 		// dialog's "Add PBR Output" path. Position is the canvas coord the

@@ -2,6 +2,7 @@
 
 #include "Material.hpp"
 #include "../HexEngine.hpp"
+#include <algorithm>
 #include "../Scene/Mesh.hpp"
 
 namespace HexEngine
@@ -206,6 +207,26 @@ namespace HexEngine
 	bool Material::GetAffectsGI() const
 	{
 		return _affectsGI;
+	}
+
+	math::Vector4 Material::GetGiAlbedoTint() const
+	{
+		math::Vector4 tint = _properties.diffuseColour;
+		if (_hasGraph)
+		{
+			// Graph materials author their colour inside the graph;
+			// _properties.diffuseColour stays at its (usually white) default,
+			// so GI proxies would read the surface as untinted. Fold the
+			// graph's constant chain into the tint. Texture samples fold to
+			// identity - GI reads the bound albedo texture separately.
+			const math::Vector4 folded = _graph.EvaluateConstantColor(
+				MaterialGraphOutputSemantic::BaseColor,
+				math::Vector4(1.0f, 1.0f, 1.0f, 1.0f));
+			tint.x = std::clamp(tint.x * folded.x, 0.0f, 1.0f);
+			tint.y = std::clamp(tint.y * folded.y, 0.0f, 1.0f);
+			tint.z = std::clamp(tint.z * folded.z, 0.0f, 1.0f);
+		}
+		return tint;
 	}
 
 	void Material::SetStandardShader(const std::shared_ptr<IShader>& shader)

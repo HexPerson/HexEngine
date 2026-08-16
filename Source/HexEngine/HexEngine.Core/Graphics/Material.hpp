@@ -120,6 +120,11 @@ namespace HexEngine
 		bool GetEmissiveAffectsGI() const;
 		void SetAffectsGI(bool value);
 		bool GetAffectsGI() const;
+
+		// Flat albedo tint for GI material proxies: diffuseColour, multiplied
+		// by the graph's constant-folded BaseColor for graph materials (whose
+		// authored colour never lands in _properties.diffuseColour).
+		math::Vector4 GetGiAlbedoTint() const;
 		// Snow shell (Phase 3): when set, a snow accumulation layer is drawn
 		// on top of this (rigid) surface in the opaque pass - see the shell
 		// re-draw in Scene::RenderInstance. Opt-in per material so only

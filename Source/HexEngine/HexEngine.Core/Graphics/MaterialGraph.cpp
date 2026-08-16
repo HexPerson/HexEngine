@@ -78,6 +78,99 @@ namespace HexEngine
 		return node;
 	}
 
+	namespace
+	{
+		math::Vector4 FoldNodeOutput(const MaterialGraph& graph, const std::string& nodeId, int32_t depth);
+
+		math::Vector4 FoldInputPin(
+			const MaterialGraph& graph,
+			const MaterialGraphNode& node,
+			const char* pinId,
+			const math::Vector4& unconnected,
+			int32_t depth)
+		{
+			for (const auto& connection : graph.connections)
+			{
+				if (connection.toNodeId == node.id && connection.toPinId == pinId)
+					return FoldNodeOutput(graph, connection.fromNodeId, depth);
+			}
+			return unconnected;
+		}
+
+		math::Vector4 FoldNodeOutput(const MaterialGraph& graph, const std::string& nodeId, int32_t depth)
+		{
+			const math::Vector4 identity(1.0f, 1.0f, 1.0f, 1.0f);
+			if (depth <= 0)
+				return identity;
+			const auto* node = graph.FindNode(nodeId);
+			if (node == nullptr)
+				return identity;
+
+			switch (node->nodeType)
+			{
+			case MaterialGraphNodeType::ScalarConstant:
+			case MaterialGraphNodeType::ScalarParameter:
+			case MaterialGraphNodeType::WeatherScalar:
+				return math::Vector4(node->scalarValue, node->scalarValue, node->scalarValue, node->scalarValue);
+			case MaterialGraphNodeType::VectorConstant:
+			case MaterialGraphNodeType::VectorParameter:
+			case MaterialGraphNodeType::WeatherVector:
+				return node->vectorValue;
+			case MaterialGraphNodeType::Add:
+				return FoldInputPin(graph, *node, "A", math::Vector4::Zero, depth - 1)
+					+ FoldInputPin(graph, *node, "B", math::Vector4::Zero, depth - 1);
+			case MaterialGraphNodeType::Multiply:
+				return FoldInputPin(graph, *node, "A", identity, depth - 1)
+					* FoldInputPin(graph, *node, "B", identity, depth - 1);
+			case MaterialGraphNodeType::Lerp:
+			{
+				const math::Vector4 a = FoldInputPin(graph, *node, "A", math::Vector4::Zero, depth - 1);
+				const math::Vector4 b = FoldInputPin(graph, *node, "B", identity, depth - 1);
+				const math::Vector4 alpha = FoldInputPin(graph, *node, "Alpha", math::Vector4(0.5f, 0.5f, 0.5f, 0.5f), depth - 1);
+				return math::Vector4::Lerp(a, b, alpha.x);
+			}
+			case MaterialGraphNodeType::OneMinus:
+				return identity - FoldInputPin(graph, *node, "In", math::Vector4::Zero, depth - 1);
+			// Texture/geometry-dependent nodes have no flat CPU value. Identity
+			// keeps the surrounding constant chain intact; the sampled texture
+			// itself reaches CPU consumers through the material's texture
+			// bindings, so folding it to 1 avoids counting it twice.
+			case MaterialGraphNodeType::TextureSample:
+			case MaterialGraphNodeType::TextureParameter:
+			case MaterialGraphNodeType::TexCoord:
+			case MaterialGraphNodeType::NormalMap:
+			default:
+				return identity;
+			}
+		}
+	}
+
+	math::Vector4 MaterialGraph::EvaluateConstantColor(MaterialGraphOutputSemantic semantic, const math::Vector4& fallback) const
+	{
+		for (const auto& output : outputs)
+		{
+			if (output.semantic != semantic)
+				continue;
+			if (output.nodeId.empty() || output.pinId.empty())
+				break;
+			return FoldNodeOutput(*this, output.nodeId, 32);
+		}
+
+		// Graphs that only wire the unified PbrOutput node (no outputs table
+		// entry for this semantic): follow the matching input pin instead.
+		if (const auto* pbrOut = FindPbrOutputNode(); pbrOut != nullptr)
+		{
+			const char* pinName = OutputSemanticToString(semantic);
+			for (const auto& connection : connections)
+			{
+				if (connection.toNodeId == pbrOut->id && connection.toPinId == pinName)
+					return FoldNodeOutput(*this, connection.fromNodeId, 32);
+			}
+		}
+
+		return fallback;
+	}
+
 	const MaterialGraphPin* MaterialGraph::FindPin(const std::string& nodeId, const std::string& pinId, MaterialGraphPinDirection direction) const
 	{
 		const auto* node = FindNode(nodeId);
