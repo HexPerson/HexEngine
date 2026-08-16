@@ -314,7 +314,9 @@
 		out float3 voxelRadianceOut,
 		out float voxelOccOut,
 		out float3 probeGiOut,
-		out float3 giOut)
+		out float3 giOut,
+		out float3 voxelAlbedoOut,
+		out float voxelAlbedoConfOut)
 	{
 		const float clipExtent = max(g_clipCenterExtent[clipIdx].w, 1e-3f);
 		const float voxelSize = max(1e-4f, g_clipVoxelInfo[clipIdx].x);
@@ -447,6 +449,8 @@
 		voxelOccOut = voxelOcc;
 		probeGiOut = probeGi;
 		giOut = gi;
+		voxelAlbedoOut = voxelAlbedo;
+		voxelAlbedoConfOut = voxelAlbedoConfidence;
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
@@ -488,6 +492,8 @@
 		float3 gi = 0.0f.xxx;
 		float3 probeGi = 0.0f.xxx;
 		float3 debugVoxelRadiance = 0.0f.xxx;
+		float3 debugVoxelAlbedo = 0.0f.xxx;
+		float debugVoxelAlbedoConf = 0.0f;
 		float3 debugClipBlend = 0.0f.xxx;
 		float voxelOcc = 0.0f;
 		uint chosenClip = 0;
@@ -497,6 +503,8 @@
 		float3 fallbackGi = 0.0f.xxx;
 		float3 fallbackProbe = 0.0f.xxx;
 		float3 fallbackVoxel = 0.0f.xxx;
+		float3 fallbackAlbedo = 0.0f.xxx;
+		float fallbackAlbedoConf = 0.0f;
 		float fallbackOcc = 0.0f;
 		uint fallbackClip = 0;
 
@@ -514,6 +522,8 @@
 			float occCurrent = 0.0f;
 			float3 probeCurrent = 0.0f.xxx;
 			float3 giCurrent = 0.0f.xxx;
+			float3 albedoCurrent = 0.0f.xxx;
+			float albedoConfCurrent = 0.0f;
 			const float invRes = rcp(max(g_clipVoxelInfo[i].z, 1.0f));
 			// World-space seed keeps voxel sampling stable while the camera moves.
 			const float2 worldSeed = float2(
@@ -530,7 +540,7 @@
 					Hash12(seed + float2(19.91f, 7.13f)),
 					Hash12(seed.yx + float2(5.71f, 29.37f)),
 					Hash12(seed + float2(41.27f, 3.97f))) - float3(0.5f, 0.5f, 0.5f)) * (invRes * jitterScale);
-			EvaluateClipContribution(i, uvw, jitterUVW, worldNormal, screenBounce, voxelCurrent, occCurrent, probeCurrent, giCurrent);
+			EvaluateClipContribution(i, uvw, jitterUVW, worldNormal, screenBounce, voxelCurrent, occCurrent, probeCurrent, giCurrent, albedoCurrent, albedoConfCurrent);
 			// Blend all overlapping clipmaps with normalized weights to avoid visible handoff rings.
 			const float edgeDistanceX = min(uvw.x, 1.0f - uvw.x);
 			const float edgeDistanceZ = min(uvw.z, 1.0f - uvw.z);
@@ -567,6 +577,8 @@
 				gi += giCurrent * clipWeight;
 				probeGi += probeCurrent * clipWeight;
 				debugVoxelRadiance += voxelCurrent * clipWeight;
+				debugVoxelAlbedo += albedoCurrent * clipWeight;
+				debugVoxelAlbedoConf += albedoConfCurrent * clipWeight;
 				debugClipBlend += kClipDebugColours[i] * clipWeight;
 				voxelOcc += occCurrent * clipWeight;
 				totalClipWeight += clipWeight;
@@ -580,6 +592,8 @@
 			fallbackGi = giCurrent;
 			fallbackProbe = probeCurrent;
 			fallbackVoxel = voxelCurrent;
+			fallbackAlbedo = albedoCurrent;
+			fallbackAlbedoConf = albedoConfCurrent;
 			fallbackOcc = occCurrent;
 			fallbackClip = i;
 			foundClip = true;
@@ -591,6 +605,8 @@
 			gi *= invWeight;
 			probeGi *= invWeight;
 			debugVoxelRadiance *= invWeight;
+			debugVoxelAlbedo *= invWeight;
+			debugVoxelAlbedoConf *= invWeight;
 			debugClipBlend *= invWeight;
 			voxelOcc *= invWeight;
 		}
@@ -599,6 +615,8 @@
 			gi = fallbackGi;
 			probeGi = fallbackProbe;
 			debugVoxelRadiance = fallbackVoxel;
+			debugVoxelAlbedo = fallbackAlbedo;
+			debugVoxelAlbedoConf = fallbackAlbedoConf;
 			debugClipBlend = kClipDebugColours[fallbackClip];
 			voxelOcc = fallbackOcc;
 			chosenClip = fallbackClip;
@@ -616,6 +634,12 @@
 		if (debugMode == 4.0f)
 		{
 			return foundClip ? float4(saturate(debugClipBlend), 1.0f) : float4(0.0f, 0.0f, 0.0f, 1.0f);
+		}
+		if (debugMode == 5.0f)
+		{
+			// Voxel ALBEDO volume, confidence-scaled: black = albedo never written,
+			// grey/white = written but untinted (injection-side bug), coloured = healthy.
+			return float4(saturate(debugVoxelAlbedo) * saturate(debugVoxelAlbedoConf * 2.0f), 1.0f);
 		}
 
 		const float raysPerProbe = foundClip ? g_clipVoxelInfo[chosenClip].w : 1.0f;

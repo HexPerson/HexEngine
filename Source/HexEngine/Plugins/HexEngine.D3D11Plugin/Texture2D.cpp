@@ -62,6 +62,25 @@ void Texture2D::GetPixels(std::vector<uint8_t>& buffer)
 	g_pGraphics->Unlock();
 	CHECK_HR(captureHr);
 
+	// Block-compressed sources capture as raw BC blocks, which no CPU caller can
+	// texel-read (consumers validate against a tight width*height*4 layout and
+	// silently treat the texture as absent). Decompress to RGBA8 so compressed
+	// albedo/emissive textures are readable; sRGB decode stays the caller's job.
+	DirectX::ScratchImage decompressed;
+	if (DirectX::IsCompressed(scratch.GetMetadata().format))
+	{
+		const HRESULT decompressHr = DirectX::Decompress(
+			scratch.GetImages(),
+			scratch.GetImageCount(),
+			scratch.GetMetadata(),
+			DXGI_FORMAT_R8G8B8A8_UNORM,
+			decompressed);
+		if (SUCCEEDED(decompressHr))
+		{
+			scratch = std::move(decompressed);
+		}
+	}
+
 	auto pixelsSize = scratch.GetPixelsSize();
 
 	if (pixelsSize <= 0)

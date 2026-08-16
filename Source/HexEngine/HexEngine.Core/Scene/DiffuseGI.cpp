@@ -110,7 +110,7 @@ namespace HexEngine
 	// reason and build duration. Turn on, reproduce a hitch (e.g. a weather
 	// transition), read the log - the failing condition names the culprit.
 	HVar r_giLogRebuilds("r_giLogRebuilds", "Log GI voxel-triangle cache rebuilds with rejection reasons + duration", false, false, true);
-	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap)", 0, 0, 4);
+	HVar r_giDebugView("r_giDebugView", "GI debug view (0=off, 1=indirect, 2=probes, 3=voxel, 4=clipmap, 5=voxel albedo)", 0, 0, 5);
 	HVar r_giVoxelResolution("r_giVoxelResolution", "Per-clipmap voxel resolution", 128, 16, 256);
 	HVar r_giClipmapBaseExtent("r_giClipmapBaseExtent", "Half-extent of first GI clipmap in world units", 56.0f, 16.0f, 4096.0f);
 }
@@ -2525,7 +2525,9 @@ namespace HexEngine
 			if (_sunRelightCooldownFrames == 0u && sunDirDot < 0.9950f)
 			{
 				_sunRelightFramesRemaining = ClipmapCount;
-				_injectSnapFramesRemaining = std::max(_injectSnapFramesRemaining, 12u);
+				// NOTE: an animated sun trips this every cooldown window; arming the fast snap
+				// here produces a rhythmic re-snap pulse (visible breathing). The relight sweep
+				// alone handles sun movement; snap stays reserved for discrete changes.
 				_sunRelightCooldownFrames = 45u;
 				for (uint32_t i = 0u; i < ClipmapCount; ++i)
 				{
@@ -5140,7 +5142,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_constants.params12 = math::Vector4(
 			static_cast<float>(triangleCount),
 			0.0f,
-			((_injectSnapFramesRemaining > 0u) || (_sunRelightFramesRemaining > 0u)) ? 1.0f : 0.0f,
+			(_injectSnapFramesRemaining > 0u) ? 1.0f : 0.0f,
 			0.0f);
 		if (_constantBuffer)
 		{
