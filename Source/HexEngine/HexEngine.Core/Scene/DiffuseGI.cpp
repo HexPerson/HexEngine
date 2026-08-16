@@ -2684,16 +2684,29 @@ namespace HexEngine
 						RunGpuVoxelization(scene, farClip);
 					}
 				}
-				else if (movementActive && (_clipmaps[0].pendingShiftWs.LengthSquared() <= 1e-8f) && ((_frameCounter % 8ull) == 0ull))
+				else if (movementActive && (_clipmaps[0].pendingShiftWs.LengthSquared() <= 1e-8f))
 				{
-					// Movement-stable mode still refreshes far clips occasionally to avoid
-					// starving distant emissive/sun contribution. Cadence doubled
-					// (%16 -> %8) with the snap-on-change work: each far clip every
-					// 24 frames while moving instead of 48.
-					const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 8ull) % (ClipmapCount - 1u));
-					if (shouldRunGpuClip(farClip))
+					if (pendingGatherClip != UINT32_MAX && ((_frameCounter % 2ull) == 0ull) && shouldRunGpuClip(pendingGatherClip))
 					{
-						RunGpuVoxelization(scene, farClip);
+						// Drain parked gathers during movement too (every other
+						// frame - half the slice cost of the stationary drain to
+						// keep moving frames light). Left to the %8 rotation a
+						// parked far clip advanced so slowly that the next shift
+						// usually aborted it, and the level went dark at its
+						// leading edge for the whole move.
+						RunGpuVoxelization(scene, pendingGatherClip);
+					}
+					else if ((_frameCounter % 8ull) == 0ull)
+					{
+						// Movement-stable mode still refreshes far clips occasionally to avoid
+						// starving distant emissive/sun contribution. Cadence doubled
+						// (%16 -> %8) with the snap-on-change work: each far clip every
+						// 24 frames while moving instead of 48.
+						const uint32_t farClip = 1u + static_cast<uint32_t>((_frameCounter / 8ull) % (ClipmapCount - 1u));
+						if (shouldRunGpuClip(farClip))
+						{
+							RunGpuVoxelization(scene, farClip);
+						}
 					}
 				}
 			}
@@ -3466,10 +3479,22 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			(_cachedSceneGeometryRevision[levelIndex] == sceneGeometryRevision) &&
 			(_cachedSceneMaterialRevision[levelIndex] == sceneMaterialRevision) &&
 			(!lightStateAffectsTriangleCache || (_cachedSceneLightRevision[levelIndex] == sceneLightRevision));
+		// Movement freshness: the CPU-bake path stays age-capped (baked radiance
+		// goes stale), but the GPU base+sun cache holds world-space geometry -
+		// a stale list is only missing a leading-edge band as wide as the
+		// centre drift. Cap by DRIFT rather than age there: an age cap made
+		// sustained movement expire the cache, start a full regather that the
+		// sliced path parked, and the next clipmap shift aborted it - so the
+		// level stopped injecting entirely while moving and the scene dimmed
+		// (shifts kept scrolling in empty voxels) until movement stopped.
+		const bool movementCacheAcceptablyFresh = gpuComputeBaseSunEnabled
+			? ((_cachedVoxelTrianglesExtent[levelIndex] == level.extent) &&
+			   ((_cachedVoxelTrianglesCenter[levelIndex] - level.center).Length() <= level.extent * 0.35f))
+			: (cacheAge < movementCacheFrames);
 		const bool movementCacheStillFresh =
 			cachedSceneStateMatches &&
 			cachedTriangleCountAcceptable &&
-			(cacheAge < movementCacheFrames) &&
+			movementCacheAcceptablyFresh &&
 			(_cameraMotionBlend > 0.05f);
 		const float pendingShiftDistance = std::sqrt(std::max(0.0f, level.pendingShiftWs.LengthSquared()));
 		const bool shiftOnlyDirty =
