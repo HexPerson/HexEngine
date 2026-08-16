@@ -482,6 +482,7 @@ namespace HexEngine
 		_sunRelightFramesRemaining = 0;
 		_lightResetFramesRemaining = 0u;
 		_injectSnapFramesRemaining = 0u;
+		_lastInjectionTuningHash = 0ull;
 		_sunRelightCooldownFrames = 0u;
 		_lastObservedSceneLightRevision = 0ull;
 		_lastCameraPosition = math::Vector3::Zero;
@@ -771,6 +772,7 @@ namespace HexEngine
 		_sunRelightFramesRemaining = 0;
 		_lightResetFramesRemaining = 0u;
 		_injectSnapFramesRemaining = 0u;
+		_lastInjectionTuningHash = 0ull;
 		_sunRelightCooldownFrames = 0u;
 		_lastObservedSceneLightRevision = 0ull;
 		_lastCameraPosition = math::Vector3::Zero;
@@ -2315,6 +2317,62 @@ namespace HexEngine
 			!r_giDebugDisableBaseAndSunInjection._val.b &&
 			!r_giDebugDisableBaseInjection._val.b &&
 			!r_giDebugDisableSunInjection._val.b;
+
+		// GI SETTINGS are a change signal too. The _last* comparison web above
+		// predates the retune and misses the primary injection dials entirely
+		// (diffuse/sun/emissive injection, colour bleed, light coupling, texture
+		// tint, shadow mode) - and even the tracked set only invalidated caches,
+		// never armed the snap, so a dragged slider still eased in through the
+		// steady-state EMA + delta brake over ~5 seconds. Hash every injection-
+		// affecting cvar; any change arms the snap window and dirties the levels
+		// so the new state writes through within a few updates. The coupling
+		// scale is quantized so continuous day/night drift can't keep the snap
+		// permanently armed.
+		{
+			uint64_t tuningHash = 1469598103934665603ull; // FNV-1a offset basis
+			const auto hashF = [&tuningHash](float v)
+			{
+				uint32_t bits = 0u;
+				std::memcpy(&bits, &v, sizeof(bits));
+				tuningHash = (tuningHash ^ static_cast<uint64_t>(bits)) * 1099511628211ull;
+			};
+			hashF(r_giDiffuseInjection._val.f32);
+			hashF(r_giSunInjection._val.f32);
+			hashF(r_giSunDirectionalBoost._val.f32);
+			hashF(r_giSunDirectionality._val.f32);
+			hashF(r_giEmissiveInjection._val.f32);
+			hashF(r_giColourBleedStrength._val.f32);
+			hashF(r_giAlbedoBleedBoost._val.f32);
+			hashF(r_giUnlitAlbedoInjection._val.f32);
+			hashF(r_giLocalLightInjection._val.f32);
+			hashF(r_giUseTextureTint._val.b ? 1.0f : 0.0f);
+			hashF(r_giLightCoupling._val.b ? 1.0f : 0.0f);
+			hashF(r_giLightCouplingRef._val.f32);
+			hashF(std::round(_lightCouplingScale * 10.0f));
+			hashF(static_cast<float>(r_giGpuSunShadowMode._val.i32));
+			hashF(r_giGpuSunShadowPerVoxel._val.b ? 1.0f : 0.0f);
+			const bool injectionTuningChanged =
+				(_lastInjectionTuningHash != 0ull) && (tuningHash != _lastInjectionTuningHash);
+			_lastInjectionTuningHash = tuningHash;
+			if (injectionTuningChanged || localLightTuningChanged)
+			{
+				_injectSnapFramesRemaining = std::max(_injectSnapFramesRemaining, 12u);
+				for (uint32_t i = 0; i < ClipmapCount; ++i)
+				{
+					// The CPU-bake path carries these values inside the cached
+					// triangle radiance - those caches must go. The GPU base+sun
+					// path reads them from the cbuffer each update, so its caches
+					// (pure geometry) stay; dirty alone schedules the refresh.
+					if (!gpuBaseSunOwnsLighting)
+					{
+						_cachedVoxelTrianglesValid[i] = false;
+						_cachedVoxelTrianglesFrame[i] = 0ull;
+					}
+					_clipmaps[i].dirty = true;
+				}
+			}
+		}
+
 		if (currentSunSig == _lastSunInjectSignature)
 		{
 			_sunInjectSignatureStableFrames = 0u;

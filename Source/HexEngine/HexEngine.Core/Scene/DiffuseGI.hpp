@@ -404,6 +404,10 @@ namespace HexEngine
 		// injection and lift the per-update delta brake - history is stale by
 		// definition, so easing in at the shimmer-safe rate just delays truth.
 		uint32_t _injectSnapFramesRemaining = 0u;
+		// FNV-1a over every injection-affecting cvar (+ quantized coupling
+		// scale). A change arms the snap window - GI settings respond in a few
+		// updates instead of easing through the steady-state EMA for seconds.
+		uint64_t _lastInjectionTuningHash = 0ull;
 		math::Vector3 _lastCameraPosition = math::Vector3::Zero;
 		bool _lastCameraPositionInitialized = false;
 		uint32_t _cameraMotionFramesRemaining = 0u;
