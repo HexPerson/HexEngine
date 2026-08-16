@@ -4950,6 +4950,15 @@ namespace HexEngine
 
 		_diffuseGi.Update(_currentScene, _currentCamera);
 		_diffuseGi.Render(_currentScene, _currentCamera, _gbuffer, _beautyRT);
+		// Lit-scene feedback AFTER the GI composite: the beauty target now
+		// holds direct lighting + GI, so next update's injection sees the
+		// full lit result (which is what makes the feedback multi-bounce).
+		// Main camera only - capture passes must not scatter their views
+		// into the shared voxel field.
+		if (_currentCamera != nullptr && !_currentCamera->IsEnvironmentCapture())
+		{
+			_diffuseGi.DispatchScreenFeedback(_beautyRT, _gbuffer.GetPosition(), _gbuffer.GetNormal());
+		}
 	}
 
 	void SceneRenderer::RenderDirectionalLights()

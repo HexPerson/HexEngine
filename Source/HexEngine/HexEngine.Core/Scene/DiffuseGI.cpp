@@ -105,7 +105,11 @@ namespace HexEngine
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.94f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
-	HVar r_giVoxelAlbedoInfluence("r_giVoxelAlbedoInfluence", "How strongly voxelized albedo tints GI bounce (0=energy only, 1=full albedo tint)", 1.0f, 0.0f, 1.0f);
+	// r_giVoxelAlbedoInfluence removed: params6.z was consumed by no shader.
+	// The slot now carries the second-bounce strength.
+	HVar r_giSecondBounce("r_giSecondBounce", "Strength of the voxel-space second bounce (prev-frame neighbour radiance x albedo re-injected)", 0.35f, 0.0f, 2.0f);
+	HVar r_giLitInjection("r_giLitInjection", "Strength of lit-scene radiance feedback into voxel injection (0 = constants only)", 0.8f, 0.0f, 4.0f);
+	HVar r_giLitInjectionMaxLuma("r_giLitInjectionMaxLuma", "Per-sample luminance cap on lit-scene feedback (stops bright pools blowing out the voxel field)", 3.0f, 0.1f, 32.0f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
 	// Diagnostic: log every CPU voxel-triangle rebuild with the cache-rejection
@@ -519,6 +523,7 @@ namespace HexEngine
 			_cachedGiMaterialProxies[i].clear();
 			_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 			_cachedVoxelTrianglesFrame[i] = 0ull;
 			_cachedEmissiveMaterialCount[i] = 0u;
 			_cachedEmissiveTriangleCount[i] = 0u;
@@ -559,6 +564,8 @@ namespace HexEngine
 		_voxelizeShader = IShader::Create("EngineData.Shaders/DiffuseGIVoxelize.hcs");
 		_voxelizeEvalShader = IShader::Create("EngineData.Shaders/DiffuseGIVoxelizeEval.hcs");
 		_voxelCandidateShader = IShader::Create("EngineData.Shaders/DiffuseGIBuildCandidates.hcs");
+		_candidateArgsFixupShader = IShader::Create("EngineData.Shaders/DiffuseGICandidateArgsFixup.hcs");
+		_screenFeedbackShader = IShader::Create("EngineData.Shaders/DiffuseGIScreenFeedback.hcs");
 		_voxelClearShader = IShader::Create("EngineData.Shaders/DiffuseGIClearVoxel.hcs");
 		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
 		_voxelShiftShader = IShader::Create("EngineData.Shaders/DiffuseGIShiftVoxel.hcs");
@@ -726,8 +733,13 @@ namespace HexEngine
 		SAFE_DELETE(_constantBuffer);
 		SAFE_DELETE(_voxelShiftConstantBuffer);
 		SAFE_DELETE(_aoBlurConstantBuffer);
-		SAFE_RELEASE(_voxelTriangleSrv);
-		SAFE_RELEASE(_voxelTriangleBuffer);
+		for (uint32_t i = 0; i < ClipmapCount; ++i)
+		{
+			SAFE_RELEASE(_voxelTriangleSrv[i]);
+			SAFE_RELEASE(_voxelTriangleBuffer[i]);
+			_voxelTriangleCapacity[i] = 0u;
+			_voxelTriangleGpuValid[i] = false;
+		}
 		SAFE_RELEASE(_giLightSrv);
 		SAFE_RELEASE(_giLightBuffer);
 		SAFE_RELEASE(_giMaterialSrv);
@@ -741,7 +753,16 @@ namespace HexEngine
 		SAFE_RELEASE(_voxelCandidateCountBuffer);
 		SAFE_RELEASE(_voxelCandidateCountReadback);
 		SAFE_RELEASE(_voxelCandidateDispatchArgs);
-		_voxelTriangleCapacity = 0;
+		SAFE_RELEASE(_voxelCandidateDispatchArgsUav);
+		for (uint32_t i = 0; i < FeedbackLevelCount; ++i)
+		{
+			SAFE_RELEASE(_feedbackAccumSrv[i]);
+			SAFE_RELEASE(_feedbackAccumUav[i]);
+			SAFE_RELEASE(_feedbackAccumBuffer[i]);
+			_feedbackAccumElements[i] = 0u;
+			_feedbackAccumValid[i] = false;
+		}
+		_voxelTriangleCapacity = {};
 		_giLightCapacity = 0;
 		_giMaterialCapacity = 0;
 		_giMaterialTexelCapacity = 0;
@@ -763,6 +784,8 @@ namespace HexEngine
 		_voxelizeShader = nullptr;
 		_voxelizeEvalShader = nullptr;
 		_voxelCandidateShader = nullptr;
+		_candidateArgsFixupShader = nullptr;
+		_screenFeedbackShader = nullptr;
 		_voxelClearShader = nullptr;
 		_voxelPropagateShader = nullptr;
 		_voxelShiftShader = nullptr;
@@ -810,6 +833,7 @@ namespace HexEngine
 			_cachedGiMaterialProxies[i].clear();
 			_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 			_cachedVoxelTrianglesFrame[i] = 0ull;
 			_cachedEmissiveMaterialCount[i] = 0u;
 			_cachedEmissiveTriangleCount[i] = 0u;
@@ -1247,6 +1271,7 @@ namespace HexEngine
 				level.dirty = true;
 				_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = (i == 0u) ? 2u : 1u;
 			}
@@ -1280,6 +1305,7 @@ namespace HexEngine
 						level.previousCenter = snapped;
 						_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 						_cachedVoxelTrianglesFrame[i] = 0ull;
 						_clipmapWarmFramesRemaining[i] = (i == 0u) ? 2u : 1u;
 					}
@@ -2138,7 +2164,7 @@ namespace HexEngine
 		_constants.params6 = math::Vector4(
 			std::clamp(r_giVoxelNeighbourBlend._val.f32, 0.0f, 1.0f),
 			shiftSettle,
-			std::clamp(r_giVoxelAlbedoInfluence._val.f32, 0.0f, 1.0f),
+			std::clamp(r_giSecondBounce._val.f32, 0.0f, 2.0f),
 			0.0f);
 		_constants.params7 = math::Vector4(
 			std::clamp(r_giGpuMaterialProxyBlend._val.f32, 0.0f, 1.0f),
@@ -2266,6 +2292,7 @@ namespace HexEngine
 				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = 0u;
 			}
@@ -2401,6 +2428,7 @@ namespace HexEngine
 					{
 						_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 						_cachedVoxelTrianglesFrame[i] = 0ull;
 					}
 					_clipmaps[i].dirty = true;
@@ -2451,6 +2479,7 @@ namespace HexEngine
 				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = 0u;
 			}
@@ -2475,6 +2504,7 @@ namespace HexEngine
 				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], 2u);
 				_clipmaps[i].dirty = true;
@@ -2531,6 +2561,7 @@ namespace HexEngine
 				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
 			_pendingGather[i] = {};
+			_voxelTriangleGpuValid[i] = false;
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 			}
 		}
@@ -2804,16 +2835,17 @@ namespace HexEngine
 		++_frameCounter;
 	}
 
-bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
+bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t elementCapacity)
 	{
-		if (elementCapacity == 0u)
+		if (elementCapacity == 0u || levelIndex >= ClipmapCount)
 			return false;
-		if (_voxelTriangleBuffer != nullptr && _voxelTriangleSrv != nullptr && _voxelTriangleCapacity >= elementCapacity)
+		if (_voxelTriangleBuffer[levelIndex] != nullptr && _voxelTriangleSrv[levelIndex] != nullptr && _voxelTriangleCapacity[levelIndex] >= elementCapacity)
 			return true;
 
-		SAFE_RELEASE(_voxelTriangleSrv);
-		SAFE_RELEASE(_voxelTriangleBuffer);
-		_voxelTriangleCapacity = 0;
+		SAFE_RELEASE(_voxelTriangleSrv[levelIndex]);
+		SAFE_RELEASE(_voxelTriangleBuffer[levelIndex]);
+		_voxelTriangleCapacity[levelIndex] = 0;
+		_voxelTriangleGpuValid[levelIndex] = false;
 
 		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
 		if (device == nullptr)
@@ -2827,7 +2859,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		desc.StructureByteStride = sizeof(GpuVoxelTriangle);
 
-		if (FAILED(device->CreateBuffer(&desc, nullptr, &_voxelTriangleBuffer)) || _voxelTriangleBuffer == nullptr)
+		if (FAILED(device->CreateBuffer(&desc, nullptr, &_voxelTriangleBuffer[levelIndex])) || _voxelTriangleBuffer[levelIndex] == nullptr)
 		{
 			LOG_CRIT("DiffuseGI failed to create GPU voxel triangle buffer.");
 			return false;
@@ -2839,15 +2871,150 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		srvDesc.Buffer.FirstElement = 0;
 		srvDesc.Buffer.NumElements = elementCapacity;
 
-		if (FAILED(device->CreateShaderResourceView(_voxelTriangleBuffer, &srvDesc, &_voxelTriangleSrv)) || _voxelTriangleSrv == nullptr)
+		if (FAILED(device->CreateShaderResourceView(_voxelTriangleBuffer[levelIndex], &srvDesc, &_voxelTriangleSrv[levelIndex])) || _voxelTriangleSrv[levelIndex] == nullptr)
 		{
 			LOG_CRIT("DiffuseGI failed to create GPU voxel triangle SRV.");
-			SAFE_RELEASE(_voxelTriangleBuffer);
+			SAFE_RELEASE(_voxelTriangleBuffer[levelIndex]);
 			return false;
 		}
 
-		_voxelTriangleCapacity = elementCapacity;
+		_voxelTriangleCapacity[levelIndex] = elementCapacity;
 		return true;
+	}
+
+	bool DiffuseGI::EnsureFeedbackAccumBuffer(uint32_t feedbackLevel, uint32_t elementCount)
+	{
+		if (feedbackLevel >= FeedbackLevelCount || elementCount == 0u)
+			return false;
+		if (_feedbackAccumBuffer[feedbackLevel] != nullptr &&
+			_feedbackAccumUav[feedbackLevel] != nullptr &&
+			_feedbackAccumSrv[feedbackLevel] != nullptr &&
+			_feedbackAccumElements[feedbackLevel] == elementCount)
+			return true;
+
+		SAFE_RELEASE(_feedbackAccumSrv[feedbackLevel]);
+		SAFE_RELEASE(_feedbackAccumUav[feedbackLevel]);
+		SAFE_RELEASE(_feedbackAccumBuffer[feedbackLevel]);
+		_feedbackAccumElements[feedbackLevel] = 0u;
+		_feedbackAccumValid[feedbackLevel] = false;
+
+		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
+		if (device == nullptr)
+			return false;
+
+		// uint4 per voxel: RGB (x1024) + weight (x1024), atomically accumulated.
+		D3D11_BUFFER_DESC desc = {};
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		desc.ByteWidth = elementCount * 16u;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = 16u;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, &_feedbackAccumBuffer[feedbackLevel])) || _feedbackAccumBuffer[feedbackLevel] == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create screen-feedback accum buffer.");
+			return false;
+		}
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.FirstElement = 0;
+		uavDesc.Buffer.NumElements = elementCount;
+		if (FAILED(device->CreateUnorderedAccessView(_feedbackAccumBuffer[feedbackLevel], &uavDesc, &_feedbackAccumUav[feedbackLevel])) || _feedbackAccumUav[feedbackLevel] == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create screen-feedback accum UAV.");
+			SAFE_RELEASE(_feedbackAccumBuffer[feedbackLevel]);
+			return false;
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = elementCount;
+		if (FAILED(device->CreateShaderResourceView(_feedbackAccumBuffer[feedbackLevel], &srvDesc, &_feedbackAccumSrv[feedbackLevel])) || _feedbackAccumSrv[feedbackLevel] == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create screen-feedback accum SRV.");
+			SAFE_RELEASE(_feedbackAccumUav[feedbackLevel]);
+			SAFE_RELEASE(_feedbackAccumBuffer[feedbackLevel]);
+			return false;
+		}
+
+		_feedbackAccumElements[feedbackLevel] = elementCount;
+		return true;
+	}
+
+	void DiffuseGI::DispatchScreenFeedback(ITexture2D* litScene, ITexture2D* gbufferPosition, ITexture2D* gbufferNormal)
+	{
+		if (!_created || !r_giEnable._val.b || !r_giGpuMaterialEval._val.b)
+			return;
+		if (r_giLitInjection._val.f32 <= 0.0001f)
+			return;
+		if (litScene == nullptr || gbufferPosition == nullptr || gbufferNormal == nullptr)
+			return;
+		auto* stage = _screenFeedbackShader ? _screenFeedbackShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
+		auto* context = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()) : nullptr;
+		if (stage == nullptr || context == nullptr)
+			return;
+		auto* litSrv = reinterpret_cast<ID3D11ShaderResourceView*>(litScene->GetNativeShaderView());
+		auto* posSrv = reinterpret_cast<ID3D11ShaderResourceView*>(gbufferPosition->GetNativeShaderView());
+		auto* normalSrv = reinterpret_cast<ID3D11ShaderResourceView*>(gbufferNormal->GetNativeShaderView());
+		if (litSrv == nullptr || posSrv == nullptr || normalSrv == nullptr)
+			return;
+
+		for (uint32_t i = 0u; i < FeedbackLevelCount; ++i)
+		{
+			const uint32_t res = std::max(1u, _clipmaps[i].resolution);
+			if (!EnsureFeedbackAccumBuffer(i, res * res * res))
+				return;
+		}
+
+		// The GI cbuffer already carries this frame's clip centers from
+		// UpdateConstants; refresh it anyway so the scatter never reads a
+		// stale per-dispatch overwrite from the last voxelize.
+		_constants.params13 = math::Vector4(
+			std::clamp(r_giLitInjection._val.f32, 0.0f, 4.0f),
+			std::clamp(r_giLitInjectionMaxLuma._val.f32, 0.1f, 32.0f),
+			0.0f,
+			0.0f);
+		if (_constantBuffer)
+		{
+			_constantBuffer->Write(&_constants, sizeof(_constants));
+		}
+
+		const UINT clearValues[4] = { 0u, 0u, 0u, 0u };
+		context->ClearUnorderedAccessViewUint(_feedbackAccumUav[0], clearValues);
+		context->ClearUnorderedAccessViewUint(_feedbackAccumUav[1], clearValues);
+
+		ID3D11Buffer* perFrameCb = nullptr;
+		if (auto* cb = g_pEnv->_graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer); cb != nullptr)
+		{
+			perFrameCb = reinterpret_cast<ID3D11Buffer*>(cb->GetNativePtr());
+		}
+		if (perFrameCb != nullptr)
+			context->CSSetConstantBuffers(0, 1, &perFrameCb);
+		ID3D11Buffer* giCb = _constantBuffer ? reinterpret_cast<ID3D11Buffer*>(_constantBuffer->GetNativePtr()) : nullptr;
+		if (giCb != nullptr)
+			context->CSSetConstantBuffers(4, 1, &giCb);
+
+		ID3D11ShaderResourceView* srvs[3] = { litSrv, posSrv, normalSrv };
+		ID3D11UnorderedAccessView* uavs[2] = { _feedbackAccumUav[0], _feedbackAccumUav[1] };
+		context->CSSetShaderResources(0, 3, srvs);
+		context->CSSetUnorderedAccessViews(0, 2, uavs, nullptr);
+		context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(stage->GetNativePtr()), nullptr, 0);
+
+		const uint32_t halfW = std::max(1u, static_cast<uint32_t>(litScene->GetWidth()) / 2u);
+		const uint32_t halfH = std::max(1u, static_cast<uint32_t>(litScene->GetHeight()) / 2u);
+		context->Dispatch((halfW + 7u) / 8u, (halfH + 7u) / 8u, 1u);
+
+		ID3D11ShaderResourceView* nullSrvs[3] = {};
+		ID3D11UnorderedAccessView* nullUavs[2] = {};
+		context->CSSetShaderResources(0, 3, nullSrvs);
+		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
+		context->CSSetShader(nullptr, nullptr, 0);
+
+		_feedbackAccumValid[0] = true;
+		_feedbackAccumValid[1] = true;
 	}
 
 	bool DiffuseGI::EnsureGpuGiLightBuffer(uint32_t elementCapacity)
@@ -3141,7 +3308,9 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		D3D11_BUFFER_DESC argsDesc = {};
 		argsDesc.ByteWidth = sizeof(uint32_t) * 3u;
 		argsDesc.Usage = D3D11_USAGE_DEFAULT;
-		argsDesc.BindFlags = 0u;
+		// UAV so the args-fixup CS can write the real GROUP count
+		// (ceil(liveCount/64)) instead of the raw element count.
+		argsDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
 		argsDesc.CPUAccessFlags = 0u;
 		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS;
 		if (FAILED(device->CreateBuffer(&argsDesc, nullptr, &_voxelCandidateDispatchArgs)) || _voxelCandidateDispatchArgs == nullptr)
@@ -3150,6 +3319,24 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			SAFE_RELEASE(_voxelCandidateCountReadback);
 			SAFE_RELEASE(_voxelCandidateCountSrv);
 		SAFE_RELEASE(_voxelCandidateCountBuffer);
+			SAFE_RELEASE(_voxelCandidateUav);
+			SAFE_RELEASE(_voxelCandidateSrv);
+			SAFE_RELEASE(_voxelCandidateBuffer);
+			return false;
+		}
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC argsUavDesc = {};
+		argsUavDesc.Format = DXGI_FORMAT_R32_UINT;
+		argsUavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		argsUavDesc.Buffer.FirstElement = 0;
+		argsUavDesc.Buffer.NumElements = 3u;
+		if (FAILED(device->CreateUnorderedAccessView(_voxelCandidateDispatchArgs, &argsUavDesc, &_voxelCandidateDispatchArgsUav)) || _voxelCandidateDispatchArgsUav == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create GPU voxel candidate dispatch args UAV.");
+			SAFE_RELEASE(_voxelCandidateDispatchArgs);
+			SAFE_RELEASE(_voxelCandidateCountReadback);
+			SAFE_RELEASE(_voxelCandidateCountSrv);
+			SAFE_RELEASE(_voxelCandidateCountBuffer);
 			SAFE_RELEASE(_voxelCandidateUav);
 			SAFE_RELEASE(_voxelCandidateSrv);
 			SAFE_RELEASE(_voxelCandidateBuffer);
@@ -3379,7 +3566,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 		auto* context = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()) : nullptr;
 		auto* stage = _voxelCandidateShader->GetShaderStage(ShaderStage::ComputeShader);
-		if (context == nullptr || stage == nullptr || _voxelTriangleSrv == nullptr)
+		if (context == nullptr || stage == nullptr || _voxelTriangleSrv[levelIndex] == nullptr)
 			return sourceTriangleCount;
 
 		const auto candidateStart = std::chrono::high_resolution_clock::now();
@@ -3389,7 +3576,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			context->CSSetConstantBuffers(4, 1, &giCb);
 		}
 
-		ID3D11ShaderResourceView* inputSrv[1] = { _voxelTriangleSrv };
+		ID3D11ShaderResourceView* inputSrv[1] = { _voxelTriangleSrv[levelIndex] };
 		ID3D11UnorderedAccessView* outputUav[1] = { _voxelCandidateUav };
 		UINT initialCounts[1] = { 0u };
 		context->CSSetShaderResources(0, 1, inputSrv);
@@ -3404,17 +3591,37 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 
-		const uint32_t dispatchInit[3] = { 0u, 1u, 1u };
-		context->UpdateSubresource(_voxelCandidateDispatchArgs, 0, nullptr, dispatchInit, 0u, 0u);
-		// args[0] receives the RAW appended count as the thread-GROUP count -
-		// with [numthreads(64)] that is a 64x thread overdispatch whose surplus
-		// threads early-out on the shader's live-count guard. Deliberate: it
-		// avoids an args-fixup dispatch, and empty groups retire immediately.
-		context->CopyStructureCount(_voxelCandidateDispatchArgs, 0u, _voxelCandidateUav);
 		// Publish the live count for the injection shaders' guard (read through
 		// the R32_UINT SRV) - unconditional, unlike the CPU readback below which
 		// only telemetry/compare pays for.
 		context->CopyStructureCount(_voxelCandidateCountBuffer, 0u, _voxelCandidateUav);
+
+		auto* fixupStage = _candidateArgsFixupShader ? _candidateArgsFixupShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
+		if (fixupStage != nullptr && _voxelCandidateDispatchArgsUav != nullptr && _voxelCandidateCountSrv != nullptr)
+		{
+			// One-thread fixup writes the real GROUP count (ceil(live/64)) plus
+			// the 1,1 tail into the indirect args - the consuming voxelize
+			// DispatchIndirect then launches exactly the groups it needs instead
+			// of the historic raw-count 64x thread overdispatch.
+			ID3D11ShaderResourceView* countSrv[1] = { _voxelCandidateCountSrv };
+			ID3D11UnorderedAccessView* argsUav[1] = { _voxelCandidateDispatchArgsUav };
+			context->CSSetShaderResources(0, 1, countSrv);
+			context->CSSetUnorderedAccessViews(0, 1, argsUav, nullptr);
+			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(fixupStage->GetNativePtr()), nullptr, 0);
+			context->Dispatch(1u, 1u, 1u);
+			context->CSSetShaderResources(0, 1, nullSrv);
+			context->CSSetUnorderedAccessViews(0, 1, nullUav, nullptr);
+			context->CSSetShader(nullptr, nullptr, 0);
+		}
+		else
+		{
+			// Fallback (fixup shader missing): raw appended count as the group
+			// count = 64x thread overdispatch whose surplus threads early-out on
+			// the live-count guard.
+			const uint32_t dispatchInit[3] = { 0u, 1u, 1u };
+			context->UpdateSubresource(_voxelCandidateDispatchArgs, 0, nullptr, dispatchInit, 0u, 0u);
+			context->CopyStructureCount(_voxelCandidateDispatchArgs, 0u, _voxelCandidateUav);
+		}
 		outDispatchIndirectReady = true;
 
 		uint32_t candidateCount = sourceTriangleCount;
@@ -3440,6 +3647,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 	{
 		const auto buildStart = std::chrono::high_resolution_clock::now();
 		_gatherParkedThisCall = false;
+		_gatherServedByGpuList = false;
 		out.clear();
 		if (scene == nullptr || levelIndex >= ClipmapCount)
 		{
@@ -3528,7 +3736,18 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			(!level.dirty || shiftOnlyDirty || movementCacheStillFresh)))
 		{
 			const auto& cachedMaterials = _cachedGiMaterialProxies[levelIndex];
-			out = _cachedVoxelTriangles[levelIndex];
+			const uint32_t cachedCount = static_cast<uint32_t>(_cachedVoxelTriangles[levelIndex].size());
+			// If the level's GPU buffer already holds this exact list, skip the
+			// CPU-side vector copy entirely - the caller will bind the existing
+			// buffer without re-uploading.
+			if (_voxelTriangleGpuValid[levelIndex] && _voxelTriangleGpuCount[levelIndex] == cachedCount)
+			{
+				_gatherServedByGpuList = true;
+			}
+			else
+			{
+				out = _cachedVoxelTriangles[levelIndex];
+			}
 			_giMaterialProxies = cachedMaterials;
 			_giMaterialProxyLookup.clear();
 			for (const auto& materialProxy : _giMaterialProxies)
@@ -3539,14 +3758,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				}
 			}
 			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
-			_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
+			_stats.sourceTriangleCount = cachedCount;
 			_stats.emissiveMaterialCount += _cachedEmissiveMaterialCount[levelIndex];
 			_stats.emissiveTriangleCount += _cachedEmissiveTriangleCount[levelIndex];
 			_stats.emissiveActiveTriangleCount += _cachedEmissiveActiveTriangleCount[levelIndex];
 			_stats.emissiveTiledTriangleCount += _cachedEmissiveTiledTriangleCount[levelIndex];
 			_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, _cachedEmissiveProxyMaxLuma[levelIndex]);
 			_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, _cachedEmissiveProxyMaxStrength[levelIndex]);
-			return static_cast<uint32_t>(out.size());
+			return cachedCount;
 		}
 
 		if (r_giLogRebuilds._val.b)
@@ -3584,6 +3803,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_cachedVoxelTrianglesValid[levelIndex] = false;
 		_cachedVoxelTrianglesFrame[levelIndex] = 0ull;
 		_cachedGiMaterialProxies[levelIndex].clear();
+		_voxelTriangleGpuValid[levelIndex] = false;
 
 		// Time-sliced gather (GPU base+sun path): resume a parked gather when
 		// its snapshot still matches the world; otherwise start fresh.
@@ -4866,6 +5086,13 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				_clipmapWarmFramesRemaining[levelIndex] = std::max(
 					_clipmapWarmFramesRemaining[levelIndex],
 					(levelIndex == 0u) ? 2u : 1u);
+				// The feedback accum was scattered against the pre-shift centre;
+				// its voxel coords are now offset by the shift - drop it for one
+				// frame rather than injecting the lit scene at the wrong voxels.
+				if (levelIndex < FeedbackLevelCount)
+				{
+					_feedbackAccumValid[levelIndex] = false;
+				}
 			}
 			else
 			{
@@ -4888,18 +5115,32 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		// a level whose gather came back empty could never advance its centre and
 		// the clipmap wedged in place until something forced a full re-init.
 		const uint32_t triangleCount = BuildGpuVoxelTriangleList(scene, levelIndex, _voxelTriangleUpload);
-		const bool hasTriangles = (triangleCount > 0u) && EnsureGpuVoxelTriangleBuffer(triangleCount);
+		// Served-from-GPU: the level buffer already holds this exact list - bind
+		// it as-is, no upload and no payload rescan (stats come from the cache).
+		const bool gpuBufferCurrent =
+			_gatherServedByGpuList &&
+			_voxelTriangleGpuValid[levelIndex] &&
+			(_voxelTriangleGpuCount[levelIndex] == triangleCount);
+		const bool hasTriangles = (triangleCount > 0u) && (gpuBufferCurrent || EnsureGpuVoxelTriangleBuffer(levelIndex, triangleCount));
 		_stats.sourceTriangleCount = triangleCount;
 		_stats.candidateTriangleCount = triangleCount;
 		uint32_t emissivePayloadTriangleCount = 0u;
 		float emissivePayloadMaxHint = 0.0f;
-		for (uint32_t i = 0u; i < triangleCount; ++i)
+		if (gpuBufferCurrent)
 		{
-			const auto& tri = _voxelTriangleUpload[i];
-			if (tri.uv2Pad.z > 0.5f)
+			emissivePayloadTriangleCount = _voxelTriangleGpuEmissivePayloadCount[levelIndex];
+			emissivePayloadMaxHint = _voxelTriangleGpuEmissivePayloadMaxHint[levelIndex];
+		}
+		else
+		{
+			for (uint32_t i = 0u; i < triangleCount; ++i)
 			{
-				++emissivePayloadTriangleCount;
-				emissivePayloadMaxHint = std::max(emissivePayloadMaxHint, std::clamp(tri.uv2Pad.w, 0.0f, 1.0f));
+				const auto& tri = _voxelTriangleUpload[i];
+				if (tri.uv2Pad.z > 0.5f)
+				{
+					++emissivePayloadTriangleCount;
+					emissivePayloadMaxHint = std::max(emissivePayloadMaxHint, std::clamp(tri.uv2Pad.w, 0.0f, 1.0f));
+				}
 			}
 		}
 		_stats.emissivePayloadTriangleCount += emissivePayloadTriangleCount;
@@ -4921,16 +5162,20 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			return;
 		}
 
-		if (hasTriangles)
+		if (hasTriangles && !gpuBufferCurrent)
 		{
 			const auto uploadStart = std::chrono::high_resolution_clock::now();
 			D3D11_MAPPED_SUBRESOURCE mapped = {};
-			if (SUCCEEDED(context->Map(_voxelTriangleBuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+			if (SUCCEEDED(context->Map(_voxelTriangleBuffer[levelIndex], 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
 			{
 				memcpy(mapped.pData, _voxelTriangleUpload.data(), triangleCount * sizeof(GpuVoxelTriangle));
-				context->Unmap(_voxelTriangleBuffer, 0);
+				context->Unmap(_voxelTriangleBuffer[levelIndex], 0);
 				_stats.uploadBytes += static_cast<uint64_t>(triangleCount) * static_cast<uint64_t>(sizeof(GpuVoxelTriangle));
 				_stats.cpuUploadMs += ElapsedMs(uploadStart);
+				_voxelTriangleGpuValid[levelIndex] = true;
+				_voxelTriangleGpuCount[levelIndex] = triangleCount;
+				_voxelTriangleGpuEmissivePayloadCount[levelIndex] = emissivePayloadTriangleCount;
+				_voxelTriangleGpuEmissivePayloadMaxHint[levelIndex] = emissivePayloadMaxHint;
 			}
 			else
 			{
@@ -5358,12 +5603,23 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			0.0f,
 			(_injectSnapFramesRemaining > 0u) ? 1.0f : 0.0f,
 			0.0f);
+		const bool feedbackBoundThisLevel =
+			useGpuMaterialEval &&
+			(levelIndex < FeedbackLevelCount) &&
+			_feedbackAccumValid[levelIndex] &&
+			(_feedbackAccumSrv[levelIndex] != nullptr) &&
+			(r_giLitInjection._val.f32 > 0.0001f);
+		_constants.params13 = math::Vector4(
+			std::clamp(r_giLitInjection._val.f32, 0.0f, 4.0f),
+			std::clamp(r_giLitInjectionMaxLuma._val.f32, 0.1f, 32.0f),
+			feedbackBoundThisLevel ? 1.0f : 0.0f,
+			0.0f);
 		if (_constantBuffer)
 		{
 			_constantBuffer->Write(&_constants, sizeof(_constants));
 		}
 		uint32_t injectionTriangleCount = triangleCount;
-		ID3D11ShaderResourceView* injectionTriangleSrv = _voxelTriangleSrv;
+		ID3D11ShaderResourceView* injectionTriangleSrv = _voxelTriangleSrv[levelIndex];
 		bool useCandidateIndirectDispatch = false;
 		if (hasTriangles && useGpuCandidateGen)
 		{
@@ -5476,6 +5732,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				ID3D11ShaderResourceView* countSrv[1] = { _voxelCandidateCountSrv };
 				context->CSSetShaderResources(useGpuMaterialEval ? 12u : 9u, 1, countSrv);
 			}
+			if (feedbackBoundThisLevel)
+			{
+				ID3D11ShaderResourceView* feedbackSrv[1] = { _feedbackAccumSrv[levelIndex] };
+				context->CSSetShaderResources(13u, 1, feedbackSrv);
+			}
 			context->CSSetUnorderedAccessViews(0, 2, clearUav, nullptr);
 			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(voxelizeStage->GetNativePtr()), nullptr, 0);
 			if (useCandidateIndirectDispatch)
@@ -5491,6 +5752,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			{
 				ID3D11ShaderResourceView* nullCountSrv[1] = { nullptr };
 				context->CSSetShaderResources(useGpuMaterialEval ? 12u : 9u, 1, nullCountSrv);
+			}
+			if (feedbackBoundThisLevel)
+			{
+				ID3D11ShaderResourceView* nullFeedbackSrv[1] = { nullptr };
+				context->CSSetShaderResources(13u, 1, nullFeedbackSrv);
 			}
 		}
 

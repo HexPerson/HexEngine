@@ -55,8 +55,20 @@ namespace HexEngine
 		 */
 		void BindVoxelsForReflection() const;
 
+		/**
+		 * @brief Scatters the current frame's LIT scene radiance into per-clip
+		 * atomic accumulation buffers (clips 0-1). Call after deferred lighting
+		 * with the lit HDR scene and the gbuffer position/normal targets; the
+		 * next voxelize update folds the accumulated radiance into injection,
+		 * making GI track every light type, shadowing and its own bounce.
+		 */
+		void DispatchScreenFeedback(ITexture2D* litScene, ITexture2D* gbufferPosition, ITexture2D* gbufferNormal);
+
 	private:
 		static constexpr uint32_t ClipmapCount = 4;
+		// Lit-scene feedback covers the two near clips; far clips get their
+		// energy through the constant-driven injection + second bounce.
+		static constexpr uint32_t FeedbackLevelCount = 2;
 		static constexpr uint32_t ProbeGridX = 16;
 		static constexpr uint32_t ProbeGridY = 10;
 		static constexpr uint32_t ProbeGridZ = 16;
@@ -111,7 +123,8 @@ namespace HexEngine
 			math::Vector4 params9; // x=sunStrength, y=unlitAlbedoInjection, z=maxVoxelTestsPerTri, w=sunShadowMode
 			math::Vector4 params10; // x=gpuEdgeSmoothThreshold, y=gpuEdgeSmoothBlendStrength, z=bounceAlbedoMinLuma, w=bounceAlbedoRemapAmount
 			math::Vector4 params11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
-			math::Vector4 params12; // x=live source-triangle count this update, y=candidate routing active, z/w reserved
+			math::Vector4 params12; // x=live source-triangle count this update, y=candidate routing active, z=snap boost, w reserved
+			math::Vector4 params13; // x=litInjection strength, y=litInjection maxLuma, z=feedback accum bound for this level, w reserved
 		};
 
 		struct GpuVoxelTriangle
@@ -321,7 +334,8 @@ namespace HexEngine
 		// _meshUvRectCache - the raw bounds scan is O(vertices) once per
 		// mesh, O(1) per call after.
 		math::Vector4 ResolveMeshUvRect(const StaticMeshComponent* meshComponent);
-		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
+		bool EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t elementCapacity);
+		bool EnsureFeedbackAccumBuffer(uint32_t feedbackLevel, uint32_t elementCount);
 		bool EnsureGpuGiLightBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialTexelBuffer(uint32_t elementCapacity);
@@ -484,9 +498,22 @@ namespace HexEngine
 		// Single float4 cbuffer feeding the blur shader: (dirX, dirY, sourceChannel, depthScale).
 		// Re-bound each pass with the appropriate direction / source channel selector.
 		IConstantBuffer* _aoBlurConstantBuffer = nullptr;
-		ID3D11Buffer* _voxelTriangleBuffer = nullptr;
-		ID3D11ShaderResourceView* _voxelTriangleSrv = nullptr;
-		uint32_t _voxelTriangleCapacity = 0;
+		// Per-level persistent triangle buffers: uploaded only when the cached
+		// triangle list actually changes. Re-dispatching an unchanged level
+		// (the steady-state injection-EMA refresh) binds the existing buffer -
+		// no CPU-side vector copy and no Map/memcpy (~34MB + 10-15ms Debug per
+		// far-clip refresh before this).
+		std::array<ID3D11Buffer*, ClipmapCount> _voxelTriangleBuffer = {};
+		std::array<ID3D11ShaderResourceView*, ClipmapCount> _voxelTriangleSrv = {};
+		std::array<uint32_t, ClipmapCount> _voxelTriangleCapacity = {};
+		std::array<uint32_t, ClipmapCount> _voxelTriangleGpuCount = {};
+		std::array<bool, ClipmapCount> _voxelTriangleGpuValid = {};
+		std::array<uint32_t, ClipmapCount> _voxelTriangleGpuEmissivePayloadCount = {};
+		std::array<float, ClipmapCount> _voxelTriangleGpuEmissivePayloadMaxHint = {};
+		// Set by BuildGpuVoxelTriangleList when it served the request from the
+		// CPU cache AND the level's GPU buffer already holds that exact list -
+		// the caller can then skip the upload and the payload rescan entirely.
+		bool _gatherServedByGpuList = false;
 		ID3D11Buffer* _giLightBuffer = nullptr;
 		ID3D11ShaderResourceView* _giLightSrv = nullptr;
 		uint32_t _giLightCapacity = 0;
@@ -505,6 +532,17 @@ namespace HexEngine
 		ID3D11ShaderResourceView* _voxelCandidateCountSrv = nullptr;
 		ID3D11Buffer* _voxelCandidateCountReadback = nullptr;
 		ID3D11Buffer* _voxelCandidateDispatchArgs = nullptr;
+		ID3D11UnorderedAccessView* _voxelCandidateDispatchArgsUav = nullptr;
+		// Lit-scene feedback accumulators (uint4 per voxel: RGB scaled 1024 +
+		// weight scaled 1024, atomically accumulated by the screen-feedback CS,
+		// cleared before each scatter). Consumed by the eval voxelize at t13.
+		std::array<ID3D11Buffer*, FeedbackLevelCount> _feedbackAccumBuffer = {};
+		std::array<ID3D11UnorderedAccessView*, FeedbackLevelCount> _feedbackAccumUav = {};
+		std::array<ID3D11ShaderResourceView*, FeedbackLevelCount> _feedbackAccumSrv = {};
+		std::array<uint32_t, FeedbackLevelCount> _feedbackAccumElements = {};
+		// Accum coords are voxel-space for the clip center at scatter time; a
+		// consumed shift offsets them, so the accum is dropped on shift.
+		std::array<bool, FeedbackLevelCount> _feedbackAccumValid = {};
 		uint32_t _voxelCandidateCapacity = 0;
 
 		std::shared_ptr<IShader> _traceShader;
@@ -518,6 +556,8 @@ namespace HexEngine
 		std::shared_ptr<IShader> _voxelizeShader;
 		std::shared_ptr<IShader> _voxelizeEvalShader;
 		std::shared_ptr<IShader> _voxelCandidateShader;
+		std::shared_ptr<IShader> _candidateArgsFixupShader;
+		std::shared_ptr<IShader> _screenFeedbackShader;
 		std::shared_ptr<IShader> _voxelClearShader;
 		std::shared_ptr<IShader> _voxelPropagateShader;
 		std::shared_ptr<IShader> _voxelShiftShader;

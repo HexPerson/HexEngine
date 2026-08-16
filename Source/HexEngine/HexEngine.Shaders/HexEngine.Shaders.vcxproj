@@ -228,6 +228,8 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="DefaultAnimated.shader" />
     <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
     <HexEngineShader Include="DiffuseGIBuildCandidates.shader" />
+    <HexEngineShader Include="DiffuseGICandidateArgsFixup.shader" />
+    <HexEngineShader Include="DiffuseGIScreenFeedback.shader" />
     <HexEngineShader Include="DiffuseGIVoxelizeEval.shader" />
     <HexEngineShader Include="DiffuseGIPropagateVoxel.shader" />
     <HexEngineShader Include="GpuFrustumCull.shader" />

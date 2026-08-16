@@ -48,6 +48,10 @@
 	// after the candidate cull - lets the guard below use the exact count
 	// without a CPU readback. Bound only in candidate mode (g_giParams12.y).
 	Buffer<uint> g_candidateLiveCount : register(t12);
+	// Lit-scene feedback accum (uint4: RGB*1024 + weight*1024 per voxel),
+	// scattered by DiffuseGIScreenFeedback at end of the previous frame.
+	// Bound only when g_giParams13.z > 0.5 (near clips, accum valid).
+	StructuredBuffer<uint4> g_litFeedback : register(t13);
 	SHADOWMAPS_RESOURCE(6);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
@@ -74,6 +78,7 @@
 		// the live count re-injected ghost geometry), y = candidate-compacted
 		// routing active, z/w reserved.
 		float4 g_giParams12;
+		float4 g_giParams13;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -769,6 +774,44 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					injected += EvaluateLocalLights(voxelCenterWs, n, voxelAlbedo, voxelSize) * motionInjectScale;
 					// Sub-voxel edge coverage softens hard transitions when triangle edges do not align to voxel boundaries.
 					injected *= coverageRadiance;
+
+					// Lit-scene radiance feedback: the previous frame's actual
+					// rendered lighting at this voxel (every light type,
+					// shadows, and GI's own output). Added to the injection
+					// TARGET so the temporal EMA damps the loop - a converging
+					// geometric series rather than unbounded accumulation.
+					// Per-voxel truth, so NOT coverage-scaled; identical for
+					// every triangle covering this voxel (writes race
+					// last-wins, so no double count).
+					if (g_giParams13.z > 0.5f)
+					{
+						const uint feedbackIdx = (coord.z * voxelRes + coord.y) * voxelRes + coord.x;
+						const uint4 packed = g_litFeedback[feedbackIdx];
+						if (packed.w > 0u)
+						{
+							const float3 feedbackRadiance = float3(packed.xyz) / max((float)packed.w, 1.0f);
+							injected += LuminanceClamp(feedbackRadiance, g_giParams13.y) * (g_giParams13.x * 0.25f);
+						}
+					}
+
+					// Second bounce: previous-frame radiance arriving from the
+					// 6 neighbours, re-emitted through this voxel's albedo.
+					// Feeds the injection target (EMA-damped, converges for
+					// albedo*strength < 1) instead of compounding post-blend.
+					if (g_giParams6.z > 0.0001f)
+					{
+						const int3 pc = int3(coord);
+						const int3 maxC = int3((int)voxelRes - 1, (int)voxelRes - 1, (int)voxelRes - 1);
+						float3 neighbourRadiance = 0.0f.xxx;
+						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(1, 0, 0), int3(0, 0, 0), maxC)].rgb;
+						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(-1, 0, 0), int3(0, 0, 0), maxC)].rgb;
+						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, 1, 0), int3(0, 0, 0), maxC)].rgb;
+						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, -1, 0), int3(0, 0, 0), maxC)].rgb;
+						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, 0, 1), int3(0, 0, 0), maxC)].rgb;
+						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, 0, -1), int3(0, 0, 0), maxC)].rgb;
+						neighbourRadiance *= (1.0f / 6.0f);
+						injected += neighbourRadiance * voxelAlbedo * (g_giParams6.z * 0.5f);
+					}
 					// Fixed-retention temporal blend. The previous version derived an
 					// `injectionPresence` from current-frame injected luminance and collapsed
 					// `effectiveKeep` to ~0.20 whenever a voxel didn't happen to receive bright
