@@ -408,6 +408,11 @@ namespace HexEngine
 		// Per-frame budget: only one level may run a FULL CPU triangle regather
 		// per Update (clip 0 exempt) - deferred levels stay dirty and retry.
 		bool _fullGatherConsumedThisFrame = false;
+		// Set by BuildGpuVoxelTriangleList when its empty result means "gather
+		// parked at the slice limit" rather than a transient anomaly - the
+		// caller must then NOT bump the warm counter (warm keeps the settling
+		// fast path re-running clip 0/1 every frame for the whole gather).
+		bool _gatherParkedThisCall = false;
 		// FNV-1a over every injection-affecting cvar (+ quantized coupling
 		// scale). A change arms the snap window - GI settings respond in a few
 		// updates instead of easing through the steady-state EMA for seconds.

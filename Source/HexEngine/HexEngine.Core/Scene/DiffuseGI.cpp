@@ -2651,11 +2651,28 @@ namespace HexEngine
 				{
 					RunGpuVoxelization(scene, 0u);
 				}
-				if (!movementActive && clipmapSettling && shouldRunGpuClip(1u))
+				// A parked time-sliced gather should drain as fast as possible:
+				// schedule that level every frame (the slice itself is capped at
+				// r_giGatherTrianglesPerFrame) instead of waiting for its slot in
+				// the far-clip rotation. One pending level per frame, lowest first.
+				uint32_t pendingGatherClip = UINT32_MAX;
+				for (uint32_t i = 1u; i < ClipmapCount; ++i)
+				{
+					if (_pendingGather[i].active)
+					{
+						pendingGatherClip = i;
+						break;
+					}
+				}
+				if (!movementActive && pendingGatherClip != UINT32_MAX && shouldRunGpuClip(pendingGatherClip))
+				{
+					RunGpuVoxelization(scene, pendingGatherClip);
+				}
+				else if (!movementActive && clipmapSettling && shouldRunGpuClip(1u))
 				{
 					RunGpuVoxelization(scene, 1u);
 				}
-				if (!clipmapSettling && !movementActive && ((_frameCounter % 2ull) == 0ull))
+				if (!clipmapSettling && !movementActive && pendingGatherClip == UINT32_MAX && ((_frameCounter % 2ull) == 0ull))
 				{
 					// Cadence doubled (%4 -> %2): each far clip now refreshes every
 					// 6 frames instead of 12 - halves the injection-EMA convergence
@@ -3409,6 +3426,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 	uint32_t DiffuseGI::BuildGpuVoxelTriangleList(Scene* scene, uint32_t levelIndex, std::vector<GpuVoxelTriangle>& out)
 	{
 		const auto buildStart = std::chrono::high_resolution_clock::now();
+		_gatherParkedThisCall = false;
 		out.clear();
 		if (scene == nullptr || levelIndex >= ClipmapCount)
 		{
@@ -4144,6 +4162,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				pendingGather.emissiveActiveTriangleCount = emissiveActiveTriangleCountLocal;
 				pendingGather.emissiveTiledTriangleCount = emissiveTiledTriangleCountLocal;
 				out.clear();
+				_gatherParkedThisCall = true;
 				_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
 				_stats.sourceTriangleCount = 0u;
 				return 0u;
@@ -4864,7 +4883,15 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		{
 			// Avoid one-frame GI collapse from transient empty triangle gathers after clipmap shifts.
 			// Keep previous radiance and retry with a warm budget on subsequent frames.
-			_clipmapWarmFramesRemaining[levelIndex] = std::max(_clipmapWarmFramesRemaining[levelIndex], (levelIndex == 0u) ? 3u : 1u);
+			// A PARKED time-sliced gather is not an anomaly though: bumping the warm
+			// counter for it kept clipmapSettling true for the whole multi-frame
+			// gather, and the settling fast path then re-ran clip 0/1 (cached-list
+			// copy + full upload + dispatch) EVERY frame - a constant ~20ms drain
+			// until the far clips finally completed.
+			if (!_gatherParkedThisCall)
+			{
+				_clipmapWarmFramesRemaining[levelIndex] = std::max(_clipmapWarmFramesRemaining[levelIndex], (levelIndex == 0u) ? 3u : 1u);
+			}
 			level.dirty = true;
 			return;
 		}
