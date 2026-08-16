@@ -743,11 +743,18 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						const float litFactor = saturate(sunFacingWeight * sunPresenceMask * sunVisible);
 						const float unlitWeight = (1.0f - litFactor) * (1.0f - litFactor);
 						const float3 triTransportAlbedo = RemapBounceTransportAlbedo(triAlbedo);
-						const float triTransportLuma = clamp(dot(triTransportAlbedo, float3(0.2126f, 0.7152f, 0.0722f)), 0.02f, 1.0f);
-						const float3 baseDiffuse = triTransportAlbedo * (triTransportLuma * diffuseInject * unlitBase * unlitWeight * 0.48f * clipAttenuation * baseInjectionScale);
+						// Bounce = irradiance x albedo (VECTOR). The old form multiplied
+						// by luma(albedo) AGAIN - a double brightness weighting that
+						// crushed saturated hues (pure blue: luma 0.07 -> its bounce
+						// was ~14x dimmer than a mid-grey floor's per unit area), which
+						// is why coloured surfaces bounced the sun's colour instead of
+						// their own. Constants rescaled x0.5 so mid-grey (luma 0.5)
+						// injects the same energy as before - only saturated colours
+						// gain.
+						const float3 baseDiffuse = triTransportAlbedo * (diffuseInject * unlitBase * unlitWeight * 0.24f * clipAttenuation * baseInjectionScale);
 						const float sunDirectionalShape = lerp(0.70f, 1.0f, sunDirectionality);
-						const float sunDirectional = sunFacingWeight * sunPresenceRaw * sunDirectionalShape * (0.38f + 0.32f * sunBoost);
-						const float3 sunBounce = triTransportAlbedo * (triTransportLuma * sunDirectional * sunVisible * clipAttenuation * sunInjectionScale);
+						const float sunDirectional = sunFacingWeight * sunPresenceRaw * sunDirectionalShape * (0.19f + 0.16f * sunBoost);
+						const float3 sunBounce = triTransportAlbedo * (sunDirectional * sunVisible * clipAttenuation * sunInjectionScale);
 						const float3 emissiveBounce = emissiveContribution * emissiveInject * clipAttenuation * baseInjectionScale;
 						injected = baseDiffuse + sunBounce + emissiveBounce;
 					}
