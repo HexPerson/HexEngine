@@ -788,8 +788,13 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					const float emissiveTargetKeep = 0.20f;
 					// Snap-on-change: see the plain voxelize shader.
 					const float snapBoost = saturate(g_giParams12.z);
+					// Snap only voxels that RECEIVE injection this update - low
+					// retention on injection-less voxels is the breathing/collapse
+					// bug (they lose 85% of history per refresh and get nothing
+					// back; with the snap armed the whole field decays to black).
+					const float snapGate = snapBoost * ((dot(injected, 1.0f.xxx) > 1e-5f) ? 1.0f : 0.0f);
 					float effectiveKeep = lerp(temporalKeep, emissiveTargetKeep, emissiveActivation);
-					effectiveKeep = lerp(effectiveKeep, 0.15f, snapBoost);
+					effectiveKeep = lerp(effectiveKeep, 0.15f, snapGate);
 					float3 radiance = previous.rgb * effectiveKeep + injected * (1.0f - effectiveKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
@@ -807,7 +812,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					// stay on the default delta limit.
 					const float3 emissiveExtraDelta = (1.0f.xxx + previous.rgb * 0.75f) * emissiveActivation;
 					deltaLimit = max(deltaLimit, deltaLimit + emissiveExtraDelta);
-					deltaLimit = lerp(deltaLimit, 8.0f.xxx, snapBoost);
+					deltaLimit = lerp(deltaLimit, 8.0f.xxx, snapGate);
 					radiance = min(radiance, previous.rgb + deltaLimit);
 					radiance = max(radiance, previous.rgb - deltaLimit);
 					radiance = max(radiance, 0.0f.xxx);

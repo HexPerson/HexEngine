@@ -2348,7 +2348,10 @@ namespace HexEngine
 			hashF(r_giUseTextureTint._val.b ? 1.0f : 0.0f);
 			hashF(r_giLightCoupling._val.b ? 1.0f : 0.0f);
 			hashF(r_giLightCouplingRef._val.f32);
-			hashF(std::round(_lightCouplingScale * 10.0f));
+			// NOTE: the live coupling SCALE is deliberately NOT hashed - it
+			// drifts continuously with weather/time-of-day, and a quantization
+			// boundary would oscillate the hash and keep the snap permanently
+			// armed (which collapses the field - see the shader's snapGate).
 			hashF(static_cast<float>(r_giGpuSunShadowMode._val.i32));
 			hashF(r_giGpuSunShadowPerVoxel._val.b ? 1.0f : 0.0f);
 			const bool injectionTuningChanged =
@@ -2502,9 +2505,11 @@ namespace HexEngine
 		if (giLightStateChanged)
 		{
 			_lastObservedSceneLightRevision = sceneLightRevision;
-			// Snap-on-change for revision-tracked light edits (add/remove/move/
-			// retint) - same rationale as the inject-signature trigger.
-			_injectSnapFramesRemaining = std::max(_injectSnapFramesRemaining, 10u);
+			// Deliberately NOT a snap trigger: the light revision can tick every
+			// frame in scenes with animated weather/sun (see the GI-revision-
+			// thrash history), which kept the snap permanently armed. The
+			// quantized inject SIGNATURE below is the intentional change signal
+			// for real light-set edits.
 		}
 
 		RebuildClipmapTransforms(cameraPosition, movementActive);

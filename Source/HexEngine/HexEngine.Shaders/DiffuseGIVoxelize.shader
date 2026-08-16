@@ -298,7 +298,13 @@
 					// keep the accumulated history at the `temporalKeep` rate (~0.94) and let
 					// new injection blend in at the matching 6%. Stale data still fades because
 					// frames without injection just lerp toward zero at the same rate.
-					const float snapKeep = lerp(temporalKeep, 0.15f, snapBoost);
+					// Snap only voxels that RECEIVE injection this update. Applying
+					// low retention to injection-less voxels re-created the classic
+					// breathing/collapse bug: sparse-coverage voxels lost 85% of
+					// their history per refresh while getting nothing back, and the
+					// whole field decayed toward black whenever the snap was armed.
+					const float snapGate = snapBoost * ((dot(injected, 1.0f.xxx) > 1e-5f) ? 1.0f : 0.0f);
+					const float snapKeep = lerp(temporalKeep, 0.15f, snapGate);
 					float3 radiance = previous.rgb * snapKeep + injected * (1.0f - snapKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
@@ -311,7 +317,7 @@
 					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
 					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
 					float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
-					deltaLimit = lerp(deltaLimit, 8.0f.xxx, snapBoost);
+					deltaLimit = lerp(deltaLimit, 8.0f.xxx, snapGate);
 					radiance = min(radiance, previous.rgb + deltaLimit);
 					radiance = max(radiance, previous.rgb - deltaLimit);
 					radiance = max(radiance, 0.0f.xxx);
