@@ -1167,11 +1167,13 @@ namespace HexEngine
 			// instance mode before calling this.)
 			_material->_graph = MaterialGraph::CreateFromStandardMaterial(*_material);
 			_material->_hasGraph = true;
+			_material->InvalidateGiGraphTintCache();
 			_material->Save();
 		}
 		else if (_material->_graph.nodes.empty())
 		{
 			_material->_graph = MaterialGraph::CreateFromStandardMaterial(*_material);
+			_material->InvalidateGiGraphTintCache();
 			_isDirty = true;
 		}
 
@@ -1688,6 +1690,7 @@ namespace HexEngine
 		{
 			_material->_hasGraph = true;
 		}
+		_material->InvalidateGiGraphTintCache();
 		_material->Save();
 		_isDirty = false;
 		SetStatusText(_instanceMode ? L"Instance saved and applied." : L"Saved and applied.", false);

@@ -314,6 +314,7 @@ namespace HexEngine
 			if (MaterialGraph::Deserialize(*graphIt, material->_graph, &graphErrors))
 			{
 				material->_hasGraph = true;
+				material->InvalidateGiGraphTintCache();
 			}
 			else
 			{

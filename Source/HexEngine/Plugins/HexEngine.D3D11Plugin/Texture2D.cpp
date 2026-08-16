@@ -6,6 +6,8 @@
 
 #include <DirectXTex\DirectXTex.h>
 
+#include <algorithm>
+
 Texture2D::~Texture2D()
 {
 	Destroy();
@@ -109,6 +111,67 @@ void Texture2D::GetPixels(std::vector<uint8_t>& buffer)
 
 	//	gfxContext->Unmap(_texture, 0);
 	//}
+}
+
+bool Texture2D::GetPixelsScaled(std::vector<uint8_t>& buffer, int32_t maxDimension, int32_t& outWidth, int32_t& outHeight)
+{
+	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
+	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
+
+	DirectX::ScratchImage scratch;
+	g_pGraphics->Lock();
+	const HRESULT captureHr = DirectX::CaptureTexture(gfxDevice, gfxContext, _texture, scratch);
+	g_pGraphics->Unlock();
+	if (FAILED(captureHr))
+		return false;
+
+	const auto& meta = scratch.GetMetadata();
+	if (meta.mipLevels == 0 || meta.width == 0 || meta.height == 0)
+		return false;
+
+	// Smallest existing mip whose larger dimension still covers maxDimension
+	// (or the smallest mip there is). Only this one image gets decoded.
+	const size_t maxDim = static_cast<size_t>(std::max(1, maxDimension));
+	size_t chosenMip = 0;
+	for (size_t mip = 0; mip < meta.mipLevels; ++mip)
+	{
+		chosenMip = mip;
+		const size_t w = std::max<size_t>(1u, meta.width >> mip);
+		const size_t h = std::max<size_t>(1u, meta.height >> mip);
+		if (std::max(w, h) <= maxDim)
+			break;
+	}
+
+	const DirectX::Image* mipImage = scratch.GetImage(chosenMip, 0, 0);
+	if (mipImage == nullptr || mipImage->pixels == nullptr)
+		return false;
+
+	DirectX::ScratchImage decompressed;
+	const DirectX::Image* source = mipImage;
+	if (DirectX::IsCompressed(meta.format))
+	{
+		if (FAILED(DirectX::Decompress(*mipImage, DXGI_FORMAT_R8G8B8A8_UNORM, decompressed)))
+			return false;
+		source = decompressed.GetImage(0, 0, 0);
+		if (source == nullptr || source->pixels == nullptr)
+			return false;
+	}
+	else if (DirectX::BitsPerPixel(meta.format) != 32)
+	{
+		// Callers treat the payload as 4 bytes per pixel; other layouts would
+		// be misread - report unsupported so they fall back to GetPixels.
+		return false;
+	}
+
+	outWidth = static_cast<int32_t>(source->width);
+	outHeight = static_cast<int32_t>(source->height);
+	const size_t tightPitch = source->width * 4u;
+	buffer.resize(tightPitch * source->height);
+	for (size_t row = 0; row < source->height; ++row)
+	{
+		memcpy(buffer.data() + row * tightPitch, source->pixels + row * source->rowPitch, tightPitch);
+	}
+	return true;
 }
 
 void* Texture2D::LockPixels(int32_t* rowPitch)

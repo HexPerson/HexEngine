@@ -67,5 +67,24 @@ namespace HexEngine
 		// for example). The previous inline implementation here cast GetNativePtr()
 		// to ID3D11Texture2D* which only worked under the D3D11 backend.
 
+		/**
+		 * @brief Reads a reduced-resolution copy of the texture as tightly
+		 * packed RGBA8 (BC formats decompressed; non-BC data returned in its
+		 * native 8-bit channel order, e.g. BGRA stays BGRA - check GetFormat).
+		 * The backend picks the smallest existing mip whose larger dimension is
+		 * still >= maxDimension (or the smallest mip available) so only that
+		 * single mip is decoded - full-chain decompression of large BC
+		 * textures on the CPU is far too slow for callers that only need a
+		 * coarse tint/average (GI material proxies).
+		 *
+		 * Appended defaulted virtual (vtable end): backends without an
+		 * implementation return false and callers must fall back to
+		 * GetPixels.
+		 */
+		virtual bool GetPixelsScaled(std::vector<uint8_t>& buffer, int32_t maxDimension, int32_t& outWidth, int32_t& outHeight)
+		{
+			(void)buffer; (void)maxDimension; (void)outWidth; (void)outHeight;
+			return false;
+		}
 	};
 }

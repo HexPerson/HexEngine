@@ -168,6 +168,28 @@ namespace
 		}
 	}
 
+	// GI only needs coarse per-triangle colour averages, so read a small mip
+	// (single-mip BC decode) instead of the full chain - full-resolution
+	// GetPixels on a 4K BC texture decompresses tens of millions of texels on
+	// the CPU and was a visible hitch whenever a new material entered clip
+	// bounds (e.g. right after movement stops and pending levels rebuild).
+	static constexpr int32_t kGiTextureReadMaxDim = 256;
+
+	static void ReadGiTexturePixels(HexEngine::ITexture2D& texture, std::vector<uint8_t>& pixels, int32_t& width, int32_t& height)
+	{
+		int32_t scaledW = 0;
+		int32_t scaledH = 0;
+		if (texture.GetPixelsScaled(pixels, kGiTextureReadMaxDim, scaledW, scaledH) && scaledW > 0 && scaledH > 0)
+		{
+			width = scaledW;
+			height = scaledH;
+			return;
+		}
+		width = std::max(1, texture.GetWidth());
+		height = std::max(1, texture.GetHeight());
+		texture.GetPixels(pixels);
+	}
+
 	static bool SphereIntersectsAabb(const math::Vector3& center, float radius, const math::Vector3& aabbMin, const math::Vector3& aabbMax)
 	{
 		const math::Vector3 clamped(
@@ -1451,10 +1473,9 @@ namespace HexEngine
 			if (auto albedo = material->GetTexture(MaterialTexture::Albedo))
 			{
 				std::vector<uint8_t> pixels;
-				albedo->GetPixels(pixels);
-
-				const int32_t texW = std::max(1, albedo->GetWidth());
-				const int32_t texH = std::max(1, albedo->GetHeight());
+				int32_t texW = 1;
+				int32_t texH = 1;
+				ReadGiTexturePixels(*albedo, pixels, texW, texH);
 				const size_t minTightSize = static_cast<size_t>(texW) * static_cast<size_t>(texH) * 4u;
 				if (pixels.size() >= minTightSize && texW > 0 && texH > 0)
 				{
@@ -3574,9 +3595,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 							it->second.pixels.clear();
 							if (albedoTex)
 							{
-								it->second.width = std::max(1, albedoTex->GetWidth());
-								it->second.height = std::max(1, albedoTex->GetHeight());
-								albedoTex->GetPixels(it->second.pixels);
+								ReadGiTexturePixels(*albedoTex, it->second.pixels, it->second.width, it->second.height);
 								const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
 								if (it->second.pixels.size() >= minTightSize)
 								{
@@ -3605,9 +3624,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 				if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
 				{
-					data.width = std::max(1, albedoTex->GetWidth());
-					data.height = std::max(1, albedoTex->GetHeight());
-					albedoTex->GetPixels(data.pixels);
+					ReadGiTexturePixels(*albedoTex, data.pixels, data.width, data.height);
 					const size_t minTightSize = static_cast<size_t>(data.width) * static_cast<size_t>(data.height) * 4u;
 					if (data.pixels.size() >= minTightSize)
 					{
@@ -3677,9 +3694,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 				{
 					if (auto emissiveTex = material->GetTexture(MaterialTexture::Emission))
 					{
-						it->second.width = std::max(1, emissiveTex->GetWidth());
-						it->second.height = std::max(1, emissiveTex->GetHeight());
-						emissiveTex->GetPixels(it->second.pixels);
+						ReadGiTexturePixels(*emissiveTex, it->second.pixels, it->second.width, it->second.height);
 						const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
 						if (it->second.pixels.size() >= minTightSize)
 						{
@@ -3701,9 +3716,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			{
 				if (auto emissiveTex = material->GetTexture(MaterialTexture::Emission))
 				{
-					data.width = std::max(1, emissiveTex->GetWidth());
-					data.height = std::max(1, emissiveTex->GetHeight());
-					emissiveTex->GetPixels(data.pixels);
+					ReadGiTexturePixels(*emissiveTex, data.pixels, data.width, data.height);
 					const size_t minTightSize = static_cast<size_t>(data.width) * static_cast<size_t>(data.height) * 4u;
 					if (data.pixels.size() >= minTightSize)
 					{
@@ -4745,9 +4758,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 							it->second.pixels.clear();
 							if (albedoTex)
 							{
-								it->second.width = std::max(1, albedoTex->GetWidth());
-								it->second.height = std::max(1, albedoTex->GetHeight());
-								albedoTex->GetPixels(it->second.pixels);
+								ReadGiTexturePixels(*albedoTex, it->second.pixels, it->second.width, it->second.height);
 								const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
 								if (it->second.pixels.size() >= minTightSize)
 								{
@@ -4776,9 +4787,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					if (auto albedoTex = material->GetTexture(MaterialTexture::Albedo))
 					{
 						data.textureIdentity = static_cast<const void*>(albedoTex.get());
-						data.width = std::max(1, albedoTex->GetWidth());
-						data.height = std::max(1, albedoTex->GetHeight());
-						albedoTex->GetPixels(data.pixels);
+						ReadGiTexturePixels(*albedoTex, data.pixels, data.width, data.height);
 						const size_t minTightSize = static_cast<size_t>(data.width) * static_cast<size_t>(data.height) * 4u;
 						if (data.pixels.size() >= minTightSize)
 						{
@@ -4815,9 +4824,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 							it->second.pixels.clear();
 							if (emissiveTex)
 							{
-								it->second.width = std::max(1, emissiveTex->GetWidth());
-								it->second.height = std::max(1, emissiveTex->GetHeight());
-								emissiveTex->GetPixels(it->second.pixels);
+								ReadGiTexturePixels(*emissiveTex, it->second.pixels, it->second.width, it->second.height);
 								const size_t minTightSize = static_cast<size_t>(it->second.width) * static_cast<size_t>(it->second.height) * 4u;
 								if (it->second.pixels.size() >= minTightSize)
 								{
@@ -4841,9 +4848,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 					if (auto emissiveTex = material->GetTexture(MaterialTexture::Emission))
 					{
 						data.textureIdentity = static_cast<const void*>(emissiveTex.get());
-						data.width = std::max(1, emissiveTex->GetWidth());
-						data.height = std::max(1, emissiveTex->GetHeight());
-						emissiveTex->GetPixels(data.pixels);
+						ReadGiTexturePixels(*emissiveTex, data.pixels, data.width, data.height);
 						const size_t minTightSize = static_cast<size_t>(data.width) * static_cast<size_t>(data.height) * 4u;
 						if (data.pixels.size() >= minTightSize)
 						{

@@ -123,8 +123,11 @@ namespace HexEngine
 
 		// Flat albedo tint for GI material proxies: diffuseColour, multiplied
 		// by the graph's constant-folded BaseColor for graph materials (whose
-		// authored colour never lands in _properties.diffuseColour).
+		// authored colour never lands in _properties.diffuseColour). The fold
+		// is cached (GI change-tracking calls this per mesh per update) -
+		// every graph (re)assignment must call InvalidateGiGraphTintCache.
 		math::Vector4 GetGiAlbedoTint() const;
+		void InvalidateGiGraphTintCache() { _giGraphTintCacheValid = false; }
 		// Snow shell (Phase 3): when set, a snow accumulation layer is drawn
 		// on top of this (rigid) surface in the opaque pass - see the shell
 		// re-draw in Scene::RenderInstance. Opt-in per material so only
@@ -194,5 +197,11 @@ namespace HexEngine
 		std::recursive_mutex _lock;
 		uint32_t _objectFlags = 0;
 		std::atomic<int32_t> _editorOpenCount = 0;
+
+		// Kept at the END of the class: appended members only grow sizeof
+		// (Materials are constructed inside Core) without shifting the
+		// offsets plugin code compiled against an older header relies on.
+		mutable math::Vector4 _giGraphTintCache = math::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
+		mutable bool _giGraphTintCacheValid = false;
 	};
 }
