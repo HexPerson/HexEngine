@@ -430,6 +430,30 @@ namespace HexEngine
 		std::vector<GiMeshInstanceProxy> _giMeshProxies;
 		std::vector<GiMaterialProxy> _giMaterialProxies;
 		std::vector<GiLocalLightProxy> _giLightProxies;
+
+		// In-flight time-sliced triangle gather (GPU base+sun path only). A full
+		// regather of a big clip is 25-200ms of CPU in Debug; instead of paying
+		// it in one frame the mesh loop stops after r_giGatherTrianglesPerFrame
+		// appended triangles, parks its state here and resumes next frame (the
+		// level keeps its previous radiance meanwhile via the transient-empty
+		// path). Aborted whenever the scene revisions or the clip volume change.
+		struct PendingTriangleGather
+		{
+			bool active = false;
+			uint32_t nextMeshIndex = 0u;
+			std::vector<GpuVoxelTriangle> triangles;
+			std::vector<GiMeshInstanceProxy> meshes;
+			std::vector<GiMaterialProxy> materials;
+			std::vector<GiLocalLightProxy> lights;
+			math::Vector3 center = math::Vector3::Zero;
+			float extent = -1.0f;
+			uint64_t geometryRevision = 0ull;
+			uint64_t materialRevision = 0ull;
+			uint32_t emissiveTriangleCount = 0u;
+			uint32_t emissiveActiveTriangleCount = 0u;
+			uint32_t emissiveTiledTriangleCount = 0u;
+		};
+		std::array<PendingTriangleGather, ClipmapCount> _pendingGather = {};
 		std::vector<GpuGiLight> _gpuGiLightUpload;
 		std::vector<GpuGiMaterial> _gpuGiMaterialUpload;
 		std::vector<uint32_t> _gpuGiMaterialTexelUpload;

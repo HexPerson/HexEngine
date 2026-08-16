@@ -101,6 +101,7 @@ namespace HexEngine
 	HVar r_giTelemetry("r_giTelemetry", "Log GI stage telemetry counters", false, false, true);
 	HVar r_giTelemetryLogFrames("r_giTelemetryLogFrames", "How often GI telemetry is logged (frames)", 300, 10, 2000);
 	HVar r_giSpikeLogMs("r_giSpikeLogMs", "Log any GI update whose CPU cost exceeds this many ms (0 = off)", 12.0f, 0.0f, 1000.0f);
+	HVar r_giGatherTrianglesPerFrame("r_giGatherTrianglesPerFrame", "Time-slice full GI triangle regathers: max triangles appended per frame (0 = unsliced)", 24000, 0, 300000);
 	HVar r_giUseProbes("r_giUseProbes", "Use probe atlas contribution in GI trace (expensive CPU path)", false, false, true);
 	HVar r_giVoxelDecay("r_giVoxelDecay", "Temporal decay applied to voxel radiance each frame", 0.94f, 0.5f, 0.999f);
 	HVar r_giVoxelNeighbourBlend("r_giVoxelNeighbourBlend", "Blend factor for neighbouring voxel smoothing in GI trace", 0.25f, 0.0f, 1.0f);
@@ -517,6 +518,7 @@ namespace HexEngine
 			_cachedVoxelTriangles[i].clear();
 			_cachedGiMaterialProxies[i].clear();
 			_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 			_cachedVoxelTrianglesFrame[i] = 0ull;
 			_cachedEmissiveMaterialCount[i] = 0u;
 			_cachedEmissiveTriangleCount[i] = 0u;
@@ -807,6 +809,7 @@ namespace HexEngine
 			_cachedVoxelTriangles[i].clear();
 			_cachedGiMaterialProxies[i].clear();
 			_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 			_cachedVoxelTrianglesFrame[i] = 0ull;
 			_cachedEmissiveMaterialCount[i] = 0u;
 			_cachedEmissiveTriangleCount[i] = 0u;
@@ -1243,6 +1246,7 @@ namespace HexEngine
 				level.pendingShiftWs = math::Vector3::Zero;
 				level.dirty = true;
 				_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = (i == 0u) ? 2u : 1u;
 			}
@@ -1275,6 +1279,7 @@ namespace HexEngine
 						level.center = snapped;
 						level.previousCenter = snapped;
 						_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 						_cachedVoxelTrianglesFrame[i] = 0ull;
 						_clipmapWarmFramesRemaining[i] = (i == 0u) ? 2u : 1u;
 					}
@@ -2260,6 +2265,7 @@ namespace HexEngine
 				_cachedVoxelTriangles[i].clear();
 				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = 0u;
 			}
@@ -2394,6 +2400,7 @@ namespace HexEngine
 					if (!gpuBaseSunOwnsLighting)
 					{
 						_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 						_cachedVoxelTrianglesFrame[i] = 0ull;
 					}
 					_clipmaps[i].dirty = true;
@@ -2443,6 +2450,7 @@ namespace HexEngine
 				_cachedVoxelTriangles[i].clear();
 				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = 0u;
 			}
@@ -2466,6 +2474,7 @@ namespace HexEngine
 				_cachedVoxelTriangles[i].clear();
 				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 				_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], 2u);
 				_clipmaps[i].dirty = true;
@@ -2521,6 +2530,7 @@ namespace HexEngine
 				_cachedVoxelTriangles[i].clear();
 				_cachedGiMaterialProxies[i].clear();
 				_cachedVoxelTrianglesValid[i] = false;
+			_pendingGather[i] = {};
 				_cachedVoxelTrianglesFrame[i] = 0ull;
 			}
 		}
@@ -3532,6 +3542,24 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_cachedVoxelTrianglesFrame[levelIndex] = 0ull;
 		_cachedGiMaterialProxies[levelIndex].clear();
 
+		// Time-sliced gather (GPU base+sun path): resume a parked gather when
+		// its snapshot still matches the world; otherwise start fresh.
+		auto& pendingGather = _pendingGather[levelIndex];
+		const uint32_t gatherTrianglesPerFrame = static_cast<uint32_t>(std::max(0, r_giGatherTrianglesPerFrame._val.i32));
+		const bool gatherSliceEligible =
+			gpuComputeBaseSunEnabled &&
+			level.initialized &&
+			(gatherTrianglesPerFrame > 0u);
+		if (pendingGather.active &&
+			(!gatherSliceEligible ||
+			 pendingGather.geometryRevision != sceneGeometryRevision ||
+			 pendingGather.materialRevision != sceneMaterialRevision ||
+			 pendingGather.extent != level.extent ||
+			 (pendingGather.center - level.center).LengthSquared() > 1e-6f))
+		{
+			pendingGather = {};
+		}
+
 		const math::Vector3 clipMin = level.center - math::Vector3(level.extent, level.extent, level.extent);
 		const math::Vector3 clipMax = level.center + math::Vector3(level.extent, level.extent, level.extent);
 		GiClipmapParams clipmapParams = {};
@@ -3540,7 +3568,27 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		clipmapParams.resolution = level.resolution;
 		clipmapParams.levelIndex = levelIndex;
 		clipmapParams.dirty = level.dirty;
-		ExtractGiSceneProxies(scene, clipmapParams, _giMeshProxies, _giMaterialProxies, _giLightProxies);
+		if (pendingGather.active)
+		{
+			// The snapshot is authoritative for a resumed gather: the mesh list,
+			// material indices (baked into already-gathered triangles) and light
+			// set must not drift between slices.
+			_giMeshProxies = pendingGather.meshes;
+			_giMaterialProxies = pendingGather.materials;
+			_giLightProxies = pendingGather.lights;
+			_giMaterialProxyLookup.clear();
+			for (const auto& materialProxy : _giMaterialProxies)
+			{
+				if (materialProxy.material != nullptr)
+				{
+					_giMaterialProxyLookup[materialProxy.material] = materialProxy.index;
+				}
+			}
+		}
+		else
+		{
+			ExtractGiSceneProxies(scene, clipmapParams, _giMeshProxies, _giMaterialProxies, _giLightProxies);
+		}
 		uint32_t emissiveMaterialCountLocal = 0u;
 		float emissiveProxyMaxLumaLocal = 0.0f;
 		float emissiveProxyMaxStrengthLocal = 0.0f;
@@ -3625,6 +3673,18 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		uint32_t emissiveTriangleCountLocal = 0u;
 		uint32_t emissiveActiveTriangleCountLocal = 0u;
 		uint32_t emissiveTiledTriangleCountLocal = 0u;
+		uint32_t gatherStartMeshIndex = 0u;
+		if (pendingGather.active)
+		{
+			out = std::move(pendingGather.triangles);
+			gatherStartMeshIndex = pendingGather.nextMeshIndex;
+			emissiveTriangleCountLocal = pendingGather.emissiveTriangleCount;
+			emissiveActiveTriangleCountLocal = pendingGather.emissiveActiveTriangleCount;
+			emissiveTiledTriangleCountLocal = pendingGather.emissiveTiledTriangleCount;
+		}
+		const uint32_t gatherSliceLimit = gatherSliceEligible
+			? static_cast<uint32_t>(out.size()) + gatherTrianglesPerFrame
+			: 0u;
 		const math::Vector3 sunTint = ComputeSunTint(scene);
 		const math::Vector3 sunDirection = ComputeSunDirectionWS(scene);
 		float sunStrength = 0.0f;
@@ -4056,8 +4116,40 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 
 			return info;
 		};
-		for (auto* smc : meshesInBounds)
+		for (uint32_t meshIndex = gatherStartMeshIndex; meshIndex < static_cast<uint32_t>(meshesInBounds.size()); ++meshIndex)
 		{
+			// Slice boundary: enough triangles appended this frame - park the
+			// gather (mesh cursor + partial list + proxy snapshot) and resume
+			// next frame. The caller's transient-empty handling keeps the
+			// level's previous radiance and its dirty flag meanwhile.
+			if (gatherSliceLimit != 0u &&
+				static_cast<uint32_t>(out.size()) >= gatherSliceLimit &&
+				static_cast<uint32_t>(out.size()) < budget)
+			{
+				const bool firstSlice = !pendingGather.active;
+				pendingGather.active = true;
+				pendingGather.nextMeshIndex = meshIndex;
+				pendingGather.triangles = std::move(out);
+				if (firstSlice)
+				{
+					pendingGather.meshes = _giMeshProxies;
+					pendingGather.materials = _giMaterialProxies;
+					pendingGather.lights = _giLightProxies;
+					pendingGather.center = level.center;
+					pendingGather.extent = level.extent;
+					pendingGather.geometryRevision = sceneGeometryRevision;
+					pendingGather.materialRevision = sceneMaterialRevision;
+				}
+				pendingGather.emissiveTriangleCount = emissiveTriangleCountLocal;
+				pendingGather.emissiveActiveTriangleCount = emissiveActiveTriangleCountLocal;
+				pendingGather.emissiveTiledTriangleCount = emissiveTiledTriangleCountLocal;
+				out.clear();
+				_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
+				_stats.sourceTriangleCount = 0u;
+				return 0u;
+			}
+
+			auto* smc = meshesInBounds[meshIndex];
 			if (smc == nullptr || smc->GetMesh() == nullptr)
 				continue;
 
@@ -4585,6 +4677,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			}
 		}
 
+		pendingGather = {};
 		_cachedVoxelTriangles[levelIndex] = out;
 		_cachedGiMaterialProxies[levelIndex] = _giMaterialProxies;
 		_cachedVoxelTrianglesValid[levelIndex] = true;
