@@ -496,6 +496,12 @@ namespace HexEngine
 		std::array<std::vector<GiMaterialProxy>, ClipmapCount> _cachedGiMaterialProxies = {};
 		std::array<bool, ClipmapCount> _cachedVoxelTrianglesValid = { false, false, false, false };
 		std::array<uint64_t, ClipmapCount> _cachedVoxelTrianglesFrame = { 0ull, 0ull, 0ull, 0ull };
+		// Clip volume the cached triangles were gathered for. When the centre/
+		// extent still match and the scene revisions are unchanged, the GPU
+		// base+sun path can reuse the cache indefinitely (it stores geometry +
+		// albedo only - lighting is recomputed on the GPU every dispatch).
+		std::array<math::Vector3, ClipmapCount> _cachedVoxelTrianglesCenter = {};
+		std::array<float, ClipmapCount> _cachedVoxelTrianglesExtent = { -1.0f, -1.0f, -1.0f, -1.0f };
 		std::array<uint32_t, ClipmapCount> _cachedEmissiveMaterialCount = { 0u, 0u, 0u, 0u };
 		std::array<uint32_t, ClipmapCount> _cachedEmissiveTriangleCount = { 0u, 0u, 0u, 0u };
 		std::array<uint32_t, ClipmapCount> _cachedEmissiveActiveTriangleCount = { 0u, 0u, 0u, 0u };

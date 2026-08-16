@@ -3450,11 +3450,29 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 			cachedTriangleCountAcceptable &&
 			(_cameraMotionBlend > 0.05f) &&
 			pendingShiftDistance > 1e-4f;
-		if (_cachedVoxelTrianglesValid[levelIndex] &&
+		// GPU base+sun path: the cache stores geometry + albedo only (sun, local
+		// lights and all injection tuning are evaluated on the GPU every
+		// dispatch), so an age limit on the cache buys nothing - it only forces
+		// periodic full regathers (~25-100ms each in Debug) of an unchanged
+		// scene. Reuse indefinitely while the scene revisions AND the gathered
+		// clip volume still match; any real change (geometry/material revision
+		// bump, clipmap shift, resolution recreate) still regathers.
+		const bool cacheVolumeMatches =
+			(_cachedVoxelTrianglesExtent[levelIndex] == level.extent) &&
+			((_cachedVoxelTrianglesCenter[levelIndex] - level.center).LengthSquared() <= 1e-6f) &&
+			(pendingShiftDistance <= 1e-4f);
+		const bool evalGeometryCacheReusable =
+			gpuComputeBaseSunEnabled &&
+			_cachedVoxelTrianglesValid[levelIndex] &&
+			cachedTriangleCountAcceptable &&
+			cachedSceneStateMatches &&
+			cacheVolumeMatches;
+		if (evalGeometryCacheReusable ||
+			(_cachedVoxelTrianglesValid[levelIndex] &&
 			(cacheStillFresh || movementCacheStillFresh) &&
 			cachedTriangleCountAcceptable &&
 			cachedSceneStateMatches &&
-			(!level.dirty || shiftOnlyDirty || movementCacheStillFresh))
+			(!level.dirty || shiftOnlyDirty || movementCacheStillFresh)))
 		{
 			const auto& cachedMaterials = _cachedGiMaterialProxies[levelIndex];
 			out = _cachedVoxelTriangles[levelIndex];
@@ -4571,6 +4589,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity)
 		_cachedGiMaterialProxies[levelIndex] = _giMaterialProxies;
 		_cachedVoxelTrianglesValid[levelIndex] = true;
 		_cachedVoxelTrianglesFrame[levelIndex] = _frameCounter;
+		_cachedVoxelTrianglesCenter[levelIndex] = level.center;
+		_cachedVoxelTrianglesExtent[levelIndex] = level.extent;
 		_cachedEmissiveMaterialCount[levelIndex] = emissiveMaterialCountLocal;
 		_cachedEmissiveTriangleCount[levelIndex] = emissiveTriangleCountLocal;
 		_cachedEmissiveActiveTriangleCount[levelIndex] = emissiveActiveTriangleCountLocal;
