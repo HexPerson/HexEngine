@@ -3098,11 +3098,15 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		// The GI cbuffer already carries this frame's clip centers from
 		// UpdateConstants; refresh it anyway so the scatter never reads a
 		// stale per-dispatch overwrite from the last voxelize.
+		// CRITICAL: preserve the directional flag in .w - this write is the
+		// LAST b4 update each frame, and the next frame's SHIFT dispatch runs
+		// before any per-level write. Zeroing it here made shifts skip the L1
+		// moment volumes: a misaligned direction field after every move.
 		_constants.params13 = math::Vector4(
 			std::clamp(r_giLitInjection._val.f32, 0.0f, 4.0f),
 			std::clamp(r_giLitInjectionMaxLuma._val.f32, 0.1f, 32.0f),
 			0.0f,
-			0.0f);
+			(r_giDirectionalVoxels._val.b && _clipmaps[0].l1Volume[0] != nullptr) ? 1.0f : 0.0f);
 		if (_constantBuffer)
 		{
 			_constantBuffer->Write(&_constants, sizeof(_constants));

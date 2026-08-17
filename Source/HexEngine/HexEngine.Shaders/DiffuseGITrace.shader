@@ -394,6 +394,22 @@
 		float3 albedoAccum = 0.0f.xxx;
 		float albedoWeightAccum = 0.0f;
 
+		// Directional (SH-1) arrival factor, sampled once at the tap centre.
+		// Applied ONLY to low-occupancy (air) samples: air voxels hold
+		// PROPAGATED radiance from other surfaces - the carrier of the
+		// silhouette leak - and their moment says which way it travels. The
+		// receiver's own SURFACE voxels hold its accumulated exitant bounce,
+		// whose moment points along the receiver's own normal; filtering
+		// those by arrival direction cancels the receiver's own GI (the
+		// builds-up-then-resolves-to-nothing collapse as the moment field
+		// converges). Occupancy gates the two regimes per tap.
+		const bool directionalArrival = g_giParams13.w > 0.5f;
+		float3 arrivalFactor = 1.0f.xxx;
+		if (directionalArrival)
+		{
+			arrivalFactor = DirectionalVoxelFactor(clipIdx, saturate(uvw + jitterUVW), worldNormal);
+		}
+
 		const float3 localOffsets[7] =
 		{
 			float3(0.0, 0.0, 0.0),
@@ -412,7 +428,12 @@
 			const float4 voxelData = SampleVoxelRadiance(clipIdx, suv);
 			const float4 albedoData = SampleVoxelAlbedo(clipIdx, suv);
 			const float occSample = (g_giParams2.w > 0.5f) ? voxelData.a : SampleVoxelOpacity(clipIdx, suv);
-			voxelRadiance += voxelData.rgb * w;
+			float3 tapRadiance = voxelData.rgb;
+			if (directionalArrival)
+			{
+				tapRadiance *= lerp(arrivalFactor, 1.0f.xxx, saturate(occSample * 2.0f));
+			}
+			voxelRadiance += tapRadiance * w;
 			occAccum += occSample * w;
 			accumW += w;
 			const float albedoW = w * saturate(albedoData.a);
@@ -430,7 +451,12 @@
 			const float4 albedoData = SampleVoxelAlbedo(clipIdx, rayUVW);
 			const float occSample = (g_giParams2.w > 0.5f) ? voxelData.a : SampleVoxelOpacity(clipIdx, rayUVW);
 			const float w = 0.85f * transmittance;
-			voxelRadiance += voxelData.rgb * w;
+			float3 coneRadiance = voxelData.rgb;
+			if (directionalArrival)
+			{
+				coneRadiance *= lerp(arrivalFactor, 1.0f.xxx, saturate(occSample * 2.0f));
+			}
+			voxelRadiance += coneRadiance * w;
 			occAccum += occSample * w;
 			accumW += w;
 			const float albedoW = w * saturate(albedoData.a) * 0.75f;
@@ -486,16 +512,6 @@
 			voxelOcc = lerp(voxelOcc, saturate(neighOcc), neighbourBlend * 0.75f);
 			voxelAlbedo = lerp(voxelAlbedo, neighAlbAvg, neighbourBlend * 0.65f);
 			voxelAlbedoConfidence = lerp(voxelAlbedoConfidence, neighAlbConfAvg, neighbourBlend * 0.65f);
-		}
-
-		// Directional voxels: scale the tap-accumulated radiance by the SH-1
-		// arrival factor sampled once at the tap centre (the factor varies
-		// slowly; per-tap evaluation would triple the sample count for no
-		// visible gain). This is the silhouette-leak fix.
-		if (g_giParams13.w > 0.5f)
-		{
-			const float3 directionalFactor = DirectionalVoxelFactor(clipIdx, saturate(uvw + jitterUVW), worldNormal);
-			voxelRadiance *= directionalFactor;
 		}
 
 		const float3 probeIrr = SampleProbeIrradianceTrilinear(clipIdx, uvw);
