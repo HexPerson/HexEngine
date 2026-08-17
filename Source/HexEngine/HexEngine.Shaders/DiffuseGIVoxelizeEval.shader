@@ -58,11 +58,21 @@
 	Texture3D<float4> g_prevVoxelL1y : register(t15);
 	Texture3D<float4> g_prevVoxelL1z : register(t16);
 	SHADOWMAPS_RESOURCE(6);
-	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
-	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
-	RWTexture3D<float4> g_voxelL1xOut : register(u2);
-	RWTexture3D<float4> g_voxelL1yOut : register(u3);
-	RWTexture3D<float4> g_voxelL1zOut : register(u4);
+	// Deterministic injection: per-triangle contributions are ATOMICALLY
+	// accumulated here (order-independent - integer adds commute exactly)
+	// and resolved to the voxel volumes by DiffuseGIInjectResolve. The old
+	// direct volume writes raced (last-writer-wins per voxel), and the whole
+	// heavy temporal chain existed to hide that noise.
+	struct VoxelAccum
+	{
+		uint radR; uint radG; uint radB; uint radW;
+		uint albR; uint albG; uint albB; uint albW;
+		uint opacityMax;
+		int l1xR; int l1xG; int l1xB;
+		int l1yR; int l1yG; int l1yB;
+		int l1zR; int l1zG; int l1zB;
+	};
+	RWStructuredBuffer<VoxelAccum> g_injectAccum : register(u0);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -694,37 +704,20 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						sunVisibility *= lerp(1.0f, localVoxelOcclusion, 0.35f);
 					}
 
-					const float4 previous = g_prevVoxelRadiance[coord];
-					const float4 previousAlbedo = g_prevVoxelAlbedo[coord];
 					// Shadow visibility should attenuate sun-driven GI; forcing a floor here was
 					// blowing out shadowed and back-facing surfaces.
 					const float visibilityFactor = lerp(1.0f, sunVisibility, 0.90f * sunDirectionality);
 					const float3 triAlbedo = triAlbedoBase;
-
-					// Temporal damping at the voxel-injection stage to reduce frame-to-frame GI shimmer
-					// from triangle-budget/coverage changes while moving clipmaps.
-					const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
-					const float shiftSettle = saturate(g_giParams6.y);
-					// Faster base blend (was 0.80-0.94/0.95): the heavy retention
-					// made every energy source - feedback, second bounce, the
-					// directional moments - converge over seconds, reading as
-					// GI slowly rising and falling. The symmetric delta brakes
-					// below remain the flicker guard, so retention can be
-					// lighter without bringing the shimmer back.
-					const float temporalKeepBase = lerp(0.70f, 0.86f, warmStabilize);
-					const float temporalKeep = lerp(temporalKeepBase, 0.90f, shiftSettle * 0.12f);
-					const float albedoKeepBase = lerp(0.75f, 0.93f, warmStabilize);
-					const float albedoKeep = lerp(albedoKeepBase, 0.96f, shiftSettle * 0.20f);
 					const float triCoverage = saturate(coverage);
 					// Use coverage as an edge softening term, but retain most interior energy.
 					const float coverageRadiance = lerp(1.0f, triCoverage, 0.45f);
 					const float coverageAlbedo = lerp(1.0f, triCoverage, 0.55f);
 					const float coverageOpacity = lerp(1.0f, triCoverage, 0.80f);
-					const float prevAlbedoW = saturate(previousAlbedo.a) * albedoKeep;
 					const float triAlbedoW = saturate(tri.albedoWeight.a) * coverageAlbedo;
-					const float albedoW = max(prevAlbedoW + triAlbedoW, 1e-4f);
-					const float3 voxelAlbedo = saturate((previousAlbedo.rgb * prevAlbedoW + triAlbedo * triAlbedoW) / albedoW);
-					const float albedoConfidence = saturate(max(previousAlbedo.a * albedoKeep, triAlbedoW));
+					// Deterministic mode: no per-triangle temporal state. The
+					// resolve pass owns prev blending; local lights use the
+					// triangle's own albedo.
+					const float3 voxelAlbedo = triAlbedo;
 					float3 injected = tri.radianceOpacity.rgb * visibilityFactor;
 					const bool gpuComputeBaseSun = gpuComputeBaseSunMode;
 					const float emissiveInject = max(0.0f, g_giParams8.w);
@@ -789,156 +782,37 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					// Sub-voxel edge coverage softens hard transitions when triangle edges do not align to voxel boundaries.
 					injected *= coverageRadiance;
 
-					// Lit-scene radiance feedback: the previous frame's actual
-					// rendered lighting at this voxel (every light type,
-					// shadows, and GI's own output). Added to the injection
-					// TARGET so the temporal EMA damps the loop - a converging
-					// geometric series rather than unbounded accumulation.
-					// Per-voxel truth, so NOT coverage-scaled; identical for
-					// every triangle covering this voxel (writes race
-					// last-wins, so no double count).
-					if (g_giParams13.z > 0.5f)
-					{
-						const uint feedbackIdx = (coord.z * voxelRes + coord.y) * voxelRes + coord.x;
-						const uint4 packed = g_litFeedback[feedbackIdx];
-						if (packed.w > 0u)
-						{
-							const float3 feedbackRadiance = float3(packed.xyz) / max((float)packed.w, 1.0f);
-							// 0.6 internal scale (was 0.25 - invisible under the
-							// trace damping + auto-exposure). Loop gain stays well
-							// under 1: beauty->voxel->beauty round trip is ~0.3.
-							injected += LuminanceClamp(feedbackRadiance, g_giParams13.y) * (g_giParams13.x * 0.6f);
-						}
-					}
-
-					// Second bounce: previous-frame radiance arriving from the
-					// 6 neighbours, re-emitted through this voxel's albedo.
-					// Feeds the injection target (EMA-damped, converges for
-					// albedo*strength < 1) instead of compounding post-blend.
-					if (g_giParams6.z > 0.0001f)
-					{
-						const int3 pc = int3(coord);
-						const int3 maxC = int3((int)voxelRes - 1, (int)voxelRes - 1, (int)voxelRes - 1);
-						float3 neighbourRadiance = 0.0f.xxx;
-						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(1, 0, 0), int3(0, 0, 0), maxC)].rgb;
-						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(-1, 0, 0), int3(0, 0, 0), maxC)].rgb;
-						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, 1, 0), int3(0, 0, 0), maxC)].rgb;
-						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, -1, 0), int3(0, 0, 0), maxC)].rgb;
-						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, 0, 1), int3(0, 0, 0), maxC)].rgb;
-						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, 0, -1), int3(0, 0, 0), maxC)].rgb;
-						neighbourRadiance *= (1.0f / 6.0f);
-						// 1.5 internal scale (was 0.5): neighbour radiance is
-						// POST-EMA voxel magnitude (~0.02-0.2), an order below the
-						// primary injection constants - at 0.5 the whole term
-						// vanished under the trace damping. Still convergent:
-						// steady-state amplification = 1/(1 - albedo*0.35*1.5),
-						// ~2.1x worst-case in a pure-white room, bounded by the
-						// luma caps and per-update delta brakes.
-						injected += neighbourRadiance * voxelAlbedo * (g_giParams6.z * 1.5f);
-					}
-					// Fixed-retention temporal blend. The previous version derived an
-					// `injectionPresence` from current-frame injected luminance and collapsed
-					// `effectiveKeep` to ~0.20 whenever a voxel didn't happen to receive bright
-					// injection that frame. That caused the GI "breathing" - any voxel whose
-					// triangle coverage briefly dropped lost 80% of its accumulated history in
-					// one frame. Now we keep history at the `temporalKeep` rate every frame and
-					// let new injection blend at the matching 6%; stale data still fades because
-					// injection-less frames lerp toward zero at the same rate.
-					// Emissive surfaces still need a fast-response override - emissive injection
-					// can dwarf the accumulated history and we don't want it temporally damped.
-					// Lerp temporalKeep toward the fast-emissive value (0.20 instead of the prior
-					// 0.02) based on the smoothed emissive activation. 0.20 still leaves emissive
-					// surfaces visibly bright but smooths the per-frame oscillation enough that
-					// per-triangle flicker doesn't translate into pulsing voxel output. The
-					// smoothstep on emissiveActivation means a triangle whose emissive sample
-					// crosses the threshold by a sliver no longer trips a hard 0.95 -> 0.02 switch.
-					const float emissiveTargetKeep = 0.20f;
-					// Snap-on-change: see the plain voxelize shader.
-					const float snapBoost = saturate(g_giParams12.z);
-					// Snap only voxels that RECEIVE injection this update - low
-					// retention on injection-less voxels is the breathing/collapse
-					// bug (they lose 85% of history per refresh and get nothing
-					// back; with the snap armed the whole field decays to black).
-					const float snapGate = snapBoost * ((dot(injected, 1.0f.xxx) > 1e-5f) ? 1.0f : 0.0f);
-					float effectiveKeep = lerp(temporalKeep, emissiveTargetKeep, emissiveActivation);
-					effectiveKeep = lerp(effectiveKeep, 0.15f, snapGate);
-					float3 radiance = previous.rgb * effectiveKeep + injected * (1.0f - effectiveKeep);
-
-					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
-					// Symmetric clamp - applies to BOTH increases and decreases. Previously only
-					// the upper clamp existed, so the effectiveKeep-collapse could drive a voxel
-					// from full to 20% in one frame with no brake. With the lower clamp in place,
-					// any single-frame darkening is also bounded - safety net even after the fix
-					// above eliminates the primary cause.
-					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
-					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
-					float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.20f);
-					// Smoothly grow per-frame delta headroom for emissive surfaces (previously a
-					// binary bool that contributed to the on/off pulse). At full emissive
-					// activation we add up to (1.0 + previous*0.75) of headroom; at zero we
-					// stay on the default delta limit.
-					const float3 emissiveExtraDelta = (1.0f.xxx + previous.rgb * 0.75f) * emissiveActivation;
-					deltaLimit = max(deltaLimit, deltaLimit + emissiveExtraDelta);
-					deltaLimit = lerp(deltaLimit, 8.0f.xxx, snapGate);
-					radiance = min(radiance, previous.rgb + deltaLimit);
-					radiance = max(radiance, previous.rgb - deltaLimit);
-					radiance = max(radiance, 0.0f.xxx);
-
-					// Step 4: cheap edge-aware smoothing only near sub-voxel triangle boundaries.
-					// We pull from previous-frame neighborhood so this stays stable and inexpensive.
-					const float edgeThreshold = saturate(g_giParams10.x);
-					const float edgeBlendStrength = saturate(g_giParams10.y);
-					const float edgeBand = max(edgeThreshold, 1e-3f);
-					const float edgeBlend = saturate((edgeThreshold - triCoverage) / edgeBand);
-					if (edgeBlend > 1e-3f && !emissiveMaterialActive)
-					{
-						const uint xm = (coord.x > 0u) ? (coord.x - 1u) : 0u;
-						const uint xp = min(coord.x + 1u, voxelRes - 1u);
-						const uint ym = (coord.y > 0u) ? (coord.y - 1u) : 0u;
-						const uint yp = min(coord.y + 1u, voxelRes - 1u);
-						const uint zm = (coord.z > 0u) ? (coord.z - 1u) : 0u;
-						const uint zp = min(coord.z + 1u, voxelRes - 1u);
-						const float3 nsum =
-							g_prevVoxelRadiance.Load(int4(xm, coord.y, coord.z, 0)).rgb +
-							g_prevVoxelRadiance.Load(int4(xp, coord.y, coord.z, 0)).rgb +
-							g_prevVoxelRadiance.Load(int4(coord.x, ym, coord.z, 0)).rgb +
-							g_prevVoxelRadiance.Load(int4(coord.x, yp, coord.z, 0)).rgb +
-							g_prevVoxelRadiance.Load(int4(coord.x, coord.y, zm, 0)).rgb +
-							g_prevVoxelRadiance.Load(int4(coord.x, coord.y, zp, 0)).rgb;
-						const float3 navg = nsum * (1.0f / 6.0f);
-						radiance = lerp(radiance, navg, edgeBlend * edgeBlendStrength);
-					}
-
-					// Voxel radiance cap. Lowered to 4 because SSR samples voxel data directly as
-					// a reflection fallback (bypassing the final clamps in trace/resolve), so the
-					// voxel's raw magnitude is what determines worst-case visible brightness for
-					// reflection paths. With dual luma + per-channel arms at 4, any single colour
-					// channel is capped at 4 - bright enough for legitimate HDR bounce, low enough
-					// that random saturated voxels can't produce the R/G/B blowouts the user
-					// reported across red/blue/yellow/cyan/orange/white.
-					radiance = LuminanceClamp(radiance, 4.0f);
-
-					const float triOpacity = saturate(tri.radianceOpacity.a) * coverageOpacity;
-					float opacity = saturate(previous.a + triOpacity * (1.0f - previous.a));
-					g_voxelRadianceOut[coord] = float4(radiance, opacity);
-					g_voxelAlbedoOut[coord] = float4(voxelAlbedo, albedoConfidence);
-
-					// Directional (SH L1) moments: the injected radiance exits
-					// Lambertian around the surface normal, so each axis moment
-					// is radiance x n[axis] (SIGNED). Same temporal keep as the
-					// radiance blend; the per-frame delta brake is skipped
-					// (signed values, and L0 already bounds the magnitude).
+					// Deterministic accumulate: fixed-point atomic adds commute
+					// exactly, so the resolved injection is identical every update
+					// for a stable triangle list - no race noise for the temporal
+					// chain to hide. Feedback, second bounce and the prev blend all
+					// moved to DiffuseGIInjectResolve (per-voxel).
+					const float contributionW = max(triCoverage, 0.05f);
+					const uint accumIdx = (coord.z * voxelRes + coord.y) * voxelRes + coord.x;
+					const float3 injectedClamped = LuminanceClamp(max(injected, 0.0f.xxx), 32.0f);
+					const float kScale = 1024.0f;
+					InterlockedAdd(g_injectAccum[accumIdx].radR, (uint)round(injectedClamped.r * contributionW * kScale));
+					InterlockedAdd(g_injectAccum[accumIdx].radG, (uint)round(injectedClamped.g * contributionW * kScale));
+					InterlockedAdd(g_injectAccum[accumIdx].radB, (uint)round(injectedClamped.b * contributionW * kScale));
+					InterlockedAdd(g_injectAccum[accumIdx].radW, (uint)round(contributionW * kScale));
+					InterlockedAdd(g_injectAccum[accumIdx].albR, (uint)round(saturate(triAlbedo.r) * triAlbedoW * kScale));
+					InterlockedAdd(g_injectAccum[accumIdx].albG, (uint)round(saturate(triAlbedo.g) * triAlbedoW * kScale));
+					InterlockedAdd(g_injectAccum[accumIdx].albB, (uint)round(saturate(triAlbedo.b) * triAlbedoW * kScale));
+					InterlockedAdd(g_injectAccum[accumIdx].albW, (uint)round(triAlbedoW * kScale));
+					const float triOpacityOut = saturate(tri.radianceOpacity.a) * coverageOpacity;
+					InterlockedMax(g_injectAccum[accumIdx].opacityMax, (uint)round(triOpacityOut * kScale));
 					if (g_giParams13.w > 0.5f)
 					{
-						// Identical blend form to the L0 radiance above:
-						// new = prev*keep + injectedMoment*(1-keep).
-						const float3 injectedClamped = LuminanceClamp(injected, 4.0f);
-						const float3 prevL1x = g_prevVoxelL1x[coord].rgb;
-						const float3 prevL1y = g_prevVoxelL1y[coord].rgb;
-						const float3 prevL1z = g_prevVoxelL1z[coord].rgb;
-						g_voxelL1xOut[coord] = float4(prevL1x * effectiveKeep + injectedClamped * n.x * (1.0f - effectiveKeep), 0.0f);
-						g_voxelL1yOut[coord] = float4(prevL1y * effectiveKeep + injectedClamped * n.y * (1.0f - effectiveKeep), 0.0f);
-						g_voxelL1zOut[coord] = float4(prevL1z * effectiveKeep + injectedClamped * n.z * (1.0f - effectiveKeep), 0.0f);
+						const float3 momentBase = injectedClamped * (contributionW * kScale);
+						InterlockedAdd(g_injectAccum[accumIdx].l1xR, (int)round(momentBase.r * n.x));
+						InterlockedAdd(g_injectAccum[accumIdx].l1xG, (int)round(momentBase.g * n.x));
+						InterlockedAdd(g_injectAccum[accumIdx].l1xB, (int)round(momentBase.b * n.x));
+						InterlockedAdd(g_injectAccum[accumIdx].l1yR, (int)round(momentBase.r * n.y));
+						InterlockedAdd(g_injectAccum[accumIdx].l1yG, (int)round(momentBase.g * n.y));
+						InterlockedAdd(g_injectAccum[accumIdx].l1yB, (int)round(momentBase.b * n.y));
+						InterlockedAdd(g_injectAccum[accumIdx].l1zR, (int)round(momentBase.r * n.z));
+						InterlockedAdd(g_injectAccum[accumIdx].l1zG, (int)round(momentBase.g * n.z));
+						InterlockedAdd(g_injectAccum[accumIdx].l1zB, (int)round(momentBase.b * n.z));
 					}
 				}
 			}

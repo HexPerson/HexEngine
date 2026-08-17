@@ -570,6 +570,7 @@ namespace HexEngine
 		_voxelCandidateShader = IShader::Create("EngineData.Shaders/DiffuseGIBuildCandidates.hcs");
 		_candidateArgsFixupShader = IShader::Create("EngineData.Shaders/DiffuseGICandidateArgsFixup.hcs");
 		_screenFeedbackShader = IShader::Create("EngineData.Shaders/DiffuseGIScreenFeedback.hcs");
+		_injectResolveShader = IShader::Create("EngineData.Shaders/DiffuseGIInjectResolve.hcs");
 		_voxelClearShader = IShader::Create("EngineData.Shaders/DiffuseGIClearVoxel.hcs");
 		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
 		_voxelShiftShader = IShader::Create("EngineData.Shaders/DiffuseGIShiftVoxel.hcs");
@@ -766,6 +767,10 @@ namespace HexEngine
 			_feedbackAccumElements[i] = 0u;
 			_feedbackAccumValid[i] = false;
 		}
+		SAFE_RELEASE(_injectAccumSrv);
+		SAFE_RELEASE(_injectAccumUav);
+		SAFE_RELEASE(_injectAccumBuffer);
+		_injectAccumElements = 0u;
 		_voxelTriangleCapacity = {};
 		_giLightCapacity = 0;
 		_giMaterialCapacity = 0;
@@ -790,6 +795,7 @@ namespace HexEngine
 		_voxelCandidateShader = nullptr;
 		_candidateArgsFixupShader = nullptr;
 		_screenFeedbackShader = nullptr;
+		_injectResolveShader = nullptr;
 		_voxelClearShader = nullptr;
 		_voxelPropagateShader = nullptr;
 		_voxelShiftShader = nullptr;
@@ -3062,6 +3068,64 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		}
 
 		_feedbackAccumElements[feedbackLevel] = elementCount;
+		return true;
+	}
+
+	bool DiffuseGI::EnsureInjectAccumBuffer(uint32_t elementCount)
+	{
+		if (elementCount == 0u)
+			return false;
+		if (_injectAccumBuffer != nullptr && _injectAccumUav != nullptr && _injectAccumSrv != nullptr && _injectAccumElements >= elementCount)
+			return true;
+
+		SAFE_RELEASE(_injectAccumSrv);
+		SAFE_RELEASE(_injectAccumUav);
+		SAFE_RELEASE(_injectAccumBuffer);
+		_injectAccumElements = 0u;
+
+		auto* device = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice()) : nullptr;
+		if (device == nullptr)
+			return false;
+
+		constexpr uint32_t kAccumStride = 18u * 4u; // VoxelAccum in the shaders
+		D3D11_BUFFER_DESC desc = {};
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
+		desc.ByteWidth = elementCount * kAccumStride;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+		desc.StructureByteStride = kAccumStride;
+		if (FAILED(device->CreateBuffer(&desc, nullptr, &_injectAccumBuffer)) || _injectAccumBuffer == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create the deterministic-injection accum buffer.");
+			return false;
+		}
+
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+		uavDesc.Buffer.FirstElement = 0;
+		uavDesc.Buffer.NumElements = elementCount;
+		if (FAILED(device->CreateUnorderedAccessView(_injectAccumBuffer, &uavDesc, &_injectAccumUav)) || _injectAccumUav == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create the deterministic-injection accum UAV.");
+			SAFE_RELEASE(_injectAccumBuffer);
+			return false;
+		}
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = elementCount;
+		if (FAILED(device->CreateShaderResourceView(_injectAccumBuffer, &srvDesc, &_injectAccumSrv)) || _injectAccumSrv == nullptr)
+		{
+			LOG_CRIT("DiffuseGI failed to create the deterministic-injection accum SRV.");
+			SAFE_RELEASE(_injectAccumUav);
+			SAFE_RELEASE(_injectAccumBuffer);
+			return false;
+		}
+
+		_injectAccumElements = elementCount;
 		return true;
 	}
 
@@ -5884,9 +5948,29 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			directionalActive ? level.l1Uav[0] : nullptr,
 			directionalActive ? level.l1Uav[1] : nullptr,
 			directionalActive ? level.l1Uav[2] : nullptr };
-		context->CSSetUnorderedAccessViews(0, 5, clearUav, nullptr);
-		context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(clearStage->GetNativePtr()), nullptr, 0);
-		context->Dispatch(clearGroups, clearGroups, clearGroups);
+
+		// Deterministic injection (eval path): the per-triangle pass
+		// accumulates atomically into the shared accum buffer and the resolve
+		// pass overwrites EVERY voxel - so the legacy clear is only needed for
+		// the plain path or when nothing will be injected this update.
+		const uint32_t voxelCount = level.resolution * level.resolution * level.resolution;
+		const bool deterministicInjection =
+			useGpuMaterialEval &&
+			(_injectResolveShader != nullptr) &&
+			(_injectResolveShader->GetShaderStage(ShaderStage::ComputeShader) != nullptr) &&
+			hasTriangles &&
+			EnsureInjectAccumBuffer(voxelCount);
+		if (deterministicInjection)
+		{
+			const UINT accumClear[4] = { 0u, 0u, 0u, 0u };
+			context->ClearUnorderedAccessViewUint(_injectAccumUav, accumClear);
+		}
+		else
+		{
+			context->CSSetUnorderedAccessViews(0, 5, clearUav, nullptr);
+			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(clearStage->GetNativePtr()), nullptr, 0);
+			context->Dispatch(clearGroups, clearGroups, clearGroups);
+		}
 
 		if (hasTriangles && injectionTriangleSrv != nullptr && (injectionTriangleCount > 0u || useCandidateIndirectDispatch))
 		{
@@ -5915,19 +5999,29 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				ID3D11ShaderResourceView* countSrv[1] = { _voxelCandidateCountSrv };
 				context->CSSetShaderResources(useGpuMaterialEval ? 12u : 9u, 1, countSrv);
 			}
-			if (feedbackBoundThisLevel)
+			if (!deterministicInjection && feedbackBoundThisLevel)
 			{
+				// Legacy direct-write path only - the deterministic resolve
+				// consumes the feedback per-voxel instead.
 				ID3D11ShaderResourceView* feedbackSrv[1] = { _feedbackAccumSrv[levelIndex] };
 				context->CSSetShaderResources(13u, 1, feedbackSrv);
 			}
-			if (directionalActive)
+			if (!deterministicInjection && directionalActive)
 			{
-				// Previous-frame L1 moments for the temporal blend
-				// (eval t14-16 / plain t10-12).
+				// Previous-frame L1 moments for the legacy in-place blend
+				// (plain t10-12 / legacy eval t14-16).
 				ID3D11ShaderResourceView* prevL1Srv[3] = { level.l1ScratchSrv[0], level.l1ScratchSrv[1], level.l1ScratchSrv[2] };
 				context->CSSetShaderResources(useGpuMaterialEval ? 14u : 10u, 3, prevL1Srv);
 			}
-			context->CSSetUnorderedAccessViews(0, 5, clearUav, nullptr);
+			if (deterministicInjection)
+			{
+				ID3D11UnorderedAccessView* accumUavArr[1] = { _injectAccumUav };
+				context->CSSetUnorderedAccessViews(0, 1, accumUavArr, nullptr);
+			}
+			else
+			{
+				context->CSSetUnorderedAccessViews(0, 5, clearUav, nullptr);
+			}
 			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(voxelizeStage->GetNativePtr()), nullptr, 0);
 			if (useCandidateIndirectDispatch)
 			{
@@ -5953,12 +6047,36 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				ID3D11ShaderResourceView* nullPrevL1Srv[3] = {};
 				context->CSSetShaderResources(useGpuMaterialEval ? 14u : 10u, 3, nullPrevL1Srv);
 			}
+
+			if (deterministicInjection)
+			{
+				// Resolve: weighted-mean injection + per-voxel feedback +
+				// second bounce + light temporal blend, written to the volumes.
+				ID3D11ShaderResourceView* nullAccumBreak[7] = {};
+				ID3D11UnorderedAccessView* nullUavBreak[1] = {};
+				context->CSSetShaderResources(0, 7, nullAccumBreak);
+				context->CSSetUnorderedAccessViews(0, 1, nullUavBreak, nullptr);
+
+				ID3D11ShaderResourceView* resolveSrvs[7] = {
+					level.radianceScratchSrv,
+					level.albedoScratchSrv,
+					directionalActive ? level.l1ScratchSrv[0] : nullptr,
+					directionalActive ? level.l1ScratchSrv[1] : nullptr,
+					directionalActive ? level.l1ScratchSrv[2] : nullptr,
+					_injectAccumSrv,
+					feedbackBoundThisLevel ? _feedbackAccumSrv[levelIndex] : nullptr };
+				context->CSSetShaderResources(0, 7, resolveSrvs);
+				context->CSSetUnorderedAccessViews(0, 5, clearUav, nullptr);
+				auto* resolveStage = _injectResolveShader->GetShaderStage(ShaderStage::ComputeShader);
+				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(resolveStage->GetNativePtr()), nullptr, 0);
+				context->Dispatch(clearGroups, clearGroups, clearGroups);
+			}
 		}
 
-		// Break UAV/SRV hazards between injection and propagation passes.
-		ID3D11ShaderResourceView* nullSrvBetweenPasses[6] = {};
+		// Break UAV/SRV hazards between injection/resolve and propagation.
+		ID3D11ShaderResourceView* nullSrvBetweenPasses[7] = {};
 		ID3D11UnorderedAccessView* nullUavBetweenPasses[5] = {};
-		context->CSSetShaderResources(0, 6, nullSrvBetweenPasses);
+		context->CSSetShaderResources(0, 7, nullSrvBetweenPasses);
 		context->CSSetUnorderedAccessViews(0, 5, nullUavBetweenPasses, nullptr);
 
 		ID3D11ShaderResourceView* radianceSrcSrv = level.radianceSrv;

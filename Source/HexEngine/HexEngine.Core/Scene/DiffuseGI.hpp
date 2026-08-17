@@ -350,6 +350,7 @@ namespace HexEngine
 		math::Vector4 ResolveMeshUvRect(const StaticMeshComponent* meshComponent);
 		bool EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t elementCapacity);
 		bool EnsureFeedbackAccumBuffer(uint32_t feedbackLevel, uint32_t elementCount);
+		bool EnsureInjectAccumBuffer(uint32_t elementCount);
 		bool EnsureGpuGiLightBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialTexelBuffer(uint32_t elementCapacity);
@@ -557,6 +558,14 @@ namespace HexEngine
 		// Accum coords are voxel-space for the clip center at scatter time; a
 		// consumed shift offsets them, so the accum is dropped on shift.
 		std::array<bool, FeedbackLevelCount> _feedbackAccumValid = {};
+		// Deterministic-injection accumulator (18 x 4B per voxel: radiance +
+		// weight, albedo + weight, opacity max, signed L1 moments). Shared by
+		// all clips (one level updates per dispatch), cleared before each
+		// accumulate pass, resolved to the volumes by DiffuseGIInjectResolve.
+		ID3D11Buffer* _injectAccumBuffer = nullptr;
+		ID3D11UnorderedAccessView* _injectAccumUav = nullptr;
+		ID3D11ShaderResourceView* _injectAccumSrv = nullptr;
+		uint32_t _injectAccumElements = 0;
 		uint32_t _voxelCandidateCapacity = 0;
 
 		std::shared_ptr<IShader> _traceShader;
@@ -572,6 +581,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> _voxelCandidateShader;
 		std::shared_ptr<IShader> _candidateArgsFixupShader;
 		std::shared_ptr<IShader> _screenFeedbackShader;
+		std::shared_ptr<IShader> _injectResolveShader;
 		std::shared_ptr<IShader> _voxelClearShader;
 		std::shared_ptr<IShader> _voxelPropagateShader;
 		std::shared_ptr<IShader> _voxelShiftShader;
