@@ -790,7 +790,10 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						if (packed.w > 0u)
 						{
 							const float3 feedbackRadiance = float3(packed.xyz) / max((float)packed.w, 1.0f);
-							injected += LuminanceClamp(feedbackRadiance, g_giParams13.y) * (g_giParams13.x * 0.25f);
+							// 0.6 internal scale (was 0.25 - invisible under the
+							// trace damping + auto-exposure). Loop gain stays well
+							// under 1: beauty->voxel->beauty round trip is ~0.3.
+							injected += LuminanceClamp(feedbackRadiance, g_giParams13.y) * (g_giParams13.x * 0.6f);
 						}
 					}
 
@@ -810,7 +813,14 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, 0, 1), int3(0, 0, 0), maxC)].rgb;
 						neighbourRadiance += g_prevVoxelRadiance[clamp(pc + int3(0, 0, -1), int3(0, 0, 0), maxC)].rgb;
 						neighbourRadiance *= (1.0f / 6.0f);
-						injected += neighbourRadiance * voxelAlbedo * (g_giParams6.z * 0.5f);
+						// 1.5 internal scale (was 0.5): neighbour radiance is
+						// POST-EMA voxel magnitude (~0.02-0.2), an order below the
+						// primary injection constants - at 0.5 the whole term
+						// vanished under the trace damping. Still convergent:
+						// steady-state amplification = 1/(1 - albedo*0.35*1.5),
+						// ~2.1x worst-case in a pure-white room, bounded by the
+						// luma caps and per-update delta brakes.
+						injected += neighbourRadiance * voxelAlbedo * (g_giParams6.z * 1.5f);
 					}
 					// Fixed-retention temporal blend. The previous version derived an
 					// `injectionPresence` from current-frame injected luminance and collapsed
