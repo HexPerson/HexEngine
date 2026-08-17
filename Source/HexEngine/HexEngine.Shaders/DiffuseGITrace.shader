@@ -47,6 +47,20 @@
 	Texture2D g_probeIrradianceTex3 : register(t23);
 	Texture2D g_probeVisibilityTex3 : register(t24);
 	Texture2D g_sceneLightingTex : register(t25);
+	// Directional (SH L1) moment volumes, clip-major - bound only when
+	// g_giParams13.w > 0.5 (r_giDirectionalVoxels).
+	Texture3D g_voxelL1xTex0 : register(t26);
+	Texture3D g_voxelL1yTex0 : register(t27);
+	Texture3D g_voxelL1zTex0 : register(t28);
+	Texture3D g_voxelL1xTex1 : register(t29);
+	Texture3D g_voxelL1yTex1 : register(t30);
+	Texture3D g_voxelL1zTex1 : register(t31);
+	Texture3D g_voxelL1xTex2 : register(t32);
+	Texture3D g_voxelL1yTex2 : register(t33);
+	Texture3D g_voxelL1zTex2 : register(t34);
+	Texture3D g_voxelL1xTex3 : register(t35);
+	Texture3D g_voxelL1yTex3 : register(t36);
+	Texture3D g_voxelL1zTex3 : register(t37);
 
 	SamplerState g_pointSampler : register(s2);
 	SamplerState g_linearSampler : register(s4);
@@ -68,6 +82,8 @@
 		float4 g_giParams9;
 		float4 g_giParams10;
 		float4 g_giParams11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
+		float4 g_giParams12; // x=live triangle count, y=candidate routing, z=snap boost, w reserved
+		float4 g_giParams13; // x=litInjection strength, y=litInjection maxLuma, z=feedback bound, w=directional voxels active
 	};
 
 	static const float3 kClipDebugColours[4] =
@@ -133,6 +149,54 @@
 		case 2: return g_voxelRadianceTex2.SampleLevel(g_linearSampler, uvw, 0.0f);
 		default: return g_voxelRadianceTex3.SampleLevel(g_linearSampler, uvw, 0.0f);
 		}
+	}
+
+	// Directional evaluation factor: how much of this location's voxel
+	// radiance actually exits toward a receiver facing N. SH band-1:
+	// E(N) = max(0, 0.5*L0 + 0.5*L1.N); returned as a per-channel ratio
+	// against L0 so the caller can scale its (multi-tap smoothed) radiance.
+	// Fully aligned with the emitting surface -> 1, behind it -> 0,
+	// side-on -> 0.5. This is what stops GI wrapping around silhouettes.
+	float3 DirectionalVoxelFactor(uint clipIdx, float3 uvw, float3 receiverNormal)
+	{
+		float3 l1x;
+		float3 l1y;
+		float3 l1z;
+		float3 l0;
+		switch (clipIdx)
+		{
+		case 0:
+			l0 = g_voxelRadianceTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		case 1:
+			l0 = g_voxelRadianceTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		case 2:
+			l0 = g_voxelRadianceTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		default:
+			l0 = g_voxelRadianceTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		}
+		// L1 stores the EXIT (propagation) direction of the radiance. A
+		// receiver with normal N is hit by light travelling INTO its surface,
+		// i.e. propagation directions opposing N - so the arrival lobe is
+		// evaluated at -N: light exiting straight toward the receiver scores
+		// 1, light exiting away (the wrap-around leak) scores 0, side-on 0.5.
+		const float3 e = max(0.0f.xxx, 0.5f * l0 - 0.5f * (l1x * receiverNormal.x + l1y * receiverNormal.y + l1z * receiverNormal.z));
+		return saturate(e / max(l0, 1e-4f.xxx));
 	}
 
 	float SampleVoxelOpacity(uint clipIdx, float3 uvw)
@@ -422,6 +486,16 @@
 			voxelOcc = lerp(voxelOcc, saturate(neighOcc), neighbourBlend * 0.75f);
 			voxelAlbedo = lerp(voxelAlbedo, neighAlbAvg, neighbourBlend * 0.65f);
 			voxelAlbedoConfidence = lerp(voxelAlbedoConfidence, neighAlbConfAvg, neighbourBlend * 0.65f);
+		}
+
+		// Directional voxels: scale the tap-accumulated radiance by the SH-1
+		// arrival factor sampled once at the tap centre (the factor varies
+		// slowly; per-tap evaluation would triple the sample count for no
+		// visible gain). This is the silhouette-leak fix.
+		if (g_giParams13.w > 0.5f)
+		{
+			const float3 directionalFactor = DirectionalVoxelFactor(clipIdx, saturate(uvw + jitterUVW), worldNormal);
+			voxelRadiance *= directionalFactor;
 		}
 
 		const float3 probeIrr = SampleProbeIrradianceTrilinear(clipIdx, uvw);

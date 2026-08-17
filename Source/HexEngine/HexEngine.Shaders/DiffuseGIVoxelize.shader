@@ -23,9 +23,17 @@
 	// Live appended-candidate count (see the eval shader) - t9 sits above the
 	// shadow cascades at t3..t8. Bound only in candidate mode.
 	Buffer<uint> g_candidateLiveCount : register(t9);
+	// Previous-frame directional (SH L1) moments - bound only when
+	// g_giParams13.w > 0.5 (r_giDirectionalVoxels).
+	Texture3D<float4> g_prevVoxelL1x : register(t10);
+	Texture3D<float4> g_prevVoxelL1y : register(t11);
+	Texture3D<float4> g_prevVoxelL1z : register(t12);
 	SHADOWMAPS_RESOURCE(3);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
+	RWTexture3D<float4> g_voxelL1xOut : register(u2);
+	RWTexture3D<float4> g_voxelL1yOut : register(u3);
+	RWTexture3D<float4> g_voxelL1zOut : register(u4);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -47,6 +55,7 @@
 		// x = live source-triangle count, y = candidate routing active (see
 		// the eval shader's comment), z/w reserved.
 		float4 g_giParams12;
+		float4 g_giParams13;
 	};
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
@@ -326,6 +335,16 @@
 					const float opacity = max(previous.a, tri.radianceOpacity.a);
 					g_voxelRadianceOut[coord] = float4(radiance, opacity);
 					g_voxelAlbedoOut[coord] = float4(voxelAlbedo, albedoConfidence);
+
+					// Directional (SH L1) moments: same blend form as the
+					// radiance above (see DiffuseGIVoxelizeEval).
+					if (g_giParams13.w > 0.5f)
+					{
+						const float3 injectedClamped = min(injected, 32.0f.xxx);
+						g_voxelL1xOut[coord] = float4(g_prevVoxelL1x[coord].rgb * snapKeep + injectedClamped * n.x * (1.0f - snapKeep), 0.0f);
+						g_voxelL1yOut[coord] = float4(g_prevVoxelL1y[coord].rgb * snapKeep + injectedClamped * n.y * (1.0f - snapKeep), 0.0f);
+						g_voxelL1zOut[coord] = float4(g_prevVoxelL1z[coord].rgb * snapKeep + injectedClamped * n.z * (1.0f - snapKeep), 0.0f);
+					}
 				}
 			}
 		}

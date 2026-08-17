@@ -5,7 +5,14 @@
 "ComputeShader"
 {
 	Texture3D<float4> g_voxelRadianceSrc : register(t0);
+	// Directional (SH L1) moment sources - bound only when g_giParams13.w > 0.5.
+	Texture3D<float4> g_voxelL1xSrc : register(t2);
+	Texture3D<float4> g_voxelL1ySrc : register(t3);
+	Texture3D<float4> g_voxelL1zSrc : register(t4);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
+	RWTexture3D<float4> g_voxelL1xOut : register(u1);
+	RWTexture3D<float4> g_voxelL1yOut : register(u2);
+	RWTexture3D<float4> g_voxelL1zOut : register(u3);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -19,6 +26,13 @@
 		float4 g_giParams4;
 		float4 g_giParams5;
 		float4 g_giParams6;
+		float4 g_giParams7;
+		float4 g_giParams8;
+		float4 g_giParams9;
+		float4 g_giParams10;
+		float4 g_giParams11;
+		float4 g_giParams12;
+		float4 g_giParams13;
 	};
 
 	// Dual cap: luminance AND peak channel both <= maxLuma. The 1.0x channel ratio prevents
@@ -53,9 +67,13 @@
 		// sun-facing buildings as the sun rotates.
 		const float dirStrength = saturate(g_giParams3.w * 0.35f);
 
+		const bool directionalActive = g_giParams13.w > 0.5f;
 		float3 accum = center.rgb;
 		float accumW = 1.0f;
 		float maxOcc = center.a;
+		float3 accumL1x = directionalActive ? g_voxelL1xSrc[p].rgb : 0.0f.xxx;
+		float3 accumL1y = directionalActive ? g_voxelL1ySrc[p].rgb : 0.0f.xxx;
+		float3 accumL1z = directionalActive ? g_voxelL1zSrc[p].rgb : 0.0f.xxx;
 
 		static const int3 kOffsets[6] =
 		{
@@ -71,10 +89,23 @@
 			const float4 n = g_voxelRadianceSrc[np];
 			const float3 sampleDir = normalize((float3)kOffsets[i]);
 			const float directionalWeight = 1.0f + saturate(dot(sampleDir, -sunDirWs)) * (0.18f * dirStrength);
-			const float w = 0.70f * directionalWeight;
+			// Occlusion-aware diffusion: a solid neighbour (occupancy in .a)
+			// should not push its radiance THROUGH itself into this voxel -
+			// unoccluded isotropic blur was one of the mechanisms carrying
+			// bounce around/through geometry (the silhouette light leak).
+			const float neighbourTransmit = 1.0f - saturate(n.a) * 0.75f;
+			const float w = 0.70f * directionalWeight * neighbourTransmit;
 			accum += n.rgb * w;
 			accumW += w;
 			maxOcc = max(maxOcc, n.a);
+			if (directionalActive)
+			{
+				// L1 diffuses with the SAME weights so direction stays
+				// consistent with magnitude.
+				accumL1x += g_voxelL1xSrc[np].rgb * w;
+				accumL1y += g_voxelL1ySrc[np].rgb * w;
+				accumL1z += g_voxelL1zSrc[np].rgb * w;
+			}
 		}
 
 		const float3 blurred = accum / max(accumW, 1e-4f);
@@ -101,5 +132,13 @@
 
 		const float outOcc = saturate(max(center.a * 0.985f, maxOcc * 0.95f));
 		g_voxelRadianceOut[p] = float4(outRgb, outOcc);
+
+		if (directionalActive)
+		{
+			const float invW = rcp(max(accumW, 1e-4f));
+			g_voxelL1xOut[p] = float4(lerp(g_voxelL1xSrc[p].rgb, accumL1x * invW, propagation), 0.0f);
+			g_voxelL1yOut[p] = float4(lerp(g_voxelL1ySrc[p].rgb, accumL1y * invW, propagation), 0.0f);
+			g_voxelL1zOut[p] = float4(lerp(g_voxelL1zSrc[p].rgb, accumL1z * invW, propagation), 0.0f);
+		}
 	}
 }

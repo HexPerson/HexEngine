@@ -6,6 +6,9 @@
 {
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
+	RWTexture3D<float4> g_voxelL1xOut : register(u2);
+	RWTexture3D<float4> g_voxelL1yOut : register(u3);
+	RWTexture3D<float4> g_voxelL1zOut : register(u4);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -19,6 +22,13 @@
 		float4 g_giParams4;
 		float4 g_giParams5;
 		float4 g_giParams6;
+		float4 g_giParams7;
+		float4 g_giParams8;
+		float4 g_giParams9;
+		float4 g_giParams10;
+		float4 g_giParams11;
+		float4 g_giParams12;
+		float4 g_giParams13;
 	};
 
 	[numthreads(8, 8, 8)]
@@ -34,5 +44,11 @@
 		// state here causes stale bright energy to survive and be re-propagated indefinitely.
 		g_voxelRadianceOut[tid] = 0.0f.xxxx;
 		g_voxelAlbedoOut[tid] = 0.0f.xxxx;
+		if (g_giParams13.w > 0.5f)
+		{
+			g_voxelL1xOut[tid] = 0.0f.xxxx;
+			g_voxelL1yOut[tid] = 0.0f.xxxx;
+			g_voxelL1zOut[tid] = 0.0f.xxxx;
+		}
 	}
 }

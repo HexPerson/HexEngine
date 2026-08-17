@@ -89,6 +89,16 @@ namespace HexEngine
 			ITexture3D* albedoVolume = nullptr;
 			ITexture3D* albedoScratchVolume = nullptr;
 			ITexture3D* opacityVolume = nullptr;
+			// Directional voxels (SH band 1): per-channel linear moments.
+			// radianceVolume stays the SH L0 (ambient) + occlusion - every
+			// legacy consumer (SSR fallback, reflections, resolve, AO) reads
+			// it unchanged. l1Volume[axis] holds the per-channel moment along
+			// X/Y/Z (RGBA16F, SIGNED). A receiver evaluates
+			// E(N) = max(0, 0.5*L0 + 0.5*(L1x*Nx + L1y*Ny + L1z*Nz)), which
+			// cancels radiance behind emitting surfaces - the fix for GI
+			// wrapping around silhouettes (isotropic-voxel light leak).
+			ITexture3D* l1Volume[3] = {};
+			ITexture3D* l1ScratchVolume[3] = {};
 			ITexture2D* probeIrradianceAtlas = nullptr;
 			ITexture2D* probeVisibilityAtlas = nullptr;
 			ID3D11UnorderedAccessView* radianceUav = nullptr;
@@ -99,6 +109,10 @@ namespace HexEngine
 			ID3D11ShaderResourceView* radianceScratchSrv = nullptr;
 			ID3D11ShaderResourceView* albedoSrv = nullptr;
 			ID3D11ShaderResourceView* albedoScratchSrv = nullptr;
+			ID3D11UnorderedAccessView* l1Uav[3] = {};
+			ID3D11UnorderedAccessView* l1ScratchUav[3] = {};
+			ID3D11ShaderResourceView* l1Srv[3] = {};
+			ID3D11ShaderResourceView* l1ScratchSrv[3] = {};
 
 			std::vector<float> radianceCpu;
 			std::vector<uint8_t> opacityCpu;

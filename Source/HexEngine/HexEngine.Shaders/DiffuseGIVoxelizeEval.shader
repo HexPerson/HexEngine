@@ -52,9 +52,17 @@
 	// scattered by DiffuseGIScreenFeedback at end of the previous frame.
 	// Bound only when g_giParams13.z > 0.5 (near clips, accum valid).
 	StructuredBuffer<uint4> g_litFeedback : register(t13);
+	// Previous-frame directional (SH L1) moments - bound only when
+	// g_giParams13.w > 0.5 (r_giDirectionalVoxels).
+	Texture3D<float4> g_prevVoxelL1x : register(t14);
+	Texture3D<float4> g_prevVoxelL1y : register(t15);
+	Texture3D<float4> g_prevVoxelL1z : register(t16);
 	SHADOWMAPS_RESOURCE(6);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
+	RWTexture3D<float4> g_voxelL1xOut : register(u2);
+	RWTexture3D<float4> g_voxelL1yOut : register(u3);
+	RWTexture3D<float4> g_voxelL1zOut : register(u4);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -908,6 +916,24 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					float opacity = saturate(previous.a + triOpacity * (1.0f - previous.a));
 					g_voxelRadianceOut[coord] = float4(radiance, opacity);
 					g_voxelAlbedoOut[coord] = float4(voxelAlbedo, albedoConfidence);
+
+					// Directional (SH L1) moments: the injected radiance exits
+					// Lambertian around the surface normal, so each axis moment
+					// is radiance x n[axis] (SIGNED). Same temporal keep as the
+					// radiance blend; the per-frame delta brake is skipped
+					// (signed values, and L0 already bounds the magnitude).
+					if (g_giParams13.w > 0.5f)
+					{
+						// Identical blend form to the L0 radiance above:
+						// new = prev*keep + injectedMoment*(1-keep).
+						const float3 injectedClamped = LuminanceClamp(injected, 4.0f);
+						const float3 prevL1x = g_prevVoxelL1x[coord].rgb;
+						const float3 prevL1y = g_prevVoxelL1y[coord].rgb;
+						const float3 prevL1z = g_prevVoxelL1z[coord].rgb;
+						g_voxelL1xOut[coord] = float4(prevL1x * effectiveKeep + injectedClamped * n.x * (1.0f - effectiveKeep), 0.0f);
+						g_voxelL1yOut[coord] = float4(prevL1y * effectiveKeep + injectedClamped * n.y * (1.0f - effectiveKeep), 0.0f);
+						g_voxelL1zOut[coord] = float4(prevL1z * effectiveKeep + injectedClamped * n.z * (1.0f - effectiveKeep), 0.0f);
+					}
 				}
 			}
 		}

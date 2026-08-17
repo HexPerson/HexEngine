@@ -110,6 +110,7 @@ namespace HexEngine
 	HVar r_giSecondBounce("r_giSecondBounce", "Strength of the voxel-space second bounce (prev-frame neighbour radiance x albedo re-injected)", 0.35f, 0.0f, 2.0f);
 	HVar r_giLitInjection("r_giLitInjection", "Strength of lit-scene radiance feedback into voxel injection (0 = constants only)", 0.8f, 0.0f, 4.0f);
 	HVar r_giLitInjectionMaxLuma("r_giLitInjectionMaxLuma", "Per-sample luminance cap on lit-scene feedback (stops bright pools blowing out the voxel field)", 3.0f, 0.1f, 32.0f);
+	HVar r_giDirectionalVoxels("r_giDirectionalVoxels", "SH-1 directional voxels: radiance carries a direction so GI cannot wrap around silhouettes (light-leak fix). Costs 6 extra RGBA16F volumes per clip.", true, false, true);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
 	// Diagnostic: log every CPU voxel-triangle rebuild with the cache-rejection
@@ -1006,6 +1007,48 @@ namespace HexEngine
 				D3D11_SRV_DIMENSION_TEXTURE3D,
 				D3D11_DSV_DIMENSION_UNKNOWN);
 
+			if (r_giDirectionalVoxels._val.b)
+			{
+				for (uint32_t axis = 0u; axis < 3u; ++axis)
+				{
+					level.l1Volume[axis] = g_pEnv->_graphicsDevice->CreateTexture3D(
+						static_cast<int32_t>(resolution),
+						static_cast<int32_t>(resolution),
+						static_cast<int32_t>(resolution),
+						DXGI_FORMAT_R16G16B16A16_FLOAT,
+						1,
+						D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+						1,
+						1,
+						0,
+						nullptr,
+						D3D11_RTV_DIMENSION_UNKNOWN,
+						D3D11_UAV_DIMENSION_TEXTURE3D,
+						D3D11_SRV_DIMENSION_TEXTURE3D,
+						D3D11_DSV_DIMENSION_UNKNOWN);
+					level.l1ScratchVolume[axis] = g_pEnv->_graphicsDevice->CreateTexture3D(
+						static_cast<int32_t>(resolution),
+						static_cast<int32_t>(resolution),
+						static_cast<int32_t>(resolution),
+						DXGI_FORMAT_R16G16B16A16_FLOAT,
+						1,
+						D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+						1,
+						1,
+						0,
+						nullptr,
+						D3D11_RTV_DIMENSION_UNKNOWN,
+						D3D11_UAV_DIMENSION_TEXTURE3D,
+						D3D11_SRV_DIMENSION_TEXTURE3D,
+						D3D11_DSV_DIMENSION_UNKNOWN);
+					if (level.l1Volume[axis] == nullptr || level.l1ScratchVolume[axis] == nullptr)
+					{
+						LOG_CRIT("DiffuseGI failed to allocate directional (L1) clipmap volumes.");
+						return false;
+					}
+				}
+			}
+
 			level.opacityVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
 				static_cast<int32_t>(resolution),
 				static_cast<int32_t>(resolution),
@@ -1176,6 +1219,57 @@ namespace HexEngine
 					LOG_CRIT("DiffuseGI failed to create albedo scratch SRV for clipmap %u (hr=0x%X).", i, static_cast<uint32_t>(hr));
 					return false;
 				}
+
+				if (r_giDirectionalVoxels._val.b)
+				{
+					D3D11_UNORDERED_ACCESS_VIEW_DESC l1UavDesc = {};
+					l1UavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+					l1UavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D;
+					l1UavDesc.Texture3D.MipSlice = 0;
+					l1UavDesc.Texture3D.FirstWSlice = 0;
+					l1UavDesc.Texture3D.WSize = resolution;
+					for (uint32_t axis = 0u; axis < 3u; ++axis)
+					{
+						if (level.l1Volume[axis] == nullptr || level.l1ScratchVolume[axis] == nullptr)
+							continue;
+						hr = device->CreateUnorderedAccessView(
+							reinterpret_cast<ID3D11Texture3D*>(level.l1Volume[axis]->GetNativePtr()),
+							&l1UavDesc,
+							&level.l1Uav[axis]);
+						if (FAILED(hr) || level.l1Uav[axis] == nullptr)
+						{
+							LOG_CRIT("DiffuseGI failed to create L1 UAV (clip %u axis %u, hr=0x%X).", i, axis, static_cast<uint32_t>(hr));
+							return false;
+						}
+						hr = device->CreateUnorderedAccessView(
+							reinterpret_cast<ID3D11Texture3D*>(level.l1ScratchVolume[axis]->GetNativePtr()),
+							&l1UavDesc,
+							&level.l1ScratchUav[axis]);
+						if (FAILED(hr) || level.l1ScratchUav[axis] == nullptr)
+						{
+							LOG_CRIT("DiffuseGI failed to create L1 scratch UAV (clip %u axis %u, hr=0x%X).", i, axis, static_cast<uint32_t>(hr));
+							return false;
+						}
+						hr = device->CreateShaderResourceView(
+							reinterpret_cast<ID3D11Resource*>(level.l1Volume[axis]->GetNativePtr()),
+							nullptr,
+							&level.l1Srv[axis]);
+						if (FAILED(hr) || level.l1Srv[axis] == nullptr)
+						{
+							LOG_CRIT("DiffuseGI failed to create L1 SRV (clip %u axis %u, hr=0x%X).", i, axis, static_cast<uint32_t>(hr));
+							return false;
+						}
+						hr = device->CreateShaderResourceView(
+							reinterpret_cast<ID3D11Resource*>(level.l1ScratchVolume[axis]->GetNativePtr()),
+							nullptr,
+							&level.l1ScratchSrv[axis]);
+						if (FAILED(hr) || level.l1ScratchSrv[axis] == nullptr)
+						{
+							LOG_CRIT("DiffuseGI failed to create L1 scratch SRV (clip %u axis %u, hr=0x%X).", i, axis, static_cast<uint32_t>(hr));
+							return false;
+						}
+					}
+				}
 			}
 		}
 
@@ -1194,6 +1288,15 @@ namespace HexEngine
 			SAFE_RELEASE(level.radianceScratchSrv);
 			SAFE_RELEASE(level.albedoSrv);
 			SAFE_RELEASE(level.albedoScratchSrv);
+			for (uint32_t axis = 0u; axis < 3u; ++axis)
+			{
+				SAFE_RELEASE(level.l1Uav[axis]);
+				SAFE_RELEASE(level.l1ScratchUav[axis]);
+				SAFE_RELEASE(level.l1Srv[axis]);
+				SAFE_RELEASE(level.l1ScratchSrv[axis]);
+				SAFE_DELETE(level.l1Volume[axis]);
+				SAFE_DELETE(level.l1ScratchVolume[axis]);
+			}
 			SAFE_DELETE(level.radianceVolume);
 			SAFE_DELETE(level.radianceScratchVolume);
 			SAFE_DELETE(level.albedoVolume);
@@ -2204,6 +2307,14 @@ namespace HexEngine
 			0.0f,
 			std::clamp(r_giReceiverMinLuma._val.f32, 0.0f, 1.0f),
 			std::clamp(r_giReceiverRemapAmount._val.f32, 0.0f, 1.0f));
+		// params13 is filled here for GLOBAL consumers (the trace reads .w for
+		// directional evaluation); the per-level voxelize dispatch overwrites
+		// .z with its feedback flag before each injection.
+		_constants.params13 = math::Vector4(
+			std::clamp(r_giLitInjection._val.f32, 0.0f, 4.0f),
+			std::clamp(r_giLitInjectionMaxLuma._val.f32, 0.1f, 32.0f),
+			0.0f,
+			(r_giDirectionalVoxels._val.b && _clipmaps[0].l1Volume[0] != nullptr) ? 1.0f : 0.0f);
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresenceMask;
@@ -2546,7 +2657,11 @@ namespace HexEngine
 		}
 
 		const uint32_t desiredResolution = GetVoxelResolution();
-		if (_clipmaps[0].resolution != desiredResolution)
+		// Directional-voxel toggle needs the L1 volumes created/destroyed -
+		// piggyback on the resolution-recreate path.
+		const bool directionalWanted = r_giDirectionalVoxels._val.b;
+		const bool directionalAllocated = (_clipmaps[0].l1Volume[0] != nullptr);
+		if (_clipmaps[0].resolution != desiredResolution || directionalWanted != directionalAllocated)
 		{
 			DestroyClipmapResources();
 			if (!CreateClipmapResources())
@@ -5023,6 +5138,12 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		if (device == nullptr || context == nullptr)
 			return;
 
+		const bool directionalActive =
+			r_giDirectionalVoxels._val.b &&
+			level.l1Volume[0] != nullptr && level.l1Volume[1] != nullptr && level.l1Volume[2] != nullptr &&
+			level.l1Uav[0] != nullptr && level.l1ScratchUav[0] != nullptr &&
+			level.l1Srv[0] != nullptr && level.l1ScratchSrv[0] != nullptr;
+
 		const uint32_t clearGroups = (level.resolution + 7u) / 8u;
 		if (level.initialized && level.pendingShiftWs.LengthSquared() > 1e-8f && level.radianceSrv != nullptr && level.radianceScratchUav != nullptr)
 		{
@@ -5066,18 +5187,28 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				{
 					context->CSSetConstantBuffers(5, 1, &shiftCb);
 				}
-				ID3D11ShaderResourceView* shiftSrv[2] = { level.radianceSrv, level.albedoSrv };
-				ID3D11UnorderedAccessView* shiftUav[2] = { level.radianceScratchUav, level.albedoScratchUav };
-				context->CSSetShaderResources(0, 2, shiftSrv);
-				context->CSSetUnorderedAccessViews(0, 2, shiftUav, nullptr);
+				ID3D11ShaderResourceView* shiftSrv[5] = {
+					level.radianceSrv,
+					level.albedoSrv,
+					directionalActive ? level.l1Srv[0] : nullptr,
+					directionalActive ? level.l1Srv[1] : nullptr,
+					directionalActive ? level.l1Srv[2] : nullptr };
+				ID3D11UnorderedAccessView* shiftUav[5] = {
+					level.radianceScratchUav,
+					level.albedoScratchUav,
+					directionalActive ? level.l1ScratchUav[0] : nullptr,
+					directionalActive ? level.l1ScratchUav[1] : nullptr,
+					directionalActive ? level.l1ScratchUav[2] : nullptr };
+				context->CSSetShaderResources(0, 5, shiftSrv);
+				context->CSSetUnorderedAccessViews(0, 5, shiftUav, nullptr);
 				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(shiftStage->GetNativePtr()), nullptr, 0);
 				context->Dispatch(clearGroups, clearGroups, clearGroups);
 
-				ID3D11ShaderResourceView* nullShiftSrv[2] = {};
-				ID3D11UnorderedAccessView* nullShiftUav[2] = {};
+				ID3D11ShaderResourceView* nullShiftSrv[5] = {};
+				ID3D11UnorderedAccessView* nullShiftUav[5] = {};
 				ID3D11Buffer* nullShiftCb[1] = {};
-				context->CSSetShaderResources(0, 2, nullShiftSrv);
-				context->CSSetUnorderedAccessViews(0, 2, nullShiftUav, nullptr);
+				context->CSSetShaderResources(0, 5, nullShiftSrv);
+				context->CSSetUnorderedAccessViews(0, 5, nullShiftUav, nullptr);
 				context->CSSetConstantBuffers(5, 1, nullShiftCb);
 				context->CSSetShader(nullptr, nullptr, 0);
 
@@ -5087,6 +5218,15 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				context->CopyResource(
 					reinterpret_cast<ID3D11Resource*>(level.albedoVolume->GetNativePtr()),
 					reinterpret_cast<ID3D11Resource*>(level.albedoScratchVolume->GetNativePtr()));
+				if (directionalActive)
+				{
+					for (uint32_t axis = 0u; axis < 3u; ++axis)
+					{
+						context->CopyResource(
+							reinterpret_cast<ID3D11Resource*>(level.l1Volume[axis]->GetNativePtr()),
+							reinterpret_cast<ID3D11Resource*>(level.l1ScratchVolume[axis]->GetNativePtr()));
+					}
+				}
 
 				appliedShift = true;
 				appliedShiftWs = math::Vector3(
@@ -5635,7 +5775,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			std::clamp(r_giLitInjection._val.f32, 0.0f, 4.0f),
 			std::clamp(r_giLitInjectionMaxLuma._val.f32, 0.1f, 32.0f),
 			feedbackBoundThisLevel ? 1.0f : 0.0f,
-			0.0f);
+			directionalActive ? 1.0f : 0.0f);
 		if (_constantBuffer)
 		{
 			_constantBuffer->Write(&_constants, sizeof(_constants));
@@ -5720,10 +5860,24 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		context->CopyResource(
 			reinterpret_cast<ID3D11Resource*>(level.albedoScratchVolume->GetNativePtr()),
 			reinterpret_cast<ID3D11Resource*>(level.albedoVolume->GetNativePtr()));
+		if (directionalActive)
+		{
+			for (uint32_t axis = 0u; axis < 3u; ++axis)
+			{
+				context->CopyResource(
+					reinterpret_cast<ID3D11Resource*>(level.l1ScratchVolume[axis]->GetNativePtr()),
+					reinterpret_cast<ID3D11Resource*>(level.l1Volume[axis]->GetNativePtr()));
+			}
+		}
 
 		const auto dispatchStart = std::chrono::high_resolution_clock::now();
-		ID3D11UnorderedAccessView* clearUav[2] = { level.radianceUav, level.albedoUav };
-		context->CSSetUnorderedAccessViews(0, 2, clearUav, nullptr);
+		ID3D11UnorderedAccessView* clearUav[5] = {
+			level.radianceUav,
+			level.albedoUav,
+			directionalActive ? level.l1Uav[0] : nullptr,
+			directionalActive ? level.l1Uav[1] : nullptr,
+			directionalActive ? level.l1Uav[2] : nullptr };
+		context->CSSetUnorderedAccessViews(0, 5, clearUav, nullptr);
 		context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(clearStage->GetNativePtr()), nullptr, 0);
 		context->Dispatch(clearGroups, clearGroups, clearGroups);
 
@@ -5759,7 +5913,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				ID3D11ShaderResourceView* feedbackSrv[1] = { _feedbackAccumSrv[levelIndex] };
 				context->CSSetShaderResources(13u, 1, feedbackSrv);
 			}
-			context->CSSetUnorderedAccessViews(0, 2, clearUav, nullptr);
+			if (directionalActive)
+			{
+				// Previous-frame L1 moments for the temporal blend
+				// (eval t14-16 / plain t10-12).
+				ID3D11ShaderResourceView* prevL1Srv[3] = { level.l1ScratchSrv[0], level.l1ScratchSrv[1], level.l1ScratchSrv[2] };
+				context->CSSetShaderResources(useGpuMaterialEval ? 14u : 10u, 3, prevL1Srv);
+			}
+			context->CSSetUnorderedAccessViews(0, 5, clearUav, nullptr);
 			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(voxelizeStage->GetNativePtr()), nullptr, 0);
 			if (useCandidateIndirectDispatch)
 			{
@@ -5780,13 +5941,18 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				ID3D11ShaderResourceView* nullFeedbackSrv[1] = { nullptr };
 				context->CSSetShaderResources(13u, 1, nullFeedbackSrv);
 			}
+			if (directionalActive)
+			{
+				ID3D11ShaderResourceView* nullPrevL1Srv[3] = {};
+				context->CSSetShaderResources(useGpuMaterialEval ? 14u : 10u, 3, nullPrevL1Srv);
+			}
 		}
 
 		// Break UAV/SRV hazards between injection and propagation passes.
 		ID3D11ShaderResourceView* nullSrvBetweenPasses[6] = {};
-		ID3D11UnorderedAccessView* nullUavBetweenPasses[2] = {};
+		ID3D11UnorderedAccessView* nullUavBetweenPasses[5] = {};
 		context->CSSetShaderResources(0, 6, nullSrvBetweenPasses);
-		context->CSSetUnorderedAccessViews(0, 2, nullUavBetweenPasses, nullptr);
+		context->CSSetUnorderedAccessViews(0, 5, nullUavBetweenPasses, nullptr);
 
 		ID3D11ShaderResourceView* radianceSrcSrv = level.radianceSrv;
 		if (radianceSrcSrv != nullptr)
@@ -5807,20 +5973,44 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 
 			for (uint32_t iter = 0u; iter < propagationIterations; ++iter)
 			{
-				context->CSSetShaderResources(0, 1, srcSrv);
-				context->CSSetUnorderedAccessViews(0, 1, dstUav, nullptr);
+				// t0 = L0 source (occupancy in .a is the damping reference for
+				// ALL volumes), t2-4 = L1 moment sources; u0 = L0 out,
+				// u1-3 = L1 out. The L1 field diffuses with the same weights as
+				// L0 so direction stays consistent with magnitude.
+				ID3D11ShaderResourceView* propSrv[5] = {
+					srcSrv[0],
+					nullptr,
+					directionalActive ? level.l1Srv[0] : nullptr,
+					directionalActive ? level.l1Srv[1] : nullptr,
+					directionalActive ? level.l1Srv[2] : nullptr };
+				ID3D11UnorderedAccessView* propUav[4] = {
+					dstUav[0],
+					directionalActive ? level.l1ScratchUav[0] : nullptr,
+					directionalActive ? level.l1ScratchUav[1] : nullptr,
+					directionalActive ? level.l1ScratchUav[2] : nullptr };
+				context->CSSetShaderResources(0, 5, propSrv);
+				context->CSSetUnorderedAccessViews(0, 4, propUav, nullptr);
 				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(propagateStage->GetNativePtr()), nullptr, 0);
 				context->Dispatch(clearGroups, clearGroups, clearGroups);
 
-				ID3D11ShaderResourceView* nullSrvForProp[1] = {};
-				ID3D11UnorderedAccessView* nullUavForProp[1] = {};
-				context->CSSetShaderResources(0, 1, nullSrvForProp);
-				context->CSSetUnorderedAccessViews(0, 1, nullUavForProp, nullptr);
+				ID3D11ShaderResourceView* nullSrvForProp[5] = {};
+				ID3D11UnorderedAccessView* nullUavForProp[4] = {};
+				context->CSSetShaderResources(0, 5, nullSrvForProp);
+				context->CSSetUnorderedAccessViews(0, 4, nullUavForProp, nullptr);
 				context->CSSetShader(nullptr, nullptr, 0);
 
 				context->CopyResource(
 					reinterpret_cast<ID3D11Resource*>(level.radianceVolume->GetNativePtr()),
 					reinterpret_cast<ID3D11Resource*>(level.radianceScratchVolume->GetNativePtr()));
+				if (directionalActive)
+				{
+					for (uint32_t axis = 0u; axis < 3u; ++axis)
+					{
+						context->CopyResource(
+							reinterpret_cast<ID3D11Resource*>(level.l1Volume[axis]->GetNativePtr()),
+							reinterpret_cast<ID3D11Resource*>(level.l1ScratchVolume[axis]->GetNativePtr()));
+					}
+				}
 			}
 		}
 
@@ -5874,6 +6064,19 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			g_pEnv->_graphicsDevice->SetTexture2D(_clipmaps[i].probeVisibilityAtlas);
 		}
 		g_pEnv->_graphicsDevice->SetTexture2D(beautyTarget);
+		// Directional (SH L1) moment volumes: t26-t37, clip-major (x,y,z per
+		// clip). Bound last so the auto-slot counter stays aligned with the
+		// trace shader's explicit registers; skipped entirely when directional
+		// voxels are off (the shader only samples them behind params13.w).
+		if (r_giDirectionalVoxels._val.b && _clipmaps[0].l1Volume[0] != nullptr)
+		{
+			for (uint32_t i = 0; i < ClipmapCount; ++i)
+			{
+				g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].l1Volume[0]);
+				g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].l1Volume[1]);
+				g_pEnv->_graphicsDevice->SetTexture3D(_clipmaps[i].l1Volume[2]);
+			}
+		}
 		g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _constantBuffer);
 
 		guiRenderer->StartFrame();
