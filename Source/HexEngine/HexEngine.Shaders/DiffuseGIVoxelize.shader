@@ -277,8 +277,9 @@
 					// from triangle-budget/coverage changes while moving clipmaps.
 					const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 					const float shiftSettle = saturate(g_giParams6.y);
-					const float temporalKeepBase = lerp(0.80f, 0.94f, warmStabilize);
-					const float temporalKeep = lerp(temporalKeepBase, 0.95f, shiftSettle * 0.45f);
+					// Faster base blend - see DiffuseGIVoxelizeEval.
+					const float temporalKeepBase = lerp(0.70f, 0.86f, warmStabilize);
+					const float temporalKeep = lerp(temporalKeepBase, 0.90f, shiftSettle * 0.45f);
 					// Snap-on-change (g_giParams12.z): the CPU detected a real
 					// lighting-state change (light set toggled/moved, sun jumped),
 					// so the accumulated history is stale by definition - blend

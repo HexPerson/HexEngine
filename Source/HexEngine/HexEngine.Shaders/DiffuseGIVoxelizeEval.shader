@@ -705,8 +705,14 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					// from triangle-budget/coverage changes while moving clipmaps.
 					const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 					const float shiftSettle = saturate(g_giParams6.y);
-					const float temporalKeepBase = lerp(0.80f, 0.94f, warmStabilize);
-					const float temporalKeep = lerp(temporalKeepBase, 0.95f, shiftSettle * 0.12f);
+					// Faster base blend (was 0.80-0.94/0.95): the heavy retention
+					// made every energy source - feedback, second bounce, the
+					// directional moments - converge over seconds, reading as
+					// GI slowly rising and falling. The symmetric delta brakes
+					// below remain the flicker guard, so retention can be
+					// lighter without bringing the shimmer back.
+					const float temporalKeepBase = lerp(0.70f, 0.86f, warmStabilize);
+					const float temporalKeep = lerp(temporalKeepBase, 0.90f, shiftSettle * 0.12f);
 					const float albedoKeepBase = lerp(0.75f, 0.93f, warmStabilize);
 					const float albedoKeep = lerp(albedoKeepBase, 0.96f, shiftSettle * 0.20f);
 					const float triCoverage = saturate(coverage);

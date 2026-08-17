@@ -108,7 +108,10 @@ namespace HexEngine
 	// r_giVoxelAlbedoInfluence removed: params6.z was consumed by no shader.
 	// The slot now carries the second-bounce strength.
 	HVar r_giSecondBounce("r_giSecondBounce", "Strength of the voxel-space second bounce (prev-frame neighbour radiance x albedo re-injected)", 0.35f, 0.0f, 2.0f);
-	HVar r_giLitInjection("r_giLitInjection", "Strength of lit-scene radiance feedback into voxel injection (0 = constants only)", 0.8f, 0.0f, 4.0f);
+	// Default deliberately LOW: the feedback is view-dependent by nature
+	// (injects what is on screen), and at 0.8 the look-at/look-away energy
+	// swing read as visible GI pumping under camera movement.
+	HVar r_giLitInjection("r_giLitInjection", "Strength of lit-scene radiance feedback into voxel injection (0 = constants only)", 0.25f, 0.0f, 4.0f);
 	HVar r_giLitInjectionMaxLuma("r_giLitInjectionMaxLuma", "Per-sample luminance cap on lit-scene feedback (stops bright pools blowing out the voxel field)", 3.0f, 0.1f, 32.0f);
 	HVar r_giDirectionalVoxels("r_giDirectionalVoxels", "SH-1 directional voxels: radiance carries a direction so GI cannot wrap around silhouettes (light-leak fix). Costs 6 extra RGBA16F volumes per clip.", true, false, true);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);

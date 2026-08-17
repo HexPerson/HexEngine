@@ -431,7 +431,7 @@
 			float3 tapRadiance = voxelData.rgb;
 			if (directionalArrival)
 			{
-				tapRadiance *= lerp(arrivalFactor, 1.0f.xxx, saturate(occSample * 2.0f));
+				tapRadiance *= lerp(max(arrivalFactor, 0.35f.xxx), 1.0f.xxx, saturate(occSample * 2.0f));
 			}
 			voxelRadiance += tapRadiance * w;
 			occAccum += occSample * w;
@@ -454,7 +454,7 @@
 			float3 coneRadiance = voxelData.rgb;
 			if (directionalArrival)
 			{
-				coneRadiance *= lerp(arrivalFactor, 1.0f.xxx, saturate(occSample * 2.0f));
+				coneRadiance *= lerp(max(arrivalFactor, 0.35f.xxx), 1.0f.xxx, saturate(occSample * 2.0f));
 			}
 			voxelRadiance += coneRadiance * w;
 			occAccum += occSample * w;
