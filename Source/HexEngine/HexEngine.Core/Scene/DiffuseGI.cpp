@@ -2412,6 +2412,9 @@ namespace HexEngine
 			// armed (which collapses the field - see the shader's snapGate).
 			hashF(static_cast<float>(r_giGpuSunShadowMode._val.i32));
 			hashF(r_giGpuSunShadowPerVoxel._val.b ? 1.0f : 0.0f);
+			hashF(r_giLitInjection._val.f32);
+			hashF(r_giLitInjectionMaxLuma._val.f32);
+			hashF(r_giSecondBounce._val.f32);
 			const bool injectionTuningChanged =
 				(_lastInjectionTuningHash != 0ull) && (tuningHash != _lastInjectionTuningHash);
 			_lastInjectionTuningHash = tuningHash;
@@ -2955,7 +2958,15 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		auto* stage = _screenFeedbackShader ? _screenFeedbackShader->GetShaderStage(ShaderStage::ComputeShader) : nullptr;
 		auto* context = (g_pEnv->_graphicsDevice->GetBackend() == HexEngine::GraphicsBackend::D3D11) ? reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()) : nullptr;
 		if (stage == nullptr || context == nullptr)
+		{
+			static bool loggedMissing = false;
+			if (!loggedMissing)
+			{
+				LOG_WARN("GI lit feedback: INACTIVE (%s)", stage == nullptr ? "DiffuseGIScreenFeedback shader missing" : "no D3D11 context");
+				loggedMissing = true;
+			}
 			return;
+		}
 		auto* litSrv = reinterpret_cast<ID3D11ShaderResourceView*>(litScene->GetNativeShaderView());
 		auto* posSrv = reinterpret_cast<ID3D11ShaderResourceView*>(gbufferPosition->GetNativeShaderView());
 		auto* normalSrv = reinterpret_cast<ID3D11ShaderResourceView*>(gbufferNormal->GetNativeShaderView());
@@ -3013,6 +3024,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		context->CSSetUnorderedAccessViews(0, 2, nullUavs, nullptr);
 		context->CSSetShader(nullptr, nullptr, 0);
 
+		if (!_feedbackAccumValid[0])
+		{
+			LOG_INFO("GI lit feedback: scatter active (%ux%u half-res -> clip0/1 accum %u elements)",
+				halfW, halfH, _feedbackAccumElements[0]);
+		}
 		_feedbackAccumValid[0] = true;
 		_feedbackAccumValid[1] = true;
 	}
@@ -5609,6 +5625,12 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			_feedbackAccumValid[levelIndex] &&
 			(_feedbackAccumSrv[levelIndex] != nullptr) &&
 			(r_giLitInjection._val.f32 > 0.0001f);
+		static bool s_loggedFeedbackConsume[FeedbackLevelCount] = {};
+		if (feedbackBoundThisLevel && !s_loggedFeedbackConsume[levelIndex])
+		{
+			LOG_INFO("GI lit feedback: consumed by clip %u injection", levelIndex);
+			s_loggedFeedbackConsume[levelIndex] = true;
+		}
 		_constants.params13 = math::Vector4(
 			std::clamp(r_giLitInjection._val.f32, 0.0f, 4.0f),
 			std::clamp(r_giLitInjectionMaxLuma._val.f32, 0.1f, 32.0f),
