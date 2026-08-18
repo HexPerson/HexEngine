@@ -328,18 +328,22 @@
 		const float worldPerPixel = clamp(length(posRight - centerPosWS) * 0.25f, 1e-4f, 0.5f);
 		const float radiusPixels = clamp(radiusWs / worldPerPixel, 4.0f, 160.0f);
 
-		// Golden-angle spiral, 12 taps. Per-pixel rotation from a screen hash
-		// decorrelates the pattern; the resolve's temporal pass integrates it.
+		// Golden-angle spiral, 16 taps. The rotation MUST vary per frame as
+		// well as per pixel: a static per-pixel hash produces the same tap
+		// pattern every frame - structured grain the resolve's temporal
+		// filter cannot integrate away. Frame-animated rotation turns the
+		// undersampling into temporal noise that averages to smooth.
+		const float frameJitter = (float)(g_frame % 16u) * 0.3926991f; // pi/8 steps
 		const float hash = frac(sin(dot(uv, float2(12.9898f, 78.233f))) * 43758.5453f);
-		const float baseAngle = hash * 6.2831853f;
+		const float baseAngle = hash * 6.2831853f + frameJitter;
 		const float falloffR2 = radiusWs * radiusWs * 0.25f;
 
 		float3 accum = 0.0f.xxx;
 
 		[unroll]
-		for (uint i = 0u; i < 12u; ++i)
+		for (uint i = 0u; i < 16u; ++i)
 		{
-			const float t = ((float)i + 0.5f) / 12.0f;
+			const float t = ((float)i + 0.5f) / 16.0f;
 			const float ringRadius = radiusPixels * sqrt(t);
 			const float angle = baseAngle + (float)i * 2.3999632f; // golden angle
 			const float2 sampleUv = saturate(uv + float2(cos(angle), sin(angle)) * ringRadius * fullTexel);
@@ -382,7 +386,7 @@
 
 		// Normalise by the taps, not the surviving weight - empty
 		// surroundings must mean LESS gathered light, not the same.
-		return accum * (1.0f / 12.0f) * 2.5f;
+		return accum * (1.0f / 16.0f) * 2.5f;
 	}
 
 	float3 ComputeScreenSpaceBounce(float2 uv, float3 centerPosWS, float3 centerNormal, float centerDepth)
