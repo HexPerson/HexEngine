@@ -87,16 +87,34 @@
 
 		if (!covered)
 		{
-			// Uncovered voxels mirror the legacy clear semantics: the volume
-			// only persists radiance at geometry; the propagate pass refills
-			// the surrounding air glow each update.
-			g_voxelRadianceOut[tid] = 0.0f.xxxx;
-			g_voxelAlbedoOut[tid] = 0.0f.xxxx;
+			// Uncovered voxels FADE over ~3 updates rather than snapping to
+			// zero. Genuinely vacated geometry (a moved object) still vanishes
+			// in ~100ms, but transient coverage changes - budget-stride subset
+			// shifts, gather latency during edits - soften instead of blacking
+			// the voxel out for a frame.
+			const float4 prevRad = g_prevVoxelRadiance[tid];
+			const float4 prevAlb = g_prevVoxelAlbedo[tid];
+			const float fade = 0.35f;
+			const float lum = dot(prevRad.rgb, float3(0.2126f, 0.7152f, 0.0722f));
+			if (lum < 0.002f && prevRad.a < 0.01f)
+			{
+				g_voxelRadianceOut[tid] = 0.0f.xxxx;
+				g_voxelAlbedoOut[tid] = 0.0f.xxxx;
+				if (directionalActive)
+				{
+					g_voxelL1xOut[tid] = 0.0f.xxxx;
+					g_voxelL1yOut[tid] = 0.0f.xxxx;
+					g_voxelL1zOut[tid] = 0.0f.xxxx;
+				}
+				return;
+			}
+			g_voxelRadianceOut[tid] = prevRad * fade;
+			g_voxelAlbedoOut[tid] = prevAlb * fade;
 			if (directionalActive)
 			{
-				g_voxelL1xOut[tid] = 0.0f.xxxx;
-				g_voxelL1yOut[tid] = 0.0f.xxxx;
-				g_voxelL1zOut[tid] = 0.0f.xxxx;
+				g_voxelL1xOut[tid] = float4(g_prevVoxelL1x[tid].rgb * fade, 0.0f);
+				g_voxelL1yOut[tid] = float4(g_prevVoxelL1y[tid].rgb * fade, 0.0f);
+				g_voxelL1zOut[tid] = float4(g_prevVoxelL1z[tid].rgb * fade, 0.0f);
 			}
 			return;
 		}

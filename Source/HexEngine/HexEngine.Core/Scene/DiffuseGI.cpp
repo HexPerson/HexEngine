@@ -4032,10 +4032,17 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			gpuComputeBaseSunEnabled &&
 			level.initialized &&
 			(gatherTrianglesPerFrame > 0u);
+		// NOTE: revision changes do NOT abort a parked gather. An entity being
+		// dragged bumps the geometry revision EVERY FRAME, and aborting made
+		// the gather an abort/restart loop that burned a full slice of CPU per
+		// frame while never completing - injection starved and GI collapsed
+		// for the whole drag. A parked gather now completes against its
+		// snapshot; the cache stores the SNAPSHOT revisions, so it reads as
+		// stale immediately and the next update regathers fresh geometry -
+		// continuous progress with a couple frames of latency instead of a
+		// stall.
 		if (pendingGather.active &&
 			(!gatherSliceEligible ||
-			 pendingGather.geometryRevision != sceneGeometryRevision ||
-			 pendingGather.materialRevision != sceneMaterialRevision ||
 			 pendingGather.extent != level.extent ||
 			 (pendingGather.center - level.center).LengthSquared() > 1e-6f))
 		{
@@ -4141,13 +4148,22 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			const uint32_t evalBudget = static_cast<uint32_t>(std::max(512, r_giGpuEvalTriangleBudget._val.i32));
 			budget = std::min(budget, evalBudget);
 		}
-		if (level.dirty && _cameraMotionBlend <= 0.05f)
+		// Deterministic-injection mode needs a CONSTANT budget: the dirty/warm
+		// x3 boost changed the triangle-stride SUBSET between updates, which
+		// changed which voxels are covered - and the resolve treats uncovered
+		// voxels as vacated. A budget flip therefore snapped previously-lit
+		// voxels dark (the object-move GI collapse). The legacy path keeps the
+		// boost (its uncovered voxels are cleared every update regardless).
+		if (!gpuComputeBaseSunEnabled)
 		{
-			budget = std::min<uint32_t>(budget * 3u, 300000u);
-		}
-		if (_clipmapWarmFramesRemaining[levelIndex] > 0u && _cameraMotionBlend <= 0.05f)
-		{
-			budget = std::min<uint32_t>(budget * 3u, 300000u);
+			if (level.dirty && _cameraMotionBlend <= 0.05f)
+			{
+				budget = std::min<uint32_t>(budget * 3u, 300000u);
+			}
+			if (_clipmapWarmFramesRemaining[levelIndex] > 0u && _cameraMotionBlend <= 0.05f)
+			{
+				budget = std::min<uint32_t>(budget * 3u, 300000u);
+			}
 		}
 		const bool coarseEmissiveMode = r_giGpuMaterialEval._val.b;
 
@@ -5160,6 +5176,11 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			}
 		}
 
+		// A gather resumed from a parked snapshot stores the SNAPSHOT
+		// revisions - the cache then reads as stale if the scene moved on
+		// mid-gather, and the next update regathers fresh.
+		const uint64_t completedGeometryRevision = pendingGather.active ? pendingGather.geometryRevision : sceneGeometryRevision;
+		const uint64_t completedMaterialRevision = pendingGather.active ? pendingGather.materialRevision : sceneMaterialRevision;
 		pendingGather = {};
 		_cachedVoxelTriangles[levelIndex] = out;
 		_cachedGiMaterialProxies[levelIndex] = _giMaterialProxies;
@@ -5173,8 +5194,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		_cachedEmissiveTiledTriangleCount[levelIndex] = emissiveTiledTriangleCountLocal;
 		_cachedEmissiveProxyMaxLuma[levelIndex] = emissiveProxyMaxLumaLocal;
 		_cachedEmissiveProxyMaxStrength[levelIndex] = emissiveProxyMaxStrengthLocal;
-		_cachedSceneGeometryRevision[levelIndex] = sceneGeometryRevision;
-		_cachedSceneMaterialRevision[levelIndex] = sceneMaterialRevision;
+		_cachedSceneGeometryRevision[levelIndex] = completedGeometryRevision;
+		_cachedSceneMaterialRevision[levelIndex] = completedMaterialRevision;
 		_cachedSceneLightRevision[levelIndex] = sceneLightRevision;
 		_stats.emissiveMaterialCount += emissiveMaterialCountLocal;
 		_stats.emissiveTriangleCount += emissiveTriangleCountLocal;
