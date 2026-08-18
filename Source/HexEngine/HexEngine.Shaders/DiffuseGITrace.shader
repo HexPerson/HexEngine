@@ -362,13 +362,20 @@
 				continue;
 			const float3 dir = delta * rsqrt(dist2);
 
-			// Receiver cosine: light arriving from the sample direction.
-			const float receiverCos = saturate(dot(centerNormal, dir));
+			// WRAPPED receiver cosine. A strict cosine kills wall<->floor
+			// transfer exactly at the contact line (grazing incidence), which
+			// made the junction lose to the AO darkening while the glow
+			// peaked half a metre up the wall - the physically-plausible look
+			// is soft mutual bounce winning at close range. The wrap models
+			// the emitter as an area, not a point: near-parallel surfaces
+			// still exchange light.
+			const float rawReceiverCos = dot(centerNormal, dir);
+			const float receiverCos = saturate((rawReceiverCos + 0.35f) / 1.35f);
 			if (receiverCos <= 0.001f)
 				continue;
-			// Emitter cosine: the sample surface must face the receiver.
+			// Emitter side gets a lighter wrap for the same reason.
 			const float3 sampleNormal = normalize(sampleNormalDepth.xyz + float3(1e-5f, 1e-5f, 1e-5f));
-			const float emitterCos = saturate(dot(sampleNormal, -dir));
+			const float emitterCos = saturate((dot(sampleNormal, -dir) + 0.20f) / 1.20f);
 			if (emitterCos <= 0.001f)
 				continue;
 
