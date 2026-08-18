@@ -30,7 +30,11 @@
 	Texture3D<float4> g_prevVoxelL1y : register(t3);
 	Texture3D<float4> g_prevVoxelL1z : register(t4);
 	StructuredBuffer<VoxelAccum> g_injectAccum : register(t5);
-	StructuredBuffer<uint4> g_litFeedback : register(t6);
+	// World-stable lit-radiance cache (rgb = remembered lit radiance,
+	// a = seen confidence). Replaces the raw per-frame scatter here: the
+	// cache persists when the camera looks away, so feedback energy no
+	// longer pumps with view direction.
+	Texture3D<float4> g_litCache : register(t6);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
 	RWTexture3D<float4> g_voxelL1xOut : register(u2);
@@ -133,15 +137,14 @@
 		const float4 previous = g_prevVoxelRadiance[tid];
 		const float4 previousAlbedo = g_prevVoxelAlbedo[tid];
 
-		// Lit-scene feedback: the previous frame's rendered lighting at this
-		// voxel (per-voxel now - no per-triangle duplication games).
+		// Lit-scene feedback via the world-stable cache: confidence-weighted
+		// remembered radiance, persistent regardless of view direction.
 		if (g_giParams13.z > 0.5f)
 		{
-			const uint4 packed = g_litFeedback[idx];
-			if (packed.w > 0u)
+			const float4 cache = g_litCache[tid];
+			if (cache.a > 0.001f)
 			{
-				const float3 feedbackRadiance = float3(packed.xyz) / max((float)packed.w, 1.0f);
-				injected += LuminanceClamp(feedbackRadiance, g_giParams13.y) * (g_giParams13.x * 0.6f);
+				injected += LuminanceClamp(cache.rgb, g_giParams13.y) * (g_giParams13.x * 0.6f * saturate(cache.a));
 			}
 		}
 

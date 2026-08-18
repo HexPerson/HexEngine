@@ -9,11 +9,13 @@
 	Texture3D<float4> g_voxelL1xSrc : register(t2);
 	Texture3D<float4> g_voxelL1ySrc : register(t3);
 	Texture3D<float4> g_voxelL1zSrc : register(t4);
+	Texture3D<float4> g_litCacheSrc : register(t5);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
 	RWTexture3D<float4> g_voxelL1xOut : register(u2);
 	RWTexture3D<float4> g_voxelL1yOut : register(u3);
 	RWTexture3D<float4> g_voxelL1zOut : register(u4);
+	RWTexture3D<float4> g_litCacheOut : register(u5);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -34,6 +36,7 @@
 		float4 g_giParams11;
 		float4 g_giParams12;
 		float4 g_giParams13;
+		float4 g_giParams14;
 	};
 
 	cbuffer VoxelShiftConstants : register(b5)
@@ -64,6 +67,10 @@
 				g_voxelL1yOut[tid] = 0.0f.xxxx;
 				g_voxelL1zOut[tid] = 0.0f.xxxx;
 			}
+			if (g_giParams14.z > 0.5f)
+			{
+				g_litCacheOut[tid] = 0.0f.xxxx;
+			}
 			return;
 		}
 
@@ -74,6 +81,10 @@
 			g_voxelL1xOut[tid] = g_voxelL1xSrc.Load(int4(src, 0));
 			g_voxelL1yOut[tid] = g_voxelL1ySrc.Load(int4(src, 0));
 			g_voxelL1zOut[tid] = g_voxelL1zSrc.Load(int4(src, 0));
+		}
+		if (g_giParams14.z > 0.5f)
+		{
+			g_litCacheOut[tid] = g_litCacheSrc.Load(int4(src, 0));
 		}
 	}
 }

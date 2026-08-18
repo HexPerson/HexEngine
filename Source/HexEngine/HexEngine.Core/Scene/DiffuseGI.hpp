@@ -99,6 +99,16 @@ namespace HexEngine
 			// wrapping around silhouettes (isotropic-voxel light leak).
 			ITexture3D* l1Volume[3] = {};
 			ITexture3D* l1ScratchVolume[3] = {};
+			// World-stable lit-radiance cache (feedback levels only). The
+			// screen scatter is view-dependent by nature; this volume REMEMBERS
+			// what surfaces looked like lit (rgb = radiance, a = seen
+			// confidence), persists when the camera looks away, scrolls with
+			// the clipmap, and ages fast under the snap signal so stale
+			// lighting clears on light changes. The inject resolve consumes
+			// THIS instead of the raw per-frame accum - which is what lets the
+			// feedback strength run high without view-dependent pumping.
+			ITexture3D* litCacheVolume = nullptr;
+			ITexture3D* litCacheScratchVolume = nullptr;
 			ITexture2D* probeIrradianceAtlas = nullptr;
 			ITexture2D* probeVisibilityAtlas = nullptr;
 			ID3D11UnorderedAccessView* radianceUav = nullptr;
@@ -113,6 +123,10 @@ namespace HexEngine
 			ID3D11UnorderedAccessView* l1ScratchUav[3] = {};
 			ID3D11ShaderResourceView* l1Srv[3] = {};
 			ID3D11ShaderResourceView* l1ScratchSrv[3] = {};
+			ID3D11UnorderedAccessView* litCacheUav = nullptr;
+			ID3D11UnorderedAccessView* litCacheScratchUav = nullptr;
+			ID3D11ShaderResourceView* litCacheSrv = nullptr;
+			ID3D11ShaderResourceView* litCacheScratchSrv = nullptr;
 
 			std::vector<float> radianceCpu;
 			std::vector<uint8_t> opacityCpu;
@@ -139,7 +153,7 @@ namespace HexEngine
 			math::Vector4 params11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
 			math::Vector4 params12; // x=live source-triangle count this update, y=candidate routing active, z=snap boost, w reserved
 			math::Vector4 params13; // x=litInjection strength, y=litInjection maxLuma, z=feedback accum bound for this level, w=directional voxels active
-			math::Vector4 params14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z/w reserved
+			math::Vector4 params14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z=lit cache active, w reserved
 		};
 
 		struct GpuVoxelTriangle
@@ -583,6 +597,7 @@ namespace HexEngine
 		std::shared_ptr<IShader> _candidateArgsFixupShader;
 		std::shared_ptr<IShader> _screenFeedbackShader;
 		std::shared_ptr<IShader> _injectResolveShader;
+		std::shared_ptr<IShader> _litCacheMergeShader;
 		std::shared_ptr<IShader> _voxelClearShader;
 		std::shared_ptr<IShader> _voxelPropagateShader;
 		std::shared_ptr<IShader> _voxelShiftShader;

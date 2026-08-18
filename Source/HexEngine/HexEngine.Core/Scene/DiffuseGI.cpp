@@ -108,10 +108,10 @@ namespace HexEngine
 	// r_giVoxelAlbedoInfluence removed: params6.z was consumed by no shader.
 	// The slot now carries the second-bounce strength.
 	HVar r_giSecondBounce("r_giSecondBounce", "Strength of the voxel-space second bounce (prev-frame neighbour radiance x albedo re-injected)", 0.35f, 0.0f, 2.0f);
-	// Default deliberately LOW: the feedback is view-dependent by nature
-	// (injects what is on screen), and at 0.8 the look-at/look-away energy
-	// swing read as visible GI pumping under camera movement.
-	HVar r_giLitInjection("r_giLitInjection", "Strength of lit-scene radiance feedback into voxel injection (0 = constants only)", 0.25f, 0.0f, 4.0f);
+	// The world-stable lit-radiance cache decouples this from the camera
+	// (the cache persists what the scatter saw), so the strength can run at
+	// a useful level without look-at/look-away pumping.
+	HVar r_giLitInjection("r_giLitInjection", "Strength of lit-scene radiance feedback into voxel injection (0 = constants only)", 0.6f, 0.0f, 4.0f);
 	HVar r_giLitInjectionMaxLuma("r_giLitInjectionMaxLuma", "Per-sample luminance cap on lit-scene feedback (stops bright pools blowing out the voxel field)", 3.0f, 0.1f, 32.0f);
 	HVar r_giDirectionalVoxels("r_giDirectionalVoxels", "SH-1 directional voxels: radiance carries a direction so GI cannot wrap around silhouettes (light-leak fix). Costs 6 extra RGBA16F volumes per clip.", true, false, true);
 	// SSGI: opt-in screen-space short-range gather layered over the voxel far
@@ -576,6 +576,7 @@ namespace HexEngine
 		_candidateArgsFixupShader = IShader::Create("EngineData.Shaders/DiffuseGICandidateArgsFixup.hcs");
 		_screenFeedbackShader = IShader::Create("EngineData.Shaders/DiffuseGIScreenFeedback.hcs");
 		_injectResolveShader = IShader::Create("EngineData.Shaders/DiffuseGIInjectResolve.hcs");
+		_litCacheMergeShader = IShader::Create("EngineData.Shaders/DiffuseGILitCacheMerge.hcs");
 		_voxelClearShader = IShader::Create("EngineData.Shaders/DiffuseGIClearVoxel.hcs");
 		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
 		_voxelShiftShader = IShader::Create("EngineData.Shaders/DiffuseGIShiftVoxel.hcs");
@@ -801,6 +802,7 @@ namespace HexEngine
 		_candidateArgsFixupShader = nullptr;
 		_screenFeedbackShader = nullptr;
 		_injectResolveShader = nullptr;
+		_litCacheMergeShader = nullptr;
 		_voxelClearShader = nullptr;
 		_voxelPropagateShader = nullptr;
 		_voxelShiftShader = nullptr;
@@ -1021,6 +1023,45 @@ namespace HexEngine
 				D3D11_SRV_DIMENSION_TEXTURE3D,
 				D3D11_DSV_DIMENSION_UNKNOWN);
 
+			if (i < FeedbackLevelCount)
+			{
+				level.litCacheVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
+					static_cast<int32_t>(resolution),
+					static_cast<int32_t>(resolution),
+					static_cast<int32_t>(resolution),
+					DXGI_FORMAT_R16G16B16A16_FLOAT,
+					1,
+					D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+					1,
+					1,
+					0,
+					nullptr,
+					D3D11_RTV_DIMENSION_UNKNOWN,
+					D3D11_UAV_DIMENSION_TEXTURE3D,
+					D3D11_SRV_DIMENSION_TEXTURE3D,
+					D3D11_DSV_DIMENSION_UNKNOWN);
+				level.litCacheScratchVolume = g_pEnv->_graphicsDevice->CreateTexture3D(
+					static_cast<int32_t>(resolution),
+					static_cast<int32_t>(resolution),
+					static_cast<int32_t>(resolution),
+					DXGI_FORMAT_R16G16B16A16_FLOAT,
+					1,
+					D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+					1,
+					1,
+					0,
+					nullptr,
+					D3D11_RTV_DIMENSION_UNKNOWN,
+					D3D11_UAV_DIMENSION_TEXTURE3D,
+					D3D11_SRV_DIMENSION_TEXTURE3D,
+					D3D11_DSV_DIMENSION_UNKNOWN);
+				if (level.litCacheVolume == nullptr || level.litCacheScratchVolume == nullptr)
+				{
+					LOG_CRIT("DiffuseGI failed to allocate the lit-radiance cache volumes.");
+					return false;
+				}
+			}
+
 			if (r_giDirectionalVoxels._val.b)
 			{
 				for (uint32_t axis = 0u; axis < 3u; ++axis)
@@ -1234,6 +1275,52 @@ namespace HexEngine
 					return false;
 				}
 
+				if (level.litCacheVolume != nullptr && level.litCacheScratchVolume != nullptr)
+				{
+					D3D11_UNORDERED_ACCESS_VIEW_DESC cacheUavDesc = {};
+					cacheUavDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+					cacheUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE3D;
+					cacheUavDesc.Texture3D.MipSlice = 0;
+					cacheUavDesc.Texture3D.FirstWSlice = 0;
+					cacheUavDesc.Texture3D.WSize = resolution;
+					hr = device->CreateUnorderedAccessView(
+						reinterpret_cast<ID3D11Texture3D*>(level.litCacheVolume->GetNativePtr()),
+						&cacheUavDesc,
+						&level.litCacheUav);
+					if (FAILED(hr) || level.litCacheUav == nullptr)
+					{
+						LOG_CRIT("DiffuseGI failed to create lit-cache UAV (clip %u, hr=0x%X).", i, static_cast<uint32_t>(hr));
+						return false;
+					}
+					hr = device->CreateUnorderedAccessView(
+						reinterpret_cast<ID3D11Texture3D*>(level.litCacheScratchVolume->GetNativePtr()),
+						&cacheUavDesc,
+						&level.litCacheScratchUav);
+					if (FAILED(hr) || level.litCacheScratchUav == nullptr)
+					{
+						LOG_CRIT("DiffuseGI failed to create lit-cache scratch UAV (clip %u, hr=0x%X).", i, static_cast<uint32_t>(hr));
+						return false;
+					}
+					hr = device->CreateShaderResourceView(
+						reinterpret_cast<ID3D11Resource*>(level.litCacheVolume->GetNativePtr()),
+						nullptr,
+						&level.litCacheSrv);
+					if (FAILED(hr) || level.litCacheSrv == nullptr)
+					{
+						LOG_CRIT("DiffuseGI failed to create lit-cache SRV (clip %u, hr=0x%X).", i, static_cast<uint32_t>(hr));
+						return false;
+					}
+					hr = device->CreateShaderResourceView(
+						reinterpret_cast<ID3D11Resource*>(level.litCacheScratchVolume->GetNativePtr()),
+						nullptr,
+						&level.litCacheScratchSrv);
+					if (FAILED(hr) || level.litCacheScratchSrv == nullptr)
+					{
+						LOG_CRIT("DiffuseGI failed to create lit-cache scratch SRV (clip %u, hr=0x%X).", i, static_cast<uint32_t>(hr));
+						return false;
+					}
+				}
+
 				if (r_giDirectionalVoxels._val.b)
 				{
 					D3D11_UNORDERED_ACCESS_VIEW_DESC l1UavDesc = {};
@@ -1311,6 +1398,12 @@ namespace HexEngine
 				SAFE_DELETE(level.l1Volume[axis]);
 				SAFE_DELETE(level.l1ScratchVolume[axis]);
 			}
+			SAFE_RELEASE(level.litCacheUav);
+			SAFE_RELEASE(level.litCacheScratchUav);
+			SAFE_RELEASE(level.litCacheSrv);
+			SAFE_RELEASE(level.litCacheScratchSrv);
+			SAFE_DELETE(level.litCacheVolume);
+			SAFE_DELETE(level.litCacheScratchVolume);
 			SAFE_DELETE(level.radianceVolume);
 			SAFE_DELETE(level.radianceScratchVolume);
 			SAFE_DELETE(level.albedoVolume);
@@ -2332,7 +2425,7 @@ namespace HexEngine
 		_constants.params14 = math::Vector4(
 			r_giSSGI._val.b ? std::clamp(r_giSSGIIntensity._val.f32, 0.0f, 4.0f) : 0.0f,
 			std::clamp(r_giSSGIRadius._val.f32, 0.25f, 8.0f),
-			0.0f,
+			(r_giLitInjection._val.f32 > 0.0001f && _clipmaps[0].litCacheVolume != nullptr) ? 1.0f : 0.0f,
 			0.0f);
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
@@ -5296,28 +5389,34 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				{
 					context->CSSetConstantBuffers(5, 1, &shiftCb);
 				}
-				ID3D11ShaderResourceView* shiftSrv[5] = {
+				const bool shiftLitCache =
+					(levelIndex < FeedbackLevelCount) &&
+					level.litCacheSrv != nullptr &&
+					level.litCacheScratchUav != nullptr;
+				ID3D11ShaderResourceView* shiftSrv[6] = {
 					level.radianceSrv,
 					level.albedoSrv,
 					directionalActive ? level.l1Srv[0] : nullptr,
 					directionalActive ? level.l1Srv[1] : nullptr,
-					directionalActive ? level.l1Srv[2] : nullptr };
-				ID3D11UnorderedAccessView* shiftUav[5] = {
+					directionalActive ? level.l1Srv[2] : nullptr,
+					shiftLitCache ? level.litCacheSrv : nullptr };
+				ID3D11UnorderedAccessView* shiftUav[6] = {
 					level.radianceScratchUav,
 					level.albedoScratchUav,
 					directionalActive ? level.l1ScratchUav[0] : nullptr,
 					directionalActive ? level.l1ScratchUav[1] : nullptr,
-					directionalActive ? level.l1ScratchUav[2] : nullptr };
-				context->CSSetShaderResources(0, 5, shiftSrv);
-				context->CSSetUnorderedAccessViews(0, 5, shiftUav, nullptr);
+					directionalActive ? level.l1ScratchUav[2] : nullptr,
+					shiftLitCache ? level.litCacheScratchUav : nullptr };
+				context->CSSetShaderResources(0, 6, shiftSrv);
+				context->CSSetUnorderedAccessViews(0, 6, shiftUav, nullptr);
 				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(shiftStage->GetNativePtr()), nullptr, 0);
 				context->Dispatch(clearGroups, clearGroups, clearGroups);
 
-				ID3D11ShaderResourceView* nullShiftSrv[5] = {};
-				ID3D11UnorderedAccessView* nullShiftUav[5] = {};
+				ID3D11ShaderResourceView* nullShiftSrv[6] = {};
+				ID3D11UnorderedAccessView* nullShiftUav[6] = {};
 				ID3D11Buffer* nullShiftCb[1] = {};
-				context->CSSetShaderResources(0, 5, nullShiftSrv);
-				context->CSSetUnorderedAccessViews(0, 5, nullShiftUav, nullptr);
+				context->CSSetShaderResources(0, 6, nullShiftSrv);
+				context->CSSetUnorderedAccessViews(0, 6, nullShiftUav, nullptr);
 				context->CSSetConstantBuffers(5, 1, nullShiftCb);
 				context->CSSetShader(nullptr, nullptr, 0);
 
@@ -5335,6 +5434,12 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 							reinterpret_cast<ID3D11Resource*>(level.l1Volume[axis]->GetNativePtr()),
 							reinterpret_cast<ID3D11Resource*>(level.l1ScratchVolume[axis]->GetNativePtr()));
 					}
+				}
+				if (shiftLitCache)
+				{
+					context->CopyResource(
+						reinterpret_cast<ID3D11Resource*>(level.litCacheVolume->GetNativePtr()),
+						reinterpret_cast<ID3D11Resource*>(level.litCacheScratchVolume->GetNativePtr()));
 				}
 
 				appliedShift = true;
@@ -5868,12 +5973,25 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			0.0f,
 			(_injectSnapFramesRemaining > 0u) ? 1.0f : 0.0f,
 			0.0f);
+		// Lit-scene feedback consumption now reads the WORLD-STABLE cache, so
+		// it stays active even on updates where the per-frame scatter was
+		// dropped (shift) or the camera looked elsewhere - that persistence
+		// is the whole point.
 		const bool feedbackBoundThisLevel =
 			useGpuMaterialEval &&
 			(levelIndex < FeedbackLevelCount) &&
+			(level.litCacheSrv != nullptr) &&
+			(r_giLitInjection._val.f32 > 0.0001f);
+		// The merge (fold this frame's scatter into the cache) additionally
+		// needs a valid scatter accum.
+		const bool mergeLitCacheThisLevel =
+			feedbackBoundThisLevel &&
 			_feedbackAccumValid[levelIndex] &&
 			(_feedbackAccumSrv[levelIndex] != nullptr) &&
-			(r_giLitInjection._val.f32 > 0.0001f);
+			(level.litCacheUav != nullptr) &&
+			(level.litCacheScratchSrv != nullptr) &&
+			(_litCacheMergeShader != nullptr) &&
+			(_litCacheMergeShader->GetShaderStage(ShaderStage::ComputeShader) != nullptr);
 		static bool s_loggedFeedbackConsume[FeedbackLevelCount] = {};
 		if (feedbackBoundThisLevel && !s_loggedFeedbackConsume[levelIndex])
 		{
@@ -6037,10 +6155,10 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				ID3D11ShaderResourceView* countSrv[1] = { _voxelCandidateCountSrv };
 				context->CSSetShaderResources(useGpuMaterialEval ? 12u : 9u, 1, countSrv);
 			}
-			if (!deterministicInjection && feedbackBoundThisLevel)
+			if (!deterministicInjection && feedbackBoundThisLevel && _feedbackAccumValid[levelIndex] && _feedbackAccumSrv[levelIndex] != nullptr)
 			{
-				// Legacy direct-write path only - the deterministic resolve
-				// consumes the feedback per-voxel instead.
+				// Legacy direct-write path only - reads the raw per-frame
+				// scatter; the deterministic resolve reads the lit cache.
 				ID3D11ShaderResourceView* feedbackSrv[1] = { _feedbackAccumSrv[levelIndex] };
 				context->CSSetShaderResources(13u, 1, feedbackSrv);
 			}
@@ -6088,13 +6206,33 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 
 			if (deterministicInjection)
 			{
-				// Resolve: weighted-mean injection + per-voxel feedback +
-				// second bounce + light temporal blend, written to the volumes.
 				ID3D11ShaderResourceView* nullAccumBreak[7] = {};
 				ID3D11UnorderedAccessView* nullUavBreak[1] = {};
 				context->CSSetShaderResources(0, 7, nullAccumBreak);
 				context->CSSetUnorderedAccessViews(0, 1, nullUavBreak, nullptr);
 
+				if (mergeLitCacheThisLevel)
+				{
+					// Fold this frame's screen scatter into the world-stable
+					// lit cache before the resolve consumes it.
+					context->CopyResource(
+						reinterpret_cast<ID3D11Resource*>(level.litCacheScratchVolume->GetNativePtr()),
+						reinterpret_cast<ID3D11Resource*>(level.litCacheVolume->GetNativePtr()));
+					ID3D11ShaderResourceView* mergeSrvs[2] = { level.litCacheScratchSrv, _feedbackAccumSrv[levelIndex] };
+					ID3D11UnorderedAccessView* mergeUav[1] = { level.litCacheUav };
+					context->CSSetShaderResources(0, 2, mergeSrvs);
+					context->CSSetUnorderedAccessViews(0, 1, mergeUav, nullptr);
+					auto* mergeStage = _litCacheMergeShader->GetShaderStage(ShaderStage::ComputeShader);
+					context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(mergeStage->GetNativePtr()), nullptr, 0);
+					context->Dispatch(clearGroups, clearGroups, clearGroups);
+					ID3D11ShaderResourceView* nullMergeSrvs[2] = {};
+					ID3D11UnorderedAccessView* nullMergeUav[1] = {};
+					context->CSSetShaderResources(0, 2, nullMergeSrvs);
+					context->CSSetUnorderedAccessViews(0, 1, nullMergeUav, nullptr);
+				}
+
+				// Resolve: weighted-mean injection + cache feedback +
+				// second bounce + light temporal blend, written to the volumes.
 				ID3D11ShaderResourceView* resolveSrvs[7] = {
 					level.radianceScratchSrv,
 					level.albedoScratchSrv,
@@ -6102,7 +6240,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 					directionalActive ? level.l1ScratchSrv[1] : nullptr,
 					directionalActive ? level.l1ScratchSrv[2] : nullptr,
 					_injectAccumSrv,
-					feedbackBoundThisLevel ? _feedbackAccumSrv[levelIndex] : nullptr };
+					feedbackBoundThisLevel ? level.litCacheSrv : nullptr };
 				context->CSSetShaderResources(0, 7, resolveSrvs);
 				context->CSSetUnorderedAccessViews(0, 5, clearUav, nullptr);
 				auto* resolveStage = _injectResolveShader->GetShaderStage(ShaderStage::ComputeShader);
