@@ -2759,10 +2759,17 @@ namespace HexEngine
 				(_clipmapLastVoxelizationFrame[clipIndex] > 0ull && _frameCounter >= _clipmapLastVoxelizationFrame[clipIndex])
 				? (_frameCounter - _clipmapLastVoxelizationFrame[clipIndex])
 				: std::numeric_limits<uint64_t>::max();
+			// Deterministic-injection era: a refresh is a cheap GPU
+			// accumulate+resolve (persistent triangle buffers, no CPU work on
+			// the reuse path) and each one is a keep-0.5 convergence HALF-STEP
+			// of the multibounce ladder. The old caps (10/24/96) made GI climb
+			// in visible ~0.2-1.6s increments; refresh continuously instead -
+			// the far-clip rotation (each far clip offered a slot every 6
+			// frames stationary) remains the actual limiter.
 			const uint64_t maxIdleFrames =
-				(clipIndex == 0u) ? (movementActive ? 4ull : 10ull) :
-				(clipIndex == 1u) ? (movementActive ? 12ull : 24ull) :
-				(movementActive ? 48ull : 96ull);
+				(clipIndex == 0u) ? (movementActive ? 2ull : 1ull) :
+				(clipIndex == 1u) ? (movementActive ? 8ull : 6ull) :
+				(movementActive ? 24ull : 12ull);
 			if (!clip.initialized || clip.dirty || _clipmapWarmFramesRemaining[clipIndex] > 0u || clip.pendingShiftWs.LengthSquared() > 1e-8f)
 				return true;
 			if (!_cachedVoxelTrianglesValid[clipIndex])
