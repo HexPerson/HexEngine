@@ -114,6 +114,11 @@ namespace HexEngine
 	HVar r_giLitInjection("r_giLitInjection", "Strength of lit-scene radiance feedback into voxel injection (0 = constants only)", 0.25f, 0.0f, 4.0f);
 	HVar r_giLitInjectionMaxLuma("r_giLitInjectionMaxLuma", "Per-sample luminance cap on lit-scene feedback (stops bright pools blowing out the voxel field)", 3.0f, 0.1f, 32.0f);
 	HVar r_giDirectionalVoxels("r_giDirectionalVoxels", "SH-1 directional voxels: radiance carries a direction so GI cannot wrap around silhouettes (light-leak fix). Costs 6 extra RGBA16F volumes per clip.", true, false, true);
+	// SSGI: opt-in screen-space short-range gather layered over the voxel far
+	// field - contact-scale bounce detail the metre-scale voxels cannot carry.
+	HVar r_giSSGI("r_giSSGI", "Screen-space short-range GI gather (contact-scale bounce detail on top of the voxel field)", false, false, true);
+	HVar r_giSSGIIntensity("r_giSSGIIntensity", "SSGI contribution strength", 1.0f, 0.0f, 4.0f);
+	HVar r_giSSGIRadius("r_giSSGIRadius", "SSGI gather radius in metres", 1.5f, 0.25f, 8.0f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
 	// Diagnostic: log every CPU voxel-triangle rebuild with the cache-rejection
@@ -2324,6 +2329,11 @@ namespace HexEngine
 			std::clamp(r_giLitInjectionMaxLuma._val.f32, 0.1f, 32.0f),
 			0.0f,
 			(r_giDirectionalVoxels._val.b && _clipmaps[0].l1Volume[0] != nullptr) ? 1.0f : 0.0f);
+		_constants.params14 = math::Vector4(
+			r_giSSGI._val.b ? std::clamp(r_giSSGIIntensity._val.f32, 0.0f, 4.0f) : 0.0f,
+			std::clamp(r_giSSGIRadius._val.f32, 0.25f, 8.0f),
+			0.0f,
+			0.0f);
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresenceMask;

@@ -84,6 +84,7 @@
 		float4 g_giParams11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
 		float4 g_giParams12; // x=live triangle count, y=candidate routing, z=snap boost, w reserved
 		float4 g_giParams13; // x=litInjection strength, y=litInjection maxLuma, z=feedback bound, w=directional voxels active
+		float4 g_giParams14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z/w reserved
 	};
 
 	static const float3 kClipDebugColours[4] =
@@ -306,6 +307,82 @@
 		const float c0 = lerp(c00, c10, w.y);
 		const float c1 = lerp(c01, c11, w.y);
 		return lerp(c0, c1, w.z);
+	}
+
+	// SSGI: screen-space short-range irradiance gather. A 12-tap golden-angle
+	// disc over a WORLD-space radius, using real gbuffer positions so the
+	// falloff and cosine terms are geometrically correct - this supplies the
+	// contact-scale bounce detail the metre-scale voxel field cannot carry.
+	// Runs at the GI half-res trace and inherits the existing resolve
+	// temporal filtering + bilateral upsample for free.
+	float3 ComputeSSGI(float2 uv, float3 centerPosWS, float3 centerNormal)
+	{
+		const float2 fullTexel = float2(
+			1.0f / max(1.0f, (float)g_screenWidth),
+			1.0f / max(1.0f, (float)g_screenHeight));
+		const float radiusWs = max(g_giParams14.y, 0.25f);
+
+		// World-metres-per-pixel estimated from the position buffer; clamped
+		// hard because depth edges make the estimate spiky.
+		const float3 posRight = GBUFFER_POSITION.Sample(g_pointSampler, saturate(uv + float2(fullTexel.x * 4.0f, 0.0f))).xyz;
+		const float worldPerPixel = clamp(length(posRight - centerPosWS) * 0.25f, 1e-4f, 0.5f);
+		const float radiusPixels = clamp(radiusWs / worldPerPixel, 4.0f, 160.0f);
+
+		// Golden-angle spiral, 12 taps. Per-pixel rotation from a screen hash
+		// decorrelates the pattern; the resolve's temporal pass integrates it.
+		const float hash = frac(sin(dot(uv, float2(12.9898f, 78.233f))) * 43758.5453f);
+		const float baseAngle = hash * 6.2831853f;
+		const float falloffR2 = radiusWs * radiusWs * 0.25f;
+
+		float3 accum = 0.0f.xxx;
+
+		[unroll]
+		for (uint i = 0u; i < 12u; ++i)
+		{
+			const float t = ((float)i + 0.5f) / 12.0f;
+			const float ringRadius = radiusPixels * sqrt(t);
+			const float angle = baseAngle + (float)i * 2.3999632f; // golden angle
+			const float2 sampleUv = saturate(uv + float2(cos(angle), sin(angle)) * ringRadius * fullTexel);
+
+			const float4 sampleDiffuse = GBUFFER_DIFFUSE.Sample(g_pointSampler, sampleUv);
+			const float4 sampleNormalDepth = GBUFFER_NORMAL.Sample(g_pointSampler, sampleUv);
+			if (sampleDiffuse.a == -1.0f || sampleNormalDepth.w <= 0.0f)
+				continue;
+
+			const float3 samplePosWS = GBUFFER_POSITION.Sample(g_pointSampler, sampleUv).xyz;
+			const float3 delta = samplePosWS - centerPosWS;
+			const float dist2 = dot(delta, delta);
+			// Reject samples outside the world radius (screen disc can catch
+			// distant geometry across depth discontinuities).
+			if (dist2 > radiusWs * radiusWs || dist2 < 1e-6f)
+				continue;
+			const float3 dir = delta * rsqrt(dist2);
+
+			// Receiver cosine: light arriving from the sample direction.
+			const float receiverCos = saturate(dot(centerNormal, dir));
+			if (receiverCos <= 0.001f)
+				continue;
+			// Emitter cosine: the sample surface must face the receiver.
+			const float3 sampleNormal = normalize(sampleNormalDepth.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+			const float emitterCos = saturate(dot(sampleNormal, -dir));
+			if (emitterCos <= 0.001f)
+				continue;
+
+			float3 sampleLighting = g_sceneLightingTex.Sample(g_linearSampler, sampleUv).rgb;
+			const float sampleLuma = dot(sampleLighting, float3(0.2126f, 0.7152f, 0.0722f));
+			// Compress bright direct highlights so sun pools don't stamp hard
+			// patches into the gather (same treatment as the screen bounce).
+			sampleLighting = sampleLighting / (1.0f + sampleLuma * 1.5f);
+			sampleLighting = min(sampleLighting, 0.8f.xxx);
+
+			const float falloff = falloffR2 / (falloffR2 + dist2);
+			const float w = receiverCos * emitterCos * falloff;
+			accum += sampleLighting * w;
+		}
+
+		// Normalise by the taps, not the surviving weight - empty
+		// surroundings must mean LESS gathered light, not the same.
+		return accum * (1.0f / 12.0f) * 2.5f;
 	}
 
 	float3 ComputeScreenSpaceBounce(float2 uv, float3 centerPosWS, float3 centerNormal, float centerDepth)
@@ -710,6 +787,14 @@
 			debugClipBlend = kClipDebugColours[fallbackClip];
 			voxelOcc = fallbackOcc;
 			chosenClip = fallbackClip;
+		}
+
+		// SSGI (opt-in): contact-scale screen-space gather layered on the
+		// voxel far field. Added to incident gi BEFORE the receiver-albedo
+		// remap below, so it tints like any other arriving light.
+		if (g_giParams14.x > 0.0001f)
+		{
+			gi += ComputeSSGI(uv, pixelPosWS.xyz, worldNormal) * g_giParams14.x;
 		}
 
 		if (debugMode == 2.0f)

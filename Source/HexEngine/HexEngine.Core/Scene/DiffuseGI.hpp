@@ -138,7 +138,8 @@ namespace HexEngine
 			math::Vector4 params10; // x=gpuEdgeSmoothThreshold, y=gpuEdgeSmoothBlendStrength, z=bounceAlbedoMinLuma, w=bounceAlbedoRemapAmount
 			math::Vector4 params11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
 			math::Vector4 params12; // x=live source-triangle count this update, y=candidate routing active, z=snap boost, w reserved
-			math::Vector4 params13; // x=litInjection strength, y=litInjection maxLuma, z=feedback accum bound for this level, w reserved
+			math::Vector4 params13; // x=litInjection strength, y=litInjection maxLuma, z=feedback accum bound for this level, w=directional voxels active
+			math::Vector4 params14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z/w reserved
 		};
 
 		struct GpuVoxelTriangle
