@@ -321,28 +321,40 @@ namespace HexEngine
 			++_shadowGeometryRevision;
 		}
 
-		// GI motion debounce. A GI mesh that moves every frame (animated
-		// characters, physics props) would otherwise invalidate the voxel triangle
-		// cache every frame and force a full, expensive BuildGpuVoxelTriangleList
-		// rebuild - the opposite of what a static voxel clipmap wants. Instead: on
-		// the static->moving transition, drop the mesh from the voxel world once
-		// (single revision bump) and mark it motion-excluded; while it keeps moving
-		// we only refresh its last-motion frame (no per-frame bumps).
-		// UpdateGiMotionDebounce re-bakes it once it settles. Meshes explicitly
-		// flagged ExcludeFromGI never enter here.
+		// GI motion debounce - deterministic-GI era. Movers STAY in the voxel
+		// world: the old behaviour dropped a moving mesh from GI entirely
+		// (motion-excluded until it settled), so a dragged object's bounce
+		// folded to zero for the whole move and only re-baked ~6 frames after
+		// release. With the sliced, snapshot-completing gather a rebake is
+		// cheap enough to run at a THROTTLED cadence while the mesh moves -
+		// its GI pose lags a few frames, but its light never disappears.
 		if (auto* staticMesh = entity->GetComponent<StaticMeshComponent>();
 			staticMesh != nullptr && staticMesh->GetMesh() != nullptr && !staticMesh->GetExcludeFromGI())
 		{
-			if (!staticMesh->IsGiMotionExcluded())
+			constexpr uint64_t kMovingRebakeFrames = 4ull;
+			auto it = _giMovingMeshes.find(staticMesh);
+			if (it == _giMovingMeshes.end())
 			{
-				staticMesh->SetGiMotionExcluded(true);
 				++_giGeometryRevision;
 				_giSpatialCacheDirty = true;
 				if (r_giLogInvalidations._val.b)
-					LOG_INFO("GI geomRev bump -> %llu (motion-exclude '%s')",
+					LOG_INFO("GI geomRev bump -> %llu (motion start '%s')",
 						(unsigned long long)_giGeometryRevision, entity->GetName().c_str());
+				_giMovingMeshes[staticMesh] = { _giFrameNumber, _giFrameNumber };
 			}
-			_giMovingMeshes[staticMesh] = _giFrameNumber;
+			else
+			{
+				it->second.lastMotionFrame = _giFrameNumber;
+				if (_giFrameNumber - it->second.lastBakeFrame >= kMovingRebakeFrames)
+				{
+					++_giGeometryRevision;
+					_giSpatialCacheDirty = true;
+					it->second.lastBakeFrame = _giFrameNumber;
+					if (r_giLogInvalidations._val.b)
+						LOG_INFO("GI geomRev bump -> %llu (moving rebake '%s')",
+							(unsigned long long)_giGeometryRevision, entity->GetName().c_str());
+				}
+			}
 		}
 
 		if (entity->GetComponent<PointLight>() != nullptr ||
@@ -368,11 +380,11 @@ namespace HexEngine
 		constexpr uint64_t kSettleFrames = 6ull;
 		for (auto it = _giMovingMeshes.begin(); it != _giMovingMeshes.end();)
 		{
-			if (_giFrameNumber - it->second >= kSettleFrames)
+			if (_giFrameNumber - it->second.lastMotionFrame >= kSettleFrames)
 			{
-				if (StaticMeshComponent* smc = it->first; smc != nullptr)
-					smc->SetGiMotionExcluded(false);
-				++_giGeometryRevision; // re-bake the mesh at its settled pose (one rebuild)
+				// Final rebake at the settled pose (the throttled cadence may
+				// have left the last few frames of movement unbaked).
+				++_giGeometryRevision;
 				_giSpatialCacheDirty = true;
 				if (r_giLogInvalidations._val.b)
 					LOG_INFO("GI geomRev bump -> %llu (motion settle)", (unsigned long long)_giGeometryRevision);

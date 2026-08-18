@@ -444,7 +444,12 @@ namespace HexEngine
 		// frame). While present they're excluded from the voxel triangle list so
 		// per-frame motion doesn't force a full rebuild; on settle they're re-baked.
 		uint64_t _giFrameNumber = 0ull;
-		std::unordered_map<StaticMeshComponent*, uint64_t> _giMovingMeshes;
+		struct GiMovingMeshState
+		{
+			uint64_t lastMotionFrame = 0ull;
+			uint64_t lastBakeFrame = 0ull;
+		};
+		std::unordered_map<StaticMeshComponent*, GiMovingMeshState> _giMovingMeshes;
 		std::vector<GiSpatialEntry> _giSpatialEntries;
 		std::unordered_map<GiSpatialCellKey, std::vector<uint32_t>, GiSpatialCellKeyHash> _giSpatialCells;
 		std::vector<uint32_t> _giSpatialOverflowEntries;
