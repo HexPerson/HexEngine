@@ -74,8 +74,8 @@ namespace HexEngine::Weather
 		// 2x band that the froxel system never even consumed (baseExt was
 		// hardcoded 0) - all weathers rendered with identical visibility.
 		case WeatherPresetId::Clear:
-			state.cloudCoverage = 0.18f;
-			state.cloudDensity = 0.55f;
+			state.cloudCoverage = 0.10f;
+			state.cloudDensity = 0.50f;
 			state.cloudErosion = 0.45f;
 			state.windSpeed = 9.0f;
 			state.fogDensity = 0.0002f;
@@ -86,8 +86,8 @@ namespace HexEngine::Weather
 			state.zenithExponent = 2.2f;
 			state.anisotropicIntensity = 0.16f;
 			state.atmosphereDensity = 0.16f;
-			state.cloudCoverage = 0.82f;
-			state.cloudDensity = 1.45f;
+			state.cloudCoverage = 0.98f;
+			state.cloudDensity = 1.15f;
 			state.cloudAmbientStrength = 0.22f;
 			state.cloudViewAbsorption = 0.70f;
 			state.cloudShadowStrength = 0.82f;
@@ -116,8 +116,8 @@ namespace HexEngine::Weather
 			state.precipitationIntensity = 0.45f;
 			state.surface.wetness = 0.55f;
 			state.surface.puddleAmount = 0.25f;
-			state.cloudCoverage = 0.94f;
-			state.cloudDensity = 1.55f;
+			state.cloudCoverage = 1.0f;
+			state.cloudDensity = 1.35f;
 			state.cloudViewAbsorption = 0.82f;
 			state.cloudShadowStrength = 0.92f;
 			state.sunIntensity = 0.16f;
@@ -149,8 +149,8 @@ namespace HexEngine::Weather
 			state.surface.puddleAmount = 0.60f;
 			state.zenithExponent = 1.55f;
 			state.anisotropicIntensity = 0.10f;
-			state.cloudCoverage = 0.98f;
-			state.cloudDensity = 1.95f;
+			state.cloudCoverage = 1.0f;
+			state.cloudDensity = 1.60f;
 			state.cloudViewAbsorption = 0.95f;
 			state.cloudShadowStrength = 1.0f;
 			state.sunIntensity = 0.08f;
@@ -185,7 +185,7 @@ namespace HexEngine::Weather
 			state.anisotropicIntensity = 0.06f;
 			state.atmosphereDensity = 0.24f;
 			state.cloudCoverage = 1.0f;
-			state.cloudDensity = 2.25f;
+			state.cloudDensity = 1.90f;
 			state.sunIntensity = 0.03f;
 			state.sunColour = math::Color(0.42f, 0.46f, 0.52f, 1.0f);
 			state.fogColour = math::Color(0.24f, 0.27f, 0.32f, 1.0f);
@@ -226,8 +226,8 @@ namespace HexEngine::Weather
 			state.surface.snowCoverage = 0.45f;
 			state.surface.snowMelt = 0.15f;
 			state.surface.temperatureBias = -0.8f;
-			state.cloudCoverage = 0.78f;
-			state.cloudDensity = 1.05f;
+			state.cloudCoverage = 0.96f;
+			state.cloudDensity = 1.10f;
 			state.atmosphereDensity = 0.13f;
 			state.sunIntensity = 0.18f;
 			state.sunColour = math::Color(0.72f, 0.76f, 0.82f, 1.0f);
@@ -257,8 +257,8 @@ namespace HexEngine::Weather
 			state.precipitationAreaRadius = 42.0f;
 			state.precipitationHeight = 20.0f;
 			state.surface.snowCoverage = 0.9f;
-			state.cloudCoverage = 0.95f;
-			state.cloudDensity = 1.65f;
+			state.cloudCoverage = 1.0f;
+			state.cloudDensity = 1.45f;
 			state.atmosphereDensity = 0.17f;
 			state.zenithExponent = 1.45f;
 			state.anisotropicIntensity = 0.07f;
@@ -287,7 +287,7 @@ namespace HexEngine::Weather
 			break;
 		case WeatherPresetId::Hot:
 			state.surface.temperatureBias = 1.0f;
-			state.cloudCoverage = 0.12f;
+			state.cloudCoverage = 0.06f;
 			state.cloudDensity = 0.35f;
 			state.sunIntensity = 1.25f;
 			state.atmosphereDensity = 0.14f;
@@ -303,8 +303,8 @@ namespace HexEngine::Weather
 			state.precipitationIntensity = 0.78f;
 			state.surface.dirtAmount = 0.7f;
 			state.surface.temperatureBias = 0.7f;
-			state.cloudCoverage = 0.48f;
-			state.cloudDensity = 0.82f;
+			state.cloudCoverage = 0.35f;
+			state.cloudDensity = 0.70f;
 			state.atmosphereDensity = 0.19f;
 			state.mieStrength = 1.75f;
 			state.sunHazeStrength = 1.6f;
