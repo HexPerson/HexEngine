@@ -160,11 +160,17 @@
 		const float detail = g_detailNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r;
 
 		const float height = saturate(localUVW.y);
-		const float heightMask = smoothstep(0.03f, 0.22f, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
+		// LUMPY UNDERSIDE: a flat cloud base renders a full deck as one
+		// featureless slab - real overcast reads as cloud because the base
+		// altitude varies and the light march turns those bumps into the
+		// light/dark mottling you actually see from below. Lift the base by
+		// the weather map and shape noise per column.
+		const float baseLift = (1.0f - wm) * 0.26f + (1.0f - shape) * 0.12f;
+		const float heightMask = smoothstep(0.03f + baseLift, 0.24f + baseLift, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
 		// Fuller weather columns build TALLER clouds: widen the vertical core
 		// with coverage so an overcast reads as a deck, scattered as puffs.
 		const float coreTop = lerp(0.62f, 0.90f, columnCoverage);
-		const float verticalCore = smoothstep(0.05f, lerp(0.55f, 0.35f, columnCoverage), height) * (1.0f - smoothstep(coreTop, 0.98f, height));
+		const float verticalCore = smoothstep(0.05f + baseLift * 0.8f, lerp(0.55f, 0.35f, columnCoverage) + baseLift * 0.5f, height) * (1.0f - smoothstep(coreTop, 0.98f, height));
 
 		// 3D Perlin-Worley SCULPTS the column the map dictates. REMAP form
 		// (Schneider), not raw subtraction: plain subtraction stacked on a
