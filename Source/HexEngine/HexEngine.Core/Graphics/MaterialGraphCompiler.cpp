@@ -432,7 +432,16 @@ namespace HexEngine
 
 				if (node->nodeType == MaterialGraphNodeType::TextureParameter || paramType == MaterialGraphValueType::Texture2D)
 				{
-					const std::string paramKey = std::format("param:{}", node->parameterName);
+					// Only key the slot by parameter name when there IS a name.
+					// Unnamed texture parameters (the promote-from-standard path
+					// creates these) all shared the "param:" key, collapsing every
+					// channel onto texture slot 0 - roughness/metallic/emissive all
+					// sampled the albedo texture. Empty key falls back to the
+					// texture-path key inside AcquireTextureSlot, which still dedups
+					// identical textures across nodes.
+					const std::string paramKey = node->parameterName.empty()
+						? std::string()
+						: std::format("param:{}", node->parameterName);
 					value = MakeTextureObjectExpression(ctx, texturePath, paramKey);
 					if (!node->parameterName.empty())
 					{
@@ -1173,7 +1182,12 @@ namespace HexEngine
 				kMaxGraphTextureSlots));
 		}
 
-		material._properties.hasTransparency = (opacityPtr != nullptr && !IsDefinitelyOpaqueOpacityExpression(opacityPtr)) ? 1 : 0;
+		if (opacityPtr != nullptr)
+			material._properties.hasTransparency = IsDefinitelyOpaqueOpacityExpression(opacityPtr) ? 0 : 1;
+		else if (ctx.graph.FindPbrOutputNode() != nullptr)
+			material._properties.hasTransparency = 0; // PbrOutput block below re-applies the artist's explicit flag
+		// else: legacy graph with no opacity binding - leave the flag the artist
+		// set in the simple MaterialDialog untouched instead of stomping it to 0.
 
 		// When the graph uses the unified PbrOutput node, push its per-material
 		// constants (render state, model selection, rain-drip intensity, etc.)
@@ -1314,45 +1328,14 @@ namespace HexEngine
 		const MaterialGraphInstanceData& instanceData,
 		Material& material)
 	{
-		// Compile graph structure once (without overrides), then apply texture overrides without recompiling.
-		MaterialGraphCompileResult result = CompileToMaterial(graph, material, nullptr);
-		if (!result.success)
-			return result;
-
-		for (const auto& overrideValue : instanceData.overrides)
-		{
-			if (overrideValue.valueType != MaterialGraphValueType::Texture2D || overrideValue.texturePath.empty())
-				continue;
-
-			const auto it = std::find_if(
-				result.textureParameterSlots.begin(),
-				result.textureParameterSlots.end(),
-				[&](const std::pair<std::string, int32_t>& binding)
-				{
-					return binding.first == overrideValue.name;
-				});
-			if (it == result.textureParameterSlots.end())
-				continue;
-
-			material.SetTexture(SlotToMaterialTexture(it->second), ITexture2D::Create(overrideValue.texturePath));
-		}
-
-		const bool hasNonTextureOverride = std::find_if(
-			instanceData.overrides.begin(),
-			instanceData.overrides.end(),
-			[](const MaterialGraphParameterOverride& o)
-			{
-				return o.valueType == MaterialGraphValueType::Scalar ||
-					o.valueType == MaterialGraphValueType::Vector2 ||
-					o.valueType == MaterialGraphValueType::Vector3 ||
-					o.valueType == MaterialGraphValueType::Vector4;
-			}) != instanceData.overrides.end();
-		if (hasNonTextureOverride)
-		{
-			result.warnings.push_back("Scalar/vector instance overrides currently require full graph recompilation and were not hot-applied.");
-		}
-
-		return result;
+		// Bake the instance's overrides straight into the compile. Scalar/vector
+		// overrides become constants in the generated source (which changes the
+		// cache hash, so instances with distinct values get their own .hcs while
+		// texture-only instances still share the parent's shader - texture paths
+		// only affect slot bindings, not the source). The old two-step flow
+		// compiled without overrides and then patched textures afterwards, which
+		// silently DROPPED every scalar/vector override with only a warning.
+		return CompileToMaterial(graph, material, &instanceData.overrides);
 	}
 
 	bool MaterialGraphCompiler::IsCachedGraphShaderStale(const fs::path& cachedShaderPath)

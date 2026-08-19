@@ -896,6 +896,10 @@ namespace HexEditor
 		auto* material = new HexEngine::Material;
 		material->SetPaths(newMaterialPath, _currentlyBrowsedFS);
 		material->CopyFrom(HexEngine::Material::GetDefaultMaterial());
+		// Seed real graph content. Saving _hasGraph=true with an empty node list
+		// produced an asset that failed graph validation ("Graph contains no
+		// nodes") on every load until someone opened the graph editor on it.
+		material->_graph = HexEngine::MaterialGraph::CreateDefaultPbrGraph();
 		material->_hasGraph = true;
 		material->_hasGraphInstance = false;
 		material->SetLoader(HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));

@@ -322,11 +322,16 @@ namespace HexEngine
 			graph.connections.push_back({ fromNode, fromPin, toNode, toPin });
 		};
 
+		// Pin id must be "Out" (capital) to match the connections authored below
+		// and the pins the dialog's BuildOutputPins creates - a lowercase "out"
+		// here leaves the graph with connections the validator rejects as broken
+		// ("Broken connection 'node_x:Out'"), which made every promoted material
+		// with a constant-driven channel fail to compile.
 		auto addVectorConstant = [&](const char* id, const char* label, const math::Vector2& pos, const math::Vector4& value)
 		{
 			auto node = makeNode(id, MaterialGraphNodeType::VectorConstant, label, pos);
 			node.vectorValue = value;
-			node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+			node.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
 			graph.nodes.push_back(std::move(node));
 		};
 
@@ -334,7 +339,7 @@ namespace HexEngine
 		{
 			auto node = makeNode(id, MaterialGraphNodeType::ScalarConstant, label, pos);
 			node.scalarValue = value;
-			node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
+			node.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
 			graph.nodes.push_back(std::move(node));
 		};
 
@@ -440,7 +445,7 @@ namespace HexEngine
 			graph.nodes.push_back(std::move(multiplyNode));
 
 			addConnection(emissiveTextureSourceId, "Out", "node_emissive_mul", "A");
-			addConnection("node_emissive_tint", "out", "node_emissive_mul", "B");
+			addConnection("node_emissive_tint", "Out", "node_emissive_mul", "B");
 			emissiveSource = "node_emissive_mul";
 		}
 		else
@@ -474,7 +479,7 @@ namespace HexEngine
 		addConnection(metallicSource, "Out", "output_pbr", "Metallic");
 		addConnection(emissiveSource, "Out", "output_pbr", "Emissive");
 		addConnection(opacitySource, "Out", "output_pbr", "Opacity");
-		addConnection(smoothnessSource, "out", "output_pbr", "Smoothness");
+		addConnection(smoothnessSource, "Out", "output_pbr", "Smoothness");
 
 		// Seed the PbrOutput node's per-material constants from the standard
 		// material's existing properties so a converted graph renders the same
@@ -837,6 +842,36 @@ namespace HexEngine
 
 				outGraph.parameters.push_back(std::move(parameter));
 			}
+		}
+
+		// Self-heal pin-id drift. Promote-from-standard used to author connections
+		// against pin id "Out" while the constant nodes it created carried "out",
+		// so graphs saved by those builds fail validation with "Broken connection"
+		// forever. If a connection's source pin doesn't resolve but the source
+		// node has exactly one output pin, snap to it - unambiguous and covers any
+		// single-output pin rename. (Input pins are left alone: nodes have several
+		// and guessing would mis-wire.) Bindings are healed the same way; for
+		// PbrOutput graphs EnsureDefaultOutputBindings below re-derives them from
+		// the healed connections anyway.
+		for (auto& connection : outGraph.connections)
+		{
+			if (outGraph.FindPin(connection.fromNodeId, connection.fromPinId, MaterialGraphPinDirection::Output) != nullptr)
+				continue;
+
+			const auto* fromNode = outGraph.FindNode(connection.fromNodeId);
+			if (fromNode != nullptr && fromNode->outputPins.size() == 1)
+				connection.fromPinId = fromNode->outputPins.front().id;
+		}
+
+		for (auto& output : outGraph.outputs)
+		{
+			if (output.nodeId.empty() ||
+				outGraph.FindPin(output.nodeId, output.pinId, MaterialGraphPinDirection::Output) != nullptr)
+				continue;
+
+			const auto* fromNode = outGraph.FindNode(output.nodeId);
+			if (fromNode != nullptr && fromNode->outputPins.size() == 1)
+				output.pinId = fromNode->outputPins.front().id;
 		}
 
 		outGraph.EnsureDefaultOutputBindings();
