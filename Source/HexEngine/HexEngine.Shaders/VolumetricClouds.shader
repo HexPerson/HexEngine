@@ -232,15 +232,16 @@
 	{
 		const float2 uv = input.texcoord;
 		float pixelDepth = GBUFFER_NORMAL.Sample(g_pointSampler, uv).w;
-		if (pixelDepth <= 0.0f || pixelDepth == -1.0f)
+		// SKY detection must match the GI trace: the SKYDOME IS GEOMETRY and
+		// writes a real gbuffer depth (its radius), so a depth-only test
+		// never fires for sky - the clouds were being depth-clipped against
+		// the dome sphere, which reads as a circular cap overhead that never
+		// reaches the horizon. Sky is flagged by diffuse.a == -1.
+		const float skyFlag = GBUFFER_DIFFUSE.Sample(g_pointSampler, uv).a;
+		if (skyFlag == -1.0f || pixelDepth <= 0.0f || pixelDepth == -1.0f)
 		{
-			// SKY pixel: no scene occluder. The old fallback clamped the
-			// trace to g_frustumDepths[3] (the far shadow-cascade depth, a
-			// couple of km) - which silently terminated the cloud deck at
-			// that range regardless of the AABB, reading as a blob overhead
-			// that never reaches the horizon. March to the cloud system's own
-			// distance limit instead (maxTraceDistance is still clamped by
-			// g_cloudParams0.w below).
+			// No scene occluder: march to the cloud system's own distance
+			// limit (maxTraceDistance is still clamped by g_cloudParams0.w).
 			pixelDepth = 1e9f;
 		}
 
