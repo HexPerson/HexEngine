@@ -195,7 +195,10 @@
 		// this clamp the light steps stretch into uselessness.
 		const float lightSpan = min(lightHit.y, 900.0f);
 		const float stepLen = max(1.0f, lightSpan / max(1, lightSteps));
-		const float invCloudHeight = rcp(max(100.0f, boundsMax.y - boundsMin.y));
+		// Physical per-metre extinction (see ShaderMain) - the old
+		// height-normalized scale capped every vertical path at the same
+		// optical depth regardless of thickness or density.
+		const float invCloudHeight = 0.012f;
 		float travelled = 0.0f;
 		float opticalDepth = 0.0f;
 
@@ -252,7 +255,14 @@
 
 		float baseStep = maxTraceDistance / max(1, viewSteps);
 		baseStep = max(1.0f, baseStep * g_cloudParams1.w);
-		const float invCloudHeight = rcp(max(100.0f, boundsMax.y - boundsMin.y));
+		// PHYSICAL per-metre extinction, replacing the old 1/slabHeight
+		// normalization. That normalization made a full vertical path through
+		// the deck total the SAME optical depth (~0.5 with default cvars)
+		// regardless of thickness or density - an overcast could never get
+		// past ~40% alpha and rendered as a milky veil. Real stratus runs
+		// ~0.02-0.1/m extinction; 0.012 at density 1 leaves the density and
+		// absorption cvars honest headroom in both directions.
+		const float invCloudHeight = 0.012f;
 
 		const float2 noiseUv = uv * float2(max(1.0f, g_screenWidth / 128.0f), max(1.0f, g_screenHeight / 128.0f));
 		const float noise = g_noiseTexture.Sample(g_linearSampler, noiseUv).r;
