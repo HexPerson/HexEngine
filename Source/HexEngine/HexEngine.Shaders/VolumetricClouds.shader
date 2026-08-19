@@ -338,7 +338,11 @@
 			if (travelled >= maxTraceDistance)
 				break;
 
-			const float stepLenView = baseStep * clamp(1.0f + (entryDist + travelled) * 0.0011f, 1.0f, 7.0f);
+			// Growth tamed (was rate 0.0011 / cap 7x): aggressive far steps
+			// sliced the 700m height profile into visible horizontal bands on
+			// distant clouds ("lined" look). 0.0005/3.5x keeps the horizon
+			// deck inside budget while sampling the profile densely enough.
+			const float stepLenView = baseStep * clamp(1.0f + (entryDist + travelled) * 0.0005f, 1.0f, 3.5f);
 			const float3 samplePos = eyePos + rayDir * (entryDist + travelled);
 			const float density = SampleCloudDensity(samplePos, boundsMin, boundsMax, windOffset);
 
