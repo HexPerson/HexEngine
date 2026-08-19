@@ -178,10 +178,21 @@
 		const float erosionByHeight = lerp(0.55f, 1.45f, smoothstep(0.25f, 0.95f, height));
 		const float detailErode = saturate((1.0f - detail) * g_cloudParams0.z * erosionByHeight);
 		cloud = saturate((cloud - detailErode) / max(0.05f, 1.0f - detailErode));
-		const float billow = saturate(1.0f + (detail - 0.5f) * 0.28f + (wm - 0.5f) * 0.36f);
-		const float densityShape = lerp(cloud * cloud, cloud, 0.55f);
 
-		return min(densityShape * billow * g_cloudParams0.x, 2.0f);
+		// STRUCTURE. The remap above deliberately pins full columns at 1 so
+		// coverage stays honest - but that erases density VARIATION, and a
+		// full-cover sky rendered as one flat grey blob. Real decks vary
+		// 40-100% in optical depth across metres; the sculpt noises modulate
+		// density INSIDE the boundary the remap defines - that variation is
+		// what the light march turns into underside shading and billow
+		// structure.
+		const float structure =
+			lerp(0.42f, 1.0f, shape) *
+			lerp(0.68f, 1.05f, detail) *
+			lerp(0.78f, 1.0f, wm);
+		const float densityShape = lerp(cloud * cloud, cloud, 0.55f) * structure;
+
+		return min(densityShape * g_cloudParams0.x, 2.0f);
 	}
 
 	float MarchToLight(float3 samplePos, float3 boundsMin, float3 boundsMax, float3 windOffset, float3 sunDir, int lightSteps)
