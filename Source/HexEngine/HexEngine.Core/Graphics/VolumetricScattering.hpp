@@ -35,10 +35,17 @@ namespace HexEngine
 	class HEX_API VolumetricScattering
 	{
 	public:
-		// Volume dimensions. 128x72 matches a 16:9 ratio at decent density;
-		// 64 slices over the 256 m far plane gives ~0.1 m near, ~30 m far.
-		static constexpr uint32_t kVolumeWidth  = 128u;
-		static constexpr uint32_t kVolumeHeight = 72u;
+		// Volume dimensions. 256x144 matches 16:9; raised from 128x72, which
+		// put ~15x15 screen pixels in one froxel at 1080p and visibly
+		// blockified emissive glow and shadowed shafts. Width must stay a
+		// multiple of 16 and height a multiple of 72 (cluster-grid 16x9
+		// divisibility + 8-wide thread groups). 4x the froxels of the old
+		// grid: ~19 MB per RGBA16F volume (4 volumes ~75 MB) and the scatter
+		// CS cost scales the same 4x - drop back to 128x72 if the pass shows
+		// up in profiles. VolumetricScatterApply.shader's VOLUME_DIMS constant
+		// must match these values.
+		static constexpr uint32_t kVolumeWidth  = 256u;
+		static constexpr uint32_t kVolumeHeight = 144u;
 		static constexpr uint32_t kVolumeDepth  = 64u;
 		// Far extent of the froxel range. Beyond this distance the aerial-
 		// perspective volume handles atmospheric scattering, so this only

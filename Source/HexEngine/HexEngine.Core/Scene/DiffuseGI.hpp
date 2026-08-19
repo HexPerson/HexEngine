@@ -47,6 +47,26 @@ namespace HexEngine
 		// without the blur shader. DiffuseGIAOProvider reads .r from this in
 		// preference to _giResolved.a when r_useGIAO compound mode is active.
 		ITexture2D* GetBlurredAOTexture() const { return _giAoBlurred; }
+		// Per-clip voxel radiance access for the froxel fog's world-space
+		// emissive/GI glow (VolumetricScattering samples the field directly
+		// at each froxel's world position). Null / w = 0 until the clip has
+		// initialized, which the fog shader treats as "clip absent".
+		ID3D11ShaderResourceView* GetClipRadianceSrv(uint32_t clip) const
+		{
+			if (clip >= ClipmapCount)
+				return nullptr;
+			const auto& level = _clipmaps[clip];
+			return level.initialized ? level.radianceSrv : nullptr;
+		}
+		math::Vector4 GetClipCenterExtent(uint32_t clip) const
+		{
+			if (clip >= ClipmapCount)
+				return math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			const auto& level = _clipmaps[clip];
+			if (!level.initialized || level.radianceSrv == nullptr)
+				return math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			return math::Vector4(level.center.x, level.center.y, level.center.z, level.extent);
+		}
 
 		/**
 		 * @brief Binds the 4 clipmaps' voxel radiance/opacity/albedo (12 SRVs) via the auto-slot

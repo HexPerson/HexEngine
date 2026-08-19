@@ -89,6 +89,14 @@ namespace HexEngine
 			// PRE-multiplied by strength on the CPU; shader adds
 			// .rgb * extinction to the scatter radiance. .w unused.
 			math::Vector4 fogAmbient;
+			// DiffuseGI clip placement for the voxel-glow path (clips 0..2,
+			// finest first). xyz = clip world center, w = extent (half-size;
+			// 0 marks the clip invalid/absent).
+			math::Vector4 giClipCenterExtent[3];
+			// .x = voxel-glow path active (1 = the emissive glow samples the
+			// GI radiance field at t18..t20, 0 = legacy screen-space gbuffer
+			// taps). .yzw unused.
+			math::Vector4 giGlowParams;
 		};
 
 		struct IntegrateParamsCB
@@ -513,15 +521,37 @@ namespace HexEngine
 			scatterCB.pointShadowSlotPerForward[i] = math::Vector4((float)slot, 0.0f, 0.0f, 0.0f);
 		}
 		scatterCB.pointShadowParams = math::Vector4(pointShadowBiasMetres, (float)shadowedPointCount, 0.0f, 0.0f);
-		// Emissive injection only runs when both gbuffer SRVs are available -
-		// force strength to 0 otherwise so the shader's gate skips the taps.
+		// GI voxel-radiance glow: hand the density CS the three nearest GI
+		// clips' placement so froxels can sample the voxel light field at
+		// their world position (emissive is baked into that field as an
+		// undiluted max source term). When the clips exist this REPLACES the
+		// screen-space gbuffer taps, which aliased through the coarse froxel
+		// grid and lost off-screen/occluded emitters.
+		bool giGlowActive = false;
+		if (g_pEnv->_sceneRenderer != nullptr)
+		{
+			if (auto* gi = g_pEnv->_sceneRenderer->GetDiffuseGI(); gi != nullptr)
+			{
+				for (uint32_t c = 0u; c < 3u; ++c)
+				{
+					scatterCB.giClipCenterExtent[c] = gi->GetClipCenterExtent(c);
+					if (scatterCB.giClipCenterExtent[c].w > 0.0f)
+						giGlowActive = true;
+				}
+			}
+		}
+		scatterCB.giGlowParams = math::Vector4(giGlowActive ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+		// Emissive injection needs a source: the GI voxel field (preferred)
+		// or, failing that, both gbuffer SRVs for the screen-space fallback -
+		// force strength to 0 when neither is available so the shader's gate
+		// skips the whole path.
 		const bool emissiveValid = gbufferDiffuse != nullptr && gbufferPosition != nullptr;
 		// .z carries "clustered fog active" - a spare lane reused rather than
 		// a cbuffer layout change (see the append-only note in RenderStructs).
 		const bool clusteredFog = _clActive && _clLightsSrv != nullptr &&
 			_clCountsSrv != nullptr && _clListsSrv != nullptr;
 		scatterCB.emissiveParams = math::Vector4(
-			emissiveValid ? std::max(0.0f, emissiveStrength) : 0.0f,
+			(emissiveValid || giGlowActive) ? std::max(0.0f, emissiveStrength) : 0.0f,
 			std::max(0.01f, emissiveRangeMetres), clusteredFog ? 1.0f : 0.0f, 0.0f);
 		// Premultiply ambient colour by strength so the shader's per-froxel
 		// cost is a single mad against the extinction.
@@ -710,7 +740,8 @@ namespace HexEngine
 		if (perFrameNative)
 			context->CSSetConstantBuffers(0, 1, &perFrameNative);
 
-		// SCATTER PASS - 8x8x8 thread groups over 128x72x64 volume.
+		// SCATTER PASS - 8x8x8 thread groups over the froxel volume
+		// (kVolumeWidth x kVolumeHeight x kVolumeDepth).
 		{
 			auto* stage = _scatterShader->GetShaderStage(ShaderStage::ComputeShader);
 			if (stage)
@@ -788,17 +819,21 @@ namespace HexEngine
 				// t17 = GI blurred voxel AO: the density CS occludes the fog
 				// AMBIENT term where the voxel field says the froxel column is
 				// enclosed (g_giComposeParams.z gates the sample; null-safe).
+				// t18..t20 = GI voxel radiance clips 0..2 for the world-space
+				// emissive/GI glow (g_giGlowParams.x gates; null-safe).
 				{
-					ID3D11ShaderResourceView* giAoSrv = nullptr;
+					ID3D11ShaderResourceView* giSrvs[4] = {};
 					if (g_pEnv->_sceneRenderer != nullptr)
 					{
 						if (auto* gi = g_pEnv->_sceneRenderer->GetDiffuseGI(); gi != nullptr)
 						{
 							if (auto* aoTex = gi->GetBlurredAOTexture(); aoTex != nullptr)
-								giAoSrv = reinterpret_cast<ID3D11ShaderResourceView*>(aoTex->GetNativeShaderView());
+								giSrvs[0] = reinterpret_cast<ID3D11ShaderResourceView*>(aoTex->GetNativeShaderView());
+							for (uint32_t c = 0u; c < 3u; ++c)
+								giSrvs[1u + c] = gi->GetClipRadianceSrv(c);
 						}
 					}
-					context->CSSetShaderResources(17, 1, &giAoSrv);
+					context->CSSetShaderResources(17, 4, giSrvs);
 				}
 
 				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
@@ -809,8 +844,11 @@ namespace HexEngine
 					context->CSSetShaderResources(12, 5, clNulls);
 				}
 				{
-					ID3D11ShaderResourceView* nullGiAo = nullptr;
-					context->CSSetShaderResources(17, 1, &nullGiAo);
+					// t17 AO + t18..t20 radiance clips. The radiance volumes are
+					// written by GI compute UAVs next frame - leaving them bound
+					// as CS SRVs would force-unbind with debug-layer noise.
+					ID3D11ShaderResourceView* nullGiSrvs[4] = {};
+					context->CSSetShaderResources(17, 4, nullGiSrvs);
 				}
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);

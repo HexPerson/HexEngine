@@ -90,6 +90,14 @@
 	// main-view screen space. The froxel's uvw.xy IS the screen uv. Gated by
 	// g_giComposeParams.z; null-bound reads 0 = no occlusion.
 	Texture2D                g_giAoTex       : register(t17);
+	// DiffuseGI voxel radiance clips 0..2 (finest -> coarser) for the fog's
+	// world-space emissive/GI glow. Emissive is baked into this field as an
+	// undiluted max source term, so sampling it around a froxel gives glow
+	// that survives occlusion and off-screen emitters - the failure modes of
+	// the screen-space gbuffer taps it replaces. Null-bound reads 0.
+	Texture3D<float4>        g_giRadianceClip0 : register(t18);
+	Texture3D<float4>        g_giRadianceClip1 : register(t19);
+	Texture3D<float4>        g_giRadianceClip2 : register(t20);
 	SamplerState g_shadowPointSampler : register(s2);
 	// Linear-clamp sampler for the transmittance LUT - the LUT is a
 	// continuous function so point sampling shows banding.
@@ -149,6 +157,14 @@
 		// the medium - dense storm/blizzard/sandstorm fog reads as a grey
 		// or coloured soup instead of just darkening the scene. .w unused.
 		float4 g_fogAmbient;
+		// DiffuseGI clip placement for the voxel-glow path (clips 0..2,
+		// finest first). xyz = clip world center, w = extent (half-size;
+		// 0 marks the clip invalid/absent).
+		float4 g_giClipCenterExtent[3];
+		// .x = voxel-glow path active (1 = the emissive glow samples the GI
+		// radiance field at t18..t20, 0 = legacy screen-space gbuffer taps).
+		// .yzw unused.
+		float4 g_giGlowParams;
 	};
 
 	// Forward lights cbuffer. Layout MUST match SceneRenderer's
@@ -204,6 +220,17 @@
 		const float softness = max(radius * 0.08f, 0.5f);
 		const float softnessSqr = softness * softness;
 		return (window * window) / (distSq + softnessSqr);
+	}
+
+	// Sample the DiffuseGI radiance clip selected for this froxel. Texture
+	// objects can't be indexed dynamically in SM5 - literal branch per clip.
+	float3 SampleGiRadiance(int clipIdx, float3 uvw3)
+	{
+		if (clipIdx == 0)
+			return g_giRadianceClip0.SampleLevel(g_linearSamplerAtm, uvw3, 0).rgb;
+		if (clipIdx == 1)
+			return g_giRadianceClip1.SampleLevel(g_linearSamplerAtm, uvw3, 0).rgb;
+		return g_giRadianceClip2.SampleLevel(g_linearSamplerAtm, uvw3, 0).rgb;
 	}
 
 	// Sample the point-light cubemap shadow at `slot` for the world
@@ -679,11 +706,15 @@
 
 		if (clusteredFog)
 		{
-			// Froxel (128x72x64) -> cluster (16x9x32): exact integer division,
-			// valid because both use the same exponential depth mapping.
-			const uint ccx = min(dtid.x / 8u, 15u);
-			const uint ccy = min(dtid.y / 8u, 8u);
-			const uint ccz = min(dtid.z / 2u, 31u);
+			// Froxel -> cluster (16x9x32). The cluster grid is fixed while the
+			// froxel dims are configurable, so derive the mapping from dims
+			// instead of hard-coding the division (the old 128x72x64 grid used
+			// /8,/8,/2). Exact when dims are multiples of the cluster grid -
+			// which the volume constants guarantee - and the depth slicing
+			// matches because both use the same exponential mapping.
+			const uint ccx = min(dtid.x * 16u / dims.x, 15u);
+			const uint ccy = min(dtid.y * 9u  / dims.y, 8u);
+			const uint ccz = min(dtid.z * 32u / dims.z, 31u);
 			const uint clusterIdx = (ccz * 9u + ccy) * 16u + ccx;
 			const uint cCount = min(g_clCounts[clusterIdx], 64u);
 			[loop] for (uint ci = 0u; ci < cCount; ++ci)
@@ -725,25 +756,80 @@
 			}
 		}
 
-		// Screen-space EMISSIVE injection: surfaces with emissive materials
-		// (neon, lit windows, screens) glow into the fog around them. The
-		// froxel's xy is a screen UV; the gbuffer sample at that UV is the
-		// surface this froxel's ray hits. Distance falloff between the froxel
-		// and the surface world position spreads the glow into the volume in
-		// front of the emitter; froxels behind the surface also accumulate
-		// but never display (the apply pass samples the volume at the scene
-		// depth, so occluded slices simply aren't read).
+		// EMISSIVE / GI glow injection: surfaces with emissive materials
+		// (neon, lit windows, screens) glow into the fog around them.
 		//
-		// LIMITATIONS (screen-space by construction): emitters off-screen or
-		// fully occluded contribute nothing, and the glow fades with the
-		// emitter at screen edges. The principled upgrade would be sampling
-		// the DiffuseGI voxel volume (which already has emissive baked into
-		// its radiance) - revisit if the screen-space artefacts ever bother.
-		if (g_emissiveParams.x > 0.0f)
+		// PREFERRED PATH (g_giGlowParams.x): sample the DiffuseGI voxel
+		// radiance field around the froxel's world position. Emissive is
+		// baked into that field as an UNDILUTED max source term, so the glow
+		// is world-space: emitters keep glowing when off-screen or occluded,
+		// and the glow no longer aliases through the froxel grid the way the
+		// per-column gbuffer taps did. A 9-tap sphere gather (centre + 8
+		// cube corners at ~0.55 * range) spreads the energy over the glow
+		// range, and a luminance knee keeps ordinary lit surfaces from
+		// hazing the whole scene - only bright sources (emissive, blown-out
+		// highlights) contribute at full strength.
+		//
+		// FALLBACK: the original screen-space gbuffer taps, kept for when
+		// the GI volumes don't exist (GI disabled / not yet initialized).
+		if (g_emissiveParams.x > 0.0f && g_giGlowParams.x > 0.5f)
 		{
-			// One froxel column covers a LARGE screen footprint (the volume is
-			// only 128x72 across the screen - roughly 15x15 pixels per froxel
-			// at 1080p). A single point tap of the gbuffer aliases any high-
+			const float range = g_emissiveParams.y;
+			// Finest clip whose box still contains the whole tap sphere, so
+			// one clip serves all 9 taps (no per-tap seams).
+			int clipIdx = -1;
+			float3 clipCenter = 0.0f.xxx;
+			float clipExtent = 0.0f;
+			[unroll]
+			for (int c = 0; c < 3; ++c)
+			{
+				const float4 ce = g_giClipCenterExtent[c];
+				if (clipIdx < 0 && ce.w > 0.0f)
+				{
+					const float3 d = abs(worldPos - ce.xyz);
+					if (all(d < (ce.w - range).xxx))
+					{
+						clipIdx = c;
+						clipCenter = ce.xyz;
+						clipExtent = ce.w;
+					}
+				}
+			}
+			if (clipIdx >= 0)
+			{
+				// Corner offset: 0.55*range along the unit cube diagonal.
+				const float k = range * 0.55f * 0.57735f;
+				const float3 taps[9] = {
+					float3( 0.0f, 0.0f, 0.0f),
+					float3(  k,  k,  k), float3(  k,  k, -k),
+					float3(  k, -k,  k), float3(  k, -k, -k),
+					float3( -k,  k,  k), float3( -k,  k, -k),
+					float3( -k, -k,  k), float3( -k, -k, -k)
+				};
+				const float invSize = 0.5f / clipExtent;
+				float3 glow = 0.0f.xxx;
+				[unroll]
+				for (int t = 0; t < 9; ++t)
+				{
+					const float3 uvw3 = (worldPos + taps[t] - clipCenter) * invSize + 0.5f;
+					const float3 rad = SampleGiRadiance(clipIdx, uvw3);
+					// Luminance knee: sun-lit surfaces (~1) contribute a mild
+					// ambient glow, genuinely bright sources (emissive is
+					// injected up to the 4.0 radiance clamp) at full weight.
+					const float luma = dot(rad, float3(0.2126f, 0.7152f, 0.0722f));
+					glow += rad * smoothstep(0.75f, 2.0f, luma);
+				}
+				// 0.8/9 puts the peak (all taps inside a bright emitter) at
+				// roughly the legacy screen-space path's near-surface energy,
+				// so r_volumetricEmissive keeps its calibration.
+				localScatter += glow * ((0.8f / 9.0f) * g_emissiveParams.x);
+			}
+		}
+		else if (g_emissiveParams.x > 0.0f)
+		{
+			// One froxel column covers a large screen footprint (several
+			// pixels per froxel even at the raised volume resolution). A
+			// single point tap of the gbuffer aliases any high-
 			// frequency emitter (neon sign letters) into froxel-sized blocks:
 			// the tap either lands on a letter (full glow) or between letters
 			// (none). Instead, take 4 rotated-grid taps spread across the

@@ -60,7 +60,7 @@
 	// fog across the whole 256m the volume used to span.
 	static const float FAR_PLANE_M  = 128.0f;
 	// Must match VolumetricScattering::kVolumeWidth/Height/Depth.
-	static const float3 VOLUME_DIMS = float3(128.0f, 72.0f, 64.0f);
+	static const float3 VOLUME_DIMS = float3(256.0f, 144.0f, 64.0f);
 
 	// Smoothstep-corrected trilinear sampling ("smooth trilinear"). Raw
 	// trilinear of a volume this coarse (one froxel covers ~15x15 screen
