@@ -1668,9 +1668,9 @@ namespace HexEngine
 
 		// Instance mode: full recompile of the PARENT graph with this
 		// instance's overrides baked in, targeting the INSTANCE material (it
-		// gets its own generated shader). This is the correct path for scalar
-		// and vector overrides too - the loader's ApplyInstanceToMaterial only
-		// hot-applies texture overrides.
+		// gets its own generated shader). Matches what the loader's
+		// ApplyInstanceToMaterial now does on load - overrides are baked into
+		// the compile there too.
 		if (_instanceMode)
 		{
 			const auto compileResult = MaterialGraphCompiler::CompileToMaterial(
