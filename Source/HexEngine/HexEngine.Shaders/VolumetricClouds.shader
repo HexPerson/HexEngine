@@ -166,14 +166,18 @@
 		const float coreTop = lerp(0.62f, 0.90f, columnCoverage);
 		const float verticalCore = smoothstep(0.05f, lerp(0.55f, 0.35f, columnCoverage), height) * (1.0f - smoothstep(coreTop, 0.98f, height));
 
-		// 3D Perlin-Worley SCULPTS the column the map dictates: shape carves
-		// the cauliflower masses (less aggressively where the column is
-		// full), detail erodes edges - rising with height so cumulus stay
-		// dense at the base and wisp at the top.
+		// 3D Perlin-Worley SCULPTS the column the map dictates. REMAP form
+		// (Schneider), not raw subtraction: plain subtraction stacked on a
+		// base that is already a product of <=1 terms crushed interior
+		// density to ~0.1 and made the whole sky nearly invisible. The remap
+		// (x - e) / (1 - e) eats from the BOTTOM - edges erode away while a
+		// full column keeps ~full density.
 		float cloud = columnCoverage * heightMask * verticalCore;
-		cloud = saturate(cloud - (1.0f - shape) * lerp(0.62f, 0.30f, columnCoverage));
+		const float shapeErode = (1.0f - shape) * lerp(0.62f, 0.30f, columnCoverage);
+		cloud = saturate((cloud - shapeErode) / max(0.05f, 1.0f - shapeErode));
 		const float erosionByHeight = lerp(0.55f, 1.45f, smoothstep(0.25f, 0.95f, height));
-		cloud = saturate(cloud - (1.0f - detail) * g_cloudParams0.z * erosionByHeight);
+		const float detailErode = saturate((1.0f - detail) * g_cloudParams0.z * erosionByHeight);
+		cloud = saturate((cloud - detailErode) / max(0.05f, 1.0f - detailErode));
 		const float billow = saturate(1.0f + (detail - 0.5f) * 0.28f + (wm - 0.5f) * 0.36f);
 		const float densityShape = lerp(cloud * cloud, cloud, 0.55f);
 
