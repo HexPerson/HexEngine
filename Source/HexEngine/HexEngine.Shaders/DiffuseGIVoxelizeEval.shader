@@ -71,6 +71,12 @@
 		int l1xR; int l1xG; int l1xB;
 		int l1yR; int l1yG; int l1yB;
 		int l1zR; int l1zG; int l1zB;
+		// Emissive is a SOURCE term, not an average: folded into the
+		// weighted mean, a thin neon strip entered at its tiny coverage
+		// weight against full-weight non-emissive neighbours and averaged
+		// to invisibility. InterlockedMax keeps the brightest emitter in
+		// the voxel undiluted; the resolve adds it on top of the mean.
+		uint emiR; uint emiG; uint emiB;
 	};
 	RWStructuredBuffer<VoxelAccum> g_injectAccum : register(u0);
 
@@ -719,6 +725,7 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					// triangle's own albedo.
 					const float3 voxelAlbedo = triAlbedo;
 					float3 injected = tri.radianceOpacity.rgb * visibilityFactor;
+					float3 emissiveSource = 0.0f.xxx;
 					const bool gpuComputeBaseSun = gpuComputeBaseSunMode;
 					const float emissiveInject = max(0.0f, g_giParams8.w);
 					// Emissive surfaces still contribute additively to `injected` below, but they
@@ -767,12 +774,14 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 						const float sunDirectionalShape = lerp(0.70f, 1.0f, sunDirectionality);
 						const float sunDirectional = sunFacingWeight * sunPresenceRaw * sunDirectionalShape * (0.19f + 0.16f * sunBoost);
 						const float3 sunBounce = triTransportAlbedo * (sunDirectional * sunVisible * clipAttenuation * sunInjectionScale);
-						const float3 emissiveBounce = emissiveContribution * emissiveInject * clipAttenuation * baseInjectionScale;
-						injected = baseDiffuse + sunBounce + emissiveBounce;
+						// Emissive routed to the max-accumulated source term below,
+						// NOT the coverage-weighted mean (see VoxelAccum).
+						injected = baseDiffuse + sunBounce;
+						emissiveSource = emissiveContribution * emissiveInject * clipAttenuation * baseInjectionScale;
 					}
 					else
 					{
-						injected += emissiveContribution * emissiveInject;
+						emissiveSource = emissiveContribution * emissiveInject;
 					}
 					// Motion damping to reduce visible flicker while clipmaps settle.
 					// Keep this subtle to avoid visible GI dimming while moving.
@@ -801,6 +810,13 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					InterlockedAdd(g_injectAccum[accumIdx].albW, (uint)round(triAlbedoW * kScale));
 					const float triOpacityOut = saturate(tri.radianceOpacity.a) * coverageOpacity;
 					InterlockedMax(g_injectAccum[accumIdx].opacityMax, (uint)round(triOpacityOut * kScale));
+					if (dot(emissiveSource, 1.0f.xxx) > 1e-5f)
+					{
+						const float3 emissiveClamped = LuminanceClamp(emissiveSource, 32.0f);
+						InterlockedMax(g_injectAccum[accumIdx].emiR, (uint)round(emissiveClamped.r * kScale));
+						InterlockedMax(g_injectAccum[accumIdx].emiG, (uint)round(emissiveClamped.g * kScale));
+						InterlockedMax(g_injectAccum[accumIdx].emiB, (uint)round(emissiveClamped.b * kScale));
+					}
 					if (g_giParams13.w > 0.5f)
 					{
 						const float3 momentBase = injectedClamped * (contributionW * kScale);

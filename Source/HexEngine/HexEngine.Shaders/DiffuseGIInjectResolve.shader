@@ -22,6 +22,7 @@
 		int l1xR; int l1xG; int l1xB;
 		int l1yR; int l1yG; int l1yB;
 		int l1zR; int l1zG; int l1zB;
+		uint emiR; uint emiG; uint emiB; // max-accumulated emissive source (undiluted)
 	};
 
 	Texture3D<float4> g_prevVoxelRadiance : register(t0);
@@ -125,6 +126,10 @@
 
 		const float invW = 1.0f / w;
 		float3 injected = float3((float)a.radR, (float)a.radG, (float)a.radB) * kInvScale * invW;
+		// Emissive source: max-accumulated, added UNDILUTED on top of the
+		// coverage-weighted mean - a thin neon strip lights its voxel at
+		// full strength no matter how much non-emissive geometry shares it.
+		injected += float3((float)a.emiR, (float)a.emiG, (float)a.emiB) * kInvScale;
 		float3 l1xInj = float3((float)a.l1xR, (float)a.l1xG, (float)a.l1xB) * kInvScale * invW;
 		float3 l1yInj = float3((float)a.l1yR, (float)a.l1yG, (float)a.l1yB) * kInvScale * invW;
 		float3 l1zInj = float3((float)a.l1zR, (float)a.l1zG, (float)a.l1zB) * kInvScale * invW;

@@ -3197,7 +3197,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		if (device == nullptr)
 			return false;
 
-		constexpr uint32_t kAccumStride = 18u * 4u; // VoxelAccum in the shaders
+		constexpr uint32_t kAccumStride = 21u * 4u; // VoxelAccum in the shaders (incl. max-accumulated emissive)
 		D3D11_BUFFER_DESC desc = {};
 		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
 		desc.ByteWidth = elementCount * kAccumStride;
