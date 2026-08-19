@@ -315,7 +315,11 @@
 		const float cosSun = dot(rayDir, sunDir);
 		const float isotropicPhase = 1.0f / (4.0f * PI);
 		const float phase = lerp(isotropicPhase, DualLobeHG(cosSun, g_cloudParams1.z), 0.85f) * g_cloudParams3.w;
-		const float3 ambientSky = lerp(cloudHorizonProbe.inscatter, cloudZenithProbe.inscatter, 0.30f) * g_cloudParams3.y;
+		// x1.6 inherent lift: clouds are the brightest ambient scatterers in
+		// a daytime scene, and the probe inscatter alone under-lit the
+		// undersides to a dirty grey-brown (user report). The strength cvar
+		// keeps its per-preset meaning on top of this.
+		const float3 ambientSky = lerp(cloudHorizonProbe.inscatter, cloudZenithProbe.inscatter, 0.35f) * (g_cloudParams3.y * 1.6f);
 		const float skyLuma = dot(ambientSky, float3(0.299f, 0.587f, 0.114f));
 		const float3 ambientNeutral = skyLuma.xxx;
 		const float3 ambientChromatic = lerp(ambientNeutral, ambientSky, saturate(g_cloudParams5.y));
@@ -373,12 +377,14 @@
 				const float height01 = saturate((samplePos.y - boundsMin.y) / max(1.0f, boundsMax.y - boundsMin.y));
 				const float3 heightTint = lerp(bottomTint, topTint, smoothstep(0.08f, 0.92f, height01));
 				const float3 stylizedTint = lerp(1.0f.xxx, heightTint, g_cloudParams4.w);
-				const float localAO = exp(-density * (0.8f + 1.8f * saturate(g_cloudParams5.w)));
+				// Softened (was 0.8 + 1.8x): stacked with coreDarken this
+				// halved the underside ambient - the dark-brown base look.
+				const float localAO = exp(-density * (0.5f + 1.0f * saturate(g_cloudParams5.w)));
 				const float aoTerm = lerp(1.0f, localAO, saturate(g_cloudParams5.w));
 				const float densityAhead = SampleCloudDensity(samplePos + rayDir * diffuseProbeDistance * 0.7f, boundsMin, boundsMax, windOffset);
 				const float edgeFactor = saturate(abs(density - densityAhead) * 2.4f);
 				const float forwardGlow = pow(viewToSun, 4.0f) * saturate(1.0f - density * 0.95f) * (0.25f + 0.75f * shadowAmount);
-				const float coreDarken = lerp(1.0f, 0.72f, saturate(density * 0.9f));
+				const float coreDarken = lerp(1.0f, 0.85f, saturate(density * 0.9f));
 				const float edgeBoost = 1.0f + edgeFactor * 0.24f;
 				const float3 directLight = ((lightTrans * powder * phase * cloudSunColour + silverLining * cloudSunColour * (0.22f + 0.48f * viewToSun)) * edgeBoost + cloudSunColour * forwardGlow * g_cloudParams4.x * 0.22f) * multiScatter * directionalDiffuse;
 				const float lightningScatterPhase = 0.35f + 0.65f * saturate(dot(rayDir, lightningDir) * 0.5f + 0.5f);
@@ -396,7 +402,7 @@
 		}
 
 		// Keep dense cores from collapsing to pure black under aggressive shadowing.
-		cloudLight = max(cloudLight, ambientShaded * (1.0f - transmittance) * 0.12f);
+		cloudLight = max(cloudLight, ambientShaded * (1.0f - transmittance) * 0.20f);
 
 		const float alpha = saturate(1.0f - transmittance);
 		if (alpha <= 1e-4f)
