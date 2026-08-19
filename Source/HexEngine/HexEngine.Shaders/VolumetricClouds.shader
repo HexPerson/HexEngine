@@ -152,7 +152,15 @@
 		// could produce an overcast.
 		const float coverage = saturate(g_cloudParams0.y);
 		const float wm = WeatherCoverage(worldPos.xz, windOffset.xz);
-		const float columnCoverage = saturate((wm - (1.0f - coverage * 1.04f)) / max(0.06f, 1.0f - coverage * 0.85f));
+		// HONEST coverage mapping. The previous remap biased upward (0.80
+		// nominal rendered ~95% cover). The 3-octave value fbm spans roughly
+		// [0.2, 0.8] around 0.5, so the cvar maps to a quantile-ish
+		// threshold across that range: 0.5 = about half the sky, 0.8 = heavy
+		// cover with real breaks, 1.0 = closed deck. The smoothstep band
+		// keeps cloud boundaries soft instead of every column snapping to
+		// full strength.
+		const float threshold = lerp(0.80f, 0.16f, coverage);
+		const float columnCoverage = smoothstep(threshold, threshold + 0.24f, wm);
 		if (columnCoverage <= 0.002f)
 			return 0.0f;
 
