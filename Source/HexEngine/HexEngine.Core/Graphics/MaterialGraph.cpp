@@ -436,12 +436,30 @@ namespace HexEngine
 			graph.nodes.push_back(std::move(node));
 		};
 
+		// Registers a named parameter definition alongside a parameter node.
+		// Required whenever a node gets a parameterName: the compiler treats a
+		// named parameter with no matching graph.parameters entry as the error
+		// "Parameter 'X' is not defined". Named parameters are what make a
+		// promoted graph INSTANTIABLE - instance materials can only override
+		// named parameters, so the old promote output (all names empty) produced
+		// parents whose instances were completely uneditable.
+		auto defineParameter = [&graph](const std::string& name, MaterialGraphValueType type, const math::Vector4& vec, const fs::path& texPath)
+		{
+			MaterialGraphParameter p;
+			p.name = name;
+			p.valueType = type;
+			p.vectorValue = vec;
+			p.texturePath = texPath;
+			p.isExposed = true;
+			graph.parameters.push_back(std::move(p));
+		};
+
 		// Builds a TextureParameter (+ optional NormalMap or TextureSample) chain
 		// for one of the standard material's bound texture slots. Returns the node
 		// id whose "Out" pin should be wired to the corresponding output node, or
 		// empty if the material has no texture bound for that slot (caller falls
 		// back to a Vector/Scalar constant in that case).
-		auto addTextureChain = [&](MaterialTexture textureType, const char* paramId, const char* sampleId, const char* label, const math::Vector2& pos, bool useNormalMap) -> std::string
+		auto addTextureChain = [&](MaterialTexture textureType, const char* paramId, const char* sampleId, const char* label, const char* paramName, const math::Vector2& pos, bool useNormalMap) -> std::string
 		{
 			const auto texture = material.GetTexture(textureType);
 			if (!texture)
@@ -449,7 +467,9 @@ namespace HexEngine
 
 			auto textureNode = makeNode(paramId, MaterialGraphNodeType::TextureParameter, label, pos);
 			textureNode.texturePath = texture->GetFileSystemPath();
+			textureNode.parameterName = paramName;
 			textureNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Output });
+			defineParameter(paramName, MaterialGraphValueType::Texture2D, math::Vector4::One, textureNode.texturePath);
 			graph.nodes.push_back(std::move(textureNode));
 
 			if (useNormalMap)
@@ -480,7 +500,7 @@ namespace HexEngine
 			material._properties.emissiveColour.y * material._properties.emissiveColour.w,
 			material._properties.emissiveColour.z * material._properties.emissiveColour.w);
 
-		std::string baseColorSource = addTextureChain(MaterialTexture::Albedo, "node_albedo_tex", "node_albedo_sample", "Albedo Texture", math::Vector2(40.0f, 60.0f), false);
+		std::string baseColorSource = addTextureChain(MaterialTexture::Albedo, "node_albedo_tex", "node_albedo_sample", "Albedo Texture", "AlbedoTexture", math::Vector2(40.0f, 60.0f), false);
 		if (baseColorSource.empty())
 		{
 			addVectorConstant("node_albedo", "Base Color", math::Vector2(80.0f, 80.0f), material._properties.diffuseColour);
@@ -495,16 +515,16 @@ namespace HexEngine
 		// applied per-pixel) - which a (0.5, 0.5, 1.0) flat-tangent value
 		// happens to approximate, but any user who edits the constant gets
 		// instant lighting breakage. Disconnected = "use the surface".
-		const std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", math::Vector2(40.0f, 150.0f), true);
+		const std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", "NormalTexture", math::Vector2(40.0f, 150.0f), true);
 
-		std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", math::Vector2(40.0f, 230.0f), false);
+		std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", "RoughnessTexture", math::Vector2(40.0f, 230.0f), false);
 		if (roughnessSource.empty())
 		{
 			addScalarConstant("node_roughness", "Roughness", math::Vector2(80.0f, 240.0f), material._properties.roughnessFactor);
 			roughnessSource = "node_roughness";
 		}
 
-		std::string metallicSource = addTextureChain(MaterialTexture::Metallic, "node_metallic_tex", "node_metallic_sample", "Metallic Texture", math::Vector2(40.0f, 310.0f), false);
+		std::string metallicSource = addTextureChain(MaterialTexture::Metallic, "node_metallic_tex", "node_metallic_sample", "Metallic Texture", "MetallicTexture", math::Vector2(40.0f, 310.0f), false);
 		if (metallicSource.empty())
 		{
 			addScalarConstant("node_metallic", "Metallic", math::Vector2(80.0f, 320.0f), material._properties.metallicFactor);
@@ -521,15 +541,23 @@ namespace HexEngine
 		// even when the author never intended emission. We now mirror the standard
 		// shader exactly: TextureSample * (tint.rgb * strength) -> Emissive.
 		std::string emissiveSource;
-		const std::string emissiveTextureSourceId = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", math::Vector2(40.0f, 390.0f), false);
+		const std::string emissiveTextureSourceId = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", "EmissionTexture", math::Vector2(40.0f, 390.0f), false);
 		if (!emissiveTextureSourceId.empty())
 		{
-			// Tint+strength constant; equivalent to g_material.emissiveColour.rgb *
+			// Tint+strength; equivalent to g_material.emissiveColour.rgb *
 			// emissiveColour.a in DefaultPixel.shader. Stored as a Vector4 with
 			// alpha=1 so the Multiply downstream doesn't accidentally zero the .a.
-			addVectorConstant("node_emissive_tint", "Emission Tint",
-				math::Vector2(40.0f, 420.0f),
-				math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+			// A NAMED VectorParameter (not a constant) so instances can override
+			// emissive tint/strength per instance - the flagship instancing use
+			// case ("same base material, this one glows").
+			{
+				auto tintNode = makeNode("node_emissive_tint", MaterialGraphNodeType::VectorParameter, "Emission Tint", math::Vector2(40.0f, 420.0f));
+				tintNode.parameterName = "EmissiveTint";
+				tintNode.vectorValue = math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f);
+				tintNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+				defineParameter("EmissiveTint", MaterialGraphValueType::Vector4, tintNode.vectorValue, {});
+				graph.nodes.push_back(std::move(tintNode));
+			}
 
 			auto multiplyNode = makeNode("node_emissive_mul", MaterialGraphNodeType::Multiply, "Emission * Tint", math::Vector2(260.0f, 405.0f));
 			multiplyNode.inputPins.push_back({ "A", "A", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
@@ -543,11 +571,17 @@ namespace HexEngine
 		}
 		else
 		{
-			addVectorConstant("node_emissive", "Emissive", math::Vector2(80.0f, 400.0f), math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+			// Named parameter for the same reason as EmissiveTint above.
+			auto emissiveNode = makeNode("node_emissive", MaterialGraphNodeType::VectorParameter, "Emissive", math::Vector2(80.0f, 400.0f));
+			emissiveNode.parameterName = "EmissiveColor";
+			emissiveNode.vectorValue = math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f);
+			emissiveNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+			defineParameter("EmissiveColor", MaterialGraphValueType::Vector4, emissiveNode.vectorValue, {});
+			graph.nodes.push_back(std::move(emissiveNode));
 			emissiveSource = "node_emissive";
 		}
 
-		std::string opacitySource = addTextureChain(MaterialTexture::Opacity, "node_opacity_tex", "node_opacity_sample", "Opacity Texture", math::Vector2(40.0f, 470.0f), false);
+		std::string opacitySource = addTextureChain(MaterialTexture::Opacity, "node_opacity_tex", "node_opacity_sample", "Opacity Texture", "OpacityTexture", math::Vector2(40.0f, 470.0f), false);
 		if (opacitySource.empty())
 		{
 			addScalarConstant("node_opacity", "Opacity", math::Vector2(80.0f, 480.0f), 1.0f);

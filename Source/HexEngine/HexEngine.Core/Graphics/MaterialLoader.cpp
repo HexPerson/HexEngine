@@ -74,6 +74,17 @@ namespace HexEngine
 			return nullptr;
 		}
 
+		// Paths/FS must be set BEFORE ParseJson. The ResourceSystem assigns them
+		// after this loader returns, but ParseJson already needs them: the
+		// graph-instance apply and the stale-graph auto-recompile both call
+		// ResolveGeneratedShaderDirectory(material), which reads the owning
+		// filesystem / absolute path. With both unset every instance material
+		// failed its load-time compile with "Could not resolve a generated
+		// shader output directory" and silently kept the stale baked shader
+		// from the .hmat. (ResourceSystem re-assigns the same values later -
+		// harmless.)
+		material->SetPaths(absolutePath, fileSystem);
+
 		ParseJson(&file, matData, material);
 
 		_loadedMaterials[absolutePath] = material;

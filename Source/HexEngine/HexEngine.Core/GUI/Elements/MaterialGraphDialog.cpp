@@ -1362,15 +1362,29 @@ namespace HexEngine
 
 	void MaterialGraphDialog::WriteInstanceOverrideFromNode(const MaterialGraphNode& node)
 	{
-		if (!_instanceMode || _material == nullptr || node.parameterName.empty())
+		if (!_instanceMode || _material == nullptr)
 			return;
 
 		const bool isParameterNode =
 			node.nodeType == MaterialGraphNodeType::ScalarParameter ||
 			node.nodeType == MaterialGraphNodeType::VectorParameter ||
 			node.nodeType == MaterialGraphNodeType::TextureParameter;
-		if (!isParameterNode)
+
+		// An instance can only persist edits as overrides of NAMED parameter
+		// nodes. Anything else (plain constants, unnamed parameters - which is
+		// everything in a graph promoted by the old converter) silently
+		// evaporated on save: the edit went into the throwaway parent-graph
+		// view copy and Apply wrote an empty override list. Say so loudly
+		// instead of letting the artist believe the edit stuck.
+		if (!isParameterNode || node.parameterName.empty())
+		{
+			SetStatusText(std::format(
+				L"'{}' is not a named parameter - this edit will NOT be saved with the instance. "
+				L"Name it as a parameter in the parent graph, or edit the parent material.",
+				s2ws(node.displayName.empty() ? node.id : node.displayName)),
+				true);
 			return;
+		}
 
 		auto& overrides = _material->_graphInstance.overrides;
 		auto it = std::find_if(overrides.begin(), overrides.end(),
