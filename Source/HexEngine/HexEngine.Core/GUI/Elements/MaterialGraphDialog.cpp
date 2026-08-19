@@ -218,8 +218,22 @@ namespace HexEngine
 											}),
 										_graph->connections.end());
 
+									// Keep graph.outputs in sync for BOTH output layouts:
+									// legacy output_* stub nodes map by node id, the unified
+									// PbrOutput node maps by pin id (pin id == semantic name).
+									// Missing the PbrOutput case left a stale binding behind,
+									// so the compiler kept using the old source after the
+									// artist visibly deleted the wire.
 									MaterialGraphOutputSemantic semantic;
-									if (TryGetOutputSemanticByNodeId(pinHit.nodeId, semantic))
+									bool affectsBinding = TryGetOutputSemanticByNodeId(pinHit.nodeId, semantic);
+									if (!affectsBinding)
+									{
+										const auto* toNode = _graph->FindNode(pinHit.nodeId);
+										affectsBinding = toNode != nullptr &&
+											toNode->nodeType == MaterialGraphNodeType::PbrOutput &&
+											MaterialGraph::ParseOutputSemantic(pinHit.pinId, semantic);
+									}
+									if (affectsBinding)
 									{
 										for (auto& output : _graph->outputs)
 										{
@@ -249,6 +263,10 @@ namespace HexEngine
 							}
 							return true;
 						}
+
+						// Any non-pin click drops an in-progress connection drag so the
+						// ghost wire doesn't stick to the cursor forever.
+						_pendingConnection = {};
 
 						const auto* node = FindNodeAt(data->MouseDown.xpos, data->MouseDown.ypos);
 						if (node != nullptr)
@@ -484,8 +502,21 @@ namespace HexEngine
 				connection.toPinId = inputPin.pinId;
 				_graph->connections.push_back(std::move(connection));
 
+				// Update graph.outputs for both output layouts (legacy output_*
+				// stubs by node id, unified PbrOutput by pin id). Without the
+				// PbrOutput case, a wire dragged into the PBR Output node changed
+				// `connections` but not the binding the compiler reads, so the new
+				// wiring did nothing until the dialog was reopened.
 				MaterialGraphOutputSemantic semantic;
-				if (TryGetOutputSemanticByNodeId(inputPin.nodeId, semantic))
+				bool affectsBinding = TryGetOutputSemanticByNodeId(inputPin.nodeId, semantic);
+				if (!affectsBinding)
+				{
+					const auto* toNode = _graph->FindNode(inputPin.nodeId);
+					affectsBinding = toNode != nullptr &&
+						toNode->nodeType == MaterialGraphNodeType::PbrOutput &&
+						MaterialGraph::ParseOutputSemantic(inputPin.pinId, semantic);
+				}
+				if (affectsBinding)
 				{
 					for (auto& output : _graph->outputs)
 					{
@@ -547,7 +578,16 @@ namespace HexEngine
 				const auto selected = _selectedNodeId;
 				if (selected.empty())
 					return;
-				if (IsMaterialOutputNodeId(selected))
+				// Refuse to delete terminal output nodes - both the legacy output_*
+				// stubs and the unified PbrOutput node. The context menu has no way
+				// to re-add a PbrOutput, so deleting it used to permanently orphan
+				// the graph until the dialog was closed and reopened.
+				const auto* selectedNode = _graph->FindNode(selected);
+				const bool isOutputNode = IsMaterialOutputNodeId(selected) ||
+					(selectedNode != nullptr &&
+						(selectedNode->nodeType == MaterialGraphNodeType::Output ||
+							selectedNode->nodeType == MaterialGraphNodeType::PbrOutput));
+				if (isOutputNode)
 				{
 					_owner->SetStatusText(L"Material output nodes cannot be deleted.", true);
 					return;
@@ -650,7 +690,15 @@ namespace HexEngine
 			void AddNode(MaterialGraphNodeType type, const Point& mousePos)
 			{
 				MaterialGraphNode node;
-				node.id = std::format("node_{}_{}", (int32_t)type, _nodeIdCounter++);
+				// _nodeIdCounter resets to 1 whenever the dialog reopens, but the
+				// loaded graph may already contain ids from earlier sessions. Keep
+				// bumping until the id is actually free - a duplicate id fails
+				// validation ("Duplicate node id") and corrupts hit-testing /
+				// deletion, which both match nodes by id.
+				do
+				{
+					node.id = std::format("node_{}_{}", (int32_t)type, _nodeIdCounter++);
+				} while (_graph->FindNode(node.id) != nullptr);
 				node.nodeType = type;
 				node.displayName = MaterialGraph::NodeTypeToString(type);
 				const auto abs = GetAbsolutePosition();
@@ -1648,6 +1696,11 @@ namespace HexEngine
 			return false;
 
 		SyncGraphParametersFromNodes();
+		// Re-derive graph.outputs from the PbrOutput node's current pin wiring so
+		// the compiler always sees what's on the canvas (connect/disconnect update
+		// the bindings too, but this is the authoritative sync before compile and
+		// before SaveAndApply serializes the outputs array).
+		_material->_graph.EnsureDefaultOutputBindings();
 		const auto compileResult = MaterialGraphCompiler::CompileToMaterial(_material->_graph, *_material, nullptr);
 		UpdateCompileMessages(compileResult);
 		if (!compileResult.success)
