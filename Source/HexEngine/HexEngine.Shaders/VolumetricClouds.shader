@@ -233,7 +233,16 @@
 		const float2 uv = input.texcoord;
 		float pixelDepth = GBUFFER_NORMAL.Sample(g_pointSampler, uv).w;
 		if (pixelDepth <= 0.0f || pixelDepth == -1.0f)
-			pixelDepth = g_frustumDepths[3];
+		{
+			// SKY pixel: no scene occluder. The old fallback clamped the
+			// trace to g_frustumDepths[3] (the far shadow-cascade depth, a
+			// couple of km) - which silently terminated the cloud deck at
+			// that range regardless of the AABB, reading as a blob overhead
+			// that never reaches the horizon. March to the cloud system's own
+			// distance limit instead (maxTraceDistance is still clamped by
+			// g_cloudParams0.w below).
+			pixelDepth = 1e9f;
+		}
 
 		const float3 boundsMin = g_cloudBoundsMin.xyz;
 		const float3 boundsMax = g_cloudBoundsMax.xyz;
