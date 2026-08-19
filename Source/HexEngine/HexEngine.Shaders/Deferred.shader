@@ -114,6 +114,40 @@
 		return float2(dstToBox, dstInsideBox);
 	}
 
+	float CloudWmHash12(float2 p)
+	{
+		const float h = dot(p, float2(127.1f, 311.7f));
+		return frac(sin(h) * 43758.5453123f);
+	}
+
+	float CloudWmValueNoise2(float2 p)
+	{
+		const float2 pi = floor(p);
+		const float2 pf = frac(p);
+		const float2 w = pf * pf * (3.0f - 2.0f * pf);
+		const float n00 = CloudWmHash12(pi);
+		const float n10 = CloudWmHash12(pi + float2(1.0f, 0.0f));
+		const float n01 = CloudWmHash12(pi + float2(0.0f, 1.0f));
+		const float n11 = CloudWmHash12(pi + float2(1.0f, 1.0f));
+		return lerp(lerp(n00, n10, w.x), lerp(n01, n11, w.x), w.y);
+	}
+
+	float CloudWmWeatherCoverage(float2 xz, float2 windXz)
+	{
+		const float2 p = (xz + windXz * 220.0f) * (1.0f / 1400.0f);
+		const float fbm =
+			CloudWmValueNoise2(p) * 0.55f +
+			CloudWmValueNoise2(p * 2.3f + 17.1f.xx) * 0.30f +
+			CloudWmValueNoise2(p * 5.1f + 41.7f.xx) * 0.15f;
+		return saturate(fbm);
+	}
+
+	// MUST stay identical to SampleCloudDensity in VolumetricClouds.shader -
+	// this is a hand-duplicated copy (differing only in texture names). It
+	// has now diverged TWICE (the old inverted erosion curve, then the whole
+	// 2026-08 weather-map rework) - both times the symptom was ground cloud
+	// shadows computed from a density field that no longer matched the
+	// clouds being drawn. If you touch one, touch both.
 	float SampleCloudDensity(float3 worldPos, float3 boundsMin, float3 boundsMax, float3 windOffset)
 	{
 		const float3 boundsSize = max(boundsMax - boundsMin, 1e-3f.xxx);
@@ -122,29 +156,36 @@
 		if (any(localUVW < 0.0f.xxx) || any(localUVW > 1.0f.xxx))
 			return 0.0f;
 
+		const float coverage = saturate(g_cloudParams0.y);
+		const float wm = CloudWmWeatherCoverage(worldPos.xz, windOffset.xz);
+		const float threshold = lerp(0.80f, 0.16f, coverage);
+		const float columnCoverage = smoothstep(threshold, threshold + 0.24f, wm);
+		if (columnCoverage <= 0.002f)
+			return 0.0f;
+
 		const float shape = g_cloudShapeNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.x + windOffset, 0.0f).r;
 		const float detail = g_cloudDetailNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r;
-		const float weather = g_cloudShapeNoise.SampleLevel(g_mirrorSampler, worldPos * (g_cloudParams2.x * 0.32f) + windOffset * 0.45f, 0.0f).r;
 
 		const float height = saturate(localUVW.y);
-		const float heightMask = smoothstep(0.03f, 0.22f, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
-		const float verticalCore = smoothstep(0.05f, 0.55f, height) * (1.0f - smoothstep(0.62f, 0.96f, height));
+		const float baseLift = (1.0f - wm) * 0.26f + (1.0f - shape) * 0.12f;
+		const float heightMask = smoothstep(0.03f + baseLift, 0.24f + baseLift, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
+		const float coreTop = lerp(0.62f, 0.90f, columnCoverage);
+		const float verticalCore = smoothstep(0.05f + baseLift * 0.8f, lerp(0.55f, 0.35f, columnCoverage) + baseLift * 0.5f, height) * (1.0f - smoothstep(coreTop, 0.98f, height));
 
-		const float coverage = saturate(g_cloudParams0.y);
-		const float weatherShift = (weather - 0.5f) * 0.35f;
-		const float coverageThreshold = saturate(1.0f - coverage + weatherShift);
-		float cloud = saturate((shape - coverageThreshold) / max(0.001f, coverage));
-		// MUST stay identical to SampleCloudDensity in VolumetricClouds.shader - this is a
-		// hand-duplicated copy (the two differ only in texture/sampler names), and it had
-		// been left on the old inverted erosion curve after the visible-cloud version was
-		// fixed. The result was world cloud shadows computed from a different density field
-		// than the clouds actually being drawn: shadows appeared where there was no cloud.
+		float cloud = columnCoverage * heightMask * verticalCore;
+		const float shapeErode = (1.0f - shape) * lerp(0.62f, 0.30f, columnCoverage);
+		cloud = saturate((cloud - shapeErode) / max(0.05f, 1.0f - shapeErode));
 		const float erosionByHeight = lerp(0.55f, 1.45f, smoothstep(0.25f, 0.95f, height));
-		cloud = saturate(cloud - (1.0f - detail) * g_cloudParams0.z * erosionByHeight);
-		const float billow = saturate(1.0f + (detail - 0.5f) * 0.28f + (weather - 0.5f) * 0.36f);
-		const float densityShape = lerp(cloud * cloud, cloud, 0.55f);
+		const float detailErode = saturate((1.0f - detail) * g_cloudParams0.z * erosionByHeight);
+		cloud = saturate((cloud - detailErode) / max(0.05f, 1.0f - detailErode));
 
-		return min(densityShape * heightMask * verticalCore * billow * g_cloudParams0.x, 2.0f);
+		const float structure =
+			lerp(0.42f, 1.0f, shape) *
+			lerp(0.68f, 1.05f, detail) *
+			lerp(0.78f, 1.0f, wm);
+		const float densityShape = lerp(cloud * cloud, cloud, 0.55f) * structure;
+
+		return min(densityShape * g_cloudParams0.x, 2.0f);
 	}
 
 	// SampleSkyEnv's one caller moved into EnvMapCommon::EvaluateEnvSpecular, which
@@ -171,15 +212,20 @@
 
 		const float3 windOffset = g_cloudWindOffset.xyz;
 
-		const float invCloudHeight = rcp(max(100.0f, boundsMax.y - boundsMin.y));
-		const float stepLen = max(1.0f, hit.y / (float)shadowSteps);
+		// Physical per-metre extinction + span clamp, matching the cloud
+		// render marches (see VolumetricClouds.shader): horizon-scale bounds
+		// can put kilometres of slab above a pixel, and light beyond ~900m of
+		// cloud is fully extinct anyway.
+		const float invCloudHeight = 0.012f;
+		const float shadowSpan = min(hit.y, 900.0f);
+		const float stepLen = max(1.0f, shadowSpan / (float)shadowSteps);
 
 		float opticalDepth = 0.0f;
 		float travelled = 0.0f;
 		[loop]
 		for (int i = 0; i < shadowSteps; ++i)
 		{
-			if (travelled >= hit.y)
+			if (travelled >= shadowSpan)
 				break;
 
 			const float3 samplePos = worldPos + sunDir * (hit.x + travelled);
