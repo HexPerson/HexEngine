@@ -811,7 +811,13 @@ namespace HexEngine
 		_statusLine = new LineEdit(this, Point(10, topOffset), Point(size.x - 220, 20), L"Status");
 		_statusLine->SetDoesCallbackWaitForReturn(false);
 		_statusLine->SetValue(L"Ready");
-		_statusLine->DisableRecursive();
+		// Read-only, NOT DisableRecursive: Disable() means "don't render" in
+		// this toolkit (UIManager::RenderElement skips disabled elements), so
+		// the status line - the ONLY compile success/failure feedback - was
+		// never drawn at all. Compile failures looked like the button doing
+		// nothing. EnableInput(false) keeps it visible but non-editable
+		// (SetHasInputFocus refuses focus when input is disabled).
+		_statusLine->EnableInput(false);
 
 		new Button(this, Point(size.x - 200, topOffset - 2), Point(90, 24), L"Compile", [this](Button*) { return CompileOnly(); });
 		new Button(this, Point(size.x - 104, topOffset - 2), Point(90, 24), L"Apply", [this](Button*) { return SaveAndApply(); });
@@ -832,7 +838,7 @@ namespace HexEngine
 
 		_selectedNodeLabel = new LineEdit(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 20), L"Selected Node");
 		_selectedNodeLabel->SetDoesCallbackWaitForReturn(false);
-		_selectedNodeLabel->DisableRecursive();
+		_selectedNodeLabel->EnableInput(false); // read-only but visible (Disable = hidden)
 
 		_parameterName = new LineEdit(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 20), L"Parameter Name");
 		_parameterName->SetOnInputFn([this](LineEdit*, const std::wstring& value)
@@ -1159,7 +1165,9 @@ namespace HexEngine
 				Point(_properties->GetSize().x - 20, 20),
 				i == 0 ? L"Compile Messages" : L"");
 			_compileMessages[i]->SetDoesCallbackWaitForReturn(false);
-			_compileMessages[i]->DisableRecursive();
+			// Read-only but VISIBLE - DisableRecursive skipped rendering, so
+			// compile errors/warnings written here were never shown to anyone.
+			_compileMessages[i]->EnableInput(false);
 		}
 
 		RebuildPropertyPanel();
