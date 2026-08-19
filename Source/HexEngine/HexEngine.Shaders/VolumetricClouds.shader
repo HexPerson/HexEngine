@@ -62,6 +62,35 @@
 		return frac(sin(h) * 43758.5453123f);
 	}
 
+	float ValueNoise2(float2 p)
+	{
+		const float2 pi = floor(p);
+		const float2 pf = frac(p);
+		const float2 w = pf * pf * (3.0f - 2.0f * pf);
+		const float n00 = Hash12(pi);
+		const float n10 = Hash12(pi + float2(1.0f, 0.0f));
+		const float n01 = Hash12(pi + float2(0.0f, 1.0f));
+		const float n11 = Hash12(pi + float2(1.0f, 1.0f));
+		return lerp(lerp(n00, n10, w.x), lerp(n01, n11, w.x), w.y);
+	}
+
+	// 2D WEATHER MAP - the root fix for clouds never filling the sky. Cloud
+	// PRESENCE is decided per XZ column by this horizontal field, so
+	// placement is altitude-independent and the coverage cvar maps ~linearly
+	// onto actual sky fraction (1.0 = a true overcast is reachable). The 3D
+	// Perlin-Worley noises only SCULPT the shapes the map dictates. Advected
+	// by the same integrated wind offset as the shape noise, at a slower
+	// rate - weather systems drift slower than the cloud tops churn.
+	float WeatherCoverage(float2 xz, float2 windXz)
+	{
+		const float2 p = (xz + windXz * 220.0f) * (1.0f / 1400.0f); // ~1.4 km systems
+		const float fbm =
+			ValueNoise2(p) * 0.55f +
+			ValueNoise2(p * 2.3f + 17.1f.xx) * 0.30f +
+			ValueNoise2(p * 5.1f + 41.7f.xx) * 0.15f;
+		return saturate(fbm);
+	}
+
 	float2 RayBoxDist(float3 boundsMin, float3 boundsMax, float3 rayOrigin, float3 rayDir)
 	{
 		float3 safeDir = rayDir;
@@ -116,26 +145,39 @@
 		if (any(localUVW < 0.0f.xxx) || any(localUVW > 1.0f.xxx))
 			return 0.0f;
 
+		// Column presence from the 2D weather map (see WeatherCoverage). The
+		// old path thresholded the 3D shape noise directly, so whether a
+		// cloud existed depended on what that noise contained at this
+		// position AND altitude - coverage was accidental and no cvar value
+		// could produce an overcast.
+		const float coverage = saturate(g_cloudParams0.y);
+		const float wm = WeatherCoverage(worldPos.xz, windOffset.xz);
+		const float columnCoverage = saturate((wm - (1.0f - coverage * 1.04f)) / max(0.06f, 1.0f - coverage * 0.85f));
+		if (columnCoverage <= 0.002f)
+			return 0.0f;
+
 		const float shape = g_shapeNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.x + windOffset, 0.0f).r;
 		const float detail = g_detailNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r;
-		const float weather = g_shapeNoise.SampleLevel(g_mirrorSampler, worldPos * (g_cloudParams2.x * 0.32f) + windOffset * 0.45f, 0.0f).r;
 
 		const float height = saturate(localUVW.y);
 		const float heightMask = smoothstep(0.03f, 0.22f, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
-		const float verticalCore = smoothstep(0.05f, 0.55f, height) * (1.0f - smoothstep(0.62f, 0.96f, height));
+		// Fuller weather columns build TALLER clouds: widen the vertical core
+		// with coverage so an overcast reads as a deck, scattered as puffs.
+		const float coreTop = lerp(0.62f, 0.90f, columnCoverage);
+		const float verticalCore = smoothstep(0.05f, lerp(0.55f, 0.35f, columnCoverage), height) * (1.0f - smoothstep(coreTop, 0.98f, height));
 
-		const float coverage = saturate(g_cloudParams0.y);
-		const float weatherShift = (weather - 0.5f) * 0.35f;
-		const float coverageThreshold = saturate(1.0f - coverage + weatherShift);
-		float cloud = saturate((shape - coverageThreshold) / max(0.001f, coverage));
-		// Cumulus erode wispy at the TOP and stay dense/round at the base, so
-		// erosion must RISE with height (the previous curve had it backwards).
+		// 3D Perlin-Worley SCULPTS the column the map dictates: shape carves
+		// the cauliflower masses (less aggressively where the column is
+		// full), detail erodes edges - rising with height so cumulus stay
+		// dense at the base and wisp at the top.
+		float cloud = columnCoverage * heightMask * verticalCore;
+		cloud = saturate(cloud - (1.0f - shape) * lerp(0.62f, 0.30f, columnCoverage));
 		const float erosionByHeight = lerp(0.55f, 1.45f, smoothstep(0.25f, 0.95f, height));
 		cloud = saturate(cloud - (1.0f - detail) * g_cloudParams0.z * erosionByHeight);
-		const float billow = saturate(1.0f + (detail - 0.5f) * 0.28f + (weather - 0.5f) * 0.36f);
+		const float billow = saturate(1.0f + (detail - 0.5f) * 0.28f + (wm - 0.5f) * 0.36f);
 		const float densityShape = lerp(cloud * cloud, cloud, 0.55f);
 
-		return min(densityShape * heightMask * verticalCore * billow * g_cloudParams0.x, 2.0f);
+		return min(densityShape * billow * g_cloudParams0.x, 2.0f);
 	}
 
 	float MarchToLight(float3 samplePos, float3 boundsMin, float3 boundsMax, float3 windOffset, float3 sunDir, int lightSteps)
@@ -144,7 +186,11 @@
 		if (lightHit.y <= 0.0f)
 			return 1.0f;
 
-		const float stepLen = max(1.0f, lightHit.y / max(1, lightSteps));
+		// Horizon-scale bounds can put kilometres of slab above a sample;
+		// light beyond ~900m of cloud is fully extinct anyway, and without
+		// this clamp the light steps stretch into uselessness.
+		const float lightSpan = min(lightHit.y, 900.0f);
+		const float stepLen = max(1.0f, lightSpan / max(1, lightSteps));
 		const float invCloudHeight = rcp(max(100.0f, boundsMax.y - boundsMin.y));
 		float travelled = 0.0f;
 		float opticalDepth = 0.0f;
@@ -152,7 +198,7 @@
 		[loop]
 		for (int i = 0; i < lightSteps; ++i)
 		{
-			if (travelled >= lightHit.y)
+			if (travelled >= lightSpan)
 				break;
 
 			const float3 p = samplePos + sunDir * travelled;
@@ -239,6 +285,11 @@
 		float transmittance = 1.0f;
 		float3 cloudLight = 0.0f.xxx;
 
+		// PROGRESSIVE stepping for the horizon-scale domain: uniform steps
+		// over a 10km+ trace either mush the near field or starve the step
+		// budget. Steps grow with distance - full detail overhead, coarse
+		// (but still sampled) toward the horizon deck.
+		const float maxDist = max(1.0f, g_cloudParams0.w);
 		float travelled = baseStep * jitter;
 		[loop]
 		for (int i = 0; i < viewSteps; ++i)
@@ -246,6 +297,7 @@
 			if (travelled >= maxTraceDistance)
 				break;
 
+			const float stepLenView = baseStep * clamp(1.0f + (entryDist + travelled) * 0.0011f, 1.0f, 7.0f);
 			const float3 samplePos = eyePos + rayDir * (entryDist + travelled);
 			const float density = SampleCloudDensity(samplePos, boundsMin, boundsMax, windOffset);
 
@@ -255,7 +307,10 @@
 				const float shadowAmount = 1.0f - lightTrans;
 				const float viewToSun = saturate(dot(rayDir, sunDir));
 				const float powder = 1.0f + g_cloudParams1.y * (1.0f - lightTrans);
-				const float scatter = density * baseStep * invCloudHeight * transmittance;
+				// Soft distance fade toward the trace limit - the horizon deck
+				// dissolves into the atmosphere instead of ending at a wall.
+				const float distanceFade = 1.0f - smoothstep(0.70f, 1.0f, (entryDist + travelled) / maxDist);
+				const float scatter = density * stepLenView * invCloudHeight * transmittance * distanceFade;
 				const float diffuseProbeDistance = max(1.0f, baseStep * 0.75f);
 				const float densityTowardSun = SampleCloudDensity(samplePos + sunDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
 				const float derivativeDiffuse = saturate((density - densityTowardSun) * 2.25f + 0.12f);
@@ -287,12 +342,12 @@
 				const float3 ambientLight = (ambientShaded * (0.35f + shadowAmount * 0.65f) + lightningColour * (0.08f + 0.14f * lightningEdge)) * (1.0f + shadowAmount * 0.25f * g_cloudParams4.z) * aoTerm * coreDarken;
 				cloudLight += scatter * (directLight + ambientLight + lightningLight) * stylizedTint;
 
-				transmittance *= exp(-density * baseStep * invCloudHeight * g_cloudParams3.x);
+				transmittance *= exp(-density * stepLenView * invCloudHeight * g_cloudParams3.x * distanceFade);
 				if (transmittance < 0.01f)
 					break;
 			}
 
-			travelled += baseStep;
+			travelled += stepLenView;
 		}
 
 		// Keep dense cores from collapsing to pure black under aggressive shadowing.
