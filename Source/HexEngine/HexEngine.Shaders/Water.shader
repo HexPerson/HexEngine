@@ -590,9 +590,18 @@
 			// rest: patch cores fill dense while edges dissolve into wisps of
 			// surviving filament. Drift rates are fixed (not wind-coupled) so
 			// weather changes never teleport the pattern.
-			const float2 wp = input.positionWS.xz;
-			const float coarseF1 = FoamWorleyF1(wp * 0.55f + float2(g_time * 0.045f, g_time * 0.028f), g_time * 0.35f);
-			const float fineF1 = FoamWorleyF1(wp * 1.9f + float2(-g_time * 0.031f, g_time * 0.052f), g_time * 0.5f);
+			// Advect the lace with the CPU-INTEGRATED wind scroll
+			// (g_timeParams2.zw - the same integral the bump layer uses), so
+			// foam travels WITH the water instead of sliding across it. The
+			// 64.0 factor converts the UV-space integral to world metres at
+			// the same effective speed as the bump advection. Weather changes
+			// bend this motion (integral property), never teleport it. The
+			// accum wraps every ~20+ minutes of runtime, which reads as a
+			// single churn event in an already-chaotic pattern - accepted.
+			const float2 scrollWorld = g_timeParams2.zw * 64.0f;
+			const float2 wp = input.positionWS.xz - scrollWorld;
+			const float coarseF1 = FoamWorleyF1(wp * 0.55f, g_time * 0.35f);
+			const float fineF1 = FoamWorleyF1(wp * 1.9f + 37.7f.xx, g_time * 0.5f);
 			const float laceCoarse = smoothstep(0.18f, 0.80f, coarseF1);
 			const float laceFine = smoothstep(0.12f, 0.85f, fineF1);
 			float lace = laceCoarse * 0.62f + laceFine * 0.38f;
