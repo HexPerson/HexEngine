@@ -344,6 +344,41 @@
 		float2 velocity : SV_TARGET4;
 	};
 
+	// Cellular (Worley F1) helper for the foam lace. Real foam is not a
+	// smooth field - it is a WEB: dark bubble holes ringed by bright
+	// filaments. F1 distance to animated feature points gives exactly that
+	// topology; the smoothstep band in the caller turns cell interiors into
+	// holes and cell borders into lace.
+	float2 FoamHash22(float2 p)
+	{
+		float3 q = frac(float3(p.xyx) * float3(0.1031f, 0.1030f, 0.0973f));
+		q += dot(q, q.yzx + 33.33f);
+		return frac((q.xx + q.yz) * q.zy);
+	}
+
+	float FoamWorleyF1(float2 p, float t)
+	{
+		const float2 cell = floor(p);
+		const float2 f = frac(p);
+		float f1 = 8.0f;
+		[unroll]
+		for (int y = -1; y <= 1; ++y)
+		{
+			[unroll]
+			for (int x = -1; x <= 1; ++x)
+			{
+				const float2 o = FoamHash22(cell + float2((float)x, (float)y));
+				// Feature points orbit their cell at a fixed slow rate -
+				// organic churn with bounded motion (no teleporting when
+				// parameters change; see the wind/phase rule in the VS).
+				const float2 wobble = 0.5f.xx + 0.38f * sin(t + 6.2831853f * o);
+				const float2 d = float2((float)x, (float)y) + wobble - f;
+				f1 = min(f1, dot(d, d));
+			}
+		}
+		return sqrt(f1);
+	}
+
 	WaterOut ShaderMain(MeshPixelInput input)
 	{
 		float4 specular = float4(0, 0, 0, 1);
@@ -545,7 +580,32 @@
 			// Whitecap coverage climbs with the wind - white water on the
 			// darkened storm body is what keeps the sea legible when the sky,
 			// fog and reflection all converge to grey.
-			foam = saturate((crestFoam + shoreFoam) * foamScale * (1.0f + seaState));
+			const float foamMask = saturate((crestFoam + shoreFoam) * foamScale * (1.0f + seaState));
+
+			// FOAM STRUCTURE. The mask above says WHERE foam lives; the
+			// smooth noise it used to output directly is why foam read as
+			// soft mathematical blobs. Two scales of cellular lace (dark
+			// bubble holes, bright filament web) + a micro grain give it the
+			// texture of white water, and coverage-driven EROSION does the
+			// rest: patch cores fill dense while edges dissolve into wisps of
+			// surviving filament. Drift rates are fixed (not wind-coupled) so
+			// weather changes never teleport the pattern.
+			const float2 wp = input.positionWS.xz;
+			const float coarseF1 = FoamWorleyF1(wp * 0.55f + float2(g_time * 0.045f, g_time * 0.028f), g_time * 0.35f);
+			const float fineF1 = FoamWorleyF1(wp * 1.9f + float2(-g_time * 0.031f, g_time * 0.052f), g_time * 0.5f);
+			const float laceCoarse = smoothstep(0.18f, 0.80f, coarseF1);
+			const float laceFine = smoothstep(0.12f, 0.85f, fineF1);
+			float lace = laceCoarse * 0.62f + laceFine * 0.38f;
+			// Micro grain: fine unresolved bubbles shimmering inside the web.
+			lace *= 0.86f + 0.28f * ValueNoise3(float3(wp.x * 6.1f, g_time * 0.4f, wp.y * 6.1f));
+
+			// Dissolve erosion: the mask sets a threshold the lace must clear.
+			// Full mask -> threshold 0 (dense white with bubble-hole shading);
+			// weak mask -> only the brightest filaments survive (wispy fringe).
+			const float threshold = 1.0f - saturate(foamMask * 1.3f);
+			foam = saturate((lace - threshold) / 0.28f);
+			foam *= foam * (3.0f - 2.0f * foam); // soften the dissolve edge
+			foam *= saturate(0.35f + foamMask);  // wisps stay lighter than cores
 		}
 
 		float4 ambient = float4(g_atmosphere.ambientLight.rgb * fadeColour.rgb, 1.0f);
