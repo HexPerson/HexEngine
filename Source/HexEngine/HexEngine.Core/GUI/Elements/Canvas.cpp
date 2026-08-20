@@ -70,6 +70,12 @@ namespace HexEngine
 		if (_width == width && _height == height)
 			return;
 
+		// A resized canvas must repaint: growing within the bucket exposes
+		// stale texels from a previous larger use, and re-creating the
+		// texture leaves undefined content. Without this, a size change
+		// between redraw triggers presents garbage.
+		_needsRedraw = true;
+
 		if (_renderTarget && BucketSize(width) == _texWidth && BucketSize(height) == _texHeight)
 		{
 			_width = width;

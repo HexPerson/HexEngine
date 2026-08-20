@@ -44,6 +44,23 @@ namespace HexEngine
 		static bool IsMouseOver(const Point& position, const Point& size);
 		static bool IsMouseOver(int32_t x, int32_t y, int32_t w, int32_t h);
 
+		/**
+		 * @brief Containers that visually clip their children (ScrollView)
+		 * override this to return true. Descendant hit-tests then fail when
+		 * the mouse is outside the container's on-screen rect, so scrolled-
+		 * away controls stop reacting to a mouse that is really over
+		 * whatever UI sits beyond the viewport.
+		 */
+		virtual bool ClipsInput() const { return false; }
+		/**
+		 * @brief True when a ClipsInput() ancestor's on-screen rect excludes
+		 * the point. The instance IsMouseOver() applies this automatically;
+		 * elements hit-testing sub-rects with the STATIC IsMouseOver should
+		 * use IsMouseOverClipped instead to get the same behaviour.
+		 */
+		bool IsMousePointClipped(int32_t mx, int32_t my) const;
+		bool IsMouseOverClipped(int32_t x, int32_t y, int32_t w, int32_t h) const;
+
 		virtual bool OnInputEvent(InputEvent event, InputData* data);
 
 		virtual void PreRender(GuiRenderer* renderer, uint32_t w, uint32_t h) {}

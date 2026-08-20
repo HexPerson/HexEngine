@@ -29,6 +29,10 @@ namespace HexEngine
 		int32_t GetManualContentHeight() const;
 		int32_t GetContentHeight() const;
 
+		// Content is visually clipped to the viewport, so descendant input
+		// hit-tests must be clipped to it too (see Element::ClipsInput).
+		virtual bool ClipsInput() const override { return true; }
+
 		virtual void OnAddChild(Element* child) override;
 		virtual void PreRender(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
 		virtual void Render(GuiRenderer* renderer, uint32_t w, uint32_t h) override;
