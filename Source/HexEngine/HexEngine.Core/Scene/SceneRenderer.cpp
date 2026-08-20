@@ -42,6 +42,11 @@ namespace HexEngine
 	HVar env_sunsetGlowStrength("env_sunsetGlowStrength", "Strength of the sunset sun halo and dusk glow", 1.0f, 0.0f, 4.0f);
 	HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
 	HVar r_volumetric("r_volumetric", "Master toggle for volumetric lighting/fog: froxel volume, legacy per-pixel march and per-light volumetric cones", true, false, true);
+	// Declared in AtmosphereLUTs.cpp. The AP apply below must respect it:
+	// with LUT updates off the volume still holds stale data, and applying
+	// that made the distance haze impossible to disable at runtime.
+	extern HVar r_atmosphereLUTs;
+	HVar r_aerialPerspective("r_aerialPerspective", "Apply the Hillaire aerial-perspective distance haze to opaque geometry", true, false, true);
 	HVar env_volumetricScattering("env_volumetricScattering", "The amount of scattering used in volumetric lighting calculations", -0.43f, -2.0f, 2.0f);
 	HVar env_volumetricStrength("env_volumetricStrength", "The strength multiplier of volumetric lighting", 1.0f, 0.1f, 5.0f);
 	HVar env_volumetricSteps("env_volumetricSteps", "The number of iterations over which to calculate volumetric lighting", 100.0f, 10.0f, 500.0f);
@@ -2742,9 +2747,13 @@ namespace HexEngine
 			// Signal to PostFog: aerial-perspective volume is doing the
 			// distance-haze pass, so PostFog should skip its own
 			// analytic atmosphere integration. Tied to the AP volume's
-			// actual availability rather than the cvar so a failed LUT
-			// init doesn't leave fog unintentionally broken.
-			const bool apActive = g_pEnv->_atmosphereLUTs != nullptr
+			// actual availability (a failed LUT init doesn't leave fog
+			// unintentionally broken) AND the cvars: with LUT updates or
+			// the AP apply disabled, the volume is stale/unused and PostFog
+			// must resume its own integration.
+			const bool apActive = r_atmosphereLUTs._val.b
+				&& r_aerialPerspective._val.b
+				&& g_pEnv->_atmosphereLUTs != nullptr
 				&& g_pEnv->_atmosphereLUTs->GetAerialPerspectiveVolume() != nullptr;
 			bufferData._atmosphere.fogUseAerialPerspective = apActive ? 1.0f : 0.0f;
 
@@ -5804,6 +5813,13 @@ namespace HexEngine
 
 	void SceneRenderer::RenderAerialPerspective()
 	{
+		// Respect the runtime toggles: r_atmosphereLUTs off freezes the LUT
+		// volume with stale data (Update() skips every dispatch), so applying
+		// it would paint yesterday's haze forever; r_aerialPerspective is the
+		// dedicated A/B switch for the apply itself.
+		if (!r_atmosphereLUTs._val.b || !r_aerialPerspective._val.b)
+			return;
+
 		// Skip if any required resource is missing. Atmosphere LUT
 		// subsystem failure (no compute support, shader compile fail
 		// etc.) cleanly disables AP - the scene just renders without
