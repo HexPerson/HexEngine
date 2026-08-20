@@ -41,6 +41,7 @@ namespace HexEngine
 	HVar env_sunsetCoolStrength("env_sunsetCoolStrength", "Strength of cool purple/violet sunset colours away from the sun", 1.0f, 0.0f, 4.0f);
 	HVar env_sunsetGlowStrength("env_sunsetGlowStrength", "Strength of the sunset sun halo and dusk glow", 1.0f, 0.0f, 4.0f);
 	HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
+	HVar r_volumetric("r_volumetric", "Master toggle for volumetric lighting/fog: froxel volume, legacy per-pixel march and per-light volumetric cones", true, false, true);
 	HVar env_volumetricScattering("env_volumetricScattering", "The amount of scattering used in volumetric lighting calculations", -0.43f, -2.0f, 2.0f);
 	HVar env_volumetricStrength("env_volumetricStrength", "The strength multiplier of volumetric lighting", 1.0f, 0.1f, 5.0f);
 	HVar env_volumetricSteps("env_volumetricSteps", "The number of iterations over which to calculate volumetric lighting", 100.0f, 10.0f, 500.0f);
@@ -2050,7 +2051,7 @@ namespace HexEngine
 		// SUCCESSOR to the legacy per-pixel VolumetricLighting march, not
 		// a sibling of the atmosphere LUTs. Skipped only when there's no
 		// sun light to drive god rays.
-		if (g_pEnv->_volumetricScattering != nullptr && sunLight != nullptr)
+		if (r_volumetric._val.b && g_pEnv->_volumetricScattering != nullptr && sunLight != nullptr)
 		{
 			const math::Vector3 vsSunForward = sunLight->GetEntity()->GetComponent<Transform>()->GetForward();
 			const math::Vector3 vsSunDir = -vsSunForward;
@@ -2834,7 +2835,10 @@ namespace HexEngine
 			const bool froxelActiveLegacyGate =
 				g_pEnv->_volumetricScattering != nullptr &&
 				g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr;
-			if (froxelActiveLegacyGate)
+			// r_volumetric off also zeroes the strength: Spot/PointLight.shader
+			// run their own per-pixel volumetric march off this value, so the
+			// master toggle must silence those cones too.
+			if (froxelActiveLegacyGate || !r_volumetric._val.b)
 				bufferData._atmosphere.volumetricStrength = 0.0f;
 			bufferData._atmosphere.volumetricSteps = GetVolumetricEffectiveSteps();
 			bufferData._atmosphere.volumetricStepIncrement = env_volumetricStepIncrement._val.f32;
@@ -4219,12 +4223,13 @@ namespace HexEngine
 			// to the legacy path when the subsystem isn't initialised, so
 			// scenes with broken compute support keep their sun shafts.
 			const bool useFroxelVolumetrics =
+				r_volumetric._val.b &&
 				g_pEnv->_volumetricScattering != nullptr &&
 				g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr &&
 				_volumetricScatterApplyShader != nullptr;
 			if (useFroxelVolumetrics)
 				RenderVolumetricScattering();
-			else
+			else if (r_volumetric._val.b)
 				RenderVolumetricLighting();
 			RenderVolumetricClouds();
 			// GPU particles render AFTER the volumetric apply (moved out of
