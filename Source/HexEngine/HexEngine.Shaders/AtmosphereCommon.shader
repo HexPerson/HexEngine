@@ -4,12 +4,23 @@
 }
 "Global"
 {
-	// Far plane of the aerial-perspective froxel volume, in metres. The volume's W axis
-	// is LINEAR over [0, ATM_AP_MAX_DIST_M], so the generator and the apply pass must
-	// agree on this value exactly or every pixel samples the wrong slice. They each
-	// used to declare their own copy and had drifted apart (32 km vs 100 km), which made
-	// the whole atmosphere read ~3x under-hazed. Single definition, both includers.
-	static const float ATM_AP_MAX_DIST_M = 32000.0f;
+	// Far plane of the aerial-perspective froxel volume, in metres. The volume's W
+	// axis is LINEAR over [0, AtmosphereApMaxDistM()], so the generator and the
+	// apply pass must agree on this value exactly or every pixel samples the wrong
+	// slice (they once kept separate drifted copies - 32 km vs 100 km - and read
+	// ~3x under-hazed). Single definition, both includers.
+	//
+	// Derived from the camera far plane (g_frustumDepths.w - SetupPerFrameBuffer
+	// keeps [3] equal to camera farZ) instead of the old hardcoded 32 km: with a
+	// far plane much shorter than that, the constant crammed the entire playable
+	// range into the first froxel slices, painting mid-ground geometry with
+	// kilometres of blue inscatter it hadn't earned. Deriving it means the 32
+	// slices always span exactly the range geometry can occupy. The floor guards
+	// degenerate/uninitialised far planes.
+	float AtmosphereApMaxDistM()
+	{
+		return max(g_frustumDepths.w, 1000.0f);
+	}
 
 	// Hillaire 2020 ("A Scalable and Production Ready Sky and Atmosphere
 	// Rendering Technique") style spherical-earth atmosphere model.
