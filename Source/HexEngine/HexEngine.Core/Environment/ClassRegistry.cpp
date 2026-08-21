@@ -25,6 +25,7 @@
 #include "../Entity/Component/SnowFootprintsComponent.hpp"
 #include "../Entity/Component/PlayerStartComponent.hpp"
 #include "../Entity/Component/DoorComponent.hpp"
+#include "../Entity/Component/SoundEffectComponent.hpp"
 #include "../Entity/Component/DrivableComponent.hpp"
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
@@ -83,6 +84,7 @@ namespace HexEngine
 		REG_CLASS(NavMeshBlockingVolume);
 		REG_CLASS(NavMeshLinkComponent);
 		REG_CLASS(ReflectionProbeComponent);
+		REG_CLASS(SoundEffectComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

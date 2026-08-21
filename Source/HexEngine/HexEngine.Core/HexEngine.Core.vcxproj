@@ -440,6 +440,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="HexEngine.hpp" />
     <ClInclude Include="Entity\Component\InteractionComponent.hpp" />
     <ClInclude Include="Entity\Component\DoorComponent.hpp" />
+    <ClInclude Include="Entity\Component\SoundEffectComponent.hpp" />
     <ClInclude Include="Entity\Component\SpotLight.hpp" />
     <ClInclude Include="Entity\Component\FirstPersonCameraController.hpp" />
     <ClInclude Include="Entity\Component\Light.hpp" />
@@ -654,6 +655,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\Collider.cpp" />
     <ClCompile Include="Entity\Component\InteractionComponent.cpp" />
     <ClCompile Include="Entity\Component\DoorComponent.cpp" />
+    <ClCompile Include="Entity\Component\SoundEffectComponent.cpp" />
     <ClCompile Include="Entity\Component\Light.cpp" />
     <ClCompile Include="Entity\Component\SpotLight.cpp" />
     <ClCompile Include="Entity\Component\FirstPersonCameraController.cpp" />
