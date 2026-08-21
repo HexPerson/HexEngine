@@ -106,20 +106,34 @@
 		// Volume-only composite: beauty * t + I.
 		const float3 volumeFinal = beauty.rgb * ap.a + ap.rgb;
 
-		// Sky LUT match for far distances. Reconstruct the view direction
+		// Sky LUT match near the far plane. Reconstruct the view direction
 		// from the gbuffer's world position so we can sample the SkyView
-		// LUT at the exact ray the pixel was rendered from. Then lerp
-		// the volume composite toward the sky colour proportional to
-		// distance - at skyMatchDistM (the camera far plane) the pixel
-		// reads as pure sky, guaranteeing the geometry silhouette
-		// dissolves into the sky background.
+		// LUT at the ray the pixel was rendered from, then dissolve the
+		// volume composite toward that sky colour as the pixel approaches
+		// skyMatchDistM (the camera far plane), so the silhouette melts into
+		// the sky instead of popping.
 		const float3 pixelWorld = GBUFFER_POSITION.Sample(g_pointSampler, uv).xyz;
 		const float3 viewDir = normalize(pixelWorld - g_eyePos.xyz);
 		const float3 sunDir  = normalize(-g_lightDirection.xyz);
-		const float2 skyUv   = SkyViewLutParamsToUv(viewDir, sunDir);
+		// Sample the sky AT OR ABOVE the horizon. A ray to a distant mountain's
+		// lower slopes points below the eye horizon, where the sky-view LUT
+		// holds its ground/ocean colour - matching toward that painted the sea
+		// horizon line straight through the mountain. The dissolve target must
+		// always be sky; horizon sky is the closest physically sensible colour
+		// for a below-horizon ray that ends on geometry.
+		float3 matchDir = viewDir;
+		matchDir.y = max(matchDir.y, 0.02f);
+		matchDir = normalize(matchDir);
+		const float2 skyUv   = SkyViewLutParamsToUv(matchDir, sunDir);
 		const float3 skyLutColour = g_atmSkyViewLUT.SampleLevel(g_linearSampler, skyUv, 0).rgb;
 
-		const float skyMatchT = pow(saturate(depthVS / skyMatchDistM), 1.6f);
+		// Far-plane DISSOLVE, not haze: the volume composite above already
+		// carries the physical distance haze (inscatter + transmittance
+		// integrated along the ray, no horizon seam). The explicit sky match
+		// exists only to hide geometry popping at the far plane, so it engages
+		// over the last stretch before it - mid-range objects keep their own
+		// shading instead of going translucent to the sky behind them.
+		const float skyMatchT = smoothstep(0.80f, 1.0f, depthVS / skyMatchDistM);
 		const float3 final = lerp(volumeFinal, skyLutColour, skyMatchT);
 
 		return float4(final, beauty.a);
