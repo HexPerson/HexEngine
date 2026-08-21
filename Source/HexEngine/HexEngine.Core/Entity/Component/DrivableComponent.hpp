@@ -152,9 +152,19 @@ namespace HexEngine
 
 		void Possess();
 		void Unpossess();
+		// Dismount request from the in-vehicle bind. Deferred to the next
+		// FixedUpdate so the look-at interaction listener (which sees the same
+		// keypress) can't re-mount in the same frame.
+		void RequestDismount();
 
 	private:
 		bool ResolveBody();
+		// Collision-aware dismount placement. Probes candidate spots around the
+		// vehicle with scene rays (approach clearance from the seat, ground
+		// snap, headroom, body clearance) and returns the first clean foot
+		// position; false if none of the candidates is safe.
+		bool FindSafeDismountPosition(math::Vector3& outFeet) const;
+		bool IsDismountSpotClear(const math::Vector3& seat, const math::Vector3& dir, float lateral, math::Vector3& outFeet) const;
 		void CreateBinds();
 		void RemoveBinds();
 
@@ -188,6 +198,13 @@ namespace HexEngine
 		// console command (V1), or the enter/exit flow (V2).
 		bool _playerControlled = false;
 		bool _bindsActive = false;
+		bool _dismountRequested = false;
+		int32_t _dismountKeyBound = -1;          // key bound to BikeDismount while possessed
+		int64_t _lastPossessChangeFrame = -1;    // same-frame toggle debounce
+		// Where the player stood when they mounted - the dismount fallback when
+		// no spot around the vehicle is clear (it was a valid standing spot).
+		math::Vector3 _mountFromPos;
+		bool _hasMountFromPos = false;
 
 		// digital key state (player path)
 		bool _kThrottle = false, _kBrake = false, _kLeft = false, _kRight = false, _kHandbrake = false;

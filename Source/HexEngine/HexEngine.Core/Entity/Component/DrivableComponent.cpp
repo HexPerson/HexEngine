@@ -15,6 +15,7 @@
 #include "../../Scene/SceneManager.hpp"
 #include "../../Scene/Scene.hpp"
 #include "../../Environment/LogFile.hpp"
+#include "../../Environment/TimeManager.hpp"
 #include "../../Audio/AudioManager.hpp"
 #include "../../Audio/SoundEffect.hpp"
 #include "../../GUI/Elements/AssetSearch.hpp"
@@ -51,6 +52,11 @@ namespace HexEngine
 	{
 		auto* c = reinterpret_cast<DrivableComponent*>(param);
 		if (c) c->SetHandbrake(pressed);
+	}
+	HEX_COMMAND(BikeDismount)
+	{
+		auto* c = reinterpret_cast<DrivableComponent*>(param);
+		if (c && pressed) c->RequestDismount();
 	}
 
 	// Console: possess the first DrivableComponent in the current scene (and
@@ -153,7 +159,13 @@ namespace HexEngine
 
 	void DrivableComponent::Possess()
 	{
-		SetPlayerControlled(!_playerControlled);
+		// The look-at interaction only MOUNTS. Dismounting is the in-vehicle
+		// bind (RequestDismount): from the seat the interaction ray starts
+		// inside the vehicle's own collider, so toggling on it was unreliable,
+		// and both paths firing on one keypress could re-mount immediately.
+		if (_playerControlled)
+			return;
+		SetPlayerControlled(true);
 	}
 
 	void DrivableComponent::Unpossess()
@@ -161,10 +173,23 @@ namespace HexEngine
 		SetPlayerControlled(false);
 	}
 
+	void DrivableComponent::RequestDismount()
+	{
+		if (_playerControlled)
+			_dismountRequested = true;
+	}
+
 	void DrivableComponent::SetPlayerControlled(bool possessed)
 	{
 		if (possessed == _playerControlled && _bindsActive == possessed)
 			return;
+		// One possession change per frame: the dismount bind and the interaction
+		// listener can both observe the same keypress.
+		const int64_t frameNow = (g_pEnv != nullptr && g_pEnv->_timeManager != nullptr)
+			? (int64_t)g_pEnv->_timeManager->_frameCount : -1;
+		if (frameNow >= 0 && frameNow == _lastPossessChangeFrame)
+			return;
+		_lastPossessChangeFrame = frameNow;
 		_playerControlled = possessed;
 		if (possessed)
 		{
@@ -195,6 +220,9 @@ namespace HexEngine
 		cm->CreateBind('D', "BikeSteerRight", this);
 		cm->CreateBind(VK_RIGHT, "BikeSteerRight", this);
 		cm->CreateBind(VK_SPACE, "BikeHandbrake", this);
+		// Dismount on the vehicle's own interact key (the key that mounted it).
+		_dismountKeyBound = GetInteractKey();
+		cm->CreateBind(_dismountKeyBound, "BikeDismount", this);
 		_bindsActive = true;
 	}
 
@@ -206,6 +234,11 @@ namespace HexEngine
 		for (int32_t k : { (int32_t)'W', (int32_t)VK_UP, (int32_t)'S', (int32_t)VK_DOWN,
 		                   (int32_t)'A', (int32_t)VK_LEFT, (int32_t)'D', (int32_t)VK_RIGHT, (int32_t)VK_SPACE })
 			cm->RemoveBind(k);
+		if (_dismountKeyBound >= 0)
+		{
+			cm->RemoveBind(_dismountKeyBound);
+			_dismountKeyBound = -1;
+		}
 		_bindsActive = false;
 	}
 
@@ -297,6 +330,14 @@ namespace HexEngine
 			}
 		}
 
+		// Remember where the player stood: the dismount fallback if nothing
+		// around the vehicle is clear when they get off.
+		if (auto* tf = camEnt->GetComponent<Transform>())
+		{
+			_mountFromPos = tf->GetPosition();
+			_hasMountFromPos = true;
+		}
+
 		// Seed the smoothed pose at the camera's current eye/look so mounting
 		// reads as a glide from where the player is standing.
 		if (auto* tf = camEnt->GetComponent<Transform>())
@@ -352,16 +393,35 @@ namespace HexEngine
 			cam->SetViewOffset(math::Vector3(0.0f, 0.0f, 0.0f));
 
 			// Set the player down beside the vehicle so they're standing when
-			// control returns. Re-enable simulation + the pose read-back FIRST -
-			// setFootPosition is illegal while DISABLE_SIMULATION is set.
+			// control returns. The spot is collision-checked (see
+			// FindSafeDismountPosition) - a raw lateral offset put the player
+			// inside walls/railings the vehicle had stopped against. Re-enable
+			// simulation + the pose read-back FIRST - setFootPosition is illegal
+			// while DISABLE_SIMULATION is set.
 			const math::Matrix bikeTM = GetEntity()->GetWorldTM();
-			math::Vector3 right = math::Vector3::TransformNormal(math::Vector3::Right, bikeTM);
-			right.y = 0.0f;
-			if (right.LengthSquared() > 1e-6f)
-				right.Normalize();
-			else
-				right = math::Vector3::Right;
-			const math::Vector3 dismountPos = bikeTM.Translation() + right * 1.0f + math::Vector3(0.0f, 0.5f, 0.0f);
+			math::Vector3 dismountPos;
+			if (!FindSafeDismountPosition(dismountPos))
+			{
+				// Nothing clear around the vehicle: fall back to where the player
+				// mounted from (a known-valid standing spot, re-snapped to the
+				// ground in case the world moved), else on top of the vehicle -
+				// never a blind offset into geometry.
+				bool placed = false;
+				if (_hasMountFromPos && g_pEnv->_physicsSystem != nullptr)
+				{
+					RayHit hit;
+					if (g_pEnv->_physicsSystem->RayCastScene(_mountFromPos + math::Vector3(0.0f, 1.0f, 0.0f),
+						math::Vector3(0.0f, -1.0f, 0.0f), 4.0f, &hit, _body) > 0)
+					{
+						dismountPos = hit.position + math::Vector3(0.0f, 0.05f, 0.0f);
+						placed = true;
+					}
+				}
+				if (!placed)
+					dismountPos = bikeTM.Translation() + math::Vector3(0.0f, 2.0f, 0.0f);
+				LOG_INFO("DrivableComponent: no clear spot beside '%s' to dismount - using %s.",
+					GetEntity()->GetName().c_str(), placed ? "the mount position" : "the top of the vehicle");
+			}
 
 			if (_camPlayerBody != nullptr)
 			{
@@ -786,9 +846,106 @@ namespace HexEngine
 		return true;
 	}
 
+	// ---- dismount placement ---------------------------------------------------
+	//
+	// The physics layer exposes rays only (no sweeps/overlaps), so clearance is
+	// built from several: every test starts from the SEAT - a point we know is
+	// free because the vehicle occupies it - and works outward, so a spot can
+	// only be accepted if there is an unobstructed path to it from the vehicle.
+	namespace
+	{
+		// Conservative standing-capsule envelope for the clearance rays. The
+		// player's actual CCT is a touch smaller; erring large keeps us out of
+		// geometry that a tight fit would graze.
+		constexpr float kDismountPlayerRadius = 0.40f;
+		constexpr float kDismountPlayerHeight = 1.90f;
+		constexpr float kDismountGroundSearch = 3.0f;   // max drop below the seat height to find a floor
+		constexpr float kDismountSeatHeight   = 0.90f;  // seat above the vehicle origin
+	}
+
+	bool DrivableComponent::IsDismountSpotClear(const math::Vector3& seat, const math::Vector3& dir, float lateral, math::Vector3& outFeet) const
+	{
+		auto* phys = g_pEnv != nullptr ? g_pEnv->_physicsSystem : nullptr;
+		if (phys == nullptr)
+			return false;
+		RayHit hit;
+
+		// 1. Approach: seat -> candidate must be unobstructed out to where the
+		//    capsule's far edge will sit. Anything in the way (wall, railing,
+		//    another vehicle) rejects the spot outright.
+		const float approach = lateral + kDismountPlayerRadius;
+		if (phys->RayCastScene(seat, dir, approach, &hit, _body) > 0)
+			return false;
+
+		// 2. Ground: drop from the candidate at seat height and find a floor
+		//    within reach. No floor = edge/void, reject rather than fall.
+		const math::Vector3 hip = seat + dir * lateral;
+		if (phys->RayCastScene(hip, math::Vector3(0.0f, -1.0f, 0.0f), kDismountSeatHeight + kDismountGroundSearch, &hit, _body) == 0)
+			return false;
+		const math::Vector3 feet = hit.position + math::Vector3(0.0f, 0.05f, 0.0f);
+
+		// 3. Headroom: a full standing capsule above the feet.
+		if (phys->RayCastScene(feet + math::Vector3(0.0f, 0.10f, 0.0f), math::Vector3(0.0f, 1.0f, 0.0f), kDismountPlayerHeight, &hit, _body) > 0)
+			return false;
+
+		// 4. Body clearance: horizontal rays from the capsule's mid-height in
+		//    the four directions around the spot (approach axis + its
+		//    perpendicular). Catches thin posts and wall corners the approach
+		//    ray passed beside.
+		const math::Vector3 mid = feet + math::Vector3(0.0f, kDismountPlayerHeight * 0.5f, 0.0f);
+		const math::Vector3 side(-dir.z, 0.0f, dir.x);
+		const math::Vector3 probes[4] = { dir, -dir, side, -side };
+		for (const math::Vector3& p : probes)
+		{
+			if (phys->RayCastScene(mid, p, kDismountPlayerRadius + 0.10f, &hit, _body) > 0)
+				return false;
+		}
+
+		outFeet = feet;
+		return true;
+	}
+
+	bool DrivableComponent::FindSafeDismountPosition(math::Vector3& outFeet) const
+	{
+		if (GetEntity() == nullptr)
+			return false;
+
+		const math::Matrix tm = GetEntity()->GetWorldTM();
+		auto flatten = [](math::Vector3 v, const math::Vector3& fallback)
+		{
+			v.y = 0.0f;
+			if (v.LengthSquared() > 1e-6f) { v.Normalize(); return v; }
+			return fallback;
+		};
+		const math::Vector3 right   = flatten(math::Vector3::TransformNormal(math::Vector3::Right, tm), math::Vector3::Right);
+		const math::Vector3 forward = flatten(math::Vector3::TransformNormal(math::Vector3::Forward, tm), math::Vector3::Forward);
+		const math::Vector3 seat = tm.Translation() + math::Vector3(0.0f, kDismountSeatHeight, 0.0f);
+
+		// Natural sides first at a comfortable distance, then the ends, then
+		// progressively further out. Rear before front: stepping off behind a
+		// vehicle that has just stopped against something is the safer habit.
+		const math::Vector3 dirs[4] = { right, -right, -forward, forward };
+		const float lateral[3] = { 1.2f, 1.8f, 2.5f };
+		for (float l : lateral)
+		{
+			for (const math::Vector3& d : dirs)
+			{
+				if (IsDismountSpotClear(seat, d, l, outFeet))
+					return true;
+			}
+		}
+		return false;
+	}
+
 	void DrivableComponent::FixedUpdate(float dt)
 	{
 		InteractionComponent::FixedUpdate(dt);
+
+		if (_dismountRequested)
+		{
+			_dismountRequested = false;
+			SetPlayerControlled(false);
+		}
 
 		if (dt <= 0.0f)
 			return;
