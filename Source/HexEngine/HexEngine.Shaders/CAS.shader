@@ -40,8 +40,19 @@
 	// into [0,1), sharpen there, expand the single output back. Reversible, so
 	// HDR range survives; and CAS adapting in a perceptual domain is arguably
 	// more correct anyway.
-	float3 Compress(float3 x) { return x / (1.0f + max(x, 0.0f)); }
-	float3 Expand(float3 y)   { y = min(y, 0.9999f.xxx); return y / (1.0f - y); }
+	//
+	// EXPOSURE-NORMALISED: the compression has to see the scene the way the
+	// display will. CAS's adaptive amplitude is sqrt(min(mn, 2 - mx) / mx) -
+	// the (2 - mx) term is its clip guard, and it collapses as the compressed
+	// neighbourhood approaches 1. Pre-exposure daylight sits at radiometric
+	// 5-50 here (sun energy is 18-30x), which raw Reinhard maps to 0.83-0.98,
+	// so the guard throttled the sharpen to ~10% strength everywhere but the
+	// shadows - r_sharpen visibly did nothing. Scaling by the tonemapper's
+	// exposure first puts mid-grey mid-range (healthy amplitude) and the scale
+	// cancels exactly on expand, so output brightness is unchanged.
+	float CasExposure() { return max(g_colourGrading.exposure, 1e-4f); }
+	float3 Compress(float3 x) { x = max(x, 0.0f) * CasExposure(); return x / (1.0f + x); }
+	float3 Expand(float3 y)   { y = min(y, 0.9999f.xxx); return (y / (1.0f - y)) / CasExposure(); }
 
 	// s2 is a POINT-WRAP sampler in-frame; Load by integer pixel instead so
 	// there's no wrap bleed at the screen edges and no filtering of the taps.
