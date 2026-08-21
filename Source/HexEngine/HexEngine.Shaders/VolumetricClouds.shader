@@ -310,9 +310,20 @@
 		const float cloudSunLuma = max(dot(cloudSunRadiance, float3(0.299f, 0.587f, 0.114f)), 0.001f);
 		const float3 cloudSunHue = cloudSunRadiance / cloudSunLuma;
 		const float sunElevation = -g_lightDirection.y;
-		const float sunsetAmount = saturate((0.22f - sunElevation) / 0.32f);
+		// Sun visibility: the direct term must switch OFF once the sun is below
+		// the horizon. It used to carry a hard max(lightMult, 0.35) floor, so a
+		// 35%-strength sun lit the clouds all night - and the sunset warmth
+		// below kept RISING past the horizon instead of fading back out, so
+		// that night-time floor was pulled 55% toward orange: brown-orange
+		// clouds in every cloudy preset after dark.
+		const float sunUp = smoothstep(-0.12f, 0.02f, sunElevation);
+		// Sunset warmth is a BAND around the horizon: ramps in as the sun
+		// drops toward it, ramps out again once it is below (same shape as
+		// the CPU-side ambient tint in SetupPerFrameBuffer).
+		const float sunsetAmount = saturate((0.22f - sunElevation) / 0.32f)
+		                         * (1.0f - saturate((-0.02f - sunElevation) / 0.10f));
 		const float3 cloudSunBalancedHue = lerp(cloudSunHue, float3(1.0f, 0.78f, 0.58f), sunsetAmount * 0.55f);
-		const float3 cloudSunColour = cloudSunBalancedHue * max(g_globalLight[0], 0.35f) * 0.55f;
+		const float3 cloudSunColour = cloudSunBalancedHue * max(g_globalLight[0], 0.35f) * 0.55f * sunUp;
 		const float3 horizonProbeDir = normalize(float3(-sunDir.x, 0.10f, -sunDir.z));
 		const float3 zenithProbeDir = float3(0.0f, 1.0f, 0.0f);
 		const PhysicalAtmosphereSample cloudHorizonProbe = IntegrateAtmospherePhysical(cloudProbeOrigin, horizonProbeDir, g_frustumDepths[3], sunDir, 12, false);
@@ -327,12 +338,22 @@
 		// a daytime scene, and the probe inscatter alone under-lit the
 		// undersides to a dirty grey-brown (user report). The strength cvar
 		// keeps its per-preset meaning on top of this.
-		const float3 ambientSky = lerp(cloudHorizonProbe.inscatter, cloudZenithProbe.inscatter, 0.35f) * (g_cloudParams3.y * 1.6f);
+		float3 ambientSky = lerp(cloudHorizonProbe.inscatter, cloudZenithProbe.inscatter, 0.35f) * (g_cloudParams3.y * 1.6f);
+		// Night ambient: the physical probes go black once the sun sets, and
+		// with the direct term now correctly off too the clouds would vanish
+		// into the night sky. Light them with the scene ambient instead - the
+		// weather preset authors it (grey for overcast/storm, and the CPU
+		// side cools it toward blue at night), so clouds read as dim blue-grey
+		// or grey at night, matching the ground they hang over.
+		const float3 nightAmbient = g_atmosphere.ambientLight.rgb * (g_cloudParams3.y * 0.9f);
+		ambientSky += nightAmbient * (1.0f - sunUp);
 		const float skyLuma = dot(ambientSky, float3(0.299f, 0.587f, 0.114f));
 		const float3 ambientNeutral = skyLuma.xxx;
 		const float3 ambientChromatic = lerp(ambientNeutral, ambientSky, saturate(g_cloudParams5.y));
-		const float3 ambientShaded = lerp(ambientChromatic, cloudSunColour, saturate(g_cloudParams5.x) * 0.28f);
-		const float3 topTint = lerp(ambientShaded, cloudSunColour, 0.48f);
+		// Warm-sun contributions scale with sunUp: lerping toward a zero sun
+		// colour at night would only darken the ambient, not tint it.
+		const float3 ambientShaded = lerp(ambientChromatic, cloudSunColour, saturate(g_cloudParams5.x) * 0.28f * sunUp);
+		const float3 topTint = lerp(ambientShaded, cloudSunColour, 0.48f * sunUp);
 		const float3 bottomTint = lerp(ambientNeutral, ambientShaded, 0.88f);
 
 		float transmittance = 1.0f;
