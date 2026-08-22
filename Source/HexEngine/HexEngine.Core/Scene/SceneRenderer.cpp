@@ -3060,6 +3060,23 @@ namespace HexEngine
 				r_giSpecOcclusion._val.f32);
 			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
 
+			// Transparent-surface atmosphere: which volumes RenderTransparent will
+			// bind at t24/t21 and their depth mappings (must match the apply
+			// passes: froxel far = VolumetricScattering::kFarDepthM, AP max =
+			// AtmosphereApMaxDistM() in the shader = max(farZ, 1 km)).
+			{
+				const bool froxel = r_volumetric._val.b && g_pEnv->_volumetricScattering != nullptr
+					&& g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr;
+				const bool ap = r_atmosphereLUTs._val.b && r_aerialPerspective._val.b
+					&& g_pEnv->_atmosphereLUTs != nullptr && g_pEnv->_atmosphereLUTs->GetAerialPerspectiveVolume() != nullptr;
+				const float farZ = _currentCamera ? _currentCamera->GetFarZ() : 1000.0f;
+				bufferData._transparentFogParams = math::Vector4(
+					froxel ? 1.0f : 0.0f,
+					ap ? 1.0f : 0.0f,
+					VolumetricScattering::kFarDepthM,
+					std::max(farZ, 1000.0f));
+			}
+
 			bufferData._reflectionParams = math::Vector4(
 				r_ssrSkyFallbackStrength._val.f32,
 				r_ssrSkyHitMinDistance._val.f32,
@@ -4318,7 +4335,8 @@ namespace HexEngine
 			// (incorrect), and after transparency would force overlapping
 			// alpha-blended geometry to be re-sampled into the scatter kernel.
 			RenderSubsurfaceScattering();
-			RenderTransparent();
+			// Transparents now render AFTER the fog / volumetric / aerial
+			// perspective applies (see below) and fog themselves per fragment.
 			RenderFog();
 			//RenderWater();
 			// Volumetric lighting: prefer the Phase D froxel-grid path when
@@ -4363,6 +4381,14 @@ namespace HexEngine
 			// AP for now (correct per-layer AP would need MRT depth
 			// peeling); acceptable v1 limit.
 			RenderAerialPerspective();
+
+			// Transparent surfaces last in the atmospheric chain: the applies
+			// above only know the opaque depth, so a window at 10 m used to be
+			// hazed as if it sat on the wall 50 m behind it, and a distant pane
+			// went un-hazed against hazed walls. Drawn here, each fragment samples
+			// the froxel and AP volumes at its OWN depth (TransparentAtmosphere)
+			// and blends over a background that already carries the haze behind it.
+			RenderTransparent();
 
 			// IBL atlases are per-scene, not per-camera: generating them again
 			// for each of a probe's six capture faces is pure waste, and running
@@ -5742,6 +5768,19 @@ namespace HexEngine
 		// this wherever its screen-space march misses; a null bind reads black,
 		// which is the old (broken) behaviour rather than a crash.
 		g_pEnv->_graphicsDevice->SetTexture2D(14, _iblSkyEnvMap);
+		// t24/t21: froxel fog integration volume + aerial-perspective volume for
+		// the per-fragment transparent atmosphere (TransparentAtmosphere.shader).
+		// Slotless Texture3D binds - position the implicit counter first.
+		{
+			ITexture3D* fogVol = (r_volumetric._val.b && g_pEnv->_volumetricScattering != nullptr)
+				? g_pEnv->_volumetricScattering->GetIntegrationVolume() : nullptr;
+			ITexture3D* apVol = (r_atmosphereLUTs._val.b && r_aerialPerspective._val.b && g_pEnv->_atmosphereLUTs != nullptr)
+				? g_pEnv->_atmosphereLUTs->GetAerialPerspectiveVolume() : nullptr;
+			g_pEnv->_graphicsDevice->SetBoundResourceIndex(24);
+			g_pEnv->_graphicsDevice->SetTexture3D(fogVol);
+			g_pEnv->_graphicsDevice->SetBoundResourceIndex(21);
+			g_pEnv->_graphicsDevice->SetTexture3D(apVol);
+		}
 
 		// t15..t20 = sun shadow cascades (slice 5), plus the b2 caster constants
 		// re-uploaded for the sun: the deferred per-light passes left b2 holding
@@ -5787,6 +5826,10 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetTexture2D(12, nullptr);
 		g_pEnv->_graphicsDevice->SetTexture2D(13, nullptr);
 		g_pEnv->_graphicsDevice->SetTexture2D(14, nullptr);
+		g_pEnv->_graphicsDevice->SetBoundResourceIndex(24);
+		g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
+		g_pEnv->_graphicsDevice->SetBoundResourceIndex(21);
+		g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
 		if (transparentSun != nullptr)
 		{
 			// The cascade depth maps become DSVs again next frame; a stale SRV

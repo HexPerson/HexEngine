@@ -312,6 +312,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// remaining ambient + IBL sky diffuse, z = 1 when the GI blurred-AO
 		// texture is bound at t22 for this view, w reserved.
 		float4 g_giComposeParams;
+		// Transparent-surface atmosphere (TransparentAtmosphere.shader):
+		// x = froxel fog volume bound at t24, y = AP volume bound at t21,
+		// z = froxel far depth (m), w = AP max distance (m).
+		float4 g_transparentFogParams;
 	};
 
 	#define g_timePrev  (g_timeParams2.x)

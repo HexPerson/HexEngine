@@ -508,6 +508,10 @@ namespace HexEngine
 		// is bound at t22 for this view (main camera only - it is main-view
 		// screen space, capture faces must not sample it); w reserved.
 		math::Vector4 _giComposeParams;
+		// Transparent-surface atmosphere: x = froxel fog volume bound (t24),
+		// y = AP volume bound (t21), z = froxel far depth (m), w = AP max
+		// distance (m). Transparents fog themselves per fragment with these.
+		math::Vector4 _transparentFogParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

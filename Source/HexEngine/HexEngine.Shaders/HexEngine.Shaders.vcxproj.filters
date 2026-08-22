@@ -92,6 +92,7 @@
     <HexEngineShader Include="CloudCommon.shader" />
     <HexEngineShader Include="CloudShadowMap.shader" />
     <HexEngineShader Include="CloudTemporal.shader" />
+    <HexEngineShader Include="TransparentAtmosphere.shader" />
     <HexEngineShader Include="AtmosphereTransmittanceLUT.shader" />
     <HexEngineShader Include="AtmosphereMultiScatteringLUT.shader" />
     <HexEngineShader Include="AtmosphereSkyViewLUT.shader" />

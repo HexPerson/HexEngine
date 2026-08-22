@@ -53,6 +53,13 @@
 	// back to this wherever the screen-space march finds nothing - without it,
 	// glass reflects black, which is why window panes read as dark holes.
 	Texture2D g_iblSkyEnvFwd     : register(t14);
+	// Per-fragment atmosphere for the transparency phase (see
+	// TransparentAtmosphere.shader): froxel integration volume + aerial
+	// perspective volume, bound by RenderTransparent.
+	Texture3D g_transFogVolume   : register(t24);
+	Texture3D g_transApVolume    : register(t21);
+	SamplerState g_transLinearSampler : register(s4);
+	#include "TransparentAtmosphere.shader"
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -757,6 +764,12 @@
 			const float isHorizDebug = step(0.5f, worldNormal.y);
 			finalRGB = RainDripsCellGridDebug(worldNormal, input.positionWS.xyz, g_time, isHorizDebug);
 		}
+
+		// Transparents are drawn AFTER the fog / aerial-perspective applies
+		// (which only know the opaque depth), so fog this fragment at its own
+		// depth. Opaque gbuffer writes are untouched - the applies handle them.
+		if (g_material.isInTransparencyPhase != 0)
+			finalRGB = ApplyTransparentAtmosphere(finalRGB, input.positionWS.xyz, input.position.xy, g_transFogVolume, g_transApVolume, g_transLinearSampler);
 
 		output.diff = float4(finalRGB, outputAlpha);
 

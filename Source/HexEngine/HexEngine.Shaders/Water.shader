@@ -184,6 +184,10 @@
 	// IBL and glass use, so the sea and every other surface agree about what
 	// the sky looks like (a storm sky reflects as overcast, not clear blue).
 	Texture2D g_iblSkyEnvFwd : register(t14);
+	// Per-fragment atmosphere (see TransparentAtmosphere.shader).
+	Texture3D g_transFogVolume : register(t24);
+	Texture3D g_transApVolume  : register(t21);
+	SamplerState g_transLinearSampler : register(s4);
 
 	// Sun cascade shadow maps - bound pass-wide for transparents at t15+
 	// (SceneRenderer::RenderTransparent), same slots DefaultPixel uses.
@@ -338,6 +342,8 @@
 	// no change). Water was the one transparent-phase shader with a single
 	// SV_Target - its Gerstner motion computed in the DS never landed
 	// anywhere, which is why waves ghosted under TAA and can't motion-blur.
+	#include "TransparentAtmosphere.shader"
+
 	struct WaterOut
 	{
 		float4 colour   : SV_Target0;
@@ -710,6 +716,9 @@
 		}
 
 		retCol.a = 1.0f;
+
+		// Water renders after the fog / AP applies: fog it at its own depth.
+		retCol.rgb = ApplyTransparentAtmosphere(retCol.rgb, input.positionWS.xyz, input.position.xy, g_transFogVolume, g_transApVolume, g_transLinearSampler);
 
 		WaterOut o;
 		o.colour = retCol;
