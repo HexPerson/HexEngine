@@ -11,6 +11,10 @@ namespace HexEngine
 		DEFINE_COMPONENT_CTOR(DayNightCycleComponent);
 
 		virtual void Update(float frameTime) override;
+		// Restores the sun rotation / light multiplier / scene ambient the cycle
+		// overwrote, captured before the first application. Removing the
+		// component used to leave the sun wherever the clock had put it.
+		virtual void Destroy() override;
 
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
@@ -50,6 +54,13 @@ namespace HexEngine
 		float _prevSunPitch = 0.0f;
 		float _prevSunYaw = 0.0f;
 		float _sunLightBoost = 1.0f;
+		// Pre-cycle baseline (see Destroy).
+		bool _baselineCaptured = false;
+		class Scene* _baselineScene = nullptr;
+		math::Quaternion _baselineSunRotation;
+		float _baselineLightMultiplier = 1.0f;
+		math::Vector4 _baselineAmbient;
+		void CaptureBaseline();
 		math::Color _dayAmbientLight = math::Color(0.14f, 0.14f, 0.145f, 1.0f);
 		math::Color _nightAmbientLight = math::Color(9.0f / 255.0f, 14.0f / 255.0f, 44.0f / 255.0f, 1.0f);
 	};

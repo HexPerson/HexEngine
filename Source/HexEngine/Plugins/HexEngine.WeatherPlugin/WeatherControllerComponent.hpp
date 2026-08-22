@@ -50,6 +50,27 @@ namespace HexEngine::Weather
 
 		virtual void Update(float frameTime) override;
 		virtual void Destroy() override;
+
+		// Scene state this controller overwrites every frame, captured the first
+		// time it authors anything and put back when the component is removed.
+		// Without this, removing the controller stranded the scene in the last
+		// preset (dim blue sun, snow wetness, storm clouds...) with nothing left
+		// to restore it.
+		struct SceneBaseline
+		{
+			bool captured = false;
+			class Scene* scene = nullptr;
+			math::Vector4 ambientLight;
+			math::Color fogColour;
+			WeatherSurfaceParams surfaceParams;
+			bool hadSun = false;
+			math::Vector4 sunColour;
+			float sunStrength = 1.0f;
+			std::vector<std::pair<std::string, float>> hvarFloats;
+			math::Vector3 cloudWindDirection;
+		};
+		void CaptureSceneBaseline(class Scene* scene);
+		void RestoreSceneBaseline();
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(ComponentWidget* widget) override;
@@ -108,6 +129,7 @@ namespace HexEngine::Weather
 		float _transitionDuration = 0.0f;
 		float _defaultTransitionSeconds = 2.0f;
 		bool _previewEnabled = true;
+		SceneBaseline _baseline;
 		std::array<WeatherLoopAudioConfig, static_cast<size_t>(WeatherAudioLoopSlot::Count)> _loopAudio = {};
 		std::array<WeatherOneShotAudioConfig, 4> _thunderAudio = {};
 		float _indoorWeatherVolumeScale = 0.42f;
