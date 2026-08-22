@@ -3,7 +3,7 @@
 #include "../Required.hpp"
 #include "PVS.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
-#include <unordered_map>
+#include <functional>
 
 namespace HexEngine
 {
@@ -35,11 +35,21 @@ namespace HexEngine
 		void BuildDepthPyramid(ITexture2D* depthSource);
 		void MarkDepthFallbackUsed() { _stats.usedDepthFallback = true; }
 
+		// Returns true when a renderable is already rejected by the CPU fine
+		// cull (frustum); such entries are never sent to the GPU, which then
+		// does occlusion only.
+		using CpuCullPredicate = std::function<bool(const RenderableSnapshot&)>;
+
 		bool CullOpaqueRenderables(
 			RenderBatchSnapshot& snapshot,
 			Camera* camera,
 			LayerMask layerMask,
-			MeshRenderFlags renderFlags);
+			MeshRenderFlags renderFlags,
+			const CpuCullPredicate* cpuCulled = nullptr);
+
+		// The snapshot was rebuilt: every stableIndex changed meaning, so
+		// in-flight readback results and per-entry state are invalidated.
+		void NotifySnapshotRebuilt();
 
 		void ReportSubmission(uint32_t submittedDraws, uint32_t visibleInstances);
 		const GpuCullingStats& GetStats() const { return _stats; }
@@ -89,13 +99,15 @@ namespace HexEngine
 		void DestroyHzbResources(HzbResources& resources);
 		void EnsureCandidateCapacity(uint32_t candidateCount);
 		void EnsureHzb(uint32_t width, uint32_t height);
-		void ClearSnapshotFlags(RenderBatchSnapshot& snapshot);
-		bool GatherCandidates(
+		void EnsurePerEntryState(uint32_t entryCount);
+		// Returns the total snapshot entry count (stableIndex range).
+		uint32_t GatherCandidates(
 			RenderBatchSnapshot& snapshot,
 			std::vector<GpuCullCandidate>& outCandidates,
 			std::vector<RenderableSnapshot*>& outRenderableMap,
 			const math::Vector3& cameraPos,
-			LayerMask layerMask);
+			LayerMask layerMask,
+			const CpuCullPredicate* cpuCulled);
 		void BuildFrustumPlanes(const math::Matrix& viewProjection, math::Vector4 outPlanes[6]) const;
 		void DispatchFrustumPass(ID3D11DeviceContext* context, uint32_t candidateCount);
 		void DispatchOcclusionPass(ID3D11DeviceContext* context, uint32_t candidateCount, bool useOcclusion);
@@ -122,15 +134,30 @@ namespace HexEngine
 		ID3D11Buffer* _visibilityReadback[ReadbackLatencyFrames] = {};
 		uint32_t _visibilityReadbackCount[ReadbackLatencyFrames] = {};
 		bool _visibilityReadbackReady[ReadbackLatencyFrames] = {};
-		std::vector<uint64_t> _visibilityReadbackKeys[ReadbackLatencyFrames];
+		std::vector<uint32_t> _visibilityReadbackStableIndex[ReadbackLatencyFrames];
+		uint64_t _visibilityReadbackGeneration[ReadbackLatencyFrames] = {};
 		uint32_t _candidateCapacity = 0;
 		uint32_t _lastDispatchCandidateCount = 0;
 
-		std::vector<uint32_t> _cpuVisibility;
-		std::unordered_map<uint64_t, uint32_t> _cpuVisibilityByEntity;
-		std::unordered_map<uint64_t, bool> _frozenVisibility;
-		std::unordered_map<uint64_t, uint32_t> _graceFramesRemaining;
-		std::unordered_map<uint64_t, uint32_t> _occlusionRejectStreak;
+		// Per-snapshot-entry state indexed by stableIndex (flat arrays; this
+		// replaced four unordered_maps keyed by entity that cost ~125k hash
+		// ops + 25k allocating inserts per frame at 25k candidates).
+		struct PerEntryState
+		{
+			uint64_t resultFrame = 0;   // frame the last GPU result for this entry was read
+			uint8_t resultBits = 0x3;   // bit0 frustum, bit1 final
+			uint8_t rejectStreak = 0;
+			uint8_t graceRemaining = 0;
+			uint8_t frozenVisible = 1;
+		};
+		std::vector<PerEntryState> _perEntry;
+		uint64_t _perEntryGeneration = 0;
+		uint64_t _snapshotGeneration = 1;
+		uint32_t _lastSnapshotEntryCount = 0;
+
+		// Scratch reused across frames (no per-frame allocation).
+		std::vector<GpuCullCandidate> _scratchCandidates;
+		std::vector<RenderableSnapshot*> _scratchRenderableMap;
 
 		HzbResources _hzbRead;
 		HzbResources _hzbWrite;

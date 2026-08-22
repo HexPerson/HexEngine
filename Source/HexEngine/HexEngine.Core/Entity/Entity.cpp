@@ -145,7 +145,17 @@ namespace HexEngine
 
 	void Entity::SetLayer(Layer layer)
 	{
+		if (_layer == layer)
+			return;
+
 		_layer = layer;
+
+		// Layer affects PVS grid classification (Sky entries are always-include),
+		// so a runtime layer change invalidates the whole cache. Rare operation.
+		if (_scene != nullptr)
+		{
+			_scene->MarkPvsSpatialCacheDirty();
+		}
 	}
 
 	int32_t Entity::GetTag() const
@@ -871,6 +881,13 @@ namespace HexEngine
 		{
 			_scene->NotifyEntityTransformChanged(this);
 		}
+		else if (_scene != nullptr)
+		{
+			// The no-notify path (physics writeback each tick) deliberately skips
+			// the GI/shadow revision bumps, but the PVS culling grid still has to
+			// track the mover or it gets culled against its stale cells.
+			_scene->UpdatePvsSpatialEntriesForEntity(this);
+		}
 
 		if (auto mainCamera = _scene->GetMainCamera())
 		{
@@ -965,6 +982,15 @@ namespace HexEngine
 
 			// Parent-space motion invalidates all descendant world transforms/bounds.
 			invalidateChildTransformCaches(this, invalidateChildTransformCaches);
+
+			// Transform::SetPosition/SetScale reach this handler without going
+			// through ClearTransformCache for the entity itself - keep its PVS
+			// culling grid cells current here (children are handled above via
+			// NotifyEntityTransformChanged).
+			if (_scene != nullptr)
+			{
+				_scene->UpdatePvsSpatialEntriesForEntity(this);
+			}
 
 			auto updatePvsForDescendants = [](PVS* pvs, Entity* root, auto&& updateRef) -> void
 			{

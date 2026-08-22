@@ -9,9 +9,31 @@
 namespace HexEngine
 {
 	const float gCameraDefaultFov = 70.0f;
-	const float gViewMatrixBehindDistance = 20.0f;
+	// Hysteresis margin for the enlarged PVS frustum: the PVS only rebuilds once
+	// the real frustum pokes outside the enlarged one, so this is "how far the
+	// camera can travel between full PVS rebuilds". Generous on purpose - the
+	// per-renderable fine frustum test in the draw loop (r_pvsFineCull) culls
+	// the over-included set every frame, so a bigger margin costs almost
+	// nothing at draw time but slashes rebuild frequency during camera motion.
+	const float gViewMatrixBehindDistance = 60.0f;
+	// The translation slack has to scale with the scene: 60 absolute units is
+	// less than one frame of editor fly speed in a cm-scale world, so the real
+	// frustum's far plane poked out the back of the enlarged one EVERY frame
+	// (per-frame rebuilds with forced=0 in the perf log). Use a fraction of
+	// the view distance, with the absolute value as the floor.
+	const float gLargerFrustumBehindFraction = 0.1f;
 
-	HVar r_cameraViewDistance("r_cameraViewDistance", "The maximum view depth of the camera", 350.0f, 1.0f, 10000.0f);
+	static float LargerFrustumBehindDistance(float screenFar)
+	{
+		const float scaled = screenFar * gLargerFrustumBehindFraction;
+		return scaled > gViewMatrixBehindDistance ? scaled : gViewMatrixBehindDistance;
+	}
+	// Extra field of view (degrees) for the enlarged frustum: ~15 degrees of
+	// rotation slack per side before a rebuild (was +10 total, i.e. ~5/side -
+	// mouse-look blew through that every 2-3 frames).
+	const float gLargerFrustumExtraFovDegrees = 30.0f;
+
+	HVar r_cameraViewDistance("r_cameraViewDistance", "The maximum view depth of the camera", 1000.0f, 1.0f, 20000.0f);
 
 	extern HVar r_lodPartition;
 
@@ -214,11 +236,19 @@ namespace HexEngine
 
 		if (_hasMovedThisFrame || _pvs->NeedsRebuild())
 		{
+			// The camera PVS is a ROTATION-INVARIANT coarse set: a sphere of the
+			// view distance around the camera (the PVS inflates it 25% for
+			// translation hysteresis). The exact per-frame frustum test happens
+			// in the draw loops (r_pvsFineCull, 6 dot products per renderable).
+			// The previous frustum-shaped coarse set rebuilt on every frame of
+			// mouse-look in large scenes - any frustum margin is exhausted by a
+			// fast turn, and the rebuild cost then drove the frame rate down,
+			// which made the per-frame turn larger still.
 			PVSParams pvsParams;
 			pvsParams.lodPartition = r_lodPartition._val.f32;
-			pvsParams.shapeType = PVSParams::ShapeType::Frustum2;
-			pvsParams.shape.frustum.sm = _frustum;
-			pvsParams.shape.frustum.lg = _largerFrustum;
+			pvsParams.shapeType = PVSParams::ShapeType::Sphere;
+			const math::Vector3 cullCentre = GetEntity()->GetPosition() + GetViewOffset();
+			pvsParams.shape.sphere = dx::BoundingSphere(dx::XMFLOAT3(cullCentre.x, cullCentre.y, cullCentre.z), _screenFar);
 			pvsParams.camera = this;
 
 			_pvs->CalculateVisibility(g_pEnv->_sceneManager->GetCurrentScene().get(), pvsParams);
@@ -417,7 +447,8 @@ namespace HexEngine
 		if (_projectionMatrixPrev == math::Matrix::Identity)
 			_projectionMatrixPrev = _projectionMatrix;
 
-		_largerProjectionMatrix = math::Matrix::CreatePerspectiveFieldOfView(ToRadian(_fov+10.0f), _aspectRatio, _screenNear, _screenFar + (gViewMatrixBehindDistance * 2.0f));
+		const float largerFov = (_fov + gLargerFrustumExtraFovDegrees < 170.0f) ? (_fov + gLargerFrustumExtraFovDegrees) : 170.0f;
+		_largerProjectionMatrix = math::Matrix::CreatePerspectiveFieldOfView(ToRadian(largerFov), _aspectRatio, _screenNear, _screenFar + (LargerFrustumBehindDistance(_screenFar) * 2.0f));
 	}
 
 	void Camera::UpdateRotation()
@@ -523,7 +554,7 @@ namespace HexEngine
 		}
 
 		_viewMatrix = math::Matrix::CreateLookAt(transform->GetPosition() + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
-		_viewMatrixBehind = math::Matrix::CreateLookAt(transform->GetPosition() - (_lookDir * gViewMatrixBehindDistance) + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
+		_viewMatrixBehind = math::Matrix::CreateLookAt(transform->GetPosition() - (_lookDir * LargerFrustumBehindDistance(_screenFar)) + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
 
 		BuildFrustum();
 

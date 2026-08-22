@@ -46,6 +46,7 @@ TrafficLaneComponent::TrafficLaneComponent(HexEngine::Entity* entity, TrafficLan
 	{
 		_loop = copy->_loop;
 		_speedLimit = copy->_speedLimit;
+		_cornerRadius = copy->_cornerRadius;
 		_drawDebug = copy->_drawDebug;
 		_nextLaneEntityNames = copy->_nextLaneEntityNames;
 		_sequentialNextLaneCursor = 0;
@@ -57,6 +58,7 @@ void TrafficLaneComponent::Serialize(json& data, HexEngine::JsonFile* file)
 {
 	file->Serialize(data, "_loop", _loop);
 	file->Serialize(data, "_speedLimit", _speedLimit);
+	file->Serialize(data, "_cornerRadius", _cornerRadius);
 	file->Serialize(data, "_drawDebug", _drawDebug);
 	file->Serialize(data, "_nextLaneEntityNames", _nextLaneEntityNames);
 	file->Serialize(data, "_branchOffset", _branchOffset);
@@ -66,6 +68,7 @@ void TrafficLaneComponent::Deserialize(json& data, HexEngine::JsonFile* file, ui
 {
 	file->Deserialize(data, "_loop", _loop);
 	file->Deserialize(data, "_speedLimit", _speedLimit);
+	file->Deserialize(data, "_cornerRadius", _cornerRadius);
 	file->Deserialize(data, "_drawDebug", _drawDebug);
 	file->Deserialize(data, "_nextLaneEntityNames", _nextLaneEntityNames);
 	file->Deserialize(data, "_branchOffset", _branchOffset);
@@ -152,6 +155,7 @@ bool TrafficLaneComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 {
 	auto* loop = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Loop Lane", &_loop);
 	auto* speedLimit = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Speed Limit", &_speedLimit, 0.0f, 5000.0f, 0.1f, 2);
+	auto* cornerRadius = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Corner Radius", &_cornerRadius, 0.0f, 100.0f, 0.1f, 2);
 	auto* drawDebug = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Draw Debug", &_drawDebug);
 
 	new HexEngine::ArrayElement<std::string>(
@@ -188,6 +192,7 @@ bool TrafficLaneComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 
 	loop->SetPrefabOverrideBinding(GetComponentName(), "/_loop");
 	speedLimit->SetPrefabOverrideBinding(GetComponentName(), "/_speedLimit");
+	cornerRadius->SetPrefabOverrideBinding(GetComponentName(), "/_cornerRadius");
 	drawDebug->SetPrefabOverrideBinding(GetComponentName(), "/_drawDebug");
 
 	auto* branchOffsetX = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Branch Offset X", &_branchOffset.x, -10000.0f, 10000.0f, 0.1f, 2);

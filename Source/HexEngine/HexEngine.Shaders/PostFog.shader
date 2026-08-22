@@ -41,8 +41,6 @@
 
 	float4 ShaderMain(UIPixelInput input) : SV_TARGET
 	{
-		//return float4(1,0,0, 1.0f);
-
 		float2 texcoord = input.texcoord;
 
 		float2 screenPos = float2(input.position.x / (float)g_screenWidth, input.position.y / (float)g_screenHeight);

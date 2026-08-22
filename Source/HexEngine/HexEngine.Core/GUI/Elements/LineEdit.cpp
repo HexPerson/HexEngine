@@ -109,6 +109,7 @@ namespace HexEngine
 	void LineEdit::SetValue(const std::wstring& value)
 	{
 		_value = value;
+		_canvas.Redraw();
 	}
 
 	const std::wstring& LineEdit::GetValue() const
@@ -129,6 +130,7 @@ namespace HexEngine
 	void LineEdit::SetUneditableText(const std::wstring& text)
 	{
 		_uneditableText = text;
+		_canvas.Redraw();
 	}
 
 	void LineEdit::SetOnDoubleClickFn(OnDoubleClickFn fn)

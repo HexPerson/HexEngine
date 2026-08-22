@@ -86,9 +86,9 @@ namespace HexEngine::Weather
 			state.zenithExponent = 2.2f;
 			state.anisotropicIntensity = 0.16f;
 			state.atmosphereDensity = 0.16f;
-			state.cloudCoverage = 0.80f;
+			state.cloudCoverage = 0.60f;
 			state.cloudDensity = 1.05f;
-			state.cloudAmbientStrength = 0.22f;
+			state.cloudAmbientStrength = 0.82f;
 			state.cloudViewAbsorption = 0.70f;
 			state.cloudShadowStrength = 0.82f;
 			state.sunIntensity = 0.22f;

@@ -13,6 +13,7 @@ namespace HexEngine
 	class Material;
 	class BaseComponent;
 	class Camera;
+	class StaticMeshComponent;
 
 	struct PVSParams
 	{
@@ -21,7 +22,8 @@ namespace HexEngine
 			lodPartition(0.0f),
 			forceMaxLod(false),
 			isShadow(false),
-			camera(nullptr)
+			camera(nullptr),
+			hasFineSphere(false)
 		{}
 
 		enum class ShapeType
@@ -52,6 +54,13 @@ namespace HexEngine
 		Camera* camera;
 		ShapeType shapeType;
 		bool isShadow;
+
+		// Optional exact shape for the per-frame draw-time fine cull when the
+		// coarse PVS shape is deliberately larger (e.g. a cascade PVS built
+		// from a camera-centred, rotation-invariant sphere passes the actual
+		// slice sphere here so shadow draws stay tight).
+		dx::BoundingSphere fineSphere;
+		bool hasFineSphere;
 	};
 
 	struct RenderableSnapshot
@@ -67,6 +76,13 @@ namespace HexEngine
 		MeshInstanceData instanceData = {};
 		SimpleMeshInstanceData shadowInstanceData = {};
 		Entity* entity = nullptr;
+		// Source component + the entity transform version the cached instance
+		// data was pulled at. The draw loops re-pull instance data lazily when
+		// the entity's version has moved on (O(drawn)); this replaced
+		// UpdateEntityInstanceCache's linear scan of every snapshot per moving
+		// entity per PVS per frame (O(movers x snapshot x PVSes)).
+		StaticMeshComponent* component = nullptr;
+		uint64_t transformVersion = 0;
 		uint32_t stableIndex = 0;
 		bool cullEligible = false;
 		bool forceVisible = true;
@@ -80,7 +96,10 @@ namespace HexEngine
 	class HEX_API PVS
 	{
 	public:
-		using MeshEntityPair = std::tuple<std::shared_ptr<Mesh>, Entity*, BaseComponent*>;
+		// Last element is the mesh's MeshInstanceId, cached at insert time so the
+		// per-batch sort is a plain integer compare instead of chasing
+		// shared_ptr->GetInstance()->GetInstanceId() per comparison.
+		using MeshEntityPair = std::tuple<std::shared_ptr<Mesh>, Entity*, BaseComponent*, uint32_t>;
 		using MeshEntityVector = std::vector<MeshEntityPair>;
 		using MeshInstanceMap = std::map<std::shared_ptr<Material>, MeshEntityVector>;
 
@@ -102,6 +121,10 @@ namespace HexEngine
 		void RemoveEntity(Entity* entity);
 
 		const PVSParams& GetOptimisedParams() const;
+		// The params of the most recent CalculateVisibility call (rebuild or
+		// not) - i.e. the CURRENT, un-inflated cull shape. The draw loops use
+		// it for the per-frame fine cull.
+		const PVSParams& GetCurrentParams() const { return _currentParams; }
 
 		uint32_t GetTotalNumberOfEnts() const { return _totalEnts; }
 		uint32_t GetTotalSkeletalAnimators() const { return _totalSkeletalAnimators; }
@@ -122,6 +145,14 @@ namespace HexEngine
 	private:
 		MeshInstanceMap _pvs;
 		PVSParams _optimisedParams;
+		PVSParams _currentParams;
+		// Planes of the frustum actually culled against (sm for Frustum, lg for
+		// Frustum2), rebuilt whenever _optimisedParams changes. The exact
+		// per-entity sphere test is 6 dot products against these -
+		// dx::BoundingFrustum::Intersects re-derives its planes on EVERY call,
+		// which was ~1/3 of the rebuild loop at 16k candidates.
+		math::Vector4 _cullPlanes[6] = {};
+		bool _cullPlanesValid = false;
 		bool _needsOptimisationRebuild = true;
 		bool _hasBuildOptimisation = false;
 		bool _forceRebuild = true;

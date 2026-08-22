@@ -366,9 +366,6 @@ void GraphicsDeviceD3D11::Destroy()
 		SAFE_DELETE(_engineConstantBuffers[i]);
 	}
 
-	//SAFE_RELEASE(_rasterState);
-	//SAFE_RELEASE(_rasterStateCullFront);
-	//SAFE_RELEASE(_rasterStateCullNone);
 	SAFE_RELEASE(_subtractivetBlendState);
 	SAFE_RELEASE(_additivePreserveAlphaBlendState);
 	SAFE_RELEASE(_transparencyPreserveAlphaBlendState);
@@ -379,23 +376,9 @@ void GraphicsDeviceD3D11::Destroy()
 	SAFE_RELEASE(_velocityMrtTransparencyPreserve);
 	SAFE_RELEASE(_velocityMrtMultiplicative);
 	SAFE_RELEASE(_velocityMrtTransparency);
-	//SAFE_RELEASE(_depthStencilView);
-
-	/*for (int i = 0; i < _countof(_shadowMap); ++i)
-	{
-		SAFE_DELETE(_shadowMap[i]);
-	}*/
-
-	//_gbuffer.Destroy();
-	//_renderTexture->Destroy();
-	//SAFE_DELETE(_composedTexture);
-
-	//SAFE_RELEASE(_texSamplerClamp);
-	//SAFE_RELEASE(_texSamplerWrap);
+	SAFE_DELETE_ARRAY(_emptyShaderResources);
 	SAFE_RELEASE(_texSamplerComparison);
-
 	SAFE_DELETE(_textureLoader);
-
 	SAFE_RELEASE(_deviceContext);
 
 	for (auto& device : _deviceData)

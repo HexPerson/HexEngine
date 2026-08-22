@@ -31,72 +31,17 @@
 
 	float SampleDepth(SamplerComparisonState cmpSampler, SamplerState pointSampler, Texture2D depthMap, float lightDepthValue, float2 projectTexCoord, float2 screenPos, int numSamples, int cascadeIndex)
 	{
-#if 1
 		if (numSamples > 0)
 		{
-			//if (cascadeIndex == 0)
-			{
-				float pcssShadow = PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples);
-
-				// Extra stable AA pass for near cascade: helps thin/elongated jagged edges.
-				float shadowMapSize = max(g_shadowConfig.shadowMapSize, 1.0f);
-				float aaRadiusUV = 1.25f / shadowMapSize;
-				float aa = 0.0f;
-				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2(-aaRadiusUV, -aaRadiusUV), lightDepthValue).r;
-				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2( aaRadiusUV, -aaRadiusUV), lightDepthValue).r;
-				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2(-aaRadiusUV,  aaRadiusUV), lightDepthValue).r;
-				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2( aaRadiusUV,  aaRadiusUV), lightDepthValue).r;
-				aa *= 0.25f;
-
-				return lerp(pcssShadow, aa, 0.4f);
-			}
-			//else
-			#if 0
-			{
-				// Deterministic PCF for cascades > 0 to avoid motion shimmer from derivative/noise-driven kernels.
-				float shadowMapSize = max(g_shadowConfig.shadowMapSize, 1.0f);
-				float baseRadiusTexels = lerp(1.5f, 2.75f, saturate((float)cascadeIndex / 3.0f));
-				float radiusUV = baseRadiusTexels / shadowMapSize;
-				float rotation = (float)cascadeIndex * 1.0471975512f;
-				int sampleCount = max(numSamples, 16);
-
-				float visibility = 0.0f;
-				[loop]
-				for (int s = 0; s < sampleCount; ++s)
-				{
-					float2 offset = PCSS_VogelDiskSample(s, sampleCount, rotation) * radiusUV;
-					visibility += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + offset, lightDepthValue).r;
-				}
-
-				return visibility / (float)sampleCount;
-			}
-			#endif
+			// PCSS derives its penumbra in world units from this cascade's
+			// projection matrix. The old fixed 4-tap box blend that lived here is
+			// gone - PCSS's 1.25-texel minimum filter radius provides the edge AA.
+			return PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples, cascadeIndex);
 		}
 		else
 		{
 			return depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy, lightDepthValue).x;
 		}
-#else
-		if (numSamples > 0)
-		{
-			float sum = 0;
-			float x, y;
-			int num = 0;
-			const float pcfFactor = (float)numSamples;
-			for (y = -pcfFactor; y <= pcfFactor; y += 1.0)
-			{
-				for (x = -pcfFactor; x <= pcfFactor; x += 1.0)
-				{
-					sum += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + TexOffset(x, y), lightDepthValue).r;
-					num = num + 1;
-				}
-			}
-
-			return sum / (float)num;
-		}
-		else
-			return depthMap.Sample(pointSampler, projectTexCoord.xy).r;
-#endif
 	}
 
 	float4 CalculateLightViewPosition(int index, float4 positionWS)

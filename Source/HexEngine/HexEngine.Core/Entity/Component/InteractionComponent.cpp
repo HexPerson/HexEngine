@@ -31,6 +31,10 @@ namespace HexEngine
 		InteractionComponent* s_focused = nullptr;
 		uint64_t              s_focusFrame = static_cast<uint64_t>(-1);
 
+		// Editor-forced focus (material drag-hover highlight); wins over the
+		// look-at raycast while set. Not touched by the per-frame resolve.
+		InteractionComponent* s_editorFocusOverride = nullptr;
+
 		// One app-lifetime input listener fires the focused interactable's
 		// callback on its interact key - a single listener rather than one per
 		// component.
@@ -131,6 +135,8 @@ namespace HexEngine
 	{
 		if (s_focused == this)
 			s_focused = nullptr;
+		if (s_editorFocusOverride == this)
+			s_editorFocusOverride = nullptr;
 		UpdateComponent::Destroy();
 	}
 
@@ -152,7 +158,18 @@ namespace HexEngine
 
 	InteractionComponent* InteractionComponent::GetFocused()
 	{
-		return s_focused;
+		return s_editorFocusOverride != nullptr ? s_editorFocusOverride : s_focused;
+	}
+
+	void InteractionComponent::SetEditorFocusOverride(InteractionComponent* ic)
+	{
+		s_editorFocusOverride = ic;
+
+		if (ic)
+		{
+			ic->_outlineThickness = 16.0f;
+			ic->_highlightColour = math::Color(HEX_RGB_TO_FLOAT3(63, 72, 204));
+		}
 	}
 
 	void InteractionComponent::OnGUI()
@@ -162,6 +179,10 @@ namespace HexEngine
 		// editor's free-look camera. Scene::OnGUI calls this inside the active
 		// GUI frame, so PrintText lands on screen.
 		if (GetFocused() != this)
+			return;
+		// Editor drag-hover highlight wants the outline glow only - no name /
+		// prompt label.
+		if (s_editorFocusOverride == this)
 			return;
 
 		auto* renderer = g_pEnv != nullptr ? g_pEnv->GetUIManager().GetRenderer() : nullptr;
@@ -175,9 +196,12 @@ namespace HexEngine
 		const int32_t cx = (int32_t)(bbvp.width * 0.5f);
 		const int32_t cy = (int32_t)(bbvp.height * 0.60f);
 
-		std::wstring name = ToWide(_interactableName);
-		renderer->PrintText(font, (uint8_t)Style::FontSize::Large, cx, cy, _highlightColour,
-			FontAlign::CentreLR | FontAlign::CentreUD, name);
+		if (!_interactableName.empty())
+		{
+			std::wstring name = ToWide(_interactableName);
+			renderer->PrintText(font, (uint8_t)Style::FontSize::Large, cx, cy, _highlightColour,
+								FontAlign::CentreLR | FontAlign::CentreUD, name);
+		}
 
 		if (!_prompt.empty())
 		{

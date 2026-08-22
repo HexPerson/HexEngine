@@ -39,13 +39,16 @@ public:
 
 private:
 	bool GatherPlannedRoute(std::vector<math::Vector3>& outPoints);
-	bool BuildWaypointRoute(std::vector<math::Vector3>& outPoints) const;
+	bool BuildWaypointRoute(std::vector<math::Vector3>& outPoints, std::vector<float>& outCornerRadii) const;
+	TrafficLaneComponent* ResolveLaneAt(size_t pointIndex);
+	bool PeekNextLanePoint(TrafficLaneComponent* fromLane, math::Vector3& outPoint);
+	bool TryStartCorner(const std::vector<math::Vector3>& points, const math::Vector3& currentPosition, const math::Vector3& targetPoint, float distanceToTarget);
 	bool AdvancePlannedRouteIndex(size_t numPoints);
 	TrafficLaneComponent* ResolveLane();
 	bool GatherLanePoints(std::vector<math::Vector3>& outPoints);
 	bool TrySwitchToConnectedLane();
 	bool AdvanceTargetIndex(size_t numPoints);
-	float ComputeAvoidanceSpeed(const math::Vector3& currentPosition, const math::Vector3& moveDirection, float maxSpeed) const;
+	float ComputeAvoidanceSpeed(const math::Vector3& currentPosition, const math::Vector3& moveDirection, float maxSpeed);
 
 	static std::vector<TrafficVehicleComponent*> s_allVehicles;
 
@@ -80,6 +83,35 @@ private:
 	float _brakingStrength = 6.0f;
 	bool _routeEndReachedEvent = false;
 	std::vector<math::Vector3> _plannedRoutePoints;
+
+	// Avoidance debug state (runtime only): who we're currently braking
+	// for, drawn by OnRenderEditorGizmo so "why is this car stopped?" is
+	// answerable at a glance.
+	bool _debugAvoidanceBlocked = false;
+	math::Vector3 _debugBlockerPos = math::Vector3::Zero;
+
+	// Last direction of travel (normalized, runtime only). Kept while the
+	// vehicle is stopped so avoidance can still reason about which way a
+	// waiting car is pointing.
+	math::Vector3 _lastMoveDirection = math::Vector3::Zero;
+
+	// --- Corner fillet driving (lane-graph mode, runtime only) ---
+	// When the vehicle gets within the current lane's corner radius of its
+	// target node and knows where it's heading next, it drives a bezier
+	// fillet through the corner instead of point-turning at the node.
+	std::vector<math::Vector3> _cornerPoints;
+	size_t _cornerIndex = 0;
+	// Curvature-based speed cap while cornering (1 = no slow-down).
+	float _cornerSpeedScale = 1.0f;
+	// Branch chosen while building the fillet, consumed by the actual lane
+	// switch so the vehicle exits onto the SAME lane the curve aims at.
+	std::string _pendingNextLaneName;
+	// Lane entity names aligned 1:1 with the points GatherLanePoints returns.
+	// Caching them (a) keeps the round-robin branch choice stable instead of
+	// re-rolling it every frame, and (b) lets the corner code look up the
+	// TrafficLaneComponent sitting AT the target node (for its radius and
+	// its outgoing connection).
+	std::vector<std::string> _chainedLaneNames;
 
 	// --- Audio ---
 	// Asset paths (serialized). One engine clip, multiple honk variants

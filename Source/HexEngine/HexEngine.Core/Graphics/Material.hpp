@@ -151,7 +151,7 @@ namespace HexEngine
 		void		RestoreRenderState();
 
 		void AddSoundTag(const std::string& key, const std::string& value);
-		const std::string& GetSoundTag(const std::string& key) const;
+		std::string GetSoundTag(const std::string& key) const;
 
 		void Lock();
 		void Unlock();

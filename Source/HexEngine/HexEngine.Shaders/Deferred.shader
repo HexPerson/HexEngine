@@ -301,13 +301,12 @@
 		//return float4(pixelColour.aaa, 1.0f);
 
 		// sky
-		if(pixelColour.a == -1 || pixelPosWS.a > 0.0f)
+		if(pixelColour.a == -1 /* || pixelPosWS.a > 0.0f */)
 		{
 			//return float4(1, 0, 0, 1.0f);
 			return float4(pixelColour.rgb, 1.0f);
 		}
 		
-
 		float3 lightDir = -normalize(g_lightDirection.xyz);
 		float3 eyeVector = normalize(g_eyePos.xyz - pixelPosWS.xyz);
 
@@ -567,65 +566,11 @@
 			pbr.rgb *= flashTint * flashMul;
 		}
 
+		if(pixelPosWS.a > 0.0f)
+		{
+			return float4(pbr.rgb + pixelColour.rgb * pixelPosWS.a, pbr.a);
+		}
+
 		return pbr;
-
-	#if 0
-		float shinyPower = pixelSpecular.g;
-		float shininessStrength = pixelSpecular.r;
-		float emission = pixelPosWS.w;
-
-		if(emission == -1.0f)
-		{
-			return float4(pixelColour.rgb, 1.0f);
-		}
-		else if (emission > 0.0f)
-		{
-			pixelColour.rgb = pixelColour.rgb * emission;
-		}
-		//else
-		{
-			ShadowInput shadow;
-			shadow.pixelDepth = pixelNormal.w;
-			shadow.positionWS = pixelPosWS;
-			shadow.positionSS = input.position.xy;
-			shadow.samples = g_shadowConfig.samples;
-
-			float d = dot(normalize(pixelNormal.xyz), normalize(g_shadowCasterLightDir.xyz));
-			float bias = g_shadowConfig.biasMultiplier* (1.0 - d);// max(0.000002 * (1.0 - d), 0.0000002); // seems good
-			//float bias = 0.00011 * (1.0 - d);// max(0.000002 * (1.0 - d), 0.0000002);
-
-			float depthValue = CalculateShadows(shadow, g_cmpSampler, g_pointSampler, SHADOWMAPS, bias);
-
-			float3 ambient = pixelColour.rgb * g_atmosphere.ambientLight.rgb;
-			float3 diffuse = float3(0, 0, 0);// pixelColour.rgb* depthValue;// float3(0, 0, 0);
-			float3 specular = float3(0, 0, 0);
-
-			CalculateDiffuseAndSpecularLighting(
-				depthValue,
-				pixelNormal.xyz,
-				pixelSpecular.rrr,
-				pixelColour.rgb * getSunColour(),
-				lightDir,
-				eyeVector, 
-				shinyPower,
-				shininessStrength,		
-				g_globalLight[0],
-				diffuse,
-				specular);
-
-			float lightningFlash = saturate(g_weatherSurface.lightningFlash);
-			float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
-			float lightningNdotL = saturate(dot(normalize(pixelNormal.xyz), lightningDir));
-			float lightningSpec = pow(saturate(dot(normalize(normalize(pixelNormal.xyz) + eyeVector), lightningDir)), lerp(44.0f, 14.0f, saturate(pixelSpecular.r)));
-			float3 lightningColour = float3(0.62f, 0.76f, 1.0f);
-			float3 lightningContribution = lightningColour * lightningFlash * (pixelColour.rgb * lightningNdotL * 0.42f + lightningSpec * 0.62f);
-
-			float3 finalColour = ambient + diffuse + specular + lightningContribution;
-
-			float4 result = float4(finalColour.rgb, 1.0f);
-			return /*saturate*/(result);
-		
-		}
-		#endif
 	}
 }

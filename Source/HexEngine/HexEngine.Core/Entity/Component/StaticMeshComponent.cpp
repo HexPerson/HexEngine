@@ -243,6 +243,13 @@ namespace HexEngine
 		{
 			scene->NotifyStaticMeshChanged(this, true, false);
 		}
+
+		// A mesh swap changes the entity's bounds - keep the PVS culling grid's
+		// cells for it current (unconditional, unlike the GI notify above).
+		if (auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->UpdatePvsSpatialEntriesForEntity(GetEntity());
+		}
 	}
 
 	std::shared_ptr<Mesh> StaticMeshComponent::GetMesh() const
@@ -940,6 +947,9 @@ namespace HexEngine
 
 	void StaticMeshComponent::OnRenderEditorGizmo(bool isSelected, bool& isHovering)
 	{
+		if (!isSelected || !g_pEnv->IsEditorMode())
+			return;
+
 		g_pEnv->_debugRenderer->DrawOBB(GetEntity()->GetWorldOBB(), math::Color(HEX_RGBA_TO_FLOAT4(255, 127, 40, 255)));
 	}
 }

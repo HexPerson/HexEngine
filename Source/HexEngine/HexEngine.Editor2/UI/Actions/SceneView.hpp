@@ -57,6 +57,10 @@ namespace HexEditor
 	private:
 		void InitializeUi();
 		HexEngine::Point GetSceneSurfaceOffset() const;
+		// Highlights the static mesh under the cursor with the interaction
+		// outline glow while a material is being dragged from the asset
+		// explorer. Pass nullptr (or a different entity) to move/clear.
+		void SetMaterialDragHighlight(HexEngine::Entity* entity);
 
 	private:
 		RoamState _roamState = RoamState::None;
@@ -65,6 +69,10 @@ namespace HexEditor
 		std::vector<HexEngine::Entity*> _dragAndDropPrefabRoots;
 		std::vector<math::Vector3> _dragAndDropPrefabRootOffsets;
 		bool _ignoreNextConsumedDroppedAsset = false;
+		HexEngine::Entity* _materialDragHighlightEntity = nullptr;
+		// True when the highlight added a temporary InteractionComponent that
+		// must be removed again; false when the entity already had one.
+		bool _materialDragHighlightOwnsComponent = false;
 		HexEngine::TabView* _tabView = nullptr;
 		HexEngine::TabItem* _sceneTab = nullptr;
 		HexEngine::Button* _runButton = nullptr;

@@ -43,7 +43,7 @@ namespace HexEngine
 
 		if (_canvas.BeginDraw(renderer, width, height /*<< 1*/))
 		{
-			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 180)));
+			renderer->FillQuad(0, 0, width, height, math::Color(HEX_RGBA_TO_FLOAT4(40, 40, 40, 255)));
 			renderer->Line(0, height, width, height, math::Color(HEX_RGBA_TO_FLOAT4(5, 5, 5, 255)));
 
 			std::wstring input = L"] ";
@@ -56,7 +56,7 @@ namespace HexEngine
 
 				int32_t promptY = height;
 
-				for (auto var : vars)
+				for (auto& var : vars)
 				{
 					auto txt = std::wstring(var->_name.begin(), var->_name.end());
 					renderer->PrintText(renderer->_style.font.get(), ConsoleFontSize, 15, promptY, math::Color(1, 1, 1, 1), 0, txt);

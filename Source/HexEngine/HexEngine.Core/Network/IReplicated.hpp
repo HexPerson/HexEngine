@@ -9,7 +9,7 @@
 
 namespace HexEngine
 {
-	class IReplicated;
+	class HEX_API IReplicated;
 
 	// One server-authoritative replicated member. `id` is the CRC32 of the member
 	// name (stable across builds while the name is unchanged). The thunks route
@@ -44,7 +44,7 @@ namespace HexEngine
 	 *       END_REPLICATED()
 	 *   };
 	 */
-	class IReplicated
+	class HEX_API IReplicated
 	{
 	public:
 		virtual ~IReplicated() = default;

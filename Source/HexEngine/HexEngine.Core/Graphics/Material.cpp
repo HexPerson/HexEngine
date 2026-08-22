@@ -413,7 +413,7 @@ namespace HexEngine
 		}
 	}
 
-	const std::string& Material::GetSoundTag(const std::string& key) const
+	std::string Material::GetSoundTag(const std::string& key) const
 	{
 		if (auto it = _soundTags.find(key); it != _soundTags.end())
 		{

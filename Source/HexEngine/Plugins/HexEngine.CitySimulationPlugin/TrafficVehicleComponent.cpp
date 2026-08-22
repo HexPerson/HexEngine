@@ -1,8 +1,10 @@
 #include "TrafficVehicleComponent.hpp"
 #include "TrafficLaneComponent.hpp"
+#include "LanePathSmoothing.hpp"
 #include <HexEngine.Core/Audio/AudioManager.hpp>
 #include <HexEngine.Core/GUI/Elements/ArrayElement.hpp>
 #include <HexEngine.Core/GUI/Elements/AssetSearch.hpp>
+#include <functional>
 #include <unordered_map>
 
 std::vector<TrafficVehicleComponent*> TrafficVehicleComponent::s_allVehicles;
@@ -39,6 +41,7 @@ namespace
 	struct WaypointGraphNode
 	{
 		math::Vector3 position = math::Vector3::Zero;
+		float cornerRadius = 0.0f;
 		std::vector<std::string> neighbours;
 	};
 
@@ -455,13 +458,21 @@ void TrafficVehicleComponent::RestartPath()
 	_targetIndex = 0;
 	_plannedRoutePoints.clear();
 	_routeEndReachedEvent = false;
+	_cornerPoints.clear();
+	_cornerIndex = 0;
+	_cornerSpeedScale = 1.0f;
+	_pendingNextLaneName.clear();
+	_chainedLaneNames.clear();
 
 	if (_useWaypointRoute)
 	{
 		std::vector<math::Vector3> route;
-		if (BuildWaypointRoute(route) && route.size() >= 2)
+		std::vector<float> cornerRadii;
+		if (BuildWaypointRoute(route, cornerRadii) && route.size() >= 2)
 		{
-			_plannedRoutePoints = std::move(route);
+			// Pre-bake the corner fillets straight into the planned route so
+			// the vehicle sweeps corners instead of point-turning at nodes.
+			LanePathSmoothing::SmoothPolyline(route, cornerRadii, _plannedRoutePoints);
 		}
 	}
 
@@ -490,9 +501,10 @@ bool TrafficVehicleComponent::GatherPlannedRoute(std::vector<math::Vector3>& out
 	return GatherLanePoints(outPoints);
 }
 
-bool TrafficVehicleComponent::BuildWaypointRoute(std::vector<math::Vector3>& outPoints) const
+bool TrafficVehicleComponent::BuildWaypointRoute(std::vector<math::Vector3>& outPoints, std::vector<float>& outCornerRadii) const
 {
 	outPoints.clear();
+	outCornerRadii.clear();
 
 	auto* entity = GetEntity();
 	auto* scene = entity != nullptr ? entity->GetScene() : nullptr;
@@ -529,6 +541,7 @@ bool TrafficVehicleComponent::BuildWaypointRoute(std::vector<math::Vector3>& out
 
 			auto& node = graph[waypoint->GetName()];
 			node.position = waypoint->GetWorldTM().Translation();
+			node.cornerRadius = lane->GetCornerRadius();
 		}
 	}
 
@@ -673,11 +686,15 @@ bool TrafficVehicleComponent::BuildWaypointRoute(std::vector<math::Vector3>& out
 	std::reverse(pathNames.begin(), pathNames.end());
 
 	outPoints.reserve(pathNames.size());
+	outCornerRadii.reserve(pathNames.size());
 	for (const auto& name : pathNames)
 	{
 		auto it = graph.find(name);
 		if (it != graph.end())
+		{
 			outPoints.push_back(it->second.position);
+			outCornerRadii.push_back(it->second.cornerRadius);
+		}
 	}
 
 	return outPoints.size() >= 2;
@@ -736,15 +753,42 @@ bool TrafficVehicleComponent::GatherLanePoints(std::vector<math::Vector3>& outPo
 	if (lane == nullptr)
 		return false;
 
+	auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
+
+	// Reuse the cached chain if it's still valid. Without this the round-
+	// robin branch cursor gets re-rolled EVERY FRAME (each TryResolveNextLane
+	// call advances it), so a lane with multiple next-lanes would flicker its
+	// target between branches - and the corner fillet needs the chain names
+	// anyway to find the lane component at the target node.
+	if (scene != nullptr && _chainedLaneNames.size() >= 2 && _chainedLaneNames.front() == _laneEntityName)
+	{
+		outPoints.clear();
+		bool valid = true;
+		for (const auto& name : _chainedLaneNames)
+		{
+			auto* chainEntity = scene->GetEntityByName(name);
+			if (chainEntity == nullptr || chainEntity->IsPendingDeletion())
+			{
+				valid = false;
+				break;
+			}
+			outPoints.push_back(chainEntity->GetWorldTM().Translation());
+		}
+		if (valid)
+			return true;
+	}
+	_chainedLaneNames.clear();
+
 	lane->GatherLanePoints(outPoints);
 	if (outPoints.size() >= 2)
 		return true;
 
 	// Lane graph can be authored as explicit next-node links.
 	// Build a deterministic forward chain to provide at least 2 points for non-route driving mode.
-	auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
 	if (scene == nullptr || outPoints.empty())
 		return false;
+
+	_chainedLaneNames.push_back(_laneEntityName);
 
 	std::unordered_set<std::string> visited;
 	auto* cursor = lane;
@@ -763,13 +807,18 @@ bool TrafficVehicleComponent::GatherLanePoints(std::vector<math::Vector3>& outPo
 			break;
 
 		outPoints.push_back(nextEntity->GetWorldTM().Translation());
+		_chainedLaneNames.push_back(nextName);
 		if (outPoints.size() >= 2)
 			return true;
 
 		cursor = nextLane;
 	}
 
-	return outPoints.size() >= 2;
+	if (outPoints.size() >= 2)
+		return true;
+
+	_chainedLaneNames.clear();
+	return false;
 }
 
 bool TrafficVehicleComponent::TrySwitchToConnectedLane()
@@ -784,7 +833,25 @@ bool TrafficVehicleComponent::TrySwitchToConnectedLane()
 
 	std::string nextLaneName;
 	TrafficLaneComponent* nextLane = nullptr;
-	if (!TryResolveNextLane(scene, currentLane, nextLaneName, nextLane))
+
+	// If a corner fillet already picked the branch, take that SAME branch -
+	// re-rolling the round-robin here would send the vehicle down a different
+	// lane than the curve it just drove was aiming at.
+	if (!_pendingNextLaneName.empty())
+	{
+		auto* pendingEntity = scene->GetEntityByName(_pendingNextLaneName);
+		if (pendingEntity != nullptr && !pendingEntity->IsPendingDeletion())
+		{
+			if (auto* pendingLane = pendingEntity->GetComponent<TrafficLaneComponent>())
+			{
+				nextLane = pendingLane;
+				nextLaneName = _pendingNextLaneName;
+			}
+		}
+		_pendingNextLaneName.clear();
+	}
+
+	if (nextLane == nullptr && !TryResolveNextLane(scene, currentLane, nextLaneName, nextLane))
 		return false;
 
 	std::vector<math::Vector3> points;
@@ -797,6 +864,7 @@ bool TrafficVehicleComponent::TrySwitchToConnectedLane()
 	const float endDistanceSq = (points.back() - vehiclePos).LengthSquared();
 
 	_laneEntityName = nextLaneName;
+	_chainedLaneNames.clear();
 	if (points.size() >= 2)
 	{
 		_invertDirection = (endDistanceSq < startDistanceSq);
@@ -807,6 +875,122 @@ bool TrafficVehicleComponent::TrySwitchToConnectedLane()
 		_invertDirection = false;
 		_targetIndex = 0;
 	}
+	return true;
+}
+
+TrafficLaneComponent* TrafficVehicleComponent::ResolveLaneAt(size_t pointIndex)
+{
+	auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
+	if (scene == nullptr || pointIndex >= _chainedLaneNames.size())
+		return nullptr;
+
+	auto* laneEntity = scene->GetEntityByName(_chainedLaneNames[pointIndex]);
+	if (laneEntity == nullptr || laneEntity->IsPendingDeletion())
+		return nullptr;
+
+	return laneEntity->GetComponent<TrafficLaneComponent>();
+}
+
+bool TrafficVehicleComponent::PeekNextLanePoint(TrafficLaneComponent* fromLane, math::Vector3& outPoint)
+{
+	auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
+	if (scene == nullptr)
+		return false;
+
+	if (!_pendingNextLaneName.empty())
+	{
+		auto* pendingEntity = scene->GetEntityByName(_pendingNextLaneName);
+		if (pendingEntity != nullptr && !pendingEntity->IsPendingDeletion())
+		{
+			outPoint = pendingEntity->GetWorldTM().Translation();
+			return true;
+		}
+		_pendingNextLaneName.clear();
+	}
+
+	if (fromLane == nullptr)
+		return false;
+
+	std::string nextName;
+	TrafficLaneComponent* nextLane = nullptr;
+	if (!TryResolveNextLane(scene, fromLane, nextName, nextLane))
+		return false;
+
+	// Remember the branch so the actual lane switch (after the corner
+	// completes) exits onto the lane the fillet was built for.
+	_pendingNextLaneName = nextName;
+	outPoint = nextLane->GetEntity()->GetWorldTM().Translation();
+	return true;
+}
+
+bool TrafficVehicleComponent::TryStartCorner(const std::vector<math::Vector3>& points, const math::Vector3& currentPosition, const math::Vector3& targetPoint, float distanceToTarget)
+{
+	auto* lane = ResolveLane();
+	if (lane == nullptr)
+		return false;
+
+	// The radius belongs to the node we're TURNING AT (the target), not the
+	// lane we're currently driving on - that's the node the level author sets
+	// the radius on. Fall back to the current lane if the chain can't resolve.
+	auto* targetLane = ResolveLaneAt(_targetIndex);
+	const float radius = targetLane != nullptr ? targetLane->GetCornerRadius() : lane->GetCornerRadius();
+	if (radius <= 0.1f || distanceToTarget > radius || distanceToTarget <= 0.05f)
+		return false;
+
+	// Where do we head after the target node?
+	math::Vector3 nextPoint;
+	bool haveNext = false;
+	if (!_invertDirection && _targetIndex + 1 < points.size())
+	{
+		nextPoint = points[_targetIndex + 1];
+		haveNext = true;
+	}
+	else if (_invertDirection && _targetIndex > 0)
+	{
+		nextPoint = points[_targetIndex - 1];
+		haveNext = true;
+	}
+	else
+	{
+		// Terminal node - the direction after it comes from the lane sitting
+		// AT the target node: ITS next-lane link says where the road goes on.
+		// (Peeking the current lane would just return the target itself.)
+		// Loop wrap-around is the fallback, matching AdvanceTargetIndex's
+		// precedence: explicit next-lane links win over local looping.
+		haveNext = PeekNextLanePoint(targetLane != nullptr ? targetLane : lane, nextPoint);
+		if (!haveNext && lane->IsLooping() && points.size() > 2)
+		{
+			nextPoint = _invertDirection ? points[points.size() - 1] : points[0];
+			haveNext = true;
+		}
+	}
+	if (!haveNext)
+		return false;
+
+	math::Vector3 dirIn = targetPoint - currentPosition;
+	math::Vector3 dirOut = nextPoint - targetPoint;
+	const float lenOut = dirOut.Length();
+	if (lenOut <= 0.001f)
+		return false;
+	dirIn.Normalize();
+	dirOut *= (1.0f / lenOut);
+
+	const float cosTurn = dirIn.Dot(dirOut);
+	if (cosTurn > 0.99f)
+		return false; // effectively straight - normal arrival handles it
+
+	const float exitTrim = std::min(radius, lenOut * 0.45f);
+	const math::Vector3 exitPoint = targetPoint + dirOut * exitTrim;
+
+	const float turnAlpha = std::clamp((1.0f - cosTurn) * 0.5f, 0.0f, 1.0f);
+	const int32_t samples = 4 + static_cast<int32_t>(turnAlpha * 8.0f);
+
+	_cornerPoints.clear();
+	LanePathSmoothing::AppendBezierSamples(currentPosition, targetPoint, exitPoint, samples, _cornerPoints);
+	_cornerIndex = 0;
+	// Sharper corners slow the vehicle more (down to ~35% of lane speed for
+	// a U-turn); gentle bends barely slow at all.
+	_cornerSpeedScale = std::clamp(1.0f - turnAlpha * 0.65f, 0.35f, 1.0f);
 	return true;
 }
 
@@ -904,8 +1088,10 @@ bool TrafficVehicleComponent::AdvanceTargetIndex(size_t numPoints)
 	return false;
 }
 
-float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& currentPosition, const math::Vector3& moveDirection, float maxSpeed) const
+float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& currentPosition, const math::Vector3& moveDirection, float maxSpeed)
 {
+	_debugAvoidanceBlocked = false;
+
 	if (!_avoidanceEnabled)
 		return maxSpeed;
 
@@ -928,6 +1114,8 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 
 	float nearestAheadDistance = std::numeric_limits<float>::max();
 
+	HexEngine::Entity* lastBlocker = nullptr;
+
 	for (auto* other : nearby)
 	{
 		if (other == nullptr || other == this)
@@ -938,6 +1126,11 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 
 		const math::Vector3 otherPos = otherEnt->GetWorldTM().Translation();
 		const math::Vector3 toOther = otherPos - currentPosition;
+
+		// Vertical gate: a car on an overpass/underpass isn't an obstacle
+		// even if it sits directly over our path.
+		if (std::abs(toOther.y) > 3.0f)
+			continue;
 
 		// Forward projection. Drop strictly-behind and beyond look-ahead.
 		// (Old code allowed slightly-behind via `-followDistance*0.5`,
@@ -955,13 +1148,54 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 		if (lateralSq > laneHalfWidthSq)
 			continue;
 
-		nearestAheadDistance = std::min(nearestAheadDistance, projectedDistance);
+		// --- Direction-aware filtering ---
+		// Lanes are one-way, so genuine same-lane traffic always travels
+		// roughly WITH us. Without these checks, oncoming cars in the
+		// opposite lane (and junction cross-traffic) that graze the narrow
+		// corridor read as obstacles: both vehicles brake at each other and
+		// deadlock with nothing actually blocking either path.
+		math::Vector3 otherHeading = other->_lastMoveDirection;
+		if (otherHeading.LengthSquared() < 0.001f)
+			otherHeading = math::Vector3::TransformNormal(math::Vector3(0.0f, 0.0f, 1.0f), otherEnt->GetWorldTM());
+		if (otherHeading.LengthSquared() > 0.001f)
+			otherHeading.Normalize();
+
+		const float headingDot = otherHeading.Dot(moveDirection);
+		const bool otherMoving = other->_currentSpeed > 0.5f;
+
+		// Moving oncoming traffic passes us in its own lane - never brake
+		// to a stop for it.
+		if (otherMoving && headingDot < -0.35f)
+			continue;
+
+		if (!otherMoving && other->_blockedTime > 1.0f && headingDot < 0.5f)
+		{
+			// The other car is stopped, stuck waiting itself, and NOT simply
+			// queued ahead of us in our own lane (same-lane queues have
+			// headingDot ~1 and must still be honoured). If it's pointing
+			// toward us this is a mutual standoff - break it
+			// deterministically: the lower-pointer vehicle proceeds.
+			const float dist = std::max(std::sqrt(distSq), 0.01f);
+			const float facingUs = -otherHeading.Dot(toOther) / dist;
+			if (facingUs > 0.2f && std::less<const TrafficVehicleComponent*>()(this, other))
+				continue;
+		}
+
+		if (projectedDistance < nearestAheadDistance)
+		{
+			nearestAheadDistance = projectedDistance;
+			_debugBlockerPos = otherPos;
+			lastBlocker = otherEnt;
+		}
 	}
 
 	if (nearestAheadDistance == std::numeric_limits<float>::max())
 		return maxSpeed;
 	if (nearestAheadDistance <= followDistance)
+	{
+		_debugAvoidanceBlocked = true;
 		return 0.0f;
+	}
 
 	// Smooth ramp from `followDistance` -> `lookAhead` mapping speed
 	// 0 -> maxSpeed. Smoothstep gives nicer braking than the old linear
@@ -1019,7 +1253,64 @@ void TrafficVehicleComponent::Update(float frameTime)
 	float distanceToTarget = toTarget.Length();
 
 	const float arrivalDistance = std::max(_arrivalDistance, 0.01f);
-	if (distanceToTarget <= arrivalDistance)
+
+	// --- Corner fillet driving (lane-graph mode only; planned waypoint
+	// routes are pre-smoothed in RestartPath). Entering the lane's corner
+	// radius spawns a bezier micro-path through the node; while it's active
+	// the vehicle chases its samples instead of the node itself.
+	if (!_useWaypointRoute)
+	{
+		if (_cornerPoints.empty())
+		{
+			TryStartCorner(points, currentPosition, targetPoint, distanceToTarget);
+		}
+
+		if (!_cornerPoints.empty())
+		{
+			const float sampleArrival = std::max(arrivalDistance * 0.5f, 0.2f);
+			while (_cornerIndex < _cornerPoints.size() && (_cornerPoints[_cornerIndex] - currentPosition).Length() <= sampleArrival)
+				++_cornerIndex;
+
+			if (_cornerIndex >= _cornerPoints.size())
+			{
+				// Corner complete - we're already on the outgoing leg past
+				// the node, so process the node arrival now.
+				_cornerPoints.clear();
+				_cornerIndex = 0;
+				_cornerSpeedScale = 1.0f;
+
+				const bool reachedRouteEnd = AdvanceTargetIndex(points.size());
+				if (reachedRouteEnd)
+				{
+					if (_despawnAtRouteEnd)
+					{
+						GetEntity()->DeleteMe();
+					}
+					else
+					{
+						_routeEndReachedEvent = true;
+					}
+					_currentSpeed = 0.0f;
+					return;
+				}
+
+				if (!GatherPlannedRoute(points))
+					return;
+
+				_targetIndex = std::min(_targetIndex, points.size() - 1);
+				targetPoint = points[_targetIndex];
+			}
+			else
+			{
+				targetPoint = _cornerPoints[_cornerIndex];
+			}
+
+			toTarget = targetPoint - currentPosition;
+			distanceToTarget = toTarget.Length();
+		}
+	}
+
+	if (_cornerPoints.empty() && distanceToTarget <= arrivalDistance)
 	{
 		const bool reachedRouteEnd = _useWaypointRoute
 			? AdvancePlannedRouteIndex(points.size())
@@ -1052,10 +1343,14 @@ void TrafficVehicleComponent::Update(float frameTime)
 		return;
 
 	toTarget.Normalize();
+	_lastMoveDirection = toTarget;
 
 	auto* lane = ResolveLane();
 	const float laneSpeed = lane != nullptr ? lane->GetSpeedLimit() : _speed;
-	const float maxSpeed = std::max(_useLaneSpeedLimit ? laneSpeed : _speed, 0.0f);
+	float maxSpeed = std::max(_useLaneSpeedLimit ? laneSpeed : _speed, 0.0f);
+	// Slow through active corner fillets - sharper turn, stronger slow-down.
+	if (!_cornerPoints.empty())
+		maxSpeed *= _cornerSpeedScale;
 	// Cache the achievable top speed so the audio system can map
 	// pitch correctly. Using _speed as the denominator means cars on
 	// slow lanes never reach max pitch even at their actual cruise.
@@ -1363,6 +1658,24 @@ void TrafficVehicleComponent::OnRenderEditorGizmo(bool isSelected, bool& isHover
 
 	HexEngine::g_pEnv->_debugRenderer->DrawLine(from, to, math::Color(HEX_RGB_TO_FLOAT3(52, 152, 219), 1.0f));
 	DrawPointMarker(to, 0.4f, math::Color(HEX_RGB_TO_FLOAT3(52, 152, 219), 1.0f));
+
+	// Active corner fillet path (cyan).
+	if (_cornerIndex < _cornerPoints.size())
+	{
+		const math::Color cornerColour = math::Color(HEX_RGB_TO_FLOAT3(26, 188, 156), 1.0f);
+		HexEngine::g_pEnv->_debugRenderer->DrawLine(from, _cornerPoints[_cornerIndex], cornerColour);
+		for (size_t i = _cornerIndex; i + 1 < _cornerPoints.size(); ++i)
+			HexEngine::g_pEnv->_debugRenderer->DrawLine(_cornerPoints[i], _cornerPoints[i + 1], cornerColour);
+	}
+
+	// Avoidance block (red): line + box to the exact entity we're braking
+	// for. If a car is "stopped for no reason", this points at the reason.
+	if (_debugAvoidanceBlocked)
+	{
+		const math::Color blockColour = math::Color(HEX_RGB_TO_FLOAT3(231, 76, 60), 1.0f);
+		HexEngine::g_pEnv->_debugRenderer->DrawLine(from + math::Vector3(0.0f, 1.0f, 0.0f), _debugBlockerPos + math::Vector3(0.0f, 1.0f, 0.0f), blockColour);
+		DrawPointMarker(_debugBlockerPos, 1.2f, blockColour);
+	}
 
 	if (_useWaypointRoute && points.size() > 1)
 	{
