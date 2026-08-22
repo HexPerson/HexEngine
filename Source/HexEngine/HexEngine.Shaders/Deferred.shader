@@ -18,6 +18,7 @@
 	// Octahedral environment atlas helpers (SampleEnvAtlas), for sky IBL.
 	EnvMapCommon
 	PBRutils
+	CloudCommon
 }
 "VertexShader"
 {
@@ -37,8 +38,10 @@
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	Texture2D g_beautyTex : register(t5);
 	SHADOWMAPS_RESOURCE(6);
-	Texture3D g_cloudShapeNoise : register(t12);
-	Texture3D g_cloudDetailNoise : register(t13);
+	// Cached cloud shadow map (t12; see CloudShadowMap.shader). t13 is left
+	// free - it used to hold the second cloud noise volume for the per-pixel
+	// slab re-march this replaced.
+	Texture2D g_cloudShadowMap : register(t12);
 	// t14 = features RT (bound explicitly by RenderDirectionalLights).
 	// Prefiltered sky environment atlas for image-based lighting, bound explicitly at
 	// t15 (SkyEnvMap.shader's output: octahedral rows, one per roughness level - see
@@ -78,115 +81,11 @@
 	SamplerState g_pointSampler : register(s2);
 	SamplerState g_mirrorSampler : register(s3);
 
-	cbuffer CloudConstants : register(b4)
-	{
-		float4 g_cloudBoundsMin;
-		float4 g_cloudBoundsMax;
-		float4 g_cloudParams0; // x=density, y=coverage, z=erosion, w=maxDistance
-		float4 g_cloudParams1; // x=absorption, y=powder, z=anisotropy, w=stepScale
-		float4 g_cloudParams2; // x=shapeScale, y=detailScale, z=windSpeed, w=animationSpeed
-		float4 g_cloudParams3; // x=viewAbsorption, y=ambientStrength, z=shadowFloor, w=phaseBoost
-		float4 g_cloudParams4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
-		float4 g_cloudParams5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
-		float4 g_cloudWindDirection; // xyz=wind direction, w=quality preset
-		float4 g_cloudWindOffset; // xyz=accumulated wind offset, w=reserved
-		float4 g_cloudMarch; // x=view steps, y=light steps, z=ground shadow steps, w=ground shadow strength
-	};
 
-	float2 RayBoxDist(float3 boundsMin, float3 boundsMax, float3 rayOrigin, float3 rayDir)
-	{
-		float3 safeDir = rayDir;
-		safeDir.x = abs(safeDir.x) < 1e-5f ? (safeDir.x < 0.0f ? -1e-5f : 1e-5f) : safeDir.x;
-		safeDir.y = abs(safeDir.y) < 1e-5f ? (safeDir.y < 0.0f ? -1e-5f : 1e-5f) : safeDir.y;
-		safeDir.z = abs(safeDir.z) < 1e-5f ? (safeDir.z < 0.0f ? -1e-5f : 1e-5f) : safeDir.z;
-		const float3 invDir = 1.0f / safeDir;
-		const float3 t0 = (boundsMin - rayOrigin) * invDir;
-		const float3 t1 = (boundsMax - rayOrigin) * invDir;
-		const float3 tmin = min(t0, t1);
-		const float3 tmax = max(t0, t1);
 
-		const float dstA = max(max(tmin.x, tmin.y), tmin.z);
-		const float dstB = min(tmax.x, min(tmax.y, tmax.z));
 
-		const float dstToBox = max(0.0f, dstA);
-		const float dstInsideBox = max(0.0f, dstB - dstToBox);
 
-		return float2(dstToBox, dstInsideBox);
-	}
 
-	float CloudWmHash12(float2 p)
-	{
-		const float h = dot(p, float2(127.1f, 311.7f));
-		return frac(sin(h) * 43758.5453123f);
-	}
-
-	float CloudWmValueNoise2(float2 p)
-	{
-		const float2 pi = floor(p);
-		const float2 pf = frac(p);
-		const float2 w = pf * pf * (3.0f - 2.0f * pf);
-		const float n00 = CloudWmHash12(pi);
-		const float n10 = CloudWmHash12(pi + float2(1.0f, 0.0f));
-		const float n01 = CloudWmHash12(pi + float2(0.0f, 1.0f));
-		const float n11 = CloudWmHash12(pi + float2(1.0f, 1.0f));
-		return lerp(lerp(n00, n10, w.x), lerp(n01, n11, w.x), w.y);
-	}
-
-	float CloudWmWeatherCoverage(float2 xz, float2 windXz)
-	{
-		const float2 p = (xz + windXz * 220.0f) * (1.0f / 1400.0f);
-		const float fbm =
-			CloudWmValueNoise2(p) * 0.55f +
-			CloudWmValueNoise2(p * 2.3f + 17.1f.xx) * 0.30f +
-			CloudWmValueNoise2(p * 5.1f + 41.7f.xx) * 0.15f;
-		return saturate(fbm);
-	}
-
-	// MUST stay identical to SampleCloudDensity in VolumetricClouds.shader -
-	// this is a hand-duplicated copy (differing only in texture names). It
-	// has now diverged TWICE (the old inverted erosion curve, then the whole
-	// 2026-08 weather-map rework) - both times the symptom was ground cloud
-	// shadows computed from a density field that no longer matched the
-	// clouds being drawn. If you touch one, touch both.
-	float SampleCloudDensity(float3 worldPos, float3 boundsMin, float3 boundsMax, float3 windOffset)
-	{
-		const float3 boundsSize = max(boundsMax - boundsMin, 1e-3f.xxx);
-		const float3 localUVW = (worldPos - boundsMin) / boundsSize;
-
-		if (any(localUVW < 0.0f.xxx) || any(localUVW > 1.0f.xxx))
-			return 0.0f;
-
-		const float coverage = saturate(g_cloudParams0.y);
-		const float wm = CloudWmWeatherCoverage(worldPos.xz, windOffset.xz);
-		const float threshold = lerp(0.80f, 0.16f, coverage);
-		const float columnCoverage = smoothstep(threshold, threshold + 0.24f, wm);
-		if (columnCoverage <= 0.002f)
-			return 0.0f;
-
-		const float shape = g_cloudShapeNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.x + windOffset, 0.0f).r;
-		const float detail = g_cloudDetailNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r;
-
-		const float height = saturate(localUVW.y);
-		const float baseLift = (1.0f - wm) * 0.26f + (1.0f - shape) * 0.12f;
-		const float heightMask = smoothstep(0.03f + baseLift, 0.24f + baseLift, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
-		const float coreTop = lerp(0.62f, 0.90f, columnCoverage);
-		const float verticalCore = smoothstep(0.05f + baseLift * 0.8f, lerp(0.55f, 0.35f, columnCoverage) + baseLift * 0.5f, height) * (1.0f - smoothstep(coreTop, 0.98f, height));
-
-		float cloud = columnCoverage * heightMask * verticalCore;
-		const float shapeErode = (1.0f - shape) * lerp(0.62f, 0.30f, columnCoverage);
-		cloud = saturate((cloud - shapeErode) / max(0.05f, 1.0f - shapeErode));
-		const float erosionByHeight = lerp(0.55f, 1.45f, smoothstep(0.25f, 0.95f, height));
-		const float detailErode = saturate((1.0f - detail) * g_cloudParams0.z * erosionByHeight);
-		cloud = saturate((cloud - detailErode) / max(0.05f, 1.0f - detailErode));
-
-		const float structure =
-			lerp(0.42f, 1.0f, shape) *
-			lerp(0.68f, 1.05f, detail) *
-			lerp(0.78f, 1.0f, wm);
-		const float densityShape = lerp(cloud * cloud, cloud, 0.55f) * structure;
-
-		return min(densityShape * g_cloudParams0.x, 2.0f);
-	}
 
 	// SampleSkyEnv's one caller moved into EnvMapCommon::EvaluateEnvSpecular, which
 	// takes the atlas as a parameter so the SSR resolve can call it too.
@@ -194,48 +93,14 @@
 	// ProbeWeight / ProbeSpecularDir moved to EnvMapCommon.shader, alongside the
 	// EvaluateEnvSpecular that both this pass and the SSR resolve now call.
 
+	// Cloud shadow from the cached top-down transmittance map: one filtered
+	// tap instead of re-marching the cloud slab per pixel (the old path also
+	// used a hand-copied density function that drifted from the clouds
+	// actually drawn - the map is rendered from the shared one).
 	float CalculateCloudShadow(float3 worldPos, float3 sunDir)
 	{
-		const float shadowStrength = saturate(g_cloudMarch.w);
-		if (shadowStrength <= 0.0001f)
-			return 1.0f;
-
-		const float3 boundsMin = g_cloudBoundsMin.xyz;
-		const float3 boundsMax = g_cloudBoundsMax.xyz;
-		if (worldPos.y > boundsMax.y)
-			return 1.0f;
-
-		const int shadowSteps = max(1, (int)g_cloudMarch.z);
-		const float2 hit = RayBoxDist(boundsMin, boundsMax, worldPos, sunDir);
-		if (hit.y <= 0.0f)
-			return 1.0f;
-
-		const float3 windOffset = g_cloudWindOffset.xyz;
-
-		// Physical per-metre extinction + span clamp, matching the cloud
-		// render marches (see VolumetricClouds.shader): horizon-scale bounds
-		// can put kilometres of slab above a pixel, and light beyond ~900m of
-		// cloud is fully extinct anyway.
-		const float invCloudHeight = 0.012f;
-		const float shadowSpan = min(hit.y, 900.0f);
-		const float stepLen = max(1.0f, shadowSpan / (float)shadowSteps);
-
-		float opticalDepth = 0.0f;
-		float travelled = 0.0f;
-		[loop]
-		for (int i = 0; i < shadowSteps; ++i)
-		{
-			if (travelled >= shadowSpan)
-				break;
-
-			const float3 samplePos = worldPos + sunDir * (hit.x + travelled);
-			const float density = SampleCloudDensity(samplePos, boundsMin, boundsMax, windOffset);
-			opticalDepth += density * stepLen * invCloudHeight;
-			travelled += stepLen;
-		}
-
-		const float cloudTransmittance = max(g_cloudParams3.z, exp(-opticalDepth * g_cloudParams1.x));
-		return lerp(1.0f, cloudTransmittance, shadowStrength);
+		// sunDir is unused: the map carries the sun direction it was rendered with.
+		return SampleCloudShadowMap(g_cloudShadowMap, g_textureSampler, worldPos);
 	}
 
 	void CalculateDiffuseAndSpecularLighting(

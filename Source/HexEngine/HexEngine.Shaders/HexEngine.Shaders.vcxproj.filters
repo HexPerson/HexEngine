@@ -88,6 +88,8 @@
     <HexEngineShader Include="DiffuseGIVoxelize.shader" />
     <HexEngineShader Include="DiffuseGIAOBlur.shader" />
     <HexEngineShader Include="AtmosphereCommon.shader" />
+    <HexEngineShader Include="CloudCommon.shader" />
+    <HexEngineShader Include="CloudShadowMap.shader" />
     <HexEngineShader Include="AtmosphereTransmittanceLUT.shader" />
     <HexEngineShader Include="AtmosphereMultiScatteringLUT.shader" />
     <HexEngineShader Include="AtmosphereSkyViewLUT.shader" />

@@ -105,6 +105,11 @@ namespace HexEngine
 	HVar r_cloudCastShadows("r_cloudCastShadows", "Enable cloud shadows on scene lighting", true, false, true);
 	HVar r_cloudShadowStrength("r_cloudShadowStrength", "Strength of cloud-cast shadows on scene lighting", 0.6f, 0.0f, 1.0f);
 	HVar r_cloudShadowSteps("r_cloudShadowSteps", "Cloud shadow ray-march step count", 6, 1, 32);
+	// Cached cloud shadow map (CloudShadowMap.shader): rendered once per frame
+	// over a square of the cloud base plane centred on the camera; Deferred
+	// samples it instead of re-marching the slab per pixel.
+	HVar r_cloudShadowMapSize("r_cloudShadowMapSize", "Cloud shadow map resolution (texels per side)", 1024, 256, 4096);
+	HVar r_cloudShadowMapExtent("r_cloudShadowMapExtent", "Cloud shadow map half-extent around the camera (m)", 2500.0f, 250.0f, 20000.0f);
 	HVar r_cloudQuality("r_cloudQuality", "Cloud quality preset (0 = performance, 1 = balanced, 2 = quality)", 1, 0, 2);
 	// Horizon-scale defaults (was a 1.2km x 100m slab terminating ~600m out -
 	// no sky deck was possible). The march uses progressive steps + a far
@@ -723,6 +728,11 @@ namespace HexEngine
 			math::Vector4 windDirection; // xyz=windDir, w=qualityPreset
 			math::Vector4 windOffset; // xyz=accumulated wind offset, w=reserved
 			math::Vector4 marchParams; // x=viewSteps, y=lightSteps, z=reserved, w=reserved
+			// Cached cloud shadow map placement (mirrors CloudCommon.shader).
+			math::Vector4 shadowMapOrigin; // xyz = centre on the cloud base plane, w = half extent (0 = no map)
+			math::Vector4 shadowMapAxisX;  // xyz = +U axis (world)
+			math::Vector4 shadowMapAxisZ;  // xyz = +V axis (world)
+			math::Vector4 shadowMapSun;    // xyz = sun direction (surface -> sun), w = shadow strength
 		};
 
 		static int32_t GetCloudQualityPreset()
@@ -835,6 +845,42 @@ namespace HexEngine
 				(float)GetCloudEffectiveSteps(r_cloudLightSteps._val.f32, 2, 64),
 				(float)GetCloudEffectiveSteps((float)r_cloudShadowSteps._val.i32, 1, 32),
 				(r_cloudEnable._val.b && r_cloudCastShadows._val.b) ? r_cloudShadowStrength._val.f32 : 0.0f);
+
+			// Shadow map placement: a square of the cloud base plane centred on
+			// the camera (snapped to the texel grid so the map doesn't swim as
+			// the camera moves), axis-aligned in world XZ. The sun direction is
+			// baked in because the map integrates along it.
+			constants.shadowMapOrigin = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			constants.shadowMapAxisX = math::Vector4(1.0f, 0.0f, 0.0f, 0.0f);
+			constants.shadowMapAxisZ = math::Vector4(0.0f, 0.0f, 1.0f, 0.0f);
+			constants.shadowMapSun = math::Vector4(0.0f, 1.0f, 0.0f, 0.0f);
+			{
+				DirectionalLight* sun = nullptr;
+				if (g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr)
+				{
+					if (auto scene = g_pEnv->_sceneManager->GetCurrentScene(); scene != nullptr)
+						sun = scene->GetSunLight();
+				}
+				math::Vector3 sunDir = math::Vector3::Up;
+				if (sun != nullptr && sun->GetEntity() != nullptr)
+				{
+					if (auto* tf = sun->GetEntity()->GetComponent<Transform>())
+					{
+						sunDir = -tf->GetForward();
+						if (sunDir.LengthSquared() > 1e-6f)
+							sunDir.Normalize();
+					}
+				}
+				const float strength = constants.marchParams.w;
+				const float halfExtent = std::max(r_cloudShadowMapExtent._val.f32, 1.0f);
+				const float texel = (2.0f * halfExtent) / (float)std::max(r_cloudShadowMapSize._val.i32, 1);
+				const math::Vector3 cameraPos = camera->GetEntity() ? camera->GetEntity()->GetPosition() : math::Vector3::Zero;
+				const float cx = std::floor(cameraPos.x / texel) * texel;
+				const float cz = std::floor(cameraPos.z / texel) * texel;
+				const bool valid = strength > 0.0001f && sunDir.y > 0.02f;
+				constants.shadowMapOrigin = math::Vector4(cx, boundsMin.y, cz, valid ? halfExtent : 0.0f);
+				constants.shadowMapSun = math::Vector4(sunDir.x, sunDir.y, sunDir.z, strength);
+			}
 
 			return true;
 		}
@@ -1165,6 +1211,7 @@ namespace HexEngine
 		SAFE_DELETE(_waterRT);
 		SAFE_DELETE(_cloudShapeNoise);
 		SAFE_DELETE(_cloudDetailNoise);
+		SAFE_DELETE(_cloudShadowMap);
 		SAFE_DELETE(_cloudConstantBuffer);
 		SAFE_DELETE(_forwardLightsBuffer);
 		SAFE_DELETE(_subsurfaceIntermediateRT);
@@ -1213,6 +1260,7 @@ namespace HexEngine
 		_fogEffect					= IShader::Create("EngineData.Shaders/PostFog.hcs");
 		_volumetricLighting			= IShader::Create("EngineData.Shaders/VolumetricLighting.hcs");
 		_volumetricClouds			= IShader::Create("EngineData.Shaders/VolumetricClouds.hcs");
+		_cloudShadowMapShader		= IShader::Create("EngineData.Shaders/CloudShadowMap.hcs");
 		_bilateralUpsample			= IShader::Create("EngineData.Shaders/BilateralUpsample.hcs");
 		_pointLightShader			= IShader::Create("EngineData.Shaders/PointLight.hcs");
 		_spotLightShader			= IShader::Create("EngineData.Shaders/SpotLight.hcs");
@@ -5007,10 +5055,14 @@ namespace HexEngine
 		const bool hasCloudShadowData = (_cloudConstantBuffer != nullptr && _cloudShapeNoise != nullptr && _cloudDetailNoise != nullptr)
 			&& BuildCloudConstants(_currentCamera, cloudConstants);
 
+		bool hasCloudShadowMap = false;
 		if (hasCloudShadowData)
 		{
 			_cloudConstantBuffer->Write(&cloudConstants, sizeof(cloudConstants));
 			g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _cloudConstantBuffer);
+			// Render this frame's cloud shadow map before the composition
+			// binds its own targets; Deferred samples it at t12.
+			hasCloudShadowMap = RenderCloudShadowMap(cloudConstants.shadowMapOrigin.w > 0.0f);
 		}
 
 		
@@ -5054,22 +5106,13 @@ namespace HexEngine
 					shadowMap->BindAsShaderResource();
 				}
 
-				if (hasCloudShadowData)
-				{
-					// Deferred uses SHADOWMAPS at t6..t11, so skip t10/t11 before binding cloud 3D noise at t12/t13.
-					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture3D(_cloudShapeNoise);
-					g_pEnv->_graphicsDevice->SetTexture3D(_cloudDetailNoise);
-				}
-				else
-				{
-					// Keep register progression consistent even when cloud shadows are disabled.
-					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
-				}
+				// Deferred uses SHADOWMAPS at t6..t11, so skip t10/t11, then the
+				// cached cloud shadow map at t12 (t13 kept free for register
+				// progression - it used to be the second cloud noise volume).
+				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(hasCloudShadowMap ? _cloudShadowMap : nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 
 				// Material-features RT at the slot Deferred.shader's
 				// GBUFFER_FEATURES_RESOURCE binds to (t14). The extended shading
@@ -7376,6 +7419,55 @@ namespace HexEngine
 		}
 
 		GFX_PERF_END();
+	}
+
+	bool SceneRenderer::RenderCloudShadowMap(bool placementValid)
+	{
+		if (_cloudShadowMapShader == nullptr || _cloudShapeNoise == nullptr || _cloudDetailNoise == nullptr)
+			return false;
+		if (!placementValid)
+			return false;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return false;
+
+		const uint32_t size = (uint32_t)std::clamp(r_cloudShadowMapSize._val.i32, 256, 4096);
+		if (_cloudShadowMap == nullptr || _cloudShadowMap->GetWidth() != size)
+		{
+			SAFE_DELETE(_cloudShadowMap);
+			_cloudShadowMap = graphics->CreateTexture2D(
+				size, size,
+				DXGI_FORMAT_R16_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+				1);
+			if (_cloudShadowMap == nullptr)
+				return false;
+			_cloudShadowMap->SetDebugName("_cloudShadowMap");
+		}
+
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"Cloud shadow map");
+		guiRenderer->StartFrame(size, size);
+
+		graphics->SetRenderTarget(_cloudShadowMap);
+		graphics->SetViewport(Viewport(0.0f, 0.0f, (float)size, (float)size));
+		// b4 = cloud constants (already written by the caller). Noise volumes
+		// at t0/t1 via the implicit slot counter (0 after the last draw).
+		graphics->UnbindAllPixelShaderResources();
+		graphics->SetTexture3D(_cloudShapeNoise);
+		graphics->SetTexture3D(_cloudDetailNoise);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _cloudShadowMapShader.get());
+
+		guiRenderer->EndFrame();
+		GFX_PERF_END();
+
+		// Hand the caller's targets back.
+		graphics->SetRenderTarget(_lightAccumulationBuffer);
+		if (_currentCamera != nullptr)
+			graphics->SetViewport(*_currentCamera->GetViewport().Get11());
+		return true;
 	}
 
 	void SceneRenderer::RenderVolumetricClouds()

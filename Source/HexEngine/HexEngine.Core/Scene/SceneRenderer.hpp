@@ -82,6 +82,9 @@ namespace HexEngine
 		void RenderFog();
 		void RenderVolumetricLighting();
 		void RenderVolumetricClouds();
+		// Renders this frame's cached cloud shadow map (top-down transmittance
+		// over the cloud base plane). Returns false if nothing was rendered.
+		bool RenderCloudShadowMap(bool placementValid);
 		void RenderSSR();
 		// True when RenderSSR will actually run for the current scene/camera, which
 		// is also the condition for handing environment specular to the SSR resolve
@@ -248,6 +251,8 @@ namespace HexEngine
 		std::shared_ptr<IShader> _basicDenoise;
 		std::shared_ptr<IShader> _volumetricLighting;
 		std::shared_ptr<IShader> _volumetricClouds;
+		std::shared_ptr<IShader> _cloudShadowMapShader;
+		ITexture2D* _cloudShadowMap = nullptr;
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
 
