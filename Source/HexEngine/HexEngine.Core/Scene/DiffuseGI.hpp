@@ -406,6 +406,9 @@ namespace HexEngine
 		void RunGpuVoxelization(Scene* scene, uint32_t levelIndex);
 
 		void RenderTracePass(const GBuffer& gbuffer, ITexture2D* beautyTarget);
+		// Depth/normal-aware pre-blur of the trace when SSGI is on; selects the
+		// texture the resolve reads (_resolveSource).
+		void RenderTraceBlurPass(const GBuffer& gbuffer);
 		void RenderResolvePass(const GBuffer& gbuffer);
 		// Two-pass separable bilateral blur on _giResolved.a into
 		// _giAoBlurred. Runs every frame so r_useGIAO can be flipped at
@@ -535,6 +538,8 @@ namespace HexEngine
 		uint64_t _statsFrameCounter = 0ull;
 
 		ITexture2D* _giHalfRes = nullptr;
+		ITexture2D* _giHalfResBlurred = nullptr;
+		ITexture2D* _resolveSource = nullptr;
 		ITexture2D* _giResolved = nullptr;
 		ITexture2D* _giHistory = nullptr;
 		// AO blur targets: _giResolved.a → bilateral H pass → _giAoBlurredH →
@@ -611,6 +616,7 @@ namespace HexEngine
 		// share the same shader; the direction is fed via the
 		// _aoBlurConstantBuffer cbuffer above.
 		std::shared_ptr<IShader> _aoBlurShader;
+		std::shared_ptr<IShader> _traceBlurShader;
 		std::shared_ptr<IShader> _voxelizeShader;
 		std::shared_ptr<IShader> _voxelizeEvalShader;
 		std::shared_ptr<IShader> _voxelCandidateShader;

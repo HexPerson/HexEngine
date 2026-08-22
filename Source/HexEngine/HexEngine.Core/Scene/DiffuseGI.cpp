@@ -119,6 +119,11 @@ namespace HexEngine
 	HVar r_giSSGI("r_giSSGI", "Screen-space short-range GI gather (contact-scale bounce detail on top of the voxel field)", false, false, true);
 	HVar r_giSSGIIntensity("r_giSSGIIntensity", "SSGI contribution strength", 1.0f, 0.0f, 4.0f);
 	HVar r_giSSGIRadius("r_giSSGIRadius", "SSGI gather radius in metres", 1.5f, 0.25f, 8.0f);
+	// Depth/normal-aware spatial pre-filter of the half-res trace before the
+	// temporal resolve; the SSGI gather's residual per-pixel variance is what
+	// it removes (DiffuseGITraceBlur.shader). Only runs while SSGI is on.
+	HVar r_giSSGIBlur("r_giSSGIBlur", "Bilateral pre-blur of the GI trace when SSGI is on (kills residual SSGI grain)", true, false, true);
+	HVar r_giSSGIBlurRadius("r_giSSGIBlurRadius", "SSGI pre-blur radius in half-res texels", 2.0f, 1.0f, 3.0f);
 	HVar r_giVoxelTriangleBudget("r_giVoxelTriangleBudget", "Maximum triangles injected into GPU voxel clipmap per update", 24000, 256, 300000);
 	HVar r_giTriangleCacheFrames("r_giTriangleCacheFrames", "How many frames GI reuses cached voxel triangle lists before rebuilding", 10, 1, 120);
 	// Diagnostic: log every CPU voxel-triangle rebuild with the cache-rejection
@@ -581,6 +586,7 @@ namespace HexEngine
 		_voxelPropagateShader = IShader::Create("EngineData.Shaders/DiffuseGIPropagateVoxel.hcs");
 		_voxelShiftShader = IShader::Create("EngineData.Shaders/DiffuseGIShiftVoxel.hcs");
 		_aoBlurShader = IShader::Create("EngineData.Shaders/DiffuseGIAOBlur.hcs");
+		_traceBlurShader = IShader::Create("EngineData.Shaders/DiffuseGITraceBlur.hcs");
 		_constantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(GIConstants));
 		_voxelShiftConstantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(VoxelShiftConstants));
 		_aoBlurConstantBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
@@ -606,6 +612,26 @@ namespace HexEngine
 			D3D11_DSV_DIMENSION_UNKNOWN,
 			D3D11_USAGE_DEFAULT,
 			0);
+
+		_giHalfResBlurred = g_pEnv->_graphicsDevice->CreateTexture2D(
+			static_cast<int32_t>(halfWidth),
+			static_cast<int32_t>(halfHeight),
+			colourFormat,
+			1,
+			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+			1,
+			1,
+			0,
+			nullptr,
+			(D3D11_CPU_ACCESS_FLAG)0,
+			D3D11_RTV_DIMENSION_TEXTURE2D,
+			D3D11_UAV_DIMENSION_UNKNOWN,
+			D3D11_SRV_DIMENSION_TEXTURE2D,
+			D3D11_DSV_DIMENSION_UNKNOWN,
+			D3D11_USAGE_DEFAULT,
+			0);
+		if (_giHalfResBlurred)
+			_giHalfResBlurred->SetDebugName("GI_HalfResBlurred");
 
 		_giResolved = g_pEnv->_graphicsDevice->CreateTexture2D(
 			static_cast<int32_t>(_width),
@@ -737,6 +763,7 @@ namespace HexEngine
 		}
 
 		SAFE_DELETE(_giHalfRes);
+		SAFE_DELETE(_giHalfResBlurred);
 		SAFE_DELETE(_giResolved);
 		SAFE_DELETE(_giHistory);
 		SAFE_DELETE(_giAoBlurredH);
@@ -2426,7 +2453,7 @@ namespace HexEngine
 			r_giSSGI._val.b ? std::clamp(r_giSSGIIntensity._val.f32, 0.0f, 4.0f) : 0.0f,
 			std::clamp(r_giSSGIRadius._val.f32, 0.25f, 8.0f),
 			(r_giLitInjection._val.f32 > 0.0001f && _clipmaps[0].litCacheVolume != nullptr) ? 1.0f : 0.0f,
-			0.0f);
+			(r_giSSGI._val.b && r_giSSGIBlur._val.b) ? std::clamp(r_giSSGIBlurRadius._val.f32, 1.0f, 3.0f) : 0.0f);
 		const float sunDirectionality = r_giLocalLightsOnlyDebug._val.b
 			? 0.0f
 			: std::clamp(r_giSunDirectionality._val.f32, 0.0f, 1.0f) * sunPresenceMask;
@@ -6387,6 +6414,37 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
 	}
 
+	void DiffuseGI::RenderTraceBlurPass(const GBuffer& gbuffer)
+	{
+		_resolveSource = _giHalfRes;
+		if (!r_giSSGI._val.b || !r_giSSGIBlur._val.b)
+			return;
+		if (!_traceBlurShader || !_giHalfRes || !_giHalfResBlurred)
+			return;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		g_pEnv->_graphicsDevice->SetRenderTarget(_giHalfResBlurred);
+		D3D11_VIEWPORT vp = {};
+		vp.Width = static_cast<float>(_giHalfResBlurred->GetWidth());
+		vp.Height = static_cast<float>(_giHalfResBlurred->GetHeight());
+		vp.MaxDepth = 1.0f;
+		g_pEnv->_graphicsDevice->SetViewport(vp);
+
+		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+		g_pEnv->_graphicsDevice->SetTexture2D(_giHalfRes);
+		g_pEnv->_graphicsDevice->SetTexture2D(gbuffer.GetNormal());
+		g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _constantBuffer);
+
+		guiRenderer->StartFrame();
+		guiRenderer->FullScreenTexturedQuad(nullptr, _traceBlurShader.get());
+		guiRenderer->EndFrame();
+		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+
+		_resolveSource = _giHalfResBlurred;
+	}
+
 	void DiffuseGI::RenderResolvePass(const GBuffer& gbuffer)
 	{
 		if (!_resolveShader || !_giResolved || !_giHistory || !_giHalfRes)
@@ -6409,7 +6467,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		g_pEnv->_graphicsDevice->SetViewport(vp);
 
 		g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
-		g_pEnv->_graphicsDevice->SetTexture2D(_giHalfRes);
+		g_pEnv->_graphicsDevice->SetTexture2D(_resolveSource != nullptr ? _resolveSource : _giHalfRes);
 		g_pEnv->_graphicsDevice->SetTexture2D(_giHistory);
 		g_pEnv->_graphicsDevice->SetTexture2D(gbuffer.GetVelocity());
 		g_pEnv->_graphicsDevice->SetTexture2D(gbuffer.GetNormal());
@@ -6573,6 +6631,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		}
 
 		RenderTracePass(gbuffer, beautyTarget);
+		RenderTraceBlurPass(gbuffer);
 		RenderResolvePass(gbuffer);
 		// Blur the AO alpha into _giAoBlurred so DiffuseGIAOProvider can
 		// read smoothed AO when r_useGIAO compound mode is active. Cost is
