@@ -3987,11 +3987,26 @@ namespace HexEngine
 					PVSParams params;
 					params.lodPartition = r_lodPartition._val.f32;
 					params.shapeType = PVSParams::ShapeType::Sphere;
-					params.shape.sphere = shadowCaster->GetLightBoundingSphere(i);
-					//params.shapeType = PVSParams::ShapeType::Frustum;
-					//params.shape.frustum = shadowCaster->GetLightBoundingFrustum(i);
 					params.isShadow = true;
 					params.camera = _currentCamera;
+
+					// Coarse PVS shape: a CAMERA-CENTRED sphere that bounds the
+					// cascade's slice sphere under every camera orientation
+					// (|centre - camera| + radius), so turning the camera never
+					// invalidates the PVS - only translation does (25% slack).
+					// The actual slice sphere goes in as the fine sphere: the
+					// shadow draw loop tests each renderable against it per
+					// frame so the shadow map still only draws the slice.
+					{
+						const dx::BoundingSphere sliceSphere = shadowCaster->GetLightBoundingSphere(i);
+						const math::Vector3 cameraPos = _currentCamera->GetEntity()->GetPosition() + _currentCamera->GetViewOffset();
+						const math::Vector3 toSlice(sliceSphere.Center.x - cameraPos.x, sliceSphere.Center.y - cameraPos.y, sliceSphere.Center.z - cameraPos.z);
+						params.shape.sphere = dx::BoundingSphere(
+							dx::XMFLOAT3(cameraPos.x, cameraPos.y, cameraPos.z),
+							toSlice.Length() + sliceSphere.Radius);
+						params.fineSphere = sliceSphere;
+						params.hasFineSphere = true;
+					}
 
 					shadowCaster->GetPVS(i)->CalculateVisibility(_currentScene, params);
 				}
@@ -5804,10 +5819,11 @@ namespace HexEngine
 		guiRenderer->FullScreenTexturedQuad(nullptr, _subsurfaceShader.get());
 		guiRenderer->EndFrame();
 
-		// Unbind the SSS-specific SRVs so later passes don't inherit stale bindings.
-		graphics->SetTexture2D(0, nullptr);
-		graphics->SetTexture2D(1, nullptr);
-		graphics->SetTexture2D(2, nullptr);
+		// Unbind the SSS-specific SRVs so later passes don't inherit stale
+		// bindings - via unbind-all, which also resets the implicit-slot
+		// counter (per-slot nulls after a draw leave it at slot+1 and misbind
+		// the next slotless pass; see the motion blur cleanup).
+		graphics->UnbindAllPixelShaderResources();
 		graphics->SetConstantBufferPS(6, nullptr);
 	}
 
@@ -6689,11 +6705,15 @@ namespace HexEngine
 		_subsurfaceIntermediateRT->CopyTo(_beautyRT);
 
 		// Unbind so the velocity/normal SRVs don't collide with their RT binds
-		// next frame (transparent pass rebinds velocity as RT4).
-		graphics->SetTexture2D(0, nullptr);
-		graphics->SetTexture2D(1, nullptr);
-		graphics->SetTexture2D(2, nullptr);
-		graphics->SetTexture2D(3, nullptr);
+		// next frame (transparent pass rebinds velocity as RT4). This MUST be
+		// the unbind-all (which also resets the implicit-slot counter), not
+		// per-slot SetTexture2D(n, nullptr): the explicit-slot form sets the
+		// counter to slot+1 AFTER the draw already reset it to 0, so the next
+		// slotless FullScreenTexturedQuad (bloom's first downsample) bound the
+		// beauty at t4 while its shader reads t0 - a black bloom chain, no
+		// flare and a lost sun disc whenever motion blur was enabled, even
+		// with the camera static. See the d3d11 auto-slot counter note.
+		graphics->UnbindAllPixelShaderResources();
 		graphics->SetConstantBufferPS(6, nullptr);
 
 		GFX_PERF_END();
