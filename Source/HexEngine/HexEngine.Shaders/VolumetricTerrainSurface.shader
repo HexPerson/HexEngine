@@ -144,54 +144,99 @@
 		return normalize(sampleValue.xyz * 2.0f - 1.0f);
 	}
 
+	// Triplanar weights are computed ONCE per pixel (they used to be recomputed
+	// inside every one of the 24 map samples). Axes below the threshold are
+	// dropped and the rest renormalised, so each helper below fetches only
+	// the axes that matter - most terrain pixels have one dominant axis, and
+	// 3 fetches per map become 1. This is the single biggest part of taking
+	// the terrain from 72 texture fetches per pixel to a typical 6-12.
+	static const float kTriplanarAxisEps = 0.03f;
+
 	float3 ComputeTriplanarWeights(float3 normal)
 	{
 		float3 weights = pow(abs(normal), 4.0f);
+		weights /= max(weights.x + weights.y + weights.z, 0.0001f);
+		weights = weights > kTriplanarAxisEps ? weights : 0.0f.xxx;
 		return weights / max(weights.x + weights.y + weights.z, 0.0001f);
 	}
 
-	float3 SampleTriplanarAlbedo(Texture2D tex, float3 worldPos, float3 normal, float scale, float3 fallbackColor)
+	float3 SampleTriplanarAlbedo(Texture2D tex, float3 worldPos, float3 weights, float scale, float3 fallbackColor)
 	{
-		float3 weights = ComputeTriplanarWeights(normal);
-		float2 uvX = worldPos.yz * scale;
-		float2 uvY = worldPos.xz * scale;
-		float2 uvZ = worldPos.xy * scale;
-		float3 sx = tex.Sample(g_textureSampler, uvX).rgb;
-		float3 sy = tex.Sample(g_textureSampler, uvY).rgb;
-		float3 sz = tex.Sample(g_textureSampler, uvZ).rgb;
-		float3 sampled = (sx * weights.x) + (sy * weights.y) + (sz * weights.z);
+		float3 sampled = 0.0f.xxx;
+		[branch] if (weights.x > 0.0f) sampled += tex.Sample(g_textureSampler, worldPos.yz * scale).rgb * weights.x;
+		[branch] if (weights.y > 0.0f) sampled += tex.Sample(g_textureSampler, worldPos.xz * scale).rgb * weights.y;
+		[branch] if (weights.z > 0.0f) sampled += tex.Sample(g_textureSampler, worldPos.xy * scale).rgb * weights.z;
 		return lerp(fallbackColor, sampled, 0.9f);
 	}
 
-	float SampleTriplanarScalar(Texture2D tex, float3 worldPos, float3 normal, float scale, float fallbackValue)
+	float SampleTriplanarScalar(Texture2D tex, float3 worldPos, float3 weights, float scale, float fallbackValue)
 	{
-		float3 weights = ComputeTriplanarWeights(normal);
-		float2 uvX = worldPos.yz * scale;
-		float2 uvY = worldPos.xz * scale;
-		float2 uvZ = worldPos.xy * scale;
-		float sx = tex.Sample(g_textureSampler, uvX).r;
-		float sy = tex.Sample(g_textureSampler, uvY).r;
-		float sz = tex.Sample(g_textureSampler, uvZ).r;
-		float sampled = (sx * weights.x) + (sy * weights.y) + (sz * weights.z);
+		float sampled = 0.0f;
+		[branch] if (weights.x > 0.0f) sampled += tex.Sample(g_textureSampler, worldPos.yz * scale).r * weights.x;
+		[branch] if (weights.y > 0.0f) sampled += tex.Sample(g_textureSampler, worldPos.xz * scale).r * weights.y;
+		[branch] if (weights.z > 0.0f) sampled += tex.Sample(g_textureSampler, worldPos.xy * scale).r * weights.z;
 		return lerp(fallbackValue, sampled, 0.9f);
 	}
 
-	float3 SampleTriplanarDetailNormal(Texture2D tex, float3 worldPos, float3 baseNormal, float scale)
+	float3 SampleTriplanarDetailNormal(Texture2D tex, float3 worldPos, float3 baseNormal, float3 weights, float scale)
 	{
-		float3 weights = ComputeTriplanarWeights(baseNormal);
-		float2 uvX = worldPos.yz * scale;
-		float2 uvY = worldPos.xz * scale;
-		float2 uvZ = worldPos.xy * scale;
+		float3 sum = 0.0f.xxx;
+		[branch] if (weights.x > 0.0f)
+		{
+			float3 nx = UnpackNormalMap(tex.Sample(g_textureSampler, worldPos.yz * scale));
+			nx = normalize(float3(nx.z * sign(baseNormal.x == 0.0f ? 1.0f : baseNormal.x), nx.x, nx.y));
+			sum += nx * weights.x;
+		}
+		[branch] if (weights.y > 0.0f)
+		{
+			float3 ny = UnpackNormalMap(tex.Sample(g_textureSampler, worldPos.xz * scale));
+			ny = normalize(float3(ny.x, ny.z * sign(baseNormal.y == 0.0f ? 1.0f : baseNormal.y), ny.y));
+			sum += ny * weights.y;
+		}
+		[branch] if (weights.z > 0.0f)
+		{
+			float3 nz = UnpackNormalMap(tex.Sample(g_textureSampler, worldPos.xy * scale));
+			nz = normalize(float3(nz.x, nz.y, nz.z * sign(baseNormal.z == 0.0f ? 1.0f : baseNormal.z)));
+			sum += nz * weights.z;
+		}
+		return dot(sum, sum) > 1e-8f ? normalize(sum) : baseNormal;
+	}
 
-		float3 nx = UnpackNormalMap(tex.Sample(g_textureSampler, uvX));
-		float3 ny = UnpackNormalMap(tex.Sample(g_textureSampler, uvY));
-		float3 nz = UnpackNormalMap(tex.Sample(g_textureSampler, uvZ));
+	// Everything one terrain layer contributes, fetched only when the layer
+	// actually has weight here (see ShaderMain) and with the detail maps
+	// faded to their fallbacks with distance - at a couple of hundred metres
+	// a triplanar detail normal or roughness map is sub-pixel, so its only
+	// contribution is shimmer and fetch cost.
+	struct TerrainLayerSample
+	{
+		float height;
+		float3 albedo;
+		float ao;
+		float3 detailNormal;
+		float roughness;
+		float metallic;
+	};
 
-		nx = normalize(float3(nx.z * sign(baseNormal.x == 0.0f ? 1.0f : baseNormal.x), nx.x, nx.y));
-		ny = normalize(float3(ny.x, ny.z * sign(baseNormal.y == 0.0f ? 1.0f : baseNormal.y), ny.y));
-		nz = normalize(float3(nz.x, nz.y, nz.z * sign(baseNormal.z == 0.0f ? 1.0f : baseNormal.z)));
-
-		return normalize((nx * weights.x) + (ny * weights.y) + (nz * weights.z));
+	TerrainLayerSample SampleTerrainLayer(
+		Texture2D heightMap, Texture2D albedoMap, Texture2D aoMap, Texture2D normalMap, Texture2D roughnessMap, Texture2D metallicMap,
+		float3 worldPos, float3 N, float3 triW, float scale, float3 fallbackColour, float detailFade)
+	{
+		TerrainLayerSample l;
+		l.height = 0.5f;
+		l.albedo = SampleTriplanarAlbedo(albedoMap, worldPos, triW, scale, fallbackColour);
+		l.ao = 1.0f;
+		l.detailNormal = N;
+		l.roughness = 1.0f;
+		l.metallic = 1.0f;
+		[branch] if (detailFade > 0.001f)
+		{
+			l.height = lerp(0.5f, SampleTriplanarScalar(heightMap, worldPos, triW, scale, 0.5f), detailFade);
+			l.ao = lerp(1.0f, SampleTriplanarScalar(aoMap, worldPos, triW, scale, 1.0f), detailFade);
+			l.detailNormal = normalize(lerp(N, SampleTriplanarDetailNormal(normalMap, worldPos, N, triW, scale), detailFade));
+			l.roughness = lerp(1.0f, SampleTriplanarScalar(roughnessMap, worldPos, triW, scale, 1.0f), detailFade);
+			l.metallic = lerp(1.0f, SampleTriplanarScalar(metallicMap, worldPos, triW, scale, 1.0f), detailFade);
+		}
+		return l;
 	}
 
 	GBufferOut ShaderMain(VSOut input)
@@ -205,11 +250,32 @@
 		}
 		float3 N = normalize(lerp(geometricNormal, interpolatedNormal, 0.7f));
 		float4 layerWeights = SampleMaterialWeights(input.worldPos);
-		float grassHeight = SampleTriplanarScalar(g_grassHeightMap, input.worldPos, N, 0.075f, 0.5f);
-		float rockHeight = SampleTriplanarScalar(g_rockHeightMap, input.worldPos, N, 0.045f, 0.5f);
-		float snowHeight = SampleTriplanarScalar(g_snowHeightMap, input.worldPos, N, 0.02f, 0.5f);
-		float dirtHeight = SampleTriplanarScalar(g_dirtHeightMap, input.worldPos, N, 0.06f, 0.5f);
 
+		// Fetch budget (was 6 maps x 4 layers x 3 axes = 72 per pixel, always):
+		//  - triplanar axes below threshold are skipped (ComputeTriplanarWeights)
+		//  - a layer with ~zero blend weight fetches nothing
+		//  - detail maps fade to fallbacks between 120 m and 220 m; beyond that
+		//    only albedo is sampled (the detail is sub-pixel out there).
+		const float3 triW = ComputeTriplanarWeights(N);
+		const float viewDist = length(input.worldPos - g_eyePos.xyz);
+		const float detailFade = 1.0f - smoothstep(120.0f, 220.0f, viewDist);
+		const float kLayerEps = 0.004f;
+
+		TerrainLayerSample grass, rock, snow, dirt;
+		grass.height = 0.5f; grass.albedo = g_chunkGrassColor.rgb; grass.ao = 1.0f; grass.detailNormal = N; grass.roughness = 1.0f; grass.metallic = 1.0f;
+		rock = grass;  rock.albedo = g_chunkRockColor.rgb;
+		snow = grass;  snow.albedo = g_chunkSnowColor.rgb;
+		dirt = grass;  dirt.albedo = g_chunkDirtColor.rgb;
+		[branch] if (layerWeights.x > kLayerEps)
+			grass = SampleTerrainLayer(g_grassHeightMap, g_grassAlbedoMap, g_grassAoMap, g_grassNormalMap, g_grassRoughnessMap, g_grassMetallicMap, input.worldPos, N, triW, 0.075f, g_chunkGrassColor.rgb, detailFade);
+		[branch] if (layerWeights.y > kLayerEps)
+			rock = SampleTerrainLayer(g_rockHeightMap, g_rockAlbedoMap, g_rockAoMap, g_rockNormalMap, g_rockRoughnessMap, g_rockMetallicMap, input.worldPos, N, triW, 0.045f, g_chunkRockColor.rgb, detailFade);
+		[branch] if (layerWeights.z > kLayerEps)
+			snow = SampleTerrainLayer(g_snowHeightMap, g_snowAlbedoMap, g_snowAoMap, g_snowNormalMap, g_snowRoughnessMap, g_snowMetallicMap, input.worldPos, N, triW, 0.02f, g_chunkSnowColor.rgb, detailFade);
+		[branch] if (layerWeights.w > kLayerEps)
+			dirt = SampleTerrainLayer(g_dirtHeightMap, g_dirtAlbedoMap, g_dirtAoMap, g_dirtNormalMap, g_dirtRoughnessMap, g_dirtMetallicMap, input.worldPos, N, triW, 0.06f, g_chunkDirtColor.rgb, detailFade);
+
+		const float grassHeight = grass.height, rockHeight = rock.height, snowHeight = snow.height, dirtHeight = dirt.height;
 		float4 heightWeighted = layerWeights * float4(
 			lerp(0.75f, 1.25f, grassHeight),
 			lerp(0.75f, 1.25f, rockHeight),
@@ -217,30 +283,11 @@
 			lerp(0.75f, 1.25f, dirtHeight));
 		heightWeighted /= max(heightWeighted.x + heightWeighted.y + heightWeighted.z + heightWeighted.w, 0.0001f);
 
-		float3 grassAlbedo = SampleTriplanarAlbedo(g_grassAlbedoMap, input.worldPos, N, 0.075f, g_chunkGrassColor.rgb);
-		float3 rockAlbedo = SampleTriplanarAlbedo(g_rockAlbedoMap, input.worldPos, N, 0.045f, g_chunkRockColor.rgb);
-		float3 snowAlbedo = SampleTriplanarAlbedo(g_snowAlbedoMap, input.worldPos, N, 0.02f, g_chunkSnowColor.rgb);
-		float3 dirtAlbedo = SampleTriplanarAlbedo(g_dirtAlbedoMap, input.worldPos, N, 0.06f, g_chunkDirtColor.rgb);
-
-		float grassAo = SampleTriplanarScalar(g_grassAoMap, input.worldPos, N, 0.075f, 1.0f);
-		float rockAo = SampleTriplanarScalar(g_rockAoMap, input.worldPos, N, 0.045f, 1.0f);
-		float snowAo = SampleTriplanarScalar(g_snowAoMap, input.worldPos, N, 0.02f, 1.0f);
-		float dirtAo = SampleTriplanarScalar(g_dirtAoMap, input.worldPos, N, 0.06f, 1.0f);
-
-		float3 grassDetailNormal = SampleTriplanarDetailNormal(g_grassNormalMap, input.worldPos, N, 0.075f);
-		float3 rockDetailNormal = SampleTriplanarDetailNormal(g_rockNormalMap, input.worldPos, N, 0.045f);
-		float3 snowDetailNormal = SampleTriplanarDetailNormal(g_snowNormalMap, input.worldPos, N, 0.02f);
-		float3 dirtDetailNormal = SampleTriplanarDetailNormal(g_dirtNormalMap, input.worldPos, N, 0.06f);
-
-		float grassRoughness = SampleTriplanarScalar(g_grassRoughnessMap, input.worldPos, N, 0.075f, 1.0f);
-		float rockRoughness = SampleTriplanarScalar(g_rockRoughnessMap, input.worldPos, N, 0.045f, 1.0f);
-		float snowRoughness = SampleTriplanarScalar(g_snowRoughnessMap, input.worldPos, N, 0.02f, 1.0f);
-		float dirtRoughness = SampleTriplanarScalar(g_dirtRoughnessMap, input.worldPos, N, 0.06f, 1.0f);
-
-		float grassMetallic = SampleTriplanarScalar(g_grassMetallicMap, input.worldPos, N, 0.075f, 1.0f);
-		float rockMetallic = SampleTriplanarScalar(g_rockMetallicMap, input.worldPos, N, 0.045f, 1.0f);
-		float snowMetallic = SampleTriplanarScalar(g_snowMetallicMap, input.worldPos, N, 0.02f, 1.0f);
-		float dirtMetallic = SampleTriplanarScalar(g_dirtMetallicMap, input.worldPos, N, 0.06f, 1.0f);
+		const float3 grassAlbedo = grass.albedo, rockAlbedo = rock.albedo, snowAlbedo = snow.albedo, dirtAlbedo = dirt.albedo;
+		const float grassAo = grass.ao, rockAo = rock.ao, snowAo = snow.ao, dirtAo = dirt.ao;
+		const float3 grassDetailNormal = grass.detailNormal, rockDetailNormal = rock.detailNormal, snowDetailNormal = snow.detailNormal, dirtDetailNormal = dirt.detailNormal;
+		const float grassRoughness = grass.roughness, rockRoughness = rock.roughness, snowRoughness = snow.roughness, dirtRoughness = dirt.roughness;
+		const float grassMetallic = grass.metallic, rockMetallic = rock.metallic, snowMetallic = snow.metallic, dirtMetallic = dirt.metallic;
 
 		float3 baseColor =
 			(grassAlbedo * grassAo * heightWeighted.x) +
