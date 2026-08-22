@@ -78,7 +78,9 @@ namespace HexEngine
 		}
 		// Seed with "no overcast" so the sky reads as clear sky if the
 		// SetSkyRenderParams setter is never called.
-		const SkyRenderParamsCB defaultSkyRender = { math::Vector4(1.0f, 1.0f, 1.0f, 1.0f), 0.0f, 0.0f, 0.0f, 0.0f };
+		// pad0 = 1 marks the buffer as live for consumers that fall back when
+		// nothing is bound (PostFog reads it as "LUT available").
+		const SkyRenderParamsCB defaultSkyRender = { math::Vector4(1.0f, 1.0f, 1.0f, 1.0f), 0.0f, 1.0f, 0.0f, 0.0f };
 		_skyRenderCBuffer->Write((void*)&defaultSkyRender, sizeof(defaultSkyRender));
 
 		_paramsDirty = true;
@@ -112,6 +114,7 @@ namespace HexEngine
 		SkyRenderParamsCB cb{};
 		cb.overcastColor = math::Vector4(overcastColor.x, overcastColor.y, overcastColor.z, 1.0f);
 		cb.overcastAmount = std::clamp(overcastAmount, 0.0f, 1.0f);
+		cb.pad0 = 1.0f; // live marker (see the default seed)
 		_skyRenderCBuffer->Write(&cb, sizeof(cb));
 	}
 

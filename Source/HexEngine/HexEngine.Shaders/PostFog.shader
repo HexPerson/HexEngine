@@ -12,6 +12,8 @@
 	ShadowUtils
 	Atmosphere
 	AtmospherePhysical
+	// SkyViewLutParamsToUv: the fog samples the sky-view LUT directly.
+	AtmosphereCommon
 }
 "VertexShader"
 {
@@ -29,7 +31,11 @@
 "PixelShader"
 {
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
-	Texture2D g_atmosphereTexture : register(t5);
+	// Sky-view LUT (t5). The fog used to sample a dedicated full-res "base sky"
+	// render target that cost a second full sky pass plus a copy every frame;
+	// the LUT IS that sun-disc-free sky, sampled here in the pixel's view
+	// direction with the same weather overcast tint the sky dome applies.
+	Texture2D g_atmSkyViewLUT : register(t5);
 	Texture2D g_depthTexture : register(t6);
 	// GI bilateral-blurred voxel-occlusion AO (.r = occlusion, 1 = blocked).
 	// Gated by g_giComposeParams.z; null-bound reads 0 = no occlusion.
@@ -38,6 +44,15 @@
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
+
+	// Same cbuffer the sky dome reads (AtmosphereLUTs::SetSkyRenderParams).
+	// .w of the pad = 1 when the LUT subsystem is live; zero when nothing bound.
+	cbuffer SkyRenderParams : register(b6)
+	{
+		float4 g_skyOvercastColour;
+		float  g_skyOvercastAmount;
+		float3 g_skyRenderPad; // .x = LUT available
+	};
 
 	float4 ShaderMain(UIPixelInput input) : SV_TARGET
 	{
@@ -119,10 +134,18 @@
 		float3 rayDir = normalize(worldPos - g_eyePos.xyz);
 		float3 sunDir = normalize(-g_lightDirection.xyz);
 
-		// Sky-colour sample (LUT-driven when r_atmosphereLUTs is on) - reused
-		// by both paths below as the colour the fog tints toward.
-		float3 farSkyColour = g_atmosphereTexture.Sample(g_textureSampler, screenPos).rgb;
 		float3 ambientFogBase = max(g_atmosphere.ambientLight.rgb, float3(0.001f, 0.001f, 0.001f));
+		// Sky colour the fog tints toward: the sky-view LUT in this pixel's view
+		// direction (sun-disc free by construction), lerped toward the weather
+		// overcast tint exactly as SkySphere does. Falls back to the ambient
+		// when the LUT subsystem isn't live.
+		float3 farSkyColour = ambientFogBase;
+		if (g_skyRenderPad.x > 0.5f)
+		{
+			const float2 skyUv = SkyViewLutParamsToUv(rayDir, sunDir);
+			farSkyColour = g_atmSkyViewLUT.SampleLevel(g_textureSampler, skyUv, 0).rgb;
+			farSkyColour = lerp(farSkyColour, g_skyOvercastColour.rgb, saturate(g_skyOvercastAmount));
+		}
 
 		float heightFogWeight = saturate(heightExtinction / max(extinction, 0.001f));
 		float sunElevation = -g_lightDirection.y;

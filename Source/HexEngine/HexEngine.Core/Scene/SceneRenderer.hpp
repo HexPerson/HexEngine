@@ -225,7 +225,6 @@ namespace HexEngine
 		ITexture2D* _fogBuffer = nullptr;
 		ITexture2D* _volumetricLightingBuffer = nullptr;
 		ITexture2D* _cloudsBuffer = nullptr;
-		ITexture2D* _atmosphereRT = nullptr;
 		ITexture2D* _lightAccumulationBuffer = nullptr;
 		ITexture2D* _pointLightBuffer = nullptr;
 		ITexture2D* _ssrDiffuseTexture = nullptr;

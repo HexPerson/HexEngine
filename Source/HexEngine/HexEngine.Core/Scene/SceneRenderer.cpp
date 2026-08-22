@@ -1151,7 +1151,6 @@ namespace HexEngine
 		SAFE_DELETE(_cloudHistory[0]);
 		SAFE_DELETE(_cloudHistory[1]);
 		_cloudHistoryValid = false;
-		SAFE_DELETE(_atmosphereRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_particleRT);
 		SAFE_DELETE(_ssrDiffuseTexture);
@@ -1208,7 +1207,6 @@ namespace HexEngine
 		SAFE_DELETE(_cloudHistory[0]);
 		SAFE_DELETE(_cloudHistory[1]);
 		_cloudHistoryValid = false;
-		SAFE_DELETE(_atmosphereRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_pointLightBuffer);
 		SAFE_DELETE(_particleRT);
@@ -1684,19 +1682,6 @@ namespace HexEngine
 		{
 			_cloudsBuffer->SetDebugName("_cloudsBuffer");
 		}
-
-		_atmosphereRT = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,
-			height,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
 		// DLSS target should be full screen
 		uint32_t backBufferWidth, backBufferHeight;
@@ -3483,28 +3468,12 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetConstantBufferPS(6, g_pEnv->_atmosphereLUTs->GetSkyRenderCBuffer());
 		}
 
-		// Pass 0: base sky only (no direct sun/mie). This is what fog samples from _atmosphereRT.
-		SetupPerShadowCasterBuffer(nullptr, false, 0, 0, 0, 0.0f);
-		_currentScene->RenderEntities(
-			_currentCamera->GetPVS(),
-			LAYERMASK(Layer::Sky),
-			MeshRenderFlags::MeshRenderNormal);
-
-		_gbuffer.GetDiffuse()->CopyTo(_atmosphereRT);
-
-		// Re-bind for pass 1 (other entity draws between passes may have
-		// stomped t0/t1 via slotless SRV binds).
-		if (g_pEnv->_atmosphereLUTs != nullptr)
-		{
-			g_pEnv->_graphicsDevice->SetTexture2D(0, g_pEnv->_atmosphereLUTs->GetSkyViewLUT());
-			g_pEnv->_graphicsDevice->SetTexture2D(1, g_pEnv->_atmosphereLUTs->GetTransmittanceLUT());
-			// PS b6 = sky-render cbuffer (overcast tint). Bound here
-			// because the sky entity draw is upcoming and the engine's
-			// material pipeline doesn't know about this cbuffer.
-			g_pEnv->_graphicsDevice->SetConstantBufferPS(6, g_pEnv->_atmosphereLUTs->GetSkyRenderCBuffer());
-		}
-
-		// Pass 1: full sky for the visible frame (includes sun/sunset/mie).
+		// ONE sky pass: the full sky for the visible frame (sun / sunset / mie).
+		// A second, sun-free "base sky" pass used to run first and get copied
+		// to a full-res RT purely so PostFog had a sky colour to tint toward;
+		// the fog now samples the sky-view LUT directly (that LUT is the
+		// sun-free sky by construction), saving a full-screen sky draw and a
+		// full-res copy every frame.
 		SetupPerShadowCasterBuffer(nullptr, false, 1, 0, 0, 0.0f);
 		_currentScene->RenderEntities(
 			_currentCamera->GetPVS(),
@@ -6498,8 +6467,11 @@ namespace HexEngine
 
 			// Render fog as a post process
 			_gbuffer.BindAsShaderResource(_beautyRT);
-			g_pEnv->_graphicsDevice->SetTexture2D(_atmosphereRT);
+			// t5 = sky-view LUT (+ b6 overcast tint): PostFog samples the sky
+			// colour it tints toward straight from the LUT.
+			g_pEnv->_graphicsDevice->SetTexture2D(g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyViewLUT() : nullptr);
 			g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetDepthBuffer());
+			g_pEnv->_graphicsDevice->SetConstantBufferPS(6, g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyRenderCBuffer() : nullptr);
 			// t22 = GI blurred voxel AO: PostFog scales its (entirely sky/sun/
 			// ambient-derived) fog factor down where the voxel field says the
 			// pixel is enclosed. Explicit slot, above the auto-counter range;
@@ -6507,6 +6479,7 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetTexture2D(22,
 				_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
 			guiRenderer->FullScreenTexturedQuad(nullptr, _fogEffect.get());
+			g_pEnv->_graphicsDevice->SetConstantBufferPS(6, nullptr);
 
 			//_fogBuffer->CopyTo(_gbuffer.GetDiffuse());
 			_fogBuffer->CopyTo(_beautyRT);
