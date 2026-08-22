@@ -94,25 +94,42 @@
 		float3 colour;
 		if (firstHop)
 		{
-			// Karis average: weight each box by 1/(1+luma) so fireflies are
-			// tamed BEFORE they enter the chain.
-			const float w0 = 0.125f / (1.0f + Luma(box0));
-			const float w1 = 0.125f / (1.0f + Luma(box1));
-			const float w2 = 0.125f / (1.0f + Luma(box2));
-			const float w3 = 0.125f / (1.0f + Luma(box3));
-			const float w4 = 0.5f   / (1.0f + Luma(box4));
+			// EXPOSURE-NORMALISED DOMAIN. The beauty is pre-exposure linear HDR
+			// (daylight sits at radiometric 5-50), but every decision below is
+			// a perceptual one - what counts as a firefly, what counts as
+			// bright enough to scatter, where to clamp. Judged raw, the Karis
+			// weight 1/(1+luma) gave the sun disc (luma in the hundreds) a
+			// weight of ~1/500 and erased it from the chain on the first hop
+			// while a luma-3 emissive sign kept 30% - exactly the reported
+			// "no sun bloom / flare, emissive is picked up". And the scatter
+			// curve saturated at 1 for the entire daylight frame, so bloom was
+			// a flat full-frame glow instead of a response to bright sources.
+			// Scaling the LUMA by the tonemapper exposure puts the judgements
+			// in display units; the colour itself stays in scene units.
+			const float exposure = max(g_colourGrading.exposure, 1e-4f);
+
+			// Karis average, softened (0.35): tames genuine fireflies without
+			// deleting small legitimately-bright sources like the sun disc.
+			const float kKaris = 0.35f;
+			const float w0 = 0.125f / (1.0f + Luma(box0) * exposure * kKaris);
+			const float w1 = 0.125f / (1.0f + Luma(box1) * exposure * kKaris);
+			const float w2 = 0.125f / (1.0f + Luma(box2) * exposure * kKaris);
+			const float w3 = 0.125f / (1.0f + Luma(box3) * exposure * kKaris);
+			const float w4 = 0.5f   / (1.0f + Luma(box4) * exposure * kKaris);
 			colour = (box0 * w0 + box1 * w1 + box2 * w2 + box3 * w3 + box4 * w4)
 				/ max(w0 + w1 + w2 + w3 + w4, 1e-5f);
 
-			// Physical prefilter (same curve the old BloomPhysical used):
-			// fraction of light the lens scatters rises with luminance.
+			// Physical prefilter: fraction of light the lens scatters rises
+			// with DISPLAY luminance. r_bloomLuminanceThreshold is now the
+			// display-referred reference (1.0 = display white).
 			const float referenceLuma = max(g_bloom.luminosityThreshold, 0.05f);
-			const float scatter = 1.0f - exp(-Luma(colour) / referenceLuma);
+			const float scatter = 1.0f - exp(-(Luma(colour) * exposure) / referenceLuma);
 			colour *= scatter;
 
-			// Optional firefly clamp (0 = off), applied after the curve.
+			// Optional firefly clamp (0 = off), in display units, applied
+			// after the curve.
 			if (g_bloom.bloomClamp > 0.0f)
-				colour = min(colour, g_bloom.bloomClamp.xxx);
+				colour = min(colour, (g_bloom.bloomClamp / exposure).xxx);
 		}
 		else
 		{

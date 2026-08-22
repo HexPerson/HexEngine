@@ -80,6 +80,18 @@
 	// the flare is driven by the frame's actual bright sources. Screen-centre
 	// symmetric, chromatically split, and radially masked so ghosts fade at
 	// the frame edge the way a real lens's do.
+	// Flare source: the chain through a soft display-luminance knee, so ghosts
+	// and halos come from genuinely bright sources (sun disc, hot emissives)
+	// rather than from every moderately lit pixel of a daylight frame. Knee in
+	// display units (exposure-normalised) - the chain itself is scene-referred.
+	float3 SampleFlareSource(float2 uv)
+	{
+		const float3 c = SampleChain(uv);
+		const float exposure = max(g_colourGrading.exposure, 1e-4f);
+		const float lumaDisplay = dot(c, float3(0.2126f, 0.7152f, 0.0722f)) * exposure;
+		return c * smoothstep(0.35f, 1.6f, lumaDisplay);
+	}
+
 	float3 LensFlare(float2 uv)
 	{
 		const float flareI = g_lensParams.x;
@@ -100,16 +112,16 @@
 			const float2 suv = uv + ghostVec * (float)i;
 			// Radial weight: bright toward centre, gone at the edges.
 			const float weight = pow(1.0f - saturate(length(0.5f.xx - suv) * 2.0f), 4.0f);
-			ghosts.r += SampleChain(suv + caOffset).r * weight;
-			ghosts.g += SampleChain(suv).g * weight;
-			ghosts.b += SampleChain(suv - caOffset).b * weight;
+			ghosts.r += SampleFlareSource(suv + caOffset).r * weight;
+			ghosts.g += SampleFlareSource(suv).g * weight;
+			ghosts.b += SampleFlareSource(suv - caOffset).b * weight;
 		}
 
 		// Halo: a ring at a fixed radius along the centre axis.
 		const float2 haloDir = normalize(toCentre + 1e-4f) * 0.32f;
 		const float2 huv = uv + haloDir;
 		const float haloW = pow(1.0f - saturate(abs(length(0.5f.xx - huv) - 0.28f) / 0.28f), 4.0f);
-		const float3 halo = SampleChain(huv) * haloW;
+		const float3 halo = SampleFlareSource(huv) * haloW;
 
 		// Anamorphic streak: horizontal decaying taps of the chain top.
 		float3 streak = 0.0f.xxx;
@@ -121,7 +133,7 @@
 			{
 				const float w = exp(-(float)s * 0.5f);
 				const float2 dx = float2((float)s * g_bloomPass.x * 6.0f, 0.0f);
-				streak += (SampleChain(uv + dx) + SampleChain(uv - dx)) * w;
+				streak += (SampleFlareSource(uv + dx) + SampleFlareSource(uv - dx)) * w;
 			}
 			streak *= streakI;
 		}
