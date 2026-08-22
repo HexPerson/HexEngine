@@ -56,6 +56,10 @@
 	float2 PixelVelocity(int2 p)
 	{
 		float2 v = g_velocity.Load(int3(p, 0)).xy;
+		// A non-finite velocity (unwritten/garbage texel) must read as "no
+		// motion", not poison the tap maths.
+		if (!all(isfinite(v)))
+			v = 0.0f.xx;
 		v = float2(v.x, -v.y) * g_mbParams.x;
 		const float2 vPx = v * g_mbParams2.xy;
 		const float lenPx = length(vPx);
@@ -96,7 +100,10 @@
 		// Dominant velocity of the 3x3 tile neighbourhood.
 		const float2 vMax = g_neighborMax.SampleLevel(g_pointSampler, uv, 0).xy;
 		const float lenMaxPx = length(vMax * g_mbParams2.xy);
-		if (lenMaxPx < 0.75f)
+
+		// NaN compares false, so a poisoned tile would fall THROUGH this early
+		// out and blur with NaN taps. Treat non-finite as static.
+		if (!(lenMaxPx >= 0.75f))
 			return centreColour;
 
 		const float2 vC = PixelVelocity(pix);
@@ -138,6 +145,13 @@
 			totalWeight += weight;
 		}
 
-		return float4(sum / max(totalWeight, 1e-4f), centreColour.a);
+		// Never let a NaN/inf out of this pass: the bloom chain downstream is a
+		// screen-wide blur, so one poisoned pixel wipes the bloom AND the sun
+		// disc (saturate(NaN) == 0) for the whole frame. Fall back to the
+		// unblurred centre sample.
+		const float3 result = sum / max(totalWeight, 1e-4f);
+		if (!all(isfinite(result)))
+			return centreColour;
+		return float4(result, centreColour.a);
 	}
 }

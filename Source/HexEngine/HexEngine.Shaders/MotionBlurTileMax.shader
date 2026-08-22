@@ -64,6 +64,10 @@
 				// Velocity RT holds the [0,1] clip-space delta (+y = up).
 				// Texture-space offset negates y (Utils.shader convention).
 				float2 v = g_velocity.Load(int3(p, 0)).xy;
+				// Non-finite texels must not win the tile (inf would survive the
+				// clamp below as NaN and poison every pixel in the tile).
+				if (!all(isfinite(v)))
+					continue;
 				v = float2(v.x, -v.y) * g_mbParams.x;
 
 				const float lenSq = dot(v, v);
