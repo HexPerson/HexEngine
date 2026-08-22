@@ -253,6 +253,13 @@ namespace HexEngine
 		std::shared_ptr<IShader> _volumetricClouds;
 		std::shared_ptr<IShader> _cloudShadowMapShader;
 		ITexture2D* _cloudShadowMap = nullptr;
+		// Cloud temporal accumulation (CloudTemporal.shader): ping-pong history
+		// at the half-res cloud buffer size.
+		std::shared_ptr<IShader> _cloudTemporalShader;
+		IConstantBuffer* _cloudTemporalBuffer = nullptr;
+		ITexture2D* _cloudHistory[2] = { nullptr, nullptr };
+		uint32_t _cloudHistoryWrite = 0u;
+		bool _cloudHistoryValid = false;
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
 

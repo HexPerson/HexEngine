@@ -108,6 +108,9 @@ namespace HexEngine
 	// Cached cloud shadow map (CloudShadowMap.shader): rendered once per frame
 	// over a square of the cloud base plane centred on the camera; Deferred
 	// samples it instead of re-marching the slab per pixel.
+	// Temporal accumulation of the half-res cloud march (CloudTemporal.shader).
+	HVar r_cloudTemporal("r_cloudTemporal", "Temporally accumulate the cloud march (removes jitter boil under camera motion)", true, false, true);
+	HVar r_cloudTemporalAlpha("r_cloudTemporalAlpha", "Cloud temporal blend weight of the NEW frame (lower = smoother, slower to react)", 0.12f, 0.02f, 1.0f);
 	HVar r_cloudShadowMapSize("r_cloudShadowMapSize", "Cloud shadow map resolution (texels per side)", 1024, 256, 4096);
 	HVar r_cloudShadowMapExtent("r_cloudShadowMapExtent", "Cloud shadow map half-extent around the camera (m)", 2500.0f, 250.0f, 20000.0f);
 	HVar r_cloudQuality("r_cloudQuality", "Cloud quality preset (0 = performance, 1 = balanced, 2 = quality)", 1, 0, 2);
@@ -1145,6 +1148,9 @@ namespace HexEngine
 		SAFE_DELETE(_fogBuffer);
 		SAFE_DELETE(_volumetricLightingBuffer);
 		SAFE_DELETE(_cloudsBuffer);
+		SAFE_DELETE(_cloudHistory[0]);
+		SAFE_DELETE(_cloudHistory[1]);
+		_cloudHistoryValid = false;
 		SAFE_DELETE(_atmosphereRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_particleRT);
@@ -1199,6 +1205,9 @@ namespace HexEngine
 		SAFE_DELETE(_fogBuffer);
 		SAFE_DELETE(_volumetricLightingBuffer);
 		SAFE_DELETE(_cloudsBuffer);
+		SAFE_DELETE(_cloudHistory[0]);
+		SAFE_DELETE(_cloudHistory[1]);
+		_cloudHistoryValid = false;
 		SAFE_DELETE(_atmosphereRT);
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_pointLightBuffer);
@@ -1213,6 +1222,7 @@ namespace HexEngine
 		SAFE_DELETE(_cloudDetailNoise);
 		SAFE_DELETE(_cloudShadowMap);
 		SAFE_DELETE(_cloudConstantBuffer);
+		SAFE_DELETE(_cloudTemporalBuffer);
 		SAFE_DELETE(_forwardLightsBuffer);
 		SAFE_DELETE(_subsurfaceIntermediateRT);
 		SAFE_DELETE(_subsurfaceParamsBuffer);
@@ -1261,6 +1271,7 @@ namespace HexEngine
 		_volumetricLighting			= IShader::Create("EngineData.Shaders/VolumetricLighting.hcs");
 		_volumetricClouds			= IShader::Create("EngineData.Shaders/VolumetricClouds.hcs");
 		_cloudShadowMapShader		= IShader::Create("EngineData.Shaders/CloudShadowMap.hcs");
+		_cloudTemporalShader		= IShader::Create("EngineData.Shaders/CloudTemporal.hcs");
 		_bilateralUpsample			= IShader::Create("EngineData.Shaders/BilateralUpsample.hcs");
 		_pointLightShader			= IShader::Create("EngineData.Shaders/PointLight.hcs");
 		_spotLightShader			= IShader::Create("EngineData.Shaders/SpotLight.hcs");
@@ -1645,6 +1656,29 @@ namespace HexEngine
 			D3D11_RTV_DIMENSION_TEXTURE2D,
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			D3D11_SRV_DIMENSION_TEXTURE2D);
+
+		// Temporal history ping-pong: same size/format as the cloud buffer.
+		for (int i = 0; i < 2; ++i)
+		{
+			SAFE_DELETE(_cloudHistory[i]);
+			_cloudHistory[i] = g_pEnv->_graphicsDevice->CreateTexture2D(
+				width / 2,
+				height / 2,
+				DXGI_FORMAT_R16G16B16A16_FLOAT,
+				1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				0,
+				1,
+				0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_TEXTURE2D,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE2D);
+			if (_cloudHistory[i])
+				_cloudHistory[i]->SetDebugName(i == 0 ? "_cloudHistory0" : "_cloudHistory1");
+		}
+		_cloudHistoryValid = false;
 
 		if (_cloudsBuffer)
 		{
@@ -7511,13 +7545,55 @@ namespace HexEngine
 			guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricClouds.get());
 			guiRenderer->EndFrame();
 
+			// Temporal accumulation (CloudTemporal.shader): reproject last
+			// frame's half-res result by view rotation and EMA-blend. Main camera
+			// only - capture cameras have no coherent history.
+			ITexture2D* upsampleSource = _cloudsBuffer;
+			const bool temporal = r_cloudTemporal._val.b && _cloudTemporalShader != nullptr
+				&& _cloudHistory[0] != nullptr && _cloudHistory[1] != nullptr
+				&& !_currentCamera->IsEnvironmentCapture();
+			if (temporal)
+			{
+				if (_cloudTemporalBuffer == nullptr)
+					_cloudTemporalBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+				if (_cloudTemporalBuffer != nullptr)
+				{
+					const uint32_t write = _cloudHistoryWrite;
+					const uint32_t read = write ^ 1u;
+					const float histWeight = _cloudHistoryValid ? (1.0f - std::clamp(r_cloudTemporalAlpha._val.f32, 0.02f, 1.0f)) : 0.0f;
+					const math::Vector4 params(histWeight, 1.0f / halfVp.Width, 1.0f / halfVp.Height, 0.0f);
+					_cloudTemporalBuffer->Write((void*)&params, sizeof(params));
+
+					g_pEnv->_graphicsDevice->SetRenderTarget(_cloudHistory[write]);
+					g_pEnv->_graphicsDevice->SetViewport(halfVp);
+					g_pEnv->_graphicsDevice->SetConstantBufferPS(6, _cloudTemporalBuffer);
+					guiRenderer->StartFrame();
+					// t0 current, t1 history, t2 gbuffer diffuse (sky flag) - implicit
+					// slots from 0 (the previous draw reset the counter).
+					g_pEnv->_graphicsDevice->SetTexture2D(_cloudsBuffer);
+					g_pEnv->_graphicsDevice->SetTexture2D(_cloudHistory[read]);
+					g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetDiffuse());
+					guiRenderer->FullScreenTexturedQuad(nullptr, _cloudTemporalShader.get());
+					guiRenderer->EndFrame();
+					g_pEnv->_graphicsDevice->SetConstantBufferPS(6, nullptr);
+
+					upsampleSource = _cloudHistory[write];
+					_cloudHistoryWrite = read;
+					_cloudHistoryValid = true;
+				}
+			}
+			else
+			{
+				_cloudHistoryValid = false;
+			}
+
 			_fogBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 			g_pEnv->_graphicsDevice->SetRenderTarget(_fogBuffer);
 			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
 
 			guiRenderer->StartFrame();
 			_gbuffer.BindAsShaderResource();
-			g_pEnv->_graphicsDevice->SetTexture2D(_cloudsBuffer);
+			g_pEnv->_graphicsDevice->SetTexture2D(upsampleSource);
 			guiRenderer->FullScreenTexturedQuad(nullptr, _bilateralUpsample.get());
 			guiRenderer->EndFrame();
 
