@@ -7501,6 +7501,13 @@ namespace HexEngine
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"Cloud shadow map");
 		guiRenderer->StartFrame(size, size);
 
+		// This runs inside the deferred light pass, whose blend state is
+		// ADDITIVE for light accumulation. Left as-is, the never-cleared map
+		// summed its transmittance every frame and grew without bound - the
+		// "cloud shadows brighten the whole scene 25x" failure. Opaque blend
+		// and a clear, then hand the light pass its state back.
+		_cloudShadowMap->ClearRenderTargetView(math::Color(1.0f, 0.0f, 0.0f, 1.0f));
+		graphics->SetBlendState(BlendState::Opaque);
 		graphics->SetRenderTarget(_cloudShadowMap);
 		graphics->SetViewport(Viewport(0.0f, 0.0f, (float)size, (float)size));
 		// b4 = cloud constants (already written by the caller). Noise volumes
@@ -7513,7 +7520,9 @@ namespace HexEngine
 		guiRenderer->EndFrame();
 		GFX_PERF_END();
 
-		// Hand the caller's targets back.
+		// Hand the caller's state back: RenderLights set ADDITIVE for light
+		// accumulation before calling into the directional pass.
+		graphics->SetBlendState(BlendState::Additive);
 		graphics->SetRenderTarget(_lightAccumulationBuffer);
 		if (_currentCamera != nullptr)
 			graphics->SetViewport(*_currentCamera->GetViewport().Get11());
