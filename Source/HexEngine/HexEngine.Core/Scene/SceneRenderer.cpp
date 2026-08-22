@@ -592,11 +592,11 @@ namespace HexEngine
 	// on grazing-angle geometry (notably volumetric-terrain slopes at mid-
 	// depth) adjacent pixels disagree about whether the ray enters the
 	// terrain, and TAA can't fully reconcile that frame-to-frame - visible
-	// flicker on the slope. Re-enabling needs a TAA-friendly noise source
-	// (e.g. blue noise indexed by world position or frame-stable jitter)
-	// and probably a distance fade so the cost+artifact concentrate near the
-	// camera where contact shadows actually add value.
-	HVar r_contactShadows("r_contactShadows", "Enable screen-space contact shadows on the directional light", false, false, true);
+	// flicker on the slope. Since addressed (ShadowUtils::ScreenSpaceContactShadow):
+	// frame-animated jitter TAA can integrate, a grazing-angle normal bias so
+	// slopes don't self-occlude, a depth-proportional blocker lower bound, and
+	// the distance fade below - so the feature defaults ON.
+	HVar r_contactShadows("r_contactShadows", "Enable screen-space contact shadows on the directional light", true, false, true);
 	HVar r_contactShadowSteps("r_contactShadowSteps", "Ray-march step count for contact shadows", 12, 4, 64);
 	HVar r_contactShadowLength("r_contactShadowLength", "Maximum world-space length of the contact shadow ray (metres)", 1.5f, 0.05f, 32.0f);
 	HVar r_contactShadowThickness("r_contactShadowThickness", "Thickness window for blocker acceptance (metres) - prevents see-through behind walls", 0.2f, 0.01f, 5.0f);

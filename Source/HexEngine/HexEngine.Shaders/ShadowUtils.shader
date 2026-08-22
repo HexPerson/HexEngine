@@ -257,13 +257,18 @@
 		// Self-bias along the surface normal so the ray's first step doesn't
 		// immediately self-intersect. 0.05m matches the ~minDistSqr clamp used
 		// by the punctual light shaders for the same reason.
-		const float3 biasedOrigin = positionWS + normalWS * 0.05f;
+		// Grazing light skims the surface, and on slopes the march then reads
+		// the surface itself as a blocker (the mid-depth terrain flicker that
+		// kept this feature off). Scale the bias up as N.L falls.
+		const float grazing = 1.0f - saturate(dot(normalWS, lightDirectionWS));
+		const float3 biasedOrigin = positionWS + normalWS * (0.05f + 0.20f * grazing);
 
 		// Per-pixel jitter breaks the banding that comes from every pixel
-		// stepping to the same set of distances. Cheap interleaved gradient noise
-		// (same as the cascade sampler uses) - keeps the noise pattern stable
-		// frame-to-frame so TAA can resolve it.
-		const float jitter = InterleavedGradientNoise(screenPos);
+		// stepping to the same set of distances. It is ANIMATED per frame
+		// (golden-ratio rotation of the gradient noise): a frame-static pattern
+		// is a constant TAA cannot average, and it shimmers against moving
+		// geometry; an animated one integrates into a smooth result.
+		const float jitter = frac(InterleavedGradientNoise(screenPos) + (float)(g_frame % 8u) * 0.618034f);
 
 		const float stepLen = maxWorldLength / max((float)numSteps, 1.0f);
 		const float3 stepWS = lightDirectionWS * stepLen;
@@ -306,8 +311,12 @@
 			// surface (e.g. a wall whose far side is way past the ray); without
 			// this the contact-shadow term darkens distant geometry seen through
 			// any near-camera object.
+			// Lower bound scales with depth: at mid range a half-pixel of
+			// reconstruction error is centimetres, and accepting it as a
+			// blocker is the other source of the slope flicker.
 			const float blockerDepth = rayViewDepth - sceneViewDepth;
-			if (blockerDepth > 0.0f && blockerDepth < thicknessThreshold)
+			const float minBlocker = max(0.015f, 0.004f * sceneViewDepth);
+			if (blockerDepth > minBlocker && blockerDepth < thicknessThreshold)
 			{
 				// Fade the last few steps so the contact shadow edge is soft
 				// rather than a hard step (otherwise the dither pattern shows).
