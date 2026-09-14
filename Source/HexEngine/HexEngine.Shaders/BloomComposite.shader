@@ -55,23 +55,57 @@
 		return g_bloomChain.SampleLevel(g_linearSampler, clamp(uv, halfTexel, 1.0f - halfTexel), 0).rgb;
 	}
 
-	// Cheap procedural lens-dirt: a few smudge lobes from hashed centres, so
-	// the effect ships without an authored dirt texture. Static in screen
-	// space (a real smudged lens), modulated by flare brightness at the call
-	// site so it only shows where light actually hits it.
+	// Procedural lens-dirt, no authored texture needed. Static in screen
+	// space (a real smudged lens) and lit by the bloom at the call site.
+	// Structure matters now that dirt is an independent effect: real lens
+	// dirt is many small sharp specks plus a few broad grease smears - the
+	// old 6 giant gaussian lobes read as vignette splotches.
+	float LensDirtHash(float2 p)
+	{
+		return frac(sin(dot(p, float2(127.1f, 311.7f))) * 43758.5453f);
+	}
+
 	float LensDirt(float2 uv)
 	{
+		// Aspect-corrected so specks stay round on widescreen.
+		const float2 p = uv * float2(1.7778f, 1.0f);
+
 		float d = 0.0f;
+
+		// Fine specks: jittered-grid dots at two scales; ~40% of cells carry
+		// one, with per-cell size and brightness variation.
 		[unroll]
-		for (int i = 0; i < 6; ++i)
+		for (int layer = 0; layer < 2; ++layer)
+		{
+			const float scale = (layer == 0) ? 22.0f : 9.0f;
+			const float2 g = p * scale + (float)layer * 13.7f;
+			const float2 cell = floor(g);
+			const float2 f = frac(g) - 0.5f;
+			const float2 jitter = float2(LensDirtHash(cell + 1.3f), LensDirtHash(cell + 17.9f)) - 0.5f;
+			const float2 dd = f - jitter * 0.6f;
+			const float size = 0.06f + 0.14f * LensDirtHash(cell + 31.4f);
+			const float keep = step(0.62f, LensDirtHash(cell + 7.7f));
+			const float bright = 0.35f + 0.65f * LensDirtHash(cell + 3.1f);
+			d += keep * bright * exp(-dot(dd, dd) / max(size * size, 1e-5f)) * ((layer == 0) ? 0.55f : 0.40f);
+		}
+
+		// Broad smudges: a few soft, strongly-eccentric lobes (grease smears),
+		// kept subtle so the specks carry the look.
+		[unroll]
+		for (int i = 0; i < 4; ++i)
 		{
 			const float fi = (float)i;
-			const float2 c = float2(frac(sin(fi * 12.9898f) * 43758.5453f),
-			                        frac(sin(fi * 78.233f) * 24634.6345f));
-			const float rad = 0.12f + 0.10f * frac(sin(fi * 3.7f) * 1000.0f);
-			const float2 dd = (uv - c) / rad;
-			d += exp(-dot(dd, dd)) * (0.4f + 0.6f * frac(fi * 0.37f));
+			const float2 c = float2(frac(sin(fi * 12.9898f + 1.0f) * 43758.5453f),
+			                        frac(sin(fi * 78.233f + 2.0f) * 24634.6345f)) * float2(1.7778f, 1.0f);
+			const float2 seed = float2(fi, fi);
+			float2 axis = float2(LensDirtHash(seed + 5.0f) - 0.5f, LensDirtHash(seed + 9.0f) - 0.5f);
+			axis = normalize(axis + float2(1e-3f, 2e-3f));
+			float2 dd = p - c;
+			dd = float2(dot(dd, axis), dot(dd, float2(-axis.y, axis.x)));
+			dd /= float2(0.30f + 0.25f * LensDirtHash(seed + 2.0f), 0.10f + 0.08f * LensDirtHash(seed + 4.0f));
+			d += exp(-dot(dd, dd)) * 0.18f;
 		}
+
 		return saturate(d);
 	}
 
@@ -87,7 +121,12 @@
 	float3 SampleFlareSource(float2 uv)
 	{
 		const float3 c = SampleChain(uv);
-		const float exposure = max(g_colourGrading.exposure, 1e-4f);
+		// Judge in display units using the INSTANT exposure (histogram target,
+			// unsmoothed). The smoothed multiplier lags during camera movement and
+			// made bloom overshoot until adaptation settled.
+			const float exposure = (g_colourGrading.exposureInstant > 1e-4f)
+				? g_colourGrading.exposureInstant
+				: max(g_colourGrading.exposure, 1e-4f); // fallback: binary predating exposureInstant
 		const float lumaDisplay = dot(c, float3(0.2126f, 0.7152f, 0.0722f)) * exposure;
 		return c * smoothstep(0.35f, 1.6f, lumaDisplay);
 	}
@@ -152,15 +191,23 @@
 		const float normalised = max(g_bloomPass2.x, 0.0f); // 1/levelCount
 		float3 result = scene.rgb + bloom * normalised * g_bloom.bloomIntensity;
 
-		// P4.12: lens flare + dirt, driven by the bloom chain. Dirt modulates
-		// the flare so smudges only glow where light lands on them.
-		const float3 flare = LensFlare(uv);
+		// P4.12: lens flare, driven by the bloom chain.
 		if (g_lensParams.x > 0.0f)
 		{
-			float3 dirtied = flare;
-			if (g_lensParams.y > 0.0f)
-				dirtied += flare * LensDirt(uv) * g_lensParams.y * 3.0f;
-			result += dirtied * normalised;
+			result += LensFlare(uv) * normalised;
+		}
+		// Lens dirt: smudges revealed by the BLOOM (veiling glare across the
+		// whole lens), not by the flare ghosts. The old wiring multiplied the
+		// flare term, which made r_lensDirt read as a second flare-intensity
+		// dial and do nothing with the flare off. Bloom-driven, it brightens
+		// dirt wherever any bright light blooms - independent of ghosts.
+		if (g_lensParams.y > 0.0f)
+		{
+			// x8: the raw bloom veil is subtle by design (bloomIntensity ~0.05),
+			// and the dirt pattern averages ~0.1 coverage - without a strong
+			// boost r_lensDirt 1 was nearly invisible. At x8, 1.0 reads clearly
+			// with a bright source in frame and the 0-4 range gives real reach.
+			result += bloom * normalised * LensDirt(uv) * g_lensParams.y * 8.0f;
 		}
 
 		return float4(result, scene.a);

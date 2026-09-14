@@ -431,11 +431,14 @@
 			pbr.rgb *= flashTint * flashMul;
 		}
 
-		if(pixelPosWS.a > 0.0f)
-		{
-			return float4(pbr.rgb + pixelColour.rgb * pixelPosWS.a, pbr.a);
-		}
-
-		return pbr;
+		// Emissive REPLACE model. pos.w carries the emissive MASK in [0,1]
+		// (0 = pure lit surface, 1 = pure emitter); the mesh already lerped the
+		// gbuffer diffuse from surface colour toward the emission by this same
+		// mask. Lerp the lit result toward that unlit diffuse, so an emitter
+		// shows its emission unlit, a normal surface is lit as usual, and a
+		// partially-emissive surface transitions smoothly. This replaces the
+		// old "diffuse * |emission|" that multiplied the whole surface by the
+		// emission magnitude and blew emissives out to saturated over-bright.
+		return lerp(pbr, float4(pixelColour.rgb, 1.0f), saturate(pixelPosWS.a));
 	}
 }

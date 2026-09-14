@@ -25,6 +25,33 @@
 	static const float ENVMAP_FACE_SIZE      = 128.0f;
 	static const float ENVMAP_ROUGHNESS_ROWS = 5.0f;
 
+	// Octahedral border gutter, in texels, reserved at each edge of every
+	// per-row 128x128 block. The octahedral map is drawn into the inner
+	// [B, FACE_SIZE-1-B] texels; the 1-texel ring outside it holds the
+	// OCTAHEDRALLY-WRAPPED neighbour directions (OctDecodeDir naturally folds
+	// when its input runs just outside [0,1]). Hardware bilinear then blends
+	// into that ring across the +-axis seams instead of clamping to the edge
+	// texel - which is what turned the atlas's axis singularities into the six
+	// blue blobs on matte surfaces. The gutter fits inside the existing block,
+	// so no atlas-size or C++ change is needed; write side (SkyEnvMap prefilter)
+	// and read side (SampleEnvAtlas) MUST use the identical mapping below.
+	static const float ENVMAP_BORDER = 1.0f;
+
+	// Octahedral unit uv [0,1] -> inset position within a 128-wide row block.
+	float2 OctUnitToBlock(float2 oct)
+	{
+		const float span = ENVMAP_FACE_SIZE - 1.0f - 2.0f * ENVMAP_BORDER;
+		return ((ENVMAP_BORDER + 0.5f) + oct * span) / ENVMAP_FACE_SIZE;
+	}
+
+	// Inverse: block uv (a texel centre) -> octahedral unit uv. Gutter texels
+	// map slightly outside [0,1] so OctDecodeDir folds them to the wrap.
+	float2 OctBlockToUnit(float2 blockUv)
+	{
+		const float span = ENVMAP_FACE_SIZE - 1.0f - 2.0f * ENVMAP_BORDER;
+		return (blockUv * ENVMAP_FACE_SIZE - (ENVMAP_BORDER + 0.5f)) / span;
+	}
+
 	// Direction (normalized, Y-up) -> octahedral UV in [0,1]^2.
 	float2 OctEncodeDir(float3 dirYUp)
 	{
@@ -124,21 +151,23 @@
 	// atlas border is invisible in prefiltered content.
 	float3 SampleEnvAtlas(Texture2D atlas, SamplerState samp, float3 dir, float roughness)
 	{
-		float2 uv = OctEncodeDir(normalize(dir));
-
-		const float texel = 1.0f / ENVMAP_FACE_SIZE;
-		uv = clamp(uv, texel, 1.0f - texel);
+		// Map the direction into the inset (gutter-bordered) octahedral block,
+		// so bilinear blends into the wrapped border ring at the +-axis seams
+		// rather than clamping to the edge texel. No inward clamp is needed: the
+		// inset already keeps every tap inside the current row's 128x128 block,
+		// so bilinear never bleeds into an adjacent roughness row.
+		const float2 blockUv = OctUnitToBlock(OctEncodeDir(normalize(dir)));
 
 		const float level = saturate(roughness) * (ENVMAP_ROUGHNESS_ROWS - 1.0f);
 		const float row0 = floor(level);
 		const float row1 = min(row0 + 1.0f, ENVMAP_ROUGHNESS_ROWS - 1.0f);
 		const float rowLerp = level - row0;
 
-		const float v0 = (row0 + uv.y) / ENVMAP_ROUGHNESS_ROWS;
-		const float v1 = (row1 + uv.y) / ENVMAP_ROUGHNESS_ROWS;
+		const float v0 = (row0 + blockUv.y) / ENVMAP_ROUGHNESS_ROWS;
+		const float v1 = (row1 + blockUv.y) / ENVMAP_ROUGHNESS_ROWS;
 
-		const float3 c0 = atlas.SampleLevel(samp, float2(uv.x, v0), 0).rgb;
-		const float3 c1 = atlas.SampleLevel(samp, float2(uv.x, v1), 0).rgb;
+		const float3 c0 = atlas.SampleLevel(samp, float2(blockUv.x, v0), 0).rgb;
+		const float3 c1 = atlas.SampleLevel(samp, float2(blockUv.x, v1), 0).rgb;
 		return lerp(c0, c1, rowLerp);
 	}
 
@@ -255,7 +284,19 @@
 
 		// Real DFG lookup, with the analytic fit as the fallback for the first
 		// frame (before the table is generated) and when disabled.
-		const float3 dfgSample = dfgLut.SampleLevel(samp, float2(NdotV, perceptualRoughness), 0).rgb;
+		//
+		// HALF-TEXEL CLAMP: the shared sampler (g_textureSampler) is s0 =
+		// AnisotropicWRAP. The DFG table is a clamped [0,1] function of
+		// (NdotV, roughness), so without this a surface faced head-on (NdotV->1,
+		// u->1) wrapped bilinearly back to the grazing end (u->0) where the bias
+		// term spikes - painting one bright soft blob per wall at its
+		// perpendicular point (6 walls => the "six axis blobs"; user confirmed
+		// r_iblDfgLut 0 removed them). Clamp both axes inside the first/last
+		// texel centres so bilinear can never reach the wrapped edge.
+		const float dfgHalfTexel = 0.5f / 128.0f; // kDfgLutSize
+		const float2 dfgUv = clamp(float2(NdotV, perceptualRoughness),
+			dfgHalfTexel, 1.0f - dfgHalfTexel);
+		const float3 dfgSample = dfgLut.SampleLevel(samp, dfgUv, 0).rgb;
 		const bool useLut = (dfgToggles.x > 0.5f) && (dfgSample.b > 1e-4f);
 		const float2 dfg = useLut ? dfgSample.rg : EnvBRDFApprox(NdotV, perceptualRoughness);
 

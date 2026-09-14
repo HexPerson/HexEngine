@@ -770,6 +770,11 @@ namespace HexEngine
 		file->Deserialize(data, "_rotation", rotation);
 		file->Deserialize(data, "_scale", scale);
 
+		if (auto sceneScale = g_pEnv->GetGlobalSceneScale(); sceneScale != 1.0f)
+		{
+			position *= sceneScale;
+		}
+
 		// Avoid broadcasting transform-change messages during deserialization to
 		// prevent cross-thread scene/PVS contention while scenes are loading.
 		SetPositionNoNotify(position);

@@ -178,7 +178,9 @@
 		keep = lerp(keep, 0.2f, snapBoost);
 
 		float3 radiance = previous.rgb * keep + injected * (1.0f - keep);
-		radiance = LuminanceClamp(max(radiance, 0.0f.xxx), 4.0f);
+		// Voxel-radiance cap follows r_giEnergyClamp (4.0 at the historical
+		// clamp of 3) so brighter GI configs are not silently flattened here.
+		radiance = LuminanceClamp(max(radiance, 0.0f.xxx), max(4.0f, g_giParams0.y * 1.33f));
 		const float opacity = saturate(max(accumOpacity, previous.a * 0.95f));
 		g_voxelRadianceOut[tid] = float4(radiance, opacity);
 

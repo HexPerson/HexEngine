@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -152,6 +152,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
   <ItemGroup>
     <HexEngineShader Include="Atmosphere.shader" />
     <HexEngineShader Include="OutlineSeed.shader" />
+    <HexEngineShader Include="OutlineSeedAnimated.shader" />
     <HexEngineShader Include="OutlineJFA.shader" />
     <HexEngineShader Include="OutlineComposite.shader" />
     <HexEngineShader Include="DiffuseGIAmbientOcclusion.shader">
@@ -173,6 +174,12 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
       <FileType>Document</FileType>
     </HexEngineShader>
     <HexEngineShader Include="CloudTemporal.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="SunShaftsMask.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="SunShaftsBlur.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
     <HexEngineShader Include="TransparentAtmosphere.shader">
@@ -227,6 +234,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="AutoExposureLuminance.shader" />
     <HexEngineShader Include="AutoExposureHistogram.shader" />
     <HexEngineShader Include="BloomDownsample.shader" />
+    <HexEngineShader Include="BloomTemporal.shader" />
     <HexEngineShader Include="BloomUpsample.shader" />
     <HexEngineShader Include="BloomComposite.shader" />
     <HexEngineShader Include="MotionBlurTileMax.shader" />

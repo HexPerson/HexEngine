@@ -37,11 +37,26 @@ namespace HexEngine
 		// > 0 = above horizon, <= 0 = below. It's used to blend the day-time target/max
 		// against the night-time overrides (r_autoExposureNightTargetLuma / r_autoExposureNightMax)
 		// so the meter doesn't push a night scene up to daytime brightness.
-		void Update(ITexture2D* beauty, float deltaTimeSeconds, float sunElevation = 1.0f);
+		// skyMask: gbuffer diffuse (its .a == -1 marks sky pixels) - lets the
+		// meter down-weight the HDR sky via r_autoExposureSkyWeight. Null =
+		// every pixel counts fully (old behaviour).
+		// skyOvercastAmount: weather overcast [0,1]. Under a closed cloud
+		// deck the ground sits in cloud shadow; metering mostly-ground then
+		// pushes exposure up and blows the (down-weighted) sky to white, so
+		// the sky weight adapts toward full as overcast rises
+		// (bridge-tuned observation, 2026-08-29).
+		void Update(ITexture2D* beauty, float deltaTimeSeconds, float sunElevation = 1.0f, ITexture2D* skyMask = nullptr,
+			float skyOvercastAmount = 0.0f);
 
 		// Current exposure multiplier (1.0 = no change). Multiply this with the user-set
 		// r_exposure value before feeding the colour-grading constant buffer.
 		float GetExposureMultiplier() const { return _smoothedExposure; }
+		// This frame's histogram-derived target BEFORE temporal smoothing.
+		// Consumers that judge brightness in display units (bloom threshold/
+		// scatter/clamp) should use this: the smoothed value lags the scene
+		// during camera movement, so bloom judged with it overshoots until
+		// adaptation settles.
+		float GetTargetExposureMultiplier() const { return _targetExposure; }
 
 		// Reset the smoothed exposure back to 1.0 - call when a level/scene is loaded so the
 		// adaptation doesn't carry over from the previous environment.
@@ -78,6 +93,8 @@ namespace HexEngine
 		// Current smoothed exposure multiplier. Updated each frame toward the target derived
 		// from the latest readback.
 		float _smoothedExposure = 1.0f;
+		// Unsmoothed per-frame target (see GetTargetExposureMultiplier).
+		float _targetExposure = 1.0f;
 
 		// Throttles r_autoExposureDebug log spew to ~1Hz.
 		float _debugAccum = 0.0f;

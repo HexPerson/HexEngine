@@ -58,6 +58,24 @@
 		float4 g_giParams13;
 	};
 
+	float3 VoxelizeBarycentric(float3 p, float3 a, float3 b, float3 c)
+	{
+		const float3 v0 = b - a;
+		const float3 v1 = c - a;
+		const float3 v2 = p - a;
+		const float d00 = dot(v0, v0);
+		const float d01 = dot(v0, v1);
+		const float d11 = dot(v1, v1);
+		const float d20 = dot(v2, v0);
+		const float d21 = dot(v2, v1);
+		const float denom = d00 * d11 - d01 * d01;
+		if (abs(denom) <= 1e-8f)
+			return float3(1.0f, 0.0f, 0.0f);
+		const float v = (d11 * d20 - d01 * d21) / denom;
+		const float w = (d00 * d21 - d01 * d20) / denom;
+		return float3(1.0f - v - w, v, w);
+	}
+
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
 	{
 		const float eps = -0.0001f;
@@ -239,8 +257,16 @@
 					if (abs(signedDist) > planeThickness)
 						continue;
 
+					// Same small-triangle fix as DiffuseGIVoxelizeEval: accept by
+					// distance to the (approximate) nearest point on the triangle
+					// instead of requiring the voxel centre to project inside the
+					// edges - high-poly meshes with sub-voxel triangles otherwise
+					// voxelize to nothing.
 					const float3 projected = voxelCenterWs - n * signedDist;
-					if (!IsPointInTriangle(projected, p0, p1, p2, n))
+					float3 baryClamped = max(VoxelizeBarycentric(projected, p0, p1, p2), 0.0f.xxx);
+					baryClamped /= max(baryClamped.x + baryClamped.y + baryClamped.z, 1e-5f);
+					const float3 closestOnTriWs = p0 * baryClamped.x + p1 * baryClamped.y + p2 * baryClamped.z;
+					if (length(voxelCenterWs - closestOnTriWs) > max(planeThickness, voxelSize * 0.87f))
 						continue;
 
 					// Evaluate direct sun visibility from the real shadow cascades first.

@@ -2437,7 +2437,11 @@ namespace HexEngine
 			std::clamp(r_giBounceAlbedoMinLuma._val.f32, 0.0f, 1.0f),
 			std::clamp(r_giBounceAlbedoRemapAmount._val.f32, 0.0f, 1.0f));
 		_constants.params11 = math::Vector4(
-			std::max(0.0f, r_giLocalLightInjection._val.f32),
+			// r_giDebugDisableLocalLightInjection used to be a GPU-path no-op
+			// (it only gated the CPU-bake evaluation), which made every
+			// injection A/B done with it meaningless. Route it into the live
+			// strength the eval kernel actually reads.
+			r_giDebugDisableLocalLightInjection._val.b ? 0.0f : std::max(0.0f, r_giLocalLightInjection._val.f32),
 			0.0f,
 			std::clamp(r_giReceiverMinLuma._val.f32, 0.0f, 1.0f),
 			std::clamp(r_giReceiverRemapAmount._val.f32, 0.0f, 1.0f));
@@ -2751,16 +2755,34 @@ namespace HexEngine
 		}
 		if (localLightTuningChanged || injectLightSetChanged)
 		{
-			for (uint32_t i = 0; i < ClipmapCount; ++i)
+			// Same policy split as the sun signature above: on the GPU
+			// material-eval path the cached voxel triangles carry NO
+			// local-light radiance - ExtractGiLocalLights re-runs every
+			// voxelize dispatch and the ranked light buffer is re-uploaded,
+			// so an added/removed/moved light flows through the regular
+			// voxelize cadence on its own; the snap window armed above fades
+			// the stale voxel history. Clearing every clip's triangle cache
+			// here (a 40-70 ms CPU re-gather per clip) would turn ANY moving
+			// injecting light (positions hash at 5 cm) into a per-frame
+			// stall now that _injectIntoGI defaults on. The legacy CPU-bake
+			// path DOES bake local radiance into the cached triangles and
+			// still needs the rebuild, as do the (rare, user-driven)
+			// injection-tuning cvar changes.
+			const bool gpuEvalOwnsLocalLights =
+				r_giGpuVoxelize._val.b && r_giGpuMaterialEval._val.b;
+			if (localLightTuningChanged || !gpuEvalOwnsLocalLights)
 			{
-				_cachedVoxelTriangles[i].clear();
-				_cachedGiMaterialProxies[i].clear();
-				_cachedVoxelTrianglesValid[i] = false;
-			_pendingGather[i] = {};
-			_voxelTriangleGpuValid[i] = false;
-				_cachedVoxelTrianglesFrame[i] = 0ull;
-				_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], 2u);
-				_clipmaps[i].dirty = true;
+				for (uint32_t i = 0; i < ClipmapCount; ++i)
+				{
+					_cachedVoxelTriangles[i].clear();
+					_cachedGiMaterialProxies[i].clear();
+					_cachedVoxelTrianglesValid[i] = false;
+					_pendingGather[i] = {};
+					_voxelTriangleGpuValid[i] = false;
+					_cachedVoxelTrianglesFrame[i] = 0ull;
+					_clipmapWarmFramesRemaining[i] = std::max(_clipmapWarmFramesRemaining[i], 2u);
+					_clipmaps[i].dirty = true;
+				}
 			}
 			_lastLocalLightInjection = r_giLocalLightInjection._val.f32;
 			_lastLocalLightInjectionEnable = !r_giDebugDisableLocalLightInjection._val.b;
@@ -3990,12 +4012,19 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		out.clear();
 		if (scene == nullptr || levelIndex >= ClipmapCount)
 		{
-			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
-			_stats.sourceTriangleCount = 0u;
+			_stats.cpuTriangleBuildMs += ElapsedMs(buildStart);
+			// sourceTriangleCount: no contribution from this transient-empty return.
 			return 0u;
 		}
 		const bool localLightsOnlyDebug = r_giLocalLightsOnlyDebug._val.b;
-		const bool localLightInjectionEnabled = !r_giDebugDisableLocalLightInjection._val.b && !r_giGpuMaterialEval._val.b;
+		// localLightsOnlyDebug must force the CPU local-light evaluation on even
+		// in GPU material-eval mode: the debug filter below keeps ONLY triangles
+		// that received CPU-computed local bounce, so with the CPU evaluation
+		// disabled the two settings intersected to an empty triangle list -
+		// every gather returned 0 triangles and the level livelocked (see the
+		// empty-gather handling in RunGpuVoxelization).
+		const bool localLightInjectionEnabled = !r_giDebugDisableLocalLightInjection._val.b &&
+			(!r_giGpuMaterialEval._val.b || localLightsOnlyDebug);
 		const bool gpuComputeBaseSunEnabled =
 			r_giGpuMaterialEval._val.b &&
 			r_giGpuComputeBaseSun._val.b &&
@@ -4096,8 +4125,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 					_giMaterialProxyLookup[materialProxy.material] = materialProxy.index;
 				}
 			}
-			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
-			_stats.sourceTriangleCount = cachedCount;
+			_stats.cpuTriangleBuildMs += ElapsedMs(buildStart);
+			_stats.sourceTriangleCount += cachedCount;
 			_stats.emissiveMaterialCount += _cachedEmissiveMaterialCount[levelIndex];
 			_stats.emissiveTriangleCount += _cachedEmissiveTriangleCount[levelIndex];
 			_stats.emissiveActiveTriangleCount += _cachedEmissiveActiveTriangleCount[levelIndex];
@@ -4133,8 +4162,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		// Clip 0 is exempt (it carries the near field and must stay responsive).
 		if (_fullGatherConsumedThisFrame && levelIndex != 0u && level.initialized)
 		{
-			_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
-			_stats.sourceTriangleCount = 0u;
+			_stats.cpuTriangleBuildMs += ElapsedMs(buildStart);
+			// sourceTriangleCount: no contribution from this budget-denied return.
 			return 0u;
 		}
 		_fullGatherConsumedThisFrame = true;
@@ -4512,7 +4541,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 
 			const auto& data = getMaterialEmissiveData(material);
 			if (!data.hasTexture)
+			{
+				if (r_giLogRebuilds._val.b)
+				{
+					LOG_INFO("GI emissive score: mat=%s NO USABLE TEXTURE DATA (readback empty or too small; px=%zu %dx%d)",
+						material->GetName().c_str(), data.pixels.size(), data.width, data.height);
+				}
 				return 0.0f;
+			}
 
 			const float uMin = std::clamp(uvRect.uMin, 0.0f, 1.0f);
 			const float vMin = std::clamp(uvRect.vMin, 0.0f, 1.0f);
@@ -4520,7 +4556,12 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			const float vMax = std::clamp(uvRect.vMax, 0.0f, 1.0f);
 			const float du = std::max(1e-4f, uMax - uMin);
 			const float dv = std::max(1e-4f, vMax - vMin);
-			const int grid = 6;
+			// 16x16: a 6x6 point grid (36 samples) systematically missed thin
+			// neon strips - an atlas with 15% emissive coverage in thin lines
+			// hit 1-2 of 36 points and scored under the 0.02 activation gate,
+			// so whole neon meshes never classified as emissive. 256 samples
+			// per (mesh, material) is still trivially cheap and cached.
+			const int grid = 16;
 			int bright = 0;
 			float maxLum = 0.0f;
 			for (int y = 0; y < grid; ++y)
@@ -4763,8 +4804,8 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 				pendingGather.emissiveTiledTriangleCount = emissiveTiledTriangleCountLocal;
 				out.clear();
 				_gatherParkedThisCall = true;
-				_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
-				_stats.sourceTriangleCount = 0u;
+				_stats.cpuTriangleBuildMs += ElapsedMs(buildStart);
+				// sourceTriangleCount: parked mid-gather; triangles counted when the gather completes.
 				return 0u;
 			}
 
@@ -5252,9 +5293,12 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 					baseInjection = math::Vector3::Zero;
 					sunInjection = math::Vector3::Zero;
 				}
-				if (localLightsOnlyDebug && localLightBounce.LengthSquared() <= 1e-8f)
+				if (localLightsOnlyDebug && localLightInjectionEnabled && localLightBounce.LengthSquared() <= 1e-8f)
 				{
-					// In local-light debug mode, only keep triangles that actually receive local-light bounce.
+					// In local-light debug mode, only keep triangles that actually receive
+					// local-light bounce. Guarded on localLightInjectionEnabled so the
+					// filter can never reject EVERY triangle when the bounce term was
+					// never evaluated in the first place.
 					continue;
 				}
 				const float baseSuppression = std::clamp(r_giLocalLightBaseSuppression._val.f32, 0.0f, 1.0f);
@@ -5296,6 +5340,14 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			}
 		}
 
+		// A completed-but-empty gather releases the one-full-gather-per-frame
+		// token so other levels still get their slot this frame - clip 0 is
+		// exempt from the budget check and runs first, so without this a clip 0
+		// that keeps gathering empty starves every other clip indefinitely.
+		if (out.empty())
+		{
+			_fullGatherConsumedThisFrame = false;
+		}
 		// A gather resumed from a parked snapshot stores the SNAPSHOT
 		// revisions - the cache then reads as stale if the scene moved on
 		// mid-gather, and the next update regathers fresh.
@@ -5323,12 +5375,12 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 		_stats.emissiveTiledTriangleCount += emissiveTiledTriangleCountLocal;
 		_stats.emissiveProxyMaxLuma = std::max(_stats.emissiveProxyMaxLuma, emissiveProxyMaxLumaLocal);
 		_stats.emissiveProxyMaxStrength = std::max(_stats.emissiveProxyMaxStrength, emissiveProxyMaxStrengthLocal);
-		_stats.cpuTriangleBuildMs = ElapsedMs(buildStart);
-		_stats.sourceTriangleCount = static_cast<uint32_t>(out.size());
+		_stats.cpuTriangleBuildMs += ElapsedMs(buildStart);
+		_stats.sourceTriangleCount += static_cast<uint32_t>(out.size());
 		if (r_giLogRebuilds._val.b)
 		{
 			LOG_INFO("GI tri-rebuild clip%u DONE: %.2f ms, %u triangles",
-				levelIndex, _stats.cpuTriangleBuildMs, (uint32_t)out.size());
+				levelIndex, ElapsedMs(buildStart), (uint32_t)out.size());
 		}
 		return static_cast<uint32_t>(out.size());
 	}
@@ -5519,7 +5571,7 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			_voxelTriangleGpuValid[levelIndex] &&
 			(_voxelTriangleGpuCount[levelIndex] == triangleCount);
 		const bool hasTriangles = (triangleCount > 0u) && (gpuBufferCurrent || EnsureGpuVoxelTriangleBuffer(levelIndex, triangleCount));
-		_stats.sourceTriangleCount = triangleCount;
+		// _stats.sourceTriangleCount already accumulated by BuildGpuVoxelTriangleList.
 		_stats.candidateTriangleCount = triangleCount;
 		uint32_t emissivePayloadTriangleCount = 0u;
 		float emissivePayloadMaxHint = 0.0f;
@@ -5551,12 +5603,28 @@ bool DiffuseGI::EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t eleme
 			// gather, and the settling fast path then re-ran clip 0/1 (cached-list
 			// copy + full upload + dispatch) EVERY frame - a constant ~20ms drain
 			// until the far clips finally completed.
-			if (!_gatherParkedThisCall)
+			//
+			// An AUTHORITATIVELY empty gather (a completed, cache-stamped gather
+			// that found nothing to voxelize) must NOT take this path either:
+			// re-dirtying re-armed the warm counter every frame faster than the
+			// scheduler drained it, which pinned clipmapSettling true forever -
+			// far clips were never scheduled again (their pending shifts never
+			// consumed) and this level did a full regather every frame with every
+			// cache-reuse door shut. Fall through instead so the level clears,
+			// initializes and drops its dirty flag like any other completed update.
+			const bool emptyIsAuthoritative =
+				!_gatherParkedThisCall &&
+				_cachedVoxelTrianglesValid[levelIndex] &&
+				_cachedVoxelTriangles[levelIndex].empty();
+			if (!emptyIsAuthoritative)
 			{
-				_clipmapWarmFramesRemaining[levelIndex] = std::max(_clipmapWarmFramesRemaining[levelIndex], (levelIndex == 0u) ? 3u : 1u);
+				if (!_gatherParkedThisCall)
+				{
+					_clipmapWarmFramesRemaining[levelIndex] = std::max(_clipmapWarmFramesRemaining[levelIndex], (levelIndex == 0u) ? 3u : 1u);
+				}
+				level.dirty = true;
+				return;
 			}
-			level.dirty = true;
-			return;
 		}
 
 		if (hasTriangles && !gpuBufferCurrent)

@@ -120,6 +120,13 @@ namespace HexEngine
 		const math::Matrix& GetProjectionMatrix() const;
 		const math::Matrix& GetViewMatrixPrev() const;
 		const math::Matrix& GetProjectionMatrixPrev() const;
+		// Combined view * projection (row-vector convention, view*proj order).
+		// Returns by value - the two matrices are stored separately and this is
+		// not cached, so callers that need it every frame in a hot loop should
+		// keep a local. Prefer this over hand-composing GetViewMatrix() *
+		// GetProjectionMatrix() at call sites.
+		math::Matrix GetViewProjectionMatrix() const;
+		math::Matrix GetViewProjectionMatrixPrev() const;
 
 		bool IsVisibleInFrustum(const dx::BoundingBox& aabb);
 		bool IsVisibleInFrustum(const dx::BoundingOrientedBox& obb);

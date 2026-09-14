@@ -137,7 +137,9 @@
 		const float rowIdx = floor(input.texcoord.y * rowsF);
 		const float2 innerUv = float2(input.texcoord.x, frac(input.texcoord.y * rowsF));
 
-		const float3 N = OctDecodeDir(innerUv);
+		// Same inset as SkyEnvMap / SampleEnvAtlas: gutter texels fold to the
+		// octahedrally-wrapped neighbour so the +-axis seams filter cleanly.
+		const float3 N = OctDecodeDir(OctBlockToUnit(innerUv));
 		const float roughness = rowIdx / (rowsF - 1.0f);
 
 		if (rowIdx < 0.5f)

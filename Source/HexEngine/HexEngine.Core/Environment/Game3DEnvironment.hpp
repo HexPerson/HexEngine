@@ -21,6 +21,7 @@ namespace HexEngine
 		std::wstring applicationName;
 		bool createIconService = false;
 		GameOptions flags = GameOptions::GameOptions_None;
+		bool mountEngineAssetPackage = false;
 	};
 
 	class Model;

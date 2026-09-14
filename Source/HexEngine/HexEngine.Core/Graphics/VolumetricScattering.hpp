@@ -145,6 +145,20 @@ namespace HexEngine
 			_clAtlasSrv = shadowAtlasSrv; _clAtlasTileVpSrv = atlasTileVpSrv;
 		}
 
+		// Cloud shadows in the fog (RDR2 sky S6): the density CS multiplies
+		// its sun term by the cloud shadow map, so god rays and near fog
+		// carry cloud-edge shafts. cloudConstants = the CloudConstants
+		// cbuffer (CloudCommon layout, bound at CS b4); either null (or a
+		// zero half-extent in the constants) disables cleanly - the shader's
+		// own guards return 1.0. Note both are LAST frame's data at dispatch
+		// time (the shadow map renders later in the frame); one frame of
+		// latency on a drifting cloud shadow is invisible.
+		void SetCloudShadow(class IConstantBuffer* cloudConstants, class ITexture2D* shadowMap)
+		{
+			_cloudConstantsCb = cloudConstants;
+			_cloudShadowMapTex = shadowMap;
+		}
+
 		void Update(const math::Vector3& sunDirection,
 		            const math::Vector3& sunColour,
 		            float sunIntensity,
@@ -233,6 +247,10 @@ namespace HexEngine
 		struct ID3D11ShaderResourceView* _clListsSrv = nullptr;
 		struct ID3D11ShaderResourceView* _clAtlasSrv = nullptr;
 		struct ID3D11ShaderResourceView* _clAtlasTileVpSrv = nullptr;
+
+		// Cloud shadow inputs (see SetCloudShadow). Not owned.
+		class IConstantBuffer* _cloudConstantsCb = nullptr;
+		class ITexture2D* _cloudShadowMapTex = nullptr;
 		bool _clActive = false;
 		// Ping-pong integration volumes for temporal accumulation. Each
 		// frame the integrate compute reads the PREVIOUS frame from

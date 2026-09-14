@@ -268,14 +268,16 @@
 			v = 0.5f + 0.5f * sqrt(-cosZenith);
 		}
 
-		// Clamp v a half-texel inside the LUT (108 rows): consumers sample
+		// Clamp v a half-texel inside the LUT (216 rows - must match the C++
+		// allocation in AtmosphereLUTs.cpp and LUT_SIZE in
+		// AtmosphereSkyViewLUT.shader): consumers sample
 		// through the shared WRAP sampler, so v = 0 exactly (the zenith)
 		// bilinearly pulled 50% of the OPPOSITE edge - the nadir/ground row -
 		// into the top of the sky. That was the dark dot at the centre of the
 		// octahedral env atlas and dark contamination in every prefilter
 		// sample whose direction neared a pole. u stays unclamped: azimuth is
 		// periodic, wrap is the correct behaviour there.
-		const float kSkyLutHalfTexelV = 0.5f / 108.0f;
+		const float kSkyLutHalfTexelV = 0.5f / 216.0f;
 		return float2(u, clamp(v, kSkyLutHalfTexelV, 1.0f - kSkyLutHalfTexelV));
 	}
 }

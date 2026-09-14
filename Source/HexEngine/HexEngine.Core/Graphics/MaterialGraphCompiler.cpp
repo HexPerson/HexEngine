@@ -832,11 +832,19 @@ namespace HexEngine
 
 			ss << "\t\tif (baseColor.a <= 0.0f && g_material.isInTransparencyPhase == 0)\n\t\t\tclip(-1);\n";
 			ss << "\t\tif (g_material.isInTransparencyPhase == 0)\n\t\t{\n\t\t\tif (opacity < 1.0f)\n\t\t\t\tclip(-1);\n\t\t}\n\t\telse if (opacity <= 0.0f)\n\t\t{\n\t\t\tclip(-1);\n\t\t}\n";
-			ss << "\t\tfloat3 finalRGB = baseColor.rgb + emission;\n";
+			// Emissive as REPLACE, not ADD. emissiveMask = how self-illuminated
+			// this pixel is (0 = pure surface, >=1 = pure emitter). The surface
+			// colour is lerped toward the emission instead of summed with it, so
+			// wiring the albedo into Emissive makes it glow its own colour WITHOUT
+			// double-counting, and a plain emission colour replaces the surface
+			// rather than washing out on top of it. The deferred pass returns this
+			// diffuse UNLIT wherever pos.w (the mask) is > 0.
+			ss << "\t\tconst float emissiveMask = saturate(dot(emission, float3(0.2126f, 0.7152f, 0.0722f)));\n";
+			ss << "\t\tfloat3 finalRGB = lerp(baseColor.rgb, emission, emissiveMask);\n";
 			ss << "\t\tif (g_material.isInTransparencyPhase != 0)\n";
 			ss << "\t\t{\n";
 			ss << "\t\t\tfloat4 litSurface = CalculatePBRSurface(metallic, roughness, worldNormal, input.positionWS.xyz, -normalize(g_lightDirection.xyz), getSunColour(), baseColor.rgb, 1.0f, g_globalLight[0]);\n";
-			ss << "\t\t\tfinalRGB = litSurface.rgb + emission;\n";
+			ss << "\t\t\tfinalRGB = lerp(litSurface.rgb, emission, emissiveMask);\n";
 			ss << "\t\t}\n";
 			ss << "\t\tfloat2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));\n";
 			ss << "\t\tfloat transparencyAlpha = saturate(opacity * baseColor.a);\n";
@@ -861,7 +869,7 @@ namespace HexEngine
 			// Wet film opens the SSR gate - matches DefaultPixel's mat write.
 			ss << "\t\toutput.mat = float4(metallic, roughness, max(smoothness, __wetFilm * 0.9f), 1.0f);\n";
 			ss << "\t\toutput.norm = float4(worldNormal.xyz, pixelDepth);\n";
-			ss << "\t\toutput.pos = float4(input.positionWS.xyz, length(emission));\n";
+			ss << "\t\toutput.pos = float4(input.positionWS.xyz, emissiveMask);\n";
 			ss << "\t\toutput.velocity = velocity;\n";
 			// Mirror DefaultPixel: encode model id + modelParams.w into the features RT.
 			// Without this the graph-compiled shader would leave the features RT pixel

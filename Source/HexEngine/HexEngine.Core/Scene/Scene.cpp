@@ -1624,10 +1624,19 @@ namespace HexEngine
 			}
 		}
 
-		if (GetMainCamera() && GetMainCamera()->HasMovedThisFrame())
+		if (GetMainCamera())
 		{
-			_updateFlags |= SceneUpdateCameraMoved;
+			if (GetMainCamera()->HasMovedThisFrame())
+				_updateFlags |= SceneUpdateCameraMoved;
 
+			// Re-centre the sky dome on the camera EVERY frame, not only when
+			// the camera reports movement. _hasMovedThisFrame is set on
+			// rotation (mouse-look) and on a PositionChanged transform message,
+			// but a player walking a straight line - or standing still while
+			// only the world updates - could leave it false, so the sky dome
+			// was left behind and the sky went dark. The editor fly-cam trips
+			// the flag constantly, which is why it only showed up in-game.
+			// Following is a single SetPosition; there is no reason to gate it.
 			UpdateSkySphereMatrix();
 		}
 
@@ -2271,7 +2280,7 @@ namespace HexEngine
 			if (!isShadowMap && !optimisedParams.isShadow && optimisedParams.camera != nullptr)
 			{
 				BuildPvsFineCullPlanes(
-					optimisedParams.camera->GetViewMatrix() * optimisedParams.camera->GetProjectionMatrix(),
+					optimisedParams.camera->GetViewProjectionMatrix(),
 					fineCullPlanes);
 				fineCullPlanesActive = true;
 			}

@@ -225,7 +225,12 @@ namespace HexEngine
 			file->Deserialize(properties, "receivesSnow", receivesSnow);
 			material->SetReceivesSnow(receivesSnow);
 
-			bool emissiveAffectsGI = false;
+			// Default ON when the key is absent: emissive materials should light
+			// the scene through GI unless explicitly opted out. Converted/imported
+			// materials never carried the key, which left every neon in an
+			// imported scene invisible to the voxel field (telemetry:
+			// emissiveMats=0 in a scene lit almost entirely by emissive strips).
+			bool emissiveAffectsGI = true;
 			file->Deserialize(properties, "emissiveAffectsGI", emissiveAffectsGI);
 			material->SetEmissiveAffectsGI(emissiveAffectsGI);
 

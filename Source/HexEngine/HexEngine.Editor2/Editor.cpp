@@ -55,9 +55,9 @@ namespace HexEditor
 
 	void EditorExtension::OnCreateGame()
 	{
-		_overlayIcons[Overlay_Light] = HexEngine::ITexture2D::Create("EngineData.Textures/UI/light_bulb.png");
+		//HexEngine::g_pEnv->SetGlobalSceneScale(0.01f);
 
-		
+		_overlayIcons[Overlay_Light] = HexEngine::ITexture2D::Create("EngineData.Textures/UI/light_bulb.png");		
 	}
 
 	void EditorExtension::OnGUI()

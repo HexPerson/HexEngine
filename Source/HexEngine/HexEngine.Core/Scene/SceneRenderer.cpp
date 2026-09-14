@@ -40,6 +40,17 @@ namespace HexEngine
 	HVar env_sunsetWarmStrength("env_sunsetWarmStrength", "Strength of warm sunset colours near the sun and horizon", 1.0f, 0.0f, 4.0f);
 	HVar env_sunsetCoolStrength("env_sunsetCoolStrength", "Strength of cool purple/violet sunset colours away from the sun", 1.0f, 0.0f, 4.0f);
 	HVar env_sunsetGlowStrength("env_sunsetGlowStrength", "Strength of the sunset sun halo and dusk glow", 1.0f, 0.0f, 4.0f);
+	// RDR2 sky S1/S2: HDR sky dome + physical sun disc + LUT Mie anisotropy.
+	HVar env_mieAnisotropy("env_mieAnisotropy", "Mie phase anisotropy g for the atmosphere LUTs (physical ~0.8; capped by SkyView LUT resolution)", 0.65f, 0.0f, 0.95f);
+	HVar r_skyRadianceScale("r_skyRadianceScale", "Linear-HDR sky dome radiance scale (single retune lever after the LDR->HDR sky conversion)", 1.0f, 0.01f, 10.0f);
+	HVar r_sunDiscDiameter("r_sunDiscDiameter", "Visual sun disc angular diameter in degrees (physical 0.53). PCSS penumbra uses r_sunAngularDiameter instead", 0.53f, 0.05f, 10.0f);
+	HVar r_sunDiscIntensity("r_sunDiscIntensity", "Multiplier on the sun disc's transmittance-LUT radiance - drives bloom/glare strength", 1.0f, 0.0f, 100.0f);
+	HVar r_starIntensity("r_starIntensity", "Night star field radiance (linear HDR, pre-exposure)", 0.02f, 0.0f, 2.0f);
+	// S8 moon (visual-only: disc antipodal to the sun; no light repoint -
+	// every g_lightDirection consumer assumes the sun).
+	HVar r_moonIntensity("r_moonIntensity", "Moon disc radiance scale (0 = no moon)", 1.0f, 0.0f, 10.0f);
+	HVar r_moonPhase("r_moonPhase", "Moon phase: 0 = new, 0.5 = half, 1 = full", 0.85f, 0.0f, 1.0f);
+	HVar r_moonDiameter("r_moonDiameter", "Moon angular diameter in degrees (physical 0.53; slightly oversized reads better)", 1.1f, 0.05f, 10.0f);
 	HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
 	HVar r_volumetric("r_volumetric", "Master toggle for volumetric lighting/fog: froxel volume, legacy per-pixel march and per-light volumetric cones", true, false, true);
 	// Declared in AtmosphereLUTs.cpp. The AP apply below must respect it:
@@ -118,15 +129,24 @@ namespace HexEngine
 	// no sky deck was possible). The march uses progressive steps + a far
 	// fade, so the big domain stays within the step budget.
 	HVar r_cloudAabbMin("r_cloudAabbMin", "Minimum world-space bounds of cloud AABB", math::Vector3(-14000.0f, 350.0f, -14000.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
-	HVar r_cloudAabbMax("r_cloudAabbMax", "Maximum world-space bounds of cloud AABB", math::Vector3(14000.0f, 1050.0f, 14000.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
+	// Top raised 1050 -> 2400 (S5): the type-driven height profile builds
+	// ~2 km cumulus towers in the taller slab while stratus decks stay low.
+	// NOTE: scenes may PIN the old AABB in their serialized cvars - set
+	// r_cloudAabbMin/Max live and re-save the scene to adopt the new slab.
+	HVar r_cloudAabbMax("r_cloudAabbMax", "Maximum world-space bounds of cloud AABB", math::Vector3(14000.0f, 2400.0f, 14000.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
 	HVar r_cloudDensity("r_cloudDensity", "Cloud density multiplier", 1.0f, 0.05f, 8.0f);
 	HVar r_cloudCoverage("r_cloudCoverage", "Cloud coverage amount", 0.56f, 0.01f, 1.0f);
 	HVar r_cloudErosion("r_cloudErosion", "Small-scale erosion amount", 0.34f, 0.0f, 1.0f);
-	HVar r_cloudLightAbsorption("r_cloudLightAbsorption", "Absorption multiplier for cloud self-shadowing", 0.14f, 0.0f, 8.0f);
+	// 0.14 -> 2.0 with the HDR sun (bridge-tuned 2026-08-29): the old value
+	// let the full-energy sun shine through the deck and everything rendered
+	// white; 2.0 restores real self-shadowing (bright rims, dark bodies).
+	HVar r_cloudLightAbsorption("r_cloudLightAbsorption", "Absorption multiplier for cloud self-shadowing", 2.0f, 0.0f, 8.0f);
 	HVar r_cloudViewAbsorption("r_cloudViewAbsorption", "Absorption multiplier along view ray inside clouds", 0.42f, 0.0f, 8.0f);
 	HVar r_cloudPowderStrength("r_cloudPowderStrength", "Powder term to brighten cloud edges", 0.38f, 0.0f, 2.0f);
 	HVar r_cloudAmbientStrength("r_cloudAmbientStrength", "Ambient skylight contribution for cloud interiors", 0.52f, 0.0f, 2.0f);
-	HVar r_cloudShadowFloor("r_cloudShadowFloor", "Minimum transmittance floor for cloud self-shadowing", 0.20f, 0.0f, 1.0f);
+	// Lowered 0.20 -> 0.10 with the HDR sun: a 20% floor on light
+	// transmittance kept storm cores visibly sunlit at the new radiance.
+	HVar r_cloudShadowFloor("r_cloudShadowFloor", "Minimum transmittance floor for cloud self-shadowing", 0.06f, 0.0f, 1.0f);
 	HVar r_cloudAnisotropy("r_cloudAnisotropy", "Anisotropy term for cloud phase function", 0.35f, -0.95f, 0.95f);
 	HVar r_cloudSilverLiningStrength("r_cloudSilverLiningStrength", "Stylized rim/silver-lining strength", 0.55f, 0.0f, 4.0f);
 	HVar r_cloudSilverLiningExponent("r_cloudSilverLiningExponent", "Stylized rim/silver-lining falloff", 5.0f, 0.5f, 16.0f);
@@ -145,6 +165,19 @@ namespace HexEngine
 	HVar r_cloudLightSteps("r_cloudLightSteps", "Base light ray-march step count", 12.0f, 2.0f, 64.0f);
 	HVar r_cloudStepScale("r_cloudStepScale", "Global cloud march step scale", 1.0f, 0.25f, 8.0f);
 	HVar r_cloudMaxDistance("r_cloudMaxDistance", "Maximum cloud trace distance from camera", 20000.0f, 100.0f, 100000.0f);
+	HVar r_cloudPhaseBoost("r_cloudPhaseBoost", "Cloud phase-function boost (scales the dual-lobe HG response)", 0.7f, 0.25f, 4.0f);
+	HVar r_cloudType("r_cloudType", "Cloud type bias: 0 = stratus decks, 0.5 = natural mix from the type field, 1 = towering cumulus", 0.5f, 0.0f, 1.0f);
+	// S4 cirrus: a 2D high-altitude layer drawn in the sky pass, lit by the
+	// transmittance LUT at ~7 km - it stays sunlit-red long after ground
+	// sunset (the RDR2 reference afterglow). Weather-driven via the plugin.
+	HVar r_cloudCirrusAmount("r_cloudCirrusAmount", "High-altitude cirrus layer coverage (0 = none)", 0.3f, 0.0f, 1.0f);
+	HVar r_cloudCirrusType("r_cloudCirrusType", "Cirrus character: 0 = streaky cirrus, 1 = cirrocumulus ripples", 0.35f, 0.0f, 1.0f);
+	// S7 screen-space sun shafts (crepuscular rays): occlusion mask from the
+	// sky/cloud state, radially blurred toward the sun's screen position,
+	// added onto beauty coloured by the transmittance-LUT sun colour.
+	HVar r_sunShafts("r_sunShafts", "Screen-space sun shafts (crepuscular rays from cloud/geometry edges)", true, false, true);
+	HVar r_sunShaftsIntensity("r_sunShaftsIntensity", "Sun shaft additive intensity", 0.5f, 0.0f, 4.0f);
+	HVar r_sunShaftsLength("r_sunShaftsLength", "Sun shaft blur reach as a fraction of the sun-to-pixel distance", 0.85f, 0.1f, 1.0f);
 	// NOTE: r_gamma is vestigial - it was uploaded to the per-frame cbuffer every frame and
 	// read by no shader (the SDR tonemap hardcodes 1/2.2). Kept declared so scenes that
 	// serialised it still load; its cbuffer slot now carries r_pbrEnergyFix.
@@ -729,13 +762,14 @@ namespace HexEngine
 			math::Vector4 params4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
 			math::Vector4 params5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
 			math::Vector4 windDirection; // xyz=windDir, w=qualityPreset
-			math::Vector4 windOffset; // xyz=accumulated wind offset, w=reserved
+			math::Vector4 windOffset; // xyz=accumulated wind offset, w=atmosphere LUTs valid (1/0)
 			math::Vector4 marchParams; // x=viewSteps, y=lightSteps, z=reserved, w=reserved
 			// Cached cloud shadow map placement (mirrors CloudCommon.shader).
 			math::Vector4 shadowMapOrigin; // xyz = centre on the cloud base plane, w = half extent (0 = no map)
 			math::Vector4 shadowMapAxisX;  // xyz = +U axis (world)
 			math::Vector4 shadowMapAxisZ;  // xyz = +V axis (world)
 			math::Vector4 shadowMapSun;    // xyz = sun direction (surface -> sun), w = shadow strength
+			math::Vector4 params6;         // x = cloud type bias (0 stratus .. 1 cumulus), y/z/w reserved
 		};
 
 		static int32_t GetCloudQualityPreset()
@@ -752,7 +786,9 @@ namespace HexEngine
 				scale = 0.75f;
 				break;
 			case 2:
-				scale = 1.35f;
+				// Cinematic tier (S5): 1.35 -> 1.6. Defaults stay modest;
+				// tier 2 spends the extra steps the 2 km towers deserve.
+				scale = 1.6f;
 				break;
 			case 1:
 			default:
@@ -830,7 +866,7 @@ namespace HexEngine
 				r_cloudViewAbsorption._val.f32,
 				r_cloudAmbientStrength._val.f32,
 				r_cloudShadowFloor._val.f32,
-				1.55f);
+				r_cloudPhaseBoost._val.f32);
 			constants.params4 = math::Vector4(
 				r_cloudSilverLiningStrength._val.f32,
 				r_cloudSilverLiningExponent._val.f32,
@@ -842,7 +878,18 @@ namespace HexEngine
 				r_cloudDirectionalDiffuse._val.f32,
 				r_cloudAmbientOcclusion._val.f32);
 			constants.windDirection = math::Vector4(windDir.x, windDir.y, windDir.z, (float)GetCloudQualityPreset());
-			constants.windOffset = math::Vector4(accumulatedWindOffset.x, accumulatedWindOffset.y, accumulatedWindOffset.z, 0.0f);
+			// windOffset.w = "atmosphere LUTs valid" flag (S3): when 1, the
+			// cloud shader lights from the Hillaire transmittance/sky-view
+			// LUTs (bound at t9/t10 by RenderVolumetricClouds) so cloud sunset
+			// hue matches the sky's; when 0 (LUTs off / D3D12 / first frame)
+			// it falls back to the legacy analytic AtmospherePhysical path.
+			const bool atmosphereLutsValid =
+				r_atmosphereLUTs._val.b &&
+				g_pEnv->_atmosphereLUTs != nullptr &&
+				g_pEnv->_atmosphereLUTs->GetTransmittanceLUT() != nullptr &&
+				g_pEnv->_atmosphereLUTs->GetSkyViewLUT() != nullptr;
+			constants.windOffset = math::Vector4(accumulatedWindOffset.x, accumulatedWindOffset.y, accumulatedWindOffset.z,
+				atmosphereLutsValid ? 1.0f : 0.0f);
 			constants.marchParams = math::Vector4(
 				(float)GetCloudEffectiveSteps(r_cloudViewSteps._val.f32, 8, 256),
 				(float)GetCloudEffectiveSteps(r_cloudLightSteps._val.f32, 2, 64),
@@ -884,6 +931,8 @@ namespace HexEngine
 				constants.shadowMapOrigin = math::Vector4(cx, boundsMin.y, cz, valid ? halfExtent : 0.0f);
 				constants.shadowMapSun = math::Vector4(sunDir.x, sunDir.y, sunDir.z, strength);
 			}
+
+			constants.params6 = math::Vector4(r_cloudType._val.f32, 0.0f, 0.0f, 0.0f);
 
 			return true;
 		}
@@ -1150,6 +1199,8 @@ namespace HexEngine
 		SAFE_DELETE(_cloudsBuffer);
 		SAFE_DELETE(_cloudHistory[0]);
 		SAFE_DELETE(_cloudHistory[1]);
+		SAFE_DELETE(_sunShaftsRTA);
+		SAFE_DELETE(_sunShaftsRTB);
 		_cloudHistoryValid = false;
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_particleRT);
@@ -1206,6 +1257,8 @@ namespace HexEngine
 		SAFE_DELETE(_cloudsBuffer);
 		SAFE_DELETE(_cloudHistory[0]);
 		SAFE_DELETE(_cloudHistory[1]);
+		SAFE_DELETE(_sunShaftsRTA);
+		SAFE_DELETE(_sunShaftsRTB);
 		_cloudHistoryValid = false;
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_pointLightBuffer);
@@ -1239,6 +1292,7 @@ namespace HexEngine
 		SAFE_DELETE(_outlineJfaB);
 		SAFE_DELETE(_outlineGlowRT);
 		SAFE_DELETE(_outlineParamsBuffer);
+		SAFE_DELETE(_sunShaftsParamsBuffer);
 		SAFE_DELETE(_iblSkyEnvMap);
 		SAFE_DELETE(_iblSkySH);
 		SAFE_DELETE(_dfgLut);
@@ -1332,11 +1386,20 @@ namespace HexEngine
 		// Interaction outline glow (jump-flood SDF) shaders + params cbuffer at
 		// b5. Layout: float4 colour + (thickness, jumpStep, pad, pad) = 32 bytes.
 		_outlineSeedShader      = IShader::Create("EngineData.Shaders/OutlineSeed.hcs");
+		_outlineSeedAnimatedShader = IShader::Create("EngineData.Shaders/OutlineSeedAnimated.hcs");
 		_outlineJfaShader       = IShader::Create("EngineData.Shaders/OutlineJFA.hcs");
 		_outlineCompositeShader = IShader::Create("EngineData.Shaders/OutlineComposite.hcs");
 		if (_outlineParamsBuffer == nullptr)
 		{
 			_outlineParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4) * 2);
+		}
+
+		// Sun shafts (S7): mask + radial blur/composite shaders, params at b6.
+		_sunShaftsMaskShader = IShader::Create("EngineData.Shaders/SunShaftsMask.hcs");
+		_sunShaftsBlurShader = IShader::Create("EngineData.Shaders/SunShaftsBlur.hcs");
+		if (_sunShaftsParamsBuffer == nullptr)
+		{
+			_sunShaftsParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4) * 2);
 		}
 
 		// Fullscreen quad in clip space. The auto-puddle shader is direct-clip-
@@ -1683,6 +1746,29 @@ namespace HexEngine
 			_cloudsBuffer->SetDebugName("_cloudsBuffer");
 		}
 
+		// Sun shaft half-res ping-pong (S7). R11G11B10: radiance only, no
+		// alpha needed, half the bandwidth of RGBA16F.
+		SAFE_DELETE(_sunShaftsRTA);
+		SAFE_DELETE(_sunShaftsRTB);
+		for (int i = 0; i < 2; ++i)
+		{
+			ITexture2D* rt = g_pEnv->_graphicsDevice->CreateTexture2D(
+				width / 2,
+				height / 2,
+				DXGI_FORMAT_R11G11B10_FLOAT,
+				1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				0, 1, 0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_TEXTURE2D,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE2D);
+			if (rt)
+				rt->SetDebugName(i == 0 ? "_sunShaftsRTA" : "_sunShaftsRTB");
+			(i == 0 ? _sunShaftsRTA : _sunShaftsRTB) = rt;
+		}
+
 		// DLSS target should be full screen
 		uint32_t backBufferWidth, backBufferHeight;
 		g_pEnv->_graphicsDevice->GetBackBufferDimensions(backBufferWidth, backBufferHeight);
@@ -1996,7 +2082,11 @@ namespace HexEngine
 			// rendered ~20x too dim once the LUT path took over.
 			const float sunY = std::clamp(sunDir.y, -1.0f, 1.0f);
 			const float sunEnergy = std::lerp(18.0f, 30.0f, std::clamp(sunY * 0.5f + 0.5f, 0.0f, 1.0f));
-			const float sunIntensity = lightMult * sunEnergy;
+			// r_skyRadianceScale is applied HERE, at LUT generation, so every
+			// LUT consumer (sky dome, fog, aerial perspective, IBL atlas, SSR
+			// sky fallback, clouds) scales together. Consumers must NOT apply
+			// it a second time.
+			const float sunIntensity = lightMult * sunEnergy * std::max(r_skyRadianceScale._val.f32, 0.01f);
 
 			// Push the env_* atmosphere HVars into the LUT params so the
 			// weather plugin (which drives env_density / env_rayleighStrength /
@@ -2031,6 +2121,9 @@ namespace HexEngine
 			params.rayleighScatteringPerMM = baseRayleighScatter * (densityScale * rayleighStrength);
 			params.mieScatteringPerMM      = baseMieScatter     * densityScale * mieStrength;
 			params.mieExtinctionPerMM      = baseMieExtinction  * densityScale * mieStrength;
+			// Live Mie anisotropy (S2): the 384x216 SkyView LUT resolves the
+			// forward peak up to ~g 0.7 without ringing; clamped by the cvar.
+			params.miePhaseG               = std::clamp(env_mieAnisotropy._val.f32, 0.0f, 0.95f);
 			g_pEnv->_atmosphereLUTs->SetParams(params);
 
 			const float cameraWorldY = _currentCamera != nullptr
@@ -2055,6 +2148,27 @@ namespace HexEngine
 			// so night storms look dark and overcast at noon looks bright
 			// dismal-white. Brighter storm-white for heavy precipitation
 			// (lit thunderhead) versus dismal grey for light overcast.
+			// Cirrus advection (S4): CPU-integrated in metres, same frame-guard
+			// pattern as the cloud wind offset, at 35% of the cloud wind speed
+			// (high-altitude layers read as slow angular drift).
+			{
+				static math::Vector2 cirrusWindOffsetM(0.0f, 0.0f);
+				static uint64_t lastCirrusFrame = ~0ull;
+				const uint64_t frameNow = (g_pEnv && g_pEnv->_timeManager) ? g_pEnv->_timeManager->_frameCount : 0ull;
+				if (frameNow != lastCirrusFrame)
+				{
+					const float dt = (g_pEnv && g_pEnv->_timeManager) ? std::clamp((float)g_pEnv->_timeManager->_frameTime, 0.0f, 0.1f) : (1.0f / 60.0f);
+					math::Vector3 wdir = r_cloudWindDirection._val.v3;
+					if (wdir.LengthSquared() > 0.0001f)
+						wdir.Normalize();
+					cirrusWindOffsetM += math::Vector2(wdir.x, wdir.z) *
+						(r_cloudWindSpeed._val.f32 * r_cloudAnimationSpeed._val.f32 * 0.35f * dt);
+					lastCirrusFrame = frameNow;
+				}
+				g_pEnv->_atmosphereLUTs->SetCirrusState(
+					r_cloudCirrusAmount._val.f32, r_cloudCirrusType._val.f32, cirrusWindOffsetM);
+			}
+
 			if (_currentScene != nullptr)
 			{
 				const auto& wp = _currentScene->GetWeatherSurfaceParams();
@@ -2068,7 +2182,10 @@ namespace HexEngine
 				const math::Vector3 cloudColour = dismalGrey + (stormWhite - dismalGrey) * precipIntensity;
 				const math::Vector3 overcastColour = cloudColour * (sunDimming * lightMult);
 
-				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(overcastColour, overcastAmount);
+				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(overcastColour, overcastAmount,
+					r_sunDiscDiameter._val.f32,
+					r_sunDiscIntensity._val.f32, r_starIntensity._val.f32,
+					r_moonIntensity._val.f32, r_moonPhase._val.f32, r_moonDiameter._val.f32);
 
 				// The prefiltered sky ENVIRONMENT atlas has to receive the same
 				// tint, or reflections disagree with the sky above them. Hillaire
@@ -2081,7 +2198,10 @@ namespace HexEngine
 			}
 			else
 			{
-				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(math::Vector3(1.0f, 1.0f, 1.0f), 0.0f);
+				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(math::Vector3(1.0f, 1.0f, 1.0f), 0.0f,
+					r_sunDiscDiameter._val.f32,
+					r_sunDiscIntensity._val.f32, r_starIntensity._val.f32,
+					r_moonIntensity._val.f32, r_moonPhase._val.f32, r_moonDiameter._val.f32);
 				_skyOvercastColour = math::Vector3(1.0f, 1.0f, 1.0f);
 				_skyOvercastAmount = 0.0f;
 			}
@@ -2204,8 +2324,7 @@ namespace HexEngine
 			// froxel WAS in the previous frame's volume (eye pos needed
 			// for distance-along-ray W mapping; off-axis froxels would
 			// reproject to the wrong W slice without it).
-			const math::Matrix currentVP =
-				_currentCamera->GetViewMatrix() * _currentCamera->GetProjectionMatrix();
+			const math::Matrix currentVP = _currentCamera->GetViewProjectionMatrix();
 			const math::Vector3 currentEye =
 				_currentCamera->GetEntity()->GetPosition();
 			// Atmospheric transmittance LUT for sunset/sunrise reddening
@@ -2382,6 +2501,12 @@ namespace HexEngine
 				r_clusterFog._val.b && r_clusterLights._val.b,
 				r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
 				r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr);
+			// Cloud shadows in the fog (S6). Both are last frame's data at
+			// this point in the frame (the shadow map renders during the
+			// light pass) - one frame of latency is invisible on clouds.
+			g_pEnv->_volumetricScattering->SetCloudShadow(
+				(r_cloudEnable._val.b && r_cloudCastShadows._val.b) ? _cloudConstantBuffer : nullptr,
+				(r_cloudEnable._val.b && r_cloudCastShadows._val.b) ? _cloudShadowMap : nullptr);
 			g_pEnv->_volumetricScattering->Update(
 				vsSunDir, sunColV, vsSunIntensity, phaseG, strength,
 				baseExt, heightDensity, heightPivot, heightFalloff,
@@ -2702,6 +2827,7 @@ namespace HexEngine
 			// Auto exposure multiplies into the user-set r_exposure. When auto exposure is
 			// disabled the multiplier is 1.0, so r_exposure passes through unchanged.
 			bufferData._colourGrading.exposure = r_exposure._val.f32 * _autoExposure.GetExposureMultiplier();
+			bufferData._colourGrading.exposureInstant = r_exposure._val.f32 * _autoExposure.GetTargetExposureMultiplier();
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
 			// One-time auto-calibration of r_hdrPeakNits from the active display's
@@ -4325,6 +4451,9 @@ namespace HexEngine
 			else if (r_volumetric._val.b)
 				RenderVolumetricLighting();
 			RenderVolumetricClouds();
+			// S7: screen-space sun shafts, right after clouds so the mask can
+			// read the full-res cloud result still sitting in _fogBuffer.
+			RenderSunShafts();
 			// GPU particles render AFTER the volumetric apply (moved out of
 			// RenderTransparent): the apply attenuates beauty pixels by the
 			// fog transmittance at the OPAQUE depth, so particles drawn
@@ -4469,7 +4598,7 @@ namespace HexEngine
 						sunElevation = -sunTransform->GetForward().y;
 					}
 				}
-				_autoExposure.Update(_beautyRT, dt, sunElevation);
+				_autoExposure.Update(_beautyRT, dt, sunElevation, _gbuffer.GetDiffuse(), _skyOvercastAmount);
 			}
 
 			// Interaction look-at outline glow. Runs before bloom so the SDF ring
@@ -5969,6 +6098,10 @@ namespace HexEngine
 		// AP composite toward it for distant pixels so geometry silhouettes
 		// dissolve cleanly into the sky behind them.
 		graphics->SetTexture2D(7, g_pEnv->_atmosphereLUTs->GetSkyViewLUT());
+		// b6: SkyRenderParams - the far dissolve applies the dome's weather
+		// overcast lerp so geometry dissolves into the sky the dome actually
+		// renders (not the raw clear-sky LUT).
+		graphics->SetConstantBufferPS(6, g_pEnv->_atmosphereLUTs->GetSkyRenderCBuffer());
 
 		guiRenderer->FullScreenTexturedQuad(nullptr, _aerialPerspectiveApplyShader.get());
 		guiRenderer->EndFrame();
@@ -5982,6 +6115,7 @@ namespace HexEngine
 		graphics->SetTexture2D(5, nullptr);
 		graphics->SetTexture2D(7, nullptr);
 		graphics->SetTexture3D(nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
 		graphics->SetBoundResourceIndex(0);
 	}
 
@@ -6635,9 +6769,15 @@ namespace HexEngine
 		// we then swap in the silhouette/seed shader and draw (same override
 		// pattern as RenderPointLights).
 		smc->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
-		graphics->SetVertexShader(_outlineSeedShader->GetShaderStage(ShaderStage::VertexShader));
-		graphics->SetPixelShader(_outlineSeedShader->GetShaderStage(ShaderStage::PixelShader));
-		graphics->SetInputLayout(_outlineSeedShader->GetInputLayout());
+		// Skinned meshes must seed through the animated VS or the outline
+		// silhouette renders in the bind/T-pose (the static seed VS ignores the
+		// bone palette RenderMesh just bound at VS register 3).
+		IShader* seedShader = (mesh->HasAnimations() && _outlineSeedAnimatedShader != nullptr)
+			? _outlineSeedAnimatedShader.get()
+			: _outlineSeedShader.get();
+		graphics->SetVertexShader(seedShader->GetShaderStage(ShaderStage::VertexShader));
+		graphics->SetPixelShader(seedShader->GetShaderStage(ShaderStage::PixelShader));
+		graphics->SetInputLayout(seedShader->GetInputLayout());
 		graphics->SetBlendState(BlendState::Opaque);
 		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
 		graphics->SetCullingMode(CullingMode::BackFace);
@@ -7567,6 +7707,18 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
 			g_pEnv->_graphicsDevice->SetTexture3D(_cloudShapeNoise);
 			g_pEnv->_graphicsDevice->SetTexture3D(_cloudDetailNoise);
+			// S3 unified cloud lighting: the Hillaire transmittance (t9) and
+			// sky-view (t10) LUTs light the clouds on the SAME atmosphere the
+			// sky dome uses (sun hue at altitude + cheap ambient). Guarded by
+			// the windOffset.w flag in the constants; when the LUTs are
+			// unavailable these binds are skipped and the shader's analytic
+			// fallback runs (the auto-slot counter still needs both slots
+			// filled in order, so bind null-safe only when valid).
+			if (constants.windOffset.w > 0.5f)
+			{
+				g_pEnv->_graphicsDevice->SetTexture2D(g_pEnv->_atmosphereLUTs->GetTransmittanceLUT());
+				g_pEnv->_graphicsDevice->SetTexture2D(g_pEnv->_atmosphereLUTs->GetSkyViewLUT());
+			}
 			guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricClouds.get());
 			guiRenderer->EndFrame();
 
@@ -7634,6 +7786,132 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthDefault);
 		g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+	}
+
+	// Screen-space sun shafts (RDR2 sky S7). Three draws:
+	//   1. Mask (half res, _sunShaftsRTA): radiance seed on sky pixels,
+	//      attenuated by the full-res cloud alpha still in _fogBuffer,
+	//      windowed to a cone around the sun. Geometry seeds zero - that's
+	//      what carves the ray silhouettes.
+	//   2. Radial blur (half res, A -> B): taps marching toward the sun's
+	//      screen position with exponential decay.
+	//   3. Composite (full res, B -> beauty, additive): a second radial tap
+	//      run with a wider reach, coloured by the transmittance-LUT sun
+	//      colour, scaled by intensity and the off-screen fade.
+	void SceneRenderer::RenderSunShafts()
+	{
+		if (!r_sunShafts._val.b || r_sunShaftsIntensity._val.f32 <= 0.001f)
+			return;
+		if (_sunShaftsMaskShader == nullptr || _sunShaftsBlurShader == nullptr ||
+			_sunShaftsRTA == nullptr || _sunShaftsRTB == nullptr ||
+			_sunShaftsParamsBuffer == nullptr || _fogBuffer == nullptr ||
+			_beautyRT == nullptr || _currentCamera == nullptr)
+			return;
+		if (_currentCamera->IsEnvironmentCapture())
+			return;
+
+		// Sun screen position. Project a far point along the sun direction;
+		// behind-camera (w <= 0) means no shafts this frame.
+		math::Vector3 sunDir = math::Vector3::Up;
+		if (_currentScene != nullptr)
+		{
+			if (auto* sun = _currentScene->GetSunLight(); sun != nullptr && sun->GetEntity() != nullptr)
+			{
+				if (auto* tf = sun->GetEntity()->GetComponent<Transform>())
+				{
+					sunDir = -tf->GetForward();
+					if (sunDir.LengthSquared() > 1e-6f)
+						sunDir.Normalize();
+				}
+			}
+		}
+		if (sunDir.y <= -0.05f)
+			return; // sun well below the horizon
+
+		const math::Vector3 eye = _currentCamera->GetEntity() ? _currentCamera->GetEntity()->GetPosition() : math::Vector3::Zero;
+		const math::Vector3 sunWorld = eye + sunDir * 10000.0f;
+		const math::Matrix viewProj = _currentCamera->GetViewProjectionMatrix();
+		math::Vector4 clip = math::Vector4::Transform(math::Vector4(sunWorld.x, sunWorld.y, sunWorld.z, 1.0f), viewProj);
+		if (clip.w <= 0.01f)
+			return;
+		const float ndcX = clip.x / clip.w;
+		const float ndcY = clip.y / clip.w;
+		const math::Vector2 sunUv(ndcX * 0.5f + 0.5f, -ndcY * 0.5f + 0.5f);
+
+		// Fade the whole effect as the sun leaves the screen (up to 35%
+		// outside still contributes - rays from a just-off-screen sun are
+		// exactly the reference-2 look).
+		const float outX = std::max({ 0.0f, -sunUv.x, sunUv.x - 1.0f });
+		const float outY = std::max({ 0.0f, -sunUv.y, sunUv.y - 1.0f });
+		const float offscreenFade = std::clamp(1.0f - std::max(outX, outY) / 0.35f, 0.0f, 1.0f);
+		if (offscreenFade <= 0.001f)
+			return;
+
+		PROFILE();
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		const auto& bbvp = _currentCamera->GetViewport();
+		D3D11_VIEWPORT halfVp = {};
+		halfVp.Width = std::max(1.0f, bbvp.width * 0.5f);
+		halfVp.Height = std::max(1.0f, bbvp.height * 0.5f);
+		halfVp.MaxDepth = 1.0f;
+
+		struct SunShaftParams { math::Vector4 p0; math::Vector4 p1; } params;
+		params.p0 = math::Vector4(sunUv.x, sunUv.y, r_sunShaftsLength._val.f32, offscreenFade);
+		params.p1 = math::Vector4(r_sunShaftsIntensity._val.f32, 0.0f /*pass*/, 0.0f, 0.0f);
+
+		guiRenderer->StartFrame();
+
+		// 1. Mask into A.
+		params.p1.y = 0.0f;
+		_sunShaftsParamsBuffer->Write(&params, sizeof(params));
+		graphics->SetConstantBufferPS(6, _sunShaftsParamsBuffer);
+		graphics->SetRenderTarget(_sunShaftsRTA);
+		graphics->SetViewport(halfVp);
+		graphics->SetBlendState(BlendState::Opaque);
+		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
+		_gbuffer.BindAsShaderResource();          // t0..t4 (sky flag in diffuse)
+		graphics->SetTexture2D(5, _fogBuffer);    // full-res cloud result
+		guiRenderer->FullScreenTexturedQuad(nullptr, _sunShaftsMaskShader.get());
+
+		// 2. Radial blur A -> B (pass 1).
+		params.p1.y = 1.0f;
+		_sunShaftsParamsBuffer->Write(&params, sizeof(params));
+		graphics->SetConstantBufferPS(6, _sunShaftsParamsBuffer);
+		graphics->SetRenderTarget(_sunShaftsRTB);
+		graphics->SetViewport(halfVp);
+		graphics->SetTexture2D(0, _sunShaftsRTA);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _sunShaftsBlurShader.get());
+
+		// 3. Composite B -> beauty (pass 2, additive, full res, coloured).
+		params.p1.y = 2.0f;
+		_sunShaftsParamsBuffer->Write(&params, sizeof(params));
+		graphics->SetConstantBufferPS(6, _sunShaftsParamsBuffer);
+		graphics->SetRenderTarget(_beautyRT);
+		graphics->SetViewport(*bbvp.Get11());
+		graphics->SetBlendState(BlendState::Additive);
+		graphics->SetTexture2D(0, _sunShaftsRTB);
+		// t1 = transmittance LUT for the shaft colour (null-safe: the shader
+		// falls back to warm white when the LUT subsystem is off).
+		graphics->SetTexture2D(1, (g_pEnv->_atmosphereLUTs != nullptr)
+			? g_pEnv->_atmosphereLUTs->GetTransmittanceLUT() : nullptr);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _sunShaftsBlurShader.get());
+
+		guiRenderer->EndFrame();
+
+		// State hygiene.
+		graphics->SetTexture2D(0, nullptr);
+		graphics->SetTexture2D(1, nullptr);
+		graphics->SetTexture2D(5, nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
+		graphics->SetBlendState(BlendState::Opaque);
+		graphics->SetDepthBufferState(DepthBufferState::DepthDefault);
+		graphics->SetViewport(*bbvp.Get11());
+		graphics->SetBoundResourceIndex(0);
 	}
 
 	const GBuffer* SceneRenderer::GetGBuffer()

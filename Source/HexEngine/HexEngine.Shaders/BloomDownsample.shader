@@ -68,19 +68,59 @@
 		const bool firstHop = g_bloomPass.z > 0.5f;
 
 		// 13 taps on the source grid (offsets in source texels).
-		const float3 a = SampleSrc(uv + ts * float2(-2.0f, -2.0f));
-		const float3 b = SampleSrc(uv + ts * float2( 0.0f, -2.0f));
-		const float3 c = SampleSrc(uv + ts * float2( 2.0f, -2.0f));
-		const float3 d = SampleSrc(uv + ts * float2(-2.0f,  0.0f));
-		const float3 e = SampleSrc(uv);
-		const float3 f = SampleSrc(uv + ts * float2( 2.0f,  0.0f));
-		const float3 g = SampleSrc(uv + ts * float2(-2.0f,  2.0f));
-		const float3 h = SampleSrc(uv + ts * float2( 0.0f,  2.0f));
-		const float3 i = SampleSrc(uv + ts * float2( 2.0f,  2.0f));
-		const float3 j = SampleSrc(uv + ts * float2(-1.0f, -1.0f));
-		const float3 k = SampleSrc(uv + ts * float2( 1.0f, -1.0f));
-		const float3 l = SampleSrc(uv + ts * float2(-1.0f,  1.0f));
-		const float3 m = SampleSrc(uv + ts * float2( 1.0f,  1.0f));
+		float3 a = SampleSrc(uv + ts * float2(-2.0f, -2.0f));
+		float3 b = SampleSrc(uv + ts * float2( 0.0f, -2.0f));
+		float3 c = SampleSrc(uv + ts * float2( 2.0f, -2.0f));
+		float3 d = SampleSrc(uv + ts * float2(-2.0f,  0.0f));
+		float3 e = SampleSrc(uv);
+		float3 f = SampleSrc(uv + ts * float2( 2.0f,  0.0f));
+		float3 g = SampleSrc(uv + ts * float2(-2.0f,  2.0f));
+		float3 h = SampleSrc(uv + ts * float2( 0.0f,  2.0f));
+		float3 i = SampleSrc(uv + ts * float2( 2.0f,  2.0f));
+		float3 j = SampleSrc(uv + ts * float2(-1.0f, -1.0f));
+		float3 k = SampleSrc(uv + ts * float2( 1.0f, -1.0f));
+		float3 l = SampleSrc(uv + ts * float2(-1.0f,  1.0f));
+		float3 m = SampleSrc(uv + ts * float2( 1.0f,  1.0f));
+
+		// Local-contrast firefly rejection (first hop only). A distant
+		// sub-pixel light twinkling under the TAA jitter shows up as ONE tap
+		// far brighter than its neighbours, and bloom turns that per-frame
+		// flicker into a coloured sparkle. Clamp each tap's luminance to a
+		// multiple of the neighbourhood brightness measured WITHOUT its own
+		// brightest tap, so an isolated spike is pulled down to the local
+		// level while a coherent bright source - the sun disc or a lit sign,
+		// whose neighbours are bright too - passes through untouched. This
+		// targets exactly the isolated sparkles, unlike an absolute clamp
+		// that would also cap the sun.
+		if (firstHop)
+		{
+			const float3 lw = float3(0.2126f, 0.7152f, 0.0722f);
+			const float la = dot(a, lw), lb = dot(b, lw), lc = dot(c, lw);
+			const float ld = dot(d, lw), le = dot(e, lw), lf = dot(f, lw);
+			const float lg = dot(g, lw), lh = dot(h, lw), li = dot(i, lw);
+			const float lj = dot(j, lw), lk = dot(k, lw), ll = dot(l, lw), lm = dot(m, lw);
+			const float sumL = la + lb + lc + ld + le + lf + lg + lh + li + lj + lk + ll + lm;
+			const float maxL = max(max(max(max(la, lb), max(lc, ld)), max(max(le, lf), max(lg, lh))),
+			                       max(max(li, lj), max(max(lk, ll), lm)));
+			// Baseline excludes the single brightest tap so a lone firefly
+			// cannot lift its own threshold. kFireflyContrast = how far above
+			// the local level a tap may sit before it is treated as a spike.
+			const float kFireflyContrast = 6.0f;
+			const float fireflyMax = max((sumL - maxL) / 12.0f, 1e-4f) * kFireflyContrast;
+			a *= min(1.0f, fireflyMax / max(la, 1e-4f));
+			b *= min(1.0f, fireflyMax / max(lb, 1e-4f));
+			c *= min(1.0f, fireflyMax / max(lc, 1e-4f));
+			d *= min(1.0f, fireflyMax / max(ld, 1e-4f));
+			e *= min(1.0f, fireflyMax / max(le, 1e-4f));
+			f *= min(1.0f, fireflyMax / max(lf, 1e-4f));
+			g *= min(1.0f, fireflyMax / max(lg, 1e-4f));
+			h *= min(1.0f, fireflyMax / max(lh, 1e-4f));
+			i *= min(1.0f, fireflyMax / max(li, 1e-4f));
+			j *= min(1.0f, fireflyMax / max(lj, 1e-4f));
+			k *= min(1.0f, fireflyMax / max(lk, 1e-4f));
+			l *= min(1.0f, fireflyMax / max(ll, 1e-4f));
+			m *= min(1.0f, fireflyMax / max(lm, 1e-4f));
+		}
 
 		// Five overlapping 4-tap boxes: inner quad carries half the energy,
 		// the four outer boxes an eighth each - the partial-overlap weighting
@@ -106,7 +146,12 @@
 			// a flat full-frame glow instead of a response to bright sources.
 			// Scaling the LUMA by the tonemapper exposure puts the judgements
 			// in display units; the colour itself stays in scene units.
-			const float exposure = max(g_colourGrading.exposure, 1e-4f);
+			// Judge in display units using the INSTANT exposure (histogram target,
+			// unsmoothed). The smoothed multiplier lags during camera movement and
+			// made bloom overshoot until adaptation settled.
+			const float exposure = (g_colourGrading.exposureInstant > 1e-4f)
+				? g_colourGrading.exposureInstant
+				: max(g_colourGrading.exposure, 1e-4f); // fallback: binary predating exposureInstant
 
 			// Karis average, softened (0.35): tames genuine fireflies without
 			// deleting small legitimately-bright sources like the sun disc.

@@ -43,6 +43,18 @@
 	SamplerState g_pointSampler          : register(s2);
 	SamplerState g_linearSampler         : register(s4);
 
+	// Same cbuffer the sky dome reads (AtmosphereLUTs::SetSkyRenderParams).
+	// The far dissolve applies the dome's weather overcast lerp so geometry
+	// dissolves into the SAME sky the dome renders.
+	cbuffer SkyRenderParams : register(b6)
+	{
+		float4 g_skyOvercastColour;
+		float  g_skyOvercastAmount;
+		float3 g_skyRenderPad; // .x = LUT available
+		float4 g_skyHdrParams; // x reserved, y = disc diameter deg, z = disc intensity, w = stars
+		float4 g_skyCirrusParams; // cirrus layer (unused here; layout match)
+	};
+
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		// Volume far plane: camera-far derived, shared with the LUT generator
@@ -125,7 +137,12 @@
 		matchDir.y = max(matchDir.y, 0.02f);
 		matchDir = normalize(matchDir);
 		const float2 skyUv   = SkyViewLutParamsToUv(matchDir, sunDir);
-		const float3 skyLutColour = g_atmSkyViewLUT.SampleLevel(g_linearSampler, skyUv, 0).rgb;
+		float3 skyLutColour = g_atmSkyViewLUT.SampleLevel(g_linearSampler, skyUv, 0).rgb;
+		// Match the dome's weather overcast lerp (previously the dissolve
+		// targeted the raw clear-sky LUT, so under a storm distant ridges
+		// dissolved into clear blue). No radiance scale needed - the lever is
+		// baked into the LUT at generation.
+		skyLutColour = lerp(skyLutColour, g_skyOvercastColour.rgb, saturate(g_skyOvercastAmount));
 
 		// Far-plane DISSOLVE, not haze: the volume composite above already
 		// carries the physical distance haze (inscatter + transmittance

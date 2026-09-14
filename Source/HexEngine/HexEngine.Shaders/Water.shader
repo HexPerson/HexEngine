@@ -511,8 +511,30 @@
 			// (getSunColour() x g_globalLight[0], Frostbite convention) instead
 			// of the ad-hoc ComputePhysicalSunColour x5.75 boost that was
 			// compensating for the old LDR clamp. Shadowed like the body term.
-			specular = float4(getSunColour() * g_globalLight[0]
-				* (NdotL * directSpecular) * sunShadow, 1.0f);
+			// Recolour the glint with the sun DISC's actual hue - the sky
+			// sampled in the sun's direction - instead of getSunColour(), which
+			// Reinhard-tonemaps toward white and desaturates the warm sunset
+			// sun, so the water glint no longer matched the disc it reflects.
+			// getSunColour()'s LUMINANCE is kept, so the (already-tuned) glint
+			// strength is unchanged; only the colour now tracks the disc.
+			const float3 sunLumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
+			const float3 skySun = SampleEnvAtlas(g_iblSkyEnvFwd, g_TexSamplerAniso, lightDir, 0.0f);
+			const float skySunLuma = max(dot(skySun, sunLumaWeights), 1e-4f);
+			const float3 sunRadiance = getSunColour() * g_globalLight[0];
+			const float3 sunTinted = (skySun / skySunLuma) * dot(sunRadiance, sunLumaWeights);
+			float3 sunSpecular = sunTinted * (NdotL * directSpecular) * sunShadow;
+			// Physical cap. A specular reflection of the sun can be at most its
+			// Fresnel-weighted radiance - a mirror cannot be brighter than what
+			// it reflects. GGX for near-mirror water spikes far past that at the
+			// exact reflection angle because a directional sun is treated as a
+			// zero-size delta (no ~0.5 degree solar disc), which is why the
+			// water's sun glint was outshining the sun disc itself - and it is
+			// then double-counted against the env/SSR reflection that already
+			// contains the sky's sun. Clamp the analytic highlight to F x the
+			// sun's radiance so the reflection tops out at the sun, not above it.
+			const float fresnelPeak = max(max(F.r, F.g), F.b);
+			sunSpecular = min(sunSpecular, sunTinted * (fresnelPeak * sunShadow));
+			specular = float4(sunSpecular, 1.0f);
 		}
 
 		// Water column (O4): METRES of water along the view path, from the

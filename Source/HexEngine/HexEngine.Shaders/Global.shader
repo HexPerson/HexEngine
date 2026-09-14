@@ -131,7 +131,8 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float saturation;
 
 		float3 colourFilter;
-		float colour_pad;
+		// r_exposure x UNSMOOTHED auto-exposure target (see RenderStructs).
+		float exposureInstant;
 	};
 
 	struct WeatherSurfaceParams

@@ -52,6 +52,12 @@
 		float4 g_skyOvercastColour;
 		float  g_skyOvercastAmount;
 		float3 g_skyRenderPad; // .x = LUT available
+		// HDR sky params (tail-appended; layout must match AtmosphereLUTs.cpp
+		// SkyRenderParamsCB and SkySphere.shader). x = reserved (radiance
+		// lever acts at LUT generation), y = sun disc diameter deg,
+		// z = sun disc intensity, w = star intensity.
+		float4 g_skyHdrParams;
+		float4 g_skyCirrusParams; // cirrus layer (unused here; layout match)
 	};
 
 	float4 ShaderMain(UIPixelInput input) : SV_TARGET
@@ -143,6 +149,9 @@
 		if (g_skyRenderPad.x > 0.5f)
 		{
 			const float2 skyUv = SkyViewLutParamsToUv(rayDir, sunDir);
+			// No radiance scale here: r_skyRadianceScale is baked into the LUT
+			// at generation (sunIntensity), so this sample already matches the
+			// HDR sky dome.
 			farSkyColour = g_atmSkyViewLUT.SampleLevel(g_textureSampler, skyUv, 0).rgb;
 			farSkyColour = lerp(farSkyColour, g_skyOvercastColour.rgb, saturate(g_skyOvercastAmount));
 		}

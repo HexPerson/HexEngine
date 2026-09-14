@@ -78,7 +78,33 @@
 			return current;
 
 		const float2 halfTexel = 0.5f * g_cloudTemporalParams.yz;
-		const float4 history = g_cloudHistory.SampleLevel(g_linearSampler, clamp(prevUv, halfTexel, 1.0f - halfTexel), 0);
+		float4 history = g_cloudHistory.SampleLevel(g_linearSampler, clamp(prevUv, halfTexel, 1.0f - halfTexel), 0);
+
+		// Neighbourhood clamp (TAA anti-ghosting). The reprojection is
+		// rotation-only, so it is correct for the distant clouds but NOT for
+		// where foreground geometry (lamp posts, building edges) disoccludes
+		// the sky as the camera moves - there the reprojected history is stale
+		// and dragged the object's silhouette through the cloud layer as a
+		// vertical smear. Clamp the history to the range of the current cloud
+		// in a 3x3 neighbourhood so a just-revealed sky pixel snaps to its true
+		// value instead of trailing the geometry that used to cover it.
+		const float2 texel = g_cloudTemporalParams.yz;
+		float4 nmin = current;
+		float4 nmax = current;
+		[unroll]
+		for (int dy = -1; dy <= 1; ++dy)
+		{
+			[unroll]
+			for (int dx = -1; dx <= 1; ++dx)
+			{
+				if (dx == 0 && dy == 0)
+					continue;
+				const float4 s = g_cloudCurrent.SampleLevel(g_pointSampler, uv + float2(dx, dy) * texel, 0);
+				nmin = min(nmin, s);
+				nmax = max(nmax, s);
+			}
+		}
+		history = clamp(history, nmin, nmax);
 
 		// Fade the history weight out toward the screen edge: the reprojected
 		// sample there is a stretched border texel, not a real neighbour.

@@ -115,52 +115,110 @@ void Texture2D::GetPixels(std::vector<uint8_t>& buffer)
 
 bool Texture2D::GetPixelsScaled(std::vector<uint8_t>& buffer, int32_t maxDimension, int32_t& outWidth, int32_t& outHeight)
 {
+	// This used to route through DirectX::CaptureTexture, which stages the
+	// ENTIRE mip chain of the full-resolution texture to the CPU (a 2048^2
+	// BC texture with mips is ~5.6 MB copied through a staging resource plus
+	// a full pipeline flush and a blocking Map) and only then discarded all
+	// but the one small mip it decoded. Profiled as the dominant render-thread
+	// stall whenever GI pulled a new material's pixels at runtime. Copy ONLY
+	// the chosen mip into a mip-sized staging texture instead: ~16 KB moved,
+	// and any BC decode runs at the small mip's resolution.
 	auto gfxContext = (ID3D11DeviceContext*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDeviceContext();
 	auto gfxDevice = (ID3D11Device*)HexEngine::g_pEnv->_graphicsDevice->GetNativeDevice();
-
-	DirectX::ScratchImage scratch;
-	g_pGraphics->Lock();
-	const HRESULT captureHr = DirectX::CaptureTexture(gfxDevice, gfxContext, _texture, scratch);
-	g_pGraphics->Unlock();
-	if (FAILED(captureHr))
+	if (_texture == nullptr || gfxContext == nullptr || gfxDevice == nullptr)
 		return false;
 
-	const auto& meta = scratch.GetMetadata();
-	if (meta.mipLevels == 0 || meta.width == 0 || meta.height == 0)
+	D3D11_TEXTURE2D_DESC desc = {};
+	_texture->GetDesc(&desc);
+	if (desc.Width == 0 || desc.Height == 0 || desc.MipLevels == 0)
 		return false;
-
-	// Smallest existing mip whose larger dimension still covers maxDimension
-	// (or the smallest mip there is). Only this one image gets decoded.
-	const size_t maxDim = static_cast<size_t>(std::max(1, maxDimension));
-	size_t chosenMip = 0;
-	for (size_t mip = 0; mip < meta.mipLevels; ++mip)
-	{
-		chosenMip = mip;
-		const size_t w = std::max<size_t>(1u, meta.width >> mip);
-		const size_t h = std::max<size_t>(1u, meta.height >> mip);
-		if (std::max(w, h) <= maxDim)
-			break;
-	}
-
-	const DirectX::Image* mipImage = scratch.GetImage(chosenMip, 0, 0);
-	if (mipImage == nullptr || mipImage->pixels == nullptr)
-		return false;
-
-	DirectX::ScratchImage decompressed;
-	const DirectX::Image* source = mipImage;
-	if (DirectX::IsCompressed(meta.format))
-	{
-		if (FAILED(DirectX::Decompress(*mipImage, DXGI_FORMAT_R8G8B8A8_UNORM, decompressed)))
-			return false;
-		source = decompressed.GetImage(0, 0, 0);
-		if (source == nullptr || source->pixels == nullptr)
-			return false;
-	}
-	else if (DirectX::BitsPerPixel(meta.format) != 32)
+	const DXGI_FORMAT format = desc.Format;
+	const bool isCompressed = DirectX::IsCompressed(format);
+	if (!isCompressed && DirectX::BitsPerPixel(format) != 32)
 	{
 		// Callers treat the payload as 4 bytes per pixel; other layouts would
 		// be misread - report unsupported so they fall back to GetPixels.
 		return false;
+	}
+
+	// Smallest existing mip whose larger dimension still covers maxDimension
+	// (or the smallest mip there is). Only this one subresource is copied.
+	const uint32_t maxDim = static_cast<uint32_t>(std::max(1, maxDimension));
+	uint32_t chosenMip = 0;
+	for (uint32_t mip = 0; mip < desc.MipLevels; ++mip)
+	{
+		chosenMip = mip;
+		const uint32_t w = std::max(1u, desc.Width >> mip);
+		const uint32_t h = std::max(1u, desc.Height >> mip);
+		if (std::max(w, h) <= maxDim)
+			break;
+	}
+	const uint32_t mipW = std::max(1u, desc.Width >> chosenMip);
+	const uint32_t mipH = std::max(1u, desc.Height >> chosenMip);
+
+	D3D11_TEXTURE2D_DESC stagingDesc = desc;
+	stagingDesc.Width = mipW;
+	stagingDesc.Height = mipH;
+	stagingDesc.MipLevels = 1;
+	stagingDesc.ArraySize = 1;
+	stagingDesc.SampleDesc.Count = 1;
+	stagingDesc.SampleDesc.Quality = 0;
+	stagingDesc.Usage = D3D11_USAGE_STAGING;
+	stagingDesc.BindFlags = 0;
+	stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	stagingDesc.MiscFlags = 0;
+
+	// Tight-pitch CPU copy of the raw (possibly block-compressed) mip.
+	size_t rowPitch = 0;
+	size_t slicePitch = 0;
+	if (FAILED(DirectX::ComputePitch(format, mipW, mipH, rowPitch, slicePitch)) || slicePitch == 0)
+		return false;
+	std::vector<uint8_t> rawMip(slicePitch);
+	const size_t copyRows = isCompressed ? static_cast<size_t>((mipH + 3u) / 4u) : static_cast<size_t>(mipH);
+
+	bool copied = false;
+	g_pGraphics->Lock();
+	ID3D11Texture2D* staging = nullptr;
+	if (SUCCEEDED(gfxDevice->CreateTexture2D(&stagingDesc, nullptr, &staging)) && staging != nullptr)
+	{
+		const UINT srcSubresource = D3D11CalcSubresource(chosenMip, 0, desc.MipLevels);
+		gfxContext->CopySubresourceRegion(staging, 0, 0, 0, 0, _texture, srcSubresource, nullptr);
+		D3D11_MAPPED_SUBRESOURCE mapped = {};
+		if (SUCCEEDED(gfxContext->Map(staging, 0, D3D11_MAP_READ, 0, &mapped)) && mapped.pData != nullptr)
+		{
+			const size_t rowBytes = std::min<size_t>(rowPitch, mapped.RowPitch);
+			for (size_t row = 0; row < copyRows; ++row)
+			{
+				memcpy(rawMip.data() + row * rowPitch,
+					static_cast<const uint8_t*>(mapped.pData) + row * mapped.RowPitch,
+					rowBytes);
+			}
+			gfxContext->Unmap(staging, 0);
+			copied = true;
+		}
+		staging->Release();
+	}
+	g_pGraphics->Unlock();
+	if (!copied)
+		return false;
+
+	DirectX::Image mipImage = {};
+	mipImage.width = mipW;
+	mipImage.height = mipH;
+	mipImage.format = format;
+	mipImage.rowPitch = rowPitch;
+	mipImage.slicePitch = slicePitch;
+	mipImage.pixels = rawMip.data();
+
+	DirectX::ScratchImage decompressed;
+	const DirectX::Image* source = &mipImage;
+	if (isCompressed)
+	{
+		if (FAILED(DirectX::Decompress(mipImage, DXGI_FORMAT_R8G8B8A8_UNORM, decompressed)))
+			return false;
+		source = decompressed.GetImage(0, 0, 0);
+		if (source == nullptr || source->pixels == nullptr)
+			return false;
 	}
 
 	outWidth = static_cast<int32_t>(source->width);

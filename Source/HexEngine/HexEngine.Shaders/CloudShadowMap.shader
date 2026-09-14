@@ -72,7 +72,7 @@
 			if (travelled >= span)
 				break;
 			const float3 p = origin + sunDir * (hit.x + travelled + stepLen * 0.5f);
-			opticalDepth += SampleCloudDensityTex(g_shapeNoise, g_detailNoise, g_mirrorSampler, p, boundsMin, boundsMax, windOffset) * stepLen * invCloudHeight;
+			opticalDepth += SampleCloudDensityTexCoarse(g_shapeNoise, g_detailNoise, g_mirrorSampler, p, boundsMin, boundsMax, windOffset) * stepLen * invCloudHeight;
 			travelled += stepLen;
 		}
 

@@ -109,7 +109,10 @@ namespace HexEngine
 	protected:
 		bool _doesCastShadows = false;
 		bool _isVolumetric = false;
-		bool _injectIntoGI = false;
+		// Default ON: local lights feed the voxel GI unless opted out per
+		// light (Inject Into GI checkbox). Scenes saved while this defaulted
+		// off keep their serialized false and need the checkbox ticked.
+		bool _injectIntoGI = true;
 		LightingEffect _effect = LightingEffect::None;
 
 		float _strength = 1.0f;

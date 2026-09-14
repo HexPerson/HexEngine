@@ -836,6 +836,20 @@ namespace HexEngine
 					context->CSSetShaderResources(17, 4, giSrvs);
 				}
 
+				// t21 = cloud shadow map + b4 = CloudConstants (S6): the sun
+				// term picks up cloud-edge shafts. Null-safe: with either
+				// missing the shader's zero-half-extent guard returns 1.0.
+				{
+					ID3D11ShaderResourceView* cloudSrv = nullptr;
+					if (_cloudShadowMapTex != nullptr && _cloudConstantsCb != nullptr)
+						cloudSrv = reinterpret_cast<ID3D11ShaderResourceView*>(_cloudShadowMapTex->GetNativeShaderView());
+					context->CSSetShaderResources(21, 1, &cloudSrv);
+					ID3D11Buffer* cloudCb = _cloudConstantsCb != nullptr
+						? reinterpret_cast<ID3D11Buffer*>(_cloudConstantsCb->GetNativePtr())
+						: nullptr;
+					context->CSSetConstantBuffers(4, 1, &cloudCb);
+				}
+
 				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
 
 				if (clusteredFog)
@@ -849,6 +863,14 @@ namespace HexEngine
 					// as CS SRVs would force-unbind with debug-layer noise.
 					ID3D11ShaderResourceView* nullGiSrvs[4] = {};
 					context->CSSetShaderResources(17, 4, nullGiSrvs);
+				}
+				{
+					// t21 cloud shadow map (rebound as an RTV later this frame)
+					// + b4 cloud constants.
+					ID3D11ShaderResourceView* nullCloudSrv = nullptr;
+					context->CSSetShaderResources(21, 1, &nullCloudSrv);
+					ID3D11Buffer* nullCloudCb = nullptr;
+					context->CSSetConstantBuffers(4, 1, &nullCloudCb);
 				}
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);

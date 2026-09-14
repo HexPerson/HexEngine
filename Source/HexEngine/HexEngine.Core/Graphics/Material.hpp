@@ -191,7 +191,9 @@ namespace HexEngine
 
 		std::map<std::string, std::string> _soundTags;
 		bool _affectsGI = true;
-		bool _emissiveAffectsGI = false;
+		// Default ON - emissive surfaces feed the voxel GI unless opted out
+		// (mirrors Light::_injectIntoGI; loader also defaults absent keys to on).
+		bool _emissiveAffectsGI = true;
 		bool _receivesSnow = false;
 
 		std::recursive_mutex _lock;

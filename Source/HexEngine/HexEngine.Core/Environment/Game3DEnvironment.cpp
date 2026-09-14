@@ -93,8 +93,7 @@ namespace HexEngine
 
 		env->_assetPackageManager = new AssetPackageManager;
 
-#ifndef _DEBUG
-		if (fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
+		if (options.mountEngineAssetPackage && fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
 		{
 			FileSystem tempFs(L"EngineDataBootStrap");
 			tempFs.SetBaseDirectory(fs::current_path());
@@ -114,7 +113,6 @@ namespace HexEngine
 			// now but the second call was still pointless).
 		}
 		else
-#endif
 		{
 			env->_fileSystem = new FileSystem(L"EngineData");
 			env->_fileSystem->SetBaseDirectory(fs::current_path());

@@ -81,6 +81,11 @@ namespace HexEngine::Weather
 		float cloudViewAbsorption = 0.42f;
 		float cloudShadowStrength = 0.6f;
 		float cloudAnimationSpeed = 1.0f;
+		// RDR2 sky S4/S5: per-column type bias (0 = stratus decks, 1 =
+		// towering cumulus) and the high-altitude 2D cirrus layer.
+		float cloudType = 0.5f;
+		float cirrusAmount = 0.3f;
+		float cirrusType = 0.35f;
 
 		math::Vector3 windDirection = math::Vector3(1.0f, 0.0f, 0.15f);
 		// Halved from the original tuning - the old defaults (e.g. 34 for the

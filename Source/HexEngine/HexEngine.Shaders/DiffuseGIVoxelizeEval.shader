@@ -409,8 +409,17 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 			if (ndotl <= 0.0f)
 				continue;
 
-			float attenuation = saturate(1.0f - saturate(dist / radius));
-			attenuation *= attenuation;
+			// Windowed inverse-square - the SAME punctual-light falloff the
+			// deferred direct pass uses (PointLight.shader), so a light's GI
+			// bounce footprint matches its visible direct footprint. The old
+			// (1 - d/r)^2 curve was near-zero one voxel away from any
+			// small-radius light, which is why interior lights injected
+			// nothing perceptible. d^2 is floored at half a voxel so a light
+			// inside a voxel stays finite at voxel-injection scale.
+			const float minD = max(0.5f * voxelSize, 0.25f);
+			float window = saturate(1.0f - (dist2 * dist2) / (radius2 * radius2));
+			window *= window;
+			float attenuation = window / max(dist2, minD * minD);
 
 			const bool isSpot = light.colourType.w > 0.5f;
 			if (isSpot)
@@ -428,12 +437,18 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 			accum += light.colourType.rgb * influence;
 		}
 
-		const float lum = dot(accum, float3(0.2126f, 0.7152f, 0.0722f));
-		accum = accum / (1.0f + lum * 0.5f);
+		// The old soft-max here (accum / (1 + 0.5*luma)) capped the summed
+		// radiance at luma ~2 REGARDLESS of light strength - a strength-5000
+		// light injected the same energy as a strength-5 one, so
+		// r_giLocalLightInjection appeared to do nothing. Light colour
+		// already carries strength (colour.rgb * alpha * strength on the
+		// CPU); with the physical falloff above the sum is well-behaved, so
+		// keep real energy and bound it only by the cap below (which lifts
+		// with the injection dial so cranking the cvar stays meaningful).
 		const float localInject = max(g_giParams11.x, 0.0f);
-		const float3 bounced = accum * (localInject * 0.55f) * saturate(albedo);
+		const float3 bounced = accum * (localInject * 0.10f) * saturate(albedo);
 		// Luminance + per-channel preserving cap.
-		return LuminanceClamp(bounced, 6.0f);
+		return LuminanceClamp(bounced, max(6.0f, localInject * 2.0f));
 	}
 
 	float3 RemapBounceTransportAlbedo(float3 albedo)
@@ -631,14 +646,27 @@ float3 ComputeBarycentric(float3 p, float3 a, float3 b, float3 c)
 					const float signedDist = dot(n, voxelCenterWs - p0);
 					const float3 projected = voxelCenterWs - n * signedDist;
 					const float3 hitBary = ComputeBarycentric(projected, p0, p1, p2);
-					const float minBary = min(hitBary.x, min(hitBary.y, hitBary.z));
-					const float baryDilate = triEmissiveActive ? 0.22f : 0.0f;
-					const bool insideConservative = (minBary >= -baryDilate);
-					if (abs(signedDist) > planeThickness || !insideConservative)
+					// Accept by DISTANCE TO THE TRIANGLE, not plane distance +
+					// voxel-center-inside-the-edges. The old inside test required a
+					// voxel CENTER to project within the triangle's edges - fine for
+					// terrain-sized triangles, but a high-poly mesh whose triangles
+					// are smaller than a voxel (any detailed prop at 0.5 m voxels)
+					// had essentially zero probability of containing a voxel centre:
+					// EVERY triangle was rejected and the whole scene voxelized to
+					// black. Clamp the barycentric to the triangle to get (a close
+					// approximation of) the nearest point on the triangle and accept
+					// anything within the voxel's reach.
+					float3 baryClamped = max(hitBary, 0.0f.xxx);
+					baryClamped /= max(baryClamped.x + baryClamped.y + baryClamped.z, 1e-5f);
+					const float3 closestOnTriWs = p0 * baryClamped.x + p1 * baryClamped.y + p2 * baryClamped.z;
+					const float distToTri = length(voxelCenterWs - closestOnTriWs);
+					// Half a voxel diagonal, widened by the emissive thickness factor
+					// (planeThickness already carries the 3.8x emissive expansion).
+					const float acceptDist = max(planeThickness, voxelSize * 0.87f);
+					if (distToTri > acceptDist)
 						continue;
-					const float planeWeight = saturate(1.0f - abs(signedDist) / max(planeThickness, 1e-5f));
-					const float edgeSoftness = 0.10f;
-					const float edgeWeight = saturate((minBary + baryDilate) / max(edgeSoftness + baryDilate, 1e-5f));
+					const float planeWeight = saturate(1.0f - distToTri / max(acceptDist, 1e-5f));
+					const float edgeWeight = 1.0f;
 					const float coverage = saturate(planeWeight * edgeWeight);
 
 					float3 emissiveContribution = 0.0f.xxx;

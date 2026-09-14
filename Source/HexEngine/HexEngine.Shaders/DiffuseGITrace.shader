@@ -479,6 +479,14 @@
 		float3 voxelRadiance = 0.0f.xxx;
 		float occAccum = 0.0f;
 		float accumW = 0.0f;
+		// Radiance uses its own PRESENCE-WEIGHTED accumulator: taps that carry
+		// no radiance (air the propagation has not filled, solid interiors)
+		// used to enter the mean at full weight and diluted a lit surface
+		// voxel's bounce by 5-10x - the reason voxel GI read as a faint veil
+		// next to SSGI. Empty taps now weigh 0.15; a fully dark neighbourhood
+		// still averages to zero, so this brightens received bounce without
+		// inventing light.
+		float radAccumW = 0.0f;
 		float3 albedoAccum = 0.0f.xxx;
 		float albedoWeightAccum = 0.0f;
 
@@ -521,7 +529,10 @@
 			{
 				tapRadiance *= lerp(max(arrivalFactor, 0.35f.xxx), 1.0f.xxx, saturate(occSample * 2.0f));
 			}
-			voxelRadiance += tapRadiance * w;
+			const float tapPresence = saturate(dot(tapRadiance, float3(0.2126f, 0.7152f, 0.0722f)) * 3.0f);
+			const float radW = w * lerp(0.15f, 1.0f, tapPresence);
+			voxelRadiance += tapRadiance * radW;
+			radAccumW += radW;
 			occAccum += occSample * w;
 			accumW += w;
 			const float albedoW = w * saturate(albedoData.a);
@@ -544,7 +555,10 @@
 			{
 				coneRadiance *= lerp(max(arrivalFactor, 0.35f.xxx), 1.0f.xxx, saturate(occSample * 2.0f));
 			}
-			voxelRadiance += coneRadiance * w;
+			const float conePresence = saturate(dot(coneRadiance, float3(0.2126f, 0.7152f, 0.0722f)) * 3.0f);
+			const float coneRadW = w * lerp(0.15f, 1.0f, conePresence);
+			voxelRadiance += coneRadiance * coneRadW;
+			radAccumW += coneRadW;
 			occAccum += occSample * w;
 			accumW += w;
 			const float albedoW = w * saturate(albedoData.a) * 0.75f;
@@ -553,7 +567,7 @@
 			transmittance *= (1.0f - saturate(occSample) * 0.40f);
 		}
 
-		voxelRadiance /= max(accumW, 1e-4f);
+		voxelRadiance /= max(radAccumW, 1e-4f);
 		float voxelOcc = saturate(occAccum / max(accumW, 1e-4f));
 		float3 voxelAlbedo = (albedoWeightAccum > 1e-4f)
 			? saturate(albedoAccum / albedoWeightAccum)
@@ -775,6 +789,18 @@
 			fallbackOcc = occCurrent;
 			fallbackClip = i;
 			foundClip = true;
+
+			// A clip that FULLY covers this pixel (edgeWeight ~1) makes every
+			// coarser clip redundant: they only exist to blend across this
+			// clip's boundary. Evaluating them anyway cost 4x the full gather
+			// on interior pixels (most of any indoor scene) and let the
+			// coarse clips' blur dominate the normalized result (their
+			// fidelity weights sum past the fine clip's). Interior pixels now
+			// evaluate exactly one clip; pixels inside a boundary band blend
+			// two - the visual intent of the edge blending, at a fraction of
+			// the cost.
+			if (edgeWeight >= 0.999f)
+				break;
 		}
 
 		if (totalClipWeight > 1e-4f)
@@ -860,7 +886,11 @@
 		// (24, 1, 1) collapsed to (4.4, 0.85, 0.85) - a strong hue shift toward white that
 		// then drove the temporal history clamp to bake in the desaturated colour. Compressing
 		// by luminance preserves the (R,G,B) ratio.
-		gi = ReinhardCompressLuminance(gi, 0.18f);
+		// Knee tied to r_giEnergyClamp: at the historical clamp of 3 this is the
+		// original 0.18 (asymptote ~5.5); raising the clamp relaxes the
+		// compression proportionally so the cvar actually raises GI energy
+		// instead of being pre-crushed by a fixed soft-max.
+		gi = ReinhardCompressLuminance(gi, 0.18f * (3.0f / max(g_giParams0.y, 1.0f)));
 
 		gi *= g_giParams0.x;
 		// Final safety clamp - was a per-channel min, which under saturated-channel inputs

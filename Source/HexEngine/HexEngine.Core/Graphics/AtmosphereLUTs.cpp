@@ -35,9 +35,19 @@ namespace HexEngine
 	{
 		math::Vector4 overcastColor;   // rgb tint, a unused
 		float overcastAmount;          // 0 = pure LUT, 1 = pure tint
-		float pad0;
-		float pad1;
-		float pad2;
+		float pad0;                    // 1 = buffer live (PostFog "LUT available" marker)
+		float pad1;                    // moon phase (0 = new, 1 = full)
+		float pad2;                    // moon angular diameter (deg)
+		// HDR sky params (tail-appended; every consumer shader recompiled
+		// with the matching cbuffer decl - SkySphere/PostFog/APApply).
+		// x = reserved (1.0; the radiance lever acts at LUT generation),
+		// y = sun disc diameter (deg), z = sun disc intensity,
+		// w = star intensity.
+		math::Vector4 hdrParams;
+		// Cirrus layer (S4): x = amount (0 = none), y = type (0 = streaky
+		// cirrus, 1 = cirrocumulus ripples), z/w = accumulated wind offset
+		// in metres (CPU-integrated so wind changes don't teleport the layer).
+		math::Vector4 cirrusParams;
 	};
 
 	AtmosphereLUTs::AtmosphereLUTs() = default;
@@ -80,7 +90,9 @@ namespace HexEngine
 		// SetSkyRenderParams setter is never called.
 		// pad0 = 1 marks the buffer as live for consumers that fall back when
 		// nothing is bound (PostFog reads it as "LUT available").
-		const SkyRenderParamsCB defaultSkyRender = { math::Vector4(1.0f, 1.0f, 1.0f, 1.0f), 0.0f, 1.0f, 0.0f, 0.0f };
+		const SkyRenderParamsCB defaultSkyRender = { math::Vector4(1.0f, 1.0f, 1.0f, 1.0f), 0.0f, 1.0f, 0.85f, 1.1f,
+			math::Vector4(1.0f, 0.53f, 1.0f, 0.02f),
+			math::Vector4(0.0f, 0.35f, 0.0f, 0.0f) };
 		_skyRenderCBuffer->Write((void*)&defaultSkyRender, sizeof(defaultSkyRender));
 
 		_paramsDirty = true;
@@ -107,7 +119,16 @@ namespace HexEngine
 		SAFE_DELETE(_skyRenderCBuffer);
 	}
 
-	void AtmosphereLUTs::SetSkyRenderParams(const math::Vector3& overcastColor, float overcastAmount)
+	void AtmosphereLUTs::SetCirrusState(float amount, float type, const math::Vector2& windOffsetM)
+	{
+		_cirrusAmount = std::clamp(amount, 0.0f, 1.0f);
+		_cirrusType = std::clamp(type, 0.0f, 1.0f);
+		_cirrusWindOffsetM = windOffsetM;
+	}
+
+	void AtmosphereLUTs::SetSkyRenderParams(const math::Vector3& overcastColor, float overcastAmount,
+		float sunDiscDiameterDeg, float sunDiscIntensity, float starIntensity,
+		float moonIntensity, float moonPhase, float moonDiameterDeg)
 	{
 		if (_skyRenderCBuffer == nullptr)
 			return;
@@ -115,6 +136,17 @@ namespace HexEngine
 		cb.overcastColor = math::Vector4(overcastColor.x, overcastColor.y, overcastColor.z, 1.0f);
 		cb.overcastAmount = std::clamp(overcastAmount, 0.0f, 1.0f);
 		cb.pad0 = 1.0f; // live marker (see the default seed)
+		// Moon (S8): phase in pad1, diameter in pad2, intensity in
+		// hdrParams.x (previously reserved).
+		cb.pad1 = std::clamp(moonPhase, 0.0f, 1.0f);
+		cb.pad2 = std::clamp(moonDiameterDeg, 0.05f, 10.0f);
+		cb.hdrParams = math::Vector4(
+			std::max(moonIntensity, 0.0f),
+			std::clamp(sunDiscDiameterDeg, 0.05f, 10.0f),
+			std::max(sunDiscIntensity, 0.0f),
+			std::max(starIntensity, 0.0f));
+		cb.cirrusParams = math::Vector4(_cirrusAmount, _cirrusType,
+			_cirrusWindOffsetM.x, _cirrusWindOffsetM.y);
 		_skyRenderCBuffer->Write(&cb, sizeof(cb));
 	}
 
@@ -205,7 +237,11 @@ namespace HexEngine
 		// sky shaders fall back to the analytic path.
 		_transmittanceLUT   = CreateLutTexture2D(graphics, 256, 64,  "AtmosphereTransmittanceLUT");
 		_multiScatteringLUT = CreateLutTexture2D(graphics, 32,  32,  "AtmosphereMultiScatteringLUT");
-		_skyViewLUT         = CreateLutTexture2D(graphics, 192, 108, "AtmosphereSkyViewLUT");
+		// 384x216 (raised from 192x108 for the RDR2 sky work): resolves the
+		// Mie forward peak at g=0.65 without concentric-ring artefacts. Must
+		// match LUT_SIZE in AtmosphereSkyViewLUT.shader and the half-texel
+		// clamp in AtmosphereCommon.shader's SkyViewLutParamsToUv.
+		_skyViewLUT         = CreateLutTexture2D(graphics, 384, 216, "AtmosphereSkyViewLUT");
 		if (!_transmittanceLUT || !_multiScatteringLUT || !_skyViewLUT)
 		{
 			LOG_WARN("AtmosphereLUTs::EnsureResources failed to allocate one or more LUT textures");
@@ -474,7 +510,7 @@ namespace HexEngine
 				/*groupsX*/ 4u, /*groupsY*/ 4u);
 		}
 
-		// Sky-view LUT (192x108, 8x8 groups -> 24x14 groups; round up for the 108 dim).
+		// Sky-view LUT (384x216, 8x8 groups -> 48x27 groups).
 		{
 			ID3D11ShaderResourceView* transmittanceSrv   = reinterpret_cast<ID3D11ShaderResourceView*>(_transmittanceLUT->GetNativeShaderView());
 			ID3D11ShaderResourceView* multiScatteringSrv = reinterpret_cast<ID3D11ShaderResourceView*>(_multiScatteringLUT->GetNativeShaderView());
@@ -483,7 +519,7 @@ namespace HexEngine
 				{ transmittanceSrv, multiScatteringSrv },
 				_linearClampSampler,
 				_atmosphereCBuffer, _skyViewCBuffer,
-				/*groupsX*/ 24u, /*groupsY*/ 14u);
+				/*groupsX*/ 48u, /*groupsY*/ 27u);
 		}
 
 		// Aerial perspective volume (32x32x32, 8x8x8 groups -> 4x4x4).

@@ -63,6 +63,16 @@ namespace HexEngine
 			"r_autoExposureSampleStride",
 			"Pixel stride between luminance samples (higher = cheaper but coarser)",
 			4, 1, 16);
+		// HDR sky (RDR2 sky S1): the sky dome now writes linear HDR radiance
+		// several times brighter than lit ground, and an outdoor frame is
+		// 30-50% sky - unweighted it drags the metered mean up and the ground
+		// exposes too dark. Real cameras centre/bottom-weight their metering
+		// for the same reason. Sky pixels (gbuffer diffuse .a == -1) count at
+		// this weight in the histogram; 1.0 = old behaviour.
+		HVar r_autoExposureSkyWeight(
+			"r_autoExposureSkyWeight",
+			"Histogram weight of sky pixels in the exposure meter (1 = full)",
+			0.25f, 0.0f, 1.0f);
 		HVar r_autoExposureDebug(
 			"r_autoExposureDebug",
 			"Log mean luma / target / smoothed exposure every ~1 second for tuning",
@@ -165,7 +175,9 @@ namespace HexEngine
 			float minLogLuma;
 			float logLumaRange;
 			uint32_t sampleCount;
-			uint32_t pad;
+			// Sky-pixel histogram weight in 1/256 fixed point (256 = full).
+			// Scene pixels always count 256; see r_autoExposureSkyWeight.
+			uint32_t skyWeightFixed;
 		};
 	}
 
@@ -194,6 +206,7 @@ namespace HexEngine
 	void AutoExposure::Reset()
 	{
 		_smoothedExposure = 1.0f;
+		_targetExposure = 1.0f;
 		_hasPendingReadback = false;
 	}
 
@@ -285,13 +298,15 @@ namespace HexEngine
 		_lastDispatchSampleCount = 0;
 	}
 
-	void AutoExposure::Update(ITexture2D* beauty, float deltaTimeSeconds, float sunElevation)
+	void AutoExposure::Update(ITexture2D* beauty, float deltaTimeSeconds, float sunElevation, ITexture2D* skyMask,
+		float skyOvercastAmount)
 	{
 		// User can disable at runtime - just clamp to 1.0 and bail. The user-set r_exposure
 		// HVar then drives the colour grade exposure directly.
 		if (!r_autoExposure._val.b || beauty == nullptr || !_luminanceShader)
 		{
 			_smoothedExposure = 1.0f;
+			_targetExposure = 1.0f;
 			_hasPendingReadback = false;
 			return;
 		}
@@ -305,6 +320,7 @@ namespace HexEngine
 		if (g_pEnv->_graphicsDevice->GetBackend() != GraphicsBackend::D3D11)
 		{
 			_smoothedExposure = 1.0f;
+			_targetExposure = 1.0f;
 			_hasPendingReadback = false;
 			return;
 		}
@@ -458,6 +474,7 @@ namespace HexEngine
 					target = targetLuma / std::max(meanLuma, 1e-6f);
 				}
 				target = std::clamp(target, minMul, maxMul);
+				_targetExposure = target;
 
 				// Exponential approach: alpha = 1 - exp(-rate * dt), frame-rate
 				// independent. Split rates (eye-like): rising exposure = dark
@@ -519,16 +536,26 @@ namespace HexEngine
 			c.minLogLuma = kMinLogLuma;
 			c.logLumaRange = kLogLumaRange;
 			c.sampleCount = sampleCount;
+			// Sky down-weighting only engages when the mask is bound; without
+			// it the shader reads alpha 0 from the null SRV and every pixel
+			// counts fully regardless of this value.
+			// Adaptive sky weight: the cvar is the CLEAR-sky weight; under
+			// overcast the sky must meter (near-)fully or the meter exposes
+			// for the cloud-shadowed ground and blows the deck white.
+			const float baseWeight = std::clamp(r_autoExposureSkyWeight._val.f32, 0.0f, 1.0f);
+			const float overcastWeight = std::max(baseWeight, 0.75f);
+			const float skyWeight = baseWeight + (overcastWeight - baseWeight) * std::clamp(skyOvercastAmount, 0.0f, 1.0f);
+			c.skyWeightFixed = (uint32_t)std::lround(skyWeight * 256.0f);
 			std::memcpy(mappedCb.pData, &c, sizeof(c));
 			context->Unmap(_constantBuffer, 0);
 		}
 
 		// Save state we're about to clobber on the compute pipeline so we don't leave dangling
 		// bindings for whatever runs next.
-		ID3D11ShaderResourceView* prevSrvs[1] = {};
+		ID3D11ShaderResourceView* prevSrvs[2] = {};
 		ID3D11UnorderedAccessView* prevUavs[1] = {};
 		ID3D11Buffer* prevCbs[1] = {};
-		context->CSGetShaderResources(0, 1, prevSrvs);
+		context->CSGetShaderResources(0, 2, prevSrvs);
 		context->CSGetUnorderedAccessViews(0, 1, prevUavs);
 		context->CSGetConstantBuffers(5, 1, prevCbs);
 
@@ -541,10 +568,16 @@ namespace HexEngine
 		context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, prevRtvs, &prevDsv);
 		context->OMSetRenderTargets(0, nullptr, nullptr);
 
-		ID3D11ShaderResourceView* srvs[] = { _beautySrv };
+		// t1 = sky mask (gbuffer diffuse; .a == -1 marks sky). The gbuffer
+		// texture owns a standard SRV, unlike beauty which needs the custom
+		// format view above.
+		ID3D11ShaderResourceView* skyMaskSrv = skyMask != nullptr
+			? reinterpret_cast<ID3D11ShaderResourceView*>(skyMask->GetNativeShaderView())
+			: nullptr;
+		ID3D11ShaderResourceView* srvs[] = { _beautySrv, skyMaskSrv };
 		ID3D11UnorderedAccessView* uavs[] = { _accumUav };
 		ID3D11Buffer* cbs[] = { _constantBuffer };
-		context->CSSetShaderResources(0, 1, srvs);
+		context->CSSetShaderResources(0, 2, srvs);
 		context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
 		context->CSSetConstantBuffers(5, 1, cbs);
 
@@ -556,10 +589,10 @@ namespace HexEngine
 		}
 
 		// Unbind to release the UAV hazard before the CopyResource.
-		ID3D11ShaderResourceView* nullSrvs[1] = { nullptr };
+		ID3D11ShaderResourceView* nullSrvs[2] = { nullptr, nullptr };
 		ID3D11UnorderedAccessView* nullUavs[1] = { nullptr };
 		ID3D11Buffer* nullCbs[1] = { nullptr };
-		context->CSSetShaderResources(0, 1, nullSrvs);
+		context->CSSetShaderResources(0, 2, nullSrvs);
 		context->CSSetUnorderedAccessViews(0, 1, nullUavs, nullptr);
 		context->CSSetConstantBuffers(5, 1, nullCbs);
 		context->CSSetShader(nullptr, nullptr, 0);
@@ -571,13 +604,14 @@ namespace HexEngine
 		_lastDispatchSampleCount = sampleCount;
 
 		// Restore the previously-bound resources so we don't disrupt later compute work.
-		ID3D11ShaderResourceView* restoreSrvs[1] = { prevSrvs[0] };
+		ID3D11ShaderResourceView* restoreSrvs[2] = { prevSrvs[0], prevSrvs[1] };
 		ID3D11UnorderedAccessView* restoreUavs[1] = { prevUavs[0] };
 		ID3D11Buffer* restoreCbs[1] = { prevCbs[0] };
-		context->CSSetShaderResources(0, 1, restoreSrvs);
+		context->CSSetShaderResources(0, 2, restoreSrvs);
 		context->CSSetUnorderedAccessViews(0, 1, restoreUavs, nullptr);
 		context->CSSetConstantBuffers(5, 1, restoreCbs);
 		if (prevSrvs[0] != nullptr) prevSrvs[0]->Release();
+		if (prevSrvs[1] != nullptr) prevSrvs[1]->Release();
 		if (prevUavs[0] != nullptr) prevUavs[0]->Release();
 		if (prevCbs[0] != nullptr) prevCbs[0]->Release();
 

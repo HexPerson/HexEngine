@@ -2,6 +2,7 @@
 {
 	Global
 	AtmosphereCommon
+	CloudCommon
 }
 "ComputeShader"
 {
@@ -98,6 +99,11 @@
 	Texture3D<float4>        g_giRadianceClip0 : register(t18);
 	Texture3D<float4>        g_giRadianceClip1 : register(t19);
 	Texture3D<float4>        g_giRadianceClip2 : register(t20);
+	// Cloud shadow map (S6): top-down cloud transmittance on the cloud base
+	// plane (CloudShadowMap.shader). The CloudConstants cbuffer it needs is
+	// declared by the CloudCommon include (b4). Null-safe: an unbound b4
+	// reads half-extent 0 and SampleCloudShadowMap returns 1.
+	Texture2D                g_cloudShadowMap  : register(t21);
 	SamplerState g_shadowPointSampler : register(s2);
 	// Linear-clamp sampler for the transmittance LUT - the LUT is a
 	// continuous function so point sampling shows banding.
@@ -672,7 +678,13 @@
 		// top for artist control.
 		const float MIE_COEFF = 0.025f;
 		const float3 effectiveSunColour = sunColour * sunTransmittance;
-		float3 totalScatter = effectiveSunColour * sunIntensity * sunVisibility * phase;
+		// Cloud shadows (S6): the sun term only - god rays gain cloud-edge
+		// shafts. Deliberately NOT folded into sunVisibility itself: the
+		// ambient-sky-access heuristic further down reads sunVisibility as
+		// "is this froxel enclosed by geometry", and a passing cloud must not
+		// crush the fog ambient the way a ceiling does.
+		const float cloudShadow = SampleCloudShadowMap(g_cloudShadowMap, g_linearSamplerAtm, worldPos);
+		float3 totalScatter = effectiveSunColour * sunIntensity * sunVisibility * cloudShadow * phase;
 
 		// Per-froxel point + spot light contributions. NO shadow gating
 		// in v1 - local lights shine through walls. Same forward-lights

@@ -156,7 +156,10 @@
 	{
 		float3 weights = pow(abs(normal), 4.0f);
 		weights /= max(weights.x + weights.y + weights.z, 0.0001f);
-		weights = weights > kTriplanarAxisEps ? weights : 0.0f.xxx;
+		// step() masking instead of a vector ternary: fxc (DXBC) accepts
+		// vector ?: but DXC (DXIL/SM6) requires select() - step() compiles
+		// identically on both.
+		weights *= step(kTriplanarAxisEps.xxx, weights);
 		return weights / max(weights.x + weights.y + weights.z, 0.0001f);
 	}
 

@@ -32,6 +32,11 @@
 		float4 g_cloudShadowMapAxisX;  // xyz = map +U axis (world, horizontal)
 		float4 g_cloudShadowMapAxisZ;  // xyz = map +V axis (world, horizontal)
 		float4 g_cloudShadowMapSun;    // xyz = sun direction (surface -> sun), w = shadow strength
+		// S5 cloud types. x = type bias (0 = force stratus, 0.5 = natural
+		// mix from the type field, 1 = force cumulus), y/z/w reserved.
+		// TAIL-APPENDED: every CloudConstants consumer recompiles together
+		// (VolumetricClouds, CloudShadowMap, Deferred, VolumetricScatterDensity).
+		float4 g_cloudParams6;
 	};
 
 	float CloudHash12(float2 p)
@@ -69,6 +74,20 @@
 		return saturate(fbm);
 	}
 
+	// S5: cloud TYPE per column, 0 = stratus (low flat deck) -> 1 = cumulus
+	// (tall billowing tower). An independent lower-frequency field (~4 km
+	// systems) so a sky can hold both a stratus bank and a cumulus cluster
+	// at once; g_cloudParams6.x biases the whole field (0.5 = as-authored,
+	// 0 = everything stratus, 1 = everything cumulus).
+	float CloudWeatherType(float2 xz, float2 windXz)
+	{
+		const float2 p = (xz + windXz * 160.0f) * (1.0f / 4200.0f);
+		const float field =
+			CloudValueNoise2(p + 71.3f.xx) * 0.65f +
+			CloudValueNoise2(p * 2.6f + 9.3f.xx) * 0.35f;
+		return saturate(field + (g_cloudParams6.x - 0.5f) * 1.6f);
+	}
+
 	float2 CloudRayBoxDist(float3 boundsMin, float3 boundsMax, float3 rayOrigin, float3 rayDir)
 	{
 		float3 safeDir = rayDir;
@@ -90,7 +109,17 @@
 		return float2(dstToBox, dstInsideBox);
 	}
 
-	float SampleCloudDensityTex(Texture3D shapeNoise, Texture3D detailNoise, SamplerState noiseSampler, float3 worldPos, float3 boundsMin, float3 boundsMax, float3 windOffset)
+	// withDetail=false: COARSE density for LIGHT marches (sun/shadow). At
+	// grazing sun angles (sunset - THE cinematic hour) the detail-eroded
+	// field has huge high-frequency variance along a horizontal light path,
+	// and the few light steps turn that into per-pixel optical-depth noise -
+	// the deck rendered as white speckle. Lighting through the smooth
+	// shape/coverage boundary integrates cleanly (and drops one 3D fetch per
+	// light step). The VIEW march keeps full detail.
+	// detailAmount: 1 = full detail erosion (near view samples), 0 = coarse
+	// (light marches, far view samples - detail at distance aliases into
+	// sparkle grain, worst against a bright dusk sun).
+	float SampleCloudDensityTexImpl(Texture3D shapeNoise, Texture3D detailNoise, SamplerState noiseSampler, float3 worldPos, float3 boundsMin, float3 boundsMax, float3 windOffset, float detailAmount)
 	{
 		const float3 boundsSize = max(boundsMax - boundsMin, 1e-3f.xxx);
 		const float3 localUVW = (worldPos - boundsMin) / boundsSize;
@@ -118,7 +147,9 @@
 			return 0.0f;
 
 		const float shape = shapeNoise.SampleLevel(noiseSampler, worldPos * g_cloudParams2.x + windOffset, 0.0f).r;
-		const float detail = detailNoise.SampleLevel(noiseSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r;
+		const float detail = detailAmount > 0.001f
+			? lerp(0.5f, detailNoise.SampleLevel(noiseSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r, detailAmount)
+			: 0.5f;
 
 		const float height = saturate(localUVW.y);
 		// LUMPY UNDERSIDE: a flat cloud base renders a full deck as one
@@ -127,11 +158,32 @@
 		// light/dark mottling you actually see from below. Lift the base by
 		// the weather map and shape noise per column.
 		const float baseLift = (1.0f - wm) * 0.26f + (1.0f - shape) * 0.12f;
-		const float heightMask = smoothstep(0.03f + baseLift, 0.24f + baseLift, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
+
+		// S5 TYPE-DRIVEN HEIGHT PROFILE. The slab default grew 700 m ->
+		// ~2 km, and one fixed vertical shape can't serve both a flat
+		// stratus deck and a towering cumulus in it. The per-column type
+		// field picks the profile: stratus tops out ~35% of the slab
+		// (~700 m) with a soft flat top; cumulus builds to ~98% (2 km
+		// towers). Bases stay put - flat bases are what sells fair-weather
+		// cumulus (reference: RDR2 midday shots).
+		const float cloudType = CloudWeatherType(worldPos.xz, windOffset.xz);
+		const float topStart = lerp(0.22f, 0.72f, cloudType);
+		const float topEnd   = lerp(0.38f, 0.98f, cloudType);
+		const float heightMask = smoothstep(0.03f + baseLift, lerp(0.10f, 0.24f, cloudType) + baseLift, height)
+		                       * (1.0f - smoothstep(topStart, topEnd, height));
 		// Fuller weather columns build TALLER clouds: widen the vertical core
 		// with coverage so an overcast reads as a deck, scattered as puffs.
-		const float coreTop = lerp(0.62f, 0.90f, columnCoverage);
-		const float verticalCore = smoothstep(0.05f + baseLift * 0.8f, lerp(0.55f, 0.35f, columnCoverage) + baseLift * 0.5f, height) * (1.0f - smoothstep(coreTop, 0.98f, height));
+		// coreTop is derived FROM the type band (topStart/topEnd) so it can
+		// never cross topEnd: an earlier independent lerp let coreTop exceed
+		// topEnd for low types at high coverage, and the resulting malformed
+		// smoothstep (edge0 > edge1) returned 1 below the band - zero density
+		// exactly where the weather map was FULLEST. That rendered rain/storm
+		// decks as hollow blobs with dense outlines (interior cc=1 = empty,
+		// rim cc~0.5 = valid).
+		const float coreTop = lerp(topStart * 0.80f, topEnd * 0.92f, columnCoverage);
+		const float verticalCore = smoothstep(0.05f + baseLift * 0.8f,
+			lerp(0.55f, 0.35f, columnCoverage) * lerp(0.55f, 1.0f, cloudType) + baseLift * 0.5f, height)
+			* (1.0f - smoothstep(coreTop, topEnd, height));
 
 		// 3D Perlin-Worley SCULPTS the column the map dictates. REMAP form
 		// (Schneider), not raw subtraction: plain subtraction stacked on a
@@ -142,9 +194,14 @@
 		float cloud = columnCoverage * heightMask * verticalCore;
 		const float shapeErode = (1.0f - shape) * lerp(0.62f, 0.30f, columnCoverage);
 		cloud = saturate((cloud - shapeErode) / max(0.05f, 1.0f - shapeErode));
-		const float erosionByHeight = lerp(0.55f, 1.45f, smoothstep(0.25f, 0.95f, height));
-		const float detailErode = saturate((1.0f - detail) * g_cloudParams0.z * erosionByHeight);
-		cloud = saturate((cloud - detailErode) / max(0.05f, 1.0f - detailErode));
+		// Cumulus tops billow harder than stratus decks; scale the height
+		// erosion with type so towers get carved detail and decks stay smooth.
+		const float erosionByHeight = lerp(0.55f, 1.45f, smoothstep(0.25f, 0.95f, height)) * lerp(0.75f, 1.1f, cloudType);
+		if (detailAmount > 0.001f)
+		{
+			const float detailErode = saturate((1.0f - detail) * g_cloudParams0.z * erosionByHeight * detailAmount);
+			cloud = saturate((cloud - detailErode) / max(0.05f, 1.0f - detailErode));
+		}
 
 		// STRUCTURE. The remap above deliberately pins full columns at 1 so
 		// coverage stays honest - but that erases density VARIATION, and a
@@ -160,6 +217,16 @@
 		const float densityShape = lerp(cloud * cloud, cloud, 0.55f) * structure;
 
 		return min(densityShape * g_cloudParams0.x, 2.0f);
+	}
+
+	float SampleCloudDensityTex(Texture3D shapeNoise, Texture3D detailNoise, SamplerState noiseSampler, float3 worldPos, float3 boundsMin, float3 boundsMax, float3 windOffset)
+	{
+		return SampleCloudDensityTexImpl(shapeNoise, detailNoise, noiseSampler, worldPos, boundsMin, boundsMax, windOffset, 1.0f);
+	}
+
+	float SampleCloudDensityTexCoarse(Texture3D shapeNoise, Texture3D detailNoise, SamplerState noiseSampler, float3 worldPos, float3 boundsMin, float3 boundsMax, float3 windOffset)
+	{
+		return SampleCloudDensityTexImpl(shapeNoise, detailNoise, noiseSampler, worldPos, boundsMin, boundsMax, windOffset, 0.0f);
 	}
 
 	// Sample the cached cloud shadow map for a world position. Returns the sun

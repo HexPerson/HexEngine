@@ -35,6 +35,12 @@ namespace HexEngine
 
 	private:
 		std::vector<ITexture2D*> _chain;   // [0] = half res ... [N-1] = smallest
+		// Temporal EMA of the accumulated chain top (see BloomTemporal.shader):
+		// TAA leaves residual shimmer on thin ultra-bright features, and the
+		// bloom threshold / flare knee amplify it into intermittent pops.
+		ITexture2D* _bloomHistory = nullptr;
+		bool _bloomHistoryValid = false;
+		std::shared_ptr<IShader> _temporalShader;
 		std::shared_ptr<IShader> _downsampleShader;
 		std::shared_ptr<IShader> _upsampleShader;
 		std::shared_ptr<IShader> _compositeShader;

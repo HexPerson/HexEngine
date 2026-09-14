@@ -69,19 +69,25 @@ namespace HexEngine
 
 	bool AssetPackage::DoesAbsolutePathExist(const fs::path& path) const
 	{
+		std::wstring lowerPath = path.wstring();
+		std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), ::towlower);
+
 		// Check both the V1 eager map and the V2 TOC. Only one will be
 		// populated for a given package (depending on the file version),
 		// so this lookup is O(log N) twice in the worst case - cheap.
-		if (_assetMap.find(path) != _assetMap.end())
+		if (_assetMap.find(lowerPath) != _assetMap.end())
 			return true;
-		return _toc.find(path) != _toc.end();
+		return _toc.find(lowerPath) != _toc.end();
 	}
 
 	bool AssetPackage::DoesRelativePathExist(const fs::path& path) const
 	{
-		if (_assetMap.find(path) != _assetMap.end())
+		std::wstring lowerPath = path.wstring();
+		std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), ::towlower);
+
+		if (_assetMap.find(lowerPath) != _assetMap.end())
 			return true;
-		return _toc.find(path) != _toc.end();
+		return _toc.find(lowerPath) != _toc.end();
 	}
 
 	bool AssetPackage::IsAsset() const
@@ -98,9 +104,12 @@ namespace HexEngine
 
 	void AssetPackage::GetFileData(const fs::path& absolutePath, std::vector<uint8_t>& data)
 	{
+		std::wstring lowerPath = absolutePath.wstring();
+		std::transform(lowerPath.begin(), lowerPath.end(), lowerPath.begin(), ::towlower);
+
 		// V1 (eager): bytes are sitting in _assetMap from mount-time decompress.
 		// Just copy them out.
-		if (auto it = _assetMap.find(absolutePath); it != _assetMap.end())
+		if (auto it = _assetMap.find(lowerPath); it != _assetMap.end())
 		{
 			data = it->second;
 			return;
@@ -111,7 +120,7 @@ namespace HexEngine
 		// serialised under _readMutex because the shared ifstream isn't
 		// thread-safe across seeks (a different thread could move the file
 		// position mid-read otherwise).
-		auto tocIt = _toc.find(absolutePath);
+		auto tocIt = _toc.find(lowerPath);
 		if (tocIt == _toc.end())
 			return;
 
@@ -122,7 +131,7 @@ namespace HexEngine
 			std::lock_guard lock(_readMutex);
 			if (!_sourceFile.is_open())
 			{
-				LOG_CRIT("AssetPackage cannot stream '%S' - source file handle is closed", absolutePath.wstring().c_str());
+				LOG_CRIT("AssetPackage cannot stream '%S' - source file handle is closed", lowerPath.c_str());
 				return;
 			}
 
@@ -134,7 +143,7 @@ namespace HexEngine
 			if (bytesRead != static_cast<std::streamsize>(entry.compressedSize))
 			{
 				LOG_CRIT("AssetPackage short-read on '%S': wanted %u, got %lld",
-					absolutePath.wstring().c_str(),
+						 lowerPath.c_str(),
 					entry.compressedSize,
 					static_cast<long long>(bytesRead));
 				return;
@@ -145,13 +154,13 @@ namespace HexEngine
 		{
 			if (!g_pEnv->_compressionProvider->DecompressData(raw, data))
 			{
-				LOG_CRIT("AssetPackage failed to decompress asset '%S'", absolutePath.wstring().c_str());
+				LOG_CRIT("AssetPackage failed to decompress asset '%S'", lowerPath.c_str());
 				return;
 			}
 			if (data.size() != entry.uncompressedSize)
 			{
 				LOG_WARN("AssetPackage decompressed size mismatch for '%S': expected %u, got %zu",
-					absolutePath.wstring().c_str(),
+					lowerPath.c_str(),
 					entry.uncompressedSize,
 					data.size());
 			}

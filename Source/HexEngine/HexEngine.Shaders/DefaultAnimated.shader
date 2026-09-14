@@ -522,15 +522,14 @@
 
 		float3 finalRGB = albedo.rgb;
 
-		// Apply emission, if there was any and multiply it by the emission colours and factor
-		if (emission > 0.0f)
-		{
-			float3 emissiveColour = g_material.emissiveColour.rgb * g_material.emissiveColour.a * emission;
-			finalRGB = emissiveColour;
-
-			if (length(albedo.rgb) > 0.0f)
-				finalRGB += albedo.rgb;
-		}
+		// Emissive REPLACE (matches DefaultPixel / the graph compiler / the
+		// deferred pass). 'emission' is a scalar mask from the emission map;
+		// build the emitted colour and lerp the surface TOWARD it by an
+		// emissive mask instead of replacing-then-adding-albedo (which
+		// double-counted). The mask goes to pos.w for the deferred blend.
+		const float3 emissiveColour = g_material.emissiveColour.rgb * g_material.emissiveColour.a * emission;
+		const float emissiveMask = saturate(dot(emissiveColour, float3(0.2126f, 0.7152f, 0.0722f)));
+		finalRGB = lerp(finalRGB, emissiveColour, emissiveMask);
 
 		// In the opaque pass we cut out non-opaque pixels; in transparency phase we preserve fractional alpha.
 		if (g_material.isInTransparencyPhase == 0)
@@ -595,8 +594,7 @@
 			}
 
 			const float3 specularReflectionTerm = F * reflection * reflectionWeight;
-			const float3 emissiveTerm = g_material.emissiveColour.rgb * g_material.emissiveColour.a * emission;
-			finalRGB = sunLit.rgb + forwardDirect + specularReflectionTerm + emissiveTerm;
+			finalRGB = lerp(sunLit.rgb + forwardDirect + specularReflectionTerm, emissiveColour, emissiveMask);
 		}
 
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
@@ -623,7 +621,7 @@
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 
-		output.pos = float4(input.positionWS.xyz, g_material.emissiveColour.a * emission);
+		output.pos = float4(input.positionWS.xyz, emissiveMask);
 
 		output.velocity = velocity;
 

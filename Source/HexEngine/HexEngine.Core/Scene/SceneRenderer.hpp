@@ -259,6 +259,15 @@ namespace HexEngine
 		ITexture2D* _cloudHistory[2] = { nullptr, nullptr };
 		uint32_t _cloudHistoryWrite = 0u;
 		bool _cloudHistoryValid = false;
+
+		// Screen-space sun shafts (RDR2 sky S7): half-res occlusion mask +
+		// radial-blur ping-pong, composited additively onto beauty.
+		ITexture2D* _sunShaftsRTA = nullptr;
+		ITexture2D* _sunShaftsRTB = nullptr;
+		IConstantBuffer* _sunShaftsParamsBuffer = nullptr;
+		std::shared_ptr<IShader> _sunShaftsMaskShader;
+		std::shared_ptr<IShader> _sunShaftsBlurShader;
+		void RenderSunShafts();
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
 
@@ -299,6 +308,7 @@ namespace HexEngine
 		ITexture2D* _outlineGlowRT = nullptr;
 		IConstantBuffer* _outlineParamsBuffer = nullptr;
 		std::shared_ptr<IShader> _outlineSeedShader;
+		std::shared_ptr<IShader> _outlineSeedAnimatedShader;
 		std::shared_ptr<IShader> _outlineJfaShader;
 		std::shared_ptr<IShader> _outlineCompositeShader;
 		// Screen-space subsurface scattering (Jorge Jimenez separable). Run twice

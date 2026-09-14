@@ -635,7 +635,7 @@
 			emission = g_emissionMap.Sample(g_textureSampler, input.texcoord).rgb * g_material.emissiveColour.rgb * g_material.emissiveColour.a;
 		}
 
-		finalRGB += emission;
+		//finalRGB += emission;
 
 		// In the opaque pass we cut out non-opaque pixels; in transparency phase we preserve fractional alpha.
 		if (g_material.isInTransparencyPhase == 0)
@@ -739,7 +739,7 @@
 
 			// Sum: analytical sun (incl. ambient) + forward direct + Fresnel-weighted reflection.
 			const float3 specularReflectionTerm = F * reflection * reflectionWeight;
-			finalRGB = sunLit.rgb + forwardDirect + specularReflectionTerm + emission;
+			finalRGB = sunLit.rgb + forwardDirect + specularReflectionTerm;// + emission;
 		}
 
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
@@ -771,6 +771,15 @@
 		if (g_material.isInTransparencyPhase != 0)
 			finalRGB = ApplyTransparentAtmosphere(finalRGB, input.positionWS.xyz, input.position.xy, g_transFogVolume, g_transApVolume, g_transLinearSampler);
 
+		// Emissive REPLACE (matches the graph compiler and the deferred pass):
+		// lerp the surface toward the emission by an emissive mask rather than
+		// adding emission on top (which double-counted and washed out). The
+		// mask goes to pos.w; the deferred lerps the lit result toward this
+		// unlit diffuse by it. emission = g_emissionMap x emissiveColour.rgb x
+		// strength, computed above.
+		const float emissiveMask = saturate(dot(emission, float3(0.2126f, 0.7152f, 0.0722f)));
+		finalRGB = lerp(finalRGB, emission, emissiveMask);
+
 		output.diff = float4(finalRGB, outputAlpha);
 
 		// material output is: metallic, roughness, smoothness, reserved (0)
@@ -782,7 +791,7 @@
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 
-		output.pos = float4(input.positionWS.xyz, length(emission));
+		output.pos = float4(input.positionWS.xyz, emissiveMask);
 
 		output.velocity = velocity;
 

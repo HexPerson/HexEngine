@@ -15,6 +15,10 @@
 	// CPU before dispatch.
 
 	Texture2D<float4> g_beauty : register(t0);
+	// Sky mask: the gbuffer diffuse target - its .a == -1 marks sky pixels.
+	// May be unbound (env captures, old callers): a null SRV reads alpha 0,
+	// which classifies every pixel as scene = full weight.
+	Texture2D<float4> g_skyMask : register(t1);
 	RWStructuredBuffer<uint> g_histogramOut : register(u0);
 
 	cbuffer AutoExposureConstants : register(b5)
@@ -24,7 +28,7 @@
 		float g_minLogLuma;      // log-luminance floor (natural log units), e.g. -10
 		float g_logLumaRange;    // log-luminance span above floor, e.g. 20
 		uint  g_sampleCount;     // total samples this dispatch contributes (unused here)
-		uint  _pad;
+		uint  g_skyWeightFixed;  // sky-pixel weight, 1/256 fixed point (256 = full)
 	};
 
 	groupshared uint gs_bins[256];
@@ -48,7 +52,16 @@
 			const float normalised = saturate((log(lum) - g_minLogLuma) / max(g_logLumaRange, 1e-3f));
 			const uint bin = (uint)(normalised * 255.0f + 0.5f);
 
-			InterlockedAdd(gs_bins[bin], 1u);
+			// Weighted counts (1/256 fixed point). The HDR sky is several
+			// times brighter than lit ground and can be half the frame; at
+			// full weight it drags the metered mean up and the ground exposes
+			// too dark. Sky pixels (gbuffer diffuse .a == -1) count at the
+			// weight the CPU passes; the CPU CDF walk derives its total from
+			// the bins themselves, so scaled counts change nothing there.
+			const bool isSky = g_skyMask[pixel].a < -0.5f;
+			const uint weight = isSky ? g_skyWeightFixed : 256u;
+			if (weight > 0u)
+				InterlockedAdd(gs_bins[bin], weight);
 		}
 		GroupMemoryBarrierWithGroupSync();
 

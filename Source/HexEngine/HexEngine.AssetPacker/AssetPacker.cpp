@@ -182,6 +182,8 @@ int main(int argc, const char* argv[])
 				PackerFileEntry entry;
 				entry.relativePath = fs::relative(path, inputPath).wstring();
 				std::replace(entry.relativePath.begin(), entry.relativePath.end(), L'\\', L'/');
+				std::transform(entry.relativePath.begin(), entry.relativePath.end(), entry.relativePath.begin(), ::towlower);
+
 				entry.uncompressedSize = fileSize;
 
 				// AssetTocEntry::relativePath is wchar_t[128]; anything that

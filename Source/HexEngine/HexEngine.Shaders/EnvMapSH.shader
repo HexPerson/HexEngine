@@ -66,8 +66,12 @@
 				const float3 dir = OctDecodeDir(uv);
 
 				// Mirror row only - rows 1+ are already GGX-blurred and would
-				// double-filter the irradiance.
-				const float2 atlasUv = float2(uv.x, uv.y / ENVMAP_ROUGHNESS_ROWS);
+				// double-filter the irradiance. Sample through the same inset
+				// the atlas is written with, so this reads the radiance actually
+				// stored for `dir` (the octahedral content lives in the inner
+				// gutter-bordered region now, not the raw [0,1] square).
+				const float2 blk = OctUnitToBlock(uv);
+				const float2 atlasUv = float2(blk.x, blk.y / ENVMAP_ROUGHNESS_ROWS);
 				const float3 radiance = g_envAtlas.SampleLevel(g_linearSampler, atlasUv, 0).rgb;
 
 				float basis[9];

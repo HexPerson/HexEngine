@@ -110,7 +110,12 @@
 		const float rowIdx = floor(input.texcoord.y * rowsF);
 		const float2 innerUv = float2(input.texcoord.x, frac(input.texcoord.y * rowsF));
 
-		const float3 N = OctDecodeDir(innerUv);
+		// Decode through the same inset the sampler uses: gutter texels (the
+		// 1-texel ring at each block edge) map slightly outside [0,1], so
+		// OctDecodeDir folds them to the octahedrally-wrapped neighbour
+		// direction. That fills the border ring with the correct wrapped
+		// radiance and makes the +-axis seams filter cleanly at read time.
+		const float3 N = OctDecodeDir(OctBlockToUnit(innerUv));
 		const float roughness = rowIdx / (rowsF - 1.0f);
 
 		// TEMPORAL ACCUMULATION: the C++ side draws this quad with src-alpha

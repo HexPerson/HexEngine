@@ -610,6 +610,16 @@ namespace HexEngine
 		return _projectionMatrixPrev;
 	}
 
+	math::Matrix Camera::GetViewProjectionMatrix() const
+	{
+		return _viewMatrix * _projectionMatrix;
+	}
+
+	math::Matrix Camera::GetViewProjectionMatrixPrev() const
+	{
+		return _viewMatrixPrev * _projectionMatrixPrev;
+	}
+
 	bool Camera::IsVisibleInFrustum(const dx::BoundingBox& aabb)
 	{
 		return _frustum.Contains(aabb) != 0;// _frustum.Intersects(aabb);// || _frustum.Contains(aabb) != 0;

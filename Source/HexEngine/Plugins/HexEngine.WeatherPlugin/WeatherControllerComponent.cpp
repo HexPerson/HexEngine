@@ -224,6 +224,9 @@ namespace HexEngine::Weather
 				NearlyEqualFloat(a.cloudViewAbsorption, b.cloudViewAbsorption) &&
 				NearlyEqualFloat(a.cloudShadowStrength, b.cloudShadowStrength) &&
 				NearlyEqualFloat(a.cloudAnimationSpeed, b.cloudAnimationSpeed) &&
+				NearlyEqualFloat(a.cloudType, b.cloudType) &&
+				NearlyEqualFloat(a.cirrusAmount, b.cirrusAmount) &&
+				NearlyEqualFloat(a.cirrusType, b.cirrusType) &&
 				NearlyEqualVec3(a.windDirection, b.windDirection) &&
 				NearlyEqualFloat(a.windSpeed, b.windSpeed) &&
 				NearlyEqualFloat(a.precipitationIntensity, b.precipitationIntensity) &&
@@ -442,6 +445,7 @@ namespace HexEngine::Weather
 			"r_fogHeightPivot", "r_fogSkyTintInfluence",
 			"r_cloudDensity", "r_cloudCoverage", "r_cloudErosion", "r_cloudAmbientStrength",
 			"r_cloudViewAbsorption", "r_cloudShadowStrength", "r_cloudAnimationSpeed",
+			"r_cloudType", "r_cloudCirrusAmount", "r_cloudCirrusType",
 			"r_cloudWindSpeed",
 		};
 	}
@@ -886,6 +890,9 @@ namespace HexEngine::Weather
 		SetNamedHVarFloat("r_cloudViewAbsorption", state.cloudViewAbsorption);
 		SetNamedHVarFloat("r_cloudShadowStrength", state.cloudShadowStrength);
 		SetNamedHVarFloat("r_cloudAnimationSpeed", state.cloudAnimationSpeed);
+		SetNamedHVarFloat("r_cloudType", state.cloudType);
+		SetNamedHVarFloat("r_cloudCirrusAmount", state.cirrusAmount);
+		SetNamedHVarFloat("r_cloudCirrusType", state.cirrusType);
 		SetNamedHVarVector3("r_cloudWindDirection", state.windDirection);
 		SetNamedHVarFloat("r_cloudWindSpeed", state.windSpeed);
 

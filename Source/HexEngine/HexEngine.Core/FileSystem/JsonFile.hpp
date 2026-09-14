@@ -4,6 +4,7 @@
 #include "DiskFile.hpp"
 #include "../Physics/IRigidBody.hpp"
 #include "../Graphics/RenderStructs.hpp"
+#include "../Audio/SoundEffect.hpp"
 
 namespace HexEngine
 {
@@ -99,6 +100,13 @@ namespace HexEngine
 		json& Serialize(json& container, const std::string& key, const IRigidBody::ColliderData::Sphere& value)
 		{
 			Serialize(container[key], "radius", value.radius);
+			return container;
+		}
+
+		template <>
+		json& Serialize(json& container, const std::string& key, const std::shared_ptr<SoundEffect>& value)
+		{
+			container[key] = value->GetFileSystemPath();
 			return container;
 		}
 
@@ -254,6 +262,18 @@ namespace HexEngine
 		json& Deserialize(json& container, const std::string& key, IRigidBody::ColliderData::Sphere& value)
 		{
 			Deserialize(container[key], "radius", value.radius);
+			return container;
+		}
+
+		template <>
+		json& Deserialize(json& container, const std::string& key, std::shared_ptr<SoundEffect>& value)
+		{
+			if (container.find(key) != container.end())
+			{
+				std::wstring path;
+				container[key].get_to<std::wstring>(path);
+				value = SoundEffect::Create(path);
+			}
 			return container;
 		}
 

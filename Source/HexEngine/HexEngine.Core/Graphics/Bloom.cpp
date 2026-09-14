@@ -29,6 +29,8 @@ namespace HexEngine
 		};
 	}
 
+	HVar r_bloomTemporal("r_bloomTemporal", "Bloom chain temporal EMA keep factor (0 = off); stabilises flicker from thin bright features", 0.6f, 0.0f, 0.95f);
+
 	void Bloom::Create(int32_t width, int32_t height)
 	{
 		// Chain: half res down to a floor of ~16px on the short side, max 6
@@ -55,6 +57,25 @@ namespace HexEngine
 			h = std::max(1, h / 2);
 		}
 
+		if (!_chain.empty())
+		{
+			_bloomHistory = g_pEnv->_graphicsDevice->CreateTexture2D(
+				_chain[0]->GetWidth(), _chain[0]->GetHeight(),
+				DXGI_FORMAT_R16G16B16A16_FLOAT,
+				1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				0, 1, 0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_TEXTURE2D,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE2D);
+			if (_bloomHistory)
+				_bloomHistory->SetDebugName("BloomHistory");
+		}
+		_bloomHistoryValid = false;
+
+		_temporalShader = IShader::Create("EngineData.Shaders/BloomTemporal.hcs");
 		_downsampleShader = IShader::Create("EngineData.Shaders/BloomDownsample.hcs");
 		_upsampleShader = IShader::Create("EngineData.Shaders/BloomUpsample.hcs");
 		_compositeShader = IShader::Create("EngineData.Shaders/BloomComposite.hcs");
@@ -76,6 +97,9 @@ namespace HexEngine
 
 	void Bloom::Destroy()
 	{
+		SAFE_DELETE(_bloomHistory);
+		_bloomHistoryValid = false;
+		_temporalShader = nullptr;
 		for (auto* level : _chain)
 		{
 			SAFE_DELETE(level);
@@ -148,11 +172,51 @@ namespace HexEngine
 		}
 		graphics->SetBlendState(BlendState::Opaque);
 
+		// --- Temporal EMA of the accumulated chain (flicker stabiliser).
+		// history = lerp(history, chain, 1-keep) via constant-alpha
+		// Transparency blending - no second read needed. TAA leaves residual
+		// shimmer on thin ultra-bright features; the bloom threshold and the
+		// flare knee turn that shimmer into intermittent pops at grazing
+		// angles. Bloom is a low-frequency veil, so the EMA latency is
+		// invisible while the flicker averages away.
+		ITexture2D* compositeChain = _chain[0];
+		const float temporalKeep = std::clamp(r_bloomTemporal._val.f32, 0.0f, 0.95f);
+		auto temporalStage = _temporalShader ? _temporalShader->GetShaderStage(ShaderStage::PixelShader) : nullptr;
+		if (temporalKeep > 0.001f && _bloomHistory != nullptr && temporalStage != nullptr &&
+			_bloomHistory->GetWidth() == _chain[0]->GetWidth() &&
+			_bloomHistory->GetHeight() == _chain[0]->GetHeight())
+		{
+			if (!_bloomHistoryValid)
+			{
+				_chain[0]->CopyTo(_bloomHistory);
+				_bloomHistoryValid = true;
+			}
+			else
+			{
+				constants.pass = math::Vector4(
+					1.0f / (float)std::max(1, _chain[0]->GetWidth()),
+					1.0f / (float)std::max(1, _chain[0]->GetHeight()),
+					1.0f - temporalKeep, 0.0f);
+				uploadConstants();
+				graphics->SetBlendState(BlendState::Transparency);
+				graphics->SetRenderTarget(_bloomHistory);
+				graphics->SetViewport(Viewport(0.0f, 0.0f,
+					(float)_bloomHistory->GetWidth(), (float)_bloomHistory->GetHeight()));
+				renderer->FullScreenTexturedQuad(_chain[0], _temporalShader.get());
+				graphics->SetBlendState(BlendState::Opaque);
+			}
+			compositeChain = _bloomHistory;
+		}
+		else
+		{
+			_bloomHistoryValid = false;
+		}
+
 		// --- Composite: scene + normalised chain top -> scratch -> scene.
 		// (Can't sample and write sceneHdr in one draw - hazard check.)
 		constants.pass = math::Vector4(
-			1.0f / (float)std::max(1, _chain[0]->GetWidth()),
-			1.0f / (float)std::max(1, _chain[0]->GetHeight()),
+			1.0f / (float)std::max(1, compositeChain->GetWidth()),
+			1.0f / (float)std::max(1, compositeChain->GetHeight()),
 			0.0f, 0.0f);
 		constants.pass2 = math::Vector4(1.0f / (float)levelCount, 0.0f, 0.0f, 0.0f);
 		uploadConstants();
@@ -160,7 +224,7 @@ namespace HexEngine
 		graphics->SetRenderTarget(compositeScratch);
 		graphics->SetViewport(*bbvp.Get11());
 		graphics->SetTexture2D(0, sceneHdr);
-		graphics->SetTexture2D(1, _chain[0]);
+		graphics->SetTexture2D(1, compositeChain);
 		renderer->FullScreenTexturedQuad(nullptr, _compositeShader.get());
 
 		compositeScratch->CopyTo(sceneHdr);

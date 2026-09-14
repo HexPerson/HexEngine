@@ -198,7 +198,11 @@ namespace HexEngine
 		float saturation;
 
 		math::Vector3 colourFilter;
-		float colour_pad;
+		// Instant display exposure: r_exposure x the UNSMOOTHED auto-exposure
+		// target. Bloom judges its threshold/scatter/clamp with this so camera
+		// movement (adaptation lag) cannot make bloom overshoot. Same layout
+		// slot as the old colour_pad.
+		float exposureInstant;
 	};
 
 	/** @brief Weather surface/material parameters uploaded per frame for weather-aware shaders. */
