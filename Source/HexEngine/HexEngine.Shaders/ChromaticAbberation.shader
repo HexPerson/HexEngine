@@ -45,6 +45,13 @@
 
 		float2 direction = (input.texcoord.xy - focalPoint);
 
+		// P4.8: square the radial falloff. Linear falloff fringed everything
+		// off-centre - real lens CA is negligible in the middle third of the
+		// frame and grows toward the corners. |d| at the corner is ~0.7, so
+		// the 1.43 factor keeps the corner strength unchanged while the
+		// centre goes clean.
+		direction *= length(direction) * 1.43f;
+
 		float4 colour = c0;
 
 		colour.r = shaderTexture.Sample(PointSampler, input.texcoord + (direction * redOffset * g_chromaticAbberationAmmount)).r;

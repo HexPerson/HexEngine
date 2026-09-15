@@ -28,6 +28,7 @@ namespace HexEditor
 
 		void HandleComponentPropertyEdit(HexEngine::Entity* entity, const json& beforeComponents, const json& afterComponents);
 		void HandleTransformPositionEdit(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
+		void HandleTransformRotationEdit(HexEngine::Entity* entity, const math::Quaternion& before, const math::Quaternion& after);
 		void HandleTransformScaleEdit(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
 		void HandleStaticMeshMaterialEdit(HexEngine::Entity* entity, const fs::path& before, const fs::path& after);
 

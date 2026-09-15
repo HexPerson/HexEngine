@@ -14,7 +14,14 @@ namespace HexEngine
 	class ShadowMap
 	{
 	public:
-		ShadowMap(uint32_t width, uint32_t height);
+		// needsColourTarget allocates a paired R32_FLOAT colour RT alongside the depth map
+		// and makes the geometry pass write NDC.z into it. Only POINT lights need this: the
+		// volumetric scattering path copies their six faces into a TextureCubeArray and
+		// needs a plain (non-typeless, non-DSV) source to copy from. Directional cascades
+		// and spot maps are sampled through the depth SRV only, so they leave it off - at
+		// the sun's 8192 square cascades the colour copy was ~268 MB each, over a gigabyte
+		// of VRAM written every frame and never read.
+		ShadowMap(uint32_t width, uint32_t height, bool needsColourTarget = false);
 
 		~ShadowMap();
 
@@ -40,9 +47,9 @@ namespace HexEngine
 		ITexture2D* _depthMap = nullptr;
 		//TAA _taa;
 
-		// Colour render target paired with _depthMap. Originally a debug-only visualisation
-		// surface, now always allocated because SetRenderTarget()/RenderDebugTargets() use it
-		// in all configurations.
+		// Colour render target paired with _depthMap - null unless _needsColourTarget.
+		// See the constructor comment for who actually needs it.
 		ITexture2D* _depthMapRT = nullptr;
+		bool _needsColourTarget = false;
 	};
 }

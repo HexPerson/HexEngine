@@ -71,9 +71,15 @@
 
 		// Bail early for non-SSS pixels — most of the scene goes here, so the cost is
 		// dominated by the single sample above plus this branch.
+		//
+		// Must test for MATERIAL_MODEL_SSS *exactly*. A `modelId < 0.5f` reject also let
+		// CLEARCOAT(2)/ANISOTROPIC(3)/SHEEN(4) through, so any of those surfaces with a
+		// non-zero modelParams.x got skin-blurred and warm-tinted by the fallback scatter
+		// colour below. Global.shader isn't included here, hence the literal.
+		const float kMaterialModelSSS = 1.0f;
 		const float modelId = ModelIdChannelToModel(features.r);
 		const float mask = features.g;
-		if (modelId < 0.5f || mask <= 0.001f)
+		if (abs(modelId - kMaterialModelSSS) > 0.5f || mask <= 0.001f)
 		{
 			return centreBeauty;
 		}

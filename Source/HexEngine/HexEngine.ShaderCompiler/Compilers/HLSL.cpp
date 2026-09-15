@@ -195,6 +195,20 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 	if (!ReadShader(filePath, shaderData, out.inputLayout, out.requirements, lineOffsets))
 		return false;
 
+	// Material-graph shaders are code-generated (MaterialGraphCompiler names them
+	// "<material>_graph_<hash>_<hash>.hcs" and writes them under a "Generated"
+	// folder). Their shared template (branchy weather-function includes plus the
+	// clip() cutout pattern) is miscompiled by FXC under ANY optimisation level
+	// (tested L3 and L1) into DXBC that discards every pixel - meshes render
+	// invisible while their shadows, which use a different non-generated shader,
+	// render fine. Skip optimisation for these specifically; hand-written engine
+	// shaders are unaffected and keep full optimisation so release perf stands.
+	const std::string filePathStr = filePath.generic_string();
+	const bool isGeneratedGraphShader =
+		filePathStr.find("_graph_") != std::string::npos ||
+		filePathStr.find("/Generated/") != std::string::npos ||
+		filePathStr.find("Generated/") != std::string::npos;
+
 	auto& dxc = Dxc();
 
 	// Track whether any stage actually produced bytecode. Pure-include shaders
@@ -232,7 +246,13 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 #ifdef _DEBUG
 				D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION,
 #else
-				D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+				// See isGeneratedGraphShader above: generated graph shaders are
+				// miscompiled by FXC at every optimisation level, so skip
+				// optimisation for them (correctness) while keeping LEVEL3 for
+				// hand-written engine shaders (perf).
+				isGeneratedGraphShader
+					? D3DCOMPILE_SKIP_OPTIMIZATION
+					: (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3),
 #endif
 				0,
 				&pCode,
@@ -322,7 +342,9 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			args.push_back(L"-Zi"); // embed debug info
 			args.push_back(L"-Od"); // disable optimisations
 #else
-			args.push_back(L"-O3");
+			// Same split as the FXC path: skip optimisation for generated graph
+			// shaders, full -O3 for hand-written engine shaders.
+			args.push_back(isGeneratedGraphShader ? L"-Od" : L"-O3");
 #endif
 
 			DxcBuffer srcBuf = {};

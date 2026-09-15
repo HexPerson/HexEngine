@@ -1,7 +1,14 @@
 "Requirements"
 {
-	GBuffer
-	Beauty
+	// EMPTY on purpose (O1 modernisation). The legacy flags (GBuffer, Beauty)
+	// made Scene::RenderInstance bind gbuffer t0-t4 + beauty t5 via the
+	// implicit slot counter, pushing the material textures up to t6..t13 -
+	// colliding with the modern transparent-pass binds (scene colour t10,
+	// gbuffer normal t12 / position t13, sky atlas t14, sun cascades t15+,
+	// SceneRenderer::RenderTransparent ~:5259-5309). With no requirements the
+	// implicit counter starts at 0: material textures land at the STANDARD
+	// t0..t7 slots (same as Default.shader) and the pass binds are read
+	// directly at their explicit registers below.
 }
 "InputLayout"
 {
@@ -10,6 +17,17 @@
 "VertexShaderIncludes"
 {
 	MeshCommon
+	WaterCommon
+}
+"HullShaderIncludes"
+{
+	MeshCommon
+	WaterCommon
+}
+"DomainShaderIncludes"
+{
+	MeshCommon
+	WaterCommon
 }
 "PixelShaderIncludes"
 {
@@ -19,395 +37,255 @@
 	Atmosphere
 	AtmospherePhysical
 	PBRutils
+	EnvMapCommon
 }
 "GlobalIncludes"
 {
 	Global
 }
-"Global"
-{
-	
-
-	float GerstnerWaveHeight(float4 wave, float3 p)
-	{
-		float steepness = wave.z / WaveSizeMultiplier;
-		float wavelength = wave.w / WaveSizeMultiplier;
-		float k = 2 * 3.14159f / wavelength;
-		float c = sqrt(9.8 / k);
-		float2 d = normalize(wave.xy);
-		float f = k * (dot(d, p.xz) - c * g_time * 4.2f);
-
-		float a = steepness / k;		
-
-		return a * sin(f);
-	}
-}
 "VertexShader"
 {
-	//static const float _Wavelength = 1.0f;
-	//static const float _Amplitude = 0.001f;
-
-	
-
-#define ENABLE_WAVES 1
-
-	
-float3 GerstnerWave(
-		float4 wave, float3 p, inout float3 tangent, inout float3 binormal
-	) {
-		float steepness = wave.z / WaveSizeMultiplier;
-		float wavelength = wave.w / WaveSizeMultiplier;
-		float k = 2 * 3.14159f / wavelength;
-		float c = sqrt(9.8 / k);
-		float2 d = normalize(wave.xy);
-		float f = k * (dot(d, p.xz) - c * g_time * 4.2f);
-
-		//f = RoundDown(f);
-
-		float a = steepness / k;
-
-		//p.x += d.x * (a * cos(f));
-		//p.y = a * sin(f);
-		//p.z += d.y * (a * cos(f));
-
-		tangent += float3(
-			-d.x * d.x * (steepness * sin(f)),
-			d.x * (steepness * cos(f)),
-			-d.x * d.y * (steepness * sin(f))
-			);
-		binormal += float3(
-			-d.x * d.y * (steepness * sin(f)),
-			d.y * (steepness * cos(f)),
-			-d.y * d.y * (steepness * sin(f))
-			);
-		// lowpoly:
-		/*return float3(
-			0.0f,
-			a * sin(f),
-			0.0f
-			);*/
-
-		return float3(
-			d.x * (a * cos(f)),
-			a * sin(f),
-			d.y * (a * cos(f))
-			);
-	}
-	
-
-	
-
-	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)
+	// Tessellation VS (O7): no waves, no projection - transform each
+	// control point to WORLD space and hand it on. The 17x17-vert sea
+	// tiles have ~8 m triangles; the wave shape now comes from the
+	// subdivided domain-shader evaluation instead of being carried by the
+	// coarse grid.
+	WaterCP ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)
 	{
-		MeshPixelInput output = (MeshPixelInput)0;
-
+		WaterCP o;
 		input.position.w = 1.0f;
 
-		//float time = g_time;// *10.0f;
-		//const float waveScale = 0.6f;
+		o.worldPos  = mul(input.position, instance.world).xyz;
+		o.worldPrev = mul(input.position, instance.worldPrev).xyz;
 
-		//float k = 2 * (3.14159) / _Wavelength;
-		//float f = k * ((input.position.x + instance.worldPos.x) + time);
+		// Bump advection via the CPU-INTEGRATED wind-scroll phase
+		// (g_timeParams2.zw) - the stateless dir x g_time x rate form slews
+		// during weather transitions; an integral cannot (see O5).
+		o.texcoord = (input.texcoord - g_timeParams2.zw) * 1.4f;
+		o.instanceID = instanceID + entityId;
+		return o;
+	}
+}
+"HullShader"
+{
+	// Distance LOD from the EDGE MIDPOINT in world space: a shared tile
+	// edge computes identical factors on both sides regardless of which
+	// tile draws it - that agreement is what keeps the 92-tile sea
+	// watertight while it animates. Factor 16 over ~8 m triangles = ~0.5 m
+	// segments near the camera, collapsing to the raw grid by ~165 m.
+	float WaterTessFactor(float3 worldMid)
+	{
+		const float d = distance(worldMid, g_eyePos.xyz);
+		return max(1.0f, lerp(16.0f, 1.0f, saturate((d - 15.0f) / 150.0f)));
+	}
 
-		//float dx = sin(input.position.x + instance.worldPos.x + time) * waveScale;
-		//float dz = cos(input.position.z + instance.worldPos.z + time) * waveScale;
+	WaterHSConst ConstantHS(InputPatch<WaterCP, 3> ip, uint pid : SV_PrimitiveID)
+	{
+		WaterHSConst o;
+		const float3 c0 = ip[0].worldPos;
+		const float3 c1 = ip[1].worldPos;
+		const float3 c2 = ip[2].worldPos;
+		// SV_TessFactor[i] governs the edge OPPOSITE control point i.
+		o.edges[0] = WaterTessFactor((c1 + c2) * 0.5f);
+		o.edges[1] = WaterTessFactor((c2 + c0) * 0.5f);
+		o.edges[2] = WaterTessFactor((c0 + c1) * 0.5f);
+		o.inside   = (o.edges[0] + o.edges[1] + o.edges[2]) / 3.0f;
+		return o;
+	}
 
-		//input.position.y += dx;
-		//input.position.y += dz;
+	[domain("tri")]
+	[partitioning("fractional_odd")]
+	[outputtopology("triangle_cw")]
+	[outputcontrolpoints(3)]
+	[patchconstantfunc("ConstantHS")]
+	WaterCP ShaderMain(InputPatch<WaterCP, 3> ip, uint i : SV_OutputControlPointID, uint pid : SV_PrimitiveID)
+	{
+		return ip[i];
+	}
+}
+"DomainShader"
+{
+	// Subdivided wave evaluation (O7): EvalOcean at the interpolated world
+	// position, at BOTH g_time (position/TBN/crest) and g_timePrev (motion
+	// vectors) - exactly what the pre-tess VS did per grid vertex, but at
+	// LOD'd density, so storm swell gets real shape and a broken
+	// silhouette instead of riding 8 m triangles. LOW-frequency waves only
+	// live here (the four-wave table); fine detail stays per-pixel bump -
+	// the snow lesson: displacement must not contain frequencies the tess
+	// density cannot represent.
+	[domain("tri")]
+	MeshPixelInput ShaderMain(WaterHSConst patchConst, float3 bary : SV_DomainLocation, const OutputPatch<WaterCP, 3> patch)
+	{
+		MeshPixelInput o = (MeshPixelInput)0;
 
-		float3 worldPos = instance.world[3].xyz;
+		const float3 gridPos  = patch[0].worldPos  * bary.x + patch[1].worldPos  * bary.y + patch[2].worldPos  * bary.z;
+		const float3 gridPrev = patch[0].worldPrev * bary.x + patch[1].worldPrev * bary.y + patch[2].worldPrev * bary.z;
+		const float2 uv       = patch[0].texcoord  * bary.x + patch[1].texcoord  * bary.y + patch[2].texcoord  * bary.z;
 
-		
+		float2 windDir;
+		float windAlign, ampScale;
+		OceanWindParams(g_weatherSurface.windDirectionAndSpeed, g_oceanConfig2.x,
+			windDir, windAlign, ampScale);
 
-		float3 gridPoint = input.position.xyz + worldPos;
+		float3 tangent, binormal;
+		float crest01;
+		const float3 p = EvalOcean(gridPos, g_time, windDir, windAlign, ampScale, tangent, binormal, crest01);
+		const float3 normal = normalize(cross(binormal, tangent));
 
-		float3 tangent = input.tangent;// float3(1, 0, 0); ;// float3(1, 0, 0);
-		float3 binormal = input.binormal;// float3(0, 0, 1); ;// float3(0, 0, 1);
-		float3 normal = input.normal;
-		float3 p = gridPoint;
+		// Storms foam harder: scale the crest factor the PS thresholds.
+		crest01 *= saturate(0.35f + ampScale);
 
-#if ENABLE_WAVES == 1
-		p += GerstnerWave(_WaveA, gridPoint, tangent, binormal);
-		p += GerstnerWave(_WaveB, gridPoint, tangent, binormal);
-		p += GerstnerWave(_WaveC, gridPoint, tangent, binormal);
-		p += GerstnerWave(_WaveD, gridPoint, tangent, binormal);
+		o.positionWS = float4(p, 1.0f);
+		o.position = mul(float4(p, 1.0f), g_viewProjectionMatrix);
 
-		
+		// Motion vectors: same evaluation at g_timePrev; the tiles are
+		// static, so the displacement delta is the whole velocity.
+		{
+			float3 tPrev, bPrev;
+			float cPrev;
+			const float3 pPrev = EvalOcean(gridPrev, g_timePrev, windDir, windAlign, ampScale, tPrev, bPrev, cPrev);
+			o.previousPositionUnjittered = mul(float4(pPrev, 1.0f), g_viewProjectionMatrixPrev);
+		}
+		o.currentPositionUnjittered = o.position;
 
-		tangent = normalize(tangent);
-		binormal = normalize(binormal);
+		// TAA jitter, matching the standard VS.
+		o.position.xy += g_jitterOffsets * o.position.w;
 
-		normal = normalize(cross(binormal, tangent));
-#endif
-		
-
-		input.position = float4(p.xyz - worldPos, 1.0f);
-
-		//input.position.y = RoundDown(input.position.y);// fmod(input.position.y, 100.0f);
-
-		input.normal = normal;
-		input.binormal = binormal;
-		input.tangent = tangent;
-
-		//input.position.y = _Amplitude * sin(f);
-		//input.position.x += _Amplitude * cos(f);
-
-		output.position = mul(input.position, instance.world);
-		output.positionWS = output.position;
-
-		output.position = mul(output.position, g_viewProjectionMatrix);
-
-		
-
-		input.texcoord.xy -= g_time * 0.03f;
-		output.texcoord = input.texcoord * 1.4;
-
-		/*float3 tangent = normalize(float3(
-			1 - k * _Amplitude * sin(f),
-			k * _Amplitude * cos(f),
-			0));*/
-
-		/*float3 tangent = normalize(float3(
-			0,
-			k * _Amplitude * cos(f),
-			1 - k * _Amplitude * sin(f)*/
-
-		//float3 normal = float3(-tangent.y, tangent.x, 0);
-
-		//input.tangent = tangent;
-		//input.binormal = normalize(cross(tangent, normal));
-
-		//input.normal = normal;// normalize(cross(input.tangent, input.binormal));
-
-		matrix normalMatrix = mul(instance.worldInverseTranspose, g_worldMatrix);
-
-		output.normal = mul(input.normal, (float3x3)normalMatrix);
-		output.normal = normalize(output.normal);
-
-		output.tangent = mul(input.tangent, (float3x3)normalMatrix);
-		output.tangent = normalize(output.tangent);
-
-		output.binormal = mul(input.binormal, (float3x3)normalMatrix);
-		output.binormal = normalize(output.binormal);
-
-		// input.tangent = normalize(float3(0.0f, dx, 1.0f));
-		//input.binormal = normalize(float3(1.0f, dz, 0.0f));
-
-		// Determine the viewing direction based on the position of the camera and the position of the vertex in the world.
-		output.viewDirection.xyz = g_eyePos.xyz - output.positionWS.xyz;
-
-		// Normalize the viewing direction vector.
-		output.viewDirection.xyz = normalize(output.viewDirection.xyz);
-
-		output.colour = instance.colour;
-
-		return output;
+		o.texcoord = uv;
+		o.normal = normal;
+		o.tangent = tangent;
+		o.binormal = binormal;
+		o.viewDirection = float4(normalize(g_eyePos.xyz - p), 0.0f);
+		// colour.x = crest factor for foam (O4).
+		o.colour = float4(crest01, 0.0f, 0.0f, 1.0f);
+		o.instanceID = patch[0].instanceID;
+		o.cullDistance = 1.0f;
+		return o;
 	}
 }
 "PixelShader"
 {
-	
-	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
-	//SHADOWMAPS_RESOURCE(4);
+	// Material textures at the STANDARD implicit slots (empty Requirements ->
+	// the counter starts at 0; same array order every material uses:
+	// Albedo/Normal/Roughness/Metallic/Height/Emission/Opacity/AO).
+	Texture2D g_albedoMap : register(t0);
+	Texture2D g_normalMap : register(t1);
 
-	Texture2D beautyTexture : register(t5);
+	// Transparent-pass binds (SceneRenderer::RenderTransparent ~:5259-5309;
+	// same registers DefaultPixel's transparency path reads).
+	// Scene colour: the pre-transparency opaque beauty snapshot.
+	Texture2D g_sceneColourTex : register(t10);
+	// Opaque gbuffer normal: xyz = world normal, w = view depth (-1 = sky).
+	Texture2D g_sceneNormalTex : register(t12);
+	// Opaque gbuffer position: xyz = world position.
+	Texture2D g_scenePositionTex : register(t13);
 
-	Texture2D shaderTexture : register(t6);
-	Texture2D normalMap : register(t7);
-	Texture2D specularMap : register(t8);
-	Texture2D noiseMap : register(t9);
-	Texture2D heightMap : register(t10);
-	Texture2D waterMask : register(t11);
+	// Prefiltered sky environment atlas - the same environment the deferred
+	// IBL and glass use, so the sea and every other surface agree about what
+	// the sky looks like (a storm sky reflects as overcast, not clear blue).
+	Texture2D g_iblSkyEnvFwd : register(t14);
+	// Per-fragment atmosphere (see TransparentAtmosphere.shader).
+	Texture3D g_transFogVolume : register(t24);
+	Texture3D g_transApVolume  : register(t21);
+	SamplerState g_transLinearSampler : register(s4);
+
+	// Sun cascade shadow maps - bound pass-wide for transparents at t15+
+	// (SceneRenderer::RenderTransparent), same slots DefaultPixel uses.
+	SHADOWMAPS_RESOURCE(15);
 
 	SamplerState g_TexSamplerAniso : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_TexSamplerPoint : register(s2);
 
-	bool IsInMaskedRegion(float2 screenPos)
+	// Inline screen-space reflection for water (O3) - the DefaultPixel
+	// transparency pattern (third copy; dedup across DefaultPixel /
+	// DefaultAnimated / here is a tracked follow-up). Replaces the legacy
+	// 24-step self-contained march this shader carried since before the SSR
+	// stack existed. Water-specific tuning: a wider thickness window (the
+	// reflecting surface is a DISPLACED wavy plane, so ray/depth
+	// disagreements up to a wave amplitude are normal, not misses).
+	bool TraceWaterSSR(float3 surfaceWorldPos, float3 reflectDirWorld,
+		out float3 reflectedColour, out float hitConfidence)
 	{
-		float4 mask = waterMask.Sample(g_TexSamplerPoint, screenPos);
+		reflectedColour = float3(0.0f, 0.0f, 0.0f);
+		hitConfidence = 0.0f;
 
-		// are we outside the masked water? just return the pixels
-		if (mask.r == 0.0f)
-			return false;
+		const int kMaxSteps = 48;
+		const float kStrideWorld = 0.12f;    // world-space step length, scaled by distance below
+		const float kThicknessWorld = 0.6f;  // wider than glass's 0.35 - see header comment
 
-		return true;
-	}
+		// Step length grows with distance from camera so distant rays don't take many steps.
+		const float distFromEye = length(g_eyePos.xyz - surfaceWorldPos);
+		const float strideWorld = kStrideWorld * max(0.5f, distFromEye * 0.08f);
 
-	float4 GetReflection(float3 eyeDir, float3 worldPos, float3 worldNormal, float4 originalColour, float currentDepth)
-	{
-		float3 rayStart = worldPos + worldNormal * 0.25f;
-		float3 rayDir = normalize(reflect(eyeDir, worldNormal));
+		// The acceptance window must scale WITH the stride: a fixed 0.6 m
+		// window under a ~1 m distant stride steps clean over thin geometry,
+		// so one pixel hits (dark cliff) and its neighbour misses (bright
+		// env) - the per-pixel speckle in distant reflections.
+		const float thickness = max(kThicknessWorld, strideWorld * 1.5f);
 
-		const int stepCount = 24;
-		const int refinementStepCount = 5;
-		const float minStepLen = 2.0f;
-		const float maxStepLen = 8.0f;
-		const float baseThickness = 2.0f;
-
-		float3 fragPos = rayStart;
-		float3 previousFragPos = fragPos;
-		float totalDistanceTravelled = 0.0f;
-		float previousDistanceTravelled = 0.0f;
-		float2 texCoord = 0.0f;
-		float actualDepth = currentDepth;
+		float3 rayPos = surfaceWorldPos + reflectDirWorld * (strideWorld * 0.5f);
 
 		[loop]
-		for (int i = 0; i < stepCount; ++i)
+		for (int step = 0; step < kMaxSteps; ++step)
 		{
-			const float marchFraction = (float)i / (float)(stepCount - 1);
-			const float stepLen = lerp(minStepLen, maxStepLen, marchFraction * marchFraction);
-			const float thickness = baseThickness + totalDistanceTravelled * 0.02f;
+			rayPos += reflectDirWorld * strideWorld;
 
-			previousFragPos = fragPos;
-			previousDistanceTravelled = totalDistanceTravelled;
-			fragPos += rayDir * stepLen;
-			totalDistanceTravelled += stepLen;
+			// Project the ray sample into clip / screen space.
+			const float4 clip = mul(float4(rayPos, 1.0f), g_viewProjectionMatrix);
+			if (clip.w <= 0.0f)
+				return false;
+			const float2 ndc = clip.xy / clip.w;
+			if (any(abs(ndc) > 1.0f))
+				return false;
 
-			float4 fragScr = float4(fragPos.xyz, 1.0f);
-			float4 fragView = mul(fragScr, g_viewMatrix);
-			float4 fragClip = mul(fragView, g_projectionMatrix);
-			fragClip.xyz /= fragClip.w;
+			const float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
 
-			float fragDepth = -fragView.z;
-			fragClip.xy = fragClip.xy * 0.5 + 0.5;
-			float2 fragTex = float2(fragClip.x, 1.0f - fragClip.y);
+			// Compare ray's view-space depth with the opaque scene at the same
+			// UV (normal.w carries view depth; -1/far = sky).
+			const float rayViewZ = -mul(float4(rayPos, 1.0f), g_viewMatrix).z;
+			const float sceneViewZ = g_sceneNormalTex.SampleLevel(g_TexSamplerPoint, uv, 0).w;
 
-			if (fragTex.x < 0.0f || fragTex.x > 1.0f || fragTex.y < 0.0f || fragTex.y > 1.0f)
-				return originalColour;
+			// Skip the sky / very far depth.
+			if (sceneViewZ <= 0.0f || sceneViewZ >= g_frustumDepths[3] * 0.999f)
+				continue;
 
-			actualDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, fragTex).w;
-			float fragHeight = GBUFFER_POSITION.Sample(g_TexSamplerPoint, fragTex).y;
-			bool isOnCorrectPlane = fragHeight >= rayStart.y;
-
-			if (g_eyePos.y <= 0.0f)
-				isOnCorrectPlane = fragHeight < rayStart.y;
-
-			if ((fragDepth >= actualDepth - thickness) && isOnCorrectPlane && actualDepth > currentDepth)
+			const float dz = rayViewZ - sceneViewZ;
+			if (dz > 0.0f && dz < thickness)
 			{
-				float3 refineStart = previousFragPos;
-				float3 refineEnd = fragPos;
-				float refineStartDistance = previousDistanceTravelled;
-				float refineEndDistance = totalDistanceTravelled;
-
-				[loop]
-				for (int j = 0; j < refinementStepCount; ++j)
-				{
-					float3 candidatePos = lerp(refineStart, refineEnd, 0.5f);
-					float candidateDistance = lerp(refineStartDistance, refineEndDistance, 0.5f);
-					float candidateThickness = baseThickness + candidateDistance * 0.02f;
-
-					float4 candidateScr = float4(candidatePos.xyz, 1.0f);
-					float4 candidateView = mul(candidateScr, g_viewMatrix);
-					float4 candidateClip = mul(candidateView, g_projectionMatrix);
-					candidateClip.xyz /= candidateClip.w;
-
-					float candidateDepth = -candidateView.z;
-					candidateClip.xy = candidateClip.xy * 0.5 + 0.5;
-					float2 candidateTex = float2(candidateClip.x, 1.0f - candidateClip.y);
-
-					if (candidateTex.x < 0.0f || candidateTex.x > 1.0f || candidateTex.y < 0.0f || candidateTex.y > 1.0f)
-					{
-						refineEnd = candidatePos;
-						refineEndDistance = candidateDistance;
-						continue;
-					}
-
-					float candidateActualDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, candidateTex).w;
-					float candidateHeight = GBUFFER_POSITION.Sample(g_TexSamplerPoint, candidateTex).y;
-					bool candidatePlane = candidateHeight >= rayStart.y;
-					if (g_eyePos.y <= 0.0f)
-						candidatePlane = candidateHeight < rayStart.y;
-
-					if ((candidateDepth >= candidateActualDepth - candidateThickness) && candidatePlane && candidateActualDepth > currentDepth)
-					{
-						refineEnd = candidatePos;
-						refineEndDistance = candidateDistance;
-						fragTex = candidateTex;
-						actualDepth = candidateActualDepth;
-					}
-					else
-					{
-						refineStart = candidatePos;
-						refineStartDistance = candidateDistance;
-					}
-				}
-
-				return beautyTexture.Sample(g_TexSamplerPoint, fragTex);
+				reflectedColour = g_sceneColourTex.SampleLevel(g_TexSamplerPoint, uv, 0).rgb;
+				// Fade out near screen edges to hide the missing-data band.
+				const float2 edgeFade = smoothstep(0.0f, 0.1f, uv) * smoothstep(0.0f, 0.1f, 1.0f - uv);
+				hitConfidence = saturate(edgeFade.x * edgeFade.y);
+				return true;
 			}
-
-			texCoord = fragTex;
 		}
-
-		if (actualDepth > currentDepth)
-			return beautyTexture.Sample(g_TexSamplerPoint, texCoord);
-
-		return originalColour;
+		return false;
 	}
 
-	float4 GetWorldColour(float3 eyeDir, inout float2 screenPos, float3 worldNormal, float4 originalWorldDiffuse, inout bool isInMaskedRegion, float3 pixelPos, float pixelDepth)
+	// Screen-space refraction: offset the scene-colour lookup along the
+	// refracted direction, depth-rejected so geometry NEARER than the water
+	// surface never smears into the refraction. Rebuilt properly in O4.
+	float4 GetWorldColour(float3 eyeDir, inout float2 screenPos, float3 worldNormal, float4 originalWorldDiffuse, float3 pixelPos, float pixelDepth, float offsetScale)
 	{
-		//return float4(0,1,0,1);
-		//return originalWorldDiffuse;
-
-		isInMaskedRegion = true;
-
-		/*if (IsInMaskedRegion(screenPos) == false)
-		{
-			isInMaskedRegion = false;
-			return originalWorldDiffuse;
-		}*/
-
-		float eta = 0.75f;// 0.5f;// -eyeDir.y - worldNormal.y;
-
-		//if (g_eyePos.y <= 0.0f)
-		//	eta = 1.33f;
+		float eta = 0.75f;
 
 		float2 origScreenPos = screenPos;
 
 		float3 refractedNormal = refract(eyeDir, -(worldNormal), eta);
 
-#if 0
-		float3 rayStart = pixelPos;
-		const float stepLen = 0.1f;
-
-		rayStart += refractedNormal * stepLen;
-
-		float4 fragScr = float4(rayStart.xyz, 1.0f);
-
-		float4 fragView = mul(fragScr, g_viewMatrix);
-		float4 fragClip = mul(fragView, g_projectionMatrix);
-
-		fragClip.xyz /= fragClip.w;
-
-		fragClip.xy = fragClip.xy * 0.5 + 0.5; // is this needed?
-
-		float2 fragTex = float2(fragClip.x, 1.0f - fragClip.y);
-
-		if (fragTex.x < 0.0f || fragTex.x > 1.0f || fragTex.y < 0.0f || fragTex.y > 1.0f)
-		{
-			screenPos = origScreenPos;
-			return originalWorldDiffuse;
-		}
-
-		screenPos = float2(fragTex.x, fragTex.y);
-
-#else
-		// fire a ray into the world to get the ending position
-
-		// we must be inside it, calculate jitter based on the normal
-		float4 jitterNormal = float4(refractedNormal/*-worldNormal.xyz*/, 0.0f);
+		// Project the refracted DIRECTION and use it as a screen-space UV
+		// offset, SCALED by the water-column depth (offsetScale): centimetres
+		// of water over a shore stone barely displace it, a deep column bends
+		// hard. The unscaled version smeared the shoreline.
+		float4 jitterNormal = float4(refractedNormal, 0.0f);
 		jitterNormal = mul(jitterNormal, g_viewProjectionMatrix);
-		//jitterNormal = mul(jitterNormal, g_projectionMatrix);
 
 		const float jitterAmmount = 0.018f;
 
-		jitterNormal = jitterNormal * jitterAmmount;
+		jitterNormal = jitterNormal * (jitterAmmount * offsetScale);
 
-		//jitterNormal.xy = float2(jitterNormal.x / (float)g_screenWidth, jitterNormal.y / (float)g_screenHeight);
-
-		screenPos = /* saturate */(screenPos + jitterNormal.xy);
-#endif
+		screenPos = screenPos + jitterNormal.xy;
 
 		if (screenPos.x < 0.0f || screenPos.x > 1.0f || screenPos.y < 0.0f || screenPos.y > 1.0f)
 		{
@@ -415,91 +293,103 @@ float3 GerstnerWave(
 			return originalWorldDiffuse;
 		}
 
-		/*if (IsInMaskedRegion(screenPos) == false)
-		{
-			isInMaskedRegion = false;
-			return originalWorldDiffuse;
-		}*/
+		float fragDepth = g_sceneNormalTex.Sample(g_TexSamplerPoint, screenPos).w;
 
-		float fragDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, screenPos).w;
-
-		if(fragDepth < pixelDepth)
+		if (fragDepth < pixelDepth)
 		{
 			screenPos = origScreenPos;
 			return originalWorldDiffuse;
 		}
 
-		// resample the world at the jittered position
-		float4 jitterDiffuse = beautyTexture.Sample(g_TexSamplerPoint, screenPos);
+		// resample the scene at the refracted position
+		float4 jitterDiffuse = g_sceneColourTex.Sample(g_TexSamplerPoint, screenPos);
 		jitterDiffuse.a = 1.0f;
 
 		return jitterDiffuse;
 	}
 
-	float4 CalculateCaustics(float3 lightDir, float3 worldNormal, float3 worldPos, float pixelDepth, float4 originalColour)
+	// Tangent-space normal mapping with the CORRECT [0,1] -> [-1,1] unpack.
+	// The legacy version had the expansion commented out, so the raw texel
+	// fed the TBN mix and the resulting basis was biased toward +tangent
+	// +binormal - water bump normals have been mathematically wrong for
+	// years (visibly: lighting that never quite tracked the waves).
+	float3 ANM(float3 worldNormal, float3 tangent, float3 binormal, Texture2D normalTex, SamplerState samp, float2 texcoord, float strength)
 	{
-		float3 rayDir = refract(lightDir, worldNormal, 0.00001f);
-		float rayLength = 64.0f;
-
-		float3 rayEndPos = worldPos + rayDir * rayLength;
-
-		float4 dpethOfPixel = mul(float4(rayEndPos, 1.0f), g_viewMatrix);
-		//dpethOfPixel = mul(dpethOfPixel, g_projectionMatrix);
-
-		//float2 projectTexCoord;
-
-		//projectTexCoord.x = dpethOfPixel.x / dpethOfPixel.w / 2.0f + 0.5f;
-		//projectTexCoord.y = -dpethOfPixel.y / dpethOfPixel.w / 2.0f + 0.5f;
-
-		//if ((saturate(projectTexCoord.x) == projectTexCoord.x) && (saturate(projectTexCoord.y) == projectTexCoord.y))
-		float newPixelDepth = -dpethOfPixel.z;// / dpethOfPixel.w;
-
-		// lookup depth
-		//float4 depth = GBUFFER_DEPTH.Sample(TextureSampler, projectTexCoord.xy);
-
-		if (newPixelDepth >= pixelDepth)
-			return float4(1, 0, 0, 1.0f);//return float4(originalColour.rgb * 0.05f, 1.0f);
-
-		return float4(0, 0, 0, 0.0f);
-	}
-
-	float3 ANM(float3 worldNormal, float3 tangent, float3 binormal, Texture2D normalMap, SamplerState samp, float2 texcoord, bool flipY = false, float bumMapMultiplier = 1.0f)
-	{
-		// Sample the pixel in the bump map.
-		float3 bumpMap = normalMap.Sample(samp, texcoord).xyz;
-
-		// flip the Y channel
-		//if(flipY)
-			//bumpMap.y = 1.0f - bumpMap.y;
+		float3 bumpMap = normalTex.Sample(samp, texcoord).xyz;
 
 		// Expand the range of the normal value from (0, +1) to (-1, +1).
-		//bumpMap = (bumpMap * 2.0f) - 1.0f;
+		bumpMap = (bumpMap * 2.0f) - 1.0f;
 
-		//bumpMap = bumpMap * float3(bumMapMultiplier, bumMapMultiplier, 1.0f);
+		// Strength scales the tangent-plane deflection only. NOTE (user-
+		// found): the years-broken unpack was accidentally ATTENUATING the
+		// map - raw [0,1] texels perturb at half amplitude around a constant
+		// bias - so fixing it unleashed the texture at full strength and the
+		// per-texel normal scatter shredded the SSR mirror image. The unpack
+		// is correct; the amplitude needed an explicit dial (and the
+		// reflection ray now uses a mostly-Gerstner normal besides).
+		bumpMap.xy *= strength;
 
-		// Calculate the normal from the data in the bump map.
-		float3 bumpNormal = (bumpMap.x * tangent * 1.0f) + (bumpMap.y * binormal * 1.0f) + (bumpMap.z * worldNormal);
-		//float3 bumpNormal = (bumpMap.x * tangent) + (bumpMap.y * binormal) + (bumpMap.z * worldNormal);
+		float3 bumpNormal =
+			(bumpMap.x * tangent) +
+			(bumpMap.y * binormal) +
+			(bumpMap.z * worldNormal);
 
-		// bumpNormal = normal + bumpMap.x * tangent + bumpMap.y * binormal;
-
-		// Normalize the resulting bump normal.
-		worldNormal = (bumpNormal);
-
-		return worldNormal;
+		return normalize(bumpNormal);
 	}
 
-	float4 ShaderMain(MeshPixelInput input) : SV_Target
+	// P4.4: the transparent pass binds the gbuffer velocity RT at slot 4
+	// (matching GBufferOut's SV_TARGET4, so the Default-family shaders need
+	// no change). Water was the one transparent-phase shader with a single
+	// SV_Target - its Gerstner motion computed in the DS never landed
+	// anywhere, which is why waves ghosted under TAA and can't motion-blur.
+	#include "TransparentAtmosphere.shader"
+
+	struct WaterOut
 	{
-		//return float4(1,0,0,1);
-		float4 albedo = shaderTexture.Sample(g_TexSamplerAniso, input.texcoord) * input.colour;
-		//return albedo;
-		//float4 color = albedo * ambientColor;
+		float4 colour   : SV_Target0;
+		float2 velocity : SV_TARGET4;
+	};
 
-		float3 reflection;
-		float4 specular = float4(0,0,0,1);
+	// Cellular (Worley F1) helper for the foam lace. Real foam is not a
+	// smooth field - it is a WEB: dark bubble holes ringed by bright
+	// filaments. F1 distance to animated feature points gives exactly that
+	// topology; the smoothstep band in the caller turns cell interiors into
+	// holes and cell borders into lace.
+	float2 FoamHash22(float2 p)
+	{
+		float3 q = frac(float3(p.xyx) * float3(0.1031f, 0.1030f, 0.0973f));
+		q += dot(q, q.yzx + 33.33f);
+		return frac((q.xx + q.yz) * q.zy);
+	}
 
-		float3 eyeVector = normalize(g_eyePos.xyz - input.positionWS.xyz);// normalize(g_eyePos.xyz - input.positionWS.xyz);
+	float FoamWorleyF1(float2 p, float t)
+	{
+		const float2 cell = floor(p);
+		const float2 f = frac(p);
+		float f1 = 8.0f;
+		[unroll]
+		for (int y = -1; y <= 1; ++y)
+		{
+			[unroll]
+			for (int x = -1; x <= 1; ++x)
+			{
+				const float2 o = FoamHash22(cell + float2((float)x, (float)y));
+				// Feature points orbit their cell at a fixed slow rate -
+				// organic churn with bounded motion (no teleporting when
+				// parameters change; see the wind/phase rule in the VS).
+				const float2 wobble = 0.5f.xx + 0.38f * sin(t + 6.2831853f * o);
+				const float2 d = float2((float)x, (float)y) + wobble - f;
+				f1 = min(f1, dot(d, d));
+			}
+		}
+		return sqrt(f1);
+	}
+
+	WaterOut ShaderMain(MeshPixelInput input)
+	{
+		float4 specular = float4(0, 0, 0, 1);
+
+		float3 eyeVector = normalize(g_eyePos.xyz - input.positionWS.xyz);
 		const float cameraDistance = length(input.positionWS.xyz - g_eyePos.xyz);
 		const float nearQualityDistance = g_oceanConfig.reflectionNearDistance;
 		const float midQualityDistance = lerp(g_oceanConfig.reflectionNearDistance, g_oceanConfig.reflectionFarDistance, 0.6f);
@@ -507,103 +397,99 @@ float3 GerstnerWave(
 		const float refractionQualityWeight = 1.0f - saturate((cameraDistance - nearQualityDistance) / max(midQualityDistance - nearQualityDistance, 1.0f));
 		const float ssrQualityWeight = 1.0f - saturate((cameraDistance - nearQualityDistance) / max(farQualityDistance - nearQualityDistance, 1.0f));
 		const float distantNormalFade = ssrQualityWeight;
-		//float3 lightVector = normalize(input.positionWS.xyz - g_lightPosition.xyz);
+
 		float3 worldNormal = normalize(input.normal.xyz);
 		float3 refractionNormal = -worldNormal;
 
-		if (g_eyePos.y <= 0.0f)
-		{
-			//refractionNormal *= -1.0f;
-			//worldNormal *= -1.0f;
-
-			//worldNormal.y *= -1.0f;
-			//refractionNormal.y *= -1.0f;
-		}
-
-		//return float4(input.normal,1);
-
 		float3 originalWorldNormal = worldNormal;
-		
+
 		float3 lightDir = -normalize(g_lightDirection.xyz);
 
 		float4 worldViewPosition = mul(input.positionWS, g_viewMatrix);
 		float pixelDepth = -worldViewPosition.z;
 
-		float2 screenPos = float2(input.position.x / (float)g_screenWidth /** 2*/, input.position.y / (float)g_screenHeight /** 2*/);		
+		float2 screenPos = float2(input.position.x / (float)g_screenWidth, input.position.y / (float)g_screenHeight);
 
-		
-
-		// get the original diffuse colour
-		float4 worldDiffuse = beautyTexture.Sample(g_TexSamplerPoint, screenPos);
+		// The pre-transparency opaque scene colour at this pixel.
+		float4 worldDiffuse = g_sceneColourTex.Sample(g_TexSamplerPoint, screenPos);
 		worldDiffuse.a = 1.0f;
 
 		// make a copy, we might need this again
 		float4 originalWorldDiffuse = worldDiffuse;
 
-		// BUMP MAPPING
+		// BUMP MAPPING - fades out with distance (far water keeps the smooth
+		// Gerstner normal; per-texel detail at the horizon just aliases).
 		if (distantNormalFade > 0.001f)
 		{
-			float3 bumpNormal = normalize(ANM(worldNormal, input.tangent, input.binormal, normalMap, g_TexSamplerAniso, input.texcoord, false, 1.0f));
+			// r_oceanBumpStrength: live normal-map deflection dial.
+			float3 bumpNormal = ANM(worldNormal, input.tangent, input.binormal, g_normalMap, g_TexSamplerAniso, input.texcoord, g_oceanConfig2.w);
 			bumpNormal = normalize(lerp(input.normal.xyz, bumpNormal, distantNormalFade));
 
 			refractionNormal = bumpNormal;
-			worldNormal = normalize(bumpNormal);
+			worldNormal = bumpNormal;
 		}
 
-		
+		// Rain ripples (O6): impact rings dimple the surface while
+		// precipitation falls. Gated out under snow (blizzard flakes don't
+		// ring like raindrops). No shelter sampling - the shelter map isn't
+		// bound in the transparent pass (Mesh.shader has the same
+		// constraint), and open water is rarely sheltered.
+		const float rainAmount = saturate(g_weatherSurface.precipitationIntensity)
+			* saturate(1.0f - g_weatherSurface.snowCoverage * 3.0f);
+		if (rainAmount > 0.001f)
+		{
+			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time, rainAmount);
+			refractionNormal = worldNormal;
+		}
 
-		//return float4(worldNormal.xyz, 1.0f);
+		// Sea state for SHADING (the VS already couples wave geometry to this).
+		// A storm sea must stay legible through CONTRAST, not mirror
+		// reflection: in a blizzard the env atlas and the fog converge to the
+		// same grey, so reflected-minus-body goes to ~zero and untreated water
+		// simply vanishes into the weather (user screenshot). Wind therefore
+		// drives: darker slate body, boosted whitecaps, rougher (softer,
+		// broader) glints and blurrier env reflection.
+		const float seaState = saturate(g_weatherSurface.windDirectionAndSpeed.w / 30.0f);
 
-		float4 normalAndDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, screenPos);
+		float4 normalAndDepth = g_sceneNormalTex.Sample(g_TexSamplerPoint, screenPos);
 		float worldDepth = normalAndDepth.w;
 
-		bool isInMaskedRegion = false;
-
 		if (refractionQualityWeight > 0.001f && (worldDepth >= pixelDepth || worldDepth == -1.0f))
-		{			
-			float4 refractedWorldDiffuse = GetWorldColour(-eyeVector, screenPos, /* worldNormal */refractionNormal, worldDiffuse, isInMaskedRegion, input.positionWS.xyz, pixelDepth);
+		{
+			// Pre-refraction column estimate just for the offset scale (the
+			// accurate metre-based column is computed below at the final UV).
+			const float preColumn = (worldDepth == -1.0f) ? 100.0f : (worldDepth - pixelDepth);
+			const float refractOffsetScale = saturate(preColumn * 0.6f);
+
+			float4 refractedWorldDiffuse = GetWorldColour(-eyeVector, screenPos, refractionNormal, worldDiffuse, input.positionWS.xyz, pixelDepth, refractOffsetScale);
 			worldDiffuse = lerp(originalWorldDiffuse, refractedWorldDiffuse, refractionQualityWeight);
 
-			// sample the other buffers using the corrected jitter positions
-			//
-			normalAndDepth = GBUFFER_NORMAL.Sample(g_TexSamplerPoint, screenPos);
-
+			// re-read depth at the refracted position so the shore/absorption
+			// terms below use the surface the refraction actually shows
+			normalAndDepth = g_sceneNormalTex.Sample(g_TexSamplerPoint, screenPos);
 			worldDepth = normalAndDepth.w;
-
-			//if (normalAndDepth.w != -1 /*|| g_eyePos.y <= 0.0f*/)
-			//{
-			//	if (normalAndDepth.w < pixelDepth)
-			//		worldDiffuse = originalWorldDiffuse;
-			//	else
-			//		worldDepth = normalAndDepth.w;
-			//}
-
-			//return worldDiffuse;
 		}
 
-		// Correct for gamma
-		//worldDiffuse = float4(pow(worldDiffuse.rgb, g_gamma), worldDiffuse.a);
-		
-		//float4 positions = GBUFFER_POSITION.Sample(TextureSampler, screenPos);
-		
-		//if(isInMaskedRegion)
-		//	worldDiffuse += CalculateCaustics(lightVector, worldNormal, input.positionWS.xyz, pixelDepth, worldDiffuse);
-		//if (isInMaskedRegion == false)
-		//	clip(-1);
+		// Sun cascade shadows (O2): water was never shadowed - a dock's shadow
+		// stopped dead at the waterline while the sea sparkled underneath it.
+		// Same cheap-PCF + gate as DefaultPixel's transparency path (the
+		// cascades + b2 caster constants are only valid when the pass bound
+		// them; g_taaParams.z carries that).
+		float sunShadow = 1.0f;
+		if (g_taaParams.z > 0.5f)
+		{
+			const float ndl = dot(worldNormal, normalize(g_shadowCasterLightDir.xyz));
+			const float shadowBias = g_shadowConfig.biasMultiplier * (1.0f - ndl);
+			sunShadow = CalculateShadowsCheapPCF(input.positionWS.xyz, g_cmpSampler, SHADOWMAPS, shadowBias);
+		}
 
-		float lightIntensity = dot(worldNormal, lightDir) * g_globalLight[0];
-		
+		float lightIntensity = dot(worldNormal, lightDir) * g_globalLight[0] * sunShadow;
+
 		if (lightIntensity > 0.0f)
 		{
-			float4 lightColour = float4(1, 1, 1, 1);
-
-			// Determine the final diffuse color based on the diffuse color and the amount of light intensity.					
-			//color = /*albedo*/float4(lightColour.rgb * lightIntensity, albedo.a);
-
-			// Saturate the final light color.
-			//color = saturate(color);
-
-			const float waterPerceptualRoughnessBase = 0.08f;
+			// Glints soften and broaden as the sea roughens - a storm has no
+			// razor-sharp sun line.
+			const float waterPerceptualRoughnessBase = lerp(0.06f, 0.35f, seaState);
 			const float waterMetallic = 0.0f;
 			const float3 viewDir = normalize(g_eyePos.xyz - input.positionWS.xyz);
 			const float3 halfVector = normalize(lightDir + viewDir);
@@ -621,125 +507,267 @@ float3 GerstnerWave(
 			const float G = geometricOcclusion(NdotL, NdotV, alphaRoughness);
 			const float D = microfacetDistribution(NdotH, alphaRoughness);
 			const float3 directSpecular = F * G * D / max(4.0f * NdotL * NdotV, 0.001f);
-			const float sunSpecularBoost = 5.75f;
-			specular = float4(ComputePhysicalSunColour(input.positionWS.xyz, lightDir) * (NdotL * directSpecular * sunSpecularBoost), 1.0f);
-
-			//return specular;
-			if ((g_objectFlags & OBJECT_FLAGS_HAS_ROUGHNESS) != 0)
-			{
-				//float4 specularIntensity = specularMap.Sample(g_TexSamplerAniso, input.texcoord);
-
-				//specular = specular * specularIntensity.r;// *depthValue2;
-			}
-
-			//specular = min(specular, albedo.a);
+			// Sun radiance in the same units the glass path uses
+			// (getSunColour() x g_globalLight[0], Frostbite convention) instead
+			// of the ad-hoc ComputePhysicalSunColour x5.75 boost that was
+			// compensating for the old LDR clamp. Shadowed like the body term.
+			// Recolour the glint with the sun DISC's actual hue - the sky
+			// sampled in the sun's direction - instead of getSunColour(), which
+			// Reinhard-tonemaps toward white and desaturates the warm sunset
+			// sun, so the water glint no longer matched the disc it reflects.
+			// getSunColour()'s LUMINANCE is kept, so the (already-tuned) glint
+			// strength is unchanged; only the colour now tracks the disc.
+			const float3 sunLumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
+			const float3 skySun = SampleEnvAtlas(g_iblSkyEnvFwd, g_TexSamplerAniso, lightDir, 0.0f);
+			const float skySunLuma = max(dot(skySun, sunLumaWeights), 1e-4f);
+			const float3 sunRadiance = getSunColour() * g_globalLight[0];
+			const float3 sunTinted = (skySun / skySunLuma) * dot(sunRadiance, sunLumaWeights);
+			float3 sunSpecular = sunTinted * (NdotL * directSpecular) * sunShadow;
+			// Physical cap. A specular reflection of the sun can be at most its
+			// Fresnel-weighted radiance - a mirror cannot be brighter than what
+			// it reflects. GGX for near-mirror water spikes far past that at the
+			// exact reflection angle because a directional sun is treated as a
+			// zero-size delta (no ~0.5 degree solar disc), which is why the
+			// water's sun glint was outshining the sun disc itself - and it is
+			// then double-counted against the env/SSR reflection that already
+			// contains the sky's sun. Clamp the analytic highlight to F x the
+			// sun's radiance so the reflection tops out at the sun, not above it.
+			const float fresnelPeak = max(max(F.r, F.g), F.b);
+			sunSpecular = min(sunSpecular, sunTinted * (fresnelPeak * sunShadow));
+			specular = float4(sunSpecular, 1.0f);
 		}
 
-		//return float4(lightIntensity, lightIntensity, lightIntensity, 1.0f);
+		// Water column (O4): METRES of water along the view path, from the
+		// opaque world position behind the surface. The legacy terms
+		// normalised the view-depth difference by the FAR PLANE, so every
+		// absorption knob was scene-scale dependent and the first metre of
+		// water - where all the shore detail lives - occupied a sliver of the
+		// parameter range.
+		const float3 scenePosWS = g_scenePositionTex.Sample(g_TexSamplerPoint, screenPos).xyz;
+		const float columnDepth = (worldDepth <= 0.0f)
+			? 500.0f
+			: max(distance(scenePosWS, input.positionWS.xyz), 0.0f);
 
-		// calculate the view-space pixel depth
+		const float fresnelPow = g_oceanConfig.fresnelPow;
 
-		float waterDepth = pixelDepth;
-		//float worldDepth = normalAndDepth.a;
-		//float terrainDepth = positions.w;
-		float depthDifference = (worldDepth - waterDepth);
-		float relativeDepth = worldDepth == -1.0f ? 1.0f : saturate(depthDifference / g_frustumDepths[3]);
+		// Beer-Lambert absorption per METRE. reflection_pad0 (per-scene)
+		// overrides when set (> 0); otherwise the live r_oceanAbsorption cvar.
+		const float absorbK = g_oceanConfig.reflection_pad0 > 0.0f ? g_oceanConfig.reflection_pad0 : max(g_oceanConfig2.z, 0.005f);
+		float transmission = exp(-columnDepth * absorbK);
 
-		
+		// CONTROL SEPARATION (user-clarified semantics):
+		//  - shoreFadeStrength: how fast DEPTH fades shallowColour->deepColour
+		//  - absorption (pad0): how fast the refracted scene stops showing
+		//    through (transmission above)
+		//  - Fresnel ALONE decides reflectance - depth plays no part in it
+		const float colourFade = 1.0f - exp(-columnDepth * g_oceanConfig.shoreFadeStrength / 30.0f);
+		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, colourFade);
+		// Storm seas read DARK SLATE - more absorption, less back-scatter.
+		// This is also what keeps the water visible in a blizzard: the body
+		// separates from the fog instead of matching it.
+		fadeColour.rgb *= (1.0f - 0.45f * seaState);
 
+		// SCHLICK Fresnel, not the legacy 1-cos^pow: that curve sat near 0.98
+		// at ordinary viewing angles, so the exponent shifted the WHOLE sea's
+		// reflectivity. Real water reflects ~2% at normal incidence and only
+		// approaches a mirror toward grazing - which also means you can see
+		// INTO the water near the camera. fresnelPow shapes the grazing rise
+		// (5 = physical; lower = reflectivity comes in earlier).
+		float fresnel = 0.02f + 0.98f * pow(1.0f - saturate(dot(eyeVector, originalWorldNormal)), max(fresnelPow, 0.5f));
 
-		//const float4 shallowColour = float4(63.0f / 255.0f, 155.0f / 255.0f, 205.0f / 255.0f, 1.0f);// *albedo;
-		//const float4 deepColour = float4(20.0f / 255.0f, 51.0f / 255.0f, 75.0f / 255.0f, 1.0f);// *albedo;
+		// Procedural foam (O4): crest foam where the waves peak (VS crest
+		// interpolant) + a shore band where the column is centimetres deep.
+		// No foam textures exist in the project - two octaves of ValueNoise3
+		// shape both, advected slowly so the pattern churns. reflection_pad1
+		// scales overall coverage (> 0 to override).
+		float foam = 0.0f;
+		{
+			// Per-scene pad overrides when set; otherwise the live r_oceanFoam cvar.
+			const float foamScale = g_oceanConfig.reflection_pad1 > 0.0f ? g_oceanConfig.reflection_pad1 : g_oceanConfig2.y;
+			// SLOW noise churn. The first version advected at 0.22 and put a
+			// hard smoothstep threshold on the crest factor - which
+			// oscillates at wave-phase speed - so foam snapped on/off as each
+			// crest swept past the threshold and the sea strobed ("looks
+			// like lightning"). Continuous power curves + slow erosion make
+			// foam wax and wane with the swell instead of flashing.
+			const float3 np = float3(input.positionWS.x * 0.35f, g_time * 0.06f, input.positionWS.z * 0.35f);
+			const float n = ValueNoise3(np) * 0.65f + ValueNoise3(np * 3.1f + float3(0.0f, g_time * 0.03f, 0.0f)) * 0.35f;
 
-		const float fresnelPow = g_oceanConfig.fresnelPow;// 3.201f;
-		const float shoreFadeStrength = g_oceanConfig.shoreFadeStrength;// 12.0f;
+			// Crests: continuous response (no threshold to flash across),
+			// noise shaping the coverage into streaks. The exponent RELAXES
+			// with sea state - a storm sea whitecaps far below the theoretical
+			// max crest, a calm sea only foams at true peaks.
+			const float crest = saturate(input.colour.x);
+			const float crestFoam = pow(crest, lerp(3.0f, 1.6f, seaState)) * (0.35f + 0.65f * n);
 
-		//return float4(relativeDepth, relativeDepth, relativeDepth, 1.0f);
+			// Shore: strongest at zero depth, fading over the first ~1.5 m,
+			// continuous curve, noise-broken.
+			const float shoreBand = saturate(1.0f - columnDepth / 1.5f);
+			const float shoreFoam = shoreBand * shoreBand * (0.45f + 0.7f * n);
 
-		float depthMultiplier = saturate(relativeDepth * g_frustumDepths[3]);
-		float transmission = exp(-relativeDepth * max(g_oceanConfig.fadeFactor, 0.001f));
+			// Whitecap coverage climbs with the wind - white water on the
+			// darkened storm body is what keeps the sea legible when the sky,
+			// fog and reflection all converge to grey.
+			const float foamMask = saturate((crestFoam + shoreFoam) * foamScale * (1.0f + seaState));
 
-		float4 worldAlbedoInfluence = float4(worldDiffuse.rgb * depthMultiplier, 1.0f/*albedo.a*/);
+			// FOAM STRUCTURE. The mask above says WHERE foam lives; the
+			// smooth noise it used to output directly is why foam read as
+			// soft mathematical blobs. Two scales of cellular lace (dark
+			// bubble holes, bright filament web) + a micro grain give it the
+			// texture of white water, and coverage-driven EROSION does the
+			// rest: patch cores fill dense while edges dissolve into wisps of
+			// surviving filament. Drift rates are fixed (not wind-coupled) so
+			// weather changes never teleport the pattern.
+			// Advect the lace with the CPU-INTEGRATED wind scroll
+			// (g_timeParams2.zw - the same integral the bump layer uses), so
+			// foam travels WITH the water instead of sliding across it. The
+			// 64.0 factor converts the UV-space integral to world metres at
+			// the same effective speed as the bump advection. Weather changes
+			// bend this motion (integral property), never teleport it. The
+			// accum wraps every ~20+ minutes of runtime, which reads as a
+			// single churn event in an already-chaotic pattern - accepted.
+			const float2 scrollWorld = g_timeParams2.zw * 64.0f;
+			const float2 wp = input.positionWS.xz - scrollWorld;
+			const float coarseF1 = FoamWorleyF1(wp * 0.55f, g_time * 0.35f);
+			const float fineF1 = FoamWorleyF1(wp * 1.9f + 37.7f.xx, g_time * 0.5f);
+			const float laceCoarse = smoothstep(0.18f, 0.80f, coarseF1);
+			const float laceFine = smoothstep(0.12f, 0.85f, fineF1);
+			float lace = laceCoarse * 0.62f + laceFine * 0.38f;
+			// Micro grain: fine unresolved bubbles shimmering inside the web.
+			lace *= 0.86f + 0.28f * ValueNoise3(float3(wp.x * 6.1f, g_time * 0.4f, wp.y * 6.1f));
 
-		float4 fadeColour = lerp(g_oceanConfig.shallowColour, g_oceanConfig.deepColour, saturate(1 - exp(-relativeDepth * g_oceanConfig.fadeFactor)));
-		float fresnel = 1 - pow(saturate(dot(eyeVector, originalWorldNormal)), fresnelPow);// min(0.7, pow(saturate(dot(-eyeVector, worldNormal)), fresnelPow));
-		float shoreFade = 1.0f - exp(-relativeDepth * shoreFadeStrength);
-
-		float fadeFactor = saturate(fresnel * shoreFade);
+			// Dissolve erosion: the mask sets a threshold the lace must clear.
+			// Full mask -> threshold 0 (dense white with bubble-hole shading);
+			// weak mask -> only the brightest filaments survive (wispy fringe).
+			const float threshold = 1.0f - saturate(foamMask * 1.3f);
+			foam = saturate((lace - threshold) / 0.28f);
+			foam *= foam * (3.0f - 2.0f * foam); // soften the dissolve edge
+			foam *= saturate(0.35f + foamMask);  // wisps stay lighter than cores
+		}
 
 		float4 ambient = float4(g_atmosphere.ambientLight.rgb * fadeColour.rgb, 1.0f);
 		float4 diffuseColour = float4(fadeColour.rgb * lightIntensity, 1.0f);
 
-		float depthValue = 1.0f;// CalculateShadows(input, g_cmpSampler, SHADOWMAPS, g_shadowBlendRange);
-
-		float4 finalColour = diffuseColour /*+ ambient*/;// saturate(ambient + diffuseColour + specular);
-		
-		//finalColour.a = fadeFactor;
-
-		//return float4(finalColour.xyz, 1.0f);
-
-		float finalFadeFactor = fadeFactor;
-
-		if (g_eyePos.y <= 0.0f)
-			finalFadeFactor *= 0.35f;
-
-		float3 transmittedColour = lerp(fadeColour.rgb, worldDiffuse.rgb, transmission);
-		float3 waterBodyColour = lerp(transmittedColour, finalColour.rgb + (ambient.rgb * 0.35f), finalFadeFactor);
+		// Optically thin water shows the refracted scene; thick water shows
+		// the lit body colour. ONE blend, driven by absorption alone - the
+		// old second lerp keyed on fresnel*shoreFade coupled body colour to
+		// reflectance, which is why the controls fought each other.
+		float3 litBody = diffuseColour.rgb + ambient.rgb * 0.35f;
+		float3 waterBodyColour = lerp(litBody, worldDiffuse.rgb, transmission);
 		float4 retCol = float4(waterBodyColour, 1.0f);
 
-		
-		
-		//retCol = float4(retCol.rgb * depthValue, 1.0f);
-
-		if (true/*  && isInMaskedRegion == true && g_eyePos.y > 0.0f */)
+		// Reflections (O3): inline screen-space march for near-field content
+		// + prefiltered sky-atlas fallback everywhere the march misses (off-
+		// screen, behind camera, beyond march range, and the whole far sea -
+		// the atlas is weather-tinted, so a storm sky reflects as OVERCAST).
+		// This replaced both the legacy 24-step march and the "cheap
+		// reflection" (beauty at the pixel's own position - positionally
+		// meaningless, it reflected whatever was BEHIND the water).
 		{
-			float3 reflectionNormal = worldNormal;
+			// Reflect off a mostly-GERSTNER normal: a mirror image needs a
+			// far smoother surface than shading does (per-texel bump scatter
+			// sends adjacent SSR rays to unrelated targets and shreds the
+			// reflection - the deferred SSR's puddle-flatten exists for the
+			// same reason). 0.35 bump influence near the camera, fading to
+			// PURE Gerstner with distance: far pixels cover many bump texels,
+			// so any bump residue there is per-pixel ray divergence = noise.
+			float3 reflectionNormal = normalize(lerp(originalWorldNormal, worldNormal, 0.35f * distantNormalFade));
 
 			if (g_eyePos.y <= 0.0f)
 				reflectionNormal *= -1.0f;
 
-			const float reflectionStrength = g_oceanConfig.reflectionStrength;
+			const float3 R = normalize(reflect(-eyeVector, reflectionNormal));
 
-			float4 cheapReflectionCol = beautyTexture.Sample(g_TexSamplerPoint, screenPos);
-			cheapReflectionCol.xyz = lerp(cheapReflectionCol.xyz, fadeColour.xyz, 0.25f);
+			float3 reflection = float3(0.0f, 0.0f, 0.0f);
+			float reflectionWeight = 0.0f;
 
-			float4 reflectionCol = cheapReflectionCol;
+			// Near-field: march the opaque depth. Distance-gated - far rays
+			// take the env path directly (matches the old ssrQualityWeight
+			// ramp and keeps the horizon cheap).
 			if (ssrQualityWeight > 0.001f)
 			{
-				float4 ssrReflectionCol = GetReflection(-eyeVector, input.positionWS.xyz, reflectionNormal, retCol, pixelDepth);
-				reflectionCol = lerp(cheapReflectionCol, ssrReflectionCol, ssrQualityWeight);
+				float3 ssrColour;
+				float ssrConfidence;
+				if (TraceWaterSSR(input.positionWS.xyz, R, ssrColour, ssrConfidence))
+				{
+					reflectionWeight = ssrConfidence * ssrQualityWeight;
+					reflection = ssrColour;
+				}
 			}
 
-			retCol.xyz = saturate(lerp(retCol.xyz, reflectionCol.xyz + specular, reflectionStrength * fadeFactor));
+			// Environment fallback wherever the march found nothing. The atlas
+			// row follows the sea state: calm water mirrors a sharp bright
+			// sky; a wind-chopped surface reflects a blurred (and naturally
+			// dimmer) prefiltered row - which also takes the edge off the
+			// clear-sky brightness on rippled water.
+			{
+				const float envRoughness = lerp(0.06f, 0.5f, seaState);
+				const float3 envColour = SampleEnvAtlas(g_iblSkyEnvFwd, g_TexSamplerAniso, R, envRoughness);
+				// Downward rays would pick up horizon sky the atlas has no
+				// ground radiance for.
+				const float envHorizon = saturate(R.y * 3.0f + 0.35f);
+				const float envWeight = (1.0f - reflectionWeight) * envHorizon;
+
+				reflection = reflection * reflectionWeight + envColour * envWeight;
+				reflectionWeight = saturate(reflectionWeight + envWeight);
+				reflection = reflectionWeight > 1e-4f ? reflection / reflectionWeight : float3(0.0f, 0.0f, 0.0f);
+			}
+
+			// Compose: reflection replaces body colour by FRESNEL x artist
+			// strength - depth/shore terms removed from reflectance (they
+			// belong to colour and see-through, not to how mirror-like the
+			// surface is). The sun glint ADDS on top (its GGX F term carries
+			// its own Fresnel). Foam suppresses both - scattered white water
+			// is matte, not a mirror.
+			// NO saturate: linear HDR into an R16G16B16A16_FLOAT target.
+			const float reflectionStrength = g_oceanConfig.reflectionStrength;
+			retCol.xyz = lerp(retCol.xyz, reflection,
+				saturate(reflectionStrength * fresnel * reflectionWeight) * (1.0f - foam));
+			retCol.xyz += specular.xyz * (1.0f - foam);
 		}
 
-		retCol = saturate(retCol /* + specular */);
-
-		// foam
-		/*if (depthDifference < 1.0f && isInMaskedRegion)
+		// Foam sits ON the surface: matte white water lit by ambient + sun
+		// diffuse (shadowed), replacing whatever is beneath it.
+		if (foam > 0.001f)
 		{
-			retCol = retCol + (float4(0.3f, 0.3f, 0.3f, 0.0f) * (1.0f - depthDifference));
-		}*/
-		
-		//return retCol;
-		albedo = worldAlbedoInfluence;
+			const float foamNdl = saturate(dot(worldNormal, lightDir));
+			const float3 foamLit = float3(0.86f, 0.88f, 0.90f)
+				* (g_atmosphere.ambientLight.rgb
+					+ getSunColour() * g_globalLight[0] * foamNdl * sunShadow);
+			retCol.xyz = lerp(retCol.xyz, foamLit, foam);
+		}
 
-		//return albedo * lightIntensity;
-
-		//return float4(1,0,0,1);
 		retCol.a = 1.0f;
 
-		//return float4(1,0,0,1);
+		// Water renders after the fog / AP applies: fog it at its own depth.
+		retCol.rgb = ApplyTransparentAtmosphere(retCol.rgb, input.positionWS.xyz, input.position.xy, g_transFogVolume, g_transApVolume, g_transLinearSampler);
 
-		//return retCol /* + worldAlbedoInfluence */ + ( albedo * lightIntensity) /* + specular */;
-
-		return retCol;
-
-		//float4 finalColour = albedo * color;
-		//color = finalColour;// color* albedo;
-
-		
-
-		//return color;
+		WaterOut o;
+		o.colour = retCol;
+		// Same clip-space [0,1] delta convention as the gbuffer (consumers
+		// negate y) - see Utils.shader CalcVelocity.
+		//
+		// GUARDS (found the hard way): the ocean grid extends to the horizon,
+		// where the interpolated clip positions' w approaches zero - and the
+		// PREVIOUS-frame position can even land behind the projection plane
+		// (w <= 0). CalcVelocity divides by w unchecked, so far/grazing water
+		// wrote hundreds-of-pixels garbage velocity (and NaNs) across the
+		// whole sky region once the transparent pass gained a velocity RT -
+		// TAA/motion blur then smeared the frame. Genuine wave motion is
+		// small: zero the velocity when w is degenerate and clamp hard.
+		o.velocity = 0.0f.xx;
+		if (input.currentPositionUnjittered.w > 1e-3f && input.previousPositionUnjittered.w > 1e-3f)
+		{
+			float2 vel = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered,
+				float2(g_screenWidth, g_screenHeight));
+			const float maxUvDelta = 0.03f; // ~2 tiles of blur at any resolution
+			const float len = length(vel);
+			if (len > maxUvDelta)
+				vel *= maxUvDelta / len;
+			// Belt and braces: a NaN here poisons the tile-max chain.
+			if (!isnan(vel.x) && !isnan(vel.y))
+				o.velocity = vel;
+		}
+		return o;
 	}
 }

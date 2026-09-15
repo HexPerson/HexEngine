@@ -53,6 +53,12 @@ namespace HexEngine
 		// SceneRenderer for the outline glow + on-screen name label.
 		static InteractionComponent* GetFocused();
 
+		// Editor-only: force this component to be the focused interactable so the
+		// outline glow draws without the game running (e.g. material drag-hover
+		// highlight in the scene view). Takes precedence over look-at focus until
+		// cleared with nullptr. Cleared automatically if the component is destroyed.
+		static void SetEditorFocusOverride(InteractionComponent* ic);
+
 	private:
 		std::string _interactableName = "Item";
 		std::string _prompt           = "Press E to interact";

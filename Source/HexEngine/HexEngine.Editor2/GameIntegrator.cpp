@@ -705,13 +705,30 @@ namespace HexEditor
 			_runtimeFS = nullptr;
 		}
 
-		HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->RemoveEntityListener(this);
+		auto* teardownScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene().get();
+		teardownScene->RemoveEntityListener(this);
 
-		for (auto& tempEnt : _tempEntitiesCreated)
-		{
-			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->DestroyEntity(tempEnt);
-		}
+		// Destroy the entities spawned during play. Snapshot their ids FIRST: the
+		// listener is already removed (so freed entities won't be pruned from the
+		// list), and DestroyEntity cascades to children — which may themselves be in
+		// this list — so iterating the raw pointers would dereference a dangling entry
+		// (use-after-free in the log). Look each up by id and skip any the cascade
+		// already removed.
+		std::vector<HexEngine::EntityId> tempIds;
+		tempIds.reserve(_tempEntitiesCreated.size());
+		for (auto* tempEnt : _tempEntitiesCreated)
+			if (tempEnt != nullptr)
+				tempIds.push_back(tempEnt->GetId());
 		_tempEntitiesCreated.clear();
+
+		if (teardownScene != nullptr)
+		{
+			for (const HexEngine::EntityId id : tempIds)
+			{
+				if (HexEngine::Entity* tempEnt = teardownScene->TryGetEntity(id))
+					teardownScene->DestroyEntity(tempEnt);
+			}
+		}
 
 		_gameExtension->OnStopGame();
 		HexEngine::g_pEnv->SetGameRunning(false);

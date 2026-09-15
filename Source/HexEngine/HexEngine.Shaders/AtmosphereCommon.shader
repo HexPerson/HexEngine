@@ -4,6 +4,24 @@
 }
 "Global"
 {
+	// Far plane of the aerial-perspective froxel volume, in metres. The volume's W
+	// axis is LINEAR over [0, AtmosphereApMaxDistM()], so the generator and the
+	// apply pass must agree on this value exactly or every pixel samples the wrong
+	// slice (they once kept separate drifted copies - 32 km vs 100 km - and read
+	// ~3x under-hazed). Single definition, both includers.
+	//
+	// Derived from the camera far plane (g_frustumDepths.w - SetupPerFrameBuffer
+	// keeps [3] equal to camera farZ) instead of the old hardcoded 32 km: with a
+	// far plane much shorter than that, the constant crammed the entire playable
+	// range into the first froxel slices, painting mid-ground geometry with
+	// kilometres of blue inscatter it hadn't earned. Deriving it means the 32
+	// slices always span exactly the range geometry can occupy. The floor guards
+	// degenerate/uninitialised far planes.
+	float AtmosphereApMaxDistM()
+	{
+		return max(g_frustumDepths.w, 1000.0f);
+	}
+
 	// Hillaire 2020 ("A Scalable and Production Ready Sky and Atmosphere
 	// Rendering Technique") style spherical-earth atmosphere model.
 	//
@@ -249,6 +267,17 @@
 		{
 			v = 0.5f + 0.5f * sqrt(-cosZenith);
 		}
-		return float2(u, saturate(v));
+
+		// Clamp v a half-texel inside the LUT (216 rows - must match the C++
+		// allocation in AtmosphereLUTs.cpp and LUT_SIZE in
+		// AtmosphereSkyViewLUT.shader): consumers sample
+		// through the shared WRAP sampler, so v = 0 exactly (the zenith)
+		// bilinearly pulled 50% of the OPPOSITE edge - the nadir/ground row -
+		// into the top of the sky. That was the dark dot at the centre of the
+		// octahedral env atlas and dark contamination in every prefilter
+		// sample whose direction neared a pole. u stays unclamped: azimuth is
+		// periodic, wrap is the correct behaviour there.
+		const float kSkyLutHalfTexelV = 0.5f / 216.0f;
+		return float2(u, clamp(v, kSkyLutHalfTexelV, 1.0f - kSkyLutHalfTexelV));
 	}
 }

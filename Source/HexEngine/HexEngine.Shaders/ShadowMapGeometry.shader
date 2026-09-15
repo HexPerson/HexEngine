@@ -36,6 +36,24 @@
 		output.position = mul(input.position, worldMatrix);
 		//output.positionWS = output.position;
 
+		// Vegetation wind sway (Phase 3): the shadow must track the swaying
+		// canopy or trees cast a rigid shadow while the mesh moves. Same PURE
+		// WindSwayOffset the main VS uses - the shadow input has no normal /
+		// tangent / instance colour, which is exactly why the helper takes
+		// only (worldPos, origin, params, wind, time). g_material,
+		// g_weatherSurface and g_time are all live in shadow passes
+		// (PerObjectBuffer is bound VS-side per draw; SetupPerFrameBuffer
+		// re-runs per shadow pass). Current time only - no motion vectors in
+		// the shadow pass.
+		[branch]
+		if (g_material.windSwayParams.w > 0.5f)
+		{
+			output.position.xyz += WindSwayOffset(
+				output.position.xyz, worldMatrix[3].xyz,
+				g_material.windSwayParams,
+				g_weatherSurface.windDirectionAndSpeed, g_time);
+		}
+
 		output.position = mul(output.position, g_viewProjectionMatrix);
 
 

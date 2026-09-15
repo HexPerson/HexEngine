@@ -74,6 +74,11 @@ namespace HexEngine
 
 			return true;
 		}
+		else if (event == InputEvent::MouseMove)
+		{
+			if (IsMouseOver(true) == false)
+				_hovering = false;
+		}
 		return false;
 	}
 

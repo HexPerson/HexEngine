@@ -7,16 +7,16 @@
 {
 	// Hillaire 2020 sky-view LUT generator.
 	//
-	// 192x108 RGBA16F per-frame compute target capturing the camera's
+	// 384x216 RGBA16F per-frame compute target capturing the camera's
 	// full-sky in-scattering for the current sun direction. The sky-sphere
 	// shader samples this with one tap per pixel instead of doing a per-
 	// pixel atmosphere ray-march - turns the sky shader from a heavy
 	// integration into a cheap LUT lookup.
 	//
 	// Parameterisation (Hillaire §5.3):
-	//   u (192) = view azimuth, in [0, 2*PI] relative to the sun.
+	//   u (384) = view azimuth, in [0, 2*PI] relative to the sun.
 	//             Wraps cleanly so the sky doesn't break at azimuth=0.
-	//   v (108) = view zenith with a horizon-bias remap. The lower half
+	//   v (216) = view zenith with a horizon-bias remap. The lower half
 	//             of v is non-linearly compressed near v=0.5 so we keep
 	//             texel density at the horizon (where the sun glow,
 	//             sunset gradient, and earth shadow line all live) and
@@ -66,7 +66,7 @@
 		float  g_sunIntensity;
 	};
 
-	static const uint2 LUT_SIZE = uint2(192u, 108u);
+	static const uint2 LUT_SIZE = uint2(384u, 216u); // must match AtmosphereLUTs.cpp allocation
 	static const uint  MARCH_STEPS = 32u;
 
 	// Forward cbuffer-driven coefficients into the common helper. See

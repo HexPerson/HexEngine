@@ -69,6 +69,11 @@ namespace HexEngine
 
 		const std::array<math::Matrix, MAX_BONES>& GetBoneTransformArray() const;
 
+		// Previous frame's pose, for skinned motion vectors. Snapshotted once per rendered
+		// frame in Update(); equals the current pose before the first advance, and whenever
+		// the animation didn't move, which correctly yields zero deformation velocity.
+		const std::array<math::Matrix, MAX_BONES>& GetBoneTransformArrayPrev() const;
+
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
 
 		virtual void Serialize(json& data, JsonFile* file) override;
@@ -85,6 +90,12 @@ namespace HexEngine
 
 		std::array<BoneInfo, MAX_BONES> _boneInfo;
 		std::array<math::Matrix, MAX_BONES> _transforms;
+		std::array<math::Matrix, MAX_BONES> _transformsPrev;
+		// Frame the prev-pose snapshot was last taken on. Update() can be entered more than
+		// once per rendered frame; snapshotting unconditionally would then leave prev ==
+		// current and silently zero the deformation velocity again.
+		uint32_t _prevPoseFrame = 0;
+		bool _prevPoseValid = false;
 
 		int32_t _previousTickRate = 1;
 

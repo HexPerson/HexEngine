@@ -41,11 +41,11 @@ public:
 	virtual void SaveToFile(const fs::path& path)                                           override;
 	virtual void ClearDepth(uint32_t)                                                       override;
 	virtual void CopyTo(ITexture2D*)                                                        override;
-	virtual void CopyTo(ITexture2D*, const RECT&, const RECT&)                              override {}
-	virtual void BlendTo_Additive(ITexture2D*, HexEngine::IShader*)                         override {}
-	virtual void BlendTo_Additive_Double(ITexture2D*, HexEngine::IShader*)                  override {}
-	virtual void BlendTo_Alpha(ITexture2D*, HexEngine::IShader*)                            override {}
-	virtual void BlendTo_NonPremultiplied(ITexture2D*, HexEngine::IShader*)                 override {}
+	virtual void CopyTo(ITexture2D*, const RECT&, const RECT&)                              override;
+	virtual void BlendTo_Additive(ITexture2D*, HexEngine::IShader*)                         override;
+	virtual void BlendTo_Additive_Double(ITexture2D*, HexEngine::IShader*)                  override;
+	virtual void BlendTo_Alpha(ITexture2D*, HexEngine::IShader*)                            override;
+	virtual void BlendTo_NonPremultiplied(ITexture2D*, HexEngine::IShader*)                 override;
 	virtual void GetPixels(std::vector<uint8_t>&)                                           override {}
 	virtual void GetPixels(std::vector<float>&)                                             override {}
 	virtual void* GetSharedHandle()                                                         override { return nullptr; }

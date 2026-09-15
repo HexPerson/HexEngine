@@ -35,10 +35,17 @@ namespace HexEngine
 	class HEX_API VolumetricScattering
 	{
 	public:
-		// Volume dimensions. 128x72 matches a 16:9 ratio at decent density;
-		// 64 slices over the 256 m far plane gives ~0.1 m near, ~30 m far.
-		static constexpr uint32_t kVolumeWidth  = 128u;
-		static constexpr uint32_t kVolumeHeight = 72u;
+		// Volume dimensions. 256x144 matches 16:9; raised from 128x72, which
+		// put ~15x15 screen pixels in one froxel at 1080p and visibly
+		// blockified emissive glow and shadowed shafts. Width must stay a
+		// multiple of 16 and height a multiple of 72 (cluster-grid 16x9
+		// divisibility + 8-wide thread groups). 4x the froxels of the old
+		// grid: ~19 MB per RGBA16F volume (4 volumes ~75 MB) and the scatter
+		// CS cost scales the same 4x - drop back to 128x72 if the pass shows
+		// up in profiles. VolumetricScatterApply.shader's VOLUME_DIMS constant
+		// must match these values.
+		static constexpr uint32_t kVolumeWidth  = 256u;
+		static constexpr uint32_t kVolumeHeight = 144u;
 		static constexpr uint32_t kVolumeDepth  = 64u;
 		// Far extent of the froxel range. Beyond this distance the aerial-
 		// perspective volume handles atmospheric scattering, so this only
@@ -119,6 +126,39 @@ namespace HexEngine
 		 *                     volume, and samples there. Camera motion no
 		 *                     longer drags the EMA into the wrong cell.
 		 */
+		// Phase 2 slice 3: hand over the cluster list SRVs for the scatter
+		// CS (raw pointers - this class is already raw D3D11 by convention).
+		// Passing nulls or active=false restores the pure forward-array path.
+		// Slice 7: the shadow atlas + per-tile matrices ride along so the
+		// froxel CS can shadow atlas-tiled spots in the cluster loop (they no
+		// longer pass through the legacy shadow-slotted forward path). Null
+		// when the atlas is off - the shader's params.w gate never samples.
+		void SetClusteredLights(struct ID3D11ShaderResourceView* lightsSrv,
+		                        struct ID3D11ShaderResourceView* countsSrv,
+		                        struct ID3D11ShaderResourceView* listsSrv,
+		                        bool active,
+		                        struct ID3D11ShaderResourceView* shadowAtlasSrv = nullptr,
+		                        struct ID3D11ShaderResourceView* atlasTileVpSrv = nullptr)
+		{
+			_clLightsSrv = lightsSrv; _clCountsSrv = countsSrv;
+			_clListsSrv = listsSrv; _clActive = active;
+			_clAtlasSrv = shadowAtlasSrv; _clAtlasTileVpSrv = atlasTileVpSrv;
+		}
+
+		// Cloud shadows in the fog (RDR2 sky S6): the density CS multiplies
+		// its sun term by the cloud shadow map, so god rays and near fog
+		// carry cloud-edge shafts. cloudConstants = the CloudConstants
+		// cbuffer (CloudCommon layout, bound at CS b4); either null (or a
+		// zero half-extent in the constants) disables cleanly - the shader's
+		// own guards return 1.0. Note both are LAST frame's data at dispatch
+		// time (the shadow map renders later in the frame); one frame of
+		// latency on a drifting cloud shadow is invisible.
+		void SetCloudShadow(class IConstantBuffer* cloudConstants, class ITexture2D* shadowMap)
+		{
+			_cloudConstantsCb = cloudConstants;
+			_cloudShadowMapTex = shadowMap;
+		}
+
 		void Update(const math::Vector3& sunDirection,
 		            const math::Vector3& sunColour,
 		            float sunIntensity,
@@ -195,6 +235,23 @@ namespace HexEngine
 		IConstantBuffer* _integrateParamsCBuffer = nullptr;
 
 		ITexture3D* _scatterVolume     = nullptr; // RGBA16F
+		// Destination of the spatial filter pass; the integrate pass reads
+		// this instead of _scatterVolume when r_volumetricSpatialFilter is
+		// on (a CS can't read and write the same volume in one dispatch).
+		ITexture3D* _scatterFilteredVolume = nullptr; // RGBA16F
+
+		// Cluster list SRVs handed over per frame by SceneRenderer (raw, not
+		// owned). Null or inactive = pure forward-array path.
+		struct ID3D11ShaderResourceView* _clLightsSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clCountsSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clListsSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clAtlasSrv = nullptr;
+		struct ID3D11ShaderResourceView* _clAtlasTileVpSrv = nullptr;
+
+		// Cloud shadow inputs (see SetCloudShadow). Not owned.
+		class IConstantBuffer* _cloudConstantsCb = nullptr;
+		class ITexture2D* _cloudShadowMapTex = nullptr;
+		bool _clActive = false;
 		// Ping-pong integration volumes for temporal accumulation. Each
 		// frame the integrate compute reads the PREVIOUS frame from
 		// [writeIdx ^ 1] (as history input) and writes the EMA-blended
@@ -210,6 +267,7 @@ namespace HexEngine
 		uint32_t _jitterFrame = 0u;
 
 		ID3D11UnorderedAccessView* _scatterUav     = nullptr;
+		ID3D11UnorderedAccessView* _scatterFilteredUav = nullptr;
 		// Point-clamp sampler bound at s2 during the scatter dispatch for
 		// shadow map lookups. The engine's global samplers don't auto-bind
 		// to the CS stage so we own a private one (same pattern as
@@ -236,6 +294,11 @@ namespace HexEngine
 
 		std::shared_ptr<IShader> _scatterShader;
 		std::shared_ptr<IShader> _integrateShader;
+		// Spatial filter between density and integrate (see
+		// VolumetricScatterFilter.shader): shares the jittered estimate
+		// across a 3x3x3 tent so per-froxel variance (fizz + per-cell
+		// blockiness) drops before the temporal EMA sees it.
+		std::shared_ptr<IShader> _scatterFilterShader;
 
 		// Previous-frame view-projection matrix for history reprojection.
 		// Each Update writes its currentViewProj here AFTER the dispatch

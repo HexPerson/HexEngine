@@ -11,8 +11,13 @@ namespace HexEngine
 {
 	HVar ed_translateSnap("ed_translateSnap", "Enable grid snapping while dragging the editor translation gizmo", false, false, true);
 	HVar ed_translateSnapSize("ed_translateSnapSize", "Grid size used for editor translation gizmo snapping", 1.0f, 0.001f, 10000.0f);
+	HVar ed_rotateSnap("ed_rotateSnap", "Enable angle snapping while dragging the editor rotation gizmo", false, false, true);
+	HVar ed_rotateSnapAngle("ed_rotateSnapAngle", "Angle in degrees used for editor rotation gizmo snapping", 15.0f, 0.1f, 180.0f);
+	HVar ed_gizmoMode("ed_gizmoMode", "Scene-view transform gizmo mode: 0=translate, 1=rotate, 2=scale (hotkeys W/E/R)", (int32_t)0, (int32_t)0, (int32_t)2);
 
 	Transform::EditorTranslateCommitCallback Transform::_editorTranslateCommitCallback = {};
+	Transform::EditorRotateCommitCallback Transform::_editorRotateCommitCallback = {};
+	Transform::EditorScaleCommitCallback Transform::_editorScaleCommitCallback = {};
 
 	namespace
 	{
@@ -28,6 +33,32 @@ namespace HexEngine
 		};
 
 		EditorTranslateGizmoState g_translateGizmoState;
+
+		struct EditorRotateGizmoState
+		{
+			Transform* activeTransform = nullptr;
+			int32_t activeAxis = -1;
+			float lastMouseAngle = 0.0f;
+			float accumulatedAngle = 0.0f;
+			math::Quaternion dragStartRotation = math::Quaternion(0.0f, 0.0f, 0.0f, 1.0f);
+			bool wasLeftMouseDown = false;
+		};
+
+		EditorRotateGizmoState g_rotateGizmoState;
+
+		struct EditorScaleGizmoState
+		{
+			Transform* activeTransform = nullptr;
+			int32_t activeAxis = -1;			// 0..2 = single axis, 3 = uniform (centre handle)
+			float accumulatedFactor = 0.0f;
+			float startMouseDistance = 1.0f;
+			int32_t lastMouseX = 0;
+			int32_t lastMouseY = 0;
+			math::Vector3 dragStartScale = math::Vector3(1.0f);
+			bool wasLeftMouseDown = false;
+		};
+
+		EditorScaleGizmoState g_scaleGizmoState;
 
 		float DistanceToScreenLineSegment(float mouseX, float mouseY, float lineStartX, float lineStartY, float lineEndX, float lineEndY, float* outSegmentT = nullptr)
 		{
@@ -94,6 +125,38 @@ namespace HexEngine
 
 			return roundf(value / step) * step;
 		}
+
+		void DrawWireCube(const math::Vector3& center, float halfSize, const math::Color& colour)
+		{
+			const float s = halfSize;
+			const math::Vector3 corners[8] = {
+				center + math::Vector3(-s, -s, -s), center + math::Vector3( s, -s, -s),
+				center + math::Vector3( s, -s,  s), center + math::Vector3(-s, -s,  s),
+				center + math::Vector3(-s,  s, -s), center + math::Vector3( s,  s, -s),
+				center + math::Vector3( s,  s,  s), center + math::Vector3(-s,  s,  s)
+			};
+
+			static const int32_t edges[12][2] = {
+				{ 0, 1 }, { 1, 2 }, { 2, 3 }, { 3, 0 },
+				{ 4, 5 }, { 5, 6 }, { 6, 7 }, { 7, 4 },
+				{ 0, 4 }, { 1, 5 }, { 2, 6 }, { 3, 7 }
+			};
+
+			for (const auto& edge : edges)
+				g_pEnv->_debugRenderer->DrawLine(corners[edge[0]], corners[edge[1]], colour);
+		}
+
+		// Basis vectors spanning the plane perpendicular to world axis `axisIndex`
+		// (0=X -> YZ plane, 1=Y -> XZ plane, 2=Z -> XY plane).
+		void GetRotationCircleBasis(int32_t axisIndex, math::Vector3& outU, math::Vector3& outV)
+		{
+			switch (axisIndex)
+			{
+			case 0:  outU = math::Vector3::Up;      outV = math::Vector3::Forward; break;
+			case 1:  outU = math::Vector3::Right;   outV = math::Vector3::Forward; break;
+			default: outU = math::Vector3::Right;   outV = math::Vector3::Up;      break;
+			}
+		}
 	}
 
 	Transform::Transform(Entity* entity) :
@@ -109,6 +172,43 @@ namespace HexEngine
 	void Transform::SetEditorTranslateCommitCallback(EditorTranslateCommitCallback callback)
 	{
 		_editorTranslateCommitCallback = callback;
+	}
+
+	void Transform::SetEditorRotateCommitCallback(EditorRotateCommitCallback callback)
+	{
+		_editorRotateCommitCallback = callback;
+	}
+
+	void Transform::SetEditorScaleCommitCallback(EditorScaleCommitCallback callback)
+	{
+		_editorScaleCommitCallback = callback;
+	}
+
+	void Transform::SetEditorGizmoMode(EditorGizmoMode mode)
+	{
+		if (GetEditorGizmoMode() == mode)
+			return;
+
+		// Cancel any in-flight drag: snap the entity back to its pre-drag value
+		// so the abandoned manipulation doesn't stick without an undo record.
+		if (g_translateGizmoState.activeTransform != nullptr)
+			g_translateGizmoState.activeTransform->GetEntity()->ForcePosition(g_translateGizmoState.dragStartPosition);
+		g_translateGizmoState = {};
+
+		if (g_rotateGizmoState.activeTransform != nullptr)
+			g_rotateGizmoState.activeTransform->GetEntity()->ForceRotation(g_rotateGizmoState.dragStartRotation);
+		g_rotateGizmoState = {};
+
+		if (g_scaleGizmoState.activeTransform != nullptr)
+			g_scaleGizmoState.activeTransform->GetEntity()->ForceScale(g_scaleGizmoState.dragStartScale);
+		g_scaleGizmoState = {};
+
+		ed_gizmoMode._val.i32 = (int32_t)mode;
+	}
+
+	EditorGizmoMode Transform::GetEditorGizmoMode()
+	{
+		return (EditorGizmoMode)std::clamp(ed_gizmoMode._val.i32, 0, 2);
 	}
 
 	void Transform::UpdateRotation()
@@ -386,6 +486,19 @@ namespace HexEngine
 		_previous.position = _current.position;
 		_current.position = position;
 
+		// An explicit SetPosition is a TELEPORT, not a smooth physics step, so snap
+		// the interpolation to the new spot before anyone reads it. Otherwise
+		// GetWorldTM (which returns the interpolated pose) still reports the OLD
+		// position during the synchronous OnMessage below - and RigidBody::
+		// ForceUpdatePose would place the physics body at the stale location (e.g. a
+		// dragged-in prefab spawning at 0,0,0 and falling through the floor). The
+		// physics writeback keeps interpolating via SetPositionNoNotify (untouched).
+		if (_enableInterpolation)
+		{
+			_previous.position = _current.position;
+			_interpolated.position = _current.position;
+		}
+
 		TransformChangedMessage message;
 		message._flags = TransformChangedMessage::ChangeFlags::PositionChanged;
 		message._position = position;
@@ -448,6 +561,16 @@ namespace HexEngine
 		_current.rotation.RotateTowards(newRot, dx::g_XMTwoPi.f[0]);
 		_current.rotation.Normalize();
 
+		// Teleport: snap the interpolation so the just-set rotation is what a
+		// synchronous reader (ForceUpdatePose via the message below) sees, instead
+		// of a slerp up from the stale previous. Physics keeps interpolating via
+		// SetRotationNoNotify.
+		if (_enableInterpolation)
+		{
+			_previous.rotation = _current.rotation;
+			_interpolated.rotation = _current.rotation;
+		}
+
 		UpdateRotation();
 
 		_eulerAngles = ToEulerAngles();
@@ -483,6 +606,14 @@ namespace HexEngine
 
 		//if (angle >= 180.0f)
 		//	newRot.Conjugate();
+
+		// Capture the previous rotation so interpolation has a valid from->to pair.
+		// SetPositionNoNotify and SetRotation both do this; this NoNotify path did
+		// not, so with interpolation enabled the rotation slerped from a frozen
+		// stale value to the live one - a dynamic body (e.g. a driven bike) then
+		// rendered at the wrong angle and jittered. CCTs never exposed it because
+		// the physics read-back skips rotation for them.
+		_previous.rotation = _current.rotation;
 
 		_current.rotation.RotateTowards(newRot, dx::g_XMTwoPi.f[0]);
 		_current.rotation.Normalize();
@@ -639,6 +770,11 @@ namespace HexEngine
 		file->Deserialize(data, "_rotation", rotation);
 		file->Deserialize(data, "_scale", scale);
 
+		if (auto sceneScale = g_pEnv->GetGlobalSceneScale(); sceneScale != 1.0f)
+		{
+			position *= sceneScale;
+		}
+
 		// Avoid broadcasting transform-change messages during deserialization to
 		// prevent cross-thread scene/PVS contention while scenes are loading.
 		SetPositionNoNotify(position);
@@ -678,12 +814,14 @@ namespace HexEngine
 		if (!isSelected || !g_pEnv->IsEditorMode())
 		{
 			if (g_translateGizmoState.activeTransform == this)
-			{
-				g_translateGizmoState.activeTransform = nullptr;
-				g_translateGizmoState.activeAxis = -1;
-				g_translateGizmoState.dragStartPosition = math::Vector3::Zero;
-				g_translateGizmoState.accumulatedPosition = math::Vector3::Zero;
-			}
+				g_translateGizmoState = {};
+
+			if (g_rotateGizmoState.activeTransform == this)
+				g_rotateGizmoState = {};
+
+			if (g_scaleGizmoState.activeTransform == this)
+				g_scaleGizmoState = {};
+
 			return;
 		}
 
@@ -698,7 +836,27 @@ namespace HexEngine
 		const math::Vector3 origin = GetEntity()->GetWorldTM().Translation();
 		const math::Vector3 cameraPosition = camera->GetEntity()->GetPosition();
 		const float distanceToCamera = std::max((origin - cameraPosition).Length(), 1.0f);
-		const float axisLength = std::clamp(distanceToCamera * 0.12f, 2.0f, 150.0f);
+		const float gizmoSize = std::clamp(distanceToCamera * 0.12f, 2.0f, 150.0f);
+
+		switch (GetEditorGizmoMode())
+		{
+		case EditorGizmoMode::Rotate:
+			RenderRotateGizmo(camera, origin, cameraPosition, gizmoSize, isHovering);
+			break;
+
+		case EditorGizmoMode::Scale:
+			RenderScaleGizmo(camera, origin, cameraPosition, gizmoSize, isHovering);
+			break;
+
+		default:
+			RenderTranslateGizmo(camera, origin, cameraPosition, gizmoSize, isHovering);
+			break;
+		}
+	}
+
+	void Transform::RenderTranslateGizmo(Camera* camera, const math::Vector3& origin, const math::Vector3& cameraPosition, float gizmoSize, bool& isHovering)
+	{
+		const float axisLength = gizmoSize;
 
 		const std::array<math::Vector3, 3> axisDirections = {
 			math::Vector3::Right,
@@ -849,5 +1007,326 @@ namespace HexEngine
 		}
 
 		g_translateGizmoState.wasLeftMouseDown = leftMouseDown;
+	}
+
+	void Transform::RenderRotateGizmo(Camera* camera, const math::Vector3& origin, const math::Vector3& cameraPosition, float gizmoSize, bool& isHovering)
+	{
+		constexpr int32_t kCircleSegments = 48;
+		constexpr float kTwoPi = 6.2831853f;
+
+		const std::array<math::Vector3, 3> axisDirections = {
+			math::Vector3::Right,
+			math::Vector3::Up,
+			math::Vector3::Forward
+		};
+
+		const std::array<math::Color, 3> axisColours = {
+			math::Color(1.0f, 0.2f, 0.2f, 1.0f),
+			math::Color(0.2f, 1.0f, 0.2f, 1.0f),
+			math::Color(0.2f, 0.45f, 1.0f, 1.0f)
+		};
+
+		int32_t mouseX = 0;
+		int32_t mouseY = 0;
+		g_pEnv->_inputSystem->GetMousePosition(mouseX, mouseY);
+
+		const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+		int32_t hoveredAxis = -1;
+
+		if (g_rotateGizmoState.activeTransform == nullptr || g_rotateGizmoState.activeTransform == this)
+		{
+			float closestDistance = 10.0f;
+
+			for (size_t axisIndex = 0; axisIndex < axisDirections.size(); ++axisIndex)
+			{
+				math::Vector3 u;
+				math::Vector3 v;
+				GetRotationCircleBasis((int32_t)axisIndex, u, v);
+
+				int32_t prevX = 0;
+				int32_t prevY = 0;
+				bool prevValid = false;
+
+				for (int32_t segment = 0; segment <= kCircleSegments; ++segment)
+				{
+					const float angle = (float)segment / (float)kCircleSegments * kTwoPi;
+					const math::Vector3 point = origin + (u * cosf(angle) + v * sinf(angle)) * gizmoSize;
+
+					int32_t screenX = 0;
+					int32_t screenY = 0;
+					const bool valid = g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, point, screenX, screenY);
+
+					if (valid && prevValid)
+					{
+						const float distance = DistanceToScreenLineSegment(
+							(float)mouseX, (float)mouseY,
+							(float)prevX, (float)prevY,
+							(float)screenX, (float)screenY);
+
+						if (distance < closestDistance)
+						{
+							closestDistance = distance;
+							hoveredAxis = (int32_t)axisIndex;
+							isHovering = true;
+						}
+					}
+
+					prevX = screenX;
+					prevY = screenY;
+					prevValid = valid;
+				}
+			}
+		}
+
+		int32_t originScreenX = 0;
+		int32_t originScreenY = 0;
+		const bool originOnScreen = g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, origin, originScreenX, originScreenY);
+		const float mouseAngle = atan2f((float)(mouseY - originScreenY), (float)(mouseX - originScreenX));
+
+		if (leftMouseDown && !g_rotateGizmoState.wasLeftMouseDown && hoveredAxis != -1 && g_rotateGizmoState.activeTransform == nullptr && originOnScreen)
+		{
+			g_rotateGizmoState.activeTransform = this;
+			g_rotateGizmoState.activeAxis = hoveredAxis;
+			g_rotateGizmoState.lastMouseAngle = mouseAngle;
+			g_rotateGizmoState.accumulatedAngle = 0.0f;
+			g_rotateGizmoState.dragStartRotation = GetEntity()->GetRotation();
+		}
+		else if (!leftMouseDown && g_rotateGizmoState.activeTransform == this)
+		{
+			const math::Quaternion finalRotation = GetEntity()->GetRotation();
+			if (_editorRotateCommitCallback &&
+				g_rotateGizmoState.dragStartRotation != finalRotation)
+			{
+				_editorRotateCommitCallback(GetEntity(), g_rotateGizmoState.dragStartRotation, finalRotation);
+			}
+
+			g_rotateGizmoState = {};
+		}
+
+		if (g_rotateGizmoState.activeTransform == this && g_rotateGizmoState.activeAxis >= 0 && originOnScreen)
+		{
+			float deltaAngle = mouseAngle - g_rotateGizmoState.lastMouseAngle;
+			while (deltaAngle > kTwoPi * 0.5f) deltaAngle -= kTwoPi;
+			while (deltaAngle < -kTwoPi * 0.5f) deltaAngle += kTwoPi;
+
+			// Screen-space angles run clockwise (y is down); flip the sign when the
+			// axis points toward the camera so the entity follows the mouse around
+			// the visible circle instead of counter-rotating.
+			const math::Vector3 axisDirection = axisDirections[g_rotateGizmoState.activeAxis];
+			const float facing = axisDirection.Dot(cameraPosition - origin) >= 0.0f ? -1.0f : 1.0f;
+
+			g_rotateGizmoState.accumulatedAngle += deltaAngle * facing;
+			g_rotateGizmoState.lastMouseAngle = mouseAngle;
+
+			float appliedAngle = g_rotateGizmoState.accumulatedAngle;
+			if (ed_rotateSnap._val.b)
+			{
+				const float snapRadians = std::max(ed_rotateSnapAngle._val.f32, 0.1f) * (kTwoPi / 360.0f);
+				appliedAngle = SnapToStep(appliedAngle, snapRadians);
+			}
+
+			math::Quaternion targetRotation = g_rotateGizmoState.dragStartRotation *
+				math::Quaternion::CreateFromAxisAngle(axisDirection, appliedAngle);
+			targetRotation.Normalize();
+			GetEntity()->ForceRotation(targetRotation);
+
+			hoveredAxis = g_rotateGizmoState.activeAxis;
+		}
+
+		for (size_t axisIndex = 0; axisIndex < axisDirections.size(); ++axisIndex)
+		{
+			math::Color colour = axisColours[axisIndex];
+
+			if ((int32_t)axisIndex == hoveredAxis)
+			{
+				colour = math::Color(HEX_RGB_TO_FLOAT3(255, 201, 14));
+			}
+
+			math::Vector3 u;
+			math::Vector3 v;
+			GetRotationCircleBasis((int32_t)axisIndex, u, v);
+
+			math::Vector3 previousPoint = origin + u * gizmoSize;
+			for (int32_t segment = 1; segment <= kCircleSegments; ++segment)
+			{
+				const float angle = (float)segment / (float)kCircleSegments * kTwoPi;
+				const math::Vector3 point = origin + (u * cosf(angle) + v * sinf(angle)) * gizmoSize;
+				g_pEnv->_debugRenderer->DrawLine(previousPoint, point, colour);
+				previousPoint = point;
+			}
+		}
+
+		g_rotateGizmoState.wasLeftMouseDown = leftMouseDown;
+	}
+
+	void Transform::RenderScaleGizmo(Camera* camera, const math::Vector3& origin, const math::Vector3& cameraPosition, float gizmoSize, bool& isHovering)
+	{
+		const float axisLength = gizmoSize;
+		const float handleHalfSize = gizmoSize * 0.05f;
+
+		const std::array<math::Vector3, 3> axisDirections = {
+			math::Vector3::Right,
+			math::Vector3::Up,
+			math::Vector3::Forward
+		};
+
+		const std::array<math::Color, 3> axisColours = {
+			math::Color(1.0f, 0.2f, 0.2f, 1.0f),
+			math::Color(0.2f, 1.0f, 0.2f, 1.0f),
+			math::Color(0.2f, 0.45f, 1.0f, 1.0f)
+		};
+
+		int32_t mouseX = 0;
+		int32_t mouseY = 0;
+		g_pEnv->_inputSystem->GetMousePosition(mouseX, mouseY);
+
+		const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
+		int32_t hoveredAxis = -1;
+
+		int32_t originScreenX = 0;
+		int32_t originScreenY = 0;
+		const bool originOnScreen = g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, origin, originScreenX, originScreenY);
+
+		if ((g_scaleGizmoState.activeTransform == nullptr || g_scaleGizmoState.activeTransform == this) && originOnScreen)
+		{
+			float closestAxisDistance = 14.0f;
+
+			for (size_t axisIndex = 0; axisIndex < axisDirections.size(); ++axisIndex)
+			{
+				const math::Vector3 axisEnd = origin + axisDirections[axisIndex] * axisLength;
+
+				int32_t axisScreenX = 0;
+				int32_t axisScreenY = 0;
+				if (!g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, axisEnd, axisScreenX, axisScreenY))
+					continue;
+
+				float segmentT = 0.0f;
+				const float axisDistance = DistanceToScreenLineSegment(
+					(float)mouseX,
+					(float)mouseY,
+					(float)originScreenX,
+					(float)originScreenY,
+					(float)axisScreenX,
+					(float)axisScreenY,
+					&segmentT);
+
+				if (axisDistance < closestAxisDistance && segmentT >= 0.1f)
+				{
+					closestAxisDistance = axisDistance;
+					hoveredAxis = (int32_t)axisIndex;
+					isHovering = true;
+				}
+			}
+
+			// Centre handle scales uniformly; the axis handles win when both hit.
+			if (hoveredAxis == -1)
+			{
+				const float dx = (float)(mouseX - originScreenX);
+				const float dy = (float)(mouseY - originScreenY);
+				if (sqrtf(dx * dx + dy * dy) < 12.0f)
+				{
+					hoveredAxis = 3;
+					isHovering = true;
+				}
+			}
+		}
+
+		if (leftMouseDown && !g_scaleGizmoState.wasLeftMouseDown && hoveredAxis != -1 && g_scaleGizmoState.activeTransform == nullptr && originOnScreen)
+		{
+			const float dx = (float)(mouseX - originScreenX);
+			const float dy = (float)(mouseY - originScreenY);
+
+			g_scaleGizmoState.activeTransform = this;
+			g_scaleGizmoState.activeAxis = hoveredAxis;
+			g_scaleGizmoState.accumulatedFactor = 0.0f;
+			g_scaleGizmoState.startMouseDistance = std::max(sqrtf(dx * dx + dy * dy), 1.0f);
+			g_scaleGizmoState.lastMouseX = mouseX;
+			g_scaleGizmoState.lastMouseY = mouseY;
+			g_scaleGizmoState.dragStartScale = GetEntity()->GetScale();
+		}
+		else if (!leftMouseDown && g_scaleGizmoState.activeTransform == this)
+		{
+			const math::Vector3 finalScale = GetEntity()->GetScale();
+			if (_editorScaleCommitCallback &&
+				g_scaleGizmoState.dragStartScale != finalScale)
+			{
+				_editorScaleCommitCallback(GetEntity(), g_scaleGizmoState.dragStartScale, finalScale);
+			}
+
+			g_scaleGizmoState = {};
+		}
+
+		if (g_scaleGizmoState.activeTransform == this && g_scaleGizmoState.activeAxis >= 0 && originOnScreen)
+		{
+			const int32_t activeAxis = g_scaleGizmoState.activeAxis;
+			math::Vector3 targetScale = g_scaleGizmoState.dragStartScale;
+
+			if (activeAxis == 3)
+			{
+				const float dx = (float)(mouseX - originScreenX);
+				const float dy = (float)(mouseY - originScreenY);
+				const float factor = std::max(sqrtf(dx * dx + dy * dy) / g_scaleGizmoState.startMouseDistance, 0.01f);
+				targetScale = g_scaleGizmoState.dragStartScale * factor;
+			}
+			else
+			{
+				const math::Vector3 axisEnd = origin + axisDirections[activeAxis] * axisLength;
+
+				int32_t axisScreenX = 0;
+				int32_t axisScreenY = 0;
+				if (g_pEnv->_inputSystem->GetWorldToScreenPosition(camera, axisEnd, axisScreenX, axisScreenY))
+				{
+					float axisScreenDirX = (float)(axisScreenX - originScreenX);
+					float axisScreenDirY = (float)(axisScreenY - originScreenY);
+					const float axisScreenLength = sqrtf(axisScreenDirX * axisScreenDirX + axisScreenDirY * axisScreenDirY);
+
+					if (axisScreenLength > 1.0f)
+					{
+						axisScreenDirX /= axisScreenLength;
+						axisScreenDirY /= axisScreenLength;
+
+						const float mouseDeltaX = (float)(mouseX - g_scaleGizmoState.lastMouseX);
+						const float mouseDeltaY = (float)(mouseY - g_scaleGizmoState.lastMouseY);
+						const float projectedPixels = mouseDeltaX * axisScreenDirX + mouseDeltaY * axisScreenDirY;
+
+						g_scaleGizmoState.accumulatedFactor += projectedPixels / axisScreenLength;
+					}
+				}
+
+				const float factor = std::max(1.0f + g_scaleGizmoState.accumulatedFactor, 0.01f);
+
+				switch (activeAxis)
+				{
+				case 0: targetScale.x = g_scaleGizmoState.dragStartScale.x * factor; break;
+				case 1: targetScale.y = g_scaleGizmoState.dragStartScale.y * factor; break;
+				case 2: targetScale.z = g_scaleGizmoState.dragStartScale.z * factor; break;
+				default: break;
+				}
+			}
+
+			GetEntity()->ForceScale(targetScale);
+
+			g_scaleGizmoState.lastMouseX = mouseX;
+			g_scaleGizmoState.lastMouseY = mouseY;
+			hoveredAxis = activeAxis;
+		}
+
+		const math::Color highlight = math::Color(HEX_RGB_TO_FLOAT3(255, 201, 14));
+
+		for (size_t axisIndex = 0; axisIndex < axisDirections.size(); ++axisIndex)
+		{
+			math::Color colour = axisColours[axisIndex];
+
+			if ((int32_t)axisIndex == hoveredAxis)
+				colour = highlight;
+
+			const math::Vector3 axisEnd = origin + axisDirections[axisIndex] * axisLength;
+			g_pEnv->_debugRenderer->DrawLine(origin, axisEnd, colour);
+			DrawWireCube(axisEnd, handleHalfSize, colour);
+		}
+
+		DrawWireCube(origin, handleHalfSize * 1.4f, hoveredAxis == 3 ? highlight : math::Color(0.85f, 0.85f, 0.85f, 1.0f));
+
+		g_scaleGizmoState.wasLeftMouseDown = leftMouseDown;
 	}
 }

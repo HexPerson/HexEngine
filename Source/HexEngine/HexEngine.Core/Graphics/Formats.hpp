@@ -262,6 +262,9 @@ namespace HexEngine
 		LineStrip,
 		TriangleList,
 		TriangleStrip,
+		// 3-control-point patch list - the IA topology hardware tessellation
+		// requires so the hull shader receives one triangle per patch.
+		ControlPointPatchList3,
 	};
 
 	/** @brief Render viewport in pixels (origin at top-left). */

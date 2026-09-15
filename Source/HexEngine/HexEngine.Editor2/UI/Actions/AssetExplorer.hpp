@@ -38,6 +38,11 @@ namespace HexEditor
 		void CreateNewMaterial(const fs::path& baseDir);
 		void CreateNewMaterialGraph(const fs::path& baseDir);
 		void CreateNewMaterialInstance(const fs::path& baseDir);
+		// Creation body with an EXPLICIT parent graph material - the
+		// right-click-a-material context item uses this; the parameterless
+		// flow above only serves the empty-space "Create new..." menu (and
+		// falls back to the first graph material in the view).
+		void CreateNewMaterialInstanceFrom(const fs::path& parentGraphPath, const fs::path& baseDir);
 		// In-place "Convert to material graph": loads the standard .hmat at
 		// targetPath, seeds a graph that mirrors its textures + scalar properties
 		// (via MaterialGraph::CreateFromStandardMaterial), flips _hasGraph to true,
@@ -60,6 +65,7 @@ namespace HexEditor
 		AssetDesc* FindAssetInView(const fs::path& filename);
 		void EditAssetName(AssetDesc* asset);
 		void ShowRenameAssetDialog(AssetDesc* asset);
+		void DuplicateSelectedAssets();
 		void FindAssetReferences(const fs::path& assetAbsolutePath, std::vector<fs::path>& outReferencingFiles) const;
 		bool ExecuteRenameAndUpdateReferences(const fs::path& oldAbsolutePath, const std::wstring& newStem, const std::vector<fs::path>& referencingFiles);
 		void ClearAssetIcons();

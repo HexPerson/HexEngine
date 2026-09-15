@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -152,6 +152,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
   <ItemGroup>
     <HexEngineShader Include="Atmosphere.shader" />
     <HexEngineShader Include="OutlineSeed.shader" />
+    <HexEngineShader Include="OutlineSeedAnimated.shader" />
     <HexEngineShader Include="OutlineJFA.shader" />
     <HexEngineShader Include="OutlineComposite.shader" />
     <HexEngineShader Include="DiffuseGIAmbientOcclusion.shader">
@@ -160,7 +161,43 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="DiffuseGIAOBlur.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="DiffuseGITraceBlur.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="AtmosphereCommon.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="CloudCommon.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="CloudShadowMap.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="CloudTemporal.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="SunShaftsMask.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="SunShaftsBlur.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="TransparentAtmosphere.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="EnvMapCommon.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="SkyEnvMap.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="ProbeEnvMap.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="EnvMapSH.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
+    <HexEngineShader Include="DFGLut.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
     <HexEngineShader Include="AtmosphereTransmittanceLUT.shader">
@@ -187,15 +224,37 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="VolumetricScatterApply.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="VolumetricScatterFilter.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="AtmospherePhysical.shader" />
+    <HexEngineShader Include="DefaultSnowTess.shader" />
+    <HexEngineShader Include="SnowShell.shader" />
+    <HexEngineShader Include="SnowFootstamp.shader" />
     <HexEngineShader Include="AutoExposureLuminance.shader" />
+    <HexEngineShader Include="AutoExposureHistogram.shader" />
+    <HexEngineShader Include="BloomDownsample.shader" />
+    <HexEngineShader Include="BloomTemporal.shader" />
+    <HexEngineShader Include="BloomUpsample.shader" />
+    <HexEngineShader Include="BloomComposite.shader" />
+    <HexEngineShader Include="MotionBlurTileMax.shader" />
+    <HexEngineShader Include="MotionBlurNeighborMax.shader" />
+    <HexEngineShader Include="MotionBlurGather.shader" />
+    <HexEngineShader Include="CAS.shader" />
     <HexEngineShader Include="BasicDenoise.shader" />
     <HexEngineShader Include="BuildDepthPyramid.shader" />
+    <HexEngineShader Include="ClusterLightCull.shader" />
+    <HexEngineShader Include="ClusterLightApply.shader" />
+    <HexEngineShader Include="ClusterLightDebug.shader" />
     <HexEngineShader Include="ParticleSimulate.shader" />
     <HexEngineShader Include="ParticleBillboardLit.shader" />
     <HexEngineShader Include="DefaultAnimated.shader" />
     <HexEngineShader Include="DiffuseGIClearVoxel.shader" />
     <HexEngineShader Include="DiffuseGIBuildCandidates.shader" />
+    <HexEngineShader Include="DiffuseGICandidateArgsFixup.shader" />
+    <HexEngineShader Include="DiffuseGIInjectResolve.shader" />
+    <HexEngineShader Include="DiffuseGILitCacheMerge.shader" />
+    <HexEngineShader Include="DiffuseGIScreenFeedback.shader" />
     <HexEngineShader Include="DiffuseGIVoxelizeEval.shader" />
     <HexEngineShader Include="DiffuseGIPropagateVoxel.shader" />
     <HexEngineShader Include="GpuFrustumCull.shader" />
@@ -214,6 +273,8 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="DefaultPixel.shader" />
     <HexEngineShader Include="ShadowMapGeometryAnimated.shader" />
     <HexEngineShader Include="SSRResolve.shader" />
+    <HexEngineShader Include="SSRGuideDownsample.shader" />
+    <HexEngineShader Include="SSRUpsample.shader" />
     <HexEngineShader Include="UIBasic.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
@@ -278,6 +339,8 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <None Include="LightingUtils.shader" />
     <None Include="Mesh.shader" />
     <None Include="MeshCommon.shader" />
+    <None Include="SnowCommon.shader" />
+    <None Include="WaterCommon.shader" />
     <HexEngineShader Include="PostFog.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
@@ -326,6 +389,7 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="Vignette.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="LensDrips.shader" />
     <HexEngineShader Include="VolumetricClouds.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
@@ -341,7 +405,6 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="Water.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
-    <None Include="WaterMask.shader" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\HexEngine.ShaderCompiler\HexEngine.ShaderCompiler.vcxproj">

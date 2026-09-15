@@ -43,18 +43,38 @@
 	SamplerState g_pointSampler          : register(s2);
 	SamplerState g_linearSampler         : register(s4);
 
-	static const float MAX_DIST_M       = 100000.0f;
-	// Distance at which we force the AP composite to fully match the sky
-	// LUT colour in the view direction. Beyond this the geometry pixel
-	// should be visually indistinguishable from the sky behind it.
-	// Clear-air physics alone doesn't attenuate a 10 km mountain enough
-	// to produce that silhouette-fade in real life either, but production
-	// engines (UE5 SkyAtmosphere, Frostbite, Horizon) all explicitly
-	// blend toward the sky LUT at far distance to sell the look.
-	static const float SKY_MATCH_DIST_M = 10000.0f;
+	// Same cbuffer the sky dome reads (AtmosphereLUTs::SetSkyRenderParams).
+	// The far dissolve applies the dome's weather overcast lerp so geometry
+	// dissolves into the SAME sky the dome renders.
+	cbuffer SkyRenderParams : register(b6)
+	{
+		float4 g_skyOvercastColour;
+		float  g_skyOvercastAmount;
+		float3 g_skyRenderPad; // .x = LUT available
+		float4 g_skyHdrParams; // x reserved, y = disc diameter deg, z = disc intensity, w = stars
+		float4 g_skyCirrusParams; // cirrus layer (unused here; layout match)
+	};
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
+		// Volume far plane: camera-far derived, shared with the LUT generator
+		// via AtmosphereApMaxDistM() in AtmosphereCommon (the two must agree
+		// exactly or every pixel samples the wrong slice).
+		const float maxDistM = AtmosphereApMaxDistM();
+		// Distance at which we force the AP composite to fully match the sky
+		// LUT colour in the view direction. Beyond this the geometry pixel
+		// should be visually indistinguishable from the sky behind it.
+		// Clear-air physics alone doesn't attenuate distant geometry enough
+		// to produce that silhouette-fade in real life either, but production
+		// engines (UE5 SkyAtmosphere, Frostbite, Horizon) all explicitly
+		// blend toward the sky LUT at far distance to sell the look. Tied to
+		// the camera far plane - geometry stops existing there, so completing
+		// the dissolve exactly at that distance hides far-plane pop-in
+		// regardless of scene scale (the old hardcoded 10 km made mid-ground
+		// buildings dissolve in scenes with a short far plane, and was never
+		// reached at all in scenes with a shorter one).
+		const float skyMatchDistM = maxDistM;
+
 		const float2 uv = input.texcoord;
 
 		const float4 beauty = g_beauty.Sample(g_pointSampler, uv);
@@ -71,46 +91,66 @@
 		// View-space depth is packed in normal.w (positive forward, metres).
 		const float depthVS = nd.w;
 
-		// Volume W axis is linear distance in [0, MAX_DIST_M]. Pixels past
+		// Volume W axis is linear distance in [0, maxDistM]. Pixels past
 		// the AP range take the far-most slice (which is the deepest
 		// integration result) so distant geometry receives full atmospheric
-		// fade rather than abruptly stopping at 32 km.
-		const float w = saturate(depthVS / MAX_DIST_M);
+		// fade rather than abruptly stopping at the volume far plane.
+		const float w = saturate(depthVS / maxDistM);
 
 		// Sample the volume with linear filter for cross-froxel smoothing.
 		float4 ap = g_aerialPerspectiveLUT.SampleLevel(g_linearSampler, float3(uv, w), 0);
 
 		// Fade AP toward identity (transmittance=1, inscatter=0) for pixels
-		// closer than the first froxel's depth (~500 m, since the volume
-		// has 32 slices over 32 km). Without this, every pixel within
-		// 500 m samples texel 0 with CLAMP - meaning a 5 m wall and a
-		// 500 m wall both get the same "500 m of atmospheric haze" tint.
-		// The first-slice inscatter is dominated by multi-scattering at
-		// low altitude which is non-trivial, hence the visible blue cast
-		// on the foreground. apNearFade ramps in linearly from camera to
-		// the first-slice depth.
-		const float FIRST_SLICE_DEPTH_M = MAX_DIST_M * (0.5f / 32.0f);
-		const float apNearFade = saturate(depthVS / FIRST_SLICE_DEPTH_M);
+		// closer than the first froxel's depth (half a slice of the 32-slice
+		// volume - with the camera-far-derived range this is farZ/64, e.g.
+		// ~31 m at a 2 km far plane instead of the old fixed 500 m). Without
+		// this, every pixel nearer than the first slice samples texel 0 with
+		// CLAMP - meaning a 5 m wall and a first-slice-distance wall both get
+		// the same slice-0 haze tint. The first-slice inscatter is dominated
+		// by multi-scattering at low altitude which is non-trivial, hence the
+		// visible blue cast on the foreground. apNearFade ramps in linearly
+		// from camera to the first-slice depth.
+		const float firstSliceDepthM = maxDistM * (0.5f / 32.0f);
+		const float apNearFade = saturate(depthVS / firstSliceDepthM);
 		ap.rgb *= apNearFade;
 		ap.a    = lerp(1.0f, ap.a, apNearFade);
 
 		// Volume-only composite: beauty * t + I.
 		const float3 volumeFinal = beauty.rgb * ap.a + ap.rgb;
 
-		// Sky LUT match for far distances. Reconstruct the view direction
+		// Sky LUT match near the far plane. Reconstruct the view direction
 		// from the gbuffer's world position so we can sample the SkyView
-		// LUT at the exact ray the pixel was rendered from. Then lerp
-		// the volume composite toward the sky colour proportional to
-		// distance - at SKY_MATCH_DIST_M the pixel reads as pure sky,
-		// guaranteeing the geometry silhouette dissolves into the sky
-		// background.
+		// LUT at the ray the pixel was rendered from, then dissolve the
+		// volume composite toward that sky colour as the pixel approaches
+		// skyMatchDistM (the camera far plane), so the silhouette melts into
+		// the sky instead of popping.
 		const float3 pixelWorld = GBUFFER_POSITION.Sample(g_pointSampler, uv).xyz;
 		const float3 viewDir = normalize(pixelWorld - g_eyePos.xyz);
 		const float3 sunDir  = normalize(-g_lightDirection.xyz);
-		const float2 skyUv   = SkyViewLutParamsToUv(viewDir, sunDir);
-		const float3 skyLutColour = g_atmSkyViewLUT.SampleLevel(g_linearSampler, skyUv, 0).rgb;
+		// Sample the sky AT OR ABOVE the horizon. A ray to a distant mountain's
+		// lower slopes points below the eye horizon, where the sky-view LUT
+		// holds its ground/ocean colour - matching toward that painted the sea
+		// horizon line straight through the mountain. The dissolve target must
+		// always be sky; horizon sky is the closest physically sensible colour
+		// for a below-horizon ray that ends on geometry.
+		float3 matchDir = viewDir;
+		matchDir.y = max(matchDir.y, 0.02f);
+		matchDir = normalize(matchDir);
+		const float2 skyUv   = SkyViewLutParamsToUv(matchDir, sunDir);
+		float3 skyLutColour = g_atmSkyViewLUT.SampleLevel(g_linearSampler, skyUv, 0).rgb;
+		// Match the dome's weather overcast lerp (previously the dissolve
+		// targeted the raw clear-sky LUT, so under a storm distant ridges
+		// dissolved into clear blue). No radiance scale needed - the lever is
+		// baked into the LUT at generation.
+		skyLutColour = lerp(skyLutColour, g_skyOvercastColour.rgb, saturate(g_skyOvercastAmount));
 
-		const float skyMatchT = pow(saturate(depthVS / SKY_MATCH_DIST_M), 1.6f);
+		// Far-plane DISSOLVE, not haze: the volume composite above already
+		// carries the physical distance haze (inscatter + transmittance
+		// integrated along the ray, no horizon seam). The explicit sky match
+		// exists only to hide geometry popping at the far plane, so it engages
+		// over the last stretch before it - mid-range objects keep their own
+		// shading instead of going translucent to the sky behind them.
+		const float skyMatchT = smoothstep(0.80f, 1.0f, depthVS / skyMatchDistM);
 		const float3 final = lerp(volumeFinal, skyLutColour, skyMatchT);
 
 		return float4(final, beauty.a);

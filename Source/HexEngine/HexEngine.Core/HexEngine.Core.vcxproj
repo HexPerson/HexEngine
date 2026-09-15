@@ -339,6 +339,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\IDenoiserProvider.hpp" />
     <ClInclude Include="Graphics\IStreamlineProvider.hpp" />
     <ClInclude Include="Graphics\IStructuredBuffer.hpp" />
+    <ClInclude Include="Graphics\ClusteredLighting.hpp" />
+    <ClInclude Include="Graphics\ShadowAtlas.hpp" />
     <ClInclude Include="Graphics\MeshLoader.hpp" />
     <ClInclude Include="Graphics\TextureLoader.hpp" />
     <ClInclude Include="GUI\Elements\Canvas.hpp" />
@@ -363,6 +365,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Scripting\ScriptFile.hpp" />
     <ClInclude Include="FileSystem\XmlFile.hpp" />
     <ClInclude Include="Graphics\AutoExposure.hpp" />
+    <ClInclude Include="Graphics\ColourLut.hpp" />
     <ClInclude Include="Graphics\Bloom.hpp" />
     <ClInclude Include="Graphics\IconService.hpp" />
     <ClInclude Include="Graphics\IParticleSystem.hpp" />
@@ -437,6 +440,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="HexEngine.hpp" />
     <ClInclude Include="Entity\Component\InteractionComponent.hpp" />
     <ClInclude Include="Entity\Component\DoorComponent.hpp" />
+    <ClInclude Include="Entity\Component\SoundEffectComponent.hpp" />
     <ClInclude Include="Entity\Component\SpotLight.hpp" />
     <ClInclude Include="Entity\Component\FirstPersonCameraController.hpp" />
     <ClInclude Include="Entity\Component\Light.hpp" />
@@ -449,9 +453,12 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Component\TimedLifetimeComponent.hpp" />
     <ClInclude Include="Entity\Component\DayNightCycleComponent.hpp" />
     <ClInclude Include="Entity\Component\DecalComponent.hpp" />
+    <ClInclude Include="Entity\Component\SnowFootprintsComponent.hpp" />
+    <ClInclude Include="Entity\Component\ReflectionProbeComponent.hpp" />
     <ClInclude Include="Entity\Component\NavMeshBlockingVolume.hpp" />
     <ClInclude Include="Entity\Component\NavMeshLinkComponent.hpp" />
     <ClInclude Include="Entity\Component\PlayerStartComponent.hpp" />
+    <ClInclude Include="Entity\Component\DrivableComponent.hpp" />
     <ClInclude Include="Entity\Component\ParticleSystemComponent.hpp" />
     <ClInclude Include="Entity\Component\Transform.hpp" />
     <ClInclude Include="Entity\Component\UpdateComponent.hpp" />
@@ -530,6 +537,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Scene\Octree.hpp" />
     <ClInclude Include="Scene\RenderState.hpp" />
     <ClInclude Include="Scene\Scene.hpp" />
+    <ClInclude Include="Scene\SnowFootprintSystem.hpp" />
     <ClInclude Include="Scene\Mesh.hpp" />
     <ClInclude Include="Scene\SceneManager.hpp" />
     <ClInclude Include="Scene\SceneRenderer.hpp" />
@@ -569,6 +577,8 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="FileSystem\ParticleEffectLoader.cpp" />
     <ClCompile Include="FileSystem\ProjectFile.cpp" />
     <ClCompile Include="Graphics\IFontResource.cpp" />
+    <ClCompile Include="Graphics\ClusteredLighting.cpp" />
+    <ClCompile Include="Graphics\ShadowAtlas.cpp" />
     <ClCompile Include="Graphics\MeshLoader.cpp" />
     <ClCompile Include="Graphics\TextureLoader.cpp" />
     <ClCompile Include="GUI\Elements\Canvas.cpp" />
@@ -590,6 +600,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Scene\ParticleWorldSystem.cpp" />
     <ClCompile Include="Scripting\ScriptFile.cpp" />
     <ClCompile Include="Graphics\AutoExposure.cpp" />
+    <ClCompile Include="Graphics\ColourLut.cpp" />
     <ClCompile Include="Graphics\Bloom.cpp" />
     <ClCompile Include="Graphics\IconService.cpp" />
     <ClCompile Include="Graphics\LogWindowMessages.cpp" />
@@ -644,6 +655,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\Collider.cpp" />
     <ClCompile Include="Entity\Component\InteractionComponent.cpp" />
     <ClCompile Include="Entity\Component\DoorComponent.cpp" />
+    <ClCompile Include="Entity\Component\SoundEffectComponent.cpp" />
     <ClCompile Include="Entity\Component\Light.cpp" />
     <ClCompile Include="Entity\Component\SpotLight.cpp" />
     <ClCompile Include="Entity\Component\FirstPersonCameraController.cpp" />
@@ -656,9 +668,12 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\TimedLifetimeComponent.cpp" />
     <ClCompile Include="Entity\Component\DayNightCycleComponent.cpp" />
     <ClCompile Include="Entity\Component\DecalComponent.cpp" />
+    <ClCompile Include="Entity\Component\SnowFootprintsComponent.cpp" />
+    <ClCompile Include="Entity\Component\ReflectionProbeComponent.cpp" />
     <ClCompile Include="Entity\Component\NavMeshBlockingVolume.cpp" />
     <ClCompile Include="Entity\Component\NavMeshLinkComponent.cpp" />
     <ClCompile Include="Entity\Component\PlayerStartComponent.cpp" />
+    <ClCompile Include="Entity\Component\DrivableComponent.cpp" />
     <ClCompile Include="Entity\Component\ParticleSystemComponent.cpp" />
     <ClCompile Include="Entity\Component\Transform.cpp" />
     <ClCompile Include="Entity\Component\UpdateComponent.cpp" />
@@ -712,6 +727,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     </ClCompile>
     <ClCompile Include="Scene\SceneManager.cpp" />
     <ClCompile Include="Scene\SceneRenderer.cpp" />
+    <ClCompile Include="Scene\SnowFootprintSystem.cpp" />
     <ClCompile Include="Terrain\HeightMapGenerator.cpp" />
     <ClCompile Include="Terrain\TerrainGenerator.cpp" />
     <ClCompile Include="Utility\MemoryManager.cpp" />

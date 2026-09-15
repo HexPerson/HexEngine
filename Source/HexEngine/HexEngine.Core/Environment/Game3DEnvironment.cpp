@@ -93,8 +93,7 @@ namespace HexEngine
 
 		env->_assetPackageManager = new AssetPackageManager;
 
-#if 1//ndef _DEBUG
-		if (fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
+		if (options.mountEngineAssetPackage && fs::exists(".\\Data\\AssetPackages\\EngineAssets.pkg"))
 		{
 			FileSystem tempFs(L"EngineDataBootStrap");
 			tempFs.SetBaseDirectory(fs::current_path());
@@ -114,7 +113,6 @@ namespace HexEngine
 			// now but the second call was still pointless).
 		}
 		else
-#endif
 		{
 			env->_fileSystem = new FileSystem(L"EngineData");
 			env->_fileSystem->SetBaseDirectory(fs::current_path());
@@ -726,13 +724,24 @@ namespace HexEngine
 
 						_graphicsDevice->SetBlendState(BlendState::Transparency);
 
-						if (!_inEditorMode)
+						// Play-in-editor: the editor publishes its scene-panel rect
+						// to the engine via InputSystem::SetInputViewport (mouse
+						// input is already remapped with it). When that rect exists,
+						// the GAME's UI below is confined to it - and the fullscreen
+						// scene blit is skipped entirely: the editor's SceneSurface
+						// element already displays the camera RT inside the panel,
+						// so the blit was a wasted full-window draw painted over by
+						// the editor background every frame.
+						math::Viewport sceneViewRect;
+						const bool confineGameUi =
+							_inputSystem != nullptr &&
+							_inputSystem->GetInputViewport(sceneViewRect) &&
+							sceneViewRect.width > 0.0f && sceneViewRect.height > 0.0f;
+
+						if (!_inEditorMode && !confineGameUi)
 						{
-							auto presentShader = (IShader*)nullptr;
-							if (auto backBuffer = _graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
-							{
-								presentShader = _hdrPresentShader.get();
-							}
+							auto presentShader = _graphicsDevice->IsHdrOutput()
+								? _hdrPresentShader.get() : (IShader*)nullptr;
 
 							_uiManager->GetRenderer()->FullScreenTexturedQuad(_sceneManager->GetCurrentScene()->GetMainCamera()->GetRenderTarget(), presentShader);
 						}
@@ -741,12 +750,33 @@ namespace HexEngine
 
 						_uiManager->Render();
 
-						_sceneManager->GetCurrentScene()->OnGUI();						
+						// GAME UI (per-component OnGUI + game-extension HUDs). With a
+						// scene-view rect active, set the HARDWARE viewport to it: the
+						// viewport transform then squeezes the full-window-authored
+						// game UI into the panel - the same linear mapping the 3D
+						// scene RT gets when SceneSurface displays it - and the
+						// rasterizer clips anything outside. This covers every draw
+						// path (quads, glyphs, fullscreen fades) without touching
+						// GuiRenderer's several inline NDC mappings. Standalone
+						// builds have no custom input viewport and are untouched.
+						if (confineGameUi)
+						{
+							graphics->SetViewport(Viewport(
+								sceneViewRect.x, sceneViewRect.y,
+								sceneViewRect.width, sceneViewRect.height));
+						}
+
+						_sceneManager->GetCurrentScene()->OnGUI();
 
 						for (auto& extension : _gameExtensions)
 						{
 							extension->OnGUI();
 						}
+
+						// Editor overlays below (console, debug GUI, fps) draw at
+						// full window again.
+						if (confineGameUi)
+							graphics->SetViewport(graphics->GetBackBufferViewport());
 
 						if (auto console = _commandManager->GetConsole(); console != nullptr)
 						{

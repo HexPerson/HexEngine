@@ -74,6 +74,17 @@ namespace HexEngine
 			return nullptr;
 		}
 
+		// Paths/FS must be set BEFORE ParseJson. The ResourceSystem assigns them
+		// after this loader returns, but ParseJson already needs them: the
+		// graph-instance apply and the stale-graph auto-recompile both call
+		// ResolveGeneratedShaderDirectory(material), which reads the owning
+		// filesystem / absolute path. With both unset every instance material
+		// failed its load-time compile with "Could not resolve a generated
+		// shader output directory" and silently kept the stale baked shader
+		// from the .hmat. (ResourceSystem re-assigns the same values later -
+		// harmless.)
+		material->SetPaths(absolutePath, fileSystem);
+
 		ParseJson(&file, matData, material);
 
 		_loadedMaterials[absolutePath] = material;
@@ -202,11 +213,24 @@ namespace HexEngine
 			// glass, polished pavement, etc.) and leave it at 0 for dry-only surfaces.
 			file->Deserialize(properties, "rainDripIntensity", props.rainDripIntensity);
 
+			// Vegetation wind sway (x = bend, y = flutter, z = characteristic
+			// height m, w = mode 0/1/2). Absent from older materials -> zero = off.
+			file->Deserialize(properties, "windSwayParams", props.windSwayParams);
+
 			bool affectsGI = true;
 			file->Deserialize(properties, "affectsGI", affectsGI);
 			material->SetAffectsGI(affectsGI);
 
-			bool emissiveAffectsGI = false;
+			bool receivesSnow = false;
+			file->Deserialize(properties, "receivesSnow", receivesSnow);
+			material->SetReceivesSnow(receivesSnow);
+
+			// Default ON when the key is absent: emissive materials should light
+			// the scene through GI unless explicitly opted out. Converted/imported
+			// materials never carried the key, which left every neon in an
+			// imported scene invisible to the voxel field (telemetry:
+			// emissiveMats=0 in a scene lit almost entirely by emissive strips).
+			bool emissiveAffectsGI = true;
 			file->Deserialize(properties, "emissiveAffectsGI", emissiveAffectsGI);
 			material->SetEmissiveAffectsGI(emissiveAffectsGI);
 
@@ -306,6 +330,7 @@ namespace HexEngine
 			if (MaterialGraph::Deserialize(*graphIt, material->_graph, &graphErrors))
 			{
 				material->_hasGraph = true;
+				material->InvalidateGiGraphTintCache();
 			}
 			else
 			{
@@ -526,27 +551,20 @@ namespace HexEngine
 
 		if (mat)
 		{
-			if (mat->_hasGraph)
-			{
-				MaterialGraphDialog* graphDialog = new MaterialGraphDialog(
-					g_pEnv->GetUIManager().GetRootElement(),
-					Point(cx - dlgW / 2, cy - dlgH / 2),
-					Point(dlgW, dlgH),
-					std::format(L"Editing Material Graph '{}'", paths[0].filename().wstring()),
-					mat);
-				return graphDialog;
-			}
-			else
-			{
-				MaterialDialog* dlg = new MaterialDialog(
-					g_pEnv->GetUIManager().GetRootElement(),
-					Point(cx - dlgW / 2, cy - dlgH / 2),
-					Point(dlgW, dlgH),
-					std::format(L"Editing Material '{}'", paths[0].filename().wstring()),
-					mat);
-
-				return dlg;
-			}
+			// Graph-only authoring policy: EVERY material opens in the graph
+			// editor. Legacy standard materials are auto-promoted (and saved)
+			// by the dialog's EnsureGraphExists; graph instances open in the
+			// dialog's instance mode (parent graph displayed, only parameter
+			// overrides editable). The legacy MaterialDialog is retired from
+			// the open path.
+			const wchar_t* kind = mat->_hasGraphInstance ? L"Material Instance" : L"Material Graph";
+			MaterialGraphDialog* graphDialog = new MaterialGraphDialog(
+				g_pEnv->GetUIManager().GetRootElement(),
+				Point(cx - dlgW / 2, cy - dlgH / 2),
+				Point(dlgW, dlgH),
+				std::format(L"Editing {} '{}'", kind, paths[0].filename().wstring()),
+				mat);
+			return graphDialog;
 		}
 
 		return nullptr;
@@ -604,7 +622,10 @@ namespace HexEngine
 			file.Serialize(properties, "materialModel", material->_properties.materialModel);
 			file.Serialize(properties, "modelParams", material->_properties.modelParams);
 			file.Serialize(properties, "rainDripIntensity", material->_properties.rainDripIntensity);
+			// Vegetation wind sway (bend / flutter / char height / mode).
+			file.Serialize(properties, "windSwayParams", material->_properties.windSwayParams);
 			file.Serialize(properties, "affectsGI", material->GetAffectsGI());
+			file.Serialize(properties, "receivesSnow", material->GetReceivesSnow());
 			file.Serialize(properties, "emissiveAffectsGI", material->GetEmissiveAffectsGI());
 			file.Serialize(properties, "footstepSoundPath", material->GetFootstepSoundPath());
 			file.Serialize(properties, "footstepSurfaceMap", material->GetFootstepSurfaceMapPath());

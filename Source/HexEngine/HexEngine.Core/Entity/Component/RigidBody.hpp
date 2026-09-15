@@ -30,7 +30,7 @@ namespace HexEngine
 
 		void AddSphereCollider(float radius);
 
-		void AddCapsuleCollider(float radius, float height);
+		void AddCapsuleCollider(float radius, float height, int axis = 1, math::Vector3 offset = math::Vector3(0.0f, 0.0f, 0.0f));
 
 		void AddTerrainCollider(Terrain* terrain);
 
@@ -111,11 +111,27 @@ namespace HexEngine
 		void EnableForcePoseUpdates(bool enable);
 
 	private:
+		// Turn transform interpolation on for a dynamic body (off otherwise), so
+		// its mesh moves smoothly between fixed physics ticks instead of stepping.
+		// Skips character controllers (they manage their own) and kinematic/static
+		// bodies (driven by game code / immobile; interpolating them fights the
+		// direct SetPosition writes). Call whenever the body type is established.
+		void UpdateInterpolationState();
+
 		void SetBodyTypeFromWidget(IRigidBody::BodyType type, DropDown* element);
 
 		void AddTriangleColliderFromWidget(DropDown* widget);
 
 		void AddBoxColliderFromWidget(DropDown* widget);
+
+		void AddCapsuleColliderFromWidget(DropDown* widget);
+
+		void AddSphereColliderFromWidget(DropDown* widget);
+
+		// Rebuild the capsule shape from the current _colliderData.capsule values
+		// (radius/height/axis/offset), used by the inspector drag fields so the
+		// author can size a capsule to their mesh live.
+		void RebuildCapsuleFromData();
 
 		void OnSetIsTriggerFromWidget(bool value);
 

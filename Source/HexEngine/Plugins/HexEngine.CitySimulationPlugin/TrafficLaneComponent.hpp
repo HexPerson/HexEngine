@@ -23,11 +23,15 @@ public:
 	std::string GetNextLaneNamesCsv() const;
 	bool IsLooping() const { return _loop; }
 	float GetSpeedLimit() const { return _speedLimit; }
+	float GetCornerRadius() const { return _cornerRadius; }
 	bool GetDrawDebug() const { return _drawDebug; }
 
 private:
 	bool _loop = true;
 	float _speedLimit = 30.0f;
+	// Fillet radius vehicles use when turning through this node. 0 = hard
+	// corner (old point-turn behaviour).
+	float _cornerRadius = 4.0f;
 	bool _drawDebug = true;
 	std::vector<std::string> _nextLaneEntityNames;
 	size_t _sequentialNextLaneCursor = 0;

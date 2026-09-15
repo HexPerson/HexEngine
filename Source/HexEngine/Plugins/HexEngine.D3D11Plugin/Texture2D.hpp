@@ -46,6 +46,8 @@ public:
 
 	virtual void GetPixels(std::vector<uint8_t>& buffer) override;
 
+	virtual bool GetPixelsScaled(std::vector<uint8_t>& buffer, int32_t maxDimension, int32_t& outWidth, int32_t& outHeight) override;
+
 	virtual void GetPixels(std::vector<float>& buffer) override;
 
 	virtual void* GetSharedHandle() override;

@@ -31,10 +31,14 @@
 	/* --- Settings --- */
 
 #define VignetteType       1  //[1|2|3] 1 = Original, 2 = New, 3 = TV style
-#define VignetteRatio   1.00  //[0.15 to 6.00]  Sets a width to height ratio. 1.00 (1/1) is perfectly round, while 1.60 (16/10) is 60 % wider than it's high.
-#define VignetteRadius  1.00  //[-1.00 to 3.00] lower values = stronger radial effect from center
-#define VignetteAmount -0.50  //[-2.00 to 1.00] Strength of black. -2.00 = Max Black, 1.00 = Max White.
-#define VignetteSlope      8  //[2 to 16] How far away from the center the change should start to really grow strong (odd numbers cause a larger fps drop than even numbers)
+	// P4.8: ratio / radius / amount / slope now come from the per-frame
+	// cbuffer (g_vignetteParams, fed by the r_vignette* cvars) instead of
+	// compile-time constants - live-tunable, and the C++ side skips the
+	// whole pass at amount 0.
+#define VignetteRatio   (g_vignetteParams.w)
+#define VignetteRadius  (g_vignetteParams.y)
+#define VignetteAmount  (g_vignetteParams.x)
+#define VignetteSlope   (g_vignetteParams.z)
 #define VignetteCenter float2(0.500, 0.500)  //[0.000 to 1.000, 0.000 to 1.000] Center of effect for VignetteType 1. 2 and 3 do not obey this setting.
 
 

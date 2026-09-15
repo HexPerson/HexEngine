@@ -90,6 +90,11 @@ public:
 
 	virtual ShaderStageImpl<ID3D11GeometryShader>* CreateGeometryShader(std::vector<uint8_t>& shaderCode) override;
 
+	// Tessellation stages (Phase 3 snow displacement). ShaderStageImpl is
+	// generic over the native type, so these mirror the VS/PS/GS creators.
+	virtual ShaderStageImpl<ID3D11HullShader>*   CreateHullShader(std::vector<uint8_t>& shaderCode) override;
+	virtual ShaderStageImpl<ID3D11DomainShader>* CreateDomainShader(std::vector<uint8_t>& shaderCode) override;
+
 	virtual ShaderStageImpl<ID3D11ComputeShader>* CreateComputeShader(std::vector<uint8_t>& shaderCode) override;
 	virtual ShaderStageImpl<ID3D11ComputeShader>* CreateComputeShaderFromSource(const std::string& shaderSource, const std::string& entryPoint = "MainCS") override;
 
@@ -116,6 +121,8 @@ public:
 
 	virtual void SetPixelShader(HexEngine::IShaderStage* shader) override;
 	virtual void SetGeometryShader(HexEngine::IShaderStage* shader) override;
+	virtual void SetHullShader(HexEngine::IShaderStage* shader) override;
+	virtual void SetDomainShader(HexEngine::IShaderStage* shader) override;
 	virtual void SetComputeShader(HexEngine::IShaderStage* shader) override;
 
 	virtual void SetInputLayout(HexEngine::IInputLayout* layout) override;
@@ -124,6 +131,8 @@ public:
 
 	virtual void SetConstantBufferPS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 	virtual void SetConstantBufferGS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
+	virtual void SetConstantBufferHS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
+	virtual void SetConstantBufferDS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 	virtual void SetConstantBufferCS(uint32_t slot, HexEngine::IConstantBuffer* buffer) override;
 
 	virtual void SetTexture2D(uint32_t slot, HexEngine::ITexture2D* texture) override;
@@ -132,6 +141,7 @@ public:
 
 	virtual void SetTexture3D(HexEngine::ITexture3D* texture) override;
 	virtual void SetGeometryTexture3D(uint32_t slot, HexEngine::ITexture3D* texture) override;
+	virtual void SetDomainTexture2D(uint32_t slot, HexEngine::ITexture2D* texture) override;
 	virtual void SetVertexStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer) override;
 	virtual void SetGeometryStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer) override;
 	virtual void SetComputeTexture3D(uint32_t slot, HexEngine::ITexture3D* texture) override;
@@ -223,6 +233,8 @@ public:
 
 	virtual HexEngine::BlendState GetBlendState() const override;
 
+	virtual void SetVelocityMrtPhase(bool active) override;
+
 	virtual int32_t GetCurrentMSAALevel() const override;
 
 	virtual void SetScissorRect(const HexEngine::ScissorRect& rect) override;
@@ -310,6 +322,17 @@ private:
 	ID3D11BlendState* _additivePreserveAlphaBlendState = nullptr;
 	ID3D11BlendState* _transparencyPreserveAlphaBlendState = nullptr;
 	ID3D11BlendState* _multiplicativeBlendState = nullptr;
+	ID3D11BlendState* _premultipliedAlphaBlendState = nullptr;
+	// P4.4 velocity-MRT phase: IndependentBlendEnable variants of the blending
+	// states (RT0 = the state's colour blend, RT4 = overwrite) + the flag that
+	// makes SetBlendState substitute them. See SetVelocityMrtPhase.
+	ID3D11BlendState* _velocityMrtSubtractive = nullptr;
+	ID3D11BlendState* _velocityMrtAdditive = nullptr;
+	ID3D11BlendState* _velocityMrtPremultiplied = nullptr;
+	ID3D11BlendState* _velocityMrtTransparencyPreserve = nullptr;
+	ID3D11BlendState* _velocityMrtMultiplicative = nullptr;
+	ID3D11BlendState* _velocityMrtTransparency = nullptr;
+	bool _velocityMrtPhase = false;
 	//ID3D11Texture2D* _depthStencilBuffer = nullptr;
 
 	std::unordered_map<HexEngine::Window*, DeviceData> _deviceData;

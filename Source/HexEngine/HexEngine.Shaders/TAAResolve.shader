@@ -60,7 +60,18 @@
 		// the genuinely-stale-history case (it clamps the reprojected history to the current
 		// frame's local color range), so we don't need a separate motion-based reject term.
 
-		float2 prevousPixelPos = input.texcoord + velocity;
+		// CalcVelocity emits a clip-space delta (+y up) while texcoord is a UV (+y down), so
+		// on paper y wants negating here - and Streamline (mvecScale = {1,-1}) and NRD
+		// (motionVectorScale[1] = -1) both do exactly that with the same buffer.
+		//
+		// In practice flipping it here produced visible vertical ghosting under camera
+		// movement, so it is a runtime knob rather than a silent change, defaulting to the
+		// engine's long-standing behaviour (+1, i.e. plain addition). The likely reason the
+		// two disagree: correcting the sign makes history land on the correct pixel and
+		// therefore survive the depth test and variance clip far more often, so it exposes
+		// however much ghosting the clip below was already tolerating. Retune
+		// r_taaVarianceGamma downward alongside r_taaVelocityYSign, not independently.
+		float2 prevousPixelPos = input.texcoord + float2(velocity.x, velocity.y * g_taaParams.y);
 
 		float3 history = historyTexture.Sample(LinearSampler, prevousPixelPos);
 
@@ -120,7 +131,11 @@
 		const float3 variance = max(m2 * invN - mean * mean, 0.0f.xxx);
 		const float3 sigma = sqrt(variance);
 
-		const float gamma = 0.5f;
+		// Runtime-tunable (r_taaVarianceGamma), defaulting to the 0.5 this shader shipped
+		// with. 1.25 is the textbook value the comment above cites, but raising it here
+		// loosened the clip enough to ghost under camera movement - it was doing more work
+		// than "standard" suggests.
+		const float gamma = g_taaParams.x;
 		const float3 clipMin = mean - sigma * gamma;
 		const float3 clipMax = mean + sigma * gamma;
 		history = clamp(history, clipMin, clipMax);

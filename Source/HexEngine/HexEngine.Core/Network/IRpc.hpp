@@ -41,7 +41,7 @@ namespace HexEngine
 	 * host to do something - the host validates (it checks the sender owns the
 	 * target entity) and runs it. Client/Multicast RPCs originate only on the host.
 	 */
-	class IRpcReceiver
+	class HEX_API IRpcReceiver
 	{
 	public:
 		virtual ~IRpcReceiver() = default;

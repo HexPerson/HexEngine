@@ -432,7 +432,16 @@ namespace HexEngine
 
 				if (node->nodeType == MaterialGraphNodeType::TextureParameter || paramType == MaterialGraphValueType::Texture2D)
 				{
-					const std::string paramKey = std::format("param:{}", node->parameterName);
+					// Only key the slot by parameter name when there IS a name.
+					// Unnamed texture parameters (the promote-from-standard path
+					// creates these) all shared the "param:" key, collapsing every
+					// channel onto texture slot 0 - roughness/metallic/emissive all
+					// sampled the albedo texture. Empty key falls back to the
+					// texture-path key inside AcquireTextureSlot, which still dedups
+					// identical textures across nodes.
+					const std::string paramKey = node->parameterName.empty()
+						? std::string()
+						: std::format("param:{}", node->parameterName);
 					value = MakeTextureObjectExpression(ctx, texturePath, paramKey);
 					if (!node->parameterName.empty())
 					{
@@ -699,11 +708,23 @@ namespace HexEngine
 			ss << "\t\tmatrix worldPrev = mul(instance.worldPrev, g_worldMatrix);\n";
 			ss << "\t\toutput.position = mul(input.position, worldMatrix);\n";
 			ss << "\t\toutput.positionWS = output.position;\n";
+			// Vegetation wind sway - keep in LOCKSTEP with Default.shader's VS
+			// (current position at g_time here, previous-frame position at
+			// g_timePrev below, so the sway delta reaches the motion vectors).
+			ss << "\t\t[branch]\n";
+			ss << "\t\tif (g_material.windSwayParams.w > 0.5f)\n\t\t{\n";
+			ss << "\t\t\toutput.position.xyz += WindSwayOffset(output.position.xyz, worldMatrix[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_time);\n";
+			ss << "\t\t\toutput.positionWS = output.position;\n";
+			ss << "\t\t}\n";
 			ss << "\t\tif(g_cullDistance > 0.0f)\n\t\t{\n";
 			ss << "\t\t\toutput.cullDistance = length(output.positionWS.xyz - g_eyePos.xyz) >= g_cullDistance ? -1.0f : 1.0f;\n";
 			ss << "\t\t}\n";
 			ss << "\t\toutput.position = mul(output.position, g_viewProjectionMatrix);\n";
 			ss << "\t\tfloat4 prevFrame_worldPos = mul(input.position, worldPrev);\n";
+			ss << "\t\t[branch]\n";
+			ss << "\t\tif (g_material.windSwayParams.w > 0.5f)\n\t\t{\n";
+			ss << "\t\t\tprevFrame_worldPos.xyz += WindSwayOffset(prevFrame_worldPos.xyz, worldPrev[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_timePrev);\n";
+			ss << "\t\t}\n";
 			ss << "\t\tfloat4 prevFrame_clipPos = mul(prevFrame_worldPos, g_viewProjectionMatrixPrev);\n";
 			ss << "\t\toutput.previousPositionUnjittered = prevFrame_clipPos;\n";
 			ss << "\t\toutput.currentPositionUnjittered = output.position;\n";
@@ -747,13 +768,31 @@ namespace HexEngine
 			else
 				ss << "\t\tfloat metallic = saturate(g_material.metallicFactor);\n";
 
+			// Universal wet response - mirrors DefaultPixel (see the comment
+			// there). Must be emitted here as well: graph-authored materials
+			// compile to their own shader and never run DefaultPixel's copy,
+			// and most environment art in this project is graph-authored -
+			// editing only DefaultPixel once left the hall floor completely
+			// unaffected even at full strength.
+			// Shelter occlusion - matches DefaultPixel: covered surfaces get
+			// no rain or snow.
+			ss << "\t\tconst float __shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);\n";
+			ss << "\t\tconst float __shelteredWetness = saturate((g_weatherSurface.wetness + g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __shelter);\n";
+			ss << "\t\tfloat __wetFilm = 0.0f;\n";
+			ss << "\t\tif (__shelteredWetness > 0.001f)\n";
+			ss << "\t\t{\n";
+			ss << "\t\t\t__wetFilm = ApplyWetSurface(baseColor.rgb, roughness, metallic, __shelteredWetness, g_wetnessDarkening);\n";
+			ss << "\t\t\tworldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time, __shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));\n";
+			ss << "\t\t}\n";
+
 			// Rain droplets - mirror what DefaultPixel.shader does so graph-authored
 			// materials get the same wet-with-droplets look when they opt in via the
 			// MaterialDialog's Rain Drip Intensity slider. ApplyRainDroplets comes
 			// from PBRutils (already in our PixelShaderIncludes above). World-space
 			// noise stays anchored as the camera moves; isHorizontal switches between
 			// "drops bead" (floor / road) and "drops streak" (vertical surfaces).
-			ss << "\t\tconst float __rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;\n";
+			// (Darkening moved to the universal block above.)
+			ss << "\t\tconst float __rainStrength = g_material.rainDripIntensity * __shelteredWetness;\n";
 			ss << "\t\tif (__rainStrength > 0.001f)\n";
 			ss << "\t\t{\n";
 			ss << "\t\t\tconst float __isHorizontal = step(0.5f, worldNormal.y);\n";
@@ -766,9 +805,17 @@ namespace HexEngine
 			// applied to baseColor + roughness for any upward-facing surface. No
 			// per-material slider; the snow shader's own slope mask handles
 			// which surfaces visually catch the snow.
-			ss << "\t\tif (g_weatherSurface.snowCoverage > 0.001f)\n";
+			ss << "\t\tconst float __dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * __shelter);\n";
+			ss << "\t\tif (__dustAmount > 0.001f)\n";
 			ss << "\t\t{\n";
-			ss << "\t\t\tconst float4 __snowResult = ApplySnowAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, g_weatherSurface.snowCoverage);\n";
+			ss << "\t\t\tconst float4 __dustResult = ApplyDustAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, __dustAmount, g_textureSampler);\n";
+			ss << "\t\t\tbaseColor.rgb = __dustResult.rgb;\n";
+			ss << "\t\t\troughness     = __dustResult.w;\n";
+			ss << "\t\t}\n";
+			ss << "\t\tconst float __shelteredSnow = g_weatherSurface.snowCoverage * __shelter;\n";
+			ss << "\t\tif (__shelteredSnow > 0.001f)\n";
+			ss << "\t\t{\n";
+			ss << "\t\t\tconst float4 __snowResult = ApplySnowAccumulation(baseColor.rgb, roughness, worldNormal, input.positionWS.xyz, __shelteredSnow, g_weatherSurface.snowMelt, g_textureSampler);\n";
 			ss << "\t\t\tbaseColor.rgb = __snowResult.rgb;\n";
 			ss << "\t\t\troughness     = __snowResult.w;\n";
 			ss << "\t\t}\n";
@@ -785,11 +832,19 @@ namespace HexEngine
 
 			ss << "\t\tif (baseColor.a <= 0.0f && g_material.isInTransparencyPhase == 0)\n\t\t\tclip(-1);\n";
 			ss << "\t\tif (g_material.isInTransparencyPhase == 0)\n\t\t{\n\t\t\tif (opacity < 1.0f)\n\t\t\t\tclip(-1);\n\t\t}\n\t\telse if (opacity <= 0.0f)\n\t\t{\n\t\t\tclip(-1);\n\t\t}\n";
-			ss << "\t\tfloat3 finalRGB = baseColor.rgb + emission;\n";
+			// Emissive as REPLACE, not ADD. emissiveMask = how self-illuminated
+			// this pixel is (0 = pure surface, >=1 = pure emitter). The surface
+			// colour is lerped toward the emission instead of summed with it, so
+			// wiring the albedo into Emissive makes it glow its own colour WITHOUT
+			// double-counting, and a plain emission colour replaces the surface
+			// rather than washing out on top of it. The deferred pass returns this
+			// diffuse UNLIT wherever pos.w (the mask) is > 0.
+			ss << "\t\tconst float emissiveMask = saturate(dot(emission, float3(0.2126f, 0.7152f, 0.0722f)));\n";
+			ss << "\t\tfloat3 finalRGB = lerp(baseColor.rgb, emission, emissiveMask);\n";
 			ss << "\t\tif (g_material.isInTransparencyPhase != 0)\n";
 			ss << "\t\t{\n";
 			ss << "\t\t\tfloat4 litSurface = CalculatePBRSurface(metallic, roughness, worldNormal, input.positionWS.xyz, -normalize(g_lightDirection.xyz), getSunColour(), baseColor.rgb, 1.0f, g_globalLight[0]);\n";
-			ss << "\t\t\tfinalRGB = litSurface.rgb + emission;\n";
+			ss << "\t\t\tfinalRGB = lerp(litSurface.rgb, emission, emissiveMask);\n";
 			ss << "\t\t}\n";
 			ss << "\t\tfloat2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));\n";
 			ss << "\t\tfloat transparencyAlpha = saturate(opacity * baseColor.a);\n";
@@ -811,9 +866,10 @@ namespace HexEngine
 				ss << std::format("\t\tfloat smoothness = saturate({});\n", ToScalar(ctx, *smoothnessExpr));
 			else
 				ss << "\t\tfloat smoothness = g_material.smoothness;\n";
-			ss << "\t\toutput.mat = float4(metallic, roughness, smoothness, 1.0f);\n";
+			// Wet film opens the SSR gate - matches DefaultPixel's mat write.
+			ss << "\t\toutput.mat = float4(metallic, roughness, max(smoothness, __wetFilm * 0.9f), 1.0f);\n";
 			ss << "\t\toutput.norm = float4(worldNormal.xyz, pixelDepth);\n";
-			ss << "\t\toutput.pos = float4(input.positionWS.xyz, length(emission));\n";
+			ss << "\t\toutput.pos = float4(input.positionWS.xyz, emissiveMask);\n";
 			ss << "\t\toutput.velocity = velocity;\n";
 			// Mirror DefaultPixel: encode model id + modelParams.w into the features RT.
 			// Without this the graph-compiled shader would leave the features RT pixel
@@ -1066,6 +1122,30 @@ namespace HexEngine
 					combined += std::format("{}", exeTime.time_since_epoch().count());
 			}
 
+			// Codegen-identity salt. The salt above catches a rebuilt SHADER
+			// COMPILER and edited INCLUDES, but the HLSL this file emits is a
+			// third input the hash could not see: changing the generated code
+			// (adding a term to the rain block, say) left every cached graph
+			// shader valid-looking and the change silently absent. Bump this
+			// whenever the emitted HLSL changes semantically.
+			//   1 - baseline
+			//   2 - wet surfaces darken baseColor by g_wetnessDarkening
+			//   3 - Phase 3 slices 1-3: universal wet response, shelter
+			//       occlusion (wetness/drips/snow), rain ripples. Bumped
+			//       retroactively - the three emitted-block changes shipped
+			//       without touching this, leaving any cache whose includes
+			//       hash happened to survive serving pre-shelter shaders
+			//       (prime suspect for "snow not occluded" on graph-authored
+			//       surfaces).
+			//   4 - slice 4: melt-fed wetness, dust accumulation, snow melt
+			//       argument.
+			//   5 - slice 5: snow relief - ApplySnowAccumulation signature
+			//       gains inout normal + sampler.
+			//   6 - dust sampler arg (sand textures).
+			//   7 - vegetation wind sway in the emitted VS (WindSwayOffset
+			//       at g_time + g_timePrev, gated on windSwayParams.w).
+			combined += "\0codegen:7";
+
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);
 		}
@@ -1173,7 +1253,12 @@ namespace HexEngine
 				kMaxGraphTextureSlots));
 		}
 
-		material._properties.hasTransparency = (opacityPtr != nullptr && !IsDefinitelyOpaqueOpacityExpression(opacityPtr)) ? 1 : 0;
+		if (opacityPtr != nullptr)
+			material._properties.hasTransparency = IsDefinitelyOpaqueOpacityExpression(opacityPtr) ? 0 : 1;
+		else if (ctx.graph.FindPbrOutputNode() != nullptr)
+			material._properties.hasTransparency = 0; // PbrOutput block below re-applies the artist's explicit flag
+		// else: legacy graph with no opacity binding - leave the flag the artist
+		// set in the simple MaterialDialog untouched instead of stomping it to 0.
 
 		// When the graph uses the unified PbrOutput node, push its per-material
 		// constants (render state, model selection, rain-drip intensity, etc.)
@@ -1195,6 +1280,8 @@ namespace HexEngine
 			if (p.hasTransparency != 0)
 				material._properties.hasTransparency = 1;
 			material.SetAffectsGI(p.affectsGI != 0);
+			material.SetReceivesSnow(p.receivesSnow != 0);
+			material._properties.windSwayParams = p.windSwayParams;
 			material.SetEmissiveAffectsGI(p.emissiveAffectsGI != 0);
 
 			// Render state.
@@ -1314,45 +1401,14 @@ namespace HexEngine
 		const MaterialGraphInstanceData& instanceData,
 		Material& material)
 	{
-		// Compile graph structure once (without overrides), then apply texture overrides without recompiling.
-		MaterialGraphCompileResult result = CompileToMaterial(graph, material, nullptr);
-		if (!result.success)
-			return result;
-
-		for (const auto& overrideValue : instanceData.overrides)
-		{
-			if (overrideValue.valueType != MaterialGraphValueType::Texture2D || overrideValue.texturePath.empty())
-				continue;
-
-			const auto it = std::find_if(
-				result.textureParameterSlots.begin(),
-				result.textureParameterSlots.end(),
-				[&](const std::pair<std::string, int32_t>& binding)
-				{
-					return binding.first == overrideValue.name;
-				});
-			if (it == result.textureParameterSlots.end())
-				continue;
-
-			material.SetTexture(SlotToMaterialTexture(it->second), ITexture2D::Create(overrideValue.texturePath));
-		}
-
-		const bool hasNonTextureOverride = std::find_if(
-			instanceData.overrides.begin(),
-			instanceData.overrides.end(),
-			[](const MaterialGraphParameterOverride& o)
-			{
-				return o.valueType == MaterialGraphValueType::Scalar ||
-					o.valueType == MaterialGraphValueType::Vector2 ||
-					o.valueType == MaterialGraphValueType::Vector3 ||
-					o.valueType == MaterialGraphValueType::Vector4;
-			}) != instanceData.overrides.end();
-		if (hasNonTextureOverride)
-		{
-			result.warnings.push_back("Scalar/vector instance overrides currently require full graph recompilation and were not hot-applied.");
-		}
-
-		return result;
+		// Bake the instance's overrides straight into the compile. Scalar/vector
+		// overrides become constants in the generated source (which changes the
+		// cache hash, so instances with distinct values get their own .hcs while
+		// texture-only instances still share the parent's shader - texture paths
+		// only affect slot bindings, not the source). The old two-step flow
+		// compiled without overrides and then patched textures afterwards, which
+		// silently DROPPED every scalar/vector override with only a warning.
+		return CompileToMaterial(graph, material, &instanceData.overrides);
 	}
 
 	bool MaterialGraphCompiler::IsCachedGraphShaderStale(const fs::path& cachedShaderPath)

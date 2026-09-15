@@ -40,9 +40,19 @@
 			boneTransform += mul(input.boneWeights[2], g_boneTransforms[(int)input.boneIds[2]]);
 			boneTransform += mul(input.boneWeights[3], g_boneTransforms[(int)input.boneIds[3]]);
 
+			// Skin the previous-frame position with the PREVIOUS frame's pose. Reusing
+			// boneTransform here meant the only motion a skinned mesh could report was its
+			// rigid object transform plus camera movement - the deformation itself produced
+			// zero velocity, so animated characters ghosted badly under TAA and DLSS.
+			matrix	boneTransformPrev = mul(input.boneWeights[0], g_boneTransformsPrev[(int)input.boneIds[0]]);
+
+			boneTransformPrev += mul(input.boneWeights[1], g_boneTransformsPrev[(int)input.boneIds[1]]);
+			boneTransformPrev += mul(input.boneWeights[2], g_boneTransformsPrev[(int)input.boneIds[2]]);
+			boneTransformPrev += mul(input.boneWeights[3], g_boneTransformsPrev[(int)input.boneIds[3]]);
+
 			worldMatrix = mul(boneTransform, instance.world);
 			normalMatrix = mul(boneTransform, instance.worldInverseTranspose);
-			worldPrev = mul(boneTransform, instance.worldPrev);
+			worldPrev = mul(boneTransformPrev, instance.worldPrev);
 		}
 		else
 		{
@@ -112,6 +122,14 @@
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
+	// Engine-global point sampler (same s2 every deferred pass uses);
+	// CalculateShadows wants it alongside the comparison sampler.
+	SamplerState g_pointSamplerFwd : register(s2);
+
+	// Sun shadow cascades for the transparency phase, bound by
+	// SceneRenderer::RenderTransparent when r_transparentShadows is on.
+	// Same t15..t20 run as DefaultPixel so one C++ bind serves both shaders.
+	SHADOWMAPS_RESOURCE(15)
 
 	cbuffer ForwardLightsBuffer : register(b7)
 	{
@@ -124,6 +142,18 @@
 		float4 g_fwdSpotColorStrength[16];
 		float4 g_fwdSpotInnerCone[16];         // .x = cos(innerHalfAngle)
 	};
+
+	// Clustered light lists (Phase 2 slice 4) - see DefaultPixel for the doc.
+	struct ClFwdLight
+	{
+		float4 posRadius;
+		float4 colorStrength;
+		float4 dirCone;
+		float4 params;
+	};
+	StructuredBuffer<ClFwdLight> g_clfLights : register(t27);
+	StructuredBuffer<uint>       g_clfCounts : register(t28);
+	StructuredBuffer<uint>       g_clfLists  : register(t29);
 
 	// Direct-only PBR (no ambient). See DefaultPixel.shader for full notes; same body.
 	float3 PBRDirectLight(float3 worldPos, float3 worldNormal, float3 baseColour,
@@ -160,6 +190,55 @@
 		float metalness, float roughness)
 	{
 		float3 accum = float3(0.0f, 0.0f, 0.0f);
+
+		// Clustered path - see DefaultPixel's copy for the full doc. Uncapped
+		// local lights from the shared lists; the 16+16 arrays go unread.
+		if (g_clusterForwardActive > 0.5f)
+		{
+			float4 clip = mul(float4(worldPos, 1.0f), g_viewProjectionMatrix);
+			if (clip.w > 0.0f)
+			{
+				const float2 ndc = clip.xy / clip.w;
+				const float2 cuv = float2(ndc.x * 0.5f + 0.5f, 1.0f - (ndc.y * 0.5f + 0.5f));
+				const float4 viewPos = mul(float4(worldPos, 1.0f), g_viewMatrix);
+				const float viewDepth = -viewPos.z;
+				const uint ccx = min((uint)(saturate(cuv.x) * 16.0f), 15u);
+				const uint ccy = min((uint)(saturate(cuv.y) * 9.0f), 8u);
+				const float cw = log(max(viewDepth, 0.1f) / 0.1f) / log(128.0f / 0.1f);
+				const uint ccz = min((uint)(saturate(cw) * 32.0f), 31u);
+				const uint clusterIdx = (ccz * 9u + ccy) * 16u + ccx;
+				const uint cCount = min(g_clfCounts[clusterIdx], 64u);
+				[loop]
+				for (uint ci = 0u; ci < cCount; ++ci)
+				{
+					const ClFwdLight cl = g_clfLights[g_clfLists[clusterIdx * 64u + ci]];
+					const float3 clToLight = cl.posRadius.xyz - worldPos;
+					const float clDistSq = dot(clToLight, clToLight);
+					const float clRadius = max(0.05f, cl.posRadius.w);
+					if (clDistSq >= clRadius * clRadius)
+						continue;
+					const float clDist = sqrt(max(1e-6f, clDistSq));
+					const float3 clL = clToLight / clDist;
+					float coneAtten = 1.0f;
+					if (cl.params.y > 0.5f)
+					{
+						const float cosOuter = cl.dirCone.w;
+						const float cosInner = max(cl.params.x, cosOuter + 1e-4f);
+						coneAtten = smoothstep(cosOuter, cosInner, dot(-clL, normalize(cl.dirCone.xyz)));
+						if (coneAtten <= 0.0f)
+							continue;
+					}
+					const float clMinDistSqr = 0.01f * 0.01f;
+					float clFalloff = saturate(1.0f - pow(clDist / clRadius, 4.0f));
+					clFalloff *= clFalloff;
+					const float clAtten = (clFalloff / max(clDistSq, clMinDistSqr)) * coneAtten;
+					accum += PBRDirectLight(worldPos, worldNormal, baseColour, metalness, roughness,
+						clL, cl.colorStrength.rgb * cl.colorStrength.w, clAtten);
+				}
+			}
+			return accum;
+		}
+
 		const uint pointCount = min((uint)g_fwdCountsAndParams.x, 16u);
 		[loop]
 		for (uint pi = 0u; pi < pointCount; ++pi)
@@ -306,8 +385,10 @@
 			//// Calculate the normal from the data in the bump map.
 			//float3 bumpNormal = (bumpMap.x * normalize(input.tangent)) + (bumpMap.y * normalize(input.binormal)) + (/*bumpMap.z **/ worldNormal);
 
-			// Normalize the resulting bump normal.
-			worldNormal = normalize(ApplyNormalMap(worldNormal, input.tangent, input.binormal, g_normalMap, g_textureSampler, input.texcoord));
+			// flipY must match DefaultPixel.shader: the static and skinned paths sample the
+			// same normal maps, and omitting it here rendered every map green-inverted on
+			// skinned meshes only.
+			worldNormal = ApplyNormalMap(worldNormal, input.tangent, input.binormal, g_normalMap, g_textureSampler, input.texcoord, true);
 		}
 
 		// Emission mapping
@@ -379,11 +460,29 @@
 			}
 		}
 
+		// Universal wet response - mirrors DefaultPixel exactly (see the
+		// comment there). Skinned surfaces get wet like everything else;
+		// only the drip perturbation below stays per-material.
+		// Shelter occlusion + melt-fed wetness - matches DefaultPixel.
+		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
+		const float shelteredWetness = saturate(
+			(g_weatherSurface.wetness
+				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
+
+		float wetFilm = 0.0f;
+		if (shelteredWetness > 0.001f)
+		{
+			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
+				shelteredWetness, g_wetnessDarkening);
+			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time,
+				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
+		}
+
 		// Rain droplets - same procedural perturbation DefaultPixel uses. See
 		// ApplyRainDroplets in PBRutils.shader for the full doc. Animated meshes
 		// hit this less often (skinned characters in rain), but if the user opts
 		// in via the material slider they get the same wet-surface look.
-		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
+		const float rainStrength = g_material.rainDripIntensity * shelteredWetness;
 		if (rainStrength > 0.001f)
 		{
 			const float isHorizontal = step(0.5f, worldNormal.y);
@@ -401,26 +500,36 @@
 
 		// Snow accumulation. Same global-no-opt-in semantics as DefaultPixel -
 		// any upward-facing animated surface catches snow. See PBRutils.
-		if (g_weatherSurface.snowCoverage > 0.001f)
+		// Dust then snow - matches DefaultPixel.
+		const float dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * shelter);
+		if (dustAmount > 0.001f)
+		{
+			const float4 dustResult = ApplyDustAccumulation(
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, dustAmount, g_textureSampler);
+			albedo.rgb = dustResult.rgb;
+			roughness  = dustResult.w;
+		}
+
+		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
+		if (shelteredSnow > 0.001f)
 		{
 			const float4 snowResult = ApplySnowAccumulation(
 				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
-				g_weatherSurface.snowCoverage);
+				shelteredSnow, g_weatherSurface.snowMelt, g_textureSampler);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}
 
 		float3 finalRGB = albedo.rgb;
 
-		// Apply emission, if there was any and multiply it by the emission colours and factor
-		if (emission > 0.0f)
-		{
-			float3 emissiveColour = g_material.emissiveColour.rgb * g_material.emissiveColour.a * emission;
-			finalRGB = emissiveColour;
-
-			if (length(albedo.rgb) > 0.0f)
-				finalRGB += albedo.rgb;
-		}
+		// Emissive REPLACE (matches DefaultPixel / the graph compiler / the
+		// deferred pass). 'emission' is a scalar mask from the emission map;
+		// build the emitted colour and lerp the surface TOWARD it by an
+		// emissive mask instead of replacing-then-adding-albedo (which
+		// double-counted). The mask goes to pos.w for the deferred blend.
+		const float3 emissiveColour = g_material.emissiveColour.rgb * g_material.emissiveColour.a * emission;
+		const float emissiveMask = saturate(dot(emissiveColour, float3(0.2126f, 0.7152f, 0.0722f)));
+		finalRGB = lerp(finalRGB, emissiveColour, emissiveMask);
 
 		// In the opaque pass we cut out non-opaque pixels; in transparency phase we preserve fractional alpha.
 		if (g_material.isInTransparencyPhase == 0)
@@ -437,6 +546,21 @@
 
 		if (g_material.isInTransparencyPhase != 0)
 		{
+			// Sun cascade shadows (Phase 2 slice 5) - was a hardcoded 1.0f, so
+			// transparent surfaces never received sun shadows. Same
+			// ShadowInput/bias formulation as the deferred pass; gated because
+			// the cascades + b2 caster constants are only valid when
+			// SceneRenderer bound them for this pass.
+			// Cheap PCF, not full PCSS - see DefaultPixel; ~4 ms measured on
+			// window-heavy views with the full path.
+			float sunShadow = 1.0f;
+			if (g_taaParams.z > 0.5f)
+			{
+				const float ndl = dot(worldNormal, normalize(g_shadowCasterLightDir.xyz));
+				const float shadowBias = g_shadowConfig.biasMultiplier * (1.0f - ndl);
+				sunShadow = CalculateShadowsCheapPCF(input.positionWS.xyz, g_cmpSampler, SHADOWMAPS, shadowBias);
+			}
+
 			const float4 sunLit = CalculatePBRSurface(
 				metalness,
 				roughness,
@@ -445,7 +569,7 @@
 				-normalize(g_lightDirection.xyz),
 				getSunColour(),
 				albedo.rgb,
-				1.0f,
+				sunShadow,
 				g_globalLight[0]);
 
 			const float3 forwardDirect = AccumulateForwardLights_PBR(input.positionWS.xyz,
@@ -470,8 +594,7 @@
 			}
 
 			const float3 specularReflectionTerm = F * reflection * reflectionWeight;
-			const float3 emissiveTerm = g_material.emissiveColour.rgb * g_material.emissiveColour.a * emission;
-			finalRGB = sunLit.rgb + forwardDirect + specularReflectionTerm + emissiveTerm;
+			finalRGB = lerp(sunLit.rgb + forwardDirect + specularReflectionTerm, emissiveColour, emissiveMask);
 		}
 
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
@@ -493,11 +616,12 @@
 		// Previously this shader wrote 0 here (with a misleading "see
 		// DefaultPixel for rationale" comment - DefaultPixel actually writes
 		// 1), which meant animated meshes were being classified as sky.
-		output.mat = float4(metalness, roughness, g_material.smoothness, 1.0f);
+		// Smoothness (the SSR gate) opens with the wet film - matches DefaultPixel.
+		output.mat = float4(metalness, roughness, max(g_material.smoothness, wetFilm * 0.9f), 1.0f);
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 
-		output.pos = float4(input.positionWS.xyz, g_material.emissiveColour.a * emission);
+		output.pos = float4(input.positionWS.xyz, emissiveMask);
 
 		output.velocity = velocity;
 

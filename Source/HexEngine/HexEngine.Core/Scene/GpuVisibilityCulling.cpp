@@ -10,7 +10,7 @@
 namespace HexEngine
 {
 	HVar r_gpuCullEnable("r_gpuCullEnable", "Enable GPU frustum/occlusion culling for opaque pass", false, false, true);
-	HVar r_gpuCullFrustum("r_gpuCullFrustum", "Enable GPU frustum culling stage", true, false, true);
+	HVar r_gpuCullFrustum("r_gpuCullFrustum", "Enable GPU frustum culling stage (only used when no CPU fine cull pre-filters the candidates)", true, false, true);
 	HVar r_gpuCullOcclusion("r_gpuCullOcclusion", "Enable GPU occlusion culling stage", true, false, true);
 	HVar r_gpuCullDepthPrepassFallback("r_gpuCullDepthPrepassFallback", "Allow depth prepass fallback if history depth is unavailable", true, false, true);
 	HVar r_gpuCullFreeze("r_gpuCullFreeze", "Freeze GPU culling visibility results for debugging", false, false, true);
@@ -80,16 +80,17 @@ namespace HexEngine
 		{
 			_visibilityReadbackCount[i] = 0;
 			_visibilityReadbackReady[i] = false;
-			_visibilityReadbackKeys[i].clear();
 		}
 
 		_candidateCapacity = 0;
 		_lastDispatchCandidateCount = 0;
-		_cpuVisibility.clear();
-		_cpuVisibilityByEntity.clear();
-		_frozenVisibility.clear();
-		_graceFramesRemaining.clear();
-		_occlusionRejectStreak.clear();
+		_perEntry.clear();
+		_perEntryGeneration = 0;
+		for (uint32_t i = 0; i < ReadbackLatencyFrames; ++i)
+		{
+			_visibilityReadbackStableIndex[i].clear();
+			_visibilityReadbackGeneration[i] = 0;
+		}
 	}
 
 	void GpuVisibilityCulling::DestroyHzbResources(HzbResources& resources)
@@ -178,7 +179,12 @@ namespace HexEngine
 		visDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
 		visDesc.StructureByteStride = sizeof(uint32_t);
 
-		if (FAILED(device->CreateBuffer(&visDesc, nullptr, &_frustumVisibilityBuffer)) || _frustumVisibilityBuffer == nullptr)
+		// Frustum visibility starts (and, with the CPU fine cull in front,
+		// stays) all-ones: the occlusion pass reads it as its input mask.
+		std::vector<uint32_t> allVisible(newCapacity, 1u);
+		D3D11_SUBRESOURCE_DATA visInit = {};
+		visInit.pSysMem = allVisible.data();
+		if (FAILED(device->CreateBuffer(&visDesc, &visInit, &_frustumVisibilityBuffer)) || _frustumVisibilityBuffer == nullptr)
 			return;
 		if (FAILED(device->CreateBuffer(&visDesc, nullptr, &_finalVisibilityBuffer)) || _finalVisibilityBuffer == nullptr)
 			return;
@@ -210,7 +216,6 @@ namespace HexEngine
 			CHECK_HR(device->CreateBuffer(&rbDesc, nullptr, &rb));
 		}
 
-		_cpuVisibility.assign(newCapacity, 1u);
 		_candidateCapacity = newCapacity;
 	}
 
@@ -391,33 +396,41 @@ bool GpuVisibilityCulling::ShouldBypassOcclusion(const RenderableSnapshot& snaps
 		return (static_cast<uint64_t>(entityId.generation) << 32ull) | static_cast<uint64_t>(entityId.index);
 	}
 
-	void GpuVisibilityCulling::ClearSnapshotFlags(RenderBatchSnapshot& snapshot)
+	void GpuVisibilityCulling::NotifySnapshotRebuilt()
 	{
-		uint32_t stableIndex = 0;
-		for (auto& batch : snapshot)
+		++_snapshotGeneration;
+	}
+
+	void GpuVisibilityCulling::EnsurePerEntryState(uint32_t entryCount)
+	{
+		// Per-snapshot-entry state, indexed by stableIndex. A new snapshot
+		// generation invalidates every index, so the arrays are reset (which
+		// conservatively also resets occlusion streaks -> everything visible
+		// until re-confirmed occluded).
+		if (_perEntryGeneration != _snapshotGeneration || _perEntry.size() != entryCount)
 		{
-			for (auto& renderable : batch.second)
-			{
-				renderable.stableIndex = stableIndex++;
-				renderable.cullEligible = false;
-				renderable.forceVisible = true;
-				renderable.gpuVisible = true;
-				renderable.culledByFrustum = false;
-				renderable.culledByOcclusion = false;
-			}
+			_perEntry.assign(entryCount, PerEntryState{});
+			_perEntryGeneration = _snapshotGeneration;
 		}
 	}
 
-bool GpuVisibilityCulling::GatherCandidates(
-	RenderBatchSnapshot& snapshot,
-	std::vector<GpuCullCandidate>& outCandidates,
-	std::vector<RenderableSnapshot*>& outRenderableMap,
-	const math::Vector3& cameraPos,
-	LayerMask layerMask)
-{
-	outCandidates.clear();
-	outRenderableMap.clear();
+	uint32_t GpuVisibilityCulling::GatherCandidates(
+		RenderBatchSnapshot& snapshot,
+		std::vector<GpuCullCandidate>& outCandidates,
+		std::vector<RenderableSnapshot*>& outRenderableMap,
+		const math::Vector3& cameraPos,
+		LayerMask layerMask,
+		const CpuCullPredicate* cpuCulled)
+	{
+		outCandidates.clear();
+		outRenderableMap.clear();
 
+		// ONE walk over the snapshot: assigns stableIndex + default flags for
+		// every entry (this used to be a separate full walk in
+		// ClearSnapshotFlags) and builds the GPU candidate list only from
+		// entries the CPU fine cull did NOT already reject - the GPU never
+		// needs to frustum-test anything, it only does occlusion.
+		uint32_t stableIndex = 0;
 		for (auto& batch : snapshot)
 		{
 			auto material = batch.first;
@@ -425,6 +438,7 @@ bool GpuVisibilityCulling::GatherCandidates(
 
 			for (auto& renderable : batch.second)
 			{
+				renderable.stableIndex = stableIndex++;
 				renderable.cullEligible = false;
 				renderable.forceVisible = true;
 				renderable.gpuVisible = true;
@@ -440,7 +454,10 @@ bool GpuVisibilityCulling::GatherCandidates(
 				if (renderable.layer == Layer::Sky)
 					continue;
 
-				auto worldSphere = renderable.entity->GetWorldBoundingSphere();
+				if (cpuCulled != nullptr && (*cpuCulled)(renderable))
+					continue;
+
+				const auto worldSphere = renderable.entity->GetWorldBoundingSphere();
 				if (worldSphere.Radius <= 0.0f)
 					continue;
 
@@ -460,7 +477,7 @@ bool GpuVisibilityCulling::GatherCandidates(
 				candidate.entityKeyHi = static_cast<uint32_t>((key >> 32ull) & 0xffffffffull);
 				candidate.flags = 0u;
 
-			if (ShouldBypassOcclusion(renderable, cameraPos))
+				if (ShouldBypassOcclusion(renderable, cameraPos))
 				{
 					candidate.flags |= CandidateForceVisible;
 				}
@@ -477,7 +494,7 @@ bool GpuVisibilityCulling::GatherCandidates(
 			}
 		}
 
-		return !outCandidates.empty();
+		return stableIndex;
 	}
 
 	void GpuVisibilityCulling::DispatchFrustumPass(ID3D11DeviceContext* context, uint32_t candidateCount)
@@ -554,40 +571,43 @@ bool GpuVisibilityCulling::GatherCandidates(
 		if (_visibilityReadback[writeIndex] == nullptr || _visibilityReadback[readIndex] == nullptr)
 			return false;
 
+		// Queue this frame's results: remember which stableIndex each result
+		// slot belongs to and which snapshot generation those indices mean.
 		context->CopyResource(_visibilityReadback[writeIndex], _finalVisibilityBuffer);
 		_visibilityReadbackCount[writeIndex] = candidateCount;
 		_visibilityReadbackReady[writeIndex] = true;
-		_visibilityReadbackKeys[writeIndex].resize(candidateCount);
+		_visibilityReadbackGeneration[writeIndex] = _snapshotGeneration;
+		auto& writeStable = _visibilityReadbackStableIndex[writeIndex];
+		writeStable.resize(candidateCount);
 		for (uint32_t i = 0; i < candidateCount; ++i)
-		{
-			_visibilityReadbackKeys[writeIndex][i] =
-				(static_cast<uint64_t>(candidates[i].entityKeyHi) << 32ull) |
-				static_cast<uint64_t>(candidates[i].entityKeyLo);
-		}
+			writeStable[i] = candidates[i].stableIndex;
 
 		if (!_visibilityReadbackReady[readIndex])
 			return false;
 
+		// Results from a different snapshot layout can't be mapped back -
+		// skip them (conservative: nothing culled this frame).
+		if (_visibilityReadbackGeneration[readIndex] != _snapshotGeneration)
+			return false;
+
 		D3D11_MAPPED_SUBRESOURCE mapped = {};
 		// Non-blocking readback: never stall the render thread waiting for GPU completion.
-		// If results are not ready yet, we keep the previous visibility and fall back conservatively.
 		if (FAILED(context->Map(_visibilityReadback[readIndex], 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
 			return false;
 
 		const auto* visible = reinterpret_cast<const uint32_t*>(mapped.pData);
 		const uint32_t resultCount = _visibilityReadbackCount[readIndex];
-		const uint32_t copyCount = std::min<uint32_t>(resultCount, static_cast<uint32_t>(_cpuVisibility.size()));
-		const uint32_t keyCount = static_cast<uint32_t>(_visibilityReadbackKeys[readIndex].size());
-		const uint32_t resultWithKeys = std::min(copyCount, keyCount);
-		_cpuVisibilityByEntity.clear();
-		_cpuVisibilityByEntity.reserve(resultWithKeys);
-		for (uint32_t i = 0; i < copyCount; ++i)
+		const auto& readStable = _visibilityReadbackStableIndex[readIndex];
+		const uint32_t count = std::min<uint32_t>(resultCount, static_cast<uint32_t>(readStable.size()));
+
+		// Scatter straight into the per-entry state - no hash map.
+		for (uint32_t i = 0; i < count; ++i)
 		{
-			_cpuVisibility[i] = visible[i];
-			if (i < resultWithKeys)
-			{
-				_cpuVisibilityByEntity[_visibilityReadbackKeys[readIndex][i]] = visible[i];
-			}
+			const uint32_t stableIndex = readStable[i];
+			if (stableIndex >= _perEntry.size())
+				continue;
+			_perEntry[stableIndex].resultBits = static_cast<uint8_t>(visible[i] & 0x3u);
+			_perEntry[stableIndex].resultFrame = _frameIndex;
 		}
 		context->Unmap(_visibilityReadback[readIndex], 0);
 		outResultCount = resultCount;
@@ -598,12 +618,16 @@ bool GpuVisibilityCulling::GatherCandidates(
 		RenderBatchSnapshot& snapshot,
 		Camera* camera,
 		LayerMask layerMask,
-		MeshRenderFlags renderFlags)
+		MeshRenderFlags renderFlags,
+		const CpuCullPredicate* cpuCulled)
 	{
-		ClearSnapshotFlags(snapshot);
-
 		if (!r_gpuCullEnable._val.b)
+		{
+			// Flags must still default to "visible" for the draw loop, but only
+			// if anything might read them: usedGpuCulling is false on this path,
+			// so the draw loop never consults gpuVisible. Nothing to do.
 			return false;
+		}
 
 		// Same backend gate as BuildDepthPyramid - all the GPU-side work
 		// below (Dispatch{Frustum,Occlusion}Pass, ReadbackVisibility,
@@ -629,9 +653,19 @@ bool GpuVisibilityCulling::GatherCandidates(
 
 		auto buildStart = std::chrono::high_resolution_clock::now();
 
-		std::vector<GpuCullCandidate> candidates;
-		std::vector<RenderableSnapshot*> renderableMap;
-		if (!GatherCandidates(snapshot, candidates, renderableMap, cameraPos, layerMask))
+		const uint32_t entryCount = GatherCandidates(snapshot, _scratchCandidates, _scratchRenderableMap, cameraPos, layerMask, cpuCulled);
+		if (entryCount != _lastSnapshotEntryCount)
+		{
+			// Snapshot changed shape without an explicit notify (entity
+			// add/remove flush) - stableIndex meanings shifted.
+			++_snapshotGeneration;
+			_lastSnapshotEntryCount = entryCount;
+		}
+		EnsurePerEntryState(entryCount);
+
+		auto& candidates = _scratchCandidates;
+		auto& renderableMap = _scratchRenderableMap;
+		if (candidates.empty())
 			return false;
 
 		_stats.totalCandidates = static_cast<uint32_t>(candidates.size());
@@ -657,6 +691,12 @@ bool GpuVisibilityCulling::GatherCandidates(
 			context->Unmap(_candidateBuffer, 0);
 		}
 
+		// The frustum dispatch only runs when no CPU predicate pre-filtered
+		// the candidates (debug/legacy, r_gpuCullFrustum). With the CPU fine
+		// cull in front the frustum visibility buffer stays at its initial
+		// all-ones and the GPU does occlusion only.
+		const bool runFrustumPass = cpuCulled == nullptr && r_gpuCullFrustum._val.b;
+
 		alignas(16) GpuCullConstants constants = {};
 		constants.view = viewMatrix.Transpose();
 		constants.projection = projectionMatrix.Transpose();
@@ -672,7 +712,7 @@ bool GpuVisibilityCulling::GatherCandidates(
 			(_cameraStableFrames >= static_cast<uint32_t>(std::max(0, r_gpuCullOcclusionStableFrames._val.i32))) &&
 			!r_gpuCullFreeze._val.b;
 		constants.cullParams0 = math::Vector4(
-			r_gpuCullFrustum._val.b ? 1.0f : 0.0f,
+			runFrustumPass ? 1.0f : 0.0f,
 			occlusionEnabled ? 1.0f : 0.0f,
 			r_gpuCullOcclusionDepthBias._val.f32,
 			static_cast<float>(std::max(0, r_gpuCullGraceFrames._val.i32)));
@@ -686,7 +726,8 @@ bool GpuVisibilityCulling::GatherCandidates(
 			_cullConstantBuffer->Write(&constants, sizeof(constants));
 
 		auto frustumStart = std::chrono::high_resolution_clock::now();
-		DispatchFrustumPass(context, _stats.totalCandidates);
+		if (runFrustumPass)
+			DispatchFrustumPass(context, _stats.totalCandidates);
 		_stats.gpuFrustumMs = ElapsedMs(frustumStart);
 
 		auto occlusionStart = std::chrono::high_resolution_clock::now();
@@ -706,10 +747,14 @@ bool GpuVisibilityCulling::GatherCandidates(
 		// If this frame has no fresh mapped results, skip GPU visibility application.
 		if (!hasResults)
 		{
-			_cpuVisibilityByEntity.clear();
 			_lastDispatchCandidateCount = 0;
 			return false;
 		}
+
+		const uint32_t rejectFrames = static_cast<uint32_t>(std::max(1, r_gpuCullOcclusionRejectFrames._val.i32));
+		const uint8_t graceFrames = static_cast<uint8_t>(std::clamp(r_gpuCullGraceFrames._val.i32, 0, 255));
+		// A result is only trusted while it is at most one readback cycle old.
+		const uint64_t oldestUsableFrame = _frameIndex >= ReadbackLatencyFrames ? _frameIndex - ReadbackLatencyFrames : 0ull;
 
 		for (uint32_t i = 0; i < _stats.totalCandidates; ++i)
 		{
@@ -717,25 +762,23 @@ bool GpuVisibilityCulling::GatherCandidates(
 			if (!renderable)
 				continue;
 
+			PerEntryState& state = _perEntry[renderable->stableIndex];
+
 			bool frustumVisible = true;
 			bool finalVisible = true;
-			const uint64_t entityKey = MakeEntityKey(*renderable);
-			if (const auto it = _cpuVisibilityByEntity.find(entityKey); it != _cpuVisibilityByEntity.end())
+			if (state.resultFrame >= oldestUsableFrame && state.resultFrame != 0ull)
 			{
-				const uint32_t result = it->second;
-				frustumVisible = (result & 0x1u) != 0u;
-				finalVisible = (result & 0x2u) != 0u;
+				frustumVisible = (state.resultBits & 0x1u) != 0u;
+				finalVisible = (state.resultBits & 0x2u) != 0u;
 			}
-
-			const bool wasFrozenVisible = _frozenVisibility.contains(entityKey) ? _frozenVisibility[entityKey] : true;
 
 			if (r_gpuCullFreeze._val.b)
 			{
-				finalVisible = wasFrozenVisible;
+				finalVisible = state.frozenVisible != 0u;
 			}
 			else
 			{
-				_frozenVisibility[entityKey] = finalVisible;
+				state.frozenVisible = finalVisible ? 1u : 0u;
 			}
 
 			// Delayed readback + camera motion can produce unstable occlusion decisions.
@@ -748,34 +791,33 @@ bool GpuVisibilityCulling::GatherCandidates(
 			const bool occlusionRejectedRaw = frustumVisible && !finalVisible;
 			if (occlusionRejectedRaw && !renderable->forceVisible)
 			{
-				auto& streak = _occlusionRejectStreak[entityKey];
-				++streak;
-				if (streak < static_cast<uint32_t>(std::max(1, r_gpuCullOcclusionRejectFrames._val.i32)))
+				if (state.rejectStreak < 255u)
+					++state.rejectStreak;
+				if (state.rejectStreak < rejectFrames)
 				{
 					finalVisible = true;
 				}
 			}
 			else
 			{
-				_occlusionRejectStreak[entityKey] = 0;
+				state.rejectStreak = 0u;
 			}
 
 			if (!finalVisible && !renderable->forceVisible)
 			{
-				auto& grace = _graceFramesRemaining[entityKey];
-				if (grace > 0)
+				if (state.graceRemaining > 0u)
 				{
 					finalVisible = true;
-					--grace;
+					--state.graceRemaining;
 				}
 				else
 				{
-					grace = static_cast<uint32_t>(std::max(0, r_gpuCullGraceFrames._val.i32));
+					state.graceRemaining = graceFrames;
 				}
 			}
 			else
 			{
-				_graceFramesRemaining[entityKey] = static_cast<uint32_t>(std::max(0, r_gpuCullGraceFrames._val.i32));
+				state.graceRemaining = graceFrames;
 			}
 
 			renderable->gpuVisible = finalVisible || renderable->forceVisible;

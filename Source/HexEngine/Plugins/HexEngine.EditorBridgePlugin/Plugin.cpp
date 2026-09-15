@@ -1,4 +1,4 @@
-
+﻿
 // -----------------------------------------------------------------------------
 // HexEngine.EditorBridgePlugin - editor-only live inspection bridge.
 //
@@ -27,10 +27,14 @@
 #include "../../HexEngine.Core/Entity/Entity.hpp"
 #include "../../HexEngine.Core/Entity/Component/BaseComponent.hpp"
 #include "../../HexEngine.Core/FileSystem/ResourceSystem.hpp"
+#include "../../HexEngine.Core/FileSystem/FileSystem.hpp"
 #include "../../HexEngine.Core/FileSystem/JsonFile.hpp"
 #include "../../HexEngine.Core/Input/CommandManager.hpp"
 #include "../../HexEngine.Core/Entity/Component/Camera.hpp"
+#include "../../HexEngine.Core/Entity/Component/StaticMeshComponent.hpp"
 #include "../../HexEngine.Core/Graphics/ITexture2D.hpp"
+#include "../../HexEngine.Core/Graphics/Material.hpp"
+#include "../../HexEngine.Core/Scene/Mesh.hpp"
 
 #include <deque>
 
@@ -143,12 +147,15 @@ namespace HexEngine
 			for (Entity* ch : e->GetChildren())
 				if (ch) children.push_back(json{ {"id", EntityIdToJson(ch->GetId())}, {"name", ch->GetName()} });
 			Entity* parent = e->GetParent();
+			const dx::BoundingBox& aabb = e->GetAABB();
 			return json{
 				{"id", EntityIdToJson(e->GetId())},
 				{"name", e->GetName()},
 				{"parent", parent ? json{ {"id", EntityIdToJson(parent->GetId())}, {"name", parent->GetName()} } : json(nullptr)},
 				{"children", children},
 				{"components", comps},
+				{"aabbCenter", json::array({ aabb.Center.x, aabb.Center.y, aabb.Center.z })},
+				{"aabbExtents", json::array({ aabb.Extents.x, aabb.Extents.y, aabb.Extents.z })},
 			};
 		}
 
@@ -717,6 +724,40 @@ namespace HexEngine
 				}
 				return MakeResult(id, json{ {"count", logs.size()}, {"logs", logs} });
 			}
+			if (m == "list_projects")
+			{
+				// The editor's recent-projects list (what the project browser
+				// shows). Entries are absolute paths to project .json files -
+				// feed one to open_project. Plain file read; no main-thread hop.
+				if (!g_pEnv)
+					return MakeError(id, ErrorCode::NotAvailable, "environment not available");
+				const fs::path listPath = g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json");
+				std::ifstream in(listPath, std::ios::binary);
+				if (!in.is_open())
+					return MakeResult(id, json{ {"count", 0}, {"projects", json::array()},
+						{"note", "no Projects.json found (" + listPath.string() + ")"} });
+				std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				in.close();
+				json projects = json::array();
+				try
+				{
+					for (const auto& entry : json::parse(text).value("projects", json::array()))
+					{
+						if (!entry.is_string()) continue;
+						const std::string p = entry.get<std::string>();
+						projects.push_back(json{
+							{"path", p},
+							{"name", fs::path(p).stem().string()},
+							{"exists", fs::exists(fs::path(p))},
+						});
+					}
+				}
+				catch (const std::exception& ex)
+				{
+					return MakeError(id, ErrorCode::Internal, std::string("Projects.json parse failed: ") + ex.what());
+				}
+				return MakeResult(id, json{ {"count", projects.size()}, {"projects", projects} });
+			}
 
 			// --- WRITE surface (dev-tuning only; gated behind BridgeWriteEnabled) ---
 			if (m == "exec_console")
@@ -731,6 +772,529 @@ namespace HexEngine
 						return MakeError(id, ErrorCode::NotAvailable, "command manager not available");
 					g_pEnv->_commandManager->ProcessCommandInput(cmd);
 					return MakeResult(id, json{ {"executed", cmd} });
+				});
+			}
+			if (m == "open_project")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "opening projects requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				std::string path = req.params.value("path", std::string());
+				const std::string name = req.params.value("name", std::string());
+				if (path.empty() && name.empty())
+					return MakeError(id, ErrorCode::InvalidParams, "open_project requires a 'path' (project .json path) or a 'name' (stem from list_projects)");
+
+				// Resolve a bare name against the recent-projects list so callers
+				// can say {"name":"TT"} without knowing where the project lives.
+				if (path.empty())
+				{
+					const fs::path listPath = g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json");
+					std::ifstream in(listPath, std::ios::binary);
+					if (in.is_open())
+					{
+						std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+						in.close();
+						try
+						{
+							for (const auto& entry : json::parse(text).value("projects", json::array()))
+							{
+								if (!entry.is_string()) continue;
+								const std::string candidate = entry.get<std::string>();
+								if (_stricmp(fs::path(candidate).stem().string().c_str(), name.c_str()) == 0)
+								{
+									path = candidate;
+									break;
+								}
+							}
+						}
+						catch (...) {}
+					}
+					if (path.empty())
+						return MakeError(id, ErrorCode::NotAvailable, "no recent project named '" + name + "' (see list_projects)");
+				}
+
+				return onMain([id, path]() -> json {
+					IEditorContext* ctx = g_pEnv ? g_pEnv->_editorContext : nullptr;
+					if (!ctx)
+						return MakeError(id, ErrorCode::NotAvailable, "editor context not available (bridge is not running inside the editor)");
+					std::string err;
+					if (!ctx->OpenProject(path, err))
+						return MakeError(id, ErrorCode::NotAvailable, err);
+					// The load continues on a worker thread with a loading
+					// dialog; poll get_editor_status until sceneName is set.
+					return MakeResult(id, json{ {"opening", true}, {"path", path} });
+				});
+			}
+			if (m == "create_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "entity creation requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "create_entity requires a 'name' string");
+					const std::string name = params["name"].get<std::string>();
+					math::Vector3 pos = math::Vector3(0.0f, 0.0f, 0.0f);
+					if (params.contains("position") && params["position"].is_array() && params["position"].size() == 3)
+						pos = math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>());
+					Entity* e = scene->CreateEntity(name, pos, math::Quaternion(0.0f, 0.0f, 0.0f, 1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::Internal, "Scene::CreateEntity returned null");
+					if (params.contains("parent") && params["parent"].is_string())
+					{
+						if (Entity* parent = scene->GetEntityByName(params["parent"].get<std::string>()))
+							e->SetParent(parent);
+						else
+							return MakeError(id, ErrorCode::NotAvailable, "parent entity '" + params["parent"].get<std::string>() + "' not found (entity was created without a parent)");
+					}
+					return MakeResult(id, json{ {"id", EntityIdToJson(e->GetId())}, {"name", e->GetName()} });
+				});
+			}
+			if (m == "add_component")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "add_component requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "add_component requires a 'name' string (entity name)");
+					if (!params.contains("component") || !params["component"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "add_component requires a 'component' string (registered class name)");
+
+					Entity* entity = scene->GetEntityByName(params["name"].get<std::string>());
+					if (entity == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "entity '" + params["name"].get<std::string>() + "' not found");
+
+					const std::string componentName = params["component"].get<std::string>();
+					auto* cls = g_pEnv->_classRegistry->Find(componentName);
+					if (cls == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "component class '" + componentName + "' is not registered");
+
+					// Same sequence the prefab loader uses for by-name construction.
+					auto* component = cls->newInstanceFn(entity);
+					if (component == nullptr)
+						return MakeError(id, ErrorCode::Internal, "failed to instantiate component '" + componentName + "'");
+					entity->AddComponent(component);
+
+					return MakeResult(id, json{
+						{"entity", entity->GetName()},
+						{"component", componentName} });
+				});
+			}
+			if (m == "clone_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "entity cloning requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string() ||
+						!params.contains("newName") || !params["newName"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "clone_entity requires 'name' (source) and 'newName'");
+					Entity* src = scene->GetEntityByName(params["name"].get<std::string>());
+					if (src == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + params["name"].get<std::string>() + "'");
+
+					// Note: kit meshes are usually baked in world space with the
+					// entity at the origin, so 'position' acts as a world-space
+					// OFFSET from wherever the source geometry sits.
+					math::Vector3 pos(0.0f, 0.0f, 0.0f);
+					if (params.contains("position") && params["position"].is_array() && params["position"].size() == 3)
+						pos = math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>());
+					math::Quaternion rot(0.0f, 0.0f, 0.0f, 1.0f);
+					if (params.contains("eulerDegrees") && params["eulerDegrees"].is_array() && params["eulerDegrees"].size() == 3)
+					{
+						const float toRad = 3.14159265358979f / 180.0f;
+						rot = math::Quaternion::CreateFromYawPitchRoll(
+							params["eulerDegrees"][1].get<float>() * toRad,
+							params["eulerDegrees"][0].get<float>() * toRad,
+							params["eulerDegrees"][2].get<float>() * toRad);
+					}
+					math::Vector3 scale(1.0f, 1.0f, 1.0f);
+					if (params.contains("scale") && params["scale"].is_array() && params["scale"].size() == 3)
+						scale = math::Vector3(params["scale"][0].get<float>(), params["scale"][1].get<float>(), params["scale"][2].get<float>());
+
+					Entity* clone = scene->CloneEntity(src, params["newName"].get<std::string>(), pos, rot, scale, true);
+					if (clone == nullptr)
+						return MakeError(id, ErrorCode::Internal, "Scene::CloneEntity returned null");
+					if (!params.value("persistent", false))
+						clone->SetFlag(EntityFlags::DoNotSave);
+					scene->ForceRebuildPVS();
+					return MakeResult(id, json{ {"source", src->GetName()}, {"clone", clone->GetName()}, {"id", EntityIdToJson(clone->GetId())} });
+				});
+			}
+			if (m == "select_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "entity selection requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					IEditorContext* ctx = g_pEnv ? g_pEnv->_editorContext : nullptr;
+					if (!ctx)
+						return MakeError(id, ErrorCode::NotAvailable, "editor context not available (bridge is not running inside the editor)");
+					if (params.value("clear", false))
+					{
+						if (!ctx->SetSelectedEntity(nullptr))
+							return MakeError(id, ErrorCode::Internal, "editor refused the selection change");
+						return MakeResult(id, json{ {"selected", nullptr} });
+					}
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "select_entity requires a 'name' string (or 'clear': true)");
+					Entity* e = scene->GetEntityByName(params["name"].get<std::string>());
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + params["name"].get<std::string>() + "'");
+					if (!ctx->SetSelectedEntity(e))
+						return MakeError(id, ErrorCode::Internal, "editor refused the selection change");
+					return MakeResult(id, json{ {"selected", e->GetName()}, {"id", EntityIdToJson(e->GetId())} });
+				});
+			}
+			if (m == "set_entity_transform")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "transform writes require the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "set_entity_transform requires a 'name' string");
+					Entity* e = scene->GetEntityByName(params["name"].get<std::string>());
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + params["name"].get<std::string>() + "'");
+
+					json applied = json::object();
+					if (params.contains("position") && params["position"].is_array() && params["position"].size() == 3)
+					{
+						e->SetPosition(math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>()));
+						applied["position"] = params["position"];
+					}
+					if (params.contains("rotation") && params["rotation"].is_array() && params["rotation"].size() == 4)
+					{
+						e->SetRotation(math::Quaternion(params["rotation"][0].get<float>(), params["rotation"][1].get<float>(), params["rotation"][2].get<float>(), params["rotation"][3].get<float>()));
+						applied["rotation"] = params["rotation"];
+					}
+					else if (params.contains("eulerDegrees") && params["eulerDegrees"].is_array() && params["eulerDegrees"].size() == 3)
+					{
+						const float toRad = 3.14159265358979f / 180.0f;
+						const float pitch = params["eulerDegrees"][0].get<float>() * toRad;
+						const float yaw   = params["eulerDegrees"][1].get<float>() * toRad;
+						const float roll  = params["eulerDegrees"][2].get<float>() * toRad;
+						e->SetRotation(math::Quaternion::CreateFromYawPitchRoll(yaw, pitch, roll));
+						applied["eulerDegrees"] = params["eulerDegrees"];
+					}
+					if (params.contains("scale") && params["scale"].is_array() && params["scale"].size() == 3)
+					{
+						e->SetScale(math::Vector3(params["scale"][0].get<float>(), params["scale"][1].get<float>(), params["scale"][2].get<float>()));
+						applied["scale"] = params["scale"];
+					}
+					if (applied.empty())
+						return MakeError(id, ErrorCode::InvalidParams, "provide at least one of: position [x,y,z], rotation [x,y,z,w], eulerDegrees [pitch,yaw,roll], scale [x,y,z]");
+					scene->ForceRebuildPVS();
+					return MakeResult(id, json{ {"entity", e->GetName()}, {"applied", applied} });
+				});
+			}
+			if (m == "set_component_field")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "component writes require the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string() ||
+						!params.contains("component") || !params["component"].is_string() ||
+						!params.contains("fields") || !params["fields"].is_object())
+						return MakeError(id, ErrorCode::InvalidParams, "set_component_field requires 'name' (entity), 'component' (type name) and 'fields' (object of field:value)");
+					Entity* e = scene->GetEntityByName(params["name"].get<std::string>());
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + params["name"].get<std::string>() + "'");
+					const std::string compName = params["component"].get<std::string>();
+					BaseComponent* target = nullptr;
+					for (BaseComponent* c : e->GetAllComponents())
+						if (c && c->GetComponentName() && compName == c->GetComponentName()) { target = c; break; }
+					if (target == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "entity has no component named '" + compName + "'");
+
+					// Read-modify-write: components' Deserialize expects the full
+					// field set (missing keys can reset to defaults), so capture
+					// the current state via Serialize, overlay the requested
+					// fields, and feed the merged object back. Unknown keys in
+					// the patch are rejected so typos don't silently no-op.
+					try
+					{
+						MemoryJsonFile mem;
+						json current = json::object();
+						target->Serialize(current, &mem);
+						for (auto& [key, value] : params["fields"].items())
+						{
+							if (!current.contains(key))
+								return MakeError(id, ErrorCode::InvalidParams, "component '" + compName + "' has no serialised field '" + key + "' (see inspect_component)");
+							current[key] = value;
+						}
+						target->Deserialize(current, &mem, 0);
+						json after = json::object();
+						target->Serialize(after, &mem);
+						return MakeResult(id, json{
+							{"entity", e->GetName()},
+							{"component", compName},
+							{"fields", after},
+						});
+					}
+					catch (const std::exception& ex)
+					{
+						return MakeError(id, ErrorCode::Internal, std::string("component serialize/deserialize threw: ") + ex.what());
+					}
+				});
+			}
+			if (m == "delete_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "entity deletion requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "delete_entity requires a 'name' string");
+					const std::string name = params["name"].get<std::string>();
+					Entity* e = scene->GetEntityByName(name);
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::NotAvailable, "no entity named '" + name + "'");
+					scene->DestroyEntity(e);
+					scene->ForceRebuildPVS();
+					return MakeResult(id, json{ {"deleted", name}, {"note", "removal may defer one tick if scene iteration is in progress"} });
+				});
+			}
+			if (m == "create_mesh_entity")
+			{
+				if (!BridgeWriteEnabled())
+					return MakeError(id, ErrorCode::Unauthorized, "mesh creation requires the write opt-in (set HEXENGINE_EDITOR_BRIDGE_WRITE=1)");
+				const json params = req.params;
+				return onMain([id, params]() -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene)
+						return MakeError(id, ErrorCode::NotAvailable, "no scene is currently open");
+					if (!params.contains("name") || !params["name"].is_string())
+						return MakeError(id, ErrorCode::InvalidParams, "create_mesh_entity requires a 'name' string");
+					const std::string name = params["name"].get<std::string>();
+
+					// --- geometry parsing (nested [[x,y,z],..] or flat [x,y,z,..]) ---
+					auto parseVec3s = [](const json& arr, std::vector<math::Vector3>& out) -> bool
+					{
+						if (!arr.is_array()) return false;
+						if (!arr.empty() && arr[0].is_array())
+						{
+							out.reserve(arr.size());
+							for (const auto& v : arr)
+							{
+								if (!v.is_array() || v.size() != 3) return false;
+								out.emplace_back(v[0].get<float>(), v[1].get<float>(), v[2].get<float>());
+							}
+							return true;
+						}
+						if (arr.size() % 3 != 0) return false;
+						out.reserve(arr.size() / 3);
+						for (size_t i = 0; i + 2 < arr.size(); i += 3)
+							out.emplace_back(arr[i].get<float>(), arr[i + 1].get<float>(), arr[i + 2].get<float>());
+						return true;
+					};
+
+					std::vector<math::Vector3> positions;
+					if (!params.contains("vertices") || !parseVec3s(params["vertices"], positions) || positions.empty())
+						return MakeError(id, ErrorCode::InvalidParams, "create_mesh_entity requires 'vertices' as [[x,y,z],...] or a flat [x,y,z,...] array");
+					if (positions.size() > 262144)
+						return MakeError(id, ErrorCode::InvalidParams, "too many vertices (max 262144)");
+
+					std::vector<MeshIndexFormat> indices;
+					if (!params.contains("indices") || !params["indices"].is_array() || params["indices"].empty() || params["indices"].size() % 3 != 0)
+						return MakeError(id, ErrorCode::InvalidParams, "create_mesh_entity requires 'indices' as a flat triangle-list array (multiple of 3)");
+					if (params["indices"].size() > 1048576)
+						return MakeError(id, ErrorCode::InvalidParams, "too many indices (max 1048576)");
+					indices.reserve(params["indices"].size());
+					for (const auto& iv : params["indices"])
+					{
+						const uint64_t v = iv.get<uint64_t>();
+						if (v >= positions.size())
+							return MakeError(id, ErrorCode::InvalidParams, "index " + std::to_string(v) + " out of range (vertex count " + std::to_string(positions.size()) + ")");
+						indices.push_back((MeshIndexFormat)v);
+					}
+
+					std::vector<math::Vector3> normals;
+					if (params.contains("normals"))
+					{
+						if (!parseVec3s(params["normals"], normals) || normals.size() != positions.size())
+							return MakeError(id, ErrorCode::InvalidParams, "'normals' must match the vertex count");
+					}
+					else
+					{
+						// Area-weighted face-normal accumulation - the cross
+						// product magnitude is twice the triangle area, so
+						// summing unnormalised face normals weights by area.
+						normals.assign(positions.size(), math::Vector3(0.0f, 0.0f, 0.0f));
+						for (size_t i = 0; i + 2 < indices.size(); i += 3)
+						{
+							const math::Vector3& a = positions[indices[i]];
+							const math::Vector3& b = positions[indices[i + 1]];
+							const math::Vector3& c = positions[indices[i + 2]];
+							const math::Vector3 fn = (b - a).Cross(c - a);
+							normals[indices[i]]     += fn;
+							normals[indices[i + 1]] += fn;
+							normals[indices[i + 2]] += fn;
+						}
+						for (auto& n : normals)
+						{
+							const float len = n.Length();
+							n = (len > 0.00001f) ? (n / len) : math::Vector3(0.0f, 1.0f, 0.0f);
+						}
+					}
+
+					std::vector<math::Vector2> uvs;
+					if (params.contains("uvs"))
+					{
+						const json& arr = params["uvs"];
+						if (!arr.is_array())
+							return MakeError(id, ErrorCode::InvalidParams, "'uvs' must be [[u,v],...] or flat [u,v,...]");
+						if (!arr.empty() && arr[0].is_array())
+						{
+							for (const auto& v : arr)
+							{
+								if (!v.is_array() || v.size() != 2)
+									return MakeError(id, ErrorCode::InvalidParams, "'uvs' entries must be [u,v]");
+								uvs.emplace_back(v[0].get<float>(), v[1].get<float>());
+							}
+						}
+						else
+						{
+							if (arr.size() % 2 != 0)
+								return MakeError(id, ErrorCode::InvalidParams, "flat 'uvs' must have an even element count");
+							for (size_t i = 0; i + 1 < arr.size(); i += 2)
+								uvs.emplace_back(arr[i].get<float>(), arr[i + 1].get<float>());
+						}
+						if (uvs.size() != positions.size())
+							return MakeError(id, ErrorCode::InvalidParams, "'uvs' must match the vertex count");
+					}
+
+					// --- assemble MeshVertex array (tangent = any axis orthogonal
+					// to the normal; Default.shader only needs it non-degenerate
+					// when no normal map is bound) ---
+					std::vector<MeshVertex> verts(positions.size());
+					math::Vector3 mn = positions[0];
+					math::Vector3 mx = positions[0];
+					for (size_t i = 0; i < positions.size(); ++i)
+					{
+						const math::Vector3& n = normals[i];
+						math::Vector3 axis = (fabsf(n.y) < 0.99f) ? math::Vector3(0.0f, 1.0f, 0.0f) : math::Vector3(1.0f, 0.0f, 0.0f);
+						math::Vector3 tangent = axis.Cross(n);
+						const float tl = tangent.Length();
+						tangent = (tl > 0.00001f) ? (tangent / tl) : math::Vector3(1.0f, 0.0f, 0.0f);
+						verts[i] = MeshVertex::Create(positions[i], n, tangent,
+							uvs.empty() ? 0.0f : uvs[i].x, uvs.empty() ? 0.0f : uvs[i].y);
+						verts[i]._bitangent = n.Cross(tangent);
+						mn = math::Vector3::Min(mn, positions[i]);
+						mx = math::Vector3::Max(mx, positions[i]);
+					}
+
+					// --- material: existing .hmat, or a Default.hmat copy;
+					// property overrides always apply to a private copy so a
+					// cached shared material is never mutated ---
+					std::shared_ptr<Material> material = std::make_shared<Material>();
+					material->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
+					const json matParams = params.value("material", json::object());
+					std::shared_ptr<Material> base;
+					if (matParams.contains("path") && matParams["path"].is_string())
+					{
+						base = Material::Create(matParams["path"].get<std::string>());
+						if (base == nullptr)
+							return MakeError(id, ErrorCode::NotAvailable, "material '" + matParams["path"].get<std::string>() + "' could not be loaded");
+					}
+					else
+					{
+						base = Material::Create("EngineData.Materials/Default.hmat");
+					}
+					if (base != nullptr)
+						material->CopyFrom(base);
+					auto readColour = [&](const char* key, math::Vector4& out)
+					{
+						if (matParams.contains(key) && matParams[key].is_array() && matParams[key].size() >= 3)
+						{
+							out = math::Vector4(
+								matParams[key][0].get<float>(), matParams[key][1].get<float>(), matParams[key][2].get<float>(),
+								matParams[key].size() >= 4 ? matParams[key][3].get<float>() : 1.0f);
+						}
+					};
+					readColour("diffuseColour", material->_properties.diffuseColour);
+					readColour("emissiveColour", material->_properties.emissiveColour);
+					if (matParams.contains("metallic"))   material->_properties.metallicFactor  = matParams["metallic"].get<float>();
+					if (matParams.contains("roughness"))  material->_properties.roughnessFactor = matParams["roughness"].get<float>();
+					if (matParams.contains("smoothness")) material->_properties.smoothness      = matParams["smoothness"].get<float>();
+					if (matParams.contains("affectsGI"))  material->SetAffectsGI(matParams["affectsGI"].get<bool>());
+
+					// --- mesh + entity ---
+					auto mesh = std::make_shared<Mesh>(nullptr, name);
+					if (!mesh->CreateDynamicBuffers((uint32_t)verts.size(), (uint32_t)indices.size()) ||
+						!mesh->UpdateDynamicGeometry(verts, indices))
+						return MakeError(id, ErrorCode::Internal, "mesh buffer creation/upload failed");
+
+					dx::BoundingBox aabb;
+					dx::BoundingBox::CreateFromPoints(aabb,
+						DirectX::XMVectorSet(mn.x, mn.y, mn.z, 1.0f),
+						DirectX::XMVectorSet(mx.x, mx.y, mx.z, 1.0f));
+					dx::BoundingOrientedBox obb;
+					dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
+					mesh->SetAABB(aabb);
+					mesh->SetOBB(obb);
+
+					math::Vector3 pos = math::Vector3(0.0f, 0.0f, 0.0f);
+					if (params.contains("position") && params["position"].is_array() && params["position"].size() == 3)
+						pos = math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>());
+
+					Entity* e = scene->CreateEntity(name, pos, math::Quaternion(0.0f, 0.0f, 0.0f, 1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::Internal, "Scene::CreateEntity returned null");
+					// The mesh has no backing asset file, so a scene save would
+					// serialise an empty mesh reference. Default the entity to
+					// DoNotSave; pass persistent=true to opt into saving anyway.
+					if (!params.value("persistent", false))
+						e->SetFlag(EntityFlags::DoNotSave);
+					if (params.contains("parent") && params["parent"].is_string())
+						if (Entity* parent = scene->GetEntityByName(params["parent"].get<std::string>()))
+							e->SetParent(parent);
+
+					auto* meshComponent = e->AddComponent<StaticMeshComponent>();
+					if (meshComponent == nullptr)
+						return MakeError(id, ErrorCode::Internal, "failed to add StaticMeshComponent");
+					meshComponent->SetMesh(mesh);
+					meshComponent->SetMaterial(material);
+
+					// Runtime-created entities are invisible until the camera's
+					// potentially-visible-set is rebuilt (same reason the
+					// volumetric terrain queues a PVS refresh after chunk
+					// builds) - force it so the mesh shows up immediately.
+					scene->ForceRebuildPVS();
+
+					return MakeResult(id, json{
+						{"id", EntityIdToJson(e->GetId())},
+						{"name", e->GetName()},
+						{"vertexCount", verts.size()},
+						{"indexCount", indices.size()},
+						{"triangleCount", indices.size() / 3},
+						{"aabbMin", json::array({ mn.x, mn.y, mn.z })},
+						{"aabbMax", json::array({ mx.x, mx.y, mx.z })},
+						{"note", "mesh is in-memory only (no .hmesh asset); entity defaults to DoNotSave unless persistent=true"},
+					});
 				});
 			}
 			if (m == "capture_frame")

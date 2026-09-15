@@ -212,6 +212,8 @@ namespace HexEngine
 		// stay inert while the editor's free-look camera is in use.
 		bool IsGameRunning() const { return _isGameRunning; }
 		void SetGameRunning(bool running) { _isGameRunning = running; }
+		void SetGlobalSceneScale(float scale) {	_globalSceneScale = scale; }
+		float GetGlobalSceneScale() const { return _globalSceneScale; }
 
 	protected:
 		bool _isGameRunning = false;
@@ -221,6 +223,8 @@ namespace HexEngine
 
 		std::thread _physicsThread;		
 		std::vector<IGameExtension*> _gameExtensions;
+
+		float _globalSceneScale = 1.0f;
 
 	public:
 		/** @brief Returns whether the environment main loop is running. */

@@ -929,4 +929,22 @@ namespace HexEngine
 		_vp.height = h;
 		_hasCustomVP = true;
 	}
+
+	void InputSystem::GetGameMousePosition(int& x, int& y)
+	{
+		GetMousePosition(x, y);
+
+		if (!_hasCustomVP || _vp.width <= 0.0f || _vp.height <= 0.0f)
+			return;
+
+		// Inverse of the play-in-editor display squeeze: window pixels ->
+		// the game's logical full-window UI space (subtract the scene-view
+		// origin, scale up by window/panel). Mirrors GetScreenToWorldRay's
+		// origin-subtract convention.
+		uint32_t width, height;
+		g_pEnv->GetScreenSize(width, height);
+
+		x = (int32_t)(((float)x - _vp.x) * ((float)width / _vp.width));
+		y = (int32_t)(((float)y - _vp.y) * ((float)height / _vp.height));
+	}
 }

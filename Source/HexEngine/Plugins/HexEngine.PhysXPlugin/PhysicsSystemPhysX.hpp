@@ -32,6 +32,8 @@ public:
 
 	virtual uint32_t RayCast(const math::Vector3& from, const math::Vector3& unitDir, float maxDist, HexEngine::IRigidBody* body, HexEngine::RayHit* hitInfo) override;
 
+	virtual uint32_t RayCastScene(const math::Vector3& from, const math::Vector3& unitDir, float maxDist, HexEngine::RayHit* hitInfo, HexEngine::IRigidBody* ignoreBody = nullptr) override;
+
 	virtual math::Vector3 GetGravity() override;
 
 	virtual void SetGravity(const math::Vector3& gravity) override;

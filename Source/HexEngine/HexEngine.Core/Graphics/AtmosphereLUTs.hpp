@@ -57,13 +57,15 @@ namespace HexEngine
 			float mieExtinctionPerMM = 4.40f;
 			// Mie anisotropy for LUT generation. Physical atmospheric value
 			// is ~0.8 but at that strength the phase function peak around
-			// the sun (~150x within 5deg) outruns the 192x108 SkyView LUT's
-			// per-texel resolution and produces visible concentric rings
-			// when bilinearly sampled. Sky-disk, aureole and halo are added
-			// analytically by SkySphere.shader on top of the LUT result, so
-			// the LUT itself doesn't need to capture the sharp peak - we
-			// dampen to g=0.5 to keep the LUT's Mie contribution smooth.
-			float miePhaseG          = 0.50f;
+			// the sun (~150x within 5deg) outruns the SkyView LUT's per-texel
+			// resolution and produces visible concentric rings when bilinearly
+			// sampled. Sky-disk, aureole and halo are added analytically by
+			// SkySphere.shader on top of the LUT result, so the LUT itself
+			// doesn't need to capture the sharp peak. At the 384x216 LUT
+			// (raised from 192x108 for the RDR2 sky work) g=0.65 resolves
+			// cleanly and restores the forward-scatter haze gradient around
+			// the sun; runtime override via env_mieAnisotropy.
+			float miePhaseG          = 0.65f;
 			float _pad2              = 0.0f;
 			float _pad3              = 0.0f;
 
@@ -111,8 +113,36 @@ namespace HexEngine
 		//   overcastAmount: 0 = pure LUT, 1 = pure overcast tint.
 		// Independent of Update() so weather can change between frames
 		// without re-dispatching the LUTs.
-		void SetSkyRenderParams(const math::Vector3& overcastColor, float overcastAmount);
+		//
+		// HDR sky params (RDR2 sky S1). The sky dome now writes linear HDR
+		// radiance (no in-shader tonemap), so the sun-disc terms became data:
+		//   sunDiscDiameterDeg : visual sun disc angular DIAMETER, degrees
+		//                        (physical ~0.53). Independent of
+		//                        r_sunAngularDiameter (PCSS penumbra only).
+		//   sunDiscIntensity   : multiplier on the disc's transmittance-LUT
+		//                        radiance - drives how hard the disc blooms.
+		//   starIntensity      : night star field radiance (linear HDR).
+		// NOTE: the overall sky radiance lever (r_skyRadianceScale) is applied
+		// at LUT GENERATION (the sunIntensity passed to Update), not here, so
+		// every LUT consumer scales together automatically.
+		// Moon (S8, VISUAL-ONLY): disc drawn by SkySphere antipodal to the
+		// sun. Deliberately no light repoint - g_lightDirection is assumed to
+		// be the SUN by exposure/fog/LUT consumers engine-wide; shadow-casting
+		// moonlight needs a second-light design (future slice).
+		//   moonIntensity  : disc radiance scale (0 disables the moon).
+		//   moonPhase      : 0 = new, 1 = full (terminator position).
+		//   moonDiameterDeg: angular diameter (physical 0.53; games run ~1.1).
+		void SetSkyRenderParams(const math::Vector3& overcastColor, float overcastAmount,
+			float sunDiscDiameterDeg = 0.53f,
+			float sunDiscIntensity = 1.0f, float starIntensity = 0.02f,
+			float moonIntensity = 1.0f, float moonPhase = 0.85f, float moonDiameterDeg = 1.1f);
 		IConstantBuffer* GetSkyRenderCBuffer() const { return _skyRenderCBuffer; }
+
+		// Cirrus layer state (RDR2 sky S4). Stored on the class and folded
+		// into the cbuffer by the next SetSkyRenderParams call. windOffsetM =
+		// CPU-integrated advection in metres (integrating on the CPU keeps a
+		// wind-direction change from teleporting the layer).
+		void SetCirrusState(float amount, float type, const math::Vector2& windOffsetM);
 
 		// Getters for downstream samplers. Null until the corresponding
 		// phase ships - callers should null-check and fall back to the
@@ -138,6 +168,11 @@ namespace HexEngine
 		IConstantBuffer* _atmosphereCBuffer = nullptr;
 		IConstantBuffer* _skyViewCBuffer    = nullptr; // per-frame camera + sun
 		IConstantBuffer* _skyRenderCBuffer  = nullptr; // post-LUT overcast tint, consumed by SkySphere.shader
+
+		// Cirrus layer state (see SetCirrusState).
+		float _cirrusAmount = 0.0f;
+		float _cirrusType = 0.35f;
+		math::Vector2 _cirrusWindOffsetM = math::Vector2(0.0f, 0.0f);
 
 		// Sky LUTs (created in EnsureResources).
 		ITexture2D* _transmittanceLUT   = nullptr; // 256x64,    RGBA16F

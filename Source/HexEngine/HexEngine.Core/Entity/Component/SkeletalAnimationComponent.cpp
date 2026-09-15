@@ -71,6 +71,13 @@ namespace HexEngine
 		return _transforms;
 	}
 
+	const std::array<math::Matrix, MAX_BONES>& SkeletalAnimationComponent::GetBoneTransformArrayPrev() const
+	{
+		// Before the first snapshot the two are identical, so a mesh drawn on its very first
+		// frame reports no deformation velocity rather than a garbage one.
+		return _prevPoseValid ? _transformsPrev : _transforms;
+	}
+
 	void SkeletalAnimationComponent::OnMessage(Message* message, MessageListener* sender)
 	{
 		UpdateComponent::OnMessage(message, sender);
@@ -103,6 +110,18 @@ namespace HexEngine
 
 		if (_animData && _animData->_animations.size() > 0 && _animIndex != -1)
 		{
+			// Snapshot the pose this frame is reprojecting FROM, before overwriting it.
+			// Guarded on the frame counter because Update() can run more than once per
+			// rendered frame - snapshotting on every entry would make prev == current and
+			// zero out the deformation velocity that the whole point of this is to provide.
+			const uint32_t frame = g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u;
+			if (!_prevPoseValid || frame != _prevPoseFrame)
+			{
+				_transformsPrev = _transforms;
+				_prevPoseFrame = frame;
+				_prevPoseValid = true;
+			}
+
 			Animation& anim = _animData->_animations.at(std::min((uint32_t)_animData->_animations.size() - 1, _animIndex));
 
 			UpdateBoneTransform(&anim, g_pEnv->_timeManager->_currentTime - _animationStartTime, _transforms);

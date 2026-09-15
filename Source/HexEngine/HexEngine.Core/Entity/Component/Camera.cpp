@@ -9,9 +9,31 @@
 namespace HexEngine
 {
 	const float gCameraDefaultFov = 70.0f;
-	const float gViewMatrixBehindDistance = 20.0f;
+	// Hysteresis margin for the enlarged PVS frustum: the PVS only rebuilds once
+	// the real frustum pokes outside the enlarged one, so this is "how far the
+	// camera can travel between full PVS rebuilds". Generous on purpose - the
+	// per-renderable fine frustum test in the draw loop (r_pvsFineCull) culls
+	// the over-included set every frame, so a bigger margin costs almost
+	// nothing at draw time but slashes rebuild frequency during camera motion.
+	const float gViewMatrixBehindDistance = 60.0f;
+	// The translation slack has to scale with the scene: 60 absolute units is
+	// less than one frame of editor fly speed in a cm-scale world, so the real
+	// frustum's far plane poked out the back of the enlarged one EVERY frame
+	// (per-frame rebuilds with forced=0 in the perf log). Use a fraction of
+	// the view distance, with the absolute value as the floor.
+	const float gLargerFrustumBehindFraction = 0.1f;
 
-	HVar r_cameraViewDistance("r_cameraViewDistance", "The maximum view depth of the camera", 350.0f, 1.0f, 10000.0f);
+	static float LargerFrustumBehindDistance(float screenFar)
+	{
+		const float scaled = screenFar * gLargerFrustumBehindFraction;
+		return scaled > gViewMatrixBehindDistance ? scaled : gViewMatrixBehindDistance;
+	}
+	// Extra field of view (degrees) for the enlarged frustum: ~15 degrees of
+	// rotation slack per side before a rebuild (was +10 total, i.e. ~5/side -
+	// mouse-look blew through that every 2-3 frames).
+	const float gLargerFrustumExtraFovDegrees = 30.0f;
+
+	HVar r_cameraViewDistance("r_cameraViewDistance", "The maximum view depth of the camera", 1000.0f, 1.0f, 20000.0f);
 
 	extern HVar r_lodPartition;
 
@@ -183,6 +205,13 @@ namespace HexEngine
 		CreateRenderTarget((int32_t)vp.width, (int32_t)vp.height);
 	}
 
+	void Camera::SetViewportWithTargetSize(const math::Viewport& vp, int32_t targetWidth, int32_t targetHeight)
+	{
+		_viewport = vp;
+
+		CreateRenderTarget(targetWidth, targetHeight);
+	}
+
 	void Camera::Update(float frameTime)
 	{
 		if (_dlssValueChanged)
@@ -207,11 +236,19 @@ namespace HexEngine
 
 		if (_hasMovedThisFrame || _pvs->NeedsRebuild())
 		{
+			// The camera PVS is a ROTATION-INVARIANT coarse set: a sphere of the
+			// view distance around the camera (the PVS inflates it 25% for
+			// translation hysteresis). The exact per-frame frustum test happens
+			// in the draw loops (r_pvsFineCull, 6 dot products per renderable).
+			// The previous frustum-shaped coarse set rebuilt on every frame of
+			// mouse-look in large scenes - any frustum margin is exhausted by a
+			// fast turn, and the rebuild cost then drove the frame rate down,
+			// which made the per-frame turn larger still.
 			PVSParams pvsParams;
 			pvsParams.lodPartition = r_lodPartition._val.f32;
-			pvsParams.shapeType = PVSParams::ShapeType::Frustum2;
-			pvsParams.shape.frustum.sm = _frustum;
-			pvsParams.shape.frustum.lg = _largerFrustum;
+			pvsParams.shapeType = PVSParams::ShapeType::Sphere;
+			const math::Vector3 cullCentre = GetEntity()->GetPosition() + GetViewOffset();
+			pvsParams.shape.sphere = dx::BoundingSphere(dx::XMFLOAT3(cullCentre.x, cullCentre.y, cullCentre.z), _screenFar);
 			pvsParams.camera = this;
 
 			_pvs->CalculateVisibility(g_pEnv->_sceneManager->GetCurrentScene().get(), pvsParams);
@@ -220,8 +257,40 @@ namespace HexEngine
 
 	void Camera::LateUpdate(float frameTime)
 	{
-		_projectionMatrixPrev = _projectionMatrix;
-		_viewMatrixPrev = _viewMatrix;
+		SnapshotPrevMatrices();
+	}
+
+	void Camera::SnapshotPrevMatrices()
+	{
+		_projectionMatrixPending = _projectionMatrix;
+		_viewMatrixPending = _viewMatrix;
+		_hasPendingPrev = true;
+	}
+
+	void Camera::PromotePrevMatrices(uint64_t frameCount)
+	{
+		if (frameCount == _prevPromoteFrame)
+			return;
+
+		// One-time proof-of-execution: the editor-viewport velocity bug was
+		// "prev matrices frozen at identity", and the fastest way to rule a
+		// stale binary in or out is a line in the log.
+		if (_prevPromoteFrame == UINT64_MAX)
+			LOG_INFO("Camera %p: motion-vector prev-matrix promotion active", (void*)this);
+
+		_prevPromoteFrame = frameCount;
+
+		// First-ever render: no pending matrices yet - seed prev with current
+		// so the first frame's velocity is zero instead of current-vs-identity.
+		if (!_hasPendingPrev)
+		{
+			_projectionMatrixPrev = _projectionMatrix;
+			_viewMatrixPrev = _viewMatrix;
+			return;
+		}
+
+		_projectionMatrixPrev = _projectionMatrixPending;
+		_viewMatrixPrev = _viewMatrixPending;
 	}
 
 	void Camera::ResetHasMovedThisFrame()
@@ -298,11 +367,74 @@ namespace HexEngine
 
 		transform->SetRotation(rot);
 
-		auto euler = rot.ToEuler();
+		// Setting the transform's rotation is not enough on its own: UpdateRotation
+		// runs every frame, rebuilds the rotation from _cameraAngles via
+		// CreateFromYawPitchRoll, and derives _lookDir from that - so it overwrites
+		// whatever was set here unless _cameraAngles agrees. Feed the angles back.
+		//
+		// This used to read the angles back with Quaternion::ToEuler, which was
+		// wrong three times over: it passed euler.x to SetYaw and euler.y to
+		// SetPitch (ToEuler returns x = pitch, y = yaw), it passed RADIANS into
+		// angles that UpdateRotation feeds through ToRadian as degrees, and even
+		// with both of those corrected ToEuler still disagrees with
+		// CreateFromYawPitchRoll at the poles - measured, it hands back a pitch of
+		// 45 degrees for a straight-up look, and a spurious roll of -180 for +Z.
+		//
+		// The symptom was that a reflection probe, which asks for the six axis
+		// directions one per capture face, got (0, 0, -1) with a couple of degrees
+		// of jitter for ALL SIX faces. Every probe captured the same wall six
+		// times and prefiltered to a near-uniform atlas; because a probe REPLACES
+		// the sky term inside its box, that atlas then zeroed environment lighting
+		// for everything indoors.
+		//
+		// So invert UpdateRotation's own formula instead of trusting ToEuler.
+		// UpdateRotation builds CreateFromYawPitchRoll(yaw, pitch, roll) and takes
+		// _lookDir = Forward * R, with Forward = (0, 0, -1), which expands to
+		//
+		//     lookDir = (-cos(pitch) sin(yaw), sin(pitch), -cos(pitch) cos(yaw))
+		//
+		// and that inverts exactly.
+		const math::Vector3 f = [&]
+		{
+			math::Vector3 v = forward;
+			v.Normalize();
+			return v;
+		}();
 
-		SetYaw(euler.x);
-		SetPitch(euler.y);
-		SetRoll(euler.z);
+		const float pitchRad = asinf(std::clamp(f.y, -1.0f, 1.0f));
+		const float cosPitch = sqrtf(std::max(0.0f, 1.0f - f.y * f.y));
+
+		float yawRad = 0.0f;
+		float rollRad = 0.0f;
+
+		if (cosPitch > 1e-4f)
+		{
+			yawRad = atan2f(-f.x, -f.z);
+
+			// Roll is whatever twist about the view axis takes the zero-roll up
+			// vector onto the requested one.
+			const float sp = f.y;
+			math::Vector3 zeroRollUp(sp * sinf(yawRad), cosPitch, sp * cosf(yawRad));
+			zeroRollUp.Normalize();
+
+			math::Vector3 wantUp = up;
+			wantUp.Normalize();
+
+			rollRad = atan2f(zeroRollUp.Cross(wantUp).Dot(f), zeroRollUp.Dot(wantUp));
+		}
+		else
+		{
+			// Looking straight up or down: pitch is +/-90, yaw and roll are the
+			// same degree of freedom, so spend it all on yaw and pick the one that
+			// lands the camera's up on the requested up. At pitch +90 the world-space
+			// up is (sin yaw, 0, cos yaw); at -90 it is (-sin yaw, 0, -cos yaw).
+			yawRad = (f.y > 0.0f) ? atan2f(up.x, up.z) : atan2f(-up.x, -up.z);
+			rollRad = 0.0f;
+		}
+
+		SetYaw(ToDegree(yawRad));
+		SetPitch(ToDegree(pitchRad));
+		SetRoll(ToDegree(rollRad));
 
 		//transform->SetRotation(math::Quaternion::CreateFromRotationMatrix(basis));
 	}
@@ -315,7 +447,8 @@ namespace HexEngine
 		if (_projectionMatrixPrev == math::Matrix::Identity)
 			_projectionMatrixPrev = _projectionMatrix;
 
-		_largerProjectionMatrix = math::Matrix::CreatePerspectiveFieldOfView(ToRadian(_fov+10.0f), _aspectRatio, _screenNear, _screenFar + (gViewMatrixBehindDistance * 2.0f));
+		const float largerFov = (_fov + gLargerFrustumExtraFovDegrees < 170.0f) ? (_fov + gLargerFrustumExtraFovDegrees) : 170.0f;
+		_largerProjectionMatrix = math::Matrix::CreatePerspectiveFieldOfView(ToRadian(largerFov), _aspectRatio, _screenNear, _screenFar + (LargerFrustumBehindDistance(_screenFar) * 2.0f));
 	}
 
 	void Camera::UpdateRotation()
@@ -393,10 +526,35 @@ namespace HexEngine
 	{
 		auto transform = GetEntity()->GetComponent<Transform>();
 
-		math::Vector3 up = _rotationMatrix.Up();		
+		// Up comes from the camera's actual rotation, not from _rotationMatrix.
+		//
+		// _rotationMatrix is declared and never assigned (its one assignment in
+		// UpdateRotation is commented out), so it is the identity and this always
+		// handed CreateLookAt a world up of (0, 1, 0). For any normal gameplay
+		// camera that is harmless - it never looks straight up or down. For a
+		// reflection probe's +Y / -Y capture faces it is fatal: the look direction
+		// is then PARALLEL to up, CreateLookAt's cross product degenerates, and
+		// the face renders garbage.
+		//
+		// Deriving up from the rotation keeps the old behaviour exactly for a
+		// level camera (an unrotated camera's up IS (0, 1, 0)) while staying valid
+		// at the poles. The final guard covers a roll of exactly +/-90 degrees,
+		// where the derived up is parallel to the look direction instead.
+		math::Vector3 up = math::Vector3::Transform(
+			math::Vector3::Up, transform->GetRotation());
+		up.Normalize();
+
+		if (fabsf(up.Dot(_lookDir)) > 0.999f)
+		{
+			const math::Vector3 fallback = (fabsf(_lookDir.y) > 0.999f)
+				? math::Vector3(0.0f, 0.0f, 1.0f)
+				: math::Vector3::Up;
+			up = fallback - _lookDir * fallback.Dot(_lookDir);
+			up.Normalize();
+		}
 
 		_viewMatrix = math::Matrix::CreateLookAt(transform->GetPosition() + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
-		_viewMatrixBehind = math::Matrix::CreateLookAt(transform->GetPosition() - (_lookDir * gViewMatrixBehindDistance) + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
+		_viewMatrixBehind = math::Matrix::CreateLookAt(transform->GetPosition() - (_lookDir * LargerFrustumBehindDistance(_screenFar)) + GetViewOffset(), _lookDir + transform->GetPosition() + GetViewOffset(), up);
 
 		BuildFrustum();
 
@@ -450,6 +608,16 @@ namespace HexEngine
 	const math::Matrix& Camera::GetProjectionMatrixPrev() const
 	{
 		return _projectionMatrixPrev;
+	}
+
+	math::Matrix Camera::GetViewProjectionMatrix() const
+	{
+		return _viewMatrix * _projectionMatrix;
+	}
+
+	math::Matrix Camera::GetViewProjectionMatrixPrev() const
+	{
+		return _viewMatrixPrev * _projectionMatrixPrev;
 	}
 
 	bool Camera::IsVisibleInFrustum(const dx::BoundingBox& aabb)

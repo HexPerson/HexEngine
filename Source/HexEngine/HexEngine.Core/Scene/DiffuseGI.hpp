@@ -47,6 +47,26 @@ namespace HexEngine
 		// without the blur shader. DiffuseGIAOProvider reads .r from this in
 		// preference to _giResolved.a when r_useGIAO compound mode is active.
 		ITexture2D* GetBlurredAOTexture() const { return _giAoBlurred; }
+		// Per-clip voxel radiance access for the froxel fog's world-space
+		// emissive/GI glow (VolumetricScattering samples the field directly
+		// at each froxel's world position). Null / w = 0 until the clip has
+		// initialized, which the fog shader treats as "clip absent".
+		ID3D11ShaderResourceView* GetClipRadianceSrv(uint32_t clip) const
+		{
+			if (clip >= ClipmapCount)
+				return nullptr;
+			const auto& level = _clipmaps[clip];
+			return level.initialized ? level.radianceSrv : nullptr;
+		}
+		math::Vector4 GetClipCenterExtent(uint32_t clip) const
+		{
+			if (clip >= ClipmapCount)
+				return math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			const auto& level = _clipmaps[clip];
+			if (!level.initialized || level.radianceSrv == nullptr)
+				return math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			return math::Vector4(level.center.x, level.center.y, level.center.z, level.extent);
+		}
 
 		/**
 		 * @brief Binds the 4 clipmaps' voxel radiance/opacity/albedo (12 SRVs) via the auto-slot
@@ -55,8 +75,20 @@ namespace HexEngine
 		 */
 		void BindVoxelsForReflection() const;
 
+		/**
+		 * @brief Scatters the current frame's LIT scene radiance into per-clip
+		 * atomic accumulation buffers (clips 0-1). Call after deferred lighting
+		 * with the lit HDR scene and the gbuffer position/normal targets; the
+		 * next voxelize update folds the accumulated radiance into injection,
+		 * making GI track every light type, shadowing and its own bounce.
+		 */
+		void DispatchScreenFeedback(ITexture2D* litScene, ITexture2D* gbufferPosition, ITexture2D* gbufferNormal);
+
 	private:
 		static constexpr uint32_t ClipmapCount = 4;
+		// Lit-scene feedback covers the two near clips; far clips get their
+		// energy through the constant-driven injection + second bounce.
+		static constexpr uint32_t FeedbackLevelCount = 2;
 		static constexpr uint32_t ProbeGridX = 16;
 		static constexpr uint32_t ProbeGridY = 10;
 		static constexpr uint32_t ProbeGridZ = 16;
@@ -77,6 +109,26 @@ namespace HexEngine
 			ITexture3D* albedoVolume = nullptr;
 			ITexture3D* albedoScratchVolume = nullptr;
 			ITexture3D* opacityVolume = nullptr;
+			// Directional voxels (SH band 1): per-channel linear moments.
+			// radianceVolume stays the SH L0 (ambient) + occlusion - every
+			// legacy consumer (SSR fallback, reflections, resolve, AO) reads
+			// it unchanged. l1Volume[axis] holds the per-channel moment along
+			// X/Y/Z (RGBA16F, SIGNED). A receiver evaluates
+			// E(N) = max(0, 0.5*L0 + 0.5*(L1x*Nx + L1y*Ny + L1z*Nz)), which
+			// cancels radiance behind emitting surfaces - the fix for GI
+			// wrapping around silhouettes (isotropic-voxel light leak).
+			ITexture3D* l1Volume[3] = {};
+			ITexture3D* l1ScratchVolume[3] = {};
+			// World-stable lit-radiance cache (feedback levels only). The
+			// screen scatter is view-dependent by nature; this volume REMEMBERS
+			// what surfaces looked like lit (rgb = radiance, a = seen
+			// confidence), persists when the camera looks away, scrolls with
+			// the clipmap, and ages fast under the snap signal so stale
+			// lighting clears on light changes. The inject resolve consumes
+			// THIS instead of the raw per-frame accum - which is what lets the
+			// feedback strength run high without view-dependent pumping.
+			ITexture3D* litCacheVolume = nullptr;
+			ITexture3D* litCacheScratchVolume = nullptr;
 			ITexture2D* probeIrradianceAtlas = nullptr;
 			ITexture2D* probeVisibilityAtlas = nullptr;
 			ID3D11UnorderedAccessView* radianceUav = nullptr;
@@ -87,6 +139,14 @@ namespace HexEngine
 			ID3D11ShaderResourceView* radianceScratchSrv = nullptr;
 			ID3D11ShaderResourceView* albedoSrv = nullptr;
 			ID3D11ShaderResourceView* albedoScratchSrv = nullptr;
+			ID3D11UnorderedAccessView* l1Uav[3] = {};
+			ID3D11UnorderedAccessView* l1ScratchUav[3] = {};
+			ID3D11ShaderResourceView* l1Srv[3] = {};
+			ID3D11ShaderResourceView* l1ScratchSrv[3] = {};
+			ID3D11UnorderedAccessView* litCacheUav = nullptr;
+			ID3D11UnorderedAccessView* litCacheScratchUav = nullptr;
+			ID3D11ShaderResourceView* litCacheSrv = nullptr;
+			ID3D11ShaderResourceView* litCacheScratchSrv = nullptr;
 
 			std::vector<float> radianceCpu;
 			std::vector<uint8_t> opacityCpu;
@@ -111,6 +171,9 @@ namespace HexEngine
 			math::Vector4 params9; // x=sunStrength, y=unlitAlbedoInjection, z=maxVoxelTestsPerTri, w=sunShadowMode
 			math::Vector4 params10; // x=gpuEdgeSmoothThreshold, y=gpuEdgeSmoothBlendStrength, z=bounceAlbedoMinLuma, w=bounceAlbedoRemapAmount
 			math::Vector4 params11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
+			math::Vector4 params12; // x=live source-triangle count this update, y=candidate routing active, z=snap boost, w reserved
+			math::Vector4 params13; // x=litInjection strength, y=litInjection maxLuma, z=feedback accum bound for this level, w=directional voxels active
+			math::Vector4 params14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z=lit cache active, w reserved
 		};
 
 		struct GpuVoxelTriangle
@@ -151,6 +214,24 @@ namespace HexEngine
 			bool hasTexture = false;
 			const void* textureIdentity = nullptr;
 			std::vector<uint8_t> pixels;
+		};
+
+		// Memoised per-mesh RAW texcoord bounds (pre-uvScale - they scale
+		// linearly with a component's UV scale, so one entry serves every
+		// component sharing the mesh). Mesh has no version counter, so
+		// validity rides the vertex allocation identity plus a sparse
+		// texcoord sentinel hash: an in-place rebuild that keeps the same
+		// allocation and count still misses via the sentinel.
+		struct MeshUvRectCacheEntry
+		{
+			const void* vertexData = nullptr;
+			size_t vertexCount = 0u;
+			uint64_t texcoordSentinelHash = 0ull;
+			float minU = 0.0f;
+			float minV = 0.0f;
+			float maxU = 0.0f;
+			float maxV = 0.0f;
+			bool valid = false; // false = mesh had no finite texcoords
 		};
 
 		struct MeshEmissiveCacheEntry
@@ -254,6 +335,7 @@ namespace HexEngine
 			float emissiveProxyMaxLuma = 0.0f;
 			float emissiveProxyMaxStrength = 0.0f;
 			float emissivePayloadMaxHint = 0.0f;
+			uint32_t updatedClipMask = 0u;
 		};
 
 		struct GpuGiLight
@@ -296,7 +378,14 @@ namespace HexEngine
 		void AddDirtyRegion(uint32_t levelIndex, const dx::BoundingBox& bounds);
 		bool IsMeshStateDirty(StaticMeshComponent* smc, const math::Vector3& worldPos);
 		math::Vector3 GetMaterialAlbedoTint(const Material* material, const StaticMeshComponent* meshComponent);
-		bool EnsureGpuVoxelTriangleBuffer(uint32_t elementCapacity);
+		// Returns (uMin, vMin, uMax, vMax) of the component's scaled UVs,
+		// (0,0,1,1) for wrapped/tiled or degenerate UVs. Memoised via
+		// _meshUvRectCache - the raw bounds scan is O(vertices) once per
+		// mesh, O(1) per call after.
+		math::Vector4 ResolveMeshUvRect(const StaticMeshComponent* meshComponent);
+		bool EnsureGpuVoxelTriangleBuffer(uint32_t levelIndex, uint32_t elementCapacity);
+		bool EnsureFeedbackAccumBuffer(uint32_t feedbackLevel, uint32_t elementCount);
+		bool EnsureInjectAccumBuffer(uint32_t elementCount);
 		bool EnsureGpuGiLightBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialBuffer(uint32_t elementCapacity);
 		bool EnsureGpuGiMaterialTexelBuffer(uint32_t elementCapacity);
@@ -317,6 +406,9 @@ namespace HexEngine
 		void RunGpuVoxelization(Scene* scene, uint32_t levelIndex);
 
 		void RenderTracePass(const GBuffer& gbuffer, ITexture2D* beautyTarget);
+		// Depth/normal-aware pre-blur of the trace when SSGI is on; selects the
+		// texture the resolve reads (_resolveSource).
+		void RenderTraceBlurPass(const GBuffer& gbuffer);
 		void RenderResolvePass(const GBuffer& gbuffer);
 		// Two-pass separable bilateral blur on _giResolved.a into
 		// _giAoBlurred. Runs every frame so r_useGIAO can be flipped at
@@ -339,6 +431,10 @@ namespace HexEngine
 		uint32_t _activeClipmap = 0;
 		bool _created = false;
 		float _resolveStabilityBoost = 0.0f;
+		// Per-frame base-injection scale from the scene ambient level (see
+		// r_giLightCoupling). Computed in UpdateConstants, applied wherever
+		// r_giDiffuseInjection feeds injection.
+		float _lightCouplingScale = 1.0f;
 		bool _lastLocalLightsOnlyDebug = false;
 		float _lastLocalLightInjection = 1.0f;
 		bool _lastLocalLightInjectionEnable = true;
@@ -359,11 +455,35 @@ namespace HexEngine
 		bool _lastTerrainProxyEnable = false;
 		float _lastTerrainProxyInjectionScale = 0.02f;
 		bool _lastGpuComputeBaseSunEnabled = false;
+		// LOCAL-light inject signature (points/spots). The SUN part is tracked
+		// separately below - it interpolates per frame during weather
+		// transitions and must never share the local set's cache-nuke path.
 		uint64_t _lastInjectLightSignature = 0ull;
+		uint64_t _lastSunInjectSignature = 0ull;
+		uint64_t _pendingSunInjectSignature = 0ull;
+		uint32_t _sunInjectSignatureStableFrames = 0u;
 		math::Vector3 _lastSunDirection = math::Vector3(0.0f, -1.0f, 0.0f);
 		bool _lastSunDirectionInitialized = false;
 		uint32_t _sunRelightFramesRemaining = 0;
 		uint32_t _lightResetFramesRemaining = 0u;
+		// Snap-on-change window: >0 for a few frames after a detected lighting-
+		// state change (local light set, light revision, sun jump). While active,
+		// params12.z tells the voxelize shaders to blend mostly to the NEW
+		// injection and lift the per-update delta brake - history is stale by
+		// definition, so easing in at the shimmer-safe rate just delays truth.
+		uint32_t _injectSnapFramesRemaining = 0u;
+		// Per-frame budget: only one level may run a FULL CPU triangle regather
+		// per Update (clip 0 exempt) - deferred levels stay dirty and retry.
+		bool _fullGatherConsumedThisFrame = false;
+		// Set by BuildGpuVoxelTriangleList when its empty result means "gather
+		// parked at the slice limit" rather than a transient anomaly - the
+		// caller must then NOT bump the warm counter (warm keeps the settling
+		// fast path re-running clip 0/1 every frame for the whole gather).
+		bool _gatherParkedThisCall = false;
+		// FNV-1a over every injection-affecting cvar (+ quantized coupling
+		// scale). A change arms the snap window - GI settings respond in a few
+		// updates instead of easing through the steady-state EMA for seconds.
+		uint64_t _lastInjectionTuningHash = 0ull;
 		math::Vector3 _lastCameraPosition = math::Vector3::Zero;
 		bool _lastCameraPositionInitialized = false;
 		uint32_t _cameraMotionFramesRemaining = 0u;
@@ -377,10 +497,35 @@ namespace HexEngine
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleAlbedoCache;
 		std::unordered_map<const Material*, MaterialTriangleAlbedoCacheEntry> _materialTriangleEmissiveCache;
 		std::unordered_map<StaticMeshComponent*, MeshEmissiveCacheEntry> _meshEmissiveCache;
+		std::unordered_map<const void*, MeshUvRectCacheEntry> _meshUvRectCache; // key: Mesh*
 		std::vector<GpuVoxelTriangle> _voxelTriangleUpload;
 		std::vector<GiMeshInstanceProxy> _giMeshProxies;
 		std::vector<GiMaterialProxy> _giMaterialProxies;
 		std::vector<GiLocalLightProxy> _giLightProxies;
+
+		// In-flight time-sliced triangle gather (GPU base+sun path only). A full
+		// regather of a big clip is 25-200ms of CPU in Debug; instead of paying
+		// it in one frame the mesh loop stops after r_giGatherTrianglesPerFrame
+		// appended triangles, parks its state here and resumes next frame (the
+		// level keeps its previous radiance meanwhile via the transient-empty
+		// path). Aborted whenever the scene revisions or the clip volume change.
+		struct PendingTriangleGather
+		{
+			bool active = false;
+			uint32_t nextMeshIndex = 0u;
+			std::vector<GpuVoxelTriangle> triangles;
+			std::vector<GiMeshInstanceProxy> meshes;
+			std::vector<GiMaterialProxy> materials;
+			std::vector<GiLocalLightProxy> lights;
+			math::Vector3 center = math::Vector3::Zero;
+			float extent = -1.0f;
+			uint64_t geometryRevision = 0ull;
+			uint64_t materialRevision = 0ull;
+			uint32_t emissiveTriangleCount = 0u;
+			uint32_t emissiveActiveTriangleCount = 0u;
+			uint32_t emissiveTiledTriangleCount = 0u;
+		};
+		std::array<PendingTriangleGather, ClipmapCount> _pendingGather = {};
 		std::vector<GpuGiLight> _gpuGiLightUpload;
 		std::vector<GpuGiMaterial> _gpuGiMaterialUpload;
 		std::vector<uint32_t> _gpuGiMaterialTexelUpload;
@@ -393,6 +538,8 @@ namespace HexEngine
 		uint64_t _statsFrameCounter = 0ull;
 
 		ITexture2D* _giHalfRes = nullptr;
+		ITexture2D* _giHalfResBlurred = nullptr;
+		ITexture2D* _resolveSource = nullptr;
 		ITexture2D* _giResolved = nullptr;
 		ITexture2D* _giHistory = nullptr;
 		// AO blur targets: _giResolved.a → bilateral H pass → _giAoBlurredH →
@@ -406,9 +553,22 @@ namespace HexEngine
 		// Single float4 cbuffer feeding the blur shader: (dirX, dirY, sourceChannel, depthScale).
 		// Re-bound each pass with the appropriate direction / source channel selector.
 		IConstantBuffer* _aoBlurConstantBuffer = nullptr;
-		ID3D11Buffer* _voxelTriangleBuffer = nullptr;
-		ID3D11ShaderResourceView* _voxelTriangleSrv = nullptr;
-		uint32_t _voxelTriangleCapacity = 0;
+		// Per-level persistent triangle buffers: uploaded only when the cached
+		// triangle list actually changes. Re-dispatching an unchanged level
+		// (the steady-state injection-EMA refresh) binds the existing buffer -
+		// no CPU-side vector copy and no Map/memcpy (~34MB + 10-15ms Debug per
+		// far-clip refresh before this).
+		std::array<ID3D11Buffer*, ClipmapCount> _voxelTriangleBuffer = {};
+		std::array<ID3D11ShaderResourceView*, ClipmapCount> _voxelTriangleSrv = {};
+		std::array<uint32_t, ClipmapCount> _voxelTriangleCapacity = {};
+		std::array<uint32_t, ClipmapCount> _voxelTriangleGpuCount = {};
+		std::array<bool, ClipmapCount> _voxelTriangleGpuValid = {};
+		std::array<uint32_t, ClipmapCount> _voxelTriangleGpuEmissivePayloadCount = {};
+		std::array<float, ClipmapCount> _voxelTriangleGpuEmissivePayloadMaxHint = {};
+		// Set by BuildGpuVoxelTriangleList when it served the request from the
+		// CPU cache AND the level's GPU buffer already holds that exact list -
+		// the caller can then skip the upload and the payload rescan entirely.
+		bool _gatherServedByGpuList = false;
 		ID3D11Buffer* _giLightBuffer = nullptr;
 		ID3D11ShaderResourceView* _giLightSrv = nullptr;
 		uint32_t _giLightCapacity = 0;
@@ -422,8 +582,30 @@ namespace HexEngine
 		ID3D11ShaderResourceView* _voxelCandidateSrv = nullptr;
 		ID3D11UnorderedAccessView* _voxelCandidateUav = nullptr;
 		ID3D11Buffer* _voxelCandidateCountBuffer = nullptr;
+		// R32_UINT SRV over the 4-byte count buffer so the injection shaders can
+		// read the live appended-candidate count directly (no CPU readback).
+		ID3D11ShaderResourceView* _voxelCandidateCountSrv = nullptr;
 		ID3D11Buffer* _voxelCandidateCountReadback = nullptr;
 		ID3D11Buffer* _voxelCandidateDispatchArgs = nullptr;
+		ID3D11UnorderedAccessView* _voxelCandidateDispatchArgsUav = nullptr;
+		// Lit-scene feedback accumulators (uint4 per voxel: RGB scaled 1024 +
+		// weight scaled 1024, atomically accumulated by the screen-feedback CS,
+		// cleared before each scatter). Consumed by the eval voxelize at t13.
+		std::array<ID3D11Buffer*, FeedbackLevelCount> _feedbackAccumBuffer = {};
+		std::array<ID3D11UnorderedAccessView*, FeedbackLevelCount> _feedbackAccumUav = {};
+		std::array<ID3D11ShaderResourceView*, FeedbackLevelCount> _feedbackAccumSrv = {};
+		std::array<uint32_t, FeedbackLevelCount> _feedbackAccumElements = {};
+		// Accum coords are voxel-space for the clip center at scatter time; a
+		// consumed shift offsets them, so the accum is dropped on shift.
+		std::array<bool, FeedbackLevelCount> _feedbackAccumValid = {};
+		// Deterministic-injection accumulator (18 x 4B per voxel: radiance +
+		// weight, albedo + weight, opacity max, signed L1 moments). Shared by
+		// all clips (one level updates per dispatch), cleared before each
+		// accumulate pass, resolved to the volumes by DiffuseGIInjectResolve.
+		ID3D11Buffer* _injectAccumBuffer = nullptr;
+		ID3D11UnorderedAccessView* _injectAccumUav = nullptr;
+		ID3D11ShaderResourceView* _injectAccumSrv = nullptr;
+		uint32_t _injectAccumElements = 0;
 		uint32_t _voxelCandidateCapacity = 0;
 
 		std::shared_ptr<IShader> _traceShader;
@@ -434,9 +616,14 @@ namespace HexEngine
 		// share the same shader; the direction is fed via the
 		// _aoBlurConstantBuffer cbuffer above.
 		std::shared_ptr<IShader> _aoBlurShader;
+		std::shared_ptr<IShader> _traceBlurShader;
 		std::shared_ptr<IShader> _voxelizeShader;
 		std::shared_ptr<IShader> _voxelizeEvalShader;
 		std::shared_ptr<IShader> _voxelCandidateShader;
+		std::shared_ptr<IShader> _candidateArgsFixupShader;
+		std::shared_ptr<IShader> _screenFeedbackShader;
+		std::shared_ptr<IShader> _injectResolveShader;
+		std::shared_ptr<IShader> _litCacheMergeShader;
 		std::shared_ptr<IShader> _voxelClearShader;
 		std::shared_ptr<IShader> _voxelPropagateShader;
 		std::shared_ptr<IShader> _voxelShiftShader;
@@ -444,6 +631,12 @@ namespace HexEngine
 		std::array<std::vector<GiMaterialProxy>, ClipmapCount> _cachedGiMaterialProxies = {};
 		std::array<bool, ClipmapCount> _cachedVoxelTrianglesValid = { false, false, false, false };
 		std::array<uint64_t, ClipmapCount> _cachedVoxelTrianglesFrame = { 0ull, 0ull, 0ull, 0ull };
+		// Clip volume the cached triangles were gathered for. When the centre/
+		// extent still match and the scene revisions are unchanged, the GPU
+		// base+sun path can reuse the cache indefinitely (it stores geometry +
+		// albedo only - lighting is recomputed on the GPU every dispatch).
+		std::array<math::Vector3, ClipmapCount> _cachedVoxelTrianglesCenter = {};
+		std::array<float, ClipmapCount> _cachedVoxelTrianglesExtent = { -1.0f, -1.0f, -1.0f, -1.0f };
 		std::array<uint32_t, ClipmapCount> _cachedEmissiveMaterialCount = { 0u, 0u, 0u, 0u };
 		std::array<uint32_t, ClipmapCount> _cachedEmissiveTriangleCount = { 0u, 0u, 0u, 0u };
 		std::array<uint32_t, ClipmapCount> _cachedEmissiveActiveTriangleCount = { 0u, 0u, 0u, 0u };

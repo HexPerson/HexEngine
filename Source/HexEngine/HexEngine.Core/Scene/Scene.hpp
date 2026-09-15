@@ -13,8 +13,11 @@
 #include "../Entity/Component/StaticMeshComponent.hpp"
 #include "../Entity/Component/UpdateComponent.hpp"
 #include "../Terrain/HeightMapGenerator.hpp"
+#include "SnowFootprintSystem.hpp"
+#include <functional>
 #include <limits>
 #include <type_traits>
+#include <unordered_set>
 
 namespace HexEngine
 {
@@ -129,7 +132,6 @@ namespace HexEngine
 
 		void OnGUI();
 
-		//void RenderWater(const SceneRenderParameters& params, bool maskPass, ITexture2D* maskTexture);
 
 		//void RenderTransparent(const SceneRenderParameters& params);
 
@@ -167,12 +169,33 @@ namespace HexEngine
 		void CalculateBounds(math::Vector3& min, math::Vector3& max);
 		bool GatherStaticMeshesInBounds(const dx::BoundingBox& bounds, std::vector<StaticMeshComponent*>& outComponents, bool includeDynamic = true);
 		uint64_t GetGiGeometryRevision() const;
+		// Bumped on ANY meshed entity's transform change and on geometry
+		// add/change - no GI exclusions, no debounce. The shadow atlas keys
+		// its cache invalidation off this, never off the GI revision.
+		uint64_t GetShadowGeometryRevision() const { return _shadowGeometryRevision; }
 		uint64_t GetGiMaterialRevision() const;
 		uint64_t GetGiLightRevision() const;
 		void NotifyGiMaterialStateChanged();
 		void NotifyGiLightStateChanged();
 		void NotifyStaticMeshChanged(StaticMeshComponent* component, bool geometryChanged, bool materialChanged);
 		void NotifyEntityTransformChanged(Entity* entity);
+
+		// PVS culling spatial cache. Mirrors the GI spatial cache but with PVS
+		// semantics: meshless components stay in (HLOD streaming needs them),
+		// Sky/HLOD entries are always returned, and moving entities update their
+		// grid cells in place instead of dirtying the whole cache. Returns false
+		// when the cache is disabled/unusable - callers fall back to a full
+		// component-pool scan. shapeIntersectsCell (optional) tightens the cell
+		// walk with an exact shape-vs-cell test; queryBounds must fully contain
+		// the cull shape.
+		bool QueryStaticMeshCullingCandidates(const dx::BoundingBox& queryBounds,
+			const std::function<bool(const dx::BoundingBox& cellBounds)>& shapeIntersectsCell,
+			std::vector<StaticMeshComponent*>& outComponents);
+		void MarkPvsSpatialCacheDirty();
+		// In-place cell update for one entity's static mesh entries (called on
+		// every transform-cache clear, including the no-notify physics writeback
+		// path, so the grid tracks movers without full rebuilds).
+		void UpdatePvsSpatialEntriesForEntity(Entity* entity);
 		// Per-frame settle sweep for the GI motion debounce (called from Update while
 		// holding _lock): re-bakes meshes that have stopped moving for a few frames.
 		void UpdateGiMotionDebounce();
@@ -247,6 +270,9 @@ namespace HexEngine
 		const math::Color& GetFogColour() const;
 		const math::Vector4& GetAmbientColour() const;
 		const WeatherSurfaceParams& GetWeatherSurfaceParams() const;
+		// Snow footprint ring buffer (Phase 3 Part B). Walking entities Emit()
+		// into it; the renderer stamps the live prints into the deformation map.
+		SnowFootprintSystem& GetSnowFootprints();
 
 		//void RenderSkySphere();
 
@@ -342,6 +368,12 @@ namespace HexEngine
 		void RemoveEntityInternal(Entity* entity);
 		bool IsGiStaticLayer(Layer layer) const;
 		void RebuildGiSpatialCache_NoLock();
+		void RebuildPvsSpatialCache_NoLock();
+		void InsertPvsSpatialEntryIntoCells_NoLock(uint32_t entryIndex);
+		void RemovePvsSpatialEntryFromCells_NoLock(uint32_t entryIndex);
+		void AddPvsSpatialEntry_NoLock(Entity* entity, StaticMeshComponent* component);
+		void RemovePvsSpatialEntry_NoLock(StaticMeshComponent* component);
+		void ProcessPvsSpatialPendingUpdates_NoLock();
 
 	private:
 		struct GiSpatialCellKey
@@ -419,6 +451,7 @@ namespace HexEngine
 
 		OceanSettings _oceanSettings;
 		WeatherSurfaceParams _weatherSurfaceParams;
+		SnowFootprintSystem _snowFootprints;
 
 		std::recursive_mutex _lock;
 
@@ -428,6 +461,7 @@ namespace HexEngine
 		bool _didAnyDrawnItemReflect = false;
 		bool _wasPvsReset = true;
 		uint64_t _giGeometryRevision = 1ull;
+		uint64_t _shadowGeometryRevision = 1ull;
 		uint64_t _giMaterialRevision = 1ull;
 		uint64_t _giLightRevision = 1ull;
 		bool _giSpatialCacheDirty = true;
@@ -435,12 +469,60 @@ namespace HexEngine
 		// frame). While present they're excluded from the voxel triangle list so
 		// per-frame motion doesn't force a full rebuild; on settle they're re-baked.
 		uint64_t _giFrameNumber = 0ull;
-		std::unordered_map<StaticMeshComponent*, uint64_t> _giMovingMeshes;
+		struct GiMovingMeshState
+		{
+			uint64_t lastMotionFrame = 0ull;
+			uint64_t lastBakeFrame = 0ull;
+		};
+		std::unordered_map<StaticMeshComponent*, GiMovingMeshState> _giMovingMeshes;
 		std::vector<GiSpatialEntry> _giSpatialEntries;
 		std::unordered_map<GiSpatialCellKey, std::vector<uint32_t>, GiSpatialCellKeyHash> _giSpatialCells;
 		std::vector<uint32_t> _giSpatialOverflowEntries;
 		std::unordered_map<StaticMeshComponent*, uint32_t> _giSpatialQueryStampByComponent;
 		uint32_t _giSpatialQueryStamp = 1u;
+
+		// PVS culling spatial cache (see QueryStaticMeshCullingCandidates).
+		// LOOSE grid: every gridded entry lives in exactly ONE cell (by AABB
+		// centre) and is guaranteed to extend at most one cell beyond it, so a
+		// query just inflates its range by a cell. Occupied cells therefore
+		// never exceed the entry count (the multi-cell version hit 164k cells
+		// for 16k entities and each query walked all of them).
+		struct PvsSpatialEntry
+		{
+			StaticMeshComponent* component = nullptr;
+			Entity* entity = nullptr;
+			dx::BoundingBox worldBounds = {};
+			GiSpatialCellKey cell = {};
+			// Not stored in cells: Sky/HLOD proxies (must always be returned) and
+			// entries too large for the loose-grid guarantee.
+			bool ungridded = false;
+			bool alwaysInclude = false;
+			uint32_t lastQueryStamp = 0u;
+		};
+		struct PvsSpatialCell
+		{
+			GiSpatialCellKey key = {};
+			std::vector<uint32_t> entries;
+		};
+		std::vector<PvsSpatialEntry> _pvsSpatialEntries;
+		// Dense cell storage (the query's wide-range fallback walks this
+		// linearly) + a key->index map for range lookups.
+		std::vector<PvsSpatialCell> _pvsSpatialCellList;
+		std::unordered_map<GiSpatialCellKey, uint32_t, GiSpatialCellKeyHash> _pvsSpatialCellIndex;
+		std::vector<uint32_t> _pvsSpatialUngriddedEntries;
+		std::unordered_map<Entity*, std::vector<uint32_t>> _pvsSpatialEntriesByEntity;
+		std::unordered_map<StaticMeshComponent*, uint32_t> _pvsSpatialEntryByComponent;
+		// Movers queue here (cheap set insert per transform event) and are
+		// re-placed lazily at the next query - queries only happen on PVS
+		// rebuilds, so per-frame motion costs no bounds recomputes at all.
+		std::unordered_set<Entity*> _pvsSpatialPendingUpdates;
+		bool _pvsSpatialCacheDirty = true;
+		uint32_t _pvsSpatialQueryStamp = 0u;
+		uint32_t _pvsSpatialDeadEntries = 0u;
+		// Adaptive loose-grid cell size (see RebuildPvsSpatialCache_NoLock).
+		float _pvsSpatialCellSize = 256.0f;
+		size_t _pvsSpatialAlwaysIncludeCount = 0;
+		size_t _pvsSpatialPoolSizeAtBuild = 0;
 		
 	};
 }

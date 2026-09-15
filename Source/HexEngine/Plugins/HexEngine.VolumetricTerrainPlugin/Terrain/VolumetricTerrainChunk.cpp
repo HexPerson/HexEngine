@@ -1,4 +1,4 @@
-#include "VolumetricTerrainChunk.hpp"
+﻿#include "VolumetricTerrainChunk.hpp"
 #include <cstring>
 #include <HexEngine.Core/Graphics/ITexture2D.hpp>
 #include <HexEngine.Core/Graphics/RenderStructs.hpp>
@@ -1797,6 +1797,20 @@ bool VolumetricTerrainChunk::ApplyBrushGpu(const math::Vector3& center, const Br
 
 void VolumetricTerrainChunk::RenderGpuSurface(uint32_t lodIndex)
 {
+	// TEMP DIAGNOSTIC: HEXENGINE_TERRAIN_NODRAW=1 skips the indirect draw but
+	// keeps the extract, so the append-counter readback instrumentation can
+	// complete a frame instead of TDR'ing on the first terrain draw.
+	static int s_noDraw = -1;
+	if (s_noDraw < 0)
+	{
+		char v[8] = {};
+		s_noDraw = (GetEnvironmentVariableA("HEXENGINE_TERRAIN_NODRAW", v, sizeof(v)) > 0 && v[0] == '1') ? 1 : 0;
+	}
+	if (s_noDraw == 1)
+	{
+		return;
+	}
+
 	if (lodIndex >= kGpuSurfaceLodCount ||
 		!_generated ||
 		!EnsureGpuSurfacePipeline() ||

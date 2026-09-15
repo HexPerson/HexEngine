@@ -3,6 +3,8 @@
 #include "Scene.hpp"
 #include "../HexEngine.hpp"
 #include "NetworkReplicationSystem.hpp"
+#include <algorithm>
+#include <chrono>
 #include <fstream>
 
 #include "../Entity/Component/Transform.hpp"
@@ -32,7 +34,8 @@ namespace HexEngine
 	HVar r_profileDisableSurfaceMaps("r_profileDisableSurfaceMaps", "Disable roughness, metallic, AO, height, emission and opacity map bindings in static mesh materials for profiling", false, false, true);
 	HVar phys_debug("phys_debug", "Enable the physics debugger (very slow)", false, false, true);
 	HVar r_debugRenderSkips("r_debugRenderSkips", "Log per-pass render skip counters for scene entity rendering", false, false, true);
-	HVar r_gpuCullUseIndirectDraw("r_gpuCullUseIndirectDraw", "Use indexed-instanced indirect draw submission for scene mesh batches", false, false, true);
+	HVar r_gpuCullUseIndirectDraw("r_gpuCullUseIndirectDraw", "Reserved for a GPU-written ExecuteIndirect path (D3D12). Ignored on D3D11 - CPU-written per-draw indirect args were measurably slower than direct draws", false, false, true);
+	HVar r_snowShellDebug("r_snowShellDebug", "Log why the snow shell draw does/doesn't fire, once/sec per material", false, false, true);
 
 	namespace
 	{
@@ -43,7 +46,52 @@ namespace HexEngine
 		{
 			return static_cast<int32_t>(std::floor(value / kGiSpatialCellSize));
 		}
+
+		// PVS culling grid: much coarser cells than GI - candidates only need to
+		// be conservative (the PVS does the exact sphere/frustum test per
+		// entity), and coarse cells keep both the occupied-cell count and the
+		// per-entry covered-cell count small, which is what the rebuild and the
+		// query walk pay for.
+		// The cell size is ADAPTIVE: picked at each grid rebuild from the entry
+		// size distribution (90th percentile of max half-extent), so ~90% of
+		// entries satisfy the loose-grid "fits in one cell" rule whatever the
+		// scene's units/scale are. A fixed 256 left 15k of 21k entries ungridded
+		// (and therefore returned by EVERY query) in a large-scale city scene.
+		constexpr float kPvsSpatialMinCellSize = 32.0f;
+		constexpr float kPvsSpatialMaxCellSize = 32768.0f;
+
+		inline int32_t PvsSpatialCellCoord(float value, float cellSize)
+		{
+			return static_cast<int32_t>(std::floor(value / cellSize));
+		}
+
+		// Same plane extraction (and sign convention) as GpuVisibilityCulling::
+		// BuildFrustumPlanes / GpuFrustumCull.shader: a sphere is OUTSIDE when
+		// dot(plane.xyz, center) + plane.w < -radius for any plane. Building the
+		// planes once per pass makes the per-renderable test 6 dot products -
+		// dx::BoundingFrustum::Intersects re-derives its planes on every call.
+		inline void BuildPvsFineCullPlanes(const math::Matrix& m, math::Vector4 outPlanes[6])
+		{
+			outPlanes[0] = math::Vector4(m._14 + m._11, m._24 + m._21, m._34 + m._31, m._44 + m._41);
+			outPlanes[1] = math::Vector4(m._14 - m._11, m._24 - m._21, m._34 - m._31, m._44 - m._41);
+			outPlanes[2] = math::Vector4(m._14 - m._12, m._24 - m._22, m._34 - m._32, m._44 - m._42);
+			outPlanes[3] = math::Vector4(m._14 + m._12, m._24 + m._22, m._34 + m._32, m._44 + m._42);
+			outPlanes[4] = math::Vector4(m._13, m._23, m._33, m._43);
+			outPlanes[5] = math::Vector4(m._14 - m._13, m._24 - m._23, m._34 - m._33, m._44 - m._43);
+
+			for (int32_t i = 0; i < 6; ++i)
+			{
+				const math::Vector3 n(outPlanes[i].x, outPlanes[i].y, outPlanes[i].z);
+				const float len = std::max(n.Length(), 1e-5f);
+				outPlanes[i] /= len;
+			}
+		}
 	}
+
+	HVar r_pvsSpatialGrid("r_pvsSpatialGrid", "Gather PVS culling candidates from the spatial grid instead of scanning every static mesh component", true, false, true);
+	HVar r_pvsFineCull("r_pvsFineCull", "Per-renderable frustum test at draw submission (culls between PVS rebuilds)", true, false, true);
+	HVar r_pvsPerfLog("r_pvsPerfLog", "Log PVS rebuild and spatial grid timings/counters", false, false, true);
+	HVar r_pvsForceRebuildOnRemove("r_pvsForceRebuildOnRemove", "Legacy: force-rebuild EVERY PVS on any frame an entity was removed (removal already flushes the entity from all PVSes incrementally)", false, false, true);
 
 	void Scene::ComponentPool::EnsureEntityCapacity(uint32_t slotCount)
 	{
@@ -251,16 +299,25 @@ namespace HexEngine
 		return _giLightRevision;
 	}
 
+	// Diagnostic sibling of DiffuseGI's r_giLogRebuilds: names WHO bumped a GI
+	// revision, so a rebuild log showing geomRevOk=0/matRevOk=0 can be traced
+	// straight to its source.
+	HVar r_giLogInvalidations("r_giLogInvalidations", "Log every GI revision bump with its source", false, false, true);
+
 	void Scene::NotifyGiMaterialStateChanged()
 	{
 		std::unique_lock lock(_lock);
 		++_giMaterialRevision;
+		if (r_giLogInvalidations._val.b)
+			LOG_INFO("GI matRev bump -> %llu (NotifyGiMaterialStateChanged)", (unsigned long long)_giMaterialRevision);
 	}
 
 	void Scene::NotifyGiLightStateChanged()
 	{
 		std::unique_lock lock(_lock);
 		++_giLightRevision;
+		if (r_giLogInvalidations._val.b)
+			LOG_INFO("GI lightRev bump -> %llu (NotifyGiLightStateChanged)", (unsigned long long)_giLightRevision);
 	}
 
 	void Scene::NotifyStaticMeshChanged(StaticMeshComponent* component, bool geometryChanged, bool materialChanged)
@@ -272,12 +329,22 @@ namespace HexEngine
 		if (geometryChanged)
 		{
 			++_giGeometryRevision;
+			++_shadowGeometryRevision;
 			_giSpatialCacheDirty = true;
 		}
 
 		if (materialChanged)
 		{
 			++_giMaterialRevision;
+		}
+
+		if (r_giLogInvalidations._val.b && (geometryChanged || materialChanged))
+		{
+			auto* entity = component->GetEntity();
+			LOG_INFO("GI %s%sRev bump (mesh '%s')",
+				geometryChanged ? "geom" : "",
+				materialChanged ? (geometryChanged ? "+mat" : "mat") : "",
+				entity != nullptr ? entity->GetName().c_str() : "<null>");
 		}
 	}
 
@@ -287,25 +354,58 @@ namespace HexEngine
 		if (entity == nullptr)
 			return;
 
-		// GI motion debounce. A GI mesh that moves every frame (animated
-		// characters, physics props) would otherwise invalidate the voxel triangle
-		// cache every frame and force a full, expensive BuildGpuVoxelTriangleList
-		// rebuild - the opposite of what a static voxel clipmap wants. Instead: on
-		// the static->moving transition, drop the mesh from the voxel world once
-		// (single revision bump) and mark it motion-excluded; while it keeps moving
-		// we only refresh its last-motion frame (no per-frame bumps).
-		// UpdateGiMotionDebounce re-bakes it once it settles. Meshes explicitly
-		// flagged ExcludeFromGI never enter here.
+		// Keep the PVS culling grid tracking movers (cheap in-place cell update,
+		// not a dirty flag - a full rebuild per moving entity would defeat it).
+		UpdatePvsSpatialEntriesForEntity(entity);
+
+		// Shadow revision: UNCONDITIONAL for anything with a mesh, unlike the
+		// GI revision below which inherits GI's exclusions and debounce. The
+		// shadow atlas first keyed off the GI revision and objects flagged
+		// ExcludeFromGI (small props) silently stopped invalidating shadow
+		// tiles - a dragged trash can kept its stale shadow (user-found).
+		// Per-frame bumps while dragging are fine: the atlas render budget
+		// bounds the refresh cost, and a live shadow during the drag is what
+		// you want anyway.
+		if (auto* anyMesh = entity->GetComponent<StaticMeshComponent>();
+			anyMesh != nullptr && anyMesh->GetMesh() != nullptr)
+		{
+			++_shadowGeometryRevision;
+		}
+
+		// GI motion debounce - deterministic-GI era. Movers STAY in the voxel
+		// world: the old behaviour dropped a moving mesh from GI entirely
+		// (motion-excluded until it settled), so a dragged object's bounce
+		// folded to zero for the whole move and only re-baked ~6 frames after
+		// release. With the sliced, snapshot-completing gather a rebake is
+		// cheap enough to run at a THROTTLED cadence while the mesh moves -
+		// its GI pose lags a few frames, but its light never disappears.
 		if (auto* staticMesh = entity->GetComponent<StaticMeshComponent>();
 			staticMesh != nullptr && staticMesh->GetMesh() != nullptr && !staticMesh->GetExcludeFromGI())
 		{
-			if (!staticMesh->IsGiMotionExcluded())
+			constexpr uint64_t kMovingRebakeFrames = 4ull;
+			auto it = _giMovingMeshes.find(staticMesh);
+			if (it == _giMovingMeshes.end())
 			{
-				staticMesh->SetGiMotionExcluded(true);
 				++_giGeometryRevision;
 				_giSpatialCacheDirty = true;
+				if (r_giLogInvalidations._val.b)
+					LOG_INFO("GI geomRev bump -> %llu (motion start '%s')",
+						(unsigned long long)_giGeometryRevision, entity->GetName().c_str());
+				_giMovingMeshes[staticMesh] = { _giFrameNumber, _giFrameNumber };
 			}
-			_giMovingMeshes[staticMesh] = _giFrameNumber;
+			else
+			{
+				it->second.lastMotionFrame = _giFrameNumber;
+				if (_giFrameNumber - it->second.lastBakeFrame >= kMovingRebakeFrames)
+				{
+					++_giGeometryRevision;
+					_giSpatialCacheDirty = true;
+					it->second.lastBakeFrame = _giFrameNumber;
+					if (r_giLogInvalidations._val.b)
+						LOG_INFO("GI geomRev bump -> %llu (moving rebake '%s')",
+							(unsigned long long)_giGeometryRevision, entity->GetName().c_str());
+				}
+			}
 		}
 
 		if (entity->GetComponent<PointLight>() != nullptr ||
@@ -313,6 +413,9 @@ namespace HexEngine
 			entity->GetComponent<DirectionalLight>() != nullptr)
 		{
 			++_giLightRevision;
+			if (r_giLogInvalidations._val.b)
+				LOG_INFO("GI lightRev bump -> %llu (light entity moved '%s')",
+					(unsigned long long)_giLightRevision, entity->GetName().c_str());
 		}
 	}
 
@@ -328,12 +431,14 @@ namespace HexEngine
 		constexpr uint64_t kSettleFrames = 6ull;
 		for (auto it = _giMovingMeshes.begin(); it != _giMovingMeshes.end();)
 		{
-			if (_giFrameNumber - it->second >= kSettleFrames)
+			if (_giFrameNumber - it->second.lastMotionFrame >= kSettleFrames)
 			{
-				if (StaticMeshComponent* smc = it->first; smc != nullptr)
-					smc->SetGiMotionExcluded(false);
-				++_giGeometryRevision; // re-bake the mesh at its settled pose (one rebuild)
+				// Final rebake at the settled pose (the throttled cadence may
+				// have left the last few frames of movement unbaked).
+				++_giGeometryRevision;
 				_giSpatialCacheDirty = true;
+				if (r_giLogInvalidations._val.b)
+					LOG_INFO("GI geomRev bump -> %llu (motion settle)", (unsigned long long)_giGeometryRevision);
 				it = _giMovingMeshes.erase(it);
 			}
 			else
@@ -1272,6 +1377,10 @@ namespace HexEngine
 			++_giGeometryRevision;
 			++_giMaterialRevision;
 			_giSpatialCacheDirty = true;
+			// Incremental, NOT a dirty flag: transient per-frame helper entities
+			// add/remove mesh components constantly, and a dirty flag here meant
+			// a full grid rebuild on every PVS query.
+			AddPvsSpatialEntry_NoLock(entity, component->CastAs<StaticMeshComponent>());
 		}
 		else if (component->CastAs<Light>() != nullptr)
 		{
@@ -1354,6 +1463,8 @@ namespace HexEngine
 			++_giGeometryRevision;
 			++_giMaterialRevision;
 			_giSpatialCacheDirty = true;
+			// Incremental tombstone (see the add-side comment).
+			RemovePvsSpatialEntry_NoLock(component->CastAs<StaticMeshComponent>());
 		}
 		else if (component->CastAs<Light>() != nullptr)
 		{
@@ -1404,7 +1515,13 @@ namespace HexEngine
 			}
 		}
 
-		if (removedAny)
+		// RemoveEntityInternal -> FlushPVS already pulls the entity out of every
+		// PVS batch list AND render snapshot, so this blanket force-rebuild was
+		// redundant - and with transient helper entities dying most frames it
+		// meant a full rebuild of the camera + every cascade PVS nearly every
+		// frame, bypassing the frustum hysteresis entirely. Kept as an opt-in
+		// escape hatch only.
+		if (removedAny && r_pvsForceRebuildOnRemove._val.b)
 			ForceRebuildPVS();
 	}
 
@@ -1507,10 +1624,19 @@ namespace HexEngine
 			}
 		}
 
-		if (GetMainCamera() && GetMainCamera()->HasMovedThisFrame())
+		if (GetMainCamera())
 		{
-			_updateFlags |= SceneUpdateCameraMoved;
+			if (GetMainCamera()->HasMovedThisFrame())
+				_updateFlags |= SceneUpdateCameraMoved;
 
+			// Re-centre the sky dome on the camera EVERY frame, not only when
+			// the camera reports movement. _hasMovedThisFrame is set on
+			// rotation (mouse-look) and on a PositionChanged transform message,
+			// but a player walking a straight line - or standing still while
+			// only the world updates - could leave it false, so the sky dome
+			// was left behind and the sky went dark. The editor fly-cam trips
+			// the flag constantly, which is why it only showed up in-game.
+			// Following is a single SetPosition; there is no reason to gate it.
 			UpdateSkySphereMatrix();
 		}
 
@@ -1593,6 +1719,11 @@ namespace HexEngine
 	const WeatherSurfaceParams& Scene::GetWeatherSurfaceParams() const
 	{
 		return _weatherSurfaceParams;
+	}
+
+	SnowFootprintSystem& Scene::GetSnowFootprints()
+	{
+		return _snowFootprints;
 	}
 
 	void Scene::Lock()
@@ -1801,6 +1932,31 @@ namespace HexEngine
 			graphicsDevice->SetTexture2DArray(slotIdx, textures);
 
 			mesh->SetBuffers(isShadowMap);
+
+			// Tessellation opt-in (Phase 3 snow displacement). This batched
+			// snapshot path - not StaticMeshComponent::RenderMesh - is what
+			// actually draws environment meshes, so the same HS/DS + patch
+			// topology switch has to live here too: a tessellation VS emits
+			// control points (no SV_Position), so without the hull/domain
+			// stages bound the mesh rasterises nothing (the "road vanished"
+			// symptom). Mirrors RenderMesh exactly; redundancy-cached clears
+			// keep non-tessellated draws free.
+			IShaderStage* hullStage   = isShadowMap ? nullptr : shader->GetShaderStage(ShaderStage::HullShader);
+			IShaderStage* domainStage = isShadowMap ? nullptr : shader->GetShaderStage(ShaderStage::DomainShader);
+			if (hullStage != nullptr && domainStage != nullptr)
+			{
+				graphicsDevice->SetHullShader(hullStage);
+				graphicsDevice->SetDomainShader(domainStage);
+				auto* perFrame = graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer);
+				graphicsDevice->SetConstantBufferHS(0, perFrame);
+				graphicsDevice->SetConstantBufferDS(0, perFrame);
+				graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::ControlPointPatchList3);
+			}
+			else
+			{
+				graphicsDevice->SetHullShader(nullptr);
+				graphicsDevice->SetDomainShader(nullptr);
+			}
 			return true;
 		}
 	}
@@ -1811,8 +1967,24 @@ namespace HexEngine
 	// meshes behind corrupt draw ordinals. Self-clears when the count runs out.
 	HVar r_dumpMeshDraws("r_dumpMeshDraws", "Log mesh/material identity for the next N instanced draws (0 = off)", 0, 0, 100000);
 
+	// Lazy-loaded snow shell shader (Phase 3 tess slice 4). Null until first
+	// use / if the .hcs is missing, in which case the shell silently no-ops.
+	IShader* GetSnowShellShader()
+	{
+		static std::shared_ptr<IShader> s_shell;
+		static bool s_tried = false;
+		if (!s_tried)
+		{
+			s_tried = true;
+			s_shell = IShader::Create("EngineData.Shaders/SnowShell.hcs");
+			if (!s_shell)
+				LOG_WARN("SnowShell.hcs failed to load - snow shell disabled");
+		}
+		return s_shell.get();
+	}
+
 	template <typename T>
-	void RenderInstance(T* instance, uint32_t numInstances, Material* material, bool& rendered)
+	void RenderInstance(T* instance, uint32_t numInstances, Material* material, bool& rendered, bool allowShell = false)
 	{
 		if (instance)
 		{
@@ -1838,8 +2010,15 @@ namespace HexEngine
 				// CORRUPTED_PARAMETER2. Fall back to the direct DrawIndexed
 				// path under non-D3D11 backends until a per-backend indirect
 				// path (ID3D12CommandSignature + ExecuteIndirect) lands.
-				const bool useIndirect = r_gpuCullUseIndirectDraw._val.b &&
-					g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11;
+				// Indirect submission is DISABLED on D3D11 regardless of the cvar:
+				// D3D11 has no multi-draw-indirect, so this path issued exactly
+				// as many draw calls as the direct one while adding an
+				// UpdateSubresource of a single shared args buffer per draw -
+				// a write-after-read hazard on every call that the driver has
+				// to stall or rename around. Measured slower than direct. The
+				// cvar is kept for a future D3D12 ExecuteIndirect path where
+				// the GPU writes the args and many draws go out per call.
+				const bool useIndirect = false;
 				if (useIndirect)
 				{
 					ID3D11Device* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
@@ -1884,6 +2063,72 @@ namespace HexEngine
 					g_pEnv->_graphicsDevice->DrawIndexedInstanced(indexCount, static_cast<uint32_t>(numInstances));
 				}
 
+				// Snow shell (Phase 3 tess slice 4): a SECOND draw of the same
+				// instances, extruded up and clipped, layered on top of the
+				// rigid surface just drawn - so snow reads as accumulation ON
+				// the concrete, not the concrete deforming. Opt-in per material
+				// (_receivesSnow, ticked on ground materials), never in the
+				// shadow pass (allowShell false there), D3D11 only. The base
+				// draw already bound this mesh's per-object buffer, textures,
+				// depth/blend/cull and the compatible input layout - the shell
+				// reuses all of it and only swaps in its own stages + patch
+				// topology + the per-frame cbuffer the HS/DS read.
+				if (r_snowShellDebug._val.b)
+				{
+					const uint64_t frame = g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0;
+					// (a) Shell-shader availability, material-independent.
+					static uint64_t sLastAny = 0;
+					if (frame - sLastAny >= 60)
+					{
+						sLastAny = frame;
+						IShader* dbgShell = GetSnowShellShader();
+						LOG_INFO("SnowShell: shellLoaded=%d hs=%d ds=%d backendD3D11=%d",
+							dbgShell ? 1 : 0,
+							(dbgShell && dbgShell->GetShaderStage(ShaderStage::HullShader)) ? 1 : 0,
+							(dbgShell && dbgShell->GetShaderStage(ShaderStage::DomainShader)) ? 1 : 0,
+							g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11 ? 1 : 0);
+					}
+					// (b) Any receivesSnow material actually reaching the draw.
+					static uint64_t sLastSnow = 0;
+					if (material && material->GetReceivesSnow() && frame - sLastSnow >= 60)
+					{
+						sLastSnow = frame;
+						LOG_INFO("SnowShell: receivesSnow mat='%s' allowShell=%d instances=%u REACHED draw",
+							material->GetName().c_str(), allowShell ? 1 : 0, numInstances);
+					}
+				}
+
+				if (allowShell && material && material->GetReceivesSnow() &&
+					g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11)
+				{
+					IShader* shell = GetSnowShellShader();
+					IShaderStage* hs = shell ? shell->GetShaderStage(ShaderStage::HullShader) : nullptr;
+					IShaderStage* ds = shell ? shell->GetShaderStage(ShaderStage::DomainShader) : nullptr;
+					if (shell && hs && ds)
+					{
+						auto* gd = g_pEnv->_graphicsDevice;
+						gd->SetVertexShader(shell->GetShaderStage(ShaderStage::VertexShader));
+						gd->SetPixelShader(shell->GetShaderStage(ShaderStage::PixelShader));
+						// Bind the SHELL vertex shader's own input layout. The base
+						// draw set the concrete material's layout, which for a graph
+						// material need not match the shell VS input signature - a
+						// mismatch feeds the IA wrong vertex data and the domain
+						// shader gets garbage positions (nothing rasterises). This
+						// was the "shell draws but shows nothing" cause.
+						gd->SetInputLayout(shell->GetInputLayout());
+						gd->SetHullShader(hs);
+						gd->SetDomainShader(ds);
+						auto* perFrame = gd->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer);
+						gd->SetConstantBufferHS(0, perFrame);
+						gd->SetConstantBufferDS(0, perFrame);
+						gd->SetTopology(HexEngine::PrimitiveTopology::ControlPointPatchList3);
+						gd->DrawIndexedInstanced(indexCount, static_cast<uint32_t>(numInstances));
+						gd->SetHullShader(nullptr);
+						gd->SetDomainShader(nullptr);
+						gd->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+					}
+				}
+
 				if (material)
 					material->RestoreRenderState();
 
@@ -1896,6 +2141,13 @@ namespace HexEngine
 	{
 		PROFILE();
 
+		// Perf gate for the accumulation shell: it issues a SECOND tessellated
+		// draw per _receivesSnow material. The shell now renders EITHER snow or
+		// wind-blown sand (whichever weather dominates), so it's needed when
+		// either snow OR dust is active; otherwise it's skipped entirely.
+		const WeatherSurfaceParams& _shellWx = GetWeatherSurfaceParams();
+		const bool snowActive = _shellWx.snowCoverage > 0.001f || _shellWx.dirtAmount > 0.001f;
+
 		auto& snapshot = pvs->GetRenderableSnapshot();
 		uint32_t totalCandidates = 0;
 		uint32_t skippedNullMeshOrInstance = 0;
@@ -1904,16 +2156,21 @@ namespace HexEngine
 		uint32_t skippedLod = 0;
 		uint32_t skippedPrepareRender = 0;
 		uint32_t skippedGpuCulling = 0;
+		uint32_t skippedFrustumFine = 0;
 		uint32_t drawnInstancesTotal = 0;
 
 		if(pvs->DidRebuild())
 		{
 			PROFILE();
 
-			//std::unique_lock lock(_lock);
-			const auto& pvsRenderables = pvs->GetRenderables();			
-			snapshot.clear();
-			snapshot.reserve(pvsRenderables.size());
+			// Rebuild the snapshot IN PLACE: batch slots (and their vectors'
+			// capacity) are reused positionally, and each RenderableSnapshot is
+			// emplaced and filled where it lives instead of being built on the
+			// stack and copied in (~500 bytes + two shared_ptr bumps per copy).
+			// _pvs is an ordered map, so consecutive rebuilds with a stable
+			// material set line up near-perfectly with the previous layout.
+			const auto& pvsRenderables = pvs->GetRenderables();
+			size_t batchCount = 0;
 
 			for (const auto& renderableBatch : pvsRenderables)
 			{
@@ -1923,8 +2180,19 @@ namespace HexEngine
 				if (!material)
 					continue;
 
-				auto& batch = snapshot.emplace_back(material, std::vector<RenderableSnapshot>()).second;
+				if (batchCount < snapshot.size())
+				{
+					snapshot[batchCount].first = material;
+					snapshot[batchCount].second.clear();
+				}
+				else
+				{
+					snapshot.emplace_back(material, std::vector<RenderableSnapshot>());
+				}
+
+				auto& batch = snapshot[batchCount].second;
 				batch.reserve(renderableBatch.second.size());
+				++batchCount;
 
 				for (const auto& meshEntityPair : renderableBatch.second)
 				{
@@ -1940,43 +2208,121 @@ namespace HexEngine
 					if (!instance)
 						continue;
 
-					RenderableSnapshot snapshot;
-					snapshot.mesh = mesh;
-					snapshot.material = material;
-					snapshot.instance = instance;
-					snapshot.simpleInstance = instance->GetSimpleInstance();
-					snapshot.layer = entity->GetLayer();
-					snapshot.hasAnimations = mesh->HasAnimations();
-					snapshot.isBoundToBone = meshComponent->IsBoundToBone();
-					snapshot.shadowCullMode = meshComponent->GetShadowCullMode();
-					snapshot.entity = entity;
+					RenderableSnapshot& entry = batch.emplace_back();
+					entry.mesh = mesh;
+					entry.material = material;
+					entry.instance = instance;
+					entry.simpleInstance = instance->GetSimpleInstance();
+					entry.layer = entity->GetLayer();
+					entry.hasAnimations = mesh->HasAnimations();
+					entry.isBoundToBone = meshComponent->IsBoundToBone();
+					entry.shadowCullMode = meshComponent->GetShadowCullMode();
+					entry.entity = entity;
+					entry.component = meshComponent;
+					entry.transformVersion = entity->GetTransformVersion();
 
-					if (snapshot.isBoundToBone)
+					if (entry.isBoundToBone)
 					{
-						snapshot.shadowInstanceData.worldMatrix = entity->GetWorldTMTranspose() * meshComponent->GetOffsetMatrixTranspose();
-						snapshot.instanceData.worldMatrix = snapshot.shadowInstanceData.worldMatrix;
-						snapshot.instanceData.worldMatrixPrev = entity->GetWorldTMPrevTranspose();
-						snapshot.instanceData.worldMatrixInverseTranspose = entity->GetWorldTMInvert();
-						snapshot.instanceData.colour = material->_properties.diffuseColour;
-						snapshot.instanceData.uvscale = meshComponent->GetUVScale();
+						entry.shadowInstanceData.worldMatrix = entity->GetWorldTMTranspose() * meshComponent->GetOffsetMatrixTranspose();
+						entry.instanceData.worldMatrix = entry.shadowInstanceData.worldMatrix;
+						entry.instanceData.worldMatrixPrev = entity->GetWorldTMPrevTranspose();
+						entry.instanceData.worldMatrixInverseTranspose = entity->GetWorldTMInvert();
+						entry.instanceData.colour = material->_properties.diffuseColour;
+						entry.instanceData.uvscale = meshComponent->GetUVScale();
 					}
 					else
 					{
-						snapshot.shadowInstanceData = meshComponent->GetCachedShadowInstanceData();
-						snapshot.instanceData = meshComponent->GetCachedInstanceData(material.get());
+						entry.shadowInstanceData = meshComponent->GetCachedShadowInstanceData();
+						entry.instanceData = meshComponent->GetCachedInstanceData(material.get());
 					}
-
-					batch.push_back(snapshot);
 				}
 			}
 
+			snapshot.resize(batchCount);
+
 			_wasPvsReset = true;
 			pvs->ResetDidRebuild();
+
+			if (g_pEnv && g_pEnv->_sceneRenderer)
+			{
+				if (auto* gpuCulling = g_pEnv->_sceneRenderer->GetGpuVisibilityCulling(); gpuCulling != nullptr)
+					gpuCulling->NotifySnapshotRebuilt();
+			}
 		}
 
 		bool isShadowMap = (renderFlags & MeshRenderFlags::MeshRenderShadowMap) != 0;
 		bool isTransparency = (renderFlags & MeshRenderFlags::MeshRenderTransparency) != 0;
 		bool isNormalRender = !isShadowMap && !isTransparency;
+
+		// Fine-grained CPU culling: the PVS admits everything in the ENLARGED
+		// hysteresis frustum and only refreshes on rebuild, so without this the
+		// draw loops submit the whole enlarged set every pass. Test each
+		// renderable's (entity-cached) world sphere against the owning camera's
+		// CURRENT frustum. Camera-shaped PVSes only - sphere-shaped (shadow)
+		// PVSes already bound their light's reach, and cached shadow tiles need
+		// stable draw sets. Sky always passes; bone-bound attachments are
+		// skipped because their entity bounds can lag the bone pose.
+		// Two fine-cull modes:
+		//  - camera passes: the owning camera's CURRENT frustum planes (the PVS
+		//    coarse set is a rotation-invariant sphere, so this is what applies
+		//    the actual frustum each frame);
+		//  - shadow passes whose PVS carries a fine sphere (sun cascades): the
+		//    actual slice sphere, so the camera-centred coarse set doesn't
+		//    inflate the shadow draw list.
+		bool fineCullPlanesActive = false;
+		bool fineCullSphereActive = false;
+		math::Vector4 fineCullPlanes[6];
+		dx::BoundingSphere fineCullSphere;
+		if (r_pvsFineCull._val.b && pvs != nullptr)
+		{
+			const auto& optimisedParams = pvs->GetOptimisedParams();
+			const auto& currentParams = pvs->GetCurrentParams();
+			if (!isShadowMap && !optimisedParams.isShadow && optimisedParams.camera != nullptr)
+			{
+				BuildPvsFineCullPlanes(
+					optimisedParams.camera->GetViewProjectionMatrix(),
+					fineCullPlanes);
+				fineCullPlanesActive = true;
+			}
+			else if (isShadowMap && currentParams.hasFineSphere)
+			{
+				fineCullSphere = currentParams.fineSphere;
+				fineCullSphereActive = true;
+			}
+		}
+
+		auto isFineCulled = [&](const RenderableSnapshot& renderable) -> bool
+		{
+			if (!fineCullPlanesActive && !fineCullSphereActive)
+				return false;
+			if (renderable.layer == Layer::Sky)
+				return false;
+			if (renderable.isBoundToBone)
+				return false;
+			if (renderable.entity == nullptr)
+				return false;
+
+			const auto& worldSphere = renderable.entity->GetWorldBoundingSphere();
+			if (worldSphere.Radius <= 0.0f)
+				return false;
+
+			if (fineCullPlanesActive)
+			{
+				for (int32_t i = 0; i < 6; ++i)
+				{
+					const math::Vector4& plane = fineCullPlanes[i];
+					if (plane.x * worldSphere.Center.x + plane.y * worldSphere.Center.y + plane.z * worldSphere.Center.z + plane.w < -worldSphere.Radius)
+						return true;
+				}
+				return false;
+			}
+
+			const float dx = worldSphere.Center.x - fineCullSphere.Center.x;
+			const float dy = worldSphere.Center.y - fineCullSphere.Center.y;
+			const float dz = worldSphere.Center.z - fineCullSphere.Center.z;
+			const float radii = worldSphere.Radius + fineCullSphere.Radius;
+			return (dx * dx + dy * dy + dz * dz) > (radii * radii);
+		};
 		const bool isOpaqueLayerSet = (layerMask & (LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass))) != 0 &&
 			(layerMask & LAYERMASK(Layer::Sky)) == 0;
 
@@ -1994,7 +2340,11 @@ namespace HexEngine
 
 			if (auto* gpuCulling = g_pEnv->_sceneRenderer->GetGpuVisibilityCulling(); gpuCulling != nullptr)
 			{
-				usedGpuCulling = gpuCulling->CullOpaqueRenderables(snapshot, cullCamera, layerMask, renderFlags);
+				// Hand the CPU fine cull to the GPU stage so it only receives
+				// (and only occlusion-tests) what survived the frustum.
+				const GpuVisibilityCulling::CpuCullPredicate cpuCulled = isFineCulled;
+				usedGpuCulling = gpuCulling->CullOpaqueRenderables(snapshot, cullCamera, layerMask, renderFlags,
+					(fineCullPlanesActive || fineCullSphereActive) ? &cpuCulled : nullptr);
 			}
 		}
 
@@ -2025,7 +2375,7 @@ namespace HexEngine
 				{
 					totalCandidates++;
 
-					auto mesh = renderable.mesh;
+					const auto& mesh = renderable.mesh;
 					auto instance = renderable.instance;
 
 					if (!mesh || !instance)
@@ -2037,6 +2387,12 @@ namespace HexEngine
 					if (usedGpuCulling && !renderable.gpuVisible)
 					{
 						skippedGpuCulling++;
+						continue;
+					}
+
+					if (isFineCulled(renderable))
+					{
+						skippedFrustumFine++;
 						continue;
 					}
 
@@ -2112,6 +2468,17 @@ namespace HexEngine
 					continue;
 				}
 
+				if (!renderable->isBoundToBone && renderable->component != nullptr && renderable->entity != nullptr)
+				{
+					const uint64_t transformVersion = renderable->entity->GetTransformVersion();
+					if (transformVersion != renderable->transformVersion)
+					{
+						renderable->instanceData = renderable->component->GetCachedInstanceData(material.get());
+						renderable->shadowInstanceData = renderable->component->GetCachedShadowInstanceData();
+						renderable->transformVersion = transformVersion;
+					}
+				}
+
 				if (renderable->layer == Layer::Sky)
 				{
 					renderable->instanceData.worldMatrix = renderable->entity->GetWorldTMTranspose();
@@ -2134,7 +2501,11 @@ namespace HexEngine
 					if (auto* smc = renderable->entity->GetComponent<StaticMeshComponent>(); smc != nullptr)
 					{
 						renderable->instanceData.worldMatrix              = renderable->entity->GetWorldTMTranspose() * smc->GetOffsetMatrixTranspose();
-						renderable->instanceData.worldMatrixPrev          = renderable->entity->GetWorldTMPrevTranspose();
+						// Motion vector: pair the entity's previous world with the
+						// bone's PREVIOUS offset. Using the entity prev alone (no
+						// offset) reported a full bone-offset-sized velocity every
+						// frame - attachments smeared under motion blur / ghosted.
+						renderable->instanceData.worldMatrixPrev          = renderable->entity->GetWorldTMPrevTranspose() * smc->GetOffsetMatrixPrevTranspose();
 						renderable->instanceData.worldMatrixInverseTranspose = renderable->entity->GetWorldTMInvert();
 						renderable->shadowInstanceData.worldMatrix        = renderable->instanceData.worldMatrix;
 					}
@@ -2165,7 +2536,7 @@ namespace HexEngine
 				{
 					totalCandidates++;
 
-					auto mesh = renderable.mesh;
+					const auto& mesh = renderable.mesh;
 					auto instance = renderable.instance;
 					SimpleMeshInstance* simpleInstance = renderable.simpleInstance;
 
@@ -2178,6 +2549,12 @@ namespace HexEngine
 					if (usedGpuCulling && !renderable.gpuVisible)
 					{
 						skippedGpuCulling++;
+						continue;
+					}
+
+					if (isFineCulled(renderable))
+					{
+						skippedFrustumFine++;
 						continue;
 					}
 
@@ -2205,7 +2582,7 @@ namespace HexEngine
 						if (isShadowMap)
 							RenderInstance((SimpleMeshInstance*)lastInstance, drawnInstances, material.get(), rendered);
 						else
-							RenderInstance(lastInstance, drawnInstances, material.get(), rendered);
+							RenderInstance(lastInstance, drawnInstances, material.get(), rendered, /*allowShell*/ snowActive);
 
 						drawnInstances = 0;
 
@@ -2269,6 +2646,20 @@ namespace HexEngine
 					drawnInstancesTotal++;
 					lastInstance = currentInstance;
 
+					// Lazy instance-data refresh: only entries that are actually
+					// drawn AND whose entity moved since they were snapshotted
+					// get re-pulled (the component caches by transform version).
+					if (!renderable.isBoundToBone && renderable.component != nullptr && renderable.entity != nullptr)
+					{
+						const uint64_t transformVersion = renderable.entity->GetTransformVersion();
+						if (transformVersion != renderable.transformVersion)
+						{
+							renderable.instanceData = renderable.component->GetCachedInstanceData(material.get());
+							renderable.shadowInstanceData = renderable.component->GetCachedShadowInstanceData();
+							renderable.transformVersion = transformVersion;
+						}
+					}
+
 					// Per-draw refresh of bone-bound attachments. PVS snapshots
 					// freeze the offset matrix; the live bone pose updates
 					// every animation tick, so we have to pull it again here
@@ -2280,7 +2671,10 @@ namespace HexEngine
 						if (auto* smc = renderable.entity->GetComponent<StaticMeshComponent>(); smc != nullptr)
 						{
 							renderable.instanceData.worldMatrix              = renderable.entity->GetWorldTMTranspose() * smc->GetOffsetMatrixTranspose();
-							renderable.instanceData.worldMatrixPrev          = renderable.entity->GetWorldTMPrevTranspose();
+							// See the PVS path above: prev world x prev bone offset,
+							// or the attachment reports a bone-offset-sized velocity
+							// every frame and smears.
+							renderable.instanceData.worldMatrixPrev          = renderable.entity->GetWorldTMPrevTranspose() * smc->GetOffsetMatrixPrevTranspose();
 							renderable.instanceData.worldMatrixInverseTranspose = renderable.entity->GetWorldTMInvert();
 							renderable.shadowInstanceData.worldMatrix        = renderable.instanceData.worldMatrix;
 						}
@@ -2315,7 +2709,7 @@ namespace HexEngine
 					if (isShadowMap)
 						RenderInstance((SimpleMeshInstance*)currentInstance, drawnInstances, material.get(), rendered);
 					else
-						RenderInstance(currentInstance, drawnInstances, material.get(), rendered);
+						RenderInstance(currentInstance, drawnInstances, material.get(), rendered, /*allowShell*/ snowActive);
 				}
 			}
 		}
@@ -2330,7 +2724,7 @@ namespace HexEngine
 			{
 				lastLoggedFrameByPass[passKey] = frame;
 				LOG_INFO(
-					"RenderEntities pass flags=%u layerMask=0x%08X candidates=%u drawn=%u skip(null=%u,trans=%u,layer=%u,lod=%u,gpu=%u,prep=%u) pvsRebuilt=%d snapshotBatches=%zu gpuCull=%d",
+					"RenderEntities pass flags=%u layerMask=0x%08X candidates=%u drawn=%u skip(null=%u,trans=%u,layer=%u,lod=%u,gpu=%u,fine=%u,prep=%u) pvsRebuilt=%d snapshotBatches=%zu gpuCull=%d",
 					(uint32_t)renderFlags,
 					layerMask,
 					totalCandidates,
@@ -2340,6 +2734,7 @@ namespace HexEngine
 					skippedLayerMask,
 					skippedLod,
 					skippedGpuCulling,
+					skippedFrustumFine,
 					skippedPrepareRender,
 					pvs->DidRebuild() ? 1 : 0,
 					snapshot.size(),
@@ -2811,6 +3206,486 @@ namespace HexEngine
 
 		return !outComponents.empty();
 	}
+
+	void Scene::MarkPvsSpatialCacheDirty()
+	{
+		std::unique_lock lock(_lock);
+		_pvsSpatialCacheDirty = true;
+	}
+
+	void Scene::InsertPvsSpatialEntryIntoCells_NoLock(uint32_t entryIndex)
+	{
+		PvsSpatialEntry& entry = _pvsSpatialEntries[entryIndex];
+
+		// Loose-grid guarantee: a gridded entry's AABB may extend at most one
+		// cell beyond its centre cell, i.e. half-extents <= cell size. Anything
+		// bigger (and Sky/HLOD) is always returned and left to the exact test.
+		const float cellSize = _pvsSpatialCellSize;
+		const bool tooLarge =
+			!(entry.worldBounds.Extents.x <= cellSize &&
+				entry.worldBounds.Extents.y <= cellSize &&
+				entry.worldBounds.Extents.z <= cellSize); // also catches NaN
+
+		if (entry.alwaysInclude || tooLarge)
+		{
+			entry.ungridded = true;
+			_pvsSpatialUngriddedEntries.push_back(entryIndex);
+			return;
+		}
+
+		entry.ungridded = false;
+		entry.cell = {
+			PvsSpatialCellCoord(entry.worldBounds.Center.x, cellSize),
+			PvsSpatialCellCoord(entry.worldBounds.Center.y, cellSize),
+			PvsSpatialCellCoord(entry.worldBounds.Center.z, cellSize) };
+
+		auto it = _pvsSpatialCellIndex.find(entry.cell);
+		if (it == _pvsSpatialCellIndex.end())
+		{
+			it = _pvsSpatialCellIndex.emplace(entry.cell, static_cast<uint32_t>(_pvsSpatialCellList.size())).first;
+			_pvsSpatialCellList.push_back({ entry.cell, {} });
+		}
+
+		_pvsSpatialCellList[it->second].entries.push_back(entryIndex);
+	}
+
+	void Scene::RemovePvsSpatialEntryFromCells_NoLock(uint32_t entryIndex)
+	{
+		PvsSpatialEntry& entry = _pvsSpatialEntries[entryIndex];
+
+		if (entry.ungridded)
+		{
+			auto& ungridded = _pvsSpatialUngriddedEntries;
+			ungridded.erase(std::remove(ungridded.begin(), ungridded.end(), entryIndex), ungridded.end());
+			return;
+		}
+
+		const auto it = _pvsSpatialCellIndex.find(entry.cell);
+		if (it == _pvsSpatialCellIndex.end())
+			return;
+
+		auto& entries = _pvsSpatialCellList[it->second].entries;
+		entries.erase(std::remove(entries.begin(), entries.end(), entryIndex), entries.end());
+	}
+
+	void Scene::RebuildPvsSpatialCache_NoLock()
+	{
+		const auto rebuildStart = std::chrono::high_resolution_clock::now();
+
+		_pvsSpatialEntries.clear();
+		_pvsSpatialCellList.clear();
+		_pvsSpatialCellIndex.clear();
+		_pvsSpatialUngriddedEntries.clear();
+		_pvsSpatialEntriesByEntity.clear();
+		_pvsSpatialEntryByComponent.clear();
+		_pvsSpatialPendingUpdates.clear();
+		_pvsSpatialQueryStamp = 0u;
+		_pvsSpatialDeadEntries = 0u;
+		_pvsSpatialPoolSizeAtBuild = 0;
+		_pvsSpatialCacheDirty = false;
+
+		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
+		if (pool == nullptr)
+			return;
+
+		_pvsSpatialPoolSizeAtBuild = pool->components.size();
+		_pvsSpatialEntries.reserve(pool->components.size());
+		_pvsSpatialEntriesByEntity.reserve(pool->components.size());
+		_pvsSpatialEntryByComponent.reserve(pool->components.size());
+
+		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
+		{
+			auto* component = static_cast<StaticMeshComponent*>(pool->components[denseIndex]);
+			if (component == nullptr)
+				continue;
+
+			Entity* entity = TryGetEntity(pool->owners[denseIndex]);
+			if (entity == nullptr || entity->IsPendingDeletion())
+				continue;
+
+			PvsSpatialEntry entry;
+			entry.component = component;
+			entry.entity = entity;
+			entry.worldBounds = entity->GetWorldAABB();
+			// Sky is unconditionally visible in PVS terms, and HLOD proxies must
+			// be globally known (cluster map + streaming decisions) - never let
+			// the grid hide either. Meshless components stay in too: an unloaded
+			// HLOD mesh has to keep being considered so it can stream back in.
+			entry.alwaysInclude =
+				entity->GetLayer() == Layer::Sky ||
+				entity->GetName().rfind("HLOD_", 0) == 0;
+
+			const uint32_t entryIndex = static_cast<uint32_t>(_pvsSpatialEntries.size());
+			_pvsSpatialEntries.push_back(entry);
+			_pvsSpatialEntriesByEntity[entity].push_back(entryIndex);
+			_pvsSpatialEntryByComponent[component] = entryIndex;
+		}
+
+		// Pick the cell size from the size distribution of the entries that
+		// would actually be gridded: 90th percentile of max half-extent, so the
+		// loose-grid fit rule holds for ~90% of them.
+		{
+			std::vector<float> halfExtents;
+			halfExtents.reserve(_pvsSpatialEntries.size());
+			size_t alwaysIncludeCount = 0;
+			for (const auto& entry : _pvsSpatialEntries)
+			{
+				if (entry.alwaysInclude)
+				{
+					++alwaysIncludeCount;
+					continue;
+				}
+				const float he = std::max({ entry.worldBounds.Extents.x, entry.worldBounds.Extents.y, entry.worldBounds.Extents.z });
+				if (he == he && he < kPvsSpatialMaxCellSize) // skip NaN / absurd
+					halfExtents.push_back(he);
+			}
+
+			float cellSize = kPvsSpatialMinCellSize;
+			if (!halfExtents.empty())
+			{
+				const size_t p90 = (halfExtents.size() * 9) / 10;
+				std::nth_element(halfExtents.begin(), halfExtents.begin() + p90, halfExtents.end());
+				cellSize = std::clamp(halfExtents[p90], kPvsSpatialMinCellSize, kPvsSpatialMaxCellSize);
+			}
+			_pvsSpatialCellSize = cellSize;
+			_pvsSpatialAlwaysIncludeCount = alwaysIncludeCount;
+		}
+
+		for (uint32_t entryIndex = 0; entryIndex < _pvsSpatialEntries.size(); ++entryIndex)
+			InsertPvsSpatialEntryIntoCells_NoLock(entryIndex);
+
+		if (r_pvsPerfLog._val.b)
+		{
+			const float ms = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - rebuildStart).count();
+			const size_t ungridded = _pvsSpatialUngriddedEntries.size();
+			LOG_INFO("PVS grid rebuild: entries=%zu cells=%zu cellSize=%.1f ungridded=%zu (alwaysInclude=%zu tooLarge=%zu) ms=%.2f",
+				_pvsSpatialEntries.size(), _pvsSpatialCellList.size(), _pvsSpatialCellSize,
+				ungridded, _pvsSpatialAlwaysIncludeCount,
+				ungridded - std::min(ungridded, _pvsSpatialAlwaysIncludeCount), ms);
+		}
+	}
+
+	void Scene::UpdatePvsSpatialEntriesForEntity(Entity* entity)
+	{
+		if (entity == nullptr)
+			return;
+
+		std::unique_lock lock(_lock);
+
+		// A dirty cache rebuilds wholesale on the next query; nothing to patch.
+		if (_pvsSpatialCacheDirty || _pvsSpatialEntries.empty())
+			return;
+
+		// Just queue: the grid is only READ at query time (PVS rebuilds), so
+		// re-placing lazily there is both correct and free between rebuilds.
+		// The eager version recomputed the world AABB for every transform event
+		// (up to several per moving entity per frame) - measurably worse than
+		// the full scans it replaced in mover-heavy scenes.
+		if (_pvsSpatialEntriesByEntity.find(entity) != _pvsSpatialEntriesByEntity.end())
+		{
+			_pvsSpatialPendingUpdates.insert(entity);
+		}
+	}
+
+	void Scene::ProcessPvsSpatialPendingUpdates_NoLock()
+	{
+		if (_pvsSpatialPendingUpdates.empty())
+			return;
+
+		// A large backlog (mass teleports, scene shuffles) is cheaper as one
+		// full rebuild than as thousands of cell moves.
+		if (_pvsSpatialPendingUpdates.size() * 4 > _pvsSpatialEntries.size())
+		{
+			RebuildPvsSpatialCache_NoLock();
+			return;
+		}
+
+		for (Entity* entity : _pvsSpatialPendingUpdates)
+		{
+			auto it = _pvsSpatialEntriesByEntity.find(entity);
+			if (it == _pvsSpatialEntriesByEntity.end())
+				continue;
+
+			for (uint32_t entryIndex : it->second)
+			{
+				PvsSpatialEntry& entry = _pvsSpatialEntries[entryIndex];
+				if (entry.component == nullptr)
+					continue;
+
+				const dx::BoundingBox newBounds = entity->GetWorldAABB();
+
+				if (entry.alwaysInclude)
+				{
+					entry.worldBounds = newBounds;
+					continue;
+				}
+
+				const GiSpatialCellKey newCell{
+					PvsSpatialCellCoord(newBounds.Center.x, _pvsSpatialCellSize),
+					PvsSpatialCellCoord(newBounds.Center.y, _pvsSpatialCellSize),
+					PvsSpatialCellCoord(newBounds.Center.z, _pvsSpatialCellSize) };
+				const bool stillFits =
+					newBounds.Extents.x <= _pvsSpatialCellSize &&
+					newBounds.Extents.y <= _pvsSpatialCellSize &&
+					newBounds.Extents.z <= _pvsSpatialCellSize;
+
+				if (!entry.ungridded && stillFits && newCell == entry.cell)
+				{
+					entry.worldBounds = newBounds;
+					continue;
+				}
+
+				// Re-place (also promotes a temporarily ungridded entry - e.g.
+				// one added before its transform existed - into a real cell).
+				RemovePvsSpatialEntryFromCells_NoLock(entryIndex);
+				entry.worldBounds = newBounds;
+				InsertPvsSpatialEntryIntoCells_NoLock(entryIndex);
+			}
+		}
+
+		_pvsSpatialPendingUpdates.clear();
+	}
+
+	void Scene::AddPvsSpatialEntry_NoLock(Entity* entity, StaticMeshComponent* component)
+	{
+		if (entity == nullptr || component == nullptr)
+			return;
+
+		// Cache not built yet (or queued for rebuild): the rebuild will pick the
+		// component up from the pool.
+		if (_pvsSpatialCacheDirty)
+			return;
+
+		if (_pvsSpatialEntryByComponent.find(component) != _pvsSpatialEntryByComponent.end())
+			return;
+
+		PvsSpatialEntry entry;
+		entry.component = component;
+		entry.entity = entity;
+		entry.alwaysInclude =
+			entity->GetLayer() == Layer::Sky ||
+			entity->GetName().rfind("HLOD_", 0) == 0;
+
+		// Components are often added before the entity's transform is wired up;
+		// use whatever bounds exist and queue a re-place for the next query.
+		if (entity->GetComponent<Transform>() != nullptr)
+		{
+			entry.worldBounds = entity->GetWorldAABB();
+		}
+
+		const uint32_t entryIndex = static_cast<uint32_t>(_pvsSpatialEntries.size());
+		_pvsSpatialEntries.push_back(entry);
+		_pvsSpatialEntriesByEntity[entity].push_back(entryIndex);
+		_pvsSpatialEntryByComponent[component] = entryIndex;
+		InsertPvsSpatialEntryIntoCells_NoLock(entryIndex);
+		_pvsSpatialPendingUpdates.insert(entity);
+		++_pvsSpatialPoolSizeAtBuild;
+	}
+
+	void Scene::RemovePvsSpatialEntry_NoLock(StaticMeshComponent* component)
+	{
+		if (component == nullptr)
+			return;
+
+		if (_pvsSpatialCacheDirty)
+			return;
+
+		auto it = _pvsSpatialEntryByComponent.find(component);
+		if (it == _pvsSpatialEntryByComponent.end())
+		{
+			// The pool shrank but we never tracked this component - fall back to
+			// a rebuild so the pool-size safety check can't loop forever.
+			_pvsSpatialCacheDirty = true;
+			return;
+		}
+
+		const uint32_t entryIndex = it->second;
+		PvsSpatialEntry& entry = _pvsSpatialEntries[entryIndex];
+
+		RemovePvsSpatialEntryFromCells_NoLock(entryIndex);
+
+		if (Entity* entity = entry.entity; entity != nullptr)
+		{
+			if (auto byEntity = _pvsSpatialEntriesByEntity.find(entity); byEntity != _pvsSpatialEntriesByEntity.end())
+			{
+				auto& indices = byEntity->second;
+				indices.erase(std::remove(indices.begin(), indices.end(), entryIndex), indices.end());
+				if (indices.empty())
+				{
+					_pvsSpatialEntriesByEntity.erase(byEntity);
+					_pvsSpatialPendingUpdates.erase(entity);
+				}
+			}
+		}
+
+		// Tombstone: entry indices are baked into cell lists, so the slot can't
+		// be reused. appendEntry skips component == nullptr. Compact via full
+		// rebuild once dead slots pile up.
+		entry.component = nullptr;
+		entry.entity = nullptr;
+		entry.ungridded = false;
+		_pvsSpatialEntryByComponent.erase(it);
+		if (_pvsSpatialPoolSizeAtBuild > 0)
+			--_pvsSpatialPoolSizeAtBuild;
+
+		++_pvsSpatialDeadEntries;
+		if (_pvsSpatialDeadEntries > 256u && _pvsSpatialDeadEntries * 4u > _pvsSpatialEntries.size())
+		{
+			_pvsSpatialCacheDirty = true;
+		}
+	}
+
+	bool Scene::QueryStaticMeshCullingCandidates(const dx::BoundingBox& queryBounds,
+		const std::function<bool(const dx::BoundingBox& cellBounds)>& shapeIntersectsCell,
+		std::vector<StaticMeshComponent*>& outComponents)
+	{
+		if (!r_pvsSpatialGrid._val.b)
+			return false;
+
+		std::unique_lock lock(_lock);
+
+		const auto queryStart = std::chrono::high_resolution_clock::now();
+
+		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
+		const size_t poolSize = pool != nullptr ? pool->components.size() : 0;
+
+		// Safety net: a structural change that slipped past the dirty hooks
+		// shows up as a pool-size mismatch - rebuild rather than cull against a
+		// stale index.
+		if (_pvsSpatialCacheDirty || poolSize != _pvsSpatialPoolSizeAtBuild)
+			RebuildPvsSpatialCache_NoLock();
+
+		// Re-place everything that moved since the last query (deferred from the
+		// per-transform-event hooks; between queries the grid is never read).
+		const size_t pendingProcessed = _pvsSpatialPendingUpdates.size();
+		ProcessPvsSpatialPendingUpdates_NoLock();
+
+		if (_pvsSpatialEntries.empty())
+		{
+			// An empty result is only trustworthy when the scene really has no
+			// static mesh components; otherwise fall back to the pool scan.
+			return poolSize == 0;
+		}
+
+		if (++_pvsSpatialQueryStamp == 0u)
+		{
+			for (auto& entry : _pvsSpatialEntries)
+				entry.lastQueryStamp = 0u;
+			_pvsSpatialQueryStamp = 1u;
+		}
+		const uint32_t stamp = _pvsSpatialQueryStamp;
+
+		auto appendEntry = [&](uint32_t entryIndex)
+		{
+			PvsSpatialEntry& entry = _pvsSpatialEntries[entryIndex];
+			if (entry.lastQueryStamp == stamp)
+				return;
+			entry.lastQueryStamp = stamp;
+
+			if (entry.component != nullptr)
+				outComponents.push_back(entry.component);
+		};
+
+		// A cell's entries may poke up to one cell size past the cell in every
+		// direction (loose-grid guarantee), so the bounds handed to the shape
+		// test are the cell inflated by that margin.
+		const float cellSize = _pvsSpatialCellSize;
+		auto looseCellBoundsFor = [cellSize](const GiSpatialCellKey& key)
+		{
+			dx::BoundingBox cellBounds;
+			cellBounds.Center = dx::XMFLOAT3(
+				(static_cast<float>(key.x) + 0.5f) * cellSize,
+				(static_cast<float>(key.y) + 0.5f) * cellSize,
+				(static_cast<float>(key.z) + 0.5f) * cellSize);
+			const float looseHalf = cellSize * 1.5f;
+			cellBounds.Extents = dx::XMFLOAT3(looseHalf, looseHalf, looseHalf);
+			return cellBounds;
+		};
+
+		// Query range inflated by one cell for the same reason.
+		const math::Vector3 center(queryBounds.Center.x, queryBounds.Center.y, queryBounds.Center.z);
+		const math::Vector3 extents(queryBounds.Extents.x + cellSize, queryBounds.Extents.y + cellSize, queryBounds.Extents.z + cellSize);
+		const math::Vector3 min = center - extents;
+		const math::Vector3 max = center + extents;
+		const int32_t minCellX = PvsSpatialCellCoord(min.x, cellSize);
+		const int32_t minCellY = PvsSpatialCellCoord(min.y, cellSize);
+		const int32_t minCellZ = PvsSpatialCellCoord(min.z, cellSize);
+		const int32_t maxCellX = PvsSpatialCellCoord(max.x, cellSize);
+		const int32_t maxCellY = PvsSpatialCellCoord(max.y, cellSize);
+		const int32_t maxCellZ = PvsSpatialCellCoord(max.z, cellSize);
+
+		const int64_t spanX = static_cast<int64_t>(maxCellX) - static_cast<int64_t>(minCellX) + 1ll;
+		const int64_t spanY = static_cast<int64_t>(maxCellY) - static_cast<int64_t>(minCellY) + 1ll;
+		const int64_t spanZ = static_cast<int64_t>(maxCellZ) - static_cast<int64_t>(minCellZ) + 1ll;
+		const int64_t coveredCells = spanX * spanY * spanZ;
+
+		size_t cellsTested = 0;
+
+		if (coveredCells > 0ll && coveredCells <= static_cast<int64_t>(_pvsSpatialCellList.size()))
+		{
+			for (int32_t z = minCellZ; z <= maxCellZ; ++z)
+			{
+				for (int32_t y = minCellY; y <= maxCellY; ++y)
+				{
+					for (int32_t x = minCellX; x <= maxCellX; ++x)
+					{
+						const GiSpatialCellKey key{ x, y, z };
+						const auto it = _pvsSpatialCellIndex.find(key);
+						if (it == _pvsSpatialCellIndex.end())
+							continue;
+
+						const auto& cell = _pvsSpatialCellList[it->second];
+						if (cell.entries.empty())
+							continue;
+
+						++cellsTested;
+						if (shapeIntersectsCell && !shapeIntersectsCell(looseCellBoundsFor(key)))
+							continue;
+
+						for (uint32_t entryIndex : cell.entries)
+							appendEntry(entryIndex);
+					}
+				}
+			}
+		}
+		else
+		{
+			// The query range covers more cells than exist (a camera frustum's
+			// AABB easily does) - walk the dense cell list instead. Integer
+			// range rejection first; the shape-vs-cell callback only runs for
+			// cells inside the query's range.
+			for (const auto& cell : _pvsSpatialCellList)
+			{
+				if (cell.entries.empty())
+					continue;
+
+				if (cell.key.x < minCellX || cell.key.x > maxCellX ||
+					cell.key.y < minCellY || cell.key.y > maxCellY ||
+					cell.key.z < minCellZ || cell.key.z > maxCellZ)
+					continue;
+
+				++cellsTested;
+				if (shapeIntersectsCell && !shapeIntersectsCell(looseCellBoundsFor(cell.key)))
+					continue;
+
+				for (uint32_t entryIndex : cell.entries)
+					appendEntry(entryIndex);
+			}
+		}
+
+		for (uint32_t entryIndex : _pvsSpatialUngriddedEntries)
+			appendEntry(entryIndex);
+
+		if (r_pvsPerfLog._val.b)
+		{
+			const float ms = std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - queryStart).count();
+			LOG_INFO("PVS grid query: frame=%lld cellSize=%.1f coveredCells=%lld occupiedCells=%zu cellsTested=%zu ungridded=%zu (alwaysInclude=%zu) returned=%zu pending=%zu ms=%.2f",
+				(long long)(g_pEnv && g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0), _pvsSpatialCellSize, (long long)coveredCells, _pvsSpatialCellList.size(), cellsTested, _pvsSpatialUngriddedEntries.size(), _pvsSpatialAlwaysIncludeCount, outComponents.size(), pendingProcessed, ms);
+		}
+
+		return true;
+	}
+
 
 	void Scene::CalculateSceneStats(std::vector<math::Vector3>& vertices, std::vector<uint16_t>& indices, uint32_t& numFaces, EntityFlags excludeFlags)
 	{

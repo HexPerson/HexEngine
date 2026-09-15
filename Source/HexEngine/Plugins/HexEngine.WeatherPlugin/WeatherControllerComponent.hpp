@@ -50,6 +50,27 @@ namespace HexEngine::Weather
 
 		virtual void Update(float frameTime) override;
 		virtual void Destroy() override;
+
+		// Scene state this controller overwrites every frame, captured the first
+		// time it authors anything and put back when the component is removed.
+		// Without this, removing the controller stranded the scene in the last
+		// preset (dim blue sun, snow wetness, storm clouds...) with nothing left
+		// to restore it.
+		struct SceneBaseline
+		{
+			bool captured = false;
+			class Scene* scene = nullptr;
+			math::Vector4 ambientLight;
+			math::Color fogColour;
+			WeatherSurfaceParams surfaceParams;
+			bool hadSun = false;
+			math::Vector4 sunColour;
+			float sunStrength = 1.0f;
+			std::vector<std::pair<std::string, float>> hvarFloats;
+			math::Vector3 cloudWindDirection;
+		};
+		void CaptureSceneBaseline(class Scene* scene);
+		void RestoreSceneBaseline();
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 		virtual bool CreateWidget(ComponentWidget* widget) override;
@@ -108,6 +129,7 @@ namespace HexEngine::Weather
 		float _transitionDuration = 0.0f;
 		float _defaultTransitionSeconds = 2.0f;
 		bool _previewEnabled = true;
+		SceneBaseline _baseline;
 		std::array<WeatherLoopAudioConfig, static_cast<size_t>(WeatherAudioLoopSlot::Count)> _loopAudio = {};
 		std::array<WeatherOneShotAudioConfig, 4> _thunderAudio = {};
 		float _indoorWeatherVolumeScale = 0.42f;
@@ -116,6 +138,14 @@ namespace HexEngine::Weather
 		float _indoorThunderPitchOffset = -0.04f;
 		float _skyProbeDistance = 1200.0f;
 		float _outdoorExposure = 1.0f;
+		// Sky-probe raycast cadence. PhysUtils::RayCast is a brute-force scan
+		// of every StaticMeshComponent in the scene (no spatial structure), so
+		// the per-frame probe was the single largest main-thread cost in the
+		// city scene - caught by stack sampling at 4/4 samples, 2026-07-30.
+		// The probe only feeds _outdoorExposure, which is already smoothed
+		// over ~0.5s, so 4 Hz is imperceptible for the audio crossfade.
+		float _skyProbeCooldown = 0.0f;      // seconds until the next probe (not serialised)
+		bool  _skyProbeLastBlocked = false;  // cached result between probes
 
 		// --- Random preset cycling ---
 		// When enabled, the controller automatically swaps presets every

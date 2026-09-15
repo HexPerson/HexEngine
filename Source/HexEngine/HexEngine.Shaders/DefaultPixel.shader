@@ -2,11 +2,40 @@
 {
 	MeshCommon
 	Utils
+	// SampleEnvAtlas, for the transparency path's environment reflection fallback.
+	EnvMapCommon
+	// CalculateShadows + ShadowInput + the b2 caster constants, for sun
+	// cascade shadows on the transparency phase (Phase 2 slice 5).
+	ShadowUtils
 }
 "Global"
 {
 	Texture2D g_albedoMap : register(t0);
 	Texture2D g_normalMap : register(t1);
+#ifdef SNOW_SHELL_NO_CLIP
+	// Snow-shell material textures (M_SnowShell.hmat), bound once per frame
+	// by SceneRenderer at t22/t23. Only declared for the shell so no other
+	// DefaultPixel consumer reserves the slots. g_rainOcclusionParams.w == 1
+	// signals they're bound (else the shell falls back to procedural white).
+	Texture2D g_snowShellAlbedo : register(t22);
+	Texture2D g_snowShellNormal : register(t23);
+	// Snow footprint deformation map (Phase 3 Part B), bound at t30 by
+	// SceneRenderer (t27-29 are the forward cluster lists). R8 top-down field of
+	// foot depressions. Consumed PER-PIXEL here (albedo darken + normal dent):
+	// the geometric/domain approach aliased the coarse tessellation into
+	// streaks, so the crisp foot shape lives as a shading detail, not geometry.
+	Texture2D<float> g_snowFootprintMap : register(t30);
+	float SnowShellFootprint(float3 worldPos, SamplerState samp)
+	{
+		if (g_snowFootprintParams.x < 0.5f)
+			return 0.0f;
+		const float4 clip = mul(float4(worldPos, 1.0f), g_snowFootprintVP);
+		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+		if (any(uv < 0.0f) || any(uv > 1.0f))
+			return 0.0f;
+		return g_snowFootprintMap.SampleLevel(samp, uv, 0);
+	}
+#endif
 	Texture2D g_roughnessMap : register(t2);
 	Texture2D g_metallicMap : register(t3);
 	Texture2D g_heightMap : register(t4);
@@ -20,9 +49,32 @@
 	Texture2D g_sceneDepthTex    : register(t11); // opaque depth buffer (linear-encoded raw depth)
 	Texture2D g_sceneNormalTex   : register(t12); // opaque world normal (xyz) + viewspace depth (w)
 	Texture2D g_scenePositionTex : register(t13); // opaque world position (xyz)
+	// Prefiltered sky environment atlas (IBL). The transparency reflection falls
+	// back to this wherever the screen-space march finds nothing - without it,
+	// glass reflects black, which is why window panes read as dark holes.
+	Texture2D g_iblSkyEnvFwd     : register(t14);
+	// Per-fragment atmosphere for the transparency phase (see
+	// TransparentAtmosphere.shader): froxel integration volume + aerial
+	// perspective volume, bound by RenderTransparent.
+	Texture3D g_transFogVolume   : register(t24);
+	Texture3D g_transApVolume    : register(t21);
+	SamplerState g_transLinearSampler : register(s4);
+	#include "TransparentAtmosphere.shader"
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
+	// Engine-global point sampler (same s2 every deferred pass uses);
+	// CalculateShadows wants it alongside the comparison sampler.
+	SamplerState g_pointSamplerFwd : register(s2);
+
+	// Sun shadow cascades for the transparency phase, bound by
+	// SceneRenderer::RenderTransparent when r_transparentShadows is on.
+	// t15..t20 - the one free six-slot run in this shader's layout. Unbound
+	// maps read as fully shadowed, which is why the shader gates on
+	// g_taaParams.z rather than sampling unconditionally.
+	// (A/B-measured 2026-07-30: this block + the PCSS include cost nothing
+	// measurable when the gate is off - the fps<20 hunt ruled it out.)
+	SHADOWMAPS_RESOURCE(15)
 
 	// Up to 16 point + 16 spot lights gathered in SceneRenderer::SetupForwardLights().
 	// Slot b7 is shared with the particle path which uses the same packing.
@@ -37,6 +89,21 @@
 		float4 g_fwdSpotColorStrength[16];
 		float4 g_fwdSpotInnerCone[16];         // .x = cos(innerHalfAngle)
 	};
+
+	// Clustered light lists (Phase 2 slice 4). When g_clusterForwardActive is
+	// set, forward-lit surfaces (glass, alpha-blend) read ALL local lights
+	// from these instead of the closest-16 arrays above. t27+ to stay clear
+	// of every material/shadow/env slot; null binds read zero counts.
+	struct ClFwdLight
+	{
+		float4 posRadius;
+		float4 colorStrength;
+		float4 dirCone;   // spot: xyz dir, w cos(outer)
+		float4 params;    // x cos(inner), y type (0 point, 1 spot), z shadowed
+	};
+	StructuredBuffer<ClFwdLight> g_clfLights : register(t27);
+	StructuredBuffer<uint>       g_clfCounts : register(t28);
+	StructuredBuffer<uint>       g_clfLists  : register(t29);
 
 	// Direct-only PBR shading for a single analytical light (no ambient, no lightning extras).
 	// Mirrors the BRDF inside CalculatePBRSurface so glass / alpha-blended meshes get the same
@@ -77,6 +144,60 @@
 		float metalness, float roughness)
 	{
 		float3 accum = float3(0.0f, 0.0f, 0.0f);
+
+		// Clustered path: every local light, uncapped, from the same lists the
+		// deferred apply and froxel volume consume. Shadowed lights are NOT
+		// skipped here - the forward path has never sampled local shadows, so
+		// including them matches the old arrays' behaviour exactly, just
+		// without the closest-16 cap. The 16+16 arrays are not read at all in
+		// this branch, so there is nothing to double-count.
+		if (g_clusterForwardActive > 0.5f)
+		{
+			float4 clip = mul(float4(worldPos, 1.0f), g_viewProjectionMatrix);
+			if (clip.w > 0.0f)
+			{
+				const float2 ndc = clip.xy / clip.w;
+				const float2 cuv = float2(ndc.x * 0.5f + 0.5f, 1.0f - (ndc.y * 0.5f + 0.5f));
+				const float4 viewPos = mul(float4(worldPos, 1.0f), g_viewMatrix);
+				const float viewDepth = -viewPos.z;
+				// Same grid + exponential slicing as ClusterLightCull.
+				const uint ccx = min((uint)(saturate(cuv.x) * 16.0f), 15u);
+				const uint ccy = min((uint)(saturate(cuv.y) * 9.0f), 8u);
+				const float cw = log(max(viewDepth, 0.1f) / 0.1f) / log(128.0f / 0.1f);
+				const uint ccz = min((uint)(saturate(cw) * 32.0f), 31u);
+				const uint clusterIdx = (ccz * 9u + ccy) * 16u + ccx;
+				const uint cCount = min(g_clfCounts[clusterIdx], 64u);
+				[loop]
+				for (uint ci = 0u; ci < cCount; ++ci)
+				{
+					const ClFwdLight cl = g_clfLights[g_clfLists[clusterIdx * 64u + ci]];
+					const float3 clToLight = cl.posRadius.xyz - worldPos;
+					const float clDistSq = dot(clToLight, clToLight);
+					const float clRadius = max(0.05f, cl.posRadius.w);
+					if (clDistSq >= clRadius * clRadius)
+						continue;
+					const float clDist = sqrt(max(1e-6f, clDistSq));
+					const float3 clL = clToLight / clDist;
+					float coneAtten = 1.0f;
+					if (cl.params.y > 0.5f)
+					{
+						const float cosOuter = cl.dirCone.w;
+						const float cosInner = max(cl.params.x, cosOuter + 1e-4f);
+						coneAtten = smoothstep(cosOuter, cosInner, dot(-clL, normalize(cl.dirCone.xyz)));
+						if (coneAtten <= 0.0f)
+							continue;
+					}
+					const float clMinDistSqr = 0.01f * 0.01f;
+					float clFalloff = saturate(1.0f - pow(clDist / clRadius, 4.0f));
+					clFalloff *= clFalloff;
+					const float clAtten = (clFalloff / max(clDistSq, clMinDistSqr)) * coneAtten;
+					accum += PBRDirectLight(worldPos, worldNormal, baseColour, metalness, roughness,
+						clL, cl.colorStrength.rgb * cl.colorStrength.w, clAtten);
+				}
+			}
+			return accum;
+		}
+
 		const uint pointCount = min((uint)g_fwdCountsAndParams.x, 16u);
 		[loop]
 		for (uint pi = 0u; pi < pointCount; ++pi)
@@ -235,19 +356,69 @@
 			input.texcoord += ParallaxOffset(heightMap, 0.018, viewDirTangent);
 		}
 
+		// Skipped on the snow shell: the substrate's normal map + the mesh's
+		// FACETED per-face tangents/binormals rebuild a per-triangle world
+		// normal, which lit each tessellated facet differently even on a flat
+		// sheet with a forced up normal (the user-diagnosed faceting). Snow is
+		// its own surface - it keeps the clean world-up normal the domain
+		// shader set, plus its own relief.
+#ifndef SNOW_SHELL_NO_CLIP
 		if (g_objectFlags & OBJECT_FLAGS_HAS_BUMP && isInDetailRange)
 		{
 			// Normalize the resulting bump normal.
 			worldNormal = (ApplyNormalMap(worldNormal, input.tangent, input.binormal, g_normalMap, g_textureSampler, input.texcoord, true));
 		}
+#endif
 
 		
 
 		//float4 specular = float4(0.0f, 0.0f, 0.0f, 0.0f);
 		float4 albedo = g_albedoMap.Sample(g_textureSampler, input.texcoord) * input.colour;
 
+#ifdef SNOW_SHELL_NO_CLIP
+		// The snow shell is a pure snow LAYER - it must not inherit the
+		// substrate's albedo (the road graph material has none, so this reads
+		// black). Force a snow-white base with a subtle height-field crevice
+		// tint so it isn't a dead flat white (ApplySnowAccumulation is skipped
+		// on the shell - see the guard further down - to avoid its POM +
+		// mesh-normal dependence, so the tint lives here).
+		// The accumulation shell renders EITHER snow or wind-blown sand - the
+		// geometry is identical, only the texture set swaps here on the dominant
+		// weather (sand during a sandstorm, snow otherwise).
+		if (g_weatherSurface.dirtAmount > g_weatherSurface.snowCoverage && g_dustParams.x > 0.5f)
+		{
+			// Real sand albedo, world-tiled at the dust tiling scale.
+			albedo = float4(g_sandAlbedo.Sample(g_textureSampler, input.positionWS.xz * g_dustParams.y).rgb, 1.0f);
+		}
+		else if (g_rainOcclusionParams.w > 0.5f)
+		{
+			// Real snow albedo, world-tiled (the DS sets input.texcoord =
+			// worldPos.xz * scale - tune that scale for tiling).
+			albedo = float4(g_snowShellAlbedo.Sample(g_textureSampler, input.texcoord).rgb, 1.0f);
+		}
+		else
+		{
+			// Fallback (no snow material): snow-white + subtle crevice tint.
+			albedo = float4(float3(0.90f, 0.92f, 0.96f)
+				* (0.82f + 0.18f * SnowHeightField(input.positionWS.xz)), 1.0f);
+		}
+		// Footprints: compacted / self-shadowed snow inside a print reads darker.
+		{
+			const float fp = SnowShellFootprint(input.positionWS.xyz, g_textureSampler);
+			albedo.rgb *= 1.0f - fp * saturate(g_snowFootprintParams.w) * 0.55f;
+		}
+#endif
+
+		// The snow shell (SnowShell.shader) reuses this pixel shader for
+		// identical snow shading but is drawn over materials whose albedo has
+		// no/zero alpha - this clip would then discard every shell pixel. The
+		// shell #defines SNOW_SHELL_NO_CLIP before including this file so it
+		// keeps its own thickness clip instead; every other consumer clips as
+		// before.
+#ifndef SNOW_SHELL_NO_CLIP
 		if(albedo.a == 0.0f && g_material.isInTransparencyPhase == 0)
 			clip(-1);
+#endif
 
 		float metalness = g_material.metallicFactor;
 		float roughness = g_material.roughnessFactor;
@@ -295,6 +466,37 @@
 			}
 		}
 
+		// Universal wet response (Phase 3): EVERY opaque surface darkens and
+		// gains the water-film gloss with weather wetness, exactly as snow
+		// applies universally - rain wets the whole world, not just materials
+		// that opted into drips. Porosity-from-roughness heuristic and the
+		// darkening rationale live in PBRutils::ApplyWetSurface. The drip
+		// block below stays per-material (rainDripIntensity) and no longer
+		// darkens - that would double-apply.
+		// Shelter occlusion (slice 2): surfaces under static cover receive
+		// no rain or snow. 1 = exposed; scales every weather term below.
+		// Melting snow (slice 4) feeds ground wetness - slush darkens and
+		// glosses the surface it sits on.
+		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
+		const float shelteredWetness = saturate(
+			(g_weatherSurface.wetness
+				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
+
+		float wetFilm = 0.0f;
+#ifndef SNOW_SHELL_NO_CLIP
+		// Skipped on the snow shell: snow is not wet asphalt, so the wet
+		// darkening/gloss (which reads near-black at night) must not apply to
+		// the snow layer.
+		if (shelteredWetness > 0.001f)
+		{
+			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
+				shelteredWetness, g_wetnessDarkening);
+			// Rain-impact ripples while precipitation is falling (slice 3).
+			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time,
+				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
+		}
+#endif
+
 		// Rain droplets: when the material opts in (rainDripIntensity > 0) and
 		// it's actually raining (g_weatherSurface.wetness > 0), perturb the
 		// normal + drop roughness via procedural droplet noise so the surface
@@ -302,7 +504,7 @@
 		// normal-map sampling above used. World-space noise so drops stay
 		// anchored as the camera moves - fine for static geometry, would slide
 		// on rotating meshes (acceptable v1 limit).
-		const float rainStrength = g_material.rainDripIntensity * g_weatherSurface.wetness;
+		const float rainStrength = g_material.rainDripIntensity * shelteredWetness;
 		if (rainStrength > 0.001f)
 		{
 			// Surface up-facing-ness selects between "drops bead in place" (horizontal)
@@ -328,14 +530,98 @@
 		// accumulates, snow then dominates the visual). No per-material opt-in -
 		// any upward-facing surface naturally catches snow when the weather
 		// system reports snowCoverage > 0. See ApplySnowAccumulation in PBRutils.
-		if (g_weatherSurface.snowCoverage > 0.001f)
+		// Dust before snow: snow lays on top of dust, not under it. Dust is
+		// wind-borne so shelter only halves it (see ApplyDustAccumulation).
+		// Flat dust overlay - skipped on the accumulation shell, which renders
+		// sand as real geometry with its own texture set below.
+#ifndef SNOW_SHELL_NO_CLIP
+		const float dustAmount = g_weatherSurface.dirtAmount * (0.5f + 0.5f * shelter);
+		if (dustAmount > 0.001f)
 		{
+			const float4 dustResult = ApplyDustAccumulation(
+				albedo.rgb, roughness, worldNormal, input.positionWS.xyz, dustAmount, g_textureSampler);
+			albedo.rgb = dustResult.rgb;
+			roughness  = dustResult.w;
+		}
+#endif
+
+		// The snow shell does NOT use ApplySnowAccumulation: that path's POM
+		// + per-vertex-friendly relief + mesh-normal use fought the shell (it
+		// already carries real tessellated geometry and forces its own white
+		// albedo). Instead the shell gets its own lightweight PER-PIXEL relief
+		// normal from the height field + snow roughness, below.
+#ifdef SNOW_SHELL_NO_CLIP
+		const bool shellUseSand = g_weatherSurface.dirtAmount > g_weatherSurface.snowCoverage && g_dustParams.x > 0.5f;
+		if (shellUseSand)
+		{
+			// LARGE-SCALE dune relief first: the shell forces a world-up shading
+			// normal (to avoid faceting), so the extruded mounds would otherwise
+			// read as a flat sheet - this bends the normal along the dune-height
+			// gradient so the mounds actually self-shade. Then the fine sand grain
+			// from the normal map rides on top. Normal-ogl -> flip green.
+			const float e = 0.18f;                       // metres - coarse, dune scale
+			const float hC = SnowHeightField(input.positionWS.xz);
+			const float hX = SnowHeightField(input.positionWS.xz + float2(e, 0.0f));
+			const float hZ = SnowHeightField(input.positionWS.xz + float2(0.0f, e));
+			const float amp = 0.35f;
+			const float3 dune = normalize(float3(-(hX - hC) / e * amp, 1.0f, -(hZ - hC) / e * amp));
+
+			float3 nTS = g_sandNormal.Sample(g_textureSampler, input.positionWS.xz * g_dustParams.y).xyz * 2.0f - 1.0f;
+			nTS.y = -nTS.y;
+			const float3 grain = normalize(nTS.x * input.tangent + nTS.y * input.binormal + nTS.z * dune);
+			worldNormal = normalize(lerp(dune, grain, 0.6f));
+		}
+		else if (g_rainOcclusionParams.w > 0.5f)
+		{
+			// Real snow normal map through the DS's WORLD-aligned tangent
+			// basis (input.tangent = +X, binormal = +Z, worldNormal = up) so
+			// it never touches the mesh's faceted tangents. Same world UV as
+			// the albedo. Normal-ogl -> flip green for D3D.
+			float3 nTS = g_snowShellNormal.Sample(g_textureSampler, input.texcoord).xyz * 2.0f - 1.0f;
+			nTS.y = -nTS.y;
+			worldNormal = normalize(nTS.x * input.tangent + nTS.y * input.binormal + nTS.z * worldNormal);
+		}
+		else
+		{
+			// Fallback relief, PER-PIXEL (the domain shader's per-vertex
+			// version aliased coarse tessellation into dark fans).
+			const float e = 0.07f;
+			const float hC = SnowHeightField(input.positionWS.xz);
+			const float hX = SnowHeightField(input.positionWS.xz + float2(e, 0.0f));
+			const float hZ = SnowHeightField(input.positionWS.xz + float2(0.0f, e));
+			const float amp = 0.05f;
+			const float3 reliefN = normalize(float3(-(hX - hC) / e * amp, 1.0f, -(hZ - hC) / e * amp));
+			worldNormal = normalize(lerp(worldNormal, reliefN, 0.6f));
+		}
+		roughness = shellUseSand ? 0.92f : 0.85f;
+		// Footprint dent (PER-PIXEL, full-res): tilt the normal by the gradient
+		// of the footprint depth so a print reads as a pressed hollow with lit
+		// rims - the fine shape the coarse tessellation could not carry. The
+		// horizontal gradient is added to the normal so the snow relief survives.
+		{
+			const float fC = SnowShellFootprint(input.positionWS.xyz, g_textureSampler);
+			if (fC > 0.001f)
+			{
+				const float e = 0.04f;
+				const float fX = SnowShellFootprint(input.positionWS.xyz + float3(e, 0.0f, 0.0f), g_textureSampler);
+				const float fZ = SnowShellFootprint(input.positionWS.xyz + float3(0.0f, 0.0f, e), g_textureSampler);
+				const float amp = 3.0f * saturate(g_snowFootprintParams.w);
+				worldNormal = normalize(worldNormal
+					+ float3((fX - fC) / e * amp, 0.0f, (fZ - fC) / e * amp) * saturate(fC));
+			}
+		}
+#else
+		const float shelteredSnow = g_weatherSurface.snowCoverage * shelter;
+		if (shelteredSnow > 0.001f)
+		{
+			// worldNormal is inout since slice 5 - snow relief + drift banks.
 			const float4 snowResult = ApplySnowAccumulation(
 				albedo.rgb, roughness, worldNormal, input.positionWS.xyz,
-				g_weatherSurface.snowCoverage);
+				shelteredSnow, g_weatherSurface.snowMelt, g_textureSampler);
 			albedo.rgb = snowResult.rgb;
 			roughness  = snowResult.w;
 		}
+#endif
 
 		float3 finalRGB = albedo.rgb;
 
@@ -349,7 +635,7 @@
 			emission = g_emissionMap.Sample(g_textureSampler, input.texcoord).rgb * g_material.emissiveColour.rgb * g_material.emissiveColour.a;
 		}
 
-		finalRGB += emission;
+		//finalRGB += emission;
 
 		// In the opaque pass we cut out non-opaque pixels; in transparency phase we preserve fractional alpha.
 		if (g_material.isInTransparencyPhase == 0)
@@ -366,6 +652,24 @@
 
 		if (g_material.isInTransparencyPhase != 0)
 		{
+			// Sun cascade shadows (Phase 2 slice 5). This argument was a
+			// hardcoded 1.0f - transparent surfaces received NO shadows at
+			// all, glass in a shadowed interior lit as if outdoors. Same
+			// ShadowInput/bias formulation as the deferred pass, so the glass
+			// and the wall behind it agree about where the shadow falls.
+			// Gated: the cascades + b2 caster constants are only valid when
+			// SceneRenderer bound them for this pass.
+			// Cheap PCF, not full PCSS: glass needs "am I in shadow", not
+			// contact hardening, and PCSS at g_shadowConfig.samples cost
+			// ~4 ms on window-heavy views (measured 2026-07-30).
+			float sunShadow = 1.0f;
+			if (g_taaParams.z > 0.5f)
+			{
+				const float ndl = dot(worldNormal, normalize(g_shadowCasterLightDir.xyz));
+				const float shadowBias = g_shadowConfig.biasMultiplier * (1.0f - ndl);
+				sunShadow = CalculateShadowsCheapPCF(input.positionWS.xyz, g_cmpSampler, SHADOWMAPS, shadowBias);
+			}
+
 			// Sun (analytical). CalculatePBRSurface already includes a single ambient term and
 			// lightning flash contribution — don't add ambient again below.
 			const float4 sunLit = CalculatePBRSurface(
@@ -376,7 +680,7 @@
 				-normalize(g_lightDirection.xyz),
 				getSunColour(),
 				albedo.rgb,
-				1.0f,
+				sunShadow,
 				g_globalLight[0]);
 
 			// Direct-only contributions for forward point + spot lights so ambient isn't
@@ -396,17 +700,46 @@
 			float reflectionWeight = 0.0f;
 			float3 ssrColour = float3(0.0f, 0.0f, 0.0f);
 			float ssrConfidence = 0.0f;
+			const float glossiness = saturate(1.0f - roughness);
+
 			if (TraceTransparentSSR(input.positionWS.xyz, R, roughness, ssrColour, ssrConfidence))
 			{
 				// Gloss-only SSR (no blur), so fade out as roughness rises.
-				const float glossiness = saturate(1.0f - roughness);
 				reflectionWeight = ssrConfidence * glossiness;
 				reflection = ssrColour;
 			}
 
+			// Environment fallback wherever the screen-space march found nothing.
+			//
+			// Without this, `reflection` stays BLACK on a miss - and for a window
+			// the reflected ray usually leaves the screen on the first step, so it
+			// misses almost always. The Fresnel term then multiplies black, and the
+			// pane renders as a dark hole instead of glass. That is the "black
+			// window panes" artifact; it was never the SSR march being wrong, just
+			// nothing behind it.
+			//
+			// The prefiltered sky atlas is the same environment the deferred IBL
+			// uses, so glass and opaque surfaces agree about what the sky looks
+			// like. Weighted by (1 - ssrWeight) so a real screen-space hit always
+			// wins - screen data is more accurate than a distant-environment
+			// approximation when it exists.
+			{
+				const float3 envColour = SampleEnvAtlas(g_iblSkyEnvFwd, g_textureSampler, R, roughness);
+				// Downward rays would otherwise pick up horizon sky and light the
+				// undersides of glass; the atlas carries no ground radiance.
+				const float envHorizon = saturate(R.y * 3.0f + 0.35f);
+				const float envWeight = (1.0f - reflectionWeight) * glossiness * envHorizon * g_glassEnvStrength;
+
+				reflection = reflection * reflectionWeight + envColour * envWeight;
+				reflectionWeight = saturate(reflectionWeight + envWeight);
+				// `reflection` is now premultiplied by its weight, so undo that -
+				// the composition below multiplies by reflectionWeight again.
+				reflection = reflectionWeight > 1e-4f ? reflection / reflectionWeight : 0.0f.xxx;
+			}
+
 			// Sum: analytical sun (incl. ambient) + forward direct + Fresnel-weighted reflection.
 			const float3 specularReflectionTerm = F * reflection * reflectionWeight;
-			finalRGB = sunLit.rgb + forwardDirect + specularReflectionTerm + emission;
+			finalRGB = sunLit.rgb + forwardDirect + specularReflectionTerm;// + emission;
 		}
 
 		float2 velocity = CalcVelocity(input.currentPositionUnjittered, input.previousPositionUnjittered, float2(g_screenWidth, g_screenHeight));
@@ -432,16 +765,33 @@
 			finalRGB = RainDripsCellGridDebug(worldNormal, input.positionWS.xyz, g_time, isHorizDebug);
 		}
 
+		// Transparents are drawn AFTER the fog / aerial-perspective applies
+		// (which only know the opaque depth), so fog this fragment at its own
+		// depth. Opaque gbuffer writes are untouched - the applies handle them.
+		if (g_material.isInTransparencyPhase != 0)
+			finalRGB = ApplyTransparentAtmosphere(finalRGB, input.positionWS.xyz, input.position.xy, g_transFogVolume, g_transApVolume, g_transLinearSampler);
+
+		// Emissive REPLACE (matches the graph compiler and the deferred pass):
+		// lerp the surface toward the emission by an emissive mask rather than
+		// adding emission on top (which double-counted and washed out). The
+		// mask goes to pos.w; the deferred lerps the lit result toward this
+		// unlit diffuse by it. emission = g_emissionMap x emissiveColour.rgb x
+		// strength, computed above.
+		const float emissiveMask = saturate(dot(emission, float3(0.2126f, 0.7152f, 0.0722f)));
+		finalRGB = lerp(finalRGB, emission, emissiveMask);
+
 		output.diff = float4(finalRGB, outputAlpha);
 
 		// material output is: metallic, roughness, smoothness, reserved (0)
 		// (specularProbability used to live in .a but nothing read it; channel is
 		// kept zero so future repurposing of .a starts from a clean clear value).
-		output.mat = float4(metalness, roughness, g_material.smoothness, 1.0f);
+		// Smoothness (the SSR gate) opens with the wet film - a rain-soaked
+		// surface reflects even when its dry material never would.
+		output.mat = float4(metalness, roughness, max(g_material.smoothness, wetFilm * 0.9f), 1.0f);
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 
-		output.pos = float4(input.positionWS.xyz, length(emission));
+		output.pos = float4(input.positionWS.xyz, emissiveMask);
 
 		output.velocity = velocity;
 

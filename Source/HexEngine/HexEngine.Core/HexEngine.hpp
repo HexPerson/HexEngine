@@ -111,5 +111,6 @@
 #include "Plugin/PluginSystem.hpp"
 
 #include "Audio/AudioManager.hpp"
+#include "Audio/SoundEffect.hpp"
 
 #include "Math/FloatMath.hpp"

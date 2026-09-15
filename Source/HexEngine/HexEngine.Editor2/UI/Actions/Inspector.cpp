@@ -76,9 +76,6 @@ namespace HexEditor
 		}
 
 		auto resourceTab = _tabs->AddTab(L"Resource");
-
-		_canvas.Create(size.x, size.y);
-		
 	}
 
 	Inspector::~Inspector()

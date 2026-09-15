@@ -30,15 +30,6 @@
 
 #define EPSILON 1e-6f
 
-#define ACEScc_MAX      1.4679964
-#define ACEScc_MIDGRAY  0.4135884
-
-	static const float g_fContrast = 1.1f;
-	static const float g_fExposure = 1.1f;
-	static const float3 g_fColourFilter = float3(1.00f, 0.92f, 0.94f);
-	static const float g_fHueShift = 0.0f;
-	static const float g_fSaturation = 1.05f;
-
 	half Luminance(half3 linearRgb)
 	{
 		return dot(linearRgb, float3(0.2126729, 0.7151522, 0.0721750));
@@ -75,9 +66,21 @@
 			: value;
 	}
 
+	static const float LINEAR_MIDGRAY = 0.18f;
+
+	// P4.6: contrast in LOG2 space about mid-grey. The old linear pivot
+	// compressed shadows and blew highlights asymmetrically: one linear
+	// stop above mid-grey is 0.18 of range but one below is only 0.09, so a
+	// linear scale about the pivot treats them completely differently. In
+	// log2, "contrast 1.2" means every STOP moves 20% further from mid-grey
+	// - the filmic definition. Guarded so neutral (1.0) is bit-identical
+	// (a log2/exp2 round-trip is NOT exact in float).
 	float3 ColorGradingContrast(float3 color)
 	{
-		return (color - ACEScc_MIDGRAY) * g_colourGrading.contrast + ACEScc_MIDGRAY;
+		if (g_colourGrading.contrast == 1.0f)
+			return color;
+		const float3 stops = log2(max(color, EPSILON) / LINEAR_MIDGRAY);
+		return exp2(stops * g_colourGrading.contrast) * LINEAR_MIDGRAY;
 	}
 
 	float3 ColorGradePostExposure(float3 color)
@@ -85,8 +88,34 @@
 		return color * g_colourGrading.exposure;
 	}
 
+	// White balance: RGB gains computed CPU-side from r_whiteBalanceTemp /
+	// r_whiteBalanceTint (von-Kries adaptation in LMS, normalised to green).
+	float3 ColorGradeWhiteBalance(float3 color)
+	{
+		return color * g_whiteBalance.rgb;
+	}
+
+	// ASC-CDL-style lift / gamma / gain, applied after the log contrast:
+	// gain scales, lift offsets (raises blacks without touching a pure-white
+	// gain response), gamma bends the mids. Guarded for bit-identical
+	// neutral (pow(x, 1) is not exact for all x).
+	float3 ColorGradeCdl(float3 color)
+	{
+		const bool neutral =
+			all(g_cdlLift.rgb == 0.0f.xxx) &&
+			all(g_cdlGamma.rgb == 1.0f.xxx) &&
+			all(g_cdlGain.rgb == 1.0f.xxx);
+		if (neutral)
+			return color;
+		color = max(color * g_cdlGain.rgb + g_cdlLift.rgb, 0.0f);
+		return pow(color, 1.0f / max(g_cdlGamma.rgb, 0.01f.xxx));
+	}
+
 	float3 ColorGradeColorFilter(float3 color) {
-		return color * g_fColourFilter;
+		// Use the uploaded cbuffer value, not the file-static below. This read the static
+		// copy, which made the r_colourFilter cvar completely inert - it was being uploaded
+		// every frame and then ignored.
+		return color * g_colourGrading.colourFilter;
 	}
 
 	float3 ColorGradingHueShift(float3 color) {
@@ -107,8 +136,14 @@
 
 		colour = min(colour, 60.0f);
 
+		// P4.6 grading order: exposure (linear) -> white balance (linear
+		// gains) -> contrast (log2 stops) -> CDL lift/gamma/gain -> colour
+		// filter -> hue shift -> saturation. Every stage is a guarded no-op
+		// at its neutral value, so default settings are bit-identical.
 		colour.rgb = ColorGradePostExposure(colour.rgb);
+		colour.rgb = ColorGradeWhiteBalance(colour.rgb);
 		colour.rgb = ColorGradingContrast(colour.rgb);
+		colour.rgb = ColorGradeCdl(colour.rgb);
 		colour.rgb = ColorGradeColorFilter(colour.rgb);
 
 		colour = max(colour, 0.0f);
@@ -116,8 +151,6 @@
 		colour.rgb = ColorGradingHueShift(colour.rgb);
 		colour.rgb = ColorGradingSaturation(colour.rgb);
 
-		
-
-		return max(colour, 0.0f);;
+		return max(colour, 0.0f);
 	}
 }

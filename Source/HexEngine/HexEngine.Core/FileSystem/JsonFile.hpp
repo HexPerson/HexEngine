@@ -4,6 +4,7 @@
 #include "DiskFile.hpp"
 #include "../Physics/IRigidBody.hpp"
 #include "../Graphics/RenderStructs.hpp"
+#include "../Audio/SoundEffect.hpp"
 
 namespace HexEngine
 {
@@ -90,6 +91,8 @@ namespace HexEngine
 		{
 			Serialize(container[key], "radius", value.radius);
 			Serialize(container[key], "height", value.height);
+			Serialize(container[key], "axis", value.axis);
+			Serialize(container[key], "offset", value.offset);
 			return container;
 		}
 
@@ -97,6 +100,13 @@ namespace HexEngine
 		json& Serialize(json& container, const std::string& key, const IRigidBody::ColliderData::Sphere& value)
 		{
 			Serialize(container[key], "radius", value.radius);
+			return container;
+		}
+
+		template <>
+		json& Serialize(json& container, const std::string& key, const std::shared_ptr<SoundEffect>& value)
+		{
+			container[key] = value->GetFileSystemPath();
 			return container;
 		}
 
@@ -239,15 +249,31 @@ namespace HexEngine
 		template <>
 		json& Deserialize(json& container, const std::string& key, IRigidBody::ColliderData::Capsule& value)
 		{
-			Deserialize(container, "radius", value.radius);
-			Deserialize(container, "height", value.height);
+			// Read from container[key] to mirror Serialize (which writes there);
+			// reading from container directly missed the nested object entirely.
+			Deserialize(container[key], "radius", value.radius);
+			Deserialize(container[key], "height", value.height);
+			Deserialize(container[key], "axis", value.axis);
+			Deserialize(container[key], "offset", value.offset);
 			return container;
 		}
 
 		template <>
 		json& Deserialize(json& container, const std::string& key, IRigidBody::ColliderData::Sphere& value)
 		{
-			Deserialize(container, "radius", value.radius);
+			Deserialize(container[key], "radius", value.radius);
+			return container;
+		}
+
+		template <>
+		json& Deserialize(json& container, const std::string& key, std::shared_ptr<SoundEffect>& value)
+		{
+			if (container.find(key) != container.end())
+			{
+				std::wstring path;
+				container[key].get_to<std::wstring>(path);
+				value = SoundEffect::Create(path);
+			}
 			return container;
 		}
 

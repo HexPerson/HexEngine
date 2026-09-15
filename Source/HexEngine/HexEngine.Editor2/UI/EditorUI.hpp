@@ -60,13 +60,16 @@ public:
 		// --- HexEngine::IEditorContext (editor state for Core plugins, e.g. the
 		//     read-only MCP editor bridge). Called on the main thread. ---
 		virtual HexEngine::Entity* GetSelectedEntity() override;
+		virtual bool SetSelectedEntity(HexEngine::Entity* entity) override;
 		virtual std::string GetProjectName() override;
 		virtual std::string GetProjectFolderPath() override;
 		virtual std::string GetProjectFilePath() override;
+		virtual bool OpenProject(const std::string& projectFilePath, std::string& error) override;
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 
 		void RecordEntityPositionChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
+		void RecordEntityRotationChange(HexEngine::Entity* entity, const math::Quaternion& before, const math::Quaternion& after);
 		void RecordEntityScaleChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
 		void RecordStaticMeshMaterialChange(HexEngine::Entity* entity, const fs::path& before, const fs::path& after);
 		void RecordEntityRename(HexEngine::Entity* entity, const std::string& beforeName, const std::string& afterName);

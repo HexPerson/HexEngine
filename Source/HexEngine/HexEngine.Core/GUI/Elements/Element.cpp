@@ -120,7 +120,43 @@ namespace HexEngine
 
 	bool Element::IsMouseOver(bool absolute)
 	{
-		return IsMouseOver(absolute ? GetAbsolutePosition() : _position, _size);
+		if (!IsMouseOver(absolute ? GetAbsolutePosition() : _position, _size))
+			return false;
+
+		// An element scrolled outside a clipping ancestor's viewport is not
+		// visible - it must not react to the mouse hovering whatever UI
+		// occupies that screen space instead.
+		int32_t mx, my;
+		g_pEnv->_inputSystem->GetMousePosition(mx, my);
+		return !IsMousePointClipped(mx, my);
+	}
+
+	bool Element::IsMousePointClipped(int32_t mx, int32_t my) const
+	{
+		for (const Element* ancestor = GetParent(); ancestor != nullptr; ancestor = ancestor->GetParent())
+		{
+			if (!ancestor->ClipsInput())
+				continue;
+
+			const Point clipPos = ancestor->GetAbsolutePosition();
+			const Point clipSize = ancestor->GetSize();
+
+			if (mx < clipPos.x || mx >= clipPos.x + clipSize.x ||
+				my < clipPos.y || my >= clipPos.y + clipSize.y)
+				return true;
+		}
+
+		return false;
+	}
+
+	bool Element::IsMouseOverClipped(int32_t x, int32_t y, int32_t w, int32_t h) const
+	{
+		if (!IsMouseOver(x, y, w, h))
+			return false;
+
+		int32_t mx, my;
+		g_pEnv->_inputSystem->GetMousePosition(mx, my);
+		return !IsMousePointClipped(mx, my);
 	}
 
 	bool Element::IsMouseOver(const Point& position, const Point& size)

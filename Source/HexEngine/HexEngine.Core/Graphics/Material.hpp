@@ -51,7 +51,8 @@ namespace HexEngine
 				_depthState == other._depthState &&
 				_cullMode == other._cullMode &&
 				_affectsGI == other._affectsGI &&
-				_emissiveAffectsGI == other._emissiveAffectsGI
+				_emissiveAffectsGI == other._emissiveAffectsGI &&
+				_receivesSnow == other._receivesSnow
 				);
 		}
 
@@ -120,6 +121,20 @@ namespace HexEngine
 		void SetAffectsGI(bool value);
 		bool GetAffectsGI() const;
 
+		// Flat albedo tint for GI material proxies: diffuseColour, multiplied
+		// by the graph's constant-folded BaseColor for graph materials (whose
+		// authored colour never lands in _properties.diffuseColour). The fold
+		// is cached (GI change-tracking calls this per mesh per update) -
+		// every graph (re)assignment must call InvalidateGiGraphTintCache.
+		math::Vector4 GetGiAlbedoTint() const;
+		void InvalidateGiGraphTintCache() { _giGraphTintCacheValid = false; }
+		// Snow shell (Phase 3): when set, a snow accumulation layer is drawn
+		// on top of this (rigid) surface in the opaque pass - see the shell
+		// re-draw in Scene::RenderInstance. Opt-in per material so only
+		// up-facing ground surfaces pay the tessellation cost.
+		void SetReceivesSnow(bool value) { _receivesSnow = value; }
+		bool GetReceivesSnow() const { return _receivesSnow; }
+
 		void				SetBlendState(BlendState state);
 		void				SetCullMode(CullingMode mode);
 		void				SetDepthState(DepthBufferState state);
@@ -136,7 +151,7 @@ namespace HexEngine
 		void		RestoreRenderState();
 
 		void AddSoundTag(const std::string& key, const std::string& value);
-		const std::string& GetSoundTag(const std::string& key) const;
+		std::string GetSoundTag(const std::string& key) const;
 
 		void Lock();
 		void Unlock();
@@ -176,10 +191,19 @@ namespace HexEngine
 
 		std::map<std::string, std::string> _soundTags;
 		bool _affectsGI = true;
-		bool _emissiveAffectsGI = false;
+		// Default ON - emissive surfaces feed the voxel GI unless opted out
+		// (mirrors Light::_injectIntoGI; loader also defaults absent keys to on).
+		bool _emissiveAffectsGI = true;
+		bool _receivesSnow = false;
 
 		std::recursive_mutex _lock;
 		uint32_t _objectFlags = 0;
 		std::atomic<int32_t> _editorOpenCount = 0;
+
+		// Kept at the END of the class: appended members only grow sizeof
+		// (Materials are constructed inside Core) without shifting the
+		// offsets plugin code compiled against an older header relies on.
+		mutable math::Vector4 _giGraphTintCache = math::Vector4(1.0f, 1.0f, 1.0f, 1.0f);
+		mutable bool _giGraphTintCacheValid = false;
 	};
 }

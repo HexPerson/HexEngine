@@ -4,6 +4,7 @@
 #include "../Entity/Component/SpotLight.hpp"
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/DecalComponent.hpp"
+#include "../Entity/Component/ReflectionProbeComponent.hpp"
 #include "../Entity/Component/InteractionComponent.hpp"
 #include "../Graphics/IVertexBuffer.hpp"
 #include "../Graphics/IIndexBuffer.hpp"
@@ -13,6 +14,11 @@
 #include "../Graphics/VolumetricScattering.hpp"
 #include "../Graphics/ShadowMap.hpp"
 #include "../Math/FloatMath.hpp"
+// After project headers (see the dxgidebug include-order note in the D3D11
+// plugin): d3d11_1 for ID3D11DeviceContext1::ClearView - the only way to
+// clear a single atlas tile without wiping the cached neighbours.
+#include <d3d11_1.h>
+#include <DirectXPackedVector.h> // XMConvertHalfToFloat (autofocus depth readback)
 #include <fastnoiselite/Cpp/FastNoiseLite.h>
 #include <cstdint>
 #include <unordered_set>
@@ -34,7 +40,24 @@ namespace HexEngine
 	HVar env_sunsetWarmStrength("env_sunsetWarmStrength", "Strength of warm sunset colours near the sun and horizon", 1.0f, 0.0f, 4.0f);
 	HVar env_sunsetCoolStrength("env_sunsetCoolStrength", "Strength of cool purple/violet sunset colours away from the sun", 1.0f, 0.0f, 4.0f);
 	HVar env_sunsetGlowStrength("env_sunsetGlowStrength", "Strength of the sunset sun halo and dusk glow", 1.0f, 0.0f, 4.0f);
+	// RDR2 sky S1/S2: HDR sky dome + physical sun disc + LUT Mie anisotropy.
+	HVar env_mieAnisotropy("env_mieAnisotropy", "Mie phase anisotropy g for the atmosphere LUTs (physical ~0.8; capped by SkyView LUT resolution)", 0.65f, 0.0f, 0.95f);
+	HVar r_skyRadianceScale("r_skyRadianceScale", "Linear-HDR sky dome radiance scale (single retune lever after the LDR->HDR sky conversion)", 1.0f, 0.01f, 10.0f);
+	HVar r_sunDiscDiameter("r_sunDiscDiameter", "Visual sun disc angular diameter in degrees (physical 0.53). PCSS penumbra uses r_sunAngularDiameter instead", 0.53f, 0.05f, 10.0f);
+	HVar r_sunDiscIntensity("r_sunDiscIntensity", "Multiplier on the sun disc's transmittance-LUT radiance - drives bloom/glare strength", 1.0f, 0.0f, 100.0f);
+	HVar r_starIntensity("r_starIntensity", "Night star field radiance (linear HDR, pre-exposure)", 0.02f, 0.0f, 2.0f);
+	// S8 moon (visual-only: disc antipodal to the sun; no light repoint -
+	// every g_lightDirection consumer assumes the sun).
+	HVar r_moonIntensity("r_moonIntensity", "Moon disc radiance scale (0 = no moon)", 1.0f, 0.0f, 10.0f);
+	HVar r_moonPhase("r_moonPhase", "Moon phase: 0 = new, 0.5 = half, 1 = full", 0.85f, 0.0f, 1.0f);
+	HVar r_moonDiameter("r_moonDiameter", "Moon angular diameter in degrees (physical 0.53; slightly oversized reads better)", 1.1f, 0.05f, 10.0f);
 	HVar env_volumetricLighting("r_volumetricLighting", "Enable or disable volumetric lighting", true, false, true);
+	HVar r_volumetric("r_volumetric", "Master toggle for volumetric lighting/fog: froxel volume, legacy per-pixel march and per-light volumetric cones", true, false, true);
+	// Declared in AtmosphereLUTs.cpp. The AP apply below must respect it:
+	// with LUT updates off the volume still holds stale data, and applying
+	// that made the distance haze impossible to disable at runtime.
+	extern HVar r_atmosphereLUTs;
+	HVar r_aerialPerspective("r_aerialPerspective", "Apply the Hillaire aerial-perspective distance haze to opaque geometry", true, false, true);
 	HVar env_volumetricScattering("env_volumetricScattering", "The amount of scattering used in volumetric lighting calculations", -0.43f, -2.0f, 2.0f);
 	HVar env_volumetricStrength("env_volumetricStrength", "The strength multiplier of volumetric lighting", 1.0f, 0.1f, 5.0f);
 	HVar env_volumetricSteps("env_volumetricSteps", "The number of iterations over which to calculate volumetric lighting", 100.0f, 10.0f, 500.0f);
@@ -43,7 +66,14 @@ namespace HexEngine
 	HVar env_volumetricPointInsideMax("env_volumetricPointInsideMax", "Point-light volumetric gain when camera is near light radius edge", 0.92f, 0.0f, 2.0f);
 	HVar env_volumetricSpotInsideMin("env_volumetricSpotInsideMin", "Spot-light volumetric gain when camera is at light center", 0.52f, 0.0f, 2.0f);
 	HVar env_volumetricSpotInsideMax("env_volumetricSpotInsideMax", "Spot-light volumetric gain when camera is near light radius edge", 0.88f, 0.0f, 2.0f);
-	HVar env_waterNormalInfluence("env_waterNormalInfluence", "The strength of the normal maps when rendering water", 0.4f, 0.0f, 4.0f);
+	// Ocean tunables (water overhaul O8) - uploaded as g_oceanConfig2, all
+	// live. The per-scene OceanSettings block keeps the authored knobs
+	// (colours, fresnel, shore fade, reflection); these are the global feel
+	// dials the rework added.
+	HVar r_oceanWaveScale("r_oceanWaveScale", "Master multiplier on the wind-driven Gerstner wave amplitude", 1.0f, 0.0f, 8.0f);
+	HVar r_oceanFoam("r_oceanFoam", "Ocean foam coverage multiplier (crest + shore)", 1.0f, 0.0f, 4.0f);
+	HVar r_oceanAbsorption("r_oceanAbsorption", "Water absorption per metre (Beer-Lambert; higher = murkier)", 0.18f, 0.005f, 4.0f);
+	HVar r_oceanBumpStrength("r_oceanBumpStrength", "Water normal-map deflection strength", 0.5f, 0.0f, 2.0f);
 	HVar env_volumetricStepIncrement("env_volumetricStepIncrement", "Global scale multiplier applied to adaptive volumetric ray-march step size", 1.0f, 0.1f, 100.0f);
 
 	// Point / spot light render caps. Sort by camera distance ascending and
@@ -86,17 +116,37 @@ namespace HexEngine
 	HVar r_cloudCastShadows("r_cloudCastShadows", "Enable cloud shadows on scene lighting", true, false, true);
 	HVar r_cloudShadowStrength("r_cloudShadowStrength", "Strength of cloud-cast shadows on scene lighting", 0.6f, 0.0f, 1.0f);
 	HVar r_cloudShadowSteps("r_cloudShadowSteps", "Cloud shadow ray-march step count", 6, 1, 32);
+	// Cached cloud shadow map (CloudShadowMap.shader): rendered once per frame
+	// over a square of the cloud base plane centred on the camera; Deferred
+	// samples it instead of re-marching the slab per pixel.
+	// Temporal accumulation of the half-res cloud march (CloudTemporal.shader).
+	HVar r_cloudTemporal("r_cloudTemporal", "Temporally accumulate the cloud march (removes jitter boil under camera motion)", true, false, true);
+	HVar r_cloudTemporalAlpha("r_cloudTemporalAlpha", "Cloud temporal blend weight of the NEW frame (lower = smoother, slower to react)", 0.12f, 0.02f, 1.0f);
+	HVar r_cloudShadowMapSize("r_cloudShadowMapSize", "Cloud shadow map resolution (texels per side)", 1024, 256, 4096);
+	HVar r_cloudShadowMapExtent("r_cloudShadowMapExtent", "Cloud shadow map half-extent around the camera (m)", 2500.0f, 250.0f, 20000.0f);
 	HVar r_cloudQuality("r_cloudQuality", "Cloud quality preset (0 = performance, 1 = balanced, 2 = quality)", 1, 0, 2);
-	HVar r_cloudAabbMin("r_cloudAabbMin", "Minimum world-space bounds of cloud AABB", math::Vector3(-600.0f, 100.0f, -600.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
-	HVar r_cloudAabbMax("r_cloudAabbMax", "Maximum world-space bounds of cloud AABB", math::Vector3(600.0f, 200.0f, 600.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
+	// Horizon-scale defaults (was a 1.2km x 100m slab terminating ~600m out -
+	// no sky deck was possible). The march uses progressive steps + a far
+	// fade, so the big domain stays within the step budget.
+	HVar r_cloudAabbMin("r_cloudAabbMin", "Minimum world-space bounds of cloud AABB", math::Vector3(-14000.0f, 350.0f, -14000.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
+	// Top raised 1050 -> 2400 (S5): the type-driven height profile builds
+	// ~2 km cumulus towers in the taller slab while stratus decks stay low.
+	// NOTE: scenes may PIN the old AABB in their serialized cvars - set
+	// r_cloudAabbMin/Max live and re-save the scene to adopt the new slab.
+	HVar r_cloudAabbMax("r_cloudAabbMax", "Maximum world-space bounds of cloud AABB", math::Vector3(14000.0f, 2400.0f, 14000.0f), math::Vector3(-25000.0f, -500.0f, -25000.0f), math::Vector3(25000.0f, 8000.0f, 25000.0f));
 	HVar r_cloudDensity("r_cloudDensity", "Cloud density multiplier", 1.0f, 0.05f, 8.0f);
 	HVar r_cloudCoverage("r_cloudCoverage", "Cloud coverage amount", 0.56f, 0.01f, 1.0f);
 	HVar r_cloudErosion("r_cloudErosion", "Small-scale erosion amount", 0.34f, 0.0f, 1.0f);
-	HVar r_cloudLightAbsorption("r_cloudLightAbsorption", "Absorption multiplier for cloud self-shadowing", 0.14f, 0.0f, 8.0f);
+	// 0.14 -> 2.0 with the HDR sun (bridge-tuned 2026-08-29): the old value
+	// let the full-energy sun shine through the deck and everything rendered
+	// white; 2.0 restores real self-shadowing (bright rims, dark bodies).
+	HVar r_cloudLightAbsorption("r_cloudLightAbsorption", "Absorption multiplier for cloud self-shadowing", 2.0f, 0.0f, 8.0f);
 	HVar r_cloudViewAbsorption("r_cloudViewAbsorption", "Absorption multiplier along view ray inside clouds", 0.42f, 0.0f, 8.0f);
 	HVar r_cloudPowderStrength("r_cloudPowderStrength", "Powder term to brighten cloud edges", 0.38f, 0.0f, 2.0f);
 	HVar r_cloudAmbientStrength("r_cloudAmbientStrength", "Ambient skylight contribution for cloud interiors", 0.52f, 0.0f, 2.0f);
-	HVar r_cloudShadowFloor("r_cloudShadowFloor", "Minimum transmittance floor for cloud self-shadowing", 0.20f, 0.0f, 1.0f);
+	// Lowered 0.20 -> 0.10 with the HDR sun: a 20% floor on light
+	// transmittance kept storm cores visibly sunlit at the new radiance.
+	HVar r_cloudShadowFloor("r_cloudShadowFloor", "Minimum transmittance floor for cloud self-shadowing", 0.06f, 0.0f, 1.0f);
 	HVar r_cloudAnisotropy("r_cloudAnisotropy", "Anisotropy term for cloud phase function", 0.35f, -0.95f, 0.95f);
 	HVar r_cloudSilverLiningStrength("r_cloudSilverLiningStrength", "Stylized rim/silver-lining strength", 0.55f, 0.0f, 4.0f);
 	HVar r_cloudSilverLiningExponent("r_cloudSilverLiningExponent", "Stylized rim/silver-lining falloff", 5.0f, 0.5f, 16.0f);
@@ -115,17 +165,53 @@ namespace HexEngine
 	HVar r_cloudLightSteps("r_cloudLightSteps", "Base light ray-march step count", 12.0f, 2.0f, 64.0f);
 	HVar r_cloudStepScale("r_cloudStepScale", "Global cloud march step scale", 1.0f, 0.25f, 8.0f);
 	HVar r_cloudMaxDistance("r_cloudMaxDistance", "Maximum cloud trace distance from camera", 20000.0f, 100.0f, 100000.0f);
-	HVar r_gamma("r_gamma", "The amount of gamma correction to apply", 2.2f, 0.1f, 5.0f);
+	HVar r_cloudPhaseBoost("r_cloudPhaseBoost", "Cloud phase-function boost (scales the dual-lobe HG response)", 0.7f, 0.25f, 4.0f);
+	HVar r_cloudType("r_cloudType", "Cloud type bias: 0 = stratus decks, 0.5 = natural mix from the type field, 1 = towering cumulus", 0.5f, 0.0f, 1.0f);
+	// S4 cirrus: a 2D high-altitude layer drawn in the sky pass, lit by the
+	// transmittance LUT at ~7 km - it stays sunlit-red long after ground
+	// sunset (the RDR2 reference afterglow). Weather-driven via the plugin.
+	HVar r_cloudCirrusAmount("r_cloudCirrusAmount", "High-altitude cirrus layer coverage (0 = none)", 0.3f, 0.0f, 1.0f);
+	HVar r_cloudCirrusType("r_cloudCirrusType", "Cirrus character: 0 = streaky cirrus, 1 = cirrocumulus ripples", 0.35f, 0.0f, 1.0f);
+	// S7 screen-space sun shafts (crepuscular rays): occlusion mask from the
+	// sky/cloud state, radially blurred toward the sun's screen position,
+	// added onto beauty coloured by the transmittance-LUT sun colour.
+	HVar r_sunShafts("r_sunShafts", "Screen-space sun shafts (crepuscular rays from cloud/geometry edges)", true, false, true);
+	HVar r_sunShaftsIntensity("r_sunShaftsIntensity", "Sun shaft additive intensity", 0.5f, 0.0f, 4.0f);
+	HVar r_sunShaftsLength("r_sunShaftsLength", "Sun shaft blur reach as a fraction of the sun-to-pixel distance", 0.85f, 0.1f, 1.0f);
+	// NOTE: r_gamma is vestigial - it was uploaded to the per-frame cbuffer every frame and
+	// read by no shader (the SDR tonemap hardcodes 1/2.2). Kept declared so scenes that
+	// serialised it still load; its cbuffer slot now carries r_pbrEnergyFix.
+	HVar r_gamma("r_gamma", "Unused. Gamma is fixed at 2.2 in the tonemap shaders", 2.2f, 0.1f, 5.0f);
+
+	// The reference glTF diffuse term is albedo/PI, but the divide is commented out in
+	// PBRutils.shader, leaving diffuse response ~3.14x hot relative to the specular lobe on
+	// every lit surface in the engine. Correcting it is a large, deliberate change in
+	// appearance: everything gets substantially darker and existing light intensities and
+	// exposure need rebalancing to match. Default OFF so nothing changes until that
+	// rebalance happens; turn on to see (and then retune toward) correct energy.
+	HVar r_pbrEnergyFix("r_pbrEnergyFix", "Apply the physically-correct diffuse 1/PI term (needs light/exposure rebalance)", true, false, true);
 	HVar r_shadowCascades("r_shadowCascades", "The number of cascades to calculate with shadow mapping", 4, 1, 4);
 	HVar r_shadowCascadeRange("r_shadowCascadeRange", "The depth of one shadow cascade, except the last (which will occupy all remaining space", 100.0f, 1.0f, 10000.0f);
-	HVar r_penumbraFilterMaxSize("r_penumbraFilterMaxSize", "The maximum filter size for penumbra calculation", 0.002f, 0.0f, 10.0f);
-	HVar r_shadowFilterMaxSize("r_shadowFilterMaxSize", "The maximum size of the shadow filter", 0.21f, 0.0f, 10.0f);
+	HVar r_shadowCascadeSplitLambda("r_shadowCascadeSplitLambda", "Sun cascade split blend: 0 = legacy fixed r_shadowCascadeRange blocks, otherwise lerps uniform->logarithmic splits (higher concentrates shadow resolution near the camera)", 0.9f, 0.0f, 1.0f);
+	// Both PCSS radii are expressed in TEXELS at the 8192 reference resolution
+	// (SetupPerShadowCasterBuffer scales by shadowMapSize/8192, so the world-space
+	// footprint survives resolution changes). The pre-2026-08 defaults (0.002 and
+	// 0.21) sat orders of magnitude below the shader's 2-texel search / 1-texel
+	// filter floors, which is why the controls appeared to do nothing.
+	HVar r_penumbraFilterMaxSize("r_penumbraFilterMaxSize", "PCSS blocker-search radius in texels (at 8192 reference resolution)", 32.0f, 0.0f, 128.0f);
+	HVar r_shadowFilterMaxSize("r_shadowFilterMaxSize", "PCSS maximum filter radius in texels (at 8192 reference resolution) - upper clamp on the physical penumbra", 48.0f, 0.0f, 256.0f);
+	// Master sun-shadow softness control: the penumbra now grows physically as
+	// occluderGap * tan(angle/2). The real sun subtends ~0.53 degrees; the default
+	// is a touch wider for a friendlier look at game scale.
+	HVar r_sunAngularDiameter("r_sunAngularDiameter", "Apparent sun angular diameter in degrees driving PCSS penumbra growth (physical sun is ~0.53, larger = softer)", 1.0f, 0.05f, 10.0f);
 	HVar r_shadowBiasMultiplier("r_shadowBiasMultiplier", "The bias multiplier to use when calculating normal offset", 0.0002f, 0.0f, 1.0f);
 	HVar r_shadowCascadeBlendRange("r_shadowCascadeBlendRange", "The distance to use for blending shadow cascades together", 10.0f, 1.0f, 1000.0f);
 	HVar r_debugScene("r_debugScene", "Draw debugging info for the current scene", 0, 0, 1);
-	HVar r_waterResolution("r_waterResolution", "The resolution multiplier at which to render water, a value of 1.0f is full resolution", 1.0f, 0.1f, 1.0f);
 	HVar r_bloomLuminanceThreshold("r_bloomLuminanceThreshold", "Reference luminance where physically-based bloom starts to respond strongly", 1.0f, 0.0f, 32.0f);
-	HVar r_bloomPhysicalIntensity("r_bloomPhysicalIntensity", "Strength multiplier for physically-based bloom", 0.35f, 0.0f, 8.0f);
+	// With the normalised mip chain this reads as "fraction of light the lens
+	// scatters" - restrained AAA values live around 0.03-0.07 (old default 0.35
+	// predates the 1/N normalisation and would glow-bomb the frame).
+	HVar r_bloomPhysicalIntensity("r_bloomPhysicalIntensity", "Strength multiplier for physically-based bloom", 0.05f, 0.0f, 8.0f);
 	HVar r_bloomPhysicalClamp("r_bloomPhysicalClamp", "Clamp physically-based bloom prefilter output (0 disables clamp)", 0.0f, 0.0f, 128.0f);
 	HVar r_fxaa("r_fxaa", "Whether or not to use the FXAA anti-aliasing method", 1, 0, 1);
 	HVar r_fog("r_fog", "Enable or disable fog effect", 1, 0, 1);
@@ -145,6 +231,387 @@ namespace HexEngine
 	HVar r_frustumSphereBoundsMultiplier("r_frustumSphereBoundsMultiplier", "The multiplier applied to the frustum bounds in order to calculate culling", 1.15f, 1.0f, 4.0f);
 	HVar r_shadowMinimumLodThreshold("r_shadowMinimumLodLevel", "The lowest LOD level allowed for shadow maps. A high number will improve performance at the expensve of shadow fidelity", 0, 0, 3);
 	HVar r_taa("r_taa", "Enable or disable temporal anti-aliasing", true, false, true);
+
+	// TAA neighbourhood variance-clip width, in standard deviations. 0.5 is what the shader
+	// shipped with; the textbook value is ~1.25 but that ghosts noticeably here.
+	HVar r_taaVarianceGamma("r_taaVarianceGamma", "TAA variance clip width in sigma (lower = tighter, less ghosting, less detail)", 0.5f, 0.1f, 3.0f);
+
+	// Environment fallback for specular rays that find no screen-space hit and no voxel
+	// coverage. Those rays used to return black, which is why a wet road reflected the sky
+	// as black rather than a sky gradient. 0 restores that behaviour.
+	// DISABLED BY DEFAULT (was 1.0). Every screen-space test for "this ray reached the sky" is
+	// unsound indoors: the opaque gbuffer behind transparent glass holds the skysphere, so a wall
+	// pixel's horizontal reflected ray crosses a window in screen space, "sees sky", and gets
+	// handed horizon radiance - painting the horizon straight through the wall. Marching further,
+	// distance-gating, direction-sampling the LUT instead of the beauty buffer, and gating on
+	// "the march ended on a sky pixel" were all tried; each moved the artifact rather than
+	// removing it, because they all rest on the same false premise. Needs real occlusion data
+	// (reflection probes, or a cone trace with coverage that actually reaches the far wall) - not
+	// another screen-space heuristic. Left in place, off, for that work.
+	HVar r_ssrSkyFallbackStrength("r_ssrSkyFallbackStrength", "Strength of the sky-LUT fallback for SSR rays that hit nothing", 0.0f, 0.0f, 4.0f);
+
+	// Screen-space sky hits: a reflection ray that passes over sky (e.g. a glossy floor
+	// reflecting sky through a window) should return that sky. An earlier version of this
+	// returned sky the moment a screen sample landed on it, which streaked badly because a
+	// floor ray sees the window in screen space long before it reaches it in 3D. Requiring a
+	// minimum travelled distance - and letting real geometry hits still win - fixes that.
+	// Raise if streaks reappear; 0 disables sky hits.
+	// DISABLED BY DEFAULT (was 2.0) - see r_ssrSkyFallbackStrength above for why the whole
+	// screen-space sky-detection approach is unsound. 0 disables the sky-pixel branch entirely,
+	// which is main's behaviour.
+	HVar r_ssrSkyHitMinDistance("r_ssrSkyHitMinDistance", "Min world distance before an SSR ray may accept a sky pixel as a hit (0 = disable)", 0.0f, 0.0f, 64.0f);
+	// Forward transparency environment reflection. Defaults ON: glass that finds
+	// no screen-space hit used to reflect literal black, which is why window panes
+	// read as dark holes. Unlike the sky terms for OPAQUE surfaces, this is not an
+	// occlusion hazard - a window reflecting the sky is what a window does.
+	HVar r_glassEnvReflection("r_glassEnvReflection", "Environment reflection strength for transparent surfaces when SSR misses", 1.0f, 0.0f, 4.0f);
+
+	// Diagnostic for "why is my glossy floor not reflecting the sky". Paints SSR sky hits
+	// MAGENTA where accepted and GREEN where a sky pixel was seen but rejected by
+	// r_ssrSkyHitMinDistance. No colour at all means the sky test never matched, which points
+	// at the gbuffer behind the window carrying real geometry depth rather than the sky's
+	// frustum-far marker.
+	// MUST be an int HVar, not a bool: a bool clamps every value to 0/1, so modes 2 and 3
+	// silently became mode 1 and their branches never ran.
+	//   1 = sky markers   : magenta accepted / green distance-rejected / blue alpha-marker-only
+	//   2 = path classify : red depth-hit / yellow last-in-screen fallback / cyan miss
+	//   3 = cbuffer test  : flood the specular output unconditionally
+	HVar r_ssrDebugSkyHits("r_ssrDebugSkyHits", "Debug SSR: 1=sky markers, 2=path classify, 3=cbuffer flood test", (int32_t)0, (int32_t)0, (int32_t)3);
+
+	// IBL: prefiltered sky environment atlas (see RenderSkyEnvMap /
+	// EnvMapCommon.shader). Inert until the deferred IBL resolve consumes it,
+	// so defaulting on only costs the small prefilter draw.
+	HVar r_iblSkyEnv("r_iblSkyEnv", "Generate the prefiltered sky environment atlas each frame", true, false, true);
+	// 1 = sky atlas, 2 = active probe atlas, 3 = the active probe's RAW capture
+	// face 0 (before prefiltering - answers "is the rig even framing the room?").
+	// Int, not bool: a bool HVar clamps every value to 0/1, so modes 2 and 3
+	// would silently become 1.
+	// 1 = sky atlas, 2 = active probe atlas, 3..8 = the active probe's RAW capture
+	// faces 0..5 (+X,-X,+Y,-Y,+Z,-Z) before prefiltering. Face 2 (+Y, straight up)
+	// is the useful one for "is the rig inside the building?" - a ceiling and a sky
+	// are impossible to confuse, whereas a wall and the ground both read as flat.
+	HVar r_iblSkyEnvDebug("r_iblSkyEnvDebug", "Env atlas overlay: 1=sky, 2=probe atlas, 3..8=probe raw face 0..5", (int32_t)0, (int32_t)0, (int32_t)8);
+
+	// Atlas geometry. Must match ENVMAP_FACE_SIZE / ENVMAP_ROUGHNESS_ROWS in
+	// EnvMapCommon.shader - the shader derives everything from uv, so the only
+	// contract is the overall texture aspect (width : height = 1 : rows).
+	static constexpr int32_t kIblEnvMapFaceSize = 128;
+	static constexpr int32_t kIblEnvMapRows = 5;
+	// L2 spherical harmonics: 9 coefficients, one per row of a 1x9 texture.
+	// Must match ENVMAP_SH_COEFFS in EnvMapCommon.shader.
+	static constexpr int32_t kIblEnvShCoeffs = 9;
+	// DFG table resolution. 128x128 is the usual choice: the function is smooth
+	// in both axes, so more resolution buys nothing measurable.
+	static constexpr int32_t kDfgLutSize = 128;
+
+	// P1-B. Real DFG lookup in place of EnvBRDFApprox's analytic fit, plus
+	// multi-scatter energy compensation. Single-scatter GGX drops the light that
+	// would have bounced a second time off the microfacets, so rough metals come
+	// out too dark; the compensation adds that energy back.
+	HVar r_iblDfgLut("r_iblDfgLut", "Use the precomputed DFG LUT instead of the analytic EnvBRDF fit", true, false, true);
+	HVar r_iblMultiScatter("r_iblMultiScatter", "Multi-scatter energy compensation for environment specular", true, false, true);
+
+	// Sky image-based lighting. The engine had no IBL at all - ambient was a flat
+	// diffuse-only constant - so no surface had any environment response. Specular defaults
+	// ON because that is the term that restores missing reflections; diffuse defaults OFF
+	// because the sky term is unoccluded, so indoors it floods a room. Reflection probes
+	// (P1-D) add the occlusion/locality this lacks.
+	// DEFAULT 0 until reflection probes provide occlusion. This term is unoccluded sky:
+	// with it on, an interior wall's reflection vector sweeps through zero elevation as
+	// the view position moves, which paints the sky's horizon line straight across the
+	// wall, and upward-facing interior floors take a blue sky tint under a solid roof.
+	// That was shipped at 1.0 (unverified) and is exactly the "horizon through walls" +
+	// "weird blue reflections inside" report - it survived r_ssr 0 because it never was
+	// SSR. Enable per-scene outdoors, or wait for probes to gate it indoors.
+	// NOW DEFAULTS ON. This was disabled when it sampled the RAW sky-view LUT,
+	// whose sharp horizon line got painted across interior walls. It now samples
+	// the prefiltered atlas (verified: soft, roughness-correct, no horizon band),
+	// and probes replace it entirely inside their volumes. Leaving it off meant an
+	// outward-facing window pane whose SSR ray left the screen reflected literal
+	// black - the "black window panes" report.
+	HVar r_iblSkySpecular("r_iblSkySpecular", "Sky specular IBL strength (split-sum environment specular)", 1.0f, 0.0f, 4.0f);
+	HVar r_iblSkyDiffuse("r_iblSkyDiffuse", "Sky diffuse IBL strength (unoccluded - floods interiors, prefer probes)", 0.0f, 0.0f, 4.0f);
+	// Probes are captured radiance with real occlusion baked in, so unlike the sky
+	// terms above they are safe to default ON: a scene with no probes is unaffected
+	// (g_probeCenter.w stays 0), and a scene with probes gets correct local
+	// reflections inside each probe's box.
+	HVar r_iblProbeStrength("r_iblProbeStrength", "Reflection probe IBL strength (box-projected local environment)", 1.0f, 0.0f, 4.0f);
+	// Probe DIFFUSE, separate from probe specular and defaulting to 0 for the same
+	// reason r_iblSkyDiffuse does. The diffuse lookup is the atlas's roughest row -
+	// a near-uniform average of the captured room - so applying it as an irradiance
+	// term floods the whole interior with flat colour instead of lighting it. That
+	// is what "probe on" looked like at first: the room washed uniform cream, all
+	// contrast gone. Specular is the term that actually restores reflections.
+	// A real fix needs a cosine-convolved irradiance probe (P1-C's SH), not a GGX
+	// roughness-1 row standing in for one.
+	// NOW DEFAULTS ON. Probe diffuse used the atlas's roughest row - a flat room
+	// average that washed interiors out - so it had to be off. It now uses the
+	// probe's own SH irradiance, integrated from what the probe actually sees, so
+	// it carries its own occlusion and is the correct indoor diffuse term.
+	HVar r_iblProbeDiffuse("r_iblProbeDiffuse", "Reflection probe diffuse strength (per-probe SH irradiance)", 1.0f, 0.0f, 4.0f);
+
+	// Compose environment specular against SSR in the resolve, instead of adding it
+	// in the deferred pass and letting the SSR blit stack on top.
+	//
+	// Stacking was never a composition: RenderLights runs first and adds the
+	// environment term, then RenderSSR blends its reflection additively onto
+	// beauty. Where a ray hit, the pixel got both and was double-bright. Where it
+	// missed it got environment but no screen data - and the specular miss path
+	// returned the voxel-GI cone trace, which is black whenever GI is off, so a
+	// floor ray aimed at a window pane (transparent glass never writes the opaque
+	// gbuffer, so the ray finds nothing) left the pane black in the reflection.
+	//
+	// With this on, the deferred pass drops the specular term entirely and the
+	// resolve writes lerp(environment, screen, confidence). Off restores the old
+	// stacked behaviour byte for byte, which is what makes the A/B measurable.
+	HVar r_iblComposeSSR("r_iblComposeSSR", "Compose environment specular with SSR in the resolve instead of stacking the two", true, false, true);
+
+	// Energy split at the SSR composite.
+	//
+	// The reflection is light the surface sends to the eye INSTEAD of the light
+	// it already emitted, not on top of it. The resolve blended additively onto a
+	// beauty buffer holding the full diffuse, so the result was
+	// diffuse + F*reflection where it should be (1-F)*diffuse + F*reflection -
+	// nothing anywhere scaled the base down. Measured on a wet floor: +19% near
+	// the camera rising to +30% toward the horizon, tending to 2x at grazing,
+	// because the error tracks Fresnel and so peaks exactly where the reflection
+	// is most visible.
+	//
+	// This is a deliberate global change to how every reflective surface reads;
+	// the cvar is here so it can be A/B'd against the old look.
+	HVar r_ssrEnergyConserve("r_ssrEnergyConserve", "Take the reflected fraction off the base layer at the SSR composite (energy conservation)", true, false, true);
+
+	// How much diffuse albedo a surface loses when fully wet.
+	//
+	// The rain response perturbed normals and dropped roughness but never
+	// touched albedo, so a wet surface kept its full dry diffuse AND gained a
+	// mirror on top - which reads as a washed-out, too-bright wet floor. Real
+	// wet surfaces darken substantially: the water film lets light refract in
+	// and get trapped by total internal reflection instead of scattering back
+	// out. 0.35 (albedo x 0.65 at full wetness) is a conventional approximation;
+	// 0 restores the previous behaviour.
+	//
+	// Note the separate auto-puddle system already had its own darkening
+	// (r_autoPuddlesDarken); this covers the per-material rain path, which did
+	// not.
+	HVar r_wetnessDarkening("r_wetnessDarkening", "Fraction of albedo removed at full rain wetness (0 = none)", 0.35f, 0.0f, 1.0f);
+
+	// Longest single SSR march step. This is the reach control:
+	//
+	//     reach ~= 28 * (0.3 + (maxStep - 0.3) / 3)   world units
+	//
+	// At the old hardcoded 3.0 that is ~34 units, against water.shader's ~96.
+	// The Whereabouts hall is far bigger than 34 units across, so rays aimed
+	// high on the far wall ran out partway and returned whatever they were
+	// crossing - the lower window row reflected, the upper row did not, and the
+	// run-out point banded visibly across the floor. 10.0 puts the reach at ~99,
+	// matching the value water has always used successfully.
+	//
+	// Raise for larger spaces, lower to buy back performance; the cost is linear
+	// in neither steps nor length but in how far each step can skip past thin
+	// geometry, which the binary refinement then has to recover.
+	HVar r_ssrMaxStepLength("r_ssrMaxStepLength", "Longest single SSR march step in world units (controls how far reflections reach)", 10.0f, 0.5f, 32.0f);
+
+	// Self-clearing: writes the beauty buffer as SSR sees it, which is BEFORE
+	// transparent geometry is drawn. A reflection that is dark because the ray
+	// hit something dark and one that is dark because the thing it hit had not
+	// been drawn yet look identical in the final frame and completely different
+	// here.
+	// Self-clearing: writes the sky env atlas, the active probe's atlas, and the
+	// probe's raw face 0 straight to PNG via SaveToFile. Unlike the on-screen
+	// overlay (r_iblSkyEnvDebug) these files bypass the tonemapper, so texel
+	// values compare in LINEAR units - which is the only way to answer "is the
+	// probe dimmer than the sky because of a units bug or because the room is
+	// genuinely dimmer".
+	HVar r_iblDumpAtlases("r_iblDumpAtlases", "Dump sky/probe env atlases to ibl_*.png in linear units", false, false, true);
+
+	HVar r_ssrDumpBeauty("r_ssrDumpBeauty", "Dump the beauty buffer as the SSR pass sees it to ssr_beauty.png", false, false, true);
+
+	// The water.shader last-in-screen fallback, on the specular path.
+	//
+	// It is worth being explicit about what this is: when the march gives up, it
+	// returns the beauty at wherever the ray HAPPENED TO BE, which is not the
+	// mirror image position. It makes a dark reflection bright, but the bright
+	// thing it draws is in the wrong PLACE. Water gets away with it because a
+	// large flat water plane mostly reflects distant sky, where a positional
+	// error is invisible; an interior floor reflecting nearby windows shows it
+	// immediately as reflections that do not line up with what they reflect.
+	//
+	// Exposed so the trade can be measured rather than argued about.
+	// Which ray marcher SSR uses.
+	//
+	//   0 - legacy: steps in WORLD space and projects each step to screen. The
+	//       screen footprint of a step is then unpredictable - near the camera
+	//       one step spans many pixels and hits get skipped, far away many steps
+	//       land in the same pixel and do nothing. The acceptance thickness has
+	//       to absorb that error, which couples two knobs that should be
+	//       independent and is why tuning either one trades one artifact for
+	//       another.
+	//   1 - screen-space DDA (McGuire & Mara 2014): project the ray's endpoints
+	//       once, walk the 2D line in pixel steps, interpolate 1/w linearly so
+	//       depth stays perspective-correct. Every pixel on the ray is visited
+	//       exactly once, so thickness only has to model real geometric
+	//       thickness rather than marching error.
+	HVar r_ssrMarchMode("r_ssrMarchMode", "SSR ray march: 0 = legacy world-space stepping, 1 = screen-space DDA", (int32_t)1, (int32_t)0, (int32_t)1);
+
+	// Rotate the SSR cone sample per frame WHEN THE DENOISER IS ON. The
+	// frame-stable seed converged NRD to the per-pixel noise instead of the lobe:
+	// reflections looked clean right after camera movement (history rejected ->
+	// wide spatial filter) and degraded to static speckle over the next seconds
+	// (history accumulated -> spatial support narrowed -> output = the one
+	// unchanging sample). A temporal accumulator can only integrate a signal
+	// that varies. Off, plus r_ssrDenoise off, restores the fully frame-stable
+	// diagnostic behaviour.
+	// Phase 2: clustered light culling. Off by default until the deferred pass
+	// consumes the lists; with it on, the cull runs and the heatmap
+	// (r_clusterDebug) verifies the binning against the world.
+	HVar r_clusterLights("r_clusterLights", "Build clustered light lists (Phase 2)", true, false, true);
+	HVar r_clusterDebug("r_clusterDebug", "Overlay the cluster occupancy heatmap (needs r_clusterLights)", false, false, true);
+	// Slice 2: the fullscreen apply. Unshadowed point/spot lights shade from
+	// the cluster lists in one draw; shadowed lights keep the per-light path.
+	// Needs r_clusterLights for the lists to exist.
+	HVar r_clusterApply("r_clusterApply", "Shade unshadowed local lights from the cluster lists in one fullscreen pass", true, false, true);
+	// INT, not bool - bool HVars clamp to 0/1 and the staged modes vanish.
+	// 1 = magenta flood (draw path), 2 = per-pixel cluster light count,
+	// 3 = shaded result of the first light in the list, skips ignored.
+	// Slice 3: the froxel volumetric CS reads the cluster lists so fog glow
+	// stops being capped at the closest-16 while surface lighting is not.
+	// Slice 4: glass / alpha-blend surfaces read uncapped local lights from
+	// the cluster lists instead of the closest-16 forward arrays.
+	HVar r_clusterForward("r_clusterForward", "Forward-lit surfaces consume the cluster lists (uncapped local lights)", true, false, true);
+	// Slice 5: the transparency phase samples the sun cascades instead of the
+	// hardcoded depthValue=1 - glass in a shadowed interior stops sun-lighting
+	// as if it stood outdoors.
+	HVar r_transparentShadows("r_transparentShadows", "Transparent surfaces receive sun cascade shadows", true, false, true);
+	// Slice 7: local-light shadow faces render into one shared atlas with
+	// LRU-cached tiles instead of per-light dedicated maps. A face whose
+	// content hash is unchanged keeps last frame's depth for free, so the
+	// budget bounds RE-RENDERS, not shadowed-light count.
+	HVar r_shadowAtlas("r_shadowAtlas", "Local-light shadows via the shared LRU atlas (sun keeps its cascades)", true, false, true);
+	// Units slice part 3: when on, authored light strengths are LUMENS
+	// (spot cd = lm/(2pi(1-cos outerHalf)), point cd = lm/4pi), the sun is
+	// LUX, emissive is NITS. Off = legacy arbitrary units. DEFAULT ON since
+	// part 4 landed (calibration + EV comp curve, user-verified day+night
+	// 2026-07-31) together with r_exposureMode.
+	HVar r_physicalLightUnits("r_physicalLightUnits", "Interpret light strengths as physical units (lumens/lux/nits)", true, false, true);
+	// Units slice part 4: the calibration bridge between legacy content and
+	// physical units, measured live 2026-07-31 (day street meanLuma 0.298 ->
+	// 4500 cd/m^2 sunny-street => factor ~15000). It declares BOTH:
+	//   - legacy _strength * scale = the value's meaning in physical units
+	//     (a lamp authored at 3 is ~45k lm - plausible street sodium), and
+	//   - preExposure = 1/scale: rendered units = physical cd/m^2 * preExposure,
+	//     which keeps FP16 buffers at today's proven magnitudes.
+	// Because both factors ride every light, they cancel in the packed
+	// strengths - so the conversion sites keep their part-3 form and the scale
+	// only surfaces where units must be ABSOLUTE: the EV100 meter (AutoExposure
+	// multiplies metered luma by scale) and g_exposureParams. Pre-exposure
+	// stays STATIC (not previous-frame exposure a la Frostbite) until sky/GI/
+	// probes are physical too - scaling only the analytic lights by a moving
+	// exposure would make sky brightness swim against surfaces during
+	// adaptation. End state: a one-time content migration bakes the factor
+	// into saved _strength values, this returns to 1, and inspector lumens
+	// become honest.
+	HVar r_legacyLightScale("r_legacyLightScale", "Calibration factor: legacy light strength -> physical units (and 1/x = pre-exposure)", 15000.0f, 1.0f, 200000.0f);
+	HVar r_shadowAtlasBudget("r_shadowAtlasBudget", "Max atlas shadow faces re-rendered per frame", (int32_t)4, (int32_t)0, (int32_t)16);
+	HVar r_shadowAtlasDebug("r_shadowAtlasDebug", "Draw the shadow atlas as an overlay", false, false, true);
+	// Phase 3 slice 2: shelter/rain occlusion. A top-down ortho depth map
+	// (static geometry only) around the camera; wet response, snow and
+	// puddles are masked where cover sits above a surface. Cached: only
+	// re-rendered on recentre (camera moved a quarter extent) or the
+	// refresh timer, and skipped entirely in dry weather.
+	HVar r_rainOcclusion("r_rainOcclusion", "Shelter occlusion: surfaces under static cover stay dry in rain/snow", true, false, true);
+	HVar r_rainOcclusionExtent("r_rainOcclusionExtent", "Half-extent in metres of the rain occlusion map around the camera", 96.0f, 16.0f, 512.0f);
+	HVar r_rainOcclusionRefresh("r_rainOcclusionRefresh", "Seconds between rain occlusion map refreshes (recentre also refreshes)", 2.0f, 0.1f, 30.0f);
+	HVar r_weatherSurfaceDebug("r_weatherSurfaceDebug", "Log the uploaded weather surface params once a second", false, false, true);
+
+	// Snow footprints (Phase 3, Part B). A small top-down map, camera-following
+	// and texel-snapped like the occlusion map but a COLOUR R8 target that is
+	// cleared and fully re-stamped each frame from a world-anchored ring buffer
+	// (so recentre is free - no persistence/reprojection). Deliberately tighter
+	// than the occlusion map: prints need crispness, not reach.
+	constexpr uint32_t kSnowFootprintMapSize = 1024u;
+	constexpr float    kSnowFootprintExtent  = 16.0f; // half-extent m (~3.1 cm texels)
+	HVar r_snowFootprintStrength("r_snowFootprintStrength", "Fraction of the local snow depth a full-depth footprint removes", 0.7f, 0.0f, 1.0f);
+	HVar r_snowFootprintDebugView("r_snowFootprintDebugView", "Blit the snow footprint deformation map to screen", false, false, true);
+	HVar r_snowFootprintDebugEmit("r_snowFootprintDebugEmit", "Emit a debug footprint at the camera each second", false, false, true);
+
+	// Dust/sand accumulation textures (M_SandDust.hmat) - real sand albedo +
+	// normal sampled by ApplyDustAccumulation, world-tiled at this scale.
+	HVar r_dustTiling("r_dustTiling", "World tiling scale for the sand/dust texture (cycles per metre)", 0.35f, 0.02f, 4.0f);
+
+	// Slice 5: the sun whose cascades RenderTransparent binds at t15..t20. One
+	// function shared by the g_taaParams.z packing and the bind block so the
+	// flag and the binds can never disagree - a set flag with nothing bound
+	// reads all-zero cascade maps as "fully shadowed" and would black out the
+	// sun on every transparent surface. Caller enforces the main-camera check
+	// (the cascades are fit to the main view, same reasoning as
+	// clusterForwardActive).
+	static DirectionalLight* FindTransparentShadowSun(Scene* scene)
+	{
+		if (!r_transparentShadows._val.b || scene == nullptr)
+			return nullptr;
+
+		std::vector<DirectionalLight*> suns;
+		if (scene->GetComponents<DirectionalLight>(suns) == false)
+			return nullptr;
+
+		for (auto* sun : suns)
+		{
+			if (sun->GetShadowMap(0) != nullptr)
+				return sun;
+		}
+
+		return nullptr;
+	}
+
+		HVar r_clusterFog("r_clusterFog", "Froxel volumetrics consume the cluster lists for unshadowed lights", true, false, true);
+		HVar r_clusterApplyDebug("r_clusterApplyDebug", "Clustered apply debug: 1=flood 2=count 3=first light", (int32_t)0, (int32_t)0, (int32_t)3);
+
+	HVar r_ssrTemporalJitter("r_ssrTemporalJitter", "Rotate SSR cone samples per frame so NRD's temporal accumulation integrates the lobe", true, false, true);
+
+	HVar r_ssrInScreenFallback("r_ssrInScreenFallback", "Use water's last-in-screen sample when the specular march gives up (bright but positionally wrong)", true, false, true);
+
+	// Declared in ReflectionProbeComponent.cpp - the probe dumps the rig camera's
+	// render target and each downsampled face; this file dumps the beauty/gbuffer
+	// they came from, so one run covers the whole chain.
+	extern HVar r_iblProbeDumpCapture;
+
+	// Declared in DiffuseGI.cpp.
+	extern HVar r_giEnable;
+
+	// Structural GI compose: give GI ownership of part of the ambient budget
+	// instead of stacking it as a third additive fill on top of the flat
+	// albedo*ambientLight ambient + the IBL sky diffuse (both of which already
+	// fill shadows, leaving GI's small add invisible - and auto-exposure then
+	// normalizes away what remains). Handoff: the deferred pass DROPS this
+	// fraction of the flat ambient when GI is on; GI's composite replaces it
+	// with structured bounce. SkyOcclusion: the remaining flat ambient and the
+	// sky SH diffuse are darkened by the GI voxel occlusion (bilateral-blurred
+	// AO, t22), so interiors/underpasses lose sky light they cannot see.
+	// Darkening survives exposure adaptation; a flat additive lift does not.
+	HVar r_giAmbientHandoff("r_giAmbientHandoff", "Fraction of the flat ambient handed to GI when GI is enabled (0 = legacy stacked-ambient behaviour)", 0.65f, 0.0f, 1.0f);
+	HVar r_giSkyOcclusion("r_giSkyOcclusion", "GI-occlusion strength on the flat ambient + IBL sky diffuse (darkens sky-blocked areas)", 0.6f, 0.0f, 1.0f);
+	// The environment SPECULAR term has no occlusion either - indoors every
+	// matte surface reflects full sky (the blue wash in window rooms). Occlude
+	// the env-spec FALLBACK by the same GI voxel AO, in whichever pass owns it
+	// (deferred, or the SSR resolve's (1-confidence) fallback). The screen-
+	// traced SSR part is real scene light and stays untouched, and the
+	// resolve's energy-conservation subtraction is scaled to match the reduced
+	// addition so the base layer never loses more than the env term added.
+	HVar r_giSpecOcclusion("r_giSpecOcclusion", "GI-occlusion strength on the environment specular fallback (kills the indoor sky-reflection wash)", 0.6f, 0.0f, 1.0f);
+
+	// Re-bake every probe in the scene. A probe only requests a capture on
+	// deserialize, so without this the sole way to retry one is to reload the
+	// project - which is a minute per iteration when you're bisecting a capture
+	// bug. Self-clearing: set it, the next frame requests the captures.
+	HVar r_iblProbeRecapture("r_iblProbeRecapture", "Request a fresh 6-face capture for every reflection probe in the scene", false, false, true);
+
+	// Sign applied to the velocity buffer's Y when TAA reprojects history. -1 is
+	// mathematically correct (CalcVelocity emits a clip-space +y-up delta, texcoords are
+	// y-down) and matches what Streamline and NRD do with the same buffer, but it ghosts
+	// vertically in practice unless r_taaVarianceGamma is retuned with it. Defaults to the
+	// engine's long-standing +1.
+	HVar r_taaVelocityYSign("r_taaVelocityYSign", "Y sign for TAA history reprojection: 1 = legacy, -1 = clip-space-correct", 1.0f, -1.0f, 1.0f);
 	HVar r_shadowNearClip("r_shadowNearClip", "How much clipping offset to apply to directional lights, larger scenes typically require a higher value", 150.0f, -1000.0f, 1000.0f);
 	HVar r_colourFilter("r_colourFilter", "The filter colour to use for colour grading", math::Vector3(1.00f, 0.98f, 0.97f), math::Vector3(0.0f), math::Vector3(1.0f));
 	HVar r_shadowSamples("r_shadowSamples", "How many samples to use in shadow map filtering", 32, 2, 128);
@@ -158,11 +625,11 @@ namespace HexEngine
 	// on grazing-angle geometry (notably volumetric-terrain slopes at mid-
 	// depth) adjacent pixels disagree about whether the ray enters the
 	// terrain, and TAA can't fully reconcile that frame-to-frame - visible
-	// flicker on the slope. Re-enabling needs a TAA-friendly noise source
-	// (e.g. blue noise indexed by world position or frame-stable jitter)
-	// and probably a distance fade so the cost+artifact concentrate near the
-	// camera where contact shadows actually add value.
-	HVar r_contactShadows("r_contactShadows", "Enable screen-space contact shadows on the directional light", false, false, true);
+	// flicker on the slope. Since addressed (ShadowUtils::ScreenSpaceContactShadow):
+	// frame-animated jitter TAA can integrate, a grazing-angle normal bias so
+	// slopes don't self-occlude, a depth-proportional blocker lower bound, and
+	// the distance fade below - so the feature defaults ON.
+	HVar r_contactShadows("r_contactShadows", "Enable screen-space contact shadows on the directional light", true, false, true);
 	HVar r_contactShadowSteps("r_contactShadowSteps", "Ray-march step count for contact shadows", 12, 4, 64);
 	HVar r_contactShadowLength("r_contactShadowLength", "Maximum world-space length of the contact shadow ray (metres)", 1.5f, 0.05f, 32.0f);
 	HVar r_contactShadowThickness("r_contactShadowThickness", "Thickness window for blocker acceptance (metres) - prevents see-through behind walls", 0.2f, 0.01f, 5.0f);
@@ -187,14 +654,18 @@ namespace HexEngine
 	// early-out skips the gather for sharp pixels too, so the cost is one
 	// texture read on the dominant in-focus region).
 	HVar r_dof("r_dof", "Enable bokeh depth-of-field post-process", false, false, true);
-	HVar r_dofFocusDistance("r_dofFocusDistance", "Depth of the in-focus plane (metres)", 8.0f, 0.1f, 1000.0f);
-	HVar r_dofFocusRange("r_dofFocusRange", "Width of the fully-sharp band around the focus plane (metres)", 4.0f, 0.0f, 50.0f);
-	// Aperture is the strongest dial here - at 1.0 a pixel at 2x focus distance
-	// already reaches ~50% CoC, and the user wants the chunkiest blur usually
-	// concentrated on the far field only. 0.4 is a subtle photo-realistic default
-	// that gives noticeable but not overwhelming bokeh; users wanting cinema
-	// shallow-DoF should bump to 1-2.
-	HVar r_dofAperture("r_dofAperture", "Blur scale - bigger aperture = stronger out-of-focus blur", 0.4f, 0.0f, 8.0f);
+	HVar r_dofFocusDistance("r_dofFocusDistance", "Manual focus plane distance (metres); ignored when autofocus is on", 8.0f, 0.1f, 1000.0f);
+	// P4.11: physical thin-lens DoF. The Circle of Confusion is derived from a
+	// real focal length + f-stop against a 36mm full-frame sensor, so the blur
+	// matches what a camera with these settings would actually produce.
+	HVar r_dofFocalLength("r_dofFocalLength", "Lens focal length in mm (physical DoF)", 50.0f, 12.0f, 300.0f);
+	HVar r_dofFStop("r_dofFStop", "Lens f-stop / aperture number (lower = shallower DoF)", 2.8f, 1.0f, 22.0f);
+	HVar r_dofAutofocus("r_dofAutofocus", "Autofocus on the centre of the screen (else use manual focus distance)", true, false, true);
+	HVar r_dofAutofocusSpeed("r_dofAutofocusSpeed", "Autofocus adaptation rate (1/s; higher = snappier rack)", 4.0f, 0.2f, 20.0f);
+	// Legacy unitless dials, retained for scenes authored before the physical
+	// model. r_dofAperture / r_dofFocusRange are no longer read by the shader.
+	HVar r_dofAperture("r_dofAperture", "[legacy] unitless blur scale - superseded by r_dofFStop", 0.4f, 0.0f, 8.0f);
+	HVar r_dofFocusRange("r_dofFocusRange", "[legacy] fully-sharp band (m) - superseded by the physical model", 4.0f, 0.0f, 50.0f);
 	// maxBlur is the pixel radius at coc=1.0 (which the hyperbolic curve never
 	// quite reaches). At 1080p, 8px gives a soft photographic bokeh; 16+ is
 	// cinematic; 32+ is dreamy/extreme. The previous 24 default combined with
@@ -206,7 +677,11 @@ namespace HexEngine
 	// surface normal + weather puddleAmount. Off by default to preserve existing
 	// scene look; ticking the HVar (or future Settings UI toggle) starts painting
 	// puddles wherever the surface is flat enough and the noise mask matches.
-	HVar r_autoPuddles("r_autoPuddles", "Enable procedural puddles driven by weather + surface normal + noise", false, false, true);
+	// Default ON since Phase 3 slice 4: the puddle mask now composes with
+	// universal wetness, shelter occlusion, and rain ripples - the full
+	// wet-street stack - and costs nothing in dry weather (the shader
+	// early-outs on puddleAmount 0).
+	HVar r_autoPuddles("r_autoPuddles", "Enable procedural puddles driven by weather + surface normal + noise", true, false, true);
 	// Larger scale = bigger, sparser puddles. 5 m gives kerb-scale puddles; 15 m
 	// gives big floods. Picks the world-space size of each noise cell.
 	HVar r_autoPuddlesScale("r_autoPuddlesScale", "World-space noise scale for procedural puddles (metres per cell)", 5.0f, 0.5f, 50.0f);
@@ -287,8 +762,14 @@ namespace HexEngine
 			math::Vector4 params4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
 			math::Vector4 params5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
 			math::Vector4 windDirection; // xyz=windDir, w=qualityPreset
-			math::Vector4 windOffset; // xyz=accumulated wind offset, w=reserved
+			math::Vector4 windOffset; // xyz=accumulated wind offset, w=atmosphere LUTs valid (1/0)
 			math::Vector4 marchParams; // x=viewSteps, y=lightSteps, z=reserved, w=reserved
+			// Cached cloud shadow map placement (mirrors CloudCommon.shader).
+			math::Vector4 shadowMapOrigin; // xyz = centre on the cloud base plane, w = half extent (0 = no map)
+			math::Vector4 shadowMapAxisX;  // xyz = +U axis (world)
+			math::Vector4 shadowMapAxisZ;  // xyz = +V axis (world)
+			math::Vector4 shadowMapSun;    // xyz = sun direction (surface -> sun), w = shadow strength
+			math::Vector4 params6;         // x = cloud type bias (0 stratus .. 1 cumulus), y/z/w reserved
 		};
 
 		static int32_t GetCloudQualityPreset()
@@ -305,7 +786,9 @@ namespace HexEngine
 				scale = 0.75f;
 				break;
 			case 2:
-				scale = 1.35f;
+				// Cinematic tier (S5): 1.35 -> 1.6. Defaults stay modest;
+				// tier 2 spends the extra steps the 2 km towers deserve.
+				scale = 1.6f;
 				break;
 			case 1:
 			default:
@@ -383,7 +866,7 @@ namespace HexEngine
 				r_cloudViewAbsorption._val.f32,
 				r_cloudAmbientStrength._val.f32,
 				r_cloudShadowFloor._val.f32,
-				1.55f);
+				r_cloudPhaseBoost._val.f32);
 			constants.params4 = math::Vector4(
 				r_cloudSilverLiningStrength._val.f32,
 				r_cloudSilverLiningExponent._val.f32,
@@ -395,12 +878,61 @@ namespace HexEngine
 				r_cloudDirectionalDiffuse._val.f32,
 				r_cloudAmbientOcclusion._val.f32);
 			constants.windDirection = math::Vector4(windDir.x, windDir.y, windDir.z, (float)GetCloudQualityPreset());
-			constants.windOffset = math::Vector4(accumulatedWindOffset.x, accumulatedWindOffset.y, accumulatedWindOffset.z, 0.0f);
+			// windOffset.w = "atmosphere LUTs valid" flag (S3): when 1, the
+			// cloud shader lights from the Hillaire transmittance/sky-view
+			// LUTs (bound at t9/t10 by RenderVolumetricClouds) so cloud sunset
+			// hue matches the sky's; when 0 (LUTs off / D3D12 / first frame)
+			// it falls back to the legacy analytic AtmospherePhysical path.
+			const bool atmosphereLutsValid =
+				r_atmosphereLUTs._val.b &&
+				g_pEnv->_atmosphereLUTs != nullptr &&
+				g_pEnv->_atmosphereLUTs->GetTransmittanceLUT() != nullptr &&
+				g_pEnv->_atmosphereLUTs->GetSkyViewLUT() != nullptr;
+			constants.windOffset = math::Vector4(accumulatedWindOffset.x, accumulatedWindOffset.y, accumulatedWindOffset.z,
+				atmosphereLutsValid ? 1.0f : 0.0f);
 			constants.marchParams = math::Vector4(
 				(float)GetCloudEffectiveSteps(r_cloudViewSteps._val.f32, 8, 256),
 				(float)GetCloudEffectiveSteps(r_cloudLightSteps._val.f32, 2, 64),
 				(float)GetCloudEffectiveSteps((float)r_cloudShadowSteps._val.i32, 1, 32),
 				(r_cloudEnable._val.b && r_cloudCastShadows._val.b) ? r_cloudShadowStrength._val.f32 : 0.0f);
+
+			// Shadow map placement: a square of the cloud base plane centred on
+			// the camera (snapped to the texel grid so the map doesn't swim as
+			// the camera moves), axis-aligned in world XZ. The sun direction is
+			// baked in because the map integrates along it.
+			constants.shadowMapOrigin = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			constants.shadowMapAxisX = math::Vector4(1.0f, 0.0f, 0.0f, 0.0f);
+			constants.shadowMapAxisZ = math::Vector4(0.0f, 0.0f, 1.0f, 0.0f);
+			constants.shadowMapSun = math::Vector4(0.0f, 1.0f, 0.0f, 0.0f);
+			{
+				DirectionalLight* sun = nullptr;
+				if (g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr)
+				{
+					if (auto scene = g_pEnv->_sceneManager->GetCurrentScene(); scene != nullptr)
+						sun = scene->GetSunLight();
+				}
+				math::Vector3 sunDir = math::Vector3::Up;
+				if (sun != nullptr && sun->GetEntity() != nullptr)
+				{
+					if (auto* tf = sun->GetEntity()->GetComponent<Transform>())
+					{
+						sunDir = -tf->GetForward();
+						if (sunDir.LengthSquared() > 1e-6f)
+							sunDir.Normalize();
+					}
+				}
+				const float strength = constants.marchParams.w;
+				const float halfExtent = std::max(r_cloudShadowMapExtent._val.f32, 1.0f);
+				const float texel = (2.0f * halfExtent) / (float)std::max(r_cloudShadowMapSize._val.i32, 1);
+				const math::Vector3 cameraPos = camera->GetEntity() ? camera->GetEntity()->GetPosition() : math::Vector3::Zero;
+				const float cx = std::floor(cameraPos.x / texel) * texel;
+				const float cz = std::floor(cameraPos.z / texel) * texel;
+				const bool valid = strength > 0.0001f && sunDir.y > 0.02f;
+				constants.shadowMapOrigin = math::Vector4(cx, boundsMin.y, cz, valid ? halfExtent : 0.0f);
+				constants.shadowMapSun = math::Vector4(sunDir.x, sunDir.y, sunDir.z, strength);
+			}
+
+			constants.params6 = math::Vector4(r_cloudType._val.f32, 0.0f, 0.0f, 0.0f);
 
 			return true;
 		}
@@ -512,12 +1044,88 @@ namespace HexEngine
 	// 0=Reinhard 1=ReinhardExtended 2=ACES Fitted (default) 3=Uncharted 2 / Hable
 	// 4=Lottes 5=Linear (debug pass-through). Affects both SDR Tonemap.hcs and
 	// HDR TonemapHDR.hcs base curve.
-	HVar r_tonemapOperator("r_tonemapOperator", "Tonemap operator: 0=Reinhard 1=ReinhardExt 2=ACES 3=Uncharted2 4=Lottes 5=Linear", 2, 0, 5);
+	HVar r_tonemapOperator("r_tonemapOperator", "Tonemap operator: 0=Reinhard 1=ReinhardExt 2=ACES 3=Uncharted2 4=Lottes 5=Linear 6=AgX", 2, 0, 6);
+	// P4.6 log-space grading additions. White balance in Kelvin (6500 =
+	// neutral D65; higher = warmer image, matching the photographic slider
+	// convention) + green/magenta tint. CDL lift/gamma/gain are per-channel:
+	// gain scales, lift raises the floor, gamma bends the mids.
+	HVar r_whiteBalanceTemp("r_whiteBalanceTemp", "White balance colour temperature in Kelvin (6500 = neutral, higher = warmer image)", 6500.0f, 1500.0f, 15000.0f);
+	HVar r_whiteBalanceTint("r_whiteBalanceTint", "White balance green-magenta tint (0 = neutral, positive = magenta)", 0.0f, -1.0f, 1.0f);
+	HVar r_cdlLift("r_cdlLift", "Colour grade lift (per-channel black offset, 0 = neutral)", math::Vector3(0.0f, 0.0f, 0.0f), math::Vector3(-0.5f, -0.5f, -0.5f), math::Vector3(0.5f, 0.5f, 0.5f));
+	HVar r_cdlGamma("r_cdlGamma", "Colour grade gamma (per-channel midtone power, 1 = neutral)", math::Vector3(1.0f, 1.0f, 1.0f), math::Vector3(0.25f, 0.25f, 0.25f), math::Vector3(4.0f, 4.0f, 4.0f));
+	HVar r_cdlGain("r_cdlGain", "Colour grade gain (per-channel scale, 1 = neutral)", math::Vector3(1.0f, 1.0f, 1.0f), math::Vector3(0.0f, 0.0f, 0.0f), math::Vector3(4.0f, 4.0f, 4.0f));
+	// P4.7 colour LUT: drop a .cube file at Bin/.../Data/ColourGrade.cube and
+	// it hot-loads within ~2s (no string cvars in this engine - the path is
+	// fixed, see ColourLut.cpp). Strength lerps between ungraded and graded.
+	HVar r_colourLutStrength("r_colourLutStrength", "3D colour LUT blend strength (LUT auto-loads from Data/ColourGrade.cube)", 1.0f, 0.0f, 1.0f);
+	// P4.8 vignette: cvar-driven (was compiled into Vignette.shader). Subtle
+	// by default per the Phase 4 scope decision: -0.35 amount vs the old
+	// hardcoded -0.50.
+	HVar r_vignette("r_vignette", "Lens vignette on/off", true, false, true);
+	HVar r_vignetteAmount("r_vignetteAmount", "Vignette strength (negative darkens edges, 0 = off)", -0.35f, -2.0f, 1.0f);
+	HVar r_vignetteRadius("r_vignetteRadius", "Vignette radius (lower = reaches further into frame)", 1.0f, 0.25f, 3.0f);
+	HVar r_vignetteSlope("r_vignetteSlope", "Vignette falloff slope (higher = tighter edge)", 8.0f, 2.0f, 16.0f);
+	HVar r_vignetteRatio("r_vignetteRatio", "Vignette aspect ratio (1 = round, >1 = wider)", 1.0f, 0.15f, 6.0f);
 	HVar r_interpolate("r_interpolate", "Interpolates entities that have a mesh component and have interpolation enabled", true, false, true);
 	HVar r_ssr("r_ssr", "Screen-space reflections", true, false, true);
+	// SSR + NRD were ~14 ms of a ~30 ms frame at 4K (user-measured on the
+	// street view, 2026-07-30) - the single largest pass. The MARCH runs at
+	// half resolution (4x fewer rays); the DENOISER stays at full resolution
+	// behind a depth-aware upsample of the march outputs (SSRUpsample.shader).
+	// NRD at half res made reflections swim under camera panning - four
+	// fixes (deterministic guide decimation, boundary-snapped gbuffer reads,
+	// resolution-scaled RELAX radii, depth-aware resolve upsample) improved
+	// half-res correctness but only moving the denoiser back to full res
+	// resolved it (bisect: raw half-res SSR never swam). Measured: 31 fps
+	// full chain -> 51 all-half (swimming) -> 43 half-march/full-denoise,
+	// motion quality indistinguishable from full res. USER-VERIFIED.
+	HVar r_ssrHalfRes("r_ssrHalfRes", "March SSR at half resolution (denoise + resolve stay full res)", true, false, true);
 	HVar r_ssrDenoise("r_ssrDenoise", "Run NRD on SSR output (0 = passthrough raw SSR, 1 = denoise)", true, false, true);
+	// P4.4: transparent surfaces write motion vectors (velocity RT bound at MRT
+	// slot 4 during the transparent pass). Off restores the old behaviour where
+	// water/glass pixels carry the OPAQUE-behind velocity - useful for A/B when
+	// chasing TAA ghosting regressions.
+	HVar r_transparentVelocity("r_transparentVelocity", "Transparent pass writes motion vectors (water waves resolve correctly under TAA)", true, false, true);
+	// P4.5 motion blur (McGuire tile-max/gather). Shutter 0.5 = the 180-degree
+	// film convention: the virtual shutter is open half the frame, so blur
+	// spans half the per-frame motion. Runs after TAA at render resolution.
+	HVar r_motionBlur("r_motionBlur", "Per-pixel camera + object motion blur", true, false, true);
+	HVar r_motionBlurShutter("r_motionBlurShutter", "Shutter fraction (0.5 = 180-degree film shutter)", 0.5f, 0.0f, 1.0f);
+	HVar r_motionBlurMaxPx("r_motionBlurMaxPx", "Maximum blur radius in pixels", 32.0f, 4.0f, 128.0f);
+	HVar r_motionBlurSamples("r_motionBlurSamples", "Gather taps along the dominant velocity", (int32_t)15, (int32_t)5, (int32_t)32);
+	// P4.9 film grain + output dither. Grain subtle by default; dither is
+	// always on inside the shader (it only moves the bottom bit and kills
+	// 8-bit gradient banding).
+	HVar r_filmGrain("r_filmGrain", "Film grain intensity (0 = off)", 0.03f, 0.0f, 0.5f);
+	HVar r_filmGrainSize("r_filmGrainSize", "Film grain size (larger = coarser grain)", 1.0f, 0.5f, 4.0f);
+	// P4.10 CAS contrast-adaptive sharpen, applied right after the TAA
+	// resolve. Off when DLSS is active (it sharpens itself).
+	HVar r_sharpen("r_sharpen", "Contrast-adaptive sharpen amount after TAA (0 = off)", 0.35f, 0.0f, 1.0f);
+	// P4.12 lens flare / dirt / streak, generated from the bloom chain in the
+	// composite. Subtle by default; dirt + anamorphic streak are opt-in (they
+	// read as stylised). All 0 = the composite skips the whole block.
+	HVar r_lensFlare("r_lensFlare", "Lens flare / ghost intensity from bright sources (0 = off)", 0.25f, 0.0f, 3.0f);
+	HVar r_lensFlareDispersal("r_lensFlareDispersal", "Ghost spacing along the screen-centre axis", 0.35f, 0.05f, 1.0f);
+	HVar r_lensDirt("r_lensDirt", "Lens-dirt intensity (procedural smudges lit by the flare)", 0.0f, 0.0f, 4.0f);
+	HVar r_lensStreak("r_lensStreak", "Anamorphic horizontal streak intensity (0 = off)", 0.0f, 0.0f, 2.0f);
 	HVar r_performantShadowMaps("r_performantShadowMaps", "Improve shadow map performance, may introduce some slight shadow stuttering", false, false, true);
-	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 1.0f, 0.0f, 10.0f);
+	// P4.8: default 1.0 -> 0.35 (user scope decision: ON but SUBTLE). The
+	// shader also squares the radial falloff now, so the centre of frame is
+	// clean and the fringe concentrates in the corners.
+	HVar r_chromaticAbberation("r_chromaticAbberation", "How much chromatic abberation to apply", 0.35f, 0.0f, 10.0f);
+	HVar r_lensDrips("r_lensDrips", "Screen-space rain droplets on the camera lens while precipitation falls", true, false, true);
+
+	// Wetness drying: wetting tracks the weather target directly (the weather
+	// controller already ramps wetness IN SYNC with the fog/overcast over the
+	// preset transition, so re-lagging the rise made surfaces darken before the
+	// fog compensated - a dark pop). Only the DRYING is lagged, so a shower
+	// leaves streets wet that dry slowly afterwards.
+	HVar r_wetnessAccumulation("r_wetnessAccumulation", "Ease surfaces wet/dry toward the weather (slow rise trails the fog; slow dry keeps streets wet)", true, false, true);
+	// Slow rise so the wet response (gloss + darkening) trails the fog buildup
+	// instead of dipping luminance ahead of it (the dark pop on rain onset).
+	HVar r_wetnessRiseRate("r_wetnessRiseRate", "How fast surfaces wet up under rain (fraction/sec; low = eases in behind the fog)", 0.25f, 0.01f, 5.0f);
+	HVar r_wetnessFallRate("r_wetnessFallRate", "How fast surfaces dry after rain (fraction/sec)", 0.06f, 0.005f, 5.0f);
+	HVar r_puddleDryRate("r_puddleDryRate", "How fast puddles dry after rain (fraction/sec)", 0.045f, 0.002f, 5.0f);
 	HVar r_profileDisableDirectionalLights("r_profileDisableDirectionalLights", "Disable directional light rendering for profiling", false, false, true);
 	HVar r_profileDisablePointLights("r_profileDisablePointLights", "Disable point light rendering for profiling", false, false, true);
 	HVar r_profileDisableSpotLights("r_profileDisableSpotLights", "Disable spot light rendering for profiling", false, false, true);
@@ -589,8 +1197,11 @@ namespace HexEngine
 		SAFE_DELETE(_fogBuffer);
 		SAFE_DELETE(_volumetricLightingBuffer);
 		SAFE_DELETE(_cloudsBuffer);
-		SAFE_DELETE(_atmosphereRT);
-		SAFE_DELETE(_waterAccumulationRT);
+		SAFE_DELETE(_cloudHistory[0]);
+		SAFE_DELETE(_cloudHistory[1]);
+		SAFE_DELETE(_sunShaftsRTA);
+		SAFE_DELETE(_sunShaftsRTB);
+		_cloudHistoryValid = false;
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_particleRT);
 		SAFE_DELETE(_ssrDiffuseTexture);
@@ -601,6 +1212,8 @@ namespace HexEngine
 		// Position-copy RT shadows the GBuffer position layout (RGBA32F).
 		// Recreated below in CreateRenderTargets at the new dimensions.
 		SAFE_DELETE(_decalPositionCopy);
+		SAFE_DELETE(_mbTileMaxRT);
+		SAFE_DELETE(_mbNeighborMaxRT);
 
 		SAFE_DELETE(_bloomEffect);
 
@@ -610,6 +1223,10 @@ namespace HexEngine
 
 		CreateRenderTargets(width, height);
 		_gpuVisibilityCulling.Resize((uint32_t)width, (uint32_t)height);
+
+		// The history texture was just destroyed and recreated at the new size, so whatever
+		// it now contains is uninitialised. Blend from the current frame for one frame.
+		_taa.ResetHistory();
 	}
 
 	void SceneRenderer::Destroy()
@@ -617,6 +1234,17 @@ namespace HexEngine
 		std::unique_lock lock(_lock);
 
 		_diffuseGi.Destroy();
+		_clusteredLights.Destroy();
+		_shadowAtlas.Destroy();
+		SAFE_DELETE(_shadowAtlasDebugTex);
+		if (_rainOcclusionMap != nullptr)
+		{
+			_rainOcclusionMap->Destroy();
+			delete _rainOcclusionMap;
+			_rainOcclusionMap = nullptr;
+		}
+		_rainOcclusionPVS.reset();
+		_rainOcclusionValid = false;
 		_gbuffer.Destroy();
 
 		//SAFE_DELETE(_clouds);
@@ -627,8 +1255,11 @@ namespace HexEngine
 		SAFE_DELETE(_fogBuffer);
 		SAFE_DELETE(_volumetricLightingBuffer);
 		SAFE_DELETE(_cloudsBuffer);
-		SAFE_DELETE(_atmosphereRT);
-		SAFE_DELETE(_waterAccumulationRT);
+		SAFE_DELETE(_cloudHistory[0]);
+		SAFE_DELETE(_cloudHistory[1]);
+		SAFE_DELETE(_sunShaftsRTA);
+		SAFE_DELETE(_sunShaftsRTB);
+		_cloudHistoryValid = false;
 		SAFE_DELETE(_lightAccumulationBuffer);
 		SAFE_DELETE(_pointLightBuffer);
 		SAFE_DELETE(_particleRT);
@@ -640,11 +1271,17 @@ namespace HexEngine
 		SAFE_DELETE(_waterRT);
 		SAFE_DELETE(_cloudShapeNoise);
 		SAFE_DELETE(_cloudDetailNoise);
+		SAFE_DELETE(_cloudShadowMap);
 		SAFE_DELETE(_cloudConstantBuffer);
+		SAFE_DELETE(_cloudTemporalBuffer);
 		SAFE_DELETE(_forwardLightsBuffer);
 		SAFE_DELETE(_subsurfaceIntermediateRT);
 		SAFE_DELETE(_subsurfaceParamsBuffer);
 		SAFE_DELETE(_bokehDoFParamsBuffer);
+		if (_autofocusStaging != nullptr) { _autofocusStaging->Release(); _autofocusStaging = nullptr; _autofocusPending = false; }
+		SAFE_DELETE(_mbTileMaxRT);
+		SAFE_DELETE(_mbNeighborMaxRT);
+		SAFE_DELETE(_mbParamsBuffer);
 		SAFE_DELETE(_decalConstantsBuffer);
 		SAFE_DELETE(_decalPositionCopy);
 		SAFE_DELETE(_decalCubeVB);
@@ -655,11 +1292,17 @@ namespace HexEngine
 		SAFE_DELETE(_outlineJfaB);
 		SAFE_DELETE(_outlineGlowRT);
 		SAFE_DELETE(_outlineParamsBuffer);
+		SAFE_DELETE(_sunShaftsParamsBuffer);
+		SAFE_DELETE(_iblSkyEnvMap);
+		SAFE_DELETE(_iblSkySH);
+		SAFE_DELETE(_dfgLut);
 		SAFE_DELETE(_autoPuddlesQuadIB);
+		SAFE_DELETE(_snowFootprintMap);
+		SAFE_DELETE(_snowFootprintBuffer);
+		SAFE_DELETE(_snowQuadVB);
+		SAFE_DELETE(_snowQuadIB);
 		_gpuVisibilityCulling.Destroy();
 		_autoExposure.Destroy();
-
-		//SAFE_DELETE(_waterDSV);
 
 		//SAFE_DELETE(_volumetricBlur);
 		//SAFE_DELETE(_waterBlur);
@@ -670,23 +1313,39 @@ namespace HexEngine
 
 	void SceneRenderer::CreateShaders()
 	{
-		_compositionShader			= IShader::Create("EngineData.Shaders/Deferred.hcs");	
+		_compositionShader			= IShader::Create("EngineData.Shaders/Deferred.hcs");
 		_fxaa						= IShader::Create("EngineData.Shaders/FXAA.hcs");
+		_mbTileMaxShader			= IShader::Create("EngineData.Shaders/MotionBlurTileMax.hcs");
+		_mbNeighborMaxShader		= IShader::Create("EngineData.Shaders/MotionBlurNeighborMax.hcs");
+		_mbGatherShader				= IShader::Create("EngineData.Shaders/MotionBlurGather.hcs");
+		_casShader					= IShader::Create("EngineData.Shaders/CAS.hcs");
 		_fogEffect					= IShader::Create("EngineData.Shaders/PostFog.hcs");
 		_volumetricLighting			= IShader::Create("EngineData.Shaders/VolumetricLighting.hcs");
 		_volumetricClouds			= IShader::Create("EngineData.Shaders/VolumetricClouds.hcs");
+		_cloudShadowMapShader		= IShader::Create("EngineData.Shaders/CloudShadowMap.hcs");
+		_cloudTemporalShader		= IShader::Create("EngineData.Shaders/CloudTemporal.hcs");
 		_bilateralUpsample			= IShader::Create("EngineData.Shaders/BilateralUpsample.hcs");
 		_pointLightShader			= IShader::Create("EngineData.Shaders/PointLight.hcs");
 		_spotLightShader			= IShader::Create("EngineData.Shaders/SpotLight.hcs");
 		_ssrShader					= IShader::Create("EngineData.Shaders/SSR.hcs");
 		_vignetteShader				= IShader::Create("EngineData.Shaders/Vignette.hcs");
 		_chromaticAberrationShader	= IShader::Create("EngineData.Shaders/ChromaticAbberation.hcs");
+		_lensDripsShader			= IShader::Create("EngineData.Shaders/LensDrips.hcs");
 		_colourGradingShader		= IShader::Create("EngineData.Shaders/ColourGrade.hcs");
 		_ssrResolve					= IShader::Create("EngineData.Shaders/SSRResolve.hcs");
+		_ssrUpsampleShader			= IShader::Create("EngineData.Shaders/SSRUpsample.hcs");
+
+		_clusteredLights.Create();
+		if (!_shadowAtlas.Create())
+			LOG_CRIT("ShadowAtlas::Create failed - r_shadowAtlas will render no local shadows");
+		_clusterApplyShader = IShader::Create("EngineData.Shaders/ClusterLightApply.hcs");
+		_iblSkyEnvShader			= IShader::Create("EngineData.Shaders/SkyEnvMap.hcs");
+		_probeEnvShader				= IShader::Create("EngineData.Shaders/ProbeEnvMap.hcs");
+		_envSHShader				= IShader::Create("EngineData.Shaders/EnvMapSH.hcs");
+		_dfgLutShader				= IShader::Create("EngineData.Shaders/DFGLut.hcs");
 		_tonemapShader				= IShader::Create("EngineData.Shaders/Tonemap.hcs");
 		_hdrOutputShader			= IShader::Create("EngineData.Shaders/TonemapHDR.hcs");
 		_basicDenoise				= IShader::Create("EngineData.Shaders/BasicDenoise.hcs");
-		_waterBlitEffect			= IShader::Create("EngineData.Shaders/WaterBlit.hcs");
 		_fullScreenQuadShader		= IShader::Create("EngineData.Shaders/FullScreenQuad.hcs");
 		_subsurfaceShader			= IShader::Create("EngineData.Shaders/SubsurfaceScattering.hcs");
 		_bokehDoFShader				= IShader::Create("EngineData.Shaders/BokehDoF.hcs");
@@ -727,11 +1386,20 @@ namespace HexEngine
 		// Interaction outline glow (jump-flood SDF) shaders + params cbuffer at
 		// b5. Layout: float4 colour + (thickness, jumpStep, pad, pad) = 32 bytes.
 		_outlineSeedShader      = IShader::Create("EngineData.Shaders/OutlineSeed.hcs");
+		_outlineSeedAnimatedShader = IShader::Create("EngineData.Shaders/OutlineSeedAnimated.hcs");
 		_outlineJfaShader       = IShader::Create("EngineData.Shaders/OutlineJFA.hcs");
 		_outlineCompositeShader = IShader::Create("EngineData.Shaders/OutlineComposite.hcs");
 		if (_outlineParamsBuffer == nullptr)
 		{
 			_outlineParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4) * 2);
+		}
+
+		// Sun shafts (S7): mask + radial blur/composite shaders, params at b6.
+		_sunShaftsMaskShader = IShader::Create("EngineData.Shaders/SunShaftsMask.hcs");
+		_sunShaftsBlurShader = IShader::Create("EngineData.Shaders/SunShaftsBlur.hcs");
+		if (_sunShaftsParamsBuffer == nullptr)
+		{
+			_sunShaftsParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4) * 2);
 		}
 
 		// Fullscreen quad in clip space. The auto-puddle shader is direct-clip-
@@ -820,7 +1488,6 @@ namespace HexEngine
 		}
 
 		//_volumetricBlur = new BlurEffect(_volumetricLightingBuffer, BlurType::Gaussian, 2);
-		//_waterBlur = new BlurEffect(_waterAccumulationRT, BlurType::Gaussian, 2);
 
 		_blueNoise					= ITexture2D::Create("EngineData.Textures/LDR_RGBA_0.png");
 
@@ -936,71 +1603,7 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
 
-		_ssrDiffuseTexture = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,
-			height,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_ssrDiffuseTexture->SetDebugName("_ssrDiffuseTexture");
-
-		_ssrDiffuseHitInfo = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,
-			height,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_ssrDiffuseHitInfo->SetDebugName("_ssrDiffuseHitInfo");
-
-		_ssrTexture = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,// / 2,
-			height,// / 2,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_ssrTexture->SetDebugName("_ssrSpecularTexture");
-
-		_ssrHitInfo = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,// / 2,
-			height,// / 2,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_ssrHitInfo->SetDebugName("_ssrSpecularHitInfo");
-
-		_ssrHistory = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
-		_ssrResolved = g_pEnv->_graphicsDevice->CreateTexture(_ssrTexture);
-
-		_ssrHistory->SetDebugName("_ssrHistory");
-		_ssrResolved->SetDebugName("_ssrResolved");
+		CreateSsrTargets(width, height);
 
 		// Position-copy RT for the decal pass. Same R32G32B32A32_FLOAT format as
 		// GBuffer position so a straight CopyTo works. MSAA disabled - decals
@@ -1047,31 +1650,6 @@ namespace HexEngine
 			/*MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS :*/ D3D11_RTV_DIMENSION_TEXTURE2D,
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			/*MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS :*/ D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		_waterAccumulationRT = g_pEnv->_graphicsDevice->CreateTexture2D(
-			(int32_t)((float)width * r_waterResolution._val.f32),
-			(int32_t)((float)height * r_waterResolution._val.f32),
-			DXGI_FORMAT_R8G8B8A8_UNORM,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
-
-		/*_waterDSV = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width * r_waterResolution._val.f32,
-			height * r_waterResolution._val.f32,
-			DXGI_FORMAT_R32_TYPELESS,
-			1,
-			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_DEPTH_STENCIL,
-			0, MsaaLevel, 0,
-			D3D11_RTV_DIMENSION_UNKNOWN,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			D3D11_SRV_DIMENSION_TEXTURE2D,
-			D3D11_DSV_DIMENSION_TEXTURE2D);*/
 
 		_fogBuffer = g_pEnv->_graphicsDevice->CreateTexture2D(
 			width,
@@ -1140,23 +1718,56 @@ namespace HexEngine
 			D3D11_UAV_DIMENSION_UNKNOWN,
 			D3D11_SRV_DIMENSION_TEXTURE2D);
 
+		// Temporal history ping-pong: same size/format as the cloud buffer.
+		for (int i = 0; i < 2; ++i)
+		{
+			SAFE_DELETE(_cloudHistory[i]);
+			_cloudHistory[i] = g_pEnv->_graphicsDevice->CreateTexture2D(
+				width / 2,
+				height / 2,
+				DXGI_FORMAT_R16G16B16A16_FLOAT,
+				1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				0,
+				1,
+				0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_TEXTURE2D,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE2D);
+			if (_cloudHistory[i])
+				_cloudHistory[i]->SetDebugName(i == 0 ? "_cloudHistory0" : "_cloudHistory1");
+		}
+		_cloudHistoryValid = false;
+
 		if (_cloudsBuffer)
 		{
 			_cloudsBuffer->SetDebugName("_cloudsBuffer");
 		}
 
-		_atmosphereRT = g_pEnv->_graphicsDevice->CreateTexture2D(
-			width,
-			height,
-			BEAUTY_FORMAT,
-			1,
-			D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
-			0, MsaaLevel, 0,
-			nullptr,
-			(D3D11_CPU_ACCESS_FLAG)0,
-			MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
-			D3D11_UAV_DIMENSION_UNKNOWN,
-			MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
+		// Sun shaft half-res ping-pong (S7). R11G11B10: radiance only, no
+		// alpha needed, half the bandwidth of RGBA16F.
+		SAFE_DELETE(_sunShaftsRTA);
+		SAFE_DELETE(_sunShaftsRTB);
+		for (int i = 0; i < 2; ++i)
+		{
+			ITexture2D* rt = g_pEnv->_graphicsDevice->CreateTexture2D(
+				width / 2,
+				height / 2,
+				DXGI_FORMAT_R11G11B10_FLOAT,
+				1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				0, 1, 0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_TEXTURE2D,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				D3D11_SRV_DIMENSION_TEXTURE2D);
+			if (rt)
+				rt->SetDebugName(i == 0 ? "_sunShaftsRTA" : "_sunShaftsRTB");
+			(i == 0 ? _sunShaftsRTA : _sunShaftsRTB) = rt;
+		}
 
 		// DLSS target should be full screen
 		uint32_t backBufferWidth, backBufferHeight;
@@ -1178,7 +1789,34 @@ namespace HexEngine
 		_dlssTarget->SetDebugName("_dlssTarget");
 
 		_bloomEffect = new Bloom();
-		_bloomEffect->Create(width / 4, height / 4);
+		_bloomEffect->Create(width, height); // full res - the chain sizes itself
+
+		// P4.5 motion blur tile grids: one texel per 20px tile, R16G16 holding
+		// the dominant (scaled, clamped) velocity in texture-UV units.
+		{
+			const int32_t tileW = std::max(1, (width + 19) / 20);
+			const int32_t tileH = std::max(1, (height + 19) / 20);
+			const auto createTileRT = [&](const char* name) -> ITexture2D*
+			{
+				auto* rt = g_pEnv->_graphicsDevice->CreateTexture2D(
+					tileW, tileH,
+					DXGI_FORMAT_R16G16_FLOAT,
+					1,
+					D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+					0, 1, 0,
+					nullptr,
+					(D3D11_CPU_ACCESS_FLAG)0,
+					D3D11_RTV_DIMENSION_TEXTURE2D,
+					D3D11_UAV_DIMENSION_UNKNOWN,
+					D3D11_SRV_DIMENSION_TEXTURE2D);
+				if (rt != nullptr)
+					rt->SetDebugName(name);
+				return rt;
+			};
+			_mbTileMaxRT = createTileRT("_mbTileMax");
+			_mbNeighborMaxRT = createTileRT("_mbNeighborMax");
+		}
+
 
 		_taa.Create(_beautyRT);
 		_diffuseGi.Create(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
@@ -1224,6 +1862,22 @@ namespace HexEngine
 		if (!camera)
 			return;
 
+		// Probe capture tracing: is the rig camera actually reaching the renderer?
+		if (camera->IsEnvironmentCapture())
+		{
+			const auto& cvp = camera->GetViewport();
+			// Where the rig actually IS and is LOOKING, not just that it ran. A
+			// capture that renders a flat wash is either framing nothing or
+			// framing it from the wrong place, and those need different fixes.
+			const math::Vector3 entPos = camera->GetEntity() != nullptr
+				? camera->GetEntity()->GetWorldTM().Translation() : math::Vector3::Zero;
+			const math::Vector3 look = camera->GetLookDir();
+			LOG_INFO("RenderScene: ENV CAPTURE camera, viewport %.0fx%.0f, rt=%p, eye=(%.2f, %.2f, %.2f), look=(%.2f, %.2f, %.2f), near=%.2f far=%.2f",
+				cvp.width, cvp.height, (void*)camera->GetRenderTarget(),
+				entPos.x, entPos.y, entPos.z, look.x, look.y, look.z,
+				camera->GetNearZ(), camera->GetFarZ());
+		}
+
 		if (!_sphereEntity)
 		{
 			_sphereEntity = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("LightSphere");
@@ -1257,9 +1911,41 @@ namespace HexEngine
 		_currentCamera = camera;
 		_cameraEntity = camera->GetEntity();
 
+		// Promote the pending motion-vector reference matrices ONCE per frame,
+		// before SetupPerFrameBuffer reads GetViewMatrixPrev: every render of
+		// this camera this frame (the editor renders a camera more than once)
+		// sees LAST frame's matrices. Paired with SnapshotPrevMatrices at the
+		// end of this function.
+		camera->PromotePrevMatrices(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u);
+
+		// P4.7: colour LUT hot-reload watch (self-gated to one stat every
+		// couple of seconds regardless of how many renders run per frame).
+		_colourLut.Poll();
+
 		_currentShadowCasterForComposition = nullptr;
 		_currentShadowMapForComposition = nullptr;
 		_gpuVisibilityCulling.BeginFrame(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u, _currentCamera);
+
+		// Discard TAA history across a cut. Reprojection cannot recover from a camera
+		// switch or a teleport - the motion vectors describe a continuous frame-to-frame
+		// delta that simply didn't happen - so the stale history smears across the new view
+		// for however long the 0.9 feedback takes to wash out. TAA::ResetHistory() existed
+		// but had no callers.
+		{
+			const math::Vector3 cameraPos = _cameraEntity->GetPosition();
+			const bool cameraChanged = (_taaHistoryCamera != _currentCamera);
+			const bool cameraScene = (_taaHistoryScene != _currentScene);
+			// 5 m in a single frame is a teleport, not travel (300 m/s at 60fps).
+			const bool cameraTeleported = !cameraChanged && !cameraScene &&
+				(cameraPos - _taaHistoryCameraPos).LengthSquared() > (5.0f * 5.0f);
+
+			if (cameraChanged || cameraScene || cameraTeleported)
+				_taa.ResetHistory();
+
+			_taaHistoryCamera = _currentCamera;
+			_taaHistoryScene = _currentScene;
+			_taaHistoryCameraPos = cameraPos;
+		}
 
 		assert(_cameraEntity && "Camera entity cannot be null");
 
@@ -1289,10 +1975,69 @@ namespace HexEngine
 		//
 		_gbuffer.Clear();		
 
-		for (auto& caster : _shadowCasters)
+		// Slice 7 split: the sun always renders its cascade chain; local
+		// lights either take the legacy dedicated-map path (r_shadowAtlas off,
+		// exactly as before) or allocate tiles in the shared atlas, where a
+		// face whose content hash is unchanged re-uses last frame's depth and
+		// costs nothing.
+		//
+		// POINT lights are atlas-EXEMPT: no consumer reads point cube faces
+		// from the atlas. ClusterLightApply only applies the atlas term to
+		// spots (shadowed points are skipped back to the per-light path, which
+		// samples the dedicated t5..t10 maps), and the froxel fog's point
+		// shadows copy the dedicated colour mirrors into a TextureCubeArray.
+		// When slice 7 first went live, points were still pushed into the
+		// atlas: each ate 6 of the 16 tiles nobody sampled, while the
+		// dedicated maps PointLight.shader ACTUALLY samples were never
+		// rendered again - interior lamps projected stale/uninitialised depth
+		// as huge angular dark blocks. Until the apply/froxel consumers learn
+		// point tiles, point casters always render their dedicated maps here,
+		// capped nearest-first (the caster list is already sorted) so a
+		// lamp-dense scene can't multiply the shadow pass count.
 		{
-			RenderShadowMaps(caster);
+			std::vector<Light*> localCasters;
+			int32_t legacyPointCasters = 0;
+			for (auto& caster : _shadowCasters)
+			{
+				const bool isLocal = caster->CastAs<DirectionalLight>() == nullptr;
+				const bool isPoint = caster->CastAs<PointLight>() != nullptr;
+				if (isLocal && r_shadowAtlas._val.b && !isPoint)
+				{
+					localCasters.push_back(caster);
+				}
+				else if (isPoint && r_shadowAtlas._val.b)
+				{
+					if (legacyPointCasters < MaxShadowCasters)
+					{
+						RenderShadowMaps(caster);
+						++legacyPointCasters;
+					}
+				}
+				else
+				{
+					RenderShadowMaps(caster);
+				}
+			}
+
+			if (!localCasters.empty())
+			{
+				const auto& assignments = _shadowAtlas.AssignTiles(
+					localCasters, _currentCamera, r_shadowAtlasBudget._val.i32,
+					_currentScene->GetShadowGeometryRevision());
+				for (const auto& a : assignments)
+				{
+					if (a.needsRender)
+						RenderShadowFaceToAtlas(a);
+				}
+			}
 		}
+
+		// Shelter/rain occlusion map (Phase 3 slice 2) - rides with the
+		// shadow renders so the main-view SetupPerFrameBuffer below sees
+		// this frame's validity + matrices.
+		UpdateWetnessAccumulation();
+		UpdateRainOcclusionMap();
+		UpdateSnowFootprintMap();
 
 		// set up the viewport
 		auto bbvp = _currentCamera->GetViewport();
@@ -1337,7 +2082,11 @@ namespace HexEngine
 			// rendered ~20x too dim once the LUT path took over.
 			const float sunY = std::clamp(sunDir.y, -1.0f, 1.0f);
 			const float sunEnergy = std::lerp(18.0f, 30.0f, std::clamp(sunY * 0.5f + 0.5f, 0.0f, 1.0f));
-			const float sunIntensity = lightMult * sunEnergy;
+			// r_skyRadianceScale is applied HERE, at LUT generation, so every
+			// LUT consumer (sky dome, fog, aerial perspective, IBL atlas, SSR
+			// sky fallback, clouds) scales together. Consumers must NOT apply
+			// it a second time.
+			const float sunIntensity = lightMult * sunEnergy * std::max(r_skyRadianceScale._val.f32, 0.01f);
 
 			// Push the env_* atmosphere HVars into the LUT params so the
 			// weather plugin (which drives env_density / env_rayleighStrength /
@@ -1372,6 +2121,9 @@ namespace HexEngine
 			params.rayleighScatteringPerMM = baseRayleighScatter * (densityScale * rayleighStrength);
 			params.mieScatteringPerMM      = baseMieScatter     * densityScale * mieStrength;
 			params.mieExtinctionPerMM      = baseMieExtinction  * densityScale * mieStrength;
+			// Live Mie anisotropy (S2): the 384x216 SkyView LUT resolves the
+			// forward peak up to ~g 0.7 without ringing; clamped by the cvar.
+			params.miePhaseG               = std::clamp(env_mieAnisotropy._val.f32, 0.0f, 0.95f);
 			g_pEnv->_atmosphereLUTs->SetParams(params);
 
 			const float cameraWorldY = _currentCamera != nullptr
@@ -1396,6 +2148,27 @@ namespace HexEngine
 			// so night storms look dark and overcast at noon looks bright
 			// dismal-white. Brighter storm-white for heavy precipitation
 			// (lit thunderhead) versus dismal grey for light overcast.
+			// Cirrus advection (S4): CPU-integrated in metres, same frame-guard
+			// pattern as the cloud wind offset, at 35% of the cloud wind speed
+			// (high-altitude layers read as slow angular drift).
+			{
+				static math::Vector2 cirrusWindOffsetM(0.0f, 0.0f);
+				static uint64_t lastCirrusFrame = ~0ull;
+				const uint64_t frameNow = (g_pEnv && g_pEnv->_timeManager) ? g_pEnv->_timeManager->_frameCount : 0ull;
+				if (frameNow != lastCirrusFrame)
+				{
+					const float dt = (g_pEnv && g_pEnv->_timeManager) ? std::clamp((float)g_pEnv->_timeManager->_frameTime, 0.0f, 0.1f) : (1.0f / 60.0f);
+					math::Vector3 wdir = r_cloudWindDirection._val.v3;
+					if (wdir.LengthSquared() > 0.0001f)
+						wdir.Normalize();
+					cirrusWindOffsetM += math::Vector2(wdir.x, wdir.z) *
+						(r_cloudWindSpeed._val.f32 * r_cloudAnimationSpeed._val.f32 * 0.35f * dt);
+					lastCirrusFrame = frameNow;
+				}
+				g_pEnv->_atmosphereLUTs->SetCirrusState(
+					r_cloudCirrusAmount._val.f32, r_cloudCirrusType._val.f32, cirrusWindOffsetM);
+			}
+
 			if (_currentScene != nullptr)
 			{
 				const auto& wp = _currentScene->GetWeatherSurfaceParams();
@@ -1409,11 +2182,28 @@ namespace HexEngine
 				const math::Vector3 cloudColour = dismalGrey + (stormWhite - dismalGrey) * precipIntensity;
 				const math::Vector3 overcastColour = cloudColour * (sunDimming * lightMult);
 
-				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(overcastColour, overcastAmount);
+				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(overcastColour, overcastAmount,
+					r_sunDiscDiameter._val.f32,
+					r_sunDiscIntensity._val.f32, r_starIntensity._val.f32,
+					r_moonIntensity._val.f32, r_moonPhase._val.f32, r_moonDiameter._val.f32);
+
+				// The prefiltered sky ENVIRONMENT atlas has to receive the same
+				// tint, or reflections disagree with the sky above them. Hillaire
+				// is a clear-sky model and physically cannot produce overcast, so
+				// this lerp IS how rain gets its grey - and the atlas prefilters
+				// the raw sky-view LUT, which never sees it. The result was a wet
+				// road mirroring clear blue under a grey-brown storm.
+				_skyOvercastColour = overcastColour;
+				_skyOvercastAmount = overcastAmount;
 			}
 			else
 			{
-				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(math::Vector3(1.0f, 1.0f, 1.0f), 0.0f);
+				g_pEnv->_atmosphereLUTs->SetSkyRenderParams(math::Vector3(1.0f, 1.0f, 1.0f), 0.0f,
+					r_sunDiscDiameter._val.f32,
+					r_sunDiscIntensity._val.f32, r_starIntensity._val.f32,
+					r_moonIntensity._val.f32, r_moonPhase._val.f32, r_moonDiameter._val.f32);
+				_skyOvercastColour = math::Vector3(1.0f, 1.0f, 1.0f);
+				_skyOvercastAmount = 0.0f;
 			}
 		}
 
@@ -1453,7 +2243,7 @@ namespace HexEngine
 		// SUCCESSOR to the legacy per-pixel VolumetricLighting march, not
 		// a sibling of the atmosphere LUTs. Skipped only when there's no
 		// sun light to drive god rays.
-		if (g_pEnv->_volumetricScattering != nullptr && sunLight != nullptr)
+		if (r_volumetric._val.b && g_pEnv->_volumetricScattering != nullptr && sunLight != nullptr)
 		{
 			const math::Vector3 vsSunForward = sunLight->GetEntity()->GetComponent<Transform>()->GetForward();
 			const math::Vector3 vsSunDir = -vsSunForward;
@@ -1534,8 +2324,7 @@ namespace HexEngine
 			// froxel WAS in the previous frame's volume (eye pos needed
 			// for distance-along-ray W mapping; off-axis froxels would
 			// reproject to the wrong W slice without it).
-			const math::Matrix currentVP =
-				_currentCamera->GetViewMatrix() * _currentCamera->GetProjectionMatrix();
+			const math::Matrix currentVP = _currentCamera->GetViewProjectionMatrix();
 			const math::Vector3 currentEye =
 				_currentCamera->GetEntity()->GetPosition();
 			// Atmospheric transmittance LUT for sunset/sunrise reddening
@@ -1705,6 +2494,19 @@ namespace HexEngine
 			// also produced an empty shadow map.)
 			const float spotShadowBias = 0.0005f;
 
+			g_pEnv->_volumetricScattering->SetClusteredLights(
+				_clusteredLights.GetLightsSrv(),
+				_clusteredLights.GetCountsSrv(),
+				_clusteredLights.GetListsSrv(),
+				r_clusterFog._val.b && r_clusterLights._val.b,
+				r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
+				r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr);
+			// Cloud shadows in the fog (S6). Both are last frame's data at
+			// this point in the frame (the shadow map renders during the
+			// light pass) - one frame of latency is invisible on clouds.
+			g_pEnv->_volumetricScattering->SetCloudShadow(
+				(r_cloudEnable._val.b && r_cloudCastShadows._val.b) ? _cloudConstantBuffer : nullptr,
+				(r_cloudEnable._val.b && r_cloudCastShadows._val.b) ? _cloudShadowMap : nullptr);
 			g_pEnv->_volumetricScattering->Update(
 				vsSunDir, sunColV, vsSunIntensity, phaseG, strength,
 				baseExt, heightDensity, heightPivot, heightFalloff,
@@ -1776,6 +2578,16 @@ namespace HexEngine
 				stats.gpuOcclusionMs,
 				_gpuVisibilityCulling.HasUsableHistory() ? 1 : 0);
 		}
+
+		// Latch this render's camera matrices as the next render's "previous"
+		// pair. The renderer owns this (not the game loop) so the EDITOR
+		// viewport gets correct motion vectors too: the editor never runs
+		// Scene::LateUpdate, so the camera's prev matrices froze at their
+		// first value and velocity grew with camera travel without ever
+		// clearing - which surfaced as motion blur "sticking" after the
+		// camera stopped (and TAA/NRD never truly reprojecting in-editor).
+		if (_currentCamera != nullptr)
+			_currentCamera->SnapshotPrevMatrices();
 	}
 
 	void SceneRenderer::CollectShadowCasters()
@@ -1840,22 +2652,109 @@ namespace HexEngine
 			//	break;
 		}
 
-		// now that we know which lights are potentially affecting the scene, we should sort them according to priority
-		//
-		std::sort(pvs.begin(), pvs.end(), [this](Light* left, Light* right) {
-
-			auto leftDist = (left->GetEntity()->GetPosition() - _currentCamera->GetEntity()->GetPosition()).Length();
-			auto rightDist = (right->GetEntity()->GetPosition() - _currentCamera->GetEntity()->GetPosition()).Length();
-
-			return leftDist > rightDist;
+		// Directional lights are global - their entity position is arbitrary, so ranking
+		// them by distance-to-camera is meaningless. They must never lose a shadow-map slot
+		// to a local light, so hoist them to the front before the distance sort. (This used
+		// to sort ALL casters, sun included, by distance DESCENDING and then keep the first
+		// MaxShadowCasters - i.e. it deliberately kept the FURTHEST casters, and could drop
+		// the sun entirely depending on where the sun entity happened to sit.)
+		const auto firstLocal = std::stable_partition(pvs.begin(), pvs.end(), [](Light* light) {
+			return dynamic_cast<DirectionalLight*>(light) != nullptr;
 			});
 
-		// Finally, tack on the shadow casters to the sun light
-		//
-		_shadowCasters.insert(_shadowCasters.end(), pvs.begin(), pvs.begin() + (pvs.size() < MaxShadowCasters ? pvs.size() : MaxShadowCasters));
+		// Local lights: nearest first, since near lights dominate what the viewer sees.
+		const math::Vector3 cameraPos = _currentCamera->GetEntity()->GetPosition();
+		std::sort(firstLocal, pvs.end(), [&cameraPos](Light* left, Light* right) {
+
+			auto leftDist = (left->GetEntity()->GetPosition() - cameraPos).LengthSquared();
+			auto rightDist = (right->GetEntity()->GetPosition() - cameraPos).LengthSquared();
+
+			return leftDist < rightDist;
+			});
+
+		// MaxShadowCasters bounds the number of shadow maps rendered this frame, across all
+		// light types. With the atlas on, capacity is the atlas tile count
+		// instead - the per-frame render budget lives in AssignTiles, not
+		// here, so listing more casters costs nothing until they win tiles.
+		const size_t cap = r_shadowAtlas._val.b
+			? (size_t)ShadowAtlas::kTileCount
+			: (size_t)MaxShadowCasters;
+		const size_t casterCount = (pvs.size() < cap) ? pvs.size() : cap;
+		_shadowCasters.insert(_shadowCasters.end(), pvs.begin(), pvs.begin() + casterCount);
 	}
 
 	
+
+	// End depth (world units from the camera) of sun cascade `cascadeIdx` out of
+	// `numCascades`. Two schemes:
+	//  - legacy (r_shadowCascadeSplitLambda == 0): every cascade covers a fixed
+	//    r_shadowCascadeRange block (100 m default) and the last takes the rest.
+	//    Cascade 0 spreading its texels over a 100 m slice is ~6 cm per texel at
+	//    4096 - the stair-stepped interior sun shadows from the 2026-08-09 report.
+	//  - practical split (lambda > 0): per-cascade lerp between a uniform and a
+	//    logarithmic distribution of [near, far]. Log-heavy blends pull cascade 0
+	//    in to tens of metres (roughly an order of magnitude more texel density
+	//    where aliasing is visible) while the far cascades still reach farZ.
+	// The shader picks its cascade from g_frustumDepths, which SetupPerFrameBuffer
+	// fills from this same function - the two callers must stay in lockstep.
+	static float ComputeCascadeSplitEnd(int32_t cascadeIdx, int32_t numCascades, float nearZ, float farZ)
+	{
+		if (cascadeIdx >= numCascades - 1)
+			return farZ;
+
+		const float lambda = r_shadowCascadeSplitLambda._val.f32;
+		if (lambda <= 0.0f)
+			return std::min((float)(cascadeIdx + 1) * r_shadowCascadeRange._val.f32, farZ);
+
+		// Clamp the split near plane: cameras with cm-scale near planes would let
+		// the log term collapse cascade 0 to a metre or two.
+		const float n = std::max(nearZ, 1.0f);
+		const float t = (float)(cascadeIdx + 1) / (float)numCascades;
+		const float logSplit = n * std::pow(farZ / n, t);
+		const float uniformSplit = n + (farZ - n) * t;
+		return lambda * logSplit + (1.0f - lambda) * uniformSplit;
+	}
+
+	// P4.6 white balance: Kelvin + tint -> RGB channel gains via von-Kries
+	// adaptation in CAT02 LMS. The photographic slider convention: RAISING
+	// the temperature warms the image (as if the shot was white-balanced for
+	// cooler light), positive tint pushes magenta. Gains are normalised to
+	// green so overall exposure is stable, and applied as straight RGB
+	// multipliers in ColourGrade.shader (the LMS round-trip on anything but
+	// the white point is a deliberate approximation - good to well under a
+	// JND across the +-2000K range grading actually uses).
+	static math::Vector3 ComputeWhiteBalanceGains(float kelvin, float tint)
+	{
+		if (std::abs(kelvin - 6500.0f) < 1.0f && std::abs(tint) < 1e-4f)
+			return math::Vector3(1.0f, 1.0f, 1.0f);
+
+		// Target white in CIE xy: slide x away from D65 with temperature
+		// (asymmetric - the blackbody locus is steeper on the warm side),
+		// and y with tint.
+		const float t1 = std::clamp((kelvin - 6500.0f) / 6500.0f, -1.0f, 1.0f);
+		const float t2 = std::clamp(tint, -1.0f, 1.0f);
+		const float x = 0.31271f - t1 * (t1 < 0.0f ? 0.1f : 0.05f);
+		const float yStd = 2.87f * x - 3.0f * x * x - 0.27509507f;
+		const float y = std::max(yStd - t2 * 0.05f, 0.05f);
+
+		// xyY (Y=1) -> XYZ -> CAT02 LMS for the target white and for D65.
+		const auto toLms = [](float X, float Y, float Z)
+		{
+			return math::Vector3(
+				 0.7328f * X + 0.4296f * Y - 0.1624f * Z,
+				-0.7036f * X + 1.6975f * Y + 0.0061f * Z,
+				 0.0030f * X + 0.0136f * Y + 0.9834f * Z);
+		};
+		const math::Vector3 w = toLms(x / y, 1.0f, (1.0f - x - y) / y);
+		const math::Vector3 d65 = toLms(0.95047f, 1.0f, 1.08883f);
+
+		math::Vector3 gains(
+			d65.x / std::max(w.x, 1e-4f),
+			d65.y / std::max(w.y, 1e-4f),
+			d65.z / std::max(w.z, 1e-4f));
+		gains /= std::max(gains.y, 1e-4f);
+		return gains;
+	}
 
 	void SceneRenderer::SetupPerFrameBuffer(
 		const math::Matrix& viewMatrix,
@@ -1877,6 +2776,15 @@ namespace HexEngine
 		{
 			PerFrameConstantBuffer bufferData = {};
 
+			// TEMPORARY: hard numbers for the cbuffer layout. Hand-computing the HLSL side
+			// gives total 1360 with _reflectionParams at 1328; if C++ disagrees, that is the
+			// divergence making the appended tail unreadable from the shader.
+			// Layout verified 2026-07-26: sizeof 1360, _taaParams@1312, _reflectionParams@1328,
+			// _iblParams@1344 - which matches HLSL's packing of the same declaration exactly,
+			// so appending float4s at the end of this struct is sound.
+			// (Appended since that audit: _iblComposeParams, _skyOvercast, _ssrParams,
+			// _exposureParams - the 1360 figure above is historical, the invariant that
+			// C++ and HLSL append in LOCKSTEP is what matters.)
 			// Camera data
 			bufferData._viewMatrix = viewMatrix.Transpose();
 			bufferData._projectionMatrix = projectionMatrix.Transpose();
@@ -1919,6 +2827,7 @@ namespace HexEngine
 			// Auto exposure multiplies into the user-set r_exposure. When auto exposure is
 			// disabled the multiplier is 1.0, so r_exposure passes through unchanged.
 			bufferData._colourGrading.exposure = r_exposure._val.f32 * _autoExposure.GetExposureMultiplier();
+			bufferData._colourGrading.exposureInstant = r_exposure._val.f32 * _autoExposure.GetTargetExposureMultiplier();
 			bufferData._colourGrading.hueShift = r_hueShift._val.f32;
 			bufferData._colourGrading.saturation = r_saturation._val.f32;
 			// One-time auto-calibration of r_hdrPeakNits from the active display's
@@ -1946,36 +2855,45 @@ namespace HexEngine
 
 			bufferData._hdrPaperWhiteNits = r_hdrPaperWhiteNits._val.f32;
 			bufferData._hdrPeakNits = r_hdrPeakNits._val.f32;
-			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 5));
+			bufferData._tonemapOperator = static_cast<float>(std::clamp(r_tonemapOperator._val.i32, 0, 6));
 			bufferData._rainDripDebug = r_rainDripDebug._val.b ? 1.0f : 0.0f;
 			bufferData._weatherSurface = _currentScene->GetWeatherSurfaceParams();
+			// Substitute the lagged wetness + puddle state. Puddles fill fast
+			// (present during rain) and dry only slightly slower than the sheen,
+			// so they emerge gently as it fades rather than popping in long after
+			// the floor dried (the old 17 s gap) or never being seen at all.
+			if (r_wetnessAccumulation._val.b && _wetnessInit)
+			{
+				bufferData._weatherSurface.wetness = _wetnessState;
+				bufferData._weatherSurface.puddleAmount = _puddleState;
+			}
+			// Diagnostic for the surface-matrix fields: logs what the GPU
+			// actually receives ~once a second, so "slider does nothing"
+			// reports can be split into CPU-chain vs shader problems.
+			if (r_weatherSurfaceDebug._val.b)
+			{
+				static uint64_t sLastLogFrame = 0ull;
+				const uint64_t frame = g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0ull;
+				if (frame - sLastLogFrame >= 60ull)
+				{
+					sLastLogFrame = frame;
+					const auto& ws = bufferData._weatherSurface;
+					LOG_INFO("WeatherSurface upload: wet=%.3f puddle=%.3f snow=%.3f melt=%.3f dirt=%.3f precip=%.3f",
+						ws.wetness, ws.puddleAmount, ws.snowCoverage, ws.snowMelt, ws.dirtAmount, ws.precipitationIntensity);
+				}
+			}
 
 			// Shadowmap data
 			
 			const auto maxShadowCascades = r_shadowCascades._val.i32;// shadowCaster->GetMaxSupportedShadowCascades();
 
-			float cascadeStart = 0.0f;
-
-			float mul = (_currentCamera->GetFarZ() / (float)numCascades) * (float)maxShadowCascades;;
-
 			for (int i = 0; i < 4; ++i)
 			{
-				// Calculate the shadow map cascade ranges
-				//
-				//float start = min(1.0f, (float)(i + 0) / (float)numCascades);
-				//float end = min(1.0f, (float)(i + 1) / (float)numCascades);
-
-				//float start = cascadeStart;
-				float end = (cascadeStart + r_shadowCascadeRange._val.f32) / _currentCamera->GetFarZ();
-
-				if (i >= maxShadowCascades - 1)
-					end = 1.0f;
-
-				// Calculate the frustum splits
-				//
-				((float*)&bufferData._frustumSplits.x)[i] = end * _currentCamera->GetFarZ();
-
-				cascadeStart += r_shadowCascadeRange._val.f32;
+				// Calculate the frustum splits. Entries past the live cascade count
+				// stay at farZ ([3] doubles as "camera far" for sky/fog/SSR shaders).
+				// Must match the start/end RenderShadowMaps feeds ConstructMatrices.
+				((float*)&bufferData._frustumSplits.x)[i] = ComputeCascadeSplitEnd(
+					i, maxShadowCascades, _currentCamera->GetNearZ(), _currentCamera->GetFarZ());
 			}
 
 			//bufferData._lightViewMatrix = shadowCaster->GetViewMatrix().Transpose();
@@ -2022,9 +2940,13 @@ namespace HexEngine
 			// Signal to PostFog: aerial-perspective volume is doing the
 			// distance-haze pass, so PostFog should skip its own
 			// analytic atmosphere integration. Tied to the AP volume's
-			// actual availability rather than the cvar so a failed LUT
-			// init doesn't leave fog unintentionally broken.
-			const bool apActive = g_pEnv->_atmosphereLUTs != nullptr
+			// actual availability (a failed LUT init doesn't leave fog
+			// unintentionally broken) AND the cvars: with LUT updates or
+			// the AP apply disabled, the volume is stale/unused and PostFog
+			// must resume its own integration.
+			const bool apActive = r_atmosphereLUTs._val.b
+				&& r_aerialPerspective._val.b
+				&& g_pEnv->_atmosphereLUTs != nullptr
 				&& g_pEnv->_atmosphereLUTs->GetAerialPerspectiveVolume() != nullptr;
 			bufferData._atmosphere.fogUseAerialPerspective = apActive ? 1.0f : 0.0f;
 
@@ -2115,7 +3037,10 @@ namespace HexEngine
 			const bool froxelActiveLegacyGate =
 				g_pEnv->_volumetricScattering != nullptr &&
 				g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr;
-			if (froxelActiveLegacyGate)
+			// r_volumetric off also zeroes the strength: Spot/PointLight.shader
+			// run their own per-pixel volumetric march off this value, so the
+			// master toggle must silence those cones too.
+			if (froxelActiveLegacyGate || !r_volumetric._val.b)
 				bufferData._atmosphere.volumetricStrength = 0.0f;
 			bufferData._atmosphere.volumetricSteps = GetVolumetricEffectiveSteps();
 			bufferData._atmosphere.volumetricStepIncrement = env_volumetricStepIncrement._val.f32;
@@ -2126,20 +3051,341 @@ namespace HexEngine
 			bufferData._atmosphere.volumetricSpotInsideMin = env_volumetricSpotInsideMin._val.f32;
 			bufferData._atmosphere.volumetricSpotInsideMax = env_volumetricSpotInsideMax._val.f32;
 
-			// bloom
+			// bloom (viewportScale retired with the mip chain - the chain shaders
+			// get per-hop texel sizes via their own b6 constants)
 			bufferData._bloom.luminosityThreshold = r_bloomLuminanceThreshold._val.f32;
-			bufferData._bloom.viewportScale = 4.0f;
 			bufferData._bloom.bloomIntensity = r_bloomPhysicalIntensity._val.f32;
 			bufferData._bloom.bloomClamp = r_bloomPhysicalClamp._val.f32;
 
 			bufferData._time = g_pEnv->_timeManager->GetTime();
 			bufferData._frame = (uint32_t)g_pEnv->_timeManager->_frameCount;
-			bufferData._gamma = r_gamma._val.f32;			
+
+			// Previous-frame time for time-dependent vertex displacement (wind
+			// sway, Gerstner waves). Advanced ONCE per frame, keyed on the
+			// frame count - this function runs several times per frame (shadow
+			// / probe / main passes) and every run must upload the SAME pair
+			// or the passes disagree about where a vertex was last frame.
+			// First frame (sentinel): prev = current, zero displacement delta.
+			{
+				const uint64_t frameCount = (uint64_t)g_pEnv->_timeManager->_frameCount;
+				if (_timePrevUploadFrame != frameCount)
+				{
+					const float frameDt = (_timePrevUploadFrame == UINT64_MAX)
+						? 0.0f : (bufferData._time - _timeCurUploaded);
+
+					// Wind-scroll phase for the water bump advection
+					// (zw lanes). INTEGRATED per frame - a stateless
+					// dir * g_time * rate slews violently whenever the rate
+					// changes (weather transitions), because a changing rate
+					// multiplies ABSOLUTE time. An integral only ever
+					// advances by rate * frame-dt. Wrapped to keep float
+					// precision (the UVs tile anyway).
+					{
+						const auto& wind = bufferData._weatherSurface.windDirectionAndSpeed;
+						float dirX = wind.x, dirZ = wind.z;
+						const float dirLen = sqrtf(dirX * dirX + dirZ * dirZ);
+						if (dirLen > 0.001f) { dirX /= dirLen; dirZ /= dirLen; }
+						else { dirX = 1.0f; dirZ = 0.0f; }
+						const float windNorm = std::clamp(wind.w / 30.0f, 0.0f, 1.0f);
+						const float rate = 0.012f + 0.035f * windNorm;
+						_windScrollAccum.x = fmodf(_windScrollAccum.x + dirX * rate * frameDt, 64.0f);
+						_windScrollAccum.y = fmodf(_windScrollAccum.y + dirZ * rate * frameDt, 64.0f);
+					}
+
+					_timePrevUploaded = (_timePrevUploadFrame == UINT64_MAX)
+						? bufferData._time : _timeCurUploaded;
+					_timeCurUploaded = bufferData._time;
+					_timePrevUploadFrame = frameCount;
+				}
+				bufferData._timeParams2 = math::Vector4(
+					_timePrevUploaded, _timeCurUploaded - _timePrevUploaded,
+					_windScrollAccum.x, _windScrollAccum.y);
+			}
+
+			bufferData._oceanConfig2 = math::Vector4(
+				r_oceanWaveScale._val.f32,
+				r_oceanFoam._val.f32,
+				r_oceanAbsorption._val.f32,
+				r_oceanBumpStrength._val.f32);
+
+			// P4.6 grading tail: white balance gains + CDL trio.
+			{
+				const math::Vector3 wb = ComputeWhiteBalanceGains(
+					r_whiteBalanceTemp._val.f32, r_whiteBalanceTint._val.f32);
+				bufferData._whiteBalance = math::Vector4(wb.x, wb.y, wb.z, 0.0f);
+				const math::Vector3& lift = r_cdlLift._val.v3;
+				const math::Vector3& gamma = r_cdlGamma._val.v3;
+				const math::Vector3& gain = r_cdlGain._val.v3;
+				bufferData._cdlLift = math::Vector4(lift.x, lift.y, lift.z, 0.0f);
+				bufferData._cdlGamma = math::Vector4(gamma.x, gamma.y, gamma.z, 0.0f);
+				bufferData._cdlGain = math::Vector4(gain.x, gain.y, gain.z, 0.0f);
+			}
+
+			// P4.8 vignette params (shader reads them where the compiled-in
+			// #defines used to be).
+			bufferData._vignetteParams = math::Vector4(
+				r_vignetteAmount._val.f32,
+				r_vignetteRadius._val.f32,
+				r_vignetteSlope._val.f32,
+				r_vignetteRatio._val.f32);
+
+			// P4.7 colour LUT: y carries the LUT edge size; 0 = nothing
+			// loaded, shader bypasses.
+			bufferData._lutParams = math::Vector4(
+				r_colourLutStrength._val.f32,
+				(float)_colourLut.GetSize(),
+				0.0f, 0.0f);
+
+			// P4.9/P4.10 grain + sharpen (z read by CAS.shader, xy by the
+			// tonemap display shaders).
+			bufferData._grainParams = math::Vector4(
+				r_filmGrain._val.f32,
+				r_filmGrainSize._val.f32,
+				r_sharpen._val.f32,
+				0.0f);
+
+			// P4.12 lens flare / dirt / streak (read by BloomComposite).
+			bufferData._lensParams = math::Vector4(
+				r_lensFlare._val.f32,
+				r_lensDirt._val.f32,
+				r_lensFlareDispersal._val.f32,
+				r_lensStreak._val.f32);
+
+			// GI ambient-ownership compose. Main camera only: the GI blurred-AO
+			// texture is main-view screen space, so a probe-capture face or
+			// secondary camera must neither sample it nor hand off ambient it
+			// will never get back (GI's composite doesn't run for captures).
+			// The blurred AO exists from the first GI frame onward; null means
+			// GI hasn't produced one yet (or is off) - both flags collapse to 0
+			// and the deferred pass behaves exactly as before this change.
+			_giComposeActive =
+				r_giEnable._val.b &&
+				_currentScene != nullptr && _currentCamera != nullptr &&
+				_currentCamera == _currentScene->GetMainCamera() &&
+				!_currentCamera->IsEnvironmentCapture() &&
+				_diffuseGi.GetBlurredAOTexture() != nullptr;
+			bufferData._giComposeParams = math::Vector4(
+				_giComposeActive ? r_giAmbientHandoff._val.f32 : 0.0f,
+				r_giSkyOcclusion._val.f32,
+				_giComposeActive ? 1.0f : 0.0f,
+				r_giSpecOcclusion._val.f32);
+			bufferData._pbrEnergyFix = r_pbrEnergyFix._val.b ? 1.0f : 0.0f;
+
+			// Transparent-surface atmosphere: which volumes RenderTransparent will
+			// bind at t24/t21 and their depth mappings (must match the apply
+			// passes: froxel far = VolumetricScattering::kFarDepthM, AP max =
+			// AtmosphereApMaxDistM() in the shader = max(farZ, 1 km)).
+			{
+				const bool froxel = r_volumetric._val.b && g_pEnv->_volumetricScattering != nullptr
+					&& g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr;
+				const bool ap = r_atmosphereLUTs._val.b && r_aerialPerspective._val.b
+					&& g_pEnv->_atmosphereLUTs != nullptr && g_pEnv->_atmosphereLUTs->GetAerialPerspectiveVolume() != nullptr;
+				const float farZ = _currentCamera ? _currentCamera->GetFarZ() : 1000.0f;
+				bufferData._transparentFogParams = math::Vector4(
+					froxel ? 1.0f : 0.0f,
+					ap ? 1.0f : 0.0f,
+					VolumetricScattering::kFarDepthM,
+					std::max(farZ, 1000.0f));
+			}
+
+			bufferData._reflectionParams = math::Vector4(
+				r_ssrSkyFallbackStrength._val.f32,
+				r_ssrSkyHitMinDistance._val.f32,
+				r_glassEnvReflection._val.f32,
+				(float)r_ssrDebugSkyHits._val.i32);
+
+			bufferData._iblParams = math::Vector4(
+				r_iblSkySpecular._val.f32, r_iblSkyDiffuse._val.f32,
+				r_iblProbeStrength._val.f32, r_iblProbeDiffuse._val.f32);
+
+			// P1-B toggles ride in the reflection params' spare lanes (x and y are
+			// dead since SSR.shader reverted to main and no longer reads them).
+			bufferData._reflectionParams.x = r_iblDfgLut._val.b ? 1.0f : 0.0f;
+			bufferData._reflectionParams.y = r_iblMultiScatter._val.b ? 1.0f : 0.0f;
+
+			// Who owns environment specular this frame. Deferred.shader reads this
+			// to decide whether to add the term; SSR.shader reads it to decide
+			// whether a specular miss returns nothing (so SSRResolve can fill it
+			// with environment) or falls back to the voxel-GI cone trace.
+			bufferData._iblComposeParams = math::Vector4(
+				ShouldComposeEnvSpecularInResolve() ? 1.0f : 0.0f,
+				r_ssrEnergyConserve._val.b ? 1.0f : 0.0f,
+				r_wetnessDarkening._val.f32,
+				r_ssrMaxStepLength._val.f32);
+
+			// Lane map (see Global.shader defines): x = in-screen fallback,
+			// y = temporal jitter (gated on the denoiser - a dead toggle until
+			// the marchMode lane collision was found), z = forward clustering
+			// (main camera only - the grid is built for one view), w = marcher.
+			const bool clusterForwardActive =
+				r_clusterForward._val.b && r_clusterLights._val.b &&
+				_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera();
+			bufferData._ssrParams = math::Vector4(
+				r_ssrInScreenFallback._val.b ? 1.0f : 0.0f,
+				(r_ssrTemporalJitter._val.b && r_ssrDenoise._val.b) ? 1.0f : 0.0f,
+				clusterForwardActive ? 1.0f : 0.0f,
+				(float)r_ssrMarchMode._val.i32);
+
+			// Physical units part 4: the declared convention is
+			//   rendered units = physical cd/m^2 * g_preExposure
+			// with the static pre-exposure 1/r_legacyLightScale (see the cvar
+			// comment for why static, and why no shader multiplies by it yet -
+			// the scale and pre-exposure cancel inside every packed light, so
+			// rendered magnitudes are unchanged). Shaders that need ABSOLUTE
+			// luminance (future physical sky, lens effects) multiply by
+			// g_invPreExposure.
+			{
+				const float unitScale = std::max(r_legacyLightScale._val.f32, 1.0f);
+				bufferData._exposureParams = math::Vector4(1.0f / unitScale, unitScale, unitScale, 0.0f);
+			}
+
+			// Shelter/rain occlusion (slice 2). Numbers mirror
+			// UpdateRainOcclusionMap's constants: 2048 map, 160 m depth
+			// range; bias = 0.5 m expressed in depth units.
+			bufferData._rainOcclusionVP = (_rainOcclusionValid
+				? (_rainOcclusionView * _rainOcclusionProj)
+				: math::Matrix::Identity).Transpose();
+			bufferData._rainOcclusionParams = math::Vector4(
+				_rainOcclusionValid ? 1.0f : 0.0f,
+				0.5f / 160.0f,
+				1.0f / 2048.0f,
+				// .w = snow-shell textures bound (t22/t23) - the shell PS reads
+				// this to pick real snow textures vs its procedural fallback.
+				_snowShellReady ? 1.0f : 0.0f);
+
+			// Snow footprints. Populated for real in UpdateSnowFootprintMap;
+			// valid=0 here means "no deformation" so the shell is unaffected
+			// until the map is built.
+			bufferData._snowFootprintVP = (_snowFootprintValid
+				? (_snowFootprintView * _snowFootprintProj)
+				: math::Matrix::Identity).Transpose();
+			bufferData._snowFootprintParams = math::Vector4(
+				_snowFootprintValid ? 1.0f : 0.0f,
+				1.0f / (float)kSnowFootprintMapSize,
+				kSnowFootprintExtent,
+				r_snowFootprintStrength._val.f32);
+
+			// Dust/sand textures: x = bound flag, y = world tiling scale.
+			bufferData._dustParams = math::Vector4(
+				_sandDustReady ? 1.0f : 0.0f,
+				r_dustTiling._val.f32, 0.0f, 0.0f);
+
+			bufferData._skyOvercast = math::Vector4(
+				_skyOvercastColour.x, _skyOvercastColour.y, _skyOvercastColour.z,
+				_skyOvercastAmount);
+
+			// Select this frame's reflection probe: the nearest atlas-ready probe
+			// whose box contains the camera, falling back to the nearest ready
+			// probe overall. One probe per frame in v1 - rooms don't overlap
+			// often, and per-pixel probe arrays are a later step. The chosen
+			// probe's atlas is bound at t16 by the deferred pass.
+			_activeProbe = nullptr;
+			_activeProbe2 = nullptr;
+			bufferData._probeCenter = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			bufferData._probeExtents = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			bufferData._probeCenter2 = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			bufferData._probeExtents2 = math::Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+			// Never sample probes while capturing one: the capture camera sits
+			// inside its own probe's box, so it would bake the previous capture's
+			// reflections into the new one and compound them on every recapture.
+			// Probe faces see sky IBL only.
+			const bool capturingEnvironment =
+				_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture();
+			if (!capturingEnvironment && _currentScene != nullptr && _cameraEntity != nullptr)
+			{
+				std::vector<ReflectionProbeComponent*> probes;
+				if (_currentScene->GetComponents<ReflectionProbeComponent>(probes))
+				{
+					const math::Vector3 camPos = _cameraEntity->GetWorldTM().Translation();
+					float bestDistSq = FLT_MAX;
+					bool bestInside = false;
+					// Keep the TWO best probes so the shader can cross-fade between
+					// them. With only one, a pixel snaps to a different environment
+					// the instant the selection flips, which pops when walking
+					// between rooms.
+					float secondDistSq = FLT_MAX;
+					bool secondInside = false;
+
+					for (auto* probe : probes)
+					{
+						if (probe == nullptr || !probe->IsAtlasReady())
+							continue;
+						const math::Vector3 centre = probe->GetWorldCentre();
+						const math::Vector3 ext = probe->GetExtents();
+						const math::Vector3 d = camPos - centre;
+						const bool inside =
+							fabsf(d.x) <= ext.x && fabsf(d.y) <= ext.y && fabsf(d.z) <= ext.z;
+						const float distSq = d.LengthSquared();
+						// Inside-probes always beat outside-probes; ties by distance.
+						const bool beatsBest =
+							(inside && !bestInside) || (inside == bestInside && distSq < bestDistSq);
+						if (beatsBest)
+						{
+							// Demote the old winner to second place.
+							secondInside = bestInside;
+							secondDistSq = bestDistSq;
+							_activeProbe2 = _activeProbe;
+
+							bestInside = inside;
+							bestDistSq = distSq;
+							_activeProbe = probe;
+						}
+						else if ((inside && !secondInside) ||
+								 (inside == secondInside && distSq < secondDistSq))
+						{
+							secondInside = inside;
+							secondDistSq = distSq;
+							_activeProbe2 = probe;
+						}
+					}
+					if (_activeProbe != nullptr)
+					{
+						const math::Vector3 c = _activeProbe->GetWorldCentre();
+						const math::Vector3 e = _activeProbe->GetExtents();
+						bufferData._probeCenter = math::Vector4(c.x, c.y, c.z, 1.0f);
+						bufferData._probeExtents = math::Vector4(
+							e.x, e.y, e.z, _activeProbe->GetBoxProjection() ? 1.0f : 0.0f);
+					}
+					if (_activeProbe2 != nullptr)
+					{
+						const math::Vector3 c = _activeProbe2->GetWorldCentre();
+						const math::Vector3 e = _activeProbe2->GetExtents();
+						bufferData._probeCenter2 = math::Vector4(c.x, c.y, c.z, 1.0f);
+						bufferData._probeExtents2 = math::Vector4(
+							e.x, e.y, e.z, _activeProbe2->GetBoxProjection() ? 1.0f : 0.0f);
+					}
+				}
+			}
+
+			// z: transparent sun shadows (slice 5) - set only when RenderTransparent
+			// will actually bind the cascades this frame (same sun lookup, main
+			// camera only), because the shader gate trusts this flag completely.
+			const bool transparentShadowsActive =
+				_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera() &&
+				FindTransparentShadowSun(_currentScene) != nullptr;
+			bufferData._taaParams = math::Vector4(
+				r_taaVarianceGamma._val.f32,
+				// Snap to exactly +/-1 so an intermediate cvar value can't scale the
+				// reprojection distance as well as its direction.
+				(r_taaVelocityYSign._val.f32 < 0.0f) ? -1.0f : 1.0f,
+				transparentShadowsActive ? 1.0f : 0.0f,
+				// w: EXACTLY the condition SetClusteredLights hands the froxel CS -
+				// if these ever diverge, per-light fog either double-counts or
+				// vanishes.
+				(r_clusterFog._val.b && r_clusterLights._val.b) ? 1.0f : 0.0f);
 
 			// ocean
 			bufferData._oceanConfig = _currentScene->GetOcean();
 
-			bufferData._jitterOffsets = _taa.GetJitterOffset(viewport.width, viewport.height);
+			// No TAA jitter for environment captures: a probe face is rendered
+			// once with no history to accumulate into, so jitter would only
+			// offset the capture by a sub-pixel - and a non-zero jitter from a
+			// small capture viewport is what pushes NRD's cameraJitter out of
+			// range (see RenderSSR's early-out).
+			bufferData._jitterOffsets =
+				(_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture())
+					? math::Vector2(0.0f, 0.0f)
+					: _taa.GetJitterOffset(viewport.width, viewport.height);
 			_denoiseFD.jitter = bufferData._jitterOffsets;
 
 			bufferData._chromaticAbberationAmmount = r_chromaticAbberation._val.f32;
@@ -2220,10 +3466,18 @@ namespace HexEngine
 				}
 
 				auto shadowMapSize = shadowCaster->GetShadowMap() ? shadowCaster->GetShadowMap()->GetViewport().width : 0.0f;
-				float shadowVarsMultiplier = (8192.0f / shadowMapSize);
 
-				if (shadowVarsMultiplier > 1.0f)
-					shadowVarsMultiplier *= 2.0f;
+				// r_shadowFilterMaxSize / r_penumbraFilterMaxSize are expressed in TEXELS,
+				// and PCSS multiplies them by texelSize (= 1/shadowMapSize) to get a UV
+				// radius - so holding the world-space penumbra constant means scaling the
+				// texel count PROPORTIONALLY to resolution. This was (8192 / size), i.e.
+				// inverted, and then doubled again above 1.0: at 4096 that produced an 8x
+				// larger penumbra instead of the same one. It only ever came out correct at
+				// exactly 8192, where it evaluates to 1.0.
+				const float kFilterReferenceResolution = 8192.0f;
+				float shadowVarsMultiplier = (shadowMapSize > 0.0f)
+					? (shadowMapSize / kFilterReferenceResolution)
+					: 1.0f;
 
 				// shadow
 				bufferData._shadowConfig.penumbraFilterMaxSize = r_penumbraFilterMaxSize._val.f32 * shadowVarsMultiplier;
@@ -2231,6 +3485,20 @@ namespace HexEngine
 				bufferData._shadowConfig.biasMultiplier = r_shadowBiasMultiplier._val.f32;
 				bufferData._shadowConfig.samples = (float)numSamples;
 				bufferData._shadowConfig.cascadeBlendRange = r_shadowCascadeBlendRange._val.f32;
+				// PCSS penumbra growth rate. Uploaded for every caster; the shader only
+				// reads it on the ortho (sun) path - spot/point use the perspective
+				// heuristic instead.
+				bufferData._shadowConfig.sunTanHalfAngle = std::tan(0.5f * ToRadian(r_sunAngularDiameter._val.f32));
+
+				// How many cascades are actually rendered and bound. RenderShadowMaps drives
+				// the sun's cascade loop from r_shadowCascades, so a directional light can
+				// have fewer live cascades than the 4 it allocates; point lights use all 6
+				// faces and spots a single map. The shader must not iterate or blend past
+				// this, or it samples an unbound depth map as "fully occluded".
+				bufferData._shadowConfig.cascadeCount =
+					(dynamic_cast<DirectionalLight*>(shadowCaster) != nullptr)
+					? std::min(maxShadowCascades, r_shadowCascades._val.i32)
+					: maxShadowCascades;
 
 				bufferData._shadowCasterLightDir = shadowCaster->GetEntity()->GetWorldTM().Forward();
 				bufferData._lightRadius = shadowCaster->GetRadius();
@@ -2326,28 +3594,12 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetConstantBufferPS(6, g_pEnv->_atmosphereLUTs->GetSkyRenderCBuffer());
 		}
 
-		// Pass 0: base sky only (no direct sun/mie). This is what fog samples from _atmosphereRT.
-		SetupPerShadowCasterBuffer(nullptr, false, 0, 0, 0, 0.0f);
-		_currentScene->RenderEntities(
-			_currentCamera->GetPVS(),
-			LAYERMASK(Layer::Sky),
-			MeshRenderFlags::MeshRenderNormal);
-
-		_gbuffer.GetDiffuse()->CopyTo(_atmosphereRT);
-
-		// Re-bind for pass 1 (other entity draws between passes may have
-		// stomped t0/t1 via slotless SRV binds).
-		if (g_pEnv->_atmosphereLUTs != nullptr)
-		{
-			g_pEnv->_graphicsDevice->SetTexture2D(0, g_pEnv->_atmosphereLUTs->GetSkyViewLUT());
-			g_pEnv->_graphicsDevice->SetTexture2D(1, g_pEnv->_atmosphereLUTs->GetTransmittanceLUT());
-			// PS b6 = sky-render cbuffer (overcast tint). Bound here
-			// because the sky entity draw is upcoming and the engine's
-			// material pipeline doesn't know about this cbuffer.
-			g_pEnv->_graphicsDevice->SetConstantBufferPS(6, g_pEnv->_atmosphereLUTs->GetSkyRenderCBuffer());
-		}
-
-		// Pass 1: full sky for the visible frame (includes sun/sunset/mie).
+		// ONE sky pass: the full sky for the visible frame (sun / sunset / mie).
+		// A second, sun-free "base sky" pass used to run first and get copied
+		// to a full-res RT purely so PostFog had a sky colour to tint toward;
+		// the fog now samples the sky-view LUT directly (that LUT is the
+		// sun-free sky by construction), saving a full-screen sky draw and a
+		// full-res copy every frame.
 		SetupPerShadowCasterBuffer(nullptr, false, 1, 0, 0, 0.0f);
 		_currentScene->RenderEntities(
 			_currentCamera->GetPVS(),
@@ -2369,6 +3621,67 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
 		}
 
+		// Shelter/rain occlusion map at t26 for the opaque material shaders
+		// (SampleRainShelter in PBRutils). Explicit slot, then reset the
+		// implicit-slot counter so material auto-binds still start at 0 -
+		// same pattern as the atmosphere block above.
+		g_pEnv->_graphicsDevice->SetTexture2D(26,
+			(_rainOcclusionValid && _rainOcclusionMap != nullptr)
+				? _rainOcclusionMap->GetDepthMap() : nullptr);
+
+		// Same occlusion map to the DOMAIN stage at DS-t0 for the snow shell's
+		// drift banks (geometry piling against walls). Domain-stage texture
+		// binding, separate from the PS bind above.
+		g_pEnv->_graphicsDevice->SetDomainTexture2D(0,
+			(_rainOcclusionValid && _rainOcclusionMap != nullptr)
+				? _rainOcclusionMap->GetDepthMap() : nullptr);
+
+		// Snow footprint deformation map to PS-t27 for the shell pixel shader
+		// (per-pixel foot depressions - the geometric/domain approach aliased
+		// into streaks). Nulled at the pass boundary below.
+		g_pEnv->_graphicsDevice->SetTexture2D(30,
+			(_snowFootprintValid && _snowFootprintMap != nullptr)
+				? _snowFootprintMap : nullptr);
+
+		// Snow-shell material textures at t22/t23 (albedo/normal) for the snow
+		// shell pixel shader. Lazy-loaded once; if missing, the shell keeps
+		// its procedural white (the .w flag in SetupPerFrameBuffer gates it).
+		if (!_snowShellTried)
+		{
+			_snowShellTried = true;
+			_snowShellMaterial = Material::Create("EngineData.Materials/M_SnowShell.hmat");
+			_snowShellReady = _snowShellMaterial != nullptr &&
+				_snowShellMaterial->GetTexture(MaterialTexture::Albedo) != nullptr &&
+				_snowShellMaterial->GetTexture(MaterialTexture::Normal) != nullptr;
+			if (!_snowShellReady)
+				LOG_WARN("Snow shell material/textures not found - shell uses procedural white");
+		}
+		if (_snowShellReady)
+		{
+			g_pEnv->_graphicsDevice->SetTexture2D(22, _snowShellMaterial->GetTexture(MaterialTexture::Albedo).get());
+			g_pEnv->_graphicsDevice->SetTexture2D(23, _snowShellMaterial->GetTexture(MaterialTexture::Normal).get());
+		}
+
+		// Dust/sand accumulation textures at t25/t31 (albedo/normal) for
+		// ApplyDustAccumulation. Lazy-loaded once; if missing, dust falls back to
+		// the procedural sand colour (g_dustParams.x gates it).
+		if (!_sandDustTried)
+		{
+			_sandDustTried = true;
+			_sandDustMaterial = Material::Create("EngineData.Materials/M_SandDust.hmat");
+			_sandDustReady = _sandDustMaterial != nullptr &&
+				_sandDustMaterial->GetTexture(MaterialTexture::Albedo) != nullptr &&
+				_sandDustMaterial->GetTexture(MaterialTexture::Normal) != nullptr;
+			if (!_sandDustReady)
+				LOG_WARN("Sand/dust material/textures not found - dust uses procedural colour");
+		}
+		if (_sandDustReady)
+		{
+			g_pEnv->_graphicsDevice->SetTexture2D(25, _sandDustMaterial->GetTexture(MaterialTexture::Albedo).get());
+			g_pEnv->_graphicsDevice->SetTexture2D(31, _sandDustMaterial->GetTexture(MaterialTexture::Normal).get());
+		}
+		g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::FrontFace);
 
 		_currentScene->RenderEntities(
@@ -2376,6 +3689,23 @@ namespace HexEngine
 			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry) | LAYERMASK(Layer::Grass),
 			MeshRenderFlags::MeshRenderNormal);
 		_currentScene->RenderCustom(_currentScene, _currentCamera, MeshRenderFlags::MeshRenderNormal);
+
+		// Tessellation state MUST NOT leak past the opaque pass. A hull/domain
+		// pair left bound while any later pass (decals, deferred lighting,
+		// transparents, post) issues a TRIANGLE-topology draw is an invalid
+		// D3D11 pipeline (HS/DS require patch topology), which corrupts
+		// intermittently depending on whether a tessellated mesh happened to
+		// be the last opaque draw - exactly the "wrong winding + flashing at
+		// certain angles" the snow road showed. Clear the stages and restore
+		// triangle topology once, here, at the pass boundary.
+		g_pEnv->_graphicsDevice->SetHullShader(nullptr);
+		g_pEnv->_graphicsDevice->SetDomainShader(nullptr);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+		// Release the domain occlusion map and the footprint map (PS-t27) so the
+		// footprint RT isn't left bound as an SRV when it's re-rendered as a
+		// target next frame.
+		g_pEnv->_graphicsDevice->SetDomainTexture2D(0, nullptr);
+		g_pEnv->_graphicsDevice->SetTexture2D(30, nullptr);
 
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
 
@@ -2406,6 +3736,389 @@ namespace HexEngine
 			_currentScene->RenderDebug(params);*/
 	}
 
+	void SceneRenderer::RenderShadowFaceToAtlas(const ShadowAtlas::FaceAssignment& assignment)
+	{
+		PROFILE();
+
+		Light* light = const_cast<Light*>(assignment.key.light);
+		auto* dsv = _shadowAtlas.GetTileDsv(assignment.tileIndex);
+		auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (light == nullptr || dsv == nullptr || ctx == nullptr)
+			return;
+
+		int32_t tx = 0, ty = 0, tw = 0, th = 0;
+		_shadowAtlas.GetTileViewport(assignment.tileIndex, tx, ty, tw, th);
+
+		// Clear ONLY this tile. A whole-DSV clear would wipe every cached
+		// neighbour, which is the entire point of the atlas - so the clear
+		// goes through ID3D11DeviceContext1::ClearView with a rect (legal on
+		// a depth-only DSV). If the interface is somehow missing, skip the
+		// clear rather than nuke the atlas: the far-plane depth from the
+		// previous owner only risks over-shadowing at the tile edge for one
+		// frame.
+		{
+			ID3D11DeviceContext1* ctx1 = nullptr;
+			if (SUCCEEDED(ctx->QueryInterface(__uuidof(ID3D11DeviceContext1), (void**)&ctx1)) && ctx1 != nullptr)
+			{
+				const FLOAT depthOne[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
+				D3D11_RECT rect = {};
+				rect.left = tx;
+				rect.top = ty;
+				rect.right = tx + tw;
+				rect.bottom = ty + th;
+				ctx1->ClearView(dsv, depthOne, &rect, 1);
+				ctx1->Release();
+			}
+			else
+			{
+				static bool sWarned = false;
+				if (!sWarned)
+				{
+					sWarned = true;
+					LOG_WARN("ShadowAtlas: ID3D11DeviceContext1 unavailable - tile clears skipped");
+				}
+			}
+		}
+
+		// Depth-only bind, tile carved by viewport + scissor. Raw, like the
+		// cluster SRV binds - the engine wrapper has no sub-rect DSV concept.
+		ctx->OMSetRenderTargets(0, nullptr, dsv);
+		D3D11_VIEWPORT vp = {};
+		vp.TopLeftX = (FLOAT)tx;
+		vp.TopLeftY = (FLOAT)ty;
+		vp.Width = (FLOAT)tw;
+		vp.Height = (FLOAT)th;
+		vp.MaxDepth = 1.0f;
+		ctx->RSSetViewports(1, &vp);
+		D3D11_RECT sc = { tx, ty, tx + tw, ty + th };
+		ctx->RSSetScissorRects(1, &sc);
+
+		const int32_t face = (int32_t)assignment.key.face;
+		const bool isPoint = light->CastAs<PointLight>() != nullptr;
+
+		// Local lights have no camera-fit cascades: the face matrices are
+		// fully determined by the light itself (cube face orientation for
+		// points, the cone for spots). 0..1 mirrors what the legacy path
+		// passes for its non-cascade lights.
+		light->ConstructMatrices(_currentCamera, 0.0f, 1.0f, face);
+
+		// Capture what this tile's depth is about to be rendered with - the
+		// consumers sample with the CAPTURED matrices, never the light's
+		// current ones (a later move that misses the re-render budget must
+		// not re-project cached depth).
+		_shadowAtlas.SetTileViewProj(assignment.tileIndex,
+			light->GetViewMatrix(face) * light->GetProjectionMatrix(face));
+
+		PVSParams params;
+		params.lodPartition = r_lodPartition._val.f32;
+		params.shapeType = PVSParams::ShapeType::Sphere;
+		params.shape.sphere = light->GetLightBoundingSphere(face);
+		params.isShadow = true;
+		params.camera = _currentCamera;
+		light->GetPVS(face)->CalculateVisibility(_currentScene, params);
+		// Local lights don't get the per-entity-move instance-cache refresh
+		// the camera and sun enjoy (Entity::ClearTransformCache), so a moved
+		// prop would re-render with its OLD shadowInstanceData. Refresh the
+		// whole face PVS - it only covers this light's radius, and this runs
+		// solely for budgeted dirty faces.
+		light->GetPVS(face)->RefreshAllInstanceCaches();
+
+		math::Viewport shadowVp;
+		shadowVp.width = (float)tw;
+		shadowVp.height = (float)th;
+
+		SetupPerFrameBuffer(
+			light->GetViewMatrix(face),
+			light->GetProjectionMatrix(face),
+			light->GetViewMatrixPrev(face),
+			light->GetProjectionMatrixPrev(face),
+			light->GetMaxSupportedShadowCascades(),
+			light->GetEntity()->GetComponent<Transform>()->GetForward(),
+			shadowVp,
+			face,
+			1.0f,
+			isPoint);
+
+		_currentScene->RenderEntities(
+			light->GetPVS(face),
+			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry),
+			MeshRenderFlags::MeshRenderShadowMap);
+
+		g_pEnv->_graphicsDevice->ClearScissorRect();
+	}
+
+	void SceneRenderer::UpdateRainOcclusionMap()
+	{
+		// Size + depth range are compile-time; the cbuffer pack in
+		// SetupPerFrameBuffer repeats the two numbers - keep in sync.
+		constexpr uint32_t kRainMapSize = 2048u;
+		constexpr float kUpRange = 80.0f;   // metres above the map centre
+		constexpr float kDownRange = 80.0f; // metres below
+
+		const auto& wsp = _currentScene->GetWeatherSurfaceParams();
+		const bool needed = r_rainOcclusion._val.b && _cameraEntity != nullptr &&
+			(wsp.wetness > 0.001f || wsp.snowCoverage > 0.001f || wsp.puddleAmount > 0.001f ||
+			 wsp.dirtAmount > 0.001f);
+		if (!needed)
+		{
+			// Dry weather: the map keeps its texels but shaders treat the
+			// world as exposed, and no render cost is paid.
+			_rainOcclusionValid = false;
+			return;
+		}
+
+		if (_rainOcclusionMap == nullptr)
+		{
+			_rainOcclusionMap = new ShadowMap(kRainMapSize, kRainMapSize);
+			_rainOcclusionMap->Create();
+		}
+		if (_rainOcclusionPVS == nullptr)
+			_rainOcclusionPVS = std::make_unique<PVS>();
+
+		const math::Vector3 camPos = _cameraEntity->GetPosition();
+		const float extent = r_rainOcclusionExtent._val.f32;
+		// Texel-snap the centre so cached depth doesn't crawl under camera
+		// drift - same trick the sun cascades use.
+		const float texelWorld = (2.0f * extent) / (float)kRainMapSize;
+		const math::Vector3 centre(
+			std::floor(camPos.x / texelWorld) * texelWorld,
+			camPos.y,
+			std::floor(camPos.z / texelWorld) * texelWorld);
+
+		const double now = g_pEnv->_timeManager->GetTime();
+		const float dx = centre.x - _rainOcclusionCentre.x;
+		const float dz = centre.z - _rainOcclusionCentre.z;
+		const float dy = std::fabs(centre.y - _rainOcclusionCentre.y);
+		const float recentreDist = extent * 0.25f;
+		const bool recentre = (dx * dx + dz * dz) > recentreDist * recentreDist
+			|| dy > kUpRange * 0.5f;
+		if (_rainOcclusionValid && !recentre && now < _rainOcclusionNextRefresh)
+			return;
+
+		// The map may still be bound as a PS SRV (t26) from last frame's
+		// opaque pass - release it before rebinding as the depth target or
+		// D3D11's hazard resolution nulls the DSV bind.
+		g_pEnv->_graphicsDevice->SetTexture2D(26, nullptr);
+
+		_rainOcclusionView = math::Matrix::CreateLookAt(
+			centre + math::Vector3(0.0f, kUpRange, 0.0f), centre, math::Vector3(0.0f, 0.0f, 1.0f));
+		_rainOcclusionProj = math::Matrix::CreateOrthographicOffCenter(
+			-extent, extent, -extent, extent, 0.1f, kUpRange + kDownRange);
+
+		PVSParams params;
+		params.lodPartition = r_lodPartition._val.f32;
+		params.shapeType = PVSParams::ShapeType::Sphere;
+		params.shape.sphere = dx::BoundingSphere(
+			dx::XMFLOAT3(centre.x, centre.y, centre.z),
+			std::sqrt(2.0f * extent * extent + kUpRange * kUpRange));
+		params.isShadow = true;
+		params.camera = _currentCamera;
+		_rainOcclusionPVS->CalculateVisibility(_currentScene, params);
+		_rainOcclusionPVS->RefreshAllInstanceCaches();
+
+		_rainOcclusionMap->SetRenderTarget();
+
+		math::Viewport rainVp;
+		rainVp.width = (float)kRainMapSize;
+		rainVp.height = (float)kRainMapSize;
+		SetupPerFrameBuffer(
+			_rainOcclusionView, _rainOcclusionProj,
+			_rainOcclusionView, _rainOcclusionProj,
+			1, math::Vector3(0.0f, -1.0f, 0.0f), rainVp, 0, 1.0f, false);
+
+		// Static geometry only: dynamic props sheltering the ground would
+		// flicker wet/dry as they moved AND dirty the cache every frame.
+		_currentScene->RenderEntities(
+			_rainOcclusionPVS.get(),
+			LAYERMASK(Layer::StaticGeometry),
+			MeshRenderFlags::MeshRenderShadowMap);
+
+		_rainOcclusionCentre = centre;
+		_rainOcclusionNextRefresh = now + (double)r_rainOcclusionRefresh._val.f32;
+		_rainOcclusionValid = true;
+	}
+
+	// Snow footprints (Phase 3 Part B). Unlike the occlusion map this is a
+	// COLOUR R8 target that is cleared and fully re-stamped every frame from the
+	// scene's world-anchored footprint ring buffer - so the camera-following
+	// map recentres for free (no persistence / reprojection). Each live print
+	// draws as an oriented instanced quad whose PS paints a foot-shaped
+	// depression; the snow shell's domain shader later reads this to compress
+	// the snow. Called right after UpdateRainOcclusionMap, before the main pass.
+	void SceneRenderer::UpdateSnowFootprintMap()
+	{
+		auto* gd = g_pEnv->_graphicsDevice;
+		const auto& wsp = _currentScene->GetWeatherSurfaceParams();
+		if (wsp.snowCoverage <= 0.001f || _cameraEntity == nullptr)
+		{
+			_snowFootprintValid = false;
+			return;
+		}
+
+		const double nowD = g_pEnv->_timeManager->GetTime();
+		const float now = (float)nowD;
+
+		// Debug emitter: drop an alternating L/R print at the camera ~2/s so the
+		// map can be exercised before the authoring component exists.
+		if (r_snowFootprintDebugEmit._val.b)
+		{
+			static double sNextEmit = 0.0;
+			static float sSide = 0.0f;
+			if (nowD >= sNextEmit)
+			{
+				sNextEmit = nowD + 0.5;
+				const math::Vector3 cp = _cameraEntity->GetPosition();
+				const math::Vector2 dir(0.0f, 1.0f);
+				const math::Vector2 lat(dir.y, -dir.x);
+				const float w = (sSide > 0.5f) ? 0.09f : -0.09f;
+				const math::Vector2 pos(cp.x + lat.x * w, cp.z + lat.y * w);
+				_currentScene->GetSnowFootprints().Emit(pos, dir, sSide, 0.13f, 0.06f, 20.0f, now);
+				sSide = (sSide > 0.5f) ? 0.0f : 1.0f;
+			}
+		}
+
+		// Gather the live prints. No prints -> nothing to deform this frame.
+		static std::vector<SnowFootprintGpu> s_active;
+		_currentScene->GetSnowFootprints().CollectActive(s_active, now);
+		if (s_active.empty())
+		{
+			_snowFootprintValid = false;
+			return;
+		}
+		const uint32_t activeCount = std::min((uint32_t)s_active.size(), SnowFootprintSystem::kCapacity);
+
+		// Lazy resources.
+		if (_snowFootprintMap == nullptr)
+		{
+			_snowFootprintMap = gd->CreateTexture2D(
+				(int32_t)kSnowFootprintMapSize, (int32_t)kSnowFootprintMapSize,
+				DXGI_FORMAT_R8_UNORM, 1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				1, 1, 0, nullptr, (D3D11_CPU_ACCESS_FLAG)0,
+				D3D11_RTV_DIMENSION_TEXTURE2D, D3D11_UAV_DIMENSION_UNKNOWN, D3D11_SRV_DIMENSION_TEXTURE2D);
+		}
+		if (_snowQuadVB == nullptr)
+		{
+			const math::Vector3 quadVerts[4] = {
+				{ -0.5f, -0.5f, 0.0f }, {  0.5f, -0.5f, 0.0f },
+				{  0.5f,  0.5f, 0.0f }, { -0.5f,  0.5f, 0.0f } };
+			_snowQuadVB = gd->CreateVertexBuffer(
+				(int32_t)sizeof(quadVerts), (uint32_t)sizeof(math::Vector3),
+				D3D11_USAGE_IMMUTABLE, 0, (void*)quadVerts);
+		}
+		if (_snowQuadIB == nullptr)
+		{
+			const uint32_t quadIndices[6] = { 0, 2, 1,  0, 3, 2 };
+			_snowQuadIB = gd->CreateIndexBuffer(
+				(int32_t)sizeof(quadIndices), (uint32_t)sizeof(uint32_t),
+				D3D11_USAGE_IMMUTABLE, 0, (void*)quadIndices);
+		}
+		if (_snowFootprintBuffer == nullptr)
+		{
+			_snowFootprintBuffer = gd->CreateStructuredBuffer(
+				(uint32_t)sizeof(SnowFootprintGpu), SnowFootprintSystem::kCapacity,
+				StructuredBufferFlags::ShaderResource, ResourceUsage::Dynamic, CpuAccess::Write);
+		}
+		if (!_snowFootstampShader)
+		{
+			_snowFootstampShader = IShader::Create("EngineData.Shaders/SnowFootstamp.hcs");
+			if (!_snowFootstampShader)
+			{
+				_snowFootprintValid = false;
+				return;
+			}
+		}
+
+		_snowFootprintBuffer->SetData(s_active.data(), activeCount * (uint32_t)sizeof(SnowFootprintGpu));
+
+		// Texel-snapped camera-following centre (same trick as the occlusion map
+		// / sun cascades) so the stamped prints don't crawl under camera drift.
+		const math::Vector3 camPos = _cameraEntity->GetPosition();
+		const float extent = kSnowFootprintExtent;
+		const float texelWorld = (2.0f * extent) / (float)kSnowFootprintMapSize;
+		const math::Vector3 centre(
+			std::floor(camPos.x / texelWorld) * texelWorld,
+			camPos.y,
+			std::floor(camPos.z / texelWorld) * texelWorld);
+		_snowFootprintCentre = centre;
+
+		constexpr float kUp = 80.0f, kDown = 80.0f;
+		_snowFootprintView = math::Matrix::CreateLookAt(
+			centre + math::Vector3(0.0f, kUp, 0.0f), centre, math::Vector3(0.0f, 0.0f, 1.0f));
+		_snowFootprintProj = math::Matrix::CreateOrthographicOffCenter(
+			-extent, extent, -extent, extent, 0.1f, kUp + kDown);
+
+		// Bind the R8 map as the target and stamp. Viewport is restored to the
+		// backbuffer by the SetViewports call right after this function returns
+		// (mirrors the occlusion map, which also leaves it to the caller).
+		D3D11_VIEWPORT vp;
+		vp.TopLeftX = 0; vp.TopLeftY = 0;
+		vp.Width = (float)kSnowFootprintMapSize; vp.Height = (float)kSnowFootprintMapSize;
+		vp.MinDepth = 0.0f; vp.MaxDepth = 1.0f;
+		gd->SetViewports({ vp });
+		gd->SetRenderTarget(_snowFootprintMap);
+		_snowFootprintMap->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+
+		math::Viewport fpVp;
+		fpVp.width = (float)kSnowFootprintMapSize;
+		fpVp.height = (float)kSnowFootprintMapSize;
+		SetupPerFrameBuffer(
+			_snowFootprintView, _snowFootprintProj,
+			_snowFootprintView, _snowFootprintProj,
+			1, math::Vector3(0.0f, -1.0f, 0.0f), fpVp, 0, 1.0f, false);
+
+		// No depth target is bound (single-arg SetRenderTarget), so there is no
+		// depth test/write to disable - the stamp just paints the R8 map.
+		gd->SetBlendState(BlendState::Additive);
+		gd->SetVertexShader(_snowFootstampShader->GetShaderStage(ShaderStage::VertexShader));
+		gd->SetPixelShader(_snowFootstampShader->GetShaderStage(ShaderStage::PixelShader));
+		gd->SetInputLayout(_snowFootstampShader->GetInputLayout());
+		gd->SetTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		gd->SetVertexBuffer(0, _snowQuadVB);
+		gd->SetIndexBuffer(_snowQuadIB);
+		gd->SetVertexStructuredBuffer(0, _snowFootprintBuffer);
+		gd->DrawIndexedInstanced(6, activeCount);
+		gd->ClearVertexStructuredBuffer(0);
+
+		gd->SetBlendState(BlendState::Opaque);
+		_snowFootprintValid = true;
+	}
+
+	// Wetness accumulation/drying (Phase 3). Runs ONCE per frame (not in
+	// SetupPerFrameBuffer, which is called several times a frame). The authored
+	// wetness/puddleAmount are the TARGET; the state lags toward them with
+	// asymmetric rates so surfaces wet quickly and dry slowly. SetupPerFrameBuffer
+	// then substitutes the lagged state for the authored values when enabled.
+	void SceneRenderer::UpdateWetnessAccumulation()
+	{
+		if (_currentScene == nullptr)
+			return;
+		const auto& wsp = _currentScene->GetWeatherSurfaceParams();
+		if (!r_wetnessAccumulation._val.b || !_wetnessInit)
+		{
+			// Snap to the authored values (also the first-frame init path) so
+			// toggling the feature never pops.
+			_wetnessState = wsp.wetness;
+			_puddleState = wsp.puddleAmount;
+			_wetnessInit = true;
+			return;
+		}
+		// Clamp dt so a hitch / breakpoint can't jump the state.
+		const float dt = std::min(0.1f, std::max(0.0f, g_pEnv->_timeManager->GetFrameTime()));
+		// SLOW rise, slow fall. The universal wet darkening dips scene luminance
+		// (every surface darkens) before the fog builds up to compensate, so a
+		// fast onset reads as a dark pop. Easing the wetness in SLOWLY (~4 s) lets
+		// the fog get established first, so surfaces darken gently UNDER the fog
+		// instead of ahead of it. Drying stays slow so streets linger wet.
+		auto lag = [dt](float state, float target, float rise, float fall)
+		{
+			const float rate = (target > state) ? rise : fall;
+			return state + std::clamp(target - state, -rate * dt, rate * dt);
+		};
+		_wetnessState = lag(_wetnessState, wsp.wetness, r_wetnessRiseRate._val.f32, r_wetnessFallRate._val.f32);
+		_puddleState  = lag(_puddleState,  wsp.puddleAmount, r_wetnessRiseRate._val.f32, r_puddleDryRate._val.f32);
+	}
+
 	void SceneRenderer::RenderShadowMaps(Light* shadowCaster)
 	{
 		PROFILE();
@@ -2414,9 +4127,11 @@ namespace HexEngine
 		//
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::NoCulling);
 		{
-			float cascadeStart = 0.0f;
+			const auto numCascades = shadowCaster->GetMaxSupportedShadowCascades();
+			const float nearZ = _currentCamera->GetNearZ();
+			const float farZ = _currentCamera->GetFarZ();
 
-			for (auto i = 0; i < shadowCaster->GetMaxSupportedShadowCascades(); ++i)
+			for (auto i = 0; i < numCascades; ++i)
 			{
 				auto shadowMap = shadowCaster->GetShadowMap(i);
 
@@ -2441,13 +4156,15 @@ namespace HexEngine
 				bool shouldOverrideCascade = shadowCaster->CastAs<PointLight>() != nullptr;
 
 				
-				float start = cascadeStart / _currentCamera->GetFarZ();
-				float end = (cascadeStart + r_shadowCascadeRange._val.f32) / _currentCamera->GetFarZ();
+				// Same split maths as SetupPerFrameBuffer's g_frustumDepths upload -
+				// the shader picks a cascade by those depths and must find geometry
+				// rendered with matching matrices. Point/spot ConstructMatrices
+				// ignore the z range entirely, so sharing this path is harmless
+				// for them.
+				float start = (i == 0) ? 0.0f : ComputeCascadeSplitEnd(i - 1, numCascades, nearZ, farZ) / farZ;
+				float end = ComputeCascadeSplitEnd(i, numCascades, nearZ, farZ) / farZ;
 
-				if (i == shadowCaster->GetMaxSupportedShadowCascades() - 1)
-					end = 1.0f;
-
-				if (start == 1.0f && end == 1.0f)
+				if (start >= 1.0f && end >= 1.0f)
 				{
 					LOG_DEBUG("Cannot render shadow map cascade where start and end are both 1.0f");
 					return;
@@ -2464,17 +4181,30 @@ namespace HexEngine
 					PVSParams params;
 					params.lodPartition = r_lodPartition._val.f32;
 					params.shapeType = PVSParams::ShapeType::Sphere;
-					params.shape.sphere = shadowCaster->GetLightBoundingSphere(i);
-					//params.shapeType = PVSParams::ShapeType::Frustum;
-					//params.shape.frustum = shadowCaster->GetLightBoundingFrustum(i);
 					params.isShadow = true;
 					params.camera = _currentCamera;
 
+					// Coarse PVS shape: a CAMERA-CENTRED sphere that bounds the
+					// cascade's slice sphere under every camera orientation
+					// (|centre - camera| + radius), so turning the camera never
+					// invalidates the PVS - only translation does (25% slack).
+					// The actual slice sphere goes in as the fine sphere: the
+					// shadow draw loop tests each renderable against it per
+					// frame so the shadow map still only draws the slice.
+					{
+						const dx::BoundingSphere sliceSphere = shadowCaster->GetLightBoundingSphere(i);
+						const math::Vector3 cameraPos = _currentCamera->GetEntity()->GetPosition() + _currentCamera->GetViewOffset();
+						const math::Vector3 toSlice(sliceSphere.Center.x - cameraPos.x, sliceSphere.Center.y - cameraPos.y, sliceSphere.Center.z - cameraPos.z);
+						params.shape.sphere = dx::BoundingSphere(
+							dx::XMFLOAT3(cameraPos.x, cameraPos.y, cameraPos.z),
+							toSlice.Length() + sliceSphere.Radius);
+						params.fineSphere = sliceSphere;
+						params.hasFineSphere = true;
+					}
+
 					shadowCaster->GetPVS(i)->CalculateVisibility(_currentScene, params);
 				}
-				
 
-				cascadeStart += r_shadowCascadeRange._val.f32;
 
 				SetupPerFrameBuffer(
 					shadowCaster->GetViewMatrix(i),
@@ -2522,78 +4252,6 @@ namespace HexEngine
 		//
 		//g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::FrontFace);
 	}
-#if 0
-	void SceneRenderer::RenderWater()
-	{
-		PROFILE();
-
-		/// RENDER WATER
-		SceneRenderParameters params;
-		params.passIndex = 6;
-		params.camera = _currentCamera;
-		params.isShadowPass = false;
-
-		const auto& bbvp = g_pEnv->_graphicsDevice->GetBackBufferViewport();
-
-		// set the shadow viewport
-		//
-		D3D11_VIEWPORT vp;
-		vp.TopLeftX = 0;
-		vp.TopLeftY = 0;
-		vp.Width = bbvp.Width * r_waterResolution._val.f32;
-		vp.Height = bbvp.Height * r_waterResolution._val.f32;
-		vp.MinDepth = 0.0f;
-		vp.MaxDepth = 1.0f;
-		g_pEnv->_graphicsDevice->SetViewports({ vp });
-
-		auto guiRenderer = g_pEnv->_uiManager->GetRenderer();
-		
-
-		g_pEnv->_graphicsDevice->SetRenderTarget(_waterAccumulationRT, g_pEnv->_graphicsDevice->GetDepthStencil()/*_waterDSV*/);
-		_waterAccumulationRT->ClearRenderTargetView(math::Color(0, 0, 0, 0));
-		//_waterDSV->ClearDepth(D3D11_CLEAR_DEPTH | D3D11_CLEAR_STENCIL);
-
-		g_pEnv->_graphicsDevice->EnableDepthBuffer(true);
-
-		//guiRenderer->StartFrame();
-
-		//guiRenderer->FullScreenTexturedQuad(_gbuffer.GetDiffuse());
-
-		if (_currentCamera->GetEntity()->GetPosition().y < 0.0f)
-			g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::FrontFace);
-		else
-			g_pEnv->_graphicsDevice->SetCullingMode(CullingMode::BackFace);
-
-		
-		//_gbuffer.GetDiffuse()->CopyTo(_waterAccumulationRT);
-
-		_currentScene->RenderWater(params, false, nullptr);
-
-		//_waterAccumulationRT->CopyTo(_compositionRT);
-		//_waterAccumulationRT->CopyTo(_gbuffer.GetDiffuse());
-
-		
-
-		guiRenderer->StartFrame();
-
-		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Transparency);
-		//_waterBlur->Render(guiRenderer);
-
-		g_pEnv->_graphicsDevice->SetViewports({ bbvp });
-
-		
-
-		g_pEnv->_graphicsDevice->SetRenderTarget(_compositionRT);
-		guiRenderer->FullScreenTexturedQuad(_waterAccumulationRT);
-
-		g_pEnv->_graphicsDevice->SetRenderTarget(_gbuffer.GetDiffuse());
-		guiRenderer->FullScreenTexturedQuad(_waterAccumulationRT);
-
-		guiRenderer->EndFrame();
-
-		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
-	}
-#endif
 
 	inline void matrixOrthoNormalInvert(math::Matrix& result, const math::Matrix& mat)
 	{
@@ -2772,7 +4430,8 @@ namespace HexEngine
 			// (incorrect), and after transparency would force overlapping
 			// alpha-blended geometry to be re-sampled into the scatter kernel.
 			RenderSubsurfaceScattering();
-			RenderTransparent();
+			// Transparents now render AFTER the fog / volumetric / aerial
+			// perspective applies (see below) and fog themselves per fragment.
 			RenderFog();
 			//RenderWater();
 			// Volumetric lighting: prefer the Phase D froxel-grid path when
@@ -2783,14 +4442,18 @@ namespace HexEngine
 			// to the legacy path when the subsystem isn't initialised, so
 			// scenes with broken compute support keep their sun shafts.
 			const bool useFroxelVolumetrics =
+				r_volumetric._val.b &&
 				g_pEnv->_volumetricScattering != nullptr &&
 				g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr &&
 				_volumetricScatterApplyShader != nullptr;
 			if (useFroxelVolumetrics)
 				RenderVolumetricScattering();
-			else
+			else if (r_volumetric._val.b)
 				RenderVolumetricLighting();
 			RenderVolumetricClouds();
+			// S7: screen-space sun shafts, right after clouds so the mask can
+			// read the full-res cloud result still sitting in _fogBuffer.
+			RenderSunShafts();
 			// GPU particles render AFTER the volumetric apply (moved out of
 			// RenderTransparent): the apply attenuates beauty pixels by the
 			// fog transmittance at the OPAQUE depth, so particles drawn
@@ -2817,32 +4480,107 @@ namespace HexEngine
 			// peeling); acceptable v1 limit.
 			RenderAerialPerspective();
 
+			// Transparent surfaces last in the atmospheric chain: the applies
+			// above only know the opaque depth, so a window at 10 m used to be
+			// hazed as if it sat on the wall 50 m behind it, and a distant pane
+			// went un-hazed against hazed walls. Drawn here, each fragment samples
+			// the froxel and AP volumes at its OWN depth (TransparentAtmosphere)
+			// and blends over a background that already carries the haze behind it.
+			RenderTransparent();
+
+			// IBL atlases are per-scene, not per-camera: generating them again
+			// for each of a probe's six capture faces is pure waste, and running
+			// the probe prefilter while a capture is in flight risks binding a
+			// probe atlas as a render target mid-capture.
+			if (_currentCamera == nullptr || !_currentCamera->IsEnvironmentCapture())
+			{
+				// Prefiltered sky environment atlas. Runs regardless of SSR: the
+				// deferred IBL term consumes it even when nothing screen-space
+				// reflects.
+				RenderSkyEnvMap();
+
+				// Prefilter any reflection probe whose 6-face capture just finished.
+				RenderProbeEnvMaps();
+
+				// Linear-unit atlas dump - see the HVar comment. Placed after both
+				// prefilters so the files reflect this frame's content.
+				if (r_iblDumpAtlases._val.b)
+				{
+					r_iblDumpAtlases._val.b = false;
+					if (_iblSkyEnvMap != nullptr)
+					{
+						try { _iblSkyEnvMap->SaveToFile(fs::path("ibl_sky_atlas.png")); }
+						catch (const std::exception& e) { LOG_WARN("ibl dump: sky atlas failed: %s", e.what()); }
+					}
+					if (_activeProbe != nullptr && _activeProbe->GetEnvAtlas() != nullptr)
+					{
+						try { _activeProbe->GetEnvAtlas()->SaveToFile(fs::path("ibl_probe_atlas.png")); }
+						catch (const std::exception& e) { LOG_WARN("ibl dump: probe atlas failed: %s", e.what()); }
+					}
+					if (_activeProbe != nullptr && _activeProbe->GetFace(0) != nullptr)
+					{
+						try { _activeProbe->GetFace(0)->SaveToFile(fs::path("ibl_probe_face0.png")); }
+						catch (const std::exception& e) { LOG_WARN("ibl dump: probe face failed: %s", e.what()); }
+					}
+					LOG_INFO("r_iblDumpAtlases: wrote ibl_sky_atlas.png / ibl_probe_atlas.png / ibl_probe_face0.png");
+				}
+			}
+
 			// don't bother doing this if we don't need to, its expensive!
-			if(_currentScene->DidAnyDrawnItemReflect())
+			// WillRenderSSR() carries the DidAnyDrawnItemReflect check along with
+			// the camera/cvar ones, and is the same predicate the deferred pass
+			// consults when deciding whether to keep its environment specular.
+			if (WillRenderSSR())
 				RenderSSR();
 
-			if (r_taa._val.b)
+			// DLSS is itself a temporal resolver and consumes the jittered, un-resolved
+			// frame. Running our TAA as well meant two accumulators fighting over the same
+			// history, which costs sharpness for nothing.
+			const bool dlssActive =
+				_currentCamera->IsDLSSEnabled() &&
+				g_pEnv->_streamlineProvider != nullptr &&
+				g_pEnv->_streamlineProvider->IsEnabled();
+
+			// Environment captures skip TAA for the same reason they skip SSR:
+			// one-shot render, no history of their own, and resolving would
+			// blend the capture against the MAIN camera's history buffer.
+			const bool isEnvCapture = _currentCamera != nullptr && _currentCamera->IsEnvironmentCapture();
+
+			if (r_taa._val.b && !dlssActive && !isEnvCapture)
 			{
 				_taa.Resolve(_beautyRT, _beautyRT, _gbuffer.GetVelocity(), _gbuffer.GetNormal(), g_pEnv->GetUIManager().GetRenderer());
+				_temporalAaAppliedThisFrame = true;
 			}
-
-			// Interaction look-at outline glow. Runs before bloom so the SDF ring
-			// picks up a soft bloom halo. No-op when nothing is focused.
-			GFX_PERF_BEGIN(0xFFFFFFFF, L"Outline glow");
+			else
 			{
-				RenderOutlineGlow();
+				_temporalAaAppliedThisFrame = dlssActive;
 			}
-			GFX_PERF_END();
 
-			if (!r_profileDisableBloom._val.b)
+			// P4.10: contrast-adaptive sharpen, right after the temporal
+			// resolve and BEFORE motion blur (sharpen the crisp frame, then
+			// let the blur soften it - not the reverse). Skipped under DLSS
+			// (it has its own sharpener) and for env captures.
+			if (r_sharpen._val.f32 > 0.0f && !dlssActive && !isEnvCapture)
 			{
-				_bloomEffect->Render(_currentCamera, _beautyRT, _beautyRT);
+				RenderCAS();
 			}
 
-			// Auto exposure: sample the post-bloom beauty for adaptive eye-adaption metering.
-			// Runs after bloom so bright bloom glare is counted by the meter (matching how
-			// the viewer perceives the scene); runs before colour grading so the resulting
-			// multiplier can be applied via r_exposure in the per-frame buffer.
+			// P4.5: motion blur right after the temporal resolve, at render
+			// resolution, before the exposure meter (a blur redistributes
+			// energy but shouldn't flicker the histogram) and before glow/
+			// bloom (glows are lens effects - they don't motion blur).
+			// Env captures have no meaningful velocity - skip.
+			if (!isEnvCapture)
+			{
+				RenderMotionBlur();
+			}
+
+			// Auto exposure: meter the PRE-bloom, pre-glow beauty. Metering
+			// after bloom created a feedback loop (brighter frame -> more
+			// bloom -> meter reads brighter -> exposure drops -> less bloom),
+			// and the histogram band doesn't want glow contamination anyway.
+			// Still before colour grading so the resulting multiplier can be
+			// applied via r_exposure in the per-frame buffer.
 			//
 			// Passing sun elevation lets AutoExposure switch its target luma and max
 			// multiplier to night-time values as the sun descends - without this, the meter
@@ -2860,7 +4598,23 @@ namespace HexEngine
 						sunElevation = -sunTransform->GetForward().y;
 					}
 				}
-				_autoExposure.Update(_beautyRT, dt, sunElevation);
+				_autoExposure.Update(_beautyRT, dt, sunElevation, _gbuffer.GetDiffuse(), _skyOvercastAmount);
+			}
+
+			// Interaction look-at outline glow. Runs before bloom so the SDF ring
+			// picks up a soft bloom halo. No-op when nothing is focused.
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"Outline glow");
+			{
+				RenderOutlineGlow();
+			}
+			GFX_PERF_END();
+
+			if (!r_profileDisableBloom._val.b)
+			{
+				// The SSS intermediate is idle by this point in the frame and
+				// matches _beautyRT in size/format - lend it as the composite
+				// scratch leg.
+				_bloomEffect->Render(_currentCamera, _beautyRT, _subsurfaceIntermediateRT);
 			}
 			
 			//_beautyRT->GetPixels(_denoiseFD.colour);
@@ -2934,25 +4688,102 @@ namespace HexEngine
 #endif
 				{
 
-					GFX_PERF_BEGIN(0xFFFFFFFF, L"RenderOverlays");
+					// Environment captures take a tonemapped SCALING blit of beauty
+					// into their own (smaller) render target instead of the overlay
+					// chain. RenderOverlays ping-pongs with `renderTarget->CopyTo(beauty)`
+					// between the camera RT and the shared full-res beauty buffer,
+					// and CopyResource requires identical dimensions - a 256px
+					// capture RT against 3840x2071 buffers is an immediate D3D11
+					// RESOURCE_MANIPULATION error. A fullscreen quad rescales, so
+					// the capture gets the finished frame at its own resolution.
+					// Post effects that only exist inside the overlay chain
+					// (vignette, colour grading, DoF) are intentionally absent from
+					// probe captures - reflections shouldn't carry lens effects.
+					if (_currentCamera->IsEnvironmentCapture())
 					{
-						g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
-						RenderOverlays(flags, _beautyRT, _currentCamera->GetRenderTarget());
+						// Region copy, not a fullscreen blit. A capture camera has a
+						// small viewport but renders into the SHARED full-resolution
+						// beauty buffer, so it only fills the top-left corner of it -
+						// a fullscreen quad would sample the whole buffer and hand the
+						// probe mostly stale main-camera content (first attempt did
+						// exactly that: every roughness row of the probe atlas came
+						// out a uniform cream, structureless even in the mirror row).
+						//
+						// Copying the rendered rect keeps source and destination the
+						// same size, which is what CopyResource requires, and takes
+						// the LINEAR HDR beauty before tonemapping - better probe
+						// radiance than a tonemapped LDR frame would be.
+						GFX_PERF_BEGIN(0xFFFFFFFF, L"EnvCapture Copy");
+						const auto& capVp = _currentCamera->GetViewport();
+						// The capture rasterizes at the FULL buffer size (it has to -
+						// the fullscreen passes key their gbuffer UVs off the
+						// viewport size), but a probe face is the centred SQUARE of
+						// that view: with a 90-degree vertical FOV, the central
+						// height x height crop is exactly the 90x90 face the
+						// prefilter reconstructs. Take that square out of the middle
+						// and land it at the origin of the camera's square target.
+						const LONG capW = (LONG)capVp.width;
+						const LONG capH = (LONG)capVp.height;
+						const LONG side = std::min(capW, capH);
+						const LONG originX = (capW - side) / 2;
+						const LONG originY = (capH - side) / 2;
+
+						RECT region{ originX, originY, originX + side, originY + side };
+						RECT destRegion{ 0, 0, side, side };
+
+						// Capture-chain dump, source side. The probe's own dump
+						// shows what the rig camera's target ended up with; this
+						// shows what beauty and the gbuffer held at the moment we
+						// copied, which separates "the capture never rendered the
+						// room" from "the copy took the wrong pixels".
+						if (r_iblProbeDumpCapture._val.b)
+						{
+							static int32_t sDumpIdx = 0;
+							const std::string tag = std::to_string(sDumpIdx++);
+							LOG_INFO("probe dump %s: beauty %dx%d, gbufDiffuse %dx%d, capture viewport %.0fx%.0f",
+								tag.c_str(),
+								(int32_t)_beautyRT->GetWidth(), (int32_t)_beautyRT->GetHeight(),
+								_gbuffer.GetDiffuse() != nullptr ? (int32_t)_gbuffer.GetDiffuse()->GetWidth() : -1,
+								_gbuffer.GetDiffuse() != nullptr ? (int32_t)_gbuffer.GetDiffuse()->GetHeight() : -1,
+								capVp.width, capVp.height);
+							try { _beautyRT->SaveToFile(fs::path("probe_dump_beauty_" + tag + ".png")); }
+							catch (const std::exception& e) { LOG_WARN("probe dump: beauty %s failed: %s", tag.c_str(), e.what()); }
+							if (_gbuffer.GetDiffuse() != nullptr)
+							{
+								try { _gbuffer.GetDiffuse()->SaveToFile(fs::path("probe_dump_gbuf_" + tag + ".png")); }
+								catch (const std::exception& e) { LOG_WARN("probe dump: gbuf %s failed: %s", tag.c_str(), e.what()); }
+							}
+						}
+
+						_beautyRT->CopyTo(_currentCamera->GetRenderTarget(), region, destRegion);
+						GFX_PERF_END();
 					}
-					GFX_PERF_END();
+					else
+					{
+						GFX_PERF_BEGIN(0xFFFFFFFF, L"RenderOverlays");
+						{
+							g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
+							RenderOverlays(flags, _beautyRT, _currentCamera->GetRenderTarget());
+						}
+						GFX_PERF_END();
+					}
 				}				
 			}
 			else
 			{
-				auto outputShader = _tonemapShader.get();
-				if (auto backBuffer = g_pEnv->_graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
-				{
-					outputShader = _hdrOutputShader.get();
-				}
+				auto outputShader = g_pEnv->_graphicsDevice->IsHdrOutput()
+					? _hdrOutputShader.get() : _tonemapShader.get();
 
 				g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
 				g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
-				guiRenderer->FullScreenTexturedQuad(_beautyRT, outputShader);
+				// P4.7/P4.9: beauty t0 + colour LUT t1 + blue-noise t2 (see the
+				// overlay path).
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+				g_pEnv->_graphicsDevice->SetTexture2D(_beautyRT);
+				g_pEnv->_graphicsDevice->SetTexture3D(_colourLut.GetVolume());
+				g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
+				guiRenderer->FullScreenTexturedQuad(nullptr, outputShader);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
 			}
 
 			guiRenderer->EndFrame();
@@ -2980,62 +4811,116 @@ namespace HexEngine
 		{
 			guiRenderer->StartFrame();
 
-			auto outputShader = _tonemapShader.get();
-			if (auto backBuffer = g_pEnv->_graphicsDevice->GetBackBuffer(); backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT)
+			auto outputShader = g_pEnv->_graphicsDevice->IsHdrOutput()
+				? _hdrOutputShader.get() : _tonemapShader.get();
+
+			// PING-PONG (Phase 4 slice 1). The chain used to draw every pass
+			// into the camera RT and then CopyResource the result back into
+			// beauty - 3-6 full-res copies per frame. The two buffers are the
+			// same size and format on both paths (beauty = _beautyRT or
+			// _dlssTarget, renderTarget = the camera RT, all
+			// GetDesiredBackBufferFormat), so alternate them instead: each
+			// enabled pass reads src, writes dst, swap. One parity copy at
+			// most before the display-output pass, which must land in the
+			// camera RT for the debug overlays + final present blit.
+			ITexture2D* src = beauty;
+			ITexture2D* dst = renderTarget;
+			const auto runPass = [&](IShader* shader)
 			{
-				outputShader = _hdrOutputShader.get();
-			}
+				g_pEnv->_graphicsDevice->SetRenderTarget(dst);
+				guiRenderer->FullScreenTexturedQuad(src, shader);
+				std::swap(src, dst);
+			};
 
 			// Bokeh DoF runs FIRST in the overlay chain so it gathers
 			// pre-tonemap linear HDR colour. The "big bright bokeh ball" look
 			// depends on this - sampling post-tonemap colour clamps bright
 			// highlights to roughly 1.0 and squashes the disc shape on the
 			// brightest sources (the most visually distinctive bokeh pixels).
-			// Internally this swaps beauty <-> _subsurfaceIntermediateRT, which
-			// SSS has already finished using by this point.
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Bokeh DoF");
 			{
-				RenderBokehDoF();
+				if (RenderBokehDoF(src, dst))
+					std::swap(src, dst);
 			}
 			GFX_PERF_END();
 
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Colour grading");
 			{
-				guiRenderer->FullScreenTexturedQuad(beauty, _colourGradingShader.get());
-				renderTarget->CopyTo(beauty);
+				runPass(_colourGradingShader.get());
 			}
 			GFX_PERF_END();
 
-			GFX_PERF_BEGIN(0xFFFFFFFF, L"Vignette");
+			// Lens drips: screen-space RAIN beads. Gated in C++ so a dry scene -
+			// or a snowstorm / sandstorm (which also drive precipitationIntensity)
+			// - pays nothing; the shader also zeroes the effect for snow/sand.
+			const WeatherSurfaceParams& _lensWx = _currentScene ? _currentScene->GetWeatherSurfaceParams() : WeatherSurfaceParams();
+			if (r_lensDrips._val.b && _lensDripsShader && _currentScene != nullptr &&
+				_lensWx.precipitationIntensity > 0.001f &&
+				_lensWx.snowCoverage < 0.34f && _lensWx.dirtAmount < 0.34f)
 			{
-				guiRenderer->FullScreenTexturedQuad(beauty, _vignetteShader.get());
-				renderTarget->CopyTo(beauty);
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Lens drips");
+				{
+					runPass(_lensDripsShader.get());
+				}
+				GFX_PERF_END();
 			}
-			GFX_PERF_END();
+
+			// P4.8: cvar-gated (the pass used to run unconditionally with
+			// compiled-in constants).
+			if (r_vignette._val.b && r_vignetteAmount._val.f32 != 0.0f)
+			{
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Vignette");
+				{
+					runPass(_vignetteShader.get());
+				}
+				GFX_PERF_END();
+			}
 
 			if (r_chromaticAbberation._val.f32 > 0.0f)
 			{
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"Chromatic abberration");
 				{
-					guiRenderer->FullScreenTexturedQuad(beauty, _chromaticAberrationShader.get());
-					renderTarget->CopyTo(beauty);
+					runPass(_chromaticAberrationShader.get());
 				}
 				GFX_PERF_END();
-			}			
+			}
 
-			if (r_fxaa._val.i32 && canPostProcess)
+			// Skip FXAA when a temporal resolver already ran this frame. TAA defaults on, so
+			// the two were stacking every frame: FXAA then blurs edges TAA had already
+			// resolved, and it does so pre-tonemap on unbounded linear HDR where its fixed
+			// relative thresholds behave inconsistently across the exposure range. Turning
+			// r_taa off still gives you FXAA as the fallback AA.
+			if (r_fxaa._val.i32 && canPostProcess && !_temporalAaAppliedThisFrame)
 			{
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"FXAA");
 				{
-					guiRenderer->FullScreenTexturedQuad(beauty, _fxaa.get());
-					renderTarget->CopyTo(beauty);
+					runPass(_fxaa.get());
 				}
 				GFX_PERF_END();
 			}
 
 			GFX_PERF_BEGIN(0xFFFFFFFF, L"Display output");
 			{
-				guiRenderer->FullScreenTexturedQuad(beauty, outputShader);
+				// Must READ the latest image and WRITE the camera RT. When the
+				// ping-pong left the latest image IN the camera RT (odd pass
+				// count), move it across once - the single copy this chain
+				// still performs, versus 3-6 before.
+				if (src == renderTarget)
+				{
+					src->CopyTo(beauty);
+					src = beauty;
+				}
+				g_pEnv->_graphicsDevice->SetRenderTarget(renderTarget);
+				// P4.7/P4.9: source at t0, colour LUT volume at t1, blue-noise
+				// at t2 (slotless binds, order exact - Tonemap/TonemapHDR
+				// declare them at those registers). A null LUT volume reads
+				// black but the shader bypasses on g_lutParams.y == 0.
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+				g_pEnv->_graphicsDevice->SetTexture2D(src);
+				g_pEnv->_graphicsDevice->SetTexture3D(_colourLut.GetVolume());
+				g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
+				guiRenderer->FullScreenTexturedQuad(nullptr, outputShader);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
 			}
 			GFX_PERF_END();
 
@@ -3058,6 +4943,96 @@ namespace HexEngine
 				guiRenderer->FillTexturedQuad(_ssrHitInfo, DebugImageSize * 8 + 40, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
 
 				guiRenderer->FillTexturedQuad(_ssrResolved, DebugImageSize * 9 + 50, 10, DebugImageSize, DebugImageSize, math::Color(1, 1, 1, 1));
+			}
+
+			// Sky environment atlas overlay - native 1:1 so the roughness rows
+			// (mirror at the top, rough at the bottom) can be inspected without
+			// filtering. Deliberately outside r_debugScene: it's the one image
+			// needed to verify the IBL prefilter.
+			ITexture2D* debugAtlas = nullptr;
+			bool debugIsFace = false;
+			if (r_iblSkyEnvDebug._val.i32 == 1)
+				debugAtlas = _iblSkyEnvMap;
+			else if (r_iblSkyEnvDebug._val.i32 == 2 && _activeProbe != nullptr)
+				debugAtlas = _activeProbe->GetEnvAtlas();
+			else if (r_iblSkyEnvDebug._val.i32 >= 3 && _activeProbe != nullptr)
+			{
+				// Raw capture face, unprefiltered. If this doesn't look like the room
+				// the probe sits in, the problem is the capture (rig framing /
+				// position), not the prefilter.
+				debugAtlas = _activeProbe->GetFace(
+					std::clamp(r_iblSkyEnvDebug._val.i32 - 3, 0, 5));
+				debugIsFace = true;
+			}
+
+			// Cluster occupancy heatmap (Phase 2). Drawn from the same debug
+			// overlay block as the env atlases; RenderDebug dispatches the
+			// heatmap compute against this frame's cull results first.
+			if (r_clusterDebug._val.b && r_clusterLights._val.b && canPostProcess &&
+				_clusteredLights.GetDebugTexture() != nullptr)
+			{
+				_clusteredLights.RenderDebug(_gbuffer.GetNormal());
+				guiRenderer->FillTexturedQuad(_clusteredLights.GetDebugTexture(),
+					10, 170, 960, 540, math::Color(1, 1, 1, 1));
+			}
+
+			// Snow footprint deformation map overlay (Phase 3 Part B). R8, so it
+			// shows as a red foot-shaped depression field; verifies the stamp
+			// pass independently of the shell consuming it.
+			if (r_snowFootprintDebugView._val.b && canPostProcess &&
+				_snowFootprintValid && _snowFootprintMap != nullptr)
+			{
+				guiRenderer->FillTexturedQuad(_snowFootprintMap,
+					10, 170, 512, 512, math::Color(1, 1, 1, 1));
+			}
+
+			// Shadow-atlas overlay (slice 7): the raw depth atlas, scaled down.
+			// Occupied tiles show their depth silhouettes; free tiles stay
+			// flat. The copy target is lazy - 64 MB nobody pays for until the
+			// cvar flips - and CopyResource is legal because R32_TYPELESS and
+			// R32_FLOAT are copy-compatible at identical dimensions.
+			if (r_shadowAtlasDebug._val.b && r_shadowAtlas._val.b && canPostProcess &&
+				_shadowAtlas.GetAtlasSrv() != nullptr)
+			{
+				if (_shadowAtlasDebugTex == nullptr)
+				{
+					_shadowAtlasDebugTex = g_pEnv->_graphicsDevice->CreateTexture2D(
+						ShadowAtlas::kAtlasSize, ShadowAtlas::kAtlasSize,
+						DXGI_FORMAT_R32_FLOAT, 1,
+						D3D11_BIND_SHADER_RESOURCE,
+						0, 1, 0, nullptr, (D3D11_CPU_ACCESS_FLAG)0,
+						D3D11_RTV_DIMENSION_UNKNOWN,
+						D3D11_UAV_DIMENSION_UNKNOWN,
+						D3D11_SRV_DIMENSION_TEXTURE2D);
+					if (_shadowAtlasDebugTex != nullptr)
+						_shadowAtlasDebugTex->SetDebugName("_shadowAtlasDebugTex");
+				}
+				if (_shadowAtlasDebugTex != nullptr)
+				{
+					if (auto* rawCtx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+					{
+						ID3D11Resource* atlasRes = nullptr;
+						_shadowAtlas.GetAtlasSrv()->GetResource(&atlasRes);
+						if (atlasRes != nullptr)
+						{
+							rawCtx->CopyResource(
+								reinterpret_cast<ID3D11Resource*>(_shadowAtlasDebugTex->GetNativePtr()),
+								atlasRes);
+							atlasRes->Release();
+						}
+					}
+					guiRenderer->FillTexturedQuad(_shadowAtlasDebugTex,
+						10, 170, 540, 540, math::Color(1, 1, 1, 1));
+				}
+			}
+
+			if (debugAtlas != nullptr && canPostProcess)
+			{
+				guiRenderer->FillTexturedQuad(
+					debugAtlas, 10, 10,
+					debugIsFace ? 512 : kIblEnvMapFaceSize,
+					debugIsFace ? 512 : kIblEnvMapFaceSize * kIblEnvMapRows,
+					math::Color(1, 1, 1, 1));
 
 				//guiRenderer->FillTexturedQuad(_dlssTarget, 150 * 7 + 20, 10, 150, 150, math::Color(1, 1, 1, 1));
 
@@ -3085,6 +5060,17 @@ namespace HexEngine
 
 	void SceneRenderer::RenderLights()
 	{
+		// Clustered light list build. Runs before any lighting so a consumer -
+		// this pass, the froxel volume, forward transparents - can read the
+		// lists; today the heatmap is the only reader. Main camera only: the
+		// grid is sized to one view and probe-capture faces don't need it.
+		if (r_clusterLights._val.b &&
+			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
+		{
+			_clusteredLights.UpdateAndCull(_currentScene, _currentCamera, _shadowCasters,
+				r_shadowAtlas._val.b ? &_shadowAtlas : nullptr);
+		}
+
 		if (r_debugBypassLighting._val.b)
 		{
 			if (_gbuffer.GetDiffuse() != nullptr && _beautyRT != nullptr)
@@ -3135,6 +5121,48 @@ namespace HexEngine
 			// Keep a sane base when a scene has no directional light; local lights will add on top.
 			_beautyRT->CopyTo(_lightAccumulationBuffer);
 		}
+		// Clustered apply: every unshadowed local light in one fullscreen draw,
+		// additively into the accumulation buffer the per-light passes also
+		// target. Runs before them so the frame composes identically whichever
+		// path a light takes.
+		if (r_clusterApply._val.b && r_clusterLights._val.b && _clusterApplyShader != nullptr &&
+			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
+		{
+			if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
+			{
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Clustered Light Apply");
+				guiRenderer->StartFrame();
+				g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
+				g_pEnv->_graphicsDevice->SetViewport(*_currentCamera->GetViewport().Get11());
+				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
+
+				g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+				_gbuffer.BindAsShaderResource();      // t0..t4 via the auto counter
+				_clusteredLights.BindApply();         // t21..t23 + b5, raw
+
+				// Slice 7: atlas depth + per-tile matrices at t24/t25, raw.
+				// Null when the atlas is off - the shader gates on params.w.
+				if (auto* rawCtx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+				{
+					ID3D11ShaderResourceView* atlasSrvs[2] = {
+						r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
+						r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr };
+					rawCtx->PSSetShaderResources(24, 2, atlasSrvs);
+				}
+
+				guiRenderer->FullScreenTexturedQuad(nullptr, _clusterApplyShader.get());
+
+				_clusteredLights.UnbindApply();
+				if (auto* rawCtx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+				{
+					ID3D11ShaderResourceView* atlasNulls[2] = { nullptr, nullptr };
+					rawCtx->PSSetShaderResources(24, 2, atlasNulls);
+				}
+				guiRenderer->EndFrame();
+				GFX_PERF_END();
+			}
+		}
+
 		if (!r_profileDisablePointLights._val.b)
 			RenderPointLights();
 		if (!r_profileDisableSpotLights._val.b)
@@ -3160,6 +5188,15 @@ namespace HexEngine
 
 		_diffuseGi.Update(_currentScene, _currentCamera);
 		_diffuseGi.Render(_currentScene, _currentCamera, _gbuffer, _beautyRT);
+		// Lit-scene feedback AFTER the GI composite: the beauty target now
+		// holds direct lighting + GI, so next update's injection sees the
+		// full lit result (which is what makes the feedback multi-bounce).
+		// Main camera only - capture passes must not scatter their views
+		// into the shared voxel field.
+		if (_currentCamera != nullptr && !_currentCamera->IsEnvironmentCapture())
+		{
+			_diffuseGi.DispatchScreenFeedback(_beautyRT, _gbuffer.GetPosition(), _gbuffer.GetNormal());
+		}
 	}
 
 	void SceneRenderer::RenderDirectionalLights()
@@ -3176,10 +5213,14 @@ namespace HexEngine
 		const bool hasCloudShadowData = (_cloudConstantBuffer != nullptr && _cloudShapeNoise != nullptr && _cloudDetailNoise != nullptr)
 			&& BuildCloudConstants(_currentCamera, cloudConstants);
 
+		bool hasCloudShadowMap = false;
 		if (hasCloudShadowData)
 		{
 			_cloudConstantBuffer->Write(&cloudConstants, sizeof(cloudConstants));
 			g_pEnv->_graphicsDevice->SetConstantBufferPS(4, _cloudConstantBuffer);
+			// Render this frame's cloud shadow map before the composition
+			// binds its own targets; Deferred samples it at t12.
+			hasCloudShadowMap = RenderCloudShadowMap(cloudConstants.shadowMapOrigin.w > 0.0f);
 		}
 
 		
@@ -3223,28 +5264,52 @@ namespace HexEngine
 					shadowMap->BindAsShaderResource();
 				}
 
-				if (hasCloudShadowData)
-				{
-					// Deferred uses SHADOWMAPS at t6..t11, so skip t10/t11 before binding cloud 3D noise at t12/t13.
-					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture3D(_cloudShapeNoise);
-					g_pEnv->_graphicsDevice->SetTexture3D(_cloudDetailNoise);
-				}
-				else
-				{
-					// Keep register progression consistent even when cloud shadows are disabled.
-					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
-					g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
-				}
+				// Deferred uses SHADOWMAPS at t6..t11, so skip t10/t11, then the
+				// cached cloud shadow map at t12 (t13 kept free for register
+				// progression - it used to be the second cloud noise volume).
+				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(hasCloudShadowMap ? _cloudShadowMap : nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 
 				// Material-features RT at the slot Deferred.shader's
 				// GBUFFER_FEATURES_RESOURCE binds to (t14). The extended shading
 				// model lobes (clearcoat / anisotropy / sheen) read this; Standard
 				// PBR pixels see (0,0,0,0) (cleared each frame) and early-out.
 				g_pEnv->_graphicsDevice->SetTexture2D(14, _gbuffer.GetFeatures());
+
+				// t15 = prefiltered sky environment atlas for image-based lighting
+				// (RenderSkyEnvMap's output - octahedral roughness rows, see
+				// EnvMapCommon.shader). Explicit slot, like the features RT above,
+				// because the cloud-noise binds before this are conditional and the
+				// auto-slot counter would land this somewhere else. Null reads as
+				// black = no IBL, never a crash.
+				g_pEnv->_graphicsDevice->SetTexture2D(15, _iblSkyEnvMap);
+
+				// t16 = the frame's selected reflection probe atlas (see
+				// SetupPerFrameBuffer's selection). Null when no captured probe
+				// exists - g_probeCenter.w is 0 then, so the shader never reads it.
+				g_pEnv->_graphicsDevice->SetTexture2D(16,
+					_activeProbe != nullptr ? _activeProbe->GetEnvAtlas() : nullptr);
+				// t17 = second-nearest probe, for the cross-fade.
+				g_pEnv->_graphicsDevice->SetTexture2D(17,
+					_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
+				// t18 = sky SH irradiance coefficients (P1-C).
+				g_pEnv->_graphicsDevice->SetTexture2D(18, _iblSkySH);
+				// t19/t20 = per-probe SH irradiance for the two selected probes.
+				g_pEnv->_graphicsDevice->SetTexture2D(19,
+					_activeProbe != nullptr ? _activeProbe->GetShTex() : nullptr);
+				g_pEnv->_graphicsDevice->SetTexture2D(20,
+					_activeProbe2 != nullptr ? _activeProbe2->GetShTex() : nullptr);
+				// t21 = DFG table (P1-B). Null until the first frame generates it,
+				// which the shader detects and falls back to the analytic fit for.
+				g_pEnv->_graphicsDevice->SetTexture2D(21, _dfgLut);
+				// t22 = GI bilateral-blurred voxel-occlusion AO (previous frame -
+				// GI renders after this pass). Drives the ambient hand-off + sky
+				// occlusion in the GI-compose block; g_giComposeParams.z gates
+				// the sample, so null here is safe and means "compose inactive".
+				g_pEnv->_graphicsDevice->SetTexture2D(22,
+					_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
 				//_currentShadowMapForComposition = shadowMap;
 				//g_pEnv->_graphicsDevice->SetTexture2D(_shadowMapsAccumulator);
 
@@ -3320,6 +5385,12 @@ namespace HexEngine
 		{
 			for (auto* light : lights)
 			{
+				// Clustered apply owns unshadowed lights when active.
+				if (r_clusterApply._val.b && r_clusterLights._val.b &&
+					std::find(_shadowCasters.begin(), _shadowCasters.end(),
+						static_cast<Light*>(light)) == _shadowCasters.end())
+					continue;
+
 				const auto& diffuse = light->GetDiffuseColour();
 				if (diffuse.w <= 0.0f)
 					continue;
@@ -3363,13 +5434,20 @@ namespace HexEngine
 				_sphereEntity->SetPosition(lightPos);
 				_sphereEntity->SetScale(math::Vector3(lightRad));
 
+				// Units slice 3c: lumens -> candela on the per-light path,
+				// matching the clustered gather exactly (a shadowed light
+				// moving between paths must not change brightness).
+				float pointPassStrength = light->GetLightStrength();
+				if (r_physicalLightUnits._val.b)
+					pointPassStrength /= 4.0f * 3.14159265f;
+
 				instance->Render(
 					_sphereEntity->GetWorldTM(),
 					_sphereEntity->GetWorldTMTranspose(),
 					_sphereEntity->GetWorldTMPrevTranspose(),
 					_sphereEntity->GetWorldTMInvert(),
 					diffuse,
-					math::Vector2(lightRad, light->GetLightStrength()));
+					math::Vector2(lightRad, pointPassStrength));
 
 				instance->Finish();
 
@@ -3426,6 +5504,22 @@ namespace HexEngine
 		for (auto& comp : spotLights)
 		{
 			SpotLight* light = (SpotLight*)comp;
+
+			// Clustered apply owns unshadowed lights when active - and, with
+			// the atlas on, shadowed spots whose tile holds valid content
+			// (those shade in the apply with an atlas term; drawing them here
+			// too would double-light).
+			if (r_clusterApply._val.b && r_clusterLights._val.b)
+			{
+				const bool isShadowCaster = std::find(_shadowCasters.begin(), _shadowCasters.end(),
+					static_cast<Light*>(light)) != _shadowCasters.end();
+				if (!isShadowCaster)
+					continue;
+				if (r_shadowAtlas._val.b &&
+					_shadowAtlas.FindContentTile(static_cast<Light*>(light), 0) >= 0)
+					continue;
+			}
+
 
 			auto lightEnt = light->GetEntity();
 			const auto& lightPos = lightEnt->GetWorldTM().Translation();
@@ -3525,13 +5619,22 @@ namespace HexEngine
 					_sphereEntity->SetPosition(lightPos);
 					_sphereEntity->SetScale(math::Vector3(lightRad));
 
+					// Units slice 3c: cone-coupled lumens -> candela, matching
+					// the clustered gather.
+					float spotPassStrength = light->GetLightStrength();
+					if (r_physicalLightUnits._val.b)
+					{
+						const float cosOuterPass = std::cos(ToRadian(light->GetOuterConeAngle() * 0.5f));
+						spotPassStrength /= std::max(2.0f * 3.14159265f * (1.0f - cosOuterPass), 1e-4f);
+					}
+
 					instance->Render(
 						_sphereEntity->GetWorldTM(),
 						_sphereEntity->GetWorldTMTranspose(),
 						_sphereEntity->GetWorldTMPrevTranspose(),
 						_sphereEntity->GetWorldTMInvert(),
 						diffuse,
-						math::Vector2(lightRad, light->GetLightStrength()));
+						math::Vector2(lightRad, spotPassStrength));
 
 					instance->Finish();
 
@@ -3618,7 +5721,10 @@ namespace HexEngine
 				const auto diffuse = light->GetDiffuseColour();
 				const auto pos = light->GetEntity()->GetWorldTM().Translation();
 				const float radius = std::max(0.05f, light->GetRadius());
-				const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+				float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+				// Units slice 3b: lumens -> candela, matching the clustered gather.
+				if (r_physicalLightUnits._val.b)
+					strength /= 4.0f * 3.14159265f;
 
 				data.pointPosRadius[pointCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
 				data.pointColorStrength[pointCount] = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
@@ -3651,11 +5757,14 @@ namespace HexEngine
 				const auto pos = lightEnt->GetWorldTM().Translation();
 				const auto fwd = lightEnt->GetWorldTM().Forward();
 				const float radius = std::max(0.05f, light->GetRadius());
-				const float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
+				float strength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
 				const float outerAngle = std::max(0.1f, light->GetOuterConeAngle());
 				const float innerAngle = std::clamp(light->GetInnerConeAngle(), 0.0f, outerAngle);
 				const float cosOuter = std::cos(ToRadian(outerAngle * 0.5f));
 				const float cosInner = std::cos(ToRadian(innerAngle * 0.5f));
+				// Units slice 3b: lumens -> candela, cone-coupled like the clustered gather.
+				if (r_physicalLightUnits._val.b)
+					strength /= std::max(2.0f * 3.14159265f * (1.0f - cosOuter), 1e-4f);
 
 				data.spotPosRadius[spotCount] = math::Vector4(pos.x, pos.y, pos.z, radius);
 				data.spotDirCone[spotCount] = math::Vector4(fwd.x, fwd.y, fwd.z, cosOuter);
@@ -3675,18 +5784,63 @@ namespace HexEngine
 
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"Begin Transparent");
 
+		// Cluster list SRVs for the forward material shaders (t27..t29, raw -
+		// no engine API for PS structured buffers). Bound for the whole
+		// transparent pass and nulled at the end; the shaders gate on
+		// g_clusterForwardActive so a null bind is also safe.
+		const bool clusterForwardBind =
+			r_clusterForward._val.b && r_clusterLights._val.b &&
+			_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera();
+		if (clusterForwardBind)
+		{
+			if (auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+			{
+				ID3D11ShaderResourceView* clSrvs[3] = {
+					_clusteredLights.GetLightsSrv(),
+					_clusteredLights.GetCountsSrv(),
+					_clusteredLights.GetListsSrv() };
+				ctx->PSSetShaderResources(27, 3, clSrvs);
+			}
+		}
+
 		// Transparent shaders (notably water, but also any alpha-blended mesh) sample the
 		// beauty texture for reflection / refraction. Render transparency into a separate RT
 		// to avoid SRV/RTV hazards on _beautyRT, then copy back at the end.
 		const bool haveSnapshotForReflection = (_waterRT != nullptr);
+		ITexture2D* transparentColourRT = haveSnapshotForReflection ? _waterRT : _beautyRT;
 		if (haveSnapshotForReflection)
-		{
 			_beautyRT->CopyTo(_waterRT);
-			g_pEnv->_graphicsDevice->SetRenderTarget(_waterRT, _gbuffer.GetDepthBuffer());
+
+		// P4.4: bind the gbuffer velocity RT at MRT slot 4 - the slot GBufferOut's
+		// float2 velocity : SV_TARGET4 already targets, so the Default-family and
+		// graph-emitted transparency shaders land their (previously discarded)
+		// velocity writes with no shader change, and Water.shader's new WaterOut
+		// does the same. Slots 1-3 stay null: the mat/normal/position writes are
+		// discarded exactly as they were with one RT bound. Shaders WITHOUT an
+		// SV_TARGET4 output (Billboard) leave the velocity RT unmodified at their
+		// pixels - the background velocity persists, which is the status quo.
+		// D3D11 only: the D3D12 PSO path compacts null RTVs out of the bind, which
+		// would remap SV_TARGET1 (gbuffer mat) onto the velocity RT.
+		ITexture2D* transparentVelocityRT =
+			(r_transparentVelocity._val.b &&
+			 g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11)
+				? _gbuffer.GetVelocity()
+				: nullptr;
+		if (transparentVelocityRT != nullptr)
+		{
+			// The deferred pass may have left the velocity SRV bound at t4;
+			// D3D11 would force-null the RTV bind on the hazard otherwise.
+			g_pEnv->_graphicsDevice->SetTexture2D(4, nullptr);
+			const std::vector<ITexture2D*> transparentRts =
+				{ transparentColourRT, nullptr, nullptr, nullptr, transparentVelocityRT };
+			g_pEnv->_graphicsDevice->SetRenderTargets(transparentRts, _gbuffer.GetDepthBuffer());
+			// Blending materials switch to their independent-blend variants so
+			// RT4 overwrites (velocity must never be alpha/additive-blended).
+			g_pEnv->_graphicsDevice->SetVelocityMrtPhase(true);
 		}
 		else
 		{
-			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT, _gbuffer.GetDepthBuffer());
+			g_pEnv->_graphicsDevice->SetRenderTarget(transparentColourRT, _gbuffer.GetDepthBuffer());
 		}
 
 		// Populate b7 with the current frame's dynamic point/spot lights so transparent meshes
@@ -3708,6 +5862,46 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetTexture2D(12, _gbuffer.GetNormal());
 		if (_gbuffer.GetPosition() != nullptr)
 			g_pEnv->_graphicsDevice->SetTexture2D(13, _gbuffer.GetPosition());
+		// t14 = prefiltered sky environment atlas. The transparency path reflects
+		// this wherever its screen-space march misses; a null bind reads black,
+		// which is the old (broken) behaviour rather than a crash.
+		g_pEnv->_graphicsDevice->SetTexture2D(14, _iblSkyEnvMap);
+		// t24/t21: froxel fog integration volume + aerial-perspective volume for
+		// the per-fragment transparent atmosphere (TransparentAtmosphere.shader).
+		// Slotless Texture3D binds - position the implicit counter first.
+		{
+			ITexture3D* fogVol = (r_volumetric._val.b && g_pEnv->_volumetricScattering != nullptr)
+				? g_pEnv->_volumetricScattering->GetIntegrationVolume() : nullptr;
+			ITexture3D* apVol = (r_atmosphereLUTs._val.b && r_aerialPerspective._val.b && g_pEnv->_atmosphereLUTs != nullptr)
+				? g_pEnv->_atmosphereLUTs->GetAerialPerspectiveVolume() : nullptr;
+			g_pEnv->_graphicsDevice->SetBoundResourceIndex(24);
+			g_pEnv->_graphicsDevice->SetTexture3D(fogVol);
+			g_pEnv->_graphicsDevice->SetBoundResourceIndex(21);
+			g_pEnv->_graphicsDevice->SetTexture3D(apVol);
+		}
+
+		// t15..t20 = sun shadow cascades (slice 5), plus the b2 caster constants
+		// re-uploaded for the sun: the deferred per-light passes left b2 holding
+		// the LAST point/spot light's data, so without this re-setup the shader
+		// would project sun cascades through a spot light's matrices. The
+		// shaders gate on g_taaParams.z, which SetupPerFrameBuffer set from the
+		// same FindTransparentShadowSun + main-camera condition.
+		DirectionalLight* transparentSun =
+			(_currentScene != nullptr && _currentCamera == _currentScene->GetMainCamera())
+				? FindTransparentShadowSun(_currentScene)
+				: nullptr;
+		if (transparentSun != nullptr)
+		{
+			for (int32_t i = 0; i < 6; ++i)
+			{
+				auto shadowMap = i < transparentSun->GetMaxSupportedShadowCascades()
+					? transparentSun->GetShadowMap(i)
+					: nullptr;
+				g_pEnv->_graphicsDevice->SetTexture2D(15 + i,
+					shadowMap != nullptr ? shadowMap->GetDepthMap() : nullptr);
+			}
+			SetupPerShadowCasterBuffer(transparentSun, false, 0, 0, r_shadowSamples._val.i32, 0.0f);
+		}
 
 		// CRITICAL: SetTexture2D(slot, ...) advances the device's "next implicit slot" counter.
 		// Scene::RenderEntities reads that counter to decide where to bind each mesh's
@@ -3729,6 +5923,18 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetTexture2D(10, nullptr);
 		g_pEnv->_graphicsDevice->SetTexture2D(12, nullptr);
 		g_pEnv->_graphicsDevice->SetTexture2D(13, nullptr);
+		g_pEnv->_graphicsDevice->SetTexture2D(14, nullptr);
+		g_pEnv->_graphicsDevice->SetBoundResourceIndex(24);
+		g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
+		g_pEnv->_graphicsDevice->SetBoundResourceIndex(21);
+		g_pEnv->_graphicsDevice->SetTexture3D(nullptr);
+		if (transparentSun != nullptr)
+		{
+			// The cascade depth maps become DSVs again next frame; a stale SRV
+			// bind here is a guaranteed debug-layer hazard warning.
+			for (int32_t i = 0; i < 6; ++i)
+				g_pEnv->_graphicsDevice->SetTexture2D(15 + i, nullptr);
+		}
 		g_pEnv->_graphicsDevice->SetBoundResourceIndex(postMaterialIndex);
 
 		// NOTE: GPU particles no longer render here. They moved AFTER the
@@ -3742,9 +5948,35 @@ namespace HexEngine
 		// flake on screen. Particles now fog themselves at their own depth
 		// in ParticleBillboardLit.shader instead.
 
+		// Tessellation state MUST NOT leak past the transparent pass either
+		// (same rule as the opaque-pass boundary): water is a tessellated
+		// TRANSPARENT material, so if a sea tile is the last draw of this
+		// pass, a bound HS/DS pair + patch topology would corrupt the next
+		// fullscreen quad (RenderFog). Clear once at the boundary.
+		g_pEnv->_graphicsDevice->SetHullShader(nullptr);
+		g_pEnv->_graphicsDevice->SetDomainShader(nullptr);
+		g_pEnv->_graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+
+		// P4.4: end the velocity-MRT phase and drop back to a single RT so the
+		// velocity texture isn't still bound as RT4 when TAA reads it as an SRV.
+		if (transparentVelocityRT != nullptr)
+		{
+			g_pEnv->_graphicsDevice->SetVelocityMrtPhase(false);
+			g_pEnv->_graphicsDevice->SetRenderTarget(transparentColourRT, _gbuffer.GetDepthBuffer());
+		}
+
 		if (_waterRT)
 		{
 			_waterRT->CopyTo(_beautyRT);
+		}
+
+		if (clusterForwardBind)
+		{
+			if (auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext()))
+			{
+				ID3D11ShaderResourceView* clNulls[3] = { nullptr, nullptr, nullptr };
+				ctx->PSSetShaderResources(27, 3, clNulls);
+			}
 		}
 
 		GFX_PERF_END();
@@ -3805,15 +6037,23 @@ namespace HexEngine
 		guiRenderer->FullScreenTexturedQuad(nullptr, _subsurfaceShader.get());
 		guiRenderer->EndFrame();
 
-		// Unbind the SSS-specific SRVs so later passes don't inherit stale bindings.
-		graphics->SetTexture2D(0, nullptr);
-		graphics->SetTexture2D(1, nullptr);
-		graphics->SetTexture2D(2, nullptr);
+		// Unbind the SSS-specific SRVs so later passes don't inherit stale
+		// bindings - via unbind-all, which also resets the implicit-slot
+		// counter (per-slot nulls after a draw leave it at slot+1 and misbind
+		// the next slotless pass; see the motion blur cleanup).
+		graphics->UnbindAllPixelShaderResources();
 		graphics->SetConstantBufferPS(6, nullptr);
 	}
 
 	void SceneRenderer::RenderAerialPerspective()
 	{
+		// Respect the runtime toggles: r_atmosphereLUTs off freezes the LUT
+		// volume with stale data (Update() skips every dispatch), so applying
+		// it would paint yesterday's haze forever; r_aerialPerspective is the
+		// dedicated A/B switch for the apply itself.
+		if (!r_atmosphereLUTs._val.b || !r_aerialPerspective._val.b)
+			return;
+
 		// Skip if any required resource is missing. Atmosphere LUT
 		// subsystem failure (no compute support, shader compile fail
 		// etc.) cleanly disables AP - the scene just renders without
@@ -3858,6 +6098,10 @@ namespace HexEngine
 		// AP composite toward it for distant pixels so geometry silhouettes
 		// dissolve cleanly into the sky behind them.
 		graphics->SetTexture2D(7, g_pEnv->_atmosphereLUTs->GetSkyViewLUT());
+		// b6: SkyRenderParams - the far dissolve applies the dome's weather
+		// overcast lerp so geometry dissolves into the sky the dome actually
+		// renders (not the raw clear-sky LUT).
+		graphics->SetConstantBufferPS(6, g_pEnv->_atmosphereLUTs->GetSkyRenderCBuffer());
 
 		guiRenderer->FullScreenTexturedQuad(nullptr, _aerialPerspectiveApplyShader.get());
 		guiRenderer->EndFrame();
@@ -3871,6 +6115,7 @@ namespace HexEngine
 		graphics->SetTexture2D(5, nullptr);
 		graphics->SetTexture2D(7, nullptr);
 		graphics->SetTexture3D(nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
 		graphics->SetBoundResourceIndex(0);
 	}
 
@@ -3912,14 +6157,27 @@ namespace HexEngine
 		// t6 = volumetric integration 3D volume. Engine's slotless SetTexture3D
 		// uses the implicit counter (now 6) - same trick as the AP apply pass.
 		graphics->SetTexture3D(integrationVolume);
+		// t7 = the REAL depth buffer (includes water/transparent depth), so
+		// the apply fogs surfaces at the depth the viewer actually sees
+		// instead of the opaque depth behind them. Safe here: transparency has
+		// drawn and the current render target has no DSV bound.
+		graphics->SetTexture2D(7, _gbuffer.GetDepthBuffer());
+		// t8 = GI blurred voxel AO for the beyond-range ambient occlusion
+		// (g_giComposeParams.z gates the sample; null is safe).
+		graphics->SetTexture2D(8,
+			_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
 
 		guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricScatterApplyShader.get());
 		guiRenderer->EndFrame();
 
 		_subsurfaceIntermediateRT->CopyTo(_beautyRT);
 
-		// Cleanup - same hygiene pattern as AP apply.
+		// Cleanup - same hygiene pattern as AP apply. t7 (the depth buffer)
+		// MUST be released before it is rebound as a DSV next frame or the
+		// D3D11 hazard handler silently unbinds our render target.
 		graphics->SetTexture2D(5, nullptr);
+		graphics->SetTexture2D(7, nullptr);
+		graphics->SetTexture2D(8, nullptr);
 		graphics->SetTexture3D(nullptr);
 		graphics->SetBoundResourceIndex(0);
 	}
@@ -4112,6 +6370,11 @@ namespace HexEngine
 			// during the decal/auto-puddle pass so reading is legal). The auto-
 			// puddle PS samples it for the per-pixel flatness test.
 			graphics->SetTexture2D(1, _gbuffer.GetNormal());
+			// Shelter occlusion map at t2 - sheltered floors collect no
+			// puddles (see PuddleShelter in AutoPuddles.shader).
+			graphics->SetTexture2D(2,
+				(_rainOcclusionValid && _rainOcclusionMap != nullptr)
+					? _rainOcclusionMap->GetDepthMap() : nullptr);
 
 			// Pack the HVar-driven config into the auto-puddle cbuffer.
 			struct AutoPuddleGpuConstants
@@ -4180,36 +6443,107 @@ namespace HexEngine
 		graphics->SetBoundResourceIndex(0);
 	}
 
-	void SceneRenderer::RenderBokehDoF()
+	bool SceneRenderer::RenderBokehDoF(ITexture2D* srcTex, ITexture2D* dstTex)
 	{
-		if (!r_dof._val.b || _bokehDoFShader == nullptr || _beautyRT == nullptr ||
-			_subsurfaceIntermediateRT == nullptr || _bokehDoFParamsBuffer == nullptr)
-			return;
+		if (!r_dof._val.b || _bokehDoFShader == nullptr || srcTex == nullptr ||
+			dstTex == nullptr || _bokehDoFParamsBuffer == nullptr)
+			return false;
 
 		PROFILE();
 
 		auto* graphics = g_pEnv->_graphicsDevice;
 		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
 		if (guiRenderer == nullptr)
-			return;
+			return false;
 
 		auto* normalDepthTex = _gbuffer.GetNormal();
 		if (normalDepthTex == nullptr)
-			return;
+			return false;
 
-		// Reuse the SSS intermediate as a scratch RT - SSS has already finished
-		// for this frame and the format/size match exactly, so allocating a
-		// dedicated DoF scratch is wasteful. The bokeh pass reads beauty, writes
-		// scratch, then we copy scratch back into beauty so downstream effects
-		// (colour grading, vignette, etc.) see the DoF'd image.
-		auto* scratchRT = _subsurfaceIntermediateRT;
+		// Phase 4 slice 1: DoF is a leg of RenderOverlays' ping-pong chain -
+		// it reads the caller's src, writes the caller's dst, and the caller
+		// swaps on a true return. The old scratch-RT + CopyTo-back dance (and
+		// its render-target restore) is gone with it.
 
-		// Cbuffer at b6: (focusDistance, focusRange, aperture, maxCocPixels).
+		// P4.11: focus distance is either manual or the autofocus readback of
+		// the centre-of-screen gbuffer depth (one frame late, AutoExposure's
+		// deferred-map pattern). D3D11-only; other backends fall back to manual.
+		float focusDistance = r_dofFocusDistance._val.f32;
+		if (r_dofAutofocus._val.b &&
+			g_pEnv->_graphicsDevice->GetBackend() == GraphicsBackend::D3D11)
+		{
+			auto* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+			auto* ctx = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+			auto* normalNative = reinterpret_cast<ID3D11Texture2D*>(normalDepthTex->GetNativePtr());
+			if (device != nullptr && ctx != nullptr && normalNative != nullptr)
+			{
+				if (_autofocusStaging == nullptr)
+				{
+					D3D11_TEXTURE2D_DESC sd = {};
+					sd.Width = 1; sd.Height = 1; sd.MipLevels = 1; sd.ArraySize = 1;
+					sd.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; // matches the normal RT
+					sd.SampleDesc.Count = 1;
+					sd.Usage = D3D11_USAGE_STAGING;
+					sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+					device->CreateTexture2D(&sd, nullptr, &_autofocusStaging);
+				}
+
+				const float dt = (g_pEnv && g_pEnv->_timeManager)
+					? std::clamp(static_cast<float>(g_pEnv->_timeManager->_frameTime), 1e-4f, 0.1f)
+					: (1.0f / 60.0f);
+
+				if (_autofocusStaging != nullptr)
+				{
+					// Read back LAST frame's centre depth (.w of the normal RT).
+					if (_autofocusPending)
+					{
+						D3D11_MAPPED_SUBRESOURCE mapped = {};
+						if (SUCCEEDED(ctx->Map(_autofocusStaging, 0, D3D11_MAP_READ, 0, &mapped)))
+						{
+							const uint16_t* px = reinterpret_cast<const uint16_t*>(mapped.pData);
+							const float depth = DirectX::PackedVector::XMConvertHalfToFloat(px[3]);
+							ctx->Unmap(_autofocusStaging, 0);
+							if (depth > 0.05f) // skip sky / unwritten centre
+							{
+								const float speed = std::max(r_dofAutofocusSpeed._val.f32, 0.0f);
+								const float alpha = 1.0f - std::exp(-speed * dt);
+								_autofocusDistance += (depth - _autofocusDistance) * alpha;
+							}
+						}
+					}
+
+					// Queue THIS frame's centre texel for next-frame readback.
+					const auto& vp = _currentCamera->GetViewport();
+					const UINT cx = (UINT)std::max(0.0f, vp.width * 0.5f);
+					const UINT cy = (UINT)std::max(0.0f, vp.height * 0.5f);
+					D3D11_BOX box = {};
+					box.left = cx; box.right = cx + 1;
+					box.top = cy; box.bottom = cy + 1;
+					box.front = 0; box.back = 1;
+					ctx->CopySubresourceRegion(_autofocusStaging, 0, 0, 0, 0, normalNative, 0, &box);
+					_autofocusPending = true;
+				}
+			}
+			focusDistance = _autofocusDistance;
+		}
+
+		// Physical CoC coefficient (P4.11): the whole uniform part of the
+		// thin-lens CoC, so the shader only does coeff * |d - S| / d.
+		//   coeff = (f^2 / (N * (S - f))) / sensorWidth * renderWidthPx * 0.5
+		// f = focal length (m), N = f-stop, sensor = 36mm full frame, *0.5 for
+		// radius (CoC is a diameter).
+		const float fM = std::max(r_dofFocalLength._val.f32, 1.0f) * 0.001f;
+		const float N = std::max(r_dofFStop._val.f32, 0.5f);
+		const float Sf = std::max(focusDistance - fM, 1e-4f);
+		const float renderW = std::max(_currentCamera->GetViewport().width, 1.0f);
+		const float cocCoeff = (fM * fM / (N * Sf)) / 0.036f * renderW * 0.5f;
+
+		// Cbuffer at b6: (focusDistance S, CoC coefficient, maxCocPixels, unused).
 		math::Vector4 params(
-			r_dofFocusDistance._val.f32,
-			r_dofFocusRange._val.f32,
-			r_dofAperture._val.f32,
-			r_dofMaxBlur._val.f32);
+			focusDistance,
+			cocCoeff,
+			r_dofMaxBlur._val.f32,
+			0.0f);
 		math::Vector4 paramsCopy = params; // Write takes void* (non-const)
 		_bokehDoFParamsBuffer->Write(&paramsCopy, sizeof(paramsCopy));
 		graphics->SetConstantBufferPS(6, _bokehDoFParamsBuffer);
@@ -4217,16 +6551,12 @@ namespace HexEngine
 		// NOTE: do NOT wrap this in guiRenderer->StartFrame()/EndFrame() - this
 		// path runs from inside RenderOverlays which has already begun a frame,
 		// and a nested EndFrame would flush the outer draw list against our
-		// scratch RT (visible as a grey screen because the queued UI draws land
-		// in the wrong place and then get copied over the beauty buffer).
-		graphics->SetRenderTarget(scratchRT);
-		graphics->SetTexture2D(0, _beautyRT);
+		// render target (visible as a grey screen because the queued UI draws
+		// land in the wrong place).
+		graphics->SetRenderTarget(dstTex);
+		graphics->SetTexture2D(0, srcTex);
 		graphics->SetTexture2D(1, normalDepthTex);
 		guiRenderer->FullScreenTexturedQuad(nullptr, _bokehDoFShader.get());
-
-		// Copy back so beauty carries the DoF'd image into the rest of the post
-		// chain. Cheap on D3D11 (a single CopyResource on same-format RTs).
-		scratchRT->CopyTo(_beautyRT);
 
 		// Unbind only the DoF params cbuffer. We deliberately do NOT unbind the
 		// source SRVs here: DrawIndexed already calls UnbindAllPixelShaderResources
@@ -4239,12 +6569,7 @@ namespace HexEngine
 		// beauty for every remaining pass (the grey screen). Removing them is the fix.
 		graphics->SetConstantBufferPS(6, nullptr);
 
-		// Restore the overlay chain's render target. DrawIndexed resets SRVs but
-		// does NOT touch the render target, so our scratch RT is still bound here.
-		// RenderOverlays renders the rest of the chain (grading, vignette, tonemap)
-		// into the camera RT and propagates back to beauty via CopyTo; leaving the
-		// scratch RT bound corrupts that.
-		graphics->SetRenderTarget(_currentCamera->GetRenderTarget());
+		return true;
 	}
 
 	void SceneRenderer::RenderFog()
@@ -4276,9 +6601,19 @@ namespace HexEngine
 
 			// Render fog as a post process
 			_gbuffer.BindAsShaderResource(_beautyRT);
-			g_pEnv->_graphicsDevice->SetTexture2D(_atmosphereRT);
+			// t5 = sky-view LUT (+ b6 overcast tint): PostFog samples the sky
+			// colour it tints toward straight from the LUT.
+			g_pEnv->_graphicsDevice->SetTexture2D(g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyViewLUT() : nullptr);
 			g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetDepthBuffer());
+			g_pEnv->_graphicsDevice->SetConstantBufferPS(6, g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyRenderCBuffer() : nullptr);
+			// t22 = GI blurred voxel AO: PostFog scales its (entirely sky/sun/
+			// ambient-derived) fog factor down where the voxel field says the
+			// pixel is enclosed. Explicit slot, above the auto-counter range;
+			// g_giComposeParams.z gates the sample so null is safe.
+			g_pEnv->_graphicsDevice->SetTexture2D(22,
+				_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
 			guiRenderer->FullScreenTexturedQuad(nullptr, _fogEffect.get());
+			g_pEnv->_graphicsDevice->SetConstantBufferPS(6, nullptr);
 
 			//_fogBuffer->CopyTo(_gbuffer.GetDiffuse());
 			_fogBuffer->CopyTo(_beautyRT);
@@ -4434,9 +6769,15 @@ namespace HexEngine
 		// we then swap in the silhouette/seed shader and draw (same override
 		// pattern as RenderPointLights).
 		smc->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
-		graphics->SetVertexShader(_outlineSeedShader->GetShaderStage(ShaderStage::VertexShader));
-		graphics->SetPixelShader(_outlineSeedShader->GetShaderStage(ShaderStage::PixelShader));
-		graphics->SetInputLayout(_outlineSeedShader->GetInputLayout());
+		// Skinned meshes must seed through the animated VS or the outline
+		// silhouette renders in the bind/T-pose (the static seed VS ignores the
+		// bone palette RenderMesh just bound at VS register 3).
+		IShader* seedShader = (mesh->HasAnimations() && _outlineSeedAnimatedShader != nullptr)
+			? _outlineSeedAnimatedShader.get()
+			: _outlineSeedShader.get();
+		graphics->SetVertexShader(seedShader->GetShaderStage(ShaderStage::VertexShader));
+		graphics->SetPixelShader(seedShader->GetShaderStage(ShaderStage::PixelShader));
+		graphics->SetInputLayout(seedShader->GetInputLayout());
 		graphics->SetBlendState(BlendState::Opaque);
 		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
 		graphics->SetCullingMode(CullingMode::BackFace);
@@ -4485,6 +6826,492 @@ namespace HexEngine
 		_outlineGlowRT->BlendTo_Additive(_beautyRT);
 	}
 
+	void SceneRenderer::RenderCAS()
+	{
+		PROFILE();
+
+		if (_casShader == nullptr || _beautyRT == nullptr ||
+			_subsurfaceIntermediateRT == nullptr || _currentCamera == nullptr)
+			return;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		GuiRenderer* renderer = g_pEnv->GetUIManager().GetRenderer();
+		if (renderer == nullptr)
+			return;
+
+		const auto& bbvp = _currentCamera->GetViewport();
+		renderer->StartFrame((uint32_t)bbvp.width, (uint32_t)bbvp.height);
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"CAS sharpen");
+
+		// Sharpen beauty -> scratch, copy back (can't sample + write beauty in
+		// one draw). Sharpen amount rides in g_grainParams.z (per-frame cbuffer).
+		graphics->SetRenderTarget(_subsurfaceIntermediateRT);
+		graphics->SetViewport(*bbvp.Get11());
+		renderer->FullScreenTexturedQuad(_beautyRT, _casShader.get());
+		_subsurfaceIntermediateRT->CopyTo(_beautyRT);
+
+		GFX_PERF_END();
+		renderer->EndFrame();
+	}
+
+	void SceneRenderer::RenderMotionBlur()
+	{
+		PROFILE();
+
+		if (!r_motionBlur._val.b)
+			return;
+		if (!_mbTileMaxShader || !_mbNeighborMaxShader || !_mbGatherShader)
+			return;
+		if (_mbTileMaxRT == nullptr || _mbNeighborMaxRT == nullptr ||
+			_beautyRT == nullptr || _subsurfaceIntermediateRT == nullptr ||
+			_gbuffer.GetVelocity() == nullptr || _gbuffer.GetNormal() == nullptr ||
+			_currentCamera == nullptr)
+			return;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		GuiRenderer* renderer = g_pEnv->GetUIManager().GetRenderer();
+		if (renderer == nullptr)
+			return;
+
+		if (_mbParamsBuffer == nullptr)
+		{
+			_mbParamsBuffer = graphics->CreateConstantBuffer(sizeof(math::Vector4) * 2);
+			if (_mbParamsBuffer == nullptr)
+				return;
+		}
+
+		// Frame-rate normalisation: velocity is per-frame displacement, but the
+		// shutter is a fixed fraction of a 60Hz frame - at lower frame rates the
+		// per-frame displacement grows, so scale down to keep the blur length
+		// tied to TIME, not frame count.
+		const float dt = (g_pEnv && g_pEnv->_timeManager)
+			? std::clamp(static_cast<float>(g_pEnv->_timeManager->_frameTime), 1e-4f, 0.1f)
+			: (1.0f / 60.0f);
+		const float velocityScale =
+			r_motionBlurShutter._val.f32 * std::clamp((1.0f / 60.0f) / dt, 0.0f, 2.0f);
+		if (velocityScale <= 0.0f)
+			return;
+
+		const auto& bbvp = _currentCamera->GetViewport();
+		const float tileW = (float)std::max(1, _mbTileMaxRT->GetWidth());
+		const float tileH = (float)std::max(1, _mbTileMaxRT->GetHeight());
+
+		struct MotionBlurConstants
+		{
+			math::Vector4 params;   // x = velocity scale, y = max px, z = samples, w = tile size
+			math::Vector4 params2;  // xy = full-res dims, zw = tile-grid dims
+		} constants;
+		constants.params = math::Vector4(
+			velocityScale,
+			r_motionBlurMaxPx._val.f32,
+			(float)r_motionBlurSamples._val.i32,
+			20.0f);
+		constants.params2 = math::Vector4(bbvp.width, bbvp.height, tileW, tileH);
+
+		renderer->StartFrame((uint32_t)bbvp.width, (uint32_t)bbvp.height);
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"Motion blur");
+
+		_mbParamsBuffer->Write(&constants, sizeof(constants));
+		graphics->SetConstantBufferPS(6, _mbParamsBuffer);
+
+		// Pass 1: per-tile dominant velocity.
+		graphics->SetRenderTarget(_mbTileMaxRT);
+		graphics->SetViewport(Viewport(0.0f, 0.0f, tileW, tileH));
+		graphics->SetTexture2D(0, _gbuffer.GetVelocity());
+		renderer->FullScreenTexturedQuad(nullptr, _mbTileMaxShader.get());
+
+		// Pass 2: 3x3 neighbourhood max.
+		graphics->SetRenderTarget(_mbNeighborMaxRT);
+		graphics->SetTexture2D(0, _mbTileMaxRT);
+		renderer->FullScreenTexturedQuad(nullptr, _mbNeighborMaxShader.get());
+
+		// Pass 3: gather into the scratch leg, copy back (can't read and write
+		// beauty in one draw).
+		graphics->SetRenderTarget(_subsurfaceIntermediateRT);
+		graphics->SetViewport(*bbvp.Get11());
+		graphics->SetTexture2D(0, _beautyRT);
+		graphics->SetTexture2D(1, _gbuffer.GetVelocity());
+		graphics->SetTexture2D(2, _mbNeighborMaxRT);
+		graphics->SetTexture2D(3, _gbuffer.GetNormal());
+		renderer->FullScreenTexturedQuad(nullptr, _mbGatherShader.get());
+
+		_subsurfaceIntermediateRT->CopyTo(_beautyRT);
+
+		// Unbind so the velocity/normal SRVs don't collide with their RT binds
+		// next frame (transparent pass rebinds velocity as RT4). This MUST be
+		// the unbind-all (which also resets the implicit-slot counter), not
+		// per-slot SetTexture2D(n, nullptr): the explicit-slot form sets the
+		// counter to slot+1 AFTER the draw already reset it to 0, so the next
+		// slotless FullScreenTexturedQuad (bloom's first downsample) bound the
+		// beauty at t4 while its shader reads t0 - a black bloom chain, no
+		// flare and a lost sun disc whenever motion blur was enabled, even
+		// with the camera static. See the d3d11 auto-slot counter note.
+		graphics->UnbindAllPixelShaderResources();
+		graphics->SetConstantBufferPS(6, nullptr);
+
+		GFX_PERF_END();
+		renderer->EndFrame();
+	}
+
+	void SceneRenderer::RenderSkyEnvMap()
+	{
+		PROFILE();
+
+		if (!r_iblSkyEnv._val.b)
+			return;
+		if (_iblSkyEnvShader == nullptr)
+			return;
+		if (g_pEnv->_atmosphereLUTs == nullptr || g_pEnv->_atmosphereLUTs->GetSkyViewLUT() == nullptr)
+			return;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+
+		// Fixed-size atlas, created lazily and deliberately not part of the
+		// resize path.
+		if (_iblSkyEnvMap == nullptr)
+		{
+			_iblSkyEnvMap = graphics->CreateTexture2D(
+				kIblEnvMapFaceSize,
+				kIblEnvMapFaceSize * kIblEnvMapRows,
+				DXGI_FORMAT_R16G16B16A16_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+				1);
+			if (_iblSkyEnvMap == nullptr)
+			{
+				LOG_WARN("SceneRenderer::RenderSkyEnvMap failed to create the sky environment atlas");
+				return;
+			}
+			_iblSkyEnvMap->SetDebugName("_iblSkyEnvMap");
+
+			// The atlas is now an EMA accumulator (see the blended draw below):
+			// uninitialised contents would decay rather than be overwritten, and
+			// a NaN would persist forever. Start from known zero.
+			_iblSkyEnvMap->ClearRenderTargetView(math::Color(0, 0, 0, 0));
+		}
+
+		// Regenerated every frame by design: the day/night cycle moves the sun
+		// continuously and the weather system retints the sky-view LUT, so a
+		// sun-direction cache would be invalid most frames anyway and buys a
+		// set of invalidation bugs. The draw is 128x640 texels sampling a
+		// 192x108 LUT - far below the cost of a single shadow cascade.
+		auto guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"SkyEnvMap");
+		guiRenderer->StartFrame();
+
+		// P1-B: generate the DFG table once. It depends only on NdotV and
+		// roughness - no scene, no lighting, no time of day - so regenerating it
+		// per frame would be pure waste.
+		if (!_dfgLutGenerated && _dfgLutShader != nullptr)
+		{
+			if (_dfgLut == nullptr)
+			{
+				_dfgLut = graphics->CreateTexture2D(
+					kDfgLutSize, kDfgLutSize,
+					DXGI_FORMAT_R16G16B16A16_FLOAT,
+					1,
+					D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+					1);
+				if (_dfgLut != nullptr)
+					_dfgLut->SetDebugName("_dfgLut");
+			}
+
+			if (_dfgLut != nullptr)
+			{
+				graphics->SetRenderTarget(_dfgLut);
+
+				D3D11_VIEWPORT dvp;
+				dvp.TopLeftX = 0.0f;
+				dvp.TopLeftY = 0.0f;
+				dvp.Width = (float)kDfgLutSize;
+				dvp.Height = (float)kDfgLutSize;
+				dvp.MinDepth = 0.0f;
+				dvp.MaxDepth = 1.0f;
+				graphics->SetViewport(dvp);
+
+				// The source texture is unused by the shader (it integrates
+				// analytically); pass the atlas purely to satisfy the quad helper.
+				guiRenderer->FullScreenTexturedQuad(_iblSkyEnvMap, _dfgLutShader.get());
+
+				_dfgLutGenerated = true;
+				LOG_INFO("Generated %dx%d DFG LUT (split-sum BRDF + single-scatter energy)",
+					kDfgLutSize, kDfgLutSize);
+			}
+		}
+
+		graphics->SetRenderTarget(_iblSkyEnvMap);
+
+		D3D11_VIEWPORT vp;
+		vp.TopLeftX = 0.0f;
+		vp.TopLeftY = 0.0f;
+		vp.Width = (float)kIblEnvMapFaceSize;
+		vp.Height = (float)(kIblEnvMapFaceSize * kIblEnvMapRows);
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		graphics->SetViewport(vp);
+
+		// The sky-view LUT rides in as the quad's source texture (t0).
+		//
+		// Src-alpha blend: the shader returns its EMA rate in alpha (1 on the
+		// mirror row = plain overwrite; halving per roughness row), so the ROP
+		// computes atlas = lerp(atlas, estimate, rate) in place. Combined with
+		// the per-frame sample-set rotation in SkyEnvMap.shader, the rough
+		// rows integrate ~1/rate frames of independent Monte-carlo estimates -
+		// the prefilter variance that showed as wispy blotches on floors is
+		// averaged inside the atlas instead of being handed to TAA (whose
+		// neighbourhood clamp rejects flicker at that amplitude).
+		graphics->SetBlendState(BlendState::Transparency);
+		guiRenderer->FullScreenTexturedQuad(g_pEnv->_atmosphereLUTs->GetSkyViewLUT(), _iblSkyEnvShader.get());
+		graphics->SetBlendState(BlendState::Opaque);
+
+		// P1-C: project the atlas we just built into SH irradiance coefficients.
+		// Nine texels, each integrating the atlas's mirror row against one basis
+		// function - the cosine-convolved diffuse term the flat ambient constant
+		// has been standing in for.
+		if (_envSHShader != nullptr)
+		{
+			if (_iblSkySH == nullptr)
+			{
+				_iblSkySH = graphics->CreateTexture2D(
+					1, kIblEnvShCoeffs,
+					DXGI_FORMAT_R16G16B16A16_FLOAT,
+					1,
+					D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+					1);
+				if (_iblSkySH != nullptr)
+					_iblSkySH->SetDebugName("_iblSkySH");
+			}
+
+			if (_iblSkySH != nullptr)
+			{
+				graphics->SetRenderTarget(_iblSkySH);
+
+				D3D11_VIEWPORT shvp;
+				shvp.TopLeftX = 0.0f;
+				shvp.TopLeftY = 0.0f;
+				shvp.Width = 1.0f;
+				shvp.Height = (float)kIblEnvShCoeffs;
+				shvp.MinDepth = 0.0f;
+				shvp.MaxDepth = 1.0f;
+				graphics->SetViewport(shvp);
+
+				guiRenderer->FullScreenTexturedQuad(_iblSkyEnvMap, _envSHShader.get());
+			}
+		}
+
+		guiRenderer->EndFrame();
+
+		// Restore the beauty target and camera viewport before returning -
+		// leaving a 128-wide viewport bound corrupts whatever pass runs next
+		// (same class of bug as the SRV auto-slot counter trap).
+		graphics->SetRenderTarget(_beautyRT);
+		graphics->SetViewport(*_currentCamera->GetViewport().Get11());
+		GFX_PERF_END();
+	}
+
+	void SceneRenderer::RenderProbeEnvMaps()
+	{
+		PROFILE();
+
+		if (_probeEnvShader == nullptr || _currentScene == nullptr)
+			return;
+
+		std::vector<ReflectionProbeComponent*> probes;
+		if (!_currentScene->GetComponents<ReflectionProbeComponent>(probes))
+			return;
+
+		// Manual re-bake trigger. Self-clearing so it reads as a verb rather than
+		// a mode - setting it once queues one capture per probe.
+		if (r_iblProbeRecapture._val.b)
+		{
+			r_iblProbeRecapture._val.b = false;
+			for (auto* probe : probes)
+			{
+				if (probe != nullptr)
+					probe->RequestCapture();
+			}
+			LOG_INFO("r_iblProbeRecapture: queued a fresh capture for %d probe(s)", (int32_t)probes.size());
+		}
+
+		// One prefilter per frame: it's a bake step triggered by a capture
+		// completing, and spreading multiple probes across frames keeps a
+		// scene-load recapture burst from hitching.
+		ReflectionProbeComponent* dirty = nullptr;
+		for (auto* probe : probes)
+		{
+			if (probe != nullptr && probe->IsAtlasDirty())
+			{
+				dirty = probe;
+				break;
+			}
+		}
+		if (dirty == nullptr)
+			return;
+
+		ITexture2D* atlas = dirty->EnsureEnvAtlas();
+		if (atlas == nullptr)
+			return;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"ProbeEnvMap");
+		guiRenderer->StartFrame();
+
+		// Explicit face binds at t0..t5 (ProbeEnvMap.shader's register layout).
+		for (int32_t i = 0; i < 6; ++i)
+			graphics->SetTexture2D(i, dirty->GetFace(i));
+
+		graphics->SetRenderTarget(atlas);
+
+		D3D11_VIEWPORT vp;
+		vp.TopLeftX = 0.0f;
+		vp.TopLeftY = 0.0f;
+		vp.Width = (float)kIblEnvMapFaceSize;
+		vp.Height = (float)(kIblEnvMapFaceSize * kIblEnvMapRows);
+		vp.MinDepth = 0.0f;
+		vp.MaxDepth = 1.0f;
+		graphics->SetViewport(vp);
+
+		guiRenderer->FullScreenTexturedQuad(dirty->GetFace(0), _probeEnvShader.get());
+
+		guiRenderer->EndFrame();
+
+		// Project this probe's atlas into its own SH irradiance (P1-C, locally).
+		// Sky SH is unoccluded and floods interiors; a probe's SH is integrated
+		// from what the probe actually sees, so an indoor probe already knows the
+		// roof is solid. This is what makes diffuse IBL usable inside a building.
+		if (_envSHShader != nullptr)
+		{
+			if (ITexture2D* probeSH = dirty->EnsureShTex(); probeSH != nullptr)
+			{
+				graphics->SetRenderTarget(probeSH);
+
+				D3D11_VIEWPORT shvp;
+				shvp.TopLeftX = 0.0f;
+				shvp.TopLeftY = 0.0f;
+				shvp.Width = 1.0f;
+				shvp.Height = (float)kIblEnvShCoeffs;
+				shvp.MinDepth = 0.0f;
+				shvp.MaxDepth = 1.0f;
+				graphics->SetViewport(shvp);
+
+				guiRenderer->FullScreenTexturedQuad(atlas, _envSHShader.get());
+			}
+		}
+
+		dirty->MarkAtlasPrefiltered();
+		LOG_INFO("ReflectionProbe: prefiltered atlas + SH for '%s' - probe is now selectable",
+			dirty->GetEntity()->GetName().c_str());
+
+		// Restore beauty target + camera viewport (same discipline as
+		// RenderSkyEnvMap - a stale 128-wide viewport corrupts the next pass).
+		graphics->SetRenderTarget(_beautyRT);
+		graphics->SetViewport(*_currentCamera->GetViewport().Get11());
+		GFX_PERF_END();
+	}
+
+	bool SceneRenderer::WillRenderSSR() const
+	{
+		if (!r_ssr._val.b)
+			return false;
+
+		// Environment-capture cameras (reflection probe faces) never run SSR - see
+		// the NRD jitter/buffer-size note in RenderSSR.
+		if (_currentCamera == nullptr || _currentCamera->IsEnvironmentCapture())
+			return false;
+
+		// Main camera only. SSR + NRD are temporal systems keyed to one camera's
+		// history and viewport.
+		if (_currentScene == nullptr || _currentCamera != _currentScene->GetMainCamera())
+			return false;
+
+		// RenderPostProcessing skips the whole pass when nothing drawn this frame
+		// was reflective. Mirrored here so the deferred pass doesn't drop its
+		// environment specular for a frame whose resolve never runs.
+		if (!_currentScene->DidAnyDrawnItemReflect())
+			return false;
+
+		return g_pEnv->GetUIManager().GetRenderer() != nullptr;
+	}
+
+	bool SceneRenderer::ShouldComposeEnvSpecularInResolve() const
+	{
+		return r_iblComposeSSR._val.b && WillRenderSSR();
+	}
+
+	void SceneRenderer::CreateSsrTargets(int32_t width, int32_t height)
+	{
+		// Same format/MSAA derivation as CreateRenderTargets - these were
+		// function-locals there, re-derived here so this can also run from
+		// RenderSSR when r_ssrHalfRes flips at runtime.
+		const auto MsaaLevel = g_pEnv->_graphicsDevice->GetCurrentMSAALevel();
+		const DXGI_FORMAT BEAUTY_FORMAT = HexEngine::detail::ShimToDxgiFormat(g_pEnv->_graphicsDevice->GetDesiredBackBufferFormat());
+
+		SAFE_DELETE(_ssrDiffuseTexture);
+		SAFE_DELETE(_ssrDiffuseHitInfo);
+		SAFE_DELETE(_ssrTexture);
+		SAFE_DELETE(_ssrHitInfo);
+		SAFE_DELETE(_ssrHistory);
+		SAFE_DELETE(_ssrResolved);
+		SAFE_DELETE(_ssrUpDiffuse);
+		SAFE_DELETE(_ssrUpDiffuseHit);
+		SAFE_DELETE(_ssrUpSpecular);
+		SAFE_DELETE(_ssrUpSpecularHit);
+
+		_ssrBaseWidth = width;
+		_ssrBaseHeight = height;
+		_ssrHalfResActive = r_ssrHalfRes._val.b;
+
+		const int32_t halfW = std::max(1, width / 2);
+		const int32_t halfH = std::max(1, height / 2);
+
+		auto makeSsrRT = [&](int32_t w, int32_t h, const char* name) -> ITexture2D*
+		{
+			ITexture2D* tex = g_pEnv->_graphicsDevice->CreateTexture2D(
+				w,
+				h,
+				BEAUTY_FORMAT,
+				1,
+				D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE,
+				0, MsaaLevel, 0,
+				nullptr,
+				(D3D11_CPU_ACCESS_FLAG)0,
+				MsaaLevel > 1 ? D3D11_RTV_DIMENSION_TEXTURE2DMS : D3D11_RTV_DIMENSION_TEXTURE2D,
+				D3D11_UAV_DIMENSION_UNKNOWN,
+				MsaaLevel > 1 ? D3D11_SRV_DIMENSION_TEXTURE2DMS : D3D11_SRV_DIMENSION_TEXTURE2D);
+			tex->SetDebugName(name);
+			return tex;
+		};
+
+		// March MRTs: half res when r_ssrHalfRes, full otherwise.
+		const int32_t mw = _ssrHalfResActive ? halfW : width;
+		const int32_t mh = _ssrHalfResActive ? halfH : height;
+		_ssrDiffuseTexture = makeSsrRT(mw, mh, "_ssrDiffuseTexture");
+		_ssrDiffuseHitInfo = makeSsrRT(mw, mh, "_ssrDiffuseHitInfo");
+		_ssrTexture        = makeSsrRT(mw, mh, "_ssrSpecularTexture");
+		_ssrHitInfo        = makeSsrRT(mw, mh, "_ssrSpecularHitInfo");
+
+		// NRD input/output/history are ALWAYS full res - the denoiser's
+		// half-res temporal accumulation is what made reflections swim, so
+		// half-res mode bridges through the upsampled set below instead.
+		_ssrHistory = makeSsrRT(width, height, "_ssrHistory");
+		_ssrResolved = makeSsrRT(width, height, "_ssrResolved");
+
+		if (_ssrHalfResActive)
+		{
+			_ssrUpDiffuse     = makeSsrRT(width, height, "_ssrUpDiffuse");
+			_ssrUpDiffuseHit  = makeSsrRT(width, height, "_ssrUpDiffuseHit");
+			_ssrUpSpecular    = makeSsrRT(width, height, "_ssrUpSpecular");
+			_ssrUpSpecularHit = makeSsrRT(width, height, "_ssrUpSpecularHit");
+		}
+	}
+
 	void SceneRenderer::RenderSSR()
 	{
 		PROFILE();
@@ -4492,7 +7319,40 @@ namespace HexEngine
 		if (!r_ssr._val.b)
 			return;
 
+		// Environment-capture cameras (reflection probe faces) never run SSR. The
+		// NRD denoiser's buffers are sized for the main camera, but this camera
+		// renders at its own much smaller resolution, and jitter reaches NRD in
+		// NDC and is converted back to pixels with the DENOISER's width - so a
+		// 256px capture against 3840px buffers turns a +/-0.5px jitter into
+		// +/-7.5 and trips NRD's internal range assert. A one-shot capture face
+		// also has no temporal history for a denoiser to work with.
+		if (_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture())
+			return;
+
+		// Main camera only. SSR + NRD are temporal systems keyed to a single
+		// camera's history and viewport: running them for a secondary camera
+		// (reflection-probe capture rig, the in-game map view) hands NRD jitter
+		// computed for that camera's viewport against buffers sized for the main
+		// one - which trips NRD's 'cameraJitter must be in [-0.5, 0.5]' assert
+		// (crash call stack: RenderSSR -> FilterFrame -> SetCommonSettings) -
+		// and would corrupt the main camera's reflection history even where it
+		// didn't crash. Secondary views get their reflections from the IBL
+		// terms instead.
+		if (_currentScene != nullptr && _currentCamera != _currentScene->GetMainCamera())
+			return;
+
 		GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Begin");
+
+		const auto& bbvp = _currentCamera->GetViewport();
+
+		// Recreate the SSR chain when r_ssrHalfRes flips at runtime (or the
+		// viewport changed under us - Resize handles the normal path, this is
+		// the cvar toggle).
+		if (_ssrHalfResActive != r_ssrHalfRes._val.b ||
+			_ssrBaseWidth != (int32_t)bbvp.width || _ssrBaseHeight != (int32_t)bbvp.height)
+		{
+			CreateSsrTargets((int32_t)bbvp.width, (int32_t)bbvp.height);
+		}
 
 		_ssrDiffuseTexture->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 		_ssrDiffuseHitInfo->ClearRenderTargetView(math::Color(0, 0, 0, 0));
@@ -4500,15 +7360,16 @@ namespace HexEngine
 		_ssrHitInfo->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
 		g_pEnv->_graphicsDevice->SetRenderTargets({ _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo });
-		
-		const auto& bbvp = _currentCamera->GetViewport();
-		// set the shadow viewport
-		//
+
+		// March at the SSR target resolution (half the viewport when
+		// r_ssrHalfRes). The shader derives its UVs from the fullscreen quad's
+		// texcoord, so the smaller viewport just means fewer rays - each ray
+		// still marches the full-res gbuffer.
 		D3D11_VIEWPORT vp;
 		vp.TopLeftX = 0;
 		vp.TopLeftY = 0;
-		vp.Width = bbvp.width;// / 2;
-		vp.Height = bbvp.height;// / 2;
+		vp.Width = (float)_ssrTexture->GetWidth();
+		vp.Height = (float)_ssrTexture->GetHeight();
 		vp.MinDepth = 0.0f;
 		vp.MaxDepth = 1.0f;
 		g_pEnv->_graphicsDevice->SetViewport(vp);
@@ -4516,6 +7377,23 @@ namespace HexEngine
 		if (auto guiRenderer = g_pEnv->GetUIManager().GetRenderer(); guiRenderer != nullptr)
 		{
 			guiRenderer->StartFrame();
+
+			// One-shot dump of exactly what SSR is about to sample.
+			//
+			// A reflection can be dark for two completely different reasons: the
+			// ray landed somewhere dark, or the ray landed on something that IS
+			// bright in the final frame but was not yet drawn when SSR read the
+			// buffer. Transparent geometry is drawn after this pass, so anything
+			// seen through glass falls in the second category. Comparing this
+			// dump against the presented frame separates them; nothing else in
+			// the pipeline can.
+			if (r_ssrDumpBeauty._val.b)
+			{
+				r_ssrDumpBeauty._val.b = false;
+				try { _beautyRT->SaveToFile(fs::path("ssr_beauty.png")); }
+				catch (const std::exception& e) { LOG_WARN("ssr beauty dump failed: %s", e.what()); }
+				LOG_INFO("r_ssrDumpBeauty: wrote ssr_beauty.png - beauty as SSR sees it");
+			}
 
 			// Ensure the auto-slot SRV counter starts at zero so the bindings below land at
 			// the registers the SSR shader declares (gbuffer=t0..t4, then t5..t8, then GI).
@@ -4547,66 +7425,100 @@ namespace HexEngine
 				_diffuseGi.BindVoxelsForReflection();
 			}
 
+			// Sky-view LUT at t21 = the environment fallback for specular rays that find
+			// nothing. Bound with an EXPLICIT slot rather than the auto-slot counter,
+			// because the GI bind above is conditional: on the auto path this would land at
+			// t9 whenever GI is off and get read as voxel radiance. The explicit setter also
+			// leaves the counter at slot+1, and nothing binds after it in this pass.
+			// A null bind reads as black, which degrades to the old no-fallback behaviour.
+			g_pEnv->_graphicsDevice->SetTexture2D(21,
+				g_pEnv->_atmosphereLUTs != nullptr ? g_pEnv->_atmosphereLUTs->GetSkyViewLUT() : nullptr);
+
+			// t22..t24 = the environment atlases, so a specular ray that finds
+			// nothing can return the environment along its own direction instead
+			// of leaving a hole for the resolve to patch. Patching it afterwards
+			// meant gating a DENOISED radiance on an UNFILTERED confidence mask,
+			// and the two disagreed at every hit/miss boundary - see the miss
+			// path in SSR.shader. Null binds read as black, degrading to the old
+			// "miss contributes nothing".
+			g_pEnv->_graphicsDevice->SetTexture2D(22, _iblSkyEnvMap);
+			g_pEnv->_graphicsDevice->SetTexture2D(23,
+				_activeProbe != nullptr ? _activeProbe->GetEnvAtlas() : nullptr);
+			g_pEnv->_graphicsDevice->SetTexture2D(24,
+				_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
+
 			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrShader.get());
 
-			
+			// The march ran at the SSR resolution; everything from here on runs
+			// at the full viewport.
+			vp.Width = bbvp.width;
+			vp.Height = bbvp.height;
+			g_pEnv->_graphicsDevice->SetViewport(vp);
+
+			// Half-res bridge: depth-aware upsample of the four march outputs
+			// to full res BEFORE the denoiser. NRD's half-res temporal
+			// accumulation made reflections swim under camera motion (bisect:
+			// raw half-res SSR does not swim), so the denoiser always runs at
+			// full resolution against the full-res gbuffer guides.
+			const bool ssrHalfRes = _ssrHalfResActive &&
+				_ssrUpDiffuse != nullptr && _ssrUpSpecular != nullptr;
+			if (ssrHalfRes && r_ssrDenoise._val.b && _ssrUpsampleShader != nullptr)
+			{
+				g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+				g_pEnv->_graphicsDevice->SetRenderTargets({ _ssrUpDiffuse, _ssrUpDiffuseHit, _ssrUpSpecular, _ssrUpSpecularHit });
+				g_pEnv->_graphicsDevice->SetTexture2D(0, _ssrDiffuseTexture);
+				g_pEnv->_graphicsDevice->SetTexture2D(1, _ssrDiffuseHitInfo);
+				g_pEnv->_graphicsDevice->SetTexture2D(2, _ssrTexture);
+				g_pEnv->_graphicsDevice->SetTexture2D(3, _ssrHitInfo);
+				g_pEnv->_graphicsDevice->SetTexture2D(4, _gbuffer.GetNormal());
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+				guiRenderer->FullScreenTexturedQuad(nullptr, _ssrUpsampleShader.get());
+				for (int32_t i = 0; i < 5; ++i)
+					g_pEnv->_graphicsDevice->SetTexture2D(i, nullptr);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(0);
+			}
 
             _ssrResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
             _denoiseFD.camera = _currentCamera;
             _denoiseFD.jitter = _taa.GetJitterOffset(bbvp.width, bbvp.height);
 
+			// The SSR signal handed to the resolve. Two sources so both the denoised
+			// and the raw path go through ONE draw: the resolve adds the
+			// environment term, and running it twice would add it twice.
+			//   denoised     - A = NRD's resolved diffuse+specular, B = nothing
+			//   not denoised - A = raw SSR diffuse, B = raw SSR specular
+			// A null bind reads as black, so the unused source contributes nothing.
+			ITexture2D* ssrSourceA = nullptr;
+			ITexture2D* ssrSourceB = nullptr;
+
 			if (r_ssrDenoise._val.b && g_pEnv->_denoiserProvider != nullptr)
 			{
 				// NRD-denoised path: pack diffuse + specular SSR signals + their hit distances,
-				// run NRD's RELAX_DIFFUSE_SPECULAR, then composite the resolved signal additively.
+				// run NRD's RELAX_DIFFUSE_SPECULAR, then hand the resolved signal to the
+				// composition below.
 				// FilterFrame compares the input texture size against NRD's last-bound size and
 				// rebuilds the pool internally when they differ - that's the DLSS-toggle safety
 				// net in case SceneRenderer::Resize's explicit CreateBuffers call is missed.
-				g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD, _ssrDiffuseTexture, _ssrDiffuseHitInfo, _ssrTexture, _ssrHitInfo, _gbuffer.GetNormal(), _gbuffer.GetSpecular(), _gbuffer.GetVelocity());
+				// NRD always denoises at full resolution with the full-res
+				// gbuffer guides; half-res mode feeds it the upsampled bridge
+				// set instead of the raw half-res march outputs.
+				g_pEnv->_denoiserProvider->BuildFrameData(_denoiseFD,
+					ssrHalfRes ? _ssrUpDiffuse     : _ssrDiffuseTexture,
+					ssrHalfRes ? _ssrUpDiffuseHit  : _ssrDiffuseHitInfo,
+					ssrHalfRes ? _ssrUpSpecular    : _ssrTexture,
+					ssrHalfRes ? _ssrUpSpecularHit : _ssrHitInfo,
+					_gbuffer.GetNormal(),
+					_gbuffer.GetSpecular(),
+					_gbuffer.GetVelocity());
 				g_pEnv->_denoiserProvider->FilterFrame(_denoiseFD, _ssrResolved);
 
 				_ssrResolved->CopyTo(_ssrHistory);
 
-				// NRD overwrites our per-frame constant buffer state; re-upload it.
-				auto sunLight = _currentScene->GetSunLight();
-
-				SetupPerFrameBuffer(
-					_currentCamera->GetViewMatrix(),
-					_currentCamera->GetProjectionMatrix(),
-					_currentCamera->GetViewMatrixPrev(),
-					_currentCamera->GetProjectionMatrixPrev(),
-					r_shadowCascades._val.i32,
-					sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
-					_currentCamera->GetViewport(),
-					6,
-					sunLight ? sunLight->GetLightMultiplier() : 1.0f
-				);
-
-				guiRenderer->StartFrame();
-				g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
-				g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
-				GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve");
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
-				guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+				ssrSourceA = _ssrResolved;
 			}
 			else
 			{
-				auto sunLight = _currentScene->GetSunLight();
-
-				SetupPerFrameBuffer(
-					_currentCamera->GetViewMatrix(),
-					_currentCamera->GetProjectionMatrix(),
-					_currentCamera->GetViewMatrixPrev(),
-					_currentCamera->GetProjectionMatrixPrev(),
-					r_shadowCascades._val.i32,
-					sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
-					_currentCamera->GetViewport(),
-					6,
-					sunLight ? sunLight->GetLightMultiplier() : 1.0f
-				);
-
 				// NRD-bypass path: composite the raw SSR diffuse + specular textures directly
 				// onto beauty. Use this to verify whether artifacts originate from the SSR shader
 				// or from NRD's denoising. If artifacts disappear here, the shader output is OK
@@ -4616,15 +7528,67 @@ namespace HexEngine
 				// the visible reflections on wet surfaces; without it, r_ssrDenoise=0 looked like
 				// "reflections vanished entirely" and made the diagnostic useless. Composite both
 				// diffuse and specular so the toggle isolates NRD vs the raw shader honestly.
-				guiRenderer->StartFrame();
-				g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
-				g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
-				GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Blit Resolve (no denoise)");
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
-				guiRenderer->FullScreenTexturedQuad(_ssrDiffuseTexture, _ssrResolve.get());
-				guiRenderer->FullScreenTexturedQuad(_ssrTexture, _ssrResolve.get());
-				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
+				ssrSourceA = _ssrDiffuseTexture;
+				ssrSourceB = _ssrTexture;
 			}
+
+			// NRD overwrites our per-frame constant buffer state; re-upload it. The
+			// resolve reads the IBL params and probe placement out of it, so this
+			// is not optional on the denoised path.
+			{
+				auto sunLight = _currentScene->GetSunLight();
+
+				SetupPerFrameBuffer(
+					_currentCamera->GetViewMatrix(),
+					_currentCamera->GetProjectionMatrix(),
+					_currentCamera->GetViewMatrixPrev(),
+					_currentCamera->GetProjectionMatrixPrev(),
+					r_shadowCascades._val.i32,
+					sunLight ? sunLight->GetEntity()->GetComponent<Transform>()->GetForward() : math::Vector3::Forward,
+					_currentCamera->GetViewport(),
+					6,
+					sunLight ? sunLight->GetLightMultiplier() : 1.0f
+				);
+			}
+
+			guiRenderer->StartFrame();
+			g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+			g_pEnv->_graphicsDevice->SetRenderTarget(_beautyRT);
+			GFX_PERF_BEGIN(0xFFFFFFFF, L"SSR Resolve + Env Compose");
+
+			// Everything the resolve reads is bound EXPLICITLY, and the quad is
+			// drawn with a null texture so nothing lands on the auto-slot counter
+			// after these. The IBL atlases keep the same registers the deferred
+			// pass uses (t15/t16/t17/t21) because both passes call the same
+			// EvaluateEnvSpecular and must not drift.
+			g_pEnv->_graphicsDevice->UnbindAllPixelShaderResources();
+			_gbuffer.BindAsShaderResource();                                  // t0..t4
+			g_pEnv->_graphicsDevice->SetTexture2D(5, ssrSourceA);
+			g_pEnv->_graphicsDevice->SetTexture2D(6, ssrSourceB);
+			// Raw, un-denoised specular hit info: .r is the screen-space
+			// confidence the composition blends against.
+			g_pEnv->_graphicsDevice->SetTexture2D(7, _ssrHitInfo);
+			g_pEnv->_graphicsDevice->SetTexture2D(15, _iblSkyEnvMap);
+			g_pEnv->_graphicsDevice->SetTexture2D(16,
+				_activeProbe != nullptr ? _activeProbe->GetEnvAtlas() : nullptr);
+			g_pEnv->_graphicsDevice->SetTexture2D(17,
+				_activeProbe2 != nullptr ? _activeProbe2->GetEnvAtlas() : nullptr);
+			g_pEnv->_graphicsDevice->SetTexture2D(21, _dfgLut);
+			// t22 = GI blurred voxel AO for the env-spec fallback occlusion
+			// (same register + gating as the deferred pass; z flag guards it).
+			g_pEnv->_graphicsDevice->SetTexture2D(22,
+				_giComposeActive ? _diffuseGi.GetBlurredAOTexture() : nullptr);
+
+			// PremultipliedAlpha (src + dst * (1 - src.a)), not Additive: the
+			// resolve writes the reflection in rgb and the surface's specular
+			// reflectance in alpha, so the same draw adds the reflection AND takes
+			// that fraction back off the base layer. The shader returns alpha 0 on
+			// every path that shouldn't attenuate (sky, legacy stacking,
+			// r_ssrEnergyConserve off), where this degrades exactly to the
+			// additive blend it replaced.
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::PremultipliedAlpha);
+			guiRenderer->FullScreenTexturedQuad(nullptr, _ssrResolve.get());
+			g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 
 			//guiRenderer->FullScreenTexturedQuad(_ssrResolved, _ssrResolve.get());
 			//_ssrResolved->CopyTo(_beautyRT);
@@ -4645,6 +7609,64 @@ namespace HexEngine
 		}
 
 		GFX_PERF_END();
+	}
+
+	bool SceneRenderer::RenderCloudShadowMap(bool placementValid)
+	{
+		if (_cloudShadowMapShader == nullptr || _cloudShapeNoise == nullptr || _cloudDetailNoise == nullptr)
+			return false;
+		if (!placementValid)
+			return false;
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return false;
+
+		const uint32_t size = (uint32_t)std::clamp(r_cloudShadowMapSize._val.i32, 256, 4096);
+		if (_cloudShadowMap == nullptr || _cloudShadowMap->GetWidth() != size)
+		{
+			SAFE_DELETE(_cloudShadowMap);
+			_cloudShadowMap = graphics->CreateTexture2D(
+				size, size,
+				DXGI_FORMAT_R16_FLOAT,
+				1,
+				D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET,
+				1);
+			if (_cloudShadowMap == nullptr)
+				return false;
+			_cloudShadowMap->SetDebugName("_cloudShadowMap");
+		}
+
+		GFX_PERF_BEGIN(0xFFFFFFFF, L"Cloud shadow map");
+		guiRenderer->StartFrame(size, size);
+
+		// This runs inside the deferred light pass, whose blend state is
+		// ADDITIVE for light accumulation. Left as-is, the never-cleared map
+		// summed its transmittance every frame and grew without bound - the
+		// "cloud shadows brighten the whole scene 25x" failure. Opaque blend
+		// and a clear, then hand the light pass its state back.
+		_cloudShadowMap->ClearRenderTargetView(math::Color(1.0f, 0.0f, 0.0f, 1.0f));
+		graphics->SetBlendState(BlendState::Opaque);
+		graphics->SetRenderTarget(_cloudShadowMap);
+		graphics->SetViewport(Viewport(0.0f, 0.0f, (float)size, (float)size));
+		// b4 = cloud constants (already written by the caller). Noise volumes
+		// at t0/t1 via the implicit slot counter (0 after the last draw).
+		graphics->UnbindAllPixelShaderResources();
+		graphics->SetTexture3D(_cloudShapeNoise);
+		graphics->SetTexture3D(_cloudDetailNoise);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _cloudShadowMapShader.get());
+
+		guiRenderer->EndFrame();
+		GFX_PERF_END();
+
+		// Hand the caller's state back: RenderLights set ADDITIVE for light
+		// accumulation before calling into the directional pass.
+		graphics->SetBlendState(BlendState::Additive);
+		graphics->SetRenderTarget(_lightAccumulationBuffer);
+		if (_currentCamera != nullptr)
+			graphics->SetViewport(*_currentCamera->GetViewport().Get11());
+		return true;
 	}
 
 	void SceneRenderer::RenderVolumetricClouds()
@@ -4685,8 +7707,62 @@ namespace HexEngine
 			g_pEnv->_graphicsDevice->SetTexture2D(_blueNoise.get());
 			g_pEnv->_graphicsDevice->SetTexture3D(_cloudShapeNoise);
 			g_pEnv->_graphicsDevice->SetTexture3D(_cloudDetailNoise);
+			// S3 unified cloud lighting: the Hillaire transmittance (t9) and
+			// sky-view (t10) LUTs light the clouds on the SAME atmosphere the
+			// sky dome uses (sun hue at altitude + cheap ambient). Guarded by
+			// the windOffset.w flag in the constants; when the LUTs are
+			// unavailable these binds are skipped and the shader's analytic
+			// fallback runs (the auto-slot counter still needs both slots
+			// filled in order, so bind null-safe only when valid).
+			if (constants.windOffset.w > 0.5f)
+			{
+				g_pEnv->_graphicsDevice->SetTexture2D(g_pEnv->_atmosphereLUTs->GetTransmittanceLUT());
+				g_pEnv->_graphicsDevice->SetTexture2D(g_pEnv->_atmosphereLUTs->GetSkyViewLUT());
+			}
 			guiRenderer->FullScreenTexturedQuad(nullptr, _volumetricClouds.get());
 			guiRenderer->EndFrame();
+
+			// Temporal accumulation (CloudTemporal.shader): reproject last
+			// frame's half-res result by view rotation and EMA-blend. Main camera
+			// only - capture cameras have no coherent history.
+			ITexture2D* upsampleSource = _cloudsBuffer;
+			const bool temporal = r_cloudTemporal._val.b && _cloudTemporalShader != nullptr
+				&& _cloudHistory[0] != nullptr && _cloudHistory[1] != nullptr
+				&& !_currentCamera->IsEnvironmentCapture();
+			if (temporal)
+			{
+				if (_cloudTemporalBuffer == nullptr)
+					_cloudTemporalBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+				if (_cloudTemporalBuffer != nullptr)
+				{
+					const uint32_t write = _cloudHistoryWrite;
+					const uint32_t read = write ^ 1u;
+					const float histWeight = _cloudHistoryValid ? (1.0f - std::clamp(r_cloudTemporalAlpha._val.f32, 0.02f, 1.0f)) : 0.0f;
+					const math::Vector4 params(histWeight, 1.0f / halfVp.Width, 1.0f / halfVp.Height, 0.0f);
+					_cloudTemporalBuffer->Write((void*)&params, sizeof(params));
+
+					g_pEnv->_graphicsDevice->SetRenderTarget(_cloudHistory[write]);
+					g_pEnv->_graphicsDevice->SetViewport(halfVp);
+					g_pEnv->_graphicsDevice->SetConstantBufferPS(6, _cloudTemporalBuffer);
+					guiRenderer->StartFrame();
+					// t0 current, t1 history, t2 gbuffer diffuse (sky flag) - implicit
+					// slots from 0 (the previous draw reset the counter).
+					g_pEnv->_graphicsDevice->SetTexture2D(_cloudsBuffer);
+					g_pEnv->_graphicsDevice->SetTexture2D(_cloudHistory[read]);
+					g_pEnv->_graphicsDevice->SetTexture2D(_gbuffer.GetDiffuse());
+					guiRenderer->FullScreenTexturedQuad(nullptr, _cloudTemporalShader.get());
+					guiRenderer->EndFrame();
+					g_pEnv->_graphicsDevice->SetConstantBufferPS(6, nullptr);
+
+					upsampleSource = _cloudHistory[write];
+					_cloudHistoryWrite = read;
+					_cloudHistoryValid = true;
+				}
+			}
+			else
+			{
+				_cloudHistoryValid = false;
+			}
 
 			_fogBuffer->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 			g_pEnv->_graphicsDevice->SetRenderTarget(_fogBuffer);
@@ -4694,7 +7770,7 @@ namespace HexEngine
 
 			guiRenderer->StartFrame();
 			_gbuffer.BindAsShaderResource();
-			g_pEnv->_graphicsDevice->SetTexture2D(_cloudsBuffer);
+			g_pEnv->_graphicsDevice->SetTexture2D(upsampleSource);
 			guiRenderer->FullScreenTexturedQuad(nullptr, _bilateralUpsample.get());
 			guiRenderer->EndFrame();
 
@@ -4710,6 +7786,132 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->SetBlendState(BlendState::Opaque);
 		g_pEnv->_graphicsDevice->SetDepthBufferState(DepthBufferState::DepthDefault);
 		g_pEnv->_graphicsDevice->SetViewport(*bbvp.Get11());
+	}
+
+	// Screen-space sun shafts (RDR2 sky S7). Three draws:
+	//   1. Mask (half res, _sunShaftsRTA): radiance seed on sky pixels,
+	//      attenuated by the full-res cloud alpha still in _fogBuffer,
+	//      windowed to a cone around the sun. Geometry seeds zero - that's
+	//      what carves the ray silhouettes.
+	//   2. Radial blur (half res, A -> B): taps marching toward the sun's
+	//      screen position with exponential decay.
+	//   3. Composite (full res, B -> beauty, additive): a second radial tap
+	//      run with a wider reach, coloured by the transmittance-LUT sun
+	//      colour, scaled by intensity and the off-screen fade.
+	void SceneRenderer::RenderSunShafts()
+	{
+		if (!r_sunShafts._val.b || r_sunShaftsIntensity._val.f32 <= 0.001f)
+			return;
+		if (_sunShaftsMaskShader == nullptr || _sunShaftsBlurShader == nullptr ||
+			_sunShaftsRTA == nullptr || _sunShaftsRTB == nullptr ||
+			_sunShaftsParamsBuffer == nullptr || _fogBuffer == nullptr ||
+			_beautyRT == nullptr || _currentCamera == nullptr)
+			return;
+		if (_currentCamera->IsEnvironmentCapture())
+			return;
+
+		// Sun screen position. Project a far point along the sun direction;
+		// behind-camera (w <= 0) means no shafts this frame.
+		math::Vector3 sunDir = math::Vector3::Up;
+		if (_currentScene != nullptr)
+		{
+			if (auto* sun = _currentScene->GetSunLight(); sun != nullptr && sun->GetEntity() != nullptr)
+			{
+				if (auto* tf = sun->GetEntity()->GetComponent<Transform>())
+				{
+					sunDir = -tf->GetForward();
+					if (sunDir.LengthSquared() > 1e-6f)
+						sunDir.Normalize();
+				}
+			}
+		}
+		if (sunDir.y <= -0.05f)
+			return; // sun well below the horizon
+
+		const math::Vector3 eye = _currentCamera->GetEntity() ? _currentCamera->GetEntity()->GetPosition() : math::Vector3::Zero;
+		const math::Vector3 sunWorld = eye + sunDir * 10000.0f;
+		const math::Matrix viewProj = _currentCamera->GetViewProjectionMatrix();
+		math::Vector4 clip = math::Vector4::Transform(math::Vector4(sunWorld.x, sunWorld.y, sunWorld.z, 1.0f), viewProj);
+		if (clip.w <= 0.01f)
+			return;
+		const float ndcX = clip.x / clip.w;
+		const float ndcY = clip.y / clip.w;
+		const math::Vector2 sunUv(ndcX * 0.5f + 0.5f, -ndcY * 0.5f + 0.5f);
+
+		// Fade the whole effect as the sun leaves the screen (up to 35%
+		// outside still contributes - rays from a just-off-screen sun are
+		// exactly the reference-2 look).
+		const float outX = std::max({ 0.0f, -sunUv.x, sunUv.x - 1.0f });
+		const float outY = std::max({ 0.0f, -sunUv.y, sunUv.y - 1.0f });
+		const float offscreenFade = std::clamp(1.0f - std::max(outX, outY) / 0.35f, 0.0f, 1.0f);
+		if (offscreenFade <= 0.001f)
+			return;
+
+		PROFILE();
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		const auto& bbvp = _currentCamera->GetViewport();
+		D3D11_VIEWPORT halfVp = {};
+		halfVp.Width = std::max(1.0f, bbvp.width * 0.5f);
+		halfVp.Height = std::max(1.0f, bbvp.height * 0.5f);
+		halfVp.MaxDepth = 1.0f;
+
+		struct SunShaftParams { math::Vector4 p0; math::Vector4 p1; } params;
+		params.p0 = math::Vector4(sunUv.x, sunUv.y, r_sunShaftsLength._val.f32, offscreenFade);
+		params.p1 = math::Vector4(r_sunShaftsIntensity._val.f32, 0.0f /*pass*/, 0.0f, 0.0f);
+
+		guiRenderer->StartFrame();
+
+		// 1. Mask into A.
+		params.p1.y = 0.0f;
+		_sunShaftsParamsBuffer->Write(&params, sizeof(params));
+		graphics->SetConstantBufferPS(6, _sunShaftsParamsBuffer);
+		graphics->SetRenderTarget(_sunShaftsRTA);
+		graphics->SetViewport(halfVp);
+		graphics->SetBlendState(BlendState::Opaque);
+		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
+		_gbuffer.BindAsShaderResource();          // t0..t4 (sky flag in diffuse)
+		graphics->SetTexture2D(5, _fogBuffer);    // full-res cloud result
+		guiRenderer->FullScreenTexturedQuad(nullptr, _sunShaftsMaskShader.get());
+
+		// 2. Radial blur A -> B (pass 1).
+		params.p1.y = 1.0f;
+		_sunShaftsParamsBuffer->Write(&params, sizeof(params));
+		graphics->SetConstantBufferPS(6, _sunShaftsParamsBuffer);
+		graphics->SetRenderTarget(_sunShaftsRTB);
+		graphics->SetViewport(halfVp);
+		graphics->SetTexture2D(0, _sunShaftsRTA);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _sunShaftsBlurShader.get());
+
+		// 3. Composite B -> beauty (pass 2, additive, full res, coloured).
+		params.p1.y = 2.0f;
+		_sunShaftsParamsBuffer->Write(&params, sizeof(params));
+		graphics->SetConstantBufferPS(6, _sunShaftsParamsBuffer);
+		graphics->SetRenderTarget(_beautyRT);
+		graphics->SetViewport(*bbvp.Get11());
+		graphics->SetBlendState(BlendState::Additive);
+		graphics->SetTexture2D(0, _sunShaftsRTB);
+		// t1 = transmittance LUT for the shaft colour (null-safe: the shader
+		// falls back to warm white when the LUT subsystem is off).
+		graphics->SetTexture2D(1, (g_pEnv->_atmosphereLUTs != nullptr)
+			? g_pEnv->_atmosphereLUTs->GetTransmittanceLUT() : nullptr);
+		guiRenderer->FullScreenTexturedQuad(nullptr, _sunShaftsBlurShader.get());
+
+		guiRenderer->EndFrame();
+
+		// State hygiene.
+		graphics->SetTexture2D(0, nullptr);
+		graphics->SetTexture2D(1, nullptr);
+		graphics->SetTexture2D(5, nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
+		graphics->SetBlendState(BlendState::Opaque);
+		graphics->SetDepthBufferState(DepthBufferState::DepthDefault);
+		graphics->SetViewport(*bbvp.Get11());
+		graphics->SetBoundResourceIndex(0);
 	}
 
 	const GBuffer* SceneRenderer::GetGBuffer()

@@ -20,9 +20,20 @@
 	StructuredBuffer<VoxelTriangleData> g_voxelTriangles : register(t0);
 	Texture3D<float4> g_prevVoxelRadiance : register(t1);
 	Texture3D<float4> g_prevVoxelAlbedo : register(t2);
+	// Live appended-candidate count (see the eval shader) - t9 sits above the
+	// shadow cascades at t3..t8. Bound only in candidate mode.
+	Buffer<uint> g_candidateLiveCount : register(t9);
+	// Previous-frame directional (SH L1) moments - bound only when
+	// g_giParams13.w > 0.5 (r_giDirectionalVoxels).
+	Texture3D<float4> g_prevVoxelL1x : register(t10);
+	Texture3D<float4> g_prevVoxelL1y : register(t11);
+	Texture3D<float4> g_prevVoxelL1z : register(t12);
 	SHADOWMAPS_RESOURCE(3);
 	RWTexture3D<float4> g_voxelRadianceOut : register(u0);
 	RWTexture3D<float4> g_voxelAlbedoOut : register(u1);
+	RWTexture3D<float4> g_voxelL1xOut : register(u2);
+	RWTexture3D<float4> g_voxelL1yOut : register(u3);
+	RWTexture3D<float4> g_voxelL1zOut : register(u4);
 
 	cbuffer GIConstants : register(b4)
 	{
@@ -36,7 +47,34 @@
 		float4 g_giParams4;
 		float4 g_giParams5;
 		float4 g_giParams6;
+		float4 g_giParams7;
+		float4 g_giParams8;
+		float4 g_giParams9;
+		float4 g_giParams10;
+		float4 g_giParams11;
+		// x = live source-triangle count, y = candidate routing active (see
+		// the eval shader's comment), z/w reserved.
+		float4 g_giParams12;
+		float4 g_giParams13;
 	};
+
+	float3 VoxelizeBarycentric(float3 p, float3 a, float3 b, float3 c)
+	{
+		const float3 v0 = b - a;
+		const float3 v1 = c - a;
+		const float3 v2 = p - a;
+		const float d00 = dot(v0, v0);
+		const float d01 = dot(v0, v1);
+		const float d11 = dot(v1, v1);
+		const float d20 = dot(v2, v0);
+		const float d21 = dot(v2, v1);
+		const float denom = d00 * d11 - d01 * d01;
+		if (abs(denom) <= 1e-8f)
+			return float3(1.0f, 0.0f, 0.0f);
+		const float v = (d11 * d20 - d01 * d21) / denom;
+		const float w = (d00 * d21 - d01 * d20) / denom;
+		return float3(1.0f - v - w, v, w);
+	}
 
 	bool IsPointInTriangle(float3 p, float3 a, float3 b, float3 c, float3 n)
 	{
@@ -146,10 +184,16 @@
 	[numthreads(64, 1, 1)]
 	void ShaderMain(uint3 tid : SV_DispatchThreadID)
 	{
-		uint triangleCount = 0;
+		uint triangleCapacity = 0;
 		uint triangleStride = 0;
-		g_voxelTriangles.GetDimensions(triangleCount, triangleStride);
-		if (tid.x >= triangleCount)
+		g_voxelTriangles.GetDimensions(triangleCapacity, triangleStride);
+		// Exact live-count guard (see the eval shader): candidate mode reads
+		// the appended count from t9, direct mode uses this update's uploaded
+		// count - never the buffer capacity, which kept stale triangles alive.
+		uint liveTriangleCount = (uint)(g_giParams12.x + 0.5f);
+		if (g_giParams12.y > 0.5f)
+			liveTriangleCount = g_candidateLiveCount[0];
+		if (tid.x >= min(liveTriangleCount, triangleCapacity))
 			return;
 
 		const VoxelTriangleData tri = g_voxelTriangles[tid.x];
@@ -213,8 +257,16 @@
 					if (abs(signedDist) > planeThickness)
 						continue;
 
+					// Same small-triangle fix as DiffuseGIVoxelizeEval: accept by
+					// distance to the (approximate) nearest point on the triangle
+					// instead of requiring the voxel centre to project inside the
+					// edges - high-poly meshes with sub-voxel triangles otherwise
+					// voxelize to nothing.
 					const float3 projected = voxelCenterWs - n * signedDist;
-					if (!IsPointInTriangle(projected, p0, p1, p2, n))
+					float3 baryClamped = max(VoxelizeBarycentric(projected, p0, p1, p2), 0.0f.xxx);
+					baryClamped /= max(baryClamped.x + baryClamped.y + baryClamped.z, 1e-5f);
+					const float3 closestOnTriWs = p0 * baryClamped.x + p1 * baryClamped.y + p2 * baryClamped.z;
+					if (length(voxelCenterWs - closestOnTriWs) > max(planeThickness, voxelSize * 0.87f))
 						continue;
 
 					// Evaluate direct sun visibility from the real shadow cascades first.
@@ -251,8 +303,16 @@
 					// from triangle-budget/coverage changes while moving clipmaps.
 					const float warmStabilize = saturate((g_giParams1.x - 0.84f) * 8.0f);
 					const float shiftSettle = saturate(g_giParams6.y);
-					const float temporalKeepBase = lerp(0.80f, 0.94f, warmStabilize);
-					const float temporalKeep = lerp(temporalKeepBase, 0.95f, shiftSettle * 0.45f);
+					// Faster base blend - see DiffuseGIVoxelizeEval.
+					const float temporalKeepBase = lerp(0.70f, 0.86f, warmStabilize);
+					const float temporalKeep = lerp(temporalKeepBase, 0.90f, shiftSettle * 0.45f);
+					// Snap-on-change (g_giParams12.z): the CPU detected a real
+					// lighting-state change (light set toggled/moved, sun jumped),
+					// so the accumulated history is stale by definition - blend
+					// mostly to the new injection and lift the per-update delta
+					// brake for a few updates, instead of easing in at the
+					// shimmer-safe steady-state rate.
+					const float snapBoost = saturate(g_giParams12.z);
 					const float albedoKeepBase = lerp(0.75f, 0.93f, warmStabilize);
 					const float albedoKeep = lerp(albedoKeepBase, 0.96f, shiftSettle * 0.55f);
 					const float prevAlbedoW = saturate(previousAlbedo.a) * albedoKeep;
@@ -274,7 +334,14 @@
 					// keep the accumulated history at the `temporalKeep` rate (~0.94) and let
 					// new injection blend in at the matching 6%. Stale data still fades because
 					// frames without injection just lerp toward zero at the same rate.
-					float3 radiance = previous.rgb * temporalKeep + injected * (1.0f - temporalKeep);
+					// Snap only voxels that RECEIVE injection this update. Applying
+					// low retention to injection-less voxels re-created the classic
+					// breathing/collapse bug: sparse-coverage voxels lost 85% of
+					// their history per refresh while getting nothing back, and the
+					// whole field decayed toward black whenever the snap was armed.
+					const float snapGate = snapBoost * ((dot(injected, 1.0f.xxx) > 1e-5f) ? 1.0f : 0.0f);
+					const float snapKeep = lerp(temporalKeep, 0.15f, snapGate);
+					float3 radiance = previous.rgb * snapKeep + injected * (1.0f - snapKeep);
 
 					// Cap per-frame voxel radiance change to suppress visible bright/dark flicker.
 					// Symmetric clamp - applies to BOTH increases (cap brightening) AND decreases
@@ -285,7 +352,8 @@
 					// primary cause.
 					const float3 baseDeltaLimit = 0.08f.xxx + previous.rgb * 0.30f;
 					const float3 settleDeltaLimit = 0.055f.xxx + previous.rgb * 0.22f;
-					const float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
+					float3 deltaLimit = lerp(baseDeltaLimit, settleDeltaLimit, shiftSettle * 0.85f);
+					deltaLimit = lerp(deltaLimit, 8.0f.xxx, snapGate);
 					radiance = min(radiance, previous.rgb + deltaLimit);
 					radiance = max(radiance, previous.rgb - deltaLimit);
 					radiance = max(radiance, 0.0f.xxx);
@@ -294,6 +362,16 @@
 					const float opacity = max(previous.a, tri.radianceOpacity.a);
 					g_voxelRadianceOut[coord] = float4(radiance, opacity);
 					g_voxelAlbedoOut[coord] = float4(voxelAlbedo, albedoConfidence);
+
+					// Directional (SH L1) moments: same blend form as the
+					// radiance above (see DiffuseGIVoxelizeEval).
+					if (g_giParams13.w > 0.5f)
+					{
+						const float3 injectedClamped = min(injected, 32.0f.xxx);
+						g_voxelL1xOut[coord] = float4(g_prevVoxelL1x[coord].rgb * snapKeep + injectedClamped * n.x * (1.0f - snapKeep), 0.0f);
+						g_voxelL1yOut[coord] = float4(g_prevVoxelL1y[coord].rgb * snapKeep + injectedClamped * n.y * (1.0f - snapKeep), 0.0f);
+						g_voxelL1zOut[coord] = float4(g_prevVoxelL1z[coord].rgb * snapKeep + injectedClamped * n.z * (1.0f - snapKeep), 0.0f);
+					}
 				}
 			}
 		}

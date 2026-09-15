@@ -88,6 +88,11 @@ namespace HexEngine
 		float rainDripIntensity = 0.0f;
 		int affectsGI = 1;
 		int emissiveAffectsGI = 0;
+		int receivesSnow = 0;
+		// Vegetation wind sway (x = bend, y = flutter, z = characteristic
+		// height m, w = mode 0 off / 1 tree / 2 grass). Mirrors
+		// MaterialProperties::windSwayParams.
+		math::Vector4 windSwayParams = math::Vector4::Zero;
 
 		// Render state - read once by the graph compiler and written into the
 		// Material before its standard shader is compiled, so artists can drive
@@ -178,6 +183,15 @@ namespace HexEngine
 
 		void EnsureDefaultOutputBindings();
 		static MaterialGraph CreateDefaultPbrGraph();
+
+		// Constant-fold the sub-graph feeding `semantic` into a flat RGBA value
+		// for CPU consumers that cannot run the compiled shader (GI material
+		// proxies). Constants and Add/Multiply/Lerp/OneMinus fold exactly;
+		// texture samples fold to identity (the sampled texture reaches those
+		// consumers separately via the material's texture bindings); geometry-
+		// dependent nodes fold to identity. Returns `fallback` when the
+		// semantic is unbound.
+		math::Vector4 EvaluateConstantColor(MaterialGraphOutputSemantic semantic, const math::Vector4& fallback) const;
 
 		// Build a PbrOutput node with the seven shading-input pins + default
 		// PbrOutputProperties. Used by CreateDefaultPbrGraph and the graph

@@ -2,6 +2,7 @@
 
 #include "Material.hpp"
 #include "../HexEngine.hpp"
+#include <algorithm>
 #include "../Scene/Mesh.hpp"
 
 namespace HexEngine
@@ -141,6 +142,7 @@ namespace HexEngine
 		_objectFlags = material._objectFlags;
 		_affectsGI = material._affectsGI;
 		_emissiveAffectsGI = material._emissiveAffectsGI;
+		_receivesSnow = material._receivesSnow;
 		_footstepSoundPath = material._footstepSoundPath;
 		_footstepSurfaceMapPath = material._footstepSurfaceMapPath;
 		_footstepSurfaceSounds = material._footstepSurfaceSounds;
@@ -148,6 +150,7 @@ namespace HexEngine
 		_graphInstance = material._graphInstance;
 		_hasGraph = material._hasGraph;
 		_hasGraphInstance = material._hasGraphInstance;
+		InvalidateGiGraphTintCache();
 	}
 
 	Material::Material(const Material& other)
@@ -205,6 +208,32 @@ namespace HexEngine
 	bool Material::GetAffectsGI() const
 	{
 		return _affectsGI;
+	}
+
+	math::Vector4 Material::GetGiAlbedoTint() const
+	{
+		math::Vector4 tint = _properties.diffuseColour;
+		if (_hasGraph)
+		{
+			// Graph materials author their colour inside the graph;
+			// _properties.diffuseColour stays at its (usually white) default,
+			// so GI proxies would read the surface as untinted. Fold the
+			// graph's constant chain into the tint. Texture samples fold to
+			// identity - GI reads the bound albedo texture separately.
+			// Cached: GI change-tracking calls this per mesh per update and
+			// the fold walks the node graph with string compares.
+			if (!_giGraphTintCacheValid)
+			{
+				_giGraphTintCache = _graph.EvaluateConstantColor(
+					MaterialGraphOutputSemantic::BaseColor,
+					math::Vector4(1.0f, 1.0f, 1.0f, 1.0f));
+				_giGraphTintCacheValid = true;
+			}
+			tint.x = std::clamp(tint.x * _giGraphTintCache.x, 0.0f, 1.0f);
+			tint.y = std::clamp(tint.y * _giGraphTintCache.y, 0.0f, 1.0f);
+			tint.z = std::clamp(tint.z * _giGraphTintCache.z, 0.0f, 1.0f);
+		}
+		return tint;
 	}
 
 	void Material::SetStandardShader(const std::shared_ptr<IShader>& shader)
@@ -384,7 +413,7 @@ namespace HexEngine
 		}
 	}
 
-	const std::string& Material::GetSoundTag(const std::string& key) const
+	std::string Material::GetSoundTag(const std::string& key) const
 	{
 		if (auto it = _soundTags.find(key); it != _soundTags.end())
 		{

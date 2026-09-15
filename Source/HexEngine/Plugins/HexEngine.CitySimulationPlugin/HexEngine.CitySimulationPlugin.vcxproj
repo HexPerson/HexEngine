@@ -171,6 +171,7 @@
     <ClInclude Include="PlaceOfWorkComponent.hpp" />
     <ClInclude Include="Plugin.hpp" />
     <ClInclude Include="ResidenceComponent.hpp" />
+    <ClInclude Include="LanePathSmoothing.hpp" />
     <ClInclude Include="RoadComponent.hpp" />
     <ClInclude Include="RoutineAgentComponent.hpp" />
     <ClInclude Include="ServiceStationComponent.hpp" />

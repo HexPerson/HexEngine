@@ -117,6 +117,7 @@ int WinMain(
 	HexEngine::Game3DOptions environmentOpts;
 
 	environmentOpts.window = mainWindow;
+	environmentOpts.mountEngineAssetPackage = true;
 
 	// Create a 3D Game environment
 	//

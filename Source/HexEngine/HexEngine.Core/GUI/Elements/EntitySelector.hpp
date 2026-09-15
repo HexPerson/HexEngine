@@ -15,6 +15,6 @@ namespace HexEngine
 
 	private:
 		EntityList* _list = nullptr;
-		uint32_t _componentMask = 0x7FFFFFFF;
+		uint64_t _componentMask = 0x7FFFFFFFFFFFFFFFull;
 	};
 }

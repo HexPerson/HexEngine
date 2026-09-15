@@ -32,15 +32,26 @@
 		float4 g_giParams4;
 		float4 g_giParams5;
 		float4 g_giParams6;
+		float4 g_giParams7;
+		float4 g_giParams8;
+		float4 g_giParams9;
+		float4 g_giParams10;
+		float4 g_giParams11;
+		// x = live source-triangle count this update.
+		float4 g_giParams12;
 	};
 
 	[numthreads(64, 1, 1)]
 	void ShaderMain(uint3 tid : SV_DispatchThreadID)
 	{
-		uint triangleCount = 0u;
+		uint triangleCapacity = 0u;
 		uint triangleStride = 0u;
-		g_voxelTrianglesIn.GetDimensions(triangleCount, triangleStride);
-		if (tid.x >= triangleCount)
+		g_voxelTrianglesIn.GetDimensions(triangleCapacity, triangleStride);
+		// Guard on the LIVE uploaded count, not the buffer capacity - stale
+		// triangles from earlier (larger) uploads must not be appended as
+		// candidates for this update.
+		const uint liveTriangleCount = (uint)(g_giParams12.x + 0.5f);
+		if (tid.x >= min(liveTriangleCount, triangleCapacity))
 			return;
 
 		const VoxelTriangleData tri = g_voxelTrianglesIn[tid.x];

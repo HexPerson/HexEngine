@@ -41,5 +41,11 @@ namespace HexEngine
 		DragMode _dragMode = DragMode::None;
 		OnDrag _onDrag = nullptr;
 		int32_t _decimalPlaces;
+		// Canvas-cache invalidation state: the widget's visuals depend only
+		// on (hover, dragging, focus) + the value text, so a redraw is only
+		// queued when one of those changes (size changes are handled by
+		// Canvas::Resize itself).
+		uint32_t _lastRenderStateKey = 0xFFFFFFFFu;
+		std::wstring _lastRenderedText;
 	};
 }

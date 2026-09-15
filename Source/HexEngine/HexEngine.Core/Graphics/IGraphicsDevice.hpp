@@ -350,6 +350,15 @@ namespace HexEngine
 		/** @brief Creates a compiled geometry shader stage object. */
 		virtual IShaderStage* CreateGeometryShader(std::vector<uint8_t>& shaderCode) = 0;
 
+		/**
+		 * @brief Creates compiled tessellation stage objects (D3D11 snow
+		 * displacement). Non-pure with a null default so backends without a
+		 * tessellation path (D3D12) need no change; a null return means the
+		 * loader keeps the mesh on the standard VS/PS triangle path.
+		 */
+		virtual IShaderStage* CreateHullShader(std::vector<uint8_t>& shaderCode) { return nullptr; }
+		virtual IShaderStage* CreateDomainShader(std::vector<uint8_t>& shaderCode) { return nullptr; }
+
 		/** @brief Creates a compiled compute shader stage object. */
 		virtual IShaderStage* CreateComputeShader(std::vector<uint8_t>& shaderCode) = 0;
 
@@ -383,6 +392,9 @@ namespace HexEngine
 		virtual void SetConstantBufferVS(uint32_t slot, IConstantBuffer* buffer) = 0;
 		virtual void SetConstantBufferPS(uint32_t slot, IConstantBuffer* buffer) = 0;
 		virtual void SetConstantBufferGS(uint32_t slot, IConstantBuffer* buffer) = 0;
+		// Tessellation cbuffer routing (default no-op for non-D3D11 backends).
+		virtual void SetConstantBufferHS(uint32_t slot, IConstantBuffer* buffer) {}
+		virtual void SetConstantBufferDS(uint32_t slot, IConstantBuffer* buffer) {}
 		virtual void SetConstantBufferCS(uint32_t slot, IConstantBuffer* buffer) = 0;
 
 		virtual void SetIndexBuffer(IIndexBuffer* buffer) = 0;
@@ -393,6 +405,9 @@ namespace HexEngine
 		virtual void SetVertexShader(IShaderStage* shader) = 0;
 		virtual void SetPixelShader(IShaderStage* shader) = 0;
 		virtual void SetGeometryShader(IShaderStage* shader) = 0;
+		// Tessellation stage binds (default no-op for non-D3D11 backends).
+		virtual void SetHullShader(IShaderStage* shader) {}
+		virtual void SetDomainShader(IShaderStage* shader) {}
 		virtual void SetComputeShader(IShaderStage* shader) = 0;
 
 		virtual void SetInputLayout(IInputLayout* layout) = 0;
@@ -402,6 +417,9 @@ namespace HexEngine
 
 		virtual void SetTexture3D(ITexture3D* texture) = 0;
 		virtual void SetGeometryTexture3D(uint32_t slot, ITexture3D* texture) = 0;
+		// Domain-stage texture (tessellation, D3D11 snow drift banks). Non-pure
+		// no-op default so backends without a tessellation path are untouched.
+		virtual void SetDomainTexture2D(uint32_t slot, ITexture2D* texture) {}
 		virtual void SetVertexStructuredBuffer(uint32_t slot, IStructuredBuffer* buffer) = 0;
 		virtual void SetGeometryStructuredBuffer(uint32_t slot, IStructuredBuffer* buffer) = 0;
 		virtual void SetComputeTexture3D(uint32_t slot, ITexture3D* texture) = 0;
@@ -516,6 +534,15 @@ namespace HexEngine
 		virtual void SetBlendState(BlendState state) = 0;
 		virtual BlendState GetBlendState() const = 0;
 
+		// Transparent-pass velocity MRT phase (P4.4). While active, blending
+		// states substitute independent-blend variants that keep their normal
+		// RT0 colour blend but OVERWRITE render target 4 (the gbuffer velocity
+		// RT, R32G32_FLOAT - blending velocities by coverage alpha is wrong
+		// and additive/multiplicative blends would corrupt the background
+		// velocity outright). Backends without the concept ignore it; the
+		// D3D11 plugin implements it.
+		virtual void SetVelocityMrtPhase(bool /*active*/) {}
+
 		virtual int32_t GetCurrentMSAALevel() const = 0;
 
 		virtual void SetScissorRect(const ScissorRect& rect) = 0;
@@ -529,6 +556,16 @@ namespace HexEngine
 		virtual TextureFormat GetDesiredBackBufferFormat() const
 		{
 			return TextureFormat::R16G16B16A16_FLOAT;
+		}
+
+		/** @brief True when the swapchain is the scRGB float format (HDR output
+		 * active). Display-output shader selection keys on this; one definition
+		 * replacing the format check that had been duplicated across
+		 * SceneRenderer and Game3DEnvironment. */
+		bool IsHdrOutput(Window* window = nullptr)
+		{
+			auto* backBuffer = GetBackBuffer(window);
+			return backBuffer != nullptr && backBuffer->GetFormat() == DXGI_FORMAT_R16G16B16A16_FLOAT;
 		}
 
 		// --------------------------------------------------------------------

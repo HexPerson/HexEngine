@@ -31,72 +31,17 @@
 
 	float SampleDepth(SamplerComparisonState cmpSampler, SamplerState pointSampler, Texture2D depthMap, float lightDepthValue, float2 projectTexCoord, float2 screenPos, int numSamples, int cascadeIndex)
 	{
-#if 1
 		if (numSamples > 0)
 		{
-			//if (cascadeIndex == 0)
-			{
-				float pcssShadow = PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples);
-
-				// Extra stable AA pass for near cascade: helps thin/elongated jagged edges.
-				float shadowMapSize = max(g_shadowConfig.shadowMapSize, 1.0f);
-				float aaRadiusUV = 1.25f / shadowMapSize;
-				float aa = 0.0f;
-				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2(-aaRadiusUV, -aaRadiusUV), lightDepthValue).r;
-				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2( aaRadiusUV, -aaRadiusUV), lightDepthValue).r;
-				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2(-aaRadiusUV,  aaRadiusUV), lightDepthValue).r;
-				aa += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + float2( aaRadiusUV,  aaRadiusUV), lightDepthValue).r;
-				aa *= 0.25f;
-
-				return lerp(pcssShadow, aa, 0.4f);
-			}
-			//else
-			#if 0
-			{
-				// Deterministic PCF for cascades > 0 to avoid motion shimmer from derivative/noise-driven kernels.
-				float shadowMapSize = max(g_shadowConfig.shadowMapSize, 1.0f);
-				float baseRadiusTexels = lerp(1.5f, 2.75f, saturate((float)cascadeIndex / 3.0f));
-				float radiusUV = baseRadiusTexels / shadowMapSize;
-				float rotation = (float)cascadeIndex * 1.0471975512f;
-				int sampleCount = max(numSamples, 16);
-
-				float visibility = 0.0f;
-				[loop]
-				for (int s = 0; s < sampleCount; ++s)
-				{
-					float2 offset = PCSS_VogelDiskSample(s, sampleCount, rotation) * radiusUV;
-					visibility += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + offset, lightDepthValue).r;
-				}
-
-				return visibility / (float)sampleCount;
-			}
-			#endif
+			// PCSS derives its penumbra in world units from this cascade's
+			// projection matrix. The old fixed 4-tap box blend that lived here is
+			// gone - PCSS's 1.25-texel minimum filter radius provides the edge AA.
+			return PCSS(depthMap, cmpSampler, pointSampler, projectTexCoord.xy, lightDepthValue, screenPos, numSamples, cascadeIndex);
 		}
 		else
 		{
 			return depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy, lightDepthValue).x;
 		}
-#else
-		if (numSamples > 0)
-		{
-			float sum = 0;
-			float x, y;
-			int num = 0;
-			const float pcfFactor = (float)numSamples;
-			for (y = -pcfFactor; y <= pcfFactor; y += 1.0)
-			{
-				for (x = -pcfFactor; x <= pcfFactor; x += 1.0)
-				{
-					sum += depthMap.SampleCmpLevelZero(cmpSampler, projectTexCoord.xy + TexOffset(x, y), lightDepthValue).r;
-					num = num + 1;
-				}
-			}
-
-			return sum / (float)num;
-		}
-		else
-			return depthMap.Sample(pointSampler, projectTexCoord.xy).r;
-#endif
 	}
 
 	float4 CalculateLightViewPosition(int index, float4 positionWS)
@@ -113,6 +58,50 @@
 		projectTexCoord.y = -lightViewPosition.y / lightViewPosition.w / 2.0f + 0.5f;
 
 		return projectTexCoord;
+	}
+
+	// Cheap 4-tap PCF sun shadow. Same cascade selection as CalculateShadows
+	// but a fixed four comparison taps instead of the full PCSS at
+	// g_shadowConfig.samples - for surfaces that need "is this in shadow"
+	// without contact hardening. Motivating case: the transparency phase's
+	// glass, where full PCSS cost ~4 ms on window-heavy views (measured
+	// 2026-07-30). No cascade blending - a subtle seam on glass is
+	// invisible behind the reflection layer.
+	float CalculateShadowsCheapPCF(float3 positionWS, SamplerComparisonState cmpSampler, Texture2D depthMaps[MAX_SHADOW_CASCADES], float bias)
+	{
+		const float cameraDistance = distance(g_eyePos.xyz, positionWS);
+		int index = 3;
+		if (cameraDistance <= g_frustumDepths[0])      index = 0;
+		else if (cameraDistance <= g_frustumDepths[1]) index = 1;
+		else if (cameraDistance <= g_frustumDepths[2]) index = 2;
+
+		const float4 lightViewPosition = CalculateLightViewPosition(index, float4(positionWS, 1.0f));
+		const float2 uv = GetProjectedTexCoord(lightViewPosition);
+		if (saturate(uv.x) != uv.x || saturate(uv.y) != uv.y)
+			return 1.0f;
+
+		const float lightDepth = (lightViewPosition.z / lightViewPosition.w) - bias;
+		if (lightDepth >= 1.0f)
+			return 1.0f;
+
+		const float texel = 1.0f / max(g_shadowConfig.shadowMapSize, 1.0f);
+		float sum = 0.0f;
+
+		// depthMaps[] wants a literal index in SM5 - same unrolled-loop trick
+		// CalculateShadows uses.
+		[unroll]
+		for (int i = 0; i < 4; ++i)
+		{
+			if (i == index)
+			{
+				sum += depthMaps[i].SampleCmpLevelZero(cmpSampler, uv + float2(-0.5f, -0.5f) * texel, lightDepth);
+				sum += depthMaps[i].SampleCmpLevelZero(cmpSampler, uv + float2( 0.5f, -0.5f) * texel, lightDepth);
+				sum += depthMaps[i].SampleCmpLevelZero(cmpSampler, uv + float2(-0.5f,  0.5f) * texel, lightDepth);
+				sum += depthMaps[i].SampleCmpLevelZero(cmpSampler, uv + float2( 0.5f,  0.5f) * texel, lightDepth);
+			}
+		}
+
+		return sum * 0.25f;
 	}
 
 	float CalculateShadows(ShadowInput input, SamplerComparisonState cmpSampler, SamplerState pointSampler, Texture2D depthMaps[MAX_SHADOW_CASCADES], float bias)
@@ -160,8 +149,15 @@
 		//float2 largestTexCoord = GetProjectedTexCoord(largestLightView);
 		//float largestDepth = SampleDepth(cmpSampler, pointSampler, depthMaps[3], (largestLightView.z / largestLightView.w), largestTexCoord, input.positionSS, input.samples);
 
+		// Live cascade count, not the array capacity. Falls back to 4 if a caller left it
+		// unset, which is the count the cascade selection above hardcodes via
+		// g_frustumDepths[0..3].
+		const int liveCascades = (g_shadowConfig.cascadeCount > 0)
+			? min(g_shadowConfig.cascadeCount, MAX_SHADOW_CASCADES)
+			: 4;
+
 		//[loop]
-		for (int i = 0; i < MAX_SHADOW_CASCADES; i++)
+		for (int i = 0; i < liveCascades; i++)
 		{
 			if (i >= index)
 			{
@@ -195,7 +191,11 @@
 							cascadeBlendRange *= 0.35f;
 						}
 
-						if (shadowDelta < cascadeBlendRange && i < MAX_SHADOW_CASCADES - 1)
+						// Bound by the LIVE cascade count. Using MAX_SHADOW_CASCADES - 1 here
+						// meant the last real cascade (i == 3 with the default 4) blended
+						// against depthMaps[4], which is never bound - it samples as 0, i.e.
+						// fully occluded, darkening a band at the far edge of the shadow range.
+						if (shadowDelta < cascadeBlendRange && i < liveCascades - 1)
 						{
 							float4 nextLightViewPosition = CalculateLightViewPosition(i + 1, input.positionWS);
 
@@ -257,13 +257,18 @@
 		// Self-bias along the surface normal so the ray's first step doesn't
 		// immediately self-intersect. 0.05m matches the ~minDistSqr clamp used
 		// by the punctual light shaders for the same reason.
-		const float3 biasedOrigin = positionWS + normalWS * 0.05f;
+		// Grazing light skims the surface, and on slopes the march then reads
+		// the surface itself as a blocker (the mid-depth terrain flicker that
+		// kept this feature off). Scale the bias up as N.L falls.
+		const float grazing = 1.0f - saturate(dot(normalWS, lightDirectionWS));
+		const float3 biasedOrigin = positionWS + normalWS * (0.05f + 0.20f * grazing);
 
 		// Per-pixel jitter breaks the banding that comes from every pixel
-		// stepping to the same set of distances. Cheap interleaved gradient noise
-		// (same as the cascade sampler uses) - keeps the noise pattern stable
-		// frame-to-frame so TAA can resolve it.
-		const float jitter = InterleavedGradientNoise(screenPos);
+		// stepping to the same set of distances. It is ANIMATED per frame
+		// (golden-ratio rotation of the gradient noise): a frame-static pattern
+		// is a constant TAA cannot average, and it shimmers against moving
+		// geometry; an animated one integrates into a smooth result.
+		const float jitter = frac(InterleavedGradientNoise(screenPos) + (float)(g_frame % 8u) * 0.618034f);
 
 		const float stepLen = maxWorldLength / max((float)numSteps, 1.0f);
 		const float3 stepWS = lightDirectionWS * stepLen;
@@ -306,8 +311,12 @@
 			// surface (e.g. a wall whose far side is way past the ray); without
 			// this the contact-shadow term darkens distant geometry seen through
 			// any near-camera object.
+			// Lower bound scales with depth: at mid range a half-pixel of
+			// reconstruction error is centimetres, and accepting it as a
+			// blocker is the other source of the slope flicker.
 			const float blockerDepth = rayViewDepth - sceneViewDepth;
-			if (blockerDepth > 0.0f && blockerDepth < thicknessThreshold)
+			const float minBlocker = max(0.015f, 0.004f * sceneViewDepth);
+			if (blockerDepth > minBlocker && blockerDepth < thicknessThreshold)
 			{
 				// Fade the last few steps so the contact shadow edge is soft
 				// rather than a hard step (otherwise the dither pattern shows).

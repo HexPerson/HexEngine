@@ -3,6 +3,8 @@
 #include "RigidBody.hpp"
 #include "../../HexEngine.hpp"
 
+#include <algorithm>
+
 namespace HexEngine
 {
 	namespace
@@ -37,14 +39,32 @@ namespace HexEngine
 		_exclusive = copy->_exclusive;
 		_colliderShape = copy->_colliderShape;
 		_colliderData = copy->_colliderData;
+		// Copy the body-config flags too - a clone that dropped these ended up
+		// with default gravity/trigger state (a spawned prefab body that wasn't
+		// gravity-driven until manually re-toggled).
+		_isGravityApplied = copy->_isGravityApplied;
+		_isTrigger = copy->_isTrigger;
+		_massAdjust = copy->_massAdjust;
 
 		if (auto rb = copy->GetIRigidBody())
 		{
+			// The actor's live type is the source of truth (the member _bodyType
+			// isn't reliably set on the source; Serialize uses GetBodyType()).
+			_bodyType = rb->GetBodyType();
 			_rigidBody = g_pEnv->_physicsSystem->CloneRigidBody(
 				rb,
 				GetEntity()->GetComponent<Transform>(),
 				this,
-				rb->GetBodyType());
+				_bodyType);
+
+			if (_rigidBody != nullptr)
+			{
+				_rigidBody->SetGravityEnabled(_isGravityApplied);
+				if (_isTrigger)
+					_rigidBody->SetIsTrigger(true);
+			}
+
+			UpdateInterpolationState();
 		}
 	}
 
@@ -84,20 +104,28 @@ namespace HexEngine
 
 		_colliderData.sphere.radius = radius;
 		_colliderShape = IRigidBody::ColliderShape::Sphere;
+		_exclusive = true;
 
 		_rigidBody->AddSphereCollider(GetEntity()->GetComponent<Transform>(), radius);
 	}
 
-	void RigidBody::AddCapsuleCollider(float radius, float height)
+	void RigidBody::AddCapsuleCollider(float radius, float height, int axis, math::Vector3 offset)
 	{
 		if (!_rigidBody)
 			_rigidBody = g_pEnv->_physicsSystem->CreateRigidBody(GetEntity()->GetComponent<Transform>(), this, _bodyType);
 
 		_colliderData.capsule.radius = radius;
 		_colliderData.capsule.height = height;
+		_colliderData.capsule.axis = axis;
+		_colliderData.capsule.offset = offset;
 		_colliderShape = IRigidBody::ColliderShape::Capsule;
 
-		_rigidBody->AddCapsuleCollider(GetEntity()->GetComponent<Transform>(), radius, height);
+		// Exclusive (like Box): a per-instance shape, so cloning a prefab gives
+		// each copy its own capsule (with its own axis pose and material) rather
+		// than sharing one - the drivable chassis mutates its material live.
+		_exclusive = true;
+
+		_rigidBody->AddCapsuleCollider(GetEntity()->GetComponent<Transform>(), radius, height, axis, offset);
 	}
 
 #if 0
@@ -536,13 +564,13 @@ namespace HexEngine
 				break;
 
 			case IRigidBody::ColliderShape::Sphere:
-				file->Deserialize(shapeData, "sphere", _colliderData.box);
+				file->Deserialize(shapeData, "sphere", _colliderData.sphere);
 				AddSphereCollider(_colliderData.sphere.radius);
 				break;
 
 			case IRigidBody::ColliderShape::Capsule:
-				file->Deserialize(shapeData, "capsule", _colliderData.box);
-				AddCapsuleCollider(_colliderData.capsule.radius, _colliderData.capsule.height);
+				file->Deserialize(shapeData, "capsule", _colliderData.capsule);
+				AddCapsuleCollider(_colliderData.capsule.radius, _colliderData.capsule.height, _colliderData.capsule.axis, _colliderData.capsule.offset);
 				break;
 
 			//case IRigidBody::ColliderShape::HeightField:
@@ -572,6 +600,11 @@ namespace HexEngine
 			_rigidBody->SetGravityEnabled(_isGravityApplied);
 		}
 
+		// Keep the component members in step with what we just applied, so a
+		// later Serialize / clone of this component reflects the real state.
+		_bodyType = type;
+		_massAdjust = mass;
+
 		if (_isTrigger)
 		{
 			if(_rigidBody)
@@ -580,8 +613,10 @@ namespace HexEngine
 			GetEntity()->SetLayer(Layer::Trigger);
 		}
 
+		UpdateInterpolationState();
+
 		//ForceUpdatePose();
-		
+
 	}
 
 	void RigidBody::RemoveCollider()
@@ -652,6 +687,8 @@ namespace HexEngine
 		colliderType->GetContextMenu()->Disable();
 		colliderType->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&RigidBody::RemoveCollider, this)));
 		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Box", std::bind(&RigidBody::AddBoxColliderFromWidget, this, colliderType)));
+		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Sphere", std::bind(&RigidBody::AddSphereColliderFromWidget, this, colliderType)));
+		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Capsule", std::bind(&RigidBody::AddCapsuleColliderFromWidget, this, colliderType)));
 		colliderType->GetContextMenu()->AddItem(new ContextItem(L"Triangle Mesh", std::bind(&RigidBody::AddTriangleColliderFromWidget, this, colliderType)));
 
 		Checkbox* isTrigger = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Is trigger?", &_isTrigger);
@@ -668,6 +705,23 @@ namespace HexEngine
 		mass->SetPrefabOverrideBinding(GetComponentName(), "/_mass");
 		mass->SetOnDrag(std::bind(&RigidBody::SetMass, this, std::placeholders::_1));
 
+		// Live capsule sizing: only meaningful when the collider IS a capsule.
+		// Radius, cylinder height and a vertical offset let the author drop a
+		// thin capsule onto the wheel line of a vehicle instead of accepting the
+		// AABB auto-fit. Each field rebuilds the shape on drag.
+		if (_colliderShape == IRigidBody::ColliderShape::Capsule)
+		{
+			const int cw = widget->GetSize().x - 20;
+			DragFloat* capR = new DragFloat(widget, widget->GetNextPos(), Point(cw, 18), L"Capsule radius", &_colliderData.capsule.radius, 0.02f, 20.0f, 0.02f);
+			capR->SetOnDrag([this](float, float, float) { RebuildCapsuleFromData(); });
+
+			DragFloat* capH = new DragFloat(widget, widget->GetNextPos(), Point(cw, 18), L"Capsule height", &_colliderData.capsule.height, 0.0f, 40.0f, 0.02f);
+			capH->SetOnDrag([this](float, float, float) { RebuildCapsuleFromData(); });
+
+			DragFloat* capOff = new DragFloat(widget, widget->GetNextPos(), Point(cw, 18), L"Capsule offset Y", &_colliderData.capsule.offset.y, -20.0f, 20.0f, 0.02f);
+			capOff->SetOnDrag([this](float, float, float) { RebuildCapsuleFromData(); });
+		}
+
 		//Button* addCollider = new Button(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Add Collider", std::bind(&RigidBody::AddColliderFromWidget,
 
 		return true;
@@ -677,6 +731,23 @@ namespace HexEngine
 	{
 		_rigidBody->SetMass(mass);
 		_massAdjust = mass;
+	}
+
+	void RigidBody::UpdateInterpolationState()
+	{
+		auto* transform = GetEntity() ? GetEntity()->GetComponent<Transform>() : nullptr;
+		if (transform == nullptr || _rigidBody == nullptr)
+			return;
+
+		// Character controllers manage their own interpolation (position only, via
+		// CreateCharacterController); leave them alone.
+		if (_rigidBody->IsCharacterController())
+			return;
+
+		const bool dynamic = (_rigidBody->GetBodyType() == IRigidBody::BodyType::Dynamic);
+		transform->EnableInterpolation(dynamic);
+		if (dynamic)
+			transform->SnapInterpolation(); // don't lerp up from a stale previous
 	}
 
 	void RigidBody::SetBodyTypeFromWidget(IRigidBody::BodyType type, DropDown* element)
@@ -691,7 +762,9 @@ namespace HexEngine
 			_rigidBody->SetGravityEnabled(_isGravityApplied);
 			_rigidBody->SetMass(_massAdjust);
 		}
-		
+
+		UpdateInterpolationState();
+
 		if (element && element->GetContextMenu())
 			element->GetContextMenu()->Disable();
 	}
@@ -722,6 +795,94 @@ namespace HexEngine
 		AddBoxCollider(GetScaledEntityAABB(GetEntity()));
 
 		widget->SetValue(L"Box");
+	}
+
+	void RigidBody::RebuildCapsuleFromData()
+	{
+		// The drag fields have already written into _colliderData.capsule; copy
+		// it out before RemoveCollider (which resets shape state) and re-add.
+		const IRigidBody::ColliderData::Capsule cap = _colliderData.capsule;
+		const IRigidBody::BodyType type = _rigidBody ? _rigidBody->GetBodyType() : _bodyType;
+
+		RemoveCollider();
+		AddCapsuleCollider(std::max(cap.radius, 0.01f), std::max(cap.height, 0.0f), cap.axis, cap.offset);
+
+		// Re-adding a shape leaves the actor intact, but re-assert the body
+		// config so mass/gravity stay as the author set them.
+		if (_rigidBody)
+		{
+			_rigidBody->SetBodyType(type);
+			if (type == IRigidBody::BodyType::Dynamic)
+			{
+				_rigidBody->SetGravityEnabled(_isGravityApplied);
+				_rigidBody->SetMass(_massAdjust);
+			}
+		}
+	}
+
+	void RigidBody::AddSphereColliderFromWidget(DropDown* widget)
+	{
+		if (_colliderShape == IRigidBody::ColliderShape::Sphere)
+			return;
+
+		RemoveCollider();
+
+		// Enclosing sphere: the largest half-extent of the scaled AABB.
+		const math::Vector3 ext = GetScaledEntityAABB(GetEntity()).Extents;
+		const float radius = std::max(ext.x, std::max(ext.y, ext.z));
+		if (radius <= 0.0f)
+			return;
+
+		AddSphereCollider(radius);
+
+		widget->SetValue(L"Sphere");
+	}
+
+	void RigidBody::AddCapsuleColliderFromWidget(DropDown* widget)
+	{
+		if (_colliderShape == IRigidBody::ColliderShape::Capsule)
+			return;
+
+		RemoveCollider();
+
+		// Fit a capsule to the scaled AABB, aligning its long axis with the
+		// entity's longest dimension. The radius is the SMALLER of the two
+		// cross-section half-extents (a thin capsule, not a fat tube that
+		// encloses the whole height), and when the long axis is horizontal the
+		// capsule is dropped so its underside meets the AABB bottom - i.e. it
+		// sits at the wheel line of a vehicle instead of being centred on the
+		// origin and lifting the whole thing off the ground.
+		const dx::BoundingBox aabb = GetScaledEntityAABB(GetEntity());
+		const math::Vector3 ext = aabb.Extents;               // half-extents
+		const math::Vector3 centre = aabb.Center;             // local, relative to origin
+		int axis = 1;
+		if (ext.x >= ext.y && ext.x >= ext.z) axis = 0;
+		else if (ext.z >= ext.x && ext.z >= ext.y) axis = 2;
+		else axis = 1;
+
+		float halfLong;
+		float r;
+		if (axis == 0) { halfLong = ext.x; r = std::min(ext.y, ext.z); }
+		else if (axis == 2) { halfLong = ext.z; r = std::min(ext.x, ext.y); }
+		else { halfLong = ext.y; r = std::min(ext.x, ext.z); }
+
+		r = std::max(r, 0.05f);
+		if (halfLong <= 0.0f)
+			return;
+
+		// PxCapsuleGeometry(height) is the cylinder segment between the two
+		// hemispherical caps, so subtract a full radius from the long span.
+		const float height = std::max((halfLong - r) * 2.0f, 0.0f);
+
+		// Local offset: recentre on the AABB, and for a horizontal capsule drop
+		// it so its bottom (centre.y - r) aligns with the AABB bottom.
+		math::Vector3 offset = centre;
+		if (axis == 0 || axis == 2)
+			offset.y = centre.y - ext.y + r;
+
+		AddCapsuleCollider(r, height, axis, offset);
+
+		widget->SetValue(L"Capsule");
 	}
 
 	void RigidBody::OnSetIsTriggerFromWidget(bool value)

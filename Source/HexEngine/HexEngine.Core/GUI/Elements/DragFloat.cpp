@@ -134,8 +134,42 @@ namespace HexEngine
 		int32_t thumbX = 0, thumbY = 0, thumbW = 0, thumbH = 0;
 		ComputeSliderLayout(renderer, boxX, boxY, boxW, boxH, trackX, trackW, thumbX, thumbY, thumbW, thumbH);
 
-		const bool boxHovered = IsMouseOver(boxX, boxY, boxW, boxH);
+		// Clipped hit-test: inside a ScrollView the widget must not react
+		// (or repaint as hovered) when it is scrolled out of the viewport.
+		const bool boxHovered = IsMouseOverClipped(boxX, boxY, boxW, boxH);
 		_hovering = boxHovered;
+
+		// Canvas cache: every drawn attribute below derives from these three
+		// flags plus the value text, so only queue a repaint when one of
+		// them changes - the common idle inspector frame presents the cached
+		// texture instead of re-issuing the quads and text.
+		const uint32_t stateKey =
+			(boxHovered ? 1u : 0u) |
+			(_dragging ? 2u : 0u) |
+			(_hasInputFocus ? 4u : 0u);
+		const std::wstring& currentText = GetValue();
+		if (stateKey != _lastRenderStateKey || currentText != _lastRenderedText)
+		{
+			_lastRenderStateKey = stateKey;
+			_lastRenderedText = currentText;
+			_canvas.Redraw();
+		}
+
+		// Origin-offset capture (same idiom as ScrollView): the draw code
+		// below keeps its absolute window coordinates, the viewport shift
+		// lands the element's origin on canvas texel (0,0).
+		if (!_canvas.BeginDraw(renderer, (uint32_t)_size.x, (uint32_t)_size.y, position.x, position.y))
+		{
+			_canvas.Present(renderer, position.x, position.y, _size.x, _size.y);
+
+			if (_dragging || boxHovered)
+				SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
+			else if (_hasInputFocus)
+				SetCursor(LoadCursor(nullptr, IDC_IBEAM));
+			else
+				SetCursor(LoadCursor(nullptr, IDC_ARROW));
+			return;
+		}
 
 		if (!label.empty())
 		{
@@ -203,6 +237,9 @@ namespace HexEngine
 		{
 			renderer->FillQuad(boxX + 7 + valueWidth + 2, boxY + 3, 2, std::max(1, boxH - 9), renderer->_style.text_regular);
 		}
+
+		_canvas.EndDraw(renderer);
+		_canvas.Present(renderer, position.x, position.y, _size.x, _size.y);
 
 		if (_dragging || boxHovered)
 			SetCursor(LoadCursor(nullptr, IDC_SIZEWE));

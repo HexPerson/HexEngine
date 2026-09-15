@@ -131,7 +131,8 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		float saturation;
 
 		float3 colourFilter;
-		float colour_pad;
+		// r_exposure x UNSMOOTHED auto-exposure target (see RenderStructs).
+		float exposureInstant;
 	};
 
 	struct WeatherSurfaceParams
@@ -198,7 +199,9 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		uint g_screenWidth;
 		uint g_screenHeight;
 		float g_time;
-		float g_gamma;
+		// 1 = physically-correct PBR energy terms, 0 = legacy. See r_pbrEnergyFix.
+		// Reuses the old (entirely unread) g_gamma slot.
+		float g_pbrEnergyFix;
 
 		//float zenithExponent;
 		//float anisotropicIntensity;
@@ -227,7 +230,151 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// > 0.5 = paint cell grid (cellFrac.x in R, cellFrac.y in G) instead of
 		// running the normal-perturbation path. Driven from r_rainDripDebug.
 		float g_rainDripDebug;
+		// TAA tuning: x = variance-clip gamma, y = velocity Y sign for history
+		// reprojection, z = transparent sun shadows active (r_transparentShadows,
+		// set only while RenderTransparent has the sun cascades bound at t15-20),
+		// w = froxel volume owns per-light fog (r_clusterFog && r_clusterLights -
+		// the per-light inline volumetric march in PointLight/SpotLight returns 0
+		// so the same light's glow isn't integrated twice).
+		// See RenderStructs.hpp::_taaParams.
+		float4 g_taaParams;
+		// x = SSR sky-fallback strength, yzw reserved. See RenderStructs.hpp.
+		float4 g_reflectionParams;
+		// Image-based lighting: x = sky specular strength, y = sky diffuse strength,
+		// z = probe specular strength, w = probe diffuse strength (separate: the
+		// probe's diffuse row is a flat room average and floods interiors, so it
+		// defaults off). See RenderStructs.hpp::_iblParams.
+		float4 g_iblParams;
+		// Active reflection probe. center.w = 1 when a probe atlas is bound at t16;
+		// extents.w = 1 when box projection is enabled. See RenderStructs.hpp.
+		float4 g_probeCenter;
+		float4 g_probeExtents;
+		// Second-nearest probe (atlas at t17), for cross-fading between volumes.
+		float4 g_probeCenter2;
+		float4 g_probeExtents2;
+		// x = 1 when the SSR resolve owns the environment specular term, so the
+		// deferred pass must NOT add it (the two would otherwise stack instead of
+		// composing). See RenderStructs.hpp::_iblComposeParams. yzw reserved.
+		float4 g_iblComposeParams;
+		// Weather overcast tint: xyz = target colour, w = amount. The sky sphere
+		// applies this on top of the Hillaire LUT; the environment atlas must
+		// apply the same one or reflections keep a clear-blue sky under a storm.
+		float4 g_skyOvercast;
+		// x = 1 to use water's last-in-screen sample when the specular march
+		// gives up. See RenderStructs.hpp::_ssrParams. yzw reserved.
+		float4 g_ssrParams;
+		// Physical light units: x = pre-exposure, y = 1/pre-exposure,
+		// z = legacy->lumens calibration factor (informational), w reserved.
+		// See RenderStructs.hpp::_exposureParams.
+		float4 g_exposureParams;
+		// Shelter/rain occlusion: world -> clip of the top-down ortho depth
+		// map around the camera. x = valid, y = depth bias, z = 1/resolution.
+		// See RenderStructs.hpp::_rainOcclusionVP/_rainOcclusionParams.
+		float4x4 g_rainOcclusionVP;
+		float4 g_rainOcclusionParams;
+		// Snow footprints: world -> clip of the top-down foot-stamp map around
+		// the camera. x = valid, y = 1/resolution, z = half-extent (m),
+		// w = global print strength. See RenderStructs.hpp::_snowFootprint*.
+		float4x4 g_snowFootprintVP;
+		float4 g_snowFootprintParams;
+		// Dust/sand accumulation textures: x = sand textures bound (t25/t31),
+		// y = world tiling scale, zw reserved. See RenderStructs.hpp::_dustParams.
+		float4 g_dustParams;
+		// Previous-frame time: x = last frame's g_time, y = dt (seconds), zw
+		// reserved. Time-dependent vertex displacement (wind sway, waves)
+		// evaluates at BOTH x and g_time so previousPositionUnjittered carries
+		// the displacement delta (correct TAA/DLSS motion vectors). See
+		// RenderStructs.hpp::_timeParams2.
+		float4 g_timeParams2;
+		// Ocean tunables (live cvars): x = r_oceanWaveScale, y = r_oceanFoam,
+		// z = r_oceanAbsorption (per metre), w = r_oceanBumpStrength.
+		float4 g_oceanConfig2;
+		// P4.6 log-space grading (see RenderStructs.hpp): xyz = white-balance
+		// RGB gains (neutral 1,1,1), w unused.
+		float4 g_whiteBalance;
+		// ASC-CDL trio: c = pow(max(c * gain + lift, 0), 1/gamma).
+		float4 g_cdlLift;
+		float4 g_cdlGamma;
+		float4 g_cdlGain;
+		// P4.8 vignette: x = amount (negative darkens), y = radius, z = slope,
+		// w = ratio.
+		float4 g_vignetteParams;
+		// P4.7 colour LUT: x = strength, y = LUT size N (0 = none bound).
+		float4 g_lutParams;
+		// P4.9/P4.10: x = film-grain intensity, y = grain size, z = CAS
+		// sharpen amount, w reserved.
+		float4 g_grainParams;
+		// P4.12: x = flare/ghost intensity, y = lens-dirt intensity,
+		// z = ghost dispersal, w = anamorphic streak intensity.
+		float4 g_lensParams;
+		// GI ambient-ownership compose: x = flat-ambient hand-off [0..1]
+		// (Deferred subtracts this fraction of albedo*ambientLight - GI's
+		// composite owns that budget), y = GI-occlusion strength on the
+		// remaining ambient + IBL sky diffuse, z = 1 when the GI blurred-AO
+		// texture is bound at t22 for this view, w reserved.
+		float4 g_giComposeParams;
+		// Transparent-surface atmosphere (TransparentAtmosphere.shader):
+		// x = froxel fog volume bound at t24, y = AP volume bound at t21,
+		// z = froxel far depth (m), w = AP max distance (m).
+		float4 g_transparentFogParams;
 	};
+
+	#define g_timePrev  (g_timeParams2.x)
+	#define g_deltaTime (g_timeParams2.y)
+
+	#define g_preExposure    (g_exposureParams.x)
+	#define g_invPreExposure (g_exposureParams.y)
+
+	// Readable aliases for the packed slot above.
+	// P1-B toggles. These lanes were g_ssrSkyFallbackStrength / g_ssrSkyHitMinDistance,
+	// both dead since SSR.shader reverted to main and stopped reading them.
+	#define g_useDfgLut              (g_reflectionParams.x)
+	#define g_useMultiScatter        (g_reflectionParams.y)
+	#define g_ssrSkyFallbackStrength (g_reflectionParams.x)
+	// Minimum world distance a ray must travel before a sky pixel counts as a hit. Guards
+	// the "floor grabs the window right next to it" streaking that killed the original
+	// sky-hit path. 0 disables sky hits entirely.
+	#define g_ssrSkyHitMinDistance   (g_reflectionParams.y)
+	// Was g_ssrSkyHitStrength, which died with the in-march sky detection when
+	// SSR.shader was reverted to main. Reused for the forward transparency path's
+	// environment reflection strength - the fallback that stops glass reflecting
+	// black when its screen-space march misses.
+	#define g_glassEnvStrength       (g_reflectionParams.z)
+	// Diagnostic: paint SSR sky hits magenta (accepted) / green (distance-rejected).
+	#define g_ssrDebugSkyHits        (g_reflectionParams.w)
+	#define g_iblSkySpecular         (g_iblParams.x)
+	#define g_iblSkyDiffuse          (g_iblParams.y)
+	// 1 = the SSR resolve composes environment specular against the screen-space
+	// reflection; the deferred pass leaves the term alone and SSR's specular miss
+	// path returns nothing so the resolve can fill it with environment.
+	#define g_iblComposeInResolve    (g_iblComposeParams.x)
+	// 1 = the SSR resolve takes the reflected fraction back off the base layer
+	// instead of adding the reflection on top of an undiminished surface.
+	#define g_ssrEnergyConserve      (g_iblComposeParams.y)
+	// Fraction of diffuse albedo a surface loses at full rain wetness. Water
+	// traps light that a dry surface would have scattered back out, so a wet
+	// surface is darker as well as smoother. See r_wetnessDarkening.
+	#define g_wetnessDarkening       (g_iblComposeParams.z)
+	// Longest single SSR march step, in world units. Sets how far a reflection
+	// ray can reach - see the reach formula in SSR.shader.
+	#define g_ssrMaxStepLength       (g_iblComposeParams.w)
+	// 1 = fall back to the last in-screen sample when the specular march gives
+	// up. Bright, but positionally wrong - it draws what the ray last saw, not
+	// the mirror image.
+	#define g_ssrInScreenFallback    (g_ssrParams.x)
+	// 1 = rotate the SSR cone sample per frame so NRD's temporal accumulation
+	// integrates the lobe. Carries r_ssrDenoise && r_ssrTemporalJitter.
+	#define g_ssrTemporalJitter      (g_ssrParams.y)
+	// 1 = forward-lit surfaces read local lights from the cluster lists
+	// (uncapped) instead of the closest-16 forward arrays. Main camera only -
+	// the cluster grid is built for one view.
+	#define g_clusterForwardActive   (g_ssrParams.z)
+	// 0 = legacy world-space stepping, 1 = screen-space DDA.
+	// .w, NOT .y: marchMode originally landed on .y, silently colliding with
+	// g_ssrTemporalJitter - which made the jitter toggle dead (always-on
+	// whenever the DDA marcher was active). That collision is also why the
+	// fade-to-noise fix appeared to work "with the toggle off".
+	#define g_ssrMarchMode           (g_ssrParams.w)
 
 	struct MaterialProps
 	{
@@ -255,6 +402,14 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// Per-model param vec4. See RenderStructs.hpp for the per-model layout
 		// table (SSS = mask + scatter colour, clearcoat = strength + roughness, etc.)
 		float4 modelParams;
+
+		// Vegetation wind sway: x = trunk bend strength, y = flutter strength,
+		// z = characteristic height (m, normalises the height^2 weight),
+		// w = mode (0 off / 1 tree / 2 grass lean-only). Consumed by the
+		// Default / graph-emitted / ShadowMapGeometry vertex shaders via
+		// MeshCommon::WindSwayOffset. Appended at the tail - cache-stale
+		// shaders keep valid offsets for earlier fields.
+		float4 windSwayParams;
 	};
 	
 	cbuffer PerObjectBuffer : register(b1)
@@ -272,6 +427,10 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 	cbuffer PerAnimationBuffer : register(b3)
 	{
 		matrix g_boneTransforms[MAX_BONES];
+		// Previous frame's pose, for skinned motion vectors. Equal to g_boneTransforms on
+		// the first frame a mesh is drawn and whenever the animation didn't advance, which
+		// correctly yields zero deformation velocity.
+		matrix g_boneTransformsPrev[MAX_BONES];
 	}
 
 	struct ShadowSettings
@@ -294,8 +453,12 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// non-shadow-casting light. Populated by SetupPerShadowCasterBuffer from
 		// Light::GetDoesCastShadows().
 		int	  castsShadowsFlag;
-		int	  pad1;
-		int	  pad2;
+		// Cascades actually allocated/bound for this caster (see RenderStructs.hpp).
+		// MAX_SHADOW_CASCADES is the array capacity, not the live count.
+		int	  cascadeCount;
+		// tan(half of r_sunAngularDiameter): PCSS penumbra growth rate for the sun.
+		// Occupies the old pad2 slot - cbuffer layout unchanged.
+		float sunTanHalfAngle;
 
 		// Screen-space contact shadow settings:
 		//   x = enabled (1/0), y = step count, z = max length (m), w = thickness (m)

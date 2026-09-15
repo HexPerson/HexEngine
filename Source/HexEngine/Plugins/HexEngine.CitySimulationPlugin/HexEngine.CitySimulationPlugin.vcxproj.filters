@@ -50,6 +50,9 @@
     <ClInclude Include="ServiceStationComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="LanePathSmoothing.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="TrafficLaneComponent.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>

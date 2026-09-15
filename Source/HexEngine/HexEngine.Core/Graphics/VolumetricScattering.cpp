@@ -1,5 +1,7 @@
 #include "VolumetricScattering.hpp"
 #include "../HexEngine.hpp"
+#include "../Scene/SceneRenderer.hpp"
+#include "../Scene/DiffuseGI.hpp"
 #include "IGraphicsDevice.hpp"
 #include "IConstantBuffer.hpp"
 #include "IShader.hpp"
@@ -19,6 +21,13 @@ namespace HexEngine
 	// unless the blend gets snappier under motion.
 	HVar r_volumetricTemporalAlpha("r_volumetricTemporalAlpha", "Volumetric temporal blend weight when static (lower = smoother, slower)", 0.08f, 0.01f, 1.0f);
 	HVar r_volumetricTemporalMotionAlpha("r_volumetricTemporalMotionAlpha", "Volumetric temporal blend weight under camera motion (higher = less ghosting)", 0.5f, 0.0f, 1.0f);
+	// 3x3x3 tent filter over the scatter volume before integration. The
+	// jittered density samples leave amplitude-proportional variance that
+	// the temporal EMA alone can't hide (fizz on neon glow, per-cell
+	// convergence differences reading as blockiness); sharing the estimate
+	// across neighbours divides the variance ~8x for half a froxel of
+	// spatial sharpness the volume never had. Off = the pre-filter look.
+	HVar r_volumetricSpatialFilter("r_volumetricSpatialFilter", "Spatially filter the froxel scatter volume before integration (reduces fizz/blockiness)", true, false, true);
 
 	namespace
 	{
@@ -80,6 +89,14 @@ namespace HexEngine
 			// PRE-multiplied by strength on the CPU; shader adds
 			// .rgb * extinction to the scatter radiance. .w unused.
 			math::Vector4 fogAmbient;
+			// DiffuseGI clip placement for the voxel-glow path (clips 0..2,
+			// finest first). xyz = clip world center, w = extent (half-size;
+			// 0 marks the clip invalid/absent).
+			math::Vector4 giClipCenterExtent[3];
+			// .x = voxel-glow path active (1 = the emissive glow samples the
+			// GI radiance field at t18..t20, 0 = legacy screen-space gbuffer
+			// taps). .yzw unused.
+			math::Vector4 giGlowParams;
 		};
 
 		struct IntegrateParamsCB
@@ -160,6 +177,7 @@ namespace HexEngine
 		ReleaseResources();
 		_scatterShader.reset();
 		_integrateShader.reset();
+		_scatterFilterShader.reset();
 		SAFE_DELETE(_scatterParamsCBuffer);
 		SAFE_DELETE(_integrateParamsCBuffer);
 	}
@@ -167,6 +185,7 @@ namespace HexEngine
 	void VolumetricScattering::ReleaseResources()
 	{
 		if (_scatterUav)         { _scatterUav->Release();         _scatterUav         = nullptr; }
+		if (_scatterFilteredUav) { _scatterFilteredUav->Release(); _scatterFilteredUav = nullptr; }
 		for (uint32_t i = 0u; i < 2u; ++i)
 		{
 			if (_integrationUavs[i]) { _integrationUavs[i]->Release(); _integrationUavs[i] = nullptr; }
@@ -176,6 +195,7 @@ namespace HexEngine
 		if (_linearClampSampler) { _linearClampSampler->Release(); _linearClampSampler = nullptr; }
 		if (_readbackStaging)    { _readbackStaging->Release();    _readbackStaging    = nullptr; }
 		SAFE_DELETE(_scatterVolume);
+		SAFE_DELETE(_scatterFilteredVolume);
 		SAFE_DELETE(_pointShadowCubeArray);
 		_writeIdx = 0u;
 		_hasPrevViewProj = false;
@@ -228,20 +248,35 @@ namespace HexEngine
 				D3D11_DSV_DIMENSION_UNKNOWN);
 		}
 
-		if (!_scatterVolume || !_integrationVolumes[0] || !_integrationVolumes[1])
+		// Spatial-filter destination - same shape as the scatter volume.
+		_scatterFilteredVolume = graphics->CreateTexture3D(
+			(int32_t)kVolumeWidth, (int32_t)kVolumeHeight, (int32_t)kVolumeDepth,
+			DXGI_FORMAT_R16G16B16A16_FLOAT,
+			1,
+			D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS,
+			1, 1, 0,
+			nullptr,
+			D3D11_RTV_DIMENSION_UNKNOWN,
+			D3D11_UAV_DIMENSION_TEXTURE3D,
+			D3D11_SRV_DIMENSION_TEXTURE3D,
+			D3D11_DSV_DIMENSION_UNKNOWN);
+
+		if (!_scatterVolume || !_scatterFilteredVolume || !_integrationVolumes[0] || !_integrationVolumes[1])
 		{
 			LOG_WARN("VolumetricScattering::EnsureResources failed to allocate volumes");
 			ReleaseResources();
 			return false;
 		}
 		_scatterVolume->SetDebugName("VolumetricScatterVolume");
+		_scatterFilteredVolume->SetDebugName("VolumetricScatterFilteredVolume");
 		_integrationVolumes[0]->SetDebugName("VolumetricIntegrationVolumeA");
 		_integrationVolumes[1]->SetDebugName("VolumetricIntegrationVolumeB");
 
 		_scatterUav         = CreateVolumeUav(device, _scatterVolume);
+		_scatterFilteredUav = CreateVolumeUav(device, _scatterFilteredVolume);
 		_integrationUavs[0] = CreateVolumeUav(device, _integrationVolumes[0]);
 		_integrationUavs[1] = CreateVolumeUav(device, _integrationVolumes[1]);
-		if (!_scatterUav || !_integrationUavs[0] || !_integrationUavs[1])
+		if (!_scatterUav || !_scatterFilteredUav || !_integrationUavs[0] || !_integrationUavs[1])
 		{
 			LOG_WARN("VolumetricScattering::EnsureResources failed to create UAVs");
 			ReleaseResources();
@@ -319,11 +354,18 @@ namespace HexEngine
 
 		_scatterShader   = IShader::Create("EngineData.Shaders/VolumetricScatterDensity.hcs");
 		_integrateShader = IShader::Create("EngineData.Shaders/VolumetricScatterIntegrate.hcs");
+		_scatterFilterShader = IShader::Create("EngineData.Shaders/VolumetricScatterFilter.hcs");
 		if (!_scatterShader || !_integrateShader)
 		{
 			LOG_WARN("VolumetricScattering::EnsureResources missing compute shaders");
 			ReleaseResources();
 			return false;
+		}
+		// The filter shader is optional - a missing .hcs (stale package)
+		// degrades to the unfiltered path instead of disabling fog.
+		if (!_scatterFilterShader)
+		{
+			LOG_WARN("VolumetricScattering: VolumetricScatterFilter.hcs missing - spatial filter disabled");
 		}
 
 		_resourcesReady = true;
@@ -479,12 +521,38 @@ namespace HexEngine
 			scatterCB.pointShadowSlotPerForward[i] = math::Vector4((float)slot, 0.0f, 0.0f, 0.0f);
 		}
 		scatterCB.pointShadowParams = math::Vector4(pointShadowBiasMetres, (float)shadowedPointCount, 0.0f, 0.0f);
-		// Emissive injection only runs when both gbuffer SRVs are available -
-		// force strength to 0 otherwise so the shader's gate skips the taps.
+		// GI voxel-radiance glow: hand the density CS the three nearest GI
+		// clips' placement so froxels can sample the voxel light field at
+		// their world position (emissive is baked into that field as an
+		// undiluted max source term). When the clips exist this REPLACES the
+		// screen-space gbuffer taps, which aliased through the coarse froxel
+		// grid and lost off-screen/occluded emitters.
+		bool giGlowActive = false;
+		if (g_pEnv->_sceneRenderer != nullptr)
+		{
+			if (auto* gi = g_pEnv->_sceneRenderer->GetDiffuseGI(); gi != nullptr)
+			{
+				for (uint32_t c = 0u; c < 3u; ++c)
+				{
+					scatterCB.giClipCenterExtent[c] = gi->GetClipCenterExtent(c);
+					if (scatterCB.giClipCenterExtent[c].w > 0.0f)
+						giGlowActive = true;
+				}
+			}
+		}
+		scatterCB.giGlowParams = math::Vector4(giGlowActive ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+		// Emissive injection needs a source: the GI voxel field (preferred)
+		// or, failing that, both gbuffer SRVs for the screen-space fallback -
+		// force strength to 0 when neither is available so the shader's gate
+		// skips the whole path.
 		const bool emissiveValid = gbufferDiffuse != nullptr && gbufferPosition != nullptr;
+		// .z carries "clustered fog active" - a spare lane reused rather than
+		// a cbuffer layout change (see the append-only note in RenderStructs).
+		const bool clusteredFog = _clActive && _clLightsSrv != nullptr &&
+			_clCountsSrv != nullptr && _clListsSrv != nullptr;
 		scatterCB.emissiveParams = math::Vector4(
-			emissiveValid ? std::max(0.0f, emissiveStrength) : 0.0f,
-			std::max(0.01f, emissiveRangeMetres), 0.0f, 0.0f);
+			(emissiveValid || giGlowActive) ? std::max(0.0f, emissiveStrength) : 0.0f,
+			std::max(0.01f, emissiveRangeMetres), clusteredFog ? 1.0f : 0.0f, 0.0f);
 		// Premultiply ambient colour by strength so the shader's per-froxel
 		// cost is a single mad against the extinction.
 		const float ambS = std::max(0.0f, fogAmbientStrength);
@@ -672,7 +740,8 @@ namespace HexEngine
 		if (perFrameNative)
 			context->CSSetConstantBuffers(0, 1, &perFrameNative);
 
-		// SCATTER PASS - 8x8x8 thread groups over 128x72x64 volume.
+		// SCATTER PASS - 8x8x8 thread groups over the froxel volume
+		// (kVolumeWidth x kVolumeHeight x kVolumeDepth).
 		{
 			auto* stage = _scatterShader->GetShaderStage(ShaderStage::ComputeShader);
 			if (stage)
@@ -735,7 +804,74 @@ namespace HexEngine
 				UINT init = 0;
 				context->CSSetUnorderedAccessViews(0, 1, &_scatterUav, &init);
 				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(stage->GetNativePtr()), nullptr, 0);
+				// Cluster list SRVs at t12..t14 for the scatter CS, plus the
+				// shadow atlas + per-tile matrices at t15/t16 (slice 7 - null
+				// when the atlas is off; the shader's params.w gate never
+				// samples them then). Bound only while active; nulled right
+				// after the dispatch so nothing downstream inherits them.
+				if (clusteredFog)
+				{
+					ID3D11ShaderResourceView* clSrvs[5] = { _clLightsSrv, _clCountsSrv, _clListsSrv,
+						_clAtlasSrv, _clAtlasTileVpSrv };
+					context->CSSetShaderResources(12, 5, clSrvs);
+				}
+
+				// t17 = GI blurred voxel AO: the density CS occludes the fog
+				// AMBIENT term where the voxel field says the froxel column is
+				// enclosed (g_giComposeParams.z gates the sample; null-safe).
+				// t18..t20 = GI voxel radiance clips 0..2 for the world-space
+				// emissive/GI glow (g_giGlowParams.x gates; null-safe).
+				{
+					ID3D11ShaderResourceView* giSrvs[4] = {};
+					if (g_pEnv->_sceneRenderer != nullptr)
+					{
+						if (auto* gi = g_pEnv->_sceneRenderer->GetDiffuseGI(); gi != nullptr)
+						{
+							if (auto* aoTex = gi->GetBlurredAOTexture(); aoTex != nullptr)
+								giSrvs[0] = reinterpret_cast<ID3D11ShaderResourceView*>(aoTex->GetNativeShaderView());
+							for (uint32_t c = 0u; c < 3u; ++c)
+								giSrvs[1u + c] = gi->GetClipRadianceSrv(c);
+						}
+					}
+					context->CSSetShaderResources(17, 4, giSrvs);
+				}
+
+				// t21 = cloud shadow map + b4 = CloudConstants (S6): the sun
+				// term picks up cloud-edge shafts. Null-safe: with either
+				// missing the shader's zero-half-extent guard returns 1.0.
+				{
+					ID3D11ShaderResourceView* cloudSrv = nullptr;
+					if (_cloudShadowMapTex != nullptr && _cloudConstantsCb != nullptr)
+						cloudSrv = reinterpret_cast<ID3D11ShaderResourceView*>(_cloudShadowMapTex->GetNativeShaderView());
+					context->CSSetShaderResources(21, 1, &cloudSrv);
+					ID3D11Buffer* cloudCb = _cloudConstantsCb != nullptr
+						? reinterpret_cast<ID3D11Buffer*>(_cloudConstantsCb->GetNativePtr())
+						: nullptr;
+					context->CSSetConstantBuffers(4, 1, &cloudCb);
+				}
+
 				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
+
+				if (clusteredFog)
+				{
+					ID3D11ShaderResourceView* clNulls[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
+					context->CSSetShaderResources(12, 5, clNulls);
+				}
+				{
+					// t17 AO + t18..t20 radiance clips. The radiance volumes are
+					// written by GI compute UAVs next frame - leaving them bound
+					// as CS SRVs would force-unbind with debug-layer noise.
+					ID3D11ShaderResourceView* nullGiSrvs[4] = {};
+					context->CSSetShaderResources(17, 4, nullGiSrvs);
+				}
+				{
+					// t21 cloud shadow map (rebound as an RTV later this frame)
+					// + b4 cloud constants.
+					ID3D11ShaderResourceView* nullCloudSrv = nullptr;
+					context->CSSetShaderResources(21, 1, &nullCloudSrv);
+					ID3D11Buffer* nullCloudCb = nullptr;
+					context->CSSetConstantBuffers(4, 1, &nullCloudCb);
+				}
 				ID3D11UnorderedAccessView* nullUav = nullptr;
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 				// +2 for the gbuffer diffuse/position emissive sources at t10/t11.
@@ -756,6 +892,31 @@ namespace HexEngine
 			}
 		}
 
+		// SPATIAL FILTER PASS - 3x3x3 tent over the scatter volume before
+		// integration (see VolumetricScatterFilter.shader for why). The
+		// integrate pass then reads the filtered copy; with the filter off
+		// (or its shader missing) it reads the raw volume - bitwise the
+		// pre-filter behaviour.
+		bool filtered = false;
+		if (r_volumetricSpatialFilter._val.b && _scatterFilterShader && _scatterFilteredUav)
+		{
+			if (auto* stage = _scatterFilterShader->GetShaderStage(ShaderStage::ComputeShader))
+			{
+				auto* rawSrv = reinterpret_cast<ID3D11ShaderResourceView*>(_scatterVolume->GetNativeShaderView());
+				context->CSSetShaderResources(0, 1, &rawSrv);
+				UINT init = 0;
+				context->CSSetUnorderedAccessViews(0, 1, &_scatterFilteredUav, &init);
+				context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(stage->GetNativePtr()), nullptr, 0);
+				context->Dispatch(kVolumeWidth / 8u, kVolumeHeight / 8u, kVolumeDepth / 8u);
+				ID3D11UnorderedAccessView* nullUav = nullptr;
+				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+				ID3D11ShaderResourceView* nullSrv = nullptr;
+				context->CSSetShaderResources(0, 1, &nullSrv);
+				context->CSSetShader(nullptr, nullptr, 0);
+				filtered = true;
+			}
+		}
+
 		// INTEGRATION PASS - 8x8x1 groups, each thread loops kVolumeDepth W slices.
 		// Ping-pong: _writeIdx holds the index of the LAST written volume
 		// (so the apply pass reads from it as the just-finished output).
@@ -770,7 +931,8 @@ namespace HexEngine
 			{
 				ID3D11Buffer* cb = reinterpret_cast<ID3D11Buffer*>(_integrateParamsCBuffer->GetNativePtr());
 				context->CSSetConstantBuffers(5, 1, &cb);
-				auto* scatterSrv = reinterpret_cast<ID3D11ShaderResourceView*>(_scatterVolume->GetNativeShaderView());
+				auto* scatterSrv = reinterpret_cast<ID3D11ShaderResourceView*>(
+					(filtered ? _scatterFilteredVolume : _scatterVolume)->GetNativeShaderView());
 				ID3D11ShaderResourceView* historySrv =
 					reinterpret_cast<ID3D11ShaderResourceView*>(_integrationVolumes[historyNow]->GetNativeShaderView());
 				ID3D11ShaderResourceView* srvs[2] = { scatterSrv, historySrv };

@@ -2,6 +2,7 @@
 
 #include "Light.hpp"
 #include "../Entity.hpp"
+#include "DirectionalLight.hpp"
 #include "UpdateComponent.hpp"
 #include "../../Math/FloatMath.hpp"
 #include "../../HexEngine.hpp"
@@ -257,7 +258,22 @@ namespace HexEngine
 		injectGI->SetOnCheckFn(std::bind(&Light::SetInjectIntoGI, this, std::placeholders::_2));
 		injectGI->SetPrefabOverrideBinding(GetComponentName(), "/_injectIntoGI");
 
-		DragFloat* strength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"Strength", &_strength, 0.1f, 500.0f, 0.0f);
+		// Units slice (user-requested): the widget reflects what the value
+		// MEANS under r_physicalLightUnits - lumens for punctual lights, lux
+		// for the sun - with a range that fits physical scales (a street lamp
+		// is 10-20k lm, daylight is ~100k lux; the legacy 500 cap would make
+		// physical values unreachable). Label is fixed at widget build time;
+		// reselecting the entity refreshes it after toggling the cvar.
+		const HVar* physUnits = g_pEnv->_commandManager->FindHVar("r_physicalLightUnits");
+		const bool physical = physUnits != nullptr && physUnits->_val.b;
+		const bool isDirectional = CastAs<DirectionalLight>() != nullptr;
+		const wchar_t* strengthLabel = physical
+			? (isDirectional ? L"Illuminance (lux)" : L"Luminous flux (lm)")
+			: L"Strength";
+		const float strengthMax = physical ? (isDirectional ? 150000.0f : 100000.0f) : 500.0f;
+		const float strengthStep = physical ? 25.0f : 0.1f;
+
+		DragFloat* strength = new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), strengthLabel, &_strength, strengthStep, strengthMax, 0.0f);
 		//strength->SetLabelMinSize(130);
 		strength->SetPrefabOverrideBinding(GetComponentName(), "/_strength");
 

@@ -78,6 +78,99 @@ namespace HexEngine
 		return node;
 	}
 
+	namespace
+	{
+		math::Vector4 FoldNodeOutput(const MaterialGraph& graph, const std::string& nodeId, int32_t depth);
+
+		math::Vector4 FoldInputPin(
+			const MaterialGraph& graph,
+			const MaterialGraphNode& node,
+			const char* pinId,
+			const math::Vector4& unconnected,
+			int32_t depth)
+		{
+			for (const auto& connection : graph.connections)
+			{
+				if (connection.toNodeId == node.id && connection.toPinId == pinId)
+					return FoldNodeOutput(graph, connection.fromNodeId, depth);
+			}
+			return unconnected;
+		}
+
+		math::Vector4 FoldNodeOutput(const MaterialGraph& graph, const std::string& nodeId, int32_t depth)
+		{
+			const math::Vector4 identity(1.0f, 1.0f, 1.0f, 1.0f);
+			if (depth <= 0)
+				return identity;
+			const auto* node = graph.FindNode(nodeId);
+			if (node == nullptr)
+				return identity;
+
+			switch (node->nodeType)
+			{
+			case MaterialGraphNodeType::ScalarConstant:
+			case MaterialGraphNodeType::ScalarParameter:
+			case MaterialGraphNodeType::WeatherScalar:
+				return math::Vector4(node->scalarValue, node->scalarValue, node->scalarValue, node->scalarValue);
+			case MaterialGraphNodeType::VectorConstant:
+			case MaterialGraphNodeType::VectorParameter:
+			case MaterialGraphNodeType::WeatherVector:
+				return node->vectorValue;
+			case MaterialGraphNodeType::Add:
+				return FoldInputPin(graph, *node, "A", math::Vector4::Zero, depth - 1)
+					+ FoldInputPin(graph, *node, "B", math::Vector4::Zero, depth - 1);
+			case MaterialGraphNodeType::Multiply:
+				return FoldInputPin(graph, *node, "A", identity, depth - 1)
+					* FoldInputPin(graph, *node, "B", identity, depth - 1);
+			case MaterialGraphNodeType::Lerp:
+			{
+				const math::Vector4 a = FoldInputPin(graph, *node, "A", math::Vector4::Zero, depth - 1);
+				const math::Vector4 b = FoldInputPin(graph, *node, "B", identity, depth - 1);
+				const math::Vector4 alpha = FoldInputPin(graph, *node, "Alpha", math::Vector4(0.5f, 0.5f, 0.5f, 0.5f), depth - 1);
+				return math::Vector4::Lerp(a, b, alpha.x);
+			}
+			case MaterialGraphNodeType::OneMinus:
+				return identity - FoldInputPin(graph, *node, "In", math::Vector4::Zero, depth - 1);
+			// Texture/geometry-dependent nodes have no flat CPU value. Identity
+			// keeps the surrounding constant chain intact; the sampled texture
+			// itself reaches CPU consumers through the material's texture
+			// bindings, so folding it to 1 avoids counting it twice.
+			case MaterialGraphNodeType::TextureSample:
+			case MaterialGraphNodeType::TextureParameter:
+			case MaterialGraphNodeType::TexCoord:
+			case MaterialGraphNodeType::NormalMap:
+			default:
+				return identity;
+			}
+		}
+	}
+
+	math::Vector4 MaterialGraph::EvaluateConstantColor(MaterialGraphOutputSemantic semantic, const math::Vector4& fallback) const
+	{
+		for (const auto& output : outputs)
+		{
+			if (output.semantic != semantic)
+				continue;
+			if (output.nodeId.empty() || output.pinId.empty())
+				break;
+			return FoldNodeOutput(*this, output.nodeId, 32);
+		}
+
+		// Graphs that only wire the unified PbrOutput node (no outputs table
+		// entry for this semantic): follow the matching input pin instead.
+		if (const auto* pbrOut = FindPbrOutputNode(); pbrOut != nullptr)
+		{
+			const char* pinName = OutputSemanticToString(semantic);
+			for (const auto& connection : connections)
+			{
+				if (connection.toNodeId == pbrOut->id && connection.toPinId == pinName)
+					return FoldNodeOutput(*this, connection.fromNodeId, 32);
+			}
+		}
+
+		return fallback;
+	}
+
 	const MaterialGraphPin* MaterialGraph::FindPin(const std::string& nodeId, const std::string& pinId, MaterialGraphPinDirection direction) const
 	{
 		const auto* node = FindNode(nodeId);
@@ -322,11 +415,16 @@ namespace HexEngine
 			graph.connections.push_back({ fromNode, fromPin, toNode, toPin });
 		};
 
+		// Pin id must be "Out" (capital) to match the connections authored below
+		// and the pins the dialog's BuildOutputPins creates - a lowercase "out"
+		// here leaves the graph with connections the validator rejects as broken
+		// ("Broken connection 'node_x:Out'"), which made every promoted material
+		// with a constant-driven channel fail to compile.
 		auto addVectorConstant = [&](const char* id, const char* label, const math::Vector2& pos, const math::Vector4& value)
 		{
 			auto node = makeNode(id, MaterialGraphNodeType::VectorConstant, label, pos);
 			node.vectorValue = value;
-			node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+			node.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
 			graph.nodes.push_back(std::move(node));
 		};
 
@@ -334,8 +432,26 @@ namespace HexEngine
 		{
 			auto node = makeNode(id, MaterialGraphNodeType::ScalarConstant, label, pos);
 			node.scalarValue = value;
-			node.outputPins.push_back({ "out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
+			node.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Scalar, MaterialGraphPinDirection::Output });
 			graph.nodes.push_back(std::move(node));
+		};
+
+		// Registers a named parameter definition alongside a parameter node.
+		// Required whenever a node gets a parameterName: the compiler treats a
+		// named parameter with no matching graph.parameters entry as the error
+		// "Parameter 'X' is not defined". Named parameters are what make a
+		// promoted graph INSTANTIABLE - instance materials can only override
+		// named parameters, so the old promote output (all names empty) produced
+		// parents whose instances were completely uneditable.
+		auto defineParameter = [&graph](const std::string& name, MaterialGraphValueType type, const math::Vector4& vec, const fs::path& texPath)
+		{
+			MaterialGraphParameter p;
+			p.name = name;
+			p.valueType = type;
+			p.vectorValue = vec;
+			p.texturePath = texPath;
+			p.isExposed = true;
+			graph.parameters.push_back(std::move(p));
 		};
 
 		// Builds a TextureParameter (+ optional NormalMap or TextureSample) chain
@@ -343,7 +459,7 @@ namespace HexEngine
 		// id whose "Out" pin should be wired to the corresponding output node, or
 		// empty if the material has no texture bound for that slot (caller falls
 		// back to a Vector/Scalar constant in that case).
-		auto addTextureChain = [&](MaterialTexture textureType, const char* paramId, const char* sampleId, const char* label, const math::Vector2& pos, bool useNormalMap) -> std::string
+		auto addTextureChain = [&](MaterialTexture textureType, const char* paramId, const char* sampleId, const char* label, const char* paramName, const math::Vector2& pos, bool useNormalMap) -> std::string
 		{
 			const auto texture = material.GetTexture(textureType);
 			if (!texture)
@@ -351,7 +467,9 @@ namespace HexEngine
 
 			auto textureNode = makeNode(paramId, MaterialGraphNodeType::TextureParameter, label, pos);
 			textureNode.texturePath = texture->GetFileSystemPath();
+			textureNode.parameterName = paramName;
 			textureNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Texture2D, MaterialGraphPinDirection::Output });
+			defineParameter(paramName, MaterialGraphValueType::Texture2D, math::Vector4::One, textureNode.texturePath);
 			graph.nodes.push_back(std::move(textureNode));
 
 			if (useNormalMap)
@@ -382,7 +500,7 @@ namespace HexEngine
 			material._properties.emissiveColour.y * material._properties.emissiveColour.w,
 			material._properties.emissiveColour.z * material._properties.emissiveColour.w);
 
-		std::string baseColorSource = addTextureChain(MaterialTexture::Albedo, "node_albedo_tex", "node_albedo_sample", "Albedo Texture", math::Vector2(40.0f, 60.0f), false);
+		std::string baseColorSource = addTextureChain(MaterialTexture::Albedo, "node_albedo_tex", "node_albedo_sample", "Albedo Texture", "AlbedoTexture", math::Vector2(40.0f, 60.0f), false);
 		if (baseColorSource.empty())
 		{
 			addVectorConstant("node_albedo", "Base Color", math::Vector2(80.0f, 80.0f), material._properties.diffuseColour);
@@ -397,16 +515,16 @@ namespace HexEngine
 		// applied per-pixel) - which a (0.5, 0.5, 1.0) flat-tangent value
 		// happens to approximate, but any user who edits the constant gets
 		// instant lighting breakage. Disconnected = "use the surface".
-		const std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", math::Vector2(40.0f, 150.0f), true);
+		const std::string normalSource = addTextureChain(MaterialTexture::Normal, "node_normal_tex", "node_normal_map", "Normal Texture", "NormalTexture", math::Vector2(40.0f, 150.0f), true);
 
-		std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", math::Vector2(40.0f, 230.0f), false);
+		std::string roughnessSource = addTextureChain(MaterialTexture::Roughness, "node_roughness_tex", "node_roughness_sample", "Roughness Texture", "RoughnessTexture", math::Vector2(40.0f, 230.0f), false);
 		if (roughnessSource.empty())
 		{
 			addScalarConstant("node_roughness", "Roughness", math::Vector2(80.0f, 240.0f), material._properties.roughnessFactor);
 			roughnessSource = "node_roughness";
 		}
 
-		std::string metallicSource = addTextureChain(MaterialTexture::Metallic, "node_metallic_tex", "node_metallic_sample", "Metallic Texture", math::Vector2(40.0f, 310.0f), false);
+		std::string metallicSource = addTextureChain(MaterialTexture::Metallic, "node_metallic_tex", "node_metallic_sample", "Metallic Texture", "MetallicTexture", math::Vector2(40.0f, 310.0f), false);
 		if (metallicSource.empty())
 		{
 			addScalarConstant("node_metallic", "Metallic", math::Vector2(80.0f, 320.0f), material._properties.metallicFactor);
@@ -423,15 +541,23 @@ namespace HexEngine
 		// even when the author never intended emission. We now mirror the standard
 		// shader exactly: TextureSample * (tint.rgb * strength) -> Emissive.
 		std::string emissiveSource;
-		const std::string emissiveTextureSourceId = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", math::Vector2(40.0f, 390.0f), false);
+		const std::string emissiveTextureSourceId = addTextureChain(MaterialTexture::Emission, "node_emissive_tex", "node_emissive_sample", "Emission Texture", "EmissionTexture", math::Vector2(40.0f, 390.0f), false);
 		if (!emissiveTextureSourceId.empty())
 		{
-			// Tint+strength constant; equivalent to g_material.emissiveColour.rgb *
+			// Tint+strength; equivalent to g_material.emissiveColour.rgb *
 			// emissiveColour.a in DefaultPixel.shader. Stored as a Vector4 with
 			// alpha=1 so the Multiply downstream doesn't accidentally zero the .a.
-			addVectorConstant("node_emissive_tint", "Emission Tint",
-				math::Vector2(40.0f, 420.0f),
-				math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+			// A NAMED VectorParameter (not a constant) so instances can override
+			// emissive tint/strength per instance - the flagship instancing use
+			// case ("same base material, this one glows").
+			{
+				auto tintNode = makeNode("node_emissive_tint", MaterialGraphNodeType::VectorParameter, "Emission Tint", math::Vector2(40.0f, 420.0f));
+				tintNode.parameterName = "EmissiveTint";
+				tintNode.vectorValue = math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f);
+				tintNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+				defineParameter("EmissiveTint", MaterialGraphValueType::Vector4, tintNode.vectorValue, {});
+				graph.nodes.push_back(std::move(tintNode));
+			}
 
 			auto multiplyNode = makeNode("node_emissive_mul", MaterialGraphNodeType::Multiply, "Emission * Tint", math::Vector2(260.0f, 405.0f));
 			multiplyNode.inputPins.push_back({ "A", "A", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Input });
@@ -440,16 +566,22 @@ namespace HexEngine
 			graph.nodes.push_back(std::move(multiplyNode));
 
 			addConnection(emissiveTextureSourceId, "Out", "node_emissive_mul", "A");
-			addConnection("node_emissive_tint", "out", "node_emissive_mul", "B");
+			addConnection("node_emissive_tint", "Out", "node_emissive_mul", "B");
 			emissiveSource = "node_emissive_mul";
 		}
 		else
 		{
-			addVectorConstant("node_emissive", "Emissive", math::Vector2(80.0f, 400.0f), math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f));
+			// Named parameter for the same reason as EmissiveTint above.
+			auto emissiveNode = makeNode("node_emissive", MaterialGraphNodeType::VectorParameter, "Emissive", math::Vector2(80.0f, 400.0f));
+			emissiveNode.parameterName = "EmissiveColor";
+			emissiveNode.vectorValue = math::Vector4(emissive.x, emissive.y, emissive.z, 1.0f);
+			emissiveNode.outputPins.push_back({ "Out", "Out", MaterialGraphValueType::Vector4, MaterialGraphPinDirection::Output });
+			defineParameter("EmissiveColor", MaterialGraphValueType::Vector4, emissiveNode.vectorValue, {});
+			graph.nodes.push_back(std::move(emissiveNode));
 			emissiveSource = "node_emissive";
 		}
 
-		std::string opacitySource = addTextureChain(MaterialTexture::Opacity, "node_opacity_tex", "node_opacity_sample", "Opacity Texture", math::Vector2(40.0f, 470.0f), false);
+		std::string opacitySource = addTextureChain(MaterialTexture::Opacity, "node_opacity_tex", "node_opacity_sample", "Opacity Texture", "OpacityTexture", math::Vector2(40.0f, 470.0f), false);
 		if (opacitySource.empty())
 		{
 			addScalarConstant("node_opacity", "Opacity", math::Vector2(80.0f, 480.0f), 1.0f);
@@ -474,7 +606,7 @@ namespace HexEngine
 		addConnection(metallicSource, "Out", "output_pbr", "Metallic");
 		addConnection(emissiveSource, "Out", "output_pbr", "Emissive");
 		addConnection(opacitySource, "Out", "output_pbr", "Opacity");
-		addConnection(smoothnessSource, "out", "output_pbr", "Smoothness");
+		addConnection(smoothnessSource, "Out", "output_pbr", "Smoothness");
 
 		// Seed the PbrOutput node's per-material constants from the standard
 		// material's existing properties so a converted graph renders the same
@@ -487,6 +619,8 @@ namespace HexEngine
 			p.rainDripIntensity = material._properties.rainDripIntensity;
 			p.affectsGI         = material.GetAffectsGI() ? 1 : 0;
 			p.emissiveAffectsGI = material.GetEmissiveAffectsGI() ? 1 : 0;
+			p.receivesSnow      = material.GetReceivesSnow() ? 1 : 0;
+			p.windSwayParams    = material._properties.windSwayParams;
 			p.depthState        = material.GetDepthState();
 			p.blendState        = material.GetBlendState();
 			p.cullMode          = material.GetCullMode();
@@ -655,6 +789,8 @@ namespace HexEngine
 					{ "modelParams", { p.modelParams.x, p.modelParams.y, p.modelParams.z, p.modelParams.w } },
 					{ "rainDripIntensity", p.rainDripIntensity },
 					{ "affectsGI", p.affectsGI },
+				{ "receivesSnow", p.receivesSnow },
+					{ "windSwayParams", { p.windSwayParams.x, p.windSwayParams.y, p.windSwayParams.z, p.windSwayParams.w } },
 					{ "emissiveAffectsGI", p.emissiveAffectsGI },
 					{ "depthState", static_cast<int>(p.depthState) },
 					{ "blendState", static_cast<int>(p.blendState) },
@@ -773,6 +909,7 @@ namespace HexEngine
 						p.materialModel      = poIt->value("materialModel", 0);
 						p.rainDripIntensity  = poIt->value("rainDripIntensity", 0.0f);
 						p.affectsGI          = poIt->value("affectsGI", 1);
+					p.receivesSnow       = poIt->value("receivesSnow", 0);
 						p.emissiveAffectsGI  = poIt->value("emissiveAffectsGI", 0);
 						p.depthState         = static_cast<DepthBufferState>(poIt->value("depthState",     static_cast<int>(DepthBufferState::DepthDefault)));
 						p.blendState         = static_cast<BlendState>(       poIt->value("blendState",     static_cast<int>(BlendState::Opaque)));
@@ -785,6 +922,13 @@ namespace HexEngine
 							p.modelParams.y = (*mp)[1].get<float>();
 							p.modelParams.z = (*mp)[2].get<float>();
 							p.modelParams.w = (*mp)[3].get<float>();
+						}
+						if (const auto ws = poIt->find("windSwayParams"); ws != poIt->end() && ws->is_array() && ws->size() >= 4)
+						{
+							p.windSwayParams.x = (*ws)[0].get<float>();
+							p.windSwayParams.y = (*ws)[1].get<float>();
+							p.windSwayParams.z = (*ws)[2].get<float>();
+							p.windSwayParams.w = (*ws)[3].get<float>();
 						}
 					}
 				}
@@ -837,6 +981,36 @@ namespace HexEngine
 
 				outGraph.parameters.push_back(std::move(parameter));
 			}
+		}
+
+		// Self-heal pin-id drift. Promote-from-standard used to author connections
+		// against pin id "Out" while the constant nodes it created carried "out",
+		// so graphs saved by those builds fail validation with "Broken connection"
+		// forever. If a connection's source pin doesn't resolve but the source
+		// node has exactly one output pin, snap to it - unambiguous and covers any
+		// single-output pin rename. (Input pins are left alone: nodes have several
+		// and guessing would mis-wire.) Bindings are healed the same way; for
+		// PbrOutput graphs EnsureDefaultOutputBindings below re-derives them from
+		// the healed connections anyway.
+		for (auto& connection : outGraph.connections)
+		{
+			if (outGraph.FindPin(connection.fromNodeId, connection.fromPinId, MaterialGraphPinDirection::Output) != nullptr)
+				continue;
+
+			const auto* fromNode = outGraph.FindNode(connection.fromNodeId);
+			if (fromNode != nullptr && fromNode->outputPins.size() == 1)
+				connection.fromPinId = fromNode->outputPins.front().id;
+		}
+
+		for (auto& output : outGraph.outputs)
+		{
+			if (output.nodeId.empty() ||
+				outGraph.FindPin(output.nodeId, output.pinId, MaterialGraphPinDirection::Output) != nullptr)
+				continue;
+
+			const auto* fromNode = outGraph.FindNode(output.nodeId);
+			if (fromNode != nullptr && fromNode->outputPins.size() == 1)
+				output.pinId = fromNode->outputPins.front().id;
 		}
 
 		outGraph.EnsureDefaultOutputBindings();

@@ -54,6 +54,22 @@
 		output.position = mul(input.position, worldMatrix);
 		output.positionWS = output.position;
 
+		// Vegetation wind sway (Phase 3). Evaluated at BOTH g_time (current
+		// position) and g_timePrev (previous-frame position, below) so the
+		// displacement delta reaches previousPositionUnjittered - TAA/DLSS
+		// motion vectors track the sway instead of smearing it (the
+		// DefaultSnowTess worldPos/worldPrev precedent extended to a
+		// time-dependent offset). Zero-cost for materials that don't opt in.
+		[branch]
+		if (g_material.windSwayParams.w > 0.5f)
+		{
+			output.position.xyz += WindSwayOffset(
+				output.position.xyz, worldMatrix[3].xyz,
+				g_material.windSwayParams,
+				g_weatherSurface.windDirectionAndSpeed, g_time);
+			output.positionWS = output.position;
+		}
+
 		if(g_cullDistance > 0.0f)
 		{
 			output.cullDistance = length(output.positionWS.xyz - g_eyePos.xyz) >= g_cullDistance ? -1.0f : 1.0f;
@@ -64,6 +80,18 @@
 		// Calculate velocity
 		float4x4 prevFrame_modelMatrix = worldPrev;
 		float4 prevFrame_worldPos = mul(input.position, prevFrame_modelMatrix);
+		// Previous-frame sway: same function at g_timePrev against the
+		// previous world transform (static vegetation: identical matrix, the
+		// TIME term is the whole delta). Current wind is used for both - wind
+		// changes far slower than a frame.
+		[branch]
+		if (g_material.windSwayParams.w > 0.5f)
+		{
+			prevFrame_worldPos.xyz += WindSwayOffset(
+				prevFrame_worldPos.xyz, prevFrame_modelMatrix[3].xyz,
+				g_material.windSwayParams,
+				g_weatherSurface.windDirectionAndSpeed, g_timePrev);
+		}
 		float4 prevFrame_clipPos = mul(prevFrame_worldPos, g_viewProjectionMatrixPrev);
 
 		output.previousPositionUnjittered = prevFrame_clipPos;

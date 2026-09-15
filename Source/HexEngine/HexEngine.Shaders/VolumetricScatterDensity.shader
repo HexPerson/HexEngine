@@ -2,6 +2,7 @@
 {
 	Global
 	AtmosphereCommon
+	CloudCommon
 }
 "ComputeShader"
 {
@@ -65,6 +66,44 @@
 	// diffuse.rgb carries its tint.
 	Texture2D    g_gbufferDiffuse    : register(t10);
 	Texture2D    g_gbufferPosition   : register(t11);
+
+	// Clustered light lists (Phase 2 slice 3). Same buffers the deferred
+	// apply consumes; froxel -> cluster is exact integer division because the
+	// cluster depth slicing equals this volume's own exponential mapping.
+	// Null binds read zero counts, so clustering off degrades to no-op.
+	struct ClGpuLight
+	{
+		float4 posRadius;      // xyz world, w radius
+		float4 colorStrength;  // rgb colour, w strength
+		float4 dirCone;        // spot: xyz dir, w cos(outer)
+		float4 params;         // x cos(inner), y type, z shadowed
+	};
+	StructuredBuffer<ClGpuLight> g_clLights : register(t12);
+	StructuredBuffer<uint>       g_clCounts : register(t13);
+	StructuredBuffer<uint>       g_clLists  : register(t14);
+	// Slice 7: shadow atlas + captured per-tile view-proj matrices, so
+	// atlas-tiled spots can shadow their fog here (they no longer pass
+	// through the legacy shadow-slotted forward path). Manual step-compare -
+	// this CS has no comparison sampler and fog needs no PCF.
+	Texture2D                g_clShadowAtlas : register(t15);
+	StructuredBuffer<matrix> g_clAtlasTileVP : register(t16);
+	// GI bilateral-blurred voxel-occlusion AO (.r = occlusion, 1 = blocked),
+	// main-view screen space. The froxel's uvw.xy IS the screen uv. Gated by
+	// g_giComposeParams.z; null-bound reads 0 = no occlusion.
+	Texture2D                g_giAoTex       : register(t17);
+	// DiffuseGI voxel radiance clips 0..2 (finest -> coarser) for the fog's
+	// world-space emissive/GI glow. Emissive is baked into this field as an
+	// undiluted max source term, so sampling it around a froxel gives glow
+	// that survives occlusion and off-screen emitters - the failure modes of
+	// the screen-space gbuffer taps it replaces. Null-bound reads 0.
+	Texture3D<float4>        g_giRadianceClip0 : register(t18);
+	Texture3D<float4>        g_giRadianceClip1 : register(t19);
+	Texture3D<float4>        g_giRadianceClip2 : register(t20);
+	// Cloud shadow map (S6): top-down cloud transmittance on the cloud base
+	// plane (CloudShadowMap.shader). The CloudConstants cbuffer it needs is
+	// declared by the CloudCommon include (b4). Null-safe: an unbound b4
+	// reads half-extent 0 and SampleCloudShadowMap returns 1.
+	Texture2D                g_cloudShadowMap  : register(t21);
 	SamplerState g_shadowPointSampler : register(s2);
 	// Linear-clamp sampler for the transmittance LUT - the LUT is a
 	// continuous function so point sampling shows banding.
@@ -124,6 +163,14 @@
 		// the medium - dense storm/blizzard/sandstorm fog reads as a grey
 		// or coloured soup instead of just darkening the scene. .w unused.
 		float4 g_fogAmbient;
+		// DiffuseGI clip placement for the voxel-glow path (clips 0..2,
+		// finest first). xyz = clip world center, w = extent (half-size;
+		// 0 marks the clip invalid/absent).
+		float4 g_giClipCenterExtent[3];
+		// .x = voxel-glow path active (1 = the emissive glow samples the GI
+		// radiance field at t18..t20, 0 = legacy screen-space gbuffer taps).
+		// .yzw unused.
+		float4 g_giGlowParams;
 	};
 
 	// Forward lights cbuffer. Layout MUST match SceneRenderer's
@@ -179,6 +226,17 @@
 		const float softness = max(radius * 0.08f, 0.5f);
 		const float softnessSqr = softness * softness;
 		return (window * window) / (distSq + softnessSqr);
+	}
+
+	// Sample the DiffuseGI radiance clip selected for this froxel. Texture
+	// objects can't be indexed dynamically in SM5 - literal branch per clip.
+	float3 SampleGiRadiance(int clipIdx, float3 uvw3)
+	{
+		if (clipIdx == 0)
+			return g_giRadianceClip0.SampleLevel(g_linearSamplerAtm, uvw3, 0).rgb;
+		if (clipIdx == 1)
+			return g_giRadianceClip1.SampleLevel(g_linearSamplerAtm, uvw3, 0).rgb;
+		return g_giRadianceClip2.SampleLevel(g_linearSamplerAtm, uvw3, 0).rgb;
 	}
 
 	// Sample the point-light cubemap shadow at `slot` for the world
@@ -275,6 +333,40 @@
 	// sample when this forward point has a shadow slot assigned (only the
 	// closest-N shadow-casting points fit; rest fall through unshadowed
 	// and shine through walls - same v1 limitation as too-many spots).
+	// Clustered variant: same falloff/phase model as the forward evals, no
+	// shadow sampling - shadowed lights stay on the forward path and are
+	// flagged in params.z. g_emissiveParams.z carries "clustered fog active".
+	float3 EvalClusteredLightScatter(ClGpuLight light, float3 worldPos, float3 rayDir, float phaseG)
+	{
+		const float strength = light.colorStrength.w;
+		if (strength <= 0.0f)
+			return float3(0.0f, 0.0f, 0.0f);
+
+		const float3 toLight = light.posRadius.xyz - worldPos;
+		const float distSq = dot(toLight, toLight);
+		const float radius = light.posRadius.w;
+		if (distSq >= radius * radius)
+			return float3(0.0f, 0.0f, 0.0f);
+
+		const float invDist = rsqrt(max(distSq, 1e-6f));
+		const float3 lightDir = toLight * invDist;
+		float falloff = LocalLightFalloff(distSq, radius);
+
+		// Spot cone, matching the forward spot eval's smoothstep.
+		if (light.params.y > 0.5f)
+		{
+			const float coneDot = dot(-lightDir, light.dirCone.xyz);
+			falloff *= smoothstep(
+				light.dirCone.w,
+				max(light.params.x, light.dirCone.w + 1e-4f),
+				coneDot);
+		}
+
+		const float mu = dot(rayDir, lightDir);
+		const float phase = MiePhaseHG(mu, phaseG);
+		return light.colorStrength.rgb * (strength * falloff * phase);
+	}
+
 	float3 EvalPointLightScatter(uint i, float3 worldPos, float3 rayDir, float phaseG)
 	{
 		const float4 posR = g_fwdPointPosRadius[i];
@@ -586,7 +678,13 @@
 		// top for artist control.
 		const float MIE_COEFF = 0.025f;
 		const float3 effectiveSunColour = sunColour * sunTransmittance;
-		float3 totalScatter = effectiveSunColour * sunIntensity * sunVisibility * phase;
+		// Cloud shadows (S6): the sun term only - god rays gain cloud-edge
+		// shafts. Deliberately NOT folded into sunVisibility itself: the
+		// ambient-sky-access heuristic further down reads sunVisibility as
+		// "is this froxel enclosed by geometry", and a passing cloud must not
+		// crush the fog ambient the way a ceiling does.
+		const float cloudShadow = SampleCloudShadowMap(g_cloudShadowMap, g_linearSamplerAtm, worldPos);
+		float3 totalScatter = effectiveSunColour * sunIntensity * sunVisibility * cloudShadow * phase;
 
 		// Per-froxel point + spot light contributions. NO shadow gating
 		// in v1 - local lights shine through walls. Same forward-lights
@@ -597,30 +695,153 @@
 		float3 localScatter = float3(0.0f, 0.0f, 0.0f);
 		const uint fwdPointCount = (uint)g_fwdCountsAndParams.x;
 		const uint fwdSpotCount  = (uint)g_fwdCountsAndParams.y;
+		// With clustered fog active the forward arrays serve ONLY their
+		// shadow-slotted entries - unshadowed lights come from the cluster
+		// lists below, and the closest-16 unshadowed appear in BOTH sources,
+		// so shading them here too would double-count exactly those sixteen.
+		// (Accepted delta, recorded in the plan: shadowed lights that missed
+		// a shadow slot used to scatter through walls unshadowed; they now
+		// contribute no fog rather than wrong fog.)
+		const bool clusteredFog = g_emissiveParams.z > 0.5f;
 		[loop] for (uint pi = 0u; pi < fwdPointCount; ++pi)
-			localScatter += EvalPointLightScatter(pi, worldPos, rayDir, phaseG);
-		[loop] for (uint si = 0u; si < fwdSpotCount; ++si)
-			localScatter += EvalSpotLightScatter(si, worldPos, rayDir, phaseG);
-
-		// Screen-space EMISSIVE injection: surfaces with emissive materials
-		// (neon, lit windows, screens) glow into the fog around them. The
-		// froxel's xy is a screen UV; the gbuffer sample at that UV is the
-		// surface this froxel's ray hits. Distance falloff between the froxel
-		// and the surface world position spreads the glow into the volume in
-		// front of the emitter; froxels behind the surface also accumulate
-		// but never display (the apply pass samples the volume at the scene
-		// depth, so occluded slices simply aren't read).
-		//
-		// LIMITATIONS (screen-space by construction): emitters off-screen or
-		// fully occluded contribute nothing, and the glow fades with the
-		// emitter at screen edges. The principled upgrade would be sampling
-		// the DiffuseGI voxel volume (which already has emissive baked into
-		// its radiance) - revisit if the screen-space artefacts ever bother.
-		if (g_emissiveParams.x > 0.0f)
 		{
-			// One froxel column covers a LARGE screen footprint (the volume is
-			// only 128x72 across the screen - roughly 15x15 pixels per froxel
-			// at 1080p). A single point tap of the gbuffer aliases any high-
+			if (clusteredFog && (int)g_pointShadowSlotPerForward[pi].x < 0)
+				continue;
+			localScatter += EvalPointLightScatter(pi, worldPos, rayDir, phaseG);
+		}
+		[loop] for (uint si = 0u; si < fwdSpotCount; ++si)
+		{
+			if (clusteredFog && (int)g_spotShadowSlotPerForward[si].x < 0)
+				continue;
+			localScatter += EvalSpotLightScatter(si, worldPos, rayDir, phaseG);
+		}
+
+		if (clusteredFog)
+		{
+			// Froxel -> cluster (16x9x32). The cluster grid is fixed while the
+			// froxel dims are configurable, so derive the mapping from dims
+			// instead of hard-coding the division (the old 128x72x64 grid used
+			// /8,/8,/2). Exact when dims are multiples of the cluster grid -
+			// which the volume constants guarantee - and the depth slicing
+			// matches because both use the same exponential mapping.
+			const uint ccx = min(dtid.x * 16u / dims.x, 15u);
+			const uint ccy = min(dtid.y * 9u  / dims.y, 8u);
+			const uint ccz = min(dtid.z * 32u / dims.z, 31u);
+			const uint clusterIdx = (ccz * 9u + ccy) * 16u + ccx;
+			const uint cCount = min(g_clCounts[clusterIdx], 64u);
+			[loop] for (uint ci = 0u; ci < cCount; ++ci)
+			{
+				const ClGpuLight cl = g_clLights[g_clLists[clusterIdx * 64u + ci]];
+				float shadowTerm = 1.0f;
+				if (cl.params.z > 0.5f)
+				{
+					// Slice 7: an atlas-tiled spot shadows its fog HERE (it
+					// no longer flows through the legacy shadow-slotted
+					// forward path). Everything else shadowed still belongs
+					// to the forward path.
+					const int tile = (int)cl.params.w;
+					if (tile < 0 || cl.params.y < 0.5f)
+						continue;
+
+					const float4 lc = mul(float4(worldPos, 1.0f), g_clAtlasTileVP[tile]);
+					if (lc.w > 0.0f)
+					{
+						float2 suv = float2(
+							lc.x / lc.w * 0.5f + 0.5f,
+							-lc.y / lc.w * 0.5f + 0.5f);
+						const float lightDepth = lc.z / lc.w;
+						if (saturate(suv.x) == suv.x && saturate(suv.y) == suv.y && lightDepth < 1.0f)
+						{
+							// Tile-local -> atlas UV (4x4 grid, 2048 tiles -
+							// keep in sync with ShadowAtlas.hpp), clamped half
+							// a texel inside the tile against bleed.
+							const float tileX = (float)(tile % 4);
+							const float tileY = (float)(tile / 4);
+							suv = clamp(suv, 0.5f / 2048.0f, 1.0f - 0.5f / 2048.0f);
+							const float2 atlasUv = (float2(tileX, tileY) + suv) * 0.25f;
+							const float mapDepth = g_clShadowAtlas.SampleLevel(g_shadowPointSampler, atlasUv, 0).r;
+							shadowTerm = (lightDepth - 0.0005f) <= mapDepth ? 1.0f : 0.0f;
+						}
+					}
+				}
+				localScatter += EvalClusteredLightScatter(cl, worldPos, rayDir, phaseG) * shadowTerm;
+			}
+		}
+
+		// EMISSIVE / GI glow injection: surfaces with emissive materials
+		// (neon, lit windows, screens) glow into the fog around them.
+		//
+		// PREFERRED PATH (g_giGlowParams.x): sample the DiffuseGI voxel
+		// radiance field around the froxel's world position. Emissive is
+		// baked into that field as an UNDILUTED max source term, so the glow
+		// is world-space: emitters keep glowing when off-screen or occluded,
+		// and the glow no longer aliases through the froxel grid the way the
+		// per-column gbuffer taps did. A 9-tap sphere gather (centre + 8
+		// cube corners at ~0.55 * range) spreads the energy over the glow
+		// range, and a luminance knee keeps ordinary lit surfaces from
+		// hazing the whole scene - only bright sources (emissive, blown-out
+		// highlights) contribute at full strength.
+		//
+		// FALLBACK: the original screen-space gbuffer taps, kept for when
+		// the GI volumes don't exist (GI disabled / not yet initialized).
+		if (g_emissiveParams.x > 0.0f && g_giGlowParams.x > 0.5f)
+		{
+			const float range = g_emissiveParams.y;
+			// Finest clip whose box still contains the whole tap sphere, so
+			// one clip serves all 9 taps (no per-tap seams).
+			int clipIdx = -1;
+			float3 clipCenter = 0.0f.xxx;
+			float clipExtent = 0.0f;
+			[unroll]
+			for (int c = 0; c < 3; ++c)
+			{
+				const float4 ce = g_giClipCenterExtent[c];
+				if (clipIdx < 0 && ce.w > 0.0f)
+				{
+					const float3 d = abs(worldPos - ce.xyz);
+					if (all(d < (ce.w - range).xxx))
+					{
+						clipIdx = c;
+						clipCenter = ce.xyz;
+						clipExtent = ce.w;
+					}
+				}
+			}
+			if (clipIdx >= 0)
+			{
+				// Corner offset: 0.55*range along the unit cube diagonal.
+				const float k = range * 0.55f * 0.57735f;
+				const float3 taps[9] = {
+					float3( 0.0f, 0.0f, 0.0f),
+					float3(  k,  k,  k), float3(  k,  k, -k),
+					float3(  k, -k,  k), float3(  k, -k, -k),
+					float3( -k,  k,  k), float3( -k,  k, -k),
+					float3( -k, -k,  k), float3( -k, -k, -k)
+				};
+				const float invSize = 0.5f / clipExtent;
+				float3 glow = 0.0f.xxx;
+				[unroll]
+				for (int t = 0; t < 9; ++t)
+				{
+					const float3 uvw3 = (worldPos + taps[t] - clipCenter) * invSize + 0.5f;
+					const float3 rad = SampleGiRadiance(clipIdx, uvw3);
+					// Luminance knee: sun-lit surfaces (~1) contribute a mild
+					// ambient glow, genuinely bright sources (emissive is
+					// injected up to the 4.0 radiance clamp) at full weight.
+					const float luma = dot(rad, float3(0.2126f, 0.7152f, 0.0722f));
+					glow += rad * smoothstep(0.75f, 2.0f, luma);
+				}
+				// 0.8/9 puts the peak (all taps inside a bright emitter) at
+				// roughly the legacy screen-space path's near-surface energy,
+				// so r_volumetricEmissive keeps its calibration.
+				localScatter += glow * ((0.8f / 9.0f) * g_emissiveParams.x);
+			}
+		}
+		else if (g_emissiveParams.x > 0.0f)
+		{
+			// One froxel column covers a large screen footprint (several
+			// pixels per froxel even at the raised volume resolution). A
+			// single point tap of the gbuffer aliases any high-
 			// frequency emitter (neon sign letters) into froxel-sized blocks:
 			// the tap either lands on a letter (full glow) or between letters
 			// (none). Instead, take 4 rotated-grid taps spread across the
@@ -698,7 +919,20 @@
 		// shade from going pitch black (it still sees most of the sky). It is an
 		// approximation: outdoor shadow loses a little ambient haze too, but it
 		// removes the interior leak cheaply. Tunable via the 0.1 floor.
-		const float ambientSkyAccess = lerp(0.1f, 1.0f, sunVisibility);
+		float ambientSkyAccess = lerp(0.1f, 1.0f, sunVisibility);
+		// GI voxel occlusion on the fog AMBIENT only - the sun/local scatter
+		// terms above keep full strength so god-rays through windows survive.
+		// The voxel field knows what the sun-shadow proxy above cannot: an
+		// interior can be sun-shadowed yet sky-open (courtyard) or sun-lit yet
+		// enclosed (window pool in a sealed room). One screen-space sample per
+		// froxel column (uvw.xy is the screen uv) is an approximation shared
+		// with the surface compose - the indoor air column stops glowing with
+		// sky ambient it cannot see.
+		if (g_giComposeParams.z > 0.5f)
+		{
+			const float giOcc = saturate(g_giAoTex.SampleLevel(g_shadowPointSampler, uvw.xy, 0.0f).r);
+			ambientSkyAccess *= saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
+		}
 		const float3 ambientScatter = g_fogAmbient.rgb * extinction * ambientSkyAccess;
 
 		const float3 scatter = MIE_COEFF * totalScatter + LOCAL_MIE_COEFF * localScatter + ambientScatter;

@@ -224,6 +224,9 @@ namespace HexEngine::Weather
 				NearlyEqualFloat(a.cloudViewAbsorption, b.cloudViewAbsorption) &&
 				NearlyEqualFloat(a.cloudShadowStrength, b.cloudShadowStrength) &&
 				NearlyEqualFloat(a.cloudAnimationSpeed, b.cloudAnimationSpeed) &&
+				NearlyEqualFloat(a.cloudType, b.cloudType) &&
+				NearlyEqualFloat(a.cirrusAmount, b.cirrusAmount) &&
+				NearlyEqualFloat(a.cirrusType, b.cirrusType) &&
 				NearlyEqualVec3(a.windDirection, b.windDirection) &&
 				NearlyEqualFloat(a.windSpeed, b.windSpeed) &&
 				NearlyEqualFloat(a.precipitationIntensity, b.precipitationIntensity) &&
@@ -375,6 +378,11 @@ namespace HexEngine::Weather
 		if (scene == nullptr || !_previewEnabled)
 			return;
 
+		// First authoring frame: remember what the scene looked like before the
+		// weather took over, so removal can hand it back.
+		if (!_baseline.captured)
+			CaptureSceneBaseline(scene);
+
 		// Random preset cycling. Accumulate frameTime and step the cycle when the
 		// configured interval is reached. Bound the interval at 1s to keep the
 		// editor from spinning the cycle on every frame if the user types 0.
@@ -423,8 +431,85 @@ namespace HexEngine::Weather
 		UpdateAudio(scene, camera, _currentState, desiredState, frameTime);
 	}
 
+	namespace
+	{
+		// Every float HVar ApplyStateToScene / ApplyPreset writes. Kept in one
+		// place so the baseline capture and restore can't drift from the
+		// authoring list.
+		const char* const kWeatherDrivenFloatHVars[] = {
+			"env_zenithExponent", "env_anisotropicIntensity", "env_density",
+			"env_rayleighStrength", "env_mieStrength", "env_ambientSkyStrength",
+			"env_sunHazeStrength", "env_sunsetWarmStrength", "env_sunsetCoolStrength",
+			"env_sunsetGlowStrength", "env_volumetricScattering", "env_volumetricStrength",
+			"r_fogDensity", "r_fogStartDistance", "r_fogHeightDensity", "r_fogHeightFalloff",
+			"r_fogHeightPivot", "r_fogSkyTintInfluence",
+			"r_cloudDensity", "r_cloudCoverage", "r_cloudErosion", "r_cloudAmbientStrength",
+			"r_cloudViewAbsorption", "r_cloudShadowStrength", "r_cloudAnimationSpeed",
+			"r_cloudType", "r_cloudCirrusAmount", "r_cloudCirrusType",
+			"r_cloudWindSpeed",
+		};
+	}
+
+	void WeatherControllerComponent::CaptureSceneBaseline(Scene* scene)
+	{
+		if (scene == nullptr)
+			return;
+		_baseline = SceneBaseline{};
+		_baseline.scene = scene;
+		_baseline.ambientLight = scene->GetAmbientColour();
+		_baseline.fogColour = scene->GetFogColour();
+		_baseline.surfaceParams = scene->GetWeatherSurfaceParams();
+		if (DirectionalLight* sun = scene->GetSunLight(); sun != nullptr)
+		{
+			_baseline.hadSun = true;
+			_baseline.sunColour = sun->GetDiffuseColour();
+			_baseline.sunStrength = sun->GetLightStrength();
+		}
+		for (const char* name : kWeatherDrivenFloatHVars)
+		{
+			if (HVar* var = FindNamedHVar(name); var != nullptr)
+				_baseline.hvarFloats.emplace_back(name, var->_val.f32);
+		}
+		if (HVar* wind = FindNamedHVar("r_cloudWindDirection"); wind != nullptr)
+			_baseline.cloudWindDirection = wind->_val.v3;
+		_baseline.captured = true;
+	}
+
+	void WeatherControllerComponent::RestoreSceneBaseline()
+	{
+		if (!_baseline.captured)
+			return;
+		// Only restore into the scene we captured from, and only if it's still
+		// the live one - during scene teardown the pointer may be dead.
+		Scene* live = (g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr)
+			? g_pEnv->_sceneManager->GetCurrentScene().get() : nullptr;
+		if (live == nullptr || live != _baseline.scene)
+		{
+			_baseline.captured = false;
+			return;
+		}
+
+		live->SetAmbientLight(_baseline.ambientLight);
+		live->SetFogColour(_baseline.fogColour);
+		live->SetWeatherSurfaceParams(_baseline.surfaceParams);
+		if (_baseline.hadSun)
+		{
+			if (DirectionalLight* sun = live->GetSunLight(); sun != nullptr)
+			{
+				sun->SetDiffuseColour(math::Color(_baseline.sunColour.x, _baseline.sunColour.y, _baseline.sunColour.z, _baseline.sunColour.w));
+				sun->SetLightStength(_baseline.sunStrength);
+			}
+		}
+		for (const auto& [name, value] : _baseline.hvarFloats)
+			SetNamedHVarFloat(name.c_str(), value);
+		SetNamedHVarVector3("r_cloudWindDirection", _baseline.cloudWindDirection);
+		_baseline.captured = false;
+	}
+
 	void WeatherControllerComponent::Destroy()
 	{
+		RestoreSceneBaseline();
+
 		auto* audioManager = (g_pEnv != nullptr) ? g_pEnv->_audioManager : nullptr;
 		for (auto& entity : _precipitationEntities)
 			CleanupHelperEntity(entity);
@@ -641,6 +726,10 @@ namespace HexEngine::Weather
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Wetness", &_globalState.surface.wetness, 0.0f, 1.0f, 0.01f, 3);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Puddles", &_globalState.surface.puddleAmount, 0.0f, 1.0f, 0.01f, 3);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Snow Coverage", &_globalState.surface.snowCoverage, 0.0f, 1.0f, 0.01f, 3);
+		// Phase 3 slice 4 gave these fields their shader consumers; without
+		// sliders they were only reachable through preset constants.
+		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Snow Melt", &_globalState.surface.snowMelt, 0.0f, 1.0f, 0.01f, 3);
+		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Dust Amount", &_globalState.surface.dirtAmount, 0.0f, 1.0f, 0.01f, 3);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Wind Speed", &_globalState.windSpeed, 0.0f, 200.0f, 0.1f, 2);
 		new DragFloat(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Lightning Intensity", &_globalState.lightningIntensity, 0.0f, 10.0f, 0.05f, 2);
 		new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"Enable Lightning", &_globalState.enableLightning);
@@ -801,6 +890,9 @@ namespace HexEngine::Weather
 		SetNamedHVarFloat("r_cloudViewAbsorption", state.cloudViewAbsorption);
 		SetNamedHVarFloat("r_cloudShadowStrength", state.cloudShadowStrength);
 		SetNamedHVarFloat("r_cloudAnimationSpeed", state.cloudAnimationSpeed);
+		SetNamedHVarFloat("r_cloudType", state.cloudType);
+		SetNamedHVarFloat("r_cloudCirrusAmount", state.cirrusAmount);
+		SetNamedHVarFloat("r_cloudCirrusType", state.cirrusType);
 		SetNamedHVarVector3("r_cloudWindDirection", state.windDirection);
 		SetNamedHVarFloat("r_cloudWindSpeed", state.windSpeed);
 
@@ -1094,15 +1186,23 @@ namespace HexEngine::Weather
 		float targetOutdoorExposure = 1.0f;
 		if (scene != nullptr && camera != nullptr && camera->GetEntity() != nullptr)
 		{
-			const math::Vector3 listenerPosition = camera->GetEntity()->GetPosition();
-			RayHit skyHit;
-			const bool blocked = PhysUtils::RayCast(
-				listenerPosition,
-				listenerPosition + math::Vector3::Up * std::max(50.0f, _skyProbeDistance),
-				LAYERMASK(Layer::StaticGeometry),
-				&skyHit,
-				{ camera->GetEntity() });
-			targetOutdoorExposure = blocked ? 0.0f : 1.0f;
+			// Rate-limited: see _skyProbeCooldown in the header. The cached
+			// result carries between probes; _outdoorExposure's own blend
+			// below hides the 250ms quantisation entirely.
+			_skyProbeCooldown -= frameTime;
+			if (_skyProbeCooldown <= 0.0f)
+			{
+				_skyProbeCooldown = 0.25f;
+				const math::Vector3 listenerPosition = camera->GetEntity()->GetPosition();
+				RayHit skyHit;
+				_skyProbeLastBlocked = PhysUtils::RayCast(
+					listenerPosition,
+					listenerPosition + math::Vector3::Up * std::max(50.0f, _skyProbeDistance),
+					LAYERMASK(Layer::StaticGeometry),
+					&skyHit,
+					{ camera->GetEntity() });
+			}
+			targetOutdoorExposure = _skyProbeLastBlocked ? 0.0f : 1.0f;
 		}
 		const float exposureBlend = std::clamp(frameTime * 2.0f, 0.0f, 1.0f);
 		_outdoorExposure = std::clamp(_outdoorExposure + (targetOutdoorExposure - _outdoorExposure) * exposureBlend, 0.0f, 1.0f);

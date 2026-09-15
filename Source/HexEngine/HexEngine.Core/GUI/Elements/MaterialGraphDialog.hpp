@@ -36,8 +36,19 @@ namespace HexEngine
 		void SyncGraphParametersFromNodes();
 		void UpdateCompileMessages(const MaterialGraphCompileResult& compileResult);
 		void FocusFirstErrorNode(const MaterialGraphCompileResult& compileResult);
+		// Instance mode: upsert the override entry for a parameter node's
+		// edited value into _material->_graphInstance.overrides.
+		void WriteInstanceOverrideFromNode(const MaterialGraphNode& node);
 	private:
 		std::shared_ptr<Material> _material;
+		// INSTANCE MODE (graph-instance materials): the dialog displays the
+		// PARENT's graph via a local copy (_instanceViewGraph - never saved)
+		// and persists ONLY parameter overrides into the instance. Decided in
+		// the constructor BEFORE EnsureGraphExists, which would otherwise
+		// flatten the instance into a standard graph and corrupt it.
+		bool _instanceMode = false;
+		std::shared_ptr<Material> _parentMaterial;
+		MaterialGraph _instanceViewGraph;
 		Element* _canvas = nullptr;
 		ComponentWidget* _properties = nullptr;
 		LineEdit* _parameterName = nullptr;
@@ -55,16 +66,28 @@ namespace HexEngine
 		// stale node.
 		bool        _pbrAffectsGI = true;
 		bool        _pbrEmissiveAffectsGI = false;
+		bool        _pbrReceivesSnow = false;
 		bool        _pbrHasTransparency = false;
 		float       _pbrRainDripIntensity = 0.0f;
 		float       _pbrCullDistance = 0.0f;
 		float       _pbrModelParams[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		// Wind sway scratch (bend / flutter / height / mode) - see the
+		// MaterialProperties::windSwayParams lane table.
+		float       _pbrWindSwayBend = 0.0f;
+		float       _pbrWindSwayFlutter = 0.0f;
+		float       _pbrWindSwayHeight = 8.0f;
+		float       _pbrWindSwayMode = 0.0f;
 		Checkbox*   _pbrAffectsGiToggle = nullptr;
 		Checkbox*   _pbrEmissiveGiToggle = nullptr;
+		Checkbox*   _pbrReceivesSnowToggle = nullptr;
 		Checkbox*   _pbrTransparencyToggle = nullptr;
 		DragFloat*  _pbrRainDripDrag = nullptr;
 		DragFloat*  _pbrCullDistanceDrag = nullptr;
 		DragFloat*  _pbrModelParamDrags[4] = { nullptr, nullptr, nullptr, nullptr };
+		DragFloat*  _pbrWindSwayModeDrag = nullptr;
+		DragFloat*  _pbrWindSwayBendDrag = nullptr;
+		DragFloat*  _pbrWindSwayFlutterDrag = nullptr;
+		DragFloat*  _pbrWindSwayHeightDrag = nullptr;
 		DropDown*   _pbrShadingModelDrop = nullptr;
 		DropDown*   _pbrDepthStateDrop = nullptr;
 		DropDown*   _pbrBlendStateDrop = nullptr;

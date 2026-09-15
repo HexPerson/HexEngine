@@ -25,10 +25,11 @@
 
 		// bumpNormal = normal + bumpMap.x * tangent + bumpMap.y * binormal;
 
-		// Normalize the resulting bump normal.
-		worldNormal = (bumpNormal);
-
-		return worldNormal;
+		// Normalize the resulting bump normal. The interpolated TBN is not orthonormal
+		// and the tangent/binormal arrive unnormalized, so skipping this wrote normals
+		// with |n| != 1 into the gbuffer - which then skews every NdotL/NdotV/NdotH in
+		// the deferred BRDF (and the derivative-based specular AA on top of it).
+		return normalize(bumpNormal);
 	}
 
 	float3 ScreenToWorldPosition(float depth, float maxDepth, float2 scr, float2 screenSize, matrix viewProjectionMatrixInverse)
@@ -69,6 +70,11 @@
 		return h * (v.xy / v.z);
 	}
 
+	// Returns the previous-to-current screen motion as a [0,1] delta in CLIP space,
+	// i.e. +y is UP, matching NDC and not the y-down convention of a texture UV. Every
+	// consumer must therefore negate y before adding it to a texcoord: Streamline does
+	// it via mvecScale = {1,-1}, NRD via motionVectorScale[1] = -1, and TAAResolve does
+	// it inline. Do not "fix" this here without updating all three together.
 	float2 CalcVelocity(float4 newPos, float4 oldPos, float2 viewSize)
 	{
 		oldPos.xyz /= oldPos.w;

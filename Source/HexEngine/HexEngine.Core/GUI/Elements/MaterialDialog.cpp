@@ -50,6 +50,8 @@ namespace HexEngine
 		_affectsGiToggle = new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Affects GI", &_affectsGI);
 		_emissiveAffectsGI = _material->GetEmissiveAffectsGI();
 		_emissiveGiToggle = new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Emissive Affects GI", &_emissiveAffectsGI);
+		_receivesSnow = _material->GetReceivesSnow();
+		new Checkbox(_layout, _layout->GetNextPos(), Point(size.x - 40, 20), L"Receives Snow", &_receivesSnow);
 
 		auto format = new DropDown(_layout, _layout->GetNextPos(), Point(200, 18), L"Format");
 		format->GetContextMenu()->AddItem(new ContextItem(L"None", std::bind(&Material::SetFormat, material.get(), MaterialFormat::None)));
@@ -96,6 +98,24 @@ namespace HexEngine
 		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
 			L"Rain Drip Intensity",
 			&material->_properties.rainDripIntensity, 0.0f, 1.0f, 0.01f, 2);
+
+		// Vegetation wind sway. Mode selects the response shape (0 = off,
+		// 1 = tree: trunk bend + canopy flutter, 2 = grass: lean + shimmer);
+		// bend/flutter scale the amplitudes and Sway Height is the plant's
+		// characteristic height in metres (normalises the height^2 bend
+		// weight so a 2 m hedge and a 15 m tree both articulate correctly).
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Wind Sway Mode (0 off / 1 tree / 2 grass)",
+			&material->_properties.windSwayParams.w, 0.0f, 2.0f, 1.0f, 0);
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Wind Sway Bend",
+			&material->_properties.windSwayParams.x, 0.0f, 2.0f, 0.01f, 2);
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Wind Sway Flutter",
+			&material->_properties.windSwayParams.y, 0.0f, 2.0f, 0.01f, 2);
+		new DragFloat(_layout, _layout->GetNextPos(), Point(size.x - 40, 18),
+			L"Wind Sway Height (m)",
+			&material->_properties.windSwayParams.z, 0.1f, 40.0f, 0.1f, 1);
 
 		// Footstep sound for this surface. The surface-aware footstep system
 		// (FirstPersonCameraController) raycasts down each step, reads the hit
@@ -169,6 +189,7 @@ namespace HexEngine
 	bool MaterialDialog::Save()
 	{
 		_material->SetAffectsGI(_affectsGI);
+		_material->SetReceivesSnow(_receivesSnow);
 		_material->SetEmissiveAffectsGI(_emissiveAffectsGI);
 		if (auto scene = g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr ? g_pEnv->_sceneManager->GetCurrentScene() : nullptr; scene != nullptr)
 		{

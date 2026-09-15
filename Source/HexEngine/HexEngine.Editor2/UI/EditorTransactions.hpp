@@ -511,6 +511,39 @@ namespace HexEditor
 		math::Vector3 _after;
 	};
 
+	class RotationTransaction final : public IEditorTransaction
+	{
+	public:
+		RotationTransaction(const std::string& entityName, const math::Quaternion& before, const math::Quaternion& after) :
+			_sceneName(Detail::GetActiveSceneName()),
+			_entityName(entityName),
+			_before(before),
+			_after(after)
+		{
+		}
+
+		virtual bool Undo() override { return Apply(_before); }
+		virtual bool Redo() override { return Apply(_after); }
+		virtual const char* GetLabel() const override { return "Rotate Entity"; }
+
+	private:
+		bool Apply(const math::Quaternion& rotation) const
+		{
+			auto* entity = Detail::ResolveEntityByName(_sceneName, _entityName);
+			if (!entity || entity->IsPendingDeletion())
+				return false;
+
+			entity->ForceRotation(rotation);
+			return true;
+		}
+
+	private:
+		std::wstring _sceneName;
+		std::string _entityName;
+		math::Quaternion _before;
+		math::Quaternion _after;
+	};
+
 	class ScaleTransaction final : public IEditorTransaction
 	{
 	public:

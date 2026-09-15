@@ -63,7 +63,10 @@ namespace HexEngine
 			{
 				if (_shadowMaps[i] == nullptr)
 				{
-					_shadowMaps[i] = new ShadowMap(1024, 1024);
+					// needsColourTarget = true: the volumetric scattering path copies these
+					// six faces into a TextureCubeArray and needs the plain R32_FLOAT mirror
+					// as the copy source (see SceneRenderer's pointShadowFaceMaps).
+					_shadowMaps[i] = new ShadowMap(1024, 1024, true);
 					_shadowMaps[i]->Create();
 				}
 			}

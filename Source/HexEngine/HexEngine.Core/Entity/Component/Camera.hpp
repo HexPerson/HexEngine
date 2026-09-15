@@ -41,6 +41,22 @@ namespace HexEngine
 
 		virtual void LateUpdate(float frameTime) override;
 
+		// Motion-vector reference bookkeeping. Two stages because the same
+		// camera can be rendered through RenderScene MORE THAN ONCE per frame
+		// (the editor does): a single latch at end-of-render made the second
+		// render see prev == current, zeroing every world-static velocity -
+		// no motion blur while panning, while camera-locked geometry (the sky
+		// dome) showed huge phantom velocity instead.
+		//
+		// SnapshotPrevMatrices: latch this render's matrices into the PENDING
+		// slot (called at the end of every RenderScene; the game loop's
+		// LateUpdate lands here too - idempotent).
+		// PromotePrevMatrices: move pending -> prev, once per frame, called at
+		// the START of RenderScene before the per-frame cbuffer is filled -
+		// so every render within a frame sees LAST frame's matrices.
+		void SnapshotPrevMatrices();
+		void PromotePrevMatrices(uint64_t frameCount);
+
 		//virtual void Create() override;
 
 		void SetLookDirection(const math::Vector3& forward, const math::Vector3& up);
@@ -57,6 +73,21 @@ namespace HexEngine
 		// top-down map. Defaults false so ordinary cameras are not auto-rendered.
 		void SetRendersToTarget(bool enable) { _rendersToTarget = enable; }
 		bool RendersToTarget() const { return _rendersToTarget; }
+
+		// Marks this camera as an offline environment capture (reflection probe
+		// face). The renderer skips the temporally-accumulating passes for these:
+		//
+		//  - SSR/NRD: the denoiser's buffers are sized for the MAIN camera, but a
+		//    capture camera has its own (much smaller) viewport. Jitter is handed
+		//    to NRD in NDC and converted back to pixels using the denoiser's
+		//    width, so a 256px capture against 3840px buffers scales a +/-0.5px
+		//    jitter to +/-7.5 and trips NRD's assert. Capture faces have no
+		//    history to denoise against anyway.
+		//  - TAA jitter/resolve: a capture is a one-shot render with no history;
+		//    jitter would just offset it by a sub-pixel and the resolve would
+		//    blend against another camera's history.
+		void SetEnvironmentCapture(bool enable) { _environmentCapture = enable; }
+		bool IsEnvironmentCapture() const { return _environmentCapture; }
 
 		// Per-camera scene-flag mask, AND-ed with the scene's flags at render time.
 		// Defaults to all bits (no masking). Lets a secondary view (e.g. the map)
@@ -89,6 +120,13 @@ namespace HexEngine
 		const math::Matrix& GetProjectionMatrix() const;
 		const math::Matrix& GetViewMatrixPrev() const;
 		const math::Matrix& GetProjectionMatrixPrev() const;
+		// Combined view * projection (row-vector convention, view*proj order).
+		// Returns by value - the two matrices are stored separately and this is
+		// not cached, so callers that need it every frame in a hot loop should
+		// keep a local. Prefer this over hand-composing GetViewMatrix() *
+		// GetProjectionMatrix() at call sites.
+		math::Matrix GetViewProjectionMatrix() const;
+		math::Matrix GetViewProjectionMatrixPrev() const;
 
 		bool IsVisibleInFrustum(const dx::BoundingBox& aabb);
 		bool IsVisibleInFrustum(const dx::BoundingOrientedBox& obb);
@@ -98,6 +136,16 @@ namespace HexEngine
 		const dx::BoundingSphere& GetFrustumSphere() const;
 		const math::Viewport& GetViewport() const;
 		void SetViewport(const math::Viewport& vp);
+		// Render at `vp` but size the render target independently.
+		//
+		// The deferred fullscreen passes derive their gbuffer UVs from the
+		// VIEWPORT size (g_screenWidth/g_screenHeight) while sampling the
+		// full-size gbuffer over 0..1, so a camera whose viewport is smaller than
+		// the shared buffers samples the wrong region entirely. An offscreen
+		// capture therefore has to rasterize at the full buffer size even when it
+		// only wants a square sub-rect of the result - which is what this lets it
+		// say. See ReflectionProbeComponent::EnsureRig.
+		void SetViewportWithTargetSize(const math::Viewport& vp, int32_t targetWidth, int32_t targetHeight);
 		bool HasMovedThisFrame();
 		void ResetHasMovedThisFrame();
 
@@ -137,6 +185,7 @@ namespace HexEngine
 		ITexture2D* _renderTarget = nullptr;
 		//ITexture2D* _fullScreenRenderTarget = nullptr;
 		bool _rendersToTarget = false;
+		bool _environmentCapture = false;
 		int32_t _sceneFlagMask = -1;   // all bits set = no masking; stored as int (SceneFlags is fwd-declared)
 		CameraProjectionMode _projectionMode = CameraProjectionMode::PerspectiveProjection;
 		math::Matrix _projectionMatrix;
@@ -146,6 +195,13 @@ namespace HexEngine
 		math::Matrix _viewMatrixBehind;
 		math::Matrix _viewMatrixPrev;
 		math::Matrix _cameraToWorld;
+		// Pending motion-vector reference (see SnapshotPrevMatrices /
+		// PromotePrevMatrices): latched at end of every render, promoted to
+		// the Prev pair once per frame at the first render's start.
+		math::Matrix _projectionMatrixPending;
+		math::Matrix _viewMatrixPending;
+		uint64_t _prevPromoteFrame = UINT64_MAX;
+		bool _hasPendingPrev = false;
 		
 		float _fov = 0.0f;
 		float _aspectRatio = 0.0f;

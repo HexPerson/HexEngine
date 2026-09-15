@@ -412,6 +412,16 @@ namespace HexEngine
 					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateGeometryShader(shaderBlobs[stage]);
 					break;
 
+				case ShaderStage::HullShader:
+					// CreateHullShader defaults to null on backends without a
+					// tessellation path, leaving the mesh on the VS/PS route.
+					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateHullShader(shaderBlobs[stage]);
+					break;
+
+				case ShaderStage::DomainShader:
+					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateDomainShader(shaderBlobs[stage]);
+					break;
+
 				case ShaderStage::ComputeShader:
 					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateComputeShader(shaderBlobs[stage]);
 					break;
@@ -579,6 +589,14 @@ namespace HexEngine
 
 				case ShaderStage::GeometryShader:
 					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateGeometryShader(shaderBlobs[stage]);
+					break;
+
+				case ShaderStage::HullShader:
+					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateHullShader(shaderBlobs[stage]);
+					break;
+
+				case ShaderStage::DomainShader:
+					shader->_stages[stage] = g_pEnv->_graphicsDevice->CreateDomainShader(shaderBlobs[stage]);
 					break;
 
 				case ShaderStage::ComputeShader:

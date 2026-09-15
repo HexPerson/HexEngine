@@ -96,6 +96,11 @@ public:
 		std::unordered_map<ChunkCoord, EditedChunkBlob, ChunkCoordHash> _bakedChunks;
 		TerrainStats _stats;
 		bool _gpuVisualsEnabled = false;
+		// Non-D3D11 backends: the GPU-surface extract dispatches must run on
+		// the main thread (the D3D12 command list is single-threaded and scene
+		// load runs on a worker), so BuildGpuVisualsOrFallback sets this and
+		// the first RenderCustom tick performs the build. See both sites.
+		bool _gpuSurfaceBuildDeferred = false;
 		bool _initialized = false;
 		float _collisionDebounce = 0.0f;
 		float _collisionStepAccumulator = 0.0f;

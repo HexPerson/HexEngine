@@ -25,6 +25,15 @@ namespace HexEngine
 		// darken the existing beauty by that factor. dst = src * dst (BlendOp
 		// = ADD, SrcBlend = ZERO, DestBlend = SRC_COLOR).
 		Multiplicative,
+		// PremultipliedAlpha: target = src + target * (1 - src.a). The source
+		// colour is already premultiplied, so alpha carries only how much of the
+		// destination to REPLACE. Used by the SSR resolve to conserve energy: a
+		// surface that reflects a fraction F of the light arriving at it must
+		// lose that fraction from what it was already emitting, so the pass
+		// writes the reflection in rgb and F in alpha and gets
+		// (1 - F) * base + reflection in one draw. Alpha is preserved on the
+		// destination like the other *PreserveAlpha states.
+		PremultipliedAlpha,
 		Count
 	};
 
@@ -131,8 +140,16 @@ namespace HexEngine
 		// SampleCmpLevelZero and read 0 = "fully occluded", turning every fragment inside
 		// the cone/sphere black.
 		int	  castsShadowsFlag;
-		int	  pad1;
-		int	  pad2;
+		// Number of shadow cascades actually allocated and bound for this caster. The
+		// shader's cascade loop and cascade-blend both need this: MAX_SHADOW_CASCADES is 6
+		// but r_shadowCascades defaults to 4, and blending off the end of the real set reads
+		// an unbound depthMaps[] slot (which samples as 0 = fully occluded) and produced a
+		// dark band at the far edge of the last cascade. Occupies the old pad1 slot, so the
+		// cbuffer layout is unchanged.
+		int	  cascadeCount;
+		// tan(half of r_sunAngularDiameter): the PCSS penumbra growth rate for the
+		// sun. Occupies the old pad2 slot, so the cbuffer layout is unchanged.
+		float sunTanHalfAngle;
 
 		// Screen-space contact shadow settings, packed as a vec4 for cbuffer alignment.
 		// Only the directional light populates these; other shadow casters leave them
@@ -181,7 +198,11 @@ namespace HexEngine
 		float saturation;
 
 		math::Vector3 colourFilter;
-		float colour_pad;
+		// Instant display exposure: r_exposure x the UNSMOOTHED auto-exposure
+		// target. Bloom judges its threshold/scatter/clamp with this so camera
+		// movement (adaptation lag) cannot make bloom overshoot. Same layout
+		// slot as the old colour_pad.
+		float exposureInstant;
 	};
 
 	/** @brief Weather surface/material parameters uploaded per frame for weather-aware shaders. */
@@ -213,6 +234,8 @@ namespace HexEngine
 			_vertexShader = nullptr;
 			_pixelShader = nullptr;
 			_geometryShader = nullptr;
+			_hullShader = nullptr;
+			_domainShader = nullptr;
 			_vsConstant = nullptr;
 			_psConstant = nullptr;
 			_gsConstant = nullptr;
@@ -226,6 +249,8 @@ namespace HexEngine
 		IShaderStage* _vertexShader = nullptr;
 		IShaderStage* _pixelShader = nullptr;
 		IShaderStage* _geometryShader = nullptr;
+		IShaderStage* _hullShader = nullptr;
+		IShaderStage* _domainShader = nullptr;
 		IConstantBuffer* _vsConstant = nullptr;
 		IConstantBuffer* _psConstant = nullptr;
 		IConstantBuffer* _gsConstant = nullptr;
@@ -263,7 +288,11 @@ namespace HexEngine
 		int _screenWidth;
 		int _screenHeight;
 		float _time;
-		float _gamma;
+		// 1 = apply the physically-correct PBR energy terms (currently the diffuse 1/PI),
+		// 0 = legacy behaviour. Driven by r_pbrEnergyFix. Occupies the slot that used to
+		// hold _gamma, which was uploaded every frame from r_gamma and read by no shader -
+		// the SDR tonemap hardcodes 1/2.2 - so the layout is unchanged.
+		float _pbrEnergyFix;
 
 		Atmosphere _atmosphere;
 		BloomParams _bloom;
@@ -301,6 +330,192 @@ namespace HexEngine
 		// every material shader path (DefaultPixel + DefaultAnimated + graph-
 		// compiled materials) without per-shader cbuffer rewiring.
 		float _rainDripDebug;
+
+		// TAA tuning, appended at the end per the note above.
+		//   x = neighbourhood variance-clip gamma (mean +/- x*sigma). Lower is tighter and
+		//       rejects more history: safer against ghosting, costs some detail.
+		//   y = sign applied to the velocity buffer's Y when reprojecting history.
+		//       CalcVelocity emits a clip-space delta (+y up) while texcoords are y-down, so
+		//       -1 is the mathematically correct value; +1 is the engine's long-standing
+		//       behaviour. Exposed because the two interact - correcting the sign makes
+		//       history land on the right pixel and therefore be ACCEPTED far more often,
+		//       which changes how much the clip gamma above is doing.
+		//   z = transparent sun shadows active (r_transparentShadows): 1 only when
+		//       RenderTransparent binds the sun cascades at t15..t20 this frame.
+		//       Rides this vector because zw were spare - nothing TAA about it.
+		//   w = froxel volume owns per-light fog (r_clusterFog && r_clusterLights):
+		//       PointLight/SpotLight skip their inline volumetric march because the
+		//       scatter CS already integrates the same lights.
+		math::Vector4 _taaParams;
+
+		// Reflection / IBL parameters, appended at the end per the note above.
+		//   x = SSR sky-fallback strength (r_ssrSkyFallbackStrength). 0 restores the old
+		//       behaviour where a specular ray finding nothing returned black.
+		//   yzw reserved for the rest of Phase 1 (probe counts, IBL intensity).
+		math::Vector4 _reflectionParams;
+
+		// Image-based lighting, appended at the end per the note above.
+		//   x = sky specular IBL strength (r_iblSkySpecular)
+		//   y = sky diffuse IBL strength  (r_iblSkyDiffuse)
+		//   z = reflection probe strength (r_iblProbeStrength)
+		//   w reserved.
+		math::Vector4 _iblParams;
+
+		// Active reflection probe (nearest captured probe to the camera; one per
+		// frame in v1). Appended at the end per the note above.
+		//   _probeCenter:  xyz = world-space box centre, w = 1 when a probe atlas
+		//                  is bound at t16 this frame, else 0.
+		//   _probeExtents: xyz = box half-extents (metres), w = 1 when box
+		//                  projection is enabled for this probe.
+		math::Vector4 _probeCenter;
+		math::Vector4 _probeExtents;
+
+		// Second-nearest probe, for cross-fading between adjacent probe volumes.
+		// Without this a pixel snaps from one probe to the next the instant the
+		// selection changes, which pops when walking between rooms. Same packing
+		// as the primary; center.w = 1 when a second atlas is bound at t17.
+		math::Vector4 _probeCenter2;
+		math::Vector4 _probeExtents2;
+
+		// Environment-specular ownership, appended at the end per the note above.
+		//   x = 1 when the SSR resolve owns the environment specular term, 0 when
+		//       the deferred lighting pass does.
+		//
+		// The two systems have to be COMPOSED, not stacked. Deferred runs before
+		// SSR and the SSR resolve blends additively onto beauty, so with both
+		// enabled a pixel whose ray hit got environment + screen reflection
+		// double-counted, while a pixel whose ray missed (a floor ray aimed at a
+		// window pane finds nothing - transparent glass never writes the opaque
+		// gbuffer) got neither and rendered black. Handing the whole term to the
+		// resolve puts both estimates in the same shader at the same time, where
+		// lerp(environment, screen, confidence) is expressible.
+		//
+		// Set per frame from r_iblComposeSSR AND the exact predicate that decides
+		// whether RenderSSR runs at all - a probe capture face, a secondary
+		// camera, r_ssr 0 or a scene with nothing reflective all keep the term in
+		// the deferred pass, because no resolve will run to supply it.
+		//   y = 1 when the SSR resolve takes the reflected fraction off the base
+		//       layer (energy conservation).
+		//   z = fraction of albedo removed at full rain wetness.
+		//   w reserved.
+		math::Vector4 _iblComposeParams;
+
+		// Weather overcast tint, appended at the end per the note above.
+		//   xyz = the colour the sky is lerped toward, w = how far.
+		//
+		// The sky sphere already applies this (Hillaire is a clear-sky model and
+		// cannot produce overcast, so this lerp IS how rain gets its grey). The
+		// prefiltered environment atlas needs the identical tint or reflections
+		// disagree with the sky above them.
+		math::Vector4 _skyOvercast;
+
+		// SSR behaviour toggles, appended at the end per the note above.
+		//   x = 1 to use water's last-in-screen sample when the specular march
+		//       gives up. It makes a dark reflection bright, but the bright
+		//       thing it draws sits where the RAY gave up rather than where the
+		//       mirror image is - so reflections stop lining up with what they
+		//       reflect. yzw reserved.
+		math::Vector4 _ssrParams;
+
+		// Physical light units (Phase 2 final slice, appended per the
+		// append-only note above).
+		//   x = pre-exposure: multiplied into lighting outputs so FP16
+		//       buffers hold physical ranges (100k-lux daylight). 1.0 until
+		//       the lumen/lux conversions land - the whole system flips
+		//       together with the calibration factor.
+		//   y = 1 / pre-exposure, for consumers that need to undo it.
+		//   z = legacy _strength -> lumens calibration factor (informational
+		//       for debug shaders; the conversion itself happens CPU-side).
+		//   w = reserved.
+		math::Vector4 _exposureParams;
+
+		// Shelter/rain occlusion (Phase 3 slice 2, appended per the
+		// append-only note above). World -> clip of the top-down ortho
+		// depth map rendered around the camera; surfaces with static
+		// geometry above them mask out wetness/snow/puddles.
+		math::Matrix _rainOcclusionVP;
+		//   x = 1 when the map holds valid content this frame (0 = dry
+		//       weather or map unavailable; shaders treat everything as
+		//       exposed).
+		//   y = depth bias in map-depth units (world metres / depth range).
+		//   z = 1 / map resolution (texel size in UV, for edge softening).
+		//   w = reserved.
+		math::Vector4 _rainOcclusionParams;
+
+		// Snow footprints (Phase 3, appended per the append-only note above).
+		// World -> clip of a small top-down ortho map rendered around the
+		// camera into which walking entities stamp foot-shaped depressions;
+		// the snow shell's domain shader reads it to compress the snow.
+		math::Matrix _snowFootprintVP;
+		//   x = 1 when the map holds valid content this frame (0 = no snow /
+		//       map unavailable; shell treats the surface as undisturbed).
+		//   y = 1 / map resolution (texel size in UV).
+		//   z = map half-extent in world metres.
+		//   w = global print strength (metres of snow removed at full depth).
+		math::Vector4 _snowFootprintParams;
+
+		// Dust/sand accumulation (Phase 3). x = sand textures bound (t25 albedo
+		// / t31 normal), y = world tiling scale, zw reserved.
+		math::Vector4 _dustParams;
+
+		// Previous-frame time (Phase 3 wind/water). x = the g_time value
+		// uploaded LAST frame, y = current - previous (seconds), zw reserved.
+		// Time-dependent vertex displacement (wind sway, Gerstner waves)
+		// evaluates its offset at BOTH x and g_time so the previous-frame
+		// position carries the displacement delta - without it TAA/DLSS see
+		// zero velocity for the animation and smear. Advanced once per frame
+		// in SetupPerFrameBuffer (frame-count keyed - the function runs
+		// several times per frame for shadow/probe passes and every run must
+		// upload the same pair). Aliased g_timePrev / g_deltaTime in
+		// Global.shader.
+		math::Vector4 _timeParams2;
+
+		// Ocean tunables (water overhaul O8), all live cvars:
+		// x = r_oceanWaveScale (master Gerstner amplitude multiplier)
+		// y = r_oceanFoam (crest+shore foam coverage)
+		// z = r_oceanAbsorption (Beer-Lambert per metre)
+		// w = r_oceanBumpStrength (normal-map deflection)
+		math::Vector4 _oceanConfig2;
+
+		// P4.6 log-space grading. Appended at the tail (append-only rule)
+		// rather than grown into ColourGradeSettings, which sits mid-buffer.
+		// _whiteBalance: xyz = RGB channel gains computed CPU-side from
+		// r_whiteBalanceTemp/Tint (von-Kries in LMS, normalised so green = 1),
+		// w unused. Neutral = (1,1,1).
+		math::Vector4 _whiteBalance;
+		// ASC-CDL-style trio, applied c = pow(max(c * gain + lift, 0), 1/gamma)
+		// after the log-space contrast. Neutral = lift 0, gamma 1, gain 1.
+		math::Vector4 _cdlLift;
+		math::Vector4 _cdlGamma;
+		math::Vector4 _cdlGain;
+		// P4.8 vignette (replaces Vignette.shader's compiled-in #defines):
+		// x = amount (negative darkens), y = radius, z = slope, w = ratio.
+		math::Vector4 _vignetteParams;
+		// P4.7 colour LUT: x = r_colourLutStrength, y = LUT size N (0 = no
+		// LUT loaded - shader bypasses), zw reserved.
+		math::Vector4 _lutParams;
+		// P4.9/P4.10 display-output finishing: x = film-grain intensity
+		// (r_filmGrain), y = grain size (r_filmGrainSize), z = CAS sharpen
+		// amount (r_sharpen), w reserved.
+		math::Vector4 _grainParams;
+		// P4.12 lens flare/dirt (folded into BloomComposite): x = flare/ghost
+		// intensity, y = lens-dirt intensity, z = ghost dispersal, w = streak
+		// intensity.
+		math::Vector4 _lensParams;
+		// GI ambient-ownership compose (structural GI fix): x = flat-ambient
+		// hand-off [0..1] - the deferred pass drops this fraction of the legacy
+		// albedo*ambientLight fill so the GI composite owns that part of the
+		// ambient budget instead of stacking on top of it; y = GI-occlusion
+		// strength applied to the remaining flat ambient + the IBL sky diffuse
+		// (darkens where the voxel field says sky is blocked - darkening is
+		// what survives auto-exposure); z = 1 when the GI blurred-AO texture
+		// is bound at t22 for this view (main camera only - it is main-view
+		// screen space, capture faces must not sample it); w reserved.
+		math::Vector4 _giComposeParams;
+		// Transparent-surface atmosphere: x = froxel fog volume bound (t24),
+		// y = AP volume bound (t21), z = froxel far depth (m), w = AP max
+		// distance (m). Transparents fog themselves per fragment with these.
+		math::Vector4 _transparentFogParams;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */
@@ -363,7 +578,8 @@ namespace HexEngine
 			emissiveColour(0.0f),
 			isInTransparencyPhase(0),
 			materialModel(0),
-			modelParams(0.0f, 0.0f, 0.0f, 0.0f)
+			modelParams(0.0f, 0.0f, 0.0f, 0.0f),
+			windSwayParams(0.0f, 0.0f, 0.0f, 0.0f)
 		{
 		}
 
@@ -375,7 +591,8 @@ namespace HexEngine
 				diffuseColour == other.diffuseColour &&
 				emissiveColour == other.emissiveColour &&
 				hasTransparency == other.hasTransparency &&
-				isWater == other.isWater
+				isWater == other.isWater &&
+				windSwayParams == other.windSwayParams
 				);
 		}
 
@@ -410,6 +627,20 @@ namespace HexEngine
 		//   Sheen:      .x = strength, .yzw = sheen tint
 		// Zero default = "feature off".
 		math::Vector4 modelParams;
+
+		// Vegetation wind sway (Phase 3). Consumed by the vertex shaders
+		// (Default / graph-emitted / ShadowMapGeometry) via g_material:
+		//   x = trunk bend strength (metres of top-of-canopy deflection at
+		//       reference wind ~30 m/s)
+		//   y = leaf/branch flutter strength
+		//   z = characteristic height in metres - normalises the height^2
+		//       bend weight so a 2 m hedge and a 15 m tree both articulate
+		//       over their own extent
+		//   w = mode: 0 = off (default), 1 = tree (bend + flutter),
+		//       2 = grass (lean + shimmer only)
+		// APPENDED at the struct tail so cache-stale shaders keep valid
+		// offsets for every earlier field.
+		math::Vector4 windSwayParams;
 	};
 
 	/** @brief Per-object constants uploaded for each draw call. */
@@ -428,6 +659,10 @@ namespace HexEngine
 	struct PerAnimationBuffer
 	{
 		math::Matrix _boneTransforms[70];
+		// Previous frame's pose. Needed so skinned meshes emit real motion vectors: the
+		// animated vertex shader used to reproject with the CURRENT pose, so deformation
+		// contributed nothing and animated characters ghosted under TAA/DLSS.
+		math::Matrix _boneTransformsPrev[70];
 	};
 
 	/** @brief Engine-managed constant buffer binding slots. */

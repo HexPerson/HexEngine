@@ -13,7 +13,12 @@
 	LightingUtils
 	Atmosphere
 	AtmospherePhysical
+	// SkyViewLutParamsToUv, for the sky IBL environment lookup.
+	AtmosphereCommon
+	// Octahedral environment atlas helpers (SampleEnvAtlas), for sky IBL.
+	EnvMapCommon
 	PBRutils
+	CloudCommon
 }
 "VertexShader"
 {
@@ -33,8 +38,38 @@
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
 	Texture2D g_beautyTex : register(t5);
 	SHADOWMAPS_RESOURCE(6);
-	Texture3D g_cloudShapeNoise : register(t12);
-	Texture3D g_cloudDetailNoise : register(t13);
+	// Cached cloud shadow map (t12; see CloudShadowMap.shader). t13 is left
+	// free - it used to hold the second cloud noise volume for the per-pixel
+	// slab re-march this replaced.
+	Texture2D g_cloudShadowMap : register(t12);
+	// t14 = features RT (bound explicitly by RenderDirectionalLights).
+	// Prefiltered sky environment atlas for image-based lighting, bound explicitly at
+	// t15 (SkyEnvMap.shader's output: octahedral rows, one per roughness level - see
+	// EnvMapCommon). A null bind reads as black, which degrades to the old no-IBL
+	// behaviour rather than breaking the pass.
+	Texture2D g_iblSkyEnvAtlas : register(t15);
+	// The frame's selected reflection probe atlas (same octahedral layout).
+	// Only read when g_probeCenter.w > 0.5; a null bind reads black.
+	Texture2D g_iblProbeAtlas : register(t16);
+	// Second-nearest probe, cross-faded with the first so moving between probe
+	// volumes doesn't snap the environment.
+	Texture2D g_iblProbeAtlas2 : register(t17);
+	// P1-C: 1x9 SH irradiance coefficients projected from the sky atlas. This is
+	// the real cosine-convolved diffuse term; the atlas's roughest row was only
+	// ever a stand-in for it.
+	Texture2D g_iblSkySHTex : register(t18);
+	// Per-probe SH irradiance for the two selected probes. Unlike the sky SH these
+	// are integrated from what each probe actually sees, so they already encode
+	// their own occlusion - an indoor probe's irradiance knows the roof is solid.
+	Texture2D g_iblProbeSH  : register(t19);
+	Texture2D g_iblProbeSH2 : register(t20);
+	// P1-B: split-sum DFG table. rg = F0 scale/bias, b = single-scatter energy.
+	Texture2D g_dfgLut      : register(t21);
+	// t22 = DiffuseGI's bilateral-blurred voxel-occlusion AO (previous frame -
+	// GI renders after this pass; one frame of latency, same as the GI-AO
+	// provider accepts). .r = occlusion, 1 = fully blocked. Only bound (and
+	// only sampled - g_giComposeParams.z gates) for the main camera.
+	Texture2D g_giAoTex     : register(t22);
 	// Material-features RT (model id + per-model parameters). t14 is the first
 	// free slot after the gbuffer (0-4), beauty (5), shadowmaps (6-11), and cloud
 	// 3D noise (12-13). C++ side binds via GraphicsDevice::SetTexture2D(14, ...).
@@ -46,107 +81,26 @@
 	SamplerState g_pointSampler : register(s2);
 	SamplerState g_mirrorSampler : register(s3);
 
-	cbuffer CloudConstants : register(b4)
-	{
-		float4 g_cloudBoundsMin;
-		float4 g_cloudBoundsMax;
-		float4 g_cloudParams0; // x=density, y=coverage, z=erosion, w=maxDistance
-		float4 g_cloudParams1; // x=absorption, y=powder, z=anisotropy, w=stepScale
-		float4 g_cloudParams2; // x=shapeScale, y=detailScale, z=windSpeed, w=animationSpeed
-		float4 g_cloudParams3; // x=viewAbsorption, y=ambientStrength, z=shadowFloor, w=phaseBoost
-		float4 g_cloudParams4; // x=silverLiningStrength, y=silverLiningExponent, z=multiScatterStrength, w=heightTintStrength
-		float4 g_cloudParams5; // x=tintWarmth, y=skyTintInfluence, z=directionalDiffuse, w=ambientOcclusion
-		float4 g_cloudWindDirection; // xyz=wind direction, w=quality preset
-		float4 g_cloudWindOffset; // xyz=accumulated wind offset, w=reserved
-		float4 g_cloudMarch; // x=view steps, y=light steps, z=ground shadow steps, w=ground shadow strength
-	};
 
-	float2 RayBoxDist(float3 boundsMin, float3 boundsMax, float3 rayOrigin, float3 rayDir)
-	{
-		float3 safeDir = rayDir;
-		safeDir.x = abs(safeDir.x) < 1e-5f ? (safeDir.x < 0.0f ? -1e-5f : 1e-5f) : safeDir.x;
-		safeDir.y = abs(safeDir.y) < 1e-5f ? (safeDir.y < 0.0f ? -1e-5f : 1e-5f) : safeDir.y;
-		safeDir.z = abs(safeDir.z) < 1e-5f ? (safeDir.z < 0.0f ? -1e-5f : 1e-5f) : safeDir.z;
-		const float3 invDir = 1.0f / safeDir;
-		const float3 t0 = (boundsMin - rayOrigin) * invDir;
-		const float3 t1 = (boundsMax - rayOrigin) * invDir;
-		const float3 tmin = min(t0, t1);
-		const float3 tmax = max(t0, t1);
 
-		const float dstA = max(max(tmin.x, tmin.y), tmin.z);
-		const float dstB = min(tmax.x, min(tmax.y, tmax.z));
 
-		const float dstToBox = max(0.0f, dstA);
-		const float dstInsideBox = max(0.0f, dstB - dstToBox);
 
-		return float2(dstToBox, dstInsideBox);
-	}
 
-	float SampleCloudDensity(float3 worldPos, float3 boundsMin, float3 boundsMax, float3 windOffset)
-	{
-		const float3 boundsSize = max(boundsMax - boundsMin, 1e-3f.xxx);
-		const float3 localUVW = (worldPos - boundsMin) / boundsSize;
 
-		if (any(localUVW < 0.0f.xxx) || any(localUVW > 1.0f.xxx))
-			return 0.0f;
+	// SampleSkyEnv's one caller moved into EnvMapCommon::EvaluateEnvSpecular, which
+	// takes the atlas as a parameter so the SSR resolve can call it too.
 
-		const float shape = g_cloudShapeNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.x + windOffset, 0.0f).r;
-		const float detail = g_cloudDetailNoise.SampleLevel(g_mirrorSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r;
-		const float weather = g_cloudShapeNoise.SampleLevel(g_mirrorSampler, worldPos * (g_cloudParams2.x * 0.32f) + windOffset * 0.45f, 0.0f).r;
+	// ProbeWeight / ProbeSpecularDir moved to EnvMapCommon.shader, alongside the
+	// EvaluateEnvSpecular that both this pass and the SSR resolve now call.
 
-		const float height = saturate(localUVW.y);
-		const float heightMask = smoothstep(0.03f, 0.22f, height) * (1.0f - smoothstep(0.68f, 0.98f, height));
-		const float verticalCore = smoothstep(0.05f, 0.55f, height) * (1.0f - smoothstep(0.62f, 0.96f, height));
-
-		const float coverage = saturate(g_cloudParams0.y);
-		const float weatherShift = (weather - 0.5f) * 0.35f;
-		const float coverageThreshold = saturate(1.0f - coverage + weatherShift);
-		float cloud = saturate((shape - coverageThreshold) / max(0.001f, coverage));
-		const float erosionByHeight = lerp(1.22f, 0.78f, smoothstep(0.18f, 0.90f, height));
-		cloud = saturate(cloud - (1.0f - detail) * g_cloudParams0.z * erosionByHeight);
-		const float billow = saturate(1.0f + (detail - 0.5f) * 0.28f + (weather - 0.5f) * 0.36f);
-		const float densityShape = lerp(cloud * cloud, cloud, 0.55f);
-
-		return min(densityShape * heightMask * verticalCore * billow * g_cloudParams0.x, 2.0f);
-	}
-
+	// Cloud shadow from the cached top-down transmittance map: one filtered
+	// tap instead of re-marching the cloud slab per pixel (the old path also
+	// used a hand-copied density function that drifted from the clouds
+	// actually drawn - the map is rendered from the shared one).
 	float CalculateCloudShadow(float3 worldPos, float3 sunDir)
 	{
-		const float shadowStrength = saturate(g_cloudMarch.w);
-		if (shadowStrength <= 0.0001f)
-			return 1.0f;
-
-		const float3 boundsMin = g_cloudBoundsMin.xyz;
-		const float3 boundsMax = g_cloudBoundsMax.xyz;
-		if (worldPos.y > boundsMax.y)
-			return 1.0f;
-
-		const int shadowSteps = max(1, (int)g_cloudMarch.z);
-		const float2 hit = RayBoxDist(boundsMin, boundsMax, worldPos, sunDir);
-		if (hit.y <= 0.0f)
-			return 1.0f;
-
-		const float3 windOffset = g_cloudWindOffset.xyz;
-
-		const float invCloudHeight = rcp(max(100.0f, boundsMax.y - boundsMin.y));
-		const float stepLen = max(1.0f, hit.y / (float)shadowSteps);
-
-		float opticalDepth = 0.0f;
-		float travelled = 0.0f;
-		[loop]
-		for (int i = 0; i < shadowSteps; ++i)
-		{
-			if (travelled >= hit.y)
-				break;
-
-			const float3 samplePos = worldPos + sunDir * (hit.x + travelled);
-			const float density = SampleCloudDensity(samplePos, boundsMin, boundsMax, windOffset);
-			opticalDepth += density * stepLen * invCloudHeight;
-			travelled += stepLen;
-		}
-
-		const float cloudTransmittance = max(g_cloudParams3.z, exp(-opticalDepth * g_cloudParams1.x));
-		return lerp(1.0f, cloudTransmittance, shadowStrength);
+		// sunDir is unused: the map carries the sun direction it was rendered with.
+		return SampleCloudShadowMap(g_cloudShadowMap, g_textureSampler, worldPos);
 	}
 
 	void CalculateDiffuseAndSpecularLighting(
@@ -212,13 +166,12 @@
 		//return float4(pixelColour.aaa, 1.0f);
 
 		// sky
-		if(pixelColour.a == -1 || pixelPosWS.a > 0.0f)
+		if(pixelColour.a == -1 /* || pixelPosWS.a > 0.0f */)
 		{
 			//return float4(1, 0, 0, 1.0f);
 			return float4(pixelColour.rgb, 1.0f);
 		}
 		
-
 		float3 lightDir = -normalize(g_lightDirection.xyz);
 		float3 eyeVector = normalize(g_eyePos.xyz - pixelPosWS.xyz);
 
@@ -292,6 +245,32 @@
 			depthValue,
 			g_globalLight[0]);
 
+		// ---- GI ambient ownership (structural GI fix) -------------------------
+		// CalculatePBR just added the legacy flat ambient (albedo * ambientLight)
+		// and the IBL block below adds sky SH diffuse - historically the GI
+		// composite then stacked additively on top as a THIRD ambient fill,
+		// too small relative to the other two to read, and auto-exposure
+		// normalized away what remained. Instead: hand a fraction of the flat
+		// ambient budget to GI (subtract it here; GI's composite adds
+		// structured bounce back later in the frame), and darken what remains
+		// by the GI voxel occlusion so covered areas (interiors, underpasses,
+		// overhangs) stop receiving full sky/ambient fill. The darkening is
+		// what survives exposure and makes GI visibly shape the image.
+		float giVis = 1.0f;
+		float giOcc = 0.0f;
+		if (g_giComposeParams.z > 0.5f)
+		{
+			giOcc = saturate(g_giAoTex.Sample(g_pointSampler, screenPos).r);
+			giVis = saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
+		}
+		{
+			const float3 ambientFlat = pixelColour.rgb * g_atmosphere.ambientLight.rgb;
+			const float giHandoff = saturate(g_giComposeParams.x);
+			// Remaining flat ambient should be ambientFlat * (1-handoff) * giVis;
+			// CalculatePBR added the full term, so subtract the difference.
+			pbr.rgb -= ambientFlat * (1.0f - (1.0f - giHandoff) * giVis);
+		}
+
 		// Extended shading-model lobes (clearcoat / anisotropic / sheen). The
 		// features RT carries the model id + per-model parameters - see
 		// ApplyMaterialFeatures for the param layout. Standard PBR + SSS take the
@@ -299,6 +278,126 @@
 		// gbuffer for the perceptual roughness used by the aniso/sheen lobes; the
 		// cost is one extra sample on the same texture the PBR path already
 		// resolved, so it stays in cache.
+		// ---- Sky image-based lighting -------------------------------------------------
+		// The engine had no IBL at all: ambient was a flat albedo * ambientLight constant,
+		// diffuse-only, so nothing gave a surface an environment response. A wall facing a
+		// window stayed dark, and SSR then faithfully reflected that dark wall - which is
+		// why glossy floors indoors look black even though SSR is working correctly.
+		//
+		// This is the split-sum approximation with the sky-view LUT standing in for the
+		// environment: specular takes the LUT along the reflection vector weighted by the
+		// env-BRDF (EnvBRDFApprox for now; P1-B replaces it with a real DFG LUT), diffuse
+		// takes the LUT along the normal as an irradiance proxy. Reflection probes (P1-D)
+		// slot in here by replacing the LUT lookup with a local cubemap where one covers the
+		// pixel, falling back to this sky term outside probe influence.
+		//
+		// Caveat this does NOT solve: there is no occlusion on the environment term, so
+		// indoors it lights as though the sky were fully visible. AO damps it, but the real
+		// answer is probes. Hence the separate diffuse strength, defaulting to 0 - diffuse
+		// sky indoors floods a room, whereas the specular term is the part that actually
+		// restores the missing reflections.
+		{
+			const float4 matSample = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos);
+			const float metallic = matSample.r;
+			const float perceptualRoughness = clamp(matSample.g, MinRoughness, 1.0f);
+
+			const float3 N = normalize(pixelNormal.xyz);
+			const float3 V = normalize(g_eyePos.xyz - pixelPosWS.xyz);
+
+			const float3 diffuseColour = pixelColour.rgb * (1.0f - f0) * (1.0f - metallic);
+
+			// ---- Diffuse ---------------------------------------------------------
+			// Diffuse comes from SH irradiance (P1-C), not from the atlas's roughest
+			// row. A GGX roughness-1 prefilter is a wide specular lobe, not a cosine
+			// convolution - using it as diffuse gave a flat wash with no directional
+			// falloff. Order-2 SH reconstructs Lambertian irradiance to ~1% and costs
+			// 9 taps of a 1x9 texture.
+			//
+			// Diffuse stays in this pass unconditionally. SSR's diffuse channel is a
+			// screen-space DELTA over the voxel-GI baseline, not a competing estimate
+			// of environment irradiance, so there is nothing for the resolve to
+			// compose it against - only the specular term has two rival estimators.
+			const float3 skyDiff = ShIrradiance(g_iblSkySHTex, g_textureSampler, N);
+
+			// Horizon fade: the sky LUT carries no ground radiance, so a downward-facing
+			// direction would otherwise light undersides with horizon sky. The SH term
+			// already encodes the sky's own directional distribution, so it needs a far
+			// gentler fade than the specular lookup does.
+			const float diffHorizon = saturate(N.y * 0.35f + 0.65f);
+
+			float3 envDiffRadiance = skyDiff * diffHorizon * g_iblSkyDiffuse;
+
+			// GI sky occlusion: the sky SH has no idea the roof is solid - the
+			// voxel field does. Applied BEFORE the probe lerp so probe
+			// irradiance (which already encodes its own occlusion) is not
+			// double-darkened. This is the term that finally lets interiors
+			// and underpasses go dark instead of receiving full-sky fill.
+			envDiffRadiance *= giVis;
+
+			// A probe's SH is integrated from what that probe actually sees, so it
+			// already encodes its own occlusion - an indoor probe's irradiance knows
+			// the roof is solid. Sky SH indoors is what floods a room blue. Specular
+			// and diffuse take SEPARATE strengths (g_iblParams.z / .w): driving both
+			// from the probe strength washed interiors flat cream.
+			{
+				const float w1 = ProbeWeight(pixelPosWS.xyz, g_probeCenter,  g_probeExtents);
+				const float w2 = ProbeWeight(pixelPosWS.xyz, g_probeCenter2, g_probeExtents2);
+				const float wSum = w1 + w2;
+
+				if (wSum > 0.0f)
+				{
+					const float n1 = w1 / wSum;
+					const float n2 = w2 / wSum;
+					const float coverage = saturate(wSum);
+
+					float3 probeDiff = 0.0f.xxx;
+					if (w1 > 0.0f)
+						probeDiff += n1 * ShIrradiance(g_iblProbeSH, g_textureSampler, N);
+					if (w2 > 0.0f)
+						probeDiff += n2 * ShIrradiance(g_iblProbeSH2, g_textureSampler, N);
+
+					envDiffRadiance = lerp(envDiffRadiance, probeDiff * g_iblParams.w, coverage);
+				}
+			}
+
+			pbr.rgb += envDiffRadiance * diffuseColour;
+
+			// ---- Specular --------------------------------------------------------
+			// Owned by the SSR resolve when it is running (g_iblComposeInResolve).
+			// Adding it here as well is what made the two systems STACK: this pass
+			// runs first, the resolve blends additively onto beauty, so a pixel
+			// whose ray hit got environment + screen reflection double-counted while
+			// a pixel whose ray missed got environment here and nothing there. The
+			// resolve is the only place both estimates exist at once, which is the
+			// only place lerp(environment, screen, confidence) can be written.
+			//
+			// The flag is 0 - and this pass keeps the term - whenever no resolve
+			// will run: probe capture faces, secondary cameras, r_ssr 0, a scene
+			// with nothing reflective, or r_iblComposeSSR 0. See
+			// SceneRenderer::ShouldComposeEnvSpecularInResolve.
+			if (g_iblComposeInResolve < 0.5f)
+			{
+				float3 envSpecRadianceUnused;
+				float3 specularReflectanceUnused;
+				// GI specular occlusion: the env-spec term has no occlusion of
+				// its own, so indoors every matte surface reflected full sky -
+				// the blue wash in window rooms. Same voxel AO as the diffuse
+				// occlusion above, separate strength (g_giComposeParams.w).
+				const float giSpecVis = saturate(1.0f - giOcc * saturate(g_giComposeParams.w));
+				pbr.rgb += EvaluateEnvSpecular(
+					g_iblSkyEnvAtlas, g_iblProbeAtlas, g_iblProbeAtlas2, g_dfgLut,
+					g_textureSampler,
+					N, V, pixelPosWS.xyz,
+					pixelColour.rgb, metallic, perceptualRoughness,
+					g_iblParams,
+					float2(g_useDfgLut, g_useMultiScatter),
+					g_probeCenter, g_probeExtents, g_probeCenter2, g_probeExtents2,
+					envSpecRadianceUnused,
+					specularReflectanceUnused) * giSpecVis;
+			}
+		}
+		// -------------------------------------------------------------------------------
+
 		const float4 features = GBUFFER_FEATURES.Sample(g_pointSampler, screenPos);
 		const uint modelId = DecodeMaterialModelId(features.r);
 		if (modelId != MATERIAL_MODEL_STANDARD)
@@ -332,65 +431,14 @@
 			pbr.rgb *= flashTint * flashMul;
 		}
 
-		return pbr;
-
-	#if 0
-		float shinyPower = pixelSpecular.g;
-		float shininessStrength = pixelSpecular.r;
-		float emission = pixelPosWS.w;
-
-		if(emission == -1.0f)
-		{
-			return float4(pixelColour.rgb, 1.0f);
-		}
-		else if (emission > 0.0f)
-		{
-			pixelColour.rgb = pixelColour.rgb * emission;
-		}
-		//else
-		{
-			ShadowInput shadow;
-			shadow.pixelDepth = pixelNormal.w;
-			shadow.positionWS = pixelPosWS;
-			shadow.positionSS = input.position.xy;
-			shadow.samples = g_shadowConfig.samples;
-
-			float d = dot(normalize(pixelNormal.xyz), normalize(g_shadowCasterLightDir.xyz));
-			float bias = g_shadowConfig.biasMultiplier* (1.0 - d);// max(0.000002 * (1.0 - d), 0.0000002); // seems good
-			//float bias = 0.00011 * (1.0 - d);// max(0.000002 * (1.0 - d), 0.0000002);
-
-			float depthValue = CalculateShadows(shadow, g_cmpSampler, g_pointSampler, SHADOWMAPS, bias);
-
-			float3 ambient = pixelColour.rgb * g_atmosphere.ambientLight.rgb;
-			float3 diffuse = float3(0, 0, 0);// pixelColour.rgb* depthValue;// float3(0, 0, 0);
-			float3 specular = float3(0, 0, 0);
-
-			CalculateDiffuseAndSpecularLighting(
-				depthValue,
-				pixelNormal.xyz,
-				pixelSpecular.rrr,
-				pixelColour.rgb * getSunColour(),
-				lightDir,
-				eyeVector, 
-				shinyPower,
-				shininessStrength,		
-				g_globalLight[0],
-				diffuse,
-				specular);
-
-			float lightningFlash = saturate(g_weatherSurface.lightningFlash);
-			float3 lightningDir = normalize(g_weatherSurface.lightningBoltDirection.xyz + float3(1e-5f, 1e-5f, 1e-5f));
-			float lightningNdotL = saturate(dot(normalize(pixelNormal.xyz), lightningDir));
-			float lightningSpec = pow(saturate(dot(normalize(normalize(pixelNormal.xyz) + eyeVector), lightningDir)), lerp(44.0f, 14.0f, saturate(pixelSpecular.r)));
-			float3 lightningColour = float3(0.62f, 0.76f, 1.0f);
-			float3 lightningContribution = lightningColour * lightningFlash * (pixelColour.rgb * lightningNdotL * 0.42f + lightningSpec * 0.62f);
-
-			float3 finalColour = ambient + diffuse + specular + lightningContribution;
-
-			float4 result = float4(finalColour.rgb, 1.0f);
-			return /*saturate*/(result);
-		
-		}
-		#endif
+		// Emissive REPLACE model. pos.w carries the emissive MASK in [0,1]
+		// (0 = pure lit surface, 1 = pure emitter); the mesh already lerped the
+		// gbuffer diffuse from surface colour toward the emission by this same
+		// mask. Lerp the lit result toward that unlit diffuse, so an emitter
+		// shows its emission unlit, a normal surface is lit as usual, and a
+		// partially-emissive surface transitions smoothly. This replaces the
+		// old "diffuse * |emission|" that multiplied the whole surface by the
+		// emission magnitude and blew emissives out to saturated over-bright.
+		return lerp(pbr, float4(pixelColour.rgb, 1.0f), saturate(pixelPosWS.a));
 	}
 }

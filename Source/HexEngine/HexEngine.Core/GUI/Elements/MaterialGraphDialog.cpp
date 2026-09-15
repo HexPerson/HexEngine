@@ -218,8 +218,22 @@ namespace HexEngine
 											}),
 										_graph->connections.end());
 
+									// Keep graph.outputs in sync for BOTH output layouts:
+									// legacy output_* stub nodes map by node id, the unified
+									// PbrOutput node maps by pin id (pin id == semantic name).
+									// Missing the PbrOutput case left a stale binding behind,
+									// so the compiler kept using the old source after the
+									// artist visibly deleted the wire.
 									MaterialGraphOutputSemantic semantic;
-									if (TryGetOutputSemanticByNodeId(pinHit.nodeId, semantic))
+									bool affectsBinding = TryGetOutputSemanticByNodeId(pinHit.nodeId, semantic);
+									if (!affectsBinding)
+									{
+										const auto* toNode = _graph->FindNode(pinHit.nodeId);
+										affectsBinding = toNode != nullptr &&
+											toNode->nodeType == MaterialGraphNodeType::PbrOutput &&
+											MaterialGraph::ParseOutputSemantic(pinHit.pinId, semantic);
+									}
+									if (affectsBinding)
 									{
 										for (auto& output : _graph->outputs)
 										{
@@ -249,6 +263,10 @@ namespace HexEngine
 							}
 							return true;
 						}
+
+						// Any non-pin click drops an in-progress connection drag so the
+						// ghost wire doesn't stick to the cursor forever.
+						_pendingConnection = {};
 
 						const auto* node = FindNodeAt(data->MouseDown.xpos, data->MouseDown.ypos);
 						if (node != nullptr)
@@ -484,8 +502,21 @@ namespace HexEngine
 				connection.toPinId = inputPin.pinId;
 				_graph->connections.push_back(std::move(connection));
 
+				// Update graph.outputs for both output layouts (legacy output_*
+				// stubs by node id, unified PbrOutput by pin id). Without the
+				// PbrOutput case, a wire dragged into the PBR Output node changed
+				// `connections` but not the binding the compiler reads, so the new
+				// wiring did nothing until the dialog was reopened.
 				MaterialGraphOutputSemantic semantic;
-				if (TryGetOutputSemanticByNodeId(inputPin.nodeId, semantic))
+				bool affectsBinding = TryGetOutputSemanticByNodeId(inputPin.nodeId, semantic);
+				if (!affectsBinding)
+				{
+					const auto* toNode = _graph->FindNode(inputPin.nodeId);
+					affectsBinding = toNode != nullptr &&
+						toNode->nodeType == MaterialGraphNodeType::PbrOutput &&
+						MaterialGraph::ParseOutputSemantic(inputPin.pinId, semantic);
+				}
+				if (affectsBinding)
 				{
 					for (auto& output : _graph->outputs)
 					{
@@ -547,7 +578,16 @@ namespace HexEngine
 				const auto selected = _selectedNodeId;
 				if (selected.empty())
 					return;
-				if (IsMaterialOutputNodeId(selected))
+				// Refuse to delete terminal output nodes - both the legacy output_*
+				// stubs and the unified PbrOutput node. The context menu has no way
+				// to re-add a PbrOutput, so deleting it used to permanently orphan
+				// the graph until the dialog was closed and reopened.
+				const auto* selectedNode = _graph->FindNode(selected);
+				const bool isOutputNode = IsMaterialOutputNodeId(selected) ||
+					(selectedNode != nullptr &&
+						(selectedNode->nodeType == MaterialGraphNodeType::Output ||
+							selectedNode->nodeType == MaterialGraphNodeType::PbrOutput));
+				if (isOutputNode)
 				{
 					_owner->SetStatusText(L"Material output nodes cannot be deleted.", true);
 					return;
@@ -650,7 +690,15 @@ namespace HexEngine
 			void AddNode(MaterialGraphNodeType type, const Point& mousePos)
 			{
 				MaterialGraphNode node;
-				node.id = std::format("node_{}_{}", (int32_t)type, _nodeIdCounter++);
+				// _nodeIdCounter resets to 1 whenever the dialog reopens, but the
+				// loaded graph may already contain ids from earlier sessions. Keep
+				// bumping until the id is actually free - a duplicate id fails
+				// validation ("Duplicate node id") and corrupts hit-testing /
+				// deletion, which both match nodes by id.
+				do
+				{
+					node.id = std::format("node_{}_{}", (int32_t)type, _nodeIdCounter++);
+				} while (_graph->FindNode(node.id) != nullptr);
 				node.nodeType = type;
 				node.displayName = MaterialGraph::NodeTypeToString(type);
 				const auto abs = GetAbsolutePosition();
@@ -719,7 +767,43 @@ namespace HexEngine
 		if (_material != nullptr)
 			_material->IncrementEditorOpenCount();
 
-		EnsureGraphExists();
+		// INSTANCE MODE: a graph-instance material owns no graph of its own -
+		// it references a parent graph material and stores parameter
+		// overrides. Display the PARENT's graph via a local copy (never
+		// saved) and restrict persistent edits to the override set. This must
+		// be decided BEFORE EnsureGraphExists, which would otherwise see
+		// !_hasGraph and "promote" the instance to a flattened standard graph
+		// - corrupting it.
+		if (_material != nullptr && _material->_hasGraphInstance && !_material->_hasGraph)
+		{
+			auto parent = Material::Create(_material->_graphInstance.parentMaterialPath);
+			if (parent != nullptr && parent->_hasGraph)
+			{
+				_parentMaterial = parent;
+				_instanceViewGraph = parent->_graph;
+				_instanceMode = true;
+
+				// Show the instance's current override values on the parameter
+				// nodes so the canvas reflects THIS instance, not the parent
+				// defaults.
+				for (const auto& ov : _material->_graphInstance.overrides)
+				{
+					for (auto& node : _instanceViewGraph.nodes)
+					{
+						if (node.parameterName == ov.name)
+						{
+							node.scalarValue = ov.scalarValue;
+							node.vectorValue = ov.vectorValue;
+							if (!ov.texturePath.empty())
+								node.texturePath = ov.texturePath;
+						}
+					}
+				}
+			}
+		}
+
+		if (!_instanceMode)
+			EnsureGraphExists();
 
 		const int32_t topOffset = _embeddedMode ? 8 : 36;
 		const int32_t graphTop = _embeddedMode ? 34 : 62;
@@ -727,12 +811,19 @@ namespace HexEngine
 		_statusLine = new LineEdit(this, Point(10, topOffset), Point(size.x - 220, 20), L"Status");
 		_statusLine->SetDoesCallbackWaitForReturn(false);
 		_statusLine->SetValue(L"Ready");
-		_statusLine->DisableRecursive();
+		// Read-only, NOT DisableRecursive: Disable() means "don't render" in
+		// this toolkit (UIManager::RenderElement skips disabled elements), so
+		// the status line - the ONLY compile success/failure feedback - was
+		// never drawn at all. Compile failures looked like the button doing
+		// nothing. EnableInput(false) keeps it visible but non-editable
+		// (SetHasInputFocus refuses focus when input is disabled).
+		_statusLine->EnableInput(false);
 
 		new Button(this, Point(size.x - 200, topOffset - 2), Point(90, 24), L"Compile", [this](Button*) { return CompileOnly(); });
 		new Button(this, Point(size.x - 104, topOffset - 2), Point(90, 24), L"Apply", [this](Button*) { return SaveAndApply(); });
 
-		_canvas = new MaterialGraphCanvasImpl(this, Point(10, graphTop), Point((size.x * 70) / 100 - 20, size.y - graphTop - 10), this, &_material->_graph);
+		_canvas = new MaterialGraphCanvasImpl(this, Point(10, graphTop), Point((size.x * 70) / 100 - 20, size.y - graphTop - 10), this,
+			_instanceMode ? &_instanceViewGraph : &_material->_graph);
 
 		_properties = new ComponentWidget(this, Point((size.x * 70) / 100 + 10, graphTop), Point(size.x - ((size.x * 70) / 100) - 20, size.y - graphTop - 10), L"Node Properties");
 
@@ -747,11 +838,15 @@ namespace HexEngine
 
 		_selectedNodeLabel = new LineEdit(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 20), L"Selected Node");
 		_selectedNodeLabel->SetDoesCallbackWaitForReturn(false);
-		_selectedNodeLabel->DisableRecursive();
+		_selectedNodeLabel->EnableInput(false); // read-only but visible (Disable = hidden)
 
 		_parameterName = new LineEdit(_properties, _properties->GetNextPos(), Point(_properties->GetSize().x - 20, 20), L"Parameter Name");
 		_parameterName->SetOnInputFn([this](LineEdit*, const std::wstring& value)
 		{
+			// Parameter NAMES belong to the parent graph - renaming from an
+			// instance would silently orphan every sibling instance's override.
+			if (_instanceMode)
+				return;
 			if (auto* node = GetSelectedNode(); node != nullptr)
 			{
 				node->parameterName = ws2s(value);
@@ -766,6 +861,7 @@ namespace HexEngine
 			if (auto* node = GetSelectedNode(); node != nullptr)
 			{
 				node->scalarValue = value;
+				WriteInstanceOverrideFromNode(*node);
 				MarkDirty();
 			}
 		});
@@ -789,6 +885,7 @@ namespace HexEngine
 				if (auto* node = GetSelectedNode(); node != nullptr)
 				{
 					node->vectorValue = math::Vector4(_vectorValue[0], _vectorValue[1], _vectorValue[2], _vectorValue[3]);
+					WriteInstanceOverrideFromNode(*node);
 					MarkDirty();
 				}
 			});
@@ -806,6 +903,7 @@ namespace HexEngine
 				{
 					const fs::path path = !result.assetPath.empty() ? result.assetPath : result.absolutePath;
 					node->texturePath = path;
+					WriteInstanceOverrideFromNode(*node);
 					MarkDirty();
 				}
 			});
@@ -847,6 +945,25 @@ namespace HexEngine
 			}
 		});
 
+		_pbrReceivesSnowToggle = new Checkbox(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Receives Snow", &_pbrReceivesSnow);
+		_pbrReceivesSnowToggle->SetOnCheckFn([this](Checkbox*, bool v)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				n->pbrOutputProperties.receivesSnow = v ? 1 : 0; MarkDirty();
+			}
+			// Apply straight to the Material too - receivesSnow only reaches
+			// _receivesSnow via CompileToMaterial otherwise, which is SKIPPED
+			// for cached graph shaders, so the node said true while the
+			// material (and the .hmat, and the runtime shell gate) stayed
+			// false. Direct apply keeps all three in sync regardless of
+			// whether a recompile runs. (The node value still drives a fresh
+			// compile / new material seeded from this graph.)
+			if (_material)
+				_material->SetReceivesSnow(v);
+		});
+
 		_pbrRainDripDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
 			L"Rain Drip Intensity", &_pbrRainDripIntensity, 0.0f, 1.0f, 0.01f, 2);
 		_pbrRainDripDrag->SetOnDrag([this](float v, float, float)
@@ -856,6 +973,37 @@ namespace HexEngine
 				n->pbrOutputProperties.rainDripIntensity = v; MarkDirty();
 			}
 		});
+
+		// Wind sway (bend / flutter / height / mode). Same direct-apply rule as
+		// Receives Snow above: CompileToMaterial is skipped for cached graph
+		// shaders, so the drags write the Material's live properties too or the
+		// node would say "sway" while the uploaded cbuffer stayed zero.
+		auto applyWindSway = [this](int lane, float v)
+		{
+			if (auto* n = GetSelectedNode(); n != nullptr && n->nodeType == MaterialGraphNodeType::PbrOutput)
+			{
+				float* lanes = &n->pbrOutputProperties.windSwayParams.x;
+				lanes[lane] = v;
+				MarkDirty();
+			}
+			if (_material)
+			{
+				float* lanes = &_material->_properties.windSwayParams.x;
+				lanes[lane] = v;
+			}
+		};
+		_pbrWindSwayModeDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Wind Sway Mode (0/1/2)", &_pbrWindSwayMode, 0.0f, 2.0f, 1.0f, 0);
+		_pbrWindSwayModeDrag->SetOnDrag([applyWindSway](float v, float, float) { applyWindSway(3, v); });
+		_pbrWindSwayBendDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Wind Sway Bend", &_pbrWindSwayBend, 0.0f, 2.0f, 0.01f, 2);
+		_pbrWindSwayBendDrag->SetOnDrag([applyWindSway](float v, float, float) { applyWindSway(0, v); });
+		_pbrWindSwayFlutterDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Wind Sway Flutter", &_pbrWindSwayFlutter, 0.0f, 2.0f, 0.01f, 2);
+		_pbrWindSwayFlutterDrag->SetOnDrag([applyWindSway](float v, float, float) { applyWindSway(1, v); });
+		_pbrWindSwayHeightDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
+			L"Wind Sway Height (m)", &_pbrWindSwayHeight, 0.1f, 40.0f, 0.1f, 1);
+		_pbrWindSwayHeightDrag->SetOnDrag([applyWindSway](float v, float, float) { applyWindSway(2, v); });
 
 		_pbrCullDistanceDrag = new DragFloat(_properties, _properties->GetNextPos(), pbrRowSize,
 			L"Cull Distance", &_pbrCullDistance, 0.0f, 10000.0f, 1.0f, 1);
@@ -1017,7 +1165,9 @@ namespace HexEngine
 				Point(_properties->GetSize().x - 20, 20),
 				i == 0 ? L"Compile Messages" : L"");
 			_compileMessages[i]->SetDoesCallbackWaitForReturn(false);
-			_compileMessages[i]->DisableRecursive();
+			// Read-only but VISIBLE - DisableRecursive skipped rendering, so
+			// compile errors/warnings written here were never shown to anyone.
+			_compileMessages[i]->EnableInput(false);
 		}
 
 		RebuildPropertyPanel();
@@ -1065,13 +1215,21 @@ namespace HexEngine
 
 		if (!_material->_hasGraph)
 		{
+			// Graph-only authoring policy: legacy standard materials are
+			// promoted to graphs ON OPEN, seeded from their scalars + bound
+			// textures so they render identically - and SAVED immediately so
+			// the promotion sticks without requiring an explicit Apply.
+			// (Instances never reach here - the constructor routes them into
+			// instance mode before calling this.)
 			_material->_graph = MaterialGraph::CreateFromStandardMaterial(*_material);
 			_material->_hasGraph = true;
-			_isDirty = true;
+			_material->InvalidateGiGraphTintCache();
+			_material->Save();
 		}
 		else if (_material->_graph.nodes.empty())
 		{
 			_material->_graph = MaterialGraph::CreateFromStandardMaterial(*_material);
+			_material->InvalidateGiGraphTintCache();
 			_isDirty = true;
 		}
 
@@ -1188,10 +1346,74 @@ namespace HexEngine
 
 	MaterialGraphNode* MaterialGraphDialog::GetSelectedNode()
 	{
-		if (_material == nullptr || !_material->_hasGraph)
+		if (_material == nullptr)
+			return nullptr;
+
+		// Instance mode edits the local parent-graph copy (only parameter
+		// overrides persist - see WriteInstanceOverrideFromNode).
+		if (_instanceMode)
+			return _instanceViewGraph.FindNode(_selectedNodeId);
+
+		if (!_material->_hasGraph)
 			return nullptr;
 
 		return _material->_graph.FindNode(_selectedNodeId);
+	}
+
+	void MaterialGraphDialog::WriteInstanceOverrideFromNode(const MaterialGraphNode& node)
+	{
+		if (!_instanceMode || _material == nullptr)
+			return;
+
+		const bool isParameterNode =
+			node.nodeType == MaterialGraphNodeType::ScalarParameter ||
+			node.nodeType == MaterialGraphNodeType::VectorParameter ||
+			node.nodeType == MaterialGraphNodeType::TextureParameter;
+
+		// An instance can only persist edits as overrides of NAMED parameter
+		// nodes. Anything else (plain constants, unnamed parameters - which is
+		// everything in a graph promoted by the old converter) silently
+		// evaporated on save: the edit went into the throwaway parent-graph
+		// view copy and Apply wrote an empty override list. Say so loudly
+		// instead of letting the artist believe the edit stuck.
+		if (!isParameterNode || node.parameterName.empty())
+		{
+			SetStatusText(std::format(
+				L"'{}' is not a named parameter - this edit will NOT be saved with the instance. "
+				L"Name it as a parameter in the parent graph, or edit the parent material.",
+				s2ws(node.displayName.empty() ? node.id : node.displayName)),
+				true);
+			return;
+		}
+
+		auto& overrides = _material->_graphInstance.overrides;
+		auto it = std::find_if(overrides.begin(), overrides.end(),
+			[&node](const MaterialGraphParameterOverride& o) { return o.name == node.parameterName; });
+		if (it == overrides.end())
+		{
+			overrides.emplace_back();
+			it = std::prev(overrides.end());
+			it->name = node.parameterName;
+		}
+
+		// Same node-type -> value-type mapping as SyncParameterDefinition.
+		switch (node.nodeType)
+		{
+		case MaterialGraphNodeType::ScalarParameter:
+			it->valueType = MaterialGraphValueType::Scalar;
+			it->scalarValue = node.scalarValue;
+			break;
+		case MaterialGraphNodeType::VectorParameter:
+			it->valueType = MaterialGraphValueType::Vector4;
+			it->vectorValue = node.vectorValue;
+			break;
+		case MaterialGraphNodeType::TextureParameter:
+			it->valueType = MaterialGraphValueType::Texture2D;
+			it->texturePath = node.texturePath;
+			break;
+		default:
+			break;
+		}
 	}
 
 	void MaterialGraphDialog::OnNodeSelectionChanged(const std::string& nodeId)
@@ -1267,25 +1489,100 @@ namespace HexEngine
 			_pbrHasTransparency    = (p.hasTransparency    != 0);
 			_pbrAffectsGI          = (p.affectsGI          != 0);
 			_pbrEmissiveAffectsGI  = (p.emissiveAffectsGI  != 0);
+			_pbrReceivesSnow       = (p.receivesSnow       != 0);
 			_pbrRainDripIntensity  = p.rainDripIntensity;
 			_pbrCullDistance       = p.cullDistance;
 			_pbrModelParams[0]     = p.modelParams.x;
 			_pbrModelParams[1]     = p.modelParams.y;
 			_pbrModelParams[2]     = p.modelParams.z;
 			_pbrModelParams[3]     = p.modelParams.w;
+			_pbrWindSwayBend    = p.windSwayParams.x;
+			_pbrWindSwayFlutter = p.windSwayParams.y;
+			_pbrWindSwayHeight  = p.windSwayParams.z;
+			_pbrWindSwayMode    = p.windSwayParams.w;
 			if (_pbrRainDripDrag)    _pbrRainDripDrag->SetValue(std::format(L"{:.3f}", _pbrRainDripIntensity));
 			if (_pbrCullDistanceDrag)_pbrCullDistanceDrag->SetValue(std::format(L"{:.1f}", _pbrCullDistance));
 			for (int32_t i = 0; i < 4; ++i)
 				if (_pbrModelParamDrags[i]) _pbrModelParamDrags[i]->SetValue(std::format(L"{:.3f}", _pbrModelParams[i]));
+			if (_pbrWindSwayModeDrag)    _pbrWindSwayModeDrag->SetValue(std::format(L"{:.0f}", _pbrWindSwayMode));
+			if (_pbrWindSwayBendDrag)    _pbrWindSwayBendDrag->SetValue(std::format(L"{:.2f}", _pbrWindSwayBend));
+			if (_pbrWindSwayFlutterDrag) _pbrWindSwayFlutterDrag->SetValue(std::format(L"{:.2f}", _pbrWindSwayFlutter));
+			if (_pbrWindSwayHeightDrag)  _pbrWindSwayHeightDrag->SetValue(std::format(L"{:.1f}", _pbrWindSwayHeight));
+
+			// Dropdowns: push the node's STORED values into the displayed text.
+			// The write path (context-menu callbacks) was always wired, but the
+			// read path never was, so all five rendered blank regardless of
+			// what the node held - the "properties don't deserialize" report
+			// (the JSON round-trips fine; the panel just never showed it).
+			// Labels must match the ContextItem strings above.
+			if (_pbrShadingModelDrop)
+			{
+				static const wchar_t* kModelNames[] = {
+					L"Standard PBR", L"Subsurface (SSS)", L"Clearcoat",
+					L"Anisotropic", L"Sheen / Cloth" };
+				const int32_t m = std::clamp(p.materialModel, 0, 4);
+				_pbrShadingModelDrop->SetValue(kModelNames[m]);
+			}
+			if (_pbrDepthStateDrop)
+			{
+				switch (p.depthState)
+				{
+				case DepthBufferState::DepthNone:         _pbrDepthStateDrop->SetValue(L"None"); break;
+				case DepthBufferState::DepthRead:         _pbrDepthStateDrop->SetValue(L"Read"); break;
+				case DepthBufferState::DepthReverseZ:     _pbrDepthStateDrop->SetValue(L"Reverse-Z"); break;
+				case DepthBufferState::DepthReadReverseZ: _pbrDepthStateDrop->SetValue(L"Read Reverse-Z"); break;
+				case DepthBufferState::DepthDefault:
+				default:                                  _pbrDepthStateDrop->SetValue(L"Default"); break;
+				}
+			}
+			if (_pbrBlendStateDrop)
+			{
+				switch (p.blendState)
+				{
+				case BlendState::Additive:     _pbrBlendStateDrop->SetValue(L"Additive"); break;
+				case BlendState::Subtractive:  _pbrBlendStateDrop->SetValue(L"Subtractive"); break;
+				case BlendState::Transparency: _pbrBlendStateDrop->SetValue(L"Transparency"); break;
+				case BlendState::Opaque:
+				default:                       _pbrBlendStateDrop->SetValue(L"Opaque"); break;
+				}
+			}
+			if (_pbrCullModeDrop)
+			{
+				switch (p.cullMode)
+				{
+				case CullingMode::NoCulling:  _pbrCullModeDrop->SetValue(L"None"); break;
+				case CullingMode::FrontFace:  _pbrCullModeDrop->SetValue(L"Front Face"); break;
+				case CullingMode::BackFace:
+				default:                      _pbrCullModeDrop->SetValue(L"Back Face"); break;
+				}
+			}
+			if (_pbrFormatDrop)
+			{
+				switch (p.materialFormat)
+				{
+				case MaterialFormat::ORM:  _pbrFormatDrop->SetValue(L"ORM"); break;
+				case MaterialFormat::RMA:  _pbrFormatDrop->SetValue(L"RMA"); break;
+				case MaterialFormat::None:
+				default:                   _pbrFormatDrop->SetValue(L"None"); break;
+				}
+			}
 		}
-		const auto setPbrEnabled = [isPbrOutputNode](Element* e) {
+		// PBR-output widgets stay disabled in instance mode: those properties
+		// belong to the parent graph (editing them here would only churn the
+		// local view copy and never persist).
+		const bool pbrEditable = isPbrOutputNode && !_instanceMode;
+		const auto setPbrEnabled = [pbrEditable](Element* e) {
 			if (e == nullptr) return;
-			if (isPbrOutputNode) e->EnableRecursive(); else e->DisableRecursive();
+			if (pbrEditable) e->EnableRecursive(); else e->DisableRecursive();
 		};
 		setPbrEnabled(_pbrTransparencyToggle);
 		setPbrEnabled(_pbrAffectsGiToggle);
 		setPbrEnabled(_pbrEmissiveGiToggle);
 		setPbrEnabled(_pbrRainDripDrag);
+		setPbrEnabled(_pbrWindSwayModeDrag);
+		setPbrEnabled(_pbrWindSwayBendDrag);
+		setPbrEnabled(_pbrWindSwayFlutterDrag);
+		setPbrEnabled(_pbrWindSwayHeightDrag);
 		setPbrEnabled(_pbrCullDistanceDrag);
 		for (int32_t i = 0; i < 4; ++i)
 			setPbrEnabled(_pbrModelParamDrags[i]);
@@ -1388,10 +1685,44 @@ namespace HexEngine
 
 	bool MaterialGraphDialog::CompileOnly()
 	{
-		if (_material == nullptr || !_material->_hasGraph)
+		if (_material == nullptr)
+			return false;
+
+		// Instance mode: full recompile of the PARENT graph with this
+		// instance's overrides baked in, targeting the INSTANCE material (it
+		// gets its own generated shader). Matches what the loader's
+		// ApplyInstanceToMaterial now does on load - overrides are baked into
+		// the compile there too.
+		if (_instanceMode)
+		{
+			const auto compileResult = MaterialGraphCompiler::CompileToMaterial(
+				_instanceViewGraph, *_material, &_material->_graphInstance.overrides);
+			UpdateCompileMessages(compileResult);
+			if (!compileResult.success)
+			{
+				std::wstring message = L"Compile failed: ";
+				for (size_t i = 0; i < compileResult.errors.size(); ++i)
+				{
+					if (i > 0) message += L" | ";
+					message += s2ws(compileResult.errors[i]);
+				}
+				SetStatusText(message, true);
+				FocusFirstErrorNode(compileResult);
+				return false;
+			}
+			SetStatusText(L"Instance compile succeeded.", false);
+			return true;
+		}
+
+		if (!_material->_hasGraph)
 			return false;
 
 		SyncGraphParametersFromNodes();
+		// Re-derive graph.outputs from the PbrOutput node's current pin wiring so
+		// the compiler always sees what's on the canvas (connect/disconnect update
+		// the bindings too, but this is the authoritative sync before compile and
+		// before SaveAndApply serializes the outputs array).
+		_material->_graph.EnsureDefaultOutputBindings();
 		const auto compileResult = MaterialGraphCompiler::CompileToMaterial(_material->_graph, *_material, nullptr);
 		UpdateCompileMessages(compileResult);
 		if (!compileResult.success)
@@ -1423,10 +1754,21 @@ namespace HexEngine
 		if (!CompileOnly())
 			return false;
 
-		_material->_hasGraph = true;
+		// An instance must stay an instance on disk: only the override set is
+		// authored here; the graph belongs to the parent.
+		if (_instanceMode)
+		{
+			_material->_hasGraph = false;
+			_material->_hasGraphInstance = true;
+		}
+		else
+		{
+			_material->_hasGraph = true;
+		}
+		_material->InvalidateGiGraphTintCache();
 		_material->Save();
 		_isDirty = false;
-		SetStatusText(L"Saved and applied.", false);
+		SetStatusText(_instanceMode ? L"Instance saved and applied." : L"Saved and applied.", false);
 		return true;
 	}
 }

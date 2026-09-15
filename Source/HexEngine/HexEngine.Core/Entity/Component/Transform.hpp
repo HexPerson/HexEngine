@@ -15,6 +15,16 @@ namespace HexEngine
 	};
 
 	class Mesh;
+	class Camera;
+
+	// Which manipulator the scene view shows for the selected entity. Shared
+	// across all Transforms - the editor switches it via hotkey (W/E/R).
+	enum class EditorGizmoMode
+	{
+		Translate,
+		Rotate,
+		Scale
+	};
 
 	class HEX_API Transform : public BaseComponent
 	{
@@ -81,6 +91,17 @@ namespace HexEngine
 		using EditorTranslateCommitCallback = std::function<void(Entity* entity, const math::Vector3& before, const math::Vector3& after)>;
 		static void SetEditorTranslateCommitCallback(EditorTranslateCommitCallback callback);
 
+		using EditorRotateCommitCallback = std::function<void(Entity* entity, const math::Quaternion& before, const math::Quaternion& after)>;
+		static void SetEditorRotateCommitCallback(EditorRotateCommitCallback callback);
+
+		using EditorScaleCommitCallback = std::function<void(Entity* entity, const math::Vector3& before, const math::Vector3& after)>;
+		static void SetEditorScaleCommitCallback(EditorScaleCommitCallback callback);
+
+		// Switching modes cancels any in-flight gizmo drag (the entity snaps back
+		// to its pre-drag value; nothing is recorded for undo).
+		static void SetEditorGizmoMode(EditorGizmoMode mode);
+		static EditorGizmoMode GetEditorGizmoMode();
+
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
@@ -89,6 +110,10 @@ namespace HexEngine
 
 	private:
 		void UpdateRotation();
+
+		void RenderTranslateGizmo(Camera* camera, const math::Vector3& origin, const math::Vector3& cameraPosition, float gizmoSize, bool& isHovering);
+		void RenderRotateGizmo(Camera* camera, const math::Vector3& origin, const math::Vector3& cameraPosition, float gizmoSize, bool& isHovering);
+		void RenderScaleGizmo(Camera* camera, const math::Vector3& origin, const math::Vector3& cameraPosition, float gizmoSize, bool& isHovering);
 
 	private:
 		struct State
@@ -111,5 +136,7 @@ namespace HexEngine
 		std::shared_ptr<Mesh> _arrow;
 
 		static EditorTranslateCommitCallback _editorTranslateCommitCallback;
+		static EditorRotateCommitCallback _editorRotateCommitCallback;
+		static EditorScaleCommitCallback _editorScaleCommitCallback;
 	};
 }

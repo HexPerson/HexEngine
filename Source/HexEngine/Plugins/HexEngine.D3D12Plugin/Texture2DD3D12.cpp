@@ -86,6 +86,91 @@ void Texture2DD3D12::CopyTo(ITexture2D* other)
 	device->RestoreBoundRoleIfNeeded(dst);
 }
 
+void Texture2DD3D12::CopyTo(ITexture2D* other, const RECT& srcRect, const RECT& dstRect)
+{
+	auto* device = static_cast<GraphicsDeviceD3D12*>(HexEngine::g_pEnv->_graphicsDevice);
+	if (device == nullptr || other == nullptr) return;
+	auto* dst = static_cast<Texture2DD3D12*>(other);
+	auto* cmd = device->GetActiveCommandList();
+	if (cmd == nullptr || _resource == nullptr || dst->_resource == nullptr) return;
+	device->TransitionResource(this, D3D12_RESOURCE_STATE_COPY_SOURCE);
+	device->TransitionResource(dst,  D3D12_RESOURCE_STATE_COPY_DEST);
+
+	// Same semantics as the D3D11 CopySubresourceRegion path: dstRect only
+	// supplies the destination offset, no stretching.
+	D3D12_TEXTURE_COPY_LOCATION srcLoc = {};
+	srcLoc.pResource        = _resource.Get();
+	srcLoc.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+	srcLoc.SubresourceIndex = 0;
+	D3D12_TEXTURE_COPY_LOCATION dstLoc = srcLoc;
+	dstLoc.pResource        = dst->_resource.Get();
+
+	D3D12_BOX srcBox = {};
+	srcBox.left   = (UINT)srcRect.left;
+	srcBox.top    = (UINT)srcRect.top;
+	srcBox.right  = (UINT)srcRect.right;
+	srcBox.bottom = (UINT)srcRect.bottom;
+	srcBox.front  = 0;
+	srcBox.back   = 1;
+	cmd->CopyTextureRegion(&dstLoc, (UINT)dstRect.left, (UINT)dstRect.top, 0, &srcLoc, &srcBox);
+
+	device->RestoreBoundRoleIfNeeded(this);
+	device->RestoreBoundRoleIfNeeded(dst);
+}
+
+namespace
+{
+	// Mirrors the D3D11 BlendTo_* flow: bind `other` as the RT and composite
+	// `src` over it with a fullscreen quad under the requested blend state.
+	// Blend selection goes through the neutral SetBlendState (baked into the
+	// PSO key on D3D12) instead of D3D11's direct OMSetBlendState calls.
+	// Like D3D11, `other` is left bound as the render target on return.
+	void BlendViaFullscreenQuad(
+		Texture2DD3D12* src, HexEngine::ITexture2D* other, HexEngine::IShader* optionalShader,
+		HexEngine::BlendState blend, bool doubleQuad)
+	{
+		auto* device = HexEngine::g_pEnv->_graphicsDevice;
+		if (device == nullptr || other == nullptr) return;
+		HexEngine::GuiRenderer* renderer = HexEngine::g_pEnv->GetUIManager().GetRenderer();
+		if (renderer == nullptr) return;
+
+		device->SetRenderTarget(other);
+		renderer->StartFrame();
+		device->SetBlendState(blend);
+		if (doubleQuad)
+			renderer->DoubleScreenTexturedQuad(src, optionalShader);
+		else
+			renderer->FullScreenTexturedQuad(src, optionalShader);
+		device->SetBlendState(HexEngine::BlendState::Opaque);
+	}
+}
+
+void Texture2DD3D12::BlendTo_Additive(ITexture2D* other, HexEngine::IShader* optionalShader)
+{
+	BlendViaFullscreenQuad(this, other, optionalShader, HexEngine::BlendState::Additive, false);
+}
+
+void Texture2DD3D12::BlendTo_Additive_Double(ITexture2D* other, HexEngine::IShader* optionalShader)
+{
+	BlendViaFullscreenQuad(this, other, optionalShader, HexEngine::BlendState::Additive, true);
+}
+
+void Texture2DD3D12::BlendTo_Alpha(ITexture2D* other, HexEngine::IShader* optionalShader)
+{
+	// D3D11 uses premultiplied AlphaBlend (ONE / INV_SRC_ALPHA) here; the
+	// neutral enum has no premultiplied preset, so Transparency
+	// (SRC_ALPHA / INV_SRC_ALPHA) is the closest match. No engine path calls
+	// this today - revisit if a premultiplied caller appears.
+	BlendViaFullscreenQuad(this, other, optionalShader, HexEngine::BlendState::Transparency, false);
+}
+
+void Texture2DD3D12::BlendTo_NonPremultiplied(ITexture2D* other, HexEngine::IShader* optionalShader)
+{
+	// Neutral Transparency == NonPremultiplied on both backends (the D3D11
+	// device maps BlendState::Transparency to _states->NonPremultiplied()).
+	BlendViaFullscreenQuad(this, other, optionalShader, HexEngine::BlendState::Transparency, false);
+}
+
 void Texture2DD3D12::ClearRenderTargetView(const math::Color& colour)
 {
 	auto* device = static_cast<GraphicsDeviceD3D12*>(HexEngine::g_pEnv->_graphicsDevice);

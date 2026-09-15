@@ -3,6 +3,7 @@
 #include "ClassRegistry.hpp"
 
 #include "../Entity/Component/PointLight.hpp"
+#include "../Entity/Component/ReflectionProbeComponent.hpp"
 #include "../Entity/Component/RTSCameraController.hpp"
 #include "../Entity/Component/SphereCollider.hpp"
 #include "../Entity/Component/TimedLifetimeComponent.hpp"
@@ -21,8 +22,11 @@
 #include "../Entity/Component/DayNightCycleComponent.hpp"
 #include "../Entity/Component/ParticleSystemComponent.hpp"
 #include "../Entity/Component/DecalComponent.hpp"
+#include "../Entity/Component/SnowFootprintsComponent.hpp"
 #include "../Entity/Component/PlayerStartComponent.hpp"
 #include "../Entity/Component/DoorComponent.hpp"
+#include "../Entity/Component/SoundEffectComponent.hpp"
+#include "../Entity/Component/DrivableComponent.hpp"
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "../HexEngine.hpp"
@@ -73,10 +77,14 @@ namespace HexEngine
 		REG_CLASS(DayNightCycleComponent);
 		REG_CLASS(ParticleSystemComponent);
 		REG_CLASS(DecalComponent);
+		REG_CLASS(SnowFootprintsComponent);
 		REG_CLASS(PlayerStartComponent);
+		REG_CLASS(DrivableComponent);
 		REG_CLASS(DoorComponent);
 		REG_CLASS(NavMeshBlockingVolume);
 		REG_CLASS(NavMeshLinkComponent);
+		REG_CLASS(ReflectionProbeComponent);
+		REG_CLASS(SoundEffectComponent);
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

@@ -3,6 +3,7 @@
 #include "../EditorUI.hpp"
 #include <HexEngine.Core/FileSystem/PrefabLoader.hpp>
 #include <HexEngine.Core/Graphics/IShader.hpp>
+#include <HexEngine.Core/Entity/Component/InteractionComponent.hpp>
 #include <algorithm>
 #include <unordered_set>
 
@@ -238,6 +239,38 @@ namespace HexEditor
 			});
 	}
 
+	void SceneView::SetMaterialDragHighlight(HexEngine::Entity* entity)
+	{
+		if (entity == _materialDragHighlightEntity)
+			return;
+
+		// Clear the previous highlight, removing the InteractionComponent only
+		// if we added it - entities that already had one keep theirs.
+		if (_materialDragHighlightEntity != nullptr)
+		{
+			HexEngine::InteractionComponent::SetEditorFocusOverride(nullptr);
+			if (_materialDragHighlightOwnsComponent)
+			{
+				if (auto* ic = _materialDragHighlightEntity->GetComponentDerived<HexEngine::InteractionComponent>(); ic != nullptr)
+					_materialDragHighlightEntity->RemoveComponent(ic);
+			}
+			_materialDragHighlightEntity = nullptr;
+			_materialDragHighlightOwnsComponent = false;
+		}
+
+		if (entity == nullptr)
+			return;
+
+		auto* ic = entity->GetComponentDerived<HexEngine::InteractionComponent>();
+		if (ic == nullptr)
+		{
+			ic = entity->AddComponent<HexEngine::InteractionComponent>();
+			_materialDragHighlightOwnsComponent = true;
+		}
+		_materialDragHighlightEntity = entity;
+		HexEngine::InteractionComponent::SetEditorFocusOverride(ic);
+	}
+
 	bool SceneView::OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data)
 	{
 		if (event == HexEngine::InputEvent::MouseDown && IsMouseOverSceneViewport())
@@ -259,6 +292,10 @@ namespace HexEditor
 
 			if (data->MouseUp.button == VK_LBUTTON)
 			{
+				// Any pending material drag-hover highlight ends with the drag,
+				// whether or not the drop lands on a mesh.
+				SetMaterialDragHighlight(nullptr);
+
 				if (_dragAndDropEntity != nullptr)
 				{
 					if (_dragAndDropPrefabRoots.empty())
@@ -471,6 +508,21 @@ namespace HexEditor
 						}
 					}
 				}
+				else if (draggingAsset->path.extension() == ".hmat")
+				{
+					// Outline-glow the static mesh under the cursor so it's obvious
+					// which mesh will receive the material on drop.
+					auto hit = g_pUIManager->RayCastWorld();
+					HexEngine::Entity* target = nullptr;
+					if (hit.entity != nullptr && hit.entity->GetComponent<HexEngine::StaticMeshComponent>() != nullptr)
+						target = hit.entity;
+					SetMaterialDragHighlight(target);
+				}
+			}
+			else if (_materialDragHighlightEntity != nullptr)
+			{
+				// Drag ended/cancelled without a drop in the viewport.
+				SetMaterialDragHighlight(nullptr);
 			}
 		}
 

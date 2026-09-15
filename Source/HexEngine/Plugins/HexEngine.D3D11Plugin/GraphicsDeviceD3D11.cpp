@@ -4,6 +4,9 @@
 #include "FormatsD3D11.hpp"
 #include "Texture3D.hpp"
 #include "Shader.hpp"
+// After the project headers: dxgidebug.h pulls in windows.h, and placed first
+// its min/max macros break std::max below.
+#include <dxgidebug.h>
 #include <HexEngine.Core/HexEngine.hpp>
 #include <HexEngine.Core/Entity/Component/Transform.hpp>
 #include <HexEngine.Core/Entity/Component/DirectionalLight.hpp>
@@ -143,7 +146,19 @@ bool GraphicsDeviceD3D11::Create()
 	UINT createDeviceFlags = 0;
 
 #ifdef _DEBUG
-	createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+	// OPT-IN, not automatic. For months this flag was a silent no-op because
+	// the machine lacked the Windows "Graphics Tools" optional feature - the
+	// day that feature was installed (for a DXGI diagnosis), every Debug
+	// session silently became a fully-validated run: <20 fps across every
+	// scene with CPU and GPU both near idle (per-call validation overhead is
+	// wait-shaped, it doesn't peg anything), plus break-on-severity turning
+	// routine validation warnings into unattended process kills. Set
+	// HEXENGINE_D3D_DEBUG=1 to arm the layer when actually chasing a D3D bug.
+	{
+		char dbgEnv[8] = {};
+		if (GetEnvironmentVariableA("HEXENGINE_D3D_DEBUG", dbgEnv, sizeof(dbgEnv)) > 0 && dbgEnv[0] == '1')
+			createDeviceFlags |= D3D11_CREATE_DEVICE_DEBUG;
+	}
 #endif
 	D3D_FEATURE_LEVEL featureLevels[] =
 	{
@@ -205,9 +220,15 @@ bool GraphicsDeviceD3D11::Create()
 		ID3D11InfoQueue* d3dInfoQueue = nullptr;
 		if (SUCCEEDED(d3dDebug->QueryInterface(__uuidof(ID3D11InfoQueue), (void**)&d3dInfoQueue)))
 		{
+			// CORRUPTION only. Break-on-WARNING killed the process on routine
+			// validation chatter (e.g. SSR's intentionally-unbound voxel SRVs
+			// when GI is off) the moment the debug layer became real - outside
+			// a debugger, the break is an unhandled RaiseException and the app
+			// just dies (crash dumps 30/07: 00:22, 11:18, 11:44). Errors and
+			// warnings still land in the info queue for the failure-path drain.
 			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_CORRUPTION, true);
-			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, true);
-			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_WARNING, true);
+			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_ERROR, false);
+			d3dInfoQueue->SetBreakOnSeverity(D3D11_MESSAGE_SEVERITY_WARNING, false);
 
 
 			D3D11_MESSAGE_ID hide[] =
@@ -345,30 +366,19 @@ void GraphicsDeviceD3D11::Destroy()
 		SAFE_DELETE(_engineConstantBuffers[i]);
 	}
 
-	//SAFE_RELEASE(_rasterState);
-	//SAFE_RELEASE(_rasterStateCullFront);
-	//SAFE_RELEASE(_rasterStateCullNone);
 	SAFE_RELEASE(_subtractivetBlendState);
 	SAFE_RELEASE(_additivePreserveAlphaBlendState);
 	SAFE_RELEASE(_transparencyPreserveAlphaBlendState);
 	SAFE_RELEASE(_multiplicativeBlendState);
-	//SAFE_RELEASE(_depthStencilView);
-
-	/*for (int i = 0; i < _countof(_shadowMap); ++i)
-	{
-		SAFE_DELETE(_shadowMap[i]);
-	}*/
-
-	//_gbuffer.Destroy();
-	//_renderTexture->Destroy();
-	//SAFE_DELETE(_composedTexture);
-
-	//SAFE_RELEASE(_texSamplerClamp);
-	//SAFE_RELEASE(_texSamplerWrap);
+	SAFE_RELEASE(_velocityMrtSubtractive);
+	SAFE_RELEASE(_velocityMrtAdditive);
+	SAFE_RELEASE(_velocityMrtPremultiplied);
+	SAFE_RELEASE(_velocityMrtTransparencyPreserve);
+	SAFE_RELEASE(_velocityMrtMultiplicative);
+	SAFE_RELEASE(_velocityMrtTransparency);
+	SAFE_DELETE_ARRAY(_emptyShaderResources);
 	SAFE_RELEASE(_texSamplerComparison);
-
 	SAFE_DELETE(_textureLoader);
-
 	SAFE_RELEASE(_deviceContext);
 
 	for (auto& device : _deviceData)
@@ -525,6 +535,26 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 	_bbufferWidth = width;
 	_bbufferHeight = height;
 
+	// Same-size resize: skip entirely. A ResizeBuffers to the swapchain's
+	// current dimensions is semantically a no-op but still requires ZERO
+	// outstanding backbuffer references - and during startup Streamline's
+	// interposer still holds its init-time refs, so the app's initial
+	// WM_SIZE (fired at the size the swapchain was created at) raced SL's
+	// first release and died with DXGI_ERROR_INVALID_CALL. Intermittently:
+	// under a debugger startup is slow enough that the first Present wins
+	// the race, which is why the crash only reproduced on cold launches.
+	{
+		DXGI_SWAP_CHAIN_DESC currentDesc = {};
+		if (device.backbuffer != nullptr &&
+			SUCCEEDED(device.swapchain->GetDesc(&currentDesc)) &&
+			currentDesc.BufferDesc.Width == (UINT)width &&
+			currentDesc.BufferDesc.Height == (UINT)height)
+		{
+			LOG_DEBUG("Resize to %dx%d skipped - swapchain already that size", width, height);
+			return;
+		}
+	}
+
 	// IDXGISwapChain::ResizeBuffers fails with DXGI_ERROR_INVALID_CALL
 	// (0x887A0001) if anything still holds an outstanding reference to the
 	// existing backbuffer - including the device context's bound RTV/SRV/
@@ -552,7 +582,116 @@ void GraphicsDeviceD3D11::Resize(HexEngine::Window* window, uint32_t width, uint
 	device.swapchainDesc.BufferDesc.Width = width;
 	device.swapchainDesc.BufferDesc.Height = height;
 
-	CHECK_HR(device.swapchain->ResizeBuffers(device.swapchainDesc.BufferCount, width, height, device.swapchainDesc.BufferDesc.Format, device.swapchainDesc.Flags));
+	// Resize with the swapchain's LIVE desc, not the cached creation request.
+	//
+	// The cache (memcpy'd from `sd` at creation) records what the engine ASKED
+	// for. With Streamline loaded, the swapchain the engine talks to is SL's
+	// interposer proxy, and SL is free to create the real swapchain with an
+	// upgraded desc - flip-model swap effect, different buffer count, extra
+	// flags for DLSS frame generation. ResizeBuffers validates Flags/BufferCount
+	// against what the swapchain was ACTUALLY created with, and a mismatch is an
+	// immediate DXGI_ERROR_INVALID_CALL before reference counting even enters
+	// into it - which is how the Launcher/Studio app crashed deterministically
+	// ~5s into startup (its first window resize) with Streamline's proxy in the
+	// failure trace, while the editor - which never resizes - ran fine all day.
+	// GetDesc through the proxy returns the truth; use it and keep the cache
+	// honest for the RTV/SRV dimension checks below.
+	DXGI_SWAP_CHAIN_DESC liveDesc = {};
+	if (SUCCEEDED(device.swapchain->GetDesc(&liveDesc)))
+	{
+		device.swapchainDesc.BufferCount = liveDesc.BufferCount;
+		device.swapchainDesc.BufferDesc.Format = liveDesc.BufferDesc.Format;
+		device.swapchainDesc.Flags = liveDesc.Flags;
+		device.swapchainDesc.SwapEffect = liveDesc.SwapEffect;
+		device.swapchainDesc.SampleDesc = liveDesc.SampleDesc;
+	}
+
+	const HRESULT resizeHr = device.swapchain->ResizeBuffers(device.swapchainDesc.BufferCount, width, height, device.swapchainDesc.BufferDesc.Format, device.swapchainDesc.Flags);
+	if (FAILED(resizeHr))
+	{
+		// DXGI_ERROR_INVALID_CALL here means something STILL holds a backbuffer
+		// reference despite the ClearState/Flush/wrapper-release above - i.e. a
+		// holder outside the context's bound state: a second wrapper, a plugin
+		// caching a native pointer, an in-flight capture. The debug layer can
+		// name it: dump every live object with its refcount to the debugger
+		// output before dying, so the crash carries its own diagnosis instead of
+		// just an HRESULT. (D3D11_CREATE_DEVICE_DEBUG is set in _DEBUG builds;
+		// on release the QI simply fails and this is a no-op.)
+		LOG_CRIT("ResizeBuffers(%ux%u) failed with 0x%08X - dumping live D3D objects (see debugger output; look for ID3D11Texture2D with Refcount > 0 outside the device's internal objects)",
+			width, height, (uint32_t)resizeHr);
+		// Process-wide DXGI debug interface, independent of how the device
+		// was created. This matters because with Streamline's interposer in
+		// the chain the NATIVE device appears to lack the debug layer (SL's
+		// own log suggests enabling it even in _DEBUG builds), so the
+		// device-level queue below stays empty - measured: a field crash
+		// with the drain in place produced zero stored messages. dxgidebug
+		// sees live DXGI/D3D objects regardless.
+		typedef HRESULT (WINAPI* PFN_GetDebugInterface)(REFIID, void**);
+		static const GUID kDxgiDebugAll =
+			{ 0xe48ae283, 0xda80, 0x490b, { 0x87, 0xe6, 0x43, 0xe9, 0xa9, 0xcf, 0xda, 0x08 } };
+		if (HMODULE dxgidebug = LoadLibraryA("dxgidebug.dll"))
+		{
+			auto getDebug = reinterpret_cast<PFN_GetDebugInterface>(
+				GetProcAddress(dxgidebug, "DXGIGetDebugInterface"));
+			IDXGIDebug* dxgiDbg = nullptr;
+			if (getDebug != nullptr && SUCCEEDED(getDebug(__uuidof(IDXGIDebug), reinterpret_cast<void**>(&dxgiDbg))))
+			{
+				dxgiDbg->ReportLiveObjects(kDxgiDebugAll, DXGI_DEBUG_RLO_ALL);
+				dxgiDbg->Release();
+			}
+			IDXGIInfoQueue* dxgiQueue = nullptr;
+			if (getDebug != nullptr && SUCCEEDED(getDebug(__uuidof(IDXGIInfoQueue), reinterpret_cast<void**>(&dxgiQueue))))
+			{
+				const UINT64 n = dxgiQueue->GetNumStoredMessages(kDxgiDebugAll);
+				LOG_CRIT("DXGI debug: %llu stored messages follow", (unsigned long long)n);
+				for (UINT64 i = 0; i < n; ++i)
+				{
+				SIZE_T length = 0;
+				if (FAILED(dxgiQueue->GetMessage(kDxgiDebugAll, i, nullptr, &length)) || length == 0)
+					continue;
+				std::vector<uint8_t> storage(length);
+				DXGI_INFO_QUEUE_MESSAGE* message = reinterpret_cast<DXGI_INFO_QUEUE_MESSAGE*>(storage.data());
+				if (SUCCEEDED(dxgiQueue->GetMessage(kDxgiDebugAll, i, message, &length)))
+					LOG_CRIT("DXGI live: %.*s", (int)message->DescriptionByteLength, message->pDescription);
+				}
+				dxgiQueue->Release();
+			}
+		}
+
+
+		ID3D11Debug* d3dDebug = nullptr;
+		if (_device != nullptr && SUCCEEDED(_device->QueryInterface(__uuidof(ID3D11Debug), reinterpret_cast<void**>(&d3dDebug))))
+		{
+			d3dDebug->ReportLiveDeviceObjects(D3D11_RLDO_DETAIL | D3D11_RLDO_IGNORE_INTERNAL);
+			d3dDebug->Release();
+
+			// ReportLiveDeviceObjects writes to the DEBUGGER output, which is
+			// lost on any launch outside one - exactly how the crash was hit in
+			// the field. The same report also lands in the device's info queue,
+			// so drain it into the engine log: the culprit gets named in
+			// LogFile_*.txt on every run. (First occurrence showed the failure
+			// surfacing through Streamline's swapchain proxy, whose backbuffer
+			// references ClearState cannot release - this dump is what will say
+			// which object.)
+			ID3D11InfoQueue* infoQueue = nullptr;
+			if (SUCCEEDED(_device->QueryInterface(__uuidof(ID3D11InfoQueue), reinterpret_cast<void**>(&infoQueue))))
+			{
+				const UINT64 messageCount = infoQueue->GetNumStoredMessages();
+				for (UINT64 i = 0; i < messageCount; ++i)
+				{
+					SIZE_T length = 0;
+					if (FAILED(infoQueue->GetMessage(i, nullptr, &length)) || length == 0)
+						continue;
+					std::vector<uint8_t> storage(length);
+					D3D11_MESSAGE* message = reinterpret_cast<D3D11_MESSAGE*>(storage.data());
+					if (SUCCEEDED(infoQueue->GetMessage(i, message, &length)))
+						LOG_CRIT("D3D11 live object: %.*s", (int)message->DescriptionByteLength, message->pDescription);
+				}
+				infoQueue->Release();
+			}
+		}
+	}
+	CHECK_HR(resizeHr);
 	ConfigureSwapChainColorSpace(device.swapchain, device.hdrOutputActive);
 
 	ID3D11Texture2D* pBackBuffer = nullptr;
@@ -659,6 +798,18 @@ bool GraphicsDeviceD3D11::CreateInternal()
 	additivePreserveAlphaDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	_device->CreateBlendState(&additivePreserveAlphaDesc, &_additivePreserveAlphaBlendState);
 
+	// src + dst * (1 - src.a). See BlendState::PremultipliedAlpha.
+	CD3D11_BLEND_DESC premultipliedAlphaDesc(def);
+	premultipliedAlphaDesc.RenderTarget[0].BlendEnable = true;
+	premultipliedAlphaDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+	premultipliedAlphaDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+	premultipliedAlphaDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+	// Keep destination alpha intact - alpha here is a blend weight, not coverage.
+	premultipliedAlphaDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ZERO;
+	premultipliedAlphaDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
+	premultipliedAlphaDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+	_device->CreateBlendState(&premultipliedAlphaDesc, &_premultipliedAlphaBlendState);
+
 	CD3D11_BLEND_DESC transparencyPreserveAlphaDesc(def);
 	transparencyPreserveAlphaDesc.RenderTarget[0].BlendEnable = true;
 	transparencyPreserveAlphaDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
@@ -683,6 +834,48 @@ bool GraphicsDeviceD3D11::CreateInternal()
 	multiplicativeDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ONE;
 	multiplicativeDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 	_device->CreateBlendState(&multiplicativeDesc, &_multiplicativeBlendState);
+
+	// P4.4 velocity-MRT variants: identical RT0 colour blend, but with
+	// IndependentBlendEnable so every OTHER render target falls back to its
+	// CD3D11_DEFAULT per-RT desc (blend DISABLED, full write mask). During
+	// the transparent pass the gbuffer velocity RT (R32G32_FLOAT) is bound at
+	// slot 4: alpha-blending a velocity is meaningless and additive/
+	// multiplicative blends would corrupt the background velocity, so slot 4
+	// must OVERWRITE while slot 0 keeps the material's blend.
+	{
+		CD3D11_BLEND_DESC d = transparentDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtSubtractive);
+
+		d = additivePreserveAlphaDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtAdditive);
+
+		d = premultipliedAlphaDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtPremultiplied);
+
+		d = transparencyPreserveAlphaDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtTransparencyPreserve);
+
+		d = multiplicativeDesc;
+		d.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&d, &_velocityMrtMultiplicative);
+
+		// BlendState::Transparency normally maps to DXTK NonPremultiplied -
+		// rebuild that desc explicitly since DXTK doesn't expose it.
+		CD3D11_BLEND_DESC np(def);
+		np.RenderTarget[0].BlendEnable = true;
+		np.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+		np.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+		np.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+		np.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_SRC_ALPHA;
+		np.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+		np.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+		np.IndependentBlendEnable = TRUE;
+		_device->CreateBlendState(&np, &_velocityMrtTransparency);
+	}
 
 	D3D11_SAMPLER_DESC sampDesc;
 	ZeroMemory(&sampDesc, sizeof(sampDesc));
@@ -1453,6 +1646,32 @@ ShaderStageImpl<ID3D11PixelShader>* GraphicsDeviceD3D11::CreatePixelShader(std::
 	return shader;
 }
 
+ShaderStageImpl<ID3D11HullShader>* GraphicsDeviceD3D11::CreateHullShader(std::vector<uint8_t>& shaderCode)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	ID3D11HullShader* d3dShader = nullptr;
+	CHECK_HR(_device->CreateHullShader(shaderCode.data(), shaderCode.size(), nullptr, &d3dShader));
+
+	auto* shader = new ShaderStageImpl<ID3D11HullShader>;
+	shader->_shader = d3dShader;
+	shader->_shaderCode = shaderCode;
+	return shader;
+}
+
+ShaderStageImpl<ID3D11DomainShader>* GraphicsDeviceD3D11::CreateDomainShader(std::vector<uint8_t>& shaderCode)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	ID3D11DomainShader* d3dShader = nullptr;
+	CHECK_HR(_device->CreateDomainShader(shaderCode.data(), shaderCode.size(), nullptr, &d3dShader));
+
+	auto* shader = new ShaderStageImpl<ID3D11DomainShader>;
+	shader->_shader = d3dShader;
+	shader->_shaderCode = shaderCode;
+	return shader;
+}
+
 ShaderStageImpl<ID3D11ComputeShader>* GraphicsDeviceD3D11::CreateComputeShader(std::vector<uint8_t>& shaderCode)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
@@ -1783,6 +2002,28 @@ void GraphicsDeviceD3D11::SetGeometryShader(HexEngine::IShaderStage* shader)
 	}
 }
 
+void GraphicsDeviceD3D11::SetHullShader(HexEngine::IShaderStage* shader)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (shader != _prevRenderState._hullShader)
+	{
+		_deviceContext->HSSetShader(shader ? reinterpret_cast<ID3D11HullShader*>(shader->GetNativePtr()) : nullptr, nullptr, 0);
+		_prevRenderState._hullShader = shader;
+	}
+}
+
+void GraphicsDeviceD3D11::SetDomainShader(HexEngine::IShaderStage* shader)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+
+	if (shader != _prevRenderState._domainShader)
+	{
+		_deviceContext->DSSetShader(shader ? reinterpret_cast<ID3D11DomainShader*>(shader->GetNativePtr()) : nullptr, nullptr, 0);
+		_prevRenderState._domainShader = shader;
+	}
+}
+
 void GraphicsDeviceD3D11::SetComputeShader(HexEngine::IShaderStage* shader)
 {
 	std::lock_guard<std::recursive_mutex> lock(_lock);
@@ -1833,6 +2074,20 @@ void GraphicsDeviceD3D11::SetConstantBufferGS(uint32_t slot, HexEngine::IConstan
 		_deviceContext->GSSetConstantBuffers(slot, 1, bufferArray);
 		_prevRenderState._gsConstant = buffer;
 	}
+}
+
+void GraphicsDeviceD3D11::SetConstantBufferHS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11Buffer* bufferArray[] = { buffer ? reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) : nullptr };
+	_deviceContext->HSSetConstantBuffers(slot, 1, bufferArray);
+}
+
+void GraphicsDeviceD3D11::SetConstantBufferDS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	ID3D11Buffer* bufferArray[] = { buffer ? reinterpret_cast<ID3D11Buffer*>(buffer->GetNativePtr()) : nullptr };
+	_deviceContext->DSSetConstantBuffers(slot, 1, bufferArray);
 }
 
 void GraphicsDeviceD3D11::SetConstantBufferCS(uint32_t slot, HexEngine::IConstantBuffer* buffer)
@@ -1972,6 +2227,14 @@ void GraphicsDeviceD3D11::SetGeometryTexture3D(uint32_t slot, HexEngine::ITextur
 	auto* tex = reinterpret_cast<Texture3D*>(texture);
 	ID3D11ShaderResourceView* srv = tex ? tex->_shaderResourceView : nullptr;
 	_deviceContext->GSSetShaderResources(slot, 1, &srv);
+}
+
+void GraphicsDeviceD3D11::SetDomainTexture2D(uint32_t slot, HexEngine::ITexture2D* texture)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	auto* tex = reinterpret_cast<Texture2D*>(texture);
+	ID3D11ShaderResourceView* srv = tex ? tex->_shaderResourceView : nullptr;
+	_deviceContext->DSSetShaderResources(slot, 1, &srv);
 }
 
 void GraphicsDeviceD3D11::SetVertexStructuredBuffer(uint32_t slot, HexEngine::IStructuredBuffer* buffer)
@@ -2226,7 +2489,9 @@ void GraphicsDeviceD3D11::SetRenderTargets(const std::vector<HexEngine::ITexture
 
 	for (auto i = 0; i < renderTargets.size(); ++i)
 	{
-		rtv[i] = ((Texture2D*)renderTargets[i])->_renderTargetView;
+		// Null entries are legal: a sparse MRT bind (e.g. colour at 0 +
+		// velocity at 4, P4.4) leaves the middle slots unbound.
+		rtv[i] = renderTargets[i] != nullptr ? ((Texture2D*)renderTargets[i])->_renderTargetView : nullptr;
 	}
 
 	_deviceContext->OMSetRenderTargets(renderTargets.size(), rtv, depthStencil ? ((Texture2D*)depthStencil)->_depthStencilView : nullptr);
@@ -2724,24 +2989,41 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 		_deviceContext->OMSetBlendState(_states->Opaque(), blend, 0xFFFFFFFF);
 		break;
 
+	// Blending states: while the velocity-MRT phase is active, substitute the
+	// IndependentBlendEnable variant so RT4 (velocity) overwrites while RT0
+	// keeps the material's colour blend. Opaque needs no variant - it already
+	// overwrites every target.
 	case HexEngine::BlendState::Additive:
-		_deviceContext->OMSetBlendState(_additivePreserveAlphaBlendState != nullptr ? _additivePreserveAlphaBlendState : _states->Additive(), blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtAdditive != nullptr) ? _velocityMrtAdditive :
+			(_additivePreserveAlphaBlendState != nullptr ? _additivePreserveAlphaBlendState : _states->Additive()), blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Subtractive:
-		_deviceContext->OMSetBlendState(_subtractivetBlendState, blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtSubtractive != nullptr) ? _velocityMrtSubtractive : _subtractivetBlendState, blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Multiplicative:
-		_deviceContext->OMSetBlendState(_multiplicativeBlendState, blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtMultiplicative != nullptr) ? _velocityMrtMultiplicative : _multiplicativeBlendState, blend, 0xFFFFFFFF);
+		break;
+
+	case HexEngine::BlendState::PremultipliedAlpha:
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtPremultiplied != nullptr) ? _velocityMrtPremultiplied :
+			(_premultipliedAlphaBlendState != nullptr ? _premultipliedAlphaBlendState : _states->AlphaBlend()), blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::Transparency:
-		_deviceContext->OMSetBlendState(_states->NonPremultiplied(), blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtTransparency != nullptr) ? _velocityMrtTransparency : _states->NonPremultiplied(), blend, 0xFFFFFFFF);
 		break;
 
 	case HexEngine::BlendState::TransparencyPreserveAlpha:
-		_deviceContext->OMSetBlendState(_transparencyPreserveAlphaBlendState != nullptr ? _transparencyPreserveAlphaBlendState : _states->NonPremultiplied(), blend, 0xFFFFFFFF);
+		_deviceContext->OMSetBlendState(
+			(_velocityMrtPhase && _velocityMrtTransparencyPreserve != nullptr) ? _velocityMrtTransparencyPreserve :
+			(_transparencyPreserveAlphaBlendState != nullptr ? _transparencyPreserveAlphaBlendState : _states->NonPremultiplied()), blend, 0xFFFFFFFF);
 		break;
 
 	default:
@@ -2756,6 +3038,18 @@ void GraphicsDeviceD3D11::SetBlendState(HexEngine::BlendState state)
 HexEngine::BlendState GraphicsDeviceD3D11::GetBlendState() const
 {
 	return _prevRenderState._blendState;
+}
+
+void GraphicsDeviceD3D11::SetVelocityMrtPhase(bool active)
+{
+	std::lock_guard<std::recursive_mutex> lock(_lock);
+	if (_velocityMrtPhase == active)
+		return;
+	_velocityMrtPhase = active;
+	// Re-apply the current state so a blend set before the toggle picks up
+	// (or drops) its velocity-MRT variant.
+	if (_prevRenderState._blendState != HexEngine::BlendState::Invalid)
+		SetBlendState(_prevRenderState._blendState);
 }
 
 int32_t GraphicsDeviceD3D11::GetCurrentMSAALevel() const

@@ -54,8 +54,23 @@
 	// untouched.
 	Texture2D g_positionTex : register(t0); // GBuffer position copy
 	Texture2D g_normalTex   : register(t1); // GBuffer normal (RT - safe to read here since the auto-puddle pass doesn't write to it)
+	// Shelter/rain occlusion map (Phase 3 slice 2) - single-tap local copy
+	// of PBRutils::SampleRainShelter (this pass includes only Global).
+	Texture2D<float> g_rainShelterTex : register(t2);
 
 	SamplerState g_pointSampler : register(s2);
+
+	float PuddleShelter(float3 worldPos)
+	{
+		if (g_rainOcclusionParams.x < 0.5f)
+			return 1.0f;
+		const float4 clip = mul(float4(worldPos, 1.0f), g_rainOcclusionVP);
+		const float2 uv = clip.xy * float2(0.5f, -0.5f) + 0.5f;
+		if (any(uv < 0.0f) || any(uv > 1.0f) || clip.z < 0.0f || clip.z > 1.0f)
+			return 1.0f;
+		const float mapDepth = g_rainShelterTex.SampleLevel(g_pointSampler, uv, 0);
+		return (clip.z <= mapDepth + g_rainOcclusionParams.y) ? 1.0f : 0.0f;
+	}
 
 	cbuffer AutoPuddleConstants : register(b4)
 	{
@@ -161,7 +176,22 @@
 		// noise eval, which keeps the pass essentially free in clear weather. The
 		// debug-force override (g_autoPuddleAppearance.y) raises the minimum so
 		// users can preview puddles without wiring up rain in their scene.
-		const float rainMul = saturate(max(g_weatherSurface.puddleAmount, g_autoPuddleAppearance.y));
+		// Sand kills puddles: while the ground carries wind-blown sand
+		// (dirtAmount > 0, i.e. the accumulation shell is drawing), rain soaks
+		// into it - no mirror film forms. Without this gate the pass painted
+		// mirror gloss onto the shell's bumpy dune relief during a sandstorm ->
+		// rain transition; SSR off those pixels scattered into dark geometry and
+		// the street carpeted in black speckle until dirtAmount decayed to zero.
+		// HARD gate at the SAME epsilon the shell's draw gate uses (Scene.cpp
+		// snowActive: dirtAmount > 0.001): a soft ramp here (tried 1-dirt*3) let
+		// puddles back in below dirt 0.33 while the shell was still drawing
+		// mounds - the artifact returned for the tail of the transition.
+		// dirtAmount is a global uniform, so this gate is purely temporal; the
+		// puddle fade-in still comes from puddleAmount rising once sand is gone.
+		// (Snow already reads correctly - the shell forces its own rough matte
+		// surface on top.)
+		const float sandFree = (g_weatherSurface.dirtAmount > 0.001f) ? 0.0f : 1.0f;
+		const float rainMul = saturate(max(g_weatherSurface.puddleAmount * sandFree, g_autoPuddleAppearance.y));
 		if (rainMul <= 0.0f)
 		{
 			o.diff = float4(0, 0, 0, 0);
@@ -190,7 +220,21 @@
 		const float3 noisePos = float3(surfacePos.x, 0.0f, surfacePos.z) / scale;
 		const float  noise = PuddleNoise(noisePos);
 		const float  threshold = g_autoPuddleParams.y;
-		const float  mask = saturate((noise - threshold) * 4.0f);
+		// SOFT, ANTI-ALIASED edge. Widen the noise->mask transition to at least
+		// the noise's screen-space footprint (fwidth) so distant puddle edges
+		// don't alias on/off frame-to-frame (the temporal shimmer), and keep a
+		// generous minimum band so the puddle FADES into the surrounding ground
+		// - roughness/smoothness ramp with the mask through the OM's alpha blend -
+		// instead of being a hard-edged mirror decal laid on top (which gave the
+		// SSR gate a hard boundary the denoiser then took ~10 s to resolve into a
+		// dark silhouette).
+		// WIDE, asymmetric feather so the puddle ramps its roughness (mirror ->
+		// dry) over a broad band and blends into the ground instead of a hard
+		// edge. The lower bound reaches well below the threshold (long fade-in);
+		// fwidth widens it further at distance so far edges anti-alias rather
+		// than shimmer on/off. r_autoPuddlesEdge (params defaulted) tunes width.
+		const float  aa = max(fwidth(noise) * 2.0f, 0.30f);
+		const float  mask = smoothstep(threshold - aa, threshold + aa * 0.25f, noise);
 		if (mask <= 0.0f)
 		{
 			o.diff = float4(0, 0, 0, 0);
@@ -198,7 +242,10 @@
 			return o;
 		}
 
-		const float alpha = saturate(mask * flatness * rainMul * g_autoPuddleParams.w);
+		// Sheltered ground collects no puddles (indoor floors especially -
+		// before this every flat interior floor puddled in the rain).
+		const float shelter = PuddleShelter(surfacePos.xyz);
+		const float alpha = saturate(mask * flatness * rainMul * g_autoPuddleParams.w * shelter);
 		if (alpha <= 0.001f)
 		{
 			o.diff = float4(0, 0, 0, 0);

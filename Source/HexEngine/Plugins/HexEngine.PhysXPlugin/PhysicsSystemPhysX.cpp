@@ -132,6 +132,12 @@ bool PhysicsSystemPhysX::Create()
 	sceneDesc.cpuDispatcher = _dispatcher;
 	sceneDesc.filterShader = SampleSubmarineFilterShader;// physx::PxDefaultSimulationFilterShader;
 	sceneDesc.simulationEventCallback = this;
+	// Continuous collision detection: without it a fast-moving dynamic body
+	// (a driven vehicle) tunnels straight through thin triangle-mesh ground
+	// between substeps and falls out of the world. eENABLE_CCD turns on the
+	// scene-wide sweep; individual dynamic actors opt in via
+	// PxRigidBodyFlag::eENABLE_CCD (see RigidBodyPhysX dynamic-body creation).
+	sceneDesc.flags |= physx::PxSceneFlag::eENABLE_CCD;
 	//sceneDesc.flags |= physx::PxSceneFlag::eENABLE_PCM;
 	//sceneDesc.broadPhaseType = physx::PxBroadPhaseType::eSAP;
 	//sceneDesc.flags.set(0);// = (physx::PxSceneFlag)0;// physx::PxSceneFlag::eREQUIRE_RW_LOCK | physx::PxSceneFlag::eENABLE_GPU_DYNAMICS;
@@ -341,6 +347,36 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 				break;
 			}
 
+			case physx::PxGeometryType::eCAPSULE:
+			{
+				physx::PxCapsuleGeometry* capGeom = (physx::PxCapsuleGeometry*)physxBody->_geometry;
+
+				physx::PxCapsuleGeometry* geomCopy = new physx::PxCapsuleGeometry(capGeom->radius, capGeom->halfHeight);
+
+				rigidBody->_geometry = geomCopy;
+				rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
+
+				// Preserve the source capsule's axis orientation (its local pose
+				// rotation), otherwise the clone snaps back to PhysX's default
+				// X-aligned capsule and the vehicle chassis lies the wrong way.
+				if (physxBody->_shape)
+					rigidBody->_shape->setLocalPose(physxBody->_shape->getLocalPose());
+
+				break;
+			}
+
+			case physx::PxGeometryType::eSPHERE:
+			{
+				physx::PxSphereGeometry* sphGeom = (physx::PxSphereGeometry*)physxBody->_geometry;
+
+				physx::PxSphereGeometry* geomCopy = new physx::PxSphereGeometry(sphGeom->radius);
+
+				rigidBody->_geometry = geomCopy;
+				rigidBody->_shape = _physics->createShape(*geomCopy, rigidBody->_customMaterial ? *rigidBody->_customMaterial : *_defaultMaterial, true);
+
+				break;
+			}
+
 			default:
 				LOG_CRIT("Exclusive shape copy not implemented");
 				break;
@@ -361,11 +397,24 @@ HexEngine::IRigidBody* PhysicsSystemPhysX::CloneRigidBody(HexEngine::IRigidBody*
 			rigidBody->_collider = new ColliderPhysX(physxBody->_shape, rigidBody);
 		}
 
-		actor->userData = physxBody;
+		// userData MUST point at the NEW cloned body, not the source. The
+		// per-frame writeback (PhysicsSystemPhysX::Update) reads actor->userData
+		// to find which component/transform to drive; with the source here, a
+		// cloned/prefab-spawned dynamic body simulated (fell, took forces) but
+		// its OWN transform never updated - it looked frozen, and forward speed
+		// read ~0 because it was just falling. Toggling the body type "fixed" it
+		// only because SetBodyType's recreation path sets userData = this.
+		actor->userData = rigidBody;
 		_scene->addActor(*actor);
 
 		_scene->unlockWrite();
 		//_scene->unlockRead();
+
+		// Copy the source's mass (+ inertia) so a cloned dynamic body doesn't
+		// fall back to PhysX's default mass 1 / unit inertia (twitchy handling).
+		// After unlockWrite - SetMass/GetMass take their own scene locks.
+		if (type != HexEngine::IRigidBody::BodyType::Static)
+			rigidBody->SetMass(physicsBody->GetMass());
 
 		return rigidBody;
 	}
@@ -432,7 +481,10 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 			{
 				auto body = (RigidBodyPhysX*)actor->userData;
 
-				if (body)
+				// Skip bodies whose owner is driving the transform itself (a
+				// mounted vehicle parks the player CCT and moves the camera to the
+				// seat) - the per-frame pose write would otherwise fight it.
+				if (body && body->IsPoseWritebackEnabled())
 				{
 
 					HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->Lock();
@@ -460,13 +512,13 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 						localRotation.Normalize();
 					}
 
-					transform->SetPosition(localPosition);
+					transform->SetPositionNoNotify(localPosition);
 
 					auto cct = dynamic_cast<CharacterController*>(body);
 
 					if (cct == nullptr)
 					{
-						transform->SetRotation(localRotation);
+						transform->SetRotationNoNotify(localRotation);
 					}
 
 					if (bodyComponent)
@@ -768,6 +820,75 @@ uint32_t PhysicsSystemPhysX::RayCast(const math::Vector3& from, const math::Vect
 	}
 
 	return numHits;
+}
+
+namespace
+{
+	// Scene raycast prefilter that rejects a single actor (the caster's own
+	// body), so a downward ground probe doesn't just hit its own collider.
+	struct IgnoreActorQueryFilter : public physx::PxQueryFilterCallback
+	{
+		const physx::PxRigidActor* ignore = nullptr;
+
+		virtual physx::PxQueryHitType::Enum preFilter(
+			const physx::PxFilterData&, const physx::PxShape*,
+			const physx::PxRigidActor* actor, physx::PxHitFlags&) override
+		{
+			return (actor == ignore) ? physx::PxQueryHitType::eNONE : physx::PxQueryHitType::eBLOCK;
+		}
+
+		virtual physx::PxQueryHitType::Enum postFilter(
+			const physx::PxFilterData&, const physx::PxQueryHit&,
+			const physx::PxShape*, const physx::PxRigidActor*) override
+		{
+			return physx::PxQueryHitType::eBLOCK;
+		}
+	};
+}
+
+uint32_t PhysicsSystemPhysX::RayCastScene(const math::Vector3& from, const math::Vector3& unitDir, float maxDist, HexEngine::RayHit* hitInfo, HexEngine::IRigidBody* ignoreBody)
+{
+	if (_scene == nullptr || hitInfo == nullptr)
+		return 0;
+
+	const physx::PxVec3 _from(from.x, from.y, from.z);
+	physx::PxVec3 _dir(unitDir.x, unitDir.y, unitDir.z);
+	if (_dir.magnitudeSquared() > 1e-8f)
+		_dir.normalize();
+
+	physx::PxRaycastBuffer buf;
+	const physx::PxHitFlags hitFlags = physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
+
+	IgnoreActorQueryFilter filter;
+	physx::PxQueryFilterData fd;
+	fd.flags = physx::PxQueryFlag::eSTATIC | physx::PxQueryFlag::eDYNAMIC;
+	if (ignoreBody != nullptr)
+	{
+		filter.ignore = ((RigidBodyPhysX*)ignoreBody)->GetRigidActor();
+		fd.flags |= physx::PxQueryFlag::ePREFILTER;
+	}
+
+	_scene->lockRead();
+	const bool hit = _scene->raycast(_from, _dir, maxDist, buf, hitFlags, fd, ignoreBody ? &filter : nullptr);
+	_scene->unlockRead();
+
+	if (!hit || !buf.hasBlock)
+		return 0;
+
+	const physx::PxRaycastHit& b = buf.block;
+	hitInfo->start = from;
+	hitInfo->position = math::Vector3(b.position.x, b.position.y, b.position.z);
+	hitInfo->normal = math::Vector3(b.normal.x, b.normal.y, b.normal.z);
+	hitInfo->distance = b.distance;
+	hitInfo->entity = nullptr;
+	if (b.actor != nullptr && b.actor->userData != nullptr)
+	{
+		RigidBodyPhysX* rb = (RigidBodyPhysX*)b.actor->userData;
+		if (rb->GetBodyComponent() != nullptr)
+			hitInfo->entity = rb->GetBodyComponent()->GetEntity();
+	}
+
+	return 1;
 }
 
 void PhysicsSystemPhysX::onControllerHit(const physx::PxControllersHit& hit)

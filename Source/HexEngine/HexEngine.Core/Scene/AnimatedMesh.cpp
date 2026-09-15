@@ -64,8 +64,10 @@ namespace HexEngine
 				return;
 			}
 			const auto& transforms = skeletalMeshComp->GetBoneTransformArray();
+			const auto& transformsPrev = skeletalMeshComp->GetBoneTransformArrayPrev();
 
 			memcpy(_animationBuffer->_boneTransforms, (uint8_t*)transforms.data(), transforms.size() * sizeof(math::Matrix));
+			memcpy(_animationBuffer->_boneTransformsPrev, (uint8_t*)transformsPrev.data(), transformsPrev.size() * sizeof(math::Matrix));
 
 
 			perAnimBuffer->Write(_animationBuffer, sizeof(PerAnimationBuffer));

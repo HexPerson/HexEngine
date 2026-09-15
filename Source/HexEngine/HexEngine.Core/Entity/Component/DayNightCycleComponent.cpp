@@ -36,8 +36,42 @@ namespace HexEngine
 		_nightAmbientLight = copy->_nightAmbientLight;
 
 		NormalizeTimelineSettings();
+		CaptureBaseline();
 		ApplySunRotation();
 		ApplyAmbientLight();
+	}
+
+	void DayNightCycleComponent::CaptureBaseline()
+	{
+		if (_baselineCaptured)
+			return;
+		auto* light = GetEntity() ? GetEntity()->GetComponent<DirectionalLight>() : nullptr;
+		auto* transform = GetEntity() ? GetEntity()->GetComponent<Transform>() : nullptr;
+		if (light == nullptr || transform == nullptr)
+			return; // nothing to own yet - try again on the next Update
+		auto scene = (g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr) ? g_pEnv->_sceneManager->GetCurrentScene() : nullptr;
+		_baselineScene = scene.get();
+		_baselineSunRotation = transform->GetRotation();
+		_baselineLightMultiplier = light->GetLightMultiplier();
+		_baselineAmbient = scene ? scene->GetAmbientColour() : math::Vector4(0.14f, 0.14f, 0.145f, 1.0f);
+		_baselineCaptured = true;
+	}
+
+	void DayNightCycleComponent::Destroy()
+	{
+		if (!_baselineCaptured)
+			return;
+		_baselineCaptured = false;
+		auto* light = GetEntity() ? GetEntity()->GetComponent<DirectionalLight>() : nullptr;
+		auto* transform = GetEntity() ? GetEntity()->GetComponent<Transform>() : nullptr;
+		if (transform != nullptr)
+			transform->SetRotation(_baselineSunRotation);
+		if (light != nullptr)
+			light->SetLightMultiplier(_baselineLightMultiplier);
+		Scene* live = (g_pEnv != nullptr && g_pEnv->_sceneManager != nullptr)
+			? g_pEnv->_sceneManager->GetCurrentScene().get() : nullptr;
+		if (live != nullptr && live == _baselineScene)
+			live->SetAmbientLight(_baselineAmbient);
 	}
 
 	void DayNightCycleComponent::Update(float frameTime)
@@ -46,6 +80,9 @@ namespace HexEngine
 
 		if (GetEntity()->GetComponent<DirectionalLight>() == nullptr)
 			return;
+
+		if (!_baselineCaptured)
+			CaptureBaseline();
 
 		if (_simulateCycle)
 			AdvanceTime(frameTime);

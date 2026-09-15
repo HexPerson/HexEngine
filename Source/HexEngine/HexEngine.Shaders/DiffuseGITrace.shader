@@ -47,6 +47,20 @@
 	Texture2D g_probeIrradianceTex3 : register(t23);
 	Texture2D g_probeVisibilityTex3 : register(t24);
 	Texture2D g_sceneLightingTex : register(t25);
+	// Directional (SH L1) moment volumes, clip-major - bound only when
+	// g_giParams13.w > 0.5 (r_giDirectionalVoxels).
+	Texture3D g_voxelL1xTex0 : register(t26);
+	Texture3D g_voxelL1yTex0 : register(t27);
+	Texture3D g_voxelL1zTex0 : register(t28);
+	Texture3D g_voxelL1xTex1 : register(t29);
+	Texture3D g_voxelL1yTex1 : register(t30);
+	Texture3D g_voxelL1zTex1 : register(t31);
+	Texture3D g_voxelL1xTex2 : register(t32);
+	Texture3D g_voxelL1yTex2 : register(t33);
+	Texture3D g_voxelL1zTex2 : register(t34);
+	Texture3D g_voxelL1xTex3 : register(t35);
+	Texture3D g_voxelL1yTex3 : register(t36);
+	Texture3D g_voxelL1zTex3 : register(t37);
 
 	SamplerState g_pointSampler : register(s2);
 	SamplerState g_linearSampler : register(s4);
@@ -68,6 +82,9 @@
 		float4 g_giParams9;
 		float4 g_giParams10;
 		float4 g_giParams11; // x=localLightInjection, y=clipAttenuation, z=receiverMinLuma, w=receiverRemapAmount
+		float4 g_giParams12; // x=live triangle count, y=candidate routing, z=snap boost, w reserved
+		float4 g_giParams13; // x=litInjection strength, y=litInjection maxLuma, z=feedback bound, w=directional voxels active
+		float4 g_giParams14; // x=ssgi intensity (0=off), y=ssgi radius (world m), z/w reserved
 	};
 
 	static const float3 kClipDebugColours[4] =
@@ -133,6 +150,54 @@
 		case 2: return g_voxelRadianceTex2.SampleLevel(g_linearSampler, uvw, 0.0f);
 		default: return g_voxelRadianceTex3.SampleLevel(g_linearSampler, uvw, 0.0f);
 		}
+	}
+
+	// Directional evaluation factor: how much of this location's voxel
+	// radiance actually exits toward a receiver facing N. SH band-1:
+	// E(N) = max(0, 0.5*L0 + 0.5*L1.N); returned as a per-channel ratio
+	// against L0 so the caller can scale its (multi-tap smoothed) radiance.
+	// Fully aligned with the emitting surface -> 1, behind it -> 0,
+	// side-on -> 0.5. This is what stops GI wrapping around silhouettes.
+	float3 DirectionalVoxelFactor(uint clipIdx, float3 uvw, float3 receiverNormal)
+	{
+		float3 l1x;
+		float3 l1y;
+		float3 l1z;
+		float3 l0;
+		switch (clipIdx)
+		{
+		case 0:
+			l0 = g_voxelRadianceTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex0.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		case 1:
+			l0 = g_voxelRadianceTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex1.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		case 2:
+			l0 = g_voxelRadianceTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex2.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		default:
+			l0 = g_voxelRadianceTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1x = g_voxelL1xTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1y = g_voxelL1yTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			l1z = g_voxelL1zTex3.SampleLevel(g_linearSampler, uvw, 0.0f).rgb;
+			break;
+		}
+		// L1 stores the EXIT (propagation) direction of the radiance. A
+		// receiver with normal N is hit by light travelling INTO its surface,
+		// i.e. propagation directions opposing N - so the arrival lobe is
+		// evaluated at -N: light exiting straight toward the receiver scores
+		// 1, light exiting away (the wrap-around leak) scores 0, side-on 0.5.
+		const float3 e = max(0.0f.xxx, 0.5f * l0 - 0.5f * (l1x * receiverNormal.x + l1y * receiverNormal.y + l1z * receiverNormal.z));
+		return saturate(e / max(l0, 1e-4f.xxx));
 	}
 
 	float SampleVoxelOpacity(uint clipIdx, float3 uvw)
@@ -244,6 +309,93 @@
 		return lerp(c0, c1, w.z);
 	}
 
+	// SSGI: screen-space short-range irradiance gather. A 12-tap golden-angle
+	// disc over a WORLD-space radius, using real gbuffer positions so the
+	// falloff and cosine terms are geometrically correct - this supplies the
+	// contact-scale bounce detail the metre-scale voxel field cannot carry.
+	// Runs at the GI half-res trace and inherits the existing resolve
+	// temporal filtering + bilateral upsample for free.
+	float3 ComputeSSGI(float2 uv, float3 centerPosWS, float3 centerNormal)
+	{
+		const float2 fullTexel = float2(
+			1.0f / max(1.0f, (float)g_screenWidth),
+			1.0f / max(1.0f, (float)g_screenHeight));
+		const float radiusWs = max(g_giParams14.y, 0.25f);
+
+		// World-metres-per-pixel estimated from the position buffer; clamped
+		// hard because depth edges make the estimate spiky.
+		const float3 posRight = GBUFFER_POSITION.Sample(g_pointSampler, saturate(uv + float2(fullTexel.x * 4.0f, 0.0f))).xyz;
+		const float worldPerPixel = clamp(length(posRight - centerPosWS) * 0.25f, 1e-4f, 0.5f);
+		const float radiusPixels = clamp(radiusWs / worldPerPixel, 4.0f, 160.0f);
+
+		// Golden-angle spiral, 16 taps. The rotation MUST vary per frame as
+		// well as per pixel: a static per-pixel hash produces the same tap
+		// pattern every frame - structured grain the resolve's temporal
+		// filter cannot integrate away. Frame-animated rotation turns the
+		// undersampling into temporal noise that averages to smooth.
+		const float frameJitter = (float)(g_frame % 16u) * 0.3926991f; // pi/8 steps
+		const float hash = frac(sin(dot(uv, float2(12.9898f, 78.233f))) * 43758.5453f);
+		const float baseAngle = hash * 6.2831853f + frameJitter;
+		const float falloffR2 = radiusWs * radiusWs * 0.25f;
+
+		float3 accum = 0.0f.xxx;
+
+		[unroll]
+		for (uint i = 0u; i < 16u; ++i)
+		{
+			const float t = ((float)i + 0.5f) / 16.0f;
+			const float ringRadius = radiusPixels * sqrt(t);
+			const float angle = baseAngle + (float)i * 2.3999632f; // golden angle
+			const float2 sampleUv = saturate(uv + float2(cos(angle), sin(angle)) * ringRadius * fullTexel);
+
+			const float4 sampleDiffuse = GBUFFER_DIFFUSE.Sample(g_pointSampler, sampleUv);
+			const float4 sampleNormalDepth = GBUFFER_NORMAL.Sample(g_pointSampler, sampleUv);
+			if (sampleDiffuse.a == -1.0f || sampleNormalDepth.w <= 0.0f)
+				continue;
+
+			const float3 samplePosWS = GBUFFER_POSITION.Sample(g_pointSampler, sampleUv).xyz;
+			const float3 delta = samplePosWS - centerPosWS;
+			const float dist2 = dot(delta, delta);
+			// Reject samples outside the world radius (screen disc can catch
+			// distant geometry across depth discontinuities).
+			if (dist2 > radiusWs * radiusWs || dist2 < 1e-6f)
+				continue;
+			const float3 dir = delta * rsqrt(dist2);
+
+			// WRAPPED receiver cosine. A strict cosine kills wall<->floor
+			// transfer exactly at the contact line (grazing incidence), which
+			// made the junction lose to the AO darkening while the glow
+			// peaked half a metre up the wall - the physically-plausible look
+			// is soft mutual bounce winning at close range. The wrap models
+			// the emitter as an area, not a point: near-parallel surfaces
+			// still exchange light.
+			const float rawReceiverCos = dot(centerNormal, dir);
+			const float receiverCos = saturate((rawReceiverCos + 0.35f) / 1.35f);
+			if (receiverCos <= 0.001f)
+				continue;
+			// Emitter side gets a lighter wrap for the same reason.
+			const float3 sampleNormal = normalize(sampleNormalDepth.xyz + float3(1e-5f, 1e-5f, 1e-5f));
+			const float emitterCos = saturate((dot(sampleNormal, -dir) + 0.20f) / 1.20f);
+			if (emitterCos <= 0.001f)
+				continue;
+
+			float3 sampleLighting = g_sceneLightingTex.Sample(g_linearSampler, sampleUv).rgb;
+			const float sampleLuma = dot(sampleLighting, float3(0.2126f, 0.7152f, 0.0722f));
+			// Compress bright direct highlights so sun pools don't stamp hard
+			// patches into the gather (same treatment as the screen bounce).
+			sampleLighting = sampleLighting / (1.0f + sampleLuma * 1.5f);
+			sampleLighting = min(sampleLighting, 0.8f.xxx);
+
+			const float falloff = falloffR2 / (falloffR2 + dist2);
+			const float w = receiverCos * emitterCos * falloff;
+			accum += sampleLighting * w;
+		}
+
+		// Normalise by the taps, not the surviving weight - empty
+		// surroundings must mean LESS gathered light, not the same.
+		return accum * (1.0f / 16.0f) * 2.5f;
+	}
+
 	float3 ComputeScreenSpaceBounce(float2 uv, float3 centerPosWS, float3 centerNormal, float centerDepth)
 	{
 		const float2 fullTexel = float2(
@@ -314,7 +466,9 @@
 		out float3 voxelRadianceOut,
 		out float voxelOccOut,
 		out float3 probeGiOut,
-		out float3 giOut)
+		out float3 giOut,
+		out float3 voxelAlbedoOut,
+		out float voxelAlbedoConfOut)
 	{
 		const float clipExtent = max(g_clipCenterExtent[clipIdx].w, 1e-3f);
 		const float voxelSize = max(1e-4f, g_clipVoxelInfo[clipIdx].x);
@@ -325,8 +479,32 @@
 		float3 voxelRadiance = 0.0f.xxx;
 		float occAccum = 0.0f;
 		float accumW = 0.0f;
+		// Radiance uses its own PRESENCE-WEIGHTED accumulator: taps that carry
+		// no radiance (air the propagation has not filled, solid interiors)
+		// used to enter the mean at full weight and diluted a lit surface
+		// voxel's bounce by 5-10x - the reason voxel GI read as a faint veil
+		// next to SSGI. Empty taps now weigh 0.15; a fully dark neighbourhood
+		// still averages to zero, so this brightens received bounce without
+		// inventing light.
+		float radAccumW = 0.0f;
 		float3 albedoAccum = 0.0f.xxx;
 		float albedoWeightAccum = 0.0f;
+
+		// Directional (SH-1) arrival factor, sampled once at the tap centre.
+		// Applied ONLY to low-occupancy (air) samples: air voxels hold
+		// PROPAGATED radiance from other surfaces - the carrier of the
+		// silhouette leak - and their moment says which way it travels. The
+		// receiver's own SURFACE voxels hold its accumulated exitant bounce,
+		// whose moment points along the receiver's own normal; filtering
+		// those by arrival direction cancels the receiver's own GI (the
+		// builds-up-then-resolves-to-nothing collapse as the moment field
+		// converges). Occupancy gates the two regimes per tap.
+		const bool directionalArrival = g_giParams13.w > 0.5f;
+		float3 arrivalFactor = 1.0f.xxx;
+		if (directionalArrival)
+		{
+			arrivalFactor = DirectionalVoxelFactor(clipIdx, saturate(uvw + jitterUVW), worldNormal);
+		}
 
 		const float3 localOffsets[7] =
 		{
@@ -346,7 +524,15 @@
 			const float4 voxelData = SampleVoxelRadiance(clipIdx, suv);
 			const float4 albedoData = SampleVoxelAlbedo(clipIdx, suv);
 			const float occSample = (g_giParams2.w > 0.5f) ? voxelData.a : SampleVoxelOpacity(clipIdx, suv);
-			voxelRadiance += voxelData.rgb * w;
+			float3 tapRadiance = voxelData.rgb;
+			if (directionalArrival)
+			{
+				tapRadiance *= lerp(max(arrivalFactor, 0.35f.xxx), 1.0f.xxx, saturate(occSample * 2.0f));
+			}
+			const float tapPresence = saturate(dot(tapRadiance, float3(0.2126f, 0.7152f, 0.0722f)) * 3.0f);
+			const float radW = w * lerp(0.15f, 1.0f, tapPresence);
+			voxelRadiance += tapRadiance * radW;
+			radAccumW += radW;
 			occAccum += occSample * w;
 			accumW += w;
 			const float albedoW = w * saturate(albedoData.a);
@@ -364,7 +550,15 @@
 			const float4 albedoData = SampleVoxelAlbedo(clipIdx, rayUVW);
 			const float occSample = (g_giParams2.w > 0.5f) ? voxelData.a : SampleVoxelOpacity(clipIdx, rayUVW);
 			const float w = 0.85f * transmittance;
-			voxelRadiance += voxelData.rgb * w;
+			float3 coneRadiance = voxelData.rgb;
+			if (directionalArrival)
+			{
+				coneRadiance *= lerp(max(arrivalFactor, 0.35f.xxx), 1.0f.xxx, saturate(occSample * 2.0f));
+			}
+			const float conePresence = saturate(dot(coneRadiance, float3(0.2126f, 0.7152f, 0.0722f)) * 3.0f);
+			const float coneRadW = w * lerp(0.15f, 1.0f, conePresence);
+			voxelRadiance += coneRadiance * coneRadW;
+			radAccumW += coneRadW;
 			occAccum += occSample * w;
 			accumW += w;
 			const float albedoW = w * saturate(albedoData.a) * 0.75f;
@@ -373,7 +567,7 @@
 			transmittance *= (1.0f - saturate(occSample) * 0.40f);
 		}
 
-		voxelRadiance /= max(accumW, 1e-4f);
+		voxelRadiance /= max(radAccumW, 1e-4f);
 		float voxelOcc = saturate(occAccum / max(accumW, 1e-4f));
 		float3 voxelAlbedo = (albedoWeightAccum > 1e-4f)
 			? saturate(albedoAccum / albedoWeightAccum)
@@ -447,6 +641,8 @@
 		voxelOccOut = voxelOcc;
 		probeGiOut = probeGi;
 		giOut = gi;
+		voxelAlbedoOut = voxelAlbedo;
+		voxelAlbedoConfOut = voxelAlbedoConfidence;
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target
@@ -488,6 +684,8 @@
 		float3 gi = 0.0f.xxx;
 		float3 probeGi = 0.0f.xxx;
 		float3 debugVoxelRadiance = 0.0f.xxx;
+		float3 debugVoxelAlbedo = 0.0f.xxx;
+		float debugVoxelAlbedoConf = 0.0f;
 		float3 debugClipBlend = 0.0f.xxx;
 		float voxelOcc = 0.0f;
 		uint chosenClip = 0;
@@ -497,6 +695,8 @@
 		float3 fallbackGi = 0.0f.xxx;
 		float3 fallbackProbe = 0.0f.xxx;
 		float3 fallbackVoxel = 0.0f.xxx;
+		float3 fallbackAlbedo = 0.0f.xxx;
+		float fallbackAlbedoConf = 0.0f;
 		float fallbackOcc = 0.0f;
 		uint fallbackClip = 0;
 
@@ -514,6 +714,8 @@
 			float occCurrent = 0.0f;
 			float3 probeCurrent = 0.0f.xxx;
 			float3 giCurrent = 0.0f.xxx;
+			float3 albedoCurrent = 0.0f.xxx;
+			float albedoConfCurrent = 0.0f;
 			const float invRes = rcp(max(g_clipVoxelInfo[i].z, 1.0f));
 			// World-space seed keeps voxel sampling stable while the camera moves.
 			const float2 worldSeed = float2(
@@ -530,7 +732,7 @@
 					Hash12(seed + float2(19.91f, 7.13f)),
 					Hash12(seed.yx + float2(5.71f, 29.37f)),
 					Hash12(seed + float2(41.27f, 3.97f))) - float3(0.5f, 0.5f, 0.5f)) * (invRes * jitterScale);
-			EvaluateClipContribution(i, uvw, jitterUVW, worldNormal, screenBounce, voxelCurrent, occCurrent, probeCurrent, giCurrent);
+			EvaluateClipContribution(i, uvw, jitterUVW, worldNormal, screenBounce, voxelCurrent, occCurrent, probeCurrent, giCurrent, albedoCurrent, albedoConfCurrent);
 			// Blend all overlapping clipmaps with normalized weights to avoid visible handoff rings.
 			const float edgeDistanceX = min(uvw.x, 1.0f - uvw.x);
 			const float edgeDistanceZ = min(uvw.z, 1.0f - uvw.z);
@@ -567,6 +769,8 @@
 				gi += giCurrent * clipWeight;
 				probeGi += probeCurrent * clipWeight;
 				debugVoxelRadiance += voxelCurrent * clipWeight;
+				debugVoxelAlbedo += albedoCurrent * clipWeight;
+				debugVoxelAlbedoConf += albedoConfCurrent * clipWeight;
 				debugClipBlend += kClipDebugColours[i] * clipWeight;
 				voxelOcc += occCurrent * clipWeight;
 				totalClipWeight += clipWeight;
@@ -580,9 +784,23 @@
 			fallbackGi = giCurrent;
 			fallbackProbe = probeCurrent;
 			fallbackVoxel = voxelCurrent;
+			fallbackAlbedo = albedoCurrent;
+			fallbackAlbedoConf = albedoConfCurrent;
 			fallbackOcc = occCurrent;
 			fallbackClip = i;
 			foundClip = true;
+
+			// A clip that FULLY covers this pixel (edgeWeight ~1) makes every
+			// coarser clip redundant: they only exist to blend across this
+			// clip's boundary. Evaluating them anyway cost 4x the full gather
+			// on interior pixels (most of any indoor scene) and let the
+			// coarse clips' blur dominate the normalized result (their
+			// fidelity weights sum past the fine clip's). Interior pixels now
+			// evaluate exactly one clip; pixels inside a boundary band blend
+			// two - the visual intent of the edge blending, at a fraction of
+			// the cost.
+			if (edgeWeight >= 0.999f)
+				break;
 		}
 
 		if (totalClipWeight > 1e-4f)
@@ -591,6 +809,8 @@
 			gi *= invWeight;
 			probeGi *= invWeight;
 			debugVoxelRadiance *= invWeight;
+			debugVoxelAlbedo *= invWeight;
+			debugVoxelAlbedoConf *= invWeight;
 			debugClipBlend *= invWeight;
 			voxelOcc *= invWeight;
 		}
@@ -599,9 +819,19 @@
 			gi = fallbackGi;
 			probeGi = fallbackProbe;
 			debugVoxelRadiance = fallbackVoxel;
+			debugVoxelAlbedo = fallbackAlbedo;
+			debugVoxelAlbedoConf = fallbackAlbedoConf;
 			debugClipBlend = kClipDebugColours[fallbackClip];
 			voxelOcc = fallbackOcc;
 			chosenClip = fallbackClip;
+		}
+
+		// SSGI (opt-in): contact-scale screen-space gather layered on the
+		// voxel far field. Added to incident gi BEFORE the receiver-albedo
+		// remap below, so it tints like any other arriving light.
+		if (g_giParams14.x > 0.0001f)
+		{
+			gi += ComputeSSGI(uv, pixelPosWS.xyz, worldNormal) * g_giParams14.x;
 		}
 
 		if (debugMode == 2.0f)
@@ -616,6 +846,12 @@
 		if (debugMode == 4.0f)
 		{
 			return foundClip ? float4(saturate(debugClipBlend), 1.0f) : float4(0.0f, 0.0f, 0.0f, 1.0f);
+		}
+		if (debugMode == 5.0f)
+		{
+			// Voxel ALBEDO volume, confidence-scaled: black = albedo never written,
+			// grey/white = written but untinted (injection-side bug), coloured = healthy.
+			return float4(saturate(debugVoxelAlbedo) * saturate(debugVoxelAlbedoConf * 2.0f), 1.0f);
 		}
 
 		const float raysPerProbe = foundClip ? g_clipVoxelInfo[chosenClip].w : 1.0f;
@@ -650,7 +886,11 @@
 		// (24, 1, 1) collapsed to (4.4, 0.85, 0.85) - a strong hue shift toward white that
 		// then drove the temporal history clamp to bake in the desaturated colour. Compressing
 		// by luminance preserves the (R,G,B) ratio.
-		gi = ReinhardCompressLuminance(gi, 0.18f);
+		// Knee tied to r_giEnergyClamp: at the historical clamp of 3 this is the
+		// original 0.18 (asymptote ~5.5); raising the clamp relaxes the
+		// compression proportionally so the cvar actually raises GI energy
+		// instead of being pre-crushed by a fixed soft-max.
+		gi = ReinhardCompressLuminance(gi, 0.18f * (3.0f / max(g_giParams0.y, 1.0f)));
 
 		gi *= g_giParams0.x;
 		// Final safety clamp - was a per-channel min, which under saturated-channel inputs

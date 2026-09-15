@@ -175,6 +175,14 @@
 
 	float CalculateVolumetricScattering(float3 raySurfacePos, float3 lightPos, float radius, float lightStrength, float sceneDepth)
 	{
+		// Retired when the froxel volume owns per-light fog (slice 6): the
+		// scatter CS already integrates this same light - cluster lists for
+		// unshadowed lights, shadow-slotted forward entries (with this
+		// light's own shadow map) for shadowed ones - so marching here again
+		// would double-count its glow.
+		if (g_taaParams.w > 0.5f)
+			return 0.0f;
+
 		// Per-light distance gate. Lights further from the camera than
 		// volumetricLightMaxDistance skip the ray-march loop entirely -
 		// surface lighting still applies but the expensive volumetric pass is

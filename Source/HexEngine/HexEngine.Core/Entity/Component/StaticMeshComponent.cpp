@@ -155,6 +155,37 @@ namespace HexEngine
 		slotIdx += MaterialTexture::Count;
 
 		mesh->SetBuffers(isShadowMap);
+
+		// Tessellation opt-in (Phase 3 snow displacement). A material whose
+		// shader carries BOTH a hull and a domain stage draws as a
+		// 3-control-point patch list with those stages bound - SetBuffers
+		// above just set TriangleList, so the override lands here, after it
+		// and before the caller's DrawIndexed. Never in the shadow pass (the
+		// shadow shader has no tessellation stages and cheap depth doesn't
+		// need displaced silhouettes). Every non-tessellated draw clears the
+		// stages so a prior patch draw can't leak HS/DS state into it; the
+		// device's redundancy cache makes the repeated null-set free.
+		IShaderStage* hullStage   = isShadowMap ? nullptr : shader->GetShaderStage(ShaderStage::HullShader);
+		IShaderStage* domainStage = isShadowMap ? nullptr : shader->GetShaderStage(ShaderStage::DomainShader);
+		if (hullStage != nullptr && domainStage != nullptr)
+		{
+			graphicsDevice->SetHullShader(hullStage);
+			graphicsDevice->SetDomainShader(domainStage);
+			// The hull constant function and the domain shader both read the
+			// per-frame buffer (viewProj + prev, jitter, eye pos, weather
+			// surface) at b0 - route it to those stages (VS/PS setters don't
+			// reach them). No per-object bind needed: the VS already baked the
+			// world transform into the control points.
+			auto* perFrame = graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerFrameBuffer);
+			graphicsDevice->SetConstantBufferHS(0, perFrame);
+			graphicsDevice->SetConstantBufferDS(0, perFrame);
+			graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::ControlPointPatchList3);
+		}
+		else
+		{
+			graphicsDevice->SetHullShader(nullptr);
+			graphicsDevice->SetDomainShader(nullptr);
+		}
 		return true;
 	}
 
@@ -212,6 +243,13 @@ namespace HexEngine
 		{
 			scene->NotifyStaticMeshChanged(this, true, false);
 		}
+
+		// A mesh swap changes the entity's bounds - keep the PVS culling grid's
+		// cells for it current (unconditional, unlike the GI notify above).
+		if (auto* scene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr; scene != nullptr)
+		{
+			scene->UpdatePvsSpatialEntriesForEntity(GetEntity());
+		}
 	}
 
 	std::shared_ptr<Mesh> StaticMeshComponent::GetMesh() const
@@ -255,10 +293,38 @@ namespace HexEngine
 
 		if (_boundBone != nullptr)
 		{
+			// Latch the previous-frame offset ONCE per frame, before rebuilding
+			// this frame's. GetOffsetMatrix is called several times a frame
+			// (main + shadow + per-pass), so key the latch on the frame count:
+			// the first call of a new frame captures last frame's offset as
+			// prev; later calls this frame leave prev alone. First frame ever
+			// seeds prev = current so a freshly spawned attachment starts at
+			// zero velocity instead of current-vs-identity.
+			const uint64_t frame = (g_pEnv && g_pEnv->_timeManager)
+				? static_cast<uint64_t>(g_pEnv->_timeManager->_frameCount)
+				: 0;
+			if (!_offsetPrevValid)
+			{
+				_offsetMatrixPrev = _offsetMatrix; // will be overwritten to current below
+				_offsetPrevFrame = frame;
+			}
+			else if (frame != _offsetPrevFrame)
+			{
+				_offsetMatrixPrev = _offsetMatrix; // last frame's value, still cached
+				_offsetPrevFrame = frame;
+			}
+
 			_offsetMatrix =
 				math::Matrix::CreateFromQuaternion(_boundBone->Rotation) *
 				math::Matrix::CreateTranslation(_boundBone->Position + _offsetPosition);
 			_offsetMatrixTranspose = _offsetMatrix.Transpose();
+
+			if (!_offsetPrevValid)
+			{
+				_offsetMatrixPrev = _offsetMatrix; // seed prev = current on frame 0
+				_offsetPrevValid = true;
+			}
+			_offsetMatrixPrevTranspose = _offsetMatrixPrev.Transpose();
 		}
 		return _offsetMatrix;
 	}
@@ -269,6 +335,14 @@ namespace HexEngine
 		// _offsetMatrixTranspose in sync alongside _offsetMatrix.
 		GetOffsetMatrix();
 		return _offsetMatrixTranspose;
+	}
+
+	const math::Matrix& StaticMeshComponent::GetOffsetMatrixPrevTranspose()
+	{
+		// GetOffsetMatrix does the per-frame prev latch; delegate so the two
+		// can never drift out of step.
+		GetOffsetMatrix();
+		return _offsetMatrixPrevTranspose;
 	}
 
 	bool StaticMeshComponent::TryResolveBoundBone()
@@ -873,6 +947,9 @@ namespace HexEngine
 
 	void StaticMeshComponent::OnRenderEditorGizmo(bool isSelected, bool& isHovering)
 	{
+		if (!isSelected || !g_pEnv->IsEditorMode())
+			return;
+
 		g_pEnv->_debugRenderer->DrawOBB(GetEntity()->GetWorldOBB(), math::Color(HEX_RGBA_TO_FLOAT4(255, 127, 40, 255)));
 	}
 }

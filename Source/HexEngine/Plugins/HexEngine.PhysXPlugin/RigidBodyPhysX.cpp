@@ -94,6 +94,14 @@ void RigidBodyPhysX::SetBodyType(BodyType type)
 
 				dynamic->setRigidBodyFlag(physx::PxRigidBodyFlag::eKINEMATIC, type != BodyType::Dynamic);
 
+				// Opt this body into continuous collision detection so a fast
+				// mover (a driven vehicle) sweeps against thin ground instead
+				// of tunnelling through it between substeps. Only meaningful
+				// for truly dynamic (non-kinematic) actors; the scene-wide
+				// eENABLE_CCD flag is set in PhysicsSystemPhysX.
+				if (type == BodyType::Dynamic)
+					dynamic->setRigidBodyFlag(physx::PxRigidBodyFlag::eENABLE_CCD, true);
+
 			}
 
 			if (actor)
@@ -301,7 +309,7 @@ HexEngine::ICollider* RigidBodyPhysX::AddSphereCollider(HexEngine::Transform* tr
 	return _collider;
 }
 
-HexEngine::ICollider* RigidBodyPhysX::AddCapsuleCollider(HexEngine::Transform* transform, float radius, float height)
+HexEngine::ICollider* RigidBodyPhysX::AddCapsuleCollider(HexEngine::Transform* transform, float radius, float height, int axis, math::Vector3 offset)
 {
 	g_pPhysx->GetScene()->lockWrite();
 
@@ -309,6 +317,18 @@ HexEngine::ICollider* RigidBodyPhysX::AddCapsuleCollider(HexEngine::Transform* t
 
 
 	_shape = g_pPhysx->GetPhysics()->createShape(*(physx::PxCapsuleGeometry*)_geometry, *g_pPhysx->GetDefaultMaterial());
+
+	// PhysX capsules run along the local +X axis. Rotate the shape's local pose
+	// so the long axis matches the requested one: 1=Y (standing), 2=Z (lying
+	// forward, e.g. a vehicle chassis), anything else = X (no rotation). The
+	// offset translates the shape within the body (e.g. drop a thin capsule to
+	// the wheel line so it doesn't lift the vehicle off the ground).
+	physx::PxQuat rot(physx::PxIdentity);
+	if (axis == 1)
+		rot = physx::PxQuat(physx::PxHalfPi, physx::PxVec3(0.0f, 0.0f, 1.0f));
+	else if (axis == 2)
+		rot = physx::PxQuat(physx::PxHalfPi, physx::PxVec3(0.0f, 1.0f, 0.0f));
+	_shape->setLocalPose(physx::PxTransform(physx::PxVec3(offset.x, offset.y, offset.z), rot));
 
 	_body->attachShape(*_shape);
 
@@ -442,10 +462,12 @@ HexEngine::ICollider* RigidBodyPhysX::AddTriangleMeshCollider(const std::vector<
 	// materially changing normal scene geometry.
 	params.meshWeldTolerance = kTriangleMeshWeldTolerance;
 	params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eWELD_VERTICES;
-	// disable edge precompute, edges are set for each triangle, slows contact generation
-	params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
-	// lower hierarchy for internal mesh
-	//params.meshCookingHint = physx::PxMeshCookingHint::eCOOKING_PERFORMANCE;
+	// KEEP active-edge precompute ENABLED (do NOT set eDISABLE_ACTIVE_EDGES_
+	// PRECOMPUTE). Disabling it makes dynamic bodies catch on the internal
+	// edges of a triangle mesh - a vehicle or character snags on the flat
+	// seams between coplanar triangles even where there's no step. The cook is
+	// a touch slower; smooth sliding contact is worth it.
+	//params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
 	params.midphaseDesc.setToDefault(physx::PxMeshMidPhase::eBVH34);
 
 	if (!PxValidateTriangleMesh(params, meshDesc))
@@ -569,7 +591,9 @@ bool RigidBodyPhysX::BeginAddTriangleMeshColliderAsync(
 		physx::PxCookingParams params(scale);
 		params.meshWeldTolerance = kTriangleMeshWeldTolerance;
 		params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eWELD_VERTICES;
-		params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
+		// Keep active-edge precompute ENABLED - see the sync path above: the
+		// disable flag makes bodies catch on internal triangle-mesh edges.
+		//params.meshPreprocessParams |= physx::PxMeshPreprocessingFlag::eDISABLE_ACTIVE_EDGES_PRECOMPUTE;
 		params.midphaseDesc.setToDefault(physx::PxMeshMidPhase::eBVH34);
 
 		// PxCookTriangleMesh is documented as thread-safe (it's a pure
@@ -1079,6 +1103,16 @@ void RigidBodyPhysX::SetIsSimulated(bool simulated)
 {
 	_body->setActorFlag(physx::PxActorFlag::eDISABLE_SIMULATION, !simulated);
 	//_shape->setFlag(physx::PxShapeFlag::eSIMULATION_SHAPE, !simulation
+}
+
+void RigidBodyPhysX::SetPoseWritebackEnabled(bool enabled)
+{
+	_poseWritebackEnabled = enabled;
+}
+
+bool RigidBodyPhysX::IsPoseWritebackEnabled() const
+{
+	return _poseWritebackEnabled;
 }
 
 bool RigidBodyPhysX::GetIsSimulated()

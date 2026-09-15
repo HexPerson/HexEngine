@@ -36,6 +36,10 @@ namespace
 			b.SrcBlend = D3D12_BLEND_ZERO;      b.DestBlend = D3D12_BLEND_SRC_COLOR; b.BlendOp = D3D12_BLEND_OP_ADD;
 			b.SrcBlendAlpha = D3D12_BLEND_ZERO; b.DestBlendAlpha = D3D12_BLEND_ONE;  b.BlendOpAlpha = D3D12_BLEND_OP_ADD;
 			break;
+		case HexEngine::BlendState::PremultipliedAlpha:
+			b.SrcBlend = D3D12_BLEND_ONE;       b.DestBlend = D3D12_BLEND_INV_SRC_ALPHA; b.BlendOp = D3D12_BLEND_OP_ADD;
+			b.SrcBlendAlpha = D3D12_BLEND_ZERO; b.DestBlendAlpha = D3D12_BLEND_ONE;  b.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+			break;
 		case HexEngine::BlendState::Opaque:
 		case HexEngine::BlendState::Invalid:
 		default:

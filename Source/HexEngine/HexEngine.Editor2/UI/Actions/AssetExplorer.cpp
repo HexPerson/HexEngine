@@ -75,12 +75,18 @@ namespace HexEditor
 			if (g_pUIManager == nullptr || g_pUIManager->GetSceneView() == nullptr)
 				return false;
 
+			// Graph-only authoring policy: EVERY .hmat opens here. Legacy
+			// standard materials are auto-promoted (and saved) by the graph
+			// dialog's EnsureGraphExists; graph instances open in the
+			// dialog's instance mode. The legacy MaterialDialog no longer
+			// participates.
 			auto material = HexEngine::Material::Create(materialPath);
-			if (material == nullptr || !material->_hasGraph)
+			if (material == nullptr)
 				return false;
 
 			auto* sceneView = g_pUIManager->GetSceneView();
-			auto* tab = sceneView->AddWorkspaceTab(std::format(L"Material: {}", materialPath.stem().wstring()));
+			const wchar_t* kind = material->_hasGraphInstance ? L"Instance" : L"Material";
+			auto* tab = sceneView->AddWorkspaceTab(std::format(L"{}: {}", kind, materialPath.stem().wstring()));
 			if (tab == nullptr)
 				return false;
 
@@ -674,6 +680,93 @@ namespace HexEditor
 			});
 	}
 
+	void AssetExplorer::DuplicateSelectedAssets()
+	{
+		CloseContextMenu();
+
+		if (_currentlyBrowsedFS == nullptr)
+			return;
+
+		// Snapshot the selection's paths first: UpdateAssets (triggered below, or by
+		// a file-change notification racing us) rebuilds _assetsInView and would
+		// invalidate any AssetDesc pointers we held across the copy loop.
+		std::vector<fs::path> sources;
+		for (const auto& asset : _assetsInView)
+		{
+			if (asset.selected)
+				sources.push_back(asset.path);
+		}
+		if (sources.empty())
+			return;
+
+		std::vector<fs::path> created;
+		for (const fs::path& source : sources)
+		{
+			std::error_code ec;
+			if (!fs::exists(source, ec))
+				continue;
+
+			// Unique sibling name: "<stem> - Copy<ext>", then "<stem> - Copy (2)<ext>", ...
+			// Directories have no extension to preserve, so the suffix lands on the
+			// whole name.
+			const bool isDirectory = fs::is_directory(source, ec);
+			const std::wstring stem = isDirectory ? source.filename().wstring() : source.stem().wstring();
+			const std::wstring extension = isDirectory ? std::wstring() : source.extension().wstring();
+			const fs::path parentDir = source.parent_path();
+
+			fs::path target;
+			for (int32_t attempt = 1; attempt < 1000; ++attempt)
+			{
+				const std::wstring suffix = (attempt == 1)
+					? std::wstring(L" - Copy")
+					: (L" - Copy (" + std::to_wstring(attempt) + L")");
+				target = parentDir / (stem + suffix + extension);
+				if (!fs::exists(target, ec))
+					break;
+				target.clear();
+			}
+			if (target.empty())
+			{
+				LOG_WARN("Duplicate: could not find a free name for '%s'", source.string().c_str());
+				continue;
+			}
+
+			if (isDirectory)
+				fs::copy(source, target, fs::copy_options::recursive, ec);
+			else
+				fs::copy_file(source, target, ec);
+
+			if (ec)
+			{
+				LOG_WARN("Duplicate: failed to copy '%s' -> '%s' (%s)",
+					source.string().c_str(), target.string().c_str(), ec.message().c_str());
+				continue;
+			}
+
+			created.push_back(target);
+		}
+
+		if (created.empty())
+			return;
+
+		UpdateAssets(_currentlyBrowsedFolder, _currentlyBrowsedFS);
+
+		// Hand the selection to the copies. A single duplicate drops straight into
+		// inline rename (same flow as Create new...), since "- Copy" is rarely the
+		// name anyone actually wants.
+		ClearSelection();
+		for (const fs::path& path : created)
+		{
+			if (auto* copy = FindAssetInView(path); copy != nullptr)
+				copy->selected = true;
+		}
+		if (created.size() == 1)
+		{
+			if (auto* copy = FindAssetInView(created.front()); copy != nullptr)
+				EditAssetName(copy);
+		}
+	}
+
 	void AssetExplorer::CreateNewMaterial(const fs::path& baseDir)
 	{
 		if (_currentlyBrowsedFS == nullptr)
@@ -896,6 +989,10 @@ namespace HexEditor
 		auto* material = new HexEngine::Material;
 		material->SetPaths(newMaterialPath, _currentlyBrowsedFS);
 		material->CopyFrom(HexEngine::Material::GetDefaultMaterial());
+		// Seed real graph content. Saving _hasGraph=true with an empty node list
+		// produced an asset that failed graph validation ("Graph contains no
+		// nodes") on every load until someone opened the graph editor on it.
+		material->_graph = HexEngine::MaterialGraph::CreateDefaultPbrGraph();
 		material->_hasGraph = true;
 		material->_hasGraphInstance = false;
 		material->SetLoader(HexEngine::g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
@@ -951,13 +1048,16 @@ namespace HexEditor
 
 	void AssetExplorer::CreateNewMaterialInstance(const fs::path& baseDir)
 	{
-		if (_currentlyBrowsedFS == nullptr)
-			return;
-
+		// Empty-space "Create new..." path: no explicit parent, so pick the
+		// first graph material in the current view. (The selection scan this
+		// used to lead with could never match - this item only appears in the
+		// zero-selection context menu, and right-clicking an asset selects
+		// it. The right-click-a-material flow passes its parent explicitly
+		// via CreateNewMaterialInstanceFrom instead.)
 		fs::path parentGraphPath;
 		for (const auto& asset : _assetsInView)
 		{
-			if (!asset.selected || asset.path.extension() != ".hmat")
+			if (asset.path.extension() != ".hmat")
 				continue;
 
 			auto parent = HexEngine::Material::Create(asset.path);
@@ -968,22 +1068,13 @@ namespace HexEditor
 			}
 		}
 
-		if (parentGraphPath.empty())
-		{
-			// Fallback: first graph material in the view.
-			for (const auto& asset : _assetsInView)
-			{
-				if (asset.path.extension() != ".hmat")
-					continue;
+		CreateNewMaterialInstanceFrom(parentGraphPath, baseDir);
+	}
 
-				auto parent = HexEngine::Material::Create(asset.path);
-				if (parent != nullptr && parent->_hasGraph)
-				{
-					parentGraphPath = parent->GetFileSystemPath();
-					break;
-				}
-			}
-		}
+	void AssetExplorer::CreateNewMaterialInstanceFrom(const fs::path& parentGraphPath, const fs::path& baseDir)
+	{
+		if (_currentlyBrowsedFS == nullptr)
+			return;
 
 		if (parentGraphPath.empty())
 		{
@@ -1764,6 +1855,25 @@ namespace HexEditor
 									ConvertStandardMaterialToGraph(targetPath);
 								}));
 						}
+
+						// "Create material instance": the right-click-a-material flow.
+						// (The old "Create new... > Material Instance" item lived only
+						// in the ZERO-selection menu, while the creation code led with
+						// a scan for a SELECTED material - a contradiction, since
+						// right-clicking an asset selects it. The parent is passed
+						// explicitly here.) Graph materials only: an instance
+						// overrides a parent graph's exposed parameters, so a
+						// standard .hmat must be converted to a graph first (the
+						// item above).
+						if (candidateMaterial != nullptr && candidateMaterial->_hasGraph)
+						{
+							const fs::path parentPath = candidateMaterial->GetFileSystemPath();
+							_contextMenu->AddItem(new HexEngine::ContextItem(L"Create material instance",
+								[this, parentPath](const std::wstring&)
+								{
+									CreateNewMaterialInstanceFrom(parentPath, _currentlyBrowsedFolder);
+								}));
+						}
 					}
 
 					// Rename is single-selection only - bulk rename would need a separate
@@ -1778,6 +1888,10 @@ namespace HexEditor
 								ShowRenameAssetDialog(renameTarget);
 							}));
 					}
+
+					// Duplicate works on the whole selection: each asset is copied next to
+					// itself under a unique "<name> - Copy[ (n)]" name.
+					_contextMenu->AddItem(new HexEngine::ContextItem(L"Duplicate", std::bind(&AssetExplorer::DuplicateSelectedAssets, this)));
 
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Set material", std::bind(&AssetExplorer::SetMassMaterial, this)));
 					_contextMenu->AddItem(new HexEngine::ContextItem(L"Import meshes", std::bind(&AssetExplorer::ImportAllForeignMeshes, this)));

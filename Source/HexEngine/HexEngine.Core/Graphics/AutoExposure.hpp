@@ -11,10 +11,11 @@ struct ID3D11Texture2D;
 
 namespace HexEngine
 {
-	// Auto exposure: dispatches a compute pass that reads the post-processed beauty buffer,
-	// reduces a strided sample of pixels to a single average log-luminance value, reads the
-	// result back to the CPU, and smoothly adapts an exposure multiplier toward a target
-	// middle-grey luminance.
+	// Auto exposure: dispatches a compute pass that reads the PRE-post-process beauty
+	// buffer, builds a 256-bin log-luminance histogram from a strided sample of pixels,
+	// reads it back to the CPU, averages the [low%, high%] percentile band of the CDF
+	// (outlier-immune metering), and smoothly adapts an exposure multiplier toward the
+	// target with split up/down rates.
 	//
 	// The output multiplier is plugged into the existing colour-grading exposure path so the
 	// existing tonemap/colour-grade shader doesn't need to change. When auto exposure is off,
@@ -36,11 +37,26 @@ namespace HexEngine
 		// > 0 = above horizon, <= 0 = below. It's used to blend the day-time target/max
 		// against the night-time overrides (r_autoExposureNightTargetLuma / r_autoExposureNightMax)
 		// so the meter doesn't push a night scene up to daytime brightness.
-		void Update(ITexture2D* beauty, float deltaTimeSeconds, float sunElevation = 1.0f);
+		// skyMask: gbuffer diffuse (its .a == -1 marks sky pixels) - lets the
+		// meter down-weight the HDR sky via r_autoExposureSkyWeight. Null =
+		// every pixel counts fully (old behaviour).
+		// skyOvercastAmount: weather overcast [0,1]. Under a closed cloud
+		// deck the ground sits in cloud shadow; metering mostly-ground then
+		// pushes exposure up and blows the (down-weighted) sky to white, so
+		// the sky weight adapts toward full as overcast rises
+		// (bridge-tuned observation, 2026-08-29).
+		void Update(ITexture2D* beauty, float deltaTimeSeconds, float sunElevation = 1.0f, ITexture2D* skyMask = nullptr,
+			float skyOvercastAmount = 0.0f);
 
 		// Current exposure multiplier (1.0 = no change). Multiply this with the user-set
 		// r_exposure value before feeding the colour-grading constant buffer.
 		float GetExposureMultiplier() const { return _smoothedExposure; }
+		// This frame's histogram-derived target BEFORE temporal smoothing.
+		// Consumers that judge brightness in display units (bloom threshold/
+		// scatter/clamp) should use this: the smoothed value lags the scene
+		// during camera movement, so bloom judged with it overshoots until
+		// adaptation settles.
+		float GetTargetExposureMultiplier() const { return _targetExposure; }
 
 		// Reset the smoothed exposure back to 1.0 - call when a level/scene is loaded so the
 		// adaptation doesn't carry over from the previous environment.
@@ -52,7 +68,7 @@ namespace HexEngine
 
 		std::shared_ptr<IShader> _luminanceShader;
 
-		// Output accumulator (32-bit uint, atomic-added by the compute shader).
+		// 256-bin histogram (uint counts, atomic-added by the compute shader).
 		ID3D11Buffer* _accumBuffer = nullptr;
 		ID3D11UnorderedAccessView* _accumUav = nullptr;
 
@@ -77,6 +93,8 @@ namespace HexEngine
 		// Current smoothed exposure multiplier. Updated each frame toward the target derived
 		// from the latest readback.
 		float _smoothedExposure = 1.0f;
+		// Unsmoothed per-frame target (see GetTargetExposureMultiplier).
+		float _targetExposure = 1.0f;
 
 		// Throttles r_autoExposureDebug log spew to ~1Hz.
 		float _debugAccum = 0.0f;

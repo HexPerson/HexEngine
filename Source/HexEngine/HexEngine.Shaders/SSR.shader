@@ -12,6 +12,10 @@
 		ShadowUtils
 		LightingUtils
 		Atmosphere
+		// SampleEnvAtlas / ProbeWeight / ProbeSpecularDir, so a specular ray that
+		// finds nothing can return the environment itself rather than leaving a
+		// hole for the resolve to patch.
+		EnvMapCommon
 }
 "VertexShader"
 {
@@ -48,6 +52,13 @@
 	Texture3D g_voxelRadianceTex3 : register(t18);
 	Texture3D g_voxelOpacityTex3  : register(t19);
 	Texture3D g_voxelAlbedoTex3   : register(t20);
+
+	// Environment atlases for the specular miss path. t21 is the sky-view LUT
+	// (bound explicitly by RenderSSR), so these start at t22. Null binds read as
+	// black, which degrades to the old "miss contributes nothing" behaviour.
+	Texture2D g_ssrSkyEnvAtlas : register(t22);
+	Texture2D g_ssrProbeAtlas  : register(t23);
+	Texture2D g_ssrProbeAtlas2 : register(t24);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
@@ -229,6 +240,7 @@
 		bool didFallback;  // true when we fell back to the last in-screen tex (not a true hit)
 		float3 colour;     // radiance to write
 		float hitDistance; // world-space distance from rayStart to the hit
+		float2 hitTex;     // screen UV the result was read from (debug)
 	};
 
 	HitResult RaymarchReflection(
@@ -237,13 +249,18 @@
 		float3 sourceNormal,
 		uint sourceInstanceID,
 		float jitter,
-		float rayRoughness)
+		float rayRoughness,
+		// Depth of the surface the ray starts from, for the loop-exhaustion
+		// fallback's "is what I am looking at farther than me" test - water's
+		// `actualDepth > currentDepth`.
+		float sourceDepth)
 	{
 		HitResult result;
 		result.didHit = false;
 		result.didFallback = false;
 		result.colour = 0.0f.xxx;
 		result.hitDistance = 0.0f;
+		result.hitTex = float2(0.0f, 0.0f);
 
 		// Push the start point off the source surface to avoid immediate self-intersection.
 		// Use both a normal bias and a small along-ray bias so the first sample is unambiguously
@@ -253,7 +270,24 @@
 		const int stepCount = 28;
 		const int refinementStepCount = 6;
 		const float minStepLen = 0.3f;
-		const float maxStepLen = 3.0f;
+		// How far the march can reach, in world units, is what decides which
+		// reflections exist at all:
+		//
+		//     reach ~= stepCount * (minStepLen + (maxStepLen - minStepLen) / 3)
+		//
+		// because the step length ramps quadratically. At the old maxStepLen of
+		// 3.0 that is ~34 units, against water.shader's ~96 (24 steps, 2..8).
+		// The Whereabouts hall's probe box alone is ~56 x 36 x 49 units, so a
+		// floor pixel reflecting anything high on the far wall simply ran out of
+		// budget partway and returned the wall it happened to be crossing. That
+		// is why the LOWER window row reflected correctly - short rays - while
+		// the upper row did not, and why the run-out point banded across the
+		// floor as visible artifacts.
+		//
+		// Larger steps trade near-field precision for reach, but the 6-step
+		// binary refinement below re-localises any hit once it is bracketed, and
+		// the thickness test already widens with distance travelled.
+		const float maxStepLen = max(minStepLen, g_ssrMaxStepLength);
 
 		float3 fragPos = origin;
 		float totalDistance = 0.0f;
@@ -270,7 +304,9 @@
 		// would end up reflecting the back wall and produce the long stripe artifact.
 		float2 lastInScreenTex = float2(-1.0f, -1.0f);
 		float lastInScreenDistance = 0.0f;
+		float lastInScreenDepth = 0.0f;
 		bool exitedScreen = false;
+		bool hitSkyOnce = false;
 
 		[loop]
 		for (int i = 0; i < stepCount; ++i)
@@ -278,9 +314,22 @@
 			const float marchFraction = saturate((float)i / (float)(stepCount - 1));
 			const float stepLen = lerp(minStepLen, maxStepLen, marchFraction * marchFraction);
 
-			// Thickness grows with distance from the camera so distant pixels still register;
-			// keep it tight near the source to avoid false self-hits.
-			const float thickness = lerp(0.6f, 2.0f, marchFraction);
+			// Acceptance thickness, and it must be at least THIS STEP'S LENGTH.
+			//
+			// The depth uncertainty a march introduces is exactly how far it
+			// jumped: a surface lying between two samples is invisible to a test
+			// tighter than the gap. This was lerp(0.6, 2.0, marchFraction) - tied
+			// to the step INDEX and capped at 2.0 - while a late step is several
+			// units long, so rays sailed past real geometry and fell through to
+			// the best-effort last-in-screen fallback instead of registering a
+			// hit. The path-classify view showed the hall floor almost entirely
+			// on that fallback rather than on real hits, which is what made the
+			// reflections smeary and banded: a fallback sample is wherever the
+			// ray happened to be, not what it was aimed at.
+			//
+			// The 6-step binary refinement below re-localises the surface once
+			// bracketed, so a generous bracket costs precision nothing.
+			const float thickness = max(lerp(0.6f, 2.0f, marchFraction), stepLen);
 
 			prevFragPos = fragPos;
 			prevTotalDistance = totalDistance;
@@ -327,11 +376,15 @@
 			// we want anyway - the GBuffer is screen-resolution and we never
 			// want a mipped read.
 			const float4 normalDepth = GBUFFER_NORMAL.SampleLevel(g_pointSampler, fragTex, 0);
-			const float actualDepth = normalDepth.w;
+			const float actualDepth = normalDepth.w;			
 
-			// Remember this in-screen sample for the loop-exhaustion fallback only.
-			lastInScreenTex = fragTex;
-			lastInScreenDistance = totalDistance;
+			
+
+			// if(actualDepth == g_frustumDepths[3])
+			// {
+			// 	exitedScreen = false;
+			// 	break;
+			// }
 
 			// Note: we deliberately do NOT special-case sky pixels here. Sky's actualDepth is
 			// the frustum-far value (very large), so the depth check below naturally rejects
@@ -341,9 +394,14 @@
 			// pixels and returned sky colour, before the ray had any chance to actually reach
 			// the wall geometry in 3D.
 
+			const bool didHitSky = (actualDepth == g_frustumDepths[3]) && (fragDepth > sourceDepth) && !hitSkyOnce;
+
+			if(didHitSky)
+				hitSkyOnce = true;
+
 			// Ray has passed behind the surface within the thickness window - candidate hit.
 			const float depthDelta = fragDepth - actualDepth;
-			if (depthDelta > 0.0f && depthDelta < thickness)
+			if ((depthDelta > 0.0f && (depthDelta < thickness)) || didHitSky)
 			{
 				// Binary-search refine between previous (in-front) and current (behind) samples.
 				float3 a = prevFragPos;
@@ -396,7 +454,7 @@
 				// Reject self-hits at the very source surface; the next iteration will progress
 				// further along the ray.
 				const uint hitInstance = (uint)GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, refinedTex, 0).w;
-				if (hitInstance == sourceInstanceID && refinedDistance < 4.0f)
+				if (hitInstance == sourceInstanceID && refinedDistance < 0.2f)
 					continue;
 
 				const float4 hitPosWS = GBUFFER_POSITION.SampleLevel(g_pointSampler, refinedTex, 0);
@@ -414,8 +472,18 @@
 				result.didHit = true;
 				result.colour = hitColour;
 				result.hitDistance = max(length(hitPosWS.xyz - rayStart), refinedDistance);
+				result.hitTex = refinedTex;
+
+				if(didHitSky)
+					continue;
+
 				return result;
 			}
+
+			// Remember this in-screen sample for the loop-exhaustion fallback only.
+			lastInScreenTex = fragTex;
+			lastInScreenDistance = totalDistance;
+			lastInScreenDepth = actualDepth;
 		}
 
 		// No real screen-space hit. Only use the water.shader last-in-screen-tex fallback when
@@ -425,12 +493,309 @@
 		// genuinely "outside what we can see", so the last in-screen tex is meaningless and
 		// would produce the stripe artifact along surfaces whose reflections all exit the same
 		// screen edge.
-		if (!exitedScreen && lastInScreenTex.x >= 0.0f)
+		// The `lastInScreenDepth > sourceDepth` guard is water.shader's
+		// `actualDepth > currentDepth`: only trust the last in-screen sample when
+		// the surface it landed on is FARTHER from the eye than the surface we
+		// are reflecting from. That is what makes the sample meaningful rather
+		// than arbitrary - the ray is still travelling toward something real that
+		// the camera can see, instead of having wandered across nearer geometry.
+		if (!exitedScreen && lastInScreenTex.x >= 0.0f && lastInScreenDepth > sourceDepth && false)
 		{
 			result.didHit = true;
 			result.didFallback = true;
 			result.colour = g_beautyTexture.SampleLevel(g_textureSampler, lastInScreenTex, 0).rgb;
+			result.hitTex = lastInScreenTex;
 			result.hitDistance = max(lastInScreenDistance, 1.0f);
+		}
+
+		return result;
+	}
+
+	// Screen-space DDA ray march (McGuire & Mara, "Efficient GPU Screen-Space
+	// Ray Tracing", JCGT 2014). r_ssrMarchMode 1.
+	//
+	// The legacy marcher above steps in WORLD space and projects every step to
+	// screen, so a step's screen footprint is unpredictable: near the camera one
+	// step spans many pixels (hits get skipped - surfaces thinner than the gap
+	// are invisible), far away many steps land in the same pixel (wasted work).
+	// The acceptance thickness then has to absorb that error, coupling two knobs
+	// that should be independent; today's history of trading smears for glow by
+	// tuning either one is that coupling at work.
+	//
+	// Here the ray is clipped and projected ONCE, then the 2D line is walked in
+	// fixed pixel-space increments. Attributes that are linear in screen space -
+	// 1/viewZ among them - are interpolated directly, so depth along the ray is
+	// perspective-correct at every pixel with no per-step matrix work. Every
+	// pixel the ray crosses is visited once. Thickness now models only real
+	// geometric thickness.
+	//
+	// Sky handling preserved from the hand fix that proved it out: a sky texel
+	// in front of the ray depth is recorded as a PROVISIONAL hit and the march
+	// continues, so real geometry found later along the ray wins. That is what
+	// makes a floor ray aimed through a window return the sky seen through it,
+	// without resurrecting the historical "first sky texel wins" streaking.
+	HitResult RaymarchReflectionDDA(
+		float3 rayStart,
+		float3 rayDir,
+		float3 sourceNormal,
+		uint sourceInstanceID,
+		float jitter,
+		float rayRoughness,
+		float sourceDepth)
+	{
+		HitResult result;
+		result.didHit = false;
+		result.didFallback = false;
+		result.colour = 0.0f.xxx;
+		result.hitDistance = 0.0f;
+		result.hitTex = float2(0.0f, 0.0f);
+
+		// Same self-intersection bias as the legacy marcher.
+		const float3 origin = rayStart + sourceNormal * 0.25f + rayDir * 0.10f;
+
+		// Total world-space length to consider. Generous: unlike the legacy
+		// marcher, unreachable far ends cost nothing here because the walk is
+		// bounded in PIXELS, not world units - a long ray that crosses few
+		// pixels is cheap by construction.
+		const float maxRayDistance = 300.0f;
+
+		// Clip the ray to the near plane in VIEW space before projecting - a
+		// segment crossing z=0 projects to garbage.
+		float4 v0 = mul(float4(origin, 1.0f), g_viewMatrix);
+		float4 v1 = mul(float4(origin + rayDir * maxRayDistance, 1.0f), g_viewMatrix);
+		// This engine's view space looks down -Z (fragDepth = -fragView.z in the
+		// legacy marcher). Clamp the far end to just inside the near plane.
+		const float nearZ = -0.11f;
+		if (v1.z > nearZ)
+		{
+			const float t = (nearZ - v0.z) / (v1.z - v0.z);
+			v1 = lerp(v0, v1, saturate(t));
+		}
+		if (v0.z > nearZ)
+			return result; // start behind the near plane - nothing to march
+
+		float4 c0 = mul(v0, g_projectionMatrix);
+		float4 c1 = mul(v1, g_projectionMatrix);
+		c0.xy += g_jitterOffsets * c0.w;
+		c1.xy += g_jitterOffsets * c1.w;
+
+		// Screen-space endpoints in PIXELS, plus the attributes that interpolate
+		// linearly in screen space: 1/w-scaled position is not needed, only
+		// 1/viewZ for the depth test and the world-space distance parameter for
+		// the hit report.
+		const float2 screenSize = float2((float)g_screenWidth, (float)g_screenHeight);
+		const float invW0 = 1.0f / c0.w;
+		const float invW1 = 1.0f / c1.w;
+		float2 p0 = (c0.xy * invW0 * 0.5f + 0.5f);
+		float2 p1 = (c1.xy * invW1 * 0.5f + 0.5f);
+		p0 = float2(p0.x, 1.0f - p0.y) * screenSize;
+		p1 = float2(p1.x, 1.0f - p1.y) * screenSize;
+		// Last sky texel the walk crossed, if any. This is the RIGHT place to
+		// answer "does this ray see sky" from - not the ray's endpoint. The sky
+		// seen through a window occupies the WINDOW's screen rectangle (the ray
+		// crosses its plane at finite distance), while the ray's vanishing point
+		// projects beyond the pane - onto the wall above it, or off-frame -
+		// because the room is enclosed. Testing the endpoint therefore reported
+		// "wall" for exactly the rays that genuinely escape through the glass and
+		// killed their reflections into environment grey. The last crossing is
+		// nearest the escape point, so it wins.
+		bool sawSky = false;
+		float2 skyT = float2(0.0f, 0.0f);
+
+		// viewZ is positive-depth (negated view z), matching gbuffer normal.w.
+		const float z0 = -v0.z;
+		const float z1 = -v1.z;
+		const float invZ0 = 1.0f / z0;
+		const float invZ1 = 1.0f / z1;
+
+		// Degenerate projection (ray nearly along the view axis): the whole
+		// march lands in a handful of pixels. Nudge the end one pixel so the
+		// DDA still advances; the depth interpolation stays correct.
+		if (distance(p0, p1) < 1.0f)
+			p1 += float2(1.0f, 1.0f);
+
+		const float2 delta = p1 - p0;
+		const float pixelLength = length(delta);
+		const float2 stepDir = delta / pixelLength;
+
+		// Pixel stride. 1 visits literally every pixel; that is exact but at
+		// 4K a long ray is thousands of taps. Stride s visits every s-th pixel,
+		// bounding the worst-case skip at s pixels - a known, uniform, SCREEN
+		// SPACE quantity, unlike the legacy marcher's world-space skips. The
+		// stride grows with distance along the ray (reflections far from the
+		// reflector get progressively coarser, which roughness masks anyway)
+		// and the loop is capped at a fixed sample budget.
+		const int sampleBudget = 96;
+		const float baseStride = max(1.0f, pixelLength / (float)sampleBudget);
+
+		// Sub-pixel jitter decorrelates adjacent rays' sample phase. Scaled by
+		// roughness exactly like the legacy marcher: mirror surfaces need
+		// deterministic sampling or adjacent pixels speckle.
+		const float ditherPhase = lerp(0.0f, jitter, rayRoughness);
+
+		float prevT = 0.0f;
+		bool exitedScreenDDA = false;
+
+		[loop]
+		for (int i = 0; i < sampleBudget; ++i)
+		{
+			// Parameter along the 2D line in [0,1]. QUADRATIC on purpose: dense
+			// near the reflector (sharp contact reflections) and SPARSE far away,
+			// so a ray that would reflect distant geometry tends to MISS and fall
+			// back to the bright, smooth, temporally-stable environment instead of
+			// locking onto dim, aliasing far screen pixels. The linear version
+			// sampled the far ray densely and reflected dark distant geometry,
+			// which read as darkness + long-range jitter + dark puddle rims on wet
+			// surfaces. (Far striping is the accepted trade; the real answer is a
+			// distance-based confidence falloff, tracked separately.)
+			const float f = ((float)i + 0.5f + ditherPhase) / (float)sampleBudget;
+			const float t = f * f;
+			const float2 pixel = p0 + stepDir * (t * pixelLength);
+			const float2 fragTex = pixel / screenSize;
+
+			if (any(fragTex < 0.0f) || any(fragTex > 1.0f))
+			{
+				exitedScreenDDA = true;
+				break;
+			}
+
+			// Perspective-correct depth at this pixel: 1/z interpolates
+			// linearly along the screen-space line.
+			const float invZ = lerp(invZ0, invZ1, t);
+			const float rayDepth = 1.0f / invZ;
+
+			const float4 normalDepth = GBUFFER_NORMAL.SampleLevel(g_pointSampler, fragTex, 0);
+			const float surfaceDepth = normalDepth.w;
+
+			// Sky texel: remember it and keep marching, so geometry later along
+			// the ray still wins. Three variants of this were tried and only this
+			// one is correct:
+			//   first crossing wins  - stamped every pane the 2D line clipped
+			//                          into the reflection (phantom pane rows)
+			//   ray endpoint decides - the vanishing point projects BEYOND the
+			//                          pane (onto the wall above it, or off
+			//                          frame) because the room is enclosed, so
+			//                          rays genuinely escaping through glass
+			//                          reported "wall" and went grey
+			//   LAST crossing wins   - nearest the ray's actual escape point,
+			//                          right colour, right place
+			// Geometry found after the last sky crossing still returns normally,
+			// which is what keeps walls from being replaced by panes.
+			if (surfaceDepth >= g_frustumDepths[3] * 0.999f)
+			{
+				prevT = t;
+				sawSky = true;
+				skyT = fragTex;
+				continue;
+			}
+
+			const float depthDelta = rayDepth - surfaceDepth;
+
+			// Thickness models GEOMETRY now, not marching error: how thick we
+			// assume the surface behind a depth sample to be. Grows mildly with
+			// depth so distant thin geometry (window frames) still registers
+			// against depth-buffer precision.
+			const float thickness = 0.5f + surfaceDepth * 0.5f;
+
+			if (depthDelta > 0.0f && depthDelta < thickness)
+			{
+				// Refine between the previous and current parameter. The DDA
+				// analogue of the legacy binary search: bisect t, not world
+				// position.
+				float ta = prevT;
+				float tb = t;
+				float2 refinedTex = fragTex;
+
+				[loop]
+				for (int j = 0; j < 10; ++j)
+				{
+					const float tm = (ta + tb) * 0.5f;
+					const float2 mPix = p0 + stepDir * (tm * pixelLength);
+					const float2 mTex = mPix / screenSize;
+					const float mDepth = 1.0f / lerp(invZ0, invZ1, tm);
+					const float mSurface = GBUFFER_NORMAL.SampleLevel(g_pointSampler, mTex, 0).w;
+					if (mDepth > mSurface) { tb = tm; refinedTex = mTex; }
+					else                   { ta = tm; }
+				}
+
+				// Self-hit rejection, sky-exempt per the hand fix: sky can
+				// never be a self-hit, and the blanket version of this guard
+				// was blocking legitimate hits.
+				const uint hitInstance = (uint)GBUFFER_DIFFUSE.SampleLevel(g_pointSampler, refinedTex, 0).w;
+				const float hitWorldDist = distance(
+					GBUFFER_POSITION.SampleLevel(g_pointSampler, refinedTex, 0).xyz, rayStart);
+					
+				if (hitInstance == sourceInstanceID && hitWorldDist < 0.2f)
+				{
+					prevT = t;
+					continue;
+				}
+
+				result.didHit = true;
+				result.colour = g_beautyTexture.SampleLevel(g_textureSampler, refinedTex, 0).rgb;
+				result.hitTex = refinedTex;
+				result.hitDistance = max(hitWorldDist, 0.5f);
+				return result;
+			}
+
+			prevT = t;
+		}
+
+		// Endpoint on geometry BEYOND the ray's own far end: content the march
+		// never had the RANGE to reach (maxRayDistance is 300; a fog-shrouded
+		// mountain sits at ~2km). Every ray aimed at such geometry used to
+		// return a miss - its track ends ON the distant silhouette, which is
+		// neither a depth crossing (surface always farther than the ray) nor a
+		// sky texel - and the env fill then painted atlas SKY over a mountain-
+		// shaped region of the reflection (bright hole; before the fog lift, a
+		// black hole - same hole). Continuing the ray from its endpoint is a
+		// far-field DIRECTION lookup, and the endpoint pixel is where that
+		// direction lands on screen - so the beauty there (fog and aerial
+		// perspective already baked in) is the correct answer. This is the same
+		// endpoint-decides doctrine as the sky tail below, extended to far
+		// geometry. It CANNOT reintroduce the rejected near-content fallback:
+		// geometry within range that the march stride-skipped has
+		// surfaceDepth < z1 and still falls through to the environment. Checked
+		// BEFORE the sky tail - geometry along the ray beats an earlier sky
+		// crossing, matching the geometry-after-sky-wins rule.
+		if (!exitedScreenDDA)
+		{
+			const float2 endTex = p1 / screenSize;
+			if (all(endTex >= 0.0f) && all(endTex <= 1.0f))
+			{
+				const float endSurface = GBUFFER_NORMAL.SampleLevel(g_pointSampler, endTex, 0).w;
+				if (endSurface > z1 && endSurface < g_frustumDepths[3] * 0.999f)
+				{
+					result.didHit = true;
+					result.colour = g_beautyTexture.SampleLevel(g_textureSampler, endTex, 0).rgb;
+					result.hitTex = endTex;
+					result.hitDistance = max(distance(
+						GBUFFER_POSITION.SampleLevel(g_pointSampler, endTex, 0).xyz, rayStart), z1);
+					return result;
+				}
+			}
+		}
+
+		// No geometry hit anywhere along the ray. The ray sees sky if and only
+		// if ITS OWN ENDPOINT - the vanishing point of the 3D direction, where
+		// the ray "is" at 300 units - lands on a sky texel:
+		//
+		//   endpoint on a pane's sky        -> that sky, correct hue and place
+		//   endpoint on wall/frame geometry -> the march missed real geometry
+		//                                      (stride skip); environment, whose
+		//                                      grey is honest, not a stolen pane
+		//   endpoint off screen             -> ray leaves the frame (steep
+		//                                      near-camera rays aimed at the
+		//                                      off-screen ceiling); environment
+		//
+		// This is what kills the phantom-pane artifact: no intermediate crossing
+		// can ever be promoted to an answer.
+		if (!exitedScreenDDA && sawSky)
+		{
+			result.didHit = true;
+			result.colour = g_beautyTexture.SampleLevel(g_textureSampler, skyT, 0).rgb;
+			result.hitTex = skyT;
+			result.hitDistance = max(z1, 8.0f);
 		}
 
 		return result;
@@ -445,9 +810,27 @@
 		out float hitDistance,
 		inout uint rngState,
 		float smoothness,
+		// Perceptual roughness from the gbuffer's own channel, for the
+		// environment lookup. NOT 1 - smoothness: this engine stores roughness
+		// (.g) and smoothness (.b) as INDEPENDENT values - the hall floor is
+		// authored smoothness 0.0 with roughnessFactor 0.625 - so deriving one
+		// from the other picked the sharpest atlas row for a rough surface and
+		// turned the fallback into hard bright blobs.
+		float perceptualRoughness,
 		bool wantSpecular,
-		uint instanceID)
+		uint instanceID,
+		// Which path produced the result, for r_ssrDebugSkyHits:
+		//   0 = real screen-space hit
+		//   1 = environment fill (the march found nothing)
+		//   2 = in-screen loop exhaustion / voxel-GI fallback
+		out float pathId,
+		// Screen-space position the ray actually resolved to, for
+		// r_ssrDebugSkyHits 3. "It hit something" and "it hit the thing you
+		// think it did" are different claims.
+		out float2 hitUv)
 	{
+		pathId = 0.0f;
+		hitUv = float2(0.0f, 0.0f);
 		didReflect = false;
 		hitDistance = 0.0f;
 
@@ -480,7 +863,13 @@
 
 			// rayRoughness=1.0 -> wide first-step jitter, which is what we want for a diffuse
 			// stochastic sample (decorrelates adjacent pixels so NRD can integrate spatially).
-			const HitResult hit = RaymarchReflection(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f);
+			// if/else, not a ternary: FXC's DXBC path rejects ?: between two
+			// struct-valued calls (X3020) even when the types match.
+			HitResult hit;
+			if (g_ssrMarchMode > 0.5f)
+				hit = RaymarchReflectionDDA(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f, currentDepth);
+			else
+				hit = RaymarchReflection(worldPos, diffuseDir, worldNormal, instanceID, jitter, 1.0f, currentDepth);
 
 			
 
@@ -518,24 +907,194 @@
 		// reflection. Without this, the spec direction was always mirror regardless of
 		// smoothness, so "smoothness" never affected reflection sharpness - it was just an
 		// intensity scalar.
-		const float3 specularDir = normalize(reflect(eyeDir, worldNormal));
+		// Puddle / wet-floor flattening. A smooth, up-facing surface (a puddle or
+		// wet asphalt) is physically a FLAT horizontal mirror, but in the gbuffer
+		// it carries the road's bumpy normal (asphalt normal map + rain ripples).
+		// Reflecting off that scatter sends the SSR ray into dark occluded
+		// geometry and makes it alias frame-to-frame - the dark blotches, the
+		// long-range shimmer, and the dark rim around puddles the user isolated to
+		// SSR. Flatten the REFLECTION normal toward world-up for such surfaces so
+		// they mirror coherently like a real puddle. Only the SSR ray normal is
+		// touched here; the shading normal elsewhere is unchanged.
+		// NOTE: do NOT widen the up-facing gate to flatten tilted pixels fully
+		// (tried: smoothstep 0.2..0.5). A fully-flattened reflection normal on a
+		// tilted pixel makes the mirror ray SKIM the ground at grazing view, and on
+		// the accumulation shell (real displaced mound geometry in the depth
+		// buffer) the skimming ray immediately hits the dark backside of the next
+		// mound - the black speckle carpeted the whole street. The real fix for
+		// "black puddles on the sand shell" is upstream: AutoPuddles no longer
+		// paints mirror gloss onto sand-covered ground at all (dirtAmount gate in
+		// AutoPuddles.shader). This flatten stays scoped to what it was validated
+		// for: near-flat bumpy roads (asphalt normal maps + rain ripples).
+		const float puddleness = saturate((smoothness - 0.75f) / 0.25f)
+			* saturate((worldNormal.y - 0.55f) / 0.45f);
+		const float3 reflNormal = normalize(lerp(worldNormal, float3(0.0f, 1.0f, 0.0f), puddleness));
+		const float3 specularDir = normalize(reflect(eyeDir, reflNormal));
 		const float rayRoughness = saturate(1.0f - smoothness);
 		const float3 randomOffset = RandomDirectionInDirectionOfNormal(specularDir, rngState);
 		float3 rayDir = normalize(specularDir + randomOffset * rayRoughness * rayRoughness);
 		// If perturbation pushed the ray below the surface, snap back to the mirror dir.
-		if (dot(rayDir, worldNormal) < 0.0f)
+		if (dot(rayDir, reflNormal) < 0.0f)
 			rayDir = specularDir;
 
 		const float jitter = RandomValue(rngState);
 
-		const HitResult hit = RaymarchReflection(worldPos, rayDir, worldNormal, instanceID, jitter, rayRoughness);
+		HitResult hit;
+		if (g_ssrMarchMode > 0.5f)
+			hit = RaymarchReflectionDDA(worldPos, rayDir, worldNormal, instanceID, jitter, rayRoughness, currentDepth);
+		else
+			hit = RaymarchReflection(worldPos, rayDir, worldNormal, instanceID, jitter, rayRoughness, currentDepth);
 
 		if (hit.didHit && !hit.didFallback)
 		{
 			// True screen-space hit (sky or geometry) - report exact world-space distance.
 			didReflect = true;
 			hitDistance = max(hit.hitDistance, 0.0f);
+			hitUv = hit.hitTex;
 			return float4(hit.colour, 1.0f);
+		}
+
+		// Loop exhausted while still on screen, looking at something FARTHER than
+		// the reflecting surface: take the beauty there, exactly as water.shader
+		// does. This is how water gets a correct sky reflection, and dropping it
+		// is why the reflections it used to get right regressed.
+		//
+		// It was removed for specular over a "long stripe artifact" - a road pixel
+		// reflecting upward marches through empty air, stays on screen the whole
+		// way, and lands on an arbitrary sample. The real defect there was that
+		// ANY last-in-screen sample was accepted; water guards it with
+		// `actualDepth > currentDepth`, now mirrored in RaymarchReflection. A ray
+		// that wandered across nearer geometry fails that test and falls through
+		// to the environment, while a ray still travelling toward something the
+		// camera can genuinely see is trusted.
+		//
+		// This is what fixes the reflected window panes, and it needs no
+		// environment at all: the outdoors behind the glass is ALREADY in the
+		// beauty buffer at those pixels. Transparent glass writes no opaque
+		// gbuffer, so the surface behind it is far away and the march can never
+		// satisfy the strict hit test - but the ray is pointing straight at a
+		// bright, visible, on-screen window the whole time. Falling back to a
+		// room-average probe threw that away and returned something much darker,
+		// which is what read as black panes.
+		if (hit.didHit && hit.didFallback && g_ssrInScreenFallback > 0.5f)
+		{
+			didReflect = true;
+			hitDistance = max(hit.hitDistance, 1.0f);
+			hitUv = hit.hitTex;
+			pathId = 3.0f;
+			return float4(hit.colour, 1.0f);
+		}
+
+		// Composition path: a ray that finds nothing returns the ENVIRONMENT along
+		// its own direction, right here, rather than leaving a hole for the
+		// resolve to patch afterwards.
+		//
+		// This is the case that rendered window panes black in the floor's
+		// reflection: transparent glass never writes the opaque gbuffer, so a
+		// floor ray aimed at a pane marches straight through and finds nothing,
+		// and the voxel cone trace below returns black whenever GI is off (which
+		// is also when its clipmaps are deliberately left unbound - see
+		// RenderSSR). Environment is a far better estimate of "what is off-screen
+		// in this direction" than a cone trace of a possibly-empty clipmap.
+		//
+		// Emitting it HERE rather than in the resolve is what kills the
+		// silhouettes. The resolve version gated environment on a confidence mask
+		// that was computed fresh each frame from one stochastic ray, while the
+		// radiance it gated had been through NRD's spatial AND temporal filter.
+		// The two disagreed at every hit/miss boundary - NRD spreads a hit's
+		// radiance outward, and during camera motion disoccluded pixels have
+		// almost no history - so the mask still said "hit" where the radiance had
+		// gone dark, suppressing the environment and leaving a hard dark rim that
+		// faded as history rebuilt. Measured: with r_ssrDenoise 0 the rims
+		// largely vanish, which is the signature of exactly that mismatch.
+		//
+		// Feeding the environment in per-ray means the signal NRD receives is
+		// already complete, so there is no unfiltered weight left to disagree
+		// with it, and the hit/miss transition gets denoised like everything
+		// else. Note this is only safe because the deferred pass no longer adds
+		// environment when composing - doing this while it did would trade black
+		// panes for double-bright ones.
+		if (g_iblComposeInResolve > 0.5f)
+		{
+			// Report a hit so the resolve adds nothing further for this pixel.
+			// Pixels SSR never traced at all (matte, sky) keep confidence 0 and
+			// are still filled by the resolve - that boundary follows whole
+			// surfaces rather than cutting through one, so it has no edge to
+			// shimmer.
+			didReflect = true;
+			hitDistance = 8.0f;
+			pathId = 1.0f;
+
+			// The RAY'S residual roughness, not the surface's - and the distinction
+			// is what reconciles two failures that looked contradictory:
+			//
+			// This is a STOCHASTIC per-ray fill. rayDir already carries the GGX
+			// cone perturbation, and NRD integrates the spread across pixels and
+			// frames - the same way a real screen-space hit samples SHARP beauty
+			// along the perturbed ray. Sampling a prefiltered row here blurs a
+			// second time, and measured in linear units that is fatal for exactly
+			// the case this fill exists for: the probe's mirror row carries
+			// windows at 246/255 (vs sky 255 - units are correct), but the GGX
+			// prefilter smears them into the dark room average by row 2 (max 77).
+			// Surface-roughness rows made off-screen window reflections ~30% of
+			// their true brightness.
+			//
+			// The analytic environment path (EvaluateEnvSpecular in the deferred
+			// pass / resolve) keeps using the surface roughness row - it is a
+			// single split-sum evaluation with no stochastic cone, so the
+			// prefilter IS its lobe integral. Only the per-ray fill wants the
+			// ray's own residual sharpness, which is the square the cone already
+			// applied to the perturbation.
+			// ...with a FLOOR of 0.25 (one prefilter row). Pure mirror-row
+			// sampling speckled: rain droplets perturb per-pixel normals, those
+			// scattered rays sample a 128px atlas whose mirror row is near-binary
+			// (window 246 / room ~20), and that contrast becomes per-pixel noise
+			// NRD never settles. One row of blur bounds the contrast (window max
+			// 117) while staying ~2x brighter than the surface-roughness rows
+			// that crushed windows to 77. Verified by A/B: the speckle follows
+			// this term, not the weather.
+			const float envRoughness = clamp(rayRoughness * rayRoughness, 0.25f, 1.0f);
+
+			// Horizon dimming, LIFTED by fog. The plain dim term (x0.35 at the
+			// horizon) is right for clear air, but in fog it black-holes every
+			// far miss: a ray aimed at distant geometry (a mountain ~2km out)
+			// exhausts its march budget long before reaching that depth, falls
+			// to this env fill, and got a dimmed clear-sky sample - while the
+			// neighbouring sky-aimed rays hit the fogged beauty and came back
+			// bright. Result: a mountain-shaped dark hole in the reflection.
+			// Physically, dense fog converges EVERYTHING far toward the
+			// atmosphere colour (that is literally what
+			// fogFarAtmosphereMatchStrength does to beauty), and the sky atlas
+			// horizon IS that colour (weather-tinted at capture) - so as fog
+			// optical depth over the atmosphere-blend distance approaches 1,
+			// stop dimming and return the atlas sample at full strength.
+			const float envFogExt = max(g_atmosphere.fogDensity + g_atmosphere.fogHeightDensity, 0.0f);
+			const float envFogDist = max(g_atmosphere.fogAtmosphereBlendStart + g_atmosphere.fogAtmosphereBlendRange, 0.0f);
+			const float envFogAmount = 1.0f - exp(-envFogExt * envFogDist);
+			const float envHorizonDim = lerp(saturate(rayDir.y * 3.0f + 0.35f), 1.0f, envFogAmount);
+			float3 env = SampleEnvAtlas(g_ssrSkyEnvAtlas, g_textureSampler, rayDir, envRoughness)
+				* envHorizonDim * g_iblSkySpecular;
+
+			// Probes replace the sky inside their box, matching
+			// EnvMapCommon::EvaluateEnvSpecular so the two estimates agree.
+			const float w1 = ProbeWeight(worldPos, g_probeCenter,  g_probeExtents);
+			const float w2 = ProbeWeight(worldPos, g_probeCenter2, g_probeExtents2);
+			const float wSum = w1 + w2;
+			if (wSum > 0.0f)
+			{
+				const float coverage = saturate(wSum);
+				float3 probeEnv = 0.0f.xxx;
+				if (w1 > 0.0f)
+					probeEnv += (w1 / wSum) * SampleEnvAtlas(g_ssrProbeAtlas, g_textureSampler,
+						ProbeSpecularDir(rayDir, worldPos, g_probeCenter, g_probeExtents), envRoughness);
+				if (w2 > 0.0f)
+					probeEnv += (w2 / wSum) * SampleEnvAtlas(g_ssrProbeAtlas2, g_textureSampler,
+						ProbeSpecularDir(rayDir, worldPos, g_probeCenter2, g_probeExtents2), envRoughness);
+
+				env = lerp(env, probeEnv * g_iblParams.z, coverage);
+			}
+
+			return float4(env, 1.0f);
 		}
 
 		// Miss path - cone-trace the voxel GI clipmaps in the ray direction for an indirect-
@@ -562,6 +1121,7 @@
 
 		didReflect = true;
 		hitDistance = max(traceDistance, 8.0f);
+		pathId = 2.0f;
 		return float4(giRadiance, 1.0f);
 	}
 
@@ -569,7 +1129,12 @@
 	{
 		SSROut ssr = (SSROut)0;
 
-		const float2 screenPosCanonical = float2(input.position.x / (float)g_screenWidth, input.position.y / (float)g_screenHeight);
+		// UV from the fullscreen quad's texcoord, NOT SV_Position over
+		// g_screenWidth: with r_ssrHalfRes the pass renders into a half-size
+		// viewport while g_screenWidth stays the full render width, and the
+		// SV_Position form would squeeze every ray into the top-left quadrant.
+		// The texcoord always spans 0..1 over whatever viewport is bound.
+		const float2 screenPosCanonical = input.texcoord;
 
 		// Compensate the source gbuffer reads for TAA jitter. The gbuffer was rasterised with
 		// `clip.xy += g_jitterOffsets * w` in the vertex shader, so the canonical world point
@@ -581,7 +1146,21 @@
 		// avoids by not applying TAA jitter to its own geometry.
 		// jitterUv: X follows clip directly, Y flips because clip-Y-up -> screen-UV-Y-down.
 		const float2 jitterUv = float2(g_jitterOffsets.x * 0.5f, -g_jitterOffsets.y * 0.5f);
-		const float2 screenPos = screenPosCanonical;// + jitterUv;
+		// (Tried enabling the + jitterUv compensation for the half-res panning
+		// warp, 2026-07-30 - no effect on the symptom, reverted to keep the
+		// settled behaviour untouched.)
+		//
+		// Snap the sampling UV to the centre of the top-left gbuffer texel of
+		// this output pixel's footprint. At FULL res this is an exact no-op
+		// (texcoord already sits on texel centres). At HALF res the raw
+		// texcoord lands exactly on the boundary between two gbuffer texels:
+		// point samples become rounding-unstable and linear samples become
+		// 50/50 blends of two surfaces - ray origins built from a surface
+		// that does not exist, alternating frame to frame. The snap picks the
+		// SAME texel as SSRGuideDownsample's Load, so the ray data and NRD's
+		// guides always describe the same surface.
+		const float2 gbufSize = float2((float)g_screenWidth, (float)g_screenHeight);
+		const float2 screenPos = (floor(screenPosCanonical * gbufSize - 0.5f) + 0.5f) / gbufSize;
 
 		// Material and instance data must stay point-sampled - pixelDiffuse.w encodes the
 		// instance ID as a float (nonsensical to interpolate) and pixelSpecular packs per-pixel
@@ -595,6 +1174,8 @@
 		const float4 pixelPosWS  = GBUFFER_POSITION.Sample(g_textureSampler, screenPos);
 
 		const float smoothness = pixelSpecular.b;
+		// Roughness is its OWN gbuffer channel here, independent of smoothness.
+		const float perceptualRoughness = clamp(pixelSpecular.g, 0.04f, 1.0f);
 		const float metalness = pixelSpecular.r;
 		const float3 diffuseSurfaceColour = saturate(pixelDiffuse.rgb);
 
@@ -623,7 +1204,23 @@
 		const float3 F0 = lerp(0.04f.xxx, diffuseSurfaceColour, metalness);
 		const float NdotV = saturate(dot(pixelNormal.xyz, -eyeVector));
 		const float fresnelExp = pow(1.0f - NdotV, 5.0f);
-		const float3 fresnel = F0 + (1.0f.xxx - F0) * fresnelExp;
+		// ROUGHNESS-AWARE Fresnel (Karis F90 = max(1-roughness, F0)), NOT raw
+		// Schlick. Raw Schlick is a per-microfacet term: it reaches 1.0 at
+		// grazing for EVERY surface, so every glossy-ish wet pixel at distance
+		// (grazing view) claimed 100% mirror weight - and since the resolve
+		// removes base lighting by this same weight (energy conservation), the
+		// surface's diffuse was DELETED and wholly replaced by one stochastic
+		// ray that, on a rough surface, lands on dark geometry half the time.
+		// That base-wipe was the single mechanism behind every "black at
+		// distance" artifact (black speckle carpets, dark mountain holes in wet
+		// roads, dark puddle rims). The VISIBLE grazing reflectance of a rough
+		// surface is the NDF-integrated (split-sum) value, which saturates well
+		// below 1; F90 = max(1-roughness, F0) is the standard approximation.
+		// A true mirror (roughness ~0.04) keeps full grazing reflectance; a
+		// rough wet road caps near ~0.3 and keeps its diffuse. SSRResolve
+		// mirrors this formula so the base attenuation matches what is added.
+		const float3 f90 = max((1.0f - perceptualRoughness).xxx, F0);
+		const float3 fresnel = F0 + (f90 - F0) * fresnelExp;
 		const float3 specularWeight = fresnel;
 		const float3 diffuseWeightRGB = ((1.0f.xxx - fresnel) * (1.0f -  metalness));
 		// Scalar threshold for the diffuse-ray gate, using the luminance of the weight.
@@ -641,6 +1238,26 @@
 		const float3 noise = g_noiseTexture.Sample(g_pointSampler, noiseSamplePos).rgb;
 
 		uint baseRngState = pixelIndex + 719393u + (uint)(noise.r * 3654.0f) + (uint)(noise.g * 1232.0f) + (uint)(noise.b * 1540.0f);
+
+		// Per-frame sample rotation, gated on the denoiser being active.
+		//
+		// The frame-STABLE seed above was a mistake whenever NRD is running, and
+		// a subtle one: it produced reflections that look beautiful right after
+		// camera movement and then DEGRADE to static speckle over a few seconds.
+		// RELAX starts with rejected history and covers with a wide spatial
+		// filter (the good frames), then narrows spatial support as history
+		// accumulates and leans on the temporal mean instead - but the temporal
+		// mean of a constant is that constant, so the output converges TO the
+		// per-pixel single-sample noise rather than to the lobe integral. A
+		// temporal accumulator can only integrate a signal that varies; feeding
+		// it the same cone sample every frame defeats the entire mechanism.
+		//
+		// Rotation stays off when the denoiser is off (g_ssrTemporalJitter
+		// carries r_ssrDenoise && r_ssrTemporalJitter): the raw diagnostic path
+		// has no temporal integrator, so there frame-stable really is the less
+		// shimmery choice.
+		if (g_ssrTemporalJitter > 0.5f)
+			baseRngState = Hash32(baseRngState ^ (g_frame * 0x9E3779B9u));
 		const float depth = pixelNormal.w;
 
 		float3 diffuseAccum = 0.0f.xxx;
@@ -649,6 +1266,18 @@
 		float specularHitDistAccum = 0.0f;
 		float diffuseSamples = 0.0f;
 		float specularSamples = 0.0f;
+		// Diagnostics for r_ssrDebugSkyHits. Which path the specular ray took and
+		// what radiance it produced, so "the reflection is black here" can be
+		// answered with "the ray missed and the environment it fell back to is
+		// this dark" instead of a guess.
+		float specPathId = 0.0f;
+		float2 specHitUv = float2(0.0f, 0.0f);
+		float3 specDebugRadiance = 0.0f.xxx;
+		// Fraction of this pixel's specular rays that found real screen-space data.
+		// The resolve blends the environment in by (1 - this), so a pixel whose ray
+		// left the screen or passed through glass gets the environment rather than
+		// the black that a failed march used to leave behind.
+		float specularConfidenceAccum = 0.0f;
 
 		// Diffuse SSR: one stochastic hemisphere ray per pixel per frame. The diffuse path in
 		// GetReflection contributes only the screen-space DELTA over DiffuseGI's voxel-cone
@@ -675,6 +1304,8 @@
 			{
 				bool didReflect = false;
 				float hitDistance = 0.0f;
+				float diffusePathIdUnused = 0.0f;
+				float2 diffuseHitUvUnused = float2(0.0f, 0.0f);
 				float4 reflected = GetReflection(
 					eyeVector,
 					pixelPosWS.xyz,
@@ -684,8 +1315,11 @@
 					hitDistance,
 					rng,
 					smoothness,
+					perceptualRoughness,
 					false,
-					instanceID);
+					instanceID,
+					diffusePathIdUnused,
+					diffuseHitUvUnused);
 
 					//if(didReflect)
 					{
@@ -716,14 +1350,19 @@
 					hitDistance,
 					rng,
 					smoothness,
+					perceptualRoughness,
 					true,
-					instanceID);
+					instanceID,
+					specPathId,
+					specHitUv);
 
 				//if(didReflect)
 				{
 					specularAccum += reflected.rgb;
 					specularHitDistAccum += hitDistance;
 					specularSamples += 1.0f;
+					specularConfidenceAccum += didReflect ? 1.0f : 0.0f;
+					specDebugRadiance = reflected.rgb;
 				}
 			}
 		}
@@ -742,7 +1381,52 @@
 		//ssr.diff = float4(pixelNormal.rgb, 1.0f);
 		ssr.diffHitInfo = float4(0.0f, 0.0f, 0.0f, averageDiffuseHitDistance);
 		ssr.spec = float4(specularRadiance * specularWeight, specularSamples > 0.0f ? 1.0f : 0.0f);
-		ssr.specHitInfo = float4(0.0f, 0.0f, 0.0f, averageSpecularHitDistance);
+		// .r carries the screen-space confidence for SSRResolve's environment
+		// composition; NRD reads only .w of this target (see NRDInterface's
+		// preprocess, which packs specularHitDistance.w), so .rgb are free.
+		const float specularConfidence =
+			specularSamples > 0.0f ? (specularConfidenceAccum / specularSamples) : 0.0f;
+		ssr.specHitInfo = float4(specularConfidence, 0.0f, 0.0f, averageSpecularHitDistance);
+
+		// r_ssrDebugSkyHits, written last so it overrides the real output.
+		//   1 = path classify: RED real screen hit / GREEN environment fill /
+		//       BLUE voxel-GI fallback / YELLOW water-style in-screen fallback.
+		//       Answers "did this pixel miss, and how did it recover?".
+		//   2 = the specular radiance the ray produced, x50. Answers "and how
+		//       bright was what it fell back to?" - a black result under mode 2
+		//       with green under mode 1 means the environment itself is dark,
+		//       not that the fallback failed to run.
+		if (g_ssrDebugSkyHits > 0.5f)
+		{
+			if (g_ssrDebugSkyHits < 1.5f)
+			{
+				const float3 classify = (specPathId < 0.5f) ? float3(1, 0, 0)
+					: (specPathId < 1.5f) ? float3(0, 1, 0)
+					: (specPathId < 2.5f) ? float3(0, 0, 1) : float3(1, 1, 0);
+				ssr.spec = float4(classify, 1.0f);
+			}
+			else if (g_ssrDebugSkyHits < 2.5f)
+			{
+				ssr.spec = float4(specDebugRadiance * 50.0f, 1.0f);
+			}
+			else
+			{
+				// Mode 3: WHERE the ray landed, as screen UV. Red = horizontal,
+				// green = vertical. A reflection can be a genuine hit and still
+				// be reading the wrong part of the screen.
+				//
+				// CAVEAT, and it matters: every mode here is written into
+				// ssr.spec, which then goes through the resolve's composite AND
+				// the tonemapper before it reaches a screenshot. Mode 1 survives
+				// that because it only needs which of four colours is largest,
+				// but modes 2 and 3 are QUANTITIES - read them back off a
+				// captured frame and you get tonemapped values, not the numbers
+				// this shader wrote. Reading exact UVs needs a debug path that
+				// writes the final image directly, bypassing the tonemap.
+				ssr.spec = float4(specHitUv.x, specHitUv.y, 0.0f, 1.0f);
+			}
+			ssr.diff = 0.0f.xxxx;
+		}
 
 		return ssr;
 	}

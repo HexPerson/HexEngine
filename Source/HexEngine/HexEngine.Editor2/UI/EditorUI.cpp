@@ -30,6 +30,24 @@ namespace HexEditor
 				}
 			});
 
+		HexEngine::Transform::SetEditorRotateCommitCallback(
+			[](HexEngine::Entity* entity, const math::Quaternion& before, const math::Quaternion& after)
+			{
+				if (g_pUIManager != nullptr)
+				{
+					g_pUIManager->RecordEntityRotationChange(entity, before, after);
+				}
+			});
+
+		HexEngine::Transform::SetEditorScaleCommitCallback(
+			[](HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)
+			{
+				if (g_pUIManager != nullptr)
+				{
+					g_pUIManager->RecordEntityScaleChange(entity, before, after);
+				}
+			});
+
 		_gadgets.push_back(new ScaleGadget);
 		_gadgets.push_back(new PositionGadget);
 		_gadgets.push_back(new DuplicateGadget);
@@ -38,6 +56,8 @@ namespace HexEditor
 	EditorUI::~EditorUI()
 	{		
 		HexEngine::Transform::SetEditorTranslateCommitCallback({});
+		HexEngine::Transform::SetEditorRotateCommitCallback({});
+		HexEngine::Transform::SetEditorScaleCommitCallback({});
 		HexEngine::g_pEnv->_inputSystem->RemoveInputListener(this);
 		g_pUIManager = nullptr;
 	}
@@ -515,6 +535,15 @@ namespace HexEditor
 		return (_rightDock != nullptr) ? _rightDock->GetInspectingEntity() : nullptr;
 	}
 
+	bool EditorUI::SetSelectedEntity(HexEngine::Entity* entity)
+	{
+		if (_rightDock == nullptr)
+			return false;
+
+		_rightDock->InspectEntity(entity);
+		return true;
+	}
+
 	std::string EditorUI::GetProjectName()
 	{
 		if (!_projectFilePath.empty()) return _projectFilePath.stem().string();
@@ -530,6 +559,46 @@ namespace HexEditor
 	std::string EditorUI::GetProjectFilePath()
 	{
 		return _projectFilePath.empty() ? std::string() : _projectFilePath.string();
+	}
+
+	bool EditorUI::OpenProject(const std::string& projectFilePath, std::string& error)
+	{
+		if (!_projectFolderPath.empty())
+		{
+			error = "a project is already open; switching projects requires an editor restart";
+			return false;
+		}
+
+		fs::path p(projectFilePath);
+		if (!fs::exists(p))
+		{
+			error = "project file does not exist: " + projectFilePath;
+			return false;
+		}
+
+		// Same flow as ProjectManager::OnClickExistingProject: dismiss the
+		// browser dialog, show a loading dialog, and run the load on a worker
+		// thread (the completion handler expects to be off the main thread so
+		// the loading dialog can repaint).
+		if (_projectManager != nullptr)
+		{
+			_projectManager->DeleteMe();
+			_projectManager = nullptr;
+		}
+
+		HexEngine::LoadingDialog* loadingDlg = new HexEngine::LoadingDialog(
+			_rootElement,
+			HexEngine::Point((int32_t)GetWidth() / 2 - 220, (int32_t)GetHeight() / 2 - 60),
+			HexEngine::Point(440, 120), L"Loading");
+
+		std::thread thread([this](const fs::path path, HexEngine::LoadingDialog* dlg)
+			{
+				OnProjectManagerCompleted(path.parent_path(), path.filename().string(), true, L"", dlg);
+			},
+			p, loadingDlg);
+		thread.detach();
+
+		return true;
 	}
 
 	void EditorUI::BroadcastEditorToolMessage(HexEngine::Message& message)
@@ -1408,6 +1477,34 @@ namespace HexEditor
 				return false;
 		}
 
+		// W/E/R switch the scene-view transform gizmo (translate/rotate/scale).
+		// Only when the mouse is over the viewport so panels keep their keys.
+		if (event == HexEngine::InputEvent::KeyDown &&
+			!isTypingInLineEdit &&
+			!HexEngine::g_pEnv->_inputSystem->IsCtrlDown() &&
+			_sceneView->GetRoamState() != SceneView::RoamState::FreeLook &&
+			_integrator.GetState() != GameTestState::Started &&
+			_sceneView->IsMouseOverSceneViewport())
+		{
+			switch (data->KeyDown.key)
+			{
+			case 'W':
+				HexEngine::Transform::SetEditorGizmoMode(HexEngine::EditorGizmoMode::Translate);
+				return false;
+
+			case 'E':
+				HexEngine::Transform::SetEditorGizmoMode(HexEngine::EditorGizmoMode::Rotate);
+				return false;
+
+			case 'R':
+				HexEngine::Transform::SetEditorGizmoMode(HexEngine::EditorGizmoMode::Scale);
+				return false;
+
+			default:
+				break;
+			}
+		}
+
 		if (_sceneView->GetRoamState() == SceneView::RoamState::FreeLook)
 		{
 			if (event == HexEngine::InputEvent::KeyDown)
@@ -1822,6 +1919,15 @@ namespace HexEditor
 
 		_transactions.Push(std::make_unique<PositionTransaction>(entity->GetName(), before, after));
 		_prefabController.HandleTransformPositionEdit(entity, before, after);
+	}
+
+	void EditorUI::RecordEntityRotationChange(HexEngine::Entity* entity, const math::Quaternion& before, const math::Quaternion& after)
+	{
+		if (entity == nullptr || before == after)
+			return;
+
+		_transactions.Push(std::make_unique<RotationTransaction>(entity->GetName(), before, after));
+		_prefabController.HandleTransformRotationEdit(entity, before, after);
 	}
 
 	void EditorUI::RecordEntityScaleChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after)

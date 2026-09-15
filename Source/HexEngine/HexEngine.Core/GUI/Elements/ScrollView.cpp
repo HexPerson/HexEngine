@@ -83,7 +83,8 @@ namespace HexEngine
 
 	void ScrollView::PreRender(GuiRenderer* renderer, uint32_t w, uint32_t h)
 	{
-		(void)renderer;
+		(void)w;
+		(void)h;
 
 		if (_contentRoot == nullptr)
 			return;
@@ -119,7 +120,9 @@ namespace HexEngine
 			_canvas.Redraw();
 		}
 
-		_isCapturing = _canvas.BeginDraw(renderer, w, h);
+		// Capture into an element-sized canvas; our absolute position becomes texel (0,0).
+		const auto absPos = GetAbsolutePosition();
+		_isCapturing = _canvas.BeginDraw(renderer, (uint32_t)_size.x, (uint32_t)_size.y, absPos.x, absPos.y);
 
 		// When the canvas is clean, skip rendering children to backbuffer.
 		// We still present the cached canvas below, preserving clip behavior.
@@ -193,8 +196,7 @@ namespace HexEngine
 			_contentRootRenderSuppressed = false;
 		}
 
-		const RECT viewport = GetViewportRect();
-		_canvas.Present(renderer, pos.x, pos.y, _size.x, _size.y, viewport);
+		_canvas.Present(renderer, pos.x, pos.y, _size.x, _size.y);
 	}
 
 	bool ScrollView::OnInputEvent(InputEvent event, InputData* data)

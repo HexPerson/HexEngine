@@ -74,8 +74,11 @@ namespace HexEngine::Weather
 		// 2x band that the froxel system never even consumed (baseExt was
 		// hardcoded 0) - all weathers rendered with identical visibility.
 		case WeatherPresetId::Clear:
-			state.cloudCoverage = 0.18f;
-			state.cloudDensity = 0.55f;
+			state.cloudCoverage = 0.08f;
+			state.cloudType = 0.85f;      // fair-weather cumulus
+			state.cirrusAmount = 0.35f;
+			state.cirrusType = 0.30f;
+			state.cloudDensity = 0.50f;
 			state.cloudErosion = 0.45f;
 			state.windSpeed = 9.0f;
 			state.fogDensity = 0.0002f;
@@ -84,12 +87,18 @@ namespace HexEngine::Weather
 			break;
 		case WeatherPresetId::Overcast:
 			state.zenithExponent = 2.2f;
+			// Deck values bridge-tuned live 2026-08-29 against the HDR sky:
+			// a heavy broken deck (0.88) of thick (1.7) low stratus reads as
+			// overcast; the old 0.60/1.05 rendered sparse thin scraps.
+			state.cloudType = 0.10f;      // flat stratus deck
+			state.cirrusAmount = 0.0f;
+			state.cirrusType = 0.50f;
 			state.anisotropicIntensity = 0.16f;
 			state.atmosphereDensity = 0.16f;
-			state.cloudCoverage = 0.82f;
-			state.cloudDensity = 1.45f;
-			state.cloudAmbientStrength = 0.22f;
-			state.cloudViewAbsorption = 0.70f;
+			state.cloudCoverage = 0.88f;
+			state.cloudDensity = 1.70f;
+			state.cloudAmbientStrength = 0.75f;
+			state.cloudViewAbsorption = 0.90f;
 			state.cloudShadowStrength = 0.82f;
 			state.sunIntensity = 0.22f;
 			state.sunColour = math::Color(0.68f, 0.71f, 0.76f, 1.0f);
@@ -110,15 +119,18 @@ namespace HexEngine::Weather
 			break;
 		case WeatherPresetId::Rain:
 			state.zenithExponent = 1.9f;
+			state.cloudType = 0.15f;
+			state.cirrusAmount = 0.0f;
 			state.anisotropicIntensity = 0.14f;
 			state.atmosphereDensity = 0.18f;
 			state.precipitationType = WeatherPrecipitationType::Rain;
 			state.precipitationIntensity = 0.45f;
 			state.surface.wetness = 0.55f;
 			state.surface.puddleAmount = 0.25f;
-			state.cloudCoverage = 0.94f;
-			state.cloudDensity = 1.55f;
-			state.cloudViewAbsorption = 0.82f;
+			// Bridge-tuned 2026-08-29 against the HDR sky.
+			state.cloudCoverage = 0.95f;
+			state.cloudDensity = 1.90f;
+			state.cloudViewAbsorption = 0.90f;
 			state.cloudShadowStrength = 0.92f;
 			state.sunIntensity = 0.16f;
 			state.sunColour = math::Color(0.58f, 0.62f, 0.68f, 1.0f);
@@ -127,7 +139,7 @@ namespace HexEngine::Weather
 			state.ambientSkyStrength = 0.16f;
 			state.rayleighStrength = 0.26f;
 			state.mieStrength = 1.95f;
-			state.cloudAmbientStrength = 0.14f;
+			state.cloudAmbientStrength = 0.32f;
 			state.sunHazeStrength = 1.35f;
 			state.sunsetWarmStrength = 0.04f;
 			state.sunsetCoolStrength = 0.14f;
@@ -142,6 +154,7 @@ namespace HexEngine::Weather
 		case WeatherPresetId::HeavyRain:
 			state = MakePresetState(WeatherPresetId::Rain);
 			state.presetId = WeatherPresetId::HeavyRain;
+			state.cloudType = 0.25f;
 			state.precipitationIntensity = 1.0f;
 			state.precipitationAreaRadius = 38.0f;
 			state.precipitationHeight = 22.0f;
@@ -149,8 +162,8 @@ namespace HexEngine::Weather
 			state.surface.puddleAmount = 0.60f;
 			state.zenithExponent = 1.55f;
 			state.anisotropicIntensity = 0.10f;
-			state.cloudCoverage = 0.98f;
-			state.cloudDensity = 1.95f;
+			state.cloudCoverage = 1.0f;
+			state.cloudDensity = 2.10f;
 			state.cloudViewAbsorption = 0.95f;
 			state.cloudShadowStrength = 1.0f;
 			state.sunIntensity = 0.08f;
@@ -160,7 +173,7 @@ namespace HexEngine::Weather
 			state.ambientSkyStrength = 0.10f;
 			state.rayleighStrength = 0.18f;
 			state.mieStrength = 2.15f;
-			state.cloudAmbientStrength = 0.08f;
+			state.cloudAmbientStrength = 0.26f;
 			state.sunHazeStrength = 1.55f;
 			state.sunsetWarmStrength = 0.02f;
 			state.sunsetCoolStrength = 0.10f;
@@ -175,6 +188,7 @@ namespace HexEngine::Weather
 		case WeatherPresetId::Storm:
 			state = MakePresetState(WeatherPresetId::HeavyRain);
 			state.presetId = WeatherPresetId::Storm;
+			state.cloudType = 0.55f;      // towering storm cells
 			state.enableLightning = true;
 			state.lightningIntensity = 5.5f;
 			state.lightningIntervalMin = 1.2f;
@@ -185,7 +199,7 @@ namespace HexEngine::Weather
 			state.anisotropicIntensity = 0.06f;
 			state.atmosphereDensity = 0.24f;
 			state.cloudCoverage = 1.0f;
-			state.cloudDensity = 2.25f;
+			state.cloudDensity = 2.40f;
 			state.sunIntensity = 0.03f;
 			state.sunColour = math::Color(0.42f, 0.46f, 0.52f, 1.0f);
 			state.fogColour = math::Color(0.24f, 0.27f, 0.32f, 1.0f);
@@ -193,7 +207,7 @@ namespace HexEngine::Weather
 			state.ambientSkyStrength = 0.05f;
 			state.rayleighStrength = 0.10f;
 			state.mieStrength = 2.45f;
-			state.cloudAmbientStrength = 0.04f;
+			state.cloudAmbientStrength = 0.18f;
 			state.cloudViewAbsorption = 1.0f;
 			state.cloudShadowStrength = 1.0f;
 			state.sunHazeStrength = 1.85f;
@@ -220,14 +234,17 @@ namespace HexEngine::Weather
 			break;
 		case WeatherPresetId::Snow:
 			state.zenithExponent = 2.0f;
+			state.cloudType = 0.20f;
+			state.cirrusAmount = 0.15f;
+			state.cirrusType = 0.60f;
 			state.anisotropicIntensity = 0.12f;
 			state.precipitationType = WeatherPrecipitationType::Snow;
 			state.precipitationIntensity = 0.36f;
 			state.surface.snowCoverage = 0.45f;
 			state.surface.snowMelt = 0.15f;
 			state.surface.temperatureBias = -0.8f;
-			state.cloudCoverage = 0.78f;
-			state.cloudDensity = 1.05f;
+			state.cloudCoverage = 0.92f;
+			state.cloudDensity = 1.50f;
 			state.atmosphereDensity = 0.13f;
 			state.sunIntensity = 0.18f;
 			state.sunColour = math::Color(0.72f, 0.76f, 0.82f, 1.0f);
@@ -240,8 +257,8 @@ namespace HexEngine::Weather
 			state.sunsetWarmStrength = 0.06f;
 			state.sunsetCoolStrength = 0.18f;
 			state.sunsetGlowStrength = 0.06f;
-			state.cloudAmbientStrength = 0.12f;
-			state.cloudViewAbsorption = 0.78f;
+			state.cloudAmbientStrength = 0.55f;
+			state.cloudViewAbsorption = 0.80f;
 			state.cloudShadowStrength = 0.82f;
 			// Snow: ~650m visibility - softly muffled air, still navigable.
 			state.fogDensity = 0.006f;
@@ -253,12 +270,14 @@ namespace HexEngine::Weather
 		case WeatherPresetId::Blizzard:
 			state = MakePresetState(WeatherPresetId::Snow);
 			state.presetId = WeatherPresetId::Blizzard;
+			state.cloudType = 0.25f;
+			state.cirrusAmount = 0.0f;
 			state.precipitationIntensity = 1.0f;
 			state.precipitationAreaRadius = 42.0f;
 			state.precipitationHeight = 20.0f;
 			state.surface.snowCoverage = 0.9f;
-			state.cloudCoverage = 0.95f;
-			state.cloudDensity = 1.65f;
+			state.cloudCoverage = 0.98f;
+			state.cloudDensity = 1.90f;
 			state.atmosphereDensity = 0.17f;
 			state.zenithExponent = 1.45f;
 			state.anisotropicIntensity = 0.07f;
@@ -273,7 +292,7 @@ namespace HexEngine::Weather
 			state.sunsetWarmStrength = 0.02f;
 			state.sunsetCoolStrength = 0.10f;
 			state.sunsetGlowStrength = 0.02f;
-			state.cloudAmbientStrength = 0.06f;
+			state.cloudAmbientStrength = 0.35f;
 			state.cloudViewAbsorption = 0.95f;
 			state.cloudShadowStrength = 0.95f;
 			// Blizzard: ~85m visibility - genuine whiteout. The froxel medium
@@ -287,8 +306,13 @@ namespace HexEngine::Weather
 			break;
 		case WeatherPresetId::Hot:
 			state.surface.temperatureBias = 1.0f;
-			state.cloudCoverage = 0.12f;
-			state.cloudDensity = 0.35f;
+			state.cloudType = 0.90f;
+			state.cirrusAmount = 0.45f;
+			state.cirrusType = 0.25f;
+			state.cloudCoverage = 0.14f;
+			state.cloudDensity = 0.55f;
+			state.cloudAmbientStrength = 0.60f;
+			state.cloudViewAbsorption = 0.50f;
 			state.sunIntensity = 1.25f;
 			state.atmosphereDensity = 0.14f;
 			state.mieStrength = 1.45f;
@@ -300,11 +324,13 @@ namespace HexEngine::Weather
 			break;
 		case WeatherPresetId::Sandstorm:
 			state.precipitationType = WeatherPrecipitationType::Sand;
+			state.cloudType = 0.30f;
+			state.cirrusAmount = 0.05f;
 			state.precipitationIntensity = 0.78f;
 			state.surface.dirtAmount = 0.7f;
 			state.surface.temperatureBias = 0.7f;
-			state.cloudCoverage = 0.48f;
-			state.cloudDensity = 0.82f;
+			state.cloudCoverage = 0.35f;
+			state.cloudDensity = 0.70f;
 			state.atmosphereDensity = 0.19f;
 			state.mieStrength = 1.75f;
 			state.sunHazeStrength = 1.6f;
@@ -323,6 +349,13 @@ namespace HexEngine::Weather
 		default:
 			break;
 		}
+
+		// scale up the sun if the PBR fix is in
+		/*static const HVar* physUnits = g_pEnv->_commandManager->FindHVar("r_pbrEnergyFix");
+		if (physUnits && physUnits->_val.b)
+		{
+			state.sunIntensity *= 2.0f;
+		}*/
 
 		return state;
 	}
@@ -369,6 +402,9 @@ namespace HexEngine::Weather
 		out.cloudViewAbsorption = LerpValue(a.cloudViewAbsorption, b.cloudViewAbsorption, alpha);
 		out.cloudShadowStrength = LerpValue(a.cloudShadowStrength, b.cloudShadowStrength, alpha);
 		out.cloudAnimationSpeed = LerpValue(a.cloudAnimationSpeed, b.cloudAnimationSpeed, alpha);
+		out.cloudType = LerpValue(a.cloudType, b.cloudType, alpha);
+		out.cirrusAmount = LerpValue(a.cirrusAmount, b.cirrusAmount, alpha);
+		out.cirrusType = LerpValue(a.cirrusType, b.cirrusType, alpha);
 		out.windDirection = LerpValue(a.windDirection, b.windDirection, alpha);
 		out.windSpeed = LerpValue(a.windSpeed, b.windSpeed, alpha);
 		out.precipitationIntensity = LerpValue(a.precipitationIntensity, b.precipitationIntensity, alpha);
@@ -444,6 +480,9 @@ namespace HexEngine::Weather
 		file->Serialize(data, "cloudViewAbsorption", state.cloudViewAbsorption);
 		file->Serialize(data, "cloudShadowStrength", state.cloudShadowStrength);
 		file->Serialize(data, "cloudAnimationSpeed", state.cloudAnimationSpeed);
+		file->Serialize(data, "cloudType", state.cloudType);
+		file->Serialize(data, "cirrusAmount", state.cirrusAmount);
+		file->Serialize(data, "cirrusType", state.cirrusType);
 		file->Serialize(data, "windDirection", state.windDirection);
 		file->Serialize(data, "windSpeed", state.windSpeed);
 		file->Serialize(data, "precipitationIntensity", state.precipitationIntensity);
@@ -503,6 +542,9 @@ namespace HexEngine::Weather
 		file->Deserialize(data, "cloudViewAbsorption", state.cloudViewAbsorption);
 		file->Deserialize(data, "cloudShadowStrength", state.cloudShadowStrength);
 		file->Deserialize(data, "cloudAnimationSpeed", state.cloudAnimationSpeed);
+		file->Deserialize(data, "cloudType", state.cloudType);
+		file->Deserialize(data, "cirrusAmount", state.cirrusAmount);
+		file->Deserialize(data, "cirrusType", state.cirrusType);
 		file->Deserialize(data, "windDirection", state.windDirection);
 		file->Deserialize(data, "windSpeed", state.windSpeed);
 		file->Deserialize(data, "precipitationIntensity", state.precipitationIntensity);

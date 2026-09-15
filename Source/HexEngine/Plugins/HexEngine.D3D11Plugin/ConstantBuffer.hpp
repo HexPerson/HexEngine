@@ -22,4 +22,11 @@ public:
 private:
 	ID3D11Buffer* _buffer = nullptr;
 	uint8_t* _data = nullptr;
+
+	// Size _data and the GPU buffer were allocated at. Write() clamps to this: the sizes
+	// come from sizeof() on structs in HexEngine.Core headers, evaluated when THIS plugin
+	// was compiled, so a Core rebuild that grows a cbuffer struct without rebuilding the
+	// plugin would otherwise memcpy past both allocations every frame.
+	uint32_t _bufferSize = 0;
+	bool _loggedOverflow = false;
 };

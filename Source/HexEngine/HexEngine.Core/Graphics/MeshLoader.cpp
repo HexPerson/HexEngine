@@ -112,6 +112,14 @@ namespace HexEngine
 			if (numVertices > 0)
 				MESH_REQUIRE(r.ReadBytes(vertices.data(), (size_t)numVertices * sizeof(AnimatedMeshVertex)));
 
+			if (auto sceneScale = g_pEnv->GetGlobalSceneScale(); sceneScale != 1.0f)
+			{
+				for (auto& v : vertices)
+				{
+					v._position *= sceneScale;
+				}
+			}
+
 			// read the index data
 			uint32_t numIndices = 0;
 			MESH_REQUIRE(r.ReadCount(numIndices, sizeof(MeshIndexFormat)));
@@ -265,6 +273,14 @@ namespace HexEngine
 			if (numVertices > 0)
 				MESH_REQUIRE(r.ReadBytes(vertices.data(), (size_t)numVertices * sizeof(MeshVertex)));
 
+			if (auto sceneScale = g_pEnv->GetGlobalSceneScale(); sceneScale != 1.0f)
+			{
+				for (auto& v : vertices)
+				{
+					v._position *= sceneScale;
+				}
+			}
+
 			// read the index data
 			uint32_t numIndices = 0;
 			MESH_REQUIRE(r.ReadCount(numIndices, sizeof(MeshIndexFormat)));
@@ -302,6 +318,14 @@ namespace HexEngine
 		dx::BoundingOrientedBox obb{};
 		MESH_REQUIRE(r.Read(aabb));
 		MESH_REQUIRE(r.Read(obb));
+
+		if (auto sceneScale = g_pEnv->GetGlobalSceneScale(); sceneScale != 1.0f)
+		{
+			*(math::Vector3*)&aabb.Extents.x *= sceneScale;
+			*(math::Vector3*)&aabb.Center.x *= sceneScale;
+			*(math::Vector3*)&obb.Extents.x *= sceneScale;
+			*(math::Vector3*)&obb.Center.x *= sceneScale;
+		}
 
 		mesh->SetAABB(aabb);
 		mesh->SetOBB(obb);

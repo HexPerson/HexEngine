@@ -62,6 +62,19 @@ namespace HexEngine
 
 		virtual uint32_t RayCast(const math::Vector3& from, const math::Vector3& unitDir, float maxDist, IRigidBody* body, RayHit* hitInfo) = 0;
 
+		// Scene-wide raycast against EVERY collider in the physics scene. Unlike
+		// RayCast (a single body) and PhysUtils::RayCast (only entities that have
+		// a StaticMeshComponent), this finds colliders added straight to the
+		// PhysX scene - e.g. volumetric terrain chunks, which a StaticMeshComponent
+		// scan can't see. Pass ignoreBody to skip the caster's own body. Returns
+		// the number of blocking hits (0 or 1). Default impl returns 0 so
+		// alternate physics backends still compile.
+		virtual uint32_t RayCastScene(const math::Vector3& from, const math::Vector3& unitDir, float maxDist, RayHit* hitInfo, IRigidBody* ignoreBody = nullptr)
+		{
+			(void)from; (void)unitDir; (void)maxDist; (void)hitInfo; (void)ignoreBody;
+			return 0;
+		}
+
 		virtual math::Vector3 GetGravity() = 0;
 
 		virtual void SetGravity(const math::Vector3& gravity) = 0;

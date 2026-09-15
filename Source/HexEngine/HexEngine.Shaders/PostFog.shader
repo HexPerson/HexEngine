@@ -12,6 +12,8 @@
 	ShadowUtils
 	Atmosphere
 	AtmospherePhysical
+	// SkyViewLutParamsToUv: the fog samples the sky-view LUT directly.
+	AtmosphereCommon
 }
 "VertexShader"
 {
@@ -29,17 +31,37 @@
 "PixelShader"
 {
 	GBUFFER_RESOURCE(0, 1, 2, 3, 4);
-	Texture2D g_atmosphereTexture : register(t5);
+	// Sky-view LUT (t5). The fog used to sample a dedicated full-res "base sky"
+	// render target that cost a second full sky pass plus a copy every frame;
+	// the LUT IS that sun-disc-free sky, sampled here in the pixel's view
+	// direction with the same weather overcast tint the sky dome applies.
+	Texture2D g_atmSkyViewLUT : register(t5);
 	Texture2D g_depthTexture : register(t6);
+	// GI bilateral-blurred voxel-occlusion AO (.r = occlusion, 1 = blocked).
+	// Gated by g_giComposeParams.z; null-bound reads 0 = no occlusion.
+	Texture2D g_giAoTex : register(t22);
 
 	SamplerState g_textureSampler : register(s0);
 	SamplerComparisonState g_cmpSampler : register(s1);
 	SamplerState g_pointSampler : register(s2);
 
+	// Same cbuffer the sky dome reads (AtmosphereLUTs::SetSkyRenderParams).
+	// .w of the pad = 1 when the LUT subsystem is live; zero when nothing bound.
+	cbuffer SkyRenderParams : register(b6)
+	{
+		float4 g_skyOvercastColour;
+		float  g_skyOvercastAmount;
+		float3 g_skyRenderPad; // .x = LUT available
+		// HDR sky params (tail-appended; layout must match AtmosphereLUTs.cpp
+		// SkyRenderParamsCB and SkySphere.shader). x = reserved (radiance
+		// lever acts at LUT generation), y = sun disc diameter deg,
+		// z = sun disc intensity, w = star intensity.
+		float4 g_skyHdrParams;
+		float4 g_skyCirrusParams; // cirrus layer (unused here; layout match)
+	};
+
 	float4 ShaderMain(UIPixelInput input) : SV_TARGET
 	{
-		//return float4(1,0,0, 1.0f);
-
 		float2 texcoord = input.texcoord;
 
 		float2 screenPos = float2(input.position.x / (float)g_screenWidth, input.position.y / (float)g_screenHeight);
@@ -105,13 +127,34 @@
 		float extinction = distExtinction + heightExtinction;
 		float fogFactor = saturate(1.0f - exp2(-extinction));
 
+		// GI occlusion on the analytic fog: this pass's fog colour is entirely
+		// sky/sun/ambient-derived, none of which reaches an enclosed interior's
+		// air, so the whole factor scales down where the voxel field says the
+		// pixel is covered. Outdoors giOcc ~ 0 and this is a no-op.
+		if (g_giComposeParams.z > 0.5f)
+		{
+			const float giOcc = saturate(g_giAoTex.Sample(g_pointSampler, screenPos).r);
+			fogFactor *= saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
+		}
+
 		float3 rayDir = normalize(worldPos - g_eyePos.xyz);
 		float3 sunDir = normalize(-g_lightDirection.xyz);
 
-		// Sky-colour sample (LUT-driven when r_atmosphereLUTs is on) - reused
-		// by both paths below as the colour the fog tints toward.
-		float3 farSkyColour = g_atmosphereTexture.Sample(g_textureSampler, screenPos).rgb;
 		float3 ambientFogBase = max(g_atmosphere.ambientLight.rgb, float3(0.001f, 0.001f, 0.001f));
+		// Sky colour the fog tints toward: the sky-view LUT in this pixel's view
+		// direction (sun-disc free by construction), lerped toward the weather
+		// overcast tint exactly as SkySphere does. Falls back to the ambient
+		// when the LUT subsystem isn't live.
+		float3 farSkyColour = ambientFogBase;
+		if (g_skyRenderPad.x > 0.5f)
+		{
+			const float2 skyUv = SkyViewLutParamsToUv(rayDir, sunDir);
+			// No radiance scale here: r_skyRadianceScale is baked into the LUT
+			// at generation (sunIntensity), so this sample already matches the
+			// HDR sky dome.
+			farSkyColour = g_atmSkyViewLUT.SampleLevel(g_textureSampler, skyUv, 0).rgb;
+			farSkyColour = lerp(farSkyColour, g_skyOvercastColour.rgb, saturate(g_skyOvercastAmount));
+		}
 
 		float heightFogWeight = saturate(heightExtinction / max(extinction, 0.001f));
 		float sunElevation = -g_lightDirection.y;
@@ -212,6 +255,10 @@
 		float3 foggedAlbedo = pixelColour.rgb * surfaceAttenuation;
 		foggedAlbedo = lerp(foggedAlbedo, fogColour, fogFactor);
 
-		return float4(saturate(foggedAlbedo), 1.0f);
+		// No saturate() here. This pass writes into the linear-HDR beauty RT well before
+		// bloom, auto-exposure and tonemapping, so clamping to 1.0 silently threw away all
+		// highlight headroom on every fogged pixel - which is most of the frame. Guard only
+		// against negatives/NaN, which the fog maths can produce at grazing angles.
+		return float4(max(foggedAlbedo, 0.0f.xxx), 1.0f);
 	}
 }

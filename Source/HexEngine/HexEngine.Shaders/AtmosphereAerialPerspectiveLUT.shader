@@ -16,10 +16,10 @@
 	//
 	// Parameterisation:
 	//   u, v : screen-space UV in [0, 1] (same axes as the camera image).
-	//   w    : linear ray distance from camera in [0, MAX_DIST_M]. Linear
-	//          rather than exp because the AP range (32 km) is short
-	//          enough that linear works fine, and the apply pass needs
-	//          a cheap forward mapping (w = rayDist / MAX_DIST_M).
+	//   w    : linear ray distance from camera in [0, AtmosphereApMaxDistM()]
+	//          (camera-far derived). Linear rather than exp because the AP
+	//          range is short enough that linear works fine, and the apply
+	//          pass needs a cheap forward mapping (w = rayDist / maxDist).
 	//
 	// World-space integration coordinates:
 	//   Each ray walks from camera to depth d. The world position at each
@@ -109,7 +109,8 @@
 
 	static const uint3 LUT_DIMS = uint3(32u, 32u, 32u);
 	static const uint  MARCH_STEPS_PER_FROXEL = 12u;
-	static const float MAX_DIST_M = 32000.0f;
+	// Volume far plane comes from AtmosphereApMaxDistM() (camera-far derived) -
+	// see AtmosphereCommon. The apply pass MUST use the same helper.
 
 	[numthreads(8, 8, 8)]
 	void ShaderMain(uint3 dtid : SV_DispatchThreadID)
@@ -129,7 +130,7 @@
 		const float3 worldFar = farH.xyz / max(farH.w, 1e-6f);
 		const float3 rayDir   = normalize(worldFar - g_eyePos.xyz);
 
-		const float depthM = uvw.z * MAX_DIST_M;
+		const float depthM = uvw.z * AtmosphereApMaxDistM();
 		const float dtM    = depthM / float(MARCH_STEPS_PER_FROXEL);
 		const float dtMM   = dtM * 1e-6f;
 
