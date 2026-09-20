@@ -287,7 +287,12 @@
 		// blobs brighter than the sky behind them. 0.55 puts a fully-lit
 		// cloud face just above the sky radiance and lets the AO/core
 		// terms carve visible form again.
-		const float ambientLift = g_cloudParams3.y * 0.24f;
+		// 0.24 was compensating for the non-conserving scatter integral
+		// (see the scatter term below); with albedo <= 1 the footing is
+		// ~0.4-0.55 again. 0.42 (checked live at 13:00, fair-weather
+		// cumulus): undersides at roughly 40% of the sky radiance, enough
+		// lit-top vs base contrast to read as cumulus rather than cotton.
+		const float ambientLift = g_cloudParams3.y * 0.42f;
 		// Zenith-weighted ambient: cloud bodies receive their diffuse light
 		// from the hemisphere ABOVE, but the old 0.35 lerp weighted the
 		// HORIZON tap 65% - the brightest direction of the midday sky-view
@@ -329,6 +334,7 @@
 
 		float transmittance = 1.0f;
 		float3 cloudLight = 0.0f.xxx;
+		float apDistWeighted = 0.0f;
 
 		// PROGRESSIVE stepping for the horizon-scale domain: uniform steps
 		// over a 10km+ trace either mush the near field or starve the step
@@ -336,8 +342,25 @@
 		// (but still sampled) toward the horizon deck.
 		const float maxDist = max(1.0f, g_cloudParams0.w);
 		float travelled = baseStep * jitter;
+		// TWO-RATE march (Schneider/Nubis): coarse steps through empty air
+		// using the cheap un-eroded density (conservative - erosion only ever
+		// removes), then on the first hit step BACK one coarse step and
+		// re-march that span at kFineScale so the eroded surface is sampled
+		// densely. Drop back to coarse after kEmptyToCoarse empty fine
+		// samples. Cures two artifacts the single-rate march had once the
+		// slab grew to 2400m: horizontal striations on tall cumulus faces
+		// (the height profile sliced by ~300-900m steps) and sparkle grain on
+		// the thinnest wisps (one or two samples across a 100m feature).
+		// Fine steps burn the same iteration budget - the ceiling is 2x the
+		// nominal count, but dense rays still terminate on transmittance
+		// within a handful of samples and empty air now costs no detail fetch.
+		const float kFineScale = 0.30f;
+		const int kEmptyToCoarse = 5;
+		const int maxIters = viewSteps * 2;
+		bool fineMode = false;
+		int emptyRun = 0;
 		[loop]
-		for (int i = 0; i < viewSteps; ++i)
+		for (int i = 0; i < maxIters; ++i)
 		{
 			if (travelled >= maxTraceDistance)
 				break;
@@ -346,15 +369,32 @@
 			// sliced the 700m height profile into visible horizontal bands on
 			// distant clouds ("lined" look). 0.0005/3.5x keeps the horizon
 			// deck inside budget while sampling the profile densely enough.
-			const float stepLenView = baseStep * clamp(1.0f + (entryDist + travelled) * 0.0005f, 1.0f, 3.5f);
+			const float coarseStep = baseStep * clamp(1.0f + (entryDist + travelled) * 0.0005f, 1.0f, 3.5f);
+			const float stepLenView = fineMode ? coarseStep * kFineScale : coarseStep;
 			const float3 samplePos = eyePos + rayDir * (entryDist + travelled);
 			// Distance LOD on the detail erosion: full detail near, coarse
 			// far - far detail aliases into sparkle grain at dusk.
-			const float detailLod = 1.0f - smoothstep(1200.0f, 6000.0f, entryDist + travelled);
+			const float detailLod = fineMode ? (1.0f - smoothstep(1200.0f, 6000.0f, entryDist + travelled)) : 0.0f;
 			const float density = SampleCloudDensityTexImpl(g_shapeNoise, g_detailNoise, g_mirrorSampler, samplePos, boundsMin, boundsMax, windOffset, detailLod);
+
+			if (!fineMode)
+			{
+				if (density > 0.0001f)
+				{
+					// Hit in coarse mode: rewind so the fine march covers the
+					// span this coarse step just leapt over.
+					fineMode = true;
+					emptyRun = 0;
+					travelled = max(0.0f, travelled - coarseStep);
+					continue;
+				}
+				travelled += stepLenView;
+				continue;
+			}
 
 			if (density > 0.0001f)
 			{
+				emptyRun = 0;
 				const float lightTrans = MarchToLight(samplePos, boundsMin, boundsMax, windOffset, sunDir, lightSteps);
 				const float shadowAmount = 1.0f - lightTrans;
 				const float viewToSun = saturate(dot(rayDir, sunDir));
@@ -372,7 +412,16 @@
 				// Soft distance fade toward the trace limit - the horizon deck
 				// dissolves into the atmosphere instead of ending at a wall.
 				const float distanceFade = 1.0f - smoothstep(0.70f, 1.0f, (entryDist + travelled) / maxDist);
-				const float scatter = density * stepLenView * invCloudHeight * transmittance * distanceFade;
+				// ENERGY-CONSERVING scatter: the extinction below is scaled by
+				// the view-absorption cvar (g_cloudParams3.x) but the scatter
+				// term was not, so the integrated single-scatter albedo was
+				// 1/absorption - 2.4 for the fair-weather presets (0.42), ~1.1
+				// for storms (0.9). That is why cumulus went nuclear white at
+				// midday while overcast decks looked sane, and why every
+				// lighting term had to be hand-dimmed (ambientLift 0.55 ->
+				// 0.24, stylized sun x0.035). Scattering = extinction x albedo
+				// (<= 1): the path integral now tops out at (1 - T).
+				const float scatter = density * stepLenView * invCloudHeight * g_cloudParams3.x * transmittance * distanceFade;
 				const float diffuseProbeDistance = max(1.0f, baseStep * 0.75f);
 				const float densityTowardSun = SampleCloudDensity(samplePos + sunDir * diffuseProbeDistance, boundsMin, boundsMax, windOffset);
 				const float derivativeDiffuse = saturate((density - densityTowardSun) * 2.25f + 0.12f);
@@ -414,9 +463,17 @@
 				const float3 ambientLight = (ambientShaded * (1.0f - shadowAmount * 0.45f) + lightningColour * (0.08f + 0.14f * lightningEdge)) * aoTerm * coreDarken;
 				cloudLight += scatter * (directLight + ambientLight + lightningLight) * stylizedTint;
 
+				const float transmittanceBefore = transmittance;
 				transmittance *= exp(-density * stepLenView * invCloudHeight * g_cloudParams3.x * distanceFade);
+				// Opacity-weighted mean distance of the cloud along this ray,
+				// for the aerial-perspective blend after the march.
+				apDistWeighted += (entryDist + travelled) * (transmittanceBefore - transmittance);
 				if (transmittance < 0.01f)
 					break;
+			}
+			else if (++emptyRun >= kEmptyToCoarse)
+			{
+				fineMode = false;
 			}
 
 			travelled += stepLenView;
@@ -428,6 +485,27 @@
 		const float alpha = saturate(1.0f - transmittance);
 		if (alpha <= 1e-4f)
 			return 0.0f.xxxx;
+
+		// AERIAL PERSPECTIVE on the cloud itself. The scene's AP pass skips
+		// sky pixels (the dome already contains the atmosphere), so clouds
+		// composited over the dome received none: a bank 20 km out rendered
+		// as flat paper-white against a hazy blue horizon - the "horizon
+		// white-wash". Blend toward the sky-view LUT in-scatter for this
+		// ray by the opacity-weighted cloud distance. 2e-5/m is close to the
+		// sea-level Rayleigh+Mie extinction (~1.5e-5): a 15 km bank sits
+		// ~26% into the haze, 30 km ~45%. (6e-5 was tried first and washed
+		// the mid-distance deck into the horizon LUT - form gone again.)
+		{
+			const float meanDist = apDistWeighted / max(alpha, 1e-3f);
+			const float apBlend = 1.0f - exp(-meanDist * 2.0e-5f);
+			float3 skyInscatter;
+			if (useAtmosphereLuts)
+				skyInscatter = g_atmSkyViewLUT.SampleLevel(g_linearSampler, SkyViewLutParamsToUv(rayDir, sunDir), 0).rgb;
+			else
+				skyInscatter = ambientHorizon;
+			skyInscatter = lerp(skyInscatter, g_skyOvercast.rgb, saturate(g_skyOvercast.w));
+			cloudLight = lerp(cloudLight, skyInscatter * alpha, apBlend);
+		}
 
 		// Clouds are composited with non-premultiplied alpha. Clamp raised
 		// 8 -> 64 for the HDR sky: sunset silver linings on the LUT energy

@@ -142,16 +142,29 @@
 		// keeps cloud boundaries soft instead of every column snapping to
 		// full strength.
 		const float threshold = lerp(0.80f, 0.16f, coverage);
-		const float columnCoverage = smoothstep(threshold, threshold + 0.24f, wm);
+		const float height = saturate(localUVW.y);
+		const float cloudType = CloudWeatherType(worldPos.xz, windOffset.xz);
+		// TOWER TAPER. The 2D weather column extruded straight up through
+		// the height profile rendered every cumulus as a vertical pillar -
+		// the "columnar / striated" look on tall faces. Raising the coverage
+		// threshold with height narrows each column toward its top, so
+		// towers build as a broad base thinning into a cauliflower crown.
+		// Type-weighted: stratus decks keep their flat extent.
+		const float taper = smoothstep(0.30f, 1.0f, height) * lerp(0.02f, 0.26f, cloudType);
+		const float columnCoverage = smoothstep(threshold + taper, threshold + 0.24f + taper, wm);
 		if (columnCoverage <= 0.002f)
 			return 0.0f;
 
-		const float shape = shapeNoise.SampleLevel(noiseSampler, worldPos * g_cloudParams2.x + windOffset, 0.0f).r;
+		// Vertical anisotropy on the shape noise for cumulus: a higher
+		// vertical frequency breaks the column into stacked billows instead
+		// of one smear that barely changes with altitude. Decks stay
+		// isotropic (they read as horizontal sheets).
+		const float3 shapeFreq = float3(1.0f, lerp(1.0f, 1.9f, cloudType), 1.0f);
+		const float shape = shapeNoise.SampleLevel(noiseSampler, worldPos * g_cloudParams2.x * shapeFreq + windOffset, 0.0f).r;
 		const float detail = detailAmount > 0.001f
 			? lerp(0.5f, detailNoise.SampleLevel(noiseSampler, worldPos * g_cloudParams2.y + windOffset * 1.7f, 0.0f).r, detailAmount)
 			: 0.5f;
 
-		const float height = saturate(localUVW.y);
 		// LUMPY UNDERSIDE: a flat cloud base renders a full deck as one
 		// featureless slab - real overcast reads as cloud because the base
 		// altitude varies and the light march turns those bumps into the
@@ -166,7 +179,6 @@
 		// (~700 m) with a soft flat top; cumulus builds to ~98% (2 km
 		// towers). Bases stay put - flat bases are what sells fair-weather
 		// cumulus (reference: RDR2 midday shots).
-		const float cloudType = CloudWeatherType(worldPos.xz, windOffset.xz);
 		const float topStart = lerp(0.22f, 0.72f, cloudType);
 		const float topEnd   = lerp(0.38f, 0.98f, cloudType);
 		const float heightMask = smoothstep(0.03f + baseLift, lerp(0.10f, 0.24f, cloudType) + baseLift, height)
