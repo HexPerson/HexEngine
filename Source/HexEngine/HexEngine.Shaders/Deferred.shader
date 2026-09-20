@@ -97,6 +97,115 @@
 	// tap instead of re-marching the cloud slab per pixel (the old path also
 	// used a hand-copied density function that drifted from the clouds
 	// actually drawn - the map is rendered from the shared one).
+	// ---- Sun caustics below the sea surface (underwater S3) ----------------
+	// t13: 32-frame looping caustic animation, 256^2 tiles packed 8x4, each
+	// with a 2 px WRAPPED gutter (Tools/BuildCausticsAtlas.py) so bilinear
+	// filtering across a tile's own tiling seam stays seamless.
+	Texture2D g_causticsAtlas : register(t13);
+
+	static const float2 kCausticAtlasPx = float2(2080.0f, 1040.0f);
+	static const float  kCausticCellPx = 260.0f;
+	static const float  kCausticTilePx = 256.0f;
+	static const float  kCausticGutterPx = 2.0f;
+	static const float  kCausticFrames = 32.0f;
+
+	float SampleCausticFrame(float2 tileUv, float frame)
+	{
+		const float f = fmod(frame, kCausticFrames);
+		const float2 cell = float2(fmod(f, 8.0f), floor(f / 8.0f));
+		const float2 px = cell * kCausticCellPx + kCausticGutterPx + frac(tileUv) * kCausticTilePx;
+		// Level 0 only: the atlas has no per-tile mip chain, and a mip would
+		// average neighbouring FRAMES together. Distance aliasing is handled
+		// by fading the effect out with view distance instead.
+		return g_causticsAtlas.SampleLevel(g_textureSampler, px / kCausticAtlasPx, 0).r;
+	}
+
+	// One animated layer: two adjacent frames cross-faded (11 fps source
+	// played at any rate without stepping).
+	float SampleCausticLayer(float2 tileUv, float frameTime)
+	{
+		const float f0 = floor(frameTime);
+		return lerp(SampleCausticFrame(tileUv, f0), SampleCausticFrame(tileUv, f0 + 1.0f), frameTime - f0);
+	}
+
+	// Multiplier on the SUN colour for a surface point below the sea. MEAN 1:
+	// refraction through a wavy surface concentrates sunlight into bright
+	// filaments and starves the cells between them - it redistributes light,
+	// it does not add any, so the seabed's average exposure must not change.
+	float3 CalculateCaustics(float3 worldPos, float3 lightDir)
+	{
+		const float strength = g_oceanConfig4.x;
+		if (strength <= 0.0f || g_oceanConfig3.w < 0.5f)
+			return 1.0f.xxx;
+
+		// Depth below the MEAN sea level. (Not the instantaneous wave: the
+		// pattern is a statistical property of the whole surface above, and
+		// keying it to each passing crest would make the waterline strobe.)
+		const float depth = g_oceanConfig3.x - worldPos.y;
+		if (depth <= -0.05f)
+			return 1.0f.xxx;
+
+		// Needs sun: nothing at night, soft at a grazing sun (the light barely
+		// enters the water and the net smears out).
+		const float sunUp = saturate(lightDir.y * 3.0f);
+		if (sunUp <= 0.0f)
+			return 1.0f.xxx;
+
+		// Fade in over the first 35 cm under the surface (a focal length is
+		// needed before the net forms), out with depth (absorption + every
+		// wave defocusing differently), and out with VIEW distance (no mips).
+		const float viewDist = distance(worldPos, g_eyePos.xyz);
+		const float fade = smoothstep(-0.05f, 0.35f, depth)
+			* exp(-depth / max(g_oceanConfig4.w, 0.5f) * 2.2f)
+			* (1.0f - smoothstep(70.0f, 160.0f, viewDist))
+			* sunUp;
+		if (fade <= 0.002f)
+			return 1.0f.xxx;
+
+		// Project back up the REFRACTED sun ray to the point on the surface
+		// plane the light entered through - the pattern then slides correctly
+		// across slopes and stays continuous from the shallows to the deep,
+		// instead of being a texture planar-mapped onto the seabed.
+		const float3 sunInWater = refract(-lightDir, float3(0.0f, 1.0f, 0.0f), 1.0f / 1.333f);
+		const float2 surfaceXZ = worldPos.xz - sunInWater.xz * (depth / max(-sunInWater.y, 0.2f));
+
+		// Ride the same CPU-integrated wind scroll the water's bump + foam use
+		// (UV-space integral x64 = world metres), so the net travels WITH the
+		// waves and a weather change bends its motion instead of teleporting it.
+		const float2 drift = g_timeParams2.zw * 64.0f;
+		const float tileMetres = max(g_oceanConfig4.y, 0.25f);
+		const float frameTime = g_time * g_oceanConfig4.z;
+
+		// Two decorrelated layers - different scale, rotation, drift, phase.
+		// min() of the pair is the trick that turns this soft, blobby source
+		// into thin bright FILAMENTS: a vein survives only where both layers
+		// are bright. The slight per-channel offset on layer A is the coloured
+		// fringe real caustics carry (water disperses, blue bends most).
+		const float2 uvA = (surfaceXZ - drift * 0.9f) / tileMetres;
+		const float2 rotB = float2(surfaceXZ.x * 0.799f - surfaceXZ.y * 0.602f, surfaceXZ.x * 0.602f + surfaceXZ.y * 0.799f);
+		const float2 uvB = (rotB - drift * 0.55f) / (tileMetres * 0.63f) + float2(0.37f, 0.71f);
+		const float layerB = SampleCausticLayer(uvB, frameTime * 0.83f + 13.0f);
+
+		const float2 fringe = float2(0.006f, 0.004f) * saturate(depth * 0.5f);
+		const float3 layerA = float3(
+			SampleCausticLayer(uvA + fringe, frameTime),
+			SampleCausticLayer(uvA, frameTime),
+			SampleCausticLayer(uvA - fringe, frameTime));
+
+		// CONTINUOUS remap, 4th power. The first version thresholded at 0.62
+		// and squared: 60% of the area sat on a flat 0.8 floor, and a flat
+		// floor with soft edges reads as dark round BLOBS, not a light-net. A
+		// low knee + x^4 gives smooth basins and sharp ridges instead. Measured
+		// over the source set (min of two decorrelated layers, knee 0.30):
+		// mean(x^4) = 0.095, so 0.72 + 2.95 x^4 has mean 1 - median ~0.81,
+		// filament peaks ~3.6.
+		const float3 x = saturate((min(layerA, layerB.xxx) - 0.30f) / 0.70f);
+		const float3 x2 = x * x;
+		const float3 net = 0.72f + 2.95f * x2 * x2;
+
+		return lerp(1.0f.xxx, net, saturate(fade * strength));
+	}
+
 	float CalculateCloudShadow(float3 worldPos, float3 sunDir)
 	{
 		// sunDir is unused: the map carries the sun direction it was rendered with.
@@ -232,6 +341,12 @@
 		const float legacySunLuma = dot(legacySunColour, float3(0.2126f, 0.7152f, 0.0722f));
 		const float physicalSunLuma = max(dot(physicalSunColour, float3(0.2126f, 0.7152f, 0.0722f)), 1e-4f);
 		physicalSunColour *= legacySunLuma / physicalSunLuma;
+
+		// Caustics modulate the SUN, so they are shadowed (depthValue), respect
+		// N.L, and leave ambient / GI / local lights alone. Applied to the
+		// colour rather than the shadow scalar: they are chromatic, and they
+		// legitimately exceed 1 in the filaments.
+		physicalSunColour *= CalculateCaustics(pixelPosWS.xyz, lightDir);
 
 		float4 pbr = CalculatePBR(
 			GBUFFER_SPECULAR,

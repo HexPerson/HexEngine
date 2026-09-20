@@ -538,6 +538,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Scene\RenderState.hpp" />
     <ClInclude Include="Scene\Scene.hpp" />
     <ClInclude Include="Scene\SnowFootprintSystem.hpp" />
+    <ClInclude Include="Scene\OceanWaveModel.hpp" />
     <ClInclude Include="Scene\Mesh.hpp" />
     <ClInclude Include="Scene\SceneManager.hpp" />
     <ClInclude Include="Scene\SceneRenderer.hpp" />

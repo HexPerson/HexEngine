@@ -317,6 +317,16 @@ static const uint MATERIAL_MODEL_SHEEN        = 4;
 		// x = froxel fog volume bound at t24, y = AP volume bound at t21,
 		// z = froxel far depth (m), w = AP max distance (m).
 		float4 g_transparentFogParams;
+		// Ocean surface state (underwater S0), CPU-evaluated once per frame:
+		// x = sea level (world Y of the undisplaced ocean tiles),
+		// y = wave amplitude bound (m) - nothing higher than x + y can be
+		//     under water; sizes the wet band and the underwater-pass gate,
+		// z = camera depth below the wave surface (m; > 0 = submerged),
+		// w = 1 when the scene has an ocean (0 = every consumer no-ops).
+		float4 g_oceanConfig3;
+		// Caustics (underwater S3): x = strength (0 = off / atlas unbound),
+		// y = metres per caustic tile, z = animation fps, w = fade-out depth (m).
+		float4 g_oceanConfig4;
 	};
 
 	#define g_timePrev  (g_timeParams2.x)

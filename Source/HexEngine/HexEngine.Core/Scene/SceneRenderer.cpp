@@ -74,6 +74,27 @@ namespace HexEngine
 	HVar r_oceanFoam("r_oceanFoam", "Ocean foam coverage multiplier (crest + shore)", 1.0f, 0.0f, 4.0f);
 	HVar r_oceanAbsorption("r_oceanAbsorption", "Water absorption per metre (Beer-Lambert; higher = murkier)", 0.18f, 0.005f, 4.0f);
 	HVar r_oceanBumpStrength("r_oceanBumpStrength", "Water normal-map deflection strength", 0.5f, 0.0f, 2.0f);
+	// Underwater S0: the CPU mirrors the GPU wave function (OceanWaveModel.hpp).
+	// Park the camera at the waterline with this on - depthBelow should cross
+	// zero exactly as the rendered surface crosses the lens.
+	// Underwater S1. The pass is per-pixel masked, so it also draws the wavy
+	// waterline when the lens is only partly submerged.
+	HVar r_underwater("r_underwater", "Underwater camera effect (absorption fog, in-scatter, refraction wobble, waterline) when the lens is below the wave surface", true, false, true);
+	HVar r_underwaterFogScale("r_underwaterFogScale", "Multiplier on r_oceanAbsorption for the underwater VIEW path (1 = same medium the surface shader sees through; higher = murkier)", 1.0f, 0.0f, 8.0f);
+	HVar r_underwaterDistortion("r_underwaterDistortion", "Underwater refraction wobble amplitude in UV units (0 = off)", 0.0030f, 0.0f, 0.03f);
+	HVar r_underwaterMeniscus("r_underwaterMeniscus", "Strength of the dark waterline/meniscus drawn where the surface crosses the lens", 1.0f, 0.0f, 2.0f);
+	HVar r_underwaterScatter("r_underwaterScatter", "Gain on the underwater in-scatter (fog) colour", 1.0f, 0.0f, 8.0f);
+	// Underwater S3: sun caustics on everything below the sea surface. Applied
+	// to the SUN COLOUR in the deferred directional pass, so they are shadowed,
+	// respect N.L, and show on the seabed from the shore too (the water surface
+	// refracts the already-lit scene). Mean-1 by construction: they redistribute
+	// sunlight, they do not add any.
+	HVar r_caustics("r_caustics", "Animated sun caustics on surfaces below the sea surface", true, false, true);
+	HVar r_causticsStrength("r_causticsStrength", "Caustic contrast (0 = off, 1 = authored; mean brightness is preserved at any value)", 1.0f, 0.0f, 3.0f);
+	HVar r_causticsScale("r_causticsScale", "World metres covered by one caustic tile (larger = broader light-net)", 3.5f, 0.25f, 40.0f);
+	HVar r_causticsSpeed("r_causticsSpeed", "Caustic animation speed in atlas frames per second (32-frame loop)", 11.0f, 0.0f, 60.0f);
+	HVar r_causticsDepth("r_causticsDepth", "Depth below sea level (m) over which caustics fade out", 14.0f, 0.5f, 200.0f);
+	HVar r_oceanDebugHeight("r_oceanDebugHeight", "Log the CPU-evaluated ocean surface height under the camera once per second", false, false, true);
 	HVar env_volumetricStepIncrement("env_volumetricStepIncrement", "Global scale multiplier applied to adaptive volumetric ray-march step size", 1.0f, 0.1f, 100.0f);
 
 	// Point / spot light render caps. Sort by camera distance ascending and
@@ -178,6 +199,10 @@ namespace HexEngine
 	HVar r_sunShafts("r_sunShafts", "Screen-space sun shafts (crepuscular rays from cloud/geometry edges)", true, false, true);
 	HVar r_sunShaftsIntensity("r_sunShaftsIntensity", "Sun shaft additive intensity", 0.5f, 0.0f, 4.0f);
 	HVar r_sunShaftsLength("r_sunShaftsLength", "Sun shaft blur reach as a fraction of the sun-to-pixel distance", 0.85f, 0.1f, 1.0f);
+	// Shafts are a low-sun phenomenon: the LUT sun colour is ~4x brighter
+	// (and white) at noon, so the same additive scale that reads right at
+	// golden hour is a hot white wash overhead. Scale reached at high sun.
+	HVar r_sunShaftsHighSunScale("r_sunShaftsHighSunScale", "Sun shaft intensity multiplier once the sun is high (blend from 1.0 at ~6 deg to this at ~30 deg elevation)", 0.22f, 0.0f, 1.0f);
 	// NOTE: r_gamma is vestigial - it was uploaded to the per-frame cbuffer every frame and
 	// read by no shader (the SDR tonemap hardcodes 1/2.2). Kept declared so scenes that
 	// serialised it still load; its cbuffer slot now carries r_pbrEnergyFix.
@@ -1054,6 +1079,19 @@ namespace HexEngine
 	HVar r_cdlLift("r_cdlLift", "Colour grade lift (per-channel black offset, 0 = neutral)", math::Vector3(0.0f, 0.0f, 0.0f), math::Vector3(-0.5f, -0.5f, -0.5f), math::Vector3(0.5f, 0.5f, 0.5f));
 	HVar r_cdlGamma("r_cdlGamma", "Colour grade gamma (per-channel midtone power, 1 = neutral)", math::Vector3(1.0f, 1.0f, 1.0f), math::Vector3(0.25f, 0.25f, 0.25f), math::Vector3(4.0f, 4.0f, 4.0f));
 	HVar r_cdlGain("r_cdlGain", "Colour grade gain (per-channel scale, 1 = neutral)", math::Vector3(1.0f, 1.0f, 1.0f), math::Vector3(0.0f, 0.0f, 0.0f), math::Vector3(4.0f, 4.0f, 4.0f));
+	// Time-of-day grade (RDR2 sky polish): a dusk/dawn CDL trim blended in
+	// by sun elevation on top of the user's static CDL. The physical sky
+	// already goes orange at the horizon; what it can't do is the cool,
+	// lifted-shadow magenta cast the reference dusk frames carry across the
+	// WHOLE image (ground included). Gain multiplies, lift adds, both
+	// weighted by a triangular window around r_gradeDuskElevation and
+	// damped under overcast (a grey dusk isn't magenta).
+	HVar r_gradeDusk("r_gradeDusk", "Enable the sun-elevation-driven dusk/dawn colour grade trim", true, false, true);
+	HVar r_gradeDuskStrength("r_gradeDuskStrength", "Dusk grade strength (0 = off, 1 = authored)", 1.0f, 0.0f, 2.0f);
+	HVar r_gradeDuskElevation("r_gradeDuskElevation", "Sun elevation (deg) where the dusk grade peaks", 1.5f, -10.0f, 20.0f);
+	HVar r_gradeDuskWidth("r_gradeDuskWidth", "Half-width (deg) of the dusk grade window around the peak elevation", 9.0f, 1.0f, 30.0f);
+	HVar r_gradeDuskGain("r_gradeDuskGain", "Dusk grade per-channel gain at full weight", math::Vector3(1.03f, 0.955f, 1.04f), math::Vector3(0.5f, 0.5f, 0.5f), math::Vector3(2.0f, 2.0f, 2.0f));
+	HVar r_gradeDuskLift("r_gradeDuskLift", "Dusk grade per-channel lift at full weight (raises blacks toward the tint)", math::Vector3(0.004f, 0.0f, 0.010f), math::Vector3(-0.2f, -0.2f, -0.2f), math::Vector3(0.2f, 0.2f, 0.2f));
 	// P4.7 colour LUT: drop a .cube file at Bin/.../Data/ColourGrade.cube and
 	// it hot-loads within ~2s (no string cvars in this engine - the path is
 	// fixed, see ColourLut.cpp). Strength lerps between ungraded and graded.
@@ -1293,6 +1331,7 @@ namespace HexEngine
 		SAFE_DELETE(_outlineGlowRT);
 		SAFE_DELETE(_outlineParamsBuffer);
 		SAFE_DELETE(_sunShaftsParamsBuffer);
+		SAFE_DELETE(_underwaterParamsBuffer);
 		SAFE_DELETE(_iblSkyEnvMap);
 		SAFE_DELETE(_iblSkySH);
 		SAFE_DELETE(_dfgLut);
@@ -1402,6 +1441,13 @@ namespace HexEngine
 			_sunShaftsParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4) * 2);
 		}
 
+		// Underwater camera (underwater S1), params at b6.
+		_underwaterShader = IShader::Create("EngineData.Shaders/UnderwaterPost.hcs");
+		if (_underwaterParamsBuffer == nullptr)
+		{
+			_underwaterParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+		}
+
 		// Fullscreen quad in clip space. The auto-puddle shader is direct-clip-
 		// space (no view/world transform), so we just need a (-1,-1)..(1,1) quad.
 		if (_autoPuddlesQuadVB == nullptr)
@@ -1490,6 +1536,10 @@ namespace HexEngine
 		//_volumetricBlur = new BlurEffect(_volumetricLightingBuffer, BlurType::Gaussian, 2);
 
 		_blueNoise					= ITexture2D::Create("EngineData.Textures/LDR_RGBA_0.png");
+		// Caustics atlas (underwater S3): 32 looping 256^2 frames packed 8x4 with
+		// a 2 px WRAPPED gutter per tile (Tools/BuildCausticsAtlas.py). Optional -
+		// a missing file just disables caustics (strength is zeroed CPU-side).
+		_causticsAtlas				= ITexture2D::Create("EngineData.Textures/caustics/caustics_atlas.png");
 
 		
 
@@ -3108,14 +3158,107 @@ namespace HexEngine
 				r_oceanAbsorption._val.f32,
 				r_oceanBumpStrength._val.f32);
 
+			// Ocean surface state (underwater S0). The CPU wave model is fed
+			// the EXACT wind/time/scale values this buffer uploads, so it
+			// agrees with the displaced surface the GPU draws this frame.
+			// Evaluated per VIEW (this function also runs for shadow / probe
+			// cameras - each gets the depth of ITS eye); the scene-level
+			// inputs gameplay queries use are published once per frame below.
+			{
+				OceanWaves::WaveInputs waveInputs;
+				const auto& wind = bufferData._weatherSurface.windDirectionAndSpeed;
+				waveInputs.windDirX = wind.x;
+				waveInputs.windDirZ = wind.z;
+				waveInputs.windSpeed = wind.w;
+				waveInputs.waveScale = r_oceanWaveScale._val.f32;
+				waveInputs.time = bufferData._time;
+
+				const uint64_t oceanFrame = g_pEnv->_timeManager->_frameCount;
+				if (_oceanStateFrame != oceanFrame)
+				{
+					_oceanStateFrame = oceanFrame;
+
+					// Sea level comes from the ocean tiles; re-detect on a slow
+					// timer so adding/moving an ocean in the editor is picked
+					// up without a hook on every entity mutation.
+					_oceanRefreshCountdown -= std::max(0.0f, g_pEnv->_timeManager->GetFrameTime());
+					if (_oceanRefreshCountdown <= 0.0f)
+					{
+						_currentScene->RefreshSeaLevel();
+						_oceanRefreshCountdown = 2.0f;
+					}
+
+					math::Vector3 mainEye(bufferData._eyePos.x, bufferData._eyePos.y, bufferData._eyePos.z);
+					if (auto* mainCamera = _currentScene->GetMainCamera(); mainCamera != nullptr && mainCamera->GetEntity() != nullptr)
+						mainEye = mainCamera->GetEntity()->GetPosition() + mainCamera->GetViewOffset();
+					_currentScene->SetOceanWaveInputs(waveInputs, mainEye);
+
+					if (r_oceanDebugHeight._val.b)
+					{
+						_oceanDebugLogCountdown -= std::max(0.0f, g_pEnv->_timeManager->GetFrameTime());
+						if (_oceanDebugLogCountdown <= 0.0f)
+						{
+							_oceanDebugLogCountdown = 1.0f;
+							LOG_INFO("Ocean: hasOcean=%d seaLevel=%.3f ampBound=%.3f eye=(%.2f %.2f %.2f) surfaceAtEye=%.3f depthBelow=%.3f wind=(%.2f %.2f |%.1f|) scale=%.2f t=%.2f",
+								_currentScene->HasOcean() ? 1 : 0, _currentScene->GetSeaLevel(), _currentScene->GetWaveAmplitudeBound(),
+								mainEye.x, mainEye.y, mainEye.z, _currentScene->GetWaterHeight(mainEye.x, mainEye.z),
+								_currentScene->GetDepthBelowWater(mainEye), wind.x, wind.z, wind.w, waveInputs.waveScale, waveInputs.time);
+						}
+					}
+				}
+
+				if (_currentScene->HasOcean())
+				{
+					const float seaLevel = _currentScene->GetSeaLevel();
+					const float surfaceY = seaLevel + OceanWaves::SurfaceOffset(bufferData._eyePos.x, bufferData._eyePos.z, waveInputs, 0.0f);
+					bufferData._oceanConfig3 = math::Vector4(
+						seaLevel,
+						OceanWaves::AmplitudeBound(waveInputs),
+						surfaceY - bufferData._eyePos.y,
+						1.0f);
+				}
+				else
+				{
+					bufferData._oceanConfig3 = math::Vector4(0.0f, 0.0f, -1.0e6f, 0.0f);
+				}
+
+				// Caustics (S3). Strength is zeroed when the atlas is missing so
+				// the shader never samples an unbound slot as "all dark cells".
+				const bool causticsLive = r_caustics._val.b && _causticsAtlas != nullptr && _currentScene->HasOcean();
+				bufferData._oceanConfig4 = math::Vector4(
+					causticsLive ? r_causticsStrength._val.f32 : 0.0f,
+					std::max(0.25f, r_causticsScale._val.f32),
+					r_causticsSpeed._val.f32,
+					std::max(0.5f, r_causticsDepth._val.f32));
+			}
+
 			// P4.6 grading tail: white balance gains + CDL trio.
 			{
 				const math::Vector3 wb = ComputeWhiteBalanceGains(
 					r_whiteBalanceTemp._val.f32, r_whiteBalanceTint._val.f32);
 				bufferData._whiteBalance = math::Vector4(wb.x, wb.y, wb.z, 0.0f);
-				const math::Vector3& lift = r_cdlLift._val.v3;
+				math::Vector3 lift = r_cdlLift._val.v3;
 				const math::Vector3& gamma = r_cdlGamma._val.v3;
-				const math::Vector3& gain = r_cdlGain._val.v3;
+				math::Vector3 gain = r_cdlGain._val.v3;
+				// Dusk/dawn trim: triangular window on sun elevation, damped by
+				// overcast. Blends toward the authored dusk gain/lift so the
+				// user's static CDL still reads as the neutral point.
+				if (r_gradeDusk._val.b && r_gradeDuskStrength._val.f32 > 0.0f)
+				{
+					const float sunElevDeg = std::asin(std::clamp(-lightDir.y, -1.0f, 1.0f)) * (180.0f / 3.14159265f);
+					const float dist = std::abs(sunElevDeg - r_gradeDuskElevation._val.f32) / std::max(0.1f, r_gradeDuskWidth._val.f32);
+					const float window = 1.0f - std::clamp(dist, 0.0f, 1.0f);
+					const float w = window * window * (3.0f - 2.0f * window) // smoothstep
+						* r_gradeDuskStrength._val.f32
+						* (1.0f - 0.75f * std::clamp(_skyOvercastAmount, 0.0f, 1.0f));
+					if (w > 0.0f)
+					{
+						const math::Vector3& dg = r_gradeDuskGain._val.v3;
+						const math::Vector3& dl = r_gradeDuskLift._val.v3;
+						gain = math::Vector3(gain.x * (1.0f + (dg.x - 1.0f) * w), gain.y * (1.0f + (dg.y - 1.0f) * w), gain.z * (1.0f + (dg.z - 1.0f) * w));
+						lift = math::Vector3(lift.x + dl.x * w, lift.y + dl.y * w, lift.z + dl.z * w);
+					}
+				}
 				bufferData._cdlLift = math::Vector4(lift.x, lift.y, lift.z, 0.0f);
 				bufferData._cdlGamma = math::Vector4(gamma.x, gamma.y, gamma.z, 0.0f);
 				bufferData._cdlGain = math::Vector4(gain.x, gain.y, gain.z, 0.0f);
@@ -4432,7 +4575,17 @@ namespace HexEngine
 			RenderSubsurfaceScattering();
 			// Transparents now render AFTER the fog / volumetric / aerial
 			// perspective applies (see below) and fog themselves per fragment.
-			RenderFog();
+			//
+			// Underwater (S1): a submerged eye looks through WATER, not air.
+			// The atmospheric stack (distance fog, froxel haze, sun shafts,
+			// aerial perspective) would paint daylight haze over the seabed
+			// and then the underwater pass would absorb it again - skip it
+			// for this view and let RenderUnderwater own the medium. A lens
+			// that is only partly under (within a few cm of the surface) keeps
+			// the air stack: most of that frame is above water.
+			const bool viewSubmerged = r_underwater._val.b && GetCurrentViewDepthBelowWater() > 0.05f;
+			if (!viewSubmerged)
+				RenderFog();
 			//RenderWater();
 			// Volumetric lighting: prefer the Phase D froxel-grid path when
 			// VolumetricScattering is up. The new path is depth-correct,
@@ -4446,14 +4599,20 @@ namespace HexEngine
 				g_pEnv->_volumetricScattering != nullptr &&
 				g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr &&
 				_volumetricScatterApplyShader != nullptr;
-			if (useFroxelVolumetrics)
+			if (viewSubmerged)
+			{
+				// (air-side volumetrics skipped - see viewSubmerged above)
+			}
+			else if (useFroxelVolumetrics)
 				RenderVolumetricScattering();
 			else if (r_volumetric._val.b)
 				RenderVolumetricLighting();
+			// Clouds stay: they are what you see through the surface from below.
 			RenderVolumetricClouds();
 			// S7: screen-space sun shafts, right after clouds so the mask can
 			// read the full-res cloud result still sitting in _fogBuffer.
-			RenderSunShafts();
+			if (!viewSubmerged)
+				RenderSunShafts();
 			// GPU particles render AFTER the volumetric apply (moved out of
 			// RenderTransparent): the apply attenuates beauty pixels by the
 			// fog transmittance at the OPAQUE depth, so particles drawn
@@ -4478,7 +4637,8 @@ namespace HexEngine
 			// composited above by this point - they don't participate in
 			// AP for now (correct per-layer AP would need MRT depth
 			// peeling); acceptable v1 limit.
-			RenderAerialPerspective();
+			if (!viewSubmerged)
+				RenderAerialPerspective();
 
 			// Transparent surfaces last in the atmospheric chain: the applies
 			// above only know the opaque depth, so a window at 10 m used to be
@@ -4487,6 +4647,11 @@ namespace HexEngine
 			// the froxel and AP volumes at its OWN depth (TransparentAtmosphere)
 			// and blends over a background that already carries the haze behind it.
 			RenderTransparent();
+
+			// Underwater camera (S1): after the transparents (the water
+			// surface seen from below is one of them) and before SSR / bloom /
+			// exposure / DoF, so everything downstream sees the water medium.
+			RenderUnderwater();
 
 			// IBL atlases are per-scene, not per-camera: generating them again
 			// for each of a probe's six capture faces is pure waste, and running
@@ -5270,7 +5435,10 @@ namespace HexEngine
 				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
 				g_pEnv->_graphicsDevice->SetTexture2D(hasCloudShadowMap ? _cloudShadowMap : nullptr);
-				g_pEnv->_graphicsDevice->SetTexture2D(nullptr);
+				// t13 = caustics atlas (underwater S3). The slot was being kept
+				// free for register progression; null is still fine - the CPU
+				// zeroes g_oceanConfig4.x when the atlas isn't loaded.
+				g_pEnv->_graphicsDevice->SetTexture2D(_causticsAtlas != nullptr ? _causticsAtlas.get() : nullptr);
 
 				// Material-features RT at the slot Deferred.shader's
 				// GBUFFER_FEATURES_RESOURCE binds to (t14). The extended shading
@@ -6117,6 +6285,78 @@ namespace HexEngine
 		graphics->SetTexture3D(nullptr);
 		graphics->SetConstantBufferPS(6, nullptr);
 		graphics->SetBoundResourceIndex(0);
+	}
+
+	float SceneRenderer::GetCurrentViewDepthBelowWater() const
+	{
+		if (_currentScene == nullptr || _currentCamera == nullptr || !_currentScene->HasOcean())
+			return -std::numeric_limits<float>::infinity();
+
+		math::Vector3 eye = math::Vector3::Zero;
+		if (auto* entity = _currentCamera->GetEntity(); entity != nullptr)
+			eye = entity->GetPosition() + _currentCamera->GetViewOffset();
+		return _currentScene->GetDepthBelowWater(eye);
+	}
+
+	void SceneRenderer::RenderUnderwater()
+	{
+		if (!r_underwater._val.b)
+			return;
+		if (_underwaterShader == nullptr || _underwaterParamsBuffer == nullptr ||
+			_beautyRT == nullptr || _subsurfaceIntermediateRT == nullptr ||
+			_currentScene == nullptr || _currentCamera == nullptr)
+			return;
+		// Probe / sky captures are air-side environment data.
+		if (_currentCamera->IsEnvironmentCapture())
+			return;
+		if (!_currentScene->HasOcean())
+			return;
+
+		// CPU gate. The shader masks per pixel, but there is nothing to mask
+		// unless some part of the NEAR PLANE can be under the surface: the eye
+		// would have to be within the wave envelope plus the near-plane's own
+		// reach below it. Above that, skip the fullscreen pass entirely.
+		const float depthBelow = GetCurrentViewDepthBelowWater();
+		const float nearPlaneReach = 0.75f; // generous: near-plane half-height + wave slope across the lens
+		if (depthBelow < -nearPlaneReach)
+			return;
+
+		PROFILE();
+
+		auto* graphics = g_pEnv->_graphicsDevice;
+		auto* guiRenderer = g_pEnv->GetUIManager().GetRenderer();
+		if (guiRenderer == nullptr)
+			return;
+
+		const math::Vector4 params(
+			r_underwaterFogScale._val.f32,
+			r_underwaterDistortion._val.f32,
+			r_underwaterMeniscus._val.f32,
+			r_underwaterScatter._val.f32);
+		_underwaterParamsBuffer->Write((void*)&params, sizeof(params));
+
+		// Two-RT pattern (same as aerial perspective / SSS): read beauty +
+		// gbuffer, write the intermediate, copy back. The refraction wobble
+		// samples beauty at displaced UVs, so it cannot be done in place.
+		guiRenderer->StartFrame();
+		graphics->SetRenderTarget(_subsurfaceIntermediateRT);
+		graphics->SetBlendState(BlendState::Opaque);
+		graphics->SetDepthBufferState(DepthBufferState::DepthNone);
+
+		_gbuffer.BindAsShaderResource();       // t0..t4 (normal.w = view depth)
+		graphics->SetTexture2D(5, _beautyRT);  // t5 = source
+		graphics->SetConstantBufferPS(6, _underwaterParamsBuffer);
+
+		guiRenderer->FullScreenTexturedQuad(nullptr, _underwaterShader.get());
+		guiRenderer->EndFrame();
+
+		_subsurfaceIntermediateRT->CopyTo(_beautyRT);
+
+		// State hygiene - same as the aerial-perspective pass.
+		graphics->SetTexture2D(5, nullptr);
+		graphics->SetConstantBufferPS(6, nullptr);
+		graphics->SetBoundResourceIndex(0);
+		graphics->SetDepthBufferState(DepthBufferState::DepthDefault);
 	}
 
 	void SceneRenderer::RenderVolumetricScattering()
@@ -7862,7 +8102,7 @@ namespace HexEngine
 
 		struct SunShaftParams { math::Vector4 p0; math::Vector4 p1; } params;
 		params.p0 = math::Vector4(sunUv.x, sunUv.y, r_sunShaftsLength._val.f32, offscreenFade);
-		params.p1 = math::Vector4(r_sunShaftsIntensity._val.f32, 0.0f /*pass*/, 0.0f, 0.0f);
+		params.p1 = math::Vector4(r_sunShaftsIntensity._val.f32, 0.0f /*pass*/, r_sunShaftsHighSunScale._val.f32, 0.0f);
 
 		guiRenderer->StartFrame();
 

@@ -32,6 +32,7 @@
 "PixelShaderIncludes"
 {
 	MeshCommon
+	WaterCommon
 	ShadowUtils
 	Utils
 	Atmosphere
@@ -129,8 +130,21 @@
 
 		float3 tangent, binormal;
 		float crest01;
-		const float3 p = EvalOcean(gridPos, g_time, windDir, windAlign, ampScale, tangent, binormal, crest01);
+		float3 p = EvalOcean(gridPos, g_time, windDir, windAlign, ampScale, tangent, binormal, crest01);
 		const float3 normal = normalize(cross(binormal, tangent));
+
+		// Detail-spectrum displacement (realism pass): the longest waves of
+		// the per-pixel detail set also move real geometry, band-limited
+		// against the local tessellation segment (same LOD curve as the
+		// hull shader: ~8 m grid triangles / factor). Normals for these
+		// waves come from the PIXEL shader's analytic gradient, so the
+		// interpolated TBN stays the four-wave swell basis.
+		const float detailSteep = OceanDetailSteepness(ampScale);
+		// Shared helper: OceanSurfaceOffset (and its CPU mirror) must apply
+		// the identical band-limit or the surface query disagrees with the
+		// geometry it is querying.
+		const float segmentLength = OceanTessSegmentLength(distance(gridPos, g_eyePos.xyz));
+		p.y += OceanDetailDisplacement(gridPos.xz, g_time, detailSteep, segmentLength);
 
 		// Storms foam harder: scale the crest factor the PS thresholds.
 		crest01 *= saturate(0.35f + ampScale);
@@ -143,7 +157,8 @@
 		{
 			float3 tPrev, bPrev;
 			float cPrev;
-			const float3 pPrev = EvalOcean(gridPrev, g_timePrev, windDir, windAlign, ampScale, tPrev, bPrev, cPrev);
+			float3 pPrev = EvalOcean(gridPrev, g_timePrev, windDir, windAlign, ampScale, tPrev, bPrev, cPrev);
+			pPrev.y += OceanDetailDisplacement(gridPrev.xz, g_timePrev, detailSteep, segmentLength);
 			o.previousPositionUnjittered = mul(float4(pPrev, 1.0f), g_viewProjectionMatrixPrev);
 		}
 		o.currentPositionUnjittered = o.position;
@@ -399,8 +414,46 @@
 		const float distantNormalFade = ssrQualityWeight;
 
 		float3 worldNormal = normalize(input.normal.xyz);
+
+		// DETAIL SPECTRUM (realism pass). The interpolated normal only knows
+		// the four swell waves; everything that makes a sea read as water -
+		// the wavelet faces, each with its own Fresnel and glint - comes from
+		// the analytic 20-wave gradient evaluated HERE, band-limited to the
+		// pixel footprint (derivatives taken before any branching). Whatever
+		// the footprint filtered out comes back as lostVariance -> roughness.
+		//
+		// The footprint is ANALYTIC (distance x pixel angle / grazing cosine),
+		// NOT ddx/ddy(positionWS): interpolated positions have derivatives that
+		// are constant per triangle and jump at triangle edges, so a
+		// derivative-based footprint stepped the band-limit weights across
+		// every tessellated triangle and drew the mesh as a faint lattice
+		// over the sea (first capture of this pass). _22 of the projection is
+		// 1/tan(fovY/2). The grazing stretch uses cos^0.7 rather than 1/cos:
+		// the footprint is anisotropic (long only ALONG the view), and the
+		// full 1/cos would over-blur the waves running across it.
+		const float pixelAngle = 2.0f / (max(abs(g_projectionMatrix._22), 1e-3f) * (float)g_screenHeight);
+		const float grazingCos = max(abs(eyeVector.y), 0.03f);
+		const float pixelFootprint = max(cameraDistance * pixelAngle / pow(grazingCos, 0.7f), 1e-3f);
+
+		float2 detailWindDir;
+		float detailWindAlign, detailAmpScale;
+		OceanWindParams(g_weatherSurface.windDirectionAndSpeed, g_oceanConfig2.x,
+			detailWindDir, detailWindAlign, detailAmpScale);
+
+		float2 detailSlope;
+		float detailHeight01, lostVariance, totalVariance;
+		OceanDetailWaves(input.positionWS.xz, g_time, OceanDetailSteepness(detailAmpScale), pixelFootprint,
+			detailSlope, detailHeight01, lostVariance, totalVariance);
+
+		// The swell normal is near-vertical, so the height-field gradient
+		// composes by simple subtraction in XZ.
+		worldNormal = normalize(float3(worldNormal.x - detailSlope.x, worldNormal.y, worldNormal.z - detailSlope.y));
+
 		float3 refractionNormal = -worldNormal;
 
+		// "original" = the resolved WAVE normal (swell + analytic detail),
+		// before the normal-map micro layer. Fresnel and reflection key off
+		// this, so reflectance varies facet by facet.
 		float3 originalWorldNormal = worldNormal;
 
 		float3 lightDir = -normalize(g_lightDirection.xyz);
@@ -422,8 +475,14 @@
 		if (distantNormalFade > 0.001f)
 		{
 			// r_oceanBumpStrength: live normal-map deflection dial.
+			// Micro layer on top of the analytic waves: two samples at unrelated
+			// scales/orientations so the tile never reads as a repeat.
 			float3 bumpNormal = ANM(worldNormal, input.tangent, input.binormal, g_normalMap, g_TexSamplerAniso, input.texcoord, g_oceanConfig2.w);
-			bumpNormal = normalize(lerp(input.normal.xyz, bumpNormal, distantNormalFade));
+			const float3 bumpNormal2 = ANM(worldNormal, input.tangent, input.binormal, g_normalMap, g_TexSamplerAniso,
+				// 31 deg, not 90: two axis-aligned tilings of the same map form a grid.
+				float2(input.texcoord.x * 0.857f - input.texcoord.y * 0.515f, input.texcoord.x * 0.515f + input.texcoord.y * 0.857f) * 0.37f + float2(0.173f, 0.619f), g_oceanConfig2.w * 0.8f);
+			bumpNormal = normalize(bumpNormal + bumpNormal2 - worldNormal);
+			bumpNormal = normalize(lerp(worldNormal, bumpNormal, distantNormalFade));
 
 			refractionNormal = bumpNormal;
 			worldNormal = bumpNormal;
@@ -485,24 +544,34 @@
 
 		float lightIntensity = dot(worldNormal, lightDir) * g_globalLight[0] * sunShadow;
 
+		// SURFACE ROUGHNESS from unresolved wave slopes. Beckmann/GGX alpha^2
+		// ~ 2 x slope variance, so the ripples the pixel footprint filtered
+		// out return as microfacet roughness: near water stays glassy with
+		// razor glints on resolved wavelets, the far sea broadens into the
+		// soft glitter path and blurred sky band of the reference.
+		const float waterBasePerceptual = lerp(0.05f, 0.30f, seaState);
+		const float waterAlpha = sqrt(saturate(pow(waterBasePerceptual, 4.0f) + 2.0f * lostVariance));
+		const float waterPerceptualFromVariance = sqrt(waterAlpha);
+
 		if (lightIntensity > 0.0f)
 		{
-			// Glints soften and broaden as the sea roughens - a storm has no
-			// razor-sharp sun line.
-			const float waterPerceptualRoughnessBase = lerp(0.06f, 0.35f, seaState);
 			const float waterMetallic = 0.0f;
 			const float3 viewDir = normalize(g_eyePos.xyz - input.positionWS.xyz);
 			const float3 halfVector = normalize(lightDir + viewDir);
-			const float3 specularNormal = normalize(lerp(originalWorldNormal, worldNormal, 0.35f));
+			// Full detail normal: the glitter IS the wavelet faces.
+			const float3 specularNormal = worldNormal;
 			const float NdotL = clamp(dot(specularNormal, lightDir), 0.001f, 1.0f);
 			const float NdotV = abs(dot(specularNormal, viewDir)) + 0.001f;
 			const float NdotH = saturate(dot(specularNormal, halfVector));
 			const float VdotH = saturate(dot(viewDir, halfVector));
-			float waterPerceptualRoughness = ApplySpecularAntiAliasing(specularNormal, waterPerceptualRoughnessBase);
+			float waterPerceptualRoughness = ApplySpecularAntiAliasing(specularNormal, waterPerceptualFromVariance);
 			const float alphaRoughness = waterPerceptualRoughness * waterPerceptualRoughness;
-			const float3 specularColor = lerp(f0, float3(1.0f, 1.0f, 1.0f), waterMetallic);
+			// Water F0 = 0.02 (IOR 1.33), not the dielectric default 0.04.
+			const float3 specularColor = lerp(float3(0.02f, 0.02f, 0.02f), float3(1.0f, 1.0f, 1.0f), waterMetallic);
 			const float reflectance = max(max(specularColor.r, specularColor.g), specularColor.b);
-			const float reflectance90 = saturate(reflectance * 25.0f);
+			// Water reaches full reflectance at grazing (the x25 heuristic would
+			// stop at 0.5 for F0 = 0.02).
+			const float reflectance90 = 1.0f;
 			const float3 F = specularReflection(specularColor, float3(1.0f, 1.0f, 1.0f) * reflectance90, VdotH);
 			const float G = geometricOcclusion(NdotL, NdotV, alphaRoughness);
 			const float D = microfacetDistribution(NdotH, alphaRoughness);
@@ -553,7 +622,14 @@
 		// Beer-Lambert absorption per METRE. reflection_pad0 (per-scene)
 		// overrides when set (> 0); otherwise the live r_oceanAbsorption cvar.
 		const float absorbK = g_oceanConfig.reflection_pad0 > 0.0f ? g_oceanConfig.reflection_pad0 : max(g_oceanConfig2.z, 0.005f);
-		float transmission = exp(-columnDepth * absorbK);
+		// SPECTRAL absorption. Water eats red within the first couple of
+		// metres, green survives several, blue longest - which is why a sand
+		// bottom goes turquoise then navy with depth instead of fading to
+		// grey. The scalar exp() this replaces dimmed all channels equally:
+		// the see-through read as a tinted glass sheet over the beach. The
+		// per-channel weights average ~1.2, so r_oceanAbsorption keeps its
+		// overall meaning.
+		const float3 transmission = exp(-columnDepth * absorbK * float3(2.30f, 0.80f, 0.55f));
 
 		// CONTROL SEPARATION (user-clarified semantics):
 		//  - shoreFadeStrength: how fast DEPTH fades shallowColour->deepColour
@@ -573,7 +649,17 @@
 		// approaches a mirror toward grazing - which also means you can see
 		// INTO the water near the camera. fresnelPow shapes the grazing rise
 		// (5 = physical; lower = reflectivity comes in earlier).
-		float fresnel = 0.02f + 0.98f * pow(1.0f - saturate(dot(eyeVector, originalWorldNormal)), max(fresnelPow, 0.5f));
+		//
+		// Evaluated on the per-pixel WAVE normal, so every wavelet face gets
+		// its own reflectance: faces tilted toward the eye go dark (you see
+		// into the water), faces tilted away go bright with sky. That facet
+		// contrast is the texture of the reference sea. The incidence cosine
+		// is floored by the RMS wave slope: a rough sea never presents a
+		// perfectly grazing facet, so horizon reflectance tops out around
+		// 0.5-0.65 instead of a chrome 1.0 (measured sea-surface albedo).
+		const float rmsSlope = sqrt(max(totalVariance, 0.0f));
+		const float fresnelCos = max(saturate(dot(eyeVector, originalWorldNormal)), 0.5f * rmsSlope);
+		float fresnel = 0.02f + 0.98f * pow(1.0f - fresnelCos, max(fresnelPow, 0.5f));
 
 		// Procedural foam (O4): crest foam where the waves peak (VS crest
 		// interpolant) + a shore band where the column is centimetres deep.
@@ -643,16 +729,42 @@
 			foam = saturate((lace - threshold) / 0.28f);
 			foam *= foam * (3.0f - 2.0f * foam); // soften the dissolve edge
 			foam *= saturate(0.35f + foamMask);  // wisps stay lighter than cores
+			// ...but a WEAK mask must produce no foam at all, not a 35%-opacity
+			// film: those rendered as flat translucent pale-blue blobs on the
+			// dark body near the camera. Foam is opaque white water or absent.
+			foam *= smoothstep(0.10f, 0.40f, foamMask);
 		}
 
 		float4 ambient = float4(g_atmosphere.ambientLight.rgb * fadeColour.rgb, 1.0f);
-		float4 diffuseColour = float4(fadeColour.rgb * lightIntensity, 1.0f);
+
+		// BODY = volume in-scatter, NOT a lit surface. The old term was
+		// Lambert (fadeColour x N.L): it shaded every wave face like painted
+		// plastic, the single most "cartoon" cue in the shader. Light that
+		// comes back OUT of water has been scattered inside the volume, so it
+		// depends on how much sun enters the sea (sun elevation), not on the
+		// facet normal. 0.40 keeps the overall level of the old term for a
+		// flat surface while removing the per-facet shading.
+		const float sunUpBody = saturate(lightDir.y);
+		const float bodySun = 0.40f * sunUpBody * g_globalLight[0] * lerp(0.45f, 1.0f, sunShadow);
+		float3 litBody = fadeColour.rgb * bodySun + ambient.rgb * 0.35f;
+
+		// Crest subsurface glow: looking toward the sun, light crosses the
+		// thin top of a wave and exits green-turquoise. Height comes from the
+		// analytic detail field + the swell crest interpolant; strongest with
+		// a low sun (long path through the crest).
+		{
+			const float3 sunAzimuth = normalize(float3(lightDir.x, 0.0f, lightDir.z) + float3(1e-5f, 0.0f, 0.0f));
+			const float towardSun = pow(saturate(dot(-eyeVector, sunAzimuth) * 0.5f + 0.5f), 3.0f);
+			const float crestHeight = saturate(detailHeight01 * 0.75f + saturate(input.colour.x) * 0.5f);
+			const float sss = towardSun * crestHeight * crestHeight
+				* lerp(1.0f, 0.45f, sunUpBody) * g_globalLight[0] * sunShadow * (0.25f + 0.75f * seaState);
+			litBody += float3(0.02f, 0.26f, 0.22f) * sss * 0.55f;
+		}
 
 		// Optically thin water shows the refracted scene; thick water shows
-		// the lit body colour. ONE blend, driven by absorption alone - the
-		// old second lerp keyed on fresnel*shoreFade coupled body colour to
-		// reflectance, which is why the controls fought each other.
-		float3 litBody = diffuseColour.rgb + ambient.rgb * 0.35f;
+		// the in-scatter colour. ONE blend, driven by (spectral) absorption
+		// alone - the old second lerp keyed on fresnel*shoreFade coupled body
+		// colour to reflectance, which is why the controls fought each other.
 		float3 waterBodyColour = lerp(litBody, worldDiffuse.rgb, transmission);
 		float4 retCol = float4(waterBodyColour, 1.0f);
 
@@ -673,10 +785,23 @@
 			// so any bump residue there is per-pixel ray divergence = noise.
 			float3 reflectionNormal = normalize(lerp(originalWorldNormal, worldNormal, 0.35f * distantNormalFade));
 
-			if (g_eyePos.y <= 0.0f)
+			// Camera below the WAVE surface (CPU-evaluated, g_oceanConfig3.z).
+			// This used to test g_eyePos.y <= 0 - sea level hardcoded to world
+			// zero, so it never fired in any scene whose ocean sits elsewhere.
+			if (g_oceanConfig3.z > 0.0f)
 				reflectionNormal *= -1.0f;
 
-			const float3 R = normalize(reflect(-eyeVector, reflectionNormal));
+			float3 R = normalize(reflect(-eyeVector, reflectionNormal));
+			// Back-facing wavelets send R below the horizon. In reality that
+			// ray strikes the next wave and carries on to the low sky; the old
+			// code instead FADED the reflection out (envHorizon), leaving the
+			// refracted brown bottom showing through in blotches across the
+			// mid-field. Fold the ray back above the horizon.
+			if (R.y < 0.02f)
+			{
+				R.y = 0.02f + abs(R.y) * 0.5f;
+				R = normalize(R);
+			}
 
 			float3 reflection = float3(0.0f, 0.0f, 0.0f);
 			float reflectionWeight = 0.0f;
@@ -701,12 +826,13 @@
 			// dimmer) prefiltered row - which also takes the edge off the
 			// clear-sky brightness on rippled water.
 			{
-				const float envRoughness = lerp(0.06f, 0.5f, seaState);
+				// Roughness from the unresolved slope variance (see waterAlpha),
+				// with the sea-state floor on top.
+				const float envRoughness = max(waterPerceptualFromVariance, lerp(0.06f, 0.5f, seaState));
 				const float3 envColour = SampleEnvAtlas(g_iblSkyEnvFwd, g_TexSamplerAniso, R, envRoughness);
-				// Downward rays would pick up horizon sky the atlas has no
-				// ground radiance for.
-				const float envHorizon = saturate(R.y * 3.0f + 0.35f);
-				const float envWeight = (1.0f - reflectionWeight) * envHorizon;
+				// R is already folded above the horizon, so the env term always
+				// has a valid sky direction - no horizon fade-out.
+				const float envWeight = (1.0f - reflectionWeight);
 
 				reflection = reflection * reflectionWeight + envColour * envWeight;
 				reflectionWeight = saturate(reflectionWeight + envWeight);
@@ -730,17 +856,89 @@
 		// diffuse (shadowed), replacing whatever is beneath it.
 		if (foam > 0.001f)
 		{
-			const float foamNdl = saturate(dot(worldNormal, lightDir));
+			// Wrapped lighting on the smooth SWELL normal. Foam is a thick
+			// multiply-scattering layer: it does not shade facet-by-facet. With
+			// the per-pixel wave normal, any patch sitting on a wavelet tilted
+			// away from the sun dropped to ambient-only and rendered as a flat
+			// grey-blue blob next to brilliant white neighbours.
+			const float foamNdl = saturate(dot(normalize(input.normal.xyz), lightDir) * 0.55f + 0.45f);
 			const float3 foamLit = float3(0.86f, 0.88f, 0.90f)
 				* (g_atmosphere.ambientLight.rgb
 					+ getSunColour() * g_globalLight[0] * foamNdl * sunShadow);
 			retCol.xyz = lerp(retCol.xyz, foamLit, foam);
 		}
 
+		// SURFACE SEEN FROM BELOW (underwater S2). Everything above shades the
+		// AIR side of the interface; from underneath it rendered as a flat
+		// grey sheet. Below the surface the optics invert:
+		//  - inside SNELL'S WINDOW (the ~97 deg cone where a ray can still
+		//    refract out of n=1.33 water into air) you see the whole sky
+		//    compressed into that disc, its edge distorted by every wavelet;
+		//  - outside it is TOTAL INTERNAL REFLECTION - the surface is a mirror
+		//    of the water below, i.e. the dim in-scatter of the deep.
+		// refract() returns 0 past the critical angle, which IS the window
+		// edge; Fresnel (on the transmitted angle) softens the rim. The
+		// underwater post pass then fogs the path from the lens to here.
+		const bool viewFromBelow = g_oceanConfig3.z > 0.0f;
+		if (viewFromBelow)
+		{
+			const float3 incident = -eyeVector;            // lens -> surface, heading up
+			// Refraction sees the surface from a couple of metres away, where
+			// the capillary-scale slope the band-limited shading normal has
+			// smoothed out is exactly what frays the window rim and shatters
+			// the sun. Exaggerate the normal's tilt for the INTERFACE only
+			// (first capture: the rim was a smooth cartoon blob).
+			const float3 interfaceNormal = normalize(float3(worldNormal.x * 1.9f, worldNormal.y, worldNormal.z * 1.9f));
+			const float3 facingNormal = -interfaceNormal;  // interface normal on the viewer's side
+			const float3 transmitted = refract(incident, facingNormal, 1.333f);
+
+			const float3 bodyLight = 0.40f * saturate(lightDir.y) * g_globalLight[0] + g_atmosphere.ambientLight.rgb * 0.35f;
+			const float3 mirrorOfDeep = lerp(g_oceanConfig.deepColour.rgb, g_oceanConfig.shallowColour.rgb, 0.22f) * bodyLight;
+
+			float3 underside = mirrorOfDeep;
+			if (dot(transmitted, transmitted) > 1e-4f)
+			{
+				const float3 skyDir = normalize(transmitted);
+				const float cosT = saturate(dot(skyDir, worldNormal));
+				const float rimFresnel = 0.02f + 0.98f * pow(1.0f - cosT, 5.0f);
+				float3 sky = SampleEnvAtlas(g_iblSkyEnvFwd, g_TexSamplerAniso, skyDir, 0.04f);
+				// The sun itself through the window: the env atlas carries no
+				// disc, and the shimmering sun ball is the signature of looking
+				// up from under water.
+				const float sunThrough = pow(saturate(dot(skyDir, lightDir)), 900.0f);
+				sky += getSunColour() * g_globalLight[0] * (sunThrough * 6.0f * sunShadow);
+				// WAVELET FOCUSING. A prefiltered sky is smooth, so refracting it
+				// through the waves alone shows nothing - overhead the first
+				// version was a featureless blue disc. What draws the rippling
+				// light-net on a real underside is that each facet passes light
+				// in proportion to how squarely it faces the sun (the same
+				// mechanism that makes caustics on the seabed). Ratio against a
+				// flat surface, so the mean stays ~1.
+				// Squared was invisible (a +/-0.2 ratio); the light-net on a real
+				// underside is HIGH contrast - bright filaments, dim cells -
+				// because focusing is strongly non-linear in facet tilt. ^6 on
+				// the exaggerated interface normal, renormalised by its flat
+				// value (1) so the mean brightness holds.
+				const float facetSun = saturate(dot(interfaceNormal, lightDir)) / max(lightDir.y, 0.15f);
+				const float focus = pow(max(facetSun, 0.0f), 6.0f);
+				sky *= lerp(1.0f, clamp(focus, 0.25f, 2.6f), saturate(lightDir.y * 4.0f));
+				// Exposure under water adapts to the dim in-scatter, against which
+				// the raw HDR sky is ~20x over: the window clipped to a shapeless
+				// white bloom blob at shallow angles. 0.38 keeps it the brightest
+				// thing in frame (it should be) while its structure survives the
+				// tonemapper.
+				sky *= 0.38f;
+				underside = lerp(sky, mirrorOfDeep, rimFresnel);
+			}
+			retCol.xyz = underside;
+		}
+
 		retCol.a = 1.0f;
 
 		// Water renders after the fog / AP applies: fog it at its own depth.
-		retCol.rgb = ApplyTransparentAtmosphere(retCol.rgb, input.positionWS.xyz, input.position.xy, g_transFogVolume, g_transApVolume, g_transLinearSampler);
+		// (Not from below: that path is water, and the underwater pass owns it.)
+		if (!viewFromBelow)
+			retCol.rgb = ApplyTransparentAtmosphere(retCol.rgb, input.positionWS.xyz, input.position.xy, g_transFogVolume, g_transApVolume, g_transLinearSampler);
 
 		WaterOut o;
 		o.colour = retCol;

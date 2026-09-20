@@ -14,6 +14,7 @@
 #include "../Entity/Component/UpdateComponent.hpp"
 #include "../Terrain/HeightMapGenerator.hpp"
 #include "SnowFootprintSystem.hpp"
+#include "OceanWaveModel.hpp"
 #include <functional>
 #include <limits>
 #include <type_traits>
@@ -284,6 +285,36 @@ namespace HexEngine
 
 		OceanSettings& GetOcean() { return _oceanSettings; }
 
+		// ---- Ocean surface queries (underwater S0) ----
+		// The sea is displaced on the GPU; these evaluate the SAME wave function
+		// on the CPU (OceanWaveModel.hpp) with the wind/time the renderer last
+		// uploaded, so gameplay and the underwater camera test agree with what
+		// is on screen.
+
+		/** @brief True when the scene contains water-material ocean tiles (or a sea-level override). */
+		bool HasOcean() const { return _hasOcean || _seaLevelOverrideEnabled; }
+		/** @brief World Y of the UNDISPLACED sea plane. */
+		float GetSeaLevel() const { return _seaLevelOverrideEnabled ? _seaLevelOverride : _seaLevel; }
+		/** @brief World Y of the wave surface above (x, z). Falls back to sea level with no ocean. */
+		float GetWaterHeight(float x, float z) const;
+		/** @brief Depth of a point below the wave surface in metres (> 0 = submerged, < 0 = above). */
+		float GetDepthBelowWater(const math::Vector3& position) const;
+		bool IsUnderwater(const math::Vector3& position) const { return HasOcean() && GetDepthBelowWater(position) > 0.0f; }
+		/** @brief Upper bound on wave height above sea level for the current sea state. */
+		float GetWaveAmplitudeBound() const;
+
+		/** @brief Per-scene sea-level override (the auto-detected tile height is used when disabled). */
+		void SetSeaLevelOverride(bool enabled, float level) { _seaLevelOverrideEnabled = enabled; _seaLevelOverride = level; }
+
+		/** @brief Re-detects sea level from the water-material tiles. Cheap pool walk; the renderer calls it every couple of seconds. */
+		void RefreshSeaLevel();
+		/** @brief Renderer-only: records the exact wave inputs uploaded to the GPU this frame. */
+		void SetOceanWaveInputs(const OceanWaves::WaveInputs& inputs, const math::Vector3& cameraPosition)
+		{
+			_oceanWaveInputs = inputs;
+			_oceanCameraPosition = cameraPosition;
+		}
+
 		void UpdateSkySphereMatrix();
 
 		void SetEntityNamingPolicy(EntityNamingPolicy policy);
@@ -450,6 +481,16 @@ namespace HexEngine
 		std::vector<IEntityListener*> _entityListeners;
 
 		OceanSettings _oceanSettings;
+		// Ocean surface state (see the query block above). _seaLevel is
+		// detected from the ocean tiles; the override is serialized beside
+		// _oceanSettings (NOT inside it - that struct sits mid-cbuffer and its
+		// size is part of the GPU layout).
+		bool _hasOcean = false;
+		float _seaLevel = 0.0f;
+		bool _seaLevelOverrideEnabled = false;
+		float _seaLevelOverride = 0.0f;
+		OceanWaves::WaveInputs _oceanWaveInputs;
+		math::Vector3 _oceanCameraPosition = math::Vector3::Zero;
 		WeatherSurfaceParams _weatherSurfaceParams;
 		SnowFootprintSystem _snowFootprints;
 

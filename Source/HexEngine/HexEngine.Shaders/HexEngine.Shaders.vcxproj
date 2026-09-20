@@ -182,6 +182,9 @@ copy "$(ProjectDir)Compiled\*.hcs" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(
     <HexEngineShader Include="SunShaftsBlur.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
+    <HexEngineShader Include="UnderwaterPost.shader">
+      <FileType>Document</FileType>
+    </HexEngineShader>
     <HexEngineShader Include="TransparentAtmosphere.shader">
       <FileType>Document</FileType>
     </HexEngineShader>
