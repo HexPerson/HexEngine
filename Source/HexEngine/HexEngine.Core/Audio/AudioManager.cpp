@@ -149,6 +149,12 @@ namespace HexEngine
 
 	void AudioManager::Play(const std::shared_ptr<SoundEffect>& effect)
 	{
+		// Null-safe like the positional overloads: game code plays event
+		// sounds from serialized slots that may legitimately be unset (or
+		// whose resource failed to load), and a null here was a hard crash
+		// on the first job-seed of the Whereabouts project.
+		if (!effect || !effect->_instance)
+			return;
 		//effect->_effect->Play(effect->_volume, 0.0f, 0.0f);
 		effect->_is3D = false;
 		effect->_instance->Stop(true);
@@ -158,6 +164,8 @@ namespace HexEngine
 
 	void AudioManager::Loop(const std::shared_ptr<SoundEffect>& effect)
 	{
+		if (!effect || !effect->_instance)
+			return;
 		effect->_is3D = false;
 		effect->_instance->Stop(true);
 		effect->_instance->Play(true);
@@ -203,6 +211,8 @@ namespace HexEngine
 
 	void AudioManager::Stop(const std::shared_ptr<SoundEffect>& effect)
 	{
+		if (!effect || !effect->_instance)
+			return;
 		effect->_instance->Stop(true);
 	}
 
