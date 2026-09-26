@@ -32,20 +32,39 @@
 		const uint srcW = max((uint)g_cullHzbInfo.x, 1u);
 		const uint srcH = max((uint)g_cullHzbInfo.y, 1u);
 		const uint mipIndex = (uint)g_cullHzbInfo.z;
+		const uint2 srcLast = uint2(srcW - 1u, srcH - 1u);
 
-		// mip0: full-resolution copy from depth source.
-		// mip>0: 2x downsample from previous HZB mip.
-		const uint2 srcBase = (mipIndex == 0u) ? uint2(tid.xy) : uint2(tid.xy * 2u);
-		const uint2 p0 = min(srcBase + uint2(0u, 0u), uint2(srcW - 1u, srcH - 1u));
-		const uint2 p1 = (mipIndex == 0u) ? p0 : min(srcBase + uint2(1u, 0u), uint2(srcW - 1u, srcH - 1u));
-		const uint2 p2 = (mipIndex == 0u) ? p0 : min(srcBase + uint2(0u, 1u), uint2(srcW - 1u, srcH - 1u));
-		const uint2 p3 = (mipIndex == 0u) ? p0 : min(srcBase + uint2(1u, 1u), uint2(srcW - 1u, srcH - 1u));
+		// mip0: full-resolution copy from the depth source.
+		if (mipIndex == 0u)
+		{
+			g_dstMip[tid.xy] = g_sourceDepth.Load(int3(min(tid.xy, srcLast), 0)).r;
+			return;
+		}
 
-		const float d0 = g_sourceDepth.Load(int3(p0, 0)).r;
-		const float d1 = g_sourceDepth.Load(int3(p1, 0)).r;
-		const float d2 = g_sourceDepth.Load(int3(p2, 0)).r;
-		const float d3 = g_sourceDepth.Load(int3(p3, 0)).r;
+		// mip>0: MAX reduction of the previous mip. A texel holds the FARTHEST
+		// depth under its footprint, so "the object's nearest point is behind
+		// it" means behind EVERYTHING the texel covers. This used to be a MIN
+		// reduction, which let a single near pixel speak for the whole cell:
+		// stand behind a lamp-post and its few columns of pixels made every
+		// coarse texel they touched read as a solid wall at lamp-post depth,
+		// and the occlusion pass culled the plainly visible buildings behind.
+		//
+		// The LAST row/column also folds in the source's leftover odd texel
+		// (srcW = 2*dstW + 1). Floor-halved mips otherwise drop a strip of
+		// depth at every level, and whatever sat under it could be culled by
+		// its neighbour's value.
+		const uint2 srcBase = min(tid.xy * 2u, srcLast);
+		const uint xEnd = (tid.x == dstW - 1u) ? srcLast.x : min(srcBase.x + 1u, srcLast.x);
+		const uint yEnd = (tid.y == dstH - 1u) ? srcLast.y : min(srcBase.y + 1u, srcLast.y);
 
-		g_dstMip[tid.xy] = min(min(d0, d1), min(d2, d3));
+		float farthest = 0.0f;
+		[loop]
+		for (uint y = srcBase.y; y <= yEnd; ++y)
+		{
+			[loop]
+			for (uint x = srcBase.x; x <= xEnd; ++x)
+				farthest = max(farthest, g_sourceDepth.Load(int3(x, y, 0)).r);
+		}
+		g_dstMip[tid.xy] = farthest;
 	}
 }

@@ -4,10 +4,13 @@
 }
 "ComputeShader"
 {
+	// Must match GpuVisibilityCulling::GpuCullCandidate (80 bytes).
 	struct GpuCullCandidate
 	{
 		float4 sphereWs;
-		float4 occlusionCenterExtent;
+		float4 obbCenter;
+		float4 obbExtents;
+		float4 obbOrientation;
 		uint stableIndex;
 		uint entityKeyLo;
 		uint entityKeyHi;

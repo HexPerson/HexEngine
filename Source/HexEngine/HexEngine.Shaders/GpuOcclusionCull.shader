@@ -4,10 +4,13 @@
 }
 "ComputeShader"
 {
+	// Must match GpuVisibilityCulling::GpuCullCandidate (80 bytes).
 	struct GpuCullCandidate
 	{
 		float4 sphereWs;
-		float4 occlusionCenterExtent;
+		float4 obbCenter;       // xyz world centre
+		float4 obbExtents;      // xyz half-extents along the box's own axes
+		float4 obbOrientation;  // quaternion (x, y, z, w)
 		uint stableIndex;
 		uint entityKeyLo;
 		uint entityKeyHi;
@@ -30,11 +33,25 @@
 		float4 g_cullHzbInfo;
 		float4 g_cullParams0;
 		float4 g_cullParams1;
+		// The view-projection the HZB's depth was RENDERED with (last frame).
+		// Bounds are projected with this, not the current camera: testing a
+		// box through this frame's projection against last frame's depth
+		// compares two different images, and a turning camera then culled
+		// objects against whatever happened to be at the same pixel a frame ago.
+		matrix g_cullHzbViewProjection;
+		// x,y = A,B of ndcZ = A + B/viewZ for the HZB's camera; z = relative bias.
+		float4 g_cullHzbDepthParams;
 	};
 
-	float2 SafeNdcToUv(float2 ndc)
+	float NdcToViewDepth(float ndcZ)
 	{
-		return float2(ndc.x * 0.5f + 0.5f, -ndc.y * 0.5f + 0.5f);
+		return g_cullHzbDepthParams.y / min(ndcZ - g_cullHzbDepthParams.x, -1e-7f);
+	}
+
+	float3 QuatRotate(float4 q, float3 v)
+	{
+		const float3 t = 2.0f * cross(q.xyz, v);
+		return v + q.w * t + cross(q.xyz, t);
 	}
 
 	[numthreads(64, 1, 1)]
@@ -47,92 +64,97 @@
 			return;
 
 		const GpuCullCandidate candidate = g_candidates[tid.x];
-		const uint frustumVisible = g_frustumVisibility[tid.x] > 0u ? 1u : 0u;
-		if (frustumVisible == 0u)
+		if (g_frustumVisibility[tid.x] == 0u)
 		{
 			g_finalVisibility[tid.x] = 0u;
 			return;
 		}
 
-		uint outputFlags = 0u;
-		outputFlags |= 1u; // frustum visible
+		const uint kFrustumVisible = 1u;
+		const uint kVisible = 3u;   // frustum visible + final visible
 
-		if ((candidate.flags & 1u) != 0u)
+		const bool occlusionEnabled = g_cullParams0.y > 0.5f && g_cullHzbInfo.w > 0.5f;
+		if ((candidate.flags & 1u) != 0u || !occlusionEnabled)
 		{
-			outputFlags |= 2u;
-			g_finalVisibility[tid.x] = outputFlags;
+			g_finalVisibility[tid.x] = kVisible;
 			return;
 		}
 
-		const bool occlusionEnabled = g_cullParams0.y > 0.5f;
-		const bool hasHiz = g_cullHzbInfo.w > 0.5f;
-		if (!occlusionEnabled || !hasHiz)
+		// Project the 8 corners of the ORIENTED box: the tightest bound we
+		// have, both for the screen rectangle (fewer HZB texels to beat) and
+		// for the nearest depth. The bounding sphere this replaced is ~1.7x
+		// the box on each axis and made nearly every thin object unoccludable.
+		// The nearest point of a box is always one of its corners, and NDC z
+		// is monotonic in view depth, so min(corner z) is the exact nearest
+		// depth - the old "centre depth minus a SCREEN-space radius" mixed
+		// units and was wrong in both directions.
+		float2 ndcMin = float2(1e30f, 1e30f);
+		float2 ndcMax = float2(-1e30f, -1e30f);
+		float nearestZ = 1.0f;
+		[unroll]
+		for (uint i = 0u; i < 8u; ++i)
 		{
-			outputFlags |= 2u;
-			g_finalVisibility[tid.x] = outputFlags;
+			const float3 corner = float3((i & 1u) ? 1.0f : -1.0f, (i & 2u) ? 1.0f : -1.0f, (i & 4u) ? 1.0f : -1.0f);
+			const float3 p = candidate.obbCenter.xyz + QuatRotate(candidate.obbOrientation, corner * candidate.obbExtents.xyz);
+			const float4 clip = mul(float4(p, 1.0f), g_cullHzbViewProjection);
+			// A corner at or behind the camera plane: the rectangle is
+			// unbounded - nothing to test against.
+			if (clip.w <= 1e-3f)
+			{
+				g_finalVisibility[tid.x] = kVisible;
+				return;
+			}
+			const float3 ndc = clip.xyz / clip.w;
+			ndcMin = min(ndcMin, ndc.xy);
+			ndcMax = max(ndcMax, ndc.xy);
+			nearestZ = min(nearestZ, ndc.z);
+		}
+
+		// Crosses the near plane, or reaches outside the frame the HZB was
+		// rendered from: there is no depth for that part, so no evidence it
+		// is hidden. (Previously the rectangle was CLAMPED to the screen and
+		// the object tested against the edge texels - things turning into
+		// view were culled by whatever sat at the screen border last frame.)
+		if (nearestZ <= 0.0f || any(ndcMin < -1.0f) || any(ndcMax > 1.0f))
+		{
+			g_finalVisibility[tid.x] = kVisible;
 			return;
 		}
 
-		float4 centerVs4 = mul(float4(candidate.sphereWs.xyz, 1.0f), g_cullView);
-		const float centerViewDepth = abs(centerVs4.z);
-		if (centerViewDepth <= 0.01f)
+		const float2 viewportSize = g_cullViewportSizeInvSize.xy;
+		const float2 pxMin = float2(ndcMin.x * 0.5f + 0.5f, 0.5f - ndcMax.y * 0.5f) * viewportSize;
+		const float2 pxMax = float2(ndcMax.x * 0.5f + 0.5f, 0.5f - ndcMin.y * 0.5f) * viewportSize;
+
+		// Pick the mip where one texel is at least as large as the rectangle:
+		// the rectangle then straddles at most 2x2 texels, and those four
+		// together cover it completely - no inset, no centre-only sample.
+		const float extentPx = max(max(pxMax.x - pxMin.x, pxMax.y - pxMin.y), 1.0f);
+		const uint mipCount = max((uint)g_cullHzbInfo.z, 1u);
+		const uint mip = min((uint)ceil(log2(extentPx)), mipCount - 1u);
+		const float texelPx = exp2((float)mip);
+
+		const uint2 hzbSize = uint2(max(g_cullHzbInfo.xy, 1.0f.xx));
+		const int2 mipLast = int2(max(hzbSize >> mip, uint2(1u, 1u))) - 1;
+		// The pyramid folds each level's odd leftover texel into the last
+		// row/column, so a coordinate past the end belongs to the last texel.
+		const int2 tMin = min(int2(floor(pxMin / texelPx)), mipLast);
+		const int2 tMax = min(int2(floor(pxMax / texelPx)), mipLast);
+		if (any(tMax - tMin > 1))
 		{
-			outputFlags |= 2u;
-			g_finalVisibility[tid.x] = outputFlags;
+			// Only reachable when the mip was clamped - too big to judge.
+			g_finalVisibility[tid.x] = kVisible;
 			return;
 		}
 
-		const float4 centerClip = mul(float4(candidate.sphereWs.xyz, 1.0f), g_cullViewProjection);
-		if (abs(centerClip.w) <= 1e-5f)
-		{
-			outputFlags |= 2u;
-			g_finalVisibility[tid.x] = outputFlags;
-			return;
-		}
+		float farthest = g_hzbTexture.Load(int3(tMin.x, tMin.y, mip)).r;
+		farthest = max(farthest, g_hzbTexture.Load(int3(tMax.x, tMin.y, mip)).r);
+		farthest = max(farthest, g_hzbTexture.Load(int3(tMin.x, tMax.y, mip)).r);
+		farthest = max(farthest, g_hzbTexture.Load(int3(tMax.x, tMax.y, mip)).r);
 
-		const float2 centerNdc = centerClip.xy / centerClip.w;
-		const float depthNdc = centerClip.z / centerClip.w;
-
-		const float projScale = max(abs(g_cullProjection[0][0]), abs(g_cullProjection[1][1]));
-		const float radiusNdc = (candidate.sphereWs.w * projScale) / max(centerViewDepth, 1e-4f);
-		const float2 minUv = saturate(SafeNdcToUv(centerNdc - radiusNdc.xx));
-		const float2 maxUv = saturate(SafeNdcToUv(centerNdc + radiusNdc.xx));
-
-		const float2 boxSizePx = max((maxUv - minUv) * g_cullViewportSizeInvSize.xy, 1.0f.xx);
-		const float boxSize = max(boxSizePx.x, boxSizePx.y);
-		const float mip = clamp(floor(log2(max(boxSize, 1.0f))), 0.0f, max(g_cullHzbInfo.z - 1.0f, 0.0f));
-
-		const float2 sampleUv = (minUv + maxUv) * 0.5f;
-		const float mipScale = exp2(mip);
-		const float2 mipSize = max(g_cullViewportSizeInvSize.xy / mipScale, 1.0f.xx);
-		const float2 uvInset = min((maxUv - minUv) * 0.1f, 0.01f.xx);
-		const float2 uvMinSafe = saturate(minUv + uvInset);
-		const float2 uvMaxSafe = saturate(maxUv - uvInset);
-
-		const int mipIndex = (int)mip;
-		const int2 centerCoord = int2(clamp(sampleUv * mipSize, 0.0f.xx, mipSize - 1.0f.xx));
-		const int2 c00 = int2(clamp(float2(uvMinSafe.x, uvMinSafe.y) * mipSize, 0.0f.xx, mipSize - 1.0f.xx));
-		const int2 c10 = int2(clamp(float2(uvMaxSafe.x, uvMinSafe.y) * mipSize, 0.0f.xx, mipSize - 1.0f.xx));
-		const int2 c01 = int2(clamp(float2(uvMinSafe.x, uvMaxSafe.y) * mipSize, 0.0f.xx, mipSize - 1.0f.xx));
-		const int2 c11 = int2(clamp(float2(uvMaxSafe.x, uvMaxSafe.y) * mipSize, 0.0f.xx, mipSize - 1.0f.xx));
-
-		const float centerDepth = g_hzbTexture.Load(int3(centerCoord, mipIndex)).r;
-		float cornerMinDepth = g_hzbTexture.Load(int3(c00, mipIndex)).r;
-		cornerMinDepth = min(cornerMinDepth, g_hzbTexture.Load(int3(c10, mipIndex)).r);
-		cornerMinDepth = min(cornerMinDepth, g_hzbTexture.Load(int3(c01, mipIndex)).r);
-		cornerMinDepth = min(cornerMinDepth, g_hzbTexture.Load(int3(c11, mipIndex)).r);
-		const float depthBias = g_cullParams0.z;
-
-		// Stability-biased policy: require center-depth agreement, then confirm with corner coverage.
-		// This reduces camera-motion flicker from thin/partial occluders.
-		const float sphereFrontDepthNdc = depthNdc - max(radiusNdc, 0.0f);
-		const bool centerOccluded = sphereFrontDepthNdc > (centerDepth + depthBias);
-		const bool cornerOccluded = sphereFrontDepthNdc > (cornerMinDepth + depthBias);
-		const bool aggressive = g_cullParams1.w > 0.5f;
-		const bool occluded = aggressive ? (centerOccluded || cornerOccluded) : (centerOccluded && cornerOccluded);
-		if (!occluded)
-			outputFlags |= 2u;
-
-		g_finalVisibility[tid.x] = outputFlags;
+		// Occluded only if the box's NEAREST point lies behind the FARTHEST
+		// depth anywhere under it - compared in LINEAR depth with a relative
+		// margin (an NDC offset is huge at range and nothing at close range).
+		const bool occluded = NdcToViewDepth(nearestZ) > NdcToViewDepth(farthest) * (1.0f + g_cullHzbDepthParams.z);
+		g_finalVisibility[tid.x] = occluded ? kFrustumVisible : kVisible;
 	}
 }
