@@ -306,6 +306,12 @@ namespace HexEngine
 		_camMain = cam;
 		_camPlayerEntity = camEnt;
 
+		// Remember the player's eye-height view offset so we can restore it on
+		// dismount. The ride drives the view offset to the seat each frame; the
+		// walk controller relies on this stored offset for eye height and never
+		// re-applies it, so we must put back exactly what was here.
+		_camSavedViewOffset = cam->GetViewOffset();
+
 		// Suspend the player's walk controller so it stops moving/looking.
 		_camFps = camEnt->GetComponent<FirstPersonCameraController>();
 		if (_camFps != nullptr)
@@ -388,9 +394,11 @@ namespace HexEngine
 
 		if (cam != nullptr && _camPlayerEntity != nullptr && GetEntity() != nullptr)
 		{
-			// Hand the camera back: clear the seat view offset so it renders from
-			// the player transform again.
-			cam->SetViewOffset(math::Vector3(0.0f, 0.0f, 0.0f));
+			// Hand the camera back: restore the player's eye-height view offset
+			// (captured on mount). Zeroing it here dropped the camera to the player
+			// transform origin - i.e. on the floor - because the walk controller
+			// never re-applies an eye offset of its own.
+			cam->SetViewOffset(_camSavedViewOffset);
 
 			// Set the player down beside the vehicle so they're standing when
 			// control returns. The spot is collision-checked (see
