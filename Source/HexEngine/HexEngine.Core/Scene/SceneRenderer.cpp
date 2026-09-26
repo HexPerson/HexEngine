@@ -84,6 +84,10 @@ namespace HexEngine
 	HVar r_underwaterDistortion("r_underwaterDistortion", "Underwater refraction wobble amplitude in UV units (0 = off)", 0.0030f, 0.0f, 0.03f);
 	HVar r_underwaterMeniscus("r_underwaterMeniscus", "Strength of the dark waterline/meniscus drawn where the surface crosses the lens", 1.0f, 0.0f, 2.0f);
 	HVar r_underwaterScatter("r_underwaterScatter", "Gain on the underwater in-scatter (fog) colour", 1.0f, 0.0f, 8.0f);
+	// Underwater S5 polish.
+	HVar r_underwaterGodRays("r_underwaterGodRays", "Strength of the volumetric light shafts under water (marched through the same caustic field that lights the seabed; 0 = off)", 1.0f, 0.0f, 4.0f);
+	HVar r_underwaterBubbles("r_underwaterBubbles", "Strength of the screen-space bubble burst for ~2 s after the camera dives (0 = off)", 1.0f, 0.0f, 2.0f);
+	HVar r_underwaterLensWetSeconds("r_underwaterLensWetSeconds", "How long water keeps running off the lens after the camera surfaces", 3.5f, 0.25f, 20.0f);
 	// Underwater S3: sun caustics on everything below the sea surface. Applied
 	// to the SUN COLOUR in the deferred directional pass, so they are shadowed,
 	// respect N.L, and show on the seabed from the shore too (the water surface
@@ -1445,7 +1449,7 @@ namespace HexEngine
 		_underwaterShader = IShader::Create("EngineData.Shaders/UnderwaterPost.hcs");
 		if (_underwaterParamsBuffer == nullptr)
 		{
-			_underwaterParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4));
+			_underwaterParamsBuffer = g_pEnv->_graphicsDevice->CreateConstantBuffer(sizeof(math::Vector4) * 2);
 		}
 
 		// Fullscreen quad in clip space. The auto-puddle shader is direct-clip-
@@ -3193,6 +3197,37 @@ namespace HexEngine
 						mainEye = mainCamera->GetEntity()->GetPosition() + mainCamera->GetViewOffset();
 					_currentScene->SetOceanWaveInputs(waveInputs, mainEye);
 
+					// Underwater S5: submersion state machine for the MAIN camera.
+					// +/-3 cm hysteresis so a lens bobbing at the waterline doesn't
+					// fire a crossing every frame.
+					{
+						const float frameDt = std::clamp(g_pEnv->_timeManager->GetFrameTime(), 0.0f, 0.1f);
+						const float mainDepth = (r_underwater._val.b && _currentScene->HasOcean())
+							? _currentScene->GetDepthBelowWater(mainEye) : -1.0e6f;
+						const bool nowSubmerged = _uwSubmerged ? (mainDepth > -0.03f) : (mainDepth > 0.03f);
+						if (nowSubmerged != _uwSubmerged)
+						{
+							_uwSubmerged = nowSubmerged;
+							// A change of MEDIUM is a hard cut for the meter: re-expose
+							// in well under a second instead of dark-adapting at 1/s.
+							_autoExposure.BoostAdaptation(0.9f);
+							if (nowSubmerged)
+								_uwSecondsSinceSubmerge = 0.0f; // bubble burst
+							else
+								_uwLensWet = 1.0f;              // water sheets off the lens
+						}
+						if (_uwSubmerged)
+						{
+							_uwSecondsSinceSubmerge += frameDt;
+							_uwLensWet = 0.0f;
+						}
+						else
+						{
+							_uwSecondsSinceSubmerge = 1.0e6f;
+							_uwLensWet = std::max(0.0f, _uwLensWet - frameDt / std::max(0.25f, r_underwaterLensWetSeconds._val.f32));
+						}
+					}
+
 					if (r_oceanDebugHeight._val.b)
 					{
 						_oceanDebugLogCountdown -= std::max(0.0f, g_pEnv->_timeManager->GetFrameTime());
@@ -3281,18 +3316,28 @@ namespace HexEngine
 
 			// P4.9/P4.10 grain + sharpen (z read by CAS.shader, xy by the
 			// tonemap display shaders).
+			// w (was reserved) = "wet lens" amount after surfacing (underwater
+			// S5), read by LensDrips.shader alongside the rain intensity.
 			bufferData._grainParams = math::Vector4(
 				r_filmGrain._val.f32,
 				r_filmGrainSize._val.f32,
 				r_sharpen._val.f32,
-				0.0f);
+				(r_underwater._val.b && r_lensDrips._val.b) ? _uwLensWet * _uwLensWet : 0.0f);
 
 			// P4.12 lens flare / dirt / streak (read by BloomComposite).
+			// Flare ghosts and streaks are an AIR-side lens artefact: under
+			// water the bright window overhead threw a big ghost disc across
+			// the frame (and the half-submerged split view showed it worst).
+			// Fade them out as this view's eye goes under.
+			// (smoothstep from 30 cm above the surface to 2 cm below; with no
+			// ocean _oceanConfig3.z is -1e6, so this is exactly 1.)
+			const float lensT = std::clamp((bufferData._oceanConfig3.z + 0.30f) / 0.32f, 0.0f, 1.0f);
+			const float lensAirAmount = 1.0f - lensT * lensT * (3.0f - 2.0f * lensT);
 			bufferData._lensParams = math::Vector4(
-				r_lensFlare._val.f32,
+				r_lensFlare._val.f32 * lensAirAmount,
 				r_lensDirt._val.f32,
 				r_lensFlareDispersal._val.f32,
-				r_lensStreak._val.f32);
+				r_lensStreak._val.f32 * lensAirAmount);
 
 			// GI ambient-ownership compose. Main camera only: the GI blurred-AO
 			// texture is main-view screen space, so a probe-capture face or
@@ -5019,9 +5064,13 @@ namespace HexEngine
 			// or a snowstorm / sandstorm (which also drive precipitationIntensity)
 			// - pays nothing; the shader also zeroes the effect for snow/sand.
 			const WeatherSurfaceParams& _lensWx = _currentScene ? _currentScene->GetWeatherSurfaceParams() : WeatherSurfaceParams();
+			// ...and the same pass doubles as "water running off the lens" for a
+			// few seconds after the camera surfaces (underwater S5, _uwLensWet).
+			const bool lensRain = _lensWx.precipitationIntensity > 0.001f &&
+				_lensWx.snowCoverage < 0.34f && _lensWx.dirtAmount < 0.34f;
+			const bool lensSeaWet = r_underwater._val.b && _uwLensWet > 0.01f;
 			if (r_lensDrips._val.b && _lensDripsShader && _currentScene != nullptr &&
-				_lensWx.precipitationIntensity > 0.001f &&
-				_lensWx.snowCoverage < 0.34f && _lensWx.dirtAmount < 0.34f)
+				(lensRain || lensSeaWet))
 			{
 				GFX_PERF_BEGIN(0xFFFFFFFF, L"Lens drips");
 				{
@@ -6328,11 +6377,28 @@ namespace HexEngine
 		if (guiRenderer == nullptr)
 			return;
 
-		const math::Vector4 params(
+		// God rays march the caustic atlas, so they need it bound (and the sun
+		// up - the shader also checks); bubbles key off the dive timer. Both
+		// follow the MAIN camera's state, which is what this pass draws.
+		const bool haveCaustics = _causticsAtlas != nullptr && r_caustics._val.b;
+		struct UnderwaterParams { math::Vector4 p0; math::Vector4 p1; } params;
+		params.p0 = math::Vector4(
 			r_underwaterFogScale._val.f32,
 			r_underwaterDistortion._val.f32,
 			r_underwaterMeniscus._val.f32,
 			r_underwaterScatter._val.f32);
+		// Sun cascades for SHADOWED god rays: a shaft must stop under a pier
+		// or a hull like any other sunlight. Same source + same main-camera
+		// condition as the transparent pass (FindTransparentShadowSun).
+		DirectionalLight* shaftSun =
+			(haveCaustics && _currentCamera == _currentScene->GetMainCamera())
+				? FindTransparentShadowSun(_currentScene)
+				: nullptr;
+		params.p1 = math::Vector4(
+			_uwSecondsSinceSubmerge,
+			haveCaustics ? r_underwaterGodRays._val.f32 : 0.0f,
+			r_underwaterBubbles._val.f32,
+			shaftSun != nullptr ? 1.0f : 0.0f); // w = cascades + b2 caster constants are valid
 		_underwaterParamsBuffer->Write((void*)&params, sizeof(params));
 
 		// Two-RT pattern (same as aerial perspective / SSS): read beauty +
@@ -6345,6 +6411,19 @@ namespace HexEngine
 
 		_gbuffer.BindAsShaderResource();       // t0..t4 (normal.w = view depth)
 		graphics->SetTexture2D(5, _beautyRT);  // t5 = source
+		graphics->SetTexture2D(6, haveCaustics ? _causticsAtlas.get() : nullptr); // t6 = caustic atlas (god rays)
+		if (shaftSun != nullptr)
+		{
+			// t15..t20 + the b2 caster constants re-uploaded for the SUN: the
+			// deferred per-light passes leave b2 holding the last point/spot
+			// light's matrices (see RenderTransparent).
+			for (int32_t i = 0; i < 6; ++i)
+			{
+				auto shadowMap = i < shaftSun->GetMaxSupportedShadowCascades() ? shaftSun->GetShadowMap(i) : nullptr;
+				graphics->SetTexture2D(15 + i, shadowMap != nullptr ? shadowMap->GetDepthMap() : nullptr);
+			}
+			SetupPerShadowCasterBuffer(shaftSun, false, 0, 0, r_shadowSamples._val.i32, 0.0f);
+		}
 		graphics->SetConstantBufferPS(6, _underwaterParamsBuffer);
 
 		guiRenderer->FullScreenTexturedQuad(nullptr, _underwaterShader.get());
@@ -6354,6 +6433,14 @@ namespace HexEngine
 
 		// State hygiene - same as the aerial-perspective pass.
 		graphics->SetTexture2D(5, nullptr);
+		graphics->SetTexture2D(6, nullptr);
+		if (shaftSun != nullptr)
+		{
+			// Cascade depth maps become DSVs again next frame - never leave
+			// them bound as SRVs.
+			for (int32_t i = 0; i < 6; ++i)
+				graphics->SetTexture2D(15 + i, nullptr);
+		}
 		graphics->SetConstantBufferPS(6, nullptr);
 		graphics->SetBoundResourceIndex(0);
 		graphics->SetDepthBufferState(DepthBufferState::DepthDefault);

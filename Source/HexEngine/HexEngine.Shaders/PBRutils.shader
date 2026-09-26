@@ -1167,6 +1167,76 @@
 		return film;
 	}
 
+	// =====================================================================
+	// Sea contact (underwater S4): the shoreline wet band + the submerged
+	// response, for the same FOUR lockstep sites that call ApplyWetSurface
+	// (DefaultPixel, DefaultAnimated, VolumetricTerrainSurface and the
+	// MaterialGraphCompiler emitted string). All of the logic lives here so a
+	// site is three lines and the four cannot drift.
+	//
+	// Returns sea-driven wetness 0..1 for a world position; `submerged` is 1
+	// where the point is below the mean sea surface.
+	//
+	//  - The band is sized from the WAVE AMPLITUDE BOUND (g_oceanConfig3.y),
+	//    not the instantaneous wave: rock stays wet well above the water
+	//    because waves wash up and drain, and keying it to each passing crest
+	//    would make the tide line flicker. It therefore TRACKS SEA STATE - a
+	//    storm wets metres up the beach, a calm day a hand's width.
+	//  - The top edge is broken up with two octaves of world noise (scaled
+	//    with the sea state) so it reads as a tide line, not a ruler line.
+	//  - No shelter test: the sea wets the underside of a pier as readily as
+	//    open rock.
+	// =====================================================================
+	float OceanContactWetness(float3 worldPos, out float submerged)
+	{
+		submerged = 0.0f;
+		if (g_oceanConfig3.w < 0.5f)
+			return 0.0f;
+
+		const float heightAboveSea = worldPos.y - g_oceanConfig3.x;
+		const float ampBound = max(g_oceanConfig3.y, 0.0f);
+
+		// How far up the swash reaches: real seas get to roughly half the
+		// all-waves-in-phase bound; the constant covers capillary creep on a
+		// flat calm.
+		const float reach = 0.10f + ampBound * 0.55f;
+		if (heightAboveSea > reach + 1.2f)
+			return 0.0f;
+
+		const float ragged =
+			((ValueNoise3(float3(worldPos.x * 0.45f, 0.0f, worldPos.z * 0.45f)) - 0.5f) * 0.70f
+			+ (ValueNoise3(float3(worldPos.x * 2.1f, 7.3f, worldPos.z * 2.1f)) - 0.5f) * 0.30f)
+			* min(0.9f, 0.18f + ampBound * 0.35f);
+
+		// Soaked up to ~55% of the reach, drying out over the rest + 35 cm.
+		const float wet = 1.0f - smoothstep(reach * 0.55f + ragged, reach + 0.35f + ragged, heightAboveSea);
+
+		// Below the MEAN surface (same reference the caustics use).
+		submerged = smoothstep(0.10f, -0.30f, heightAboveSea);
+		return saturate(wet);
+	}
+
+	// ApplyWetSurface for a surface that may also be touched by the sea.
+	// `wetness` is max(rain wetness, OceanContactWetness). Under water the
+	// albedo still darkens (pores full) but the FILM must not appear: a water
+	// film only glosses because of the air-water index step, and a submerged
+	// surface has water on both sides of it - no sheen, no SSR. So roughness is
+	// restored and the returned film (the gbuffer smoothness / SSR gate) is
+	// zeroed by `submerged`.
+	float ApplyWetSurfaceSea(
+		inout float3 albedo,
+		inout float roughness,
+		float metalness,
+		float wetness,
+		float submerged,
+		float darkenStrength)
+	{
+		const float dryRoughness = roughness;
+		const float film = ApplyWetSurface(albedo, roughness, metalness, wetness, darkenStrength);
+		roughness = lerp(roughness, dryRoughness, submerged);
+		return film * (1.0f - submerged);
+	}
+
 	float4 ApplyRainDroplets(
 		float3 baseNormalWS,
 		float3 worldPos,

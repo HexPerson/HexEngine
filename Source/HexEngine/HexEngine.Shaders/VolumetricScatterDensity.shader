@@ -692,7 +692,8 @@
 		// SceneRenderer::SetupForwardLights once per frame. Each light
 		// adds its own phase-weighted contribution: looking toward a
 		// light = bright shaft, sideways = dim, behind = near zero.
-		float3 localScatter = float3(0.0f, 0.0f, 0.0f);
+		float3 localScatter = float3(0.0f, 0.0f, 0.0f);   // point/spot lights
+		float3 glowScatter  = float3(0.0f, 0.0f, 0.0f);   // emissive / GI glow
 		const uint fwdPointCount = (uint)g_fwdCountsAndParams.x;
 		const uint fwdSpotCount  = (uint)g_fwdCountsAndParams.y;
 		// With clustered fog active the forward arrays serve ONLY their
@@ -834,7 +835,7 @@
 				// 0.8/9 puts the peak (all taps inside a bright emitter) at
 				// roughly the legacy screen-space path's near-surface energy,
 				// so r_volumetricEmissive keeps its calibration.
-				localScatter += glow * ((0.8f / 9.0f) * g_emissiveParams.x);
+				glowScatter += glow * ((0.8f / 9.0f) * g_emissiveParams.x);
 			}
 		}
 		else if (g_emissiveParams.x > 0.0f)
@@ -887,7 +888,7 @@
 				const float falloff = (window * window) / (distSq + softSqr);
 				emissiveGlow += tint * posEm.w * falloff;
 			}
-			localScatter += emissiveGlow * (0.25f * g_emissiveParams.x);
+			glowScatter += emissiveGlow * (0.25f * g_emissiveParams.x);
 		}
 		// Local lights need a stronger coefficient than the sun: the
 		// sun's "intensity" slot already encodes a multiplier matched
@@ -919,7 +920,21 @@
 		// shade from going pitch black (it still sees most of the sky). It is an
 		// approximation: outdoor shadow loses a little ambient haze too, but it
 		// removes the interior leak cheaply. Tunable via the 0.1 floor.
-		float ambientSkyAccess = lerp(0.1f, 1.0f, sunVisibility);
+		// ...but only where there IS shadow data. sunVisibility is 0 both for
+		// "shadowed" and for "no cascade covers this froxel" (the sun-term
+		// gating above wants that), and since the volume reaches 384 m most
+		// far froxels lie outside every cascade: they were read as enclosed
+		// and lost 90% of their ambient, and the cascade boxes' edges (near
+		// vertical under a high sun/moon) drew dark vertical bands down the
+		// sky. No data = open air.
+		// And only while the light comes from ABOVE: at night the cascades
+		// still render from the sun's below-horizon direction, so every
+		// building and lamp throws its shadow volume UPWARD - read as
+		// "enclosed", those columns of air lost their ambient and rose as
+		// dark vertical streaks through the night sky.
+		const float shadowProxyTrust = smoothstep(-0.02f, 0.10f, sunDir.y);
+		const float skyAccessProxy = lerp(1.0f, (anyCascade > 0.0f) ? sunVisibility : 1.0f, shadowProxyTrust);
+		float ambientSkyAccess = lerp(0.1f, 1.0f, skyAccessProxy);
 		// GI voxel occlusion on the fog AMBIENT only - the sun/local scatter
 		// terms above keep full strength so god-rays through windows survive.
 		// The voxel field knows what the sun-shadow proxy above cannot: an
@@ -935,7 +950,22 @@
 		}
 		const float3 ambientScatter = g_fogAmbient.rgb * extinction * ambientSkyAccess;
 
-		const float3 scatter = MIE_COEFF * totalScatter + LOCAL_MIE_COEFF * localScatter + ambientScatter;
+		// Point/spot lights scatter in proportion to the ACTUAL medium:
+		// sigma_s = albedo * extinction (g_emissiveParams.w = albedo,
+		// r_volumetricLocalScatter). They used the constant LOCAL_MIE_COEFF
+		// (0.15/m) like the sun, while the fog only EXTINGUISHED at its real
+		// density (Snow at night ~0.0024/m) - a medium scattering ~60x more
+		// light than it removes. Any lamp near the camera turned the air
+		// around it into a light source: everything seen through its cone
+		// was veiled flat white (user: "meshes behind a spot light appear
+		// washed out"). Coupled, a lamp cone glows as much as the weather is
+		// foggy, and dims what lies behind it by the matching amount.
+		// Emissive glow keeps its own calibrated constant.
+		// Floor (g_fogAmbient.w, r_volumetricLocalHaze): a stylised minimum so
+		// lamp cones still read in clear night air; weather fog adds on top.
+		const float localSigmaS = max(extinction * g_emissiveParams.w, g_fogAmbient.w);
+		const float3 scatter = MIE_COEFF * totalScatter + localSigmaS * localScatter
+			+ LOCAL_MIE_COEFF * glowScatter + ambientScatter;
 
 		g_scatterVolume[dtid] = float4(scatter, extinction);
 	}

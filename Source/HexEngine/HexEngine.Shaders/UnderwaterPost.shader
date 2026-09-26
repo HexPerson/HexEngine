@@ -10,6 +10,7 @@
 {
 	UICommon
 	WaterCommon
+	ShadowUtils
 	Utils
 }
 "VertexShader"
@@ -52,12 +53,86 @@
 	SamplerState g_pointSampler : register(s2);
 	SamplerState g_linearSampler : register(s4); // WRAP - clamp UVs manually
 
+	// Caustic atlas (same one Deferred.shader lights the seabed with) - the
+	// god rays are marched through the SAME field, so a shaft in the water
+	// lands on its own bright filament on the sand.
+	Texture2D g_causticsAtlas : register(t6);
+
+	// Sun cascade shadow maps at the same slots the transparent pass uses
+	// (bound by RenderUnderwater together with the b2 caster constants;
+	// g_underwaterP1.w says whether they are valid this frame).
+	SHADOWMAPS_RESOURCE(15);
+	SamplerComparisonState g_cmpSampler : register(s1);
+
 	cbuffer UnderwaterParams : register(b6)
 	{
 		// x = fog scale (multiplies r_oceanAbsorption for the view path),
 		// y = distortion amplitude (uv), z = meniscus strength, w = in-scatter gain
 		float4 g_underwaterP0;
+		// x = seconds since the camera dived (huge when not applicable),
+		// y = god-ray strength (0 = off / atlas unbound), z = bubble strength,
+		// w = 1 when the sun cascades + caster constants are bound
+		float4 g_underwaterP1;
 	};
+
+	// Atlas layout - MIRRORS Deferred.shader (kCaustic*) and
+	// Tools/BuildCausticsAtlas.py. Change all three together.
+	static const float2 kCausticAtlasPx = float2(2080.0f, 1040.0f);
+	static const float  kCausticCellPx = 260.0f;
+	static const float  kCausticTilePx = 256.0f;
+	static const float  kCausticGutterPx = 2.0f;
+
+	float SampleCausticFrame(float2 tileUv, float frame)
+	{
+		const float f = fmod(frame, 32.0f);
+		const float2 cell = float2(fmod(f, 8.0f), floor(f / 8.0f));
+		const float2 px = cell * kCausticCellPx + kCausticGutterPx + frac(tileUv) * kCausticTilePx;
+		return g_causticsAtlas.SampleLevel(g_linearSampler, px / kCausticAtlasPx, 0).r;
+	}
+
+	float Hash21(float2 p)
+	{
+		float3 q = frac(float3(p.xyx) * float3(0.1031f, 0.1030f, 0.0973f));
+		q += dot(q, q.yzx + 33.33f);
+		return frac((q.x + q.y) * q.z);
+	}
+
+	// Dive bubble burst: two layers of rising screen-space bubbles. Returns
+	// the ring highlight; `refractOffset` accumulates a lens-like UV push so
+	// each bubble bends the scene behind it instead of being a flat sprite.
+	float DiveBubbles(float2 uv, float aspect, float seconds, inout float2 refractOffset)
+	{
+		float highlight = 0.0f;
+		[unroll]
+		for (int layer = 0; layer < 2; ++layer)
+		{
+			const float cols = (layer == 0) ? 9.0f : 17.0f;
+			const float rise = (layer == 0) ? 0.55f : 0.85f;   // screens per second
+			float2 p = float2(uv.x * aspect, uv.y) * cols;
+			p.y += seconds * rise * cols;                        // bubbles travel UP the screen
+			const float2 cell = floor(p);
+			const float2 local = frac(p);
+
+			const float present = Hash21(cell + 17.0f * (float)layer);
+			if (present < 0.62f)
+				continue;
+
+			const float2 centre = float2(0.25f + 0.5f * Hash21(cell + 3.1f), 0.25f + 0.5f * Hash21(cell + 7.7f))
+				+ float2(sin(seconds * 5.0f + present * 40.0f) * 0.06f, 0.0f); // wobble as they rise
+			const float radius = lerp(0.07f, 0.20f, Hash21(cell + 11.3f));
+			const float2 d = local - centre;
+			const float dist = length(d);
+
+			const float inside = 1.0f - smoothstep(radius * 0.92f, radius, dist);
+			const float ring = inside * smoothstep(radius * 0.55f, radius * 0.95f, dist);
+			// Bright crescent on the upper-left, like a lit air bubble.
+			const float glint = inside * pow(saturate(dot(normalize(d + 1e-5f), normalize(float2(-0.6f, -0.8f)))), 6.0f);
+
+			highlight += ring * 0.55f + glint * 0.9f;
+			refractOffset += (d / max(radius, 1e-3f)) * inside * (0.012f / cols * 9.0f);
+		}
+		return highlight;
+	}
 
 	// Same weights as Water.shader's spectral transmission: red dies in the
 	// first couple of metres, green carries several, blue longest.
@@ -114,7 +189,21 @@
 		const float2 wobble = float2(
 			sin(uv.y * 17.0f + t * 1.31f) + 0.5f * sin(uv.y * 41.0f - t * 1.87f),
 			cos(uv.x * 13.0f + t * 1.13f) + 0.5f * cos(uv.x * 37.0f + t * 1.59f));
-		const float2 uvRefracted = clamp(uv + wobble * (g_underwaterP0.y * mask), 0.001f.xx, 0.999f.xx);
+		// ---- Dive bubble burst (S5) ---------------------------------------
+		// For ~2.4 s after the camera goes under: the air dragged down with
+		// it, rising past the lens. Each bubble refracts the scene behind it.
+		float2 bubbleOffset = float2(0.0f, 0.0f);
+		float bubbleHighlight = 0.0f;
+		const float diveSeconds = g_underwaterP1.x;
+		if (g_underwaterP1.z > 0.0f && diveSeconds < 2.4f)
+		{
+			const float burst = (1.0f - smoothstep(1.1f, 2.4f, diveSeconds)) * g_underwaterP1.z;
+			const float aspect = (float)g_screenWidth / max((float)g_screenHeight, 1.0f);
+			bubbleHighlight = DiveBubbles(uv, aspect, diveSeconds, bubbleOffset) * burst;
+			bubbleOffset *= burst;
+		}
+
+		const float2 uvRefracted = clamp(uv + (wobble * g_underwaterP0.y + bubbleOffset) * mask, 0.001f.xx, 0.999f.xx);
 		const float3 scene = g_beauty.SampleLevel(g_linearSampler, uvRefracted, 0).rgb;
 
 		// ---- Path length through water ------------------------------------
@@ -167,6 +256,84 @@
 			* downwelling * lookUp * g_underwaterP0.w;
 
 		float3 underwater = scene * transmission + inscatter * (1.0f - transmission);
+
+		// ---- God rays (S5) -------------------------------------------------
+		// Light shafts are the caustic net seen SIDEWAYS: the same focusing
+		// that draws bright filaments on the sand lights up the water column
+		// above them. March the view ray, and at each step walk back up the
+		// REFRACTED sun ray to the surface and read the caustic field there -
+		// the identical projection Deferred.shader uses for the seabed, so a
+		// shaft in the water ends on its own bright patch of sand. One layer
+		// at a coarser scale (broad shafts, not a fine net), jittered per
+		// pixel + frame so TAA resolves the ten steps into a smooth volume.
+		if (g_underwaterP1.y > 0.0f && sunUp > 0.02f)
+		{
+			const float3 sunInWater = refract(-lightDir, float3(0.0f, 1.0f, 0.0f), 1.0f / 1.333f);
+			const float marchLength = min(pathLength, 26.0f);
+			const float2 drift = g_timeParams2.zw * 64.0f;
+			const float tileMetres = max(g_oceanConfig4.y, 0.25f) * 1.7f;
+			const float frameTime = g_time * g_oceanConfig4.z * 0.8f;
+			const float frame0 = floor(frameTime);
+			const float frameBlend = frameTime - frame0;
+			const float surfaceY = seaLevel + surfaceOffset;
+
+			// INTERLEAVED GRADIENT NOISE for the step offset, not a white hash.
+			// White noise gives neighbouring pixels unrelated offsets, so the
+			// banding it is meant to hide comes straight back as GRAIN (the
+			// first version: visibly stippled shafts). IGN is built so every
+			// small neighbourhood covers [0,1) evenly - the error is pushed to
+			// a high, regular frequency the eye and TAA both integrate away -
+			// and the per-frame shift (golden-ratio stride over a 64-frame
+			// cycle) makes successive frames sample the gaps between steps.
+			const int kSteps = 16;
+			const float2 ignPos = input.position.xy + 5.588238f * (float)(g_frame % 64u);
+			const float jitter = frac(52.9829189f * frac(dot(ignPos, float2(0.06711056f, 0.00583715f))));
+			float shaft = 0.0f;
+			[loop]
+			for (int i = 0; i < kSteps; ++i)
+			{
+				const float t = ((float)i + jitter) / (float)kSteps * marchLength;
+				const float3 p = nearPos + rayDir * t;
+				const float depthHere = surfaceY - p.y;
+				if (depthHere <= 0.0f)
+					continue;
+
+				const float2 surfaceXZ = p.xz - sunInWater.xz * (depthHere / max(-sunInWater.y, 0.2f));
+				const float2 tileUv = (surfaceXZ - drift * 0.9f) / tileMetres;
+				const float c = lerp(SampleCausticFrame(tileUv, frame0), SampleCausticFrame(tileUv, frame0 + 1.0f), frameBlend);
+				const float beam = saturate((c - 0.50f) / 0.50f);
+
+				// SHADOWED: a shaft is sunlight, so it stops under a pier, a
+				// hull or a cliff exactly as the caustics on the seabed below
+				// it do (those go through the deferred sun term, which is
+				// already shadowed). Without this the rays shone straight
+				// through anything standing in the water. The cascades are
+				// rendered along the straight sun direction while the light
+				// under water is refracted; the offset over a few metres of
+				// depth is small, and it is the same approximation the seabed's
+				// own shadows make, so the two stay consistent.
+				float sunVisible = 1.0f;
+				if (g_underwaterP1.w > 0.5f)
+					sunVisible = CalculateShadowsCheapPCF(p, g_cmpSampler, SHADOWMAPS, g_shadowConfig.biasMultiplier);
+
+				// Light reaching this point (down the sun ray) x light reaching
+				// the eye from it (back along the view ray). Cubed: shafts are
+				// the BRIGHT filaments only; the cells between must stay dark
+				// or the volume just reads as brighter fog.
+				shaft += beam * beam * beam * sunVisible * exp(-(depthHere * 0.8f + t * 0.9f) * absorbK);
+			}
+			shaft *= marchLength / (float)kSteps;
+
+			// Strongly forward-scattering: shafts blaze looking up-sun and all
+			// but vanish looking away from it.
+			const float towardSun = saturate(dot(rayDir, -sunInWater));
+			const float phase = 0.12f + 0.88f * towardSun * towardSun * towardSun;
+			underwater += g_oceanConfig.shallowColour.rgb * (0.40f * sunUp * g_globalLight[0])
+				* (shaft * phase * 5.0f * g_underwaterP1.y); // (0.16 was invisible - first capture)
+		}
+
+		// Bubble highlights sit on top of everything in the water.
+		underwater += inscatter * (bubbleHighlight * 2.5f) + bubbleHighlight * 0.04f;
 
 		float3 result = lerp(source.rgb, underwater, mask);
 

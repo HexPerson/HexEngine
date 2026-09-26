@@ -148,14 +148,15 @@
 		}
 
 		// Froxel UVW for this particle: screen UV + exp-mapped depth slice
-		// (near 0.1m, far 128m - mirrors VolumetricScatterApply). Shared by
-		// the fog-transmittance tap below and the light-probe tap in the
-		// lit path.
+		// (near 0.1m, far 384m - MUST mirror VolumetricScattering::kFarDepthM
+		// and VolumetricScatterApply's FAR_PLANE_M; a stale range here fogs
+		// particles at the wrong depth). Shared by the fog-transmittance tap
+		// below and the light-probe tap in the lit path.
 		const float2 froxelUv = input.position.xy / float2((float)g_screenWidth, (float)g_screenHeight);
 		const float froxelDist = length(input.positionWS.xyz - g_eyePos.xyz);
 		const float3 froxelUvw = float3(
 			froxelUv,
-			saturate(log(max(froxelDist, 0.1f) / 0.1f) / log(128.0f / 0.1f)));
+			saturate(log(max(froxelDist, 0.1f) / 0.1f) / log(384.0f / 0.1f)));
 
 		// Per-particle volumetric fog transmittance at the PARTICLE's depth.
 		// Inscatter is intentionally NOT added here: the background behind

@@ -27,6 +27,17 @@ namespace HexEngine
 	// convergence differences reading as blockiness); sharing the estimate
 	// across neighbours divides the variance ~8x for half a froxel of
 	// spatial sharpness the volume never had. Off = the pre-filter look.
+	// Scattering albedo of the fog for point/spot lights: sigma_s = this x
+	// extinction (VolumetricScatterDensity). 1 is the physical ceiling (the
+	// medium can't scatter more than it removes); above it lamp cones glow
+	// brighter than the fog density justifies and veil what's behind them.
+	HVar r_volumetricLocalScatter("r_volumetricLocalScatter", "Fog scattering albedo for point/spot lights (x fog extinction; 1 = physical max)", 0.9f, 0.0f, 20.0f);
+	// Stylised floor under the above: lamps always light at least this much
+	// haze per metre, whatever the weather (thin clear-night air would
+	// otherwise show no cone at all). NOT energy-conserving - it scatters
+	// without extinguishing - so it is what veils things seen through a cone;
+	// the old fixed coefficient was 0.15 and washed scenes out.
+	HVar r_volumetricLocalHaze("r_volumetricLocalHaze", "Minimum per-metre fog scattering for point/spot lights, weather-independent (old fixed value 0.15)", 0.045f, 0.0f, 0.5f);
 	HVar r_volumetricSpatialFilter("r_volumetricSpatialFilter", "Spatially filter the froxel scatter volume before integration (reduces fizz/blockiness)", true, false, true);
 
 	namespace
@@ -552,12 +563,14 @@ namespace HexEngine
 			_clCountsSrv != nullptr && _clListsSrv != nullptr;
 		scatterCB.emissiveParams = math::Vector4(
 			(emissiveValid || giGlowActive) ? std::max(0.0f, emissiveStrength) : 0.0f,
-			std::max(0.01f, emissiveRangeMetres), clusteredFog ? 1.0f : 0.0f, 0.0f);
+			std::max(0.01f, emissiveRangeMetres), clusteredFog ? 1.0f : 0.0f,
+			std::max(0.0f, r_volumetricLocalScatter._val.f32));
 		// Premultiply ambient colour by strength so the shader's per-froxel
 		// cost is a single mad against the extinction.
 		const float ambS = std::max(0.0f, fogAmbientStrength);
 		scatterCB.fogAmbient = math::Vector4(
-			fogAmbientColour.x * ambS, fogAmbientColour.y * ambS, fogAmbientColour.z * ambS, 0.0f);
+			fogAmbientColour.x * ambS, fogAmbientColour.y * ambS, fogAmbientColour.z * ambS,
+			std::max(0.0f, r_volumetricLocalHaze._val.f32));
 
 		_scatterParamsCBuffer->Write(&scatterCB, sizeof(scatterCB));
 

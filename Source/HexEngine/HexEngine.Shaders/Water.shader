@@ -278,6 +278,102 @@
 		return false;
 	}
 
+	// FROM BELOW: what the refracted ray sees of the world above the water.
+	// The opaque scene colour is lit before any water draws, so it holds the
+	// un-refracted above-water world across the whole screen - including the
+	// part of it the total-internal-reflection zone hides. Marching the
+	// TRANSMITTED ray through that depth buffer is what bends a pier or a hull
+	// into Snell's window instead of leaving it a disc of pure sky.
+	// Strides grow geometrically (0.25 m -> ~330 m in 24 steps): the ray leaves
+	// the surface heading for the horizon, so what it hits is either right here
+	// (a hull, a pier) or far away (the shore), and a fixed stride can't do both.
+	// Misses - off-screen, sky, or nothing in the way - fall back to the env
+	// atlas at the call site, which is also what owns the sky itself: the dome
+	// in scene colour carries the raw HDR sun disc and no clouds.
+	bool TraceRefractedScene(float3 surfaceWorldPos, float3 refractDirWorld, float2 pixelXY,
+		out float3 sceneColour, out float hitConfidence)
+	{
+		sceneColour = float3(0.0f, 0.0f, 0.0f);
+		hitConfidence = 0.0f;
+
+		const int kMaxSteps = 24;
+		const float kFirstStride = 0.25f;
+		const float kStrideGrowth = 1.35f;
+
+		// Interleaved gradient noise on the start offset turns the geometric
+		// strides' depth banding into grain the temporal resolve eats.
+		const float jitter = frac(52.9829189f * frac(dot(pixelXY, float2(0.06711056f, 0.00583715f))));
+
+		float stride = kFirstStride;
+		float travelled = kFirstStride * jitter;
+		float prevTravelled = 0.0f;
+
+		[loop]
+		for (int step = 0; step < kMaxSteps; ++step)
+		{
+			prevTravelled = travelled;
+			travelled += stride;
+			const float3 rayPos = surfaceWorldPos + refractDirWorld * travelled;
+
+			const float4 clip = mul(float4(rayPos, 1.0f), g_viewProjectionMatrix);
+			if (clip.w <= 0.0f)
+				return false;
+			const float2 ndc = clip.xy / clip.w;
+			if (any(abs(ndc) > 1.0f))
+				return false;
+			const float2 uv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+
+			const float rayViewZ = -mul(float4(rayPos, 1.0f), g_viewMatrix).z;
+			const float sceneViewZ = g_sceneNormalTex.SampleLevel(g_TexSamplerPoint, uv, 0).w;
+
+			const bool sceneIsGeometry = sceneViewZ > 0.0f && sceneViewZ < g_frustumDepths[3] * 0.999f;
+			const float dz = rayViewZ - sceneViewZ;
+			if (sceneIsGeometry && dz > 0.0f && dz < stride * 2.0f + 0.5f)
+			{
+				// Bisect between the last clear sample and this one: the late
+				// strides are tens of metres long, and an unrefined hit slides
+				// the image around as the waves move the ray.
+				float lo = prevTravelled;
+				float hi = travelled;
+				float2 hitUv = uv;
+				for (int refine = 0; refine < 5; ++refine)
+				{
+					const float mid = 0.5f * (lo + hi);
+					const float3 midPos = surfaceWorldPos + refractDirWorld * mid;
+					const float4 midClip = mul(float4(midPos, 1.0f), g_viewProjectionMatrix);
+					const float2 midNdc = midClip.xy / max(midClip.w, 1e-4f);
+					const float2 midUv = float2(midNdc.x * 0.5f + 0.5f, 0.5f - midNdc.y * 0.5f);
+					const float midRayZ = -mul(float4(midPos, 1.0f), g_viewMatrix).z;
+					const float midSceneZ = g_sceneNormalTex.SampleLevel(g_TexSamplerPoint, midUv, 0).w;
+					if (midSceneZ > 0.0f && midRayZ > midSceneZ)
+					{
+						hi = mid;
+						hitUv = midUv;
+					}
+					else
+					{
+						lo = mid;
+					}
+				}
+
+				// The ray climbs out of the water, so a genuine hit is above
+				// it. Anything below the waterline is the depth test catching
+				// submerged geometry that merely lines up on screen.
+				const float3 hitPosWS = g_scenePositionTex.SampleLevel(g_TexSamplerPoint, hitUv, 0).xyz;
+				if (hitPosWS.y < g_oceanConfig3.x - 0.25f)
+					return false;
+
+				sceneColour = g_sceneColourTex.SampleLevel(g_TexSamplerPoint, hitUv, 0).rgb;
+				const float2 edgeFade = smoothstep(0.0f, 0.08f, hitUv) * smoothstep(0.0f, 0.08f, 1.0f - hitUv);
+				hitConfidence = saturate(edgeFade.x * edgeFade.y);
+				return true;
+			}
+
+			stride *= kStrideGrowth;
+		}
+		return false;
+	}
+
 	// Screen-space refraction: offset the scene-colour lookup along the
 	// refracted direction, depth-rejected so geometry NEARER than the water
 	// surface never smears into the refraction. Rebuilt properly in O4.
@@ -414,6 +510,9 @@
 		const float distantNormalFade = ssrQualityWeight;
 
 		float3 worldNormal = normalize(input.normal.xyz);
+		// The four-wave swell alone - the from-below interface needs to tell the
+		// swell's tilt (kept as is) from the wavelets' (exaggerated).
+		const float3 swellNormal = worldNormal;
 
 		// DETAIL SPECTRUM (realism pass). The interpolated normal only knows
 		// the four swell waves; everything that makes a sea read as water -
@@ -888,7 +987,21 @@
 			// smoothed out is exactly what frays the window rim and shatters
 			// the sun. Exaggerate the normal's tilt for the INTERFACE only
 			// (first capture: the rim was a smooth cartoon blob).
-			const float3 interfaceNormal = normalize(float3(worldNormal.x * 1.9f, worldNormal.y, worldNormal.z * 1.9f));
+			// ...but ONLY up close. Applied everywhere, it tipped distant
+			// facets (seen at grazing angles, where total internal reflection
+			// should be near-total) past the critical angle, and the window
+			// smeared down to the horizon as a flat cyan sheet. Fades to the
+			// true normal by ~18 m.
+			const float interfaceTilt = lerp(1.9f, 1.0f, saturate(cameraDistance / 18.0f));
+			// ...and ONLY the wavelets. Scaling the whole normal doubled the
+			// SWELL's tilt too: on a 12 degree swell face the window slid ~25
+			// degrees off the zenith and total internal reflection swallowed
+			// most of a straight-up view.
+			// It is the WAVE normal (swell + analytic wavelets) that gets this, not
+			// the bump-mapped shading normal: at a couple of metres the normal-map
+			// layer tilts nearly every texel past 32 degrees (debug view), which
+			// from below is past the critical angle more often than not.
+			const float3 interfaceNormal = normalize(swellNormal + (originalWorldNormal - swellNormal) * interfaceTilt);
 			const float3 facingNormal = -interfaceNormal;  // interface normal on the viewer's side
 			const float3 transmitted = refract(incident, facingNormal, 1.333f);
 
@@ -907,6 +1020,14 @@
 				// up from under water.
 				const float sunThrough = pow(saturate(dot(skyDir, lightDir)), 900.0f);
 				sky += getSunColour() * g_globalLight[0] * (sunThrough * 6.0f * sunShadow);
+				// Whatever stands above the water along the refracted ray - pier,
+				// hull, shoreline - replaces the sky there (and hides the sun
+				// behind it, which the analytic disc above would otherwise
+				// shine straight through).
+				float3 aboveWater;
+				float aboveWaterConfidence;
+				if (TraceRefractedScene(input.positionWS.xyz, skyDir, input.position.xy, aboveWater, aboveWaterConfidence))
+					sky = lerp(sky, aboveWater, aboveWaterConfidence);
 				// WAVELET FOCUSING. A prefiltered sky is smooth, so refracting it
 				// through the waves alone shows nothing - overhead the first
 				// version was a featureless blue disc. What draws the rippling

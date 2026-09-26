@@ -44,9 +44,20 @@ namespace HexEngine
 
 		void SetReverb(dx::AUDIO_ENGINE_REVERB reverb);
 
+		// Underwater muffle (underwater S5). 0 = in air, 1 = listener fully
+		// submerged; smoothed in Update() from Scene::IsUnderwater(listener).
+		float GetUnderwaterBlend() const { return _underwaterBlend; }
+		// Pitch offset (semi-octaves, <= 0) layered on every playing sound.
+		float GetUnderwaterPitchOffset() const { return _underwaterPitchOffset; }
+
 	private:
+		void UpdateUnderwaterMuffle(const math::Vector3& listenerPosition);
+
 		dx::AudioEngine* _engine;
 		dx::AudioListener _listener;
+		float _underwaterBlend = 0.0f;
+		float _underwaterPitchOffset = 0.0f;
+		float _underwaterAppliedBlend = -1.0f; // last blend pushed to the engine/instances
 
 		std::vector<std::weak_ptr<SoundEffect>> _createdSounds;
 		

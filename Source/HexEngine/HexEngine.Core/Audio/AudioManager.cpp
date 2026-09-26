@@ -7,6 +7,17 @@
 
 namespace HexEngine
 {
+	// Underwater muffle (underwater S5). DirectXTK's per-voice filters are only
+	// reachable through the environmental-reverb path, which this engine creates
+	// the AudioEngine WITHOUT (see Create()) - so a true low-pass is an audio-
+	// architecture change, not a polish item. What sells "head under water"
+	// almost as well is the pair the weather plugin already uses for "indoors":
+	// duck the level and drop the pitch. Both are smoothed so a camera bobbing
+	// at the waterline doesn't chatter.
+	HVar snd_underwater("snd_underwater", "Muffle audio (level duck + pitch drop) while the listener is below the sea surface", true, false, true);
+	HVar snd_underwaterVolume("snd_underwaterVolume", "Master volume multiplier while fully submerged", 0.42f, 0.0f, 1.0f);
+	HVar snd_underwaterPitch("snd_underwaterPitch", "Pitch offset (octaves, negative = lower) layered on every sound while fully submerged", -0.22f, -1.0f, 0.0f);
+
 	AudioManager::AudioManager()
 	{
 		g_pEnv->GetResourceSystem().RegisterResourceLoader(this);
@@ -118,6 +129,12 @@ namespace HexEngine
 				_listener.SetPosition(mainCamera->GetEntity()->GetPosition());
 				_listener.SetOrientation(mainCamera->GetEntity()->GetComponent<Transform>()->GetForward(), math::Vector3::Up);
 
+				UpdateUnderwaterMuffle(mainCamera->GetEntity()->GetPosition() + mainCamera->GetViewOffset());
+				// Re-layer the pitch offset only while it is changing or active:
+				// one SetPitch per playing sound per frame, and nothing at all in
+				// the (overwhelmingly common) dry steady state.
+				const bool relayerPitch = _underwaterBlend > 0.0f || _underwaterAppliedBlend != _underwaterBlend;
+
 				for (auto it = _createdSounds.begin(); it != _createdSounds.end(); )
 				{
 					auto sp = it->lock();
@@ -126,6 +143,9 @@ namespace HexEngine
 						it = _createdSounds.erase(it);
 						continue;
 					}
+
+					if (relayerPitch && sp->_instance && sp->IsPlaying())
+						sp->_instance->SetPitch(std::clamp(sp->_pitch + _underwaterPitchOffset, -1.0f, 1.0f));
 
 					if (sp->_is3D && sp->IsPlaying())
 					{
@@ -143,8 +163,34 @@ namespace HexEngine
 
 					++it;
 				}
+
+				_underwaterAppliedBlend = _underwaterBlend;
 			}
 		}
+	}
+
+	void AudioManager::UpdateUnderwaterMuffle(const math::Vector3& listenerPosition)
+	{
+		auto scene = g_pEnv->_sceneManager->GetCurrentScene();
+
+		float target = 0.0f;
+		if (snd_underwater._val.b && scene != nullptr && scene->HasOcean())
+		{
+			// Ramp over the top 25 cm so ears-at-the-waterline is a partial
+			// muffle, not a switch.
+			target = std::clamp(scene->GetDepthBelowWater(listenerPosition) / 0.25f, 0.0f, 1.0f);
+		}
+
+		const float dt = (g_pEnv->_timeManager != nullptr) ? std::clamp(g_pEnv->_timeManager->GetFrameTime(), 0.0f, 0.1f) : 0.0f;
+		const float alpha = 1.0f - std::exp(-9.0f * dt); // ~0.25 s to settle
+		_underwaterBlend += (target - _underwaterBlend) * alpha;
+		if (std::abs(target - _underwaterBlend) < 0.002f)
+			_underwaterBlend = target;
+
+		_underwaterPitchOffset = snd_underwaterPitch._val.f32 * _underwaterBlend;
+
+		if (_engine != nullptr && _underwaterBlend != _underwaterAppliedBlend)
+			_engine->SetMasterVolume(1.0f + (snd_underwaterVolume._val.f32 - 1.0f) * _underwaterBlend);
 	}
 
 	void AudioManager::Play(const std::shared_ptr<SoundEffect>& effect)

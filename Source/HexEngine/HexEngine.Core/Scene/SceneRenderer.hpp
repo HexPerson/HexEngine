@@ -486,6 +486,12 @@ namespace HexEngine
 		uint64_t _oceanStateFrame = UINT64_MAX;
 		float _oceanRefreshCountdown = 0.0f;
 		float _oceanDebugLogCountdown = 0.0f;
+		// Underwater S5: main-camera submersion state (hysteresis), time since
+		// the last dive (drives the bubble burst) and the "water running off
+		// the lens" amount that decays after surfacing.
+		bool _uwSubmerged = false;
+		float _uwSecondsSinceSubmerge = 1.0e6f;
+		float _uwLensWet = 0.0f;
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 
