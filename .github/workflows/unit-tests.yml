@@ -35,7 +35,11 @@ jobs:
           # parses JSON via <nlohmann/json.hpp>). It's header-only, so a single
           # targeted vcpkg install is fast and avoids restoring the full engine
           # manifest (PhysX/GNS/etc.). vcpkg is preinstalled on the runner.
-          vcpkg install nlohmann-json:x64-windows
+          # --classic: the repo root carries vcpkg.json, which puts vcpkg in
+          # manifest mode, and manifest mode rejects single-package installs
+          # ("does not support individual package arguments" - this step failed
+          # on every run until the flag was added).
+          vcpkg install nlohmann-json:x64-windows --classic
           if ($LASTEXITCODE -ne 0) { Write-Error "vcpkg install failed ($LASTEXITCODE)"; exit 1 }
 
       - name: Build HexEngine.Tests

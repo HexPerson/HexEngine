@@ -1,10 +1,16 @@
 name: CodeQL
 
 # Semantic security scanning (CodeQL) for the C++ engine. CodeQL must observe a
-# real compile, so this reuses the SAME cmake-preset build steps as the modern
-# build workflow (known-good) and analyses everything the solution compiles -
+# real compile, so this mirrors the build steps of windows-modern-build.yml
+# (known-good) and analyses everything the modern solution filter compiles -
 # Core plus plugins - with the security-extended query pack. Runs on pushes and
 # PRs to main plus a weekly schedule (CodeQL picks up newly published queries).
+#
+# Keep the build steps in lockstep with windows-modern-build.yml. This file was
+# a copy of an older version of it and failed on every run: no Plugins output
+# directory (every plugin PostBuildEvent `copy` failed), no vcpkg manifest
+# install (GameNetworkingSockets plugin), and the nested-msbuild CMake preset
+# that returns a spurious -1.
 
 on:
   push:
@@ -20,6 +26,7 @@ jobs:
   analyze:
     name: Analyze (cpp)
     runs-on: windows-2022
+    timeout-minutes: 300
     permissions:
       security-events: write
       actions: read
@@ -36,11 +43,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+      # Same cache key as windows-modern-build.yml, so a dependency build either
+      # job already did is reused here (restore only - that workflow saves it).
+      - name: Restore built dependency libraries (Debug)
+        uses: actions/cache/restore@v4
         with:
-          languages: cpp
-          queries: security-extended
+          path: |
+            Libs
+            Bin
+          key: hexdeps-${{ runner.os }}-debug-${{ hashFiles('build/dependencies.lock.json') }}
 
       - name: Configure (Debug)
         run: cmake --preset vs2022-x64-debug
@@ -48,8 +59,46 @@ jobs:
       - name: Minimal Bootstrap (Debug)
         run: cmake --build --preset minimal-bootstrap-debug
 
+      - name: Restore vcpkg manifest deps
+        uses: actions/cache/restore@v4
+        with:
+          path: vcpkg_installed
+          key: vcpkg-${{ runner.os }}-x64-windows-${{ hashFiles('vcpkg.json') }}
+
+      - name: vcpkg install manifest deps
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install `
+            --x-manifest-root="$env:GITHUB_WORKSPACE" `
+            --x-install-root="$env:GITHUB_WORKSPACE\vcpkg_installed" `
+            --triplet x64-windows
+          if ($LASTEXITCODE -ne 0) { Write-Error "vcpkg install failed ($LASTEXITCODE)"; exit 1 }
+
+      - name: Prepare plugin output directory (Debug)
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force "$env:GITHUB_WORKSPACE\Bin\x64\Debug\Plugins" | Out-Null
+
+      # Initialise CodeQL only NOW: the tracer records every compile that runs
+      # after init, so starting it here keeps the third-party dependency and
+      # vcpkg builds out of the database (they were traced before - hours of
+      # extra build time, and findings in code we don't own).
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: cpp
+          queries: security-extended
+
+      # Direct msbuild on the solution filter, as in windows-modern-build.yml
+      # (the CMake preset nests msbuild and returns a spurious -1 on success).
       - name: Build Solution Modern (Debug)
-        run: cmake --build --preset sln-build-debug-modern
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $msbuild = & $vswhere -latest -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
+          if (-not $msbuild) { Write-Error "MSBuild.exe not found via vswhere"; exit 1 }
+          Write-Host "Using MSBuild: $msbuild"
+          & $msbuild "$env:GITHUB_WORKSPACE\Source\HexEngine\HexEngine-modern.slnf" /p:Configuration=Debug /p:Platform=x64 /m
+          if ($LASTEXITCODE -ne 0) { Write-Error "Modern build failed ($LASTEXITCODE)"; exit $LASTEXITCODE }
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
