@@ -41,14 +41,18 @@ jobs:
           # on every run until the flag was added).
           vcpkg install nlohmann-json:x64-windows --classic
           if ($LASTEXITCODE -ne 0) { Write-Error "vcpkg install failed ($LASTEXITCODE)"; exit 1 }
+          # Stage the headers where the project looks: its include dirs are
+          # repo-relative ($(SolutionDir)..\..\Include\ is one), and MSBuild C++
+          # projects ignore the INCLUDE env var this workflow used to set.
+          $src = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows\include\nlohmann"
+          if (-not (Test-Path $src)) { Write-Error "nlohmann headers not found at $src"; exit 1 }
+          $dst = Join-Path $env:GITHUB_WORKSPACE "Include"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item -Recurse -Force $src $dst
 
       - name: Build HexEngine.Tests
         shell: pwsh
         run: |
-          # Expose the vcpkg include dir to cl.exe via the INCLUDE env var, so we
-          # don't have to touch the project's hard-coded (repo-local) paths.
-          $inc = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows\include"
-          $env:INCLUDE = "$env:INCLUDE;$inc"
           msbuild Source\HexEngine\HexEngine.Tests\HexEngine.Tests.vcxproj `
             /p:Configuration=Debug /p:Platform=x64 `
             /p:SolutionDir=${{ github.workspace }}\Source\HexEngine\ `
