@@ -233,6 +233,7 @@ namespace HexEngine
 		ITexture2D* _ssrHitInfo = nullptr;
 		ITexture2D* _waterRT = nullptr;
 		std::shared_ptr<ITexture2D> _blueNoise;
+		std::shared_ptr<ITexture2D> _causticsAtlas; // underwater S3, bound at Deferred t13
 		ITexture2D* _dlssTarget = nullptr;
 		std::shared_ptr<IShader> _compositionShader;
 		std::shared_ptr<IShader> _fxaa;
@@ -268,6 +269,14 @@ namespace HexEngine
 		std::shared_ptr<IShader> _sunShaftsMaskShader;
 		std::shared_ptr<IShader> _sunShaftsBlurShader;
 		void RenderSunShafts();
+
+		// Underwater camera (underwater S1): fullscreen absorb/in-scatter pass
+		// with a per-pixel near-plane waterline mask. Params at b6.
+		std::shared_ptr<IShader> _underwaterShader;
+		IConstantBuffer* _underwaterParamsBuffer = nullptr;
+		void RenderUnderwater();
+		/** @brief Depth of the current view's eye below the wave surface (m; > 0 = submerged). -inf with no ocean. */
+		float GetCurrentViewDepthBelowWater() const;
 		std::shared_ptr<IShader> _ssrResolve;
 		std::shared_ptr<IShader> _fullScreenQuadShader;
 
@@ -472,6 +481,17 @@ namespace HexEngine
 		// advection offset, accumulated dir*rate*dt per frame so weather
 		// transitions can't slew it (a changing rate x absolute time does).
 		math::Vector2 _windScrollAccum = math::Vector2::Zero;
+		// Ocean surface state (underwater S0): once-per-frame gate for the
+		// scene-level wave inputs, slow sea-level re-detection, debug log pace.
+		uint64_t _oceanStateFrame = UINT64_MAX;
+		float _oceanRefreshCountdown = 0.0f;
+		float _oceanDebugLogCountdown = 0.0f;
+		// Underwater S5: main-camera submersion state (hysteresis), time since
+		// the last dive (drives the bubble burst) and the "water running off
+		// the lens" amount that decays after surfacing.
+		bool _uwSubmerged = false;
+		float _uwSecondsSinceSubmerge = 1.0e6f;
+		float _uwLensWet = 0.0f;
 		std::shared_ptr<IShader> _clusterApplyShader;
 		GpuVisibilityCulling _gpuVisibilityCulling;
 

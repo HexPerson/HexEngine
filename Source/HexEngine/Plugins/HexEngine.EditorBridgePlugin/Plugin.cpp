@@ -979,18 +979,61 @@ namespace HexEngine
 						e->SetPosition(math::Vector3(params["position"][0].get<float>(), params["position"][1].get<float>(), params["position"][2].get<float>()));
 						applied["position"] = params["position"];
 					}
+
+					// CAMERAS OWN THEIR ORIENTATION. Camera::UpdateRotation rebuilds
+					// the Transform rotation AND _lookDir from the camera's own
+					// _cameraAngles, and only when those angles change; the view
+					// matrix is CreateLookAt(pos, pos + _lookDir, up) with `up`
+					// taken from the Transform. Writing the Transform quaternion
+					// directly (what this handler used to do for every entity)
+					// therefore left a camera with a STALE look direction and a NEW
+					// up vector - two different orientations in one view matrix. It
+					// showed as a rolled horizon whenever pitch and yaw were combined
+					// and as pitches that didn't look where they were told. For a
+					// camera, drive the angles (or SetLookDirection for a quaternion)
+					// and let the camera write its own Transform.
+					Camera* camera = e->GetComponentDerived<Camera>();
+
 					if (params.contains("rotation") && params["rotation"].is_array() && params["rotation"].size() == 4)
 					{
-						e->SetRotation(math::Quaternion(params["rotation"][0].get<float>(), params["rotation"][1].get<float>(), params["rotation"][2].get<float>(), params["rotation"][3].get<float>()));
+						const math::Quaternion q(params["rotation"][0].get<float>(), params["rotation"][1].get<float>(), params["rotation"][2].get<float>(), params["rotation"][3].get<float>());
+						if (camera != nullptr)
+						{
+							// Literal axes: SimpleMath's static Vector3::Forward / ::Up
+							// data members are not exported to plugins (LNK2001).
+							camera->SetLookDirection(
+								math::Vector3::Transform(math::Vector3(0.0f, 0.0f, -1.0f), q),
+								math::Vector3::Transform(math::Vector3(0.0f, 1.0f, 0.0f), q));
+							applied["viaCamera"] = true;
+						}
+						else
+						{
+							e->SetRotation(q);
+						}
 						applied["rotation"] = params["rotation"];
 					}
 					else if (params.contains("eulerDegrees") && params["eulerDegrees"].is_array() && params["eulerDegrees"].size() == 3)
 					{
-						const float toRad = 3.14159265358979f / 180.0f;
-						const float pitch = params["eulerDegrees"][0].get<float>() * toRad;
-						const float yaw   = params["eulerDegrees"][1].get<float>() * toRad;
-						const float roll  = params["eulerDegrees"][2].get<float>() * toRad;
-						e->SetRotation(math::Quaternion::CreateFromYawPitchRoll(yaw, pitch, roll));
+						const float pitchDeg = params["eulerDegrees"][0].get<float>();
+						const float yawDeg   = params["eulerDegrees"][1].get<float>();
+						const float rollDeg  = params["eulerDegrees"][2].get<float>();
+						if (camera != nullptr)
+						{
+							// Degrees, the camera's own convention (Camera::SetLookDirection):
+							// lookDir = (-cos p sin y, sin p, -cos p cos y) - so pitch + looks
+							// UP, yaw 0 faces -Z and yaw + turns toward -X. Pitch is clamped
+							// to the camera's limits (+/-89 by default).
+							camera->SetPitch(pitchDeg);
+							camera->SetYaw(yawDeg);
+							camera->SetRoll(rollDeg);
+							applied["viaCamera"] = true;
+							applied["convention"] = "degrees; pitch + = up; yaw 0 = -Z, yaw + turns toward -X";
+						}
+						else
+						{
+							const float toRad = 3.14159265358979f / 180.0f;
+							e->SetRotation(math::Quaternion::CreateFromYawPitchRoll(yawDeg * toRad, pitchDeg * toRad, rollDeg * toRad));
+						}
 						applied["eulerDegrees"] = params["eulerDegrees"];
 					}
 					if (params.contains("scale") && params["scale"].is_array() && params["scale"].size() == 3)

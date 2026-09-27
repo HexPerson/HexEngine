@@ -58,7 +58,7 @@
 	// so the new "visibility=0 outside cascade" gating works - the haze
 	// stops where the shadow data stops, instead of continuing as flat
 	// fog across the whole 256m the volume used to span.
-	static const float FAR_PLANE_M  = 128.0f;
+	static const float FAR_PLANE_M  = 384.0f;
 	// Must match VolumetricScattering::kVolumeWidth/Height/Depth.
 	static const float3 VOLUME_DIMS = float3(256.0f, 144.0f, 64.0f);
 
@@ -193,14 +193,44 @@
 			const float extraTrans = exp(-extraExt);
 			float3 ambientFog = max(g_atmosphere.ambientLight.rgb, 0.0f.xxx);
 			// GI occlusion on the beyond-range ambient continuation, matching
-			// the froxel medium's in-range ambient gate so the 128m handoff
+			// the froxel medium's in-range ambient gate so the far-plane handoff
 			// stays seamless under the same occlusion.
 			if (g_giComposeParams.z > 0.5f)
 			{
 				const float giOcc = saturate(g_giAoTex.Sample(g_pointSampler, uv).r);
 				ambientFog *= saturate(1.0f - giOcc * saturate(g_giComposeParams.y));
 			}
-			inscatter     += transmittance * (1.0f - extraTrans) * ambientFog;
+
+			// SOURCE RADIANCE FROM THE VOLUME ITSELF. Continuing with the
+			// ambient colour alone is what drew the hard line: inside the
+			// volume the haze is lit by the SUN (phase x visibility x cloud
+			// shadow) as well as ambient, so at the far plane the in-scatter
+			// dropped from "sunlit" to "ambient only" in one step.
+			//
+			// Along any ray, over a segment of constant source radiance L the
+			// integrated in-scatter grows by exactly L x (T0 - T1). So the
+			// medium's source at the far end of THIS pixel's ray is
+			//     L = dI / dT
+			// between the last slices - no extinction coefficient, phase
+			// function or light list needed, and whatever the froxel pass
+			// computed there (sun, cloud shadow, building shadow, ambient) is
+			// what carries on. The continuation is then C0 in value AND slope
+			// at the far plane by construction: no seam at any range.
+			//
+			// Where the medium is too thin for dT to be measurable the fog
+			// contribution is negligible anyway; blend back to the ambient
+			// equilibrium there, and clamp so one bright local light sitting in
+			// the last slice cannot be smeared to the horizon.
+			const float wPrev = 1.0f - 3.0f / VOLUME_DIMS.z;
+			const float4 vlutPrev = SampleVolumeSmooth(g_volumetricIntegrationLUT, g_linearSampler, float3(uv, wPrev));
+			const float dT = vlutPrev.a - transmittance;
+			const float3 dI = max(inscatter - vlutPrev.rgb, 0.0f.xxx);
+			const float3 measuredSource = dI / max(dT, 1e-5f);
+			const float ambientPeak = max(max(ambientFog.r, ambientFog.g), max(ambientFog.b, 1e-3f));
+			const float3 clampedSource = min(measuredSource, (ambientPeak * 24.0f + 0.5f).xxx);
+			const float3 farSource = lerp(ambientFog, clampedSource, saturate(dT / 0.0015f));
+
+			inscatter     += transmittance * (1.0f - extraTrans) * farSource;
 			transmittance *= extraTrans;
 		}
 

@@ -342,10 +342,15 @@
 		const float __shelteredWetness = saturate(
 			(g_weatherSurface.wetness
 				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __shelter);
-		if (__shelteredWetness > 0.001f)
+		// Sea contact (underwater S4) - lockstep with DefaultPixel; see
+		// PBRutils::OceanContactWetness. Terrain is where this matters most:
+		// the beach and the seabed are terrain.
+		float __seaSubmerged;
+		const float __surfaceWetness = max(__shelteredWetness, OceanContactWetness(input.worldPos, __seaSubmerged));
+		if (__surfaceWetness > 0.001f)
 		{
-			const float __wetFilm = ApplyWetSurface(baseColor, roughness, metallic,
-				__shelteredWetness, g_wetnessDarkening);
+			const float __wetFilm = ApplyWetSurfaceSea(baseColor, roughness, metallic,
+				__surfaceWetness, __seaSubmerged, g_wetnessDarkening);
 			// Open SSR only on FLAT wet ground (a puddle-like mirror the SSR's
 			// puddle-flatten then handles cleanly). Sloped/bumpy wet terrain kept
 			// at smoothness 0 - its detail-normal reflection scatters dark (the
@@ -354,7 +359,7 @@
 			const float __wetFlat = saturate((macroUp - 0.80f) / 0.20f);
 			smoothness = __wetFilm * 0.9f * __wetFlat;
 			N = ApplyRainRipples(N, input.worldPos, g_time,
-				__shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
+				__shelteredWetness * saturate(g_weatherSurface.precipitationIntensity) * (1.0f - __seaSubmerged));
 		}
 
 		// Snow accumulation. Same global driver from g_weatherSurface.snowCoverage

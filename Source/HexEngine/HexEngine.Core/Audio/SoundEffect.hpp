@@ -45,6 +45,10 @@ namespace HexEngine
 		std::shared_ptr<dx::SoundEffect> _effect;
 		std::unique_ptr<dx::SoundEffectInstance> _instance;
 		float _volume = 1.0f;
+		// The pitch the CALLER asked for. AudioManager layers its underwater
+		// offset on top of this each frame, so gameplay pitch changes (engine
+		// revs, the weather plugin's indoor offset) survive the muffle.
+		float _pitch = 0.0f;
 		dx::AudioEmitter _emitter;
 		bool _is3D = false;
 		std::unique_ptr<uint8_t[]> _wavData;

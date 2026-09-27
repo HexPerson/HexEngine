@@ -50,7 +50,18 @@ namespace HexEngine
 		// Far extent of the froxel range. Beyond this distance the aerial-
 		// perspective volume handles atmospheric scattering, so this only
 		// needs to cover the visible "sun shafts through nearby haze" range.
-		static constexpr float    kFarDepthM   = 128.0f;
+		//
+		// 128 -> 384 m: the volume ended where its SUN in-scatter ended, and
+		// that drew a hard line across open ground (lit warm haze up to 128 m,
+		// none beyond - only the ambient term was continued analytically). The
+		// slice distribution is exponential, so tripling the range costs almost
+		// nothing: per-slice growth goes 11.8% -> 13.8%, same froxel count, and
+		// the sun cascades already cover it (the last cascade takes all
+		// remaining view depth). Past 384 m VolumetricScatterApply continues
+		// the medium from the volume's own far-end source radiance, so there is
+		// no seam there either. VolumetricScatterApply.shader's FAR_PLANE_M
+		// MUST match.
+		static constexpr float    kFarDepthM   = 384.0f;
 		// Matches the engine's directional-light cascade count
 		// (DirectionalLight stores 4 shadow maps; r_shadowCascades caps
 		// at 4). The scatter pass samples cascade 0..N-1 per froxel and

@@ -482,9 +482,16 @@ namespace HexEngine
 				// legacy r_autoExposureSpeed HVar (still on the Settings slider)
 				// scales both, 1.5 = neutral.
 				const float masterScale = std::max(r_autoExposureSpeed._val.f32, 0.0f) / 1.5f;
-				const float rate = masterScale * ((target > _smoothedExposure)
+				float rate = masterScale * ((target > _smoothedExposure)
 					? r_autoExposureSpeedUp._val.f32
 					: r_autoExposureSpeedDown._val.f32);
+				// Medium-change boost (BoostAdaptation): a fixed fast rate in
+				// both directions while the window is open.
+				if (_boostSeconds > 0.0f)
+				{
+					rate = std::max(rate, 9.0f);
+					_boostSeconds = std::max(0.0f, _boostSeconds - deltaTimeSeconds);
+				}
 				const float alpha = (rate > 0.0f && deltaTimeSeconds > 0.0f)
 					? (1.0f - std::exp(-rate * deltaTimeSeconds))
 					: 1.0f;

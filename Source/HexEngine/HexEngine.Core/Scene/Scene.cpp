@@ -5,7 +5,9 @@
 #include "NetworkReplicationSystem.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <fstream>
+#include <unordered_map>
 
 #include "../Entity/Component/Transform.hpp"
 #include "../Entity/Component/StaticMeshComponent.hpp"
@@ -1897,7 +1899,15 @@ namespace HexEngine
 			material->SaveRenderState();
 			graphicsDevice->SetBlendState(effectiveBlendState);
 			graphicsDevice->SetDepthBufferState(effectiveDepthState);
-			graphicsDevice->SetCullingMode(isShadowMap ? shadowCullMode : material->GetCullMode());
+			// Water is DOUBLE-SIDED (underwater S2): with back-face culling the
+			// sea simply was not drawn from underneath - a submerged camera saw
+			// only the odd wavelet steep enough to present its front face (they
+			// showed as stray bright flecks). From above a height-field has no
+			// visible back faces, so this costs nothing there; Water.shader picks
+			// the air-side or the Snell's-window shading from the camera depth
+			// (g_oceanConfig3.z), not from the triangle facing.
+			const CullingMode materialCullMode = isWaterMaterial ? CullingMode::NoCulling : material->GetCullMode();
+			graphicsDevice->SetCullingMode(isShadowMap ? shadowCullMode : materialCullMode);
 
 			mesh->UpdateConstantBuffer(entity, math::Matrix::Identity, material, instanceId, isTransparency);
 
@@ -3039,9 +3049,94 @@ namespace HexEngine
 		return _terrainParams;
 	}*/
 
+	// ---- Ocean surface queries (underwater S0) -------------------------------
+
+	void Scene::RefreshSeaLevel()
+	{
+		// The ocean is ordinary water-material tile entities from the "Add
+		// ocean" tool, all flat grids at one height - so sea level IS their
+		// world Y. Tiles at more than one height (a lake above the sea) vote:
+		// the most common centimetre bucket wins. A per-water-body query is a
+		// later slice; one sea level is what every current consumer needs.
+		std::unique_lock lock(_lock);
+
+		const auto* pool = TryGetComponentPool(StaticMeshComponent::_GetComponentId());
+		if (pool == nullptr)
+		{
+			_hasOcean = false;
+			return;
+		}
+
+		std::unordered_map<int32_t, uint32_t> votes;
+		for (uint32_t denseIndex = 0; denseIndex < pool->components.size(); ++denseIndex)
+		{
+			auto* smc = static_cast<StaticMeshComponent*>(pool->components[denseIndex]);
+			if (smc == nullptr)
+				continue;
+
+			auto material = smc->GetMaterial();
+			if (!material || material->_properties.isWater != 1)
+				continue;
+
+			Entity* entity = TryGetEntity(pool->owners[denseIndex]);
+			if (entity == nullptr)
+				continue;
+
+			const float y = entity->GetWorldTM().Translation().y;
+			++votes[(int32_t)std::lround(y * 100.0f)];
+		}
+
+		if (votes.empty())
+		{
+			_hasOcean = false;
+			return;
+		}
+
+		int32_t bestBucket = 0;
+		uint32_t bestCount = 0;
+		for (const auto& [bucket, count] : votes)
+		{
+			if (count > bestCount)
+			{
+				bestCount = count;
+				bestBucket = bucket;
+			}
+		}
+
+		_hasOcean = true;
+		_seaLevel = (float)bestBucket / 100.0f;
+	}
+
+	float Scene::GetWaterHeight(float x, float z) const
+	{
+		if (!HasOcean())
+			return GetSeaLevel();
+
+		// The band-limit the GPU applied to the displaced detail waves depends
+		// on the tessellation density there, i.e. distance from the camera.
+		const float dx = x - _oceanCameraPosition.x;
+		const float dz = z - _oceanCameraPosition.z;
+		const float distance = std::sqrt(dx * dx + dz * dz);
+		return GetSeaLevel() + OceanWaves::SurfaceOffset(x, z, _oceanWaveInputs, distance);
+	}
+
+	float Scene::GetDepthBelowWater(const math::Vector3& position) const
+	{
+		return GetWaterHeight(position.x, position.z) - position.y;
+	}
+
+	float Scene::GetWaveAmplitudeBound() const
+	{
+		return OceanWaves::AmplitudeBound(_oceanWaveInputs);
+	}
+
 	void Scene::Save(json& data, JsonFile* file)
 	{
 		file->Serialize<OceanSettings>(data, "_oceanSettings", _oceanSettings);
+		// Beside _oceanSettings, not inside it: that struct is uploaded mid-
+		// cbuffer and must not grow.
+		data["_seaLevelOverrideEnabled"] = _seaLevelOverrideEnabled;
+		data["_seaLevelOverride"] = _seaLevelOverride;
 
 		// Persist the navmesh as a binary sidecar (<scene>.navmesh) next to the .hscene,
 		// so it loads with the scene instead of being re-baked at runtime.
@@ -3068,6 +3163,10 @@ namespace HexEngine
 		{
 			file->Deserialize<OceanSettings>(data, "_oceanSettings", _oceanSettings);
 		}
+		if (auto it = data.find("_seaLevelOverrideEnabled"); it != data.end() && it->is_boolean())
+			_seaLevelOverrideEnabled = it->get<bool>();
+		if (auto it = data.find("_seaLevelOverride"); it != data.end() && it->is_number())
+			_seaLevelOverride = it->get<float>();
 
 		// Load the navmesh sidecar (if the scene was saved with one).
 		if (data.find("_hasNavMesh") != data.end() && data["_hasNavMesh"].get<bool>() &&

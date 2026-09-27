@@ -60,13 +60,17 @@ namespace HexEngine
 	private:
 		struct GpuCullCandidate
 		{
+			// Layout mirrored by GpuFrustumCull/GpuOcclusionCull.shader.
 			math::Vector4 sphereWs;
-			math::Vector4 occlusionCenterExtent;
+			math::Vector4 obbCenter;
+			math::Vector4 obbExtents;
+			math::Vector4 obbOrientation;
 			uint32_t stableIndex = 0;
 			uint32_t entityKeyLo = 0;
 			uint32_t entityKeyHi = 0;
 			uint32_t flags = 0;
 		};
+		static_assert(sizeof(GpuCullCandidate) == 80, "GpuCullCandidate must match the cull shaders' struct");
 
 		struct GpuCullConstants
 		{
@@ -79,6 +83,10 @@ namespace HexEngine
 			math::Vector4 hzbInfo;
 			math::Vector4 cullParams0;
 			math::Vector4 cullParams1;
+			// The camera the HZB was rendered from (GpuOcclusionCull.shader).
+			math::Matrix hzbViewProjection;
+			// x,y = A,B of ndcZ = A + B/viewZ for that camera; z = relative bias.
+			math::Vector4 hzbDepthParams;
 		};
 
 		enum CandidateFlags : uint32_t
@@ -165,6 +173,16 @@ namespace HexEngine
 		uint32_t _hzbHeight = 0;
 		uint32_t _hzbMipCount = 0;
 		bool _hzbHistoryValid = false;
+		// What the HZB depth was rendered with: occlusion tests project bounds
+		// through THIS, and only run for the camera that owns it (another
+		// camera's depth says nothing about what this one can see).
+		math::Matrix _hzbViewProjection = math::Matrix::Identity;
+		math::Vector2 _hzbDepthAB = math::Vector2(1.0f, 0.0f);
+		const Camera* _hzbCamera = nullptr;
+		// Set by BeginFrame, latched into the two above by BuildDepthPyramid.
+		math::Matrix _frameViewProjection = math::Matrix::Identity;
+		math::Vector2 _frameDepthAB = math::Vector2(1.0f, 0.0f);
+		const Camera* _frameCamera = nullptr;
 
 		uint64_t _frameIndex = 0;
 		math::Vector3 _lastCameraPos = math::Vector3::Zero;

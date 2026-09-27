@@ -44,7 +44,7 @@
 	cbuffer SunShaftParams : register(b6)
 	{
 		float4 g_shaftP0; // xy = sun screen uv, z = blur length, w = off-screen fade
-		float4 g_shaftP1; // x = intensity, y = pass index, z/w = reserved
+		float4 g_shaftP1; // x = intensity, y = pass index, z = high-sun scale, w = reserved
 	};
 
 	static const int kTaps = 20;
@@ -99,6 +99,12 @@
 		// against the LUT-energy sun colour it must stay a modest additive
 		// glow, not a second sun. r_sunShaftsIntensity is the artist lever.
 		const float3 colour = sunTrans * float3(1.0f, 0.985f, 0.965f) * sunEnergy * 0.02f;
-		return float4(shaft * colour * (g_shaftP1.x * g_shaftP0.w), 1.0f);
+		// Elevation fade: the LUT sun is ~4x brighter and white overhead, so
+		// the golden-hour scale is a hot wash at noon. Blend from full at
+		// ~6 deg to r_sunShaftsHighSunScale by ~30 deg (a zero cbuffer slot
+		// - shader ahead of the C++ build - falls back to the default 0.22).
+		const float highSunScale = (g_shaftP1.z > 0.0f) ? g_shaftP1.z : 0.22f;
+		const float elevScale = lerp(1.0f, highSunScale, smoothstep(0.10f, 0.50f, sunDir.y));
+		return float4(shaft * colour * (g_shaftP1.x * g_shaftP0.w * elevScale), 1.0f);
 	}
 }

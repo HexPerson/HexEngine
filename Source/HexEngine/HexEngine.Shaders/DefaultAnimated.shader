@@ -470,12 +470,17 @@
 				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
 
 		float wetFilm = 0.0f;
-		if (shelteredWetness > 0.001f)
+		// Sea contact (underwater S4) - lockstep with DefaultPixel; see
+		// PBRutils::OceanContactWetness. A wading character's legs darken
+		// without glossing under water and carry a wet band above it.
+		float seaSubmerged;
+		const float surfaceWetness = max(shelteredWetness, OceanContactWetness(input.positionWS.xyz, seaSubmerged));
+		if (surfaceWetness > 0.001f)
 		{
-			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
-				shelteredWetness, g_wetnessDarkening);
+			wetFilm = ApplyWetSurfaceSea(albedo.rgb, roughness, metalness,
+				surfaceWetness, seaSubmerged, g_wetnessDarkening);
 			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time,
-				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
+				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity) * (1.0f - seaSubmerged));
 		}
 
 		// Rain droplets - same procedural perturbation DefaultPixel uses. See

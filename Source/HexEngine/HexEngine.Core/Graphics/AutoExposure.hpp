@@ -62,6 +62,14 @@ namespace HexEngine
 		// adaptation doesn't carry over from the previous environment.
 		void Reset();
 
+		// Adapt at a fast fixed rate for the next `seconds` (both directions).
+		// For DISCONTINUOUS changes of medium - the camera crossing the sea
+		// surface (underwater S5). The eye-like split rates are right for a
+		// scene that changes gradually, but dark adaptation at 1/s left the
+		// first several seconds under water nearly black; a camera operator
+		// (or an eye) re-meters a hard cut almost at once.
+		void BoostAdaptation(float seconds) { _boostSeconds = std::max(_boostSeconds, seconds); }
+
 	private:
 		bool EnsureResources(uint32_t inputWidth, uint32_t inputHeight);
 		void ReleaseResources();
@@ -95,6 +103,9 @@ namespace HexEngine
 		float _smoothedExposure = 1.0f;
 		// Unsmoothed per-frame target (see GetTargetExposureMultiplier).
 		float _targetExposure = 1.0f;
+
+		// Remaining fast-adaptation window (see BoostAdaptation).
+		float _boostSeconds = 0.0f;
 
 		// Throttles r_autoExposureDebug log spew to ~1Hz.
 		float _debugAccum = 0.0f;

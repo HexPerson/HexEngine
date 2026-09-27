@@ -779,10 +779,18 @@ namespace HexEngine
 			ss << "\t\tconst float __shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);\n";
 			ss << "\t\tconst float __shelteredWetness = saturate((g_weatherSurface.wetness + g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __shelter);\n";
 			ss << "\t\tfloat __wetFilm = 0.0f;\n";
-			ss << "\t\tif (__shelteredWetness > 0.001f)\n";
+			// Sea contact (underwater S4) - lockstep with DefaultPixel; the
+			// logic lives in PBRutils::OceanContactWetness / ApplyWetSurfaceSea.
+			// Rain and sea share one wet response via max(); under water the
+			// albedo darkens but the film (gloss + SSR gate) is suppressed.
+			// CODEGEN SALT bumped below - emitted-HLSL edits are invisible to
+			// the includes hash.
+			ss << "\t\tfloat __seaSubmerged;\n";
+			ss << "\t\tconst float __surfaceWetness = max(__shelteredWetness, OceanContactWetness(input.positionWS.xyz, __seaSubmerged));\n";
+			ss << "\t\tif (__surfaceWetness > 0.001f)\n";
 			ss << "\t\t{\n";
-			ss << "\t\t\t__wetFilm = ApplyWetSurface(baseColor.rgb, roughness, metallic, __shelteredWetness, g_wetnessDarkening);\n";
-			ss << "\t\t\tworldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time, __shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));\n";
+			ss << "\t\t\t__wetFilm = ApplyWetSurfaceSea(baseColor.rgb, roughness, metallic, __surfaceWetness, __seaSubmerged, g_wetnessDarkening);\n";
+			ss << "\t\t\tworldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time, __shelteredWetness * saturate(g_weatherSurface.precipitationIntensity) * (1.0f - __seaSubmerged));\n";
 			ss << "\t\t}\n";
 
 			// Rain droplets - mirror what DefaultPixel.shader does so graph-authored
@@ -1144,7 +1152,7 @@ namespace HexEngine
 			//   6 - dust sampler arg (sand textures).
 			//   7 - vegetation wind sway in the emitted VS (WindSwayOffset
 			//       at g_time + g_timePrev, gated on windSwayParams.w).
-			combined += "\0codegen:7";
+			combined += "\0codegen:8";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);

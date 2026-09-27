@@ -106,7 +106,7 @@ namespace HexEngine
 		template <>
 		json& Serialize(json& container, const std::string& key, const std::shared_ptr<SoundEffect>& value)
 		{
-			container[key] = value->GetFileSystemPath();
+			container[key] = value.get() ? value->GetFileSystemPath() : "";
 			return container;
 		}
 
@@ -270,9 +270,11 @@ namespace HexEngine
 		{
 			if (container.find(key) != container.end())
 			{
-				std::wstring path;
-				container[key].get_to<std::wstring>(path);
-				value = SoundEffect::Create(path);
+				std::string path;
+				container[key].get_to<std::string>(path);
+
+				if (!path.empty())
+					value = SoundEffect::Create(path);
 			}
 			return container;
 		}

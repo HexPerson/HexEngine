@@ -516,6 +516,19 @@ namespace HexEngine
 		// y = AP volume bound (t21), z = froxel far depth (m), w = AP max
 		// distance (m). Transparents fog themselves per fragment with these.
 		math::Vector4 _transparentFogParams;
+		// Ocean surface state (underwater S0), evaluated on the CPU once per
+		// frame from OceanWaveModel.hpp with the SAME wind/time values this
+		// buffer uploads: x = sea level (world Y of the undisplaced ocean
+		// tiles), y = wave amplitude bound (m), z = camera depth below the
+		// wave surface (m; > 0 = submerged), w = 1 when the scene has an
+		// ocean. Aliased g_oceanConfig3 in Global.shader.
+		math::Vector4 _oceanConfig3;
+		// Caustics (underwater S3): x = strength (0 = off OR atlas not
+		// loaded - the shader cannot tell a null SRV from a black texture, so
+		// the CPU folds "bound" into this), y = metres per caustic tile,
+		// z = animation frames per second, w = depth (m) over which the
+		// pattern fades out. Aliased g_oceanConfig4.
+		math::Vector4 _oceanConfig4;
 	};
 
 	/** @brief Per-light shadow-caster constants used by shadow rendering shaders. */

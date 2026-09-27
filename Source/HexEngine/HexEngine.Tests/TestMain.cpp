@@ -26,6 +26,7 @@
 #include "../Plugins/HexEngine.EditorBridgePlugin/EditorBridgeProtocol.hpp"
 #include "../Tools/HexEngine.McpServer/StaticTools.hpp"
 #include "../Tools/HexEngine.McpServer/BridgeClient.hpp"
+#include "../HexEngine.Core/Scene/OceanWaveModel.hpp"
 
 using namespace HexEngine;
 
@@ -619,6 +620,99 @@ static void TestMcpStaticTools()
 	fs::remove_all(sdir, ec);
 }
 
+// Ocean wave model (underwater S0): the CPU mirror of WaterCommon.shader. These
+// can't compare against the GPU, so they pin the PROPERTIES every consumer
+// relies on - the camera-submerged test, the wet band and (later) swimming.
+static void TestOceanWaveModel()
+{
+	using namespace HexEngine::OceanWaves;
+
+	auto makeInputs = [](float windSpeed, float scale, float time)
+	{
+		WaveInputs in;
+		in.windDirX = 0.8f; in.windDirZ = 0.6f;
+		in.windSpeed = windSpeed; in.waveScale = scale; in.time = time;
+		return in;
+	};
+
+	// 1. Nothing exceeds the amplitude bound (it gates the underwater pass and
+	//    sizes the wet line - a height above it would be a missed submersion).
+	//    Swept over calm / fresh / storm, the scene's pinned scale, space, time.
+	{
+		const float winds[] = { 0.0f, 9.0f, 17.0f, 30.0f };
+		const float scales[] = { 1.0f, 2.28f };
+		bool withinBound = true, finite = true;
+		float worstRatio = 0.0f;
+		for (float wind : winds) for (float scale : scales)
+		{
+			for (int t = 0; t < 6; ++t)
+			{
+				const WaveInputs in = makeInputs(wind, scale, 13.7f * (float)t + 1000.0f);
+				const float bound = AmplitudeBound(in);
+				for (int i = 0; i < 40; ++i)
+				{
+					const float x = 900.0f + 3.7f * (float)i, z = 262.0f - 5.3f * (float)i;
+					const float h = SurfaceOffset(x, z, in);
+					finite = finite && std::isfinite(h);
+					withinBound = withinBound && (std::fabs(h) <= bound + 1e-4f);
+					worstRatio = std::max(worstRatio, std::fabs(h) / std::max(bound, 1e-6f));
+				}
+			}
+		}
+		CHECK(finite);
+		CHECK(withinBound);
+		// ...and the bound is not uselessly loose: real seas reach a decent
+		// fraction of it somewhere in that sweep.
+		CHECK(worstRatio > 0.25f);
+	}
+
+	// 2. The Gerstner inversion converges: the grid point it finds really does
+	//    displace onto the queried (x, z). The fixed-point contraction factor is
+	//    the summed swell steepness, so the tolerance is per sea state: microns
+	//    in ordinary weather, millimetres in a full storm at the scene's 2.28
+	//    wave scale (4 rounds left CENTIMETRES there - this test found it).
+	{
+		float worstTypical = 0.0f, worstStorm = 0.0f;
+		for (int i = 0; i < 60; ++i)
+		{
+			const float x = -400.0f + 17.3f * (float)i, z = 1200.0f - 9.1f * (float)i;
+			worstTypical = std::max(worstTypical, InversionResidual(x, z, makeInputs(17.0f, 2.28f, 4321.0f)));
+			worstStorm = std::max(worstStorm, InversionResidual(x, z, makeInputs(30.0f, 2.28f, 4321.0f)));
+		}
+		CHECK(worstTypical < 1e-3f);
+		CHECK(worstStorm < 1e-2f);
+	}
+
+	// 3. Wind scales AMPLITUDE only - the phase (so the position of every
+	//    crest) must not depend on it, or weather transitions teleport the
+	//    sea. Bound grows monotonically with wind; a calm sea is near-flat.
+	{
+		CHECK(AmplitudeBound(makeInputs(0.0f, 1.0f, 0.0f)) < AmplitudeBound(makeInputs(10.0f, 1.0f, 0.0f)));
+		CHECK(AmplitudeBound(makeInputs(10.0f, 1.0f, 0.0f)) < AmplitudeBound(makeInputs(30.0f, 1.0f, 0.0f)));
+		CHECK(AmplitudeBound(makeInputs(0.0f, 1.0f, 0.0f)) < 0.35f);
+		CHECK(AmplitudeBound(makeInputs(0.0f, 0.0f, 0.0f)) == 0.0f);   // r_oceanWaveScale 0 = flat
+		CHECK(SurfaceOffset(10.0f, 20.0f, makeInputs(20.0f, 0.0f, 50.0f)) == 0.0f);
+	}
+
+	// 4. Continuity in time and space - a camera bobbing at the waterline must
+	//    not see the surface jump (one 60 Hz frame, one centimetre).
+	{
+		const WaveInputs a = makeInputs(17.0f, 2.28f, 500.0f);
+		WaveInputs b = a; b.time += 1.0f / 60.0f;
+		const float h0 = SurfaceOffset(900.0f, 262.0f, a);
+		CHECK(std::fabs(SurfaceOffset(900.0f, 262.0f, b) - h0) < 0.05f);
+		CHECK(std::fabs(SurfaceOffset(900.01f, 262.0f, a) - h0) < 0.01f);
+	}
+
+	// 5. The tessellation band-limit only ever REMOVES displaced detail with
+	//    distance, and matches the hull-shader curve's end points.
+	{
+		CHECK(std::fabs(TessSegmentLength(0.0f) - 0.5f) < 1e-5f);     // factor 16
+		CHECK(std::fabs(TessSegmentLength(165.0f) - 8.0f) < 1e-4f);   // raw grid
+		CHECK(TessSegmentLength(80.0f) > TessSegmentLength(20.0f));
+	}
+}
+
 int main()
 {
 	std::printf("HexEngine.Tests\n");
@@ -637,6 +731,7 @@ int main()
 	TestPackageManifestRoundtrip();
 	TestBridgeProtocol();
 	TestMcpStaticTools();
+	TestOceanWaveModel();
 	std::printf("\n%d/%d checks passed.\n", g_total - g_fail, g_total);
 	std::printf(g_fail == 0 ? "RESULT: OK\n" : "RESULT: FAILED\n");
 	return g_fail == 0 ? 0 : 1;

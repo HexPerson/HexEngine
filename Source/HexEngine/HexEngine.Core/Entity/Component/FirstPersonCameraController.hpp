@@ -54,6 +54,11 @@ namespace HexEngine
 		virtual bool CreateWidget(class ComponentWidget* widget) override;
 
 	private:
+		// (Re)binds the WASD/Space/Ctrl/Shift movement keys to this controller.
+		// Called at construction and again whenever control is re-enabled, so
+		// returning from something that stole the keys (e.g. a mounted vehicle,
+		// which unbinds them on dismount) restores walking control.
+		void CreateMovementBinds();
 		// Plays one footstep clone (pitch-randomised) and keeps it alive.
 		void PlayFootstep();
 		// Drops finished footstep clones (AudioManager only holds weak refs).

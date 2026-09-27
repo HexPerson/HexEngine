@@ -345,7 +345,14 @@
 			opacity = g_opacityMap.Sample(g_textureSampler, input.texcoord).r;
 		}
 
+		// Not on the snow shell: its texcoord is WORLD XZ (set by the domain
+		// shader), so the substrate's height map would offset the snow by an
+		// unrelated texture sampled at an unrelated scale.
+#ifndef SNOW_SHELL_NO_CLIP
 		if (g_objectFlags & OBJECT_FLAGS_HAS_HEIGHT && isInDetailRange)
+#else
+		if (false)
+#endif
 		{
 			float3x3 tangentMatrix = float3x3(input.tangent, input.binormal, worldNormal);
 
@@ -423,6 +430,18 @@
 		float metalness = g_material.metallicFactor;
 		float roughness = g_material.roughnessFactor;
 
+#ifdef SNOW_SHELL_NO_CLIP
+		// The snow shell is drawn with the SUBSTRATE's material bound (it
+		// reuses the base draw's per-object state), so everything below would
+		// read the concrete's surface maps at the shell's world-XZ texcoord.
+		// Roughness gets overwritten with the snow value further down, but
+		// metalness never was: a substrate with a metallic map (or the
+		// lerp(1, map, factor) convention at a small factor, which is ~96%
+		// metal) turned its snow into chrome - sky-blue sheen with black
+		// streaks where the snow normal map reflected dark directions. Snow is
+		// a dielectric, full stop; the ORM/AO maps don't belong to it either.
+		metalness = 0.0f;
+#else
 		// support ORM format, extract the data from the roughness map
 		if(g_objectFlags & OBJECT_FLAGS_ORM_FORMAT)
 		{
@@ -465,6 +484,7 @@
 				albedo.rgb *= g_ambientOcclusionMap.Sample(g_textureSampler, input.texcoord).r;
 			}
 		}
+#endif
 
 		// Universal wet response (Phase 3): EVERY opaque surface darkens and
 		// gains the water-film gloss with weather wetness, exactly as snow
@@ -487,13 +507,20 @@
 		// Skipped on the snow shell: snow is not wet asphalt, so the wet
 		// darkening/gloss (which reads near-black at night) must not apply to
 		// the snow layer.
-		if (shelteredWetness > 0.001f)
+		// Sea contact (underwater S4): shoreline wet band + submerged response
+		// - see PBRutils::OceanContactWetness. Rain and sea share ONE wet
+		// response via max(), so a rain-soaked rock at the tide line is not
+		// darkened twice. Lockstep with the other three sites.
+		float seaSubmerged;
+		const float surfaceWetness = max(shelteredWetness, OceanContactWetness(input.positionWS.xyz, seaSubmerged));
+		if (surfaceWetness > 0.001f)
 		{
-			wetFilm = ApplyWetSurface(albedo.rgb, roughness, metalness,
-				shelteredWetness, g_wetnessDarkening);
-			// Rain-impact ripples while precipitation is falling (slice 3).
+			wetFilm = ApplyWetSurfaceSea(albedo.rgb, roughness, metalness,
+				surfaceWetness, seaSubmerged, g_wetnessDarkening);
+			// Rain-impact ripples while precipitation is falling (slice 3) -
+			// rain only, and not on a surface that is under water.
 			worldNormal = ApplyRainRipples(worldNormal, input.positionWS.xyz, g_time,
-				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity));
+				shelteredWetness * saturate(g_weatherSurface.precipitationIntensity) * (1.0f - seaSubmerged));
 		}
 #endif
 
@@ -630,7 +657,12 @@
 
 		float3 emission = float3(0,0,0);//g_material.emissiveColour.rgb;
 
+		// (Snow doesn't glow with the substrate's emission map either.)
+#ifndef SNOW_SHELL_NO_CLIP
 		if (g_objectFlags & OBJECT_FLAGS_HAS_EMISSION)
+#else
+		if (false)
+#endif
 		{
 			emission = g_emissionMap.Sample(g_textureSampler, input.texcoord).rgb * g_material.emissiveColour.rgb * g_material.emissiveColour.a;
 		}
@@ -787,7 +819,12 @@
 		// kept zero so future repurposing of .a starts from a clean clear value).
 		// Smoothness (the SSR gate) opens with the wet film - a rain-soaked
 		// surface reflects even when its dry material never would.
+#ifdef SNOW_SHELL_NO_CLIP
+		// Snow: no SSR gate from the substrate's smoothness.
+		output.mat = float4(metalness, roughness, 0.0f, 1.0f);
+#else
 		output.mat = float4(metalness, roughness, max(g_material.smoothness, wetFilm * 0.9f), 1.0f);
+#endif
 
 		output.norm = float4(worldNormal.xyz, pixelDepth);
 
@@ -806,6 +843,10 @@
 		//   .gba = modelParams.xyz (strength + the first two tint / shape params)
 		// (0,0,0,0) = standard PBR which preserves existing behaviour for materials
 		// that don't opt into a non-default model.
+#ifdef SNOW_SHELL_NO_CLIP
+		// Standard PBR for snow, whatever shading model the substrate uses.
+		output.feat = float4(0.0f, 0.0f, 0.0f, 0.0f);
+#else
 		const uint idByte = (uint)g_material.materialModel;
 		const float wQuant = floor(saturate(g_material.modelParams.w) * 31.0f + 0.5f);
 		const float packedR = ((float)idByte * 32.0f + wQuant) / 255.0f;
@@ -814,6 +855,7 @@
 			g_material.modelParams.x,
 			g_material.modelParams.y,
 			g_material.modelParams.z);
+#endif
 
 		return output;
 	}

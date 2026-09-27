@@ -61,7 +61,10 @@
 		// when it's snowing or during a sandstorm.
 		const float rainType = saturate(1.0f - g_weatherSurface.snowCoverage * 3.0f)
 			* saturate(1.0f - g_weatherSurface.dirtAmount * 3.0f);
-		const float rain = saturate(g_weatherSurface.precipitationIntensity) * rainType;
+		// g_grainParams.w = "wet lens" after the camera SURFACES from the sea
+		// (underwater S5): the same beads + runners, decaying over a few
+		// seconds, whatever the weather is doing.
+		const float rain = max(saturate(g_weatherSurface.precipitationIntensity) * rainType, saturate(g_grainParams.w));
 		if (rain < 0.01f)
 			return shaderTexture.SampleLevel(LinearSampler, uv, 0);
 

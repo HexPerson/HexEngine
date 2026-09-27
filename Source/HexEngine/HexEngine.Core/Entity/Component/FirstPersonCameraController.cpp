@@ -105,13 +105,7 @@ namespace HexEngine
 
 		g_pEnv->_inputSystem->AddInputListener(this, InputEvent::KeyDown | InputEvent::KeyUp | InputEvent::MouseDown | InputEvent::MouseUp | InputEvent::MouseWheel | InputEvent::MouseMove);
 
-		g_pEnv->_commandManager->CreateBind('W', "MoveForwards", this);
-		g_pEnv->_commandManager->CreateBind('S', "MoveBackwards", this);
-		g_pEnv->_commandManager->CreateBind('A', "MoveLeft", this);
-		g_pEnv->_commandManager->CreateBind('D', "MoveRight", this);
-		g_pEnv->_commandManager->CreateBind(VK_SPACE, "MoveUp", this);
-		g_pEnv->_commandManager->CreateBind(VK_CONTROL, "MoveDown", this);
-		g_pEnv->_commandManager->CreateBind(VK_SHIFT, "MoveRun", this);
+		CreateMovementBinds();
 	}
 
 	FirstPersonCameraController::FirstPersonCameraController(Entity* entity, FirstPersonCameraController* clone) :
@@ -130,13 +124,21 @@ namespace HexEngine
 
 		g_pEnv->_inputSystem->AddInputListener(this, InputEvent::KeyDown | InputEvent::KeyUp | InputEvent::MouseDown | InputEvent::MouseUp | InputEvent::MouseWheel | InputEvent::MouseMove);
 
-		g_pEnv->_commandManager->CreateBind('W', "MoveForwards", this);
-		g_pEnv->_commandManager->CreateBind('S', "MoveBackwards", this);
-		g_pEnv->_commandManager->CreateBind('A', "MoveLeft", this);
-		g_pEnv->_commandManager->CreateBind('D', "MoveRight", this);
-		g_pEnv->_commandManager->CreateBind(VK_SPACE, "MoveUp", this);
-		g_pEnv->_commandManager->CreateBind(VK_CONTROL, "MoveDown", this);
-		g_pEnv->_commandManager->CreateBind(VK_SHIFT, "MoveRun", this);
+		CreateMovementBinds();
+	}
+
+	void FirstPersonCameraController::CreateMovementBinds()
+	{
+		if (g_pEnv == nullptr || g_pEnv->_commandManager == nullptr)
+			return;
+		auto* cm = g_pEnv->_commandManager;
+		cm->CreateBind('W', "MoveForwards", this);
+		cm->CreateBind('S', "MoveBackwards", this);
+		cm->CreateBind('A', "MoveLeft", this);
+		cm->CreateBind('D', "MoveRight", this);
+		cm->CreateBind(VK_SPACE, "MoveUp", this);
+		cm->CreateBind(VK_CONTROL, "MoveDown", this);
+		cm->CreateBind(VK_SHIFT, "MoveRun", this);
 	}
 
 	FirstPersonCameraController::~FirstPersonCameraController()
@@ -155,6 +157,11 @@ namespace HexEngine
 		_controlEnabled = enabled;
 		if (!enabled)
 			_flags = MoveNone; // drop held keys so movement doesn't resume mid-ride
+		else
+			// Re-claim the movement keys. A mounted vehicle rebinds W/A/S/D/Space to
+			// itself and then hard-removes them on dismount, leaving them unbound;
+			// re-asserting here restores walking whenever control returns to us.
+			CreateMovementBinds();
 	}
 
 	void FirstPersonCameraController::FixedUpdate(float frameTime)

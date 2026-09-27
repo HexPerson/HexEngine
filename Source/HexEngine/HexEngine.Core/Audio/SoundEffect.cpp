@@ -36,6 +36,7 @@ namespace HexEngine
 			});
 		clone->_effect = _effect;
 		clone->_volume = _volume;
+		clone->_pitch = _pitch;
 		clone->_emitter = _emitter;
 		clone->_is3D = _is3D;
 		clone->_radius = _radius;
@@ -62,7 +63,12 @@ namespace HexEngine
 		// in [-1, 1] (semi-octave: -1 = down one octave, +1 = up one
 		// octave, 0 = original). Clamp here so a caller passing a stale
 		// or unconverted value doesn't crash the audio thread.
-		_instance->SetPitch(std::clamp(pitch, -1.0f, 1.0f));
+		_pitch = std::clamp(pitch, -1.0f, 1.0f);
+		// Apply with the manager's current underwater offset so a SetPitch
+		// made while submerged does not pop back to full pitch for a frame.
+		const float offset = (g_pEnv != nullptr && g_pEnv->_audioManager != nullptr)
+			? g_pEnv->_audioManager->GetUnderwaterPitchOffset() : 0.0f;
+		_instance->SetPitch(std::clamp(_pitch + offset, -1.0f, 1.0f));
 	}
 
 	void SoundEffect::SetRadius(float radius)

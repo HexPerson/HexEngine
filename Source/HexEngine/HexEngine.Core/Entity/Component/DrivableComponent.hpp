@@ -247,6 +247,7 @@ namespace HexEngine
 		bool _camSmoothInit = false;
 		math::Vector3 _camEyeSmoothed;               // smoothed world eye position
 		math::Vector3 _camLookSmoothed;              // smoothed world look direction
+		math::Vector3 _camSavedViewOffset;           // player's eye-height view offset, restored on dismount
 
 		// --- audio playback state (runtime; not serialized) ---
 		std::shared_ptr<SoundEffect> _engineMaster, _engineInst;
