@@ -465,7 +465,7 @@ namespace HexEngine
                 {
                     *p++ = '\n';
                     *p++ = '\0';
-                    LOG_DEBUG(str);
+                    LOG_DEBUG("%s", str);
                     p = str;
                     count = 0;
                 }
@@ -479,7 +479,7 @@ namespace HexEngine
             if (used_freq[i])
             {
                 sprintf_s(str, "// 0x%04X - %S (%d)", xmsglist[i].code, xmsglist[i].text, used_freq[i]);
-                LOG_DEBUG(str);
+                LOG_DEBUG("%s", str);
             }
         }
     }

@@ -475,7 +475,9 @@ bool GraphicsDeviceD3D11::AttachToWindow(HexEngine::Window* window)
 	hr = device.swapchain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(&pBackBuffer));
 	if (FAILED(hr))
 	{
-		return hr;
+		// Was `return hr;` - AttachToWindow returns bool, and a failure HRESULT
+		// is negative, i.e. converts to TRUE: a failed GetBuffer reported success.
+		return false;
 	}
 
 	D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};

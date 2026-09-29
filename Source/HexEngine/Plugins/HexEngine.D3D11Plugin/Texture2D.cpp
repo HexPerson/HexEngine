@@ -277,11 +277,11 @@ void Texture2D::GetPixels(std::vector<float>& buffer)
 	{
 		if (buffer.size() > 0)
 		{
-			memcpy((void*)buffer.data(), mapped.pData, GetWidth() * GetHeight() * 4 * sizeof(float));
+			memcpy((void*)buffer.data(), mapped.pData, static_cast<size_t>(GetWidth()) * GetHeight() * 4 * sizeof(float));
 		}
 		else
 		{
-			buffer.insert(buffer.end(), (uint8_t*)mapped.pData, (uint8_t*)mapped.pData + (GetWidth() * GetHeight() * 4 * sizeof(float)));
+			buffer.insert(buffer.end(), (uint8_t*)mapped.pData, (uint8_t*)mapped.pData + (static_cast<size_t>(GetWidth()) * GetHeight() * 4 * sizeof(float)));
 		}
 
 		gfxContext->Unmap(_texture, 0);

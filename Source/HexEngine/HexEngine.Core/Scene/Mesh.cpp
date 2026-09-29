@@ -35,7 +35,7 @@ namespace HexEngine
 			}
 			else if (auto lodEndStr = name.find_first_not_of("0123456789", lodStr+3); lodEndStr != name.npos)
 			{
-				if (lodEndStr - (lodStr + 3) > 0)
+				if (lodEndStr > lodStr + 3)
 				{
 					auto lodString = name.substr(lodStr + 3, lodEndStr - (lodStr + 3));
 

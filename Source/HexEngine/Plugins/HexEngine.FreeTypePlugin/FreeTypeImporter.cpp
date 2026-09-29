@@ -339,10 +339,11 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 
 	_maxCharHeight = 0;
 
-	uint32_t* pixelData = new uint32_t[currentAtlasSize * currentAtlasSize];
-	memset(pixelData, 0, sizeof(uint32_t) * (currentAtlasSize * currentAtlasSize));
+	// Zero-initialised staging buffer for the atlas upload; owned here and
+	// freed on every return path by scope.
+	std::vector<uint32_t> pixelData(static_cast<size_t>(currentAtlasSize) * currentAtlasSize, 0u);
 
-	uint32_t* p = pixelData;
+	uint32_t* p = pixelData.data();
 	//uint32_t* lastOffset = p;
 
 	x = 0;
@@ -403,7 +404,7 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 
 
 	D3D11_SUBRESOURCE_DATA initialData;
-	initialData.pSysMem = pixelData;
+	initialData.pSysMem = pixelData.data();
 	initialData.SysMemPitch = currentAtlasSize * 4;
 	initialData.SysMemSlicePitch = 0;
 
@@ -425,10 +426,9 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 
 	if (!atlas)
 	{
-		// Atlas creation failed: face and the staging buffer would otherwise leak because
-		// ownership normally transfers to FreeTypeFont below, which never happens here.
+		// Atlas creation failed: the face would otherwise leak because ownership
+		// normally transfers to FreeTypeFont below, which never happens here.
 		FT_Done_Face(face);
-		SAFE_DELETE_ARRAY(pixelData);
 		return false;
 	}
 
@@ -450,8 +450,6 @@ bool FreeTypeImporter::LoadFontInternal(std::shared_ptr<FreeTypeFont>& font, FT_
 	atlasPath += ".png";
 	atlas->SaveToFile(atlasPath);
 #endif	
-
-	SAFE_DELETE_ARRAY(pixelData);
 
 	font->CreateInstanceBuffer(size);
 

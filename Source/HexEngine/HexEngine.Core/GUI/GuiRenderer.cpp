@@ -1379,7 +1379,7 @@ namespace HexEngine
 		}
 
 		auto atlas = font->GetAtlas(fontSize);
-		std::vector<GuiVertex> vertices(glyphCount * quadsPerGlyph * 4);
+		std::vector<GuiVertex> vertices(static_cast<size_t>(glyphCount) * quadsPerGlyph * 4);
 
 		int32_t sx = x;
 		int32_t sy = y;

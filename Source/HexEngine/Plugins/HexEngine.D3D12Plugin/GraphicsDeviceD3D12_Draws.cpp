@@ -423,7 +423,7 @@ bool GraphicsDeviceD3D12::FlushGraphics()
 		if (!_shaderVisibleHeap.Allocate(count, cpu, gpu)) return;
 		for (uint32_t i = 0; i < count; ++i)
 		{
-			D3D12_CPU_DESCRIPTOR_HANDLE dst = cpu; dst.ptr += i * incr;
+			D3D12_CPU_DESCRIPTOR_HANDLE dst = cpu; dst.ptr += static_cast<SIZE_T>(i) * incr;
 			// Always write a descriptor - either the bound resource's CPU
 			// descriptor or the pre-created null one. The shader-visible
 			// heap is NOT zero-initialised between frames; leaving stale
@@ -491,7 +491,7 @@ bool GraphicsDeviceD3D12::FlushCompute()
 		if (!_shaderVisibleHeap.Allocate(count, cpu, gpu)) return;
 		for (uint32_t i = 0; i < count; ++i)
 		{
-			D3D12_CPU_DESCRIPTOR_HANDLE dst = cpu; dst.ptr += i * incr;
+			D3D12_CPU_DESCRIPTOR_HANDLE dst = cpu; dst.ptr += static_cast<SIZE_T>(i) * incr;
 			// See FlushGraphics: unbound slots must still carry a valid
 			// (null) descriptor or the GPU reads stale bits and may TDR.
 			const D3D12_CPU_DESCRIPTOR_HANDLE source = (src[i].ptr != 0) ? src[i] : nullDesc;

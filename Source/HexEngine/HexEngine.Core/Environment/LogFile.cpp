@@ -58,7 +58,7 @@ namespace HexEngine
 		DiskFile::Flush();
 
 		if(level != LogLevel::Debug)
-			CON_ECHO(buf);
+			CON_ECHO("%s", buf); // buf is already formatted - never a format string
 
 		if (level == LogLevel::Crit)
 		{
@@ -121,7 +121,7 @@ namespace HexEngine
 		DiskFile::Flush();
 
 		if (level != LogLevel::Debug)
-			CON_ECHO(buf);
+			CON_ECHO("%s", buf); // buf is already formatted - never a format string
 
 		if (level == LogLevel::Crit)
 		{
@@ -164,7 +164,7 @@ namespace HexEngine
 		DiskFile::Flush();
 
 		if (level != LogLevel::Debug)
-			CON_ECHO(buf);
+			CON_ECHO("%s", buf); // buf is already formatted - never a format string
 
 		if (level == LogLevel::Crit)
 		{
@@ -227,7 +227,7 @@ namespace HexEngine
 		DiskFile::Flush();
 
 		if (level != LogLevel::Debug)
-			CON_ECHO(buf);
+			CON_ECHO("%s", buf); // buf is already formatted - never a format string
 
 		if (level == LogLevel::Crit)
 		{

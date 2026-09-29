@@ -1039,7 +1039,7 @@ namespace HexEngine
 			D3D11_SUBRESOURCE_DATA initialData = {};
 			initialData.pSysMem = noiseData.data();
 			initialData.SysMemPitch = static_cast<UINT>(resolution * sizeof(float));
-			initialData.SysMemSlicePitch = static_cast<UINT>(resolution * resolution * sizeof(float));
+			initialData.SysMemSlicePitch = static_cast<UINT>(static_cast<size_t>(resolution) * resolution * sizeof(float));
 
 			return g_pEnv->_graphicsDevice->CreateTexture3D(
 				resolution,

@@ -299,14 +299,21 @@ namespace HexEngine
 		{
 			if (_rawInputEnabled)
 			{
-				UINT bufferSize;
-				GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &bufferSize, sizeof(RAWINPUTHEADER));
-				BYTE* buffer = new BYTE[bufferSize];
-				GetRawInputData((HRAWINPUT)lParam, RID_INPUT, (LPVOID)buffer, &bufferSize, sizeof(RAWINPUTHEADER));
+				// A failed size query left bufferSize uninitialised and the
+				// allocation/read ran on garbage - check both calls.
+				UINT bufferSize = 0;
+				std::vector<BYTE> buffer;
+				if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &bufferSize, sizeof(RAWINPUTHEADER)) == 0 &&
+					bufferSize >= sizeof(RAWINPUTHEADER))
+				{
+					buffer.resize(bufferSize);
+					if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, buffer.data(), &bufferSize, sizeof(RAWINPUTHEADER)) != bufferSize)
+						buffer.clear();
+				}
 
-				RAWINPUT* raw = (RAWINPUT*)buffer;
+				RAWINPUT* raw = buffer.empty() ? nullptr : reinterpret_cast<RAWINPUT*>(buffer.data());
 
-				if (raw->header.dwType == RIM_TYPEMOUSE)
+				if (raw != nullptr && raw->header.dwType == RIM_TYPEMOUSE)
 				{
 					SetMousePosition(raw->data.mouse.lLastX, raw->data.mouse.lLastY, false);
 
@@ -378,8 +385,6 @@ namespace HexEngine
 					}
 				}
 #endif
-
-				SAFE_DELETE_ARRAY(buffer);
 			}
 			return 0;
 		}

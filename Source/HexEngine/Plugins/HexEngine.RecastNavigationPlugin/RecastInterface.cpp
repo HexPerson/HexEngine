@@ -1097,15 +1097,15 @@ void RecastInterface::doLog(const rcLogCategory category, const char* msg, const
 	switch (category)
 	{
 	case rcLogCategory::RC_LOG_ERROR:
-		LOG_CRIT(msg);
+		LOG_CRIT("%s", msg); // Recast's text, not a format string
 		break;
 
 	case rcLogCategory::RC_LOG_PROGRESS:
-		LOG_INFO(msg);
+		LOG_INFO("%s", msg);
 		break;
 
 	case rcLogCategory::RC_LOG_WARNING:
-		LOG_WARN(msg);
+		LOG_WARN("%s", msg);
 		break;
 	}
 }

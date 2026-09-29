@@ -1799,9 +1799,9 @@ namespace HexEngine
 							const float minC = std::min(linR, std::min(linG, linB));
 							const float sat = std::max(0.0f, maxC - minC);
 							const float satWeight = 0.05f + sat * sat * 4.0f;
-							rs += linR * satWeight;
-							gs += linG * satWeight;
-							bs += linB * satWeight;
+							rs += static_cast<double>(linR) * satWeight;
+							gs += static_cast<double>(linG) * satWeight;
+							bs += static_cast<double>(linB) * satWeight;
 							satWeightSum += satWeight;
 							++samples;
 						}
