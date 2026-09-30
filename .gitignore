@@ -477,3 +477,6 @@ FodyWeavers.xsd
 /Source/HexEngine/HexEngine.Creator/HexEngine.Creator.vcxproj
 /Source/HexEngine/HexEngine.Creator/HexEngine.Creator.vcxproj.filters
 /Source/HexEngine/HexEngine.Creator/
+
+# Scratch frame dumps from GI video captures
+tmp_gi_video_frames/
