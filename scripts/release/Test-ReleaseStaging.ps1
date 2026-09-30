@@ -112,6 +112,11 @@ else {
     $vcRuntime = 'vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
                  'msvcp140_atomic_wait.dll', 'msvcp140_codecvt_ids.dll', 'concrt140.dll', 'vcomp140.dll', 'vccorlib140.dll'
     $debugCrt = 'vcruntime140d.dll', 'vcruntime140_1d.dll', 'msvcp140d.dll', 'ucrtbased.dll', 'concrt140d.dll', 'vcomp140d.dll'
+    # Installed by the NVIDIA display driver, not Windows. Streamline only loads
+    # its nvngx_* feature DLLs (DLSS-G, DeepDVC) on NVIDIA GPUs, where the driver
+    # is always present - so these are fine there and nowhere else. (A GPU-less
+    # CI runner lacks them; a dev PC with an NVIDIA card has them in System32.)
+    $nvidiaDriver = 'nvcuda.dll', 'vulkan-1.dll'
     $system32 = Join-Path $env:SystemRoot 'System32'
 
     $pe = $allFiles | Where-Object {
@@ -143,6 +148,7 @@ else {
             if ($imp -in $debugCrt) { $failures.Add("debug CRT import: $(RelPath $b) -> $imp"); continue }
             if ($shipped.ContainsKey($imp)) { continue }
             if ($imp -in $vcRuntime) { continue }                       # installer: VC++ Redistributable
+            if ($imp -in $nvidiaDriver -and ($b.Name -like 'nvngx_*' -or $b.Name -like 'sl.*')) { continue }
             if ($imp -like 'api-ms-win-*' -or $imp -like 'ext-ms-*') { continue }
             if (Test-Path -LiteralPath (Join-Path $system32 $imp)) { continue }
             $failures.Add("unresolved import: $(RelPath $b) -> $imp (not shipped, not Windows, not VC++ runtime)")
