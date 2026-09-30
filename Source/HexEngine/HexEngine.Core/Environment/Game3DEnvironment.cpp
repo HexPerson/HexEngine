@@ -974,13 +974,16 @@ namespace HexEngine
 
 		// Initialise a new log file instance
 		//
+		// Under the per-user data root: beside the exe for dev/portable builds (as
+		// before), %LOCALAPPDATA%\HexEngine for an installed (read-only) build.
 		std::wstring logName = L"Logs/LogFile_" + options.applicationName + L".txt";
-		_logFile = new LogFile(_fileSystem->GetLocalAbsolutePath(logName), LogOptions::IncludeTime, LogLevel::Crit);
+		_logFile = new LogFile(FileSystem::GetUserDataRoot() / logName, LogOptions::IncludeTime, LogLevel::Crit);
 
 		// Output our standard header
 		//
 		_logFile->WriteLine(LogLevel::Info, "**********************************************************************");
-		_logFile->WriteLine(LogLevel::Info, "**  HexEngine v%d.%d", GET_MAJOR_VERSION(HexEngineVersion), GET_MINOR_VERSION(HexEngineVersion));
+		_logFile->WriteLine(LogLevel::Info, "**  HexEngine %s%s (format v%d.%d)", HEX_VERSION_STRING, HEX_VERSION_IS_DEV ? "-dev" : "",
+			GET_MAJOR_VERSION(HexEngineVersion), GET_MINOR_VERSION(HexEngineVersion));
 		_logFile->WriteLine(LogLevel::Info, "**  Built on %s %s", __DATE__, __TIME__);
 		_logFile->WriteLine(LogLevel::Info, "**********************************************************************");
 	}

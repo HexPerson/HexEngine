@@ -9,6 +9,12 @@ This file is the authoritative guide for HexEngine build/dependency migration st
 - Top-level CMake has been introduced as the canonical orchestration entrypoint for migration tasks.
 - Dependency metadata now lives in `build/dependencies.lock.json`.
 
+## Engine Data (Git LFS)
+
+- Source-controlled engine assets live in `Content/EngineData/` (binary files in Git LFS). Run `git lfs install` once before cloning (or `git lfs pull` after).
+- A local build reads `Bin/x64/<Config>/Data/`; copy the tracked data there with `./scripts/Sync-EngineData.ps1` after cloning and after pulling asset changes.
+- Releases are cut by pushing a `vMAJOR.MINOR.PATCH` tag - see [docs/RELEASING.md](docs/RELEASING.md).
+
 ## Legacy Flow (Still Supported)
 
 1. Run `Setup.bat`.

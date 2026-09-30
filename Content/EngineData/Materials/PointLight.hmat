@@ -1,0 +1,32 @@
+{
+  "properties": {
+    "diffuseColour": [
+      0.6000000238418579,
+      0.6000000238418579,
+      0.6000000238418579,
+      1.0
+    ],
+    "emissiveColour": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "hasTransparency": 0,
+    "isWater": 0,
+    "shininess": 10.0,
+    "shininessStrength": 0.4000000059604645
+  },
+  "renderer": {
+    "blendState": 1,
+    "cullingMode": 2,
+    "depthState": 2
+  },
+  "shaders": {
+    "shadowmap": null,
+    "standard": "EngineData.Shaders/PointLight.hcs"
+  },
+  "textures": {
+    "Albedo": "EngineData.Textures/white.png"
+  }
+}

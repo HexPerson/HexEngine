@@ -59,6 +59,19 @@ namespace HexEngine
 
 		virtual fs::path GetLocalAbsoluteDataPath(const fs::path& localPath);
 
+		// Per-user writable state - logs, the recent-projects list, caches and
+		// generated engine shaders. An INSTALLED build (the installer drops
+		// kInstalledMarkerFileName beside the executable) keeps it under
+		// %LOCALAPPDATA%\HexEngine, because the install folder is read-only
+		// Program Files. A dev tree or portable ZIP keeps it beside the
+		// executable, exactly as before. The directory is created on first use.
+		static const fs::path& GetUserDataRoot();
+
+		// True when kInstalledMarkerFileName sits beside the running executable.
+		static bool IsInstalledBuild();
+
+		static constexpr const wchar_t* kInstalledMarkerFileName = L"HexEngine.installed";
+
 		void CreateSubDirectories(const fs::path& absolutePath);
 
 		bool CreateChangeNotifier(const fs::path& pathToWatch, std::function<void(const DirectoryWatchInfo&, const FileChangeActionMap&)> onFileChangeCB=nullptr);

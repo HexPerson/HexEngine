@@ -45,7 +45,17 @@ namespace HexEditor
 		{
 			fs::create_directories(assetFolder);
 		}
-		fs::copy(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("AssetPackages/StandardAssets.pkg"), assetFolder / "StandardAssets.pkg", fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+		// Optional: nothing at runtime mounts StandardAssets.pkg, and no build
+		// step produces it. The throwing fs::copy overload crashed project
+		// creation (std::terminate) whenever it was absent.
+		const fs::path standardAssets = HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("AssetPackages/StandardAssets.pkg");
+		std::error_code copyError;
+		if (fs::exists(standardAssets, copyError))
+		{
+			fs::copy(standardAssets, assetFolder / "StandardAssets.pkg", fs::copy_options::overwrite_existing, copyError);
+			if (copyError)
+				LOG_WARN("Could not copy StandardAssets.pkg into the new project: %s", copyError.message().c_str());
+		}
 
 		return true;
 	}

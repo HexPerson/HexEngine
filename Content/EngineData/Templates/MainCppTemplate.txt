@@ -1,0 +1,24 @@
+
+
+#include <HexEngine.Core\HexEngine.hpp>
+#include "<$NAME>.hpp"
+
+HexEngine::IEnvironment* HexEngine::g_pEnv = nullptr;
+
+extern "C"
+{
+	__declspec(dllexport) HexEngine::IGameExtension* CreateGame()
+	{
+		<$NAMESPACE>::g_pGame = new <$NAMESPACE>::<$NAME>;
+
+		return <$NAMESPACE>::g_pGame;
+	}
+}
+
+BOOL WINAPI DllMain(
+	HINSTANCE hinstDLL,
+	DWORD fdwReason,
+	LPVOID lpvReserved)
+{
+	return TRUE;
+}

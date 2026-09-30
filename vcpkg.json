@@ -6,6 +6,7 @@
     "brotli",
     "cxxopts",
     "directxtk",
+    "directx-dxc",
     "directxtex",
     "freetype",
     "gamenetworkingsockets",

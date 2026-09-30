@@ -19,13 +19,13 @@ set(HEXENGINE_REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 set(HEXENGINE_DEPENDENCY_MANIFEST "${HEXENGINE_REPO_ROOT}/build/dependencies.lock.json")
 set(HEXENGINE_DEPENDENCY_BOOTSTRAP_SCRIPT "${HEXENGINE_REPO_ROOT}/tools/deps/bootstrap.py")
 set(HEXENGINE_SOLUTION_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.sln")
-# Curated solution filter for the "modern" lanes: the SAME solution, minus the
-# plugins whose SDKs the minimal/non-legacy bootstrap does not provision
-# (Assimp, NRD, OIDN, HBAO+) and the projects gated on heavy source-built
-# toolchains that the modern bootstrap intentionally omits (ShaderCompiler +
-# Shaders -> LLVM-fork DXC submodule; PhysXPlugin -> PhysX SDK source build).
-# Building through this .slnf keeps the modern lanes a fast, green compile gate
-# for Core/Editor/renderer + non-legacy plugins. See HexEngine-modern.slnf.
+# Curated solution filter for the "modern" lanes (CI and the release build):
+# the SAME solution minus OIDNPlugin (optional denoiser that needs ISPC/TBB
+# and a recursive source build the bootstrap does not provision; NRD covers
+# the engine's denoiser requirement) and HexEngine.Tests (built by its own
+# CMake preset / unit-tests lane). Assimp, NRD, HBAO+ and PhysX are provisioned by
+# tools/deps/bootstrap.py; ShaderCompiler + Shaders use the prebuilt vcpkg
+# directx-dxc port (no DXC source build). See HexEngine-modern.slnf.
 set(HEXENGINE_SOLUTION_FILTER_MODERN_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine-modern.slnf")
 set(HEXENGINE_SHADERCOMPILER_PROJECT_PATH "${HEXENGINE_REPO_ROOT}/Source/HexEngine/HexEngine.ShaderCompiler/HexEngine.ShaderCompiler.vcxproj")
 set(HEXENGINE_STREAMLINE_LIB_PATH "${HEXENGINE_REPO_ROOT}/ThirdParty/Streamline/lib/x64/sl.interposer.lib")

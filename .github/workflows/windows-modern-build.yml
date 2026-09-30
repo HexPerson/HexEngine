@@ -18,7 +18,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true
+          # No repo LFS needed here: Content/EngineData (the only LFS content)
+          # is packaged by release.yml only. Pulling it would spend metered
+          # LFS bandwidth on every run.
+          lfs: false
           submodules: recursive
 
       - name: Setup Python
@@ -129,7 +132,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          lfs: true
+          # No repo LFS needed here: Content/EngineData (the only LFS content)
+          # is packaged by release.yml only. Pulling it would spend metered
+          # LFS bandwidth on every run.
+          lfs: false
           submodules: recursive
 
       - name: Setup Python

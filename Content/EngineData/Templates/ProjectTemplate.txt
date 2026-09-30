@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">    
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid><$GUID></ProjectGuid>
+    <RootNamespace>HexEngineCore</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <!--
+    The HexEngine SDK this game builds against. Every engine include, library
+    and runtime path comes from <SDK>\HexEngine.props. To point the project at
+    a different engine install, set the HEXENGINE_SDK environment variable (or
+    pass /p:HexEngineSDK=...) instead of editing this file.
+  -->
+  <PropertyGroup Label="HexEngine">
+    <HexEngineSDK Condition="'$(HexEngineSDK)' == ''">$(HEXENGINE_SDK)</HexEngineSDK>
+    <HexEngineSDK Condition="'$(HexEngineSDK)' == ''"><$SDKPATH></HexEngineSDK>
+  </PropertyGroup>
+  <Import Project="$(HexEngineSDK)\HexEngine.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>$(HexEngineDebugUseDebugLibraries)</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>MultiByte</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>true</LinkIncremental>
+	<OutDir>$(SolutionDir)..\Build\</OutDir>
+	<TargetName>Game</TargetName>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+	<OutDir>$(SolutionDir)..\Build\</OutDir>
+	<TargetName>Game</TargetName>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>$(HexEngineDebugDefines);_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(HexEngineIncludeDirs);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <RuntimeLibrary>$(HexEngineDebugRuntimeLibrary)</RuntimeLibrary>
+      <Optimization>Disabled</Optimization>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(HexEngineLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>HexEngine.Core.lib;DirectXTK.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+	<PostBuildEvent>
+      <Command>mkdir "$(OutDir)Plugins\"
+mkdir "$(OutDir)Bin\"
+mkdir "$(OutDir)Data\"
+mkdir "$(OutDir)Data\Shaders"
+copy "$(HexEngineRuntimeDir)Bin\*.dll" "$(OutDir)Bin\*.dll" &gt;nul
+copy "$(HexEngineRuntimeDir)Plugins\*.dll" "$(OutDir)Plugins\*.dll" &gt;nul
+copy "$(HexEngineRuntimeDir)HexEngine.Launcher.exe" "$(OutDir)\<$NAME>.exe" &gt;nul
+copy "$(HexEngineRuntimeDir)HexEngine.Core.dll" "$(OutDir)HexEngine.Core.dll" &gt;nul
+
+xcopy "$(ProjectDir)Shaders\Compiled\" "$(SolutionDir)..\Data\Shaders\" /e /s /y &gt;nul
+xcopy "$(SolutionDir)..\Data\" "$(OutDir)Data\" /e /s /y &gt;nul</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalIncludeDirectories>$(HexEngineIncludeDirs);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(HexEngineLibDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>HexEngine.Core.lib;DirectXTK.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+	<PostBuildEvent>
+      <Command>mkdir "$(OutDir)Plugins\"
+mkdir "$(OutDir)Bin\"
+mkdir "$(OutDir)Data\"
+mkdir "$(OutDir)Data\Shaders"
+copy "$(HexEngineRuntimeDir)Bin\*.dll" "$(OutDir)Bin\*.dll" &gt;nul
+copy "$(HexEngineRuntimeDir)Plugins\*.dll" "$(OutDir)Plugins\*.dll" &gt;nul
+copy "$(HexEngineRuntimeDir)HexEngine.Launcher.exe" "$(OutDir)\<$NAME>.exe" &gt;nul
+copy "$(HexEngineRuntimeDir)HexEngine.Core.dll" "$(OutDir)HexEngine.Core.dll" &gt;nul
+
+xcopy "$(ProjectDir)Shaders\Compiled\" "$(SolutionDir)..\Data\Shaders\" /e /s /y &gt;nul
+xcopy "$(SolutionDir)..\Data\" "$(OutDir)Data\" /e /s /y &gt;nul</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="<$NAME>.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="<$NAME>.cpp" />
+	<ClCompile Include="Main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="HexEngine.Shaders.targets" />
+  </ItemGroup>
+  <ItemGroup>
+    <Xml Include="shader.xml" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="HexEngine.Shaders.targets" />
+  </ImportGroup>
+</Project>

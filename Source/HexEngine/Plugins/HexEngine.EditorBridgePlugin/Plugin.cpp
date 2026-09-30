@@ -731,7 +731,7 @@ namespace HexEngine
 				// feed one to open_project. Plain file read; no main-thread hop.
 				if (!g_pEnv)
 					return MakeError(id, ErrorCode::NotAvailable, "environment not available");
-				const fs::path listPath = g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json");
+				const fs::path listPath = FileSystem::GetUserDataRoot() / L"Projects.json";
 				std::ifstream in(listPath, std::ios::binary);
 				if (!in.is_open())
 					return MakeResult(id, json{ {"count", 0}, {"projects", json::array()},
@@ -787,7 +787,7 @@ namespace HexEngine
 				// can say {"name":"TT"} without knowing where the project lives.
 				if (path.empty())
 				{
-					const fs::path listPath = g_pEnv->GetFileSystem().GetLocalAbsolutePath(L"Projects.json");
+					const fs::path listPath = FileSystem::GetUserDataRoot() / L"Projects.json";
 					std::ifstream in(listPath, std::ios::binary);
 					if (in.is_open())
 					{

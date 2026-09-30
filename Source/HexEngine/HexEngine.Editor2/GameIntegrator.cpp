@@ -974,13 +974,81 @@ namespace HexEditor
 		return {};
 	}
 
+	namespace
+	{
+		// Ask the Visual Studio Installer's vswhere.exe for the newest MSBuild
+		// (any edition, any install location, Build Tools included). Returns an
+		// empty path if vswhere is absent or finds nothing.
+		fs::path FindMSBuildViaVsWhere()
+		{
+			wchar_t programFilesX86[MAX_PATH] = {};
+			if (GetEnvironmentVariableW(L"ProgramFiles(x86)", programFilesX86, MAX_PATH) == 0)
+				return {};
+			const fs::path vswhere = fs::path(programFilesX86) / L"Microsoft Visual Studio/Installer/vswhere.exe";
+			std::error_code ec;
+			if (!fs::exists(vswhere, ec))
+				return {};
+
+			SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+			HANDLE readPipe = nullptr, writePipe = nullptr;
+			if (!CreatePipe(&readPipe, &writePipe, &sa, 0))
+				return {};
+			SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+			std::wstring cmd = L"\"" + vswhere.wstring() +
+				L"\" -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe";
+			STARTUPINFOW si = { sizeof(si) };
+			si.dwFlags = STARTF_USESTDHANDLES;
+			si.hStdOutput = writePipe;
+			si.hStdError = writePipe;
+			PROCESS_INFORMATION pi = {};
+			const BOOL started = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+			CloseHandle(writePipe);
+			if (!started)
+			{
+				CloseHandle(readPipe);
+				return {};
+			}
+
+			std::string output;
+			char buffer[512];
+			DWORD bytesRead = 0;
+			while (ReadFile(readPipe, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
+				output.append(buffer, bytesRead);
+			WaitForSingleObject(pi.hProcess, 10000);
+			CloseHandle(pi.hProcess);
+			CloseHandle(pi.hThread);
+			CloseHandle(readPipe);
+
+			// First non-empty line is the newest match.
+			std::istringstream lines(output);
+			std::string line;
+			while (std::getline(lines, line))
+			{
+				while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+					line.pop_back();
+				if (!line.empty() && fs::exists(fs::path(line), ec))
+					return fs::path(line);
+			}
+			return {};
+		}
+	}
+
 	fs::path GameIntegrator::FindMSBuildExecutable() const
 	{
-		static const std::array<fs::path, 4> candidates = {
+		// vswhere first: it knows every edition and install location, including
+		// Build Tools (which lives under Program Files (x86)) and newer VS
+		// versions. The fixed paths remain as a fallback for machines where the
+		// installer isn't present.
+		if (fs::path found = FindMSBuildViaVsWhere(); !found.empty())
+			return found;
+
+		static const std::array<fs::path, 5> candidates = {
 			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin/MSBuild.exe"),
 			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/Professional/MSBuild/Current/Bin/MSBuild.exe"),
 			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe"),
-			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/MSBuild.exe")
+			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/MSBuild.exe"),
+			fs::path(L"C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/MSBuild.exe")
 		};
 
 		for (const auto& candidate : candidates)
