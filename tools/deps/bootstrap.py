@@ -439,9 +439,9 @@ def build_assimp(ctx: RuntimeContext, dep: dict, config: str) -> None:
 def build_nrd(ctx: RuntimeContext, dep: dict, config: str) -> None:
     """Static NVIDIA Real-time Denoisers library (HexEngine.NRDPlugin).
 
-    Port of the legacy setup.py recipe. SPIR-V embedding stays OFF - it needs
-    the Vulkan SDK's dxc, which a hosted runner doesn't have; the D3D paths
-    use the Windows SDK compilers.
+    Port of the legacy setup.py recipe. SPIR-V embedding (and ShaderMake's
+    search for a SPIR-V dxc) stays OFF - it needs the Vulkan SDK, which a
+    hosted runner doesn't have; the D3D paths use the Windows SDK compilers.
     """
     repo = ensure_repo(dep, ctx.frozen, ctx.update, recursive=True)
     if staged_lib_present(ctx, config, "NRD.lib"):
@@ -455,6 +455,9 @@ def build_nrd(ctx: RuntimeContext, dep: dict, config: str) -> None:
             "cmake", "-S", "..", "-G", ctx.generator, "-A", ctx.arch,
             "-DNRD_STATIC_LIBRARY=ON",
             "-DNRD_EMBEDS_SPIRV_SHADERS=OFF",
+            # ShaderMake otherwise hunts for the Vulkan SDK's SPIR-V dxc even with
+            # SPIR-V embedding off, and fails the configure without it.
+            "-DSHADERMAKE_FIND_DXC_SPIRV=OFF",
             "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>DLL",
         ],
         cwd=build_dir,
@@ -730,6 +733,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # CI captures stdout as a pipe (block-buffered): without this our progress
+    # lines land after the child processes' output and hide which one failed.
+    sys.stdout.reconfigure(line_buffering=True)
     if not MANIFEST_PATH.exists():
         print(f"Dependency manifest not found: {MANIFEST_PATH}", file=sys.stderr)
         return 1
