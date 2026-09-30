@@ -7,3 +7,21 @@
 /THIRD_PARTY_NOTICES.md        text eol=lf
 /tools/deps/dependencies.json  text eol=lf
 /tools/deps/generate_sbom.py   text eol=lf
+
+# Engine runtime data (Content/EngineData -> Data/ in a build/release) is
+# stored in Git LFS: binary assets only. Text formats (.hmat, .hparticles,
+# templates, .obj/.mtl, licence .txt) stay regular git so they diff normally.
+/Content/EngineData/**/*.png    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.jpg    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.jpeg   filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.tga    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.TGA    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.dds    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.hdr    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.ttf    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.otf    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.ico    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.hmesh  filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.fbx    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.wav    filter=lfs diff=lfs merge=lfs -text
+/Content/EngineData/**/*.ogg    filter=lfs diff=lfs merge=lfs -text

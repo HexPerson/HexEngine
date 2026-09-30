@@ -412,7 +412,11 @@ namespace HexEngine
 
 		_previewRootEntities.clear();
 
-		_diskCacheRoot = g_pEnv->GetFileSystem().GetLocalAbsolutePath(fs::path(L"Data/Cache/Icons"));
+		// Installed builds cache under the per-user data root (the install folder
+		// is read-only); dev/portable builds keep the historic Data/Cache/Icons.
+		_diskCacheRoot = FileSystem::IsInstalledBuild()
+			? FileSystem::GetUserDataRoot() / fs::path(L"Cache/Icons")
+			: g_pEnv->GetFileSystem().GetLocalAbsolutePath(fs::path(L"Data/Cache/Icons"));
 		_diskCacheIndexFile = _diskCacheRoot / fs::path(L"index.json");
 		std::error_code ec;
 		fs::create_directories(_diskCacheRoot, ec);
@@ -751,8 +755,11 @@ namespace HexEngine
 		const fs::path baseDir = g_pEnv->GetFileSystem().GetBaseDirectory();
 		std::error_code ec;
 		fs::path cachePathRelative = fs::relative(cachePath, baseDir, ec);
-		if (ec || cachePathRelative.empty())
-			cachePathRelative = fs::path(L"Data/Cache/Icons") / fs::path(cacheFile);
+		// Outside the base directory (per-user cache of an installed build):
+		// save by absolute path - SaveToFile's base-relative join leaves an
+		// absolute path untouched.
+		if (ec || cachePathRelative.empty() || *cachePathRelative.begin() == L"..")
+			cachePathRelative = cachePath;
 
 		texture->SaveToFile(cachePathRelative);
 

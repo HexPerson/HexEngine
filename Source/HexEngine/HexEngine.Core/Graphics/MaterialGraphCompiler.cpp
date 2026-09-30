@@ -1031,6 +1031,12 @@ namespace HexEngine
 		{
 			if (auto* fsys = material.GetOwningFileSystem(); fsys != nullptr)
 			{
+				// Engine-owned materials of an INSTALLED build: the engine Data
+				// folder is read-only Program Files, so bake into the per-user
+				// data root instead. Loaded back by absolute path either way.
+				if (FileSystem::IsInstalledBuild() && g_pEnv != nullptr && fsys == &g_pEnv->GetFileSystem())
+					return FileSystem::GetUserDataRoot() / "GeneratedShaders";
+
 				const fs::path dataDir = fsys->GetDataDirectory();
 				if (!dataDir.empty())
 					return dataDir / "Shaders" / "Generated";

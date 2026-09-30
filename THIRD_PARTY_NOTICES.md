@@ -10,6 +10,7 @@ HexEngine bundles / links the third-party components listed below. Each is distr
 | --- | --- | --- | --- | --- |
 | brotli | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/google/brotli) | _(installed via vcpkg)_ |
 | cxxopts | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/jarro2783/cxxopts) | _(installed via vcpkg)_ |
+| directx-dxc | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | NCSA AND MIT | [link](https://github.com/microsoft/DirectXShaderCompiler) | _(installed via vcpkg)_ |
 | directxtex | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/microsoft/DirectXTex) | _(installed via vcpkg)_ |
 | directxtk | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/microsoft/DirectXTK) | _(installed via vcpkg)_ |
 | freetype | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | FTL | [link](https://freetype.org/) | _(installed via vcpkg)_ |

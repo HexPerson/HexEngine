@@ -17,6 +17,38 @@
 
 namespace HexEditor
 {
+	namespace
+	{
+		// Root of the HexEngine SDK that generated game projects build against:
+		// the folder holding HexEngine.props (include/lib/runtime paths). Found
+		// from the editor EXE's own location - never the working directory - so
+		// it works both in a source checkout and in an install:
+		//   1. HEXENGINE_SDK environment variable (explicit override)
+		//   2. installed build: {app}\SDK\HexEngine.props
+		//   3. development tree: <repo>\Bin\x64\<Config>\ -> <repo>\HexEngine.props
+		fs::path ResolveSdkRoot()
+		{
+			std::error_code ec;
+
+			wchar_t envSdk[MAX_PATH] = {};
+			const DWORD envLen = GetEnvironmentVariableW(L"HEXENGINE_SDK", envSdk, MAX_PATH);
+			if (envLen > 0 && envLen < MAX_PATH && fs::exists(fs::path(envSdk) / "HexEngine.props", ec))
+				return fs::path(envSdk);
+
+			wchar_t exePath[MAX_PATH] = {};
+			GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+			const fs::path exeDir = fs::path(exePath).parent_path();
+
+			if (fs::exists(exeDir / "SDK" / "HexEngine.props", ec))
+				return exeDir / "SDK";
+
+			const fs::path repoRoot = exeDir.parent_path().parent_path().parent_path();
+			if (!fs::exists(repoRoot / "HexEngine.props", ec))
+				LOG_WARN("HexEngine SDK not found (no SDK/HexEngine.props beside the editor, no repository HexEngine.props, HEXENGINE_SDK unset); generated projects will point at %s", repoRoot.string().c_str());
+			return repoRoot;
+		}
+	}
+
 	EditorUI::EditorUI()
 	{
 		g_pUIManager = this;
@@ -189,7 +221,7 @@ namespace HexEditor
 			ProjectGenerationParams params;
 			params.path = projectFolder / "Code";
 			params.projectName = projectName;
-			params.sdkPath = HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory().parent_path().parent_path().parent_path(); // this is....awful
+			params.sdkPath = ResolveSdkRoot();
 			params.nameSpace = std::string(namespaceName.begin(), namespaceName.end());
 			params.primaryScenePath = sceneFile->GetAbsolutePath();
 

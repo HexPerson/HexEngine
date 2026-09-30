@@ -162,7 +162,7 @@ def detect_msbuild_path() -> Path:
     return Path(candidates[0])
 
 
-def ensure_repo(dep: dict, frozen: bool, update: bool) -> Path:
+def ensure_repo(dep: dict, frozen: bool, update: bool, recursive: bool = False) -> Path:
     path = dep_path(dep)
     url = dep["git_url"]
     ref = dep.get("ref")
@@ -182,7 +182,24 @@ def ensure_repo(dep: dict, frozen: bool, update: bool) -> Path:
             run_git(["-C", str(path), "fetch", "--all", "--prune", "--force"])
             run_git(["-C", str(path), "checkout", ref])
 
+    if recursive:
+        # After the checkout, so submodules match the pinned superproject ref.
+        run_git(["-C", str(path), "submodule", "update", "--init", "--recursive"])
+
     return path
+
+
+def require_staged(ctx: "RuntimeContext", config: str, dep_name: str, *patterns: str) -> None:
+    """Fail loudly when a build handler staged nothing.
+
+    copy_glob() is silent when its pattern matches no files, so a build that
+    wrote its output somewhere unexpected used to "succeed" here and only fail
+    much later, as an LNK1181 in the engine solution build.
+    """
+    if not staged_lib_present(ctx, config, *patterns):
+        raise RuntimeError(
+            f"{dep_name} {config}: expected {', '.join(patterns)} in {ctx.libs_dir(config)} after the build, found none."
+        )
 
 
 def print_plan(manifest: dict) -> None:
@@ -336,6 +353,23 @@ def build_physx(ctx: RuntimeContext, dep: dict, config: str) -> None:
     if root is None:
         raise RuntimeError("PhysX layout missing expected buildtools/generate_projects files.")
 
+    # The upstream preset builds PhysX against the STATIC CRT (/MT), which (a)
+    # cannot link into the /MD PhysX plugin and (b) writes to
+    # bin/win.x86_64.vc143.mt/, not the .md folder staged below - so a fresh
+    # clone staged nothing. The legacy setup.py flipped this switch; a checkout
+    # that still built only worked because that edit was left in its tree.
+    preset = root / "buildtools" / "presets" / "public" / "vc17win64.xml"
+    preset_text = preset.read_text(encoding="utf-8")
+    patched = preset_text.replace(
+        '<cmakeSwitch name="NV_USE_STATIC_WINCRT" value="True"',
+        '<cmakeSwitch name="NV_USE_STATIC_WINCRT" value="False"',
+    )
+    if patched != preset_text:
+        preset.write_text(patched, encoding="utf-8")
+        print("Patched PhysX preset: NV_USE_STATIC_WINCRT -> False (DLL CRT)")
+    if 'name="NV_USE_STATIC_WINCRT" value="False"' not in patched:
+        raise RuntimeError(f"Could not set NV_USE_STATIC_WINCRT=False in {preset}; the preset format changed.")
+
     run(["cmd", "/c", "generate_projects.bat", "vc17win64"], cwd=root)
     sln = root / "compiler" / "vc17win64" / "PhysXSDK.sln"
     targets = [
@@ -360,6 +394,87 @@ def build_physx(ctx: RuntimeContext, dep: dict, config: str) -> None:
     bin_root = root / "bin" / "win.x86_64.vc143.md" / config.lower()
     copy_glob(str(bin_root / "*.lib"), ctx.libs_dir(config))
     copy_glob(str(bin_root / "*.dll"), ctx.bin_dir(config), allow_locked=True)
+    require_staged(ctx, config, "physx", "PhysX_64.lib", "PhysXFoundation_64.lib", "PhysXCommon_64.lib")
+
+
+def build_assimp(ctx: RuntimeContext, dep: dict, config: str) -> None:
+    """Static assimp + its bundled zlib, as HexEngine.AssimpPlugin links them.
+
+    Port of the legacy setup.py recipe: assimp-vc143-mt[d].lib and
+    zlibstatic[d].lib into Libs/x64/<Config>, plus the generated
+    assimp/config.h into Include/ (first on the plugin's include path).
+    """
+    repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    suffix = "d" if config == "Debug" else ""
+    assimp_lib = f"assimp-vc143-mt{suffix}.lib"
+    zlib_lib = f"zlibstatic{suffix}.lib"
+    config_h = ctx.repo_root / "Include" / "assimp" / "config.h"
+    if staged_lib_present(ctx, config, assimp_lib, zlib_lib) and config_h.exists():
+        print(f"[skip-build] assimp {config}: {assimp_lib} already staged")
+        return
+
+    build_dir = repo / "build"
+    mkdir(build_dir)
+    run(
+        [
+            "cmake", "-S", "..", "-G", ctx.generator, "-A", ctx.arch,
+            "-DASSIMP_BUILD_ASSIMP_TOOLS=OFF",
+            "-DASSIMP_BUILD_SAMPLES=OFF",
+            "-DASSIMP_BUILD_TESTS=OFF",
+            "-DBUILD_SHARED_LIBS=OFF",
+            "-DASSIMP_BUILD_ASSIMP_VIEW=OFF",
+            "-DASSIMP_NO_EXPORT=OFF",
+            "-DASSIMP_WARNINGS_AS_ERRORS=OFF",
+        ],
+        cwd=build_dir,
+    )
+    run([str(ctx.msbuild_path), str(build_dir / "ALL_BUILD.vcxproj"), f"/p:Configuration={config}", "/p:Platform=x64", "/m"])
+
+    copy_file(build_dir / "lib" / config / assimp_lib, ctx.libs_dir(config) / assimp_lib)
+    copy_file(build_dir / "contrib" / "zlib" / config / zlib_lib, ctx.libs_dir(config) / zlib_lib)
+    copy_file(build_dir / "include" / "assimp" / "config.h", config_h)
+    require_staged(ctx, config, "assimp", assimp_lib, zlib_lib)
+
+
+def build_nrd(ctx: RuntimeContext, dep: dict, config: str) -> None:
+    """Static NVIDIA Real-time Denoisers library (HexEngine.NRDPlugin).
+
+    Port of the legacy setup.py recipe. SPIR-V embedding (and ShaderMake's
+    search for a SPIR-V dxc) stays OFF - it needs the Vulkan SDK, which a
+    hosted runner doesn't have; the D3D paths use the Windows SDK compilers.
+    """
+    repo = ensure_repo(dep, ctx.frozen, ctx.update, recursive=True)
+    if staged_lib_present(ctx, config, "NRD.lib"):
+        print(f"[skip-build] nrd {config}: NRD.lib already staged")
+        return
+
+    build_dir = repo / "build"
+    mkdir(build_dir)
+    run(
+        [
+            "cmake", "-S", "..", "-G", ctx.generator, "-A", ctx.arch,
+            "-DNRD_STATIC_LIBRARY=ON",
+            "-DNRD_EMBEDS_SPIRV_SHADERS=OFF",
+            # ShaderMake otherwise hunts for the Vulkan SDK's SPIR-V dxc even with
+            # SPIR-V embedding off, and fails the configure without it.
+            "-DSHADERMAKE_FIND_DXC_SPIRV=OFF",
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded$<$<CONFIG:Debug>:Debug>DLL",
+        ],
+        cwd=build_dir,
+    )
+    run([str(ctx.msbuild_path), str(build_dir / "NRD.sln"), f"/p:Configuration={config}", "/p:Platform=x64", "/m"])
+
+    copy_file(repo / "_Bin" / config / "NRD.lib", ctx.libs_dir(config) / "NRD.lib")
+    require_staged(ctx, config, "nrd", "NRD.lib")
+
+
+def stage_hbaoplus(ctx: RuntimeContext, dep: dict, config: str) -> None:
+    """HBAO+ ships prebuilt (git-tracked) binaries; stage lib + runtime DLL."""
+    repo = ensure_repo(dep, ctx.frozen, ctx.update)
+    lib_dir = repo / "lib"
+    copy_file(lib_dir / "GFSDK_SSAO_D3D11.win64.lib", ctx.libs_dir(config) / "GFSDK_SSAO_D3D11.win64.lib")
+    copy_file(lib_dir / "GFSDK_SSAO_D3D11.win64.dll", ctx.bin_dir(config) / "GFSDK_SSAO_D3D11.win64.dll")
+    require_staged(ctx, config, "hbaoplus", "GFSDK_SSAO_D3D11.win64.lib")
 
 
 def build_shaderconductor(ctx: RuntimeContext, dep: dict, config: str) -> None:
@@ -421,7 +536,8 @@ def ensure_streamline(ctx: RuntimeContext, dep: dict) -> None:
     if lfs:
         env = git_env()
         env.pop("GIT_LFS_SKIP_SMUDGE", None)
-        run([lfs, "pull", "--include=lib/x64/*"], cwd=repo, env=env)
+        # lib/ for the link, bin/ for the runtime DLLs staged below.
+        run([lfs, "pull", "--include=lib/x64/*,bin/x64/*"], cwd=repo, env=env)
 
     required_lib = repo / "lib" / "x64" / "sl.interposer.lib"
     required_header = repo / "include" / "sl_helpers.h"
@@ -434,6 +550,35 @@ def ensure_streamline(ctx: RuntimeContext, dep: dict) -> None:
         head = stream.read(200)
     if b"version https://git-lfs.github.com/spec/v1" in head:
         raise RuntimeError(f"Streamline library unresolved git-lfs pointer: {required_lib}")
+
+    # Runtime DLLs: HexEngine.StreamlinePlugin loads <Bin>/sl.interposer.dll and
+    # Streamline resolves its feature plugins from the same folder. These used
+    # to be copied into Bin/x64/<Config>/Bin by hand.
+    for dll in STREAMLINE_RUNTIME_DLLS:
+        src = repo / "bin" / "x64" / dll
+        if not src.exists():
+            raise RuntimeError(f"Missing Streamline runtime DLL: {src}")
+        with src.open("rb") as stream:
+            if b"version https://git-lfs.github.com/spec/v1" in stream.read(200):
+                raise RuntimeError(f"Streamline runtime DLL is an unresolved git-lfs pointer: {src}")
+        for config in ("Debug", "Release"):
+            copy_file(src, ctx.bin_dir(config) / dll)
+
+
+# Streamline runtime set HexEngine uses: the interposer + common core, DLSS
+# super resolution / frame generation, DeepDVC and DirectSR, plus NVIDIA's
+# NGX feature DLLs they load.
+STREAMLINE_RUNTIME_DLLS = (
+    "sl.interposer.dll",
+    "sl.common.dll",
+    "sl.dlss.dll",
+    "sl.dlss_g.dll",
+    "sl.deepdvc.dll",
+    "sl.directsr.dll",
+    "nvngx_dlss.dll",
+    "nvngx_dlssg.dll",
+    "nvngx_deepdvc.dll",
+)
 
 
 def ensure_only(ctx: RuntimeContext, dep: dict, _: str) -> None:
@@ -506,6 +651,9 @@ def create_handlers() -> dict[str, Callable[[RuntimeContext, dict, str], None]]:
         "directxtex": build_directxtex,
         "brotli": build_brotli,
         "physx": build_physx,
+        "assimp": build_assimp,
+        "nrd": build_nrd,
+        "hbaoplus": stage_hbaoplus,
         "shaderconductor": build_shaderconductor,
         "streamline": lambda ctx, dep, cfg: ensure_streamline(ctx, dep),
         "nlohmann-json": stage_nlohmann_json,
@@ -585,6 +733,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # CI captures stdout as a pipe (block-buffered): without this our progress
+    # lines land after the child processes' output and hide which one failed.
+    sys.stdout.reconfigure(line_buffering=True)
     if not MANIFEST_PATH.exists():
         print(f"Dependency manifest not found: {MANIFEST_PATH}", file=sys.stderr)
         return 1

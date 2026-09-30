@@ -13,7 +13,8 @@
         "Libs/x64/<Config>/assimp-*.lib",
         "Libs/x64/<Config>/zlibstatic*.lib",
         "Include/assimp/config.h"
-      ]
+      ],
+      "required": true
     },
     {
       "name": "directxtk",
@@ -37,7 +38,8 @@
       "notes": "Recursive clone.",
       "legacy_stage_paths": [
         "Libs/x64/<Config>/NRD.lib"
-      ]
+      ],
+      "required": true
     },
     {
       "name": "physx",
@@ -58,10 +60,10 @@
       "path": "ThirdParty/shaderconductor",
       "git_url": "https://github.com/microsoft/ShaderConductor.git",
       "ref": "f18f7b5c370bae157a6b7377155f758f6441cfea",
-      "required": true,
-      "required_runtime_module": true,
+      "required": false,
+      "required_runtime_module": false,
       "build_system": "cmake",
-      "notes": "Builds ShaderConductor.lib.",
+      "notes": "No longer needed by the engine build: HexEngine.ShaderCompiler links the prebuilt vcpkg directx-dxc port. Kept for the opt-in shaderconductor probe presets.",
       "legacy_stage_paths": [
         "Libs/x64/<Config>/ShaderConductor.lib"
       ]
@@ -76,7 +78,8 @@
       "legacy_stage_paths": [
         "Libs/x64/<Config>/GFSDK_SSAO_D3D11.win64.lib",
         "Bin/x64/<Config>/Bin/GFSDK_SSAO_D3D11.win64.dll"
-      ]
+      ],
+      "required": true
     },
     {
       "name": "freetype",

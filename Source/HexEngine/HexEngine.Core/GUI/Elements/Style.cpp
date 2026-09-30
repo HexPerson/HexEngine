@@ -71,7 +71,9 @@ namespace HexEngine
 
 		fontOpts.AddCharacterSet(FontImportOptions::EnglishCharacterSets);
 
-		style.font = IFontResource::Create("EngineData.Fonts/Arial/arial.ttf", &fontOpts);
+		// Inter (SIL OFL, redistributable). Arial, the previous default, is a
+		// Microsoft font that cannot ship in a public release.
+		style.font = IFontResource::Create("EngineData.Fonts/Inter/Inter-Regular.ttf", &fontOpts);
 
 #else
 

@@ -1,0 +1,34 @@
+{
+  "properties": {
+    "diffuseColour": [
+      1,
+      1,
+      1,
+      1.0
+    ],
+    "emissiveColour": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "hasTransparency": 0,
+    "isWater": 0,
+    "shininess": 10.0,
+    "shininessStrength": 0.4000000059604645
+  },
+  "renderer": {
+    "blendState": 0,
+    "cullingMode": 2,
+    "depthState": 0
+  },
+  "shaders": {
+    "shadowmap": null,
+    "standard": "EngineData.Shaders/SkySphere.hcs"
+  },
+  "textures": {
+    "Albedo": "EngineData.Textures/white.png",
+	"Normal": "EngineData.Textures/LDR_RGBA_0.png"
+  }
+}
+
