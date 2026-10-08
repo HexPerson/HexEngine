@@ -26,6 +26,25 @@
 		float2 texcoord		: TEXCOORD0;	
 	};
 
+	// Pre-skinned characters (GpuSkinning.cpp). The vertex buffer being drawn is also
+	// bound here as raw bytes, so ANY mesh shader - not just DefaultAnimated - can read
+	// the skinned vertex's LAST-frame position (parked in the AnimatedMeshVertex
+	// BLENDINDICES slot) by SV_VertexID and give deformation real motion vectors.
+	// Read only under OBJECT_FLAGS_PRESKINNED. t40 sits inside the D3D12 root
+	// signature's SRV range (t0-t63), so declaring it is harmless there.
+	ByteAddressBuffer g_preSkinnedVertices : register(t40);
+	static const uint PRESKINNED_VERTEX_STRIDE = 92;			// sizeof(AnimatedMeshVertex)
+	static const uint PRESKINNED_PREV_POSITION_OFFSET = 60;	// AnimatedMeshVertex::_boneIds
+
+	// Object-space position this vertex had last frame (for previousPositionUnjittered).
+	float4 PreviousLocalPosition(float4 currentLocalPosition, uint vertexId)
+	{
+		[branch]
+		if ((g_objectFlags & OBJECT_FLAGS_PRESKINNED) != 0)
+			return float4(asfloat(g_preSkinnedVertices.Load3(vertexId * PRESKINNED_VERTEX_STRIDE + PRESKINNED_PREV_POSITION_OFFSET)), 1.0f);
+		return currentLocalPosition;
+	}
+
 	struct AnimatedMeshVertexInput
 	{
 		float4 position 	: POSITION;

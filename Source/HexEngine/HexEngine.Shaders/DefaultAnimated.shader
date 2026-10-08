@@ -31,6 +31,7 @@
 		output.cullDistance = 0.5f;
 
 		matrix worldMatrix, normalMatrix, worldPrev;
+		float4 prevLocalPosition = input.position;
 
 		if ((g_objectFlags & OBJECT_FLAGS_HAS_ANIMATION) != 0)
 		{
@@ -59,6 +60,12 @@
 			worldMatrix = instance.world;
 			normalMatrix = instance.worldInverseTranspose;
 			worldPrev = instance.worldPrev;
+
+			// Already skinned by the GpuSkinning compute pass. It parks last frame's
+			// skinned position in the bone-id slot, so deformation still produces
+			// motion vectors (TAA/DLSS) without the bone palette.
+			if ((g_objectFlags & OBJECT_FLAGS_PRESKINNED) != 0)
+				prevLocalPosition = float4(input.boneIds.xyz, 1.0f);
 		}
 
 		output.position = mul(input.position, worldMatrix);
@@ -68,7 +75,7 @@
 
 		// Calculate velocity
 		float4x4 prevFrame_modelMatrix = worldPrev;
-		float4 prevFrame_worldPos = mul(input.position, prevFrame_modelMatrix);
+		float4 prevFrame_worldPos = mul(prevLocalPosition, prevFrame_modelMatrix);
 		float4 prevFrame_clipPos = mul(prevFrame_worldPos, g_viewProjectionMatrixPrev);
 
 		output.previousPositionUnjittered = prevFrame_clipPos;
@@ -150,6 +157,7 @@
 		float4 colorStrength;
 		float4 dirCone;
 		float4 params;
+		float4 shape;
 	};
 	StructuredBuffer<ClFwdLight> g_clfLights : register(t27);
 	StructuredBuffer<uint>       g_clfCounts : register(t28);
@@ -218,9 +226,18 @@
 					if (clDistSq >= clRadius * clRadius)
 						continue;
 					const float clDist = sqrt(max(1e-6f, clDistSq));
+					// Area lights (tube / rect) - PBRutils' ShadeAreaLight; the
+					// bounding-radius reject above already applied.
+					if (cl.params.y > 1.5f)
+					{
+						accum += ShadeAreaLight(worldPos, worldNormal, baseColour, metalness, roughness,
+							cl.colorStrength.rgb * cl.colorStrength.w, cl.params.y,
+							cl.posRadius.xyz, cl.dirCone, cl.shape, cl.params.x);
+						continue;
+					}
 					const float3 clL = clToLight / clDist;
 					float coneAtten = 1.0f;
-					if (cl.params.y > 0.5f)
+					if (abs(cl.params.y - 1.0f) < 0.5f)
 					{
 						const float cosOuter = cl.dirCone.w;
 						const float cosInner = max(cl.params.x, cosOuter + 1e-4f);

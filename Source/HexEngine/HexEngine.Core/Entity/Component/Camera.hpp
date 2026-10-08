@@ -98,6 +98,19 @@ namespace HexEngine
 		void EnableDLSS(bool enable);
 		bool IsDLSSEnabled() const;
 
+		// Temporal upscaling through the IUpscalerProvider plugin (FSR 2). Renders at
+		// the quality preset's internal size and upscales to the viewport. Mutually
+		// exclusive with DLSS - enabling either turns the other off.
+		void EnableFSR(bool enable);
+		bool IsFSREnabled() const;
+		void SetFSRQuality(int32_t quality);	// UpscalerQuality
+		int32_t GetFSRQuality() const { return _fsrQuality; }
+
+		// Any upscaler active: GetViewport() is the internal render size and
+		// GetDisplayViewport() the output size.
+		bool IsUpscalingEnabled() const { return IsDLSSEnabled() || IsFSREnabled(); }
+		const math::Viewport& GetDisplayViewport() const { return _viewport; }
+
 		float GetYaw();
 		float GetPitch();
 		float GetRoll();
@@ -227,6 +240,11 @@ namespace HexEngine
 
 		bool _dlssEnabled = false;
 		bool _dlssValueChanged = false;
+
+		// FSR shares _dlssViewport as the internal render viewport.
+		bool _fsrEnabled = false;
+		bool _fsrValueChanged = false;
+		int32_t _fsrQuality = 1;	// UpscalerQuality::Quality
 
 		CameraEffect _effects = CameraEffect::None;
 

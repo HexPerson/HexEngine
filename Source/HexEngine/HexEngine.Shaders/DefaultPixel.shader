@@ -99,7 +99,8 @@
 		float4 posRadius;
 		float4 colorStrength;
 		float4 dirCone;   // spot: xyz dir, w cos(outer)
-		float4 params;    // x cos(inner), y type (0 point, 1 spot), z shadowed
+		float4 params;    // x cos(inner) | area range, y type (0 point, 1 spot, 2 tube, 3 rect), z shadowed
+		float4 shape;     // area lights - see PBRutils' packing doc
 	};
 	StructuredBuffer<ClFwdLight> g_clfLights : register(t27);
 	StructuredBuffer<uint>       g_clfCounts : register(t28);
@@ -177,9 +178,18 @@
 					if (clDistSq >= clRadius * clRadius)
 						continue;
 					const float clDist = sqrt(max(1e-6f, clDistSq));
+					// Area lights (tube / rect) - PBRutils' ShadeAreaLight; the
+					// bounding-radius reject above already applied.
+					if (cl.params.y > 1.5f)
+					{
+						accum += ShadeAreaLight(worldPos, worldNormal, baseColour, metalness, roughness,
+							cl.colorStrength.rgb * cl.colorStrength.w, cl.params.y,
+							cl.posRadius.xyz, cl.dirCone, cl.shape, cl.params.x);
+						continue;
+					}
 					const float3 clL = clToLight / clDist;
 					float coneAtten = 1.0f;
-					if (cl.params.y > 0.5f)
+					if (abs(cl.params.y - 1.0f) < 0.5f)
 					{
 						const float cosOuter = cl.dirCone.w;
 						const float cosInner = max(cl.params.x, cosOuter + 1e-4f);

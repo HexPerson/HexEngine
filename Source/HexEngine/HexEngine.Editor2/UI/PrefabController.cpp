@@ -4,6 +4,7 @@
 #include "Actions/Inspector.hpp"
 #include "Actions/Explorer.hpp"
 #include "Elements/EntityList.hpp"
+#include "EditorTransactions.hpp"
 
 #include <HexEngine.Core\FileSystem\DiskFile.hpp>
 #include <HexEngine.Core\FileSystem\PrefabLoader.hpp>
@@ -15,6 +16,12 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <cwctype>
+#include <cctype>
+#include <chrono>
+#include <HexEngine.Core\GUI\Elements\Button.hpp>
+#include <HexEngine.Core\GUI\Elements\Checkbox.hpp>
+#include <HexEngine.Core\GUI\Elements\Dialog.hpp>
+#include <HexEngine.Core\GUI\Elements\ScrollView.hpp>
 
 namespace HexEditor
 {
@@ -1339,6 +1346,7 @@ namespace HexEditor
 		_inspector = inspector;
 		_entityList = entityList;
 		_explorer = explorer;
+		LoadEditorPrefs();
 	}
 
 	void PrefabController::RefreshPrefabAssetPreview(const fs::path& prefabPath)
@@ -1492,6 +1500,8 @@ namespace HexEditor
 		}
 
 		clonedEntity->SetPrefabNodeId(sourceEntity->EnsurePrefabNodeId());
+		if (isRootInstance && !prefabSourcePath.empty())
+			clonedEntity->SetPrefabRevision(HexEngine::PrefabLoader::ComputePrefabRevision(prefabSourcePath));
 
 		for (auto* child : sourceEntity->GetChildren())
 		{
@@ -1533,134 +1543,1099 @@ namespace HexEditor
 		}
 	}
 
-	bool PrefabController::PropagateAppliedPrefabToInstances(
-		const fs::path& prefabPath,
-		HexEngine::Entity* appliedSourceInstance,
-		HexEngine::Entity** outReplacementForAppliedInstance)
+	// =====================================================================
+	// Prefab instance sync
+	//
+	// When a prefab asset changes, instances are brought up to date IN PLACE:
+	// every instance entity is matched to its prefab entity (prefab node id,
+	// then name with the scene's numeric de-dup suffix ignored), its components
+	// are rebuilt from the prefab's plus the instance's recorded override
+	// patches, and only components whose data actually changed are
+	// re-deserialized. Children the prefab added are cloned in, children it
+	// removed are destroyed; children and components added in the scene (not
+	// from the prefab) are left alone. Entities keep their identity, so
+	// references, selection and undo history stay valid. The previous
+	// implementation destroyed and re-cloned each instance.
+	//
+	// Instance roots carry the asset revision they were built from
+	// (Entity::GetPrefabRevision, PrefabLoader::ComputePrefabRevision);
+	// a mismatch marks them out of date.
+	// =====================================================================
+	namespace
 	{
-		if (outReplacementForAppliedInstance != nullptr)
-			*outReplacementForAppliedInstance = nullptr;
+		constexpr const char* kSyncPolicyPrefKey = "prefabInstanceSync";
 
-		if (prefabPath.empty())
-			return false;
-
-		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
-		if (sceneManager == nullptr)
-			return false;
-
-		auto prefabScene = sceneManager->CreateEmptyScene(false, nullptr, false);
-		if (!HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(prefabPath, prefabScene))
+		fs::path GetEditorPrefsPath()
 		{
-			LOG_WARN("Failed to reload prefab '%s' for instance propagation.", prefabPath.string().c_str());
+			wchar_t* localAppData = nullptr;
+			size_t length = 0;
+			fs::path result;
+			if (_wdupenv_s(&localAppData, &length, L"LOCALAPPDATA") == 0 && localAppData != nullptr)
+				result = fs::path(localAppData) / L"HexEngine" / L"EditorPrefs.json";
+			free(localAppData);
+			return result;
+		}
+
+		json ReadEditorPrefsJson()
+		{
+			json prefs = json::object();
+			const fs::path path = GetEditorPrefsPath();
+			if (path.empty())
+				return prefs;
+
+			std::ifstream input(path, std::ios::binary);
+			if (!input)
+				return prefs;
+
+			try
+			{
+				input >> prefs;
+			}
+			catch (const std::exception&)
+			{
+				prefs = json::object();
+			}
+			return prefs.is_object() ? prefs : json::object();
+		}
+
+		std::string StripTrailingDigits(const std::string& name)
+		{
+			size_t end = name.size();
+			while (end > 0 && std::isdigit(static_cast<unsigned char>(name[end - 1])))
+				--end;
+			return end == 0 ? name : name.substr(0, end);
+		}
+
+		HexEngine::Scene* FindLoadedSceneByName(const std::wstring& name)
+		{
+			auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+			if (sceneManager == nullptr)
+				return nullptr;
+
+			for (const auto& scene : sceneManager->GetAllScenes())
+			{
+				if (scene != nullptr && scene->GetName() == name)
+					return scene.get();
+			}
+			return nullptr;
+		}
+
+		// One JSON-patch op, tolerant of a prefab that changed underneath it: a
+		// replace of a field the prefab no longer writes becomes an add.
+		bool ApplySinglePatchOp(json& target, const std::string& op, const std::string& path, const json& value)
+		{
+			json patchOp = json::object();
+			patchOp["op"] = op;
+			patchOp["path"] = path;
+			if (op != "remove")
+				patchOp["value"] = value;
+
+			try
+			{
+				target = target.patch(json::array({ patchOp }));
+				return true;
+			}
+			catch (const std::exception&)
+			{
+			}
+
+			if (op == "replace")
+			{
+				patchOp["op"] = "add";
+				try
+				{
+					target = target.patch(json::array({ patchOp }));
+					return true;
+				}
+				catch (const std::exception&)
+				{
+				}
+			}
 			return false;
 		}
 
-		struct InstanceRefreshTarget
+		// The prefab's component array with this instance's overrides re-applied.
+		//
+		// Per-component patches apply by component name. Component-array patches
+		// ("__components__", recorded when the instance added/removed components)
+		// are index based, and the prefab may have reordered its components since,
+		// so indices are mapped to names through the instance's own array (the
+		// order the patch was recorded against): a whole-component add/replace is
+		// upserted by its "name", a sub-path op is redirected to the named
+		// component, and a removal keeps absent whichever prefab components the
+		// instance doesn't have.
+		json BuildDesiredInstanceComponents(const json& sourceComponents, const json& currentComponents, HexEngine::Entity* instance, bool isRoot)
 		{
-			HexEngine::Entity* instanceRoot = nullptr;
-			math::Vector3 rootPosition = math::Vector3::Zero;
-			math::Quaternion rootRotation = math::Quaternion::Identity;
-			math::Vector3 rootScale = math::Vector3(1.0f);
+			json desired = sourceComponents.is_array() ? sourceComponents : json::array();
+			const auto& patches = instance->GetPrefabOverridePatches();
+			bool instanceRemovedComponents = false;
+			size_t skipped = 0;
+
+			for (const auto& patch : patches)
+			{
+				if (patch.componentName.empty() || patch.path.empty() || patch.op.empty())
+					continue;
+
+				if (patch.componentName != kPrefabOverrideComponentArrayPatchTarget)
+				{
+					auto* target = FindMutableComponentEntryByName(desired, patch.componentName);
+					if (target == nullptr || !ApplySinglePatchOp(*target, patch.op, patch.path, patch.value))
+						++skipped;
+					continue;
+				}
+
+				const size_t slash = patch.path.find('/', 1);
+				const std::string indexText = patch.path.substr(1, slash == std::string::npos ? std::string::npos : slash - 1);
+				const std::string subPath = slash == std::string::npos ? std::string() : patch.path.substr(slash);
+
+				if (subPath.empty())
+				{
+					if (patch.op == "remove")
+					{
+						instanceRemovedComponents = true;
+						continue;
+					}
+
+					const std::string name = patch.value.is_object() ? patch.value.value("name", std::string()) : std::string();
+					if (name.empty())
+					{
+						++skipped;
+						continue;
+					}
+
+					if (auto* existing = FindMutableComponentEntryByName(desired, name); existing != nullptr)
+						*existing = patch.value;
+					else
+						desired.push_back(patch.value);
+					continue;
+				}
+
+				const bool numeric = !indexText.empty() &&
+					std::all_of(indexText.begin(), indexText.end(), [](char c) { return std::isdigit(static_cast<unsigned char>(c)) != 0; });
+				std::string name;
+				if (numeric && currentComponents.is_array())
+				{
+					const size_t index = static_cast<size_t>(std::stoull(indexText));
+					if (index < currentComponents.size() && currentComponents[index].is_object())
+						name = currentComponents[index].value("name", std::string());
+				}
+
+				auto* target = name.empty() ? nullptr : FindMutableComponentEntryByName(desired, name);
+				if (target == nullptr || !ApplySinglePatchOp(*target, patch.op, subPath, patch.value))
+					++skipped;
+			}
+
+			if (instanceRemovedComponents)
+			{
+				json kept = json::array();
+				for (const auto& component : desired)
+				{
+					const std::string name = component.is_object() ? component.value("name", std::string()) : std::string();
+					if (name == HexEngine::Transform::_GetComponentName() || FindComponentEntryByName(currentComponents, name) != nullptr)
+						kept.push_back(component);
+				}
+				desired = std::move(kept);
+			}
+
+			// Legacy instances that only carry coarse override keys: keep their
+			// current values for exactly those properties.
+			const auto& coarse = instance->GetPrefabPropertyOverrides();
+			if (patches.empty() && !coarse.empty())
+			{
+				auto* desiredTransform = FindMutableComponentEntryByName(desired, HexEngine::Transform::_GetComponentName());
+				const auto* currentTransform = FindComponentEntryByName(currentComponents, HexEngine::Transform::_GetComponentName());
+				const std::pair<const char*, const char*> transformKeys[] = {
+					{ kPrefabOverrideTransformPosition, "_position" },
+					{ kPrefabOverrideTransformRotation, "_rotation" },
+					{ kPrefabOverrideTransformScale, "_scale" } };
+				if (desiredTransform != nullptr && currentTransform != nullptr)
+				{
+					for (const auto& [overrideKey, field] : transformKeys)
+					{
+						if (coarse.count(overrideKey) != 0 && currentTransform->contains(field))
+							(*desiredTransform)[field] = (*currentTransform)[field];
+					}
+				}
+
+				const bool staticMeshOverridden = std::any_of(coarse.begin(), coarse.end(),
+					[](const std::string& key) { return key.rfind("staticMesh.", 0) == 0; });
+				if (staticMeshOverridden)
+				{
+					const char* meshName = HexEngine::StaticMeshComponent::_GetComponentName();
+					auto* desiredMesh = FindMutableComponentEntryByName(desired, meshName);
+					const auto* currentMesh = FindComponentEntryByName(currentComponents, meshName);
+					if (desiredMesh != nullptr && currentMesh != nullptr)
+						*desiredMesh = *currentMesh;
+				}
+			}
+
+			// The root's placement belongs to the instance, not the prefab.
+			if (isRoot)
+			{
+				auto* desiredTransform = FindMutableComponentEntryByName(desired, HexEngine::Transform::_GetComponentName());
+				const auto* currentTransform = FindComponentEntryByName(currentComponents, HexEngine::Transform::_GetComponentName());
+				if (desiredTransform != nullptr && currentTransform != nullptr)
+				{
+					for (const char* field : { "_position", "_rotation", "_scale" })
+					{
+						if (currentTransform->contains(field))
+							(*desiredTransform)[field] = (*currentTransform)[field];
+					}
+				}
+			}
+
+			if (skipped > 0)
+			{
+				LOG_WARN("Prefab update: %zu override(s) on '%s' no longer match the prefab and were dropped.",
+					skipped, instance->GetName().c_str());
+			}
+			return desired;
+		}
+
+		// Brings an entity's components to `desired`: removes the ones it lists no
+		// longer (never the Transform), adds new ones, and deserializes only the
+		// components that are new or whose data differs from `current`.
+		void MergeComponentsIntoEntity(HexEngine::Entity* entity, const json& desired, const json& current)
+		{
+			HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+
+			std::unordered_set<std::string> desiredNames;
+			for (const auto& component : desired)
+			{
+				if (component.is_object())
+					desiredNames.insert(component.value("name", std::string()));
+			}
+
+			const auto existing = entity->GetAllComponents();
+			for (auto* component : existing)
+			{
+				if (component == nullptr || component->GetComponentId() == HexEngine::Transform::_GetComponentId())
+					continue;
+				if (desiredNames.count(component->GetComponentName()) == 0)
+					entity->RemoveComponent(component);
+			}
+
+			std::unordered_set<std::string> added;
+			for (const auto& component : desired)
+			{
+				const std::string name = component.is_object() ? component.value("name", std::string()) : std::string();
+				if (name.empty() || entity->GetComponentByClassName(name) != nullptr)
+					continue;
+
+				auto* cls = HexEngine::g_pEnv->_classRegistry->Find(name);
+				if (cls == nullptr)
+				{
+					LOG_WARN("Prefab update could not resolve component class '%s' on '%s'.", name.c_str(), entity->GetName().c_str());
+					continue;
+				}
+
+				auto* created = cls->newInstanceFn(entity);
+				if (created == nullptr)
+					continue;
+				entity->AddComponent(created);
+				added.insert(name);
+			}
+
+			const auto needsDeserialize = [&](const json& component)
+			{
+				const std::string name = component.value("name", std::string());
+				if (added.count(name) != 0)
+					return true;
+				const auto* currentComponent = FindComponentEntryByName(current, name);
+				return currentComponent == nullptr || *currentComponent != component;
+			};
+
+			// Transform first so dependent components see the final placement.
+			for (int pass = 0; pass < 2; ++pass)
+			{
+				for (const auto& component : desired)
+				{
+					if (!component.is_object())
+						continue;
+
+					auto* target = entity->GetComponentByClassName(component.value("name", std::string()));
+					if (target == nullptr)
+						continue;
+
+					const bool isTransform = target->GetComponentId() == HexEngine::Transform::_GetComponentId();
+					if ((pass == 0) != isTransform || !needsDeserialize(component))
+						continue;
+
+					json data = component;
+					target->Deserialize(data, &serializer);
+				}
+			}
+		}
+
+		bool CaptureInstanceSnapshot(HexEngine::Entity* root, Detail::EntityHierarchySnapshot& out)
+		{
+			if (root == nullptr || root->GetScene() == nullptr)
+				return false;
+			out = {};
+			out.sceneName = root->GetScene()->GetName();
+			out.rootEntityName = root->GetName();
+			return Detail::CaptureEntityHierarchyRecursive(root, out);
+		}
+
+		// Puts an instance hierarchy back to `target` without recreating entities
+		// that still exist: `other` is the state being left, whose extra entities
+		// (children the sync added) are destroyed.
+		bool ApplyInstanceSnapshotInPlace(const Detail::EntityHierarchySnapshot& target, const Detail::EntityHierarchySnapshot& other)
+		{
+			auto* scene = FindLoadedSceneByName(target.sceneName);
+			if (scene == nullptr)
+				return false;
+
+			std::unordered_set<std::string> targetNames;
+			for (const auto& snapshot : target.entities)
+				targetNames.insert(snapshot.entityName);
+
+			for (auto it = other.entities.rbegin(); it != other.entities.rend(); ++it)
+			{
+				if (targetNames.count(it->entityName) != 0)
+					continue;
+				if (auto* entity = scene->GetEntityByName(it->entityName); entity != nullptr && !entity->IsPendingDeletion())
+					scene->DestroyEntity(entity);
+			}
+
+			HexEngine::JsonFile serializer(fs::path(), std::ios::in);
+			for (const auto& snapshot : target.entities)
+			{
+				if (scene->GetEntityByName(snapshot.entityName) != nullptr)
+					continue;
+				json data = snapshot.entityData;
+				if (HexEngine::Entity::LoadFromFile(data, snapshot.entityName, scene, &serializer) == nullptr)
+					return false;
+			}
+
+			for (const auto& snapshot : target.entities)
+			{
+				if (snapshot.parentEntityName.empty())
+					continue;
+				auto* entity = scene->GetEntityByName(snapshot.entityName);
+				auto* parent = scene->GetEntityByName(snapshot.parentEntityName);
+				if (entity != nullptr && parent != nullptr && entity->GetParent() != parent)
+					entity->SetParent(parent, false);
+			}
+
+			const uint32_t transformMask = 1u << HexEngine::Transform::_GetComponentId();
+			for (const auto& snapshot : target.entities)
+			{
+				if (auto* entity = scene->GetEntityByName(snapshot.entityName); entity != nullptr)
+				{
+					json data = snapshot.entityData;
+					entity->Deserialize(data, &serializer, transformMask);
+				}
+			}
+
+			for (const auto& snapshot : target.entities)
+			{
+				auto* entity = scene->GetEntityByName(snapshot.entityName);
+				if (entity == nullptr)
+					continue;
+
+				json data = snapshot.entityData;
+				entity->Deserialize(data, &serializer);
+
+				std::unordered_set<std::string> wanted;
+				if (const auto it = snapshot.entityData.find("components"); it != snapshot.entityData.end() && it->is_array())
+				{
+					for (const auto& component : *it)
+					{
+						if (component.is_object())
+							wanted.insert(component.value("name", std::string()));
+					}
+				}
+				const auto existing = entity->GetAllComponents();
+				for (auto* component : existing)
+				{
+					if (component != nullptr && component->GetComponentId() != HexEngine::Transform::_GetComponentId() &&
+						wanted.count(component->GetComponentName()) == 0)
+					{
+						entity->RemoveComponent(component);
+					}
+				}
+			}
+
+			scene->ForceRebuildPVS();
+			return true;
+		}
+
+		class PrefabInstanceSyncTransaction final : public IEditorTransaction
+		{
+		public:
+			struct Item
+			{
+				Detail::EntityHierarchySnapshot before;
+				Detail::EntityHierarchySnapshot after;
+			};
+
+			void Add(Item&& item) { _items.push_back(std::move(item)); }
+			bool Empty() const { return _items.empty(); }
+
+			virtual bool Undo() override
+			{
+				bool ok = true;
+				for (auto it = _items.rbegin(); it != _items.rend(); ++it)
+					ok = ApplyInstanceSnapshotInPlace(it->before, it->after) && ok;
+				return ok;
+			}
+
+			virtual bool Redo() override
+			{
+				bool ok = true;
+				for (auto& item : _items)
+					ok = ApplyInstanceSnapshotInPlace(item.after, item.before) && ok;
+				return ok;
+			}
+
+			virtual const char* GetLabel() const override { return "Update Prefab Instances"; }
+
+		private:
+			std::vector<Item> _items;
 		};
 
-		std::vector<InstanceRefreshTarget> targets;
+		// "N prefab instances are out of date" with a checklist.
+		class PrefabInstanceSyncDialog final : public HexEngine::Dialog
+		{
+		public:
+			struct Row
+			{
+				std::wstring sceneName;
+				std::string entityName;
+				std::wstring label;
+			};
+
+			enum Action : int32_t { Skip = 0, UpdateAll = 1, UpdateSelected = 2 };
+			// `dialog` identifies which dialog closed (a replaced one never reports).
+			using OnClosed = std::function<void(const void* dialog, int32_t action, const std::vector<Row>& chosen, bool remember)>;
+
+			static constexpr int32_t kWidth = 600;
+			static constexpr int32_t kHeight = 440;
+
+			PrefabInstanceSyncDialog(const std::wstring& message, std::vector<Row> rows, OnClosed onClosed) :
+				Dialog(HexEngine::g_pEnv->GetUIManager().GetRootElement(),
+					HexEngine::Point::GetScreenCenterWithOffset(-kWidth / 2, -kHeight / 2),
+					HexEngine::Point(kWidth, kHeight),
+					L"Prefab Changed"),
+				_message(message),
+				_rows(std::move(rows)),
+				_checked(new bool[std::max<size_t>(_rows.size(), 1)]),
+				_onClosed(std::move(onClosed))
+			{
+				for (size_t i = 0; i < _rows.size(); ++i)
+					_checked[i] = true;
+
+				auto* scroll = new HexEngine::ScrollView(this, HexEngine::Point(10, 46), HexEngine::Point(kWidth - 20, kHeight - 46 - 76));
+				int32_t y = 2;
+				for (size_t i = 0; i < _rows.size(); ++i)
+				{
+					new HexEngine::Checkbox(scroll->GetContentRoot(), HexEngine::Point(4, y), HexEngine::Point(kWidth - 48, 18), _rows[i].label, &_checked[i]);
+					y += 20;
+				}
+				scroll->SetManualContentHeight(y + 4);
+
+				new HexEngine::Checkbox(this, HexEngine::Point(10, kHeight - 64), HexEngine::Point(330, 18),
+					L"Remember my choice (Update all / Skip)", &_remember);
+
+				new HexEngine::Button(this, HexEngine::Point(kWidth - 384, kHeight - 38), HexEngine::Point(110, 24), L"Skip",
+					[this](HexEngine::Button*) { Finish(Skip); return true; });
+				new HexEngine::Button(this, HexEngine::Point(kWidth - 266, kHeight - 38), HexEngine::Point(126, 24), L"Update selected",
+					[this](HexEngine::Button*) { Finish(UpdateSelected); return true; });
+				auto* updateAll = new HexEngine::Button(this, HexEngine::Point(kWidth - 132, kHeight - 38), HexEngine::Point(120, 24), L"Update all",
+					[this](HexEngine::Button*) { Finish(UpdateAll); return true; });
+				updateAll->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(30, 180, 90, 255)));
+			}
+
+			virtual bool OnInputEvent(HexEngine::InputEvent event, HexEngine::InputData* data) override
+			{
+				const bool handled = Dialog::OnInputEvent(event, data);
+				// Closed with the title-bar X: same as Skip, without remembering.
+				if (_wantsDeletion && !_finished)
+				{
+					_finished = true;
+					if (_onClosed)
+						_onClosed(this, Skip, {}, false);
+				}
+				return handled;
+			}
+
+			virtual void Render(HexEngine::GuiRenderer* renderer, uint32_t w, uint32_t h) override
+			{
+				Dialog::Render(renderer, w, h);
+				const auto position = GetAbsolutePosition();
+				renderer->PrintText(renderer->_style.font.get(), (uint8_t)HexEngine::Style::FontSize::Tiny,
+					position.x + 12, position.y + 10, renderer->_style.text_regular, HexEngine::FontAlign::None, _message);
+			}
+
+		private:
+			void Finish(int32_t action)
+			{
+				if (_finished)
+					return;
+				_finished = true;
+
+				std::vector<Row> chosen;
+				for (size_t i = 0; i < _rows.size(); ++i)
+				{
+					if (action == UpdateAll || (action == UpdateSelected && _checked[i]))
+						chosen.push_back(_rows[i]);
+				}
+
+				auto onClosed = _onClosed;
+				const bool remember = _remember && action != UpdateSelected;
+				const void* self = this;
+				DeleteMe();	// deferred - safe to keep using locals
+				if (onClosed)
+					onClosed(self, action, chosen, remember);
+			}
+
+			std::wstring _message;
+			std::vector<Row> _rows;
+			std::unique_ptr<bool[]> _checked;
+			bool _remember = false;
+			bool _finished = false;
+			OnClosed _onClosed;
+		};
+	}
+
+	std::string PrefabController::GetCurrentPrefabRevision(const fs::path& prefabPath) const
+	{
+		if (prefabPath.empty())
+			return std::string();
+
+		// The entity list asks once per row on every refresh; the revision itself
+		// is cached by file size + write time, this just skips the stat calls.
+		const auto now = std::chrono::steady_clock::now();
+		const std::wstring key = prefabPath.wstring();
+		if (auto it = _revisionMemo.find(key); it != _revisionMemo.end() && now - it->second.first < std::chrono::milliseconds(500))
+			return it->second.second;
+
+		std::string revision = HexEngine::PrefabLoader::ComputePrefabRevision(prefabPath);
+		_revisionMemo[key] = { now, revision };
+		return revision;
+	}
+
+	bool PrefabController::IsSceneEligibleForInstanceSync(const HexEngine::Scene* scene) const
+	{
+		if (scene == nullptr)
+			return false;
+		// The prefab stage holds the prefab's own entities, and utility scenes
+		// (icon renders) aren't project content.
+		if (_prefabStage.active && _prefabStage.stageScene.get() == scene)
+			return false;
+		return !HEX_HASFLAG(const_cast<HexEngine::Scene*>(scene)->GetFlags(), HexEngine::SceneFlags::Utility);	// GetFlags isn't const
+	}
+
+	bool PrefabController::IsPrefabInstanceOutOfDate(HexEngine::Entity* entity) const
+	{
+		auto* root = ResolvePrefabInstanceRootEntity(entity);
+		if (root == nullptr || root->GetPrefabRevision().empty() || !IsSceneEligibleForInstanceSync(root->GetScene()))
+			return false;
+
+		const std::string current = GetCurrentPrefabRevision(root->GetPrefabSourcePath());
+		return !current.empty() && current != root->GetPrefabRevision();
+	}
+
+	std::vector<HexEngine::Entity*> PrefabController::CollectPrefabInstanceRoots(
+		const fs::path& prefabPath, bool outOfDateOnly, bool unknownCountsAsOutOfDate) const
+	{
+		std::vector<HexEngine::Entity*> roots;
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+			return roots;
+
+		// Does an instance of `instancePath` depend on `prefabPath`? Itself, or a
+		// variant whose base chain reaches it. Memoised per distinct source path.
+		std::unordered_map<std::wstring, bool> dependsMemo;
+		const auto dependsOnChanged = [&](const fs::path& instancePath)
+		{
+			if (prefabPath.empty())
+				return true;
+			const std::wstring key = instancePath.wstring();
+			if (auto it = dependsMemo.find(key); it != dependsMemo.end())
+				return it->second;
+
+			bool depends = false;
+			fs::path current = instancePath;
+			for (int depth = 0; depth < 16 && !current.empty() && !depends; ++depth)
+			{
+				if (ArePrefabPathsEquivalent(current, prefabPath))
+				{
+					depends = true;
+					break;
+				}
+				VariantAssetData variant;
+				if (!LoadVariantAssetData(current, variant))
+					break;
+				current = variant.basePrefabAbsolutePath;
+			}
+			dependsMemo[key] = depends;
+			return depends;
+		};
+
 		for (const auto& scene : sceneManager->GetAllScenes())
 		{
-			if (scene == nullptr)
+			if (!IsSceneEligibleForInstanceSync(scene.get()))
 				continue;
 
 			for (const auto& bySignature : scene->GetEntities())
 			{
 				for (auto* entity : bySignature.second)
 				{
-					if (entity == nullptr || entity->IsPendingDeletion())
+					if (entity == nullptr || entity->IsPendingDeletion() || !entity->IsPrefabInstanceRoot())
+						continue;
+					if (!dependsOnChanged(entity->GetPrefabSourcePath()))
 						continue;
 
-					if (!entity->IsPrefabInstanceRoot() || !ArePrefabPathsEquivalent(entity->GetPrefabSourcePath(), prefabPath))
-						continue;
-
-					const bool isAppliedSource = (entity == appliedSourceInstance);
-					if (isAppliedSource)
+					if (outOfDateOnly)
 					{
-						if (outReplacementForAppliedInstance != nullptr)
-							*outReplacementForAppliedInstance = entity;
-						continue;
+						const std::string current = GetCurrentPrefabRevision(entity->GetPrefabSourcePath());
+						if (current.empty())
+							continue;
+						const std::string& stamped = entity->GetPrefabRevision();
+						const bool outOfDate = stamped.empty() ? unknownCountsAsOutOfDate : stamped != current;
+						if (!outOfDate)
+							continue;
 					}
 
-					InstanceRefreshTarget target;
-					target.instanceRoot = entity;
-					target.rootPosition = entity->GetPosition();
-					target.rootRotation = entity->GetRotation();
-					target.rootScale = entity->GetScale();
-					targets.push_back(target);
+					if (std::find(roots.begin(), roots.end(), entity) == roots.end())
+						roots.push_back(entity);
 				}
 			}
 		}
 
-		bool replacedAny = false;
-		for (const auto& target : targets)
+		return roots;
+	}
+
+	HexEngine::Entity* PrefabController::ClonePrefabSubtreeInto(
+		HexEngine::Scene* scene, HexEngine::Entity* source, HexEngine::Entity* parent,
+		const fs::path& prefabPath, const std::string& rootName)
+	{
+		// The clone is created at root with its local transform in the world
+		// slot; attaching WITHOUT preserving world keeps that local, so the new
+		// child sits where the prefab puts it under an already-placed parent.
+		auto* clone = scene->CloneEntity(source, false);
+		if (clone == nullptr)
+			return nullptr;
+
+		if (parent != nullptr)
+			clone->SetParent(parent, false);
+		clone->SetPrefabSource(prefabPath, rootName, false);
+		clone->SetPrefabNodeId(source->EnsurePrefabNodeId());
+
+		for (auto* child : source->GetChildren())
 		{
-			auto* instanceRoot = target.instanceRoot;
-			if (instanceRoot == nullptr || instanceRoot->IsPendingDeletion())
+			if (child != nullptr)
+				ClonePrefabSubtreeInto(scene, child, clone, prefabPath, rootName);
+		}
+		return clone;
+	}
+
+	void PrefabController::SyncEntityFromPrefab(
+		HexEngine::Entity* instance, HexEngine::Entity* source, bool isRoot,
+		const fs::path& prefabPath, const std::string& rootName)
+	{
+		auto* scene = instance->GetScene();
+		if (scene == nullptr)
+			return;
+
+		// A matched child that didn't carry this prefab's link (e.g. added in the
+		// scene, then applied into the prefab) now belongs to it. Roots of other
+		// prefabs keep their own link.
+		if (!isRoot && !instance->IsPrefabInstanceRoot() &&
+			(!instance->IsPrefabInstance() || !ArePrefabPathsEquivalent(instance->GetPrefabSourcePath(), prefabPath)))
+		{
+			const auto overrides = instance->GetPrefabPropertyOverrides();
+			const auto patches = instance->GetPrefabOverridePatches();
+			instance->SetPrefabSource(prefabPath, rootName, false);
+			instance->SetPrefabPropertyOverrides(overrides);
+			instance->SetPrefabOverridePatches(patches);
+		}
+		instance->SetPrefabNodeId(source->EnsurePrefabNodeId());
+		if (instance->GetLayer() != source->GetLayer())
+			instance->SetLayer(source->GetLayer());
+
+		json sourceComponents = json::array();
+		json currentComponents = json::array();
+		if (CaptureEntityComponentsSnapshot(source, sourceComponents) && CaptureEntityComponentsSnapshot(instance, currentComponents))
+		{
+			const json desired = BuildDesiredInstanceComponents(sourceComponents, currentComponents, instance, isRoot);
+			MergeComponentsIntoEntity(instance, desired, currentComponents);
+		}
+
+		// ---- children ----
+		std::vector<HexEngine::Entity*> instanceChildren;
+		for (auto* child : instance->GetChildren())
+		{
+			if (child != nullptr && !child->IsPendingDeletion())
+				instanceChildren.push_back(child);
+		}
+		std::vector<HexEngine::Entity*> sourceChildren;
+		for (auto* child : source->GetChildren())
+		{
+			if (child != nullptr)
+				sourceChildren.push_back(child);
+		}
+
+		const auto belongsToPrefab = [&](HexEngine::Entity* child)
+		{
+			return child->IsPrefabInstance() && !child->IsPrefabInstanceRoot() &&
+				ArePrefabPathsEquivalent(child->GetPrefabSourcePath(), prefabPath);
+		};
+
+		std::vector<HexEngine::Entity*> matches(sourceChildren.size(), nullptr);
+		std::unordered_set<HexEngine::Entity*> used;
+
+		// Prefab node id first - stable across renames and the scene's name de-dup.
+		for (size_t i = 0; i < sourceChildren.size(); ++i)
+		{
+			const std::string& nodeId = sourceChildren[i]->EnsurePrefabNodeId();
+			for (auto* candidate : instanceChildren)
+			{
+				if (used.count(candidate) == 0 && candidate->GetPrefabNodeId() == nodeId)
+				{
+					matches[i] = candidate;
+					used.insert(candidate);
+					break;
+				}
+			}
+		}
+
+		// Then name, ignoring the numeric suffix the scene appends to keep names
+		// unique (older prefab files didn't persist node ids).
+		for (size_t i = 0; i < sourceChildren.size(); ++i)
+		{
+			if (matches[i] != nullptr)
+				continue;
+			const std::string baseName = StripTrailingDigits(sourceChildren[i]->GetName());
+			for (auto* candidate : instanceChildren)
+			{
+				if (used.count(candidate) == 0 && belongsToPrefab(candidate) &&
+					StripTrailingDigits(candidate->GetName()) == baseName)
+				{
+					matches[i] = candidate;
+					used.insert(candidate);
+					break;
+				}
+			}
+		}
+
+		for (size_t i = 0; i < sourceChildren.size(); ++i)
+		{
+			if (matches[i] != nullptr)
+				SyncEntityFromPrefab(matches[i], sourceChildren[i], false, prefabPath, rootName);
+			else
+				ClonePrefabSubtreeInto(scene, sourceChildren[i], instance, prefabPath, rootName);
+		}
+
+		// Children that came from the prefab but are gone from it. Scene-added
+		// children (no link to this prefab) stay.
+		for (auto* child : instanceChildren)
+		{
+			if (used.count(child) == 0 && belongsToPrefab(child))
+				scene->DestroyEntity(child);
+		}
+	}
+
+	size_t PrefabController::SyncPrefabInstances(const std::vector<HexEngine::Entity*>& instanceRoots)
+	{
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr || instanceRoots.empty())
+			return 0;
+
+		struct LoadedPrefab
+		{
+			std::shared_ptr<HexEngine::Scene> scene;
+			std::string revision;
+			bool loaded = false;
+		};
+		std::unordered_map<std::wstring, LoadedPrefab> prefabs;
+
+		auto transaction = std::make_unique<PrefabInstanceSyncTransaction>();
+		std::unordered_set<HexEngine::Scene*> touchedScenes;
+		size_t updated = 0;
+
+		for (auto* root : instanceRoots)
+		{
+			if (root == nullptr || root->IsPendingDeletion() || !root->IsPrefabInstanceRoot() || root->GetScene() == nullptr)
 				continue;
 
-			auto* sourceRoot = FindPrefabRootInScene(
-				prefabScene,
-				instanceRoot->GetPrefabRootEntityName(),
-				instanceRoot->GetPrefabNodeId());
+			const fs::path prefabPath = root->GetPrefabSourcePath();
+			const std::wstring key = BuildComparablePrefabPath(prefabPath);
+			auto it = prefabs.find(key);
+			if (it == prefabs.end())
+			{
+				LoadedPrefab loaded;
+				loaded.scene = sceneManager->CreateEmptyScene(false, nullptr, false);
+				loaded.loaded = HexEngine::g_pEnv->_prefabLoader->LoadPrefabAssetToScene(prefabPath, loaded.scene);
+				loaded.revision = HexEngine::PrefabLoader::ComputePrefabRevision(prefabPath);
+				if (!loaded.loaded)
+					LOG_WARN("Prefab update: couldn't load '%s'.", prefabPath.string().c_str());
+				it = prefabs.emplace(key, std::move(loaded)).first;
+			}
+			if (!it->second.loaded)
+				continue;
+
+			auto* sourceRoot = FindPrefabRootInScene(it->second.scene, root->GetPrefabRootEntityName(), root->GetPrefabNodeId());
 			if (sourceRoot == nullptr)
 			{
-				LOG_WARN("Could not find source root '%s' while propagating prefab '%s'.",
-					instanceRoot->GetPrefabRootEntityName().c_str(), prefabPath.string().c_str());
+				LOG_WARN("Prefab update: no root '%s' in '%s'.", root->GetPrefabRootEntityName().c_str(), prefabPath.string().c_str());
 				continue;
 			}
 
-			auto* targetScene = instanceRoot->GetScene();
-			if (targetScene == nullptr)
-				continue;
+			PrefabInstanceSyncTransaction::Item item;
+			const bool haveBefore = CaptureInstanceSnapshot(root, item.before);
 
-			const std::string desiredName = instanceRoot->GetName();
-			auto* parent = instanceRoot->GetParent();
+			SyncEntityFromPrefab(root, sourceRoot, true, prefabPath, sourceRoot->GetName());
+			root->SetPrefabRevision(it->second.revision);
 
-			PrefabOverrideStateSet overrideStates;
-			CollectPrefabOverrideStateRecursive(instanceRoot, "__root__", overrideStates);
+			if (haveBefore && CaptureInstanceSnapshot(root, item.after))
+				transaction->Add(std::move(item));
 
-			const bool wasInspected = (_inspector != nullptr && _inspector->GetInspectingEntity() == instanceRoot);
-			targetScene->DestroyEntity(instanceRoot);
-
-			auto* newRoot = CloneEntityHierarchyToScene(targetScene, sourceRoot, parent, prefabPath, sourceRoot->GetName(), true);
-			if (newRoot == nullptr)
-			{
-				LOG_WARN("Failed to rebuild prefab instance while propagating '%s'.", prefabPath.string().c_str());
-				continue;
-			}
-
-			if (!desiredName.empty() && desiredName != newRoot->GetName())
-			{
-				std::string finalName;
-				targetScene->RenameEntity(newRoot, desiredName, &finalName);
-			}
-
-			ApplyPrefabOverrideStateRecursive(newRoot, "__root__", overrideStates);
-			newRoot->SetPosition(target.rootPosition);
-			newRoot->SetRotation(target.rootRotation);
-			newRoot->SetScale(target.rootScale);
-
-			targetScene->ForceRebuildPVS();
-			replacedAny = true;
-
-			if (wasInspected && _inspector != nullptr)
-			{
-				_inspector->InspectEntity(newRoot);
-			}
+			touchedScenes.insert(root->GetScene());
+			++updated;
 		}
 
-		if (replacedAny && _entityList != nullptr)
+		for (auto* scene : touchedScenes)
+			scene->ForceRebuildPVS();
+
+		if (updated > 0)
 		{
-			_entityList->RefreshList();
+			if (_transactions != nullptr && !transaction->Empty())
+				_transactions->Push(std::move(transaction));
+			LOG_INFO("Updated %zu prefab instance(s) from their prefab.", updated);
 		}
 
-		return replacedAny;
+		RefreshViewsAfterInstanceChange();
+		return updated;
+	}
+
+	void PrefabController::RefreshViewsAfterInstanceChange()
+	{
+		if (_entityList != nullptr)
+			_entityList->RefreshList();
+
+		if (_inspector != nullptr)
+		{
+			if (auto* inspecting = _inspector->GetInspectingEntity(); inspecting != nullptr && !inspecting->IsPendingDeletion())
+				_inspector->RequestForcedRefresh(inspecting);
+		}
+	}
+
+	void PrefabController::OnPrefabAssetChanged(const fs::path& prefabPath, HexEngine::Entity* alreadyInSync)
+	{
+		if (prefabPath.empty())
+			return;
+
+		_revisionMemo.clear();
+
+		if (auto* root = ResolvePrefabInstanceRootEntity(alreadyInSync); root != nullptr)
+			root->SetPrefabRevision(HexEngine::PrefabLoader::ComputePrefabRevision(root->GetPrefabSourcePath()));
+
+		// An instance with no stamp predates revision tracking; after a change to
+		// its prefab it is assumed out of date.
+		const auto roots = CollectPrefabInstanceRoots(prefabPath, true, true);
+		// Normalised path: the same change can arrive as a relative (stage save)
+		// and an absolute (file watcher) path.
+		const std::wstring comparablePath = BuildComparablePrefabPath(prefabPath);
+		const std::string skipKey = comparablePath.empty()
+			? std::string()
+			: fs::path(comparablePath).generic_string() + "|" + GetCurrentPrefabRevision(prefabPath);
+
+		const std::wstring reason = L"'" + prefabPath.filename().wstring() + L"' changed. " +
+			std::to_wstring(roots.size()) + L" instance(s) in loaded scenes are out of date:";
+		RequestInstanceSync(roots, reason, skipKey);
+	}
+
+	void PrefabController::CheckLoadedScenesForOutOfDateInstances()
+	{
+		// Instances saved before revisions existed: their sync state is unknown,
+		// so adopt the current revision (exactly as before - nothing synced them
+		// on load either). Changes from here on are tracked.
+		size_t stamped = 0;
+		for (auto* root : CollectPrefabInstanceRoots(fs::path(), false, false))
+		{
+			if (!root->GetPrefabRevision().empty())
+				continue;
+			const std::string revision = GetCurrentPrefabRevision(root->GetPrefabSourcePath());
+			if (!revision.empty())
+			{
+				root->SetPrefabRevision(revision);
+				++stamped;
+			}
+		}
+		if (stamped > 0)
+			LOG_INFO("Prefab tracking: stamped %zu existing instance(s) with their prefab's current revision.", stamped);
+
+		const auto roots = CollectPrefabInstanceRoots(fs::path(), true, false);
+		const std::wstring reason = std::to_wstring(roots.size()) +
+			L" prefab instance(s) in the loaded scenes were built from an older version of their prefab:";
+		RequestInstanceSync(roots, reason, std::string());
+	}
+
+	void PrefabController::RequestInstanceSync(const std::vector<HexEngine::Entity*>& instanceRoots, const std::wstring& reason, const std::string& skipKey)
+	{
+		if (instanceRoots.empty())
+		{
+			RefreshViewsAfterInstanceChange();
+			return;
+		}
+
+		switch (_syncPolicy)
+		{
+		case InstanceSyncPolicy::Always:
+			SyncPrefabInstances(instanceRoots);
+			return;
+
+		case InstanceSyncPolicy::Never:
+			LOG_INFO("%zu prefab instance(s) are out of date (policy: never update automatically).", instanceRoots.size());
+			RefreshViewsAfterInstanceChange();
+			return;
+
+		case InstanceSyncPolicy::Ask:
+		default:
+			break;
+		}
+
+		if (!skipKey.empty() && _skippedSyncKeys.count(skipKey) != 0)
+		{
+			RefreshViewsAfterInstanceChange();
+			return;
+		}
+
+		// Merge into an open dialog rather than stacking a second one.
+		for (auto* root : instanceRoots)
+		{
+			InstanceRef ref{ root->GetScene()->GetName(), root->GetName() };
+			const bool known = std::any_of(_syncDialogRefs.begin(), _syncDialogRefs.end(),
+				[&](const InstanceRef& r) { return r.sceneName == ref.sceneName && r.entityName == ref.entityName; });
+			if (!known)
+				_syncDialogRefs.push_back(std::move(ref));
+		}
+		if (!skipKey.empty())
+			_syncDialogSkipKeys.push_back(skipKey);
+
+		RefreshViewsAfterInstanceChange();
+		ShowInstanceSyncDialog(_syncDialog != nullptr
+			? std::to_wstring(_syncDialogRefs.size()) + L" prefab instance(s) are out of date:"
+			: reason);
+	}
+
+	void PrefabController::ShowInstanceSyncDialog(const std::wstring& reason)
+	{
+		if (_syncDialog != nullptr)
+		{
+			// Rebuild with the merged list; the old dialog's close must not
+			// report a Skip.
+			auto* old = _syncDialog;
+			_syncDialog = nullptr;
+			static_cast<HexEngine::Element*>(old)->DeleteMe();
+		}
+
+		std::vector<PrefabInstanceSyncDialog::Row> rows;
+		for (const auto& ref : _syncDialogRefs)
+		{
+			auto* scene = FindLoadedSceneByName(ref.sceneName);
+			auto* entity = scene != nullptr ? scene->GetEntityByName(ref.entityName) : nullptr;
+			if (entity == nullptr)
+				continue;
+
+			PrefabInstanceSyncDialog::Row row;
+			row.sceneName = ref.sceneName;
+			row.entityName = ref.entityName;
+			row.label = std::wstring(ref.entityName.begin(), ref.entityName.end()) + L"   (" +
+				entity->GetPrefabSourcePath().filename().wstring() + L", " + ref.sceneName + L")";
+			rows.push_back(std::move(row));
+		}
+
+		auto* dialog = new PrefabInstanceSyncDialog(reason, std::move(rows),
+			[this](const void* closedDialog, int32_t action, const std::vector<PrefabInstanceSyncDialog::Row>& chosen, bool remember)
+			{
+				if (closedDialog != _syncDialog)
+					return;
+				std::vector<InstanceRef> refs;
+				for (const auto& row : chosen)
+					refs.push_back(InstanceRef{ row.sceneName, row.entityName });
+				OnInstanceSyncDialogClosed(action, refs, remember);
+			});
+		dialog->BringToFront();
+		_syncDialog = dialog;
+	}
+
+	void PrefabController::OnInstanceSyncDialogClosed(int32_t action, const std::vector<InstanceRef>& chosen, bool remember)
+	{
+		_syncDialog = nullptr;
+
+		const auto skipKeys = std::move(_syncDialogSkipKeys);
+		_syncDialogSkipKeys.clear();
+		_syncDialogRefs.clear();
+
+		if (action == PrefabInstanceSyncDialog::Skip)
+		{
+			for (const auto& key : skipKeys)
+				_skippedSyncKeys.insert(key);
+			if (remember)
+				SetInstanceSyncPolicy(InstanceSyncPolicy::Never);
+			RefreshViewsAfterInstanceChange();
+			return;
+		}
+
+		std::vector<HexEngine::Entity*> roots;
+		for (const auto& ref : chosen)
+		{
+			auto* scene = FindLoadedSceneByName(ref.sceneName);
+			if (auto* entity = scene != nullptr ? scene->GetEntityByName(ref.entityName) : nullptr; entity != nullptr && !entity->IsPendingDeletion())
+				roots.push_back(entity);
+		}
+
+		if (remember && action == PrefabInstanceSyncDialog::UpdateAll)
+			SetInstanceSyncPolicy(InstanceSyncPolicy::Always);
+
+		SyncPrefabInstances(roots);
+	}
+
+	bool PrefabController::UpdatePrefabInstanceFromAsset(HexEngine::Entity* entity)
+	{
+		auto* root = ResolvePrefabInstanceRootEntity(entity);
+		if (root == nullptr)
+			return false;
+		return SyncPrefabInstances({ root }) > 0;
+	}
+
+	size_t PrefabController::UpdateAllOutOfDatePrefabInstances()
+	{
+		_revisionMemo.clear();
+		return SyncPrefabInstances(CollectPrefabInstanceRoots(fs::path(), true, false));
+	}
+
+	void PrefabController::SetInstanceSyncPolicy(InstanceSyncPolicy policy)
+	{
+		_syncPolicy = policy;
+		SaveEditorPrefs();
+		LOG_INFO("Prefab instance updates: %s", policy == InstanceSyncPolicy::Always ? "always" : (policy == InstanceSyncPolicy::Never ? "never" : "ask"));
+	}
+
+	void PrefabController::LoadEditorPrefs()
+	{
+		const json prefs = ReadEditorPrefsJson();
+		const std::string policy = prefs.value(kSyncPolicyPrefKey, std::string("ask"));
+		_syncPolicy = policy == "always" ? InstanceSyncPolicy::Always : (policy == "never" ? InstanceSyncPolicy::Never : InstanceSyncPolicy::Ask);
+	}
+
+	void PrefabController::SaveEditorPrefs() const
+	{
+		const fs::path path = GetEditorPrefsPath();
+		if (path.empty())
+			return;
+
+		json prefs = ReadEditorPrefsJson();
+		prefs[kSyncPolicyPrefKey] = _syncPolicy == InstanceSyncPolicy::Always ? "always" : (_syncPolicy == InstanceSyncPolicy::Never ? "never" : "ask");
+
+		std::error_code ec;
+		fs::create_directories(path.parent_path(), ec);
+		if (!WriteJsonAssetFile(path, prefs))
+			LOG_WARN("Couldn't write editor preferences to '%s'.", path.string().c_str());
 	}
 
 	void PrefabController::HandleComponentPropertyEdit(HexEngine::Entity* entity, const json& beforeComponents, const json& afterComponents)
@@ -2124,7 +3099,7 @@ namespace HexEditor
 
 		RefreshPrefabAssetPreview(prefabPath);
 		RefreshInspectorForPrefabInstance(entity);
-		PropagateAppliedPrefabToInstances(prefabPath, instanceRoot, nullptr);
+		OnPrefabAssetChanged(prefabPath, instanceRoot);
 		return true;
 	}
 
@@ -2250,7 +3225,7 @@ namespace HexEditor
 
 			RefreshPrefabAssetPreview(prefabPath);
 			RefreshInspectorForPrefabInstance(entity);
-			PropagateAppliedPrefabToInstances(prefabPath, entity, nullptr);
+			OnPrefabAssetChanged(prefabPath, entity);
 
 			LOG_INFO("Applied prefab variant instance '%s' to asset '%s' (%zu patches).",
 				entity->GetName().c_str(),
@@ -2268,7 +3243,7 @@ namespace HexEditor
 
 		RefreshPrefabAssetPreview(prefabPath);
 		RefreshInspectorForPrefabInstance(entity);
-		PropagateAppliedPrefabToInstances(prefabPath, entity, nullptr);
+		OnPrefabAssetChanged(prefabPath, entity);
 
 		LOG_INFO("Applied prefab instance '%s' to asset '%s'.", entity->GetName().c_str(), prefabPath.string().c_str());
 		return true;
@@ -2536,7 +3511,8 @@ namespace HexEditor
 			return false;
 
 		RefreshPrefabAssetPreview(prefabPath);
-		return PropagateAppliedPrefabToInstances(prefabPath, nullptr, nullptr);
+		OnPrefabAssetChanged(prefabPath);
+		return true;
 	}
 
 	bool PrefabController::ClosePrefabStage(bool saveChanges)

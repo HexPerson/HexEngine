@@ -28,7 +28,12 @@ namespace HexEngine
 		Updateable				= HEX_BITSET(1),
 		Renderable				= HEX_BITSET(2),
 		PostProcessingEnabled	= HEX_BITSET(3),
-		Utility					= HEX_BITSET(4)
+		Utility					= HEX_BITSET(4),
+		// Run the deferred light pass even though post-processing is off. Without it
+		// a non-post render (thumbnails, editor previews) is flat unlit albedo; with it
+		// the view gets sun/local lights and shadows but none of the temporal effects
+		// (TAA, GI, exposure, fog) whose shared history a second view would disturb.
+		PreviewLighting			= HEX_BITSET(5)
 	};
 
 	DEFINE_ENUM_FLAG_OPERATORS(SceneFlags);

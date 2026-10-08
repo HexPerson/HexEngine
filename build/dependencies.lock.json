@@ -216,6 +216,16 @@
       "build_system": "vendor-sdk",
       "notes": "Cloned by setup; include copy currently disabled.",
       "legacy_stage_paths": []
+    },
+    {
+      "name": "fidelityfx-fsr2",
+      "path": "ThirdParty/FidelityFX-FSR2",
+      "git_url": "https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git",
+      "ref": "1680d1edd5c034f88ebbbb793d8b88f8842cf804",
+      "required": true,
+      "build_system": "source",
+      "notes": "FSR 2.2.1 (tag v2.2.1). Clone only: the core library sources are compiled straight into HexEngine.FSRPlugin, which also compiles the pass shaders with fxc (cs_5_0) and supplies its own D3D11 backend.",
+      "legacy_stage_paths": []
     }
   ]
 }

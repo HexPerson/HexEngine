@@ -72,6 +72,21 @@
     <ClInclude Include="UI\Actions\SceneView.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="UI\AnimationEditor\AnimationDocument.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\AnimationEditor\AnimationEditor.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\AnimationEditor\AnimationViewport.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\AnimationEditor\AnimationTimeline.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="UI\AnimationEditor\BoneHierarchyView.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="UI\EditorTransactions.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -120,6 +135,21 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\Gadgets\Gadget.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\AnimationEditor\AnimationDocument.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\AnimationEditor\AnimationEditor.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\AnimationEditor\AnimationViewport.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\AnimationEditor\AnimationTimeline.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="UI\AnimationEditor\BoneHierarchyView.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="UI\Gadgets\ScaleGadget.cpp">

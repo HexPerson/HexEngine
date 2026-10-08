@@ -88,6 +88,8 @@ private:
 	bool _warnedNonD3D11Backend = false;
 	uint32_t _width = 0;
 	uint32_t _height = 0;
-	math::Vector2 _previousJitter;
+	// Last frame's camera jitter as handed to NRD: pixels, screen-UV-Y-down (see RunDenoiser).
+	math::Vector2 _previousJitterPixels;
+	math::Vector2 _pendingJitterPixels;
 	nrd::Denoiser _activeDenoiser = nrd::Denoiser::RELAX_DIFFUSE_SPECULAR;
 };

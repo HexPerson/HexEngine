@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{a8e3c1f2-5b7d-4e19-9c2a-3f6d8b1e4a70}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{c4b2d9e6-1a3f-4c58-8e7b-2d9f6a1c3b84}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="FidelityFX">
+      <UniqueIdentifier>{e7f1a2b3-6c4d-4f85-9a1e-5b3c7d2e8f96}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="FSR2Upscaler.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ffx_fsr2_dx11.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Plugin.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="FSR2Upscaler.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="ffx_fsr2_dx11.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Plugin.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="$(HexFsr2ApiDir)ffx_fsr2.cpp">
+      <Filter>FidelityFX</Filter>
+    </ClCompile>
+    <ClCompile Include="$(HexFsr2ApiDir)ffx_assert.cpp">
+      <Filter>FidelityFX</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="CompileShaders.cmd" />
+  </ItemGroup>
+</Project>

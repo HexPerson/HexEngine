@@ -19,6 +19,7 @@ namespace HexEngine
 		{
 			item->SetSelected(true);
 			_currentIndex = 0;
+			_selectedTab = item;
 		}
 
 		_currentOffset += item->GetTabWidth();
@@ -69,6 +70,61 @@ namespace HexEngine
 	void TabView::SetActiveTab(int32_t idx)
 	{
 		SetActiveTab(_items.at(idx));
+	}
+
+	void TabView::RemoveTab(TabItem* item)
+	{
+		auto it = std::find(_items.begin(), _items.end(), item);
+		if (it == _items.end())
+			return;
+
+		const int32_t removedIndex = (int32_t)(it - _items.begin());
+		const bool wasActive = (item == _selectedTab) || removedIndex == _currentIndex;
+
+		// Hide its content now (deletion is deferred to the end of the frame).
+		item->SetSelected(false);
+		_items.erase(it);
+		if (_selectedTab == item)
+			_selectedTab = nullptr;
+		item->DeleteMe();
+
+		Relayout();
+
+		if (_items.empty())
+		{
+			_currentIndex = -1;
+			_selectedTab = nullptr;
+			return;
+		}
+
+		if (wasActive)
+		{
+			SetActiveTab(_items[std::max(0, removedIndex - 1)]);
+		}
+		else
+		{
+			const auto selected = std::find(_items.begin(), _items.end(), _selectedTab);
+			_currentIndex = selected != _items.end() ? (int32_t)(selected - _items.begin()) : 0;
+		}
+	}
+
+	void TabView::Relayout()
+	{
+		// Tab content sits at -tabX inside its tab (so it lines up with the view's left
+		// edge), so moving a tab moves its content back the other way.
+		int32_t x = 0;
+		for (auto* tab : _items)
+		{
+			const int32_t oldX = tab->GetPosition().x;
+			if (oldX != x)
+			{
+				tab->SetPosition(Point(x, tab->GetPosition().y));
+				for (auto* child : tab->GetChildren())
+					child->SetPosition(child->GetPosition() + Point(oldX - x, 0));
+			}
+			x += tab->GetTabWidth();
+		}
+		_currentOffset = x;
 	}
 
 	void TabView::SetActiveTab(TabItem* item)

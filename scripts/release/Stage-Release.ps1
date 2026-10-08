@@ -103,6 +103,7 @@ $Plugins = @(
     'HexEngine.NRDPlugin.dll',
     # Optional features / tooling (TryCreateInterface or feature plugins).
     'HexEngine.HBAOPlusPlugin.dll',
+    'HexEngine.FSRPlugin.dll',
     'HexEngine.GameNetworkingSocketsPlugin.dll',
     'HexEngine.CitySimulationPlugin.dll',
     'HexEngine.VolumetricTerrainPlugin.dll',

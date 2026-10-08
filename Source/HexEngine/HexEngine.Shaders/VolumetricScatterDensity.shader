@@ -76,7 +76,8 @@
 		float4 posRadius;      // xyz world, w radius
 		float4 colorStrength;  // rgb colour, w strength
 		float4 dirCone;        // spot: xyz dir, w cos(outer)
-		float4 params;         // x cos(inner), y type, z shadowed
+		float4 params;         // x cos(inner) | area range, y type (0 point, 1 spot, 2 tube, 3 rect), z shadowed
+		float4 shape;          // area lights - see PBRutils' packing doc
 	};
 	StructuredBuffer<ClGpuLight> g_clLights : register(t12);
 	StructuredBuffer<uint>       g_clCounts : register(t13);
@@ -104,6 +105,9 @@
 	// declared by the CloudCommon include (b4). Null-safe: an unbound b4
 	// reads half-extent 0 and SampleCloudShadowMap returns 1.
 	Texture2D                g_cloudShadowMap  : register(t21);
+	// Rect light images (ClusteredLighting's array, 1-based slice in dirCone.w):
+	// fog takes each image's average colour (last mip). Null when none exist.
+	Texture2DArray           g_clAreaTextures  : register(t22);
 	SamplerState g_shadowPointSampler : register(s2);
 	// Linear-clamp sampler for the transmittance LUT - the LUT is a
 	// continuous function so point sampling shows banding.
@@ -342,9 +346,34 @@
 		if (strength <= 0.0f)
 			return float3(0.0f, 0.0f, 0.0f);
 
-		const float3 toLight = light.posRadius.xyz - worldPos;
+		// Area lights (tube / rect) scatter as a point light at the emitter's
+		// nearest point, ranged from the shape (params.x) - the shape's own
+		// extent is what gives the glow its elongated form.
+		float3 lightPos = light.posRadius.xyz;
+		float radius = light.posRadius.w;
+		float3 imageTint = 1.0f.xxx;
+		if (light.params.y > 1.5f)
+		{
+			const float3 rel = worldPos - light.posRadius.xyz;
+			const float hw = length(light.dirCone.xyz);
+			const float3 axisN = light.dirCone.xyz / max(hw, 1e-6f);
+			lightPos += axisN * clamp(dot(rel, axisN), -hw, hw);
+			if (light.params.y > 2.5f)
+			{
+				const float hh = length(light.shape.xyz);
+				const float3 upN = light.shape.xyz / max(hh, 1e-6f);
+				// One-sided rects light only the half-space they face.
+				if (light.shape.w < 0.5f && dot(rel, normalize(cross(upN, axisN))) <= 0.0f)
+					return float3(0.0f, 0.0f, 0.0f);
+				lightPos += upN * clamp(dot(rel, upN), -hh, hh);
+				if (light.dirCone.w > 0.5f)
+					imageTint = g_clAreaTextures.SampleLevel(g_linearSamplerAtm, float3(0.5f, 0.5f, light.dirCone.w - 1.0f), 9.0f).rgb;
+			}
+			radius = light.params.x;
+		}
+
+		const float3 toLight = lightPos - worldPos;
 		const float distSq = dot(toLight, toLight);
-		const float radius = light.posRadius.w;
 		if (distSq >= radius * radius)
 			return float3(0.0f, 0.0f, 0.0f);
 
@@ -353,7 +382,7 @@
 		float falloff = LocalLightFalloff(distSq, radius);
 
 		// Spot cone, matching the forward spot eval's smoothstep.
-		if (light.params.y > 0.5f)
+		if (abs(light.params.y - 1.0f) < 0.5f)
 		{
 			const float coneDot = dot(-lightDir, light.dirCone.xyz);
 			falloff *= smoothstep(
@@ -364,7 +393,7 @@
 
 		const float mu = dot(rayDir, lightDir);
 		const float phase = MiePhaseHG(mu, phaseG);
-		return light.colorStrength.rgb * (strength * falloff * phase);
+		return light.colorStrength.rgb * imageTint * (strength * falloff * phase);
 	}
 
 	float3 EvalPointLightScatter(uint i, float3 worldPos, float3 rayDir, float phaseG)
@@ -741,7 +770,7 @@
 					// forward path). Everything else shadowed still belongs
 					// to the forward path.
 					const int tile = (int)cl.params.w;
-					if (tile < 0 || cl.params.y < 0.5f)
+					if (tile < 0 || abs(cl.params.y - 1.0f) > 0.5f)
 						continue;
 
 					const float4 lc = mul(float4(worldPos, 1.0f), g_clAtlasTileVP[tile]);

@@ -656,6 +656,7 @@ def create_handlers() -> dict[str, Callable[[RuntimeContext, dict, str], None]]:
         "hbaoplus": stage_hbaoplus,
         "shaderconductor": build_shaderconductor,
         "streamline": lambda ctx, dep, cfg: ensure_streamline(ctx, dep),
+        "fidelityfx-fsr2": ensure_only,
         "nlohmann-json": stage_nlohmann_json,
         "retpack2d": ensure_only,
         "cxxopts": ensure_only,
@@ -681,7 +682,7 @@ def bootstrap_dependencies(ctx: RuntimeContext, dep_names: list[str], configs: l
     for name in dep_names:
         dep = dep_map[name]
         handler = handlers[name]
-        if name in ("streamline", "nlohmann-json", "retpack2d", "cxxopts", "fastnoiselite", "rapidxml"):
+        if name in ("streamline", "fidelityfx-fsr2", "nlohmann-json", "retpack2d", "cxxopts", "fastnoiselite", "rapidxml"):
             print(f"Bootstrapping {name} (no per-config build)")
             handler(ctx, dep, "Debug")
             continue

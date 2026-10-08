@@ -28,6 +28,7 @@ HexEngine bundles / links the third-party components listed below. Each is distr
 | directxtex | vendored | MIT | [link](https://github.com/microsoft/DirectXTex) | `ThirdParty/directxtex/LICENSE` |
 | directxtk | vendored | MIT | [link](https://github.com/microsoft/DirectXTK) | `ThirdParty/directxtk/LICENSE` |
 | fastnoiselite | vendored | MIT | [link](https://github.com/Auburn/FastNoiseLite) | `ThirdParty/fastnoiselite/LICENSE` |
+| FidelityFX-FSR2 | 2.2.1 | MIT | [link](https://github.com/GPUOpen-Effects/FidelityFX-FSR2) | `ThirdParty/FidelityFX-FSR2/LICENSE.txt` |
 | freetype | vendored | FTL | [link](https://freetype.org/) | `ThirdParty/freetype/LICENSE.TXT` |
 | hbaoplus | vendored | LicenseRef-NVIDIA-HBAOPlus | [link](https://developer.nvidia.com/gameworks-visualfx-overview) | `ThirdParty/hbaoplus/LICENSE.txt` |
 | ispc | 1.26.0 | BSD-3-Clause | [link](https://ispc.github.io/) | `ThirdParty/ispc-v1.26.0-windows/LICENSE.txt` |

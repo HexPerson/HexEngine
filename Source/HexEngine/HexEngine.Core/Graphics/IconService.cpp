@@ -14,7 +14,8 @@
 constexpr int32_t kIconSize = 800;
 constexpr size_t kMaxAsyncMeshPreviewLoads = 3;
 constexpr size_t kMaxResidentGeneratedIcons = 512;
-constexpr int32_t kDiskCacheVersion = 1;
+// 2: icons are lit (SceneFlags::PreviewLighting); v1 caches hold flat unlit albedo.
+constexpr int32_t kDiskCacheVersion = 2;
 constexpr uint8_t kMaxAsyncMeshPreviewRetries = 2;
 
 namespace
@@ -985,7 +986,10 @@ namespace HexEngine
 				return;
 			}
 
-			_iconScene->SetFlags(SceneFlags::Renderable);
+			// PreviewLighting: run the deferred light pass so thumbnails show the
+			// icon scene's sun and shadows instead of flat albedo, without the post
+			// chain whose temporal history belongs to the main view.
+			_iconScene->SetFlags(SceneFlags::Renderable | SceneFlags::PreviewLighting);
 
 			g_pEnv->GetGraphicsDevice().SetClearColour(math::Color(HEX_RGB_TO_FLOAT3(40, 44, 48)));
 

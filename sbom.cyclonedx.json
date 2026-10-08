@@ -209,6 +209,35 @@
     },
     {
       "type": "library",
+      "name": "FidelityFX-FSR2",
+      "version": "2.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:github/GPUOpen-Effects/FidelityFX-FSR2@v2.2.1",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/GPUOpen-Effects/FidelityFX-FSR2"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/FidelityFX-FSR2/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "freetype",
       "version": "vendored",
       "licenses": [

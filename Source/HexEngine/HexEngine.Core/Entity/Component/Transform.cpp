@@ -809,9 +809,19 @@ namespace HexEngine
 
 	}
 
+	namespace
+	{
+		bool g_editorGizmosEnabled = true;
+	}
+
+	void Transform::SetEditorGizmosEnabled(bool enabled)
+	{
+		g_editorGizmosEnabled = enabled;
+	}
+
 	void Transform::OnRenderEditorGizmo(bool isSelected, bool& isHovering)
 	{
-		if (!isSelected || !g_pEnv->IsEditorMode())
+		if (!isSelected || !g_pEnv->IsEditorMode() || !g_editorGizmosEnabled)
 		{
 			if (g_translateGizmoState.activeTransform == this)
 				g_translateGizmoState = {};

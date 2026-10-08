@@ -6,6 +6,8 @@
 #include "../Scene/Prefab.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "FileSystem.hpp"
+#include <fstream>
+#include <mutex>
 
 namespace
 {
@@ -625,6 +627,95 @@ namespace HexEngine
 		g_pEnv->GetResourceSystem().UnregisterResourceLoader(this);
 	}
 
+	namespace
+	{
+		std::string ComputePrefabRevisionRecursive(const fs::path& path, std::unordered_set<std::wstring>& guard)
+		{
+			fs::path absolutePath;
+			if (!TryResolvePrefabPathToAbsolute(path, absolutePath))
+				return std::string();
+
+			const std::wstring key = BuildComparablePath(absolutePath);
+			if (key.empty() || !guard.insert(key).second)
+				return std::string();	// unreadable, or a variant cycle
+
+			std::error_code ec;
+			const auto size = fs::file_size(absolutePath, ec);
+			if (ec)
+				return std::string();
+			const auto writeTime = fs::last_write_time(absolutePath, ec).time_since_epoch().count();
+
+			// variantBase: the base prefab path when the file is a variant (parsed once
+			// per file version - the editor asks for revisions on every list refresh).
+			struct CacheEntry { uintmax_t size; int64_t writeTime; uint64_t fileHash; fs::path variantBase; };
+			static std::mutex s_cacheLock;
+			static std::unordered_map<std::wstring, CacheEntry> s_cache;
+
+			uint64_t fileHash = 0;
+			fs::path variantBase;
+			bool cached = false;
+			{
+				std::lock_guard lock(s_cacheLock);
+				if (auto it = s_cache.find(key); it != s_cache.end() && it->second.size == size && it->second.writeTime == (int64_t)writeTime)
+				{
+					fileHash = it->second.fileHash;
+					variantBase = it->second.variantBase;
+					cached = true;
+				}
+			}
+
+			if (!cached)
+			{
+				std::ifstream file(absolutePath, std::ios::binary);
+				if (!file)
+					return std::string();
+				// FNV-1a 64 - change detection, not security.
+				fileHash = 1469598103934665603ull;
+				char buffer[65536];
+				while (file)
+				{
+					file.read(buffer, sizeof(buffer));
+					const std::streamsize read = file.gcount();
+					for (std::streamsize i = 0; i < read; ++i)
+					{
+						fileHash ^= (uint8_t)buffer[i];
+						fileHash *= 1099511628211ull;
+					}
+				}
+
+				PrefabVariantData variantData;
+				if (TryReadPrefabVariantData(absolutePath, variantData))
+					variantBase = variantData.basePrefabPath;
+
+				std::lock_guard lock(s_cacheLock);
+				s_cache[key] = CacheEntry{ size, (int64_t)writeTime, fileHash, variantBase };
+			}
+
+			// A variant's effective content also depends on its base.
+			if (!variantBase.empty())
+			{
+				const std::string baseRevision = ComputePrefabRevisionRecursive(variantBase, guard);
+				for (const char ch : baseRevision)
+				{
+					fileHash ^= (uint8_t)ch;
+					fileHash *= 1099511628211ull;
+				}
+			}
+
+			char hex[17];
+			snprintf(hex, sizeof(hex), "%016llx", (unsigned long long)fileHash);
+			return std::string(hex);
+		}
+	}
+
+	std::string PrefabLoader::ComputePrefabRevision(const fs::path& path)
+	{
+		if (path.empty())
+			return std::string();
+		std::unordered_set<std::wstring> guard;
+		return ComputePrefabRevisionRecursive(path, guard);
+	}
+
 	std::vector<Entity*> PrefabLoader::LoadPrefab(const std::shared_ptr<Scene>& scene, const fs::path& path)
 	{
 		if (scene == nullptr || path.empty())
@@ -639,6 +730,7 @@ namespace HexEngine
 
 		std::vector<std::pair<Entity*, Entity*>> sourceToMerged;
 		auto mergedEntities = scene->MergeFrom(prefab->_scene.get(), &sourceToMerged);
+		const std::string revision = ComputePrefabRevision(path);
 
 		auto findSourceRoot = [](Entity* sourceEntity) -> Entity*
 		{
@@ -669,6 +761,8 @@ namespace HexEngine
 
 			const bool isRootInstance = sourceEntity->GetParent() == nullptr;
 			mergedEntity->SetPrefabSource(path, sourceRoot->GetName(), isRootInstance);
+			if (isRootInstance)
+				mergedEntity->SetPrefabRevision(revision);
 		}
 
 		return mergedEntities;

@@ -964,6 +964,7 @@ namespace HexEngine
 			clone->SetPrefabNodeId(entity->EnsurePrefabNodeId());
 			clone->SetPrefabPropertyOverrides(entity->GetPrefabPropertyOverrides());
 			clone->SetPrefabOverridePatches(entity->GetPrefabOverridePatches());
+			clone->SetPrefabRevision(entity->GetPrefabRevision());
 		}
 		else
 		{

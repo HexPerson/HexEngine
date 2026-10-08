@@ -24,7 +24,7 @@ namespace HexEngine
 		class IStructuredBuffer;
 	class IIndexBuffer;
 
-	class SceneRenderer
+	class HEX_API SceneRenderer
 	{
 	public:
 		SceneRenderer();
@@ -166,6 +166,14 @@ namespace HexEngine
 		void RenderDecals();
 		void RenderVignette();
 		void SetStreamlineConstants();
+
+		// FSR 2 (IUpscalerProvider plugin) is upscaling the current camera.
+		bool IsFsrActive() const;
+		// This frame's projection jitter in NDC for a render viewport: the upscaler's
+		// sequence while FSR is active, TAA's otherwise.
+		math::Vector2 GetFrameJitter(float renderWidth, float renderHeight) const;
+		// Runs the FSR upscale of _beautyRT into _dlssTarget. False = nothing written.
+		bool EvaluateFsr();
 
 		// Gathers the closest point + spot lights in the scene and uploads them to the
 		// forward-lights constant buffer (PS slot b7). Used by the transparency pass so glass /
@@ -410,6 +418,11 @@ namespace HexEngine
 		Camera* _taaHistoryCamera = nullptr;
 		Scene* _taaHistoryScene = nullptr;
 		math::Vector3 _taaHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
+		// Same cut detection for the FSR history, tracked only across FSR renders so
+		// other cameras rendering in between (previews, captures) don't reset it.
+		Camera* _fsrHistoryCamera = nullptr;
+		Scene* _fsrHistoryScene = nullptr;
+		math::Vector3 _fsrHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
 		DiffuseGI _diffuseGi;
 		// GI ambient-ownership compose is live for the current view (main
 		// camera, GI on, blurred AO available). Set in SetupPerFrameBuffer

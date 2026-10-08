@@ -59,6 +59,7 @@ namespace HexEngine
 		REG_CLASS(Transform);
 		REG_CLASS(UpdateComponent);
 		REG_CLASS(SpotLight);
+		REG_CLASS(AreaLight);
 		REG_CLASS(MotorComponent);
 		REG_CLASS(Billboard);
 		REG_CLASS(RTSCameraController);

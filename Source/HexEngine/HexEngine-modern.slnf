@@ -26,7 +26,8 @@
       "Plugins\\HexEngine.PhysXPlugin\\HexEngine.PhysXPlugin.vcxproj",
       "Plugins\\HexEngine.AssimpPlugin\\HexEngine.AssimpPlugin.vcxproj",
       "Plugins\\HexEngine.NRDPlugin\\HexEngine.NRDPlugin.vcxproj",
-      "Plugins\\HexEngine.HBAOPlusPlugin\\HexEngine.HBAOPlusPlugin.vcxproj"
+      "Plugins\\HexEngine.HBAOPlusPlugin\\HexEngine.HBAOPlusPlugin.vcxproj",
+      "Plugins\\HexEngine.FSRPlugin\\HexEngine.FSRPlugin.vcxproj"
     ]
   }
 }

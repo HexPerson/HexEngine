@@ -8,6 +8,7 @@
 #include "../FileSystem/ICompressionProvider.hpp"
 #include "../FileSystem/AssetPackageManager.hpp"
 #include "../Graphics/ShaderSystem.hpp"
+#include "../Graphics/OffscreenRenderHooks.hpp"
 #include "../Graphics/MaterialLoader.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "../Input/InputSystem.hpp"
@@ -295,6 +296,15 @@ namespace HexEngine
 				env->_giAOProvider = new DiffuseGIAOProvider(nullptr);
 				env->_giAOProvider->Create();
 			}
+
+			// Temporal upscaler (FSR plugin) - optional, owned by its plugin. Its GPU
+			// state is created lazily on first use, after the renderer exists.
+			env->_upscalerProvider = (IUpscalerProvider*)env->_pluginSystem->TryCreateInterface(IUpscalerProvider::InterfaceName);
+			if (env->_upscalerProvider != nullptr && !env->_upscalerProvider->Create())
+			{
+				env->_upscalerProvider->Destroy();
+				env->_upscalerProvider = nullptr;
+			}
 		}
 
 		env->_debugGui = new DebugGUI;
@@ -454,6 +464,14 @@ namespace HexEngine
 		_ssaoProvider->Destroy();
 		SAFE_DELETE(_ssaoProvider);
 
+		// Release the upscaler's GPU objects while the device is still alive; the
+		// object itself belongs to its plugin.
+		if (_upscalerProvider != nullptr)
+		{
+			_upscalerProvider->Destroy();
+			_upscalerProvider = nullptr;
+		}
+
 		// Sibling r_useGIAO provider is only allocated when a plugin SSAO
 		// was loaded at Create() time, so null in the fallback config.
 		if (_giAOProvider != nullptr)
@@ -562,12 +580,16 @@ namespace HexEngine
 
 	void Game3DEnvironment::FixedStep(float dt)
 	{
+		// No physics or fixed update while a scene is still loading - see the main loop.
+		const bool worldLoading = _sceneManager->IsLoadingScene();
+
 #if USE_MULTITHREADED_PHYSICS == 0
-		if (IsPhysicsSystemEnabled())
+		if (IsPhysicsSystemEnabled() && !worldLoading)
 			_physicsSystem->Simulate(dt);
 #endif
 
-		_sceneManager->FixedUpdate(dt);
+		if (!worldLoading)
+			_sceneManager->FixedUpdate(dt);
 
 		for (auto& extension : _gameExtensions)
 		{
@@ -634,7 +656,16 @@ namespace HexEngine
 
 		while (_timeManager->_accumulatedSimulationTime >= timeStep)
 		{
-			_sceneManager->FixedUpdate(timeStep);
+			// A scene that is still deserializing (the editor loads on a worker thread)
+			// is only part of a world: its colliders arrive entity by entity. Stepping
+			// physics - or the fixed update, where components push forces into bodies -
+			// in that window drops every already-created dynamic body through ground
+			// that hasn't loaded yet. Hold both; simulation time still advances, so
+			// there is no catch-up burst when the load completes.
+			const bool worldLoading = _sceneManager->IsLoadingScene();
+
+			if (!worldLoading)
+				_sceneManager->FixedUpdate(timeStep);
 
 			for (auto& extension : _gameExtensions)
 			{
@@ -642,7 +673,7 @@ namespace HexEngine
 			}
 
 #if USE_MULTITHREADED_PHYSICS == 0
-			if (IsPhysicsSystemEnabled())
+			if (IsPhysicsSystemEnabled() && !worldLoading)
 			{
 				_physicsSystem->Simulate(timeStep);
 				_physicsSystem->Update(timeStep);
@@ -695,7 +726,8 @@ namespace HexEngine
 				{
 					if (auto mainCamera = currentScene->GetMainCamera(); mainCamera != nullptr)
 					{
-						shouldUseDepthBuffer = !mainCamera->IsDLSSEnabled();
+						// The gbuffer depth is render-sized while upscaling; the back buffer isn't.
+						shouldUseDepthBuffer = !mainCamera->IsUpscalingEnabled();
 					}
 				}
 
@@ -706,7 +738,14 @@ namespace HexEngine
 						if (_iconService)
 							_iconService->Render();
 
+						// Private preview scenes (e.g. the editor's animation viewport).
+						OffscreenRenderHooks::RunAll();
+
 						_sceneManager->Render();
+
+						// Scene renders may bias material sampling for an upscaler
+						// (SceneRenderer, r_fsrMipBias); UI textures sample unbiased.
+						_graphicsDevice->SetTextureMipBias(0.0f);
 
 						if (_iconService)
 							_iconService->CompletedFrame();
