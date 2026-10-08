@@ -335,7 +335,7 @@ namespace
 	void CopyName(wchar_t (&dst)[64], const char* src)
 	{
 		size_t i = 0;
-		for (; src[i] != 0 && i < 63; ++i)
+		for (; i < 63 && src[i] != 0; ++i)
 			dst[i] = (wchar_t)(unsigned char)src[i];
 		dst[i] = 0;
 	}
