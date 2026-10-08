@@ -97,6 +97,7 @@
     <ClCompile Include="Entity\Component\InteractionComponent.cpp" />
     <ClCompile Include="Entity\Component\Light.cpp" />
     <ClCompile Include="Entity\Component\SpotLight.cpp" />
+    <ClCompile Include="Entity\Component\AreaLight.cpp" />
     <ClCompile Include="Entity\Component\FirstPersonCameraController.cpp" />
     <ClCompile Include="Entity\Component\StaticMeshComponent.cpp" />
     <ClCompile Include="Entity\Component\RigidBody.cpp" />
@@ -146,6 +147,9 @@
     <ClCompile Include="Graphics\IInputLayout.cpp" />
     <ClCompile Include="Scene\DiffuseGI.cpp" />
     <ClCompile Include="Scene\GpuVisibilityCulling.cpp" />
+    <ClCompile Include="Graphics\GpuSkinning.cpp" />
+    <ClCompile Include="Graphics\OffscreenRenderHooks.cpp" />
+    <ClCompile Include="Scene\AnimationUtils.cpp" />
     <ClCompile Include="Scene\Mesh.cpp" />
     <ClCompile Include="Scene\MeshInstance.cpp" />
     <ClCompile Include="Scene\MeshInstanceManager.cpp" />
@@ -191,6 +195,7 @@
     <ClInclude Include="FileSystem\ProjectFile.hpp" />
     <ClInclude Include="Graphics\IDenoiserProvider.hpp" />
     <ClInclude Include="Graphics\IStreamlineProvider.hpp" />
+    <ClInclude Include="Graphics\IUpscalerProvider.hpp" />
     <ClInclude Include="Graphics\MeshLoader.hpp" />
     <ClInclude Include="Graphics\TextureLoader.hpp" />
     <ClInclude Include="GUI\Elements\Canvas.hpp" />
@@ -276,6 +281,7 @@
     <ClInclude Include="HexEngine.hpp" />
     <ClInclude Include="Entity\Component\InteractionComponent.hpp" />
     <ClInclude Include="Entity\Component\SpotLight.hpp" />
+    <ClInclude Include="Entity\Component\AreaLight.hpp" />
     <ClInclude Include="Entity\Component\FirstPersonCameraController.hpp" />
     <ClInclude Include="Entity\Component\Light.hpp" />
     <ClInclude Include="Entity\Component\StaticMeshComponent.hpp" />
@@ -351,6 +357,9 @@
     <ClInclude Include="Required.hpp" />
     <ClInclude Include="Scene\DiffuseGI.hpp" />
     <ClInclude Include="Scene\GpuVisibilityCulling.hpp" />
+    <ClInclude Include="Graphics\GpuSkinning.hpp" />
+    <ClInclude Include="Graphics\OffscreenRenderHooks.hpp" />
+    <ClInclude Include="Scene\AnimationUtils.hpp" />
     <ClInclude Include="Scene\IEntityListener.hpp" />
     <ClInclude Include="Scene\MeshInstance.hpp" />
     <ClInclude Include="Scene\MeshInstanceManager.hpp" />

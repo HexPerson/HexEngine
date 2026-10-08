@@ -1143,6 +1143,10 @@ namespace HexEngine
 	// P4.10 CAS contrast-adaptive sharpen, applied right after the TAA
 	// resolve. Off when DLSS is active (it sharpens itself).
 	HVar r_sharpen("r_sharpen", "Contrast-adaptive sharpen amount after TAA (0 = off)", 0.35f, 0.0f, 1.0f);
+	// FSR 2 (camera "FSR 2 Enabled"): its RCAS sharpen replaces r_sharpen's CAS,
+	// which is skipped like under DLSS.
+	HVar r_fsrSharpness("r_fsrSharpness", "FSR 2 RCAS sharpening (0 = off, 1 = max)", 0.4f, 0.0f, 1.0f);
+	HVar r_fsrMipBias("r_fsrMipBias", "Negative texture LOD bias while FSR 2 upscales (log2(render/display) - 1)", true, false, true);
 	// P4.12 lens flare / dirt / streak, generated from the bloom chain in the
 	// composite. Subtle by default; dirt + anamorphic streak are opt-in (they
 	// read as stylised). All 0 = the composite skips the whole block.
@@ -1980,6 +1984,22 @@ namespace HexEngine
 		_currentShadowMapForComposition = nullptr;
 		_gpuVisibilityCulling.BeginFrame(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u, _currentCamera);
 
+		// Texture LOD bias for this view: FSR renders below display size, and AMD's
+		// recommended log2(render/display) - 1 keeps textures display-sharp (the
+		// jitter resolves the extra detail). Zero for every other render, so
+		// previews and captures sharing the frame are unaffected.
+		{
+			float mipBias = 0.0f;
+			if (IsFsrActive() && r_fsrMipBias._val.b)
+			{
+				const float renderW = _currentCamera->GetViewport().width;
+				const float displayW = _currentCamera->GetDisplayViewport().width;
+				if (renderW > 0.0f && displayW > 0.0f)
+					mipBias = std::log2(renderW / displayW) - 1.0f;
+			}
+			g_pEnv->_graphicsDevice->SetTextureMipBias(mipBias);
+		}
+
 		// Discard TAA history across a cut. Reprojection cannot recover from a camera
 		// switch or a teleport - the motion vectors describe a continuous frame-to-frame
 		// delta that simply didn't happen - so the stale history smears across the new view
@@ -2554,7 +2574,8 @@ namespace HexEngine
 				_clusteredLights.GetListsSrv(),
 				r_clusterFog._val.b && r_clusterLights._val.b,
 				r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
-				r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr);
+				r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr,
+				_clusteredLights.GetAreaTextureSrv());
 			// Cloud shadows in the fog (S6). Both are last frame's data at
 			// this point in the frame (the shadow map renders during the
 			// light pass) - one frame of latency is invisible on clouds.
@@ -3573,7 +3594,7 @@ namespace HexEngine
 			bufferData._jitterOffsets =
 				(_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture())
 					? math::Vector2(0.0f, 0.0f)
-					: _taa.GetJitterOffset(viewport.width, viewport.height);
+					: GetFrameJitter(viewport.width, viewport.height);
 			_denoiseFD.jitter = bufferData._jitterOffsets;
 
 			bufferData._chromaticAbberationAmmount = r_chromaticAbberation._val.f32;
@@ -4485,6 +4506,65 @@ namespace HexEngine
 		outCameraToPrevCamera = cameraToCcWorld * ccWorldToCameraPrev;
 	}
 
+	bool SceneRenderer::IsFsrActive() const
+	{
+		return _currentCamera != nullptr && _currentCamera->IsFSREnabled() && !_currentCamera->IsEnvironmentCapture() &&
+			g_pEnv->_upscalerProvider != nullptr && g_pEnv->_upscalerProvider->IsSupported();
+	}
+
+	math::Vector2 SceneRenderer::GetFrameJitter(float renderWidth, float renderHeight) const
+	{
+		if (IsFsrActive() && renderWidth > 0.0f && renderHeight > 0.0f)
+		{
+			// Upscaler jitter is in render pixels, +y down; the vertex shaders add
+			// g_jitterOffsets * w in clip space (+y up).
+			const uint64_t frame = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
+			const math::Vector2 px = g_pEnv->_upscalerProvider->GetJitterOffset(frame, (uint32_t)renderWidth,
+				(uint32_t)_currentCamera->GetDisplayViewport().width);
+			return math::Vector2(2.0f * px.x / renderWidth, -2.0f * px.y / renderHeight);
+		}
+		return _taa.GetJitterOffset(renderWidth, renderHeight);
+	}
+
+	bool SceneRenderer::EvaluateFsr()
+	{
+		auto* upscaler = g_pEnv->_upscalerProvider;
+		if (upscaler == nullptr || _currentCamera == nullptr || _beautyRT == nullptr || _dlssTarget == nullptr)
+			return false;
+
+		const math::Viewport& renderVp = _currentCamera->GetViewport();
+
+		// History cut: camera switch, scene switch or a >5 m single-frame jump.
+		const math::Vector3 cameraPos = _cameraEntity != nullptr ? _cameraEntity->GetPosition() : math::Vector3::Zero;
+		const bool cut = _fsrHistoryCamera != _currentCamera || _fsrHistoryScene != _currentScene ||
+			(cameraPos - _fsrHistoryCameraPos).LengthSquared() > (5.0f * 5.0f);
+		_fsrHistoryCamera = _currentCamera;
+		_fsrHistoryScene = _currentScene;
+		_fsrHistoryCameraPos = cameraPos;
+
+		UpscalerFrameInputs in;
+		in.color = _beautyRT;
+		in.depth = _gbuffer.GetDepthBuffer();
+		in.motionVectors = _gbuffer.GetVelocity();
+		in.output = _dlssTarget;
+		in.renderWidth = (uint32_t)renderVp.width;
+		in.renderHeight = (uint32_t)renderVp.height;
+		// The output covers the whole (back-buffer sized) target the overlay chain reads.
+		in.displayWidth = (uint32_t)_dlssTarget->GetWidth();
+		in.displayHeight = (uint32_t)_dlssTarget->GetHeight();
+		const uint64_t frame = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
+		in.jitterPixels = upscaler->GetJitterOffset(frame, in.renderWidth, (uint32_t)_currentCamera->GetDisplayViewport().width);
+		in.frameTimeDeltaMs = g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameTimeMS : 16.6f;
+		in.cameraNear = _currentCamera->GetNearZ();
+		in.cameraFar = _currentCamera->GetFarZ();
+		in.cameraFovYRadians = ToRadian(_currentCamera->GetFov());
+		in.sharpness = r_fsrSharpness._val.f32;
+		in.sharpen = in.sharpness > 0.0f;
+		in.reset = cut;
+
+		return upscaler->Evaluate(in);
+	}
+
 	void SceneRenderer::SetStreamlineConstants()
 	{
 		auto sl = g_pEnv->_streamlineProvider;
@@ -4582,6 +4662,11 @@ namespace HexEngine
 		if (profileAlbedoOnly)
 		{
 			_gbuffer.GetDiffuse()->CopyTo(_beautyRT);
+		}
+		else if (!canPostProcess && HEX_HASFLAG(flags, SceneFlags::PreviewLighting))
+		{
+			// Lit preview: direct lighting only, then the plain tonemap below.
+			RenderLights();
 		}
 		else if (canPostProcess)
 		{
@@ -4746,10 +4831,12 @@ namespace HexEngine
 			// DLSS is itself a temporal resolver and consumes the jittered, un-resolved
 			// frame. Running our TAA as well meant two accumulators fighting over the same
 			// history, which costs sharpness for nothing.
+			// FSR 2 likewise: it is the temporal resolver for its camera.
 			const bool dlssActive =
-				_currentCamera->IsDLSSEnabled() &&
+				(_currentCamera->IsDLSSEnabled() &&
 				g_pEnv->_streamlineProvider != nullptr &&
-				g_pEnv->_streamlineProvider->IsEnabled();
+				g_pEnv->_streamlineProvider->IsEnabled()) ||
+				IsFsrActive();
 
 			// Environment captures skip TAA for the same reason they skip SSR:
 			// one-shot render, no history of their own, and resolving would
@@ -4876,6 +4963,28 @@ namespace HexEngine
 
 			if (canPostProcess)
 			{
+				if (IsFsrActive() && _dlssTarget != nullptr)
+				{
+					// Render-res HDR beauty -> display-res _dlssTarget, then the
+					// display-res overlay chain (DoF, grading, tonemap) exactly as DLSS.
+					GFX_PERF_BEGIN(0xFFFFFFFF, L"FSR 2 Upscale");
+					const bool upscaled = EvaluateFsr();
+					GFX_PERF_END();
+
+					if (!upscaled)
+					{
+						// Plain bilinear stretch so a failed dispatch still presents a
+						// whole frame (the overlay chain needs display-sized buffers).
+						g_pEnv->_graphicsDevice->SetRenderTarget(_dlssTarget);
+						g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
+						guiRenderer->FullScreenTexturedQuad(_beautyRT);
+					}
+
+					g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
+
+					RenderOverlays(flags, _dlssTarget, _currentCamera->GetRenderTarget());
+				}
+				else
 #if 1
 				if (_currentCamera->IsDLSSEnabled() && g_pEnv->_streamlineProvider != nullptr)
 				{
@@ -6017,6 +6126,7 @@ namespace HexEngine
 					_clusteredLights.GetCountsSrv(),
 					_clusteredLights.GetListsSrv() };
 				ctx->PSSetShaderResources(27, 3, clSrvs);
+				_clusteredLights.BindAreaTexturesPS();	// rect light images for ShadeAreaLight
 			}
 		}
 
@@ -6193,6 +6303,7 @@ namespace HexEngine
 			{
 				ID3D11ShaderResourceView* clNulls[3] = { nullptr, nullptr, nullptr };
 				ctx->PSSetShaderResources(27, 3, clNulls);
+				_clusteredLights.UnbindAreaTexturesPS();
 			}
 		}
 
@@ -7808,7 +7919,7 @@ namespace HexEngine
             _ssrResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
             _denoiseFD.camera = _currentCamera;
-            _denoiseFD.jitter = _taa.GetJitterOffset(bbvp.width, bbvp.height);
+            _denoiseFD.jitter = GetFrameJitter(bbvp.width, bbvp.height);
 
 			// The SSR signal handed to the resolve. Two sources so both the denoised
 			// and the raw path go through ONE draw: the resolve adds the

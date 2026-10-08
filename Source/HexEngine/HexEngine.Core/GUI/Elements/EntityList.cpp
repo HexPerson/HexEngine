@@ -1083,6 +1083,13 @@ namespace HexEngine
 
 		const std::wstring entName(entity->GetName().begin(), entity->GetName().end());
 		auto* node = new ListNode(this, entName, { _icons[IconId::Entity].get() }, entity);
+		if (_badgeProvider)
+		{
+			math::Color badgeColour(1.0f, 0.75f, 0.2f, 1.0f);
+			const std::wstring badge = _badgeProvider(entity, badgeColour);
+			if (!badge.empty())
+				node->SetBadge(badge, badgeColour);
+		}
 		node->_onClick = std::bind(&EntityList::OnClickEntityInList, this, std::placeholders::_1, std::placeholders::_2);
 		node->_onDragAndDrop = std::bind(&EntityList::OnDragAndDropEntity, this, this, std::placeholders::_1, std::placeholders::_2);
 		auto& listState = GetState(this);

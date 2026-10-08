@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>16.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{341b589c-6dc1-4efe-b65b-fb5ab8454228}</ProjectGuid>
+    <RootNamespace>HexEngine_FSRPlugin</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ProjectName>HexEngine.FSRPlugin</ProjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>true</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="Shared">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <!-- FidelityFX-FSR2 v2.2.1 (tools/deps bootstrap: fidelityfx-fsr2). The core
+         library is compiled into this DLL; the pass shaders are compiled to cs_5_0
+         headers by CompileShaders.cmd into $(IntDir)FsrShaders. -->
+    <HexFsr2ApiDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\..\ThirdParty\FidelityFX-FSR2\src\ffx-fsr2-api'))\</HexFsr2ApiDir>
+    <HexFsr2ShaderOut>$(IntDir)FsrShaders</HexFsr2ShaderOut>
+    <HexFxcPath>$(WindowsSdkVerBinPath)x64\fxc.exe</HexFxcPath>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <LinkIncremental>true</LinkIncremental>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(HexFsr2ApiDir);$(HexFsr2ShaderOut)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\</AdditionalLibraryDirectories>
+      <AdditionalDependencies>HexEngine.Core.lib;DirectXTK.lib;d3d11.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PreBuildEvent>
+      <Command>call "$(MSBuildThisFileDirectory)CompileShaders.cmd" "$(HexFxcPath)" "$(HexFsr2ApiDir)shaders" "$(HexFsr2ShaderOut)"</Command>
+    </PreBuildEvent>
+    <PostBuildEvent>
+      <Command>copy "$(TargetDir)$(TargetName).dll" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\Plugins\$(TargetName).dll"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(SolutionDir);$(SolutionDir)..\..\Include\;$(SolutionDir)..\..\ThirdParty\DirectXMath\Inc\;$(SolutionDir)..\..\ThirdParty\DirectXTK\Inc\;$(HexFsr2ApiDir);$(HexFsr2ShaderOut)</AdditionalIncludeDirectories>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+    </ClCompile>
+    <Link>
+      <SubSystem>Console</SubSystem>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(SolutionDir)..\..\Libs\$(PlatformTarget)\$(ConfigurationName)\</AdditionalLibraryDirectories>
+      <AdditionalDependencies>HexEngine.Core.lib;DirectXTK.lib;d3d11.lib;d3dcompiler.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <PreBuildEvent>
+      <Command>call "$(MSBuildThisFileDirectory)CompileShaders.cmd" "$(HexFxcPath)" "$(HexFsr2ApiDir)shaders" "$(HexFsr2ShaderOut)"</Command>
+    </PreBuildEvent>
+    <PostBuildEvent>
+      <Command>copy "$(TargetDir)$(TargetName).dll" "$(SolutionDir)..\..\Bin\$(PlatformTarget)\$(ConfigurationName)\Plugins\$(TargetName).dll"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClInclude Include="FSR2Upscaler.hpp" />
+    <ClInclude Include="ffx_fsr2_dx11.h" />
+    <ClInclude Include="Plugin.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="FSR2Upscaler.cpp" />
+    <ClCompile Include="ffx_fsr2_dx11.cpp" />
+    <ClCompile Include="Plugin.cpp" />
+    <!-- AMD's platform-independent FSR2 runtime, compiled as-is. -->
+    <ClCompile Include="$(HexFsr2ApiDir)ffx_fsr2.cpp">
+      <SDLCheck>false</SDLCheck>
+      <WarningLevel>Level1</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="$(HexFsr2ApiDir)ffx_assert.cpp">
+      <SDLCheck>false</SDLCheck>
+      <WarningLevel>Level1</WarningLevel>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="CompileShaders.cmd" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

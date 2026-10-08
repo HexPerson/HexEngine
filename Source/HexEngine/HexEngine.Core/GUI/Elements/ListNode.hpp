@@ -42,6 +42,10 @@ namespace HexEngine
 		void						SetLabel(const std::wstring& label);
 		void						SetObjectPtr(void* objectPtr);
 
+		// Short status text drawn after the label (e.g. "outdated"); empty = none.
+		void						SetBadge(const std::wstring& badge, const math::Color& colour);
+		const std::wstring&		GetBadge() const { return _badge; }
+
 		template <typename T>
 		T* GetObjectAs() const
 		{
@@ -62,6 +66,8 @@ namespace HexEngine
 		bool _isOpen = false;
 		std::vector<ListNode*> _items;
 		void* _objectPtr = nullptr;
+		std::wstring _badge;
+		math::Color _badgeColour = math::Color(1.0f, 0.75f, 0.2f, 1.0f);
 
 	public:
 		OnClickNode _onClick;

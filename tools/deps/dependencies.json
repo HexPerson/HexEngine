@@ -12,13 +12,15 @@
     { "name": "brotli",                "spdx": "MIT",          "homepage": "https://github.com/google/brotli",              "purl": "pkg:vcpkg/brotli" },
     { "name": "cxxopts",               "spdx": "MIT",          "homepage": "https://github.com/jarro2783/cxxopts",          "purl": "pkg:vcpkg/cxxopts" },
     { "name": "directxtk",             "spdx": "MIT",          "homepage": "https://github.com/microsoft/DirectXTK",        "purl": "pkg:vcpkg/directxtk" },
+    { "name": "directx-dxc",           "spdx": "NCSA AND MIT", "homepage": "https://github.com/microsoft/DirectXShaderCompiler", "purl": "pkg:vcpkg/directx-dxc", "notes": "Prebuilt DXC release: dxcompiler.dll + dxil.dll ship beside HexEngine.ShaderCompiler.exe. dxil.dll is covered by Microsoft's redistributable DXC licence terms." },
     { "name": "directxtex",            "spdx": "MIT",          "homepage": "https://github.com/microsoft/DirectXTex",       "purl": "pkg:vcpkg/directxtex" },
     { "name": "freetype",              "spdx": "FTL",          "homepage": "https://freetype.org/",                         "purl": "pkg:vcpkg/freetype" },
     { "name": "gamenetworkingsockets", "spdx": "BSD-3-Clause", "homepage": "https://github.com/ValveSoftware/GameNetworkingSockets", "purl": "pkg:vcpkg/gamenetworkingsockets" },
     { "name": "nlohmann-json",         "spdx": "MIT",          "homepage": "https://github.com/nlohmann/json",              "purl": "pkg:vcpkg/nlohmann-json" }
   ],
   "thirdparty": [
-    { "name": "SDL",              "dir": "SDL-release-3.2.4",    "version": "3.2.4",    "spdx": "Zlib",         "license_file": "ThirdParty/SDL-release-3.2.4/LICENSE.txt", "homepage": "https://www.libsdl.org/",                               "purl": "pkg:github/libsdl-org/SDL@release-3.2.4" },
+    { "name": "FidelityFX-FSR2",  "dir": "FidelityFX-FSR2",     "version": "2.2.1",    "spdx": "MIT",          "license_file": "ThirdParty/FidelityFX-FSR2/LICENSE.txt", "homepage": "https://github.com/GPUOpen-Effects/FidelityFX-FSR2", "purl": "pkg:github/GPUOpen-Effects/FidelityFX-FSR2@v2.2.1" },
+    { "name": "SDL",             "dir": "SDL-release-3.2.4",    "version": "3.2.4",    "spdx": "Zlib",         "license_file": "ThirdParty/SDL-release-3.2.4/LICENSE.txt", "homepage": "https://www.libsdl.org/",                               "purl": "pkg:github/libsdl-org/SDL@release-3.2.4" },
     { "name": "Streamline",       "dir": "Streamline",          "version": "vendored", "spdx": "LicenseRef-NVIDIA-Streamline", "license_name": "NVIDIA Streamline SDK License", "license_file": "ThirdParty/Streamline/license.txt", "homepage": "https://github.com/NVIDIAGameWorks/Streamline" },
     { "name": "VXGI",             "dir": "VXGI",                "version": "vendored", "spdx": "LicenseRef-NVIDIA-VXGI",       "license_name": "NVIDIA VXGI SDK License",       "license_file": null,                                 "homepage": "https://developer.nvidia.com/vxgi", "notes": "No top-level license file vendored; governed by the NVIDIA GameWorks SDK EULA." },
     { "name": "angelscript",      "dir": "angelscript",         "version": "vendored", "spdx": "Zlib",         "license_file": "ThirdParty/angelscript/sdk/docs/doxygen/source/doc_license.h", "homepage": "https://www.angelcode.com/angelscript/" },

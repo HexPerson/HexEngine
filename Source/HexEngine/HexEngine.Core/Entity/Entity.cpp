@@ -1141,6 +1141,8 @@ namespace HexEngine
 			prefabData["sourcePath"] = _prefabSourcePath.string();
 			prefabData["rootEntityName"] = _prefabRootEntityName;
 			prefabData["isRootInstance"] = _isPrefabInstanceRoot;
+			if (!_prefabRevision.empty())
+				prefabData["revision"] = _prefabRevision;
 
 			if (!_prefabPropertyOverrides.empty())
 			{
@@ -1247,6 +1249,7 @@ namespace HexEngine
 			_prefabSourcePath = sourcePath.empty() ? fs::path() : fs::path(sourcePath);
 			_prefabRootEntityName = prefabData.value("rootEntityName", std::string());
 			_isPrefabInstanceRoot = prefabData.value("isRootInstance", false);
+			_prefabRevision = prefabData.value("revision", std::string());
 			_prefabPropertyOverrides.clear();
 			_prefabOverridePatches.clear();
 
@@ -1349,6 +1352,7 @@ namespace HexEngine
 		_isPrefabInstanceRoot = isRootInstance;
 		_prefabPropertyOverrides.clear();
 		_prefabOverridePatches.clear();
+		_prefabRevision.clear();
 	}
 
 	void Entity::ClearPrefabSource()
@@ -1358,6 +1362,7 @@ namespace HexEngine
 		_isPrefabInstanceRoot = false;
 		_prefabPropertyOverrides.clear();
 		_prefabOverridePatches.clear();
+		_prefabRevision.clear();
 	}
 
 	bool Entity::IsPrefabInstance() const

@@ -39,7 +39,11 @@
 		float4 posRadius;      // xyz world, w radius
 		float4 colorStrength;  // rgb colour, w strength
 		float4 dirCone;        // spot: xyz dir, w cos(outer). point: unused
-		float4 params;         // x cos(inner), y type (0 point, 1 spot), z shadowed, w unused
+		float4 params;         // x cos(inner), y type (0 point, 1 spot, 2 tube, 3 rect), z shadowed, w atlas tile
+		// Area lights only (PBRutils documents the packing). Their posRadius.w is
+		// already the bounding radius of range + shape, so the sphere test below
+		// needs no special case.
+		float4 shape;
 	};
 
 	StructuredBuffer<GpuLight>  g_lights        : register(t0);
@@ -152,7 +156,7 @@
 			// against the light's TRUE geometry while acceptance used the
 			// projected sphere, and the apply's own cone falloff keeps
 			// correctness there.
-			if (!projectedFar && light.params.y > 0.5f)
+			if (!projectedFar && abs(light.params.y - 1.0f) < 0.5f)
 			{
 				// Direction into the same flipped view space as the position:
 				// rotate (w=0), then mirror z. Both flipped together keeps the

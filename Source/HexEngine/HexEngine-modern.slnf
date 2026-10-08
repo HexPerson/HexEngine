@@ -20,7 +20,14 @@
       "Plugins\\HexEngine.StreamlinePlugin\\HexEngine.StreamlinePlugin.vcxproj",
       "Plugins\\HexEngine.CitySimulationPlugin\\HexEngine.CitySimulationPlugin.vcxproj",
       "Plugins\\HexEngine.VolumetricTerrainPlugin\\HexEngine.VolumetricTerrainPlugin.vcxproj",
-      "Plugins\\HexEngine.WeatherPlugin\\HexEngine.WeatherPlugin.vcxproj"
+      "Plugins\\HexEngine.WeatherPlugin\\HexEngine.WeatherPlugin.vcxproj",
+      "HexEngine.ShaderCompiler\\HexEngine.ShaderCompiler.vcxproj",
+      "HexEngine.Shaders\\HexEngine.Shaders.vcxproj",
+      "Plugins\\HexEngine.PhysXPlugin\\HexEngine.PhysXPlugin.vcxproj",
+      "Plugins\\HexEngine.AssimpPlugin\\HexEngine.AssimpPlugin.vcxproj",
+      "Plugins\\HexEngine.NRDPlugin\\HexEngine.NRDPlugin.vcxproj",
+      "Plugins\\HexEngine.HBAOPlusPlugin\\HexEngine.HBAOPlusPlugin.vcxproj",
+      "Plugins\\HexEngine.FSRPlugin\\HexEngine.FSRPlugin.vcxproj"
     ]
   }
 }

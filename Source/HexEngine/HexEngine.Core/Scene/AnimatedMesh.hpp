@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Mesh.hpp"
+#include "../Graphics/GpuSkinning.hpp"
 
 namespace HexEngine
 {
@@ -19,6 +20,8 @@ namespace HexEngine
 		virtual ~AnimatedMesh();
 
 		virtual void UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId, bool isTransparencyPhase = false) override;
+		virtual void SetBuffers(bool isShadowMap = false) override;
+		virtual uint32_t GetAnimationObjectFlags() const override;
 
 		void UpdateBoneTransform(Animation* animation, float TimeInSeconds, std::vector<math::Matrix>& Transforms);
 
@@ -41,6 +44,15 @@ namespace HexEngine
 		void AddVertex(const AnimatedMeshVertex& vertex);
 		void AddVertices(const std::vector<AnimatedMeshVertex>& vertex);
 		const std::vector<AnimatedMeshVertex>& GetVertices() const;
+		const std::vector<SimpleAnimatedMeshVertex>& GetSimpleVertices() const { return _simpleVertices; }
+
+		// The material name stored in the .hmesh, even when loading substituted the
+		// DefaultAnimated fallback (see MeshLoader). Written back on save.
+		void SetFileMaterialName(const std::string& name) { _fileMaterialName = name; }
+		const std::string& GetFileMaterialName() const { return _fileMaterialName; }
+
+		// Bind-pose vertices for the GpuSkinning compute pass, created on first use.
+		GpuSkinSource* GetGpuSkinSource();
 
 		void SetRootTransformation(const math::Matrix& rootTrans);
 		const math::Matrix& GetRootTransformation() const;
@@ -68,5 +80,14 @@ namespace HexEngine
 		std::shared_ptr<AnimationData> _animData;
 
 		struct PerAnimationBuffer* _animationBuffer = nullptr;
+
+		std::unique_ptr<GpuSkinSource> _gpuSkinSource;
+		bool _gpuSkinSourceFailed = false;
+		std::string _fileMaterialName;
+
+		// Set by UpdateConstantBuffer for the draw being prepared, consumed by the
+		// SetBuffers call that always follows it. The mesh is shared between entities,
+		// so this is strictly per-draw state.
+		GpuSkinInstance* _preSkinnedDraw = nullptr;
 	};
 }

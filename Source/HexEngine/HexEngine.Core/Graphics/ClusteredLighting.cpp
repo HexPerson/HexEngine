@@ -7,6 +7,7 @@
 #include "../Entity/Component/Camera.hpp"
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/SpotLight.hpp"
+#include "../Entity/Component/AreaLight.hpp"
 #include "../Entity/Component/Light.hpp"
 #include "ShadowAtlas.hpp"
 
@@ -173,6 +174,203 @@ namespace HexEngine
 		SafeRelease(_lightsBuffer);
 		_cullShader.reset();
 		_debugShader.reset();
+		ReleaseAreaTextures();
+	}
+
+	void ClusteredLighting::ReleaseAreaTextures()
+	{
+		for (auto& slot : _areaSlots)
+			slot = AreaTextureSlot{};
+		SafeRelease(_areaTexUav);
+		SafeRelease(_areaTexSrv);
+		SafeRelease(_areaTex);
+		SafeRelease(_areaSampler);
+		SafeRelease(_areaBlitConstants);
+		_areaBlitShader.reset();
+	}
+
+	bool ClusteredLighting::EnsureAreaTextureArray()
+	{
+		if (_areaTex != nullptr)
+			return true;
+		if (_areaTexFailed)
+			return false;
+		_areaTexFailed = true;	// cleared on success; don't retry a failure every frame
+
+		ID3D11Device* device = reinterpret_cast<ID3D11Device*>(g_pEnv->_graphicsDevice->GetNativeDevice());
+		if (device == nullptr)
+			return false;
+
+		_areaBlitShader = IShader::Create("EngineData.Shaders/AreaLightTextureBlit.hcs");
+		if (_areaBlitShader == nullptr || _areaBlitShader->GetShaderStage(ShaderStage::ComputeShader) == nullptr)
+		{
+			LOG_WARN("ClusteredLighting: AreaLightTextureBlit shader missing - rect light images disabled");
+			return false;
+		}
+
+		// Lazily created: ~44 MB at 16 x 512^2 RGBA16F with mips, only once a
+		// textured rect light exists. RT bind for GenerateMips, UAV for the blit.
+		D3D11_TEXTURE2D_DESC desc = {};
+		desc.Width = kAreaTextureSize;
+		desc.Height = kAreaTextureSize;
+		desc.MipLevels = 0;
+		desc.ArraySize = kMaxAreaTextures;
+		desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+		desc.SampleDesc.Count = 1;
+		desc.Usage = D3D11_USAGE_DEFAULT;
+		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS;
+		desc.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+		if (FAILED(device->CreateTexture2D(&desc, nullptr, &_areaTex)))
+			return false;
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srv = {};
+		srv.Format = desc.Format;
+		srv.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+		srv.Texture2DArray.MipLevels = (UINT)-1;
+		srv.Texture2DArray.ArraySize = kMaxAreaTextures;
+		D3D11_UNORDERED_ACCESS_VIEW_DESC uav = {};
+		uav.Format = desc.Format;
+		uav.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2DARRAY;
+		uav.Texture2DArray.ArraySize = kMaxAreaTextures;
+		if (FAILED(device->CreateShaderResourceView(_areaTex, &srv, &_areaTexSrv)) ||
+			FAILED(device->CreateUnorderedAccessView(_areaTex, &uav, &_areaTexUav)))
+		{
+			ReleaseAreaTextures();
+			return false;
+		}
+
+		D3D11_SAMPLER_DESC sampler = {};
+		sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+		sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		sampler.ComparisonFunc = D3D11_COMPARISON_NEVER;
+		sampler.MaxLOD = D3D11_FLOAT32_MAX;
+		D3D11_BUFFER_DESC cb = {};
+		cb.ByteWidth = 32;
+		cb.Usage = D3D11_USAGE_DYNAMIC;
+		cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		cb.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		if (FAILED(device->CreateSamplerState(&sampler, &_areaSampler)) ||
+			FAILED(device->CreateBuffer(&cb, nullptr, &_areaBlitConstants)))
+		{
+			ReleaseAreaTextures();
+			return false;
+		}
+
+		_areaTexFailed = false;
+		return true;
+	}
+
+	uint32_t ClusteredLighting::AcquireAreaTexture(ID3D11DeviceContext* context, const std::shared_ptr<ITexture2D>& texture,
+		bool srgb, bool live)
+	{
+		if (texture == nullptr || !EnsureAreaTextureArray())
+			return 0;
+
+		// Reuse the slice already holding this image; else the first slice not
+		// claimed this frame (stale entries are overwritten).
+		int32_t index = -1;
+		for (uint32_t i = 0; i < kMaxAreaTextures && index < 0; ++i)
+			if (_areaSlots[i].texture == texture && _areaSlots[i].srgb == srgb)
+				index = (int32_t)i;
+		bool resample = index < 0;
+		if (index < 0)
+		{
+			// Empty slices first, so an image whose light just hasn't been
+			// gathered yet this frame isn't evicted (and re-sampled) needlessly.
+			for (uint32_t i = 0; i < kMaxAreaTextures && index < 0; ++i)
+				if (!_areaSlots[i].usedThisFrame && _areaSlots[i].texture == nullptr)
+					index = (int32_t)i;
+			for (uint32_t i = 0; i < kMaxAreaTextures && index < 0; ++i)
+				if (!_areaSlots[i].usedThisFrame)
+					index = (int32_t)i;
+			if (index < 0)
+			{
+				static bool s_warned = false;
+				if (!s_warned)
+				{
+					s_warned = true;
+					LOG_WARN("ClusteredLighting: more than %u distinct rect light images in view - extras render untextured", kMaxAreaTextures);
+				}
+				return 0;
+			}
+		}
+
+		AreaTextureSlot& slot = _areaSlots[index];
+		slot.usedThisFrame = true;
+		if (live && !slot.resampledThisFrame)
+			resample = true;
+
+		if (resample)
+		{
+			auto* srcSrv = reinterpret_cast<ID3D11ShaderResourceView*>(texture->GetNativeShaderView());
+			auto* stage = _areaBlitShader->GetShaderStage(ShaderStage::ComputeShader);
+			if (srcSrv == nullptr || stage == nullptr)
+				return 0;
+
+			// Read the source mip nearest 4x the slice resolution and box 4x4 taps
+			// per texel (fewer when the source is already small).
+			const float srcSize = (float)std::max(1, std::max(texture->GetWidth(), texture->GetHeight()));
+			const float ratio = srcSize / (float)kAreaTextureSize;
+			D3D11_SHADER_RESOURCE_VIEW_DESC srcDesc = {};
+			srcSrv->GetDesc(&srcDesc);
+			const float maxSrcMip = srcDesc.ViewDimension == D3D11_SRV_DIMENSION_TEXTURE2D && srcDesc.Texture2D.MipLevels > 0
+				? (float)(srcDesc.Texture2D.MipLevels - 1) : 0.0f;
+			const uint32_t taps = ratio > 3.0f ? 4u : (ratio > 1.5f ? 2u : 1u);
+			const float srcMip = std::clamp(std::log2(std::max(ratio / (float)taps, 1.0f)), 0.0f, maxSrcMip);
+			// An _SRGB view already decodes in the sampler.
+			const bool viewIsSrgb = srcDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || srcDesc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
+				srcDesc.Format == DXGI_FORMAT_BC1_UNORM_SRGB || srcDesc.Format == DXGI_FORMAT_BC2_UNORM_SRGB ||
+				srcDesc.Format == DXGI_FORMAT_BC3_UNORM_SRGB || srcDesc.Format == DXGI_FORMAT_BC7_UNORM_SRGB;
+
+			struct { uint32_t params[4]; float lod[4]; } constants = {
+				{ (uint32_t)index, kAreaTextureSize, (srgb && !viewIsSrgb) ? 1u : 0u, taps }, { srcMip, 0.0f, 0.0f, 0.0f } };
+			D3D11_MAPPED_SUBRESOURCE mapped = {};
+			if (FAILED(context->Map(_areaBlitConstants, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+				return 0;
+			memcpy(mapped.pData, &constants, sizeof(constants));
+			context->Unmap(_areaBlitConstants, 0);
+
+			context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(stage->GetNativePtr()), nullptr, 0);
+			context->CSSetShaderResources(0, 1, &srcSrv);
+			context->CSSetUnorderedAccessViews(0, 1, &_areaTexUav, nullptr);
+			context->CSSetSamplers(0, 1, &_areaSampler);
+			context->CSSetConstantBuffers(6, 1, &_areaBlitConstants);
+			context->Dispatch((kAreaTextureSize + 7) / 8, (kAreaTextureSize + 7) / 8, 1);
+
+			ID3D11ShaderResourceView* nullSrv = nullptr;
+			ID3D11UnorderedAccessView* nullUav = nullptr;
+			ID3D11Buffer* nullCb = nullptr;
+			context->CSSetShaderResources(0, 1, &nullSrv);
+			context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
+			context->CSSetConstantBuffers(6, 1, &nullCb);
+			context->CSSetShader(nullptr, nullptr, 0);
+
+			slot.texture = texture;
+			slot.srgb = srgb;
+			slot.resampledThisFrame = true;
+			_areaMipsDirty = true;
+		}
+
+		return (uint32_t)index + 1;
+	}
+
+	void ClusteredLighting::BindAreaTexturesPS()
+	{
+		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (context == nullptr)
+			return;
+		context->PSSetShaderResources(kAreaTextureSlot, 1, &_areaTexSrv);
+		if (_areaSampler != nullptr)
+			context->PSSetSamplers(kAreaSamplerSlot, 1, &_areaSampler);
+	}
+
+	void ClusteredLighting::UnbindAreaTexturesPS()
+	{
+		auto* context = reinterpret_cast<ID3D11DeviceContext*>(g_pEnv->_graphicsDevice->GetNativeDeviceContext());
+		if (context == nullptr)
+			return;
+		ID3D11ShaderResourceView* nullSrv = nullptr;
+		context->PSSetShaderResources(kAreaTextureSlot, 1, &nullSrv);
 	}
 
 	// Units slice part 3 (SceneRenderer.cpp declares it): lumens -> candela
@@ -272,6 +470,66 @@ namespace HexEngine
 			}
 		}
 
+		// Area lights (tube / rect). Always unshadowed. posRadius.w is the
+		// BOUNDING radius (range + shape extent) so the cull's sphere test needs
+		// no special case; the authored range, measured from the shape, rides in
+		// params.x. Packing documented in PBRutils.shader.
+		for (auto& slot : _areaSlots)
+		{
+			slot.usedThisFrame = false;
+			slot.resampledThisFrame = false;
+		}
+
+		std::vector<AreaLight*> areas;
+		if (scene->GetComponents<AreaLight>(areas))
+		{
+			for (auto* l : areas)
+			{
+				if (l == nullptr || l->GetEntity() == nullptr || l->GetEntity()->IsPendingDeletion())
+					continue;
+				const auto diffuse = l->GetDiffuseColour();
+				float strength = std::max(0.0f, l->GetLightStrength() * l->GetLightMultiplier());
+				if (diffuse.w <= 0.0f || strength <= 0.0f)
+					continue;
+				const bool isRect = l->GetShape() == AreaLight::Shape::Rect;
+				if (physicalUnits)
+				{
+					// lumens -> intensity. Tube: isotropic like a point (4pi).
+					// Rect: cosine emitter, normal intensity = flux / pi over one
+					// hemisphere, half that per side when two-sided.
+					strength /= isRect ? (l->GetTwoSided() ? 2.0f * kPi : kPi) : 4.0f * kPi;
+				}
+				if (lights.size() >= kMaxLights)
+					break;
+
+				math::Vector3 centre, halfW, halfH, facing;
+				l->GetWorldAxes(centre, halfW, halfH, facing);
+
+				GpuLight gl = {};
+				gl.posRadius = math::Vector4(centre.x, centre.y, centre.z, l->GetBoundingRadius());
+				gl.colorStrength = math::Vector4(diffuse.x, diffuse.y, diffuse.z, strength);
+				// dirCone.w: tube radius, or for a rect the 1-based image slice (0 = none).
+				const float rectImage = isRect
+					? (float)AcquireAreaTexture(context, l->GetTexture(), l->GetTextureIsSRGB(), l->GetTextureIsLive())
+					: 0.0f;
+				gl.dirCone = math::Vector4(halfW.x, halfW.y, halfW.z, isRect ? rectImage : l->GetTubeRadius());
+				gl.params = math::Vector4(std::max(0.05f, l->GetRadius()), isRect ? 3.0f : 2.0f, 0.0f, -1.0f);
+				gl.shape = math::Vector4(halfH.x, halfH.y, halfH.z, l->GetTwoSided() ? 1.0f : 0.0f);
+				lights.push_back(gl);
+			}
+		}
+
+		// New / changed images: one mip rebuild covering every slice.
+		if (_areaMipsDirty && _areaTexSrv != nullptr)
+		{
+			context->GenerateMips(_areaTexSrv);
+			_areaMipsDirty = false;
+		}
+		// Drop references to images no light used this frame.
+		for (auto& slot : _areaSlots)
+			if (!slot.usedThisFrame)
+				slot.texture.reset();
+
 		_lastLightCount = (uint32_t)lights.size();
 
 		// ---- Upload -------------------------------------------------------
@@ -340,6 +598,7 @@ namespace HexEngine
 		ID3D11ShaderResourceView* srvs[3] = { _lightsSrv, _countsSrv, _listsSrv };
 		context->PSSetShaderResources(21, 3, srvs);
 		context->PSSetConstantBuffers(5, 1, &_constantsBuffer);
+		BindAreaTexturesPS();	// rect light images (t41 / s5)
 	}
 
 	void ClusteredLighting::UnbindApply()
@@ -351,6 +610,7 @@ namespace HexEngine
 		context->PSSetShaderResources(21, 3, nullSrvs);
 		ID3D11Buffer* nullCb = nullptr;
 		context->PSSetConstantBuffers(5, 1, &nullCb);
+		UnbindAreaTexturesPS();
 	}
 
 	void ClusteredLighting::RenderDebug(ITexture2D* gbufferNormalDepth)

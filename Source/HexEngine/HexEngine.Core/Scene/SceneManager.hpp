@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Scene.hpp"
+#include <atomic>
 
 namespace HexEngine
 {
@@ -35,6 +36,15 @@ namespace HexEngine
 
 		void SetActiveScene(const std::shared_ptr<Scene>& scene);
 
+		// A scene is being deserialized. The editor loads a level on a worker thread
+		// (minutes for a big one) while the main loop keeps running, so until the
+		// load finishes the world is only partly there: a dynamic body created early
+		// has no ground under it yet. The frame loop holds physics and the fixed
+		// update while this is true. Calls nest; SceneSaveFile brackets its own loads.
+		void BeginSceneLoad() { ++_scenesLoading; }
+		void EndSceneLoad() { --_scenesLoading; }
+		bool IsLoadingScene() const { return _scenesLoading.load() > 0; }
+
 		// IResourceLoader virtual overrides
 		virtual std::shared_ptr<IResource>	LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
 		virtual std::shared_ptr<IResource>	LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
@@ -48,5 +58,6 @@ namespace HexEngine
 		std::vector<std::shared_ptr<Scene>> _scenes;
 		std::recursive_mutex _mutex;
 		std::shared_ptr<Scene> _currentScene;
+		std::atomic<int32_t> _scenesLoading{ 0 };
 	};
 }

@@ -315,6 +315,13 @@ namespace HexEngine
 		void SetPrefabOverridePatches(const std::vector<PrefabOverridePatch>& patches);
 		const std::vector<PrefabOverridePatch>& GetPrefabOverridePatches() const;
 
+		// Content hash of the prefab asset this instance was last built / synced
+		// from (PrefabLoader::ComputePrefabRevision). Kept on instance roots; the
+		// editor compares it with the asset's current hash to flag out-of-date
+		// instances. Empty = unknown (instances saved before revisions existed).
+		void SetPrefabRevision(const std::string& revision) { _prefabRevision = revision; }
+		const std::string& GetPrefabRevision() const { return _prefabRevision; }
+
 	private:
 		struct EntityGuidComponent
 		{
@@ -383,6 +390,7 @@ namespace HexEngine
 		std::string _prefabNodeId;
 		std::unordered_set<std::string> _prefabPropertyOverrides;
 		std::vector<PrefabOverridePatch> _prefabOverridePatches;
+		std::string _prefabRevision;
 		
 	};
 }

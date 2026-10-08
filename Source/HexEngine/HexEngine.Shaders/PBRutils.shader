@@ -441,6 +441,311 @@
 		return float4(color, 1.0f);
 	}
 
+	// ---- Area lights (AreaLight component, clustered types 2 and 3) ----------
+	//
+	// Packed by ClusteredLighting::UpdateAndCull:
+	//   posRadius     xyz centre, w bounding radius (range + shape extent; cull only)
+	//   colorStrength rgb colour, w intensity (physical units: lm/4pi tube,
+	//                 lm/pi one-sided rect, lm/2pi two-sided rect)
+	//   dirCone       xyz tube axis * halfLength | rect right * halfWidth, w tube radius
+	//   params        x range from the SHAPE, y type (2 tube, 3 rect)
+	//   shape         xyz rect up * halfHeight, w 1 = two-sided. A rect emits along
+	//                 cross(up, right) = the entity's Forward (AreaLightFacing).
+	//
+	// Karis 2013 ("Real Shading in Unreal Engine 4") representative point for the
+	// specular lobe with its energy normalisation, and closed-form irradiance for
+	// diffuse (line irradiance for tubes, polygon form factor for rects), both
+	// normalised so the far field reduces to a point light of the same intensity:
+	// moving away from an area light is indistinguishable from a point light.
+	static const float AREA_LIGHT_TUBE = 2.0f;
+	static const float AREA_LIGHT_RECT = 3.0f;
+
+	// Rect light images: one slice per image in a shared array (ClusteredLighting,
+	// kAreaTextureSize = 512 -> mips 0..9), bound raw at t41 / s5 for the deferred
+	// apply and forward transparents. A rect's dirCone.w carries its 1-based
+	// slice (0 = untextured), so nothing is sampled unless a light has an image.
+	Texture2DArray g_areaLightTextures : register(t41);
+	SamplerState g_areaLightSampler : register(s5);
+	static const float AREA_LIGHT_TEXTURE_SIZE = 512.0f;
+	static const float AREA_LIGHT_TEXTURE_MAX_MIP = 9.0f;
+
+	struct AreaLightTerms
+	{
+		float3 diffuseL;     // unit, surface -> light (diffuse Fresnel)
+		float  diffuseTerm;  // irradiance / intensity: stands in for NdotL * attenuation
+		float3 specularL;    // unit, surface -> representative point
+		float  specularTerm; // NdotL * attenuation * energy normalisation at that point
+		float3 diffuseTint;  // rect image colour for the diffuse / reflected light (1 = untextured)
+		float3 specularTint;
+	};
+
+	// Emitting side of a rect: right x up (the entity's Forward for the
+	// component's axis convention).
+	float3 AreaLightFacing(float3 right, float3 up)
+	{
+		return normalize(cross(up, right));
+	}
+
+	float3 ClosestPointOnSegment(float3 a, float3 b, float3 p)
+	{
+		const float3 ab = b - a;
+		const float t = saturate(dot(p - a, ab) / max(dot(ab, ab), 1e-8f));
+		return a + ab * t;
+	}
+
+	// Lambert horizon wrap for a spherical source of form factor sinAlphaSqr
+	// (UE4 SphereHorizonCosWrap): smooth irradiance as the source sinks below
+	// the surface's horizon instead of a hard cos clamp.
+	float AreaHorizonCosWrap(float NoL, float sinAlphaSqr)
+	{
+		const float sinAlpha = sqrt(sinAlphaSqr);
+		if (NoL < sinAlpha)
+		{
+			NoL = max(NoL, -sinAlpha);
+			NoL = (sinAlpha + NoL) * (sinAlpha + NoL) / (4.0f * sinAlpha);
+		}
+		return NoL;
+	}
+
+	// Range window on the distance to the SHAPE (not the centre), same
+	// UE4/Frostbite curve as point lights.
+	float AreaLightWindow(float distToShape, float range)
+	{
+		if (distToShape >= range)
+			return 0.0f;
+		float w = saturate(1.0f - pow(distToShape / range, 4.0f));
+		return w * w;
+	}
+
+	bool ComputeAreaLightTerms(float type, float3 centre, float4 axisRadius, float4 axisB2Sided, float range,
+		float3 P, float3 N, float3 V, float alphaRoughness, out AreaLightTerms t)
+	{
+		t = (AreaLightTerms)0;
+		t.diffuseTint = 1.0f.xxx;
+		t.specularTint = 1.0f.xxx;
+		const float3 R = reflect(-V, N);
+		const float minDistSqr = 0.01f * 0.01f;
+
+		if (type < 2.5f)
+		{
+			// ---- Tube: segment p0..p1 with a spherical cross-section --------
+			const float3 L0 = (centre - axisRadius.xyz) - P;
+			const float3 L1 = (centre + axisRadius.xyz) - P;
+			const float tubeRadius = max(axisRadius.w, 0.0f);
+
+			const float3 closest = ClosestPointOnSegment(L0, L1, 0.0f.xxx);
+			const float distToAxis = length(closest);
+			const float window = AreaLightWindow(max(distToAxis - tubeRadius, 0.0f), range);
+			if (window <= 0.0f)
+				return false;
+
+			// Diffuse: irradiance of a uniform line of total intensity 1,
+			// E = (n.l0 + n.l1) / (|L0||L1| + L0.L1), exact for the segment
+			// and -> cos/d^2 in the far field. The denominator is floored at the
+			// tube surface so a pixel touching the tube doesn't blow up.
+			const float len0 = length(L0);
+			const float len1 = length(L1);
+			const float nl = dot(N, L0) / max(len0, 1e-4f) + dot(N, L1) / max(len1, 1e-4f);
+			const float denom = max(len0 * len1 + dot(L0, L1), 2.0f * max(tubeRadius * tubeRadius, minDistSqr));
+			t.diffuseTerm = 2.0f * saturate(0.5f * nl) / denom * window;
+			t.diffuseL = closest / max(distToAxis, 1e-4f);
+
+			// Specular: point on the segment closest to the reflection ray, then
+			// the point on the tube's sphere closest to the ray (Karis).
+			const float3 Ld = L1 - L0;
+			const float rLd = dot(R, Ld);
+			const float tSeg = saturate((dot(R, L0) * rLd - dot(L0, Ld)) / max(dot(Ld, Ld) - rLd * rLd, 1e-6f));
+			float3 Ls = L0 + Ld * tSeg;
+			const float3 toRay = dot(Ls, R) * R - Ls;
+			Ls += toRay * saturate(tubeRadius / max(length(toRay), 1e-4f));
+
+			const float distSq = max(dot(Ls, Ls), minDistSqr);
+			const float invDist = rsqrt(distSq);
+			t.specularL = Ls * invDist;
+
+			// Energy normalisation: widen the lobe by the subtended angles -
+			// squared for the sphere (2D spread), linear for the length (1D).
+			const float a = max(alphaRoughness, 1e-4f);
+			const float sphereA = a / saturate(a + 0.5f * saturate(tubeRadius * invDist));
+			const float lineA = a / saturate(a + 0.5f * saturate(2.0f * length(axisRadius.xyz) * invDist));
+			const float energy = sphereA * sphereA * lineA;
+
+			t.specularTerm = saturate(dot(N, t.specularL)) * energy * window / distSq;
+			return true;
+		}
+
+		// ---- Rect: centre +- right*hw +- up*hh --------------------------------
+		const float3 right = axisRadius.xyz;
+		const float3 up = axisB2Sided.xyz;
+		const bool twoSided = axisB2Sided.w > 0.5f;
+		const float3 facing = AreaLightFacing(right, up);
+
+		const float3 toP = P - centre;
+		const float planeDist = dot(toP, facing);
+		if (!twoSided && planeDist <= 0.0f)
+			return false; // behind a one-sided emitter
+
+		// Distance to the rect (window) via the clamped local coordinates.
+		const float hw = length(right);
+		const float hh = length(up);
+		const float3 rightN = right / max(hw, 1e-6f);
+		const float3 upN = up / max(hh, 1e-6f);
+		const float3 nearest = centre
+			+ rightN * clamp(dot(toP, rightN), -hw, hw)
+			+ upN * clamp(dot(toP, upN), -hh, hh);
+		const float window = AreaLightWindow(length(nearest - P), range);
+		if (window <= 0.0f)
+			return false;
+
+		// Diffuse: vector form factor of the quad, F = 1/2pi sum theta_i u_i,
+		// horizon-wrapped as an equivalent sphere (|F| = sin^2 alpha). For
+		// radiance Le = I/A, E = pi Le FF, so E/I = pi FF / A, which -> the
+		// cos.cos/d^2 of a cosine emitter in the far field.
+		const float3 v0 = normalize(centre - right - up - P);
+		const float3 v1 = normalize(centre + right - up - P);
+		const float3 v2 = normalize(centre + right + up - P);
+		const float3 v3 = normalize(centre - right + up - P);
+		float3 F = 0.0f.xxx;
+		F += acos(clamp(dot(v0, v1), -1.0f, 1.0f)) * normalize(cross(v0, v1) + 1e-8f);
+		F += acos(clamp(dot(v1, v2), -1.0f, 1.0f)) * normalize(cross(v1, v2) + 1e-8f);
+		F += acos(clamp(dot(v2, v3), -1.0f, 1.0f)) * normalize(cross(v2, v3) + 1e-8f);
+		F += acos(clamp(dot(v3, v0), -1.0f, 1.0f)) * normalize(cross(v3, v0) + 1e-8f);
+		F *= 1.0f / (2.0f * PI);
+		// The winding's sign depends on which side P is on; point F at the light.
+		if (dot(F, centre - P) < 0.0f)
+			F = -F;
+		const float ffLen = length(F);
+		if (ffLen > 1e-6f)
+		{
+			const float3 Fdir = F / ffLen;
+			const float ff = ffLen * AreaHorizonCosWrap(dot(N, Fdir), saturate(ffLen));
+			const float area = 4.0f * hw * hh;
+			t.diffuseTerm = PI * ff / max(area, 1e-4f) * window;
+			t.diffuseL = Fdir;
+		}
+
+		// Specular: where the reflection ray meets the plane, clamped to the rect.
+		// A ray running away from the plane uses the point a centre-distance down
+		// the ray projected onto the plane - the rect edge it is closest to.
+		const float rDotF = dot(R, facing);
+		const float sideSign = planeDist >= 0.0f ? 1.0f : -1.0f;
+		float3 hit;
+		if (rDotF * sideSign < -1e-4f)
+			hit = P + R * (-planeDist / rDotF);
+		else
+		{
+			const float3 farP = P + R * length(toP);
+			hit = farP - facing * dot(farP - centre, facing);
+		}
+		const float3 hitLocal = hit - centre;
+		const float3 Ls = centre
+			+ rightN * clamp(dot(hitLocal, rightN), -hw, hw)
+			+ upN * clamp(dot(hitLocal, upN), -hh, hh)
+			- P;
+
+		const float distSq = max(dot(Ls, Ls), minDistSqr);
+		const float invDist = rsqrt(distSq);
+		t.specularL = Ls * invDist;
+
+		// Lambertian emitter cosine at the representative point, and the lobe
+		// widened by the rect's equivalent-disc radius.
+		const float emitCos = twoSided ? abs(dot(-t.specularL, facing)) : saturate(dot(-t.specularL, facing));
+		const float a = max(alphaRoughness, 1e-4f);
+		const float discRadius = sqrt(4.0f * hw * hh / PI);
+		const float normA = a / saturate(a + 0.5f * saturate(discRadius * invDist));
+
+		t.specularTerm = saturate(dot(N, t.specularL)) * emitCos * normA * normA * window / distSq;
+
+		// Rect image. Seen from the emitting side it reads the right way round:
+		// u runs along -Right, v along -Up.
+		if (axisRadius.w > 0.5f)
+		{
+			const float slice = axisRadius.w - 1.0f;
+			const float imageSize = 2.0f * max(hw, hh);
+			const float3 specLocal = Ls + P - centre;
+			const float3 diffLocal = nearest - centre;
+			const float2 specUv = float2(0.5f - 0.5f * dot(specLocal, rightN) / max(hw, 1e-6f),
+				0.5f - 0.5f * dot(specLocal, upN) / max(hh, 1e-6f));
+			const float2 diffUv = float2(0.5f - 0.5f * dot(diffLocal, rightN) / max(hw, 1e-6f),
+				0.5f - 0.5f * dot(diffLocal, upN) / max(hh, 1e-6f));
+
+			// Reflection: the GGX lobe (~alpha radians wide) covers about
+			// 2 alpha d of the plane - mirrors read mip 0, rough floors a blur.
+			const float lobeTexels = 2.0f * a * sqrt(distSq) / imageSize * AREA_LIGHT_TEXTURE_SIZE;
+			const float specLod = clamp(log2(max(lobeTexels, 1.0f)), 0.0f, AREA_LIGHT_TEXTURE_MAX_MIP);
+			// Diffuse: the cosine lobe's footprint on the plane is ~2x the
+			// distance across - local colour up close, the image average by half
+			// the image size away. Floored so pixel-scale detail never shows.
+			const float diffLod = clamp(AREA_LIGHT_TEXTURE_MAX_MIP + 1.0f + log2(max(length(nearest - P), 1e-4f) / imageSize),
+				3.0f, AREA_LIGHT_TEXTURE_MAX_MIP);
+
+			t.specularTint = g_areaLightTextures.SampleLevel(g_areaLightSampler, float3(specUv, slice), specLod).rgb;
+			t.diffuseTint = g_areaLightTextures.SampleLevel(g_areaLightSampler, float3(diffUv, slice), diffLod).rgb;
+		}
+		return true;
+	}
+
+	// Direct lighting from one area light, same BRDF and conventions as
+	// CalculatePBRPointLighting / the forward PBRDirectLight (f0, R90 grazing
+	// reflectance, roughness floor + specular AA, diffuse() energy flag).
+	// perceptualRoughness is the raw material value.
+	float3 ShadeAreaLight(float3 P, float3 N, float3 baseColour, float metallic, float perceptualRoughness,
+		float3 lightColour, float type, float3 centre, float4 axisRadius, float4 axisB2Sided, float range)
+	{
+		metallic = saturate(metallic);
+		perceptualRoughness = clamp(perceptualRoughness, MinRoughness, 1.0f);
+		perceptualRoughness = ApplySpecularAntiAliasing(N, perceptualRoughness);
+		const float alphaRoughness = perceptualRoughness * perceptualRoughness;
+
+		const float3 V = normalize(g_eyePos.xyz - P);
+		AreaLightTerms t;
+		if (!ComputeAreaLightTerms(type, centre, axisRadius, axisB2Sided, range, P, N, V, alphaRoughness, t))
+			return 0.0f.xxx;
+
+		const float3 diffuseColor = (baseColour * (float3(1.0f, 1.0f, 1.0f) - f0)) * (1.0f - metallic);
+		const float3 specularColor = lerp(f0, baseColour, metallic);
+		const float reflectance = max(max(specularColor.r, specularColor.g), specularColor.b);
+		const float3 R0 = specularColor;
+		const float3 R90 = float3(1.0f, 1.0f, 1.0f) * saturate(reflectance * 25.0f);
+		const float NdotV = abs(dot(N, V)) + 0.001f;
+
+		float3 colour = 0.0f.xxx;
+
+		if (t.diffuseTerm > 0.0f)
+		{
+			const float3 Hd = normalize(t.diffuseL + V);
+			const float3 Fd = specularReflection(R0, R90, saturate(dot(V, Hd)));
+			colour += t.diffuseTerm * (1.0f - Fd) * diffuse(diffuseColor) * t.diffuseTint;
+		}
+
+		if (t.specularTerm > 0.0f)
+		{
+			const float3 L = t.specularL;
+			const float3 H = normalize(L + V);
+			const float NdotL = clamp(dot(N, L), 0.001f, 1.0f);
+			const float3 F = specularReflection(R0, R90, saturate(dot(V, H)));
+			const float G = geometricOcclusion(NdotL, NdotV, alphaRoughness);
+			const float D = microfacetDistribution(saturate(dot(N, H)), alphaRoughness);
+			colour += t.specularTerm * F * G * D / (4.0f * NdotL * NdotV) * t.specularTint;
+		}
+
+		return colour * lightColour;
+	}
+
+	// Nearest point of an area light's shape to P - the fog / scattering
+	// approximation (a point light at the closest point of the emitter).
+	float3 AreaLightNearestPoint(float type, float3 centre, float4 axisRadius, float4 axisB2Sided, float3 P)
+	{
+		if (type < 2.5f)
+			return ClosestPointOnSegment(centre - axisRadius.xyz, centre + axisRadius.xyz, P);
+		const float hw = length(axisRadius.xyz);
+		const float hh = length(axisB2Sided.xyz);
+		const float3 rightN = axisRadius.xyz / max(hw, 1e-6f);
+		const float3 upN = axisB2Sided.xyz / max(hh, 1e-6f);
+		const float3 toP = P - centre;
+		return centre + rightN * clamp(dot(toP, rightN), -hw, hw) + upN * clamp(dot(toP, upN), -hh, hh);
+	}
+
 	float4 CalculatePBRSpotLighting(
 		Texture2D materialTex,
 		SamplerState samp,

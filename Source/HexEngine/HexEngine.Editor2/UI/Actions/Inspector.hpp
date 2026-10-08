@@ -78,6 +78,7 @@ namespace HexEditor
 		HexEngine::Button* _deleteBtn = nullptr;
 		HexEngine::Button* _revertPrefabBtn = nullptr;
 		HexEngine::Button* _applyPrefabBtn = nullptr;
+		HexEngine::Button* _updatePrefabBtn = nullptr;	// enabled when the instance's prefab changed since it was built
 		HexEngine::Button* _prefabOverridesBtn = nullptr;
 		HexEngine::ScrollView* _componentScroll = nullptr;
 		HexEngine::TabView* _tabs = nullptr;

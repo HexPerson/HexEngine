@@ -700,7 +700,7 @@ namespace HexEngine
 			ss << "\"VertexShaderIncludes\"\n{\n\tMeshCommon\n\tUtils\n}\n";
 			ss << "\"PixelShaderIncludes\"\n{\n\tMeshCommon\n\tUtils\n\tAtmosphere\n\tPBRutils\n}\n";
 			ss << "\"VertexShader\"\n{\n";
-			ss << "\tMeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)\n\t{\n";
+			ss << "\tMeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID, uint vertexID : SV_VertexID)\n\t{\n";
 			ss << "\t\tMeshPixelInput output;\n";
 			ss << "\t\tinput.position.w = 1.0f;\n";
 			ss << "\t\tmatrix worldMatrix = mul(instance.world, g_worldMatrix);\n";
@@ -720,7 +720,8 @@ namespace HexEngine
 			ss << "\t\t\toutput.cullDistance = length(output.positionWS.xyz - g_eyePos.xyz) >= g_cullDistance ? -1.0f : 1.0f;\n";
 			ss << "\t\t}\n";
 			ss << "\t\toutput.position = mul(output.position, g_viewProjectionMatrix);\n";
-			ss << "\t\tfloat4 prevFrame_worldPos = mul(input.position, worldPrev);\n";
+			// Skinned meshes (GpuSkinning) read last frame's pose - see MeshCommon.
+			ss << "\t\tfloat4 prevFrame_worldPos = mul(PreviousLocalPosition(input.position, vertexID), worldPrev);\n";
 			ss << "\t\t[branch]\n";
 			ss << "\t\tif (g_material.windSwayParams.w > 0.5f)\n\t\t{\n";
 			ss << "\t\t\tprevFrame_worldPos.xyz += WindSwayOffset(prevFrame_worldPos.xyz, worldPrev[3].xyz, g_material.windSwayParams, g_weatherSurface.windDirectionAndSpeed, g_timePrev);\n";
@@ -1031,6 +1032,12 @@ namespace HexEngine
 		{
 			if (auto* fsys = material.GetOwningFileSystem(); fsys != nullptr)
 			{
+				// Engine-owned materials of an INSTALLED build: the engine Data
+				// folder is read-only Program Files, so bake into the per-user
+				// data root instead. Loaded back by absolute path either way.
+				if (FileSystem::IsInstalledBuild() && g_pEnv != nullptr && fsys == &g_pEnv->GetFileSystem())
+					return FileSystem::GetUserDataRoot() / "GeneratedShaders";
+
 				const fs::path dataDir = fsys->GetDataDirectory();
 				if (!dataDir.empty())
 					return dataDir / "Shaders" / "Generated";
@@ -1152,7 +1159,13 @@ namespace HexEngine
 			//   6 - dust sampler arg (sand textures).
 			//   7 - vegetation wind sway in the emitted VS (WindSwayOffset
 			//       at g_time + g_timePrev, gated on windSwayParams.w).
-			combined += "\0codegen:8";
+			//   8 - (unrecorded)
+			//   9 - pre-skinned motion vectors (PreviousLocalPosition, SV_VertexID),
+			//       so graph materials work on GPU-skinned characters.
+			// The separator is pushed as a char: the old "\0codegen:N" literal was a
+			// C string that ends at its first byte, so the salt was never appended.
+			combined += '\0';
+			combined += "codegen:9";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);

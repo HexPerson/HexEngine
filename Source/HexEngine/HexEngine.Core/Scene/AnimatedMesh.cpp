@@ -6,6 +6,7 @@
 #include "../Environment/LogFile.hpp"
 #include "../Entity/Entity.hpp"
 #include "../Entity/Component/SkeletalAnimationComponent.hpp"
+#include <chrono>
 
 namespace HexEngine
 {
@@ -42,38 +43,91 @@ namespace HexEngine
 
 	void AnimatedMesh::UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId, bool isTransparencyPhase)
 	{
-		Mesh::UpdateConstantBuffer(entity, localTM, material, instanceId, isTransparencyPhase);
-
 		// The icon-preview pipeline (IconService::Render -> SceneRenderer ->
 		// Scene::RenderEntities) walks meshes WITHOUT an owning Entity in
 		// order to rasterise a thumbnail straight from disk. `entity` is
 		// nullptr in that path - skipping the SkeletalAnimationComponent
 		// lookup means the thumbnail renders in T-pose (no bone transforms
 		// uploaded), which is the desired behaviour for an asset preview.
-		if (entity == nullptr)
+		SkeletalAnimationComponent* skeletalMeshComp = entity != nullptr ? entity->GetComponent<SkeletalAnimationComponent>() : nullptr;
+
+		// Decide the skinning path BEFORE the per-object buffer is written: it picks
+		// OBJECT_FLAGS_PRESKINNED or OBJECT_FLAGS_HAS_ANIMATION from _preSkinnedDraw.
+		// PrepareGpuSkin dispatches the compute pass on this entity's first draw of the
+		// frame; every later pass reuses that output.
+		_preSkinnedDraw = skeletalMeshComp != nullptr ? skeletalMeshComp->PrepareGpuSkin(this) : nullptr;
+
+		Mesh::UpdateConstantBuffer(entity, localTM, material, instanceId, isTransparencyPhase);
+
+		if (skeletalMeshComp == nullptr || _preSkinnedDraw != nullptr)
 			return;
 
-		if (auto skeletalMeshComp = entity->GetComponent<SkeletalAnimationComponent>(); skeletalMeshComp != nullptr)
+		// Fallback: skin in the vertex shader, so the palette goes up with every draw.
+		auto perAnimBuffer = g_pEnv->_graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerAnimationBuffer);
+
+		if (!perAnimBuffer)
 		{
-			// Write the per-object constant buffer
-			auto perAnimBuffer = g_pEnv->_graphicsDevice->GetEngineConstantBuffer(EngineConstantBuffer::PerAnimationBuffer);
-
-			if (!perAnimBuffer)
-			{
-				LOG_WARN("Invalid per-object constant buffer");
-				return;
-			}
-			const auto& transforms = skeletalMeshComp->GetBoneTransformArray();
-			const auto& transformsPrev = skeletalMeshComp->GetBoneTransformArrayPrev();
-
-			memcpy(_animationBuffer->_boneTransforms, (uint8_t*)transforms.data(), transforms.size() * sizeof(math::Matrix));
-			memcpy(_animationBuffer->_boneTransformsPrev, (uint8_t*)transformsPrev.data(), transformsPrev.size() * sizeof(math::Matrix));
-
-
-			perAnimBuffer->Write(_animationBuffer, sizeof(PerAnimationBuffer));
-
-			g_pEnv->_graphicsDevice->SetConstantBufferVS(3, perAnimBuffer);
+			LOG_WARN("Invalid per-object constant buffer");
+			return;
 		}
+		const bool telemetry = SkeletalAnimationComponent::IsTelemetryEnabled();
+		const auto uploadStart = telemetry ? std::chrono::high_resolution_clock::now() : std::chrono::high_resolution_clock::time_point{};
+
+		const auto& transforms = skeletalMeshComp->GetBoneTransformArray();
+		const auto& transformsPrev = skeletalMeshComp->GetBoneTransformArrayPrev();
+
+		memcpy(_animationBuffer->_boneTransforms, (uint8_t*)transforms.data(), transforms.size() * sizeof(math::Matrix));
+		memcpy(_animationBuffer->_boneTransformsPrev, (uint8_t*)transformsPrev.data(), transformsPrev.size() * sizeof(math::Matrix));
+
+		perAnimBuffer->Write(_animationBuffer, sizeof(PerAnimationBuffer));
+
+		g_pEnv->_graphicsDevice->SetConstantBufferVS(3, perAnimBuffer);
+
+		if (telemetry)
+			SkeletalAnimationComponent::RecordBoneUpload(std::chrono::duration<float, std::milli>(std::chrono::high_resolution_clock::now() - uploadStart).count());
+	}
+
+	void AnimatedMesh::SetBuffers(bool isShadowMap)
+	{
+		GpuSkinInstance* skin = _preSkinnedDraw;
+		_preSkinnedDraw = nullptr;	// one draw only - never let it leak into an unrelated SetBuffers
+
+		if (skin == nullptr)
+		{
+			Mesh::SetBuffers(isShadowMap);
+			return;
+		}
+
+		auto graphicsDevice = g_pEnv->_graphicsDevice;
+		graphicsDevice->SetIndexBuffer(_indexBuffer);
+
+		// Bind the mesh's own buffer first: the device skips a SetVertexBuffer that
+		// matches its cached last buffer, and the skinning dispatch can have silently
+		// unbound our output from the input assembler (it was a UAV), so the cache may
+		// say "bound" when it isn't. Binding something else first forces the real bind.
+		graphicsDevice->SetVertexBuffer(0, isShadowMap ? _simpleVertexBuffer : _vertexBuffer);
+		graphicsDevice->SetVertexBuffer(0, skin->GetVertexBuffer(isShadowMap));
+		if (!isShadowMap)
+			skin->BindForVertexShader();	// last-frame positions for motion vectors (any material)
+		graphicsDevice->SetTopology(HexEngine::PrimitiveTopology::TriangleList);
+	}
+
+	uint32_t AnimatedMesh::GetAnimationObjectFlags() const
+	{
+		return _preSkinnedDraw != nullptr ? OBJECT_FLAGS_PRESKINNED : OBJECT_FLAGS_HAS_ANIMATION;
+	}
+
+	GpuSkinSource* AnimatedMesh::GetGpuSkinSource()
+	{
+		if (_gpuSkinSource == nullptr && !_gpuSkinSourceFailed)
+		{
+			auto source = std::make_unique<GpuSkinSource>();
+			if (source->Create(*this))
+				_gpuSkinSource = std::move(source);
+			else
+				_gpuSkinSourceFailed = true;	// don't retry every draw
+		}
+		return _gpuSkinSource.get();
 	}
 
 	const std::vector<AnimatedMeshVertex>& AnimatedMesh::GetVertices() const

@@ -247,7 +247,8 @@ void NRDInterface::Destroy()
 	SAFE_RELEASE(_pointClampSampler);
 	SAFE_RELEASE(_linearClampSampler);
 
-	_previousJitter = math::Vector2::Zero;
+	_previousJitterPixels = math::Vector2::Zero;
+	_pendingJitterPixels = math::Vector2::Zero;
 	_created = false;
 	_device = nullptr;
 	_context = nullptr;
@@ -903,8 +904,16 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 	const float halfH = static_cast<float>(_height) * 0.5f;
 	settings.cameraJitter[0] = fd.jitter.x * halfW;
 	settings.cameraJitter[1] = -fd.jitter.y * halfH;
-	settings.cameraJitterPrev[0] = _previousJitter.x * halfW;
-	settings.cameraJitterPrev[1] = -_previousJitter.y * halfH;
+	// The previous jitter is kept in PIXELS, not NDC: converting last frame's NDC value
+	// with THIS frame's resolution is wrong across a render-size change (FSR / DLSS toggled,
+	// window resized) - going from 1280 to 1920 wide turns a 0.5 px jitter into 0.75 px and
+	// trips NRD's [-0.5, 0.5] assert on cameraJitterPrev. Clamped for the same reason:
+	// an out-of-range value must never reach NRD.
+	settings.cameraJitter[0] = std::clamp(settings.cameraJitter[0], -0.5f, 0.5f);
+	settings.cameraJitter[1] = std::clamp(settings.cameraJitter[1], -0.5f, 0.5f);
+	settings.cameraJitterPrev[0] = std::clamp(_previousJitterPixels.x, -0.5f, 0.5f);
+	settings.cameraJitterPrev[1] = std::clamp(_previousJitterPixels.y, -0.5f, 0.5f);
+	_pendingJitterPixels = math::Vector2(settings.cameraJitter[0], settings.cameraJitter[1]);
 	settings.resourceSize[0] = static_cast<uint16_t>(_width);
 	settings.resourceSize[1] = static_cast<uint16_t>(_height);
 	settings.resourceSizePrev[0] = static_cast<uint16_t>(_width);
@@ -1188,7 +1197,7 @@ bool NRDInterface::RunDenoiser(const HexEngine::DenoiserFrameData& fd)
 		_context->CSSetSamplers(_instanceDesc->samplersBaseRegisterIndex, std::min<uint32_t>(_instanceDesc->samplersNum, 2), nullSamplers);
 
 	_context->CSSetShader(nullptr, nullptr, 0);
-	_previousJitter = fd.jitter;
+	_previousJitterPixels = _pendingJitterPixels;
 	_resetHistory = false;
 	return true;
 }

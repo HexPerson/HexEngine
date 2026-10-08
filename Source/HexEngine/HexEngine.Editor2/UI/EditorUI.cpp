@@ -17,6 +17,38 @@
 
 namespace HexEditor
 {
+	namespace
+	{
+		// Root of the HexEngine SDK that generated game projects build against:
+		// the folder holding HexEngine.props (include/lib/runtime paths). Found
+		// from the editor EXE's own location - never the working directory - so
+		// it works both in a source checkout and in an install:
+		//   1. HEXENGINE_SDK environment variable (explicit override)
+		//   2. installed build: {app}\SDK\HexEngine.props
+		//   3. development tree: <repo>\Bin\x64\<Config>\ -> <repo>\HexEngine.props
+		fs::path ResolveSdkRoot()
+		{
+			std::error_code ec;
+
+			wchar_t envSdk[MAX_PATH] = {};
+			const DWORD envLen = GetEnvironmentVariableW(L"HEXENGINE_SDK", envSdk, MAX_PATH);
+			if (envLen > 0 && envLen < MAX_PATH && fs::exists(fs::path(envSdk) / "HexEngine.props", ec))
+				return fs::path(envSdk);
+
+			wchar_t exePath[MAX_PATH] = {};
+			GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+			const fs::path exeDir = fs::path(exePath).parent_path();
+
+			if (fs::exists(exeDir / "SDK" / "HexEngine.props", ec))
+				return exeDir / "SDK";
+
+			const fs::path repoRoot = exeDir.parent_path().parent_path().parent_path();
+			if (!fs::exists(repoRoot / "HexEngine.props", ec))
+				LOG_WARN("HexEngine SDK not found (no SDK/HexEngine.props beside the editor, no repository HexEngine.props, HEXENGINE_SDK unset); generated projects will point at %s", repoRoot.string().c_str());
+			return repoRoot;
+		}
+	}
+
 	EditorUI::EditorUI()
 	{
 		g_pUIManager = this;
@@ -71,6 +103,20 @@ namespace HexEditor
 		CreateMenuBar();
 		NotifyEditorToolPluginsCreateUI();
 		_prefabController.SetDependencies(this, &_integrator, _rightDock, _entityList, _lowerDock);
+		_prefabController.SetTransactionStack(&_transactions);
+		if (_entityList != nullptr)
+		{
+			// Out-of-date prefab instances get a badge in the entity list.
+			_entityList->_badgeProvider = [this](HexEngine::Entity* entity, math::Color& colour) -> std::wstring
+			{
+				if (entity != nullptr && entity->IsPrefabInstanceRoot() && _prefabController.IsPrefabInstanceOutOfDate(entity))
+				{
+					colour = math::Color(1.0f, 0.72f, 0.2f, 1.0f);
+					return L"(prefab changed)";
+				}
+				return std::wstring();
+			};
+		}
 
 		// Always start with the project manager
 		_projectManager = ProjectManager::CreateProjectManagerDialog(_rootElement, std::bind(&EditorUI::OnProjectManagerCompleted, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
@@ -159,6 +205,9 @@ namespace HexEditor
 			_projectFile->_scenes = _sceneFiles;
 			_entityListRefreshPending = true;
 
+			// Instances whose prefab changed while their scene wasn't loaded.
+			_prefabController.CheckLoadedScenesForOutOfDateInstances();
+
 			
 		}
 		else
@@ -189,7 +238,7 @@ namespace HexEditor
 			ProjectGenerationParams params;
 			params.path = projectFolder / "Code";
 			params.projectName = projectName;
-			params.sdkPath = HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory().parent_path().parent_path().parent_path(); // this is....awful
+			params.sdkPath = ResolveSdkRoot();
 			params.nameSpace = std::string(namespaceName.begin(), namespaceName.end());
 			params.primaryScenePath = sceneFile->GetAbsolutePath();
 
@@ -255,6 +304,23 @@ namespace HexEditor
 				actionExitPrefab->name = L"Exit Prefab Stage";
 				actionExitPrefab->action = std::bind(&EditorUI::ClosePrefabStage, this, true);
 				_mainMenu->AddSubItem(file, actionExitPrefab);
+
+				HexEngine::MenuBar::Item* actionUpdateInstances = new HexEngine::MenuBar::Item;
+				actionUpdateInstances->name = L"Update Out-of-Date Prefab Instances";
+				actionUpdateInstances->action = [this](HexEngine::MenuBar::Item*) { _prefabController.UpdateAllOutOfDatePrefabInstances(); };
+				_mainMenu->AddSubItem(file, actionUpdateInstances);
+
+				const std::pair<const wchar_t*, PrefabController::InstanceSyncPolicy> syncPolicies[] = {
+					{ L"Prefab Changes: Ask Before Updating Instances", PrefabController::InstanceSyncPolicy::Ask },
+					{ L"Prefab Changes: Always Update Instances", PrefabController::InstanceSyncPolicy::Always },
+					{ L"Prefab Changes: Never Update Instances", PrefabController::InstanceSyncPolicy::Never } };
+				for (const auto& [label, policy] : syncPolicies)
+				{
+					HexEngine::MenuBar::Item* actionPolicy = new HexEngine::MenuBar::Item;
+					actionPolicy->name = label;
+					actionPolicy->action = [this, policy = policy](HexEngine::MenuBar::Item*) { _prefabController.SetInstanceSyncPolicy(policy); };
+					_mainMenu->AddSubItem(file, actionPolicy);
+				}
 
 				HexEngine::MenuBar::Item* actionExport = new HexEngine::MenuBar::Item;
 				actionExport->name = L"Export";
@@ -337,6 +403,16 @@ namespace HexEditor
 				actionNewSL->name = L"Add spot light";
 				actionNewSL->action = std::bind(&EditorUI::OnAddSpotLight, this);
 				_mainMenu->AddSubItem(scene, actionNewSL);
+
+				HexEngine::MenuBar::Item* actionNewTube = new HexEngine::MenuBar::Item;
+				actionNewTube->name = L"Add tube light";
+				actionNewTube->action = std::bind(&EditorUI::OnAddAreaLight, this, HexEngine::AreaLight::Shape::Tube);
+				_mainMenu->AddSubItem(scene, actionNewTube);
+
+				HexEngine::MenuBar::Item* actionNewRect = new HexEngine::MenuBar::Item;
+				actionNewRect->name = L"Add rect light";
+				actionNewRect->action = std::bind(&EditorUI::OnAddAreaLight, this, HexEngine::AreaLight::Shape::Rect);
+				_mainMenu->AddSubItem(scene, actionNewRect);
 
 				HexEngine::MenuBar::Item* actionNewBB = new HexEngine::MenuBar::Item;
 				actionNewBB->name = L"Add billboard";
@@ -673,6 +749,16 @@ namespace HexEditor
 	HexEngine::Entity* EditorUI::RevertPrefabInstance(HexEngine::Entity* entity)
 	{
 		return _prefabController.RevertPrefabInstance(entity);
+	}
+
+	bool EditorUI::IsPrefabInstanceOutOfDate(HexEngine::Entity* entity) const
+	{
+		return _prefabController.IsPrefabInstanceOutOfDate(entity);
+	}
+
+	bool EditorUI::UpdatePrefabInstanceFromAsset(HexEngine::Entity* entity)
+	{
+		return _prefabController.UpdatePrefabInstanceFromAsset(entity);
 	}
 
 	bool EditorUI::ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity)
@@ -1186,6 +1272,24 @@ namespace HexEditor
 		GetInspector()->InspectEntity(light);
 	}
 
+	void EditorUI::OnAddAreaLight(HexEngine::AreaLight::Shape shape)
+	{
+		auto hit = RayCastWorld({}, false);
+
+		// Lifted off the surface under the cursor so the shape isn't buried in it.
+		HexEngine::Entity* light = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(
+			shape == HexEngine::AreaLight::Shape::Rect ? "RectLight" : "TubeLight",
+			hit.position + math::Vector3(0.0f, 1.0f, 0.0f));
+
+		auto areaLight = light->AddComponent<HexEngine::AreaLight>();
+		areaLight->SetShape(shape);
+		areaLight->SetLightStength(4.0f);
+
+		RecordEntityCreated(light);
+
+		GetInspector()->InspectEntity(light);
+	}
+
 	void EditorUI::OnCreateNewSceneAction(const std::wstring& sceneName)
 	{
 		auto scene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(true, this, true);
@@ -1421,7 +1525,12 @@ namespace HexEditor
 
 		// Let gadget hotkeys (e.g. Ctrl+D duplicate) still work even when another
 		// focused widget reports the key event as handled, but never while typing.
-		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook &&
+		// Scene hotkeys act on the scene: none of them while another workspace tab
+		// (material graph, animation editor) is in front of it.
+		const bool sceneTabActive = _sceneView->IsSceneTabActive();
+
+		if (sceneTabActive &&
+			_sceneView->GetRoamState() != SceneView::RoamState::FreeLook &&
 			_integrator.GetState() != GameTestState::Started &&
 			!isTypingInLineEdit &&
 			event == HexEngine::InputEvent::KeyDown &&
@@ -1446,7 +1555,7 @@ namespace HexEditor
 		if (uiHandled)
 			return false;
 
-		if (event == HexEngine::InputEvent::KeyDown && HexEngine::g_pEnv->_inputSystem->IsCtrlDown())
+		if (sceneTabActive && event == HexEngine::InputEvent::KeyDown && HexEngine::g_pEnv->_inputSystem->IsCtrlDown())
 		{
 			if (data->KeyDown.key == 'Z')
 			{
@@ -1460,7 +1569,7 @@ namespace HexEditor
 			}
 		}
 
-		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started && !isTypingInLineEdit)
+		if (sceneTabActive && _sceneView->GetRoamState() != SceneView::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started && !isTypingInLineEdit)
 		{
 			bool anyGadgetRunning = false;
 			bool keyhandled = false;

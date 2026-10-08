@@ -33,6 +33,7 @@
 #include "Graphics/IFontResource.hpp"
 #include "Graphics/IconService.hpp"
 #include "Graphics/IStreamlineProvider.hpp"
+#include "Graphics/IUpscalerProvider.hpp"
 #include "Graphics/IDenoiserProvider.hpp"
 #include "Steam/ISteamworksProvider.hpp"
 
@@ -41,6 +42,8 @@
 #include "Scene/MeshPrimitives.hpp"
 #include "Scene/SceneRenderer.hpp"
 #include "Scene/AnimatedMesh.hpp"
+#include "Scene/AnimationUtils.hpp"
+#include "Graphics/OffscreenRenderHooks.hpp"
 #include "Scene/INavMeshProvider.hpp"
 #include "Scene/Prefab.hpp"
 #include "Scene/ParticleEffect.hpp"
@@ -91,6 +94,7 @@
 
 #include "Entity/Component/InteractionComponent.hpp"
 #include "Entity/Component/SpotLight.hpp"
+#include "Entity/Component/AreaLight.hpp"
 #include "Entity/Component/StaticMeshComponent.hpp"
 #include "Entity/Component/FirstPersonCameraController.hpp"
 #include "Entity/Component/RigidBody.hpp"

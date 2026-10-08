@@ -1,0 +1,34 @@
+{
+  "properties": {
+    "diffuseColour": [
+      0.6000000238418579,
+      0.6000000238418579,
+      0.6000000238418579,
+      1.0
+    ],
+    "emissiveColour": [
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ],
+    "hasTransparency": 0,
+    "isWater": 1,
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.5
+  },
+  "renderer": {
+    "blendState": 0,
+    "cullingMode": 0,
+    "depthState": 1,
+    "format": 0
+  },
+  "shaders": {
+    "shadowmap": "EngineData.Shaders/ShadowMapGeometry.hcs",
+    "standard": "EngineData.Shaders/Water.hcs"
+  },
+  "textures": {
+    "Albedo": "EngineData.Textures\\water 0175b.jpg",
+    "Normal": "EngineData.Textures\\Water 0175bnormal.jpg"
+  }
+}

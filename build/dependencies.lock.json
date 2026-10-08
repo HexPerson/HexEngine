@@ -13,7 +13,8 @@
         "Libs/x64/<Config>/assimp-*.lib",
         "Libs/x64/<Config>/zlibstatic*.lib",
         "Include/assimp/config.h"
-      ]
+      ],
+      "required": true
     },
     {
       "name": "directxtk",
@@ -37,7 +38,8 @@
       "notes": "Recursive clone.",
       "legacy_stage_paths": [
         "Libs/x64/<Config>/NRD.lib"
-      ]
+      ],
+      "required": true
     },
     {
       "name": "physx",
@@ -58,10 +60,10 @@
       "path": "ThirdParty/shaderconductor",
       "git_url": "https://github.com/microsoft/ShaderConductor.git",
       "ref": "f18f7b5c370bae157a6b7377155f758f6441cfea",
-      "required": true,
-      "required_runtime_module": true,
+      "required": false,
+      "required_runtime_module": false,
       "build_system": "cmake",
-      "notes": "Builds ShaderConductor.lib.",
+      "notes": "No longer needed by the engine build: HexEngine.ShaderCompiler links the prebuilt vcpkg directx-dxc port. Kept for the opt-in shaderconductor probe presets.",
       "legacy_stage_paths": [
         "Libs/x64/<Config>/ShaderConductor.lib"
       ]
@@ -76,7 +78,8 @@
       "legacy_stage_paths": [
         "Libs/x64/<Config>/GFSDK_SSAO_D3D11.win64.lib",
         "Bin/x64/<Config>/Bin/GFSDK_SSAO_D3D11.win64.dll"
-      ]
+      ],
+      "required": true
     },
     {
       "name": "freetype",
@@ -212,6 +215,16 @@
       "required_runtime_module": true,
       "build_system": "vendor-sdk",
       "notes": "Cloned by setup; include copy currently disabled.",
+      "legacy_stage_paths": []
+    },
+    {
+      "name": "fidelityfx-fsr2",
+      "path": "ThirdParty/FidelityFX-FSR2",
+      "git_url": "https://github.com/GPUOpen-Effects/FidelityFX-FSR2.git",
+      "ref": "1680d1edd5c034f88ebbbb793d8b88f8842cf804",
+      "required": true,
+      "build_system": "source",
+      "notes": "FSR 2.2.1 (tag v2.2.1). Clone only: the core library sources are compiled straight into HexEngine.FSRPlugin, which also compiles the pass shaders with fxc (cs_5_0) and supplies its own D3D11 backend.",
       "legacy_stage_paths": []
     }
   ]

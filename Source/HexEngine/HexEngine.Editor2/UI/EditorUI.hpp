@@ -97,6 +97,8 @@ public:
 		bool RevertPrefabInstanceComponentOverrides(HexEngine::Entity* entity, const std::string& componentName);
 		bool ApplySelectedPrefabInstanceOverridesToAsset(HexEngine::Entity* entity, const std::vector<PrefabController::PrefabPropertyOverride>& selectedOverrides);
 		HexEngine::Entity* RevertPrefabInstance(HexEngine::Entity* entity);
+		bool IsPrefabInstanceOutOfDate(HexEngine::Entity* entity) const;
+		bool UpdatePrefabInstanceFromAsset(HexEngine::Entity* entity);
 		bool ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity);
 		bool IsVariantStageEntity(HexEngine::Entity* entity) const;
 		bool GetVariantStageEntityOverrideComponents(HexEngine::Entity* entity, std::unordered_set<std::string>& outComponentNames) const;
@@ -126,6 +128,7 @@ public:
 
 		void OnAddLight();
 		void OnAddSpotLight();
+		void OnAddAreaLight(HexEngine::AreaLight::Shape shape);
 		void OnAddEmptyEntity();
 		void OnSaveAction();
 		void OnExportAction();

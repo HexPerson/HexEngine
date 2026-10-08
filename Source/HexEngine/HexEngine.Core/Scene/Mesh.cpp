@@ -485,10 +485,7 @@ namespace HexEngine
 		_objectBuffer->cullDistance = material->GetCullDistance();
 		_objectBuffer->pad = 0;
 
-		if (HasAnimations())
-		{
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_ANIMATION;
-		}
+		_objectBuffer->_flags |= GetAnimationObjectFlags();
 
 		_objectBuffer->_material = material->_properties;
 		_objectBuffer->_material.isInTransparencyPhase = isTransparencyPhase ? 1 : 0;

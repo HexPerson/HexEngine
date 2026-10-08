@@ -183,6 +183,9 @@ namespace HexEngine
 		class IconService* _iconService = nullptr;
 		//class IScriptEngine* _scriptEngine = nullptr; // disabled currently
 		class IStreamlineProvider* _streamlineProvider = nullptr;
+		// Optional temporal upscaler (FSR plugin). Null when no plugin provides
+		// one; cameras then refuse EnableFSR and render natively.
+		class IUpscalerProvider* _upscalerProvider = nullptr;
 		// Optional Steamworks integration. Null when not running under Steam,
 		// SteamAPI_Init failed, or the plugin DLL isn't present - callers
 		// should null-check and treat it as a "graceful disable" rather than

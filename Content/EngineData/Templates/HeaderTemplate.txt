@@ -1,0 +1,41 @@
+
+#pragma once
+
+#include <HexEngine.Core\HexEngine.hpp>
+
+namespace <$NAMESPACE>
+{
+	class <$NAME> : public HexEngine::IGameExtension
+	{
+	public:
+		virtual void OnCreateGame() override;
+		
+		virtual void OnStopGame() override;
+		
+		virtual void OnLoadGameWorld() override;
+		
+		virtual void OnRegisterClasses() override;
+
+		virtual void OnUpdate(float frameTime) override;
+
+		virtual void OnFixedUpdate(float frameTime) override;
+
+		virtual void OnShutdown() override;
+
+		virtual void OnDebugGUI() override;
+
+		virtual void OnGUI() override;
+
+		virtual void OnDebugRender() override;
+
+		virtual void OnResize(int32_t width, int32_t height) override {}
+		
+		virtual std::string GetGameName() const override { return "<$NAME>"; }
+		
+	private:
+		std::shared_ptr<HexEngine::Scene> _scene;
+		HexEngine::FileSystem* _gameData = nullptr;
+	};
+
+	inline <$NAME>* g_pGame = nullptr;
+}

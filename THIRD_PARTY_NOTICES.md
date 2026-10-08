@@ -10,6 +10,7 @@ HexEngine bundles / links the third-party components listed below. Each is distr
 | --- | --- | --- | --- | --- |
 | brotli | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/google/brotli) | _(installed via vcpkg)_ |
 | cxxopts | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/jarro2783/cxxopts) | _(installed via vcpkg)_ |
+| directx-dxc | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | NCSA AND MIT | [link](https://github.com/microsoft/DirectXShaderCompiler) | _(installed via vcpkg)_ |
 | directxtex | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/microsoft/DirectXTex) | _(installed via vcpkg)_ |
 | directxtk | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/microsoft/DirectXTK) | _(installed via vcpkg)_ |
 | freetype | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | FTL | [link](https://freetype.org/) | _(installed via vcpkg)_ |
@@ -27,6 +28,7 @@ HexEngine bundles / links the third-party components listed below. Each is distr
 | directxtex | vendored | MIT | [link](https://github.com/microsoft/DirectXTex) | `ThirdParty/directxtex/LICENSE` |
 | directxtk | vendored | MIT | [link](https://github.com/microsoft/DirectXTK) | `ThirdParty/directxtk/LICENSE` |
 | fastnoiselite | vendored | MIT | [link](https://github.com/Auburn/FastNoiseLite) | `ThirdParty/fastnoiselite/LICENSE` |
+| FidelityFX-FSR2 | 2.2.1 | MIT | [link](https://github.com/GPUOpen-Effects/FidelityFX-FSR2) | `ThirdParty/FidelityFX-FSR2/LICENSE.txt` |
 | freetype | vendored | FTL | [link](https://freetype.org/) | `ThirdParty/freetype/LICENSE.TXT` |
 | hbaoplus | vendored | LicenseRef-NVIDIA-HBAOPlus | [link](https://developer.nvidia.com/gameworks-visualfx-overview) | `ThirdParty/hbaoplus/LICENSE.txt` |
 | ispc | 1.26.0 | BSD-3-Clause | [link](https://ispc.github.io/) | `ThirdParty/ispc-v1.26.0-windows/LICENSE.txt` |

@@ -152,6 +152,11 @@ namespace HexEngine
 	{
 		std::vector<Animation> _animations;		
 		math::Matrix _globalInverseTransform;
+
+		// Bumped by editing tools (the animation editor) whenever clips, channels or keys
+		// change, so cached evaluation layouts (SkeletalAnimationComponent's compiled
+		// clips) rebuild. Not serialized.
+		uint64_t _revision = 0;
 		//uint32_t _animIndex = 1;
 		//uint32_t _nextAnimIndex = -1;
 		//float _blendFactor = 0.0f;
@@ -169,6 +174,9 @@ namespace HexEngine
 	const int OBJECT_FLAGS_HAS_ANIMATION			= (1 << 7);
 	const int OBJECT_FLAGS_ORM_FORMAT				= (1 << 8);
 	const int OBJECT_FLAGS_RMA_FORMAT				= (1 << 9);
+	// Vertices were skinned by the GpuSkinning compute pass: draw them rigidly, and
+	// read last frame's skinned position from the BLENDINDICES slot for motion vectors.
+	const int OBJECT_FLAGS_PRESKINNED				= (1 << 10);
 
 	class MeshRenderer;
 	class Model;
@@ -207,7 +215,8 @@ namespace HexEngine
 
 		virtual void Destroy() override;
 
-		void SetBuffers(bool isShadowMap = false);
+		// Virtual so AnimatedMesh can bind its GPU-skinned vertex buffers instead.
+		virtual void SetBuffers(bool isShadowMap = false);
 
 		virtual void UpdateConstantBuffer(Entity* entity, const math::Matrix& localTM, Material* material, int32_t instanceId, bool isTransparencyPhase = false);
 		
@@ -247,6 +256,9 @@ namespace HexEngine
 		void		SetMaxLodLevel(int32_t level);
 
 		virtual bool HasAnimations() const { return false; }
+
+		// Animation bits UpdateConstantBuffer ORs into the per-object flags.
+		virtual uint32_t GetAnimationObjectFlags() const { return HasAnimations() ? OBJECT_FLAGS_HAS_ANIMATION : 0; }
 
 		virtual std::shared_ptr<AnimationData> GetAnimationData() const { return nullptr; }
 		virtual std::shared_ptr<AnimationData> CreateAnimationData() { return nullptr; }

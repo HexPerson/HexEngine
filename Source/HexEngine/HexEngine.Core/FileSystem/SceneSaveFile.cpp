@@ -222,6 +222,18 @@ namespace HexEngine
 	{
 		bool isPrefab = HEX_HASFLAG(_flags, SceneFileFlags::IsPrefab);
 
+		// Hold physics for the duration of a scene load (see SceneManager::IsLoadingScene).
+		// Entities come alive one by one as they deserialize; without the hold, a
+		// dynamic body near the top of the file simulates - and falls - for as long as
+		// the rest of the level's colliders take to arrive. Prefabs drop into a world
+		// that is already there, so they don't hold.
+		struct SceneLoadHold
+		{
+			SceneManager* manager;
+			explicit SceneLoadHold(SceneManager* m) : manager(m) { if (manager) manager->BeginSceneLoad(); }
+			~SceneLoadHold() { if (manager) manager->EndSceneLoad(); }
+		} loadHold((!isPrefab && g_pEnv != nullptr) ? g_pEnv->_sceneManager : nullptr);
+
 		if (isPrefab == false)
 			loadIntoExistingScene->SetName(_fsPathObj.stem().wstring());
 

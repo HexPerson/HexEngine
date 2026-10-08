@@ -6,6 +6,9 @@
 struct ID3D11Buffer;
 struct ID3D11ShaderResourceView;
 struct ID3D11UnorderedAccessView;
+struct ID3D11Texture2D;
+struct ID3D11SamplerState;
+struct ID3D11DeviceContext;
 
 namespace HexEngine
 {
@@ -36,6 +39,17 @@ namespace HexEngine
 		static constexpr uint32_t kClusterCount = kClustersX * kClustersY * kClustersZ;
 		static constexpr uint32_t kMaxLightsPerCluster = 64;
 		static constexpr uint32_t kMaxLights = 1024;
+
+		// Textured rect lights: each distinct image is resampled into one slice of
+		// a shared RGBA16F array with a full mip chain (PBRutils picks the mip from
+		// the reflection lobe / diffuse footprint). Keep kAreaTextureSize in sync
+		// with AREA_LIGHT_TEXTURE_MAX_MIP in PBRutils.shader (log2 of it).
+		static constexpr uint32_t kAreaTextureSize = 512;
+		static constexpr uint32_t kMaxAreaTextures = 16;
+		// Shader slots of the array (+ its linear-clamp sampler) for the deferred
+		// apply and forward transparents; the froxel fog reads it at CS t22.
+		static constexpr uint32_t kAreaTextureSlot = 41;
+		static constexpr uint32_t kAreaSamplerSlot = 5;
 
 		bool Create();
 		void Destroy();
@@ -71,18 +85,36 @@ namespace HexEngine
 		// Per-atlas-tile view-proj matrices (row per tile), uploaded when
 		// UpdateAndCull ran with an atlas. Null-safe for consumers.
 		ID3D11ShaderResourceView* GetTileVpSrv() const { return _tileVpSrv; }
+		// Area-light image array; null until a textured rect light appears.
+		ID3D11ShaderResourceView* GetAreaTextureSrv() const { return _areaTexSrv; }
+		ID3D11SamplerState* GetAreaTextureSampler() const { return _areaSampler; }
+		// Raw PS bind of the array + sampler at kAreaTextureSlot / kAreaSamplerSlot.
+		void BindAreaTexturesPS();
+		void UnbindAreaTexturesPS();
 
 		ITexture2D* GetDebugTexture() const { return _debugTexture; }
 		uint32_t GetLastLightCount() const { return _lastLightCount; }
 
 	private:
+		// Slice for a rect light's image (resampling it when new, changed or live),
+		// as 1-based index for the GpuLight packing; 0 = untextured.
+		uint32_t AcquireAreaTexture(ID3D11DeviceContext* context, const std::shared_ptr<ITexture2D>& texture,
+			bool srgb, bool live);
+		bool EnsureAreaTextureArray();
+		void ReleaseAreaTextures();
+
+		// Mirrored by every HLSL consumer (ClusterLightCull/Apply, DefaultPixel +
+		// DefaultAnimated ClFwdLight, VolumetricScatterDensity ClGpuLight) - the
+		// structured-buffer stride must match all of them.
 		struct GpuLight
 		{
 			math::Vector4 posRadius;
 			math::Vector4 colorStrength;
 			math::Vector4 dirCone;
-			math::Vector4 params;
+			math::Vector4 params;	// x cos(inner) | area range, y type (0 point, 1 spot, 2 tube, 3 rect), z shadowed, w atlas tile
+			math::Vector4 shape;	// area lights: xyz rect up * halfHeight, w two-sided
 		};
+		static_assert(sizeof(GpuLight) == 80, "update the HLSL GpuLight mirrors");
 
 		struct ClusterConstants
 		{
@@ -114,5 +146,23 @@ namespace HexEngine
 		void* _normalDepthSrvSource = nullptr;
 
 		uint32_t _lastLightCount = 0;
+
+		// Area-light image array (see kAreaTextureSize).
+		struct AreaTextureSlot
+		{
+			std::shared_ptr<ITexture2D> texture;	// held so a freed + reallocated texture can't alias the slot
+			bool srgb = true;
+			bool usedThisFrame = false;
+			bool resampledThisFrame = false;
+		};
+		AreaTextureSlot _areaSlots[kMaxAreaTextures];
+		bool _areaMipsDirty = false;
+		bool _areaTexFailed = false;
+		std::shared_ptr<IShader> _areaBlitShader;
+		ID3D11Texture2D* _areaTex = nullptr;
+		ID3D11ShaderResourceView* _areaTexSrv = nullptr;
+		ID3D11UnorderedAccessView* _areaTexUav = nullptr;
+		ID3D11SamplerState* _areaSampler = nullptr;
+		ID3D11Buffer* _areaBlitConstants = nullptr;
 	};
 }

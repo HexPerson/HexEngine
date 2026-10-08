@@ -1,6 +1,7 @@
 #include "AssetExplorer.hpp"
 #include "../../Editor.hpp"
 #include "../EditorUI.hpp"
+#include "../AnimationEditor/AnimationEditor.hpp"
 #include <HexEngine.Core\GUI\Elements\MaterialGraphDialog.hpp>
 #include <algorithm>
 #include <cmath>
@@ -1728,6 +1729,18 @@ namespace HexEditor
 					g_pUIManager->OpenPrefabStage(_hoveredAsset->path);
 					_hoveredAsset = nullptr;
 					return true;
+				}
+
+				// Animated meshes open in the animation editor; static ones keep the
+				// default handling below.
+				if (_hoveredAsset->path.extension() == ".hmesh")
+				{
+					auto mesh = HexEngine::Mesh::Create(_hoveredAsset->path);
+					if (mesh != nullptr && mesh->HasAnimations() && AnimationEditor::Open(_hoveredAsset->path))
+					{
+						_hoveredAsset = nullptr;
+						return true;
+					}
 				}
 
 				if (_hoveredAsset->path.extension() == ".hmat" && OpenGraphMaterialInSceneWorkspace(_hoveredAsset->path))

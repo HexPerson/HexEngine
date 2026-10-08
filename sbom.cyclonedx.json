@@ -209,6 +209,35 @@
     },
     {
       "type": "library",
+      "name": "FidelityFX-FSR2",
+      "version": "2.2.1",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:github/GPUOpen-Effects/FidelityFX-FSR2@v2.2.1",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/GPUOpen-Effects/FidelityFX-FSR2"
+        },
+        {
+          "type": "license",
+          "url": "ThirdParty/FidelityFX-FSR2/LICENSE.txt"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "thirdparty"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "freetype",
       "version": "vendored",
       "licenses": [
@@ -711,6 +740,33 @@
         {
           "name": "hexengine:source",
           "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "directx-dxc",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "expression": "NCSA AND MIT"
+        }
+      ],
+      "purl": "pkg:vcpkg/directx-dxc",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/microsoft/DirectXShaderCompiler"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        },
+        {
+          "name": "hexengine:notes",
+          "value": "Prebuilt DXC release: dxcompiler.dll + dxil.dll ship beside HexEngine.ShaderCompiler.exe. dxil.dll is covered by Microsoft's redistributable DXC licence terms."
         }
       ]
     },

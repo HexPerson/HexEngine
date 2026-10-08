@@ -37,6 +37,19 @@ namespace HexEngine
 		renderer->FillTexturedQuad(GetIcon(), position.x + 4, position.y + 1, 16, 16, math::Color(1, 1, 1, 1));
 
 		renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + 24, position.y + TreeListLineHeight / 2, renderer->_style.text_regular, FontAlign::CentreUD, GetLabel());
+
+		if (!_badge.empty())
+		{
+			int32_t labelWidth = 0, labelHeight = 0;
+			renderer->_style.font->MeasureText((uint8_t)Style::FontSize::Tiny, GetLabel(), labelWidth, labelHeight);
+			renderer->PrintText(renderer->_style.font.get(), (uint8_t)Style::FontSize::Tiny, position.x + 24 + labelWidth + 8, position.y + TreeListLineHeight / 2, _badgeColour, FontAlign::CentreUD, _badge);
+		}
+	}
+
+	void ListNode::SetBadge(const std::wstring& badge, const math::Color& colour)
+	{
+		_badge = badge;
+		_badgeColour = colour;
 	}
 
 	void ListNode::OnClick(int32_t button, int32_t x, int32_t y)

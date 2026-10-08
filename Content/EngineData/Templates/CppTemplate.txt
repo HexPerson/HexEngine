@@ -1,0 +1,69 @@
+
+#include "<$NAME>.hpp"
+
+namespace <$NAMESPACE>
+{
+	void <$NAME>::OnCreateGame()
+	{
+		// Get the current scene
+		//
+		_scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+
+		// Add a first person camera controller so we can move around
+		//
+		_scene->GetMainCamera()->GetEntity()->AddComponent<HexEngine::FirstPersonCameraController>();
+	}
+	
+	void <$NAME>::OnStopGame()
+	{
+
+	}
+
+	void <$NAME>::OnLoadGameWorld()
+	{
+		_gameData = new HexEngine::FileSystem(L"GameData");
+		_gameData->SetBaseDirectory(HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory());
+		HexEngine::g_pEnv->GetResourceSystem().AddFileSystem(_gameData);
+
+		// Load the scene file from disk
+		//
+		_scene = HexEngine::g_pEnv->_sceneManager->LoadScene(HexEngine::g_pEnv->GetFileSystem().GetLocalAbsoluteDataPath("Scenes/New Scene.hscene"));
+
+		_scene->SetSkySphere(_scene->GetEntityByName("SkySphere"));
+	}
+
+	void <$NAME>::OnRegisterClasses()
+	{
+		// Register all of your custom classes in here
+	}
+
+	void <$NAME>::OnDebugGUI()
+	{
+		
+	}
+
+	void <$NAME>::OnGUI()
+	{
+		
+	}
+
+	void <$NAME>::OnUpdate(float frameTime)
+	{
+		
+	}
+
+	void <$NAME>::OnFixedUpdate(float frameTime)
+	{
+		
+	}
+
+	void <$NAME>::OnDebugRender()
+	{
+		
+	}
+
+	void <$NAME>::OnShutdown()
+	{
+		HexEngine::g_pEnv->_sceneManager->UnloadScene(_scene.get());
+	}
+}

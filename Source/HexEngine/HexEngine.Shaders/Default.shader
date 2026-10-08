@@ -22,7 +22,7 @@
 }
 "VertexShader"
 {
-	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID)
+	MeshPixelInput ShaderMain(MeshVertexInput input, MeshInstanceData instance, uint instanceID : SV_INSTANCEID, uint vertexID : SV_VertexID)
 	{
 		MeshPixelInput output;
 		
@@ -79,7 +79,8 @@
 
 		// Calculate velocity
 		float4x4 prevFrame_modelMatrix = worldPrev;
-		float4 prevFrame_worldPos = mul(input.position, prevFrame_modelMatrix);
+		// Skinned meshes drawn from GpuSkinning's output read last frame's pose here.
+		float4 prevFrame_worldPos = mul(PreviousLocalPosition(input.position, vertexID), prevFrame_modelMatrix);
 		// Previous-frame sway: same function at g_timePrev against the
 		// previous world transform (static vegetation: identical matrix, the
 		// TIME term is the whole delta). Current wind is used for both - wind
