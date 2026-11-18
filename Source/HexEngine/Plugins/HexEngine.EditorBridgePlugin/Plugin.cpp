@@ -43,6 +43,7 @@
 #include "../../HexEngine.Core/Scene/Mesh.hpp"
 #include "../../HexEngine.Core/FileSystem/PrefabLoader.hpp"
 #include "../../HexEngine.Core/Physics/IPhysicsSystem.hpp"
+#include "../../HexEngine.Core/Physics/PhysUtils.hpp"
 
 #include <deque>
 
@@ -1311,16 +1312,8 @@ namespace HexEngine
 			const char* source = "";
 		};
 
-		struct RayOptions
-		{
-			float maxDistance = 10000.0f;
-			bool meshes = true;
-			bool physics = true;
-			bool includeHidden = false;
-			float minNormalY = -2.0f;                    // reject (pass through) surfaces steeper than this
-			std::unordered_set<Entity*> ignore;           // never hit these
-			std::unordered_set<Entity*> only;             // when non-empty: hit only these
-		};
+		// The bridge's ray options ARE the engine's (same names, see PhysUtils.hpp).
+		using RayOptions = RayCastOptions;
 
 		void AddHierarchy(Entity* e, std::unordered_set<Entity*>& out)
 		{
@@ -1328,131 +1321,22 @@ namespace HexEngine
 			for (Entity* c : e->GetChildren()) AddHierarchy(c, out);
 		}
 
-		// Nearest triangle of every StaticMeshComponent mesh the ray reaches,
-		// tested in object space (exact, all triangles, both faces).
-		void RaycastMeshesOnce(Scene* scene, const math::Vector3& o, const math::Vector3& d, float maxDist, const RayOptions& opt, RayResult& best)
-		{
-			std::vector<EntityId> ids;
-			scene->GetLiveEntityIds(ids);
-			const DirectX::XMVECTOR xo = DirectX::XMVectorSet(o.x, o.y, o.z, 1.0f);
-			const DirectX::XMVECTOR xd = DirectX::XMVectorSet(d.x, d.y, d.z, 0.0f);
-			for (const EntityId& eid : ids)
-			{
-				Entity* e = scene->TryGetEntity(eid);
-				if (!e || e->IsPendingDeletion() || opt.ignore.count(e)) continue;
-				if (!opt.only.empty() && !opt.only.count(e)) continue;
-				if (!opt.includeHidden && e->HasFlag(EntityFlags::DoNotRender)) continue;
-				auto* smc = e->GetComponent<StaticMeshComponent>();
-				if (!smc) continue;
-				auto mesh = smc->GetMesh();
-				if (!mesh || mesh->HasAnimations()) continue;
-				const auto& verts = mesh->GetVertices();
-				const auto& idx = mesh->GetIndices();
-				if (verts.empty() || idx.size() < 3) continue;
-
-				float boxDist = 0.0f;
-				const dx::BoundingBox& box = e->GetWorldAABB();
-				if (!box.Intersects(xo, xd, boxDist)) continue;
-				const float limit = std::min(best.distance, maxDist);
-				if (boxDist > limit) continue;
-
-				const math::Matrix world = e->GetWorldTM();
-				math::Matrix inv;
-				world.Invert(inv);
-				// Affine map: with the un-normalised local direction, t is the
-				// same parameter in local and world space.
-				const math::Vector3 lo = math::Vector3::Transform(o, inv);
-				const math::Vector3 ld = math::Vector3::TransformNormal(d, inv);
-				float bestT = limit;
-				size_t bestTri = SIZE_MAX;
-				const size_t triCount = idx.size() / 3;
-				for (size_t t = 0; t < triCount; ++t)
-				{
-					const uint32_t i0 = idx[t * 3], i1 = idx[t * 3 + 1], i2 = idx[t * 3 + 2];
-					if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
-					const math::Vector3 p0(verts[i0]._position.x, verts[i0]._position.y, verts[i0]._position.z);
-					const math::Vector3 p1(verts[i1]._position.x, verts[i1]._position.y, verts[i1]._position.z);
-					const math::Vector3 p2(verts[i2]._position.x, verts[i2]._position.y, verts[i2]._position.z);
-					// Moller-Trumbore, double-sided.
-					const math::Vector3 e1 = p1 - p0, e2 = p2 - p0;
-					const math::Vector3 pv = ld.Cross(e2);
-					const float det = e1.Dot(pv);
-					if (fabsf(det) < 1e-14f) continue;
-					const float invDet = 1.0f / det;
-					const math::Vector3 tv = lo - p0;
-					const float u = tv.Dot(pv) * invDet;
-					if (u < 0.0f || u > 1.0f) continue;
-					const math::Vector3 qv = tv.Cross(e1);
-					const float v = ld.Dot(qv) * invDet;
-					if (v < 0.0f || u + v > 1.0f) continue;
-					const float hitT = e2.Dot(qv) * invDet;
-					if (hitT > 1e-5f && hitT < bestT) { bestT = hitT; bestTri = t; }
-				}
-				if (bestTri == SIZE_MAX) continue;
-
-				const uint32_t i0 = idx[bestTri * 3], i1 = idx[bestTri * 3 + 1], i2 = idx[bestTri * 3 + 2];
-				const math::Vector3 p0(verts[i0]._position.x, verts[i0]._position.y, verts[i0]._position.z);
-				const math::Vector3 p1(verts[i1]._position.x, verts[i1]._position.y, verts[i1]._position.z);
-				const math::Vector3 p2(verts[i2]._position.x, verts[i2]._position.y, verts[i2]._position.z);
-				// Engine front face: (b-a)x(c-a). Normals transform by the
-				// inverse-transpose.
-				math::Vector3 n = math::Vector3::TransformNormal((p1 - p0).Cross(p2 - p0), inv.Transpose());
-				n.Normalize();
-				best.hit = true;
-				best.distance = bestT;
-				best.position = o + d * bestT;
-				best.normal = n;
-				best.backFace = n.Dot(d) > 0.0f;
-				best.entity = e;
-				best.source = "mesh";
-			}
-		}
-
-		// Nearest accepted hit along the ray: meshes (exact triangles) and/or
-		// physics colliders (terrain chunks etc. that have no mesh component).
-		// Rejected hits (ignored entity, too steep) are passed through.
-		RayResult CastRay(Scene* scene, const math::Vector3& origin, math::Vector3 dir, const RayOptions& opt)
+		// Nearest accepted hit: the engine raycast (exact triangles via a cached
+		// per-mesh BVH + the physics scene for mesh-less colliders), on the
+		// edited scene - never GetCurrentScene, which can be the icon scene.
+		RayResult CastRay(Scene* scene, const math::Vector3& origin, const math::Vector3& dir, const RayOptions& opt)
 		{
 			RayResult out;
 			if (dir.LengthSquared() < 1e-12f) return out;
-			dir.Normalize();
-			math::Vector3 o = origin;
-			float travelled = 0.0f;
-			for (int attempt = 0; attempt < 32; ++attempt)
-			{
-				const float remaining = opt.maxDistance - travelled;
-				if (remaining <= 0.0f) break;
-				RayResult best;
-				if (opt.meshes)
-					RaycastMeshesOnce(scene, o, dir, remaining, opt, best);
-				if (opt.physics && g_pEnv->_physicsSystem)
-				{
-					RayHit h;
-					if (g_pEnv->_physicsSystem->RayCastScene(o, dir, std::min(remaining, best.distance), &h) > 0 && h.distance < best.distance)
-					{
-						best.hit = true;
-						best.distance = h.distance;
-						best.position = h.position;
-						best.normal = h.normal;
-						best.backFace = h.normal.Dot(dir) > 0.0f;
-						best.entity = h.entity;
-						best.source = "physics";
-					}
-				}
-				if (!best.hit) break;
-				const bool rejected =
-					(best.entity && opt.ignore.count(best.entity)) ||
-					(!opt.only.empty() && (!best.entity || !opt.only.count(best.entity))) ||
-					(opt.minNormalY > -1.5f && best.normal.y < opt.minNormalY);
-				if (!rejected)
-				{
-					best.distance += travelled;
-					return best;
-				}
-				const float step = best.distance + 0.001f;
-				o = o + dir * step;
-				travelled += step;
-			}
+			RayHit h;
+			if (!PhysUtils::RayCast(scene, origin, dir, opt, &h)) return out;
+			out.hit = true;
+			out.distance = h.distance;
+			out.position = h.position;
+			out.normal = h.normal;
+			out.backFace = h.backFace;
+			out.entity = h.entity;
+			out.source = RayHitSourceName(h.source);
 			return out;
 		}
 
@@ -1491,6 +1375,7 @@ namespace HexEngine
 		RayOptions ReadRayOptions(int64_t id, Scene* scene, const json& p)
 		{
 			RayOptions opt;
+			opt.rigidBodyColliders = false; // placement wants the visible surface, not a collider
 			if (p.contains("maxDistance")) opt.maxDistance = PositiveParam(p, "maxDistance", 10000.0f);
 			opt.meshes = p.value("meshes", true);
 			opt.physics = p.value("physics", true);

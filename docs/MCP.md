@@ -131,7 +131,7 @@ Read (always available):
 | `hex_list_assets` | Project assets by `type` (mesh, material, prefab, scene, texture), `filter`, `subdir`; `includeEngine` adds EngineData. Returns each asset's `ref`. |
 | `hex_get_material` | A material's properties and texture slots, by `path` or by the `entity` using it. |
 | `hex_capture_view` | **Vision.** The camera's rendered frame, downscaled (`maxSize`, default 768) and returned **inline** as an MCP image. Optional viewpoint: `position` + `lookAt` / `eulerDegrees`, or `frameEntity` to fit an entity in view. The editor camera is moved for the shot and restored; `waitFrames` (default 8 after a move) lets temporal effects settle. Readback is one main-thread hop; downscale + JPEG/PNG encode run off the main thread. |
-| `hex_raycast` | Exact ray vs. mesh triangles (object space, every triangle, nearest hit) plus physics colliders (terrain chunks without a mesh). Position, front-face normal, distance, entity, `source`. Filters: `ignore`, `only`, `minNormalY`, `includeHidden`. |
+| `hex_raycast` | The engine raycast (`PhysUtils::RayCast` on the edited scene): exact nearest triangle via a cached per-mesh BVH (visible surfaces, not RigidBody colliders) plus physics-scene colliders (terrain chunks without a mesh). Position, front-face normal, distance, entity, `source`. Filters: `ignore`, `only`, `minNormalY`, `includeHidden`. |
 | `hex_ground_height` | Surface height under up to 20000 `[x, z]` points (rays down from `fromY`), same filters — for scattering and placement. |
 | `hex_query_region` | Entities whose world bounds touch a sphere or box, nearest first, with their bounds. |
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
