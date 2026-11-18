@@ -16,6 +16,7 @@
       "Plugins\\HexEngine.EditorBridgePlugin\\HexEngine.EditorBridgePlugin.vcxproj",
       "Plugins\\HexEngine.SteamworksPlugin\\HexEngine.SteamworksPlugin.vcxproj",
       "Plugins\\HexEngine.GameNetworkingSocketsPlugin\\HexEngine.GameNetworkingSocketsPlugin.vcxproj",
+      "Plugins\\HexEngine.ScriptingPlugin\\HexEngine.ScriptingPlugin.vcxproj",
       "Plugins\\HexEngine.RecastNavigationPlugin\\HexEngine.RecastNavigationPlugin.vcxproj",
       "Plugins\\HexEngine.StreamlinePlugin\\HexEngine.StreamlinePlugin.vcxproj",
       "Plugins\\HexEngine.CitySimulationPlugin\\HexEngine.CitySimulationPlugin.vcxproj",

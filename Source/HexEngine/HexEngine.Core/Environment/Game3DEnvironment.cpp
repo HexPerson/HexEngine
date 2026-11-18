@@ -209,8 +209,15 @@ namespace HexEngine
 		env->_navMeshProvider = (INavMeshProvider*)env->_pluginSystem->CreateInterface(INavMeshProvider::InterfaceName);
 		env->_navMeshProvider->Create();
 
-		//env->_scriptEngine = (IScriptEngine*)env->_pluginSystem->CreateInterface(IScriptEngine::InterfaceName);
-		//env->_scriptEngine->Create();
+		// Gameplay scripting - optional (HexEngine.ScriptingPlugin). Without it
+		// ScriptComponents stay inert; with it they run in play mode.
+		env->_scriptEngine = (IScriptEngine*)env->_pluginSystem->TryCreateInterface(IScriptEngine::InterfaceName);
+		if (env->_scriptEngine != nullptr && !env->_scriptEngine->Create())
+		{
+			env->_scriptEngine->Destroy();
+			delete env->_scriptEngine;
+			env->_scriptEngine = nullptr;
+		}
 
 		env->_meshPrimitives = new MeshPrimitives;
 
@@ -519,8 +526,14 @@ namespace HexEngine
 		_navMeshProvider->Destroy();
 		SAFE_DELETE(_navMeshProvider);
 
-		//_scriptEngine->Destroy();
-		//SAFE_DELETE(_scriptEngine);
+		// After the scene manager (above): components release their script
+		// instances while the engine is still alive. Destroy() detaches any
+		// instance that outlived its scene.
+		if (_scriptEngine != nullptr)
+		{
+			_scriptEngine->Destroy();
+			SAFE_DELETE(_scriptEngine);
+		}
 
 		SAFE_DELETE(_debugRenderer);
 		SAFE_DELETE(_timeManager);
@@ -713,6 +726,11 @@ namespace HexEngine
 				_audioManager->Update();
 
 				_uiManager->Update(_timeManager->_frameTime);
+
+				// Script runtime housekeeping (hot reload, input edges) on real
+				// time, before the scene update runs the scripts themselves.
+				if (_scriptEngine != nullptr)
+					_scriptEngine->Tick(_timeManager->_frameTime);
 
 				// Gameplay runs on GAME time (scaled / paused - see TimeManager);
 				// the UI above keeps real time.

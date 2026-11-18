@@ -181,7 +181,9 @@ namespace HexEngine
 		
 		class AssetPackageManager* _assetPackageManager = nullptr;
 		class IconService* _iconService = nullptr;
-		//class IScriptEngine* _scriptEngine = nullptr; // disabled currently
+		// Optional gameplay script runtime (HexEngine.ScriptingPlugin, Lua). Null
+		// when the plugin isn't loaded; ScriptComponents then stay inert.
+		class IScriptEngine* _scriptEngine = nullptr;
 		class IStreamlineProvider* _streamlineProvider = nullptr;
 		// Optional temporal upscaler (FSR plugin). Null when no plugin provides
 		// one; cameras then refuse EnableFSR and render natively.

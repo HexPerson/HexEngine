@@ -120,6 +120,12 @@ namespace HexEngine
 
 		Entity* trigger = nullptr;
 		EntityId triggerId = InvalidEntityId;
+
+		// The entity on the other side of the overlap. Physics delivers the
+		// message to BOTH sides: to the entering body (other = the trigger)
+		// and to the trigger itself (other = the entering body).
+		Entity* other = nullptr;
+		EntityId otherId = InvalidEntityId;
 	};
 
 	class LeaveTriggerMessage : public Message
@@ -129,6 +135,12 @@ namespace HexEngine
 
 		Entity* trigger = nullptr;
 		EntityId triggerId = InvalidEntityId;
+
+		// The entity on the other side of the overlap. Physics delivers the
+		// message to BOTH sides: to the entering body (other = the trigger)
+		// and to the trigger itself (other = the entering body).
+		Entity* other = nullptr;
+		EntityId otherId = InvalidEntityId;
 	};
 
 	class RigidBodyCollision : public Message

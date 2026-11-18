@@ -105,6 +105,7 @@ $Plugins = @(
     'HexEngine.HBAOPlusPlugin.dll',
     'HexEngine.FSRPlugin.dll',
     'HexEngine.GameNetworkingSocketsPlugin.dll',
+    'HexEngine.ScriptingPlugin.dll',
     'HexEngine.CitySimulationPlugin.dll',
     'HexEngine.VolumetricTerrainPlugin.dll',
     'HexEngine.WeatherPlugin.dll',
@@ -118,6 +119,8 @@ $BinFiles = @(
     'brotlicommon.dll', 'brotlidec.dll', 'brotlienc.dll',
     # GameNetworkingSockets + deps (vcpkg, plugin post-build)
     'GameNetworkingSockets.dll', 'libprotobuf.dll', 'abseil_dll.dll', 'libcrypto-3-x64.dll', 'libssl-3-x64.dll',
+    # Lua 5.5 built as C++ (vcpkg lua[cpp], ScriptingPlugin post-build)
+    'lua-c++.dll',
     # HBAO+ (bootstrap: stage_hbaoplus)
     'GFSDK_SSAO_D3D11.win64.dll',
     # NVIDIA Streamline runtime (bootstrap: ensure_streamline)

@@ -751,19 +751,40 @@ void PhysicsSystemPhysX::onTrigger(physx::PxTriggerPair* pairs, physx::PxU32 cou
 
 			if (triggerEnt && actorEnt)
 			{
+				// Both sides hear about the overlap: the entering body (other =
+				// the trigger) and the trigger itself (other = the entering body),
+				// so a script on a trigger volume gets OnTriggerEnter/Exit.
 				if (cp.status == physx::PxPairFlag::eNOTIFY_TOUCH_LOST)
 				{
 					HexEngine::LeaveTriggerMessage message;
 					message.trigger = triggerEnt;
 					message.triggerId = triggerEnt->GetId();
+					message.other = triggerEnt;
+					message.otherId = triggerEnt->GetId();
 					actorEnt->OnMessage(&message, triggerEnt);
+
+					HexEngine::LeaveTriggerMessage toTrigger;
+					toTrigger.trigger = triggerEnt;
+					toTrigger.triggerId = triggerEnt->GetId();
+					toTrigger.other = actorEnt;
+					toTrigger.otherId = actorEnt->GetId();
+					triggerEnt->OnMessage(&toTrigger, actorEnt);
 				}
 				else if (cp.status == physx::PxPairFlag::eNOTIFY_TOUCH_FOUND)
 				{
 					HexEngine::EnterTriggerMessage message;
 					message.trigger = triggerEnt;
 					message.triggerId = triggerEnt->GetId();
+					message.other = triggerEnt;
+					message.otherId = triggerEnt->GetId();
 					actorEnt->OnMessage(&message, triggerEnt);
+
+					HexEngine::EnterTriggerMessage toTrigger;
+					toTrigger.trigger = triggerEnt;
+					toTrigger.triggerId = triggerEnt->GetId();
+					toTrigger.other = actorEnt;
+					toTrigger.otherId = actorEnt->GetId();
+					triggerEnt->OnMessage(&toTrigger, actorEnt);
 				}
 			}
 		}

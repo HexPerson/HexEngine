@@ -21,7 +21,6 @@
 #include "FileSystem/DiskFile.hpp"
 #include "FileSystem/ParticleEffectLoader.hpp"
 
-#include "Scripting/ScriptFile.hpp"
 #include "Scripting/IScriptEngine.hpp"
 
 #include "Graphics/IGraphicsDevice.hpp"

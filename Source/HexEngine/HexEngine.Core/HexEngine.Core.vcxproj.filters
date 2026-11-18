@@ -42,7 +42,6 @@
     <ClCompile Include="Scene\Prefab.cpp" />
     <ClCompile Include="Scene\ParticleEffect.cpp" />
     <ClCompile Include="Scene\ParticleWorldSystem.cpp" />
-    <ClCompile Include="Scripting\ScriptFile.cpp" />
     <ClCompile Include="Graphics\AutoExposure.cpp" />
     <ClCompile Include="Graphics\Bloom.cpp" />
     <ClCompile Include="Graphics\IconService.cpp" />
@@ -218,7 +217,6 @@
     <ClInclude Include="Scene\Prefab.hpp" />
     <ClInclude Include="Scene\ParticleEffect.hpp" />
     <ClInclude Include="Scene\ParticleWorldSystem.hpp" />
-    <ClInclude Include="Scripting\ScriptFile.hpp" />
     <ClInclude Include="FileSystem\XmlFile.hpp" />
     <ClInclude Include="Graphics\AutoExposure.hpp" />
     <ClInclude Include="Graphics\Bloom.hpp" />

@@ -366,7 +366,6 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Scene\Prefab.hpp" />
     <ClInclude Include="Scene\ParticleEffect.hpp" />
     <ClInclude Include="Scene\ParticleWorldSystem.hpp" />
-    <ClInclude Include="Scripting\ScriptFile.hpp" />
     <ClInclude Include="FileSystem\XmlFile.hpp" />
     <ClInclude Include="Graphics\AutoExposure.hpp" />
     <ClInclude Include="Graphics\ColourLut.hpp" />
@@ -609,7 +608,6 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Scene\Prefab.cpp" />
     <ClCompile Include="Scene\ParticleEffect.cpp" />
     <ClCompile Include="Scene\ParticleWorldSystem.cpp" />
-    <ClCompile Include="Scripting\ScriptFile.cpp" />
     <ClCompile Include="Graphics\AutoExposure.cpp" />
     <ClCompile Include="Graphics\ColourLut.cpp" />
     <ClCompile Include="Graphics\Bloom.cpp" />
