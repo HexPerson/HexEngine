@@ -110,6 +110,11 @@ namespace HexEngine
 
 	void Bloom::Render(Camera* camera, ITexture2D* sceneHdr, ITexture2D* compositeScratch)
 	{
+		// Disabled: forget the temporal history so re-enabling starts clean
+		// instead of resuming a stale (or NaN-poisoned) EMA.
+		if (!r_bloom._val.b)
+			_bloomHistoryValid = false;
+
 		if (!r_bloom._val.b ||
 			!_downsampleShader || !_upsampleShader || !_compositeShader ||
 			_chain.empty() || _paramsBuffer == nullptr ||
