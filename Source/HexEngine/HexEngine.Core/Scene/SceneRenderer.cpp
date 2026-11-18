@@ -1936,22 +1936,8 @@ namespace HexEngine
 				camera->GetNearZ(), camera->GetFarZ());
 		}
 
-		if (!_sphereEntity)
-		{
-			_sphereEntity = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("LightSphere");
-			_sphereEntity->SetLayer(Layer::Invisible);
-			_sphereEntity->SetFlag(EntityFlags::DoNotSave | EntityFlags::ExcludeFromHLOD);
-			auto sphereMeshRenderer = _sphereEntity->AddComponent<StaticMeshComponent>();
-			// This sphere is a transient deferred-light-volume helper: it is
-			// repositioned, rescaled and re-materialed every frame (its material
-			// is swapped between the point and spot passes). It must never enter
-			// GI - both for correctness and because those per-frame mutations
-			// would otherwise bump the GI revisions and thrash the voxel triangle
-			// cache. Flag it before SetMesh/SetMaterial so neither notifies.
-			sphereMeshRenderer->SetExcludeFromGI(true);
-			sphereMeshRenderer->SetMesh(_sphereMesh);
-			sphereMeshRenderer->SetMaterial(_pointLightMaterial);
-		}
+		// (The deferred light volume is drawn straight from _sphereMesh - see
+		// BindLightVolumeMesh. It used to be a "LightSphere" scene entity.)
 		// TODO move this somewhere
 		/*if (_clouds == nullptr)
 		{
@@ -5669,6 +5655,54 @@ namespace HexEngine
 #endif
 	}
 
+	// Binds one deferred light-volume draw (the light sphere) WITHOUT an entity:
+	// StaticMeshComponent::RenderMesh's non-shadow path with an identity object
+	// matrix - the light passes pass the real world matrix through the instance
+	// buffer. The volume used to be a "LightSphere" scene entity, created in
+	// whichever scene was current at the first render: once that scene was
+	// unloaded (or cleared, like the editor's icon scene) the cached pointer
+	// dangled and every light pass wrote into freed memory. It also showed up as
+	// a phantom entity in scene lists and needed DoNotSave / GI / HLOD opt-outs.
+	static bool BindLightVolumeMesh(Mesh* mesh, Material* material)
+	{
+		if (mesh == nullptr || material == nullptr)
+			return false;
+		auto shader = material->GetStandardShader();
+		if (!shader)
+			return false;
+
+		auto* graphicsDevice = g_pEnv->_graphicsDevice;
+		graphicsDevice->SetPixelShader(shader->GetShaderStage(ShaderStage::PixelShader));
+		graphicsDevice->SetVertexShader(shader->GetShaderStage(ShaderStage::VertexShader));
+		graphicsDevice->SetInputLayout(shader->GetInputLayout());
+
+		material->SaveRenderState();
+		graphicsDevice->SetBlendState(material->GetBlendState());
+		graphicsDevice->SetDepthBufferState(material->GetDepthState());
+		graphicsDevice->SetCullingMode(material->GetCullMode());
+
+		mesh->UpdateConstantBuffer(nullptr, math::Matrix(), material, 0, false);
+
+		const auto requirements = shader->GetRequirements();
+		if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresGBuffer))
+			g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+		if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresShadowMaps))
+			g_pEnv->_sceneRenderer->GetCurrentShadowMap()->BindAsShaderResource();
+		if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresBeauty))
+			graphicsDevice->SetTexture2D(g_pEnv->_sceneRenderer->GetBeautyTexture());
+
+		// Material textures in MaterialTexture order (Albedo .. AmbientOcclusion),
+		// after whatever the requirements bound - same as RenderMesh.
+		const uint32_t slotIdx = graphicsDevice->GetBoundResourceIndex();
+		for (int32_t t = 0; t < MaterialTexture::Count; ++t)
+			graphicsDevice->SetTexture2D(slotIdx + t, material->GetTexture((MaterialTexture)t).get());
+
+		mesh->SetBuffers(false);
+		graphicsDevice->SetHullShader(nullptr);
+		graphicsDevice->SetDomainShader(nullptr);
+		return true;
+	}
+
 	void SceneRenderer::RenderPointLights()
 	{
 		std::vector<PointLight*> pointLights;
@@ -5709,9 +5743,9 @@ namespace HexEngine
 
 		g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
 
-		auto renderer = _sphereEntity->GetComponent<StaticMeshComponent>();
-		renderer->SetMaterial(_pointLightMaterial);
-		auto mesh = renderer->GetMesh();
+		auto mesh = _sphereMesh;
+		if (mesh == nullptr || _pointLightMaterial == nullptr)
+			return;
 		auto instance = mesh->GetInstance();
 
 		// One draw per light, mirroring RenderSpotLights. The previous batched
@@ -5772,8 +5806,11 @@ namespace HexEngine
 
 				instance->Start();
 
-				_sphereEntity->SetPosition(lightPos);
-				_sphereEntity->SetScale(math::Vector3(lightRad));
+				// The light volume: the unit sphere scaled to the radius, at the light.
+				const math::Matrix volumeTM = math::Matrix::CreateScale(lightRad) * math::Matrix::CreateTranslation(lightPos);
+				const math::Matrix volumeTMT = volumeTM.Transpose();
+				math::Matrix volumeInv;
+				volumeTM.Invert(volumeInv);
 
 				// Units slice 3c: lumens -> candela on the per-light path,
 				// matching the clustered gather exactly (a shadowed light
@@ -5782,20 +5819,16 @@ namespace HexEngine
 				if (r_physicalLightUnits._val.b)
 					pointPassStrength /= 4.0f * 3.14159265f;
 
-				instance->Render(
-					_sphereEntity->GetWorldTM(),
-					_sphereEntity->GetWorldTMTranspose(),
-					_sphereEntity->GetWorldTMPrevTranspose(),
-					_sphereEntity->GetWorldTMInvert(),
+				instance->Render(volumeTM, volumeTMT, volumeTMT, volumeInv,
 					diffuse,
 					math::Vector2(lightRad, pointPassStrength));
 
 				instance->Finish();
 
-				// RenderMesh resets blend/depth/cull to the material defaults, so
+				// The bind resets blend/depth/cull to the material defaults, so
 				// the actual draw state is applied AFTER it (same ordering note as
 				// RenderSpotLights).
-				renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
+				BindLightVolumeMesh(mesh.get(), _pointLightMaterial.get());
 
 				g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
 				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
@@ -5880,9 +5913,9 @@ namespace HexEngine
 
 		
 
-		auto renderer = _sphereEntity->GetComponent<StaticMeshComponent>();
-		renderer->SetMaterial(_spotLightMaterial);
-		auto mesh = renderer->GetMesh();
+		auto mesh = _sphereMesh;
+		if (mesh == nullptr || _spotLightMaterial == nullptr)
+			return;
 		auto instance = mesh->GetInstance();
 		bool renderedSphere = false;
 
@@ -5957,8 +5990,10 @@ namespace HexEngine
 					// price we pay for per-light state correctness.
 					instance->Start();
 
-					_sphereEntity->SetPosition(lightPos);
-					_sphereEntity->SetScale(math::Vector3(lightRad));
+					const math::Matrix volumeTM = math::Matrix::CreateScale(lightRad) * math::Matrix::CreateTranslation(lightPos);
+					const math::Matrix volumeTMT = volumeTM.Transpose();
+					math::Matrix volumeInv;
+					volumeTM.Invert(volumeInv);
 
 					// Units slice 3c: cone-coupled lumens -> candela, matching
 					// the clustered gather.
@@ -5969,11 +6004,7 @@ namespace HexEngine
 						spotPassStrength /= std::max(2.0f * 3.14159265f * (1.0f - cosOuterPass), 1e-4f);
 					}
 
-					instance->Render(
-						_sphereEntity->GetWorldTM(),
-						_sphereEntity->GetWorldTMTranspose(),
-						_sphereEntity->GetWorldTMPrevTranspose(),
-						_sphereEntity->GetWorldTMInvert(),
+					instance->Render(volumeTM, volumeTMT, volumeTMT, volumeInv,
 						diffuse,
 						math::Vector2(lightRad, spotPassStrength));
 
@@ -5983,7 +6014,7 @@ namespace HexEngine
 					// resets blend/depth/cull to the material's defaults. We override
 					// those AFTER the call so the actual draw runs with additive blending,
 					// depth-test off, and the inside/outside-bounding-sphere culling mode.
-					renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
+					BindLightVolumeMesh(mesh.get(), _spotLightMaterial.get());
 
 					g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
 					g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);

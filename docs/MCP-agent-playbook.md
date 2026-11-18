@@ -135,7 +135,7 @@ Scripted logic (no C++ build) is coming with the scripting plugin.
   `floating` (info) - ignore those.
 - No bridge tool writes Lua scripts yet (the scripting plugin exists; tools to
   create/attach scripts are next).
-- Engine render helpers (`LightSphere`, `ReflectionProbeRig`) appear on their
-  own; they are not scene content.
+- Engine render helpers (`ReflectionProbeRig`) appear on their own; they are
+  not scene content.
 - `capture_view` takes ~1–2 s (it waits frames so temporal effects settle).
 - A huge batch stalls that editor frame; split batches beyond a few thousand ops.

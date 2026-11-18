@@ -403,7 +403,7 @@ namespace HexEngine
 		IConstantBuffer* _cloudConstantBuffer = nullptr;
 		IConstantBuffer* _forwardLightsBuffer = nullptr;
 		std::shared_ptr<Mesh> _sphereMesh = nullptr;
-		Entity* _sphereEntity = nullptr;
+		Entity* _sphereEntity = nullptr; // unused: the light volume no longer has an entity (kept so the class layout doesn't change)
 		std::shared_ptr<Material> _pointLightMaterial;
 		std::shared_ptr<Material> _spotLightMaterial;
 
