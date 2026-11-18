@@ -75,6 +75,10 @@ namespace HexEditor
 		bool ApplySelectedPrefabInstanceOverridesToAsset(HexEngine::Entity* entity, const std::vector<PrefabPropertyOverride>& selectedOverrides);
 		HexEngine::Entity* RevertPrefabInstance(HexEngine::Entity* entity);
 		bool ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity);
+		// Write `entity` and its whole hierarchy to a NEW prefab asset (root
+		// placed at the origin, prefab links cleared). Does not touch the source
+		// entity. Used by "create prefab from entity".
+		bool WritePrefabAsset(HexEngine::Entity* entity, const fs::path& prefabPath, std::string& error);
 		bool IsVariantStageEntity(HexEngine::Entity* entity) const;
 		bool GetVariantStageEntityOverrideComponents(HexEngine::Entity* entity, std::unordered_set<std::string>& outComponentNames) const;
 		bool RevertVariantStageComponentToBase(HexEngine::Entity* entity, const std::string& componentName);

@@ -41,6 +41,7 @@
 #include "../../HexEngine.Core/Graphics/ITexture2D.hpp"
 #include "../../HexEngine.Core/Graphics/Material.hpp"
 #include "../../HexEngine.Core/Scene/Mesh.hpp"
+#include "../../HexEngine.Core/FileSystem/PrefabLoader.hpp"
 
 #include <deque>
 
@@ -651,6 +652,63 @@ namespace HexEngine
 			return true;
 		}
 
+		IEditorContext* Ctx()
+		{
+			return g_pEnv ? g_pEnv->_editorContext : nullptr;
+		}
+
+		// Project-relative asset paths. Accepts an absolute path, "Data/...",
+		// or a path relative to the project's Data folder ("Prefabs/Tree.hprefab").
+		// Results must stay inside the open project (no writing elsewhere).
+		bool ResolveProjectPath(const std::string& input, fs::path& out, std::string& error)
+		{
+			IEditorContext* ctx = Ctx();
+			const std::string folder = ctx ? ctx->GetProjectFolderPath() : std::string();
+			if (folder.empty())
+			{
+				error = "no project is open";
+				return false;
+			}
+			const fs::path root = fs::weakly_canonical(fs::path(folder));
+			fs::path p = fs::path(input);
+			if (!p.is_absolute())
+			{
+				const auto first = p.begin() != p.end() ? p.begin()->wstring() : std::wstring();
+				p = (_wcsicmp(first.c_str(), L"Data") == 0) ? root / p : root / L"Data" / p;
+			}
+			p = fs::weakly_canonical(p);
+			const std::wstring r = root.wstring(), c = p.wstring();
+			if (c.size() < r.size() || _wcsnicmp(c.c_str(), r.c_str(), r.size()) != 0)
+			{
+				error = "path '" + input + "' resolves outside the open project (" + root.string() + ")";
+				return false;
+			}
+			out = p;
+			return true;
+		}
+
+		// Project-relative form for responses ("Data/Prefabs/Tree.hprefab").
+		std::string ProjectRelative(const fs::path& p)
+		{
+			IEditorContext* ctx = Ctx();
+			const std::string folder = ctx ? ctx->GetProjectFolderPath() : std::string();
+			if (folder.empty()) return p.string();
+			std::error_code ec;
+			const fs::path rel = fs::relative(p, fs::path(folder), ec);
+			return ec || rel.empty() ? p.string() : rel.generic_string();
+		}
+
+		// Spawned prefab entities whose parent is not part of the same spawn.
+		std::vector<Entity*> SpawnRoots(const std::vector<Entity*>& spawned)
+		{
+			std::unordered_set<Entity*> set(spawned.begin(), spawned.end());
+			std::vector<Entity*> roots;
+			for (Entity* e : spawned)
+				if (e != nullptr && (e->GetParent() == nullptr || set.count(e->GetParent()) == 0))
+					roots.push_back(e);
+			return roots;
+		}
+
 		struct FlagName { const char* name; EntityFlags flag; };
 		const FlagName kEditableFlags[] = {
 			{ "DoNotSave",         EntityFlags::DoNotSave },
@@ -824,7 +882,25 @@ namespace HexEngine
 			bool    write = false;      // requires HEXENGINE_EDITOR_BRIDGE_WRITE=1
 			bool    mainThread = true;  // marshal to the editor main thread
 			bool    batchable = true;   // may appear inside `batch`
+			bool    undoable = false;   // its edits are recorded as one undo step
 			Handler fn;
+		};
+
+		// Everything recorded inside one bridge request (single call or whole
+		// batch) becomes ONE editor undo step. Exception-safe.
+		struct UndoGroupScope
+		{
+			IEditorContext* ctx = nullptr;
+			UndoGroupScope(bool enable, const std::string& label)
+			{
+				if (enable && (ctx = Ctx()) != nullptr)
+					ctx->BeginUndoGroup(label);
+			}
+			~UndoGroupScope()
+			{
+				if (ctx != nullptr)
+					ctx->EndUndoGroup();
+			}
 		};
 
 		// Main thread: run queued tasks, then apply coalesced deferred work.
@@ -1003,7 +1079,11 @@ namespace HexEngine
 			const json params = req.params;
 			if (!info.mainThread)
 				return Invoke(info, id, params);
-			return OnMain(id, [&info, id, params]() { return Invoke(info, id, params); });
+			const std::string label = "Bridge: " + req.method;
+			return OnMain(id, [&info, id, params, label]() {
+				UndoGroupScope undo(info.undoable, label);
+				return Invoke(info, id, params);
+			});
 		}
 
 		// `batch`: run many methods in ONE main-thread task (a single editor
@@ -1058,7 +1138,9 @@ namespace HexEngine
 				ops.push_back({ &it->second, method, o.contains("params") ? o["params"] : json::object(), label });
 			}
 
-			return OnMain(id, [id, ops = std::move(ops), stopOnError]() mutable -> json {
+			const bool anyUndoable = std::any_of(ops.begin(), ops.end(), [](const Op& o) { return o.info->undoable; });
+			return OnMain(id, [id, ops = std::move(ops), stopOnError, anyUndoable]() mutable -> json {
+				UndoGroupScope undo(anyUndoable, "Bridge: batch (" + std::to_string(ops.size()) + " ops)");
 				const auto start = std::chrono::steady_clock::now();
 				std::vector<json> results(ops.size());
 				BatchLabels labels;
@@ -1206,6 +1288,9 @@ namespace HexEngine
 					{"protocolVersion", kProtocolVersion},
 					{"writeEnabled", BridgeWriteEnabled()},
 					{"frame", _frameCount.load()},
+					{"prefabStageOpen", ctx ? ctx->IsPrefabEditStageOpen() : false},
+					{"undoCount", ctx ? ctx->GetUndoCount() : 0},
+					{"redoCount", ctx ? ctx->GetRedoCount() : 0},
 				});
 			});
 
@@ -1588,6 +1673,42 @@ namespace HexEngine
 				});
 			});
 
+			// ---- Prefabs (read) ----
+
+			Reg("list_prefabs", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				fs::path base;
+				std::string err;
+				if (!ResolveProjectPath(p.value("subdir", std::string("")), base, err))
+					return MakeError(id, ErrorCode::NotAvailable, err);
+				json list = json::array();
+				std::error_code ec;
+				for (fs::recursive_directory_iterator it(base, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
+				{
+					if (!it->is_regular_file(ec) || _wcsicmp(it->path().extension().c_str(), L".hprefab") != 0)
+						continue;
+					list.push_back(json{ {"path", ProjectRelative(it->path())}, {"name", it->path().stem().string()} });
+					if (list.size() >= 2000) break;
+				}
+				return MakeResult(id, json{ {"count", list.size()}, {"prefabs", list},
+					{"note", "Pass 'path' to instantiate_prefab / open_prefab_stage. Paths are relative to the project folder."} });
+			});
+
+			Reg("prefab_info", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				json err;
+				Entity* e = RequireEntity(id, scene.get(), p, "entity", true, err);
+				if (!e) return err;
+				IEditorContext* ctx = Ctx();
+				if (!ctx)
+					return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				json info = ctx->DescribePrefabInstance(e);
+				if (info.contains("sourcePath") && info["sourcePath"].is_string())
+					info["sourcePath"] = ProjectRelative(fs::path(info["sourcePath"].get<std::string>()));
+				info["entity"] = EntityBrief(e);
+				return MakeResult(id, info);
+			});
+
 			// ================= WRITE =================
 
 			Reg("set_cvars", W, Main, Batch, [](int64_t id, const json& p) -> json {
@@ -1740,6 +1861,7 @@ namespace HexEngine
 						added.push_back(r);
 					}
 				}
+				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityCreated(e);
 				MarkPvsDirty();
 				json result = EntityBrief(e);
 				if (!added.empty()) result["components"] = added;
@@ -1752,8 +1874,17 @@ namespace HexEngine
 				json err;
 				Entity* entity = RequireEntity(id, scene.get(), p, "entity", true, err);
 				if (!entity) return err;
+				IEditorContext* ctx = Ctx();
+				if (ctx) ctx->BeginComponentEdit(entity);
 				json r = AddComponentByName(id, entity, p, err);
+				// A property edit on an existing component records here; a new
+				// component changes the layout, so this is a no-op and the add
+				// is recorded instead.
+				if (ctx) ctx->EndComponentEdit(entity);
 				if (r.is_null()) return err;
+				if (ctx && !r.value("alreadyExisted", false))
+					if (BaseComponent* added = FindComponent(entity, r["component"].get<std::string>()))
+						ctx->RecordComponentAdded(added);
 				r["entity"] = EntityBrief(entity);
 				MarkPvsDirty();
 				return MakeResult(id, r);
@@ -1774,6 +1905,7 @@ namespace HexEngine
 				// The inspector holds widgets bound to the selected entity's
 				// components - drop the selection before destroying one.
 				const bool selectionCleared = ReleaseSelectionOf(entity);
+				if (IEditorContext* ctx = Ctx()) ctx->RecordComponentDeleted(c);
 				entity->RemoveComponent(c);
 				MarkPvsDirty();
 				return MakeResult(id, json{ {"entity", EntityBrief(entity)}, {"removed", compName}, {"selectionCleared", selectionCleared} });
@@ -1790,6 +1922,7 @@ namespace HexEngine
 				std::string finalName;
 				if (!scene->RenameEntity(e, newName, &finalName))
 					return MakeError(id, ErrorCode::Internal, "Scene::RenameEntity refused the rename");
+				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityRename(e, before, finalName);
 				return MakeResult(id, json{ {"id", EntityIdToJson(e->GetId())}, {"before", before}, {"name", finalName},
 					{"note", finalName != newName ? "name was de-duplicated by the scene" : ""} });
 			});
@@ -1810,7 +1943,9 @@ namespace HexEngine
 							return MakeError(id, ErrorCode::InvalidParams, "cannot parent an entity to itself or one of its descendants");
 				}
 				const bool preserveWorld = p.value("preserveWorldPosition", true);
+				Entity* oldParent = e->GetParent();
 				e->SetParent(parent, preserveWorld);
+				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityParentChange(e, oldParent, parent);
 				MarkPvsDirty();
 				return MakeResult(id, json{ {"entity", EntityBrief(e)}, {"parent", parent ? EntityBrief(parent) : json(nullptr)} });
 			});
@@ -1840,11 +1975,14 @@ namespace HexEngine
 						changes.push_back({ f, std::string(key) == "set" });
 					}
 				}
+				const bool hiddenBefore = e->HasFlag(EntityFlags::DoNotRender);
 				for (auto& [f, set] : changes)
 				{
 					if (set) e->SetFlag(f);
 					else e->ClearFlags(f);
 				}
+				if (IEditorContext* ctx = Ctx(); ctx && hiddenBefore != e->HasFlag(EntityFlags::DoNotRender))
+					ctx->RecordEntityVisibilityChange(e, hiddenBefore, e->HasFlag(EntityFlags::DoNotRender));
 				if (!changes.empty()) MarkPvsDirty();
 				return MakeResult(id, json{ {"entity", EntityBrief(e)}, {"flags", EditableFlagsOf(e)} });
 			});
@@ -1871,6 +2009,7 @@ namespace HexEngine
 					return MakeError(id, ErrorCode::Internal, "Scene::CloneEntity returned null");
 				if (!p.value("persistent", false))
 					clone->SetFlag(EntityFlags::DoNotSave);
+				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityCreated(clone);
 				MarkPvsDirty();
 				json result = EntityBrief(clone);
 				result["source"] = EntityBrief(src);
@@ -1906,6 +2045,9 @@ namespace HexEngine
 				if (!e) return err;
 
 				json applied = json::object();
+				const math::Vector3 positionBefore = e->GetPosition();
+				const math::Quaternion rotationBefore = e->GetRotation();
+				const math::Vector3 scaleBefore = e->GetScale();
 				math::Vector3 v;
 				if (ReadVec3(p, "position", v))
 				{
@@ -1973,6 +2115,10 @@ namespace HexEngine
 				}
 				if (applied.empty())
 					return MakeError(id, ErrorCode::InvalidParams, "provide at least one of: position [x,y,z], rotation [x,y,z,w], eulerDegrees [pitch,yaw,roll], scale [x,y,z]");
+				// Cameras own their orientation (see above), so their moves aren't
+				// replayed through the Transform-based undo.
+				if (IEditorContext* ctx = Ctx(); ctx && camera == nullptr)
+					ctx->RecordEntityTransformChange(e, positionBefore, rotationBefore, scaleBefore);
 				MarkPvsDirty();
 				return MakeResult(id, json{ {"entity", e->GetName()}, {"id", EntityIdToJson(e->GetId())}, {"applied", applied} });
 			});
@@ -1991,7 +2137,11 @@ namespace HexEngine
 					return MakeError(id, ErrorCode::NotAvailable, "entity '" + e->GetName() + "' has no component named '" + compName + "' (it has: " + ComponentNames(e).dump() + ")");
 				json after;
 				std::string msg;
-				if (!ApplyComponentFields(target, p["fields"], after, msg))
+				IEditorContext* ctx = Ctx();
+				if (ctx) ctx->BeginComponentEdit(e);
+				const bool applied = ApplyComponentFields(target, p["fields"], after, msg);
+				if (ctx) ctx->EndComponentEdit(e); // records nothing when unchanged
+				if (!applied)
 					return MakeError(id, ErrorCode::InvalidParams, msg);
 				MarkPvsDirty();
 				return MakeResult(id, json{
@@ -2010,6 +2160,7 @@ namespace HexEngine
 				if (!e) return err;
 				const json brief = EntityBrief(e);
 				const bool selectionCleared = ReleaseSelectionOf(e);
+				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityDeleted(e);
 				scene->DestroyEntity(e);
 				MarkPvsDirty();
 				return MakeResult(id, json{ {"deleted", brief["name"]}, {"id", brief["id"]}, {"selectionCleared", selectionCleared},
@@ -2230,6 +2381,200 @@ namespace HexEngine
 				return MakeResult(id, result);
 			});
 
+			// ---- Undo / redo / save ----
+
+			Reg("undo", W, Main, Solo, [](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				int steps = std::clamp(p.value("steps", 1), 1, 100);
+				int done = 0;
+				while (done < steps && ctx->Undo()) ++done;
+				return MakeResult(id, json{ {"undone", done}, {"undoCount", ctx->GetUndoCount()}, {"redoCount", ctx->GetRedoCount()},
+					{"note", "Each bridge call or batch is ONE undo step, shared with the editor's own history."} });
+			});
+
+			Reg("redo", W, Main, Solo, [](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				int steps = std::clamp(p.value("steps", 1), 1, 100);
+				int done = 0;
+				while (done < steps && ctx->Redo()) ++done;
+				return MakeResult(id, json{ {"redone", done}, {"undoCount", ctx->GetUndoCount()}, {"redoCount", ctx->GetRedoCount()} });
+			});
+
+			Reg("save_scene", W, Main, Solo, [](int64_t id, const json&) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				std::string err;
+				if (!ctx->SaveAll(err))
+					return MakeError(id, ErrorCode::NotAvailable, err);
+				return MakeResult(id, json{ {"saved", true},
+					{"note", "Saved the project file, every open scene (cvars included) and the prefab stage if open. Entities flagged DoNotSave (e.g. in-memory procedural meshes) are skipped."} });
+			});
+
+			// ---- Prefabs (write) ----
+
+			Reg("instantiate_prefab", W, Main, Batch, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				fs::path path;
+				std::string perr;
+				if (!ResolveProjectPath(RequireString(p, "path"), path, perr))
+					return MakeError(id, ErrorCode::InvalidParams, perr);
+				std::error_code ec;
+				if (!fs::exists(path, ec))
+					return MakeError(id, ErrorCode::NotAvailable, "no prefab at '" + ProjectRelative(path) + "' (see list_prefabs)");
+
+				Entity* parent = nullptr;
+				if (p.contains("parent") && !p["parent"].is_null())
+				{
+					json err;
+					parent = RequireEntity(id, scene.get(), p, "parent", false, err);
+					if (!parent) return err;
+				}
+				math::Vector3 position;
+				const bool hasPosition = ReadVec3(p, "position", position);
+				math::Quaternion rotation;
+				const bool hasRotation = ReadRotation(p, rotation);
+				math::Vector3 scale;
+				const bool hasScale = ReadVec3(p, "scale", scale);
+
+				auto spawned = g_pEnv->_prefabLoader->LoadPrefab(scene, path);
+				const auto roots = SpawnRoots(spawned);
+				if (roots.empty())
+					return MakeError(id, ErrorCode::Internal, "the prefab spawned no entities (see engine logs)");
+
+				// Same placement rule as the editor's drag & drop: move every root
+				// by the offset that puts the first root at `position`.
+				const math::Vector3 delta = hasPosition ? position - roots.front()->GetPosition() : math::Vector3(0.0f, 0.0f, 0.0f);
+				json rootList = json::array();
+				for (Entity* r : roots)
+				{
+					if (parent) r->SetParent(parent, false);
+					if (hasPosition) r->SetPosition(r->GetPosition() + delta);
+					if (hasRotation) r->SetRotation(rotation);
+					if (hasScale) r->SetScale(scale);
+				}
+				if (p.contains("name") && p["name"].is_string() && roots.size() == 1)
+				{
+					std::string finalName;
+					scene->RenameEntity(roots.front(), p["name"].get<std::string>(), &finalName);
+				}
+				if (p.value("persistent", true) == false)
+					for (Entity* e : spawned) e->SetFlag(EntityFlags::DoNotSave);
+				for (Entity* r : roots)
+				{
+					if (IEditorContext* ctx = Ctx()) ctx->RecordEntityCreated(r);
+					rootList.push_back(EntityBrief(r));
+				}
+				MarkPvsDirty();
+				json result = EntityBrief(roots.front());
+				result["roots"] = rootList;
+				result["entityCount"] = spawned.size();
+				result["prefab"] = ProjectRelative(path);
+				return MakeResult(id, result);
+			});
+
+			Reg("create_prefab", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				json err;
+				Entity* e = RequireEntity(id, scene.get(), p, "entity", true, err);
+				if (!e) return err;
+				std::string requested = p.value("path", std::string());
+				if (requested.empty())
+					requested = "Prefabs/" + e->GetName() + ".hprefab";
+				fs::path path;
+				std::string perr;
+				if (!ResolveProjectPath(requested, path, perr))
+					return MakeError(id, ErrorCode::InvalidParams, perr);
+				if (path.extension() != ".hprefab")
+					path.replace_extension(".hprefab");
+				std::error_code ec;
+				if (fs::exists(path, ec) && !p.value("overwrite", false))
+					return MakeError(id, ErrorCode::InvalidParams, "'" + ProjectRelative(path) + "' already exists (pass overwrite: true, or edit it with open_prefab_stage)");
+				const bool replace = p.value("replaceWithInstance", true);
+				std::string cerr;
+				Entity* result = ctx->CreatePrefabFromEntity(e, path, replace, cerr);
+				if (result == nullptr)
+					return MakeError(id, ErrorCode::Internal, cerr);
+				MarkPvsDirty();
+				json out = json{ {"prefab", ProjectRelative(path)}, {"entity", EntityBrief(result)}, {"replacedWithInstance", replace && cerr.empty()} };
+				if (!cerr.empty()) out["warning"] = cerr;
+				return MakeResult(id, out);
+			});
+
+			auto prefabInstanceOp = [](const char* what) {
+				return [what](int64_t id, const json& p) -> json {
+					auto scene = PrimaryUserScene();
+					if (!scene) return NoScene(id);
+					IEditorContext* ctx = Ctx();
+					if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+					json err;
+					Entity* e = RequireEntity(id, scene.get(), p, "entity", true, err);
+					if (!e) return err;
+					std::string msg;
+					const std::string op = what;
+					if (op == "apply")
+					{
+						if (!ctx->ApplyPrefabInstance(e, msg)) return MakeError(id, ErrorCode::InvalidParams, msg);
+						return MakeResult(id, json{ {"applied", true}, {"entity", EntityBrief(e)},
+							{"note", "The prefab asset was rewritten; other instances update per the editor's instance-sync policy."} });
+					}
+					if (op == "revert")
+					{
+						ReleaseSelectionOf(e);
+						Entity* r = ctx->RevertPrefabInstanceToAsset(e, msg);
+						if (!r) return MakeError(id, ErrorCode::InvalidParams, msg);
+						return MakeResult(id, json{ {"reverted", true}, {"entity", EntityBrief(r)} });
+					}
+					if (!ctx->UpdatePrefabInstance(e, msg)) return MakeError(id, ErrorCode::InvalidParams, msg);
+					return MakeResult(id, json{ {"updated", true}, {"entity", EntityBrief(e)} });
+				};
+			};
+			Reg("apply_prefab_instance", W, Main, Solo, prefabInstanceOp("apply"));
+			Reg("revert_prefab_instance", W, Main, Solo, prefabInstanceOp("revert"));
+			Reg("update_prefab_instance", W, Main, Solo, prefabInstanceOp("update"));
+
+			Reg("open_prefab_stage", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				fs::path path;
+				std::string err;
+				if (!ResolveProjectPath(RequireString(p, "path"), path, err))
+					return MakeError(id, ErrorCode::InvalidParams, err);
+				if (!ctx->OpenPrefabEditStage(path, err))
+					return MakeError(id, ErrorCode::NotAvailable, err);
+				MarkPvsDirty();
+				auto scene = PrimaryUserScene();
+				return MakeResult(id, json{ {"opened", ProjectRelative(path)}, {"stageScene", scene ? WideToUtf8(scene->GetName()) : std::string()},
+					{"note", "Every entity/component tool now edits the PREFAB. Finish with save_prefab_stage and/or close_prefab_stage."} });
+			});
+
+			Reg("save_prefab_stage", W, Main, Solo, [](int64_t id, const json&) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				std::string err;
+				if (!ctx->SavePrefabEditStage(err))
+					return MakeError(id, ErrorCode::NotAvailable, err);
+				return MakeResult(id, json{ {"saved", true} });
+			});
+
+			Reg("close_prefab_stage", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				if (!p.contains("save") || !p["save"].is_boolean())
+					throw ParamError("close_prefab_stage requires 'save': true (keep changes) or false (discard)");
+				std::string err;
+				if (!ctx->ClosePrefabEditStage(p["save"].get<bool>(), err))
+					return MakeError(id, ErrorCode::NotAvailable, err);
+				MarkPvsDirty();
+				auto scene = PrimaryUserScene();
+				return MakeResult(id, json{ {"closed", true}, {"saved", p["save"].get<bool>()}, {"activeScene", scene ? WideToUtf8(scene->GetName()) : std::string()} });
+			});
+
 			// Pipe-thread handler: waits `waitFrames` editor frames (default 2) so
 			// mutations made just before - including the coalesced PVS rebuild -
 			// are actually rendered, THEN marshals the capture. Not batchable (a
@@ -2261,6 +2606,14 @@ namespace HexEngine
 					return MakeResult(id, json{ {"path", path}, {"frame", _frameCount.load()} });
 				});
 			});
+
+			// Methods whose edits go through the editor's undo history (each call
+			// or batch = one step). create_mesh_entity is excluded: its mesh has
+			// no asset, so an undo/redo round-trip couldn't rebuild it.
+			for (const char* name : { "create_entity", "add_component", "remove_component", "rename_entity", "set_parent",
+				"set_entity_flags", "clone_entity", "set_entity_transform", "set_component_field", "delete_entity",
+				"instantiate_prefab", "create_prefab" })
+				_methods[name].undoable = true;
 		}
 
 	private:

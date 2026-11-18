@@ -66,6 +66,29 @@ public:
 		virtual std::string GetProjectFilePath() override;
 		virtual bool OpenProject(const std::string& projectFilePath, std::string& error) override;
 
+		// Programmatic-authoring hooks (editor bridge). The Record* overrides
+		// are the existing Record* methods below (same signatures).
+		virtual HexEngine::FileSystem* GetProjectFileSystem() override;
+		virtual void BeginUndoGroup(const std::string& label) override;
+		virtual void EndUndoGroup() override;
+		virtual bool Undo() override;
+		virtual bool Redo() override;
+		virtual size_t GetUndoCount() override;
+		virtual size_t GetRedoCount() override;
+		virtual void RecordEntityTransformChange(HexEngine::Entity* entity, const math::Vector3& positionBefore, const math::Quaternion& rotationBefore, const math::Vector3& scaleBefore) override;
+		virtual void BeginComponentEdit(HexEngine::Entity* entity) override;
+		virtual void EndComponentEdit(HexEngine::Entity* entity) override;
+		virtual bool SaveAll(std::string& error) override;
+		virtual json DescribePrefabInstance(HexEngine::Entity* entity) override;
+		virtual bool ApplyPrefabInstance(HexEngine::Entity* entity, std::string& error) override;
+		virtual HexEngine::Entity* RevertPrefabInstanceToAsset(HexEngine::Entity* entity, std::string& error) override;
+		virtual bool UpdatePrefabInstance(HexEngine::Entity* entity, std::string& error) override;
+		virtual HexEngine::Entity* CreatePrefabFromEntity(HexEngine::Entity* entity, const fs::path& prefabPath, bool replaceWithInstance, std::string& error) override;
+		virtual bool OpenPrefabEditStage(const fs::path& prefabPath, std::string& error) override;
+		virtual bool SavePrefabEditStage(std::string& error) override;
+		virtual bool ClosePrefabEditStage(bool saveChanges, std::string& error) override;
+		virtual bool IsPrefabEditStageOpen() override;
+
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 
 		void RecordEntityPositionChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
@@ -203,6 +226,8 @@ public:
 		// touches the entity list / inspector / dialogs, so it runs on the main
 		// thread in Update.
 		std::atomic_bool _prefabLoadCheckPending = false;
+		// Component-state snapshots between Begin/EndComponentEdit (bridge).
+		std::unordered_map<HexEngine::Entity*, Detail::EntityComponentStateSnapshot> _programmaticComponentEdits;
 
 	};
 

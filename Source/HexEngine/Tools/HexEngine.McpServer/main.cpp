@@ -151,6 +151,10 @@ namespace
 			Obj(json{ {"names", json{ {"type", "array"}, {"items", json{ {"type", "string"} }}, {"minItems", 1}, {"description", "Exact cvar names."} }} }, { "names" }) });
 		v.push_back({ "list_console_commands", "List console commands (run them with hex_exec_console).",
 			Obj(json{ {"filter", Str("Name substring.")} }) });
+		v.push_back({ "list_prefabs", "List prefab assets (.hprefab) in the open project. Paths are project-relative.",
+			Obj(json{ {"subdir", Str("Folder under the project's Data folder to search (default: all of Data).")} }) });
+		v.push_back({ "prefab_info", "Is this entity a prefab instance? Source prefab, instance root, out-of-date state and the list of overridden properties.",
+			Obj(json{ {"entity", EntityRefSchema()} }, { "entity" }) });
 
 		// --- write ---
 		v.push_back({ "open_project", w("Open a project at the project browser. Async: poll hex_get_editor_status until sceneName is set. Not batchable."),
@@ -207,11 +211,40 @@ namespace
 					{"metallic", Num("0..1")}, {"roughness", Num("0..1")}, {"smoothness", Num("0..1")},
 					{"affectsGI", Bool("Contribute to voxel GI.")} })},
 			}), { "name", "vertices", "indices" }) });
+		v.push_back({ "undo", w("Undo the last editor history steps (shared with the editor's Ctrl+Z). Every bridge call or batch that edits entities is ONE step. Not batchable."),
+			Obj(json{ {"steps", Int("How many steps (default 1, max 100).")} }) });
+		v.push_back({ "redo", w("Redo undone steps. Not batchable."),
+			Obj(json{ {"steps", Int("How many steps (default 1, max 100).")} }) });
+		v.push_back({ "save_scene", w("Save everything like the editor's Save action: project file, every open scene (cvars included) and the prefab stage if open. DoNotSave entities are skipped. Not batchable."),
+			Obj(json::object()) });
+		v.push_back({ "instantiate_prefab", w("Spawn a prefab instance (linked to its asset, like drag & drop). The first root is moved to position; rotation/scale apply to the roots."),
+			Obj(TransformProps(json{
+				{"path", Str("Prefab path from hex_list_prefabs (project-relative, e.g. \"Data/Prefabs/Tree.hprefab\").")},
+				{"name", Str("Optional name for the (single) root.")},
+				{"parent", EntityRefSchema("Optional parent entity.")},
+				{"persistent", Bool("Save with the scene (default true).")},
+			}), { "path" }) });
+		v.push_back({ "create_prefab", w("Save an entity and its whole hierarchy as a NEW prefab asset. By default the original is replaced by a linked instance of the new prefab (same parent/transform/name). Not batchable."),
+			Obj(json{ {"entity", EntityRefSchema()},
+				{"path", Str("Output path, project-relative (default \"Data/Prefabs/<entity name>.hprefab\").")},
+				{"replaceWithInstance", Bool("Swap the original for a linked instance (default true).")},
+				{"overwrite", Bool("Allow replacing an existing prefab file (default false).")} }, { "entity" }) });
+		v.push_back({ "apply_prefab_instance", w("Write a prefab instance's changes back into its prefab asset (other instances follow the editor's sync policy). Not batchable."),
+			Obj(json{ {"entity", EntityRefSchema("Prefab instance root.")} }, { "entity" }) });
+		v.push_back({ "revert_prefab_instance", w("Discard an instance's overrides and rebuild it from its prefab. Returns the rebuilt root. Not batchable."),
+			Obj(json{ {"entity", EntityRefSchema("Prefab instance root.")} }, { "entity" }) });
+		v.push_back({ "update_prefab_instance", w("Pull the latest prefab asset into an out-of-date instance. Not batchable."),
+			Obj(json{ {"entity", EntityRefSchema("Prefab instance root.")} }, { "entity" }) });
+		v.push_back({ "open_prefab_stage", w("Open a prefab for EDITING: its own scene becomes the active scene, so every entity/component tool (create, add_component, set_component_field, delete, batch...) now authors the prefab. Finish with save_prefab_stage / close_prefab_stage. Not batchable."),
+			Obj(json{ {"path", Str("Prefab path (project-relative).")} }, { "path" }) });
+		v.push_back({ "save_prefab_stage", w("Save the open prefab stage to its asset. Not batchable."), Obj(json::object()) });
+		v.push_back({ "close_prefab_stage", w("Close the prefab stage and return to the level scene. Not batchable."),
+			Obj(json{ {"save", Bool("true = save changes first, false = discard.")} }, { "save" }) });
 		v.push_back({ "capture_frame", w("Save the main camera's rendered frame to an image file. Waits waitFrames (default 2) editor frames first so recent edits are visible. Not batchable."),
 			Obj(json{ {"path", Str("Absolute output path (.png / .jpg / .dds).")}, {"waitFrames", Int("Frames to wait before capturing (default 2).")} }, { "path" }) });
 
 		// --- batch ---
-		v.push_back({ "batch", "FAST PATH: run many bridge methods (any of the above except open_project/capture_frame, names WITHOUT the hex_ prefix) in ONE editor frame. "
+		v.push_back({ "batch", "FAST PATH: run many bridge methods (any of the above not marked \"Not batchable\", names WITHOUT the hex_ prefix) in ONE editor frame and ONE undo step. "
 			"An op's params may reference an earlier op's result with {\"$ref\": \"<opIndexOrLabel>.<path>\"}, e.g. {\"$ref\": \"house.id\"} where op had \"as\": \"house\". "
 			"Ops run in order; with stopOnError (default) later ops are skipped after a failure. Not transactional: completed ops stay applied." + std::string(" Write ops need the write opt-in."),
 			Obj(json{

@@ -3172,6 +3172,62 @@ namespace HexEditor
 		return newRoot;
 	}
 
+	bool PrefabController::WritePrefabAsset(HexEngine::Entity* entity, const fs::path& prefabPath, std::string& error)
+	{
+		if (entity == nullptr || entity->IsPendingDeletion())
+		{
+			error = "no entity";
+			return false;
+		}
+		if (prefabPath.empty() || prefabPath.extension() != ".hprefab")
+		{
+			error = "prefab path must end in .hprefab";
+			return false;
+		}
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		if (sceneManager == nullptr)
+		{
+			error = "scene manager unavailable";
+			return false;
+		}
+
+		// Same isolation as ApplyPrefabInstanceToPrefabAsset: clone the hierarchy
+		// into a private scene with prefab links cleared, then save that.
+		auto tempScene = sceneManager->CreateEmptyScene(false);
+		auto* tempRoot = CloneEntityHierarchyToScene(tempScene.get(), entity, nullptr, fs::path(), std::string(), true);
+		if (tempRoot == nullptr)
+		{
+			error = "failed to clone the entity hierarchy";
+			return false;
+		}
+
+		// Author the prefab around the origin; whoever spawns it places the root.
+		tempRoot->SetPosition(math::Vector3(0.0f, 0.0f, 0.0f));
+
+		std::vector<HexEngine::Entity*> entitiesToSave;
+		CollectEntityHierarchy(tempRoot, entitiesToSave);
+
+		// The prefab IS the saved form: a scene-only "don't save" flag on the
+		// source (e.g. a scratch entity) must not make the asset come out empty.
+		for (auto* e : entitiesToSave)
+			e->ClearFlags(HexEngine::EntityFlags::DoNotSave);
+
+		std::error_code ec;
+		fs::create_directories(prefabPath.parent_path(), ec);
+
+		HexEngine::SceneSaveFile saveFile(prefabPath, std::ios::out | std::ios::trunc, tempScene, HexEngine::SceneFileFlags::IsPrefab);
+		if (!saveFile.Save(entitiesToSave))
+		{
+			error = "failed to write '" + prefabPath.string() + "'";
+			return false;
+		}
+
+		RefreshPrefabAssetPreview(prefabPath);
+		LOG_INFO("Created prefab '%s' from '%s' (%zu entities).", prefabPath.string().c_str(), entity->GetName().c_str(), entitiesToSave.size());
+		return true;
+	}
+
 	bool PrefabController::ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity)
 	{
 		if (entity == nullptr || !entity->IsPrefabInstanceRoot())

@@ -9,6 +9,7 @@
 #include "Actions\MultiplayerTool.hpp"
 #include "Actions\BuildDialog.hpp"
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
+#include <HexEngine.Core\FileSystem\PrefabLoader.hpp>
 #include <HexEngine.Core\Entity\Component\PlayerStartComponent.hpp>
 
 #include "Gadgets\ScaleGadget.hpp"
@@ -2240,3 +2241,274 @@ namespace HexEditor
 		return redone;
 	}
 }
+
+	// --- IEditorContext: programmatic-authoring hooks (editor bridge) ---------
+
+	HexEngine::FileSystem* EditorUI::GetProjectFileSystem()
+	{
+		return g_pEditor != nullptr ? g_pEditor->_projectFS : nullptr;
+	}
+
+	void EditorUI::BeginUndoGroup(const std::string& label)
+	{
+		_transactions.BeginGroup(label);
+	}
+
+	void EditorUI::EndUndoGroup()
+	{
+		_transactions.EndGroup();
+	}
+
+	bool EditorUI::Undo()
+	{
+		return UndoLastTransaction();
+	}
+
+	bool EditorUI::Redo()
+	{
+		return RedoLastTransaction();
+	}
+
+	size_t EditorUI::GetUndoCount()
+	{
+		return _transactions.UndoCount();
+	}
+
+	size_t EditorUI::GetRedoCount()
+	{
+		return _transactions.RedoCount();
+	}
+
+	void EditorUI::RecordEntityTransformChange(HexEngine::Entity* entity, const math::Vector3& positionBefore, const math::Quaternion& rotationBefore, const math::Vector3& scaleBefore)
+	{
+		if (entity == nullptr || entity->IsPendingDeletion())
+			return;
+
+		// Each Record* also drives prefab-instance override tracking.
+		if (entity->GetPosition() != positionBefore)
+			RecordEntityPositionChange(entity, positionBefore, entity->GetPosition());
+		if (entity->GetRotation() != rotationBefore)
+			RecordEntityRotationChange(entity, rotationBefore, entity->GetRotation());
+		if (entity->GetScale() != scaleBefore)
+			RecordEntityScaleChange(entity, scaleBefore, entity->GetScale());
+	}
+
+	void EditorUI::BeginComponentEdit(HexEngine::Entity* entity)
+	{
+		Detail::EntityComponentStateSnapshot snapshot;
+		if (Detail::CaptureEntityComponentState(entity, snapshot))
+			_programmaticComponentEdits[entity] = std::move(snapshot);
+	}
+
+	void EditorUI::EndComponentEdit(HexEngine::Entity* entity)
+	{
+		auto it = _programmaticComponentEdits.find(entity);
+		if (it == _programmaticComponentEdits.end())
+			return;
+
+		Detail::EntityComponentStateSnapshot before = std::move(it->second);
+		_programmaticComponentEdits.erase(it);
+
+		Detail::EntityComponentStateSnapshot after;
+		if (Detail::CaptureEntityComponentState(entity, after))
+			RecordComponentPropertyStateChange(entity, before, after);
+	}
+
+	bool EditorUI::SaveAll(std::string& error)
+	{
+		if (_projectFile == nullptr)
+		{
+			error = "no project is open";
+			return false;
+		}
+		OnSaveAction();
+		return true;
+	}
+
+	json EditorUI::DescribePrefabInstance(HexEngine::Entity* entity)
+	{
+		json j = json::object();
+		if (entity == nullptr)
+			return j;
+
+		const bool isInstance = IsPrefabInstanceEntity(entity);
+		j["isInstance"] = isInstance;
+		if (!isInstance)
+			return j;
+
+		j["isRoot"] = IsPrefabInstanceRootEntity(entity);
+		j["sourcePath"] = entity->GetPrefabSourcePath().string();
+		j["rootName"] = entity->GetPrefabRootEntityName();
+
+		// Out-of-date / override state is tracked on the instance ROOT.
+		HexEngine::Entity* root = entity;
+		while (root != nullptr && !root->IsPrefabInstanceRoot() && root->GetParent() != nullptr)
+			root = root->GetParent();
+		j["outOfDate"] = root != nullptr && root->IsPrefabInstanceRoot() && IsPrefabInstanceOutOfDate(root);
+
+		std::vector<PrefabController::PrefabPropertyOverride> overrides;
+		json list = json::array();
+		if (GetPrefabInstancePropertyOverrides(entity, overrides))
+		{
+			for (const auto& o : overrides)
+				list.push_back(json{ {"component", o.componentName}, {"path", o.path}, {"op", o.op} });
+		}
+		j["overrides"] = list;
+		return j;
+	}
+
+	bool EditorUI::ApplyPrefabInstance(HexEngine::Entity* entity, std::string& error)
+	{
+		if (entity == nullptr || !IsPrefabInstanceEntity(entity))
+		{
+			error = "entity is not a prefab instance";
+			return false;
+		}
+		if (!ApplyPrefabInstanceToPrefabAsset(entity))
+		{
+			error = "applying the instance to its prefab failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	HexEngine::Entity* EditorUI::RevertPrefabInstanceToAsset(HexEngine::Entity* entity, std::string& error)
+	{
+		if (entity == nullptr || !IsPrefabInstanceEntity(entity))
+		{
+			error = "entity is not a prefab instance";
+			return nullptr;
+		}
+		HexEngine::Entity* reverted = RevertPrefabInstance(entity);
+		if (reverted == nullptr)
+			error = "reverting the instance failed (see engine logs)";
+		return reverted;
+	}
+
+	bool EditorUI::UpdatePrefabInstance(HexEngine::Entity* entity, std::string& error)
+	{
+		if (entity == nullptr || !IsPrefabInstanceEntity(entity))
+		{
+			error = "entity is not a prefab instance";
+			return false;
+		}
+		if (!UpdatePrefabInstanceFromAsset(entity))
+		{
+			error = "updating the instance from its prefab failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	HexEngine::Entity* EditorUI::CreatePrefabFromEntity(HexEngine::Entity* entity, const fs::path& prefabPath, bool replaceWithInstance, std::string& error)
+	{
+		if (IsPrefabStageActive())
+		{
+			error = "close the prefab stage before creating prefabs";
+			return nullptr;
+		}
+		if (!_prefabController.WritePrefabAsset(entity, prefabPath, error))
+			return nullptr;
+		if (!replaceWithInstance)
+			return entity;
+
+		auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr || entity->GetScene() != scene.get())
+		{
+			error = "prefab written, but the entity is not in the active scene so it was not replaced with an instance";
+			return entity;
+		}
+
+		// Swap the source hierarchy for a linked instance of the new prefab.
+		HexEngine::Entity* parent = entity->GetParent();
+		const math::Vector3 position = entity->GetPosition();
+		const math::Quaternion rotation = entity->GetRotation();
+		const math::Vector3 scale = entity->GetScale();
+		const std::string name = entity->GetName();
+
+		for (auto* s = GetSelectedEntity(); s != nullptr; s = s->GetParent())
+		{
+			if (s == entity)
+			{
+				SetSelectedEntity(nullptr);
+				break;
+			}
+		}
+
+		RecordEntityDeleted(entity);
+		scene->DestroyEntity(entity);
+
+		auto spawned = HexEngine::g_pEnv->_prefabLoader->LoadPrefab(scene, prefabPath);
+		HexEngine::Entity* root = nullptr;
+		for (auto* e : spawned)
+		{
+			if (e != nullptr && e->GetParent() == nullptr)
+			{
+				root = e;
+				break;
+			}
+		}
+		if (root == nullptr)
+		{
+			error = "prefab written, but instantiating it failed; the original was removed (undo restores it)";
+			return nullptr;
+		}
+
+		if (parent != nullptr)
+			root->SetParent(parent, false);
+		root->SetPosition(position);
+		root->SetRotation(rotation);
+		root->SetScale(scale);
+		std::string finalName;
+		scene->RenameEntity(root, name, &finalName);
+
+		RecordEntityCreated(root);
+		_entityListRefreshPending = true;
+		scene->ForceRebuildPVS();
+		return root;
+	}
+
+	bool EditorUI::OpenPrefabEditStage(const fs::path& prefabPath, std::string& error)
+	{
+		if (!OpenPrefabStage(prefabPath))
+		{
+			error = "could not open the prefab stage for '" + prefabPath.string() + "' (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::SavePrefabEditStage(std::string& error)
+	{
+		if (!IsPrefabStageActive())
+		{
+			error = "no prefab stage is open";
+			return false;
+		}
+		if (!SavePrefabStage())
+		{
+			error = "saving the prefab stage failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::ClosePrefabEditStage(bool saveChanges, std::string& error)
+	{
+		if (!IsPrefabStageActive())
+		{
+			error = "no prefab stage is open";
+			return false;
+		}
+		if (!ClosePrefabStage(saveChanges))
+		{
+			error = "closing the prefab stage failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::IsPrefabEditStageOpen()
+	{
+		return IsPrefabStageActive();
+	}

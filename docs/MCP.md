@@ -126,6 +126,8 @@ Read (always available):
 | `hex_describe_component_type` | Catalogue entry for a type **without adding it**: every field with type, default, and enum/flag names, range, units, description. Defaults come from a throwaway instance built in a private unregistered scene (never the user scene) and are cached. |
 | `hex_list_cvars` / `hex_get_cvars` | Console variables (render, GI, fog, post, weather, gameplay; saved with the scene) with typed value, min, max and description. Filter matches name or description. |
 | `hex_list_console_commands` | Console command names (run them with `exec_console`). |
+| `hex_list_prefabs` | Prefab assets in the open project (project-relative paths). |
+| `hex_prefab_info` | Instance link, root, out-of-date state and overridden properties of an entity. |
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
 | `hex_list_loaded_resources`, `hex_validate_current_scene`, `hex_list_projects` | |
 | `hex_find_missing_references` | `NotImplemented` (follow-up). |
@@ -144,7 +146,25 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_exec_console` | Console command / cvar set. |
 | `hex_capture_frame` | Waits `waitFrames` (default 2) so recent edits are rendered, then saves the main camera image. |
 | `hex_open_project` | Async; poll `hex_get_editor_status`. |
+| `hex_undo` / `hex_redo` | The editor's own history. Every bridge call or batch that edits entities is **one** step. |
+| `hex_save_scene` | The editor's Save action: project file, every open scene, the prefab stage if open. |
+| `hex_instantiate_prefab` | Spawn a linked instance (like drag & drop) with position/rotation/scale/parent/name. |
+| `hex_create_prefab` | Save an entity hierarchy as a new `.hprefab`; by default the original is replaced by a linked instance. |
+| `hex_apply_prefab_instance` / `hex_revert_prefab_instance` / `hex_update_prefab_instance` | Instance ↔ asset sync, same as the inspector buttons. |
+| `hex_open_prefab_stage` / `hex_save_prefab_stage` / `hex_close_prefab_stage` | Prefab authoring: while the stage is open, every entity/component tool edits the prefab. |
 | `hex_batch` | See below. |
+
+### Undo and prefab overrides
+
+Mutating bridge methods record into the editor's undo history through
+`IEditorContext` (the same `Record*` path the inspector and gizmos use), so a
+user can Ctrl+Z an agent's work and — because recording also drives prefab
+override tracking — edits to prefab instances show up as overrides and survive
+instance sync. Each request (single call or whole `batch`) is grouped into one
+undo step. `create_mesh_entity` is not recorded (its in-memory mesh can't be
+rebuilt by redo). Asset paths for the prefab tools are resolved inside the open
+project (absolute, `Data/...`, or relative to `Data`); paths outside the project
+are refused.
 
 ### Entity references
 
@@ -255,7 +275,7 @@ Serialize/Deserialize stay the source of truth — metadata is purely additive.
 
 ## Not supported yet
 
-- Undo integration (bridge edits bypass the editor's undo stack).
-- Scene save / new / load, prefab instantiation, asset creation or import.
+- New / open / switch scenes (only saving is supported).
+- Mesh / material asset creation, primitives, model import.
 - Play mode control, input injection, game build / hot reload.
 - Arbitrary shell/command execution.
