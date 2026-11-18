@@ -222,7 +222,11 @@ namespace HexEngine
 	{
 		SERIALIZE_VALUE(_diffuseColour);
 		SERIALIZE_VALUE(_effect);
-		SERIALIZE_VALUE(_strength);
+		// While an effect animates _strength (e.g. SlowRandomPulse), the authored
+		// value is _originalStrength. Saving the animated value would bake in a
+		// random strength on every scene save / read-modify-write edit.
+		const float _strengthToSave = (_effect != LightingEffect::None) ? _originalStrength : _strength;
+		file->Serialize(data, "_strength", _strengthToSave);
 		SERIALIZE_VALUE(_radius);
 		SERIALIZE_VALUE(_doesCastShadows);
 		SERIALIZE_VALUE(_injectIntoGI);
