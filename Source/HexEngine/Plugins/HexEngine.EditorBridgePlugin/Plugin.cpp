@@ -33,6 +33,9 @@
 #include "../../HexEngine.Core/FileSystem/FileSystem.hpp"
 #include "../../HexEngine.Core/FileSystem/JsonFile.hpp"
 #include "../../HexEngine.Core/Input/CommandManager.hpp"
+#include "../../HexEngine.Core/Input/HVar.hpp"
+#include "../../HexEngine.Core/Input/HCommand.hpp"
+#include "../../HexEngine.Core/Environment/ComponentFieldMeta.hpp"
 #include "../../HexEngine.Core/Entity/Component/Camera.hpp"
 #include "../../HexEngine.Core/Entity/Component/StaticMeshComponent.hpp"
 #include "../../HexEngine.Core/Graphics/ITexture2D.hpp"
@@ -59,6 +62,12 @@
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
+#include <cctype>
+#include <cmath>
+#include <cstring>
+#include <limits>
+#include <type_traits>
 
 namespace fs = std::filesystem;
 
@@ -389,12 +398,83 @@ namespace HexEngine
 			return fields;
 		}
 
+		// ---- Field typing: shape checks + enum names ----
+
+		// Enum fields accept their value NAMES ("Dynamic"), flag fields a name or
+		// an array of names (OR-ed). Numbers pass through. Uses the Core
+		// ComponentFieldMeta registry; unknown names are an error.
+		bool TranslateEnumValue(const std::string& component, const std::string& field, json& value, std::string& msg)
+		{
+			const ComponentFieldInfo* info = ComponentFieldMeta::Find(component, field);
+			if (info == nullptr || info->enumValues.empty())
+				return true;
+			auto lookup = [&](const std::string& name, int64_t& out) {
+				for (const auto& [n, v] : info->enumValues)
+					if (_stricmp(n.c_str(), name.c_str()) == 0) { out = v; return true; }
+				return false;
+			};
+			auto names = [&]() {
+				std::string s;
+				for (const auto& [n, v] : info->enumValues) s += (s.empty() ? "" : ", ") + n;
+				return s;
+			};
+			if (value.is_string())
+			{
+				int64_t v;
+				if (!lookup(value.get<std::string>(), v))
+				{
+					msg = "'" + field + "': unknown value '" + value.get<std::string>() + "' (valid: " + names() + ")";
+					return false;
+				}
+				value = v;
+			}
+			else if (value.is_array() && info->isFlags)
+			{
+				int64_t bits = 0;
+				for (const auto& n : value)
+				{
+					int64_t v;
+					if (!n.is_string() || !lookup(n.get<std::string>(), v))
+					{
+						msg = "'" + field + "': unknown flag " + n.dump() + " (valid: " + names() + ")";
+						return false;
+					}
+					bits |= v;
+				}
+				value = bits;
+			}
+			return true;
+		}
+
+		// Per-field metadata for the fields of `component` that have any.
+		json FieldInfoJson(const std::string& component, const json* fields)
+		{
+			json out = json::object();
+			for (const auto& [field, info] : ComponentFieldMeta::ForComponent(component))
+			{
+				if (fields && !fields->contains(field)) continue;
+				json j = json::object();
+				if (!info.description.empty()) j["description"] = info.description;
+				if (!info.units.empty()) j["units"] = info.units;
+				if (!info.enumValues.empty())
+				{
+					json e = json::object();
+					for (const auto& [n, v] : info.enumValues) e[n] = v;
+					j[info.isFlags ? "flags" : "enum"] = e;
+				}
+				if (info.hasRange) j["range"] = json::array({ info.minValue, info.maxValue });
+				out[field] = j;
+			}
+			return out;
+		}
+
 		// Read-modify-write through the component's own Serialize/Deserialize:
 		// components' Deserialize expects the full field set (missing keys can
 		// reset to defaults), so capture current state, overlay the patch, and
 		// feed the merged object back. Object-valued fields merge recursively
-		// (JSON merge-patch); scalars/arrays replace. Unknown top-level keys are
-		// rejected BEFORE anything is applied, so typos never half-apply.
+		// (JSON merge-patch); scalars/arrays replace. Unknown keys, wrong shapes
+		// and unknown enum names are all rejected BEFORE anything is applied, so
+		// a bad patch never half-applies.
 		bool ApplyComponentFields(BaseComponent* c, const json& fields, json& after, std::string& msg)
 		{
 			if (!fields.is_object())
@@ -402,18 +482,24 @@ namespace HexEngine
 				msg = "'fields' must be an object of field:value";
 				return false;
 			}
+			const std::string compName = c->GetComponentName() ? c->GetComponentName() : "";
 			MemoryJsonFile mem;
 			json current = json::object();
 			c->Serialize(current, &mem);
-			for (auto& [key, value] : fields.items())
+			json patch = fields;
+			for (auto& [key, value] : patch.items())
 			{
 				if (!current.contains(key))
 				{
-					msg = std::string("component '") + c->GetComponentName() + "' has no serialised field '" + key + "' (see inspect_component)";
+					msg = "component '" + compName + "' has no serialised field '" + key + "' (see inspect_component / describe_component_type)";
 					return false;
 				}
+				if (!TranslateEnumValue(compName, key, value, msg))
+					return false;
+				if (!CheckFieldShape(current[key], value, key, msg))
+					return false;
 			}
-			for (auto& [key, value] : fields.items())
+			for (auto& [key, value] : patch.items())
 			{
 				if (current[key].is_object() && value.is_object())
 					current[key].merge_patch(value);
@@ -442,6 +528,127 @@ namespace HexEngine
 				}
 			}
 			return false;
+		}
+
+		// ---- Console variables (HVar) ----
+
+		const char* HVarTypeName(HVar::Type t)
+		{
+			switch (t)
+			{
+			case HVar::Type::Bool:    return "bool";
+			case HVar::Type::Int8:    return "int8";
+			case HVar::Type::UInt8:   return "uint8";
+			case HVar::Type::Int16:   return "int16";
+			case HVar::Type::UInt16:  return "uint16";
+			case HVar::Type::Int32:   return "int32";
+			case HVar::Type::UInt32:  return "uint32";
+			case HVar::Type::Int64:   return "int64";
+			case HVar::Type::UInt64:  return "uint64";
+			case HVar::Type::Float32: return "float";
+			case HVar::Type::Float64: return "double";
+			case HVar::Type::Vector3: return "vec3";
+			default:                  return "unknown";
+			}
+		}
+
+		json HVarValueJson(HVar::Type t, const HVar::Val& v)
+		{
+			switch (t)
+			{
+			case HVar::Type::Bool:    return v.b;
+			case HVar::Type::Int8:    return v.i8;
+			case HVar::Type::UInt8:   return v.ui8;
+			case HVar::Type::Int16:   return v.i16;
+			case HVar::Type::UInt16:  return v.ui16;
+			case HVar::Type::Int32:   return v.i32;
+			case HVar::Type::UInt32:  return v.ui32;
+			case HVar::Type::Int64:   return v.i64;
+			case HVar::Type::UInt64:  return v.ui64;
+			case HVar::Type::Float32: return v.f32;
+			case HVar::Type::Float64: return v.f64;
+			case HVar::Type::Vector3: return json::array({ v.v3.x, v.v3.y, v.v3.z });
+			default:                  return nullptr;
+			}
+		}
+
+		json HVarJson(HVar* v, bool full)
+		{
+			const HVar::Type t = v->GetType();
+			json j = json{ {"name", v->_name}, {"type", HVarTypeName(t)}, {"value", HVarValueJson(t, v->_val)} };
+			if (full)
+			{
+				j["description"] = v->_description;
+				if (t != HVar::Type::Bool)
+				{
+					j["min"] = HVarValueJson(t, v->_min);
+					j["max"] = HVarValueJson(t, v->_max);
+				}
+			}
+			return j;
+		}
+
+		// Typed assignment from JSON (no string parsing, so bad input can't
+		// throw out of std::stoi the way the console path can), then the var's
+		// own Clamp(). Main thread only.
+		bool SetHVarFromJson(HVar* v, const json& value, std::string& msg, bool clamp = true)
+		{
+			auto setInt = [&](auto& field) -> bool {
+				using T = std::decay_t<decltype(field)>;
+				if (!value.is_number() || value.is_boolean())
+				{
+					msg = "'" + v->_name + "' is " + HVarTypeName(v->GetType()) + "; expected an integer";
+					return false;
+				}
+				const double d = value.get<double>();
+				if (std::floor(d) != d)
+				{
+					msg = "'" + v->_name + "' is " + HVarTypeName(v->GetType()) + "; " + value.dump() + " is not an integer";
+					return false;
+				}
+				if (d < (double)std::numeric_limits<T>::lowest() || d > (double)std::numeric_limits<T>::max())
+				{
+					msg = "'" + v->_name + "': " + value.dump() + " is outside the " + HVarTypeName(v->GetType()) + " range";
+					return false;
+				}
+				field = value.is_number_unsigned() ? (T)value.get<uint64_t>() : (T)value.get<int64_t>();
+				if (!value.is_number_integer()) field = (T)d;
+				return true;
+			};
+			switch (v->GetType())
+			{
+			case HVar::Type::Bool:
+				if (value.is_boolean()) v->_val.b = value.get<bool>();
+				else if (value.is_number_integer() && (value.get<int64_t>() == 0 || value.get<int64_t>() == 1)) v->_val.b = value.get<int64_t>() == 1;
+				else { msg = "'" + v->_name + "' is bool; expected true/false"; return false; }
+				break;
+			case HVar::Type::Int8:   if (!setInt(v->_val.i8)) return false; break;
+			case HVar::Type::UInt8:  if (!setInt(v->_val.ui8)) return false; break;
+			case HVar::Type::Int16:  if (!setInt(v->_val.i16)) return false; break;
+			case HVar::Type::UInt16: if (!setInt(v->_val.ui16)) return false; break;
+			case HVar::Type::Int32:  if (!setInt(v->_val.i32)) return false; break;
+			case HVar::Type::UInt32: if (!setInt(v->_val.ui32)) return false; break;
+			case HVar::Type::Int64:  if (!setInt(v->_val.i64)) return false; break;
+			case HVar::Type::UInt64: if (!setInt(v->_val.ui64)) return false; break;
+			case HVar::Type::Float32:
+				if (!value.is_number() || value.is_boolean()) { msg = "'" + v->_name + "' is float; expected a number"; return false; }
+				v->_val.f32 = value.get<float>();
+				break;
+			case HVar::Type::Float64:
+				if (!value.is_number() || value.is_boolean()) { msg = "'" + v->_name + "' is double; expected a number"; return false; }
+				v->_val.f64 = value.get<double>();
+				break;
+			case HVar::Type::Vector3:
+				if (!IsNumericVector(value) || value.size() != 3) { msg = "'" + v->_name + "' is vec3; expected [x, y, z]"; return false; }
+				v->_val.v3 = math::Vector3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+				break;
+			default:
+				msg = "'" + v->_name + "' has an unsupported type";
+				return false;
+			}
+			if (clamp)
+				v->Clamp();
+			return true;
 		}
 
 		struct FlagName { const char* name; EntityFlags flag; };
@@ -1140,12 +1347,17 @@ namespace HexEngine
 				BaseComponent* target = FindComponent(e, compName);
 				if (!target)
 					return MakeError(id, ErrorCode::NotAvailable, "entity '" + e->GetName() + "' has no component named '" + compName + "' (it has: " + ComponentNames(e).dump() + ")");
-				return MakeResult(id, json{
+				const json fields = SerializeComponent(target);
+				json result = json{
 					{"entity", EntityBrief(e)},
 					{"component", compName},
-					{"fields", SerializeComponent(target)},
+					{"fields", fields},
 					{"note", "Fields are the component's own Serialize() output; components with an empty/no-op Serialize return {}."},
-				});
+				};
+				// Enum names / ranges / units for fields that have metadata.
+				if (json info = FieldInfoJson(compName, &fields); !info.empty())
+					result["fieldInfo"] = info;
+				return MakeResult(id, result);
 			});
 
 			Reg("list_loaded_resources", R, Pipe, Batch, [](int64_t id, const json& p) -> json {
@@ -1225,7 +1437,210 @@ namespace HexEngine
 				return MakeResult(id, json{ {"count", projects.size()}, {"projects", projects} });
 			});
 
+			// ---- Console variables / commands (the "environment" knobs: render,
+			//      GI, fog, post, weather... - cvars are saved per scene) ----
+
+			Reg("list_cvars", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				const std::string filter = p.value("filter", std::string());
+				const size_t offset = (size_t)std::max<int64_t>(0, p.value("offset", (int64_t)0));
+				size_t limit = (size_t)std::max<int64_t>(1, p.value("limit", (int64_t)200));
+				if (limit > 2000) limit = 2000;
+				const bool full = p.value("details", true);
+				std::vector<HVar*> vars;
+				CommandManager::LockVars();
+				for (HVar* v = g_hvars; v != nullptr; v = v->_next)
+				{
+					if (!filter.empty())
+					{
+						// case-insensitive substring over name + description
+						auto lower = [](std::string s) { std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); }); return s; };
+						const std::string f = lower(filter);
+						if (lower(v->_name).find(f) == std::string::npos && lower(v->_description).find(f) == std::string::npos)
+							continue;
+					}
+					vars.push_back(v);
+				}
+				std::sort(vars.begin(), vars.end(), [](HVar* a, HVar* b) { return a->_name < b->_name; });
+				json list = json::array();
+				for (size_t i = offset; i < vars.size() && list.size() < limit; ++i)
+					list.push_back(HVarJson(vars[i], full));
+				CommandManager::UnlockVars();
+				return MakeResult(id, json{ {"matched", vars.size()}, {"offset", offset}, {"returned", list.size()}, {"cvars", list},
+					{"note", "Values are typed. Set with set_cvars {values: {name: value}}; vars clamp to [min, max]. Cvars are saved with the scene."} });
+			});
+
+			Reg("get_cvars", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				if (!p.contains("names") || !p["names"].is_array() || p["names"].empty())
+					throw ParamError("get_cvars requires 'names': [\"r_name\", ...]");
+				json out = json::object();
+				json missing = json::array();
+				CommandManager::LockVars();
+				for (const auto& n : p["names"])
+				{
+					if (!n.is_string()) { CommandManager::UnlockVars(); throw ParamError("'names' must contain strings"); }
+					HVar* v = g_pEnv->_commandManager->FindHVar(n.get<std::string>());
+					if (v) out[v->_name] = HVarJson(v, true);
+					else missing.push_back(n);
+				}
+				CommandManager::UnlockVars();
+				return MakeResult(id, json{ {"cvars", out}, {"missing", missing} });
+			});
+
+			Reg("list_console_commands", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				const std::string filter = p.value("filter", std::string());
+				std::vector<std::string> names;
+				CommandManager::LockCommands();
+				for (HCommand* c = g_commands; c != nullptr; c = c->_next)
+					if (filter.empty() || c->_name.find(filter) != std::string::npos)
+						names.push_back(c->_name);
+				CommandManager::UnlockCommands();
+				std::sort(names.begin(), names.end());
+				return MakeResult(id, json{ {"count", names.size()}, {"commands", names},
+					{"note", "Run with exec_console. Commands take space-separated args; they have no machine-readable signature."} });
+			});
+
+			// ---- Component catalogue ----
+
+			Reg("describe_component_type", R, Main, Batch, [this](int64_t id, const json& p) -> json {
+				const std::string name = RequireString(p, "component");
+				auto* cls = g_pEnv->_classRegistry->Find(name);
+				if (cls == nullptr)
+					return MakeError(id, ErrorCode::NotAvailable, "component class '" + name + "' is not registered (see list_component_types)");
+
+				json defaults;
+				std::string source;
+				if (auto it = _componentDefaults.find(name); it != _componentDefaults.end())
+				{
+					defaults = it->second;
+					source = "defaults";
+				}
+				else if (kNoScratchInstance.count(name) != 0)
+				{
+					// Construction has global side effects (e.g. key binds that
+					// are never removed): read a live instance instead.
+					if (auto scene = PrimaryUserScene())
+					{
+						std::vector<EntityId> ids;
+						scene->GetLiveEntityIds(ids);
+						for (const EntityId& eid : ids)
+						{
+							Entity* e = scene->TryGetEntity(eid);
+							if (!e) continue;
+							if (BaseComponent* c = FindComponent(e, name))
+							{
+								defaults = SerializeComponent(c);
+								source = "scene-instance:" + e->GetName();
+								break;
+							}
+						}
+					}
+					if (source.empty())
+						source = "unavailable (constructing this component has global side effects; add it to an entity and use inspect_component)";
+				}
+				else
+				{
+					// Build a throwaway instance in a private, UNREGISTERED scene
+					// (the same isolation PrefabLoader uses for prefab assets) so the
+					// user scene never sees it - no new main camera, sun, outliner
+					// churn or GI invalidation. Released immediately; cached.
+					auto scratch = g_pEnv->GetSceneManager().CreateEmptyScene(false, nullptr, false);
+					if (scratch == nullptr)
+						return MakeError(id, ErrorCode::Internal, "could not create a scratch scene");
+					Entity* e = scratch->CreateEntity("__bridge_describe", math::Vector3(0.0f, 0.0f, 0.0f), math::Quaternion(0.0f, 0.0f, 0.0f, 1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
+					if (e == nullptr)
+						return MakeError(id, ErrorCode::Internal, "could not create a scratch entity");
+					e->SetFlag(EntityFlags::DoNotSave);
+					BaseComponent* created = cls->newInstanceFn(e);
+					BaseComponent* component = created ? e->AddComponent(created) : nullptr;
+					if (component == nullptr)
+						return MakeError(id, ErrorCode::Internal, "failed to instantiate '" + name + "'");
+					defaults = SerializeComponent(component);
+					scratch.reset(); // tears the entity + component down
+					_componentDefaults[name] = defaults;
+					source = "defaults";
+				}
+
+				json fields = json::array();
+				const json info = FieldInfoJson(name, nullptr);
+				if (defaults.is_object())
+				{
+					for (auto& [key, value] : defaults.items())
+					{
+						json f = json{ {"name", key}, {"type", JsonFieldType(value)}, {"default", value} };
+						if (info.contains(key))
+						{
+							for (auto& [ik, iv] : info[key].items())
+								f[ik] = iv;
+							if (info[key].contains("enum")) f["type"] = "enum";
+							if (info[key].contains("flags")) f["type"] = "flags";
+						}
+						fields.push_back(f);
+					}
+				}
+				return MakeResult(id, json{
+					{"component", name},
+					{"valuesFrom", source},
+					{"fieldCount", fields.size()},
+					{"fields", fields},
+					{"note", fields.empty()
+						? "This component serialises no fields: it has nothing to configure through the bridge."
+						: "Pass these names to add_component / create_entity components[].fields / set_component_field. enum/flags fields also accept value names (flags: an array of names)."},
+				});
+			});
+
 			// ================= WRITE =================
+
+			Reg("set_cvars", W, Main, Batch, [](int64_t id, const json& p) -> json {
+				if (!p.contains("values") || !p["values"].is_object() || p["values"].empty())
+					throw ParamError("set_cvars requires 'values': {\"r_name\": value, ...}");
+				// Validate every name first so a typo applies nothing.
+				CommandManager::LockVars();
+				std::vector<std::pair<HVar*, json>> todo;
+				for (auto& [name, value] : p["values"].items())
+				{
+					HVar* v = g_pEnv->_commandManager->FindHVar(name);
+					if (v == nullptr)
+					{
+						CommandManager::UnlockVars();
+						return MakeError(id, ErrorCode::NotAvailable, "no cvar named '" + name + "' (see list_cvars); nothing was changed");
+					}
+					todo.push_back({ v, value });
+				}
+				// Then type-check by applying to a copy of each value.
+				for (auto& [v, value] : todo)
+				{
+					HVar::Val saved;
+					std::memcpy(&saved, &v->_val, sizeof(HVar::Val));
+					std::string msg;
+					const bool ok = SetHVarFromJson(v, value, msg);
+					std::memcpy(&v->_val, &saved, sizeof(HVar::Val));
+					if (!ok)
+					{
+						CommandManager::UnlockVars();
+						return MakeError(id, ErrorCode::InvalidParams, msg + "; nothing was changed");
+					}
+				}
+				json results = json::object();
+				for (auto& [v, value] : todo)
+				{
+					const json before = HVarValueJson(v->GetType(), v->_val);
+					std::string msg;
+					SetHVarFromJson(v, value, msg, false);
+					const json requested = HVarValueJson(v->GetType(), v->_val);
+					v->Clamp();
+					const json after = HVarValueJson(v->GetType(), v->_val);
+					json r = json{ {"before", before}, {"value", after} };
+					if (after != requested)
+					{
+						r["clamped"] = true;
+						r["requested"] = requested;
+					}
+					results[v->_name] = r;
+					LOG_INFO("EditorBridge: cvar %s %s -> %s", v->_name.c_str(), before.dump().c_str(), after.dump().c_str());
+				}
+				CommandManager::UnlockVars();
+				return MakeResult(id, json{ {"cvars", results} });
+			});
 
 			Reg("exec_console", W, Main, Batch, [](int64_t id, const json& p) -> json {
 				const std::string cmd = RequireString(p, "command");
@@ -1860,6 +2275,12 @@ namespace HexEngine
 		std::atomic<uint64_t> _frameCount{ 0 };
 
 		std::unordered_map<std::string, MethodInfo> _methods;
+
+		// describe_component_type: cached default field values per type (main
+		// thread only), and types whose construction has global side effects so
+		// they are never built as throwaway instances.
+		std::unordered_map<std::string, json> _componentDefaults;
+		inline static const std::unordered_set<std::string> kNoScratchInstance = { "RTSCameraController" };
 
 		static constexpr size_t kMaxLogRing = 2000;
 		std::mutex              _logMutex;

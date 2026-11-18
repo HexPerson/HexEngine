@@ -21,6 +21,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <map>
 #include <string>
@@ -347,6 +348,88 @@ namespace EditorBridge
 			for (auto& v : value)
 				if (!ResolveBatchRefs(v, results, currentOp, labels, error))
 					return false;
+		}
+		return true;
+	}
+
+	// ---- Component field typing (shared by set_component_field / describe) ----
+
+	inline bool IsNumericVector(const json& v)
+	{
+		if (!v.is_array() || v.size() < 2 || v.size() > 4)
+			return false;
+		for (const auto& e : v)
+			if (!e.is_number()) return false;
+		return true;
+	}
+
+	// A short type name for a serialised value (what agents see).
+	inline std::string JsonFieldType(const json& v)
+	{
+		if (v.is_boolean()) return "bool";
+		if (v.is_number_integer()) return "int";
+		if (v.is_number()) return "float";
+		if (v.is_string()) return "string";
+		if (IsNumericVector(v)) return "vec" + std::to_string(v.size());
+		if (v.is_array()) return "array";
+		if (v.is_object()) return "object";
+		return "null";
+	}
+
+	// Check that `patch` has the same shape as the field's current value, so
+	// a wrong type can't throw half-way through a component's Deserialize
+	// (or silently store garbage). Numeric vectors keep their length; ints
+	// stay integral; nested objects are checked key-by-key for keys that
+	// already exist (new nested keys are allowed, e.g. switching collider
+	// shapeData from box to sphere).
+	inline bool CheckFieldShape(const json& current, const json& patch, const std::string& path, std::string& msg)
+	{
+		if (current.is_null())
+			return true;
+		if (patch.is_null())
+		{
+			msg = "'" + path + "' cannot be set to null";
+			return false;
+		}
+		auto fail = [&](const std::string& expected) {
+			msg = "'" + path + "' expects " + expected + ", got " + JsonFieldType(patch) + " " + patch.dump();
+			return false;
+		};
+		if (current.is_boolean())
+			return patch.is_boolean() ? true : fail("a bool");
+		if (current.is_number())
+		{
+			if (!patch.is_number() || patch.is_boolean())
+				return fail("a number");
+			if (current.is_number_integer() && !patch.is_number_integer())
+			{
+				const double d = patch.get<double>();
+				if (std::floor(d) != d)
+					return fail("an integer");
+			}
+			return true;
+		}
+		if (current.is_string())
+			return patch.is_string() ? true : fail("a string");
+		if (current.is_array())
+		{
+			if (!patch.is_array())
+				return fail("an array");
+			if (IsNumericVector(current))
+			{
+				if (!IsNumericVector(patch) || patch.size() != current.size())
+					return fail("an array of " + std::to_string(current.size()) + " numbers");
+			}
+			return true;
+		}
+		if (current.is_object())
+		{
+			if (!patch.is_object())
+				return fail("an object");
+			for (auto& [k, v] : patch.items())
+				if (current.contains(k) && !CheckFieldShape(current[k], v, path + "." + k, msg))
+					return false;
+			return true;
 		}
 		return true;
 	}

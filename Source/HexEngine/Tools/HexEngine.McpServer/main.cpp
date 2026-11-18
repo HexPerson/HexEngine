@@ -96,7 +96,7 @@ namespace
 	json FieldsSchema()
 	{
 		return json{ {"type", "object"}, {"additionalProperties", true},
-			{"description", "Field:value patch. Names/shapes come from hex_inspect_component (the component's Serialize() output). Unknown names are rejected before anything applies; object values merge recursively, scalars/arrays replace."} };
+			{"description", "Field:value patch. Names/shapes come from hex_inspect_component (the component's Serialize() output). Unknown names, wrong types/shapes and unknown enum names are rejected before anything applies. Enum fields take value names, flag fields arrays of names (see hex_describe_component_type). Object values merge recursively; scalars/arrays replace."} };
 	}
 
 	json TransformProps(json props)
@@ -142,12 +142,23 @@ namespace
 			Obj(json{ {"max", Int("Max lines (<= 1000, default 200).")}, {"sinceSeq", Int("Only lines with seq greater than this.")},
 				{"minLevel", json{ {"type", "string"}, {"enum", json::array({ "debug", "info", "warn", "crit" })}, {"description", "Minimum level."} }} }) });
 		v.push_back({ "list_projects", "The editor's recent projects (path/name/exists).", Obj(json::object()) });
+		v.push_back({ "describe_component_type", "Catalogue entry for a component type WITHOUT adding it: every serialised field with its type, default value and (where known) enum/flag names, range, units and description. Use before add_component / create_entity to know what to set.",
+			Obj(json{ {"component", Str("Registered component class name (see hex_list_component_types).")} }, { "component" }) });
+		v.push_back({ "list_cvars", "List console variables (render / GI / fog / post / weather / gameplay settings; saved with the scene) with type, value, min, max and description. Filter matches name or description, case-insensitive.",
+			Obj(json{ {"filter", Str("Substring of the name or description, e.g. \"fog\" or \"r_gi\".")}, {"offset", Int("Skip this many matches.")},
+				{"limit", Int("Max results (<= 2000, default 200).")}, {"details", Bool("Include description/min/max (default true).")} }) });
+		v.push_back({ "get_cvars", "Read specific console variables (typed values + range).",
+			Obj(json{ {"names", json{ {"type", "array"}, {"items", json{ {"type", "string"} }}, {"minItems", 1}, {"description", "Exact cvar names."} }} }, { "names" }) });
+		v.push_back({ "list_console_commands", "List console commands (run them with hex_exec_console).",
+			Obj(json{ {"filter", Str("Name substring.")} }) });
 
 		// --- write ---
 		v.push_back({ "open_project", w("Open a project at the project browser. Async: poll hex_get_editor_status until sceneName is set. Not batchable."),
 			Obj(json{ {"path", Str("Project .json path.")}, {"name", Str("Project name (stem from hex_list_projects).")} }) });
-		v.push_back({ "exec_console", w("Run an editor console command / set a cvar, e.g. \"r_bloomIntensity 0.1\"."),
+		v.push_back({ "exec_console", w("Run an editor console command, e.g. \"ed_gizmoMode 1\". Prefer hex_set_cvars for variables (typed, validated, returns the clamped result)."),
 			Obj(json{ {"command", Str("Console command line.")} }, { "command" }) });
+		v.push_back({ "set_cvars", w("Set console variables with typed values: bools true/false, numbers, vec3 [x,y,z]. All names and types are validated before anything changes; each var clamps to its [min, max] and the result reports before/value (and requested+clamped when clamped)."),
+			Obj(json{ {"values", json{ {"type", "object"}, {"additionalProperties", true}, {"description", "{\"cvar_name\": value, ...}"} }} }, { "values" }) });
 		v.push_back({ "create_entity", w("Create an entity, optionally with a transform, parent and components (each with initial fields) in ONE call. Returns {id, name} - the name may be de-duplicated."),
 			Obj(TransformProps(json{
 				{"name", Str("Desired entity name.")},
@@ -159,7 +170,7 @@ namespace
 			Obj(json{ {"entity", EntityRefSchema()}, {"component", Str("Registered component class name.")}, {"fields", FieldsSchema()} }, { "entity", "component" }) });
 		v.push_back({ "remove_component", w("Remove a component from an entity (Transform cannot be removed)."),
 			Obj(json{ {"entity", EntityRefSchema()}, {"component", Str("Component type name.")} }, { "entity", "component" }) });
-		v.push_back({ "set_component_field", w("Patch a component's serialised fields (read-modify-write through Serialize/Deserialize)."),
+		v.push_back({ "set_component_field", w("Patch a component's serialised fields (read-modify-write through Serialize/Deserialize). Values must keep the field's type/shape; enum fields accept value names (e.g. \"_bodyType\": \"Dynamic\"), flag fields an array of names."),
 			Obj(json{ {"entity", EntityRefSchema()}, {"component", Str("Component type name.")}, {"fields", FieldsSchema()} }, { "entity", "component", "fields" }) });
 		v.push_back({ "set_entity_transform", w("Set position / rotation / scale. CAMERA entities are driven through the camera's own angles: degrees, pitch + = up (clamped to +/-89), yaw 0 faces -Z and yaw + turns toward -X."),
 			Obj(TransformProps(json{ {"entity", EntityRefSchema()} }), { "entity" }) });

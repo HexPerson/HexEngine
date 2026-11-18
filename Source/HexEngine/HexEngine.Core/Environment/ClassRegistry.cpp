@@ -1,6 +1,7 @@
 
 
 #include "ClassRegistry.hpp"
+#include "ComponentFieldMeta.hpp"
 
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/ReflectionProbeComponent.hpp"
@@ -86,6 +87,10 @@ namespace HexEngine
 		REG_CLASS(NavMeshLinkComponent);
 		REG_CLASS(ReflectionProbeComponent);
 		REG_CLASS(SoundEffectComponent);
+
+		// Enum names / ranges / descriptions for the serialised fields above
+		// (consumed by the editor bridge's component catalogue).
+		ComponentFieldMeta::RegisterBuiltIns();
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)

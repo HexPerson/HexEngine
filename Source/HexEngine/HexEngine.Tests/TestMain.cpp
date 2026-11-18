@@ -639,6 +639,32 @@ static void TestBridgeProtocol()
 		J nonString = J::parse(R"({"x":{"$ref":5}})");
 		CHECK(!ResolveBatchRefs(nonString, results, 3, labels, er));
 	}
+
+	// --- Phase B: component field shape checks ---
+	{
+		using J = EditorBridge::json;
+		std::string er;
+		CHECK(JsonFieldType(J(true)) == "bool" && JsonFieldType(J(3)) == "int" && JsonFieldType(J(2.5)) == "float");
+		CHECK(JsonFieldType(J::parse("[1,2,3]")) == "vec3" && JsonFieldType(J::parse("[1,2,3,4]")) == "vec4");
+		CHECK(JsonFieldType(J::parse("[1,2,3,4,5]")) == "array" && JsonFieldType(J::parse("[\"a\"]")) == "array");
+		CHECK(JsonFieldType(J::parse("{}")) == "object" && JsonFieldType(J("s")) == "string");
+
+		CHECK(CheckFieldShape(J(1.0), J(2), "f", er));                       // int into float is fine
+		CHECK(CheckFieldShape(J(1), J(4.0), "i", er));                       // integral float into int is fine
+		CHECK(!CheckFieldShape(J(1), J(4.5), "i", er));                      // fractional into int
+		CHECK(!CheckFieldShape(J(1.0), J("x"), "f", er));                    // string into number
+		CHECK(!CheckFieldShape(J(1.0), J(true), "f", er));                   // bool into number
+		CHECK(!CheckFieldShape(J(true), J(1), "b", er));                     // number into bool
+		CHECK(CheckFieldShape(J::parse("[0,0,0]"), J::parse("[1,2,3]"), "v", er));
+		CHECK(!CheckFieldShape(J::parse("[0,0,0]"), J::parse("[1,2]"), "v", er));      // vec3 keeps its length
+		CHECK(!CheckFieldShape(J::parse("[0,0,0]"), J::parse("[1,\"a\",3]"), "v", er));
+		CHECK(CheckFieldShape(J::parse("[]"), J::parse("[1,2,3,4,5,6]"), "list", er)); // variable lists may resize
+		CHECK(!CheckFieldShape(J(1.0), J(nullptr), "f", er));                // no nulls
+		CHECK(CheckFieldShape(J(nullptr), J("anything"), "n", er));          // unknown current shape -> allowed
+		CHECK(CheckFieldShape(J::parse(R"({"box":{"aabb":1}})"), J::parse(R"({"sphere":{"radius":2}})"), "shapeData", er)); // new nested key ok
+		CHECK(!CheckFieldShape(J::parse(R"({"box":{"aabb":1}})"), J::parse(R"({"box":{"aabb":"x"}})"), "shapeData", er));  // nested type checked
+		CHECK(er.find("shapeData.box.aabb") != std::string::npos);           // error names the nested path
+	}
 }
 
 // --- MCP static tools + discovery ------------------------------------------

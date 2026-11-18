@@ -122,7 +122,10 @@ Read (always available):
 | `hex_inspect_entity` | id, name, parent, children, components, AABB. |
 | `hex_list_components` | Component types present in the scene. |
 | `hex_list_component_types` | Every registered component class (what `add_component` accepts). |
-| `hex_inspect_component` | The component's `Serialize()` fields = the exact names `set_component_field` accepts. |
+| `hex_inspect_component` | The component's `Serialize()` fields = the exact names `set_component_field` accepts, plus `fieldInfo` (enum names, ranges, units) where known. |
+| `hex_describe_component_type` | Catalogue entry for a type **without adding it**: every field with type, default, and enum/flag names, range, units, description. Defaults come from a throwaway instance built in a private unregistered scene (never the user scene) and are cached. |
+| `hex_list_cvars` / `hex_get_cvars` | Console variables (render, GI, fog, post, weather, gameplay; saved with the scene) with typed value, min, max and description. Filter matches name or description. |
+| `hex_list_console_commands` | Console command names (run them with `exec_console`). |
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
 | `hex_list_loaded_resources`, `hex_validate_current_scene`, `hex_list_projects` | |
 | `hex_find_missing_references` | `NotImplemented` (follow-up). |
@@ -133,7 +136,8 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | --- | --- |
 | `hex_create_entity` | Name, transform, parent, `persistent`, and inline `components: [{component, fields}]` — a fully configured entity in one call. |
 | `hex_add_component` / `hex_remove_component` | By registered class name; `add_component` takes optional initial `fields`. One component per type per entity. |
-| `hex_set_component_field` | Read-modify-write through Serialize/Deserialize. Unknown keys rejected before anything applies; object values merge recursively. |
+| `hex_set_component_field` | Read-modify-write through Serialize/Deserialize. Unknown keys, wrong types/shapes (vec3 stays length 3, ints stay integral) and unknown enum names are rejected before anything applies. Enum fields accept value names (`"_bodyType": "Dynamic"`), flag fields arrays of names. Object values merge recursively. |
+| `hex_set_cvars` | `{values: {name: value}}` with typed values; every name/type validated before anything changes; reports before/value and `clamped` + `requested` when the var's range clamped it. |
 | `hex_set_entity_transform` | position / rotation quat / eulerDegrees / scale. Cameras are driven through their own angles. |
 | `hex_rename_entity`, `hex_set_parent`, `hex_set_entity_flags`, `hex_delete_entity`, `hex_clone_entity`, `hex_select_entity` | |
 | `hex_create_mesh_entity` | In-memory procedural mesh + material copy (DoNotSave unless `persistent`). |
@@ -240,10 +244,18 @@ ctest --preset tests-debug
 
 ---
 
+### Field metadata (Core)
+
+`HexEngine.Core/Environment/ComponentFieldMeta.hpp` holds optional per-field
+metadata (description, units, range, enum / flag value names) keyed by component
+class name + serialised field key. Core components are described in
+`ComponentFieldMeta::RegisterBuiltIns()`; plugins can call
+`ComponentFieldMeta::Register(...)` for their own components after `REG_CLASS`.
+Serialize/Deserialize stay the source of truth — metadata is purely additive.
+
 ## Not supported yet
 
 - Undo integration (bridge edits bypass the editor's undo stack).
 - Scene save / new / load, prefab instantiation, asset creation or import.
-- Console-variable listing/readback (`exec_console` can set, not read).
 - Play mode control, input injection, game build / hot reload.
 - Arbitrary shell/command execution.

@@ -473,6 +473,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Entity\Reflection\GUID.hpp" />
     <ClInclude Include="Entity\Reflection\IObject.hpp" />
     <ClInclude Include="Environment\ClassRegistry.hpp" />
+    <ClInclude Include="Environment\ComponentFieldMeta.hpp" />
     <ClInclude Include="Environment\ArchitectEnvironment.hpp" />
     <ClInclude Include="Environment\Game3DEnvironment.hpp" />
     <ClInclude Include="Environment\IEditorContext.hpp" />
@@ -689,6 +690,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Entity\Component\UpdateComponent.cpp" />
     <ClCompile Include="Entity\Messaging\MessageDispatcher.cpp" />
     <ClCompile Include="Environment\ClassRegistry.cpp" />
+    <ClCompile Include="Environment\ComponentFieldMeta.cpp" />
     <ClCompile Include="Environment\Game3DEnvironment.cpp" />
     <ClCompile Include="Environment\IEnvironment.cpp" />
     <ClCompile Include="Environment\Profiler.cpp" />

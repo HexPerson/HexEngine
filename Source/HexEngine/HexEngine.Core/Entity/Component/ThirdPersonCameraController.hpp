@@ -22,6 +22,11 @@ namespace HexEngine
 
 		virtual void Update(float frameTime) override;
 
+		// Tunables only (speeds, offsets, springs). The look-at target is a
+		// runtime pointer set by game code (SetLookAtTarget) and isn't saved.
+		virtual void Serialize(json& data, JsonFile* file) override;
+		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
+
 		void SetLookAtTarget(Transform* transform);
 		const math::Vector3& GetThirdPersonPosition() const;
 		Transform* GetLookAtTarget() const;

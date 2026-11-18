@@ -334,17 +334,15 @@ namespace HexEngine
 
 	void DirectionalLight::Serialize(json& data, JsonFile* file)
 	{
-
-		//file->Write(&direction, sizeof(math::Vector3));
+		// Colour / strength / shadows / GI live on the Light base. (Direction is
+		// the entity's rotation, saved by its Transform.) Scenes saved before this
+		// lack the keys, and missing keys leave the defaults untouched.
+		Light::Serialize(data, file);
 	}
 
 	void DirectionalLight::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
-		//math::Vector3 direction;		
-
-		//file->Read(&direction, sizeof(math::Vector3));
-		
-		//_direction = direction;
+		Light::Deserialize(data, file, mask);
 	}
 
 	
