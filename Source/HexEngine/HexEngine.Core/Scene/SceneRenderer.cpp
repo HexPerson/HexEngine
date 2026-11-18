@@ -2089,6 +2089,22 @@ namespace HexEngine
 					if (a.needsRender)
 						RenderShadowFaceToAtlas(a);
 				}
+
+				// RenderSpotLights draws (and shadows from the DEDICATED maps,
+				// t5..t10) every shadowed spot the clustered apply doesn't own:
+				// all of them when the apply is off, and any spot left without
+				// an atlas tile (over r_shadowAtlasBudget). Those maps were never
+				// rendered on the atlas path, so such spots sampled stale or
+				// empty depth - with r_clusterApply 0 they vanished entirely.
+				// Mirror RenderSpotLights' skip test exactly and render the
+				// dedicated maps for the rest.
+				const bool applyOwnsAtlasSpots = r_clusterApply._val.b && r_clusterLights._val.b;
+				for (Light* caster : localCasters)
+				{
+					if (applyOwnsAtlasSpots && _shadowAtlas.FindContentTile(caster, 0) >= 0)
+						continue;
+					RenderShadowMaps(caster);
+				}
 			}
 		}
 
@@ -5815,7 +5831,7 @@ namespace HexEngine
 				// Units slice 3c: lumens -> candela on the per-light path,
 				// matching the clustered gather exactly (a shadowed light
 				// moving between paths must not change brightness).
-				float pointPassStrength = light->GetLightStrength();
+				float pointPassStrength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
 				if (r_physicalLightUnits._val.b)
 					pointPassStrength /= 4.0f * 3.14159265f;
 
@@ -5997,7 +6013,7 @@ namespace HexEngine
 
 					// Units slice 3c: cone-coupled lumens -> candela, matching
 					// the clustered gather.
-					float spotPassStrength = light->GetLightStrength();
+					float spotPassStrength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
 					if (r_physicalLightUnits._val.b)
 					{
 						const float cosOuterPass = std::cos(ToRadian(light->GetOuterConeAngle() * 0.5f));
