@@ -26,15 +26,25 @@ namespace HexEditor
 		// it works both in a source checkout and in an install:
 		//   1. HEXENGINE_SDK environment variable (explicit override)
 		//   2. installed build: {app}\SDK\HexEngine.props
-		//   3. development tree: <repo>\Bin\x64\<Config>\ -> <repo>\HexEngine.props
+		//   3. development tree: the nearest ancestor of the EXE folder holding
+		//      HexEngine.props (the repository root). Searched rather than assumed
+		//      to be a fixed depth, because the editor runs from more than one
+		//      output folder: <repo>\Bin\x64\<Config>\ (3 levels down) and, when
+		//      launched from Visual Studio, the linker output
+		//      <repo>\Source\HexEngine\x64\<Config>\ (4 levels down).
 		fs::path ResolveSdkRoot()
 		{
 			std::error_code ec;
 
 			wchar_t envSdk[MAX_PATH] = {};
 			const DWORD envLen = GetEnvironmentVariableW(L"HEXENGINE_SDK", envSdk, MAX_PATH);
-			if (envLen > 0 && envLen < MAX_PATH && fs::exists(fs::path(envSdk) / "HexEngine.props", ec))
-				return fs::path(envSdk);
+			if (envLen > 0 && envLen < MAX_PATH)
+			{
+				if (fs::exists(fs::path(envSdk) / "HexEngine.props", ec))
+					return fs::path(envSdk);
+
+				LOG_WARN("HEXENGINE_SDK is set to '%S' but it holds no HexEngine.props; ignoring it", envSdk);
+			}
 
 			wchar_t exePath[MAX_PATH] = {};
 			GetModuleFileNameW(nullptr, exePath, MAX_PATH);
@@ -43,10 +53,20 @@ namespace HexEditor
 			if (fs::exists(exeDir / "SDK" / "HexEngine.props", ec))
 				return exeDir / "SDK";
 
-			const fs::path repoRoot = exeDir.parent_path().parent_path().parent_path();
-			if (!fs::exists(repoRoot / "HexEngine.props", ec))
-				LOG_WARN("HexEngine SDK not found (no SDK/HexEngine.props beside the editor, no repository HexEngine.props, HEXENGINE_SDK unset); generated projects will point at %s", repoRoot.string().c_str());
-			return repoRoot;
+			for (fs::path dir = exeDir; !dir.empty(); dir = dir.parent_path())
+			{
+				if (fs::exists(dir / "HexEngine.props", ec))
+					return dir;
+
+				if (dir == dir.root_path())
+					break;
+			}
+
+			// Nothing found: keep the historical <exe>\..\..\..\ guess so the
+			// generated project at least names a plausible location, and say so.
+			const fs::path fallback = exeDir.parent_path().parent_path().parent_path();
+			LOG_WARN("HexEngine SDK not found (no SDK/HexEngine.props beside the editor, no HexEngine.props in any parent of '%S', HEXENGINE_SDK unset); generated projects will point at %S and will not build until HEXENGINE_SDK is set", exeDir.wstring().c_str(), fallback.wstring().c_str());
+			return fallback;
 		}
 	}
 
