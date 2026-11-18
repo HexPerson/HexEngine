@@ -4883,6 +4883,11 @@ namespace HexEngine
 			// multiplier to night-time values as the sun descends - without this, the meter
 			// drives a dark night scene back up toward daytime middle-grey, undoing the
 			// authored mood entirely.
+			//
+			// Env captures don't meter: a probe face is not what the player
+			// sees, and feeding six faces into the MAIN camera's adaptation
+			// yanked its exposure around every probe refresh.
+			if (!isEnvCapture)
 			{
 				const float dt = (g_pEnv && g_pEnv->_timeManager)
 					? std::clamp(static_cast<float>(g_pEnv->_timeManager->_frameTime), 0.0f, 0.1f)
@@ -4900,13 +4905,23 @@ namespace HexEngine
 
 			// Interaction look-at outline glow. Runs before bloom so the SDF ring
 			// picks up a soft bloom halo. No-op when nothing is focused.
-			GFX_PERF_BEGIN(0xFFFFFFFF, L"Outline glow");
+			if (!isEnvCapture)
 			{
-				RenderOutlineGlow();
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Outline glow");
+				{
+					RenderOutlineGlow();
+				}
+				GFX_PERF_END();
 			}
-			GFX_PERF_END();
 
-			if (!r_profileDisableBloom._val.b)
+			// Env captures skip bloom like the other lens / temporal effects
+			// above. A probe must store scene RADIANCE: bloom baked a lens veil
+			// into every face, so a bright sky smeared over all the captured
+			// geometry and the probe then re-lit the scene with it (a night
+			// scene came out uniformly white-washed). Bloom's temporal history
+			// is also shared with the main camera, so capture faces leaked into
+			// the main view's bloom and vice versa.
+			if (!r_profileDisableBloom._val.b && !isEnvCapture)
 			{
 				// The SSS intermediate is idle by this point in the frame and
 				// matches _beautyRT in size/format - lend it as the composite
