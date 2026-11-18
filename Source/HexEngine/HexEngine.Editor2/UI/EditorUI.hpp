@@ -199,7 +199,11 @@ public:
 		PendingComponentEditSource _pendingComponentEditSource = PendingComponentEditSource::None;
 		Detail::EntityComponentStateSnapshot _pendingComponentEditBefore;
 		std::atomic_bool _entityListRefreshPending = false;
-		
+		// Set by the project-load worker thread; the prefab out-of-date check
+		// touches the entity list / inspector / dialogs, so it runs on the main
+		// thread in Update.
+		std::atomic_bool _prefabLoadCheckPending = false;
+
 	};
 
 	inline EditorUI* g_pUIManager = nullptr;

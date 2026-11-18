@@ -206,7 +206,13 @@ namespace HexEditor
 			_entityListRefreshPending = true;
 
 			// Instances whose prefab changed while their scene wasn't loaded.
-			_prefabController.CheckLoadedScenesForOutOfDateInstances();
+			// NOT called here: this runs on the project-load worker thread, and the
+			// check always ends in RefreshViewsAfterInstanceChange() ->
+			// EntityList::RefreshList(), which raced the main thread's own pending
+			// refresh (both Clear()/AddNode the same TreeList -> use-after-free in
+			// TreeList::AddNode). It can also sync instances and open dialogs. Defer
+			// it to the main thread (EditorUI::Update).
+			_prefabLoadCheckPending = true;
 
 			
 		}
@@ -1384,6 +1390,10 @@ namespace HexEditor
 	{
 		CheckCentralDockRoamState();
 		_integrator.Update();
+
+		// Deferred from the project-load worker thread (see OnProjectManagerCompleted).
+		if (_prefabLoadCheckPending.exchange(false))
+			_prefabController.CheckLoadedScenesForOutOfDateInstances();
 
 		if (_entityList != nullptr && _entityListRefreshPending.exchange(false))
 		{
