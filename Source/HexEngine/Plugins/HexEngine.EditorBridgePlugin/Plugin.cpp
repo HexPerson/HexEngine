@@ -42,12 +42,19 @@
 #include "../../HexEngine.Core/Graphics/Material.hpp"
 #include "../../HexEngine.Core/Scene/Mesh.hpp"
 #include "../../HexEngine.Core/FileSystem/PrefabLoader.hpp"
+#include "../../HexEngine.Core/Physics/IPhysicsSystem.hpp"
 
 #include <deque>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <wincodec.h>
+#include <objbase.h>
+#include <dxgiformat.h>
+#include <DirectXPackedVector.h>
+#pragma comment(lib, "windowscodecs.lib")
+#pragma comment(lib, "ole32.lib")
 
 #include <algorithm>
 #include <atomic>
@@ -1289,6 +1296,406 @@ namespace HexEngine
 			if (shared.get() != &src)
 				shared->CopyFrom(src);
 			return shared;
+		}
+
+		// ---- Spatial queries (D1) ----
+
+		struct RayResult
+		{
+			bool hit = false;
+			float distance = FLT_MAX;
+			math::Vector3 position;
+			math::Vector3 normal;      // the surface's front-face normal (world)
+			bool backFace = false;     // the ray hit the back of the triangle
+			Entity* entity = nullptr;
+			const char* source = "";
+		};
+
+		struct RayOptions
+		{
+			float maxDistance = 10000.0f;
+			bool meshes = true;
+			bool physics = true;
+			bool includeHidden = false;
+			float minNormalY = -2.0f;                    // reject (pass through) surfaces steeper than this
+			std::unordered_set<Entity*> ignore;           // never hit these
+			std::unordered_set<Entity*> only;             // when non-empty: hit only these
+		};
+
+		void AddHierarchy(Entity* e, std::unordered_set<Entity*>& out)
+		{
+			if (!e || !out.insert(e).second) return;
+			for (Entity* c : e->GetChildren()) AddHierarchy(c, out);
+		}
+
+		// Nearest triangle of every StaticMeshComponent mesh the ray reaches,
+		// tested in object space (exact, all triangles, both faces).
+		void RaycastMeshesOnce(Scene* scene, const math::Vector3& o, const math::Vector3& d, float maxDist, const RayOptions& opt, RayResult& best)
+		{
+			std::vector<EntityId> ids;
+			scene->GetLiveEntityIds(ids);
+			const DirectX::XMVECTOR xo = DirectX::XMVectorSet(o.x, o.y, o.z, 1.0f);
+			const DirectX::XMVECTOR xd = DirectX::XMVectorSet(d.x, d.y, d.z, 0.0f);
+			for (const EntityId& eid : ids)
+			{
+				Entity* e = scene->TryGetEntity(eid);
+				if (!e || e->IsPendingDeletion() || opt.ignore.count(e)) continue;
+				if (!opt.only.empty() && !opt.only.count(e)) continue;
+				if (!opt.includeHidden && e->HasFlag(EntityFlags::DoNotRender)) continue;
+				auto* smc = e->GetComponent<StaticMeshComponent>();
+				if (!smc) continue;
+				auto mesh = smc->GetMesh();
+				if (!mesh || mesh->HasAnimations()) continue;
+				const auto& verts = mesh->GetVertices();
+				const auto& idx = mesh->GetIndices();
+				if (verts.empty() || idx.size() < 3) continue;
+
+				float boxDist = 0.0f;
+				const dx::BoundingBox& box = e->GetWorldAABB();
+				if (!box.Intersects(xo, xd, boxDist)) continue;
+				const float limit = std::min(best.distance, maxDist);
+				if (boxDist > limit) continue;
+
+				const math::Matrix world = e->GetWorldTM();
+				math::Matrix inv;
+				world.Invert(inv);
+				// Affine map: with the un-normalised local direction, t is the
+				// same parameter in local and world space.
+				const math::Vector3 lo = math::Vector3::Transform(o, inv);
+				const math::Vector3 ld = math::Vector3::TransformNormal(d, inv);
+				float bestT = limit;
+				size_t bestTri = SIZE_MAX;
+				const size_t triCount = idx.size() / 3;
+				for (size_t t = 0; t < triCount; ++t)
+				{
+					const uint32_t i0 = idx[t * 3], i1 = idx[t * 3 + 1], i2 = idx[t * 3 + 2];
+					if (i0 >= verts.size() || i1 >= verts.size() || i2 >= verts.size()) continue;
+					const math::Vector3 p0(verts[i0]._position.x, verts[i0]._position.y, verts[i0]._position.z);
+					const math::Vector3 p1(verts[i1]._position.x, verts[i1]._position.y, verts[i1]._position.z);
+					const math::Vector3 p2(verts[i2]._position.x, verts[i2]._position.y, verts[i2]._position.z);
+					// Moller-Trumbore, double-sided.
+					const math::Vector3 e1 = p1 - p0, e2 = p2 - p0;
+					const math::Vector3 pv = ld.Cross(e2);
+					const float det = e1.Dot(pv);
+					if (fabsf(det) < 1e-14f) continue;
+					const float invDet = 1.0f / det;
+					const math::Vector3 tv = lo - p0;
+					const float u = tv.Dot(pv) * invDet;
+					if (u < 0.0f || u > 1.0f) continue;
+					const math::Vector3 qv = tv.Cross(e1);
+					const float v = ld.Dot(qv) * invDet;
+					if (v < 0.0f || u + v > 1.0f) continue;
+					const float hitT = e2.Dot(qv) * invDet;
+					if (hitT > 1e-5f && hitT < bestT) { bestT = hitT; bestTri = t; }
+				}
+				if (bestTri == SIZE_MAX) continue;
+
+				const uint32_t i0 = idx[bestTri * 3], i1 = idx[bestTri * 3 + 1], i2 = idx[bestTri * 3 + 2];
+				const math::Vector3 p0(verts[i0]._position.x, verts[i0]._position.y, verts[i0]._position.z);
+				const math::Vector3 p1(verts[i1]._position.x, verts[i1]._position.y, verts[i1]._position.z);
+				const math::Vector3 p2(verts[i2]._position.x, verts[i2]._position.y, verts[i2]._position.z);
+				// Engine front face: (b-a)x(c-a). Normals transform by the
+				// inverse-transpose.
+				math::Vector3 n = math::Vector3::TransformNormal((p1 - p0).Cross(p2 - p0), inv.Transpose());
+				n.Normalize();
+				best.hit = true;
+				best.distance = bestT;
+				best.position = o + d * bestT;
+				best.normal = n;
+				best.backFace = n.Dot(d) > 0.0f;
+				best.entity = e;
+				best.source = "mesh";
+			}
+		}
+
+		// Nearest accepted hit along the ray: meshes (exact triangles) and/or
+		// physics colliders (terrain chunks etc. that have no mesh component).
+		// Rejected hits (ignored entity, too steep) are passed through.
+		RayResult CastRay(Scene* scene, const math::Vector3& origin, math::Vector3 dir, const RayOptions& opt)
+		{
+			RayResult out;
+			if (dir.LengthSquared() < 1e-12f) return out;
+			dir.Normalize();
+			math::Vector3 o = origin;
+			float travelled = 0.0f;
+			for (int attempt = 0; attempt < 32; ++attempt)
+			{
+				const float remaining = opt.maxDistance - travelled;
+				if (remaining <= 0.0f) break;
+				RayResult best;
+				if (opt.meshes)
+					RaycastMeshesOnce(scene, o, dir, remaining, opt, best);
+				if (opt.physics && g_pEnv->_physicsSystem)
+				{
+					RayHit h;
+					if (g_pEnv->_physicsSystem->RayCastScene(o, dir, std::min(remaining, best.distance), &h) > 0 && h.distance < best.distance)
+					{
+						best.hit = true;
+						best.distance = h.distance;
+						best.position = h.position;
+						best.normal = h.normal;
+						best.backFace = h.normal.Dot(dir) > 0.0f;
+						best.entity = h.entity;
+						best.source = "physics";
+					}
+				}
+				if (!best.hit) break;
+				const bool rejected =
+					(best.entity && opt.ignore.count(best.entity)) ||
+					(!opt.only.empty() && (!best.entity || !opt.only.count(best.entity))) ||
+					(opt.minNormalY > -1.5f && best.normal.y < opt.minNormalY);
+				if (!rejected)
+				{
+					best.distance += travelled;
+					return best;
+				}
+				const float step = best.distance + 0.001f;
+				o = o + dir * step;
+				travelled += step;
+			}
+			return out;
+		}
+
+		json Vec3Json(const math::Vector3& v) { return json::array({ v.x, v.y, v.z }); }
+
+		json RayResultJson(const RayResult& r)
+		{
+			if (!r.hit) return json{ {"hit", false} };
+			json j = json{ {"hit", true}, {"position", Vec3Json(r.position)}, {"normal", Vec3Json(r.normal)},
+				{"distance", r.distance}, {"source", r.source}, {"entity", r.entity ? EntityBrief(r.entity) : json(nullptr)} };
+			if (r.backFace) j["backFace"] = true;
+			return j;
+		}
+
+		// World AABB of an entity and its whole hierarchy (prefab roots are
+		// often empty transforms whose meshes live on children).
+		bool HierarchyAABB(Entity* e, dx::BoundingBox& out)
+		{
+			bool any = false;
+			std::unordered_set<Entity*> all;
+			AddHierarchy(e, all);
+			for (Entity* x : all)
+			{
+				if (x->IsPendingDeletion()) continue;
+				const dx::BoundingBox& b = x->GetWorldAABB();
+				const bool hasExtent = b.Extents.x > 1e-5f || b.Extents.y > 1e-5f || b.Extents.z > 1e-5f;
+				if (!hasExtent && x != e) continue;
+				if (!any) { out = b; any = true; }
+				else dx::BoundingBox::CreateMerged(out, out, b);
+			}
+			return any;
+		}
+
+		// Common ray options from params ("ignore", "only", "includeHidden",
+		// "physics", "meshes", "minNormalY", "maxDistance").
+		RayOptions ReadRayOptions(int64_t id, Scene* scene, const json& p)
+		{
+			RayOptions opt;
+			if (p.contains("maxDistance")) opt.maxDistance = PositiveParam(p, "maxDistance", 10000.0f);
+			opt.meshes = p.value("meshes", true);
+			opt.physics = p.value("physics", true);
+			opt.includeHidden = p.value("includeHidden", false);
+			if (p.contains("minNormalY") && !p["minNormalY"].is_null())
+			{
+				if (!p["minNormalY"].is_number()) throw ParamError("'minNormalY' must be a number (-1..1)");
+				opt.minNormalY = p["minNormalY"].get<float>();
+			}
+			auto readSet = [&](const char* key, std::unordered_set<Entity*>& set)
+			{
+				if (!p.contains(key) || p[key].is_null()) return;
+				if (!p[key].is_array()) throw ParamError(std::string("'") + key + "' must be an array of entity references");
+				for (const auto& ref : p[key])
+				{
+					json wrap = json{ {"entity", ref} }, err;
+					Entity* e = RequireEntity(id, scene, wrap, "entity", false, err);
+					if (!e) throw ParamError(std::string("'") + key + "': " + (err.contains("error") ? err["error"].value("message", std::string("unknown entity")) : std::string("unknown entity")));
+					AddHierarchy(e, set); // an entity's children count as part of it
+				}
+			};
+			readSet("ignore", opt.ignore);
+			readSet("only", opt.only);
+			return opt;
+		}
+
+		// ---- Image readback / encode (capture_view) ----
+
+		float SrgbEncode(float c)
+		{
+			c = std::clamp(c, 0.0f, 1.0f);
+			return c <= 0.0031308f ? c * 12.92f : 1.055f * powf(c, 1.0f / 2.4f) - 0.055f;
+		}
+
+		// One texel of a render target to 0..1 display RGB. False = format
+		// not supported.
+		bool DecodeTexel(uint32_t fmt, const uint8_t* px, float rgb[3])
+		{
+			switch (fmt)
+			{
+			case DXGI_FORMAT_R8G8B8A8_UNORM: case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+				rgb[0] = px[0] / 255.0f; rgb[1] = px[1] / 255.0f; rgb[2] = px[2] / 255.0f; return true;
+			case DXGI_FORMAT_B8G8R8A8_UNORM: case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+			case DXGI_FORMAT_B8G8R8X8_UNORM: case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+				rgb[0] = px[2] / 255.0f; rgb[1] = px[1] / 255.0f; rgb[2] = px[0] / 255.0f; return true;
+			case DXGI_FORMAT_R10G10B10A2_UNORM: case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+			{
+				uint32_t v; memcpy(&v, px, 4);
+				rgb[0] = (v & 1023u) / 1023.0f; rgb[1] = ((v >> 10) & 1023u) / 1023.0f; rgb[2] = ((v >> 20) & 1023u) / 1023.0f; return true;
+			}
+			case DXGI_FORMAT_R16G16B16A16_FLOAT:
+			{
+				uint16_t h[3]; memcpy(h, px, 6);
+				for (int i = 0; i < 3; ++i) rgb[i] = SrgbEncode(DirectX::PackedVector::XMConvertHalfToFloat(h[i]));
+				return true;
+			}
+			case DXGI_FORMAT_R11G11B10_FLOAT:
+			{
+				DirectX::PackedVector::XMFLOAT3PK pk; memcpy(&pk, px, 4);
+				DirectX::XMFLOAT3 f; DirectX::XMStoreFloat3(&f, DirectX::PackedVector::XMLoadFloat3PK(&pk));
+				rgb[0] = SrgbEncode(f.x); rgb[1] = SrgbEncode(f.y); rgb[2] = SrgbEncode(f.z); return true;
+			}
+			case DXGI_FORMAT_R32G32B32A32_FLOAT:
+			{
+				float f[3]; memcpy(f, px, 12);
+				for (int i = 0; i < 3; ++i) rgb[i] = SrgbEncode(f[i]);
+				return true;
+			}
+			default: return false;
+			}
+		}
+
+		uint32_t TexelBytes(uint32_t fmt)
+		{
+			switch (fmt)
+			{
+			case DXGI_FORMAT_R16G16B16A16_FLOAT: return 8;
+			case DXGI_FORMAT_R32G32B32A32_FLOAT: return 16;
+			default: return 4;
+			}
+		}
+
+		// Box-filtered downscale to BGR8 (what WIC's JPEG/PNG encoders take).
+		// Each output pixel averages up to 4x4 samples spread over its block.
+		bool DownscaleToBgr(const std::vector<uint8_t>& src, uint32_t fmt, int w, int h, int ow, int oh, std::vector<uint8_t>& out, std::string& err)
+		{
+			const uint32_t bpp = TexelBytes(fmt);
+			if (src.size() < (size_t)w * h * bpp) { err = "render target readback was short"; return false; }
+			float probe[3];
+			if (!DecodeTexel(fmt, src.data(), probe)) { err = "unsupported render target format " + std::to_string(fmt); return false; }
+			out.resize((size_t)ow * oh * 3);
+			for (int y = 0; y < oh; ++y)
+			{
+				const int y0 = (int)((int64_t)y * h / oh), y1 = std::max(y0 + 1, (int)((int64_t)(y + 1) * h / oh));
+				const int sy = std::max(1, (y1 - y0) / 4);
+				for (int x = 0; x < ow; ++x)
+				{
+					const int x0 = (int)((int64_t)x * w / ow), x1 = std::max(x0 + 1, (int)((int64_t)(x + 1) * w / ow));
+					const int sx = std::max(1, (x1 - x0) / 4);
+					float acc[3] = { 0, 0, 0 };
+					int n = 0;
+					for (int yy = y0; yy < y1; yy += sy)
+						for (int xx = x0; xx < x1; xx += sx)
+						{
+							float c[3];
+							DecodeTexel(fmt, src.data() + ((size_t)yy * w + xx) * bpp, c);
+							acc[0] += c[0]; acc[1] += c[1]; acc[2] += c[2]; ++n;
+						}
+					uint8_t* o = out.data() + ((size_t)y * ow + x) * 3;
+					for (int i = 0; i < 3; ++i)
+						o[2 - i] = (uint8_t)std::clamp((int)(acc[i] / n * 255.0f + 0.5f), 0, 255); // BGR
+				}
+			}
+			return true;
+		}
+
+		bool EncodeWic(const std::vector<uint8_t>& bgr, int w, int h, bool jpeg, float quality, std::vector<uint8_t>& out, std::string& err)
+		{
+			const HRESULT coHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+			const bool coOwned = SUCCEEDED(coHr);
+			bool ok = false;
+			IWICImagingFactory* factory = nullptr;
+			IStream* stream = nullptr;
+			IWICBitmapEncoder* encoder = nullptr;
+			IWICBitmapFrameEncode* frame = nullptr;
+			IPropertyBag2* props = nullptr;
+			do
+			{
+				if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)))) { err = "WIC factory unavailable"; break; }
+				if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream))) { err = "stream allocation failed"; break; }
+				if (FAILED(factory->CreateEncoder(jpeg ? GUID_ContainerFormatJpeg : GUID_ContainerFormatPng, nullptr, &encoder))) { err = "encoder unavailable"; break; }
+				if (FAILED(encoder->Initialize(stream, WICBitmapEncoderNoCache))) { err = "encoder init failed"; break; }
+				if (FAILED(encoder->CreateNewFrame(&frame, &props))) { err = "frame creation failed"; break; }
+				if (jpeg && props)
+				{
+					PROPBAG2 opt = {};
+					wchar_t name[] = L"ImageQuality";
+					opt.pstrName = name;
+					VARIANT v;
+					VariantInit(&v);
+					v.vt = VT_R4;
+					v.fltVal = std::clamp(quality, 0.05f, 1.0f);
+					props->Write(1, &opt, &v);
+				}
+				if (FAILED(frame->Initialize(props))) { err = "frame init failed"; break; }
+				if (FAILED(frame->SetSize((UINT)w, (UINT)h))) { err = "SetSize failed"; break; }
+				WICPixelFormatGUID pf = GUID_WICPixelFormat24bppBGR;
+				if (FAILED(frame->SetPixelFormat(&pf)) || pf != GUID_WICPixelFormat24bppBGR) { err = "encoder rejected 24bpp BGR"; break; }
+				if (FAILED(frame->WritePixels((UINT)h, (UINT)w * 3, (UINT)bgr.size(), const_cast<BYTE*>(bgr.data())))) { err = "WritePixels failed"; break; }
+				if (FAILED(frame->Commit()) || FAILED(encoder->Commit())) { err = "encode commit failed"; break; }
+				HGLOBAL mem = nullptr;
+				if (FAILED(GetHGlobalFromStream(stream, &mem))) { err = "stream read failed"; break; }
+				STATSTG stat = {};
+				stream->Stat(&stat, STATFLAG_NONAME);
+				const size_t size = (size_t)stat.cbSize.QuadPart;
+				const void* data = GlobalLock(mem);
+				if (!data) { err = "stream lock failed"; break; }
+				out.assign((const uint8_t*)data, (const uint8_t*)data + size);
+				GlobalUnlock(mem);
+				ok = true;
+			} while (false);
+			if (props) props->Release();
+			if (frame) frame->Release();
+			if (encoder) encoder->Release();
+			if (stream) stream->Release();
+			if (factory) factory->Release();
+			if (coOwned) CoUninitialize();
+			return ok;
+		}
+
+		std::string Base64(const std::vector<uint8_t>& data)
+		{
+			static const char* k = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+			std::string s;
+			s.reserve((data.size() + 2) / 3 * 4);
+			size_t i = 0;
+			for (; i + 2 < data.size(); i += 3)
+			{
+				const uint32_t v = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+				s += k[(v >> 18) & 63]; s += k[(v >> 12) & 63]; s += k[(v >> 6) & 63]; s += k[v & 63];
+			}
+			if (i < data.size())
+			{
+				uint32_t v = data[i] << 16;
+				if (i + 1 < data.size()) v |= data[i + 1] << 8;
+				s += k[(v >> 18) & 63]; s += k[(v >> 12) & 63];
+				s += (i + 1 < data.size()) ? k[(v >> 6) & 63] : '=';
+				s += '=';
+			}
+			return s;
+		}
+
+		// Camera look direction <-> the camera's own angles (degrees):
+		// lookDir = (-cos p sin y, sin p, -cos p cos y).
+		void AnglesFromDirection(math::Vector3 d, float& pitch, float& yaw)
+		{
+			d.Normalize();
+			pitch = asinf(std::clamp(d.y, -1.0f, 1.0f)) * 180.0f / kPi;
+			yaw = atan2f(-d.x, -d.z) * 180.0f / kPi;
+		}
+
+		math::Vector3 DirectionFromAngles(float pitch, float yaw)
+		{
+			const float p = pitch * kPi / 180.0f, y = yaw * kPi / 180.0f;
+			return math::Vector3(-cosf(p) * sinf(y), sinf(p), -cosf(p) * cosf(y));
 		}
 
 		struct FlagName { const char* name; EntityFlags flag; };
@@ -3236,6 +3643,306 @@ namespace HexEngine
 				return MakeResult(id, json{ {"closed", true}, {"saved", p["save"].get<bool>()}, {"activeScene", scene ? WideToUtf8(scene->GetName()) : std::string()} });
 			});
 
+			// ---- Spatial queries + visual feedback (D1) ----
+
+			Reg("raycast", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				math::Vector3 origin, dir, target;
+				if (!ReadVec3(p, "origin", origin)) throw ParamError("raycast requires 'origin' [x,y,z]");
+				if (ReadVec3(p, "target", target))
+				{
+					dir = target - origin;
+					if (!p.contains("maxDistance")) { json q = p; q["maxDistance"] = std::max(dir.Length(), 1e-4f); return MakeResult(id, RayResultJson(CastRay(scene.get(), origin, dir, ReadRayOptions(id, scene.get(), q)))); }
+				}
+				else if (!ReadVec3(p, "direction", dir))
+					throw ParamError("raycast requires 'direction' [x,y,z] or 'target' [x,y,z]");
+				if (dir.LengthSquared() < 1e-12f) throw ParamError("'direction' must be non-zero");
+				return MakeResult(id, RayResultJson(CastRay(scene.get(), origin, dir, ReadRayOptions(id, scene.get(), p))));
+			});
+
+			Reg("ground_height", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				std::vector<std::pair<float, float>> pts;
+				if (p.contains("points"))
+				{
+					if (!p["points"].is_array()) throw ParamError("'points' must be [[x, z], ...]");
+					for (const auto& pt : p["points"])
+					{
+						if (!IsNumericVector(pt) || pt.size() != 2) throw ParamError("each point must be [x, z]");
+						pts.push_back({ pt[0].get<float>(), pt[1].get<float>() });
+					}
+				}
+				else
+				{
+					float xz[2];
+					if (!ReadFloats(p, "xz", 2, xz)) throw ParamError("ground_height requires 'points' [[x,z],...] or 'xz' [x,z]");
+					pts.push_back({ xz[0], xz[1] });
+				}
+				if (pts.empty() || pts.size() > 20000) throw ParamError("1..20000 points");
+				const float fromY = p.value("fromY", 2000.0f);
+				json q = p;
+				if (!q.contains("maxDistance")) q["maxDistance"] = fromY + 10000.0f;
+				const RayOptions opt = ReadRayOptions(id, scene.get(), q);
+				json out = json::array();
+				size_t hits = 0;
+				for (const auto& [x, z] : pts)
+				{
+					const RayResult r = CastRay(scene.get(), math::Vector3(x, fromY, z), math::Vector3(0.0f, -1.0f, 0.0f), opt);
+					if (!r.hit) { out.push_back(json{ {"x", x}, {"z", z}, {"y", nullptr} }); continue; }
+					++hits;
+					out.push_back(json{ {"x", x}, {"z", z}, {"y", r.position.y}, {"normal", Vec3Json(r.normal)},
+						{"entity", r.entity ? json(r.entity->GetName()) : json(nullptr)} });
+				}
+				return MakeResult(id, json{ {"count", pts.size()}, {"hits", hits}, {"points", out},
+					{"note", "Rays go straight down from fromY and stop at the first surface (canopies and roofs included): pass only / ignore / minNormalY to pick the ground."} });
+			});
+
+			Reg("snap_to_ground", W, Main, Batch, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				json err;
+				Entity* e = RequireEntity(id, scene.get(), p, "entity", true, err);
+				if (!e) return err;
+				if (e->GetComponentDerived<Camera>()) throw ParamError("cameras can't be snapped");
+				RayOptions opt = ReadRayOptions(id, scene.get(), p);
+				AddHierarchy(e, opt.ignore); // never land on yourself
+				const float offset = p.value("offset", 0.0f);
+				const bool align = p.value("alignToNormal", false);
+
+				const math::Vector3 posBefore = e->GetPosition();
+				const math::Quaternion rotBefore = e->GetRotation();
+				const math::Vector3 scaleBefore = e->GetScale();
+				dx::BoundingBox box;
+				HierarchyAABB(e, box);
+				const float castHeight = p.value("castHeight", 2.0f);
+				const math::Vector3 from(box.Center.x, box.Center.y + box.Extents.y + castHeight, box.Center.z);
+				const RayResult r = CastRay(scene.get(), from, math::Vector3(0.0f, -1.0f, 0.0f), opt);
+				if (!r.hit)
+					return MakeError(id, ErrorCode::NotAvailable, "no surface below '" + e->GetName() + "' (cast from y=" + std::to_string(from.y) + "); try a larger castHeight or maxDistance");
+
+				if (align)
+				{
+					math::Vector3 n = r.normal;
+					if (n.y < 0.0f) n = -n;
+					n.Normalize();
+					const math::Vector3 up(0.0f, 1.0f, 0.0f);
+					math::Vector3 axis = up.Cross(n);
+					const float s = axis.Length();
+					if (s > 1e-5f)
+					{
+						axis /= s;
+						const math::Quaternion tilt = math::Quaternion::CreateFromAxisAngle(axis, asinf(std::min(s, 1.0f)) * (up.Dot(n) < 0.0f ? -1.0f : 1.0f));
+						e->SetRotation(rotBefore * tilt);
+					}
+					HierarchyAABB(e, box); // bounds change with the tilt
+				}
+				const float bottom = box.Center.y - box.Extents.y;
+				const float dy = r.position.y + offset - bottom;
+				e->SetPosition(e->GetPosition() + math::Vector3(0.0f, dy, 0.0f));
+				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityTransformChange(e, posBefore, rotBefore, scaleBefore);
+				MarkPvsDirty();
+				return MakeResult(id, json{ {"entity", EntityBrief(e)}, {"position", Vec3Json(e->GetPosition())}, {"moved", dy},
+					{"surface", RayResultJson(r)} });
+			});
+
+			Reg("query_region", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				math::Vector3 center, mn, mx;
+				const bool sphere = ReadVec3(p, "center", center);
+				float radius = 0.0f;
+				if (sphere)
+					radius = PositiveParam(p, "radius", 10.0f);
+				else if (!(ReadVec3(p, "min", mn) && ReadVec3(p, "max", mx)))
+					throw ParamError("query_region requires 'center' + 'radius' (sphere) or 'min' + 'max' (box)");
+				dx::BoundingSphere qs(DirectX::XMFLOAT3(center.x, center.y, center.z), radius);
+				dx::BoundingBox qb;
+				if (!sphere)
+				{
+					dx::BoundingBox::CreateFromPoints(qb, DirectX::XMVectorSet(mn.x, mn.y, mn.z, 1), DirectX::XMVectorSet(mx.x, mx.y, mx.z, 1));
+					center = math::Vector3(qb.Center.x, qb.Center.y, qb.Center.z);
+				}
+				const std::string component = p.value("component", std::string());
+				const std::string filter = p.value("filter", std::string());
+				const bool rootsOnly = p.value("rootsOnly", false);
+				const size_t limit = (size_t)std::clamp(p.value("limit", 200), 1, 5000);
+
+				std::vector<EntityId> ids;
+				scene->GetLiveEntityIds(ids);
+				struct Found { float dist; Entity* e; dx::BoundingBox box; };
+				std::vector<Found> found;
+				for (const EntityId& eid : ids)
+				{
+					Entity* e = scene->TryGetEntity(eid);
+					if (!e || e->IsPendingDeletion()) continue;
+					if (rootsOnly && e->GetParent()) continue;
+					if (!filter.empty() && e->GetName().find(filter) == std::string::npos) continue;
+					if (!component.empty() && FindComponent(e, component) == nullptr) continue;
+					const dx::BoundingBox& b = e->GetWorldAABB();
+					if (sphere ? !qs.Intersects(b) : !qb.Intersects(b)) continue;
+					// Distance from the query centre to the box (0 inside).
+					const math::Vector3 c(b.Center.x, b.Center.y, b.Center.z), ext(b.Extents.x, b.Extents.y, b.Extents.z);
+					const math::Vector3 dlt = center - c;
+					const math::Vector3 outside(std::max(fabsf(dlt.x) - ext.x, 0.0f), std::max(fabsf(dlt.y) - ext.y, 0.0f), std::max(fabsf(dlt.z) - ext.z, 0.0f));
+					found.push_back({ outside.Length(), e, b });
+				}
+				// Nearest first; ties (e.g. several boxes containing the centre)
+				// put the smaller, more specific entity first - not the terrain.
+				auto volume = [](const dx::BoundingBox& x) { return x.Extents.x * x.Extents.y * x.Extents.z; };
+				std::sort(found.begin(), found.end(), [&](const Found& a, const Found& b) {
+					if (a.dist != b.dist) return a.dist < b.dist;
+					return volume(a.box) < volume(b.box);
+				});
+				json list = json::array();
+				for (size_t i = 0; i < found.size() && i < limit; ++i)
+				{
+					const auto& f = found[i];
+					json j = EntityBrief(f.e);
+					j["distance"] = f.dist;
+					j["aabbMin"] = json::array({ f.box.Center.x - f.box.Extents.x, f.box.Center.y - f.box.Extents.y, f.box.Center.z - f.box.Extents.z });
+					j["aabbMax"] = json::array({ f.box.Center.x + f.box.Extents.x, f.box.Center.y + f.box.Extents.y, f.box.Center.z + f.box.Extents.z });
+					list.push_back(j);
+				}
+				return MakeResult(id, json{ {"matched", found.size()}, {"returned", list.size()}, {"entities", list} });
+			});
+
+			// Pipe-thread handler. Optionally moves the editor camera to a
+			// viewpoint, waits for the frame (and temporal effects) to settle,
+			// reads the camera's render target back on the main thread, puts the
+			// camera back, then downscales + encodes OFF the main thread. The
+			// image comes back inline (the MCP server turns "__image" into an
+			// image content block).
+			Reg("capture_view", R, Pipe, Solo, [this](int64_t id, const json& p) -> json {
+				std::lock_guard<std::mutex> captureLock(_captureMutex); // one camera hijack at a time
+				const int maxSize = std::clamp(p.value("maxSize", 768), 64, 2048);
+				const std::string format = p.value("format", std::string("jpeg"));
+				if (format != "jpeg" && format != "png") throw ParamError("'format' must be \"jpeg\" or \"png\"");
+				const float quality = std::clamp(p.value("quality", 85), 10, 100) / 100.0f;
+				const bool restore = p.value("restore", true);
+				math::Vector3 reqPos, reqLookAt;
+				float reqEul[3];
+				const bool hasPos = ReadVec3(p, "position", reqPos);
+				const bool hasLookAt = ReadVec3(p, "lookAt", reqLookAt);
+				const bool hasEul = ReadFloats(p, "eulerDegrees", 3, reqEul);
+				const bool hasFrame = p.contains("frameEntity") && !p["frameEntity"].is_null();
+				const bool moves = hasPos || hasLookAt || hasEul || hasFrame;
+				const int waitFrames = std::clamp(p.value("waitFrames", moves ? 8 : 2), 0, 600);
+
+				struct Saved { math::Vector3 pos; float pitch = 0, yaw = 0, roll = 0; bool valid = false; };
+				auto saved = std::make_shared<Saved>();
+				auto applied = std::make_shared<json>();
+
+				// 1. position the camera
+				json setup = OnMain(id, [&, saved, applied]() -> json {
+					auto scene = PrimaryUserScene();
+					Camera* cam = scene ? scene->GetMainCamera() : nullptr;
+					if (!cam) return MakeError(id, ErrorCode::NotAvailable, "no main camera");
+					Entity* ce = cam->GetEntity();
+					saved->pos = ce->GetPosition();
+					saved->pitch = cam->GetPitch(); saved->yaw = cam->GetYaw(); saved->roll = cam->GetRoll();
+					saved->valid = true;
+					if (!moves) return MakeResult(id, json::object());
+
+					math::Vector3 pos = hasPos ? reqPos : saved->pos;
+					float pitch = saved->pitch, yaw = saved->yaw, roll = 0.0f;
+					if (hasEul) { pitch = reqEul[0]; yaw = reqEul[1]; roll = reqEul[2]; }
+					if (hasFrame)
+					{
+						json err;
+						json wrap = json{ {"entity", p["frameEntity"]} };
+						Entity* target = RequireEntity(id, scene.get(), wrap, "entity", false, err);
+						if (!target) return err;
+						dx::BoundingBox box;
+						HierarchyAABB(target, box);
+						const math::Vector3 c(box.Center.x, box.Center.y, box.Center.z);
+						const float radius = std::max(math::Vector3(box.Extents.x, box.Extents.y, box.Extents.z).Length(), 0.25f);
+						if (!hasEul) { pitch = -25.0f; yaw = saved->yaw; }
+						const float halfFov = std::clamp(cam->GetFov(), 10.0f, 150.0f) * 0.5f * kPi / 180.0f;
+						const float dist = radius / sinf(halfFov) * p.value("distanceScale", 1.15f);
+						pos = c - DirectionFromAngles(pitch, yaw) * dist;
+						(*applied)["framed"] = json{ {"center", Vec3Json(c)}, {"radius", radius}, {"distance", dist} };
+					}
+					else if (hasLookAt)
+					{
+						const math::Vector3 d = reqLookAt - pos;
+						if (d.LengthSquared() < 1e-8f) throw ParamError("'lookAt' must differ from the camera position");
+						AnglesFromDirection(d, pitch, yaw);
+					}
+					ce->SetPosition(pos);
+					cam->SetPitch(pitch);
+					cam->SetYaw(yaw);
+					cam->SetRoll(roll);
+					MarkPvsDirty();
+					(*applied)["position"] = Vec3Json(pos);
+					(*applied)["eulerDegrees"] = json::array({ pitch, yaw, roll });
+					return MakeResult(id, json::object());
+				});
+				if (setup.contains("error")) return setup;
+
+				// 2. let it render (and temporal effects converge)
+				const uint64_t target = _frameCount.load() + (uint64_t)waitFrames;
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kPendingTimeoutMs);
+				bool timedOut = false;
+				while (_frameCount.load() < target)
+				{
+					if (std::chrono::steady_clock::now() >= deadline) { timedOut = true; break; }
+					std::this_thread::sleep_for(std::chrono::milliseconds(2));
+				}
+
+				// 3. read back + restore (one main-thread hop)
+				auto pixels = std::make_shared<std::vector<uint8_t>>();
+				uint32_t fmt = 0;
+				int w = 0, h = 0;
+				json grab = OnMain(id, [&, saved, pixels]() -> json {
+					auto scene = PrimaryUserScene();
+					Camera* cam = scene ? scene->GetMainCamera() : nullptr;
+					std::string problem;
+					if (!cam || !cam->GetRenderTarget()) problem = "no main-camera render target";
+					else if (!timedOut)
+					{
+						ITexture2D* tex = cam->GetRenderTarget();
+						fmt = tex->GetFormat();
+						w = tex->GetWidth();
+						h = tex->GetHeight();
+						tex->GetPixels(*pixels);
+					}
+					if (cam && moves && restore && saved->valid)
+					{
+						cam->GetEntity()->SetPosition(saved->pos);
+						cam->SetPitch(saved->pitch);
+						cam->SetYaw(saved->yaw);
+						cam->SetRoll(saved->roll);
+						MarkPvsDirty();
+					}
+					if (timedOut) problem = "the editor did not render " + std::to_string(waitFrames) + " frames in time";
+					if (!problem.empty()) return MakeError(id, ErrorCode::NotAvailable, problem + (moves && restore ? " (camera restored)" : ""));
+					return MakeResult(id, json::object());
+				});
+				if (grab.contains("error")) return grab;
+				if (w <= 0 || h <= 0 || pixels->empty())
+					return MakeError(id, ErrorCode::Internal, "render target readback returned nothing");
+
+				// 4. downscale + encode on this (pipe) thread
+				const float scale = std::min(1.0f, (float)maxSize / (float)std::max(w, h));
+				const int ow = std::max(1, (int)lroundf(w * scale)), oh = std::max(1, (int)lroundf(h * scale));
+				std::vector<uint8_t> bgr, encoded;
+				std::string err;
+				if (!DownscaleToBgr(*pixels, fmt, w, h, ow, oh, bgr, err))
+					return MakeError(id, ErrorCode::Internal, err);
+				pixels.reset();
+				if (!EncodeWic(bgr, ow, oh, format == "jpeg", quality, encoded, err))
+					return MakeError(id, ErrorCode::Internal, err);
+				json result = json{
+					{"width", ow}, {"height", oh}, {"sourceSize", json::array({ w, h })}, {"bytes", encoded.size()},
+					{"frame", _frameCount.load()}, {"cameraRestored", moves && restore},
+					{"__image", json{ {"mimeType", format == "jpeg" ? "image/jpeg" : "image/png"}, {"data", Base64(encoded)} }},
+				};
+				if (moves) result["camera"] = *applied;
+				return MakeResult(id, result);
+			});
+
 			// Pipe-thread handler: waits `waitFrames` editor frames (default 2) so
 			// mutations made just before - including the coalesced PVS rebuild -
 			// are actually rendered, THEN marshals the capture. Not batchable (a
@@ -3274,7 +3981,7 @@ namespace HexEngine
 			// rebuilt by redo.
 			for (const char* name : { "create_entity", "add_component", "remove_component", "rename_entity", "set_parent",
 				"set_entity_flags", "clone_entity", "set_entity_transform", "set_component_field", "delete_entity",
-				"instantiate_prefab", "create_prefab", "create_mesh_entity", "create_primitive", "assign_material" })
+				"instantiate_prefab", "create_prefab", "create_mesh_entity", "create_primitive", "assign_material", "snap_to_ground" })
 				_methods[name].undoable = true;
 		}
 
@@ -3583,6 +4290,7 @@ namespace HexEngine
 		std::string     _token;
 		bool            _started = false;
 		bool            _pvsDirty = false; // main thread only
+		std::mutex      _captureMutex;     // capture_view: one camera hijack at a time
 		std::atomic<uint64_t> _frameCount{ 0 };
 
 		std::unordered_map<std::string, MethodInfo> _methods;

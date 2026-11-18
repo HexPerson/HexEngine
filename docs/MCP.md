@@ -130,6 +130,10 @@ Read (always available):
 | `hex_prefab_info` | Instance link, root, out-of-date state and overridden properties of an entity. |
 | `hex_list_assets` | Project assets by `type` (mesh, material, prefab, scene, texture), `filter`, `subdir`; `includeEngine` adds EngineData. Returns each asset's `ref`. |
 | `hex_get_material` | A material's properties and texture slots, by `path` or by the `entity` using it. |
+| `hex_capture_view` | **Vision.** The camera's rendered frame, downscaled (`maxSize`, default 768) and returned **inline** as an MCP image. Optional viewpoint: `position` + `lookAt` / `eulerDegrees`, or `frameEntity` to fit an entity in view. The editor camera is moved for the shot and restored; `waitFrames` (default 8 after a move) lets temporal effects settle. Readback is one main-thread hop; downscale + JPEG/PNG encode run off the main thread. |
+| `hex_raycast` | Exact ray vs. mesh triangles (object space, every triangle, nearest hit) plus physics colliders (terrain chunks without a mesh). Position, front-face normal, distance, entity, `source`. Filters: `ignore`, `only`, `minNormalY`, `includeHidden`. |
+| `hex_ground_height` | Surface height under up to 20000 `[x, z]` points (rays down from `fromY`), same filters — for scattering and placement. |
+| `hex_query_region` | Entities whose world bounds touch a sphere or box, nearest first, with their bounds. |
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
 | `hex_list_loaded_resources`, `hex_validate_current_scene`, `hex_list_projects` | |
 | `hex_find_missing_references` | `NotImplemented` (follow-up). |
@@ -149,6 +153,7 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_save_mesh_asset` | Write a bridge-built mesh as a project `.hmesh` (and its private material as a `.hmat`); the entity becomes an ordinary asset-backed mesh that saves with the scene and works in prefabs. Clears DoNotSave. |
 | `hex_create_material` | New project `.hmat` from a `base` plus property/texture overrides. |
 | `hex_edit_material` | Change a project material (every user updates) and save it; by `path` or the `entity` using it. Engine materials are refused. Not part of undo. |
+| `hex_snap_to_ground` | Drop an entity hierarchy so its bounds rest on the surface below (optionally tilted to the normal, `offset`); undoable. |
 | `hex_assign_material` | Set an entity's mesh material to an asset; undoable and tracked as a prefab override. |
 | `hex_exec_console` | Console command / cvar set. |
 | `hex_capture_frame` | Waits `waitFrames` (default 2) so recent edits are rendered, then saves the main camera image. |

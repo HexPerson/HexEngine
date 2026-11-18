@@ -144,6 +144,20 @@ namespace
 			{"anyOf", json::array({ json{ {"type", "string"} }, obj })} };
 	}
 
+	// Ray filters shared by raycast / ground_height / snap_to_ground.
+	json RayOptionProps(json props)
+	{
+		const json refs = json{ {"type", "array"}, {"items", EntityRefSchema()} };
+		props["maxDistance"] = Num("Ray length (default 10000).");
+		props["ignore"] = refs; props["ignore"]["description"] = "Entities (with their children) the ray passes through.";
+		props["only"] = refs; props["only"]["description"] = "Hit ONLY these entities (and their children), e.g. the terrain.";
+		props["minNormalY"] = Num("Pass through surfaces whose normal.y is below this (e.g. 0.6 = ignore walls/steep faces).");
+		props["includeHidden"] = Bool("Also hit DoNotRender entities (default false).");
+		props["meshes"] = Bool("Test mesh triangles (default true).");
+		props["physics"] = Bool("Test physics colliders, e.g. terrain chunks without a mesh component (default true).");
+		return props;
+	}
+
 	struct LiveTool { std::string method; std::string description; json schema; };
 
 	std::vector<LiveTool> LiveTools()
@@ -195,6 +209,27 @@ namespace
 				{"limit", Int("Max results (default 500, max 5000).")}, {"includeEngine", Bool("Also list engine assets (EngineData...), e.g. its materials (default false).")} }) });
 		v.push_back({ "get_material", "Read a material's properties and texture slots, by asset path or by the entity whose mesh uses it.",
 			Obj(json{ {"path", Str("Material asset path/ref.")}, {"entity", EntityRefSchema("Or: read the material this entity's StaticMeshComponent uses.")} }) });
+		v.push_back({ "raycast", "Cast a ray into the open scene: exact mesh triangles + physics colliders. Returns hit position, surface normal, distance and the entity hit.",
+			Obj(RayOptionProps(json{ {"origin", NumArray(3, "Ray start [x,y,z].")}, {"direction", NumArray(3, "Ray direction (any length).")},
+				{"target", NumArray(3, "Or: a point to cast toward (maxDistance defaults to its distance).")} }), { "origin" }) });
+		v.push_back({ "ground_height", "Surface height under one or many [x, z] points (rays straight down from fromY): for placing/scattering objects. Use only / ignore / minNormalY to skip canopies, roofs and walls.",
+			Obj(RayOptionProps(json{ {"points", json{ {"type", "array"}, {"items", NumArray(2, "[x, z]")}, {"description", "Up to 20000 [x, z] points."} }},
+				{"xz", NumArray(2, "Or: a single [x, z].")}, {"fromY", Num("Height the rays start at (default 2000).")} })) });
+		v.push_back({ "query_region", "Entities whose world bounds intersect a sphere (center + radius) or box (min + max), nearest first, with their bounds. For 'what is here?' and free-space checks.",
+			Obj(json{ {"center", NumArray(3, "Sphere centre.")}, {"radius", Num("Sphere radius (default 10).")},
+				{"min", NumArray(3, "Box min corner.")}, {"max", NumArray(3, "Box max corner.")},
+				{"component", Str("Only entities with this component type.")}, {"filter", Str("Name substring.")},
+				{"rootsOnly", Bool("Only top-level entities.")}, {"limit", Int("Max results (default 200).")} }) });
+		v.push_back({ "capture_view", "LOOK at the scene: returns a downscaled image of the editor camera's rendered frame INLINE. Optionally from another viewpoint (position + lookAt / eulerDegrees, or frameEntity to fit an entity in view); the editor camera is moved for the capture and put back afterwards.",
+			Obj(json{ {"position", NumArray(3, "Camera position for the shot.")}, {"lookAt", NumArray(3, "Point to look at.")},
+				{"eulerDegrees", NumArray(3, "[pitch, yaw, roll]: pitch + = up, yaw 0 faces -Z, yaw + turns toward -X.")},
+				{"frameEntity", EntityRefSchema("Fit this entity (and its children) in view; direction from eulerDegrees or a 25-degree look-down at the current heading.")},
+				{"distanceScale", Num("frameEntity: distance multiplier (default 1.15).")},
+				{"maxSize", Int("Longest image side in pixels (64..2048, default 768).")},
+				{"format", json{ {"type", "string"}, {"enum", json::array({ "jpeg", "png" })}, {"description", "Default jpeg."} }},
+				{"quality", Int("JPEG quality 10..100 (default 85).")},
+				{"waitFrames", Int("Frames to render before grabbing (default 8 after a camera move so temporal effects settle, else 2).")},
+				{"restore", Bool("Put the camera back afterwards (default true).")} }) });
 		v.push_back({ "prefab_info", "Is this entity a prefab instance? Source prefab, instance root, out-of-date state and the list of overridden properties.",
 			Obj(json{ {"entity", EntityRefSchema()} }, { "entity" }) });
 
@@ -264,6 +299,11 @@ namespace
 				{"path", Str("Output .hmesh (default \"Meshes/<entity name>.hmesh\").")},
 				{"materialPath", Str("Where a private material is written (default next to the mesh).")},
 				{"overwrite", Bool("Allow replacing existing files (default false).")} }, { "entity" }) });
+		v.push_back({ "snap_to_ground", w("Drop an entity (with its children) so its bounds' bottom rests on the surface below it, optionally tilted to the surface normal. Undoable. Use only / minNormalY to choose what counts as ground."),
+			Obj(RayOptionProps(json{ {"entity", EntityRefSchema()},
+				{"offset", Num("Extra height above the surface (negative sinks it in).")},
+				{"alignToNormal", Bool("Tilt the entity's up axis to the surface normal (keeps its heading).")},
+				{"castHeight", Num("Start the ray this far above the entity's top (default 2).")} }), { "entity" }) });
 		v.push_back({ "create_material", w("Create a project material (.hmat) from a base material plus property/texture overrides. Returns its ref."),
 			Obj(MaterialProps(json{
 				{"path", Str("Output path, e.g. \"Materials/Rock.hmat\".")},
@@ -445,6 +485,21 @@ namespace
 	// JSON: pretty-printing roughly doubles the tokens an agent pays per call.
 	json ToContent(const json& obj, bool isError)
 	{
+		// A bridge result carrying "__image" {mimeType, data(base64)} becomes
+		// an MCP image block (the model sees the picture) + the rest as text.
+		if (!isError && obj.is_object() && obj.contains("__image") && obj["__image"].is_object())
+		{
+			json rest = obj;
+			const json img = rest["__image"];
+			rest.erase("__image");
+			return json{
+				{"content", json::array({
+					json{ {"type", "image"}, {"data", img.value("data", std::string())}, {"mimeType", img.value("mimeType", std::string("image/jpeg"))} },
+					json{ {"type", "text"}, {"text", rest.dump()} },
+				})},
+				{"isError", false},
+			};
+		}
 		return json{
 			{"content", json::array({ json{ {"type","text"}, {"text", obj.dump()} } })},
 			{"isError", isError},
