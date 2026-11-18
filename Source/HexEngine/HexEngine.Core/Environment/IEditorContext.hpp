@@ -140,5 +140,17 @@ namespace HexEngine
 		// Code/ file changes; agents driving builds explicitly can turn that off.
 		virtual void SetGameAutoReload(bool enabled) { (void)enabled; }
 		virtual bool GetGameAutoReload() { return false; }
+
+		// Scenes: the project's .hscene files. ListProjectScenes returns
+		// [{name, path (project-relative), loaded, active, entityCount}] including
+		// .hscene files under Data/ that the project hasn't loaded. Switching the
+		// active scene clears the undo history (undo resolves entities by name in
+		// the active scene).
+		virtual json ListProjectScenes() { return json::array(); }
+		virtual bool CreateProjectScene(const std::string& name, bool withSun, bool activate, std::string& error) { (void)name; (void)withSun; (void)activate; error = "not supported by this host"; return false; }
+		virtual bool ActivateProjectScene(const std::string& nameOrPath, std::string& error) { (void)nameOrPath; error = "not supported by this host"; return false; }
+		// Unload a (non-active) scene and drop it from the project; optionally
+		// delete its .hscene file.
+		virtual bool RemoveProjectScene(const std::string& nameOrPath, bool deleteFile, std::string& error) { (void)nameOrPath; (void)deleteFile; error = "not supported by this host"; return false; }
 	};
 }

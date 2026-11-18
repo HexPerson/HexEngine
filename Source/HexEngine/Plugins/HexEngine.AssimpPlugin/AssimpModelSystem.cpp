@@ -369,6 +369,41 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 
 
 
+bool AssimpModelImporter::ImportModel(const fs::path& absolutePath, HexEngine::FileSystem* fileSystem, const HexEngine::ModelImportSettings& settings,
+	std::vector<fs::path>& createdMeshes, std::string& error)
+{
+	if (fileSystem == nullptr)
+	{
+		error = "no file system for the import";
+		return false;
+	}
+
+	// Same work as the dialog's Import button, with explicit options; the
+	// dialog's own option state is put back afterwards.
+	const AssimpImportOptions previous = _importOpts;
+	_importOpts.importAnimations = settings.importAnimations;
+	_importOpts.tryAndCreateMaterials = settings.createMaterials;
+	_importOpts.mergeChildMeshesByMaterial = settings.mergeChildMeshesByMaterial;
+	_importOpts.importScale = settings.importScale;
+	_importOpts.textureSearchPaths = settings.textureSearchPaths;
+	_importOpts.deleteOriginalsAfterImport = false;
+
+	auto result = LoadResourceFromFile(absolutePath, fileSystem, nullptr);
+	for (auto& created : _createdMeshes)
+	{
+		fs::path meshPath = created.first;
+		createdMeshes.push_back(meshPath.replace_extension(".hmesh"));
+	}
+	_importOpts = previous;
+
+	if (result == nullptr)
+	{
+		error = "the model could not be imported (see engine logs)";
+		return false;
+	}
+	return true;
+}
+
 std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromFile(const fs::path& path, HexEngine::FileSystem* fileSystem, const HexEngine::ResourceLoadOptions* options /*= nullptr*/)
 {
 	if (path.extension() == ".mtl")

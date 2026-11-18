@@ -158,6 +158,21 @@ namespace
 		return props;
 	}
 
+	// Sent as the MCP server instructions: the condensed agent playbook
+	// (full version: docs/MCP-agent-playbook.md).
+	const char* const kAgentInstructions =
+		"HexEngine editor bridge. Loop: observe (get_editor_status, list_scenes, get_environment, capture_view, validate_current_scene) -> act -> verify (capture_view, validate_current_scene groundCheck, get_recent_engine_logs sinceSeq).\n"
+		"Speed: every call costs >= 1 editor frame; use hex_batch for multiple edits (one frame, one undo step; chain with \"as\" + {\"$ref\": \"label.id\"}). ground_height takes up to 20000 points per call.\n"
+		"Conventions: right-handed, Y up, metres; camera yaw 0 looks along -Z; eulerDegrees [pitch, yaw, roll]. Entity names are unique (duplicates get suffixes) - use the returned ids. Assets are refs like GameData.Materials/X.hmat (list_assets).\n"
+		"Levels: new_scene / open_scene (switching clears undo). set_environment for time of day, weather, sea level and look cvars. Water = a plane with a material based on EngineData.Materials/Water.hmat (check with ground_height that the basin is below it). Emissive materials light the world via GI - keep emission modest or set emissiveAffectsGI false.\n"
+		"Geometry: create_primitive / create_mesh_entity are IN-MEMORY until saveAs or save_mesh_asset (needed to save, prefab or undo them). Share materials (create_material + assign_material) rather than per-object overrides.\n"
+		"Placement: ground_height / raycast with only=[terrain] or minNormalY 0.7 to skip canopies and roofs; snap_to_ground; query_region to avoid overlaps. Reuse via create_prefab + instantiate_prefab; edit all copies in open_prefab_stage.\n"
+		"Components: describe_component_type before adding (fields, enum names, ranges).\n"
+		"Game C++: set_game_auto_reload false, write_game_source, build_game (errors come back with file/line), then play.\n"
+		"Play-testing: play needs Build/Game.dll; stop restores the pre-play scene (play-time edits are discarded). set_simulation paused + step_simulation for exact ticks; send_input drives key binds like real input.\n"
+		"Safety: undo reverts the last call/batch. While a prefab stage is open every tool edits the prefab. save_scene only when you mean to keep the work.\n"
+		"Full guide: docs/MCP-agent-playbook.md.";
+
 	struct LiveTool { std::string method; std::string description; json schema; };
 
 	std::vector<LiveTool> LiveTools()
@@ -243,6 +258,8 @@ namespace
 			Obj(json{ {"path", Str("e.g. \"Wickwood/Wickwood.cpp\".")} }, { "path" }) });
 		v.push_back({ "get_build_status", "State of the latest build_game: running / succeeded / failed, duration, compiler errors (file, line, column, code, message), warnings, whether the new DLL was reloaded.",
 			Obj(json{ {"waitSeconds", Int("Wait up to this long (0..110) for a running build to finish (default 0).")} }) });
+		v.push_back({ "list_scenes", "The project's scenes (.hscene): name, path, whether loaded, which one is active (the one every tool edits), entity count. Includes scene files in Data/ the project hasn't loaded.", Obj(json::object()) });
+		v.push_back({ "get_environment", "The active scene's environment in one view: time of day (DayNightCycleComponent), weather preset (WeatherControllerComponent), sun direction, sea level, ocean look and the look-defining cvars (env_*, fog, clouds, sky, exposure, moon/stars, ocean).", Obj(json::object()) });
 		v.push_back({ "prefab_info", "Is this entity a prefab instance? Source prefab, instance root, out-of-date state and the list of overridden properties.",
 			Obj(json{ {"entity", EntityRefSchema()} }, { "entity" }) });
 
@@ -383,6 +400,37 @@ namespace
 			Obj(json{ {"reload", Bool("Swap in the new DLL after a successful build (default true).")},
 				{"waitSeconds", Int("Wait up to this long (0..110, default 100) before returning.")} }) });
 		v.push_back({ "reload_game", w("Load the already-built Build/Game.dll into the editor (unload the old one first; play restarts if it was running). Not batchable."), Obj(json::object()) });
+		v.push_back({ "new_scene", w("Create a new scene (Data/Scenes/<name>.hscene) with a MainCamera and, by default, a sun; add it to the project, save it and (by default) make it the active scene. Switching scenes clears the undo history. Not batchable."),
+			Obj(json{ {"name", Str("Scene name (also the file name).")}, {"withSun", Bool("Add the default sun light (default true).")},
+				{"activate", Bool("Switch the editor to it (default true).")} }, { "name" }) });
+		v.push_back({ "open_scene", w("Switch the editor to another project scene, loading it if needed (by name, \"Scenes/X.hscene\" or \"Data/Scenes/X.hscene\"). Every tool then acts on it; the undo history is cleared. Not batchable."),
+			Obj(json{ {"scene", Str("Scene name or path (see hex_list_scenes).")} }, { "scene" }) });
+		v.push_back({ "spawn_mesh", w("Place an existing mesh ASSET (.hmesh, see hex_list_assets type=mesh) in the scene as an entity with a StaticMeshComponent, using the mesh's own material unless one is given. Undoable."),
+			Obj(TransformProps(json{ {"mesh", Str("Mesh ref or path, e.g. \"GameData.Models/Tree/Trunk.hmesh\".")},
+				{"name", Str("Entity name (default: the mesh's file name).")},
+				{"material", Str("Optional material ref to use instead of the mesh's own.")},
+				{"parent", EntityRefSchema("Optional parent entity.")} }), { "mesh" }) });
+		v.push_back({ "import_model", w("Import a 3D model file (fbx, gltf/glb, obj, dae, 3ds) from anywhere on disk into the project: copies it (and the textures / glTF buffers / .mtl beside it) to Data/<destFolder>, converts it to .hmesh meshes (+ .hmat materials) and lists the new assets. spawn: true also places it. Not batchable."),
+			Obj(json{ {"source", Str("Absolute path of the model file (or a project path).")},
+				{"destFolder", Str("Folder under Data (default \"Models/<file name>\").")},
+				{"createMaterials", Bool("Create .hmat materials from the model (default true).")},
+				{"importAnimations", Bool("Import skeletal animations (default true).")},
+				{"mergeByMaterial", Bool("Merge child meshes that share a material (default false).")},
+				{"scale", Num("Import scale (default 1).")},
+				{"copyTextures", Bool("Copy textures/buffers/.mtl next to the source too (default true).")},
+				{"spawn", Bool("Place the imported meshes under one root entity (default false).")},
+				{"name", Str("spawn: root entity name.")}, {"position", NumArray(3, "spawn: root position.")} }, { "source" }) });
+		v.push_back({ "close_scene", w("Unload a project scene that is NOT active and remove it from the project (project file saved); deleteFile also deletes its .hscene. Not batchable."),
+			Obj(json{ {"scene", Str("Scene name or path.")}, {"deleteFile", Bool("Also delete the .hscene file (default false).")} }, { "scene" }) });
+		v.push_back({ "set_environment", w("Set the active scene's environment in one call: time of day (adds a DayNightCycleComponent to the sun if missing), weather preset (adds a WeatherControllerComponent if missing), sea level, ocean look and any look cvars. Component changes are undoable. Not batchable."),
+			Obj(json{
+				{"timeOfDay", Num("Hours 0..24.")}, {"freezeTime", Bool("Stop the day/night cycle at timeOfDay.")}, {"dayLengthSeconds", Num("Real seconds per in-game day.")},
+				{"weather", json{ {"type", "string"}, {"enum", json::array({ "Clear", "Overcast", "Rain", "HeavyRain", "Storm", "Thunderstorm", "Snow", "Blizzard", "Hot", "Sandstorm", "Custom" })} }},
+				{"weatherTransitionSeconds", Num("Blend time to the new weather.")},
+				{"seaLevel", json{ {"type", json::array({ "number", "null" })}, {"description", "World height of the sea plane; null = auto-detect from water surfaces."} }},
+				{"ocean", json{ {"type", "object"}, {"description", "shallowColour, deepColour ([r,g,b,a] 0..1), fresnelPow, shoreFadeStrength, fadeFactor, reflectionStrength, reflectionNearDistance, reflectionFarDistance."} }},
+				{"cvars", json{ {"type", "object"}, {"additionalProperties", true}, {"description", "{cvar: value} e.g. r_fogDensity, r_cloudCoverage, r_exposure (see get_environment / list_cvars)."} }},
+			}) });
 		v.push_back({ "play", w("Enter play mode (the scene view's Run): loads the project's Build/Game.dll and starts the game. Refuses if the game DLL isn't built. hex_stop restores the scene to its pre-play state. Not batchable."),
 			Obj(json{ {"waitFrames", Int("Frames to let the game run before returning (default 5).")} }) });
 		v.push_back({ "stop", w("Leave play mode; the scene returns to exactly its pre-play state. Not batchable."), Obj(json::object()) });
@@ -590,7 +638,8 @@ int main(int argc, char** argv)
 			out = RpcResult(id, json{
 				{"protocolVersion", "2024-11-05"},
 				{"capabilities", { {"tools", json::object()} }},
-				{"serverInfo", { {"name","HexEngine.McpServer"}, {"version","0.2.0"} }},
+				{"serverInfo", { {"name","HexEngine.McpServer"}, {"version","0.3.0"} }},
+				{"instructions", kAgentInstructions},
 			});
 		}
 		else if (method == "tools/list")

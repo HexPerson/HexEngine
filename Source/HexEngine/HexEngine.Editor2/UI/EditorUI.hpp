@@ -96,6 +96,12 @@ public:
 		virtual bool IsGameModuleLoaded() override;
 		virtual void SetGameAutoReload(bool enabled) override;
 		virtual bool GetGameAutoReload() override;
+		virtual json ListProjectScenes() override;
+		virtual bool CreateProjectScene(const std::string& name, bool withSun, bool activate, std::string& error) override;
+		virtual bool ActivateProjectScene(const std::string& nameOrPath, std::string& error) override;
+		virtual bool RemoveProjectScene(const std::string& nameOrPath, bool deleteFile, std::string& error) override;
+		// Make `scene` the one the editor shows and edits (others disabled).
+		void SwitchToScene(const std::shared_ptr<HexEngine::Scene>& scene);
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 

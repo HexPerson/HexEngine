@@ -2005,9 +2005,16 @@ namespace HexEditor
 
 		//_entityList->AddItem(std::wstring(name.begin(), name.end()), nullptr);
 
+		// The sky sphere belongs to the scene it was created in. This listener
+		// serves every scene, and creating a scene (File > New Scene, the bridge's
+		// new_scene, project load) adds its SkySphere while ANOTHER scene is
+		// current: setting it on GetCurrentScene() left that scene pointing at a
+		// foreign entity, which dangled once the new scene was unloaded and
+		// crashed Scene::UpdateSkySphereMatrix.
 		if (entity->GetName() == "SkySphere")
 		{
-			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->SetSkySphere(entity);
+			if (auto* owner = entity->GetScene(); owner != nullptr)
+				owner->SetSkySphere(entity);
 		}
 	}
 
@@ -2602,5 +2609,233 @@ namespace HexEditor
 	bool EditorUI::GetGameAutoReload()
 	{
 		return _integrator.IsAutoReloadEnabled();
+	}
+
+	json EditorUI::ListProjectScenes()
+	{
+		json out = json::array();
+		if (_projectFolderPath.empty())
+			return out;
+
+		auto current = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		std::set<std::wstring> loadedPaths;
+		std::error_code ec;
+		for (auto* ssf : _sceneFiles)
+		{
+			if (ssf == nullptr)
+				continue;
+			auto scene = ssf->GetScene();
+			const fs::path abs = fs::weakly_canonical(ssf->GetAbsolutePath(), ec);
+			std::wstring key = abs.wstring();
+			std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+			loadedPaths.insert(key);
+			out.push_back(json{
+				{"name", scene ? ws2s(scene->GetName()) : abs.stem().string()},
+				{"path", fs::relative(abs, _projectFolderPath, ec).generic_string()},
+				{"loaded", scene != nullptr},
+				{"active", scene != nullptr && scene == current},
+				{"entityCount", scene ? scene->GetTotalNumberOfEntities() : 0u},
+			});
+		}
+
+		// .hscene files in the project's Data folder that aren't loaded.
+		const fs::path dataDir = _projectFolderPath / L"Data";
+		for (fs::recursive_directory_iterator it(dataDir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
+		{
+			if (!it->is_regular_file(ec) || _wcsicmp(it->path().extension().c_str(), L".hscene") != 0)
+				continue;
+			std::wstring key = fs::weakly_canonical(it->path(), ec).wstring();
+			std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+			if (loadedPaths.count(key))
+				continue;
+			out.push_back(json{
+				{"name", it->path().stem().string()},
+				{"path", fs::relative(it->path(), _projectFolderPath, ec).generic_string()},
+				{"loaded", false},
+				{"active", false},
+			});
+		}
+		return out;
+	}
+
+	void EditorUI::SwitchToScene(const std::shared_ptr<HexEngine::Scene>& scene)
+	{
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		auto current = sceneManager->GetCurrentScene();
+		if (current != nullptr && current != scene)
+			current->SetFlags(HexEngine::SceneFlags::Disabled);
+		scene->SetFlags(HexEngine::SceneFlags::Renderable | HexEngine::SceneFlags::Updateable | HexEngine::SceneFlags::PostProcessingEnabled);
+		sceneManager->SetActiveScene(scene);
+		SetSelectedEntity(nullptr);
+		// Undo/redo resolve entities by name in the active scene; history from
+		// another scene would act on the wrong entities.
+		_transactions.Clear();
+		_entityListRefreshPending = true;
+		scene->ForceRebuildPVS();
+	}
+
+	bool EditorUI::CreateProjectScene(const std::string& name, bool withSun, bool activate, std::string& error)
+	{
+		if (_projectFolderPath.empty() || _projectFile == nullptr) { error = "no project is open"; return false; }
+		if (IsPrefabStageActive()) { error = "close the prefab stage first"; return false; }
+		if (IsPlayModeActive()) { error = "stop play mode first"; return false; }
+		if (name.empty() || name.size() > 100 || name.find_first_of("\\/:*?\"<>|") != std::string::npos || name.front() == '.' || name.front() == ' ' || name.back() == ' ' || name.back() == '.')
+		{
+			error = "invalid scene name '" + name + "' (it becomes a file name)";
+			return false;
+		}
+
+		const std::wstring wname(name.begin(), name.end());
+		const fs::path scenePath = _projectFolderPath / L"Data" / L"Scenes" / (wname + L".hscene");
+		std::error_code ec;
+		if (fs::exists(scenePath, ec)) { error = "'" + fs::relative(scenePath, _projectFolderPath, ec).generic_string() + "' already exists (open_scene it)"; return false; }
+		for (auto* ssf : _sceneFiles)
+			if (ssf && ssf->GetScene() && ssf->GetScene()->GetName() == wname) { error = "a scene named '" + name + "' is already loaded"; return false; }
+
+		auto scene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(true, this, true);
+		if (auto mainCamera = scene->CreateEntity("MainCamera"); mainCamera != nullptr)
+			mainCamera->AddComponent<HexEngine::Camera>();
+		if (withSun)
+			scene->CreateDefaultSunLight();
+		scene->SetName(wname);
+
+		fs::create_directories(scenePath.parent_path(), ec);
+		auto* ssf = new HexEngine::SceneSaveFile(scenePath, std::ios::out, scene);
+		_projectFile->_scenes.push_back(ssf);
+		_sceneFiles.push_back(ssf);
+
+		if (activate)
+			SwitchToScene(scene);
+		else
+			scene->SetFlags(HexEngine::SceneFlags::Disabled);
+
+		// Persist right away: the new file + the project's scene list.
+		ssf->Save();
+		_projectFile->Save();
+		_entityListRefreshPending = true;
+		return true;
+	}
+
+	// The .hscene a scene reference means, canonical: a bare name is
+	// Data/Scenes/<name>.hscene; "Scenes/..." is under Data; "Data/..." under the
+	// project. Empty when it would leave the project.
+	static fs::path CanonicalSceneCandidate(const fs::path& projectFolder, const std::string& nameOrPath)
+	{
+		std::error_code ec;
+		fs::path candidate = fs::path(std::wstring(nameOrPath.begin(), nameOrPath.end()));
+		if (!candidate.has_extension())
+			candidate = fs::path(L"Data") / L"Scenes" / (candidate.wstring() + L".hscene");
+		if (!candidate.is_absolute())
+		{
+			const auto first = candidate.begin() != candidate.end() ? candidate.begin()->wstring() : std::wstring();
+			candidate = (_wcsicmp(first.c_str(), L"Data") == 0) ? projectFolder / candidate : projectFolder / L"Data" / candidate;
+		}
+		candidate = fs::weakly_canonical(candidate, ec);
+		const std::wstring root = fs::weakly_canonical(projectFolder, ec).wstring();
+		if (candidate.wstring().size() <= root.size() || _wcsnicmp(candidate.wstring().c_str(), root.c_str(), root.size()) != 0)
+			return {};
+		return candidate;
+	}
+
+	bool EditorUI::RemoveProjectScene(const std::string& nameOrPath, bool deleteFile, std::string& error)
+	{
+		if (_projectFolderPath.empty() || _projectFile == nullptr) { error = "no project is open"; return false; }
+		if (IsPrefabStageActive()) { error = "close the prefab stage first"; return false; }
+		if (IsPlayModeActive()) { error = "stop play mode first"; return false; }
+
+		std::error_code ec;
+		auto lower = [](std::wstring s) { std::transform(s.begin(), s.end(), s.begin(), ::towlower); return s; };
+		const std::wstring wanted = lower(std::wstring(nameOrPath.begin(), nameOrPath.end()));
+		const fs::path candidate = CanonicalSceneCandidate(_projectFolderPath, nameOrPath);
+		auto current = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+
+		for (auto it = _sceneFiles.begin(); it != _sceneFiles.end(); ++it)
+		{
+			HexEngine::SceneSaveFile* ssf = *it;
+			auto scene = ssf ? ssf->GetScene() : nullptr;
+			if (!ssf)
+				continue;
+			const fs::path abs = fs::weakly_canonical(ssf->GetAbsolutePath(), ec);
+			const bool match = (scene && lower(scene->GetName()) == wanted) || lower(abs.wstring()) == lower(candidate.wstring());
+			if (!match)
+				continue;
+			if (scene != nullptr && scene == current)
+			{
+				error = "that is the active scene: open_scene another one first";
+				return false;
+			}
+
+			_sceneFiles.erase(it);
+			auto& projectScenes = _projectFile->_scenes;
+			projectScenes.erase(std::remove(projectScenes.begin(), projectScenes.end(), ssf), projectScenes.end());
+			if (scene != nullptr)
+				HexEngine::g_pEnv->_sceneManager->UnloadScene(scene.get());
+			_projectFile->Save();
+			if (deleteFile)
+				fs::remove(abs, ec);
+			_entityListRefreshPending = true;
+			return true;
+		}
+		error = "no loaded project scene '" + nameOrPath + "' (see list_scenes)";
+		return false;
+	}
+
+	bool EditorUI::ActivateProjectScene(const std::string& nameOrPath, std::string& error)
+	{
+		if (_projectFolderPath.empty() || _projectFile == nullptr) { error = "no project is open"; return false; }
+		if (IsPrefabStageActive()) { error = "close the prefab stage first"; return false; }
+		if (IsPlayModeActive()) { error = "stop play mode first"; return false; }
+
+		std::error_code ec;
+		auto lower = [](std::wstring s) { std::transform(s.begin(), s.end(), s.begin(), ::towlower); return s; };
+		const std::wstring wanted = lower(std::wstring(nameOrPath.begin(), nameOrPath.end()));
+		const fs::path candidate = CanonicalSceneCandidate(_projectFolderPath, nameOrPath);
+
+		// Already loaded: by scene name, or by its file - however the path was
+		// written (a loaded scene must never be loaded a second time).
+		for (auto* ssf : _sceneFiles)
+		{
+			auto scene = ssf ? ssf->GetScene() : nullptr;
+			if (!scene)
+				continue;
+			const fs::path abs = fs::weakly_canonical(ssf->GetAbsolutePath(), ec);
+			if (lower(scene->GetName()) == wanted || (!candidate.empty() && lower(abs.wstring()) == lower(candidate.wstring())))
+			{
+				SwitchToScene(scene);
+				return true;
+			}
+		}
+
+		// A .hscene in the project that isn't loaded yet.
+		if (candidate.empty() || !fs::exists(candidate, ec) || _wcsicmp(candidate.extension().c_str(), L".hscene") != 0)
+		{
+			error = "no scene '" + nameOrPath + "' in the project (see list_scenes)";
+			return false;
+		}
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		auto previous = sceneManager->GetCurrentScene();
+		auto scene = sceneManager->CreateEmptyScene(false, this, true);
+		// Same order as project load: the scene being filled is the active one.
+		sceneManager->SetActiveScene(scene);
+		HexEngine::SceneSaveFile loader(candidate, std::ios::in, scene);
+		if (!loader.Load())
+		{
+			sceneManager->SetActiveScene(previous);
+			sceneManager->UnloadScene(scene.get());
+			error = "loading '" + candidate.string() + "' failed (see engine logs)";
+			return false;
+		}
+		if (scene->GetName().empty())
+			scene->SetName(candidate.stem().wstring());
+
+		auto* ssf = new HexEngine::SceneSaveFile(candidate, std::ios::out, scene);
+		_projectFile->_scenes.push_back(ssf);
+		_sceneFiles.push_back(ssf);
+		_projectFile->Save();
+
+		sceneManager->SetActiveScene(previous);
+		SwitchToScene(scene);
+		return true;
 	}
 }

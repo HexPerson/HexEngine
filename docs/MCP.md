@@ -137,6 +137,8 @@ Read (always available):
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
 | `hex_validate_current_scene` | Problems to fix, sorted error > warning > info with a `code` and the entity: NaN / zero-scale transforms, entities below `killY`, missing or unsaved (in-memory) mesh/material assets on saved entities, double-spawned duplicates (same mesh, position, rotation), out-of-date prefab instances, no camera / lights / PlayerStart, and with `groundCheck` floating top-level meshes. |
 | `hex_find_missing_references` | The asset-reference subset of the above. |
+| `hex_list_scenes` | Project scenes: name, path, loaded, active (the one every tool edits), entity count; includes `.hscene` files under `Data/` not yet loaded. |
+| `hex_get_environment` | The active scene's environment: time of day, weather preset, sun direction, sea level, ocean look, and the look cvars (`env_*`, fog, clouds, sky, exposure, moon/stars, ocean). |
 | `hex_list_game_sources` / `hex_read_game_source` | The project's C++ game code under `Code/` (sources, headers, `.vcxproj`/`.sln`), whether the game DLL is loaded and whether auto-reload is on. |
 | `hex_get_build_status` | Latest `build_game`: running / succeeded / failed, duration, compiler errors (file relative to `Code/`, line, column, code, message), warnings, reload result. `waitSeconds` blocks until it finishes. |
 | `hex_list_loaded_resources`, `hex_list_projects` | |
@@ -154,6 +156,8 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_create_primitive` | box/cube, plane/quad, sphere, capsule, cylinder, cone, torus with size/radius/height/segments, normals, UVs (`uvTiling`) and UV-derived tangents. Same `material` / `saveAs` options as below. |
 | `hex_create_mesh_entity` | Mesh from raw vertices/indices (normals computed if omitted, tangents from UVs). |
 | `hex_save_mesh_asset` | Write a bridge-built mesh as a project `.hmesh` (and its private material as a `.hmat`); the entity becomes an ordinary asset-backed mesh that saves with the scene and works in prefabs. Clears DoNotSave. |
+| `hex_spawn_mesh` | Place an existing `.hmesh` asset as an entity (StaticMeshComponent, the mesh's own material unless overridden); undoable. |
+| `hex_import_model` | FBX / glTF / GLB / OBJ / DAE / 3DS from anywhere on disk → copied (with textures, glTF buffers, `.mtl`) into `Data/<destFolder>`, converted to `.hmesh` (+ `.hmat`) via the model importer plugin, new assets listed; `spawn: true` places them under one root. |
 | `hex_create_material` | New project `.hmat` from a `base` plus property/texture overrides. |
 | `hex_edit_material` | Change a project material (every user updates) and save it; by `path` or the `entity` using it. Engine materials are refused. Not part of undo. |
 | `hex_snap_to_ground` | Drop an entity hierarchy so its bounds rest on the surface below (optionally tilted to the normal, `offset`); undoable. |
@@ -167,6 +171,10 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_create_prefab` | Save an entity hierarchy as a new `.hprefab`; by default the original is replaced by a linked instance. |
 | `hex_apply_prefab_instance` / `hex_revert_prefab_instance` / `hex_update_prefab_instance` | Instance ↔ asset sync, same as the inspector buttons. |
 | `hex_open_prefab_stage` / `hex_save_prefab_stage` / `hex_close_prefab_stage` | Prefab authoring: while the stage is open, every entity/component tool edits the prefab. |
+| `hex_new_scene` | New `Data/Scenes/<name>.hscene` with a MainCamera (+ default sun), added to the project, saved and (by default) made active. |
+| `hex_open_scene` | Switch to another project scene by name or path, loading it if needed. Switching scenes clears the undo history (undo resolves entities by name in the active scene). |
+| `hex_close_scene` | Unload a non-active scene and drop it from the project (`deleteFile` also removes the `.hscene`). |
+| `hex_set_environment` | One call for time of day / freeze / day length (adds a `DayNightCycleComponent` to the sun if missing), weather preset (adds a `WeatherControllerComponent`), sea level, ocean look and any look cvars. Component changes are undoable. |
 | `hex_write_game_source` | Create/replace a C/C++ file under `Code/` (never build-output folders); new files are added to the owning `.vcxproj`. |
 | `hex_set_game_auto_reload` | The editor's own watcher rebuilds + reloads ~0.4 s after any `Code/` change (blocking the editor while MSBuild runs). Agents editing several files should turn it off and call `build_game` once. |
 | `hex_build_game` | MSBuild of the game project on a background thread (the editor keeps rendering), exclusive with the watcher's reloads; then, by default, swaps in the new DLL on the main thread (play restarts if it was running). Returns parsed compiler errors; polls via `get_build_status` past `waitSeconds`. |
@@ -323,8 +331,8 @@ Serialize/Deserialize stay the source of truth — metadata is purely additive.
 
 ## Not supported yet
 
-- New / open / switch scenes (only saving is supported).
-- Model import (FBX/glTF), material graphs, texture creation.
+- Renaming scenes.
+- Material graphs, texture creation.
 - Script-based game logic (Phase E2: scripting plugin, in progress separately).
 - Arbitrary shell/command execution.
 
@@ -335,3 +343,5 @@ Serialize/Deserialize stay the source of truth — metadata is purely additive.
   particles use it; UI, input and render temporal effects keep real time.
 - While a game with a locked mouse runs, the engine recentres the cursor every
   frame, which also captures the user's real mouse while the editor has focus.
+
+See also the [agent playbook](MCP-agent-playbook.md): workflow, conventions and pitfalls for agents (also sent as the MCP server's `instructions`).

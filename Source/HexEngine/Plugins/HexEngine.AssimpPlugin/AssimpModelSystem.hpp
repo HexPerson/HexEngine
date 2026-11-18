@@ -80,6 +80,8 @@ public:
 	virtual std::vector<std::string>	GetSupportedResourceExtensions() override;
 	virtual std::wstring				GetResourceDirectory() const override;
 	virtual HexEngine::Dialog* CreateEditorDialog(const std::vector<fs::path>& paths) override;
+	virtual bool ImportModel(const fs::path& absolutePath, HexEngine::FileSystem* fileSystem, const HexEngine::ModelImportSettings& settings,
+		std::vector<fs::path>& createdMeshes, std::string& error) override;
 	virtual void						SaveResource(HexEngine::IResource* resource, const fs::path& path) override {}
 	virtual bool						DoesSupportHotLoading() override { return true; }
 

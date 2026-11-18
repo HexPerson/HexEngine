@@ -44,6 +44,8 @@
 #include "../../HexEngine.Core/FileSystem/PrefabLoader.hpp"
 #include "../../HexEngine.Core/Physics/IPhysicsSystem.hpp"
 #include "../../HexEngine.Core/Physics/PhysUtils.hpp"
+#include "../../HexEngine.Core/Graphics/IGraphicsDevice.hpp"
+#include "../../HexEngine.Core/Scene/IModelSystem.hpp"
 #include "../../HexEngine.Core/Environment/TimeManager.hpp"
 #include "../../HexEngine.Core/Input/InputSystem.hpp"
 
@@ -53,6 +55,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <wincodec.h>
+#include <d3d11.h>
 #include <objbase.h>
 #include <dxgiformat.h>
 #include <DirectXPackedVector.h>
@@ -1551,6 +1554,73 @@ namespace HexEngine
 			return ok;
 		}
 
+		// D3D11 only (main thread): copy the frame into a mip-chained texture,
+		// GenerateMips (GPU box filter), and read back just the mip whose longest
+		// side is the smallest still >= maxSize - 1/16..1/64 of a 4K readback.
+		// False = use the full-resolution path (other backends, odd formats).
+		bool ReadbackDownsampledD3D11(ITexture2D* src, int maxSize, std::vector<uint8_t>& out, uint32_t& fmt, int& w, int& h)
+		{
+			IGraphicsDevice* gd = g_pEnv ? g_pEnv->_graphicsDevice : nullptr;
+			if (!gd || gd->GetBackend() != GraphicsBackend::D3D11 || !src) return false;
+			auto* dev = static_cast<ID3D11Device*>(gd->GetNativeDevice());
+			auto* ctx = static_cast<ID3D11DeviceContext*>(gd->GetNativeDeviceContext());
+			auto* srcTex = static_cast<ID3D11Texture2D*>(src->GetNativePtr());
+			if (!dev || !ctx || !srcTex) return false;
+			D3D11_TEXTURE2D_DESC sd;
+			srcTex->GetDesc(&sd);
+			if (sd.SampleDesc.Count != 1 || sd.ArraySize != 1) return false;
+			UINT support = 0;
+			if (FAILED(dev->CheckFormatSupport(sd.Format, &support)) || !(support & D3D11_FORMAT_SUPPORT_MIP_AUTOGEN)) return false;
+
+			UINT readMip = 0;
+			while (readMip < 12 && (int)std::max(sd.Width >> (readMip + 1), sd.Height >> (readMip + 1)) >= maxSize) ++readMip;
+			if (readMip == 0) return false; // already small: the plain path is as cheap
+
+			D3D11_TEXTURE2D_DESC md = {};
+			md.Width = sd.Width; md.Height = sd.Height; md.MipLevels = readMip + 1; md.ArraySize = 1;
+			md.Format = sd.Format; md.SampleDesc.Count = 1; md.Usage = D3D11_USAGE_DEFAULT;
+			md.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+			md.MiscFlags = D3D11_RESOURCE_MISC_GENERATE_MIPS;
+			ID3D11Texture2D* mipTex = nullptr;
+			ID3D11ShaderResourceView* srv = nullptr;
+			ID3D11Texture2D* staging = nullptr;
+			bool ok = false;
+			do
+			{
+				if (FAILED(dev->CreateTexture2D(&md, nullptr, &mipTex))) break;
+				if (FAILED(dev->CreateShaderResourceView(mipTex, nullptr, &srv))) break;
+				D3D11_TEXTURE2D_DESC stg = {};
+				stg.Width = std::max(1u, sd.Width >> readMip); stg.Height = std::max(1u, sd.Height >> readMip);
+				stg.MipLevels = 1; stg.ArraySize = 1; stg.Format = sd.Format; stg.SampleDesc.Count = 1;
+				stg.Usage = D3D11_USAGE_STAGING; stg.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+				if (FAILED(dev->CreateTexture2D(&stg, nullptr, &staging))) break;
+
+				gd->Lock(); // other threads may use the immediate context
+				ctx->CopySubresourceRegion(mipTex, 0, 0, 0, 0, srcTex, 0, nullptr);
+				ctx->GenerateMips(srv);
+				ctx->CopySubresourceRegion(staging, 0, 0, 0, 0, mipTex, readMip, nullptr);
+				D3D11_MAPPED_SUBRESOURCE map = {};
+				const HRESULT hr = ctx->Map(staging, 0, D3D11_MAP_READ, 0, &map);
+				if (SUCCEEDED(hr))
+				{
+					const uint32_t bpp = TexelBytes((uint32_t)sd.Format);
+					const size_t row = (size_t)stg.Width * bpp;
+					out.resize(row * stg.Height);
+					for (UINT y = 0; y < stg.Height; ++y)
+						memcpy(out.data() + row * y, (const uint8_t*)map.pData + (size_t)map.RowPitch * y, row);
+					ctx->Unmap(staging, 0);
+				}
+				gd->Unlock();
+				if (FAILED(hr)) break;
+				fmt = (uint32_t)sd.Format; w = (int)stg.Width; h = (int)stg.Height;
+				ok = true;
+			} while (false);
+			if (staging) staging->Release();
+			if (srv) srv->Release();
+			if (mipTex) mipTex->Release();
+			return ok;
+		}
+
 		std::string Base64(const std::vector<uint8_t>& data)
 		{
 			static const char* k = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -1893,6 +1963,81 @@ namespace HexEngine
 				else { ++d.warningCount; if (d.warnings.size() < 20) d.warnings.push_back(diag); }
 			}
 			return d;
+		}
+
+		// ---- Scene environment ----
+
+		// WeatherPresetId (HexEngine.WeatherPlugin/WeatherTypes.hpp) by value.
+		const char* const kWeatherPresets[] = { "Custom", "Clear", "Overcast", "Rain", "HeavyRain", "Storm", "Thunderstorm", "Snow", "Blizzard", "Hot", "Sandstorm" };
+
+		Entity* FindEntityWithComponent(Scene* scene, const char* component)
+		{
+			std::vector<EntityId> ids;
+			scene->GetLiveEntityIds(ids);
+			for (const EntityId& eid : ids)
+			{
+				Entity* e = scene->TryGetEntity(eid);
+				if (e && !e->IsPendingDeletion() && FindComponent(e, component)) return e;
+			}
+			return nullptr;
+		}
+
+		json PickFields(const json& all, std::initializer_list<const char*> keys)
+		{
+			json out = json::object();
+			for (const char* k : keys) if (all.contains(k)) out[k] = all[k];
+			return out;
+		}
+
+		json EnvironmentJson(Scene* scene)
+		{
+			json env = json::object();
+			env["sceneName"] = WideToUtf8(scene->GetName());
+
+			if (Entity* dn = FindEntityWithComponent(scene, "DayNightCycleComponent"))
+			{
+				const json f = SerializeComponent(FindComponent(dn, "DayNightCycleComponent"));
+				json t = PickFields(f, { "_currentTimeHours", "_simulateCycle", "_dayLengthSeconds", "_nightLengthSeconds", "_sunYawDegrees" });
+				t["entity"] = dn->GetName();
+				env["timeOfDay"] = t;
+			}
+			else
+				env["timeOfDay"] = nullptr;
+
+			if (Entity* we = FindEntityWithComponent(scene, "WeatherControllerComponent"))
+			{
+				const json f = SerializeComponent(FindComponent(we, "WeatherControllerComponent"));
+				const int pid = f.value("_globalPresetId", 0);
+				env["weather"] = json{ {"entity", we->GetName()}, {"preset", pid >= 0 && pid < (int)std::size(kWeatherPresets) ? kWeatherPresets[pid] : "?"},
+					{"transitionSeconds", f.value("_defaultTransitionSeconds", 0.0f)}, {"randomCycling", f.value("_randomCyclingEnabled", false)} };
+			}
+			else
+				env["weather"] = g_pEnv->_classRegistry->Find("WeatherControllerComponent") ? json(nullptr) : json("weather plugin not loaded");
+
+			if (Entity* sun = FindEntityWithComponent(scene, "DirectionalLight"))
+			{
+				const math::Vector3 dir = math::Vector3::Transform(math::Vector3(0.0f, 0.0f, -1.0f), sun->GetRotation());
+				env["sun"] = json{ {"entity", sun->GetName()}, {"direction", Vec3Json(dir)} };
+			}
+			else
+				env["sun"] = nullptr;
+
+			env["sea"] = json{ {"hasOcean", scene->HasOcean()}, {"seaLevel", scene->GetSeaLevel()} };
+			const OceanSettings& o = scene->GetOcean();
+			auto v4 = [](const math::Vector4& v) { return json::array({ v.x, v.y, v.z, v.w }); };
+			env["ocean"] = json{ {"shallowColour", v4(o.shallowColour)}, {"deepColour", v4(o.deepColour)}, {"fresnelPow", o.fresnelPow},
+				{"shoreFadeStrength", o.shoreFadeStrength}, {"fadeFactor", o.fadeFactor}, {"reflectionStrength", o.reflectionStrength},
+				{"reflectionNearDistance", o.reflectionNearDistance}, {"reflectionFarDistance", o.reflectionFarDistance} };
+
+			// The look-defining console variables (saved with the scene).
+			json cv = json::object();
+			static const char* kPrefixes[] = { "env_", "r_fog", "r_cloud", "r_sky", "r_exposure", "r_moon", "r_star", "r_ocean", "r_atmosphere" };
+			for (HVar* v = g_hvars; v != nullptr; v = v->_next)
+				for (const char* pre : kPrefixes)
+					if (v->_name.rfind(pre, 0) == 0) { cv[v->_name] = HVarValueJson(v->_type, v->_val); break; }
+			env["cvars"] = cv;
+			env["note"] = "set_environment changes these in one call. Water renders on surfaces whose material is based on EngineData.Materials/Water.hmat (create_material base=...); seaLevel only moves the sea plane used by underwater/ocean queries.";
+			return env;
 		}
 
 		struct FlagName { const char* name; EntityFlags flag; };
@@ -3868,6 +4013,7 @@ namespace HexEngine
 				const RayOptions opt = ReadRayOptions(id, scene.get(), q);
 				json out = json::array();
 				size_t hits = 0;
+				const auto t0 = std::chrono::steady_clock::now();
 				for (const auto& [x, z] : pts)
 				{
 					const RayResult r = CastRay(scene.get(), math::Vector3(x, fromY, z), math::Vector3(0.0f, -1.0f, 0.0f), opt);
@@ -3876,7 +4022,8 @@ namespace HexEngine
 					out.push_back(json{ {"x", x}, {"z", z}, {"y", r.position.y}, {"normal", Vec3Json(r.normal)},
 						{"entity", r.entity ? json(r.entity->GetName()) : json(nullptr)} });
 				}
-				return MakeResult(id, json{ {"count", pts.size()}, {"hits", hits}, {"points", out},
+				const double rayMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+				return MakeResult(id, json{ {"count", pts.size()}, {"hits", hits}, {"points", out}, {"msPerRay", rayMs / (double)pts.size()},
 					{"note", "Rays go straight down from fromY and stop at the first surface (canopies and roofs included): pass only / ignore / minNormalY to pick the ground."} });
 			});
 
@@ -4075,7 +4222,9 @@ namespace HexEngine
 				// 3. read back + restore (one main-thread hop)
 				auto pixels = std::make_shared<std::vector<uint8_t>>();
 				uint32_t fmt = 0;
-				int w = 0, h = 0;
+				int w = 0, h = 0, srcW = 0, srcH = 0;
+				bool gpuDownsampled = false;
+				const auto grabStart = std::chrono::steady_clock::now();
 				json grab = OnMain(id, [&, saved, pixels]() -> json {
 					auto scene = PrimaryUserScene();
 					Camera* cam = scene ? scene->GetMainCamera() : nullptr;
@@ -4084,10 +4233,16 @@ namespace HexEngine
 					else if (!timedOut)
 					{
 						ITexture2D* tex = cam->GetRenderTarget();
-						fmt = tex->GetFormat();
-						w = tex->GetWidth();
-						h = tex->GetHeight();
-						tex->GetPixels(*pixels);
+						srcW = tex->GetWidth();
+						srcH = tex->GetHeight();
+						gpuDownsampled = ReadbackDownsampledD3D11(tex, maxSize, *pixels, fmt, w, h);
+						if (!gpuDownsampled)
+						{
+							fmt = tex->GetFormat();
+							w = srcW;
+							h = srcH;
+							tex->GetPixels(*pixels);
+						}
 					}
 					if (cam && moves && restore && saved->valid)
 					{
@@ -4106,8 +4261,9 @@ namespace HexEngine
 					return MakeError(id, ErrorCode::Internal, "render target readback returned nothing");
 
 				// 4. downscale + encode on this (pipe) thread
-				const float scale = std::min(1.0f, (float)maxSize / (float)std::max(w, h));
-				const int ow = std::max(1, (int)lroundf(w * scale)), oh = std::max(1, (int)lroundf(h * scale));
+				// Final size from the SOURCE aspect (a GPU mip may round odd sizes).
+				const float scale = std::min(1.0f, (float)maxSize / (float)std::max(srcW, srcH));
+				const int ow = std::max(1, (int)lroundf(srcW * scale)), oh = std::max(1, (int)lroundf(srcH * scale));
 				std::vector<uint8_t> bgr, encoded;
 				std::string err;
 				if (!DownscaleToBgr(*pixels, fmt, w, h, ow, oh, bgr, err))
@@ -4116,7 +4272,9 @@ namespace HexEngine
 				if (!EncodeWic(bgr, ow, oh, format == "jpeg", quality, encoded, err))
 					return MakeError(id, ErrorCode::Internal, err);
 				json result = json{
-					{"width", ow}, {"height", oh}, {"sourceSize", json::array({ w, h })}, {"bytes", encoded.size()},
+					{"width", ow}, {"height", oh}, {"sourceSize", json::array({ srcW, srcH })}, {"bytes", encoded.size()},
+					{"gpuDownsampled", gpuDownsampled},
+					{"grabMs", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - grabStart).count()},
 					{"frame", _frameCount.load()}, {"cameraRestored", moves && restore},
 					{"__image", json{ {"mimeType", format == "jpeg" ? "image/jpeg" : "image/png"}, {"data", Base64(encoded)} }},
 				};
@@ -4464,6 +4622,340 @@ namespace HexEngine
 				return MakeResult(id, json{ {"reloaded", true}, {"playing", ctx->IsPlayModeActive()} });
 			});
 
+			// ---- Scenes + environment ----
+
+			Reg("list_scenes", R, Main, Batch, [](int64_t id, const json&) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				json scenes = ctx->ListProjectScenes();
+				return MakeResult(id, json{ {"count", scenes.size()}, {"scenes", scenes},
+					{"note", "open_scene switches the editor to a scene (loading it if needed); new_scene creates one under Data/Scenes."} });
+			});
+
+			Reg("new_scene", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				const std::string name = RequireString(p, "name");
+				std::string err;
+				if (!ctx->CreateProjectScene(name, p.value("withSun", true), p.value("activate", true), err))
+					return MakeError(id, ErrorCode::InvalidParams, err);
+				MarkPvsDirty();
+				auto scene = PrimaryUserScene();
+				return MakeResult(id, json{ {"created", name}, {"path", "Data/Scenes/" + name + ".hscene"},
+					{"activeScene", scene ? WideToUtf8(scene->GetName()) : std::string()},
+					{"note", "Saved with its project entry. It starts with a MainCamera (+ a default sun unless withSun=false). Switching scenes clears the undo history."} });
+			});
+
+			Reg("open_scene", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				std::string err;
+				if (!ctx->ActivateProjectScene(RequireString(p, "scene"), err))
+					return MakeError(id, ErrorCode::InvalidParams, err);
+				MarkPvsDirty();
+				auto scene = PrimaryUserScene();
+				return MakeResult(id, json{ {"activeScene", scene ? WideToUtf8(scene->GetName()) : std::string()},
+					{"entityCount", scene ? scene->GetTotalNumberOfEntities() : 0u},
+					{"note", "Every tool now acts on this scene. The undo history was cleared."} });
+			});
+
+			Reg("close_scene", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				const std::string sceneName = RequireString(p, "scene");
+				const bool deleteFile = p.value("deleteFile", false);
+				std::string err;
+				if (!ctx->RemoveProjectScene(sceneName, deleteFile, err))
+					return MakeError(id, ErrorCode::InvalidParams, err);
+				MarkPvsDirty();
+				return MakeResult(id, json{ {"closed", sceneName}, {"fileDeleted", deleteFile} });
+			});
+
+			Reg("get_environment", R, Main, Batch, [](int64_t id, const json&) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				return MakeResult(id, EnvironmentJson(scene.get()));
+			});
+
+			Reg("set_environment", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				IEditorContext* ctx = Ctx();
+				json applied = json::object();
+
+				// --- validate everything first ---
+				std::vector<std::pair<HVar*, json>> cvars;
+				if (p.contains("cvars"))
+				{
+					if (!p["cvars"].is_object()) throw ParamError("'cvars' must be an object {name: value}");
+					for (auto it = p["cvars"].begin(); it != p["cvars"].end(); ++it)
+					{
+						HVar* v = g_pEnv->_commandManager->FindHVar(it.key());
+						if (!v) throw ParamError("unknown cvar '" + it.key() + "' (see list_cvars)");
+						cvars.push_back({ v, *it });
+					}
+				}
+				int weatherPreset = -1;
+				if (p.contains("weather"))
+				{
+					if (!p["weather"].is_string()) throw ParamError("'weather' must be a preset name");
+					const std::string w = p["weather"].get<std::string>();
+					for (int i = 0; i < (int)std::size(kWeatherPresets); ++i)
+						if (_stricmp(w.c_str(), kWeatherPresets[i]) == 0) weatherPreset = i;
+					if (weatherPreset < 0)
+					{
+						std::string list;
+						for (const char* n : kWeatherPresets) list += (list.empty() ? "" : ", ") + std::string(n);
+						throw ParamError("unknown weather preset '" + w + "' (" + list + ")");
+					}
+					if (!g_pEnv->_classRegistry->Find("WeatherControllerComponent"))
+						return MakeError(id, ErrorCode::NotAvailable, "the weather plugin isn't loaded (no WeatherControllerComponent)");
+				}
+				if (p.contains("timeOfDay") && (!p["timeOfDay"].is_number() || p["timeOfDay"].get<float>() < 0.0f || p["timeOfDay"].get<float>() > 24.0f))
+					throw ParamError("'timeOfDay' must be hours 0..24");
+				if (p.contains("seaLevel") && !p["seaLevel"].is_null() && !p["seaLevel"].is_number())
+					throw ParamError("'seaLevel' must be a number, or null to go back to the auto-detected level");
+				if (p.contains("ocean") && !p["ocean"].is_object()) throw ParamError("'ocean' must be an object");
+
+				// --- time of day: DayNightCycleComponent on the sun ---
+				if (p.contains("timeOfDay") || p.contains("freezeTime") || p.contains("dayLengthSeconds"))
+				{
+					Entity* dn = FindEntityWithComponent(scene.get(), "DayNightCycleComponent");
+					if (!dn)
+					{
+						dn = FindEntityWithComponent(scene.get(), "DirectionalLight");
+						if (!dn) return MakeError(id, ErrorCode::NotAvailable, "the scene has no sun (DirectionalLight) for a day/night cycle; new_scene withSun=true creates one");
+						json err;
+						json r = AddComponentByName(id, dn, json{ {"component", "DayNightCycleComponent"} }, err);
+						if (r.is_null()) return err;
+						if (ctx) ctx->RecordComponentAdded(FindComponent(dn, "DayNightCycleComponent"));
+						applied["dayNightCycleAddedTo"] = dn->GetName();
+					}
+					json fields = json::object();
+					if (p.contains("timeOfDay")) fields["_currentTimeHours"] = p["timeOfDay"];
+					if (p.contains("freezeTime")) fields["_simulateCycle"] = !p["freezeTime"].get<bool>();
+					if (p.contains("dayLengthSeconds")) fields["_dayLengthSeconds"] = p["dayLengthSeconds"];
+					json after;
+					std::string msg;
+					if (ctx) ctx->BeginComponentEdit(dn);
+					const bool ok = ApplyComponentFields(FindComponent(dn, "DayNightCycleComponent"), fields, after, msg);
+					if (ctx) ctx->EndComponentEdit(dn);
+					if (!ok) return MakeError(id, ErrorCode::InvalidParams, msg);
+					applied["timeOfDay"] = fields;
+				}
+
+				// --- weather: WeatherControllerComponent ---
+				if (weatherPreset >= 0)
+				{
+					Entity* we = FindEntityWithComponent(scene.get(), "WeatherControllerComponent");
+					if (!we)
+					{
+						we = scene->CreateEntity("Weather", math::Vector3(0.0f, 0.0f, 0.0f), math::Quaternion(0.0f, 0.0f, 0.0f, 1.0f), math::Vector3(1.0f, 1.0f, 1.0f)); // explicit: SimpleMath statics are not exported to plugins
+						json err;
+						json r = AddComponentByName(id, we, json{ {"component", "WeatherControllerComponent"} }, err);
+						if (r.is_null()) return err;
+						if (ctx) ctx->RecordEntityCreated(we);
+						applied["weatherEntityCreated"] = we->GetName();
+					}
+					json fields = json{ {"_globalPresetId", weatherPreset} };
+					if (p.contains("weatherTransitionSeconds")) fields["_defaultTransitionSeconds"] = p["weatherTransitionSeconds"];
+					json after;
+					std::string msg;
+					if (ctx) ctx->BeginComponentEdit(we);
+					const bool ok = ApplyComponentFields(FindComponent(we, "WeatherControllerComponent"), fields, after, msg);
+					if (ctx) ctx->EndComponentEdit(we);
+					if (!ok) return MakeError(id, ErrorCode::InvalidParams, msg);
+					applied["weather"] = kWeatherPresets[weatherPreset];
+				}
+
+				// --- sea level + ocean look (scene settings, saved with the scene) ---
+				if (p.contains("seaLevel"))
+				{
+					if (p["seaLevel"].is_null()) scene->SetSeaLevelOverride(false, 0.0f);
+					else scene->SetSeaLevelOverride(true, p["seaLevel"].get<float>());
+					applied["seaLevel"] = p["seaLevel"];
+				}
+				if (p.contains("ocean"))
+				{
+					OceanSettings& o = scene->GetOcean();
+					for (auto it = p["ocean"].begin(); it != p["ocean"].end(); ++it)
+					{
+						const std::string& k = it.key();
+						if (k == "shallowColour") o.shallowColour = ReadColourValue(*it, "ocean.shallowColour");
+						else if (k == "deepColour") o.deepColour = ReadColourValue(*it, "ocean.deepColour");
+						else if (k == "fresnelPow") o.fresnelPow = it->get<float>();
+						else if (k == "shoreFadeStrength") o.shoreFadeStrength = it->get<float>();
+						else if (k == "fadeFactor") o.fadeFactor = it->get<float>();
+						else if (k == "reflectionStrength") o.reflectionStrength = it->get<float>();
+						else if (k == "reflectionNearDistance") o.reflectionNearDistance = it->get<float>();
+						else if (k == "reflectionFarDistance") o.reflectionFarDistance = it->get<float>();
+						else throw ParamError("unknown ocean field '" + k + "'");
+					}
+					applied["ocean"] = p["ocean"];
+				}
+
+				// --- cvars (render / fog / clouds / atmosphere ...; saved with the scene) ---
+				if (!cvars.empty())
+				{
+					CommandManager::LockVars();
+					json set = json::object();
+					std::string msg;
+					for (auto& [v, value] : cvars)
+					{
+						if (!SetHVarFromJson(v, value, msg, true)) { CommandManager::UnlockVars(); throw ParamError(msg); }
+						set[v->_name] = HVarValueJson(v->_type, v->_val);
+					}
+					CommandManager::UnlockVars();
+					applied["cvars"] = set;
+				}
+
+				if (applied.empty()) throw ParamError("nothing to set: pass timeOfDay, freezeTime, dayLengthSeconds, weather, weatherTransitionSeconds, seaLevel, ocean or cvars");
+				MarkPvsDirty();
+				json result = EnvironmentJson(scene.get());
+				result["applied"] = applied;
+				return MakeResult(id, result);
+			});
+
+			// ---- Mesh assets in the scene + model import ----
+
+			Reg("spawn_mesh", W, Main, Batch, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				AssetRef meshRef;
+				std::string err;
+				if (!ResolveAssetRef(RequireString(p, "mesh"), ".hmesh", false, meshRef, err))
+					return MakeError(id, ErrorCode::InvalidParams, err);
+				if (!AssetExists(meshRef))
+					return MakeError(id, ErrorCode::NotAvailable, "no mesh at '" + meshRef.ref + "' (see list_assets type=mesh)");
+				std::shared_ptr<Material> overrideMat;
+				if (p.contains("material") && !p["material"].is_null())
+				{
+					AssetRef mref;
+					if (!ResolveAssetRef(RequireString(p, "material"), ".hmat", false, mref, err)) return MakeError(id, ErrorCode::InvalidParams, err);
+					if (!AssetExists(mref)) return MakeError(id, ErrorCode::NotAvailable, "no material at '" + mref.ref + "'");
+					overrideMat = Material::Create(fs::path(Utf8ToWide(mref.ref)));
+					if (!overrideMat) return MakeError(id, ErrorCode::Internal, "'" + mref.ref + "' could not be loaded");
+				}
+				Entity* parent = nullptr;
+				if (p.contains("parent") && !p["parent"].is_null())
+				{
+					json perr;
+					parent = RequireEntity(id, scene.get(), p, "parent", false, perr);
+					if (!parent) return perr;
+				}
+				json r = SpawnMeshEntity(scene.get(), meshRef, p.value("name", meshRef.absolute.stem().string()), overrideMat, parent, p, err);
+				if (r.is_null()) return MakeError(id, ErrorCode::Internal, err);
+				return MakeResult(id, r);
+			});
+
+			Reg("import_model", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				IEditorContext* ctx = Ctx();
+				FileSystem* projectFs = ctx ? ctx->GetProjectFileSystem() : nullptr;
+				if (!projectFs) return MakeError(id, ErrorCode::NotAvailable, "no project is open");
+				if (!g_pEnv->_modelImporter) return MakeError(id, ErrorCode::NotAvailable, "no model importer plugin is loaded");
+
+				// Source: any readable file on disk (or a project path).
+				fs::path src = fs::path(Utf8ToWide(RequireString(p, "source")));
+				std::error_code ec;
+				if (!src.is_absolute())
+				{
+					fs::path resolved;
+					std::string perr;
+					if (!ResolveProjectPath(RequireString(p, "source"), resolved, perr)) return MakeError(id, ErrorCode::InvalidParams, perr);
+					src = resolved;
+				}
+				if (!fs::is_regular_file(src, ec)) return MakeError(id, ErrorCode::NotAvailable, "no file at '" + src.string() + "'");
+				const std::wstring ext = src.extension().wstring();
+				bool supported = false;
+				for (const wchar_t* x : { L".fbx", L".gltf", L".glb", L".obj", L".blend", L".dae", L".3ds" }) if (_wcsicmp(ext.c_str(), x) == 0) supported = true;
+				if (!supported) return MakeError(id, ErrorCode::InvalidParams, "unsupported model type '" + src.extension().string() + "' (fbx, gltf, glb, obj, dae, 3ds; .blend from Blender 4+ fails - export fbx/gltf)");
+
+				// Destination folder inside the project's Data folder.
+				std::string destReq = p.value("destFolder", std::string("Models/") + src.stem().string());
+				AssetRef destRef;
+				std::string err;
+				if (!ResolveAssetRef(destReq + "/_.hmesh", ".hmesh", true, destRef, err)) return MakeError(id, ErrorCode::InvalidParams, "destFolder: " + err);
+				const fs::path destDir = destRef.absolute.parent_path();
+				fs::create_directories(destDir, ec);
+
+				// Copy the model, plus the files it usually needs (textures,
+				// glTF buffers, .mtl) from beside it, into the project.
+				json copied = json::array();
+				auto copyIn = [&](const fs::path& f) {
+					const fs::path to = destDir / f.filename();
+					if (fs::weakly_canonical(f, ec) == fs::weakly_canonical(to, ec)) return;
+					fs::copy_file(f, to, fs::copy_options::overwrite_existing, ec);
+					if (!ec) copied.push_back(f.filename().string());
+				};
+				copyIn(src);
+				if (p.value("copyTextures", true))
+				{
+					for (fs::directory_iterator it(src.parent_path(), ec), end; !ec && it != end; it.increment(ec))
+					{
+						if (!it->is_regular_file()) continue;
+						const std::wstring e = it->path().extension().wstring();
+						for (const wchar_t* x : { L".png", L".jpg", L".jpeg", L".tga", L".dds", L".bmp", L".tif", L".tiff", L".bin", L".mtl" })
+							if (_wcsicmp(e.c_str(), x) == 0) { copyIn(it->path()); break; }
+					}
+					ec.clear();
+				}
+
+				// Snapshot, import, diff: everything new in the folder is output.
+				std::set<std::wstring> before;
+				for (fs::directory_iterator it(destDir, ec), end; !ec && it != end; it.increment(ec)) before.insert(it->path().filename().wstring());
+				ec.clear();
+				ModelImportSettings settings;
+				settings.importAnimations = p.value("importAnimations", true);
+				settings.createMaterials = p.value("createMaterials", true);
+				settings.mergeChildMeshesByMaterial = p.value("mergeByMaterial", false);
+				settings.importScale = p.value("scale", 1.0f);
+				settings.textureSearchPaths.push_back(destDir.wstring());
+				std::vector<fs::path> meshes;
+				if (!g_pEnv->_modelImporter->ImportModel(destDir / src.filename(), projectFs, settings, meshes, err))
+					return MakeError(id, ErrorCode::Internal, err);
+
+				json meshList = json::array(), others = json::array();
+				for (const fs::path& m : meshes)
+				{
+					AssetRef r;
+					std::string e2;
+					if (ResolveAssetRef(m.string(), ".hmesh", false, r, e2)) meshList.push_back(r.ref);
+				}
+				for (fs::directory_iterator it(destDir, ec), end; !ec && it != end; it.increment(ec))
+				{
+					if (before.count(it->path().filename().wstring()) || _wcsicmp(it->path().extension().c_str(), L".hmesh") == 0) continue;
+					AssetRef r;
+					std::string e2;
+					if (ResolveAssetRef(it->path().string(), nullptr, false, r, e2)) others.push_back(r.ref);
+				}
+				json result = json{ {"source", src.string()}, {"folder", ProjectRelative(destDir)}, {"copied", copied},
+					{"meshes", meshList}, {"otherNewAssets", others} };
+
+				// Optionally place it: a root entity with one child per mesh
+				// (imported meshes keep their model-space placement).
+				if (p.value("spawn", false) && scene && !meshList.empty())
+				{
+					math::Vector3 pos(0, 0, 0);
+					ReadVec3(p, "position", pos);
+					Entity* root = scene->CreateEntity(p.value("name", src.stem().string()), pos, math::Quaternion(0.0f, 0.0f, 0.0f, 1.0f), math::Vector3(1.0f, 1.0f, 1.0f));
+					json children = json::array();
+					for (const auto& mr : meshList)
+					{
+						AssetRef r;
+						std::string e2;
+						ResolveAssetRef(mr.get<std::string>(), ".hmesh", false, r, e2);
+						json c = SpawnMeshEntity(scene.get(), r, r.absolute.stem().string(), nullptr, root, json::object(), e2, false); // the root's record covers them
+						if (!c.is_null()) children.push_back(c["id"]);
+					}
+					if (IEditorContext* c2 = Ctx()) c2->RecordEntityCreated(root);
+					MarkPvsDirty();
+					result["spawned"] = json{ {"root", EntityBrief(root)}, {"meshEntities", children.size()} };
+				}
+				result["note"] = "Place meshes with spawn_mesh (or spawn: true here). Imported meshes keep their model-space offsets; parent them under one root to move them together.";
+				return MakeResult(id, result);
+			});
+
 			// Pipe-thread handler: waits `waitFrames` editor frames (default 2) so
 			// mutations made just before - including the coalesced PVS rebuild -
 			// are actually rendered, THEN marshals the capture. Not batchable (a
@@ -4502,7 +4994,7 @@ namespace HexEngine
 			// rebuilt by redo.
 			for (const char* name : { "create_entity", "add_component", "remove_component", "rename_entity", "set_parent",
 				"set_entity_flags", "clone_entity", "set_entity_transform", "set_component_field", "delete_entity",
-				"instantiate_prefab", "create_prefab", "create_mesh_entity", "create_primitive", "assign_material", "snap_to_ground" })
+				"instantiate_prefab", "create_prefab", "create_mesh_entity", "create_primitive", "assign_material", "snap_to_ground", "spawn_mesh", "import_model" })
 				_methods[name].undoable = true;
 		}
 
@@ -4979,6 +5471,40 @@ namespace HexEngine
 			if (HVar* v = g_pEnv && g_pEnv->_commandManager ? g_pEnv->_commandManager->FindHVar("cl_simulationRate") : nullptr)
 				return v->_val.f32;
 			return 60.0f;
+		}
+
+		// An entity showing a mesh ASSET (StaticMeshComponent, the mesh's own
+		// material unless overridden). Transform from p (position / rotation /
+		// eulerDegrees / scale). `record` = add it to the undo history (false
+		// for children whose root is recorded afterwards).
+		json SpawnMeshEntity(Scene* scene, const AssetRef& meshRef, const std::string& name, const std::shared_ptr<Material>& overrideMat, Entity* parent, const json& p, std::string& err, bool record = true)
+		{
+			auto mesh = Mesh::Create(fs::path(Utf8ToWide(meshRef.ref)));
+			if (!mesh) { err = "'" + meshRef.ref + "' could not be loaded (see engine logs)"; return nullptr; }
+			math::Vector3 pos(0, 0, 0), scale(1, 1, 1);
+			ReadVec3(p, "position", pos);
+			ReadVec3(p, "scale", scale);
+			math::Quaternion rot(0, 0, 0, 1);
+			ReadRotation(p, rot);
+			Entity* e = scene->CreateEntity(name, pos, rot, scale);
+			if (!e) { err = "Scene::CreateEntity failed"; return nullptr; }
+			if (parent) e->SetParent(parent, false);
+			auto* smc = e->AddComponent<StaticMeshComponent>();
+			smc->SetMesh(mesh);
+			if (overrideMat) smc->SetMaterial(overrideMat);
+			else if (mesh->GetMaterial()) smc->SetMaterial(mesh->GetMaterial());
+			if (record)
+				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityCreated(e);
+			MarkPvsDirty();
+			json r = EntityBrief(e);
+			r["mesh"] = meshRef.ref;
+			const auto mat = smc->GetMaterial();
+			r["material"] = mat && !mat->GetFileSystemPath().empty() ? json(mat->GetFileSystemPath().generic_string()) : json(nullptr);
+			const dx::BoundingBox& b = e->GetWorldAABB();
+			r["aabbMin"] = json::array({ b.Center.x - b.Extents.x, b.Center.y - b.Extents.y, b.Center.z - b.Extents.z });
+			r["aabbMax"] = json::array({ b.Center.x + b.Extents.x, b.Center.y + b.Extents.y, b.Center.z + b.Extents.z });
+			if (mesh->HasAnimations()) r["animated"] = true;
+			return r;
 		}
 
 		StaticMeshComponent* RequireMeshComponent(int64_t id, Entity* e, json& err)
