@@ -225,7 +225,7 @@ namespace HexEngine
 		if (g_pEnv->_graphicsDevice->GetBackend() != GraphicsBackend::D3D11)
 			return;
 
-		float dt = g_pEnv && g_pEnv->_timeManager ? (float)g_pEnv->_timeManager->_frameTime : _frameTime;
+		float dt = g_pEnv && g_pEnv->_timeManager ? (float)g_pEnv->_timeManager->GetGameFrameTime() : _frameTime;
 		dt = std::clamp(dt, 0.0f, r_particleDeltaClamp._val.f32);
 
 		if (!BuildEmitters(scene, camera, dt))

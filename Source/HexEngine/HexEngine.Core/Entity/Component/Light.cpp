@@ -88,7 +88,7 @@ namespace HexEngine
 
 					float dir = _slowRandomPulseEffect.target > _slowRandomPulseEffect.current ? 1.0f : -1.0f;
 
-					_slowRandomPulseEffect.current += /*(_slowRandomPulseEffect.target - _slowRandomPulseEffect.current)*/dir * g_pEnv->_timeManager->GetFrameTime() * 1.4f;
+					_slowRandomPulseEffect.current += /*(_slowRandomPulseEffect.target - _slowRandomPulseEffect.current)*/dir * g_pEnv->_timeManager->GetGameFrameTime() * 1.4f;
 					_strength = std::clamp(_slowRandomPulseEffect.current, 0.0f, _originalStrength);
 					break;
 				}

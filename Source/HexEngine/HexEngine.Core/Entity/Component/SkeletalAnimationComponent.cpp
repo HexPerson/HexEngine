@@ -225,7 +225,7 @@ namespace HexEngine
 					_transforms[i] = math::Matrix::Lerp(_transforms[i], blendTransforms[i], _blendFactor);
 				}
 
-				_blendFactor += g_pEnv->_timeManager->_frameTime * 12.3f;
+				_blendFactor += g_pEnv->_timeManager->GetGameFrameTime() * 12.3f;
 
 				if (_blendFactor >= 1.0f)
 				{

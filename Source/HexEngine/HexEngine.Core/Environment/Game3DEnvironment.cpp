@@ -654,6 +654,17 @@ namespace HexEngine
 				scene->GetNetworkReplicationSystem()->Pump(_timeManager->_frameTime);
 		}
 
+		// Paused simulation with requested steps: run exactly that many fixed ticks
+		// this frame (any leftover partial tick is discarded so the count is exact),
+		// and let gameplay's variable-rate update see the same span of time.
+		if (_timeManager->_simulationPaused && _timeManager->_pendingSimulationSteps > 0)
+		{
+			const uint32_t steps = std::min<uint32_t>(_timeManager->_pendingSimulationSteps, 120u);
+			_timeManager->_pendingSimulationSteps -= steps;
+			_timeManager->_accumulatedSimulationTime = ((float)steps + 0.5f) * timeStep;
+			_timeManager->_gameFrameTime = (float)steps * timeStep;
+		}
+
 		while (_timeManager->_accumulatedSimulationTime >= timeStep)
 		{
 			// A scene that is still deserializing (the editor loads on a worker thread)
@@ -703,7 +714,9 @@ namespace HexEngine
 
 				_uiManager->Update(_timeManager->_frameTime);
 
-				_sceneManager->Update(_timeManager->_frameTime);
+				// Gameplay runs on GAME time (scaled / paused - see TimeManager);
+				// the UI above keeps real time.
+				_sceneManager->Update(_timeManager->_gameFrameTime);
 
 				// Host: broadcast transform snapshots now the scene's transforms are
 				// final for this frame (runs outside the scene update lock).
@@ -717,7 +730,7 @@ namespace HexEngine
 
 				for (auto& extension : _gameExtensions)
 				{
-					extension->OnUpdate(_timeManager->_frameTime);
+					extension->OnUpdate(_timeManager->_gameFrameTime);
 				}
 
 				bool shouldUseDepthBuffer = true;
@@ -930,7 +943,7 @@ namespace HexEngine
 					_graphicsDevice->EndFrame(win);
 				}
 
-				_sceneManager->LateUpdate(_timeManager->_frameTime);
+				_sceneManager->LateUpdate(_timeManager->_gameFrameTime);
 
 				if (cl_forcelagframe._val.i32 > 0)
 					std::this_thread::sleep_for(std::chrono::milliseconds(cl_forcelagframe._val.i32));
