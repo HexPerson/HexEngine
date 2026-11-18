@@ -709,6 +709,588 @@ namespace HexEngine
 			return roots;
 		}
 
+		std::wstring Utf8ToWide(const std::string& s)
+		{
+			if (s.empty()) return std::wstring();
+			int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+			std::wstring w(n, L'\0');
+			MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+			return w;
+		}
+
+		// ---- Procedural geometry (create_primitive / create_mesh_entity) ----
+
+		struct Geometry
+		{
+			std::vector<math::Vector3> positions;
+			std::vector<math::Vector3> normals;   // empty = derive smooth normals
+			std::vector<math::Vector2> uvs;       // empty = no UVs
+			std::vector<MeshIndexFormat> indices;
+
+			MeshIndexFormat Add(const math::Vector3& p, const math::Vector3& n, float u, float v)
+			{
+				positions.push_back(p);
+				normals.push_back(n);
+				uvs.emplace_back(u, v);
+				return (MeshIndexFormat)(positions.size() - 1);
+			}
+			void Tri(MeshIndexFormat a, MeshIndexFormat b, MeshIndexFormat c)
+			{
+				indices.push_back(a); indices.push_back(b); indices.push_back(c);
+			}
+			// Quad a-b-c-d around its perimeter.
+			void Quad(MeshIndexFormat a, MeshIndexFormat b, MeshIndexFormat c, MeshIndexFormat d)
+			{
+				Tri(a, b, c); Tri(a, c, d);
+			}
+		};
+
+		constexpr float kPi = 3.14159265358979f;
+
+		// Engine convention (measured on imported .hmesh assets): a triangle's
+		// front face is the side (b-a)x(c-a) points to, and vertex normals point
+		// out of the front. Re-wind any triangle that disagrees with its vertex
+		// normals, so generators only have to get positions and normals right.
+		void OrientTriangles(Geometry& g)
+		{
+			if (g.normals.size() != g.positions.size()) return;
+			for (size_t i = 0; i + 2 < g.indices.size(); i += 3)
+			{
+				const auto a = g.indices[i], b = g.indices[i + 1], c = g.indices[i + 2];
+				const math::Vector3 fn = (g.positions[b] - g.positions[a]).Cross(g.positions[c] - g.positions[a]);
+				const math::Vector3 vn = g.normals[a] + g.normals[b] + g.normals[c];
+				if (fn.Dot(vn) < 0.0f)
+					std::swap(g.indices[i + 1], g.indices[i + 2]);
+			}
+		}
+
+		float PositiveParam(const json& p, const char* key, float def)
+		{
+			if (!p.contains(key) || p[key].is_null()) return def;
+			if (!p[key].is_number()) throw ParamError(std::string("'") + key + "' must be a number");
+			const float v = p[key].get<float>();
+			if (!(v > 0.0f) || !std::isfinite(v)) throw ParamError(std::string("'") + key + "' must be > 0");
+			return v;
+		}
+
+		int CountParam(const json& p, const char* key, int def, int lo, int hi)
+		{
+			if (!p.contains(key) || p[key].is_null()) return def;
+			if (!p[key].is_number_integer()) throw ParamError(std::string("'") + key + "' must be an integer");
+			return std::clamp(p[key].get<int>(), lo, hi);
+		}
+
+		// Ring of (segments+1) vertices (seam duplicated for UVs) around Y.
+		// Angle runs so that, seen from outside, u increases left to right.
+		math::Vector3 RingDir(int s, int segments)
+		{
+			const float t = 2.0f * kPi * (float)s / (float)segments;
+			return math::Vector3(cosf(t), 0.0f, -sinf(t));
+		}
+
+		// Shapes are centred on the origin (plane: at y = 0, facing +Y).
+		// Returns the shape's parameters as used, for the response.
+		json GeneratePrimitive(const std::string& shape, const json& p, Geometry& g)
+		{
+			json used = json::object();
+			if (shape == "box" || shape == "cube")
+			{
+				math::Vector3 size(1.0f, 1.0f, 1.0f);
+				if (p.contains("size") && p["size"].is_number())
+					size = math::Vector3(p["size"].get<float>());
+				else
+					ReadVec3(p, "size", size);
+				if (!(size.x > 0 && size.y > 0 && size.z > 0)) throw ParamError("'size' components must be > 0");
+				const math::Vector3 h = size * 0.5f;
+				// (normal, u axis, v axis) with u x v = normal.
+				const math::Vector3 faces[6][3] = {
+					{ { 1, 0, 0 }, { 0, 0, -1 }, { 0, 1, 0 } },
+					{ { -1, 0, 0 }, { 0, 0, 1 }, { 0, 1, 0 } },
+					{ { 0, 1, 0 }, { 1, 0, 0 }, { 0, 0, -1 } },
+					{ { 0, -1, 0 }, { 1, 0, 0 }, { 0, 0, 1 } },
+					{ { 0, 0, 1 }, { 1, 0, 0 }, { 0, 1, 0 } },
+					{ { 0, 0, -1 }, { -1, 0, 0 }, { 0, 1, 0 } },
+				};
+				for (const auto& f : faces)
+				{
+					MeshIndexFormat q[4];
+					const float su[4] = { -1, 1, 1, -1 }, sv[4] = { -1, -1, 1, 1 };
+					for (int k = 0; k < 4; ++k)
+					{
+						const math::Vector3 unit = f[0] + f[1] * su[k] + f[2] * sv[k];
+						q[k] = g.Add(unit * h, f[0], (su[k] + 1.0f) * 0.5f, 1.0f - (sv[k] + 1.0f) * 0.5f);
+					}
+					g.Quad(q[0], q[1], q[2], q[3]);
+				}
+				used["size"] = json::array({ size.x, size.y, size.z });
+			}
+			else if (shape == "plane" || shape == "quad")
+			{
+				float sz[2] = { 1.0f, 1.0f };
+				if (p.contains("size") && p["size"].is_number())
+					sz[0] = sz[1] = p["size"].get<float>();
+				else
+					ReadFloats(p, "size", 2, sz);
+				if (!(sz[0] > 0 && sz[1] > 0)) throw ParamError("'size' must be > 0");
+				const int n = CountParam(p, "subdivisions", 1, 1, 512);
+				for (int j = 0; j <= n; ++j)
+					for (int i = 0; i <= n; ++i)
+					{
+						const float u = (float)i / n, t = (float)j / n;
+						g.Add(math::Vector3(-sz[0] * 0.5f + sz[0] * u, 0.0f, sz[1] * 0.5f - sz[1] * t), math::Vector3(0, 1, 0), u, 1.0f - t);
+					}
+				for (int j = 0; j < n; ++j)
+					for (int i = 0; i < n; ++i)
+					{
+						const MeshIndexFormat a = (MeshIndexFormat)(j * (n + 1) + i);
+						g.Quad(a, a + 1, a + 1 + (n + 1), a + (n + 1));
+					}
+				used["size"] = json::array({ sz[0], sz[1] });
+				used["subdivisions"] = n;
+			}
+			else if (shape == "sphere" || shape == "capsule")
+			{
+				const float r = PositiveParam(p, "radius", 0.5f);
+				const int segs = CountParam(p, "segments", 32, 3, 512);
+				int rings = CountParam(p, "rings", 16, 2, 512);
+				float cyl = 0.0f;
+				if (shape == "capsule")
+				{
+					const float height = PositiveParam(p, "height", 2.0f);
+					if (height < 2.0f * r) throw ParamError("capsule 'height' (total, caps included) must be >= 2 * radius");
+					cyl = height - 2.0f * r;
+					if (rings % 2) ++rings;
+					used["height"] = height;
+				}
+				// Ring list: polar angle + vertical offset. A capsule duplicates
+				// the equator ring (top/bottom offsets) to form its cylinder.
+				std::vector<std::pair<float, float>> ringDefs;
+				for (int k = 0; k <= rings; ++k)
+				{
+					const float phi = kPi * (float)k / (float)rings;
+					if (cyl > 0.0f && k == rings / 2)
+					{
+						ringDefs.push_back({ phi, cyl * 0.5f });
+						ringDefs.push_back({ phi, -cyl * 0.5f });
+					}
+					else
+						ringDefs.push_back({ phi, cyl > 0.0f ? (k < rings / 2 ? cyl * 0.5f : -cyl * 0.5f) : 0.0f });
+				}
+				const int rowCount = (int)ringDefs.size();
+				for (int k = 0; k < rowCount; ++k)
+				{
+					const float phi = ringDefs[k].first, yoff = ringDefs[k].second;
+					for (int s = 0; s <= segs; ++s)
+					{
+						const math::Vector3 d = RingDir(s, segs);
+						const math::Vector3 n(d.x * sinf(phi), cosf(phi), d.z * sinf(phi));
+						g.Add(n * r + math::Vector3(0.0f, yoff, 0.0f), n, (float)s / segs, (float)k / (rowCount - 1));
+					}
+				}
+				for (int k = 0; k + 1 < rowCount; ++k)
+					for (int s = 0; s < segs; ++s)
+					{
+						const MeshIndexFormat a = (MeshIndexFormat)(k * (segs + 1) + s);
+						const MeshIndexFormat b = a + (MeshIndexFormat)(segs + 1);
+						if (k > 0) g.Tri(a, a + 1, b);                 // skip zero-area pole tris
+						if (k + 2 < rowCount) g.Tri(a + 1, b + 1, b);
+					}
+				used["radius"] = r; used["segments"] = segs; used["rings"] = rings;
+			}
+			else if (shape == "cylinder" || shape == "cone")
+			{
+				const bool cone = shape == "cone";
+				const float r = PositiveParam(p, "radius", 0.5f);
+				const float h = PositiveParam(p, "height", 1.0f);
+				const int segs = CountParam(p, "segments", 32, 3, 512);
+				const bool caps = p.value("caps", true);
+				const float y0 = -h * 0.5f, y1 = h * 0.5f;
+				// Side. Cone normals tilt up by the slope; its apex is one vertex
+				// per segment (averaged normal) so shading stays smooth.
+				const float slope = cone ? r / h : 0.0f;
+				for (int s = 0; s <= segs; ++s)
+				{
+					const math::Vector3 d = RingDir(s, segs);
+					math::Vector3 n(d.x, slope, d.z); n.Normalize();
+					g.Add(d * r + math::Vector3(0, y0, 0), n, (float)s / segs, 1.0f);
+					if (cone)
+					{
+						const math::Vector3 dm = RingDir(s, segs) * 0.5f + RingDir(s + 1, segs) * 0.5f;
+						math::Vector3 nm(dm.x, slope, dm.z); nm.Normalize();
+						g.Add(math::Vector3(0, y1, 0), nm, ((float)s + 0.5f) / segs, 0.0f);
+					}
+					else
+						g.Add(d * r + math::Vector3(0, y1, 0), n, (float)s / segs, 0.0f);
+				}
+				for (int s = 0; s < segs; ++s)
+				{
+					const MeshIndexFormat a = (MeshIndexFormat)(s * 2);
+					if (cone) g.Tri(a, a + 2, a + 1);
+					else g.Quad(a, a + 2, a + 3, a + 1);
+				}
+				auto cap = [&](float y, float ny, float capR)
+				{
+					const MeshIndexFormat c = g.Add(math::Vector3(0, y, 0), math::Vector3(0, ny, 0), 0.5f, 0.5f);
+					for (int s = 0; s <= segs; ++s)
+					{
+						const math::Vector3 d = RingDir(s, segs);
+						g.Add(d * capR + math::Vector3(0, y, 0), math::Vector3(0, ny, 0), 0.5f + d.x * 0.5f, 0.5f - d.z * ny * 0.5f);
+					}
+					for (int s = 0; s < segs; ++s)
+						g.Tri(c, c + 1 + s, c + 2 + s);
+				};
+				if (caps)
+				{
+					cap(y0, -1.0f, r);
+					if (!cone) cap(y1, 1.0f, r);
+				}
+				used["radius"] = r; used["height"] = h; used["segments"] = segs; used["caps"] = caps;
+			}
+			else if (shape == "torus")
+			{
+				const float R = PositiveParam(p, "radius", 0.5f);
+				const float tr = PositiveParam(p, "tubeRadius", 0.15f);
+				const int segs = CountParam(p, "segments", 48, 3, 512);
+				const int sides = CountParam(p, "sides", 24, 3, 512);
+				for (int s = 0; s <= segs; ++s)
+				{
+					const math::Vector3 d = RingDir(s, segs);
+					for (int k = 0; k <= sides; ++k)
+					{
+						const float phi = 2.0f * kPi * (float)k / sides;
+						const math::Vector3 n = d * cosf(phi) + math::Vector3(0, sinf(phi), 0);
+						g.Add(d * R + n * tr, n, (float)s / segs, (float)k / sides);
+					}
+				}
+				for (int s = 0; s < segs; ++s)
+					for (int k = 0; k < sides; ++k)
+					{
+						const MeshIndexFormat a = (MeshIndexFormat)(s * (sides + 1) + k);
+						const MeshIndexFormat b = a + (MeshIndexFormat)(sides + 1);
+						g.Quad(a, b, b + 1, a + 1);
+					}
+				used["radius"] = R; used["tubeRadius"] = tr; used["segments"] = segs; used["sides"] = sides;
+			}
+			else
+			{
+				throw ParamError("unknown shape '" + shape + "' (box, plane, sphere, capsule, cylinder, cone, torus)");
+			}
+
+			// Optional UV tiling.
+			float uvTile[2];
+			if (ReadFloats(p, "uvTiling", 2, uvTile))
+			{
+				for (auto& uv : g.uvs) { uv.x *= uvTile[0]; uv.y *= uvTile[1]; }
+				used["uvTiling"] = json::array({ uvTile[0], uvTile[1] });
+			}
+			OrientTriangles(g);
+			return used;
+		}
+
+		// ---- Asset references ----
+		//
+		// Assets are referenced the way scenes store them: "<FileSystem>.<path
+		// under its Data folder>" ("GameData.Materials/Rock.hmat",
+		// "EngineData.Materials/Default.hmat"). Tools also accept a project path
+		// (absolute, "Data/..." or Data-relative). Writes are only allowed inside
+		// the open project's Data folder.
+		struct AssetRef
+		{
+			fs::path absolute;
+			std::string ref;     // engine resource path
+			bool inProject = false;
+		};
+
+		bool ResolveAssetRef(const std::string& input, const char* requiredExt, bool forWrite, AssetRef& out, std::string& error)
+		{
+			IEditorContext* ctx = Ctx();
+			FileSystem* projectFs = ctx ? ctx->GetProjectFileSystem() : nullptr;
+			if (input.empty())
+			{
+				error = "empty asset path";
+				return false;
+			}
+
+			// "<FileSystem>.<rest>" form?
+			const size_t dot = input.find('.');
+			const size_t slash = input.find_first_of("/\\:");
+			if (dot != std::string::npos && dot > 0 && (slash == std::string::npos || dot < slash))
+			{
+				FileSystem* fsys = g_pEnv->GetResourceSystem().FindFileSystemByName(Utf8ToWide(input.substr(0, dot)));
+				if (fsys != nullptr)
+				{
+					const fs::path rest = fs::path(Utf8ToWide(input.substr(dot + 1)));
+					out.absolute = fs::weakly_canonical(fsys->GetLocalAbsoluteDataPath(rest));
+					out.ref = WideToUtf8(fsys->GetName()) + "." + rest.generic_string();
+					out.inProject = (fsys == projectFs);
+				}
+			}
+
+			if (out.ref.empty())
+			{
+				if (projectFs == nullptr)
+				{
+					error = "no project is open";
+					return false;
+				}
+				fs::path abs;
+				if (!ResolveProjectPath(input, abs, error))
+					return false;
+				const fs::path dataDir = fs::weakly_canonical(projectFs->GetDataDirectory());
+				const std::wstring d = dataDir.wstring(), a = abs.wstring();
+				if (a.size() <= d.size() || _wcsnicmp(a.c_str(), d.c_str(), d.size()) != 0)
+				{
+					error = "'" + input + "' is not inside the project's Data folder (" + dataDir.string() + ")";
+					return false;
+				}
+				out.absolute = abs;
+				out.ref = WideToUtf8(projectFs->GetName()) + "." + fs::relative(abs, dataDir).generic_string();
+				out.inProject = true;
+			}
+
+			if (requiredExt != nullptr && _wcsicmp(out.absolute.extension().c_str(), Utf8ToWide(requiredExt).c_str()) != 0)
+			{
+				if (!forWrite || out.absolute.has_extension())
+				{
+					error = "'" + input + "' must be a " + requiredExt + " file";
+					return false;
+				}
+				out.absolute.replace_extension(requiredExt);
+				out.ref += requiredExt;
+			}
+			if (forWrite && !out.inProject)
+			{
+				error = "'" + input + "' is outside the open project; only project assets can be written";
+				return false;
+			}
+			return true;
+		}
+
+		// Loose file, or inside a mounted asset package (EngineAssets.pkg).
+		bool AssetExists(const AssetRef& a)
+		{
+			std::error_code ec;
+			return fs::exists(a.absolute, ec) || g_pEnv->GetResourceSystem().DoesResourceExistAsAsset(a.absolute);
+		}
+
+		json AssetRefJson(const AssetRef& a)
+		{
+			return json{ {"ref", a.ref}, {"path", ProjectRelative(a.absolute)} };
+		}
+
+		// ---- Material properties ----
+		//
+		// The bridge's material vocabulary (flat keys; same names on create,
+		// edit and read). Graph materials compute their surface in the graph, so
+		// for them most of these do nothing visible.
+		const char* const kMaterialKeys[] = {
+			"diffuseColour", "emissiveColour", "metallic", "roughness", "smoothness", "transparent", "isWater",
+			"affectsGI", "emissiveAffectsGI", "receivesSnow", "cullMode", "rainDripIntensity", "materialModel",
+			"modelParams", "windSwayParams", "cullDistance", "textures",
+		};
+
+		struct TextureSlotName { const char* name; MaterialTexture slot; };
+		const TextureSlotName kTextureSlots[] = {
+			{ "albedo", MaterialTexture::Albedo }, { "normal", MaterialTexture::Normal },
+			{ "roughness", MaterialTexture::Roughness }, { "metallic", MaterialTexture::Metallic },
+			{ "height", MaterialTexture::Height }, { "emission", MaterialTexture::Emission },
+			{ "opacity", MaterialTexture::Opacity }, { "ambientOcclusion", MaterialTexture::AmbientOcclusion },
+		};
+
+		const char* CullModeName(CullingMode m)
+		{
+			switch (m)
+			{
+			case CullingMode::NoCulling: return "none";
+			case CullingMode::FrontFace: return "front";
+			default: return "back";
+			}
+		}
+
+		math::Vector4 ReadColourValue(const json& v, const char* key)
+		{
+			if (!IsNumericVector(v) || v.size() < 3 || v.size() > 4)
+				throw ParamError(std::string("'") + key + "' must be [r, g, b] or [r, g, b, a]");
+			return math::Vector4(v[0].get<float>(), v[1].get<float>(), v[2].get<float>(), v.size() == 4 ? v[3].get<float>() : 1.0f);
+		}
+
+		math::Vector4 ReadVec4Value(const json& v, const char* key)
+		{
+			if (!IsNumericVector(v) || v.size() != 4)
+				throw ParamError(std::string("'") + key + "' must be an array of 4 numbers");
+			return math::Vector4(v[0].get<float>(), v[1].get<float>(), v[2].get<float>(), v[3].get<float>());
+		}
+
+		// Validates everything first (throws ParamError, nothing applied), then
+		// applies. `params` may carry other, non-material keys listed in
+		// `ignoreKeys`.
+		void ApplyMaterialParams(Material& m, const json& params, std::initializer_list<const char*> ignoreKeys)
+		{
+			if (!params.is_object())
+				throw ParamError("material properties must be an object");
+
+			auto isIgnored = [&](const std::string& k)
+			{
+				for (const char* i : ignoreKeys) if (k == i) return true;
+				return false;
+			};
+			auto num = [&](const json& v, const char* key) -> float
+			{
+				if (!v.is_number()) throw ParamError(std::string("'") + key + "' must be a number");
+				return v.get<float>();
+			};
+			auto boolean = [&](const json& v, const char* key) -> bool
+			{
+				if (!v.is_boolean()) throw ParamError(std::string("'") + key + "' must be true or false");
+				return v.get<bool>();
+			};
+
+			// Pass 1: validate, and resolve textures.
+			std::vector<std::pair<MaterialTexture, std::shared_ptr<ITexture2D>>> textures;
+			for (auto it = params.begin(); it != params.end(); ++it)
+			{
+				const std::string& k = it.key();
+				if (isIgnored(k)) continue;
+				bool known = false;
+				for (const char* mk : kMaterialKeys) if (k == mk) known = true;
+				if (!known)
+				{
+					std::string list;
+					for (const char* mk : kMaterialKeys) list += (list.empty() ? "" : ", ") + std::string(mk);
+					throw ParamError("unknown material property '" + k + "' (valid: " + list + ")");
+				}
+				if (k == "textures")
+				{
+					if (!it->is_object()) throw ParamError("'textures' must be an object {slot: asset path or null}");
+					for (auto t = it->begin(); t != it->end(); ++t)
+					{
+						const TextureSlotName* slot = nullptr;
+						for (const auto& s : kTextureSlots) if (_stricmp(t.key().c_str(), s.name) == 0) slot = &s;
+						if (!slot) throw ParamError("unknown texture slot '" + t.key() + "' (albedo, normal, roughness, metallic, height, emission, opacity, ambientOcclusion)");
+						if (t->is_null()) { textures.push_back({ slot->slot, nullptr }); continue; }
+						if (!t->is_string()) throw ParamError("texture '" + t.key() + "' must be an asset path or null");
+						AssetRef ref;
+						std::string err;
+						if (!ResolveAssetRef(t->get<std::string>(), nullptr, false, ref, err)) throw ParamError("texture '" + t.key() + "': " + err);
+						if (!AssetExists(ref)) throw ParamError("texture '" + t.key() + "': no file at '" + ref.ref + "'");
+						auto tex = ITexture2D::Create(fs::path(Utf8ToWide(ref.ref)));
+						if (!tex) throw ParamError("texture '" + t.key() + "': '" + ref.ref + "' could not be loaded");
+						textures.push_back({ slot->slot, tex });
+					}
+				}
+				else if (k == "diffuseColour" || k == "emissiveColour") ReadColourValue(*it, k.c_str());
+				else if (k == "modelParams" || k == "windSwayParams") ReadVec4Value(*it, k.c_str());
+				else if (k == "transparent" || k == "isWater" || k == "affectsGI" || k == "emissiveAffectsGI" || k == "receivesSnow") boolean(*it, k.c_str());
+				else if (k == "cullMode")
+				{
+					const std::string v = it->is_string() ? it->get<std::string>() : std::string();
+					if (v != "back" && v != "front" && v != "none") throw ParamError("'cullMode' must be \"back\", \"front\" or \"none\" (two-sided)");
+				}
+				else if (k == "materialModel") { if (!it->is_number_integer()) throw ParamError("'materialModel' must be an integer"); }
+				else num(*it, k.c_str());
+			}
+
+			// Pass 2: apply.
+			for (auto it = params.begin(); it != params.end(); ++it)
+			{
+				const std::string& k = it.key();
+				if (isIgnored(k) || k == "textures") continue;
+				auto& pr = m._properties;
+				if (k == "diffuseColour") pr.diffuseColour = ReadColourValue(*it, "diffuseColour");
+				else if (k == "emissiveColour") pr.emissiveColour = ReadColourValue(*it, "emissiveColour");
+				else if (k == "metallic") pr.metallicFactor = it->get<float>();
+				else if (k == "roughness") pr.roughnessFactor = it->get<float>();
+				else if (k == "smoothness") pr.smoothness = it->get<float>();
+				else if (k == "rainDripIntensity") pr.rainDripIntensity = it->get<float>();
+				else if (k == "materialModel") pr.materialModel = it->get<int>();
+				else if (k == "modelParams") pr.modelParams = ReadVec4Value(*it, "modelParams");
+				else if (k == "windSwayParams") pr.windSwayParams = ReadVec4Value(*it, "windSwayParams");
+				else if (k == "isWater") pr.isWater = it->get<bool>() ? 1 : 0;
+				else if (k == "transparent")
+				{
+					pr.hasTransparency = it->get<bool>() ? 1 : 0;
+					m.SetBlendState(it->get<bool>() ? BlendState::Transparency : BlendState::Opaque);
+				}
+				else if (k == "affectsGI") m.SetAffectsGI(it->get<bool>());
+				else if (k == "emissiveAffectsGI") m.SetEmissiveAffectsGI(it->get<bool>());
+				else if (k == "receivesSnow") m.SetReceivesSnow(it->get<bool>());
+				else if (k == "cullDistance") m.SetCullDistance(it->get<float>());
+				else if (k == "cullMode")
+				{
+					const std::string v = it->get<std::string>();
+					m.SetCullMode(v == "none" ? CullingMode::NoCulling : v == "front" ? CullingMode::FrontFace : CullingMode::BackFace);
+				}
+			}
+			for (auto& t : textures)
+				m.SetTexture(t.first, t.second);
+			m.InvalidateGiGraphTintCache();
+		}
+
+		json MaterialJson(const Material& mc)
+		{
+			const Material& m = mc;
+			const auto& pr = m._properties;
+			auto v4 = [](const math::Vector4& v) { return json::array({ v.x, v.y, v.z, v.w }); };
+			json textures = json::object();
+			for (const auto& s : kTextureSlots)
+			{
+				const auto& tex = m.GetTexture(s.slot);
+				textures[s.name] = tex ? json(tex->GetFileSystemPath().generic_string()) : json(nullptr);
+			}
+			json out = json{
+				{"diffuseColour", v4(pr.diffuseColour)},
+				{"emissiveColour", v4(pr.emissiveColour)},
+				{"metallic", pr.metallicFactor},
+				{"roughness", pr.roughnessFactor},
+				{"smoothness", pr.smoothness},
+				{"transparent", pr.hasTransparency != 0},
+				{"isWater", pr.isWater != 0},
+				{"affectsGI", m.GetAffectsGI()},
+				{"emissiveAffectsGI", m.GetEmissiveAffectsGI()},
+				{"receivesSnow", m.GetReceivesSnow()},
+				{"cullMode", CullModeName(m.GetCullMode())},
+				{"rainDripIntensity", pr.rainDripIntensity},
+				{"materialModel", pr.materialModel},
+				{"modelParams", v4(pr.modelParams)},
+				{"windSwayParams", v4(pr.windSwayParams)},
+				{"cullDistance", m.GetCullDistance()},
+				{"textures", textures},
+			};
+			return out;
+		}
+
+		// Write `src` as a .hmat at `ref` and return the engine's shared copy
+		// of that asset. A copy already loaded (overwrite) is refreshed in place
+		// so every user sees the new values.
+		std::shared_ptr<Material> WriteMaterialAsset(const Material& src, const AssetRef& ref, std::string& error)
+		{
+			IEditorContext* ctx = Ctx();
+			FileSystem* projectFs = ctx ? ctx->GetProjectFileSystem() : nullptr;
+			if (!projectFs) { error = "no project is open"; return nullptr; }
+			std::error_code ec;
+			fs::create_directories(ref.absolute.parent_path(), ec); // MaterialLoader pops a dialog if the open fails
+
+			auto file = std::make_shared<Material>();
+			file->CopyFrom(src);
+			file->SetPaths(ref.absolute, projectFs);
+			file->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
+			file->Save();
+			if (!fs::exists(ref.absolute, ec))
+			{
+				error = "failed to write '" + ref.absolute.string() + "'";
+				return nullptr;
+			}
+			auto shared = Material::Create(fs::path(Utf8ToWide(ref.ref)));
+			if (!shared)
+			{
+				error = "wrote '" + ref.ref + "' but the engine could not load it back";
+				return nullptr;
+			}
+			if (shared.get() != &src)
+				shared->CopyFrom(src);
+			return shared;
+		}
+
 		struct FlagName { const char* name; EntityFlags flag; };
 		const FlagName kEditableFlags[] = {
 			{ "DoNotSave",         EntityFlags::DoNotSave },
@@ -2213,33 +2795,11 @@ namespace HexEngine
 					indices.push_back((MeshIndexFormat)v);
 				}
 
-				std::vector<math::Vector3> normals;
+				std::vector<math::Vector3> normals; // computed by BuildMeshEntity when omitted
 				if (p.contains("normals"))
 				{
 					if (!parseVec3s(p["normals"], normals) || normals.size() != positions.size())
 						return MakeError(id, ErrorCode::InvalidParams, "'normals' must match the vertex count");
-				}
-				else
-				{
-					// Area-weighted face-normal accumulation - the cross product
-					// magnitude is twice the triangle area, so summing
-					// unnormalised face normals weights by area.
-					normals.assign(positions.size(), math::Vector3(0.0f, 0.0f, 0.0f));
-					for (size_t i = 0; i + 2 < indices.size(); i += 3)
-					{
-						const math::Vector3& a = positions[indices[i]];
-						const math::Vector3& b = positions[indices[i + 1]];
-						const math::Vector3& c = positions[indices[i + 2]];
-						const math::Vector3 fn = (b - a).Cross(c - a);
-						normals[indices[i]]     += fn;
-						normals[indices[i + 1]] += fn;
-						normals[indices[i + 2]] += fn;
-					}
-					for (auto& n : normals)
-					{
-						const float len = n.Length();
-						n = (len > 0.00001f) ? (n / len) : math::Vector3(0.0f, 1.0f, 0.0f);
-					}
 				}
 
 				std::vector<math::Vector2> uvs;
@@ -2268,117 +2828,218 @@ namespace HexEngine
 						return MakeError(id, ErrorCode::InvalidParams, "'uvs' must match the vertex count");
 				}
 
-				Entity* parent = nullptr;
-				if (p.contains("parent") && !p["parent"].is_null())
-				{
-					json err;
-					parent = RequireEntity(id, scene.get(), p, "parent", false, err);
-					if (!parent) return err;
-				}
+				Geometry g;
+				g.positions = std::move(positions);
+				g.normals = std::move(normals);
+				g.uvs = std::move(uvs);
+				g.indices = std::move(indices);
+				return BuildMeshEntity(id, scene, p, g, json::object());
+			});
 
-				// --- assemble MeshVertex array (tangent = any axis orthogonal to
-				// the normal; Default.shader only needs it non-degenerate when no
-				// normal map is bound) ---
-				std::vector<MeshVertex> verts(positions.size());
-				math::Vector3 mn = positions[0];
-				math::Vector3 mx = positions[0];
-				for (size_t i = 0; i < positions.size(); ++i)
-				{
-					const math::Vector3& n = normals[i];
-					math::Vector3 axis = (fabsf(n.y) < 0.99f) ? math::Vector3(0.0f, 1.0f, 0.0f) : math::Vector3(1.0f, 0.0f, 0.0f);
-					math::Vector3 tangent = axis.Cross(n);
-					const float tl = tangent.Length();
-					tangent = (tl > 0.00001f) ? (tangent / tl) : math::Vector3(1.0f, 0.0f, 0.0f);
-					verts[i] = MeshVertex::Create(positions[i], n, tangent,
-						uvs.empty() ? 0.0f : uvs[i].x, uvs.empty() ? 0.0f : uvs[i].y);
-					verts[i]._bitangent = n.Cross(tangent);
-					mn = math::Vector3::Min(mn, positions[i]);
-					mx = math::Vector3::Max(mx, positions[i]);
-				}
+			// ---- Primitives, mesh assets, materials (C2) ----
 
-				// --- material: existing .hmat, or a Default.hmat copy; property
-				// overrides always apply to a private copy so a cached shared
-				// material is never mutated ---
-				std::shared_ptr<Material> material = std::make_shared<Material>();
-				material->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
-				const json matParams = p.value("material", json::object());
-				std::shared_ptr<Material> base;
-				if (matParams.contains("path") && matParams["path"].is_string())
-				{
-					base = Material::Create(matParams["path"].get<std::string>());
-					if (base == nullptr)
-						return MakeError(id, ErrorCode::NotAvailable, "material '" + matParams["path"].get<std::string>() + "' could not be loaded");
-				}
-				else
-				{
-					base = Material::Create("EngineData.Materials/Default.hmat");
-				}
-				if (base != nullptr)
-					material->CopyFrom(base);
-				auto readColour = [&](const char* key, math::Vector4& out)
-				{
-					if (matParams.contains(key) && matParams[key].is_array() && matParams[key].size() >= 3)
-					{
-						out = math::Vector4(
-							matParams[key][0].get<float>(), matParams[key][1].get<float>(), matParams[key][2].get<float>(),
-							matParams[key].size() >= 4 ? matParams[key][3].get<float>() : 1.0f);
-					}
+			Reg("create_primitive", W, Main, Batch, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				std::string shape = RequireString(p, "shape");
+				std::transform(shape.begin(), shape.end(), shape.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+				Geometry g;
+				const json used = GeneratePrimitive(shape, p, g);
+				return BuildMeshEntity(id, scene, p, g, json{ {"shape", shape}, {"shapeParams", used} });
+			});
+
+			Reg("save_mesh_asset", W, Main, Batch, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				json err;
+				Entity* e = RequireEntity(id, scene.get(), p, "entity", true, err);
+				if (!e) return err;
+				json out = EntityBrief(e);
+				std::string msg;
+				if (!SaveMeshAsset(e, p, out, msg))
+					return MakeError(id, ErrorCode::InvalidParams, msg);
+				out["note"] = "the entity now references the asset and saves with the scene; reuse the mesh elsewhere via its ref";
+				return MakeResult(id, out);
+			});
+
+			Reg("list_assets", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				struct TypeExt { const char* type; std::vector<const wchar_t*> exts; };
+				static const TypeExt kTypes[] = {
+					{ "mesh", { L".hmesh" } }, { "material", { L".hmat" } }, { "prefab", { L".hprefab" } },
+					{ "scene", { L".hscene" } }, { "texture", { L".png", L".dds", L".tga", L".jpg", L".jpeg", L".bmp", L".hdr" } },
 				};
-				readColour("diffuseColour", material->_properties.diffuseColour);
-				readColour("emissiveColour", material->_properties.emissiveColour);
-				if (matParams.contains("metallic"))   material->_properties.metallicFactor  = matParams["metallic"].get<float>();
-				if (matParams.contains("roughness"))  material->_properties.roughnessFactor = matParams["roughness"].get<float>();
-				if (matParams.contains("smoothness")) material->_properties.smoothness      = matParams["smoothness"].get<float>();
-				if (matParams.contains("affectsGI"))  material->SetAffectsGI(matParams["affectsGI"].get<bool>());
+				const std::string type = p.value("type", std::string("all"));
+				std::vector<const TypeExt*> wanted;
+				for (const auto& t : kTypes) if (type == "all" || type == t.type) wanted.push_back(&t);
+				if (wanted.empty()) throw ParamError("'type' must be mesh, material, prefab, scene, texture or all");
+				std::string filter = p.value("filter", std::string());
+				std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+				const size_t limit = (size_t)std::clamp(p.value("limit", 500), 1, 5000);
+				const std::string subdir = p.value("subdir", std::string());
 
-				// --- mesh + entity ---
-				auto mesh = std::make_shared<Mesh>(nullptr, name);
-				if (!mesh->CreateDynamicBuffers((uint32_t)verts.size(), (uint32_t)indices.size()) ||
-					!mesh->UpdateDynamicGeometry(verts, indices))
-					return MakeError(id, ErrorCode::Internal, "mesh buffer creation/upload failed");
+				IEditorContext* ctx = Ctx();
+				FileSystem* projectFs = ctx ? ctx->GetProjectFileSystem() : nullptr;
+				std::vector<FileSystem*> roots;
+				if (projectFs) roots.push_back(projectFs);
+				if (p.value("includeEngine", false))
+					for (FileSystem* f : g_pEnv->GetResourceSystem().GetFileSystems())
+						if (f && f != projectFs && !f->IsAsset()) roots.push_back(f);
+				if (roots.empty()) return MakeError(id, ErrorCode::NotAvailable, "no project is open");
 
-				dx::BoundingBox aabb;
-				dx::BoundingBox::CreateFromPoints(aabb,
-					DirectX::XMVectorSet(mn.x, mn.y, mn.z, 1.0f),
-					DirectX::XMVectorSet(mx.x, mx.y, mx.z, 1.0f));
-				dx::BoundingOrientedBox obb;
-				dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
-				mesh->SetAABB(aabb);
-				mesh->SetOBB(obb);
+				json list = json::array();
+				size_t matched = 0;
+				std::error_code ec;
+				for (FileSystem* f : roots)
+				{
+					const fs::path dataDir = f->GetDataDirectory();
+					const fs::path base = subdir.empty() ? dataDir : dataDir / fs::path(Utf8ToWide(subdir));
+					for (fs::recursive_directory_iterator it(base, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
+					{
+						std::error_code fec;
+						if (!it->is_regular_file(fec)) continue;
+						const std::wstring ext = it->path().extension().wstring();
+						const char* kind = nullptr;
+						for (const TypeExt* t : wanted)
+							for (const wchar_t* x : t->exts)
+								if (_wcsicmp(ext.c_str(), x) == 0) kind = t->type;
+						if (!kind) continue;
+						const std::string rel = fs::relative(it->path(), dataDir, fec).generic_string();
+						if (!filter.empty())
+						{
+							std::string low = rel;
+							std::transform(low.begin(), low.end(), low.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+							if (low.find(filter) == std::string::npos) continue;
+						}
+						++matched;
+						if (list.size() < limit)
+							list.push_back(json{ {"ref", WideToUtf8(f->GetName()) + "." + rel}, {"type", kind}, {"name", it->path().stem().string()} });
+					}
+					ec.clear();
+				}
+				return MakeResult(id, json{ {"matched", matched}, {"returned", list.size()}, {"truncated", matched > list.size()}, {"assets", list},
+					{"note", "Pass a ref (or a Data-relative path) to any tool taking an asset path."} });
+			});
 
-				math::Vector3 pos(0.0f, 0.0f, 0.0f);
-				ReadVec3(p, "position", pos);
-				math::Quaternion rot(0.0f, 0.0f, 0.0f, 1.0f);
-				ReadRotation(p, rot);
-				math::Vector3 scale(1.0f, 1.0f, 1.0f);
-				ReadVec3(p, "scale", scale);
+			// Material: by asset path, or the material an entity's mesh uses.
+			auto resolveMaterial = [this](int64_t id, const json& p, std::shared_ptr<Material>& mat, AssetRef& ref, StaticMeshComponent** smcOut, json& err) -> bool
+			{
+				if (p.contains("entity") && !p["entity"].is_null())
+				{
+					auto scene = PrimaryUserScene();
+					if (!scene) { err = NoScene(id); return false; }
+					Entity* e = RequireEntity(id, scene.get(), p, "entity", false, err);
+					if (!e) return false;
+					auto* smc = RequireMeshComponent(id, e, err);
+					if (!smc) return false;
+					if (smcOut) *smcOut = smc;
+					mat = smc->GetMaterial();
+					if (!mat) { err = MakeError(id, ErrorCode::NotAvailable, "'" + e->GetName() + "' has no material"); return false; }
+					const std::string fsPath = mat->GetFileSystemPath().generic_string();
+					std::string msg;
+					if (!fsPath.empty() && !ResolveAssetRef(fsPath, nullptr, false, ref, msg)) { err = MakeError(id, ErrorCode::NotAvailable, msg); return false; }
+					return true;
+				}
+				std::string msg;
+				if (!ResolveAssetRef(RequireString(p, "path"), ".hmat", false, ref, msg)) { err = MakeError(id, ErrorCode::InvalidParams, msg); return false; }
+				std::error_code ec;
+				if (!AssetExists(ref)) { err = MakeError(id, ErrorCode::NotAvailable, "no material at '" + ref.ref + "' (see list_assets type=material)"); return false; }
+				mat = Material::Create(fs::path(Utf8ToWide(ref.ref)));
+				if (!mat) { err = MakeError(id, ErrorCode::Internal, "'" + ref.ref + "' could not be loaded"); return false; }
+				return true;
+			};
 
-				Entity* e = scene->CreateEntity(name, pos, rot, scale);
-				if (e == nullptr)
-					return MakeError(id, ErrorCode::Internal, "Scene::CreateEntity returned null");
-				// The mesh has no backing asset file, so a scene save would
-				// serialise an empty mesh reference. Default the entity to
-				// DoNotSave; pass persistent=true to opt into saving anyway.
-				if (!p.value("persistent", false))
-					e->SetFlag(EntityFlags::DoNotSave);
-				if (parent)
-					e->SetParent(parent);
+			Reg("get_material", R, Main, Batch, [resolveMaterial](int64_t id, const json& p) -> json {
+				std::shared_ptr<Material> mat;
+				AssetRef ref;
+				json err;
+				if (!resolveMaterial(id, p, mat, ref, nullptr, err)) return err;
+				json out = json{
+					{"ref", ref.ref.empty() ? json(nullptr) : json(ref.ref)},
+					{"asset", !ref.ref.empty()},
+					{"projectAsset", ref.inProject},
+					{"isGraph", mat->_hasGraph || mat->_hasGraphInstance},
+					{"properties", MaterialJson(*mat)},
+				};
+				if (mat->_hasGraph || mat->_hasGraphInstance)
+					out["note"] = "graph material: its surface comes from the material graph, so most properties have little visible effect";
+				return MakeResult(id, out);
+			});
 
-				auto* meshComponent = e->AddComponent<StaticMeshComponent>();
-				if (meshComponent == nullptr)
-					return MakeError(id, ErrorCode::Internal, "failed to add StaticMeshComponent");
-				meshComponent->SetMesh(mesh);
-				meshComponent->SetMaterial(material);
-				MarkPvsDirty();
-
-				json result = EntityBrief(e);
-				result["vertexCount"] = verts.size();
-				result["indexCount"] = indices.size();
-				result["triangleCount"] = indices.size() / 3;
-				result["aabbMin"] = json::array({ mn.x, mn.y, mn.z });
-				result["aabbMax"] = json::array({ mx.x, mx.y, mx.z });
-				result["note"] = "mesh is in-memory only (no .hmesh asset); entity defaults to DoNotSave unless persistent=true";
+			Reg("create_material", W, Main, Batch, [](int64_t id, const json& p) -> json {
+				AssetRef out;
+				std::string err;
+				if (!ResolveAssetRef(RequireString(p, "path"), ".hmat", true, out, err))
+					return MakeError(id, ErrorCode::InvalidParams, err);
+				std::error_code ec;
+				if (fs::exists(out.absolute, ec) && !p.value("overwrite", false))
+					return MakeError(id, ErrorCode::InvalidParams, "'" + out.ref + "' already exists (pass overwrite: true, or change it with edit_material)");
+				AssetRef baseRef;
+				if (!ResolveAssetRef(p.value("base", std::string("EngineData.Materials/Default.hmat")), ".hmat", false, baseRef, err))
+					return MakeError(id, ErrorCode::InvalidParams, "base: " + err);
+				auto base = Material::Create(fs::path(Utf8ToWide(baseRef.ref)));
+				if (!base) return MakeError(id, ErrorCode::NotAvailable, "base material '" + baseRef.ref + "' could not be loaded");
+				auto src = std::make_shared<Material>();
+				src->CopyFrom(base);
+				ApplyMaterialParams(*src, p, { "path", "base", "overwrite" });
+				auto shared = WriteMaterialAsset(*src, out, err);
+				if (!shared) return MakeError(id, ErrorCode::Internal, err);
+				json result = AssetRefJson(out);
+				result["base"] = baseRef.ref;
+				result["properties"] = MaterialJson(*shared);
 				return MakeResult(id, result);
+			});
+
+			Reg("edit_material", W, Main, Batch, [this, resolveMaterial](int64_t id, const json& p) -> json {
+				std::shared_ptr<Material> mat;
+				AssetRef ref;
+				json err;
+				if (!resolveMaterial(id, p, mat, ref, nullptr, err)) return err;
+				if (!ref.ref.empty() && !ref.inProject)
+					return MakeError(id, ErrorCode::InvalidParams, "'" + ref.ref + "' is an engine asset shared by everything that uses it; make a project copy with create_material {base: \"" + ref.ref + "\"} and assign_material that instead");
+				ApplyMaterialParams(*mat, p, { "path", "entity", "save" });
+				MarkPvsDirty();
+				bool saved = false;
+				if (!ref.ref.empty() && p.value("save", true))
+				{
+					std::error_code ec;
+					const auto before = fs::exists(ref.absolute, ec) ? fs::last_write_time(ref.absolute, ec) : fs::file_time_type{};
+					if (!mat->GetLoader()) mat->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
+					mat->Save();
+					saved = fs::exists(ref.absolute, ec) && fs::last_write_time(ref.absolute, ec) != before;
+					if (!saved) return MakeError(id, ErrorCode::Internal, "edited in memory, but writing '" + ref.ref + "' failed (see engine logs)");
+				}
+				json out = json{ {"ref", ref.ref.empty() ? json(nullptr) : json(ref.ref)}, {"saved", saved}, {"properties", MaterialJson(*mat)} };
+				out["note"] = ref.ref.empty()
+					? "private (unsaved) material: changes are in memory; save_mesh_asset writes it as a .hmat"
+					: "asset edit: every entity using this material changes. Not part of undo.";
+				return MakeResult(id, out);
+			});
+
+			Reg("assign_material", W, Main, Batch, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				json err;
+				Entity* e = RequireEntity(id, scene.get(), p, "entity", true, err);
+				if (!e) return err;
+				auto* smc = RequireMeshComponent(id, e, err);
+				if (!smc) return err;
+				AssetRef ref;
+				std::string msg;
+				if (!ResolveAssetRef(RequireString(p, "material"), ".hmat", false, ref, msg))
+					return MakeError(id, ErrorCode::InvalidParams, msg);
+				if (!AssetExists(ref))
+					return MakeError(id, ErrorCode::NotAvailable, "no material at '" + ref.ref + "' (see list_assets type=material)");
+				auto mat = Material::Create(fs::path(Utf8ToWide(ref.ref)));
+				if (!mat) return MakeError(id, ErrorCode::Internal, "'" + ref.ref + "' could not be loaded");
+				const auto previous = smc->GetMaterial();
+				// Same record path as set_component_field: undo + prefab override.
+				IEditorContext* ctx = Ctx();
+				if (ctx) ctx->BeginComponentEdit(e);
+				smc->SetMaterial(mat);
+				if (ctx) ctx->EndComponentEdit(e);
+				MarkPvsDirty();
+				return MakeResult(id, json{ {"entity", EntityBrief(e)}, {"material", ref.ref},
+					{"previous", previous && !previous->GetFileSystemPath().empty() ? json(previous->GetFileSystemPath().generic_string()) : json(nullptr)} });
 			});
 
 			// ---- Undo / redo / save ----
@@ -2608,15 +3269,312 @@ namespace HexEngine
 			});
 
 			// Methods whose edits go through the editor's undo history (each call
-			// or batch = one step). create_mesh_entity is excluded: its mesh has
-			// no asset, so an undo/redo round-trip couldn't rebuild it.
+			// or batch = one step). The mesh builders only record an entity once
+			// it is backed by a .hmesh (saveAs): an in-memory mesh couldn't be
+			// rebuilt by redo.
 			for (const char* name : { "create_entity", "add_component", "remove_component", "rename_entity", "set_parent",
 				"set_entity_flags", "clone_entity", "set_entity_transform", "set_component_field", "delete_entity",
-				"instantiate_prefab", "create_prefab" })
+				"instantiate_prefab", "create_prefab", "create_mesh_entity", "create_primitive", "assign_material" })
 				_methods[name].undoable = true;
 		}
 
 	private:
+		// ---- C2: mesh entities, mesh + material assets (main thread only) ----
+
+		// The material a new mesh entity gets. `material` may be omitted (the
+		// engine Default), an asset path, or an object {path?, saveAs?,
+		// overwrite?, ...properties}. Properties make a private copy of the base;
+		// saveAs writes that copy as a project .hmat and uses the shared asset.
+		std::shared_ptr<Material> ResolveMeshMaterial(const json& p, json& info)
+		{
+			const json mp = p.contains("material") ? p["material"] : json();
+			std::string basePath = "EngineData.Materials/Default.hmat";
+			json props = json::object();
+			std::string saveAs;
+			bool overwrite = false;
+			if (mp.is_string())
+				basePath = mp.get<std::string>();
+			else if (mp.is_object())
+			{
+				for (auto it = mp.begin(); it != mp.end(); ++it)
+				{
+					if (it.key() == "path") { if (!it->is_string()) throw ParamError("'material.path' must be a string"); basePath = it->get<std::string>(); }
+					else if (it.key() == "saveAs") { if (!it->is_string()) throw ParamError("'material.saveAs' must be a string"); saveAs = it->get<std::string>(); }
+					else if (it.key() == "overwrite") overwrite = it->get<bool>();
+					else props[it.key()] = *it;
+				}
+			}
+			else if (!mp.is_null())
+				throw ParamError("'material' must be an asset path or an object");
+
+			AssetRef baseRef;
+			std::string err;
+			if (!ResolveAssetRef(basePath, ".hmat", false, baseRef, err)) throw ParamError("material: " + err);
+			std::error_code ec;
+			if (!AssetExists(baseRef)) throw ParamError("material: no .hmat at '" + baseRef.ref + "' (see list_assets type=material)");
+			auto base = Material::Create(fs::path(Utf8ToWide(baseRef.ref)));
+			if (!base) throw ParamError("material '" + baseRef.ref + "' could not be loaded");
+
+			if (props.empty() && saveAs.empty())
+			{
+				info = json{ {"ref", baseRef.ref}, {"shared", true} };
+				return base;
+			}
+
+			auto copy = std::make_shared<Material>();
+			copy->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmat"));
+			copy->CopyFrom(base);
+			ApplyMaterialParams(*copy, props, {});
+			if (saveAs.empty())
+			{
+				info = json{ {"ref", nullptr}, {"base", baseRef.ref}, {"shared", false},
+					{"note", "private material copy (not an asset); save_mesh_asset writes it as a .hmat, or pass material.saveAs"} };
+				return copy;
+			}
+			AssetRef out;
+			if (!ResolveAssetRef(saveAs, ".hmat", true, out, err)) throw ParamError("material.saveAs: " + err);
+			if (fs::exists(out.absolute, ec) && !overwrite)
+				throw ParamError("material.saveAs: '" + out.ref + "' already exists (set material.overwrite: true, or reference it with material.path)");
+			auto shared = WriteMaterialAsset(*copy, out, err);
+			if (!shared) throw std::runtime_error(err);
+			info = AssetRefJson(out);
+			info["shared"] = true;
+			info["written"] = true;
+			return shared;
+		}
+
+		// Write an entity's bridge-built mesh as a .hmesh (and its private
+		// material as a .hmat). Afterwards the entity is an ordinary
+		// asset-backed mesh: it saves with the scene and works in prefabs.
+		bool SaveMeshAsset(Entity* e, const json& p, json& out, std::string& err)
+		{
+			IEditorContext* ctx = Ctx();
+			FileSystem* projectFs = ctx ? ctx->GetProjectFileSystem() : nullptr;
+			if (!projectFs) { err = "no project is open"; return false; }
+			auto* smc = e->GetComponent<StaticMeshComponent>();
+			auto mesh = smc ? smc->GetMesh() : nullptr;
+			if (!mesh) { err = "'" + e->GetName() + "' has no StaticMeshComponent mesh"; return false; }
+			if (!mesh->IsDynamicMesh())
+			{
+				err = "'" + e->GetName() + "' already uses the mesh asset '" + mesh->GetFileSystemPath().generic_string() + "'; only bridge-built meshes (create_primitive / create_mesh_entity) are saved this way";
+				return false;
+			}
+			if (mesh->GetVertices().empty() || mesh->GetIndices().empty()) { err = "the mesh has no geometry"; return false; }
+
+			const bool overwrite = p.value("overwrite", false);
+			std::string requested = p.value("path", std::string());
+			if (requested.empty()) requested = "Meshes/" + e->GetName() + ".hmesh";
+			AssetRef ref;
+			if (!ResolveAssetRef(requested, ".hmesh", true, ref, err)) return false;
+			std::error_code ec;
+			if (fs::exists(ref.absolute, ec) && !overwrite && ref.absolute != fs::path(mesh->GetAbsolutePath()))
+			{
+				err = "'" + ref.ref + "' already exists (pass overwrite: true)";
+				return false;
+			}
+
+			// A private material has no file for the mesh/scene to reference:
+			// write it next to the mesh (or at materialPath).
+			auto material = smc->GetMaterial();
+			if (material && material->GetFileSystemPath().empty())
+			{
+				std::string mreq = p.value("materialPath", std::string());
+				if (mreq.empty()) { fs::path mp = ref.absolute; mp.replace_extension(".hmat"); mreq = mp.string(); }
+				AssetRef mref;
+				if (!ResolveAssetRef(mreq, ".hmat", true, mref, err)) return false;
+				if (fs::exists(mref.absolute, ec) && !overwrite)
+				{
+					err = "'" + mref.ref + "' already exists (pass overwrite: true or a different materialPath)";
+					return false;
+				}
+				auto shared = WriteMaterialAsset(*material, mref, err);
+				if (!shared) return false;
+				smc->SetMaterial(shared);
+				material = shared;
+				out["material"] = AssetRefJson(mref);
+				out["materialWritten"] = true;
+			}
+			else if (material)
+				out["material"] = json{ {"ref", material->GetFileSystemPath().generic_string()} };
+
+			mesh->SetMaterial(material);
+			mesh->SetLoader(g_pEnv->GetResourceSystem().FindResourceLoaderForExtension(".hmesh"));
+			mesh->SetPaths(ref.absolute, projectFs);
+			fs::create_directories(ref.absolute.parent_path(), ec);
+			mesh->Save();
+			if (!fs::exists(ref.absolute, ec)) { err = "failed to write '" + ref.absolute.string() + "' (see engine logs)"; return false; }
+
+			const bool wasDoNotSave = e->HasFlag(EntityFlags::DoNotSave);
+			e->ClearFlags(EntityFlags::DoNotSave);
+			out["mesh"] = AssetRefJson(ref);
+			out["clearedDoNotSave"] = wasDoNotSave;
+			return true;
+		}
+
+		// Shared by create_mesh_entity and create_primitive: `g` holds positions
+		// + indices (normals / uvs optional, validated by the caller).
+		json BuildMeshEntity(int64_t id, const std::shared_ptr<Scene>& scene, const json& p, Geometry& g, json extra)
+		{
+			const std::string name = RequireString(p, "name");
+			if (p.contains("saveAs") && !p["saveAs"].is_null() && !p["saveAs"].is_string())
+				throw ParamError("'saveAs' must be a .hmesh path");
+
+			if (g.normals.size() != g.positions.size())
+			{
+				// Area-weighted face-normal accumulation (the cross product's
+				// length is twice the triangle area).
+				g.normals.assign(g.positions.size(), math::Vector3(0.0f, 0.0f, 0.0f));
+				for (size_t i = 0; i + 2 < g.indices.size(); i += 3)
+				{
+					const auto a = g.indices[i], b = g.indices[i + 1], c = g.indices[i + 2];
+					const math::Vector3 fn = (g.positions[b] - g.positions[a]).Cross(g.positions[c] - g.positions[a]);
+					g.normals[a] += fn; g.normals[b] += fn; g.normals[c] += fn;
+				}
+				for (auto& n : g.normals)
+				{
+					const float len = n.Length();
+					n = (len > 0.00001f) ? (n / len) : math::Vector3(0.0f, 1.0f, 0.0f);
+				}
+			}
+
+			Entity* parent = nullptr;
+			if (p.contains("parent") && !p["parent"].is_null())
+			{
+				json err;
+				parent = RequireEntity(id, scene.get(), p, "parent", false, err);
+				if (!parent) return err;
+			}
+
+			json matInfo;
+			auto material = ResolveMeshMaterial(p, matInfo);
+
+			// Tangents: from UVs when there are any (so normal maps work),
+			// otherwise any axis orthogonal to the normal.
+			const bool hasUvs = g.uvs.size() == g.positions.size();
+			std::vector<math::Vector3> tan(g.positions.size(), math::Vector3(0, 0, 0)), bit(g.positions.size(), math::Vector3(0, 0, 0));
+			if (hasUvs)
+			{
+				for (size_t i = 0; i + 2 < g.indices.size(); i += 3)
+				{
+					const auto a = g.indices[i], b = g.indices[i + 1], c = g.indices[i + 2];
+					const math::Vector3 e1 = g.positions[b] - g.positions[a], e2 = g.positions[c] - g.positions[a];
+					const math::Vector2 d1 = g.uvs[b] - g.uvs[a], d2 = g.uvs[c] - g.uvs[a];
+					const float det = d1.x * d2.y - d2.x * d1.y;
+					if (fabsf(det) < 1e-12f) continue;
+					const float r = 1.0f / det;
+					const math::Vector3 t = (e1 * d2.y - e2 * d1.y) * r;
+					const math::Vector3 bt = (e2 * d1.x - e1 * d2.x) * r;
+					for (auto v : { a, b, c }) { tan[v] += t; bit[v] += bt; }
+				}
+			}
+
+			std::vector<MeshVertex> verts(g.positions.size());
+			math::Vector3 mn = g.positions[0], mx = g.positions[0];
+			for (size_t i = 0; i < g.positions.size(); ++i)
+			{
+				const math::Vector3& n = g.normals[i];
+				math::Vector3 t = tan[i] - n * n.Dot(tan[i]); // Gram-Schmidt
+				float tl = t.Length();
+				if (tl < 1e-6f)
+				{
+					const math::Vector3 axis = (fabsf(n.y) < 0.99f) ? math::Vector3(0, 1, 0) : math::Vector3(1, 0, 0);
+					t = axis.Cross(n);
+					tl = t.Length();
+				}
+				t = (tl > 1e-6f) ? t / tl : math::Vector3(1, 0, 0);
+				math::Vector3 b = n.Cross(t);
+				if (hasUvs && b.Dot(bit[i]) < 0.0f) b = -b;
+				verts[i] = MeshVertex::Create(g.positions[i], n, t, hasUvs ? g.uvs[i].x : 0.0f, hasUvs ? g.uvs[i].y : 0.0f);
+				verts[i]._bitangent = b;
+				mn = math::Vector3::Min(mn, g.positions[i]);
+				mx = math::Vector3::Max(mx, g.positions[i]);
+			}
+
+			auto mesh = std::make_shared<Mesh>(nullptr, name);
+			if (!mesh->CreateDynamicBuffers((uint32_t)verts.size(), (uint32_t)g.indices.size()) ||
+				!mesh->UpdateDynamicGeometry(verts, g.indices))
+				return MakeError(id, ErrorCode::Internal, "mesh buffer creation/upload failed");
+			dx::BoundingBox aabb;
+			dx::BoundingBox::CreateFromPoints(aabb, DirectX::XMVectorSet(mn.x, mn.y, mn.z, 1.0f), DirectX::XMVectorSet(mx.x, mx.y, mx.z, 1.0f));
+			dx::BoundingOrientedBox obb;
+			dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
+			mesh->SetAABB(aabb);
+			mesh->SetOBB(obb);
+			mesh->SetMaterial(material);
+
+			math::Vector3 pos(0.0f, 0.0f, 0.0f);
+			ReadVec3(p, "position", pos);
+			math::Quaternion rot(0.0f, 0.0f, 0.0f, 1.0f);
+			ReadRotation(p, rot);
+			math::Vector3 scale(1.0f, 1.0f, 1.0f);
+			ReadVec3(p, "scale", scale);
+
+			Entity* e = scene->CreateEntity(name, pos, rot, scale);
+			if (e == nullptr)
+				return MakeError(id, ErrorCode::Internal, "Scene::CreateEntity returned null");
+			// Without a mesh asset a scene save would write an empty mesh
+			// reference, so in-memory meshes default to DoNotSave.
+			if (!p.value("persistent", false))
+				e->SetFlag(EntityFlags::DoNotSave);
+			if (parent)
+				e->SetParent(parent);
+			auto* meshComponent = e->AddComponent<StaticMeshComponent>();
+			if (meshComponent == nullptr)
+				return MakeError(id, ErrorCode::Internal, "failed to add StaticMeshComponent");
+			meshComponent->SetMesh(mesh);
+			meshComponent->SetMaterial(material);
+			MarkPvsDirty();
+
+			json result = EntityBrief(e);
+			for (auto it = extra.begin(); it != extra.end(); ++it) result[it.key()] = *it;
+			result["vertexCount"] = verts.size();
+			result["triangleCount"] = g.indices.size() / 3;
+			result["aabbMin"] = json::array({ mn.x, mn.y, mn.z });
+			result["aabbMax"] = json::array({ mx.x, mx.y, mx.z });
+			result["material"] = matInfo;
+
+			bool assetBacked = false;
+			if (p.contains("saveAs") && !p["saveAs"].is_null())
+			{
+				json saveParams = json{ {"path", p["saveAs"]}, {"overwrite", p.value("overwrite", false)} };
+				if (p.contains("materialPath")) saveParams["materialPath"] = p["materialPath"];
+				json saved;
+				std::string err;
+				if (!SaveMeshAsset(e, saveParams, saved, err))
+				{
+					result["saveError"] = err;
+					result["note"] = "entity created, but saving the mesh asset failed; it stays in-memory (DoNotSave). Retry with save_mesh_asset.";
+				}
+				else
+				{
+					assetBacked = true;
+					result["asset"] = saved;
+					if (saved.contains("material"))
+						result["material"] = saved["material"]; // the saved copy, not the pre-save private one
+				}
+			}
+			if (assetBacked)
+			{
+				// Recorded after the save so redo rebuilds it from the asset.
+				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityCreated(e);
+				result["undoable"] = true;
+			}
+			else if (!result.contains("note"))
+			{
+				result["undoable"] = false;
+				result["note"] = "in-memory mesh: not saved with the scene and not undoable until save_mesh_asset (or pass saveAs)";
+			}
+			return MakeResult(id, result);
+		}
+
+		StaticMeshComponent* RequireMeshComponent(int64_t id, Entity* e, json& err)
+		{
+			auto* smc = e->GetComponent<StaticMeshComponent>();
+			if (!smc)
+				err = MakeError(id, ErrorCode::InvalidParams, "'" + e->GetName() + "' has no StaticMeshComponent");
+			return smc;
+		}
+
 		struct LogEntry { uint64_t seq; std::string text; LogLevel level; };
 
 		BridgeServer    _server;

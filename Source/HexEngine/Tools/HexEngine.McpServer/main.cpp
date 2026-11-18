@@ -108,6 +108,42 @@ namespace
 		return props;
 	}
 
+	// Material vocabulary shared by create_material / edit_material / mesh tools.
+	json MaterialProps(json props)
+	{
+		props["diffuseColour"] = ColourSchema("Base colour [r,g,b] or [r,g,b,a], 0..1.");
+		props["emissiveColour"] = ColourSchema("Emission [r,g,b] or [r,g,b,a]; values > 1 glow.");
+		props["metallic"] = Num("0..1.");
+		props["roughness"] = Num("0..1.");
+		props["smoothness"] = Num("0..1.");
+		props["transparent"] = Bool("Alpha-blended (uses diffuseColour alpha / the opacity texture).");
+		props["isWater"] = Bool("Water shading.");
+		props["affectsGI"] = Bool("Contributes to voxel GI (default true).");
+		props["emissiveAffectsGI"] = Bool("Emission lights the GI (default true).");
+		props["receivesSnow"] = Bool("Snow accumulates on it (up-facing ground).");
+		props["cullMode"] = json{ {"type", "string"}, {"enum", json::array({ "back", "front", "none" })}, {"description", "\"none\" = two-sided."} };
+		props["rainDripIntensity"] = Num("0..1 wet-droplet effect when it rains.");
+		props["materialModel"] = Int("Shading model index (0 = standard).");
+		props["modelParams"] = NumArray(4, "Shading-model parameters.");
+		props["windSwayParams"] = NumArray(4, "Vegetation wind sway [bend, flutter, charHeight, mode].");
+		props["cullDistance"] = Num("Stop drawing beyond this distance (0 = never).");
+		props["textures"] = json{ {"type", "object"}, {"additionalProperties", json{ {"type", json::array({ "string", "null" })} }},
+			{"description", "{slot: texture asset path or null to clear}. Slots: albedo, normal, roughness, metallic, height, emission, opacity, ambientOcclusion."} };
+		return props;
+	}
+
+	// `material` on mesh-creating tools.
+	json MeshMaterialSchema()
+	{
+		json obj = Obj(MaterialProps(json{
+			{"path", Str("Base .hmat (default EngineData.Materials/Default.hmat). With no properties the entity uses this shared asset directly.")},
+			{"saveAs", Str("Write the result as a NEW project .hmat and use it (otherwise property overrides make a private, unsaved copy).")},
+			{"overwrite", Bool("Allow saveAs to replace an existing file.")},
+		}));
+		return json{ {"description", "Material: an asset path (ref like \"GameData.Materials/Rock.hmat\" or a Data-relative path), or an object with a base path and property overrides."},
+			{"anyOf", json::array({ json{ {"type", "string"} }, obj })} };
+	}
+
 	struct LiveTool { std::string method; std::string description; json schema; };
 
 	std::vector<LiveTool> LiveTools()
@@ -153,6 +189,12 @@ namespace
 			Obj(json{ {"filter", Str("Name substring.")} }) });
 		v.push_back({ "list_prefabs", "List prefab assets (.hprefab) in the open project. Paths are project-relative.",
 			Obj(json{ {"subdir", Str("Folder under the project's Data folder to search (default: all of Data).")} }) });
+		v.push_back({ "list_assets", "List project assets by type (mesh .hmesh, material .hmat, prefab, scene, texture). Each result's ref (e.g. \"GameData.Materials/Rock.hmat\") is what scenes store and what every asset parameter accepts.",
+			Obj(json{ {"type", json{ {"type", "string"}, {"enum", json::array({ "all", "mesh", "material", "prefab", "scene", "texture" })}, {"description", "Asset type (default all)."} }},
+				{"subdir", Str("Folder under Data to search (default all of Data).")}, {"filter", Str("Case-insensitive substring of the path.")},
+				{"limit", Int("Max results (default 500, max 5000).")}, {"includeEngine", Bool("Also list engine assets (EngineData...), e.g. its materials (default false).")} }) });
+		v.push_back({ "get_material", "Read a material's properties and texture slots, by asset path or by the entity whose mesh uses it.",
+			Obj(json{ {"path", Str("Material asset path/ref.")}, {"entity", EntityRefSchema("Or: read the material this entity's StaticMeshComponent uses.")} }) });
 		v.push_back({ "prefab_info", "Is this entity a prefab instance? Source prefab, instance root, out-of-date state and the list of overridden properties.",
 			Obj(json{ {"entity", EntityRefSchema()} }, { "entity" }) });
 
@@ -195,7 +237,48 @@ namespace
 				{"persistent", Bool("Save with the scene (default false).")} }), { "entity", "newName" }) });
 		v.push_back({ "select_entity", w("Select an entity in the editor (the editor also frames the camera on it), or clear the selection."),
 			Obj(json{ {"entity", EntityRefSchema()}, {"clear", Bool("Clear the selection instead.")} }) });
-		v.push_back({ "create_mesh_entity", w("Create an entity with an in-memory procedural mesh. Front faces are COUNTER-clockwise seen from outside. Normals are computed if omitted."),
+		const char* SAVEAS = "Also write the mesh as a project .hmesh (e.g. \"Meshes/Crate.hmesh\") so it saves with the scene, works in prefabs and is undoable. A private material is written beside it (or at materialPath).";
+		v.push_back({ "create_primitive", w("Create a mesh entity from a built-in shape, centred on its origin (plane at y=0 facing +Y): box/cube, plane/quad, sphere, capsule, cylinder, cone, torus. Smooth normals, UVs and tangents included. Without saveAs the mesh is in-memory (DoNotSave, not undoable) until hex_save_mesh_asset."),
+			Obj(TransformProps(json{
+				{"name", Str("Entity name.")},
+				{"shape", json{ {"type", "string"}, {"enum", json::array({ "box", "cube", "plane", "quad", "sphere", "capsule", "cylinder", "cone", "torus" })} }},
+				{"size", json{ {"description", "box: [x,y,z] or one number; plane: [x,z] or one number (default 1)."}, {"anyOf", json::array({ json{ {"type", "number"} }, json{ {"type", "array"}, {"items", json{ {"type", "number"} }} } })} }},
+				{"radius", Num("sphere/capsule/cylinder/cone radius; torus ring radius (default 0.5).")},
+				{"height", Num("cylinder/cone height (default 1); capsule TOTAL height incl. caps, >= 2*radius (default 2).")},
+				{"tubeRadius", Num("torus tube radius (default 0.15).")},
+				{"segments", Int("Around the Y axis (default 32; torus 48).")},
+				{"rings", Int("sphere/capsule latitude rings (default 16).")},
+				{"sides", Int("torus tube sides (default 24).")},
+				{"subdivisions", Int("plane grid subdivisions per side (default 1).")},
+				{"caps", Bool("cylinder/cone end caps (default true).")},
+				{"uvTiling", NumArray(2, "Multiply UVs by [u, v].")},
+				{"parent", EntityRefSchema("Optional parent entity.")},
+				{"material", MeshMaterialSchema()},
+				{"saveAs", Str(SAVEAS)},
+				{"materialPath", Str("Where saveAs writes a private material (default next to the mesh).")},
+				{"overwrite", Bool("Allow saveAs to replace existing files.")},
+				{"persistent", Bool("Save the entity with the scene even WITHOUT a mesh asset (rarely useful: the mesh reference would be empty).")},
+			}), { "name", "shape" }) });
+		v.push_back({ "save_mesh_asset", w("Write an entity's bridge-built mesh (create_primitive / create_mesh_entity) as a project .hmesh - plus its private material as a .hmat - so it saves with the scene, can go into prefabs and be reused. Clears DoNotSave."),
+			Obj(json{ {"entity", EntityRefSchema()},
+				{"path", Str("Output .hmesh (default \"Meshes/<entity name>.hmesh\").")},
+				{"materialPath", Str("Where a private material is written (default next to the mesh).")},
+				{"overwrite", Bool("Allow replacing existing files (default false).")} }, { "entity" }) });
+		v.push_back({ "create_material", w("Create a project material (.hmat) from a base material plus property/texture overrides. Returns its ref."),
+			Obj(MaterialProps(json{
+				{"path", Str("Output path, e.g. \"Materials/Rock.hmat\".")},
+				{"base", Str("Material to start from (default EngineData.Materials/Default.hmat).")},
+				{"overwrite", Bool("Allow replacing an existing file.")},
+			}), { "path" }) });
+		v.push_back({ "edit_material", w("Change a project material's properties/textures and save it (every entity using it changes; not part of undo). With entity: edits the material that entity uses (an engine material is refused - copy it with create_material first)."),
+			Obj(MaterialProps(json{
+				{"path", Str("Material asset path/ref.")},
+				{"entity", EntityRefSchema("Or: the entity whose material to edit.")},
+				{"save", Bool("Write the .hmat (default true).")},
+			})) });
+		v.push_back({ "assign_material", w("Give an entity's StaticMeshComponent a material asset. Undoable; tracked as a prefab override on instances."),
+			Obj(json{ {"entity", EntityRefSchema()}, {"material", Str("Material asset path/ref (see hex_list_assets type=material).")} }, { "entity", "material" }) });
+		v.push_back({ "create_mesh_entity", w("Create an entity with a procedural mesh from raw vertices/indices. Front faces are COUNTER-clockwise seen from outside. Normals are computed if omitted; tangents come from the UVs. In-memory until saveAs / hex_save_mesh_asset."),
 			Obj(TransformProps(json{
 				{"name", Str("Entity name.")},
 				{"vertices", json{ {"type", "array"}, {"description", "[[x,y,z],...] or flat [x,y,z,...] (local space)."} }},
@@ -203,13 +286,11 @@ namespace
 				{"normals", json{ {"type", "array"}, {"description", "Optional, same layout/count as vertices."} }},
 				{"uvs", json{ {"type", "array"}, {"description", "Optional [[u,v],...] or flat."} }},
 				{"parent", EntityRefSchema("Optional parent entity.")},
-				{"persistent", Bool("Save with the scene (default false; the mesh has no asset file).")},
-				{"material", Obj(json{
-					{"path", Str("Existing .hmat to copy (default EngineData.Materials/Default.hmat).")},
-					{"diffuseColour", ColourSchema("[r,g,b] or [r,g,b,a], 0..1.")},
-					{"emissiveColour", ColourSchema("[r,g,b] or [r,g,b,a]; values > 1 glow.")},
-					{"metallic", Num("0..1")}, {"roughness", Num("0..1")}, {"smoothness", Num("0..1")},
-					{"affectsGI", Bool("Contribute to voxel GI.")} })},
+				{"persistent", Bool("Save the entity with the scene even WITHOUT a mesh asset (rarely useful).")},
+				{"material", MeshMaterialSchema()},
+				{"saveAs", Str(SAVEAS)},
+				{"materialPath", Str("Where saveAs writes a private material (default next to the mesh).")},
+				{"overwrite", Bool("Allow saveAs to replace existing files.")},
 			}), { "name", "vertices", "indices" }) });
 		v.push_back({ "undo", w("Undo the last editor history steps (shared with the editor's Ctrl+Z). Every bridge call or batch that edits entities is ONE step. Not batchable."),
 			Obj(json{ {"steps", Int("How many steps (default 1, max 100).")} }) });

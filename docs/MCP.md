@@ -128,6 +128,8 @@ Read (always available):
 | `hex_list_console_commands` | Console command names (run them with `exec_console`). |
 | `hex_list_prefabs` | Prefab assets in the open project (project-relative paths). |
 | `hex_prefab_info` | Instance link, root, out-of-date state and overridden properties of an entity. |
+| `hex_list_assets` | Project assets by `type` (mesh, material, prefab, scene, texture), `filter`, `subdir`; `includeEngine` adds EngineData. Returns each asset's `ref`. |
+| `hex_get_material` | A material's properties and texture slots, by `path` or by the `entity` using it. |
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
 | `hex_list_loaded_resources`, `hex_validate_current_scene`, `hex_list_projects` | |
 | `hex_find_missing_references` | `NotImplemented` (follow-up). |
@@ -142,7 +144,12 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_set_cvars` | `{values: {name: value}}` with typed values; every name/type validated before anything changes; reports before/value and `clamped` + `requested` when the var's range clamped it. |
 | `hex_set_entity_transform` | position / rotation quat / eulerDegrees / scale. Cameras are driven through their own angles. |
 | `hex_rename_entity`, `hex_set_parent`, `hex_set_entity_flags`, `hex_delete_entity`, `hex_clone_entity`, `hex_select_entity` | |
-| `hex_create_mesh_entity` | In-memory procedural mesh + material copy (DoNotSave unless `persistent`). |
+| `hex_create_primitive` | box/cube, plane/quad, sphere, capsule, cylinder, cone, torus with size/radius/height/segments, normals, UVs (`uvTiling`) and UV-derived tangents. Same `material` / `saveAs` options as below. |
+| `hex_create_mesh_entity` | Mesh from raw vertices/indices (normals computed if omitted, tangents from UVs). |
+| `hex_save_mesh_asset` | Write a bridge-built mesh as a project `.hmesh` (and its private material as a `.hmat`); the entity becomes an ordinary asset-backed mesh that saves with the scene and works in prefabs. Clears DoNotSave. |
+| `hex_create_material` | New project `.hmat` from a `base` plus property/texture overrides. |
+| `hex_edit_material` | Change a project material (every user updates) and save it; by `path` or the `entity` using it. Engine materials are refused. Not part of undo. |
+| `hex_assign_material` | Set an entity's mesh material to an asset; undoable and tracked as a prefab override. |
 | `hex_exec_console` | Console command / cvar set. |
 | `hex_capture_frame` | Waits `waitFrames` (default 2) so recent edits are rendered, then saves the main camera image. |
 | `hex_open_project` | Async; poll `hex_get_editor_status`. |
@@ -161,10 +168,35 @@ Mutating bridge methods record into the editor's undo history through
 user can Ctrl+Z an agent's work and — because recording also drives prefab
 override tracking — edits to prefab instances show up as overrides and survive
 instance sync. Each request (single call or whole `batch`) is grouped into one
-undo step. `create_mesh_entity` is not recorded (its in-memory mesh can't be
-rebuilt by redo). Asset paths for the prefab tools are resolved inside the open
-project (absolute, `Data/...`, or relative to `Data`); paths outside the project
-are refused.
+undo step. A mesh built by `create_primitive` / `create_mesh_entity` is only
+recorded when it is backed by a `.hmesh` (`saveAs`): an in-memory mesh can't be
+rebuilt by redo. Material asset edits (`edit_material`) are not part of undo.
+
+### Meshes, materials and asset references
+
+Assets are referenced the way scenes store them: `<FileSystem>.<path under its
+Data folder>`, e.g. `GameData.Materials/Rock.hmat` or
+`EngineData.Materials/Default.hmat` (`hex_list_assets` returns these as `ref`).
+Every asset parameter also accepts a project path (absolute, `Data/...`, or
+relative to `Data`). Writes are only allowed inside the open project's `Data`
+folder.
+
+Mesh tools take `material` as an asset path (the entity uses that shared asset)
+or an object `{path, saveAs, overwrite, ...properties}`: property overrides make a
+private copy, which `saveAs` writes as a new `.hmat`. Without `saveAs`, the mesh
+lives in memory (DoNotSave) until `hex_save_mesh_asset` writes it, together with
+a private material. The material vocabulary is the same everywhere
+(`create_material`, `edit_material`, `get_material`, mesh `material`):
+`diffuseColour`, `emissiveColour`, `metallic`, `roughness`, `smoothness`,
+`transparent`, `isWater`, `affectsGI`, `emissiveAffectsGI`, `receivesSnow`,
+`cullMode` (`back`/`front`/`none`), `rainDripIntensity`, `materialModel`,
+`modelParams`, `windSwayParams`, `cullDistance`, and `textures` (`albedo`,
+`normal`, `roughness`, `metallic`, `height`, `emission`, `opacity`,
+`ambientOcclusion`: asset path or null). Graph materials compute their surface
+in the graph, so these properties mostly don't show on them.
+
+Generated geometry follows the engine's measured convention: front faces wind
+counter-clockwise seen from outside (`(b-a)x(c-a)` points along the normal).
 
 ### Entity references
 
@@ -276,6 +308,6 @@ Serialize/Deserialize stay the source of truth — metadata is purely additive.
 ## Not supported yet
 
 - New / open / switch scenes (only saving is supported).
-- Mesh / material asset creation, primitives, model import.
+- Model import (FBX/glTF), material graphs, texture creation.
 - Play mode control, input injection, game build / hot reload.
 - Arbitrary shell/command execution.
