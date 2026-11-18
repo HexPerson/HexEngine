@@ -128,5 +128,17 @@ namespace HexEngine
 		virtual bool StartPlayMode(std::string& error) { error = "not supported by this host"; return false; }
 		virtual bool StopPlayMode(std::string& error) { error = "not supported by this host"; return false; }
 		virtual bool IsPlayModeActive() { return false; }
+
+		// Game module: the project's Code/ C++ game DLL. BuildGameModule may run on
+		// a worker thread (it blocks for the whole MSBuild run; output goes to
+		// <project>/Build/GameBuild.log); ReloadGameModule is main-thread only and
+		// restarts play if it was running.
+		virtual bool BuildGameModule(std::string& error) { error = "not supported by this host"; return false; }
+		virtual bool ReloadGameModule(std::string& error) { error = "not supported by this host"; return false; }
+		virtual bool IsGameModuleLoaded() { return false; }
+		// The editor's code watcher rebuilds + reloads by itself ~0.4 s after a
+		// Code/ file changes; agents driving builds explicitly can turn that off.
+		virtual void SetGameAutoReload(bool enabled) { (void)enabled; }
+		virtual bool GetGameAutoReload() { return false; }
 	};
 }

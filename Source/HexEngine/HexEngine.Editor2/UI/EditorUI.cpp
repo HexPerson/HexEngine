@@ -2568,4 +2568,39 @@ namespace HexEditor
 	{
 		return _integrator.GetState() == GameTestState::Started;
 	}
+
+	bool EditorUI::BuildGameModule(std::string& error)
+	{
+		if (GetProjectFolderPath().empty())
+		{
+			error = "no project is open";
+			return false;
+		}
+		return _integrator.BuildGameExclusive(error);
+	}
+
+	bool EditorUI::ReloadGameModule(std::string& error)
+	{
+		if (IsPrefabStageActive())
+		{
+			error = "close the prefab stage before reloading the game";
+			return false;
+		}
+		return _integrator.ReloadBuiltGame(error);
+	}
+
+	bool EditorUI::IsGameModuleLoaded()
+	{
+		return _integrator.IsGameLoaded();
+	}
+
+	void EditorUI::SetGameAutoReload(bool enabled)
+	{
+		_integrator.SetAutoReloadEnabled(enabled);
+	}
+
+	bool EditorUI::GetGameAutoReload()
+	{
+		return _integrator.IsAutoReloadEnabled();
+	}
 }

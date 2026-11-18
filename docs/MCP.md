@@ -137,6 +137,8 @@ Read (always available):
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
 | `hex_validate_current_scene` | Problems to fix, sorted error > warning > info with a `code` and the entity: NaN / zero-scale transforms, entities below `killY`, missing or unsaved (in-memory) mesh/material assets on saved entities, double-spawned duplicates (same mesh, position, rotation), out-of-date prefab instances, no camera / lights / PlayerStart, and with `groundCheck` floating top-level meshes. |
 | `hex_find_missing_references` | The asset-reference subset of the above. |
+| `hex_list_game_sources` / `hex_read_game_source` | The project's C++ game code under `Code/` (sources, headers, `.vcxproj`/`.sln`), whether the game DLL is loaded and whether auto-reload is on. |
+| `hex_get_build_status` | Latest `build_game`: running / succeeded / failed, duration, compiler errors (file relative to `Code/`, line, column, code, message), warnings, reload result. `waitSeconds` blocks until it finishes. |
 | `hex_list_loaded_resources`, `hex_list_projects` | |
 
 Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
@@ -165,6 +167,10 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_create_prefab` | Save an entity hierarchy as a new `.hprefab`; by default the original is replaced by a linked instance. |
 | `hex_apply_prefab_instance` / `hex_revert_prefab_instance` / `hex_update_prefab_instance` | Instance ↔ asset sync, same as the inspector buttons. |
 | `hex_open_prefab_stage` / `hex_save_prefab_stage` / `hex_close_prefab_stage` | Prefab authoring: while the stage is open, every entity/component tool edits the prefab. |
+| `hex_write_game_source` | Create/replace a C/C++ file under `Code/` (never build-output folders); new files are added to the owning `.vcxproj`. |
+| `hex_set_game_auto_reload` | The editor's own watcher rebuilds + reloads ~0.4 s after any `Code/` change (blocking the editor while MSBuild runs). Agents editing several files should turn it off and call `build_game` once. |
+| `hex_build_game` | MSBuild of the game project on a background thread (the editor keeps rendering), exclusive with the watcher's reloads; then, by default, swaps in the new DLL on the main thread (play restarts if it was running). Returns parsed compiler errors; polls via `get_build_status` past `waitSeconds`. |
+| `hex_reload_game` | Load the already-built `Build/Game.dll`. |
 | `hex_play` / `hex_stop` | The scene view's Run / Stop. Play needs the project's built `Build/Game.dll` (it refuses rather than starting a build); stop restores the scene to its pre-play state. |
 | `hex_set_simulation` | Play mode: `paused`, `timeScale` (0..100). Paused = no fixed ticks / physics and zero gameplay delta time; rendering, UI and input keep running. Resets when play stops, so edit mode is never frozen. |
 | `hex_step_simulation` | Play mode: pause and advance exactly N fixed ticks (1/`cl_simulationRate` s each), then return. |
@@ -319,7 +325,7 @@ Serialize/Deserialize stay the source of truth — metadata is purely additive.
 
 - New / open / switch scenes (only saving is supported).
 - Model import (FBX/glTF), material graphs, texture creation.
-- Game build / hot reload through the bridge (play needs an already built `Build/Game.dll`).
+- Script-based game logic (Phase E2: scripting plugin, in progress separately).
 - Arbitrary shell/command execution.
 
 ### Play mode notes

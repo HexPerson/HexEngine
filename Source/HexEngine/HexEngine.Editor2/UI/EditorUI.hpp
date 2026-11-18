@@ -91,6 +91,11 @@ public:
 		virtual bool StartPlayMode(std::string& error) override;
 		virtual bool StopPlayMode(std::string& error) override;
 		virtual bool IsPlayModeActive() override;
+		virtual bool BuildGameModule(std::string& error) override;
+		virtual bool ReloadGameModule(std::string& error) override;
+		virtual bool IsGameModuleLoaded() override;
+		virtual void SetGameAutoReload(bool enabled) override;
+		virtual bool GetGameAutoReload() override;
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 

@@ -203,7 +203,11 @@ namespace HexEditor
 					}
 				}
 
-				LOG_CRIT("Game code build failed with exit code %d. See '%S'", exitCode, logPath.wstring().c_str());
+				// A compile error is routine, not critical: LOG_CRIT pops a modal
+				// "Critical Error" box that stalls whatever thread built (the main
+				// thread for watcher reloads, the bridge's build thread for agents).
+				// The errors are already in the log/console above and in GameBuild.log.
+				LOG_WARN("Game code build failed with exit code %d. See '%S'", exitCode, logPath.wstring().c_str());
 				return false;
 			}
 
@@ -222,7 +226,7 @@ namespace HexEditor
 		bool shouldReload = false;
 		{
 			std::scoped_lock lock(_reloadMutex);
-			if (_reloadRequested && !_isReloading && (std::chrono::steady_clock::now() - _lastCodeChange) >= GameReloadDebounce)
+			if (_autoReloadEnabled && _reloadRequested && !_isReloading && (std::chrono::steady_clock::now() - _lastCodeChange) >= GameReloadDebounce)
 			{
 				_reloadRequested = false;
 				_isReloading = true;
@@ -881,6 +885,65 @@ namespace HexEditor
 		if (wasStarted)
 			return RunGame();
 
+		return true;
+	}
+
+	bool GameIntegrator::BuildGameExclusive(std::string& error)
+	{
+		const auto buildStart = std::chrono::steady_clock::now();
+		{
+			std::scoped_lock lock(_reloadMutex);
+			if (_isReloading)
+			{
+				error = "a game build or hot reload is already running";
+				return false;
+			}
+			_isReloading = true;
+		}
+
+		const bool ok = BuildGame(_lastBuildProjectFileName);
+
+		{
+			std::scoped_lock lock(_reloadMutex);
+			_isReloading = false;
+			// Code changes the watcher queued before this build started are in it;
+			// don't rebuild for them again.
+			if (_reloadRequested && _lastCodeChange <= buildStart)
+				_reloadRequested = false;
+		}
+
+		if (!ok)
+			error = "the game build failed (see Build/GameBuild.log)";
+		return ok;
+	}
+
+	bool GameIntegrator::ReloadBuiltGame(std::string& error)
+	{
+		{
+			std::scoped_lock lock(_reloadMutex);
+			if (_isReloading)
+			{
+				error = "a game build or hot reload is running";
+				return false;
+			}
+		}
+
+		const bool wasStarted = (_state == GameTestState::Started);
+		if ((_gameDll != nullptr || _gameExtension != nullptr) && !UnloadGame())
+		{
+			error = "unloading the previous game module failed";
+			return false;
+		}
+		if (!LoadGame())
+		{
+			error = "loading Build/Game.dll failed (see engine logs)";
+			return false;
+		}
+		if (wasStarted && !RunGame())
+		{
+			error = "the new game module loaded, but play mode did not restart";
+			return false;
+		}
 		return true;
 	}
 

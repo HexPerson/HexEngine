@@ -87,6 +87,22 @@ namespace HexEditor
 		/** @brief Returns the current game integration state. */
 		GameTestState GetState() const;
 
+		// --- Driven by the MCP editor bridge (agent builds) ---------------------
+		/**
+		 * @brief Builds the game project into Build/Game.dll. Safe to call from a
+		 *        worker thread (the editor keeps rendering): the build is exclusive
+		 *        with the code watcher's auto hot reload, and a reload the watcher
+		 *        queued for changes this build already covers is dropped.
+		 */
+		bool BuildGameExclusive(std::string& error);
+		/** @brief Main thread: swaps in the freshly built Build/Game.dll (stops
+		 *         play, unloads, loads, restarts play if it was running). */
+		bool ReloadBuiltGame(std::string& error);
+		bool IsGameLoaded() const { return _gameDll != nullptr && _gameExtension != nullptr; }
+		/** @brief Turns the code watcher's automatic rebuild + reload on/off. */
+		void SetAutoReloadEnabled(bool enabled) { _autoReloadEnabled = enabled; }
+		bool IsAutoReloadEnabled() const { return _autoReloadEnabled; }
+
 		/** @brief Tracks temporary entities created during play mode. */
 		virtual void OnAddEntity(HexEngine::Entity* entity) override;
 		/** @brief Removes tracked temporary entities when deleted. */
@@ -128,6 +144,7 @@ namespace HexEditor
 		fs::path _buildProjectPath;
 		std::wstring _lastBuildProjectFileName;
 		bool _isWatchingCode = false;
+		std::atomic<bool> _autoReloadEnabled{ true };
 		bool _reloadRequested = false;
 		bool _isReloading = false;
 		uint64_t _reloadGeneration = 0;

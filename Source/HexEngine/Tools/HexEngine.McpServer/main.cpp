@@ -238,6 +238,11 @@ namespace
 				{"quality", Int("JPEG quality 10..100 (default 85).")},
 				{"waitFrames", Int("Frames to render before grabbing (default 8 after a camera move so temporal effects settle, else 2).")},
 				{"restore", Bool("Put the camera back afterwards (default true).")} }) });
+		v.push_back({ "list_game_sources", "The project's C++ game code (Code/ folder): source/header files, the .vcxproj/.sln, whether the game DLL is loaded and whether the editor auto-rebuilds on changes.", Obj(json::object()) });
+		v.push_back({ "read_game_source", "Read a game source file (path relative to the project's Code folder).",
+			Obj(json{ {"path", Str("e.g. \"Wickwood/Wickwood.cpp\".")} }, { "path" }) });
+		v.push_back({ "get_build_status", "State of the latest build_game: running / succeeded / failed, duration, compiler errors (file, line, column, code, message), warnings, whether the new DLL was reloaded.",
+			Obj(json{ {"waitSeconds", Int("Wait up to this long (0..110) for a running build to finish (default 0).")} }) });
 		v.push_back({ "prefab_info", "Is this entity a prefab instance? Source prefab, instance root, out-of-date state and the list of overridden properties.",
 			Obj(json{ {"entity", EntityRefSchema()} }, { "entity" }) });
 
@@ -369,6 +374,15 @@ namespace
 		v.push_back({ "save_prefab_stage", w("Save the open prefab stage to its asset. Not batchable."), Obj(json::object()) });
 		v.push_back({ "close_prefab_stage", w("Close the prefab stage and return to the level scene. Not batchable."),
 			Obj(json{ {"save", Bool("true = save changes first, false = discard.")} }, { "save" }) });
+		v.push_back({ "write_game_source", w("Write (create or replace) a C/C++ file in the project's Code folder. New files are added to the game's .vcxproj. Then build_game. While auto-reload is on (set_game_auto_reload) and the game is loaded, the editor rebuilds by itself ~0.4 s after a change."),
+			Obj(json{ {"path", Str("Path relative to Code/, e.g. \"Wickwood/Enemy.cpp\".")}, {"content", Str("The whole file text.")},
+				{"overwrite", Bool("Replace an existing file (default true).")}, {"addToProject", Bool("Add a NEW file to the owning .vcxproj (default true).")} }, { "path", "content" }) });
+		v.push_back({ "set_game_auto_reload", w("Turn the editor's automatic rebuild + reload on Code/ changes on or off. Turn it off while editing several files, then build_game once."),
+			Obj(json{ {"enabled", Bool("true = editor rebuilds on file changes (default behaviour).")} }, { "enabled" }) });
+		v.push_back({ "build_game", w("Build the project's C++ game (MSBuild) into Build/Game.dll in the background - the editor keeps running - and by default hot-reload it (play mode restarts if it was running). Returns compiler errors with file/line. Waits up to waitSeconds; if still building, poll get_build_status. Not batchable."),
+			Obj(json{ {"reload", Bool("Swap in the new DLL after a successful build (default true).")},
+				{"waitSeconds", Int("Wait up to this long (0..110, default 100) before returning.")} }) });
+		v.push_back({ "reload_game", w("Load the already-built Build/Game.dll into the editor (unload the old one first; play restarts if it was running). Not batchable."), Obj(json::object()) });
 		v.push_back({ "play", w("Enter play mode (the scene view's Run): loads the project's Build/Game.dll and starts the game. Refuses if the game DLL isn't built. hex_stop restores the scene to its pre-play state. Not batchable."),
 			Obj(json{ {"waitFrames", Int("Frames to let the game run before returning (default 5).")} }) });
 		v.push_back({ "stop", w("Leave play mode; the scene returns to exactly its pre-play state. Not batchable."), Obj(json::object()) });

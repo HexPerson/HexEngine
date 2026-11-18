@@ -69,6 +69,8 @@
 #include <future>
 #include <mutex>
 #include <queue>
+#include <regex>
+#include <condition_variable>
 #include <set>
 #include <random>
 #include <stdexcept>
@@ -1733,6 +1735,166 @@ namespace HexEngine
 			return std::string();
 		}
 
+		// ---- Game code (E1) ----
+
+		fs::path GameCodeDir()
+		{
+			IEditorContext* ctx = Ctx();
+			const std::string folder = ctx ? ctx->GetProjectFolderPath() : std::string();
+			return folder.empty() ? fs::path() : fs::weakly_canonical(fs::path(folder) / "Code");
+		}
+
+		bool IsBuildOutputDir(const std::wstring& name)
+		{
+			static const wchar_t* kSkip[] = { L"x64", L"x86", L"Win32", L".vs", L"Debug", L"Release", L"obj", L"bin", L"HotReload" };
+			for (const wchar_t* s : kSkip) if (_wcsicmp(name.c_str(), s) == 0) return true;
+			return false;
+		}
+
+		enum class SourceKind { None, Compile, Include };
+		SourceKind SourceKindOf(const fs::path& p)
+		{
+			const std::wstring e = p.extension().wstring();
+			for (const wchar_t* x : { L".cpp", L".cc", L".cxx", L".c" }) if (_wcsicmp(e.c_str(), x) == 0) return SourceKind::Compile;
+			for (const wchar_t* x : { L".h", L".hpp", L".hxx", L".inl" }) if (_wcsicmp(e.c_str(), x) == 0) return SourceKind::Include;
+			return SourceKind::None;
+		}
+
+		// A path under the project's Code/ folder (absolute, "Code/...", or
+		// relative to Code/). Never into build-output folders.
+		bool ResolveGameSourcePath(const std::string& input, fs::path& out, std::string& err)
+		{
+			const fs::path code = GameCodeDir();
+			if (code.empty()) { err = "no project is open"; return false; }
+			fs::path p = fs::path(Utf8ToWide(input));
+			if (!p.is_absolute())
+			{
+				const auto first = p.begin() != p.end() ? p.begin()->wstring() : std::wstring();
+				p = (_wcsicmp(first.c_str(), L"Code") == 0) ? code.parent_path() / p : code / p;
+			}
+			p = fs::weakly_canonical(p);
+			const std::wstring c = code.wstring(), s = p.wstring();
+			if (s.size() <= c.size() || _wcsnicmp(s.c_str(), c.c_str(), c.size()) != 0 || (s[c.size()] != L'\\' && s[c.size()] != L'/'))
+			{
+				err = "'" + input + "' is not inside the project's Code folder (" + code.string() + ")";
+				return false;
+			}
+			for (const auto& part : fs::relative(p, code))
+				if (IsBuildOutputDir(part.wstring())) { err = "'" + input + "' is inside a build-output folder"; return false; }
+			out = p;
+			return true;
+		}
+
+		std::string CodeRelative(const fs::path& p)
+		{
+			std::error_code ec;
+			const fs::path rel = fs::relative(p, GameCodeDir(), ec);
+			return ec || rel.empty() ? p.string() : rel.generic_string();
+		}
+
+		// The .vcxproj that owns `file`: the nearest one walking up from its
+		// folder to Code/, else the first under Code/.
+		fs::path OwningVcxproj(const fs::path& file)
+		{
+			const fs::path code = GameCodeDir();
+			std::error_code ec;
+			for (fs::path dir = file.parent_path(); !dir.empty(); dir = dir.parent_path())
+			{
+				for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+					if (_wcsicmp(it->path().extension().c_str(), L".vcxproj") == 0) return it->path();
+				if (_wcsicmp(dir.wstring().c_str(), code.wstring().c_str()) == 0 || dir == dir.root_path()) break;
+			}
+			for (fs::recursive_directory_iterator it(code, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
+				if (_wcsicmp(it->path().extension().c_str(), L".vcxproj") == 0) return it->path();
+			return {};
+		}
+
+		// Adds `file` to the project as ClCompile / ClInclude unless it is already
+		// listed. Text-level edit next to existing items of the same kind.
+		bool AddToVcxproj(const fs::path& vcxproj, const fs::path& file, bool& added, std::string& err)
+		{
+			added = false;
+			const SourceKind kind = SourceKindOf(file);
+			if (kind == SourceKind::None) return true;
+			std::ifstream in(vcxproj, std::ios::binary);
+			if (!in) { err = "cannot read " + vcxproj.string(); return false; }
+			std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+			in.close();
+			const std::string nl = text.find("\r\n") != std::string::npos ? "\r\n" : "\n";
+			std::string rel = fs::relative(file, vcxproj.parent_path()).string();
+			std::replace(rel.begin(), rel.end(), '/', '\\');
+			auto lower = [](std::string s) { std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); }); return s; };
+			if (lower(text).find(lower("Include=\"" + rel + "\"")) != std::string::npos) return true;
+
+			const std::string tag = kind == SourceKind::Compile ? "ClCompile" : "ClInclude";
+			const std::string item = "<" + tag + " Include=\"" + rel + "\" />";
+			const size_t at = text.find("<" + tag + " Include=");
+			if (at != std::string::npos)
+			{
+				const size_t lineStart = text.rfind('\n', at);
+				const std::string indent = text.substr(lineStart == std::string::npos ? 0 : lineStart + 1, at - (lineStart == std::string::npos ? 0 : lineStart + 1));
+				text.insert(lineStart == std::string::npos ? 0 : lineStart + 1, indent + item + nl);
+			}
+			else
+			{
+				const size_t end = text.rfind("</Project>");
+				if (end == std::string::npos) { err = "unexpected project file format: " + vcxproj.string(); return false; }
+				text.insert(end, "  <ItemGroup>" + nl + "    " + item + nl + "  </ItemGroup>" + nl);
+			}
+			std::ofstream out(vcxproj, std::ios::binary | std::ios::trunc);
+			if (!out) { err = "cannot write " + vcxproj.string(); return false; }
+			out << text;
+			added = true;
+			return true;
+		}
+
+		// MSBuild/cl/link diagnostics from Build/GameBuild.log.
+		struct BuildDiagnostics { json errors = json::array(); json warnings = json::array(); size_t errorCount = 0, warningCount = 0; std::vector<std::string> tail; };
+
+		BuildDiagnostics ParseBuildLog(const fs::path& log)
+		{
+			BuildDiagnostics d;
+			std::ifstream in(log, std::ios::binary);
+			std::string line;
+			std::set<std::string> seen;
+			// file(line[,col]): error|warning CODE: message [project]
+			static const std::regex kFileDiag(R"(^\s*(.+?)\((\d+)(?:,(\d+))?\)\s*:\s*(fatal error|error|warning)\s+([A-Za-z]+\d+)\s*:\s*(.*?)(?:\s+\[[^\]]*\])?\s*$)");
+			// tool or file: error|warning CODE: message [project]  (link, MSBuild)
+			static const std::regex kToolDiag(R"(^\s*(.+?)\s*:\s*(fatal error|error|warning)\s+([A-Za-z]+\d+)\s*:\s*(.*?)(?:\s+\[[^\]]*\])?\s*$)");
+			const fs::path code = GameCodeDir();
+			while (std::getline(in, line))
+			{
+				if (!line.empty() && line.back() == '\r') line.pop_back();
+				for (char& ch : line) if ((unsigned char)ch >= 0x80) ch = '?';
+				d.tail.push_back(line);
+				if (d.tail.size() > 40) d.tail.erase(d.tail.begin());
+				std::smatch m;
+				json diag;
+				bool isError = false;
+				if (std::regex_match(line, m, kFileDiag))
+				{
+					std::string file = m[1].str();
+					std::error_code ec;
+					const fs::path rel = fs::relative(fs::path(file), code, ec);
+					if (!ec && !rel.empty() && rel.native()[0] != L'.') file = rel.generic_string();
+					isError = m[4].str() != "warning";
+					diag = json{ {"file", file}, {"line", std::stoi(m[2].str())}, {"code", m[5].str()}, {"message", m[6].str()} };
+					if (m[3].matched) diag["column"] = std::stoi(m[3].str());
+				}
+				else if (std::regex_match(line, m, kToolDiag))
+				{
+					isError = m[2].str() != "warning";
+					diag = json{ {"source", m[1].str()}, {"code", m[3].str()}, {"message", m[4].str()} };
+				}
+				else
+					continue;
+				if (!seen.insert(diag.dump()).second) continue; // MSBuild repeats some lines
+				if (isError) { ++d.errorCount; if (d.errors.size() < 50) d.errors.push_back(diag); }
+				else { ++d.warningCount; if (d.warnings.size() < 20) d.warnings.push_back(diag); }
+			}
+			return d;
+		}
+
 		struct FlagName { const char* name; EntityFlags flag; };
 		const FlagName kEditableFlags[] = {
 			{ "DoNotSave",         EntityFlags::DoNotSave },
@@ -1975,6 +2137,7 @@ namespace HexEngine
 			if (g_pEnv)
 				g_pEnv->GetLogFile().RemoveListener(this);
 			_mainThread.Shutdown();
+			if (_build.thread.joinable()) _build.thread.join(); // waits for a running MSBuild
 			_server.Stop();
 			RemoveSessionFile();
 			_started = false;
@@ -4142,6 +4305,165 @@ namespace HexEngine
 				return MakeResult(id, r);
 			});
 
+			// ---- Game code: sources, build, reload (E1) ----
+
+			Reg("list_game_sources", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				const fs::path code = GameCodeDir();
+				if (code.empty()) return MakeError(id, ErrorCode::NotAvailable, "no project is open");
+				json files = json::array(), projects = json::array();
+				std::error_code ec;
+				for (fs::recursive_directory_iterator it(code, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
+				{
+					if (it->is_directory(ec)) { if (IsBuildOutputDir(it->path().filename().wstring())) it.disable_recursion_pending(); continue; }
+					const fs::path& f = it->path();
+					const std::wstring ext = f.extension().wstring();
+					if (_wcsicmp(ext.c_str(), L".vcxproj") == 0 || _wcsicmp(ext.c_str(), L".sln") == 0) { projects.push_back(CodeRelative(f)); continue; }
+					if (SourceKindOf(f) == SourceKind::None) continue;
+					std::error_code se;
+					files.push_back(json{ {"path", CodeRelative(f)}, {"bytes", (uint64_t)fs::file_size(f, se)} });
+					if (files.size() >= 2000) break;
+				}
+				(void)p;
+				IEditorContext* ctx = Ctx();
+				return MakeResult(id, json{ {"codeDir", code.string()}, {"projects", projects}, {"files", files},
+					{"gameLoaded", ctx && ctx->IsGameModuleLoaded()}, {"autoReload", ctx && ctx->GetGameAutoReload()},
+					{"note", "Paths are relative to the project's Code folder. The game is an IGameExtension DLL built to Build/Game.dll."} });
+			});
+
+			Reg("read_game_source", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				fs::path path;
+				std::string err;
+				if (!ResolveGameSourcePath(RequireString(p, "path"), path, err)) return MakeError(id, ErrorCode::InvalidParams, err);
+				std::ifstream in(path, std::ios::binary);
+				if (!in) return MakeError(id, ErrorCode::NotAvailable, "no file at '" + CodeRelative(path) + "'");
+				std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				if (text.size() > 2 * 1024 * 1024) return MakeError(id, ErrorCode::InvalidParams, "file is over 2 MB");
+				size_t lines = std::count(text.begin(), text.end(), '\n') + (text.empty() || text.back() == '\n' ? 0 : 1);
+				return MakeResult(id, json{ {"path", CodeRelative(path)}, {"lines", lines}, {"content", text} });
+			});
+
+			Reg("write_game_source", W, Main, Batch, [](int64_t id, const json& p) -> json {
+				fs::path path;
+				std::string err;
+				if (!ResolveGameSourcePath(RequireString(p, "path"), path, err)) return MakeError(id, ErrorCode::InvalidParams, err);
+				if (SourceKindOf(path) == SourceKind::None)
+					return MakeError(id, ErrorCode::InvalidParams, "only C/C++ sources and headers can be written (.cpp .cc .cxx .c .h .hpp .hxx .inl)");
+				if (!p.contains("content") || !p["content"].is_string()) throw ParamError("'content' (the whole file text) is required");
+				const std::string& content = p["content"].get_ref<const std::string&>();
+				if (content.size() > 2 * 1024 * 1024) return MakeError(id, ErrorCode::InvalidParams, "content is over 2 MB");
+				std::error_code ec;
+				const bool existed = fs::exists(path, ec);
+				if (existed && !p.value("overwrite", true))
+					return MakeError(id, ErrorCode::InvalidParams, "'" + CodeRelative(path) + "' exists (overwrite: false)");
+				fs::create_directories(path.parent_path(), ec);
+				{
+					std::ofstream out(path, std::ios::binary | std::ios::trunc);
+					if (!out) return MakeError(id, ErrorCode::Internal, "cannot write '" + path.string() + "'");
+					out << content;
+				}
+				json r = json{ {"path", CodeRelative(path)}, {"created", !existed}, {"bytes", content.size()} };
+				if (!existed && p.value("addToProject", true))
+				{
+					const fs::path proj = OwningVcxproj(path);
+					bool added = false;
+					if (proj.empty()) r["warning"] = "no .vcxproj found under Code; the file is not part of the build";
+					else if (!AddToVcxproj(proj, path, added, err)) r["warning"] = err;
+					else { r["project"] = CodeRelative(proj); r["addedToProject"] = added; }
+				}
+				IEditorContext* ctx = Ctx();
+				if (ctx && ctx->GetGameAutoReload() && ctx->IsGameModuleLoaded())
+					r["note"] = "auto-reload is ON: the editor rebuilds + reloads by itself ~0.4 s after this change. Use set_game_auto_reload false and build_game to control builds yourself.";
+				return MakeResult(id, r);
+			});
+
+			Reg("set_game_auto_reload", W, Main, Batch, [](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				if (!p.contains("enabled") || !p["enabled"].is_boolean()) throw ParamError("'enabled' must be true or false");
+				ctx->SetGameAutoReload(p["enabled"].get<bool>());
+				return MakeResult(id, json{ {"autoReload", ctx->GetGameAutoReload()} });
+			});
+
+			Reg("build_game", W, Pipe, Solo, [this](int64_t id, const json& p) -> json {
+				const bool reload = p.value("reload", true);
+				const int waitSeconds = std::clamp(p.value("waitSeconds", 100), 0, 110);
+				{
+					std::lock_guard<std::mutex> lock(_build.m);
+					if (_build.running)
+						return MakeError(id, ErrorCode::NotAvailable, "a build is already running (build " + std::to_string(_build.id) + "); poll get_build_status");
+					if (_build.thread.joinable()) _build.thread.join();
+					_build.running = true;
+					_build.id += 1;
+					_build.started = std::chrono::steady_clock::now();
+					_build.result = json{ {"state", "running"}, {"buildId", _build.id} };
+				}
+				const uint64_t buildId = _build.id;
+				_build.thread = std::thread([this, reload, buildId]() {
+					IEditorContext* ctx = Ctx();
+					std::string err;
+					const bool ok = ctx && ctx->BuildGameModule(err);
+					const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - _build.started).count();
+					const fs::path code = GameCodeDir();
+					const fs::path log = code.empty() ? fs::path() : code.parent_path() / "Build" / "GameBuild.log";
+					BuildDiagnostics d = ParseBuildLog(log);
+					json r = json{ {"buildId", buildId}, {"state", ok ? "succeeded" : "failed"}, {"success", ok}, {"seconds", secs},
+						{"errorCount", d.errorCount}, {"warningCount", d.warningCount}, {"errors", d.errors}, {"warnings", d.warnings},
+						{"log", log.string()} };
+					if (!ok)
+					{
+						r["error"] = err;
+						if (d.errors.empty()) r["logTail"] = d.tail;
+					}
+					if (ok && reload)
+					{
+						json rr = OnMain(0, [&]() -> json {
+							std::string e;
+							if (!ctx->ReloadGameModule(e)) return MakeError(0, ErrorCode::Internal, e);
+							return MakeResult(0, json{ {"playing", ctx->IsPlayModeActive()} });
+						});
+						r["reloaded"] = !rr.contains("error");
+						if (rr.contains("error")) r["reloadError"] = rr["error"].value("message", std::string("reload failed"));
+						else r["playing"] = rr["result"].value("playing", false);
+					}
+					std::lock_guard<std::mutex> lock(_build.m);
+					_build.result = r;
+					_build.running = false;
+					_build.cv.notify_all();
+				});
+				std::unique_lock<std::mutex> lock(_build.m);
+				_build.cv.wait_for(lock, std::chrono::seconds(waitSeconds), [&] { return !_build.running || _build.id != buildId; });
+				json r = _build.result;
+				if (_build.running)
+				{
+					r["note"] = "still building; poll get_build_status";
+					r["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - _build.started).count();
+				}
+				return MakeResult(id, r);
+			});
+
+			Reg("get_build_status", R, Pipe, Batch, [this](int64_t id, const json& p) -> json {
+				const int waitSeconds = std::clamp(p.value("waitSeconds", 0), 0, 110);
+				std::unique_lock<std::mutex> lock(_build.m);
+				if (_build.id == 0) return MakeResult(id, json{ {"state", "idle"}, {"note", "no build has run in this editor session"} });
+				if (waitSeconds > 0)
+					_build.cv.wait_for(lock, std::chrono::seconds(waitSeconds), [&] { return !_build.running; });
+				json r = _build.result;
+				if (_build.running)
+					r["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - _build.started).count();
+				return MakeResult(id, r);
+			});
+
+			Reg("reload_game", W, Main, Solo, [](int64_t id, const json&) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				std::error_code ec;
+				const fs::path dll = fs::path(ctx->GetProjectFolderPath()) / "Build" / "Game.dll";
+				if (!fs::exists(dll, ec)) return MakeError(id, ErrorCode::NotAvailable, "no built game at '" + dll.string() + "' (build_game first)");
+				std::string err;
+				if (!ctx->ReloadGameModule(err)) return MakeError(id, ErrorCode::Internal, err);
+				return MakeResult(id, json{ {"reloaded", true}, {"playing", ctx->IsPlayModeActive()} });
+			});
+
 			// Pipe-thread handler: waits `waitFrames` editor frames (default 2) so
 			// mutations made just before - including the coalesced PVS rebuild -
 			// are actually rendered, THEN marshals the capture. Not batchable (a
@@ -4676,6 +4998,18 @@ namespace HexEngine
 		bool            _started = false;
 		bool            _pvsDirty = false; // main thread only
 		std::mutex      _captureMutex;     // capture_view: one camera hijack at a time
+
+		// build_game: one background game build at a time.
+		struct BuildJob
+		{
+			std::mutex m;
+			std::condition_variable cv;
+			std::thread thread;
+			bool running = false;
+			uint64_t id = 0;
+			std::chrono::steady_clock::time_point started;
+			json result;
+		} _build;
 		std::atomic<uint64_t> _frameCount{ 0 };
 
 		std::unordered_map<std::string, MethodInfo> _methods;
