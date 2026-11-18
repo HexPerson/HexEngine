@@ -579,6 +579,66 @@ static void TestBridgeProtocol()
 	CHECK(authed(R"({"id":1,"method":"m"})")["error"]["code"] == "Unauthorized");                 // missing
 	CHECK(authed(R"({"id":1,"method":"m","token":"wrong"})")["error"]["code"] == "Unauthorized");  // wrong
 	CHECK(authed(R"({"id":1,"method":"m","token":"sekret"})")["ok"] == true);                      // right
+
+	// --- v2: entity references ---
+	{
+		using J = EditorBridge::json;
+		EntityRef ref; std::string er;
+		CHECK(ParseEntityRefValue(J("Crate"), ref, er) && ref.kind == EntityRef::Kind::Name && ref.name == "Crate");
+		CHECK(ParseEntityRefValue(J(42), ref, er) && ref.kind == EntityRef::Kind::Index && ref.index == 42);
+		CHECK(ParseEntityRefValue(J::parse(R"({"index":7,"generation":3})"), ref, er) && ref.kind == EntityRef::Kind::Id && ref.index == 7 && ref.generation == 3);
+		CHECK(ParseEntityRefValue(J::parse(R"({"index":7})"), ref, er) && ref.kind == EntityRef::Kind::Index && ref.index == 7);
+		CHECK(!ParseEntityRefValue(J(""), ref, er));                                   // empty name
+		CHECK(!ParseEntityRefValue(J(-1), ref, er));                                   // negative index
+		CHECK(!ParseEntityRefValue(J(true), ref, er));                                 // wrong type
+		CHECK(!ParseEntityRefValue(J::parse(R"({"index":7,"generation":-1})"), ref, er));
+		CHECK(!ParseEntityRefValue(J::parse(R"({"name":"x"})"), ref, er));           // object without index
+
+		// Primary key wins; legacy keys only when allowed.
+		CHECK(GetEntityRef(J::parse(R"({"entity":"A","name":"B"})"), "entity", true, ref, er) && ref.name == "A");
+		CHECK(GetEntityRef(J::parse(R"({"name":"B"})"), "entity", true, ref, er) && ref.name == "B");
+		CHECK(GetEntityRef(J::parse(R"({"index":5})"), "entity", true, ref, er) && ref.kind == EntityRef::Kind::Index);
+		CHECK(GetEntityRef(J::parse(R"({"id":{"index":5,"generation":1}})"), "entity", true, ref, er) && ref.kind == EntityRef::Kind::Id);
+		CHECK(!GetEntityRef(J::parse(R"({"name":"B"})"), "entity", false, ref, er));  // legacy disabled
+		CHECK(!GetEntityRef(J::object(), "entity", true, ref, er));                    // nothing present
+	}
+
+	// --- v2: batch $ref resolution ---
+	{
+		using J = EditorBridge::json;
+		std::vector<J> results = {
+			J::parse(R"({"id":{"index":10,"generation":2},"name":"House"})"),
+			J(nullptr),                                                   // op 1 failed
+			J::parse(R"({"entities":[{"name":"a"},{"name":"b"}]})"),
+		};
+		BatchLabels labels{ {"house", 0}, {"broken", 1} };
+		std::string er;
+
+		J p = J::parse(R"({"entity":{"$ref":"0.id"},"parent":{"$ref":"house.name"},"deep":[{"$ref":"2.entities.1.name"}]})");
+		CHECK(ResolveBatchRefs(p, results, 3, labels, er));
+		CHECK(p["entity"]["index"] == 10 && p["entity"]["generation"] == 2);
+		CHECK(p["parent"] == "House");
+		CHECK(p["deep"][0] == "b");
+
+		J whole = J::parse(R"({"x":{"$ref":"0"}})");
+		CHECK(ResolveBatchRefs(whole, results, 3, labels, er) && whole["x"]["name"] == "House");
+
+		J notARef = J::parse(R"({"x":{"$ref":"0.id","extra":1}})");             // 2 keys -> left alone
+		CHECK(ResolveBatchRefs(notARef, results, 3, labels, er) && notARef["x"].contains("extra"));
+
+		J forward = J::parse(R"({"x":{"$ref":"2.entities"}})");
+		CHECK(!ResolveBatchRefs(forward, results, 2, labels, er));             // op 2 is not earlier than op 2
+		J failed = J::parse(R"({"x":{"$ref":"broken.id"}})");
+		CHECK(!ResolveBatchRefs(failed, results, 3, labels, er));              // references a failed op
+		J missing = J::parse(R"({"x":{"$ref":"0.nope"}})");
+		CHECK(!ResolveBatchRefs(missing, results, 3, labels, er));
+		J badIdx = J::parse(R"({"x":{"$ref":"2.entities.9"}})");
+		CHECK(!ResolveBatchRefs(badIdx, results, 3, labels, er));
+		J unknownLabel = J::parse(R"({"x":{"$ref":"nope.id"}})");
+		CHECK(!ResolveBatchRefs(unknownLabel, results, 3, labels, er));
+		J nonString = J::parse(R"({"x":{"$ref":5}})");
+		CHECK(!ResolveBatchRefs(nonString, results, 3, labels, er));
+	}
 }
 
 // --- MCP static tools + discovery ------------------------------------------

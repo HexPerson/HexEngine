@@ -1,7 +1,7 @@
 # HexEngine MCP Integration
 
-HexEngine exposes read-only editor/project inspection to AI clients (Claude,
-Codex, ChatGPT, etc.) through the **Model Context Protocol (MCP)**. The MCP
+HexEngine exposes live editor inspection **and authoring** to AI clients
+(Claude, Codex, ChatGPT, etc.) through the **Model Context Protocol (MCP)**. The MCP
 protocol lives in a **standalone external process** — it is never compiled into
 the engine runtime or the shipped game launcher.
 
@@ -18,11 +18,12 @@ HexEngine.EditorBridgePlugin     ← editor-only plugin, off by default
 Running HexEngine Editor / live scene / ECS / ResourceSystem
 ```
 
-**Phase 1 is read-only.** No mutation, no asset import/reimport, no scene
-editing, no file writes (other than the bridge's own discovery session file), no
-shell/process execution. Anything not yet safely implementable returns a clear
-`NotImplemented` / `NotAvailable` error rather than faking data or touching
-engine state unsafely.
+Inspection is always available once the bridge is enabled. **Mutation** (entity
+/ component / transform edits, console commands, frame capture, opening a
+project) additionally requires `HEXENGINE_EDITOR_BRIDGE_WRITE=1` in the editor's
+environment. There is still no asset import, scene save or shell execution.
+Anything not yet implementable returns a clear `NotImplemented` /
+`NotAvailable` error rather than faking data.
 
 ---
 
@@ -41,11 +42,17 @@ A normal HexEngine plugin (`IPlugin` + `IEditorToolPlugin`) that starts a local
 - **Discovery:** on start it writes a session file to
   `%TEMP%\HexEngine\EditorBridge\session-<pid>.json` (pid, pipe name, project,
   start time) and removes it on shutdown.
-- **Threading:** the pipe server runs on one owned background thread (RAII,
-  joined on unload — never detached). ECS/scene reads are **marshalled to the
-  editor main thread** (drained during editor tool-message dispatch); if the
-  editor is idle the request times out cleanly instead of touching engine state
-  from the pipe thread.
+- **Connections:** persistent and concurrent. A client may send any number of
+  newline-delimited requests over one connection (responses come back in
+  order); up to 8 clients can be connected at once, each on its own owned
+  thread (joined on unload — never detached). One-shot clients (connect, one
+  line, disconnect) still work.
+- **Threading:** engine work is **marshalled to the editor main thread** and
+  drained once per editor frame (`OnEditorFrameTick`). A request the main
+  thread hasn't *started* within 10 s is cancelled and is guaranteed **not** to
+  run (`NotAvailable`, "safe to retry"); once started it always completes.
+- **Coalesced PVS rebuild:** mutations mark the potentially-visible-set dirty and
+  it is rebuilt once at the end of the frame, not once per edit.
 
 ### 2. `HexEngine.McpServer.exe` (standalone)
 
@@ -53,8 +60,14 @@ Speaks MCP JSON-RPC 2.0 over **stdio** (newline-delimited). It runs with or
 without a live editor:
 
 - **Static tools** inspect files under a project/repo root and always work.
-- **Live tools** proxy to the editor bridge over the named pipe. With no editor
-  running they return a clear `EditorNotConnected` error.
+- **Live tools** proxy to the editor bridge over **one persistent pipe
+  connection** (no per-call discovery/connect; ~50 µs transport overhead per
+  call). If the editor restarts, the next call re-discovers and reconnects. A
+  request whose write succeeded is never resent, so a timeout can't duplicate a
+  mutation. With no editor running they return `EditorNotConnected`.
+- Results are returned as **compact** JSON (the bridge `result` object, or
+  `{"error": {...}}`) to keep agent token cost down. Every tool has a typed
+  input schema.
 
 Run it pointed at your repo/project root:
 
@@ -76,6 +89,9 @@ launch this command as an stdio MCP server. Example client config:
 }
 ```
 
+The repo root ships a `.mcp.json` doing exactly this for Claude Code (override
+the checkout location with `HEXENGINE_ROOT`).
+
 ---
 
 ## Tools
@@ -95,23 +111,64 @@ launch this command as an stdio MCP server. Example client config:
 
 ### Live (require a running editor with the bridge enabled)
 
-| Tool → bridge method | Status |
-| --- | --- |
-| `hex_get_editor_status` | Implemented (running / scene / authoritative edit-vs-play mode / project name). |
-| `hex_get_open_scene` | Implemented (scene name + entity count). |
-| `hex_list_entities` | Implemented (id/name/components, paginated). |
-| `hex_inspect_entity` | Implemented (by `name` or `index`). |
-| `hex_list_components` | Implemented (component types in the scene). |
-| `hex_validate_current_scene` | Implemented (minimal Phase-1 diagnostics). |
-| `hex_get_open_project` | Implemented (open-project name + folder / `.hexproj` paths, via `IEditorContext`). |
-| `hex_get_selected_entity` | Implemented (currently inspected entity + detail, via `IEditorContext`). |
-| `hex_inspect_component` | Implemented (component fields via the component's own `Serialize` into a disk-neutered `JsonFile`; `{}` for no-op serializers). |
-| `hex_list_loaded_resources` | `NotImplemented` (no safe ResourceSystem enumeration yet). |
-| `hex_find_missing_references` | `NotImplemented` (follow-up). |
-| `hex_get_recent_engine_logs` | `NotImplemented` (log ring buffer not exposed yet). |
+Read (always available):
 
-`NotImplemented` methods return a structured error with a TODO — they never fake
-data.
+| Tool | Notes |
+| --- | --- |
+| `hex_get_editor_status` | Scene, edit/play mode, project, protocol version, `writeEnabled`, frame counter. |
+| `hex_get_open_project` / `hex_get_open_scene` | Project paths; scene name + entity count. |
+| `hex_get_selected_entity` | Selected entity with full detail. |
+| `hex_list_entities` | Paginated; filter by name substring and/or `component`. |
+| `hex_inspect_entity` | id, name, parent, children, components, AABB. |
+| `hex_list_components` | Component types present in the scene. |
+| `hex_list_component_types` | Every registered component class (what `add_component` accepts). |
+| `hex_inspect_component` | The component's `Serialize()` fields = the exact names `set_component_field` accepts. |
+| `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
+| `hex_list_loaded_resources`, `hex_validate_current_scene`, `hex_list_projects` | |
+| `hex_find_missing_references` | `NotImplemented` (follow-up). |
+
+Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
+
+| Tool | Notes |
+| --- | --- |
+| `hex_create_entity` | Name, transform, parent, `persistent`, and inline `components: [{component, fields}]` — a fully configured entity in one call. |
+| `hex_add_component` / `hex_remove_component` | By registered class name; `add_component` takes optional initial `fields`. One component per type per entity. |
+| `hex_set_component_field` | Read-modify-write through Serialize/Deserialize. Unknown keys rejected before anything applies; object values merge recursively. |
+| `hex_set_entity_transform` | position / rotation quat / eulerDegrees / scale. Cameras are driven through their own angles. |
+| `hex_rename_entity`, `hex_set_parent`, `hex_set_entity_flags`, `hex_delete_entity`, `hex_clone_entity`, `hex_select_entity` | |
+| `hex_create_mesh_entity` | In-memory procedural mesh + material copy (DoNotSave unless `persistent`). |
+| `hex_exec_console` | Console command / cvar set. |
+| `hex_capture_frame` | Waits `waitFrames` (default 2) so recent edits are rendered, then saves the main camera image. |
+| `hex_open_project` | Async; poll `hex_get_editor_status`. |
+| `hex_batch` | See below. |
+
+### Entity references
+
+Every method that targets an existing entity takes `entity` as a **name**
+(string), a **live index** (integer) or an **exact id** `{index, generation}`
+(as returned by every create/clone/list call — stale ids are rejected instead of
+hitting a reused slot). Legacy `name` / `index` / `id` params still work.
+
+### `batch` — the fast path
+
+`batch` runs many methods in **one main-thread task (one editor frame, one PVS
+rebuild)**. Later ops can consume earlier results with `{"$ref": "<op>.<path>"}`
+where `<op>` is an op index or an `as` label:
+
+```json
+{"ops": [
+  {"method": "create_entity", "as": "lamp", "params": {"name": "Lamp", "position": [0, 30, 0],
+     "components": [{"component": "PointLight", "fields": {"_strength": 4.0}}]}},
+  {"method": "clone_entity", "params": {"entity": {"$ref": "lamp.id"}, "newName": "Lamp2", "position": [5, 0, 0]}},
+  {"method": "set_parent", "params": {"entity": {"$ref": "1.id"}, "parent": {"$ref": "lamp.id"}}}
+], "stopOnError": true}
+```
+
+Ops run in order. With `stopOnError` (default) the remaining ops are reported
+`skipped` after a failure. **Not transactional** — completed ops stay applied.
+`open_project` and `capture_frame` are not batchable (a batch runs inside one
+frame, so a capture could never see its own edits). Up to 5000 ops / 16 MiB per
+request; responses are capped at 8 MiB.
 
 ---
 
@@ -168,12 +225,14 @@ ctest --preset tests-debug
   the client's discovery. The plugin must never appear in a **production plugin
   allowlist**; it is already gated to editor + opt-in and cannot run in a shipped
   game.
-- **Read-only (Phase 1).** No scene/component/asset mutation, no asset
-  import/reimport, no file writes (except the bridge session file), no file
-  deletes, no shell/process execution.
+- **Two-level opt-in.** Inspection needs the bridge opt-in; every mutating
+  method (and any `batch` containing one) additionally needs
+  `HEXENGINE_EDITOR_BRIDGE_WRITE=1`, checked per method before anything runs.
+  No asset import/reimport, no scene save, no shell/process execution. File
+  writes are limited to the session file and `capture_frame`'s output image.
 - **Fail closed.** The bridge is off unless explicitly opted in, and only in the
   editor. Unknown methods are rejected; all params are validated; responses are
-  size-capped (1 MiB); oversized requests are rejected.
+  size-capped (8 MiB); oversized requests (> 16 MiB) are rejected.
 - **No unsafe threading.** Engine state is read on the editor main thread via a
   marshalling queue, never from the pipe thread.
 - **Logging.** Bridge start/stop is logged; method calls can be logged at
@@ -181,13 +240,10 @@ ctest --preset tests-debug
 
 ---
 
-## Intentionally NOT supported yet
+## Not supported yet
 
-- Any mutation: creating/editing/deleting entities, components, or assets.
-- Asset import/reimport, packaging, or build execution.
+- Undo integration (bridge edits bypass the editor's undo stack).
+- Scene save / new / load, prefab instantiation, asset creation or import.
+- Console-variable listing/readback (`exec_console` can set, not read).
+- Play mode control, input injection, game build / hot reload.
 - Arbitrary shell/command execution.
-- File writes or deletes.
-- An in-editor AI assistant UI (this PR is infrastructure only).
-
-These are deliberately out of scope for Phase 1 and will be designed with their
-own authorization model before being added.
