@@ -2240,7 +2240,6 @@ namespace HexEditor
 
 		return redone;
 	}
-}
 
 	// --- IEditorContext: programmatic-authoring hooks (editor bridge) ---------
 
@@ -2512,3 +2511,4 @@ namespace HexEditor
 	{
 		return IsPrefabStageActive();
 	}
+}
