@@ -168,6 +168,7 @@ namespace
 		"Geometry: create_primitive / create_mesh_entity are IN-MEMORY until saveAs or save_mesh_asset (needed to save, prefab or undo them). Share materials (create_material + assign_material) rather than per-object overrides.\n"
 		"Placement: ground_height / raycast with only=[terrain] or minNormalY 0.7 to skip canopies and roofs; snap_to_ground; query_region to avoid overlaps. Reuse via create_prefab + instantiate_prefab; edit all copies in open_prefab_stage.\n"
 		"Components: describe_component_type before adding (fields, enum names, ranges).\n"
+		"Game logic, fastest: Lua scripts (no build). write_script Data path e.g. Scripts/Door.lua (returns compile errors at once), attach with add_component ScriptComponent {script: \"GameData.Scripts/Door.lua\", properties: {...}}, play. Edits hot-reload within 0.25 s even while playing; runtime errors are [Script] warnings in get_recent_engine_logs. API: docs/Scripting.md.\n"
 		"Game C++: set_game_auto_reload false, write_game_source, build_game (errors come back with file/line), then play.\n"
 		"Play-testing: play needs Build/Game.dll; stop restores the pre-play scene (play-time edits are discarded). set_simulation paused + step_simulation for exact ticks; send_input drives key binds like real input.\n"
 		"Safety: undo reverts the last call/batch. While a prefab stage is open every tool edits the prefab. save_scene only when you mean to keep the work.\n"
@@ -210,7 +211,7 @@ namespace
 		validateAll["killY"] = Num("World height below which an entity counts as fallen out of the world (default -500).");
 		validateAll["groundCheck"] = Bool("Also flag top-level mesh entities floating above the surface below them (raycasts; default false).");
 		validateAll["floatTolerance"] = Num("groundCheck: gap that counts as floating (default 0.25).");
-		v.push_back({ "validate_current_scene", "Check the scene for problems an agent should fix: NaN/zero-scale transforms, entities fallen out of the world, missing or unsaved mesh/material assets, double-spawned duplicates, out-of-date prefab instances, no camera / lights / PlayerStart, and (groundCheck) floating objects. Issues come sorted error > warning > info, with codes and the entity.", Obj(validateAll) });
+		v.push_back({ "validate_current_scene", "Check the scene for problems an agent should fix: NaN/zero-scale transforms, entities fallen out of the world, missing or unsaved mesh/material assets, double-spawned duplicates, out-of-date prefab instances, scripts that are missing or don't compile, no camera / lights / PlayerStart, and (groundCheck) floating objects. Issues come sorted error > warning > info, with codes and the entity.", Obj(validateAll) });
 		v.push_back({ "get_recent_engine_logs", "Recent engine log lines with sequence numbers. Pass the previous lastSeq as sinceSeq to get only NEW lines.",
 			Obj(json{ {"max", Int("Max lines (<= 1000, default 200).")}, {"sinceSeq", Int("Only lines with seq greater than this.")},
 				{"minLevel", json{ {"type", "string"}, {"enum", json::array({ "debug", "info", "warn", "crit" })}, {"description", "Minimum level."} }} }) });
@@ -253,6 +254,12 @@ namespace
 				{"quality", Int("JPEG quality 10..100 (default 85).")},
 				{"waitFrames", Int("Frames to render before grabbing (default 8 after a camera move so temporal effects settle, else 2).")},
 				{"restore", Bool("Put the camera back afterwards (default true).")} }) });
+		v.push_back({ "list_scripts", "Gameplay scripts (Lua, see docs/Scripting.md) in the project's Data folder: ref (what ScriptComponent.script takes), size, and which entities in the loaded scenes use each one. check: true also compiles each and reports errors.",
+			Obj(json{ {"check", Bool("Compile every script and report errors (default false).")} }) });
+		v.push_back({ "read_script", "Read a script file. path: a ref (\"GameData.Scripts/Door.lua\") or a Data-relative path (\"Scripts/Door.lua\").",
+			Obj(json{ {"path", Str("Script ref or Data-relative path.")} }, { "path" }) });
+		v.push_back({ "check_script", "Compile a script without running it: {compiles, error: \"file:line: message\"}.",
+			Obj(json{ {"path", Str("Script ref or Data-relative path.")} }, { "path" }) });
 		v.push_back({ "list_game_sources", "The project's C++ game code (Code/ folder): source/header files, the .vcxproj/.sln, whether the game DLL is loaded and whether the editor auto-rebuilds on changes.", Obj(json::object()) });
 		v.push_back({ "read_game_source", "Read a game source file (path relative to the project's Code folder).",
 			Obj(json{ {"path", Str("e.g. \"Wickwood/Wickwood.cpp\".")} }, { "path" }) });
@@ -391,6 +398,9 @@ namespace
 		v.push_back({ "save_prefab_stage", w("Save the open prefab stage to its asset. Not batchable."), Obj(json::object()) });
 		v.push_back({ "close_prefab_stage", w("Close the prefab stage and return to the level scene. Not batchable."),
 			Obj(json{ {"save", Bool("true = save changes first, false = discard.")} }, { "save" }) });
+		v.push_back({ "write_script", w("Write (create or replace) a Lua gameplay script under the project's Data folder and compile it at once: the result has compiles + error (file:line). The engine hot-reloads it within ~0.25 s, also during play (running instances keep their state; a compile error keeps the previous version running). Attach a new script with add_component ScriptComponent {script: <ref>, properties: {...}}. Script format and API: docs/Scripting.md (the script returns a class table with Properties and OnStart/OnUpdate(dt)/OnKeyDown(key)/OnTriggerEnter(other)... callbacks)."),
+			Obj(json{ {"path", Str("Data-relative path or ref, e.g. \"Scripts/Door.lua\" (.lua is added if missing).")}, {"content", Str("The whole script text.")},
+				{"overwrite", Bool("Replace an existing file (default true).")} }, { "path", "content" }) });
 		v.push_back({ "write_game_source", w("Write (create or replace) a C/C++ file in the project's Code folder. New files are added to the game's .vcxproj. Then build_game. While auto-reload is on (set_game_auto_reload) and the game is loaded, the editor rebuilds by itself ~0.4 s after a change."),
 			Obj(json{ {"path", Str("Path relative to Code/, e.g. \"Wickwood/Enemy.cpp\".")}, {"content", Str("The whole file text.")},
 				{"overwrite", Bool("Replace an existing file (default true).")}, {"addToProject", Bool("Add a NEW file to the owning .vcxproj (default true).")} }, { "path", "content" }) });
@@ -638,7 +648,7 @@ int main(int argc, char** argv)
 			out = RpcResult(id, json{
 				{"protocolVersion", "2024-11-05"},
 				{"capabilities", { {"tools", json::object()} }},
-				{"serverInfo", { {"name","HexEngine.McpServer"}, {"version","0.3.0"} }},
+				{"serverInfo", { {"name","HexEngine.McpServer"}, {"version","0.4.0"} }},
 				{"instructions", kAgentInstructions},
 			});
 		}

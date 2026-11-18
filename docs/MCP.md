@@ -135,10 +135,12 @@ Read (always available):
 | `hex_ground_height` | Surface height under up to 20000 `[x, z]` points (rays down from `fromY`), same filters — for scattering and placement. |
 | `hex_query_region` | Entities whose world bounds touch a sphere or box, nearest first, with their bounds. |
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
-| `hex_validate_current_scene` | Problems to fix, sorted error > warning > info with a `code` and the entity: NaN / zero-scale transforms, entities below `killY`, missing or unsaved (in-memory) mesh/material assets on saved entities, double-spawned duplicates (same mesh, position, rotation), out-of-date prefab instances, no camera / lights / PlayerStart, and with `groundCheck` floating top-level meshes. |
+| `hex_validate_current_scene` | Problems to fix, sorted error > warning > info with a `code` and the entity: NaN / zero-scale transforms, entities below `killY`, missing or unsaved (in-memory) mesh/material assets on saved entities, double-spawned duplicates (same mesh, position, rotation), out-of-date prefab instances, `ScriptComponent`s with no script or a script that doesn't compile (`scriptError`, with file:line), no camera / lights / PlayerStart, and with `groundCheck` floating top-level meshes. |
 | `hex_find_missing_references` | The asset-reference subset of the above. |
 | `hex_list_scenes` | Project scenes: name, path, loaded, active (the one every tool edits), entity count; includes `.hscene` files under `Data/` not yet loaded. |
 | `hex_get_environment` | The active scene's environment: time of day, weather preset, sun direction, sea level, ocean look, and the look cvars (`env_*`, fog, clouds, sky, exposure, moon/stars, ocean). |
+| `hex_list_scripts` | Lua gameplay scripts under `Data/` (see [Scripting.md](Scripting.md)): `ref` (what `ScriptComponent.script` takes), size, and which entities in the loaded scenes use each; `check: true` also compiles every one and reports errors. |
+| `hex_read_script` / `hex_check_script` | Read a script; compile one without running it (`{compiles, error: "file:line: message"}`). |
 | `hex_list_game_sources` / `hex_read_game_source` | The project's C++ game code under `Code/` (sources, headers, `.vcxproj`/`.sln`), whether the game DLL is loaded and whether auto-reload is on. |
 | `hex_get_build_status` | Latest `build_game`: running / succeeded / failed, duration, compiler errors (file relative to `Code/`, line, column, code, message), warnings, reload result. `waitSeconds` blocks until it finishes. |
 | `hex_list_loaded_resources`, `hex_list_projects` | |
@@ -175,6 +177,7 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_open_scene` | Switch to another project scene by name or path, loading it if needed. Switching scenes clears the undo history (undo resolves entities by name in the active scene). |
 | `hex_close_scene` | Unload a non-active scene and drop it from the project (`deleteFile` also removes the `.hscene`). |
 | `hex_set_environment` | One call for time of day / freeze / day length (adds a `DayNightCycleComponent` to the sun if missing), weather preset (adds a `WeatherControllerComponent`), sea level, ocean look and any look cvars. Component changes are undoable. |
+| `hex_write_script` | Create/replace a Lua script under `Data/` (`Scripts/Door.lua` or a `GameData.` ref; `.lua` is added if missing) and compile it at once, returning `compiles` + `error` (file:line). The engine hot-reloads it within ~0.25 s, also during play: running instances keep their state and get `OnReload`; a compile error keeps the previous version running. Attach with `add_component ScriptComponent {script, properties}`. |
 | `hex_write_game_source` | Create/replace a C/C++ file under `Code/` (never build-output folders); new files are added to the owning `.vcxproj`. |
 | `hex_set_game_auto_reload` | The editor's own watcher rebuilds + reloads ~0.4 s after any `Code/` change (blocking the editor while MSBuild runs). Agents editing several files should turn it off and call `build_game` once. |
 | `hex_build_game` | MSBuild of the game project on a background thread (the editor keeps rendering), exclusive with the watcher's reloads; then, by default, swaps in the new DLL on the main thread (play restarts if it was running). Returns parsed compiler errors; polls via `get_build_status` past `waitSeconds`. |
@@ -333,7 +336,6 @@ Serialize/Deserialize stay the source of truth — metadata is purely additive.
 
 - Renaming scenes.
 - Material graphs, texture creation.
-- Script-based game logic (Phase E2: scripting plugin, in progress separately).
 - Arbitrary shell/command execution.
 
 ### Play mode notes

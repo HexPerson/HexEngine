@@ -48,6 +48,8 @@
 #include "../../HexEngine.Core/Scene/IModelSystem.hpp"
 #include "../../HexEngine.Core/Environment/TimeManager.hpp"
 #include "../../HexEngine.Core/Input/InputSystem.hpp"
+#include "../../HexEngine.Core/Entity/Component/ScriptComponent.hpp"
+#include "../../HexEngine.Core/Scripting/IScriptEngine.hpp"
 
 #include <deque>
 
@@ -4534,6 +4536,132 @@ namespace HexEngine
 				return MakeResult(id, r);
 			});
 
+			// ---- Scripts (Lua, HexEngine.ScriptingPlugin) ----
+			//
+			// Scripts are plain files under the project's Data folder, referenced
+			// like any asset ("GameData.Scripts/Door.lua") and attached with
+			// add_component ScriptComponent {script, properties}. The engine
+			// hot-reloads a changed file within ~0.25 s, also during play.
+
+			Reg("list_scripts", R, Main, Batch, [this](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				FileSystem* projectFs = ctx ? ctx->GetProjectFileSystem() : nullptr;
+				if (!projectFs) return MakeError(id, ErrorCode::NotAvailable, "no project is open");
+				IScriptEngine* engine = g_pEnv->_scriptEngine;
+				const std::string ext = engine ? engine->GetFileExtension() : ".lua";
+				const bool check = p.value("check", false);
+				const fs::path dataDir = projectFs->GetDataDirectory();
+				const std::string fsName = WideToUtf8(projectFs->GetName());
+
+				// Which entities in the loaded scenes use each script.
+				std::map<std::string, json> users;
+				for (auto& scene : g_pEnv->GetSceneManager().GetAllScenes())
+				{
+					if (!scene || HEX_HASFLAG(scene->GetFlags(), SceneFlags::Utility)) continue;
+					std::vector<EntityId> ids;
+					scene->GetLiveEntityIds(ids);
+					for (const EntityId& eid : ids)
+					{
+						Entity* e = scene->TryGetEntity(eid);
+						auto* sc = e ? e->GetComponent<ScriptComponent>() : nullptr;
+						if (!sc || sc->GetScript().empty()) continue;
+						json& u = users[sc->GetScript()];
+						if (!u.is_array()) u = json::array();
+						if (u.size() < 50) u.push_back(json{ {"entity", e->GetName()}, {"scene", WideToUtf8(scene->GetName())} });
+					}
+				}
+
+				json scripts = json::array();
+				std::error_code ec;
+				for (fs::recursive_directory_iterator it(dataDir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
+				{
+					if (!it->is_regular_file(ec)) continue;
+					const fs::path& f = it->path();
+					if (_wcsicmp(f.extension().c_str(), Utf8ToWide(ext).c_str()) != 0) continue;
+					const std::string ref = fsName + "." + fs::relative(f, dataDir).generic_string();
+					std::error_code se;
+					json s = json{ {"ref", ref}, {"bytes", (uint64_t)fs::file_size(f, se)} };
+					if (auto u = users.find(ref); u != users.end()) s["usedBy"] = u->second;
+					if (check && engine)
+					{
+						std::string err;
+						const bool ok = engine->CheckScript(ref, err);
+						s["compiles"] = ok;
+						if (!ok) s["error"] = err;
+					}
+					scripts.push_back(std::move(s));
+					if (scripts.size() >= 2000) break;
+				}
+				json r = json{ {"scripts", scripts} };
+				r["scriptEngine"] = engine ? json(engine->GetLanguageName()) : json(nullptr);
+				if (!engine) r["warning"] = "no script engine is loaded (HexEngine.ScriptingPlugin): ScriptComponents stay inert";
+				return MakeResult(id, r);
+			});
+
+			Reg("read_script", R, Main, Batch, [this](int64_t id, const json& p) -> json {
+				const std::string ext = g_pEnv->_scriptEngine ? g_pEnv->_scriptEngine->GetFileExtension() : ".lua";
+				AssetRef a;
+				std::string err;
+				if (!ResolveAssetRef(RequireString(p, "path"), ext.c_str(), false, a, err)) return MakeError(id, ErrorCode::InvalidParams, err);
+				std::ifstream in(a.absolute, std::ios::binary);
+				if (!in) return MakeError(id, ErrorCode::NotAvailable, "no script at '" + a.ref + "'");
+				std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+				if (text.size() > 2 * 1024 * 1024) return MakeError(id, ErrorCode::InvalidParams, "file is over 2 MB");
+				const size_t lines = std::count(text.begin(), text.end(), '\n') + (text.empty() || text.back() == '\n' ? 0 : 1);
+				return MakeResult(id, json{ {"ref", a.ref}, {"lines", lines}, {"content", text} });
+			});
+
+			Reg("write_script", W, Main, Batch, [this](int64_t id, const json& p) -> json {
+				IScriptEngine* engine = g_pEnv->_scriptEngine;
+				const std::string ext = engine ? engine->GetFileExtension() : ".lua";
+				AssetRef a;
+				std::string err;
+				if (!ResolveAssetRef(RequireString(p, "path"), ext.c_str(), true, a, err)) return MakeError(id, ErrorCode::InvalidParams, err);
+				if (!p.contains("content") || !p["content"].is_string()) throw ParamError("'content' (the whole script text) is required");
+				const std::string& content = p["content"].get_ref<const std::string&>();
+				if (content.size() > 2 * 1024 * 1024) return MakeError(id, ErrorCode::InvalidParams, "content is over 2 MB");
+				std::error_code ec;
+				const bool existed = fs::exists(a.absolute, ec);
+				if (existed && !p.value("overwrite", true))
+					return MakeError(id, ErrorCode::InvalidParams, "'" + a.ref + "' exists (overwrite: false)");
+				fs::create_directories(a.absolute.parent_path(), ec);
+				{
+					std::ofstream out(a.absolute, std::ios::binary | std::ios::trunc);
+					if (!out) return MakeError(id, ErrorCode::Internal, "cannot write '" + a.absolute.string() + "'");
+					out << content;
+				}
+				json r = json{ {"ref", a.ref}, {"created", !existed}, {"bytes", content.size()} };
+				if (!engine)
+				{
+					r["warning"] = "no script engine is loaded (HexEngine.ScriptingPlugin): the file is written but nothing runs it";
+					return MakeResult(id, r);
+				}
+				// Compile it now so the caller gets errors straight away. (The
+				// engine also hot-reloads it within ~0.25 s; a compile error keeps
+				// the previous version running.)
+				std::string compileError;
+				const bool ok = engine->CheckScript(a.ref, compileError);
+				r["compiles"] = ok;
+				if (!ok) r["error"] = compileError;
+				r["note"] = existed
+					? std::string("running instances hot-reload within ~0.25 s and keep their state (OnReload is called); runtime errors appear in get_recent_engine_logs as [Script] warnings")
+					: "attach with add_component {component: \"ScriptComponent\", fields: {script: \"" + a.ref + "\", properties: {...}}}; scripts run in play mode";
+				return MakeResult(id, r);
+			});
+
+			Reg("check_script", R, Main, Batch, [this](int64_t id, const json& p) -> json {
+				IScriptEngine* engine = g_pEnv->_scriptEngine;
+				if (!engine) return MakeError(id, ErrorCode::NotAvailable, "no script engine is loaded (HexEngine.ScriptingPlugin)");
+				AssetRef a;
+				std::string err;
+				if (!ResolveAssetRef(RequireString(p, "path"), engine->GetFileExtension(), false, a, err)) return MakeError(id, ErrorCode::InvalidParams, err);
+				std::string compileError;
+				const bool ok = engine->CheckScript(a.ref, compileError);
+				json r = json{ {"ref", a.ref}, {"compiles", ok} };
+				if (!ok) r["error"] = compileError;
+				return MakeResult(id, r);
+			});
+
 			Reg("set_game_auto_reload", W, Main, Batch, [](int64_t id, const json& p) -> json {
 				IEditorContext* ctx = Ctx();
 				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
@@ -5308,6 +5436,7 @@ namespace HexEngine
 			size_t lights = 0, playerStarts = 0, meshes = 0;
 			std::map<std::string, Entity*> placed; // duplicate-spawn detection
 			std::vector<Entity*> groundCandidates;
+			std::map<std::string, std::string> scriptErrors; // one compile per script path
 			for (const EntityId& eid : ids)
 			{
 				Entity* e = scene->TryGetEntity(eid);
@@ -5336,6 +5465,26 @@ namespace HexEngine
 						const json info = ctx->DescribePrefabInstance(e);
 						if (info.value("outOfDate", false))
 							add("info", "prefabOutOfDate", e, "built from an older version of " + info.value("sourcePath", std::string("its prefab")) + " (update_prefab_instance)");
+					}
+				}
+
+				if (auto* script = e->GetComponent<ScriptComponent>(); script != nullptr)
+				{
+					const std::string& scriptPath = script->GetScript();
+					if (scriptPath.empty())
+						add("warning", "scriptMissing", e, "ScriptComponent has no script");
+					else if (g_pEnv->_scriptEngine != nullptr)
+					{
+						auto it = scriptErrors.find(scriptPath);
+						if (it == scriptErrors.end())
+						{
+							std::string err;
+							if (g_pEnv->_scriptEngine->CheckScript(scriptPath, err)) err.clear();
+							else if (err.empty()) err = "does not compile";
+							it = scriptErrors.emplace(scriptPath, err).first;
+						}
+						if (!it->second.empty())
+							add("error", "scriptError", e, "script " + scriptPath + ": " + it->second);
 					}
 				}
 

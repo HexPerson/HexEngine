@@ -88,7 +88,31 @@ the server's `instructions`.
   `saveAs`) works well up to ~100k vertices. Verify the winding with a downward
   `raycast {only: [terrain]}`: the hit must not report `backFace`.
 
-## 5. Game logic (C++)
+## 5. Game logic
+
+### Lua scripts (fastest: no build)
+
+Per-entity behaviour (doors, pickups, movers, triggers, simple AI) is quickest as
+a Lua script. Format and API: [Scripting.md](Scripting.md).
+
+1. `write_script {path: "Scripts/Door.lua", content}`. The result says
+   `compiles`; a compile error comes back as `"file:line: message"`.
+2. `add_component {entity, component: "ScriptComponent", fields: {script:
+   "GameData.Scripts/Door.lua", properties: {...}}}`. `properties` overrides the
+   script's `Properties` defaults per entity (`set_component_field` merges).
+3. `play`, then drive it: `set_simulation {paused: true}` + `step_simulation`,
+   `send_input` (keys reach `OnKeyDown`, also when sent while paused - they are
+   delivered on the next step), `capture_view`.
+4. Read `get_recent_engine_logs {sinceSeq}`: `Log.Info`/`print` lines and runtime
+   errors (warnings, with file:line, reported once) are tagged `[Script]`.
+5. Fix with another `write_script`: it hot-reloads within ~0.25 s, even during
+   play, and running instances keep their `self` state. A faulted instance resumes
+   once the fixed file is saved.
+
+`validate_current_scene` flags scripts that are missing or don't compile
+(`scriptError`); `list_scripts {check: true}` checks them all.
+
+### C++
 
 The game is a C++ DLL (`IGameExtension`: `OnCreateGame`, `OnUpdate`,
 `OnFixedUpdate`, `OnStopGame`) in the project's `Code/` folder.
@@ -101,12 +125,13 @@ The game is a C++ DLL (`IGameExtension`: `OnCreateGame`, `OnUpdate`,
    message}`. Fix and rebuild. Success hot-reloads the game.
 4. `play` and check behaviour (logs, captures, input).
 
-Scripted logic (no C++ build) is coming with the scripting plugin.
 
 ## 6. Play-testing
 
 - `play` needs a built `Build/Game.dll`. `stop` restores the scene to exactly
-  its pre-play state — **edits made while playing are discarded**.
+  its pre-play state — **edits made while playing are discarded**. Only entities
+  that save with the scene are restored: an in-memory primitive (no `saveAs`)
+  keeps whatever play did to it.
 - Deterministic testing: `set_simulation {paused: true}`, then `step_simulation
   {steps: N}` (exact fixed ticks), `capture_view` between steps.
   `timeScale` slows or speeds gameplay.
@@ -133,8 +158,6 @@ Scripted logic (no C++ build) is coming with the scripting plugin.
 - `save_scene` saves EVERY open scene; there is no single-scene save yet.
 - `validate_current_scene` reports deliberate `snap_to_ground` offsets as
   `floating` (info) - ignore those.
-- No bridge tool writes Lua scripts yet (the scripting plugin exists; tools to
-  create/attach scripts are next).
 - Engine render helpers (`ReflectionProbeRig`) appear on their own; they are
   not scene content.
 - `capture_view` takes ~1–2 s (it waits frames so temporal effects settle).
