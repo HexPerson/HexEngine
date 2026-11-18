@@ -2531,4 +2531,41 @@ namespace HexEditor
 	{
 		return IsPrefabStageActive();
 	}
+
+	bool EditorUI::StartPlayMode(std::string& error)
+	{
+		if (IsPrefabStageActive())
+		{
+			error = "close the prefab stage before playing";
+			return false;
+		}
+		if (_integrator.GetState() == GameTestState::Started)
+			return true;
+		if (!_integrator.RunGame())
+		{
+			error = "the game did not start: the project's Build/Game.dll is missing or failed to load (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::StopPlayMode(std::string& error)
+	{
+		if (_integrator.GetState() != GameTestState::Started)
+		{
+			error = "the game is not running";
+			return false;
+		}
+		if (!_integrator.StopGame())
+		{
+			error = "stopping the game failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::IsPlayModeActive()
+	{
+		return _integrator.GetState() == GameTestState::Started;
+	}
 }

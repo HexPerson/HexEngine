@@ -121,5 +121,12 @@ namespace HexEngine
 		virtual bool SavePrefabEditStage(std::string& error) { error = "not supported by this host"; return false; }
 		virtual bool ClosePrefabEditStage(bool saveChanges, std::string& error) { (void)saveChanges; error = "not supported by this host"; return false; }
 		virtual bool IsPrefabEditStageOpen() { return false; }
+
+		// Play mode (the scene view's Run / Stop). Start loads the project's
+		// Build/Game.dll if needed; stopping restores the scene to its pre-play
+		// state.
+		virtual bool StartPlayMode(std::string& error) { error = "not supported by this host"; return false; }
+		virtual bool StopPlayMode(std::string& error) { error = "not supported by this host"; return false; }
+		virtual bool IsPlayModeActive() { return false; }
 	};
 }

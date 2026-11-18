@@ -88,6 +88,9 @@ public:
 		virtual bool SavePrefabEditStage(std::string& error) override;
 		virtual bool ClosePrefabEditStage(bool saveChanges, std::string& error) override;
 		virtual bool IsPrefabEditStageOpen() override;
+		virtual bool StartPlayMode(std::string& error) override;
+		virtual bool StopPlayMode(std::string& error) override;
+		virtual bool IsPlayModeActive() override;
 
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 

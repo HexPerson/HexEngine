@@ -135,8 +135,9 @@ Read (always available):
 | `hex_ground_height` | Surface height under up to 20000 `[x, z]` points (rays down from `fromY`), same filters — for scattering and placement. |
 | `hex_query_region` | Entities whose world bounds touch a sphere or box, nearest first, with their bounds. |
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
-| `hex_list_loaded_resources`, `hex_validate_current_scene`, `hex_list_projects` | |
-| `hex_find_missing_references` | `NotImplemented` (follow-up). |
+| `hex_validate_current_scene` | Problems to fix, sorted error > warning > info with a `code` and the entity: NaN / zero-scale transforms, entities below `killY`, missing or unsaved (in-memory) mesh/material assets on saved entities, double-spawned duplicates (same mesh, position, rotation), out-of-date prefab instances, no camera / lights / PlayerStart, and with `groundCheck` floating top-level meshes. |
+| `hex_find_missing_references` | The asset-reference subset of the above. |
+| `hex_list_loaded_resources`, `hex_list_projects` | |
 
 Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 
@@ -164,6 +165,10 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_create_prefab` | Save an entity hierarchy as a new `.hprefab`; by default the original is replaced by a linked instance. |
 | `hex_apply_prefab_instance` / `hex_revert_prefab_instance` / `hex_update_prefab_instance` | Instance ↔ asset sync, same as the inspector buttons. |
 | `hex_open_prefab_stage` / `hex_save_prefab_stage` / `hex_close_prefab_stage` | Prefab authoring: while the stage is open, every entity/component tool edits the prefab. |
+| `hex_play` / `hex_stop` | The scene view's Run / Stop. Play needs the project's built `Build/Game.dll` (it refuses rather than starting a build); stop restores the scene to its pre-play state. |
+| `hex_set_simulation` | Play mode: `paused`, `timeScale` (0..100). Paused = no fixed ticks / physics and zero gameplay delta time; rendering, UI and input keep running. Resets when play stops, so edit mode is never frozen. |
+| `hex_step_simulation` | Play mode: pause and advance exactly N fixed ticks (1/`cl_simulationRate` s each), then return. |
+| `hex_send_input` | Timed keyboard/mouse sequence for the running game (`keyDown`/`keyUp`/`hold`/`mouseMove`/`mouseMoveTo`/`mouseDown`/`mouseUp`/`click`/`wheel`/`text`/`wait`). Goes through `InputSystem`, so key binds (WASD) and listeners see it like real input; held keys are released at the end. Refused outside play mode unless `allowInEditMode`. |
 | `hex_batch` | See below. |
 
 ### Undo and prefab overrides
@@ -314,5 +319,13 @@ Serialize/Deserialize stay the source of truth — metadata is purely additive.
 
 - New / open / switch scenes (only saving is supported).
 - Model import (FBX/glTF), material graphs, texture creation.
-- Play mode control, input injection, game build / hot reload.
+- Game build / hot reload through the bridge (play needs an already built `Build/Game.dll`).
 - Arbitrary shell/command execution.
+
+### Play mode notes
+
+- Gameplay time is separate from real time (`TimeManager::GetGameFrameTime()`):
+  scene / game-extension updates, fixed ticks, animation blends, light pulses and
+  particles use it; UI, input and render temporal effects keep real time.
+- While a game with a locked mouse runs, the engine recentres the cursor every
+  frame, which also captures the user's real mouse while the editor has focus.

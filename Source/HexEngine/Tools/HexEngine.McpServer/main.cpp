@@ -186,8 +186,16 @@ namespace
 		v.push_back({ "inspect_component", "A component's serialised fields - the exact names/shapes hex_set_component_field accepts.",
 			Obj(json{ {"entity", EntityRefSchema()}, {"component", Str("Component type name, e.g. \"Transform\".")} }, { "entity", "component" }) });
 		v.push_back({ "list_loaded_resources", "Currently loaded resources (id/path/refcount).", Obj(json{ {"limit", Int("Max results (<= 2000).")} }) });
-		v.push_back({ "find_missing_references", "Find missing asset references (not implemented yet).", Obj(json::object()) });
-		v.push_back({ "validate_current_scene", "Basic scene validation diagnostics.", Obj(json::object()) });
+		const json validateProps = json{
+			{"limit", Int("Max issues listed (default 200; counts always cover everything).")},
+			{"minSeverity", json{ {"type", "string"}, {"enum", json::array({ "info", "warning", "error" })}, {"description", "Lowest severity to report (default info)."} }},
+		};
+		v.push_back({ "find_missing_references", "Asset-reference check only: meshes/materials whose files are missing, and in-memory (unsaved) meshes/materials on entities that save with the scene.", Obj(validateProps) });
+		json validateAll = validateProps;
+		validateAll["killY"] = Num("World height below which an entity counts as fallen out of the world (default -500).");
+		validateAll["groundCheck"] = Bool("Also flag top-level mesh entities floating above the surface below them (raycasts; default false).");
+		validateAll["floatTolerance"] = Num("groundCheck: gap that counts as floating (default 0.25).");
+		v.push_back({ "validate_current_scene", "Check the scene for problems an agent should fix: NaN/zero-scale transforms, entities fallen out of the world, missing or unsaved mesh/material assets, double-spawned duplicates, out-of-date prefab instances, no camera / lights / PlayerStart, and (groundCheck) floating objects. Issues come sorted error > warning > info, with codes and the entity.", Obj(validateAll) });
 		v.push_back({ "get_recent_engine_logs", "Recent engine log lines with sequence numbers. Pass the previous lastSeq as sinceSeq to get only NEW lines.",
 			Obj(json{ {"max", Int("Max lines (<= 1000, default 200).")}, {"sinceSeq", Int("Only lines with seq greater than this.")},
 				{"minLevel", json{ {"type", "string"}, {"enum", json::array({ "debug", "info", "warn", "crit" })}, {"description", "Minimum level."} }} }) });
@@ -361,6 +369,23 @@ namespace
 		v.push_back({ "save_prefab_stage", w("Save the open prefab stage to its asset. Not batchable."), Obj(json::object()) });
 		v.push_back({ "close_prefab_stage", w("Close the prefab stage and return to the level scene. Not batchable."),
 			Obj(json{ {"save", Bool("true = save changes first, false = discard.")} }, { "save" }) });
+		v.push_back({ "play", w("Enter play mode (the scene view's Run): loads the project's Build/Game.dll and starts the game. Refuses if the game DLL isn't built. hex_stop restores the scene to its pre-play state. Not batchable."),
+			Obj(json{ {"waitFrames", Int("Frames to let the game run before returning (default 5).")} }) });
+		v.push_back({ "stop", w("Leave play mode; the scene returns to exactly its pre-play state. Not batchable."), Obj(json::object()) });
+		v.push_back({ "set_simulation", w("Play mode only: pause/resume gameplay and set a time scale (slow motion / fast forward). Paused = no physics or fixed ticks and zero gameplay delta time; rendering, UI and input keep running."),
+			Obj(json{ {"paused", Bool("Pause (true) or resume (false) the game simulation.")}, {"timeScale", Num("Gameplay speed multiplier 0..100 (1 = real time).")} }) });
+		v.push_back({ "step_simulation", w("Play mode only: pause (if not already) and advance the game by exactly N fixed simulation ticks (1/cl_simulationRate s each), then return. For deterministic observe-act loops. Not batchable."),
+			Obj(json{ {"steps", Int("Fixed ticks to run (1..6000, default 1).")} }) });
+		v.push_back({ "send_input", w("Feed keyboard/mouse input to the RUNNING game (play mode), as a timed sequence. Key binds (e.g. WASD) and input listeners receive it exactly like real input. Keys still held at the end are released. Not batchable."),
+			Obj(json{
+				{"events", json{ {"type", "array"}, {"minItems", 1}, {"maxItems", 2000}, {"description",
+					"Ordered events: {type: keyDown|keyUp, key} | {type: hold, key, frames|ms} (down, wait, up) | {type: mouseMove, dx, dy} (relative look delta as the game receives it) | "
+					"{type: mouseMoveTo, x, y} | {type: mouseDown|mouseUp|click, button: left|right|middle, x?, y?} | {type: wheel, delta} | {type: text, text} | {type: wait, frames|ms}. "
+					"Keys: \"W\", \"Space\", \"Shift\", \"Ctrl\", \"Alt\", \"Enter\", \"Escape\", \"Tab\", \"Up\"..., \"F1\".., \"Numpad0\".. or a virtual-key code."},
+					{"items", json{ {"type", "object"}, {"properties", json{ {"type", json{ {"type", "string"}, {"enum", json::array({ "keyDown", "keyUp", "hold", "mouseMove", "mouseMoveTo", "mouseDown", "mouseUp", "click", "wheel", "text", "wait" })} }} }}, {"required", json::array({ "type" })} }} }},
+				{"release", Bool("Release keys/buttons still held at the end (default true).")},
+				{"allowInEditMode", Bool("Also send while NOT playing (default false): the editor's own shortcuts react to it.")},
+			}, { "events" }) });
 		v.push_back({ "capture_frame", w("Save the main camera's rendered frame to an image file. Waits waitFrames (default 2) editor frames first so recent edits are visible. Not batchable."),
 			Obj(json{ {"path", Str("Absolute output path (.png / .jpg / .dds).")}, {"waitFrames", Int("Frames to wait before capturing (default 2).")} }, { "path" }) });
 

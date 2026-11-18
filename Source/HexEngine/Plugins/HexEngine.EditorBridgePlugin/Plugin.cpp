@@ -44,6 +44,8 @@
 #include "../../HexEngine.Core/FileSystem/PrefabLoader.hpp"
 #include "../../HexEngine.Core/Physics/IPhysicsSystem.hpp"
 #include "../../HexEngine.Core/Physics/PhysUtils.hpp"
+#include "../../HexEngine.Core/Environment/TimeManager.hpp"
+#include "../../HexEngine.Core/Input/InputSystem.hpp"
 
 #include <deque>
 
@@ -67,6 +69,7 @@
 #include <future>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <random>
 #include <stdexcept>
 #include <thread>
@@ -1583,6 +1586,153 @@ namespace HexEngine
 			return math::Vector3(-cosf(p) * sinf(y), sinf(p), -cosf(p) * cosf(y));
 		}
 
+		// ---- Input injection (D2) ----
+
+		int KeyFromJson(const json& k)
+		{
+			if (k.is_number_integer())
+			{
+				const int vk = k.get<int>();
+				if (vk <= 0 || vk > 0xFE) throw ParamError("virtual-key codes are 1..254");
+				return vk;
+			}
+			if (!k.is_string() || k.get<std::string>().empty()) throw ParamError("'key' must be a key name (\"W\", \"Space\", \"Shift\", \"F1\", ...) or a virtual-key code");
+			std::string s = k.get<std::string>();
+			if (s.size() == 1)
+			{
+				const char c = (char)std::toupper((unsigned char)s[0]);
+				if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return c;
+			}
+			std::string l = s;
+			std::transform(l.begin(), l.end(), l.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+			static const std::pair<const char*, int> kNames[] = {
+				{ "space", VK_SPACE }, { "enter", VK_RETURN }, { "return", VK_RETURN }, { "escape", VK_ESCAPE }, { "esc", VK_ESCAPE },
+				{ "tab", VK_TAB }, { "backspace", VK_BACK }, { "delete", VK_DELETE }, { "insert", VK_INSERT },
+				{ "shift", VK_SHIFT }, { "lshift", VK_LSHIFT }, { "rshift", VK_RSHIFT },
+				{ "ctrl", VK_CONTROL }, { "control", VK_CONTROL }, { "lctrl", VK_LCONTROL }, { "rctrl", VK_RCONTROL },
+				{ "alt", VK_MENU }, { "lalt", VK_LMENU }, { "ralt", VK_RMENU },
+				{ "up", VK_UP }, { "down", VK_DOWN }, { "left", VK_LEFT }, { "right", VK_RIGHT },
+				{ "home", VK_HOME }, { "end", VK_END }, { "pageup", VK_PRIOR }, { "pagedown", VK_NEXT },
+				{ "capslock", VK_CAPITAL }, { "minus", VK_OEM_MINUS }, { "plus", VK_OEM_PLUS }, { "comma", VK_OEM_COMMA }, { "period", VK_OEM_PERIOD },
+			};
+			for (const auto& [name, vk] : kNames) if (l == name) return vk;
+			if (l.size() >= 2 && l[0] == 'f')
+			{
+				const int n = atoi(l.c_str() + 1);
+				if (n >= 1 && n <= 24) return VK_F1 + n - 1;
+			}
+			if (l.rfind("numpad", 0) == 0 && l.size() == 7 && std::isdigit((unsigned char)l[6])) return VK_NUMPAD0 + (l[6] - '0');
+			throw ParamError("unknown key '" + s + "'");
+		}
+
+		int MouseButtonFromJson(const json& e)
+		{
+			const std::string b = e.value("button", std::string("left"));
+			if (b == "left") return VK_LBUTTON;
+			if (b == "right") return VK_RBUTTON;
+			if (b == "middle") return VK_MBUTTON;
+			throw ParamError("'button' must be left, right or middle");
+		}
+
+		struct InputStep
+		{
+			enum Kind { KeyDown, KeyUp, MouseMove, MouseMoveTo, MouseDown, MouseUp, Wheel, Char, WaitFrames, WaitMs } kind;
+			int code = 0;               // vk / button / char / frames / ms
+			float x = 0.0f, y = 0.0f;   // move deltas, positions, wheel delta
+			bool hasPos = false;
+		};
+
+		// Validates and expands `events` (hold / click / text become primitive
+		// steps) before anything is sent.
+		std::vector<InputStep> ParseInputEvents(const json& events)
+		{
+			if (!events.is_array() || events.empty()) throw ParamError("'events' must be a non-empty array");
+			if (events.size() > 2000) throw ParamError("at most 2000 events per call");
+			std::vector<InputStep> out;
+			auto waitOf = [](const json& e, std::vector<InputStep>& o, int defFrames)
+			{
+				if (e.contains("ms")) { InputStep w{ InputStep::WaitMs }; w.code = std::clamp(e["ms"].get<int>(), 0, 60000); o.push_back(w); }
+				else { InputStep w{ InputStep::WaitFrames }; w.code = std::clamp(e.value("frames", defFrames), 0, 3600); o.push_back(w); }
+			};
+			for (const auto& e : events)
+			{
+				if (!e.is_object() || !e.contains("type") || !e["type"].is_string()) throw ParamError("each event needs a 'type'");
+				const std::string t = e["type"].get<std::string>();
+				if (t == "keyDown" || t == "keyUp")
+				{
+					InputStep s{ t == "keyDown" ? InputStep::KeyDown : InputStep::KeyUp };
+					s.code = KeyFromJson(e.value("key", json()));
+					out.push_back(s);
+				}
+				else if (t == "hold" || t == "press")
+				{
+					// Down, keep it held for frames/ms (default 1 frame), up.
+					const int vk = KeyFromJson(e.value("key", json()));
+					InputStep d{ InputStep::KeyDown }; d.code = vk; out.push_back(d);
+					waitOf(e, out, 1);
+					InputStep u{ InputStep::KeyUp }; u.code = vk; out.push_back(u);
+				}
+				else if (t == "mouseMove")
+				{
+					InputStep s{ InputStep::MouseMove };
+					s.x = e.value("dx", 0.0f); s.y = e.value("dy", 0.0f);
+					out.push_back(s);
+				}
+				else if (t == "mouseMoveTo")
+				{
+					InputStep s{ InputStep::MouseMoveTo };
+					if (!e.contains("x") || !e.contains("y")) throw ParamError("mouseMoveTo needs x and y (window pixels)");
+					s.x = e["x"].get<float>(); s.y = e["y"].get<float>();
+					out.push_back(s);
+				}
+				else if (t == "mouseDown" || t == "mouseUp" || t == "click")
+				{
+					const int b = MouseButtonFromJson(e);
+					InputStep d{ InputStep::MouseDown }; d.code = b;
+					if (e.contains("x") && e.contains("y")) { d.x = e["x"].get<float>(); d.y = e["y"].get<float>(); d.hasPos = true; }
+					if (t != "mouseUp") out.push_back(d);
+					if (t == "click") waitOf(e, out, 1);
+					if (t != "mouseDown") { InputStep u{ InputStep::MouseUp }; u.code = b; out.push_back(u); }
+				}
+				else if (t == "wheel")
+				{
+					InputStep s{ InputStep::Wheel }; s.x = e.value("delta", 1.0f); out.push_back(s);
+				}
+				else if (t == "text")
+				{
+					const std::wstring w = Utf8ToWide(e.value("text", std::string()));
+					if (w.empty()) throw ParamError("text event needs 'text'");
+					for (wchar_t c : w) { InputStep s{ InputStep::Char }; s.code = (int)c; out.push_back(s); }
+				}
+				else if (t == "wait")
+					waitOf(e, out, 1);
+				else
+					throw ParamError("unknown event type '" + t + "' (keyDown, keyUp, hold, mouseMove, mouseMoveTo, mouseDown, mouseUp, click, wheel, text, wait)");
+			}
+			return out;
+		}
+
+		// ---- Scene validation (D2) ----
+
+		bool Finite3(const math::Vector3& v) { return std::isfinite(v.x) && std::isfinite(v.y) && std::isfinite(v.z); }
+
+		struct Issue { const char* severity; const char* code; Entity* entity; std::string message; };
+
+		int SeverityRank(const std::string& s) { return s == "error" ? 2 : s == "warning" ? 1 : 0; }
+
+		// Asset reference health for one engine resource path (empty = none).
+		// Returns "" when fine, else a reason.
+		std::string CheckAssetPath(const fs::path& resourcePath)
+		{
+			const std::string ref = resourcePath.generic_string();
+			if (ref.empty()) return "unsaved (in-memory, no asset file)";
+			AssetRef a;
+			std::string err;
+			if (!ResolveAssetRef(ref, nullptr, false, a, err)) return "unresolvable reference '" + ref + "': " + err;
+			if (!AssetExists(a)) return "file missing: '" + ref + "'";
+			return std::string();
+		}
+
 		struct FlagName { const char* name; EntityFlags flag; };
 		const FlagName kEditableFlags[] = {
 			{ "DoNotSave",         EntityFlags::DoNotSave },
@@ -2163,6 +2313,7 @@ namespace HexEngine
 					{"writeEnabled", BridgeWriteEnabled()},
 					{"frame", _frameCount.load()},
 					{"prefabStageOpen", ctx ? ctx->IsPrefabEditStageOpen() : false},
+					{"simulation", SimulationJson()},
 					{"undoCount", ctx ? ctx->GetUndoCount() : 0},
 					{"redoCount", ctx ? ctx->GetRedoCount() : 0},
 				});
@@ -2245,30 +2396,10 @@ namespace HexEngine
 					{"note", "Every name here can be passed to add_component. Field names come from inspect_component on an instance."} });
 			});
 
-			Reg("validate_current_scene", R, Main, Batch, [](int64_t id, const json&) -> json {
+			Reg("validate_current_scene", R, Main, Batch, [this](int64_t id, const json& p) -> json {
 				auto scene = PrimaryUserScene();
 				if (!scene) return NoScene(id);
-				std::vector<EntityId> ids;
-				scene->GetLiveEntityIds(ids);
-				json diagnostics = json::array();
-				size_t unnamed = 0;
-				for (const EntityId& eid : ids)
-				{
-					Entity* e = scene->TryGetEntity(eid);
-					if (!e) continue;
-					if (e->GetName().empty()) ++unnamed;
-				}
-				if (ids.empty())
-					diagnostics.push_back(json{ {"severity","warning"}, {"message","scene has no entities"} });
-				if (unnamed > 0)
-					diagnostics.push_back(json{ {"severity","info"}, {"message", std::to_string(unnamed) + " entities have no name"} });
-				return MakeResult(id, json{
-					{"sceneName", WideToUtf8(scene->GetName())},
-					{"entityCount", ids.size()},
-					{"diagnosticCount", diagnostics.size()},
-					{"diagnostics", diagnostics},
-					{"note", "Validation is minimal (entity presence/naming). Deeper reference/asset validation is a follow-up."},
-				});
+				return MakeResult(id, ValidateScene(id, scene.get(), p, false));
 			});
 
 			Reg("get_open_project", R, Main, Batch, [](int64_t id, const json&) -> json {
@@ -2330,8 +2461,10 @@ namespace HexEngine
 				return MakeResult(id, json{ {"count", arr.size()}, {"resources", arr} });
 			});
 
-			Reg("find_missing_references", R, Pipe, Batch, [](int64_t id, const json&) -> json {
-				return MakeError(id, ErrorCode::NotImplemented, "reference validation is a follow-up (TODO)");
+			Reg("find_missing_references", R, Main, Batch, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				return MakeResult(id, ValidateScene(id, scene.get(), p, true));
 			});
 
 			Reg("get_recent_engine_logs", R, Pipe, Batch, [this](int64_t id, const json& p) -> json {
@@ -3828,6 +3961,187 @@ namespace HexEngine
 				return MakeResult(id, result);
 			});
 
+			// ---- Play mode, simulation control, input, validation (D2) ----
+
+			Reg("play", W, Pipe, Solo, [this](int64_t id, const json& p) -> json {
+				const int waitFrames = std::clamp(p.value("waitFrames", 5), 0, 600);
+				json started = OnMain(id, [&]() -> json {
+					IEditorContext* ctx = Ctx();
+					if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+					if (ctx->IsPlayModeActive()) return MakeResult(id, json{ {"alreadyPlaying", true} });
+					// The editor's Run would otherwise BUILD a missing game DLL
+					// (MSBuild of the game project); building is the user's call.
+					const fs::path dll = fs::path(ctx->GetProjectFolderPath()) / "Build" / "Game.dll";
+					std::error_code ec;
+					if (!fs::exists(dll, ec))
+						return MakeError(id, ErrorCode::NotAvailable, "no built game at '" + dll.string() + "': build the game project first");
+					std::string err;
+					if (!ctx->StartPlayMode(err)) return MakeError(id, ErrorCode::NotAvailable, err);
+					return MakeResult(id, json::object());
+				});
+				if (started.contains("error")) return started;
+				if (!WaitFrames(waitFrames))
+					return MakeError(id, ErrorCode::NotAvailable, "play started but the editor stopped rendering frames");
+				return OnMain(id, [&]() -> json {
+					json r = SimulationJson();
+					if (started["result"].value("alreadyPlaying", false)) r["alreadyPlaying"] = true;
+					r["note"] = "Gameplay runs now. hex_stop restores the scene to its pre-play state; edits made while playing are discarded with it.";
+					return MakeResult(id, r);
+				});
+			});
+
+			Reg("stop", W, Main, Solo, [this](int64_t id, const json&) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
+				std::string err;
+				if (!ctx->StopPlayMode(err)) return MakeError(id, ErrorCode::NotAvailable, err);
+				MarkPvsDirty();
+				json r = SimulationJson();
+				r["note"] = "Scene restored to its pre-play state.";
+				return MakeResult(id, r);
+			});
+
+			Reg("set_simulation", W, Main, Batch, [this](int64_t id, const json& p) -> json {
+				IEditorContext* ctx = Ctx();
+				if (!ctx || !ctx->IsPlayModeActive())
+					return MakeError(id, ErrorCode::NotAvailable, "simulation control applies to play mode: start it with hex_play");
+				TimeManager* tm = g_pEnv->_timeManager;
+				if (p.contains("paused"))
+				{
+					if (!p["paused"].is_boolean()) throw ParamError("'paused' must be true or false");
+					tm->_simulationPaused = p["paused"].get<bool>();
+					if (!tm->_simulationPaused) tm->_pendingSimulationSteps = 0;
+				}
+				if (p.contains("timeScale"))
+				{
+					if (!p["timeScale"].is_number()) throw ParamError("'timeScale' must be a number");
+					const float s = p["timeScale"].get<float>();
+					if (!(s >= 0.0f && s <= 100.0f)) throw ParamError("'timeScale' must be 0..100");
+					tm->_timeScale = s;
+				}
+				return MakeResult(id, SimulationJson());
+			});
+
+			Reg("step_simulation", W, Pipe, Solo, [this](int64_t id, const json& p) -> json {
+				const int steps = std::clamp(p.value("steps", 1), 1, 6000);
+				float before = 0.0f;
+				json armed = OnMain(id, [&]() -> json {
+					IEditorContext* ctx = Ctx();
+					if (!ctx || !ctx->IsPlayModeActive())
+						return MakeError(id, ErrorCode::NotAvailable, "stepping applies to play mode: start it with hex_play");
+					TimeManager* tm = g_pEnv->_timeManager;
+					tm->_simulationPaused = true; // stepping implies paused
+					before = tm->_simulationTime;
+					tm->_pendingSimulationSteps += (uint32_t)steps;
+					return MakeResult(id, json::object());
+				});
+				if (armed.contains("error")) return armed;
+				// <= 120 ticks run per frame; +2 so the last batch has rendered.
+				if (!WaitFrames((steps + 119) / 120 + 2))
+					return MakeError(id, ErrorCode::NotAvailable, "the editor stopped rendering frames while stepping");
+				return OnMain(id, [&]() -> json {
+					TimeManager* tm = g_pEnv->_timeManager;
+					json r = SimulationJson();
+					r["requestedSteps"] = steps;
+					r["advanced"] = tm->_simulationTime - before;
+					r["pendingSteps"] = tm->_pendingSimulationSteps;
+					return MakeResult(id, r);
+				});
+			});
+
+			Reg("send_input", W, Pipe, Solo, [this](int64_t id, const json& p) -> json {
+				const std::vector<InputStep> steps = ParseInputEvents(p.value("events", json()));
+				const bool allowInEditMode = p.value("allowInEditMode", false);
+				const bool release = p.value("release", true);
+				std::set<int> heldKeys, heldButtons;
+				bool inputEnabled = true;
+
+				auto applyRun = [&](size_t from, size_t to) -> json {
+					return OnMain(id, [&, from, to]() -> json {
+						IEditorContext* ctx = Ctx();
+						if (!allowInEditMode && !(ctx && ctx->IsPlayModeActive()))
+							return MakeError(id, ErrorCode::NotAvailable, "send_input drives the running game: start play mode (hex_play) first, or pass allowInEditMode: true - editor shortcuts react to it too");
+						InputSystem* in = g_pEnv->_inputSystem;
+						// The engine drops ALL input while the editor window is
+						// unfocused (WM_KILLFOCUS) - and an agent-driven editor
+						// usually is. Open the gate just for these events.
+						const bool wasEnabled = in->IsInputEnabled();
+						if (!wasEnabled) { in->EnableInput(true); inputEnabled = false; }
+						for (size_t i = from; i < to; ++i)
+						{
+							const InputStep& s = steps[i];
+							switch (s.kind)
+							{
+							case InputStep::KeyDown: in->OnKeyDown(s.code); heldKeys.insert(s.code); break;
+							case InputStep::KeyUp: in->OnKeyUp(s.code); heldKeys.erase(s.code); break;
+							case InputStep::MouseMove: in->OnMouseMove(s.x, s.y, false); break;
+							case InputStep::MouseMoveTo: in->OnMouseMove(s.x, s.y, true); break;
+							case InputStep::MouseDown:
+							{
+								int mx = 0, my = 0;
+								in->GetMousePosition(mx, my);
+								in->OnMouseDown(s.code, s.hasPos ? (int)s.x : mx, s.hasPos ? (int)s.y : my);
+								heldButtons.insert(s.code);
+								break;
+							}
+							case InputStep::MouseUp: in->OnMouseUp(s.code); heldButtons.erase(s.code); break;
+							case InputStep::Wheel: in->OnMouseWheel(s.x); break;
+							case InputStep::Char: in->OnChar((wchar_t)s.code); break;
+							default: break;
+							}
+						}
+						if (!wasEnabled) in->EnableInput(false);
+						return MakeResult(id, json::object());
+					});
+				};
+
+				size_t runStart = 0;
+				int framesWaited = 0;
+				json failure;
+				for (size_t i = 0; i <= steps.size() && failure.is_null(); ++i)
+				{
+					const bool isWait = i < steps.size() && (steps[i].kind == InputStep::WaitFrames || steps[i].kind == InputStep::WaitMs);
+					if (i == steps.size() || isWait)
+					{
+						if (i > runStart)
+						{
+							json r = applyRun(runStart, i);
+							if (r.contains("error")) failure = r;
+						}
+						if (isWait && failure.is_null())
+						{
+							if (steps[i].kind == InputStep::WaitFrames)
+							{
+								if (!WaitFrames(steps[i].code)) failure = MakeError(id, ErrorCode::NotAvailable, "the editor stopped rendering frames");
+								framesWaited += steps[i].code;
+							}
+							else
+								std::this_thread::sleep_for(std::chrono::milliseconds(steps[i].code));
+						}
+						runStart = i + 1;
+					}
+				}
+				// Never leave keys/buttons stuck down (also after a failure).
+				json released = json::array();
+				if (release && (!heldKeys.empty() || !heldButtons.empty()))
+				{
+					OnMain(id, [&]() -> json {
+						InputSystem* in = g_pEnv->_inputSystem;
+						const bool wasEnabled = in->IsInputEnabled();
+						if (!wasEnabled) in->EnableInput(true);
+						for (int k : heldKeys) { in->OnKeyUp(k); released.push_back(k); }
+						for (int b : heldButtons) { in->OnMouseUp(b); released.push_back(b); }
+						if (!wasEnabled) in->EnableInput(false);
+						return MakeResult(id, json::object());
+					});
+				}
+				if (!failure.is_null()) return failure;
+				json r = json{ {"sent", steps.size()}, {"framesWaited", framesWaited}, {"frame", _frameCount.load()} };
+				if (!released.empty()) r["releasedAtEnd"] = released;
+				if (!inputEnabled) r["editorUnfocused"] = true; // delivered anyway (see above)
+				return MakeResult(id, r);
+			});
+
 			// Pipe-thread handler: waits `waitFrames` editor frames (default 2) so
 			// mutations made just before - including the coalesced PVS rebuild -
 			// are actually rendered, THEN marshals the capture. Not batchable (a
@@ -4157,6 +4471,192 @@ namespace HexEngine
 				result["note"] = "in-memory mesh: not saved with the scene and not undoable until save_mesh_asset (or pass saveAs)";
 			}
 			return MakeResult(id, result);
+		}
+
+		// ---- D2: scene validation (main thread) ----
+		json ValidateScene(int64_t id, Scene* scene, const json& p, bool referencesOnly)
+		{
+			const size_t limit = (size_t)std::clamp(p.value("limit", 200), 1, 5000);
+			const int minRank = SeverityRank(p.value("minSeverity", std::string("info")));
+			const float killY = p.value("killY", -500.0f);
+			const bool groundCheck = !referencesOnly && p.value("groundCheck", false);
+			const float floatTolerance = p.value("floatTolerance", 0.25f);
+			IEditorContext* ctx = Ctx();
+
+			std::vector<Issue> issues;
+			auto add = [&](const char* sev, const char* code, Entity* e, std::string msg)
+			{
+				if (SeverityRank(sev) >= minRank) issues.push_back({ sev, code, e, std::move(msg) });
+			};
+
+			std::vector<EntityId> ids;
+			scene->GetLiveEntityIds(ids);
+			size_t lights = 0, playerStarts = 0, meshes = 0;
+			std::map<std::string, Entity*> placed; // duplicate-spawn detection
+			std::vector<Entity*> groundCandidates;
+			for (const EntityId& eid : ids)
+			{
+				Entity* e = scene->TryGetEntity(eid);
+				if (!e || e->IsPendingDeletion()) continue;
+				const bool saved = !e->HasFlag(EntityFlags::DoNotSave);
+
+				if (!referencesOnly)
+				{
+					const math::Vector3 pos = e->GetPosition(), sc = e->GetScale();
+					const math::Quaternion q = e->GetRotation();
+					if (!Finite3(pos) || !Finite3(sc) || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w))
+						add("error", "nonFiniteTransform", e, "position, rotation or scale is NaN/infinite");
+					else
+					{
+						const math::Vector3 wp = e->GetWorldTM().Translation();
+						if (wp.y < killY)
+							add("warning", "fellOutOfWorld", e, "world y " + std::to_string(wp.y) + " is below killY " + std::to_string(killY) + " (fell through the ground?)");
+						if (fabsf(sc.x) < 1e-6f || fabsf(sc.y) < 1e-6f || fabsf(sc.z) < 1e-6f)
+							add("warning", "zeroScale", e, "a scale component is ~0 (invisible / degenerate physics)");
+					}
+					if (FindComponent(e, "PlayerStartComponent")) ++playerStarts;
+					for (const char* lt : { "PointLight", "SpotLight", "DirectionalLight", "AreaLight" })
+						if (FindComponent(e, lt)) { ++lights; break; }
+					if (ctx && e->IsPrefabInstanceRoot())
+					{
+						const json info = ctx->DescribePrefabInstance(e);
+						if (info.value("outOfDate", false))
+							add("info", "prefabOutOfDate", e, "built from an older version of " + info.value("sourcePath", std::string("its prefab")) + " (update_prefab_instance)");
+					}
+				}
+
+				auto* smc = e->GetComponent<StaticMeshComponent>();
+				if (!smc) continue;
+				++meshes;
+				auto mesh = smc->GetMesh();
+				if (!mesh)
+				{
+					add("error", "meshMissing", e, "StaticMeshComponent has no mesh");
+					continue;
+				}
+				const std::string meshProblem = CheckAssetPath(mesh->GetFileSystemPath());
+				if (!meshProblem.empty())
+				{
+					if (mesh->GetFileSystemPath().empty())
+					{
+						if (saved) add("warning", "meshUnsaved", e, "in-memory mesh on an entity that saves with the scene: the saved reference will be empty (save_mesh_asset)");
+					}
+					else if (mesh->GetFileSystemPath().generic_string() != "TERRAIN")
+						add("error", "meshFileMissing", e, "mesh " + meshProblem);
+				}
+				auto mat = smc->GetMaterial();
+				if (!mat)
+					add("warning", "materialMissing", e, "mesh has no material");
+				else
+				{
+					const std::string matProblem = CheckAssetPath(mat->GetFileSystemPath());
+					if (!matProblem.empty())
+					{
+						if (mat->GetFileSystemPath().empty())
+						{
+							if (saved) add("warning", "materialUnsaved", e, "private (unsaved) material on an entity that saves with the scene (save_mesh_asset or assign_material)");
+						}
+						else
+							add("error", "materialFileMissing", e, "material " + matProblem);
+					}
+				}
+
+				if (!referencesOnly && !mesh->GetFileSystemPath().empty())
+				{
+					// Same mesh at the same spot and orientation = a double spawn.
+					const math::Vector3 wp = e->GetWorldTM().Translation();
+					const math::Quaternion q = e->GetRotation();
+					char key[512];
+					snprintf(key, sizeof(key), "%s|%.2f|%.2f|%.2f|%.2f|%.2f|%.2f|%.2f", mesh->GetFileSystemPath().generic_string().c_str(),
+						wp.x, wp.y, wp.z, q.x, q.y, q.z, q.w);
+					auto [it, inserted] = placed.emplace(key, e);
+					if (!inserted)
+						add("warning", "duplicateOverlap", e, "same mesh, position and rotation as '" + it->second->GetName() + "' (spawned twice?)");
+				}
+				if (groundCheck && !e->GetParent() && !e->HasFlag(EntityFlags::DoNotRender))
+					groundCandidates.push_back(e);
+			}
+
+			if (groundCheck)
+			{
+				// Floating roots: the surface under the bounds' bottom centre is
+				// more than floatTolerance below it.
+				size_t checked = 0;
+				for (Entity* e : groundCandidates)
+				{
+					if (++checked > 3000) break;
+					dx::BoundingBox box;
+					HierarchyAABB(e, box);
+					RayOptions opt;
+					opt.rigidBodyColliders = false;
+					opt.maxDistance = 200.0f;
+					AddHierarchy(e, opt.ignore);
+					const float bottom = box.Center.y - box.Extents.y;
+					const RayResult r = CastRay(scene, math::Vector3(box.Center.x, bottom + 0.01f, box.Center.z), math::Vector3(0, -1, 0), opt);
+					if (r.hit && r.distance - 0.01f > floatTolerance)
+						add("info", "floating", e, "bottom is " + std::to_string(r.distance - 0.01f) + " above the surface below (" + (r.entity ? r.entity->GetName() : std::string("collider")) + "); snap_to_ground?");
+				}
+			}
+
+			if (!referencesOnly)
+			{
+				if (!scene->GetMainCamera()) add("error", "noMainCamera", nullptr, "the scene has no main camera");
+				if (lights == 0) add("warning", "noLights", nullptr, "no light components in the scene");
+				if (playerStarts == 0) add("info", "noPlayerStart", nullptr, "no PlayerStartComponent: play mode starts wherever the editor camera is");
+				if (ids.empty()) add("warning", "emptyScene", nullptr, "the scene has no entities");
+			}
+
+			std::stable_sort(issues.begin(), issues.end(), [](const Issue& a, const Issue& b) { return SeverityRank(a.severity) > SeverityRank(b.severity); });
+			json counts = json::object(), list = json::array();
+			json bySeverity = json{ {"error", 0}, {"warning", 0}, {"info", 0} };
+			for (const auto& is : issues)
+			{
+				counts[is.code] = counts.value(is.code, 0) + 1;
+				bySeverity[is.severity] = bySeverity[is.severity].get<int>() + 1;
+				if (list.size() < limit)
+					list.push_back(json{ {"severity", is.severity}, {"code", is.code}, {"entity", is.entity ? EntityBrief(is.entity) : json(nullptr)}, {"message", is.message} });
+			}
+			json result = json{
+				{"sceneName", WideToUtf8(scene->GetName())},
+				{"entityCount", ids.size()},
+				{"meshEntities", meshes},
+				{"issueCount", issues.size()},
+				{"bySeverity", bySeverity},
+				{"counts", counts},
+				{"issues", list},
+				{"truncated", issues.size() > list.size()},
+			};
+			(void)id;
+			return result;
+		}
+
+		// Frames until `pred` holds (pipe thread). False on timeout.
+		bool WaitFrames(int frames)
+		{
+			const uint64_t target = _frameCount.load() + (uint64_t)std::max(frames, 0);
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kPendingTimeoutMs * 6);
+			while (_frameCount.load() < target)
+			{
+				if (std::chrono::steady_clock::now() >= deadline) return false;
+				std::this_thread::sleep_for(std::chrono::milliseconds(2));
+			}
+			return true;
+		}
+
+		json SimulationJson()
+		{
+			TimeManager* tm = g_pEnv ? g_pEnv->_timeManager : nullptr;
+			const bool playing = Ctx() ? Ctx()->IsPlayModeActive() : (g_pEnv && g_pEnv->IsGameRunning());
+			if (!tm) return json{ {"playing", playing} };
+			return json{ {"playing", playing}, {"paused", tm->_simulationPaused}, {"timeScale", tm->_timeScale},
+				{"simulationTime", tm->_simulationTime}, {"fixedStep", 1.0f / std::max(1.0f, SimulationRate())} };
+		}
+
+		static float SimulationRate()
+		{
+			if (HVar* v = g_pEnv && g_pEnv->_commandManager ? g_pEnv->_commandManager->FindHVar("cl_simulationRate") : nullptr)
+				return v->_val.f32;
+			return 60.0f;
 		}
 
 		StaticMeshComponent* RequireMeshComponent(int64_t id, Entity* e, json& err)
