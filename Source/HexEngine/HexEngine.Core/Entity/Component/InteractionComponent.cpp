@@ -90,8 +90,11 @@ namespace HexEngine
 			const float maxDist = 1000.0f;
 			math::Ray ray(origin, forward);
 			RayHit hit;
+			// The camera usually lives on the player entity, and the ray starts
+			// inside the player's own bounds/collider - never hit ourselves.
+			const std::vector<Entity*> ignore{ cam->GetEntity() };
 			if (!PhysUtils::RayCast(ray, maxDist,
-				LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit))
+				LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit, ignore))
 				return nullptr;
 
 			if (hit.entity == nullptr)

@@ -234,6 +234,12 @@ namespace HexEngine
 		uint32_t GetNumIndices() const;
 		uint32_t GetNumVertices() const;
 
+		// Bumped by every CPU-side vertex/index change (Add*, Clear,
+		// UpdateDynamicGeometry, SetNumFaces). Caches derived from the CPU
+		// geometry - e.g. PhysUtils' per-mesh ray BVH - compare it to know when
+		// to rebuild. Subclasses that write _indices directly must bump it too.
+		uint32_t GetGeometryRevision() const { return _geometryRevision; }
+
 		const dx::BoundingBox& GetAABB() const;
 		const dx::BoundingOrientedBox& GetOBB() const;		
 
@@ -280,6 +286,7 @@ namespace HexEngine
 		uint32_t _simpleVertexBufferCapacity = 0;
 		uint32_t _indexBufferCapacity = 0;
 		bool _isDynamicMesh = false;
+		uint32_t _geometryRevision = 0;
 
 	private:
 		std::shared_ptr<Model> _model;

@@ -203,6 +203,7 @@ namespace HexEngine
 
 	void Mesh::Clear()
 	{
+		++_geometryRevision;
 		_vertices.clear();
 		_indices.clear();
 		_simpleVertices.clear();
@@ -405,6 +406,7 @@ namespace HexEngine
 			}
 		}
 
+		++_geometryRevision;
 		_vertices = vertices;
 		_indices = indices;
 		_simpleVertices.clear();
@@ -440,6 +442,7 @@ namespace HexEngine
 		vertexFixed = vertex;
 		vertexFixed._position.w = 1.0f;
 
+		++_geometryRevision;
 		_vertices.push_back(vertexFixed);
 
 		SimpleMeshVertex smv;
@@ -451,6 +454,7 @@ namespace HexEngine
 
 	void Mesh::AddIndex(const MeshIndexFormat index)
 	{
+		++_geometryRevision;
 		_indices.push_back(index);
 	}
 
@@ -464,6 +468,7 @@ namespace HexEngine
 
 	void Mesh::AddIndices(const std::vector<MeshIndexFormat>& indices)
 	{
+		++_geometryRevision;
 		_indices.insert(_indices.end(), indices.begin(), indices.end());
 	}
 
@@ -496,6 +501,7 @@ namespace HexEngine
 
 	void Mesh::SetNumFaces(uint32_t numFaces)
 	{
+		++_geometryRevision;
 		_faceCount = numFaces;
 	}
 

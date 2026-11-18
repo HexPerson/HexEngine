@@ -447,7 +447,8 @@ namespace HexEngine
 			ray,
 			camera->GetFarZ(),
 			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry),
-			&hit))
+			&hit,
+			{ camera->GetEntity() })) // don't pick the camera's own entity (ray starts inside it)
 		{
 			return false;
 		}

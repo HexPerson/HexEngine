@@ -425,6 +425,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Input\MouseInputDevice.hpp" />
     <ClInclude Include="Math\easing.h" />
     <ClInclude Include="Physics\PhysUtils.hpp" />
+    <ClInclude Include="Physics\RayMath.hpp" />
     <ClInclude Include="Plugin\IPlugin.hpp" />
     <ClInclude Include="Plugin\PluginSystem.hpp" />
     <ClInclude Include="Plugin\PluginManifest.hpp" />

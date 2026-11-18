@@ -241,8 +241,9 @@ namespace HexEngine
 
 		math::Ray ray(origin, dir);
 		RayHit hit;
+		// Skip the camera's own entity (and children): the ray starts inside it.
 		if (PhysUtils::RayCast(ray, 100000.0f,
-			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit))
+			LAYERMASK(Layer::StaticGeometry) | LAYERMASK(Layer::DynamicGeometry), &hit, { cam->GetEntity() }))
 		{
 			_targetPosition = hit.position;
 			LOG_INFO("NavigationComponent: target set to [%.2f %.2f %.2f].",
