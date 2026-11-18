@@ -5762,7 +5762,15 @@ namespace HexEngine
 		auto mesh = _sphereMesh;
 		if (mesh == nullptr || _pointLightMaterial == nullptr)
 			return;
+		// Nothing else attaches the light-volume sphere to a renderer (it used
+		// to be a StaticMeshComponent's mesh, whose SetMesh created this), so
+		// create its instance on first use. Only when missing: CreateInstance
+		// AddRefs an existing one.
 		auto instance = mesh->GetInstance();
+		if (instance == nullptr)
+			instance = mesh->CreateInstance();
+		if (instance == nullptr)
+			return;
 
 		// One draw per light, mirroring RenderSpotLights. The previous batched
 		// DrawIndexedInstanced couldn't bind per-light shadow maps or per-light
@@ -5932,7 +5940,15 @@ namespace HexEngine
 		auto mesh = _sphereMesh;
 		if (mesh == nullptr || _spotLightMaterial == nullptr)
 			return;
+		// Nothing else attaches the light-volume sphere to a renderer (it used
+		// to be a StaticMeshComponent's mesh, whose SetMesh created this), so
+		// create its instance on first use. Only when missing: CreateInstance
+		// AddRefs an existing one.
 		auto instance = mesh->GetInstance();
+		if (instance == nullptr)
+			instance = mesh->CreateInstance();
+		if (instance == nullptr)
+			return;
 		bool renderedSphere = false;
 
 		auto renderLightList = [&](const std::vector<SpotLight*>& lights, CullingMode cullMode)
