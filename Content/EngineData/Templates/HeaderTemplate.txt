@@ -8,12 +8,18 @@ namespace <$NAMESPACE>
 	class <$NAME> : public HexEngine::IGameExtension
 	{
 	public:
+		// Lifecycle
+		//
+		// Standalone launcher: OnRegisterClasses -> OnLoadGameWorld -> OnCreateGame -> (loop) -> OnStopGame -> OnShutdown
+		// Editor play mode:   OnRegisterClasses (on DLL load) -> OnCreateGame -> (play) -> OnStopGame
+		//                     The editor has already loaded the scene, so OnLoadGameWorld is NOT called there.
+		//
 		virtual void OnCreateGame() override;
-		
+
 		virtual void OnStopGame() override;
-		
+
 		virtual void OnLoadGameWorld() override;
-		
+
 		virtual void OnRegisterClasses() override;
 
 		virtual void OnUpdate(float frameTime) override;
@@ -29,12 +35,17 @@ namespace <$NAMESPACE>
 		virtual void OnDebugRender() override;
 
 		virtual void OnResize(int32_t width, int32_t height) override {}
-		
+
 		virtual std::string GetGameName() const override { return "<$NAME>"; }
-		
+
 	private:
 		std::shared_ptr<HexEngine::Scene> _scene;
-		HexEngine::FileSystem* _gameData = nullptr;
+
+		// The camera controller this game attached in OnCreateGame, so OnStopGame
+		// can take it off again. In the editor the main camera persists between
+		// play sessions and components added during play are not rolled back.
+		HexEngine::Entity* _cameraEntity = nullptr;
+		bool _addedCameraController = false;
 	};
 
 	inline <$NAME>* g_pGame = nullptr;

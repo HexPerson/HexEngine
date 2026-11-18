@@ -10,4 +10,9 @@
     <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
 	<LocalDebuggerCommand>$(OutDir)<$NAME>.exe</LocalDebuggerCommand>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <LocalDebuggerWorkingDirectory>$(OutDir)</LocalDebuggerWorkingDirectory>
+    <DebuggerFlavor>WindowsLocalDebugger</DebuggerFlavor>
+	<LocalDebuggerCommand>$(OutDir)<$NAME>.exe</LocalDebuggerCommand>
+  </PropertyGroup>
 </Project>

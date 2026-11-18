@@ -1,17 +1,33 @@
 
-
 #include <HexEngine.Core\HexEngine.hpp>
 #include "<$NAME>.hpp"
 
-HexEngine::IEnvironment* HexEngine::g_pEnv = nullptr;
+// NOTE: HexEngine::g_pEnv is defined and exported by HexEngine.Core.dll - do not
+// define it here (a second definition of a dllimport variable will not compile).
 
 extern "C"
 {
+	// Called by the standalone launcher (which passes the environment pointer) and
+	// by the editor's GameIntegrator (which passes nothing). The environment is
+	// always reachable through HexEngine::g_pEnv, so the argument is ignored and
+	// the signature takes none - safe for both callers under the x64 ABI.
 	__declspec(dllexport) HexEngine::IGameExtension* CreateGame()
 	{
 		<$NAMESPACE>::g_pGame = new <$NAMESPACE>::<$NAME>;
 
 		return <$NAMESPACE>::g_pGame;
+	}
+
+	// Called by the editor before it unloads the game DLL (hot reload / stop).
+	// Deleting here keeps the free on this module's heap and runs <$NAME>'s
+	// destructor - IGameExtension has no virtual destructor, so a delete through
+	// the base pointer from the engine side would skip it.
+	__declspec(dllexport) void DestroyGame(HexEngine::IGameExtension* game)
+	{
+		delete static_cast<<$NAMESPACE>::<$NAME>*>(game);
+
+		if (<$NAMESPACE>::g_pGame == game)
+			<$NAMESPACE>::g_pGame = nullptr;
 	}
 }
 

@@ -14,7 +14,7 @@
     <VCProjectVersion>16.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <ProjectGuid><$GUID></ProjectGuid>
-    <RootNamespace>HexEngineCore</RootNamespace>
+    <RootNamespace><$NAME></RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <!--
@@ -148,4 +148,4 @@ xcopy "$(SolutionDir)..\Data\" "$(OutDir)Data\" /e /s /y &gt;nul</Command>
   <ImportGroup Label="ExtensionTargets">
     <Import Project="HexEngine.Shaders.targets" />
   </ImportGroup>
-</Project>
+</Project>
