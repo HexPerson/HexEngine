@@ -1487,7 +1487,12 @@ namespace HexEditor
 
 		if (targetParent != nullptr)
 		{
-			clonedEntity->SetParent(targetParent);
+			// Keep the cloned LOCAL transform. The default SetParent preserves
+			// world position, and since the clone is still unparented (world ==
+			// its local) that baked -parentWorld into every child of an offset
+			// parent: reverted or re-written prefabs had nested children (door
+			// leaves in a wall module) displaced by their parent's offset.
+			clonedEntity->SetParent(targetParent, false);
 		}
 
 		if (!prefabSourcePath.empty())
@@ -3147,6 +3152,13 @@ namespace HexEditor
 		auto* parent = entity->GetParent();
 		const std::string desiredInstanceName = entity->GetName();
 
+		// Revert resets the instance's CONTENT, not where it stands: keep the
+		// root's placement (the prefab asset's root sits at its own origin, so
+		// re-cloning alone moved the instance there).
+		const math::Vector3 rootPosition = entity->GetPosition();
+		const math::Quaternion rootRotation = entity->GetRotation();
+		const math::Vector3 rootScale = entity->GetScale();
+
 		targetScene->DestroyEntity(entity);
 
 		auto* newRoot = CloneEntityHierarchyToScene(targetScene, sourceRoot, parent, prefabPath, sourceRoot->GetName(), true);
@@ -3161,6 +3173,10 @@ namespace HexEditor
 			std::string finalName;
 			targetScene->RenameEntity(newRoot, desiredInstanceName, &finalName);
 		}
+
+		newRoot->SetPosition(rootPosition);
+		newRoot->SetRotation(rootRotation);
+		newRoot->SetScale(rootScale);
 
 		if (_entityList != nullptr)
 		{
