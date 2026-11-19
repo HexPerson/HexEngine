@@ -14,11 +14,11 @@
 #include <format>
 #include <sstream>
 
-// Unselected lanes are drawn as a network overlay in the editor. A generated
-// city has thousands of lane nodes, each costing a marker box, a name lookup
-// per next-lane link and the lines themselves, so only nodes near the camera
-// draw. Selected lanes always draw (via the editor-gizmo path).
-HexEngine::HVar city_laneDebugDistance("city_laneDebugDistance", "Editor: unselected traffic lanes draw only within this many metres of the camera (0 = no limit)", 200.0f, 0.0f, 100000.0f);
+// Unselected lanes are drawn as a network overlay in the editor; each node
+// costs a marker box, a name lookup per next-lane link and the lines. Off by
+// default (the whole network is wanted in overview shots); set a radius for
+// very large lane graphs. Selected lanes always draw (editor-gizmo path).
+HexEngine::HVar city_laneDebugDistance("city_laneDebugDistance", "Editor: unselected traffic lanes draw only within this many metres of the camera (0 = no limit)", 0.0f, 0.0f, 100000.0f);
 
 namespace
 {
@@ -98,13 +98,14 @@ void TrafficLaneComponent::GatherLanePoints(std::vector<math::Vector3>& outPoint
 {
 	outPoints.clear();
 
-	std::vector<HexEngine::Entity*> waypoints;
-	GatherLaneWaypointEntities(waypoints);
-	outPoints.reserve(waypoints.size());
-	for (auto* child : waypoints)
-	{
-		outPoints.push_back(child->GetWorldTM().Translation());
-	}
+	// Same node set as GatherLaneWaypointEntities (a lane is exactly one node),
+	// without a temporary vector - this runs per lane per frame for the editor
+	// overlay and per vehicle lane query.
+	auto* entity = GetEntity();
+	if (entity == nullptr || entity->IsPendingDeletion())
+		return;
+
+	outPoints.push_back(entity->GetWorldTM().Translation());
 }
 
 void TrafficLaneComponent::SetNextLaneNamesFromCsv(const std::string& csv)
@@ -280,7 +281,8 @@ void TrafficLaneComponent::OnRenderEditorGizmo(bool isSelected, bool& isHovering
 	if (!_drawDebug && !isSelected)
 		return;
 
-	std::vector<math::Vector3> points;
+	// Reused across calls: the overlay runs this for every lane every frame.
+	static std::vector<math::Vector3> points;
 	GatherLanePoints(points);
 
 	if (points.empty())
