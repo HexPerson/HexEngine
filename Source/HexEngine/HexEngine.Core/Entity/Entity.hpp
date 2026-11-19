@@ -373,6 +373,11 @@ namespace HexEngine
 		bool _hasCachedWorldOBB = false;
 		bool _hasCachedWorldBoundingSphere = false;
 		bool _hasCachedWorldOcclusionVolume = true;
+		// Bounds last recorded in the scene's shadow-invalidation journal, so a
+		// move dirties shadow tiles around where the entity WAS as well as where
+		// it is (Scene::RecordShadowDirty).
+		dx::BoundingSphere _lastShadowBounds;
+		bool _hasLastShadowBounds = false;
 		uint64_t _transformVersion = 1;
 		// Frame number that last refreshed _cachedWorldTMPrev. Used by GetWorldTM() to
 		// advance prev<-current at the first call of each new frame even when the world TM

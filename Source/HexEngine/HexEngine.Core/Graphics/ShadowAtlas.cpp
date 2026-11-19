@@ -4,6 +4,7 @@
 #include "../Entity/Entity.hpp"
 #include "../Entity/Component/Light.hpp"
 #include "../Entity/Component/Camera.hpp"
+#include "../Scene/Scene.hpp"
 
 #include <algorithm>
 #include <d3d11.h>
@@ -102,14 +103,11 @@ namespace HexEngine
 		return -1;
 	}
 
-	uint64_t ShadowAtlas::ComputeFaceContentHash(const Light* light, uint8_t face, uint64_t sceneGeometryRevision) const
+	uint64_t ShadowAtlas::ComputeFaceContentHash(const Light* light, uint8_t face) const
 	{
-		// v1 invalidation: the light's own state. A light that has not moved or
-		// changed keeps its cached tile. Deliberately NOT yet covered: dynamic
-		// geometry moving inside a static light's volume - v1 pairs this hash
-		// with the scene geometry-revision check in the caller, which
-		// invalidates every cached tile on any structural scene change. Finer
-		// per-volume tracking is a follow-up.
+		// The light's own state: a light that has not moved or changed keeps
+		// its cached tile. Geometry moving inside the light's volume is the
+		// caller's job (scene shadow-invalidation journal, see AssignTiles).
 		// GetWorldTM is non-const on Entity (it lazily rebuilds), so the cast
 		// is unavoidable for a logically-read-only hash.
 		Entity* ent = const_cast<Light*>(light)->GetEntity();
@@ -127,13 +125,6 @@ namespace HexEngine
 		const float radius = const_cast<Light*>(light)->GetRadius();
 		mix((uint64_t)*reinterpret_cast<const uint32_t*>(&radius));
 		mix(face);
-		// Scene geometry epoch (user-found gap: an object placed into a
-		// lamp's frustum cast nothing - the cached tile never knew). Any
-		// mesh/transform mutation bumps the GI geometry revision, which
-		// dirties every cached face; the render budget then rolls the
-		// refresh over a few frames in priority order. Coarse by design -
-		// per-light-volume intersection dirtying is the recorded follow-up.
-		mix(sceneGeometryRevision);
 		return h;
 	}
 
@@ -141,24 +132,12 @@ namespace HexEngine
 		const std::vector<Light*>& casters,
 		const Camera* camera,
 		int32_t renderBudget,
-		uint64_t sceneGeometryRevision)
+		Scene* scene)
 	{
 		++_frame;
 		_assignments.clear();
 		for (auto& t : _tiles)
 			t.renderedThisFrame = false;
-
-		// Diagnostic for the invalidation chain (rate-limited by change): if
-		// dragging an object produces NO revision lines in the log, the
-		// entity-move path never reaches Scene::NotifyEntityTransformChanged
-		// and the fault is upstream of the atlas; if lines appear but shadows
-		// stay stale, the fault is in the hash/budget logic here.
-		static uint64_t sLastLoggedRevision = ~0ull;
-		if (sceneGeometryRevision != sLastLoggedRevision)
-		{
-			LOG_DEBUG("ShadowAtlas: shadow geometry revision -> %llu", (unsigned long long)sceneGeometryRevision);
-			sLastLoggedRevision = sceneGeometryRevision;
-		}
 
 		if (_atlas == nullptr || camera == nullptr || camera->GetEntity() == nullptr)
 			return _assignments;
@@ -231,16 +210,34 @@ namespace HexEngine
 			_assignments.push_back({ want->key, best, false });
 		}
 
-		// Budgeted dirty marking, priority order.
+		// Budgeted dirty marking, priority order. A face is dirty when the light
+		// itself changed (hash) or when shadow-casting geometry moved/changed
+		// inside the light's volume since the tile was last known valid (user-
+		// found gap: an object placed into a lamp's frustum cast nothing - the
+		// cached tile never knew). That second test used to be a single scene-
+		// wide revision, so ANY moving mesh anywhere (walking NPCs, traffic)
+		// re-dirtied every shadowed light every frame.
+		const uint64_t journalSeq = scene != nullptr ? scene->GetShadowDirtySequence() : 0ull;
 		int32_t budget = std::max(0, renderBudget);
 		for (auto& a : _assignments)
 		{
 			Tile& tile = _tiles[a.tileIndex];
-			const uint64_t hash = ComputeFaceContentHash(a.key.light, a.key.face, sceneGeometryRevision);
-			if (tile.contentHash != hash && budget > 0)
+			const uint64_t hash = ComputeFaceContentHash(a.key.light, a.key.face);
+			bool dirty = tile.contentHash != hash;
+			if (!dirty && scene != nullptr && tile.dirtySeq < journalSeq)
+			{
+				// World position: lamp lights are usually children of their post.
+				Light* light = const_cast<Light*>(a.key.light);
+				const dx::BoundingSphere volume(light->GetEntity()->GetWorldTM().Translation(), light->GetRadius());
+				dirty = scene->IsShadowVolumeDirtySince(tile.dirtySeq, volume);
+				if (!dirty)
+					tile.dirtySeq = journalSeq; // verified clean through now
+			}
+			if (dirty && budget > 0)
 			{
 				a.needsRender = true;
 				tile.contentHash = hash;
+				tile.dirtySeq = journalSeq;
 				tile.renderedThisFrame = true;
 				--budget;
 			}

@@ -18,6 +18,7 @@
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "PVS.hpp"
+#include "../Physics/RayMath.hpp"
 
 namespace HexEngine
 {
@@ -331,8 +332,11 @@ namespace HexEngine
 		if (geometryChanged)
 		{
 			++_giGeometryRevision;
-			++_shadowGeometryRevision;
 			_giSpatialCacheDirty = true;
+			if (auto* entity = component->GetEntity())
+				RecordShadowDirty(entity);
+			else
+				PushShadowDirtyRegion(dx::BoundingSphere(math::Vector3::Zero, FLT_MAX));
 		}
 
 		if (materialChanged)
@@ -350,6 +354,64 @@ namespace HexEngine
 		}
 	}
 
+	void Scene::RecordShadowDirty(Entity* entity)
+	{
+		// Non-casters never appear in a shadow map, so moving one can't stale a tile.
+		if (!entity->GetCastsShadows())
+		{
+			entity->_hasLastShadowBounds = false;
+			return;
+		}
+
+		const dx::BoundingSphere now = entity->GetWorldBoundingSphere();
+		const bool valid = RayMath::IsFinite(now.Radius) && RayMath::IsFinite(now.Center.x) &&
+			RayMath::IsFinite(now.Center.y) && RayMath::IsFinite(now.Center.z);
+		if (!valid)
+		{
+			entity->_hasLastShadowBounds = false;
+			PushShadowDirtyRegion(dx::BoundingSphere(math::Vector3::Zero, FLT_MAX));
+			return;
+		}
+
+		dx::BoundingSphere region = now;
+		if (entity->_hasLastShadowBounds)
+			dx::BoundingSphere::CreateMerged(region, entity->_lastShadowBounds, now);
+		entity->_lastShadowBounds = now;
+		entity->_hasLastShadowBounds = true;
+		PushShadowDirtyRegion(region);
+	}
+
+	void Scene::PushShadowDirtyRegion(const dx::BoundingSphere& bounds)
+	{
+		_shadowDirtyRegions.push_back({ ++_shadowDirtySeq, bounds });
+		if (_shadowDirtyRegions.size() > kMaxShadowDirtyRegions)
+		{
+			_shadowDirtyFloorSeq = _shadowDirtyRegions.front().seq;
+			_shadowDirtyRegions.pop_front();
+		}
+	}
+
+	uint64_t Scene::GetShadowDirtySequence()
+	{
+		std::unique_lock lock(_lock);
+		return _shadowDirtySeq;
+	}
+
+	bool Scene::IsShadowVolumeDirtySince(uint64_t sinceSeq, const dx::BoundingSphere& volume)
+	{
+		std::unique_lock lock(_lock);
+		if (sinceSeq >= _shadowDirtySeq)
+			return false;
+		if (sinceSeq < _shadowDirtyFloorSeq)
+			return true; // regions newer than sinceSeq were dropped by the cap
+		for (auto it = _shadowDirtyRegions.rbegin(); it != _shadowDirtyRegions.rend() && it->seq > sinceSeq; ++it)
+		{
+			if (it->bounds.Radius == FLT_MAX || it->bounds.Intersects(volume))
+				return true;
+		}
+		return false;
+	}
+
 	void Scene::NotifyEntityTransformChanged(Entity* entity)
 	{
 		std::unique_lock lock(_lock);
@@ -360,18 +422,26 @@ namespace HexEngine
 		// not a dirty flag - a full rebuild per moving entity would defeat it).
 		UpdatePvsSpatialEntriesForEntity(entity);
 
-		// Shadow revision: UNCONDITIONAL for anything with a mesh, unlike the
+		// The sky dome follows the camera every frame (UpdateSkySphereMatrix). It
+		// never casts a shadow and is never GI geometry, so its moves must not
+		// invalidate either - as a meshed mover it re-dirtied every shadow-atlas
+		// face every frame and queued a GI rebake every few frames while the
+		// camera moved.
+		if (entity->GetLayer() == Layer::Sky)
+			return;
+
+		// Shadow invalidation: UNCONDITIONAL for anything with a mesh, unlike the
 		// GI revision below which inherits GI's exclusions and debounce. The
 		// shadow atlas first keyed off the GI revision and objects flagged
 		// ExcludeFromGI (small props) silently stopped invalidating shadow
 		// tiles - a dragged trash can kept its stale shadow (user-found).
-		// Per-frame bumps while dragging are fine: the atlas render budget
-		// bounds the refresh cost, and a live shadow during the drag is what
-		// you want anyway.
+		// Regional, though: only atlas faces whose light volume the move
+		// touches re-render (a scene-wide revision re-dirtied every shadowed
+		// light whenever any NPC or car moved anywhere).
 		if (auto* anyMesh = entity->GetComponent<StaticMeshComponent>();
 			anyMesh != nullptr && anyMesh->GetMesh() != nullptr)
 		{
-			++_shadowGeometryRevision;
+			RecordShadowDirty(entity);
 		}
 
 		// GI motion debounce - deterministic-GI era. Movers STAY in the voxel
@@ -1799,8 +1869,14 @@ namespace HexEngine
 	{
 		//_skySphereMatrix = math::Matrix::CreateScale(math::Vector3(2.0f)) * math::Matrix::CreateTranslation(_mainCamera->GetEntity()->GetPosition());
 
-		if(_skySphere)
-			_skySphere->SetPosition(_mainCamera->GetEntity()->GetPosition() + _mainCamera->GetViewOffset());
+		if (_skySphere)
+		{
+			// Only when the camera actually moved: every SetPosition clears the
+			// transform caches and runs the scene's transform-change notify.
+			const math::Vector3 target = _mainCamera->GetEntity()->GetPosition() + _mainCamera->GetViewOffset();
+			if (_skySphere->GetPosition() != target)
+				_skySphere->SetPosition(target);
+		}
 	}
 
 	void Scene::OnDebugGUI()
