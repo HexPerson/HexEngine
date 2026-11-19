@@ -1139,19 +1139,37 @@ namespace HexEngine
 			camera->OnMessage(&message, nullptr);*/
 		}
 
-		for (auto& caster : g_pEnv->_sceneRenderer->GetShadowCasters())
+		// EVERY shadow-casting light keeps its own PVS, not just this frame's
+		// casters: GetShadowCasters() is only the nearest N picked per frame, so a
+		// light outside that set kept pointers to deleted entities and, once the
+		// camera moved and it was picked again, drew a freed mesh in the shadow pass
+		// (access violation in StaticMeshComponent::GetCachedInstanceData - seen
+		// after deleting a building and after play-mode stop restores).
+		auto flushLights = [&](ComponentId componentId)
 		{
-			if (caster->GetEntity() == entity)
-				continue;
-
-			for (auto i = 0; i < caster->GetMaxSupportedShadowCascades(); ++i)
+			const auto* pool = TryGetComponentPool(componentId);
+			if (pool == nullptr)
+				return;
+			for (uint32_t i = 0; i < pool->components.size(); ++i)
 			{
-				if(remove)
-					caster->GetPVS(i)->RemoveEntity(entity);
-				else
-					caster->GetPVS(i)->AddEntity(entity);
+				auto* light = pool->components[i] != nullptr ? pool->components[i]->CastAs<Light>() : nullptr;
+				if (light == nullptr || light->GetEntity() == entity || !light->GetDoesCastShadows())
+					continue;
+				for (auto c = 0; c < light->GetMaxSupportedShadowCascades(); ++c)
+				{
+					if (auto* pvs = light->GetPVS(c); pvs != nullptr)
+					{
+						if (remove)
+							pvs->RemoveEntity(entity);
+						else
+							pvs->AddEntity(entity);
+					}
+				}
 			}
-		}
+		};
+		flushLights(DirectionalLight::_GetComponentId());
+		flushLights(SpotLight::_GetComponentId());
+		flushLights(PointLight::_GetComponentId());
 	}
 
 	void Scene::OnGUI()
