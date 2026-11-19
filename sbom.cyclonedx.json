@@ -872,6 +872,31 @@
     },
     {
       "type": "library",
+      "name": "lua",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/lua",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://www.lua.org/"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "name": "nlohmann-json",
       "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
       "licenses": [
@@ -886,6 +911,31 @@
         {
           "type": "website",
           "url": "https://github.com/nlohmann/json"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hexengine:source",
+          "value": "vcpkg"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "sol2",
+      "version": "vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "purl": "pkg:vcpkg/sol2",
+      "externalReferences": [
+        {
+          "type": "website",
+          "url": "https://github.com/ThePhD/sol2"
         }
       ],
       "properties": [

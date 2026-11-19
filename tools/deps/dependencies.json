@@ -16,7 +16,9 @@
     { "name": "directxtex",            "spdx": "MIT",          "homepage": "https://github.com/microsoft/DirectXTex",       "purl": "pkg:vcpkg/directxtex" },
     { "name": "freetype",              "spdx": "FTL",          "homepage": "https://freetype.org/",                         "purl": "pkg:vcpkg/freetype" },
     { "name": "gamenetworkingsockets", "spdx": "BSD-3-Clause", "homepage": "https://github.com/ValveSoftware/GameNetworkingSockets", "purl": "pkg:vcpkg/gamenetworkingsockets" },
-    { "name": "nlohmann-json",         "spdx": "MIT",          "homepage": "https://github.com/nlohmann/json",              "purl": "pkg:vcpkg/nlohmann-json" }
+    { "name": "lua",                   "spdx": "MIT",          "homepage": "https://www.lua.org/",                          "purl": "pkg:vcpkg/lua" },
+    { "name": "nlohmann-json",         "spdx": "MIT",          "homepage": "https://github.com/nlohmann/json",              "purl": "pkg:vcpkg/nlohmann-json" },
+    { "name": "sol2",                  "spdx": "MIT",          "homepage": "https://github.com/ThePhD/sol2",                "purl": "pkg:vcpkg/sol2" }
   ],
   "thirdparty": [
     { "name": "FidelityFX-FSR2",  "dir": "FidelityFX-FSR2",     "version": "2.2.1",    "spdx": "MIT",          "license_file": "ThirdParty/FidelityFX-FSR2/LICENSE.txt", "homepage": "https://github.com/GPUOpen-Effects/FidelityFX-FSR2", "purl": "pkg:github/GPUOpen-Effects/FidelityFX-FSR2@v2.2.1" },

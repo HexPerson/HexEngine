@@ -15,7 +15,9 @@ HexEngine bundles / links the third-party components listed below. Each is distr
 | directxtk | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/microsoft/DirectXTK) | _(installed via vcpkg)_ |
 | freetype | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | FTL | [link](https://freetype.org/) | _(installed via vcpkg)_ |
 | gamenetworkingsockets | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | BSD-3-Clause | [link](https://github.com/ValveSoftware/GameNetworkingSockets) | _(installed via vcpkg)_ |
+| lua | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://www.lua.org/) | _(installed via vcpkg)_ |
 | nlohmann-json | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/nlohmann/json) | _(installed via vcpkg)_ |
+| sol2 | vcpkg-baseline:c3867e714dd3a51c272826eea77267876517ed99 | MIT | [link](https://github.com/ThePhD/sol2) | _(installed via vcpkg)_ |
 
 ## Vendored dependencies (ThirdParty/)
 

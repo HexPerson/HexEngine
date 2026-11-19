@@ -28,27 +28,31 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
-      - name: Install nlohmann-json (header-only)
+      - name: Install test header dependencies (nlohmann-json, DirectXTK)
         shell: pwsh
         run: |
-          # The only external dependency of the test TUs (PluginManifest.cpp
-          # parses JSON via <nlohmann/json.hpp>). It's header-only, so a single
-          # targeted vcpkg install is fast and avoids restoring the full engine
-          # manifest (PhysX/GNS/etc.). vcpkg is preinstalled on the runner.
+          # The test TUs' only external headers: <nlohmann/json.hpp>
+          # (PluginManifest.cpp) and <directxtk/SimpleMath.h> (the header-only
+          # Physics/RayMath.hpp the ray tests compile directly - only the
+          # header is used, no DirectXTK library link). A targeted vcpkg install
+          # avoids restoring the full engine manifest (PhysX/GNS/etc.). vcpkg is
+          # preinstalled on the runner.
           # --classic: the repo root carries vcpkg.json, which puts vcpkg in
           # manifest mode, and manifest mode rejects single-package installs
           # ("does not support individual package arguments" - this step failed
           # on every run until the flag was added).
-          vcpkg install nlohmann-json:x64-windows --classic
+          vcpkg install nlohmann-json:x64-windows directxtk:x64-windows --classic
           if ($LASTEXITCODE -ne 0) { Write-Error "vcpkg install failed ($LASTEXITCODE)"; exit 1 }
           # Stage the headers where the project looks: its include dirs are
           # repo-relative ($(SolutionDir)..\..\Include\ is one), and MSBuild C++
           # projects ignore the INCLUDE env var this workflow used to set.
-          $src = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows\include\nlohmann"
-          if (-not (Test-Path $src)) { Write-Error "nlohmann headers not found at $src"; exit 1 }
           $dst = Join-Path $env:GITHUB_WORKSPACE "Include"
           New-Item -ItemType Directory -Force $dst | Out-Null
-          Copy-Item -Recurse -Force $src $dst
+          foreach ($dir in 'nlohmann', 'directxtk') {
+            $src = Join-Path $env:VCPKG_INSTALLATION_ROOT "installed\x64-windows\include\$dir"
+            if (-not (Test-Path $src)) { Write-Error "$dir headers not found at $src"; exit 1 }
+            Copy-Item -Recurse -Force $src $dst
+          }
 
       - name: Build HexEngine.Tests
         shell: pwsh
