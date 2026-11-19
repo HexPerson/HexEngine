@@ -116,6 +116,20 @@ jobs:
       # PluginManifest / BlockingQueue). Runs after the Debug bootstrap has
       # staged Include/nlohmann - the test target includes <nlohmann/json.hpp>
       # only from that staged tree, so a missing/partial stage fails this build.
+      # The tests compile the header-only Physics/RayMath.hpp, which includes
+      # <directxtk/SimpleMath.h>. The MSBuild projects find it in
+      # vcpkg_installed (manifest dep), but the CMake test target only searches
+      # the staged Include/ tree, so stage the headers there (header only - no
+      # DirectXTK library is linked). Same staging as unit-tests.yml.
+      - name: Stage DirectXTK headers for unit tests
+        shell: pwsh
+        run: |
+          $src = "$env:GITHUB_WORKSPACE\vcpkg_installed\x64-windows\include\directxtk"
+          if (-not (Test-Path $src)) { Write-Error "DirectXTK headers not found at $src"; exit 1 }
+          $dst = "$env:GITHUB_WORKSPACE\Include"
+          New-Item -ItemType Directory -Force $dst | Out-Null
+          Copy-Item -Recurse -Force $src $dst
+
       - name: Configure unit tests (Debug)
         run: cmake --preset vs2022-x64-debug-tests
 
