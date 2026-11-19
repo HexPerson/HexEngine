@@ -2899,11 +2899,54 @@ namespace HexEngine
 
 		PROFILE();
 
+		// Component debug drawing, per component TYPE: only pools whose class
+		// overrides OnDebugRender are visited. This used to call DebugRender on
+		// every entity, which made a virtual (almost always empty) call on every
+		// component in the scene each frame - a city scene's few thousand
+		// entities cost more than the drawing itself.
+		{
+			// Indexed by component id; rebuilt when the registry grows (plugin load).
+			static std::vector<uint8_t> s_typeDrawsDebug;
+			static size_t s_typeDrawsDebugRegistrySize = 0;
+			auto* registry = g_pEnv->_classRegistry;
+			const size_t registrySize = registry->GetAllClasses().size();
+			if (registrySize != s_typeDrawsDebugRegistrySize)
+			{
+				s_typeDrawsDebug.assign(MAX_COMPONENTS, 1);
+				for (ComponentId id = 0; id < MAX_COMPONENTS; ++id)
+					s_typeDrawsDebug[id] = registry->HasDebugRender(id) ? 1 : 0;
+				s_typeDrawsDebugRegistrySize = registrySize;
+			}
+
+			// Snapshot first: a component's OnDebugRender may add/remove
+			// components (the scene lock is recursive), which would invalidate
+			// a live pool iterator.
+			static std::vector<BaseComponent*> s_debugComponents;
+			s_debugComponents.clear();
+			for (const auto& [componentId, pool] : _componentPools)
+			{
+				if (componentId < MAX_COMPONENTS && s_typeDrawsDebug[componentId] == 0)
+					continue;
+				s_debugComponents.insert(s_debugComponents.end(), pool.components.begin(), pool.components.end());
+			}
+
+			for (auto* component : s_debugComponents)
+			{
+				auto* owner = component != nullptr ? component->GetEntity() : nullptr;
+				if (owner == nullptr || owner->IsPendingDeletion())
+					continue;
+				component->OnDebugRender();
+			}
+		}
+
+		// Editor gizmos: selected entities, plus any entity whose hover flag is
+		// still set from when it was selected (DebugRender clears it).
 		for (auto& set : GetEntities())
 		{
 			for (auto& ent : set.second)
 			{
-				ent->DebugRender();
+				if (ent->HasFlag(EntityFlags::SelectedInEditor) || ent->IsEditorGizmoHovered())
+					ent->DebugRender();
 			}
 		}
 

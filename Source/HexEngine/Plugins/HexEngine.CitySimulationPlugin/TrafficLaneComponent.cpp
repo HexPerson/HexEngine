@@ -9,9 +9,16 @@
 #include <HexEngine.Core/GUI/Elements/EntitySearch.hpp>
 #include <HexEngine.Core/Math/FloatMath.hpp>
 #include <HexEngine.Core/Scene/Scene.hpp>
+#include <HexEngine.Core/Entity/Component/Camera.hpp>
 #include <algorithm>
 #include <format>
 #include <sstream>
+
+// Unselected lanes are drawn as a network overlay in the editor. A generated
+// city has thousands of lane nodes, each costing a marker box, a name lookup
+// per next-lane link and the lines themselves, so only nodes near the camera
+// draw. Selected lanes always draw (via the editor-gizmo path).
+HexEngine::HVar city_laneDebugDistance("city_laneDebugDistance", "Editor: unselected traffic lanes draw only within this many metres of the camera (0 = no limit)", 200.0f, 0.0f, 100000.0f);
 
 namespace
 {
@@ -319,8 +326,21 @@ void TrafficLaneComponent::OnDebugRender()
 {
 	if (!HexEngine::g_pEnv->IsEditorMode() || !_drawDebug)
 		return;
-	if (GetEntity() != nullptr && GetEntity()->HasFlag(HexEngine::EntityFlags::SelectedInEditor))
+	auto* entity = GetEntity();
+	if (entity == nullptr || entity->HasFlag(HexEngine::EntityFlags::SelectedInEditor))
 		return;
+
+	if (const float maxDistance = city_laneDebugDistance._val.f32; maxDistance > 0.0f)
+	{
+		auto* scene = entity->GetScene();
+		auto* camera = scene != nullptr ? scene->GetMainCamera() : nullptr;
+		if (camera != nullptr && camera->GetEntity() != nullptr)
+		{
+			const math::Vector3 cameraPos = camera->GetEntity()->GetWorldTM().Translation();
+			if (math::Vector3::DistanceSquared(cameraPos, entity->GetWorldTM().Translation()) > maxDistance * maxDistance)
+				return;
+		}
+	}
 
 	bool hovering = false;
 	OnRenderEditorGizmo(false, hovering);

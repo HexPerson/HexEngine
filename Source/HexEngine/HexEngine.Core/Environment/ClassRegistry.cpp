@@ -152,4 +152,16 @@ namespace HexEngine
 	{
 		return _registry;
 	}
+
+	void ClassRegistry::SetHasDebugRender(uint32_t nameHash, bool hasDebugRender)
+	{
+		if (auto* cls = Find(nameHash); cls != nullptr)
+			cls->hasDebugRender = hasDebugRender;
+	}
+
+	bool ClassRegistry::HasDebugRender(uint32_t componentId)
+	{
+		auto* cls = FindByComponentId(componentId);
+		return cls == nullptr || cls->hasDebugRender;
+	}
 }

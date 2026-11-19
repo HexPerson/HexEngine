@@ -478,18 +478,20 @@ namespace HexEngine
 		//	//g_pEnv->_debugRenderer->DrawLine(GetPosition(), GetPosition() + _cachedTransform->GetUp() * 20.0f, math::Color(0, 1, 0, 1));
 		//}
 
+		// Editor gizmos only. Component OnDebugRender is dispatched per
+		// component TYPE by Scene::RenderDebug (only types that override it),
+		// which also only calls this for selected entities plus any entity
+		// whose hover flag still needs clearing.
 		_isEditorGizmoHovered = false;
+
+		if (!HasFlag(EntityFlags::SelectedInEditor))
+			return;
 
 		for (auto& comp : _components)
 		{
-			comp.component->OnDebugRender();
-
-			if (HasFlag(EntityFlags::SelectedInEditor))
-			{
-				bool hovering = false;
-				comp.component->OnRenderEditorGizmo(true, hovering);
-				_isEditorGizmoHovered |= hovering;
-			}
+			bool hovering = false;
+			comp.component->OnRenderEditorGizmo(true, hovering);
+			_isEditorGizmoHovered |= hovering;
 		}
 	}
 
