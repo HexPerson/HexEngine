@@ -228,6 +228,11 @@ namespace HexEngine::VolumetricTerrain
 		bool _hasMaterialEdits = false;
 
 		Entity* _entity = nullptr;
+		// Generation-checked id + owning scene of _entity: scene teardown can free
+		// the chunk entity before this chunk is destroyed, so release only touches
+		// _entity while _scene->TryGetEntity(_entityId) still returns it.
+		EntityId _entityId;
+		Scene* _scene = nullptr;
 		StaticMeshComponent* _meshComponent = nullptr;
 		RigidBody* _rigidBody = nullptr;
 		std::shared_ptr<Mesh> _mesh;

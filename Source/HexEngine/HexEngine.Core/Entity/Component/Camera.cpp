@@ -310,7 +310,15 @@ namespace HexEngine
 			pvsParams.shape.sphere = dx::BoundingSphere(dx::XMFLOAT3(cullCentre.x, cullCentre.y, cullCentre.z), _screenFar);
 			pvsParams.camera = this;
 
-			_pvs->CalculateVisibility(g_pEnv->_sceneManager->GetCurrentScene().get(), pvsParams);
+			// Cull against the scene this camera LIVES in. Using the scene manager's
+			// current scene let a camera in another scene (the icon-preview scene,
+			// ticked by IconService::Destroy during shutdown) query the main scene
+			// after it had been torn down - a lock on a destroyed mutex.
+			Scene* ownScene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
+			if (ownScene == nullptr)
+				ownScene = g_pEnv->_sceneManager->GetCurrentScene().get();
+			if (ownScene != nullptr)
+				_pvs->CalculateVisibility(ownScene, pvsParams);
 		}
 	}
 

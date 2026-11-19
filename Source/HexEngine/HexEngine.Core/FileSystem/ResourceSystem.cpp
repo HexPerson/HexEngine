@@ -66,6 +66,12 @@ namespace HexEngine
 		// pointer from two different "branches" of the search, doubling
 		// refcounts on lookup, and showing up as two "EngineData" entries
 		// in any filesystem-listing UI). Dedup by pointer at the source.
+		//
+		// Locked: LoadResource iterates _fileSystems under _lock, and project open
+		// loads its scenes on a worker thread while the game's runtime file system
+		// is mounted - an unlocked push_back reallocated the vector mid-iteration
+		// (crash in FileSystem::GetRelativeResourcePath on a freed element).
+		std::unique_lock lock(_lock);
 		if (std::find(_fileSystems.begin(), _fileSystems.end(), fileSystem) != _fileSystems.end())
 			return;
 		_fileSystems.push_back(fileSystem);
@@ -73,7 +79,10 @@ namespace HexEngine
 
 	void ResourceSystem::RemoveFileSystem(FileSystem* fileSystem)
 	{
-		_fileSystems.erase(std::remove(_fileSystems.begin(), _fileSystems.end(), fileSystem));
+		std::unique_lock lock(_lock);
+		// erase(remove(...), end): the single-iterator erase was UB when the file
+		// system wasn't registered (it erased end()).
+		_fileSystems.erase(std::remove(_fileSystems.begin(), _fileSystems.end(), fileSystem), _fileSystems.end());
 	}
 
 	void ResourceSystem::RegisterResourceLoader(IResourceLoader* loader)
@@ -137,6 +146,7 @@ namespace HexEngine
 
 	bool ResourceSystem::DoesResourceExistAsAsset(const fs::path& path)
 	{
+		std::unique_lock lock(_lock);
 		for (auto& fs : _fileSystems)
 		{
 			if (fs->IsAsset() == false)
@@ -152,6 +162,7 @@ namespace HexEngine
 
 	FileSystem* ResourceSystem::FindAssetFileSystemForAsset(const fs::path& path)
 	{
+		std::unique_lock lock(_lock);
 		for (auto& fs : _fileSystems)
 		{
 			if (fs->IsAsset() == false)
@@ -167,6 +178,7 @@ namespace HexEngine
 
 	FileSystem* ResourceSystem::FindFileSystemByPath(const fs::path& path)
 	{
+		std::unique_lock lock(_lock);
 		for (auto& fs : _fileSystems)
 		{
 			if (auto p = path.wstring().find('.'); p != std::string::npos)
@@ -192,6 +204,7 @@ namespace HexEngine
 
 	FileSystem* ResourceSystem::FindFileSystemByName(const std::wstring& name)
 	{
+		std::unique_lock lock(_lock);
 		for (auto& fs : _fileSystems)
 		{
 			if(fs->GetName() == name)

@@ -374,6 +374,8 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			_entity = parentEntity->GetScene()->CreateEntity(chunkName, _origin);
 			if (_entity != nullptr)
 			{
+				_scene = parentEntity->GetScene();
+				_entityId = _entity->GetId();
 				_entity->SetParent(parentEntity);
 				// DoNotBlockNavMesh: keep the volumetric terrain out of scene navmesh
 				// bakes (CalculateSceneStats skips this flag) so agents navigate the
@@ -1385,7 +1387,8 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 	void VolumetricTerrainChunk::ReleaseEntityReferences(bool queueDeleteEntity)
 	{
-		if (queueDeleteEntity && _entity != nullptr && _entity->GetScene() != nullptr)
+		const bool entityAlive = _entity != nullptr && _scene != nullptr && _scene->TryGetEntity(_entityId) == _entity;
+		if (queueDeleteEntity && entityAlive)
 		{
 			_entity->SetParent(nullptr);
 			_entity->DeleteMe(false);
@@ -1395,6 +1398,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_meshComponent = nullptr;
 		_rigidBody = nullptr;
 		_entity = nullptr;
+		_entityId = EntityId{};
 	}
 
 	void VolumetricTerrainChunk::SetVisualMeshHidden(bool hidden)
