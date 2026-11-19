@@ -1113,6 +1113,7 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 	QueryNearbyVehicles(currentPosition, lookAhead + 2.0f, nearby);
 
 	float nearestAheadDistance = std::numeric_limits<float>::max();
+	bool bypassStillAhead = false;
 
 	HexEngine::Entity* lastBlocker = nullptr;
 
@@ -1148,6 +1149,13 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 		if (lateralSq > laneHalfWidthSq)
 			continue;
 
+		// Still passing the car we broke a gridlock against: keep ignoring it.
+		if (other == _gridlockBypass)
+		{
+			bypassStillAhead = true;
+			continue;
+		}
+
 		// --- Direction-aware filtering ---
 		// Lanes are one-way, so genuine same-lane traffic always travels
 		// roughly WITH us. Without these checks, oncoming cars in the
@@ -1181,6 +1189,27 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 				continue;
 		}
 
+		// Gridlock breaker. Junction cross-traffic forms rings - each car held
+		// by the next, perpendicular one - that the head-on rule above never
+		// matches (nobody faces anybody), so whole junctions froze for minutes
+		// and the drivers bailed out on foot. When we have waited a while and
+		// the blocker is stopped and waiting too, and it is NOT simply queued
+		// ahead of us in our own direction, exactly one car of the pair
+		// proceeds (pointer order). Around any ring at least one link
+		// qualifies, so the ring unwinds; same-direction queues are honoured.
+		constexpr float kGridlockPatienceSeconds = 2.0f;
+		if (!otherMoving && headingDot < 0.7f &&
+			_waitTime > kGridlockPatienceSeconds && other->_waitTime > kGridlockPatienceSeconds &&
+			std::less<const TrafficVehicleComponent*>()(this, other))
+		{
+			// Remember it: once we move our wait resets, and without this we
+			// would brake for the same car again next frame and stop-start
+			// through the junction in 2 s steps.
+			_gridlockBypass = other;
+			bypassStillAhead = true;
+			continue;
+		}
+
 		if (projectedDistance < nearestAheadDistance)
 		{
 			nearestAheadDistance = projectedDistance;
@@ -1188,6 +1217,9 @@ float TrafficVehicleComponent::ComputeAvoidanceSpeed(const math::Vector3& curren
 			lastBlocker = otherEnt;
 		}
 	}
+
+	if (!bypassStillAhead)
+		_gridlockBypass = nullptr;
 
 	if (nearestAheadDistance == std::numeric_limits<float>::max())
 		return maxSpeed;
@@ -1376,6 +1408,11 @@ void TrafficVehicleComponent::Update(float frameTime)
 
 	currentPosition += toTarget * (_currentSpeed * frameTime);
 	transform->SetPositionNoNotify(currentPosition);
+
+	if (_speed > 0.1f && _currentSpeed <= 0.5f)
+		_waitTime += frameTime;
+	else
+		_waitTime = 0.0f;
 
 	const float yaw = atan2f(toTarget.x, toTarget.z);
 	const auto targetRotation = math::Quaternion::CreateFromYawPitchRoll(yaw, 0.0f, 0.0f);
