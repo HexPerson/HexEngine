@@ -97,6 +97,7 @@ namespace HexEngine::Weather
 		void UpdateLightning(Scene* scene, Camera* camera, const WeatherState& currentState, const WeatherState& targetState, float frameTime);
 		void UpdateAudio(Scene* scene, Camera* camera, const WeatherState& currentState, const WeatherState& targetState, float frameTime);
 		void CleanupHelperEntity(Entity*& entity);
+		void ValidateHelperEntities(Scene* scene);
 		Entity* EnsurePrecipitationEntity(Scene* scene, size_t index);
 		std::shared_ptr<ParticleEffect> BuildParticleEffect(const WeatherState& state) const;
 		float ComputeDesiredLoopGain(WeatherAudioLoopSlot slot, const WeatherState& state) const;
@@ -178,6 +179,11 @@ namespace HexEngine::Weather
 		std::vector<std::shared_ptr<PresetMaskBinding>> _presetMaskBindings;
 
 		std::array<Entity*, 7> _precipitationEntities = {};
+		// Generation-checked ids of the helpers above. The helpers are DoNotSave
+		// scene entities, so anything that rebuilds the scene behind our back (the
+		// play-mode stop restore) frees them while these raw pointers survive;
+		// ValidateHelperEntities() drops any pointer whose id no longer resolves to it.
+		std::array<EntityId, 7> _precipitationEntityIds = {};
 		std::array<WeatherLoopAudioRuntime, static_cast<size_t>(WeatherAudioLoopSlot::Count)> _loopAudioRuntime = {};
 		std::shared_ptr<SoundEffect> _thunderSound;
 		std::vector<ActiveThunderSoundRuntime> _activeThunderSounds;

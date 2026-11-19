@@ -80,6 +80,11 @@ public:
 	private:
 		Entity* _owner = nullptr;
 		Entity* _rootEntity = nullptr;
+		// Generation-checked id of _rootEntity. Scene teardown (and the play-mode
+		// stop restore) can free the DoNotSave chunk root before this terrain is
+		// destroyed; LiveRootEntity() refuses a pointer whose id no longer matches.
+		EntityId _rootEntityId;
+		Entity* LiveRootEntity() const;
 		math::Vector3 _lastOwnerPosition = math::Vector3::Zero;
 		SdfTerrainGenerationParams _params;
 		BrushSettings _brush;

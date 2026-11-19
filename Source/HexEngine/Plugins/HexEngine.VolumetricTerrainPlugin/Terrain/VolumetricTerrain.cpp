@@ -359,6 +359,16 @@ namespace HexEngine::VolumetricTerrain
 		_settleBlockerRaised = want;
 	}
 
+	Entity* VolumetricTerrain::LiveRootEntity() const
+	{
+		if (_rootEntity == nullptr || _owner == nullptr)
+			return nullptr;
+		Scene* scene = _owner->GetScene();
+		if (scene == nullptr || scene->TryGetEntity(_rootEntityId) != _rootEntity)
+			return nullptr;
+		return _rootEntity;
+	}
+
 	VolumetricTerrain::~VolumetricTerrain()
 	{
 		SyncSettleBlocker(true);
@@ -368,10 +378,10 @@ namespace HexEngine::VolumetricTerrain
 			_owner->GetScene()->UnregisterCustomRenderer(this);
 		}
 
-		if (_rootEntity != nullptr && _rootEntity->GetScene() != nullptr)
+		if (Entity* root = LiveRootEntity(); root != nullptr)
 		{
-			_rootEntity->SetParent(nullptr);
-			_rootEntity->DeleteMe(false);
+			root->SetParent(nullptr);
+			root->DeleteMe(false);
 		}
 	}
 
@@ -417,10 +427,10 @@ namespace HexEngine::VolumetricTerrain
 		}
 		_chunks.clear();
 
-		if (_rootEntity != nullptr && _rootEntity->GetScene() != nullptr)
+		if (Entity* root = LiveRootEntity(); root != nullptr)
 		{
-			_rootEntity->SetParent(nullptr);
-			_rootEntity->DeleteMe(false);
+			root->SetParent(nullptr);
+			root->DeleteMe(false);
 		}
 		_rootEntity = nullptr;
 		_pendingCollisionRefresh = false;
@@ -444,6 +454,7 @@ namespace HexEngine::VolumetricTerrain
 				_rootEntity = _owner->GetScene()->CreateEntity(std::format("{}_Chunks", _owner->GetName()), _owner->GetPosition());
 				if (_rootEntity != nullptr)
 				{
+					_rootEntityId = _rootEntity->GetId();
 					_rootEntity->SetParent(_owner);
 					_rootEntity->SetFlag(EntityFlags::ExcludeFromHLOD | EntityFlags::DoNotSave);
 				}

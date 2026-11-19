@@ -510,6 +510,8 @@ namespace HexEngine::Weather
 	{
 		RestoreSceneBaseline();
 
+		ValidateHelperEntities(GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr);
+
 		auto* audioManager = (g_pEnv != nullptr) ? g_pEnv->_audioManager : nullptr;
 		for (auto& entity : _precipitationEntities)
 			CleanupHelperEntity(entity);
@@ -945,6 +947,8 @@ namespace HexEngine::Weather
 	{
 		if (scene == nullptr)
 			return;
+
+		ValidateHelperEntities(scene);
 
 		const bool currentActive = (currentState.precipitationType != WeatherPrecipitationType::None && currentState.precipitationIntensity > 0.01f);
 		const bool targetActive = (targetState.precipitationType != WeatherPrecipitationType::None && targetState.precipitationIntensity > 0.01f);
@@ -1394,6 +1398,24 @@ namespace HexEngine::Weather
 		entity = nullptr;
 	}
 
+	void WeatherControllerComponent::ValidateHelperEntities(Scene* scene)
+	{
+		for (size_t i = 0; i < _precipitationEntities.size(); ++i)
+		{
+			Entity*& entity = _precipitationEntities[i];
+			if (entity == nullptr)
+				continue;
+
+			// No scene to ask, or the id now resolves to nothing / someone else:
+			// the helper was freed under us. Forget it - never dereference it.
+			if (scene == nullptr || scene->TryGetEntity(_precipitationEntityIds[i]) != entity)
+			{
+				entity = nullptr;
+				_precipitationEntityIds[i] = EntityId{};
+			}
+		}
+	}
+
 	Entity* WeatherControllerComponent::EnsurePrecipitationEntity(Scene* scene, size_t index)
 	{
 		if (index >= _precipitationEntities.size())
@@ -1405,6 +1427,7 @@ namespace HexEngine::Weather
 		_precipitationEntities[index] = scene->CreateEntity(std::format("WeatherPrecipitation{}", index));
 		if (_precipitationEntities[index] == nullptr)
 			return nullptr;
+		_precipitationEntityIds[index] = _precipitationEntities[index]->GetId();
 
 		_precipitationEntities[index]->SetLayer(Layer::Particle);
 		_precipitationEntities[index]->SetFlag(EntityFlags::DoNotSave);
