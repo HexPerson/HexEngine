@@ -652,6 +652,14 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 			{
 				motion.vehicleStillSeconds += frameTime;
 			}
+
+			// The hidden driver rides along: without this the agent entity stays
+			// at the parking spot it left, so anything locating the person (the
+			// game's map markers, interaction, proximity) points at an empty car
+			// park. Only re-placed after a real move to keep transform churn low.
+			const math::Vector3 agentPos = agent->GetEntity()->GetWorldTM().Translation();
+			if ((vehiclePos - agentPos).LengthSquared() > 1.0f)
+				agent->GetEntity()->ForcePosition(vehiclePos);
 			if (_vehicleStuckSeconds > 0.0f && motion.vehicleStillSeconds > _vehicleStuckSeconds)
 			{
 				motion.hasLastVehiclePosition = false;
@@ -1074,6 +1082,14 @@ void CityRoutineSystemComponent::UpdateLocomotionAnimation(RoutineAgentComponent
 	const LocomotionClips clips = cached->second;
 	if (clips.idle < 0 || clips.walk < 0)
 		return;
+
+	// Agents are moved by navigation, but locomotion clips (the retargeted
+	// Mixamo walk) carry forward travel on the root bone: ~1.3 m per loop.
+	// Left in, the body walks ahead of the entity and snaps back every cycle.
+	// Strip it (root motion) and discard the delta - nav owns the position.
+	if (!skel->IsRootMotionEnabled())
+		skel->SetRootMotionEnabled(true);
+	skel->ConsumeRootMotionDelta();
 
 	auto& state = _agentAnimStates[entity->GetName()];
 	const math::Vector3 pos = entity->GetWorldTM().Translation();
