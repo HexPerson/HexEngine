@@ -239,6 +239,12 @@ namespace
 		v.push_back({ "ground_height", "Surface height under one or many [x, z] points (rays straight down from fromY): for placing/scattering objects. Use only / ignore / minNormalY to skip canopies, roofs and walls.",
 			Obj(RayOptionProps(json{ {"points", json{ {"type", "array"}, {"items", NumArray(2, "[x, z]")}, {"description", "Up to 20000 [x, z] points."} }},
 				{"xz", NumArray(2, "Or: a single [x, z].")}, {"fromY", Num("Height the rays start at (default 2000).")} })) });
+		v.push_back({ "find_path", "Query a walking path on the scene navmesh (what routine agents use). reaches=false or a large endGap means the target is off the navmesh or unreachable (doors, blockers, gaps). Use it to check that building entry waypoints are reachable from the street.",
+			Obj(json{ {"from", NumArray(3, "Start [x,y,z].")}, {"fromEntity", Str("Or: start at this entity's position.")},
+				{"to", NumArray(3, "End [x,y,z].")}, {"toEntity", Str("Or: end at this entity's position.")},
+				{"tolerance", Num("endGap counted as reaching (default 1.5 m).")},
+				{"searchDistance", Num("Horizontal snap distance for the endpoints (default 50).")},
+				{"returnPoints", Bool("Include the path points (default true).")} }) });
 		v.push_back({ "query_region", "Entities whose world bounds intersect a sphere (center + radius) or box (min + max), nearest first, with their bounds. For 'what is here?' and free-space checks.",
 			Obj(json{ {"center", NumArray(3, "Sphere centre.")}, {"radius", Num("Sphere radius (default 10).")},
 				{"min", NumArray(3, "Box min corner.")}, {"max", NumArray(3, "Box max corner.")},
@@ -336,6 +342,10 @@ namespace
 				{"path", Str("Output .hmesh (default \"Meshes/<entity name>.hmesh\").")},
 				{"materialPath", Str("Where a private material is written (default next to the mesh).")},
 				{"overwrite", Bool("Allow replacing existing files (default false).")} }, { "entity" }) });
+		v.push_back({ "build_navmesh", w("Bake the open scene's walking navmesh (the editor NavMesh tool's Build Scene NavMesh). Live at once for find_path and routine agents; save_scene writes the sidecar. Rebake after placing buildings. Takes seconds on a big scene."),
+			Obj(json{ {"cellSize", Num("Voxel size in metres (default 0.3).")}, {"cellHeight", Num("Voxel height (default 0.3).")},
+				{"walkableRadius", Num("Agent radius in voxels (default 1).")}, {"walkableHeight", Num("Agent height in voxels (default 7).")},
+				{"walkableClimb", Num("Step height in voxels (default 2).")}, {"walkableSlopeAngle", Num("Max slope degrees (default 45).")} }) });
 		v.push_back({ "snap_to_ground", w("Drop an entity (with its children) so its bounds' bottom rests on the surface below it, optionally tilted to the surface normal. Undoable. Use only / minNormalY to choose what counts as ground."),
 			Obj(RayOptionProps(json{ {"entity", EntityRefSchema()},
 				{"offset", Num("Extra height above the surface (negative sinks it in).")},
@@ -648,7 +658,7 @@ int main(int argc, char** argv)
 			out = RpcResult(id, json{
 				{"protocolVersion", "2024-11-05"},
 				{"capabilities", { {"tools", json::object()} }},
-				{"serverInfo", { {"name","HexEngine.McpServer"}, {"version","0.4.0"} }},
+				{"serverInfo", { {"name","HexEngine.McpServer"}, {"version","0.5.0"} }},
 				{"instructions", kAgentInstructions},
 			});
 		}

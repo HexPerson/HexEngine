@@ -1,4 +1,5 @@
 #include "ResidenceComponent.hpp"
+#include "CityAnchorUtils.hpp"
 #include <HexEngine.Core/GUI/Elements/ComponentWidget.hpp>
 #include <HexEngine.Core/GUI/Elements/DragInt.hpp>
 #include <HexEngine.Core/GUI/Elements/EntitySearch.hpp>
@@ -67,3 +68,12 @@ bool ResidenceComponent::CreateWidget(HexEngine::ComponentWidget* widget)
 	return true;
 }
 
+std::string ResidenceComponent::ResolveEntryWaypointName() const
+{
+	return CityAnchors::ResolveName(GetEntity(), _entryWaypointEntityName);
+}
+
+std::string ResidenceComponent::ResolveParkingWaypointName() const
+{
+	return CityAnchors::ResolveName(GetEntity(), _parkingWaypointEntityName);
+}

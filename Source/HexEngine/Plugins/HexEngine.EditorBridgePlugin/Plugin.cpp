@@ -50,6 +50,7 @@
 #include "../../HexEngine.Core/Input/InputSystem.hpp"
 #include "../../HexEngine.Core/Entity/Component/ScriptComponent.hpp"
 #include "../../HexEngine.Core/Scripting/IScriptEngine.hpp"
+#include "../../HexEngine.Core/Scene/INavMeshProvider.hpp"
 
 #include <deque>
 
@@ -4027,6 +4028,98 @@ namespace HexEngine
 				const double rayMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 				return MakeResult(id, json{ {"count", pts.size()}, {"hits", hits}, {"points", out}, {"msPerRay", rayMs / (double)pts.size()},
 					{"note", "Rays go straight down from fromY and stop at the first surface (canopies and roofs included): pass only / ignore / minNormalY to pick the ground."} });
+			});
+
+			// Navigation: bake the scene navmesh (what the editor's NavMesh tool's
+			// "Build Scene NavMesh" button does) and query paths on it, so agents
+			// can verify that waypoints are reachable.
+			Reg("build_navmesh", W, Main, Solo, [](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				auto* nav = g_pEnv->_navMeshProvider;
+				if (nav == nullptr) return MakeError(id, ErrorCode::Internal, "no navmesh provider is loaded");
+
+				INavMeshProvider::NavMeshCreationParams params = {};
+				params.cs = p.value("cellSize", 0.3f);
+				params.ch = p.value("cellHeight", 0.3f);
+				params.walkableSlopeAngle = p.value("walkableSlopeAngle", 45.0f);
+				params.walkableClimb = p.value("walkableClimb", 2);
+				params.walkableHeight = p.value("walkableHeight", 7);
+				params.walkableRadius = p.value("walkableRadius", 1);
+				params.minRegionArea = p.value("minRegionArea", 8);
+				params.mergeRegionArea = std::max(params.minRegionArea, p.value("mergeRegionArea", 20));
+				params.maxEdgeLen = 24;
+				params.maxSimplificationError = 1.3f;
+				params.maxVertsPerPoly = 6;
+				params.detailSampleDist = 3.0f;
+				params.detailSampleMaxError = 1.0f;
+				params.heightBias = params.ch * 0.5f;
+				params.borderSize = params.walkableRadius + 3;
+				params.width = params.height = params.tileSize = 0;
+				params.bmin[0] = params.bmin[1] = params.bmin[2] = 0.0f;
+				params.bmax[0] = params.bmax[1] = params.bmax[2] = 0.0f;
+
+				const auto t0 = std::chrono::steady_clock::now();
+				NavMeshId navMeshId = 0;
+				if (!nav->CreateNavMeshForScene(scene.get(), params, &navMeshId))
+					return MakeError(id, ErrorCode::Internal, "navmesh build failed (see get_recent_engine_logs)");
+				scene->SetNavMeshId(navMeshId);
+				const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+				return MakeResult(id, json{ {"navMeshId", navMeshId}, {"ms", ms},
+					{"note", "Live immediately for path queries and agents; save_scene writes the navmesh sidecar."} });
+			});
+
+			Reg("find_path", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				auto* nav = g_pEnv->_navMeshProvider;
+				if (nav == nullptr) return MakeError(id, ErrorCode::Internal, "no navmesh provider is loaded");
+
+				auto readEnd = [&](const char* posKey, const char* entKey, math::Vector3& out) -> bool
+				{
+					float v[3];
+					if (ReadFloats(p, posKey, 3, v)) { out = math::Vector3(v[0], v[1], v[2]); return true; }
+					if (p.contains(entKey) && p[entKey].is_string())
+					{
+						auto* e = scene->GetEntityByName(p[entKey].get<std::string>());
+						if (e == nullptr) throw ParamError(std::string("no entity named ") + p[entKey].dump());
+						out = e->GetWorldTM().Translation();
+						return true;
+					}
+					return false;
+				};
+				math::Vector3 from, to;
+				if (!readEnd("from", "fromEntity", from) || !readEnd("to", "toEntity", to))
+					throw ParamError("find_path needs from:[x,y,z] or fromEntity, and to:[x,y,z] or toEntity");
+
+				INavMeshProvider::PathParams params;
+				params.from = from;
+				params.to = to;
+				const float search = p.value("searchDistance", 50.0f);
+				params.searchDistance = math::Vector3(search, p.value("searchHeight", 15.0f), search);
+				params.stepSize = p.value("stepSize", 5.0f);
+				params.meshId = scene->GetNavMeshId();
+				INavMeshProvider::PathResult result;
+				nav->FindPath(params, result);
+
+				float length = 0.0f;
+				json pts = json::array();
+				for (size_t i = 0; i < result.path.size(); ++i)
+				{
+					if (i > 0) length += (result.path[i] - result.path[i - 1]).Length();
+					pts.push_back(Vec3Json(result.path[i]));
+				}
+				const float endGap = result.path.empty() ? -1.0f : (result.path.back() - to).Length();
+				const float startGap = result.path.empty() ? -1.0f : (result.path.front() - from).Length();
+				const float tolerance = p.value("tolerance", 1.5f);
+				const bool returnPoints = p.value("returnPoints", true);
+				return MakeResult(id, json{ {"found", !result.path.empty()},
+					{"reaches", !result.path.empty() && endGap <= tolerance},
+					{"length", length}, {"straightLine", (to - from).Length()},
+					{"startGap", startGap}, {"endGap", endGap}, {"pointCount", result.path.size()},
+					{"navMeshId", scene->GetNavMeshId()},
+					{"points", returnPoints ? pts : json(nullptr)},
+					{"note", "endGap = distance from the path's last point to 'to': a large gap means the target is off the navmesh or unreachable (the path stops at the nearest reachable point)."} });
 			});
 
 			Reg("snap_to_ground", W, Main, Batch, [this](int64_t id, const json& p) -> json {

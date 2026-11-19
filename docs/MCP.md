@@ -133,6 +133,7 @@ Read (always available):
 | `hex_capture_view` | **Vision.** The camera's rendered frame, downscaled (`maxSize`, default 768) and returned **inline** as an MCP image. Optional viewpoint: `position` + `lookAt` / `eulerDegrees`, or `frameEntity` to fit an entity in view. The editor camera is moved for the shot and restored; `waitFrames` (default 8 after a move) lets temporal effects settle. Readback is one main-thread hop; downscale + JPEG/PNG encode run off the main thread. |
 | `hex_raycast` | The engine raycast (`PhysUtils::RayCast` on the edited scene): exact nearest triangle via a cached per-mesh BVH (visible surfaces, not RigidBody colliders) plus physics-scene colliders (terrain chunks without a mesh). Position, front-face normal, distance, entity, `source`. Filters: `ignore`, `only`, `minNormalY`, `includeHidden`. |
 | `hex_ground_height` | Surface height under up to 20000 `[x, z]` points (rays down from `fromY`), same filters — for scattering and placement. |
+| `hex_find_path` | Walking path on the scene navmesh between two points or entities: `reaches`, `length`, `endGap` (a large gap = target off the navmesh/unreachable). Use it to check building entry waypoints. |
 | `hex_query_region` | Entities whose world bounds touch a sphere or box, nearest first, with their bounds. |
 | `hex_get_recent_engine_logs` | Lines carry a `seq`; pass the previous `lastSeq` as `sinceSeq` for only new lines; `minLevel` filter. |
 | `hex_validate_current_scene` | Problems to fix, sorted error > warning > info with a `code` and the entity: NaN / zero-scale transforms, entities below `killY`, missing or unsaved (in-memory) mesh/material assets on saved entities, double-spawned duplicates (same mesh, position, rotation), out-of-date prefab instances, `ScriptComponent`s with no script or a script that doesn't compile (`scriptError`, with file:line), no camera / lights / PlayerStart, and with `groundCheck` floating top-level meshes. |
@@ -162,6 +163,7 @@ Write (need `HEXENGINE_EDITOR_BRIDGE_WRITE=1`):
 | `hex_import_model` | FBX / glTF / GLB / OBJ / DAE / 3DS from anywhere on disk → copied (with textures, glTF buffers, `.mtl`) into `Data/<destFolder>`, converted to `.hmesh` (+ `.hmat`) via the model importer plugin, new assets listed; `spawn: true` places them under one root. |
 | `hex_create_material` | New project `.hmat` from a `base` plus property/texture overrides. |
 | `hex_edit_material` | Change a project material (every user updates) and save it; by `path` or the `entity` using it. Engine materials are refused. Not part of undo. |
+| `hex_build_navmesh` | Bake the scene walking navmesh (the NavMesh tool's Build Scene NavMesh); live at once for `find_path` and routine agents, `save_scene` writes the sidecar. Rebake after placing buildings. |
 | `hex_snap_to_ground` | Drop an entity hierarchy so its bounds rest on the surface below (optionally tilted to the normal, `offset`); undoable. |
 | `hex_assign_material` | Set an entity's mesh material to an asset; undoable and tracked as a prefab override. |
 | `hex_exec_console` | Console command / cvar set. |

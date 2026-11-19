@@ -20,6 +20,19 @@ public:
 
 	bool IsHourInAnyShift(float hour) const;
 
+	// Services this place offers to VISITORS (routine schedule activities other
+	// than Home/Work, e.g. "Food", "Shop", "Leisure"). Open while any shift
+	// window covers the hour.
+	const std::vector<std::string>& GetServiceTags() const { return _serviceTags; }
+	bool OffersService(const std::string& tag) const;
+	int32_t GetVisitorCapacity() const { return _visitorCapacity; }
+
+	// Waypoint entities resolved against this building's own hierarchy first
+	// (prefab instances get de-duplicated child names), then the scene.
+	std::string ResolveEntryWaypointName() const;
+	std::string ResolveParkingWaypointName() const;
+
+	void SetServiceTagsCsv(const std::string& v) { _serviceTagsCsv = v; RebuildServiceTags(); }
 	void SetRoleTagsCsv(const std::string& v) { _roleTagsCsv = v; RebuildRoleTags(); }
 	void SetShiftWindowsCsv(const std::string& v) { _shiftWindowsCsv = v; RebuildShiftsFromCsv(); }
 	void SetWorkerCapacity(int32_t v) { _workerCapacity = v; }
@@ -29,6 +42,7 @@ public:
 private:
 	void RebuildRoleTags();
 	void RebuildShiftsFromCsv();
+	void RebuildServiceTags();
 
 private:
 	std::string _roleTagsCsv = "Worker";
@@ -39,6 +53,9 @@ private:
 	std::vector<math::Vector2> _shiftWindows;
 	std::string _entryWaypointEntityName;
 	std::string _parkingWaypointEntityName;
+	std::string _serviceTagsCsv;
+	std::vector<std::string> _serviceTags;
+	int32_t _visitorCapacity = 12;
 };
 
 

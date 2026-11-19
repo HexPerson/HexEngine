@@ -2,6 +2,9 @@
 #include "CityEmergencyDispatcherSystemComponent.hpp"
 #include <HexEngine.Core/Entity/Component/DayNightCycleComponent.hpp>
 #include <HexEngine.Core/Entity/Component/NavigationComponent.hpp>
+#include <HexEngine.Core/Entity/Component/SkeletalAnimationComponent.hpp>
+#include <HexEngine.Core/GUI/Elements/LineEdit.hpp>
+#include "CityAnchorUtils.hpp"
 #include "PlaceOfWorkComponent.hpp"
 #include "ResidenceComponent.hpp"
 #include "RoutineAgentComponent.hpp"
@@ -26,6 +29,28 @@
 namespace
 {
 	constexpr float kWorkplacePriorityWeight = 100.0f;
+	constexpr float kArrivalRadius = 8.0f;
+
+	// Deterministic [0,1) from a string + salt (stable across runs and saves).
+	float Hash01(const std::string& text, uint64_t salt)
+	{
+		const uint32_t h = HexEngine::CRC32::HashString((text + "#" + std::to_string(salt)).c_str());
+		return (float)(h & 0xFFFFFF) / (float)0x1000000;
+	}
+
+	bool HourInWindow(float hour, float start, float end)
+	{
+		if (start <= end)
+			return hour >= start && hour < end;
+		return hour >= start || hour < end;	// wraps midnight
+	}
+
+	bool ContainsNoCase(const std::string& haystack, const std::string& needle)
+	{
+		auto it = std::search(haystack.begin(), haystack.end(), needle.begin(), needle.end(),
+			[](char a, char b) { return std::tolower((unsigned char)a) == std::tolower((unsigned char)b); });
+		return it != haystack.end();
+	}
 
 	const char* ToString(RoutineExecutionState state)
 	{
@@ -80,6 +105,14 @@ CityRoutineSystemComponent::CityRoutineSystemComponent(HexEngine::Entity* entity
 		_walkStuckSpeedThreshold = copy->_walkStuckSpeedThreshold;
 		_walkStuckDurationSeconds = copy->_walkStuckDurationSeconds;
 		_walkStuckRepathCooldownSeconds = copy->_walkStuckRepathCooldownSeconds;
+		_walkMaxDistance = copy->_walkMaxDistance;
+		_defaultVehiclePrefabPath = copy->_defaultVehiclePrefabPath;
+		_hideAgentsAtDestination = copy->_hideAgentsAtDestination;
+		_failedTaskCooldownSeconds = copy->_failedTaskCooldownSeconds;
+		_vehicleStuckSeconds = copy->_vehicleStuckSeconds;
+		_animateLocomotion = copy->_animateLocomotion;
+		_idleClipName = copy->_idleClipName;
+		_walkClipName = copy->_walkClipName;
 	}
 }
 
@@ -106,6 +139,14 @@ void CityRoutineSystemComponent::Serialize(json& data, HexEngine::JsonFile* file
 	file->Serialize(data, "_walkStuckSpeedThreshold", _walkStuckSpeedThreshold);
 	file->Serialize(data, "_walkStuckDurationSeconds", _walkStuckDurationSeconds);
 	file->Serialize(data, "_walkStuckRepathCooldownSeconds", _walkStuckRepathCooldownSeconds);
+	file->Serialize(data, "_walkMaxDistance", _walkMaxDistance);
+	file->Serialize(data, "_defaultVehiclePrefabPath", _defaultVehiclePrefabPath);
+	file->Serialize(data, "_hideAgentsAtDestination", _hideAgentsAtDestination);
+	file->Serialize(data, "_failedTaskCooldownSeconds", _failedTaskCooldownSeconds);
+	file->Serialize(data, "_vehicleStuckSeconds", _vehicleStuckSeconds);
+	file->Serialize(data, "_animateLocomotion", _animateLocomotion);
+	file->Serialize(data, "_idleClipName", _idleClipName);
+	file->Serialize(data, "_walkClipName", _walkClipName);
 }
 
 void CityRoutineSystemComponent::Deserialize(json& data, HexEngine::JsonFile* file, uint32_t mask)
@@ -122,7 +163,19 @@ void CityRoutineSystemComponent::Deserialize(json& data, HexEngine::JsonFile* fi
 	file->Deserialize(data, "_walkStuckSpeedThreshold", _walkStuckSpeedThreshold);
 	file->Deserialize(data, "_walkStuckDurationSeconds", _walkStuckDurationSeconds);
 	file->Deserialize(data, "_walkStuckRepathCooldownSeconds", _walkStuckRepathCooldownSeconds);
+	file->Deserialize(data, "_walkMaxDistance", _walkMaxDistance);
+	file->Deserialize(data, "_defaultVehiclePrefabPath", _defaultVehiclePrefabPath);
+	file->Deserialize(data, "_hideAgentsAtDestination", _hideAgentsAtDestination);
+	file->Deserialize(data, "_failedTaskCooldownSeconds", _failedTaskCooldownSeconds);
+	file->Deserialize(data, "_vehicleStuckSeconds", _vehicleStuckSeconds);
+	file->Deserialize(data, "_animateLocomotion", _animateLocomotion);
+	file->Deserialize(data, "_idleClipName", _idleClipName);
+	file->Deserialize(data, "_walkClipName", _walkClipName);
 	_agentMotionStates.clear();
+	_agentAnimStates.clear();
+	_locomotionClipCache.clear();
+	_lastSimulationHour = -1.0f;
+	_dayIndex = 0;
 }
 
 bool CityRoutineSystemComponent::CreateWidget(HexEngine::ComponentWidget* widget)
@@ -151,6 +204,33 @@ bool CityRoutineSystemComponent::CreateWidget(HexEngine::ComponentWidget* widget
 	stuckDuration->SetPrefabOverrideBinding(GetComponentName(), "/_walkStuckDurationSeconds");
 	stuckCooldown->SetPrefabOverrideBinding(GetComponentName(), "/_walkStuckRepathCooldownSeconds");
 
+	auto* walkMax = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Walk Max Distance", &_walkMaxDistance, 0.0f, 10000.0f, 1.0f, 0);
+	auto* hideAtDest = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Hide Agents At Work", &_hideAgentsAtDestination);
+	auto* failCooldown = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Failed Task Cooldown", &_failedTaskCooldownSeconds, 0.0f, 600.0f, 0.5f, 1);
+	auto* vehicleStuck = new HexEngine::DragFloat(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Vehicle Stuck Seconds", &_vehicleStuckSeconds, 0.0f, 600.0f, 1.0f, 0);
+	vehicleStuck->SetPrefabOverrideBinding(GetComponentName(), "/_vehicleStuckSeconds");
+	auto* animate = new HexEngine::Checkbox(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Animate Locomotion", &_animateLocomotion);
+	auto* vehicle = new HexEngine::LineEdit(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Default Vehicle Prefab");
+	vehicle->SetValue(std::wstring(_defaultVehiclePrefabPath.begin(), _defaultVehiclePrefabPath.end()));
+	vehicle->SetDoesCallbackWaitForReturn(false);
+	vehicle->SetOnInputFn([this](HexEngine::LineEdit*, const std::wstring& value) { _defaultVehiclePrefabPath = ws2s(value); });
+	auto* idleClip = new HexEngine::LineEdit(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Idle Clip");
+	idleClip->SetValue(std::wstring(_idleClipName.begin(), _idleClipName.end()));
+	idleClip->SetDoesCallbackWaitForReturn(false);
+	idleClip->SetOnInputFn([this](HexEngine::LineEdit*, const std::wstring& value) { _idleClipName = ws2s(value); _locomotionClipCache.clear(); });
+	auto* walkClip = new HexEngine::LineEdit(widget, widget->GetNextPos(), HexEngine::Point(widget->GetSize().x - 20, 18), L"Walk Clip");
+	walkClip->SetValue(std::wstring(_walkClipName.begin(), _walkClipName.end()));
+	walkClip->SetDoesCallbackWaitForReturn(false);
+	walkClip->SetOnInputFn([this](HexEngine::LineEdit*, const std::wstring& value) { _walkClipName = ws2s(value); _locomotionClipCache.clear(); });
+
+	walkMax->SetPrefabOverrideBinding(GetComponentName(), "/_walkMaxDistance");
+	hideAtDest->SetPrefabOverrideBinding(GetComponentName(), "/_hideAgentsAtDestination");
+	failCooldown->SetPrefabOverrideBinding(GetComponentName(), "/_failedTaskCooldownSeconds");
+	animate->SetPrefabOverrideBinding(GetComponentName(), "/_animateLocomotion");
+	vehicle->SetPrefabOverrideBinding(GetComponentName(), "/_defaultVehiclePrefabPath");
+	idleClip->SetPrefabOverrideBinding(GetComponentName(), "/_idleClipName");
+	walkClip->SetPrefabOverrideBinding(GetComponentName(), "/_walkClipName");
+
 	return true;
 }
 
@@ -160,6 +240,7 @@ void CityRoutineSystemComponent::OnRemoveEntity(HexEngine::Entity* entity)
 		return;
 
 	_agentMotionStates.erase(entity->GetName());
+	_agentAnimStates.erase(entity->GetName());
 }
 
 bool CityRoutineSystemComponent::EnqueueTask(HexEngine::Entity* agentEntity, const RoutineTaskSpec& spec)
@@ -238,12 +319,46 @@ void CityRoutineSystemComponent::Update(float frameTime)
 {
 	UpdateComponent::Update(frameTime);
 
+	// Edit mode: don't move agents. They walked off in the editor, the moved
+	// positions got saved, and every step bumped the shadow/GI revisions.
+	const bool running = HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->IsGameRunning();
+	if (!running)
+	{
+		// Play just stopped: the restore skips unchanged components, so an
+		// agent's NavigationComponent kept its runtime path and went on walking
+		// in the editor. Drop the paths and per-trip state.
+		if (_wasGameRunning && GetEntity() != nullptr && GetEntity()->GetScene() != nullptr)
+		{
+			std::vector<RoutineAgentComponent*> agents;
+			GetEntity()->GetScene()->GetComponents<RoutineAgentComponent>(agents);
+			for (auto* agent : agents)
+			{
+				if (agent == nullptr || agent->GetEntity() == nullptr)
+					continue;
+				if (auto* nav = agent->GetEntity()->GetComponent<HexEngine::NavigationComponent>(); nav != nullptr)
+					nav->ClearPath();
+			}
+			_agentMotionStates.clear();
+			_agentAnimStates.clear();
+			_lastSimulationHour = -1.0f;
+		}
+		_wasGameRunning = false;
+		return;
+	}
+	_wasGameRunning = true;
+
 	if (!_enabled)
 		return;
 
 	const float simulationHour = GetSimulationHour();
 	if (simulationHour < 0.0f)
 		return;
+
+	// Day counter (the clock only reports the hour): advances when the hour
+	// wraps, so per-day venue choices vary from day to day.
+	if (_lastSimulationHour >= 0.0f && simulationHour + 12.0f < _lastSimulationHour)
+		++_dayIndex;
+	_lastSimulationHour = simulationHour;
 
 	UpdateAgents(frameTime, simulationHour);
 }
@@ -335,11 +450,13 @@ void CityRoutineSystemComponent::UpdateAgents(float frameTime, float simulationH
 			continue;
 
 		UpdateAgentState(agent, frameTime, simulationHour, workplaceOccupancy);
+		UpdateLocomotionAnimation(agent, frameTime);
 	}
 }
 
 void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, float frameTime, float simulationHour, const std::unordered_map<std::string, int32_t>& workplaceOccupancy)
 {
+	agent->SeedCooldownRef() = std::max(0.0f, agent->SeedCooldownRef() - frameTime);
 	EnsureWorkplaceAssignment(agent, simulationHour, workplaceOccupancy);
 	SeedBaselineTaskIfIdle(agent, simulationHour);
 
@@ -408,7 +525,7 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 			break;
 		}
 
-		if (agent->StateTimerRef() > _walkStateTimeoutSeconds)
+		if (agent->StateTimerRef() > GetWalkTimeout(agent))
 		{
 			HandleTaskRetryOrFailure(agent, "Timed out walking to vehicle");
 			break;
@@ -464,6 +581,31 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 			break;
 		}
 
+		// Traffic jams (lane spawners can wedge cars at a junction) would
+		// otherwise hold the agent until the drive timeout. Abandon a car that
+		// has not moved for a while; the agent gets out there and walks on.
+		{
+			auto& motion = _agentMotionStates[agent->GetEntity()->GetName()];
+			const math::Vector3 vehiclePos = vehicleEntity->GetWorldTM().Translation();
+			if (!motion.hasLastVehiclePosition || (vehiclePos - motion.lastVehiclePosition).LengthSquared() > 0.25f)
+			{
+				motion.lastVehiclePosition = vehiclePos;
+				motion.hasLastVehiclePosition = true;
+				motion.vehicleStillSeconds = 0.0f;
+			}
+			else
+			{
+				motion.vehicleStillSeconds += frameTime;
+			}
+			if (_vehicleStuckSeconds > 0.0f && motion.vehicleStillSeconds > _vehicleStuckSeconds)
+			{
+				motion.hasLastVehiclePosition = false;
+				motion.vehicleStillSeconds = 0.0f;
+				HandleTaskRetryOrFailure(agent, "Vehicle stuck during drive");
+				break;
+			}
+		}
+
 		if (vehicle->ConsumeRouteEndReachedEvent())
 		{
 			agent->GetEntity()->ClearFlags(HexEngine::EntityFlags::DoNotRender);
@@ -500,7 +642,7 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 			break;
 		}
 
-		if (agent->StateTimerRef() > _walkStateTimeoutSeconds)
+		if (agent->StateTimerRef() > GetWalkTimeout(agent))
 		{
 			HandleTaskRetryOrFailure(agent, "Timed out walking to entry");
 			break;
@@ -617,101 +759,290 @@ void CityRoutineSystemComponent::SeedBaselineTaskIfIdle(RoutineAgentComponent* a
 	if (agent == nullptr || agent->GetEntity() == nullptr)
 		return;
 
-	if (agent->GetActiveTask().has_value() || agent->HasQueuedTasks())
+	if (agent->GetActiveTask().has_value() || agent->HasQueuedTasks() || agent->SeedCooldownRef() > 0.0f)
 		return;
 
 	auto* scene = agent->GetEntity()->GetScene();
 	if (scene == nullptr)
 		return;
 
-	PlaceOfWorkComponent* workplace = nullptr;
-	ResidenceComponent* residence = nullptr;
-
-	if (!agent->GetAssignedWorkplaceEntityName().empty())
-	{
-		auto* workEntity = scene->GetEntityByName(agent->GetAssignedWorkplaceEntityName());
-		if (workEntity != nullptr)
-			workplace = workEntity->GetComponent<PlaceOfWorkComponent>();
-	}
-
-	if (!agent->GetHomeEntityName().empty())
-	{
-		auto* homeEntity = scene->GetEntityByName(agent->GetHomeEntityName());
-		if (homeEntity != nullptr)
-			residence = homeEntity->GetComponent<ResidenceComponent>();
-	}
-
-	const bool onShift = workplace != nullptr ? workplace->IsHourInAnyShift(simulationHour) : false;
-	agent->SetOnShift(onShift);
+	RoutineTaskSpec task;
+	if (!BuildScheduledTask(agent, simulationHour, task))
+		return;
 
 	const math::Vector3 agentPos = agent->GetEntity()->GetWorldTM().Translation();
-	constexpr float kArrivalRadius = 8.0f;
-	auto isNear = [&](const std::string& waypointEntityName, HexEngine::Entity* fallbackEntity) -> bool
-		{
-			math::Vector3 target = math::Vector3::Zero;
-			bool hasTarget = false;
-
-			if (!waypointEntityName.empty())
-			{
-				auto* waypoint = scene->GetEntityByName(waypointEntityName);
-				if (waypoint != nullptr && !waypoint->IsPendingDeletion())
-				{
-					target = waypoint->GetWorldTM().Translation();
-					hasTarget = true;
-				}
-			}
-
-			if (!hasTarget && fallbackEntity != nullptr && !fallbackEntity->IsPendingDeletion())
-			{
-				target = fallbackEntity->GetWorldTM().Translation();
-				hasTarget = true;
-			}
-
-			if (!hasTarget)
-				return false;
-
-			return (target - agentPos).LengthSquared() <= (kArrivalRadius * kArrivalRadius);
-		};
-
-	RoutineTaskSpec task;
-	task.travelMode = RoutineTravelMode::DriveFirst;
-	task.priority = 0;
-
-	if (onShift && workplace != nullptr)
-	{
-		if (isNear(workplace->GetEntryWaypointEntityName(), workplace->GetEntity()) ||
-			isNear(workplace->GetParkingWaypointEntityName(), workplace->GetEntity()))
-		{
-			return;
-		}
-
-		task.type = RoutineTaskType::GoToWork;
-		task.targetEntityName = workplace->GetEntity()->GetName();
-		task.targetEntryWaypointName = workplace->GetEntryWaypointEntityName();
-		task.targetParkingWaypointName = workplace->GetParkingWaypointEntityName();
-		task.sourceParkingWaypointName = residence != nullptr ? residence->GetParkingWaypointEntityName() : std::string();
-	}
-	else if (residence != nullptr)
-	{
-		if (isNear(residence->GetEntryWaypointEntityName(), residence->GetEntity()) ||
-			isNear(residence->GetParkingWaypointEntityName(), residence->GetEntity()))
-		{
-			return;
-		}
-
-		task.type = RoutineTaskType::GoHome;
-		task.targetEntityName = residence->GetEntity()->GetName();
-		task.targetEntryWaypointName = residence->GetEntryWaypointEntityName();
-		task.targetParkingWaypointName = residence->GetParkingWaypointEntityName();
-		if (workplace != nullptr)
-			task.sourceParkingWaypointName = workplace->GetParkingWaypointEntityName();
-	}
-	else
-	{
+	math::Vector3 destination;
+	if (!ResolveAnchorPosition(task.targetEntryWaypointName, destination) &&
+		!ResolveAnchorPosition(task.targetEntityName, destination))
 		return;
+
+	if ((destination - agentPos).LengthSquared() <= kArrivalRadius * kArrivalRadius)
+		return;	// already there
+
+	task.travelMode = ChooseTravelMode(agent, agentPos, destination);
+	if (task.travelMode == RoutineTravelMode::DriveFirst)
+	{
+		// Buildings rarely name lane waypoints; use the nearest ones.
+		if (task.targetParkingWaypointName.empty())
+			task.targetParkingWaypointName = FindNearestWaypointName(destination);
+		if (task.sourceParkingWaypointName.empty())
+			task.sourceParkingWaypointName = FindNearestWaypointName(agentPos);
+		if (task.targetParkingWaypointName.empty() || task.sourceParkingWaypointName.empty() ||
+			task.targetParkingWaypointName == task.sourceParkingWaypointName)
+			task.travelMode = RoutineTravelMode::WalkOnly;
 	}
 
 	agent->EnqueueTask(task);
+}
+
+bool CityRoutineSystemComponent::BuildScheduledTask(RoutineAgentComponent* agent, float simulationHour, RoutineTaskSpec& task)
+{
+	auto* scene = agent->GetEntity()->GetScene();
+
+	PlaceOfWorkComponent* workplace = nullptr;
+	ResidenceComponent* residence = nullptr;
+	if (!agent->GetAssignedWorkplaceEntityName().empty())
+	{
+		if (auto* workEntity = scene->GetEntityByName(agent->GetAssignedWorkplaceEntityName()); workEntity != nullptr)
+			workplace = workEntity->GetComponent<PlaceOfWorkComponent>();
+	}
+	if (!agent->GetHomeEntityName().empty())
+	{
+		if (auto* homeEntity = scene->GetEntityByName(agent->GetHomeEntityName()); homeEntity != nullptr)
+			residence = homeEntity->GetComponent<ResidenceComponent>();
+	}
+
+	// What the agent should be doing now.
+	std::string activity;
+	uint64_t blockKey = 0;
+	const auto& schedule = agent->GetSchedule();
+	if (schedule.empty())
+	{
+		activity = (workplace != nullptr && workplace->IsHourInAnyShift(simulationHour)) ? "Work" : "Home";
+	}
+	else
+	{
+		// One stable per-agent offset shifts the whole day, so a crowd with
+		// the same schedule doesn't move in lockstep.
+		const float offset = (Hash01(agent->GetEntity()->GetName(), 0) - 0.5f) * agent->GetScheduleJitterHours();
+		float hour = std::fmod(simulationHour - offset + 24.0f, 24.0f);
+		activity = "Home";
+		for (size_t i = 0; i < schedule.size(); ++i)
+		{
+			if (HourInWindow(hour, schedule[i].start, schedule[i].end))
+			{
+				activity = schedule[i].activity;
+				blockKey = ((uint64_t)_dayIndex << 8) | (uint64_t)(i + 1);
+				break;
+			}
+		}
+	}
+
+	if (_stricmp(activity.c_str(), "Work") == 0 && workplace == nullptr)
+		activity = "Home";
+	agent->SetOnShift(_stricmp(activity.c_str(), "Work") == 0);
+
+	task.priority = 0;
+	if (_stricmp(activity.c_str(), "Work") == 0)
+	{
+		task.type = RoutineTaskType::GoToWork;
+		task.targetEntityName = workplace->GetEntity()->GetName();
+		task.targetEntryWaypointName = workplace->ResolveEntryWaypointName();
+		task.targetParkingWaypointName = workplace->ResolveParkingWaypointName();
+		task.sourceParkingWaypointName = residence != nullptr ? residence->ResolveParkingWaypointName() : std::string();
+	}
+	else if (_stricmp(activity.c_str(), "Home") == 0)
+	{
+		if (residence == nullptr)
+			return false;
+		task.type = RoutineTaskType::GoHome;
+		task.targetEntityName = residence->GetEntity()->GetName();
+		task.targetEntryWaypointName = residence->ResolveEntryWaypointName();
+		task.targetParkingWaypointName = residence->ResolveParkingWaypointName();
+	}
+	else
+	{
+		// A visit: pick a venue offering this service once per block.
+		if (agent->GetPlannedBlockKey() != blockKey)
+			agent->SetPlannedBlock(blockKey, PickVenue(agent, activity, simulationHour, blockKey));
+
+		auto* venueEntity = agent->GetPlannedTargetName().empty() ? nullptr : scene->GetEntityByName(agent->GetPlannedTargetName());
+		auto* venue = venueEntity != nullptr ? venueEntity->GetComponent<PlaceOfWorkComponent>() : nullptr;
+		if (venue == nullptr)
+		{
+			// Nowhere open for it: go home instead.
+			if (residence == nullptr)
+				return false;
+			task.type = RoutineTaskType::GoHome;
+			task.targetEntityName = residence->GetEntity()->GetName();
+			task.targetEntryWaypointName = residence->ResolveEntryWaypointName();
+			task.targetParkingWaypointName = residence->ResolveParkingWaypointName();
+		}
+		else
+		{
+			task.type = RoutineTaskType::CustomTravel;
+			task.reason = activity;
+			task.targetEntityName = venueEntity->GetName();
+			task.targetEntryWaypointName = venue->ResolveEntryWaypointName();
+			task.targetParkingWaypointName = venue->ResolveParkingWaypointName();
+		}
+	}
+
+	// No entry waypoint: walk to the building itself (nearest navmesh point).
+	if (task.targetEntryWaypointName.empty())
+		task.targetEntryWaypointName = task.targetEntityName;
+	return true;
+}
+
+std::string CityRoutineSystemComponent::PickVenue(RoutineAgentComponent* agent, const std::string& serviceTag, float simulationHour, uint64_t blockKey) const
+{
+	auto* scene = agent->GetEntity()->GetScene();
+	std::vector<PlaceOfWorkComponent*> places;
+	scene->GetComponents<PlaceOfWorkComponent>(places);
+
+	std::vector<RoutineAgentComponent*> agents;
+	scene->GetComponents<RoutineAgentComponent>(agents);
+
+	const math::Vector3 agentPos = agent->GetEntity()->GetWorldTM().Translation();
+	std::vector<std::pair<std::string, float>> candidates;
+	float total = 0.0f;
+	for (auto* place : places)
+	{
+		if (place == nullptr || place->GetEntity() == nullptr || place->GetEntity()->IsPendingDeletion())
+			continue;
+		if (!place->OffersService(serviceTag) || !place->IsHourInAnyShift(simulationHour))
+			continue;
+
+		const std::string& name = place->GetEntity()->GetName();
+		int32_t visitors = 0;
+		for (auto* other : agents)
+		{
+			if (other != nullptr && other != agent && other->GetPlannedTargetName() == name)
+				++visitors;
+		}
+		if (place->GetVisitorCapacity() > 0 && visitors >= place->GetVisitorCapacity())
+			continue;
+
+		// Prefer nearby places, but not exclusively.
+		const float distance = (place->GetEntity()->GetWorldTM().Translation() - agentPos).Length();
+		const float weight = 1.0f / ((1.0f + distance / 60.0f) * (1.0f + distance / 60.0f));
+		candidates.emplace_back(name, weight);
+		total += weight;
+	}
+
+	if (candidates.empty() || total <= 0.0f)
+		return {};
+
+	float roll = Hash01(agent->GetEntity()->GetName(), blockKey + 1) * total;
+	for (const auto& [name, weight] : candidates)
+	{
+		if (roll < weight)
+			return name;
+		roll -= weight;
+	}
+	return candidates.back().first;
+}
+
+RoutineTravelMode CityRoutineSystemComponent::ChooseTravelMode(RoutineAgentComponent* agent, const math::Vector3& from, const math::Vector3& to) const
+{
+	switch (agent->GetTravelPreference())
+	{
+	case RoutineTravelPreference::Walk:
+		return RoutineTravelMode::WalkOnly;
+	case RoutineTravelPreference::Drive:
+		return RoutineTravelMode::DriveFirst;
+	default:
+		break;
+	}
+
+	if (agent->GetPreferredVehiclePrefabPath().empty() && _defaultVehiclePrefabPath.empty())
+		return RoutineTravelMode::WalkOnly;
+	return (to - from).Length() <= _walkMaxDistance ? RoutineTravelMode::WalkOnly : RoutineTravelMode::DriveFirst;
+}
+
+bool CityRoutineSystemComponent::ResolveAnchorPosition(const std::string& entityName, math::Vector3& outPosition) const
+{
+	if (entityName.empty() || GetEntity() == nullptr || GetEntity()->GetScene() == nullptr)
+		return false;
+	auto* e = GetEntity()->GetScene()->GetEntityByName(entityName);
+	if (e == nullptr || e->IsPendingDeletion())
+		return false;
+	outPosition = e->GetWorldTM().Translation();
+	return true;
+}
+
+float CityRoutineSystemComponent::GetWalkTimeout(RoutineAgentComponent* agent)
+{
+	auto it = _agentMotionStates.find(agent->GetEntity()->GetName());
+	const float perWalk = it != _agentMotionStates.end() ? it->second.walkTimeoutSeconds : 0.0f;
+	return std::max(_walkStateTimeoutSeconds, perWalk);
+}
+
+void CityRoutineSystemComponent::UpdateLocomotionAnimation(RoutineAgentComponent* agent, float frameTime)
+{
+	if (!_animateLocomotion || frameTime <= 0.0f || agent == nullptr || agent->GetEntity() == nullptr)
+		return;
+
+	auto* entity = agent->GetEntity();
+	auto* skel = entity->GetComponent<HexEngine::SkeletalAnimationComponent>();
+	if (skel == nullptr)
+		return;
+	auto data = skel->GetAnimationData();
+	if (data == nullptr || data->_animations.empty())
+		return;
+
+	auto cached = _locomotionClipCache.find(data.get());
+	if (cached == _locomotionClipCache.end())
+	{
+		// Exact clip names first, then a loose match ("walk" but not a strafe).
+		LocomotionClips clips;
+		const auto& anims = data->_animations;
+		for (int32_t i = 0; i < (int32_t)anims.size(); ++i)
+		{
+			if (clips.idle < 0 && _stricmp(anims[i].name.c_str(), _idleClipName.c_str()) == 0)
+				clips.idle = i;
+			if (clips.walk < 0 && _stricmp(anims[i].name.c_str(), _walkClipName.c_str()) == 0)
+				clips.walk = i;
+		}
+		for (int32_t i = 0; i < (int32_t)anims.size(); ++i)
+		{
+			if (clips.idle < 0 && ContainsNoCase(anims[i].name, "idle"))
+				clips.idle = i;
+			if (clips.walk < 0 && ContainsNoCase(anims[i].name, "walk") && !ContainsNoCase(anims[i].name, "strafe"))
+				clips.walk = i;
+		}
+		if (clips.idle < 0 || clips.walk < 0)
+			LOG_WARN("CityRoutineSystem: '%s' has no idle/walk clips (looked for '%s'/'%s'); locomotion animation disabled for it.", entity->GetName().c_str(), _idleClipName.c_str(), _walkClipName.c_str());
+		cached = _locomotionClipCache.emplace(data.get(), clips).first;
+	}
+
+	const LocomotionClips clips = cached->second;
+	if (clips.idle < 0 || clips.walk < 0)
+		return;
+
+	auto& state = _agentAnimStates[entity->GetName()];
+	const math::Vector3 pos = entity->GetWorldTM().Translation();
+	if (!state.hasLastPosition)
+	{
+		state.lastPosition = pos;
+		state.hasLastPosition = true;
+	}
+	math::Vector3 delta = pos - state.lastPosition;
+	delta.y = 0.0f;
+	state.lastPosition = pos;
+	const float speed = delta.Length() / frameTime;
+	if (speed < 20.0f)	// ignore teleports (vehicle exit, restore)
+		state.smoothedSpeed += (speed - state.smoothedSpeed) * std::min(1.0f, frameTime * 6.0f);
+
+	auto* nav = entity->GetComponent<HexEngine::NavigationComponent>();
+	const bool moving = state.smoothedSpeed > 0.3f && (nav == nullptr || nav->HasPath() || state.smoothedSpeed > 0.8f);
+	const int32_t wanted = moving ? clips.walk : clips.idle;
+	if (state.requestedClip != wanted)
+	{
+		if ((int32_t)skel->GetAnimationIndex() != wanted)
+			skel->BlendToAnimationIndex((uint32_t)wanted);
+		state.requestedClip = wanted;
+	}
 }
 
 bool CityRoutineSystemComponent::BeginWalkTo(RoutineAgentComponent* agent, const std::string& waypointEntityName)
@@ -747,6 +1078,8 @@ bool CityRoutineSystemComponent::BeginWalkTo(RoutineAgentComponent* agent, const
 		return false;
 
 	nav->ClearPath();
+	if (agent->GetWalkSpeed() > 0.0f)
+		nav->SetMovementSpeed(agent->GetWalkSpeed());
 	nav->FindPath(scene->GetNavMeshId(), from, to, 5.0f);   // scene's navmesh (loaded from sidecar)
 	if (!nav->HasPath())
 	{
@@ -767,6 +1100,14 @@ bool CityRoutineSystemComponent::BeginWalkTo(RoutineAgentComponent* agent, const
 	motion.hasLastPosition = true;
 	motion.lowMotionAccumSeconds = 0.0f;
 	motion.repathCooldownSeconds = 0.0f;
+	{
+		float pathLength = 0.0f;
+		const auto& points = nav->GetPathPoints();
+		for (size_t i = 0; i + 1 < points.size(); ++i)
+			pathLength += (points[i + 1] - points[i]).Length();
+		const float speed = std::max(0.2f, agent->GetWalkSpeed());
+		motion.walkTimeoutSeconds = pathLength / speed * 1.5f + 15.0f;
+	}
 
 	return true;
 }
@@ -797,6 +1138,8 @@ HexEngine::Entity* CityRoutineSystemComponent::AcquireVehicleForTask(RoutineAgen
 		}
 	}
 
+	if (prefabPath.empty())
+		prefabPath = _defaultVehiclePrefabPath;
 	if (prefabPath.empty())
 		return nullptr;
 
@@ -863,6 +1206,7 @@ void CityRoutineSystemComponent::FinishTask(RoutineAgentComponent* agent, bool s
 
 	const auto completedTask = agent->GetActiveTask();
 	const bool hideAfterCompletion =
+		_hideAgentsAtDestination &&
 		success &&
 		completedTask.has_value() &&
 		completedTask->type == RoutineTaskType::GoToWork;
@@ -914,7 +1258,6 @@ void CityRoutineSystemComponent::FinishTask(RoutineAgentComponent* agent, bool s
 
 			if (isCommuteLike)
 			{
-				constexpr float kArrivalRadius = 8.0f;
 				math::Vector3 destination = math::Vector3::Zero;
 				bool hasDestination = false;
 
@@ -961,6 +1304,33 @@ void CityRoutineSystemComponent::HandleTaskRetryOrFailure(RoutineAgentComponent*
 		return;
 
 	auto task = *agent->GetActiveTask();
+
+	// Driving is the fragile half of a trip (lane coverage, parking, vehicle
+	// prefab). If any vehicle leg fails, finish the trip on foot instead.
+	if (task.travelMode == RoutineTravelMode::DriveFirst && !ContainsNoCase(failureReason, "entry"))
+	{
+		// Mid-drive the hidden agent is still standing where it got in: put it
+		// where the car is before the car goes.
+		if (!agent->GetCurrentVehicleEntityName().empty() && agent->GetEntity()->GetScene() != nullptr)
+		{
+			auto* vehicleEntity = agent->GetEntity()->GetScene()->GetEntityByName(agent->GetCurrentVehicleEntityName());
+			if (vehicleEntity != nullptr && !vehicleEntity->IsPendingDeletion() &&
+				agent->GetExecutionState() == RoutineExecutionState::DriveToDestinationParking)
+			{
+				agent->GetEntity()->ForcePosition(vehicleEntity->GetWorldTM().Translation());
+			}
+		}
+		CleanupAgentVehicle(agent);
+		agent->GetEntity()->ClearFlags(HexEngine::EntityFlags::DoNotRender);
+		task.travelMode = RoutineTravelMode::WalkOnly;
+		agent->SetActiveTask(task);
+		agent->SetExecutionState(RoutineExecutionState::Idle);
+		agent->SetStateTimer(0.0f);
+		agent->RetryTimerRef() = 0.0f;
+		LOG_WARN("CityRoutineSystem: Agent '%s' walking instead after: %s", agent->GetEntity()->GetName().c_str(), failureReason.c_str());
+		return;
+	}
+
 	std::string lowerReason = failureReason;
 	std::transform(lowerReason.begin(), lowerReason.end(), lowerReason.begin(),
 		[](unsigned char c) { return (char)std::tolower(c); });
@@ -1006,6 +1376,7 @@ void CityRoutineSystemComponent::HandleTaskRetryOrFailure(RoutineAgentComponent*
 	}
 
 	LOG_WARN("CityRoutineSystem: Agent '%s' task failed permanently: %s", agent->GetEntity()->GetName().c_str(), failureReason.c_str());
+	agent->SeedCooldownRef() = _failedTaskCooldownSeconds;
 	FinishTask(agent, false);
 }
 
