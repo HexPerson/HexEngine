@@ -1,5 +1,7 @@
 #include "CityRoutineSystemComponent.hpp"
 #include "CityEmergencyDispatcherSystemComponent.hpp"
+#include <functional>
+#include <unordered_set>
 #include <HexEngine.Core/Entity/Component/DayNightCycleComponent.hpp>
 #include <HexEngine.Core/Entity/Component/NavigationComponent.hpp>
 #include <HexEngine.Core/Entity/Component/SkeletalAnimationComponent.hpp>
@@ -28,6 +30,58 @@
 
 namespace
 {
+	// Descendants hidden BY SetAgentHidden (so showing the agent doesn't unhide a
+	// child that was hidden for its own reasons). Generation-checked ids.
+	std::unordered_set<HexEngine::EntityId, HexEngine::EntityIdHasher> g_childrenHiddenWithAgent;
+
+	void SetHiddenAndFlush(HexEngine::Entity* entity, bool hidden)
+	{
+		if (entity->HasFlag(HexEngine::EntityFlags::DoNotRender) == hidden)
+			return;
+		if (hidden)
+			entity->SetFlag(HexEngine::EntityFlags::DoNotRender);
+		else
+			entity->ClearFlags(HexEngine::EntityFlags::DoNotRender);
+		// DoNotRender is only read when a PVS rebuilds. Without this flush a shown
+		// agent stayed invisible (and a hidden one visible) until something else
+		// forced a rebuild - the "body missing, hair still there" residents.
+		if (auto* scene = entity->GetScene())
+			scene->FlushPVS(entity);
+	}
+
+	// Hide / show a routine agent INCLUDING its child entities: DoNotRender is
+	// per-entity, so hiding only the root (getting into a car, going indoors) left
+	// bone-bound hair, hats and accessories floating where the body had been.
+	void SetAgentHidden(HexEngine::Entity* root, bool hidden)
+	{
+		if (root == nullptr)
+			return;
+		SetHiddenAndFlush(root, hidden);
+
+		std::function<void(HexEngine::Entity*)> visit = [&](HexEngine::Entity* parent)
+		{
+			for (HexEngine::Entity* child : parent->GetChildren())
+			{
+				if (child == nullptr || child->IsPendingDeletion())
+					continue;
+				if (hidden)
+				{
+					if (!child->HasFlag(HexEngine::EntityFlags::DoNotRender))
+					{
+						g_childrenHiddenWithAgent.insert(child->GetId());
+						SetHiddenAndFlush(child, true);
+					}
+				}
+				else if (g_childrenHiddenWithAgent.erase(child->GetId()) != 0)
+				{
+					SetHiddenAndFlush(child, false);
+				}
+				visit(child);
+			}
+		};
+		visit(root);
+	}
+
 	constexpr float kWorkplacePriorityWeight = 100.0f;
 	constexpr float kArrivalRadius = 8.0f;
 
@@ -280,7 +334,7 @@ bool CityRoutineSystemComponent::CancelTask(HexEngine::Entity* agentEntity, cons
 		return false;
 
 	CleanupAgentVehicle(agent);
-	agent->GetEntity()->ClearFlags(HexEngine::EntityFlags::DoNotRender);
+	SetAgentHidden(agent->GetEntity(), false);
 	agent->SetActiveTask(std::nullopt);
 	agent->ClearSuspendedTask();
 	agent->SetExecutionState(RoutineExecutionState::Idle);
@@ -470,7 +524,7 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 			if (headTask.preemptive && headTask.priority > activeTask.priority)
 			{
 				CleanupAgentVehicle(agent);
-				agent->GetEntity()->ClearFlags(HexEngine::EntityFlags::DoNotRender);
+				SetAgentHidden(agent->GetEntity(), false);
 				agent->SuspendCurrentTask();
 			}
 		}
@@ -482,7 +536,7 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 		if (agent->TryPopTask(nextTask))
 		{
 			agent->SetActiveTask(nextTask);
-			agent->GetEntity()->ClearFlags(HexEngine::EntityFlags::DoNotRender);
+			SetAgentHidden(agent->GetEntity(), false);
 			agent->SetExecutionState(RoutineExecutionState::Idle);
 			agent->SetStateTimer(0.0f);
 			agent->RetryTimerRef() = 0.0f;
@@ -559,7 +613,7 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 			nav->ClearPath();
 		}
 
-		agent->GetEntity()->SetFlag(HexEngine::EntityFlags::DoNotRender);
+		SetAgentHidden(agent->GetEntity(), true);
 		agent->SetExecutionState(RoutineExecutionState::DriveToDestinationParking);
 		agent->SetStateTimer(0.0f);
 		break;
@@ -609,7 +663,7 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 
 		if (vehicle->ConsumeRouteEndReachedEvent())
 		{
-			agent->GetEntity()->ClearFlags(HexEngine::EntityFlags::DoNotRender);
+			SetAgentHidden(agent->GetEntity(), false);
 			agent->GetEntity()->ForcePosition(vehicleEntity->GetWorldTM().Translation());
 			agent->SetExecutionState(RoutineExecutionState::WalkToTaskEntry);
 			agent->SetStateTimer(0.0f);
@@ -1242,11 +1296,11 @@ void CityRoutineSystemComponent::FinishTask(RoutineAgentComponent* agent, bool s
 	}
 	if (hideAfterCompletion)
 	{
-		agent->GetEntity()->SetFlag(HexEngine::EntityFlags::DoNotRender);
+		SetAgentHidden(agent->GetEntity(), true);
 	}
 	else
 	{
-		agent->GetEntity()->ClearFlags(HexEngine::EntityFlags::DoNotRender);
+		SetAgentHidden(agent->GetEntity(), false);
 	}
 	agent->SetBusy(false);
 	agent->SetExecutionState(RoutineExecutionState::Idle);
@@ -1342,7 +1396,7 @@ void CityRoutineSystemComponent::HandleTaskRetryOrFailure(RoutineAgentComponent*
 			}
 		}
 		CleanupAgentVehicle(agent);
-		agent->GetEntity()->ClearFlags(HexEngine::EntityFlags::DoNotRender);
+		SetAgentHidden(agent->GetEntity(), false);
 		task.travelMode = RoutineTravelMode::WalkOnly;
 		agent->SetActiveTask(task);
 		agent->SetExecutionState(RoutineExecutionState::Idle);

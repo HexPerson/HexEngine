@@ -6,9 +6,35 @@
 #include "../../Scene/PVS.hpp"
 #include "../../Scene/Scene.hpp"   // SceneFlags (forward-declared in Camera.hpp)
 #include "../../Graphics/IUpscalerProvider.hpp"
+#include <mutex>
 
 namespace HexEngine
 {
+	namespace
+	{
+		// Camera::SetPoseOverride state, kept out of the class so its layout stays the
+		// same for modules that allocate Camera inline (AddComponent<Camera>).
+		struct PoseOverride
+		{
+			math::Vector3 position;
+			math::Vector3 angles;	// pitch, yaw, roll (degrees)
+		};
+		std::mutex g_poseOverrideLock;
+		std::unordered_map<const Camera*, PoseOverride> g_poseOverrides;
+
+		bool LookupPoseOverride(const Camera* camera, PoseOverride& out)
+		{
+			std::lock_guard lock(g_poseOverrideLock);
+			if (g_poseOverrides.empty())
+				return false;
+			auto it = g_poseOverrides.find(camera);
+			if (it == g_poseOverrides.end())
+				return false;
+			out = it->second;
+			return true;
+		}
+	}
+
 	const float gCameraDefaultFov = 70.0f;
 	// Hysteresis margin for the enlarged PVS frustum: the PVS only rebuilds once
 	// the real frustum pokes outside the enlarged one, so this is "how far the
@@ -75,6 +101,7 @@ namespace HexEngine
 
 	Camera::~Camera()
 	{
+		ClearPoseOverride();
 		SAFE_DELETE(_pvs);
 		//SAFE_DELETE(_fullScreenRenderTarget);
 		SAFE_DELETE(_renderTarget);
@@ -284,6 +311,17 @@ namespace HexEngine
 			SetPespectiveParameters(_fov, _aspectRatio, _screenNear, r_cameraViewDistance._val.f32);
 		}
 
+		if (GetEntity() != nullptr)
+		{
+			PoseOverride pose;
+			if (LookupPoseOverride(this, pose))
+			{
+				GetEntity()->SetPosition(pose.position);
+				SetPitch(pose.angles.x);
+				SetYaw(pose.angles.y);
+				SetRoll(pose.angles.z);
+			}
+		}
 		UpdateRotation();
 		ConstructViewMatrix();
 
@@ -381,6 +419,24 @@ namespace HexEngine
 	void Camera::SetOrthographicOffScreenParameters(float minX, float maxX, float minY, float maxY, float minZ, float maxZ)
 	{
 		_projectionMatrix = math::Matrix::CreateOrthographicOffCenter(minX, maxX, minY, maxY, minZ, maxZ);
+	}
+
+	void Camera::SetPoseOverride(const math::Vector3& position, float pitchDegrees, float yawDegrees, float rollDegrees)
+	{
+		std::lock_guard lock(g_poseOverrideLock);
+		g_poseOverrides[this] = PoseOverride{ position, math::Vector3(pitchDegrees, yawDegrees, rollDegrees) };
+	}
+
+	void Camera::ClearPoseOverride()
+	{
+		std::lock_guard lock(g_poseOverrideLock);
+		g_poseOverrides.erase(this);
+	}
+
+	bool Camera::HasPoseOverride() const
+	{
+		std::lock_guard lock(g_poseOverrideLock);
+		return g_poseOverrides.count(this) != 0;
 	}
 
 	void Camera::SetYaw(float yawDegrees)

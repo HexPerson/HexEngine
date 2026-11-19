@@ -37,6 +37,13 @@ namespace HexEngine
 		// (and any gameplay code) to enumerate available animation names.
 		std::shared_ptr<AnimationData> GetAnimationData() const { return _animData; }
 
+		// Diagnostics (bridge inspect_render_state): the mesh this component drives,
+		// how many poses it has evaluated, and whether a compute-skin instance exists.
+		const AnimatedMesh*	GetBoundMesh() const { return _mesh.get(); }
+		uint64_t			GetPoseVersion() const { return _poseVersion; }
+		bool				HasGpuSkinInstance() const { return _gpuSkin != nullptr; }
+		const std::array<math::Matrix, MAX_BONES>& GetBoneTransformArrayForDebug() const { return _transforms; }
+
 		// One node of a clip's channel tree, flattened parent-before-child so a
 		// pose is a single forward loop: no recursion and no per-frame bone-name
 		// lookups (the bone index is resolved once, when the clip is compiled).

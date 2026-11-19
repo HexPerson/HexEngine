@@ -199,6 +199,8 @@ namespace
 				{"filter", Str("Name substring filter.")}, {"component", Str("Only entities that have this component type.")} }) });
 		v.push_back({ "list_components", "Component types present in the current scene.", Obj(json::object()) });
 		v.push_back({ "list_component_types", "Every registered component class (anything hex_add_component accepts).", Obj(json::object()) });
+		v.push_back({ "inspect_render_state", "Why an entity is or isn't drawn: render flags/layer, per-camera PVS membership and snapshot entry (the matrices the draw uses), cached instance matrices, and skinning state (bound mesh, pose version, GPU-skin instance, non-finite bones). Use for 'the mesh exists but is invisible'.",
+			Obj(json{ {"entity", EntityRefSchema()} }, { "entity" }) });
 		v.push_back({ "inspect_component", "A component's serialised fields - the exact names/shapes hex_set_component_field accepts.",
 			Obj(json{ {"entity", EntityRefSchema()}, {"component", Str("Component type name, e.g. \"Transform\".")} }, { "entity", "component" }) });
 		v.push_back({ "list_loaded_resources", "Currently loaded resources (id/path/refcount).", Obj(json{ {"limit", Int("Max results (<= 2000).")} }) });
@@ -250,7 +252,7 @@ namespace
 				{"min", NumArray(3, "Box min corner.")}, {"max", NumArray(3, "Box max corner.")},
 				{"component", Str("Only entities with this component type.")}, {"filter", Str("Name substring.")},
 				{"rootsOnly", Bool("Only top-level entities.")}, {"limit", Int("Max results (default 200).")} }) });
-		v.push_back({ "capture_view", "LOOK at the scene: returns a downscaled image of the editor camera's rendered frame INLINE. Optionally from another viewpoint (position + lookAt / eulerDegrees, or frameEntity to fit an entity in view); the editor camera is moved for the capture and put back afterwards.",
+		v.push_back({ "capture_view", "LOOK at the scene: returns a downscaled image of the editor camera's rendered frame INLINE. Optionally from another viewpoint (position + lookAt / eulerDegrees, or frameEntity to fit an entity in view); the camera is moved for the capture and put back afterwards. Works in play mode too: the requested pose is held against the game camera controller until the frame is read back.",
 			Obj(json{ {"position", NumArray(3, "Camera position for the shot.")}, {"lookAt", NumArray(3, "Point to look at.")},
 				{"eulerDegrees", NumArray(3, "[pitch, yaw, roll]: pitch + = up, yaw 0 faces -Z, yaw + turns toward -X.")},
 				{"frameEntity", EntityRefSchema("Fit this entity (and its children) in view; direction from eulerDegrees or a 25-degree look-down at the current heading.")},

@@ -44,6 +44,9 @@
 #include "../../HexEngine.Core/Scene/Mesh.hpp"
 #include "../../HexEngine.Core/Scene/AnimatedMesh.hpp"
 #include "../../HexEngine.Core/Scene/AnimationRetarget.hpp"
+#include "../../HexEngine.Core/Scene/PVS.hpp"
+#include "../../HexEngine.Core/Entity/Component/SkeletalAnimationComponent.hpp"
+#include "../../HexEngine.Core/Physics/RayMath.hpp"
 #include "../../HexEngine.Core/FileSystem/PrefabLoader.hpp"
 #include "../../HexEngine.Core/Physics/IPhysicsSystem.hpp"
 #include "../../HexEngine.Core/Physics/PhysUtils.hpp"
@@ -2628,6 +2631,9 @@ namespace HexEngine
 					{"frame", _frameCount.load()},
 					{"prefabStageOpen", ctx ? ctx->IsPrefabEditStageOpen() : false},
 					{"simulation", SimulationJson()},
+					// true while a SceneSaveFile::Load is in flight (project open runs it on
+					// a worker thread): wait for false before play / bulk edits.
+					{"sceneLoading", g_pEnv && g_pEnv->_sceneManager && g_pEnv->_sceneManager->IsLoadingScene()},
 					{"undoCount", ctx ? ctx->GetUndoCount() : 0},
 					{"redoCount", ctx ? ctx->GetRedoCount() : 0},
 				});
@@ -2739,6 +2745,122 @@ namespace HexEngine
 				if (!e)
 					return MakeResult(id, json{ {"hasSelection", false}, {"entity", nullptr} });
 				return MakeResult(id, json{ {"hasSelection", true}, {"entity", EntityDetailJson(e)} });
+			});
+
+			// Every gate between "entity exists" and "its mesh is drawn": render flags,
+			// per-camera PVS membership + snapshot entry, the cached instance matrices
+			// the draw uses, and the skinning state. For "mesh exists but is invisible".
+			Reg("inspect_render_state", R, Main, Batch, [](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				if (!scene) return NoScene(id);
+				json err;
+				Entity* e = RequireEntity(id, scene.get(), p, "entity", true, err);
+				if (!e) return err;
+
+				auto finiteMatrix = [](const math::Matrix& m) {
+					const float* f = &m._11;
+					for (int i = 0; i < 16; ++i)
+						if (!RayMath::IsFinite(f[i])) return false;
+					return true;
+				};
+				auto vec3 = [](const math::Vector3& v) { return json::array({ v.x, v.y, v.z }); };
+
+				const dx::BoundingSphere ws = e->GetWorldBoundingSphere();
+				json out = json{
+					{"entity", EntityBrief(e)},
+					{"flags", (uint32_t)e->GetFlags()},
+					{"doNotRender", e->HasFlag(EntityFlags::DoNotRender)},
+					{"pendingDeletion", e->IsPendingDeletion()},
+					{"layer", (int32_t)e->GetLayer()},
+					{"castsShadows", e->GetCastsShadows()},
+					{"isInPVS", e->IsInPVS()},
+					{"transformVersion", e->GetTransformVersion()},
+					{"worldSphere", json{ {"center", vec3(math::Vector3(ws.Center))}, {"radius", ws.Radius} }},
+					{"worldMatrixFinite", finiteMatrix(e->GetWorldTM())},
+				};
+
+				std::vector<StaticMeshComponent*> smcs = e->GetComponents<StaticMeshComponent>();
+				json meshes = json::array();
+				for (auto* smc : smcs)
+				{
+					if (!smc) continue;
+					auto mesh = smc->GetMesh();
+					auto material = smc->GetMaterial();
+					json m = json{
+						{"mesh", mesh ? mesh->GetRelativePath().generic_string() : std::string()},
+						{"meshPtr", (uint64_t)(uintptr_t)mesh.get()},
+						{"hasAnimations", mesh ? mesh->HasAnimations() : false},
+						{"instance", mesh && mesh->GetInstance() != nullptr},
+						{"material", material ? material->GetRelativePath().generic_string() : std::string()},
+						{"boundToBone", smc->IsBoundToBone()},
+					};
+					if (material)
+					{
+						const auto& inst = smc->GetCachedInstanceData(material.get());
+						m["cachedWorldFinite"] = finiteMatrix(inst.worldMatrix);
+						m["cachedWorldTranslation"] = vec3(inst.worldMatrix.Transpose().Translation());
+					}
+					meshes.push_back(m);
+				}
+				out["meshes"] = meshes;
+
+				json cams = json::array();
+				for (uint32_t ci = 0; ci < scene->GetNumCameras(); ++ci)
+				{
+					Camera* cam = scene->GetCameraAtIndex(ci);
+					PVS* pvs = cam ? cam->GetPVS() : nullptr;
+					if (!pvs) continue;
+					uint32_t pvsEntries = 0;
+					for (const auto& [mat, vec] : pvs->GetRenderables())
+						for (const auto& pair : vec)
+							if (std::get<1>(pair) == e) ++pvsEntries;
+					json snaps = json::array();
+					for (auto& [mat, vec] : pvs->GetRenderableSnapshot())
+						for (auto& s : vec)
+							if (s.entity == e)
+								snaps.push_back(json{
+									{"meshPtr", (uint64_t)(uintptr_t)s.mesh.get()},
+									{"hasAnimations", s.hasAnimations},
+									{"boundToBone", s.isBoundToBone},
+									{"transformVersion", s.transformVersion},
+									{"worldFinite", finiteMatrix(s.instanceData.worldMatrix)},
+									{"worldTranslation", vec3(s.instanceData.worldMatrix.Transpose().Translation())},
+									// Last frame's GPU-culling verdicts for this entry.
+									{"cullEligible", s.cullEligible},
+									{"forceVisible", s.forceVisible},
+									{"gpuVisible", s.gpuVisible},
+									{"culledByFrustum", s.culledByFrustum},
+									{"culledByOcclusion", s.culledByOcclusion},
+								});
+					cams.push_back(json{
+						{"camera", cam->GetEntity() ? cam->GetEntity()->GetName() : std::string()},
+						{"main", cam == scene->GetMainCamera()},
+						{"pvsEntries", pvsEntries},
+						{"pvsTotal", pvs->GetTotalNumberOfEnts()},
+						{"snapshot", snaps},
+					});
+				}
+				out["cameras"] = cams;
+
+				if (auto* skel = e->GetComponent<SkeletalAnimationComponent>())
+				{
+					const auto& bones = skel->GetBoneTransformArrayForDebug();
+					uint32_t nonFinite = 0;
+					for (const auto& b : bones)
+						if (!finiteMatrix(b)) ++nonFinite;
+					const Mesh* first = smcs.empty() || !smcs[0] ? nullptr : smcs[0]->GetMesh().get();
+					out["skeletal"] = json{
+						{"boundMeshPtr", (uint64_t)(uintptr_t)skel->GetBoundMesh()},
+						{"boundToEntityMesh", first != nullptr && (const Mesh*)skel->GetBoundMesh() == first},
+						{"hasAnimData", skel->GetAnimationData() != nullptr},
+						{"poseVersion", skel->GetPoseVersion()},
+						{"tickRate", skel->GetTickRate()},
+						{"gpuSkinInstance", skel->HasGpuSkinInstance()},
+						{"nonFiniteBones", nonFinite},
+						{"bone0Translation", vec3(bones[0].Transpose().Translation())},
+					};
+				}
+				return MakeResult(id, out);
 			});
 
 			Reg("inspect_component", R, Main, Batch, [](int64_t id, const json& p) -> json {
@@ -3328,21 +3450,51 @@ namespace HexEngine
 				Entity* clone = scene->CloneEntity(src, newName, pos, rot, scale, true);
 				if (clone == nullptr)
 					return MakeError(id, ErrorCode::Internal, "Scene::CloneEntity returned null");
-				if (!p.value("persistent", false))
-					clone->SetFlag(EntityFlags::DoNotSave);
+				const bool persistent = p.value("persistent", false);
+
+				// Scene::CloneEntity copies ONE entity (retainHierarchy only re-attaches
+				// it to the source's parent), so descendants - e.g. bone-bound hair and
+				// accessories on a character - were silently dropped. Copy them with their
+				// local offsets kept verbatim (preserveWorldPosition=false), like the
+				// editor's Duplicate does.
+				std::vector<Entity*> cloned{ clone };
+				std::function<bool(Entity*, Entity*)> cloneChildren = [&](Entity* from, Entity* to) -> bool
+				{
+					const auto children = from->GetChildren();
+					for (Entity* child : children)
+					{
+						if (child == nullptr || child->IsPendingDeletion())
+							continue;
+						Entity* c = scene->CloneEntity(child, false);
+						if (c == nullptr)
+							return false;
+						c->SetParent(to, false);
+						cloned.push_back(c);
+						if (!cloneChildren(child, c))
+							return false;
+					}
+					return true;
+				};
+				if (!cloneChildren(src, clone))
+				{
+					scene->DestroyEntity(clone);
+					return MakeError(id, ErrorCode::Internal, "cloning a child of '" + src->GetName() + "' failed (Scene::CloneEntity returned null)");
+				}
+				for (Entity* c : cloned)
+					if (!persistent) c->SetFlag(EntityFlags::DoNotSave);
 				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityCreated(clone);
-				// Register the clone (and its cloned children) with every PVS right
-				// away. A bulk clone/edit session left skinned clones - and their
-				// source - missing from the camera PVS until something flushed them
-				// (a DoNotRender toggle, i.e. this same flush, was the observed cure).
-				scene->FlushPVS(clone, false);
-				for (Entity* child : clone->GetChildren())
-					if (child != nullptr) scene->FlushPVS(child, false);
+				// Register the clone hierarchy with every PVS right away. A bulk
+				// clone/edit session left skinned clones - and their source - missing
+				// from the camera PVS until something flushed them (a DoNotRender
+				// toggle, i.e. this same flush, was the observed cure).
+				for (Entity* c : cloned)
+					scene->FlushPVS(c, false);
 				scene->FlushPVS(src, false);
 				MarkPvsDirty();
 				json result = EntityBrief(clone);
 				result["source"] = EntityBrief(src);
 				result["clone"] = clone->GetName(); // legacy field
+				result["entitiesCloned"] = cloned.size();
 				return MakeResult(id, result);
 			});
 
@@ -4577,6 +4729,10 @@ namespace HexEngine
 					cam->SetPitch(pitch);
 					cam->SetYaw(yaw);
 					cam->SetRoll(roll);
+					// Hold the pose until the readback: in play mode the game's camera
+					// controller rewrites the main camera every frame (the bridge pumps
+					// before the scene update), so a one-off move never reached a frame.
+					cam->SetPoseOverride(pos, pitch, yaw, roll);
 					MarkPvsDirty();
 					(*applied)["position"] = Vec3Json(pos);
 					(*applied)["eulerDegrees"] = json::array({ pitch, yaw, roll });
@@ -4619,6 +4775,8 @@ namespace HexEngine
 							tex->GetPixels(*pixels);
 						}
 					}
+					if (cam)
+						cam->ClearPoseOverride();
 					if (cam && moves && restore && saved->valid)
 					{
 						cam->GetEntity()->SetPosition(saved->pos);
@@ -4665,6 +4823,11 @@ namespace HexEngine
 					IEditorContext* ctx = Ctx();
 					if (!ctx) return MakeError(id, ErrorCode::NotAvailable, "editor context not available");
 					if (ctx->IsPlayModeActive()) return MakeResult(id, json{ {"alreadyPlaying", true} });
+					// Play snapshots the scene (Serialize). Doing that while the load worker
+					// is still building it raced the terrain chunk map (AV in
+					// VolumetricTerrain::Serialize when play followed open_project at once).
+					if (g_pEnv->_sceneManager && g_pEnv->_sceneManager->IsLoadingScene())
+						return MakeError(id, ErrorCode::NotAvailable, "the scene is still loading - retry once get_editor_status reports sceneLoading false");
 					// The editor's Run would otherwise BUILD a missing game DLL
 					// (MSBuild of the game project); building is the user's call.
 					const fs::path dll = fs::path(ctx->GetProjectFolderPath()) / "Build" / "Game.dll";
