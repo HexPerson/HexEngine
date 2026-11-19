@@ -10,6 +10,7 @@
 #include "../Graphics/ShaderSystem.hpp"
 #include "../Graphics/OffscreenRenderHooks.hpp"
 #include "../Graphics/MaterialLoader.hpp"
+#include "../Entity/Component/RigidBody.hpp"
 #include "../Scene/SceneManager.hpp"
 #include "../Input/InputSystem.hpp"
 #include "../Graphics/AtmosphereLUTs.hpp"
@@ -38,6 +39,7 @@
 namespace HexEngine
 {
 	HVar cl_simulationRate("cl_simulationRate", "The speed at which physics is simulated in hz", 120.0f, 1.0f, 240.0f);
+	HVar phys_loadSettleSeconds("phys_loadSettleSeconds", "After a scene load / play-mode restore, keep physics held up to this long while async collider cooks (volumetric terrain) are in flight", 10.0f, 0.0f, 60.0f);
 	HVar cl_showfps("cl_showfps", "Draw the current frames per-second on the screen", false, false, true);
 	HVar cl_forcelagframe("cl_forcelagframe", "Forcefully delay each frame by this amount (in milliseconds)", 0, 0, 1000);
 	HVar r_debugFrameInfo("r_debugFrameInfo", "Draws per-frame renderer diagnostics (weather, HDR, SSR/TAA state, camera) as text overlay", false, false, true);
@@ -591,10 +593,24 @@ namespace HexEngine
 		return _running;
 	}
 
+	// The scene-load hold, extended past the load itself while async collider
+	// cooks it triggered are still in flight: volumetric terrain recooks its
+	// chunk colliders asynchronously on every (re)load - including the editor's
+	// play-mode restore - so a dynamic body resting on it (the bikes) fell
+	// through before its ground arrived. Bounded by phys_loadSettleSeconds so
+	// gameplay-time terrain streaming never freezes physics.
+	bool Game3DEnvironment::IsWorldSettling() const
+	{
+		if (_sceneManager->IsLoadingScene())
+			return true;
+		const bool groundPending = _sceneManager->GetWorldSettleBlockers() > 0 || RigidBody::GetAsyncCooksInFlight() > 0;
+		return groundPending && _sceneManager->SecondsSinceSceneLoad() < (double)phys_loadSettleSeconds._val.f32;
+	}
+
 	void Game3DEnvironment::FixedStep(float dt)
 	{
 		// No physics or fixed update while a scene is still loading - see the main loop.
-		const bool worldLoading = _sceneManager->IsLoadingScene();
+		const bool worldLoading = IsWorldSettling();
 
 #if USE_MULTITHREADED_PHYSICS == 0
 		if (IsPhysicsSystemEnabled() && !worldLoading)
@@ -686,7 +702,7 @@ namespace HexEngine
 			// in that window drops every already-created dynamic body through ground
 			// that hasn't loaded yet. Hold both; simulation time still advances, so
 			// there is no catch-up burst when the load completes.
-			const bool worldLoading = _sceneManager->IsLoadingScene();
+			const bool worldLoading = IsWorldSettling();
 
 			if (!worldLoading)
 				_sceneManager->FixedUpdate(timeStep);

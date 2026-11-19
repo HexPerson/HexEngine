@@ -7,6 +7,7 @@
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
 
 #include <array>
+#include <chrono>
 #include <deque>
 #include <fstream>
 
@@ -774,11 +775,13 @@ namespace HexEditor
 		}
 
 		// Full serialised snapshot of the scene via the normal save codec.
+		const auto saveStart = std::chrono::steady_clock::now();
 		HexEngine::SceneSaveFile save(path, std::ios::out | std::ios::trunc, scene);
 		if (save.Save())
 			_playSnapshotPath = path;
 		else
 			LOG_WARN("Play-mode snapshot save failed; scene won't be restored on stop.");
+		LOG_INFO("Play-mode snapshot: saved in %.0f ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - saveStart).count());
 	}
 
 	void GameIntegrator::RestoreSceneState()
@@ -793,6 +796,8 @@ namespace HexEditor
 			// real name across the restore.
 			const auto sceneName = scene->GetName();
 
+			const auto restoreStart = std::chrono::steady_clock::now();
+			double compareMs = 0.0;
 			HexEngine::SceneSaveFile load(_playSnapshotPath, std::ios::in, scene);
 
 			// Restore into entities that still exist (keeps editor-held pointers -
@@ -800,16 +805,68 @@ namespace HexEditor
 			// that were destroyed during play. The deserialize passes are idempotent
 			// per component, so reusing an entity restores it in place.
 			load.SetLoadOverride(
-				[](json& data, const std::string& name, HexEngine::Scene* s, HexEngine::SceneSaveFile* f) -> HexEngine::Entity*
+				[&compareMs](json& data, const std::string& name, HexEngine::Scene* s, HexEngine::SceneSaveFile* f) -> HexEngine::Entity*
 				{
 					if (auto* existing = s->GetEntityByName(name); existing != nullptr)
+					{
+						const auto compareStart = std::chrono::steady_clock::now();
+						struct AddElapsed { double& ms; std::chrono::steady_clock::time_point t; ~AddElapsed() { ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); } } addElapsed{ compareMs, compareStart };
+						// Only re-deserialise components that play actually changed.
+						// Deserialising an unchanged component is not free and not
+						// always harmless: the volumetric terrain tore down and
+						// recooked every chunk collider (a ~6 s stall on stop, and
+						// bodies resting on it fell through while the ground was
+						// gone). Transform is always restored; bodies are teleported
+						// to it below. Entity::Deserialize never removes components
+						// that are absent from the data.
+						auto comps = data.find("components");
+						if (comps != data.end() && comps->is_array())
+						{
+							json changed = json::array();
+							for (auto& snap : *comps)
+							{
+								const std::string compName = snap.value("name", std::string());
+								HexEngine::BaseComponent* current =
+									compName.empty() || compName == "Transform" ? nullptr : existing->GetComponentByClassName(compName);
+								if (current != nullptr)
+								{
+									json now = json::object();
+									now["name"] = compName;
+									current->Serialize(now, f);
+									if (now == snap)
+										continue;
+								}
+								changed.push_back(snap);
+							}
+							*comps = std::move(changed);
+						}
 						return existing;
+					}
 					return HexEngine::Entity::LoadFromFile(data, name, s, f);
 				});
 
 			load.Load(scene);
+			const double loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - restoreStart).count();
 
 			scene->SetName(sceneName);
+
+			// The restore deserialises transforms with the NoNotify setters, so no
+			// TransformChanged reaches RigidBody: a dynamic or kinematic body kept
+			// its play-time pose and wrote it straight back (a bike that fell stayed
+			// fallen, a door opened in play stayed open). Move every body to its
+			// restored transform explicitly.
+			std::vector<HexEngine::EntityId> ids;
+			scene->GetLiveEntityIds(ids);
+			for (const HexEngine::EntityId& id : ids)
+			{
+				if (HexEngine::Entity* e = scene->TryGetEntity(id); e != nullptr && !e->IsPendingDeletion())
+				{
+					if (auto* body = e->GetComponent<HexEngine::RigidBody>(); body != nullptr)
+						body->TeleportToTransform();
+				}
+			}
+			LOG_INFO("Play-mode restore: %.0f ms (load %.0f ms, of which change detection %.0f ms)",
+				std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - restoreStart).count(), loadMs, compareMs);
 		}
 
 		std::error_code ec;

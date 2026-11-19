@@ -84,6 +84,19 @@ namespace HexEngine
 
 		void ForceUpdatePose();
 
+		// Put the physics body where the entity's transform says it is, now:
+		// for code that rewrites transforms without TransformChanged messages
+		// (scene/snapshot loads use the NoNotify setters). Snaps the transform
+		// interpolation, moves non-static bodies and clears a dynamic body's
+		// velocity. Static bodies and character controllers are left alone.
+		void TeleportToTransform();
+
+		// Async triangle-mesh cooks queued (BeginAddTriangleMeshColliderAsync)
+		// and not yet attached, across all bodies. The frame loop keeps the
+		// post-load physics hold while this is non-zero, so bodies resting on
+		// async-cooked ground (volumetric terrain) don't fall through it.
+		static int32_t GetAsyncCooksInFlight();
+
 		/*void ApplyForceToCenterOfMass(const math::Vector3& force);
 
 		void SetMass(float mass);
@@ -148,5 +161,9 @@ namespace HexEngine
 		float _massAdjust = 1.0f;
 		bool _forcePoseEnabled = true;
 		//SoundEffect* _collisionSound = nullptr;
+
+		// This body's cook is counted in GetAsyncCooksInFlight().
+		bool _asyncCookCounted = false;
+		void ReleaseAsyncCook(bool force);
 	};
 }

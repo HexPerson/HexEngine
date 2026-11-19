@@ -350,8 +350,19 @@ namespace HexEngine::VolumetricTerrain
 	{
 	}
 
+	void VolumetricTerrain::SyncSettleBlocker(bool forceRelease)
+	{
+		const bool want = !forceRelease && _pendingCollisionRefresh;
+		if (want == _settleBlockerRaised || g_pEnv == nullptr || g_pEnv->_sceneManager == nullptr)
+			return;
+		g_pEnv->_sceneManager->AddWorldSettleBlocker(want ? 1 : -1);
+		_settleBlockerRaised = want;
+	}
+
 	VolumetricTerrain::~VolumetricTerrain()
 	{
+		SyncSettleBlocker(true);
+
 		if (_owner != nullptr && _owner->GetScene() != nullptr)
 		{
 			_owner->GetScene()->UnregisterCustomRenderer(this);
@@ -884,6 +895,8 @@ namespace HexEngine::VolumetricTerrain
 
 	void VolumetricTerrain::Tick(float deltaTime)
 	{
+		struct SettleSync { VolumetricTerrain* t; ~SettleSync() { t->SyncSettleBlocker(); } } settleSync{ this };
+
 		if (!_initialized)
 			return;
 
@@ -1265,6 +1278,26 @@ namespace HexEngine::VolumetricTerrain
 		StitchChunkBorders();
 	}
 
+	namespace
+	{
+		// FNV-1a over 8-byte words (tail bytewise): fast enough to hash every
+		// chunk's data per save (~100+ MB) in a fraction of the compression cost.
+		inline void HashBytes(uint64_t& h, const void* data, size_t size)
+		{
+			const uint8_t* p = static_cast<const uint8_t*>(data);
+			size_t i = 0;
+			for (; i + 8 <= size; i += 8)
+			{
+				uint64_t w;
+				memcpy(&w, p + i, 8);
+				h = (h ^ w) * 1099511628211ull;
+			}
+			for (; i < size; ++i)
+				h = (h ^ p[i]) * 1099511628211ull;
+			h = (h ^ (uint64_t)size) * 1099511628211ull;
+		}
+	}
+
 	void VolumetricTerrain::Serialize(json& data, JsonFile* file)
 	{
 		if (_pendingCollisionRefresh)
@@ -1301,23 +1334,46 @@ namespace HexEngine::VolumetricTerrain
 			if (chunk == nullptr)
 				continue;
 
+			json out;
+			out["coord"] = { coord.x, coord.y, coord.z };
+
+			// Hash straight from the chunk's buffers; only build (copy) the blob
+			// when the cached payload is stale.
+			const auto& densities = chunk->GetDensities();
+			const auto& materials = chunk->GetMaterials();
+			const auto& materialWeights = chunk->GetMaterialWeights();
+			const auto& cookedBlob = chunk->GetCachedCookedCollisionBlob();
+			uint64_t hash = 14695981039346656037ull;
+			HashBytes(hash, densities.data(), densities.size() * sizeof(float));
+			HashBytes(hash, materials.data(), materials.size());
+			HashBytes(hash, materialWeights.data(), materialWeights.size());
+			HashBytes(hash, cookedBlob.data(), cookedBlob.size());
+			hash = (hash ^ (chunk->HasMaterialEdits() ? 1ull : 2ull)) * 1099511628211ull;
+
+			auto cached = _payloadCache.find(coord);
+			if (cached != _payloadCache.end() && cached->second.hash == hash && !cached->second.payload.empty())
+			{
+				out["payload"] = cached->second.payload;
+				bakedChunks.push_back(std::move(out));
+				continue;
+			}
+
 			EditedChunkBlob blob;
 			blob.coord = coord;
-			blob.densities = chunk->GetDensities();
-			blob.materials = chunk->GetMaterials();
-			blob.materialWeights = chunk->GetMaterialWeights();
+			blob.densities = densities;
+			blob.materials = materials;
+			blob.materialWeights = materialWeights;
 			blob.hasMaterialEdits = chunk->HasMaterialEdits();
 			// Pull the cached cooked-PhysX blob too, if the chunk has one.
 			// Capturing here means the .hscene save embeds the cook output
 			// alongside the density snapshot - so the next load skips both
 			// SDF generation AND PxCookTriangleMesh.
-			blob.cookedCollisionBlob = chunk->GetCachedCookedCollisionBlob();
+			blob.cookedCollisionBlob = cookedBlob;
 
-			json out;
-			out["coord"] = { coord.x, coord.y, coord.z };
 			std::string payload;
 			if (SerializeEditedChunkBlobBinary(blob, payload))
 			{
+				_payloadCache[coord] = CachedChunkPayload{ hash, payload };
 				out["payload"] = std::move(payload);
 			}
 			else

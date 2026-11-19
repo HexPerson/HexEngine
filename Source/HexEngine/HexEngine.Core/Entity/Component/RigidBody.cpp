@@ -1,5 +1,6 @@
 
 
+#include <atomic>
 #include "RigidBody.hpp"
 #include "../../HexEngine.hpp"
 
@@ -7,6 +8,8 @@
 
 namespace HexEngine
 {
+	static std::atomic<int32_t> g_asyncCooksInFlight{ 0 };
+
 	namespace
 	{
 		dx::BoundingBox GetScaledEntityAABB(Entity* entity)
@@ -71,6 +74,8 @@ namespace HexEngine
 	void RigidBody::Destroy()
 	{
 		LOG_DEBUG("Destroring rigid body");
+
+		ReleaseAsyncCook(true);
 
 		if (_rigidBody)
 		{
@@ -312,7 +317,13 @@ namespace HexEngine
 		_colliderShape = IRigidBody::ColliderShape::TriangleMesh;
 		_exclusive = exclusive;
 
-		return _rigidBody->BeginAddTriangleMeshColliderAsync(vertices, indices, faceCount, exclusive);
+		const bool queued = _rigidBody->BeginAddTriangleMeshColliderAsync(vertices, indices, faceCount, exclusive);
+		if (queued && !_asyncCookCounted)
+		{
+			_asyncCookCounted = true;
+			++g_asyncCooksInFlight;
+		}
+		return queued;
 	}
 
 	bool RigidBody::BeginAddTriangleMeshColliderAsync(Mesh* meshIn, bool exclusive)
@@ -326,7 +337,26 @@ namespace HexEngine
 
 	bool RigidBody::TryFinishAsyncCollider()
 	{
-		return _rigidBody != nullptr && _rigidBody->TryFinishAsyncCollider();
+		const bool finished = _rigidBody != nullptr && _rigidBody->TryFinishAsyncCollider();
+		if (finished)
+			ReleaseAsyncCook(true);
+		return finished;
+	}
+
+	int32_t RigidBody::GetAsyncCooksInFlight()
+	{
+		return g_asyncCooksInFlight.load();
+	}
+
+	void RigidBody::ReleaseAsyncCook(bool force)
+	{
+		if (!_asyncCookCounted)
+			return;
+		// Not forced: only release once the backend no longer has the cook.
+		if (!force && _rigidBody != nullptr && _rigidBody->HasAsyncColliderInFlight())
+			return;
+		_asyncCookCounted = false;
+		--g_asyncCooksInFlight;
 	}
 
 	bool RigidBody::HasAsyncColliderInFlight() const
@@ -412,6 +442,28 @@ namespace HexEngine
 	void RigidBody::EnableForcePoseUpdates(bool enable)
 	{
 		_forcePoseEnabled = enable;
+	}
+
+	void RigidBody::TeleportToTransform()
+	{
+		auto rb = GetIRigidBody();
+		if (rb == nullptr || rb->IsCharacterController() || rb->GetBodyType() == IRigidBody::BodyType::Static)
+			return;
+
+		// GetWorldTM (read by ForceUpdatePose) returns the INTERPOLATED pose,
+		// which lags a transform that was just rewritten.
+		if (auto* tf = GetEntity()->GetComponent<Transform>(); tf != nullptr)
+			tf->SnapInterpolation();
+
+		ForceUpdatePose();
+
+		// No velocity setter on IRigidBody: disabling gravity with
+		// resetVelocity zeroes linear + angular velocity, then restore it.
+		if (rb->GetBodyType() == IRigidBody::BodyType::Dynamic)
+		{
+			rb->SetGravityEnabled(false, true);
+			rb->SetGravityEnabled(_isGravityApplied, false);
+		}
 	}
 
 	void RigidBody::ForceUpdatePose()
@@ -623,6 +675,8 @@ namespace HexEngine
 	{
 		if(_rigidBody)
 			_rigidBody->RemoveCollider();
+
+		ReleaseAsyncCook(false);
 
 		_colliderShape = IRigidBody::ColliderShape::None;
 	}
