@@ -4058,6 +4058,15 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->ClearScissorRect();
 	}
 
+	void SceneRenderer::FlushRainOcclusionEntity(Entity* entity)
+	{
+		// Without this a deleted entity stayed in the rain occlusion snapshot
+		// and the next refresh drew through its freed component (crash after
+		// deleting entities, e.g. on returning from the prefab stage).
+		if (_rainOcclusionPVS != nullptr && entity != nullptr)
+			_rainOcclusionPVS->RemoveEntity(entity);
+	}
+
 	void SceneRenderer::UpdateRainOcclusionMap()
 	{
 		// Size + depth range are compile-time; the cbuffer pack in
@@ -4085,6 +4094,18 @@ namespace HexEngine
 		}
 		if (_rainOcclusionPVS == nullptr)
 			_rainOcclusionPVS = std::make_unique<PVS>();
+
+		// The PVS reuses its snapshot while the cull sphere stays inside the
+		// last one, and holds raw entity/component pointers. Switching scenes
+		// (prefab stage <-> level, scene tabs) must not reuse another scene's
+		// snapshot: those entities may be destroyed by now. Removals within a
+		// scene arrive through FlushRainOcclusionEntity.
+		if (_rainOcclusionScene != _currentScene)
+		{
+			_rainOcclusionPVS->ForceRebuild();
+			_rainOcclusionScene = _currentScene;
+			_rainOcclusionValid = false;
+		}
 
 		const math::Vector3 camPos = _cameraEntity->GetPosition();
 		const float extent = r_rainOcclusionExtent._val.f32;

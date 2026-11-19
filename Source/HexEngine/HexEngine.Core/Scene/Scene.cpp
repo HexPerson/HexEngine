@@ -1121,6 +1121,9 @@ namespace HexEngine
 
 	void Scene::FlushPVS(Entity* entity, bool remove)
 	{
+		if (remove && g_pEnv->_sceneRenderer != nullptr)
+			g_pEnv->_sceneRenderer->FlushRainOcclusionEntity(entity);
+
 		for (auto& camera : _cameras)
 		{
 			if(remove)

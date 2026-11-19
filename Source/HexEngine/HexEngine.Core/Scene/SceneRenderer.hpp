@@ -41,6 +41,10 @@ namespace HexEngine
 		ITexture2D* GetBeautyTexture() const;
 		std::shared_ptr<ITexture2D> GetNoiseTexture() const { return _blueNoise;}
 		const std::vector<Light*>& GetShadowCasters() const;
+
+		// Scene::FlushPVS hook: drops a removed entity from renderer-owned
+		// PVSes that aren't a camera's or a light's (the rain occlusion PVS).
+		void FlushRainOcclusionEntity(Entity* entity);
 		void ClearShadowCasters();
 		void RemoveShadowCaster(Light* light);
 
@@ -528,5 +532,9 @@ namespace HexEngine
 		int32_t _ssrBaseHeight = 0;
 
 		DenoiserFrameData _denoiseFD;
+
+		// Scene the rain occlusion PVS snapshot was built from (identity only,
+		// never dereferenced): a different current scene forces a rebuild.
+		const Scene* _rainOcclusionScene = nullptr;
 	};
 }
