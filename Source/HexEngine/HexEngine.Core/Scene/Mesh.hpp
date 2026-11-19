@@ -246,6 +246,12 @@ namespace HexEngine
 		void SetAABB(const dx::BoundingBox& aabb);
 		void SetOBB(const dx::BoundingOrientedBox& obb);
 
+		// Moves every vertex by `offset` (mesh-local space), recomputes the bounds and,
+		// when GPU buffers already exist, recreates them so a LIVE shared mesh updates in
+		// place (used by "recenter mesh to origin"). Static meshes only - returns false
+		// for animated meshes, dynamic meshes or meshes without CPU-side vertices.
+		bool TranslateGeometry(const math::Vector3& offset);
+
 		MeshInstance* GetInstance();
 
 		//void SetPaths(const fs::path& path, FileSystem* fileSystem);

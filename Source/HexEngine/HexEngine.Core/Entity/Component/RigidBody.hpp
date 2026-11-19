@@ -80,6 +80,13 @@ namespace HexEngine
 
 		void RemoveCollider();
 
+		// Re-derive a mesh-shaped collider (triangle mesh / box-from-bounds)
+		// from the entity's CURRENT StaticMeshComponent geometry, then re-sync the
+		// pose. For tools that edit a mesh's vertices in place (recenter to origin).
+		// Primitive colliders (sphere/capsule) are left untouched. Returns true if
+		// a collider was rebuilt.
+		bool RebuildColliderFromMesh();
+
 		bool IsExclusive() const;
 
 		void ForceUpdatePose();

@@ -938,30 +938,17 @@ namespace HexEditor
 			return;
 		}
 
-		std::vector<HexEngine::MeshVertex> recenteredVertices = sourceVertices;
-		for (auto& vertex : recenteredVertices)
+		// Moves the CPU vertices + bounds and, when this is the LIVE shared mesh
+		// (already loaded by the scene), recreates its GPU buffers too - the old
+		// Clear/AddVertices path left a loaded mesh drawing stale buffers.
+		// Placed entities are NOT compensated here; the editor bridge's
+		// recenter_mesh tool does that (and patches prefabs).
+		(void)sourceIndices;
+		if (!mesh->TranslateGeometry(-center))
 		{
-			vertex._position.x -= center.x;
-			vertex._position.y -= center.y;
-			vertex._position.z -= center.z;
+			LOG_WARN("Failed to recenter mesh '%s' (dynamic mesh or GPU buffer recreation failed).", selectedMeshPath.string().c_str());
+			return;
 		}
-
-		mesh->Clear();
-		mesh->SetNumFaces(static_cast<uint32_t>(sourceIndices.size() / 3));
-		mesh->AddVertices(recenteredVertices);
-		mesh->AddIndices(sourceIndices);
-
-		dx::BoundingBox aabb;
-		dx::BoundingBox::CreateFromPoints(
-			aabb,
-			static_cast<size_t>(recenteredVertices.size()),
-			reinterpret_cast<const math::Vector3*>(recenteredVertices.data()),
-			sizeof(HexEngine::MeshVertex));
-		mesh->SetAABB(aabb);
-
-		dx::BoundingOrientedBox obb;
-		dx::BoundingOrientedBox::CreateFromBoundingBox(obb, aabb);
-		mesh->SetOBB(obb);
 
 		mesh->Save();
 		InvalidateAssetPreview(selectedMeshPath);

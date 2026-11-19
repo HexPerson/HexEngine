@@ -93,6 +93,15 @@ namespace HexEngine
 	SkeletalAnimationComponent::SkeletalAnimationComponent(Entity* entity, SkeletalAnimationComponent* copy) :
 		UpdateComponent(entity, copy)
 	{
+		// Carry the authored (serialised) settings across a clone. Without this a
+		// duplicated / prefab-spawned character played clip 0 (the bind-pose take)
+		// instead of its configured idle. Runtime state (bound mesh, compiled
+		// clips, pose) is rebuilt lazily by TryAutoBindFromEntityMesh.
+		if (copy != nullptr)
+		{
+			_animIndex = copy->_animIndex;
+			_rootMotion = copy->_rootMotion;
+		}
 	}
 
 	SkeletalAnimationComponent::~SkeletalAnimationComponent() = default;

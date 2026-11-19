@@ -364,6 +364,11 @@ namespace
 				{"entity", EntityRefSchema("Or: the entity whose material to edit.")},
 				{"save", Bool("Write the .hmat (default true).")},
 			})) });
+		v.push_back({ "recenter_mesh", w("Recenter a STATIC mesh asset so its bounds centre is the model origin (fixes kit meshes whose geometry sits far from the pivot). Updates the live mesh in place and saves the .hmesh; every entity in the open scene using it is moved by rotation*scale*offset (its children counter-shifted) so nothing moves in the world, and its bounds / PVS / triangle-mesh or box collider are refreshed. Prefabs in Data/Prefabs that use the mesh get the same compensation. Other scenes referencing it are listed, not edited. Animated meshes are refused. Save the scene afterwards. Not batchable."),
+			Obj(json{ {"mesh", Str("Mesh ref or path, e.g. \"GameData.Meshes/Universe/Buildings/City/X.hmesh\".")},
+				{"dryRun", Bool("Only report the offset and the scene entities using the mesh (default false).")},
+				{"compensateScene", Bool("Move the open scene's users so they stay put (default true).")},
+				{"updatePrefabs", Bool("Apply the same compensation inside Data/Prefabs/*.hprefab (default true).")} }, { "mesh" }) });
 		v.push_back({ "assign_material", w("Give an entity's StaticMeshComponent a material asset. Undoable; tracked as a prefab override on instances."),
 			Obj(json{ {"entity", EntityRefSchema()}, {"material", Str("Material asset path/ref (see hex_list_assets type=material).")} }, { "entity", "material" }) });
 		v.push_back({ "create_mesh_entity", w("Create an entity with a procedural mesh from raw vertices/indices. Front faces are COUNTER-clockwise seen from outside. Normals are computed if omitted; tangents come from the UVs. In-memory until saveAs / hex_save_mesh_asset."),
@@ -437,6 +442,7 @@ namespace
 				{"createMaterials", Bool("Create .hmat materials from the model (default true).")},
 				{"importAnimations", Bool("Import skeletal animations (default true).")},
 				{"mergeByMaterial", Bool("Merge child meshes that share a material (default false).")},
+				{"mergeSiblingAnimations", Bool("Append the animations of every other .fbx beside the model as named clips (Mixamo rig + one-file-per-clip folders). REQUIRED when re-importing such a rig, or its clips are dropped (default false).")},
 				{"scale", Num("Import scale (default 1).")},
 				{"copyTextures", Bool("Copy textures/buffers/.mtl next to the source too (default true).")},
 				{"spawn", Bool("Place the imported meshes under one root entity (default false).")},
@@ -659,7 +665,7 @@ int main(int argc, char** argv)
 			out = RpcResult(id, json{
 				{"protocolVersion", "2024-11-05"},
 				{"capabilities", { {"tools", json::object()} }},
-				{"serverInfo", { {"name","HexEngine.McpServer"}, {"version","0.5.0"} }},
+				{"serverInfo", { {"name","HexEngine.McpServer"}, {"version","0.6.0"} }},
 				{"instructions", kAgentInstructions},
 			});
 		}

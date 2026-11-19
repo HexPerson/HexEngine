@@ -38,6 +38,7 @@
 #include "../../HexEngine.Core/Environment/ComponentFieldMeta.hpp"
 #include "../../HexEngine.Core/Entity/Component/Camera.hpp"
 #include "../../HexEngine.Core/Entity/Component/StaticMeshComponent.hpp"
+#include "../../HexEngine.Core/Entity/Component/RigidBody.hpp"
 #include "../../HexEngine.Core/Graphics/ITexture2D.hpp"
 #include "../../HexEngine.Core/Graphics/Material.hpp"
 #include "../../HexEngine.Core/Scene/Mesh.hpp"
@@ -3328,6 +3329,14 @@ namespace HexEngine
 				if (!p.value("persistent", false))
 					clone->SetFlag(EntityFlags::DoNotSave);
 				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityCreated(clone);
+				// Register the clone (and its cloned children) with every PVS right
+				// away. A bulk clone/edit session left skinned clones - and their
+				// source - missing from the camera PVS until something flushed them
+				// (a DoNotRender toggle, i.e. this same flush, was the observed cure).
+				scene->FlushPVS(clone, false);
+				for (Entity* child : clone->GetChildren())
+					if (child != nullptr) scene->FlushPVS(child, false);
+				scene->FlushPVS(src, false);
 				MarkPvsDirty();
 				json result = EntityBrief(clone);
 				result["source"] = EntityBrief(src);
@@ -3773,9 +3782,195 @@ namespace HexEngine
 				if (ctx) ctx->BeginComponentEdit(e);
 				smc->SetMaterial(mat);
 				if (ctx) ctx->EndComponentEdit(e);
+				// Re-file the entity under its new material batch now (see clone_entity).
+				scene->FlushPVS(e, false);
 				MarkPvsDirty();
 				return MakeResult(id, json{ {"entity", EntityBrief(e)}, {"material", ref.ref},
 					{"previous", previous && !previous->GetFileSystemPath().empty() ? json(previous->GetFileSystemPath().generic_string()) : json(nullptr)} });
+			});
+
+			// Recenter a static mesh asset so its bounds centre sits at the model
+			// origin (fixes kit meshes authored kilometres from their pivot). The
+			// live shared mesh is updated in place (GPU buffers rebuilt) and saved;
+			// every entity in the open scene that uses it is moved by R*S*offset
+			// (children counter-shifted) so nothing moves in the world, and its
+			// bounds, PVS entry and mesh/box collider are refreshed. Prefab files in
+			// Data/Prefabs that reference the mesh get the same compensation.
+			Reg("recenter_mesh", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				auto scene = PrimaryUserScene();
+				IEditorContext* ctx = Ctx();
+				FileSystem* projectFs = ctx ? ctx->GetProjectFileSystem() : nullptr;
+				AssetRef ref;
+				std::string msg;
+				if (!ResolveAssetRef(RequireString(p, "mesh"), ".hmesh", false, ref, msg))
+					return MakeError(id, ErrorCode::InvalidParams, msg);
+				if (!AssetExists(ref))
+					return MakeError(id, ErrorCode::NotAvailable, "no mesh at '" + ref.ref + "'");
+				const bool dryRun = p.value("dryRun", false);
+				const bool compensateScene = p.value("compensateScene", true);
+				const bool updatePrefabs = p.value("updatePrefabs", true);
+
+				auto mesh = Mesh::Create(fs::path(Utf8ToWide(ref.ref)));
+				if (!mesh) return MakeError(id, ErrorCode::Internal, "'" + ref.ref + "' could not be loaded");
+				if (mesh->HasAnimations())
+					return MakeError(id, ErrorCode::InvalidParams, "'" + ref.ref + "' is animated - recentering would break its skin/bone binding");
+				if (mesh->GetVertices().empty())
+					return MakeError(id, ErrorCode::NotAvailable, "'" + ref.ref + "' has no CPU-side vertices to move");
+
+				const math::Vector3 center = mesh->GetAABB().Center;
+				json result = json{ {"mesh", ref.ref}, {"offset", json::array({ center.x, center.y, center.z })} };
+				if (center.LengthSquared() <= 1e-6f)
+				{
+					result["note"] = "already centred";
+					return MakeResult(id, result);
+				}
+
+				// Mesh-key match for prefab JSON: "<fs>.<path>" normalised.
+				auto normKey = [](std::string s) {
+					std::replace(s.begin(), s.end(), '\\', '/');
+					std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+					const size_t dot = s.find('.');
+					const size_t slash = s.find('/');
+					if (dot != std::string::npos && (slash == std::string::npos || dot < slash)) s = s.substr(dot + 1);
+					return s;
+				};
+				const std::string wantKey = normKey(ref.ref);
+
+				// Live users in the open scene.
+				std::vector<StaticMeshComponent*> users;
+				if (scene)
+				{
+					std::vector<StaticMeshComponent*> all;
+					scene->GetComponents<StaticMeshComponent>(all);
+					for (auto* smc : all)
+						if (smc && smc->GetEntity() && !smc->GetEntity()->IsPendingDeletion() && smc->GetMesh() == mesh)
+							users.push_back(smc);
+				}
+				json entities = json::array();
+				for (auto* smc : users) entities.push_back(smc->GetEntity()->GetName());
+				result["sceneEntities"] = entities;
+
+				if (dryRun)
+				{
+					result["dryRun"] = true;
+					return MakeResult(id, result);
+				}
+
+				if (!mesh->TranslateGeometry(-center))
+					return MakeError(id, ErrorCode::Internal, "TranslateGeometry failed (dynamic mesh, or GPU buffer recreation failed)");
+				mesh->Save();
+
+				// Compensate placed entities: local' = local + R * (S * c); children -= c.
+				if (compensateScene && scene)
+				{
+					for (auto* smc : users)
+					{
+						Entity* e = smc->GetEntity();
+						const math::Vector3 posBefore = e->GetPosition();
+						const math::Quaternion rotBefore = e->GetRotation();
+						const math::Vector3 scaleBefore = e->GetScale();
+						const math::Vector3 shift = math::Vector3::Transform(scaleBefore * center, rotBefore);
+						e->SetPosition(posBefore + shift);
+						if (ctx) ctx->RecordEntityTransformChange(e, posBefore, rotBefore, scaleBefore);
+						for (Entity* child : e->GetChildren())
+						{
+							if (child == nullptr) continue;
+							const math::Vector3 cp = child->GetPosition(), cs = child->GetScale();
+							const math::Quaternion cr = child->GetRotation();
+							child->SetPosition(cp - center);
+							if (ctx) ctx->RecordEntityTransformChange(child, cp, cr, cs);
+						}
+						e->SetAABB(mesh->GetAABB());
+						e->SetOBB(mesh->GetOBB());
+						e->RecalculateBoundingVolumes(mesh->GetAABB());
+						scene->NotifyStaticMeshChanged(smc, true, false);
+						scene->UpdatePvsSpatialEntriesForEntity(e);
+						if (auto* rb = e->GetComponent<RigidBody>(); rb != nullptr)
+							rb->RebuildColliderFromMesh();
+						scene->FlushPVS(e, false);
+					}
+					MarkPvsDirty();
+				}
+
+				// Prefab files that reference the mesh.
+				json prefabs = json::array();
+				if (updatePrefabs && projectFs)
+				{
+					std::error_code ec;
+					const fs::path prefabDir = projectFs->GetDataDirectory() / L"Prefabs";
+					for (fs::recursive_directory_iterator it(prefabDir, ec), end; !ec && it != end; it.increment(ec))
+					{
+						if (!it->is_regular_file() || _wcsicmp(it->path().extension().c_str(), L".hprefab") != 0) continue;
+						std::ifstream in(it->path());
+						json doc = json::parse(in, nullptr, false);
+						in.close();
+						if (doc.is_discarded() || !doc.contains("entities") || !doc["entities"].is_object()) continue;
+						auto& ents = doc["entities"];
+						const json hierarchy = doc.value("hierarchy", json::object());
+						int changed = 0;
+						for (auto& [name, ent] : ents.items())
+						{
+							if (!ent.contains("components") || !ent["components"].is_array()) continue;
+							bool uses = false;
+							json* tr = nullptr;
+							for (auto& c : ent["components"])
+							{
+								const std::string cn = c.value("name", std::string());
+								if (cn == "Transform") tr = &c;
+								if (cn == "StaticMeshComponent" && c.contains("mesh") && c["mesh"].is_object())
+									for (auto& [k, v] : c["mesh"].items()) if (normKey(k) == wantKey) uses = true;
+							}
+							if (!uses || tr == nullptr || !tr->contains("_position")) continue;
+							auto& pos = (*tr)["_position"];
+							const json rj = tr->value("_rotation", json::array({ 0.0, 0.0, 0.0, 1.0 }));
+							const json sj = tr->value("_scale", json::array({ 1.0, 1.0, 1.0 }));
+							const math::Quaternion r(rj[0].get<float>(), rj[1].get<float>(), rj[2].get<float>(), rj[3].get<float>());
+							const math::Vector3 s(sj[0].get<float>(), sj[1].get<float>(), sj[2].get<float>());
+							const math::Vector3 shift = math::Vector3::Transform(s * center, r);
+							pos[0] = pos[0].get<float>() + shift.x; pos[1] = pos[1].get<float>() + shift.y; pos[2] = pos[2].get<float>() + shift.z;
+							for (auto& [child, parent] : hierarchy.items())
+							{
+								if (!parent.is_string() || parent.get<std::string>() != name || !ents.contains(child)) continue;
+								for (auto& cc : ents[child]["components"])
+									if (cc.value("name", std::string()) == "Transform" && cc.contains("_position"))
+									{
+										auto& cpos = cc["_position"];
+										cpos[0] = cpos[0].get<float>() - center.x; cpos[1] = cpos[1].get<float>() - center.y; cpos[2] = cpos[2].get<float>() - center.z;
+									}
+							}
+							++changed;
+						}
+						if (changed > 0)
+						{
+							std::ofstream out(it->path(), std::ios::trunc);
+							out << doc.dump(2);
+							prefabs.push_back(json{ {"prefab", ProjectRelative(it->path())}, {"entities", changed} });
+						}
+					}
+				}
+				result["prefabsUpdated"] = prefabs;
+
+				// Other scene files still placing the mesh at its OLD pivot (not edited).
+				json otherScenes = json::array();
+				if (projectFs)
+				{
+					std::error_code ec;
+					const std::string fileName = fs::path(Utf8ToWide(ref.ref)).filename().string();
+					const std::wstring openScene = scene ? fs::path(scene->GetName()).wstring() : std::wstring();
+					for (fs::recursive_directory_iterator it(projectFs->GetDataDirectory(), ec), end; !ec && it != end; it.increment(ec))
+					{
+						if (!it->is_regular_file() || _wcsicmp(it->path().extension().c_str(), L".hscene") != 0) continue;
+						if (!openScene.empty() && _wcsicmp(it->path().stem().wstring().c_str(), openScene.c_str()) == 0) continue;
+						std::ifstream in(it->path());
+						const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+						if (text.find(fileName) != std::string::npos) otherScenes.push_back(ProjectRelative(it->path()));
+					}
+				}
+				result["otherScenesReferencing"] = otherScenes;
+				if (!otherScenes.empty())
+					result["warning"] = "these scenes still place the mesh at its OLD pivot; open each and move its users by the offset";
+				result["note"] = "mesh recentred, saved, and the open scene compensated - save the scene to keep the entity moves";
+				return MakeResult(id, result);
 			});
 
 			// ---- Undo / redo / save ----
@@ -5136,6 +5331,7 @@ namespace HexEngine
 				settings.importAnimations = p.value("importAnimations", true);
 				settings.createMaterials = p.value("createMaterials", true);
 				settings.mergeChildMeshesByMaterial = p.value("mergeByMaterial", false);
+				settings.mergeSiblingAnimations = p.value("mergeSiblingAnimations", false);
 				settings.importScale = p.value("scale", 1.0f);
 				settings.textureSearchPaths.push_back(destDir.wstring());
 				std::vector<fs::path> meshes;
@@ -5743,6 +5939,11 @@ namespace HexEngine
 			else if (mesh->GetMaterial()) smc->SetMaterial(mesh->GetMaterial());
 			if (record)
 				if (IEditorContext* ctx = Ctx()) ctx->RecordEntityCreated(e);
+			// Register with every PVS now (see clone_entity); re-file the parent too,
+			// since attaching a bone-bound child to a skinned character during a bulk
+			// spawn is exactly the session that lost characters from the PVS.
+			scene->FlushPVS(e, false);
+			if (parent) scene->FlushPVS(parent, false);
 			MarkPvsDirty();
 			json r = EntityBrief(e);
 			r["mesh"] = meshRef.ref;

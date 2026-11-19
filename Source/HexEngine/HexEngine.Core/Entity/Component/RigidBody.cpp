@@ -681,6 +681,51 @@ namespace HexEngine
 		_colliderShape = IRigidBody::ColliderShape::None;
 	}
 
+	bool RigidBody::RebuildColliderFromMesh()
+	{
+		const IRigidBody::ColliderShape shape = _colliderShape;
+		if (shape != IRigidBody::ColliderShape::TriangleMesh &&
+			shape != IRigidBody::ColliderShape::Box)
+			return false;
+
+		auto* smc = GetEntity() != nullptr ? GetEntity()->GetComponent<StaticMeshComponent>() : nullptr;
+		auto mesh = smc != nullptr ? smc->GetMesh() : nullptr;
+		if (mesh == nullptr)
+			return false;
+
+		const bool exclusive = _exclusive;
+		RemoveCollider();
+		_colliderData.meshes.clear();
+
+		switch (shape)
+		{
+		case IRigidBody::ColliderShape::TriangleMesh:
+			AddTriangleMeshCollider(mesh.get(), exclusive);
+			if (_rigidBody)
+				_rigidBody->UpdateTriangleMeshScale(GetEntity()->GetAbsoluteScale());
+			break;
+		default:
+			AddBoxCollider(GetScaledEntityAABB(GetEntity()));
+			break;
+		}
+
+		// ForceUpdatePose skips STATIC bodies, but the caller usually moved the
+		// entity too (recenter compensation) - put every non-CCT body back on
+		// the entity's current world pose explicitly.
+		if (auto* rb = GetIRigidBody(); rb != nullptr && !rb->IsCharacterController())
+		{
+			math::Quaternion worldRotation = GetEntity()->GetRotation();
+			for (auto* parent = GetEntity()->GetParent(); parent != nullptr; parent = parent->GetParent())
+			{
+				worldRotation = worldRotation * parent->GetRotation();
+				worldRotation.Normalize();
+			}
+			rb->UpdatePosePosition(GetEntity()->GetWorldTM().Translation());
+			rb->UpdatePoseRotation(worldRotation);
+		}
+		return true;
+	}
+
 	IRigidBody::ColliderShape RigidBody::GetColliderShape() const
 	{
 		return _colliderShape;

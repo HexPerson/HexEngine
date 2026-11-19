@@ -14,6 +14,10 @@ namespace HexEngine
 		bool importAnimations = true;
 		bool createMaterials = true;            // write .hmat files from the model's materials
 		bool mergeChildMeshesByMaterial = false;
+		// Append the animations of every other .fbx beside the model (Mixamo-style
+		// "rig + one file per clip" folders) as named clips. Re-importing such a rig
+		// WITHOUT this silently drops all of its clips.
+		bool mergeSiblingAnimations = false;
 		float importScale = 1.0f;
 		std::vector<std::wstring> textureSearchPaths;
 	};

@@ -384,6 +384,7 @@ bool AssimpModelImporter::ImportModel(const fs::path& absolutePath, HexEngine::F
 	_importOpts.importAnimations = settings.importAnimations;
 	_importOpts.tryAndCreateMaterials = settings.createMaterials;
 	_importOpts.mergeChildMeshesByMaterial = settings.mergeChildMeshesByMaterial;
+	_importOpts.mergeSiblingAnimations = settings.mergeSiblingAnimations;
 	_importOpts.importScale = settings.importScale;
 	_importOpts.textureSearchPaths = settings.textureSearchPaths;
 	_importOpts.deleteOriginalsAfterImport = false;
