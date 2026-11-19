@@ -108,6 +108,13 @@ namespace HexEngine
 
 	void SkeletalAnimationComponent::SetAnimationData(std::shared_ptr<AnimatedMesh> mesh, std::shared_ptr<AnimationData> animData)
 	{
+		if (mesh != _mesh)
+		{
+			// A different body: the compute-skinned vertex buffers and last frame's
+			// palette belong to the old mesh / skeleton.
+			_gpuSkin.reset();
+			_prevPoseValid = false;
+		}
 		_mesh = mesh;
 		_animData = animData;
 		_boneInfo = mesh->GetAllBoneInfo();
@@ -119,32 +126,35 @@ namespace HexEngine
 
 	bool SkeletalAnimationComponent::TryAutoBindFromEntityMesh()
 	{
-		if (_animData)
-			return true; // already bound
-
 		Entity* owner = GetEntity();
 		if (owner == nullptr)
-			return false;
+			return _animData != nullptr;
 
 		// StaticMeshComponent owns the loaded Mesh; if it's an AnimatedMesh
 		// (skinned) it carries the AnimationData we need. Async mesh load
 		// is possible - bail quietly when the component isn't ready yet,
 		// the next caller (Update or CreateWidget on next open) retries.
+		// Also rebinds when the entity's mesh was swapped for another skinned body
+		// (set_component_field / inspector): the old skeleton's bone layout would
+		// otherwise drive the new mesh's vertices.
 		auto* smc = owner->GetComponent<StaticMeshComponent>();
 		if (smc == nullptr)
-			return false;
+			return _animData != nullptr;
 
 		auto mesh = smc->GetMesh();
+		if (_animData && mesh.get() == _mesh.get())
+			return true; // already bound to this mesh
+
 		if (mesh == nullptr || !mesh->HasAnimations())
-			return false;
+			return _animData != nullptr;
 
 		auto animatedMesh = std::dynamic_pointer_cast<AnimatedMesh>(mesh);
 		if (animatedMesh == nullptr)
-			return false;
+			return _animData != nullptr;
 
 		auto animData = animatedMesh->GetAnimationData();
 		if (animData == nullptr)
-			return false;
+			return _animData != nullptr;
 
 		SetAnimationData(animatedMesh, animData);
 		return true;
@@ -187,10 +197,9 @@ namespace HexEngine
 		UpdateComponent::Update(frameTime);
 
 		// Prefab deserialization doesn't wire up the StaticMesh -> Skeletal
-		// link, so catch the bind here once the mesh has finished loading.
-		// No-op when _animData is already populated.
-		if (!_animData)
-			TryAutoBindFromEntityMesh();
+		// link, so catch the bind here once the mesh has finished loading, and
+		// rebind if the mesh was swapped. Cheap no-op when already bound.
+		TryAutoBindFromEntityMesh();
 
 		if (_mesh && _animData && _animData->_animations.size() > 0 && _animIndex != -1)
 		{

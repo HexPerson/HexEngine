@@ -42,6 +42,8 @@
 #include "../../HexEngine.Core/Graphics/ITexture2D.hpp"
 #include "../../HexEngine.Core/Graphics/Material.hpp"
 #include "../../HexEngine.Core/Scene/Mesh.hpp"
+#include "../../HexEngine.Core/Scene/AnimatedMesh.hpp"
+#include "../../HexEngine.Core/Scene/AnimationRetarget.hpp"
 #include "../../HexEngine.Core/FileSystem/PrefabLoader.hpp"
 #include "../../HexEngine.Core/Physics/IPhysicsSystem.hpp"
 #include "../../HexEngine.Core/Physics/PhysUtils.hpp"
@@ -3971,6 +3973,83 @@ namespace HexEngine
 					result["warning"] = "these scenes still place the mesh at its OLD pivot; open each and move its users by the offset";
 				result["note"] = "mesh recentred, saved, and the open scene compensated - save the scene to keep the entity moves";
 				return MakeResult(id, result);
+			});
+
+
+			// Bake a rigged source mesh's clips onto other skinned meshes with a
+			// different skeleton (e.g. Mixamo clips -> Synty POLYGON characters).
+			// Each target's clips are REPLACED by the retargeted set (same order as
+			// the source, so clip indices stay interchangeable) and saved.
+			Reg("retarget_animations", W, Main, Solo, [this](int64_t id, const json& p) -> json {
+				AssetRef srcRef;
+				std::string msg;
+				if (!ResolveAssetRef(RequireString(p, "source"), ".hmesh", false, srcRef, msg))
+					return MakeError(id, ErrorCode::InvalidParams, "source: " + msg);
+				auto srcMesh = std::dynamic_pointer_cast<AnimatedMesh>(Mesh::Create(fs::path(Utf8ToWide(srcRef.ref))));
+				if (!srcMesh)
+					return MakeError(id, ErrorCode::InvalidParams, "source '" + srcRef.ref + "' is not an animated (skinned) mesh");
+
+				RetargetMap map;
+				const std::string preset = p.value("preset", std::string("mixamo_to_synty"));
+				if (!RetargetMap::FromPreset(preset, map))
+					return MakeError(id, ErrorCode::InvalidParams, "unknown preset '" + preset + "' (known: mixamo_to_synty)");
+
+				std::vector<uint32_t> clips;
+				if (p.contains("clips") && p["clips"].is_array())
+					for (const auto& c : p["clips"]) clips.push_back(c.get<uint32_t>());
+				const float sampleRate = p.value("sampleRate", 30.0f);
+				const bool save = p.value("save", true);
+
+				if (!p.contains("targets") || !p["targets"].is_array() || p["targets"].empty())
+					return MakeError(id, ErrorCode::InvalidParams, "targets: array of skinned .hmesh refs");
+
+				json results = json::array();
+				for (const auto& t : p["targets"])
+				{
+					json row = json{ {"target", t} };
+					AssetRef tRef;
+					std::string terr;
+					if (!t.is_string() || !ResolveAssetRef(t.get<std::string>(), ".hmesh", false, tRef, terr))
+					{
+						row["error"] = terr.empty() ? "not a string" : terr;
+						results.push_back(row);
+						continue;
+					}
+					auto tgtMesh = std::dynamic_pointer_cast<AnimatedMesh>(Mesh::Create(fs::path(Utf8ToWide(tRef.ref))));
+					if (!tgtMesh)
+					{
+						row["error"] = "not an animated (skinned) mesh - re-import its model with importAnimations so the skin is kept";
+						results.push_back(row);
+						continue;
+					}
+					RetargetReport report;
+					std::string err;
+					if (!RetargetAnimations(*srcMesh, *tgtMesh, map, sampleRate, clips, report, err))
+					{
+						row["error"] = err;
+						results.push_back(row);
+						continue;
+					}
+					if (save)
+						tgtMesh->Save();
+					row["clips"] = report.clips;
+					row["mappedBones"] = report.mappedBones;
+					row["samplesPerClipMax"] = report.samplesPerClipMax;
+					row["spaceYawDegrees"] = report.spaceYawDegrees;
+					{
+						json lm = json::object();
+						for (const auto& [n, v] : report.landmarks) lm[n] = json::array({ v.x, v.y, v.z });
+						row["landmarks"] = lm;
+					}
+					row["missingSourceBones"] = report.missingSourceBones;
+					row["missingTargetBones"] = report.missingTargetBones;
+					row["unmappedTargetBones"] = report.unmappedTargetBones;
+					row["saved"] = save;
+					results.push_back(row);
+				}
+				MarkPvsDirty();
+				return MakeResult(id, json{ {"source", srcRef.ref}, {"preset", preset}, {"sourceClips", srcMesh->GetAnimationData()->_animations.size()}, {"results", results},
+					{"note", "Entities already using a target mesh pick the new clips up live (the evaluator rebuilds on the data revision). Clip indices match the source's."} });
 			});
 
 			// ---- Undo / redo / save ----

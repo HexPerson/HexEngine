@@ -343,6 +343,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClInclude Include="Graphics\ClusteredLighting.hpp" />
     <ClInclude Include="Graphics\GpuSkinning.hpp" />
     <ClInclude Include="Graphics\OffscreenRenderHooks.hpp" />
+    <ClInclude Include="Scene\AnimationRetarget.hpp" />
     <ClInclude Include="Scene\AnimationUtils.hpp" />
     <ClInclude Include="Graphics\ShadowAtlas.hpp" />
     <ClInclude Include="Graphics\MeshLoader.hpp" />
@@ -587,6 +588,7 @@ xcopy "$(ProjectDir)*.h" "$(SolutionDir)..\..\Include\$(TargetName)\*.h" /s /y</
     <ClCompile Include="Graphics\ClusteredLighting.cpp" />
     <ClCompile Include="Graphics\GpuSkinning.cpp" />
     <ClCompile Include="Graphics\OffscreenRenderHooks.cpp" />
+    <ClCompile Include="Scene\AnimationRetarget.cpp" />
     <ClCompile Include="Scene\AnimationUtils.cpp" />
     <ClCompile Include="Graphics\ShadowAtlas.cpp" />
     <ClCompile Include="Graphics\MeshLoader.cpp" />

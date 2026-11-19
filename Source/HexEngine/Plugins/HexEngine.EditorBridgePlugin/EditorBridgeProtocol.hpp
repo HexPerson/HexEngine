@@ -426,8 +426,11 @@ namespace EditorBridge
 		{
 			if (!patch.is_object())
 				return fail("an object");
+			// A null member REMOVES that key (JSON merge-patch), e.g. swapping a
+			// StaticMeshComponent's mesh: {"mesh": {"<old path>": null, "<new path>": {...}}}.
+			// Without it the old key survives the merge and Deserialize loads both.
 			for (auto& [k, v] : patch.items())
-				if (current.contains(k) && !CheckFieldShape(current[k], v, path + "." + k, msg))
+				if (!v.is_null() && current.contains(k) && !CheckFieldShape(current[k], v, path + "." + k, msg))
 					return false;
 			return true;
 		}

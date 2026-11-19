@@ -94,8 +94,15 @@
 		const SkinRows skin = BlendBones(boneIds, boneWeights, 0, boneCount);
 		const SkinRows skinPrev = BlendBones(boneIds, boneWeights, boneCount, boneCount);
 
-		const float4 skinned = float4(SkinPoint(position, skin).xyz, 1.0f);
-		const float4 skinnedPrev = float4(SkinPoint(position, skinPrev).xyz, 1.0f);
+		// The blended matrix's last row is (0,0,0,sum of weights), so w = sum(w).
+		// The vertex-shader skinning path never notices unnormalised weights - its
+		// perspective divide cancels them - so divide here too: meshes whose skin
+		// weights don't sum to 1 (Synty's Characters.fbx) were scaled away from the
+		// model origin ("blades") only on the compute path.
+		const float4 skinnedRaw = SkinPoint(position, skin);
+		const float4 skinnedPrevRaw = SkinPoint(position, skinPrev);
+		const float4 skinned = float4(skinnedRaw.xyz / max(abs(skinnedRaw.w), 1e-6f), 1.0f);
+		const float4 skinnedPrev = float4(skinnedPrevRaw.xyz / max(abs(skinnedPrevRaw.w), 1e-6f), 1.0f);
 
 		g_skinOut.Store4(base + g_skinLayout0.y, asuint(skinned));
 		g_skinOut.Store3(base + g_skinLayout0.z, asuint(SkinVector(normal, skin)));

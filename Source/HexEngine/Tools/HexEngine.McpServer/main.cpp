@@ -294,7 +294,7 @@ namespace
 			Obj(json{ {"entity", EntityRefSchema()}, {"component", Str("Registered component class name.")}, {"fields", FieldsSchema()} }, { "entity", "component" }) });
 		v.push_back({ "remove_component", w("Remove a component from an entity (Transform cannot be removed)."),
 			Obj(json{ {"entity", EntityRefSchema()}, {"component", Str("Component type name.")} }, { "entity", "component" }) });
-		v.push_back({ "set_component_field", w("Patch a component's serialised fields (read-modify-write through Serialize/Deserialize). Values must keep the field's type/shape; enum fields accept value names (e.g. \"_bodyType\": \"Dynamic\"), flag fields an array of names."),
+		v.push_back({ "set_component_field", w("Patch a component's serialised fields (read-modify-write through Serialize/Deserialize). Values must keep the field's type/shape; enum fields accept value names (e.g. \"_bodyType\": \"Dynamic\"), flag fields an array of names. Object fields merge (JSON merge-patch): a null member removes that key, e.g. swap a mesh with {\"mesh\": {\"<old path>\": null, \"<new path>\": {\"materials\": [...]}}}."),
 			Obj(json{ {"entity", EntityRefSchema()}, {"component", Str("Component type name.")}, {"fields", FieldsSchema()} }, { "entity", "component", "fields" }) });
 		v.push_back({ "set_entity_transform", w("Set position / rotation / scale. CAMERA entities are driven through the camera's own angles: degrees, pitch + = up (clamped to +/-89), yaw 0 faces -Z and yaw + turns toward -X."),
 			Obj(TransformProps(json{ {"entity", EntityRefSchema()} }), { "entity" }) });
@@ -364,6 +364,13 @@ namespace
 				{"entity", EntityRefSchema("Or: the entity whose material to edit.")},
 				{"save", Bool("Write the .hmat (default true).")},
 			})) });
+		v.push_back({ "retarget_animations", w("Bake a rigged SOURCE mesh's animation clips onto other skinned TARGET meshes with a different skeleton (preset mixamo_to_synty: Mixamo rig -> Synty POLYGON 36-bone rig). Per mapped bone the target turns away from its own bind pose as the source turned from its; the root also follows the source root translation scaled by the root-height ratio. Each target's clips are REPLACED (same order as the source, so clip indices match) and the .hmesh is saved. Targets must be skinned animated meshes - import character packs with importAnimations so their skin is kept. Not batchable."),
+			Obj(json{ {"source", Str("Rigged source mesh with clips, e.g. GameData.Meshes/Universe/Characters/casual_male_01/casual_male_01_Cylinder501.hmesh.")},
+				{"targets", json{ {"type", "array"}, {"items", json{ {"type", "string"} }}, {"description", "Skinned target .hmesh refs."} }},
+				{"preset", Str("Bone map preset (default mixamo_to_synty).")},
+				{"clips", json{ {"type", "array"}, {"items", json{ {"type", "integer"} }}, {"description", "Source clip indices (default all)."} }},
+				{"sampleRate", Num("Bake rate in samples per second (default 30).")},
+				{"save", Bool("Save each target .hmesh (default true). false only edits the LOADED mesh: a target no entity references is unloaded straight after and reloads from disk without the new clips.")} }, { "source", "targets" }) });
 		v.push_back({ "recenter_mesh", w("Recenter a STATIC mesh asset so its bounds centre is the model origin (fixes kit meshes whose geometry sits far from the pivot). Updates the live mesh in place and saves the .hmesh; every entity in the open scene using it is moved by rotation*scale*offset (its children counter-shifted) so nothing moves in the world, and its bounds / PVS / triangle-mesh or box collider are refreshed. Prefabs in Data/Prefabs that use the mesh get the same compensation. Other scenes referencing it are listed, not edited. Animated meshes are refused. Save the scene afterwards. Not batchable."),
 			Obj(json{ {"mesh", Str("Mesh ref or path, e.g. \"GameData.Meshes/Universe/Buildings/City/X.hmesh\".")},
 				{"dryRun", Bool("Only report the offset and the scene entities using the mesh (default false).")},

@@ -665,6 +665,7 @@ static void TestBridgeProtocol()
 		CHECK(CheckFieldShape(J::parse(R"({"box":{"aabb":1}})"), J::parse(R"({"sphere":{"radius":2}})"), "shapeData", er)); // new nested key ok
 		CHECK(!CheckFieldShape(J::parse(R"({"box":{"aabb":1}})"), J::parse(R"({"box":{"aabb":"x"}})"), "shapeData", er));  // nested type checked
 		CHECK(er.find("shapeData.box.aabb") != std::string::npos);           // error names the nested path
+		CHECK(CheckFieldShape(J::parse(R"({"a.hmesh":{"materials":[]}})"), J::parse(R"({"a.hmesh":null,"b.hmesh":{"materials":[]}})"), "mesh", er)); // null member = remove key
 	}
 }
 
