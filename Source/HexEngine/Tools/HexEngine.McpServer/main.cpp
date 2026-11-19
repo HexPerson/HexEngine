@@ -345,7 +345,8 @@ namespace
 		v.push_back({ "build_navmesh", w("Bake the open scene's walking navmesh (the editor NavMesh tool's Build Scene NavMesh). Live at once for find_path and routine agents; save_scene writes the sidecar. Rebake after placing buildings. Takes seconds on a big scene."),
 			Obj(json{ {"cellSize", Num("Voxel size in metres (default 0.3).")}, {"cellHeight", Num("Voxel height (default 0.3).")},
 				{"walkableRadius", Num("Agent radius in voxels (default 1).")}, {"walkableHeight", Num("Agent height in voxels (default 7).")},
-				{"walkableClimb", Num("Step height in voxels (default 2).")}, {"walkableSlopeAngle", Num("Max slope degrees (default 45).")} }) });
+				{"walkableClimb", Num("Step height in voxels (default 2).")}, {"walkableSlopeAngle", Num("Max slope degrees (default 45).")},
+				{"min", NumArray(3, "Bake region min corner (world). Use with max to bake just the playable area at finer cell sizes.")}, {"max", NumArray(3, "Bake region max corner (world).")} }) });
 		v.push_back({ "snap_to_ground", w("Drop an entity (with its children) so its bounds' bottom rests on the surface below it, optionally tilted to the surface normal. Undoable. Use only / minNormalY to choose what counts as ground."),
 			Obj(RayOptionProps(json{ {"entity", EntityRefSchema()},
 				{"offset", Num("Extra height above the surface (negative sinks it in).")},

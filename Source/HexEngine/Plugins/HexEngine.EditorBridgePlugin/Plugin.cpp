@@ -4058,6 +4058,12 @@ namespace HexEngine
 				params.width = params.height = params.tileSize = 0;
 				params.bmin[0] = params.bmin[1] = params.bmin[2] = 0.0f;
 				params.bmax[0] = params.bmax[1] = params.bmax[2] = 0.0f;
+				// Optional bake region (world AABB). Without one the whole scene's bounds
+				// are used - sky sphere and distant scenery included.
+				if (float lo[3], hi[3]; ReadFloats(p, "min", 3, lo) && ReadFloats(p, "max", 3, hi))
+				{
+					for (int i = 0; i < 3; ++i) { params.bmin[i] = lo[i]; params.bmax[i] = hi[i]; }
+				}
 
 				const auto t0 = std::chrono::steady_clock::now();
 				NavMeshId navMeshId = 0;
