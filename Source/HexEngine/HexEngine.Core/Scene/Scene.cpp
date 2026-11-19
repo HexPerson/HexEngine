@@ -1489,6 +1489,15 @@ namespace HexEngine
 			_giSpatialCacheDirty = true;
 			// Incremental tombstone (see the add-side comment).
 			RemovePvsSpatialEntry_NoLock(component->CastAs<StaticMeshComponent>());
+
+			// Camera / light PVS snapshots hold the component pointer and the
+			// render pass WRITES its cached instance data back into it. Removing a
+			// mesh from an entity that lives on (in-place prefab sync, editor
+			// component removal) left those entries dangling: heap corruption /
+			// access violations in the next shadow or main pass. Drop the entity
+			// from every PVS; view-dirty re-adds whatever it still renders.
+			if (!isEntityPendingDeletion)
+				FlushPVS(entity, true);
 		}
 		else if (component->CastAs<Light>() != nullptr)
 		{
