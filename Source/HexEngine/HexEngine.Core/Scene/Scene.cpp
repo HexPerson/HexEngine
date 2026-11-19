@@ -410,9 +410,15 @@ namespace HexEngine
 			}
 		}
 
-		if (entity->GetComponent<PointLight>() != nullptr ||
-			entity->GetComponent<SpotLight>() != nullptr ||
-			entity->GetComponent<DirectionalLight>() != nullptr)
+		// Only lights the voxel GI actually consumes: the sun always, local lights
+		// only when injected. A moving non-injected light (a vehicle headlight
+		// with _injectIntoGI off) used to bump the light revision every frame and
+		// relight the whole GI volume for nothing.
+		const auto* movedPoint = entity->GetComponent<PointLight>();
+		const auto* movedSpot = entity->GetComponent<SpotLight>();
+		if (entity->GetComponent<DirectionalLight>() != nullptr ||
+			(movedPoint != nullptr && movedPoint->GetInjectIntoGI()) ||
+			(movedSpot != nullptr && movedSpot->GetInjectIntoGI()))
 		{
 			++_giLightRevision;
 			if (r_giLogInvalidations._val.b)
