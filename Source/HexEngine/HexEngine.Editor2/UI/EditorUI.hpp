@@ -236,6 +236,7 @@ public:
 		PendingComponentEditSource _pendingComponentEditSource = PendingComponentEditSource::None;
 		Detail::EntityComponentStateSnapshot _pendingComponentEditBefore;
 		std::atomic_bool _entityListRefreshPending = false;
+		float _entityListRefreshCooldown = 0.0f;   // main thread only; play-mode refresh throttle
 		// Set by the project-load worker thread; the prefab out-of-date check
 		// touches the entity list / inspector / dialogs, so it runs on the main
 		// thread in Update.

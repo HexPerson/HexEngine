@@ -58,6 +58,22 @@ namespace HexEngine
 
 		int32_t GetCurrentNodeId() const;
 
+		// ListNode::SetObjectPtr calls this so the object index stays correct.
+		void OnNodeObjectPtrChanged(ListNode* node, void* previousObjectPtr);
+
+	private:
+		// O(1) lookup indices for attached nodes. FindItemByObjectPtr and AddNode's
+		// duplicate check used to walk the whole tree per call, which made bulk
+		// entity creation (a play-mode start spawning dozens of multi-entity cars
+		// into a ~9k-entity hierarchy) quadratic - the top editor frame cost.
+		void IndexSubtree(ListNode* node);
+		void UnindexSubtree(ListNode* node);
+		bool IsUnder(const ListNode* node, const ListNode* ancestor) const;
+		void UpdateContentHeightIfDirty();
+		std::unordered_map<void*, std::vector<ListNode*>> _nodesByObject;
+		std::unordered_map<int32_t, ListNode*> _nodesById;
+		bool _contentHeightDirty = false;
+
 	private:
 		void RenderItems(GuiRenderer* renderer, Point& position, const Point& absolutePos, const std::vector<ListNode*>& items, int32_t& c);
 		bool RenderItem(GuiRenderer* renderer, Point& position, const Point& absolutePos, ListNode* item, ListNode* parent, int32_t& c);

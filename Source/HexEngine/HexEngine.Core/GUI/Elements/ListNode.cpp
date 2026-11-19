@@ -115,7 +115,10 @@ namespace HexEngine
 
 	void ListNode::SetObjectPtr(void* objectPtr)
 	{
+		void* previous = _objectPtr;
 		_objectPtr = objectPtr;
+		if (_list != nullptr && previous != objectPtr)
+			_list->OnNodeObjectPtrChanged(this, previous);
 	}
 
 	void SceneListNode::OnClick(int32_t button, int32_t x, int32_t y)

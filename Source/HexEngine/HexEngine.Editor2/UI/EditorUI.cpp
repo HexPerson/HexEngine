@@ -1416,9 +1416,20 @@ namespace HexEditor
 		if (_prefabLoadCheckPending.exchange(false))
 			_prefabController.CheckLoadedScenesForOutOfDateInstances();
 
-		if (_entityList != nullptr && _entityListRefreshPending.exchange(false))
+		// RefreshList rebuilds the whole hierarchy. During play the game spawns and
+		// despawns entities every frame (traffic spawns a multi-entity car per
+		// frame at start), so rebuild at most every 0.25 s there; edit-mode
+		// changes still refresh on the next frame.
+		if (_entityList != nullptr && _entityListRefreshPending.load())
 		{
-			_entityList->RefreshList();
+			const bool playing = _integrator.GetState() == GameTestState::Started;
+			_entityListRefreshCooldown = std::max(0.0f, _entityListRefreshCooldown - frameTime);
+			if (!playing || _entityListRefreshCooldown <= 0.0f)
+			{
+				_entityListRefreshPending = false;
+				_entityList->RefreshList();
+				_entityListRefreshCooldown = playing ? 0.25f : 0.0f;
+			}
 		}
 
 		if (g_pEditor != nullptr)
