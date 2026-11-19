@@ -265,6 +265,12 @@ void TrafficManagerComponent::UpdateSpawner(TrafficSpawnerComponent* spawner, He
 		{
 			activeGlobalCount += spawnedVehicles;
 			++spawnedThisFrame;
+			// One spawn per spawner per frame: the clearance test reads the
+			// spatial grid, which only sees cars from the start of the frame,
+			// so a catch-up burst stacked several cars on the same lane node
+			// and they wedged each other there forever.
+			timer = std::min(timer, interval);
+			break;
 		}
 		else
 		{
@@ -281,11 +287,35 @@ void TrafficManagerComponent::Update(float frameTime)
 {
 	UpdateComponent::Update(frameTime);
 
-	if (!_enabled)
-		return;
-
 	auto* scene = GetEntity()->GetScene();
 	if (scene == nullptr)
+		return;
+
+	// Traffic is a play-time simulation. In edit mode it spawned and drove cars
+	// (constant shadow/GI churn) and anything left over from a play session
+	// kept driving in the editor after stop: clear the spawned cars instead.
+	const bool running = HexEngine::g_pEnv != nullptr && HexEngine::g_pEnv->IsGameRunning();
+	if (!running)
+	{
+		if (_wasGameRunning)
+		{
+			std::vector<TrafficSpawnerComponent*> spawners;
+			scene->GetComponents<TrafficSpawnerComponent>(spawners);
+			for (auto* spawner : spawners)
+			{
+				if (spawner != nullptr)
+				{
+					DespawnSpawnerVehicles(spawner);
+					spawner->SpawnTimerRef() = 0.0f;
+				}
+			}
+		}
+		_wasGameRunning = false;
+		return;
+	}
+	_wasGameRunning = true;
+
+	if (!_enabled)
 		return;
 
 	auto* camera = scene->GetMainCamera();

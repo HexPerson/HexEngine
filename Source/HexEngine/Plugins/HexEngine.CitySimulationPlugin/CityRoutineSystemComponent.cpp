@@ -335,6 +335,7 @@ void CityRoutineSystemComponent::Update(float frameTime)
 			{
 				if (agent == nullptr || agent->GetEntity() == nullptr)
 					continue;
+				CleanupAgentVehicle(agent);	// the trip's car is play-time only
 				if (auto* nav = agent->GetEntity()->GetComponent<HexEngine::NavigationComponent>(); nav != nullptr)
 					nav->ClearPath();
 			}
@@ -1095,6 +1096,20 @@ bool CityRoutineSystemComponent::BeginWalkTo(RoutineAgentComponent* agent, const
 		return false;
 	}
 
+	// Starting off the walkable mesh (just out of a car on the road: roads have
+	// no colliders and are carved out of the navmesh, so ground snapping drops
+	// the agent onto the terrain under them and it never gets anywhere). Step
+	// onto the path's first point - the nearest pavement.
+	{
+		const auto& points = nav->GetPathPoints();
+		if (!points.empty())
+		{
+			const float gap = (points.front() - from).Length();
+			if (gap > 0.75f && gap < 20.0f)
+				agent->GetEntity()->ForcePosition(points.front());
+		}
+	}
+
 	auto& motion = _agentMotionStates[agent->GetEntity()->GetName()];
 	motion.lastPosition = from;
 	motion.hasLastPosition = true;
@@ -1144,6 +1159,12 @@ HexEngine::Entity* CityRoutineSystemComponent::AcquireVehicleForTask(RoutineAgen
 		return nullptr;
 
 	auto spawned = HexEngine::g_pEnv->_prefabLoader->LoadPrefab(HexEngine::g_pEnv->_sceneManager->GetCurrentScene(), prefabPath);
+	// Transient like spawner traffic: never baked into a saved scene.
+	for (auto* ent : spawned)
+	{
+		if (ent != nullptr)
+			ent->SetFlag(HexEngine::EntityFlags::DoNotSave);
+	}
 	for (auto* ent : spawned)
 	{
 		if (ent == nullptr || ent->IsPendingDeletion())
