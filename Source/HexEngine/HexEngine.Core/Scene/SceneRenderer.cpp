@@ -1921,6 +1921,9 @@ namespace HexEngine
 		if (!camera)
 			return;
 
+		_previewNoPost = !HEX_HASFLAG(flags, SceneFlags::PostProcessingEnabled) &&
+			HEX_HASFLAG(flags, SceneFlags::PreviewLighting);
+
 		// Probe capture tracing: is the rig camera actually reaching the renderer?
 		if (camera->IsEnvironmentCapture())
 		{
@@ -3388,9 +3391,9 @@ namespace HexEngine
 			// passes: froxel far = VolumetricScattering::kFarDepthM, AP max =
 			// AtmosphereApMaxDistM() in the shader = max(farZ, 1 km)).
 			{
-				const bool froxel = r_volumetric._val.b && g_pEnv->_volumetricScattering != nullptr
+				const bool froxel = !_previewNoPost && r_volumetric._val.b && g_pEnv->_volumetricScattering != nullptr
 					&& g_pEnv->_volumetricScattering->GetIntegrationVolume() != nullptr;
-				const bool ap = r_atmosphereLUTs._val.b && r_aerialPerspective._val.b
+				const bool ap = !_previewNoPost && r_atmosphereLUTs._val.b && r_aerialPerspective._val.b
 					&& g_pEnv->_atmosphereLUTs != nullptr && g_pEnv->_atmosphereLUTs->GetAerialPerspectiveVolume() != nullptr;
 				const float farZ = _currentCamera ? _currentCamera->GetFarZ() : 1000.0f;
 				bufferData._transparentFogParams = math::Vector4(
@@ -4689,8 +4692,11 @@ namespace HexEngine
 		}
 		else if (!canPostProcess && HEX_HASFLAG(flags, SceneFlags::PreviewLighting))
 		{
-			// Lit preview: direct lighting only, then the plain tonemap below.
+			// Lit preview: direct lighting + transparents (water, glass), then
+			// the plain tonemap below. No fog/GI/volumetrics/bloom/exposure, and
+			// the transparents skip the per-fragment haze (_previewNoPost).
 			RenderLights();
+			RenderTransparent();
 		}
 		else if (canPostProcess)
 		{

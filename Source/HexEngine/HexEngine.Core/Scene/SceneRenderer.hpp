@@ -416,6 +416,10 @@ namespace HexEngine
 		// Set when TAA or DLSS resolved this frame, so the overlay chain can skip FXAA
 		// rather than stacking a second, spatial AA pass on top of a temporal one.
 		bool _temporalAaAppliedThisFrame = false;
+		// Lit-preview view (PreviewLighting without post, e.g. a game map camera):
+		// transparents draw without the froxel/AP haze, whose volumes belong to
+		// the main camera.
+		bool _previewNoPost = false;
 
 		// Cut detection for TAA history invalidation - see RenderScene. Raw observer
 		// pointers, only ever compared for identity, never dereferenced.

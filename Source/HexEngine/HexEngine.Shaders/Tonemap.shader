@@ -89,6 +89,8 @@
 		mapped = pow(mapped, kInvGamma);
 		mapped = ApplyColourLut(mapped);
 		mapped = ApplyGrainAndDither(mapped, input.position.xy);
-		return float4(mapped, colour.a);
+		// Opaque: the finished frame lands in a camera target that game UI may
+		// sample (e.g. a map); beauty's alpha is meaningless (0) by this point.
+		return float4(mapped, 1.0f);
 	}
 }
