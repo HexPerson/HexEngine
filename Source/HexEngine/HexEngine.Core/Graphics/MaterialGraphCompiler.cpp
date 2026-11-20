@@ -776,8 +776,9 @@ namespace HexEngine
 			// editing only DefaultPixel once left the hall floor completely
 			// unaffected even at full strength.
 			// Shelter occlusion - matches DefaultPixel: covered surfaces get
-			// no rain or snow.
-			ss << "\t\tconst float __shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);\n";
+			// no rain or snow. Normal-aware so the inner face of an exterior
+			// wall doesn't read the open sky past the roof edge (PBRutils).
+			ss << "\t\tconst float __shelter = SampleRainShelterN(input.positionWS.xyz, normalize(input.normal), g_textureSampler);\n";
 			ss << "\t\tconst float __shelteredWetness = saturate((g_weatherSurface.wetness + g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * __shelter);\n";
 			ss << "\t\tfloat __wetFilm = 0.0f;\n";
 			// Sea contact (underwater S4) - lockstep with DefaultPixel; the
@@ -1162,10 +1163,12 @@ namespace HexEngine
 			//   8 - (unrecorded)
 			//   9 - pre-skinned motion vectors (PreviousLocalPosition, SV_VertexID),
 			//       so graph materials work on GPU-skinned characters.
+			//  10 - normal-aware shelter (SampleRainShelterN): no rain droplets
+			//       on the inner faces of exterior walls.
 			// The separator is pushed as a char: the old "\0codegen:N" literal was a
 			// C string that ends at its first byte, so the salt was never appended.
 			combined += '\0';
-			combined += "codegen:9";
+			combined += "codegen:10";
 
 			const uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(combined));
 			return std::format("{:016x}", h);

@@ -6,6 +6,7 @@
 #include "../Entity/Component/DecalComponent.hpp"
 #include "../Entity/Component/ReflectionProbeComponent.hpp"
 #include "../Entity/Component/InteractionComponent.hpp"
+#include "../Physics/PhysUtils.hpp"
 #include "../Graphics/IVertexBuffer.hpp"
 #include "../Graphics/IIndexBuffer.hpp"
 #include "../Graphics/ISSAOProvider.hpp"
@@ -4777,6 +4778,16 @@ namespace HexEngine
 			// cloud layer rather than under it.
 			if (g_pEnv && g_pEnv->_particleWorldSystem)
 			{
+				// Shelter map at t26 for weather particles (ParticleBillboardLit
+				// discards shelter-occluded rain/snow under cover). Explicit slot,
+				// then restore the implicit-slot counter the particle pass
+				// auto-binds its sprite textures from.
+				const uint32_t particleSlot = g_pEnv->_graphicsDevice->GetBoundResourceIndex();
+				g_pEnv->_graphicsDevice->SetTexture2D(26,
+					(_rainOcclusionValid && _rainOcclusionMap != nullptr)
+						? _rainOcclusionMap->GetDepthMap() : nullptr);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(particleSlot);
+
 				g_pEnv->_particleWorldSystem->Render(_currentScene, _currentCamera, _beautyRT, _gbuffer.GetDepthBuffer());
 			}
 			// Aerial perspective runs LAST in the atmospheric chain so it
@@ -5213,8 +5224,19 @@ namespace HexEngine
 			const WeatherSurfaceParams& _lensWx = _currentScene ? _currentScene->GetWeatherSurfaceParams() : WeatherSurfaceParams();
 			// ...and the same pass doubles as "water running off the lens" for a
 			// few seconds after the camera surfaces (underwater S5, _uwLensWet).
-			const bool lensRain = _lensWx.precipitationIntensity > 0.001f &&
+			bool lensRain = _lensWx.precipitationIntensity > 0.001f &&
 				_lensWx.snowCoverage < 0.34f && _lensWx.dirtAmount < 0.34f;
+			// No rain on the lens under a roof: one upward ray from the eye
+			// against static cover (the pass used to run indoors too).
+			if (lensRain && r_lensDrips._val.b && _currentCamera != nullptr && _currentCamera->GetEntity() != nullptr)
+			{
+				Entity* camEntity = _currentCamera->GetEntity();
+				const math::Vector3 eye = camEntity->GetWorldTM().Translation() + _currentCamera->GetViewOffset();
+				RayHit roofHit;
+				if (PhysUtils::RayCast(math::Ray(eye, math::Vector3::Up), 60.0f,
+						LAYERMASK(Layer::StaticGeometry), &roofHit, { camEntity }))
+					lensRain = false;
+			}
 			const bool lensSeaWet = r_underwater._val.b && _uwLensWet > 0.01f;
 			if (r_lensDrips._val.b && _lensDripsShader && _currentScene != nullptr &&
 				(lensRain || lensSeaWet))

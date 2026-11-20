@@ -66,6 +66,9 @@
 	// cycled through ~16 sub-froxel samples and visibly PULSED, with hard per-
 	// froxel shadow edges. The integration volume is stable and ray-accumulated.
 	Texture3D g_volumetricFogLUT : register(t8);
+	// Top-down shelter depth map (SceneRenderer's rain occlusion map), bound
+	// for the particle pass. Same convention as PBRutils / AutoPuddles.
+	Texture2D<float> g_rainOcclusionMap : register(t26);
 	SamplerState g_textureSampler : register(s0);
 	SamplerState g_volumeFogSampler : register(s4);
 
@@ -124,6 +127,43 @@
 		if (alpha <= 0.001f)
 			clip(-1.0f);
 
+		// viewDirection.w carries render flags: +1 lit, +2 shelter-occluded.
+		const bool shelterOccluded = input.viewDirection.w > 1.5f;
+		const float litFlag = shelterOccluded ? input.viewDirection.w - 2.0f : input.viewDirection.w;
+
+		// Weather under cover: rain/snow spawn in a box around the camera and
+		// used to fall straight through roofs into interiors. Test the particle
+		// against the top-down shelter depth map; anything with cover above it
+		// is discarded (the map only holds static geometry: roofs, awnings).
+		if (shelterOccluded && g_rainOcclusionParams.x > 0.5f)
+		{
+			const float4 occ = mul(float4(input.positionWS.xyz, 1.0f), g_rainOcclusionVP);
+			const float2 occUv = occ.xy * float2(0.5f, -0.5f) + 0.5f;
+			if (all(occUv >= 0.0f) && all(occUv <= 1.0f) && occ.z > 0.0f && occ.z < 1.0f)
+			{
+				// Conservative 3x3: a texel is ~9 cm, so a drop just inside a
+				// wall could read the open-sky texel past the roof edge. Any
+				// covered neighbour counts as cover (shaves ~10 cm of rain off
+				// the outside of walls - invisible).
+				const float mapSize = 1.0f / max(g_rainOcclusionParams.z, 1e-6f);
+				const int maxTexel = (int)mapSize - 1;
+				const int2 texel = (int2)(occUv * mapSize);
+				float coverDepth = 1.0f;
+				[unroll]
+				for (int oy = -1; oy <= 1; ++oy)
+				{
+					[unroll]
+					for (int ox = -1; ox <= 1; ++ox)
+					{
+						const int2 t = clamp(texel + int2(ox, oy), int2(0, 0), int2(maxTexel, maxTexel));
+						coverDepth = min(coverDepth, g_rainOcclusionMap.Load(int3(t, 0)));
+					}
+				}
+				if (occ.z > coverDepth + g_rainOcclusionParams.y)
+					clip(-1.0f);
+			}
+		}
+
 		if (g_particleTransparencyAssist.x > 0.5f)
 		{
 			const float depthBias = saturate(g_particleTransparencyAssist.y);
@@ -170,7 +210,7 @@
 		}
 
 		float3 baseColor = tex.rgb * input.colour.rgb;
-		if (input.viewDirection.w < 0.5f)
+		if (litFlag < 0.5f)
 		{
 			return float4(baseColor * fogTrans, alpha);
 		}

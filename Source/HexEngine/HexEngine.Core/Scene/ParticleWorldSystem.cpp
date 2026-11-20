@@ -57,6 +57,7 @@ namespace HexEngine
 		constexpr uint32_t ParticleFlags_FacingShift = 8;
 		constexpr uint32_t ParticleFlags_AlphaCurve3 = HEX_BITSET(16);
 		constexpr uint32_t ParticleFlags_ReceiveLighting = HEX_BITSET(17);
+		constexpr uint32_t ParticleFlags_ShelterOccluded = HEX_BITSET(18);   // mirror in ParticleSimulate.shader
 
 		BlendState ToBlendState(ParticleBlendMode mode)
 		{
@@ -462,6 +463,8 @@ namespace HexEngine
 					gpu.flags |= ParticleFlags_ReceiveLighting;
 				if (emitter.useThreePointAlphaCurve)
 					gpu.flags |= ParticleFlags_AlphaCurve3;
+				if (emitter.shelterOccluded)
+					gpu.flags |= ParticleFlags_ShelterOccluded;
 				// Texture slot index in bits 28..29 (kMaxParticleTextures=4).
 				// The sim shader stamps this into each rendered instance so
 				// the billboard pixel shader samples the right texture.

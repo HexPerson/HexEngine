@@ -481,7 +481,7 @@
 		// comment there). Skinned surfaces get wet like everything else;
 		// only the drip perturbation below stays per-material.
 		// Shelter occlusion + melt-fed wetness - matches DefaultPixel.
-		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
+		const float shelter = SampleRainShelterN(input.positionWS.xyz, normalize(input.normal), g_textureSampler);
 		const float shelteredWetness = saturate(
 			(g_weatherSurface.wetness
 				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);

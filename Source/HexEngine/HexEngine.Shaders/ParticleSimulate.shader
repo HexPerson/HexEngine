@@ -37,6 +37,7 @@
 	};
 
 	static const uint ParticleFlags_ReceiveLighting = (1u << 17u);
+	static const uint ParticleFlags_ShelterOccluded = (1u << 18u);   // mirror of ParticleWorldSystem.cpp
 
 	struct MeshInstanceData
 	{
@@ -365,7 +366,10 @@
 			float lifeN = saturate(state.misc0.z / max(0.01f, state.misc0.w));
 			ComputeFlipbookUv(emitter, lifeN, uvScale, uvOffset);
 			inst.worldPrev[3].xy = uvOffset;
-			inst.worldPrev[3].z = ((emitter.flags & ParticleFlags_ReceiveLighting) != 0u) ? 1.0f : 0.0f;
+			// Per-instance render flags for ParticleBillboardLit: +1 receive
+			// lighting, +2 shelter-occluded (weather particles cut by cover).
+			inst.worldPrev[3].z = (((emitter.flags & ParticleFlags_ReceiveLighting) != 0u) ? 1.0f : 0.0f)
+				+ (((emitter.flags & ParticleFlags_ShelterOccluded) != 0u) ? 2.0f : 0.0f);
 			// Texture slot index from emitter flags bits 28..29 - lets each
 			// emitter use its own texture within the single shared render
 			// pass (selected in ParticleBillboardLit's pixel shader).

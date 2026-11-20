@@ -1317,7 +1317,13 @@
 		// user saw near buildings). smoothstep over a ~3 m depth band makes
 		// each tap continuous, so the whole shelter term - and the darkening
 		// it multiplies - fades smoothly across the cover edge.
-		const float kSoftBand = 3.0f / 160.0f; // ~3 m over the 160 m depth range
+		// Band narrowed 3 m -> 0.3 m (2026-11-20): a 3 m ramp left anything
+		// within 3 m of the cover above it PARTLY exposed - i.e. most of an
+		// interior under a single-storey roof (diner roof 3.6 m over the floor:
+		// window frames came out 10-75% exposed and grew rain droplets indoors).
+		// The 12-tap spatial PCF below already softens the cover edge, which
+		// is what the wide band was originally for.
+		const float kSoftBand = 0.3f / 160.0f; // ~0.3 m over the 160 m depth range
 
 		// SPATIAL penumbra. The old 4-tap ±0.5-texel box only feathered the
 		// shelter FOOTPRINT edge by ~1 texel (~9 cm at 2048/192 m), so the
@@ -1347,6 +1353,24 @@
 			exposed += (1.0f - smoothstep(bias, bias + kSoftBand, clip.z - mapDepth));
 		}
 		return exposed * (1.0f / 12.0f);
+	}
+
+	// Normal-aware shelter. The PCF above has a ~38 cm penumbra, so a surface
+	// right at a building's wall line averaged in the open sky just outside it:
+	// the INNER face of an exterior wall (window frames, pillars, door frames)
+	// read ~half exposed and grew rain droplets indoors. Sampling from up to
+	// 0.5 m in FRONT of the face fixes both sides with one rule: an inner face
+	// (normal into the room) reads the roof over the room, an outer face
+	// (normal outward) reads the sky and stays wet. Up/down-facing surfaces
+	// have no horizontal normal and sample in place as before.
+	float SampleRainShelterN(float3 worldPos, float3 worldNormal, SamplerState samp)
+	{
+		const float2 nxz = worldNormal.xz;
+		const float horiz = length(nxz);
+		float3 p = worldPos;
+		if (horiz > 1e-3f)
+			p.xz += (nxz / horiz) * (0.5f * horiz);
+		return SampleRainShelter(p, samp);
 	}
 
 	// =====================================================================

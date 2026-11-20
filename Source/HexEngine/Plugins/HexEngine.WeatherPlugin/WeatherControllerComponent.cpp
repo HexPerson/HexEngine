@@ -1460,6 +1460,9 @@ namespace HexEngine::Weather
 
 		auto pushEmitter = [&effect](ParticleEmitterDesc emitter)
 		{
+			// Every weather emitter stops under cover (roofs, awnings): the
+			// particle shader tests against the renderer's rain occlusion map.
+			emitter.shelterOccluded = true;
 			effect->emitters.push_back(std::move(emitter));
 		};
 

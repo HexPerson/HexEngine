@@ -507,7 +507,7 @@
 		// no rain or snow. 1 = exposed; scales every weather term below.
 		// Melting snow (slice 4) feeds ground wetness - slush darkens and
 		// glosses the surface it sits on.
-		const float shelter = SampleRainShelter(input.positionWS.xyz, g_textureSampler);
+		const float shelter = SampleRainShelterN(input.positionWS.xyz, normalize(input.normal), g_textureSampler);
 		const float shelteredWetness = saturate(
 			(g_weatherSurface.wetness
 				+ g_weatherSurface.snowCoverage * g_weatherSurface.snowMelt * 0.6f) * shelter);
