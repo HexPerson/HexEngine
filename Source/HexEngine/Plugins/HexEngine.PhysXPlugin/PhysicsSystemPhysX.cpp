@@ -128,7 +128,10 @@ bool PhysicsSystemPhysX::Create()
 
 	_dispatcher = physx::PxDefaultCpuDispatcherCreate(2);
 
-	sceneDesc.gravity = physx::PxVec3(0.0f, -98.1f, 0.0f);
+	// Real gravity. Was -98.1 (10x) since the initial commit: hops couldn't
+	// leave the ground and ground friction was 10x, so vehicles needed absurd
+	// drive forces. The player CCT, particles and weather use their own gravity.
+	sceneDesc.gravity = physx::PxVec3(0.0f, -9.81f, 0.0f);
 	sceneDesc.cpuDispatcher = _dispatcher;
 	sceneDesc.filterShader = SampleSubmarineFilterShader;// physx::PxDefaultSimulationFilterShader;
 	sceneDesc.simulationEventCallback = this;

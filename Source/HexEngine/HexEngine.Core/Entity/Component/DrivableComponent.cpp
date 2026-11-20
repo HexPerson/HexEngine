@@ -1271,8 +1271,10 @@ namespace HexEngine
 		if (_hopKickLeft > 0.0f)
 		{
 			// Short upward kick reaching ~hopSpeed (force-only body: no impulse API).
+			// Compensate the scene's ACTUAL gravity, never an assumed 9.81.
 			constexpr float kHopKick = 0.06f;
-			_body->ApplyForceToCenterOfMass(worldUp * ((_tuning.hopSpeed / kHopKick + 9.81f) * mass));
+			const float g = std::fabs(g_pEnv->_physicsSystem->GetGravity().y);
+			_body->ApplyForceToCenterOfMass(worldUp * ((_tuning.hopSpeed / kHopKick + g) * mass));
 			_hopKickLeft -= dt;
 		}
 
