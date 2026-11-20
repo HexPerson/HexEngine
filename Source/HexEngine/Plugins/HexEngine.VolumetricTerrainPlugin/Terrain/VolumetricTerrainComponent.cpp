@@ -319,6 +319,29 @@ namespace HexEngine::VolumetricTerrain
 		_terrain.Tick(frameTime);
 	}
 
+	int32_t VolumetricTerrainComponent::FlattenArea(const math::Vector3& centre, float radius, float height, int32_t passes)
+	{
+		if (!_initialized)
+			return 0;
+
+		BrushSettings settings = _brush;
+		settings.mode = BrushMode::Flatten;
+		settings.radius = std::max(0.5f, radius);
+		settings.targetHeight = height;
+		settings.hardness = 1.0f;
+		settings.useGpu = false;
+
+		int32_t applied = 0;
+		_terrain.SetSculptingActive(true);
+		for (int32_t i = 0; i < std::max(1, passes); ++i)
+		{
+			if (_terrain.ApplyBrush(math::Vector3(centre.x, height, centre.z), settings, 1.0f / 12.0f))
+				++applied;
+		}
+		_terrain.SetSculptingActive(false);
+		return applied;
+	}
+
 	void VolumetricTerrainComponent::OnDebugRender()
 	{
 		if (!_initialized || (!_showDebugBounds && !_sculptEnabled))
@@ -376,6 +399,27 @@ namespace HexEngine::VolumetricTerrain
 	}
 }
 
-
-
-
+// Console: vt_flatten <x> <z> <radius> <height> [passes=8]
+// Flattens the scene's volumetric terrain to <height> within <radius> of (x, z) -
+// used to level ground under scripted building/road placement. Saved with the scene.
+HEX_COMMAND(vt_flatten)
+{
+	(void)pressed; (void)param;
+	using namespace HexEngine::VolumetricTerrain;
+	if (args == nullptr || args->Count() < 4)
+	{
+		LOG_WARN("vt_flatten: usage vt_flatten <x> <z> <radius> <height> [passes]");
+		return;
+	}
+	auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+	if (scene == nullptr)
+		return;
+	std::vector<VolumetricTerrainComponent*> terrains;
+	scene->GetComponents<VolumetricTerrainComponent>(terrains);
+	const float x = args->Get<float>(0), z = args->Get<float>(1), radius = args->Get<float>(2), height = args->Get<float>(3);
+	const int32_t passes = args->Count() > 4 ? static_cast<int32_t>(args->Get<float>(4)) : 8;
+	int32_t applied = 0;
+	for (auto* t : terrains)
+		applied += t->FlattenArea(math::Vector3(x, height, z), radius, height, passes);
+	LOG_INFO("vt_flatten: (%.1f, %.1f) r=%.1f h=%.2f passes=%d -> %d stamp(s) changed terrain on %zu terrain(s)", x, z, radius, height, passes, applied, terrains.size());
+}

@@ -659,6 +659,10 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 	bool VolumetricTerrainChunk::ApplyBrush(const math::Vector3& center, const BrushSettings& settings, float deltaTime)
 	{
+		// Any brush edit invalidates the pre-cooked collision blob loaded with the
+		// scene: it describes the OLD surface. Left in place, the collision refresh
+		// re-attached it ("cache-hit") so sculpted terrain kept its pre-edit
+		// collider forever - and the next save wrote that stale blob back out.
 		if (ApplyBrushGpu(center, settings, deltaTime))
 		{
 			BrushSettings cpuMirror = settings;
@@ -669,10 +673,14 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			_densityDirty = false;
 			_meshDirty = true;
 			_collisionDirty = true;
+			_cachedCookedCollisionBlob.clear();
 			return true;
 		}
 
-		return ApplyBrushCpu(center, settings, deltaTime, true, true);
+		const bool modified = ApplyBrushCpu(center, settings, deltaTime, true, true);
+		if (modified)
+			_cachedCookedCollisionBlob.clear();
+		return modified;
 	}
 
 	bool VolumetricTerrainChunk::ApplyBrushCpu(const math::Vector3& center, const BrushSettings& settings, float deltaTime, bool uploadGpuAfterModify, bool runRelaxation)
