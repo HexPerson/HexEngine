@@ -63,6 +63,12 @@ private:
 	CityEmergencyDispatcherSystemComponent* GetDispatcherSystem() const;
 	void CleanupAgentVehicle(RoutineAgentComponent* agent);
 	bool UpdateWalkStuckRecovery(RoutineAgentComponent* agent, float frameTime, const std::string& waypointEntityName, const char* failureReason);
+	// On-site behaviour: after arriving at a PlaceOfWork venue (shift or visit),
+	// the agent strolls between random reachable spots near the venue entry
+	// instead of freezing on the entry waypoint until its next schedule block.
+	void BeginOnSite(RoutineAgentComponent* agent, const RoutineTaskSpec& completedTask);
+	void UpdateOnSite(RoutineAgentComponent* agent, float frameTime);
+	bool PickOnSiteSpot(RoutineAgentComponent* agent, const math::Vector3& anchor, math::Vector3& outSpot);
 
 	struct AgentMotionState
 	{
@@ -88,6 +94,14 @@ private:
 	{
 		int32_t idle = -1;
 		int32_t walk = -1;
+	};
+
+	struct OnSiteState
+	{
+		math::Vector3 anchor = math::Vector3::Zero;	// venue entry waypoint (stroll centre)
+		float pauseSeconds = 0.0f;				// time left standing at the current spot
+		float walkSeconds = 0.0f;				// time spent on the current stroll (timeout)
+		bool walking = false;
 	};
 
 private:
@@ -118,5 +132,9 @@ private:
 	bool _wasGameRunning = false;
 	uint32_t _dayIndex = 0;
 	std::unordered_map<std::string, AgentAnimState> _agentAnimStates;
+	std::unordered_map<std::string, OnSiteState> _onSiteStates;
+	bool _onSiteWander = true;			// stroll around the venue between schedule blocks
+	float _onSiteWanderRadius = 5.0f;	// metres around the entry (stays inside kArrivalRadius = 8)
+	uint32_t _onSiteRng = 0x9E3779B9u;
 	std::unordered_map<const void*, LocomotionClips> _locomotionClipCache;
 };

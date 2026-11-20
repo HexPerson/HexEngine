@@ -1,5 +1,7 @@
 #include "CityRoutineSystemComponent.hpp"
 #include "CityEmergencyDispatcherSystemComponent.hpp"
+#include <algorithm>
+#include <cmath>
 #include <functional>
 #include <unordered_set>
 #include <HexEngine.Core/Entity/Component/DayNightCycleComponent.hpp>
@@ -201,6 +203,8 @@ void CityRoutineSystemComponent::Serialize(json& data, HexEngine::JsonFile* file
 	file->Serialize(data, "_animateLocomotion", _animateLocomotion);
 	file->Serialize(data, "_idleClipName", _idleClipName);
 	file->Serialize(data, "_walkClipName", _walkClipName);
+	file->Serialize(data, "_onSiteWander", _onSiteWander);
+	file->Serialize(data, "_onSiteWanderRadius", _onSiteWanderRadius);
 }
 
 void CityRoutineSystemComponent::Deserialize(json& data, HexEngine::JsonFile* file, uint32_t mask)
@@ -225,7 +229,10 @@ void CityRoutineSystemComponent::Deserialize(json& data, HexEngine::JsonFile* fi
 	file->Deserialize(data, "_animateLocomotion", _animateLocomotion);
 	file->Deserialize(data, "_idleClipName", _idleClipName);
 	file->Deserialize(data, "_walkClipName", _walkClipName);
+	file->Deserialize(data, "_onSiteWander", _onSiteWander);
+	file->Deserialize(data, "_onSiteWanderRadius", _onSiteWanderRadius);
 	_agentMotionStates.clear();
+	_onSiteStates.clear();
 	_agentAnimStates.clear();
 	_locomotionClipCache.clear();
 	_lastSimulationHour = -1.0f;
@@ -295,6 +302,7 @@ void CityRoutineSystemComponent::OnRemoveEntity(HexEngine::Entity* entity)
 
 	_agentMotionStates.erase(entity->GetName());
 	_agentAnimStates.erase(entity->GetName());
+	_onSiteStates.erase(entity->GetName());
 }
 
 bool CityRoutineSystemComponent::EnqueueTask(HexEngine::Entity* agentEntity, const RoutineTaskSpec& spec)
@@ -535,6 +543,10 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 		RoutineTaskSpec nextTask;
 		if (agent->TryPopTask(nextTask))
 		{
+			// Leaving the venue: drop the on-site stroll and any stale arrival flag
+			// from it so the new task's first walk doesn't "arrive" instantly.
+			if (_onSiteStates.erase(agent->GetEntity()->GetName()) > 0)
+				agent->ConsumeNavigationReached();
 			agent->SetActiveTask(nextTask);
 			SetAgentHidden(agent->GetEntity(), false);
 			agent->SetExecutionState(RoutineExecutionState::Idle);
@@ -545,7 +557,10 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 	}
 
 	if (!agent->GetActiveTask().has_value())
+	{
+		UpdateOnSite(agent, frameTime);
 		return;
+	}
 
 	auto task = *agent->GetActiveTask();
 	agent->StateTimerRef() += frameTime;
@@ -1333,7 +1348,9 @@ void CityRoutineSystemComponent::FinishTask(RoutineAgentComponent* agent, bool s
 	agent->SetActiveTask(std::nullopt);
 	if (!agent->RestoreSuspendedTask())
 	{
-		// nothing to restore
+		// Nothing to resume: if we just arrived at a venue, start strolling there.
+		if (!hideAfterCompletion && completedTask.has_value())
+			BeginOnSite(agent, *completedTask);
 	}
 	else
 	{
@@ -1575,6 +1592,129 @@ bool CityRoutineSystemComponent::UpdateWalkStuckRecovery(RoutineAgentComponent* 
 	agent->SetStateTimer(0.0f);
 	LOG_WARN("CityRoutineSystem: Agent '%s' triggered walk stuck recovery toward '%s'", agent->GetEntity()->GetName().c_str(), waypointEntityName.c_str());
 	return false;
+}
+
+namespace
+{
+	float OnSiteRand01(uint32_t& s)
+	{
+		s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+		return (s & 0xFFFFFF) / (float)0x1000000;
+	}
+}
+
+void CityRoutineSystemComponent::BeginOnSite(RoutineAgentComponent* agent, const RoutineTaskSpec& completedTask)
+{
+	if (!_onSiteWander || agent == nullptr || agent->GetEntity() == nullptr)
+		return;
+	auto* scene = agent->GetEntity()->GetScene();
+	if (scene == nullptr)
+		return;
+
+	// Only venues (shifts and visits) - not home: residents at home stay put.
+	auto* venue = completedTask.targetEntityName.empty() ? nullptr : scene->GetEntityByName(completedTask.targetEntityName);
+	if (venue == nullptr || venue->GetComponent<PlaceOfWorkComponent>() == nullptr)
+		return;
+
+	OnSiteState state;
+	if (!ResolveAnchorPosition(completedTask.targetEntryWaypointName, state.anchor))
+		state.anchor = agent->GetEntity()->GetWorldTM().Translation();
+	// Stagger the first stroll so a shift's workers don't all set off together.
+	state.pauseSeconds = 2.0f + OnSiteRand01(_onSiteRng) * 8.0f;
+	_onSiteStates[agent->GetEntity()->GetName()] = state;
+}
+
+bool CityRoutineSystemComponent::PickOnSiteSpot(RoutineAgentComponent* agent, const math::Vector3& anchor, math::Vector3& outSpot)
+{
+	auto* entity = agent->GetEntity();
+	auto* scene = entity->GetScene();
+	auto* nav = entity->GetComponent<HexEngine::NavigationComponent>();
+	if (scene == nullptr || nav == nullptr)
+		return false;
+
+	const math::Vector3 from = entity->GetWorldTM().Translation();
+	const float radius = std::clamp(_onSiteWanderRadius, 1.5f, kArrivalRadius - 1.0f);
+	for (int32_t attempt = 0; attempt < 6; ++attempt)
+	{
+		const float angle = OnSiteRand01(_onSiteRng) * 6.2831853f;
+		const float r = 1.25f + OnSiteRand01(_onSiteRng) * (radius - 1.25f);
+		const math::Vector3 candidate(anchor.x + std::cos(angle) * r, anchor.y, anchor.z + std::sin(angle) * r);
+		if ((candidate - from).LengthSquared() < 1.0f)
+			continue;
+
+		nav->ClearPath();
+		nav->FindPath(scene->GetNavMeshId(), from, candidate, 5.0f);
+		if (!nav->HasPath())
+			continue;
+
+		// Accept only short in-room strolls: the path must end at the candidate on
+		// the same floor and not detour (e.g. out of the door and round the block).
+		const auto& pts = nav->GetPathPoints();
+		const math::Vector3 end = pts.back();
+		math::Vector3 endFlat = end - candidate; endFlat.y = 0.0f;
+		float length = 0.0f;
+		math::Vector3 prev = from;
+		for (const auto& p : pts) { length += (p - prev).Length(); prev = p; }
+		math::Vector3 direct = end - from; direct.y = 0.0f;
+		if (endFlat.Length() > 0.75f || std::fabs(end.y - anchor.y) > 0.75f ||
+			length > direct.Length() * 1.6f + 1.5f)
+		{
+			nav->ClearPath();
+			continue;
+		}
+		outSpot = end;
+		return true;
+	}
+	nav->ClearPath();
+	return false;
+}
+
+void CityRoutineSystemComponent::UpdateOnSite(RoutineAgentComponent* agent, float frameTime)
+{
+	auto it = _onSiteStates.find(agent->GetEntity()->GetName());
+	if (it == _onSiteStates.end())
+		return;
+	if (!_onSiteWander || agent->GetEntity()->HasFlag(HexEngine::EntityFlags::DoNotRender))
+	{
+		_onSiteStates.erase(it);
+		return;
+	}
+	OnSiteState& state = it->second;
+	auto* nav = agent->GetEntity()->GetComponent<HexEngine::NavigationComponent>();
+	if (nav == nullptr)
+		return;
+
+	if (state.walking)
+	{
+		state.walkSeconds += frameTime;
+		const bool arrived = agent->ConsumeNavigationReached();
+		if (arrived || !nav->HasPath() || state.walkSeconds > 25.0f)
+		{
+			nav->ClearPath();
+			state.walking = false;
+			state.pauseSeconds = 8.0f + OnSiteRand01(_onSiteRng) * 17.0f;   // linger 8-25 s
+		}
+		return;
+	}
+
+	state.pauseSeconds -= frameTime;
+	if (state.pauseSeconds > 0.0f)
+		return;
+
+	math::Vector3 spot;
+	if (PickOnSiteSpot(agent, state.anchor, spot))
+	{
+		// Stroll, not commute: a little slower than the agent's walk.
+		if (agent->GetWalkSpeed() > 0.0f)
+			nav->SetMovementSpeed(agent->GetWalkSpeed() * 0.7f);
+		agent->ConsumeNavigationReached();   // clear any stale flag before this stroll
+		state.walking = true;
+		state.walkSeconds = 0.0f;
+	}
+	else
+	{
+		state.pauseSeconds = 4.0f;   // cramped spot / no navmesh nearby: try again shortly
+	}
 }
 
 void CityRoutineSystemComponent::OnDebugRender()
