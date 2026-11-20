@@ -50,6 +50,17 @@ namespace HexEngine
 		// Unknown ids answer true (conservative - see Class::hasDebugRender).
 		bool HasDebugRender(uint32_t componentId);
 
+		// Hot reload of a module that registered classes (the game DLL).
+		// Classes are attributed to the module their type_info lives in.
+		std::vector<std::string> GetModuleClassNames(void* moduleHandle) const;
+		// Drop the factories of every class owned by `moduleHandle`. Must run
+		// while the module is STILL LOADED: the std::functions were built in it,
+		// so destroying them executes its code. The entries (and their compIds)
+		// stay; re-registering the same name from the reloaded module fills
+		// them back in. A released class has empty newInstanceFn/cloneInstanceFn
+		// and a null type - callers must check before creating instances.
+		void ReleaseModuleClasses(void* moduleHandle);
+
 	private:
 		std::map<uint32_t, Class> _registry;
 	};

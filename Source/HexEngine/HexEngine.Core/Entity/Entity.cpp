@@ -1310,6 +1310,8 @@ namespace HexEngine
 				{
 					if (cls.second.name == componentName)
 					{
+						if (!cls.second.newInstanceFn)
+							break;   // class released while its module hot-reloads
 						component = cls.second.newInstanceFn(this);
 						AddComponent(component);
 						break;
@@ -1319,6 +1321,11 @@ namespace HexEngine
 
 			if (!component)
 			{
+				if (auto* released = g_pEnv->_classRegistry->Find(componentName); released != nullptr && !released->newInstanceFn)
+				{
+					LOG_WARN("Skipped component '%s' on '%s': its module is reloading", componentName.c_str(), GetName().c_str());
+					continue;
+				}
 				LOG_CRIT("Unhandled component load: %s", componentName.c_str());
 				return;
 			}

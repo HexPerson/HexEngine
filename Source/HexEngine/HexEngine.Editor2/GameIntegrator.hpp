@@ -114,7 +114,14 @@ namespace HexEditor
 		void EnsureCodeWatcher();
 		void OnCodeFileChangeEvent(const HexEngine::DirectoryWatchInfo& info, const HexEngine::FileChangeActionMap& actionMap);
 		bool HotReloadGame();
-		bool UnloadGame();
+		// preserveSceneComponents: a hot reload - stash the game's components on
+		// every loaded entity and put them back after the next LoadGame.
+		bool UnloadGame(bool preserveSceneComponents = false);
+		// Game-module components live in the game DLL (vtables, factories, widget
+		// callbacks), so they can't outlive it: serialise + remove them before
+		// FreeLibrary, recreate them from the new DLL's factories after loading.
+		void StashGameComponents();
+		void RestoreGameComponents();
 		fs::path StageRuntimeGameDllCopy(const fs::path& sourceDllPath);
 		fs::path ResolveBuildProjectPath(const std::wstring& projectFileName) const;
 		fs::path FindMSBuildExecutable() const;
@@ -152,5 +159,15 @@ namespace HexEditor
 		std::mutex _reloadMutex;
 		fs::path _loadedGameDllPath;
 		HexEngine::Camera* _origMainCamera = nullptr;
+
+		struct StashedGameComponent
+		{
+			std::weak_ptr<HexEngine::Scene> scene;
+			HexEngine::EntityId entity;
+			std::string entityName;
+			json data;   // {"name": class, ...Serialize()}
+		};
+		// Held across the unload -> load window; kept until a load succeeds.
+		std::vector<StashedGameComponent> _stashedGameComponents;
 	};
 }

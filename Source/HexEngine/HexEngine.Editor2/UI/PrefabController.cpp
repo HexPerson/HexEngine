@@ -1155,7 +1155,7 @@ namespace HexEditor
 					continue;
 				}
 
-				component = cls->newInstanceFn(entity);
+				component = cls->newInstanceFn ? cls->newInstanceFn(entity) : nullptr;
 				if (component == nullptr)
 				{
 					LOG_WARN("Prefab patch failed to instantiate component class '%s' on '%s'.",
@@ -1834,7 +1834,7 @@ namespace HexEditor
 					continue;
 				}
 
-				auto* created = cls->newInstanceFn(entity);
+				auto* created = cls->newInstanceFn ? cls->newInstanceFn(entity) : nullptr;
 				if (created == nullptr)
 					continue;
 				entity->AddComponent(created);

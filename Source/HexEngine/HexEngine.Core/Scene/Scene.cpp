@@ -1078,7 +1078,7 @@ namespace HexEngine
 				return nullptr;
 			}
 
-			auto clonedComponent = cls->cloneInstanceFn(clone, comp);
+			auto clonedComponent = cls->cloneInstanceFn ? cls->cloneInstanceFn(clone, comp) : nullptr;   // empty while its module reloads
 
 			clone->AddComponent(clonedComponent);
 		}

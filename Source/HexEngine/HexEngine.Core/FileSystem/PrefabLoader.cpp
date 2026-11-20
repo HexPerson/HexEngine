@@ -187,7 +187,7 @@ namespace
 				continue;
 			}
 
-			component = cls->newInstanceFn(entity);
+			component = (cls->newInstanceFn ? cls->newInstanceFn(entity) : nullptr);
 			if (component == nullptr)
 			{
 				LOG_WARN("Prefab variant failed to instantiate component class '%s' on '%s'.",

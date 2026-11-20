@@ -1,6 +1,7 @@
 
 #include "GameIntegrator.hpp"
 #include "Editor.hpp"
+#include "UI/EditorUI.hpp"
 #include <HexEngine.Core\Entity\Component\PlayerStartComponent.hpp>
 #include <HexEngine.Core\Entity\Component\RigidBody.hpp>
 #include <HexEngine.Core\Environment\LogFile.hpp>
@@ -10,6 +11,7 @@
 #include <chrono>
 #include <deque>
 #include <fstream>
+#include <unordered_set>
 
 namespace HexEditor
 {
@@ -323,6 +325,10 @@ namespace HexEditor
 
 		_gameExtension->OnRegisterClasses();
 		_state = GameTestState::Loaded;
+
+		// Hot reload: put back the game components stashed by UnloadGame(true),
+		// now built from the new module's factories.
+		RestoreGameComponents();
 		return true;
 	}
 
@@ -926,14 +932,18 @@ namespace HexEditor
 		if (_gameDll == nullptr && _gameExtension == nullptr)
 			return false;
 
+		// Build BEFORE unloading: the loaded module is a staged copy
+		// (Build/HotReload/Game_Loaded_N.dll), so Build/Game.dll can be rebuilt
+		// under it - and a compile error then leaves the old game fully working
+		// instead of unloaded.
+		if (!BuildGame(_lastBuildProjectFileName))
+			return false;
+
 		const bool wasStarted = (_state == GameTestState::Started);
 		if (wasStarted)
 			StopGame();
 
-		if (!UnloadGame())
-			return false;
-
-		if (!BuildGame(_lastBuildProjectFileName))
+		if (!UnloadGame(true))
 			return false;
 
 		if (!LoadGame())
@@ -986,7 +996,7 @@ namespace HexEditor
 		}
 
 		const bool wasStarted = (_state == GameTestState::Started);
-		if ((_gameDll != nullptr || _gameExtension != nullptr) && !UnloadGame())
+		if ((_gameDll != nullptr || _gameExtension != nullptr) && !UnloadGame(true))
 		{
 			error = "unloading the previous game module failed";
 			return false;
@@ -1004,10 +1014,32 @@ namespace HexEditor
 		return true;
 	}
 
-	bool GameIntegrator::UnloadGame()
+	bool GameIntegrator::UnloadGame(bool preserveSceneComponents)
 	{
 		if (_state == GameTestState::Started)
 			StopGame();
+
+		if (_gameDll != nullptr)
+		{
+			// Everything below runs game code, so it must happen while the module
+			// is still mapped: serialising/destroying its components, deleting
+			// inspector widgets whose callbacks were built in it, and destroying
+			// the registry's std::function factories it created.
+			if (preserveSceneComponents)
+				StashGameComponents();
+
+			if (g_pUIManager != nullptr)
+			{
+				if (auto* inspector = g_pUIManager->GetInspector(); inspector != nullptr)
+				{
+					auto* inspected = inspector->GetInspectingEntity();
+					inspector->InspectEntity(nullptr);
+					if (inspected != nullptr)
+						inspector->RequestForcedRefresh(inspected);   // rebuilt next frame, from the new module
+				}
+			}
+			HexEngine::g_pEnv->GetUIManager().FlushPendingDeletions();
+		}
 
 		if (_runtimeFS)
 		{
@@ -1029,6 +1061,7 @@ namespace HexEditor
 
 		if (_gameDll)
 		{
+			HexEngine::g_pEnv->_classRegistry->ReleaseModuleClasses(_gameDll);
 			FreeLibrary(_gameDll);
 			_gameDll = nullptr;
 		}
@@ -1042,6 +1075,94 @@ namespace HexEditor
 
 		_state = GameTestState::None;
 		return true;
+	}
+
+	void GameIntegrator::StashGameComponents()
+	{
+		if (_gameDll == nullptr)
+			return;
+
+		const auto names = HexEngine::g_pEnv->_classRegistry->GetModuleClassNames(_gameDll);
+		if (names.empty())
+			return;
+		const std::unordered_set<std::string> gameClasses(names.begin(), names.end());
+
+		std::error_code ec;
+		const fs::path codecPath = fs::temp_directory_path(ec) / L"HexEngine_HotReloadComponents.json";
+		HexEngine::JsonFile codec(codecPath, std::ios::out | std::ios::trunc);
+
+		int32_t stashed = 0;
+		for (const auto& scene : HexEngine::g_pEnv->_sceneManager->GetAllScenes())
+		{
+			if (!scene)
+				continue;
+			std::vector<HexEngine::EntityId> ids;
+			scene->GetLiveEntityIds(ids);
+			for (const HexEngine::EntityId& id : ids)
+			{
+				HexEngine::Entity* e = scene->TryGetEntity(id);
+				if (e == nullptr || e->IsPendingDeletion())
+					continue;
+				for (HexEngine::BaseComponent* comp : e->GetAllComponents())
+				{
+					if (comp == nullptr || gameClasses.find(comp->GetComponentName()) == gameClasses.end())
+						continue;
+					StashedGameComponent entry;
+					entry.scene = scene;
+					entry.entity = id;
+					entry.entityName = e->GetName();
+					entry.data = json::object();
+					entry.data["name"] = comp->GetComponentName();
+					comp->Serialize(entry.data, &codec);
+					_stashedGameComponents.push_back(std::move(entry));
+					e->RemoveComponent(comp);
+					++stashed;
+				}
+			}
+		}
+		fs::remove(codecPath, ec);
+		LOG_INFO("Hot reload: stashed %d game components (%d game classes)", stashed, (int32_t)gameClasses.size());
+	}
+
+	void GameIntegrator::RestoreGameComponents()
+	{
+		if (_stashedGameComponents.empty())
+			return;
+
+		std::error_code ec;
+		const fs::path codecPath = fs::temp_directory_path(ec) / L"HexEngine_HotReloadComponents.json";
+		HexEngine::JsonFile codec(codecPath, std::ios::out | std::ios::trunc);
+
+		int32_t restored = 0, lost = 0;
+		for (auto& entry : _stashedGameComponents)
+		{
+			auto scene = entry.scene.lock();
+			HexEngine::Entity* e = scene ? scene->TryGetEntity(entry.entity) : nullptr;
+			if (e == nullptr || e->IsPendingDeletion() || e->GetName() != entry.entityName)
+			{
+				++lost;
+				continue;
+			}
+			const std::string name = entry.data.value("name", std::string());
+			auto* cls = HexEngine::g_pEnv->_classRegistry->Find(name);
+			if (cls == nullptr || !cls->newInstanceFn)
+			{
+				LOG_WARN("Hot reload: the new game module no longer registers '%s'; dropped it from '%s'", name.c_str(), entry.entityName.c_str());
+				++lost;
+				continue;
+			}
+			HexEngine::BaseComponent* comp = e->AddComponent(cls->newInstanceFn(e));
+			if (comp == nullptr)
+			{
+				++lost;
+				continue;
+			}
+			comp->Deserialize(entry.data, &codec);
+			++restored;
+		}
+		_stashedGameComponents.clear();
+		fs::remove(codecPath, ec);
+		LOG_INFO("Hot reload: restored %d game components (%d lost)", restored, lost);
 	}
 
 	fs::path GameIntegrator::StageRuntimeGameDllCopy(const fs::path& sourceDllPath)

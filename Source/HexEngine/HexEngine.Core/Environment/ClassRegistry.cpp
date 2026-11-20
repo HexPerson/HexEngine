@@ -97,6 +97,18 @@ namespace HexEngine
 	{
 		if (auto current = Find(nameHash); current != nullptr)
 		{
+			// A class released for a module hot reload: the reloaded module is
+			// registering it again, so take its new factories (same compId, so
+			// component signatures and cached ids stay valid).
+			if (!current->newInstanceFn)
+			{
+				current->type = &type;
+				current->cloneInstanceFn = cloneInstanceFn;
+				current->newInstanceFn = newInstanceFn;
+				LOG_INFO("Re-registered class '%s' with ID: %d (module reload)", name.c_str(), current->compId);
+				return current->compId;
+			}
+
 			LOG_DEBUG("A class with name '%s' has already been registered, ignoring", name.c_str());
 			return current->compId;
 		}
@@ -163,5 +175,43 @@ namespace HexEngine
 	{
 		auto* cls = FindByComponentId(componentId);
 		return cls == nullptr || cls->hasDebugRender;
+	}
+
+	namespace
+	{
+		bool ClassOwnedByModule(const ClassRegistry::Class& cls, void* moduleHandle)
+		{
+			if (cls.type == nullptr || moduleHandle == nullptr)
+				return false;
+			HMODULE owner = nullptr;
+			if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+				reinterpret_cast<LPCWSTR>(cls.type), &owner))
+				return false;
+			return owner == static_cast<HMODULE>(moduleHandle);
+		}
+	}
+
+	std::vector<std::string> ClassRegistry::GetModuleClassNames(void* moduleHandle) const
+	{
+		std::vector<std::string> names;
+		for (const auto& it : _registry)
+		{
+			if (ClassOwnedByModule(it.second, moduleHandle))
+				names.push_back(it.second.name);
+		}
+		return names;
+	}
+
+	void ClassRegistry::ReleaseModuleClasses(void* moduleHandle)
+	{
+		for (auto& it : _registry)
+		{
+			if (!ClassOwnedByModule(it.second, moduleHandle))
+				continue;
+			it.second.newInstanceFn = nullptr;
+			it.second.cloneInstanceFn = nullptr;
+			it.second.type = nullptr;
+			LOG_INFO("Released class '%s' (ID %d) for module unload", it.second.name.c_str(), it.second.compId);
+		}
 	}
 }

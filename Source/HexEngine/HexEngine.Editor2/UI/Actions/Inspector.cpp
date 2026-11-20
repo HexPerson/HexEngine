@@ -670,7 +670,7 @@ namespace HexEditor
 				return;
 			}
 
-			HexEngine::BaseComponent* component = cls->newInstanceFn(_inspecting);
+			HexEngine::BaseComponent* component = (cls->newInstanceFn ? cls->newInstanceFn(_inspecting) : nullptr);
 			if (component == nullptr)
 			{
 				LOG_WARN("Failed to create component instance for id %u", compId);

@@ -2576,7 +2576,7 @@ namespace HexEngine
 			// construction. AddComponent rejects a duplicate type by DELETING the
 			// new instance and returning the existing one - only ever use the
 			// returned pointer.
-			BaseComponent* created = cls->newInstanceFn(entity);
+			BaseComponent* created = cls->newInstanceFn ? cls->newInstanceFn(entity) : nullptr;
 			if (created == nullptr)
 			{
 				err = MakeError(id, ErrorCode::Internal, "failed to instantiate component '" + componentName + "'");
@@ -3078,7 +3078,7 @@ namespace HexEngine
 					if (e == nullptr)
 						return MakeError(id, ErrorCode::Internal, "could not create a scratch entity");
 					e->SetFlag(EntityFlags::DoNotSave);
-					BaseComponent* created = cls->newInstanceFn(e);
+					BaseComponent* created = cls->newInstanceFn ? cls->newInstanceFn(e) : nullptr;
 					BaseComponent* component = created ? e->AddComponent(created) : nullptr;
 					if (component == nullptr)
 						return MakeError(id, ErrorCode::Internal, "failed to instantiate '" + name + "'");

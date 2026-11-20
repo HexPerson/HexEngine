@@ -436,7 +436,7 @@ namespace HexEditor
 				if (cls == nullptr)
 					return nullptr;
 
-				component = cls->newInstanceFn(entity);
+				component = cls->newInstanceFn ? cls->newInstanceFn(entity) : nullptr;
 				if (component == nullptr)
 					return nullptr;
 
