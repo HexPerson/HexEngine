@@ -1,4 +1,5 @@
 #include "RoutineAgentComponent.hpp"
+#include "PlaceOfWorkComponent.hpp"
 #include <HexEngine.Core/Entity/Component/NavigationComponent.hpp>
 #include <HexEngine.Core/Entity/Component/Transform.hpp>
 #include <HexEngine.Core/Entity/Entity.hpp>
@@ -92,6 +93,8 @@ void RoutineAgentComponent::Deserialize(json& data, HexEngine::JsonFile* file, u
 	_stateTimer = 0.0f;
 	_retryTimer = 0.0f;
 	_navigationReachedFlag = false;
+	_settledVenueName.clear();
+	_heldAtVenue = false;
 }
 
 bool RoutineAgentComponent::CreateWidget(HexEngine::ComponentWidget* widget)
@@ -292,4 +295,15 @@ void RoutineAgentComponent::RebuildSchedule()
 
 	_plannedBlockKey = ~0ull;
 	_plannedTargetName.clear();
+}
+
+bool RoutineAgentComponent::WorkplaceOffersService(const std::string& tag) const
+{
+	auto* self = GetEntity();
+	auto* scene = self != nullptr ? self->GetScene() : nullptr;
+	if (scene == nullptr || _assignedWorkplaceEntityName.empty())
+		return false;
+	auto* work = scene->GetEntityByName(_assignedWorkplaceEntityName);
+	auto* place = work != nullptr ? work->GetComponent<PlaceOfWorkComponent>() : nullptr;
+	return place != nullptr && place->OffersService(tag);
 }

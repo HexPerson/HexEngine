@@ -1,6 +1,7 @@
 #pragma once
 
 #include <HexEngine.Core/HexEngine.hpp>
+#include <HexEngine.Core/Entity/Component/IRoutineAgentState.hpp>
 
 enum class RoutineTaskType
 {
@@ -66,7 +67,7 @@ struct RoutineTaskSpec
 	uint32_t incidentId = 0;
 };
 
-class RoutineAgentComponent : public HexEngine::UpdateComponent
+class RoutineAgentComponent : public HexEngine::UpdateComponent, public HexEngine::IRoutineAgentState
 {
 public:
 	CREATE_COMPONENT_ID(RoutineAgentComponent);
@@ -79,8 +80,8 @@ public:
 
 	const std::vector<std::string>& GetRoleTags() const { return _roleTags; }
 	const std::string& GetRoleTagsCsv() const { return _roleTagsCsv; }
-	const std::string& GetHomeEntityName() const { return _homeEntityName; }
-	const std::string& GetAssignedWorkplaceEntityName() const { return _assignedWorkplaceEntityName; }
+	virtual const std::string& GetHomeEntityName() const override { return _homeEntityName; }
+	virtual const std::string& GetAssignedWorkplaceEntityName() const override { return _assignedWorkplaceEntityName; }
 	const std::string& GetPreferredVehiclePrefabPath() const { return _preferredVehiclePrefabPath; }
 	const std::string& GetCurrentVehicleEntityName() const { return _currentVehicleEntityName; }
 	bool IsEmergencyEligible() const { return _isEmergencyEligible; }
@@ -134,6 +135,15 @@ public:
 
 	bool ConsumeNavigationReached();
 
+	// IRoutineAgentState: the venue the agent arrived at (set by the routine
+	// system when a trip completes, cleared when the next trip starts) and the
+	// game-side "stay here" hold.
+	virtual const std::string& GetSettledVenueName() const override { return _settledVenueName; }
+	void SetSettledVenueName(const std::string& venue) { _settledVenueName = venue; }
+	virtual void SetHeldAtVenue(bool held) override { _heldAtVenue = held; }
+	virtual bool IsHeldAtVenue() const override { return _heldAtVenue; }
+	virtual bool WorkplaceOffersService(const std::string& tag) const override;
+
 private:
 	void RebuildRoleTags();
 	void RebuildSchedule();
@@ -165,4 +175,6 @@ private:
 	uint64_t _plannedBlockKey = ~0ull;
 	std::string _plannedTargetName;
 	float _seedCooldown = 0.0f;
+	std::string _settledVenueName;	// runtime
+	bool _heldAtVenue = false;		// runtime
 };

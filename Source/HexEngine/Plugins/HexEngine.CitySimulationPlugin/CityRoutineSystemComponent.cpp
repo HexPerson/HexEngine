@@ -521,6 +521,15 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 {
 	agent->SeedCooldownRef() = std::max(0.0f, agent->SeedCooldownRef() - frameTime);
 	EnsureWorkplaceAssignment(agent, simulationHour, workplaceOccupancy);
+
+	// Held by the game (e.g. a job pickup is waiting on this NPC): stay on site
+	// - no new trip, schedule changes wait until the hold is released.
+	if (agent->IsHeldAtVenue() && !agent->GetActiveTask().has_value() && !agent->GetSettledVenueName().empty())
+	{
+		UpdateOnSite(agent, frameTime);
+		return;
+	}
+
 	SeedBaselineTaskIfIdle(agent, simulationHour);
 
 	if (agent->GetActiveTask().has_value())
@@ -547,6 +556,7 @@ void CityRoutineSystemComponent::UpdateAgentState(RoutineAgentComponent* agent, 
 			// from it so the new task's first walk doesn't "arrive" instantly.
 			if (_onSiteStates.erase(agent->GetEntity()->GetName()) > 0)
 				agent->ConsumeNavigationReached();
+			agent->SetSettledVenueName(std::string());
 			agent->SetActiveTask(nextTask);
 			SetAgentHidden(agent->GetEntity(), false);
 			agent->SetExecutionState(RoutineExecutionState::Idle);
@@ -1349,6 +1359,8 @@ void CityRoutineSystemComponent::FinishTask(RoutineAgentComponent* agent, bool s
 	if (!agent->RestoreSuspendedTask())
 	{
 		// Nothing to resume: if we just arrived at a venue, start strolling there.
+		if (completedTask.has_value())
+			agent->SetSettledVenueName(completedTask->targetEntityName);
 		if (!hideAfterCompletion && completedTask.has_value())
 			BeginOnSite(agent, *completedTask);
 	}
