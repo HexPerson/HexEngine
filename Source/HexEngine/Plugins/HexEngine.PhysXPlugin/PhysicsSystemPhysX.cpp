@@ -490,7 +490,11 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 				if (body && body->IsPoseWritebackEnabled())
 				{
 
-					HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->Lock();
+					// Lock and unlock the SAME scene: re-reading GetCurrentScene() for
+					// the unlock aborted the editor (unlock of an unowned mutex) when an
+					// open_project load switched the current scene mid-loop.
+					auto lockedScene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+					lockedScene->Lock();
 
 					auto transform = body->GetTransform();
 
@@ -527,7 +531,7 @@ void PhysicsSystemPhysX::Update(float simulationTime)
 					if (bodyComponent)
 						bodyComponent->EnableForcePoseUpdates(true);
 
-					HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->Unlock();
+					lockedScene->Unlock();
 				}
 			}
 		}
