@@ -203,6 +203,7 @@ namespace HexEngine
 
 	void Mesh::Clear()
 	{
+		++_geometryRevision;
 		_vertices.clear();
 		_indices.clear();
 		_simpleVertices.clear();
@@ -405,6 +406,7 @@ namespace HexEngine
 			}
 		}
 
+		++_geometryRevision;
 		_vertices = vertices;
 		_indices = indices;
 		_simpleVertices.clear();
@@ -440,6 +442,7 @@ namespace HexEngine
 		vertexFixed = vertex;
 		vertexFixed._position.w = 1.0f;
 
+		++_geometryRevision;
 		_vertices.push_back(vertexFixed);
 
 		SimpleMeshVertex smv;
@@ -451,6 +454,7 @@ namespace HexEngine
 
 	void Mesh::AddIndex(const MeshIndexFormat index)
 	{
+		++_geometryRevision;
 		_indices.push_back(index);
 	}
 
@@ -464,6 +468,7 @@ namespace HexEngine
 
 	void Mesh::AddIndices(const std::vector<MeshIndexFormat>& indices)
 	{
+		++_geometryRevision;
 		_indices.insert(_indices.end(), indices.begin(), indices.end());
 	}
 
@@ -485,10 +490,7 @@ namespace HexEngine
 		_objectBuffer->cullDistance = material->GetCullDistance();
 		_objectBuffer->pad = 0;
 
-		if (HasAnimations())
-		{
-			_objectBuffer->_flags |= OBJECT_FLAGS_HAS_ANIMATION;
-		}
+		_objectBuffer->_flags |= GetAnimationObjectFlags();
 
 		_objectBuffer->_material = material->_properties;
 		_objectBuffer->_material.isInTransparencyPhase = isTransparencyPhase ? 1 : 0;
@@ -499,6 +501,7 @@ namespace HexEngine
 
 	void Mesh::SetNumFaces(uint32_t numFaces)
 	{
+		++_geometryRevision;
 		_faceCount = numFaces;
 	}
 
@@ -520,6 +523,52 @@ namespace HexEngine
 	void Mesh::SetOBB(const dx::BoundingOrientedBox& obb)
 	{
 		_obb = obb;
+	}
+
+	bool Mesh::TranslateGeometry(const math::Vector3& offset)
+	{
+		if (HasAnimations() || _isDynamicMesh || _vertices.empty())
+			return false;
+
+		for (auto& v : _vertices)
+		{
+			v._position.x += offset.x;
+			v._position.y += offset.y;
+			v._position.z += offset.z;
+		}
+		for (auto& v : _simpleVertices)
+		{
+			v._position.x += offset.x;
+			v._position.y += offset.y;
+			v._position.z += offset.z;
+		}
+		++_geometryRevision;
+
+		_aabb.Center.x += offset.x;
+		_aabb.Center.y += offset.y;
+		_aabb.Center.z += offset.z;
+		_obb.Center.x += offset.x;
+		_obb.Center.y += offset.y;
+		_obb.Center.z += offset.z;
+
+		// A live mesh already has immutable (USAGE_DEFAULT) buffers: drop and
+		// recreate them from the moved CPU data. CreateBuffers refuses to run
+		// while any buffer still exists.
+		if (_vertexBuffer != nullptr || _indexBuffer != nullptr || _simpleVertexBuffer != nullptr)
+		{
+			SAFE_DELETE(_vertexBuffer);
+			SAFE_DELETE(_indexBuffer);
+			SAFE_DELETE(_simpleVertexBuffer);
+			_vertexBufferCapacity = 0;
+			_simpleVertexBufferCapacity = 0;
+			_indexBufferCapacity = 0;
+			if (!CreateBuffers())
+			{
+				LOG_WARN("Mesh '%s': failed to recreate GPU buffers after TranslateGeometry", GetName().c_str());
+				return false;
+			}
+		}
+		return true;
 	}
 
 	uint32_t Mesh::GetNumIndices() const

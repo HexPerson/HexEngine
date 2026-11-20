@@ -181,8 +181,13 @@ namespace HexEngine
 		
 		class AssetPackageManager* _assetPackageManager = nullptr;
 		class IconService* _iconService = nullptr;
-		//class IScriptEngine* _scriptEngine = nullptr; // disabled currently
+		// Optional gameplay script runtime (HexEngine.ScriptingPlugin, Lua). Null
+		// when the plugin isn't loaded; ScriptComponents then stay inert.
+		class IScriptEngine* _scriptEngine = nullptr;
 		class IStreamlineProvider* _streamlineProvider = nullptr;
+		// Optional temporal upscaler (FSR plugin). Null when no plugin provides
+		// one; cameras then refuse EnableFSR and render natively.
+		class IUpscalerProvider* _upscalerProvider = nullptr;
 		// Optional Steamworks integration. Null when not running under Steam,
 		// SteamAPI_Init failed, or the plugin DLL isn't present - callers
 		// should null-check and treat it as a "graceful disable" rather than

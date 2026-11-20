@@ -1,5 +1,6 @@
 
 
+#include <unordered_set>
 #include "SceneSaveFile.hpp"
 #include "../HexEngine.hpp"
 
@@ -30,7 +31,10 @@ namespace HexEngine
 		{
 			for (auto&& ent : vec.second)
 			{
-				if(ent->HasFlag(EntityFlags::DoNotSave) == false)
+				// Skip entities mid-removal too: a despawning traffic car saved in
+				// that state came back flagged IsPendingRemoval, was never reaped,
+				// and got written out again on every save.
+				if (ent->HasFlag(EntityFlags::DoNotSave) == false && !ent->IsPendingDeletion())
 					finalEntityList.push_back(ent);
 			}
 		}
@@ -131,7 +135,7 @@ namespace HexEngine
 		{
 			LOG_DEBUG("Saving entity '%s' with %d components", ent->GetName().c_str(), ent->GetAllComponents().size());
 
-			if (ent->HasFlag(EntityFlags::DoNotSave) == false)
+			if (ent->HasFlag(EntityFlags::DoNotSave) == false && !ent->IsPendingDeletion())
 				ent->Serialize(entities, this);
 		}
 
@@ -142,7 +146,7 @@ namespace HexEngine
 			// now save all the parent information
 			for (auto&& ent : entitiesVec)
 			{
-				if (ent->HasFlag(EntityFlags::DoNotSave) == false)
+				if (ent->HasFlag(EntityFlags::DoNotSave) == false && !ent->IsPendingDeletion())
 				{
 					if (ent->GetParent() != nullptr)
 					{
@@ -222,6 +226,18 @@ namespace HexEngine
 	{
 		bool isPrefab = HEX_HASFLAG(_flags, SceneFileFlags::IsPrefab);
 
+		// Hold physics for the duration of a scene load (see SceneManager::IsLoadingScene).
+		// Entities come alive one by one as they deserialize; without the hold, a
+		// dynamic body near the top of the file simulates - and falls - for as long as
+		// the rest of the level's colliders take to arrive. Prefabs drop into a world
+		// that is already there, so they don't hold.
+		struct SceneLoadHold
+		{
+			SceneManager* manager;
+			explicit SceneLoadHold(SceneManager* m) : manager(m) { if (manager) manager->BeginSceneLoad(); }
+			~SceneLoadHold() { if (manager) manager->EndSceneLoad(); }
+		} loadHold((!isPrefab && g_pEnv != nullptr) ? g_pEnv->_sceneManager : nullptr);
+
 		if (isPrefab == false)
 			loadIntoExistingScene->SetName(_fsPathObj.stem().wstring());
 
@@ -240,8 +256,38 @@ namespace HexEngine
 
 		std::vector<std::pair<json, Entity*>> createdEnts;
 
+		// Entities saved while pending removal (and their whole subtrees: a pending
+		// parent makes its children pending too) are dropped, not resurrected.
+		std::unordered_set<std::string> pendingRemoval;
 		for (auto& ent : sceneData["entities"].items())
 		{
+			if (auto flagsIt = ent.value().find("flags"); flagsIt != ent.value().end() && flagsIt->is_number_integer() &&
+				HEX_HASFLAG((EntityFlags)flagsIt->get<int32_t>(), EntityFlags::IsPendingRemoval))
+				pendingRemoval.insert(ent.key());
+		}
+		if (!pendingRemoval.empty() && sceneData.contains("hierarchy") && sceneData["hierarchy"].is_object())
+		{
+			for (bool grew = true; grew;)
+			{
+				grew = false;
+				for (auto& link : sceneData["hierarchy"].items())
+				{
+					if (link.value().is_string() && pendingRemoval.count(link.value().get<std::string>()) != 0 &&
+						pendingRemoval.insert(link.key()).second)
+						grew = true;
+				}
+			}
+		}
+
+		size_t skippedPendingRemoval = 0;
+		for (auto& ent : sceneData["entities"].items())
+		{
+			if (pendingRemoval.count(ent.key()) != 0)
+			{
+				++skippedPendingRemoval;
+				continue;
+			}
+
 			loadIntoExistingScene->Lock();
 			// A load override (e.g. editor play/stop restore) can return an existing
 			// entity to reconstruct into rather than always creating a fresh one.
@@ -257,6 +303,9 @@ namespace HexEngine
 		}
 
 		
+
+		if (skippedPendingRemoval > 0)
+			LOG_WARN("Scene load: skipped %zu entities that were saved while pending removal (the next save drops them).", skippedPendingRemoval);
 
 		auto& hierarchy = sceneData["hierarchy"];
 

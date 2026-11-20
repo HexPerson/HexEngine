@@ -83,6 +83,10 @@ namespace HexEngine
 		bool softParticles = false;
 		bool overrideReceiveLightingEnabled = false;
 		bool overrideReceiveLighting = false;
+		// Weather particles (rain/snow): discard particles under static cover,
+		// tested against the renderer's top-down rain occlusion map, so rain
+		// doesn't fall through roofs into interiors.
+		bool shelterOccluded = false;
 
 		ParticleEmissionModule emission;
 		ParticleShapeModule shape;

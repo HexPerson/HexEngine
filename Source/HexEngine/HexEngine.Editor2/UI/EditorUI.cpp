@@ -9,6 +9,7 @@
 #include "Actions\MultiplayerTool.hpp"
 #include "Actions\BuildDialog.hpp"
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
+#include <HexEngine.Core\FileSystem\PrefabLoader.hpp>
 #include <HexEngine.Core\Entity\Component\PlayerStartComponent.hpp>
 
 #include "Gadgets\ScaleGadget.hpp"
@@ -17,6 +18,58 @@
 
 namespace HexEditor
 {
+	namespace
+	{
+		// Root of the HexEngine SDK that generated game projects build against:
+		// the folder holding HexEngine.props (include/lib/runtime paths). Found
+		// from the editor EXE's own location - never the working directory - so
+		// it works both in a source checkout and in an install:
+		//   1. HEXENGINE_SDK environment variable (explicit override)
+		//   2. installed build: {app}\SDK\HexEngine.props
+		//   3. development tree: the nearest ancestor of the EXE folder holding
+		//      HexEngine.props (the repository root). Searched rather than assumed
+		//      to be a fixed depth, because the editor runs from more than one
+		//      output folder: <repo>\Bin\x64\<Config>\ (3 levels down) and, when
+		//      launched from Visual Studio, the linker output
+		//      <repo>\Source\HexEngine\x64\<Config>\ (4 levels down).
+		fs::path ResolveSdkRoot()
+		{
+			std::error_code ec;
+
+			wchar_t envSdk[MAX_PATH] = {};
+			const DWORD envLen = GetEnvironmentVariableW(L"HEXENGINE_SDK", envSdk, MAX_PATH);
+			if (envLen > 0 && envLen < MAX_PATH)
+			{
+				if (fs::exists(fs::path(envSdk) / "HexEngine.props", ec))
+					return fs::path(envSdk);
+
+				LOG_WARN("HEXENGINE_SDK is set to '%S' but it holds no HexEngine.props; ignoring it", envSdk);
+			}
+
+			wchar_t exePath[MAX_PATH] = {};
+			GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+			const fs::path exeDir = fs::path(exePath).parent_path();
+
+			if (fs::exists(exeDir / "SDK" / "HexEngine.props", ec))
+				return exeDir / "SDK";
+
+			for (fs::path dir = exeDir; !dir.empty(); dir = dir.parent_path())
+			{
+				if (fs::exists(dir / "HexEngine.props", ec))
+					return dir;
+
+				if (dir == dir.root_path())
+					break;
+			}
+
+			// Nothing found: keep the historical <exe>\..\..\..\ guess so the
+			// generated project at least names a plausible location, and say so.
+			const fs::path fallback = exeDir.parent_path().parent_path().parent_path();
+			LOG_WARN("HexEngine SDK not found (no SDK/HexEngine.props beside the editor, no HexEngine.props in any parent of '%S', HEXENGINE_SDK unset); generated projects will point at %S and will not build until HEXENGINE_SDK is set", exeDir.wstring().c_str(), fallback.wstring().c_str());
+			return fallback;
+		}
+	}
+
 	EditorUI::EditorUI()
 	{
 		g_pUIManager = this;
@@ -71,6 +124,20 @@ namespace HexEditor
 		CreateMenuBar();
 		NotifyEditorToolPluginsCreateUI();
 		_prefabController.SetDependencies(this, &_integrator, _rightDock, _entityList, _lowerDock);
+		_prefabController.SetTransactionStack(&_transactions);
+		if (_entityList != nullptr)
+		{
+			// Out-of-date prefab instances get a badge in the entity list.
+			_entityList->_badgeProvider = [this](HexEngine::Entity* entity, math::Color& colour) -> std::wstring
+			{
+				if (entity != nullptr && entity->IsPrefabInstanceRoot() && _prefabController.IsPrefabInstanceOutOfDate(entity))
+				{
+					colour = math::Color(1.0f, 0.72f, 0.2f, 1.0f);
+					return L"(prefab changed)";
+				}
+				return std::wstring();
+			};
+		}
 
 		// Always start with the project manager
 		_projectManager = ProjectManager::CreateProjectManagerDialog(_rootElement, std::bind(&EditorUI::OnProjectManagerCompleted, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5));
@@ -159,6 +226,15 @@ namespace HexEditor
 			_projectFile->_scenes = _sceneFiles;
 			_entityListRefreshPending = true;
 
+			// Instances whose prefab changed while their scene wasn't loaded.
+			// NOT called here: this runs on the project-load worker thread, and the
+			// check always ends in RefreshViewsAfterInstanceChange() ->
+			// EntityList::RefreshList(), which raced the main thread's own pending
+			// refresh (both Clear()/AddNode the same TreeList -> use-after-free in
+			// TreeList::AddNode). It can also sync instances and open dialogs. Defer
+			// it to the main thread (EditorUI::Update).
+			_prefabLoadCheckPending = true;
+
 			
 		}
 		else
@@ -189,7 +265,7 @@ namespace HexEditor
 			ProjectGenerationParams params;
 			params.path = projectFolder / "Code";
 			params.projectName = projectName;
-			params.sdkPath = HexEngine::g_pEnv->GetFileSystem().GetBaseDirectory().parent_path().parent_path().parent_path(); // this is....awful
+			params.sdkPath = ResolveSdkRoot();
 			params.nameSpace = std::string(namespaceName.begin(), namespaceName.end());
 			params.primaryScenePath = sceneFile->GetAbsolutePath();
 
@@ -255,6 +331,23 @@ namespace HexEditor
 				actionExitPrefab->name = L"Exit Prefab Stage";
 				actionExitPrefab->action = std::bind(&EditorUI::ClosePrefabStage, this, true);
 				_mainMenu->AddSubItem(file, actionExitPrefab);
+
+				HexEngine::MenuBar::Item* actionUpdateInstances = new HexEngine::MenuBar::Item;
+				actionUpdateInstances->name = L"Update Out-of-Date Prefab Instances";
+				actionUpdateInstances->action = [this](HexEngine::MenuBar::Item*) { _prefabController.UpdateAllOutOfDatePrefabInstances(); };
+				_mainMenu->AddSubItem(file, actionUpdateInstances);
+
+				const std::pair<const wchar_t*, PrefabController::InstanceSyncPolicy> syncPolicies[] = {
+					{ L"Prefab Changes: Ask Before Updating Instances", PrefabController::InstanceSyncPolicy::Ask },
+					{ L"Prefab Changes: Always Update Instances", PrefabController::InstanceSyncPolicy::Always },
+					{ L"Prefab Changes: Never Update Instances", PrefabController::InstanceSyncPolicy::Never } };
+				for (const auto& [label, policy] : syncPolicies)
+				{
+					HexEngine::MenuBar::Item* actionPolicy = new HexEngine::MenuBar::Item;
+					actionPolicy->name = label;
+					actionPolicy->action = [this, policy = policy](HexEngine::MenuBar::Item*) { _prefabController.SetInstanceSyncPolicy(policy); };
+					_mainMenu->AddSubItem(file, actionPolicy);
+				}
 
 				HexEngine::MenuBar::Item* actionExport = new HexEngine::MenuBar::Item;
 				actionExport->name = L"Export";
@@ -337,6 +430,16 @@ namespace HexEditor
 				actionNewSL->name = L"Add spot light";
 				actionNewSL->action = std::bind(&EditorUI::OnAddSpotLight, this);
 				_mainMenu->AddSubItem(scene, actionNewSL);
+
+				HexEngine::MenuBar::Item* actionNewTube = new HexEngine::MenuBar::Item;
+				actionNewTube->name = L"Add tube light";
+				actionNewTube->action = std::bind(&EditorUI::OnAddAreaLight, this, HexEngine::AreaLight::Shape::Tube);
+				_mainMenu->AddSubItem(scene, actionNewTube);
+
+				HexEngine::MenuBar::Item* actionNewRect = new HexEngine::MenuBar::Item;
+				actionNewRect->name = L"Add rect light";
+				actionNewRect->action = std::bind(&EditorUI::OnAddAreaLight, this, HexEngine::AreaLight::Shape::Rect);
+				_mainMenu->AddSubItem(scene, actionNewRect);
 
 				HexEngine::MenuBar::Item* actionNewBB = new HexEngine::MenuBar::Item;
 				actionNewBB->name = L"Add billboard";
@@ -673,6 +776,16 @@ namespace HexEditor
 	HexEngine::Entity* EditorUI::RevertPrefabInstance(HexEngine::Entity* entity)
 	{
 		return _prefabController.RevertPrefabInstance(entity);
+	}
+
+	bool EditorUI::IsPrefabInstanceOutOfDate(HexEngine::Entity* entity) const
+	{
+		return _prefabController.IsPrefabInstanceOutOfDate(entity);
+	}
+
+	bool EditorUI::UpdatePrefabInstanceFromAsset(HexEngine::Entity* entity)
+	{
+		return _prefabController.UpdatePrefabInstanceFromAsset(entity);
 	}
 
 	bool EditorUI::ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity)
@@ -1186,6 +1299,24 @@ namespace HexEditor
 		GetInspector()->InspectEntity(light);
 	}
 
+	void EditorUI::OnAddAreaLight(HexEngine::AreaLight::Shape shape)
+	{
+		auto hit = RayCastWorld({}, false);
+
+		// Lifted off the surface under the cursor so the shape isn't buried in it.
+		HexEngine::Entity* light = HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity(
+			shape == HexEngine::AreaLight::Shape::Rect ? "RectLight" : "TubeLight",
+			hit.position + math::Vector3(0.0f, 1.0f, 0.0f));
+
+		auto areaLight = light->AddComponent<HexEngine::AreaLight>();
+		areaLight->SetShape(shape);
+		areaLight->SetLightStength(4.0f);
+
+		RecordEntityCreated(light);
+
+		GetInspector()->InspectEntity(light);
+	}
+
 	void EditorUI::OnCreateNewSceneAction(const std::wstring& sceneName)
 	{
 		auto scene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(true, this, true);
@@ -1281,9 +1412,24 @@ namespace HexEditor
 		CheckCentralDockRoamState();
 		_integrator.Update();
 
-		if (_entityList != nullptr && _entityListRefreshPending.exchange(false))
+		// Deferred from the project-load worker thread (see OnProjectManagerCompleted).
+		if (_prefabLoadCheckPending.exchange(false))
+			_prefabController.CheckLoadedScenesForOutOfDateInstances();
+
+		// RefreshList rebuilds the whole hierarchy. During play the game spawns and
+		// despawns entities every frame (traffic spawns a multi-entity car per
+		// frame at start), so rebuild at most every 0.25 s there; edit-mode
+		// changes still refresh on the next frame.
+		if (_entityList != nullptr && _entityListRefreshPending.load())
 		{
-			_entityList->RefreshList();
+			const bool playing = _integrator.GetState() == GameTestState::Started;
+			_entityListRefreshCooldown = std::max(0.0f, _entityListRefreshCooldown - frameTime);
+			if (!playing || _entityListRefreshCooldown <= 0.0f)
+			{
+				_entityListRefreshPending = false;
+				_entityList->RefreshList();
+				_entityListRefreshCooldown = playing ? 0.25f : 0.0f;
+			}
 		}
 
 		if (g_pEditor != nullptr)
@@ -1421,7 +1567,12 @@ namespace HexEditor
 
 		// Let gadget hotkeys (e.g. Ctrl+D duplicate) still work even when another
 		// focused widget reports the key event as handled, but never while typing.
-		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook &&
+		// Scene hotkeys act on the scene: none of them while another workspace tab
+		// (material graph, animation editor) is in front of it.
+		const bool sceneTabActive = _sceneView->IsSceneTabActive();
+
+		if (sceneTabActive &&
+			_sceneView->GetRoamState() != SceneView::RoamState::FreeLook &&
 			_integrator.GetState() != GameTestState::Started &&
 			!isTypingInLineEdit &&
 			event == HexEngine::InputEvent::KeyDown &&
@@ -1446,7 +1597,7 @@ namespace HexEditor
 		if (uiHandled)
 			return false;
 
-		if (event == HexEngine::InputEvent::KeyDown && HexEngine::g_pEnv->_inputSystem->IsCtrlDown())
+		if (sceneTabActive && event == HexEngine::InputEvent::KeyDown && HexEngine::g_pEnv->_inputSystem->IsCtrlDown())
 		{
 			if (data->KeyDown.key == 'Z')
 			{
@@ -1460,7 +1611,7 @@ namespace HexEditor
 			}
 		}
 
-		if (_sceneView->GetRoamState() != SceneView::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started && !isTypingInLineEdit)
+		if (sceneTabActive && _sceneView->GetRoamState() != SceneView::RoamState::FreeLook && _integrator.GetState() != GameTestState::Started && !isTypingInLineEdit)
 		{
 			bool anyGadgetRunning = false;
 			bool keyhandled = false;
@@ -1865,9 +2016,16 @@ namespace HexEditor
 
 		//_entityList->AddItem(std::wstring(name.begin(), name.end()), nullptr);
 
+		// The sky sphere belongs to the scene it was created in. This listener
+		// serves every scene, and creating a scene (File > New Scene, the bridge's
+		// new_scene, project load) adds its SkySphere while ANOTHER scene is
+		// current: setting it on GetCurrentScene() left that scene pointing at a
+		// foreign entity, which dangled once the new scene was unloaded and
+		// crashed Scene::UpdateSkySphereMatrix.
 		if (entity->GetName() == "SkySphere")
 		{
-			HexEngine::g_pEnv->_sceneManager->GetCurrentScene()->SetSkySphere(entity);
+			if (auto* owner = entity->GetScene(); owner != nullptr)
+				owner->SetSkySphere(entity);
 		}
 	}
 
@@ -2119,5 +2277,576 @@ namespace HexEditor
 		}
 
 		return redone;
+	}
+
+	// --- IEditorContext: programmatic-authoring hooks (editor bridge) ---------
+
+	HexEngine::FileSystem* EditorUI::GetProjectFileSystem()
+	{
+		return g_pEditor != nullptr ? g_pEditor->_projectFS : nullptr;
+	}
+
+	void EditorUI::BeginUndoGroup(const std::string& label)
+	{
+		_transactions.BeginGroup(label);
+	}
+
+	void EditorUI::EndUndoGroup()
+	{
+		_transactions.EndGroup();
+	}
+
+	bool EditorUI::Undo()
+	{
+		return UndoLastTransaction();
+	}
+
+	bool EditorUI::Redo()
+	{
+		return RedoLastTransaction();
+	}
+
+	size_t EditorUI::GetUndoCount()
+	{
+		return _transactions.UndoCount();
+	}
+
+	size_t EditorUI::GetRedoCount()
+	{
+		return _transactions.RedoCount();
+	}
+
+	void EditorUI::RecordEntityTransformChange(HexEngine::Entity* entity, const math::Vector3& positionBefore, const math::Quaternion& rotationBefore, const math::Vector3& scaleBefore)
+	{
+		if (entity == nullptr || entity->IsPendingDeletion())
+			return;
+
+		// Each Record* also drives prefab-instance override tracking.
+		if (entity->GetPosition() != positionBefore)
+			RecordEntityPositionChange(entity, positionBefore, entity->GetPosition());
+		if (entity->GetRotation() != rotationBefore)
+			RecordEntityRotationChange(entity, rotationBefore, entity->GetRotation());
+		if (entity->GetScale() != scaleBefore)
+			RecordEntityScaleChange(entity, scaleBefore, entity->GetScale());
+	}
+
+	void EditorUI::BeginComponentEdit(HexEngine::Entity* entity)
+	{
+		Detail::EntityComponentStateSnapshot snapshot;
+		if (Detail::CaptureEntityComponentState(entity, snapshot))
+			_programmaticComponentEdits[entity] = std::move(snapshot);
+	}
+
+	void EditorUI::EndComponentEdit(HexEngine::Entity* entity)
+	{
+		auto it = _programmaticComponentEdits.find(entity);
+		if (it == _programmaticComponentEdits.end())
+			return;
+
+		Detail::EntityComponentStateSnapshot before = std::move(it->second);
+		_programmaticComponentEdits.erase(it);
+
+		Detail::EntityComponentStateSnapshot after;
+		if (Detail::CaptureEntityComponentState(entity, after))
+			RecordComponentPropertyStateChange(entity, before, after);
+	}
+
+	bool EditorUI::SaveAll(std::string& error)
+	{
+		if (_projectFile == nullptr)
+		{
+			error = "no project is open";
+			return false;
+		}
+		OnSaveAction();
+		return true;
+	}
+
+	json EditorUI::DescribePrefabInstance(HexEngine::Entity* entity)
+	{
+		json j = json::object();
+		if (entity == nullptr)
+			return j;
+
+		const bool isInstance = IsPrefabInstanceEntity(entity);
+		j["isInstance"] = isInstance;
+		if (!isInstance)
+			return j;
+
+		j["isRoot"] = IsPrefabInstanceRootEntity(entity);
+		j["sourcePath"] = entity->GetPrefabSourcePath().string();
+		j["rootName"] = entity->GetPrefabRootEntityName();
+
+		// Out-of-date / override state is tracked on the instance ROOT.
+		HexEngine::Entity* root = entity;
+		while (root != nullptr && !root->IsPrefabInstanceRoot() && root->GetParent() != nullptr)
+			root = root->GetParent();
+		j["outOfDate"] = root != nullptr && root->IsPrefabInstanceRoot() && IsPrefabInstanceOutOfDate(root);
+
+		std::vector<PrefabController::PrefabPropertyOverride> overrides;
+		json list = json::array();
+		if (GetPrefabInstancePropertyOverrides(entity, overrides))
+		{
+			for (const auto& o : overrides)
+				list.push_back(json{ {"component", o.componentName}, {"path", o.path}, {"op", o.op} });
+		}
+		j["overrides"] = list;
+		return j;
+	}
+
+	bool EditorUI::ApplyPrefabInstance(HexEngine::Entity* entity, std::string& error)
+	{
+		if (entity == nullptr || !IsPrefabInstanceEntity(entity))
+		{
+			error = "entity is not a prefab instance";
+			return false;
+		}
+		if (!ApplyPrefabInstanceToPrefabAsset(entity))
+		{
+			error = "applying the instance to its prefab failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	HexEngine::Entity* EditorUI::RevertPrefabInstanceToAsset(HexEngine::Entity* entity, std::string& error)
+	{
+		if (entity == nullptr || !IsPrefabInstanceEntity(entity))
+		{
+			error = "entity is not a prefab instance";
+			return nullptr;
+		}
+		HexEngine::Entity* reverted = RevertPrefabInstance(entity);
+		if (reverted == nullptr)
+			error = "reverting the instance failed (see engine logs)";
+		return reverted;
+	}
+
+	bool EditorUI::UpdatePrefabInstance(HexEngine::Entity* entity, std::string& error)
+	{
+		if (entity == nullptr || !IsPrefabInstanceEntity(entity))
+		{
+			error = "entity is not a prefab instance";
+			return false;
+		}
+		if (!UpdatePrefabInstanceFromAsset(entity))
+		{
+			error = "updating the instance from its prefab failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	HexEngine::Entity* EditorUI::CreatePrefabFromEntity(HexEngine::Entity* entity, const fs::path& prefabPath, bool replaceWithInstance, std::string& error)
+	{
+		if (IsPrefabStageActive())
+		{
+			error = "close the prefab stage before creating prefabs";
+			return nullptr;
+		}
+		if (!_prefabController.WritePrefabAsset(entity, prefabPath, error))
+			return nullptr;
+		if (!replaceWithInstance)
+			return entity;
+
+		auto scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		if (scene == nullptr || entity->GetScene() != scene.get())
+		{
+			error = "prefab written, but the entity is not in the active scene so it was not replaced with an instance";
+			return entity;
+		}
+
+		// Swap the source hierarchy for a linked instance of the new prefab.
+		HexEngine::Entity* parent = entity->GetParent();
+		const math::Vector3 position = entity->GetPosition();
+		const math::Quaternion rotation = entity->GetRotation();
+		const math::Vector3 scale = entity->GetScale();
+		const std::string name = entity->GetName();
+
+		for (auto* s = GetSelectedEntity(); s != nullptr; s = s->GetParent())
+		{
+			if (s == entity)
+			{
+				SetSelectedEntity(nullptr);
+				break;
+			}
+		}
+
+		RecordEntityDeleted(entity);
+		scene->DestroyEntity(entity);
+
+		auto spawned = HexEngine::g_pEnv->_prefabLoader->LoadPrefab(scene, prefabPath);
+		HexEngine::Entity* root = nullptr;
+		for (auto* e : spawned)
+		{
+			if (e != nullptr && e->GetParent() == nullptr)
+			{
+				root = e;
+				break;
+			}
+		}
+		if (root == nullptr)
+		{
+			error = "prefab written, but instantiating it failed; the original was removed (undo restores it)";
+			return nullptr;
+		}
+
+		if (parent != nullptr)
+			root->SetParent(parent, false);
+		root->SetPosition(position);
+		root->SetRotation(rotation);
+		root->SetScale(scale);
+		std::string finalName;
+		scene->RenameEntity(root, name, &finalName);
+
+		RecordEntityCreated(root);
+		_entityListRefreshPending = true;
+		scene->ForceRebuildPVS();
+		return root;
+	}
+
+	bool EditorUI::OpenPrefabEditStage(const fs::path& prefabPath, std::string& error)
+	{
+		if (!OpenPrefabStage(prefabPath))
+		{
+			error = "could not open the prefab stage for '" + prefabPath.string() + "' (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::SavePrefabEditStage(std::string& error)
+	{
+		if (!IsPrefabStageActive())
+		{
+			error = "no prefab stage is open";
+			return false;
+		}
+		if (!SavePrefabStage())
+		{
+			error = "saving the prefab stage failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::ClosePrefabEditStage(bool saveChanges, std::string& error)
+	{
+		if (!IsPrefabStageActive())
+		{
+			error = "no prefab stage is open";
+			return false;
+		}
+		if (!ClosePrefabStage(saveChanges))
+		{
+			error = "closing the prefab stage failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::IsPrefabEditStageOpen()
+	{
+		return IsPrefabStageActive();
+	}
+
+	bool EditorUI::StartPlayMode(std::string& error)
+	{
+		if (IsPrefabStageActive())
+		{
+			error = "close the prefab stage before playing";
+			return false;
+		}
+		if (_integrator.GetState() == GameTestState::Started)
+			return true;
+		if (!_integrator.RunGame())
+		{
+			error = "the game did not start: the project's Build/Game.dll is missing or failed to load (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::StopPlayMode(std::string& error)
+	{
+		if (_integrator.GetState() != GameTestState::Started)
+		{
+			error = "the game is not running";
+			return false;
+		}
+		if (!_integrator.StopGame())
+		{
+			error = "stopping the game failed (see engine logs)";
+			return false;
+		}
+		return true;
+	}
+
+	bool EditorUI::IsPlayModeActive()
+	{
+		return _integrator.GetState() == GameTestState::Started;
+	}
+
+	bool EditorUI::BuildGameModule(std::string& error)
+	{
+		if (GetProjectFolderPath().empty())
+		{
+			error = "no project is open";
+			return false;
+		}
+		return _integrator.BuildGameExclusive(error);
+	}
+
+	bool EditorUI::ReloadGameModule(std::string& error)
+	{
+		if (IsPrefabStageActive())
+		{
+			error = "close the prefab stage before reloading the game";
+			return false;
+		}
+		return _integrator.ReloadBuiltGame(error);
+	}
+
+	bool EditorUI::IsGameModuleLoaded()
+	{
+		return _integrator.IsGameLoaded();
+	}
+
+	void EditorUI::SetGameAutoReload(bool enabled)
+	{
+		_integrator.SetAutoReloadEnabled(enabled);
+	}
+
+	bool EditorUI::GetGameAutoReload()
+	{
+		return _integrator.IsAutoReloadEnabled();
+	}
+
+	json EditorUI::ListProjectScenes()
+	{
+		json out = json::array();
+		if (_projectFolderPath.empty())
+			return out;
+
+		auto current = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+		std::set<std::wstring> loadedPaths;
+		std::error_code ec;
+		for (auto* ssf : _sceneFiles)
+		{
+			if (ssf == nullptr)
+				continue;
+			auto scene = ssf->GetScene();
+			const fs::path abs = fs::weakly_canonical(ssf->GetAbsolutePath(), ec);
+			std::wstring key = abs.wstring();
+			std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+			loadedPaths.insert(key);
+			out.push_back(json{
+				{"name", scene ? ws2s(scene->GetName()) : abs.stem().string()},
+				{"path", fs::relative(abs, _projectFolderPath, ec).generic_string()},
+				{"loaded", scene != nullptr},
+				{"active", scene != nullptr && scene == current},
+				{"entityCount", scene ? scene->GetTotalNumberOfEntities() : 0u},
+			});
+		}
+
+		// .hscene files in the project's Data folder that aren't loaded.
+		const fs::path dataDir = _projectFolderPath / L"Data";
+		for (fs::recursive_directory_iterator it(dataDir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
+		{
+			if (!it->is_regular_file(ec) || _wcsicmp(it->path().extension().c_str(), L".hscene") != 0)
+				continue;
+			std::wstring key = fs::weakly_canonical(it->path(), ec).wstring();
+			std::transform(key.begin(), key.end(), key.begin(), ::towlower);
+			if (loadedPaths.count(key))
+				continue;
+			out.push_back(json{
+				{"name", it->path().stem().string()},
+				{"path", fs::relative(it->path(), _projectFolderPath, ec).generic_string()},
+				{"loaded", false},
+				{"active", false},
+			});
+		}
+		return out;
+	}
+
+	void EditorUI::SwitchToScene(const std::shared_ptr<HexEngine::Scene>& scene)
+	{
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		auto current = sceneManager->GetCurrentScene();
+		if (current != nullptr && current != scene)
+			current->SetFlags(HexEngine::SceneFlags::Disabled);
+		scene->SetFlags(HexEngine::SceneFlags::Renderable | HexEngine::SceneFlags::Updateable | HexEngine::SceneFlags::PostProcessingEnabled);
+		sceneManager->SetActiveScene(scene);
+		SetSelectedEntity(nullptr);
+		// Undo/redo resolve entities by name in the active scene; history from
+		// another scene would act on the wrong entities.
+		_transactions.Clear();
+		_entityListRefreshPending = true;
+		scene->ForceRebuildPVS();
+	}
+
+	bool EditorUI::CreateProjectScene(const std::string& name, bool withSun, bool activate, std::string& error)
+	{
+		if (_projectFolderPath.empty() || _projectFile == nullptr) { error = "no project is open"; return false; }
+		if (IsPrefabStageActive()) { error = "close the prefab stage first"; return false; }
+		if (IsPlayModeActive()) { error = "stop play mode first"; return false; }
+		if (name.empty() || name.size() > 100 || name.find_first_of("\\/:*?\"<>|") != std::string::npos || name.front() == '.' || name.front() == ' ' || name.back() == ' ' || name.back() == '.')
+		{
+			error = "invalid scene name '" + name + "' (it becomes a file name)";
+			return false;
+		}
+
+		const std::wstring wname(name.begin(), name.end());
+		const fs::path scenePath = _projectFolderPath / L"Data" / L"Scenes" / (wname + L".hscene");
+		std::error_code ec;
+		if (fs::exists(scenePath, ec)) { error = "'" + fs::relative(scenePath, _projectFolderPath, ec).generic_string() + "' already exists (open_scene it)"; return false; }
+		for (auto* ssf : _sceneFiles)
+			if (ssf && ssf->GetScene() && ssf->GetScene()->GetName() == wname) { error = "a scene named '" + name + "' is already loaded"; return false; }
+
+		auto scene = HexEngine::g_pEnv->_sceneManager->CreateEmptyScene(true, this, true);
+		if (auto mainCamera = scene->CreateEntity("MainCamera"); mainCamera != nullptr)
+			mainCamera->AddComponent<HexEngine::Camera>();
+		if (withSun)
+			scene->CreateDefaultSunLight();
+		scene->SetName(wname);
+
+		fs::create_directories(scenePath.parent_path(), ec);
+		auto* ssf = new HexEngine::SceneSaveFile(scenePath, std::ios::out, scene);
+		_projectFile->_scenes.push_back(ssf);
+		_sceneFiles.push_back(ssf);
+
+		if (activate)
+			SwitchToScene(scene);
+		else
+			scene->SetFlags(HexEngine::SceneFlags::Disabled);
+
+		// Persist right away: the new file + the project's scene list.
+		ssf->Save();
+		_projectFile->Save();
+		_entityListRefreshPending = true;
+		return true;
+	}
+
+	// The .hscene a scene reference means, canonical: a bare name is
+	// Data/Scenes/<name>.hscene; "Scenes/..." is under Data; "Data/..." under the
+	// project. Empty when it would leave the project.
+	static fs::path CanonicalSceneCandidate(const fs::path& projectFolder, const std::string& nameOrPath)
+	{
+		std::error_code ec;
+		fs::path candidate = fs::path(std::wstring(nameOrPath.begin(), nameOrPath.end()));
+		if (!candidate.has_extension())
+			candidate = fs::path(L"Data") / L"Scenes" / (candidate.wstring() + L".hscene");
+		if (!candidate.is_absolute())
+		{
+			const auto first = candidate.begin() != candidate.end() ? candidate.begin()->wstring() : std::wstring();
+			candidate = (_wcsicmp(first.c_str(), L"Data") == 0) ? projectFolder / candidate : projectFolder / L"Data" / candidate;
+		}
+		candidate = fs::weakly_canonical(candidate, ec);
+		const std::wstring root = fs::weakly_canonical(projectFolder, ec).wstring();
+		if (candidate.wstring().size() <= root.size() || _wcsnicmp(candidate.wstring().c_str(), root.c_str(), root.size()) != 0)
+			return {};
+		return candidate;
+	}
+
+	bool EditorUI::RemoveProjectScene(const std::string& nameOrPath, bool deleteFile, std::string& error)
+	{
+		if (_projectFolderPath.empty() || _projectFile == nullptr) { error = "no project is open"; return false; }
+		if (IsPrefabStageActive()) { error = "close the prefab stage first"; return false; }
+		if (IsPlayModeActive()) { error = "stop play mode first"; return false; }
+
+		std::error_code ec;
+		auto lower = [](std::wstring s) { std::transform(s.begin(), s.end(), s.begin(), ::towlower); return s; };
+		const std::wstring wanted = lower(std::wstring(nameOrPath.begin(), nameOrPath.end()));
+		const fs::path candidate = CanonicalSceneCandidate(_projectFolderPath, nameOrPath);
+		auto current = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+
+		for (auto it = _sceneFiles.begin(); it != _sceneFiles.end(); ++it)
+		{
+			HexEngine::SceneSaveFile* ssf = *it;
+			auto scene = ssf ? ssf->GetScene() : nullptr;
+			if (!ssf)
+				continue;
+			const fs::path abs = fs::weakly_canonical(ssf->GetAbsolutePath(), ec);
+			const bool match = (scene && lower(scene->GetName()) == wanted) || lower(abs.wstring()) == lower(candidate.wstring());
+			if (!match)
+				continue;
+			if (scene != nullptr && scene == current)
+			{
+				error = "that is the active scene: open_scene another one first";
+				return false;
+			}
+
+			_sceneFiles.erase(it);
+			auto& projectScenes = _projectFile->_scenes;
+			projectScenes.erase(std::remove(projectScenes.begin(), projectScenes.end(), ssf), projectScenes.end());
+			if (scene != nullptr)
+				HexEngine::g_pEnv->_sceneManager->UnloadScene(scene.get());
+			_projectFile->Save();
+			if (deleteFile)
+				fs::remove(abs, ec);
+			_entityListRefreshPending = true;
+			return true;
+		}
+		error = "no loaded project scene '" + nameOrPath + "' (see list_scenes)";
+		return false;
+	}
+
+	bool EditorUI::ActivateProjectScene(const std::string& nameOrPath, std::string& error)
+	{
+		if (_projectFolderPath.empty() || _projectFile == nullptr) { error = "no project is open"; return false; }
+		if (IsPrefabStageActive()) { error = "close the prefab stage first"; return false; }
+		if (IsPlayModeActive()) { error = "stop play mode first"; return false; }
+
+		std::error_code ec;
+		auto lower = [](std::wstring s) { std::transform(s.begin(), s.end(), s.begin(), ::towlower); return s; };
+		const std::wstring wanted = lower(std::wstring(nameOrPath.begin(), nameOrPath.end()));
+		const fs::path candidate = CanonicalSceneCandidate(_projectFolderPath, nameOrPath);
+
+		// Already loaded: by scene name, or by its file - however the path was
+		// written (a loaded scene must never be loaded a second time).
+		for (auto* ssf : _sceneFiles)
+		{
+			auto scene = ssf ? ssf->GetScene() : nullptr;
+			if (!scene)
+				continue;
+			const fs::path abs = fs::weakly_canonical(ssf->GetAbsolutePath(), ec);
+			if (lower(scene->GetName()) == wanted || (!candidate.empty() && lower(abs.wstring()) == lower(candidate.wstring())))
+			{
+				SwitchToScene(scene);
+				return true;
+			}
+		}
+
+		// A .hscene in the project that isn't loaded yet.
+		if (candidate.empty() || !fs::exists(candidate, ec) || _wcsicmp(candidate.extension().c_str(), L".hscene") != 0)
+		{
+			error = "no scene '" + nameOrPath + "' in the project (see list_scenes)";
+			return false;
+		}
+
+		auto* sceneManager = HexEngine::g_pEnv->_sceneManager;
+		auto previous = sceneManager->GetCurrentScene();
+		auto scene = sceneManager->CreateEmptyScene(false, this, true);
+		// Same order as project load: the scene being filled is the active one.
+		sceneManager->SetActiveScene(scene);
+		HexEngine::SceneSaveFile loader(candidate, std::ios::in, scene);
+		if (!loader.Load())
+		{
+			sceneManager->SetActiveScene(previous);
+			sceneManager->UnloadScene(scene.get());
+			error = "loading '" + candidate.string() + "' failed (see engine logs)";
+			return false;
+		}
+		if (scene->GetName().empty())
+			scene->SetName(candidate.stem().wstring());
+
+		auto* ssf = new HexEngine::SceneSaveFile(candidate, std::ios::out, scene);
+		_projectFile->_scenes.push_back(ssf);
+		_sceneFiles.push_back(ssf);
+		_projectFile->Save();
+
+		sceneManager->SetActiveScene(previous);
+		SwitchToScene(scene);
+		return true;
 	}
 }

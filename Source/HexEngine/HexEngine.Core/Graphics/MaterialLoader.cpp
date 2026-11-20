@@ -412,7 +412,11 @@ namespace HexEngine
 					"Material '%s' standard shader '%s' is from a stale includes hash; clearing for recompile.",
 					material->GetFileSystemPath().string().c_str(),
 					cachedPath.string().c_str());
-				material->SetStandardShader(nullptr);
+				// NOT SetStandardShader(nullptr): that ignores null, so the stale
+				// shader stayed bound and the recompile below never fired - graph
+				// materials (all the Universe kit buildings) kept serving shaders
+				// generated months earlier, missing every engine include change.
+				material->ClearStandardShader();
 			}
 		}
 

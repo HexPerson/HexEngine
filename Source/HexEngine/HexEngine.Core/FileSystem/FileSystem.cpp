@@ -4,6 +4,10 @@
 #include "../Environment/IEnvironment.hpp"
 #include "../Environment/LogFile.hpp"
 
+#include <ShlObj.h>
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "ole32.lib")
+
 namespace HexEngine
 {
 	bool FileSystem::DoesAbsolutePathExist(const fs::path& path) const
@@ -84,6 +88,60 @@ namespace HexEngine
 		baseDir /= localPath;
 
 		return baseDir;
+	}
+
+	namespace
+	{
+		fs::path GetExecutableDirectory()
+		{
+			std::wstring buffer(MAX_PATH, L'\0');
+			for (;;)
+			{
+				const DWORD len = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+				if (len == 0)
+					return fs::current_path();
+				if (len < buffer.size())
+				{
+					buffer.resize(len);
+					return fs::path(buffer).parent_path();
+				}
+				buffer.resize(buffer.size() * 2);
+			}
+		}
+	}
+
+	bool FileSystem::IsInstalledBuild()
+	{
+		static const bool s_installed = []()
+		{
+			std::error_code ec;
+			return fs::exists(GetExecutableDirectory() / kInstalledMarkerFileName, ec);
+		}();
+		return s_installed;
+	}
+
+	const fs::path& FileSystem::GetUserDataRoot()
+	{
+		static const fs::path s_root = []()
+		{
+			fs::path root;
+			if (IsInstalledBuild())
+			{
+				PWSTR localAppData = nullptr;
+				if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr, &localAppData)) && localAppData != nullptr)
+					root = fs::path(localAppData) / L"HexEngine";
+				CoTaskMemFree(localAppData);
+			}
+			// Dev tree / portable build (or no LocalAppData): beside the executable,
+			// where logs and Projects.json have always lived.
+			if (root.empty())
+				root = fs::current_path();
+
+			std::error_code ec;
+			fs::create_directories(root, ec);
+			return root;
+		}();
+		return s_root;
 	}
 
 	fs::path FileSystem::GetLocalAbsoluteDataPath(const fs::path& localPath)

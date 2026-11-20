@@ -45,6 +45,14 @@ private:
 	void UpdateAgentState(RoutineAgentComponent* agent, float frameTime, float simulationHour, const std::unordered_map<std::string, int32_t>& workplaceOccupancy);
 	void EnsureWorkplaceAssignment(RoutineAgentComponent* agent, float simulationHour, const std::unordered_map<std::string, int32_t>& workplaceOccupancy);
 	void SeedBaselineTaskIfIdle(RoutineAgentComponent* agent, float simulationHour);
+	// The task the agent's day schedule (or, without one, its shift) wants
+	// right now. False = nothing to do (no home, etc).
+	bool BuildScheduledTask(RoutineAgentComponent* agent, float simulationHour, RoutineTaskSpec& outTask);
+	std::string PickVenue(RoutineAgentComponent* agent, const std::string& serviceTag, float simulationHour, uint64_t blockKey) const;
+	RoutineTravelMode ChooseTravelMode(RoutineAgentComponent* agent, const math::Vector3& from, const math::Vector3& to) const;
+	bool ResolveAnchorPosition(const std::string& entityName, math::Vector3& outPosition) const;
+	float GetWalkTimeout(RoutineAgentComponent* agent);
+	void UpdateLocomotionAnimation(RoutineAgentComponent* agent, float frameTime);
 	bool BeginWalkTo(RoutineAgentComponent* agent, const std::string& waypointEntityName);
 	HexEngine::Entity* AcquireVehicleForTask(RoutineAgentComponent* agent, RoutineTaskSpec& task);
 	bool ConfigureVehicleRoute(HexEngine::Entity* vehicleEntity, RoutineAgentComponent* agent, const RoutineTaskSpec& task);
@@ -55,6 +63,12 @@ private:
 	CityEmergencyDispatcherSystemComponent* GetDispatcherSystem() const;
 	void CleanupAgentVehicle(RoutineAgentComponent* agent);
 	bool UpdateWalkStuckRecovery(RoutineAgentComponent* agent, float frameTime, const std::string& waypointEntityName, const char* failureReason);
+	// On-site behaviour: after arriving at a PlaceOfWork venue (shift or visit),
+	// the agent strolls between random reachable spots near the venue entry
+	// instead of freezing on the entry waypoint until its next schedule block.
+	void BeginOnSite(RoutineAgentComponent* agent, const RoutineTaskSpec& completedTask);
+	void UpdateOnSite(RoutineAgentComponent* agent, float frameTime);
+	bool PickOnSiteSpot(RoutineAgentComponent* agent, const math::Vector3& anchor, math::Vector3& outSpot);
 
 	struct AgentMotionState
 	{
@@ -62,6 +76,32 @@ private:
 		bool hasLastPosition = false;
 		float lowMotionAccumSeconds = 0.0f;
 		float repathCooldownSeconds = 0.0f;
+		float walkTimeoutSeconds = 0.0f;	// per-walk, from the distance and walk speed
+		math::Vector3 lastVehiclePosition = math::Vector3::Zero;
+		bool hasLastVehiclePosition = false;
+		float vehicleStillSeconds = 0.0f;	// how long the agent's car hasn't moved
+	};
+
+	struct AgentAnimState
+	{
+		math::Vector3 lastPosition = math::Vector3::Zero;
+		bool hasLastPosition = false;
+		float smoothedSpeed = 0.0f;
+		int32_t requestedClip = -1;
+	};
+
+	struct LocomotionClips
+	{
+		int32_t idle = -1;
+		int32_t walk = -1;
+	};
+
+	struct OnSiteState
+	{
+		math::Vector3 anchor = math::Vector3::Zero;	// venue entry waypoint (stroll centre)
+		float pauseSeconds = 0.0f;				// time left standing at the current spot
+		float walkSeconds = 0.0f;				// time spent on the current stroll (timeout)
+		bool walking = false;
 	};
 
 private:
@@ -78,4 +118,23 @@ private:
 	float _walkStuckRepathCooldownSeconds = 1.0f;
 	bool _isListeningForEntityEvents = false;
 	std::unordered_map<std::string, AgentMotionState> _agentMotionStates;
+
+	// Schedules / travel / animation.
+	float _walkMaxDistance = 150.0f;			// Auto travel: walk up to this straight-line distance, drive beyond
+	std::string _defaultVehiclePrefabPath = "GameData.Prefabs/SmallCar01.hprefab";
+	bool _hideAgentsAtDestination = false;		// legacy: vanish on arriving at work
+	float _failedTaskCooldownSeconds = 15.0f;	// after a permanent failure, wait before re-seeding
+	float _vehicleStuckSeconds = 20.0f;		// a car that hasn't moved this long is abandoned (agent walks on)
+	bool _animateLocomotion = true;
+	std::string _idleClipName = "idle";
+	std::string _walkClipName = "walking";
+	float _lastSimulationHour = -1.0f;
+	bool _wasGameRunning = false;
+	uint32_t _dayIndex = 0;
+	std::unordered_map<std::string, AgentAnimState> _agentAnimStates;
+	std::unordered_map<std::string, OnSiteState> _onSiteStates;
+	bool _onSiteWander = true;			// stroll around the venue between schedule blocks
+	float _onSiteWanderRadius = 5.0f;	// metres around the entry (stays inside kArrivalRadius = 8)
+	uint32_t _onSiteRng = 0x9E3779B9u;
+	std::unordered_map<const void*, LocomotionClips> _locomotionClipCache;
 };

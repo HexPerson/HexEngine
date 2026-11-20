@@ -1,5 +1,6 @@
 
 #include "TreeList.hpp"
+#include <algorithm>
 #include "../GuiRenderer.hpp"
 #include "../../Environment/IEnvironment.hpp"
 #include "../../Graphics/IGraphicsDevice.hpp"
@@ -397,10 +398,14 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		// don't add it if it already exists
+		// don't add it if it already exists (same id already attached under
+		// `parent`, or anywhere for a root add - the old recursive search's rule)
 		//
-		if (auto exist = FindItemByIdParented(node->_id, parent); exist != nullptr)
-			return;
+		if (auto it = _nodesById.find(node->_id); it != _nodesById.end())
+		{
+			if (parent == nullptr || IsUnder(it->second, parent))
+				return;
+		}
 
 		if (parent)
 		{
@@ -417,12 +422,78 @@ namespace HexEngine
 			_numItems++;
 		}
 
+		IndexSubtree(node);
+
 		if(repaintImmediately)
 			_canvas.Redraw();
 
-		SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+		// Counting every visible row here made each add O(tree); Render recounts
+		// once per frame anyway, and ScrollToItem refreshes it on demand.
+		_contentHeightDirty = true;
 
 		_currentNodeId++;
+	}
+
+	void TreeList::IndexSubtree(ListNode* node)
+	{
+		if (node == nullptr)
+			return;
+		_nodesById[node->_id] = node;
+		auto& bucket = _nodesByObject[node->_objectPtr];
+		if (std::find(bucket.begin(), bucket.end(), node) == bucket.end())
+			bucket.push_back(node);
+		for (auto* child : node->_items)
+			IndexSubtree(child);
+	}
+
+	void TreeList::UnindexSubtree(ListNode* node)
+	{
+		if (node == nullptr)
+			return;
+		for (auto* child : node->_items)
+			UnindexSubtree(child);
+		if (auto it = _nodesById.find(node->_id); it != _nodesById.end() && it->second == node)
+			_nodesById.erase(it);
+		if (auto it = _nodesByObject.find(node->_objectPtr); it != _nodesByObject.end())
+		{
+			auto& bucket = it->second;
+			bucket.erase(std::remove(bucket.begin(), bucket.end(), node), bucket.end());
+			if (bucket.empty())
+				_nodesByObject.erase(it);
+		}
+	}
+
+	bool TreeList::IsUnder(const ListNode* node, const ListNode* ancestor) const
+	{
+		for (const ListNode* p = node != nullptr ? node->_parent : nullptr; p != nullptr; p = p->_parent)
+		{
+			if (p == ancestor)
+				return true;
+		}
+		return false;
+	}
+
+	void TreeList::UpdateContentHeightIfDirty()
+	{
+		if (!_contentHeightDirty)
+			return;
+		_contentHeightDirty = false;
+		SetManualContentHeight(std::max(_size.y, CountVisibleRows(_items) * TreeListLineHeight));
+	}
+
+	void TreeList::OnNodeObjectPtrChanged(ListNode* node, void* previousObjectPtr)
+	{
+		std::unique_lock lock(_lock);
+		if (node == nullptr || _nodesById.find(node->_id) == _nodesById.end())
+			return; // not attached yet - AddNode indexes it with the current pointer
+		if (auto it = _nodesByObject.find(previousObjectPtr); it != _nodesByObject.end())
+		{
+			auto& bucket = it->second;
+			bucket.erase(std::remove(bucket.begin(), bucket.end(), node), bucket.end());
+			if (bucket.empty())
+				_nodesByObject.erase(it);
+		}
+		_nodesByObject[node->_objectPtr].push_back(node);
 	}
 
 	ListNode* TreeList::FindItemByLabel(const std::wstring& label)
@@ -543,6 +614,8 @@ namespace HexEngine
 		if (item == nullptr)
 			return false;
 
+		UpdateContentHeightIfDirty();
+
 		padding = std::max(0, padding);
 
 		int32_t targetRow = -1;
@@ -600,16 +673,13 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		for (auto& item : parent ? parent->_items : _items)
+		auto it = _nodesByObject.find(objectPtr);
+		if (it == _nodesByObject.end())
+			return nullptr;
+		for (auto* node : it->second)
 		{
-			if (item->GetObjectPtr() == objectPtr)
-				return item;
-
-			if (item->_child)
-			{
-				if (auto itemFound = FindItemByObjectPtr(objectPtr, item); itemFound != nullptr)
-					return itemFound;
-			}
+			if (parent == nullptr || IsUnder(node, parent))
+				return node;
 		}
 		return nullptr;
 	}
@@ -625,6 +695,7 @@ namespace HexEngine
 				auto it = std::remove(_items.begin(), _items.end(), item);
 				if (it != _items.end())
 				{
+					UnindexSubtree(*it);
 					delete* it;
 					_items.erase(it);
 				}
@@ -652,6 +723,7 @@ namespace HexEngine
 				auto it = std::remove(_items.begin(), _items.end(), item);
 				if (it != _items.end())
 				{
+					UnindexSubtree(*it);
 					delete* it;
 					_items.erase(it);
 				}
@@ -683,6 +755,9 @@ namespace HexEngine
 			delete item;
 		}
 		_items.clear();
+		_nodesById.clear();
+		_nodesByObject.clear();
+		_contentHeightDirty = false;
 		SetManualContentHeight(_size.y);
 		_canvas.Redraw();
 	}
@@ -699,12 +774,14 @@ namespace HexEngine
 	{
 		std::unique_lock lock(_lock);
 
-		for (auto& item : item->_items)
+		for (auto& child : item->_items)
 		{
-			ClearItem(item);
-			delete item;
+			ClearItem(child);
+			UnindexSubtree(child);
+			delete child;
 		}
 		item->_items.clear();
+		item->_child = nullptr;
 	}
 
 	int32_t TreeList::GetCurrentNodeId() const

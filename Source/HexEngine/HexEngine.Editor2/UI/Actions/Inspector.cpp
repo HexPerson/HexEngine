@@ -67,7 +67,19 @@ namespace HexEditor
 			const int32_t prefabButtonWidth = std::max(40, (size.x - 15) / 2);
 			_revertPrefabBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 110), HexEngine::Point(prefabButtonWidth, 22), L"Revert Prefab", std::bind(&Inspector::OnRevertPrefabInstance, this, std::placeholders::_1));
 			_applyPrefabBtn = new HexEngine::Button(entityTab, HexEngine::Point(10 + prefabButtonWidth, 110), HexEngine::Point(prefabButtonWidth, 22), L"Apply Prefab", std::bind(&Inspector::OnApplyPrefabInstance, this, std::placeholders::_1));
-			_prefabOverridesBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 136), HexEngine::Point(size.x - 10, 22), L"Overrides...", std::bind(&Inspector::OnOpenPrefabOverrides, this, std::placeholders::_1));
+			_prefabOverridesBtn = new HexEngine::Button(entityTab, HexEngine::Point(5, 136), HexEngine::Point(prefabButtonWidth, 22), L"Overrides...", std::bind(&Inspector::OnOpenPrefabOverrides, this, std::placeholders::_1));
+			_updatePrefabBtn = new HexEngine::Button(entityTab, HexEngine::Point(10 + prefabButtonWidth, 136), HexEngine::Point(prefabButtonWidth, 22), L"Update from Prefab",
+				[this](HexEngine::Button*)
+				{
+					if (_inspecting != nullptr && g_pUIManager != nullptr && g_pUIManager->UpdatePrefabInstanceFromAsset(_inspecting))
+					{
+						auto* entity = _inspecting;
+						_inspecting = nullptr;
+						InspectEntity(entity);
+					}
+					return true;
+				});
+			_updatePrefabBtn->DisableRecursive();
 			_revertPrefabBtn->DisableRecursive();
 			_applyPrefabBtn->DisableRecursive();
 			_prefabOverridesBtn->DisableRecursive();
@@ -318,6 +330,11 @@ namespace HexEditor
 			ClosePrefabApplyPreviewDialog();
 			if (_revertPrefabBtn != nullptr)
 				_revertPrefabBtn->DisableRecursive();
+			if (_updatePrefabBtn != nullptr)
+			{
+				_updatePrefabBtn->DisableRecursive();
+				_updatePrefabBtn->RemoveHighlightOverride();
+			}
 			if (_applyPrefabBtn != nullptr)
 			{
 				_applyPrefabBtn->DisableRecursive();
@@ -389,6 +406,20 @@ namespace HexEditor
 				_revertPrefabBtn->DisableRecursive();
 				_applyPrefabBtn->DisableRecursive();
 				_applyPrefabBtn->RemoveHighlightOverride();
+			}
+		}
+
+		if (_updatePrefabBtn != nullptr)
+		{
+			if (showPrefabButtons && g_pUIManager->IsPrefabInstanceOutOfDate(entity))
+			{
+				_updatePrefabBtn->EnableRecursive();
+				_updatePrefabBtn->SetHighlightOverride(math::Color(HEX_RGBA_TO_FLOAT4(200, 140, 40, 255)));
+			}
+			else
+			{
+				_updatePrefabBtn->DisableRecursive();
+				_updatePrefabBtn->RemoveHighlightOverride();
 			}
 		}
 

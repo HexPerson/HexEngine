@@ -480,3 +480,13 @@ FodyWeavers.xsd
 
 # Scratch frame dumps from GI video captures
 tmp_gi_video_frames/
+
+# Release packaging output (scripts/release/*): staging dir, portable ZIP,
+# installer, and the downloaded/assembled runtime payload. Never committed.
+/dist/
+/release-out/
+
+# Not build output: the release pipeline scripts and engine primitive meshes
+# (Wavefront .obj) would otherwise match [Rr]elease/ and *.obj above.
+!/scripts/release/
+!/Content/EngineData/**/*.obj

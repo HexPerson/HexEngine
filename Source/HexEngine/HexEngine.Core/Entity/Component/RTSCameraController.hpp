@@ -32,6 +32,7 @@ namespace HexEngine
 
 		virtual void Update(float frameTime) override;		
 
+		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;
 
 		virtual bool OnInputEvent(InputEvent event, InputData* data) override;

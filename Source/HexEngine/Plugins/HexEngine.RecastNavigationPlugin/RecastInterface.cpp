@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <cstring>
 
+HexEngine::HVar r_navSmoothPath("nav_smoothPath", "Navmesh paths: step-sampled surface walk (1) instead of the string-pulled straight path (0)", false, false, true);
+
 enum PolyAreas
 {
 	POLYAREA_GROUND,
@@ -247,7 +249,36 @@ bool RecastInterface::CreateNavMeshInternal(HexEngine::Scene* scene, HexEngine::
 	}
 	else
 	{
-		scene->CalculateBounds(min, max);		
+		scene->CalculateBounds(min, max);
+
+		// Explicit bake region: scene bounds include the sky sphere and distant
+		// scenery, which at fine cell sizes makes an enormous, mostly empty grid.
+		if (params.bmax[0] > params.bmin[0] && params.bmax[1] > params.bmin[1] && params.bmax[2] > params.bmin[2])
+		{
+			min = math::Vector3(params.bmin[0], params.bmin[1], params.bmin[2]);
+			max = math::Vector3(params.bmax[0], params.bmax[1], params.bmax[2]);
+		}
+	}
+
+	{
+		const double cellsX = std::ceil((double)(max.x - min.x) / std::max(0.01f, params.cs));
+		const double cellsZ = std::ceil((double)(max.z - min.z) / std::max(0.01f, params.cs));
+		if (cellsX * cellsZ > 120.0e6)
+		{
+			LOG_CRIT("Navmesh build refused: a %.0f x %.0f cell grid (%.0f x %.0f m at %.2f m cells) is too large. Pass a bake region or a larger cell size.",
+				cellsX, cellsZ, max.x - min.x, max.z - min.z, params.cs);
+			return false;
+		}
+	}
+
+	// Recast stores span heights in RC_SPAN_HEIGHT_BITS: a world taller than
+	// RC_SPAN_MAX_HEIGHT cells overflowed rasterisation (access violation in
+	// addSpan - e.g. cellHeight 0.2 over a scene with a sky sphere/mountains).
+	if (params.ch <= 0.0f || (max.y - min.y) / params.ch >= (float)RC_SPAN_MAX_HEIGHT)
+	{
+		LOG_CRIT("Navmesh build refused: scene height %.0f m / cell height %.2f m exceeds Recast's %d-cell span range. Use a larger cell height.",
+			max.y - min.y, params.ch, RC_SPAN_MAX_HEIGHT);
+		return false;
 	}
 
 	rcCalcGridSize(&min.x, &max.x, params.cs, &width, &height);
@@ -929,7 +960,20 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 	math::Vector3 start, end, currentPos;
 
 	navMesh.navMeshQuery->closestPointOnPoly(startRef, &params.from.x, &start.x, nullptr);
-	navMesh.navMeshQuery->closestPointOnPoly(endRef, &params.to.x, &end.x, nullptr);
+	// A partial corridor (target not connected to the start) ends short of
+	// endRef: steer to the closest point on the LAST corridor polygon. Using the
+	// point on endRef glued a straight segment through walls onto the path, so
+	// agents walked through them and callers believed the target was reachable.
+	const dtPolyRef lastRef = pathRefs[pathCount - 1];
+	if (lastRef != endRef)
+	{
+		navMesh.navMeshQuery->closestPointOnPoly(lastRef, &params.to.x, &end.x, nullptr);
+		LOG_DEBUG("FindPath: target unreachable from start - partial path to the nearest reachable point.");
+	}
+	else
+	{
+		navMesh.navMeshQuery->closestPointOnPoly(endRef, &params.to.x, &end.x, nullptr);
+	}
 
 	currentPos = start;
 
@@ -947,6 +991,36 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 	const float stepSize = std::max(0.01f, params.stepSize);
 	static const float SLOP = 0.01f;
 	static const int MAX_SMOOTH = 2048;
+
+	// String-pulled straight path (corners + off-mesh link endpoints). The
+	// moveAlongSurface step-sampling below overshot and doubled back on
+	// multi-level corridors (a 7 m upstairs walk came out 47 m of zigzag);
+	// NavigationComponent ground-snaps between corners, so corners suffice.
+	if (!r_navSmoothPath._val.b)
+	{
+		std::vector<float> straight(512 * 3);
+		std::vector<unsigned char> straightFlags(512);
+		std::vector<dtPolyRef> straightRefs(512);
+		int straightCount = 0;
+		navMesh.navMeshQuery->findStraightPath(&start.x, &end.x, pathRefs.data(), pathCount,
+			straight.data(), straightFlags.data(), straightRefs.data(), &straightCount, 512, 0);
+		result.path.clear();
+		for (int i = 0; i < straightCount; ++i)
+		{
+			const math::Vector3 p(straight[i * 3 + 0], straight[i * 3 + 1], straight[i * 3 + 2]);
+			if (!result.path.empty() && (result.path.back() - p).LengthSquared() < 1e-6f)
+				continue;
+			result.path.push_back(p);
+		}
+		return;
+	}
+
+	// Stall guard: on some corridors (stairs between floors) moveAlongSurface
+	// makes no progress and the steering ping-pongs between two points until
+	// MAX_SMOOTH (a 10 km "path"). Detect it and finish with the plain
+	// straight path along the remaining corridor instead.
+	int stalledSteps = 0;
+	math::Vector3 previousPos = currentPos, previousPos2 = currentPos;
 
 	while (pathCount && result.path.size() < MAX_SMOOTH)
 	{
@@ -989,6 +1063,26 @@ void RecastInterface::FindPath(const PathParams& params, PathResult& result)
 			result2[1] = h;
 
 		dtVcopy(&currentPos.x, result2);
+
+		{
+			const bool noProgress = (currentPos - previousPos).LengthSquared() < 1e-4f;
+			const bool pingPong = (currentPos - previousPos2).LengthSquared() < 1e-4f;
+			stalledSteps = (noProgress || pingPong) ? stalledSteps + 1 : 0;
+			previousPos2 = previousPos;
+			previousPos = currentPos;
+			if (stalledSteps >= 3)
+			{
+				float straight[64 * 3];
+				unsigned char straightFlags[64];
+				dtPolyRef straightRefs[64];
+				int straightCount = 0;
+				navMesh.navMeshQuery->findStraightPath(&currentPos.x, &end.x, pathRefs.data(), pathCount,
+					straight, straightFlags, straightRefs, &straightCount, 64);
+				for (int i = 0; i < straightCount && result.path.size() < MAX_SMOOTH; ++i)
+					result.path.push_back(math::Vector3(straight[i * 3 + 0], straight[i * 3 + 1], straight[i * 3 + 2]));
+				break;
+			}
+		}
 
 		// Handle end of path and off-mesh links when close enough.
 		if (endOfPath && inRange(&currentPos.x, steerPos, SLOP, 1.0f))

@@ -7,6 +7,7 @@
 #include <HexEngine.Core\FileSystem\SceneSaveFile.hpp>
 
 #include <array>
+#include <chrono>
 #include <deque>
 #include <fstream>
 
@@ -203,7 +204,11 @@ namespace HexEditor
 					}
 				}
 
-				LOG_CRIT("Game code build failed with exit code %d. See '%S'", exitCode, logPath.wstring().c_str());
+				// A compile error is routine, not critical: LOG_CRIT pops a modal
+				// "Critical Error" box that stalls whatever thread built (the main
+				// thread for watcher reloads, the bridge's build thread for agents).
+				// The errors are already in the log/console above and in GameBuild.log.
+				LOG_WARN("Game code build failed with exit code %d. See '%S'", exitCode, logPath.wstring().c_str());
 				return false;
 			}
 
@@ -222,7 +227,7 @@ namespace HexEditor
 		bool shouldReload = false;
 		{
 			std::scoped_lock lock(_reloadMutex);
-			if (_reloadRequested && !_isReloading && (std::chrono::steady_clock::now() - _lastCodeChange) >= GameReloadDebounce)
+			if (_autoReloadEnabled && _reloadRequested && !_isReloading && (std::chrono::steady_clock::now() - _lastCodeChange) >= GameReloadDebounce)
 			{
 				_reloadRequested = false;
 				_isReloading = true;
@@ -770,11 +775,13 @@ namespace HexEditor
 		}
 
 		// Full serialised snapshot of the scene via the normal save codec.
+		const auto saveStart = std::chrono::steady_clock::now();
 		HexEngine::SceneSaveFile save(path, std::ios::out | std::ios::trunc, scene);
 		if (save.Save())
 			_playSnapshotPath = path;
 		else
 			LOG_WARN("Play-mode snapshot save failed; scene won't be restored on stop.");
+		LOG_INFO("Play-mode snapshot: saved in %.0f ms", std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - saveStart).count());
 	}
 
 	void GameIntegrator::RestoreSceneState()
@@ -789,6 +796,8 @@ namespace HexEditor
 			// real name across the restore.
 			const auto sceneName = scene->GetName();
 
+			const auto restoreStart = std::chrono::steady_clock::now();
+			double compareMs = 0.0;
 			HexEngine::SceneSaveFile load(_playSnapshotPath, std::ios::in, scene);
 
 			// Restore into entities that still exist (keeps editor-held pointers -
@@ -796,16 +805,68 @@ namespace HexEditor
 			// that were destroyed during play. The deserialize passes are idempotent
 			// per component, so reusing an entity restores it in place.
 			load.SetLoadOverride(
-				[](json& data, const std::string& name, HexEngine::Scene* s, HexEngine::SceneSaveFile* f) -> HexEngine::Entity*
+				[&compareMs](json& data, const std::string& name, HexEngine::Scene* s, HexEngine::SceneSaveFile* f) -> HexEngine::Entity*
 				{
 					if (auto* existing = s->GetEntityByName(name); existing != nullptr)
+					{
+						const auto compareStart = std::chrono::steady_clock::now();
+						struct AddElapsed { double& ms; std::chrono::steady_clock::time_point t; ~AddElapsed() { ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count(); } } addElapsed{ compareMs, compareStart };
+						// Only re-deserialise components that play actually changed.
+						// Deserialising an unchanged component is not free and not
+						// always harmless: the volumetric terrain tore down and
+						// recooked every chunk collider (a ~6 s stall on stop, and
+						// bodies resting on it fell through while the ground was
+						// gone). Transform is always restored; bodies are teleported
+						// to it below. Entity::Deserialize never removes components
+						// that are absent from the data.
+						auto comps = data.find("components");
+						if (comps != data.end() && comps->is_array())
+						{
+							json changed = json::array();
+							for (auto& snap : *comps)
+							{
+								const std::string compName = snap.value("name", std::string());
+								HexEngine::BaseComponent* current =
+									compName.empty() || compName == "Transform" ? nullptr : existing->GetComponentByClassName(compName);
+								if (current != nullptr)
+								{
+									json now = json::object();
+									now["name"] = compName;
+									current->Serialize(now, f);
+									if (now == snap)
+										continue;
+								}
+								changed.push_back(snap);
+							}
+							*comps = std::move(changed);
+						}
 						return existing;
+					}
 					return HexEngine::Entity::LoadFromFile(data, name, s, f);
 				});
 
 			load.Load(scene);
+			const double loadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - restoreStart).count();
 
 			scene->SetName(sceneName);
+
+			// The restore deserialises transforms with the NoNotify setters, so no
+			// TransformChanged reaches RigidBody: a dynamic or kinematic body kept
+			// its play-time pose and wrote it straight back (a bike that fell stayed
+			// fallen, a door opened in play stayed open). Move every body to its
+			// restored transform explicitly.
+			std::vector<HexEngine::EntityId> ids;
+			scene->GetLiveEntityIds(ids);
+			for (const HexEngine::EntityId& id : ids)
+			{
+				if (HexEngine::Entity* e = scene->TryGetEntity(id); e != nullptr && !e->IsPendingDeletion())
+				{
+					if (auto* body = e->GetComponent<HexEngine::RigidBody>(); body != nullptr)
+						body->TeleportToTransform();
+				}
+			}
+			LOG_INFO("Play-mode restore: %.0f ms (load %.0f ms, of which change detection %.0f ms)",
+				std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - restoreStart).count(), loadMs, compareMs);
 		}
 
 		std::error_code ec;
@@ -881,6 +942,65 @@ namespace HexEditor
 		if (wasStarted)
 			return RunGame();
 
+		return true;
+	}
+
+	bool GameIntegrator::BuildGameExclusive(std::string& error)
+	{
+		const auto buildStart = std::chrono::steady_clock::now();
+		{
+			std::scoped_lock lock(_reloadMutex);
+			if (_isReloading)
+			{
+				error = "a game build or hot reload is already running";
+				return false;
+			}
+			_isReloading = true;
+		}
+
+		const bool ok = BuildGame(_lastBuildProjectFileName);
+
+		{
+			std::scoped_lock lock(_reloadMutex);
+			_isReloading = false;
+			// Code changes the watcher queued before this build started are in it;
+			// don't rebuild for them again.
+			if (_reloadRequested && _lastCodeChange <= buildStart)
+				_reloadRequested = false;
+		}
+
+		if (!ok)
+			error = "the game build failed (see Build/GameBuild.log)";
+		return ok;
+	}
+
+	bool GameIntegrator::ReloadBuiltGame(std::string& error)
+	{
+		{
+			std::scoped_lock lock(_reloadMutex);
+			if (_isReloading)
+			{
+				error = "a game build or hot reload is running";
+				return false;
+			}
+		}
+
+		const bool wasStarted = (_state == GameTestState::Started);
+		if ((_gameDll != nullptr || _gameExtension != nullptr) && !UnloadGame())
+		{
+			error = "unloading the previous game module failed";
+			return false;
+		}
+		if (!LoadGame())
+		{
+			error = "loading Build/Game.dll failed (see engine logs)";
+			return false;
+		}
+		if (wasStarted && !RunGame())
+		{
+			error = "the new game module loaded, but play mode did not restart";
+			return false;
+		}
 		return true;
 	}
 
@@ -974,13 +1094,81 @@ namespace HexEditor
 		return {};
 	}
 
+	namespace
+	{
+		// Ask the Visual Studio Installer's vswhere.exe for the newest MSBuild
+		// (any edition, any install location, Build Tools included). Returns an
+		// empty path if vswhere is absent or finds nothing.
+		fs::path FindMSBuildViaVsWhere()
+		{
+			wchar_t programFilesX86[MAX_PATH] = {};
+			if (GetEnvironmentVariableW(L"ProgramFiles(x86)", programFilesX86, MAX_PATH) == 0)
+				return {};
+			const fs::path vswhere = fs::path(programFilesX86) / L"Microsoft Visual Studio/Installer/vswhere.exe";
+			std::error_code ec;
+			if (!fs::exists(vswhere, ec))
+				return {};
+
+			SECURITY_ATTRIBUTES sa = { sizeof(sa), nullptr, TRUE };
+			HANDLE readPipe = nullptr, writePipe = nullptr;
+			if (!CreatePipe(&readPipe, &writePipe, &sa, 0))
+				return {};
+			SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+
+			std::wstring cmd = L"\"" + vswhere.wstring() +
+				L"\" -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe";
+			STARTUPINFOW si = { sizeof(si) };
+			si.dwFlags = STARTF_USESTDHANDLES;
+			si.hStdOutput = writePipe;
+			si.hStdError = writePipe;
+			PROCESS_INFORMATION pi = {};
+			const BOOL started = CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+			CloseHandle(writePipe);
+			if (!started)
+			{
+				CloseHandle(readPipe);
+				return {};
+			}
+
+			std::string output;
+			char buffer[512];
+			DWORD bytesRead = 0;
+			while (ReadFile(readPipe, buffer, sizeof(buffer), &bytesRead, nullptr) && bytesRead > 0)
+				output.append(buffer, bytesRead);
+			WaitForSingleObject(pi.hProcess, 10000);
+			CloseHandle(pi.hProcess);
+			CloseHandle(pi.hThread);
+			CloseHandle(readPipe);
+
+			// First non-empty line is the newest match.
+			std::istringstream lines(output);
+			std::string line;
+			while (std::getline(lines, line))
+			{
+				while (!line.empty() && (line.back() == '\r' || line.back() == ' '))
+					line.pop_back();
+				if (!line.empty() && fs::exists(fs::path(line), ec))
+					return fs::path(line);
+			}
+			return {};
+		}
+	}
+
 	fs::path GameIntegrator::FindMSBuildExecutable() const
 	{
-		static const std::array<fs::path, 4> candidates = {
+		// vswhere first: it knows every edition and install location, including
+		// Build Tools (which lives under Program Files (x86)) and newer VS
+		// versions. The fixed paths remain as a fallback for machines where the
+		// installer isn't present.
+		if (fs::path found = FindMSBuildViaVsWhere(); !found.empty())
+			return found;
+
+		static const std::array<fs::path, 5> candidates = {
 			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin/MSBuild.exe"),
 			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/Professional/MSBuild/Current/Bin/MSBuild.exe"),
 			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/MSBuild.exe"),
-			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/MSBuild.exe")
+			fs::path(L"C:/Program Files/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/MSBuild.exe"),
+			fs::path(L"C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/MSBuild/Current/Bin/MSBuild.exe")
 		};
 
 		for (const auto& candidate : candidates)

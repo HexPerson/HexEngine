@@ -28,6 +28,7 @@ namespace HexEngine
 
 	private:
 		void RenderItems(GuiRenderer* renderer, const Point& position);
+		int32_t HitTestItem(int32_t mx, int32_t my) const;
 
 	private:
 		std::vector<Item> _items;

@@ -128,7 +128,10 @@ bool PhysicsSystemPhysX::Create()
 
 	_dispatcher = physx::PxDefaultCpuDispatcherCreate(2);
 
-	sceneDesc.gravity = physx::PxVec3(0.0f, -98.1f, 0.0f);
+	// Real gravity. Was -98.1 (10x) since the initial commit: hops couldn't
+	// leave the ground and ground friction was 10x, so vehicles needed absurd
+	// drive forces. The player CCT, particles and weather use their own gravity.
+	sceneDesc.gravity = physx::PxVec3(0.0f, -9.81f, 0.0f);
 	sceneDesc.cpuDispatcher = _dispatcher;
 	sceneDesc.filterShader = SampleSubmarineFilterShader;// physx::PxDefaultSimulationFilterShader;
 	sceneDesc.simulationEventCallback = this;
@@ -751,19 +754,40 @@ void PhysicsSystemPhysX::onTrigger(physx::PxTriggerPair* pairs, physx::PxU32 cou
 
 			if (triggerEnt && actorEnt)
 			{
+				// Both sides hear about the overlap: the entering body (other =
+				// the trigger) and the trigger itself (other = the entering body),
+				// so a script on a trigger volume gets OnTriggerEnter/Exit.
 				if (cp.status == physx::PxPairFlag::eNOTIFY_TOUCH_LOST)
 				{
 					HexEngine::LeaveTriggerMessage message;
 					message.trigger = triggerEnt;
 					message.triggerId = triggerEnt->GetId();
+					message.other = triggerEnt;
+					message.otherId = triggerEnt->GetId();
 					actorEnt->OnMessage(&message, triggerEnt);
+
+					HexEngine::LeaveTriggerMessage toTrigger;
+					toTrigger.trigger = triggerEnt;
+					toTrigger.triggerId = triggerEnt->GetId();
+					toTrigger.other = actorEnt;
+					toTrigger.otherId = actorEnt->GetId();
+					triggerEnt->OnMessage(&toTrigger, actorEnt);
 				}
 				else if (cp.status == physx::PxPairFlag::eNOTIFY_TOUCH_FOUND)
 				{
 					HexEngine::EnterTriggerMessage message;
 					message.trigger = triggerEnt;
 					message.triggerId = triggerEnt->GetId();
+					message.other = triggerEnt;
+					message.otherId = triggerEnt->GetId();
 					actorEnt->OnMessage(&message, triggerEnt);
+
+					HexEngine::EnterTriggerMessage toTrigger;
+					toTrigger.trigger = triggerEnt;
+					toTrigger.triggerId = triggerEnt->GetId();
+					toTrigger.other = actorEnt;
+					toTrigger.otherId = actorEnt->GetId();
+					triggerEnt->OnMessage(&toTrigger, actorEnt);
 				}
 			}
 		}
@@ -816,6 +840,9 @@ uint32_t PhysicsSystemPhysX::RayCast(const math::Vector3& from, const math::Vect
 		hitInfo->distance = hit.distance;
 		hitInfo->entity = entity;
 		hitInfo->normal = math::Vector3(hit.normal.x, hit.normal.y, hit.normal.z);
+		hitInfo->smoothNormal = hitInfo->normal;
+		hitInfo->backFace = hitInfo->normal.Dot(unitDir) > 0.0f;
+		hitInfo->source = HexEngine::RayHitSource::Collider;
 		hitInfo->start = from;
 	}
 
@@ -824,6 +851,65 @@ uint32_t PhysicsSystemPhysX::RayCast(const math::Vector3& from, const math::Vect
 
 namespace
 {
+	// The engine entity that owns a PhysX actor. Ordinary bodies resolve via
+	// their RigidBody component; character controllers have no component
+	// (RigidBodyPhysX is built with bodyComponent == nullptr) but do carry
+	// their entity, so fall back to that - otherwise a CCT capsule hit has no
+	// entity and can't be ignored or layer-filtered by the caller.
+	HexEngine::Entity* EntityFromActor(const physx::PxRigidActor* actor)
+	{
+		if (actor == nullptr || actor->userData == nullptr)
+			return nullptr;
+		RigidBodyPhysX* rb = (RigidBodyPhysX*)actor->userData;
+		if (rb->GetBodyComponent() != nullptr)
+			return rb->GetBodyComponent()->GetEntity();
+		return rb->GetEntity();
+	}
+
+	void FillSceneHit(HexEngine::RayHit* hitInfo, const math::Vector3& from, const math::Vector3& unitDir, const physx::PxRaycastHit& b)
+	{
+		hitInfo->start = from;
+		hitInfo->position = math::Vector3(b.position.x, b.position.y, b.position.z);
+		hitInfo->normal = math::Vector3(b.normal.x, b.normal.y, b.normal.z);
+		hitInfo->smoothNormal = hitInfo->normal;
+		hitInfo->distance = b.distance;
+		hitInfo->entity = EntityFromActor(b.actor);
+		hitInfo->uv = math::Vector2(0.0f, 0.0f);
+		hitInfo->backFace = hitInfo->normal.Dot(unitDir) > 0.0f;
+		hitInfo->source = HexEngine::RayHitSource::PhysicsScene;
+		hitInfo->triangleIndex = UINT32_MAX;
+	}
+
+	// Prefilter for RayCastSceneFiltered: drops the ignore body and any
+	// collider whose entity the caller rejects, so the query continues to
+	// whatever is behind them. touchMode turns every accepted collider into a
+	// touch so a slope filter can look past a steep nearest surface.
+	struct EntityQueryFilter : public physx::PxQueryFilterCallback
+	{
+		const physx::PxRigidActor* ignore = nullptr;
+		const HexEngine::RaySceneFilter* filter = nullptr;
+		bool touchMode = false;
+
+		virtual physx::PxQueryHitType::Enum preFilter(
+			const physx::PxFilterData&, const physx::PxShape*,
+			const physx::PxRigidActor* actor, physx::PxHitFlags&) override
+		{
+			if (actor == ignore)
+				return physx::PxQueryHitType::eNONE;
+			if (filter != nullptr && filter->acceptEntity != nullptr &&
+				!filter->acceptEntity(EntityFromActor(actor), filter->context))
+				return physx::PxQueryHitType::eNONE;
+			return touchMode ? physx::PxQueryHitType::eTOUCH : physx::PxQueryHitType::eBLOCK;
+		}
+
+		virtual physx::PxQueryHitType::Enum postFilter(
+			const physx::PxFilterData&, const physx::PxQueryHit&,
+			const physx::PxShape*, const physx::PxRigidActor*) override
+		{
+			return touchMode ? physx::PxQueryHitType::eTOUCH : physx::PxQueryHitType::eBLOCK;
+		}
+	};
+
 	// Scene raycast prefilter that rejects a single actor (the caster's own
 	// body), so a downward ground probe doesn't just hit its own collider.
 	struct IgnoreActorQueryFilter : public physx::PxQueryFilterCallback
@@ -875,19 +961,73 @@ uint32_t PhysicsSystemPhysX::RayCastScene(const math::Vector3& from, const math:
 	if (!hit || !buf.hasBlock)
 		return 0;
 
-	const physx::PxRaycastHit& b = buf.block;
-	hitInfo->start = from;
-	hitInfo->position = math::Vector3(b.position.x, b.position.y, b.position.z);
-	hitInfo->normal = math::Vector3(b.normal.x, b.normal.y, b.normal.z);
-	hitInfo->distance = b.distance;
-	hitInfo->entity = nullptr;
-	if (b.actor != nullptr && b.actor->userData != nullptr)
+	FillSceneHit(hitInfo, from, math::Vector3(_dir.x, _dir.y, _dir.z), buf.block);
+	return 1;
+}
+
+uint32_t PhysicsSystemPhysX::RayCastSceneFiltered(const math::Vector3& from, const math::Vector3& unitDir, float maxDist, HexEngine::RayHit* hitInfo, const HexEngine::RaySceneFilter& filter)
+{
+	if (_scene == nullptr || hitInfo == nullptr || !(maxDist > 0.0f))
+		return 0;
+
+	const physx::PxVec3 _from(from.x, from.y, from.z);
+	physx::PxVec3 _dir(unitDir.x, unitDir.y, unitDir.z);
+	if (_dir.magnitudeSquared() < 1e-12f)
+		return 0;
+	_dir.normalize();
+	const math::Vector3 dir(_dir.x, _dir.y, _dir.z);
+
+	EntityQueryFilter cb;
+	cb.ignore = filter.ignoreBody != nullptr ? ((RigidBodyPhysX*)filter.ignoreBody)->GetRigidActor() : nullptr;
+	cb.filter = &filter;
+	// A slope limit has to see past a steep nearest surface - including other
+	// triangles of the SAME mesh/heightfield (eMESH_MULTIPLE) - so it collects
+	// every touch and picks the nearest acceptable one. Without one, the
+	// single nearest blocking hit is all we need.
+	cb.touchMode = filter.minNormalY > -1.0f;
+
+	physx::PxQueryFilterData fd;
+	fd.flags = physx::PxQueryFlag::eSTATIC | physx::PxQueryFlag::eDYNAMIC | physx::PxQueryFlag::ePREFILTER;
+
+	physx::PxHitFlags hitFlags = physx::PxHitFlag::ePOSITION | physx::PxHitFlag::eNORMAL;
+
+	if (!cb.touchMode)
 	{
-		RigidBodyPhysX* rb = (RigidBodyPhysX*)b.actor->userData;
-		if (rb->GetBodyComponent() != nullptr)
-			hitInfo->entity = rb->GetBodyComponent()->GetEntity();
+		physx::PxRaycastBuffer buf;
+		_scene->lockRead();
+		const bool hit = _scene->raycast(_from, _dir, maxDist, buf, hitFlags, fd, &cb);
+		_scene->unlockRead();
+		if (!hit || !buf.hasBlock)
+			return 0;
+		FillSceneHit(hitInfo, from, dir, buf.block);
+		return 1;
 	}
 
+	hitFlags |= physx::PxHitFlag::eMESH_MULTIPLE;
+	fd.flags |= physx::PxQueryFlag::eNO_BLOCK;
+	// If more colliders than this are touched the overflow is dropped by
+	// PhysX (in no defined order); 256 is far beyond a sane single ray.
+	constexpr physx::PxU32 kMaxTouches = 256;
+	thread_local physx::PxRaycastHit touches[kMaxTouches];
+	physx::PxRaycastBuffer buf(touches, kMaxTouches);
+
+	_scene->lockRead();
+	_scene->raycast(_from, _dir, maxDist, buf, hitFlags, fd, &cb);
+	_scene->unlockRead();
+
+	const physx::PxRaycastHit* best = nullptr;
+	for (physx::PxU32 i = 0; i < buf.nbTouches; ++i)
+	{
+		const physx::PxRaycastHit& t = buf.touches[i];
+		if (t.normal.y < filter.minNormalY)
+			continue;
+		if (best == nullptr || t.distance < best->distance)
+			best = &t;
+	}
+	if (best == nullptr)
+		return 0;
+
+	FillSceneHit(hitInfo, from, dir, *best);
 	return 1;
 }
 

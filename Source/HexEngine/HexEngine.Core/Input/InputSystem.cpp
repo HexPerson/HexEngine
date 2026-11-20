@@ -459,7 +459,8 @@ namespace HexEngine
 	void InputSystem::OnMouseMove(float x, float y, bool absolute)
 	{
 		// no need to send if we have no movement (this can happen with smoothed mouse input)
-		if (x != 0.0f && y != 0.0f)
+		// (Was &&: a purely horizontal or vertical move was silently dropped.)
+		if (x != 0.0f || y != 0.0f)
 		{
 			InputData data;
 			data.MouseMove.x = x;

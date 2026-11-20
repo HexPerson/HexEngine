@@ -180,6 +180,14 @@ private:
 	bool _engineSoundPlaying = false;
 	float _blockedTime = 0.0f;
 	float _honkCooldown = 0.0f;
+	// Continuous time this vehicle has wanted to move but been held at a stop.
+	// Unlike _blockedTime (the honk timer, reset on every honk) this only
+	// resets when the vehicle actually moves, so the gridlock breaker in
+	// ComputeAvoidanceSpeed can compare how long two vehicles have waited.
+	float _waitTime = 0.0f;
+	// Vehicle we decided to drive through to break a gridlock; ignored until it
+	// leaves our look-ahead corridor. Identity only - never dereferenced.
+	const TrafficVehicleComponent* _gridlockBypass = nullptr;
 
 	// Set when the component is DESERIALIZED (loaded from a saved scene).
 	// Spawner-created vehicles are explicitly placed onto the lane via

@@ -85,7 +85,10 @@
     <ClInclude Include="BridgeServer.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Plugin.cpp" />
+    <ClCompile Include="Plugin.cpp">
+      <!-- Plugin.cpp hit the COFF section limit (C1128) with the navmesh tools. -->
+      <AdditionalOptions>%(AdditionalOptions) /bigobj</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="BridgeServer.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

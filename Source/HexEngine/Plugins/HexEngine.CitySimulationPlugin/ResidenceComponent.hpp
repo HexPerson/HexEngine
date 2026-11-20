@@ -16,6 +16,11 @@ public:
 	const std::string& GetEntryWaypointEntityName() const { return _entryWaypointEntityName; }
 	const std::string& GetParkingWaypointEntityName() const { return _parkingWaypointEntityName; }
 
+	// Resolved against this building's own hierarchy first (prefab instances
+	// get de-duplicated child names), then the scene.
+	std::string ResolveEntryWaypointName() const;
+	std::string ResolveParkingWaypointName() const;
+
 	void SetHouseholdCapacity(int32_t v) { _householdCapacity = v; }
 	void SetEntryWaypointEntityName(const std::string& v) { _entryWaypointEntityName = v; }
 	void SetParkingWaypointEntityName(const std::string& v) { _parkingWaypointEntityName = v; }

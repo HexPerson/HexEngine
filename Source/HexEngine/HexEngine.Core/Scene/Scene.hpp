@@ -15,6 +15,7 @@
 #include "../Terrain/HeightMapGenerator.hpp"
 #include "SnowFootprintSystem.hpp"
 #include "OceanWaveModel.hpp"
+#include <deque>
 #include <functional>
 #include <limits>
 #include <type_traits>
@@ -28,7 +29,12 @@ namespace HexEngine
 		Updateable				= HEX_BITSET(1),
 		Renderable				= HEX_BITSET(2),
 		PostProcessingEnabled	= HEX_BITSET(3),
-		Utility					= HEX_BITSET(4)
+		Utility					= HEX_BITSET(4),
+		// Run the deferred light pass even though post-processing is off. Without it
+		// a non-post render (thumbnails, editor previews) is flat unlit albedo; with it
+		// the view gets sun/local lights and shadows but none of the temporal effects
+		// (TAA, GI, exposure, fog) whose shared history a second view would disturb.
+		PreviewLighting			= HEX_BITSET(5)
 	};
 
 	DEFINE_ENUM_FLAG_OPERATORS(SceneFlags);
@@ -170,10 +176,17 @@ namespace HexEngine
 		void CalculateBounds(math::Vector3& min, math::Vector3& max);
 		bool GatherStaticMeshesInBounds(const dx::BoundingBox& bounds, std::vector<StaticMeshComponent*>& outComponents, bool includeDynamic = true);
 		uint64_t GetGiGeometryRevision() const;
-		// Bumped on ANY meshed entity's transform change and on geometry
-		// add/change - no GI exclusions, no debounce. The shadow atlas keys
-		// its cache invalidation off this, never off the GI revision.
-		uint64_t GetShadowGeometryRevision() const { return _shadowGeometryRevision; }
+		// Shadow-atlas invalidation journal. Every shadow-casting meshed entity's
+		// transform change and every geometry add/change records a world-space
+		// region (the union of where it was and where it is) - no GI exclusions,
+		// no debounce. A cached atlas face re-renders only when a region recorded
+		// since its last check intersects its light's volume, so one walking NPC
+		// no longer re-dirties every shadowed lamp in the city (the old single
+		// scene-wide revision did, every frame).
+		uint64_t GetShadowDirtySequence();
+		// True if anything recorded after `sinceSeq` touches `volume`; also true
+		// when the journal has since overflowed past `sinceSeq` (conservative).
+		bool IsShadowVolumeDirtySince(uint64_t sinceSeq, const dx::BoundingSphere& volume);
 		uint64_t GetGiMaterialRevision() const;
 		uint64_t GetGiLightRevision() const;
 		void NotifyGiMaterialStateChanged();
@@ -502,7 +515,17 @@ namespace HexEngine
 		bool _didAnyDrawnItemReflect = false;
 		bool _wasPvsReset = true;
 		uint64_t _giGeometryRevision = 1ull;
-		uint64_t _shadowGeometryRevision = 1ull;
+		struct ShadowDirtyRegion
+		{
+			uint64_t seq = 0ull;
+			dx::BoundingSphere bounds;	// radius = FLT_MAX means "everywhere"
+		};
+		static constexpr size_t kMaxShadowDirtyRegions = 8192;
+		std::deque<ShadowDirtyRegion> _shadowDirtyRegions;
+		uint64_t _shadowDirtySeq = 0ull;		// seq of the newest region
+		uint64_t _shadowDirtyFloorSeq = 0ull;	// newest seq dropped by the cap
+		void RecordShadowDirty(Entity* entity);	// caller holds _lock
+		void PushShadowDirtyRegion(const dx::BoundingSphere& bounds);
 		uint64_t _giMaterialRevision = 1ull;
 		uint64_t _giLightRevision = 1ull;
 		bool _giSpatialCacheDirty = true;

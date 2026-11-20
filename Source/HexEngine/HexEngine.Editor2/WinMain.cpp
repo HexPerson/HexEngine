@@ -6,6 +6,16 @@ static std::vector<std::shared_ptr<HexEngine::IShader>> g_hotReloadShaders;
 
 void PrepareShaderHotReload()
 {
+	// _SHADERS_LIVE_DIR is the SOURCE tree's HexEngine.Shaders folder, baked in at
+	// compile time. It only exists on a developer machine: an installed or
+	// portable build has no source tree, and iterating a missing directory
+	// throws - which crashed the editor on startup. No sources, no hot reload.
+	{
+		std::error_code ec;
+		if (!std::filesystem::is_directory(_SHADERS_LIVE_DIR, ec))
+			return;
+	}
+
 	// find all the shaders in the shaders dir, and "load" them.
 	// the reason we do this is so that change notifications can be received later on
 	for (auto const& dir_entry : std::filesystem::recursive_directory_iterator(_SHADERS_LIVE_DIR))
@@ -36,6 +46,18 @@ int WinMain(
 	int       nShowCmd
 )
 {
+	// The engine resolves Data\, Plugins\, Bin\ and the helper tools relative to
+	// the WORKING directory. An installed build can be started from anywhere
+	// (a pinned taskbar icon, a file association, another folder's shell), so
+	// pin it to the install folder rather than trust the caller's. Dev builds
+	// keep their existing behaviour (Visual Studio sets the working dir).
+	if (HexEngine::FileSystem::IsInstalledBuild())
+	{
+		wchar_t exePath[MAX_PATH] = {};
+		if (GetModuleFileNameW(nullptr, exePath, MAX_PATH) > 0)
+			SetCurrentDirectoryW(fs::path(exePath).parent_path().c_str());
+	}
+
 	SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_SYSTEM_AWARE);
 
 

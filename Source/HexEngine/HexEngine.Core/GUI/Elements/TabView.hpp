@@ -20,6 +20,14 @@ namespace HexEngine
 		void SetActiveTab(int32_t idx);
 		void SetActiveTab(TabItem* item);
 
+		// Removes and deletes `item`, sliding later tabs (and their content) left. If
+		// it was active, the tab before it becomes active.
+		void RemoveTab(TabItem* item);
+
+		// Re-packs the tab headers left to right (after a header changes width).
+		void Relayout();
+		const std::vector<TabItem*>& GetTabs() const { return _items; }
+
 	private:
 		std::vector<TabItem*> _items;
 		int32_t _currentIndex = -1;

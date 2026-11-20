@@ -378,6 +378,7 @@ void GraphicsDeviceD3D11::Destroy()
 	SAFE_RELEASE(_velocityMrtTransparency);
 	SAFE_DELETE_ARRAY(_emptyShaderResources);
 	SAFE_RELEASE(_texSamplerComparison);
+	SAFE_RELEASE(_texSamplerBiased);
 	SAFE_DELETE(_textureLoader);
 	SAFE_RELEASE(_deviceContext);
 
@@ -2875,12 +2876,43 @@ HexEngine::CullingMode GraphicsDeviceD3D11::GetCullingMode() const
 	return _prevRenderState._cullMode;
 }
 
+ID3D11SamplerState* GraphicsDeviceD3D11::GetMaterialSampler() const
+{
+	return _texSamplerBiased != nullptr ? _texSamplerBiased : _states->AnisotropicWrap();
+}
+
+void GraphicsDeviceD3D11::SetTextureMipBias(float bias)
+{
+	bias = std::clamp(bias, -4.0f, 4.0f);
+	if (std::abs(bias - _texMipBias) > 1e-3f)
+	{
+		_texMipBias = bias;
+		SAFE_RELEASE(_texSamplerBiased);
+		if (std::abs(bias) > 1e-3f)
+		{
+			// Same state as CommonStates::AnisotropicWrap, plus the bias.
+			D3D11_SAMPLER_DESC desc = {};
+			desc.Filter = D3D11_FILTER_ANISOTROPIC;
+			desc.AddressU = desc.AddressV = desc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+			desc.MaxAnisotropy = D3D11_MAX_MAXANISOTROPY;
+			desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+			desc.MaxLOD = D3D11_FLOAT32_MAX;
+			desc.MipLODBias = bias;
+			if (FAILED(_device->CreateSamplerState(&desc, &_texSamplerBiased)))
+				_texSamplerBiased = nullptr;
+		}
+	}
+
+	ID3D11SamplerState* sampler = GetMaterialSampler();
+	_deviceContext->PSSetSamplers(0, 1, &sampler);
+}
+
 void GraphicsDeviceD3D11::ResetState()
 {
 	_prevRenderState.Reset();
 	_deviceContext->ClearState();
 
-	ID3D11SamplerState* samplers[] = { _states->AnisotropicWrap(), _texSamplerComparison, _states->PointWrap(), _texSamplerMirrored, _states->LinearClamp() };
+	ID3D11SamplerState* samplers[] = { GetMaterialSampler(), _texSamplerComparison, _states->PointWrap(), _texSamplerMirrored, _states->LinearClamp() };
 	_deviceContext->PSSetSamplers(0, 5, samplers);
 }
 
@@ -2900,7 +2932,7 @@ void GraphicsDeviceD3D11::BeginFrame(HexEngine::Window* window, HexEngine::IText
 
 	SetDepthBufferState(HexEngine::DepthBufferState::DepthDefault);
 
-	ID3D11SamplerState* samplers[] = { _states->AnisotropicWrap(), _texSamplerComparison, _states->PointWrap(), _texSamplerMirrored, _states->LinearWrap() };
+	ID3D11SamplerState* samplers[] = { GetMaterialSampler(), _texSamplerComparison, _states->PointWrap(), _texSamplerMirrored, _states->LinearWrap() };
 	_deviceContext->PSSetSamplers(0, 5, samplers);
 
 	it->second.backbuffer->ClearRenderTargetView(math::Color(HEX_RGBA_TO_FLOAT4(83, 92, 111, 255)));

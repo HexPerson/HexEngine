@@ -6,9 +6,12 @@
 #include "../../HexEngine.Core/Environment/IEnvironment.hpp"
 #include "../../HexEngine.Core/FileSystem/KeyValues.hpp"
 #include "../../HexEngine.Core/Graphics/IShader.hpp"
-#include <ShaderConductor/ShaderConductor.hpp>
 
-using namespace ShaderConductor;
+// Unqualified ShaderStage (used across the compiler) is the engine's own enum.
+// It used to resolve through `using namespace ShaderConductor` to an identical
+// enum; ShaderConductor is no longer a dependency.
+using HexEngine::ShaderStage;
+
 
 extern fs::path gWorkingDirectory;
 

@@ -442,7 +442,14 @@ namespace HexEngine
 		// below take the scene lock, and acquiring it while holding the PVS lock
 		// would invert the order used by entity-add paths (scene lock ->
 		// PVS::FlushEntity).
-		std::vector<StaticMeshComponent*> components;
+		// Per-thread scratch reused across rebuilds: a fresh vector grew to ~10k
+		// candidates by repeated push_back on EVERY rebuild, and right after a
+		// play start (camera teleport + every shadow light rebuilding) those
+		// reallocations were the top main-thread cost. clear() keeps capacity.
+		// Not re-entrant per thread, so one buffer per thread is safe.
+		thread_local std::vector<StaticMeshComponent*> t_candidateScratch;
+		std::vector<StaticMeshComponent*>& components = t_candidateScratch;
+		components.clear();
 
 		if (g_pEnv->_chunkManager->HasActiveChunks(scene))
 		{

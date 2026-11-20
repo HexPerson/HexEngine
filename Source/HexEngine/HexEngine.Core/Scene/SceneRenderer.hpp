@@ -24,7 +24,7 @@ namespace HexEngine
 		class IStructuredBuffer;
 	class IIndexBuffer;
 
-	class SceneRenderer
+	class HEX_API SceneRenderer
 	{
 	public:
 		SceneRenderer();
@@ -41,6 +41,10 @@ namespace HexEngine
 		ITexture2D* GetBeautyTexture() const;
 		std::shared_ptr<ITexture2D> GetNoiseTexture() const { return _blueNoise;}
 		const std::vector<Light*>& GetShadowCasters() const;
+
+		// Scene::FlushPVS hook: drops a removed entity from renderer-owned
+		// PVSes that aren't a camera's or a light's (the rain occlusion PVS).
+		void FlushRainOcclusionEntity(Entity* entity);
 		void ClearShadowCasters();
 		void RemoveShadowCaster(Light* light);
 
@@ -166,6 +170,14 @@ namespace HexEngine
 		void RenderDecals();
 		void RenderVignette();
 		void SetStreamlineConstants();
+
+		// FSR 2 (IUpscalerProvider plugin) is upscaling the current camera.
+		bool IsFsrActive() const;
+		// This frame's projection jitter in NDC for a render viewport: the upscaler's
+		// sequence while FSR is active, TAA's otherwise.
+		math::Vector2 GetFrameJitter(float renderWidth, float renderHeight) const;
+		// Runs the FSR upscale of _beautyRT into _dlssTarget. False = nothing written.
+		bool EvaluateFsr();
 
 		// Gathers the closest point + spot lights in the scene and uploads them to the
 		// forward-lights constant buffer (PS slot b7). Used by the transparency pass so glass /
@@ -395,7 +407,7 @@ namespace HexEngine
 		IConstantBuffer* _cloudConstantBuffer = nullptr;
 		IConstantBuffer* _forwardLightsBuffer = nullptr;
 		std::shared_ptr<Mesh> _sphereMesh = nullptr;
-		Entity* _sphereEntity = nullptr;
+		Entity* _sphereEntity = nullptr; // unused: the light volume no longer has an entity (kept so the class layout doesn't change)
 		std::shared_ptr<Material> _pointLightMaterial;
 		std::shared_ptr<Material> _spotLightMaterial;
 
@@ -410,6 +422,11 @@ namespace HexEngine
 		Camera* _taaHistoryCamera = nullptr;
 		Scene* _taaHistoryScene = nullptr;
 		math::Vector3 _taaHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
+		// Same cut detection for the FSR history, tracked only across FSR renders so
+		// other cameras rendering in between (previews, captures) don't reset it.
+		Camera* _fsrHistoryCamera = nullptr;
+		Scene* _fsrHistoryScene = nullptr;
+		math::Vector3 _fsrHistoryCameraPos = math::Vector3(0.0f, 0.0f, 0.0f);
 		DiffuseGI _diffuseGi;
 		// GI ambient-ownership compose is live for the current view (main
 		// camera, GI on, blurred AO available). Set in SetupPerFrameBuffer
@@ -515,5 +532,9 @@ namespace HexEngine
 		int32_t _ssrBaseHeight = 0;
 
 		DenoiserFrameData _denoiseFD;
+
+		// Scene the rain occlusion PVS snapshot was built from (identity only,
+		// never dereferenced): a different current scene forces a rebuild.
+		const Scene* _rainOcclusionScene = nullptr;
 	};
 }

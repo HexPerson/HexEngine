@@ -5,6 +5,8 @@
 #include "../Entity.hpp"
 #include "Transform.hpp"
 #include "StaticMeshComponent.hpp"
+#include "RigidBody.hpp"
+#include "../../Scene/Mesh.hpp"
 #include "../../Environment/IEnvironment.hpp"
 #include "../../Graphics/DebugRenderer.hpp"
 #include "../../Audio/AudioManager.hpp"
@@ -16,6 +18,7 @@
 #include "../../GUI/Elements/DropDown.hpp"
 #include "../../GUI/Elements/AssetSearch.hpp"
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 
 namespace HexEngine
@@ -57,12 +60,16 @@ namespace HexEngine
 			_isOpen = false;
 			_t = 0.0f;
 			_closedCaptured = false;
+			_colliderFitted = false;
 			return;
 		}
 
 		auto* tf = GetEntity()->GetComponent<Transform>();
 		if (tf == nullptr)
 			return;
+
+		if (!_colliderFitted)
+			_colliderFitted = FitColliderToLeaf();
 
 		if (!_closedCaptured)
 		{
@@ -96,6 +103,72 @@ namespace HexEngine
 			if (std::fabs(_t - target) <= 1e-4f)
 				SetSwingGiExclusion(false); // settled - hand the door back to GI at its final pose
 		}
+	}
+
+	bool DoorComponent::FitColliderToLeaf()
+	{
+		// Doors are usually a frame mesh with the glass split into child meshes that
+		// have no collider, and the door's own collider is a triangle mesh of the
+		// FRAME only. The interaction focus ray is a physics query, so looking at
+		// the glass went straight through and the door couldn't be opened (178 of
+		// 202 Whereabouts doors). For the play session, replace that collider with
+		// a box around the leaf AND its collider-less child meshes. Stop restores the
+		// authored collider through the play/stop scene snapshot.
+		auto* rb = GetEntity()->GetComponent<RigidBody>();
+		if (rb == nullptr || rb->GetColliderShape() != IRigidBody::ColliderShape::TriangleMesh)
+			return true;    // no collider / already a primitive: nothing to do
+		if (rb->HasAsyncColliderInFlight())
+			return false;   // let the async cook land first, retry next tick
+
+		math::Vector3 lo(FLT_MAX, FLT_MAX, FLT_MAX);
+		math::Vector3 hi(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+		bool any = false;
+		auto addBounds = [&](const dx::BoundingBox& b, const math::Matrix* toDoorLocal)
+		{
+			dx::XMFLOAT3 corners[dx::BoundingBox::CORNER_COUNT];
+			b.GetCorners(corners);
+			for (const auto& c : corners)
+			{
+				math::Vector3 p(c.x, c.y, c.z);
+				if (toDoorLocal != nullptr)
+					p = math::Vector3::Transform(p, *toDoorLocal);
+				lo = math::Vector3::Min(lo, p);
+				hi = math::Vector3::Max(hi, p);
+			}
+			any = true;
+		};
+
+		if (auto* smc = GetEntity()->GetComponent<StaticMeshComponent>())
+			if (auto mesh = smc->GetMesh())
+				addBounds(mesh->GetAABB(), nullptr);
+
+		bool hasPane = false;
+		for (Entity* child : GetEntity()->GetChildren())
+		{
+			if (child == nullptr || child->GetComponent<RigidBody>() != nullptr)
+				continue;   // children with their own collider are hittable already
+			auto* csmc = child->GetComponent<StaticMeshComponent>();
+			auto cmesh = csmc != nullptr ? csmc->GetMesh() : nullptr;
+			if (cmesh == nullptr)
+				continue;
+			const math::Matrix childLocal = child->GetLocalTM();
+			addBounds(cmesh->GetAABB(), &childLocal);
+			hasPane = true;
+		}
+
+		// Only doors with collider-less panes need this; plain solid doors keep
+		// their exact triangle-mesh collider.
+		if (!any || !hasPane)
+			return true;
+
+		dx::BoundingBox box;
+		box.Center = (lo + hi) * 0.5f;
+		const math::Vector3 ext = (hi - lo) * 0.5f;
+		box.Extents = math::Vector3(std::max(ext.x, 0.02f), std::max(ext.y, 0.02f), std::max(ext.z, 0.02f));
+
+		rb->RemoveCollider();
+		rb->AddBoxCollider(box);
+		return true;
 	}
 
 	void DoorComponent::ApplyAngle()

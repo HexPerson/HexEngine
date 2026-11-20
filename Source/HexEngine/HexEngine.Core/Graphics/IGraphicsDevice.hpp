@@ -552,6 +552,16 @@ namespace HexEngine
 		/** @brief Resets cached graphics state to backend defaults. */
 		virtual void ResetState() = 0;
 
+		/**
+		 * @brief LOD bias for the material texture sampler (s0).
+		 *
+		 * Temporal upscalers render below display resolution; a negative bias keeps
+		 * surface textures at display-resolution sharpness (the upscaler's jitter
+		 * resolves the extra detail). Takes effect immediately and persists across
+		 * frames. Backends without a configurable sampler ignore it.
+		 */
+		virtual void SetTextureMipBias(float bias) { (void)bias; }
+
 		/** @brief Returns preferred swapchain/backbuffer format for this backend. */
 		virtual TextureFormat GetDesiredBackBufferFormat() const
 		{

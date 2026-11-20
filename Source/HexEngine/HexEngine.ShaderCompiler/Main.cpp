@@ -2,12 +2,10 @@
 #include "../HexEngine.Core/Required.hpp"
 #include "../HexEngine.Core/Environment/IEnvironment.hpp"
 #include "../HexEngine.Core/FileSystem/KeyValues.hpp"
-#include <ShaderConductor/ShaderConductor.hpp>
 #include <cxxopts.hpp>
 #include "Compilers\BaseCompiler.hpp"
 #include "Compilers\HLSL.hpp"
 
-using namespace ShaderConductor;
 
 fs::path gWorkingDirectory;
 

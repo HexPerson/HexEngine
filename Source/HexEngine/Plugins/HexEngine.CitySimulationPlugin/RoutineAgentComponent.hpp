@@ -29,6 +29,23 @@ enum class RoutineTravelMode
 	WalkOnly,
 };
 
+// How an agent picks between walking and driving for a trip.
+enum class RoutineTravelPreference : int32_t
+{
+	Auto = 0,	// walk trips up to the routine system's walk distance, drive longer ones
+	Walk = 1,
+	Drive = 2,
+};
+
+// One block of an agent's day. activity is "Home", "Work", or a visitor
+// service tag offered by PlaceOfWork venues ("Food", "Shop", "Leisure", ...).
+struct RoutineScheduleBlock
+{
+	float start = 0.0f;
+	float end = 24.0f;
+	std::string activity;
+};
+
 struct RoutineTaskSpec
 {
 	RoutineTaskType type = RoutineTaskType::None;
@@ -70,6 +87,25 @@ public:
 	bool IsBusy() const { return _isBusy; }
 	bool IsOnShift() const { return _isOnShift; }
 
+	// Day schedule: "start-end:Activity" entries separated by ',' or ';',
+	// hours 0-24, wrapping allowed ("22-6:Home"). Empty = legacy behaviour
+	// (at work during the workplace's shifts, otherwise home).
+	const std::string& GetScheduleCsv() const { return _scheduleCsv; }
+	const std::vector<RoutineScheduleBlock>& GetSchedule() const { return _schedule; }
+	void SetScheduleCsv(const std::string& value) { _scheduleCsv = value; RebuildSchedule(); }
+	RoutineTravelPreference GetTravelPreference() const { return (RoutineTravelPreference)_travelPreference; }
+	float GetWalkSpeed() const { return _walkSpeed; }
+	// Block boundaries shift by up to +/- half this many hours, deterministically
+	// per agent and block, so a crowd does not move in lockstep.
+	float GetScheduleJitterHours() const { return _scheduleJitterHours; }
+
+	// Runtime: the venue chosen for the current schedule block (re-picked when
+	// the block changes).
+	uint64_t GetPlannedBlockKey() const { return _plannedBlockKey; }
+	const std::string& GetPlannedTargetName() const { return _plannedTargetName; }
+	void SetPlannedBlock(uint64_t key, const std::string& target) { _plannedBlockKey = key; _plannedTargetName = target; }
+	float& SeedCooldownRef() { return _seedCooldown; }
+
 	void SetAssignedWorkplaceEntityName(const std::string& value) { _assignedWorkplaceEntityName = value; }
 	void SetCurrentVehicleEntityName(const std::string& value) { _currentVehicleEntityName = value; }
 	void SetBusy(bool value) { _isBusy = value; }
@@ -100,6 +136,7 @@ public:
 
 private:
 	void RebuildRoleTags();
+	void RebuildSchedule();
 
 private:
 	std::string _roleTagsCsv = "Citizen";
@@ -119,4 +156,13 @@ private:
 	float _stateTimer = 0.0f;
 	float _retryTimer = 0.0f;
 	bool _navigationReachedFlag = false;
+
+	std::string _scheduleCsv;
+	std::vector<RoutineScheduleBlock> _schedule;
+	int32_t _travelPreference = (int32_t)RoutineTravelPreference::Auto;
+	float _walkSpeed = 1.6f;
+	float _scheduleJitterHours = 0.5f;
+	uint64_t _plannedBlockKey = ~0ull;
+	std::string _plannedTargetName;
+	float _seedCooldown = 0.0f;
 };

@@ -153,14 +153,24 @@
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		const float2 uv = input.texcoord;
-		float pixelDepth = GBUFFER_NORMAL.Sample(g_pointSampler, uv).w;
+		// Gbuffer texel for this half-res texel: full-res pixel 2c+1, fetched
+		// with an explicit Load. It used to be a point Sample at uv, but uv *
+		// fullRes lands EXACTLY on the 2c / 2c+1 pixel boundary, so rounding
+		// sometimes picked 2c - the row above / column left. CloudTemporal and
+		// BilateralUpsample test 2c+1, so a texel just below a silhouette was
+		// marched as GEOMETRY here (no cloud) yet accepted as SKY there: a
+		// cloud-free texel feeding the sky, upsampled and temporally smeared
+		// into a bright rim under every leaf and branch. All three passes
+		// must agree on this texel.
+		const int3 gbufferTexel = int3(int2(input.position.xy) * 2 + int2(1, 1), 0);
+		float pixelDepth = GBUFFER_NORMAL.Load(gbufferTexel).w;
 		// SKY detection must match the GI trace: the SKYDOME IS GEOMETRY and
 		// writes a real gbuffer depth (its radius), so a depth-only test
 		// never fires for sky - the clouds were being depth-clipped against
 		// the dome sphere, which reads as a circular cap overhead that never
 		// reaches the horizon. Sky is flagged by diffuse.a == -1.
-		const float skyFlag = GBUFFER_DIFFUSE.Sample(g_pointSampler, uv).a;
-		if (skyFlag == -1.0f || pixelDepth <= 0.0f || pixelDepth == -1.0f)
+		const float skyFlag = GBUFFER_DIFFUSE.Load(gbufferTexel).a;
+		if (skyFlag < -0.5f || pixelDepth <= 0.0f || pixelDepth == -1.0f)
 		{
 			// No scene occluder: march to the cloud system's own distance
 			// limit (maxTraceDistance is still clamped by g_cloudParams0.w).

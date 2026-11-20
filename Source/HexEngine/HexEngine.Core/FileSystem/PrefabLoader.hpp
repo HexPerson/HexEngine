@@ -17,6 +17,12 @@ namespace HexEngine
 		std::vector<Entity*>				LoadPrefab(const std::shared_ptr<Scene>& scene, const fs::path& path);
 		bool								LoadPrefabAssetToScene(const fs::path& path, const std::shared_ptr<Scene>& targetScene);
 
+		// Content hash (hex) of a prefab asset as instances see it: the file's
+		// bytes, chained with the base prefab's revision for variants. Cached on
+		// (path, size, write time); empty when the file can't be read (packaged
+		// builds), which callers treat as "unknown".
+		static std::string					ComputePrefabRevision(const fs::path& path);
+
 		virtual std::shared_ptr<IResource>	LoadResourceFromFile(const fs::path& absolutePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
 		virtual std::shared_ptr<IResource>	LoadResourceFromMemory(const std::vector<uint8_t>& data, const fs::path& relativePath, FileSystem* fileSystem, const ResourceLoadOptions* options = nullptr) override;
 		virtual void						OnResourceChanged(std::shared_ptr<IResource> resource) override;

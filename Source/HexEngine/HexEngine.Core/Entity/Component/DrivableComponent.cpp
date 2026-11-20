@@ -21,7 +21,9 @@
 #include "../../GUI/Elements/AssetSearch.hpp"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
+#include <iterator>
 #include <vector>
 
 namespace HexEngine
@@ -52,6 +54,11 @@ namespace HexEngine
 	{
 		auto* c = reinterpret_cast<DrivableComponent*>(param);
 		if (c) c->SetHandbrake(pressed);
+	}
+	HEX_COMMAND(BikeHop)
+	{
+		auto* c = reinterpret_cast<DrivableComponent*>(param);
+		if (c) c->SetHop(pressed);
 	}
 	HEX_COMMAND(BikeDismount)
 	{
@@ -165,6 +172,9 @@ namespace HexEngine
 		// and both paths firing on one keypress could re-mount immediately.
 		if (_playerControlled)
 			return;
+		// Just came off it: the bike can't be remounted until the lockout ends.
+		if (_crashed && _crashTimer > 0.0f)
+			return;
 		SetPlayerControlled(true);
 	}
 
@@ -193,6 +203,14 @@ namespace HexEngine
 		_playerControlled = possessed;
 		if (possessed)
 		{
+			// Back on the bike: clear any crash (upright control resumes and
+			// stands it back up) and start the impact window fresh.
+			_crashed = false;
+			_crashTimer = 0.0f;
+			_crashTopple = 0.0f;
+			_hopRequested = false;
+			_hopKickLeft = 0.0f;
+			std::fill(std::begin(_speedWindow), std::end(_speedWindow), 0.0f);
 			CreateBinds();
 			MountCamera();
 			StartVehicleAudio();
@@ -200,15 +218,40 @@ namespace HexEngine
 		else
 		{
 			RemoveBinds();
-			_kThrottle = _kBrake = _kLeft = _kRight = _kHandbrake = false;
+			_kThrottle = _kBrake = _kLeft = _kRight = _kHandbrake = _kHop = false;
+			_hopRequested = false;
+			_input = DriveInput{};   // riderless: don't keep driving on the last input
 			DismountCamera();
 			StopVehicleAudio();
 		}
 	}
 
+	void DrivableComponent::TriggerCrash(const char* reason, float speed)
+	{
+		if (_crashed)
+			return;
+		_crashed = true;
+		_crashEvent = true;
+		_crashTimer = std::max(0.0f, _tuning.crashRemountDelay);
+		_crashTopple = 0.35f;
+		_crashToppleSide = (_steerSmoothed >= 0.0f) ? 1.0f : -1.0f;
+		_hopKickLeft = 0.0f;
+		_hopAirGrace = 0.0f;
+		// Throw the rider: the dismount runs at the top of the next FixedUpdate
+		// (collision-checked placement beside the bike, camera handed back).
+		_dismountRequested = true;
+		LOG_INFO("bike: CRASH (%s) at %.1f m/s - rider thrown off, remount in %.1f s", reason, speed, _crashTimer);
+	}
+
 	void DrivableComponent::CreateBinds()
 	{
-		if (_bindsActive || g_pEnv == nullptr || g_pEnv->_commandManager == nullptr)
+		// No _bindsActive early-out: the flag is runtime state that outlives
+		// play/stop (Stop restores serialized fields, it doesn't run the
+		// dismount), so on the next session's possess it claimed the binds were
+		// live while the player controller had re-taken W/A/S/D - the bike sat
+		// at throttle 0. CreateBind replaces an existing bind, so re-asserting
+		// is always safe.
+		if (g_pEnv == nullptr || g_pEnv->_commandManager == nullptr)
 			return;
 		auto* cm = g_pEnv->_commandManager;
 		cm->CreateBind('W', "BikeThrottle", this);
@@ -219,7 +262,10 @@ namespace HexEngine
 		cm->CreateBind(VK_LEFT, "BikeSteerLeft", this);
 		cm->CreateBind('D', "BikeSteerRight", this);
 		cm->CreateBind(VK_RIGHT, "BikeSteerRight", this);
-		cm->CreateBind(VK_SPACE, "BikeHandbrake", this);
+		// Space = hop (the jump key - the move you make under pressure), Shift =
+		// handbrake/skid. The walking controller re-claims both on dismount.
+		cm->CreateBind(VK_SPACE, "BikeHop", this);
+		cm->CreateBind(VK_SHIFT, "BikeHandbrake", this);
 		// Dismount on the vehicle's own interact key (the key that mounted it).
 		_dismountKeyBound = GetInteractKey();
 		cm->CreateBind(_dismountKeyBound, "BikeDismount", this);
@@ -232,7 +278,7 @@ namespace HexEngine
 			return;
 		auto* cm = g_pEnv->_commandManager;
 		for (int32_t k : { (int32_t)'W', (int32_t)VK_UP, (int32_t)'S', (int32_t)VK_DOWN,
-		                   (int32_t)'A', (int32_t)VK_LEFT, (int32_t)'D', (int32_t)VK_RIGHT, (int32_t)VK_SPACE })
+		                   (int32_t)'A', (int32_t)VK_LEFT, (int32_t)'D', (int32_t)VK_RIGHT, (int32_t)VK_SPACE, (int32_t)VK_SHIFT })
 			cm->RemoveBind(k);
 		if (_dismountKeyBound >= 0)
 		{
@@ -669,6 +715,12 @@ namespace HexEngine
 		file->Serialize(t, "chassisFriction", _tuning.chassisFriction);
 		file->Serialize(t, "chassisRestitution", _tuning.chassisRestitution);
 		file->Serialize(t, "debug", _tuning.debug);
+		file->Serialize(t, "hopSpeed", _tuning.hopSpeed);
+		file->Serialize(t, "hopCooldown", _tuning.hopCooldown);
+		file->Serialize(t, "crashSpeed", _tuning.crashSpeed);
+		file->Serialize(t, "crashSpeedLoss", _tuning.crashSpeedLoss);
+		file->Serialize(t, "crashLandAngle", _tuning.crashLandAngle);
+		file->Serialize(t, "crashRemountDelay", _tuning.crashRemountDelay);
 		file->Serialize(t, "cameraOffset", _tuning.cameraOffset);
 		file->Serialize(t, "cameraPosSmoothing", _tuning.cameraPosSmoothing);
 		file->Serialize(t, "cameraLookSmoothing", _tuning.cameraLookSmoothing);
@@ -720,6 +772,12 @@ namespace HexEngine
 			file->Deserialize(t, "chassisFriction", _tuning.chassisFriction);
 			file->Deserialize(t, "chassisRestitution", _tuning.chassisRestitution);
 			file->Deserialize(t, "debug", _tuning.debug);
+			file->Deserialize(t, "hopSpeed", _tuning.hopSpeed);
+			file->Deserialize(t, "hopCooldown", _tuning.hopCooldown);
+			file->Deserialize(t, "crashSpeed", _tuning.crashSpeed);
+			file->Deserialize(t, "crashSpeedLoss", _tuning.crashSpeedLoss);
+			file->Deserialize(t, "crashLandAngle", _tuning.crashLandAngle);
+			file->Deserialize(t, "crashRemountDelay", _tuning.crashRemountDelay);
 			file->Deserialize(t, "cameraOffset", _tuning.cameraOffset);
 			file->Deserialize(t, "cameraPosSmoothing", _tuning.cameraPosSmoothing);
 			file->Deserialize(t, "cameraLookSmoothing", _tuning.cameraLookSmoothing);
@@ -813,6 +871,13 @@ namespace HexEngine
 		addF(L"CoM height", &_tuning.comHeight, -1.5f, 1.0f, 0.02f);
 		addF(L"Chassis friction", &_tuning.chassisFriction, 0.0f, 1.0f, 0.01f);
 		addF(L"Chassis restitution", &_tuning.chassisRestitution, 0.0f, 1.0f, 0.01f);
+
+		addF(L"Hop speed (m/s up)", &_tuning.hopSpeed, 0.0f, 8.0f, 0.1f);
+		addF(L"Hop cooldown (s)", &_tuning.hopCooldown, 0.0f, 3.0f, 0.05f);
+		addF(L"Crash min speed (m/s)", &_tuning.crashSpeed, 0.5f, 30.0f, 0.25f);
+		addF(L"Crash speed loss (0-1)", &_tuning.crashSpeedLoss, 0.1f, 1.0f, 0.05f);
+		addF(L"Crash landing angle (deg)", &_tuning.crashLandAngle, 5.0f, 90.0f, 1.0f);
+		addF(L"Crash remount delay (s)", &_tuning.crashRemountDelay, 0.0f, 10.0f, 0.1f);
 
 		addF(L"Camera offset X", &_tuning.cameraOffset.x, -3.0f, 3.0f, 0.02f);
 		addF(L"Camera offset Y", &_tuning.cameraOffset.y, -1.0f, 3.0f, 0.02f);
@@ -958,6 +1023,11 @@ namespace HexEngine
 		if (dt <= 0.0f)
 			return;
 
+		if (_crashed)
+			_crashTimer -= dt;
+		_hopCooldownLeft = std::max(0.0f, _hopCooldownLeft - dt);
+		_hopAirGrace = std::max(0.0f, _hopAirGrace - dt);
+
 		if (!ResolveBody())
 		{
 			// Ticking but no usable body - the #1 setup mistake. Log once so
@@ -1014,6 +1084,9 @@ namespace HexEngine
 			_input.steer = _steerSmoothed;
 			_input.handbrake = _kHandbrake;
 		}
+		// A crashed (riderless) bike must not keep driving on its last input.
+		if (_crashed)
+			_input = DriveInput{};
 
 		const float mass = std::max(_body->GetMass(), 1.0f);
 		const math::Vector3 pos = _body->GetPhysicsPosition();
@@ -1077,6 +1150,7 @@ namespace HexEngine
 		const float probeUp = hover ? 0.0f : 0.3f;
 
 		int grounded = 0;
+		float minHitDist = FLT_MAX;   // nearest wheel ray hit (wheel-line ground clearance)
 		math::Vector3 groundNormalAccum(0.0f, 0.0f, 0.0f);
 		_dbgBottomY = bottomLocalY;
 		_dbgHitDist = -1.0f;
@@ -1122,10 +1196,16 @@ namespace HexEngine
 					// mass (not at-point), so it can't inject a pitching torque -
 					// applying it at each wheel is what made the bike bob nose
 					// up/down even on flat ground. At rest vel.y~=0, so no force.
-					const float dampAccel = -vel.y * suspDamp * 0.5f;
-					_body->ApplyForceToCenterOfMass(worldUp * (dampAccel * mass));
+					// Off during a hop: the wheel rays still reach the ground below,
+					// and this damping would eat the hop's upward speed.
+					if (_hopAirGrace <= 0.0f)
+					{
+						const float dampAccel = -vel.y * suspDamp * 0.5f;
+						_body->ApplyForceToCenterOfMass(worldUp * (dampAccel * mass));
+					}
 				}
 
+				minHitDist = std::min(minHitDist, hit.distance);
 				++grounded;
 				groundNormalAccum += hit.normal;
 			}
@@ -1160,6 +1240,87 @@ namespace HexEngine
 
 		_forwardSpeed = vel.Dot(fwdGround);
 		const float maxSpeed = _tuning.maxSpeed;
+
+		// --- hop / crash ---
+		// Wheel-line clearance above the ground (the rays start probeUp above it
+		// and reach well below, so "contact" alone stays true mid-hop).
+		const float wheelGap = (minHitDist < FLT_MAX) ? (minHitDist - probeUp) : maxDrop;
+		const bool wheelsDown = contact && wheelGap < 0.08f;
+		const float hSpeed = math::Vector3(vel.x, 0.0f, vel.z).Length();
+
+		if (_hopRequested)
+		{
+			_hopRequested = false;   // no buffering: a press in the air is dropped
+			if (_playerControlled && !_crashed && wheelsDown && _hopCooldownLeft <= 0.0f && _tuning.hopSpeed > 0.0f)
+			{
+				constexpr float kHopKick = 0.06f;
+				_hopKickLeft = kHopKick;
+				_hopCooldownLeft = _tuning.hopCooldown;
+				_hopAirGrace = 0.6f;
+				if (_tuning.debug)
+					LOG_INFO("bike: HOP (speed %.1f m/s, wheel gap %.3f m)", hSpeed, wheelGap);
+			}
+			else if (_tuning.debug)
+			{
+				LOG_INFO("bike: hop ignored (possessed=%d crashed=%d contact=%d gap=%.3f cooldown=%.2f)",
+					_playerControlled ? 1 : 0, _crashed ? 1 : 0, contact ? 1 : 0, wheelGap, _hopCooldownLeft);
+			}
+		}
+		if (_tuning.debug && _hopAirGrace > 0.0f)
+			LOG_INFO("bike: air hs=%.2f vy=%.2f gap=%.3f y=%.3f", hSpeed, vel.y, wheelGap, pos.y);
+		if (_hopKickLeft > 0.0f)
+		{
+			// Short upward kick reaching ~hopSpeed (force-only body: no impulse API).
+			// Compensate the scene's ACTUAL gravity, never an assumed 9.81.
+			constexpr float kHopKick = 0.06f;
+			const float g = std::fabs(g_pEnv->_physicsSystem->GetGravity().y);
+			_body->ApplyForceToCenterOfMass(worldUp * ((_tuning.hopSpeed / kHopKick + g) * mass));
+			_hopKickLeft -= dt;
+		}
+
+		// Bad landing: coming down tilted past crashLandAngle throws the rider.
+		const bool airborneNow = !contact || wheelGap > 0.15f;
+		if (airborneNow)
+		{
+			_airborneTime += dt;
+		}
+		else
+		{
+			if (_airborneTime > 0.12f && _playerControlled && !_crashed)
+			{
+				const float tiltDeg = std::acos(std::clamp(up.Dot(groundNormal), -1.0f, 1.0f)) * 57.2957795f;
+				if (tiltDeg > _tuning.crashLandAngle)
+					TriggerCrash("bad landing", hSpeed);
+			}
+			_airborneTime = 0.0f;
+		}
+
+		// Lost balance: the bike rearing up against a kerb face or going over
+		// sideways (well past the ~24 deg max lean) - the rider can't stay on.
+		if (_playerControlled && !_crashed)
+		{
+			const float tiltDeg = std::acos(std::clamp(up.Dot(worldUp), -1.0f, 1.0f)) * 57.2957795f;
+			if (tiltDeg > 55.0f)
+				TriggerCrash("lost balance", hSpeed);
+		}
+
+		// Impact: most of the speed gone within ~0.3 s without braking (a kerb
+		// face, a wall, a failed hop clipping the edge). Horizontal speed, not
+		// the forward component, so a handbrake slide isn't mistaken for a hit.
+		{
+			float recentMax = 0.0f;
+			for (float s : _speedWindow)
+				recentMax = std::max(recentMax, s);
+			_speedWindow[_speedWindowIdx] = hSpeed;
+			_speedWindowIdx = (_speedWindowIdx + 1) % kSpeedWindow;
+			if (_playerControlled && !_crashed && _input.brake < 0.01f &&
+				recentMax > _tuning.crashSpeed && hSpeed < recentMax * (1.0f - _tuning.crashSpeedLoss))
+			{
+				if (_tuning.debug)
+					LOG_INFO("bike: impact hs=%.2f max=%.2f vy=%.2f gap=%.3f hopGrace=%.2f", hSpeed, recentMax, vel.y, wheelGap, _hopAirGrace);
+				TriggerCrash("impact", recentMax);
+			}
+		}
 		const float speedFactor = std::clamp(std::fabs(_forwardSpeed) / std::max(maxSpeed, 1.0f), 0.0f, 1.0f);
 
 		if (_grounded)
@@ -1189,8 +1350,8 @@ namespace HexEngine
 			const float gripScale = _input.handbrake ? 0.35f : 1.0f;
 			applyForceAtPoint(right * (-lateral * _tuning.grip * gripScale * mass), com);
 
-			// Planted at speed.
-			if (_tuning.downforce > 0.0f)
+			// Planted at speed (not during a hop - it would pin the bike down).
+			if (_tuning.downforce > 0.0f && _hopAirGrace <= 0.0f)
 				_body->ApplyForceToCenterOfMass(-groundNormal * (_tuning.downforce * speedFactor * mass));
 		}
 
@@ -1213,7 +1374,17 @@ namespace HexEngine
 		const math::Quaternion leanQ = math::Quaternion::CreateFromAxisAngle(fwd, leanRoll);
 		math::Vector3 targetUp = math::Vector3::Transform(targetGroundUp, leanQ);
 		const math::Vector3 uprightAxis = up.Cross(targetUp); // ~sin(angle) * rotation axis
-		_body->ApplyTorque(uprightAxis * (_tuning.upright * mass));
+		if (!_crashed)
+		{
+			_body->ApplyTorque(uprightAxis * (_tuning.upright * mass));
+		}
+		else if (_crashTopple > 0.0f)
+		{
+			// Crashed: no upright control, plus a short shove so it goes over
+			// rather than standing riderless. Remounting re-enables upright.
+			_body->ApplyTorque(fwd * (_crashToppleSide * 30.0f * mass));
+			_crashTopple -= dt;
+		}
 
 		if (!_grounded)
 			_lateralSlip = 0.0f; // no skid noise while airborne

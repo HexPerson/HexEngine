@@ -374,6 +374,8 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			_entity = parentEntity->GetScene()->CreateEntity(chunkName, _origin);
 			if (_entity != nullptr)
 			{
+				_scene = parentEntity->GetScene();
+				_entityId = _entity->GetId();
 				_entity->SetParent(parentEntity);
 				// DoNotBlockNavMesh: keep the volumetric terrain out of scene navmesh
 				// bakes (CalculateSceneStats skips this flag) so agents navigate the
@@ -657,6 +659,10 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 	bool VolumetricTerrainChunk::ApplyBrush(const math::Vector3& center, const BrushSettings& settings, float deltaTime)
 	{
+		// Any brush edit invalidates the pre-cooked collision blob loaded with the
+		// scene: it describes the OLD surface. Left in place, the collision refresh
+		// re-attached it ("cache-hit") so sculpted terrain kept its pre-edit
+		// collider forever - and the next save wrote that stale blob back out.
 		if (ApplyBrushGpu(center, settings, deltaTime))
 		{
 			BrushSettings cpuMirror = settings;
@@ -667,10 +673,14 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 			_densityDirty = false;
 			_meshDirty = true;
 			_collisionDirty = true;
+			_cachedCookedCollisionBlob.clear();
 			return true;
 		}
 
-		return ApplyBrushCpu(center, settings, deltaTime, true, true);
+		const bool modified = ApplyBrushCpu(center, settings, deltaTime, true, true);
+		if (modified)
+			_cachedCookedCollisionBlob.clear();
+		return modified;
 	}
 
 	bool VolumetricTerrainChunk::ApplyBrushCpu(const math::Vector3& center, const BrushSettings& settings, float deltaTime, bool uploadGpuAfterModify, bool runRelaxation)
@@ -1385,7 +1395,8 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 
 	void VolumetricTerrainChunk::ReleaseEntityReferences(bool queueDeleteEntity)
 	{
-		if (queueDeleteEntity && _entity != nullptr && _entity->GetScene() != nullptr)
+		const bool entityAlive = _entity != nullptr && _scene != nullptr && _scene->TryGetEntity(_entityId) == _entity;
+		if (queueDeleteEntity && entityAlive)
 		{
 			_entity->SetParent(nullptr);
 			_entity->DeleteMe(false);
@@ -1395,6 +1406,7 @@ void MainCS(uint3 id : SV_DispatchThreadID)
 		_meshComponent = nullptr;
 		_rigidBody = nullptr;
 		_entity = nullptr;
+		_entityId = EntityId{};
 	}
 
 	void VolumetricTerrainChunk::SetVisualMeshHidden(bool hidden)

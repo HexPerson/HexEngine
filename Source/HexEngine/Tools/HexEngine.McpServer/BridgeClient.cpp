@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -52,10 +53,65 @@ namespace Mcp
 			if (!WriteFile(pipe, data.data(), (DWORD)data.size(), &written, &ov))
 			{
 				if (GetLastError() != ERROR_IO_PENDING) { err = "WriteFile failed"; return false; }
-				if (WaitForSingleObject(evt.h, timeoutMs) != WAIT_OBJECT_0) { CancelIo(pipe); err = "write timed out"; return false; }
+				if (WaitForSingleObject(evt.h, timeoutMs) != WAIT_OBJECT_0)
+				{
+					CancelIo(pipe);
+					GetOverlappedResult(pipe, &ov, &written, TRUE); // don't leave `ov` referenced
+					err = "write timed out";
+					return false;
+				}
 				if (!GetOverlappedResult(pipe, &ov, &written, FALSE)) { err = "write overlapped failed"; return false; }
 			}
 			return written == data.size();
+		}
+
+		// Overlapped read of one newline-delimited line, bounded by timeoutMs.
+		// `carry` holds bytes already read past a previous newline and receives
+		// any bytes read past this one (persistent connections).
+		bool ReadLineBuffered(HANDLE pipe, std::string& carry, std::string& out, unsigned int timeoutMs, std::string& err)
+		{
+			if (auto nl = carry.find('\n'); nl != std::string::npos)
+			{
+				out = carry.substr(0, nl);
+				carry.erase(0, nl + 1);
+				return true;
+			}
+			ScopedHandle evt{ CreateEventW(nullptr, TRUE, FALSE, nullptr) };
+			if (!evt) { err = "CreateEvent failed"; return false; }
+			const DWORD start = GetTickCount();
+			std::vector<char> chunk(64 * 1024);
+			for (;;)
+			{
+				OVERLAPPED ov{}; ov.hEvent = evt.h;
+				ResetEvent(evt.h);
+				DWORD read = 0;
+				BOOL ok = ReadFile(pipe, chunk.data(), (DWORD)chunk.size(), &read, &ov);
+				if (!ok)
+				{
+					DWORD e = GetLastError();
+					if (e != ERROR_IO_PENDING) { err = "ReadFile failed (gle=" + std::to_string(e) + ")"; return false; }
+					const DWORD elapsed = GetTickCount() - start;
+					const DWORD remaining = (elapsed >= timeoutMs) ? 0 : (timeoutMs - elapsed);
+					if (WaitForSingleObject(evt.h, remaining) != WAIT_OBJECT_0)
+					{
+						CancelIo(pipe);
+						GetOverlappedResult(pipe, &ov, &read, TRUE);
+						err = "read timed out after " + std::to_string(timeoutMs) + " ms";
+						return false;
+					}
+					if (!GetOverlappedResult(pipe, &ov, &read, FALSE)) { err = "read overlapped failed"; return false; }
+				}
+				if (read == 0) { err = "pipe closed before newline"; return false; }
+				carry.append(chunk.data(), read);
+				if (auto nl = carry.find('\n'); nl != std::string::npos)
+				{
+					out = carry.substr(0, nl);
+					carry.erase(0, nl + 1);
+					return true;
+				}
+				if (carry.size() > HexEngine::EditorBridge::kMaxResponseBytes + 1024) { err = "response exceeded the size cap"; return false; }
+				if (GetTickCount() - start > timeoutMs) { err = "read timed out"; return false; }
+			}
 		}
 
 		// Overlapped read of one newline-delimited line, bounded by timeoutMs.
@@ -182,6 +238,113 @@ namespace Mcp
 		try { response = json::parse(reply); }
 		catch (const std::exception& e) { error = std::string("bridge returned invalid JSON: ") + e.what(); return false; }
 		return true;
+	}
+
+	// ---- BridgeConnection ----------------------------------------------------------
+
+	BridgeConnection::~BridgeConnection()
+	{
+		Close();
+	}
+
+	void BridgeConnection::Close()
+	{
+		if (_handle != nullptr)
+		{
+			CloseHandle((HANDLE)_handle);
+			_handle = nullptr;
+		}
+		_buffer.clear();
+	}
+
+	bool BridgeConnection::IsConnected() const
+	{
+		return _handle != nullptr;
+	}
+
+	bool BridgeConnection::Connect(std::string& error)
+	{
+		Close();
+		auto sessions = DiscoverSessions();
+		if (sessions.empty())
+		{
+			error = "No running HexEngine editor bridge was found. Start the editor with the bridge enabled (--enable-editor-bridge or HEXENGINE_EDITOR_BRIDGE=1).";
+			return false;
+		}
+		_session = sessions.front();
+
+		const std::wstring pipe = Widen(_session.pipeName);
+		const DWORD start = GetTickCount();
+		for (;;)
+		{
+			HANDLE h = CreateFileW(pipe.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+				OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+			if (h != INVALID_HANDLE_VALUE)
+			{
+				_handle = h;
+				return true;
+			}
+			const DWORD e = GetLastError();
+			if (e != ERROR_PIPE_BUSY)
+			{
+				error = "cannot connect to editor bridge pipe '" + _session.pipeName + "' (gle=" + std::to_string(e) + ")";
+				return false;
+			}
+			if (GetTickCount() - start >= 5000u)
+			{
+				error = "timed out waiting for a free bridge pipe instance";
+				return false;
+			}
+			WaitNamedPipeW(pipe.c_str(), 500);
+		}
+	}
+
+	bool BridgeConnection::Call(const json& request, json& response, std::string& error, unsigned int timeoutMs)
+	{
+		// Two attempts at the CONNECT+WRITE stage only: a pipe that turns out to
+		// be dead before the request reached the editor (editor restarted) is
+		// safe to retry; once the write succeeded we never resend.
+		for (int attempt = 0; attempt < 2; ++attempt)
+		{
+			if (!IsConnected() && !Connect(error))
+				return false;
+
+			json authed = request;
+			const int64_t id = _nextId++;
+			authed["id"] = id;
+			if (!_session.token.empty())
+				authed["token"] = _session.token;
+			std::string line = authed.dump();
+			line.push_back('\n');
+
+			std::string writeErr;
+			if (!WriteAll((HANDLE)_handle, line, timeoutMs, writeErr))
+			{
+				Close();
+				error = writeErr;
+				continue; // reconnect (possibly to a new editor session) and retry
+			}
+
+			std::string reply;
+			if (!ReadLineBuffered((HANDLE)_handle, _buffer, reply, timeoutMs, error))
+			{
+				// The request may have executed; drop the connection (a late
+				// reply would desync the stream) but do NOT resend.
+				Close();
+				error += " (the request was delivered and may still have executed; check state before retrying)";
+				return false;
+			}
+
+			try { response = json::parse(reply); }
+			catch (const std::exception& e)
+			{
+				Close();
+				error = std::string("bridge returned invalid JSON: ") + e.what();
+				return false;
+			}
+			return true;
+		}
+		return false;
 	}
 }
 }

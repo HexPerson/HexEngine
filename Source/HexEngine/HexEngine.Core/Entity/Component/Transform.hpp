@@ -102,6 +102,11 @@ namespace HexEngine
 		static void SetEditorGizmoMode(EditorGizmoMode mode);
 		static EditorGizmoMode GetEditorGizmoMode();
 
+		// The gizmos poll the mouse button directly, so the editor turns them off
+		// while the scene view is hidden behind another workspace tab - otherwise a
+		// click in, say, the animation editor would drag the hidden selected entity.
+		static void SetEditorGizmosEnabled(bool enabled);
+
 		virtual void OnMessage(Message* message, MessageListener* sender) override;
 		virtual void Serialize(json& data, JsonFile* file) override;
 		virtual void Deserialize(json& data, JsonFile* file, uint32_t mask = 0) override;

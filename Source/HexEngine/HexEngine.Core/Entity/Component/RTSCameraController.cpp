@@ -60,9 +60,10 @@ namespace HexEngine
 	{
 		g_pEnv->_inputSystem->AddInputListener(this, InputEvent::KeyDown | InputEvent::KeyUp | InputEvent::MouseDown | InputEvent::MouseUp | InputEvent::MouseWheel | InputEvent::MouseMove);
 
-		Camera* camera = GetEntity()->GetComponent<Camera>();
-
-		camera->SetPitch(-65.0f);
+		// The controller drives a Camera on the same entity; it may be added
+		// before (or without) one, so never assume it exists.
+		if (Camera* camera = GetEntity()->GetComponent<Camera>(); camera != nullptr)
+			camera->SetPitch(-65.0f);
 
 		/*g_pEnv->_commandManager->RegisterCommand(&cmd_movebackwards);
 		g_pEnv->_commandManager->RegisterCommand(&cmd_moveforward);
@@ -80,9 +81,10 @@ namespace HexEngine
 	{
 		g_pEnv->_inputSystem->AddInputListener(this, InputEvent::KeyDown | InputEvent::KeyUp | InputEvent::MouseDown | InputEvent::MouseUp | InputEvent::MouseWheel | InputEvent::MouseMove);
 
-		Camera* camera = GetEntity()->GetComponent<Camera>();
-
-		camera->SetPitch(-65.0f);
+		// The controller drives a Camera on the same entity; it may be added
+		// before (or without) one, so never assume it exists.
+		if (Camera* camera = GetEntity()->GetComponent<Camera>(); camera != nullptr)
+			camera->SetPitch(-65.0f);
 
 		/*g_pEnv->_commandManager->RegisterCommand(&cmd_movebackwards);
 		g_pEnv->_commandManager->RegisterCommand(&cmd_moveforward);
@@ -93,6 +95,18 @@ namespace HexEngine
 		g_pEnv->_commandManager->CreateBind('S', "RTSMoveBackwards");
 		g_pEnv->_commandManager->CreateBind('A', "RTSMoveLeft");
 		g_pEnv->_commandManager->CreateBind('D', "rtsmoveright");
+
+		if (other != nullptr)
+		{
+			_movementSpeed = other->_movementSpeed;
+			_strafeMovementSpeed = other->_strafeMovementSpeed;
+			_pitchSensitivity = other->_pitchSensitivity;
+			_yawSensitivity = other->_yawSensitivity;
+			_zoomSpeed = other->_zoomSpeed;
+			_enableMouseSmoothing = other->_enableMouseSmoothing;
+			_constraint = other->_constraint;
+			_hasConstraint = other->_hasConstraint;
+		}
 	}
 
 	RTSCameraController::~RTSCameraController()
@@ -237,8 +251,23 @@ namespace HexEngine
 		return false;
 	}
 
+	void RTSCameraController::Serialize(json& data, JsonFile* file)
+	{
+		SERIALIZE_VALUE(_movementSpeed);
+		SERIALIZE_VALUE(_strafeMovementSpeed);
+		SERIALIZE_VALUE(_pitchSensitivity);
+		SERIALIZE_VALUE(_yawSensitivity);
+		SERIALIZE_VALUE(_zoomSpeed);
+		SERIALIZE_VALUE(_enableMouseSmoothing);
+	}
+
 	void RTSCameraController::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
-		
+		DESERIALIZE_VALUE(_movementSpeed);
+		DESERIALIZE_VALUE(_strafeMovementSpeed);
+		DESERIALIZE_VALUE(_pitchSensitivity);
+		DESERIALIZE_VALUE(_yawSensitivity);
+		DESERIALIZE_VALUE(_zoomSpeed);
+		DESERIALIZE_VALUE(_enableMouseSmoothing);
 	}
 }

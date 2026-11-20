@@ -6,6 +6,7 @@
 #include "../Entity/Component/DecalComponent.hpp"
 #include "../Entity/Component/ReflectionProbeComponent.hpp"
 #include "../Entity/Component/InteractionComponent.hpp"
+#include "../Physics/PhysUtils.hpp"
 #include "../Graphics/IVertexBuffer.hpp"
 #include "../Graphics/IIndexBuffer.hpp"
 #include "../Graphics/ISSAOProvider.hpp"
@@ -1143,6 +1144,10 @@ namespace HexEngine
 	// P4.10 CAS contrast-adaptive sharpen, applied right after the TAA
 	// resolve. Off when DLSS is active (it sharpens itself).
 	HVar r_sharpen("r_sharpen", "Contrast-adaptive sharpen amount after TAA (0 = off)", 0.35f, 0.0f, 1.0f);
+	// FSR 2 (camera "FSR 2 Enabled"): its RCAS sharpen replaces r_sharpen's CAS,
+	// which is skipped like under DLSS.
+	HVar r_fsrSharpness("r_fsrSharpness", "FSR 2 RCAS sharpening (0 = off, 1 = max)", 0.4f, 0.0f, 1.0f);
+	HVar r_fsrMipBias("r_fsrMipBias", "Negative texture LOD bias while FSR 2 upscales (log2(render/display) - 1)", true, false, true);
 	// P4.12 lens flare / dirt / streak, generated from the bloom chain in the
 	// composite. Subtle by default; dirt + anamorphic streak are opt-in (they
 	// read as stylised). All 0 = the composite skips the whole block.
@@ -1932,22 +1937,8 @@ namespace HexEngine
 				camera->GetNearZ(), camera->GetFarZ());
 		}
 
-		if (!_sphereEntity)
-		{
-			_sphereEntity = g_pEnv->_sceneManager->GetCurrentScene()->CreateEntity("LightSphere");
-			_sphereEntity->SetLayer(Layer::Invisible);
-			_sphereEntity->SetFlag(EntityFlags::DoNotSave | EntityFlags::ExcludeFromHLOD);
-			auto sphereMeshRenderer = _sphereEntity->AddComponent<StaticMeshComponent>();
-			// This sphere is a transient deferred-light-volume helper: it is
-			// repositioned, rescaled and re-materialed every frame (its material
-			// is swapped between the point and spot passes). It must never enter
-			// GI - both for correctness and because those per-frame mutations
-			// would otherwise bump the GI revisions and thrash the voxel triangle
-			// cache. Flag it before SetMesh/SetMaterial so neither notifies.
-			sphereMeshRenderer->SetExcludeFromGI(true);
-			sphereMeshRenderer->SetMesh(_sphereMesh);
-			sphereMeshRenderer->SetMaterial(_pointLightMaterial);
-		}
+		// (The deferred light volume is drawn straight from _sphereMesh - see
+		// BindLightVolumeMesh. It used to be a "LightSphere" scene entity.)
 		// TODO move this somewhere
 		/*if (_clouds == nullptr)
 		{
@@ -1979,6 +1970,22 @@ namespace HexEngine
 		_currentShadowCasterForComposition = nullptr;
 		_currentShadowMapForComposition = nullptr;
 		_gpuVisibilityCulling.BeginFrame(g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameCount : 0u, _currentCamera);
+
+		// Texture LOD bias for this view: FSR renders below display size, and AMD's
+		// recommended log2(render/display) - 1 keeps textures display-sharp (the
+		// jitter resolves the extra detail). Zero for every other render, so
+		// previews and captures sharing the frame are unaffected.
+		{
+			float mipBias = 0.0f;
+			if (IsFsrActive() && r_fsrMipBias._val.b)
+			{
+				const float renderW = _currentCamera->GetViewport().width;
+				const float displayW = _currentCamera->GetDisplayViewport().width;
+				if (renderW > 0.0f && displayW > 0.0f)
+					mipBias = std::log2(renderW / displayW) - 1.0f;
+			}
+			g_pEnv->_graphicsDevice->SetTextureMipBias(mipBias);
+		}
 
 		// Discard TAA history across a cut. Reprojection cannot recover from a camera
 		// switch or a teleport - the motion vectors describe a continuous frame-to-frame
@@ -2077,11 +2084,27 @@ namespace HexEngine
 			{
 				const auto& assignments = _shadowAtlas.AssignTiles(
 					localCasters, _currentCamera, r_shadowAtlasBudget._val.i32,
-					_currentScene->GetShadowGeometryRevision());
+					_currentScene);
 				for (const auto& a : assignments)
 				{
 					if (a.needsRender)
 						RenderShadowFaceToAtlas(a);
+				}
+
+				// RenderSpotLights draws (and shadows from the DEDICATED maps,
+				// t5..t10) every shadowed spot the clustered apply doesn't own:
+				// all of them when the apply is off, and any spot left without
+				// an atlas tile (over r_shadowAtlasBudget). Those maps were never
+				// rendered on the atlas path, so such spots sampled stale or
+				// empty depth - with r_clusterApply 0 they vanished entirely.
+				// Mirror RenderSpotLights' skip test exactly and render the
+				// dedicated maps for the rest.
+				const bool applyOwnsAtlasSpots = r_clusterApply._val.b && r_clusterLights._val.b;
+				for (Light* caster : localCasters)
+				{
+					if (applyOwnsAtlasSpots && _shadowAtlas.FindContentTile(caster, 0) >= 0)
+						continue;
+					RenderShadowMaps(caster);
 				}
 			}
 		}
@@ -2554,7 +2577,8 @@ namespace HexEngine
 				_clusteredLights.GetListsSrv(),
 				r_clusterFog._val.b && r_clusterLights._val.b,
 				r_shadowAtlas._val.b ? _shadowAtlas.GetAtlasSrv() : nullptr,
-				r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr);
+				r_shadowAtlas._val.b ? _clusteredLights.GetTileVpSrv() : nullptr,
+				_clusteredLights.GetAreaTextureSrv());
 			// Cloud shadows in the fog (S6). Both are last frame's data at
 			// this point in the frame (the shadow map renders during the
 			// light pass) - one frame of latency is invisible on clouds.
@@ -3573,7 +3597,7 @@ namespace HexEngine
 			bufferData._jitterOffsets =
 				(_currentCamera != nullptr && _currentCamera->IsEnvironmentCapture())
 					? math::Vector2(0.0f, 0.0f)
-					: _taa.GetJitterOffset(viewport.width, viewport.height);
+					: GetFrameJitter(viewport.width, viewport.height);
 			_denoiseFD.jitter = bufferData._jitterOffsets;
 
 			bufferData._chromaticAbberationAmmount = r_chromaticAbberation._val.f32;
@@ -4035,6 +4059,15 @@ namespace HexEngine
 		g_pEnv->_graphicsDevice->ClearScissorRect();
 	}
 
+	void SceneRenderer::FlushRainOcclusionEntity(Entity* entity)
+	{
+		// Without this a deleted entity stayed in the rain occlusion snapshot
+		// and the next refresh drew through its freed component (crash after
+		// deleting entities, e.g. on returning from the prefab stage).
+		if (_rainOcclusionPVS != nullptr && entity != nullptr)
+			_rainOcclusionPVS->RemoveEntity(entity);
+	}
+
 	void SceneRenderer::UpdateRainOcclusionMap()
 	{
 		// Size + depth range are compile-time; the cbuffer pack in
@@ -4062,6 +4095,18 @@ namespace HexEngine
 		}
 		if (_rainOcclusionPVS == nullptr)
 			_rainOcclusionPVS = std::make_unique<PVS>();
+
+		// The PVS reuses its snapshot while the cull sphere stays inside the
+		// last one, and holds raw entity/component pointers. Switching scenes
+		// (prefab stage <-> level, scene tabs) must not reuse another scene's
+		// snapshot: those entities may be destroyed by now. Removals within a
+		// scene arrive through FlushRainOcclusionEntity.
+		if (_rainOcclusionScene != _currentScene)
+		{
+			_rainOcclusionPVS->ForceRebuild();
+			_rainOcclusionScene = _currentScene;
+			_rainOcclusionValid = false;
+		}
 
 		const math::Vector3 camPos = _cameraEntity->GetPosition();
 		const float extent = r_rainOcclusionExtent._val.f32;
@@ -4485,6 +4530,65 @@ namespace HexEngine
 		outCameraToPrevCamera = cameraToCcWorld * ccWorldToCameraPrev;
 	}
 
+	bool SceneRenderer::IsFsrActive() const
+	{
+		return _currentCamera != nullptr && _currentCamera->IsFSREnabled() && !_currentCamera->IsEnvironmentCapture() &&
+			g_pEnv->_upscalerProvider != nullptr && g_pEnv->_upscalerProvider->IsSupported();
+	}
+
+	math::Vector2 SceneRenderer::GetFrameJitter(float renderWidth, float renderHeight) const
+	{
+		if (IsFsrActive() && renderWidth > 0.0f && renderHeight > 0.0f)
+		{
+			// Upscaler jitter is in render pixels, +y down; the vertex shaders add
+			// g_jitterOffsets * w in clip space (+y up).
+			const uint64_t frame = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
+			const math::Vector2 px = g_pEnv->_upscalerProvider->GetJitterOffset(frame, (uint32_t)renderWidth,
+				(uint32_t)_currentCamera->GetDisplayViewport().width);
+			return math::Vector2(2.0f * px.x / renderWidth, -2.0f * px.y / renderHeight);
+		}
+		return _taa.GetJitterOffset(renderWidth, renderHeight);
+	}
+
+	bool SceneRenderer::EvaluateFsr()
+	{
+		auto* upscaler = g_pEnv->_upscalerProvider;
+		if (upscaler == nullptr || _currentCamera == nullptr || _beautyRT == nullptr || _dlssTarget == nullptr)
+			return false;
+
+		const math::Viewport& renderVp = _currentCamera->GetViewport();
+
+		// History cut: camera switch, scene switch or a >5 m single-frame jump.
+		const math::Vector3 cameraPos = _cameraEntity != nullptr ? _cameraEntity->GetPosition() : math::Vector3::Zero;
+		const bool cut = _fsrHistoryCamera != _currentCamera || _fsrHistoryScene != _currentScene ||
+			(cameraPos - _fsrHistoryCameraPos).LengthSquared() > (5.0f * 5.0f);
+		_fsrHistoryCamera = _currentCamera;
+		_fsrHistoryScene = _currentScene;
+		_fsrHistoryCameraPos = cameraPos;
+
+		UpscalerFrameInputs in;
+		in.color = _beautyRT;
+		in.depth = _gbuffer.GetDepthBuffer();
+		in.motionVectors = _gbuffer.GetVelocity();
+		in.output = _dlssTarget;
+		in.renderWidth = (uint32_t)renderVp.width;
+		in.renderHeight = (uint32_t)renderVp.height;
+		// The output covers the whole (back-buffer sized) target the overlay chain reads.
+		in.displayWidth = (uint32_t)_dlssTarget->GetWidth();
+		in.displayHeight = (uint32_t)_dlssTarget->GetHeight();
+		const uint64_t frame = g_pEnv->_timeManager ? (uint64_t)g_pEnv->_timeManager->_frameCount : 0;
+		in.jitterPixels = upscaler->GetJitterOffset(frame, in.renderWidth, (uint32_t)_currentCamera->GetDisplayViewport().width);
+		in.frameTimeDeltaMs = g_pEnv->_timeManager ? g_pEnv->_timeManager->_frameTimeMS : 16.6f;
+		in.cameraNear = _currentCamera->GetNearZ();
+		in.cameraFar = _currentCamera->GetFarZ();
+		in.cameraFovYRadians = ToRadian(_currentCamera->GetFov());
+		in.sharpness = r_fsrSharpness._val.f32;
+		in.sharpen = in.sharpness > 0.0f;
+		in.reset = cut;
+
+		return upscaler->Evaluate(in);
+	}
+
 	void SceneRenderer::SetStreamlineConstants()
 	{
 		auto sl = g_pEnv->_streamlineProvider;
@@ -4583,6 +4687,11 @@ namespace HexEngine
 		{
 			_gbuffer.GetDiffuse()->CopyTo(_beautyRT);
 		}
+		else if (!canPostProcess && HEX_HASFLAG(flags, SceneFlags::PreviewLighting))
+		{
+			// Lit preview: direct lighting only, then the plain tonemap below.
+			RenderLights();
+		}
 		else if (canPostProcess)
 		{
 			if (g_pEnv->_ssaoProvider)
@@ -4669,6 +4778,16 @@ namespace HexEngine
 			// cloud layer rather than under it.
 			if (g_pEnv && g_pEnv->_particleWorldSystem)
 			{
+				// Shelter map at t26 for weather particles (ParticleBillboardLit
+				// discards shelter-occluded rain/snow under cover). Explicit slot,
+				// then restore the implicit-slot counter the particle pass
+				// auto-binds its sprite textures from.
+				const uint32_t particleSlot = g_pEnv->_graphicsDevice->GetBoundResourceIndex();
+				g_pEnv->_graphicsDevice->SetTexture2D(26,
+					(_rainOcclusionValid && _rainOcclusionMap != nullptr)
+						? _rainOcclusionMap->GetDepthMap() : nullptr);
+				g_pEnv->_graphicsDevice->SetBoundResourceIndex(particleSlot);
+
 				g_pEnv->_particleWorldSystem->Render(_currentScene, _currentCamera, _beautyRT, _gbuffer.GetDepthBuffer());
 			}
 			// Aerial perspective runs LAST in the atmospheric chain so it
@@ -4746,10 +4865,12 @@ namespace HexEngine
 			// DLSS is itself a temporal resolver and consumes the jittered, un-resolved
 			// frame. Running our TAA as well meant two accumulators fighting over the same
 			// history, which costs sharpness for nothing.
+			// FSR 2 likewise: it is the temporal resolver for its camera.
 			const bool dlssActive =
-				_currentCamera->IsDLSSEnabled() &&
+				(_currentCamera->IsDLSSEnabled() &&
 				g_pEnv->_streamlineProvider != nullptr &&
-				g_pEnv->_streamlineProvider->IsEnabled();
+				g_pEnv->_streamlineProvider->IsEnabled()) ||
+				IsFsrActive();
 
 			// Environment captures skip TAA for the same reason they skip SSR:
 			// one-shot render, no history of their own, and resolving would
@@ -4796,6 +4917,11 @@ namespace HexEngine
 			// multiplier to night-time values as the sun descends - without this, the meter
 			// drives a dark night scene back up toward daytime middle-grey, undoing the
 			// authored mood entirely.
+			//
+			// Env captures don't meter: a probe face is not what the player
+			// sees, and feeding six faces into the MAIN camera's adaptation
+			// yanked its exposure around every probe refresh.
+			if (!isEnvCapture)
 			{
 				const float dt = (g_pEnv && g_pEnv->_timeManager)
 					? std::clamp(static_cast<float>(g_pEnv->_timeManager->_frameTime), 0.0f, 0.1f)
@@ -4813,13 +4939,23 @@ namespace HexEngine
 
 			// Interaction look-at outline glow. Runs before bloom so the SDF ring
 			// picks up a soft bloom halo. No-op when nothing is focused.
-			GFX_PERF_BEGIN(0xFFFFFFFF, L"Outline glow");
+			if (!isEnvCapture)
 			{
-				RenderOutlineGlow();
+				GFX_PERF_BEGIN(0xFFFFFFFF, L"Outline glow");
+				{
+					RenderOutlineGlow();
+				}
+				GFX_PERF_END();
 			}
-			GFX_PERF_END();
 
-			if (!r_profileDisableBloom._val.b)
+			// Env captures skip bloom like the other lens / temporal effects
+			// above. A probe must store scene RADIANCE: bloom baked a lens veil
+			// into every face, so a bright sky smeared over all the captured
+			// geometry and the probe then re-lit the scene with it (a night
+			// scene came out uniformly white-washed). Bloom's temporal history
+			// is also shared with the main camera, so capture faces leaked into
+			// the main view's bloom and vice versa.
+			if (!r_profileDisableBloom._val.b && !isEnvCapture)
 			{
 				// The SSS intermediate is idle by this point in the frame and
 				// matches _beautyRT in size/format - lend it as the composite
@@ -4876,6 +5012,28 @@ namespace HexEngine
 
 			if (canPostProcess)
 			{
+				if (IsFsrActive() && _dlssTarget != nullptr)
+				{
+					// Render-res HDR beauty -> display-res _dlssTarget, then the
+					// display-res overlay chain (DoF, grading, tonemap) exactly as DLSS.
+					GFX_PERF_BEGIN(0xFFFFFFFF, L"FSR 2 Upscale");
+					const bool upscaled = EvaluateFsr();
+					GFX_PERF_END();
+
+					if (!upscaled)
+					{
+						// Plain bilinear stretch so a failed dispatch still presents a
+						// whole frame (the overlay chain needs display-sized buffers).
+						g_pEnv->_graphicsDevice->SetRenderTarget(_dlssTarget);
+						g_pEnv->_graphicsDevice->SetViewport(g_pEnv->_graphicsDevice->GetBackBufferViewport());
+						guiRenderer->FullScreenTexturedQuad(_beautyRT);
+					}
+
+					g_pEnv->_graphicsDevice->SetRenderTarget(_currentCamera->GetRenderTarget());
+
+					RenderOverlays(flags, _dlssTarget, _currentCamera->GetRenderTarget());
+				}
+				else
 #if 1
 				if (_currentCamera->IsDLSSEnabled() && g_pEnv->_streamlineProvider != nullptr)
 				{
@@ -5066,8 +5224,19 @@ namespace HexEngine
 			const WeatherSurfaceParams& _lensWx = _currentScene ? _currentScene->GetWeatherSurfaceParams() : WeatherSurfaceParams();
 			// ...and the same pass doubles as "water running off the lens" for a
 			// few seconds after the camera surfaces (underwater S5, _uwLensWet).
-			const bool lensRain = _lensWx.precipitationIntensity > 0.001f &&
+			bool lensRain = _lensWx.precipitationIntensity > 0.001f &&
 				_lensWx.snowCoverage < 0.34f && _lensWx.dirtAmount < 0.34f;
+			// No rain on the lens under a roof: one upward ray from the eye
+			// against static cover (the pass used to run indoors too).
+			if (lensRain && r_lensDrips._val.b && _currentCamera != nullptr && _currentCamera->GetEntity() != nullptr)
+			{
+				Entity* camEntity = _currentCamera->GetEntity();
+				const math::Vector3 eye = camEntity->GetWorldTM().Translation() + _currentCamera->GetViewOffset();
+				RayHit roofHit;
+				if (PhysUtils::RayCast(math::Ray(eye, math::Vector3::Up), 60.0f,
+						LAYERMASK(Layer::StaticGeometry), &roofHit, { camEntity }))
+					lensRain = false;
+			}
 			const bool lensSeaWet = r_underwater._val.b && _uwLensWet > 0.01f;
 			if (r_lensDrips._val.b && _lensDripsShader && _currentScene != nullptr &&
 				(lensRain || lensSeaWet))
@@ -5545,6 +5714,54 @@ namespace HexEngine
 #endif
 	}
 
+	// Binds one deferred light-volume draw (the light sphere) WITHOUT an entity:
+	// StaticMeshComponent::RenderMesh's non-shadow path with an identity object
+	// matrix - the light passes pass the real world matrix through the instance
+	// buffer. The volume used to be a "LightSphere" scene entity, created in
+	// whichever scene was current at the first render: once that scene was
+	// unloaded (or cleared, like the editor's icon scene) the cached pointer
+	// dangled and every light pass wrote into freed memory. It also showed up as
+	// a phantom entity in scene lists and needed DoNotSave / GI / HLOD opt-outs.
+	static bool BindLightVolumeMesh(Mesh* mesh, Material* material)
+	{
+		if (mesh == nullptr || material == nullptr)
+			return false;
+		auto shader = material->GetStandardShader();
+		if (!shader)
+			return false;
+
+		auto* graphicsDevice = g_pEnv->_graphicsDevice;
+		graphicsDevice->SetPixelShader(shader->GetShaderStage(ShaderStage::PixelShader));
+		graphicsDevice->SetVertexShader(shader->GetShaderStage(ShaderStage::VertexShader));
+		graphicsDevice->SetInputLayout(shader->GetInputLayout());
+
+		material->SaveRenderState();
+		graphicsDevice->SetBlendState(material->GetBlendState());
+		graphicsDevice->SetDepthBufferState(material->GetDepthState());
+		graphicsDevice->SetCullingMode(material->GetCullMode());
+
+		mesh->UpdateConstantBuffer(nullptr, math::Matrix(), material, 0, false);
+
+		const auto requirements = shader->GetRequirements();
+		if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresGBuffer))
+			g_pEnv->_sceneRenderer->GetGBuffer()->BindAsShaderResource();
+		if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresShadowMaps))
+			g_pEnv->_sceneRenderer->GetCurrentShadowMap()->BindAsShaderResource();
+		if (HEX_HASFLAG(requirements, ShaderRequirements::RequiresBeauty))
+			graphicsDevice->SetTexture2D(g_pEnv->_sceneRenderer->GetBeautyTexture());
+
+		// Material textures in MaterialTexture order (Albedo .. AmbientOcclusion),
+		// after whatever the requirements bound - same as RenderMesh.
+		const uint32_t slotIdx = graphicsDevice->GetBoundResourceIndex();
+		for (int32_t t = 0; t < MaterialTexture::Count; ++t)
+			graphicsDevice->SetTexture2D(slotIdx + t, material->GetTexture((MaterialTexture)t).get());
+
+		mesh->SetBuffers(false);
+		graphicsDevice->SetHullShader(nullptr);
+		graphicsDevice->SetDomainShader(nullptr);
+		return true;
+	}
+
 	void SceneRenderer::RenderPointLights()
 	{
 		std::vector<PointLight*> pointLights;
@@ -5585,10 +5802,18 @@ namespace HexEngine
 
 		g_pEnv->_graphicsDevice->SetRenderTarget(_lightAccumulationBuffer);
 
-		auto renderer = _sphereEntity->GetComponent<StaticMeshComponent>();
-		renderer->SetMaterial(_pointLightMaterial);
-		auto mesh = renderer->GetMesh();
+		auto mesh = _sphereMesh;
+		if (mesh == nullptr || _pointLightMaterial == nullptr)
+			return;
+		// Nothing else attaches the light-volume sphere to a renderer (it used
+		// to be a StaticMeshComponent's mesh, whose SetMesh created this), so
+		// create its instance on first use. Only when missing: CreateInstance
+		// AddRefs an existing one.
 		auto instance = mesh->GetInstance();
+		if (instance == nullptr)
+			instance = mesh->CreateInstance();
+		if (instance == nullptr)
+			return;
 
 		// One draw per light, mirroring RenderSpotLights. The previous batched
 		// DrawIndexedInstanced couldn't bind per-light shadow maps or per-light
@@ -5648,30 +5873,29 @@ namespace HexEngine
 
 				instance->Start();
 
-				_sphereEntity->SetPosition(lightPos);
-				_sphereEntity->SetScale(math::Vector3(lightRad));
+				// The light volume: the unit sphere scaled to the radius, at the light.
+				const math::Matrix volumeTM = math::Matrix::CreateScale(lightRad) * math::Matrix::CreateTranslation(lightPos);
+				const math::Matrix volumeTMT = volumeTM.Transpose();
+				math::Matrix volumeInv;
+				volumeTM.Invert(volumeInv);
 
 				// Units slice 3c: lumens -> candela on the per-light path,
 				// matching the clustered gather exactly (a shadowed light
 				// moving between paths must not change brightness).
-				float pointPassStrength = light->GetLightStrength();
+				float pointPassStrength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
 				if (r_physicalLightUnits._val.b)
 					pointPassStrength /= 4.0f * 3.14159265f;
 
-				instance->Render(
-					_sphereEntity->GetWorldTM(),
-					_sphereEntity->GetWorldTMTranspose(),
-					_sphereEntity->GetWorldTMPrevTranspose(),
-					_sphereEntity->GetWorldTMInvert(),
+				instance->Render(volumeTM, volumeTMT, volumeTMT, volumeInv,
 					diffuse,
 					math::Vector2(lightRad, pointPassStrength));
 
 				instance->Finish();
 
-				// RenderMesh resets blend/depth/cull to the material defaults, so
+				// The bind resets blend/depth/cull to the material defaults, so
 				// the actual draw state is applied AFTER it (same ordering note as
 				// RenderSpotLights).
-				renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
+				BindLightVolumeMesh(mesh.get(), _pointLightMaterial.get());
 
 				g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
 				g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
@@ -5756,10 +5980,18 @@ namespace HexEngine
 
 		
 
-		auto renderer = _sphereEntity->GetComponent<StaticMeshComponent>();
-		renderer->SetMaterial(_spotLightMaterial);
-		auto mesh = renderer->GetMesh();
+		auto mesh = _sphereMesh;
+		if (mesh == nullptr || _spotLightMaterial == nullptr)
+			return;
+		// Nothing else attaches the light-volume sphere to a renderer (it used
+		// to be a StaticMeshComponent's mesh, whose SetMesh created this), so
+		// create its instance on first use. Only when missing: CreateInstance
+		// AddRefs an existing one.
 		auto instance = mesh->GetInstance();
+		if (instance == nullptr)
+			instance = mesh->CreateInstance();
+		if (instance == nullptr)
+			return;
 		bool renderedSphere = false;
 
 		auto renderLightList = [&](const std::vector<SpotLight*>& lights, CullingMode cullMode)
@@ -5833,23 +6065,21 @@ namespace HexEngine
 					// price we pay for per-light state correctness.
 					instance->Start();
 
-					_sphereEntity->SetPosition(lightPos);
-					_sphereEntity->SetScale(math::Vector3(lightRad));
+					const math::Matrix volumeTM = math::Matrix::CreateScale(lightRad) * math::Matrix::CreateTranslation(lightPos);
+					const math::Matrix volumeTMT = volumeTM.Transpose();
+					math::Matrix volumeInv;
+					volumeTM.Invert(volumeInv);
 
 					// Units slice 3c: cone-coupled lumens -> candela, matching
 					// the clustered gather.
-					float spotPassStrength = light->GetLightStrength();
+					float spotPassStrength = std::max(0.0f, light->GetLightStrength() * light->GetLightMultiplier());
 					if (r_physicalLightUnits._val.b)
 					{
 						const float cosOuterPass = std::cos(ToRadian(light->GetOuterConeAngle() * 0.5f));
 						spotPassStrength /= std::max(2.0f * 3.14159265f * (1.0f - cosOuterPass), 1e-4f);
 					}
 
-					instance->Render(
-						_sphereEntity->GetWorldTM(),
-						_sphereEntity->GetWorldTMTranspose(),
-						_sphereEntity->GetWorldTMPrevTranspose(),
-						_sphereEntity->GetWorldTMInvert(),
+					instance->Render(volumeTM, volumeTMT, volumeTMT, volumeInv,
 						diffuse,
 						math::Vector2(lightRad, spotPassStrength));
 
@@ -5859,7 +6089,7 @@ namespace HexEngine
 					// resets blend/depth/cull to the material's defaults. We override
 					// those AFTER the call so the actual draw runs with additive blending,
 					// depth-test off, and the inside/outside-bounding-sphere culling mode.
-					renderer->RenderMesh(mesh.get(), MeshRenderFlags::MeshRenderNormal, 0);
+					BindLightVolumeMesh(mesh.get(), _spotLightMaterial.get());
 
 					g_pEnv->_graphicsDevice->SetCullingMode(cullMode);
 					g_pEnv->_graphicsDevice->SetBlendState(BlendState::Additive);
@@ -6017,6 +6247,7 @@ namespace HexEngine
 					_clusteredLights.GetCountsSrv(),
 					_clusteredLights.GetListsSrv() };
 				ctx->PSSetShaderResources(27, 3, clSrvs);
+				_clusteredLights.BindAreaTexturesPS();	// rect light images for ShadeAreaLight
 			}
 		}
 
@@ -6193,6 +6424,7 @@ namespace HexEngine
 			{
 				ID3D11ShaderResourceView* clNulls[3] = { nullptr, nullptr, nullptr };
 				ctx->PSSetShaderResources(27, 3, clNulls);
+				_clusteredLights.UnbindAreaTexturesPS();
 			}
 		}
 
@@ -7808,7 +8040,7 @@ namespace HexEngine
             _ssrResolved->ClearRenderTargetView(math::Color(0, 0, 0, 0));
 
             _denoiseFD.camera = _currentCamera;
-            _denoiseFD.jitter = _taa.GetJitterOffset(bbvp.width, bbvp.height);
+            _denoiseFD.jitter = GetFrameJitter(bbvp.width, bbvp.height);
 
 			// The SSR signal handed to the resolve. Two sources so both the denoised
 			// and the raw path go through ONE draw: the resolve adds the

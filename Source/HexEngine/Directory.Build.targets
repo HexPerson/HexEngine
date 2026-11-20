@@ -1,0 +1,60 @@
+<Project>
+  <!--
+    HexEngine version propagation (imported automatically by every .vcxproj under
+    Source/HexEngine, after the project's own definitions).
+
+    The Git tag is the single source of truth: the release workflow validates the
+    tag vMAJOR.MINOR.PATCH and builds with
+
+        msbuild ... /p:HexVersion=MAJOR.MINOR.PATCH /p:HexVersionIsRelease=true
+
+    Here that becomes HEX_VERSION_MAJOR/MINOR/PATCH defines for every C++ and
+    resource compile (read through HexEngine.Core/HexVersion.hpp), plus a shared
+    VERSIONINFO resource (Common/HexVersion.rc) linked into every EXE/DLL.
+    A local build with no /p:HexVersion is 0.0.0 and flagged as a dev build.
+
+    Opt a project out of the VERSIONINFO resource with
+    <HexSkipVersionResource>true</HexSkipVersionResource>.
+  -->
+  <PropertyGroup>
+    <HexVersion Condition="'$(HexVersion)' == ''">0.0.0</HexVersion>
+    <HexVersionIsRelease Condition="'$(HexVersionIsRelease)' == ''">false</HexVersionIsRelease>
+
+    <!-- The shader project is a custom-build wrapper, not a real binary. -->
+    <HexSkipVersionResource Condition="'$(HexSkipVersionResource)' == '' and '$(MSBuildProjectName)' == 'HexEngine.Shaders'">true</HexSkipVersionResource>
+
+    <_HexVersionMajor>$([System.Version]::Parse('$(HexVersion)').Major)</_HexVersionMajor>
+    <_HexVersionMinor>$([System.Version]::Parse('$(HexVersion)').Minor)</_HexVersionMinor>
+    <_HexVersionPatch>$([System.Version]::Parse('$(HexVersion)').Build)</_HexVersionPatch>
+
+    <_HexVersionDefines>HEX_VERSION_MAJOR=$(_HexVersionMajor);HEX_VERSION_MINOR=$(_HexVersionMinor);HEX_VERSION_PATCH=$(_HexVersionPatch)</_HexVersionDefines>
+    <_HexVersionDefines Condition="'$(HexVersionIsRelease)' == 'true'">$(_HexVersionDefines);HEX_VERSION_IS_DEV=0</_HexVersionDefines>
+    <_HexVersionDefines Condition="'$(HexVersionIsRelease)' != 'true'">$(_HexVersionDefines);HEX_VERSION_IS_DEV=1</_HexVersionDefines>
+  </PropertyGroup>
+
+  <Target Name="HexValidateVersion" BeforeTargets="PrepareForBuild">
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(HexVersion)', '^\d+\.\d+\.\d+$'))"
+           Text="HexVersion '$(HexVersion)' is not MAJOR.MINOR.PATCH." />
+  </Target>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);$(_HexVersionDefines)</PreprocessorDefinitions>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);$(_HexVersionDefines)</PreprocessorDefinitions>
+      <!-- So Common\HexVersion.rc finds HexEngine.ico whatever the project dir. -->
+      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(MSBuildThisFileDirectory)Common</AdditionalIncludeDirectories>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(ConfigurationType)' == 'DynamicLibrary'">
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);HEX_RC_IS_DLL</PreprocessorDefinitions>
+    </ResourceCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup Condition="('$(ConfigurationType)' == 'Application' or '$(ConfigurationType)' == 'DynamicLibrary') and '$(HexSkipVersionResource)' != 'true'">
+    <ResourceCompile Include="$(MSBuildThisFileDirectory)Common\HexVersion.rc" />
+  </ItemGroup>
+</Project>

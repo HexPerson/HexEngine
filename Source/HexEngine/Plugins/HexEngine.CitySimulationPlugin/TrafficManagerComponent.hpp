@@ -22,6 +22,7 @@ private:
 
 private:
 	bool _enabled = true;
+	bool _wasGameRunning = false;
 	int32_t _globalMaxActiveVehicles = 200;
 	float _globalActivationDistance = 500.0f;
 	bool _drawDebug = true;

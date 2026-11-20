@@ -69,5 +69,10 @@ namespace HexEngine
 		OnEntityParentedFn _onEntityParented;
 		OnSceneClickedFn _onSceneClicked;
 		OnEntityDuplicatedFn _onEntityDuplicated;
+
+		// Optional status badge per entity row (the editor marks out-of-date prefab
+		// instances). Return empty for none; may set the colour. Read on RefreshList.
+		using EntityBadgeFn = std::function<std::wstring(Entity*, math::Color& colour)>;
+		EntityBadgeFn _badgeProvider;
 	};
 }

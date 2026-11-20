@@ -306,10 +306,18 @@ namespace HexEngine
 			MESH_REQUIRE(r.ReadString(matName));
 		}
 
-		// force the animated shader, otherwise the mesh won't be animated
+		// Animated meshes used to be forced onto DefaultAnimated, the only shader that
+		// could skin. With GPU skinning the vertices arrive already posed and every mesh
+		// shader reads last frame's pose for motion vectors (MeshCommon's
+		// PreviousLocalPosition), so the imported material - or any material - works.
+		// DefaultAnimated remains the fallback when the file names no material, and on
+		// backends without GPU skinning (only it can skin in the vertex shader).
+		// The file's own name is remembered so re-saving never replaces it.
 		if (hasAnimations)
 		{
-			matName = "EngineData.Materials/DefaultAnimated.hmat";
+			static_cast<AnimatedMesh*>(mesh.get())->SetFileMaterialName(matName);
+			if (matName.empty() || !GpuSkinning::IsSupported())
+				matName = "EngineData.Materials/DefaultAnimated.hmat";
 		}
 
 		mesh->SetMaterialName(matName);
@@ -388,6 +396,10 @@ namespace HexEngine
 
 		Mesh* mesh = dynamic_cast<Mesh*>(resource);
 
+		// The loader multiplies positions and bounds by the global scene scale, so
+		// divide it back out here or every re-save would bake it in again.
+		const float sceneScale = g_pEnv->GetGlobalSceneScale();
+
 		if (mesh->HasAnimations())
 		{
 			file.Write<bool>(true);
@@ -402,7 +414,17 @@ namespace HexEngine
 
 			// write the vertex data
 			file.Write<uint32_t>((uint32_t)vertices.size());
-			file.Write((uint8_t*)vertices.data(), (uint32_t)vertices.size() * sizeof(AnimatedMeshVertex));
+			if (sceneScale != 1.0f)
+			{
+				auto unscaled = vertices;
+				for (auto& v : unscaled)
+					*(math::Vector3*)&v._position.x /= sceneScale;
+				file.Write((uint8_t*)unscaled.data(), (uint32_t)unscaled.size() * sizeof(AnimatedMeshVertex));
+			}
+			else
+			{
+				file.Write((uint8_t*)vertices.data(), (uint32_t)vertices.size() * sizeof(AnimatedMeshVertex));
+			}
 
 			// write the index data
 			file.Write<uint32_t>((uint32_t)indices.size());
@@ -449,14 +471,19 @@ namespace HexEngine
 
 					file.Write<math::Matrix>(chan.nodeTransform);
 
-					file.Write<uint32_t>((uint32_t)chan.children.size());
+					// The loader leaves a child null when its name didn't resolve; skip
+					// those rather than dereference them (count and names must agree).
+					const auto liveChildren = std::count_if(chan.children.begin(), chan.children.end(),
+						[](const AnimChannel* child) { return child != nullptr; });
+					file.Write<uint32_t>((uint32_t)liveChildren);
 				}
 
 				for (auto& chan : anim.channels)
 				{
 					for (auto& child : chan.children)
 					{
-						file.WriteString(child->nodeName);
+						if (child != nullptr)
+							file.WriteString(child->nodeName);
 					}
 				}
 
@@ -500,16 +527,35 @@ namespace HexEngine
 
 			// write the vertex data
 			file.Write<uint32_t>((uint32_t)vertices.size());
-			file.Write((uint8_t*)vertices.data(), (uint32_t)vertices.size() * sizeof(MeshVertex));
+			if (sceneScale != 1.0f)
+			{
+				auto unscaled = vertices;
+				for (auto& v : unscaled)
+					*(math::Vector3*)&v._position.x /= sceneScale;
+				file.Write((uint8_t*)unscaled.data(), (uint32_t)unscaled.size() * sizeof(MeshVertex));
+			}
+			else
+			{
+				file.Write((uint8_t*)vertices.data(), (uint32_t)vertices.size() * sizeof(MeshVertex));
+			}
 
 			// write the index data
 			file.Write<uint32_t>((uint32_t)indices.size());
 			file.Write((uint8_t*)indices.data(), (uint32_t)indices.size() * sizeof(MeshIndexFormat));
 		}
 
-		// write the material
+		// write the material. An animated mesh writes the name its file came with when
+		// it was loaded onto the DefaultAnimated fallback, so a save (e.g. from the
+		// animation editor) doesn't replace the real material with the fallback.
 		auto material = mesh->GetMaterial();
-		if (material)
+		const AnimatedMesh* animatedForMaterial = mesh->HasAnimations() ? static_cast<const AnimatedMesh*>(mesh) : nullptr;
+		if (animatedForMaterial != nullptr && !animatedForMaterial->GetFileMaterialName().empty() &&
+			(material == nullptr || material->GetFileSystemPath().generic_string().find("DefaultAnimated.hmat") != std::string::npos))
+		{
+			file.Write<bool>(true);
+			file.WriteString(animatedForMaterial->GetFileMaterialName());
+		}
+		else if (material)
 		{
 			file.Write<bool>(true);
 			file.WriteString(mesh->GetMaterial()->GetFileSystemPath().string());
@@ -520,8 +566,17 @@ namespace HexEngine
 		}
 
 		// write the aabb + obb
-		file.Write<dx::BoundingBox>(mesh->GetAABB());
-		file.Write<dx::BoundingOrientedBox>(mesh->GetOBB());
+		dx::BoundingBox aabb = mesh->GetAABB();
+		dx::BoundingOrientedBox obb = mesh->GetOBB();
+		if (sceneScale != 1.0f)
+		{
+			*(math::Vector3*)&aabb.Extents.x /= sceneScale;
+			*(math::Vector3*)&aabb.Center.x /= sceneScale;
+			*(math::Vector3*)&obb.Extents.x /= sceneScale;
+			*(math::Vector3*)&obb.Center.x /= sceneScale;
+		}
+		file.Write<dx::BoundingBox>(aabb);
+		file.Write<dx::BoundingOrientedBox>(obb);
 
 		// finally close the file
 		file.Close();

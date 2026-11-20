@@ -1,0 +1,120 @@
+
+#include "<$NAME>.hpp"
+
+namespace <$NAMESPACE>
+{
+	// The scene the standalone game opens on: a resource path into the project's
+	// Data folder, which the launcher mounts as the "GameData" filesystem.
+	static constexpr const char* kStartupScene = "GameData.Scenes/New Scene.hscene";
+
+	void <$NAME>::OnCreateGame()
+	{
+		// Get the current scene (in the editor this is the scene being played)
+		//
+		_scene = HexEngine::g_pEnv->_sceneManager->GetCurrentScene();
+
+		if (!_scene)
+			return;
+
+		// Add a first person camera controller so we can move around. The engine has
+		// already moved the main camera to the scene's Player Start (if any).
+		//
+		if (auto* camera = _scene->GetMainCamera(); camera != nullptr && camera->GetEntity() != nullptr)
+		{
+			_cameraEntity = camera->GetEntity();
+
+			if (_cameraEntity->GetComponent<HexEngine::FirstPersonCameraController>() == nullptr)
+			{
+				_cameraEntity->AddComponent<HexEngine::FirstPersonCameraController>();
+				_addedCameraController = true;
+			}
+		}
+	}
+
+	void <$NAME>::OnStopGame()
+	{
+		// Undo what OnCreateGame added - the editor keeps the same camera entity
+		// across play sessions.
+		//
+		if (_addedCameraController && _cameraEntity != nullptr)
+			_cameraEntity->RemoveComponent<HexEngine::FirstPersonCameraController>();
+
+		_cameraEntity = nullptr;
+		_addedCameraController = false;
+		_scene.reset();
+	}
+
+	void <$NAME>::OnLoadGameWorld()
+	{
+		// Standalone launcher only. The launcher has already mounted the game's data
+		// as the "GameData" filesystem (Data/ next to the exe, or GameData.pkg).
+		// Don't mount another one here, and don't build the path from
+		// g_pEnv->GetFileSystem(): that is the ENGINE data filesystem, which becomes
+		// EngineAssets.pkg when one is present.
+		//
+		if (HexEngine::g_pEnv->GetResourceSystem().FindFileSystemByName(L"GameData") == nullptr)
+		{
+			LOG_CRIT("GameData filesystem is not mounted; cannot load '%s'", kStartupScene);
+			return;
+		}
+
+		// Load the scene through the resource system so it streams from GameData.pkg
+		// in a packaged build and from the loose Data/ folder otherwise.
+		//
+		_scene = std::dynamic_pointer_cast<HexEngine::Scene>(
+			HexEngine::g_pEnv->GetResourceSystem().LoadResource(kStartupScene));
+
+		if (!_scene)
+		{
+			LOG_CRIT("Failed to load startup scene '%s'", kStartupScene);
+			return;
+		}
+
+		HexEngine::g_pEnv->_sceneManager->SetActiveScene(_scene);
+
+		// Scenes loaded outside the editor don't get their sky sphere hooked up
+		// automatically.
+		//
+		if (auto* skySphere = _scene->GetEntityByName("SkySphere"); skySphere != nullptr)
+			_scene->SetSkySphere(skySphere);
+	}
+
+	void <$NAME>::OnRegisterClasses()
+	{
+		// Register all of your custom classes in here
+	}
+
+	void <$NAME>::OnDebugGUI()
+	{
+
+	}
+
+	void <$NAME>::OnGUI()
+	{
+
+	}
+
+	void <$NAME>::OnUpdate(float frameTime)
+	{
+
+	}
+
+	void <$NAME>::OnFixedUpdate(float frameTime)
+	{
+
+	}
+
+	void <$NAME>::OnDebugRender()
+	{
+
+	}
+
+	void <$NAME>::OnShutdown()
+	{
+		// The SceneManager owns and destroys every loaded scene when the engine shuts
+		// down - just drop our reference. (Calling UnloadScene here would delete the
+		// scene out from under the shared_ptrs still holding it.)
+		//
+		_scene.reset();
+	}
+}

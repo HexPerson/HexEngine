@@ -80,9 +80,29 @@ namespace HexEngine
 
 		void RemoveCollider();
 
+		// Re-derive a mesh-shaped collider (triangle mesh / box-from-bounds)
+		// from the entity's CURRENT StaticMeshComponent geometry, then re-sync the
+		// pose. For tools that edit a mesh's vertices in place (recenter to origin).
+		// Primitive colliders (sphere/capsule) are left untouched. Returns true if
+		// a collider was rebuilt.
+		bool RebuildColliderFromMesh();
+
 		bool IsExclusive() const;
 
 		void ForceUpdatePose();
+
+		// Put the physics body where the entity's transform says it is, now:
+		// for code that rewrites transforms without TransformChanged messages
+		// (scene/snapshot loads use the NoNotify setters). Snaps the transform
+		// interpolation, moves non-static bodies and clears a dynamic body's
+		// velocity. Static bodies and character controllers are left alone.
+		void TeleportToTransform();
+
+		// Async triangle-mesh cooks queued (BeginAddTriangleMeshColliderAsync)
+		// and not yet attached, across all bodies. The frame loop keeps the
+		// post-load physics hold while this is non-zero, so bodies resting on
+		// async-cooked ground (volumetric terrain) don't fall through it.
+		static int32_t GetAsyncCooksInFlight();
 
 		/*void ApplyForceToCenterOfMass(const math::Vector3& force);
 
@@ -148,5 +168,9 @@ namespace HexEngine
 		float _massAdjust = 1.0f;
 		bool _forcePoseEnabled = true;
 		//SoundEffect* _collisionSound = nullptr;
+
+		// This body's cook is counted in GetAsyncCooksInFlight().
+		bool _asyncCookCounted = false;
+		void ReleaseAsyncCook(bool force);
 	};
 }

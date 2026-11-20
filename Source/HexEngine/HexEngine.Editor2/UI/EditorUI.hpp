@@ -66,6 +66,43 @@ public:
 		virtual std::string GetProjectFilePath() override;
 		virtual bool OpenProject(const std::string& projectFilePath, std::string& error) override;
 
+		// Programmatic-authoring hooks (editor bridge). The Record* overrides
+		// are the existing Record* methods below (same signatures).
+		virtual HexEngine::FileSystem* GetProjectFileSystem() override;
+		virtual void BeginUndoGroup(const std::string& label) override;
+		virtual void EndUndoGroup() override;
+		virtual bool Undo() override;
+		virtual bool Redo() override;
+		virtual size_t GetUndoCount() override;
+		virtual size_t GetRedoCount() override;
+		virtual void RecordEntityTransformChange(HexEngine::Entity* entity, const math::Vector3& positionBefore, const math::Quaternion& rotationBefore, const math::Vector3& scaleBefore) override;
+		virtual void BeginComponentEdit(HexEngine::Entity* entity) override;
+		virtual void EndComponentEdit(HexEngine::Entity* entity) override;
+		virtual bool SaveAll(std::string& error) override;
+		virtual json DescribePrefabInstance(HexEngine::Entity* entity) override;
+		virtual bool ApplyPrefabInstance(HexEngine::Entity* entity, std::string& error) override;
+		virtual HexEngine::Entity* RevertPrefabInstanceToAsset(HexEngine::Entity* entity, std::string& error) override;
+		virtual bool UpdatePrefabInstance(HexEngine::Entity* entity, std::string& error) override;
+		virtual HexEngine::Entity* CreatePrefabFromEntity(HexEngine::Entity* entity, const fs::path& prefabPath, bool replaceWithInstance, std::string& error) override;
+		virtual bool OpenPrefabEditStage(const fs::path& prefabPath, std::string& error) override;
+		virtual bool SavePrefabEditStage(std::string& error) override;
+		virtual bool ClosePrefabEditStage(bool saveChanges, std::string& error) override;
+		virtual bool IsPrefabEditStageOpen() override;
+		virtual bool StartPlayMode(std::string& error) override;
+		virtual bool StopPlayMode(std::string& error) override;
+		virtual bool IsPlayModeActive() override;
+		virtual bool BuildGameModule(std::string& error) override;
+		virtual bool ReloadGameModule(std::string& error) override;
+		virtual bool IsGameModuleLoaded() override;
+		virtual void SetGameAutoReload(bool enabled) override;
+		virtual bool GetGameAutoReload() override;
+		virtual json ListProjectScenes() override;
+		virtual bool CreateProjectScene(const std::string& name, bool withSun, bool activate, std::string& error) override;
+		virtual bool ActivateProjectScene(const std::string& nameOrPath, std::string& error) override;
+		virtual bool RemoveProjectScene(const std::string& nameOrPath, bool deleteFile, std::string& error) override;
+		// Make `scene` the one the editor shows and edits (others disabled).
+		void SwitchToScene(const std::shared_ptr<HexEngine::Scene>& scene);
+
 		HexEngine::RayHit RayCastWorld(const std::vector<HexEngine::Entity*>& entsToIgnore = {}, bool useMousePos = true);
 
 		void RecordEntityPositionChange(HexEngine::Entity* entity, const math::Vector3& before, const math::Vector3& after);
@@ -97,6 +134,8 @@ public:
 		bool RevertPrefabInstanceComponentOverrides(HexEngine::Entity* entity, const std::string& componentName);
 		bool ApplySelectedPrefabInstanceOverridesToAsset(HexEngine::Entity* entity, const std::vector<PrefabController::PrefabPropertyOverride>& selectedOverrides);
 		HexEngine::Entity* RevertPrefabInstance(HexEngine::Entity* entity);
+		bool IsPrefabInstanceOutOfDate(HexEngine::Entity* entity) const;
+		bool UpdatePrefabInstanceFromAsset(HexEngine::Entity* entity);
 		bool ApplyPrefabInstanceToPrefabAsset(HexEngine::Entity* entity);
 		bool IsVariantStageEntity(HexEngine::Entity* entity) const;
 		bool GetVariantStageEntityOverrideComponents(HexEngine::Entity* entity, std::unordered_set<std::string>& outComponentNames) const;
@@ -126,6 +165,7 @@ public:
 
 		void OnAddLight();
 		void OnAddSpotLight();
+		void OnAddAreaLight(HexEngine::AreaLight::Shape shape);
 		void OnAddEmptyEntity();
 		void OnSaveAction();
 		void OnExportAction();
@@ -196,7 +236,14 @@ public:
 		PendingComponentEditSource _pendingComponentEditSource = PendingComponentEditSource::None;
 		Detail::EntityComponentStateSnapshot _pendingComponentEditBefore;
 		std::atomic_bool _entityListRefreshPending = false;
-		
+		float _entityListRefreshCooldown = 0.0f;   // main thread only; play-mode refresh throttle
+		// Set by the project-load worker thread; the prefab out-of-date check
+		// touches the entity list / inspector / dialogs, so it runs on the main
+		// thread in Update.
+		std::atomic_bool _prefabLoadCheckPending = false;
+		// Component-state snapshots between Begin/EndComponentEdit (bridge).
+		std::unordered_map<HexEngine::Entity*, Detail::EntityComponentStateSnapshot> _programmaticComponentEdits;
+
 	};
 
 	inline EditorUI* g_pUIManager = nullptr;

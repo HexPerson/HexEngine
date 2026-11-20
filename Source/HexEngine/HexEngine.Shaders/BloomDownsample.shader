@@ -58,7 +58,15 @@
 	float3 SampleSrc(float2 uv)
 	{
 		const float2 halfTexel = 0.5f * g_bloomPass.xy;
-		return g_source.SampleLevel(g_linearSampler, clamp(uv, halfTexel, 1.0f - halfTexel), 0).rgb;
+		float3 s = g_source.SampleLevel(g_linearSampler, clamp(uv, halfTexel, 1.0f - halfTexel), 0).rgb;
+		// Non-finite guard. One NaN/Inf beauty pixel (an fp16 overflow, a
+		// bad divide in any upstream pass) turned the firefly maths below
+		// into NaN (Inf - Inf), and the bloom history is a fixed-function
+		// EMA that can never blend a NaN back out - it stuck as a permanent
+		// blocky white veil over half the screen until a resize. Drop NaN,
+		// cap Inf to the fp16 range.
+		s = (isnan(s.r) || isnan(s.g) || isnan(s.b)) ? 0.0f.xxx : min(s, 65000.0f.xxx);
+		return s;
 	}
 
 	float4 ShaderMain(UIPixelInput input) : SV_Target

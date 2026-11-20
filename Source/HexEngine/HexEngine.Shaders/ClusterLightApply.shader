@@ -53,7 +53,8 @@
 		float4 posRadius;
 		float4 colorStrength;
 		float4 dirCone;
-		float4 params; // x cos(inner), y type (0 point, 1 spot), z shadowed
+		float4 params; // x cos(inner) | area range, y type (0 point, 1 spot, 2 tube, 3 rect), z shadowed
+		float4 shape;  // area lights: xyz rect up * halfHeight, w two-sided (see PBRutils)
 	};
 
 	// Raw-bound by SceneRenderer at explicit slots (the engine API has no PS
@@ -161,8 +162,20 @@
 			// vector exists for slope-scaling); everything else shadowed
 			// stays on the per-light path exactly as before.
 			const bool atlasShadowed = light.params.z > 0.5f;
-			if (atlasShadowed && ((int)light.params.w < 0 || light.params.y < 0.5f))
+			if (atlasShadowed && ((int)light.params.w < 0 || abs(light.params.y - 1.0f) > 0.5f))
 				continue; // per-light path's job
+
+			// Area lights (tube / rect): unshadowed, own geometry - see PBRutils'
+			// ComputeAreaLightTerms. Material decoded exactly as
+			// CalculatePBRPointLighting does (metallic .r, roughness .g).
+			if (light.params.y > 1.5f)
+			{
+				const float2 mr = GBUFFER_SPECULAR.Sample(g_pointSampler, screenPos).rg;
+				accum += ShadeAreaLight(pixelPosWS.xyz, normalWS, pixelColour.rgb, mr.r, mr.g,
+					light.colorStrength.rgb * light.colorStrength.w, light.params.y,
+					light.posRadius.xyz, light.dirCone, light.shape, light.params.x);
+				continue;
+			}
 
 			// PIXEL -> LIGHT. The old shaders name this exact vector
 			// "lightToPixelVec" while constructing lightPos - pixelPos; the name
@@ -183,7 +196,7 @@
 			float attenuation = distanceFalloff / max(d * d, minDistSqr);
 
 			// Spot cone, same smoothstep as SpotLight.shader.
-			if (light.params.y > 0.5f)
+			if (abs(light.params.y - 1.0f) < 0.5f)
 			{
 				// Inside the cone when the light->pixel direction aligns with
 				// the spot forward: that is minus the pixel->light vector.

@@ -3,7 +3,7 @@
 #include "HLSL.hpp"
 
 #include <sstream>
-#include <dxc/dxcapi.h>
+#include <directx-dxc/dxcapi.h> // vcpkg directx-dxc
 #include <wrl/client.h>
 
 #pragma comment(lib,"d3dcompiler.lib")
@@ -338,6 +338,12 @@ bool HLSL::Compile(const fs::path& filePath, CompiledShader& out)
 			args.push_back(gShaderStageToSm6Target[stageIdx]);
 			args.push_back(L"-E");
 			args.push_back(L"ShaderMain");
+			// The -HV 2018 promised in the comment above. DXC 1.7+ defaults
+			// to HLSL 2021 (different overload / short-circuit / struct
+			// semantics); the old ShaderConductor-built DXC 1.5 defaulted to
+			// 2018, so pinning it keeps shader behaviour identical.
+			args.push_back(L"-HV");
+			args.push_back(L"2018");
 #ifdef _DEBUG
 			args.push_back(L"-Zi"); // embed debug info
 			args.push_back(L"-Od"); // disable optimisations

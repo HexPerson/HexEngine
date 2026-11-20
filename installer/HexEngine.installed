@@ -1,0 +1,7 @@
+This file marks an installed copy of HexEngine.
+
+Its presence tells the engine the install folder is read-only (Program Files),
+so per-user state - logs, the recent-projects list, caches and generated
+shaders - goes to %LOCALAPPDATA%\HexEngine instead of beside the executables.
+The installer adds it; the portable ZIP deliberately does not (a portable copy
+keeps everything in its own folder). Do not delete it.

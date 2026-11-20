@@ -827,6 +827,8 @@ namespace HexEngine
 					ID3D11ShaderResourceView* clSrvs[5] = { _clLightsSrv, _clCountsSrv, _clListsSrv,
 						_clAtlasSrv, _clAtlasTileVpSrv };
 					context->CSSetShaderResources(12, 5, clSrvs);
+					// t22: rect light images - the fog uses each one's average colour.
+					context->CSSetShaderResources(22, 1, &_clAreaTexturesSrv);
 				}
 
 				// t17 = GI blurred voxel AO: the density CS occludes the fog
@@ -869,6 +871,8 @@ namespace HexEngine
 				{
 					ID3D11ShaderResourceView* clNulls[5] = { nullptr, nullptr, nullptr, nullptr, nullptr };
 					context->CSSetShaderResources(12, 5, clNulls);
+					ID3D11ShaderResourceView* nullArea = nullptr;
+					context->CSSetShaderResources(22, 1, &nullArea);
 				}
 				{
 					// t17 AO + t18..t20 radiance clips. The radiance volumes are

@@ -18,6 +18,7 @@
 #include "../Entity/Component/NavMeshBlockingVolume.hpp"
 #include "../Entity/Component/NavMeshLinkComponent.hpp"
 #include "PVS.hpp"
+#include "../Physics/RayMath.hpp"
 
 namespace HexEngine
 {
@@ -331,8 +332,11 @@ namespace HexEngine
 		if (geometryChanged)
 		{
 			++_giGeometryRevision;
-			++_shadowGeometryRevision;
 			_giSpatialCacheDirty = true;
+			if (auto* entity = component->GetEntity())
+				RecordShadowDirty(entity);
+			else
+				PushShadowDirtyRegion(dx::BoundingSphere(math::Vector3::Zero, FLT_MAX));
 		}
 
 		if (materialChanged)
@@ -350,6 +354,64 @@ namespace HexEngine
 		}
 	}
 
+	void Scene::RecordShadowDirty(Entity* entity)
+	{
+		// Non-casters never appear in a shadow map, so moving one can't stale a tile.
+		if (!entity->GetCastsShadows())
+		{
+			entity->_hasLastShadowBounds = false;
+			return;
+		}
+
+		const dx::BoundingSphere now = entity->GetWorldBoundingSphere();
+		const bool valid = RayMath::IsFinite(now.Radius) && RayMath::IsFinite(now.Center.x) &&
+			RayMath::IsFinite(now.Center.y) && RayMath::IsFinite(now.Center.z);
+		if (!valid)
+		{
+			entity->_hasLastShadowBounds = false;
+			PushShadowDirtyRegion(dx::BoundingSphere(math::Vector3::Zero, FLT_MAX));
+			return;
+		}
+
+		dx::BoundingSphere region = now;
+		if (entity->_hasLastShadowBounds)
+			dx::BoundingSphere::CreateMerged(region, entity->_lastShadowBounds, now);
+		entity->_lastShadowBounds = now;
+		entity->_hasLastShadowBounds = true;
+		PushShadowDirtyRegion(region);
+	}
+
+	void Scene::PushShadowDirtyRegion(const dx::BoundingSphere& bounds)
+	{
+		_shadowDirtyRegions.push_back({ ++_shadowDirtySeq, bounds });
+		if (_shadowDirtyRegions.size() > kMaxShadowDirtyRegions)
+		{
+			_shadowDirtyFloorSeq = _shadowDirtyRegions.front().seq;
+			_shadowDirtyRegions.pop_front();
+		}
+	}
+
+	uint64_t Scene::GetShadowDirtySequence()
+	{
+		std::unique_lock lock(_lock);
+		return _shadowDirtySeq;
+	}
+
+	bool Scene::IsShadowVolumeDirtySince(uint64_t sinceSeq, const dx::BoundingSphere& volume)
+	{
+		std::unique_lock lock(_lock);
+		if (sinceSeq >= _shadowDirtySeq)
+			return false;
+		if (sinceSeq < _shadowDirtyFloorSeq)
+			return true; // regions newer than sinceSeq were dropped by the cap
+		for (auto it = _shadowDirtyRegions.rbegin(); it != _shadowDirtyRegions.rend() && it->seq > sinceSeq; ++it)
+		{
+			if (it->bounds.Radius == FLT_MAX || it->bounds.Intersects(volume))
+				return true;
+		}
+		return false;
+	}
+
 	void Scene::NotifyEntityTransformChanged(Entity* entity)
 	{
 		std::unique_lock lock(_lock);
@@ -360,18 +422,26 @@ namespace HexEngine
 		// not a dirty flag - a full rebuild per moving entity would defeat it).
 		UpdatePvsSpatialEntriesForEntity(entity);
 
-		// Shadow revision: UNCONDITIONAL for anything with a mesh, unlike the
+		// The sky dome follows the camera every frame (UpdateSkySphereMatrix). It
+		// never casts a shadow and is never GI geometry, so its moves must not
+		// invalidate either - as a meshed mover it re-dirtied every shadow-atlas
+		// face every frame and queued a GI rebake every few frames while the
+		// camera moved.
+		if (entity->GetLayer() == Layer::Sky)
+			return;
+
+		// Shadow invalidation: UNCONDITIONAL for anything with a mesh, unlike the
 		// GI revision below which inherits GI's exclusions and debounce. The
 		// shadow atlas first keyed off the GI revision and objects flagged
 		// ExcludeFromGI (small props) silently stopped invalidating shadow
 		// tiles - a dragged trash can kept its stale shadow (user-found).
-		// Per-frame bumps while dragging are fine: the atlas render budget
-		// bounds the refresh cost, and a live shadow during the drag is what
-		// you want anyway.
+		// Regional, though: only atlas faces whose light volume the move
+		// touches re-render (a scene-wide revision re-dirtied every shadowed
+		// light whenever any NPC or car moved anywhere).
 		if (auto* anyMesh = entity->GetComponent<StaticMeshComponent>();
 			anyMesh != nullptr && anyMesh->GetMesh() != nullptr)
 		{
-			++_shadowGeometryRevision;
+			RecordShadowDirty(entity);
 		}
 
 		// GI motion debounce - deterministic-GI era. Movers STAY in the voxel
@@ -410,9 +480,15 @@ namespace HexEngine
 			}
 		}
 
-		if (entity->GetComponent<PointLight>() != nullptr ||
-			entity->GetComponent<SpotLight>() != nullptr ||
-			entity->GetComponent<DirectionalLight>() != nullptr)
+		// Only lights the voxel GI actually consumes: the sun always, local lights
+		// only when injected. A moving non-injected light (a vehicle headlight
+		// with _injectIntoGI off) used to bump the light revision every frame and
+		// relight the whole GI volume for nothing.
+		const auto* movedPoint = entity->GetComponent<PointLight>();
+		const auto* movedSpot = entity->GetComponent<SpotLight>();
+		if (entity->GetComponent<DirectionalLight>() != nullptr ||
+			(movedPoint != nullptr && movedPoint->GetInjectIntoGI()) ||
+			(movedSpot != nullptr && movedSpot->GetInjectIntoGI()))
 		{
 			++_giLightRevision;
 			if (r_giLogInvalidations._val.b)
@@ -964,6 +1040,7 @@ namespace HexEngine
 			clone->SetPrefabNodeId(entity->EnsurePrefabNodeId());
 			clone->SetPrefabPropertyOverrides(entity->GetPrefabPropertyOverrides());
 			clone->SetPrefabOverridePatches(entity->GetPrefabOverridePatches());
+			clone->SetPrefabRevision(entity->GetPrefabRevision());
 		}
 		else
 		{
@@ -1120,6 +1197,9 @@ namespace HexEngine
 
 	void Scene::FlushPVS(Entity* entity, bool remove)
 	{
+		if (remove && g_pEnv->_sceneRenderer != nullptr)
+			g_pEnv->_sceneRenderer->FlushRainOcclusionEntity(entity);
+
 		for (auto& camera : _cameras)
 		{
 			if(remove)
@@ -1135,19 +1215,37 @@ namespace HexEngine
 			camera->OnMessage(&message, nullptr);*/
 		}
 
-		for (auto& caster : g_pEnv->_sceneRenderer->GetShadowCasters())
+		// EVERY shadow-casting light keeps its own PVS, not just this frame's
+		// casters: GetShadowCasters() is only the nearest N picked per frame, so a
+		// light outside that set kept pointers to deleted entities and, once the
+		// camera moved and it was picked again, drew a freed mesh in the shadow pass
+		// (access violation in StaticMeshComponent::GetCachedInstanceData - seen
+		// after deleting a building and after play-mode stop restores).
+		auto flushLights = [&](ComponentId componentId)
 		{
-			if (caster->GetEntity() == entity)
-				continue;
-
-			for (auto i = 0; i < caster->GetMaxSupportedShadowCascades(); ++i)
+			const auto* pool = TryGetComponentPool(componentId);
+			if (pool == nullptr)
+				return;
+			for (uint32_t i = 0; i < pool->components.size(); ++i)
 			{
-				if(remove)
-					caster->GetPVS(i)->RemoveEntity(entity);
-				else
-					caster->GetPVS(i)->AddEntity(entity);
+				auto* light = pool->components[i] != nullptr ? pool->components[i]->CastAs<Light>() : nullptr;
+				if (light == nullptr || light->GetEntity() == entity || !light->GetDoesCastShadows())
+					continue;
+				for (auto c = 0; c < light->GetMaxSupportedShadowCascades(); ++c)
+				{
+					if (auto* pvs = light->GetPVS(c); pvs != nullptr)
+					{
+						if (remove)
+							pvs->RemoveEntity(entity);
+						else
+							pvs->AddEntity(entity);
+					}
+				}
 			}
-		}
+		};
+		flushLights(DirectionalLight::_GetComponentId());
+		flushLights(SpotLight::_GetComponentId());
+		flushLights(PointLight::_GetComponentId());
 	}
 
 	void Scene::OnGUI()
@@ -1467,6 +1565,15 @@ namespace HexEngine
 			_giSpatialCacheDirty = true;
 			// Incremental tombstone (see the add-side comment).
 			RemovePvsSpatialEntry_NoLock(component->CastAs<StaticMeshComponent>());
+
+			// Camera / light PVS snapshots hold the component pointer and the
+			// render pass WRITES its cached instance data back into it. Removing a
+			// mesh from an entity that lives on (in-place prefab sync, editor
+			// component removal) left those entries dangling: heap corruption /
+			// access violations in the next shadow or main pass. Drop the entity
+			// from every PVS; view-dirty re-adds whatever it still renders.
+			if (!isEntityPendingDeletion)
+				FlushPVS(entity, true);
 		}
 		else if (component->CastAs<Light>() != nullptr)
 		{
@@ -1762,8 +1869,14 @@ namespace HexEngine
 	{
 		//_skySphereMatrix = math::Matrix::CreateScale(math::Vector3(2.0f)) * math::Matrix::CreateTranslation(_mainCamera->GetEntity()->GetPosition());
 
-		if(_skySphere)
-			_skySphere->SetPosition(_mainCamera->GetEntity()->GetPosition() + _mainCamera->GetViewOffset());
+		if (_skySphere)
+		{
+			// Only when the camera actually moved: every SetPosition clears the
+			// transform caches and runs the scene's transform-change notify.
+			const math::Vector3 target = _mainCamera->GetEntity()->GetPosition() + _mainCamera->GetViewOffset();
+			if (_skySphere->GetPosition() != target)
+				_skySphere->SetPosition(target);
+		}
 	}
 
 	void Scene::OnDebugGUI()
@@ -2786,11 +2899,54 @@ namespace HexEngine
 
 		PROFILE();
 
+		// Component debug drawing, per component TYPE: only pools whose class
+		// overrides OnDebugRender are visited. This used to call DebugRender on
+		// every entity, which made a virtual (almost always empty) call on every
+		// component in the scene each frame - a city scene's few thousand
+		// entities cost more than the drawing itself.
+		{
+			// Indexed by component id; rebuilt when the registry grows (plugin load).
+			static std::vector<uint8_t> s_typeDrawsDebug;
+			static size_t s_typeDrawsDebugRegistrySize = 0;
+			auto* registry = g_pEnv->_classRegistry;
+			const size_t registrySize = registry->GetAllClasses().size();
+			if (registrySize != s_typeDrawsDebugRegistrySize)
+			{
+				s_typeDrawsDebug.assign(MAX_COMPONENTS, 1);
+				for (ComponentId id = 0; id < MAX_COMPONENTS; ++id)
+					s_typeDrawsDebug[id] = registry->HasDebugRender(id) ? 1 : 0;
+				s_typeDrawsDebugRegistrySize = registrySize;
+			}
+
+			// Snapshot first: a component's OnDebugRender may add/remove
+			// components (the scene lock is recursive), which would invalidate
+			// a live pool iterator.
+			static std::vector<BaseComponent*> s_debugComponents;
+			s_debugComponents.clear();
+			for (const auto& [componentId, pool] : _componentPools)
+			{
+				if (componentId < MAX_COMPONENTS && s_typeDrawsDebug[componentId] == 0)
+					continue;
+				s_debugComponents.insert(s_debugComponents.end(), pool.components.begin(), pool.components.end());
+			}
+
+			for (auto* component : s_debugComponents)
+			{
+				auto* owner = component != nullptr ? component->GetEntity() : nullptr;
+				if (owner == nullptr || owner->IsPendingDeletion())
+					continue;
+				component->OnDebugRender();
+			}
+		}
+
+		// Editor gizmos: selected entities, plus any entity whose hover flag is
+		// still set from when it was selected (DebugRender clears it).
 		for (auto& set : GetEntities())
 		{
 			for (auto& ent : set.second)
 			{
-				ent->DebugRender();
+				if (ent->HasFlag(EntityFlags::SelectedInEditor) || ent->IsEditorGizmoHovered())
+					ent->DebugRender();
 			}
 		}
 

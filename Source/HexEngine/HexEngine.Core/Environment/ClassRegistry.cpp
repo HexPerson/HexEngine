@@ -1,6 +1,7 @@
 
 
 #include "ClassRegistry.hpp"
+#include "ComponentFieldMeta.hpp"
 
 #include "../Entity/Component/PointLight.hpp"
 #include "../Entity/Component/ReflectionProbeComponent.hpp"
@@ -59,6 +60,7 @@ namespace HexEngine
 		REG_CLASS(Transform);
 		REG_CLASS(UpdateComponent);
 		REG_CLASS(SpotLight);
+		REG_CLASS(AreaLight);
 		REG_CLASS(MotorComponent);
 		REG_CLASS(Billboard);
 		REG_CLASS(RTSCameraController);
@@ -85,6 +87,10 @@ namespace HexEngine
 		REG_CLASS(NavMeshLinkComponent);
 		REG_CLASS(ReflectionProbeComponent);
 		REG_CLASS(SoundEffectComponent);
+
+		// Enum names / ranges / descriptions for the serialised fields above
+		// (consumed by the editor bridge's component catalogue).
+		ComponentFieldMeta::RegisterBuiltIns();
 	}
 
 	uint32_t ClassRegistry::Register(uint32_t nameHash, const std::string& name, const type_info& type, CloneInstanceFn cloneInstanceFn, NewInstanceFn newInstanceFn)
@@ -145,5 +151,17 @@ namespace HexEngine
 	const std::map<uint32_t, ClassRegistry::Class>& ClassRegistry::GetAllClasses() const
 	{
 		return _registry;
+	}
+
+	void ClassRegistry::SetHasDebugRender(uint32_t nameHash, bool hasDebugRender)
+	{
+		if (auto* cls = Find(nameHash); cls != nullptr)
+			cls->hasDebugRender = hasDebugRender;
+	}
+
+	bool ClassRegistry::HasDebugRender(uint32_t componentId)
+	{
+		auto* cls = FindByComponentId(componentId);
+		return cls == nullptr || cls->hasDebugRender;
 	}
 }

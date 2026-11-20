@@ -315,6 +315,13 @@ namespace HexEngine
 		void SetPrefabOverridePatches(const std::vector<PrefabOverridePatch>& patches);
 		const std::vector<PrefabOverridePatch>& GetPrefabOverridePatches() const;
 
+		// Content hash of the prefab asset this instance was last built / synced
+		// from (PrefabLoader::ComputePrefabRevision). Kept on instance roots; the
+		// editor compares it with the asset's current hash to flag out-of-date
+		// instances. Empty = unknown (instances saved before revisions existed).
+		void SetPrefabRevision(const std::string& revision) { _prefabRevision = revision; }
+		const std::string& GetPrefabRevision() const { return _prefabRevision; }
+
 	private:
 		struct EntityGuidComponent
 		{
@@ -366,6 +373,11 @@ namespace HexEngine
 		bool _hasCachedWorldOBB = false;
 		bool _hasCachedWorldBoundingSphere = false;
 		bool _hasCachedWorldOcclusionVolume = true;
+		// Bounds last recorded in the scene's shadow-invalidation journal, so a
+		// move dirties shadow tiles around where the entity WAS as well as where
+		// it is (Scene::RecordShadowDirty).
+		dx::BoundingSphere _lastShadowBounds;
+		bool _hasLastShadowBounds = false;
 		uint64_t _transformVersion = 1;
 		// Frame number that last refreshed _cachedWorldTMPrev. Used by GetWorldTM() to
 		// advance prev<-current at the first call of each new frame even when the world TM
@@ -383,6 +395,7 @@ namespace HexEngine
 		std::string _prefabNodeId;
 		std::unordered_set<std::string> _prefabPropertyOverrides;
 		std::vector<PrefabOverridePatch> _prefabOverridePatches;
+		std::string _prefabRevision;
 		
 	};
 }

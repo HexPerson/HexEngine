@@ -66,6 +66,7 @@ namespace HexEngine
 			FaceKey owner;                 // owner.light == nullptr -> free
 			uint64_t lastUsedFrame = 0;    // LRU age
 			uint64_t contentHash = 0;      // what the tile currently holds (0 = never rendered)
+			uint64_t dirtySeq = 0;         // scene shadow-journal seq the content is known valid through
 			bool renderedThisFrame = false;
 			// View-proj CAPTURED WHEN THE TILE WAS RENDERED - never the
 			// light's current matrices. A moved light whose re-render missed
@@ -97,13 +98,16 @@ namespace HexEngine
 		 * @param renderBudget Max faces marked needsRender this frame; faces
 		 *                     whose content hash matches their tile keep cached
 		 *                     depth for free and do not count against it.
+		 * @param scene        Source of the shadow-invalidation journal: a face
+		 *                     also re-renders when geometry moved/changed inside
+		 *                     its light's volume since the tile was last checked.
 		 * @return the frame's assignments, priority order.
 		 */
 		const std::vector<FaceAssignment>& AssignTiles(
 			const std::vector<Light*>& casters,
 			const Camera* camera,
 			int32_t renderBudget,
-			uint64_t sceneGeometryRevision);
+			Scene* scene);
 
 		/** Viewport (x, y, w, h) of a tile in atlas texels. */
 		void GetTileViewport(int32_t tileIndex, int32_t& x, int32_t& y, int32_t& w, int32_t& h) const;
@@ -126,7 +130,7 @@ namespace HexEngine
 		uint64_t GetFrameIndex() const { return _frame; }
 
 	private:
-		uint64_t ComputeFaceContentHash(const Light* light, uint8_t face, uint64_t sceneGeometryRevision) const;
+		uint64_t ComputeFaceContentHash(const Light* light, uint8_t face) const;
 
 		ID3D11Texture2D* _atlas = nullptr;
 		ID3D11ShaderResourceView* _atlasSrv = nullptr;

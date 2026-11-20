@@ -35,12 +35,26 @@
 	// DIRECTION (w = 0 drops the translation rows) through the previous
 	// view-projection is exactly the treatment the sky dome uses for its
 	// own velocity, and needs no depth.
+	//
+	// GEOMETRY TEXELS ARE NOT CLOUD DATA. They are written as the sentinel
+	// (0,0,0,-1) and excluded from every history / neighbourhood fetch.
+	// They used to be written as plain 0 - indistinguishable from "clear
+	// sky, no cloud" - and the history was fetched with a hardware bilinear
+	// tap at the (TAA-jittered, so never texel-centred) reprojected UV. Every
+	// frame each sky texel touching a silhouette therefore blended in a
+	// share of its zero-alpha geometry neighbours, and the EMA compounded it
+	// (alpha settles near a third of its true value with a 25% leak at
+	// 0.88 history weight). The neighbourhood clamp could not undo it
+	// because its min also included those zeros. Upsampled, that is the
+	// bright halo hugging every foliage / branch / roofline silhouette
+	// against the cloud deck: the cloudless dome showing through.
+	// BilateralUpsample clamps the sentinel back to 0 before using a tap.
 
 	Texture2D g_cloudCurrent : register(t0);
 	Texture2D g_cloudHistory : register(t1);
-	Texture2D g_gbufferDiffuse : register(t2); // .a == -1 marks sky
+	Texture2D g_gbufferDiffuse : register(t2); // .a == -1 marks sky (FULL res)
 	SamplerState g_pointSampler : register(s2);
-	SamplerState g_linearSampler : register(s4); // WRAP in-frame: clamp UVs manually
+	SamplerState g_linearSampler : register(s4); // unused (manual masked bilinear below)
 
 	cbuffer CloudTemporalParams : register(b6)
 	{
@@ -49,17 +63,27 @@
 		float4 g_cloudTemporalParams;
 	};
 
+	// Sky test for a HALF-res texel. The march samples the full-res gbuffer
+	// at the half-res texel centre, which lands on full-res pixel 2c+1 -
+	// BilateralUpsample tests the same pixel, so all three passes agree on
+	// which texels are sky.
+	bool IsSkyTexel(int2 halfCoord)
+	{
+		return g_gbufferDiffuse.Load(int3(halfCoord * 2 + int2(1, 1), 0)).a < -0.5f;
+	}
+
 	float4 ShaderMain(UIPixelInput input) : SV_Target
 	{
 		const float2 uv = input.texcoord;
-		const float4 current = g_cloudCurrent.SampleLevel(g_pointSampler, uv, 0);
+		const int2 coord = int2(input.position.xy);
+		const float4 current = g_cloudCurrent.Load(int3(coord, 0));
 
-		// Geometry pixels carry no clouds (the march writes 0 there). Never
-		// let history leak clouds onto them: a turning camera would otherwise
-		// ghost the deck across building silhouettes for a few frames.
-		const float skyFlag = g_gbufferDiffuse.SampleLevel(g_pointSampler, uv, 0).a;
-		if (skyFlag > -0.5f)
-			return 0.0f.xxxx;
+		// Geometry pixels carry no clouds. Never let history leak clouds onto
+		// them (a turning camera would otherwise ghost the deck across
+		// building silhouettes), and mark them so neither this pass next
+		// frame nor the upsample mistakes them for clear sky.
+		if (!IsSkyTexel(coord))
+			return float4(0.0f, 0.0f, 0.0f, -1.0f);
 
 		const float histWeight = saturate(g_cloudTemporalParams.x);
 		if (histWeight <= 0.0f)
@@ -77,8 +101,39 @@
 		if (any(prevUv < 0.0f) || any(prevUv > 1.0f))
 			return current;
 
-		const float2 halfTexel = 0.5f * g_cloudTemporalParams.yz;
-		float4 history = g_cloudHistory.SampleLevel(g_linearSampler, clamp(prevUv, halfTexel, 1.0f - halfTexel), 0);
+		// Masked bilinear history fetch: the four surrounding history texels,
+		// bilinear-weighted, with last frame's geometry texels (sentinel
+		// alpha) dropped and the remaining weights renormalised.
+		uint histW, histH;
+		g_cloudHistory.GetDimensions(histW, histH);
+		const int2 histMax = int2((int)histW - 1, (int)histH - 1);
+		// uv is normalised to the half-res VIEWPORT (width*0.5 x height*0.5,
+		// e.g. 1035.5 rows for a 2071-row screen), not to the integer texture
+		// size - map back through the same extent (1 / params.yz) or the fetch
+		// drifts up to half a texel toward the top-left across the screen.
+		const float2 histPos = prevUv / g_cloudTemporalParams.yz - 0.5f;
+		const int2 base = int2(floor(histPos));
+		const float2 f = histPos - float2(base);
+		const float bilinear[4] = { (1.0f - f.x) * (1.0f - f.y), f.x * (1.0f - f.y), (1.0f - f.x) * f.y, f.x * f.y };
+		const int2 tapOffsets[4] = { int2(0, 0), int2(1, 0), int2(0, 1), int2(1, 1) };
+
+		float4 history = 0.0f.xxxx;
+		float historyWeight = 0.0f;
+		[unroll]
+		for (int t = 0; t < 4; ++t)
+		{
+			const int2 tc = clamp(base + tapOffsets[t], int2(0, 0), histMax);
+			const float4 h = g_cloudHistory.Load(int3(tc, 0));
+			const float w = (h.a > -0.5f) ? bilinear[t] : 0.0f;
+			history += h * w;
+			historyWeight += w;
+		}
+
+		// Every tap was geometry last frame: this sky texel was just
+		// disoccluded, there is no history for it.
+		if (historyWeight <= 1e-3f)
+			return current;
+		history /= historyWeight;
 
 		// Neighbourhood clamp (TAA anti-ghosting). The reprojection is
 		// rotation-only, so it is correct for the distant clouds but NOT for
@@ -88,7 +143,8 @@
 		// vertical smear. Clamp the history to the range of the current cloud
 		// in a 3x3 neighbourhood so a just-revealed sky pixel snaps to its true
 		// value instead of trailing the geometry that used to cover it.
-		const float2 texel = g_cloudTemporalParams.yz;
+		// SKY neighbours only: a geometry neighbour's value is not cloud and
+		// would drag the box minimum to zero along every silhouette.
 		float4 nmin = current;
 		float4 nmax = current;
 		[unroll]
@@ -99,7 +155,10 @@
 			{
 				if (dx == 0 && dy == 0)
 					continue;
-				const float4 s = g_cloudCurrent.SampleLevel(g_pointSampler, uv + float2(dx, dy) * texel, 0);
+				const int2 nc = coord + int2(dx, dy);
+				if (any(nc < int2(0, 0)) || any(nc > histMax) || !IsSkyTexel(nc))
+					continue;
+				const float4 s = g_cloudCurrent.Load(int3(nc, 0));
 				nmin = min(nmin, s);
 				nmax = max(nmax, s);
 			}

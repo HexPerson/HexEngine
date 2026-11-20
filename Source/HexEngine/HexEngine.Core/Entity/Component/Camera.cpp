@@ -5,9 +5,36 @@
 #include "../../HexEngine.hpp"
 #include "../../Scene/PVS.hpp"
 #include "../../Scene/Scene.hpp"   // SceneFlags (forward-declared in Camera.hpp)
+#include "../../Graphics/IUpscalerProvider.hpp"
+#include <mutex>
 
 namespace HexEngine
 {
+	namespace
+	{
+		// Camera::SetPoseOverride state, kept out of the class so its layout stays the
+		// same for modules that allocate Camera inline (AddComponent<Camera>).
+		struct PoseOverride
+		{
+			math::Vector3 position;
+			math::Vector3 angles;	// pitch, yaw, roll (degrees)
+		};
+		std::mutex g_poseOverrideLock;
+		std::unordered_map<const Camera*, PoseOverride> g_poseOverrides;
+
+		bool LookupPoseOverride(const Camera* camera, PoseOverride& out)
+		{
+			std::lock_guard lock(g_poseOverrideLock);
+			if (g_poseOverrides.empty())
+				return false;
+			auto it = g_poseOverrides.find(camera);
+			if (it == g_poseOverrides.end())
+				return false;
+			out = it->second;
+			return true;
+		}
+	}
+
 	const float gCameraDefaultFov = 70.0f;
 	// Hysteresis margin for the enlarged PVS frustum: the PVS only rebuilds once
 	// the real frustum pokes outside the enlarged one, so this is "how far the
@@ -74,6 +101,7 @@ namespace HexEngine
 
 	Camera::~Camera()
 	{
+		ClearPoseOverride();
 		SAFE_DELETE(_pvs);
 		//SAFE_DELETE(_fullScreenRenderTarget);
 		SAFE_DELETE(_renderTarget);
@@ -107,6 +135,8 @@ namespace HexEngine
 	void Camera::EnableDLSS(bool enable)
 	{
 		_dlssEnabled = enable;
+		if (enable)
+			_fsrEnabled = false;
 
 		if (enable)
 		{
@@ -153,6 +183,52 @@ namespace HexEngine
 		return _dlssEnabled && !_dlssValueChanged;
 	}
 
+	void Camera::EnableFSR(bool enable)
+	{
+		_fsrEnabled = enable;
+
+		if (enable)
+		{
+			_dlssEnabled = false;
+
+			uint32_t renderWidth = 0, renderHeight = 0;
+			auto* upscaler = g_pEnv->_upscalerProvider;
+			if (upscaler != nullptr && upscaler->IsSupported() &&
+				upscaler->GetRenderResolution((UpscalerQuality)_fsrQuality, (uint32_t)_viewport.width, (uint32_t)_viewport.height,
+					renderWidth, renderHeight) && renderWidth > 0 && renderHeight > 0)
+			{
+				LOG_INFO("%s: rendering at %ux%u, upscaling to %dx%d", upscaler->GetName(), renderWidth, renderHeight,
+					(int32_t)_viewport.width, (int32_t)_viewport.height);
+
+				_dlssViewport = _viewport;
+				_dlssViewport.width = (float)renderWidth;
+				_dlssViewport.height = (float)renderHeight;
+
+				SetPespectiveParameters(_fov, _dlssViewport.width / _dlssViewport.height, _screenNear, _screenFar);
+				g_pEnv->_sceneRenderer->Resize((int32_t)renderWidth, (int32_t)renderHeight);
+				return;
+			}
+
+			LOG_WARN("FSR requested but no supported upscaler plugin is loaded - rendering at native resolution");
+			_fsrEnabled = false;
+		}
+
+		CreateRenderTarget((int32_t)_viewport.width, (int32_t)_viewport.height);
+		g_pEnv->_sceneRenderer->Resize((int32_t)_viewport.width, (int32_t)_viewport.height);
+	}
+
+	bool Camera::IsFSREnabled() const
+	{
+		return _fsrEnabled && !_fsrValueChanged;
+	}
+
+	void Camera::SetFSRQuality(int32_t quality)
+	{
+		_fsrQuality = std::clamp(quality, (int32_t)UpscalerQuality::NativeAA, (int32_t)UpscalerQuality::UltraPerformance);
+		if (_fsrEnabled)
+			EnableFSR(true);	// new internal size
+	}
+
 	ITexture2D* Camera::GetRenderTarget() const
 	{
 		return _renderTarget;
@@ -195,12 +271,14 @@ namespace HexEngine
 
 	const math::Viewport& Camera::GetViewport() const
 	{
-		return _dlssEnabled ? _dlssViewport : _viewport;
+		return (_dlssEnabled || _fsrEnabled) ? _dlssViewport : _viewport;
 	}
 
 	void Camera::SetViewport(const math::Viewport& vp)
 	{
 		_viewport = vp;
+		if (_fsrEnabled)
+			_fsrValueChanged = true;	// re-derive the internal size on the next Update
 
 		CreateRenderTarget((int32_t)vp.width, (int32_t)vp.height);
 	}
@@ -208,6 +286,8 @@ namespace HexEngine
 	void Camera::SetViewportWithTargetSize(const math::Viewport& vp, int32_t targetWidth, int32_t targetHeight)
 	{
 		_viewport = vp;
+		if (_fsrEnabled)
+			_fsrValueChanged = true;
 
 		CreateRenderTarget(targetWidth, targetHeight);
 	}
@@ -220,11 +300,28 @@ namespace HexEngine
 			_dlssValueChanged = false;
 		}
 
+		if (_fsrValueChanged)
+		{
+			_fsrValueChanged = false;
+			EnableFSR(_fsrEnabled);
+		}
+
 		if (_screenFar != r_cameraViewDistance._val.f32)
 		{
 			SetPespectiveParameters(_fov, _aspectRatio, _screenNear, r_cameraViewDistance._val.f32);
 		}
 
+		if (GetEntity() != nullptr)
+		{
+			PoseOverride pose;
+			if (LookupPoseOverride(this, pose))
+			{
+				GetEntity()->SetPosition(pose.position);
+				SetPitch(pose.angles.x);
+				SetYaw(pose.angles.y);
+				SetRoll(pose.angles.z);
+			}
+		}
 		UpdateRotation();
 		ConstructViewMatrix();
 
@@ -251,7 +348,15 @@ namespace HexEngine
 			pvsParams.shape.sphere = dx::BoundingSphere(dx::XMFLOAT3(cullCentre.x, cullCentre.y, cullCentre.z), _screenFar);
 			pvsParams.camera = this;
 
-			_pvs->CalculateVisibility(g_pEnv->_sceneManager->GetCurrentScene().get(), pvsParams);
+			// Cull against the scene this camera LIVES in. Using the scene manager's
+			// current scene let a camera in another scene (the icon-preview scene,
+			// ticked by IconService::Destroy during shutdown) query the main scene
+			// after it had been torn down - a lock on a destroyed mutex.
+			Scene* ownScene = GetEntity() != nullptr ? GetEntity()->GetScene() : nullptr;
+			if (ownScene == nullptr)
+				ownScene = g_pEnv->_sceneManager->GetCurrentScene().get();
+			if (ownScene != nullptr)
+				_pvs->CalculateVisibility(ownScene, pvsParams);
 		}
 	}
 
@@ -314,6 +419,24 @@ namespace HexEngine
 	void Camera::SetOrthographicOffScreenParameters(float minX, float maxX, float minY, float maxY, float minZ, float maxZ)
 	{
 		_projectionMatrix = math::Matrix::CreateOrthographicOffCenter(minX, maxX, minY, maxY, minZ, maxZ);
+	}
+
+	void Camera::SetPoseOverride(const math::Vector3& position, float pitchDegrees, float yawDegrees, float rollDegrees)
+	{
+		std::lock_guard lock(g_poseOverrideLock);
+		g_poseOverrides[this] = PoseOverride{ position, math::Vector3(pitchDegrees, yawDegrees, rollDegrees) };
+	}
+
+	void Camera::ClearPoseOverride()
+	{
+		std::lock_guard lock(g_poseOverrideLock);
+		g_poseOverrides.erase(this);
+	}
+
+	bool Camera::HasPoseOverride() const
+	{
+		std::lock_guard lock(g_poseOverrideLock);
+		return g_poseOverrides.count(this) != 0;
 	}
 
 	void Camera::SetYaw(float yawDegrees)
@@ -671,6 +794,8 @@ namespace HexEngine
 	void Camera::Serialize(json& data, JsonFile* file)
 	{
 		SERIALIZE_VALUE(_dlssEnabled);
+		SERIALIZE_VALUE(_fsrEnabled);
+		SERIALIZE_VALUE(_fsrQuality);
 		SERIALIZE_VALUE(_effects);
 		SERIALIZE_VALUE(_cameraAngles);
 	}
@@ -678,11 +803,13 @@ namespace HexEngine
 	void Camera::Deserialize(json& data, JsonFile* file, uint32_t mask)
 	{
 		DESERIALIZE_VALUE(_dlssEnabled);
+		DESERIALIZE_VALUE(_fsrEnabled);
+		DESERIALIZE_VALUE(_fsrQuality);
 		DESERIALIZE_VALUE(_effects);
 		DESERIALIZE_VALUE(_cameraAngles);
 
 		_dlssValueChanged = true;
-		
+		_fsrValueChanged = _fsrEnabled;
 	}
 
 	void Camera::SetYawLimits(const math::Vector2& limit, bool set)
@@ -713,6 +840,17 @@ namespace HexEngine
 		Checkbox* dlssEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"DLSS Enabled", &_dlssEnabled);
 		dlssEnabled->SetOnCheckFn(std::bind(&Camera::EnableDLSS, this, std::placeholders::_2));
 		dlssEnabled->SetPrefabOverrideBinding(GetComponentName(), "/_dlssEnabled");
+
+		Checkbox* fsrEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"FSR 2 Enabled", &_fsrEnabled);
+		fsrEnabled->SetOnCheckFn(std::bind(&Camera::EnableFSR, this, std::placeholders::_2));
+		fsrEnabled->SetPrefabOverrideBinding(GetComponentName(), "/_fsrEnabled");
+
+		static const wchar_t* kFsrQualityNames[] = { L"Native AA", L"Quality", L"Balanced", L"Performance", L"Ultra performance" };
+		DropDown* fsrQuality = new DropDown(widget, widget->GetNextPos(), Point(widget->GetSize().x - 140, 18), L"FSR quality");
+		fsrQuality->SetValue(kFsrQualityNames[std::clamp(_fsrQuality, 0, 4)]);
+		fsrQuality->SetPrefabOverrideBinding(GetComponentName(), "/_fsrQuality");
+		for (int32_t q = 0; q < 5; ++q)
+			fsrQuality->GetContextMenu()->AddItem(new ContextItem(kFsrQualityNames[q], [this, q](const std::wstring&) { SetFSRQuality(q); }));
 
 		//Checkbox* ssrEnabled = new Checkbox(widget, widget->GetNextPos(), Point(widget->GetSize().x - 20, 18), L"SSR Enabled", [this]() { return HEX_HASFLAG(GetCameraEffects(), CameraEffect::SSR);});
 		//ssrEnabled->SetOnCheckFn(std::bind(&Camera::ToggleEffect, this, CameraEffect::SSR));

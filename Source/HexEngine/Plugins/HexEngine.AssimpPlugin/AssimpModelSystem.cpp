@@ -369,6 +369,42 @@ HexEngine::Dialog* AssimpModelImporter::CreateEditorDialog(const std::vector<fs:
 
 
 
+bool AssimpModelImporter::ImportModel(const fs::path& absolutePath, HexEngine::FileSystem* fileSystem, const HexEngine::ModelImportSettings& settings,
+	std::vector<fs::path>& createdMeshes, std::string& error)
+{
+	if (fileSystem == nullptr)
+	{
+		error = "no file system for the import";
+		return false;
+	}
+
+	// Same work as the dialog's Import button, with explicit options; the
+	// dialog's own option state is put back afterwards.
+	const AssimpImportOptions previous = _importOpts;
+	_importOpts.importAnimations = settings.importAnimations;
+	_importOpts.tryAndCreateMaterials = settings.createMaterials;
+	_importOpts.mergeChildMeshesByMaterial = settings.mergeChildMeshesByMaterial;
+	_importOpts.mergeSiblingAnimations = settings.mergeSiblingAnimations;
+	_importOpts.importScale = settings.importScale;
+	_importOpts.textureSearchPaths = settings.textureSearchPaths;
+	_importOpts.deleteOriginalsAfterImport = false;
+
+	auto result = LoadResourceFromFile(absolutePath, fileSystem, nullptr);
+	for (auto& created : _createdMeshes)
+	{
+		fs::path meshPath = created.first;
+		createdMeshes.push_back(meshPath.replace_extension(".hmesh"));
+	}
+	_importOpts = previous;
+
+	if (result == nullptr)
+	{
+		error = "the model could not be imported (see engine logs)";
+		return false;
+	}
+	return true;
+}
+
 std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromFile(const fs::path& path, HexEngine::FileSystem* fileSystem, const HexEngine::ResourceLoadOptions* options /*= nullptr*/)
 {
 	if (path.extension() == ".mtl")
@@ -470,6 +506,25 @@ std::shared_ptr<HexEngine::IResource> AssimpModelImporter::LoadResourceFromFile(
 
 	if (_importOpts.importAnimations)
 		ProcessAnimations(model, modelScene);
+
+	// Skinned but clip-less files (character packs that ship a rig with no
+	// animations, e.g. Synty's Characters.fbx) used to import as STATIC meshes:
+	// the bones and weights were dropped because the animated-mesh path only ran
+	// when the scene carried animations. Seed an (empty) AnimationData so such
+	// meshes keep their skin and can receive clips later (retarget_animations,
+	// the animation editor).
+	if (_importOpts.importAnimations && !model->GetAnimationData())
+	{
+		bool anySkinned = false;
+		for (uint32_t i = 0; i < modelScene->mNumMeshes && !anySkinned; ++i)
+			anySkinned = modelScene->mMeshes[i] != nullptr && modelScene->mMeshes[i]->mNumBones > 0;
+		if (anySkinned)
+		{
+			auto seed = std::make_shared<HexEngine::AnimationData>();
+			seed->_globalInverseTransform = math::Matrix(&modelScene->mRootNode->mTransformation.a1);
+			model->SetAnimatioData(seed);
+		}
+	}
 
 	// Merge sibling-FBX animations into the primary's AnimationData. Run
 	// BEFORE ProcessNode so the channel-hierarchy hookup pass (which
@@ -1264,7 +1319,9 @@ void AssimpModelImporter::ProcessNode(std::shared_ptr<HexEngine::Model>& model, 
 	{
 		aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
 
-		if (scene->HasAnimations())
+		// Animated when the file has clips, or when the mesh is skinned and an
+		// AnimationData exists for it (seeded above / by sibling merging).
+		if (scene->HasAnimations() || (mesh->mNumBones > 0 && model->GetAnimationData() != nullptr))
 			ProcessAnimatedMesh(model, mesh, scene, node, fileSystem);
 		else
 			ProcessMesh(model, mesh, scene, node, fileSystem);
@@ -1728,6 +1785,17 @@ std::shared_ptr<HexEngine::AnimatedMesh> AssimpModelImporter::ProcessAnimatedMes
 
 			vertices[VertexID].AddBoneData(BoneIndex, Weight);
 		}
+	}
+
+	// Normalise each vertex's (up to four) skin weights. Some packs ship weights
+	// that don't sum to 1 (Synty's Characters.fbx); vertex-shader skinning hides it
+	// behind the perspective divide but the GPU-skinning compute pass doesn't.
+	for (auto& vertex : vertices)
+	{
+		auto& w = const_cast<HexEngine::AnimatedMeshVertex&>(vertex)._boneWeights;
+		const float sum = w.x + w.y + w.z + w.w;
+		if (sum > 1e-6f && std::abs(sum - 1.0f) > 1e-4f)
+			w = w / sum;
 	}
 
 	modelMesh->SetBoneMap(mesh->mNumBones, boneMap, boneInfo);

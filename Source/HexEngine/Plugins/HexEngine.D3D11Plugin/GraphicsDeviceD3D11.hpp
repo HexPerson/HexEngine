@@ -244,7 +244,12 @@ public:
 
 	virtual void ResetState() override;
 
+	virtual void SetTextureMipBias(float bias) override;
+
 private:
+	// s0: CommonStates' anisotropic wrap, or a copy with _texMipBias applied.
+	ID3D11SamplerState* GetMaterialSampler() const;
+
 	bool CreateFactory();
 
 	bool CreateInternal();
@@ -350,6 +355,8 @@ private:
 	//ID3D11SamplerState* _texSamplerWrap = nullptr;
 	ID3D11SamplerState* _texSamplerComparison = nullptr;
 	ID3D11SamplerState* _texSamplerMirrored = nullptr;
+	ID3D11SamplerState* _texSamplerBiased = nullptr;	// anisotropic wrap + _texMipBias (null when the bias is 0)
+	float _texMipBias = 0.0f;
 
 	dx::CommonStates* _states = nullptr;
 	math::Color _clearColour;
