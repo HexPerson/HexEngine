@@ -53,6 +53,12 @@ namespace HexEngine
 		// Removes/restores the door mesh from GI for the duration of a swing so the
 		// per-frame movement doesn't re-voxelise the clipmap every frame.
 		void SetSwingGiExclusion(bool excluded);
+
+		// Play-time only: swap a frame-only triangle-mesh collider for a box that
+		// also covers collider-less child meshes (glass panes), so the focus ray
+		// (a physics query) hits the door through its glass. Returns true once
+		// done or not applicable; false = retry next tick (async cook in flight).
+		bool FitColliderToLeaf();
 		void PlayDoorSound(const std::string& path, std::shared_ptr<SoundEffect>& master);
 
 	private:
@@ -79,6 +85,7 @@ namespace HexEngine
 		// it settles. _meshOriginalExclude remembers that authored state.
 		bool             _giExcludedForSwing  = false;
 		bool             _meshOriginalExclude = false;
+		bool             _colliderFitted      = false; // FitColliderToLeaf done this play session
 
 		// Master sounds (lazy-loaded) + in-flight clones held alive (AudioManager
 		// keeps only weak refs).
